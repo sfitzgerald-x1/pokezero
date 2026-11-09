@@ -97,7 +97,7 @@ class ConstructorWorldsTests(unittest.TestCase):
     def setUp(self):
         # The fake engine's carries are not the device tracker carry: prepare_roots and build keep them as built here (the carry
         # completion is tests/test_gpu_engine_constructor_worlds_carry's subject; its order in prepare_roots and build is below).
-        keep=patch.object(cw,'world_completer',return_value=lambda world,owner:world);keep.start();self.addCleanup(keep.stop)
+        keep=patch.object(cw,'world_completer',return_value=lambda world,owner,**kw:world);keep.start();self.addCleanup(keep.stop)
 
     # fixtures ----------------------------------------------------------------------------------------------------------------
     def constructor(self,count,**kw):
@@ -539,9 +539,26 @@ class ConstructorWorldsTests(unittest.TestCase):
         self.assertEqual(float(b.requests[0].root_inputs['numeric_features'][0,0,0,0]),.375)   # the root view reads the completed world 0
         self.assertEqual([None if w.state is None else float(w.state.value[0])for pair in b.worlds.pairs for w in pair],[.375,.375,None]+[.375]*5)
         # A completion that changes nothing keeps prepare()'s own world set object.
-        with patch.object(cw,'world_completer',return_value=lambda world,owner:world):
+        with patch.object(cw,'world_completer',return_value=lambda world,owner,**kw:world):
             _,same,_=self.prepared({'r':roots['r']},W)
         self.assertIs(same[0].made,roots['r'][1])
+
+    def test_prepare_roots_reads_the_requests_lines_and_an_unjoinable_peer_order_refuses_the_root(self):
+        W=2;roots={'ok':self.made(0,0,self.modes(0,W)),'odd':self.made(1,0,self.modes(1,W))}
+        lines={'ok':['|switch|p2a: Snorlax|Snorlax, L80|100/100','|turn|1'],'odd':['|switch|p2a: Nobody|Nobody, L80|100/100']}
+        def complete(world,owner,facts=None):   # a stand-in completion that cannot join 'nobody'
+            if facts.peer_switches==('nobody',):raise cw.PeerOrderUnavailable('nobody: 0 members of the peer\'s party match a public switch-in')
+            return world
+        constructor=self.constructor(W)
+        with patch.object(ProtocolConstructor,'prepare',side_effect=lambda r,i:roots[r['request_id']]),patch.object(cw,'world_completer',return_value=complete):
+            out=cw.prepare_roots(constructor,[dict(request_id=k,lines=lines[k])for k in roots])
+        self.assertIs(type(out[0]),cw.Prepared);self.assertEqual(out[0].facts,cw.LineFacts(('snorlax',),()))
+        self.assertIs(type(out[1]),cw.RootRefusal);self.assertEqual((out[1].kind,out[1].detail[:7]),('PEER_REQUEST_ORDER_UNAVAILABLE','nobody:'))
+        def refuse(world,owner,facts=None):raise cw.PeerOrderUnavailable('the last public switch-in is not the world\'s peer active')
+        with patch.object(cw,'world_completer',return_value=refuse),self.forward_patch():   # build applies the root's facts again
+            b=cw.build(constructor,out,self.pricer(carry_executor(),depth=2,k_own=(2,),k_opp=(2,),capacity=2),PARAMS,binding=self.binding,recipe=self.recipe)
+        self.assertEqual([r['status']for r in b.roots],['REFUSED','REFUSED']);self.assertTrue(b.roots[0]['reason'].startswith('PEER_REQUEST_ORDER_UNAVAILABLE: the last'))
+        self.assertEqual(b.roots[1]['reason'][:47],'constructor-root:PEER_REQUEST_ORDER_UNAVAILABLE')
 
     def test_a_reduction_error_refuses_its_root_only(self):
         """reduce_completed_q's range check raises when a block's completed-Q rounds outside [-1, 1]: here action 0 wins against

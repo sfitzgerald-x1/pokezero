@@ -277,12 +277,160 @@ class FromB2WorldTests(unittest.TestCase):
                     changed=('shown_types','negative_items','self_items_removed_credit','opp_items_removed_credit')
                     self.assertTrue(all(x is y for(_,x),(_,y)in zip(leaves(t,changed),leaves(c,changed))))
                     self.assertIs(d.state,w.state);self.assertIs(cw.complete_world(d,self.tables,owner),d)   # a second pass is a no-op
+            # with the fold's own lines: the peer's lead is its request position 0 and the only switch-in, so the order stands; no Spikes
+            lines=(f'|switch|p{owner+1}a: Alpha|Alpha, L80|291/291',f'|switch|p{2-owner}a: Beta|Beta, L80|100/100','|turn|1')
+            facts=cw.line_facts(lines,owner);self.assertEqual(facts,cw.LineFacts(('beta',),()))
+            for d in done:
+                e=cw.complete_world(d,self.tables,owner,facts=facts);self.assertIs(e,d)
+                order=np.asarray(d.public.own_order)[0,1-owner];self.assertEqual(int(order[0]),int(np.asarray(d.state.active)[0,1-owner]))
             # every world completes alike (the completion reads only the public species and the engine types)
             for name in('shown_types',):
                 for d in done[1:]:np.testing.assert_array_equal(getattr(d.public,name),getattr(done[0].public,name))
             for d in done[1:]:
                 for key in cw.CREDIT_KEYS:np.testing.assert_array_equal(d.public.field_features[key],done[0].public.field_features[key])
                 for x,y in zip(d.public.negative_items,done[0].public.negative_items):np.testing.assert_array_equal(x,y)
+
+
+NAMES=['','alpha','beta','gamma','delta','epsilon','zeta','eta','theta']   # engine species 1..8
+ORDER_TABLE=np.zeros((len(NAMES),2),np.int32)
+
+
+def peer_world(team,*,active,revealed,owner=0,own_order=None):
+    """(state, carry) of one constructed world: the peer (1 - owner) has `team` (engine species, physical order) with `active` the
+    physical active and `revealed` its revealed physicals in public-slot order; own_order[peer] as _rebase leaves it
+    ([active, the rest ascending]) unless given."""
+    peer=1-owner;species=np.zeros((2,6),np.int32);species[peer]=team;species[owner]=[1,2,3,4,5,6]
+    s=empty_state(1)._replace(species=j.asarray(species[None]),active=j.asarray([[0,0]],j.int32).at[0,peer].set(active))
+    mapping=np.full((2,6),-1,np.int32);mapping[owner]=np.arange(6)
+    for slot,physical in enumerate(revealed):mapping[peer,physical]=slot
+    pub=np.zeros((2,6),np.int32);pub[owner]=species[owner];pub[peer,:len(revealed)]=[team[p]for p in revealed]
+    t=carry(pub,mapping)
+    order=np.broadcast_to(np.arange(6,dtype=np.int32),(1,2,6)).copy()
+    order[0,peer]=[active,*[i for i in range(6)if i!=active]]if own_order is None else own_order
+    return s,t._replace(own_order=j.asarray(order))
+
+
+def switch(seat,name,hp='100/100',kind='switch'):return f'|{kind}|{seat}a: {name.title()}|{name.title()}, L80, M|{hp}'
+
+
+class PeerOrderTests(unittest.TestCase):
+    """constructor_worlds.order_peer and line_facts: the peer's Showdown request order from the public switch history."""
+    tables=cw._table(ORDER_TABLE,species_names=NAMES)
+
+    def order(self,lines,team,*,active,revealed,owner=0,**kw):
+        s,t=peer_world(team,active=active,revealed=revealed,owner=owner,**kw)
+        out=cw.order_peer(s,t,owner,cw.line_facts(lines,owner),self.tables)
+        return np.asarray(out.own_order)[0,1-owner].tolist(),out,t
+
+    def test_voluntary_switches_swap_into_position_zero_and_unrevealed_members_keep_their_slots(self):
+        lines=['|init|battle',switch('p1','alpha','291/291'),switch('p2','alpha'),'|turn|1',switch('p2','gamma'),'|turn|2',switch('p2','beta'),'|turn|3']
+        got,out,before=self.order(lines,[1,2,3,4,5,6],active=1,revealed=(0,2,1))
+        self.assertEqual(got,[1,2,0,3,4,5])   # [A..F] -> C in: [C,B,A,..] -> B in: [B,C,A,D,E,F]; D, E, F never move
+        self.assertEqual(np.asarray(before.own_order)[0,1].tolist(),[1,0,2,3,4,5])   # what _rebase leaves: active first, the rest ascending
+        self.assertEqual(np.asarray(out.own_order)[0,0].tolist(),list(range(6)))   # the owner's own (request) order is untouched
+        for a,b in zip(leaves(before,('own_order',)),leaves(out,('own_order',))):self.assertIs(a[1],b[1])
+        self.assertIs(cw.order_peer(peer_world([1,2,3,4,5,6],active=1,revealed=(0,2,1))[0],out,0,cw.line_facts(lines,0),self.tables),out)   # idempotent
+
+    def test_drags_faint_replacements_and_baton_pass_follow_the_same_rule(self):
+        lines=['|init|battle',switch('p2','beta'),'|turn|1',
+            '|move|p1a: Alpha|Roar|p2a: Beta',switch('p2','epsilon',kind='drag'),'|turn|2',   # a drag
+            '|move|p1a: Alpha|Tackle|p2a: Epsilon','|faint|p2a: Epsilon','|upkeep|',switch('p2','zeta'),'|turn|3',   # a faint replacement
+            '|move|p2a: Zeta|Baton Pass|p2a: Zeta',switch('p2','beta'),'|turn|4']   # a Baton Pass recipient
+        got,_,_=self.order(lines,[2,3,4,5,6,1],active=0,revealed=(0,3,4))
+        # [B,C,D,E,F,A]: E dragged in -> [E,C,D,B,F,A]; F replaces -> [F,C,D,B,E,A]; B passed in -> [B,C,D,F,E,A]
+        self.assertEqual(got,[0,1,2,4,3,5])
+        got,_,_=self.order([l.replace('p2','p1').replace('p1a: Alpha','p2a: Alpha')for l in lines],[2,3,4,5,6,1],active=0,revealed=(0,3,4),owner=1)
+        self.assertEqual(got,[0,1,2,4,3,5])   # the same history with the seats exchanged, for owner 1
+
+    def test_a_sampled_order_whose_lead_is_not_first_is_still_swapped(self):
+        lines=[switch('p2','gamma'),'|turn|1']   # the lead at physical 2 of this world's sampled team
+        got,_,_=self.order(lines,[1,2,3,4,5,6],active=2,revealed=(2,))
+        self.assertEqual(got,[2,1,0,3,4,5])
+
+    def test_what_cannot_be_joined_refuses(self):
+        team=[1,2,3,4,5,6]
+        cases={'no switch-in':['|turn|1'],'not in the party':[switch('p2','theta')],'not revealed here':[switch('p2','alpha'),switch('p2','delta')],
+            'not the active':[switch('p2','alpha'),switch('p2','beta')]}
+        for name,lines in cases.items():
+            with self.subTest(name),self.assertRaises(cw.PeerOrderUnavailable):self.order(lines,team,active=0,revealed=(0,))
+        with self.assertRaises(cw.CarryLayoutError):
+            s,t=peer_world(team,active=0,revealed=(0,));cw.order_peer(s,t,0,cw.line_facts([switch('p2','alpha')],0),table())   # no species names
+        self.assertTrue(issubclass(cw.PeerOrderUnavailable,ValueError))
+
+    def test_formes_join_by_prefix(self):
+        tables=cw._table(np.zeros((3,2),np.int32),species_names=['','deoxysspeed','snorlax'])
+        s,t=peer_world([1,2,0,0,0,0],active=0,revealed=(0,))
+        out=cw.order_peer(s,t,0,cw.line_facts(['|switch|p2a: Deoxys|Deoxys-Speed, L80|100/100'],0),tables)
+        self.assertEqual(np.asarray(out.own_order)[0,1,0],0)
+
+    def test_line_facts(self):
+        lines=['|init|battle','|switch|p1a: Alpha|Alpha, L80, F|300/300','|switch|p2a: Beta|Beta, L80|100/100','|turn|1',
+            '|request|{"side":{"id":"p1"}}','|move|p2a: Beta|Spikes|p1a: Alpha','|-sidestart|p1: Player|Spikes',
+            '|switch|p1a: Gamma|Gamma, L80|299/300','|-damage|p1a: Gamma|262/300|[from] Spikes','|-heal|p1a: Gamma|281/300 par|[from] item: Leftovers',
+            '|drag|p2a: Delta|Delta, L80, M|100/100','|-damage|p2a: Delta|88/100|[from] Spikes','|turn|2',
+            '|switch|p1a: Alpha|Alpha, L80, F|300/300','|-damage|p1a: Alpha|263/300|[from] Spikes','|faint|p1a: Gamma',
+            '|switch|p1a: Eta|Eta, L80|10/300','|-damage|p1a: Eta|0 fnt|[from] Spikes','|replace|p2a: Beta|Beta, L80|100/100']
+        f=cw.line_facts(lines,0)
+        self.assertEqual(f.peer_switches,('beta','delta','beta'))
+        self.assertEqual(f.owner_spikes,((299,262,300),(300,263,300),(10,0,300)))
+        g=cw.line_facts(lines,1)   # the other seat: p2 owns, p1 is the peer
+        self.assertEqual(g.peer_switches,('alpha','gamma','alpha','eta'));self.assertEqual(g.owner_spikes,((100,88,100),))   # p2's hit, as its lines read
+        self.assertEqual(cw.line_facts(['|-damage|p1a: Alpha|263/300|[from] Spikes'],0).owner_spikes,None)   # no previous HP on the lines
+
+
+class OwnerSpikesTests(unittest.TestCase):
+    def port_carry(self):
+        from gpu_engine import engine_device_public_port as port
+        t=carry(SPECIES,MAPPING);hazards=np.zeros((1,2,2,2),np.float32);hazards[0,0,1]=[.25,0.];hazards[0,1,0]=[.12,0.]
+        return t._replace(public_port=port.initialize(1)._replace(hazards=j.asarray(hazards)))
+
+    def test_the_owners_shown_spikes_credit_is_the_device_hooks(self):
+        from gpu_engine import engine_device_damage_history as dh
+        facts=cw.LineFacts(('alpha',),((300,263,300),(299,262,300),(10,0,300)))
+        out=cw.fill_owner_spikes(self.port_carry(),0,facts);h=np.asarray(out.public_port.hazards)
+        pair=j.zeros(2,j.float32)
+        for drop in(12,11,4):pair=dh._add(pair,j.asarray(drop,j.float32)/100)   # 100->88, 99->88 (capped below max), 4->0
+        np.testing.assert_array_equal(h[0,0,0],np.asarray(pair))
+        np.testing.assert_array_equal(h[0,0,1],[.25,0.]);np.testing.assert_array_equal(h[0,1],np.asarray(self.port_carry().public_port.hazards)[0,1])
+        self.assertAlmostEqual(float(np.float32(h[0,0,0,0])+np.float32(h[0,0,0,1])),.27,places=6)   # the peer's OPP_HAZARD_CREDIT (high + low)
+        self.assertIs(cw.fill_owner_spikes(out,0,facts),out)   # filled once: idempotent
+        base=self.port_carry()
+        for f in(None,cw.LineFacts(('alpha',),None),cw.LineFacts(('alpha',),())):self.assertIs(cw.fill_owner_spikes(base,0,f),base)
+
+
+class PeerViewLaneTests(unittest.TestCase):
+    """The real encoder (engine_device_observation on the repo's fixture tables) on a peer whose own order is not physical: self
+    tokens, switch tokens, switch lanes, map_actions and the self tokens' ability / item belief columns all follow own_order[peer]."""
+    @classmethod
+    def setUpClass(cls):
+        import test_gpu_engine_device_observation as fixtures
+        fixtures.DeviceObservationTests.setUpClass()
+        cls.catalog,cls.tables=fixtures.DeviceObservationTests.catalog,fixtures.DeviceObservationTests.tables
+
+    def test_lanes_tokens_and_belief_columns_follow_the_peers_request_order(self):
+        from gpu_engine import device_public_leaf as leaf,engine_device_observation as e
+        from gpu_engine.public_moves import _static_category
+        rows=np.asarray(self.tables.belief.species_types);peer,active=1,2
+        s=battle([[1,2,3,1,2,3],[2,3,1,3,1,2]],rows,active=(0,active))
+        hp=np.asarray([100,90,80,70,60,50],np.int32);ability=np.asarray([1,2,1,2,1,2],np.int32);item=np.asarray([1,0,1,0,1,0],np.int32)
+        s=s._replace(hp=s.hp.at[0,peer].set(hp),base_ability=s.base_ability.at[0,peer].set(ability),ability=s.ability.at[0,peer].set(ability),
+            item=s.item.at[0,peer].set(item))
+        c=hooks.initialize(s,self.tables.belief);order=[2,4,0,5,1,3]
+        t=c.trackers._replace(own_order=c.trackers.own_order.at[0,peer].set(j.asarray(order,j.int32)))
+        engine=np.asarray([[True,True,False,True,True,True,False,True,True]])   # engine lanes 4..8: physicals 0,1,3,4,5 (active 2 skipped)
+        view=leaf.from_public(s,t,self.tables,observer_sides=j.asarray([peer],j.int32),legal_action_mask=j.asarray(engine),enable_device_leaf=True)
+        obs=view.observation;num,cat=np.asarray(obs.numeric_features)[0],np.asarray(obs.categorical_ids)[0]
+        self.assertEqual(np.asarray(obs.switch_targets)[0].tolist(),order[1:])
+        v=self.catalog.vocabulary;names=lambda kind,n:_static_category(v,f'belief:possible_{kind}:{n}')
+        for k,physical in enumerate(order):   # self token 1 + k is request position k
+            self.assertAlmostEqual(float(num[1+k,e._index('HP_FRACTION')]),hp[physical]/100,places=6)
+            self.assertEqual(int(cat[1+k,9]),names('ability',['','immunity','pressure'][ability[physical]]))
+            self.assertEqual(int(cat[1+k,11]),names('item','leftovers')if item[physical]else 0)
+        for i,physical in enumerate(order[1:]):   # switch lane 4 + i, token 17 + i: request position i + 1
+            lane=int(np.asarray(leaf.map_actions(view,s,j.asarray([4+i],j.int32)))[0])
+            self.assertEqual(lane,4+physical-(physical>active))   # the engine's own switch lane for that physical
+            self.assertEqual(bool(np.asarray(obs.legal_action_mask)[0,4+i]),bool(engine[0,lane]))
+            self.assertAlmostEqual(float(num[17+i,e._index('HP_FRACTION')]),hp[physical]/100,places=6)
 
 
 if __name__=='__main__':unittest.main()

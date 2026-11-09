@@ -587,7 +587,7 @@ class BindConstructorRealPathTests(unittest.TestCase):
         class Champion(CW.Evaluator):   # the fake head under a champion identity, with bind_evaluator_roots' first-root check
             def check(self, params, inputs):return True
         evaluator, W = Champion(), 2;made, view = fx.wide_root(0, W)
-        with patch.object(cw, 'world_completer', return_value=lambda world, owner: world):   # the fake carry, kept as built
+        with patch.object(cw, 'world_completer', return_value=lambda world, owner, **kw: world):   # the fake carry, kept as built
             constructor, prepared, _ = fx.prepared({'r': made}, W)
             pricer = fx.pricer(CW.wide_executor(), depth=2, k_own=(2,), k_opp=(2,), capacity=2, block_lanes=16, forward=evaluator)
             built = {prior: cw.build(constructor, prepared, pricer, CW.PARAMS[:1], binding=fx.binding, recipe=fx.recipe, only_complete=True,

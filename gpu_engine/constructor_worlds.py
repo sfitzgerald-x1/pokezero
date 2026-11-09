@@ -11,9 +11,10 @@ dict keys and leaves two members None). This module turns prepared roots into De
   binding. A raised refusal (phase_d_live_worlds.Refusal, or the errors ProtocolConstructor.construct treats as
   refusals) is a RootRefusal: the root gets no request. Every constructed world's public carry is completed (below)
   before its clock stops, so the live search's structure check, build, the pricer and every capture see one world set.
-- Carry completion (complete_world; build applies it again, a no-op on a completed world). phase_d_live_worlds.from_b2
-  builds the root's tracker carry from B2's public fold, not through the device public hooks, and leaves three things
-  the device path (engine_device_public_hooks.initialize, then a hook per engine step) would hold on the same history:
+- Carry completion (complete_world / complete_public; build applies it again, a no-op on a completed world).
+  phase_d_live_worlds.from_b2 builds the root's tracker carry from B2's public fold, not through the device public hooks,
+  and leaves these where the device path (engine_device_public_hooks.initialize, then a hook per engine step) would hold
+  other values on the same history (the last two read the request's own protocol lines: line_facts, kept on Prepared):
   - shown_types (fill_shown_types): from_b2 writes zeros, so the encoder's TYPE_1/TYPE_2 of every revealed Pokemon of
     the side other than the observer read 0 (<pad>), at the root and at every node and leaf. The hook rule
     (engine_device_public_hooks.install: species_types[clip(species)] where 0 < species < len(species_types), else 0) is
@@ -37,6 +38,29 @@ dict keys and leaves two members None). This module turns prepared roots into De
   - the items-removed credits (orient_credits): from_b2 stores them owner-oriented as [B] arrays, which the readout
     passes through unchanged, so the peer's view read the owner's own counts; they become per-side [B, 2] arrays
     (self = items_removed[side], opp = items_removed[1 - side], B2's project_credits), the owner's view unchanged.
+  - the peer's request order (order_peer): the peer's view (the reply prior's, and every grid column's lane) orders its
+    own Pokemon by own_order[peer]: self tokens 1-6, switch tokens 17-21 and switch lanes 4-8 (engine_device_observation
+    .encode's targets), which map_actions turns back into engine switch lanes, so lane b means one Pokemon for the
+    peer's logits, its legal mask and the grid. device_public_world_state._rebase leaves it [active, the rest ascending];
+    Showdown's request order (LocalShowdownEnv.observe of that player) starts from the party order and swaps every
+    switch-in into position 0 (switch, drag, faint replacement, Baton Pass recipient), the device install hook's own
+    rule. order_peer rebuilds it from the world's physical party order (the materialized team's: the true team's original
+    order in the true world, the sampled team's otherwise) and the peer's public switch-ins on the lines; unrevealed
+    members never move. The engine state is untouched (switch lanes map to physical slots through own_order), so the
+    engine stays consistent; the owner's own order (from_b2: the request's) is unchanged. A switch-in that does not join
+    exactly one revealed member, or a last switch-in that is not the world's peer active, refuses the root
+    (PeerOrderUnavailable: PEER_REQUEST_ORDER_UNAVAILABLE).
+  - the peer's OPP_HAZARD_CREDIT (fill_owner_spikes): from_b2 fills only hazards[owner, exact] and hazards[foe, shown]
+    (phase_d_live_worlds.py:415), so hazards[owner, shown], the peer's view of the owner's Spikes losses, read 0. The
+    device's shown half is the per-hit sum of (_percent(hp) - _percent(new)) / 100 (engine_device_public_port.spikes);
+    B2 keeps only the exact sum, whose per-hit rounding is lost (300 max HP, 37 damage: 300 -> 263 shows 12%, 299 -> 262
+    shows 11%), but the owner's own lines carry each hit exactly (a Spikes -damage line after the owner's exact HP on its
+    switch-in line), so it is rebuilt hit by hit with the device's own compensated sum. Left 0 when a hit's previous HP
+    is not on the lines.
+  The peer's own ability and item belief columns need nothing here: the encoder writes the observer's own Pokemon's from
+  the world's engine state (engine_device_observation.encode: base_ability and item as belief:possible_ability / item
+  categories, in own_order), as the env writes a player's own (showdown._encode_pokemon_tokens' self rule: the request's
+  baseAbility and item, Gen 3 requests carrying no other ability); they follow the request order once own_order does.
   The completion is pure host numpy on the world's own leaves (no other leaf changes) and raises CarryLayoutError (a
   RuntimeError, never a per-root refusal) when a carry is not the engine_device_trackers.Trackers layout it was
   written against.
@@ -47,14 +71,8 @@ dict keys and leaves two members None). This module turns prepared roots into De
     :569), so that active's LAST_USED_MOVE category is the plain switch's in both views until it moves. B2's own
     mons.arrived_by_baton has the fact (B2's literal-root encoding shows it) but the carry does not keep it; the fix is
     one line in from_b2.
-  - Peer-view hazard credit: from_b2 fills only hazards[owner, exact] and hazards[foe, shown]
-    (phase_d_live_worlds.py:415), so the peer's OPP_HAZARD_CREDIT (readout: hazards[owner, shown]) reads 0 at the root
-    and only counts Spikes damage taken in search. The device's shown half is the per-hit sum of
-    (_percent(hp) - _percent(new)) / 100 over the owner's Spikes hits (engine_device_public_port.spikes), the ceil
-    percentages the peer sees; B2 keeps only the exact sum (ctx.damage.hazard_suffered: (hp - new) / max per hit, the
-    owner seeing its own HP), and per-hit rounding is not a function of that sum (300 max HP, 37 damage: 300 -> 263 shows
-    12%, 299 -> 262 shows 11%). Only the owner's protocol (each Spikes -damage line and the switch-in HP before it) would
-    determine it.
+  - Peer-view hazard credit: completed from the lines (above) when every owner Spikes hit's previous HP is on them; left
+    0 otherwise.
   - Peer-view last damage: the peer's exact own losses (own.LAST_DAMAGE_TAKEN, foe.LAST_DAMAGE_DEALT,
     field.SELF_HAZARD_CREDIT: damage_exact_*, hazards[foe, exact]) are redacted to zero by design
     (device_public_teacher.REPLY_HISTORY_APPROXIMATION, device_public_worlds._redact_peer_private); and from_b2's
@@ -140,6 +158,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from pokezero import v5_gumbel as original
+from pokezero.dex import normalize_id
 from . import champion_evaluator as evaluators,depthn_backups as backups,device_depth2_pricer as depth2,device_depthn_pricer as dn
 from . import device_public_teacher_batch as batch,device_public_worlds as plans
 from . import engine_device_negative_items as negative_items,engine_device_trackers as public_trackers
@@ -196,11 +215,16 @@ class CarryLayoutError(RuntimeError):
 @dataclass(frozen=True)
 class CarryTables:
     """What the completion reads: species_types [S, 2] int32, engine species id -> engine type ids (the public hooks'
-    belief_tables.species_types, engine_device_belief.Tables), held as host numpy."""
+    belief_tables.species_types, engine_device_belief.Tables), held as host numpy; species_names, the engine species
+    vocabulary normalized (metadata['vocabulary']['species'] through normalize_id), to join protocol switch-ins."""
     species_types:object
+    species_names:tuple=()
 
 
-def _table(species_types,species_count=None,type_count=None):
+def _table(species_types,species_count=None,type_count=None,species_names=()):
+    species_names=tuple(map(normalize_id,species_names))
+    if species_names and len(species_names)!=np.shape(species_types)[0]:
+        raise CarryLayoutError(f'species_names: {len(species_names)} names for {np.shape(species_types)[0]} engine species')
     st=np.asarray(species_types)
     if st.ndim!=2 or st.shape[1]!=2 or not st.shape[0] or st.dtype!=np.int32:
         raise CarryLayoutError(f'species_types: an [S, 2] int32 table required, got {st.shape} {st.dtype}')
@@ -208,7 +232,7 @@ def _table(species_types,species_count=None,type_count=None):
         raise CarryLayoutError(f'species_types: {st.shape[0]} rows for {species_count} engine species')
     if np.any(st<0)or type_count is not None and np.any(st>=type_count):raise CarryLayoutError('species_types: a type id outside the engine namespace')
     st=st.copy();st.setflags(write=False)
-    return CarryTables(st)
+    return CarryTables(st,species_names)
 
 
 def carry_tables(metadata,catalog):
@@ -220,7 +244,7 @@ def carry_tables(metadata,catalog):
     except RuntimeError:context=nullcontext()   # no CPU backend in this process: the default device
     with context:belief=engine_device_belief.compile_tables(metadata,catalog)
     v=metadata['vocabulary']
-    return _table(jax.device_get(belief.species_types),len(v['species']),len(v['types']))
+    return _table(jax.device_get(belief.species_types),len(v['species']),len(v['types']),v['species'])
 
 
 _CARRY_TABLES={}
@@ -237,9 +261,10 @@ def constructor_carry_tables(constructor):
 
 
 def world_completer(constructor):
-    """The completion prepare_roots and build apply to each world of this constructor: (world, owner) -> world."""
+    """The completion prepare_roots and build apply to each world of this constructor: (world, owner, facts=None) -> world,
+    facts the root's LineFacts (None: the fills only, no peer order or owner Spikes credit)."""
     tables=constructor_carry_tables(constructor)
-    return lambda world,owner:complete_world(world,tables,owner)
+    return lambda world,owner,facts=None:complete_world(world,tables,owner,facts=facts)
 
 
 def _host(x):return np.asarray(jax.device_get(x))
@@ -312,27 +337,150 @@ def orient_credits(public,owner):
     return public._replace(field_features={**fields,CREDIT_KEYS[0]:jnp.asarray(removed),CREDIT_KEYS[1]:jnp.asarray(removed[:,::-1].copy())})
 
 
-def complete_world(world,tables,owner):
-    """A constructor world with its public carry completed (fill_shown_types, fill_negative_items, orient_credits; module
-    docstring), `owner` the root's owner; a refused world (no state) and an already completed one are returned as they are.
-    Pure: the world's other leaves are the same objects. CarryLayoutError on another carry layout."""
+# The owner's protocol prefix: the peer's request order and the owner's shown Spikes losses ------------------------------------------
+SWITCH_KINDS=('switch','drag','replace')   # a public switch-in (Baton Pass's included: its recipient arrives on a |switch| line)
+
+
+class PeerOrderUnavailable(ValueError):
+    """The peer's public switch history does not join this world's party: the root is refused (PEER_REQUEST_ORDER_UNAVAILABLE)."""
+
+
+@dataclass(frozen=True)
+class LineFacts:
+    """What the completion reads from the owner's protocol prefix (public lines only; line_facts):
+    peer_switches: the peer side's switch-ins in protocol order, each the normalized species of a |switch| / |drag| /
+    |replace| line's details; owner_spikes: the owner side's Spikes hits in order, (hp before, hp after, max HP) from the
+    owner's own exact HP lines, or None when one hit's previous HP is not on the lines (its shown credit is then left 0)."""
+    peer_switches:tuple
+    owner_spikes:tuple|None
+
+
+def _seat_name(field):
+    seat,_,name=str(field).partition(':')
+    return seat.strip()[:2],name.strip()
+
+
+def _condition_hp(condition):
+    """(hp, max HP or None) of a protocol condition ('250/300', '250/300 par', '0 fnt'); ValueError otherwise."""
+    head=(str(condition).split()or[''])[0]
+    if head=='0':return 0,None
+    hp,maximum=head.split('/')
+    return int(hp),int(maximum)
+
+
+def line_facts(lines,owner):
+    """LineFacts of the owner's protocol prefix `lines` (the request's own lines) for owner seat `owner` (0 or 1)."""
+    if owner not in(0,1):raise ValueError(f'owner 0 or 1 required, got {owner!r}')
+    own,peer=f'p{owner+1}',f'p{2-owner}';switches=[];spikes=[];hp={};complete=True
+    for line in lines:
+        parts=str(line).split('|')
+        if len(parts)<4 or parts[0]!='':continue
+        kind=parts[1];seat,name=_seat_name(parts[2])
+        if kind in SWITCH_KINDS:
+            if seat==peer:switches.append(normalize_id(parts[3].split(',')[0]))
+            elif seat==own and len(parts)>4:
+                try:hp[name]=_condition_hp(parts[4])
+                except ValueError:hp.pop(name,None)
+        elif kind in('-damage','-heal','-sethp')and seat==own:
+            try:new,maximum=_condition_hp(parts[3])
+            except ValueError:hp.pop(name,None);continue
+            before=hp.get(name);maximum=maximum if maximum is not None else(before[1]if before else None)
+            if kind=='-damage'and any(x.strip().lower()=='[from] spikes'for x in parts[4:]):
+                if before is None or maximum is None:complete=False
+                else:spikes.append((before[0],new,maximum))
+            hp[name]=(new,maximum)
+    return LineFacts(tuple(switches),tuple(spikes)if complete else None)
+
+
+def _member(names,want,where):
+    found=[p for p,n in enumerate(names)if n and n==want]
+    if not found:found=[p for p,n in enumerate(names)if n and(want.startswith(n)or n.startswith(want))]   # a forme suffix on one side
+    if len(found)!=1:raise PeerOrderUnavailable(f'{want}: {len(found)} members of {where} match a public switch-in')
+    return found[0]
+
+
+def order_peer(state,public,owner,facts,tables):
+    """The public carry with own_order[peer] (the peer = 1 - owner) the peer's Showdown request order: the world's physical
+    party order (the materialized team's, phase_d_protocol_world's start) with each public peer switch-in, in protocol order,
+    swapped into position 0 (Showdown's switchIn; the device install hook's rule). Unrevealed members never move. Members
+    join by normalized species (one per side: species clause); a switch-in matching no member or several, one not a
+    revealed member of this world, or a final position 0 that is not the world's peer active raises PeerOrderUnavailable.
+    Host numpy, B = 1; the same carry when the order is already this one."""
+    b=_trackers(public);peer=1-owner
+    if b!=1:raise CarryLayoutError(f'one world per carry required, got B={b}')
+    for name,value,shape in(('own_order',public.own_order,(1,2,6)),('physical_to_public',public.physical_to_public,(1,2,6)),
+            ('state.species',state.species,(1,2,6)),('state.active',state.active,(1,2))):_leaf(value,shape,np.int32,name)
+    if type(facts)is not LineFacts:raise CarryLayoutError('LineFacts required')
+    if not tables.species_names:raise CarryLayoutError('CarryTables.species_names required')
+    if not facts.peer_switches:raise PeerOrderUnavailable('no public switch-in of the peer on the lines')
+    species=_host(state.species)[0,peer];mapping=_host(public.physical_to_public)[0,peer];active=int(_host(state.active)[0,peer])
+    n=len(tables.species_names);names=[tables.species_names[int(x)]if 0<int(x)<n else''for x in species]
+    order=list(range(6))
+    for want in facts.peer_switches:
+        p=_member(names,want,'the peer\'s party')
+        if mapping[p]<0:raise PeerOrderUnavailable(f'{want}: switched in publicly, not a revealed member of this world')
+        at=order.index(p);order[0],order[at]=order[at],order[0]
+    if order[0]!=active:raise PeerOrderUnavailable(f'the last public switch-in {names[order[0]]} is not the world\'s peer active {names[active] if 0<=active<6 else active}')
+    current=_host(public.own_order)
+    if np.array_equal(current[0,peer],order):return public
+    current=current.copy();current[0,peer]=order
+    return public._replace(own_order=jnp.asarray(current))
+
+
+def fill_owner_spikes(public,owner,facts):
+    """The public carry with hazards[owner, shown] (the peer's OPP_HAZARD_CREDIT) filled where from_b2 left it zero: the
+    owner's Spikes hits on the lines, each (_percent(hp before) - _percent(hp after)) / 100 in float32 (the peer sees the
+    owner's HP as Showdown's public percent), accumulated by the device's own compensated sum
+    (engine_device_damage_history._add), as engine_device_public_port.spikes would have. Unchanged when the hits are not
+    all on the lines (facts.owner_spikes None), when there is none, or when the half is already non-zero."""
+    from .engine_device_damage_history import _add
+    b=_trackers(public);port=public.public_port
+    if port is None or facts is None or not facts.owner_spikes:return public
+    _leaf(port.hazards,(b,2,2,2),np.float32,'public_port.hazards')
+    hazards=_host(port.hazards)
+    if np.any(hazards[:,owner,0]!=0):return public
+    pair=jnp.zeros(2,jnp.float32)
+    for before,after,maximum in facts.owner_spikes:
+        drop=max(0,int(public_trackers._percent(before,maximum))-int(public_trackers._percent(after,maximum)))
+        pair=_add(pair,jnp.asarray(drop,jnp.float32)/100)
+    hazards=hazards.copy();hazards[:,owner,0]=np.asarray(pair)
+    if not np.any(hazards[:,owner,0]):return public
+    return public._replace(public_port=port._replace(hazards=jnp.asarray(hazards)))
+
+
+def complete_public(state,public,tables,owner,*,facts=None):
+    """A constructor world's public carry completed (module docstring): fill_shown_types, fill_negative_items,
+    orient_credits, and with the root's LineFacts order_peer and fill_owner_spikes. Pure; the same carry when nothing
+    changes. CarryLayoutError on another carry layout, PeerOrderUnavailable when the peer order cannot be joined."""
+    _trackers(public)
+    done=orient_credits(fill_negative_items(fill_shown_types(state,public,tables)),owner)
+    if facts is not None:done=fill_owner_spikes(order_peer(state,done,owner,facts,tables),owner,facts)
+    return done
+
+
+def complete_world(world,tables,owner,*,facts=None):
+    """A constructor world with its public carry completed (complete_public), `owner` the root's owner and `facts` its
+    LineFacts (None: the fills only); a refused world (no state) and an already completed one are returned as they are.
+    Pure: the world's other leaves are the same objects."""
     if world.state is None:return world
     public=world.public
     _trackers(public,f'world {world.index} public carry')
-    done=orient_credits(fill_negative_items(fill_shown_types(world.state,public,tables)),owner)
+    done=complete_public(world.state,public,tables,owner,facts=facts)
     return world if done is public else replace(world,public=done)
 
 
 # Prepare ----------------------------------------------------------------------------------------------------------------------------
 @dataclass(frozen=True)
 class Prepared:
-    """One root's ProtocolConstructor.prepare output, its synced wall seconds and the binding of the constructor that made it."""
+    """One root's ProtocolConstructor.prepare output, its synced wall seconds, the binding of the constructor that made it
+    and the LineFacts of its request's lines (None for a request without lines)."""
     request_id:object
     detached:object
     made:object
     legal:tuple
     seconds:float
     binding:object
+    facts:object=None
 
 
 @dataclass(frozen=True)
@@ -345,9 +493,13 @@ class RootRefusal:
     binding:object
 
 
-def _completed(made,complete,owner):
+def _complete(complete,world,owner,facts):
+    return complete(world,owner)if facts is None else complete(world,owner,facts=facts)
+
+
+def _completed(made,complete,owner,facts=None):
     """The world set with every constructed world completed; the same object when no world changes."""
-    worlds=tuple(w if w.state is None else complete(w,owner)for w in made.worlds)
+    worlds=tuple(w if w.state is None else _complete(complete,w,owner,facts)for w in made.worlds)
     return made if all(a is b for a,b in zip(worlds,made.worlds))else replace(made,worlds=worlds)
 
 
@@ -374,9 +526,13 @@ def prepare_roots(constructor,protocol_requests,*,start_index=0,device='cpu'):
                 raise TypeError(f'ProtocolConstructor.prepare must return (Root, WorldSet, legal mask), got {type(result).__name__}')
             detached,made,legal=result
             if complete is None:complete=world_completer(constructor)
-            made=_completed(made,complete,detached.address.owner)
+            lines=request.get('lines')if isinstance(request,dict)else None
+            facts=None if lines is None else line_facts(lines,detached.address.owner)
+            try:made=_completed(made,complete,detached.address.owner,facts)
+            except PeerOrderUnavailable as error:
+                out.append(RootRefusal(rid,'PEER_REQUEST_ORDER_UNAVAILABLE',str(error),time.perf_counter()-clock,stamp));continue
             jax.block_until_ready([(w.state,w.public)for w in made.worlds if w.state is not None])
-            out.append(Prepared(rid,detached,made,tuple(map(bool,legal)),time.perf_counter()-clock,stamp))
+            out.append(Prepared(rid,detached,made,tuple(map(bool,legal)),time.perf_counter()-clock,stamp,facts))
     return tuple(out)
 
 
@@ -502,8 +658,10 @@ def build(constructor,prepared,pricer,params,*,binding,recipe,learner_actor=0,op
         if detached.source_binding_sha256!=binding.source_binding_sha256:raise ValueError('root source binding differs from the pricer\'s')
         # A world without a state always names its refusal, so it stays this root's refusal (the pricer refuses the frame otherwise).
         if complete is None:complete=world_completer(constructor)
-        worlds=tuple(complete(w,detached.address.owner)if w.state is not None else w if w.refusals else replace(w,refusals=(UNNAMED,))
+        try:worlds=tuple(_complete(complete,w,detached.address.owner,item.facts)if w.state is not None else w if w.refusals else replace(w,refusals=(UNNAMED,))
             for w in made.worlds)
+        except PeerOrderUnavailable as error:
+            roots.append(dict(base,status='REFUSED',reason=f'PEER_REQUEST_ORDER_UNAVAILABLE: {error}',constructed=0,refused_worlds=None,refused_world_share=None));continue
         refused=tuple(w.index for w in worlds if w.state is None);kinds=';'.join(sorted({r for w in worlds for r in w.refusals}))
         base.update(address=(detached.address.stream,detached.address.frame,detached.address.owner),constructed=W-len(refused),refused_worlds=refused,
             refused_world_share=len(refused)/W)

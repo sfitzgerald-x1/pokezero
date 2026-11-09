@@ -99,7 +99,7 @@ class LiveSearchTests(unittest.TestCase):
     def setUp(self):
         # The fake engine's carries are not the device tracker carry: prepare_roots and build keep them as built (the carry
         # completion is tests/test_gpu_engine_constructor_worlds_carry's subject).
-        keep=patch.object(cw,'world_completer',return_value=lambda world,owner:world);keep.start();self.addCleanup(keep.stop)
+        keep=patch.object(cw,'world_completer',return_value=lambda world,owner,**kw:world);keep.start();self.addCleanup(keep.stop)
 
     def search(self,W=8,*,pricers=None,saved_root_admission=False,**kw):
         kw.setdefault('tree_commit',TREE)

@@ -86,7 +86,7 @@ def pricing(stack, *, still_clock=False):
     """Fake pricing under the real _search: build, price and the backups (each row r is the block of worlds 2r, 2r+1). The fake
     worlds' carries are not the device tracker carry: the real prepare_roots keeps them as built (no carry completion)."""
     stack.enter_context(patch.object(cw, 'constructor_binding', return_value='binding'))
-    stack.enter_context(patch.object(cw, 'world_completer', return_value=lambda world, owner: world))
+    stack.enter_context(patch.object(cw, 'world_completer', return_value=lambda world, owner, **kw: world))
     stack.enter_context(patch.object(live, 'classify', return_value=([], 'protocol_facts')))
     stack.enter_context(patch.object(cw, 'build', side_effect=fake_build))
     stack.enter_context(patch.object(cw, 'price', return_value=(SimpleNamespace(), None)))
