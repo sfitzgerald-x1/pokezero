@@ -184,7 +184,8 @@ class OutputsTest(unittest.TestCase):
         for r in diffs[0]['results']:del r['sides']
         sites = dict(sites={'x': {'m:1': dict(key_statics={'x@m:1#0': {'a': 1, 'side': 0}, 'x@m:1#1': {'a': 1, 'side': 1}}), 'm:2': dict(key_statics={'x@m:2': {'a': 2, 'side': 0}})}})
         report = taps.signatures_report(diffs, sites)
-        self.assertEqual(report['side_source'], 'hook_sites.json');self.assertEqual([(g['signature'], g['side']) for g in report['signature_sides_never_exercised']], [('x(a=1)', 1), ('x(a=2)', 0), ('y()', None)])
+        self.assertEqual(report['side_source'], 'hook_sites.json');self.assertEqual([(g['signature'], g['side']) for g in report['signature_sides_never_exercised']], [('x(a=1)', 1), ('x(a=2)', 0)])
+        self.assertEqual([g['side'] for g in report['per_side'] if g['signature'] == 'y()'], [None], 'a hook without a side parameter and no sites record: side None')
         self.assertEqual(taps.normalize_signature("feature(add=False, name='x', physical=3)"), "feature(add=False, name='x')")
         self.assertEqual(taps.normalize_signature('_refresh(physical=0)'), '_refresh()');self.assertEqual(taps.normalize_signature('hp_line(side=1, source_class=2)'), 'hp_line(source_class=2)')
 
