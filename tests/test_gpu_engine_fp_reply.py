@@ -311,6 +311,20 @@ class RecalibrationTests(unittest.TestCase):
         self.assertAlmostEqual(fit['temperature'], 3., delta=.3);self.assertAlmostEqual(fit['switch_bias'], 0., delta=.15)
         self.assertLess(t.nll(apply(sharp, legality), labels), t.nll(sharp, labels))
 
+    def test_static_control_recovers_temperature_and_class_bias_on_its_rows(self):
+        import torch
+        rng = np.random.default_rng(1);n = 4000;logits = rng.normal(size=(n, 9));legality = np.ones((n, 9), bool)
+        classes = np.tile(np.array([0, 0, 1, 1, 2, 2, 2, 2, 2]), (n, 1))
+        true = np.exp(logits + .5 * (classes == 2));true /= true.sum(1, keepdims=True)
+        labels = np.array([rng.choice(9, p=p) for p in true])
+        sharp = np.exp(2 * logits);sharp /= sharp.sum(1, keepdims=True)
+        rows = np.arange(0, n, 2)
+        fit, probs = probe.static_fit(np.log(sharp).astype(np.float32), classes, legality, labels, rows, torch)
+        self.assertAlmostEqual(fit['temperature'], 2., delta=.3)
+        self.assertAlmostEqual(fit['class_bias'][2] - fit['class_bias'][0], .5, delta=.2)
+        self.assertEqual(probs.shape, (n, 9));np.testing.assert_allclose(probs.sum(1), 1., rtol=1e-5)
+        self.assertLess(t.nll(probs[1::2], labels[1::2]), t.nll(sharp[1::2], labels[1::2]))
+
 
 if __name__ == '__main__':
     unittest.main()

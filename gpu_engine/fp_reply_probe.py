@@ -18,6 +18,8 @@ clustered on battle seed.
    With --pi-fp-data (the dataset π_FP was trained on) the probe fits only on games π_FP did not train on: every non-test game
    whose ordinal is absent from that dataset's train split, divided by seed ((seed // 10) % 4 == 0 for early stopping, the rest to
    fit). Otherwise it fits on train and early-stops on validation, which overstates π_FP wherever π_FP fit its own training games.
+   Control: the same head with no history (one temperature and three class biases, LBFGS on the probe's fit rows). probe - static is
+   what the game history adds beyond recalibrating π_FP; reported with intervals, not a gate.
 """
 import glob
 import argparse
@@ -107,6 +109,22 @@ def build_probe(torch, hidden=32):
             logits = log_pi * inv_temperature + per_action
             return logits.masked_fill(~legal, -1e9)
     return Probe()
+
+
+def static_fit(logp, classes, legal, labels, rows, torch):
+    """The probe's head without history: logits = log π_FP / T + b[class], T and b fitted by LBFGS on `rows`. Returns (params, probs
+    for every row)."""
+    lp = torch.as_tensor(logp, dtype=torch.float64);cl = torch.as_tensor(np.clip(classes, 0, CLASSES - 1), dtype=torch.long)
+    lg = torch.as_tensor(legal, dtype=torch.bool);y = torch.as_tensor(labels, dtype=torch.long);r = torch.as_tensor(rows, dtype=torch.long)
+    w = torch.zeros(CLASSES + 1, dtype=torch.float64, requires_grad=True)
+    logits = lambda i: (lp[i] * torch.exp(-w[CLASSES]) + w[:CLASSES][cl[i]]).masked_fill(~lg[i], -1e9)
+    optimizer = torch.optim.LBFGS([w], max_iter=200, line_search_fn='strong_wolfe')
+
+    def closure():
+        optimizer.zero_grad();loss = torch.nn.functional.cross_entropy(logits(r), y[r]);loss.backward();return loss
+    optimizer.step(closure)
+    with torch.no_grad():probs = torch.softmax(logits(torch.arange(len(labels))), -1).numpy().astype(np.float32)
+    return dict(temperature=float(torch.exp(w[CLASSES])), class_bias=w[:CLASSES].tolist()), probs
 
 
 def pad(sequences, arrays, extra, torch, device):
@@ -218,6 +236,13 @@ def main(argv=None):
                  gate2_late_minus_early=cluster_bootstrap(d, clusters, [late, early], lambda a, b: a - b),
                  gate2_turn1=cluster_bootstrap(d, clusters, [first], lambda a: a),
                  gate3_identity_max_abs_difference=identity_gap)
+    static_params, static = static_fit(logp, arrays['candidate_class'], legal, labels, fit_train, torch)
+    nll_static = train_mod.label_nll(static[test], labels[test])
+    ds = nll_static - train_mod.label_nll(pi_fp[test], labels[test]);dh = train_mod.label_nll(probe[test], labels[test]) - nll_static
+    control = dict(static=static_params, static_minus_pi_fp=cluster_bootstrap(ds, clusters, [every], lambda a: a),
+                   probe_minus_static=cluster_bootstrap(dh, clusters, [every], lambda a: a),
+                   probe_minus_static_late_minus_early=cluster_bootstrap(dh, clusters, [late, early], lambda a, b: a - b))
+    print(json.dumps(dict(event='PROBE_STATIC_CONTROL', **control)), flush=True)
     gates['pass'] = dict(gate1=bool(gates['gate1_nll_probe_minus_pi_fp']['interval_90'] and gates['gate1_nll_probe_minus_pi_fp']['interval_90'][1] < 0),
                          gate2=bool(gates['gate2_late_minus_early']['interval_90'] and gates['gate2_late_minus_early']['interval_90'][1] < 0
                                     and gates['gate2_turn1']['interval_90'] and gates['gate2_turn1']['interval_90'][0] <= 0),
@@ -225,9 +250,10 @@ def main(argv=None):
     with torch.no_grad():
         f, lp, c, lg, _, valid = pad(seqs['test'], arrays, logp, torch, args.device)
         out_head = model.head(model.gru(torch.cat([torch.zeros_like(f[:, :1]), f[:, :-1]], 1))[0])[valid].cpu().numpy()
-    report['probe'] = dict(fitting=fitting, history=history, best_epoch=best['epoch'], gates=gates,
-                           test=dict(pi_fp=train_mod.grouped(pi_fp[test], arrays, test), probe=train_mod.grouped(probe[test], arrays, test)),
-                           in_context_curve=train_mod.in_context_curve(dict(pi_fp=pi_fp[test], probe=probe[test]), arrays, test),
+    report['probe'] = dict(fitting=fitting, history=history, best_epoch=best['epoch'], gates=gates, static_control=control,
+                           test=dict(pi_fp=train_mod.grouped(pi_fp[test], arrays, test), static=train_mod.grouped(static[test], arrays, test),
+                                     probe=train_mod.grouped(probe[test], arrays, test)),
+                           in_context_curve=train_mod.in_context_curve(dict(pi_fp=pi_fp[test], static=static[test], probe=probe[test]), arrays, test),
                            head_output=dict(bias_mean=out_head[:, :CLASSES].mean(0).tolist(), bias_sd=out_head[:, :CLASSES].std(0).tolist(),
                                             temperature_mean=float(np.exp(out_head[:, CLASSES]).mean())))
     torch.save(dict(state_dict=state, features=FEATURES, classes=CLASSES, pi_fp_sha256=report['pi_fp_sha256']), out / 'probe.pt')
