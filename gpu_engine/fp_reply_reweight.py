@@ -297,6 +297,7 @@ def replay_game(env, model, game, dex, torch, tables, redaction=None, on_ours=No
             if data_mod.choice_action(env, player, entry.get('choice')) != action:
                 raise data_mod.Mismatch(f'Foul Play choice {entry.get("choice")!r} does not decode to {action}, round {round_}')
             actions[player] = action
+            if entry.get('tag') == 'fill':checks['fill_skipped'] += 1;continue   # a rebuilt journal's placeholder: drives the replay, never evidence
             request = env._latest_requests.get(fp)
             if first is None:first = env._first_requests.get(fp) or request
             if request.get('forceSwitch'):checks['forced_skipped'] += 1;continue
