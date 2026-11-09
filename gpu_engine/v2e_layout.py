@@ -1073,6 +1073,12 @@ def cmd_probe(args):
 # and source site from the jaxpr. Proves the point semantics of Leaf::set (update conversion only) is sufficient (no
 # promoting pair) and tells which gather mode each oracle site uses (get vs get_fill).
 
+def _dtype_of(y):
+    """The dtype of a scatter update: an array's (tracers included) or the weak Python scalar's kind."""
+    if hasattr(y, 'dtype'):return str(np.dtype(y.dtype))
+    return {bool: 'bool (python)', int: 'int (python)', float: 'float (python)'}.get(type(y), type(y).__name__)
+
+
 @__import__('contextlib').contextmanager
 def _record_scatter_dtypes(record):
     """Wrap jax._src.ops.scatter._scatter_impl and lane_index._store for one trace, counting (operand, update) dtypes."""
@@ -1080,10 +1086,10 @@ def _record_scatter_dtypes(record):
     from gpu_engine import lane_index
     impl, store = jscatter._scatter_impl, lane_index._store
     def recording_impl(x, y, *args, **kwargs):
-        record['scatter_impl'][f'{np.dtype(x.dtype)}<-{np.dtype(getattr(y, "dtype", np.asarray(y).dtype))}'] += 1
+        record['scatter_impl'][f'{np.dtype(x.dtype)}<-{_dtype_of(y)}'] += 1
         return impl(x, y, *args, **kwargs)
     def recording_store(x, b, sizes, indices, y, **kwargs):
-        record['lane_index_store'][f'{np.dtype(x.dtype)}<-{np.dtype(getattr(y, "dtype", np.asarray(y).dtype))}'] += 1
+        record['lane_index_store'][f'{np.dtype(x.dtype)}<-{_dtype_of(y)}'] += 1
         return store(x, b, sizes, indices, y, **kwargs)
     jscatter._scatter_impl = recording_impl;lane_index._store = recording_store
     try:yield
@@ -1115,7 +1121,7 @@ def index_census(fn, *example):
     record = dict(scatter_impl=collections.Counter(), lane_index_store=collections.Counter())
     with _record_scatter_dtypes(record):closed = jax.make_jaxpr(fn)(*example)
     pairs = {k: dict(v) for k, v in record.items()}
-    promoting = {src: {k: v for k, v in c.items() if promotes(*k.split('<-'))} for src, c in pairs.items()}
+    promoting = {src: {k: v for k, v in c.items() if '(python)' not in k and promotes(*k.split('<-'))} for src, c in pairs.items()}
     return dict(**pairs, gather_modes=gather_modes(closed), promoting=promoting, point_semantics_sufficient=not any(promoting.values()))
 
 
