@@ -1,4 +1,5 @@
 """Foul Play reply dataset and model helpers on hand-made inputs; no Showdown, checkpoint or device."""
+import copy
 import json
 import tempfile
 import unittest
@@ -10,6 +11,7 @@ import numpy as np
 from gpu_engine import fp_reply_data as d
 from gpu_engine import fp_reply_train as t
 from gpu_engine import fp_reply_probe as probe
+from gpu_engine import fp_reply_reweight as rw
 
 FP_SEAT, OUR_SEAT = 'p2', 'p1'
 
@@ -288,6 +290,66 @@ class ProbeHelperTests(unittest.TestCase):
         fit, stop = probe.fit_rows(split, ordinal, seed, seen)
         self.assertEqual(fit.tolist(), [1, 3, 6]);self.assertEqual(stop.tolist(), [5, 7])
 
+
+
+def _rw_request(item='leftovers', locked=False):
+    entries = [{'move': n, 'id': i, 'pp': p, 'maxpp': 16, 'target': 'normal', 'disabled': d}
+               for n, i, p, d in (('Earthquake', 'earthquake', 14, False), ('Sludge Bomb', 'sludgebomb', 16, False),
+                                  ('Crunch', 'crunch', 16, False), ('Flamethrower', 'flamethrower', 16, True))]
+    if locked:entries = entries[:1]
+    return {'active': [{'moves': entries}], 'side': {'pokemon': [
+        {'ident': 'p2: Seviper', 'details': 'Seviper, L88, M', 'active': True, 'moves': ['earthquake', 'sludgebomb', 'crunch', 'flamethrower'],
+         'baseAbility': 'shedskin', 'ability': None, 'item': item},
+        {'ident': 'p2: Milotic', 'details': 'Milotic, L77, M', 'active': False, 'moves': ['surf'], 'baseAbility': 'marvelscale', 'item': 'leftovers'}]}}
+
+
+RW_DEX = SimpleNamespace(move_info=lambda m: SimpleNamespace(name={'hiddenpower': 'Hidden Power', 'toxic': 'Toxic'}.get(m, m.title()),
+                                                             max_pp={'hiddenpower': 24, 'toxic': 16}.get(m, 8), target='normal'))
+
+
+class ReweightHelperTests(unittest.TestCase):
+    def test_set_keys_match_request_ids_to_variant_names(self):
+        row = _rw_request()['side']['pokemon'][0]
+        variant = {'moves': ['crunch', 'earthquake', 'flamethrower', 'sludgebomb'], 'ability': 'Shed Skin', 'item': 'Leftovers'}
+        self.assertEqual(rw.request_key(row), rw.variant_key(variant))
+        self.assertEqual(rw.move_key('Hidden Power Steel 70'), 'hiddenpowersteel');self.assertEqual(rw.species_of(row), 'seviper')
+
+    def test_world_request_keeps_shared_slots_and_fills_new_moves_fresh(self):
+        request = _rw_request();first = copy.deepcopy(request['side']['pokemon'][0])
+        variant = {'moves': ['crunch', 'earthquake', 'hiddenpowergrass', 'sludgebomb'], 'ability': 'Shed Skin', 'item': 'Choice Band'}
+        world, labels = rw.world_request(request, first, variant, RW_DEX)
+        row = world['side']['pokemon'][0]
+        self.assertEqual(row['moves'], ['earthquake', 'sludgebomb', 'crunch', 'hiddenpowergrass'])
+        self.assertEqual(world['active'][0]['moves'][:3], request['active'][0]['moves'][:3])
+        self.assertEqual(world['active'][0]['moves'][3], {'move': 'Hidden Power Grass 70', 'id': 'hiddenpower', 'pp': 24, 'maxpp': 24,
+                                                          'target': 'normal', 'disabled': True})
+        self.assertEqual((row['item'], row['baseAbility']), ('choiceband', 'shedskin'));self.assertEqual(labels, [0, 1, 2, None, 4, 5, 6, 7, 8])
+        self.assertEqual(request['side']['pokemon'][0]['moves'][3], 'flamethrower')   # input untouched
+        same, labels = rw.world_request(request, first, {'moves': first['moves'], 'ability': 'Shed Skin', 'item': 'Leftovers'}, RW_DEX)
+        self.assertEqual(same, request);self.assertEqual(labels, list(range(9)))
+
+    def test_world_request_leaves_a_public_item_change_and_a_locked_move(self):
+        first = _rw_request()['side']['pokemon'][0]
+        variant = {'moves': ['crunch', 'earthquake', 'toxic', 'sludgebomb'], 'ability': 'Shed Skin', 'item': 'Choice Band'}
+        world, _ = rw.world_request(_rw_request(item=''), first, variant, RW_DEX)
+        self.assertEqual(world['side']['pokemon'][0]['item'], '')
+        locked = _rw_request(locked=True);world, labels = rw.world_request(locked, first, variant, RW_DEX)
+        self.assertEqual(world['active'], locked['active']);self.assertEqual(labels[0], 0)
+        self.assertEqual(rw.chosen_move(locked, 0), 'earthquake');self.assertIsNone(rw.chosen_move(locked, 5))
+
+    def test_public_choice_needs_the_chosen_move_or_a_switch_from_foul_plays_side(self):
+        lines = ['|move|p2a: Seviper|Hidden Power|p1a: Swellow', '|move|p1a: Swellow|Aerial Ace|p2a: Seviper']
+        self.assertTrue(rw.public_choice(lines, 'p2', 3, 'hiddenpowergrass'));self.assertFalse(rw.public_choice(lines, 'p2', 0, 'earthquake'))
+        self.assertFalse(rw.public_choice(['|move|p2a: Snorlax|Body Slam|p1a: X|[from]Sleep Talk'], 'p2', 1, 'bodyslam'))
+        self.assertFalse(rw.public_choice(['|cant|p2a: Seviper|par'], 'p2', 0, 'earthquake'))
+        self.assertTrue(rw.public_choice(['|switch|p2a: Milotic|Milotic, L77, M|273/273'], 'p2', 5, None))
+
+    def test_set_posterior_weights_the_uniform_prior_by_the_likelihood(self):
+        a, b = 'A', 'B';keys, prior, post = rw.set_posterior([a, a, b], {a: np.log(.5), b: np.log(.25)}, 1.)
+        self.assertEqual(keys, [a, b]);np.testing.assert_allclose(np.exp(prior), [2 / 3, 1 / 3]);np.testing.assert_allclose(np.exp(post), [.8, .2])
+        _, _, half = rw.set_posterior([a, b], {a: np.log(.5)}, .5);np.testing.assert_allclose(np.exp(half), [.5 ** .5, 1.] / np.sum([.5 ** .5, 1.]))
+        _, prior, post = rw.set_posterior([a, b], {a: -np.inf, b: -np.inf}, 1.);np.testing.assert_allclose(post, prior)
+        self.assertAlmostEqual(rw.logsumexp([np.log(.2), np.log(.3)]), np.log(.5));self.assertEqual(rw.logsumexp([-np.inf]), -np.inf)
 
 @unittest.skipUnless(__import__('importlib').util.find_spec('torch'), 'torch not installed')
 class RecalibrationTests(unittest.TestCase):

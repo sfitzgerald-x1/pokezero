@@ -124,7 +124,7 @@ def static_fit(logp, classes, legal, labels, rows, torch):
         optimizer.zero_grad();loss = torch.nn.functional.cross_entropy(logits(r), y[r]);loss.backward();return loss
     optimizer.step(closure)
     with torch.no_grad():probs = torch.softmax(logits(torch.arange(len(labels))), -1).numpy().astype(np.float32)
-    return dict(temperature=float(torch.exp(w[CLASSES])), class_bias=w[:CLASSES].tolist()), probs
+    w = w.detach();return dict(temperature=float(torch.exp(w[CLASSES])), class_bias=w[:CLASSES].tolist()), probs
 
 
 def pad(sequences, arrays, extra, torch, device):
