@@ -251,7 +251,8 @@ class CaptureTests(unittest.TestCase):
         self.assertEqual(sorted(recorder.pending), ['rr-1001-0-7', 'rr-1001-1-7', 'rr-1001-2-7'])   # only the selected; refused too
         refused, record = recorder.pending['rr-1001-1-7'], recorder.pending['rr-1001-0-7']
         self.assertEqual((refused['build_status'], refused['arrays']), ('REFUSED', {}))
-        self.assertEqual(record['errors'], []);self.assertEqual(record['path2'], dict(logits_equal=True, value_equal=True, valid=True))
+        self.assertEqual(record['errors'], []);self.assertEqual(record['path2'], dict(logits_equal=True, value_equal=True, valid=True, inputs='world0'))
+        self.assertEqual((record['root_view_source'], record['world0']), (None, None))   # fake_build names no source: world 0's view
         self.assertEqual(record['path3']['logits'], P.floats(fake_forward(None, P.splice(ROOT, B2)[0]).policy_logits))
         self.assertNotEqual(record['path3']['logits'], list(priced_logits()))
         self.assertEqual((record['path3']['valid'], record['path3']['lossy_keys'], record['recorded_float32_exact']), (True, [], True))
@@ -273,6 +274,26 @@ class CaptureTests(unittest.TestCase):
                 with P.reprice_hooks(recorder):
                     self.assertIsNot(R.Capture, ORIGINAL_CAPTURE);self.assertIsNot(R.decision_row, ORIGINAL_ROW);raise ValueError('boom')
             self.assertIs(R.Capture, ORIGINAL_CAPTURE);self.assertIs(R.decision_row, ORIGINAL_ROW)
+
+    def test_a_b2_sourced_prior_is_reproduced_on_the_spliced_inputs(self):
+        """build's root prior read B2's encoding (root_view_source 'b2'): path 2 re-runs it on splice(root_inputs, B2), and world 0's own
+        encoding through the same callable is recorded beside it."""
+        spliced = fake_forward(None, P.splice(ROOT, B2)[0])
+
+        def b2_build(*a, **k):
+            out = fake_build(*a, **k)
+            roots = tuple(dict(r, root_logits=tuple(P.floats(spliced.policy_logits)), root_value=float(spliced.value[0]), root_view_source='b2')
+                if r['status'] == 'PRICED' else r for r in out.roots)
+            return SimpleNamespace(requests=out.requests, roots=roots)
+        with tempfile.TemporaryDirectory() as tmp, ExitStack() as stack:
+            capture_fakes(stack);stack.enter_context(patch.object(cw, 'build', b2_build))
+            recorder = P.Recorder(selected((1001, 0)), tmp);search = RT.fake_search(B2Constructor())
+            with P.capture_class(recorder)().installed():response = search.process_many([body(0)])[0]
+            recorder.close()
+        record = recorder.pending['rr-1001-0-7']
+        self.assertEqual((response['status'], response['root_view_source'], record['errors'], record['root_view_source']), ('COMPLETE', 'b2', [], 'b2'))
+        self.assertEqual(record['path2'], dict(logits_equal=True, value_equal=True, valid=True, inputs='b2_spliced'))
+        self.assertEqual(record['world0']['logits'], list(priced_logits()));self.assertEqual(record['path3']['logits'], P.floats(spliced.policy_logits))
 
     def test_a_failing_capture_never_reaches_the_search(self):
         with tempfile.TemporaryDirectory() as tmp, ExitStack() as stack:
@@ -337,7 +358,7 @@ class MainTests(unittest.TestCase):
         self.assertEqual([(e['decision_index'], e['set']) for e in index], sorted(sets.items()))
         first = index[0]
         self.assertEqual((first['captured'], first['build_status'], first['replay_status'], first['errors']), (True, 'PRICED', 'COMPLETE', []))
-        self.assertEqual(first['path2'], dict(logits_equal=True, value_equal=True, valid=True))
+        self.assertEqual(first['path2'], dict(logits_equal=True, value_equal=True, valid=True, inputs='world0'))
         self.assertEqual((first['selection']['live_greedy'], first['live']['greedy_action_index'], first['live_greedy_matches_selection']), (0, 0, True))
         self.assertTrue(first['root_logits_match_selection'] and first['decide_root_logits_match'])
         self.assertEqual(first['parity']['replay_complete'], True);self.assertEqual(first['crossworld']['differing_worlds'], [5, 6])

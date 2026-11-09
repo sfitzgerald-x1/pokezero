@@ -5,7 +5,8 @@ The actor plays argmax of champion 9375 (torch, CPU fp32) on B2's own encoding o
 tokens). The server's root prior is the same champion (gpu_engine.champion, bf16, weights.npz exported from the same checkpoint) on
 world 0's own V2 view (29 tokens; the champion reads the 23-token prefix). Four paths separate the inputs from the model:
   path 1: B2 encoding        -> torch actor forward   (the actor reference; must reproduce the live greedy)
-  path 2: world-0 encoding   -> server forward        (the recorded root prior; re-run, must reproduce root_logits bit for bit)
+  path 2: the recorded prior -> server forward        (re-run on the inputs build gave it, must reproduce root_logits bit for bit:
+                                                        world 0's encoding, or B2-spliced when the root's root_view_source is 'b2')
   path 3: B2 encoding        -> server forward        (root_inputs with the first 23 tokens of each token tensor replaced by B2's)
   path 4: world-0 prefix     -> torch actor forward
 
@@ -27,8 +28,10 @@ for the duration of its main (reprice_hooks; check_reprice_hooks verifies from m
   (a) root_inputs, the Request's world-0 V2 encoding (five keys, exact arrays); (b) B2's detached.view['_b2_root_inputs'] of the
   prepared root of that index; (c) the root dict's b2_view, root_logits, root_value, root_legal, root_view_world; (d) path 3:
   constructor_worlds._root_forward(pricer.forward)(params[learner_actor], X), the jitted callable build used, X = splice(root_inputs,
-  B2); valid, logits and value recorded; (e) path 2: the same callable on the unmodified root_inputs, compared bit for bit with the
-  recorded root_logits and root_value (path2.logits_equal / value_equal; a miss is reported, never raised). Cross-world: OUR (owner)
+  B2); valid, logits and value recorded; (e) path 2: the same callable on the inputs build's root prior read (root_inputs, or X when
+  the root dict's root_view_source is 'b2': constructor_worlds.splice is build's own), compared bit for bit with the recorded
+  root_logits and root_value (path2.logits_equal / value_equal, path2.inputs; a miss is reported, never raised); with a 'b2' source,
+  `world0` also records the callable on the unmodified root_inputs (logits, value, top). Cross-world: OUR (owner)
   view of every constructed world through depth2._make_views(pricer.executor)(state, public, owner)'s third output, on the
   host-fetched state as build does; per root whether every world's 23-token prefix (and the full 29 tokens) is bit-identical to the
   root view world's, which keys / tokens / columns differ, the max |diff|; arrays kept for worlds 0, 1 and any world that differs.
@@ -90,7 +93,7 @@ REQUEST_ID = re.compile(r'rr-(\d+)-(\d+)-\d+')
 GATE_PATH1 = .995
 FATAL = (MemoryError, KeyboardInterrupt)
 SETS = ('disagree', 'control')
-PATHS = {1: 'B2 encoding -> torch actor (the actor reference)', 2: 'world-0 encoding -> server forward (the recorded root prior)',
+PATHS = {1: 'B2 encoding -> torch actor (the actor reference)', 2: 'the recorded root prior (world-0 or B2-spliced inputs, root_view_source)',
     3: 'B2 encoding -> server forward', 4: 'world-0 23-token prefix -> torch actor'}
 
 
@@ -199,25 +202,7 @@ def shard_battles(selected, shard, shards, *, battles=None, limit=None):
 
 
 # The splice and the diffs -----------------------------------------------------------------------------------------------------------
-def _prefix_index(key, tokens=TOKENS):
-    return (Ellipsis, slice(0, tokens)) + ((slice(None),) if TOKEN_KEYS[key] == 2 else ())
-
-
-def splice(root_inputs, b2, tokens=TOKENS):
-    """(X, lossy keys): copies of the V2 root inputs with the first `tokens` tokens of each token tensor replaced by B2's (cast to
-    the root's dtype); history_mask and tokens >= `tokens` unchanged. A key whose B2 values do not survive the cast is listed."""
-    out, lossy = {}, []
-    for key, value in root_inputs.items():
-        a = np.array(value, copy=True)
-        if key in TOKEN_KEYS:
-            source = np.asarray(b2[key]);index = _prefix_index(key, tokens);target = a[index]
-            if source.shape[0] != tokens or source.shape != target.shape[target.ndim - source.ndim:]:
-                raise ValueError(f'{key}: B2 {source.shape} does not fit the root prefix {target.shape}')
-            cast = source.astype(a.dtype)
-            if not bit_equal(cast.astype(source.dtype), source):lossy.append(key)
-            a[index] = cast
-        out[key] = a
-    return out, lossy
+_prefix_index, splice = cw._prefix_index, cw.splice   # build's own splice (constructor_worlds): the root prior's B2 inputs
 
 
 def token_view(value, key):
@@ -397,20 +382,29 @@ class Recorder:
         view = getattr(detached, 'view', None);b2 = view.get('_b2_root_inputs') if hasattr(view, 'get') else None
         logits = np.asarray(root['root_logits'], np.float32);value = np.float32(root['root_value'])
         arrays.update(root__logits=logits, root__value=np.asarray(value), root__legal=np.asarray(root['root_legal'], bool))
+        source = root.get('root_view_source')
         record.update(root_logits=list(root['root_logits']), root_legal=[bool(x) for x in root['root_legal']], root_value=root['root_value'],
-            root_view_world=root.get('root_view_world'), b2_view=root.get('b2_view'), owner=owner,
+            root_view_world=root.get('root_view_world'), b2_view=root.get('b2_view'), owner=owner, root_view_source=source,
             recorded_float32_exact=floats(logits) == list(root['root_logits']) and float(value) == root['root_value'])
         forward, p = root_forward_of(pricer), params[learner]
-        # Path 2: the recorded prior again, through the same jitted callable on the same root inputs.
-        out = jax.device_get(forward(p, root_inputs))
+        X, lossy = splice(root_inputs, b2) if b2 is not None else (None, None)
+        if source == 'b2' and X is None:raise ValueError('root_view_source b2 without _b2_root_inputs')
+        # Path 2: the recorded prior again, through the same jitted callable on the inputs build gave it.
+        out = jax.device_get(forward(p, X if source == 'b2' else root_inputs))
         l2, v2 = np.asarray(out.policy_logits, np.float32).reshape(-1), np.asarray(out.value, np.float32).reshape(-1)[0]
         arrays.update(path2__logits=l2, path2__value=np.asarray(v2), path2__valid=np.asarray(out.valid).reshape(-1))
-        record['path2'] = dict(logits_equal=bit_equal(l2, logits), value_equal=bit_equal(v2, value), valid=bool(np.asarray(out.valid).reshape(-1)[0]))
+        record['path2'] = dict(logits_equal=bit_equal(l2, logits), value_equal=bit_equal(v2, value), valid=bool(np.asarray(out.valid).reshape(-1)[0]),
+            inputs='b2_spliced' if source == 'b2' else 'world0')
+        record['world0'] = None
+        if source == 'b2':   # world 0's own encoding through the same callable (what the prior read before the B2 root view)
+            out = jax.device_get(forward(p, root_inputs))
+            l0, v0 = np.asarray(out.policy_logits, np.float32).reshape(-1), np.asarray(out.value, np.float32).reshape(-1)[0]
+            arrays.update(world0__logits=l0, world0__value=np.asarray(v0))
+            record['world0'] = dict(logits=floats(l0), value=float(v0), valid=bool(np.asarray(out.valid).reshape(-1)[0]), top=argmax_legal(floats(l0), root['root_legal']))
         if b2 is None:record['errors'].append('the root carries no _b2_root_inputs');record['path3'] = None
         else:
             for k in b2:arrays['b2__' + k] = np.array(b2[k], copy=True)
             # Path 3: the server forward on the actor's encoding (the champion reads only the 23-token prefix).
-            X, lossy = splice(root_inputs, b2)
             out = jax.device_get(forward(p, X))
             l3, v3 = np.asarray(out.policy_logits, np.float32).reshape(-1), np.asarray(out.value, np.float32).reshape(-1)[0]
             valid = bool(np.asarray(out.valid).reshape(-1)[0])
@@ -456,8 +450,8 @@ class Recorder:
             parity=record.get('parity'), replay_status=replay.get('status'), replay_cause=replay.get('cause'), replay_action_index=replay.get('action_index'),
             build_status=captured.get('build_status'), build_reason=captured.get('build_reason'),
             captured=bool(captured['arrays']) and 'path2' in captured, errors=list(captured['errors']),
-            **{k: captured.get(k) for k in ('root_logits', 'root_legal', 'root_value', 'root_view_world', 'b2_view', 'owner', 'recorded_float32_exact',
-                'path2', 'path3', 'crossworld', 'capture_seconds')})
+            **{k: captured.get(k) for k in ('root_logits', 'root_legal', 'root_value', 'root_view_world', 'root_view_source', 'b2_view', 'owner',
+                'recorded_float32_exact', 'path2', 'path3', 'world0', 'crossworld', 'capture_seconds')})
         entry['live_greedy_matches_selection'] = entry['live']['greedy_action_index'] == chosen['live_greedy']
         entry['root_logits_match_selection'] = entry['root_logits'] is not None and entry['root_logits'] == chosen['root_logits']
         entry['decide_root_logits_match'] = entry['root_logits'] is not None and list(root.get('root_logits') or ()) == entry['root_logits']

@@ -14,6 +14,11 @@ tree guard) on the live inputs.
   (depthn_live_server.py, depthn_live_bench.py), must equal those of the live server tree LIVE_COMMIT (pinned in LIVE_TREES,
   and checked against the commit itself when the clone has it), with no tracked change and no untracked .py file there.
   --tree-commit (the server's label for the code served, which the bench passes through) must name HEAD when given.
+  --accept-tree COMMIT replays against a modified tree instead: COMMIT must be HEAD (git rev-parse --verify COMMIT^{commit}),
+  the guarded paths' trees are taken from it (git rev-parse COMMIT:<path>) and recorded with the live pins and the paths that
+  differ from them, and the guarded paths and scripts/ must hold no tracked change and no untracked .py file. The header
+  records it (tree_guard.modified_tree, replay_against: 'replay against a modified tree ...'); parity against the live run is
+  still recorded, but expected to fail. Without the flag the guard is unchanged.
 - Identity: the built search's run header (depthn_live_server.header) must match the live READY identity (LIVE_IDENTITY:
   seeds, session cap, precision pins, x64 off, sessions, champion and input sha256s) with the arm's rung, bucket 1 and
   max_requests 1; the replay refuses to warm up otherwise.
@@ -108,6 +113,8 @@ def parser():
     p.add_argument('--sample-seed', type=int, help='the sample\'s seed (required with --sample)')
     p.add_argument('--shard', type=int, default=0);p.add_argument('--shards', type=int, default=1)
     p.add_argument('--max-decisions', type=int, help='stop after this many sent decisions (smoke tests)')
+    p.add_argument('--accept-tree', metavar='COMMIT', help='replay against a modified tree: COMMIT must be HEAD and clean in the guarded paths '
+        'and scripts/; its trees replace the live pins (module docstring). Parity against live is recorded but expected to fail')
     p.set_defaults(saved_root_admission=False, buckets=(1,))
     return p
 
@@ -134,12 +141,18 @@ def git(root, *arguments):
     return subprocess.check_output(['git', '-C', str(root), *arguments], text=True, stderr=subprocess.DEVNULL).strip()
 
 
-def tree_guard(root=ROOT, *, tree_commit=None, run=git):
+MODIFIED_TREE = 'replay against a modified tree: parity against the live run is recorded but expected to fail'
+ACCEPT_PATHS = (*LIVE_TREES, 'scripts')   # what --accept-tree holds clean: the guarded paths and every script the replay may run
+
+
+def tree_guard(root=ROOT, *, tree_commit=None, accept_tree=None, run=git):
     """dict(head, live_commit, live_commit_present, trees) when HEAD's guarded paths are the live tree's (module docstring);
-    ValueError otherwise."""
+    with accept_tree (a commit that must be HEAD, clean in ACCEPT_PATHS), its trees instead, plus accepted_tree, modified_tree,
+    live_trees, differs_from_live and the MODIFIED_TREE note. ValueError otherwise."""
     try:head = run(root, 'rev-parse', 'HEAD')
     except (OSError, subprocess.CalledProcessError) as error:raise ValueError(f'tree guard: {root} must be a git checkout ({error})') from None
     if tree_commit is not None and tree_commit != head:raise ValueError(f'tree guard: --tree-commit {tree_commit} is not HEAD {head}')
+    if accept_tree is not None:return accepted_tree_guard(root, head, accept_tree, run=run)
     trees, present = {}, True
     for path, pinned in LIVE_TREES.items():
         try:theirs = run(root, 'rev-parse', f'{LIVE_COMMIT}:{path}')
@@ -153,6 +166,23 @@ def tree_guard(root=ROOT, *, tree_commit=None, run=git):
     odd = [x for x in changed if not x.startswith('??') or x.endswith('.py')]
     if odd:raise ValueError('tree guard: the live paths differ from HEAD in the working tree: ' + '; '.join(odd[:5]))
     return dict(head=head, live_commit=LIVE_COMMIT, live_commit_present=present, trees=trees)
+
+
+def accepted_tree_guard(root, head, commit, *, run=git):
+    """tree_guard's --accept-tree branch (module docstring): ValueError unless `commit` is HEAD and the ACCEPT_PATHS are clean."""
+    if type(commit) is not str or not commit.strip():raise ValueError('tree guard: --accept-tree needs a commit')
+    try:resolved = run(root, 'rev-parse', '--verify', f'{commit}^{{commit}}')
+    except subprocess.CalledProcessError:raise ValueError(f'tree guard: --accept-tree {commit} is not a commit of {root}') from None
+    if resolved != head:raise ValueError(f'tree guard: --accept-tree {commit} ({resolved}) is not HEAD {head}')
+    trees = {}
+    for path in LIVE_TREES:
+        try:trees[path] = run(root, 'rev-parse', f'{resolved}:{path}')
+        except subprocess.CalledProcessError:raise ValueError(f'tree guard: --accept-tree {resolved[:8]} has no {path}') from None
+    changed = run(root, 'status', '--porcelain', '--untracked-files=all', '--', *ACCEPT_PATHS).splitlines()
+    odd = [x for x in changed if not x.startswith('??') or x.endswith('.py')]
+    if odd:raise ValueError('tree guard: --accept-tree needs a clean HEAD; the working tree differs: ' + '; '.join(odd[:5]))
+    return dict(head=head, live_commit=LIVE_COMMIT, live_commit_present=None, trees=trees, accepted_tree=resolved, modified_tree=True,
+        live_trees=dict(LIVE_TREES), differs_from_live=[p for p in LIVE_TREES if trees[p] != LIVE_TREES[p]], note=MODIFIED_TREE)
 
 
 def check_call_sites(function=None):
@@ -489,7 +519,7 @@ def write_json(path, value):
 
 def main(argv=None):
     args = options(argv);argv = list(sys.argv[1:] if argv is None else argv)
-    try:guard = tree_guard(tree_commit=args.tree_commit);check_call_sites();cells = select_cells(args)
+    try:guard = tree_guard(tree_commit=args.tree_commit, accept_tree=args.accept_tree);check_call_sites();cells = select_cells(args)
     except (ValueError, RuntimeError, OSError) as error:raise SystemExit(f'depthn_rr_reprice: {error}')
     if not cells:raise SystemExit('depthn_rr_reprice: no cell in this shard')
     out = Path(args.out);out.mkdir(parents=True, exist_ok=False);shard = args.shard;run = Path(args.run_directory)
@@ -504,7 +534,7 @@ def main(argv=None):
         warmup_requests=len(saved), build_seconds=build_seconds, warmup_seconds=warmup_seconds, cells=cells, run_directory=str(run),
         arm=args.arm, shard=shard, shards=args.shards, max_decisions=args.max_decisions, sample=args.sample, sample_seed=args.sample_seed,
         jax_version=jax.__version__, devices=[f'{d.platform}:{d.device_kind}' for d in jax.devices()], python=sys.version,
-        environment={k: os.environ.get(k) for k in ENVIRONMENT}, pid=os.getpid()))
+        environment={k: os.environ.get(k) for k in ENVIRONMENT}, pid=os.getpid(), **({'replay_against': MODIFIED_TREE} if guard.get('modified_tree') else {})))
     rows, skipped, skip_disagreements, cell_errors, done, finished = [], 0, [], [], False, False
     started = time.perf_counter()
     try:

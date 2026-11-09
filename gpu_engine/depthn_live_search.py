@@ -63,10 +63,14 @@ request_id. Per batch (process_many chunks a longer list into batches of max_req
   (depthn_live_server --matmul-precision, default 'highest': it refuses to start on any other setting); this module
   records jax.config.jax_default_matmul_precision in the pricer identity (matmul_precision) of every response, and the
   panel's probe and readout refuse a response priced under another precision.
+- the root prior's inputs (reported): `root_view_source`, the build root dict's ('b2': the champion read B2's own encoding of
+  the literal root, as Codex's ladder; 'world0': world 0's own view, for a root without B2 inputs), and `b2_view`, its
+  diagnostic of world 0's view against B2's encoding (wire_b2_view: equal, per-key equal flags, the largest numeric
+  difference, error); both None for a root that never reached the root view.
 Response, per the live contract: schema, request_id, rung, archive_sha256, status, action_index, q_values (9, None on
 illegal lanes), refusal, cause, requested_worlds, constructed_worlds, decision_seconds (batch start -> result, COMPLETE
 only); ours: root_operator, root_operator_impl, completed_q, policy_target, root_value, action_mean_q,
-action_policy_target, mean_q_agrees, reduction_note, block_causes, world_refusals, timings (queue_seconds,
+action_policy_target, mean_q_agrees, reduction_note, root_view_source, b2_view, block_causes, world_refusals, timings (queue_seconds,
 prepare_seconds (the root's own), build/price/reduce_seconds (the shared batch's; reduce = backups, averaging and the
 reporting reduction)), batch_size, bucket, tree_commit, pricer. Fields a request never reached are None. `rung` echoes the
 request's when it is a string (so a RUNG_NOT_SERVED refusal still matches the client's rung), else this server's.
@@ -211,6 +215,16 @@ def refusal_cause(reason):
         else'depthn_refused')
 
 
+def wire_b2_view(view):
+    """A root's b2_view (constructor_worlds.b2_view_check) for the wire: dict(equal, keys, numeric_max_abs_diff, error), JSON-safe
+    (bools, a finite float or None: a non-finite difference is None), or None when there is none."""
+    if view is None:return None
+    if not isinstance(view,dict):return dict(equal=None,keys=None,numeric_max_abs_diff=None,error=f'unexpected b2_view {type(view).__name__}')
+    keys,diff,error=view.get('keys'),view.get('numeric_max_abs_diff'),view.get('error')
+    return dict(equal=None if view.get('equal')is None else bool(view['equal']),keys=None if keys is None else{str(k):bool(v)for k,v in keys.items()},
+        numeric_max_abs_diff=float(diff)if isinstance(diff,(int,float))and math.isfinite(diff)else None,error=None if error is None else str(error))
+
+
 def _battle(key):
     """The battle of a ProtocolConstructor session key (rung, battle, owner, stream), else None."""
     return key[1]if type(key)is tuple and len(key)==4 else None
@@ -271,7 +285,8 @@ class DepthNLiveSearch:
         return dict(schema=SCHEMA,request_id=request_id,rung=self.rung,archive_sha256=self.archive_sha256,status='REFUSED',action_index=None,q_values=None,
             refusal=None,cause=None,requested_worlds=self.W,constructed_worlds=0,decision_seconds=None,root_operator=ROOT_OPERATOR,
             root_operator_impl=ROOT_OPERATOR_IMPL,completed_q=None,policy_target=None,root_value=None,action_mean_q=None,action_policy_target=None,
-            mean_q_agrees=None,reduction_note=None,block_causes=None,world_refusals=None,timings=dict.fromkeys(STAGES),batch_size=n,bucket=None,
+            mean_q_agrees=None,reduction_note=None,root_view_source=None,b2_view=None,block_causes=None,world_refusals=None,timings=dict.fromkeys(STAGES),
+            batch_size=n,bucket=None,
             root_classes=None,root_class=None,root_class_source=None,root_class_crosscheck=None,
             tree_commit=self.tree_commit,pricer=dict(self.pricer_identity))
 
@@ -357,8 +372,9 @@ class DepthNLiveSearch:
             frame,_=cw.price(self.pricers[chosen],made,self.binding,self.recipe,self.params)
         t_price=time.perf_counter();results=[];causes=backups.refusal_summary(frame)['roots']if made.requests else()
         for root in made.roots:
-            if root['status']!='PRICED':results.append(dict(request_id=root['request_id'],status='REFUSED',refusal=root['reason'],block_causes=None));continue
-            block=[causes[r]['cause']for r in root['rows']];base=dict(request_id=root['request_id'],block_causes=block)
+            view=dict(root_view_source=root.get('root_view_source'),b2_view=wire_b2_view(root.get('b2_view')))
+            if root['status']!='PRICED':results.append(dict(request_id=root['request_id'],status='REFUSED',refusal=root['reason'],block_causes=None,**view));continue
+            block=[causes[r]['cause']for r in root['rows']];base=dict(request_id=root['request_id'],block_causes=block,**view)
             if any(block):results.append(dict(base,status='REFUSED',refusal=next(c for c in block if c)));continue   # DepthN's rule: a refused block refuses the root
             try:blocks=[backups.backup(frame,r,backups.learner_max)for r in root['rows']]   # WorldPrices: averaging's value and logit rules
             except ValueError as error:results.append(dict(base,status='REFUSED',refusal=f'AVERAGING_ERROR: {error}'));continue
@@ -372,7 +388,8 @@ class DepthNLiveSearch:
             timings=dict(row['timings'],prepare_seconds=item.seconds,classify_seconds=labels.pop('classify_seconds'),structure_seconds=labels.pop('structure_seconds'),
                 build_seconds=t_build-t_classify,price_seconds=t_price-t_build,reduce_seconds=t_reduce-t_price)
             base=dict(row,**labels,constructed_worlds=sum(w.state is not None for w in worlds),world_refusals=[dict(world=w.index,kinds=list(w.refusals))for w in worlds if w.refusals],
-                timings=timings,bucket=chosen,block_causes=None if result['block_causes']is None else list(result['block_causes']))
+                timings=timings,bucket=chosen,block_causes=None if result['block_causes']is None else list(result['block_causes']),
+                root_view_source=result['root_view_source'],b2_view=result['b2_view'])
             if i in gates:out[i]=dict(base,cause=gates[i][0],refusal=gates[i][1])
             elif result['status']=='COMPLETE':
                 out[i]=dict(base,**{k:result[k]for k in('status','action_index','q_values','completed_q','policy_target','root_value','action_mean_q',

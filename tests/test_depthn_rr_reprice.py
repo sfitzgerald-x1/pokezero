@@ -82,8 +82,10 @@ def fake_build(constructor, prepared, pricer, params, *, binding, recipe, only_c
 
 
 def pricing(stack, *, still_clock=False):
-    """Fake pricing under the real _search: build, price and the backups (each row r is the block of worlds 2r, 2r+1)."""
+    """Fake pricing under the real _search: build, price and the backups (each row r is the block of worlds 2r, 2r+1). The fake
+    worlds' carries are not the device tracker carry: the real prepare_roots keeps them as built (no carry completion)."""
     stack.enter_context(patch.object(cw, 'constructor_binding', return_value='binding'))
+    stack.enter_context(patch.object(cw, 'world_completer', return_value=lambda world, owner: world))
     stack.enter_context(patch.object(live, 'classify', return_value=([], 'protocol_facts')))
     stack.enter_context(patch.object(cw, 'build', side_effect=fake_build))
     stack.enter_context(patch.object(cw, 'price', return_value=(SimpleNamespace(), None)))
@@ -341,6 +343,47 @@ class GuardTests(unittest.TestCase):
         self.assertFalse(R.tree_guard(run=self.runner(shallow))['live_commit_present'])
         with self.assertRaisesRegex(ValueError, 'git checkout'):R.tree_guard(run=self.runner({('rev-parse', 'HEAD'): None}))
 
+    def accept_runner(self, override=None, *, head='a' * 40, trees=None):
+        """git answers for --accept-tree: HEAD `head`, its trees `trees` (default: gpu_engine modified, the rest the live pins)."""
+        trees = dict(R.LIVE_TREES, gpu_engine='9' * 40) if trees is None else trees
+        answers = {('rev-parse', 'HEAD'): head, ('rev-parse', '--verify', f'{head}^{{commit}}'): head, ('rev-parse', '--verify', 'HEAD^{commit}'): head,
+            ('rev-parse', '--verify', 'b' * 40 + '^{commit}'): 'b' * 40, ('rev-parse', '--verify', 'nope^{commit}'): None,
+            ('status', '--porcelain', '--untracked-files=all', '--', *R.ACCEPT_PATHS): ''}
+        for path, tree in trees.items():answers[('rev-parse', f'{head}:{path}')] = answers[('rev-parse', f'HEAD:{path}')] = tree
+        for path, tree in R.LIVE_TREES.items():answers[('rev-parse', f'{R.LIVE_COMMIT}:{path}')] = tree
+        answers.update(override or {})
+
+        def run(root, *arguments):
+            value = answers[arguments]
+            if value is None:raise subprocess.CalledProcessError(128, 'git')
+            return value
+        return run
+
+    def test_accept_tree_replays_a_modified_clean_head_and_refuses_anything_else(self):
+        head = 'a' * 40;run = self.accept_runner()
+        with self.assertRaisesRegex(ValueError, 'HEAD:gpu_engine'):R.tree_guard(run=run)   # the default guard is unchanged: refused
+        for commit in (head, 'HEAD'):
+            got = R.tree_guard(accept_tree=commit, run=run)
+            self.assertEqual((got['head'], got['accepted_tree'], got['modified_tree'], got['note'], got['live_trees']), (head, head, True, R.MODIFIED_TREE, R.LIVE_TREES))
+            self.assertEqual((got['trees']['gpu_engine'], got['trees']['src'], got['differs_from_live']), ('9' * 40, R.LIVE_TREES['src'], ['gpu_engine']))
+        with self.assertRaisesRegex(ValueError, 'is not HEAD'):R.tree_guard(accept_tree='b' * 40, run=run)   # a commit, not HEAD
+        with self.assertRaisesRegex(ValueError, 'not a commit'):R.tree_guard(accept_tree='nope', run=run)
+        with self.assertRaisesRegex(ValueError, 'needs a commit'):R.tree_guard(accept_tree='  ', run=run)
+        status = ('status', '--porcelain', '--untracked-files=all', '--', *R.ACCEPT_PATHS)
+        for dirty in ('M gpu_engine/constructor_worlds.py', ' M scripts/depthn_rr_reprice.py', '?? scripts/extra.py'):   # tracked change, untracked .py
+            with self.subTest(dirty=dirty), self.assertRaisesRegex(ValueError, 'clean HEAD'):R.tree_guard(accept_tree=head, run=self.accept_runner({status: dirty}))
+        self.assertTrue(R.tree_guard(accept_tree=head, run=self.accept_runner({status: '?? scripts/notes.txt'})))   # no code
+        with self.assertRaisesRegex(ValueError, 'tree-commit'):R.tree_guard(tree_commit='c' * 40, accept_tree=head, run=run)
+        with self.assertRaisesRegex(ValueError, 'has no src'):R.tree_guard(accept_tree=head, run=self.accept_runner({('rev-parse', f'{head}:src'): None}))
+        default = R.tree_guard(run=self.runner())   # the live tree: no accept keys, the live pins
+        self.assertEqual(set(default), {'head', 'live_commit', 'live_commit_present', 'trees'})
+
+    def test_accept_tree_option(self):
+        args = R.parser().parse_args(BASE + CHAMPION + ['--run-directory', 'r', '--out', 'o', '--cells', '1001'])
+        self.assertIsNone(args.accept_tree)
+        args = R.parser().parse_args(BASE + CHAMPION + ['--run-directory', 'r', '--out', 'o', '--cells', '1001', '--accept-tree', 'abc'])
+        self.assertEqual(args.accept_tree, 'abc')
+
     @unittest.skipUnless(subprocess.run(['git', '-C', str(R.ROOT), 'rev-parse', R.LIVE_COMMIT], capture_output=True).returncode == 0,
         'needs a checkout holding the live commit')
     def test_the_pins_are_the_live_commits_trees(self):
@@ -377,7 +420,7 @@ class MainTests(unittest.TestCase):
                 with self.subTest(argv=argv), redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):R.options(argv)
             self.assertEqual(R.options(BASE + CHAMPION + ['--run-directory', 'r', '--out', 'o', '--sample', '8', '--sample-seed', '3']).sample_seed, 3)
 
-    def replay(self, tmp, *extra, header=None):
+    def replay(self, tmp, *extra, header=None, guard=None):
         """main over a run directory with cell 1001: decisions 0-4, decision 1 single-legal, decision 4 refused by the constructor."""
         root = Path(tmp) / 'run';write_run(root, [(1001, 'DN2W16', 7, 1, 'COMPLETE')])
         roots = write_capture(root / 'owning-wire' / '1001.jsonl', [False, True, False, False, False])
@@ -402,7 +445,7 @@ class MainTests(unittest.TestCase):
         with ExitStack() as stack:
             pricing(stack)
             stack.enter_context(patch.object(R, 'options', return_value=args))
-            stack.enter_context(patch.object(R, 'tree_guard', return_value=dict(head='h')))
+            self.guard = stack.enter_context(patch.object(R, 'tree_guard', return_value=dict(head='h') if guard is None else guard))
             stack.enter_context(patch.object(R.server, 'read_requests', return_value=[dict(saved=1)]))
             stack.enter_context(patch.object(R.server, 'build', return_value=search_object))
             stack.enter_context(patch.object(R.server, 'header', return_value=header))
@@ -412,6 +455,16 @@ class MainTests(unittest.TestCase):
         out = Path(tmp) / 'out'
         rows = [json.loads(x) for x in (out / 'rows-0.jsonl').read_text().splitlines()]
         return code, rows, json.loads((out / 'summary-0.json').read_text()), json.loads((out / 'header-0.json').read_text()), constructor, warmed, stdout.getvalue(), args
+
+    def test_main_with_accept_tree_records_a_modified_tree_replay(self):
+        accepted = dict(head='h', trees={}, accepted_tree='h', modified_tree=True, note=R.MODIFIED_TREE)
+        with tempfile.TemporaryDirectory() as tmp:
+            code, rows, summary, header, *_ = self.replay(tmp, '--accept-tree', 'h', guard=accepted)
+        self.assertEqual(code, 0);self.guard.assert_called_once_with(tree_commit=None, accept_tree='h')
+        self.assertEqual((header['tree_guard'], header['replay_against']), (accepted, R.MODIFIED_TREE))
+        self.assertTrue(all('parity' in r for r in rows))   # parity against live is still recorded
+        with tempfile.TemporaryDirectory() as tmp:header = self.replay(tmp)[3]
+        self.assertNotIn('replay_against', header);self.guard.assert_called_once_with(tree_commit=None, accept_tree=None)   # the default: unchanged
 
     def test_main_replays_records_and_joins(self):
         with tempfile.TemporaryDirectory() as tmp:
