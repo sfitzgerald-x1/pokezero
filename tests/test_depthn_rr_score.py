@@ -719,11 +719,11 @@ class DefinitiveOperatorTests(unittest.TestCase):
 
     def test_the_champion_as_reply_model_reproduces_averaging_and_blend(self):
         c, out = self.score(self.worlds(), model=self.champion)
-        self.assertEqual(set(c), set(S.DEFINITIVE_SETTINGS))
+        self.assertEqual(set(c), set(S.DEFINITIVE_SETTINGS + S.LOW_BETA_REWEIGHTED))
         self.assertEqual((c['averaging'], c['br_fp'], c['bayes_hedge:lam=0']), (0, 0, 1))
         self.assertEqual((c['blend:lam=0.5'], c['rnr:lam=0.5']), (2, 2))
         self.assertEqual((c['reweighted_averaging:beta=0.5'], c['reweighted_br_fp:beta=0.5']), (0, 0))
-        self.assertEqual(out['world_weights'], [.5, .5]);self.assertEqual(out['effective_worlds'], 2.)
+        self.assertEqual(out['world_weights'], [.5, .5]);self.assertEqual((out['effective_worlds'], out['max_world_weight']), (2., .5))
 
     def test_a_reply_model_that_predicts_the_other_reply_moves_br_and_rnr(self):
         # The model predicts reply 1 at .9: Q = (-.8, .2, -.03), so br_fp plays 1; at lam .75 rnr stays on the safe action too.
@@ -740,6 +740,9 @@ class DefinitiveOperatorTests(unittest.TestCase):
         self.assertEqual((c['reweighted_averaging:beta=0.5'], c['reweighted_br_fp:beta=0.5']), (2, 2))
         self.assertAlmostEqual(out['world_weights'][1], math.exp(5) / (1 + math.exp(5)), places=12)
         self.assertAlmostEqual(out['effective_worlds'], 1 / math.fsum(w * w for w in out['world_weights']), places=12)
+        self.assertEqual(out['max_world_weight'], max(out['world_weights']))
+        # beta 0.25 halves the evidence: weight e^2.5 / (1 + e^2.5) on world 1, still enough to move both operators here
+        self.assertEqual((c['reweighted_averaging:beta=0.25'], c['reweighted_br_fp:beta=0.25']), (2, 2))
         self.assertEqual(S.world_weights([-1e6, 0.]), [0., 1.])
 
     def test_guards(self):
@@ -794,20 +797,24 @@ class DefinitiveEndToEndTests(EndToEndTests):
 
     def test_main_with_reply_prior(self):pass
 
-    def test_main_definitive(self):
+    def definitive_inputs(self, slope):
         run = self.root / 'run'
-        for sub in ('results', 'telemetry', 'owning-wire'):(run / sub).mkdir(parents=True)
+        for sub in ('results', 'telemetry', 'owning-wire'):(run / sub).mkdir(parents=True, exist_ok=True)
         rows = self.rows(run, random.Random(11));weights, prior = [], []
         for row in rows:
             row['guards'] = dict(GUARDS_OFF, opponent_recharge_unrepresented=(row['ordinal'], row['decision_index']) == (1, 0))
             if row['worlds'] is None:continue
             for w, world in enumerate(row['worlds']):
-                if (row['ordinal'], row['decision_index']) != (1, 1):weights.append(dict(ordinal=row['ordinal'], decision_index=row['decision_index'], world=w, loglik=-w / 4))
+                if (row['ordinal'], row['decision_index']) != (1, 1):weights.append(dict(ordinal=row['ordinal'], decision_index=row['decision_index'], world=w, loglik=-w * slope))
                 if row['ordinal'] == 0:world['reply_peer_logits'] = world['root_peer_logits'][::-1]
                 else:prior.append(dict(ordinal=row['ordinal'], decision_index=row['decision_index'], world=w, logits=world['root_peer_logits'][::-1]))
         path = self.root / 'rows-0.jsonl';path.write_text(''.join(json.dumps(r) + '\n' for r in rows))
         wpath = self.root / 'weights.jsonl';wpath.write_text(''.join(json.dumps(r) + '\n' for r in weights))
         ppath = self.root / 'prior.jsonl';ppath.write_text(''.join(json.dumps(r) + '\n' for r in prior))
+        return run, path, wpath, ppath
+
+    def test_main_definitive(self):
+        run, path, wpath, ppath = self.definitive_inputs(.25)
         out = self.root / 'out'
         with redirect_stdout(io.StringIO()):
             S.main(['--rows', str(path), '--run-directory', str(run), '--out', str(out), '--operator-set', 'definitive',
@@ -819,7 +826,12 @@ class DefinitiveEndToEndTests(EndToEndTests):
         self.assertIn('rnr:lam=0.25', summary['reported_only']);self.assertNotIn('rnr:lam=0.5', summary['reported_only'])
         self.assertEqual((cover['scored'], cover['excluded']), (5, {'replay_REFUSED': 1, 'world_weights_missing': 1}))
         self.assertEqual((cover['guards']['decisions'], cover['guards']['opponent_recharge_roots']), (5, 1))
-        self.assertEqual(cover['world_weights']['decisions'], 5);self.assertLess(cover['world_weights']['mean_effective_worlds'], 16)
+        w = cover['world_weights']   # loglik -w/4 at beta .5: p_w ∝ r^w, r = e^(-1/8), ESS = (sum r^w)^2 / sum r^2w ~ 12.2 on every root
+        self.assertEqual(w['roots'], 5);self.assertAlmostEqual(w['median_ess'], 12.2, places=1);self.assertEqual(w['share_ess_under_2'], 0.)
+        self.assertAlmostEqual(w['median_max_weight'], (1 - math.exp(-1 / 8)) / (1 - math.exp(-2)), places=12)
+        self.assertFalse(w['low_beta_reported']);self.assertNotIn('reweighted_br_fp:beta=0.25', summary['settings'])
+        self.assertEqual(summary['scoring_rule'], S.SCORING_RULE);self.assertIn('Scoring rule:', (out / 'summary.md').read_text())
+        self.assertEqual(cover['dropped_battles']['battles'], 0)
         self.assertIsNone(cover['external_prior'])
         for name in S.DEFINITIVE_SETTINGS:self.assertEqual(summary['metrics']['pi_filled']['all']['operators'][name]['decisions'], 5, name)
         decisions = {(d['ordinal'], d['decision_index']): d for d in map(json.loads, (out / 'decisions.jsonl').read_text().splitlines())}
@@ -829,6 +841,25 @@ class DefinitiveEndToEndTests(EndToEndTests):
         self.assertIn('recharge guards (definitive set)', (out / 'summary.md').read_text())
         with redirect_stdout(io.StringIO()), self.assertRaises(SystemExit):
             S.main(['--rows', str(path), '--run-directory', str(run), '--out', str(self.root / 'out2'), '--operator-set', 'definitive'])
+
+    def test_steep_weights_report_beta_quarter_and_dropped_battles_leave_every_operator(self):
+        run, path, wpath, ppath = self.definitive_inputs(4.)   # ESS ~ 1 at beta .5
+        drop = self.root / 'drop.json';drop.write_text(json.dumps([dict(ordinal=1, reason='journal_validation')]))
+        out = self.root / 'out'
+        with redirect_stdout(io.StringIO()):
+            S.main(['--rows', str(path), '--run-directory', str(run), '--out', str(out), '--operator-set', 'definitive',
+                    '--world-weights', str(wpath), '--reply-prior', str(ppath), '--drop-battles', str(drop)])
+        summary = json.loads((out / 'summary.json').read_text());cover = summary['coverage']
+        self.assertTrue(cover['world_weights']['low_beta_reported']);self.assertEqual(cover['world_weights']['share_ess_under_2'], 1.)
+        self.assertEqual(summary['settings'], list(S.DEFINITIVE_SETTINGS + S.LOW_BETA_REWEIGHTED))
+        self.assertIn('reweighted_br_fp:beta=0.25', summary['reported_only']);self.assertEqual(summary['candidates'], list(S.DEFINITIVE_CANDIDATES))
+        self.assertEqual(cover['dropped_battles'], dict(battles=1, by_reason={'journal_validation': 1}, rows={'journal_validation': 3}, ordinals=[1]))
+        for name in summary['settings']:self.assertEqual(summary['metrics']['pi_filled']['all']['operators'][name]['decisions'], 4, name)
+        self.assertEqual(cover['scored'], 4)
+        decisions = [json.loads(x) for x in (out / 'decisions.jsonl').read_text().splitlines()]
+        self.assertEqual([d['reason'] for d in decisions if d['ordinal'] == 1], ['battle_dropped:journal_validation'] * 3)
+        drop.write_text(json.dumps([dict(ordinal=1, reason='a'), dict(ordinal=1, reason='b')]))
+        with self.assertRaises(ValueError):S.load_dropped_battles(drop)
         with redirect_stdout(io.StringIO()), self.assertRaises(SystemExit):
             S.main(['--rows', str(path), '--run-directory', str(run), '--out', str(self.root / 'out3'), '--world-weights', str(wpath)])
 

@@ -73,6 +73,12 @@ Definitive operator set (--operator-set definitive; the screen's set above stays
   ('guards_missing'). Counts per operator and reason are reported.
 - Candidates: bayes_hedge:lam=0, blend:lam=0.5, br_fp, rnr:lam=0.5 and both reweighted operators. Every other setting is
   reported only. Gate, selection (even seeds) and confirmation (odd seeds) are the screen's rules over these candidates.
+- Reweighting diagnostics per root (one weight vector serves both reweighted operators): the effective world count
+  ESS = (sum p_w)^2 / sum p_w^2 (median, share of roots under 2) and the largest single weight (median, max). When the median
+  ESS is under 4, both reweighted operators at beta 0.25 are added, reported only.
+- --drop-battles FILE (JSON [{ordinal, reason}]): those battles' rows are scored by no operator (references included) and
+  counted by reason: the journal rebuild's validation drops and the leakage check's overlaps.
+The scoring rule is fixed and the same for every operator (SCORING_RULE); no operator's world weights or beta enter it.
 
 Run from the repository root with the venv that has numpy and scipy:
   python scripts/depthn_rr_score.py --rows ROWS/rows-*.jsonl --run-directory RUN --out NEW_DIRECTORY
@@ -127,6 +133,11 @@ DEFINITIVE_SETTINGS = SETTINGS + ('br_fp',) + tuple(f'rnr:lam={lam}' for lam in 
 DEFINITIVE_CANDIDATES = ('bayes_hedge:lam=0', 'blend:lam=0.5', 'br_fp', 'rnr:lam=0.5') + REWEIGHTED
 WORLD_WEIGHT_FIELDS = dict(ordinal='ordinal', decision_index='decision_index', world='world', loglik='loglik')
 GUARD_REASONS = ('opponent_recharge_root', 'own_recharge_override')
+LOW_BETA = .25
+LOW_BETA_REWEIGHTED = (f'reweighted_averaging:beta={LOW_BETA}', f'reweighted_br_fp:beta={LOW_BETA}')
+LOW_BETA_IF_MEDIAN_ESS_UNDER = 4.
+SCORING_RULE = ("R(a) = the uniform mean over the worlds Foul Play's realized reply b_FP maps into of G_w[a][b_w] (pi_filled: "
+                "averaging's q where no world maps); D = R(op) - R(greedy). Identical for every operator; no world weights or beta.")
 WAITING = (1.,) + (0.,) * 8   # a waiting opponent: column 0 at mass 1
 
 # ---- the re-pricer's field names (scripts/depthn_rr_reprice.py, row schema pokezero.depthn-rr-reprice.row.v1 at f9e143ae),
@@ -505,6 +516,8 @@ def definitive_operators(worlds, root_legal, reply, logliks, failures):
         try:out[name] = _hedge_top(fp_worlds, root_legal, lam)
         except ValueError:out[name] = None;failures[name] += 1
     for name, grids_ in zip(REWEIGHTED, (gs, fp_grids)):q = weighted_q(grids_, weights);out[name] = argmax(q, sorted(q))
+    low = world_weights(logliks, LOW_BETA)   # reported only, when the median ESS at REWEIGHT_BETA is under 4
+    for name, grids_ in zip(LOW_BETA_REWEIGHTED, (gs, fp_grids)):q = weighted_q(grids_, low);out[name] = argmax(q, sorted(q))
     return out, weights
 
 
@@ -693,7 +706,8 @@ def score_decision(decision, reply, target, failures, base=None, external=None, 
                 world_drops=drops, R=dict(dropped=r_dropped, pi_filled=r_filled), operators=ops, averaging_q=list(average.q),
                 greedy_argmax=greedy_argmax, target_fallback=fallback, worlds=len(worlds), external_missing_worlds=external_missing,
                 guard=None if guard is None else dict(opponent_recharge=guard[0], own_recharge_lanes=sorted(guard[1]), replaced=guard_events),
-                world_weights=weights, effective_worlds=None if weights is None else 1. / math.fsum(w * w for w in weights))
+                world_weights=weights, effective_worlds=None if weights is None else math.fsum(weights) ** 2 / math.fsum(w * w for w in weights),
+                max_world_weight=None if weights is None else max(weights))
 
 
 # ---- statistics ----
@@ -829,7 +843,9 @@ class Coverage:
         self.target_fallbacks = 0;self.failures = collections.Counter();self.no_half = 0;self.seen = set()
         self.external = None   # with --reply-prior: Counter(decisions, missing_decisions, missing_worlds)
         self.guards = None   # definitive set: Counter(decisions, opponent_recharge_roots, decisions_with_own_recharge_lanes) and replacements
-        self.replaced = collections.Counter();self.effective_worlds = []
+        self.replaced = collections.Counter();self.effective_worlds = [];self.max_weights = []
+        self.dropped_battles = {}   # --drop-battles: ordinal -> reason
+        self.dropped_rows = collections.Counter()
 
     def add_parity(self, check):
         self.parity['rows'] += 1;self.parity['matches'] += check['match']
@@ -877,10 +893,18 @@ class Coverage:
                 decisions=self.guards['decisions'], opponent_recharge_roots=self.guards['opponent_recharge_roots'],
                 with_own_recharge_lanes=self.guards['with_own_recharge_lanes'],
                 replaced={f'{name}:{reason}': n for (name, reason), n in sorted(self.replaced.items())}),
-            world_weights=None if self.guards is None else dict(
-                beta=REWEIGHT_BETA, decisions=len(self.effective_worlds),
-                mean_effective_worlds=statistics.fmean(self.effective_worlds) if self.effective_worlds else None,
-                min_effective_worlds=min(self.effective_worlds, default=None)))
+            world_weights=None if self.guards is None else self.weight_report(),
+            dropped_battles=dict(battles=len(self.dropped_battles), by_reason=dict(collections.Counter(self.dropped_battles.values())),
+                                 rows=dict(self.dropped_rows), ordinals=sorted(self.dropped_battles)))
+
+    def weight_report(self):
+        ess, top = self.effective_worlds, self.max_weights
+        median = statistics.median(ess) if ess else None
+        return dict(beta=REWEIGHT_BETA, roots=len(ess), ess_rule='(sum w)^2 / sum w^2 over the 16 worlds, per root',
+                    median_ess=median, share_ess_under_2=sum(x < 2 for x in ess) / len(ess) if ess else None,
+                    mean_ess=statistics.fmean(ess) if ess else None, min_ess=min(ess, default=None),
+                    median_max_weight=statistics.median(top) if top else None, max_max_weight=max(top, default=None),
+                    low_beta_reported=median is not None and median < LOW_BETA_IF_MEDIAN_ESS_UNDER)
 
 
 def half_of(seed):
@@ -897,6 +921,9 @@ def process(decision, run, coverage, prior=None, weights=None, definitive=False)
                    request_count=decision['request_count'], turn=decision['turn'], request_kind=decision['request_kind'],
                    source=decision['source'])
     if (ordinal, index) in coverage.seen:coverage.duplicates += 1;return dict(address, scored=False, reason='duplicate_row'), None
+    if ordinal in coverage.dropped_battles:   # before parity and scoring: a dropped battle counts for no operator
+        coverage.seen.add((ordinal, index));coverage.dropped_rows[coverage.dropped_battles[ordinal]] += 1
+        return dict(address, scored=False, reason='battle_dropped:' + coverage.dropped_battles[ordinal]), None
     coverage.seen.add((ordinal, index))
     cell = run.cell(ordinal);seed = cell['seed'];half = half_of(seed)
     coverage.arms[str(cell['arm'])] += 1;coverage.sources[str(decision['source'])] += 1
@@ -937,7 +964,7 @@ def process(decision, run, coverage, prior=None, weights=None, definitive=False)
         g = scored['guard'];coverage.guards['decisions'] += 1;coverage.guards['opponent_recharge_roots'] += g['opponent_recharge']
         coverage.guards['with_own_recharge_lanes'] += bool(g['own_recharge_lanes'])
         for name, reason in g['replaced'].items():coverage.replaced[(name, reason)] += 1
-        coverage.effective_worlds.append(scored['effective_worlds'])
+        coverage.effective_worlds.append(scored['effective_worlds']);coverage.max_weights.append(scored['max_world_weight'])
     if external is not None:
         missing = scored['external_missing_worlds']
         coverage.external['decisions'] += 1;coverage.external['missing_decisions'] += bool(missing);coverage.external['missing_worlds'] += len(missing)
@@ -947,13 +974,24 @@ def process(decision, run, coverage, prior=None, weights=None, definitive=False)
                  live_action=decision['live_action'], averaging_action=chosen, greedy_action=decision['greedy_action'],
                  greedy_argmax=scored['greedy_argmax'], target_fallback=scored['target_fallback'], R=scored['R'], operators=ops,
                  external_missing_worlds=scored['external_missing_worlds'], guard=scored['guard'], world_weights=scored['world_weights'],
-                 effective_worlds=scored['effective_worlds'])
+                 effective_worlds=scored['effective_worlds'], max_world_weight=scored['max_world_weight'])
     record = dict(ordinal=ordinal, half=half, kind=decision['request_kind'], observed=scored['observed'], fp_requested=reply.kind != 'wait',
                   ops={n: (o['choice'], (o['D']['dropped'], o['D']['pi_filled']), o['band']) for n, o in ops.items()})
     return entry, record
 
 
-def score_run(rows, run_directory, out, reply_prior=None, operator_set='screen', world_weights=None):
+def load_dropped_battles(path):
+    """{ordinal: reason} from a JSON list of {ordinal (int), reason (str)}; a malformed or repeated entry raises."""
+    out = {}
+    for number, item in enumerate(json.loads(Path(path).read_text())):
+        if type(item) is not dict or type(item.get('ordinal')) is not int or type(item.get('reason')) is not str or not item['reason']:
+            raise ValueError(f'{path}[{number}]: {{ordinal: int, reason: str}} required')
+        if item['ordinal'] in out:raise ValueError(f'{path}[{number}]: ordinal {item["ordinal"]} listed twice')
+        out[item['ordinal']] = item['reason']
+    return out
+
+
+def score_run(rows, run_directory, out, reply_prior=None, operator_set='screen', world_weights=None, drop_battles=None):
     """Score every row into the new directory `out`; returns the summary. `reply_prior`: an external reply prior JSONL
     (load_reply_prior): under the screen set it adds the reported-only EXTERNAL_SETTINGS operators; under the definitive set it
     is the reply model's logits where the rows carry none. `world_weights`: load_world_weights' JSONL (definitive set only)."""
@@ -969,12 +1007,15 @@ def score_run(rows, run_directory, out, reply_prior=None, operator_set='screen',
     run, coverage, records = RunDirectory(run_directory), Coverage(), []
     if prior is not None and not definitive:coverage.external = collections.Counter()
     if definitive:coverage.guards = collections.Counter()
+    if drop_battles is not None:coverage.dropped_battles = load_dropped_battles(drop_battles)
     with (out / 'decisions.jsonl').open('x') as stream:
         for decision in load_rows(rows):
             entry, record = process(decision, run, coverage, prior, weights, definitive)
             stream.write(json.dumps(entry) + '\n')
             if record is not None:records.append(record)
-    table = metrics(records, settings);cover = coverage.report(records)
+    cover = coverage.report(records)
+    if definitive and cover['world_weights']['low_beta_reported']:settings = settings + LOW_BETA_REWEIGHTED
+    table = metrics(records, settings)
     outcome = decide(table, cover['parity']['passed'], candidates)
     # Reported only (the gate and selection use `metrics`): without 'wait' decisions. There every mapped world is a waiting
     # world (pi_w is column 0's unit mass), so R is averaging's own per-world value over them: exactly its q, and averaging's
@@ -982,10 +1023,11 @@ def score_run(rows, run_directory, out, reply_prior=None, operator_set='screen',
     requested = metrics([r for r in records if r['fp_requested']], settings)
     reported = [n for n in settings if n not in candidates and n not in ('greedy', 'averaging')] if definitive else \
         [n for n in settings if n in EXTERNAL_SETTINGS]
-    summary = dict(schema=SCHEMA, operator_set=operator_set,
+    summary = dict(schema=SCHEMA, operator_set=operator_set, scoring_rule=SCORING_RULE,
                    inputs=dict(rows=[str(Path(p).resolve()) for p in rows], run_directory=str(Path(run_directory).resolve()),
                                reply_prior=None if reply_prior is None else str(Path(reply_prior).resolve()),
-                               world_weights=None if world_weights is None else str(Path(world_weights).resolve())),
+                               world_weights=None if world_weights is None else str(Path(world_weights).resolve()),
+                               drop_battles=None if drop_battles is None else str(Path(drop_battles).resolve())),
                    settings=list(settings), candidates=list(candidates), reported_only=reported, level=LEVEL, override_min=OVERRIDE_MIN, parity_min=PARITY_MIN,
                    bands=[b for b, _ in BANDS], **outcome, coverage=cover, metrics=table, metrics_fp_requested=requested)
     (out / 'summary.json').write_text(json.dumps(summary, indent=1) + '\n')
@@ -1015,6 +1057,8 @@ def markdown(summary):
     cover, table, gate, selection, confirmation = (summary[k] for k in ('coverage', 'metrics', 'gate', 'selection', 'confirmation'))
     settings = summary['settings']
     out = ['# RR (realized-reply re-pricing) score', '', f"**Verdict: {summary['verdict']}** (operator set: {summary['operator_set']})", '',
+           f"Scoring rule: {summary['scoring_rule']}", '',
+           f"Dropped battles (no operator scores them): {cover['dropped_battles']['battles']} {cover['dropped_battles']['by_reason']}", '',
            f"- Parity (rows searched live: replay COMPLETE, recomputed averaging's action == live, q == replay q): "
            f"{cover['parity']['matches']}/{cover['parity']['live_searched']} = {_pct(cover['parity']['rate'])} "
            f"(required >= {_pct(PARITY_MIN)}): {'ok' if cover['parity']['passed'] else 'PARITY_FAILED'}",
@@ -1084,8 +1128,9 @@ def main(argv=None):
                                               "model's logits where the rows carry no reply_peer_logits (definitive set)")
     parser.add_argument('--operator-set', choices=OPERATOR_SETS, default='screen', help='the screen\'s operators (default) or the definitive set')
     parser.add_argument('--world-weights', help='JSONL {ordinal, decision_index, world, loglik} (required with --operator-set definitive)')
+    parser.add_argument('--drop-battles', help='JSON [{ordinal, reason}]: battles no operator scores (validation drops, leakage overlaps)')
     args = parser.parse_args(argv)
-    try:summary = score_run(args.rows, args.run_directory, args.out, args.reply_prior, args.operator_set, args.world_weights)
+    try:summary = score_run(args.rows, args.run_directory, args.out, args.reply_prior, args.operator_set, args.world_weights, args.drop_battles)
     except ValueError as error:
         if 'operator set' in str(error) or 'world-weights' in str(error):parser.error(str(error))
         raise
