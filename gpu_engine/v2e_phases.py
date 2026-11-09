@@ -456,7 +456,8 @@ class Plan:
         constvars = [v for v in jx.constvars if v in s['leftover']]
         consts = [c for v, c in zip(jx.constvars, self.closed.consts) if v in s['leftover']]
         eqns = [new for _, new in s['kept']]
-        effects = jcore.join_effects(*(e.effects for e in eqns)) if eqns else jcore.no_effects
+        from jax._src import core as _core
+        effects = _core.join_effects(*(e.effects for e in eqns)) if eqns else jcore.no_effects
         jaxpr = jcore.Jaxpr(constvars=constvars, invars=invars, outvars=outvars, eqns=eqns, effects=effects)
         dced, _ = pe.dce_jaxpr(jaxpr, [True] * len(outvars), instantiate=True)
         closed = jcore.ClosedJaxpr(dced, consts)
