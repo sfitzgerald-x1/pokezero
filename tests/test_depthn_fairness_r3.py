@@ -265,8 +265,31 @@ class FinalGateR3Tests(unittest.TestCase):
             source_game=dict(opponent_think=[dict(round=0, stratum='2x1000ms', iterations_per_budget_second=1.)] * 500))))
         self.assertEqual(F.final_gate_r3(self.root, 'DN2W16', 500), value)
         self.assertLess(F.final_gate_r3(self.root, 'DN2W16', 2000)['difference'], value['difference'])
+        self.assertEqual(F.final_gate_r3(self.root, 'DN2W16', 2000)['missing_captures'], dict(per_arm={'RAW': 0, 'DN2W16': 2}, total=2, ordinals=[1801, 1804]))
         self.assertIsNone(F.final_gate_r3(self.root, 'DN2W8', 500)['difference'])   # no rated search moves: not within
         self.assertFalse(F.final_gate_r3(self.root, 'DN2W8', 500)['within'])
+
+    def test_missing_captures_are_counted_at_the_path_the_panel_reads(self):
+        lopsided_run(self.root)
+        none = dict(per_arm={'RAW': 0, 'DN2W16': 0}, total=0, ordinals=[])
+        self.assertEqual(F.final_gate_r3(self.root, 'DN2W16', 500)['missing_captures'], none)
+        lopsided_capture(self.root/'owning-wire'/'4.jsonl', 5)   # a capture shorter than its 30 rounds: not missing (rounds beyond it, by round)
+        value = F.final_gate_r3(self.root, 'DN2W16', 500)
+        self.assertEqual((value['missing_captures'], value['reading']['band_from_round']), (none, dict(RAW=0, search=25)))
+        (self.root/'owning-wire'/'0.jsonl').rename(self.root/'elsewhere.jsonl')   # one COMPLETE RAW cell without its capture
+        value = F.final_gate_r3(self.root, 'DN2W16', 500)
+        self.assertEqual(value['missing_captures'], dict(per_arm={'RAW': 1, 'DN2W16': 0}, total=1, ordinals=[0]))
+        self.assertEqual(value['reading']['band_from_round'], dict(RAW=30, search=25))   # unchanged: report only; within is the rule's
+        result = json.loads((self.root/'results'/'0.json').read_text())   # the result's own owning_wire is the path read
+        (self.root/'results'/'0.json').write_text(json.dumps(dict(result, owning_wire=str(self.root/'elsewhere.jsonl'))))
+        self.assertEqual(F.final_gate_r3(self.root, 'DN2W16', 500)['missing_captures'], none)
+        result = json.loads((self.root/'results'/'3.json').read_text())
+        (self.root/'results'/'3.json').write_text(json.dumps(dict(result, owning_wire=str(self.root/'nowhere.jsonl'))))   # its default exists
+        self.assertEqual(F.final_gate_r3(self.root, 'DN2W16', 500)['missing_captures'], dict(per_arm={'RAW': 1, 'DN2W16': 0}, total=1, ordinals=[3]))
+        (self.root/'owning-wire').rename(self.root/'gone')   # every capture missing: all counted, 20 ordinals listed
+        value = F.final_gate_r3(self.root, 'DN2W16', 500)['missing_captures']
+        self.assertEqual((value['per_arm'], value['total']), ({'RAW': 39, 'DN2W16': 40}, 79))   # cell 0 still reads elsewhere.jsonl
+        self.assertEqual(value['ordinals'], sorted(o for p in range(40) for o in (3*p, 3*p + 1) if o != 0)[:20])
 
     def test_the_cli(self):
         lopsided_run(self.root)

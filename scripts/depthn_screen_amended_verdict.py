@@ -35,6 +35,8 @@ A binding may instead declare its final fairness gate (final_fairness_rule, pinn
 carries it as arm_fairness), whose whole-run gate is depthn_fairness_final.final_gate_r3 (`final --rule r3`). The verdict then requires
 that gate's result (its arm_fairness RULE_R3, at the readout's paired cells), refuses the coarse and exact-band gates' results and any run
 amendment (the alive-bands one is screen-r2's), and voids (VOID_FAIRNESS) when it is not within, as the final-fairness addendum's gate does.
+It refuses to run (no verdict, not VOID) when that gate counts any COMPLETE cell whose owner capture file is missing (missing_captures,
+absent or above 0), as the screen-r3 adoption record states.
 Only the standard library and scipy (the declared estimator's own t quantile). Writes the verdict once with --output.
 """
 import argparse
@@ -175,6 +177,10 @@ def verdict(readout, amendment, run_directory, *, readout_sha256, amendment_sha2
                                       or 'alive_bands' in final_fairness or 'finer' in final_fairness):
             raise ValueError(f'the binding\'s final fairness gate ({gate_rule}: depthn_fairness_final.final_gate_r3) required, not the coarse '
                              'or exact-band gate')
+        missing = final_fairness.get('missing_captures') if gate_rule is not None else None
+        if gate_rule is not None and (type(missing) is not dict or type(missing.get('total')) is not int or missing['total'] != 0):
+            raise ValueError(f'no verdict: the {gate_rule} gate must count no COMPLETE cell without its owner capture file '
+                             f'(missing_captures {missing!r})')
         if set(run_amendments) - {'alive_bands'}:raise ValueError(f'unknown run amendments {sorted(set(run_amendments) - {"alive_bands"})}')
         if 'alive_bands' in run_amendments:
             check_alive_bands(*run_amendments['alive_bands'], binding_sha256=binding_sha256, declaration_sha256=declaration_sha256,

@@ -383,10 +383,17 @@ class RunBindingTests(unittest.TestCase):
 R3_DECLARATION_SHA256, R3_TREE = 'a3'*32, 'b3'*20   # a synthetic screen-r3 run
 
 
-def r3_gate(within=True, limit=500):
-    """depthn_fairness_final.final_gate_r3's shape."""
+def r3_gate(within=True, limit=500, missing=0):
+    """depthn_fairness_final.final_gate_r3's shape (`missing` COMPLETE search cells without their owner capture)."""
     return dict(rule='screen-r3 arm fairness (RULE_R3)', arm_fairness=json.loads(json.dumps(fairness.RULE_R3)), limit=limit, tolerance=.05,
-                within=within, difference=-.01 if within else -.08, supported_share=dict(RAW=.99, search=.99), reading=dict(band_from_round=dict(RAW=0, search=0)))
+                within=within, difference=-.01 if within else -.08, supported_share=dict(RAW=.99, search=.99), reading=dict(band_from_round=dict(RAW=0, search=0)),
+                missing_captures=dict(per_arm=dict(RAW=0, DN2W16=missing), total=missing, ordinals=[3*p + 1 for p in range(missing)][:20]))
+
+
+def write_captures(root, ordinals):
+    """An (empty) owner capture file for each ordinal: it exists, so no cell lacks one (every round counts 6 alive, by round)."""
+    (root/'owning-wire').mkdir(exist_ok=True)
+    for ordinal in ordinals:(root/'owning-wire'/f'{ordinal}.jsonl').write_text('')
 
 
 class FinalRuleR3Tests(unittest.TestCase):
@@ -480,11 +487,30 @@ class FinalRuleR3Tests(unittest.TestCase):
                          (self.sha, 'RULE_R3', r3_gate(), 'CONTINUE_TO_2000', R3_TREE))
         self.assertEqual(self.main(self.cli(output='void.json'), gate=r3_gate(within=False)), 0)
         self.assertEqual(json.loads((self.root/'void.json').read_text())['decision'], 'VOID_FAIRNESS')
+        write_captures(self.root, [int(p.stem) for p in (self.root/'results').glob('*.json')])
         self.assertEqual(self.main(self.cli(output='real.json')), 0)   # the real gate: these cells carry no Foul Play rates, so not within
         real = json.loads((self.root/'real.json').read_text())
         self.assertEqual((real['decision'], real['final_fairness']['within'], real['final_fairness']['arm_fairness']), ('VOID_FAIRNESS', False, fairness.RULE_R3))
+        self.assertEqual(real['final_fairness']['missing_captures'], dict(per_arm=dict(RAW=0, DN2W16=0), total=0, ordinals=[]))
         alive_sha = hashlib.sha256(ALIVE.read_bytes()).hexdigest()
         with self.assertRaisesRegex(SystemExit, 'takes none'):self.main(self.cli('--run-amendment', str(ALIVE), alive_sha, output='a.json'), gate=r3_gate())
+
+    def test_no_verdict_when_a_complete_cell_lacks_its_owner_capture(self):
+        """The adoption record's rule: the verdict refuses to run (no verdict, not VOID) when the RULE_R3 gate counts any COMPLETE cell
+        whose owner capture file is missing; with none missing the verdict is as before."""
+        self.assertEqual(self.run_verdict(self.value, r3_gate())['decision'], 'CONTINUE_TO_2000')
+        for gate in (r3_gate(missing=1), r3_gate(within=False, missing=1), {k: v for k, v in r3_gate().items() if k != 'missing_captures'},
+                     dict(r3_gate(), missing_captures=dict(r3_gate()['missing_captures'], total=True)), dict(r3_gate(), missing_captures=None)):
+            with self.subTest(missing=gate.get('missing_captures')), self.assertRaisesRegex(ValueError, 'no verdict'):self.run_verdict(self.value, gate)
+        with self.assertRaisesRegex(ValueError, 'no verdict'):self.main(self.cli(output='m.json'), gate=r3_gate(missing=1))
+        ordinals = sorted(int(p.stem) for p in (self.root/'results').glob('*.json'))
+        with self.assertRaisesRegex(ValueError, r"'total': 1000"):self.main(self.cli(output='none.json'))   # the real gate, no capture at all
+        write_captures(self.root, ordinals[1:])   # the real gate, one COMPLETE cell (RAW, ordinal 0) without its capture
+        with self.assertRaisesRegex(ValueError, r"'total': 1, 'ordinals': \[0\]"):self.main(self.cli(output='one.json'))
+        self.assertEqual([p.name for p in self.root.glob('*.json')], ['readout.json'])   # no verdict written
+        write_captures(self.root, ordinals[:1])
+        self.assertEqual(self.main(self.cli(output='all.json')), 0)
+        self.assertEqual(json.loads((self.root/'all.json').read_text())['final_fairness']['missing_captures']['total'], 0)
 
     def test_an_unpinned_final_rule_is_refused(self):
         from unittest import mock

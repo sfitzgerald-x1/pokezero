@@ -21,8 +21,12 @@ rates only, never outcomes. Needs the run's tree on the path (pokezero.depthn_li
   merge at 120 moves per arm within each (budget, ours, theirs) group, and minimum support: a merged cell enters the weighted ratio only
   with 120 rated moves in each arm). final_gate_r3: fairness.reading under RULE_R3 over every COMPLETE cell of both arms within the first
   `limit` pairs, the moves as the panel reads them (depthn_live_panel.cell_moves under the rule); within when |difference| <= 5%; it
-  reports each arm's supported share. `window --rule r3` reads the declared reading (and the finer one) under RULE_R3. The alive counts
-  come from depthn_live_fairness.round_states (rounds here is that function), so every reader shares one definition.
+  reports each arm's supported share, and missing_captures: the COMPLETE cells within the limit whose owner capture file does not exist at
+  the path cell_moves reads (the result's owning_wire, else owning-wire/<ordinal>.jsonl), per arm and in total, with up to 20 of their
+  ordinals (report only: their moves count both sides 6 alive, by round, in band_from_round; a capture shorter than the game is not
+  missing; the screen-r3 verdict refuses to run when any is). `window --rule r3` reads the declared reading (and the finer one) under
+  RULE_R3. The alive counts come from depthn_live_fairness.round_states (rounds here is that function), so every reader shares one
+  definition.
 """
 import argparse
 import sys
@@ -124,19 +128,23 @@ def final_gate_r3(run_directory, search_arm, limit):
     """Screen-r3's final gate (module docstring): fairness.reading under RULE_R3 over every COMPLETE cell of both arms within the first
     `limit` pairs, each cell's moves as the panel reads them under that rule; within when |difference| <= 5% (none: not within)."""
     from pokezero import depthn_live_panel as panel
-    run, rule = Path(run_directory), fairness.RULE_R3;cells = {'RAW': [], search_arm: []}
+    run, rule = Path(run_directory), fairness.RULE_R3;cells = {'RAW': [], search_arm: []};missing = {'RAW': [], search_arm: []}
     for path in sorted((run / 'results').glob('*.json')):
         result = json.loads(path.read_bytes());cell = result.get('cell') or {}
         if (result.get('status') != 'COMPLETE' or cell.get('arm') not in cells or type(cell.get('pair_ordinal')) is not int
                 or not 0 <= cell['pair_ordinal'] < limit):continue
         cells[cell['arm']].append(panel.cell_moves(run, cell['ordinal'], result, rule))
+        if not Path(result.get('owning_wire') or run / 'owning-wire' / f"{cell['ordinal']}.jsonl").exists():   # the path cell_moves reads
+            missing[cell['arm']].append(cell['ordinal'])
     value = fairness.reading(fairness.pool(cells['RAW']), fairness.pool(cells[search_arm]), rule)
     within = value['difference'] is not None and abs(value['difference']) <= TOLERANCE
     return dict(rule=f'screen-r3 arm fairness (RULE_R3: budget stratum x turn band x our and their exact alive bands 1 / 2 / 3-4 / 5-6; '
         f'sparse turn bands merged at {rule["min_cell_moves"]} moves per arm; a cell enters the weighted ratio only with '
         f'{rule["min_support_moves"]} rated moves in each arm) over the whole run; |difference| > {TOLERANCE:.0%}: VOID_FAIRNESS',
         arm_fairness=json.loads(json.dumps(rule)), limit=limit, tolerance=TOLERANCE, within=within, difference=value['difference'],
-        supported_share=value['supported_share'], reading=value)
+        supported_share=value['supported_share'], reading=value,
+        missing_captures=dict(per_arm={arm: len(found) for arm, found in missing.items()}, total=sum(map(len, missing.values())),
+                              ordinals=sorted(o for found in missing.values() for o in found)[:20]))
 
 
 def window_entries(run_directory, start, *, end=None, pairs=None, search_arm, limit):
