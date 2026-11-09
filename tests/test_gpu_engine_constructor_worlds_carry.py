@@ -470,6 +470,27 @@ class PeerPressureTests(unittest.TestCase):
         self.assertIs(cw.fill_peer_pressure(swift[0],swift[1],0,facts,pressure_tables(),swift[2]),swift[1])
 
 
+    def test_a_tracers_copied_pressure_is_not_its_own_and_the_completion_is_idempotent(self):
+        """A peer Beta (Trace) faced the owner's Alpha in an earlier stint and took a foe-targeted Surf (its copy then not Pressure),
+        left, came back and traced the owner's Pressure. The spec wrote the copy into its base_ability; the corrected state says
+        Trace, so the earlier Surf is not recharged, on the first pass (prepare_roots) or the second (build)."""
+        state,t,root=pressure_world(peer_abilities=(1,3,0,0,0,0),uses=((3,1,1,2),))   # Beta: base_ability Pressure, as the spec wrote it
+        original=np.zeros((1,2,6),np.int32);borrowed=np.zeros((1,2,6),np.int32);original[0,1,0]=2;borrowed[0,1,0]=1   # Trace, running Pressure
+        t=t._replace(original_ability=j.asarray(original),borrowed_ability=j.asarray(borrowed),own_order=j.asarray([[[0,1,2,3,4,5]]*2],j.int32))
+        lines=[switch('p1','alpha','300/300'),switch('p2','beta'),'|turn|1','|move|p1a: Alpha|Surf|p2a: Beta','|turn|2',switch('p2','gamma'),
+            '|turn|3',switch('p2','beta'),'|-ability|p2a: Beta|Pressure|[from] ability: Trace|[of] p1a: Alpha','|turn|4']
+        facts=cw.line_facts(lines,0);self.assertEqual(facts.owner_moves,(('alpha','surf','beta',True,False),))
+        world=World(0,state,t,(),1,False)
+        first=cw.complete_world(world,pressure_tables(),0,facts=facts,root=root)
+        np.testing.assert_array_equal(np.asarray(first.public.pp_used)[0,0,0],[3,1,1,2])   # B2's count: nothing to add
+        self.assertEqual(int(np.asarray(first.state.base_ability)[0,1,0]),2)   # Trace
+        self.assertIs(cw.complete_world(first,pressure_tables(),0,facts=facts,root=root),first)   # the second pass changes nothing
+        silent=World(0,state,t._replace(original_ability=j.zeros((1,2,6),j.int32),borrowed_ability=j.zeros((1,2,6),j.int32)),(),1,False)
+        once=cw.complete_world(silent,pressure_tables(),0,facts=facts,root=root)   # Beta's own Pressure, never public: one more
+        np.testing.assert_array_equal(np.asarray(once.public.pp_used)[0,0,0],[4,1,1,2])
+        self.assertIs(cw.complete_world(once,pressure_tables(),0,facts=facts,root=root),once)
+
+
 class PeerBaseAbilityTests(unittest.TestCase):
     def test_a_peer_tracers_base_ability_is_its_public_original(self):
         state=empty_state(1)._replace(base_ability=j.asarray([[[3,0,0,0,0,0],[1,3,0,0,0,0]]],j.int32),ability=j.asarray([[[3,0,0,0,0,0],[1,3,0,0,0,0]]],j.int32))

@@ -423,6 +423,9 @@ def fake_sample(root, detached, *, lines, catalog, source, metadata, config, bat
         fully_constructed=True, mapper_diagnostics=())
 
 
+ROOT_CARRY = SimpleNamespace(kind='the root\'s own public carry')   # what the completion receives as `root`
+
+
 class SamplingConstructor(RT.FakeConstructor):
     """RT's constructor, its prepare sampling through phase_d_protocol_world.sample as ProtocolConstructor.prepare does."""
     owning_config = 'owning-config'
@@ -430,7 +433,7 @@ class SamplingConstructor(RT.FakeConstructor):
     def prepare(self, request, index):
         self.calls.append(request['decision_index'])
         if request['decision_index'] in self.refuse:raise Refusal('TEST_REFUSAL', 'no worlds')
-        detached = SimpleNamespace(address=SimpleNamespace(stream=1, frame=request['decision_index'], owner=0))
+        detached = SimpleNamespace(address=SimpleNamespace(stream=1, frame=request['decision_index'], owner=0), public=ROOT_CARRY)
         made = pw.sample(SimpleNamespace(kind='public'), detached, lines=tuple(request['lines']), catalog='catalog', source='source', metadata='metadata',
             config='config', battle_id=request['battle_id'], seed=20261103, count=16)
         return made.root, made, RT.LEGAL
@@ -540,20 +543,21 @@ class CaptureTests(unittest.TestCase):
     def test_every_world_kind_is_completed_with_its_decisions_lines_before_its_view(self):
         calls = []
 
-        def complete(state, public, owner, lines, root=None):   # marks the carry: the view's categorical [0, 0] reads the marker
+        def complete(state, public, owner, lines, root=None):   # marks both: categorical [0, 0] reads the carry, numeric self0 HP the state
             calls.append((int(np.asarray(public['w'])), owner, lines, root))
             if int(np.asarray(public['w'])) == 1:raise ValueError('PEER_REQUEST_ORDER_UNAVAILABLE stand-in')
-            return state, dict(w=jnp.asarray(int(np.asarray(public['w'])) + 200))
+            return state._replace(hp=state.hp.at[0, 1, 0].set(7)), dict(w=jnp.asarray(int(np.asarray(public['w'])) + 200))
         with tempfile.TemporaryDirectory() as tmp, ExitStack() as stack:
             ctx, count, constructor, seen, out, stdout = self.run_cell(tmp, stack, complete=complete)
             rows = P.read_rows(out / 'positions-0.jsonl')
             with np.load(out / 'arrays-0-1001.npz') as data:arrays = {k: np.asarray(data[k]) for k in data.files}
         self.assertEqual(count, 3);self.assertEqual(len(calls), 3 * 4)   # true, true_private, sampled_0, sampled_1 per position
         self.assertEqual([c[0] for c in calls[:4]], [99, 99, 0, 1]);self.assertTrue(all(c[1] == 0 for c in calls))
-        self.assertTrue(all(c[3] is None for c in calls))   # the fake root carries no public carry: the Pressure count has no base
+        self.assertTrue(all(c[3] is ROOT_CARRY for c in calls))   # the root's own carry (the Pressure count's base), for every kind
         first = rows[0];lines = calls[0][2]
         self.assertTrue(lines and lines[-1].startswith('|request|'))   # the decision's own prefix, its last line the own request
         self.assertEqual(arrays['view_categorical'][0, :3, 0, 0].tolist(), [299, 299, 200])   # completed carries; sampled_1's raised
+        np.testing.assert_allclose(arrays['view_numeric'][0, :3, 1, 0], [.07] * 3)   # the views read the completed STATE too
         self.assertFalse(arrays['view_valid'][0, 3]);self.assertTrue(any('sampled_1 view' in n and 'PEER_REQUEST_ORDER' in n for n in first['notes']))
 
     def test_a_game_the_env_cannot_replay_is_a_cell_error_before_anything_is_sent(self):
@@ -644,6 +648,20 @@ def toy(n=5):
     return env, {k: v.copy() for k, v in env.items()}
 
 
+def synthetic_capture(directory, env, view, recomputed=None):
+    """A capture directory of one world kind ('true') whose env and view numeric features are `env` / `view` [n, 23, 132] (everything
+    else equal), with env_opp_hazard_credit `recomputed` [n] when given (an earlier capture's layout otherwise)."""
+    directory.mkdir();n = len(env);t = np.tile(TOKEN_TYPES, (n, 1)).astype(np.int16)
+    extra = {} if recomputed is None else dict(env_opp_hazard_credit=np.asarray(recomputed, np.float32))
+    np.savez(directory / 'arrays-0-1.npz', kinds=np.asarray(['true']), env_numeric=env, env_categorical=np.zeros((n, 23, 41), np.int32), env_token_type=t,
+        env_attention=np.ones((n, 23), bool), env_legal=np.ones((n, 9), bool), view_numeric=view[:, None], view_categorical=np.zeros((n, 1, 23, 41), np.int32),
+        view_token_type=t[:, None], view_attention=np.ones((n, 1, 23), bool), view_legal=np.ones((n, 1, 9), bool), view_valid=np.ones((n, 1), bool),
+        view_error=np.zeros((n, 1), np.int32), ordinal=np.ones(n, np.int64), round=np.arange(n), decision_index=np.arange(n), turn=np.ones(n, np.int64), **extra)
+    (directory / 'positions-0.jsonl').write_text(''.join(json.dumps(dict(views=dict(true={}))) + '\n' for _ in range(n)))
+    (directory / 'summary-0.json').write_text(json.dumps(dict(positions=n)))
+    return directory
+
+
 class ReportMathTests(unittest.TestCase):
     def test_shares_maxima_and_ranking(self):
         env, view = toy()
@@ -721,14 +739,7 @@ class ReportMathTests(unittest.TestCase):
         env[3, 8, 0] = 263 / 300;view[3, 8, 0] = .88   # an exact fraction against the public percent
         env[3, 0, 116] = .02;view[3, 0, 116] = .0213   # the opponent's view of our Spikes losses: exact sum against per-hit percents
         with tempfile.TemporaryDirectory() as tmp:
-            capture = Path(tmp) / 'capture';capture.mkdir();n = len(env);t = np.tile(TOKEN_TYPES, (n, 1)).astype(np.int16)
-            np.savez(capture / 'arrays-0-1.npz', kinds=np.asarray(['true']), env_numeric=env, env_categorical=np.zeros((n, 23, 41), np.int32), env_token_type=t,
-                env_attention=np.ones((n, 23), bool), env_legal=np.ones((n, 9), bool), view_numeric=view[:, None], view_categorical=np.zeros((n, 1, 23, 41), np.int32),
-                view_token_type=t[:, None], view_attention=np.ones((n, 1, 23), bool), view_legal=np.ones((n, 1, 9), bool), view_valid=np.ones((n, 1), bool),
-                view_error=np.zeros((n, 1), np.int32), ordinal=np.ones(n, np.int64), round=np.arange(n), decision_index=np.arange(n), turn=np.ones(n, np.int64))
-            (capture / 'positions-0.jsonl').write_text(''.join(json.dumps(dict(views=dict(true={}))) + '\n' for _ in range(n)))
-            (capture / 'summary-0.json').write_text(json.dumps(dict(positions=n)))
-            report = P.build_report([capture])
+            capture = synthetic_capture(Path(tmp) / 'capture', env, view);report = P.build_report([capture])
             with patch('sys.stdout', new_callable=io.StringIO):
                 self.assertEqual(P.main(['report', '--capture', str(capture), '--out', str(Path(tmp) / 'one'), '--redact', 'hp_percent']), 0)
             one = P.read_json(Path(tmp) / 'one' / 'summary.json');markdown = (Path(tmp) / 'one' / 'summary.md').read_text()
@@ -737,6 +748,34 @@ class ReportMathTests(unittest.TestCase):
         self.assertEqual(sorted(report['redactions']), sorted(P.DEFAULT_REDACTIONS))
         self.assertEqual((sorted(one['redactions']), one['parity_redacted']['true']['exact']['numeric']), (['hp_percent'], 0.))   # --redact selects
         self.assertIn('Exact match except the documented redactions', markdown)
+
+    def test_field_116_is_compared_against_the_env_recomputation_else_within_the_rounding_tolerance(self):
+        env, view = toy(4);env, view = env['numeric'], view['numeric']
+        for i, (e, v) in enumerate(((.02, .0213), (.02, .0213), (.02, .03), (.0, .0))):env[i, 0, 116], view[i, 0, 116] = e, v
+        with tempfile.TemporaryDirectory() as tmp:
+            recomputed = synthetic_capture(Path(tmp) / 'r', env, view, recomputed=[.0213, .0212, np.nan, np.nan])
+            earlier = synthetic_capture(Path(tmp) / 'e', env, view)
+            exact = lambda d: [bool(x) for x in P.diff_stats(*P.redact_pair(P.side_of(P.load_captures([d])[3], 'env', mask=np.ones(4, bool)),
+                P.side_of(P.load_captures([d])[3], 'view', 0, np.ones(4, bool)), P.DEFAULT_REDACTIONS, P.load_captures([d])[3]['env_opp_hazard_credit']),
+                tolerance=1e-5)['observation_exact']]
+            # recomputed: exact equality (a recomputation 1e-4 off differs although within the tolerance); else the tolerance (0.01 apart differs)
+            self.assertEqual(exact(recomputed), [True, False, False, True])
+            self.assertEqual(exact(earlier), [True, True, False, True])
+            self.assertTrue(np.isnan(P.load_captures([earlier])[3]['env_opp_hazard_credit']).all())   # an earlier capture: no recomputation
+
+    def test_the_recomputation_is_the_views_fill(self):
+        from gpu_engine import constructor_worlds as cw, engine_device_public_port as port, engine_device_trackers as tr
+        lines = ['|switch|p1a: Alpha|Alpha, L80|300/300', '|switch|p2a: Beta|Beta, L80|100/100', '|turn|1', '|switch|p1a: Gamma|Gamma, L80|299/300',
+            '|-damage|p1a: Gamma|262/300|[from] Spikes', '|switch|p1a: Alpha|Alpha, L80|300/300', '|-damage|p1a: Alpha|263/300|[from] Spikes',
+            '|switch|p1a: Eta|Eta, L80|10/300', '|-damage|p1a: Eta|0 fnt|[from] Spikes']
+        z = jnp.zeros((1, 2, 6), jnp.int32);base = tr.Trackers(*([z] * 5), z, z, z, z, z, jnp.zeros((1, 2, 6, 7), jnp.int32), z > 0, z > 0, jnp.ones(1, jnp.int32),
+            jnp.zeros(1, jnp.int32), jnp.zeros((1, 2), jnp.int32), jnp.zeros(1, jnp.int32), public_port=port.initialize(1))
+        filled = cw.fill_owner_spikes(base, 0, cw.line_facts(lines, 0));pair = np.asarray(filled.public_port.hazards)[0, 0, 0]
+        view = np.float32(np.clip(np.float32(pair[0] + pair[1]) / np.float32(6), 0, 1))   # what the encoder writes into field 116
+        self.assertGreater(view, 0);self.assertEqual(P.recompute_opp_hazard_credit(lines, 0), view)
+        self.assertEqual(P.recompute_opp_hazard_credit(lines[:3], 0), 0.)   # no hit
+        self.assertTrue(np.isnan(P.recompute_opp_hazard_credit(['|-damage|p1a: Gamma|262/300|[from] Spikes'], 0)))   # no previous HP
+        self.assertEqual((P.showdown_percent(299, 300), P.showdown_percent(300, 300), P.showdown_percent(1, 300), P.showdown_percent(0, 300)), (99, 100, 1, 0))
 
     def test_empty_kind(self):
         env, view = toy(0)

@@ -80,9 +80,10 @@ that differ and the max |diff|; every differing (token, column) cell ranked (bey
 then max |diff|) with examples from both sides; legal-lane disagreement both ways; the sampled worlds' views against the true
 world's. parity_redacted: the same comparison after the documented redactions (REDACTIONS, --redact; default all five:
 LAST_DAMAGE_TAKEN on self0, LAST_DAMAGE_DEALT on opp0-5 and SELF_HAZARD_CREDIT on the field token zeroed, the opponent's exact
-own-HP history, redacted by design; HP_FRACTION on opp0-5 at Showdown's public percent; OPP_HAZARD_CREDIT on the field token
-zeroed, the env's exact-HP sum against the view's per-hit public percents) on both sides, so "exact except the five documented
-redactions" is reported directly. Names: tokens field / self0-5 / opp0-5 / move0-3 / switch0-4 / tendency_stats (engine_device_observation.TOKEN_TYPES),
+own-HP history, redacted by design; HP_FRACTION on opp0-5 at Showdown's public percent; OPP_HAZARD_CREDIT on the field token: the
+env side recomputed at capture (env_opp_hazard_credit, from the decision's own lines as constructor_worlds.fill_owner_spikes builds
+the view's) and compared exactly, or, without a recomputation, compared within OPP_HAZARD_TOLERANCE) on both sides, so "exact
+except the five documented redactions" is reported directly. Names: tokens field / self0-5 / opp0-5 / move0-3 / switch0-4 / tendency_stats (engine_device_observation.TOKEN_TYPES),
 numeric columns through showdown.V4_NUMERIC_LEGACY_INDEX_BY_NEW_INDEX and the NUMERIC_* writer names (as
 engine_device_observation.column_manifest names them), categorical columns through the CATEGORY_* layout. Written as
 summary.json and summary.md in --out.
@@ -116,6 +117,7 @@ SELF_TOKENS, OPPONENT_TOKENS = list(range(1, 7)), list(range(7, 13))
 SAMPLE_PARAMETERS = ('root', 'detached', 'lines', 'catalog', 'source', 'metadata', 'config', 'battle_id', 'seed', 'count')
 ARRAY_KEYS = ('env_numeric', 'env_categorical', 'env_token_type', 'env_attention', 'env_legal', 'view_numeric', 'view_categorical',
     'view_token_type', 'view_attention', 'view_legal', 'view_valid', 'view_error', 'ordinal', 'round', 'decision_index', 'turn')
+OPTIONAL_ARRAY_KEYS = ('env_opp_hazard_credit',)   # [n]; captures before it read NaN (no recomputation)
 FPR_ARRAYS = ('numeric_features', 'categorical_ids', 'token_type_ids', 'attention_mask', 'legal')
 FPR_SCALARS = ('round', 'turn', 'forced', 'label', 'seed', 'seat')
 
@@ -535,6 +537,30 @@ def make_completion(search):
     return Completion(search.constructor)
 
 
+def showdown_percent(hp, maximum):
+    """Showdown's public HP percent of an exact HP: ceil(100 hp / max), 99 below max (the device's engine_device_trackers._percent)."""
+    positive = max(int(maximum), 1);hp = min(max(int(hp), 0), positive);shown = (100 * hp + positive - 1) // positive
+    return 99 if hp < positive and shown == 100 else shown
+
+
+def recompute_opp_hazard_credit(lines, owner):
+    """The env side of field 116 (the opponent's OPP_HAZARD_CREDIT) recomputed from the decision's own lines the way
+    constructor_worlds.fill_owner_spikes builds the view's: each of our Spikes hits (constructor_worlds.line_facts' owner_spikes:
+    the exact HP before and after) at Showdown's public percent drop / 100 in float32, accumulated by the device's compensated
+    float32 sum (engine_device_damage_history._add, here in numpy), then the encoder's column value min(1, max(0, sum / 6)).
+    NaN when a hit's previous HP is not on the lines; 0 without a hit."""
+    from gpu_engine import constructor_worlds as cw
+    hits = cw.line_facts(lines, owner).owner_spikes
+    if hits is None:return np.float32(np.nan)
+    f = np.float32;high, low = f(0), f(0)
+    for before, after, maximum in hits:
+        value = f(max(0, showdown_percent(before, maximum) - showdown_percent(after, maximum))) / f(100)
+        if not value > 0:continue
+        total = f(high + value);recovered = f(total - high);error = f(f(high - f(total - recovered)) + f(value - recovered))
+        correction = f(low + error);new_high = f(total + correction);low = f(correction - f(new_high - total));high = new_high
+    return f(np.clip(f(high + low) / f(6), 0, 1))
+
+
 # The sampler wrapper --------------------------------------------------------------------------------------------------------------
 @dataclass
 class SampleCall:
@@ -694,6 +720,8 @@ def describe_position(ctx, cell, game, row, alignment, capture, response, table,
                 try:views[f'sampled_{i}'] = ctx.view(w.state, w.public, owner, lines, root)
                 except Exception as error:notes.append(f'sampled_{i} view: {type(error).__name__}: {error}'[:300])
     arrays = position_arrays(fpr, views, kinds)
+    try:arrays['env_opp_hazard_credit'] = np.float32(np.nan) if call is None or call.error is not None else recompute_opp_hazard_credit(lines, owner)
+    except Exception as error:arrays['env_opp_hazard_credit'] = np.float32(np.nan);notes.append(f'opp hazard credit: {type(error).__name__}: {error}'[:300])
     record = dict(schema=POSITION_SCHEMA, shard=ctx.shard, ordinal=cell['ordinal'], seed=game['seed'], seat=cell.get('seat'), fp=game['fp'], ours=game['ours'],
         battle_id=row['battle_id'], decision_index=row['decision_index'], request_count=row['request_count'], round=alignment['round'],
         turn=row.get('turn'), alignment={k: v for k, v in alignment.items() if k not in ('round', 'aligned', 'reason')},
@@ -865,6 +893,8 @@ def load_captures(directories):
                 if kinds is None:kinds = found
                 elif found != kinds:raise ValueError(f'{path}: world kinds {found} differ from {kinds}')
                 for key in ARRAY_KEYS:arrays[key].append(np.asarray(data[key]))
+                n = len(data['ordinal'])
+                for key in OPTIONAL_ARRAY_KEYS:arrays[key].append(np.asarray(data[key]) if key in data.files else np.full(n, np.nan, np.float32))
     if kinds is None:raise ValueError('no arrays-*.npz in ' + ', '.join(map(str, directories)))
     return rows, summaries, kinds, {k: np.concatenate(v) for k, v in arrays.items()}
 
@@ -965,13 +995,16 @@ REDACTIONS = {
     'hp_percent': ('tokens 7-12 numeric 0 HP_FRACTION at Showdown\'s public percent: ceil(100 x), capped at 99 below max, 0 if fainted', 0,
         tuple(OPPONENT_TOKENS)),
     'self_hazard_credit': ('field numeric 115 SELF_HAZARD_CREDIT -> 0: the opponent\'s exact Spikes losses, redacted by design', 115, (0,)),
-    'opp_hazard_credit': ('field numeric 116 OPP_HAZARD_CREDIT -> 0: the opponent\'s view of our Spikes losses, the env\'s exact-HP sum against '
-        'the view\'s per-hit public percents (at most 0.007 apart)', 116, (0,)),
+    'opp_hazard_credit': ('field numeric 116 OPP_HAZARD_CREDIT: the env side recomputed from the decision\'s own lines as '
+        'constructor_worlds.fill_owner_spikes builds the view\'s (per-hit public percents, the device\'s compensated sum; '
+        'recompute_opp_hazard_credit) and compared exactly; without a recomputation (an earlier capture, a hit whose previous HP is not on '
+        'the lines) the env value is kept and compared within OPP_HAZARD_TOLERANCE, the per-hit percent rounding', 116, (0,)),
 }
 # All five by default: the first, second and fourth are device_public_teacher.REPLY_HISTORY_APPROXIMATION's columns (the
 # opponent's exact own-HP history, never borrowed); the third is the opponent's public view of our HP; the fifth the precision
 # of its view of our Spikes losses (constructor_worlds.fill_owner_spikes sums the device's per-hit public percents).
 DEFAULT_REDACTIONS = ('last_damage_taken', 'last_damage_dealt', 'hp_percent', 'self_hazard_credit', 'opp_hazard_credit')
+OPP_HAZARD_TOLERANCE = .0075   # the env's exact-HP sum against per-hit public percents: at most 0.007 measured
 
 
 def public_percent(x):
@@ -982,13 +1015,28 @@ def public_percent(x):
 
 
 def redact(side, names=DEFAULT_REDACTIONS):
-    """A copy of one side (side_of's dict) with the named REDACTIONS applied to its numeric features."""
+    """A copy of one side (side_of's dict) with the named per-side REDACTIONS applied to its numeric features (opp_hazard_credit
+    is two-sided: redact_pair)."""
     numeric = np.array(side['numeric'], copy=True)
     for name in names:
         _, column, tokens = REDACTIONS[name];tokens = list(tokens)
+        if name == 'opp_hazard_credit':continue
         if name == 'hp_percent':numeric[:, tokens, column] = public_percent(numeric[:, tokens, column]).astype(numeric.dtype)
         else:numeric[:, tokens, column] = np.where(np.isnan(numeric[:, tokens, column]), np.nan, 0)
     return dict(side, numeric=numeric)
+
+
+def redact_pair(env, view, names=DEFAULT_REDACTIONS, recomputed=None):
+    """(env, view) with `names` applied: redact on each side, then opp_hazard_credit: the env's field 116 replaced by its
+    recomputation where one exists (`recomputed` [n], NaN where none), else the view's taken where the two are within
+    OPP_HAZARD_TOLERANCE (a larger gap stays a difference)."""
+    a, b = redact(env, names), redact(view, names)
+    if 'opp_hazard_credit' in names:
+        _, column, (token,) = REDACTIONS['opp_hazard_credit'];numeric = np.array(a['numeric'], copy=True);theirs = np.asarray(b['numeric'])[:, token, column]
+        mine = numeric[:, token, column];redo = np.full(len(mine), np.nan, np.float32) if recomputed is None else np.asarray(recomputed, np.float32)
+        close = ~np.isnan(theirs) & (np.abs(mine.astype(np.float64) - theirs) <= OPP_HAZARD_TOLERANCE)
+        numeric[:, token, column] = np.where(~np.isnan(redo), redo, np.where(close, theirs, mine));a = dict(a, numeric=numeric)
+    return a, b
 
 
 def side_of(data, prefix, k=None, mask=None):
@@ -1065,8 +1113,8 @@ def build_report(directories, *, tolerance=1e-5, top=30, examples=3, vocabulary=
     for k, kind in enumerate(kinds):
         valid = data['view_valid'][:, k]
         out['parity'][kind] = kind_summary(side_of(data, 'env', mask=valid), side_of(data, 'view', k, valid), {n: v[valid] for n, v in keys.items()}, **common)
-        out['parity_redacted'][kind] = kind_summary(redact(side_of(data, 'env', mask=valid), redactions), redact(side_of(data, 'view', k, valid), redactions),
-            {n: v[valid] for n, v in keys.items()}, **common)
+        a, b = redact_pair(side_of(data, 'env', mask=valid), side_of(data, 'view', k, valid), redactions, data['env_opp_hazard_credit'][valid])
+        out['parity_redacted'][kind] = kind_summary(a, b, {n: v[valid] for n, v in keys.items()}, **common)
     if 'true' in kinds:
         t = kinds.index('true')
         for k, kind in enumerate(kinds):

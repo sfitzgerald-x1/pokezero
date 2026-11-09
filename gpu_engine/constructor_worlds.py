@@ -65,13 +65,18 @@ dict keys and leaves two members None). This module turns prepared roots into De
     (phase_d_live_worlds.py:320); the device writes -2 after a Baton Pass arrival (engine_device_public_hooks.baton_copy,
     :569) and B2 encodes the Baton Pass sentinel (mons.arrived_by_baton). The carry does not keep B2's flag, but the lines
     carry the same fact by the env's and B2's host rule (line_facts' baton), so -1 becomes -2 for that active, both sides.
+    That rule is the env's pending flag: a passer that faints to Pursuit before its recipient arrives leaves the flag
+    set, so the env and the fill mark the next switch a Baton Pass arrival where the device (no baton_copy) may not;
+    very rare.
   - the peer's count of the owner's PP (fill_peer_pressure): from_b2 copies B2's uses, which charge an owner move twice only
     against a PUBLIC Pressure (public_abilities.move_context); Gen 3 Pressure is silent, and the peer knows its own
     ability, so the device move hook (the receiving observer's own active ability) and the env charge twice whenever the
     peer's active has Pressure. Recounted from the root's own pp_used (B2's) plus one per owner foe-targeted declaration
     against a live, silently Pressured peer active of this world (its base ability); the same on every pass. The owner's
     count of the peer's PP stays B2's (the owner view's reference): from_b2's copy at the root; the device hook counts the
-    owner's own Pressure in search.
+    owner's own Pressure in search. B2 also charges an owner move a [from] tag attributes to an unknown caller (e.g.
+    [from]Magic Coat: public_moves' OTHER_FROM caller); line_facts and the device do not count those declarations, so
+    neither does this recount: an existing B2-vs-device difference, not one this fill introduces.
   - a peer tracer's base ability (fix_peer_base_ability, on the world STATE): the materialized spec writes a Trace holder's
     public copied ability into both ability and base_ability (engine_world._resolved_ability), so the peer's own ability
     column (the encoder reads base_ability) showed the copy; base_ability becomes the public original (Trace), as the env
@@ -588,8 +593,12 @@ def complete_public(state,public,tables,owner,*,facts=None,root=None):
 
 
 def complete_carry(state,public,tables,owner,*,facts=None,root=None):
-    """(state, public) of one constructor world completed: fix_peer_base_ability on the state, complete_public on the carry."""
-    return fix_peer_base_ability(state,public,owner),complete_public(state,public,tables,owner,facts=facts,root=root)
+    """(state, public) of one constructor world completed: fix_peer_base_ability on the state first, then complete_public on
+    the carry against the CORRECTED state (fill_peer_pressure reads the peer's base abilities: a Trace holder running a
+    copied Pressure has Trace as its own ability, so earlier moves against it are not recharged, and a second pass, which
+    sees the corrected state, gives the same carry)."""
+    fixed=fix_peer_base_ability(state,public,owner)
+    return fixed,complete_public(fixed,public,tables,owner,facts=facts,root=root)
 
 
 def complete_world(world,tables,owner,*,facts=None,root=None):
