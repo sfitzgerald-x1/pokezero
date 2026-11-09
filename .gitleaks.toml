@@ -9,3 +9,10 @@ targetRules = ["generic-api-key"]
 condition = "AND"
 paths = ['''^src/pokezero/randbat_vocab\.py$''']
 stopwords = ["include_turn_merged"]
+
+[[allowlists]]
+description = "Known non-secret keyword argument in the RR scorer tests (generic-api-key matches 'key in tier_b, unrepresented_turn1_legal=key')"
+targetRules = ["generic-api-key"]
+condition = "AND"
+paths = ['''^tests/test_depthn_rr_score\.py$''']
+stopwords = ["unrepresented_turn1_legal"]
