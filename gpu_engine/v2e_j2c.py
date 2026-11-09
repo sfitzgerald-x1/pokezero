@@ -325,6 +325,15 @@ class Module:
         return sum(text.count(chr(10)) for text in self.files.values())
 
 
+def mark_site(e):
+    """A profile mark's site: (line of the outermost gpu_engine/transition.py step_with_chance frame, i.e. the step phase, or
+    None; the innermost gpu_engine module) of equation e's traceback. Marks are (primitive, where, shapes, line, module)."""
+    tb = getattr(e.source_info, 'traceback', None);frames = tb.frames if tb is not None else ()
+    line = next((f.line_num for f in reversed(frames) if f.function_name == 'step_with_chance' and f.file_name.endswith('/gpu_engine/transition.py')), None)
+    module = next((f.file_name.rsplit('/', 1)[-1][:-3] for f in frames if '/gpu_engine/' in f.file_name), None)
+    return line, module
+
+
 def thread_index(n):
     """This thread's (clamped) element of a register value with n elements."""
     return '0' if n <= 1 else ('t' if n >= REG else f'(t < {n} ? t : {n - 1})')
@@ -558,6 +567,8 @@ void launch_{c}(const Params& p, cudaStream_t stream) {{
                 if v.src == 'store':pending[id(v.holder)] = pending.get(id(v.holder), 0) + 1
             dying = {id(v) for v in ins if v.src == 'store' and v.holder.refs == pending[id(v.holder)] == 1}
             before = len(self.k.lines);self.eq_start = before
+            # Profile marks: a call's inner equations carry no outer frames, so they take their top-level equation's site.
+            if self.profile:outer = getattr(self, 'mark_outer', None);self.mark_outer = outer or mark_site(e)
             key = self.cse_key(e, ins);hit = self.cse.get(key) if key is not None else None
             self.declined_runtime = False
             folded = self.constant_fold(e, ins) if hit is None else None
@@ -593,17 +604,25 @@ void launch_{c}(const Params& p, cudaStream_t stream) {{
                     frames = [f for f in tb.frames if 'v2e_' not in f.file_name and '/jax/' not in f.file_name]
                     info = frames[0] if frames else tb.frames[0]
                 where = f'{info.file_name.rsplit("/", 1)[-1]}:{info.line_num}' if info else '?'
-                self.marks.append((e.primitive.name, where, ','.join(str(tuple(v.aval.shape)) for v in e.outvars)))
+                self.marks.append((e.primitive.name, where, ','.join(str(tuple(v.aval.shape)) for v in e.outvars)) + self.mark_outer)
                 self.k.emit(f'if ({self.mark_cond()}) err[1 + {len(self.marks) - 1}] = (uint32_t)(clock64() - T0);')
+                self.mark_lines = getattr(self, 'mark_lines', 0) + 1   # not counted toward the chunk size (maybe_split)
+            if self.profile:self.mark_outer = outer
             self.maybe_split()
         outs = [self.read(a) for a in jaxpr.outvars]
         self.env = saved
         return outs
 
+    def chunk_size(self):
+        """Lines of the current chunk toward CHUNK_LINES: profile mark lines excluded, so a profile build splits exactly where the
+        plain build does (the plain build plus mark lines, chunk for chunk)."""
+        return len(self.k.lines) - (getattr(self, 'mark_lines', 0) if self.profile else 0)
+
     def maybe_split(self):
-        if len(self.k.lines) >= self.k.CHUNK_LINES and self.k.indent == 1:
+        if self.chunk_size() >= self.k.CHUNK_LINES and self.k.indent == 1:
             self.spill_live()
             self.k.chunks.append(self.k.lines);self.k.chunk_smem.append(self.k.smem);self.k.lines = [];self.k.smem = 0
+            if self.profile:self.mark_lines = 0
 
     def equation(self, e, ins, dying):
         p = e.primitive.name;params = e.params
@@ -1697,9 +1716,10 @@ class ThreadGenerator(Generator):
         h.kind = 'reg';h.name = name;h.chunk = self.chunk_id;self.reloads += 1
 
     def maybe_split(self):
-        if len(self.k.lines) >= self.k.CHUNK_LINES and self.k.indent == 1:
+        if self.chunk_size() >= self.k.CHUNK_LINES and self.k.indent == 1:
             self.spill_live()
             self.k.chunks.append(self.k.lines);self.k.chunk_smem.append(0);self.k.lines = [];self.chunk_id += 1
+            if self.profile:self.mark_lines = 0
 
     def arena_ref(self, off, idx):
         return f'Ab[(size_t)({off} + ({idx})) * L]'
