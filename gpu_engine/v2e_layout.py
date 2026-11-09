@@ -1097,20 +1097,23 @@ def _record_scatter_dtypes(record):
 
 
 def gather_modes(closed):
-    """{mode: {'<module>:<line>': count}} over every gather equation (sub-jaxprs included), by innermost gpu_engine site."""
+    """{mode: {'<module>:<line>': count}} over every gather equation (sub-jaxprs included), by innermost gpu_engine site;
+    an equation inside a library jit (jnp.take_along_axis is one) inherits the site of the enclosing call equation."""
     from jax.extend import core as jcore
     import collections
     out = collections.defaultdict(collections.Counter)
-    def walk(jaxpr):
+    def site_of(e):
+        tb = getattr(e.source_info, 'traceback', None)
+        for f in (tb.frames if tb is not None else ()):
+            if '/gpu_engine/' in f.file_name and not f.file_name.rsplit('/', 1)[-1].startswith(('v2e_', 'v2_')):
+                return f"{f.file_name.rsplit('/', 1)[-1][:-3]}:{f.line_num}"
+        return None
+    def walk(jaxpr, inherited):
         for e in jaxpr.eqns:
-            if e.primitive.name == 'gather':
-                tb = getattr(e.source_info, 'traceback', None);site = None
-                for f in (tb.frames if tb is not None else ()):
-                    if '/gpu_engine/' in f.file_name and not f.file_name.rsplit('/', 1)[-1].startswith(('v2e_', 'v2_')):
-                        site = f"{f.file_name.rsplit('/', 1)[-1][:-3]}:{f.line_num}";break
-                out[str(e.params['mode']).split('.')[-1]][site or 'unknown'] += 1
-            for sub in jcore.jaxprs_in_params(e.params):walk(sub)
-    walk(closed.jaxpr)
+            site = site_of(e) or inherited
+            if e.primitive.name == 'gather':out[str(e.params['mode']).split('.')[-1]][site or 'unknown'] += 1
+            for sub in jcore.jaxprs_in_params(e.params):walk(sub, site)
+    walk(closed.jaxpr, None)
     return {mode: dict(sites) for mode, sites in out.items()}
 
 
