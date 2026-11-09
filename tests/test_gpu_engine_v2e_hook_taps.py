@@ -120,7 +120,7 @@ class OutputsTest(unittest.TestCase):
         state, c = synthetic();before = c.trackers
         H.observe(c, state, j.ones(5, bool));after = c.trackers;written = taps.written_paths(before, after)
         oracle = taps.site_outputs('observe@x', before, after, written, oracle=True)
-        self.assertEqual(set(oracle), {f'observe@x/{p}' for p in written} | {'observe@x/untouched_equal'})
+        self.assertEqual(set(oracle), {f'observe@x/{p}' for p in written} | {'observe@x/untouched_equal', 'observe@x/err'})
         self.assertTrue(bool(np.all(np.asarray(oracle['observe@x/untouched_equal']))))
         same = taps.site_outputs('observe@x', before, after, written, oracle=False)
         self.assertTrue(bool(np.all(np.asarray(same['observe@x/untouched_equal']))))
@@ -148,11 +148,15 @@ class OutputsTest(unittest.TestCase):
         carry, err = taps.split_result((j.zeros(3), j.zeros(3)));self.assertIsNotNone(err, 'a 2-tuple whose second item is an array is (carry, err)')
 
     def test_exercised_lanes(self):
+        """A lane counts as exercised only where the oracle hook changed a written leaf: observing an unchanged state
+        changes nothing; observing lowered HP changes hp_percent on the used lanes."""
         state, c = synthetic();before = c.trackers;use = j.asarray([True, False, True, False, True])
         H.observe(c, state, use);after = c.trackers;written = taps.written_paths(before, after)
+        self.assertTrue(written);self.assertFalse(np.asarray(taps.exercised(before, after, written)).any())
+        damaged = state._replace(hp=state.hp.at[:, 0, 0].set(37));c = H.Context(before, None, None)
+        H.observe(c, damaged, use);after = c.trackers;written = taps.written_paths(before, after)
         hit = np.asarray(taps.exercised(before, after, written))
-        self.assertTrue(hit[0] and hit[2] and hit[4], 'observe changes hp_percent/status/weather on the used lanes')
-        self.assertFalse(hit[1] or hit[3])
+        self.assertTrue(hit[0] and hit[2] and hit[4]);self.assertFalse(hit[1] or hit[3])
 
     def test_statics_and_signature(self):
         state, c = synthetic();use = j.ones(5, bool)
