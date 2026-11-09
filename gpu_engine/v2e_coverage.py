@@ -13,10 +13,12 @@ attributed to the phase of the last step_with_chance-line call before it):
   Sleep Talk and Struggle), per declaring site (the caller move, the Sleep Talk child, Pursuit, Focus Punch);
 - `step:*`: deferral (the output's pending_residual), resume, request kinds and the approximate input-derived path
   classes of v2e_phase_profile.lane_features (`input:*`).
-coverage.json and coverage.md list every path's count and lane share, flag the paths with fewer than --rare (1,000)
-occurrences (the synthetic-lane list for M2..M4) and give the warp union factor per phase group over the exact masks
-(v2e_phase_profile.UnionStats: mean warp-union path count over mean per-lane path count, and the design's cost-model
-factor). Paths are arguments.
+coverage.json and coverage.md list every path's occurrences and occurrences per lane-step (a site reached several times
+per step counts each time), flag the paths with fewer than --rare (1,000) occurrences (the synthetic-lane list for M2..M4)
+and give per phase group, over the exact hook:/mech:/step: masks only: the distinct paths a warp touches over the
+distinct paths one lane touches, and the design's cost-model factor (v2e_phase_profile.UnionStats) at the design's
+uniform share and, with --census, at each group's census hook share; across-group figures are census-weighted only
+when --census is given. Paths are arguments.
 """
 import argparse
 import collections
@@ -101,12 +103,11 @@ class Features:
         from gpu_engine.state import usable_moves
         b = state.hp.shape[0];names = hook_names() + mechanics_names()
         with taps.tap(names, modules=MODULES, scan=SCAN) as calls:out = self.step(state, actions, trackers)
-        feats = {g: {} for g in cz.GROUPS};group = 'A';sites = collections.Counter()
+        feats = {g: {} for g in cz.GROUPS};sites = collections.Counter()
         for call in calls:
             kind = 'hook' if call.name.split('.')[0] in taps.TAP_MODULES or '.' not in call.name else 'mech'
-            if call.site.startswith('transition:'):
-                g = group_of_line(int(call.site.split(':')[1]))
-                if g is not None:group = g
+            # The phase is the step_with_chance line active when the hook was entered (nested calls included).
+            group = group_of_line(call.step_line) or 'A'
             args = bound_arguments(call, MODULES);mask = None
             for param in MASK_PARAMS:
                 if param in args:
@@ -140,39 +141,48 @@ def path_of(name):
 
 
 def summarize(counts, lanes, union, rare):
-    """Per group: {feature: count, share} per tapped occurrence, the per-path aggregation over occurrences, the rare
-    paths (aggregated count under `rare`) and the union factors."""
+    """Per group: {feature: occurrences, share} per tapped occurrence, the per-path aggregation over occurrences
+    (occurrences per lane-step, which can exceed 1 for a site hit several times per step), the rare paths (aggregated
+    count under `rare`) and the union figures."""
     out = {}
     for g in cz.GROUPS:
-        features = {name: dict(count=int(c), lane_share=int(c) / lanes if lanes else None) for name, c in sorted(counts[g].items(), key=lambda kv: (-kv[1], kv[0]))}
+        features = {name: dict(occurrences=int(c), per_lane_step=int(c) / lanes if lanes else None) for name, c in sorted(counts[g].items(), key=lambda kv: (-kv[1], kv[0]))}
         paths = collections.Counter()
         for name, c in counts[g].items():paths[path_of(name)] += int(c)
-        paths = {name: dict(count=c, lane_share=c / lanes if lanes else None) for name, c in sorted(paths.items(), key=lambda kv: (-kv[1], kv[0]))}
-        out[g] = dict(features=features, paths=paths, rare=[name for name, r in paths.items() if r['count'] < rare], union=union.get(g))
+        paths = {name: dict(occurrences=c, per_lane_step=c / lanes if lanes else None) for name, c in sorted(paths.items(), key=lambda kv: (-kv[1], kv[0]))}
+        out[g] = dict(features=features, paths=paths, rare=[name for name, r in paths.items() if r['occurrences'] < rare], union=union.get(g))
     return out
 
 
 def markdown(report):
+    w = report['weights']
     out = [f"# Coverage over {report['shards']} shards, {report['lane_steps']:,} lane-steps", '',
-        '| Group | Tapped occurrences | Paths (occurrences merged) | Paths under {rare} | Union factor (exact masks) | Union factor (design cost model) | Distinct classes per warp (mean / p90) |'.format(rare=report['rare']),
-        '| --- | ---: | ---: | ---: | ---: | ---: | --- |']
+        'Union figures are per 32-lane warp over the exact tapped masks only (`hook:`, `mech:`, `step:`; not the approximate `input:*` classes nor '
+        'the `effect:` subsets). "Distinct paths per warp / per lane" is the raw ratio of the mean number of distinct paths a warp touches to the mean '
+        'number one lane touches; the design cost-model factor is v2e_phase_profile.UnionStats\' warp cost over lane cost with the uniform share u '
+        f"(hooks run unconditionally in the design, so the hook masks are weighted by 1 - u): u = {report['design_uniform_share']} (design) and, with --census, each group's census hook share.", '',
+        '| Group | Tapped occurrences | Paths (occurrences merged) | Paths under {rare} | Distinct paths per warp / per lane | Design cost-model factor (u = design) | Design cost-model factor (u = census hook share) | Distinct classes per warp (mean / p90) |'.format(rare=report['rare']),
+        '| --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |']
     for g, row in report['groups'].items():
         u = row['union'] or {}
-        out.append(f"| {g} | {len(row['features'])} | {len(row['paths'])} | {len(row['rare'])} | {u.get('raw_union_factor', float('nan')):.3f} | "
-            f"{(u.get('union_factor_design_uniform') or float('nan')):.3f} | {u.get('distinct_classes_per_warp', {}).get('mean', float('nan')):.1f} / {u.get('distinct_classes_per_warp', {}).get('p90', float('nan'))} |")
-    out += ['', f"Weighted union factor (exact masks, census weights when given): {report.get('weighted_raw_union_factor')}", '',
-        '## Paths with fewer than {rare} occurrences (synthetic-lane candidates)'.format(rare=report['rare']), '', '| Group | Path | Count |', '| --- | --- | ---: |']
+        census_factor = u.get('union_factor') if report['census'] else None
+        out.append(f"| {g} | {len(row['features'])} | {len(row['paths'])} | {len(row['rare'])} | {u.get('distinct_paths_warp_over_lane', float('nan')):.3f} | "
+            f"{(u.get('union_factor_design_uniform') or float('nan')):.3f} | {census_factor if census_factor is None else f'{census_factor:.3f}'} | "
+            f"{u.get('distinct_classes_per_warp', {}).get('mean', float('nan')):.1f} / {u.get('distinct_classes_per_warp', {}).get('p90', float('nan'))} |")
+    out += ['', f"Across groups ({w}): distinct paths per warp / per lane {report['distinct_paths_factor_across_groups']}; "
+        f"design cost-model factor (u = design) {report['design_factor_across_groups']}" + (f"; design cost-model factor (u = census hook share) {report['census_factor_across_groups']}" if report['census'] else ' (no --census: no census-weighted figure)'), '',
+        '## Paths with fewer than {rare} occurrences (synthetic-lane candidates)'.format(rare=report['rare']), '', '| Group | Path | Occurrences |', '| --- | --- | ---: |']
     for g, row in report['groups'].items():
-        for name in row['rare']:out.append(f"| {g} | `{name}` | {row['paths'][name]['count']} |")
-    out += ['', '## Key paths', '', '| Group | Path | Count | Lane share |', '| --- | --- | ---: | ---: |']
+        for name in row['rare']:out.append(f"| {g} | `{name}` | {row['paths'][name]['occurrences']} |")
+    out += ['', '## Key paths', '', '| Group | Path | Occurrences | Per lane-step |', '| --- | --- | ---: | ---: |']
     for g, row in report['groups'].items():
         for name, r in row['paths'].items():
             if name.startswith(('hook:switch_decision', 'hook:install', 'hook:baton_copy', 'hook:drag', 'hook:port_count', 'mech:pursuit', 'mech:phazing', 'mech:baton', 'step:')):
-                out.append(f"| {g} | `{name}` | {r['count']:,} | {100 * (r['lane_share'] or 0):.2f}% |")
+                out.append(f"| {g} | `{name}` | {r['occurrences']:,} | {100 * (r['per_lane_step'] or 0):.2f}% |")
     out += ['', '## All paths (occurrences merged; per-occurrence counts in coverage.json `features`)', '']
     for g, row in report['groups'].items():
-        out += [f'### {g}', '', '| Path | Count | Lane share |', '| --- | ---: | ---: |']
-        out += [f"| `{name}` | {r['count']:,} | {100 * (r['lane_share'] or 0):.2f}% |" for name, r in row['paths'].items()]
+        out += [f'### {g}', '', '| Path | Occurrences | Per lane-step |', '| --- | ---: | ---: |']
+        out += [f"| `{name}` | {r['occurrences']:,} | {100 * (r['per_lane_step'] or 0):.2f}% |" for name, r in row['paths'].items()]
         out.append('')
     return '\n'.join(out) + '\n'
 
@@ -204,25 +214,31 @@ def main(argv=None):
         per_group = {}
         for g in cz.GROUPS:
             d = {n: exact[g][:, k] for k, n in enumerate(names[g])}
+            per_group[g] = {n: v for n, v in d.items() if n.startswith(('hook:', 'mech:', 'step:'))}   # the exact masks the union figures use
             for n, v in approx.get(g, {}).items():d[f'input:{n}'] = np.asarray(v, bool)
-            per_group[g] = d
             for n, v in d.items():counts[g][n] += int(v.sum())
         union.add(per_group);lanes += b
         if (i + 1) % 20 == 0 or i + 1 == len(paths):log('COVERAGE_PROGRESS', shards=i + 1, lane_steps=lanes, seconds=time.perf_counter() - begin)
     uniform, equations = pp.census_weights(args.census);summary = union.summary(uniform)
     for g, s in summary.items():
-        s['raw_union_factor'] = s['union_features_mean'] / s['lane_features_mean'] if s['lane_features_mean'] else None
+        s['distinct_paths_warp_over_lane'] = s['union_features_mean'] / s['lane_features_mean'] if s['lane_features_mean'] else None
     groups = summarize(counts, lanes, summary, args.rare)
+    weights = 'census equations per group' if equations else 'equal weights (unweighted mean of the groups)'
     report = dict(schema=SCHEMA, source_commit=os.environ.get('V2_SOURCE_COMMIT'), shards=len(paths), lane_steps=lanes, warp=args.warp, rare=args.rare,
-        census=args.census, seconds=time.perf_counter() - begin, calls_per_step={str(b): s for b, s in features.sites.items()},
-        groups=groups, weighted_raw_union_factor=pp.weighted_factor(summary, equations, 'raw_union_factor'),
-        weighted_union_factor_design_uniform=pp.weighted_factor(summary, equations, 'union_factor_design_uniform'),
+        census=args.census, weights=weights, design_uniform_share=pp.DESIGN_UNIFORM_SHARE, seconds=time.perf_counter() - begin,
+        calls_per_step={str(b): s for b, s in features.sites.items()}, groups=groups,
+        distinct_paths_factor_across_groups=pp.weighted_factor(summary, equations, 'distinct_paths_warp_over_lane'),
+        design_factor_across_groups=pp.weighted_factor(summary, equations, 'union_factor_design_uniform'),
+        census_factor_across_groups=pp.weighted_factor(summary, equations, 'union_factor') if equations else None,
         rare_total=sum(len(g['rare']) for g in groups.values()),
-        method='exact per-lane masks of every tapped hook and mechanics call (the oracle\'s own values) plus the move-table flags of each declared move; '
-            'input:* are the approximate input-derived classes of v2e_phase_profile.lane_features; union factors as v2e_phase_profile.UnionStats')
+        method='exact per-lane masks of every tapped hook and mechanics call (the oracle\'s own values, attributed to the step_with_chance line active '
+            'at the call) plus the move-table flags of each declared move at the caller and Sleep Talk child sites; input:* are the approximate '
+            'input-derived classes of v2e_phase_profile.lane_features and are counted but excluded from the union figures; union figures as '
+            'v2e_phase_profile.UnionStats over hook:/mech:/step: masks')
     (out / 'coverage.json').write_text(json.dumps(report, indent=1, default=str) + '\n')
     (out / 'coverage.md').write_text(markdown(report))
-    log('COVERAGE', shards=len(paths), lane_steps=lanes, rare=report['rare_total'], union={g: (s.get('raw_union_factor')) for g, s in summary.items()}, out=str(out / 'coverage.json'))
+    log('COVERAGE', shards=len(paths), lane_steps=lanes, rare=report['rare_total'], distinct_paths={g: s.get('distinct_paths_warp_over_lane') for g, s in summary.items()},
+        design_factor=report['design_factor_across_groups'], census_factor=report['census_factor_across_groups'], out=str(out / 'coverage.json'))
     return 0
 
 

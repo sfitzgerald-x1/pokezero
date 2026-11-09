@@ -13,7 +13,8 @@ cannot drift apart silently:
   buffer on the host in the header's order and offsets.
 
 Leaf<T, D...> is a per-lane row-major [B, D...] buffer with XLA-exact point access:
-- get(b, i...)    gather: a negative index wraps once (i + dim), then clamps into [0, dim - 1];
+- get(b, i...)    gather, clip mode (jnp indexing, lane_index.take): a negative index wraps once (i + dim), then clamps
+  into [0, dim - 1]; get_fill(b, i...) is the fill mode of jnp.take_along_axis (fill value per dtype as jax);
 - set(b, i..., v) scatter (FILL_OR_DROP): wrap once, drop the whole write if any index is still out of range, convert
   the update to the operand dtype exactly as JAX's _scatter_impl does (promote, scatter, convert back: integer wrap,
   float -> int toward zero saturating with NaN -> 0, anything -> bool as != 0); returns whether the write was kept;
@@ -24,16 +25,23 @@ Under V2E_LAYOUT_DEBUG every Leaf and Table carries `uint32_t* dbg` (dbg[0] clam
 into. emulate_get / emulate_set are the numpy reference of the same semantics; `probe` checks them and the device
 accessors against jax.lax on a GPU for every dtype in use (negative, in-range and out-of-range indices).
 
-Drift check: each struct has kDigest, the 64-bit prefix of sha256 over its (path, dtype, shape) lines, and kDigestHex;
-digests(description, spec) returns the same values in Python, so an FFI handler compares its compiled kDigest with a
-`layout_digest` attribute passed from Python and returns the error word kStaleLayout instead of touching the buffers.
+Drift check: each struct has kDigest, the 64-bit prefix of sha256 over its (path, dtype, shape) lines, and kDigestHex,
+and the header has kLayoutDigest over every struct; digests()/layout_digest() return the same values in Python from a
+description, live_digests() from the live pytrees. An FFI handler compares its compiled kLayoutDigest (or a struct's
+kDigest) with the `layout_digest` attribute (digest_attr) and returns the error word kStaleLayout, written from a kernel,
+instead of touching the buffers.
 
 Subcommands (paths are arguments; no cluster paths are built in):
   describe  dump the pytree description JSON from the real tables (GPU host; v2e_diff's loading);
   generate  header from a description JSON and a spec (CPU);
   check     regenerate and compare with the committed header (CPU);
-  probe     GPU: header compiles under v2e_cuda.NVCC_FLAGS; accessors and the numpy emulation against jax.lax; the
-            digest refusal through a real FFI handler. Writes probe.json.
+  probe     GPU: header compiles under v2e_cuda.NVCC_FLAGS; accessors (get, get_fill, set) and the numpy emulation
+            against jax.lax; the digest refusal through a real FFI handler. Writes probe.json.
+  index-census  GPU host: every scatter's (operand, update) dtypes recorded at trace time (jax _scatter_impl and the
+            lane_index select-form _store) and every gather's mode and site. Proves Leaf::set's point semantics suffice.
+Drift check, live: a handler's `layout_digest` attribute is computed from the pytrees actually passed (live_digests /
+layout_digest over live_description), never from the committed fixture; check_live compares the fixture with the live
+pytrees (tests/test_gpu_engine_v2e_layout_live.py on the pod).
 """
 import argparse
 import ctypes
@@ -163,6 +171,45 @@ def digests(description, spec=None):
     return {name: (digest64(entries), digest_hex(entries)) for name, entries in structs(description, spec).items()}
 
 
+def layout_digest(description, spec=None):
+    """(digest64, hex) over every struct digest of the header in order: the one attribute a handler binding several
+    structs checks (kLayoutDigest)."""
+    h = hashlib.sha256('\n'.join(f'{name}\t{hexdigest}' for name, (_, hexdigest) in digests(description, spec).items()).encode()).hexdigest()
+    return int(h[:16], 16), h
+
+
+def live_description(state, actions, trackers, engine_tables, belief_tables=None, step_output=None):
+    """The description of the pytrees actually in hand (the operands a handler will receive), in the generator's format:
+    compare it with the committed fixture (check_live) and compute the digests from it, never from the fixture."""
+    from gpu_engine import mechanics
+    tables = describe(engine_tables, lane_axis=False)
+    tables += [dict(e, path='belief' + e['path']) for e in (describe(belief_tables, lane_axis=False) if belief_tables is not None else [])]
+    tables.append(dict(path=ACCURACY_PATH, dtype='int32', shape=list(np.asarray(mechanics._ACCURACY_COUNTS, np.int32).shape)))
+    return dict(schema=SCHEMA, state=describe(state), actions=describe(actions), trackers=describe(trackers),
+        step_output=describe(step_output) if step_output is not None else None, tables=tables)
+
+
+def live_digests(state, actions, trackers, engine_tables, belief_tables=None, spec=None):
+    """{struct: (digest64, hex)} plus 'kLayoutDigest' computed from the live pytrees (what the `layout_digest` attribute
+    must carry); equal to the header's constants exactly when the live pytrees match the description the header was
+    generated from."""
+    d = live_description(state, actions, trackers, engine_tables, belief_tables)
+    out = digests(d, spec);out['kLayoutDigest'] = layout_digest(d, spec)
+    return out
+
+
+def check_live(description, state, actions, trackers, engine_tables, belief_tables=None):
+    """[differences] between a committed description and the live pytrees' description (empty when fresh)."""
+    live = live_description(state, actions, trackers, engine_tables, belief_tables)
+    out = []
+    for key in ('state', 'actions', 'trackers', 'tables'):
+        a = {e['path']: (e['dtype'], [int(d) for d in e['shape']]) for e in description[key]};b = {e['path']: (e['dtype'], [int(d) for d in e['shape']]) for e in live[key]}
+        if [e['path'] for e in description[key]] != [e['path'] for e in live[key]]:out.append(f'{key}: leaf order or set differs: committed {len(a)} leaves, live {len(b)}')
+        for path in sorted(set(a) | set(b)):
+            if a.get(path) != b.get(path):out.append(f'{key}{path}: committed {a.get(path)} live {b.get(path)}')
+    return out
+
+
 def digest_attr(d64):
     """The `layout_digest` FFI attribute for a kDigest value: the same 64 bits as a numpy int64 (XLA FFI attributes have no
     unsigned 64-bit type); the handler compares static_cast<uint64_t>(attribute) with kDigest."""
@@ -242,6 +289,24 @@ def convert(value, dtype):
     raise TypeError(f'unsupported conversion to {dtype}')
 
 
+def fill_value(dtype):
+    """jax's default fill value for a fill-mode gather: NaN (float), the minimum (signed), all ones (unsigned), True (bool)."""
+    dtype = np.dtype(dtype)
+    if dtype == np.bool_:return True
+    if dtype.kind == 'f':return np.nan
+    return np.iinfo(dtype).min if dtype.kind == 'i' else np.iinfo(dtype).max
+
+
+def emulate_get_fill(x, *indices):
+    """x.at[arange(B), *indices].get(mode='fill') (jnp.take_along_axis's default): wrap once, fill when still out of range."""
+    x = np.asarray(x);b = x.shape[0];rows = np.arange(b);keep = np.ones(b, bool);idx = []
+    for i, n in zip(indices, x.shape[1:]):
+        wrapped, ok = scatter_index(np.broadcast_to(np.asarray(i), (b,)), n);keep &= ok;idx.append(np.clip(wrapped, 0, n - 1))
+    out = x[(rows,) + tuple(idx)].copy()
+    out[~keep] = fill_value(x.dtype)
+    return out
+
+
 def emulate_get(x, *indices):
     """x[arange(B), *indices] with JAX's default gather semantics (indices: scalars or [B] integer arrays)."""
     x = np.asarray(x);b = x.shape[0];rows = np.arange(b)
@@ -294,7 +359,12 @@ PRELUDE = r'''// Generated by gpu_engine.v2e_layout from the oracle pytrees. Do 
 // and check with `python -m gpu_engine.v2e_layout check`.
 //
 // Per-lane buffers are row-major [B, ...] as the FFI operands are today; a Leaf<T, D...> gives XLA-exact point access:
-//   get(b, i...)      gather:  a negative index wraps once (i + dim), then clamps into [0, dim - 1];
+//   get(b, i...)      gather, clip mode (jnp indexing x[rows, i], lane_index.take; every tracker-hook read): a negative
+//                     index wraps once (i + dim), then clamps into [0, dim - 1];
+//   get_fill(b, i...) gather, fill mode (jnp.take_along_axis, x.at[].get(mode='fill'); the oracle uses it at
+//                     state.usable_moves/legal_actions, transition 461/465/567/2062, linked_traps:35, sleep_talk:39-40;
+//                     none of them in M1): wraps once, then an index still out of range yields the fill value
+//                     (NaN for float, INT_MIN for signed, all ones for unsigned, true for bool);
 //   set(b, i..., v)   scatter: wraps once, drops the whole write if any index is out of range (returns false), converts
 //                     v to T as JAX's _scatter_impl does (integer wrap; float -> int toward zero, saturating, NaN -> 0;
 //                     -> bool as != 0);
@@ -351,9 +421,32 @@ V2E_LAYOUT_HD bool scatter_index(int64_t& i, int64_t n) {
   return i >= 0 && i < n;
 }
 
+// The eight dtypes the oracle pytrees use; every Leaf/Table element type and every scatter update type is one of them.
+template <class T> struct is_supported : std::false_type {};
+template <> struct is_supported<bool> : std::true_type {};
+template <> struct is_supported<int8_t> : std::true_type {};
+template <> struct is_supported<uint8_t> : std::true_type {};
+template <> struct is_supported<int16_t> : std::true_type {};
+template <> struct is_supported<uint16_t> : std::true_type {};
+template <> struct is_supported<int32_t> : std::true_type {};
+template <> struct is_supported<uint32_t> : std::true_type {};
+template <> struct is_supported<float> : std::true_type {};
+
+// jax's default fill value of a fill-mode gather: NaN (float), the minimum (signed), all ones (unsigned), true (bool).
+template <class T>
+V2E_LAYOUT_HD T fill_value() {
+  static_assert(is_supported<T>::value, "unsupported element type");
+  if constexpr (std::is_same<T, bool>::value) return true;
+  else if constexpr (std::is_floating_point<T>::value) return __builtin_nanf("");
+  else if constexpr (std::is_signed<T>::value) return std::numeric_limits<T>::min();
+  else return std::numeric_limits<T>::max();
+}
+
 // lax.convert_element_type semantics for a scatter update (jax _scatter_impl: promote, scatter, convert back to T).
 template <class T, class U>
 V2E_LAYOUT_HD T convert(U v) {
+  static_assert(is_supported<T>::value, "unsupported operand type");
+  static_assert(is_supported<U>::value, "scatter update type must be one of bool, int8..int32, uint8..uint32, float");
   if constexpr (std::is_same<T, U>::value) {
     return v;
   } else if constexpr (std::is_same<T, bool>::value) {
@@ -493,8 +586,16 @@ def _leaf_specialization(rank):
     out.append(f'  V2E_LAYOUT_HD T& raw({sig}) const {{ return p[offset({", ".join(["b"] + idx)})]; }}')
     clamped = [f'gather_index({i}, {d}, this->counters())' for i, d in zip(idx, dims)]
     out.append(f'  V2E_LAYOUT_HD T get({sig}) const {{ return p[offset({", ".join(["b"] + clamped)})]; }}')
+    out.append(f'  V2E_LAYOUT_HD T get_fill({sig}) const {{')
+    if rank:
+        out.append('    bool ok = true;')
+        out += [f'    ok = scatter_index({i}, {d}) && ok;' for i, d in zip(idx, dims)]
+        out.append('    if (!ok) { V2E_LAYOUT_COUNT(this->counters(), 0); return fill_value<T>(); }')
+    out.append(f'    return p[offset({", ".join(["b"] + idx)})];')
+    out.append('  }')
     out.append('  template <class U>')
     out.append(f'  V2E_LAYOUT_HD bool set({sig}, U v) const {{')
+    out.append('    static_assert(is_supported<U>::value, "scatter update type must be one of bool, int8..int32, uint8..uint32, float");')
     if rank:
         out.append('    bool ok = true;')
         out += [f'    ok = scatter_index({i}, {d}) && ok;' for i, d in zip(idx, dims)]
@@ -588,6 +689,10 @@ def generate(description, spec=None):
         phases = ', '.join(f"{p['name']} {p['from']}->{p['to']}" for p in spec.get('phases', []))
         text += f'// phases: {phases}\n'
     text += _tables(description['tables'])
+    text += f'\n// Header-wide digest: sha256 over every struct digest above, in order (gpu_engine.v2e_layout.layout_digest). A handler that\n'
+    text += '// binds several structs checks this one against the `layout_digest` attribute Python computes from the live pytrees.\n'
+    text += f'constexpr uint64_t kLayoutDigest = 0x{layout_digest(description, spec)[0]:016x}ull;\n'
+    text += f'constexpr const char* kLayoutDigestHex = "{layout_digest(description, spec)[1]}";\n'
     text += '\n}  // namespace v2e_layout\n'
     return text
 
@@ -605,18 +710,18 @@ PROBE_COMMON = r'''// Probe of v2e_layout.cuh accessors (generated by gpu_engine
 namespace v2e_layout_probe {
 using namespace v2e_layout;
 
-// Lane b: got[b] = leaf.get(b, idx[b]) on the operand, then kept[b] = leaf.set(b, idx[b], v[b]) into the same operand.
+// Lane b: got[b] = get (clip), fill[b] = get_fill, then kept[b] = set(v[b]) into the same operand.
 template <class T, class U, int... D>
-V2E_LAYOUT_HD void point(T* x, const int32_t* idx, const U* v, T* got, uint8_t* kept, int64_t b, int64_t lanes, uint32_t* dbg) {
+V2E_LAYOUT_HD void point(T* x, const int32_t* idx, const U* v, T* got, T* fill, uint8_t* kept, int64_t b, int64_t lanes, uint32_t* dbg) {
   Leaf<T, D...> leaf;
   leaf.p = x; leaf.lanes = lanes; leaf.dbg = dbg;
   constexpr int R = sizeof...(D);
   const int32_t* i = idx + b * (R > 0 ? R : 1);
-  if constexpr (R == 0) { got[b] = leaf.get(b); kept[b] = leaf.set(b, v[b]); }
-  else if constexpr (R == 1) { got[b] = leaf.get(b, i[0]); kept[b] = leaf.set(b, i[0], v[b]); }
-  else if constexpr (R == 2) { got[b] = leaf.get(b, i[0], i[1]); kept[b] = leaf.set(b, i[0], i[1], v[b]); }
-  else if constexpr (R == 3) { got[b] = leaf.get(b, i[0], i[1], i[2]); kept[b] = leaf.set(b, i[0], i[1], i[2], v[b]); }
-  else { got[b] = leaf.get(b, i[0], i[1], i[2], i[3]); kept[b] = leaf.set(b, i[0], i[1], i[2], i[3], v[b]); }
+  if constexpr (R == 0) { got[b] = leaf.get(b); fill[b] = leaf.get_fill(b); kept[b] = leaf.set(b, v[b]); }
+  else if constexpr (R == 1) { got[b] = leaf.get(b, i[0]); fill[b] = leaf.get_fill(b, i[0]); kept[b] = leaf.set(b, i[0], v[b]); }
+  else if constexpr (R == 2) { got[b] = leaf.get(b, i[0], i[1]); fill[b] = leaf.get_fill(b, i[0], i[1]); kept[b] = leaf.set(b, i[0], i[1], v[b]); }
+  else if constexpr (R == 3) { got[b] = leaf.get(b, i[0], i[1], i[2]); fill[b] = leaf.get_fill(b, i[0], i[1], i[2]); kept[b] = leaf.set(b, i[0], i[1], i[2], v[b]); }
+  else { got[b] = leaf.get(b, i[0], i[1], i[2], i[3]); fill[b] = leaf.get_fill(b, i[0], i[1], i[2], i[3]); kept[b] = leaf.set(b, i[0], i[1], i[2], i[3], v[b]); }
 }
 
 }  // namespace v2e_layout_probe
@@ -625,6 +730,7 @@ V2E_LAYOUT_HD void point(T* x, const int32_t* idx, const U* v, T* got, uint8_t* 
 PROBE_CUDA_HEAD = r'''// GPU probe of v2e_layout.cuh (generated by gpu_engine.v2e_layout). XLA FFI handlers in the shape of a hand-written
 // test handler: operands, a `layout_digest` attribute checked against the compiled digest, an error word output.
 #include <cstdint>
+#include <string>
 #include <cuda_runtime.h>
 #include "xla/ffi/api/ffi.h"
 #include "v2e_layout_probe_common.cuh"
@@ -634,44 +740,52 @@ using namespace v2e_layout;
 using namespace v2e_layout_probe;
 
 template <class T, class U, int... D>
-__global__ void point_kernel(T* x, const int32_t* idx, const U* v, T* got, uint8_t* kept, int64_t lanes, uint32_t* dbg) {
+__global__ void point_kernel(T* x, const int32_t* idx, const U* v, T* got, T* fill, uint8_t* kept, int64_t lanes, uint32_t* dbg) {
   const int64_t b = blockIdx.x * static_cast<int64_t>(blockDim.x) + threadIdx.x;
   if (b >= lanes) return;
-  point<T, U, D...>(x, idx, v, got, kept, b, lanes, dbg);
+  point<T, U, D...>(x, idx, v, got, fill, kept, b, lanes, dbg);
 }
 
-// Every probe handler: x [B, D...] T, idx [B, R] int32, v [B] U -> out [B, D...] T (x after set), got [B] T, kept [B] u8,
-// dbg [2] u32 (clamps, drops), err [1] u32 (kStaleLayout when layout_digest differs from TrackerView::kDigest, else 0).
-// layout_digest arrives as int64 (gpu_engine.v2e_layout.digest_attr): XLA FFI attributes have no unsigned 64-bit type.
+// Writes one word from a one-thread kernel: graph-capture safe (no host memory is read at replay time).
+__global__ void write_word_kernel(uint32_t* dst, uint32_t word) { dst[0] = word; }
+
+static ffi::Error check(cudaError_t status, const char* where) {
+  if (status != cudaSuccess) return ffi::Error::Internal(std::string(where) + ": " + cudaGetErrorString(status));
+  return ffi::Error::Success();
+}
+
+// Every probe handler: x [B, D...] T, idx [B, R] int32, v [B] U -> out [B, D...] T (x after set), got [B] T (get), fill [B] T
+// (get_fill), kept [B] u8, dbg [2] u32 (clamps, drops), err [1] u32 (kStaleLayout when layout_digest differs from the
+// header-wide kLayoutDigest, else 0). layout_digest arrives as int64 (gpu_engine.v2e_layout.digest_attr of a value
+// computed from the live pytrees, live_digests): XLA FFI attributes have no unsigned 64-bit type. The refusal path is
+// the template a hand-written handler copies: it is kCmdBufferCompatible, so the error word is written by a kernel.
 template <class T, class U, int... D>
 static ffi::Error PointImpl(cudaStream_t stream, int64_t layout_digest, ffi::AnyBuffer x, ffi::AnyBuffer idx, ffi::AnyBuffer v,
-                            ffi::Result<ffi::AnyBuffer> out, ffi::Result<ffi::AnyBuffer> got, ffi::Result<ffi::AnyBuffer> kept,
-                            ffi::Result<ffi::Buffer<ffi::U32>> dbg, ffi::Result<ffi::Buffer<ffi::U32>> err) {
+                            ffi::Result<ffi::AnyBuffer> out, ffi::Result<ffi::AnyBuffer> got, ffi::Result<ffi::AnyBuffer> fill,
+                            ffi::Result<ffi::AnyBuffer> kept, ffi::Result<ffi::Buffer<ffi::U32>> dbg, ffi::Result<ffi::Buffer<ffi::U32>> err) {
   constexpr int64_t per_lane = LeafBase<T, D...>::kPerLane;
   const int64_t lanes = static_cast<int64_t>(x.element_count()) / per_lane;
-  cudaMemsetAsync(dbg->typed_data(), 0, 2 * sizeof(uint32_t), stream);
+  if (auto e = check(cudaMemsetAsync(dbg->typed_data(), 0, 2 * sizeof(uint32_t), stream), "memset dbg"); e.failure()) return e;
   // The output is the operand (a hand-written handler aliases it in place; the probe copies it through).
-  cudaMemcpyAsync(out->untyped_data(), x.untyped_data(), x.size_bytes(), cudaMemcpyDeviceToDevice, stream);
-  if (static_cast<uint64_t>(layout_digest) != TrackerView::kDigest) {   // the attribute is the digest as int64 (digest_attr)
-    const uint32_t stale = kStaleLayout;
-    cudaMemcpyAsync(err->typed_data(), &stale, sizeof(uint32_t), cudaMemcpyHostToDevice, stream);
-    return ffi::Error::Success();   // refused: the operand is left as it was
+  if (auto e = check(cudaMemcpyAsync(out->untyped_data(), x.untyped_data(), x.size_bytes(), cudaMemcpyDeviceToDevice, stream), "copy operand"); e.failure()) return e;
+  if (static_cast<uint64_t>(layout_digest) != kLayoutDigest) {
+    write_word_kernel<<<1, 1, 0, stream>>>(err->typed_data(), kStaleLayout);
+    return check(cudaGetLastError(), "write_word_kernel");   // refused: the operand is left as it was
   }
-  cudaMemsetAsync(err->typed_data(), 0, sizeof(uint32_t), stream);
+  write_word_kernel<<<1, 1, 0, stream>>>(err->typed_data(), 0u);
+  if (auto e = check(cudaGetLastError(), "write_word_kernel"); e.failure()) return e;
   const int threads = 128;
   point_kernel<T, U, D...><<<static_cast<unsigned>((lanes + threads - 1) / threads), threads, 0, stream>>>(
       static_cast<T*>(out->untyped_data()), static_cast<const int32_t*>(idx.untyped_data()), static_cast<const U*>(v.untyped_data()),
-      static_cast<T*>(got->untyped_data()), static_cast<uint8_t*>(kept->untyped_data()), lanes, dbg->typed_data());
-  cudaError_t status = cudaGetLastError();
-  if (status != cudaSuccess) return ffi::Error::Internal(cudaGetErrorString(status));
-  return ffi::Error::Success();
+      static_cast<T*>(got->untyped_data()), static_cast<T*>(fill->untyped_data()), static_cast<uint8_t*>(kept->untyped_data()), lanes, dbg->typed_data());
+  return check(cudaGetLastError(), "point_kernel");
 }
 
 #define V2E_PROBE_HANDLER(NAME, ...)                                                                                   \
   XLA_FFI_DEFINE_HANDLER_SYMBOL(NAME, (PointImpl<__VA_ARGS__>),                                                        \
                                 ffi::Ffi::Bind().Ctx<ffi::PlatformStream<cudaStream_t>>().Attr<int64_t>("layout_digest") \
                                     .Arg<ffi::AnyBuffer>().Arg<ffi::AnyBuffer>().Arg<ffi::AnyBuffer>()                   \
-                                    .Ret<ffi::AnyBuffer>().Ret<ffi::AnyBuffer>().Ret<ffi::AnyBuffer>()                   \
+                                    .Ret<ffi::AnyBuffer>().Ret<ffi::AnyBuffer>().Ret<ffi::AnyBuffer>().Ret<ffi::AnyBuffer>() \
                                     .Ret<ffi::Buffer<ffi::U32>>().Ret<ffi::Buffer<ffi::U32>>(),                          \
                                 {xla::ffi::Traits::kCmdBufferCompatible})
 
@@ -679,7 +793,7 @@ static ffi::Error PointImpl(cudaStream_t stream, int64_t layout_digest, ffi::Any
 
 PROBE_HOST = r"""// Host probe of v2e_layout.cuh (generated by gpu_engine.v2e_layout; compiled with g++/clang++ -x c++ in the CPU test).
 // One case per stdin line: "<T> <U> <dims> <B> x... idx... v..." (numbers as text, nan/inf allowed); prints
-// "got... | kept... | out... | clamps drops".
+// "got... | fill... | kept... | out... | clamps drops".
 #include "v2e_layout_probe_common.cuh"
 #include <cmath>
 #include <cstdint>
@@ -703,15 +817,18 @@ void run_case(std::istream& in, std::ostream& out, int lanes) {
   std::unique_ptr<int32_t[]> idx(new int32_t[ni]());
   std::unique_ptr<U[]> v(new U[lanes]());
   std::unique_ptr<T[]> got(new T[lanes]());
+  std::unique_ptr<T[]> fill(new T[lanes]());
   std::unique_ptr<uint8_t[]> kept(new uint8_t[lanes]());
   uint32_t dbg[2] = {0u, 0u};
   std::string s;
   for (int64_t k = 0; k < nx; ++k) { in >> s; x[k] = parse<T>(s); }
   for (int64_t k = 0; k < ni; ++k) { in >> s; idx[k] = parse<int32_t>(s); }
   for (int64_t k = 0; k < lanes; ++k) { in >> s; v[k] = parse<U>(s); }
-  for (int b = 0; b < lanes; ++b) point<T, U, D...>(x.get(), idx.get(), v.get(), got.get(), kept.get(), b, lanes, dbg);
+  for (int b = 0; b < lanes; ++b) point<T, U, D...>(x.get(), idx.get(), v.get(), got.get(), fill.get(), kept.get(), b, lanes, dbg);
   out.precision(17);
   for (int64_t k = 0; k < lanes; ++k) emit(out, got[k]);
+  out << "| ";
+  for (int64_t k = 0; k < lanes; ++k) emit(out, fill[k]);
   out << "| ";
   for (int64_t k = 0; k < lanes; ++k) out << static_cast<int>(kept[k]) << ' ';
   out << "| ";
@@ -832,19 +949,21 @@ def host_probe(header_text, cases, lanes, *, work, compiler=None, seed_base=0):
     outputs = run.stdout.strip().splitlines()
     if len(outputs) != len(rows):raise RuntimeError(f'host probe wrote {len(outputs)} lines for {len(rows)} cases')
     for row, line in zip(rows, outputs):
-        got, kept, out, dbg = [part.split() for part in line.split('|')]
-        row.update(got=_from_text(got, row['t']), kept=np.array([int(k) for k in kept], bool), out=_from_text(out, row['t']).reshape(row['x'].shape),
+        got, fill, kept, out, dbg = [part.split() for part in line.split('|')]
+        row.update(got=_from_text(got, row['t']), fill=_from_text(fill, row['t']), kept=np.array([int(k) for k in kept], bool), out=_from_text(out, row['t']).reshape(row['x'].shape),
             clamps=int(dbg[0]), drops=int(dbg[1]))
     return rows
 
 
 def _jax_reference(x, idx, v, rank):
+    """(clip-mode get, fill-mode get, set) of jnp indexing on the device."""
     import jax
     import jax.numpy as j
     xj = j.asarray(x);rows = j.arange(x.shape[0]);index = tuple(j.asarray(idx[:, k]) for k in range(rank))
     got = xj[(rows,) + index] if rank else xj
+    fill = xj.at[(rows,) + index].get(mode='fill') if rank else xj
     out = xj.at[(rows,) + index].set(j.asarray(v)) if rank else xj.at[rows].set(j.asarray(v))
-    return np.asarray(got), np.asarray(out)
+    return np.asarray(got), np.asarray(fill), np.asarray(out)
 
 
 def _bits_equal(a, b):
@@ -896,25 +1015,29 @@ def cmd_probe(args):
     for t, u, dims in cases:
         name = f'V2eLayoutProbe_{case_name(t, u, dims)}'
         jax.ffi.register_ffi_target(f'v2e_layout_probe_{digest}_{name}', jax.ffi.pycapsule(getattr(lib, name)), platform='CUDA')
-    want_digest = digests(description, spec)['TrackerView'][0]
+    # The attribute comes from the pytrees in hand (live_digests); here those are the probe's own operands, so the
+    # description is the committed one; the header-wide digest covers every struct a handler binds.
+    want_digest = layout_digest(description, spec)[0]
     def call(t, u, dims, x, idx, v, layout_digest):
         name = f'V2eLayoutProbe_{case_name(t, u, dims)}';lanes = x.shape[0]
-        shapes = (jax.ShapeDtypeStruct(x.shape, x.dtype), jax.ShapeDtypeStruct((lanes,), x.dtype), jax.ShapeDtypeStruct((lanes,), np.uint8),
-            jax.ShapeDtypeStruct((2,), np.uint32), jax.ShapeDtypeStruct((1,), np.uint32))
+        shapes = (jax.ShapeDtypeStruct(x.shape, x.dtype), jax.ShapeDtypeStruct((lanes,), x.dtype), jax.ShapeDtypeStruct((lanes,), x.dtype),
+            jax.ShapeDtypeStruct((lanes,), np.uint8), jax.ShapeDtypeStruct((2,), np.uint32), jax.ShapeDtypeStruct((1,), np.uint32))
         out = jax.ffi.ffi_call(f'v2e_layout_probe_{digest}_{name}', shapes)(j.asarray(x), j.asarray(idx), j.asarray(v), layout_digest=digest_attr(layout_digest))
         return [np.asarray(o) for o in out]
     all_equal = True
     for n, (t, u, dims) in enumerate(cases):
         x, idx, v = probe_inputs(t, u, dims, args.lanes, seed=n);rank = len(dims)
-        got_j, out_j = _jax_reference(x, idx, v, rank)
+        got_j, fill_j, out_j = _jax_reference(x, idx, v, rank)
         got_e = emulate_get(x, *[idx[:, k] for k in range(rank)]);out_e = emulate_set(x, [idx[:, k] for k in range(rank)], v)
-        out_p = emulate_set_point(x, [idx[:, k] for k in range(rank)], v)
-        out_c, got_c, kept_c, dbg_c, err_c = call(t, u, dims, x, idx, v, want_digest)
+        fill_e = emulate_get_fill(x, *[idx[:, k] for k in range(rank)]);out_p = emulate_set_point(x, [idx[:, k] for k in range(rank)], v)
+        out_c, got_c, fill_c, kept_c, dbg_c, err_c = call(t, u, dims, x, idx, v, want_digest)
         promoting = promotes(t, u);kept = kept_c.astype(bool);rows = np.flatnonzero(kept)
         element = (rows,) + tuple(scatter_index(idx[rows, k], d)[0] for k, d in enumerate(dims))   # the written element of every kept lane
         written_j = out_j[element];written_c = out_c[element]
         row = dict(case=case_name(t, u, dims), operand=t, update=u, dims=list(dims), lanes=int(x.shape[0]), promotes_operand=promoting,
-            cuda_get_equals_jax=_bits_equal(got_c, got_j), cuda_set_equals_jax=_bits_equal(out_c, out_j),
+            cuda_get_equals_jax=_bits_equal(got_c, got_j), cuda_get_fill_equals_jax=_bits_equal(fill_c, fill_j), emulation_get_fill_equals_jax=_bits_equal(fill_e, fill_j),
+            filled=int(sum((~scatter_index(idx[:, k], d)[1]).astype(int) for k, d in enumerate(dims)).astype(bool).sum()) if rank else 0,
+            cuda_set_equals_jax=_bits_equal(out_c, out_j),
             cuda_set_equals_point_emulation=_bits_equal(out_c, out_p), cuda_written_elements_equal_jax=_bits_equal(written_c, written_j),
             emulation_get_equals_jax=_bits_equal(got_e, got_j), emulation_set_equals_jax=_bits_equal(out_e, out_j),
             clamps=int(dbg_c[0]), drops=int(dbg_c[1]), kept=int(kept.sum()), error_word=int(err_c[0]),
@@ -923,16 +1046,19 @@ def cmd_probe(args):
         # the point accessor converts the update alone, so it must match JAX on the written elements and the point
         # emulation everywhere (the oracle has no promoting scatter: scatter-census).
         set_ok = row['cuda_set_equals_jax'] if not promoting else (row['cuda_written_elements_equal_jax'] and row['cuda_set_equals_point_emulation'])
-        row['equal'] = set_ok and row['cuda_get_equals_jax'] and row['emulation_get_equals_jax'] and row['emulation_set_equals_jax'] and row['error_word'] == 0
+        row['equal'] = (set_ok and row['cuda_get_equals_jax'] and row['emulation_get_equals_jax'] and row['emulation_set_equals_jax'] and row['error_word'] == 0
+            and row['cuda_get_fill_equals_jax'] and row['emulation_get_fill_equals_jax'])
         all_equal &= row['equal'];report['cases'].append(row)
         if not row['equal']:print('MISMATCH', row)
     report['promoting_pairs'] = sorted({f"{r['operand']}<-{r['update']}" for r in report['cases'] if r['promotes_operand']})
     # The digest refusal: a wrong layout_digest attribute returns kStaleLayout and leaves the operand untouched (out = x).
     t, u, dims = cases[0];x, idx, v = probe_inputs(t, u, dims, args.lanes, seed=0)
-    out_c, got_c, kept_c, dbg_c, err_c = call(t, u, dims, x, idx, v, want_digest ^ 1)
+    out_c, got_c, fill_c, kept_c, dbg_c, err_c = call(t, u, dims, x, idx, v, want_digest ^ 1)
     report['digest_refusal'] = dict(passed_digest=f'{want_digest ^ 1:016x}', compiled_digest=f'{want_digest:016x}', error_word=int(err_c[0]),
         expected_error_word=STALE_LAYOUT, refused=int(err_c[0]) == STALE_LAYOUT, operand_untouched=_bits_equal(out_c, x))
     report['digests'] = {k: dict(digest64=f'{a:016x}', sha256=b) for k, (a, b) in digests(description, spec).items()}
+    report['digests']['kLayoutDigest'] = dict(digest64=f'{want_digest:016x}', sha256=layout_digest(description, spec)[1])
+    report['filled_total'] = sum(r['filled'] for r in report['cases'])
     report['equal'] = all_equal and report['digest_refusal']['refused'] and report['digest_refusal']['operand_untouched'] and report['header_compile']['returncode'] == 0
     report['jax'] = jax.__version__
     Path(args.out).mkdir(parents=True, exist_ok=True);(Path(args.out) / 'probe.json').write_text(json.dumps(report, indent=1) + '\n')
@@ -942,43 +1068,69 @@ def cmd_probe(args):
 
 
 # ---------------------------------------------------------------------------
-# Scatter census: the (operand, update) dtype pairs of every scatter in the oracle step, so the point semantics of
-# Leaf::set (update conversion only) is proven sufficient: no pair promotes the operand.
+# Index census of the oracle step, recorded at trace time: the (operand, update) dtype pair of every scatter as jax's
+# _scatter_impl sees it (before promotion) and of every lane_index select-form write (_store), plus every gather's mode
+# and source site from the jaxpr. Proves the point semantics of Leaf::set (update conversion only) is sufficient (no
+# promoting pair) and tells which gather mode each oracle site uses (get vs get_fill).
 
-def scatter_dtype_pairs(closed):
-    """{'<operand dtype><-<update dtype>': count} over every scatter-family equation of a closed jaxpr (sub-jaxprs
-    included). The operand dtype is the original one when the operand is a convert_element_type of another var (that is
-    _scatter_impl's promotion), else the scatter operand's."""
+@__import__('contextlib').contextmanager
+def _record_scatter_dtypes(record):
+    """Wrap jax._src.ops.scatter._scatter_impl and lane_index._store for one trace, counting (operand, update) dtypes."""
+    from jax._src.ops import scatter as jscatter
+    from gpu_engine import lane_index
+    impl, store = jscatter._scatter_impl, lane_index._store
+    def recording_impl(x, y, *args, **kwargs):
+        record['scatter_impl'][f'{np.dtype(x.dtype)}<-{np.dtype(getattr(y, "dtype", np.asarray(y).dtype))}'] += 1
+        return impl(x, y, *args, **kwargs)
+    def recording_store(x, b, sizes, indices, y, **kwargs):
+        record['lane_index_store'][f'{np.dtype(x.dtype)}<-{np.dtype(getattr(y, "dtype", np.asarray(y).dtype))}'] += 1
+        return store(x, b, sizes, indices, y, **kwargs)
+    jscatter._scatter_impl = recording_impl;lane_index._store = recording_store
+    try:yield
+    finally:jscatter._scatter_impl = impl;lane_index._store = store
+
+
+def gather_modes(closed):
+    """{mode: {'<module>:<line>': count}} over every gather equation (sub-jaxprs included), by innermost gpu_engine site."""
     from jax.extend import core as jcore
     import collections
-    pairs = collections.Counter()
+    out = collections.defaultdict(collections.Counter)
     def walk(jaxpr):
-        producer = {}
         for e in jaxpr.eqns:
-            for v in e.outvars:producer[v] = e
-            if e.primitive.name.startswith('scatter'):
-                operand, _, update = e.invars[0], e.invars[1], e.invars[2]
-                src = producer.get(operand)
-                original = str(src.invars[0].aval.dtype) if src is not None and src.primitive.name == 'convert_element_type' and not isinstance(src.invars[0], jcore.Literal) else str(operand.aval.dtype)
-                pairs[f'{original}<-{update.aval.dtype}' + ('' if original == str(operand.aval.dtype) else f' (promoted to {operand.aval.dtype})')] += 1
+            if e.primitive.name == 'gather':
+                tb = getattr(e.source_info, 'traceback', None);site = None
+                for f in (tb.frames if tb is not None else ()):
+                    if '/gpu_engine/' in f.file_name and not f.file_name.rsplit('/', 1)[-1].startswith(('v2e_', 'v2_')):
+                        site = f"{f.file_name.rsplit('/', 1)[-1][:-3]}:{f.line_num}";break
+                out[str(e.params['mode']).split('.')[-1]][site or 'unknown'] += 1
             for sub in jcore.jaxprs_in_params(e.params):walk(sub)
     walk(closed.jaxpr)
-    return dict(pairs)
+    return {mode: dict(sites) for mode, sites in out.items()}
 
 
-def cmd_scatter_census(args):
+def index_census(fn, *example):
+    """Trace fn(*example) once; returns dict(scatter_impl, lane_index_store, gather_modes, promoting)."""
+    import collections
+    import jax
+    record = dict(scatter_impl=collections.Counter(), lane_index_store=collections.Counter())
+    with _record_scatter_dtypes(record):closed = jax.make_jaxpr(fn)(*example)
+    pairs = {k: dict(v) for k, v in record.items()}
+    promoting = {src: {k: v for k, v in c.items() if promotes(*k.split('<-'))} for src, c in pairs.items()}
+    return dict(**pairs, gather_modes=gather_modes(closed), promoting=promoting, point_semantics_sufficient=not any(promoting.values()))
+
+
+def cmd_index_census(args):
     import jax
     from gpu_engine import v2e_census as cz, v2e_modules
     ctx = cz.load_context(args);state, actions, trackers = ctx['template']
     fn = v2e_modules.step(ctx['engine_tables'], ctx['observation_tables'])
-    begin = time.perf_counter();closed = jax.make_jaxpr(fn)(state, actions, trackers)
-    pairs = scatter_dtype_pairs(closed)
-    promoting = {k: v for k, v in pairs.items() if 'promoted' in k or promotes(*[d.split(' ')[0] for d in k.split('<-')])}
-    report = dict(schema='pokezero.v2e-scatter-census.v1', jax=jax.__version__, seconds=time.perf_counter() - begin, pairs=pairs, promoting=promoting,
-        point_semantics_sufficient=not promoting)
+    begin = time.perf_counter();census = index_census(fn, state, actions, trackers)
+    modes = {m: sum(c.values()) for m, c in census['gather_modes'].items()}
+    report = dict(schema='pokezero.v2e-index-census.v1', jax=jax.__version__, seconds=time.perf_counter() - begin, gather_counts=modes, **census)
     Path(args.out).parent.mkdir(parents=True, exist_ok=True);Path(args.out).write_text(json.dumps(report, indent=1) + '\n')
-    print(f"scatter-census: {sum(pairs.values())} scatters, pairs {pairs}, promoting {promoting} -> {args.out}")
-    return 0 if not promoting else 1
+    print(f"index-census: _scatter_impl {census['scatter_impl']}, lane_index._store {census['lane_index_store']}, promoting {census['promoting']}, "
+        f"gathers by mode {modes}, fill-mode sites {sorted(census['gather_modes'].get('FILL_OR_DROP', {}))} -> {args.out}")
+    return 0 if census['point_semantics_sufficient'] else 1
 
 
 # ---------------------------------------------------------------------------
@@ -1032,9 +1184,9 @@ def parser():
     q.add_argument('--build-dir', required=True);q.add_argument('--out', required=True);q.add_argument('--header', default=str(HEADER))
     q.add_argument('--description', default=str(DEFAULT_DESCRIPTION));q.add_argument('--spec', default=str(DEFAULT_SPEC))
     q.add_argument('--lanes', type=int, default=96);q.set_defaults(fn=cmd_probe)
-    q = sub.add_parser('scatter-census', help='GPU host: (operand, update) dtype pairs of every scatter in the oracle step')
+    q = sub.add_parser('index-census', help='GPU host: scatter dtype pairs at trace time (_scatter_impl, lane_index._store) and every gather\'s mode and site')
     q.add_argument('--config', required=True);q.add_argument('--reference-run', required=True);q.add_argument('--arm', default='B', choices=('A', 'B'))
-    q.add_argument('--out', required=True);q.set_defaults(fn=cmd_scatter_census)
+    q.add_argument('--out', required=True);q.set_defaults(fn=cmd_index_census)
     return p
 
 

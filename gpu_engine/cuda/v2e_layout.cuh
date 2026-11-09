@@ -3,7 +3,12 @@
 // and check with `python -m gpu_engine.v2e_layout check`.
 //
 // Per-lane buffers are row-major [B, ...] as the FFI operands are today; a Leaf<T, D...> gives XLA-exact point access:
-//   get(b, i...)      gather:  a negative index wraps once (i + dim), then clamps into [0, dim - 1];
+//   get(b, i...)      gather, clip mode (jnp indexing x[rows, i], lane_index.take; every tracker-hook read): a negative
+//                     index wraps once (i + dim), then clamps into [0, dim - 1];
+//   get_fill(b, i...) gather, fill mode (jnp.take_along_axis, x.at[].get(mode='fill'); the oracle uses it at
+//                     state.usable_moves/legal_actions, transition 461/465/567/2062, linked_traps:35, sleep_talk:39-40;
+//                     none of them in M1): wraps once, then an index still out of range yields the fill value
+//                     (NaN for float, INT_MIN for signed, all ones for unsigned, true for bool);
 //   set(b, i..., v)   scatter: wraps once, drops the whole write if any index is out of range (returns false), converts
 //                     v to T as JAX's _scatter_impl does (integer wrap; float -> int toward zero, saturating, NaN -> 0;
 //                     -> bool as != 0);
@@ -60,9 +65,32 @@ V2E_LAYOUT_HD bool scatter_index(int64_t& i, int64_t n) {
   return i >= 0 && i < n;
 }
 
+// The eight dtypes the oracle pytrees use; every Leaf/Table element type and every scatter update type is one of them.
+template <class T> struct is_supported : std::false_type {};
+template <> struct is_supported<bool> : std::true_type {};
+template <> struct is_supported<int8_t> : std::true_type {};
+template <> struct is_supported<uint8_t> : std::true_type {};
+template <> struct is_supported<int16_t> : std::true_type {};
+template <> struct is_supported<uint16_t> : std::true_type {};
+template <> struct is_supported<int32_t> : std::true_type {};
+template <> struct is_supported<uint32_t> : std::true_type {};
+template <> struct is_supported<float> : std::true_type {};
+
+// jax's default fill value of a fill-mode gather: NaN (float), the minimum (signed), all ones (unsigned), true (bool).
+template <class T>
+V2E_LAYOUT_HD T fill_value() {
+  static_assert(is_supported<T>::value, "unsupported element type");
+  if constexpr (std::is_same<T, bool>::value) return true;
+  else if constexpr (std::is_floating_point<T>::value) return __builtin_nanf("");
+  else if constexpr (std::is_signed<T>::value) return std::numeric_limits<T>::min();
+  else return std::numeric_limits<T>::max();
+}
+
 // lax.convert_element_type semantics for a scatter update (jax _scatter_impl: promote, scatter, convert back to T).
 template <class T, class U>
 V2E_LAYOUT_HD T convert(U v) {
+  static_assert(is_supported<T>::value, "unsupported operand type");
+  static_assert(is_supported<U>::value, "scatter update type must be one of bool, int8..int32, uint8..uint32, float");
   if constexpr (std::is_same<T, U>::value) {
     return v;
   } else if constexpr (std::is_same<T, bool>::value) {
@@ -124,8 +152,12 @@ struct Leaf<T> : LeafBase<T> {
   V2E_LAYOUT_HD static int64_t offset(int64_t b) { return b * kPerLane + 0; }
   V2E_LAYOUT_HD T& raw(int64_t b) const { return p[offset(b)]; }
   V2E_LAYOUT_HD T get(int64_t b) const { return p[offset(b)]; }
+  V2E_LAYOUT_HD T get_fill(int64_t b) const {
+    return p[offset(b)];
+  }
   template <class U>
   V2E_LAYOUT_HD bool set(int64_t b, U v) const {
+    static_assert(is_supported<U>::value, "scatter update type must be one of bool, int8..int32, uint8..uint32, float");
     p[offset(b)] = convert<T>(v);
     return true;
   }
@@ -140,8 +172,15 @@ struct Leaf<T, D0> : LeafBase<T, D0> {
   V2E_LAYOUT_HD static int64_t offset(int64_t b, int64_t i0) { return b * kPerLane + i0; }
   V2E_LAYOUT_HD T& raw(int64_t b, int64_t i0) const { return p[offset(b, i0)]; }
   V2E_LAYOUT_HD T get(int64_t b, int64_t i0) const { return p[offset(b, gather_index(i0, D0, this->counters()))]; }
+  V2E_LAYOUT_HD T get_fill(int64_t b, int64_t i0) const {
+    bool ok = true;
+    ok = scatter_index(i0, D0) && ok;
+    if (!ok) { V2E_LAYOUT_COUNT(this->counters(), 0); return fill_value<T>(); }
+    return p[offset(b, i0)];
+  }
   template <class U>
   V2E_LAYOUT_HD bool set(int64_t b, int64_t i0, U v) const {
+    static_assert(is_supported<U>::value, "scatter update type must be one of bool, int8..int32, uint8..uint32, float");
     bool ok = true;
     ok = scatter_index(i0, D0) && ok;
     if (!ok) { V2E_LAYOUT_COUNT(this->counters(), 1); return false; }
@@ -161,8 +200,16 @@ struct Leaf<T, D0, D1> : LeafBase<T, D0, D1> {
   V2E_LAYOUT_HD static int64_t offset(int64_t b, int64_t i0, int64_t i1) { return b * kPerLane + i0 * D1 + i1; }
   V2E_LAYOUT_HD T& raw(int64_t b, int64_t i0, int64_t i1) const { return p[offset(b, i0, i1)]; }
   V2E_LAYOUT_HD T get(int64_t b, int64_t i0, int64_t i1) const { return p[offset(b, gather_index(i0, D0, this->counters()), gather_index(i1, D1, this->counters()))]; }
+  V2E_LAYOUT_HD T get_fill(int64_t b, int64_t i0, int64_t i1) const {
+    bool ok = true;
+    ok = scatter_index(i0, D0) && ok;
+    ok = scatter_index(i1, D1) && ok;
+    if (!ok) { V2E_LAYOUT_COUNT(this->counters(), 0); return fill_value<T>(); }
+    return p[offset(b, i0, i1)];
+  }
   template <class U>
   V2E_LAYOUT_HD bool set(int64_t b, int64_t i0, int64_t i1, U v) const {
+    static_assert(is_supported<U>::value, "scatter update type must be one of bool, int8..int32, uint8..uint32, float");
     bool ok = true;
     ok = scatter_index(i0, D0) && ok;
     ok = scatter_index(i1, D1) && ok;
@@ -185,8 +232,17 @@ struct Leaf<T, D0, D1, D2> : LeafBase<T, D0, D1, D2> {
   V2E_LAYOUT_HD static int64_t offset(int64_t b, int64_t i0, int64_t i1, int64_t i2) { return b * kPerLane + i0 * D1 * D2 + i1 * D2 + i2; }
   V2E_LAYOUT_HD T& raw(int64_t b, int64_t i0, int64_t i1, int64_t i2) const { return p[offset(b, i0, i1, i2)]; }
   V2E_LAYOUT_HD T get(int64_t b, int64_t i0, int64_t i1, int64_t i2) const { return p[offset(b, gather_index(i0, D0, this->counters()), gather_index(i1, D1, this->counters()), gather_index(i2, D2, this->counters()))]; }
+  V2E_LAYOUT_HD T get_fill(int64_t b, int64_t i0, int64_t i1, int64_t i2) const {
+    bool ok = true;
+    ok = scatter_index(i0, D0) && ok;
+    ok = scatter_index(i1, D1) && ok;
+    ok = scatter_index(i2, D2) && ok;
+    if (!ok) { V2E_LAYOUT_COUNT(this->counters(), 0); return fill_value<T>(); }
+    return p[offset(b, i0, i1, i2)];
+  }
   template <class U>
   V2E_LAYOUT_HD bool set(int64_t b, int64_t i0, int64_t i1, int64_t i2, U v) const {
+    static_assert(is_supported<U>::value, "scatter update type must be one of bool, int8..int32, uint8..uint32, float");
     bool ok = true;
     ok = scatter_index(i0, D0) && ok;
     ok = scatter_index(i1, D1) && ok;
@@ -212,8 +268,18 @@ struct Leaf<T, D0, D1, D2, D3> : LeafBase<T, D0, D1, D2, D3> {
   V2E_LAYOUT_HD static int64_t offset(int64_t b, int64_t i0, int64_t i1, int64_t i2, int64_t i3) { return b * kPerLane + i0 * D1 * D2 * D3 + i1 * D2 * D3 + i2 * D3 + i3; }
   V2E_LAYOUT_HD T& raw(int64_t b, int64_t i0, int64_t i1, int64_t i2, int64_t i3) const { return p[offset(b, i0, i1, i2, i3)]; }
   V2E_LAYOUT_HD T get(int64_t b, int64_t i0, int64_t i1, int64_t i2, int64_t i3) const { return p[offset(b, gather_index(i0, D0, this->counters()), gather_index(i1, D1, this->counters()), gather_index(i2, D2, this->counters()), gather_index(i3, D3, this->counters()))]; }
+  V2E_LAYOUT_HD T get_fill(int64_t b, int64_t i0, int64_t i1, int64_t i2, int64_t i3) const {
+    bool ok = true;
+    ok = scatter_index(i0, D0) && ok;
+    ok = scatter_index(i1, D1) && ok;
+    ok = scatter_index(i2, D2) && ok;
+    ok = scatter_index(i3, D3) && ok;
+    if (!ok) { V2E_LAYOUT_COUNT(this->counters(), 0); return fill_value<T>(); }
+    return p[offset(b, i0, i1, i2, i3)];
+  }
   template <class U>
   V2E_LAYOUT_HD bool set(int64_t b, int64_t i0, int64_t i1, int64_t i2, int64_t i3, U v) const {
+    static_assert(is_supported<U>::value, "scatter update type must be one of bool, int8..int32, uint8..uint32, float");
     bool ok = true;
     ok = scatter_index(i0, D0) && ok;
     ok = scatter_index(i1, D1) && ok;
@@ -2390,5 +2456,10 @@ struct EngineTables {
     return t;
   }
 };
+
+// Header-wide digest: sha256 over every struct digest above, in order (gpu_engine.v2e_layout.layout_digest). A handler that
+// binds several structs checks this one against the `layout_digest` attribute Python computes from the live pytrees.
+constexpr uint64_t kLayoutDigest = 0x1b1bf8d402b4114aull;
+constexpr const char* kLayoutDigestHex = "1b1bf8d402b4114a10902caf0e9ed272a0e2dee5f144de1cf62e721c228499e3";
 
 }  // namespace v2e_layout

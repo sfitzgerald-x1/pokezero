@@ -162,6 +162,10 @@ def run(module, shard_paths, template, context, *, out, workers=8, repro_lanes=1
     import jax
     factory, takes_context = resolve(module)
     jax_fn, cuda_fn = factory(dict(context, template=template)) if takes_context else factory()
+    # A provider may describe itself (`info`) and accumulate per-shard statistics from the reference outputs
+    # (`accumulate(want, lanes)` / `summary()`), e.g. the hook: module's exercised lane-steps per call site.
+    info = getattr(cuda_fn, 'info', None) or getattr(jax_fn, 'info', None)
+    accumulate = getattr(jax_fn, 'accumulate', None);summary = getattr(jax_fn, 'summary', None)
     treedef = jax.tree.structure(template)
     jitted = {}
     def call(fn_name, fn, *args):
@@ -186,6 +190,7 @@ def run(module, shard_paths, template, context, *, out, workers=8, repro_lanes=1
             state, actions, trackers = jax.tree.unflatten(treedef, [jax.numpy.asarray(x) for x in leaves])
             want = call('jax', jax_fn, state, actions, trackers);got = call('cuda', cuda_fn, state, actions, trackers)
             diffs = jax.device_get(compare(want, got));n = state.hp.shape[0];compared += n   # one transfer for every leaf
+            if accumulate is not None:accumulate(want, n)
             any_lane = np.zeros(n, bool)
             for name, d in diffs.items():
                 d = np.asarray(d);totals[name] = totals.get(name, 0) + int(d.sum());any_lane |= d if d.shape == any_lane.shape else d.any()
@@ -197,9 +202,11 @@ def run(module, shard_paths, template, context, *, out, workers=8, repro_lanes=1
                 np.savez_compressed(Path(out) / f"repro-{module.replace(':', '_').replace('@', '_').replace('+', '_')}.npz", lanes=rows, **{f'l{i:03d}': x[rows] for i, x in enumerate(leaves)})
                 log('FIRST_DIFFERENCE', module=module, **first)
     seconds = time.perf_counter() - begin
-    return dict(module=module, shards=len(shard_paths), lane_steps=compared, lane_steps_differing=differing,
+    result = dict(module=module, shards=len(shard_paths), lane_steps=compared, lane_steps_differing=differing,
         equal=compared > 0 and bool(totals) and differing == 0, differing_by_leaf={k: v for k, v in totals.items() if v}, output_leaves=len(totals),
-        first_difference=first, seconds=seconds)
+        first_difference=first, seconds=seconds, provider=info)
+    if summary is not None:result.update(summary())
+    return result
 
 
 def main(argv=None):
@@ -214,7 +221,12 @@ def main(argv=None):
     parser.add_argument('--build-dir', default=None)
     parser.add_argument('--mode', default=None, choices=('warp', 'thread'), help='generator backend (default per module)')
     parser.add_argument('--lanes', type=int, default=0, help='replay only the first N lanes of each shard (0: all)')
+    parser.add_argument('--hooks-selftest', default=None, choices=('oracle', 'negative', 'negative-untouched'),
+        help='hook: modules only: stand the harness self-test in for CUDA_HOOKS (refused when any CUDA hook is registered); recorded in diff.json')
     args = parser.parse_args(argv)
+    if args.hooks_selftest:
+        from gpu_engine import v2e_hooks
+        v2e_hooks.selftest(args.hooks_selftest, source='--hooks-selftest')
     if args.lanes < 0:parser.error('--lanes must be positive (or 0 for all lanes)')
     out = Path(args.out);out.mkdir(parents=True, exist_ok=True)
     import jax

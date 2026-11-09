@@ -2,7 +2,7 @@
 
 CUDA_HOOKS maps a hook name to a callable with the signature
 
-    fn(carry, *args, tables, **kwargs) -> carry
+    fn(carry, *args, tables, **kwargs) -> carry            or    -> (carry, err)
 
 where everything after `carry` is exactly what the oracle hook received after its first argument, at the tapped call
 site, teacher-forced (gpu_engine.v2e_hook_taps records it from the oracle's own trace):
@@ -14,21 +14,29 @@ site, teacher-forced (gpu_engine.v2e_hook_taps records it from the oracle's own 
 - `*args` / `**kwargs` are the remaining oracle arguments as received: pytrees of per-lane arrays (`state`, masks,
   values; masks are per-lane bool, or a Python bool / scalar the oracle broadcasts, so broadcast them to [B] before
   the FFI call) and Python statics (`side` int, feature `name` str, `source_class` int, `add`/`pp_use`/`start` flags,
-  the EntryTable / MoveEffects table pytrees). A CUDA implementation turns the statics into FFI attributes.
+  the EntryTable / MoveEffects table pytrees). A CUDA implementation turns the statics into FFI attributes. The
+  harness groups call sites by their static-argument signature (v2e_hook_taps signatures): M1's definition of done
+  needs every signature exercised (a lane where the oracle hook changed a leaf) on real or synthetic lanes.
 - `tables` is HookTables(engine, belief, port): the engine tables (transition.MoveTable), observation_tables.belief
   (the Context's belief_tables) and engine_tables.public_port (its port_tables). Pack them once with
   gpu_engine.v2e_layout.pack_tables for the EngineTables buffer of gpu_engine/cuda/v2e_layout.cuh.
+- `err`, optional, is the handler's error word: uint32 of shape [1] (one word for the call) or [B] (per lane). The
+  harness emits it as `<name>@<site>/err` and compares it with zeros, so a stale-layout refusal (v2e_layout.cuh
+  kStaleLayout) or a debug clamp/drop count shows as a difference at its site. A hook that returns the carry alone
+  reports zeros.
 Hook names are the function names of engine_device_public_hooks (`observe`, `_write`, ...) or `<alias>.<function>`
 for the callees the hooks reach through a module global (`trackers._observe`, `port.condition`,
 `visible_belief.refresh`, `negative_items.hp_line`, `damage_history._add`, ...); see v2e_hook_taps.TAP_MODULES.
 
-This module holds no CUDA. Two self-test registrations exist for the harness itself, never active by default; select one
-with the environment variable V2E_HOOKS_SELFTEST or selftest(mode):
-- 'oracle-as-cuda': every hook is the JAX oracle hook itself; hook:<name>@all must then show 0 differing lane-steps;
-- 'negative': the oracle hook with one bit of its first output leaf flipped at one lane; it must be detected.
+This module holds no CUDA. In normal mode a hook missing from CUDA_HOOKS is a hard error (KeyError). Self-tests of the
+harness itself are selected only by the v2e_diff flag `--hooks-selftest {oracle,negative,negative-untouched}` (or
+selftest(mode) in code), are refused while CUDA_HOOKS is non-empty, and are recorded in diff.json (`provider`):
+- 'oracle': every hook is the JAX oracle hook itself; hook:<name>@all must then show 0 differing lane-steps;
+- 'negative': the oracle hook with one bit of its first written leaf flipped at one lane; it must be detected;
+- 'negative-untouched': one bit of a leaf the hook does not write flipped at one lane; the untouched_equal check must
+  detect it.
 """
 from collections import namedtuple
-import os
 
 HookTables = namedtuple('HookTables', 'engine belief port')
 
@@ -44,54 +52,68 @@ CALLEES = ('trackers._observe', 'trackers._percent', 'port.condition', 'visible_
     'negative_items.hp_line', 'damage_history.observe', 'damage_history._add', 'damage_history.settle')
 ALL_HOOKS = M1_HOOKS + M3_HOOKS + M2_HOOKS + ('opportunity', 'matchup') + CALLEES
 
-SELFTEST_ENV = 'V2E_HOOKS_SELFTEST'
-SELFTESTS = ('oracle-as-cuda', 'negative')
-NEGATIVE_LANE = 3   # the lane whose first output leaf gets one bit flipped (lane 0 when the batch is smaller)
+SELFTESTS = ('oracle', 'negative', 'negative-untouched')
+ALIASES = {'oracle-as-cuda': 'oracle'}
+NEGATIVE_LANE = 3   # the lane whose leaf gets one bit flipped (lane 0 when the batch is smaller)
 
 CUDA_HOOKS = {}
-_selftest = {'mode': None}
+_selftest = {'mode': None, 'source': None}
 
 
-def selftest(mode):
-    """Select a harness self-test ('oracle-as-cuda' or 'negative'); None disables. Returns the previous mode."""
+def selftest(mode, source='selftest()'):
+    """Select a harness self-test (SELFTESTS; None disables) and record where it was selected. Returns the previous mode.
+    Refused while CUDA_HOOKS holds any registration: a self-test must never stand in for a registered hook."""
+    mode = ALIASES.get(mode, mode)
     if mode is not None and mode not in SELFTESTS:raise ValueError(f'unknown self-test {mode!r}; one of {SELFTESTS}')
-    previous = _selftest['mode'];_selftest['mode'] = mode
+    if mode is not None and CUDA_HOOKS:raise ValueError(f'self-test {mode!r} refused: CUDA_HOOKS has registrations {sorted(CUDA_HOOKS)}')
+    previous = _selftest['mode'];_selftest.update(mode=mode, source=source if mode is not None else None)
     return previous
 
 
 def selftest_mode():
-    """The active self-test: selftest(mode) if set, else the V2E_HOOKS_SELFTEST environment variable, else None."""
-    mode = _selftest['mode'] or os.environ.get(SELFTEST_ENV) or None
-    if mode is not None and mode not in SELFTESTS:raise ValueError(f'{SELFTEST_ENV}={mode!r}: one of {SELFTESTS}')
-    return mode
+    """The active self-test mode (None in normal mode)."""
+    return _selftest['mode']
 
 
 def resolve(name):
-    """The callable for a hook name: CUDA_HOOKS[name], or the active self-test's stand-in; KeyError when neither exists."""
-    if name in CUDA_HOOKS:return CUDA_HOOKS[name]
+    """The callable for a hook name: CUDA_HOOKS[name] in normal mode (KeyError when missing: never a fallback), or the
+    active self-test's stand-in (refused when CUDA_HOOKS is non-empty)."""
     mode = selftest_mode()
-    if mode is None:raise KeyError(f'no CUDA hook registered for {name!r} (CUDA_HOOKS has {sorted(CUDA_HOOKS)}); set {SELFTEST_ENV}=oracle-as-cuda for the harness self-test')
+    if mode is None:
+        if name not in CUDA_HOOKS:raise KeyError(f'no CUDA hook registered for {name!r} (CUDA_HOOKS has {sorted(CUDA_HOOKS)})')
+        return CUDA_HOOKS[name]
+    if CUDA_HOOKS:raise ValueError(f'self-test {mode!r} refused: CUDA_HOOKS has registrations {sorted(CUDA_HOOKS)}')
     return selftest_hook(name, mode)
 
 
-def _flip_one_bit(tree):
-    """The pytree with bit 0 of the first leaf's first element at NEGATIVE_LANE flipped (any dtype), the rest untouched."""
+def implementation(name):
+    """What resolve(name) returns, as a record for diff.json: the implementation's module and qualified name, the
+    self-test mode and where it was selected."""
+    fn = resolve(name)
+    return dict(hook=name, implementation=f'{getattr(fn, "__module__", "?")}.{getattr(fn, "__qualname__", getattr(fn, "__name__", "?"))}',
+        selftest=_selftest['mode'], selftest_source=_selftest['source'], registered=name in CUDA_HOOKS)
+
+
+def _flip_one_bit(tree, index):
+    """The pytree with bit 0 of leaf `index`'s first element at NEGATIVE_LANE flipped (any dtype), the rest untouched."""
     import jax
     import jax.numpy as j
     from gpu_engine.v2e_diff import unsigned
     leaves, treedef = jax.tree.flatten(tree)
-    x = leaves[0];b = x.shape[0];lane = NEGATIVE_LANE if b > NEGATIVE_LANE else 0
+    x = leaves[index];b = x.shape[0];lane = NEGATIVE_LANE if b > NEGATIVE_LANE else 0
     flat = x.reshape(b, -1)
     if x.dtype == j.bool_:flipped = flat.at[lane, 0].set(~flat[lane, 0])
     else:
         u = unsigned(flat);flipped = u.at[lane, 0].set(u[lane, 0] ^ 1)
         flipped = flipped if flipped.dtype == x.dtype else jax.lax.bitcast_convert_type(flipped, x.dtype)
-    leaves[0] = flipped.reshape(x.shape)
+    leaves[index] = flipped.reshape(x.shape)
     return jax.tree.unflatten(treedef, leaves)
 
 
 def selftest_hook(name, mode):
-    """The self-test stand-in for `name`: the oracle hook (with a Context rebuilt around the carry), optionally flipped."""
+    """The self-test stand-in for `name`: the oracle hook (with a Context rebuilt around the carry), optionally with one
+    bit flipped in its first written leaf ('negative') or its first untouched leaf ('negative-untouched')."""
+    import jax
     from gpu_engine import v2e_hook_taps as taps
     original = taps.original(name);context_first = taps.context_first(name)
     def fn(carry, *args, tables, **kwargs):
@@ -99,6 +121,12 @@ def selftest_hook(name, mode):
             from gpu_engine.engine_device_public_hooks import Context
             out = original(Context(carry, tables.belief, tables.port), *args, **kwargs).trackers
         else:out = original(carry, *args, **kwargs)
-        return _flip_one_bit(out) if mode == 'negative' else out
-    fn.__name__ = f'{mode}:{name}'
+        if mode == 'oracle':return out
+        before = jax.tree.leaves(carry) if jax.tree.structure(carry) == jax.tree.structure(out) else []
+        after = jax.tree.leaves(out)
+        written = [k for k, (x, y) in enumerate(zip(before, after)) if x is not y]
+        untouched = [k for k, (x, y) in enumerate(zip(before, after)) if x is y]
+        wanted = written if mode == 'negative' else untouched
+        return _flip_one_bit(out, wanted[0] if wanted else 0)
+    fn.__name__ = fn.__qualname__ = f'selftest_{mode.replace("-", "_")}:{name}'
     return fn

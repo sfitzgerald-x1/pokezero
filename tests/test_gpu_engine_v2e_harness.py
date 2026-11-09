@@ -97,9 +97,6 @@ class CaptureSinkTest(unittest.TestCase):
             with self.assertRaises(SystemExit):Sink(d, every=1, skip=0, limit=0)
 
 
-if __name__ == '__main__':
-    unittest.main()
-
 
 class ProviderResolutionTest(unittest.TestCase):
     def test_parametrized_names_reach_their_provider_with_the_argument(self):
@@ -130,3 +127,7 @@ class ProviderResolutionTest(unittest.TestCase):
         self.assertEqual(v2e_diff.module_name('hook:observe@all'), 'hook:observe@all')
         with self.assertRaises(argparse.ArgumentTypeError):v2e_diff.module_name('nonsense:x')
         with self.assertRaises(KeyError):v2e_diff.resolve('nonsense:x')
+
+
+if __name__ == '__main__':
+    unittest.main()

@@ -9,9 +9,12 @@ device path's facts:
 - every `table.*` sub-table is present, as are the Context's belief and port tables and every tracker sub-carry;
 - `hasattr(c.belief_tables, X)` / `getattr(table, X, None)` follow the real table pytrees (tests/fixtures/v2e_layout_description.json).
 A statically true `if` keeps its header (so the reader sees the guard) and its body; a false one keeps only its else
-branch; an unknown test keeps both. Comments and blank lines are not statements and do not survive. Every surviving line
-is printed with its original line number, one text file per function (`<module>.<function>.txt`), plus listing.json
-(the surviving line sets, the static headers, counts by phase for step_with_chance) and listing.md.
+branch; an unknown test keeps both. After a statically taken `if ...: return` (or a return) the rest of the block is
+dead and dropped; a conditional expression whose test is static is annotated with its dead branch. Comments and blank
+lines are not statements and do not survive. Every surviving line is printed with its original line number, one text
+file per function (`<module>.<function>.txt`; with --trace-lines, `NNNN:~` marks a line without equations in the traced
+jaxpr), plus listing.json (the surviving line sets, the static headers, the notes, counts by phase for step_with_chance)
+and listing.md.
 
 Cross-check: `trace-lines` (GPU host) traces the oracle step and records every gpu_engine (module, line) that appears in
 the jaxpr's source info; `write --trace-lines <that json>` then reports, per function, listing lines without equations
@@ -173,6 +176,7 @@ class Pruned:
     def __init__(self, module, fn):
         self.module = module;self.function = fn.name;self.first = fn.lineno;self.last = fn.end_lineno
         self.lines = set();self.static_headers = set();self.unknown_headers = set();self.dropped = set()
+        self.notes = {}   # line -> annotation (a conditional expression whose test is static: which branch is dead)
 
     def keep(self, first, last):
         self.lines.update(range(first, last + 1))
@@ -197,32 +201,61 @@ def else_line(module, body_end, orelse_start):
     return None
 
 
+def terminates(statements):
+    """Whether a statement list always leaves the function (ends in return/raise, or an if whose both branches do)."""
+    if not statements:return False
+    last = statements[-1]
+    if isinstance(last, (ast.Return, ast.Raise)):return True
+    if isinstance(last, ast.If):return terminates(last.body) and terminates(last.orelse)
+    return False
+
+
+def annotate(out, facts, node):
+    """Note conditional expressions with a statically known test inside a kept statement (which branch is dead)."""
+    for sub in ast.walk(node):
+        if isinstance(sub, ast.IfExp):
+            t = facts.truth(sub.test)
+            if t is not UNKNOWN:
+                dead = 'else' if t else 'if'
+                text = f'{ast.unparse(sub.test)} is {"always" if t else "never"} true: the {dead}-branch of this conditional expression is dead on the device path'
+                out.notes[sub.lineno] = (out.notes.get(sub.lineno, '') + '; ' + text).strip('; ')
+
+
 def prune_function(module, fn, facts):
     facts = Facts(facts.attributes, dict(facts.locals, **local_aliases(fn, facts)))
     out = Pruned(module, fn);first, last = header_span(fn);out.keep(first, last)
     def walk(statements):
-        for node in statements:
+        """Returns True when the walked block always leaves the function on the device path (the caller drops the rest)."""
+        for n, node in enumerate(statements):
             if isinstance(node, ast.If):
-                t = facts.truth(node.test);h0, h1 = header_span(node)
+                t = facts.truth(node.test);h0, h1 = header_span(node);annotate(out, facts, node.test)
                 if t is True:
-                    out.keep(h0, h1);out.static_headers.update(range(h0, h1 + 1));walk(node.body)
+                    out.keep(h0, h1);out.static_headers.update(range(h0, h1 + 1));done = walk(node.body)
                     for o in node.orelse:out.drop(o)
                 elif t is False:
                     out.dropped.update(range(h0, h1 + 1))
                     for b in node.body:out.drop(b)
-                    walk(node.orelse)
+                    done = walk(node.orelse)
                 else:
-                    out.keep(h0, h1);out.unknown_headers.update(range(h0, h1 + 1));walk(node.body)
+                    out.keep(h0, h1);out.unknown_headers.update(range(h0, h1 + 1));done_body = walk(node.body);done = False
                     if node.orelse:
                         if not (len(node.orelse) == 1 and isinstance(node.orelse[0], ast.If) and node.orelse[0].col_offset == node.col_offset):
                             e = else_line(module, node.body[-1].end_lineno, node.orelse[0].lineno)
                             if e:out.keep(e, e)
-                        walk(node.orelse)
+                        done_else = walk(node.orelse);done = done_body and done_else
+                if done:   # a statically taken `if ...: return` (or both branches returning): the rest of the block is dead
+                    for rest in statements[n + 1:]:out.drop(rest)
+                    return True
             elif isinstance(node, (ast.For, ast.While, ast.With, ast.Try, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
                 h0, h1 = header_span(node);out.keep(h0, h1)
                 for field in ('body', 'orelse', 'finalbody'):walk(getattr(node, field, []) or [])
                 for handler in getattr(node, 'handlers', []) or []:out.keep(handler.lineno, handler.lineno);walk(handler.body)
-            else:out.keep(node.lineno, node.end_lineno)
+            else:
+                out.keep(node.lineno, node.end_lineno);annotate(out, facts, node)
+                if isinstance(node, (ast.Return, ast.Raise)):
+                    for rest in statements[n + 1:]:out.drop(rest)
+                    return True
+        return False
     walk(fn.body)
     return out
 
@@ -245,22 +278,50 @@ def reached_calls(module, pruned):
     return out
 
 
-def listing(modules, attributes, root=ROOT_FUNCTION, skip_modules=()):
-    """{(module, function): Pruned} of every function reached from `root` on the device path."""
+def call_site_facts(sites_report):
+    """{(module, function): {parameter: value}} from a hook_sites.json (v2e_hook_taps sites): a static argument that has
+    the same value at every traced call site of a hook is a fact inside that hook (e.g. reveal_item's `original` is
+    always True), so `x if original else y` can be annotated and `if original:` pruned."""
+    from gpu_engine import v2e_hook_taps as taps
+    out = {}
+    for name, row in sites_report.get('sites', {}).items():
+        alias, function = taps.split(name);module = taps.TAP_MODULES[alias].rsplit('.', 1)[-1]
+        values = {}
+        for entry in row.values():
+            for statics in entry.get('statics', []):
+                for k, v in statics.items():values.setdefault(k, set()).add(json.dumps(v))
+        facts = {k: json.loads(next(iter(v))) for k, v in values.items() if len(v) == 1}
+        if facts:out[(module, function)] = facts
+    return out
+
+
+def listing(modules, attributes, root=ROOT_FUNCTION, skip_modules=(), site_facts=None):
+    """{(module, function): Pruned} of every function reached from `root` on the device path. `site_facts`
+    (call_site_facts) adds per-function constants observed at every call site."""
     facts = Facts(attributes);done = {};queue = [root]
     while queue:
         key = queue.pop(0)
         if key in done:continue
         mod, fn = key
         if mod not in modules or fn not in modules[mod].functions or mod in skip_modules:continue
-        pruned = prune_function(modules[mod], modules[mod].functions[fn], facts);done[key] = pruned
+        local = Facts(attributes, dict((site_facts or {}).get(key, {})))
+        pruned = prune_function(modules[mod], modules[mod].functions[fn], local);done[key] = pruned
         for callee in sorted(reached_calls(modules[mod], pruned)):
             if callee not in done:queue.append(callee)
     return done
 
 
-def render(module, pruned):
-    return ''.join(f'{n:5d}: {module.lines[n - 1]}\n' for n in sorted(pruned.lines))
+def render(module, pruned, trace_lines=None):
+    """The reading copy: `NNNN: source`. With trace lines, a line that produced no equation in the traced jaxpr (control
+    flow, aliasing, Python-only work) is marked `NNNN:~ source`; a conditional expression whose test is static gets a
+    trailing `## note`."""
+    have = set(trace_lines.get(pruned.module, {})) if trace_lines else None
+    out = []
+    for n in sorted(pruned.lines):
+        mark = '~' if have is not None and n not in have else ' '
+        note = f'   ## {pruned.notes[n]}' if n in pruned.notes else ''
+        out.append(f'{n:5d}:{mark}{module.lines[n - 1]}{note}\n')
+    return ''.join(out)
 
 
 def phase_counts(pruned):
@@ -272,11 +333,12 @@ def phase_counts(pruned):
 
 def write_listing(out, modules, listed, *, trace_lines=None):
     out = Path(out);out.mkdir(parents=True, exist_ok=True);report = dict(schema='pokezero.v2e-listing.v1', root=list(ROOT_FUNCTION), functions={})
+    lines_by_module = {m: {int(k) for k in c} for m, c in trace_lines['lines'].items()} if trace_lines else None
     for (mod, fn), pruned in sorted(listed.items(), key=lambda kv: (kv[0][0] != 'transition', kv[0] != STEP_FUNCTION, kv[0])):
-        (out / f'{mod}.{fn}.txt').write_text(render(modules[mod], pruned))
+        (out / f'{mod}.{fn}.txt').write_text(render(modules[mod], pruned, lines_by_module))
         row = dict(module=mod, function=fn, span=[pruned.first, pruned.last], source_lines=pruned.last - pruned.first + 1,
             surviving=len(pruned.lines), static_true_headers=len(pruned.static_headers), unknown_headers=len(pruned.unknown_headers),
-            dropped=len(pruned.dropped), lines=sorted(pruned.lines), static_true_header_lines=sorted(pruned.static_headers))
+            dropped=len(pruned.dropped), lines=sorted(pruned.lines), static_true_header_lines=sorted(pruned.static_headers), notes={str(k): v for k, v in sorted(pruned.notes.items())})
         if (mod, fn) == STEP_FUNCTION:row['by_phase'] = phase_counts(pruned)
         report['functions'][f'{mod}.{fn}'] = row
     report['totals'] = dict(functions=len(listed), surviving=sum(r['surviving'] for r in report['functions'].values()),
@@ -360,7 +422,8 @@ def crosscheck_markdown(cc):
 
 def cmd_write(args):
     modules = load_modules();attributes = present_attributes(args.description)
-    listed = listing(modules, attributes)
+    site_facts = call_site_facts(json.loads(Path(args.sites).read_text())) if args.sites else None
+    listed = listing(modules, attributes, site_facts=site_facts)
     trace = json.loads(Path(args.trace_lines).read_text()) if args.trace_lines else None
     report = write_listing(args.out, modules, listed, trace_lines=trace)
     root = report['functions']['.'.join(STEP_FUNCTION)]
@@ -398,6 +461,7 @@ def parser():
     p = argparse.ArgumentParser(description=__doc__.split('\n')[0]);sub = p.add_subparsers(dest='command', required=True)
     q = sub.add_parser('write', help='write the pruned listing (CPU; optional cross-check against trace-lines output)')
     q.add_argument('--out', required=True);q.add_argument('--description', default=str(DESCRIPTION));q.add_argument('--trace-lines')
+    q.add_argument('--sites', help='hook_sites.json (v2e_hook_taps sites): static arguments constant over every call site become facts inside the hook')
     q.set_defaults(fn=cmd_write)
     q = sub.add_parser('trace-lines', help='GPU host: (module, line) pairs in the traced oracle step\'s source info')
     q.add_argument('--config', required=True);q.add_argument('--reference-run', required=True);q.add_argument('--arm', default='B', choices=('A', 'B'))

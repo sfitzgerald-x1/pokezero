@@ -183,17 +183,14 @@ class HostAccessorTest(unittest.TestCase):
         self.assertEqual(len(rows), len(cases));mismatches = [];seen_clamp = seen_drop = 0
         for row in rows:
             rank = len(row['dims']);idx = [row['idx'][:, k] for k in range(rank)]
-            got = L.emulate_get(row['x'], *idx);out = L.emulate_set_point(row['x'], idx, row['v'])
+            got = L.emulate_get(row['x'], *idx);out = L.emulate_set_point(row['x'], idx, row['v']);fill = L.emulate_get_fill(row['x'], *idx)
             kept = np.ones(row['x'].shape[0], bool)
             for i, n in zip(idx, row['dims']):kept &= L.scatter_index(i, n)[1]
-            ok = (L._bits_equal(got, row['got']) and L._bits_equal(out, row['out']) and np.array_equal(kept, row['kept'])
+            ok = (L._bits_equal(got, row['got']) and L._bits_equal(out, row['out']) and L._bits_equal(fill, row['fill']) and np.array_equal(kept, row['kept'])
                 and row['drops'] == int((~kept).sum()))
             if not ok:mismatches.append(row['case'])
             seen_clamp += row['clamps'];seen_drop += row['drops']
         self.assertEqual(mismatches, []);self.assertGreater(seen_clamp, 0);self.assertGreater(seen_drop, 0)
-
-
-if __name__ == '__main__':unittest.main()
 
 
 class ListingTest(unittest.TestCase):
@@ -240,3 +237,104 @@ class CommandTest(unittest.TestCase):
             self.assertEqual(L.main(['check', '--spec', str(MINI_SPEC), '--header', str(out)]), 0)
             self.assertEqual(L.main(['check', '--spec', str(Path(tmp) / 'absent.json'), '--header', str(out)]), 1, 'a header with carries is stale without the spec')
             self.assertEqual(L.main(['check', '--header', str(L.HEADER), '--spec', str(MINI_SPEC)]), 1, 'the committed header has no carries yet')
+
+
+class FillAndDigestTest(unittest.TestCase):
+    def test_fill_gather_emulation(self):
+        """jnp.take_along_axis / .at[].get(mode='fill'): wrap once, then the fill value (jax defaults per dtype)."""
+        x = np.arange(4 * 6, dtype=np.int32).reshape(4, 6)
+        np.testing.assert_array_equal(L.emulate_get_fill(x, np.array([-7, -1, 6, 100])), [np.iinfo(np.int32).min, 11, np.iinfo(np.int32).min, np.iinfo(np.int32).min])
+        np.testing.assert_array_equal(L.emulate_get_fill(x, np.array([-6, 0, 5, 3])), [0, 6, 17, 21])
+        self.assertEqual(L.fill_value('uint32'), 2**32 - 1);self.assertEqual(L.fill_value('bool'), True);self.assertTrue(np.isnan(L.fill_value('float32')))
+        self.assertEqual(L.fill_value('int16'), -32768);self.assertEqual(L.fill_value('uint8'), 255)
+        f = L.emulate_get_fill(np.zeros((2, 3), np.float32), np.array([5, 1]));self.assertTrue(np.isnan(f[0]) and f[1] == 0)
+
+    def test_header_wide_digest_and_attribute(self):
+        d = tiny_description();spec = L.load_spec(MINI_SPEC);text = L.generate(d, spec)
+        d64, hexdigest = L.layout_digest(d, spec)
+        self.assertIn(f'constexpr uint64_t kLayoutDigest = 0x{d64:016x}ull;', text);self.assertIn(f'kLayoutDigestHex = "{hexdigest}"', text)
+        e = copy.deepcopy(d);e['tables'][0]['shape'] = [8]
+        self.assertNotEqual(L.layout_digest(e, spec)[0], d64, 'any struct change moves the header-wide digest')
+        self.assertNotEqual(L.layout_digest(d)[0], d64, 'the carries are part of it')
+        for v in (0, 2**63 - 1, 2**63, 2**64 - 1, d64):
+            self.assertEqual(int(np.int64(L.digest_attr(v)).view(np.uint64)), v)
+
+    def test_live_description_matches_describe_shapes(self):
+        """live_description over arrays built from the fixture reproduces the fixture's tables entries exactly."""
+        d = description()
+        import jax
+        from gpu_engine.engine_device_trackers import Trackers
+        state = tuple(np.zeros([1] + e['shape'], e['dtype']) for e in d['state'])   # a tuple pytree: paths differ, dtypes/shapes agree
+        live = L.live_description(state, np.zeros((1, 2), np.int32), Trackers(*[None] * len(Trackers._fields)), tuple(), None)
+        self.assertEqual([(e['dtype'], e['shape']) for e in live['state']], [(e['dtype'], e['shape']) for e in d['state']])
+        self.assertEqual(live['tables'][-1], d['tables'][-1])
+        diffs = L.check_live(d, state, np.zeros((1, 2), np.int32), Trackers(*[None] * len(Trackers._fields)), tuple(), None)
+        self.assertTrue(any(s.startswith('state: leaf order') for s in diffs), 'the tuple pytree has other paths: reported')
+
+
+class HostSpanAndStaticAssertTest(unittest.TestCase):
+    def _compile(self, body, expect_ok=True):
+        import subprocess
+        compiler = L.cxx_compiler()
+        if compiler is None:self.skipTest('no C++ compiler')
+        with tempfile.TemporaryDirectory() as tmp:
+            (Path(tmp) / 'v2e_layout.cuh').write_text(L.generate(description()))
+            src = Path(tmp) / 'main.cpp';src.write_text('#define V2E_LAYOUT_DEBUG 1\n#include "v2e_layout.cuh"\n#include <cstdio>\nusing namespace v2e_layout;\n' + body)
+            result = subprocess.run([compiler, '-std=c++17', '-x', 'c++', '-o', str(Path(tmp) / 'a.out'), str(src)], capture_output=True, text=True)
+            if not expect_ok:return result.returncode, result.stderr
+            self.assertEqual(result.returncode, 0, result.stderr[-2000:])
+            run = subprocess.run([str(Path(tmp) / 'a.out')], capture_output=True, text=True)
+            self.assertEqual(run.returncode, 0, run.stderr);return run.stdout
+
+    def test_span_and_writable(self):
+        out = self._compile(r'''
+int main() {
+  int32_t data[3 * 2 * 6]; for (int k = 0; k < 36; ++k) data[k] = k;
+  uint32_t dbg[2] = {0u, 0u};
+  Leaf<int32_t, 2, 6> leaf; leaf.p = data; leaf.lanes = 3; leaf.dbg = dbg;
+  // span(b) is the lane; span(b, i0) clamps i0 like a gather (-1 -> 1, 7 -> 1, -3 -> 0)
+  std::printf("%ld %ld %ld %ld %ld\n", (long)(leaf.span(1) - data), (long)(leaf.span(1, -1) - data), (long)(leaf.span(1, 7) - data), (long)(leaf.span(1, -3) - data), (long)(leaf.span(2, 0) - data));
+  // writable follows the scatter rule: wrap once, in range or dropped
+  std::printf("%d %d %d %d %d\n", (int)leaf.writable(0), (int)leaf.writable(0, -1), (int)leaf.writable(0, -3), (int)leaf.writable(0, 2), (int)leaf.writable(0, 1));
+  // get_fill at a lane: in range reads, out of range fills INT_MIN; clamps counted
+  std::printf("%d %d %u\n", leaf.get_fill(0, 1, -1), leaf.get_fill(0, 1, 6) == INT32_MIN, dbg[0]);
+  return 0;
+}
+''')
+        self.assertEqual(out.splitlines(), ['12 18 18 12 24', '1 1 0 0 1', '11 1 3'])
+
+    def test_set_refuses_unsupported_update_types(self):
+        ok = self._compile('int main() { int32_t d[6] = {}; Leaf<int32_t, 6> l; l.p = d; l.lanes = 1; l.set(0, 1, 2.5f); l.set(0, 2, true); l.set(0, 3, uint8_t(7)); return d[1] != 2; }')
+        self.assertEqual(ok, '')
+        rc, err = self._compile('int main() { int32_t d[6] = {}; Leaf<int32_t, 6> l; l.p = d; l.lanes = 1; l.set(0, 1, 2.5); return 0; }', expect_ok=False)
+        self.assertNotEqual(rc, 0);self.assertIn('scatter update type', err)
+        rc, err = self._compile('int main() { int32_t d[6] = {}; Leaf<int32_t, 6> l; l.p = d; l.lanes = 1; l.set(0, 1, int64_t(3)); return 0; }', expect_ok=False)
+        self.assertNotEqual(rc, 0)
+
+
+class CoverageTest(unittest.TestCase):
+    """gpu_engine.v2e_coverage pieces on synthetic data (no tables, no trace)."""
+    def test_paths_summary_and_markdown(self):
+        from gpu_engine import v2e_coverage as cov, v2e_census as cz
+        self.assertEqual(cov.path_of('hook:observe@transition:756#1'), 'hook:observe@transition:756');self.assertEqual(cov.path_of('step:defer'), 'step:defer')
+        counts = {g: {} for g in cz.GROUPS};counts['E'] = {'hook:observe@transition:756#0': 500, 'hook:observe@transition:756#1': 700, 'effect:.x@caller': 3, 'input:kind:done': 10}
+        groups = cov.summarize(counts, 1000, {}, rare=1000)
+        self.assertEqual(groups['E']['paths']['hook:observe@transition:756'], dict(occurrences=1200, per_lane_step=1.2))
+        self.assertEqual(groups['E']['rare'], ['input:kind:done', 'effect:.x@caller']);self.assertEqual(len(groups['E']['features']), 4)
+        report = dict(shards=1, lane_steps=1000, rare=1000, census=None, weights='equal weights (unweighted mean of the groups)', design_uniform_share=0.7,
+            groups={g: dict(features={}, paths={}, rare=[], union=None) for g in cz.GROUPS}, distinct_paths_factor_across_groups=None, design_factor_across_groups=None, census_factor_across_groups=None)
+        report['groups']['E'] = groups['E'];report['groups']['E']['union'] = dict(distinct_paths_warp_over_lane=2.5, union_factor_design_uniform=1.07, union_factor=1.1, distinct_classes_per_warp=dict(mean=3.0, p90=5))
+        md = cov.markdown(report)
+        self.assertIn('| E | 4 | 3 | 2 | 2.500 | 1.070 | None | 3.0 / 5 |', md);self.assertIn('no --census: no census-weighted figure', md)
+        self.assertIn('| `hook:observe@transition:756` | 1,200 | 120.00% |', md)
+
+    def test_lane_mask_and_group_of_line(self):
+        import jax.numpy as j
+        from gpu_engine import v2e_coverage as cov
+        np.testing.assert_array_equal(np.asarray(cov.lane_mask(True, 3)), [True, True, True])
+        np.testing.assert_array_equal(np.asarray(cov.lane_mask(j.asarray([[True, False], [False, False], [True, True]]), 3)), [True, False, True])
+        self.assertIsNone(cov.lane_mask(j.zeros(3, j.int32), 3));self.assertIsNone(cov.lane_mask(j.zeros((4,), bool), 3))
+        self.assertEqual((cov.group_of_line(511), cov.group_of_line(1700), cov.group_of_line(2092), cov.group_of_line(153), cov.group_of_line(None)), ('B', 'F', 'G', None, None))
+
+
+if __name__ == '__main__':unittest.main()
