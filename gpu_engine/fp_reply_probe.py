@@ -15,14 +15,15 @@ clustered on battle seed.
    move, switch) and a log-temperature, logits' = log π_FP / T + b[class]. At initialisation it is π_FP exactly (gate 3). Gates:
    (1) test NLL minus π_FP's, upper bound < 0; (2) the improvement late (turn 18+) minus early (turns 1-3), upper bound < 0, and the
    turn-1 improvement not worse than 0 (lower bound <= 0).
-   With --pi-fp-data (the dataset π_FP was trained on) the probe fits only on games π_FP did not train on: every non-test game
+   With --pi-fp-data (the dataset π_FP was trained on; default: the checkpoint's fp_reply.data marker, and it must come from the
+   same collection as DATA_DIR) the probe fits only on games π_FP did not train on: every non-test game
    whose ordinal is absent from that dataset's train split, divided by seed ((seed // 10) % 4 == 0 for early stopping, the rest to
    fit). Otherwise it fits on train and early-stops on validation, which overstates π_FP wherever π_FP fit its own training games.
    Control: the same head with no history (one temperature and three class biases, LBFGS on the probe's fit rows). probe - static is
    what the game history adds beyond recalibrating π_FP; reported with intervals, not a gate.
 """
-import glob
 import argparse
+import glob
 import json
 import time
 from pathlib import Path
@@ -43,6 +44,7 @@ def cluster_bootstrap(values, clusters, masks, combine, draws=train_mod.BOOTSTRA
     unique, inverse = np.unique(clusters, return_inverse=True)
     sums = [np.bincount(inverse, np.where(m, values, 0.), len(unique)) for m in masks]
     counts = [np.bincount(inverse, m.astype(float), len(unique)) for m in masks]
+    if any(c.sum() == 0 for c in counts):return dict(mean=None, interval_90=None, seeds=int(len(unique)))
     point = combine(*[s.sum() / max(c.sum(), 1e-12) for s, c in zip(sums, counts)])
     if len(unique) < train_mod.MIN_CLUSTERS:return dict(mean=float(point), interval_90=None, seeds=int(len(unique)))
     rng = np.random.default_rng(seed);stats = []
@@ -50,6 +52,14 @@ def cluster_bootstrap(values, clusters, masks, combine, draws=train_mod.BOOTSTRA
         pick = rng.integers(0, len(unique), len(unique))
         stats.append(combine(*[s[pick].sum() / max(c[pick].sum(), 1e-12) for s, c in zip(sums, counts)]))
     return dict(mean=float(point), interval_90=[float(q) for q in np.quantile(stats, [.05, .95])], seeds=int(len(unique)))
+
+
+def dataset_collection(data_dir):
+    """The collection a fp_reply_data dataset was built from (its shard summaries must agree): ordinals only mean the same
+    games within one collection."""
+    names = {json.loads(Path(p).read_text()).get('collection') for p in glob.glob(str(Path(data_dir) / 'shard-*.json'))}
+    if len(names) != 1 or None in names:raise SystemExit(f'{data_dir}: shard summaries name collections {sorted(map(str, names))}, not one')
+    return names.pop()
 
 
 def seen_ordinals(data_dir):
@@ -168,13 +178,20 @@ def main(argv=None):
         if key not in arrays:raise SystemExit(f'{args.data} lacks {key}: rebuild it with fp_reply_data --extras')
     split = data_mod.split_of(arrays['seed']);rows = {n: np.flatnonzero(split == n) for n in ('train', 'val', 'test')}
     labels, legal = arrays['label'], arrays['legal'];test = rows['test']
-    pi_fp_model, _ = load_transformer_checkpoint(args.pi_fp, map_location=args.device)
+    pi_fp_model, pi_fp_result = load_transformer_checkpoint(args.pi_fp, map_location=args.device)
+    if int(pi_fp_result.model_config.window_size) != 1:raise SystemExit(f'π_FP has window {pi_fp_result.model_config.window_size}; the probe feeds window 1')
+    marker = torch.load(args.pi_fp, map_location='cpu', weights_only=True).get('fp_reply') or {}
+    if marker.get('redaction') == 'peer-view-v1':train_mod.redact_peer_view(arrays['numeric_features'])
+    elif marker.get('redaction') is not None:raise SystemExit(f"unknown redaction {marker['redaction']!r}")
+    args.pi_fp_data = args.pi_fp_data or marker.get('data')
+    if args.pi_fp_data and Path(dataset_collection(args.pi_fp_data)).resolve() != Path(dataset_collection(args.data)).resolve():
+        raise SystemExit(f'{args.pi_fp_data} and {args.data} come from different collections: their ordinals mean other games')
     index = train_mod.windows(arrays['ordinal'], 1)
     pi_fp = train_mod.predict(pi_fp_model, arrays, index, np.arange(len(labels)), torch, args.device)
     del pi_fp_model
     _, calibrated = train_mod.recalibrate(arrays['probs'][rows['train']], labels[rows['train']], legal[rows['train']], torch)
-    report = dict(schema='v2s-fp-reply-probe.v1', data=str(args.data), base=str(args.base), base_sha256=checkpoint_file_sha256(args.base),
-                  pi_fp=str(args.pi_fp), pi_fp_sha256=checkpoint_file_sha256(args.pi_fp), rows={k: int(len(v)) for k, v in rows.items()},
+    report = dict(schema='v2s-fp-reply-probe.v2', data=str(args.data), base=str(args.base), base_sha256=checkpoint_file_sha256(args.base),
+                  pi_fp=str(args.pi_fp), pi_fp_sha256=checkpoint_file_sha256(args.pi_fp), pi_fp_redaction=marker.get('redaction'), rows={k: int(len(v)) for k, v in rows.items()},
                   games={k: int(len(np.unique(arrays['ordinal'][v]))) for k, v in rows.items()},
                   seeds={k: int(len(np.unique(arrays['seed'][v]))) for k, v in rows.items()}, args=vars(args))
 

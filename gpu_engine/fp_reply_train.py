@@ -323,11 +323,17 @@ def main(argv=None):
         for key in ('ordinal', 'seed', 'label', 'round'):
             if not np.array_equal(other[key], arrays[key][rows['test']]):raise SystemExit(f'--compare-to run has different test rows ({key})')
         compare = other['probs']
-    if args.evaluate and args.redact:redact_peer_view(arrays['numeric_features'])
+    checkpoint_redaction = None
+    if args.evaluate:   # a model trained on a redacted view must be scored on it; a plain one may be scored zero-shot on either
+        checkpoint_redaction = (torch.load(args.evaluate, map_location='cpu', weights_only=True).get('fp_reply') or {}).get('redaction')
+        if checkpoint_redaction is not None and checkpoint_redaction != args.redact:
+            raise SystemExit(f'{args.evaluate} was trained on redaction {checkpoint_redaction!r}; pass --redact {checkpoint_redaction}')
+        if args.redact:redact_peer_view(arrays['numeric_features'])
     calibration, calibrated = recalibrate(arrays['probs'][rows['train']], labels[rows['train']], arrays['legal'][rows['train']], torch)
     if args.evaluate:
         test = rows['test'];probs = predict(model, arrays, index, test, torch, args.device)
-        report = dict(schema='v2s-fp-reply-model-eval.v1', data=str(args.data), redaction=args.redact, base_checkpoint=str(args.checkpoint),
+        report = dict(schema='v2s-fp-reply-model-eval.v1', data=str(args.data), redaction=args.redact, checkpoint_redaction=checkpoint_redaction,
+                      base_checkpoint=str(args.checkpoint),
                       base_checkpoint_sha256=checkpoint_file_sha256(args.checkpoint), pi_fp=str(args.evaluate),
                       pi_fp_sha256=checkpoint_file_sha256(args.evaluate), window=window, rows={k: int(len(v)) for k, v in rows.items()},
                       games=games, seats=seats, split_rule='battle seed % 10: 0 test, 1 validation, else train', recalibration=calibration,

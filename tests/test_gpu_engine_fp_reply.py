@@ -276,6 +276,16 @@ class ProbeHelperTests(unittest.TestCase):
         self.assertAlmostEqual(out['mean'], values[late].mean() - values[early].mean())
         self.assertLessEqual(out['interval_90'][0], out['mean']);self.assertGreaterEqual(out['interval_90'][1], out['mean'])
         self.assertIsNone(probe.cluster_bootstrap(values[:4], clusters[:4], [late[:4]], lambda a: a)['interval_90'])
+        empty = probe.cluster_bootstrap(values, clusters, [late, np.zeros(10, bool)], lambda a, b: a - b, draws=10)
+        self.assertIsNone(empty['mean']);self.assertIsNone(empty['interval_90'])
+
+    def test_dataset_collection_must_be_one_collection(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            (Path(tmp) / 'shard-0.json').write_text(json.dumps({'collection': '/c/one'}))
+            (Path(tmp) / 'shard-1.json').write_text(json.dumps({'collection': '/c/one'}))
+            self.assertEqual(probe.dataset_collection(tmp), '/c/one')
+            (Path(tmp) / 'shard-2.json').write_text(json.dumps({'collection': '/c/two'}))
+            with self.assertRaises(SystemExit):probe.dataset_collection(tmp)
 
     def test_fit_rows_exclude_test_and_games_pi_fp_trained_on(self):
         # seed % 10: 0 test, 1 val, else train; (seed // 10) % 4 == 0 for 402, 403 and 41 (early stopping when fitting on unseen games)
@@ -339,8 +349,8 @@ class ReweightHelperTests(unittest.TestCase):
     def test_world_request_keeps_shared_slots_and_fills_new_moves_fresh(self):
         request = _rw_request();first = copy.deepcopy(request['side']['pokemon'][0])
         variant = {'moves': ['crunch', 'earthquake', 'hiddenpowergrass', 'sludgebomb'], 'ability': 'Shed Skin', 'item': 'Choice Band'}
-        world, labels = rw.world_request(request, first, variant, RW_DEX)
-        row = world['side']['pokemon'][0]
+        world, labels, replaced_disabled = rw.world_request(request, first, variant, RW_DEX)
+        row = world['side']['pokemon'][0];self.assertTrue(replaced_disabled)   # flamethrower's slot is disabled in the true request
         self.assertEqual(row['moves'], ['earthquake', 'sludgebomb', 'crunch', 'hiddenpowergrass'])
         self.assertEqual(world['active'][0]['moves'][:3], request['active'][0]['moves'][:3])
         self.assertEqual(world['active'][0]['moves'][3], {'move': 'Hidden Power Grass 70', 'id': 'hiddenpower', 'pp': 24, 'maxpp': 24,
@@ -348,17 +358,33 @@ class ReweightHelperTests(unittest.TestCase):
         self.assertEqual((row['item'], row['baseAbility']), ('choiceband', 'shedskin'));self.assertEqual(labels, [0, 1, 2, None, 4, 5, 6, 7, 8])
         self.assertEqual(request['side']['pokemon'][0]['moves'][3], 'flamethrower')   # input untouched
         powered = _rw_request();powered['side']['pokemon'][0]['moves'][2] = 'return102'
-        world, labels = rw.world_request(powered, first, {'moves': ['earthquake', 'frustration', 'return', 'sludgebomb']}, RW_DEX)
+        world, labels, _ = rw.world_request(powered, first, {'moves': ['earthquake', 'frustration', 'return', 'sludgebomb']}, RW_DEX)
         self.assertEqual(world['side']['pokemon'][0]['moves'], ['earthquake', 'sludgebomb', 'return102', 'frustration102'])
-        same, labels = rw.world_request(request, first, {'moves': first['moves'], 'ability': 'Shed Skin', 'item': 'Leftovers'}, RW_DEX)
-        self.assertEqual(same, request);self.assertEqual(labels, list(range(9)))
+        same, labels, replaced_disabled = rw.world_request(request, first, {'moves': first['moves'], 'ability': 'Shed Skin', 'item': 'Leftovers'}, RW_DEX)
+        self.assertEqual(same, request);self.assertEqual(labels, list(range(9)));self.assertFalse(replaced_disabled)
+
+    def test_hidden_power_types_are_one_family_the_protocol_cannot_split(self):
+        request = _rw_request();request['side']['pokemon'][0]['moves'][1] = 'hiddenpowerfire'
+        request['active'][0]['moves'][1] = {'move': 'Hidden Power Fire 70', 'id': 'hiddenpower', 'pp': 20, 'maxpp': 24, 'target': 'normal', 'disabled': False}
+        first = copy.deepcopy(request['side']['pokemon'][0])
+        variant = {'moves': ['crunch', 'earthquake', 'flamethrower', 'hiddenpowergrass'], 'ability': 'Shed Skin', 'item': 'Leftovers'}
+        world, labels, replaced_disabled = rw.world_request(request, first, variant, RW_DEX)
+        self.assertEqual(world['side']['pokemon'][0]['moves'], ['earthquake', 'hiddenpowergrass', 'crunch', 'flamethrower'])
+        self.assertEqual(world['active'][0]['moves'][1], {'move': 'Hidden Power Grass 70', 'id': 'hiddenpower', 'pp': 20, 'maxpp': 24,
+                                                          'target': 'normal', 'disabled': False})   # PP used is public; the type isn't
+        self.assertEqual(labels[1], 1);self.assertFalse(replaced_disabled)   # a chosen Hidden Power Fire is a Hidden Power in this world
+        _, labels, _ = rw.world_request(request, first, {'moves': ['crunch', 'earthquake', 'flamethrower', 'toxic']}, RW_DEX)
+        self.assertIsNone(labels[1])   # a set without Hidden Power can't have used it
+        self.assertEqual(rw.family('hiddenpowergrass'), 'hiddenpower');self.assertEqual(rw.family('toxic'), 'toxic')
+        fire, grass = rw.variant_key({'moves': ['crunch', 'hiddenpowerfire']}), rw.variant_key({'moves': ['crunch', 'hiddenpowergrass']})
+        self.assertNotEqual(fire, grass);self.assertEqual(rw.family_key(fire), rw.family_key(grass))
 
     def test_world_request_leaves_a_public_item_change_and_a_locked_move(self):
         first = _rw_request()['side']['pokemon'][0]
         variant = {'moves': ['crunch', 'earthquake', 'toxic', 'sludgebomb'], 'ability': 'Shed Skin', 'item': 'Choice Band'}
-        world, _ = rw.world_request(_rw_request(item=''), first, variant, RW_DEX)
+        world, _, _ = rw.world_request(_rw_request(item=''), first, variant, RW_DEX)
         self.assertEqual(world['side']['pokemon'][0]['item'], '')
-        locked = _rw_request(locked=True);world, labels = rw.world_request(locked, first, variant, RW_DEX)
+        locked = _rw_request(locked=True);world, labels, _ = rw.world_request(locked, first, variant, RW_DEX)
         self.assertEqual(world['active'], locked['active']);self.assertEqual(labels[0], 0)
         self.assertEqual(rw.chosen_move(locked, 0), 'earthquake');self.assertIsNone(rw.chosen_move(locked, 5))
 
