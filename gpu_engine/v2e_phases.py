@@ -1168,6 +1168,18 @@ def cmd_floats(args):
     return 0
 
 
+def cmd_build(args):
+    """Generate and build every phase library (and FG) into --build-dir, so later gates find them cached."""
+    ctx = _context(args);plan = step_plan(ctx);rows = {}
+    for name, (a, b) in [(n, (x, y)) for n, x, y in PHASES] + list(COMPOSITES.items()):
+        g = compile_phase(plan, a, b, args.build_dir)
+        rows[name] = dict(path=str(g.path), digest=g.module.digest, aliased=len(g.module.aliases), **{k: g.module.stats.get(k) for k in
+            ('chunks', 'lines', 'consts', 'cse_hits', 'folds', 'generate_s', 'build_s', 'equations')}, arena_words=g.module.arena_words)
+        log('PHASE_BUILT', phase=name, **rows[name])
+    if args.out:Path(args.out).write_text(json.dumps(rows, indent=1, default=str) + '\n')
+    return 0
+
+
 def parser():
     p = argparse.ArgumentParser(description=__doc__.split('\n')[0])
     sub = p.add_subparsers(dest='command', required=True)
@@ -1185,12 +1197,14 @@ def parser():
     q.add_argument('--no-step', action='store_true', help='skip the monolithic generated step')
     q = sub.add_parser('floats', help='float-site report of the step and observe');common(q)
     q.add_argument('--out', required=True)
+    q = sub.add_parser('build', help='generate and build every phase library into --build-dir');common(q)
+    q.add_argument('--build-dir', required=True);q.add_argument('--out', help='JSON of the built libraries')
     return p
 
 
 def main(argv=None):
     args = parser().parse_args(argv)
-    return dict(spec=cmd_spec, timings=cmd_timings, floats=cmd_floats)[args.command](args)
+    return dict(spec=cmd_spec, timings=cmd_timings, floats=cmd_floats, build=cmd_build)[args.command](args)
 
 
 if __name__ == '__main__':raise SystemExit(main())
