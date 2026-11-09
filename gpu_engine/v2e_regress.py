@@ -126,8 +126,9 @@ def migrate(capture_names, leaves, template_named, *, defaults=None):
     """Shard leaves (capture order) -> {name: array} in the template's leaf set.
 
     Existing leaves must keep their per-lane shape and dtype. Template leaves
-    absent from the capture are filled from `defaults[name](lanes)` when given,
-    else by broadcasting the template's lane 0 (the initializer's neutral value).
+    absent from the capture are filled from `defaults[name](lanes)` when given
+    (patched_pass passes empty_state's values for state leaves), else by
+    broadcasting the template's lane 0 (the initializer's neutral value).
     A captured leaf missing from the template is refused.
     """
     defaults = defaults or {}
@@ -490,9 +491,10 @@ def patched_pass(args, *, step_override=None, prepared=None):
     uninvolved_leaves = {};new_outputs = None
     listing = (out / 'changed.jsonl').open('x');begin = time.perf_counter();rev, dirty = git_source()
     names_order = _template_names(template)
+    defaults = state_defaults()
     try:
         for index, (path, (leaves, tick, level)) in enumerate(prefetched(shards)):
-            named, filled = migrate(capture_names, leaves, template_named)
+            named, filled = migrate(capture_names, leaves, template_named, defaults=defaults)
             named, real = pad_lanes(named, manifest['pad_lanes'])
             result = stepper([named[n] for n in names_order])
             names = result['names'];position = {n: i for i, n in enumerate(names)}
@@ -561,6 +563,17 @@ def patched_pass(args, *, step_override=None, prepared=None):
     (out / 'report.json').write_text(json.dumps(report, indent=1) + '\n')
     log('PATCHED_DONE', passed=report['passed'], **counts)
     return 0 if report['passed'] else 1
+
+
+def state_defaults():
+    """New BattleState leaves default to empty_state's values (counters 0, sources -1, ...);
+    new tracker leaves fall back to the initializer's lane-0 template (public_order identity)."""
+    from gpu_engine.state import empty_state
+    blank = empty_state(1)
+    def fill(value):
+        value = np.asarray(value)
+        return lambda lanes: np.broadcast_to(value, (lanes,) + value.shape[1:])
+    return {f'state.{name}': fill(getattr(blank, name)) for name in blank._fields}
 
 
 def _engine_step(tables):
