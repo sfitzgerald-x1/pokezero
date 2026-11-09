@@ -111,8 +111,9 @@ def config_from_checkpoint(cfg):
         feedforward=cfg['feedforward_dim'],tanh_value=cfg.get('value_activation','linear')=='tanh')
 
 
-def export(checkpoint,out):
-    """CPU-only, safe Torch loader; exclusive NPZ output outside version control."""
+def export(checkpoint,out,*,extra=None):
+    """CPU-only, safe Torch loader; exclusive NPZ output outside version control. extra (JSON-able), when given, is recorded in
+    the archive metadata as meta['extra'] (e.g. a policy-only marker for a reply model)."""
     import torch
     blob,digest=snapshot(checkpoint)
     payload=torch.load(io.BytesIO(blob),map_location='cpu',weights_only=True)
@@ -122,6 +123,7 @@ def export(checkpoint,out):
     meta={'schema':'pokezero.gpu_champion_forward.v1','config':asdict(c),
         'checkpoint_sha256':digest,
         'parameter_count':sum(a.size for a in params.values())}
+    if extra is not None:meta['extra']=extra
     encoded=np.frombuffer(json.dumps(meta,sort_keys=True).encode(),np.uint8)
     with Path(out).open('xb') as stream:np.savez_compressed(stream,metadata_json=encoded,**params)
     return meta
