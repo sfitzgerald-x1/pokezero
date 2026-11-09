@@ -436,8 +436,15 @@ class FinalRuleR3Tests(unittest.TestCase):
             stack.enter_context(mock.patch('sys.stdout'))
             return V.main(argv)
 
-    def test_the_pinned_rule_is_rule_r3_and_nothing_is_pinned_yet(self):
-        self.assertEqual(V.FINAL_RULES, dict(RULE_R3=fairness.RULE_R3));self.assertEqual(V.RUN_FINAL_RULES, {})
+    def test_the_pinned_rule_is_rule_r3_and_only_screen_r3_is_pinned(self):
+        self.assertEqual(V.FINAL_RULES, dict(RULE_R3=fairness.RULE_R3))
+        self.assertEqual(V.RUN_FINAL_RULES, {V.RUN_BINDINGS['screen_r3']: 'RULE_R3'})
+        r3 = EVALS/'depthn-foulplay-dn2w16-amendment-screen-r3-adoption-20261109.json';raw = r3.read_bytes();record = json.loads(raw)
+        self.assertEqual(hashlib.sha256(raw).hexdigest(), V.RUN_BINDINGS['screen_r3'])   # the committed record is the pinned one
+        self.assertEqual(V.final_rule(record, V.RUN_BINDINGS['screen_r3']), 'RULE_R3')
+        self.assertEqual(record['declaration_sha256'], hashlib.sha256((EVALS.parent/record['declaration']).read_bytes()).hexdigest())
+        self.assertEqual(json.loads((EVALS.parent/record['declaration']).read_bytes())['arm_fairness'], fairness.RULE_R3)
+        self.assertNotIn(V.RUN_BINDINGS['screen_r3'], V.RUN_AMENDMENTS)   # screen-r3 takes no run amendment
         self.assertIsNone(V.final_rule(json.loads(ADOPTION.read_bytes()), 'r2'))   # screen-r2's binding declares no final rule
         self.assertEqual(V.final_rule(self.record, self.sha), 'RULE_R3')
         for bad in (dict(self.record, final_fairness_rule='RULE'), dict(self.record, arm_fairness=fairness.RULE),
