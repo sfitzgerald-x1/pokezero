@@ -324,6 +324,12 @@ def _leaf_count(jaxpr):
     return sum((sum(_leaf_count(s) for s in subs) if (subs := list(jcore.jaxprs_in_params(e.params))) else 1) for e in jaxpr.eqns)
 
 
+@functools.lru_cache(maxsize=None)
+def _rule_arity(rule):
+    try:return len(inspect.signature(rule).parameters)
+    except (TypeError, ValueError):return 3
+
+
 def backward_slice(jaxpr, wanted, stop):
     """Equations computing `wanted` (vars or literals) from the `stop` vars: a backward DCE over the top-level equations that
     does not expand stop vars (JAX's per-primitive DCE rules prune call bodies to the used outputs). Returns (kept
@@ -341,7 +347,8 @@ def backward_slice(jaxpr, wanted, stop):
         rule = pe.dce_rules.get(e.primitive)
         if rule is None:used_inputs, new = [True] * len(e.invars), e
         else:
-            used_inputs, new = rule(used, e)
+            # jax 0.12: rule(used_outputs, live_ins, eqn); older jax: rule(used_outputs, eqn).
+            used_inputs, new = rule(used, [True] * len(e.invars), e) if _rule_arity(rule) == 3 else rule(used, e)
             if new is None:continue
         kept.append((e, new))
         for v, u in zip(e.outvars, used):
