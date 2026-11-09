@@ -593,5 +593,90 @@ class RecalibrationTests(unittest.TestCase):
         self.assertLess(t.nll(probs[1::2], labels[1::2]), t.nll(sharp[1::2], labels[1::2]))
 
 
+class BuilderViewReplayTests(unittest.TestCase):
+    """replay --views: a builder failure or a builder view whose masks differ from env.observe's is a BuilderMismatch."""
+
+    class Env(FakeEnv):
+        def observe(self, player):
+            return SimpleNamespace(legal_action_mask=self._round()[player][0], player=player, token_type_ids=(1, 2), attention_mask=(True, True))
+
+    def setUp(self):
+        self.saved = d.choice_action, d.builder_views;d.choice_action = fake_choice_action
+
+    def tearDown(self):
+        d.choice_action, d.builder_views = self.saved
+
+    def run_with(self, builder):
+        d.builder_views = builder
+        return d.replay(self.Env(two_rounds(), OUR_SEAT), FakePolicy(), game(), rng=None, views=dict())
+
+    def test_agreeing_views_are_recorded(self):
+        same = lambda env, player, request, seed, views: dict(b=env.observe(player))
+        rows, _, _ = self.run_with(same);self.assertEqual([sorted(r['views']) for r in rows], [['b'], ['b']])
+
+    def test_a_mask_difference_or_a_builder_error_is_a_builder_mismatch(self):
+        def other_legal(env, player, request, seed, views):
+            o = env.observe(player);return dict(b=SimpleNamespace(token_type_ids=o.token_type_ids, attention_mask=o.attention_mask, legal_action_mask=legal(0)))
+        with self.assertRaisesRegex(d.BuilderMismatch, 'legal_action_mask differs'):self.run_with(other_legal)
+        def broken(env, player, request, seed, views):raise KeyError('slot')
+        with self.assertRaisesRegex(d.BuilderMismatch, 'KeyError'):self.run_with(broken)
+
+
+class ViewsAndSplitTests(unittest.TestCase):
+    def test_split_rows_fixed_test_late_block_validation_and_train(self):
+        seed = np.array([10, 10, 21, 33, 40, 51, 62, 70, 33]);ordinal = np.array([1, 2, 3, 4, 5, 6, 7, 8, 9])   # seed 33: games 4 and 9
+        rows = t.split_rows(dict(seed=seed, ordinal=ordinal), test_seeds=[10, 70], late_from=6)
+        self.assertEqual({k: v.tolist() for k, v in rows.items()}, dict(train=[3, 4, 8], val=[2], test=[0, 1, 7], late=[5, 6]))   # 33 stays whole
+        default = t.split_rows(dict(seed=seed, ordinal=ordinal))
+        self.assertEqual(default['test'].tolist(), [0, 1, 4, 7]);self.assertNotIn('late', default)
+
+    def test_saved_probabilities_compare_only_on_the_same_rows(self):
+        import tempfile
+        arrays = dict(ordinal=np.array([1, 1, 2]), seed=np.array([5, 5, 6]), label=np.array([0, 2, 1]), round=np.array([1, 2, 1]))
+        probs = np.array([[.5, .5], [.2, .8]], np.float32)
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / 'late-probs.npz';t.save_probs(path, arrays, np.array([0, 2]), probs, model='m.pt', view='b', redaction=None)
+            self.assertTrue(np.array_equal(t.compared_probs(path, arrays, np.array([0, 2])), probs))
+            saved = np.load(path);self.assertEqual((str(saved['model']), str(saved['view']), str(saved['redaction'])), ('m.pt', 'b', 'None'))
+            with self.assertRaises(SystemExit):t.compared_probs(path, arrays, np.array([1, 2]))
+
+    def test_use_view_swaps_the_inputs_needs_them_and_drops_the_others(self):
+        arrays = dict(numeric_features=np.zeros(2), categorical_ids=np.zeros(2), numeric_features_b=np.ones(2), categorical_ids_b=np.ones(2),
+                      numeric_features_k=np.full(2, 2.), categorical_ids_k=np.full(2, 2.))
+        with self.assertRaises(SystemExit):t.use_view(dict(numeric_features=np.zeros(2), categorical_ids=np.zeros(2)), 'k')
+        t.use_view(arrays, 'b');self.assertEqual((arrays['numeric_features'].tolist(), arrays['categorical_ids'].tolist()), ([1., 1.], [1., 1.]))
+        self.assertEqual(sorted(arrays), ['categorical_ids', 'numeric_features'])
+        env = dict(numeric_features=np.zeros(2), categorical_ids=np.zeros(2), numeric_features_b=np.ones(2), categorical_ids_b=np.ones(2))
+        self.assertIs(t.use_view(env, 'env'), env);self.assertEqual(env['numeric_features'].tolist(), [0., 0.]);self.assertNotIn('numeric_features_b', env)
+
+    def test_late_from_needs_test_seeds(self):
+        with self.assertRaises(SystemExit):t.main(['data', 'out', '--checkpoint', 'x.pt', '--late-from', '5'])
+
+    def test_test_seeds_must_be_integers_present_in_the_data(self):
+        import tempfile
+        arrays = dict(seed=np.array([10, 10, 20]))
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / 'seeds.json'
+            for bad in ('[]', '["10"]', '{"10": 1}', '[true]', '[10, 30]'):
+                path.write_text(bad)
+                with self.assertRaises(SystemExit):t.read_test_seeds(path, arrays)
+            path.write_text('[10]');self.assertEqual(t.read_test_seeds(path, arrays), [10])
+
+    def test_the_split_record_refuses_scoring_fitted_seeds_as_held_out(self):
+        seed = np.array([10, 21, 33, 40, 51, 62]);ordinal = np.arange(6)
+        arrays = dict(seed=seed, ordinal=ordinal);rows = t.split_rows(arrays, test_seeds=[10], late_from=5)
+        record = t.split_record(arrays, rows, 'rule', [10], 5)
+        self.assertEqual(record['fit_seeds'], [21, 33, 40, 51]);self.assertEqual((record['test_seeds'], record['late_from']), ([10], 5))
+        self.assertEqual(t.held_out_overlap(dict(split=record), arrays, rows), [])
+        default = t.split_rows(arrays)   # test: seeds 10, 40 (% 10 == 0); 40 was fitted
+        self.assertEqual(t.held_out_overlap(dict(split=record), arrays, default), [40])
+        self.assertIsNone(t.held_out_overlap(dict(view='env'), arrays, default));self.assertIsNone(t.held_out_overlap(None, arrays, default))
+
+    def test_the_k_view_keeps_only_the_opponents_silent_ability_lines(self):
+        from gpu_engine import g3rb_views as gv
+        lines = ['|-ability|p2a: Snorlax|Pressure|[silent]', '|-activate|p2a: Snorlax|move: Struggle', '|-hint|x']
+        self.assertEqual(gv.seat_lines(lines, 'p1'), []);self.assertEqual(gv.seat_lines(lines, 'p1', keep_silent_ability=True), lines[:1])
+
+
 if __name__ == '__main__':
     unittest.main()

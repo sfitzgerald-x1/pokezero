@@ -74,16 +74,18 @@ def exact_hp(text):
 PRIVATE = 'opponent [silent] ability, opponent Struggle activation, -hint'
 
 
-def seat_lines(lines, seat, counts=None):
+def seat_lines(lines, seat, counts=None, keep_silent_ability=False):
     """The log as `seat` received it. These logs are the server's: exact HP for both sides (the view builder projects the
     opponent's to the public percent) and lines Showdown sends to one side only, dropped here for the other side: an
     opponent's [silent] ability announcement (Pressure; our live wires carry it for our own mons only), an opponent's
-    -activate ... move: Struggle, and every -hint line. Every other [silent] kind is on both sides of our wires (public)."""
+    -activate ... move: Struggle, and every -hint line. Every other [silent] kind is on both sides of our wires (public).
+    keep_silent_ability keeps the opponent's [silent] ability lines (the reply model's ablation of that one redaction)."""
     out = []
     for line in lines:
         p = line.split('|');kind = p[1] if len(p) > 1 else '';who = ident(p[2]) if len(p) > 2 else None
         opponent = who is not None and who[0] != seat
-        if kind == '-hint' or opponent and (kind == '-ability' and '[silent]' in line or kind == '-activate' and 'move: Struggle' in line):
+        silent_ability = kind == '-ability' and '[silent]' in line and not keep_silent_ability
+        if kind == '-hint' or opponent and (silent_ability or kind == '-activate' and 'move: Struggle' in line):
             if counts is not None:counts['private_line_dropped:' + kind] += 1
             continue
         out.append(line)
