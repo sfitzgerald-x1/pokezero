@@ -379,6 +379,25 @@ class ReweightHelperTests(unittest.TestCase):
         fire, grass = rw.variant_key({'moves': ['crunch', 'hiddenpowerfire']}), rw.variant_key({'moves': ['crunch', 'hiddenpowergrass']})
         self.assertNotEqual(fire, grass);self.assertEqual(rw.family_key(fire), rw.family_key(grass))
 
+    def test_generator_stats_dump_attack_without_a_physical_damaging_move(self):
+        cats = {'flamethrower': 'Special', 'hiddenpowerfire': 'Special', 'hiddenpowerground': 'Physical', 'earthquake': 'Physical',
+                'seismictoss': 'Physical', 'toxic': 'Status'}
+        dex = SimpleNamespace(move_info=lambda m: SimpleNamespace(gen3_category=cats[m]) if m in cats else None)
+        tables = dict(fixed_damage=frozenset({'seismictoss'}), hp_ivs={'fire': {'atk': 30, 'spa': 30, 'spe': 30}, 'ground': {'spa': 30, 'spd': 30}})
+        base = dict(atk=100, **{'def': 80}, spa=90, spd=70, spe=60)
+        special = rw.generator_stats(base, 50, ['flamethrower', 'hiddenpowerfire', 'toxic', 'seismictoss'], dex, tables)
+        self.assertEqual(special['atk'], (200 + 2) * 50 // 100 + 5)          # EV 0, IV 30 - 28
+        self.assertEqual(special['spa'], (180 + 30 + 21) * 50 // 100 + 5)    # Hidden Power Fire's IV
+        physical = rw.generator_stats(base, 50, ['flamethrower', 'hiddenpowerground', 'toxic'], dex, tables)
+        self.assertEqual(physical['atk'], (200 + 31 + 21) * 50 // 100 + 5);self.assertEqual(physical['spd'], (140 + 30 + 21) * 50 // 100 + 5)
+        self.assertEqual(rw.generator_stats(base, 50, ['flamethrower', 'toxic'], dex, tables)['atk'], 200 * 50 // 100 + 5)   # IV 0
+        self.assertTrue(rw.attack_dumped(['flamethrower', 'seismictoss'], dex, tables))
+        self.assertFalse(rw.attack_dumped(['flamethrower', 'earthquake'], dex, tables))
+        self.assertEqual(rw.level_of({'details': 'Seviper, L88, M'}), 88);self.assertEqual(rw.level_of({'details': 'Mew'}), 100)
+        request = _rw_request();first = copy.deepcopy(request['side']['pokemon'][0])
+        world, _, _ = rw.world_request(request, first, {'moves': first['moves']}, RW_DEX, {'atk': 106})
+        self.assertEqual(world['side']['pokemon'][0]['stats'], {'atk': 106})
+
     def test_world_request_leaves_a_public_item_change_and_a_locked_move(self):
         first = _rw_request()['side']['pokemon'][0]
         variant = {'moves': ['crunch', 'earthquake', 'toxic', 'sludgebomb'], 'ability': 'Shed Skin', 'item': 'Choice Band'}
