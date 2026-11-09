@@ -48,12 +48,16 @@ def use_view(arrays, view):
 
 def split_rows(arrays, test_seeds=None, late_from=None):
     """{train, val, test[, late]: row indices}. Default: battle seed % 10 (fp_reply_data.split_of). With test_seeds: test is those
-    games' rows (a fixed set, e.g. an earlier run's), late (with late_from) every game of ordinal >= late_from outside them, val the
-    other seed % 10 == 1 games, train the rest."""
+    games' rows (a fixed set, e.g. an earlier run's), late (with late_from) every game of a battle seed whose first game has
+    ordinal >= late_from (a seed's seat-swapped games stay together), val the other seed % 10 == 1 games, train the rest."""
     if test_seeds is None:
         split = data_mod.split_of(arrays['seed']);return {name: np.flatnonzero(split == name) for name in ('train', 'val', 'test')}
     test = np.isin(arrays['seed'], np.asarray(sorted(test_seeds)))
-    late = (arrays['ordinal'] >= late_from) & ~test if late_from is not None else np.zeros(len(test), bool)
+    late = np.zeros(len(test), bool)
+    if late_from is not None:   # by battle seed: a seed's seat-swapped games stay together (its first game decides)
+        first = {};seeds, ordinals = arrays['seed'].tolist(), arrays['ordinal'].tolist()
+        for sd, o in zip(seeds, ordinals):first[sd] = min(o, first.get(sd, o))
+        late = np.array([first[sd] >= late_from for sd in seeds]) & ~test
     val = (arrays['seed'] % 10 == 1) & ~test & ~late
     out = dict(train=np.flatnonzero(~test & ~late & ~val), val=np.flatnonzero(val), test=np.flatnonzero(test))
     if late_from is not None:out['late'] = np.flatnonzero(late)

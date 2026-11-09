@@ -319,7 +319,7 @@ def build(args):
     torch.set_num_threads(1)
     collection, out = Path(args.collection), Path(args.out);out.mkdir(parents=True, exist_ok=True)
     paths = sorted(glob.glob(str(collection / 'results' / '*.json')), key=lambda p: int(Path(p).stem))
-    paths = [p for p in paths if int(Path(p).stem) % args.shards == args.shard]
+    paths = [p for p in paths if int(Path(p).stem) % args.shards == args.shard and (not args.max_ordinal or int(Path(p).stem) <= args.max_ordinal)]
     if args.limit:paths = paths[:args.limit]
     sha = checkpoint_file_sha256(args.checkpoint)
     model, result = load_transformer_checkpoint(args.checkpoint, map_location='cpu');model.eval()
@@ -470,6 +470,7 @@ def main(argv=None):
     parser.add_argument('--checkpoint');parser.add_argument('--shard', type=int, default=0);parser.add_argument('--shards', type=int, default=1)
     parser.add_argument('--limit', type=int, default=0)
     parser.add_argument('--extras', action='store_true', help="also record action classes, HP and our view's opponent-head logits")
+    parser.add_argument('--max-ordinal', type=int, default=0, help='only games of ordinal <= this (a frozen set while the collection grows)')
     parser.add_argument('--views', action='store_true', help="also record the builder's views of each Foul Play decision (VIEW_KINDS: "
                         "numeric_features_<k> / categorical_ids_<k>; fp_reply_train --view)")
     parser.add_argument('--report', metavar='OUT_DIR');parser.add_argument('--split', choices=('all', 'test', 'val', 'train'), default='all')

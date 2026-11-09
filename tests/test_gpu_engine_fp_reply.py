@@ -595,9 +595,9 @@ class RecalibrationTests(unittest.TestCase):
 
 class ViewsAndSplitTests(unittest.TestCase):
     def test_split_rows_fixed_test_late_block_validation_and_train(self):
-        seed = np.array([10, 10, 21, 33, 40, 51, 62, 70]);ordinal = np.array([1, 1, 2, 3, 4, 5, 6, 7])
-        rows = t.split_rows(dict(seed=seed, ordinal=ordinal), test_seeds=[10, 70], late_from=5)
-        self.assertEqual({k: v.tolist() for k, v in rows.items()}, dict(train=[3, 4], val=[2], test=[0, 1, 7], late=[5, 6]))
+        seed = np.array([10, 10, 21, 33, 40, 51, 62, 70, 33]);ordinal = np.array([1, 2, 3, 4, 5, 6, 7, 8, 9])   # seed 33: games 4 and 9
+        rows = t.split_rows(dict(seed=seed, ordinal=ordinal), test_seeds=[10, 70], late_from=6)
+        self.assertEqual({k: v.tolist() for k, v in rows.items()}, dict(train=[3, 4, 8], val=[2], test=[0, 1, 7], late=[5, 6]))   # 33 stays whole
         default = t.split_rows(dict(seed=seed, ordinal=ordinal))
         self.assertEqual(default['test'].tolist(), [0, 1, 4, 7]);self.assertNotIn('late', default)
 
