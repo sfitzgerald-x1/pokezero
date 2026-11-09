@@ -249,7 +249,10 @@ class FinalGateR3Tests(unittest.TestCase):
         self.assertEqual((reading['supported_cells'], reading['unsupported_cells'], reading['moves']), (4, 1, dict(RAW=1200, search=1200)))
         unsupported, = [c for c in reading['cells'] if not c['supported']]
         self.assertEqual((unsupported['stratum'], unsupported['raw_moves'], unsupported['ratio']), ('2x1000ms|ours 1|theirs 2', 110, 2.))
-        self.assertIn('RULE_R3', value['rule'])
+        self.assertIn('RULE_R3', value['rule']);self.assertEqual(reading['band_from_round'], dict(RAW=0, search=0))
+        (self.root/'owning-wire'/'0.jsonl').rename(self.root/'owning-wire'/'moved.jsonl')   # a RAW cell without its capture: 6 alive, by round
+        reading = F.final_gate_r3(self.root, 'DN2W16', 500)['reading']
+        self.assertEqual((reading['band_from_round'], reading['moves']), (dict(RAW=30, search=0), dict(RAW=1200, search=1200)))
 
     def test_a_uniform_deficit_still_voids_and_cells_outside_the_gate_are_left_out(self):
         lopsided_run(self.root, search_scale=.9)

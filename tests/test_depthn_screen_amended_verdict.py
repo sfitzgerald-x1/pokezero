@@ -5,6 +5,7 @@ import random
 import unittest
 from tempfile import TemporaryDirectory
 
+from pokezero import depthn_live_fairness as fairness
 from pokezero import depthn_live_panel as panel
 from scripts import depthn_screen_amended_verdict as V
 
@@ -377,6 +378,121 @@ class RunBindingTests(unittest.TestCase):
                     dict(alive, run=dict(alive['run'], run_directory='/out/screen-r1'))):
             with self.assertRaisesRegex(ValueError, 'alive-bands amendment of the bound run'):go(bad)
         with self.assertRaisesRegex(ValueError, 'need their run binding'):go(binding=None, binding_sha256=None)
+
+
+R3_DECLARATION_SHA256, R3_TREE = 'a3'*32, 'b3'*20   # a synthetic screen-r3 run
+
+
+def r3_gate(within=True, limit=500):
+    """depthn_fairness_final.final_gate_r3's shape."""
+    return dict(rule='screen-r3 arm fairness (RULE_R3)', arm_fairness=json.loads(json.dumps(fairness.RULE_R3)), limit=limit, tolerance=.05,
+                within=within, difference=-.01 if within else -.08, supported_share=dict(RAW=.99, search=.99), reading=dict(band_from_round=dict(RAW=0, search=0)))
+
+
+class FinalRuleR3Tests(unittest.TestCase):
+    """A run binding declaring final_fairness_rule RULE_R3 (screen-r3): the verdict's final fairness gate is final_gate_r3."""
+    def setUp(self):
+        from unittest import mock
+        self.directory = TemporaryDirectory();self.root = Path(self.directory.name)
+        self.files = {k: (p, json.loads(p.read_bytes()), hashlib.sha256(p.read_bytes()).hexdigest())
+                      for k, p in (('amendment', AMENDMENT), ('addendum', ADDENDUM), ('both', BOTH), ('final', FINAL))}
+        adoption = json.loads(ADOPTION.read_bytes())
+        self.record = dict(adoption, declaration='evals/synthetic-screen-r3-declaration.json', declaration_sha256=R3_DECLARATION_SHA256,
+                           run=dict(adoption['run'], run_directory=str(self.root.resolve()), tree_commit=R3_TREE),
+                           final_fairness_rule='RULE_R3', arm_fairness=json.loads(json.dumps(fairness.RULE_R3)))
+        self.path, self.sha = self.write(self.record, 'binding.json')
+        self.pins = [mock.patch.dict(V.RUN_BINDINGS, screen_r3=self.sha), mock.patch.dict(V.RUN_FINAL_RULES, {self.sha: 'RULE_R3'})]
+        self.value = scenario(self.root, *SCENARIOS[0], declaration=R3_DECLARATION_SHA256, tree=R3_TREE)
+
+    def tearDown(self):self.directory.cleanup()
+
+    def write(self, record, name):
+        path = self.root/'records'/name;path.parent.mkdir(exist_ok=True);path.write_text(json.dumps(record))
+        return path, hashlib.sha256(path.read_bytes()).hexdigest()
+
+    def run_verdict(self, value, gate, binding=None, **kw):
+        f = self.files
+        return V.verdict(value, f['amendment'][1], self.root, readout_sha256='r'*64, amendment_sha256=f['amendment'][2],
+            addendum=f['addendum'][1], addendum_sha256=f['addendum'][2], both=f['both'][1], both_sha256=f['both'][2],
+            final=f['final'][1], final_sha256=f['final'][2], final_fairness=gate,
+            **dict(dict(binding=self.record if binding is None else binding, binding_sha256=self.sha), **kw))
+
+    def cli(self, *extra, binding=None, output='verdict.json'):
+        path = self.root/'readout.json';path.write_text(json.dumps(self.value));sha = hashlib.sha256(path.read_bytes()).hexdigest()
+        argv = ['--readout', str(path), '--readout-sha256', sha]
+        for k, (p, _, digest) in self.files.items():argv += [f'--{k}', str(p), f'--{k}-sha256', digest]
+        return argv + ['--run-directory', str(self.root), '--output', str(self.root/output),
+                       '--run-binding', *(map(str, binding or (self.path, self.sha)))] + list(extra)
+
+    def main(self, argv, *, pins=True, gate=None):
+        """V.main with this binding pinned (or not), final_gate_r3 returning `gate` (None: the real gate), final_gate never called."""
+        from contextlib import ExitStack
+        from unittest import mock
+        from scripts import depthn_fairness_final
+        with ExitStack() as stack:
+            for pin in self.pins if pins else ():stack.enter_context(pin)
+            self.coarse = stack.enter_context(mock.patch.object(depthn_fairness_final, 'final_gate', side_effect=AssertionError('not this gate')))
+            if gate is not None:self.gate = stack.enter_context(mock.patch.object(depthn_fairness_final, 'final_gate_r3', return_value=gate))
+            stack.enter_context(mock.patch('sys.stdout'))
+            return V.main(argv)
+
+    def test_the_pinned_rule_is_rule_r3_and_nothing_is_pinned_yet(self):
+        self.assertEqual(V.FINAL_RULES, dict(RULE_R3=fairness.RULE_R3));self.assertEqual(V.RUN_FINAL_RULES, {})
+        self.assertIsNone(V.final_rule(json.loads(ADOPTION.read_bytes()), 'r2'))   # screen-r2's binding declares no final rule
+        self.assertEqual(V.final_rule(self.record, self.sha), 'RULE_R3')
+        for bad in (dict(self.record, final_fairness_rule='RULE'), dict(self.record, arm_fairness=fairness.RULE),
+                    dict(self.record, arm_fairness=dict(fairness.RULE_R3, min_support_moves=60)),
+                    {k: v for k, v in self.record.items() if k != 'arm_fairness'}, {k: v for k, v in self.record.items() if k != 'final_fairness_rule'}):
+            with self.subTest(rule=bad.get('final_fairness_rule'), arm_fairness=bad.get('arm_fairness')), \
+                    self.assertRaisesRegex(ValueError, 'final_fairness_rule'):V.final_rule(bad, 'x')
+
+    def test_the_verdict_takes_the_r3_gate_and_refuses_the_others(self):
+        out = self.run_verdict(self.value, r3_gate())
+        self.assertEqual((out['decision'], out['final_fairness_rule'], out['run_amendments'], out['final_fairness']), ('CONTINUE_TO_2000', 'RULE_R3', {}, r3_gate()))
+        self.assertEqual(out['run_binding'], dict(declaration_sha256=R3_DECLARATION_SHA256, run_directory=str(self.root.resolve()), tree_commit=R3_TREE))
+        for gate in (EXACT_FAIR, FAIR, dict(r3_gate(), arm_fairness=fairness.RULE), dict(r3_gate(), alive_bands='exact'), dict(r3_gate(), finer={}), None):
+            with self.subTest(gate=gate), self.assertRaisesRegex(ValueError, 'final_gate_r3'):self.run_verdict(self.value, gate)
+        with self.assertRaisesRegex(ValueError, "readout's paired cells"):self.run_verdict(self.value, r3_gate(limit=2000))
+        with self.assertRaisesRegex(ValueError, 'final_fairness_rule'):self.run_verdict(self.value, r3_gate(), dict(self.record, arm_fairness=fairness.RULE))
+        alive = json.loads(ALIVE.read_bytes());alive_sha = hashlib.sha256(ALIVE.read_bytes()).hexdigest()
+        with self.assertRaisesRegex(ValueError, 'takes no run amendments'):
+            self.run_verdict(self.value, r3_gate(), run_amendments=dict(alive_bands=(alive, alive_sha)))
+
+    def test_void_fairness_when_the_r3_gate_is_not_within(self):
+        out = self.run_verdict(self.value, r3_gate(within=False))
+        self.assertEqual((out['decision'], out['conservative'], out['harm_mirror'], out['bar_met']), ('VOID_FAIRNESS', None, None, None))
+        self.tearDown();self.setUp()
+        harm = scenario(self.root, *SCENARIOS[2], declaration=R3_DECLARATION_SHA256, tree=R3_TREE)   # STOP_HARM within the gate
+        self.assertEqual((self.run_verdict(harm, r3_gate())['decision'], self.run_verdict(harm, r3_gate(within=False))['decision']), ('STOP_HARM', 'VOID_FAIRNESS'))
+
+    def test_the_cli_runs_the_r3_gate_for_a_pinned_binding_and_refuses_run_amendments(self):
+        self.assertEqual(self.main(self.cli(), gate=r3_gate()), 0)
+        self.assertEqual(self.gate.call_args.args, (str(self.root), 'DN2W16', 500));self.coarse.assert_not_called()
+        written = json.loads((self.root/'verdict.json').read_text())
+        self.assertEqual((written['run_binding_sha256'], written['final_fairness_rule'], written['final_fairness'], written['decision'], written['tree_commit']),
+                         (self.sha, 'RULE_R3', r3_gate(), 'CONTINUE_TO_2000', R3_TREE))
+        self.assertEqual(self.main(self.cli(output='void.json'), gate=r3_gate(within=False)), 0)
+        self.assertEqual(json.loads((self.root/'void.json').read_text())['decision'], 'VOID_FAIRNESS')
+        self.assertEqual(self.main(self.cli(output='real.json')), 0)   # the real gate: these cells carry no Foul Play rates, so not within
+        real = json.loads((self.root/'real.json').read_text())
+        self.assertEqual((real['decision'], real['final_fairness']['within'], real['final_fairness']['arm_fairness']), ('VOID_FAIRNESS', False, fairness.RULE_R3))
+        alive_sha = hashlib.sha256(ALIVE.read_bytes()).hexdigest()
+        with self.assertRaisesRegex(SystemExit, 'takes none'):self.main(self.cli('--run-amendment', str(ALIVE), alive_sha, output='a.json'), gate=r3_gate())
+
+    def test_an_unpinned_final_rule_is_refused(self):
+        from unittest import mock
+        with mock.patch.dict(V.RUN_BINDINGS, screen_r3=self.sha), self.assertRaisesRegex(SystemExit, 'RUN_FINAL_RULES'):   # bound, rule not pinned
+            self.main(self.cli(), pins=False, gate=r3_gate())
+        with self.assertRaisesRegex(SystemExit, 'committed run binding'):self.main(self.cli(), pins=False, gate=r3_gate())
+        plain, plain_sha = self.write({k: v for k, v in self.record.items() if k not in ('final_fairness_rule', 'arm_fairness')}, 'plain.json')
+        with mock.patch.dict(V.RUN_BINDINGS, plain=plain_sha), mock.patch.dict(V.RUN_FINAL_RULES, {plain_sha: 'RULE_R3'}), \
+                self.assertRaisesRegex(SystemExit, 'RUN_FINAL_RULES'):   # pinned with a final rule the binding does not declare
+            self.main(self.cli(binding=(plain, plain_sha)), pins=False, gate=r3_gate())
+        bad, bad_sha = self.write(dict(self.record, arm_fairness=fairness.RULE), 'bad.json')
+        with mock.patch.dict(V.RUN_BINDINGS, bad=bad_sha), mock.patch.dict(V.RUN_FINAL_RULES, {bad_sha: 'RULE_R3'}), \
+                self.assertRaisesRegex(SystemExit, 'final_fairness_rule'):
+            self.main(self.cli(binding=(bad, bad_sha)), pins=False, gate=r3_gate())
+        self.assertFalse((self.root/'verdict.json').exists())
 
 
 if __name__ == '__main__':
