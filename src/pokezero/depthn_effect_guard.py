@@ -309,11 +309,12 @@ def evaluate(cond, *, own_turn1, peer_turn1, turn2, turn2_available=True, choice
 
 # Reach (report only): the expected turn-2 guarded mass under the search's own root and reply priors ------------------------------
 def _psychoboost(record, side):
-    """Psycho Boost's condition for `side` from the record's root conditions: its Deoxys form's White Herb (a turn-2 child keeps
-    the root's item facts; only Deoxys formes know the move), the pool's default for an opponent the root never saw."""
+    """Whether Psycho Boost is certainly guarded for `side` (the lower bound): a revealed Deoxys or Deoxys-Attack of that side
+    holds its White Herb in the root's item facts (a turn-2 child keeps them; one Deoxys form per side, species clause). With
+    none revealed the user may be Deoxys-Speed, which learns Psycho Boost and holds no White Herb: then it counts only in the
+    upper bound."""
     members = ((record.get('conditions') or {}).get(side) or {}).get('members') or {}
-    herbs = [bool(m.get('white_herb')) for species, m in members.items() if species in WHITE_HERB_SPECIES]
-    return any(herbs) if herbs else side == 'opp'
+    return any(bool(m.get('white_herb')) for species, m in members.items() if species in WHITE_HERB_SPECIES)
 
 
 def reach(record, root_logits, root_legal, worlds, *, threshold=THRESHOLD):
@@ -323,7 +324,8 @@ def reach(record, root_logits, root_legal, worlds, *, threshold=THRESHOLD):
     world w's turn-1 peer prior (its root_peer_logits over kept; a world whose opponent waits has the single reply 0 at mass 1:
     the pricer expands its cells (a, 0)), p_w uniform over the priced worlds. `worlds`: the row's worlds in block order, each
     dict(requested, logits, kept, priced=True). Exact when every turn-2 entry carries `guarded` (the guard's own decision at
-    that child); otherwise bounds: lower counts tier A and Psycho Boost (its condition is the root's item facts), upper every
+    that child); otherwise bounds: lower counts tier A and Psycho Boost when a revealed Deoxys or Deoxys-Attack of that side holds
+    its White Herb (_psychoboost), upper every
     tier-C mass as guarded. tripped: True / False when the bounds (or the exact M) agree about THRESHOLD on either side, None
     when they straddle it; a record without its turn-2 masses (an error record, an unavailable capture) trips, fail closed."""
     out = dict(exact=None, m_own=None, m_opp=None, m_own_lower=None, m_own_upper=None, m_opp_lower=None, m_opp_upper=None, tiers=None,

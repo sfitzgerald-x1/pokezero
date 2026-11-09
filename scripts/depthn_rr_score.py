@@ -55,7 +55,8 @@ per tier and for the union (turn-1 and turn-2-added parts apart), (c) per operat
 sensitivity rows ((a) holds, neither (b) nor any operator's (c)), and above_20pct when the guarded share exceeds 20%.
 Guard reach (report only; the lead's narrower scope): per row M_s = sum_w p_w sum_(a,b) pi_own(a) pi_peer,w(b) q_(w,ab),s
 (pokezero.depthn_effect_guard.reach over the row's effect_guard masses, root prior and worlds), exact when the record's turn-2
-masses carry the guard's own `guarded` flag, else lower (tier A and Psycho Boost) and upper (every tier-C mass) bounds; the
+masses carry the guard's own `guarded` flag, else lower (tier A, and Psycho Boost under a revealed White Herb holder) and upper
+(every tier-C mass) bounds; the
 reach scope at each bound is turn-1 (b) or a turn-2 M >= 5%, (c) per operator unchanged. decisions.jsonl gains reach_turn2
 {m_own_lower, m_own_upper, m_opp_lower, m_opp_upper, tripped (None: the bounds straddle 5%), exact} and
 reach_scope_tripped_lower / _upper; summary guard.reach and summary.md "Guard reach" report each bound's share (union, turn 1
@@ -1096,7 +1097,7 @@ def reach_markdown(reach, settings):
     if not reach:return []
     out = ['# Guard reach (report only; the primary, gate and selection above stay on the any-cell scope)', '',
            f"Turn 2 trips when M_own or M_opp >= {reach['threshold']:g}: M_s = sum_w p_w sum_(a,b) pi_own(a) pi_peer,w(b) q_(w,ab),s. Rows "
-           f"{reach['rows']}: exact {reach['exact_rows']}, bounds {reach['rows'] - reach['exact_rows']} (lower: tier A and Psycho Boost; upper: every "
+           f"{reach['rows']}: exact {reach['exact_rows']}, bounds {reach['rows'] - reach['exact_rows']} (lower: tier A, Psycho Boost under a revealed White Herb holder; upper: every "
            f"tier-C mass guarded), ambiguous (the bounds straddle the threshold) {reach['ambiguous']}, unavailable (fail closed) {reach['unavailable']}.", '',
            '| scope | guarded | turn 1 | reach turn 2 added | tier A | tier C | own | opp | any-cell / reach | any-cell / clear | clear / reach | clear / clear |',
            '|---|---|---|---|---|---|---|---|---|---|---|---|']

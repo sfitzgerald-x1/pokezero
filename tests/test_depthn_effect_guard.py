@@ -300,14 +300,64 @@ class ReachTests(unittest.TestCase):
         self.assertAlmostEqual(one(1, 0, 1), .5 * .25, places=15)   # the waiting world: reply 0 at mass 1
         self.assertEqual(one(1, 1, 1), 0.)   # and no other reply
 
-    def test_psycho_boost_counts_in_the_lower_bound_from_the_root_items(self):
+    def test_psycho_boost_counts_in_the_lower_bound_only_under_a_revealed_white_herb_holder(self):
         pb = [entry(0, 0, 1, 'opp', 'psychoboost', .2)]
-        self.assertAlmostEqual(self.reach(pb)['m_opp_lower'], .5 * .75 * .75 * .2, places=15)   # an opponent the root never saw: pool White Herb
+        none = self.reach(pb)   # no Deoxys form revealed: it may be Deoxys-Speed (no White Herb), so upper only
+        self.assertEqual(none['m_opp_lower'], 0.);self.assertAlmostEqual(none['m_opp_upper'], .5 * .75 * .75 * .2, places=15)
+        held = self.reach(pb, opp_members={'deoxysattack': dict(white_herb=True)})
+        self.assertAlmostEqual(held['m_opp_lower'], .5 * .75 * .75 * .2, places=15)
         gone = self.reach(pb, opp_members={'deoxysattack': dict(white_herb=False)})
         self.assertEqual((gone['m_opp_lower'], gone['m_opp_upper'] > 0), (0., True))   # consumed: upper only
         ours = self.reach([entry(0, 0, 1, 'own', 'psychoboost', .2)], own_members={'deoxys': dict(white_herb=True)})
         self.assertGreater(ours['m_own_lower'], 0)
         self.assertEqual(self.reach([entry(0, 0, 1, 'own', 'psychoboost', .2)])['m_own_lower'], 0.)   # ours without a Deoxys: no herb
+
+    def test_a_revealed_deoxys_speed_keeps_lower_at_most_exact(self):
+        """The review's repro: a revealed opponent Deoxys-Speed (Psycho Boost, no White Herb) with 0.6 of its turn-2 prior on it."""
+        cond = G.conditions([switch('p1', 'Snorlax'), switch('p2', 'Deoxys', details='Deoxys-Speed'), '|turn|1'], 0, None)
+        hit = G.guarded('psychoboost', G.child_side(cond['opp'], [('deoxysspeed', 0, True, False)], opponent=True), 'deoxysspeed')
+        self.assertIsNone(hit)   # the guard itself: not guarded
+        e = entry(0, 0, 1, 'opp', 'psychoboost', .6);flagged = dict(e, guarded=hit is not None, tier='C', user='deoxysspeed')
+        exact = G.reach(dict(reach_record([flagged]), conditions=cond), self.root_logits, self.root_legal, self.worlds)
+        bounds = G.reach(dict(reach_record([e]), conditions=cond), self.root_logits, self.root_legal, self.worlds)
+        self.assertEqual((exact['m_opp'], exact['tripped']), (0., False))
+        self.assertEqual(bounds['m_opp_lower'], 0.);self.assertAlmostEqual(bounds['m_opp_upper'], .5 * .75 * .75 * .6, places=15)
+        self.assertEqual(bounds['tripped'], None)   # the bounds straddle 5%: ambiguous, never a false trip
+
+    def test_lower_at_most_exact_at_most_upper_on_random_records(self):
+        """Randomized records whose turn-2 entries carry the guard's own flags (G.guarded on each child's sides, as evaluate decides):
+        the bounds of the same record without the flags bracket its exact M, both sides."""
+        import random
+        rng = random.Random(20261109);moves = sorted(G.WATCHED);status = (0, 0, 0, 1, 2, 3, 4, 5, 6)
+        opp_pool = ['snorlax', 'ursaring', 'swellow', 'gengar', 'deoxys', 'deoxysattack', 'deoxysspeed', 'bellossom']
+        for trial in range(300):
+            deoxys = rng.choice(['deoxys', 'deoxysattack', 'deoxysspeed', None])   # the opponent's one Deoxys form, if any
+            revealed = rng.sample([x for x in opp_pool if not x.startswith('deoxys')], 2) + ([deoxys] if deoxys and rng.random() < .5 else [])
+            lines = [switch('p1', 'Breloom')] + [switch('p2', x.title(), details=x) for x in revealed]
+            if deoxys in revealed and rng.random() < .3:lines.append(f'|-enditem|p2a: {deoxys.title()}|White Herb')
+            ours = [('Breloom', rng.choice(['100/100', '100/100 par', '50/100 brn']), 'leftovers', 'effectspore'),
+                    ('Deoxys', '100/100', rng.choice(['whiteherb', '']), 'pressure'), ('Ursaring', rng.choice(['100/100', '100/100 psn']), '', rng.choice(['guts', 'quickfeet']))]
+            cond = G.conditions(lines, 0, request(ours))
+            own_species = ['breloom', 'deoxys', 'ursaring'];opp_species = [x for x in opp_pool if not x.startswith('deoxys')] + ([deoxys] if deoxys else [])
+            entries = []
+            for _ in range(rng.randint(1, 8)):
+                side = rng.choice(['own', 'opp']);move = rng.choice(moves)
+                users = own_species if side == 'own' else opp_species
+                user = (('deoxys' if side == 'own' else deoxys) if move == 'psychoboost' else rng.choice(users))
+                if user is None:continue   # no Deoxys form on that side: nobody knows Psycho Boost
+                children = {s: G.child_side(cond[s], [(x, rng.choice(status), rng.random() < .9, rng.random() < .3) for x in (own_species if s == 'own' else opp_species)],
+                                            opponent=s == 'opp') for s in ('own', 'opp')}
+                hit = G.guarded(move, children[side], user, other=children['opp' if side == 'own' else 'own'])
+                e = entry(rng.randint(0, 1), rng.randint(0, 1), rng.randint(0, 1), side, move, rng.random())
+                entries.append(dict(e, guarded=hit is not None, tier=G.tier_of(move), user=user))
+            exact = G.reach(dict(reach_record(entries), conditions=cond), self.root_logits, self.root_legal, self.worlds)
+            bounds = G.reach(dict(reach_record([{k: v for k, v in e.items() if k not in ('guarded', 'tier', 'user')} for e in entries]), conditions=cond),
+                             self.root_logits, self.root_legal, self.worlds)
+            for side in ('own', 'opp'):
+                with self.subTest(trial=trial, side=side):
+                    self.assertLessEqual(bounds[f'm_{side}_lower'], exact[f'm_{side}'] + 1e-12)
+                    self.assertLessEqual(exact[f'm_{side}'], bounds[f'm_{side}_upper'] + 1e-12)
+            if bounds['tripped'] is not None:self.assertEqual(bounds['tripped'], exact['tripped'])   # the bounds never decide wrong
 
     def test_a_record_without_turn_2_masses_fails_closed(self):
         for record in (G.error_record('x'), reach_record([], available=False), None):
