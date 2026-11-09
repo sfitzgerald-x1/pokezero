@@ -424,6 +424,18 @@ class TorchWindowTests(unittest.TestCase):
         self.assertEqual(out['probabilities'][4], 0.);self.assertAlmostEqual(sum(out['probabilities']), 1., places=6)
 
 
+class FakeRuntime:
+    """torch_main's runtime without a checkpoint: each path's outputs read its encoding's opponent token 8, column 43."""
+    calls = []
+
+    def __init__(self, checkpoint, digest):
+        self.state, self.environment = dict(threads=1), dict(torch_config='fake config')
+
+    def run(self, arrays, legal):
+        FakeRuntime.calls.append(list(legal));x = float(np.asarray(arrays['numeric_features'])[8, 43])
+        return dict(logits=[x] * 9, probabilities=[0.] * 9, greedy=0, value=x, select_action=0, select_agrees=True)
+
+
 class TorchCommandTests(unittest.TestCase):
     def test_checkpoint_bytes_are_pinned(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -434,33 +446,139 @@ class TorchCommandTests(unittest.TestCase):
                 P.main(['torch', '--capture', tmp, '--checkpoint', str(path), '--checkpoint-sha256', P.CHAMPION_CHECKPOINT_SHA256, '--out', str(Path(tmp) / 'o.jsonl')])
             self.assertFalse((Path(tmp) / 'o.jsonl').exists())
 
+    def test_paths_take_their_own_encodings_and_the_root_legal_mask(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            toy_capture(Path(tmp) / 'cap', [(0, 'disagree', .5, [0.] * 9, 0, True, [])]);out = Path(tmp) / 't.jsonl';FakeRuntime.calls = []
+            with patch.object(P, 'ActorRuntime', FakeRuntime), patch.object(P, 'file_sha256', return_value=P.CHAMPION_CHECKPOINT_SHA256), \
+                    patch('sys.stdout', new_callable=io.StringIO):
+                code = P.main(['torch', '--capture', str(Path(tmp) / 'cap'), '--checkpoint', 'ck.pt', '--checkpoint-sha256', P.CHAMPION_CHECKPOINT_SHA256,
+                    '--out', str(out)])
+            row = json.loads(out.read_text());header = json.loads(Path(str(out) + '.header.json').read_text())
+        self.assertEqual(code, 0)
+        self.assertEqual(row['path1']['value'], float(b2_of(ROOT)['numeric_features'][8, 43]))   # path 1: B2's encoding
+        self.assertEqual(row['path4']['value'], float(ROOT['numeric_features'][0, 0, 8, 43]))   # path 4: the world-0 prefix
+        self.assertNotEqual(row['path1']['value'], row['path4']['value'])
+        self.assertEqual(row['legal'], list(RT.LEGAL));self.assertEqual(FakeRuntime.calls, [list(RT.LEGAL)] * 2)   # root_legal, not all nine
+        self.assertTrue(row['b2_legal_equals_root_legal'])
+        env = header['environment']
+        self.assertEqual((env['torch_config'], env['src_tree']), ('fake config', P.git_tree('src')['src']))
+        self.assertTrue(env['machine']);self.assertIn('numpy_blas', env);self.assertIn('processors', env['cpu'])
+
+
+# Capture survivors ---------------------------------------------------------------------------------------------------------------
+class CaptureEdgeTests(unittest.TestCase):
+    def capture_one(self, *, build=fake_build, forward=fake_forward, views=fake_views):
+        with tempfile.TemporaryDirectory() as tmp, ExitStack() as stack:
+            capture_fakes(stack)
+            stack.enter_context(patch.object(cw, 'build', build))
+            stack.enter_context(patch.object(P, 'root_forward_of', lambda pricer: forward));stack.enter_context(patch.object(P, 'views_of', lambda pricer: views))
+            recorder = P.Recorder(selected((1001, 0)), tmp);search = RT.fake_search(B2Constructor())
+            with P.capture_class(recorder)().installed():response = search.process_many([body(0)])[0]
+            recorder.close()
+        return response, recorder.pending['rr-1001-0-7']
+
+    def test_path2_value_mismatch(self):
+        def build(*a, **k):
+            out = fake_build(*a, **k);out.roots = tuple(dict(r, root_value=float(np.float32(r['root_value']) + np.float32(1e-3))) for r in out.roots);return out
+        response, record = self.capture_one(build=build)
+        self.assertEqual(response['status'], 'COMPLETE');self.assertEqual(record['path2'], dict(logits_equal=True, value_equal=False, valid=True))
+        self.assertTrue(record['recorded_float32_exact'])
+
+    def test_recorded_prior_not_float32(self):
+        def build(*a, **k):
+            out = fake_build(*a, **k);out.roots = tuple(dict(r, root_logits=RT.LOGITS) for r in out.roots);return out   # -.2 is no float32
+        _, record = self.capture_one(build=build)
+        self.assertFalse(record['recorded_float32_exact']);self.assertFalse(record['path2']['logits_equal'])
+
+    def test_reference_world_not_reproducing_root_inputs(self):
+        def views(state, public, owner):
+            _, _, own, _ = fake_views(state, public, owner);own['categorical_ids'][0, 0, 26, 1] += 1   # every world, beyond the prefix
+            return None, None, own, None
+        _, record = self.capture_one(views=views)
+        cross = record['crossworld']
+        self.assertFalse(cross['reference_reproduces_root_inputs']);self.assertEqual(cross['differing_worlds'], [5, 6])
+
+    def test_invalid_path3(self):
+        def picky(p, inputs):   # valid only on world 0's own value at opponent token 8, column 43
+            out = fake_forward(p, inputs);x = np.asarray(inputs['numeric_features'])[:, 0, 8, 43]
+            return SimpleNamespace(policy_logits=out.policy_logits, value=out.value, valid=x == ROOT['numeric_features'][0, 0, 8, 43])
+        response, record = self.capture_one(forward=picky)
+        self.assertEqual(response['status'], 'COMPLETE');self.assertFalse(record['path3']['valid']);self.assertEqual(record['errors'], ['path 3 forward not valid'])
+        self.assertTrue(record['path2']['logits_equal'])
+
+    def test_per_battle_flush(self):
+        record = dict(live=dict(greedy_action_index=0), replay=dict(status='COMPLETE'), parity=dict(replay_complete=True), root=dict(root_logits=list(RT.LOGITS)))
+        captured = lambda v: dict(errors=[], arrays={'root__x': np.full(3, v)}, build_status='PRICED', path2=dict(logits_equal=True, value_equal=True),
+            root_logits=list(RT.LOGITS))
+        with tempfile.TemporaryDirectory() as tmp:
+            rec = P.Recorder(selected((1, 0), (2, 0), (2, 1)), tmp, log=io.StringIO())
+            for o, i in ((1, 0), (2, 0), (2, 1)):rec.pending[f'rr-{o}-{i}-7'] = captured(10 * o + i)
+            row = lambda o, i: (dict(ordinal=o), dict(decision_index=i, battle_id=f'b{o}'), dict(request_id=f'rr-{o}-{i}-7'), record)
+            rec.after_row(*row(1, 0));rec.after_row(*row(1, 1))   # decision 1 is not selected
+            index = Path(tmp) / 'index.jsonl'
+            self.assertEqual(index.read_text(), '');self.assertFalse((Path(tmp) / 'arrays' / '1.npz').exists())   # battle 1 still open
+            rec.after_row(*row(2, 0))
+            self.assertEqual([(e['ordinal'], e['decision_index']) for e in map(json.loads, index.read_text().splitlines())], [(1, 0)])
+            with np.load(Path(tmp) / 'arrays' / '1.npz') as z:self.assertEqual({k: z[k].tolist() for k in z.files}, {'d0__root__x': [10] * 3})
+            rec.after_row(*row(2, 1));rec.close()
+            entries = [json.loads(x) for x in index.read_text().splitlines()]
+            with np.load(Path(tmp) / 'arrays' / '2.npz') as z:second = {k: z[k].tolist() for k in z.files}
+        self.assertEqual([(e['ordinal'], e['decision_index'], e['arrays']) for e in entries], [(1, 0, 'arrays/1.npz'), (2, 0, 'arrays/2.npz'), (2, 1, 'arrays/2.npz')])
+        self.assertEqual(second, {'d0__root__x': [20] * 3, 'd1__root__x': [21] * 3})
+        self.assertEqual((rec.errors, rec.counts['recorded'], rec.counts['captured'], rec.counts['path2_exact']), ([], 3, 3, 3))
+
+    def test_captures_of_different_selections_refuse_to_combine(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            one = toy_capture(Path(tmp) / 'a', [(0, 'disagree', .5, [0.] * 9, 0, True, [])], ordinal=1)
+            toy_capture(Path(tmp) / 'b', [(0, 'control', 0., [0.] * 9, 3, True, [])], ordinal=2)
+            toy_capture(Path(tmp) / 'c', [(1, 'control', 0., [0.] * 9, 3, True, [])], ordinal=3, selection_sha='t')
+            self.assertEqual([(e['ordinal'], e['directory']) for e in P.capture_entries([Path(tmp) / 'b', Path(tmp) / 'a'])], [(1, str(Path(tmp) / 'a')), (2, str(Path(tmp) / 'b'))])
+            with self.assertRaisesRegex(ValueError, 'different rows or seeds'):P.capture_entries([Path(tmp) / 'a', Path(tmp) / 'c'])
+            with self.assertRaisesRegex(ValueError, 'two captures'):P.capture_entries([Path(tmp) / 'a', Path(tmp) / 'a'])
+        self.assertEqual(len(one), 1)
+
 
 # Report ---------------------------------------------------------------------------------------------------------------------------
-def toy_capture(directory, decisions):
-    """A capture directory: selection.json, index.jsonl and arrays/<ordinal>.npz for (decision_index, set, b2 shift, path3 logits,
-    live greedy, path2 exact, cross-world cells) tuples of battle 1."""
-    d = Path(directory);(d / 'arrays').mkdir(parents=True);arrays, entries = {}, []
+def toy_capture(directory, decisions, *, ordinal=1, invalid_path3=(), edits=None, uncaptured=(), problems=None, selection_sha='s'):
+    """A capture directory: selection.json, index.jsonl, arrays/<ordinal>.npz and replay/rows-0.jsonl for (decision_index, set, b2
+    shift, path3 logits, live greedy, path2 exact, cross-world cells) tuples of one battle; `edits` {decision: [(token, column, delta)]}
+    on B2's numerics, `uncaptured` (decision_index, set) selected but never recorded, `problems` {decision: live_problem}."""
+    d = Path(directory);(d / 'arrays').mkdir(parents=True);(d / 'replay').mkdir();arrays, entries = {}, []
     for i, name, shift, p3, live_greedy, exact, cells in decisions:
         b2 = b2_of(ROOT, shift=shift)
+        for t, c, delta in (edits or {}).get(i, ()):b2['numeric_features'][t, c] += np.float32(delta)
         for k, v in ROOT.items():arrays[f'd{i}__root__{k}'] = v
         for k, v in b2.items():arrays[f'd{i}__b2__{k}'] = v
         arrays[f'd{i}__root__legal'] = np.asarray(RT.LEGAL, bool)
-        entries.append(dict(schema=P.INDEX_SCHEMA, ordinal=1, decision_index=i, set=name, selection=dict(live_greedy=live_greedy, server_top=3), captured=True,
+        entries.append(dict(schema=P.INDEX_SCHEMA, ordinal=ordinal, decision_index=i, set=name, selection=dict(live_greedy=live_greedy, server_top=3), captured=True,
             root_logits=list(RT.LOGITS), root_legal=list(RT.LEGAL), path2=dict(logits_equal=exact, value_equal=True, valid=True),
-            path3=dict(logits=p3, value=0., valid=True, lossy_keys=[]), crossworld=dict(prefix_equal=not cells, full_equal=not cells, value_equal=not cells,
-            cells=cells, reference_reproduces_root_inputs=True), parity=dict(action_equal=True, q_equal=True), errors=[], arrays='arrays/1.npz',
-            root_logits_match_selection=True, live_greedy_matches_selection=True, b2_view=dict(equal=not shift)))
-    np.savez_compressed(d / 'arrays' / '1.npz', **arrays)
+            path3=dict(logits=p3, value=0., valid=i not in invalid_path3, lossy_keys=[]), crossworld=dict(prefix_equal=not cells, full_equal=not cells,
+            value_equal=not cells, cells=cells, reference_reproduces_root_inputs=True), parity=dict(action_equal=True, q_equal=True), errors=[],
+            arrays=f'arrays/{ordinal}.npz', root_logits_match_selection=True, live_greedy_matches_selection=True, b2_view=dict(equal=not shift)))
+    np.savez_compressed(d / 'arrays' / f'{ordinal}.npz', **arrays)
     (d / 'index.jsonl').write_text(''.join(json.dumps(e) + '\n' for e in entries))
-    (d / 'selection.json').write_text(json.dumps(dict(selection_sha256='s', counts=dict(disagree=2), select_seed=1,
-        decisions=[dict(ordinal=1, decision_index=x[0], set=x[1]) for x in decisions])))
-    (d / 'capture-summary.json').write_text(json.dumps(dict(selected_in_shard=len(decisions), recorded=len(decisions), missing=[], errors=[])))
+    listing = [dict(ordinal=ordinal, decision_index=x[0], set=x[1], live_greedy=x[4], root_legal=list(RT.LEGAL)) for x in decisions]
+    listing += [dict(ordinal=ordinal, decision_index=i, set=name, live_greedy=3, root_legal=list(RT.LEGAL)) for i, name in uncaptured]
+    (d / 'selection.json').write_text(json.dumps(dict(selection_sha256=selection_sha, counts=dict(disagree=2), select_seed=1, decisions=listing)))
+    (d / 'capture-summary.json').write_text(json.dumps(dict(selected_in_shard=len(listing), recorded=len(decisions), missing=[], errors=[])))
+    (d / 'replay' / 'rows-0.jsonl').write_text(''.join(json.dumps(dict(ordinal=ordinal, decision_index=x['decision_index'],
+        live_problem=(problems or {}).get(x['decision_index']))) + '\n' for x in listing))
     return entries
 
 
-def torch_row(i, name, p1, p4):
-    path = lambda logits, greedy: dict(logits=logits, probabilities=[0.] * 9, greedy=greedy, value=0., select_action=greedy, select_agrees=True)
-    return dict(ordinal=1, decision_index=i, set=name, path1=path(*p1), path4=path(*p4))
+def torch_row(i, name, p1, p4, *, ordinal=1, agrees=True):
+    path = lambda logits, greedy: dict(logits=logits, probabilities=[0.] * 9, greedy=greedy, value=0., select_action=greedy, select_agrees=agrees)
+    return dict(ordinal=ordinal, decision_index=i, set=name, path1=path(*p1), path4=path(*p4), b2_legal_equals_root_legal=True)
+
+
+def gate_entry(i, **changes):
+    return dict(dict(ordinal=1, decision_index=i, set='disagree', captured=True, path2=dict(logits_equal=True, value_equal=True),
+        root_logits_match_selection=True, live_greedy_matches_selection=True, selection=dict(live_greedy=0),
+        parity=dict(live_searched=True, replay_complete=True, action_equal=True, q_equal=True)), **changes)
+
+
+def gate_torch(greedy=0, agrees=True):
+    return dict(path1=dict(greedy=greedy, select_agrees=agrees), path4=dict(greedy=greedy, select_agrees=agrees))
 
 
 class ReportTests(unittest.TestCase):
@@ -472,15 +590,38 @@ class ReportTests(unittest.TestCase):
         self.assertEqual(P.max_gap([float('nan')] * 9, [0.] * 9, [True] * 9), float('inf'));self.assertIsNone(P.max_gap(None, [0.] * 9, [True] * 9))
 
     def test_gate(self):
-        entries = [dict(ordinal=1, decision_index=i, set='disagree', captured=True, path2=dict(logits_equal=True, value_equal=True)) for i in range(200)]
-        decisions = [dict(live=0, logits={1: [0.] * 9}, action={1: 0 if i else 1}) for i in range(200)]
-        g = P.gate(entries, decisions)
-        self.assertEqual((g['verdict'], g['path1']['reproduced'], g['path1']['share']), ('HARNESS_EXACT', 199, .995))
-        decisions[1]['action'][1] = 2;g = P.gate(entries, decisions)
-        self.assertEqual((g['verdict'], [m['decision_index'] for m in g['path1']['misses']]), ('HARNESS_NOT_EXACT', [0, 1]))
-        decisions[1]['action'][1] = 0;entries[5]['path2'] = dict(logits_equal=False, value_equal=True);g = P.gate(entries, decisions)
-        self.assertEqual((g['verdict'], g['path1']['passed'], [m['decision_index'] for m in g['path2']['misses']]), ('HARNESS_NOT_EXACT', True, [5]))
-        self.assertEqual(P.gate([], [])['verdict'], 'HARNESS_NOT_EXACT')   # nothing checked is not exact
+        entries = [gate_entry(i) for i in range(200)];rows = {(1, i): gate_torch(0 if i else 1) for i in range(200)}
+        check = lambda **k: P.gate(entries, rows, **k)
+        g = check()
+        self.assertEqual((g['verdict'], g['failed'], g['path1']['reproduced'], g['path1']['share'], g['exact_on']), ('HARNESS_EXACT', [], 199, .995, dict(k=200, n=200)))
+        rows[1, 1] = gate_torch(2);g = check()
+        self.assertEqual((g['verdict'], g['failed'], [m['decision_index'] for m in g['path1']['misses']]), ('HARNESS_NOT_EXACT', ['path1'], [0, 1]))
+        rows[1, 0] = rows[1, 1] = gate_torch()   # no path-1 miss from here on: each case fails its own check alone
+        entries[5] = gate_entry(5, path2=dict(logits_equal=True, value_equal=False));g = check()   # the value alone
+        self.assertEqual((g['failed'], [m['decision_index'] for m in g['path2']['misses']], g['exact_on']['k']), (['path2'], [5], 199))
+        entries[5] = gate_entry(5, path2=dict(logits_equal=False, value_equal=True))
+        self.assertEqual(check()['failed'], ['path2']);entries[5] = gate_entry(5)
+        entries[6], entries[7] = gate_entry(6, root_logits_match_selection=False), gate_entry(7, live_greedy_matches_selection=False);g = check()
+        self.assertEqual((g['failed'], [m['decision_index'] for m in g['selection']['misses']]), (['selection'], [6, 7]))
+        entries[6], entries[7] = gate_entry(6), gate_entry(7)
+        entries[8] = gate_entry(8, parity=dict(live_searched=True, replay_complete=True, action_equal=True, q_equal=False))
+        self.assertEqual(check()['failed'], ['replay_parity'])
+        entries[8] = gate_entry(8, parity=dict(live_searched=False, replay_complete=True, action_equal=None, q_equal=None))   # not searched live: no parity
+        self.assertEqual((check()['verdict'], check()['replay_parity']['n']), ('HARNESS_EXACT', 199))
+        rows[1, 9] = gate_torch(agrees=False);del rows[1, 10];g = check()
+        self.assertEqual((g['failed'], [m['decision_index'] for m in g['torch']['misses']], g['path1']['n']), (['torch'], [9, 10], 199))
+        rows[1, 9] = rows[1, 10] = gate_torch()
+        entries[11] = dict(ordinal=1, decision_index=11, set='control', captured=False, path2=None);g = check()   # selected, never captured
+        self.assertEqual((g['failed'], g['coverage']['missing'], g['path2']['misses'], g['coverage']['captured'], g['exact_on']), (['coverage'],
+            [dict(ordinal=1, decision_index=11, set='control')], [], 199, dict(k=199, n=200)))
+        entries[11] = gate_entry(11)
+        g = check(selected={(1, i) for i in range(200)} | {(2, 0)})
+        self.assertEqual((g['failed'], g['coverage']['missing'], g['coverage']['selected']), (['coverage'], [dict(ordinal=2, decision_index=0, set=None)], 201))
+        self.assertEqual(check(selected={(1, i) for i in range(199)})['coverage']['unexpected'], [dict(ordinal=1, decision_index=199, set='disagree')])
+        g = check(excluded={(1, 0): ['live_greedy_illegal'], (1, 1): ['live_problem: duplicated live telemetry rows']})
+        self.assertEqual((g['verdict'], g['path1']['misses'], g['coverage']['excluded'], g['coverage']['analysed'], g['exact_on']['k']), ('HARNESS_EXACT', [], 2, 198, 198))
+        self.assertEqual(g['excluded_reasons'], {'live_greedy_illegal': 1, 'live_problem': 1})
+        self.assertEqual(P.gate([], {})['verdict'], 'HARNESS_NOT_EXACT')   # nothing checked is not exact
 
     def test_tally_ranking(self):
         t = P.Tally()
@@ -489,24 +630,35 @@ class ReportTests(unittest.TestCase):
         rows = t.ranked()
         self.assertEqual([r['feature'] for r in rows], ['a', 'b', 'c'])
         a, b, c = rows
-        self.assertEqual((a['disagree'], a['control'], a['ratio'], a['control_zero']), (3, 0, None, True))
-        self.assertEqual((b['disagree_share'], b['control_share'], b['ratio']), (1., .5, 2.));self.assertEqual(c['disagree'], 0)
+        self.assertEqual((a['disagree'], a['control'], a['ratio'], a['control_zero'], a['excess_share']), (3, 0, None, True, .75))
+        self.assertEqual((b['disagree_share'], b['control_share'], b['ratio'], b['excess_share']), (1., .5, 2., .5))
+        self.assertEqual((c['disagree'], c['excess_share']), (0, -.5))
         self.assertEqual(t.table(['b']), [dict(feature='b', disagree=4, control=2, disagree_share=1., control_share=.5)])
+        u = P.Tally()   # x: rare but control-free (the larger smoothed ratio); y: common, twice the control share (the larger excess)
+        for i in range(100):u.add('disagree', ['x'] * (i < 1) + ['y'] * (i < 60));u.add('control', ['y'] * (i < 30))
+        ranked = u.ranked()
+        self.assertEqual([r['feature'] for r in ranked], ['y', 'x']);self.assertGreater(ranked[1]['smoothed_ratio'], ranked[0]['smoothed_ratio'])
 
     def test_report_on_toy_data(self):
         move = lambda a: [5. if x == a else 0. for x in range(9)]
         decisions = [(0, 'disagree', .5, move(0), 0, True, [['numeric_features', 3, 7]]), (1, 'disagree', .5, move(3), 0, True, []),
             (2, 'control', 0., move(3), 3, True, []), (3, 'control', 5e-7, move(3), 3, True, [])]
         with tempfile.TemporaryDirectory() as tmp:
-            toy_capture(Path(tmp) / 'cap', decisions);entries = P.capture_entries([Path(tmp) / 'cap'])
+            toy_capture(Path(tmp) / 'cap', decisions, invalid_path3=(1,), edits={2: [(0, 0, 1.)]})   # field HP_FRACTION: a structural zero
+            entries = P.capture_entries([Path(tmp) / 'cap'])
             rows = {(1, 0): torch_row(0, 'disagree', (move(0), 0), (move(3), 3)), (1, 1): torch_row(1, 'disagree', (move(0), 0), (move(0), 0)),
                 (1, 2): torch_row(2, 'control', (move(3), 3), (move(3), 3)), (1, 3): torch_row(3, 'control', (move(3), 3), (move(3), 3))}
             s = P.report(entries, rows)
             torch_file = Path(tmp) / 't.jsonl';torch_file.write_text(''.join(json.dumps(r) + '\n' for r in rows.values()))
-            self.assertEqual(P.main(['report', '--capture', str(Path(tmp) / 'cap'), '--torch', str(torch_file), '--out', str(Path(tmp) / 'rep')]), 0)
+            Path(str(torch_file) + '.header.json').write_text(json.dumps(dict(precision=dict(threads=1), environment=dict(machine='aarch64',
+                cpu={'CPU part': '0xd4f'}, src_tree='abc', torch_config='blas'))))
+            with patch('sys.stdout', new_callable=io.StringIO):
+                self.assertEqual(P.main(['report', '--capture', str(Path(tmp) / 'cap'), '--torch', str(torch_file), '--out', str(Path(tmp) / 'rep')]), 0)
             written = json.loads((Path(tmp) / 'rep' / 'summary.json').read_text());md = (Path(tmp) / 'rep' / 'summary.md').read_text()
         self.assertEqual(s['gate']['verdict'], 'HARNESS_EXACT');self.assertEqual(written['gate']['verdict'], 'HARNESS_EXACT')
-        self.assertIn('Gate: HARNESS_EXACT', md);self.assertIn('Cross-world', md)
+        for text in ('Gate: HARNESS_EXACT', 'exact on 4/4', '## Coverage', 'selected 4, captured 4, missing 0', 'Cross-world', 'Anomalies',
+                'not matched on request kind', 'request boundary', 'aarch64 0xd4f', 'src tree abc'):self.assertIn(text, md)
+        self.assertEqual(written['torch_runtime'][0]['torch_config'], 'blas')
         p = s['paths']
         self.assertEqual((p['1']['disagree']['agree_live'], p['2']['disagree']['agree_live'], p['3']['disagree']['agree_live'], p['4']['disagree']['agree_live']),
             (2, 0, 1, 1))
@@ -514,21 +666,45 @@ class ReportTests(unittest.TestCase):
         self.assertEqual(p['2']['disagree']['dlogit_vs_recorded']['max'], 0.)
         self.assertEqual(p['4']['disagree']['dlogit_vs_path1']['max'], 5.);self.assertEqual(p['4']['disagree']['dlogit_vs_path1']['p50'], 0.)
         a = s['attribution']
-        self.assertEqual((a['disagree']['path3_agrees_live'], a['disagree']['path3_n'], a['disagree']['path4_disagrees_live']), (1, 2, 1))
+        self.assertEqual((a['disagree']['path3_agrees_live'], a['disagree']['path3_n'], a['disagree']['path4_disagrees_live']), (1, 1, 1))   # an invalid path 3 has no action
+        self.assertEqual(s['replay']['path3_invalid'], 1)
         e = s['encoding_diff']
         self.assertEqual(e['compared'], 4);top = e['ranked_cells'][0]
-        self.assertEqual((top['feature'], top['names'], top['side'], top['info'], top['disagree'], top['control']),
-            (['opponent', 'numeric', 43], ['CANDIDATE_SET_COUNT'], 'opponent', 'opponent-unrevealed', 2, 1))
+        self.assertEqual((top['feature'], top['names'], top['side'], top['info'], top['disagree'], top['control'], top['excess_share'], top['anomaly']),
+            (['opponent', 'numeric', 43], ['CANDIDATE_SET_COUNT'], 'opponent', 'opponent-unrevealed', 2, 1, .5, False))
+        self.assertEqual([(r['feature'], r['info'], r['control'], r['anomaly']) for r in e['anomalies']], [(['field', 'numeric', 0], 'none', 1, True)])
         self.assertEqual(next(r for r in e['tokens'] if r['feature'] == 8)['label'], 'opponent[1]')
         self.assertEqual(next(r for r in e['numeric_columns'] if r['feature'] == 43)['disagree_share'], 1.)
-        self.assertEqual(e['float_noise'], {'control:differing': 1, 'control:max_numeric_diff_below_1e-6': 1, 'control:numeric_only_below_1e-6': 1,
+        self.assertEqual(e['float_noise'], {'control:differing': 2, 'control:max_numeric_diff_below_1e-6': 1, 'control:numeric_only_below_1e-6': 1,
             'disagree:differing': 2})
         tags = {tuple(r['feature']): (r['disagree'], r['control']) for r in e['by_tag']}
-        self.assertEqual(tags['info', 'opponent-unrevealed'], (2, 1))
+        self.assertEqual((tags['info', 'opponent-unrevealed'], tags['info', 'none']), ((2, 1), (0, 1)))
         c = s['crossworld']
         self.assertEqual(c['any_difference'][0], dict(feature='prefix_differs', disagree=1, control=0, disagree_share=.5, control_share=0.))
         self.assertEqual(c['ranked_cells'][0]['feature'], ['own', 'numeric', 7]);self.assertIn('pre = 3 +', c['turn1_input_check'])
-        self.assertEqual(s['replay']['captured'], 4)
+        self.assertEqual((s['replay']['captured'], s['torch']['b2_legal_equals_root_legal'], s['torch']['select_agrees']['path1']), (4, {'True': 4}, {'True': 4}))
+
+    def test_report_excludes_and_gates_coverage(self):
+        move = lambda a: [5. if x == a else 0. for x in range(9)]
+        decisions = [(0, 'disagree', .5, move(0), 0, True, []), (1, 'disagree', .5, move(0), 2, True, []),   # live greedy 2 is illegal
+            (2, 'control', 0., move(3), 3, True, []), (3, 'control', 0., move(3), 3, True, [])]
+        with tempfile.TemporaryDirectory() as tmp:
+            toy_capture(Path(tmp) / 'cap', decisions, uncaptured=[(4, 'control')], problems={2: 'duplicated live telemetry rows'})
+            rows = [torch_row(i, name, (move(0 if i < 2 else 3), 0 if i < 2 else 3), (move(3), 3)) for i, name, *_ in decisions]
+            torch_file = Path(tmp) / 't.jsonl';torch_file.write_text(''.join(json.dumps(r) + '\n' for r in rows))
+            with patch('sys.stdout', new_callable=io.StringIO):
+                P.main(['report', '--capture', str(Path(tmp) / 'cap'), '--torch', str(torch_file), '--out', str(Path(tmp) / 'rep')])
+            s = json.loads((Path(tmp) / 'rep' / 'summary.json').read_text());md = (Path(tmp) / 'rep' / 'summary.md').read_text()
+        g = s['gate']
+        self.assertEqual((g['verdict'], g['failed'], g['exact_on']), ('HARNESS_NOT_EXACT', ['coverage'], dict(k=2, n=5)))
+        self.assertEqual({k: g['coverage'][k] for k in ('selected', 'captured', 'excluded', 'analysed')}, dict(selected=5, captured=4, excluded=2, analysed=2))
+        self.assertEqual(g['coverage']['missing'], [dict(ordinal=1, decision_index=4, set=None)])
+        self.assertEqual(g['excluded_reasons'], {'live_greedy_illegal': 1, 'live_problem': 1});self.assertEqual(g['path1']['n'], 2)
+        self.assertEqual(s['excluded'], [dict(ordinal=1, decision_index=1, reasons=['live_greedy_illegal']),
+            dict(ordinal=1, decision_index=2, reasons=['live_problem: duplicated live telemetry rows'])])
+        self.assertEqual(s['paths']['1']['disagree']['n'] + s['paths']['1']['control']['n'], 2)   # the analysis leaves the excluded out
+        self.assertEqual(s['coverage']['replay_rows_with_live_problem'], 1)
+        for text in ('Gate: HARNESS_NOT_EXACT', 'exact on 2/5', 'failed: coverage', 'selected 5, captured 4, missing 1', 'excluded 2'):self.assertIn(text, md)
 
     def test_layout_names_every_column_and_checks_the_token_roles(self):
         tokens = P.token_layout()
@@ -539,6 +715,7 @@ class ReportTests(unittest.TestCase):
         self.assertEqual(len(cells), 5 * (132 + 41 + 2) + 1)
         self.assertEqual((cells['field', 'numeric', 0]['info'], cells['opponent', 'numeric', 0]['info']), ('none', 'opponent-revealed'))   # HP on the field token
         self.assertEqual(cells['own', 'numeric', 18]['names'], ['ACTUAL_HP']);self.assertEqual(cells['own', 'numeric', 18]['info'], 'own-private')
+        for c in range(18, 24):self.assertEqual(cells['opponent', 'numeric', c]['info'], 'opponent-unrevealed', c)   # unavailable hidden actual stats
         self.assertEqual(cells['stats', 'numeric', 121]['side'], 'opponent');self.assertEqual(cells['stats', 'numeric', 121]['info'], 'public')
 
 
