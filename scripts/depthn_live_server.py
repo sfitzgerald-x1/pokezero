@@ -253,13 +253,12 @@ def build(args):
         configure_compilation_cache(args.compilation_cache)
     if len(jax.devices())!=1 or jax.devices()[0].platform!='gpu':raise ValueError('ONE visible GPU required')
     from pokezero import v5_gumbel
-    from gpu_engine import constructor_worlds as cw,device_public_teacher as teacher,engine_device_observation,transition
+    from gpu_engine import constructor_worlds as cw
     from gpu_engine.phase_d_protocol_constructor import ProtocolConstructor,load_inputs
     catalog,source,metadata,config=load_inputs(args);evaluator=evaluators.load_from_arguments(args);W=live.RUNGS[args.rung]
     constructor=ProtocolConstructor(catalog=catalog,source=source,metadata=metadata,owning_config=config,count=W,seed=args.seed,rung=args.rung,
         saved_root_admission=args.saved_root_admission)
-    executor=teacher.make_executor(transition.tables_from_metadata(metadata),engine_device_observation.compile_tables(metadata,catalog=catalog),
-        enable_device_teacher=True,batch_joint=True)
+    executor=cw.live_executor(metadata,catalog)   # the constructor's own engine metadata and catalog (the depth-N gate's CONSTRUCTOR_ROOTS uses the same)
     params=(evaluator.params,)
     pricers=live.make_pricers(executor,evaluator,params,worlds=W,buckets=args.buckets,block_lanes=args.block_lanes,blocks_per_call=args.blocks_per_call)
     return live.DepthNLiveSearch(constructor=constructor,pricers=pricers,params=params,binding=cw.binding(source,metadata,catalog),
