@@ -841,14 +841,23 @@ def _observer(order):
 
 
 def diff_phase(argument, ctx):
-    """v2e_diff provider, teacher-forced: the generated phase on the oracle's tapped C_start against the oracle's C_end.
-    The oracle side is the full tapped program (projected to C_end plus a zero error word); the CUDA side is a `teacher`:
-    it reads C_start from the oracle side's own outputs and calls the phase's custom call."""
+    """v2e_diff provider, teacher-forced: a phase on the oracle's tapped C_start against the oracle's C_end. The argument
+    is a PHASES name, FG or '<from>..<to>', optionally prefixed 'gen-' or 'hand-'; a bare name runs the hand phase when
+    HAND_PHASES has one under that name (M2's FG), else the generated slice. The oracle side is the full tapped program
+    (projected to C_end plus a zero error word); the CUDA side is a `teacher`: it reads C_start from the oracle side's
+    own outputs and runs the phase."""
     import jax
+    load_hand_phases()
+    kind = None
+    if argument.startswith(('gen-', 'hand-')):kind, _, argument = argument.partition('-')
     start, end, label = _phase_range(argument)
+    kind = kind or ('hand' if label in HAND_PHASES else 'gen')
+    if kind == 'hand':
+        if label not in HAND_PHASES:raise KeyError(f'phase:hand-{label}: no hand phase registered (HAND_PHASES: {sorted(HAND_PHASES)})')
+        if (HAND_PHASES[label].start, HAND_PHASES[label].end) != (start, end):raise ValueError(f'hand phase {label} spans {HAND_PHASES[label].start}->{HAND_PHASES[label].end}, not {start}->{end}')
     plan, bs = _context_plan([start, end], ctx)
     if start not in plan.carry or end not in plan.carry:raise KeyError(f'phase {argument}: boundaries {start}, {end} not in the plan')
-    generated = compile_phase(plan, start, end, _build_dir(ctx), mode=ctx.get('mode') or 'thread')
+    run, impl = build_chain(plan, [Unit(kind, label, start, end)], ctx, _build_dir(ctx), mode=ctx.get('mode') or 'thread')
     full = oracle_full(ctx, plan, bs)
     ins = [e.name for e in plan.carry[start]];outs = [e.name for e in plan.carry[end]]
     def reference(s, a, t, c):
@@ -858,19 +867,18 @@ def diff_phase(argument, ctx):
         out[f'err/{label}'] = _zero_err()
         return out
     reference.project = project
-    call = jax.jit(lambda *xs: generated(*xs))
+    call = jax.jit(run)
     def cuda(s, a, t, c):   # unused: the teacher replaces the CUDA side's own call
         raise RuntimeError('phase: the CUDA side is teacher-forced')
     def teacher(want):
-        got, err = call(*[want[f'{start}/{n}'] for n in ins])
-        out = {f'{end}/{n}': x for n, x in zip(outs, got)}
-        out[f'err/{label}'] = err[:1]
+        carries, errs = call([want[f'{start}/{n}'] for n in ins])
+        out = {f'{end}/{n}': x for n, x in zip(outs, carries[end])}
+        out[f'err/{label}'] = errs[label]
         return out
     cuda.teacher = teacher
     matches, differing = _spec_check(plan)
-    info = dict(provider='phase', phase=label, start=start, end=end, implementation='generated', library=str(generated.path),
-        digest=generated.module.digest, chunks=generated.module.stats.get('chunks'), slice=plan.slice(start, end).stats,
-        aliased_outputs=len(plan.slice(start, end).aliases), spec_matches_committed=matches, spec_differing_boundaries=differing)
+    info = dict(provider='phase', phase=label, start=start, end=end, implementation=impl[0], slice=plan.slice(start, end).stats if kind == 'gen' else None,
+        spec_matches_committed=matches, spec_differing_boundaries=differing)
     reference.info = cuda.info = info
     return reference, cuda
 
@@ -885,7 +893,8 @@ def build_chain(plan, units, ctx, build_dir=None, mode='thread', committed=None)
     for u in units:
         if u.kind == 'gen':
             g = compile_phase(plan, u.start, u.end, build_dir, mode=mode)
-            steps.append((u, lambda xs, g=g: g(*xs)));impl.append(dict(unit=u.name, kind='gen', start=u.start, end=u.end, library=str(g.path), digest=g.module.digest))
+            steps.append((u, lambda xs, g=g: g(*xs)));impl.append(dict(unit=u.name, kind='gen', start=u.start, end=u.end, library=str(g.path), digest=g.module.digest,
+                chunks=g.module.stats.get('chunks'), aliased_outputs=len(g.module.aliases)))
             continue
         hp = HAND_PHASES[u.name];committed = committed if committed is not None else (load_spec() if SPEC.exists() else None)
         if committed is None:raise RuntimeError('hand phases need the committed gpu_engine/v2e_phases_spec.json')
@@ -1106,6 +1115,12 @@ def timings_markdown(report):
     out += ['', f"Live pricer engine steps: P1 {ls['p1_step_lanes']} lanes x {ls['p1_steps_per_call']} per call; block program "
         f"{ls['block_step_lanes']} lanes ({ls['block_nodes']} nodes x {ls['pairs_per_node']} pairs) x {ls['block_steps_per_call']} sequential steps per call; "
         f"a full ply is {ls['full_ply_blocks']} blocks in {ls['full_ply_calls']} calls."]
+    block = report['lanes'].get(str(ls['block_step_lanes']))
+    if block:
+        g = lambda key: (block.get(key) or block['phases'].get(key) or {}).get('ms_median')
+        fg, chain = g('FG'), g('chain')
+        out.append(f"At {ls['block_step_lanes']} lanes: generated FG {fg:.3f} ms, chain {chain:.3f} ms per step; x {ls['block_steps_per_call']} steps "
+            f"per block call: FG {ls['block_steps_per_call'] * fg:.2f} ms, chain {ls['block_steps_per_call'] * chain:.2f} ms (generated, sequential).")
     return '\n'.join(out) + '\n'
 
 
