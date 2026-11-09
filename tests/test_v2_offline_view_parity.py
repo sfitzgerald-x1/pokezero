@@ -23,6 +23,9 @@ import jax.numpy as j
 import numpy as np
 
 from scripts import v2_offline_view_parity as parity
+from _showdown_root import requires_showdown
+
+SHOWDOWN = requires_showdown('the synthetic fixture compiles its catalog from a pokemon-showdown checkout')
 
 
 # ---------------------------------------------------------------------------------------------- synthetic world fixture
@@ -250,6 +253,7 @@ class OrderRuleTests(unittest.TestCase):
         # ... but not on a first switch-in that skips a party slot (static finding): 0 -> 3 is [3, 1, 2, 0, 4, 5].
         self.assertEqual(swap_history([3]), [3, 1, 2, 0, 4, 5]);self.assertEqual(rebase_rule(3, {0: 0, 1: 3}), [3, 0, 1, 2, 4, 5])
 
+    @SHOWDOWN
     def test_live_hooks_install_uses_the_same_swap(self):
         from gpu_engine import engine_device_public_hooks as hooks
         f = fixture();state, _ = teams_state(f, [[team(f, SPECIES[:6], [1] * 6), team(f, SPECIES[1:], [1] * 6)]])
@@ -329,6 +333,7 @@ class RedactionTests(unittest.TestCase):
         self.assertEqual(hp.tolist(), [111, 2, 1, 0, 2, 99])   # round(111.37), round(1.5)=2, max(1, round(.5)=0), 0, round(2.5)=2
         self.assertEqual(status.tolist(), [4, 0, 0, 0, 0, 0])
 
+    @SHOWDOWN
     def test_tiers_take_only_the_named_fields_of_the_offline_redaction(self):
         from gpu_engine import device_public_worlds as worlds, engine_device_public_hooks as hooks
         f = fixture();state, _ = teams_state(f, [[team(f, SPECIES[:6], [1] * 6), team(f, SPECIES[1:], [1] * 6)]])
@@ -370,6 +375,7 @@ class SelectionShardTests(unittest.TestCase):
 
 # ---------------------------------------------------------------------------------------------- the true world
 
+@SHOWDOWN
 class TrueWorldTests(unittest.TestCase):
     """O = 0 sees foe members physical 0 (slot 0) and 3 (slot 1, active): materializer order [0, 3, 1, 2, 4, 5]."""
     def context(self, foe_team, *, switches=(3,)):
@@ -430,6 +436,7 @@ class TrueWorldTests(unittest.TestCase):
 
 # ---------------------------------------------------------------------------------------------- CPU end-to-end smoke
 
+@SHOWDOWN
 class EndToEndSmokeTest(unittest.TestCase):
     MAX_STEPS = 9
 
@@ -495,6 +502,7 @@ def planted(materialize):
     return wrapper
 
 
+@SHOWDOWN
 class PlantedDefectSmokeTest(unittest.TestCase):
     """The same smoke with defects planted in the world builder: each detectable class turns PRESENT."""
     def test_planted_world_defects_are_reported_in_their_classes(self):
