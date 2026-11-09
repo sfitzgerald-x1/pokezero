@@ -606,16 +606,23 @@ void launch_{c}(const Params& p, cudaStream_t stream) {{
                 where = f'{info.file_name.rsplit("/", 1)[-1]}:{info.line_num}' if info else '?'
                 self.marks.append((e.primitive.name, where, ','.join(str(tuple(v.aval.shape)) for v in e.outvars)) + self.mark_outer)
                 self.k.emit(f'if ({self.mark_cond()}) err[1 + {len(self.marks) - 1}] = (uint32_t)(clock64() - T0);')
+                self.mark_lines = getattr(self, 'mark_lines', 0) + 1   # not counted toward the chunk size (maybe_split)
             if self.profile:self.mark_outer = outer
             self.maybe_split()
         outs = [self.read(a) for a in jaxpr.outvars]
         self.env = saved
         return outs
 
+    def chunk_size(self):
+        """Lines of the current chunk toward CHUNK_LINES: profile mark lines excluded, so a profile build splits exactly where the
+        plain build does (the plain build plus mark lines, chunk for chunk)."""
+        return len(self.k.lines) - (getattr(self, 'mark_lines', 0) if self.profile else 0)
+
     def maybe_split(self):
-        if len(self.k.lines) >= self.k.CHUNK_LINES and self.k.indent == 1:
+        if self.chunk_size() >= self.k.CHUNK_LINES and self.k.indent == 1:
             self.spill_live()
             self.k.chunks.append(self.k.lines);self.k.chunk_smem.append(self.k.smem);self.k.lines = [];self.k.smem = 0
+            if self.profile:self.mark_lines = 0
 
     def equation(self, e, ins, dying):
         p = e.primitive.name;params = e.params
@@ -1709,9 +1716,10 @@ class ThreadGenerator(Generator):
         h.kind = 'reg';h.name = name;h.chunk = self.chunk_id;self.reloads += 1
 
     def maybe_split(self):
-        if len(self.k.lines) >= self.k.CHUNK_LINES and self.k.indent == 1:
+        if self.chunk_size() >= self.k.CHUNK_LINES and self.k.indent == 1:
             self.spill_live()
             self.k.chunks.append(self.k.lines);self.k.chunk_smem.append(0);self.k.lines = [];self.chunk_id += 1
+            if self.profile:self.mark_lines = 0
 
     def arena_ref(self, off, idx):
         return f'Ab[(size_t)({off} + ({idx})) * L]'

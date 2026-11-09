@@ -23,6 +23,9 @@ usage: scripts/v2e_prof_a1.sh --config FILE --reference-run DIR --shards DIR --o
                              the champion (bf16) for the pricer split
   --compilation-cache DIR    absolute JAX persistent compilation cache for the pricer split
   --memory-policy            apply the bank runtime's JAX memory policy in the pricer split
+  --live-metadata FILE --live-metadata-sha256 HEX
+                             the live server's engine metadata: the pricer split compares its compiled tables with the bank's
+  --live-tables-digest HEX   a recorded engine_tables_digest of the live executor's tables, for the same comparison
   --shard-limit N            marks: shards per lane count (default 20)
   --divergence-limit N       divergence: shards (default 100)
   --steps LIST               comma-separated subset of census,marks,walls,nsys,jax,ncu,divergence,pricer,report (default all)
@@ -31,6 +34,7 @@ EOF
 }
 
 CONFIG= REFERENCE= SHARDS= OUT= BUILD= LISTING= PYBIN=${PY:-python3} D3ROOT= CHUNK= ARCHIVE= ARCHIVE_SHA= CHECKPOINT_SHA= CACHE= MEMPOLICY=
+LIVE_META= LIVE_META_SHA= LIVE_DIGEST=
 SHARD_LIMIT=20 DIV_LIMIT=100 STEPS=census,marks,walls,nsys,jax,ncu,divergence,pricer,report DRY=0
 while (($#)); do
   case "$1" in
@@ -48,6 +52,9 @@ while (($#)); do
     --champion-checkpoint-sha256) CHECKPOINT_SHA=$2; shift 2;;
     --compilation-cache) CACHE=$2; shift 2;;
     --memory-policy) MEMPOLICY=--memory-policy; shift;;
+    --live-metadata) LIVE_META=$2; shift 2;;
+    --live-metadata-sha256) LIVE_META_SHA=$2; shift 2;;
+    --live-tables-digest) LIVE_DIGEST=$2; shift 2;;
     --shard-limit) SHARD_LIMIT=$2; shift 2;;
     --divergence-limit) DIV_LIMIT=$2; shift 2;;
     --steps) STEPS=$2; shift 2;;
@@ -60,6 +67,11 @@ for name in CONFIG REFERENCE SHARDS OUT BUILD; do
   if [[ -z ${!name} ]]; then echo "missing required argument for $name" >&2; usage >&2; exit 2; fi
 done
 
+# Paths are used after `cd "$REPO"`: make the relative ones absolute first.
+absolute() { case $1 in ''|/*) printf '%s' "$1";; *) printf '%s/%s' "$PWD" "$1";; esac; }
+OUT=$(absolute "$OUT") CONFIG=$(absolute "$CONFIG") REFERENCE=$(absolute "$REFERENCE") SHARDS=$(absolute "$SHARDS") BUILD=$(absolute "$BUILD")
+LISTING=$(absolute "$LISTING") D3ROOT=$(absolute "$D3ROOT") ARCHIVE=$(absolute "$ARCHIVE") CACHE=$(absolute "$CACHE") LIVE_META=$(absolute "$LIVE_META")
+case $PYBIN in */*) PYBIN=$(absolute "$PYBIN");; esac
 REPO=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 export PYTHONPATH="$REPO:$REPO/src${PYTHONPATH:+:$PYTHONPATH}" PYTHONUNBUFFERED=1
 export V2_SOURCE_COMMIT=${V2_SOURCE_COMMIT:-$(git -C "$REPO" rev-parse HEAD 2>/dev/null || echo unknown)}
@@ -133,7 +145,7 @@ if want ncu; then
     if [[ -n $REGEX ]]; then
       ((DRY)) || mkdir -p "$OUT/ncu"
       run ncu 3600 -- ncu --set full --target-processes all --kernel-name-base demangled --kernel-name "$REGEX" --launch-count 8 \
-        -o "$OUT/ncu/step128" "$PYBIN" "${PROFILE[@]}" ncu-driver "${RUN[@]}" --lanes 128 --hand-kernels --out "$OUT/ncu/driver"
+        -o "$OUT/ncu/step128" "$PYBIN" "${PROFILE[@]}" ncu-driver "${RUN[@]}" --lanes 128 --hand-kernels --marks "$OUT/marks" --out "$OUT/ncu/driver"
       if ok ncu; then
         run ncu-export 600 -- bash -c 'ncu --import "$1" --page details --csv > "$2" && ncu --import "$1" --page raw --csv > "$3"' _ \
           "$OUT/ncu/step128.ncu-rep" "$OUT/ncu/step128-details.csv" "$OUT/ncu/step128-raw.csv"
@@ -158,7 +170,8 @@ if want pricer; then
   if [[ -n $D3ROOT ]]; then
     run pricer 7200 JAX_DEFAULT_MATMUL_PRECISION=highest JAX_ENABLE_X64=0 -- "$PYBIN" "${PROFILE[@]}" pricer-split --d3-root "$D3ROOT" --chunk "$CHUNK" \
       --champion-archive "$ARCHIVE" --champion-archive-sha256 "$ARCHIVE_SHA" --champion-checkpoint-sha256 "$CHECKPOINT_SHA" \
-      ${CACHE:+--compilation-cache "$CACHE"} ${MEMPOLICY:+"$MEMPOLICY"} --out "$OUT/pricer-split"
+      ${CACHE:+--compilation-cache "$CACHE"} ${MEMPOLICY:+"$MEMPOLICY"} ${LIVE_META:+--live-metadata "$LIVE_META"} \
+      ${LIVE_META_SHA:+--live-metadata-sha256 "$LIVE_META_SHA"} ${LIVE_DIGEST:+--live-tables-digest "$LIVE_DIGEST"} --out "$OUT/pricer-split"
   else
     echo "pricer split skipped: no --d3-root" >&2
   fi
