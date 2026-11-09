@@ -50,7 +50,8 @@ mean per-battle sum. The per-decision mean D is sum D / decisions, and its inter
 the mean decisions per battle (the same t statistic, so the same signs). Parity, over every row searched live (source 'search'):
 the replay is COMPLETE, averaging recomputed from the captured worlds plays the live search action, and its q equals the
 replay's q_values exactly after a JSON round trip. Below 99% the verdict is PARITY_FAILED: no candidate is selected, as for
-GATE_FAILED. Also reported, never gating: every table restricted to decisions where Foul Play was requested (no 'wait').
+GATE_FAILED. --parity-mode replay (a replay on a modified tree, e.g. a fixed server): every replay-COMPLETE row is held to
+the replay's own action and q_values instead of the live action. Also reported, never gating: every table restricted to decisions where Foul Play was requested (no 'wait').
 External reply prior (--reply-prior, for a Foul Play reply model): rows {ordinal, decision_index, world, logits[9]} add
 external_br (averaging with pi_w = softmax of the external logits over the kept lanes) and external_mix alpha (0.25, 0.5,
 0.75: alpha * external + (1 - alpha) * the champion's pi_w), reported only, never candidates. A waiting world needs no
@@ -82,6 +83,7 @@ SCHEMA = 'pokezero.depthn-rr-score.v1'
 LEVEL = .90
 OVERRIDE_MIN = .05
 PARITY_MIN = .99
+PARITY_MODES = ('live', 'replay')   # live: against the live search (the default); replay: the replay against itself (a modified tree)
 PRIOR_C = (.02, .05, .1, .2, .5)
 NOISE_K = (1, 2)
 LCB_KAPPA = (.5, 1, 2)
@@ -518,15 +520,17 @@ def q_json_equal(q, replay_q):
     return all(x is None and y is None or x is not None and type(y) in (int, float) and float(x) == float(y) for x, y in zip(mine, replay_q))
 
 
-def parity_row(decision, base, reason):
-    """A live-searched row's parity: dict(match, action_equal, q_equal, cause). A replay that is not COMPLETE, a row whose
-    averaging cannot be recomputed, a recomputed action other than the live one, or a recomputed q other than the replay's
-    q_values is a mismatch."""
+def parity_row(decision, base, reason, mode='live'):
+    """A row's parity: dict(match, action_equal, q_equal, cause). mode 'live' (a live-searched row): a replay that is not
+    COMPLETE, a row whose averaging cannot be recomputed, a recomputed action other than the live one, or a recomputed q other
+    than the replay's q_values is a mismatch. mode 'replay' (a replay-COMPLETE row of a replay on a modified tree, whose
+    decisions legitimately differ from live): the recomputed action is held to the replay's own action instead of the live one."""
+    if mode not in PARITY_MODES:raise ValueError(f'parity mode in {PARITY_MODES} required')
     if decision['replay_status'] != 'COMPLETE':
         return dict(match=False, action_equal=None, q_equal=None, cause=f"replay_{decision['replay_status']}:{decision['replay_cause']}")
     if base is None:return dict(match=False, action_equal=None, q_equal=None, cause='recompute_' + reason)
-    live = decision['live_action']
-    action_equal = type(live) is int and live == hedge.top_action(base.average.strategy)
+    reference = decision['live_action'] if mode == 'live' else decision['replay_action']
+    action_equal = type(reference) is int and reference == hedge.top_action(base.average.strategy)
     q_equal = q_json_equal(base.average.q, decision['replay_q'])
     cause = None if action_equal and q_equal else 'q_differs' if action_equal else 'action_differs' if q_equal else 'action_and_q_differ'
     return dict(match=cause is None, action_equal=action_equal, q_equal=q_equal, cause=cause)
@@ -715,8 +719,12 @@ class Coverage:
         return dict(
             searched_decisions=self.rows, duplicate_rows=self.duplicates, arms=dict(self.arms), live_sources=dict(self.sources),
             replay_complete=self.replay_complete, scored=scored, excluded=dict(self.excluded),
-            parity=dict(rule=(f'every row searched live (source search): replay COMPLETE, averaging recomputed from the captured worlds '
-                              f'plays the live search action_index, and its q equals the replay q_values after a JSON round trip; >= {PARITY_MIN:.0%}'),
+            parity=dict(mode=getattr(self, 'parity_mode', 'live'), rule=(
+                (f'every row searched live (source search): replay COMPLETE, averaging recomputed from the captured worlds '
+                 f'plays the live search action_index, and its q equals the replay q_values after a JSON round trip; >= {PARITY_MIN:.0%}')
+                if getattr(self, 'parity_mode', 'live') == 'live' else
+                (f'replay mode (a modified tree): every replay-COMPLETE row; averaging recomputed from the captured worlds plays the '
+                 f"replay's own action_index and its q equals the replay q_values after a JSON round trip; >= {PARITY_MIN:.0%}")),
                         live_searched=p['rows'], matches=p['matches'], rate=share(p['matches'], p['rows']),
                         action_equal=p['action_equal'], action_rate=share(p['action_equal'], p['rows']),
                         q_equal=p['q_equal'], q_rate=share(p['q_equal'], p['rows']), mismatches_by_cause=dict(self.parity_causes),
@@ -750,7 +758,7 @@ def half_of(seed):
     return None if type(seed) is not int else 'even' if seed % 2 == 0 else 'odd'
 
 
-def process(decision, run, coverage, prior=None):
+def process(decision, run, coverage, prior=None, parity_mode='live'):
     """One row: (decisions.jsonl entry, compact record or None). `prior`: load_reply_prior's dict, or None."""
     coverage.rows += 1
     ordinal, index = decision['ordinal'], decision['decision_index']
@@ -770,7 +778,8 @@ def process(decision, run, coverage, prior=None):
     base = reason = None
     try:base = recompute(decision)
     except Unscorable as error:reason = error.reason
-    parity = parity_row(decision, base, reason) if searched else None
+    checked = searched if parity_mode == 'live' else complete   # replay mode: every replay-COMPLETE row, held to itself
+    parity = parity_row(decision, base, reason, parity_mode) if checked else None
     if parity is not None:coverage.add_parity(parity)
     address.update(parity=parity)
     if base is None:
@@ -806,17 +815,18 @@ def process(decision, run, coverage, prior=None):
     return entry, record
 
 
-def score_run(rows, run_directory, out, reply_prior=None):
+def score_run(rows, run_directory, out, reply_prior=None, parity_mode='live'):
     """Score every row into the new directory `out`; returns the summary. `reply_prior`: an external reply prior JSONL
     (load_reply_prior) adding the reported-only EXTERNAL_SETTINGS operators."""
     prior = None if reply_prior is None else load_reply_prior(reply_prior)
     settings = SETTINGS + (EXTERNAL_SETTINGS if prior is not None else ())
     out = Path(out);out.mkdir(parents=True, exist_ok=False)
-    run, coverage, records = RunDirectory(run_directory), Coverage(), []
+    if parity_mode not in PARITY_MODES:raise ValueError(f'parity mode in {PARITY_MODES} required')
+    run, coverage, records = RunDirectory(run_directory), Coverage(), [];coverage.parity_mode = parity_mode
     if prior is not None:coverage.external = collections.Counter()
     with (out / 'decisions.jsonl').open('x') as stream:
         for decision in load_rows(rows):
-            entry, record = process(decision, run, coverage, prior)
+            entry, record = process(decision, run, coverage, prior, parity_mode)
             stream.write(json.dumps(entry) + '\n')
             if record is not None:records.append(record)
     table = metrics(records, settings);cover = coverage.report(records)
@@ -919,8 +929,11 @@ def main(argv=None):
     parser.add_argument('--out', required=True, help='a new output directory')
     parser.add_argument('--reply-prior', help='optional JSONL of external reply logits per (ordinal, decision_index, world): adds the '
                                               'reported-only external_br and external_mix operators')
+    parser.add_argument('--parity-mode', choices=PARITY_MODES, default='live',
+                        help="live (default): parity against the live search; replay: the replay against itself, for a replay on a "
+                             "modified tree whose decisions legitimately differ from live")
     args = parser.parse_args(argv)
-    summary = score_run(args.rows, args.run_directory, args.out, args.reply_prior)
+    summary = score_run(args.rows, args.run_directory, args.out, args.reply_prior, args.parity_mode)
     cover = summary['coverage']
     print(json.dumps(dict(verdict=summary['verdict'], scored=cover['scored'], parity=cover['parity']['rate'],
                           gate=summary['gate']['passed'], chosen=summary['selection']['chosen'], out=str(Path(args.out).resolve()))))
