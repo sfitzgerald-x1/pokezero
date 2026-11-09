@@ -23,8 +23,12 @@ def legal(*actions):
 class FakeEnv:
     """Scripted rounds: each round is {player: (legal tuple, request)}; the battle ends with `winner` after the last round."""
 
-    def __init__(self, rounds, winner):
-        self.rounds, self.winner, self.steps = rounds, winner, []
+    def __init__(self, rounds, winner, lines=None):
+        self.rounds, self.winner, self.steps, self.lines = rounds, winner, [], lines   # lines[i]: protocol lines before round i
+
+    @property
+    def protocol_lines(self):
+        return tuple(x for chunk in (self.lines or ())[:self.i + 1] for x in chunk)
 
     def reset(self, *, seed):
         self.seed, self.i, self.steps = seed, 0, []
@@ -105,6 +109,15 @@ class ReplayTests(unittest.TestCase):
         self.assertEqual([r['turn'] for r in rows], [1, 2])
         self.assertEqual(env.steps, [{OUR_SEAT: 0, FP_SEAT: 2}, {OUR_SEAT: 1, FP_SEAT: 5}])
         self.assertEqual((parity, decided), (1, 2))   # greedy 0 matches; greedy 4 vs the fake argmax 1 doesn't
+        self.assertEqual([r['fp_opp_hazard_credit'] for r in rows], [0, 0])
+
+    def test_rows_carry_foul_plays_view_of_our_spikes_losses_at_their_decision(self):
+        env = FakeEnv(two_rounds(), OUR_SEAT, lines=[SPIKES_LINES[:2], SPIKES_LINES[2:7]])
+        rows, _, _ = d.replay(env, FakePolicy(), game(), rng=None)
+        self.assertEqual([r['fp_opp_hazard_credit'] for r in rows], [np.float32(np.float32(.12) * np.float32(1 / 6)),
+                                                                      d.fp_view_opp_hazard_credit(SPIKES_LINES[:7], OUR_SEAT)])
+        self.assertAlmostEqual(float(rows[1]['fp_opp_hazard_credit']), .23 / 6, places=7)
+        self.assertEqual([r['spikes_unknown_before'] for r in rows], [False, False])
 
     def test_request_compare_ignores_rqid_and_username_but_not_the_team(self):
         bad = game(our_requests=['|request|' + json.dumps(request('z')), '|request|' + json.dumps(request('b'))])
@@ -333,6 +346,106 @@ class PeerViewRedactionTests(unittest.TestCase):
         changed = numeric != before;changed[:, 1, 39] = changed[:, 7:13, 38] = changed[:, 7:13, 0] = False
         self.assertFalse(changed.any());self.assertEqual(before[:, 0, 39].tolist(), numeric[:, 0, 39].tolist())
         with self.assertRaises(SystemExit):t.redact_peer_view(np.zeros((2, 22, 132), np.float32))
+
+
+# Spikes hits on our seat (p1), shown drops 12, 11, 12, 100: 300/300 -> 263/300 is 100% -> 88%; 298/299 -> 261/299 is 99% (a damaged
+# mon never shows 100) -> 88%; 263/300 -> 226/300 is 88% -> 76%; a 20 HP Pichu KO'd is 100%. Their side's hit, a Rest heal and a
+# Thunderbolt KO sit between.
+SPIKES_LINES = (
+    '|switch|p1a: Golem|Golem, L83, M|300/300', '|-damage|p1a: Golem|263/300|[from] Spikes', '|turn|2',
+    '|switch|p2a: Zapdos|Zapdos, L74|250/250', '|-damage|p2a: Zapdos|219/250|[from] Spikes',
+    '|switch|p1a: Snorlax|Snorlax, L70, M|298/299', '|-damage|p1a: Snorlax|261/299|[from] Spikes',
+    '|-heal|p1a: Snorlax|299/299 slp|[from] move: Rest', '|switch|p1a: Golem|Golem, L83, M|263/300',
+    '|-damage|p1a: Golem|226/300|[from] Spikes', '|move|p2a: Zapdos|Thunderbolt|p1a: Golem', '|-damage|p1a: Golem|0 fnt',
+    '|faint|p1a: Golem', '|switch|p1a: Pichu|Pichu, L100|20/20', '|-damage|p1a: Pichu|0 fnt|[from] Spikes')
+
+
+class HazardCreditTests(unittest.TestCase):
+    def test_shown_percent_is_item_3s_public_percent(self):
+        for top in range(1, 801):
+            hp = np.arange(top + 1)
+            shown = np.array([d.shown_percent(h, top) for h in hp])
+            np.testing.assert_array_equal(shown, np.round(t.public_percent((hp / top).astype(np.float32)).astype(np.float64) * 100))
+        self.assertEqual((d.shown_percent(263, 300), d.shown_percent(299, 300), d.shown_percent(0, 300)), (88, 99, 0))
+
+    def test_spikes_hits_read_each_hit_against_the_mons_previous_exact_hp(self):
+        self.assertEqual(d.spikes_hits(SPIKES_LINES, 'p1'), [(300, 263, 300), (298, 261, 299), (263, 226, 300), (20, 0, 20)])
+        self.assertEqual(d.spikes_hits(SPIKES_LINES, 'p2'), [(250, 219, 250)])
+        self.assertIsNone(d.spikes_hits(SPIKES_LINES[1:], 'p1'))   # the first hit's previous HP is not on the lines
+        self.assertEqual(d.spikes_hits(('|request|{"side": {}}', '|turn|1'), 'p1'), [])
+
+    def test_credit_sums_public_percent_drops_with_twosum_then_divides_by_six(self):
+        # drops 12, 11, 12, 100 percent: 1.35 of a mon
+        got = d.fp_view_opp_hazard_credit(SPIKES_LINES, 'p1');self.assertEqual(got.dtype, np.float32)
+        high = low = np.float32(0)
+        for drop in (12, 11, 12, 100):high, low = d.two_sum_add(high, low, np.float32(np.float32(drop) * np.float32(1 / 100)))
+        self.assertEqual(got, np.float32(np.float32(high + low) * np.float32(1 / 6)))
+        self.assertAlmostEqual(float(got), 1.35 / 6, places=6)
+        exact = (37 / 300 + 37 / 299 + 37 / 300 + 1.) / 6   # the env's own value: our exact fractions
+        self.assertGreater(abs(float(got) - exact), 1e-4)
+        self.assertEqual(d.fp_view_opp_hazard_credit(SPIKES_LINES[1:], 'p1'), np.float32(0))
+        self.assertEqual(d.fp_view_opp_hazard_credit(SPIKES_LINES * 6, 'p1'), np.float32(1))   # clipped at 1, as the device
+
+    def test_twosum_compensates_a_long_float32_sum(self):
+        high = low = np.float32(0);naive = np.float32(0)
+        for _ in range(997):high, low = d.two_sum_add(high, low, np.float32(.01));naive = np.float32(naive + np.float32(.01))
+        self.assertEqual(np.float32(high + low), np.float32(997 * np.float64(np.float32(.01))))
+        self.assertNotEqual(naive, np.float32(high + low))
+        self.assertEqual(d.two_sum_add(np.float32(.5), np.float32(0), np.float32(0)), (np.float32(.5), np.float32(0)))
+
+    def test_peer_view_v2_zeroes_self_credit_and_writes_the_public_opp_credit(self):
+        rng = np.random.default_rng(0);numeric = rng.random((5, 23, 132)).astype(np.float32);before = numeric.copy()
+        credit = rng.random(5).astype(np.float32);v1 = t.redact_peer_view(before.copy())
+        t.redact_peer_view(numeric, 'peer-view-v2', credit)
+        self.assertTrue((numeric[:, 0, 115] == 0).all());np.testing.assert_array_equal(numeric[:, 0, 116], credit)
+        changed = numeric != v1;changed[:, 0, 115:117] = False;self.assertFalse(changed.any())
+        arrays = dict(numeric_features=before.copy(), fp_opp_hazard_credit=credit)
+        np.testing.assert_array_equal(t.apply_redaction(arrays, 'peer-view-v2')['numeric_features'], numeric)
+        self.assertIs(t.apply_redaction(dict(numeric_features=before), None)['numeric_features'], before)
+        with self.assertRaises(SystemExit):t.redact_peer_view(before.copy(), 'peer-view-v2')
+        with self.assertRaises(SystemExit):t.redact_peer_view(before.copy(), 'peer-view-v2', credit[:4])
+        with self.assertRaises(SystemExit):t.redact_peer_view(before.copy(), 'peer-view-v3')
+
+
+@unittest.skipUnless(__import__('importlib').util.find_spec('jax'), 'jax not installed')
+class HazardCreditDeviceTests(unittest.TestCase):
+    """fp_view_opp_hazard_credit against the device's own pieces: engine_device_trackers._percent, engine_device_damage_history._add
+    and engine_device_features' clip(value / 6, 0, 1) under jit, the rule the search's peer view (fill_owner_spikes) runs; and
+    against device values recorded by the 48-cell opponent-view run."""
+
+    def test_matches_the_device_rule_bit_for_bit(self):
+        import jax.numpy as jnp
+        from gpu_engine import engine_device_damage_history as history
+        from gpu_engine import engine_device_trackers as trackers
+        import jax
+        # engine_device_features' field readout as the device runs it: inside a jitted program, where XLA turns / 6. into a
+        # multiplication by the float32 reciprocal (op-by-op eager JAX divides exactly)
+        readout = jax.jit(lambda pair: jnp.clip(jnp.nan_to_num(pair.sum()) / 6., 0., 1.))
+        per_hit = jax.jit(lambda drop: jnp.asarray(drop, jnp.float32) / 100)   # engine_device_public_port.spikes' drop / 100, jitted
+        rng = np.random.default_rng(7)
+        for trial in range(600):
+            top = int(rng.integers(1, 801));hits = []
+            for _ in range(int(rng.integers(1, 40 if trial % 2 else 6))):   # half the sequences stay under the clip at 1
+                before = int(rng.integers(0, top + 1));hits.append((before, int(rng.integers(0, before + 1)), top))
+            pair = jnp.zeros(2, jnp.float32);high = low = np.float32(0)
+            for before, after, maximum in hits:
+                drop = max(0, int(trackers._percent(before, maximum)) - int(trackers._percent(after, maximum)))
+                self.assertEqual(drop, max(0, d.shown_percent(before, maximum) - d.shown_percent(after, maximum)))
+                pair = history._add(pair, per_hit(drop))
+                high, low = d.two_sum_add(high, low, np.float32(np.float32(drop) * np.float32(1 / 100)))
+            np.testing.assert_array_equal(np.asarray(pair), np.array([high, low], np.float32))
+            device = float(readout(pair))
+            lines = [x for before, after, maximum in hits for x in (f'|switch|p1a: Mon|Mon, L80|{before}/{maximum}',
+                                                                    f'|-damage|p1a: Mon|{after}/{maximum}|[from] Spikes')]
+            self.assertEqual(d.fp_view_opp_hazard_credit(lines, 'p1'), np.float32(device))
+        # device values from the 48-cell check (battles 215, 543): its / 100 and / 6. are float32 reciprocal multiplications
+        for hits, want in ((((199, 167, 263), (30, 0, 310)), 0.03666666895151138),
+                           (((199, 167, 263), (30, 0, 310), (316, 277, 316)), 0.05666666477918625),
+                           (((272, 238, 272), (296, 259, 296), (278, 244, 278), (269, 236, 269), (54, 20, 278), (266, 233, 266),
+                             (37, 3, 278), (238, 205, 266), (54, 20, 278), (237, 204, 266), (295, 258, 296)), 0.2199999988079071)):
+            lines = [x for before, after, maximum in hits for x in (f'|switch|p1a: Mon|Mon, L80|{before}/{maximum}',
+                                                                    f'|-damage|p1a: Mon|{after}/{maximum}|[from] Spikes')]
+            self.assertEqual(d.fp_view_opp_hazard_credit(lines, 'p1'), np.float32(want))
 
 
 class ReweightHelperTests(unittest.TestCase):

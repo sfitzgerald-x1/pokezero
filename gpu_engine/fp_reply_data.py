@@ -24,7 +24,10 @@ MAX_CONSECUTIVE_ENV_ERRORS in a row abort the shard.
 Reported, not a drop: encoder parity, the champion's argmax on our seat's env observation against the recorded greedy action.
 Games whose battle seed is in the screen band (2103400000 to 2103400999) are skipped: RR scores operators on those roots.
 Output per shard: shard-<I>.npz, one row per Foul Play decision (the observation arrays, legal mask, label, the champion's
-probabilities and value on Foul Play's view, round, turn, request kind, game ordinal and seed), and shard-<I>.json (counts).
+probabilities and value on Foul Play's view, round, turn, request kind, game ordinal and seed, and fp_opp_hazard_credit: the
+OPP_HAZARD_CREDIT Foul Play itself sees, fp_view_opp_hazard_credit, which peer-view-v2 writes over the env's exact value), and
+shard-<I>.json (counts; spikes_unknown_before counts rows where one of our Spikes hits had no previous HP on the lines, credit 0;
+hazard_credit_rows_differ and hazard_credit_max_abs_gap_vs_env compare fp_opp_hazard_credit with the env's own column).
 """
 import argparse
 import collections
@@ -121,6 +124,87 @@ def hp_fraction(request):
     return float('nan')
 
 
+# Foul Play's view of our Spikes losses (peer-view-v2's OPP_HAZARD_CREDIT) ------------------------------------------------------------
+# The env's OPP_HAZARD_CREDIT in Foul Play's view sums our exact HP fractions lost to Spikes (showdown.py's hazard_damage_suffered,
+# read off the omniscient stream). Foul Play sees our HP only as Showdown's public percent, and the search's peer view (the
+# constructor's fill_owner_spikes, the device's engine_device_public_port.spikes) sums each hit's public-percent drop / 100 in float32
+# with a compensated (TwoSum) sum. fp_view_opp_hazard_credit is that rule on the env's own lines, written as the feature value.
+SWITCH_KINDS = ('switch', 'drag', 'replace')
+HAZARD_CREDIT_DIVISOR = 6.   # engine_device_features.FIELD_FIELDS['opp_hazard_credit'] and showdown's / _TEAM_SIZE
+OPP_HAZARD_CREDIT_COLUMN = 116   # field token 0's numeric column: showdown.v4_numeric_index(NUMERIC_OPP_HAZARD_CREDIT)
+
+
+def shown_percent(hp, maximum):
+    """Showdown's public HP percent (sim/pokemon.ts getHealth with HP percentages): ceil(100 hp / max), 99 for a damaged mon that
+    would show 100, 0 when fainted; integer arithmetic, as engine_device_trackers._percent."""
+    top = max(int(maximum), 1);hp = min(max(int(hp), 0), top)
+    shown = (100 * hp + top - 1) // top
+    return 99 if hp < top and shown == 100 else shown
+
+
+def _condition(text):
+    """(hp, max HP or None) of a protocol condition ('263/300', '263/300 par', '0 fnt'); None when unreadable."""
+    head = (str(text).split() or [''])[0]
+    if head == '0':return 0, None
+    hp, sep, top = head.partition('/')
+    try:return (int(hp), int(top)) if sep else None
+    except ValueError:return None
+
+
+def spikes_hits(lines, seat):
+    """seat's ('p1' / 'p2') Spikes hits in protocol order, each (hp before, hp after, max HP), from exact-HP lines (the env's
+    omniscient stream, or the seat's own); the previous HP is the mon's last |switch| / |drag| / |replace| / |-damage| / |-heal| /
+    |-sethp| condition. None when a hit's previous HP or max HP is not on the lines (the search side then leaves the credit 0)."""
+    hp = {};hits = []
+    for line in lines:
+        parts = str(line).split('|')
+        if len(parts) < 4 or parts[0] != '':continue
+        kind = parts[1];side, _, name = parts[2].partition(':')
+        if side.strip()[:2] != seat:continue
+        name = name.strip()
+        if kind in SWITCH_KINDS:
+            if len(parts) > 4:
+                condition = _condition(parts[4])
+                if condition is None:hp.pop(name, None)
+                else:hp[name] = condition
+        elif kind in ('-damage', '-heal', '-sethp'):
+            condition = _condition(parts[3])
+            if condition is None:hp.pop(name, None);continue
+            new, maximum = condition;before = hp.get(name)
+            if maximum is None:maximum = before[1] if before else None
+            if kind == '-damage' and any(x.strip().lower() == '[from] spikes' for x in parts[4:]):
+                if before is None or maximum is None:return None
+                hits.append((before[0], new, maximum))
+            hp[name] = (new, maximum)
+    return hits
+
+
+def two_sum_add(high, low, value):
+    """engine_device_damage_history._add on one float32 (high, low) pair: TwoSum, each operation rounded to float32; value <= 0 is a
+    no-op."""
+    f = np.float32;high, low, value = f(high), f(low), f(value)
+    if not value > 0:return high, low
+    total = f(high + value);recovered = f(total - high)
+    error = f(f(high - f(total - recovered)) + f(value - recovered))
+    correction = f(low + error);new_high = f(total + correction)
+    return new_high, f(correction - f(new_high - total))
+
+
+def fp_view_opp_hazard_credit(lines, victim):
+    """Foul Play's OPP_HAZARD_CREDIT feature value (v4 field token 0, numeric column 116) for victim = our seat ('p1' / 'p2'):
+    clip((high + low) * float32(1/6), 0, 1) in float32 of the TwoSum over our Spikes hits of
+    (shown_percent(before) - shown_percent(after)) * float32(1/100); 0 when a hit's previous HP is unknown, as the search side
+    leaves it. Both divisions are the float32 reciprocal multiplications XLA compiles the device's `/ 100` and `/ 6.` into
+    (10 * float32(0.01) rounds to 0.099999994, not 0.1): a correctly rounded division is one ulp off on 21 of the 48-cell
+    check's 1,622 rows."""
+    hits = spikes_hits(lines, victim);high = low = np.float32(0)
+    for before, after, maximum in hits or ():
+        drop = max(0, shown_percent(before, maximum) - shown_percent(after, maximum))
+        high, low = two_sum_add(high, low, np.float32(np.float32(drop) * np.float32(1. / 100)))
+    value = np.float32(np.float32(high + low) * np.float32(1. / HAZARD_CREDIT_DIVISOR))
+    return np.float32(min(max(value, np.float32(0)), np.float32(1)))
+
+
 def action_classes(request, legal, dex):
     """Per action index: DAMAGING or STATUS for the active's moves (by dex category), SWITCH for switches, ILLEGAL otherwise."""
     moves = [m.get('id') for m in ((request.get('active') or [{}])[0].get('moves') or ())]
@@ -168,8 +252,11 @@ def replay(env, policy, game, rng, extras=None):
                 if decoded != action:
                     raise Mismatch(f'Foul Play choice {entry.get("choice")!r} decodes to {decoded}, not its action {action}, round {round_}')
                 request = env._latest_requests.get(player) or {}
+                lines = env.protocol_lines
                 fp_row = dict(observation=observation, label=action, probs=probs, value=decision.value_estimate,
-                              round=round_, turn=int(env._latest_turn), forced=bool(request.get('forceSwitch')), choice=entry.get('choice'))
+                              round=round_, turn=int(env._latest_turn), forced=bool(request.get('forceSwitch')), choice=entry.get('choice'),
+                              fp_opp_hazard_credit=fp_view_opp_hazard_credit(lines, game['ours']),
+                              spikes_unknown_before=spikes_hits(lines, game['ours']) is None)
                 if extras is not None:
                     classes = action_classes(request, observation.legal_action_mask, extras['dex'])
                     fp_row.update(candidate_class=classes, label_class=classes[action], own_hp=hp_fraction(request),
@@ -218,7 +305,7 @@ def build(args):
     env = None;config_key = None;rng = random.Random(0)
     counts = collections.Counter();mismatches = collections.Counter();examples = {}
     columns = collections.defaultdict(list);parity_hits = 0;parity_total = 0;started = time.time()
-    seats = collections.Counter();consecutive_errors = 0
+    seats = collections.Counter();consecutive_errors = 0;hazard_gap = 0.
     for path in paths:
         game, skip = load_game(collection, path)
         if game is None:counts[f'skipped_{skip}'] += 1;continue
@@ -255,6 +342,10 @@ def build(args):
             columns['probs'].append(np.asarray(row['probs'], np.float32))
             columns['value'].append(np.float32(row['value'] if row['value'] is not None else np.nan))
             for key_ in ('label', 'round', 'turn', 'forced'):columns[key_].append(row[key_])
+            columns['fp_opp_hazard_credit'].append(np.float32(row['fp_opp_hazard_credit']))
+            counts['spikes_unknown_before'] += row['spikes_unknown_before']
+            gap = abs(float(row['fp_opp_hazard_credit']) - float(columns['numeric_features'][-1][0, OPP_HAZARD_CREDIT_COLUMN]))
+            counts['hazard_credit_rows_differ'] += gap > 0;hazard_gap = max(hazard_gap, gap)
             if extras is not None:
                 columns['candidate_class'].append(np.asarray(row['candidate_class'], np.int8));columns['label_class'].append(row['label_class'])
                 columns['own_hp'].append(np.float32(row['own_hp']));columns['opp_hp'].append(np.float32(row['opp_hp']))
@@ -273,6 +364,7 @@ def build(args):
                    shard=args.shard, shards=args.shards, results_seen=len(paths), **counts, mismatched=sum(mismatches.values()),
                    mismatch_reasons=dict(mismatches), mismatch_examples=examples, foul_play_seat_games=dict(seats),
                    encoder_parity=dict(hits=parity_hits, decisions=parity_total, share=parity_hits / parity_total if parity_total else None),
+                   hazard_credit_max_abs_gap_vs_env=hazard_gap,
                    shapes={k: list(v.shape) for k, v in arrays.items()}, seconds=round(time.time() - started, 1))
     (out / f'shard-{args.shard}.json').write_text(json.dumps(summary, indent=1) + '\n')
     print(json.dumps(dict(event='SHARD_DONE', **{k: summary[k] for k in ('shard', 'games', 'decisions', 'mismatched', 'seconds')
