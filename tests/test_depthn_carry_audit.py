@@ -420,6 +420,25 @@ class CaptureHookTests(unittest.TestCase):
             self.assertEqual(printed['watch'], ['destinybond', 'hyperbeam', 'perishsong', 'transform', 'trick', 'wrap', 'yawn'])
             self.assertFalse((Path(tmp) / 'cap').exists())
 
+    def test_the_describe_wrapper_passes_the_re_pricers_arguments_through(self):
+        """The re-pricer's describe signature since 5a035eb7: describe(capture, peer_lanes, vocabulary, peer_inputs, (ordinal,
+        decision_index)), positionally or by keyword; the wrapper hands every argument through and the recorder sees the detail."""
+        from scripts import depthn_rr_reprice as rr
+        calls, seen = [], []
+
+        def describe(capture, peer_lanes, vocabulary, peer_inputs=None, key=None):
+            calls.append((capture, peer_lanes, vocabulary, peer_inputs, key));return dict(detail=len(calls))
+        recorder = SimpleNamespace(current=None, described=lambda capture, detail, vocabulary: seen.append((capture, detail, vocabulary)))
+        with patch.object(rr, 'describe', describe):
+            with A.turn2_hooks(recorder):
+                self.assertIsNot(rr.describe, describe)
+                first = rr.describe('c', 'p', 'v', 'inputs', (1001, 3));second = rr.describe('c', 'p', 'v', peer_inputs='i', key=(1001, 4))
+                third = rr.describe('c', 'p', 'v')   # the older three-argument call still works
+            self.assertIs(rr.describe, describe)
+        self.assertEqual(calls, [('c', 'p', 'v', 'inputs', (1001, 3)), ('c', 'p', 'v', 'i', (1001, 4)), ('c', 'p', 'v', None, None)])
+        self.assertEqual((first, second, third), (dict(detail=1), dict(detail=2), dict(detail=3)))
+        self.assertEqual(seen, [('c', dict(detail=1), 'v'), ('c', dict(detail=2), 'v'), ('c', dict(detail=3), 'v')])
+
     def test_capture_main_writes_turn2_records(self):
         """The re-pricer's own main (its test harness: fake search, fake pricing) under turn2_hooks, cw.price returning a frame."""
         from tests import test_depthn_rr_reprice as RT

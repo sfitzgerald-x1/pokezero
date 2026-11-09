@@ -858,8 +858,9 @@ def turn2_hooks(recorder):
     check_reprice_hooks();check_turn2_call_sites()
     capture, describe, decision_row = rr.Capture, rr.describe, rr.decision_row
 
-    def describe_wrapper(capture_object, peer_lanes, vocabulary):
-        detail = describe(capture_object, peer_lanes, vocabulary)
+    def describe_wrapper(capture_object, peer_lanes, vocabulary, *arguments, **keywords):
+        # Every further argument passes through unchanged: the re-pricer's describe also takes (peer_inputs, (ordinal, decision_index)).
+        detail = describe(capture_object, peer_lanes, vocabulary, *arguments, **keywords)
         recorder.described(capture_object, detail, vocabulary)
         return detail
 
