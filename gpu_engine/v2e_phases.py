@@ -14,7 +14,8 @@ top-level statement boundaries b0..b8 of BOUNDARIES. Everything here works from 
 - Liveness and slicer. jax.make_jaxpr of the tapped step at v2e_j2c.LANES under v2e_modules.trace_substitutions (the
   generator's trace). Each tapped var is lane-dependent (its cone reaches a step input) or constant-derived. A
   boundary's carry C_k is the lane-dependent tapped vars the later phases read, aliases (one var under several names)
-  deduplicated by var identity, preferring state > actions > trackers > chance > other locals. Phase k's jaxpr is a
+  deduplicated by var identity, preferring state > actions > trackers > chance > other locals (plain names before
+  _-prefixed ones, then f_locals order). Phase k's jaxpr is a
   backward DCE from C_{k+1}'s vars that stops at C_k's vars (JAX's per-primitive DCE rules prune call bodies); reaching a
   step input outside C_k raises IncompleteCarry. Constant-derived values are never carried: their equations are
   recomputed inside the phase, so the generator's constant-folding decisions (the f32 division rewrite) stay those of
@@ -411,7 +412,7 @@ class Plan:
         self.dep = lane_dependence(jx)
         self.tapped = {};self.candidates = {};self.constant = {}
         for b in self.order[:-1]:
-            rows = taps[b];ranked = sorted(range(len(rows)), key=lambda i: (SOURCES.index(rows[i][1]), i))
+            rows = taps[b];ranked = sorted(range(len(rows)), key=lambda i: (SOURCES.index(rows[i][1]), rows[i][0].startswith('_'), i))
             seen = {};cands = [];constant = 0
             for i in ranked:
                 name, source, path, index = rows[i];atom = outvars[index]
