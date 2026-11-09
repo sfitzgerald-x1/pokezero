@@ -224,3 +224,19 @@ class ListingTest(unittest.TestCase):
         self.assertIn(('engine_device_public_hooks', 'observe'), listed);self.assertIn(('pursuit', 'intercept'), listed)
         self.assertIn(('engine_device_trackers', '_gated'), listed, 'functions passed as callbacks are reached')
         self.assertLess(len(step.lines), 800);self.assertGreater(len(step.lines) - len(step.static_headers), 550)
+
+
+class CommandTest(unittest.TestCase):
+    """The one-command regeneration M0a runs once its spec exists, exercised with the mini spec:
+    python -m gpu_engine.v2e_layout generate --spec gpu_engine/v2e_phases_spec.json (defaults: the committed description and header path)."""
+    def test_generate_and_check_with_a_spec(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp) / 'v2e_layout.cuh'
+            self.assertEqual(L.main(['generate', '--spec', str(MINI_SPEC), '--out', str(out)]), 0)
+            text = out.read_text()
+            self.assertEqual(text, L.generate(description(), L.load_spec(MINI_SPEC)))
+            for name in ('C_b0', 'C_b1', 'C_b2'):self.assertIn(f'struct {name} {{', text)
+            self.assertIn('// phases: A b0->b1, BC b1->b2', text)
+            self.assertEqual(L.main(['check', '--spec', str(MINI_SPEC), '--header', str(out)]), 0)
+            self.assertEqual(L.main(['check', '--spec', str(Path(tmp) / 'absent.json'), '--header', str(out)]), 1, 'a header with carries is stale without the spec')
+            self.assertEqual(L.main(['check', '--header', str(L.HEADER), '--spec', str(MINI_SPEC)]), 1, 'the committed header has no carries yet')
