@@ -38,8 +38,10 @@ MECHANICS = ('mechanics', 'action_history', 'items', 'weather', 'absorption', 'e
 MODULES = dict(taps.TAP_MODULES, **{m: f'gpu_engine.{m}' for m in MECHANICS})
 SCAN = tuple(dict.fromkeys(taps.SCAN_MODULES + tuple(MODULES.values())))
 MASK_PARAMS = ('use', 'eligible', 'acts', 'ordinary', 'active', 'rows_active', 'applied', 'changes', 'proc')
-# `move` hook sites whose declared move's table flags are counted (transition lines; see v2e_hook_taps sites).
-MOVE_SITES = {'transition:807': 'caller', 'transition:838': 'child', 'transition:561': 'pursuit', 'transition:534': 'focus_punch'}
+# `move` hook sites whose declared move's table flags are counted (transition lines; see v2e_hook_taps sites): the caller
+# move and the Sleep Talk child. The Pursuit (561) and Focus Punch preparation (534) sites declare one fixed move each and
+# are covered by their own hook paths.
+MOVE_SITES = {'transition:807': 'caller', 'transition:838': 'child'}
 RARE = 1000
 
 
