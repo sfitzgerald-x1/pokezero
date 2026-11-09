@@ -60,7 +60,8 @@ class RequestTests(unittest.TestCase):
     """request() with a fake dex and generator tables."""
     def tables(self):
         info = NS(base_stats=dict(hp=60, atk=60, **{'def': 60}, spa=60, spd=60, spe=60))
-        moves = {'thunderbolt': ('Special', 24), 'icepunch': ('Physical', 24), 'hypnosis': ('Status', 32), 'explosion': ('Physical', 8)}
+        moves = {'thunderbolt': ('Special', 24), 'icepunch': ('Physical', 24), 'hypnosis': ('Status', 32), 'explosion': ('Physical', 8),
+                 'hiddenpower': ('Special', 24)}
         dex = NS(species_info=lambda s: info, move_info=lambda m: NS(name=m.title(), gen3_category=moves[m][0], max_pp=moves[m][1], target='normal') if m in moves else None)
         from gpu_engine import fp_reply_reweight as rw
         return NS(rw=rw, dex=dex, gen=dict(fixed_damage=frozenset(), hp_ivs={}))
@@ -84,6 +85,12 @@ class RequestTests(unittest.TestCase):
         self.assertTrue(entries['hypnosis']['disabled']);self.assertFalse(entries['thunderbolt']['disabled'])
         locked = gv.request(t, self.team(item='choiceband'), lines, 'p1', 'move')
         self.assertEqual([e['disabled'] for e in locked['active'][0]['moves']], [True, False, True, True])   # locked into Ice Punch
+        self.assertEqual((gv.choice(req, 'move icepunch'), gv.choice(req, 'move hiddenpower')), ('move 2', None))
+        hp = self.team();hp[0]['moves'][3] = 'hiddenpowerfire';hp_req = gv.request(t, hp, lines, 'p1', 'move')
+        self.assertEqual(hp_req['active'][0]['moves'][3]['id'], 'hiddenpower');self.assertEqual(gv.choice(hp_req, 'move hiddenpower'), 'move 4')
+        self.assertEqual((gv.choice(req, 'switch starmie'), gv.choice(req, 'switch gengar')), ('switch 3', None))   # the active never
+        struggle = gv.request(t, self.team(), lines, 'p1', 'move', struggle=True)
+        self.assertEqual([e['id'] for e in struggle['active'][0]['moves']], ['struggle']);self.assertEqual(gv.choice(struggle, 'move struggle'), 'move 1')
         forced = gv.request(t, self.team(), lines, 'p1', 'switch')
         self.assertEqual((forced['forceSwitch'], 'active' in forced), ([True], False))
 

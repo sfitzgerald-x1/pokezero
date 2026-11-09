@@ -214,7 +214,29 @@ def request_move_id(rw, m):
     return m + '70' if m.startswith('hiddenpower') and m != 'hiddenpower' else rw.request_move_id(m)
 
 
-def request(tables, team, lines, seat, kind):
+STRUGGLE = {'move': 'Struggle', 'id': 'struggle', 'pp': 1, 'maxpp': 1, 'target': 'randomNormal', 'disabled': False}
+
+
+def choice(req, label):
+    """The /choose body for `label` on `req`, by position (decoding names fails on a typed Hidden Power id and Unown's forms):
+    'move N' (N the 1-based slot in the active request; any Hidden Power matches the typed one) or 'switch N' (the party
+    position of that species); None when it is not there."""
+    kind, _, name = label.partition(' ')
+    if kind == 'move':
+        entries = (req.get('active') or [{}])[0].get('moves') or []
+        for j, e in enumerate(entries):
+            ident = gv_toid(e.get('id'))
+            if ident == name or name == 'hiddenpower' and ident.startswith('hiddenpower'):return f'move {j + 1}'
+        return None
+    for j, mon in enumerate(req['side']['pokemon']):
+        if species_id(mon['details']) == name and not mon.get('active'):return f'switch {j + 1}'
+    return None
+
+
+def gv_toid(x):return re.sub(r'\d+$', '', toid(x))
+
+
+def request(tables, team, lines, seat, kind, struggle=False):
     """Showdown's request for `seat` at the end of the public prefix `lines` (module docstring), and the imputed flags."""
     rw = tables.rw;order = list(range(len(team)));by_nick = {m['nick']: i for i, m in enumerate(team)}
     hp = {i: (100., '') for i in order};exact = {};used = collections.Counter();active = None;since = None
@@ -268,7 +290,7 @@ def request(tables, team, lines, seat, kind):
         disabled = (choice and x != since[0]) or x == volatile['disable'] or (volatile['encore'] is not None and x != volatile['encore']) \
             or (volatile['taunt'] and (tables.dex.move_info(x) is not None and tables.dex.move_info(x).gen3_category == 'Status'))
         e = rw.fresh_move_entry(tables.dex, x, disabled);e['pp'] = max(0, e['maxpp'] - used[(active, x)]);entries.append(e)
-    out['active'] = [{'moves': entries}]
+    out['active'] = [{'moves': [dict(STRUGGLE)] if struggle else entries}]   # Showdown offers Struggle alone when no move is usable
     return out
 
 
@@ -279,6 +301,7 @@ def replay_rows(tables, model, row_index, row, vintage, imputations, counts):
     from pokezero.policy_opponent_view import PolicyOpponentViewError, build_policy_opponent_view
     from pokezero.teacher_capture import action_index_from_choice_string
     lines = [l for l in str(row['log']).split('\n') if l.startswith('|')];all_facts, lead = facts(lines);points = decisions(lines)
+    for seat in ('p1', 'p2'):seat_lines(lines, seat, counts)   # count the private lines each seat's view drops
     rows = []
     for imp in range(imputations):
         for seat in ('p1', 'p2'):
@@ -289,13 +312,14 @@ def replay_rows(tables, model, row_index, row, vintage, imputations, counts):
                 if s != seat:continue
                 obs = None
                 try:
-                    public = seat_lines(lines[:end], seat, counts if end == len(lines) else None)   # what the seat received
-                    req = request(tables, team, public, seat, kind)
+                    public = seat_lines(lines[:end], seat)   # what the seat received
+                    req = request(tables, team, public, seat, kind, struggle=label == 'move struggle')
                     view = build_policy_opponent_view(public_lines=public, hp_visibility={'p1': 'exact', 'p2': 'exact'},
                         sampled_self_request=req, opponent_slot=seat, battle_id=str(row['id']), battle_seed=0, format_id=FORMAT,
                         set_source=tables.source, spec=model['spec'], feature_masks=model['masks'])
                     obs = view.observation(category_vocab=model['vocab'], dex=tables.dex)
-                    action = action_index_from_choice_string(view.state, label) if censor == 'none' and label else None
+                    body = choice(req, label) if censor == 'none' and label else None
+                    action = action_index_from_choice_string(view.state, body) if body else None
                     if censor == 'none' and action is None:censor = 'label_undecodable'
                 except (PolicyOpponentViewError, ValueError, KeyError, IndexError, TypeError) as error:
                     counts['view_error:' + type(error).__name__] += 1;counts.setdefault('view_error_example', f'{type(error).__name__}: {str(error)[:200]}')
