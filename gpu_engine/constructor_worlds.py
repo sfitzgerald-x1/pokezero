@@ -14,7 +14,8 @@ dict keys and leaves two members None). This module turns prepared roots into De
 - Carry completion (complete_world / complete_public; build applies it again, a no-op on a completed world).
   phase_d_live_worlds.from_b2 builds the root's tracker carry from B2's public fold, not through the device public hooks,
   and leaves these where the device path (engine_device_public_hooks.initialize, then a hook per engine step) would hold
-  other values on the same history (the last two read the request's own protocol lines: line_facts, kept on Prepared):
+  other values on the same history (the peer order, the Spikes credit, Baton Pass arrivals and the peer's PP count read the
+  request's own protocol lines: line_facts, kept on Prepared; the PP count also the root's own carry):
   - shown_types (fill_shown_types): from_b2 writes zeros, so the encoder's TYPE_1/TYPE_2 of every revealed Pokemon of
     the side other than the observer read 0 (<pad>), at the root and at every node and leaf. The hook rule
     (engine_device_public_hooks.install: species_types[clip(species)] where 0 < species < len(species_types), else 0) is
@@ -60,8 +61,24 @@ dict keys and leaves two members None). This module turns prepared roots into De
     shows 11%), but the owner's own lines carry each hit exactly (a Spikes -damage line after the owner's exact HP on its
     switch-in line), so it is rebuilt hit by hit with the device's own compensated sum. Left 0 when a hit's previous HP
     is not on the lines.
-  The peer's own ability and item belief columns need nothing here: the encoder writes the observer's own Pokemon's from
-  the world's engine state (engine_device_observation.encode: base_ability and item as belief:possible_ability / item
+  - Baton Pass arrivals (fill_baton): from_b2 writes last_moves -1 for an active whose last public action was a switch
+    (phase_d_live_worlds.py:320); the device writes -2 after a Baton Pass arrival (engine_device_public_hooks.baton_copy,
+    :569) and B2 encodes the Baton Pass sentinel (mons.arrived_by_baton). The carry does not keep B2's flag, but the lines
+    carry the same fact by the env's and B2's host rule (line_facts' baton), so -1 becomes -2 for that active, both sides.
+  - the peer's count of the owner's PP (fill_peer_pressure): from_b2 copies B2's uses, which charge an owner move twice only
+    against a PUBLIC Pressure (public_abilities.move_context); Gen 3 Pressure is silent, and the peer knows its own
+    ability, so the device move hook (the receiving observer's own active ability) and the env charge twice whenever the
+    peer's active has Pressure. Recounted from the root's own pp_used (B2's) plus one per owner foe-targeted declaration
+    against a live, silently Pressured peer active of this world (its base ability); the same on every pass. The owner's
+    count of the peer's PP stays B2's (the owner view's reference): from_b2's copy at the root; the device hook counts the
+    owner's own Pressure in search.
+  - a peer tracer's base ability (fix_peer_base_ability, on the world STATE): the materialized spec writes a Trace holder's
+    public copied ability into both ability and base_ability (engine_world._resolved_ability), so the peer's own ability
+    column (the encoder reads base_ability) showed the copy; base_ability becomes the public original (Trace), as the env
+    and the Gen 3 request's baseAbility show it, the running ability unchanged. The owner side is from_b2's request
+    baseAbility already.
+  The peer's own ability and item belief columns otherwise need nothing: the encoder writes the observer's own Pokemon's
+  from the world's engine state (engine_device_observation.encode: base_ability and item as belief:possible_ability / item
   categories, in own_order), as the env writes a player's own (showdown._encode_pokemon_tokens' self rule: the request's
   baseAbility and item, Gen 3 requests carrying no other ability); they follow the request order once own_order does.
   The completion is pure host numpy on the world's own leaves (no other leaf changes) and raises CarryLayoutError (a
@@ -69,13 +86,9 @@ dict keys and leaves two members None). This module turns prepared roots into De
   written against.
   Deliberately not completed (the carry and B2's public context do not determine the device's value; owner = the root's
   owner, peer = the other seat, whose view is the reply prior):
-  - Baton Pass arrival: from_b2 writes last_moves -1 for an active whose last public action was a switch
-    (phase_d_live_worlds.py:320); the device writes -2 after a Baton Pass arrival (engine_device_public_hooks.baton_copy,
-    :569), so that active's LAST_USED_MOVE category is the plain switch's in both views until it moves. B2's own
-    mons.arrived_by_baton has the fact (B2's literal-root encoding shows it) but the carry does not keep it; the fix is
-    one line in from_b2.
   - Peer-view hazard credit: completed from the lines (above) when every owner Spikes hit's previous HP is on them; left
-    0 otherwise.
+    0 otherwise. Its precision against the env (the env sums the owner's exact HP, the device per-hit public percents, at
+    most 0.007) is a documented redaction of the opponent-view parity, not a difference this layer can close.
   - Peer-view last damage: the peer's exact own losses (own.LAST_DAMAGE_TAKEN, foe.LAST_DAMAGE_DEALT,
     field.SELF_HAZARD_CREDIT: damage_exact_*, hazards[foe, exact]) are redacted to zero by design
     (device_public_teacher.REPLY_HISTORY_APPROXIMATION, device_public_worlds._redact_peer_private); and from_b2's
@@ -222,9 +235,14 @@ class CarryTables:
     vocabulary normalized (metadata['vocabulary']['species'] through normalize_id), to join protocol switch-ins."""
     species_types:object
     species_names:tuple=()
+    move_names:tuple=()         # metadata['vocabulary']['moves'] normalized
+    foe_targeted:tuple=()       # per engine move id: Pressure doubles its PP (the hooks' belief_tables.public_foe_targeted)
+    pressure:tuple=()           # per engine ability id: the ability is Pressure (the hooks' belief_tables.public_pressure)
 
 
-def _table(species_types,species_count=None,type_count=None,species_names=()):
+def _table(species_types,species_count=None,type_count=None,species_names=(),move_names=(),foe_targeted=(),pressure=()):
+    move_names=tuple(map(normalize_id,move_names));foe_targeted=tuple(map(bool,foe_targeted));pressure=tuple(map(bool,pressure))
+    if len(move_names)!=len(foe_targeted):raise CarryLayoutError(f'foe_targeted: {len(foe_targeted)} flags for {len(move_names)} engine moves')
     species_names=tuple(map(normalize_id,species_names))
     if species_names and len(species_names)!=np.shape(species_types)[0]:
         raise CarryLayoutError(f'species_names: {len(species_names)} names for {np.shape(species_types)[0]} engine species')
@@ -235,7 +253,7 @@ def _table(species_types,species_count=None,type_count=None,species_names=()):
         raise CarryLayoutError(f'species_types: {st.shape[0]} rows for {species_count} engine species')
     if np.any(st<0)or type_count is not None and np.any(st>=type_count):raise CarryLayoutError('species_types: a type id outside the engine namespace')
     st=st.copy();st.setflags(write=False)
-    return CarryTables(st,species_names)
+    return CarryTables(st,species_names,move_names,foe_targeted,pressure)
 
 
 def carry_tables(metadata,catalog):
@@ -247,7 +265,8 @@ def carry_tables(metadata,catalog):
     except RuntimeError:context=nullcontext()   # no CPU backend in this process: the default device
     with context:belief=engine_device_belief.compile_tables(metadata,catalog)
     v=metadata['vocabulary']
-    return _table(jax.device_get(belief.species_types),len(v['species']),len(v['types']),v['species'])
+    return _table(jax.device_get(belief.species_types),len(v['species']),len(v['types']),v['species'],v['moves'],
+        np.asarray(jax.device_get(belief.public_foe_targeted)),np.asarray(jax.device_get(belief.public_pressure)))
 
 
 _CARRY_TABLES={}
@@ -267,7 +286,7 @@ def world_completer(constructor):
     """The completion prepare_roots and build apply to each world of this constructor: (world, owner, facts=None) -> world,
     facts the root's LineFacts (None: the fills only, no peer order or owner Spikes credit)."""
     tables=constructor_carry_tables(constructor)
-    return lambda world,owner,facts=None:complete_world(world,tables,owner,facts=facts)
+    return lambda world,owner,facts=None,root=None:complete_world(world,tables,owner,facts=facts,root=root)
 
 
 def _host(x):return np.asarray(jax.device_get(x))
@@ -355,9 +374,16 @@ class LineFacts:
     """What the completion reads from the owner's protocol prefix (public lines only; line_facts):
     peer_switches: the peer side's switch-ins in protocol order, each the normalized species of a |switch| / |drag| /
     |replace| line's details; owner_spikes: the owner side's Spikes hits in order, (hp before, hp after, max HP) from the
-    owner's own exact HP lines, or None when one hit's previous HP is not on the lines (its shown credit is then left 0)."""
+    owner's own exact HP lines, or None when one hit's previous HP is not on the lines (its shown credit is then left 0);
+    baton: per side (p1, p2), whether its current active arrived by Baton Pass (the env's and B2's host rule: a |switch|
+    after that side's |move| Baton Pass with no other move of the side between, or a switch line naming Baton Pass);
+    owner_moves: the owner's PP-charged move declarations in order (a |move| line of the owner without a [from] tag, not
+    Struggle, the actor not transformed), each (actor species, move, the peer's active species, whether that active was
+    alive, whether its Pressure was public: revealed by an -ability line, a Trace copy until it next arrives)."""
     peer_switches:tuple
     owner_spikes:tuple|None
+    baton:tuple=(False,False)
+    owner_moves:tuple=()
 
 
 def _seat_name(field):
@@ -377,10 +403,29 @@ def line_facts(lines,owner):
     """LineFacts of the owner's protocol prefix `lines` (the request's own lines) for owner seat `owner` (0 or 1)."""
     if owner not in(0,1):raise ValueError(f'owner 0 or 1 required, got {owner!r}')
     own,peer=f'p{owner+1}',f'p{2-owner}';switches=[];spikes=[];hp={};complete=True
+    species={};active={'p1':'','p2':''};alive={'p1':False,'p2':False};pending=set();baton={'p1':False,'p2':False}
+    transformed=set();original_pressure=set();running_pressure=set();moves=[]
     for line in lines:
         parts=str(line).split('|')
-        if len(parts)<4 or parts[0]!='':continue
-        kind=parts[1];seat,name=_seat_name(parts[2])
+        if len(parts)<3 or parts[0]!='':continue
+        kind=parts[1];seat,name=_seat_name(parts[2]);tags=[x.strip().lower()for x in parts[4:]]
+        if kind=='faint'and seat in alive:alive[seat]=False   # |faint|IDENT: three fields
+        if len(parts)<4:continue
+        if kind=='move'and seat in active:
+            move=normalize_id(parts[3])
+            if move=='batonpass':pending.add(seat)
+            else:pending.discard(seat)
+            if (seat==own and not any(t.startswith('[from]')for t in tags)and move!='struggle'and seat not in transformed
+                    and active[own]):
+                foe=active[peer];moves.append((active[own],move,foe,alive[peer],foe in original_pressure or foe in running_pressure))
+        elif kind=='-transform'and seat in active:transformed.add(seat)
+        elif kind=='-ability'and seat==peer and normalize_id(parts[3])=='pressure':
+            target=species.get((seat,name),'')
+            (running_pressure if any(t.startswith('[from] ability: trace')for t in tags)else original_pressure).add(target)
+        if kind in SWITCH_KINDS and seat in active:
+            arrived=normalize_id(parts[3].split(',')[0]);species[(seat,name)]=arrived;active[seat]=arrived;alive[seat]=True
+            transformed.discard(seat);running_pressure.discard(arrived)
+            baton[seat]=kind=='switch'and(seat in pending or any('baton pass'in t for t in tags));pending.discard(seat)
         if kind in SWITCH_KINDS:
             if seat==peer:switches.append(normalize_id(parts[3].split(',')[0]))
             elif seat==own and len(parts)>4:
@@ -394,7 +439,7 @@ def line_facts(lines,owner):
                 if before is None or maximum is None:complete=False
                 else:spikes.append((before[0],new,maximum))
             hp[name]=(new,maximum)
-    return LineFacts(tuple(switches),tuple(spikes)if complete else None)
+    return LineFacts(tuple(switches),tuple(spikes)if complete else None,(baton['p1'],baton['p2']),tuple(moves))
 
 
 def _member(names,want,where):
@@ -453,25 +498,109 @@ def fill_owner_spikes(public,owner,facts):
     return public._replace(public_port=port._replace(hazards=jnp.asarray(hazards)))
 
 
-def complete_public(state,public,tables,owner,*,facts=None):
+def fill_baton(public,facts):
+    """The public carry with last_moves -2 (the device's Baton Pass arrival sentinel, engine_device_public_hooks.baton_copy)
+    for each side whose current active arrived by Baton Pass (facts.baton) and still reads -1 (from_b2's plain switch, its
+    last public action a switch); every other value unchanged."""
+    b=_trackers(public)
+    if facts is None or not any(facts.baton):return public
+    _leaf(public.last_moves,(b,2,6),np.int32,'last_moves');_leaf(public.active_slot,(b,2),np.int32,'active_slot')
+    last=_host(public.last_moves);slots=_host(public.active_slot);new=last.copy()
+    for side,arrived in enumerate(facts.baton):
+        at=int(slots[0,side])
+        if arrived and 0<=at<6 and new[0,side,at]==-1:new[0,side,at]=-2
+    return public if np.array_equal(new,last)else public._replace(last_moves=jnp.asarray(new))
+
+
+def _name_index(names,want,*,move=False):
+    """The one index of `names` naming `want`: exact, else (a move) any Hidden Power for 'hiddenpower...', else (a species) a
+    unique forme prefix; None otherwise."""
+    found=[i for i,n in enumerate(names)if n and n==want]
+    if not found and move and want.startswith('hiddenpower'):found=[i for i,n in enumerate(names)if n.startswith('hiddenpower')][:1]
+    if not found and not move:found=[i for i,n in enumerate(names)if n and(want.startswith(n)or n.startswith(want))]
+    return found[0]if len(found)==1 else None
+
+
+def fill_peer_pressure(state,public,owner,facts,tables,root):
+    """The public carry with pp_used[owner] (the peer's view of the owner's PP) charged as the peer counts it: each owner
+    declaration (facts.owner_moves) against a live peer active whose Pressure was not public costs one more PP when this
+    world gives that active Pressure (its base ability) and the move is foe-targeted (tables.foe_targeted), the device move
+    hook's rule (the receiving observer knows its own active's ability; engine_device_public_hooks.move) and the env's
+    (Foul Play counts its own Pressure). Gen 3 Pressure is silent, so B2's public rule (public_abilities.move_context:
+    revealed Pressure only) charged one. The count starts from `root`'s pp_used (from_b2's, B2's own), so it is the same
+    on every pass; unchanged without root or facts, or when a move or member does not join."""
+    b=_trackers(public)
+    if facts is None or root is None or not facts.owner_moves or not tables.pressure:return public
+    peer=1-owner
+    for name,value,shape in(('pp_used',public.pp_used,(1,2,6,4)),('observed_moves',public.observed_moves,(1,2,6,4)),
+            ('root pp_used',root.pp_used,(1,2,6,4)),('state.base_ability',state.base_ability,(1,2,6)),('state.species',state.species,(1,2,6)),
+            ('species',public.species,(1,2,6))):_leaf(value,shape,np.int32,name)
+    n=len(tables.species_names);names=lambda ids:[tables.species_names[int(x)]if 0<int(x)<n else''for x in ids]
+    peers=names(_host(state.species)[0,peer]);ability=_host(state.base_ability)[0,peer]
+    owners=names(_host(public.species)[0,owner]);observed=_host(public.observed_moves)[0,owner]
+    m=len(tables.move_names);target=_host(root.pp_used).copy()
+    for actor,move,foe,alive,public_pressure in facts.owner_moves:
+        if not alive or public_pressure or not foe:continue
+        p=_name_index(peers,foe);a=int(ability[p])if p is not None else 0
+        if p is None or not(0<a<len(tables.pressure)and tables.pressure[a]):continue
+        engine=_name_index(tables.move_names,move,move=True)
+        if engine is None or not tables.foe_targeted[engine]:continue
+        slot=_name_index(owners,actor)
+        if slot is None:continue
+        column=_name_index([tables.move_names[int(x)]if 0<int(x)<m else''for x in observed[slot]],move,move=True)
+        if column is not None:target[0,owner,slot,column]+=1
+    current=_host(public.pp_used)
+    if np.array_equal(current[0,owner],target[0,owner]):return public
+    current=current.copy();current[0,owner]=target[0,owner]
+    return public._replace(pp_used=jnp.asarray(current))
+
+
+def fix_peer_base_ability(state,public,owner):
+    """The world state with each revealed peer member's base_ability its public original ability where the materialized
+    spec wrote the publicly borrowed one into it (engine_world._resolved_ability: a Trace holder's revealedAbility is the
+    copied ability): the peer's own ability column (engine_device_observation.encode reads base_ability) then shows the
+    set's ability, as the env and the Gen 3 request's baseAbility do, and the engine reverts to it on switch-out. Running
+    abilities, the owner side (from_b2: the request's baseAbility) and every other member are unchanged."""
+    b=_trackers(public);peer=1-owner
+    if public.original_ability is None or public.borrowed_ability is None:return state
+    for name,value,shape in(('original_ability',public.original_ability,(b,2,6)),('borrowed_ability',public.borrowed_ability,(b,2,6)),
+            ('physical_to_public',public.physical_to_public,(b,2,6)),('state.base_ability',state.base_ability,(b,2,6))):_leaf(value,shape,np.int32,name)
+    original,borrowed,mapping=(_host(x)[0,peer]for x in(public.original_ability,public.borrowed_ability,public.physical_to_public))
+    base=_host(state.base_ability);new=base.copy()
+    for p in range(6):
+        slot=int(mapping[p])
+        if 0<=slot<6 and borrowed[slot]and original[slot]and original[slot]!=borrowed[slot]and new[0,peer,p]==borrowed[slot]:
+            new[0,peer,p]=original[slot]
+    return state if np.array_equal(new,base)else state._replace(base_ability=jnp.asarray(new))
+
+
+def complete_public(state,public,tables,owner,*,facts=None,root=None):
     """A constructor world's public carry completed (module docstring): fill_shown_types, fill_negative_items,
-    orient_credits, and with the root's LineFacts order_peer and fill_owner_spikes. Pure; the same carry when nothing
-    changes. CarryLayoutError on another carry layout, PeerOrderUnavailable when the peer order cannot be joined."""
+    orient_credits, and with the root's LineFacts order_peer, fill_owner_spikes, fill_baton and (with the root's own carry,
+    `root`) fill_peer_pressure. Pure; the same carry when nothing changes. CarryLayoutError on another carry layout,
+    PeerOrderUnavailable when the peer order cannot be joined."""
     _trackers(public)
     done=orient_credits(fill_negative_items(fill_shown_types(state,public,tables)),owner)
-    if facts is not None:done=fill_owner_spikes(order_peer(state,done,owner,facts,tables),owner,facts)
+    if facts is not None:
+        done=fill_baton(fill_owner_spikes(order_peer(state,done,owner,facts,tables),owner,facts),facts)
+        done=fill_peer_pressure(state,done,owner,facts,tables,root)
     return done
 
 
-def complete_world(world,tables,owner,*,facts=None):
-    """A constructor world with its public carry completed (complete_public), `owner` the root's owner and `facts` its
-    LineFacts (None: the fills only); a refused world (no state) and an already completed one are returned as they are.
-    Pure: the world's other leaves are the same objects."""
+def complete_carry(state,public,tables,owner,*,facts=None,root=None):
+    """(state, public) of one constructor world completed: fix_peer_base_ability on the state, complete_public on the carry."""
+    return fix_peer_base_ability(state,public,owner),complete_public(state,public,tables,owner,facts=facts,root=root)
+
+
+def complete_world(world,tables,owner,*,facts=None,root=None):
+    """A constructor world completed (complete_carry), `owner` the root's owner, `facts` its LineFacts (None: the fills
+    only) and `root` the root's own public carry (the peer Pressure count's base); a refused world (no state) and an
+    already completed one are returned as they are. Pure: the world's other leaves are the same objects."""
     if world.state is None:return world
     public=world.public
     _trackers(public,f'world {world.index} public carry')
-    done=complete_public(world.state,public,tables,owner,facts=facts)
-    return world if done is public else replace(world,public=done)
+    state,done=complete_carry(world.state,public,tables,owner,facts=facts,root=root)
+    return world if done is public and state is world.state else replace(world,state=state,public=done)
 
 
 # Prepare ----------------------------------------------------------------------------------------------------------------------------
@@ -498,13 +627,13 @@ class RootRefusal:
     binding:object
 
 
-def _complete(complete,world,owner,facts):
-    return complete(world,owner)if facts is None else complete(world,owner,facts=facts)
+def _complete(complete,world,owner,facts,root=None):
+    return complete(world,owner)if facts is None else complete(world,owner,facts=facts,root=root)
 
 
-def _completed(made,complete,owner,facts=None):
+def _completed(made,complete,owner,facts=None,root=None):
     """The world set with every constructed world completed; the same object when no world changes."""
-    worlds=tuple(w if w.state is None else _complete(complete,w,owner,facts)for w in made.worlds)
+    worlds=tuple(w if w.state is None else _complete(complete,w,owner,facts,root)for w in made.worlds)
     return made if all(a is b for a,b in zip(worlds,made.worlds))else replace(made,worlds=worlds)
 
 
@@ -533,7 +662,7 @@ def prepare_roots(constructor,protocol_requests,*,start_index=0,device='cpu'):
             if complete is None:complete=world_completer(constructor)
             lines=request.get('lines')if isinstance(request,dict)else None
             facts=None if lines is None else line_facts(lines,detached.address.owner)
-            try:made=_completed(made,complete,detached.address.owner,facts)
+            try:made=_completed(made,complete,detached.address.owner,facts,getattr(detached,'public',None))
             except PeerOrderUnavailable as error:
                 out.append(RootRefusal(rid,'PEER_REQUEST_ORDER_UNAVAILABLE',str(error),time.perf_counter()-clock,stamp));continue
             jax.block_until_ready([(w.state,w.public)for w in made.worlds if w.state is not None])
@@ -663,7 +792,7 @@ def build(constructor,prepared,pricer,params,*,binding,recipe,learner_actor=0,op
         if detached.source_binding_sha256!=binding.source_binding_sha256:raise ValueError('root source binding differs from the pricer\'s')
         # A world without a state always names its refusal, so it stays this root's refusal (the pricer refuses the frame otherwise).
         if complete is None:complete=world_completer(constructor)
-        try:worlds=tuple(_complete(complete,w,detached.address.owner,item.facts)if w.state is not None else w if w.refusals else replace(w,refusals=(UNNAMED,))
+        try:worlds=tuple(_complete(complete,w,detached.address.owner,item.facts,getattr(detached,'public',None))if w.state is not None else w if w.refusals else replace(w,refusals=(UNNAMED,))
             for w in made.worlds)
         except PeerOrderUnavailable as error:
             roots.append(dict(base,status='REFUSED',reason=f'PEER_REQUEST_ORDER_UNAVAILABLE: {error}',constructed=0,refused_worlds=None,refused_world_share=None));continue

@@ -546,15 +546,18 @@ class ConstructorWorldsTests(unittest.TestCase):
     def test_prepare_roots_reads_the_requests_lines_and_an_unjoinable_peer_order_refuses_the_root(self):
         W=2;roots={'ok':self.made(0,0,self.modes(0,W)),'odd':self.made(1,0,self.modes(1,W))}
         lines={'ok':['|switch|p2a: Snorlax|Snorlax, L80|100/100','|turn|1'],'odd':['|switch|p2a: Nobody|Nobody, L80|100/100']}
-        def complete(world,owner,facts=None):   # a stand-in completion that cannot join 'nobody'
+        roots_seen=[]
+        def complete(world,owner,facts=None,root=None):   # a stand-in completion that cannot join 'nobody'
+            roots_seen.append(root)
             if facts.peer_switches==('nobody',):raise cw.PeerOrderUnavailable('nobody: 0 members of the peer\'s party match a public switch-in')
             return world
         constructor=self.constructor(W)
         with patch.object(ProtocolConstructor,'prepare',side_effect=lambda r,i:roots[r['request_id']]),patch.object(cw,'world_completer',return_value=complete):
             out=cw.prepare_roots(constructor,[dict(request_id=k,lines=lines[k])for k in roots])
         self.assertIs(type(out[0]),cw.Prepared);self.assertEqual(out[0].facts,cw.LineFacts(('snorlax',),()))
+        self.assertTrue(roots_seen and all(r is roots['ok'][0].public or r is roots['odd'][0].public for r in roots_seen))   # the root's own carry
         self.assertIs(type(out[1]),cw.RootRefusal);self.assertEqual((out[1].kind,out[1].detail[:7]),('PEER_REQUEST_ORDER_UNAVAILABLE','nobody:'))
-        def refuse(world,owner,facts=None):   # refuses only what it is handed the root's facts for
+        def refuse(world,owner,facts=None,root=None):   # refuses only what it is handed the root's facts for
             if facts is None:return world
             raise cw.PeerOrderUnavailable('the last public switch-in is not the world\'s peer active')
         pricer=self.pricer(carry_executor(),depth=2,k_own=(2,),k_opp=(2,),capacity=2)

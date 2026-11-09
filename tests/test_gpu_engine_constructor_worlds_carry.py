@@ -235,6 +235,20 @@ class RealTablesTests(unittest.TestCase):
         engine=_remap(j.asarray([b2],j.int32),names,v['species'])
         self.assertEqual(engine.tolist(),[[v['species'].index('gardevoir'),v['species'].index('snorlax')]])
 
+    def test_the_peer_pressure_count_matches_the_device_move_hook_with_the_real_tables(self):
+        v=self.metadata['vocabulary'];pressure,surf=v['abilities'].index('pressure'),v['moves'].index('surf')
+        rows=np.asarray(self.tables.belief.species_types)
+        s=battle([[2,1,3,0,0,0],[1,3,2,0,0,0]],rows)   # one member per species (species clause): the joins are by species
+        s=s._replace(ability=s.ability.at[0,1,0].set(pressure),base_ability=s.base_ability.at[0,1,0].set(pressure))   # the peer's Gardevoir: Pressure
+        c=hooks.initialize(s,self.tables.belief)
+        for _ in range(2):c=hooks.move(c,s,0,j.asarray([surf],j.int32),j.ones(1,bool),pp_use=True)   # the owner's Snorlax uses Surf twice
+        device=c.trackers;slot=int(device.active_slot[0,0]);column=int(np.flatnonzero(np.asarray(device.observed_moves)[0,0,slot]==surf)[0])
+        self.assertEqual(int(device.pp_used[0,0,slot,column]),4)   # the device: the observer knows its own Pressure
+        b2=device._replace(pp_used=device.pp_used.at[0,0,slot,column].set(2))   # B2's public count: Gen 3 Pressure is silent
+        facts=cw.LineFacts(('gardevoir',),(),(False,False),(('snorlax','surf','gardevoir',True,False),)*2)
+        out=cw.fill_peer_pressure(s,b2,0,facts,cw.carry_tables(self.metadata,self.catalog),b2)
+        np.testing.assert_array_equal(np.asarray(out.pp_used),np.asarray(device.pp_used))
+
     def test_the_fill_matches_the_install_hook_with_the_real_tables(self):
         rows=np.asarray(self.tables.belief.species_types)
         c,after=device_reveals(self.tables.belief,[[2,1,3,2,1,3],[1,3,2,2,1,3]],rows);device=c.trackers   # Snorlax revealed on both sides
@@ -389,6 +403,88 @@ class PeerOrderTests(unittest.TestCase):
         self.assertEqual(cw.line_facts(['|-damage|p1a: Alpha|263/300|[from] Spikes'],0).owner_spikes,None)   # no previous HP on the lines
 
 
+class Round4LineFactsTests(unittest.TestCase):
+    def test_baton_pass_arrivals(self):
+        bp=lambda seat,name:f'|move|{seat}a: {name.title()}|Baton Pass|{seat}a: {name.title()}'
+        base=[switch('p1','alpha','300/300'),switch('p2','beta'),'|turn|1']
+        cases={'a switch after the side\'s Baton Pass':(base+[bp('p2','beta'),switch('p2','gamma')],(False,True)),
+            'another move of the side clears it':(base+[bp('p2','beta'),'|move|p2a: Beta|Tackle|p1a: Alpha',switch('p2','gamma')],(False,False)),
+            'a drag is never one':(base+[bp('p2','beta'),switch('p2','gamma',kind='drag')],(False,False)),
+            'the other side\'s move does not clear it':(base+[bp('p1','alpha'),'|move|p2a: Beta|Tackle|p1a: Alpha',switch('p1','delta','200/300')],(True,False)),
+            'a later arrival replaces it':(base+[bp('p2','beta'),switch('p2','gamma'),'|turn|2',switch('p2','beta')],(False,False)),
+            'a switch line naming Baton Pass':(base+[switch('p2','gamma')+'|[from] Baton Pass'],(False,True))}
+        for name,(lines,want)in cases.items():
+            with self.subTest(name):self.assertEqual(cw.line_facts(lines,0).baton,want)
+
+    def test_owner_moves_carry_the_peers_active_and_whether_its_pressure_was_public(self):
+        lines=[switch('p1','alpha','300/300'),switch('p2','beta'),'|turn|1',
+            '|move|p1a: Alpha|Surf|p2a: Beta',   # charged; Beta's Pressure (if any) not public
+            '|move|p1a: Alpha|Body Slam|p2a: Beta|[from]Sleep Talk',   # a called move: never charged
+            '|move|p1a: Alpha|Struggle|p2a: Beta','|turn|2',   # Struggle: never charged
+            '|-ability|p2a: Beta|Pressure|[from] ability: Trace|[of] p1a: Alpha','|move|p1a: Alpha|Surf|p2a: Beta',   # Beta runs a public (traced) Pressure
+            switch('p2','gamma'),switch('p2','beta'),'|move|p1a: Alpha|Surf|p2a: Beta',   # Beta arrived again: the traced copy is gone
+            '|-ability|p2a: Beta|Pressure','|move|p1a: Alpha|Hidden Power|p2a: Beta',   # an original Pressure reveal: public from now on
+            '|faint|p2a: Beta','|move|p1a: Alpha|Surf|',   # the peer's active fainted
+            '|-transform|p1a: Alpha|p2a: Beta','|move|p1a: Alpha|Surf|p2a: Beta']   # a transformed actor: never charged
+        self.assertEqual(cw.line_facts(lines,0).owner_moves,(('alpha','surf','beta',True,False),('alpha','surf','beta',True,True),
+            ('alpha','surf','beta',True,False),('alpha','hiddenpower','beta',True,True),('alpha','surf','beta',False,True)))
+
+
+PRESSURE_NAMES=['','alpha','beta','gamma','delta','epsilon','zeta']
+MOVES=['','surf','bodyslam','swordsdance','hiddenpowerfire70']
+ABILITIES=['','pressure','trace','swiftswim']
+
+
+def pressure_tables():
+    return cw._table(np.zeros((len(PRESSURE_NAMES),2),np.int32),species_names=PRESSURE_NAMES,move_names=MOVES,
+        foe_targeted=[False,True,True,False,True],pressure=[n=='pressure'for n in ABILITIES])
+
+
+def pressure_world(*,peer_abilities=(1,3,0,0,0,0),uses=((2,1,0,0),)):
+    """(state, carry, root carry): owner 0 has Alpha (public slot 0) whose revealed moves are surf, bodyslam, swordsdance, a
+    Hidden Power with B2's counts `uses`; the peer has Beta, Gamma (physical 0, 1) with base abilities `peer_abilities`."""
+    state=empty_state(1)._replace(species=j.asarray([[[1,4,5,6,0,0],[2,3,0,0,0,0]]],j.int32),base_ability=j.asarray([[[0]*6,list(peer_abilities)]],j.int32))
+    t=carry([[1,4,5,6,0,0],[2,3,0,0,0,0]],[[0,1,2,3,-1,-1],[0,1,-1,-1,-1,-1]])
+    observed=np.zeros((1,2,6,4),np.int32);observed[0,0,0]=[1,2,3,4];used=np.zeros((1,2,6,4),np.int32);used[0,0,0]=(list(uses[0])+[0,0,0,0])[:4]
+    t=t._replace(observed_moves=j.asarray(observed),pp_used=j.asarray(used))
+    return state,t,t
+
+
+class PeerPressureTests(unittest.TestCase):
+    def test_the_peers_own_silent_pressure_charges_the_owners_foe_targeted_moves_twice(self):
+        state,t,root=pressure_world(uses=((3,1,1,2),))
+        moves=(('alpha','surf','beta',True,False),('alpha','surf','beta',True,False),   # silent Pressure: +1 each
+            ('alpha','surf','beta',True,True),   # public Pressure: B2 already charged two
+            ('alpha','bodyslam','gamma',True,False),   # Gamma has no Pressure
+            ('alpha','swordsdance','beta',True,False),   # not foe-targeted
+            ('alpha','hiddenpower','beta',True,False),   # Hidden Power joins its typed column: +1
+            ('alpha','surf','beta',False,False))   # the peer's active had fainted
+        facts=cw.LineFacts(('beta',),(),(False,False),moves)
+        out=cw.fill_peer_pressure(state,t,0,facts,pressure_tables(),root)
+        np.testing.assert_array_equal(np.asarray(out.pp_used)[0,0,0],[5,1,1,3])
+        np.testing.assert_array_equal(np.asarray(out.pp_used)[0,1],np.asarray(t.pp_used)[0,1])   # the peer's own PP: B2's
+        self.assertIs(cw.fill_peer_pressure(state,out,0,facts,pressure_tables(),root),out)   # from the root's counts: the same on every pass
+        for kw in(dict(root=None),dict(facts=None)):
+            args=dict(dict(facts=facts,root=root),**kw);self.assertIs(cw.fill_peer_pressure(state,t,0,args['facts'],pressure_tables(),args['root']),t)
+        swift=pressure_world(peer_abilities=(3,3,0,0,0,0),uses=((3,1,1,2),))   # a world whose Beta has no Pressure: nothing to add
+        self.assertIs(cw.fill_peer_pressure(swift[0],swift[1],0,facts,pressure_tables(),swift[2]),swift[1])
+
+
+class PeerBaseAbilityTests(unittest.TestCase):
+    def test_a_peer_tracers_base_ability_is_its_public_original(self):
+        state=empty_state(1)._replace(base_ability=j.asarray([[[3,0,0,0,0,0],[1,3,0,0,0,0]]],j.int32),ability=j.asarray([[[3,0,0,0,0,0],[1,3,0,0,0,0]]],j.int32))
+        t=carry([[1,0,0,0,0,0],[2,3,0,0,0,0]],[[0,-1,-1,-1,-1,-1],[1,0,-1,-1,-1,-1]])
+        original=np.zeros((1,2,6),np.int32);borrowed=np.zeros((1,2,6),np.int32)
+        original[0,1,1]=2;borrowed[0,1,1]=1   # the peer's public slot 1 (physical 0): Trace, running a copied Pressure
+        original[0,0,0]=2;borrowed[0,0,0]=1   # the owner's own tracer: never touched (from_b2 wrote the request's baseAbility)
+        t=t._replace(original_ability=j.asarray(original),borrowed_ability=j.asarray(borrowed))
+        out=cw.fix_peer_base_ability(state,t,0)
+        self.assertEqual(np.asarray(out.base_ability)[0].tolist(),[[3,0,0,0,0,0],[2,3,0,0,0,0]])
+        self.assertIs(out.ability,state.ability);self.assertIs(cw.fix_peer_base_ability(out,t,0),out)
+        world=World(0,state,t,(),1,False);done=cw.complete_world(world,table(),0)
+        self.assertEqual(np.asarray(done.state.base_ability)[0,1].tolist(),[2,3,0,0,0,0]);self.assertIs(cw.complete_world(done,table(),0),done)
+
+
 class OwnerSpikesTests(unittest.TestCase):
     def port_carry(self):
         from gpu_engine import engine_device_public_port as port
@@ -407,6 +503,19 @@ class OwnerSpikesTests(unittest.TestCase):
         self.assertIs(cw.fill_owner_spikes(out,0,facts),out)   # filled once: idempotent
         base=self.port_carry()
         for f in(None,cw.LineFacts(('alpha',),None),cw.LineFacts(('alpha',),())):self.assertIs(cw.fill_owner_spikes(base,0,f),base)
+
+
+class BatonFillTests(unittest.TestCase):
+    def test_a_baton_pass_arrival_reads_the_devices_sentinel(self):
+        t=carry(SPECIES,MAPPING)
+        last=np.zeros((1,2,6),np.int32);last[0,0,0]=-1;last[0,1,0]=-1;active=np.asarray([[0,0]],np.int32)
+        t=t._replace(last_moves=j.asarray(last),active_slot=j.asarray(active))
+        out=cw.fill_baton(t,cw.LineFacts(('beta',),(),(False,True)))
+        self.assertEqual(np.asarray(out.last_moves)[0,:,0].tolist(),[-1,-2])
+        self.assertIs(cw.fill_baton(out,cw.LineFacts(('beta',),(),(False,True))),out)
+        moved=t._replace(last_moves=j.asarray(np.where(np.arange(6)==0,7,0)[None,None].repeat(2,1).astype(np.int32)))   # it has moved since
+        self.assertIs(cw.fill_baton(moved,cw.LineFacts(('beta',),(),(True,True))),moved)
+        self.assertIs(cw.fill_baton(t,cw.LineFacts(('beta',),())),t)
 
 
 class PeerViewLaneTests(unittest.TestCase):
