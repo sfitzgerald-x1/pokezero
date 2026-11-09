@@ -13,7 +13,7 @@ its value output is meaningless.
 Reported on the test split, by the fp_reply_data groups: uniform over legal (top-1 is a uniform guess's expectation), the
 champion's π zero-shot (its stored probabilities), π recalibrated (a temperature and a switch bias fitted on train, from the
 stored float32 probabilities clipped at 1e-12, so tail actions share one floor; a slight approximation), and π_FP.
-Checks: TF32 is off, so CUDA matmuls are fp32. Before training, the base model's validation probabilities through windows/batch
+Checks: TF32 and the MHA eval fast path are off, so CUDA runs exact fp32 (the fast path alone moved probabilities by up to 5.5e-3). Before training, the base model's validation probabilities through windows/batch
 must reproduce the stored π to 1e-3. --export-archive recomputes π_FP on CPU in fp32 and requires the JAX archive forward to
 match it to 1e-4.
 """
@@ -254,7 +254,10 @@ def main(argv=None):
     args = parser.parse_args(argv)
     import torch
     from pokezero.neural_policy import checkpoint_file_sha256, load_transformer_checkpoint
+    # Exact fp32 on CUDA: TF32 off, highest matmul precision, and no MHA fast path. In eval mode nn.TransformerEncoder's fused fast
+    # path on CUDA moved π's probabilities by up to 5.5e-3 against CPU (median 6e-4); with it off the difference is under 4e-6.
     torch.backends.cuda.matmul.allow_tf32 = False;torch.backends.cudnn.allow_tf32 = False
+    torch.set_float32_matmul_precision('highest');torch.backends.mha.set_fastpath_enabled(False)
     torch.manual_seed(args.seed);rng = np.random.default_rng(args.seed)
     if args.export_archive and Path(args.export_archive).exists():raise SystemExit(f'{args.export_archive} exists; champion.export writes exclusively')
     out = Path(args.out);out.mkdir(parents=True, exist_ok=True);started = time.time()
