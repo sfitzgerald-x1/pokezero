@@ -6,6 +6,7 @@ from dataclasses import replace
 import math
 import re
 import unittest
+from types import SimpleNamespace as NS
 from unittest.mock import patch
 
 import jax
@@ -282,5 +283,49 @@ class PeerViewBB2Tests(unittest.TestCase):
                         for cell, value in expected.items():self.assertEqual(float(theirs_on['numeric_features'][0][cell]), float(np.float32(value)))
                         for k in ('categorical_ids', 'token_type_ids', 'attention_mask'):np.testing.assert_array_equal(theirs_on[k], theirs_off[k], err_msg=k)
 
+
+
+class ReplyPriorCompositionTests(unittest.TestCase):
+    """--peer-view-b with --reply-archive: the br_fp reply prior (gpu_engine/depthn_reply_prior.ReplyPrior) reads the worlds
+    prepare_roots completed (DepthNLiveSearch._search: self.reply.apply(blocks, item.made.worlds, owner)) through
+    device_depth2_pricer._make_views on the live executor's observe (device_public_teacher.make_executor's: leaf.from_public on the
+    observation tables), so its peer inputs carry view b: the projected damage cells and the private-reveal redaction."""
+    @classmethod
+    def setUpClass(cls):
+        from gpu_engine import device_public_leaf as leaf, engine_device_observation as e
+        cls.fx = G.b2_fixture();cls.e = e;tables = e.compile_tables(cls.fx.metadata, catalog=cls.fx.catalog)
+        cls.executor = NS(legal=jax.jit(lambda state: j.ones((state.active.shape[0], 2, 9), bool)),   # the views' legal masks: not under test
+            observe=jax.jit(lambda state, public, owner, legal: leaf.from_public(state, public, tables, observer_sides=owner, legal_action_mask=legal,
+                enable_device_leaf=True)))
+
+    def reply_inputs(self, owner, peer_view_b):
+        """The reply prior's peer inputs [W, 23, 132] of the 'pressure' root (a hit on our Alpha and its side-private Pressure line) as
+        prepare_roots(peer_view_b=...) completes its worlds, and the root's slots and view-b record."""
+        from gpu_engine.depthn_reply_prior import ReplyPrior
+        root, made, lines = G.b2_root(self.fx, 'pressure', owner)
+        constructor = NS(metadata=self.fx.metadata, catalog=self.fx.catalog, count=16, prepare=lambda request, index: (root, made, (True,) * 9))
+        with patch.object(cw, 'constructor_binding', return_value='binding'):   # the stand-in constructor's binding is not under test
+            item, = cw.prepare_roots(constructor, [dict(request_id='r', lines=list(lines))], **({'peer_view_b': True} if peer_view_b else {}))
+        self.assertIs(type(item), cw.Prepared)
+        inputs = ReplyPrior(self.executor, None, params=()).inputs(item.made.worlds[:2], owner)
+        n = np.asarray(inputs['numeric_features']);return n.reshape(2, -1, n.shape[-1])[:, :23], np.asarray(root.public.active_slot)[0], item
+
+    def test_the_reply_priors_peer_inputs_carry_view_b(self):
+        dealt, taken, revealed = self.e._index('LAST_DAMAGE_DEALT'), self.e._index('LAST_DAMAGE_TAKEN'), self.e._index('REVEALED_ABILITY')
+        for owner in (0, 1):
+            with self.subTest(owner=owner):
+                on, slots, item = self.reply_inputs(owner, True);off, _, plain = self.reply_inputs(owner, False)
+                ours = 7 + int(slots[owner]);cells = {c['column']: c for c in item.peer_view_b['cells']}
+                # view b on: Beta's (the peer's own active, token 1) dealt and our Alpha's taken are the projected public values (291 -> 250:
+                # 100 -> 86), and Alpha's Pressure, revealed on our wire alone, is redacted from the peer's view
+                self.assertEqual(on[:, 1, dealt].tolist(), [cells['last_damage_dealt']['public']] * 2)
+                self.assertEqual(on[:, ours, taken].tolist(), [cells['last_damage_taken']['public']] * 2)
+                self.assertEqual((cells['last_damage_taken']['public'], on[:, ours, revealed].tolist()), (float(np.float32(.14)), [0., 0.]))
+                # view b off: B2's exact owner-HP sums (41/291) and the reveal, as before the flag
+                self.assertEqual(off[:, 1, dealt].tolist(), [cells['last_damage_dealt']['carry']] * 2)
+                self.assertEqual(off[:, ours, taken].tolist(), [cells['last_damage_taken']['carry']] * 2)
+                self.assertEqual(off[:, ours, revealed].tolist(), [1., 1.]);self.assertIsNone(plain.peer_view_b)
+                changed = {tuple(x[1:]) for x in np.argwhere(on != off).tolist()}
+                self.assertEqual(changed, {(1, dealt), (ours, taken), (ours, revealed)})   # nothing else of the reply prior's input moves
 
 if __name__ == '__main__':unittest.main()

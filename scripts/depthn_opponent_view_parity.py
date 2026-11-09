@@ -432,10 +432,13 @@ def align(row, table, fp_rows):
 
 # The fp-wire-b reference: view b of Foul Play's own wire ------------------------------------------------------------------------------
 REFERENCES = ('env', 'fp-wire-b')
-FORMAT = 'gen3randombattle'   # gpu_engine/g3rb_views.FORMAT (origin/scott/v2s-fpr4): the builder views' format
-FIELD_TOKEN, SELF_ACTIVE_TOKEN = 0, 1
-HP_FRACTION, LAST_DAMAGE_DEALT, LAST_DAMAGE_TAKEN, SELF_HAZARD_CREDIT, OPP_HAZARD_CREDIT = 0, 38, 39, 115, 116
-HAZARD_CREDIT_DIVISOR = 6.
+# The measurement code's own rules, imported (one source of truth): view b's format (gpu_engine/g3rb_views.FORMAT), the v4 columns
+# peer-view-v2 names (gpu_engine/fp_reply_train), its redaction and public percent, and Foul Play's own OPP_HAZARD_CREDIT
+# (gpu_engine/fp_reply_data.fp_view_opp_hazard_credit and spikes_hits). numpy only at import.
+from gpu_engine.fp_reply_data import fp_view_opp_hazard_credit, spikes_hits   # noqa: E402
+from gpu_engine.fp_reply_train import (FIELD_TOKEN, HP_FRACTION, LAST_DAMAGE_DEALT, LAST_DAMAGE_TAKEN, OPP_HAZARD_CREDIT,   # noqa: E402
+    SELF_ACTIVE_TOKEN, SELF_HAZARD_CREDIT, public_percent as pv2_public_percent, redact_peer_view)
+from gpu_engine.g3rb_views import FORMAT   # noqa: E402
 
 
 def channel_lines(env, player):
@@ -470,83 +473,25 @@ def make_channel_environment(config):
     return ChannelEnv(config)
 
 
-def pv2_public_percent(x):
-    """fp_reply_train.public_percent (origin/scott/v2s-fpr4 gpu_engine/fp_reply_train.py:322-329): ceil(100 x) with 100 x rounded to 3
-    decimals first, 99 for x < 1 that would show 100, clipped to [0, 1], in x's dtype."""
-    x = np.asarray(x);p = np.ceil(np.round(100. * np.asarray(x, np.float64), 3))
-    p = np.where((x < 1) & (p >= 100), 99., p)
-    return (np.clip(p, 0., 100.) / 100.).astype(x.dtype)
-
-
 def peer_view_v2(numeric, opp_hazard_credit):
-    """fp_reply_train.redact_peer_view(numeric, 'peer-view-v2', credit) (origin/scott/v2s-fpr4 gpu_engine/fp_reply_train.py:331-352)
-    on one [23, 132] row, a copy: Foul Play's own active's LAST_DAMAGE_TAKEN -> 0, our six's LAST_DAMAGE_DEALT -> 0, our six's
-    HP_FRACTION -> the public percent, the field's SELF_HAZARD_CREDIT -> 0 and OPP_HAZARD_CREDIT -> `opp_hazard_credit` (Foul Play's
-    own value, fp_view_opp_hazard_credit). π_FP-red3-full's input is view b after this."""
-    n = np.array(numeric, np.float32, copy=True)
-    n[SELF_ACTIVE_TOKEN, LAST_DAMAGE_TAKEN] = 0.;n[OPPONENT_TOKENS, LAST_DAMAGE_DEALT] = 0.
-    n[OPPONENT_TOKENS, HP_FRACTION] = pv2_public_percent(n[OPPONENT_TOKENS, HP_FRACTION])
-    n[FIELD_TOKEN, SELF_HAZARD_CREDIT] = 0.;n[FIELD_TOKEN, OPP_HAZARD_CREDIT] = np.float32(opp_hazard_credit)
-    return n
-
-
-def spikes_hits(lines, seat):
-    """fp_reply_data.spikes_hits (origin/scott/v2s-fpr4 gpu_engine/fp_reply_data.py:167-190): seat's Spikes hits in protocol order,
-    (hp before, hp after, max HP), the previous HP the mon's last |switch| / |drag| / |replace| / |-damage| / |-heal| / |-sethp|
-    condition; None when a hit's previous HP or max HP is not on the lines. On Foul Play's own wire our HP reads N/100."""
-    hp = {};hits = []
-    for line in lines:
-        parts = str(line).split('|')
-        if len(parts) < 4 or parts[0] != '':continue
-        kind = parts[1];side, _, name = parts[2].partition(':')
-        if side.strip()[:2] != seat:continue
-        name = name.strip()
-        if kind in ('switch', 'drag', 'replace'):
-            if len(parts) > 4:
-                condition = _condition(parts[4])
-                if condition is None:hp.pop(name, None)
-                else:hp[name] = condition
-        elif kind in ('-damage', '-heal', '-sethp'):
-            condition = _condition(parts[3])
-            if condition is None:hp.pop(name, None);continue
-            new, maximum = condition;before = hp.get(name)
-            if maximum is None:maximum = before[1] if before else None
-            if kind == '-damage' and any(x.strip().lower() == '[from] spikes' for x in parts[4:]):
-                if before is None or maximum is None:return None
-                hits.append((before[0], new, maximum))
-            hp[name] = (new, maximum)
-    return hits
-
-
-def _condition(text):
-    head = (str(text).split() or [''])[0]
-    if head == '0':return 0, None
-    hp, sep, top = head.partition('/')
-    try:return (int(hp), int(top)) if sep else None
-    except ValueError:return None
-
-
-def fp_view_opp_hazard_credit(lines, victim):
-    """fp_reply_data.fp_view_opp_hazard_credit (origin/scott/v2s-fpr4 gpu_engine/fp_reply_data.py:204-217): Foul Play's
-    OPP_HAZARD_CREDIT for our seat `victim`: clip((high + low) * float32(1/6), 0, 1) of the float32 TwoSum over our Spikes hits of
-    (public percent before - after) * float32(1/100); 0 when a hit's previous HP is unknown."""
-    f = np.float32;high = low = f(0)
-    for before, after, maximum in spikes_hits(lines, victim) or ():
-        value = f(f(max(0, showdown_percent(before, maximum) - showdown_percent(after, maximum))) * f(1. / 100))
-        if not value > 0:continue
-        total = f(high + value);recovered = f(total - high);error = f(f(high - f(total - recovered)) + f(value - recovered))
-        correction = f(low + error);new_high = f(total + correction);low = f(correction - f(new_high - total));high = new_high
-    return f(min(max(f(f(high + low) * f(1. / HAZARD_CREDIT_DIVISOR)), f(0)), f(1)))
+    """fp_reply_train.redact_peer_view(numeric, 'peer-view-v2', credit) on a float32 copy of one [23, 132] row: Foul Play's own
+    active's LAST_DAMAGE_TAKEN -> 0, our six's LAST_DAMAGE_DEALT -> 0, our six's HP_FRACTION -> the public percent, the field's
+    SELF_HAZARD_CREDIT -> 0 and OPP_HAZARD_CREDIT -> `opp_hazard_credit` (Foul Play's own value, fp_view_opp_hazard_credit).
+    π_FP-red3-full's input is view b after this."""
+    return redact_peer_view(np.array(numeric, np.float32, copy=True), 'peer-view-v2', np.float32(opp_hazard_credit))
 
 
 class ReferenceViews:
-    """View b of Foul Play's own wire, as π_FP-red3-full was trained on it (fp_reply_data.builder_views 'b', origin/scott/v2s-fpr4
-    gpu_engine/fp_reply_data.py:235-250, then peer-view-v2): pokezero.policy_opponent_view.build_policy_opponent_view on what Foul Play
-    received (its channel without |request| lines; its own HP exact, projected to the public percent by the builder, ours already
-    N/100 on its wire) and its literal request, with the owning config's observation spec, feature masks and category vocabulary
-    (the champion's: the env's) and the pinned Showdown's random-battle set source and dex; then peer_view_v2 with Foul Play's own
-    OPP_HAZARD_CREDIT (fp_view_opp_hazard_credit on the same lines). The seat filter gpu_engine/g3rb_views.seat_lines is not needed:
-    the channel is Showdown's own split."""
+    """View b of Foul Play's own wire, as π_FP-red3-full was trained on it (gpu_engine/fp_reply_data.builder_views 'b', then
+    peer-view-v2): pokezero.policy_opponent_view.build_policy_opponent_view on what Foul Play received and its literal request, with
+    the owning config's observation spec, feature masks and category vocabulary (the champion's: the env's) and the pinned
+    Showdown's random-battle set source and dex; then peer_view_v2 (fp_reply_train.redact_peer_view) with Foul Play's own
+    OPP_HAZARD_CREDIT (fp_reply_data.fp_view_opp_hazard_credit on the same lines). Where it departs from builder_views, by design:
+    builder_views reads the env's omniscient lines through the hand filter gpu_engine/g3rb_views.seat_lines (dropping the
+    opponent's [silent] -ability lines, its Struggle activation and every -hint) with every seat's HP exact
+    (hp_visibility exact for both, projected by the builder); here the lines are Foul Play's own channel, Showdown's split, without
+    |request| lines: its own HP exact (projected by the builder), ours already N/100 (hp_visibility percentage), which is the
+    builder's projection of the exact value (constructor_worlds.public_percent: Showdown's float rule equals the integer one)."""
     def __init__(self, config):
         from pokezero.dex import load_showdown_dex_cached
         from pokezero.randbat import load_gen3_randbat_source_cached

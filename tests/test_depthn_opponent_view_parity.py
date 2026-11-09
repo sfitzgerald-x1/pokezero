@@ -629,6 +629,10 @@ class WireReferenceTests(unittest.TestCase):
         self.assertEqual((out[7, 0], out[8, 0], out[1, 38], out[7, 39]), (np.float32(.46), np.float32(.99), np.float32(.17), np.float32(.35)))   # damage cells kept
         self.assertEqual(row[1, 39], np.float32(.3))   # a copy
         np.testing.assert_array_equal(P.pv2_public_percent(np.float32([.4, 1., .0001, 0.])), np.float32([.4, 1., .01, 0.]))
+        from gpu_engine import fp_reply_data as D, fp_reply_train as T, g3rb_views as gv   # one source of truth: the measurement code's own
+        self.assertEqual((P.pv2_public_percent, P.fp_view_opp_hazard_credit, P.spikes_hits, P.FORMAT), (T.public_percent, D.fp_view_opp_hazard_credit,
+            D.spikes_hits, gv.FORMAT))
+        np.testing.assert_array_equal(out.view(np.uint32), T.redact_peer_view(row.copy(), 'peer-view-v2', np.float32(.25)).view(np.uint32))
 
     def test_foul_plays_own_hazard_credit_from_its_wire_equals_the_rule_on_ours(self):
         """fp_view_opp_hazard_credit on Foul Play's wire (our HP N/100) equals recompute_opp_hazard_credit on our wire (exact HP)."""

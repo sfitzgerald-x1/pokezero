@@ -1,5 +1,5 @@
 {
- "generated_from": "43f60b4f",
+ "generated_from": "67300f81-revert-a3c8b9d5",
  "jax": "0.12.0",
  "numpy": "2.5.4",
  "outputs": {
@@ -1026,6 +1026,7 @@
      "reduce_seconds": null,
      "reduction_note": null,
      "refusal": null,
+     "reply_prior": null,
      "request_id": "r",
      "root_class": null,
      "root_class_source": null,
@@ -1171,6 +1172,7 @@
      "reduce_seconds": null,
      "reduction_note": null,
      "refusal": null,
+     "reply_prior": null,
      "request_id": "r",
      "root_class": null,
      "root_class_source": null,
@@ -1310,6 +1312,7 @@
      "reduce_seconds": null,
      "reduction_note": null,
      "refusal": null,
+     "reply_prior": null,
      "request_id": "r",
      "root_class": null,
      "root_class_source": null,
