@@ -421,7 +421,8 @@ def signatures_markdown(report):
         f"{report['signature_sides']} (signature, side) pairs (side from {report['side_source']})", '',
         f"Signatures exercised nowhere ({len(report['signatures_never_exercised'])}):", '']
     out += [f'- `{s}`' for s in report['signatures_never_exercised']] or ['- none']
-    out += ['', f"(signature, side) pairs exercised nowhere ({len(report['signature_sides_never_exercised'])}; M1's synthetic-lane list, per seat; side `array` means the seat is a per-lane array at that site, `None` means the hook has no side parameter):", '']
+    out += ['', f"(signature, side) pairs exercised nowhere ({len(report['signature_sides_never_exercised'])}; M1's synthetic-lane list, per seat; side `None` or `array`: "
+        "the seat is not a Python static at that site, i.e. a per-lane array such as the residual loop's `event % 2`, or the hook has no side parameter):", '']
     out += [f"- `{g['signature']}` side {g['side']} ({g['sites']} sites)" for g in report['signature_sides_never_exercised']] or ['- none']
     out += ['', '| Hook | Signature | Sites | Sites never exercised | Exercised lane-steps | Best site |', '| --- | --- | ---: | ---: | ---: | --- |']
     for g in report['groups']:
