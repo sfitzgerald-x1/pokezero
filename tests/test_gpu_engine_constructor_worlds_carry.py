@@ -839,6 +839,10 @@ class PrivateRevealB2Tests(unittest.TestCase):
                 root,made,facts=self.root(owner,['|-ability|OWNa: Alpha|Pressure|[silent]','|switch|PEERa: Beta|Beta, L80|100/100','|turn|1'])
                 self.assertEqual(int(np.asarray(root.public.original_ability)[0,owner,0]),pressure)   # B2's fold records it: the leak
                 self.assertEqual(facts.private_reveals[owner],(('alpha','pressure'),))
+                for enabled in(False,True):   # the record on the real root carry, a non-empty `found`
+                    self.assertEqual(cw.private_reveal_record(root.public,owner,facts,self.carry,enabled),dict(enabled=enabled,
+                        found=[dict(species='alpha',ability='pressure')],applicable=[dict(species='alpha',ability='pressure',slot=0)],
+                        redacted=[dict(species='alpha',ability='pressure',slot=0)]if enabled else[],unmatched=[]))
                 b2=root.view['_b2_root_inputs'];peer=1-owner
                 for w in made.worlds:
                     off=cw.complete_world(w,self.carry,owner,facts=facts,root=root.public)

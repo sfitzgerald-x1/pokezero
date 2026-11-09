@@ -443,7 +443,8 @@ class PeerOrderUnavailable(ValueError):
 
 @dataclass(frozen=True)
 class LineFacts:
-    """What the completion reads from the owner's protocol prefix (public lines only; line_facts):
+    """What the completion reads from the owner's protocol prefix (line_facts): public lines, and for private_reveals also the
+    owner's own side-private ability lines (which only the owner's wire carries):
     peer_switches: the peer side's switch-ins in protocol order, each the normalized species of a |switch| / |drag| /
     |replace| line's details; owner_spikes: the owner side's Spikes hits in order, (hp before, hp after, max HP) from the
     owner's own exact HP lines, or None when one hit's previous HP is not on the lines (its shown credit is then left 0);
@@ -940,6 +941,18 @@ def _completed(made,complete,owner,facts=None,root=None,redact=False):
     return made if all(a is b for a,b in zip(worlds,made.worlds))else replace(made,worlds=worlds)
 
 
+PRIVATE_REVEALS_UNAVAILABLE='PRIVATE_REVEALS_UNAVAILABLE'   # prepare_roots' refusal kind: the redaction is on, its record unreadable
+RECORD_ERRORS=(CarryLayoutError,)+ROOT_ERRORS   # what reading a root's private-reveal record may raise (an unexpected carry or tables)
+
+
+def _reveal_record(constructor,detached,facts,enabled):
+    """prepare_roots' private_reveal_record of one root (None without LineFacts); the carry tables only when the lines reveal
+    something privately."""
+    if facts is None:return None
+    owner=detached.address.owner
+    return private_reveal_record(getattr(detached,'public',None),owner,facts,constructor_carry_tables(constructor)if facts.private_reveals[owner]else None,enabled)
+
+
 def _redacting(item):
     """Whether a Prepared's completion redacts private reveals (its record's flag; build applies the same completion)."""
     return bool((getattr(item,'private_reveals',None)or{}).get('enabled'))
@@ -951,7 +964,9 @@ def prepare_roots(constructor,protocol_requests,*,start_index=0,device='cpu',red
     private-reveal redaction too, off by default) and its arrays synced before its clock stops. Returns one Prepared (with
     its private_reveal_record when the request has lines) or RootRefusal per request, each stamped with
     constructor_binding(constructor) (build refuses a stamp other than its constructor's). CarryLayoutError (the completion)
-    is never a refusal."""
+    is never a refusal. A private-reveal record that cannot be read (RECORD_ERRORS: an unexpected root carry or carry
+    tables) never touches a root with the redaction off (its record is dict(enabled=False, error, found, applicable=None,
+    redacted=[], unmatched=None)); with it on, the root is refused PRIVATE_REVEALS_UNAVAILABLE."""
     if type(redact_private_reveals)is not bool:raise ValueError('redact_private_reveals must be a bool')
     stamp=constructor_binding(constructor)
     if device is None:context=nullcontext()
@@ -975,10 +990,15 @@ def prepare_roots(constructor,protocol_requests,*,start_index=0,device='cpu',red
             facts=None if lines is None else line_facts(lines,detached.address.owner)
             if facts is not None and facts.recharge[1-detached.address.owner]:   # module docstring: never priced
                 out.append(RootRefusal(rid,OPPONENT_RECHARGE,OPPONENT_RECHARGE_DETAIL,time.perf_counter()-clock,stamp));continue
-            # the record reads the root's own carry (from_b2's: every world's public knowledge before completion)
-            owner=detached.address.owner
-            reveals=None if facts is None else private_reveal_record(getattr(detached,'public',None),owner,facts,
-                constructor_carry_tables(constructor)if facts.private_reveals[owner]else None,redact_private_reveals)
+            # the record reads the root's own carry (from_b2's: every world's public knowledge before completion), inside the
+            # refusal net: with the flag off a record that cannot be read never touches the root (the record names the error);
+            # with it on, a root whose private reveals cannot be read is refused (never priced with them)
+            try:reveals=_reveal_record(constructor,detached,facts,redact_private_reveals)
+            except RECORD_ERRORS as error:
+                if redact_private_reveals:
+                    out.append(RootRefusal(rid,PRIVATE_REVEALS_UNAVAILABLE,f'{type(error).__name__}: {error}'[:500],time.perf_counter()-clock,stamp));continue
+                reveals=dict(enabled=False,error=f'{type(error).__name__}: {error}'[:500],found=[dict(species=who,ability=ability)
+                    for who,ability in facts.private_reveals[detached.address.owner]],applicable=None,redacted=[],unmatched=None)
             try:made=_completed(made,complete,detached.address.owner,facts,getattr(detached,'public',None),redact_private_reveals)
             except PeerOrderUnavailable as error:
                 out.append(RootRefusal(rid,'PEER_REQUEST_ORDER_UNAVAILABLE',str(error),time.perf_counter()-clock,stamp));continue

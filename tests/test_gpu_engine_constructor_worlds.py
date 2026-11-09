@@ -543,6 +543,27 @@ class ConstructorWorldsTests(unittest.TestCase):
             _,same,_=self.prepared({'r':roots['r']},W)
         self.assertIs(same[0].made,roots['r'][1])
 
+    def test_an_unreadable_private_reveal_record_never_touches_a_root_with_the_flag_off(self):
+        """The fake engine's root carry is not the tracker carry, so a privately revealed ability cannot be read from it: with the
+        redaction off the root is prepared as ever (the record names the error); with it on the root is refused
+        PRIVATE_REVEALS_UNAVAILABLE; lines without a private reveal never read the carry or the tables."""
+        W=2;made=self.made(0,0,self.modes(0,W))
+        private=['|switch|p1a: Zapdos|Zapdos, L80|100/100','|-ability|p1a: Zapdos|Pressure|[silent]','|switch|p2a: Snorlax|Snorlax, L80|100/100','|turn|1']
+        constructor=self.constructor(W);seen=[]
+        complete=lambda world,owner,facts=None,root=None,**kw:seen.append(kw)or world
+        with patch.object(ProtocolConstructor,'prepare',side_effect=lambda r,i:made),patch.object(cw,'world_completer',return_value=complete):
+            off=cw.prepare_roots(constructor,[dict(request_id='p',lines=private),dict(request_id='q',lines=private[2:])])
+            on=cw.prepare_roots(constructor,[dict(request_id='p',lines=private),dict(request_id='q',lines=private[2:])],redact_private_reveals=True)
+        self.assertEqual([type(x)for x in off],[cw.Prepared,cw.Prepared])
+        record=off[0].private_reveals
+        self.assertEqual({k:record[k]for k in('enabled','found','applicable','redacted','unmatched')},
+            dict(enabled=False,found=[dict(species='zapdos',ability='pressure')],applicable=None,redacted=[],unmatched=None))
+        self.assertTrue(record['error'])
+        self.assertEqual(off[1].private_reveals,dict(enabled=False,found=[],applicable=[],redacted=[],unmatched=[]))
+        self.assertEqual((type(on[0]),on[0].kind),(cw.RootRefusal,cw.PRIVATE_REVEALS_UNAVAILABLE))
+        self.assertEqual((type(on[1]),on[1].private_reveals['enabled']),(cw.Prepared,True))
+        self.assertIn(dict(redact_private_reveals=True),seen)   # the flag reaches the completion of the root it can read
+
     def test_prepare_roots_reads_the_requests_lines_and_an_unjoinable_peer_order_refuses_the_root(self):
         W=2;roots={'ok':self.made(0,0,self.modes(0,W)),'odd':self.made(1,0,self.modes(1,W))}
         lines={'ok':['|switch|p2a: Snorlax|Snorlax, L80|100/100','|turn|1'],'odd':['|switch|p2a: Nobody|Nobody, L80|100/100']}

@@ -11,15 +11,22 @@ Per world (both sides priced, the same opponent_requested and kept; a waiting wo
 the single reply 0 on both and is only counted): the turn-1 reply prior pi = softmax(root_peer_logits) over kept
 (v5_gumbel._probabilities, averaging's own prior), KL(baseline || redacted) in nats and whether its top reply (argmax,
 lowest index on ties) flips.
-Per root: averaging's played action recomputed with the BASELINE's G grids and the redacted run's turn-1 reply priors
-(search_hedge.averaging over WorldPrices(requested, kept, redacted root_peer_logits, baseline grid): the scorer's averaging,
-summed as the live server sums it) against the baseline's own averaging, on the roots the reach guard would search: the
-baseline record's b false and (c) false for the baseline averaging's choice (depthn_effect_guard.trips). How many roots'
-guard (b) differs between the runs is reported beside it.
-Each, overall and split applied / control. The control must not move at all: any control world whose logits differ by a
-bit, whose KL is nonzero or whose top reply flips, and any control root whose averaging flips, is a determinism failure,
-listed and printed loudly on stderr.
-Output: a summary on stdout (and the full report as JSON with --out, a new file). Exit 0 always.
+Per root (both replays COMPLETE): averaging's action recomputed with the BASELINE's G grids and the redacted run's turn-1
+reply priors (search_hedge.averaging over WorldPrices(requested, kept, redacted root_peer_logits, baseline grid): the
+scorer's averaging, summed as the live server sums it), a_flag, against the baseline's own averaging, a_base. The PLAYED
+action of each side applies the full live guard (scripts/depthn_rr_score.guard_choices, the live actor's functions): greedy
+(the live run's greedy action) where the own-recharge guard (an override INTO Hyper Beam, Blast Burn, Hydro Cannon or
+Frenzy Plant that greedy did not choose) or UNREPRESENTED_EFFECT ((b) at the root, (c) on the choice) trips; the
+baseline's on a_base with the baseline record, the redacted run's on a_flag with the redacted run's record. The headline is
+the played-action flip rate over the roots the baseline would search (no guard trips on a_base); beside it, on the same
+roots, the raw averaging flip (a_base != a_flag). How many roots' (b) differs between the runs is reported too.
+Each, overall and split applied / control. The control (no redaction at the root) must not move at all; each of these is a
+determinism failure, listed and printed loudly on stderr: a world whose logits differ by a bit, whose KL is nonzero or
+whose top reply flips; a world not compared on both sides alike (priced on one side only, requested or kept differing, a
+world missing on either side, logits missing); a root whose replays disagree (one COMPLETE, or different refusals), whose
+averaging cannot be recomputed on a decided root (any status but scored), whose (b) changes, or whose averaging or played
+action flips.
+Output: a summary on stdout (and the full report as JSON with --out, a new file). Exit 0, or 3 on a determinism failure.
 
   python scripts/depthn_private_reveal_effect.py --baseline BASE/rows-*.jsonl --redacted FLAG/rows-*.jsonl [--out REPORT.json]
 """
@@ -92,8 +99,10 @@ def worlds_by_index(row):
 
 
 def world_effect(base, flag):
-    """(status, details) of one joined world: 'compared' with kl, top flip and bit equality; 'waiting'; or why not compared."""
-    if not (base.get('priced') and flag.get('priced')):return 'unpriced', None
+    """(status, details) of one joined world: 'compared' with kl, top flip and bit equality; 'waiting' (on both sides);
+    'unpriced' (on both sides); or why the two sides cannot be compared (a determinism failure on a control root)."""
+    priced = bool(base.get('priced')), bool(flag.get('priced'))
+    if priced != (True, True):return ('unpriced' if priced == (False, False) else 'priced_mismatch'), None
     if bool(base.get('opponent_requested')) != bool(flag.get('opponent_requested')):return 'requested_mismatch', None
     if not base.get('opponent_requested'):return 'waiting', None
     kept, other = base.get('kept'), flag.get('kept')
@@ -105,12 +114,27 @@ def world_effect(base, flag):
     return 'compared', dict(kl=kl(p, q), flip=top(p, kept) != top(q, kept), bits_equal=bits_equal(a, b))
 
 
+WORLD_OK = ('compared', 'waiting', 'unpriced')   # a control world in any other status is a determinism failure
+
+
+def played(choice, greedy, own_moves, record):
+    """(played action, guarded) of one side: the live guards (depthn_rr_score.guard_choices) on averaging's `choice`."""
+    out, causes = score.guard_choices({'averaging': choice}, greedy, own_moves, record if type(record) is dict else None)
+    return out['averaging'], causes['averaging'] is not None
+
+
 def averaging_effect(base_row, flag_row):
-    """(status, details) of one joined root: averaging's action on the baseline worlds against the same with the redacted
-    run's reply priors; whether the reach guard would search it (the baseline record); whether the redacted record's b differs."""
+    """(status, details) of one joined root: averaging's action on the baseline worlds (a_base) against the same with the
+    redacted run's reply priors (a_flag), each side's played action under the live guards, whether the baseline would
+    search the root (no guard trips on a_base) and whether the two records' (b) differ. 'undecided' when neither replay is
+    COMPLETE and both refused alike; 'decision_mismatch' when the replays disagree; else why it cannot be recomputed."""
     base, flag = score.normalize(base_row), score.normalize(flag_row)
+    done = base['replay_status'] == 'COMPLETE', flag['replay_status'] == 'COMPLETE'
+    if done != (True, True):
+        same = done == (False, False) and (base['replay_status'], base['replay_cause']) == (flag['replay_status'], flag['replay_cause'])
+        return ('undecided' if same else 'decision_mismatch'), None
     legal, logits = base['root_legal'], base['root_logits']
-    if type(legal) is not list or len(legal) != 9 or not any(legal) or type(logits) is not list:return 'undecided', None
+    if type(legal) is not list or len(legal) != 9 or not any(legal) or type(logits) is not list:return 'root_missing', None
     try:worlds = score.world_prices(base)
     except score.Unscorable as error:return f'baseline_{error.reason}', None
     others = flag['worlds']
@@ -123,11 +147,13 @@ def averaging_effect(base_row, flag_row):
     legal = tuple(legal);mine, theirs = hedge.averaging(worlds, legal), hedge.averaging(tuple(mixed), legal)
     if mine is None or theirs is None:return 'unpriced_cell', None
     a, b = hedge.top_action(mine.strategy), hedge.top_action(theirs.strategy)
+    greedy, moves = base['greedy_action'], base['own_moves']
+    if type(greedy) is not int or not 0 <= greedy < 9 or not legal[greedy]:return 'greedy_missing', None
     record, other = base['effect_guard'], flag['effect_guard']
-    if type(record) is not dict:return 'no_guard_record', dict(baseline=a, mixed=b)
-    searched = not effect_guard.trips(record, a)['tripped']
-    b_changed = type(other) is dict and bool(other.get('b')) != bool(record.get('b'))
-    return 'scored', dict(baseline=a, mixed=b, flip=a != b, searched=searched, b_changed=b_changed)
+    if type(record) is not dict or type(other) is not dict:return 'no_guard_record', None
+    played_base, guarded = played(a, greedy, moves, record);played_flag, _ = played(b, greedy, moves, other)
+    return 'scored', dict(baseline=a, mixed=b, flip=a != b, played_baseline=played_base, played_redacted=played_flag,
+                          played_flip=played_base != played_flag, searched=not guarded, b_changed=bool(other.get('b')) != bool(record.get('b')))
 
 
 def compare(baseline, redacted):
@@ -154,23 +180,29 @@ def compare(baseline, redacted):
         expected = [(x.get('species'), x.get('slot')) for x in ((base.get('private_reveals') or {}).get('applicable') or ())]
         got = [(x.get('species'), x.get('slot')) for x in ((row.get('private_reveals') or {}).get('redacted') or ())]
         if expected != got:record_mismatch.append(dict(ordinal=key[0], decision_index=key[1], baseline_applicable=expected, redacted=got))
-        theirs = worlds_by_index(row)
-        for index, w in worlds_by_index(base).items():
-            other = theirs.get(index)
-            status, d = ('redacted_world_missing', None) if other is None else world_effect(w, other)
+        theirs, ours = worlds_by_index(row), worlds_by_index(base)
+        for index in sorted(set(ours) | set(theirs), key=str):
+            w, other = ours.get(index), theirs.get(index)
+            if w is None or other is None:status, d = ('baseline_world_missing' if w is None else 'redacted_world_missing'), None
+            else:status, d = world_effect(w, other)
             statuses[status] += 1
+            if group == 'control' and status not in WORLD_OK:
+                determinism.append(dict(ordinal=key[0], decision_index=key[1], world=index, status=status))
             if status != 'compared':continue
             for g in ('all', group):
                 kls[g].append(d['kl']);flips[g]['worlds'] += 1;flips[g]['flips'] += d['flip'];flips[g]['bits_differ'] += not d['bits_equal']
             if group == 'control' and (not d['bits_equal'] or d['kl'] != 0 or d['flip']):
                 determinism.append(dict(ordinal=key[0], decision_index=key[1], world=index, kl=d['kl'], top_flip=d['flip'], bits_equal=d['bits_equal']))
         status, d = averaging_effect(base, row);counts[f'averaging_{status}'] += 1
+        if group == 'control' and status not in ('scored', 'undecided'):
+            determinism.append(dict(ordinal=key[0], decision_index=key[1], world=None, averaging_status=status))
         if status != 'scored':continue
         for g in ('all', group):
-            p = plays[g];p['roots'] += 1;p['b_changed'] += d['b_changed']
-            if d['searched']:p['searched'] += 1;p['flips'] += d['flip']
-        if group == 'control' and d['flip']:
-            determinism.append(dict(ordinal=key[0], decision_index=key[1], world=None, averaging=[d['baseline'], d['mixed']], searched=d['searched']))
+            p = plays[g];p['roots'] += 1;p['b_changed'] += d['b_changed'];p['raw_flips_all'] += d['flip']
+            if d['searched']:p['searched'] += 1;p['flips'] += d['flip'];p['played_flips'] += d['played_flip']
+        if group == 'control' and (d['flip'] or d['played_flip'] or d['b_changed']):
+            determinism.append(dict(ordinal=key[0], decision_index=key[1], world=None, averaging=[d['baseline'], d['mixed']],
+                                    played=[d['played_baseline'], d['played_redacted']], b_changed=d['b_changed'], searched=d['searched']))
     counts['baseline_without_redacted'] = len(set(mine) - seen)
     share = lambda a, b: a / b if b else None
     groups = {}
@@ -179,14 +211,17 @@ def compare(baseline, redacted):
         groups[g] = dict(roots=roots[g] if g != 'all' else roots['applied'] + roots['control'],
             worlds=f['worlds'], kl_median=quantile(kls[g], .5), kl_p95=quantile(kls[g], .95), kl_max=max(kls[g]) if kls[g] else None,
             kl_nonzero=sum(x > 0 for x in kls[g]), reply_top1_flips=f['flips'], reply_top1_flip_rate=share(f['flips'], f['worlds']),
-            logits_bits_differ=f['bits_differ'], averaging=dict(scored_roots=p['roots'], searched_roots=p['searched'], flips=p['flips'],
-                flip_rate=share(p['flips'], p['searched']), b_changed=p['b_changed']))
+            logits_bits_differ=f['bits_differ'], averaging=dict(scored_roots=p['roots'], searched_roots=p['searched'],
+                played_flips=p['played_flips'], played_flip_rate=share(p['played_flips'], p['searched']),
+                raw_flips=p['flips'], raw_flip_rate=share(p['flips'], p['searched']), raw_flips_all_scored=p['raw_flips_all'],
+                b_changed=p['b_changed']))
     return dict(schema=SCHEMA, counts=dict(counts), worlds=dict(statuses), groups=groups, redacted_species=dict(species),
         identity_mismatches=dict(count=len(mismatches), examples=mismatches[:EXAMPLES]),
         record_mismatches=dict(count=len(record_mismatch), examples=record_mismatch[:EXAMPLES],
             note="the baseline's applicable members against the redacted run's redacted ones: the same selection must agree"),
-        determinism=dict(passed=not determinism, failures=len(determinism), examples=determinism[:EXAMPLES],
-            rule='the control (no redaction at the root) must not move: logits bit-equal, KL 0, no reply or averaging flip'))
+        determinism=dict(passed=not determinism, failures=len(determinism), rows=determinism,
+            rule='the control (no redaction at the root) must not move (module docstring): every world compared alike with bit-equal '
+                 'logits, KL 0 and no reply flip; replays alike; averaging recomputed; (b), averaging and the played action unchanged'))
 
 
 def summary(report):
@@ -199,8 +234,9 @@ def summary(report):
     for g in GROUPS:
         r = report['groups'][g];a = r['averaging']
         lines.append(f"{g}: roots {r['roots']}, worlds {r['worlds']}; KL median {fmt(r['kl_median'])}, p95 {fmt(r['kl_p95'])}, max {fmt(r['kl_max'])}; "
-                     f"reply top-1 flips {r['reply_top1_flips']} ({fmt(r['reply_top1_flip_rate'])}); averaging flips {a['flips']} of "
-                     f"{a['searched_roots']} guard-searched roots ({fmt(a['flip_rate'])}); guard b changed on {a['b_changed']}")
+                     f"reply top-1 flips {r['reply_top1_flips']} ({fmt(r['reply_top1_flip_rate'])}); over {a['searched_roots']} roots the baseline "
+                     f"searches: PLAYED flips {a['played_flips']} ({fmt(a['played_flip_rate'])}), raw averaging flips {a['raw_flips']} "
+                     f"({fmt(a['raw_flip_rate'])}); guard b changed on {a['b_changed']}")
     if report['redacted_species']:lines.append('redacted members: ' + ', '.join(f'{k} {v}' for k, v in sorted(report['redacted_species'].items())))
     d = report['determinism']
     lines.append('determinism: ' + ('ok (the control did not move)' if d['passed'] else f"FAILED: {d['failures']} control world(s) / root(s) moved"))
@@ -217,11 +253,13 @@ def main(argv=None):
     if args.out:
         with open(args.out, 'x') as stream:stream.write(json.dumps(report, indent=1, sort_keys=True) + '\n')
     print(summary(report))
-    if not report['determinism']['passed']:
-        print(f"DETERMINISM FAILURE: {report['determinism']['failures']} control world(s) / root(s) moved without a redaction; first: "
-              f"{report['determinism']['examples'][:3]}", file=sys.stderr)
     for name in ('identity_mismatches', 'record_mismatches'):
         if report[name]['count']:print(f"WARNING: {report[name]['count']} {name.replace('_', ' ')}; first: {report[name]['examples'][:3]}", file=sys.stderr)
+    if not report['determinism']['passed']:
+        rows = report['determinism']['rows']
+        print(f"DETERMINISM FAILURE: {len(rows)} control world(s) / root(s) moved without a redaction:", file=sys.stderr)
+        for x in rows:print(f'  {json.dumps(x, sort_keys=True)}', file=sys.stderr)
+        return 3
     return 0
 
 
