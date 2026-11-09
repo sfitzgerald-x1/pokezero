@@ -203,13 +203,26 @@ def split_of(seed):
     return np.where(seed % 10 == 0, 'test', np.where(seed % 10 == 1, 'val', 'train'))
 
 
+ECE_BINS = 15
+
+
+def calibration_error(confidence, correct, bins=ECE_BINS):
+    """Expected calibration error of the top-1 prediction: equal-width confidence bins, |accuracy - confidence| weighted by bin size."""
+    edges = np.linspace(0., 1., bins + 1);which = np.clip(np.digitize(confidence, edges[1:-1]), 0, bins - 1)
+    return float(sum(abs(correct[which == b].mean() - confidence[which == b].mean()) * (which == b).mean()
+                     for b in range(bins) if (which == b).any()))
+
+
 def metrics(probs, labels, legal):
-    """top-1 (argmax over legal), NLL of the label, and switch mass (predicted vs actual), on one set of rows."""
+    """top-1 (argmax over legal), NLL of the label, the share of labels under 1% and 5%, top-1 ECE, and switch mass (predicted vs
+    actual), on one set of rows."""
     if not len(labels):return dict(decisions=0)
-    masked = np.where(legal, probs, -1.)
-    p = np.clip(probs[np.arange(len(labels)), labels], 1e-12, 1.)
+    masked = np.where(legal, probs, -1.);top = masked.argmax(1)
+    raw = probs[np.arange(len(labels)), labels];p = np.clip(raw, 1e-12, 1.)
     predicted_switch = np.where(legal[:, MOVES:], probs[:, MOVES:], 0.).sum(1)
-    return dict(decisions=int(len(labels)), top1=float((masked.argmax(1) == labels).mean()), nll=float(-np.log(p).mean()),
+    return dict(decisions=int(len(labels)), top1=float((top == labels).mean()), nll=float(-np.log(p).mean()),
+                label_below_1pct=float((raw < .01).mean()), label_below_5pct=float((raw < .05).mean()),
+                ece=calibration_error(masked.max(1), (top == labels).astype(float)),
                 predicted_switch_mass=float(predicted_switch.mean()), actual_switch_share=float((labels >= MOVES).mean()),
                 mean_label_probability=float(p.mean()))
 

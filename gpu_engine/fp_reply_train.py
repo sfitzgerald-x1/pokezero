@@ -105,19 +105,51 @@ def grouped(probs, arrays, rows):
     return {name: data_mod.metrics(probs[m], labels[m], legal[m]) for name, m in groups.items()}
 
 
+def test_report(arrays, test, pi_fp_probs, calibrated):
+    """The four reply models on the test rows: uniform over legal actions, the champion's π (its stored probabilities), π recalibrated,
+    and π_FP."""
+    legal = arrays['legal'][test]
+    return dict(uniform_legal=grouped(legal / legal.sum(1, keepdims=True), arrays, test),
+                champion_pi=grouped(arrays['probs'][test], arrays, test),
+                champion_pi_recalibrated=grouped(calibrated(arrays['probs'][test], legal), arrays, test),
+                pi_fp=grouped(pi_fp_probs, arrays, test))
+
+
+def archive_parity(checkpoint, archive, arrays, rows, torch_probs, size=512):
+    """Export π_FP to the champion_evaluator weight archive and check the JAX forward reproduces the torch probabilities."""
+    import jax
+    import jax.numpy as jnp
+    from gpu_engine import champion
+    meta = champion.export(checkpoint, archive)
+    params, config, loaded = champion.load(archive)
+    worst = 0.;agree = 0
+    for lo in range(0, len(rows), size):
+        r = rows[lo:lo + size]
+        output = champion.forward(params, jnp.asarray(arrays['numeric_features'][r]), jnp.asarray(arrays['categorical_ids'][r]),
+                                  jnp.asarray(arrays['token_type_ids'][r].astype(np.int32)), jnp.asarray(arrays['attention_mask'][r]), config)
+        logits = jnp.where(jnp.asarray(arrays['legal'][r]), output.policy_logits, -1e9)
+        probs = np.asarray(jax.nn.softmax(logits, axis=-1));reference = torch_probs[lo:lo + size]
+        worst = max(worst, float(np.abs(probs - reference).max()))
+        agree += int((np.where(arrays['legal'][r], probs, -1).argmax(1) == np.where(arrays['legal'][r], reference, -1).argmax(1)).sum())
+    return dict(archive=str(archive), weights_archive_sha256=loaded['weights_archive_sha256'], checkpoint_sha256=meta['checkpoint_sha256'],
+                rows=int(len(rows)), max_abs_probability_difference=worst, argmax_agreement=agree / len(rows) if len(rows) else None)
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.split('\n')[0])
     parser.add_argument('data');parser.add_argument('out');parser.add_argument('--checkpoint', required=True)
     parser.add_argument('--epochs', type=int, default=8);parser.add_argument('--lr', type=float, default=2e-5)
     parser.add_argument('--batch', type=int, default=256);parser.add_argument('--weight-decay', type=float, default=0.01)
     parser.add_argument('--device', default='cuda');parser.add_argument('--seed', type=int, default=0)
+    parser.add_argument('--evaluate', metavar='PI_FP_PT', help='skip training: report this trained π_FP on test')
+    parser.add_argument('--export-archive', metavar='NPZ', help='with --evaluate: export π_FP to a champion_evaluator archive and check parity')
     args = parser.parse_args(argv)
     import torch
     from pokezero.neural_policy import checkpoint_file_sha256, load_transformer_checkpoint
     torch.manual_seed(args.seed);rng = np.random.default_rng(args.seed)
     out = Path(args.out);out.mkdir(parents=True, exist_ok=True);started = time.time()
     arrays = load(args.data)
-    model, result = load_transformer_checkpoint(args.checkpoint, map_location=args.device)
+    model, result = load_transformer_checkpoint(args.evaluate or args.checkpoint, map_location=args.device)
     window = int(result.model_config.window_size)
     index = windows(arrays['ordinal'], window)
     split = data_mod.split_of(arrays['seed'])
@@ -126,6 +158,19 @@ def main(argv=None):
     print(json.dumps(dict(event='DATA', rows={k: int(len(v)) for k, v in rows.items()}, games=games, window=window)), flush=True)
     labels = arrays['label']
     calibration, calibrated = recalibrate(arrays['probs'][rows['train']], labels[rows['train']], arrays['legal'][rows['train']], torch)
+    if args.evaluate:
+        test = rows['test'];probs = predict(model, arrays, index, test, torch, args.device)
+        report = dict(schema='v2s-fp-reply-model-eval.v1', data=str(args.data), base_checkpoint=str(args.checkpoint),
+                      base_checkpoint_sha256=checkpoint_file_sha256(args.checkpoint), pi_fp=str(args.evaluate),
+                      pi_fp_sha256=checkpoint_file_sha256(args.evaluate), window=window, rows={k: int(len(v)) for k, v in rows.items()},
+                      games=games, split_rule='battle seed % 10: 0 test, 1 validation, else train', recalibration=calibration,
+                      ece_bins=data_mod.ECE_BINS, test=test_report(arrays, test, probs, calibrated))
+        if args.export_archive:
+            if window != 1:raise SystemExit('champion_evaluator archives need window 1')
+            report['archive'] = archive_parity(args.evaluate, args.export_archive, arrays, test, probs)
+        (out / 'report-eval.json').write_text(json.dumps(report, indent=1) + '\n')
+        print(json.dumps(dict(event='EVALUATED', test_all={k: v['all'] for k, v in report['test'].items()}, archive=report.get('archive'))), flush=True)
+        return 0
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
     best = dict(epoch=0, val_nll=nll(predict(model, arrays, index, rows['val'], torch, args.device), labels[rows['val']]))
     best_state = {k: v.detach().cpu().clone() for k, v in model.state_dict().items()}
@@ -147,10 +192,8 @@ def main(argv=None):
     report = dict(schema='v2s-fp-reply-model.v1', data=str(args.data), checkpoint=str(args.checkpoint),
                   checkpoint_sha256=checkpoint_file_sha256(args.checkpoint), window=window, rows={k: int(len(v)) for k, v in rows.items()},
                   games=games, split_rule='battle seed % 10: 0 test, 1 validation, else train', args=vars(args), history=history,
-                  best_epoch=best['epoch'], recalibration=calibration,
-                  test=dict(champion_pi=grouped(arrays['probs'][test], arrays, test),
-                            champion_pi_recalibrated=grouped(calibrated(arrays['probs'][test], arrays['legal'][test]), arrays, test),
-                            pi_fp=grouped(predict(model, arrays, index, test, torch, args.device), arrays, test)),
+                  best_epoch=best['epoch'], recalibration=calibration, ece_bins=data_mod.ECE_BINS,
+                  test=test_report(arrays, test, predict(model, arrays, index, test, torch, args.device), calibrated),
                   seconds=round(time.time() - started, 1))
     payload = torch.load(args.checkpoint, map_location='cpu', weights_only=True)
     payload = dict(payload);payload['state_dict'] = best_state
