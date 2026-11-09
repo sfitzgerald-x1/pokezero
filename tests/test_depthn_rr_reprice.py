@@ -528,7 +528,9 @@ class MainTests(unittest.TestCase):
                     BASE[:-2] + CHAMPION + run):   # no champion; no warmup file; no sample seed; both selections; the server's default rung
                 with self.subTest(argv=argv), redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):R.options(argv)
             self.assertEqual(R.options(BASE + CHAMPION + ['--run-directory', 'r', '--out', 'o', '--sample', '8', '--sample-seed', '3']).sample_seed, 3)
-            with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):R.options(BASE + CHAMPION + run + ['--reply-archive', 'p.npz'])   # dropped
+            with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):R.options(BASE + CHAMPION + run + ['--reply-archive', 'p.npz'])   # needs its sha256 flags
+            reply = ['--reply-archive', 'p.npz', '--reply-archive-sha256', 'e' * 64, '--reply-checkpoint-sha256', 'f' * 64]   # a br_fp replay (the server's flags)
+            self.assertEqual(R.options(BASE + CHAMPION + run + reply).reply_archive, 'p.npz')
 
     def replay(self, tmp, *extra, header=None, guard=None, peer_off=()):
         """main over a run directory with cell 1001: decisions 0-4, decision 1 single-legal, decision 4 refused by the constructor."""
@@ -657,9 +659,9 @@ class MainTests(unittest.TestCase):
         first = rows[0]
         self.assertEqual([(w['peer_inputs_index'], w['peer_self_check'], w['peer_self_check_max_abs_diff']) for w in first['worlds']],
             [(w, True, 0.) for w in range(16)])
-        self.assertEqual(first['peer_inputs_check'], dict(checked=16, equal=16, failed_worlds=[], written=16))
-        self.assertEqual(summary['peer_inputs_check'], dict(decided_roots=3, roots_checked=3, worlds_written=48, worlds_checked=48, worlds_equal=48,
-            failures=[], unchecked_roots=[], passed=True))
+        self.assertEqual(first['peer_inputs_check'], dict(checked=16, equal=16, failed_worlds=[], written=16, applicable=True))
+        self.assertEqual(summary['peer_inputs_check'], dict(decided_roots=3, roots_checked=3, roots_not_applicable=0, worlds_written=48,
+            worlds_checked=48, worlds_equal=48, failures=[], unchecked_roots=[], passed=True))
         with tempfile.TemporaryDirectory() as tmp:   # one world's peer inputs one ulp off its recorded logits: the check fails
             _, rows, summary, *_ = self.replay(tmp, peer_off=(3,))
         self.assertEqual([w['peer_self_check'] for w in rows[0]['worlds']], [w != 3 for w in range(16)])
@@ -671,7 +673,7 @@ class MainTests(unittest.TestCase):
     def test_a_failed_peer_capture_fails_the_check_and_keeps_the_sidecar_aligned(self):
         with tempfile.TemporaryDirectory() as tmp, patch.object(FakeEvaluator, 'view', side_effect=ValueError('slice')):
             _, rows, summary, *_ = self.replay(tmp)
-        self.assertEqual(rows[0]['peer_inputs_check'], dict(checked=16, equal=0, failed_worlds=list(range(16)), written=0))
+        self.assertEqual(rows[0]['peer_inputs_check'], dict(checked=16, equal=0, failed_worlds=list(range(16)), written=0, applicable=True))
         self.assertIn('peer inputs: ValueError: slice', rows[0]['notes']);self.assertFalse(summary['peer_inputs_check']['passed'])
         self.assertEqual(self.sidecar['numeric_features'].shape, (0, 23, 132))   # nothing kept, every column still aligned
 
@@ -685,7 +687,7 @@ class MainTests(unittest.TestCase):
         first = rows[0]
         self.assertEqual([w['peer_self_check'] for w in first['worlds']], [w != 5 for w in range(16)])   # failed, not skipped
         self.assertIsNone(first['worlds'][5]['peer_inputs_index']);self.assertIn('world 5: ValueError: peer view', first['notes'])
-        self.assertEqual(first['peer_inputs_check'], dict(checked=16, equal=15, failed_worlds=[5], written=15))
+        self.assertEqual(first['peer_inputs_check'], dict(checked=16, equal=15, failed_worlds=[5], written=15, applicable=True))
         self.assertFalse(summary['peer_inputs_check']['passed'])
         # A prepared root that never reached decide: its worlds are described, never captured or kept.
         class Counting:
@@ -704,6 +706,12 @@ class MainTests(unittest.TestCase):
         self.assertTrue(R.peer_inputs_summary([complete(0, ok), dict(complete(1, None), replay=dict(status='REFUSED'))])['passed'])
         self.assertFalse(R.peer_inputs_summary([complete(0, ok), complete(1, None)])['passed'])   # a decided root left unchecked
         self.assertFalse(R.peer_inputs_summary([complete(0, dict(ok, checked=0, equal=0))])['passed'])   # nothing checked
+        # a decided root with no priced opponent-requested world: not applicable, counted, never failing (the definitive run's 362)
+        na = R.peer_inputs_summary([complete(0, ok), complete(1, dict(ok, checked=0, equal=0, applicable=False))])
+        self.assertEqual((na['roots_checked'], na['roots_not_applicable'], na['unchecked_roots'], na['passed']), (1, 1, [], True))
+        self.assertFalse(R.peer_inputs_summary([complete(0, dict(ok, checked=0, equal=0, applicable=False))])['passed'])   # still nothing checked
+        broken = R.peer_inputs_summary([complete(0, ok), complete(1, dict(ok, checked=0, equal=0, applicable=False, failed_worlds=[2]))])
+        self.assertFalse(broken['passed'])   # a failure is never not applicable
         none = R.peer_inputs_summary([complete(0, ok), complete(1, dict(ok, checked=0, equal=0))])   # a decided root with no checkable world
         self.assertEqual((none['roots_checked'], none['unchecked_roots'], none['passed']), (1, [dict(ordinal=1, decision_index=1)], False))
         self.assertFalse(R.peer_inputs_summary([])['passed'])

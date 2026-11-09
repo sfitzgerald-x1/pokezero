@@ -66,7 +66,8 @@ tree guard) on the live inputs.
     every operator's choice against the live join's greedy_action_index with them.
   - Effect guard: the row's effect_guard is the replayed response's own (the live search's UNREPRESENTED_EFFECT record,
     pokezero.depthn_effect_guard, read through the pricers' observer seam in the same process_many call, so one pass gives the
-    row and its turn-2 priors): tripped, b (turn 1 / turn 2), c for the search's own choice, the reasons, the (a) flag,
+    row and its turn-2 priors): tripped, b (turn 1 / turn 2: the reach M under the live rule 'reach'), m_own, m_opp, arms, the
+    any-cell arm kept for analysis (any_cell_turn2 / _b / _tripped), c for the search's own choice, the reasons, the (a) flag,
     tier_b_legal, our guarded lanes, the conditions per side and the masses of every watched move (turn 1 per side and world,
     turn 2 per side, world and cell); None for a root the replay did not decide. The RR scorer applies it per operator.
   - Peer inputs (peer-inputs-<shard>.npz, every run): per decided root, each constructed world's depth-0 peer inputs, the
@@ -79,7 +80,8 @@ tree guard) on the live inputs.
     (true / false, null where not applicable; a priced, opponent-requested world whose capture raised is false, never
     skipped) and peer_self_check_max_abs_diff; per row peer_inputs_check (checked, equal, failed_worlds, written); the
     summary's peer_inputs_check counts them, lists the failures and passes only when every decided root had at least one
-    checked world and every checked world was equal (a decided root with none counts as unchecked). Only decided roots are
+    checked world and every checked world was equal (a decided root with none counts as unchecked, except one with no priced
+    opponent-requested world at all: not applicable, counted as roots_not_applicable, never failing). Only decided roots are
     captured or written (a root refused after prepare_roots has no root_peer_logits). The sidecar holds,
     stacked over its K worlds, the champion adapter's own view slice (ChampionEvaluator.view: the first 23 tokens) of
     those inputs: numeric_features f32 [K,23,132], categorical_ids i32 [K,23,41], token_type_ids i32 [K,23],
@@ -169,6 +171,7 @@ def parser():
 
 def options(argv=None):
     p = parser();args = p.parse_args(argv);server.evaluators.check_arguments(p, args);server.check_precision_environment(p, args)
+    server.check_reply_arguments(p, args)   # br_fp replays (--reply-archive with its two sha256 flags), as the server checks them
     if not args.champion_archive:p.error('--champion-archive with its two sha256 flags is required: the champion prices every root and leaf')
     for name in BENCH_ONLY:
         if getattr(args, name, None):p.error(f'--{name.replace("_", "-")} is the bench\'s; cells come from --cells or --sample')
@@ -614,7 +617,7 @@ def describe(capture, peer_lanes, vocabulary, peer_inputs=None, key=None):
 
 
 REPLAY_FIELDS = ('q_values', 'completed_q', 'policy_target', 'root_value', 'action_mean_q', 'action_policy_target', 'reduction_note', 'block_causes',
-    'world_refusals', 'bucket', 'batch_size', 'tree_commit', 'root_view_source', 'b2_view')
+    'world_refusals', 'bucket', 'batch_size', 'tree_commit', 'root_view_source', 'b2_view', 'reply_prior')   # reply_prior: --reply-archive (br_fp) only
 
 
 def decision_row(cell, row, request, response, wall, found, detail, *, shard, capture_seconds, live_problem=None):
@@ -643,7 +646,8 @@ def decision_row(cell, row, request, response, wall, found, detail, *, shard, ca
     checks = [w['peer_self_check'] for w in out['worlds'] if 'peer_self_check' in w]
     out['peer_inputs_check'] = None if not checks else dict(checked=sum(c is not None for c in checks), equal=sum(c is True for c in checks),
         failed_worlds=[w['world'] for w in out['worlds'] if w.get('peer_self_check') is False],
-        written=sum(w.get('peer_inputs_index') is not None for w in out['worlds']))
+        written=sum(w.get('peer_inputs_index') is not None for w in out['worlds']),
+        applicable=any(w.get('priced') is True and w.get('opponent_requested') is True for w in out['worlds']))   # no requested world: nothing to check
     out['capture_ok'] = ((response.get('status') != 'COMPLETE' or decided)
         and ((response.get('timings') or {}).get('prepare_seconds') is None or detail['prepared'] is not None))
     return out
@@ -667,14 +671,18 @@ def encode_row(row):
 # Summary -------------------------------------------------------------------------------------------------------------------------
 def peer_inputs_summary(rows):
     """The summary's peer_inputs_check (module docstring): written, checked and equal worlds over every decided root, the
-    failures, and passed (at least one world checked, every checked world equal, and every decided root checked)."""
+    failures, the not-applicable roots (decided, no priced world where the opponent was requested: no root_peer_logits to check;
+    counted, never failing), and passed (at least one world checked, every checked world equal, and every other decided root
+    checked)."""
     decided = [r for r in rows if r['replay']['status'] == 'COMPLETE']
     checked = [r for r in decided if r.get('peer_inputs_check') and r['peer_inputs_check']['checked'] > 0]   # a root with no checked world is not
+    na = [r for r in decided if r.get('peer_inputs_check') and r['peer_inputs_check']['checked'] == 0
+          and r['peer_inputs_check'].get('applicable') is False and not r['peer_inputs_check']['failed_worlds']]
     address = lambda r: dict(ordinal=r['ordinal'], decision_index=r['decision_index'])
     worlds = sum(r['peer_inputs_check']['checked'] for r in checked);equal = sum(r['peer_inputs_check']['equal'] for r in checked)
     failures = [dict(address(r), worlds=r['peer_inputs_check']['failed_worlds']) for r in checked if r['peer_inputs_check']['failed_worlds']]
-    seen = {id(r) for r in checked};unchecked = [address(r) for r in decided if id(r) not in seen]
-    return dict(decided_roots=len(decided), roots_checked=len(checked),
+    seen = {id(r) for r in checked + na};unchecked = [address(r) for r in decided if id(r) not in seen]
+    return dict(decided_roots=len(decided), roots_checked=len(checked), roots_not_applicable=len(na),
         worlds_written=sum(r['peer_inputs_check']['written'] for r in decided if r.get('peer_inputs_check')),
         worlds_checked=worlds, worlds_equal=equal, failures=failures, unchecked_roots=unchecked,
         passed=worlds > 0 and equal == worlds and not failures and not unchecked)

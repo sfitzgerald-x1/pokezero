@@ -811,7 +811,7 @@ class ReportMathTests(unittest.TestCase):
         z = jnp.zeros((1, 2, 6), jnp.int32);base = tr.Trackers(*([z] * 5), z, z, z, z, z, jnp.zeros((1, 2, 6, 7), jnp.int32), z > 0, z > 0, jnp.ones(1, jnp.int32),
             jnp.zeros(1, jnp.int32), jnp.zeros((1, 2), jnp.int32), jnp.zeros(1, jnp.int32), public_port=port.initialize(1))
         filled = cw.fill_owner_spikes(base, 0, cw.line_facts(lines, 0));pair = np.asarray(filled.public_port.hazards)[0, 0, 0]
-        view = np.float32(np.clip(np.float32(pair[0] + pair[1]) / np.float32(6), 0, 1))   # what the encoder writes into field 116
+        view = np.float32(np.clip(np.float32(np.float32(pair[0] + pair[1]) * np.float32(1 / 6)), 0, 1))   # the encoder's field 116 (x * float32(1/6))
         self.assertGreater(view, 0);self.assertEqual(P.recompute_opp_hazard_credit(lines, 0), view)
         # Drops of 3, 16 and 11 points: the compensated sum's low-order term moves the column (a plain float32 sum gives 0.05 / 6 rounded
         # differently), so the recomputation must carry the device's compensation to match the fill.
@@ -819,14 +819,29 @@ class ReportMathTests(unittest.TestCase):
         for name, after in (('Gamma', 97), ('Delta', 84), ('Eta', 89)):
             long += [f'|switch|p1a: {name}|{name}, L80|100/100', f'|-damage|p1a: {name}|{after}/100|[from] Spikes']
         filled = cw.fill_owner_spikes(base, 0, cw.line_facts(long, 0));pair = np.asarray(filled.public_port.hazards)[0, 0, 0]
-        view = np.float32(np.clip(np.float32(pair[0] + pair[1]) / np.float32(6), 0, 1))
+        view = np.float32(np.clip(np.float32(np.float32(pair[0] + pair[1]) * np.float32(1 / 6)), 0, 1))
         plain = np.float32(0)
-        for drop in (3, 16, 11):plain = np.float32(plain + np.float32(drop) / np.float32(100))
-        self.assertNotEqual(np.float32(np.clip(plain / np.float32(6), 0, 1)), view)   # the case does tell the two sums apart
+        for drop in (3, 16, 11):plain = np.float32(plain + np.float32(np.float32(drop) * np.float32(1 / 100)))
+        self.assertNotEqual(np.float32(np.clip(np.float32(plain * np.float32(1 / 6)), 0, 1)), view)   # the case does tell the two sums apart
         self.assertEqual(P.recompute_opp_hazard_credit(long, 0), view)
         self.assertEqual(P.recompute_opp_hazard_credit(lines[:3], 0), 0.)   # no hit
         self.assertTrue(np.isnan(P.recompute_opp_hazard_credit(['|-damage|p1a: Gamma|262/300|[from] Spikes'], 0)))   # no previous HP
         self.assertEqual((P.showdown_percent(299, 300), P.showdown_percent(300, 300), P.showdown_percent(1, 300), P.showdown_percent(0, 300)), (99, 100, 1, 0))
+
+    def test_the_recomputation_multiplies_by_float32_reciprocals_as_xla_does(self):
+        """The measurement session's one-ulp rows: XLA compiles the device's x / 100 per hit and the readout's x / 6 to float32
+        reciprocal multiplies; the recomputation does the same (a 5-point drop and a 1-point drop, where the two differ)."""
+        f = np.float32
+        def one_hit(points):
+            return ['|switch|p1a: Alpha|Alpha, L80|100/100', '|switch|p2a: Beta|Beta, L80|100/100', '|turn|1', '|switch|p1a: Gamma|Gamma, L80|100/100',
+                f'|-damage|p1a: Gamma|{100 - points}/100|[from] Spikes']
+        for points in (5, 1):
+            with self.subTest(points=points):
+                xla = f(f(f(points) * f(1 / 100)) * f(1 / 6));divided = f(f(f(points) / f(100)) / f(6))
+                self.assertNotEqual(xla, divided)   # the case tells the two apart (by one ulp)
+                self.assertEqual(P.recompute_opp_hazard_credit(one_hit(points), 0), xla)
+        self.assertNotEqual(f(f(5) / f(100)), f(f(5) * f(1 / 100)))   # the per-hit term alone differs at 5 points
+        self.assertNotEqual(f(f(1) * f(1 / 100) / f(6)), f(f(f(1) * f(1 / 100)) * f(1 / 6)))   # and the readout at 1 point
 
     def test_empty_kind(self):
         env, view = toy(0)
