@@ -66,7 +66,8 @@ tree guard) on the live inputs.
     every operator's choice against the live join's greedy_action_index with them.
   - Effect guard: the row's effect_guard is the replayed response's own (the live search's UNREPRESENTED_EFFECT record,
     pokezero.depthn_effect_guard, read through the pricers' observer seam in the same process_many call, so one pass gives the
-    row and its turn-2 priors): tripped, b (turn 1 / turn 2), c for the search's own choice, the reasons, the (a) flag,
+    row and its turn-2 priors): tripped, b (turn 1 / turn 2: the reach M under the live rule 'reach'), m_own, m_opp, arms, the
+    any-cell arm kept for analysis (any_cell_turn2 / _b / _tripped), c for the search's own choice, the reasons, the (a) flag,
     tier_b_legal, our guarded lanes, the conditions per side and the masses of every watched move (turn 1 per side and world,
     turn 2 per side, world and cell); None for a root the replay did not decide. The RR scorer applies it per operator.
   - Peer inputs (peer-inputs-<shard>.npz, every run): per decided root, each constructed world's depth-0 peer inputs, the

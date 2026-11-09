@@ -106,6 +106,7 @@ class SeamTests(unittest.TestCase):
         self.assertEqual((clear['tripped'], clear['reasons'], clear['a']), (False, [], False))
         missing, _, _ = self.record(lambda s: fake_labels(s, peer_moves=(TACKLE, REST, PROTECT, 0)), children=[])
         self.assertEqual((missing['tripped'], [x['source'] for x in missing['reasons']]), (True, ['turn2_unavailable']))   # fail closed
+        self.assertEqual([x['source'] for x in missing['any_cell_reasons']], ['turn2_unavailable'])
 
     def test_turn_2_reads_each_cells_own_child_row(self):
         """Each expanded cell reads the child row its lane holds (P1 row w, lane l: w*81 + l, through lane_cell), not w*81 + cell: the
@@ -130,9 +131,12 @@ class SeamTests(unittest.TestCase):
         """Our Surf is a sleep move here (Sleep Clause): guarded at a child only while the OPPONENT's seat has a sleeper there."""
         clause = ('C', 'status', 'sleep_clause')
         theirs, _, _ = self.record(lambda s: varied_labels(s, seat=0, sleeper=1), entry=clause)
-        self.assertEqual({(x['move'], x['side'], x['source']) for x in theirs['reasons']}, {('surf', 'own', 'turn2')})
+        self.assertEqual({(x['move'], x['side'], x['source']) for x in theirs['any_cell_reasons']}, {('surf', 'own', 'turn2')})
+        # reasons list only what tripped: the reach on our side (M_own crosses THRESHOLD here), its tier C mass from Surf
+        self.assertGreaterEqual(theirs['m_own'], G.THRESHOLD);self.assertEqual((theirs['m_opp'], theirs['tiers']), (0., ['C']))
+        self.assertEqual([(x['side'], x['source'], x['tiers'], list(x['moves'])) for x in theirs['reasons']], [('own', 'reach', {'C': theirs['m_own']}, ['surf'])])
         ours, _, _ = self.record(lambda s: varied_labels(s, seat=0, sleeper=0), entry=clause)   # only our own seat sleeps: no clause
-        self.assertEqual(ours['reasons'], [])
+        self.assertEqual((ours['reasons'], ours['any_cell_reasons'], ours['m_own']), ([], [], 0.))
 
     def test_turn_2_cells_are_our_lane_times_9_plus_the_reply(self):
         """Every turn-2 mass entry's cell is a * 9 + b on the frame's [own lane a, reply b] axes (what the reach reads), its mass
