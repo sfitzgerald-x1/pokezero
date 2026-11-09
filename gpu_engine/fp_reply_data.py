@@ -19,7 +19,8 @@ Checks per game (a failing game is dropped and counted, never patched):
     choice string decodes to that action on its own replayed state (teacher_capture.action_index_from_choice_string), which
     constrains Foul Play's side of the replay directly;
   - our seat's decisions are exactly the telemetry's (and the result's pokezero_decisions), and the terminal winner is the result's.
-An env error in one game (LocalShowdownError, ValueError) drops that game, counted by type, and the env is rebuilt.
+An env error in one game (LocalShowdownError, ValueError, KeyError) drops that game, counted by type, and the env is rebuilt;
+MAX_CONSECUTIVE_ENV_ERRORS in a row abort the shard.
 Reported, not a drop: encoder parity, the champion's argmax on our seat's env observation against the recorded greedy action.
 Games whose battle seed is in the screen band (2103400000 to 2103400999) are skipped: RR scores operators on those roots.
 Output per shard: shard-<I>.npz, one row per Foul Play decision (the observation arrays, legal mask, label, the champion's
@@ -43,6 +44,7 @@ MOVES = 4
 ACTIONS = 9
 TURN_BANDS = ((1, 3), (4, 9), (10, 19), (20, 10**9))
 MAX_ROUNDS = 400
+MAX_CONSECUTIVE_ENV_ERRORS = 5   # a systematic config or encoder bug fails the shard loudly, not game by game
 
 
 class Mismatch(Exception):
@@ -166,7 +168,7 @@ def build(args):
     env = None;config_key = None;rng = random.Random(0)
     counts = collections.Counter();mismatches = collections.Counter();examples = {}
     columns = collections.defaultdict(list);parity_hits = 0;parity_total = 0;started = time.time()
-    seats = collections.Counter()
+    seats = collections.Counter();consecutive_errors = 0
     for path in paths:
         game, skip = load_game(collection, path)
         if game is None:counts[f'skipped_{skip}'] += 1;continue
@@ -182,13 +184,15 @@ def build(args):
                 set_belief_source=bool(base['belief_set_source'])))
         try:rows, parity, decided = replay(env, policy, game, rng)
         except Mismatch as error:
-            reason = re.sub(r"'[^']*'|\d+", '#', str(error))
+            reason = re.sub(r"'[^']*'|\"[^\"]*\"|\d+", '#', str(error));consecutive_errors = 0
             mismatches[reason] += 1;examples.setdefault(reason, dict(ordinal=game['ordinal'], detail=str(error)));continue
         except (LocalShowdownError, ValueError, KeyError) as error:   # one bad game, not the shard; the env may be wedged
             reason = f'env error {type(error).__name__}'
             mismatches[reason] += 1;examples.setdefault(reason, dict(ordinal=game['ordinal'], detail=str(error)[:500]))
-            env.close();env = None;continue
-        seats[game['fp']] += 1
+            env.close();env = None;consecutive_errors += 1
+            if consecutive_errors >= MAX_CONSECUTIVE_ENV_ERRORS:raise SystemExit(f'{consecutive_errors} consecutive env errors: {examples[reason]}')
+            continue
+        consecutive_errors = 0;seats[game['fp']] += 1
         counts['games'] += 1;parity_hits += parity;parity_total += decided
         for row in rows:
             observation = row['observation']

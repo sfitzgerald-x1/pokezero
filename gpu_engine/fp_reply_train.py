@@ -110,8 +110,9 @@ def grouped(probs, arrays, rows, uniform=False):
     return {name: data_mod.metrics(probs[m], labels[m], legal[m], uniform=uniform) for name, m in groups.items()}
 
 
-TURN_BUCKETS = ((1, 1), (2, 2), (3, 3), (4, 5), (6, 8), (9, 12), (13, 17), (18, 24), (25, 34), (35, 49), (50, 10**9))
+TURN_BUCKETS = ((0, 0), (1, 1), (2, 2), (3, 3), (4, 5), (6, 8), (9, 12), (13, 17), (18, 24), (25, 34), (35, 49), (50, 10**9))
 BOOTSTRAP_DRAWS = 2000
+MIN_CLUSTERS = 5
 
 
 def label_nll(probs, labels):
@@ -126,21 +127,24 @@ def in_context_curve(models, arrays, rows):
         m = (turn >= low) & (turn <= high)
         if m.any():curve.append(dict(turns=f'{low}' if low == high else (f'{low}-{high}' if high < 10**9 else f'{low}+'), decisions=int(m.sum()),
                                      **{name: float(label_nll(p[m], labels[m]).mean()) for name, p in models.items()}))
+    if sum(c['decisions'] for c in curve) != len(rows):raise ValueError('turn buckets must cover every row')
     return curve
 
 
 def game_bootstrap(models, arrays, rows, pairs, draws=BOOTSTRAP_DRAWS, seed=0):
-    """90% game-cluster bootstrap intervals for mean-NLL differences (a − b) on the given rows: games are resampled with replacement,
-    because decisions within a game are correlated."""
-    labels, games = arrays['label'][rows], arrays['ordinal'][rows]
-    unique, inverse = np.unique(games, return_inverse=True);rng = np.random.default_rng(seed)
+    """90% cluster bootstrap intervals for mean-NLL differences (a − b) on the given rows. The cluster is the battle seed, the split
+    unit: the collector plays each seed once from each seat, so the two games on a seed are correlated and resampled together.
+    Fewer than MIN_CLUSTERS seeds gives no interval."""
+    labels, clusters = arrays['label'][rows], arrays['seed'][rows]
+    unique, inverse = np.unique(clusters, return_inverse=True);rng = np.random.default_rng(seed)
     per = {name: label_nll(p, labels) for name, p in models.items()};out = {}
     for a, b in pairs:
         d = per[a] - per[b];sums = np.bincount(inverse, d, len(unique));counts = np.bincount(inverse, None, len(unique))
         stats = [];idx = np.arange(len(unique))
-        for _ in range(draws):
+        for _ in range(draws if len(unique) >= MIN_CLUSTERS else 0):
             pick = rng.choice(idx, len(idx));stats.append(sums[pick].sum() / counts[pick].sum())
-        out[f'{a} - {b}'] = dict(mean=float(d.mean()), interval_90=[float(q) for q in np.quantile(stats, [.05, .95])], games=int(len(unique)))
+        out[f'{a} - {b}'] = dict(mean=float(d.mean()), seeds=int(len(unique)), games=int(len(np.unique(arrays['ordinal'][rows]))),
+                                 interval_90=[float(q) for q in np.quantile(stats, [.05, .95])] if len(unique) >= MIN_CLUSTERS else None)
     return out
 
 
@@ -171,6 +175,8 @@ def widen(checkpoint, window, out, torch):
     if row.shape[0] != 1:raise SystemExit(f'unexpected history_position_embedding shape {tuple(row.shape)}')
     state['history_position_embedding.weight'] = row.repeat(window, 1).clone()
     payload['model_config'] = dict(config, window_size=window);payload['state_dict'] = state
+    if isinstance(payload.get('training_config'), dict) and 'window_size' in payload['training_config']:
+        payload['training_config'] = dict(payload['training_config'], window_size=window)
     path = Path(out) / f'base-window-{window}.pt'
     torch.save(payload, path)
     return path
@@ -186,22 +192,26 @@ def step_cost(model, arrays, index, rows, torch, device, single=200, batched=409
     """Inference cost per decision: batch-1 latency (median over `single` decisions after warm-up) on the device and on CPU, and
     batch-512 throughput on the device."""
     import copy
+    sync = (lambda: torch.cuda.synchronize(device)) if str(device) != 'cpu' else (lambda: None)
     def latency(m, dev, count):
         m.eval();times = []
         with torch.no_grad():
             for i, r in enumerate(rows[:count + 10]):
                 b = batch(arrays, index, np.array([r]), torch, dev)
-                if dev != 'cpu':torch.cuda.synchronize()
+                if dev != 'cpu':sync()
                 started = time.perf_counter();forward(m, b)
-                if dev != 'cpu':torch.cuda.synchronize()
+                if dev != 'cpu':sync()
                 if i >= 10:times.append(time.perf_counter() - started)
         return 1e3 * float(np.median(times))
-    out = dict(device=str(device), batch1_ms_device=latency(model, device, single))
+    out = dict(device=str(device), note='for comparing windows only: exact-fp32 kernels (MHA fast path off), host gathering included '
+               'in the batched figure, CPU latency on one thread', batch1_ms_device=latency(model, device, single))
     with torch.no_grad():
-        chunk = rows[:batched];started = time.perf_counter();predict(model, arrays, index, chunk, torch, device)
-        if device != 'cpu':torch.cuda.synchronize()
+        chunk = rows[:batched];predict(model, arrays, index, chunk[:512], torch, device);sync()
+        started = time.perf_counter();predict(model, arrays, index, chunk, torch, device);sync()
         out['batch512_ms_per_decision_device'] = 1e3 * (time.perf_counter() - started) / max(1, len(chunk))
-    out['batch1_ms_cpu'] = latency(copy.deepcopy(model).to('cpu'), 'cpu', min(single, 50))
+    threads = torch.get_num_threads();torch.set_num_threads(1)
+    try:out['batch1_ms_cpu_1thread'] = latency(copy.deepcopy(model).to('cpu'), 'cpu', min(single, 50))
+    finally:torch.set_num_threads(threads)
     return out
 
 
@@ -232,7 +242,9 @@ def archive_parity(checkpoint, archive, arrays, index, rows, torch, extra, size=
     result = dict(archive=str(archive), weights_archive_sha256=loaded['weights_archive_sha256'], checkpoint_sha256=meta['checkpoint_sha256'],
                   extra=loaded.get('extra'), reference='torch fp32 on CPU', tolerance=ARCHIVE_TOLERANCE, rows=int(len(rows)),
                   max_abs_probability_difference=worst, argmax_agreement=agree / len(rows) if len(rows) else None)
-    if not worst <= ARCHIVE_TOLERANCE:raise SystemExit(f'archive parity failed: {json.dumps(result)}')
+    if not worst <= ARCHIVE_TOLERANCE:
+        Path(archive).replace(str(archive) + '.failed-parity')
+        raise SystemExit(f'archive parity failed (archive moved to {archive}.failed-parity): {json.dumps(result)}')
     return result
 
 
@@ -252,6 +264,8 @@ def main(argv=None):
     parser.add_argument('--window', type=int, default=None, help='train at this window (the base is widened; see widen)')
     parser.add_argument('--compare-to', metavar='RUN_DIR', help="another run's test-probs.npz to report beside this π_FP (same test rows)")
     args = parser.parse_args(argv)
+    if args.evaluate and (args.window or args.compare_to):parser.error('--window and --compare-to apply to training, not --evaluate')
+    if args.export_archive and not args.evaluate:parser.error('--export-archive needs --evaluate')
     import torch
     from pokezero.neural_policy import checkpoint_file_sha256, load_transformer_checkpoint
     # Exact fp32 on CUDA: TF32 off, highest matmul precision, and no MHA fast path. In eval mode nn.TransformerEncoder's fused fast
@@ -272,7 +286,12 @@ def main(argv=None):
     games = {name: int(len(np.unique(arrays['ordinal'][r]))) for name, r in rows.items()}
     seats = seats_by_split(arrays, rows)
     print(json.dumps(dict(event='DATA', rows={k: int(len(v)) for k, v in rows.items()}, games=games, seats=seats, window=window)), flush=True)
-    labels = arrays['label']
+    labels = arrays['label'];compare = None
+    if args.compare_to:   # validated before training, so a bad comparison can't waste a run
+        other = np.load(Path(args.compare_to) / 'test-probs.npz')
+        for key in ('ordinal', 'seed', 'label', 'round'):
+            if not np.array_equal(other[key], arrays[key][rows['test']]):raise SystemExit(f'--compare-to run has different test rows ({key})')
+        compare = other['probs']
     calibration, calibrated = recalibrate(arrays['probs'][rows['train']], labels[rows['train']], arrays['legal'][rows['train']], torch)
     if args.evaluate:
         test = rows['test'];probs = predict(model, arrays, index, test, torch, args.device)
@@ -313,12 +332,15 @@ def main(argv=None):
     test = rows['test'];test_probs = predict(model, arrays, index, test, torch, args.device)
     np.savez(out / 'test-probs.npz', rows=test, ordinal=arrays['ordinal'][test], seed=arrays['seed'][test], label=labels[test],
              round=arrays['round'][test], probs=test_probs)
-    compare = None
-    if args.compare_to:
-        other = np.load(Path(args.compare_to) / 'test-probs.npz')
-        for key in ('ordinal', 'seed', 'label', 'round'):
-            if not np.array_equal(other[key], arrays[key][test]):raise SystemExit(f'--compare-to run has different test rows ({key})')
-        compare = other['probs']
+    payload = dict(torch.load(base_path, map_location='cpu', weights_only=True))   # saved before the optional extras below
+    base_sha = checkpoint_file_sha256(args.checkpoint)
+    payload['state_dict'] = best_state;payload['value_calibration_transform'] = None
+    payload['value_calibration_source_checkpoint_sha256'] = None
+    if isinstance(payload.get('model_config'), dict) and 'policy_id' in payload['model_config']:
+        payload['model_config'] = dict(payload['model_config'], policy_id=f"fp-reply-{payload['model_config']['policy_id']}")
+    payload['fp_reply'] = dict(policy_only=True, base_checkpoint_sha256=base_sha, best_epoch=best['epoch'], data=str(args.data), window=window,
+                               note='policy fine-tuned on Foul Play decisions; the value output is not trained and must not be used')
+    torch.save(payload, out / 'pi-fp.pt')
     cost = step_cost(model, arrays, index, test, torch, args.device)
     report = dict(schema='v2s-fp-reply-model.v1', data=str(args.data), checkpoint=str(args.checkpoint),
                   checkpoint_sha256=checkpoint_file_sha256(args.checkpoint), window=window, rows={k: int(len(v)) for k, v in rows.items()},
@@ -327,14 +349,6 @@ def main(argv=None):
                   best_epoch=best['epoch'], recalibration=calibration, ece_bins=data_mod.ECE_BINS,
                   test=test_report(arrays, test, test_probs, calibrated, compare), compare_to=args.compare_to, inference_cost=cost,
                   seconds=round(time.time() - started, 1))
-    payload = dict(torch.load(base_path, map_location='cpu', weights_only=True))
-    base_sha = checkpoint_file_sha256(args.checkpoint)
-    payload['state_dict'] = best_state;payload['value_calibration_transform'] = None
-    if isinstance(payload.get('model_config'), dict) and 'policy_id' in payload['model_config']:
-        payload['model_config'] = dict(payload['model_config'], policy_id=f"fp-reply-{payload['model_config']['policy_id']}")
-    payload['fp_reply'] = dict(policy_only=True, base_checkpoint_sha256=base_sha, best_epoch=best['epoch'], data=str(args.data), window=window,
-                               note='policy fine-tuned on Foul Play decisions; the value output is not trained and must not be used')
-    torch.save(payload, out / 'pi-fp.pt')
     report['saved'] = dict(path=str(out / 'pi-fp.pt'), sha256=checkpoint_file_sha256(out / 'pi-fp.pt'),
                            note='champion checkpoint format; policy fine-tuned on Foul Play decisions; the value head output is not trained')
     (out / 'report.json').write_text(json.dumps(report, indent=1) + '\n')

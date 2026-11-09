@@ -224,21 +224,28 @@ class WindowTests(unittest.TestCase):
 
 class CurveAndBootstrapTests(unittest.TestCase):
     def arrays(self):
-        return dict(turn=np.array([1, 1, 2, 7, 60]), label=np.array([0, 1, 0, 0, 1]), ordinal=np.array([4, 4, 5, 5, 6]))
+        return dict(turn=np.array([0, 1, 2, 7, 60]), label=np.array([0, 1, 0, 0, 1]), ordinal=np.array([4, 4, 5, 5, 6]),
+                    seed=np.array([10, 10, 10, 10, 20]))
 
-    def test_curve_buckets_turns_and_averages_nll_per_model(self):
+    def test_curve_buckets_every_turn_including_zero(self):
         sure = np.tile(np.eye(9)[0] * .9 + .1 / 9, (5, 1))
         curve = t.in_context_curve(dict(m=sure), self.arrays(), np.arange(5))
-        self.assertEqual([(c['turns'], c['decisions']) for c in curve], [('1', 2), ('2', 1), ('6-8', 1), ('50+', 1)])
-        p0, p1 = .9 + .1 / 9, .1 / 9
-        self.assertAlmostEqual(curve[0]['m'], -(np.log(p0) + np.log(p1)) / 2)
+        self.assertEqual([(c['turns'], c['decisions']) for c in curve], [('0', 1), ('1', 1), ('2', 1), ('6-8', 1), ('50+', 1)])
+        self.assertAlmostEqual(curve[1]['m'], -np.log(.1 / 9))
 
-    def test_bootstrap_of_identical_models_is_zero_and_resamples_games(self):
+    def test_bootstrap_clusters_by_seed_and_needs_enough_seeds(self):
         p = np.full((5, 9), 1 / 9);q = np.tile(np.eye(9)[0] * .5 + .5 / 9, (5, 1))
         out = t.game_bootstrap(dict(a=p, b=p, c=q), self.arrays(), np.arange(5), (('a', 'b'), ('c', 'a')), draws=200)
-        self.assertEqual(out['a - b']['interval_90'], [0., 0.]);self.assertEqual(out['a - b']['games'], 3)
-        low, high = out['c - a']['interval_90'];self.assertLessEqual(low, out['c - a']['mean'] + 1e-12)
-        self.assertGreaterEqual(high, out['c - a']['mean'] - 1e-12)
+        self.assertEqual((out['a - b']['seeds'], out['a - b']['games']), (2, 3))   # games 4 and 5 share seed 10
+        self.assertIsNone(out['c - a']['interval_90'])                           # 2 seeds < MIN_CLUSTERS
+
+    def test_bootstrap_interval_brackets_the_mean_with_enough_seeds(self):
+        rng = np.random.default_rng(1);n = 60
+        arrays = dict(label=rng.integers(0, 9, n), ordinal=np.arange(n), seed=np.repeat(np.arange(n // 2), 2), turn=np.ones(n, int))
+        p = np.full((n, 9), 1 / 9);q = rng.dirichlet(np.ones(9), n)
+        out = t.game_bootstrap(dict(a=p, b=p, c=q), arrays, np.arange(n), (('a', 'b'), ('c', 'a')), draws=400)
+        self.assertEqual(out['a - b']['interval_90'], [0., 0.])
+        low, high = out['c - a']['interval_90'];self.assertLess(low, out['c - a']['mean']);self.assertGreater(high, out['c - a']['mean'])
 
 
 @unittest.skipUnless(__import__('importlib').util.find_spec('torch'), 'torch not installed')
