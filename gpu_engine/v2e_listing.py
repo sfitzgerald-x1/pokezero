@@ -29,7 +29,8 @@ import time
 
 PACKAGE = Path(__file__).resolve().parent
 DESCRIPTION = PACKAGE.parent / 'tests' / 'fixtures' / 'v2e_layout_description.json'
-ROOT_FUNCTION = ('transition', 'step_with_chance')
+ROOT_FUNCTION = ('transition', 'step_with_public')   # the collector's entry; step_with_chance is reached from it
+STEP_FUNCTION = ('transition', 'step_with_chance')
 # Names the device path fixes (design note section 1.1).
 NAME_FACTS = {'_device_public': 'present', '_lifecycle_trace': False, '_public_trace': None, '_hypothetical_profile': None, '_hypothetical': False,
     'table': 'present', 'tables': 'present', 'belief_tables': 'present', 'port_tables': 'present', 'leftovers': 'present', 'entry_table': 'present',
@@ -226,20 +227,20 @@ def prune_function(module, fn, facts):
     return out
 
 
-CALL = re.compile(r'\b([A-Za-z_]\w*)(?:\.([A-Za-z_]\w*))?\s*\(')
+REFERENCE = re.compile(r'(?<![\w.])([A-Za-z_]\w*)(?:\.([A-Za-z_]\w*))?')
 
 
 def reached_calls(module, pruned):
-    """(callee module name, function name) pairs the surviving lines call: `alias.name(` through the module's import aliases,
-    bare `name(` for the module's own or from-imported functions."""
+    """(callee module name, function name) pairs the surviving lines reference (called or passed as a callback):
+    `alias.name` through the module's import aliases, bare `name` for the module's own or from-imported functions."""
     text = '\n'.join(module.lines[n - 1] for n in sorted(pruned.lines))
     text = re.sub(r"'[^'\n]*'|\"[^\"\n]*\"|#[^\n]*", '', text)   # strings and comments
     out = set()
-    for m in CALL.finditer(text):
+    for m in REFERENCE.finditer(text):
         head, attr = m.group(1), m.group(2)
         if attr is not None:
             if head in module.aliases and module.aliases[head] not in SKIP_MODULES:out.add((module.aliases[head], attr))
-        elif head in module.functions:out.add((module.name, head))
+        elif head in module.functions and head != pruned.function:out.add((module.name, head))
         elif head in module.names:out.add(module.names[head])
     return out
 
@@ -271,12 +272,12 @@ def phase_counts(pruned):
 
 def write_listing(out, modules, listed, *, trace_lines=None):
     out = Path(out);out.mkdir(parents=True, exist_ok=True);report = dict(schema='pokezero.v2e-listing.v1', root=list(ROOT_FUNCTION), functions={})
-    for (mod, fn), pruned in sorted(listed.items(), key=lambda kv: (kv[0][0] != 'transition', kv[0])):
+    for (mod, fn), pruned in sorted(listed.items(), key=lambda kv: (kv[0][0] != 'transition', kv[0] != STEP_FUNCTION, kv[0])):
         (out / f'{mod}.{fn}.txt').write_text(render(modules[mod], pruned))
         row = dict(module=mod, function=fn, span=[pruned.first, pruned.last], source_lines=pruned.last - pruned.first + 1,
             surviving=len(pruned.lines), static_true_headers=len(pruned.static_headers), unknown_headers=len(pruned.unknown_headers),
             dropped=len(pruned.dropped), lines=sorted(pruned.lines), static_true_header_lines=sorted(pruned.static_headers))
-        if (mod, fn) == ROOT_FUNCTION:row['by_phase'] = phase_counts(pruned)
+        if (mod, fn) == STEP_FUNCTION:row['by_phase'] = phase_counts(pruned)
         report['functions'][f'{mod}.{fn}'] = row
     report['totals'] = dict(functions=len(listed), surviving=sum(r['surviving'] for r in report['functions'].values()),
         by_module={m: sum(r['surviving'] for r in report['functions'].values() if r['module'] == m) for m in sorted({k[0] for k in listed})})
@@ -293,7 +294,7 @@ def listing_markdown(report):
     out = ['| Function | Source lines | Surviving | Static-true `if` headers | Unknown `if` headers |', '| --- | ---: | ---: | ---: | ---: |']
     for name, r in report['functions'].items():
         out.append(f"| {name} | {r['source_lines']} | {r['surviving']} | {r['static_true_headers']} | {r['unknown_headers']} |")
-    root = report['functions'].get('.'.join(ROOT_FUNCTION))
+    root = report['functions'].get('.'.join(STEP_FUNCTION))
     if root:
         out += ['', f"step_with_chance: {root['surviving']} surviving lines ({root['surviving'] - root['static_true_headers']} without the statically true `if` headers) by phase:", '']
         out += ['| Phase | Surviving lines |', '| --- | ---: |'] + [f'| {k} | {v} |' for k, v in root['by_phase'].items()]
@@ -362,7 +363,7 @@ def cmd_write(args):
     listed = listing(modules, attributes)
     trace = json.loads(Path(args.trace_lines).read_text()) if args.trace_lines else None
     report = write_listing(args.out, modules, listed, trace_lines=trace)
-    root = report['functions']['.'.join(ROOT_FUNCTION)]
+    root = report['functions']['.'.join(STEP_FUNCTION)]
     print(f"listing: {report['totals']['functions']} functions, {report['totals']['surviving']} lines; step_with_chance {root['surviving']} "
         f"({root['surviving'] - root['static_true_headers']} without static headers) -> {args.out}")
     if trace is not None:

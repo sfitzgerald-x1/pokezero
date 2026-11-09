@@ -152,6 +152,19 @@ class EmulationTest(unittest.TestCase):
         np.testing.assert_array_equal(L.convert(np.array([5e9, -5., np.nan, 4294967296.0, 2.9], np.float32), np.uint32), [4294967295, 0, 0, 4294967295, 2])
         np.testing.assert_array_equal(L.convert(np.array([0., -0., np.nan, 2.9], np.float32), np.bool_), [False, False, True, True])
 
+    def test_promotion_round_trips_the_whole_operand_like_jax(self):
+        """jax: x.at[].set(float) on an int32 operand promotes x to float32, so untouched large values change; the point
+        semantics of Leaf::set converts the update alone. The oracle has no promoting scatter (scatter-census)."""
+        self.assertTrue(L.promotes('int32', 'float32'));self.assertTrue(L.promotes('uint32', 'float32'))
+        for a, b in (('int32', 'int32'), ('bool', 'int32'), ('uint8', 'int32'), ('int32', 'uint32'), ('float32', 'int32'), ('int32', 'bool')):
+            self.assertEqual(L.promotes(a, b), np.dtype(L.promoted_dtype(a, b)) != np.dtype(a), (a, b))
+        self.assertFalse(L.promotes('float32', 'int32'));self.assertFalse(L.promotes('int32', 'int32'))
+        x = np.array([[2**24 + 1, 5], [7, -(2**24 + 3)]], np.int32);v = np.array([1.5, 2.5], np.float32)
+        exact = L.emulate_set(x, [np.array([1, 0])], v);point = L.emulate_set_point(x, [np.array([1, 0])], v)
+        np.testing.assert_array_equal(point, [[2**24 + 1, 1], [2, -(2**24 + 3)]])
+        np.testing.assert_array_equal(exact, [[2**24, 1], [2, -(2**24 + 4)]])   # the untouched elements rounded through float32
+        np.testing.assert_array_equal(L.emulate_set(x, [np.array([1, 0])], np.array([9, 8], np.int32)), [[2**24 + 1, 9], [8, -(2**24 + 3)]])
+
     def test_multi_index_scatter_drops_the_whole_write(self):
         x = np.zeros((3, 2, 6), np.int32)
         out = L.emulate_set(x, [np.array([0, 1, 5]), np.array([5, 6, 0])], np.int32(1))   # lane 1 side in range, slot 6 out; lane 2 side 5 out
@@ -170,7 +183,7 @@ class HostAccessorTest(unittest.TestCase):
         self.assertEqual(len(rows), len(cases));mismatches = [];seen_clamp = seen_drop = 0
         for row in rows:
             rank = len(row['dims']);idx = [row['idx'][:, k] for k in range(rank)]
-            got = L.emulate_get(row['x'], *idx);out = L.emulate_set(row['x'], idx, row['v'])
+            got = L.emulate_get(row['x'], *idx);out = L.emulate_set_point(row['x'], idx, row['v'])
             kept = np.ones(row['x'].shape[0], bool)
             for i, n in zip(idx, row['dims']):kept &= L.scatter_index(i, n)[1]
             ok = (L._bits_equal(got, row['got']) and L._bits_equal(out, row['out']) and np.array_equal(kept, row['kept'])

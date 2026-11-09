@@ -249,9 +249,25 @@ def emulate_get(x, *indices):
     return x[(rows,) + idx]
 
 
-def emulate_set(x, indices, value):
-    """x.at[arange(B), *indices].set(value) with JAX's default scatter semantics (drop out-of-range rows; _scatter_impl's
-    dtype handling: the update is converted to the operand dtype)."""
+def promoted_dtype(a, b):
+    """jnp.promote_types with 64-bit results canonicalized to 32 bits (JAX with x64 disabled), as _scatter_impl promotes."""
+    a = np.dtype(a);b = np.dtype(b)
+    if a == b:return a
+    p = np.promote_types(a, b)
+    if p.itemsize == 8:p = np.dtype({'i': np.int32, 'u': np.uint32, 'f': np.float32}[p.kind])
+    return p
+
+
+def promotes(operand_dtype, update_dtype):
+    """Whether x.at[].set(v) promotes the whole operand (jax _scatter_impl: promote_dtypes(x, y) differs from x's dtype).
+    Then every element of x round-trips through the promoted type, which is lossy only for a float update into an
+    integer operand with |x| > 2**24. The oracle has no such scatter (scatter-census), and Leaf::set converts the update
+    alone."""
+    return promoted_dtype(operand_dtype, update_dtype) != np.dtype(operand_dtype)
+
+
+def emulate_set_point(x, indices, value):
+    """Leaf::set semantics: drop out-of-range rows, convert the update alone to the operand dtype."""
     x = np.asarray(x);b = x.shape[0];out = x.copy();keep = np.ones(b, bool);idx = []
     for i, n in zip(indices, x.shape[1:len(indices) + 1]):
         wrapped, ok = scatter_index(np.broadcast_to(np.asarray(i), (b,)), n);keep &= ok;idx.append(wrapped)
@@ -259,6 +275,15 @@ def emulate_set(x, indices, value):
     rows = np.flatnonzero(keep)
     out[(rows,) + tuple(np.asarray(i)[rows] for i in idx)] = value[rows]
     return out
+
+
+def emulate_set(x, indices, value):
+    """x.at[arange(B), *indices].set(value) exactly as jax (_scatter_impl): promote operand and update to their common
+    dtype, scatter with FILL_OR_DROP (drop out-of-range rows), convert the result back to the operand dtype. Equals
+    emulate_set_point unless promotes(x.dtype, value.dtype)."""
+    x = np.asarray(x);value = np.asarray(value);p = promoted_dtype(x.dtype, value.dtype)
+    out = emulate_set_point(convert(x, p), indices, convert(value, p))
+    return convert(out, x.dtype)
 
 
 # ---------------------------------------------------------------------------
@@ -625,13 +650,14 @@ static ffi::Error PointImpl(cudaStream_t stream, int64_t layout_digest, ffi::Any
   constexpr int64_t per_lane = LeafBase<T, D...>::kPerLane;
   const int64_t lanes = static_cast<int64_t>(x.element_count()) / per_lane;
   cudaMemsetAsync(dbg->typed_data(), 0, 2 * sizeof(uint32_t), stream);
+  // The output is the operand (a hand-written handler aliases it in place; the probe copies it through).
+  cudaMemcpyAsync(out->untyped_data(), x.untyped_data(), x.size_bytes(), cudaMemcpyDeviceToDevice, stream);
   if (static_cast<uint64_t>(layout_digest) != TrackerView::kDigest) {   // the attribute is the digest as int64 (digest_attr)
     const uint32_t stale = kStaleLayout;
     cudaMemcpyAsync(err->typed_data(), &stale, sizeof(uint32_t), cudaMemcpyHostToDevice, stream);
-    return ffi::Error::Success();   // refused: the buffers are not touched
+    return ffi::Error::Success();   // refused: the operand is left as it was
   }
   cudaMemsetAsync(err->typed_data(), 0, sizeof(uint32_t), stream);
-  cudaMemcpyAsync(out->untyped_data(), x.untyped_data(), x.size_bytes(), cudaMemcpyDeviceToDevice, stream);
   const int threads = 128;
   point_kernel<T, U, D...><<<static_cast<unsigned>((lanes + threads - 1) / threads), threads, 0, stream>>>(
       static_cast<T*>(out->untyped_data()), static_cast<const int32_t*>(idx.untyped_data()), static_cast<const U*>(v.untyped_data()),
@@ -882,15 +908,24 @@ def cmd_probe(args):
         x, idx, v = probe_inputs(t, u, dims, args.lanes, seed=n);rank = len(dims)
         got_j, out_j = _jax_reference(x, idx, v, rank)
         got_e = emulate_get(x, *[idx[:, k] for k in range(rank)]);out_e = emulate_set(x, [idx[:, k] for k in range(rank)], v)
+        out_p = emulate_set_point(x, [idx[:, k] for k in range(rank)], v)
         out_c, got_c, kept_c, dbg_c, err_c = call(t, u, dims, x, idx, v, want_digest)
-        row = dict(case=case_name(t, u, dims), operand=t, update=u, dims=list(dims), lanes=int(x.shape[0]),
+        promoting = promotes(t, u);kept = kept_c.astype(bool)
+        written_j = out_j.reshape(x.shape[0], -1)[kept];written_c = out_c.reshape(x.shape[0], -1)[kept]
+        row = dict(case=case_name(t, u, dims), operand=t, update=u, dims=list(dims), lanes=int(x.shape[0]), promotes_operand=promoting,
             cuda_get_equals_jax=_bits_equal(got_c, got_j), cuda_set_equals_jax=_bits_equal(out_c, out_j),
+            cuda_set_equals_point_emulation=_bits_equal(out_c, out_p), cuda_written_rows_equal_jax=_bits_equal(written_c, written_j),
             emulation_get_equals_jax=_bits_equal(got_e, got_j), emulation_set_equals_jax=_bits_equal(out_e, out_j),
-            clamps=int(dbg_c[0]), drops=int(dbg_c[1]), kept=int(kept_c.sum()), error_word=int(err_c[0]),
+            clamps=int(dbg_c[0]), drops=int(dbg_c[1]), kept=int(kept.sum()), error_word=int(err_c[0]),
             negative_indices=int((idx[:, :rank] < 0).sum()), out_of_range_indices=int(sum(((idx[:, k] < -d) | (idx[:, k] >= d)).sum() for k, d in enumerate(dims))))
-        row['equal'] = all(row[k] for k in ('cuda_get_equals_jax', 'cuda_set_equals_jax', 'emulation_get_equals_jax', 'emulation_set_equals_jax')) and row['error_word'] == 0
+        # A promoting pair (float update into an integer operand) round-trips the whole operand through float32 in JAX;
+        # the point accessor converts the update alone, so it must match JAX on the written rows and the point emulation
+        # everywhere (the oracle has no promoting scatter: scatter-census).
+        set_ok = row['cuda_set_equals_jax'] if not promoting else (row['cuda_written_rows_equal_jax'] and row['cuda_set_equals_point_emulation'])
+        row['equal'] = set_ok and row['cuda_get_equals_jax'] and row['emulation_get_equals_jax'] and row['emulation_set_equals_jax'] and row['error_word'] == 0
         all_equal &= row['equal'];report['cases'].append(row)
         if not row['equal']:print('MISMATCH', row)
+    report['promoting_pairs'] = sorted({f"{r['operand']}<-{r['update']}" for r in report['cases'] if r['promotes_operand']})
     # The digest refusal: a wrong layout_digest attribute returns kStaleLayout and leaves the operand untouched (out = x).
     t, u, dims = cases[0];x, idx, v = probe_inputs(t, u, dims, args.lanes, seed=0)
     out_c, got_c, kept_c, dbg_c, err_c = call(t, u, dims, x, idx, v, want_digest ^ 1)
@@ -903,6 +938,46 @@ def cmd_probe(args):
     print(f"probe: {len(cases)} cases, equal={report['equal']}, header_compile={report['header_compile']['returncode']}, "
         f"digest_refusal={report['digest_refusal']['refused']} -> {Path(args.out) / 'probe.json'}")
     return 0 if report['equal'] else 1
+
+
+# ---------------------------------------------------------------------------
+# Scatter census: the (operand, update) dtype pairs of every scatter in the oracle step, so the point semantics of
+# Leaf::set (update conversion only) is proven sufficient: no pair promotes the operand.
+
+def scatter_dtype_pairs(closed):
+    """{'<operand dtype><-<update dtype>': count} over every scatter-family equation of a closed jaxpr (sub-jaxprs
+    included). The operand dtype is the original one when the operand is a convert_element_type of another var (that is
+    _scatter_impl's promotion), else the scatter operand's."""
+    from jax.extend import core as jcore
+    import collections
+    pairs = collections.Counter()
+    def walk(jaxpr):
+        producer = {}
+        for e in jaxpr.eqns:
+            for v in e.outvars:producer[v] = e
+            if e.primitive.name.startswith('scatter'):
+                operand, _, update = e.invars[0], e.invars[1], e.invars[2]
+                src = producer.get(operand)
+                original = str(src.invars[0].aval.dtype) if src is not None and src.primitive.name == 'convert_element_type' and not isinstance(src.invars[0], jcore.Literal) else str(operand.aval.dtype)
+                pairs[f'{original}<-{update.aval.dtype}' + ('' if original == str(operand.aval.dtype) else f' (promoted to {operand.aval.dtype})')] += 1
+            for sub in jcore.jaxprs_in_params(e.params):walk(sub)
+    walk(closed.jaxpr)
+    return dict(pairs)
+
+
+def cmd_scatter_census(args):
+    import jax
+    from gpu_engine import v2e_census as cz, v2e_modules
+    ctx = cz.load_context(args);state, actions, trackers = ctx['template']
+    fn = v2e_modules.step(ctx['engine_tables'], ctx['observation_tables'])
+    begin = time.perf_counter();closed = jax.make_jaxpr(fn)(state, actions, trackers)
+    pairs = scatter_dtype_pairs(closed)
+    promoting = {k: v for k, v in pairs.items() if 'promoted' in k or promotes(*[d.split(' ')[0] for d in k.split('<-')])}
+    report = dict(schema='pokezero.v2e-scatter-census.v1', jax=jax.__version__, seconds=time.perf_counter() - begin, pairs=pairs, promoting=promoting,
+        point_semantics_sufficient=not promoting)
+    Path(args.out).parent.mkdir(parents=True, exist_ok=True);Path(args.out).write_text(json.dumps(report, indent=1) + '\n')
+    print(f"scatter-census: {sum(pairs.values())} scatters, pairs {pairs}, promoting {promoting} -> {args.out}")
+    return 0 if not promoting else 1
 
 
 # ---------------------------------------------------------------------------
@@ -956,6 +1031,9 @@ def parser():
     q.add_argument('--build-dir', required=True);q.add_argument('--out', required=True);q.add_argument('--header', default=str(HEADER))
     q.add_argument('--description', default=str(DEFAULT_DESCRIPTION));q.add_argument('--spec', default=str(DEFAULT_SPEC))
     q.add_argument('--lanes', type=int, default=96);q.set_defaults(fn=cmd_probe)
+    q = sub.add_parser('scatter-census', help='GPU host: (operand, update) dtype pairs of every scatter in the oracle step')
+    q.add_argument('--config', required=True);q.add_argument('--reference-run', required=True);q.add_argument('--arm', default='B', choices=('A', 'B'))
+    q.add_argument('--out', required=True);q.set_defaults(fn=cmd_scatter_census)
     return p
 
 
