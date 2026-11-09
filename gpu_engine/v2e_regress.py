@@ -29,7 +29,10 @@ Special rules (PR0): `trackers.public_order` is checked against a numpy replay
 of its swap rule over the recorded install calls instead of bitwise, and with
 --faint-clear the PR0 faint-time public clear may change only the listed
 tracker entries on lanes where an active faints (meanlook_trap: the actives'
-entries).
+entries). Leaves the faint rule explains are removed from the lane-step's
+changes; any other changed leaf on it still needs an involved effect. PR0's
+remaining changes (the Intimidate and weather reveal gates, the Color Change
+type revert on departure) are the `PR0` plug-in.
 
 The involvement superset resolves the executed move as the engine does (slot,
 charge, standing or same-turn Encore, Struggle, a resumed queued action, every
@@ -317,17 +320,38 @@ def destiny_bond_bit(p):
     return ((p.s['volatile'] & p.destiny_bond) != 0).any(axis=2)
 
 
+def installs(p):
+    """[L,2] a side may install a new active this step (and so its active departs): a switch
+    action, Baton Pass, the foe's Roar/Whirlwind, a replacement (forced switch or fainted active)."""
+    rows = np.arange(p.lanes)[:, None];sides = np.arange(2)[None, :]
+    active_hp = p.s['hp'][rows, sides, p.s['active']]
+    return ((p.actions >= 4) | p.side_uses('batonpass') | p.side_uses('roar', 'whirlwind')[:, ::-1]
+            | p.s['forced_switch'].astype(bool) | (active_hp <= 0))
+
+
 def white_herb(p):
     """An active White Herb holder, or one that may come in this step (switch, Baton
     Pass, the foe's Roar/Whirlwind, a replacement)."""
     items = p.vocab['items']
     if 'whiteherb' not in items:return np.zeros((p.lanes, 2), bool)
     herb = items.index('whiteherb');holders = p.s['item'] == herb                       # [L,2,6]
-    rows = np.arange(p.lanes)[:, None];sides = np.arange(2)[None, :]
-    active_hp = p.s['hp'][rows, sides, p.s['active']]
-    incoming = ((p.actions >= 4) | p.side_uses('batonpass') | p.side_uses('roar', 'whirlwind')[:, ::-1]
-                | p.s['forced_switch'].astype(bool) | (active_hp <= 0))
-    return (p.active('item') == herb) | (holders.any(-1) & incoming)
+    return (p.active('item') == herb) | (holders.any(-1) & installs(p))
+
+
+def entering_ability(*names):
+    """PR0 reveal gates: a side may install a holder of one of these abilities this step
+    (the reveal happens at its switch-in; the foe's HP/Substitute or the weather is not
+    predicted, so this is a superset)."""
+    def predicate(p):
+        return np.isin(p.s['ability'], p.ability_ids(*names)).any(-1) & installs(p)
+    return predicate
+
+
+def type_revert(p):
+    """PR0 Kecleon revert: a departing active with a live type overlay (types != base types),
+    or a Color Change active that a same-step hit may change before it departs (Pursuit)."""
+    changed = (p.active('types') != p.active('base_types')).any(-1) if 'base_types' in p.s else np.zeros((p.lanes, 2), bool)
+    return (changed | p.active_ability('colorchange')) & installs(p)
 
 
 def confusion_active(p):
@@ -348,6 +372,7 @@ FAMILIES = {
     'item': (r'^state\.item$', r'^trackers\.(shown_item|item_removed|belief_mask)$', r'^trackers\.(visible_belief|negative_items)\.',
              r"^trackers\.mon_features\['item_swapped'\]$"),
     'reveal': (r'^trackers\.(shown_ability|original_ability|borrowed_ability|belief_mask)$', r'^trackers\.visible_belief\.'),
+    'types': (r'^trackers\.shown_types$',),
     'all': (r'.*',),
 }
 ALL = dict(user=('all',), target=('all',), glob=('all',))
@@ -368,6 +393,11 @@ ALLOWED = {
     'lovelykiss': ALL, 'sleep_clause': ALL, 'sleep_immunity': ALL,
     'aromatherapy': dict(user=('status', 'hp'), target=('hp',), glob=()),
     'refresh': dict(user=('status', 'hp'), target=('hp',), glob=()),
+    # PR0 (tracker only): a gated reveal drops the entrant's own ability reveal; the
+    # Color Change revert rewrites the departing mon's shown types. No state, no foe field.
+    'intimidate_reveal': dict(user=('reveal',), target=(), glob=()),
+    'weather_reveal': dict(user=('reveal',), target=(), glob=()),
+    'type_revert': dict(user=('types',), target=(), glob=()),
 }
 
 
@@ -379,6 +409,10 @@ def allowed_leaf(name, families):
 # are never involvement (design 5.2). `none` is the base-against-base self-test.
 PLUGINS = {
     'none': {},
+    # PR0's public_order and faint-clear rules are special rules (see the docstring);
+    # these are its remaining tracker changes.
+    'PR0': dict(intimidate_reveal=entering_ability('intimidate'),
+                weather_reveal=entering_ability('drizzle', 'drought', 'sandstream'), type_revert=type_revert),
     'A1': dict(curse=move('curse'), superpower=move('superpower'), charm=move('charm'), lovelykiss=move('lovelykiss'),
                aromatherapy=move('aromatherapy'), refresh=move('refresh'), sleep_clause=sleep_clause,
                sleep_immunity=sleep_immunity),
@@ -471,6 +505,19 @@ def faint_clear_ok(lane_changes, post, base, fainted, physical_to_public, active
                 if 0 <= slot < 6:allowed[side, slot] = True
         if (differ & ~allowed).any() or (a[differ] != 0).any():return False
     return True
+
+
+def faint_rule(entries, post, base, fainted, physical_to_public, active_slot):
+    """Split a faint lane-step's changes: the faint-clear leaves the rule explains (every changed
+    one, or none) leave `entries`; the rest still need an involved effect.
+
+    entries: {(leaf, side)}; post/base: {faint leaf: this lane's array} for the changed faint leaves.
+    Returns (remaining entries, explained leaves).
+    """
+    leaves = sorted(post)
+    if leaves and faint_clear_ok(leaves, post, base, fainted, physical_to_public, active_slot):
+        return {(leaf, side) for leaf, side in entries if leaf not in leaves}, leaves
+    return entries, []
 
 
 # ---------------------------------------------------------------------------
@@ -692,7 +739,7 @@ def patched_pass(args, *, step_override=None, prepared=None):
     callable_moves = np.asarray(tables.engine_tables.sleep_talk.callable)
     destiny_bond = getattr(state_module, 'DESTINY_BOND', DEFAULT_DESTINY_BOND)
     counts = dict(lane_steps=0, done_skipped=0, unchanged=0, changed_and_involved=0, changed_but_uninvolved=0,
-                  changed_involved_unexpected_fields=0, ko_cascade=0, waived=0, rule_explained=0)
+                  changed_involved_unexpected_fields=0, ko_cascade=0, waived=0, rule_explained=0, faint_rule_leaves=0)
     by_effect = {k: dict(changed=0, involved_unchanged=0, changed_fields={}, unexpected_fields={}, ko_cascade=0,
                          ko_cascade_non_hp_fields={}) for k in table}
     ko_leaves = manifest.get('ko_leaves')
@@ -749,12 +796,17 @@ def patched_pass(args, *, step_override=None, prepared=None):
                     else:entries.add((leaf, None))
                 changed = sorted({leaf for leaf, _ in entries})
                 effects = {k: [s for s in (0, 1) if v[lane, s]] for k, v in involved.items() if v[lane].any()}
-                rule_ok = False
-                if changed and args.faint_clear and lane in faint_set and all(n in faint_base for n in changed):
-                    post = {n: result['extra'][n][lane] for n in changed}
-                    based = {n: faint_base[n][lane] for n in changed}
-                    rule_ok = faint_clear_ok(changed, post, based, result['fainted'][lane], result['physical_to_public'][lane],
-                                             result['active_slot'][lane])
+                # The faint-clear rule explains its own leaves; any other changed leaf on the
+                # same lane-step still needs an involved effect (e.g. a revert on a faint lane).
+                faint_explained = []
+                if changed and args.faint_clear and lane in faint_set:
+                    leaves = [n for n in changed if n in faint_base]
+                    entries, faint_explained = faint_rule(entries, {n: result['extra'][n][lane] for n in leaves},
+                        {n: faint_base[n][lane] for n in leaves}, result['fainted'][lane],
+                        result['physical_to_public'][lane], result['active_slot'][lane])
+                    counts['faint_rule_leaves'] += bool(faint_explained)
+                rule_ok = bool(changed) and not entries
+                changed_rest = sorted({leaf for leaf, _ in entries})
                 cascade = bool(cascade_lanes[lane]);cascade_info = None
                 if cascade:
                     ko_mons = ko_mons_all[lane]
@@ -765,7 +817,7 @@ def patched_pass(args, *, step_override=None, prepared=None):
                         return not (differ & ~ko_mons[side]).any()
                     cascade_info = dict(ko_sides=ko_mons.any(-1), mon_ok=mon_ok)
                 unexpected, waived, by_ko = lane_verdict(entries, effects, side_axis, cascade=cascade_info, waive=args.waive or ()) \
-                    if changed and effects else ([], [], [])
+                    if changed_rest and effects else ([], [], [])
                 kind = classify(changed, bool(effects), rule_ok, unexpected)
                 if kind == 'unchanged':
                     counts['unchanged'] += 1
@@ -790,9 +842,9 @@ def patched_pass(args, *, step_override=None, prepared=None):
                             key = f'{leaf}@{role}';stats['unexpected_fields'][key] = stats['unexpected_fields'].get(key, 0) + 1
                 else:
                     counts['changed_but_uninvolved'] += 1
-                    for n in changed:uninvolved_leaves[n] = uninvolved_leaves.get(n, 0) + 1
+                    for n in changed_rest:uninvolved_leaves[n] = uninvolved_leaves.get(n, 0) + 1
                 listing.write(json.dumps(dict(shard=path.name, lane=lane, tick=tick, kind=kind, ko_cascade=cascade,
-                    involved={k: v for k, v in effects.items()}, leaves=changed, entries=labels,
+                    involved={k: v for k, v in effects.items()}, leaves=changed, entries=labels, faint_rule=faint_explained,
                     unexpected=[f"{l}@{'glob' if s is None else s}" for l, s in unexpected],
                     ko_consequences=[f"{l}@{'glob' if s is None else s}" for l, s in by_ko],
                     waived=[f"{l}@{'glob' if s is None else s}" for l, s in waived])) + '\n')

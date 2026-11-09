@@ -214,6 +214,40 @@ class DigestAndRuleTests(unittest.TestCase):
         named['state.moves'][8, 0, 0, 0] = BATONPASS
         self.assertTrue(white_herb(Pre(named, VOCAB, CALLABLE, np.zeros((L, 2), bool)))[8, 0])
 
+    def test_pr0_plug_in_predicates_allowances_and_faint_split(self):
+        from gpu_engine.v2e_regress import Pre, PLUGINS, ALLOWED, faint_rule, lane_verdict
+        ROAR = len(VOCAB['moves']);INTIM, SAND, COLOR = 4, 5, 6
+        vocab = dict(VOCAB, moves=VOCAB['moves'] + ['roar'], abilities=VOCAB['abilities'] + ['intimidate', 'sandstream', 'colorchange'])
+        L = 7;s = pre_arrays(L);actions = np.zeros((L, 2), np.int32)
+        s['types'] = np.ones((L, 2, 6, 2), np.int32);s['base_types'] = np.ones((L, 2, 6, 2), np.int32)
+        s['ability'][0, 1, 3] = INTIM;actions[0, 1] = 7                   # lane 0: switches to an Intimidate holder
+        s['ability'][1, 1, 3] = INTIM                                      # lane 1: a benched holder, no switch
+        s['ability'][2, 0, 2] = SAND;s['forced_switch'][2, 0] = True       # lane 2: a replacement may bring Sand Stream
+        s['ability'][3, 1, 4] = INTIM;s['moves'][3, 0, 0, 0] = ROAR        # lane 3: the foe's Roar may drag it in
+        s['types'][4, 0, 0] = [5, 0];actions[4, 0] = 4                     # lane 4: a Color Changed active leaves
+        s['ability'][5, 1, 0] = COLOR;actions[5, 1] = 5                    # lane 5: a Color Change active leaves (Pursuit)
+        s['types'][6, 0, 0] = [5, 0]                                       # lane 6: the overlay stays in
+        named = {f'state.{k}': v for k, v in s.items()};named['actions'] = actions
+        p = Pre(named, vocab, np.append(CALLABLE, False), np.zeros((L, 2), bool))
+        pr0 = PLUGINS['PR0'];no = [False, False]
+        self.assertEqual(pr0['intimidate_reveal'](p).tolist(), [[False, True], no, no, [False, True], no, no, no])
+        self.assertEqual(pr0['weather_reveal'](p).tolist(), [no, no, [True, False], no, no, no, no])
+        self.assertEqual(pr0['type_revert'](p).tolist(), [no, no, no, no, [True, False], [False, True], no])
+        self.assertTrue(all(e in ALLOWED for e in pr0))
+        self.assertEqual(lane_verdict({('trackers.shown_ability', 1), ('trackers.belief_mask', 1), ('trackers.visible_belief.pin', 1)},
+                                      {'intimidate_reveal': [1]}, None)[0], [])
+        self.assertEqual(lane_verdict({('trackers.shown_ability', 0), ('state.boosts', 1)}, {'weather_reveal': [1]}, None)[0],
+                         [('state.boosts', 1), ('trackers.shown_ability', 0)])
+        self.assertEqual(lane_verdict({('trackers.shown_types', 0)}, {'type_revert': [0]}, None)[0], [])
+        self.assertEqual(lane_verdict({('trackers.shown_types', 1)}, {'type_revert': [0]}, None)[0], [('trackers.shown_types', 1)])
+        # A faint lane-step: the rule removes the cleared leaves; another change still needs an effect.
+        vol = 'trackers.public_volatiles';fainted = np.zeros((2, 6), bool);fainted[1, 0] = True
+        base = np.zeros((2, 6, 3), bool);base[1, 0, 1] = True;post = np.zeros_like(base)
+        entries = {(vol, 1), ('trackers.shown_types', 1)};p2p = np.tile(np.arange(6), (2, 1));slots = np.zeros(2, np.int64)
+        self.assertEqual(faint_rule(entries, {vol: post}, {vol: base}, fainted, p2p, slots), ({('trackers.shown_types', 1)}, [vol]))
+        wrong = post.copy();wrong[0, 2, 0] = True
+        self.assertEqual(faint_rule(entries, {vol: wrong}, {vol: base}, fainted, p2p, slots), (entries, []))
+
     def test_allowed_fields_are_side_aware(self):
         from gpu_engine.v2e_regress import lane_verdict
         effects = {'curse': [0]}
