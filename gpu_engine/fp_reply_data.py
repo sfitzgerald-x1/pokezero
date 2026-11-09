@@ -1,6 +1,7 @@
 """Foul Play reply dataset: replay each collected game through the training env and record Foul Play's own view at its decisions.
 
 usage: python -m gpu_engine.fp_reply_data COLLECTION OUT_DIR --checkpoint PT [--shard I --shards N] [--limit GAMES]
+       [--max-ordinal N] [--views] [--extras]
        python -m gpu_engine.fp_reply_data --report OUT_DIR [--split all|test]
 
 Input, read-only: a Foul Play choice collection (the engine session's fp_collect.py, RAW champion vs Foul Play with
@@ -28,6 +29,12 @@ probabilities and value on Foul Play's view, round, turn, request kind, game ord
 OPP_HAZARD_CREDIT Foul Play itself sees, fp_view_opp_hazard_credit, which peer-view-v2 writes over the env's exact value), and
 shard-<I>.json (counts; spikes_unknown_before counts rows where one of our Spikes hits had no previous HP on the lines, credit 0;
 hazard_credit_rows_differ and hazard_credit_max_abs_gap_vs_env compare fp_opp_hazard_credit with the env's own column).
+--max-ordinal N reads only games of ordinal <= N (a frozen set while the collection grows; a game still running at build time
+joins a later build, so freeze at an ordinal below which every game has finished). --views also records the builder's views of
+each Foul Play decision (builder_views; numeric_features_<kind>, categorical_ids_<kind> for VIEW_KINDS): b is the seat's view as
+Showdown sends it at public precision; k is b keeping the opponent's [silent] ability lines (it still drops the opponent's
+Struggle activation and -hint). A builder failure, or a builder view whose masks differ from env.observe's, skips the game
+(BuilderMismatch; consecutive ones abort the shard). The shard summary records max_ordinal and views.
 """
 import argparse
 import collections
@@ -235,6 +242,11 @@ def opponent_head_logits(model, observation, torch):
 VIEW_KINDS = ('b', 'k')   # b: the seat-filtered builder view; k: the same keeping the opponent's [silent] ability lines
 
 
+class BuilderMismatch(Exception):
+    """A builder view of the game failed or disagrees with env.observe's masks: the game is skipped (Mismatch) and counted toward
+    MAX_CONSECUTIVE_ENV_ERRORS, so a builder that always fails aborts the shard instead of emptying it."""
+
+
 def builder_views(env, player, request, seed, views):
     """{kind: observation} of `player`'s view rebuilt from what it received (gpu_engine.g3rb_views.seat_lines on the env's lines) and
     its true request by pokezero.policy_opponent_view.build_policy_opponent_view: 'b' drops the lines the other side never gets
@@ -287,7 +299,12 @@ def replay(env, policy, game, rng, extras=None, views=None):
                                   opp_hp=hp_fraction(env._latest_requests.get(game['ours']) or {}))
                 if views is not None:   # --views: the builder's views of the same decision (fp_reply_train --view)
                     try:fp_row['views'] = builder_views(env, player, request, game['seed'], views)
-                    except ValueError as error:raise Mismatch(f'builder view, round {round_}: {type(error).__name__}: {error}')
+                    except (ValueError, KeyError, IndexError, TypeError) as error:   # as g3rb_views catches the same builder
+                        raise BuilderMismatch(f'builder view, round {round_}: {type(error).__name__}: {error}')
+                    for kind, other in fp_row['views'].items():   # fp_reply_train --view swaps only the features: masks must agree
+                        for name in ('token_type_ids', 'attention_mask', 'legal_action_mask'):
+                            if not np.array_equal(np.asarray(getattr(other, name)), np.asarray(getattr(observation, name))):
+                                raise BuilderMismatch(f'builder view {kind}, round {round_}: {name} differs from env.observe')
                 rows.append(fp_row)
                 actions[player] = action
             else:
@@ -347,6 +364,8 @@ def build(args):
                 category_vocab=category_vocab_from_model_config(result.model_config, base['showdown_root']),
                 feature_masks=feature_masks_from_model_config(result.model_config),
                 set_belief_source=bool(base['belief_set_source'])))
+        if args.views and not base['belief_set_source']:   # the builder always reads the set source: env's beliefs would differ
+            raise SystemExit('--views needs games played with belief_set_source (the builder views always use the random-battle sets)')
         if args.views and views is None:   # the builder views' inputs: the same spec, masks and vocabulary as env.observe
             from pokezero.dex import load_showdown_dex_cached
             from pokezero.randbat import load_gen3_randbat_source_cached
@@ -357,6 +376,11 @@ def build(args):
         except Mismatch as error:
             reason = re.sub(r"'[^']*'|\"[^\"]*\"|\d+", '#', str(error));consecutive_errors = 0
             mismatches[reason] += 1;examples.setdefault(reason, dict(ordinal=game['ordinal'], detail=str(error)));continue
+        except BuilderMismatch as error:   # the env is fine (no reset); a systematic builder failure still aborts the shard
+            reason = re.sub(r"'[^']*'|\"[^\"]*\"|\d+", '#', str(error));consecutive_errors += 1
+            mismatches[reason] += 1;examples.setdefault(reason, dict(ordinal=game['ordinal'], detail=str(error)[:500]))
+            if consecutive_errors >= MAX_CONSECUTIVE_ENV_ERRORS:raise SystemExit(f'{consecutive_errors} consecutive builder-view failures: {examples[reason]}')
+            continue
         except (LocalShowdownError, ValueError, KeyError) as error:   # one bad game, not the shard; the env may be wedged
             reason = f'env error {type(error).__name__}'
             mismatches[reason] += 1;examples.setdefault(reason, dict(ordinal=game['ordinal'], detail=str(error)[:500]))
@@ -402,7 +426,8 @@ def build(args):
               else np.asarray(v) for k, v in columns.items()}
     np.savez(out / f'shard-{args.shard}.npz', **arrays)
     summary = dict(schema='v2s-fp-reply-data.v1', collection=str(collection), checkpoint=str(args.checkpoint), checkpoint_sha256=sha,
-                   shard=args.shard, shards=args.shards, results_seen=len(paths), **counts, mismatched=sum(mismatches.values()),
+                   shard=args.shard, shards=args.shards, max_ordinal=args.max_ordinal or None, views=list(VIEW_KINDS) if args.views else None,
+                   results_seen=len(paths), **counts, mismatched=sum(mismatches.values()),
                    mismatch_reasons=dict(mismatches), mismatch_examples=examples, foul_play_seat_games=dict(seats),
                    encoder_parity=dict(hits=parity_hits, decisions=parity_total, share=parity_hits / parity_total if parity_total else None),
                    hazard_credit_max_abs_gap_vs_env=hazard_gap,

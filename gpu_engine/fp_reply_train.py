@@ -1,7 +1,8 @@
 """Train π_FP: fine-tune the champion's policy on Foul Play's own decisions, and report it against the champion's π.
 
 usage: python -m gpu_engine.fp_reply_train DATA_DIR OUT_DIR --checkpoint PT [--epochs 8] [--lr 2e-5] [--batch 256]
-       [--weight-decay 0.01] [--device cuda] [--seed 0] [--redact peer-view-v1|peer-view-v2]
+       [--weight-decay 0.01] [--device cuda] [--seed 0] [--redact peer-view-v1|peer-view-v2] [--view env|b|k]
+       [--test-seeds JSON [--late-from ORDINAL]] [--compare-to RUN_DIR] [--evaluate PI_FP_PT [--export-archive NPZ]]
 
 DATA_DIR holds fp_reply_data shards (one row per Foul Play decision, games in decision order). Splits are by game, from the
 battle seed: seed % 10 == 0 is test, == 1 is validation, the rest train (fp_reply_data.split_of). Each row's input is the
@@ -19,6 +20,12 @@ match it to 1e-4.
 --redact peer-view-v1|peer-view-v2 trains and evaluates on Foul Play's view redacted the way the search's constructor builds the
 opponent's (peer) view (redact_peer_view; v2 needs data with fp_opp_hazard_credit); the input-parity check runs on the unredacted tensors first, and the checkpoint's fp_reply marker
 records the redaction.
+--view b|k trains on fp_reply_data --views' builder views (after the input-parity check, which holds env's view against the stored
+π). --test-seeds fixes the test set to an earlier run's battle seeds (all must be in the data); --late-from adds a late held-out
+block (split_rows). The checkpoint's fp_reply records its view, redaction and split (split_record: the fitted battle seeds), and
+--evaluate refuses a different view or redaction, or a split that holds out seeds the checkpoint was fitted on. Runs and
+evaluations write test-probs.npz (and late-probs.npz) with provenance; --compare-to reports another's beside this π_FP on the
+same rows, and --evaluate writes only to a fresh directory.
 """
 import argparse
 import glob
@@ -38,12 +45,41 @@ VIEWS = ('env', 'b', 'k')   # env.observe's view, or fp_reply_data --views' buil
 
 
 def use_view(arrays, view):
-    """In place: the inputs of `view` (numeric_features_<view> / categorical_ids_<view>) become the model's inputs."""
-    if view == 'env':return arrays
-    for key in ('numeric_features', 'categorical_ids'):
-        if f'{key}_{view}' not in arrays:raise SystemExit(f'view {view!r} needs {key}_{view}: build the data with fp_reply_data --views')
-        arrays[key] = arrays[f'{key}_{view}']
+    """In place: the inputs of `view` (numeric_features_<view> / categorical_ids_<view>) become the model's inputs; the other views'
+    arrays are dropped (each is a full copy of the features)."""
+    if view != 'env':
+        for key in ('numeric_features', 'categorical_ids'):
+            if f'{key}_{view}' not in arrays:raise SystemExit(f'view {view!r} needs {key}_{view}: build the data with fp_reply_data --views')
+            arrays[key] = arrays[f'{key}_{view}']
+    for key in [k for k in arrays if k.startswith(('numeric_features_', 'categorical_ids_'))]:del arrays[key]
     return arrays
+
+
+def read_test_seeds(path, arrays):
+    """--test-seeds: a non-empty JSON list of integer battle seeds, every one present in the data (a fixed test set that silently
+    shrank, or matched nothing, would no longer be the set it names)."""
+    seeds = json.loads(Path(path).read_text())
+    if not isinstance(seeds, list) or not seeds or not all(isinstance(x, int) and not isinstance(x, bool) for x in seeds):
+        raise SystemExit(f'{path}: --test-seeds needs a non-empty JSON list of integer battle seeds')
+    absent = sorted(set(seeds) - set(np.unique(arrays['seed']).tolist()))
+    if absent:raise SystemExit(f'{path}: {len(absent)} of {len(seeds)} test seeds have no rows in the data (first: {absent[:5]})')
+    return seeds
+
+
+def split_record(arrays, rows, rule, test_seeds, late_from):
+    """The checkpoint's record of its split: the seeds it was fitted on (train and validation), so a later --evaluate can refuse to
+    score them as held out."""
+    fit = np.unique(np.concatenate([arrays['seed'][rows['train']], arrays['seed'][rows['val']]]))
+    return dict(rule=rule, test_seeds=None if test_seeds is None else sorted(test_seeds), late_from=late_from, fit_seeds=fit.tolist())
+
+
+def held_out_overlap(fp_reply, arrays, rows):
+    """Battle seeds the checkpoint was fitted on that this evaluation would score as held out (test or late); None when the
+    checkpoint records no split (trained before the record existed)."""
+    split = (fp_reply or {}).get('split')
+    if not split:return None
+    held = np.unique(np.concatenate([arrays['seed'][r] for k, r in rows.items() if k in ('test', 'late')]))
+    return sorted(set(held.tolist()) & set(split['fit_seeds']))
 
 
 def split_rows(arrays, test_seeds=None, late_from=None):
@@ -196,10 +232,11 @@ def test_report(arrays, test, pi_fp_probs, calibrated, compare=None):
     return report
 
 
-def save_probs(path, arrays, rows, probs):
-    """A run's π_FP probabilities on `rows`, with the keys a later --compare-to checks them by."""
+def save_probs(path, arrays, rows, probs, **provenance):
+    """A run's π_FP probabilities on `rows`, with the keys a later --compare-to checks them by, and provenance strings (the model,
+    its view and redaction)."""
     np.savez(path, rows=rows, ordinal=arrays['ordinal'][rows], seed=arrays['seed'][rows], label=arrays['label'][rows],
-             round=arrays['round'][rows], probs=probs)
+             round=arrays['round'][rows], probs=probs, **{k: np.asarray(str(v)) for k, v in provenance.items()})
 
 
 def compared_probs(path, arrays, rows):
@@ -210,9 +247,9 @@ def compared_probs(path, arrays, rows):
     return other['probs']
 
 
-def late_report(model, arrays, index, rows, calibrated, compare, out, torch, device):
+def late_report(model, arrays, index, rows, calibrated, compare, out, torch, device, provenance):
     """test_report on the late block; its probabilities saved as late-probs.npz."""
-    probs = predict(model, arrays, index, rows, torch, device);save_probs(out / 'late-probs.npz', arrays, rows, probs)
+    probs = predict(model, arrays, index, rows, torch, device);save_probs(out / 'late-probs.npz', arrays, rows, probs, **provenance)
     return test_report(arrays, rows, probs, calibrated, compare)
 
 
@@ -369,8 +406,10 @@ def main(argv=None):
     parser.add_argument('--redact', choices=REDACTIONS, help="train/evaluate on Foul Play's view redacted as the constructor's peer view")
     parser.add_argument('--view', choices=VIEWS, default='env', help="the inputs: env.observe's (default) or fp_reply_data --views' builder views")
     parser.add_argument('--test-seeds', metavar='JSON', help='a fixed test set: a JSON list of battle seeds (e.g. an earlier run\'s test games)')
-    parser.add_argument('--late-from', type=int, metavar='ORDINAL', help='with --test-seeds: every game of ordinal >= this is a second held-out set')
+    parser.add_argument('--late-from', type=int, metavar='ORDINAL', help='with --test-seeds: every battle seed whose first game has ordinal >= '
+                        'this is a second held-out set (late)')
     args = parser.parse_args(argv)
+    if args.late_from is not None and not args.test_seeds:parser.error('--late-from needs --test-seeds (the default split would ignore it)')
     if args.evaluate and args.window:parser.error('--window applies to training, not --evaluate')
     if args.export_archive and not args.evaluate:parser.error('--export-archive needs --evaluate')
     import torch
@@ -381,6 +420,8 @@ def main(argv=None):
     torch.set_float32_matmul_precision('highest');torch.backends.mha.set_fastpath_enabled(False)
     torch.manual_seed(args.seed);rng = np.random.default_rng(args.seed)
     if args.export_archive and Path(args.export_archive).exists():raise SystemExit(f'{args.export_archive} exists; champion.export writes exclusively')
+    if args.evaluate and any((Path(args.out) / f).exists() for f in ('test-probs.npz', 'late-probs.npz', 'pi-fp.pt')):
+        raise SystemExit(f'{args.out} already holds a run or an evaluation: --evaluate writes its probabilities to a fresh directory')
     out = Path(args.out);out.mkdir(parents=True, exist_ok=True);started = time.time()
     arrays = load(args.data)
     base_path = args.checkpoint
@@ -388,11 +429,12 @@ def main(argv=None):
     model, result = load_transformer_checkpoint(args.evaluate or base_path, map_location=args.device)
     window = int(result.model_config.window_size)
     index = windows(arrays['ordinal'], window)
-    test_seeds = None if not args.test_seeds else json.loads(Path(args.test_seeds).read_text())
+    test_seeds = None if not args.test_seeds else read_test_seeds(args.test_seeds, arrays)
     rows = split_rows(arrays, test_seeds, args.late_from)
     rule = ('battle seed % 10: 0 test, 1 validation, else train' if test_seeds is None else
-            f'test: {len(test_seeds)} fixed battle seeds ({args.test_seeds}); late: ordinal >= {args.late_from} outside them; '
-            'validation: the other battle seed % 10 == 1; train: the rest')
+            f'test: {len(test_seeds)} fixed battle seeds ({args.test_seeds}); '
+            + ('' if args.late_from is None else f'late: battle seeds whose first game has ordinal >= {args.late_from}, outside test; ')
+            + 'validation: the other battle seed % 10 == 1; train: the rest')
     games = {name: int(len(np.unique(arrays['ordinal'][r]))) for name, r in rows.items()}
     seats = seats_by_split(arrays, rows)
     print(json.dumps(dict(event='DATA', rows={k: int(len(v)) for k, v in rows.items()}, games=games, seats=seats, window=window)), flush=True)
@@ -401,24 +443,34 @@ def main(argv=None):
         compare = compared_probs(Path(args.compare_to) / 'test-probs.npz', arrays, rows['test'])
         if 'late' in rows and (Path(args.compare_to) / 'late-probs.npz').exists():
             compare_late = compared_probs(Path(args.compare_to) / 'late-probs.npz', arrays, rows['late'])
-    checkpoint_redaction = None
+        elif 'late' in rows:print(json.dumps(dict(event='NOTE', note=f'{args.compare_to} has no late-probs.npz: the late block is not compared')), flush=True)
+    late_compare = args.compare_to if compare_late is not None else None
+    checkpoint_redaction = None;held_out_check = None
     if args.evaluate:   # a model trained on a redacted view must be scored on it; a plain one may be scored zero-shot on either
-        checkpoint_redaction = (torch.load(args.evaluate, map_location='cpu', weights_only=True).get('fp_reply') or {}).get('redaction')
+        fp_reply = torch.load(args.evaluate, map_location='cpu', weights_only=True).get('fp_reply')
+        checkpoint_redaction = (fp_reply or {}).get('redaction')
         if checkpoint_redaction is not None and checkpoint_redaction != args.redact:
             raise SystemExit(f'{args.evaluate} was trained on redaction {checkpoint_redaction!r}; pass --redact {checkpoint_redaction}')
-        checkpoint_view = (torch.load(args.evaluate, map_location='cpu', weights_only=True).get('fp_reply') or {}).get('view', 'env')
-        if checkpoint_view != args.view:raise SystemExit(f'{args.evaluate} was trained on view {checkpoint_view!r}; pass --view {checkpoint_view}')
+        if fp_reply is not None:   # a π_FP must be scored on its own view (before views existed, env's); a plain checkpoint on any
+            checkpoint_view = fp_reply.get('view', 'env')
+            if checkpoint_view != args.view:raise SystemExit(f'{args.evaluate} was trained on view {checkpoint_view!r}; pass --view {checkpoint_view}')
+        overlap = held_out_overlap(fp_reply, arrays, rows)
+        if overlap:raise SystemExit(f'{args.evaluate} was fitted on {len(overlap)} battle seeds this split holds out (first: {overlap[:5]})')
+        held_out_check = 'no checkpoint split record' if overlap is None else 'held-out seeds disjoint from the checkpoint\'s fitted seeds'
         use_view(arrays, args.view);apply_redaction(arrays, args.redact)
+    provenance = dict(model=args.evaluate or out / 'pi-fp.pt', view=args.view, redaction=args.redact)
     calibration, calibrated = recalibrate(arrays['probs'][rows['train']], labels[rows['train']], arrays['legal'][rows['train']], torch)
     if args.evaluate:
-        test = rows['test'];probs = predict(model, arrays, index, test, torch, args.device);save_probs(out / 'test-probs.npz', arrays, test, probs)
+        test = rows['test'];probs = predict(model, arrays, index, test, torch, args.device)
+        save_probs(out / 'test-probs.npz', arrays, test, probs, **provenance)
         report = dict(schema='v2s-fp-reply-model-eval.v1', data=str(args.data), redaction=args.redact, checkpoint_redaction=checkpoint_redaction,
                       base_checkpoint=str(args.checkpoint),
                       base_checkpoint_sha256=checkpoint_file_sha256(args.checkpoint), pi_fp=str(args.evaluate),
                       pi_fp_sha256=checkpoint_file_sha256(args.evaluate), window=window, rows={k: int(len(v)) for k, v in rows.items()},
-                      games=games, seats=seats, split_rule=rule, recalibration=calibration, compare_to=args.compare_to,
+                      games=games, seats=seats, split_rule=rule, held_out_check=held_out_check, recalibration=calibration,
+                      compare_to=args.compare_to, late_compare=late_compare,
                       ece_bins=data_mod.ECE_BINS, test=test_report(arrays, test, probs, calibrated, compare), view=args.view)
-        if 'late' in rows:report['late'] = late_report(model, arrays, index, rows['late'], calibrated, compare_late, out, torch, args.device)
+        if 'late' in rows:report['late'] = late_report(model, arrays, index, rows['late'], calibrated, compare_late, out, torch, args.device, provenance)
         (out / 'report-eval.json').write_text(json.dumps(report, indent=1) + '\n')
         if args.export_archive:
             if window != 1:raise SystemExit('champion_evaluator archives need window 1')
@@ -458,7 +510,7 @@ def main(argv=None):
             best = dict(epoch=epoch, val_nll=val);best_state = {k: v.detach().cpu().clone() for k, v in model.state_dict().items()}
     model.load_state_dict(best_state)
     test = rows['test'];test_probs = predict(model, arrays, index, test, torch, args.device)
-    save_probs(out / 'test-probs.npz', arrays, test, test_probs)
+    save_probs(out / 'test-probs.npz', arrays, test, test_probs, **provenance)
     payload = dict(torch.load(base_path, map_location='cpu', weights_only=True))   # saved before the optional extras below
     base_sha = checkpoint_file_sha256(args.checkpoint)
     payload['state_dict'] = best_state;payload['value_calibration_transform'] = None
@@ -466,7 +518,7 @@ def main(argv=None):
     if isinstance(payload.get('model_config'), dict) and 'policy_id' in payload['model_config']:
         payload['model_config'] = dict(payload['model_config'], policy_id=f"fp-reply-{payload['model_config']['policy_id']}")
     payload['fp_reply'] = dict(policy_only=True, base_checkpoint_sha256=base_sha, best_epoch=best['epoch'], data=str(args.data), window=window,
-                               redaction=args.redact, view=args.view,
+                               redaction=args.redact, view=args.view, split=split_record(arrays, rows, rule, test_seeds, args.late_from),
                                note='policy fine-tuned on Foul Play decisions; the value output is not trained and must not be used')
     torch.save(payload, out / 'pi-fp.pt')
     cost = step_cost(model, arrays, index, test, torch, args.device)
@@ -475,8 +527,9 @@ def main(argv=None):
                   games=games, seats=seats, input_parity=input_parity, redaction=redaction, split_rule=rule,
                   args=vars(args), history=history,
                   best_epoch=best['epoch'], recalibration=calibration, ece_bins=data_mod.ECE_BINS,
-                  test=test_report(arrays, test, test_probs, calibrated, compare), compare_to=args.compare_to, inference_cost=cost, view=args.view,
-                  late=None if 'late' not in rows else late_report(model, arrays, index, rows['late'], calibrated, compare_late, out, torch, args.device),
+                  test=test_report(arrays, test, test_probs, calibrated, compare), compare_to=args.compare_to, late_compare=late_compare,
+                  inference_cost=cost, view=args.view,
+                  late=None if 'late' not in rows else late_report(model, arrays, index, rows['late'], calibrated, compare_late, out, torch, args.device, provenance),
                   seconds=round(time.time() - started, 1))
     report['saved'] = dict(path=str(out / 'pi-fp.pt'), sha256=checkpoint_file_sha256(out / 'pi-fp.pt'),
                            note='champion checkpoint format; policy fine-tuned on Foul Play decisions; the value head output is not trained')
