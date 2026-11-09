@@ -385,6 +385,15 @@ def _dtype_name(aval):
     return np.dtype(aval.dtype).name
 
 
+def _debug_info(name, args, results):
+    """A jax DebugInfo naming a phase jaxpr's operands (jax 0.12 warns on a Jaxpr without one); None if unavailable."""
+    try:
+        from jax._src.core import DebugInfo
+        return DebugInfo('v2e_phases', name, tuple(args), tuple(results))
+    except Exception:
+        return None
+
+
 @dataclass(eq=False)
 class PhaseSlice:
     name: str
@@ -459,7 +468,8 @@ class Plan:
         eqns = [new for _, new in s['kept']]
         from jax._src import core as _core
         effects = _core.join_effects(*(e.effects for e in eqns)) if eqns else jcore.no_effects
-        jaxpr = jcore.Jaxpr(constvars=constvars, invars=invars, outvars=outvars, eqns=eqns, effects=effects)
+        info = _debug_info(name or f'{start}->{end}', [e.name for e in self.carry[start]], [e.name for e in self.carry[end]])
+        jaxpr = jcore.Jaxpr(constvars=constvars, invars=invars, outvars=outvars, eqns=eqns, effects=effects, **({'debug_info': info} if info else {}))
         dced, _ = pe.dce_jaxpr(jaxpr, [True] * len(outvars), instantiate=True)
         closed = jcore.ClosedJaxpr(dced, consts)
         index = {v: i for i, v in enumerate(invars)};aliases = {};taken = set()
