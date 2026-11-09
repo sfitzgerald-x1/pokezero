@@ -249,13 +249,14 @@ def collect(runs, *, args, function_modules):
     return summaries, parsed
 
 
-def settle(summaries, parsed, pods=()):
-    """test -> (outcome, provenance): first CI run (in order) that settled it, then pod results."""
-    outcome = {}
+def settle(summaries, parsed, pods=(), pod_modules=()):
+    """test -> (outcome, provenance): first CI run (in order) that settled it, then pod results.
+    Tests of pod_modules (changed between the CI checkout and the tree) take the pod outcome only."""
+    outcome = {};pod_modules = set(pod_modules)
     for summary, jobs in zip(summaries, parsed):
         for name, record in jobs.items():
             for test, value in sorted(record['settled'].items()):
-                if test not in outcome:
+                if test not in outcome and module_of(test) not in pod_modules:
                     outcome[test] = (value, dict(source='ci', run=summary['run'], head=summary['head_sha'], job=name))
     for pod in pods:
         for test, value in sorted(pod['settled'].items()):
@@ -265,6 +266,7 @@ def settle(summaries, parsed, pods=()):
     for jobs in parsed:
         for record in jobs.values():unsettled |= record['unsettled']
     for pod in pods:unsettled |= set(pod['unsettled'])
+    unsettled = {t for t in unsettled if module_of(t) not in pod_modules or any(t in p['unsettled'] for p in pods)}
     return outcome, unsettled - set(outcome)
 
 
@@ -288,7 +290,10 @@ def extract(args):
     tree = tree_from(args);function_modules = tree.function_modules() if tree else None
     summaries, parsed = collect(args.runs, args=args, function_modules=function_modules)
     pods = [read_pod(p) for p in args.pod or ()]
-    outcome, unsettled = settle(summaries, parsed, pods)
+    pod_modules = sorted(set(args.pod_module or ()))
+    missing = [m for m in pod_modules if not any(m in p['modules'] for p in pods)]
+    if missing:raise SystemExit(f'--pod-module {missing} not run in any --pod result')
+    outcome, unsettled = settle(summaries, parsed, pods, pod_modules)
     failing = sorted(t for t, (v, _) in outcome.items() if v == 'fail')
     cover = coverage(tree, outcome, unsettled)
     out = Path(args.out);out.parent.mkdir(parents=True, exist_ok=True)
@@ -301,6 +306,7 @@ def extract(args):
         failing=len(failing), settled_tests=len(outcome), failing_by_source=by_source,
         provenance={t: outcome[t][1] for t in failing}, settled_outcomes={t: v for t, (v, _) in sorted(outcome.items())},
         unsettled_tests=sorted(unsettled), coverage=cover, cross_head=bool(getattr(args, 'allow_cross_head', False)),
+        pod_modules=pod_modules,
         note='A test is settled when its unittest run printed `Ran N tests` or its own result was printed inline; '
              'CI runs take precedence in the listed order and pod results only fill tests CI did not settle.')
     out.with_suffix('.json').write_text(json.dumps(sidecar, indent=1) + '\n')
@@ -483,6 +489,8 @@ def main(argv=None):
     e.add_argument('--log', action='append', default=None, help='parse saved logs instead of downloading (one per run, in order)')
     e.add_argument('--log-head', action='append', default=None, help='head SHA of each saved --log')
     e.add_argument('--pod', action='append', default=None, help='pod-run result JSON to fill unsettled tests')
+    e.add_argument('--pod-module', action='append', default=None,
+        help='module changed between the CI checkout and the tree: its tests take the pod outcome only')
     tree_args(e)
     s = sub.add_parser('supplement', help='module list for a pod supplement from an extract sidecar')
     s.add_argument('--sidecar', required=True);s.add_argument('--out', required=True)

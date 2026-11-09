@@ -105,6 +105,10 @@ class ExtractDiffTests(unittest.TestCase):
         self.assertEqual(side['provenance']['test_v.V.test_v']['source'], 'pod')
         self.assertEqual(side['provenance']['test_w.D.test_d']['source'], 'ci')   # CI settled it first
         self.assertEqual(side['coverage']['modules_never_reached'], []);self.assertEqual(side['unsettled_tests'], [])
+        code, side2 = self.extract('--pod', self.tmp / 'pod.json', '--pod-module', 'test_w')    # test_w changed since CI
+        self.assertEqual(side2['provenance'].get('test_w.D.test_d'), None)                      # the pod's pass wins
+        self.assertEqual(side2['settled_outcomes']['test_w.D.test_d'], 'pass')
+        code, side = self.extract('--pod', self.tmp / 'pod.json')
         base = self.tmp / 'base.txt'
         (self.tmp / 'pr.log').write_text(LOG)
         # Same logs as the PR: the killed job leaves test_f unsettled and test_v unreached -> INCOMPLETE.
