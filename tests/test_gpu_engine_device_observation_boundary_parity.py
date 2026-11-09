@@ -276,6 +276,35 @@ console.log(JSON.stringify({
         for side in (0,1):
             self.assertEqual(bool(c.trackers.shown_ability[0,side,0]),bool(sand[f'p{side+1}']))
 
+    def test_public_order_replays_showdowns_request_order(self):
+        """Showdown's side.pokemon after each switch, in public encounter slots, equals public_order.
+
+        Members are revealed in team order here: the public view cannot know a hidden member's
+        team position, so its rule places an unrevealed member at its public slot's position."""
+        import json,os
+        root=os.environ['POKEZERO_SHOWDOWN_ROOT']
+        names=['Magikarp','Feebas','Goldeen','Horsea','Shellder','Staryu']
+        code="""const {Battle}=require(process.argv[1]+'/dist/sim/battle.js');
+function mon(species){return {name:species,species,ability:'Swift Swim',item:'',moves:['splash'],nature:'Hardy',level:80,gender:'M',
+ evs:{hp:84,atk:84,def:84,spa:84,spd:84,spe:84},ivs:{hp:31,atk:31,def:31,spa:31,spd:31,spe:31}};}
+const b=new Battle({formatid:'gen3customgame',seed:[5,6,7,8]});
+b.setPlayer('p1',{name:'A',team:[mon('Smeargle')]});b.setPlayer('p2',{name:'B',team:JSON.parse(process.argv[2]).map(mon)});
+const orders=[b.sides[1].pokemon.map(p=>p.name)];
+for(const c of JSON.parse(process.argv[3])){b.makeChoices('move 1',c);orders.push(b.sides[1].pokemon.map(p=>p.name));}
+console.log(JSON.stringify(orders));"""
+        choices=['switch 2','switch 3','switch 2','switch 4','switch 3','switch 5']
+        orders=json.loads(subprocess.check_output(['node','-e',code,root,json.dumps(names),json.dumps(choices)],text=True))
+        state=self.state();state=state._replace(species=state.species.at[:,1].set(j.asarray([3,1,2,3,1,2],j.int32)))
+        c=h.initialize(state);yes=j.ones(2,bool);public=[names[0]]
+        for k,order in enumerate(orders):
+            if k and order[0]!=orders[k-1][0]:
+                if order[0] not in public:public.append(order[0])
+                state=state._replace(active=state.active.at[:,1].set(names.index(order[0])));h.install(c,state,1,yes)
+            hidden=iter(range(len(public),6))
+            expected=[public.index(n) if n in public else next(hidden) for n in order]
+            self.assertEqual(c.trackers.public_order[0,1].tolist(),expected,(k,order))
+        self.assertEqual(orders[3][:3],['Magikarp','Goldeen','Feebas'])            # 0->1->2->0 gives [0,2,1,...]
+
     def test_departed_color_change_shows_b2_species_types(self):
         from gpu_engine import public_types as pt, public_mon_state as m
         state=self.state();yes=j.ones(2,bool);owners=j.zeros(2,j.int32)
