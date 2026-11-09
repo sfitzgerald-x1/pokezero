@@ -417,6 +417,15 @@ class ParityTests(unittest.TestCase):
         self.worlds[0]['grid'] = None
         self.assertEqual(self.check(live_action=self.action, replay_q=self.q)['cause'], 'recompute_world_unpriced')
 
+    def test_replay_mode_holds_the_replay_to_itself(self):
+        row = decision(self.worlds, root_legal=self.legal, live_action=1 - self.action, replay_action=self.action, replay_q=self.q)
+        base = S.recompute(row)
+        self.assertEqual(S.parity_row(row, base, None)['cause'], 'action_differs')   # live mode: the live action differs
+        self.assertEqual(S.parity_row(row, base, None, 'replay'), dict(match=True, action_equal=True, q_equal=True, cause=None))
+        off = decision(self.worlds, root_legal=self.legal, live_action=self.action, replay_action=1 - self.action, replay_q=self.q)
+        self.assertEqual(S.parity_row(off, S.recompute(off), None, 'replay')['cause'], 'action_differs')
+        with self.assertRaises(ValueError):S.parity_row(row, base, None, 'other')
+
     def test_threshold_is_99_percent_inclusive(self):
         self.assertTrue(S.parity_passed(99, 100))
         self.assertFalse(S.parity_passed(98, 100))
@@ -689,6 +698,91 @@ class EndToEndTests(unittest.TestCase):
         self.assertEqual(decisions[1]['external_missing_worlds'], [3]);self.assertIsNone(decisions[1]['operators']['external_br']['choice'])
         self.assertEqual(decisions[2]['external_missing_worlds'], []);self.assertIsNotNone(decisions[2]['operators']['external_br']['choice'])
         self.assertIn('external_mix:alpha=0.5', (out / 'summary.md').read_text())
+
+
+def guard_record(*, b=False, turn1=(), turn2=(), lanes=(None, None, None, None), a=False, tier_b=False):
+    """A minimal effect-guard record (pokezero.depthn_effect_guard.evaluate's fields the scorer reads): (b) reasons per source as
+    (move, tier), our guarded lanes as (tier, class) or None."""
+    reasons = [dict(move=m, side='opp', source='turn1', tier=t, effect_class='x', max_mass=.3, worlds=[0]) for m, t in turn1]
+    reasons += [dict(move=m, side='own', source='turn2', tier=t, effect_class='x', max_mass=.2, worlds=[1]) for m, t in turn2]
+    return dict(b=b or bool(reasons), b_turn1=bool(turn1), b_turn2=bool(turn2), reasons=reasons, a=a, tier_b_legal=tier_b,
+                own_guarded_lanes=[None if x is None else list(x) for x in lanes])
+
+
+class GuardTests(unittest.TestCase):
+    """Every operator but greedy plays greedy where the own-recharge guard or UNREPRESENTED_EFFECT trips on its own choice."""
+    legal = legal_mask(0, 1, 4)
+
+    def score(self, record=None, own_moves=None):
+        d = decision(waiting_worlds([{0: .5, 1: .1, 4: -.2}] * 2, self.legal), greedy=1, root_legal=self.legal)   # averaging plays 0
+        d.update(effect_guard=record, own_moves=own_moves)
+        return S.score_decision(d, S.Reply('wait', None, None, ''), None, collections.Counter())
+
+    def test_b_guards_every_operator(self):
+        out = self.score(guard_record(turn1=[('destinybond', 'A')]))
+        for name, o in out['operators'].items():
+            self.assertEqual((o['choice'], o['D']['dropped']), (1, 0.), name)   # greedy plays
+            if name != 'greedy' and o['raw_choice'] != 1:self.assertEqual(o['guard_causes'], ['UNREPRESENTED_EFFECT'], name)
+        self.assertEqual(out['raw_operators']['averaging']['choice'], 0);self.assertAlmostEqual(out['raw_operators']['averaging']['D']['dropped'], .4)
+        self.assertEqual((out['guard']['b'], out['guard']['tiers_turn1']), (True, ['A']))
+
+    def test_c_guards_only_the_operators_choosing_the_lane(self):
+        out = self.score(guard_record(lanes=(('A', 'other'), None, None, None)))   # lane 0 (averaging's choice) guarded for us
+        self.assertEqual((out['operators']['averaging']['choice'], out['operators']['averaging']['guard_causes']), (1, ['UNREPRESENTED_EFFECT']))
+        self.assertEqual(out['guard']['c']['averaging'], True)
+        kept = [n for n, o in out['raw_operators'].items() if o['choice'] not in (0, None)]
+        for name in kept:self.assertEqual(out['operators'][name]['choice'], out['raw_operators'][name]['choice'], name)   # not lane 0: unguarded
+        clear = self.score(guard_record())
+        self.assertEqual((clear['operators']['averaging']['choice'], clear['operators']['averaging']['guard_causes']), (0, None))
+
+    def test_the_recharge_guard_and_a_row_without_the_record(self):
+        out = self.score(None, own_moves=['hyperbeam', 'bodyslam', 'rest', 'protect'])
+        self.assertEqual((out['operators']['averaging']['choice'], out['operators']['averaging']['guard_causes'], out['guard']),
+            (1, ['OWN_RECHARGE_UNREPRESENTED'], None))
+        both = self.score(guard_record(lanes=(('A', 'multi_turn'), None, None, None)), own_moves=['hyperbeam', 'bodyslam', 'rest', 'protect'])
+        self.assertEqual(both['operators']['averaging']['guard_causes'], ['OWN_RECHARGE_UNREPRESENTED', 'UNREPRESENTED_EFFECT'])
+
+    def test_guard_report(self):
+        def record(ordinal, guard, d=.1, raw=.3):
+            ops = {n: (0, (d, d), '<1%') for n in S.SETTINGS};ops['greedy'] = (1, (0., 0.), '<1%')
+            raws = {n: (0, (raw, raw), '<1%') for n in S.SETTINGS};raws['greedy'] = (1, (0., 0.), '<1%')
+            return dict(ordinal=ordinal, half='even', kind='move', observed=True, fp_requested=True, ops=ops, raw_ops=raws, guard=guard)
+        facts = lambda r, c=False: S.guard_facts(r, {'averaging': 0 if c else 4, 'greedy': 1})
+        records = [record(0, facts(guard_record(turn1=[('curse', 'A')])), d=0.), record(1, facts(guard_record(turn2=[('spore', 'C')])), d=0.),
+                   record(2, facts(guard_record(a=True, tier_b=True))), record(3, facts(guard_record(lanes=(('A', 'x'), None, None, None)), c=True)),
+                   record(4, None), record(5, facts(S.effect_guard.error_record('unreadable')), d=0.)]
+        g = S.guard_report(records, S.SETTINGS, opponent_recharge=2)
+        self.assertEqual((g['priced_roots'], g['without_record'], g['opponent_recharge_refused']), (5, 1, 2))
+        # the error record (b, neither turn-1 nor turn-2 reasons) is its own part of the guarded share
+        self.assertEqual((g['union']['turn1'], g['union']['turn2_added'], g['union']['unavailable_or_error'], g['union']['total'], g['guarded_share']),
+            (1, 1, 1, 3, .6))
+        self.assertEqual((g['tiers']['A']['turn1'], g['tiers']['C']['turn2_added']), (1, 1));self.assertTrue(g['above_20pct'])
+        self.assertEqual((g['c']['averaging']['c_only'], g['c']['averaging']['union_share']), (1, .8))
+        self.assertEqual((g['primary']['roots'], g['guarded_context']['roots'], g['tier_b']['legal']['roots'], g['sensitivity']['roots']), (2, 3, 1, 1))
+        alone = S.guard_report([record(0, facts(guard_record())), record(1, facts(S.effect_guard.error_record('x')))], S.SETTINGS)
+        self.assertEqual((alone['guarded_share'], alone['above_20pct'], alone['union']['unavailable_or_error']), (.5, True, 1))   # errors alone flag
+        self.assertAlmostEqual(g['guarded_context']['table']['pi_filled']['averaging']['mean'], .3)   # raw choices for context
+        self.assertAlmostEqual(g['primary']['table']['pi_filled']['averaging']['mean'], .1)
+        text = '\n'.join(S.guard_markdown(g, S.SETTINGS))
+        self.assertIn('**above 20%**', text);self.assertIn('Primary: RR on unguarded roots (2)', text)
+
+    def test_end_to_end(self):
+        """A small synthetic replay through main(): the rows carry their guard records; the guarded root plays greedy everywhere."""
+        e2e = EndToEndTests('test_main');e2e.setUp();self.addCleanup(e2e.tearDown)
+        run = e2e.root / 'run'
+        for sub in ('results', 'telemetry', 'owning-wire'):(run / sub).mkdir(parents=True)
+        rows = e2e.rows(run, random.Random(11))
+        for i, row in enumerate(rows):
+            row['effect_guard'] = guard_record(turn1=[('knockoff', 'A')]) if i == 0 else guard_record(a=i == 1)
+            if row['root'] is not None:row['root']['own_moves'] = ['surf', 'icebeam', 'recover', 'thunderbolt']
+        rows[-1]['root'] = dict(decided=False, root_logits=None, root_legal=None, refusal_cause='OPPONENT_RECHARGE_UNREPRESENTED')
+        path = e2e.root / 'rows-0.jsonl';path.write_text(''.join(json.dumps(r) + '\n' for r in rows))
+        with redirect_stdout(io.StringIO()):self.assertEqual(S.main(['--rows', str(path), '--run-directory', str(run), '--out', str(e2e.root / 'out')]), 0)
+        summary = json.loads((e2e.root / 'out' / 'summary.json').read_text());g = summary['guard']
+        self.assertEqual((g['priced_roots'], g['union']['total'], g['opponent_recharge_refused'], g['primary']['roots']), (6, 1, 1, 5))
+        first = json.loads((e2e.root / 'out' / 'decisions.jsonl').read_text().splitlines()[0])
+        self.assertTrue(all(o['choice'] == first['greedy_action'] for o in first['operators'].values()))
+        self.assertIn('# Effect guard', (e2e.root / 'out' / 'summary.md').read_text())
 
 
 class TemperedTests(unittest.TestCase):

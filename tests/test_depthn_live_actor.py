@@ -4,7 +4,9 @@ import json
 import os
 from pathlib import Path
 import random
+import shutil
 import socket
+import subprocess
 import struct
 import sys
 from tempfile import TemporaryDirectory
@@ -20,12 +22,13 @@ from pokezero.live_protocol_actor import ActorContract, JaxBackend, OwnedProvide
 from pokezero.live_protocol_bridge import OwningActorFactory
 from pokezero.policy import PolicyDecision
 from tests import test_phase_d_prerequisites as fixture
+from tests._showdown_root import has_showdown, showdown_root
 
 REQUEST_KEYS = {'schema','request_id','battle_id','owner','stream_id','decision_index','generation',
                 'prefix_sha256','lines','own_request_line','rung','budget_seconds'}
 ROW_KEYS = {'schema','arm','policy_id','cell','battle_id','owner','stream_id','generation','turn','decision_index','request_kind',
             'prefix_sha256','archive_sha256','archive_source','deadline_seconds','reserve_seconds','encode_seconds','greedy','search','played_action_index','source','cause',
-            'search_differs','select_seconds'}
+            'search_differs','recharge_guard','guard_causes','select_seconds'}
 
 
 def decode_edge():
@@ -50,7 +53,7 @@ def complete(request, *, action=4, q=.25, **extra):
         status='COMPLETE', action_index=action, q_values=values, refusal=None, cause=None, requested_worlds=8,
         constructed_worlds=8, decision_seconds=.5, root_operator='ARGMAX_MEAN_COMPLETED_Q', policy_target=[0.]*9,
         root_value=.2, timings=dict(queue_seconds=.01, prepare_seconds=.2, build_seconds=.05, price_seconds=.2,
-        reduce_seconds=.01), **extra)
+        reduce_seconds=.01), **dict(dict(effect_guard=dict(tripped=False, b=False, c=False, reasons=[])), **extra))
 
 
 def refused(request, cause):
@@ -113,13 +116,17 @@ def snapshot():
               lines=('|turn|1', line), own_request_line=line)
 
 
-def request_line(*, members=2, force=False, trapped=False):
+def request_line(*, members=2, force=False, trapped=False, moves=None):
     packet = json.loads(fixture.request()[len('|request|'):]); side = packet['side']; key = next(k for k in side if k != 'id')
     base = side[key][1]
     side[key] = side[key][:1]+[dict(base, ident=base['ident'][:-1]+str(i)) for i in range(1, members)]
+    if moves is not None: packet['active'][0]['moves'] = [m if isinstance(m, dict) else dict(id=m, pp=8, maxpp=8) for m in moves]
     if force: packet.pop('active'); packet['forceSwitch'] = [True]
     if trapped: packet['active'][0]['trapped'] = True
     return '|request|'+json.dumps(packet)
+
+
+BEAM = ('hyperbeam', 'bodyslam', 'earthquake', 'rest')   # lane 0 is a recharge move
 
 
 class ClientTests(unittest.TestCase):
@@ -663,6 +670,112 @@ class FactoryTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'owning root'):
             policy.select_action(NS(metadata={'owner_prefix_sha256': 'e'*64}, legal_action_mask=mask), rng=random.Random(1))
         self.assertEqual(calls, []); self.assertEqual(self.path.read_bytes(), b'')
+
+
+    def guarded(self, name, *, search, greedy, moves=BEAM):
+        self.fresh(name)
+        def responder(r): return dict(complete(r, action=search), q_values=[.1]*9)
+        (decision,), calls = self.run_arm(responder, greedy=greedy, lines=[request_line(moves=moves)])
+        self.assertEqual(sorted(calls), ['greedy', 'search']); row, = self.rows()
+        return decision, row
+
+    def test_an_override_into_an_own_recharge_move_plays_greedy(self):
+        """The lead's guard: search chose Hyper Beam (lane 0), greedy did not; greedy is played, source greedy_fallback, cause
+        OWN_RECHARGE_UNREPRESENTED, and the row keeps the COMPLETE response and names the guarded lane."""
+        for greedy, greedy_move in ((1, 'bodyslam'), (4, None)):   # a move greedy, a switch greedy
+            with self.subTest(greedy=greedy):
+                decision, row = self.guarded(f'into-{greedy}', search=0, greedy=greedy)
+                self.assertEqual((decision.action_index, decision.policy_id), (greedy, 'champion-raw'))
+                self.assertEqual(decision.metadata['depthn_live'],
+                    dict(arm='DN2W8', source='greedy_fallback', cause='OWN_RECHARGE_UNREPRESENTED', request_id='f'*32))
+                self.assertEqual((row['source'], row['cause'], row['played_action_index'], row['search_differs']),
+                    ('greedy_fallback', 'OWN_RECHARGE_UNREPRESENTED', greedy, None))
+                self.assertEqual((row['search']['status'], row['search']['action_index']), ('COMPLETE', 0))
+                self.assertEqual(row['recharge_guard'], dict(searched_action=0, searched_move='hyperbeam', greedy_move=greedy_move))
+                self.assertEqual(set(row), ROW_KEYS)
+        # Every Gen 3 recharge move is guarded, by its id or (no id) its display name.
+        for i, move in enumerate(('blastburn', 'hydrocannon', 'frenzyplant', dict(move='Hyper Beam', pp=8, maxpp=8))):
+            with self.subTest(move=move):
+                decision, row = self.guarded(f'move-{i}', search=2, greedy=1, moves=('rest', 'bodyslam', move, 'earthquake'))
+                self.assertEqual((decision.action_index, row['cause']), (1, 'OWN_RECHARGE_UNREPRESENTED'))
+
+    def test_overrides_away_from_or_without_a_recharge_move_are_played(self):
+        for name, search, greedy, differs in (('away', 1, 0, True), ('same', 0, 0, False), ('plain', 2, 1, True), ('switch', 4, 0, True)):
+            with self.subTest(name):
+                decision, row = self.guarded(name, search=search, greedy=greedy)
+                self.assertEqual((decision.action_index, row['source'], row['cause'], row['search_differs'], row['recharge_guard']),
+                    (search, 'search', None, differs, None))
+        decision, row = self.guarded('no-beam', search=0, greedy=1, moves=('bodyslam', 'rest', 'earthquake', 'shadowball'))
+        self.assertEqual((decision.action_index, row['source']), (0, 'search'))
+
+    def test_the_panel_counts_the_guard_as_a_fallback_cause(self):
+        from pokezero.depthn_live_panel import decisions
+        decision, row = self.guarded('panel', search=0, greedy=1)
+        summary = decisions([row], deadline=3.)
+        self.assertEqual(summary['by_request_kind']['move']['fallback_by_cause'], {'OWN_RECHARGE_UNREPRESENTED': 1})
+        self.assertEqual((summary['fallback_by_cause']['OWN_RECHARGE_UNREPRESENTED']['count'], summary['transport_failure_share']), (1, 0.))
+
+
+    def test_an_unrepresented_effect_plays_greedy_and_the_first_guard_cause_stands(self):
+        """The server's effect guard tripped: greedy, cause UNREPRESENTED_EFFECT, the full response kept; with the own-recharge guard
+        too, OWN_RECHARGE_UNREPRESENTED stands and guard_causes lists both."""
+        tripped = dict(tripped=True, b=True, c=False, reasons=[dict(move='destinybond', side='opp', source='turn1', max_mass=.3)])
+        def responder(search):
+            def reply(r):return dict(complete(r, action=search), q_values=[.1] * 9, effect_guard=tripped)
+            return reply
+        for name, search, greedy, causes in (('effect', 1, 2, ['UNREPRESENTED_EFFECT']), ('both', 0, 1, ['OWN_RECHARGE_UNREPRESENTED', 'UNREPRESENTED_EFFECT']),
+                ('same', 2, 2, ['UNREPRESENTED_EFFECT'])):
+            with self.subTest(name):
+                self.fresh(name)
+                (decision,), _ = self.run_arm(responder(search), greedy=greedy, lines=[request_line(moves=BEAM)])
+                row, = self.rows()
+                self.assertEqual((decision.action_index, row['source'], row['cause'], row['guard_causes'], row['played_action_index']),
+                    (greedy, 'greedy_fallback', causes[0], causes, greedy))
+                self.assertEqual((row['search']['status'], row['search']['effect_guard']), ('COMPLETE', tripped))
+                self.assertEqual(decision.metadata['depthn_live']['cause'], causes[0]);self.assertEqual(set(row), ROW_KEYS)
+        self.fresh('clear')
+        (decision,), _ = self.run_arm(lambda r: dict(complete(r, action=1), q_values=[.1] * 9), greedy=2, lines=[request_line(moves=BEAM)])
+        self.assertEqual((decision.action_index, self.rows()[0]['guard_causes'], self.rows()[0]['source']), (1, [], 'search'))
+
+    def test_a_complete_response_without_the_effect_guard_is_a_server_error(self):
+        for name, guard in (('missing', None), ('not_bool', dict(tripped='no')), ('not_dict', [True])):
+            with self.subTest(name):
+                self.fresh(name)
+                def reply(r, guard=guard):
+                    out = complete(r, action=4)
+                    if guard is None:out.pop('effect_guard')
+                    else:out['effect_guard'] = guard
+                    return out
+                with FakeServer(lambda request, conn, reply=reply: conn.sendall(wire.encode(reply(request)))) as server:
+                    client = live.Client('127.0.0.1', server.port, rung='DN2W8')
+                    decision, = play(live.factory(NS(), raw_factory=raw_factory([]), client=client, telemetry_path=self.path, arm='DN2W8'))
+                self.assertEqual((decision.action_index, self.rows()[0]['cause']), (0, 'server_error'))
+
+
+class RechargeMoveTests(unittest.TestCase):
+    def test_own_moves_reads_the_request_lanes(self):
+        self.assertEqual(live.own_moves(request_line(moves=BEAM)), BEAM)
+        self.assertEqual(live.own_moves(request_line(moves=('bodyslam', dict(move='Hyper Beam'), dict(id='', move='Rest')))),
+            ('bodyslam', 'hyperbeam', 'rest', None))
+        self.assertEqual(live.own_moves(request_line(force=True)), (None,)*4)   # a forceSwitch request has no active row
+        self.assertEqual(live.own_moves(request_line(moves=BEAM+('surf',))), BEAM)   # lanes 0-3 only
+        for bad in (None, '', '|request|', '|request|[]', '|request|{bad', '|turn|1'):
+            with self.subTest(bad=bad): self.assertIsNone(live.own_moves(bad))
+
+    def test_the_guard_rule(self):
+        moves = BEAM
+        self.assertTrue(live.recharge_guarded(moves, 0, 1)); self.assertTrue(live.recharge_guarded(moves, 0, 4))
+        for searched, greedy in ((1, 0), (0, 0), (2, 1), (4, 1), (5, 0)):
+            self.assertFalse(live.recharge_guarded(moves, searched, greedy), (searched, greedy))
+        self.assertFalse(live.recharge_guarded(None, 0, 1)); self.assertFalse(live.recharge_guarded((None,)*4, 0, 1))
+
+    @unittest.skipUnless(has_showdown() and (showdown_root()/'dist'/'sim').is_dir() and shutil.which('node'), 'needs a built Showdown and node')
+    def test_recharge_moves_are_showdowns_gen3_recharge_flag(self):
+        """RECHARGE_MOVES is exactly the standard Gen 3 moves Showdown's own move table flags recharge."""
+        script = ("const {Dex}=require(process.argv[1]+'/dist/sim');const g=Dex.forGen(3);"
+                  "console.log(JSON.stringify(g.moves.all().filter(m=>m.flags&&m.flags.recharge&&!m.isNonstandard).map(m=>m.id)))")
+        out = subprocess.run([shutil.which('node'), '-e', script, str(showdown_root())], check=True, capture_output=True, text=True, timeout=60)
+        self.assertEqual(frozenset(json.loads(out.stdout)), live.RECHARGE_MOVES)
 
 
 class RequestKindTests(unittest.TestCase):

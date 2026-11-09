@@ -28,7 +28,7 @@ request_id. Per batch (process_many chunks a longer list into batches of max_req
   summing to 1 + ulp), or fails in any other way, those fields are None and reduction_note says why; the root still plays
   averaging's action.
 - causes: a root prepare() refused, or one with a refused world, is constructor_refused; one refused by build's root
-  checks (root view, legal mask, root forward), by DepthN's pricing (a block cause, depthn_backups.refusal_summary) or by
+  checks (root view, legal mask, B2 inputs: ROOT_B2_INPUTS_UNUSABLE, root forward), by DepthN's pricing (a block cause, depthn_backups.refusal_summary) or by
   averaging (an unknown price, or its error) is depthn_refused. Any other exception in the shared batch (prepare_roots,
   build, price, the backups) refuses every request of the batch server_error with its text; MemoryError propagates.
   Every response must pass phase_d_search_server.encode (else server_error), so no value breaks the wire.
@@ -63,10 +63,21 @@ request_id. Per batch (process_many chunks a longer list into batches of max_req
   (depthn_live_server --matmul-precision, default 'highest': it refuses to start on any other setting); this module
   records jax.config.jax_default_matmul_precision in the pricer identity (matmul_precision) of every response, and the
   panel's probe and readout refuse a response priced under another precision.
+- the effect guard (`effect_guard`, every COMPLETE response; pokezero.depthn_effect_guard, its inputs
+  depthn_guard_inputs): the pricers are ObservedDepthNPricers whose observer seam reads the P1 call's turn-1 children while
+  this batch prices (observer only: the frame and every program are the base pricer's); the record of the root (our root
+  prior, the peer's per world, both sides' turn-2 priors per expanded cell, the search's own action) with `tripped`, which
+  the live actor turns into greedy (cause UNREPRESENTED_EFFECT). A root whose inputs cannot be read gets the fail-closed
+  record (tripped, with its error), as does one whose expanded cells have no captured children.
+- the root prior's inputs (reported): `root_view_source`, the build root dict's ('b2': the champion read B2's own encoding of
+  the literal root, as Codex's ladder; 'world0': world 0's own view, for a root without B2 inputs), and `b2_view`, its
+  diagnostic of world 0's view against B2's encoding (wire_b2_view: equal, per-key equal flags, the largest numeric
+  difference, error). Both are None for a root that never reached the root view; a root refused ROOT_LEGAL_EMPTY has
+  b2_view set and root_view_source None (build checks the legal mask between the two).
 Response, per the live contract: schema, request_id, rung, archive_sha256, status, action_index, q_values (9, None on
 illegal lanes), refusal, cause, requested_worlds, constructed_worlds, decision_seconds (batch start -> result, COMPLETE
 only); ours: root_operator, root_operator_impl, completed_q, policy_target, root_value, action_mean_q,
-action_policy_target, mean_q_agrees, reduction_note, block_causes, world_refusals, timings (queue_seconds,
+action_policy_target, mean_q_agrees, reduction_note, root_view_source, b2_view, effect_guard, block_causes, world_refusals, timings (queue_seconds,
 prepare_seconds (the root's own), build/price/reduce_seconds (the shared batch's; reduce = backups, averaging and the
 reporting reduction)), batch_size, bucket, tree_commit, pricer. Fields a request never reached are None. `rung` echoes the
 request's when it is a string (so a RUNG_NOT_SERVED refusal still matches the client's rung), else this server's.
@@ -87,7 +98,9 @@ import numpy as np
 
 from pokezero import v5_gumbel as original
 from pokezero.phase_d_search_server import SCHEMA,encode
+from pokezero import depthn_effect_guard as effect_guard
 from . import champion_evaluator as evaluators,constructor_worlds as cw,depthn_backups as backups,device_depthn_pricer as dn,search_hedge as hedge
+from . import depthn_guard_inputs as guard_inputs
 
 RUNGS={'DN2W8':8,'DN2W16':16}
 ROOT_OPERATOR='ARGMAX_MEAN_COMPLETED_Q'
@@ -103,14 +116,15 @@ FATAL=(MemoryError,)
 WARMUP_BUDGET=3600.
 
 
-def make_pricers(executor,forward,params,*,worlds,buckets=(1,2,4),block_lanes=2187,blocks_per_call=16):
-    """The live pricers: {bucket b: DepthNPricer(capacity b x W/2, depth 2, k 9, k1 9/9, prior, fixed_capacity)} with `forward`
-    (the champion) and one program table shared after binding `params` (block programs compile once, P1 once per bucket)."""
+def make_pricers(executor,forward,params,*,worlds,buckets=(1,2,4),block_lanes=2187,blocks_per_call=16,labels=guard_inputs.child_labels):
+    """The live pricers: {bucket b: ObservedDepthNPricer(capacity b x W/2, depth 2, k 9, k1 9/9, prior, fixed_capacity)} with
+    `forward` (the champion) and one program table shared after binding `params` (block programs compile once, P1 once per
+    bucket); `labels` is the effect guard's turn-1 child gather (depthn_guard_inputs)."""
     if forward is None:raise ValueError('an explicit evaluator (the champion) required')
-    table={};out={}
+    guard_inputs.check_seam();table={};out={}
     for b in buckets:
-        p=dn.DepthNPricer(executor,None,capacity=b*(worlds//2),depth=DEPTH,k_own=WIDTH,k_opp=WIDTH,k1_own=WIDTH,k1_opp=WIDTH,block_lanes=block_lanes,
-            blocks_per_call=blocks_per_call,selection='prior',fixed_capacity=True,forward=forward,actor_capacity=len(params))
+        p=guard_inputs.ObservedDepthNPricer(executor,None,capacity=b*(worlds//2),depth=DEPTH,k_own=WIDTH,k_opp=WIDTH,k1_own=WIDTH,k1_opp=WIDTH,block_lanes=block_lanes,
+            blocks_per_call=blocks_per_call,selection='prior',fixed_capacity=True,forward=forward,actor_capacity=len(params),labels=labels)
         p.bind(params);p.programs=table;out[b]=p
     return out
 
@@ -211,6 +225,16 @@ def refusal_cause(reason):
         else'depthn_refused')
 
 
+def wire_b2_view(view):
+    """A root's b2_view (constructor_worlds.b2_view_check) for the wire: dict(equal, keys, numeric_max_abs_diff, error), JSON-safe
+    (bools, a finite float or None: a non-finite difference is None), or None when there is none."""
+    if view is None:return None
+    if not isinstance(view,dict):return dict(equal=None,keys=None,numeric_max_abs_diff=None,error=f'unexpected b2_view {type(view).__name__}')
+    keys,diff,error=view.get('keys'),view.get('numeric_max_abs_diff'),view.get('error')
+    return dict(equal=None if view.get('equal')is None else bool(view['equal']),keys=None if keys is None else{str(k):bool(v)for k,v in keys.items()},
+        numeric_max_abs_diff=float(diff)if isinstance(diff,(int,float))and math.isfinite(diff)else None,error=None if error is None else str(error))
+
+
 def _battle(key):
     """The battle of a ProtocolConstructor session key (rung, battle, owner, stream), else None."""
     return key[1]if type(key)is tuple and len(key)==4 else None
@@ -233,7 +257,7 @@ class DepthNLiveSearch:
         first=pricers[self.buckets[0]]
         for b in self.buckets:
             p=pricers[b]
-            if(type(p)is not dn.DepthNPricer or p.depth!=DEPTH or p.selection!='prior'or p.fixed_capacity is not True or p.capacity!=b*self.K
+            if(not isinstance(p,dn.DepthNPricer)or p.depth!=DEPTH or p.selection!='prior'or p.fixed_capacity is not True or p.capacity!=b*self.K
                     or p.k_own!=(WIDTH,)or p.k_opp!=(WIDTH,)or(p.k1_own,p.k1_opp)!=(WIDTH,WIDTH)or p.executor is not first.executor
                     or p.forward is not first.forward):
                 raise ValueError(f'bucket {b}: a fixed-capacity DepthNPricer of capacity {b}x{self.K}, depth 2, k 9, k1 9/9, prior, sharing the executor and evaluator required')
@@ -271,7 +295,9 @@ class DepthNLiveSearch:
         return dict(schema=SCHEMA,request_id=request_id,rung=self.rung,archive_sha256=self.archive_sha256,status='REFUSED',action_index=None,q_values=None,
             refusal=None,cause=None,requested_worlds=self.W,constructed_worlds=0,decision_seconds=None,root_operator=ROOT_OPERATOR,
             root_operator_impl=ROOT_OPERATOR_IMPL,completed_q=None,policy_target=None,root_value=None,action_mean_q=None,action_policy_target=None,
-            mean_q_agrees=None,reduction_note=None,block_causes=None,world_refusals=None,timings=dict.fromkeys(STAGES),batch_size=n,bucket=None,
+            mean_q_agrees=None,reduction_note=None,root_view_source=None,b2_view=None,effect_guard=None,block_causes=None,world_refusals=None,
+            timings=dict.fromkeys(STAGES),
+            batch_size=n,bucket=None,
             root_classes=None,root_class=None,root_class_source=None,root_class_crosscheck=None,
             tree_commit=self.tree_commit,pricer=dict(self.pricer_identity))
 
@@ -354,15 +380,23 @@ class DepthNLiveSearch:
         if made.requests:
             chosen=bucket if bucket is not None else next((b for b in self.buckets if len(made.requests)<=b*self.K),None)
             if chosen is None:raise ValueError(f'{len(made.requests)} blocks exceed the largest bucket\'s capacity')
-            frame,_=cw.price(self.pricers[chosen],made,self.binding,self.recipe,self.params)
+            pricer=self.pricers[chosen];observer=pricer if isinstance(pricer,guard_inputs.ObservedDepthNPricer)else None
+            if observer is not None:observer.observe()
+            try:frame,_=cw.price(pricer,made,self.binding,self.recipe,self.params)
+            finally:children,seam_notes=observer.observed()if observer is not None else([],['the pricer has no observer seam'])
         t_price=time.perf_counter();results=[];causes=backups.refusal_summary(frame)['roots']if made.requests else()
+        by_id={p['request_id']:p for _,p,_ in todo};labels=getattr(observer,'labels',guard_inputs.child_labels)if made.requests else None
         for root in made.roots:
-            if root['status']!='PRICED':results.append(dict(request_id=root['request_id'],status='REFUSED',refusal=root['reason'],block_causes=None));continue
-            block=[causes[r]['cause']for r in root['rows']];base=dict(request_id=root['request_id'],block_causes=block)
+            view=dict(root_view_source=root.get('root_view_source'),b2_view=wire_b2_view(root.get('b2_view')))
+            if root['status']!='PRICED':results.append(dict(request_id=root['request_id'],status='REFUSED',refusal=root['reason'],block_causes=None,**view));continue
+            block=[causes[r]['cause']for r in root['rows']];base=dict(request_id=root['request_id'],block_causes=block,**view)
             if any(block):results.append(dict(base,status='REFUSED',refusal=next(c for c in block if c)));continue   # DepthN's rule: a refused block refuses the root
             try:blocks=[backups.backup(frame,r,backups.learner_max)for r in root['rows']]   # WorldPrices: averaging's value and logit rules
             except ValueError as error:results.append(dict(base,status='REFUSED',refusal=f'AVERAGING_ERROR: {error}'));continue
-            results.append(dict(base,**decide(blocks,root['root_logits'],root['root_legal'])))
+            decision=decide(blocks,root['root_logits'],root['root_legal'])
+            if decision['status']=='COMPLETE':decision['effect_guard']=self._effect_guard(frame,root,made,by_id[root['request_id']],children,seam_notes,
+                decision['action_index'],labels)
+            results.append(dict(base,**decision))
         t_reduce=time.perf_counter();decided=self.clock()-started
         if len(prepared)!=len(todo)or len(results)!=len(todo)or any(r['request_id']!=p['request_id']for r,(_,p,_)in zip(results,todo)):
             raise ValueError('the decisions do not answer the batch\'s requests in order')
@@ -372,13 +406,24 @@ class DepthNLiveSearch:
             timings=dict(row['timings'],prepare_seconds=item.seconds,classify_seconds=labels.pop('classify_seconds'),structure_seconds=labels.pop('structure_seconds'),
                 build_seconds=t_build-t_classify,price_seconds=t_price-t_build,reduce_seconds=t_reduce-t_price)
             base=dict(row,**labels,constructed_worlds=sum(w.state is not None for w in worlds),world_refusals=[dict(world=w.index,kinds=list(w.refusals))for w in worlds if w.refusals],
-                timings=timings,bucket=chosen,block_causes=None if result['block_causes']is None else list(result['block_causes']))
+                timings=timings,bucket=chosen,block_causes=None if result['block_causes']is None else list(result['block_causes']),
+                root_view_source=result['root_view_source'],b2_view=result['b2_view'])
             if i in gates:out[i]=dict(base,cause=gates[i][0],refusal=gates[i][1])
             elif result['status']=='COMPLETE':
                 out[i]=dict(base,**{k:result[k]for k in('status','action_index','q_values','completed_q','policy_target','root_value','action_mean_q',
-                    'action_policy_target','mean_q_agrees','reduction_note')},decision_seconds=decided)
+                    'action_policy_target','mean_q_agrees','reduction_note','effect_guard')},decision_seconds=decided)
             else:out[i]=dict(base,cause=refusal_cause(result['refusal']),refusal=result['refusal'])
         return out
+
+    def _effect_guard(self,frame,root,made,request,children,notes,choice,labels):
+        """The root's effect guard record (depthn_guard_inputs.effect_record over this frame's observed P1 children); the
+        fail-closed error record when its inputs cannot be read (pokezero.depthn_effect_guard.error_record)."""
+        try:
+            pairs=made.worlds.pairs;worlds=[w for r in root['rows']for w in pairs[r]];owner={'p1':0,'p2':1}[request['owner']]
+            return guard_inputs.effect_record(frame,root,worlds,children,request,owner,self.constructor.metadata['vocabulary'],choice,labels=labels,
+                notes=notes)
+        except FATAL:raise
+        except Exception as error:return effect_guard.error_record(f'{type(error).__name__}: {error}')
 
     def _structure(self,item,request,classes):
         """WORLD_STRUCTURE_MISMATCH detail for a fully constructed root whose worlds' carry differs from the reference (recorded
@@ -433,26 +478,39 @@ class DepthNLiveSearch:
             pool.append({k:r[k]for k in keys})
         if not pool:raise ValueError('at least one saved request required')
         started=time.perf_counter();self.carry=None;self.warming=True
-        try:report=self._warm_buckets(pool);self._hold_to_reference(pool)
+        try:report=self._warm_buckets(pool);labels=self._hold_to_reference(pool)
         finally:self.warming=False;self.reset_sessions()
+        missing=[b for b in self.buckets if isinstance(self.pricers[b],guard_inputs.ObservedDepthNPricer)
+            and 2*b*self.K*dn.LANES not in self.pricers[b].label_rows]
+        if missing or labels is None:
+            raise RuntimeError(f'warmup: the effect guard\'s label gather did not compile for buckets {missing} (P1 children) or the root worlds '
+                f'({"missing" if labels is None else "ok"})')
         signatures={k[-1][2]for k in self.programs if type(k[-1])is tuple and k[-1][:2]==('worlds',cw.SOURCE)}
         if self.carry is None or signatures!={self.carry['signature']}:
             raise RuntimeError(f'warmup: the recorded carry signature {None if self.carry is None else self.carry["signature"]} is not the warmed programs\' {sorted(signatures)}')
         self.warm=dict(buckets=report,programs=len(self.programs),seconds=time.perf_counter()-started,carry_signature=self.carry['signature'],
-            carry_reference=self.carry['root'])
+            carry_reference=self.carry['root'],labels=dict(p1_rows={b:2*b*self.K*dn.LANES for b in self.buckets},root_rows=labels))
         return self.warm
 
     def _hold_to_reference(self,pool):
         """Every warmup root, not only those of the windows that priced: prepared once more (fresh sessions and attempts), each
-        fully constructed one held to the carry reference; RuntimeError naming every root that differs."""
+        fully constructed one held to the carry reference; RuntimeError naming every root that differs. The first one's stacked
+        worlds also go through the effect guard's label gather (its root-world shape, [W, 1, ...], compiles here whether or not
+        a warmup root decided); returns that row count (None without a fully constructed root)."""
         self.reset_sessions()
         requests=[dict(r,schema=SCHEMA,request_id=f'warmup-structure-{j}')for j,r in enumerate(pool)]
-        odd=[]
+        odd=[];labels=None;tried=False;gather=getattr(self.pricers[self.buckets[0]],'labels',guard_inputs.child_labels)
         for request,item in zip(requests,cw.prepare_roots(self.constructor,requests,device=self.device)):
             if type(item)is not cw.Prepared or not item.made.fully_constructed:continue
+            if not tried:
+                tried=True
+                try:jax.block_until_ready(gather(guard_inputs.stack_worlds(item.made.worlds)));labels=len(item.made.worlds)
+                except FATAL:raise
+                except Exception:labels=None   # warmup then refuses READY: the gather does not run on these worlds
             diff=self._structure(item,request,None)
             if diff:odd.append(f'{request["battle_id"]}/{request["decision_index"]}: {diff}')
         if odd:raise RuntimeError(f'warmup: every warmup root must share one carry structure; against the reference root {self.carry["root"]}: '+'; '.join(odd))
+        return labels
 
     def _warm_buckets(self,pool):
         report={}

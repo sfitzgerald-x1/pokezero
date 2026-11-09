@@ -24,7 +24,7 @@ U=2.**-53
 KEYS={'schema','request_id','rung','archive_sha256','status','action_index','q_values','refusal','cause','requested_worlds','constructed_worlds',
     'decision_seconds','root_operator','policy_target','root_value','action_policy_target','block_causes','world_refusals','timings','batch_size',
     'bucket','tree_commit','pricer','root_operator_impl','completed_q','action_mean_q','mean_q_agrees','reduction_note','root_classes','root_class',
-    'root_class_source','root_class_crosscheck'}
+    'root_class_source','root_class_crosscheck','root_view_source','b2_view','effect_guard'}
 TREE='0123456789abcdef'*2+'01234567'
 
 
@@ -93,7 +93,14 @@ class LiveSearchTests(unittest.TestCase):
         cls.pricers={8:cls.make_pricers(8,(1,2,4)),16:cls.make_pricers(16,(1,))}
 
     @classmethod
-    def make_pricers(cls,W,buckets):return live.make_pricers(cls.executor,cls.evaluator,PARAMS,worlds=W,buckets=buckets,block_lanes=81,blocks_per_call=4)
+    def make_pricers(cls,W,buckets,executor=None):
+        from tests.test_gpu_engine_depthn_guard_inputs import fake_labels   # the fake engine's states: the effect guard's label gather
+        return live.make_pricers(executor or cls.executor,cls.evaluator,PARAMS,worlds=W,buckets=buckets,block_lanes=81,blocks_per_call=4,labels=fake_labels)
+
+    def setUp(self):
+        # The fake engine's carries are not the device tracker carry: prepare_roots and build keep them as built (the carry
+        # completion is tests/test_gpu_engine_constructor_worlds_carry's subject).
+        keep=patch.object(cw,'world_completer',return_value=lambda world,owner,**kw:world);keep.start();self.addCleanup(keep.stop)
 
     def search(self,W=8,*,pricers=None,saved_root_admission=False,**kw):
         kw.setdefault('tree_commit',TREE)
@@ -107,6 +114,23 @@ class LiveSearchTests(unittest.TestCase):
         return rows,codex
 
     # the contract --------------------------------------------------------------------------------------------------------------
+    def test_responses_name_the_root_priors_source_and_carry_b2_view(self):
+        made,_=self.cw.wide_root(0,8)
+        s=self.search(pricers=self.make_pricers(8,(1,),executor=CW.wide_executor()))
+        bad=self.cw.made(1,0,self.cw.modes(1,8),b2=made[0].view['_b2_root_inputs'])   # the narrow fake encoder cannot take B2's tokens
+        rows,_=self.run_batch(s,[request('b2',0)],{('b2',0):made})
+        row=rows[0];encode(row);self.assertEqual(set(row),KEYS)
+        self.assertEqual((row['status'],row['root_view_source']),('COMPLETE','b2'))
+        self.assertEqual(row['b2_view'],dict(equal=False,keys=dict(numeric_features=False,categorical_ids=True,token_type_ids=True,attention_mask=True),
+            numeric_max_abs_diff=.5,error=None))
+        rows,_=self.run_batch(self.search(),[request('bad',0)],{('bad',0):bad})
+        row=rows[0];encode(row)
+        self.assertEqual((row['status'],row['cause'],row['root_view_source'],row['b2_view']['equal']),('REFUSED','depthn_refused','b2',None))
+        self.assertTrue(row['refusal'].startswith('ROOT_B2_INPUTS_UNUSABLE'));self.assertIn('KeyError',row['b2_view']['error'])
+        self.assertEqual(live.wire_b2_view(dict(equal=True,keys={'numeric_features':np.bool_(True)},numeric_max_abs_diff=float('nan'))),
+            dict(equal=True,keys={'numeric_features':True},numeric_max_abs_diff=None,error=None))   # never a NaN on the wire
+        self.assertIsNone(live.wire_b2_view(None))
+
     def test_complete_responses_follow_the_contract_and_the_direct_pipeline(self):
         reqs=[request(f'b{i}',0,stream=10+i)for i in range(3)];outcomes={(f'b{i}',0):self.outcome(i)for i in range(3)}
         s=self.search();rows,codex=self.run_batch(s,reqs,outcomes)
@@ -114,6 +138,7 @@ class LiveSearchTests(unittest.TestCase):
         legal=CW.T.ROOT_LEGAL
         for row in rows:
             self.assertEqual(set(row),KEYS);encode(row);json.loads(json.dumps(row,allow_nan=False))
+            self.assertEqual((row['root_view_source'],row['b2_view']),('world0',None))   # no B2 encoding on these roots: world 0's view
             self.assertEqual((row['schema'],row['rung'],row['status'],row['cause'],row['refusal'],row['root_operator'],row['root_operator_impl'],row['reduction_note']),
                 (SCHEMA,'DN2W8','COMPLETE',None,None,'ARGMAX_MEAN_COMPLETED_Q','search_hedge.averaging',None))
             self.assertEqual(row['mean_q_agrees'],row['action_mean_q']==row['action_index'])
@@ -323,6 +348,32 @@ class LiveSearchTests(unittest.TestCase):
         rows,_=self.run_batch(s,[dict(request('ok',0),request_id='again')],outcomes)   # Codex's no-retry rule holds
         self.assertEqual((rows[0]['cause'],rows[0]['refusal'],rows[0]['bucket']),('constructor_refused','constructor-root:SEARCH_REQUEST_ALREADY_ATTEMPTED',None))
 
+    def test_complete_responses_carry_the_effect_guard_record(self):
+        """The pricers' observer seam feeds the record of every COMPLETE response (the fake engine's labels; surf guarded for the
+        test): the peer's Surf trips it at turn 1 and turn 2; a peer without it does not; a refused root has none."""
+        from pokezero import depthn_effect_guard as G
+        from tests.test_gpu_engine_depthn_guard_inputs import fake_labels, TACKLE, REST, PROTECT
+        make=lambda labels:live.make_pricers(self.executor,self.evaluator,PARAMS,worlds=8,buckets=(1,),block_lanes=81,blocks_per_call=4,labels=labels)
+        outcomes={('g',0):self.outcome(0),('r',0):Refusal('SEARCH_PREFIX_OR_REQUEST_MISMATCH')}
+        with patch.dict(G.GUARDED,surf=('A','test',None)),patch.object(G,'WATCHED',G.WATCHED|{'surf'}):
+            rows,_=self.run_batch(self.search(pricers=make(fake_labels)),[request('g',0),request('r',0)],outcomes)
+            clear,_=self.run_batch(self.search(pricers=make(lambda s:fake_labels(s,peer_moves=(TACKLE,REST,PROTECT,0)))),[request('g',0)],outcomes)
+        guard=rows[0]['effect_guard'];encode(rows[0])
+        self.assertEqual((rows[0]['status'],guard['tripped'],guard['b_turn1'],guard['b_turn2'],guard['choice']),('COMPLETE',True,True,True,rows[0]['action_index']))
+        self.assertEqual({(x['move'],x['side'])for x in guard['reasons']},{('surf','opp')});self.assertEqual(guard['turn2_cells']['p1_captures'],1)
+        self.assertEqual((rows[1]['status'],rows[1]['effect_guard']),('REFUSED',None))
+        self.assertEqual((clear[0]['status'],clear[0]['effect_guard']['tripped'],clear[0]['effect_guard']['reasons']),('COMPLETE',False,[]))
+
+    def test_a_root_whose_opponent_must_recharge_is_constructor_refused(self):
+        """The lead's decision: the peer's -mustrecharge on the owner's lines refuses the root in prepare_roots (cause
+        constructor_refused, refusal constructor-root:OPPONENT_RECHARGE_UNREPRESENTED:...); the owner's own does not."""
+        s=self.search();beam=lambda seat:(f'|move|{seat}a: Snorlax|Hyper Beam|{"p2"if seat=="p1"else"p1"}a: Snorlax',f'|-mustrecharge|{seat}a: Snorlax')
+        outcomes={('peer',0):self.outcome(0),('own',0):self.outcome(1)}
+        rows,_=self.run_batch(s,[request('peer',0,before=beam('p2')),request('own',0,before=beam('p1'))],outcomes)
+        self.assertEqual([(r['status'],r['cause'])for r in rows],[('REFUSED','constructor_refused'),('COMPLETE',None)])
+        self.assertEqual(rows[0]['refusal'],'constructor-root:OPPONENT_RECHARGE_UNREPRESENTED:'+cw.OPPONENT_RECHARGE_DETAIL)
+        self.assertEqual((rows[0]['constructed_worlds'],rows[0]['world_refusals']),(0,[]))
+
     def test_depthn_refusals(self):
         s=self.search();empty=self.outcome(1);empty=empty[:2]+((False,)*9,)
         outcomes={('pre',0):self.outcome(0,values={5:.5}),('empty',0):empty,('ok',0):self.outcome(2),('bad',0):self.outcome(3)}
@@ -411,6 +462,9 @@ class LiveSearchTests(unittest.TestCase):
         self.assertEqual(report['programs'],len(pricers[1].programs));self.assertEqual({k[1]for k in pricers[1].programs if k[0]=='P1'},{4,8,16})
         self.assertEqual((s.constructor.seen,s.constructor.sessions,s.battles),(set(),{},{}));self.assertIs(s.warm,report)
         self.assertEqual([s.missing_programs(b)for b in(1,2,4)],[[]]*3)   # P1, selection, gather and the leaf program, per bucket
+        # the effect guard's label gather compiled at both shapes: each bucket's P1 children and the root worlds [W, 1, ...]
+        self.assertEqual(report['labels'],dict(p1_rows={1:2*4*81,2:2*8*81,4:2*16*81},root_rows=8))
+        self.assertTrue(all(2*b*4*81 in pricers[b].label_rows for b in(1,2,4)))
         for n,b in((1,1),(2,2),(3,4)):
             rows,_=self.run_batch(s,[dict(request(f'l{i}',0),request_id=f'l{i}:{n}')for i in range(n)],outcomes)
             self.assertEqual({(r['status'],r['bucket'])for r in rows},{('COMPLETE',b)});self.assertEqual(pricers[b].compiles,())
@@ -425,6 +479,10 @@ class LiveSearchTests(unittest.TestCase):
             return out
         with Codex(outcomes),patch.object(live.cw,'price',side_effect=leafless),self.assertRaisesRegex(RuntimeError,r'bucket 1 with every program compiled \(missing: leaf\)'):
             self.search(pricers=bare).warmup([request('w0',0)])
+        # a label gather that fails on the pricer's children never compiled: warmup raises before READY
+        broken=live.make_pricers(self.executor,self.evaluator,PARAMS,worlds=8,buckets=(1,),block_lanes=81,blocks_per_call=4,labels=lambda s:1/0)
+        with Codex(outcomes),self.assertRaisesRegex(RuntimeError,r"label gather did not compile for buckets \[1\]"):
+            self.search(pricers=broken).warmup([request('w0',0)])
         with self.assertRaisesRegex(ValueError,'saved requests with'):self.search().warmup([{'battle_id':'x'}])
         with self.assertRaisesRegex(ValueError,'at least one'):self.search().warmup([])
 
