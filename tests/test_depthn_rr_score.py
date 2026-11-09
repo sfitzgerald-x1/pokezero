@@ -691,6 +691,148 @@ class EndToEndTests(unittest.TestCase):
         self.assertIn('external_mix:alpha=0.5', (out / 'summary.md').read_text())
 
 
+GUARDS_OFF = dict(opponent_recharge_unrepresented=False, own_recharge_lanes=[])
+
+
+def definitive_decision(worlds, *, guards=GUARDS_OFF, **kw):
+    row = raw_row(worlds, **kw)
+    if guards is not None:row['guards'] = guards
+    return S.normalize(row)
+
+
+class DefinitiveOperatorTests(unittest.TestCase):
+    """The definitive set on test_averaging_hedge_and_blend_differ's grid: replies 0 and 1; action 0 [1, -1], 1 [.2, .2], 2 [.6, -.1];
+    the champion's prior (.9, .1): averaging 0, hedge 1, blend 0.5 2."""
+    cells = {0: (1., -1.), 1: (.2, .2), 2: (.6, -.1)}
+    champion = [math.log(.9), math.log(.1)] + [0.] * 7
+
+    def worlds(self, count=2, cells=None):
+        legal = legal_mask(0, 1, 2);cells = cells or [self.cells] * count
+        return [world_row(lambda a, b, c=c: c[a][b], root_legal=legal, kept=legal_mask(0, 1), logits=self.champion) for c in cells]
+
+    def score(self, worlds, *, model, logliks=None, guards=GUARDS_OFF, greedy=1):
+        legal = legal_mask(0, 1, 2);d = definitive_decision(worlds, guards=guards, greedy=greedy, root_legal=legal)
+        prior = {w: list(model) for w in range(len(worlds))}
+        weights = {w: x for w, x in enumerate(logliks or [0.] * len(worlds))}
+        out = S.score_decision(d, S.censored('other', ''), None, collections.Counter(), definitive=dict(prior=prior, weights=weights))
+        return {name: op['choice'] for name, op in out['operators'].items()}, out
+
+    def test_the_champion_as_reply_model_reproduces_averaging_and_blend(self):
+        c, out = self.score(self.worlds(), model=self.champion)
+        self.assertEqual(set(c), set(S.DEFINITIVE_SETTINGS))
+        self.assertEqual((c['averaging'], c['br_fp'], c['bayes_hedge:lam=0']), (0, 0, 1))
+        self.assertEqual((c['blend:lam=0.5'], c['rnr:lam=0.5']), (2, 2))
+        self.assertEqual((c['reweighted_averaging:beta=0.5'], c['reweighted_br_fp:beta=0.5']), (0, 0))
+        self.assertEqual(out['world_weights'], [.5, .5]);self.assertEqual(out['effective_worlds'], 2.)
+
+    def test_a_reply_model_that_predicts_the_other_reply_moves_br_and_rnr(self):
+        # The model predicts reply 1 at .9: Q = (-.8, .2, -.03), so br_fp plays 1; at lam .75 rnr stays on the safe action too.
+        c, _ = self.score(self.worlds(), model=[math.log(.1), math.log(.9)] + [0.] * 7)
+        self.assertEqual((c['averaging'], c['br_fp'], c['rnr:lam=0.75'], c['reweighted_br_fp:beta=0.5']), (0, 1, 1, 1))
+
+    def test_reweighting_follows_the_likely_world(self):
+        # World 0 is the grid above; in world 1 action 2 dominates. Equal logliks: averaging's choice; loglik 10 on world 1
+        # (beta .5: weight e^5 / (1 + e^5)) plays world 1's best.
+        other = {0: (-.5, -.5), 1: (0., 0.), 2: (.9, .9)}
+        c, out = self.score(self.worlds(cells=[self.cells, other]), model=self.champion)
+        self.assertEqual(c['reweighted_averaging:beta=0.5'], c['averaging'])
+        c, out = self.score(self.worlds(cells=[self.cells, other]), model=self.champion, logliks=[0., 10.])
+        self.assertEqual((c['reweighted_averaging:beta=0.5'], c['reweighted_br_fp:beta=0.5']), (2, 2))
+        self.assertAlmostEqual(out['world_weights'][1], math.exp(5) / (1 + math.exp(5)), places=12)
+        self.assertAlmostEqual(out['effective_worlds'], 1 / math.fsum(w * w for w in out['world_weights']), places=12)
+        self.assertEqual(S.world_weights([-1e6, 0.]), [0., 1.])
+
+    def test_guards(self):
+        model = [math.log(.1), math.log(.9)] + [0.] * 7
+        free, _ = self.score(self.worlds(), model=model, greedy=0)
+        c, out = self.score(self.worlds(), model=model, guards=dict(opponent_recharge_unrepresented=True, own_recharge_lanes=[]), greedy=0)
+        self.assertEqual(set(c.values()), {0})
+        self.assertEqual(out['guard']['replaced'], {n: 'opponent_recharge_root' for n, x in free.items() if x != 0})
+        self.assertEqual((free['br_fp'], free['bayes_hedge:lam=0']), (1, 1))
+        for name, op in out['operators'].items():self.assertEqual(op['D']['pi_filled'], 0., name)
+        # Our lane 1 is a recharge move: an override into it falls back to greedy (0); greedy itself may be one.
+        c, out = self.score(self.worlds(), model=model, guards=dict(opponent_recharge_unrepresented=False, own_recharge_lanes=[1]), greedy=0)
+        self.assertEqual((c['br_fp'], c['bayes_hedge:lam=0'], c['blend:lam=0.5']), (0, 0, 2))
+        self.assertEqual(out['guard']['replaced']['br_fp'], 'own_recharge_override')
+        c, out = self.score(self.worlds(), model=model, guards=dict(opponent_recharge_unrepresented=False, own_recharge_lanes=[1]), greedy=1)
+        self.assertEqual((c['greedy'], c['br_fp']), (1, 1));self.assertNotIn('br_fp', out['guard']['replaced'])
+
+    def test_missing_inputs_leave_the_decision_out_of_every_operator(self):
+        legal = legal_mask(0, 1, 2);worlds = self.worlds()
+        cases = (('guards_missing', dict(guards=None), {0: self.champion, 1: self.champion}, {0: 0., 1: 0.}),
+                 ('guards_missing', dict(guards=dict(opponent_recharge_unrepresented=False, own_recharge_lanes=[4])), {0: self.champion, 1: self.champion}, {0: 0., 1: 0.}),
+                 ('reply_prior_missing', {}, {0: self.champion}, {0: 0., 1: 0.}),
+                 ('world_weights_missing', {}, {0: self.champion, 1: self.champion}, {0: 0.}),
+                 ('world_weights_missing', {}, {0: self.champion, 1: self.champion}, None))
+        for reason, kw, prior, weights in cases:
+            d = definitive_decision(worlds, greedy=1, root_legal=legal, **kw)
+            with self.assertRaises(S.Unscorable) as caught:
+                S.score_decision(d, S.censored('other', ''), None, collections.Counter(), definitive=dict(prior=prior, weights=weights))
+            self.assertEqual(caught.exception.reason, reason)
+        # Rows carrying reply_peer_logits need no --reply-prior; a waiting world needs none at all.
+        rows = [dict(w, reply_peer_logits=self.champion) for w in worlds] + [world_row(lambda a, b: .1, requested=False, root_legal=legal)]
+        d = definitive_decision(rows, greedy=1, root_legal=legal)
+        out = S.score_decision(d, S.censored('other', ''), None, collections.Counter(), definitive=dict(prior=None, weights={0: 0., 1: 0., 2: 0.}))
+        self.assertEqual(out['operators']['br_fp']['choice'], out['operators']['averaging']['choice'])
+
+    def test_load_world_weights(self):
+        with TemporaryDirectory() as tmp:
+            path = Path(tmp) / 'w.jsonl'
+            path.write_text(json.dumps(dict(ordinal=1, decision_index=2, world=0, loglik=-1.5)) + '\n\n' + json.dumps(dict(ordinal=1, decision_index=2, world=1, loglik=0)) + '\n')
+            self.assertEqual(S.load_world_weights(path), {(1, 2): {0: -1.5, 1: 0.}})
+            for bad in (dict(ordinal=1, decision_index=2, world=0, loglik=float('nan')), dict(ordinal=1, decision_index=2, world='0', loglik=0.)):
+                path.write_text(json.dumps(bad) + '\n')
+                with self.assertRaises(ValueError):S.load_world_weights(path)
+            path.write_text(json.dumps(dict(ordinal=1, decision_index=2, world=0, loglik=0.)) * 1 + '\n' + json.dumps(dict(ordinal=1, decision_index=2, world=0, loglik=1.)) + '\n')
+            with self.assertRaises(ValueError):S.load_world_weights(path)
+
+
+class DefinitiveEndToEndTests(EndToEndTests):
+    """EndToEndTests' two battles under --operator-set definitive: one guarded root, one decision without world weights."""
+
+    def test_main(self):pass
+
+    def test_main_with_reply_prior(self):pass
+
+    def test_main_definitive(self):
+        run = self.root / 'run'
+        for sub in ('results', 'telemetry', 'owning-wire'):(run / sub).mkdir(parents=True)
+        rows = self.rows(run, random.Random(11));weights, prior = [], []
+        for row in rows:
+            row['guards'] = dict(GUARDS_OFF, opponent_recharge_unrepresented=(row['ordinal'], row['decision_index']) == (1, 0))
+            if row['worlds'] is None:continue
+            for w, world in enumerate(row['worlds']):
+                if (row['ordinal'], row['decision_index']) != (1, 1):weights.append(dict(ordinal=row['ordinal'], decision_index=row['decision_index'], world=w, loglik=-w / 4))
+                if row['ordinal'] == 0:world['reply_peer_logits'] = world['root_peer_logits'][::-1]
+                else:prior.append(dict(ordinal=row['ordinal'], decision_index=row['decision_index'], world=w, logits=world['root_peer_logits'][::-1]))
+        path = self.root / 'rows-0.jsonl';path.write_text(''.join(json.dumps(r) + '\n' for r in rows))
+        wpath = self.root / 'weights.jsonl';wpath.write_text(''.join(json.dumps(r) + '\n' for r in weights))
+        ppath = self.root / 'prior.jsonl';ppath.write_text(''.join(json.dumps(r) + '\n' for r in prior))
+        out = self.root / 'out'
+        with redirect_stdout(io.StringIO()):
+            S.main(['--rows', str(path), '--run-directory', str(run), '--out', str(out), '--operator-set', 'definitive',
+                    '--world-weights', str(wpath), '--reply-prior', str(ppath)])
+        summary = json.loads((out / 'summary.json').read_text());cover = summary['coverage']
+        self.assertEqual((summary['schema'], summary['operator_set']), (S.SCHEMA, 'definitive'))
+        self.assertEqual(summary['settings'], list(S.DEFINITIVE_SETTINGS));self.assertEqual(summary['candidates'], list(S.DEFINITIVE_CANDIDATES))
+        self.assertNotIn('averaging', summary['reported_only']);self.assertIn('tempered:T=2', summary['reported_only'])
+        self.assertIn('rnr:lam=0.25', summary['reported_only']);self.assertNotIn('rnr:lam=0.5', summary['reported_only'])
+        self.assertEqual((cover['scored'], cover['excluded']), (5, {'replay_REFUSED': 1, 'world_weights_missing': 1}))
+        self.assertEqual((cover['guards']['decisions'], cover['guards']['opponent_recharge_roots']), (5, 1))
+        self.assertEqual(cover['world_weights']['decisions'], 5);self.assertLess(cover['world_weights']['mean_effective_worlds'], 16)
+        self.assertIsNone(cover['external_prior'])
+        for name in S.DEFINITIVE_SETTINGS:self.assertEqual(summary['metrics']['pi_filled']['all']['operators'][name]['decisions'], 5, name)
+        decisions = {(d['ordinal'], d['decision_index']): d for d in map(json.loads, (out / 'decisions.jsonl').read_text().splitlines())}
+        guarded = decisions[(1, 0)]
+        self.assertTrue(guarded['guard']['opponent_recharge'])
+        self.assertEqual({op['choice'] for op in guarded['operators'].values()}, {guarded['greedy_action']})
+        self.assertIn('recharge guards (definitive set)', (out / 'summary.md').read_text())
+        with redirect_stdout(io.StringIO()), self.assertRaises(SystemExit):
+            S.main(['--rows', str(path), '--run-directory', str(run), '--out', str(self.root / 'out2'), '--operator-set', 'definitive'])
+        with redirect_stdout(io.StringIO()), self.assertRaises(SystemExit):
+            S.main(['--rows', str(path), '--run-directory', str(run), '--out', str(self.root / 'out3'), '--world-weights', str(wpath)])
+
+
 class TemperedTests(unittest.TestCase):
     """Sixteen worlds, our legal actions 0, 1, 2, 4 and 6, kept sets that differ by world, and four waiting worlds."""
 
