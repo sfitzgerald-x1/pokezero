@@ -601,6 +601,15 @@ class ViewsAndSplitTests(unittest.TestCase):
         default = t.split_rows(dict(seed=seed, ordinal=ordinal))
         self.assertEqual(default['test'].tolist(), [0, 1, 4, 7]);self.assertNotIn('late', default)
 
+    def test_saved_probabilities_compare_only_on_the_same_rows(self):
+        import tempfile
+        arrays = dict(ordinal=np.array([1, 1, 2]), seed=np.array([5, 5, 6]), label=np.array([0, 2, 1]), round=np.array([1, 2, 1]))
+        probs = np.array([[.5, .5], [.2, .8]], np.float32)
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / 'late-probs.npz';t.save_probs(path, arrays, np.array([0, 2]), probs)
+            self.assertTrue(np.array_equal(t.compared_probs(path, arrays, np.array([0, 2])), probs))
+            with self.assertRaises(SystemExit):t.compared_probs(path, arrays, np.array([1, 2]))
+
     def test_use_view_swaps_the_inputs_and_needs_them(self):
         arrays = dict(numeric_features=np.zeros(2), categorical_ids=np.zeros(2), numeric_features_b=np.ones(2), categorical_ids_b=np.ones(2))
         t.use_view(arrays, 'b');self.assertEqual((arrays['numeric_features'].tolist(), arrays['categorical_ids'].tolist()), ([1., 1.], [1., 1.]))

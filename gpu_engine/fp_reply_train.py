@@ -196,6 +196,26 @@ def test_report(arrays, test, pi_fp_probs, calibrated, compare=None):
     return report
 
 
+def save_probs(path, arrays, rows, probs):
+    """A run's π_FP probabilities on `rows`, with the keys a later --compare-to checks them by."""
+    np.savez(path, rows=rows, ordinal=arrays['ordinal'][rows], seed=arrays['seed'][rows], label=arrays['label'][rows],
+             round=arrays['round'][rows], probs=probs)
+
+
+def compared_probs(path, arrays, rows):
+    """Another run's probabilities from `path` (save_probs), refused unless they are on the same rows."""
+    other = np.load(path)
+    for key in ('ordinal', 'seed', 'label', 'round'):
+        if not np.array_equal(other[key], arrays[key][rows]):raise SystemExit(f'--compare-to run has different rows in {path.name} ({key})')
+    return other['probs']
+
+
+def late_report(model, arrays, index, rows, calibrated, compare, out, torch, device):
+    """test_report on the late block; its probabilities saved as late-probs.npz."""
+    probs = predict(model, arrays, index, rows, torch, device);save_probs(out / 'late-probs.npz', arrays, rows, probs)
+    return test_report(arrays, rows, probs, calibrated, compare)
+
+
 def widen(checkpoint, window, out, torch):
     """The base checkpoint at a longer window. The model takes window_size from its config and attends over every frame's tokens
     jointly; the one parameter sized by the window is history_position_embedding (window_size × width). Its rows all start as the
@@ -344,13 +364,14 @@ def main(argv=None):
     parser.add_argument('--evaluate', metavar='PI_FP_PT', help='skip training: report this trained π_FP on test')
     parser.add_argument('--export-archive', metavar='NPZ', help='with --evaluate: export π_FP to a champion_evaluator archive and check parity')
     parser.add_argument('--window', type=int, default=None, help='train at this window (the base is widened; see widen)')
-    parser.add_argument('--compare-to', metavar='RUN_DIR', help="another run's test-probs.npz to report beside this π_FP (same test rows)")
+    parser.add_argument('--compare-to', metavar='RUN_DIR', help="another run's (or evaluation's) test-probs.npz to report beside this π_FP "
+                        "(same test rows), and its late-probs.npz on the late rows when both have them")
     parser.add_argument('--redact', choices=REDACTIONS, help="train/evaluate on Foul Play's view redacted as the constructor's peer view")
     parser.add_argument('--view', choices=VIEWS, default='env', help="the inputs: env.observe's (default) or fp_reply_data --views' builder views")
     parser.add_argument('--test-seeds', metavar='JSON', help='a fixed test set: a JSON list of battle seeds (e.g. an earlier run\'s test games)')
     parser.add_argument('--late-from', type=int, metavar='ORDINAL', help='with --test-seeds: every game of ordinal >= this is a second held-out set')
     args = parser.parse_args(argv)
-    if args.evaluate and (args.window or args.compare_to):parser.error('--window and --compare-to apply to training, not --evaluate')
+    if args.evaluate and args.window:parser.error('--window applies to training, not --evaluate')
     if args.export_archive and not args.evaluate:parser.error('--export-archive needs --evaluate')
     import torch
     from pokezero.neural_policy import checkpoint_file_sha256, load_transformer_checkpoint
@@ -375,12 +396,11 @@ def main(argv=None):
     games = {name: int(len(np.unique(arrays['ordinal'][r]))) for name, r in rows.items()}
     seats = seats_by_split(arrays, rows)
     print(json.dumps(dict(event='DATA', rows={k: int(len(v)) for k, v in rows.items()}, games=games, seats=seats, window=window)), flush=True)
-    labels = arrays['label'];compare = None
+    labels = arrays['label'];compare = compare_late = None
     if args.compare_to:   # validated before training, so a bad comparison can't waste a run
-        other = np.load(Path(args.compare_to) / 'test-probs.npz')
-        for key in ('ordinal', 'seed', 'label', 'round'):
-            if not np.array_equal(other[key], arrays[key][rows['test']]):raise SystemExit(f'--compare-to run has different test rows ({key})')
-        compare = other['probs']
+        compare = compared_probs(Path(args.compare_to) / 'test-probs.npz', arrays, rows['test'])
+        if 'late' in rows and (Path(args.compare_to) / 'late-probs.npz').exists():
+            compare_late = compared_probs(Path(args.compare_to) / 'late-probs.npz', arrays, rows['late'])
     checkpoint_redaction = None
     if args.evaluate:   # a model trained on a redacted view must be scored on it; a plain one may be scored zero-shot on either
         checkpoint_redaction = (torch.load(args.evaluate, map_location='cpu', weights_only=True).get('fp_reply') or {}).get('redaction')
@@ -391,14 +411,14 @@ def main(argv=None):
         use_view(arrays, args.view);apply_redaction(arrays, args.redact)
     calibration, calibrated = recalibrate(arrays['probs'][rows['train']], labels[rows['train']], arrays['legal'][rows['train']], torch)
     if args.evaluate:
-        test = rows['test'];probs = predict(model, arrays, index, test, torch, args.device)
+        test = rows['test'];probs = predict(model, arrays, index, test, torch, args.device);save_probs(out / 'test-probs.npz', arrays, test, probs)
         report = dict(schema='v2s-fp-reply-model-eval.v1', data=str(args.data), redaction=args.redact, checkpoint_redaction=checkpoint_redaction,
                       base_checkpoint=str(args.checkpoint),
                       base_checkpoint_sha256=checkpoint_file_sha256(args.checkpoint), pi_fp=str(args.evaluate),
                       pi_fp_sha256=checkpoint_file_sha256(args.evaluate), window=window, rows={k: int(len(v)) for k, v in rows.items()},
-                      games=games, seats=seats, split_rule=rule, recalibration=calibration,
-                      ece_bins=data_mod.ECE_BINS, test=test_report(arrays, test, probs, calibrated), view=args.view)
-        if 'late' in rows:report['late'] = test_report(arrays, rows['late'], predict(model, arrays, index, rows['late'], torch, args.device), calibrated)
+                      games=games, seats=seats, split_rule=rule, recalibration=calibration, compare_to=args.compare_to,
+                      ece_bins=data_mod.ECE_BINS, test=test_report(arrays, test, probs, calibrated, compare), view=args.view)
+        if 'late' in rows:report['late'] = late_report(model, arrays, index, rows['late'], calibrated, compare_late, out, torch, args.device)
         (out / 'report-eval.json').write_text(json.dumps(report, indent=1) + '\n')
         if args.export_archive:
             if window != 1:raise SystemExit('champion_evaluator archives need window 1')
@@ -438,8 +458,7 @@ def main(argv=None):
             best = dict(epoch=epoch, val_nll=val);best_state = {k: v.detach().cpu().clone() for k, v in model.state_dict().items()}
     model.load_state_dict(best_state)
     test = rows['test'];test_probs = predict(model, arrays, index, test, torch, args.device)
-    np.savez(out / 'test-probs.npz', rows=test, ordinal=arrays['ordinal'][test], seed=arrays['seed'][test], label=labels[test],
-             round=arrays['round'][test], probs=test_probs)
+    save_probs(out / 'test-probs.npz', arrays, test, test_probs)
     payload = dict(torch.load(base_path, map_location='cpu', weights_only=True))   # saved before the optional extras below
     base_sha = checkpoint_file_sha256(args.checkpoint)
     payload['state_dict'] = best_state;payload['value_calibration_transform'] = None
@@ -457,7 +476,7 @@ def main(argv=None):
                   args=vars(args), history=history,
                   best_epoch=best['epoch'], recalibration=calibration, ece_bins=data_mod.ECE_BINS,
                   test=test_report(arrays, test, test_probs, calibrated, compare), compare_to=args.compare_to, inference_cost=cost, view=args.view,
-                  late=None if 'late' not in rows else test_report(arrays, rows['late'], predict(model, arrays, index, rows['late'], torch, args.device), calibrated),
+                  late=None if 'late' not in rows else late_report(model, arrays, index, rows['late'], calibrated, compare_late, out, torch, args.device),
                   seconds=round(time.time() - started, 1))
     report['saved'] = dict(path=str(out / 'pi-fp.pt'), sha256=checkpoint_file_sha256(out / 'pi-fp.pt'),
                            note='champion checkpoint format; policy fine-tuned on Foul Play decisions; the value head output is not trained')
