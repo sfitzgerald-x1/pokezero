@@ -39,11 +39,23 @@ Checks per sampled decision (owner O, foe F):
    different request position than in the offline world's actual layout (`revealed_positions_differ`: materializer
    physical order is revealed members by public slot, then the hidden ones); and whether F's true-world view differs
    from the real one ONLY by a permutation of the own (1-6) and switch (17-21) tokens and switch legal lanes.
-4. Five-class verdict: PRESENT / ABSENT / NOT_APPLICABLE per class, with counts and the mechanism's file:line.
+   The true back-switch share (a member re-entering after being benched, from the actives seen at every decision:
+   History) is reported apart from the order-vs-rule share, which also counts out-of-order first entries, faint
+   replacements and drag-ins.
+4. Five-class verdict with counts and the mechanism's file:line. Carry fields (Baton Pass, Trace, choice lock, Encore,
+   traps, Substitute; per side) and peer belief columns (Pressure PP, shown hazard credit, Spikes, Toxic, sleep clause)
+   get per-mechanism verdicts counted over COMPARED decisions only, with refused and foe-not-requested counts apart:
+   PRESENT / ABSENT / NOT_EXERCISED; a class is ABSENT only when every mechanism was compared clean
+   (ABSENT_WHERE_EXERCISED when some never were). The peer's own exact hazard credit and exact damage halves are
+   EXCLUDED_BY_DESIGN (named redactions); recharge is NOT_APPLICABLE (no engine state). Legal-lane differences carry
+   their cause (PP exhausted -> peer belief; trap/lock/disabled -> carry; otherwise their own 'legal' bucket). Owner
+   worlds get the same per-class rollup (types, bench order, belief, carry, legal, other) and the would-be refusal codes.
 
-Self-checks: re-encoding the real root through the pricer's views equals decide's observation (both seats);
-decide's own_inputs row equals O's own observation (the root source); the true world's foe species/levels/moves and
-mapping equal the real ones (notes otherwise).
+Self-checks: re-encoding the real root through the pricer's views equals decide's observation (both seats); root
+source is structural (decide's own_inputs row is O's own observation) and re-checked by A's forward on the Request's
+root inputs against decide's raw logits; the true world's foe species/levels/moves/stats/mapping equal the real ones
+(notes otherwise); the materializer's own world public equals the true world's re-based public up to sigma (a
+materializer public-data defect shows there).
 
 Output (`--out`, a new directory): summary.json, summary.md, positions.jsonl (per decision: address, diffs, flags).
 Shards (`--shard i --shards k`) split the block's games (games[i::k] after the `--max-games` prefix) and run as separate
@@ -83,6 +95,8 @@ KINDS = dict(numeric_features='numeric', categorical_ids='categorical', token_ty
     attention_mask='attention', legal_action_mask='legal')
 # The FramePricer's root-input comparison order (device_public_teacher_batch.SERIAL_INPUT_ORDER, history_mask always ones).
 PRE_INPUT_ORDER = ('numeric_features', 'categorical_ids', 'token_type_ids', 'attention_mask', 'history_mask')
+TYPE_TOKENS = tuple(range(1, 13)) + tuple(range(23, 29))   # own, opponent and belief tokens carry shown/current types
+TYPE_COLUMNS = (4, 5)   # CATEGORY_TYPE_1, CATEGORY_TYPE_2 (pokezero.showdown; checked in the tests)
 LANE_CONSTANT_COLUMNS = (1, 2, 3)   # action-token categories fixed per lane: SECONDARY, ROLE, SLOT
 SECTIONS = (('field', 0, 1), ('own', 1, 7), ('opponent', 7, 13), ('move_actions', 13, 17), ('switch_actions', 17, 22),
     ('stats', 22, 23), ('belief', 23, 29))
@@ -195,13 +209,90 @@ def diff(world, real, *, cap=CELL_CAP):
         total += len(where)
         for i in where:
             keys.add(':'.join(cell_key(kind, tuple(int(x) for x in i))));exact.add((kind,) + tuple(int(x) for x in i))
-    out.update(total=int(total), keys=sorted(keys), exact=exact)
+    # Zeroed shown types over the FULL arrays (not the capped listing): world 0, real nonzero.
+    w, r = np.asarray(world['categorical_ids']), np.asarray(real['categorical_ids'])
+    tokens, columns = list(TYPE_TOKENS), list(TYPE_COLUMNS)
+    zeroed = int(np.sum((w[tokens][:, columns] == 0) & (r[tokens][:, columns] != 0)))
+    out.update(total=int(total), keys=sorted(keys), exact=exact, zeroed_types=zeroed)
     return out
 
 
 def serial(result):
     """A diff without its exact cell set and without empty kinds (positions.jsonl stays small)."""
     return {k: v for k, v in result.items() if k != 'exact' and not (isinstance(v, dict) and v.get('count') == 0)}
+
+
+# Legal-lane causes and the class each belongs to (legal lanes are not all carry fields).
+LEGAL_CAUSE_CLASS = dict(pp='peer_belief_columns', trap='carry_fields', disabled='carry_fields', lock='carry_fields',
+    hp='other', move_id='other', foe_ability_trap='legal', unknown='legal')
+
+
+def legal_causes(lanes, world, real, seat, real_order, active):
+    """Why each differing legal lane differs: world/real are one-row host BattleStates whose `seat` side uses the same
+    physical coordinates; lanes are request lanes of the REAL order (0-3 the active's move slots, 4-8 switch members)."""
+    s, a, out = int(seat), int(active), {}
+    members = switch_members(real_order, a) if _is_perm(real_order) and a in [int(x) for x in real_order] else None
+    def active_of(state, side):return int(np.asarray(state.active)[0, side])
+    for lane in lanes:
+        lane = int(lane)
+        if lane < 4:
+            w_pp, r_pp = int(world.pp[0, s, a, lane]), int(real.pp[0, s, a, lane])
+            if (w_pp > 0) != (r_pp > 0):cause = 'pp'
+            elif bool(world.disabled[0, s, a, lane]) != bool(real.disabled[0, s, a, lane]):cause = 'disabled'
+            elif any(int(getattr(world, n)[0, s, a]) != int(getattr(real, n)[0, s, a]) for n in ('choice_move', 'encore_move', 'charge_move')):
+                cause = 'lock'
+            elif int(world.moves[0, s, a, lane]) != int(real.moves[0, s, a, lane]):cause = 'move_id'
+            else:cause = 'unknown'
+        elif members is None:cause = 'unknown'
+        else:
+            p = members[lane - 4]
+            linked = lambda st:(int(st.trap_source[0, s, a]) >= 0, int(st.volatile[0, s, a]) & 8 != 0, bool(st.trapped[0, s]))
+            foe_ability = lambda st:int(st.ability[0, 1 - s, active_of(st, 1 - s)])
+            if (int(world.hp[0, s, p]) > 0) != (int(real.hp[0, s, p]) > 0):cause = 'hp'
+            elif linked(world) != linked(real):cause = 'trap'
+            elif int(world.charge_move[0, s, a]) != int(real.charge_move[0, s, a]):cause = 'lock'
+            elif foe_ability(world) != foe_ability(real):cause = 'foe_ability_trap'
+            else:cause = 'unknown'
+        out[lane] = cause
+    return out
+
+
+def with_causes(result, causes):
+    """A diff whose legal-lane keys name their cause: 'legal:legal:lane_<k>/<cause>'."""
+    keys = [k for k in result['keys'] if not k.startswith('legal:')]
+    keys += ['legal:legal:lane_%d/%s' % (lane, cause) for lane, cause in sorted(causes.items())]
+    out = dict(result, keys=sorted(keys))
+    if 'legal' in out:out['legal'] = dict(out['legal'], causes={str(k): v for k, v in sorted(causes.items())})
+    return out
+
+
+def legal_lanes(result):
+    return sorted({int(i[1]) for i in result['exact'] if i[0] == 'legal'})
+
+
+class History:
+    """Per row and side, from the actives seen at every lockstep decision: which members have been active (a member
+    re-entering after being benched is a back-switch) and whether the current active arrived by Baton Pass (the side's
+    baton_pass flag was set at the decision before its active changed). Switches inside one engine step are not seen."""
+    def __init__(self, active):
+        active = np.asarray(active);rows = len(active);self.prev = active.copy()
+        self.ever = np.zeros((rows, 2, 6), bool);self.ever[np.arange(rows)[:, None], np.arange(2)[None, :], active] = True
+        self.back = np.zeros((rows, 2), bool);self.pending = np.zeros((rows, 2), bool)
+        self.baton_in = np.full((rows, 2), -1, np.int32);self.switch_ins = np.zeros((rows, 2), np.int32)
+
+    def update(self, active, baton_pass):
+        active = np.asarray(active);changed = active != self.prev
+        for r, s in zip(*np.nonzero(changed)):
+            p = int(active[r, s])
+            if self.ever[r, s, p]:self.back[r, s] = True
+            self.ever[r, s, p] = True;self.switch_ins[r, s] += 1
+            self.baton_in[r, s] = p if self.pending[r, s] else -1
+        self.pending = np.where(changed, False, self.pending) | np.asarray(baton_pass, bool)
+        self.prev = active.copy()
+
+    def flags(self, row, side):
+        return dict(back_switched=bool(self.back[row, side]), baton_in=bool(self.baton_in[row, side] >= 0 and self.baton_in[row, side] == self.prev[row, side]),
+            switch_ins=int(self.switch_ins[row, side]), ever_active=[int(p) for p in np.flatnonzero(self.ever[row, side])])
 
 
 def numeric_max_abs(world, real):
@@ -418,6 +509,30 @@ def build_true_world(root, real, source, materializer, recipe, keys):
     return world, state, public, sigma, move_maps, notes
 
 
+def public_differences(world_public, public, sigma, owner):
+    """Fields where the materializer's own world public (materializer coordinates) differs from the true world's public
+    re-based from the root in real coordinates: every tracker field must be equal, except that the foe's
+    physical_to_public/active_physical must agree through sigma and its own_order is the rebase rule in each
+    coordinate system (compared as the peer order, not here). A materializer public-data defect shows here."""
+    foe = 1 - owner;sig = np.asarray(sigma);out = []
+    for name in type(public)._fields:
+        a, b = getattr(world_public, name), getattr(public, name)
+        if name == 'physical_to_public':
+            a, b = np.asarray(a), np.asarray(b)
+            same = np.array_equal(a[0, owner], b[0, owner]) and np.array_equal(a[0, foe], b[0, foe][sig])
+        elif name == 'active_physical':
+            a, b = np.asarray(a), np.asarray(b)
+            same = a[0, owner] == b[0, owner] and (a[0, foe] < 0 and b[0, foe] < 0 or int(sig[int(a[0, foe])]) == int(b[0, foe]))
+        elif name == 'own_order':
+            same = np.array_equal(np.asarray(a)[0, owner], np.asarray(b)[0, owner])
+        else:
+            import jax
+            la, lb = jax.tree.leaves(a), jax.tree.leaves(b)
+            same = len(la) == len(lb) and all(np.asarray(x).dtype == np.asarray(y).dtype and np.array_equal(x, y) for x, y in zip(la, lb))
+        if not same:out.append(name)
+    return out
+
+
 # ---------------------------------------------------------------------------------------------- encoding
 
 _ENCODERS = {}
@@ -507,13 +622,58 @@ class Setup:
     seat_order: object
     fresh: object
     meta: dict
+    forward: object = None   # A's forward(params, inputs) -> v5_model.Output, for the root-logit re-check (optional)
+
+
+# Mechanisms whose exercise is counted per decision, by side; a class verdict is ABSENT only where they were compared.
+CARRY_MECHANISMS = ('baton_pass', 'trace', 'choice_lock', 'encore', 'trapped', 'substitute')
+BELIEF_MECHANISMS = ('pressure_pp', 'hazard_credit_opp', 'spikes', 'toxic', 'sleep_clause')
+EXCLUDED_BY_DESIGN = dict(hazard_credit_self='peer_exact_hazard', damage_exact='peer_damage_exact')
+ROOT_LOGIT_TOLERANCE = .05   # |re-forward - decide's raw logits| above this is a root-source mismatch (bf16 batch-shape noise is far below)
+
+
+def mechanisms(real_state, clone, owner, history, pressure, max_pp):
+    """Which carry/belief mechanisms a decision exercises in the REAL game: per side (the active's carry state) and, for
+    the peer's belief columns, the real public facts the reply prior reads. `history` = History.flags per side."""
+    foe = 1 - owner
+    def carry(side):
+        a = int(real_state.active[0, side]);f = (history or {}).get(side) or {}
+        return dict(baton_pass=bool(f.get('baton_in')), trace=bool(real_state.ability[0, side, a] != real_state.base_ability[0, side, a]),
+            choice_lock=bool(real_state.choice_move[0, side, a] > 0), encore=bool(real_state.encore_move[0, side, a] > 0),
+            trapped=bool(real_state.trapped[0, side]) or int(real_state.trap_source[0, side, a]) >= 0 or (int(real_state.volatile[0, side, a]) & 8) != 0,
+            substitute=bool(real_state.substitute_hp[0, side, a] > 0))
+    fa = int(real_state.active[0, foe])
+    spent = any(int(m) > 0 and int(real_state.pp[0, foe, fa, k]) < max_pp[int(m)] for k, m in enumerate(real_state.moves[0, foe, fa]))
+    seen = ((history or {}).get(owner) or {}).get('ever_active', range(6))
+    port = clone.public_port
+    hazards = np.zeros((2, 2)) if port is None else np.asarray(port.hazards)[0].sum(axis=-1)   # [victim side, (shown, exact)]
+    belief = dict(pressure_pp=bool(pressure) and spent and any(int(real_state.ability[0, owner, p]) == pressure for p in seen),
+        hazard_credit_opp=bool(hazards[owner, 0] != 0), spikes=bool(np.any(np.asarray(real_state.spikes)[0] > 0)),
+        toxic=int(real_state.status[0, foe, fa]) == 4, sleep_clause=False if port is None else bool(np.any(np.asarray(port.holder)[0] >= 0)),
+        hazard_credit_self=bool(hazards[foe, 1] != 0),
+        damage_exact=bool(np.any(np.asarray(clone.damage_exact_taken)[0, foe] != 0) or np.any(np.asarray(clone.damage_exact_dealt)[0, owner] != 0))
+            if clone.damage_exact_taken is not None else False)
+    return dict(peer=dict(carry(foe), **belief), owner=carry(owner))
 
 
 class Checker:
     def __init__(self, setup):
-        self.setup = setup;self.encode = make_encoder(setup.executor);self.timing = collections.Counter()
+        self.setup = setup;self.encode = make_encoder(setup.executor);self.timing = collections.Counter();self._forward = None
+        names = setup.materializer.namespaces['abilities'] if hasattr(setup.materializer, 'namespaces') else {}
+        self.pressure = int(names.get('pressure', 0)) if names else 0
+        self.max_pp = tuple(getattr(setup.materializer, 'max_pp', ()))
 
-    def __call__(self, carry, decided, host, rows, step):
+    def forward_logits(self, own_inputs, count):
+        """A's forward on the Request's root inputs (actor_inputs layout), to re-check decide's raw logits."""
+        import jax
+        s = self.setup
+        if self._forward is None:self._forward = jax.jit(lambda params, inputs: s.forward(params, inputs).policy_logits)
+        bucket = max(64, 1 << (count - 1).bit_length())
+        pad = lambda x: np.concatenate([np.asarray(x), np.repeat(np.asarray(x)[:1], bucket - count, axis=0)])[:, None]
+        batch = {k: pad(v) for k, v in own_inputs.items()};batch['history_mask'] = np.ones((bucket, 1), bool)
+        return np.asarray(jax.device_get(self._forward(s.params[0], batch)))[:count]
+
+    def __call__(self, carry, decided, host, rows, step, history=None):
         import jax
         import jax.numpy as j
         from gpu_engine import device_public_worlds as worlds, device_public_world_state as states
@@ -533,6 +693,10 @@ class Checker:
         state_fields = {name: getattr(carry.state, name) for name in worlds.OWN_MON_FIELDS + worlds.OWN_SIDE_FIELDS}
         cloned, redacted = jax.device_get(worlds._detach_device()(carry.public, state_fields, carry.streams, carry.frames, r, o)[:2])
         self.timing['detach_seconds'] += time.perf_counter() - clock;clock = time.perf_counter()
+        logits = None
+        if s.forward is not None:
+            logits = self.forward_logits(own_inputs, count)
+            self.timing['forward_seconds'] += time.perf_counter() - clock;clock = time.perf_counter()
         plans = [[worlds.plan_starts(root, s.source, recipe) for recipe in s.recipes] for root in roots]
         self.timing['plan_seconds'] += time.perf_counter() - clock;clock = time.perf_counter()
         seeds = sorted({states.kernel_seed(root, start.world, recipe) for root, per in zip(roots, plans)
@@ -553,7 +717,9 @@ class Checker:
                 stats=real_state.stats[0, foe], max_hp=real_state.max_hp[0, foe], hidden_power_power=real_state.hidden_power_power[0, foe],
                 active=int(real_state.active[0, foe]), truth_probabilities=truth[0][i, foe], truth_known=truth[1][i, foe])
             real_order = [int(x) for x in np.asarray(clone.own_order)[0, foe]]
+            owner_order = [int(x) for x in np.asarray(clone.own_order)[0, owner]]
             layout = offline_layout_order(real['active'], mapping)
+            flags = None if history is None else {owner: history.flags(row, owner), foe: history.flags(row, foe)}
             record = dict(shard=s.meta.get('shard'), step=int(step), stream=int(root.address.stream), frame=int(root.address.frame),
                 owner=owner, row=row, game=int(s.game[row]), seat_order=int(s.seat_order[row]), turn=int(host['turn'][row]),
                 foe_requested=bool(host['requested'][row, foe]),
@@ -561,19 +727,22 @@ class Checker:
                     differs_real_coords=real_order != rule_order(real['active']),
                     revealed_positions_differ=revealed_positions_differ(real_order, layout, mapping) if _is_perm(real_order) else None,
                     revealed=int(np.sum(mapping >= 0))),
+                history=None if flags is None else dict(owner=flags[owner], foe=flags[foe]),
+                mechanisms=mechanisms(real_state, clone, owner, flags, self.pressure, self.max_pp),
                 carry=dict(owner_baton_pass=bool(real_state.baton_pass[0, owner]), foe_baton_pass=bool(real_state.baton_pass[0, foe]),
-                    owner_traced=bool(real_state.ability[0, owner, real_state.active[0, owner]] != real_state.base_ability[0, owner, real_state.active[0, owner]]),
-                    foe_traced=bool(real_state.ability[0, foe, real['active']] != real_state.base_ability[0, foe, real['active']]),
                     owner_forced_switch=bool(real_state.forced_switch[0, owner])))
+            if logits is not None:
+                raw = np.asarray(host['raw_logits'][row, owner], np.float32)
+                record['root_logits'] = dict(equal=bool(np.array_equal(logits[i], raw)), max_abs=float(np.max(np.abs(logits[i].astype(np.float64) - raw))))
             records.append(record)
             # Self checks and the real foe tiers.
-            add(real_state, clone, owner, 'real_owner', i)
+            add(real_state, clone, owner, 'real_owner', i, dict(state=real_state, order=owner_order))
             tiers = redaction_tiers(clone, red)
             add(real_state, tiers['raw'], foe, 'real_foe:raw', i)
             add(real_state, tiers['peer_damage_exact'], foe, 'real_foe:peer_damage_exact', i)
             add(real_state, tiers['peer_exact_hazard'], foe, 'real_foe:peer_exact_hazard', i)
             hp_state = redact_state_hp(real_state, foe, mapping, np.asarray(root.view['hp_percent'])[0])
-            add(hp_state, tiers['peer_exact_hazard'], foe, 'real_foe:foe_hp_public_percent', i)
+            add(hp_state, tiers['peer_exact_hazard'], foe, 'real_foe:foe_hp_public_percent', i, dict(state=hp_state))
             # Recipe worlds (the pricer's own materialization).
             record['owner_check'] = dict(worlds=[])
             for b, (recipe, p) in enumerate(zip(s.recipes, plans[i])):
@@ -582,15 +751,18 @@ class Checker:
                     label = 'b%dw%d' % (b, start.world)
                     if world.state is None:
                         record['owner_check']['worlds'].append(dict(world=label, refusal=','.join(world.refusals)[:300]));continue
-                    add(world.state, world.public, owner, 'world_owner', i, label)
-                    add(world.state, world.public, foe, 'world_peer', i, label)
+                    add(world.state, world.public, owner, 'world_owner', i, dict(label=label, state=world.state,
+                        order=[int(x) for x in np.asarray(world.public.own_order)[0, owner]]))
+                    add(world.state, world.public, foe, 'world_peer', i, dict(label=label))
             # The true world.
             try:
                 world, state, public, sigma, move_maps, notes = build_true_world(root, real, s.source, s.materializer, s.recipes[0], keys)
                 record['true_world'] = dict(status='built', notes=notes, sigma=list(sigma),
-                    move_order_permuted=any(k != v for m in move_maps.values() for k, v in m.items()))
-                add(state, public, foe, 'true_foe', i, dict(order=[int(x) for x in np.asarray(public.own_order)[0, foe]]))
-                add(state, public, owner, 'true_owner', i)
+                    move_order_permuted=any(k != v for m in move_maps.values() for k, v in m.items()),
+                    public_differs=public_differences(world.public, public, sigma, owner))
+                add(state, public, foe, 'true_foe', i, dict(order=[int(x) for x in np.asarray(public.own_order)[0, foe]], state=state))
+                add(state, public, owner, 'true_owner', i, dict(label='true', state=state,
+                    order=[int(x) for x in np.asarray(public.own_order)[0, owner]]))
                 layout_order = [int(sigma[int(x)]) for x in np.asarray(world.public.own_order)[0, foe]]
                 add(world.state, world.public, foe, 'layout_foe', i,
                     dict(order=layout_order, move_map=move_maps[int(sigma[int(world.state.active[0, foe])])]))
@@ -603,13 +775,29 @@ class Checker:
         self.timing['encode_seconds'] += time.perf_counter() - clock;clock = time.perf_counter()
         views = collections.defaultdict(dict)
         for (i, role, extra), view in zip(jobs, encoded):
-            if role in ('world_owner', 'world_peer'):views[i].setdefault(role, {})[extra] = view
+            if role in ('world_owner', 'world_peer'):views[i].setdefault(role, {})[extra['label']] = (view, extra)
             else:views[i][role] = (view, extra)
         for i, record in enumerate(records):
             self._compare(record, views[i], observed, own_inputs, host, i)
         self.timing['compare_seconds'] += time.perf_counter() - clock
         self.timing['decisions'] += len(records)
         return records
+
+    def _owner_world(self, owner, label, own, extra, peer, root_view, inputs, root_legal, real):
+        """One owner-world comparison: raw cells (legal lanes with causes), order-caused cells, classes, pre code."""
+        real_state, real_order = real['state'], real['order']
+        active = int(real_state.active[0, owner])
+        d = diff(own, root_view)
+        world_order = extra['order']
+        aligned = (diff(align(own, world_order, real_order, active), root_view)
+            if world_order != real_order and _is_perm(world_order) and _is_perm(real_order) else d)
+        causes = legal_causes(legal_lanes(aligned), extra['state'], real_state, owner, real_order, active)
+        aligned_keys = with_causes(aligned, causes)['keys']
+        d = with_causes(d, legal_causes(legal_lanes(d), extra['state'], real_state, owner, real_order, active))
+        order_keys = sorted(set(d['keys']) - set(aligned_keys))
+        classes = sorted({_class_of(k) for k in aligned_keys} | ({'order'} if order_keys else set()))
+        return dict(world=label, refusal=None, pre=pre_code(own, peer, inputs, root_legal), error=int(own['error']),
+            max_abs=numeric_max_abs(own, root_view), order_keys=order_keys, aligned_keys=aligned_keys, classes=classes, **serial(d))
 
     def _compare(self, record, views, observed, own_inputs, host, i):
         owner = record['owner'];foe = 1 - owner
@@ -618,34 +806,32 @@ class Checker:
         inputs = {k: np.asarray(own_inputs[k][i]) for k in own_inputs}   # decide's own row (the Request's root inputs)
         root_legal = np.asarray(host['legal'][record['row'], owner], bool)
         root_view = dict(inputs, legal_action_mask=root_legal)
-        # Root source: the Request's root inputs are the actor's own observation of the real root.
+        # Root source (structural): the Request's root inputs/legal are the actor's own observation row; with a forward,
+        # A's forward on those inputs re-derives decide's raw logits (record['root_logits']).
         record['root_source'] = dict(inputs_equal=all(np.array_equal(inputs[k], decide_owner[k]) for k in OBS_FIELDS[:4]),
             legal_equal=bool(np.array_equal(root_legal, decide_owner['legal_action_mask'])))
-        real_owner = views['real_owner'][0]
+        real_owner, real_extra = views['real_owner']
         record['self_check'] = dict(owner_reencode_equal=diff(real_owner, decide_owner)['total'] == 0)
         if record['foe_requested']:
             record['self_check']['foe_reencode_equal'] = diff(views['real_foe:raw'][0], decide_foe)['total'] == 0
-        # Owner check, recipe worlds.
+        # Owner check: recipe worlds and the true world.
         worlds = record['owner_check']
-        for label, own in views.get('world_owner', {}).items():
-            peer = views.get('world_peer', {}).get(label)
-            d = diff(own, root_view)
-            worlds['worlds'].append(dict(world=label, refusal=None, pre=pre_code(own, peer, inputs, root_legal),
-                error=int(own['error']), max_abs=numeric_max_abs(own, root_view), **serial(d)))
+        for label, (own, extra) in views.get('world_owner', {}).items():
+            peer = views.get('world_peer', {}).get(label, (None, None))[0]
+            worlds['worlds'].append(self._owner_world(owner, label, own, extra, peer, root_view, inputs, root_legal, real_extra))
         worlds['worlds'].sort(key=lambda w: w['world'])
         if 'true_owner' in views:
-            own = views['true_owner'][0];d = diff(own, root_view)
-            worlds['true'] = dict(world='true', refusal=None, pre=pre_code(own, None, inputs, root_legal), error=int(own['error']),
-                max_abs=numeric_max_abs(own, root_view), **serial(d))
+            own, extra = views['true_owner']
+            worlds['true'] = self._owner_world(owner, 'true', own, extra, None, root_view, inputs, root_legal, real_extra)
         # Peer check.
-        peer = dict(status='skipped', reason=None)
-        if not record['foe_requested']:peer['reason'] = 'foe not requested at this decision'
-        elif record['true_world']['status'] != 'built':peer['reason'] = record['true_world']['reason']
+        peer = dict(status='skipped', reason=None, kind=None)
+        if not record['foe_requested']:peer.update(reason='foe not requested at this decision', kind='not_requested')
+        elif record['true_world']['status'] != 'built':peer.update(reason=record['true_world']['reason'], kind='refused')
         else:
             world_view, extra = views['true_foe']
             tiers = [('raw', decide_foe)] + [(name, views['real_foe:' + name][0]) for name, _ in REDACTIONS]
             diffs = [(name, diff(world_view, real)) for name, real in tiers]
-            remaining = diffs[-1][1];final_real = tiers[-1][1]
+            remaining = diffs[-1][1];final_real = tiers[-1][1];final_state = views['real_foe:foe_hp_public_percent'][1]['state']
             explained, introduced = {}, {}
             for (_, before), (name, after) in zip(diffs, diffs[1:]):
                 gone = before['exact'] - after['exact'];new = after['exact'] - before['exact']
@@ -656,16 +842,18 @@ class Checker:
             if _is_perm(world_order) and _is_perm(real_order) and active in world_order and active in real_order:
                 aligned = diff(align(world_view, world_order, real_order, active), final_real)
             else:aligned = remaining
+            aligned = with_causes(aligned, legal_causes(legal_lanes(aligned), extra['state'], final_state, foe, real_order, active))
+            remaining = with_causes(remaining, legal_causes(legal_lanes(remaining), extra['state'], final_state, foe, real_order, active))
             order_keys = sorted(set(remaining['keys']) - set(aligned['keys']))
             layout_view, layout_extra = views['layout_foe']
             layout_raw = diff(layout_view, final_real)
             layout_aligned = (diff(align(layout_view, layout_extra['order'], real_order, active, move_map=layout_extra['move_map']), final_real)
                 if _is_perm(layout_extra['order']) and _is_perm(real_order) else layout_raw)
-            peer = dict(status='compared', reason=None, world_order=world_order,
+            peer = dict(status='compared', reason=None, kind='compared', world_order=world_order,
                 tiers={name: d['total'] for name, d in diffs}, explained=explained, introduced=introduced,
                 remaining=serial(remaining), aligned=serial(aligned), order_keys=order_keys,
                 order_only=remaining['total'] > 0 and aligned['total'] == 0,
-                max_abs=numeric_max_abs(world_view, final_real),
+                max_abs=numeric_max_abs(world_view, final_real), public_differs=record['true_world'].get('public_differs', []),
                 offline_layout=dict(raw=layout_raw['total'], aligned=layout_aligned['total'], aligned_keys=layout_aligned['keys'],
                     order_only=layout_raw['total'] > 0 and layout_aligned['total'] == 0))
         record['peer'] = peer
@@ -681,6 +869,7 @@ def run_shard(setup, out, *, max_steps=None, quota=None, sample_rate=1., sample_
     out = Path(out);out.mkdir(parents=True, exist_ok=False)
     begin = time.perf_counter();checker = Checker(setup);timing = collections.Counter()
     carry = setup.fresh();step = 0;checked = 0;quota_step = None;seen = 0
+    history = History(jax.device_get(carry.state.active))
     a_side = setup.a_side;a_side_device = j.asarray(a_side);everyone = np.arange(len(a_side))
     log('OFFLINE_VIEW_PARITY_START', **dict(setup.meta, rows=len(a_side), quota=quota, sample_rate=sample_rate, policy=policy))
     with (out / 'positions.jsonl').open('w') as stream, patch.object(original.Recipe, 'selected', lambda self, address: True):
@@ -689,6 +878,7 @@ def run_shard(setup, out, *, max_steps=None, quota=None, sample_rate=1., sample_
             decided = setup.decide(carry, setup.params, a_side_device)
             host = jax.device_get({k: decided[k] for k in ('live', 'requested', 'legal', 'raw_logits', 'actions', 'input_valid', 'turn')})
             timing['decide_seconds'] += time.perf_counter() - clock
+            history.update(*jax.device_get((carry.state.active, carry.state.baton_pass)))
             if not host['live'].any() or (max_steps is not None and step >= max_steps):break
             if quota is not None and checked >= quota:break   # nothing left to check in this shard
             frames = np.asarray(carry.frames);streams = np.asarray(carry.streams)
@@ -699,7 +889,7 @@ def run_shard(setup, out, *, max_steps=None, quota=None, sample_rate=1., sample_
                 chosen = chosen[:max(0, quota - checked)]
                 if quota_step is None and checked + len(chosen) >= quota:quota_step = step
             if chosen:
-                for record in checker(carry, decided, host, chosen, step):stream.write(json.dumps(record) + '\n')
+                for record in checker(carry, decided, host, chosen, step, history):stream.write(json.dumps(record) + '\n')
                 stream.flush();checked += len(chosen)
             actions = host['actions'].copy()
             if policy == 'argmax':
@@ -727,13 +917,15 @@ def run_shard(setup, out, *, max_steps=None, quota=None, sample_rate=1., sample_
 # ---------------------------------------------------------------------------------------------- summary
 
 def _class_of(key):
-    """Which input-bug class a remaining peer cell belongs to (documented in summary.md)."""
+    """Which input-bug class a differing cell belongs to (documented in summary.md). Legal lanes go by their cause
+    (LEGAL_CAUSE_CLASS: PP exhausted is a peer-belief fact, traps/locks/disabled are carry fields, else 'legal')."""
     from gpu_engine import engine_device_features as features
     sec, kind, name = key.split(':')
     public = {item[0] for item in features.MON_FIELDS.values()} | {'TOXIC_STAGE', 'WAKE_KNOWN', 'LAST_DAMAGE_DEALT',
         'LAST_DAMAGE_TAKEN', 'TRUANT_LOAF', 'SUB_HP_FRACTION'}
+    if kind == 'legal':return LEGAL_CAUSE_CLASS.get(name.partition('/')[2] or 'unknown', 'legal')
     if kind == 'categorical' and name in ('TYPE_1', 'TYPE_2') and sec in ('own', 'opponent', 'belief'):return 'types'
-    if kind == 'legal' or (sec == 'field' and kind == 'categorical' and name == 'PRIMARY'):return 'carry_fields'
+    if sec == 'field' and kind == 'categorical' and name == 'PRIMARY':return 'carry_fields'   # request kind
     if sec == 'own' and (name.startswith('BOOST_') or (kind == 'numeric' and name in ('ACTIVE', 'LEGAL'))
             or (kind == 'categorical' and (name.startswith('BELIEF_ABILITY') or name == 'TRACED_ABILITY' or name.startswith('VOLATILE')))):
         return 'carry_fields'
@@ -742,6 +934,9 @@ def _class_of(key):
     if sec == 'own' and (name in public or (kind == 'categorical' and name == 'LAST_USED_MOVE')):return 'peer_belief_columns'
     if sec == 'move_actions' and name == 'MOVE_PP_FRACTION':return 'peer_belief_columns'
     return 'other'
+
+
+OWNER_CLASSES = dict(types='types', order='order', belief='peer_belief_columns', carry='carry_fields', legal='legal', other='other')
 
 
 def _rank(key_lists, denominator, top=40):
@@ -755,11 +950,53 @@ def _share(numerator, denominator):
 
 
 def _zeroed_types(result):
-    """Cells of a serialized diff where a TYPE category is zero in the world and nonzero in the real view."""
-    from pokezero import showdown as reference
-    columns = (reference.CATEGORY_TYPE_1, reference.CATEGORY_TYPE_2)
-    return sum(1 for token, column, w, r in result.get('categorical', {}).get('cells', ()) if column in columns and w == 0 and r != 0
-        and section(token) in ('own', 'opponent', 'belief'))
+    """Zeroed shown-type cells of a serialized diff, counted over the full arrays (diff's zeroed_types)."""
+    return int(result.get('zeroed_types', 0))
+
+
+def owner_rollup(worlds):
+    """Owner-world differences per class (types, bench order, belief columns, carry fields, legal lanes, other)."""
+    out = {}
+    for label, name in OWNER_CLASSES.items():
+        hit = [w for w in worlds if name in w.get('classes', ())]
+        keys = [w.get('order_keys', []) for w in hit] if name == 'order' else [[k for k in w.get('aligned_keys', w.get('keys', [])) if _class_of(k) == name] for w in hit]
+        out[label] = dict(worlds=len(hit), share=_share(len(hit), len(worlds)), cells=_rank(keys, len(worlds), top=8))
+    return out
+
+
+def _owner_compared(p):
+    return [w for w in p['owner_check']['worlds'] if not w['refusal']] + ([p['owner_check']['true']] if p['owner_check'].get('true') else [])
+
+
+def mechanism_table(P, side, names, class_name):
+    """Per mechanism: sampled decisions exercising it, how many were compared, refused or had the foe not requested,
+    and how many compared ones show differences of the class. NOT_EXERCISED when none was compared."""
+    rows = {}
+    for m in names:
+        hit = [p for p in P if (p.get('mechanisms') or {}).get(side, {}).get(m)]
+        if side == 'peer':
+            compared = [p for p in hit if p['peer']['status'] == 'compared']
+            refused = sum(p['peer'].get('kind') == 'refused' for p in hit);not_requested = sum(p['peer'].get('kind') == 'not_requested' for p in hit)
+            diffs = sum(any(_class_of(k) == class_name for k in p['peer']['aligned']['keys']) for p in compared)
+            any_diffs = sum(p['peer']['aligned']['total'] > 0 for p in compared)
+        else:
+            compared = [p for p in hit if _owner_compared(p)]
+            refused, not_requested = len(hit) - len(compared), 0
+            diffs = sum(any(class_name in w.get('classes', ()) for w in _owner_compared(p)) for p in compared)
+            any_diffs = sum(any(w['total'] > 0 for w in _owner_compared(p)) for p in compared)
+        rows[m] = dict(sampled=len(hit), compared=len(compared), refused=refused, not_requested=not_requested,
+            with_class_differences=diffs, with_any_differences=any_diffs,
+            verdict='PRESENT' if diffs else 'ABSENT' if compared else 'NOT_EXERCISED')
+    return rows
+
+
+def class_verdict(differences, table, compared):
+    """PRESENT on any difference of the class; otherwise ABSENT only when every mechanism was compared clean,
+    ABSENT_WHERE_EXERCISED when some were, NOT_EXERCISED when none (or nothing) was compared."""
+    if differences:return 'PRESENT'
+    verdicts = [r['verdict'] for r in table.values()]
+    if not compared or not any(v == 'ABSENT' for v in verdicts):return 'NOT_EXERCISED'
+    return 'ABSENT' if all(v == 'ABSENT' for v in verdicts) else 'ABSENT_WHERE_EXERCISED'
 
 
 def summarize(positions, metas):
@@ -767,26 +1004,35 @@ def summarize(positions, metas):
     worlds = [w for p in P for w in p['owner_check']['worlds']]
     refused = [w for w in worlds if w['refusal']];compared = [w for w in worlds if not w['refusal']]
     trues = [p['owner_check']['true'] for p in P if p['owner_check'].get('true')]
+    pre = collections.Counter(str(w['pre']) for w in compared)
     owner = dict(worlds=len(worlds), refused=len(refused),
         refusal_reasons=dict(collections.Counter(w['refusal'].split(':')[0][:120] for w in refused).most_common(20)),
         compared=len(compared), exact=sum(w['total'] == 0 for w in compared),
         exact_share=_share(sum(w['total'] == 0 for w in compared), len(compared)),
-        pre_codes=dict(sorted(collections.Counter(str(w['pre']) for w in compared).items())),
-        cells_ranked=_rank([w['keys'] for w in compared], len(compared)),
+        pre_codes=dict(sorted(pre.items())), would_be_pre_refused=sum(v for k, v in pre.items() if k != '0'),
+        classes=owner_rollup(compared), cells_ranked=_rank([w['keys'] for w in compared], len(compared)),
         true_world=dict(compared=len(trues), exact=sum(w['total'] == 0 for w in trues),
-            pre_codes=dict(sorted(collections.Counter(str(w['pre']) for w in trues).items())),
+            pre_codes=dict(sorted(collections.Counter(str(w['pre']) for w in trues).items())), classes=owner_rollup(trues),
             cells_ranked=_rank([w['keys'] for w in trues], len(trues))))
-    root = dict(decisions=n, inputs_mismatch=sum(not p['root_source']['inputs_equal'] for p in P),
-        legal_mismatch=sum(not p['root_source']['legal_equal'] for p in P))
+    forward = [p['root_logits'] for p in P if p.get('root_logits')]
+    root = dict(decisions=n, structural=dict(inputs_mismatch=sum(not p['root_source']['inputs_equal'] for p in P),
+            legal_mismatch=sum(not p['root_source']['legal_equal'] for p in P)),
+        forward=dict(checked=len(forward), equal=sum(x['equal'] for x in forward), tolerance=ROOT_LOGIT_TOLERANCE,
+            above_tolerance=sum(x['max_abs'] > ROOT_LOGIT_TOLERANCE for x in forward),
+            max_abs=max((x['max_abs'] for x in forward), default=None)))
+    built = [p['true_world'] for p in P if p['true_world']['status'] == 'built']
     selfcheck = dict(owner_reencode_mismatch=sum(not p['self_check']['owner_reencode_equal'] for p in P),
         foe_reencode_mismatch=sum(p['self_check'].get('foe_reencode_equal') is False for p in P),
-        true_world_notes=dict(collections.Counter(note for p in P for note in p['true_world'].get('notes', ()))))
+        true_world_notes=dict(collections.Counter(note for p in P for note in p['true_world'].get('notes', ()))),
+        true_worlds_built=len(built), materializer_public_differs=sum(bool(x.get('public_differs')) for x in built),
+        materializer_public_fields=dict(collections.Counter(f for x in built for f in x.get('public_differs', ()))))
     peers = [p['peer'] for p in P];cmp = [x for x in peers if x['status'] == 'compared']
     explained = {name: dict(decisions=sum(x['explained'][name]['cells'] > 0 for x in cmp), cells=sum(x['explained'][name]['cells'] for x in cmp),
         introduced_cells=sum(x['introduced'][name]['cells'] for x in cmp),
         cells_ranked=_rank([x['explained'][name]['keys'] for x in cmp], len(cmp), top=15), mechanism=text) for name, text in REDACTIONS}
     order_caused = [x for x in cmp if x['order_keys']]
     peer = dict(decisions=n, compared=len(cmp),
+        refused=sum(x.get('kind') == 'refused' for x in peers), not_requested=sum(x.get('kind') == 'not_requested' for x in peers),
         skipped=dict(collections.Counter(x['reason'][:120] for x in peers if x['status'] != 'compared').most_common(20)),
         raw_differs=sum(x['tiers']['raw'] > 0 for x in cmp), redactions=explained,
         remaining_differs=sum(x['remaining']['total'] > 0 for x in cmp),
@@ -800,73 +1046,94 @@ def summarize(positions, metas):
             order_only=sum(x['offline_layout']['order_only'] for x in cmp),
             order_only_share=_share(sum(x['offline_layout']['order_only'] for x in cmp), len(cmp)),
             aligned_differs=sum(x['offline_layout']['aligned'] > 0 for x in cmp)))
-    orders = [p['order'] for p in P]
-    order = dict(decisions=len(orders), back_switch=sum(o['differs_real_coords'] for o in orders),
-        back_switch_share=_share(sum(o['differs_real_coords'] for o in orders), len(orders)),
+    orders = [p['order'] for p in P];backs = [p for p in P if p.get('history')]
+    back = sum(p['history']['foe']['back_switched'] for p in backs)
+    order = dict(decisions=len(orders), differs_from_rule=sum(o['differs_real_coords'] for o in orders),
+        differs_from_rule_share=_share(sum(o['differs_real_coords'] for o in orders), len(orders)),
+        foe_back_switched=back, foe_back_switched_share=_share(back, len(backs)),
+        differs_without_back_switch=sum(p['order']['differs_real_coords'] and not p['history']['foe']['back_switched'] for p in backs),
         revealed_positions_differ=sum(bool(o['revealed_positions_differ']) for o in orders),
         revealed_positions_differ_share=_share(sum(bool(o['revealed_positions_differ']) for o in orders), len(orders)),
         with_switch_history=sum(o['real'] != list(range(6)) for o in orders),
         order_only_share_of_compared=peer['order_only_share'])
-    carry = dict(owner_baton_pass=sum(p['carry']['owner_baton_pass'] for p in P), foe_baton_pass=sum(p['carry']['foe_baton_pass'] for p in P),
-        owner_traced=sum(p['carry']['owner_traced'] for p in P), foe_traced=sum(p['carry']['foe_traced'] for p in P),
-        owner_forced_switch=sum(p['carry']['owner_forced_switch'] for p in P))
     zeroed_owner = sum(_zeroed_types(w) for w in compared + trues)
     zeroed_peer = sum(_zeroed_types(x['aligned']) for x in cmp)
-    by_class = collections.defaultdict(lambda: collections.Counter())
+    by_class = collections.defaultdict(collections.Counter)
     for x in cmp:
-        classes = {_class_of(k) for k in x['aligned']['keys']}
-        for c in classes:by_class[c]['decisions'] += 1
+        for c in {_class_of(k) for k in x['aligned']['keys']}:by_class[c]['decisions'] += 1
         for k in x['aligned']['keys']:by_class[_class_of(k)][k] += 1
     def evidence_cells(name, top=12):
         c = by_class.get(name, collections.Counter())
         return [dict(cell=k, decisions=v, share=_share(v, len(cmp))) for k, v in c.most_common() if k != 'decisions'][:top]
-    def verdict(present, exercised):
-        return 'PRESENT' if present else 'ABSENT' if exercised else 'NOT_APPLICABLE'
-    type_cells = sum(1 for x in cmp for k in x['aligned']['keys'] if _class_of(k) == 'types')
+    owner_class_worlds = lambda name: sum(name in w.get('classes', ()) for w in compared + trues)
+    carry_table = {'peer.' + k: v for k, v in mechanism_table(P, 'peer', CARRY_MECHANISMS, 'carry_fields').items()}
+    carry_table.update({'owner.' + k: v for k, v in mechanism_table(P, 'owner', CARRY_MECHANISMS, 'carry_fields').items()})
+    belief_table = mechanism_table(P, 'peer', BELIEF_MECHANISMS, 'peer_belief_columns')
+    excluded = {m: dict(mechanism_table(P, 'peer', (m,), 'peer_belief_columns')[m], verdict='EXCLUDED_BY_DESIGN',
+        redaction=redaction) for m, redaction in EXCLUDED_BY_DESIGN.items()}
+    carry_differences = by_class['carry_fields']['decisions'] + owner_class_worlds('carry_fields')
+    belief_differences = by_class['peer_belief_columns']['decisions']
     classes = dict(
-        types=dict(verdict=verdict(zeroed_owner + zeroed_peer > 0, len(compared) + len(trues) + len(cmp) > 0),
+        types=dict(verdict='PRESENT' if zeroed_owner + zeroed_peer else 'ABSENT' if compared or trues or cmp else 'NOT_EXERCISED',
             evidence=dict(zeroed_type_cells_owner_worlds=zeroed_owner, zeroed_type_cells_peer=zeroed_peer,
-                owner_worlds_compared=len(compared) + len(trues), peer_compared=len(cmp),
-                peer_decisions_with_any_type_difference=by_class['types']['decisions'], peer_type_cells=type_cells,
+                owner_worlds_compared=len(compared) + len(trues), owner_worlds_with_type_differences=owner_class_worlds('types'),
+                peer_compared=len(cmp), peer_decisions_with_any_type_difference=by_class['types']['decisions'],
                 cells=evidence_cells('types')), mechanism=MECHANISMS['types'],
-            rule='PRESENT when a TYPE_1/TYPE_2 category is zero in a world view and nonzero in the real view'),
-        root_source=dict(verdict=verdict(root['inputs_mismatch'] + root['legal_mismatch'] > 0, n > 0),
+            rule='PRESENT when a TYPE_1/TYPE_2 category is zero in a world view and nonzero in the real view (full arrays)'),
+        root_source=dict(verdict='PRESENT' if root['structural']['inputs_mismatch'] + root['structural']['legal_mismatch']
+                + root['forward']['above_tolerance'] else 'ABSENT' if n else 'NOT_EXERCISED',
             evidence=dict(root, owner_world_pre_codes=owner['pre_codes']), mechanism=MECHANISMS['root_source'],
-            rule="PRESENT when the Request's root inputs or root legal are not the actor's own observation of the real root"),
-        peer_order=dict(verdict=verdict(len(order_caused) > 0, len(cmp) > 0),
-            evidence=dict(back_switch=order['back_switch'], back_switch_share=order['back_switch_share'],
+            rule="structural: the Request's root inputs and legal are decide's own row for A's seat (near-tautological); "
+                "re-checked by A's forward on those inputs against decide's raw logits (|diff| <= %s)" % ROOT_LOGIT_TOLERANCE),
+        peer_order=dict(verdict='PRESENT' if order_caused else 'ABSENT' if cmp else 'NOT_EXERCISED',
+            evidence=dict(foe_order_differs_from_rule_share=order['differs_from_rule_share'],
+                foe_back_switched_share=order['foe_back_switched_share'], differs_without_back_switch=order['differs_without_back_switch'],
                 revealed_positions_differ_share=order['revealed_positions_differ_share'],
                 peer_compared=len(cmp), decisions_with_order_caused_cells=len(order_caused),
                 order_only=peer['order_only'], order_only_share=peer['order_only_share'], order_and_other=peer['order_and_other'],
-                offline_layout_order_only_share=peer['offline_layout']['order_only_share'], cells=peer['order_caused_cells_ranked'][:12]),
+                offline_layout_order_only_share=peer['offline_layout']['order_only_share'],
+                owner_worlds_with_order_differences=owner_class_worlds('order'), cells=peer['order_caused_cells_ranked'][:12]),
             mechanism=MECHANISMS['peer_order'],
             rule='PRESENT when aligning the bench order removes differing cells from the peer view in some decision'),
-        peer_belief_columns=dict(verdict=verdict(by_class['peer_belief_columns']['decisions'] > 0, len(cmp) > 0),
-            evidence=dict(peer_compared=len(cmp), decisions=by_class['peer_belief_columns']['decisions'],
-                share=_share(by_class['peer_belief_columns']['decisions'], len(cmp)), cells=evidence_cells('peer_belief_columns')),
+        peer_belief_columns=dict(verdict=class_verdict(belief_differences, belief_table, len(cmp)),
+            evidence=dict(peer_compared=len(cmp), decisions=belief_differences, share=_share(belief_differences, len(cmp)),
+                owner_worlds_with_belief_differences=owner_class_worlds('peer_belief_columns'),
+                mechanisms=belief_table, excluded_by_design=excluded, cells=evidence_cells('peer_belief_columns')),
             mechanism=MECHANISMS['peer_belief_columns'],
-            rule='PRESENT when a field/opponent/belief/stats cell, an own public-feature column or the own move PP fraction '
-                'differs after the named redactions and the order alignment'),
-        carry_fields=dict(verdict=verdict(by_class['carry_fields']['decisions'] > 0, len(cmp) > 0),
+            rule='PRESENT when a field/opponent/belief/stats cell, an own public-feature column, the own move PP fraction or a '
+                'PP-exhausted legal lane differs after the named redactions and the order alignment; the peer\'s own exact hazard '
+                'credit and exact damage halves are excluded by design (redactions peer_exact_hazard, peer_damage_exact)'),
+        carry_fields=dict(verdict=class_verdict(carry_differences, carry_table, len(cmp) + len(compared) + len(trues)),
             evidence=dict(peer_compared=len(cmp), decisions=by_class['carry_fields']['decisions'],
-                share=_share(by_class['carry_fields']['decisions'], len(cmp)), cells=evidence_cells('carry_fields'), exercised=carry,
+                share=_share(by_class['carry_fields']['decisions'], len(cmp)), owner_worlds_with_carry_differences=owner_class_worlds('carry_fields'),
+                mechanisms=carry_table, cells=evidence_cells('carry_fields'),
                 recharge='NOT_APPLICABLE: the GPU engine has no recharge state, so the offline games never reach it'),
             mechanism=MECHANISMS['carry_fields'],
-            rule='PRESENT when a legal lane, the request kind, an own boost/ability/volatile/active cell or an action '
-                'legality cell differs after the named redactions and the order alignment'))
+            rule='PRESENT when a trap/lock/disabled legal lane, the request kind, an own boost/ability/volatile/active cell or an '
+                'action legality cell differs (peer after redactions and alignment; owner worlds); per mechanism NOT_EXERCISED '
+                'when no compared decision exercised it'))
     other = dict(decisions=by_class['other']['decisions'], cells=evidence_cells('other', top=20))
+    legal = dict(decisions=by_class['legal']['decisions'], cells=evidence_cells('legal', top=12))
     runs = sorted(metas, key=lambda m: (m.get('shard') or 0))
     timing = collections.Counter()
     for m in runs:timing.update({k: v for k, v in m.get('timing', {}).items() if isinstance(v, (int, float))})
-    check_seconds = sum(timing[k] for k in ('detach_seconds', 'plan_seconds', 'materialize_seconds', 'encode_seconds', 'compare_seconds'))
+    check_seconds = sum(timing[k] for k in ('detach_seconds', 'forward_seconds', 'plan_seconds', 'materialize_seconds', 'encode_seconds', 'compare_seconds'))
     return dict(schema=SCHEMA, decisions=n, runs=runs, owner=owner, root_source=root, self_check=selfcheck, peer=peer, order=order,
-        carry=carry, other_remaining=other, classes=classes,
+        other_remaining=other, legal_remaining=legal, classes=classes,
         timing=dict(total=dict(timing), check_seconds=check_seconds,
             check_seconds_per_100_decisions=None if not n else 100 * check_seconds / n,
             wall_seconds_per_100_decisions=None if not n else 100 * sum(m.get('timing', {}).get('wall_seconds', 0) for m in runs) / n),
         redactions=[dict(name=name, mechanism=text) for name, text in REDACTIONS],
         scope='Inputs of the offline head-to-head search worlds against the real root, on GPU-engine games; no pricing, '
             'no Foul Play result.')
+
+
+def _mechanism_lines(title, table):
+    lines = ['', '| %s | verdict | sampled | compared | refused | foe not requested | with class differences |' % title, '|---|---|---|---|---|---|---|']
+    for name, r in table.items():
+        lines.append('| %s | %s | %d | %d | %d | %d | %d |' % (name, r['verdict'], r['sampled'], r['compared'], r['refused'], r['not_requested'],
+            r['with_class_differences']))
+    return lines
 
 
 def render(summary):
@@ -882,23 +1149,42 @@ def render(summary):
     lines += ['## Five-class verdict', '', '| class | verdict | evidence | mechanism |', '|---|---|---|---|']
     for name in CLASSES:
         c = s['classes'][name]
-        evidence = {k: v for k, v in c['evidence'].items() if k not in ('cells',)}
+        evidence = {k: v for k, v in c['evidence'].items() if k not in ('cells', 'mechanisms', 'excluded_by_design')}
         cells = ', '.join('%s (%s)' % (x['cell'], x['decisions']) for x in c['evidence'].get('cells', [])[:6])
         lines.append('| %s | **%s** | %s%s | %s |' % (name, c['verdict'], json.dumps(evidence, default=str).replace('|', '/'),
             ('; cells: ' + cells) if cells else '', c['mechanism'].replace('|', '/')))
-    lines += ['', 'Rules: ' + '; '.join('%s: %s' % (k, s['classes'][k]['rule']) for k in CLASSES if s['classes'][k].get('rule')), '']
-    o = s['owner']
-    lines += ['## Owner check (recipe worlds against the real root)', '',
+    sc = s['self_check']
+    lines += ['', 'True-world notes (materialized real team vs the real one, e.g. stats, max HP or Hidden Power from the source '
+        'spread): %s of %s true worlds; %s. Materializer world public vs the re-based public: %s differ (%s).' % (
+            sum(sc['true_world_notes'].values()), sc['true_worlds_built'], json.dumps(sc['true_world_notes']) or '{}',
+            sc['materializer_public_differs'], json.dumps(sc['materializer_public_fields'])), '',
+        'Verdicts: PRESENT (a difference of the class), ABSENT (every listed mechanism compared, none differs), '
+        'ABSENT_WHERE_EXERCISED (no difference, some mechanisms never compared), NOT_EXERCISED (none compared), '
+        'NOT_APPLICABLE, EXCLUDED_BY_DESIGN (a named redaction).', '',
+        'Rules: ' + '; '.join('%s: %s' % (k, s['classes'][k]['rule']) for k in CLASSES if s['classes'][k].get('rule'))]
+    lines += _mechanism_lines('carry mechanism (side.name)', s['classes']['carry_fields']['evidence']['mechanisms'])
+    lines += ['', 'recharge: ' + s['classes']['carry_fields']['evidence']['recharge']]
+    lines += _mechanism_lines('peer belief mechanism', dict(s['classes']['peer_belief_columns']['evidence']['mechanisms'],
+        **s['classes']['peer_belief_columns']['evidence']['excluded_by_design']))
+    o = s['owner'];root = s['root_source']
+    lines += ['', '## Owner check (recipe worlds against the real root)', '',
         '- worlds: %d; refused by the materializer: %d; compared: %d; exact: %d (share %s)' % (o['worlds'], o['refused'], o['compared'], o['exact'], o['exact_share']),
-        '- pricer pre-refusal codes of compared worlds: %s (0 = admitted; 2 legal; 3-6 first differing input)' % o['pre_codes'],
+        '- the pricer\'s would-be pre-refusal codes of compared worlds: %s (0 admitted; 1 own error; 2 legal; 3-6 first differing input; 8 peer error); would be refused: %d' % (
+            o['pre_codes'], o['would_be_pre_refused']),
         '- refusal reasons: %s' % o['refusal_reasons'],
-        '- true world (real foe team): compared %d, exact %d, codes %s' % (o['true_world']['compared'], o['true_world']['exact'], o['true_world']['pre_codes']), '']
+        '- true world (real foe team): compared %d, exact %d, codes %s' % (o['true_world']['compared'], o['true_world']['exact'], o['true_world']['pre_codes']),
+        '- root source (structural): %s; forward re-check: %s' % (json.dumps(root['structural']), json.dumps(root['forward'])), '',
+        '| owner-world class | recipe worlds | share | true worlds | top cells |', '|---|---|---|---|---|']
+    for label in OWNER_CLASSES:
+        a, b = o['classes'][label], o['true_world']['classes'][label]
+        lines.append('| %s | %d | %s | %d | %s |' % (label, a['worlds'], a['share'], b['worlds'], ', '.join(x['cell'] for x in a['cells'][:4])))
     if o['cells_ranked']:
-        lines += ['| owner-view cell (recipe worlds) | worlds | share |', '|---|---|---|']
-        lines += ['| %s | %d | %s |' % (x['cell'], x['decisions'], x['share']) for x in o['cells_ranked'][:20]] + ['']
+        lines += ['', '| owner-view cell (recipe worlds) | worlds | share |', '|---|---|---|']
+        lines += ['| %s | %d | %s |' % (x['cell'], x['decisions'], x['share']) for x in o['cells_ranked'][:20]]
     p = s['peer']
-    lines += ['## Peer check (true world, foe seat)', '',
-        '- compared: %d of %d; skipped: %s' % (p['compared'], p['decisions'], p['skipped']),
+    lines += ['', '## Peer check (true world, foe seat)', '',
+        '- compared: %d of %d; refused (true world not built): %d; foe not requested: %d; skipped reasons: %s' % (
+            p['compared'], p['decisions'], p['refused'], p['not_requested'], p['skipped']),
         '- raw differs: %d; after the named redactions: %d; after the bench-order alignment: %d' % (p['raw_differs'], p['remaining_differs'], p['aligned_remaining_differs']),
         '- order only: %d (share %s); order and other: %d; move slots permuted from the variant order: %d' % (p['order_only'], p['order_only_share'], p['order_and_other'], p['move_order_permuted']),
         '- the offline world layout (materializer physical order, variant move order): raw differs %d, order only %d (share %s), still differs after alignment %d' % (
@@ -913,10 +1199,14 @@ def render(summary):
     lines += ['| %s | %d | %s |' % (x['cell'], x['decisions'], x['share']) for x in p['order_caused_cells_ranked'][:12]]
     r = s['order']
     lines += ['', '## Peer order', '',
-        '- foe own_order != [active, *rest ascending] (real coordinates, the "back-switch" share): %d of %d (%s)' % (r['back_switch'], r['decisions'], r['back_switch_share']),
-        '- a revealed foe member at another request position than in the offline world layout: %d (%s)' % (r['revealed_positions_differ'], r['revealed_positions_differ_share']),
+        '- foe order != rebase rule (real coordinates): %d of %d (%s); it counts first switch-ins out of party order, faint '
+            'replacements and drag-ins as well as back-switches' % (r['differs_from_rule'], r['decisions'], r['differs_from_rule_share']),
+        '- true back-switch share (the foe has re-entered a member benched earlier, seen at decisions): %d (%s); order differs '
+            'without any back-switch: %s' % (r['foe_back_switched'], r['foe_back_switched_share'], r['differs_without_back_switch']),
+        '- offline layout: a revealed foe member at another request position than in the offline world: %d (%s)' % (
+            r['revealed_positions_differ'], r['revealed_positions_differ_share']),
         '- decisions whose foe order is not the initial one: %d' % r['with_switch_history'], '',
-        '## Self-checks', '', '- %s' % json.dumps(s['self_check']), '- root source: %s' % json.dumps(s['root_source']), '',
+        '## Self-checks', '', '- %s' % json.dumps(s['self_check']), '',
         '## Timing', '', '- %s' % json.dumps({k: (round(v, 2) if isinstance(v, float) else v) for k, v in s['timing'].items() if k != 'total'}),
         '- totals: %s' % json.dumps({k: round(v, 2) for k, v in s['timing']['total'].items()}), '', s['scope'], '']
     return '\n'.join(lines)
@@ -929,6 +1219,10 @@ def write_summary(out, positions, metas):
     return summary
 
 
+REPORT_KEYS = ('config_sha256', 'iteration', 'block', 'shards', 'max_games', 'world_blocks', 'search_seed', 'sample_seed',
+    'sample_rate', 'sample_decisions', 'policy', 'champion')
+
+
 def report(inputs, out):
     """Merge shard outputs: positions concatenated in shard order; the summary recomputed from them."""
     out = Path(out);out.mkdir(parents=True, exist_ok=False)
@@ -937,9 +1231,8 @@ def report(inputs, out):
         directory = Path(directory)
         metas.extend(json.loads((directory / 'summary.json').read_text())['runs'])
         positions.extend(json.loads(line) for line in (directory / 'positions.jsonl').read_text().splitlines() if line)
-    keys = ('config_sha256', 'iteration', 'block', 'shards', 'max_games', 'world_blocks', 'search_seed', 'sample_seed', 'policy')
-    for key in keys:
-        if len({json.dumps(m.get(key)) for m in metas}) > 1:raise SystemExit('shards differ in ' + key)
+    for key in REPORT_KEYS:
+        if len({json.dumps(m.get(key), sort_keys=True, default=str) for m in metas}) > 1:raise SystemExit('shards differ in ' + key)
     shards = sorted(m.get('shard') for m in metas)
     if len(set(shards)) != len(shards):raise SystemExit('a shard appears twice')
     missing = sorted(set(range(metas[0].get('shards') or 0)) - set(shards)) if metas else []
@@ -955,9 +1248,16 @@ def report(inputs, out):
 
 # ---------------------------------------------------------------------------------------------- the real setup
 
+@dataclass
+class EmptyShard:
+    """A shard with no games (more shards than games): its full run metadata, for report."""
+    meta: dict
+
+
 def build_setup(args):
     """The offline path's own preparation: v2_fused.prepare(--config), the champion binding, the block's games and its
-    swapped copy (v2_search_head_to_head.main), make_step, and Search's source/materializer/executor/recipes."""
+    swapped copy (v2_search_head_to_head.main), make_step, and Search's source/materializer/executor/recipes.
+    An empty shard returns EmptyShard with the same metadata."""
     import jax
     import jax.numpy as j
     from pokezero import v5_gumbel as original
@@ -974,7 +1274,11 @@ def build_setup(args):
     games, roots = batch.games, batch.gender_root_ids
     if args.max_games:games, roots = games[:args.max_games], (None if roots is None else roots[:args.max_games])
     picked = shard_games(tuple(range(len(games))), args.shard, args.shards)
-    if not picked:return None
+    meta = dict(shard=args.shard, shards=args.shards, config=args.config, config_sha256=context['declared'].get('config_sha256'),
+        iteration=args.iteration, block=args.block, max_games=args.max_games, games=list(picked), world_blocks=args.world_blocks,
+        search_seed=args.search_seed, sample_decisions=getattr(args, 'sample_decisions', None), champion=record.evaluator,
+        sampling_seed=batch.sampling_seed, max_requests=plan.max_requests, backend=jax.default_backend())
+    if not picked:return EmptyShard(meta)
     batch = replace(batch, games=tuple(games[g] for g in picked), gender_root_ids=None if roots is None else tuple(roots[g] for g in picked))
     swapped = replace(batch, games=tuple(replace(g, stream_id=g.stream_id - SWAP_OFFSET, battle_id=g.battle_id + '-swap') for g in batch.games))
     def fresh():
@@ -989,12 +1293,8 @@ def build_setup(args):
     executor = teacher.make_executor(prepared.engine_tables, prepared.observation_tables, enable_device_teacher=True)
     recipes = tuple(original.Recipe(s) for s in h2h.world_block_seeds(args.search_seed, args.world_blocks))
     n = len(picked)
-    meta = dict(shard=args.shard, shards=args.shards, config=args.config, config_sha256=context['declared'].get('config_sha256'),
-        iteration=args.iteration, block=args.block, max_games=args.max_games, games=list(picked), world_blocks=args.world_blocks,
-        search_seed=args.search_seed, champion=record.evaluator, sampling_seed=batch.sampling_seed, max_requests=plan.max_requests,
-        backend=jax.default_backend())
     return Setup(executor, source, materializer, recipes, decide, apply, (params, params), np.repeat(np.asarray([0, 1], np.int32), n),
-        np.tile(np.asarray(picked, np.int32), 2), np.repeat(np.asarray([0, 1], np.int32), n), fresh, meta)
+        np.tile(np.asarray(picked, np.int32), 2), np.repeat(np.asarray([0, 1], np.int32), n), fresh, meta, forward=evaluator)
 
 
 def main(argv=None):
@@ -1024,12 +1324,14 @@ def main(argv=None):
     if not args.champion_archive:run.error('the champion flags are required (--champion-archive, --champion-archive-sha256, --champion-checkpoint-sha256)')
     if not 0 < args.sample_rate <= 1 or args.sample_decisions < 1 or args.world_blocks < 1:run.error('0 < --sample-rate <= 1, positive counts')
     if Path(args.out).exists():run.error('--out must be a new directory')
-    setup = build_setup(args)
-    if setup is None:
-        Path(args.out).mkdir(parents=True);(Path(args.out) / 'positions.jsonl').write_text('')
-        write_summary(args.out, [], [dict(shard=args.shard, shards=args.shards, config=args.config, games=[], steps=0)]);return 0
-    run_shard(setup, args.out, max_steps=args.max_steps, quota=shard_quota(args.sample_decisions, args.shards),
-        sample_rate=args.sample_rate, sample_seed=args.sample_seed, policy=args.policy)
+    setup = build_setup(args);quota = shard_quota(args.sample_decisions, args.shards)
+    if isinstance(setup, EmptyShard):
+        out = Path(args.out);out.mkdir(parents=True);(out / 'positions.jsonl').write_text('')
+        write_summary(out, [], [dict(setup.meta, steps=0, owner_decisions_seen=0, decisions_checked=0, quota=quota, quota_reached_at_step=None,
+            sample_rate=args.sample_rate, sample_seed=args.sample_seed, policy=args.policy, timing={})])
+        return 0
+    run_shard(setup, args.out, max_steps=args.max_steps, quota=quota, sample_rate=args.sample_rate, sample_seed=args.sample_seed,
+        policy=args.policy)
     return 0
 
 

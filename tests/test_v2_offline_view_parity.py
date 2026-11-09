@@ -184,7 +184,7 @@ def smoke_setup(f, *, games, shard, shards, world_blocks=1, step_cache=None):
     return parity.Setup(executor, f.compiled, f.materializer, recipes, step[0], step[1], (params, params),
         np.repeat(np.asarray([0, 1], np.int32), n), np.tile(np.asarray(picked, np.int32), 2), np.repeat(np.asarray([0, 1], np.int32), n),
         fresh, dict(shard=shard, shards=shards, config='synthetic', config_sha256='0' * 64, iteration=1, block=0, max_games=len(games),
-            games=list(picked), world_blocks=world_blocks, search_seed=2026110500))
+            games=list(picked), world_blocks=world_blocks, search_seed=2026110500), forward=scripted_forward)
 
 
 # ---------------------------------------------------------------------------------------------- pure pieces
@@ -288,7 +288,11 @@ class DiffAlignTests(unittest.TestCase):
         self.assertEqual(sorted(d['keys']), sorted(['field:numeric:SELF_HAZARD_CREDIT', 'opponent:categorical:TYPE_1', 'legal:legal:lane_6', 'own:attention:']))
         self.assertEqual(parity._class_of('field:numeric:SELF_HAZARD_CREDIT'), 'peer_belief_columns')
         self.assertEqual(parity._class_of('own:categorical:TYPE_1'), 'types')
-        self.assertEqual(parity._class_of('legal:legal:lane_6'), 'carry_fields')
+        self.assertEqual(parity._class_of('legal:legal:lane_6'), 'legal')   # no cause known: its own bucket
+        self.assertEqual(parity._class_of('legal:legal:lane_1/pp'), 'peer_belief_columns')
+        self.assertEqual(parity._class_of('legal:legal:lane_5/trap'), 'carry_fields')
+        self.assertEqual(parity._class_of('legal:legal:lane_5/foe_ability_trap'), 'legal')
+        self.assertEqual(parity.with_causes(d, {6: 'pp'})['keys'][1], 'legal:legal:lane_6/pp')
         self.assertEqual(parity._class_of('move_actions:numeric:MOVE_PP_FRACTION'), 'peer_belief_columns')
         self.assertEqual(parity._class_of('own:numeric:ACTUAL_ATK'), 'other')
         self.assertNotIn('token_type', parity.serial(d));self.assertEqual(parity.serial(d)['numeric']['count'], 1)
@@ -463,7 +467,12 @@ class EndToEndSmokeTest(unittest.TestCase):
         # Self-checks: the pricer's views re-encode decide's observations; the Request's root inputs are the actor's own.
         self.assertEqual(merged['self_check']['owner_reencode_mismatch'], 0);self.assertEqual(merged['self_check']['foe_reencode_mismatch'], 0)
         self.assertEqual(merged['self_check']['true_world_notes'], {})
-        self.assertEqual(merged['root_source']['inputs_mismatch'], 0);self.assertEqual(merged['root_source']['legal_mismatch'], 0)
+        self.assertEqual(merged['root_source']['structural'], dict(inputs_mismatch=0, legal_mismatch=0))
+        forward = merged['root_source']['forward']   # the scripted forward on the Request's inputs re-derives decide's logits
+        self.assertEqual((forward['checked'], forward['equal'], forward['above_tolerance']), (merged['decisions'], merged['decisions'], 0))
+        self.assertEqual(merged['self_check']['materializer_public_differs'], 0)
+        self.assertEqual({k: v['worlds'] for k, v in merged['owner']['classes'].items()}, {k: 0 for k in parity.OWNER_CLASSES})
+        self.assertEqual(merged['owner']['would_be_pre_refused'], 0)
         # Owner worlds of a consistent game are exact and admitted (pre code 0).
         self.assertGreater(merged['owner']['compared'], 0);self.assertEqual(merged['owner']['exact'], merged['owner']['compared'])
         self.assertEqual(set(merged['owner']['pre_codes']), {'0'})
@@ -483,7 +492,13 @@ class EndToEndSmokeTest(unittest.TestCase):
                 self.assertEqual(p['peer']['order_only'], bool(p['peer']['order_keys']))
         self.assertGreater(peer['order_only'], 0);self.assertEqual(peer['order_and_other'], 0)
         self.assertEqual(merged['classes']['peer_order']['verdict'], 'PRESENT')
-        for name in ('types', 'root_source', 'peer_belief_columns', 'carry_fields'):self.assertEqual(merged['classes'][name]['verdict'], 'ABSENT', name)
+        for name in ('types', 'root_source'):self.assertEqual(merged['classes'][name]['verdict'], 'ABSENT', name)
+        # No Baton Pass, Trace, lock, trap, Pressure PP, hazard, toxic or sleep-clause state in this game: not ABSENT.
+        for name in ('peer_belief_columns', 'carry_fields'):self.assertEqual(merged['classes'][name]['verdict'], 'NOT_EXERCISED', name)
+        self.assertTrue(all(r['verdict'] == 'NOT_EXERCISED' for r in merged['classes']['carry_fields']['evidence']['mechanisms'].values()))
+        # History: no member re-entered before the scripted 2 -> 0, which is a back-switch.
+        self.assertTrue(all(p['history']['foe']['back_switched'] == (p['order']['real'][:3] == [0, 2, 1]) for p in positions if p['step'] < 7))
+        self.assertGreater(merged['order']['foe_back_switched'], 0)
         self.assertGreater(peer['move_order_permuted'], 0)
         self.assertIn('Five-class verdict', parity.render(merged))
 
@@ -521,7 +536,102 @@ class PlantedDefectSmokeTest(unittest.TestCase):
         self.assertNotIn('0', summary['owner']['pre_codes'])   # every recipe world would be pre-refused by the pricer
         cells = {x['cell'] for x in summary['classes']['peer_belief_columns']['evidence']['cells']}
         self.assertIn('move_actions:numeric:MOVE_PP_FRACTION', cells)
-        self.assertTrue(any(x['cell'].startswith('legal:') for x in summary['classes']['carry_fields']['evidence']['cells']))
+        self.assertTrue(any(x['cell'].startswith('legal:') and x['cell'].endswith('/trap') for x in summary['classes']['carry_fields']['evidence']['cells']))
+        # The zeroed shown types are a materializer public-data defect: the world public differs from the re-based one.
+        self.assertGreater(summary['self_check']['materializer_public_differs'], 0)
+        self.assertEqual(set(summary['self_check']['materializer_public_fields']), {'shown_types'})
+        self.assertGreater(summary['owner']['classes']['types']['worlds'], 0)
+        trapped = summary['classes']['carry_fields']['evidence']['mechanisms']['peer.trapped']
+        self.assertEqual(trapped['verdict'], 'NOT_EXERCISED')   # the planted trap is in the world, not in the real game
+
+
+def position(*, peer='compared', peer_keys=(), owner_worlds=(), peer_mechanisms=(), owner_mechanisms=()):
+    """A minimal positions.jsonl record for the summary's mechanism logic."""
+    aligned = dict(total=len(peer_keys), keys=sorted(peer_keys))
+    kind = dict(compared='compared', refused='refused', not_requested='not_requested')[peer]
+    return dict(owner_check=dict(worlds=[dict(w, refusal=w.get('refusal'), total=len(w.get('keys', ())), keys=list(w.get('keys', ())),
+            aligned_keys=list(w.get('keys', ())), classes=sorted({parity._class_of(k) for k in w.get('keys', ())}), pre=0) for w in owner_worlds]),
+        peer=dict(status='compared' if peer == 'compared' else 'skipped', kind=kind, reason=None if peer == 'compared' else kind, aligned=aligned),
+        mechanisms=dict(peer={m: True for m in peer_mechanisms}, owner={m: True for m in owner_mechanisms}))
+
+
+class MechanismVerdictTests(unittest.TestCase):
+    def test_per_mechanism_verdicts_count_only_compared_decisions(self):
+        P = [position(peer='refused', peer_mechanisms=('baton_pass',)),                         # exercised but refused
+             position(peer='not_requested', peer_mechanisms=('baton_pass',)),                   # exercised, foe not requested
+             position(peer_mechanisms=('trace',)),                                              # compared clean
+             position(peer_mechanisms=('trapped',), peer_keys=('legal:legal:lane_4/trap',)),    # compared with a carry difference
+             position(owner_worlds=[dict(world='b0w0', refusal='suspended/replacement')], owner_mechanisms=('baton_pass',))]
+        table = parity.mechanism_table(P, 'peer', parity.CARRY_MECHANISMS, 'carry_fields')
+        self.assertEqual(table['baton_pass'], dict(sampled=2, compared=0, refused=1, not_requested=1, with_class_differences=0,
+            with_any_differences=0, verdict='NOT_EXERCISED'))
+        self.assertEqual(table['trace']['verdict'], 'ABSENT');self.assertEqual(table['trapped']['verdict'], 'PRESENT')
+        self.assertEqual(table['choice_lock']['verdict'], 'NOT_EXERCISED')
+        owner = parity.mechanism_table(P, 'owner', parity.CARRY_MECHANISMS, 'carry_fields')
+        self.assertEqual((owner['baton_pass']['sampled'], owner['baton_pass']['compared'], owner['baton_pass']['refused']), (1, 0, 1))
+        self.assertEqual(owner['baton_pass']['verdict'], 'NOT_EXERCISED')
+        # Class verdicts: no difference with some mechanisms never compared is not ABSENT.
+        clean = {k: v for k, v in table.items() if k != 'trapped'}
+        self.assertEqual(parity.class_verdict(0, clean, 3), 'ABSENT_WHERE_EXERCISED')
+        self.assertEqual(parity.class_verdict(0, {'trace': dict(verdict='ABSENT')}, 3), 'ABSENT')
+        self.assertEqual(parity.class_verdict(0, {'baton_pass': dict(verdict='NOT_EXERCISED')}, 3), 'NOT_EXERCISED')
+        self.assertEqual(parity.class_verdict(0, {'trace': dict(verdict='ABSENT')}, 0), 'NOT_EXERCISED')
+        self.assertEqual(parity.class_verdict(1, clean, 3), 'PRESENT')
+
+    def test_history_back_switch_and_baton_pass(self):
+        h = parity.History(np.zeros((1, 2), np.int32))
+        no = np.zeros((1, 2), bool)
+        h.update(np.asarray([[0, 3]]), no);self.assertEqual(h.flags(0, 1)['back_switched'], False)   # first entry out of party order
+        h.update(np.asarray([[0, 3]]), np.asarray([[False, True]]))                                   # side 1 passes: replacement pending
+        h.update(np.asarray([[0, 2]]), no);f = h.flags(0, 1)
+        self.assertEqual((f['back_switched'], f['baton_in'], f['switch_ins'], f['ever_active']), (False, True, 2, [0, 2, 3]))
+        h.update(np.asarray([[0, 3]]), no);f = h.flags(0, 1)
+        self.assertEqual((f['back_switched'], f['baton_in']), (True, False))
+        self.assertEqual(h.flags(0, 0)['switch_ins'], 0)
+
+    def test_legal_causes(self):
+        def state(**cells):
+            base = dict(pp=np.full((1, 2, 6, 4), 5), disabled=np.zeros((1, 2, 6, 4), bool), moves=np.ones((1, 2, 6, 4), np.int32),
+                choice_move=np.zeros((1, 2, 6), np.int32), encore_move=np.zeros((1, 2, 6), np.int32), charge_move=np.zeros((1, 2, 6), np.int32),
+                hp=np.full((1, 2, 6), 50), trap_source=np.full((1, 2, 6), -1), volatile=np.zeros((1, 2, 6), np.uint32),
+                trapped=np.zeros((1, 2), bool), ability=np.ones((1, 2, 6), np.int32), active=np.zeros((1, 2), np.int32))
+            for k, v in cells.items():base[k] = v
+            return SimpleNamespace(**base)
+        real = state();order = [0, 2, 1, 3, 4, 5]
+        pp = real.pp.copy();pp[0, 1, 0, 2] = 0
+        hp = real.hp.copy();hp[0, 1, 2] = 0
+        trapped = np.asarray([[False, True]])
+        ability = real.ability.copy();ability[0, 0, 0] = 9
+        self.assertEqual(parity.legal_causes([2], state(pp=pp), real, 1, order, 0), {2: 'pp'})
+        self.assertEqual(parity.legal_causes([4], state(hp=hp), real, 1, order, 0), {4: 'hp'})   # lane 4 is member 2 in [0, 2, 1, ...]
+        self.assertEqual(parity.legal_causes([5], state(trapped=trapped), real, 1, order, 0), {5: 'trap'})
+        self.assertEqual(parity.legal_causes([6], state(ability=ability), real, 1, order, 0), {6: 'foe_ability_trap'})
+        self.assertEqual(parity.legal_causes([7, 1], real, real, 1, order, 0), {7: 'unknown', 1: 'unknown'})
+
+    def test_zeroed_types_count_the_full_arrays(self):
+        a = obs(3);b = {k: np.array(v, copy=True) for k, v in a.items()}
+        a['categorical_ids'][1:13, 4:6] = 0;b['categorical_ids'][1:13, 4:6] = 7
+        a['numeric_features'] += 1   # more than CELL_CAP numeric cells: the type count must not depend on the listing cap
+        d = parity.diff(a, b)
+        self.assertEqual(d['zeroed_types'], 24);self.assertEqual(parity._zeroed_types(parity.serial(d)), 24)
+        self.assertEqual(len(d['numeric']['cells']), parity.CELL_CAP)
+
+
+class ReportTests(unittest.TestCase):
+    def shard(self, root, name, shard, **meta):
+        out = Path(root) / name;out.mkdir();(out / 'positions.jsonl').write_text('')
+        parity.write_summary(out, [], [dict(dict(shard=shard, shards=2, config_sha256='c', sample_rate=.2, champion={'iteration': 9375},
+            games=[], steps=0), **meta)])
+        return out
+
+    def test_empty_shards_merge_and_mismatches_refuse(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            a, b = self.shard(tmp, 'a', 0), self.shard(tmp, 'b', 1)
+            merged = parity.report([a, b], Path(tmp) / 'merged')
+            self.assertEqual(merged['decisions'], 0);self.assertEqual(merged['classes']['carry_fields']['verdict'], 'NOT_EXERCISED')
+            for key, value in (('sample_rate', .3), ('champion', {'iteration': 1}), ('config_sha256', 'd')):
+                other = self.shard(tmp, 'other-' + key, 1, **{key: value})
+                with self.assertRaisesRegex(SystemExit, key):parity.report([a, other], Path(tmp) / ('m-' + key))
 
 
 class CommandLineTests(unittest.TestCase):
@@ -532,6 +642,14 @@ class CommandLineTests(unittest.TestCase):
             flags = ['--champion-archive', 'a.npz', '--champion-archive-sha256', 'a' * 64, '--champion-checkpoint-sha256', 'b' * 64]
             with self.assertRaises(SystemExit):parity.main(['run', '--config', 'c.json', '--out', tmp] + flags)   # exists
             with self.assertRaises(SystemExit):parity.main(['run', '--config', 'c.json', '--out', str(Path(tmp) / 'o'), '--sample-rate', '0'] + flags)
+            # An empty shard writes the full run metadata report checks.
+            meta = dict(shard=3, shards=4, config='c.json', config_sha256='s', iteration=1, block=0, max_games=3, games=[], world_blocks=4,
+                search_seed=7, sample_decisions=100, champion={'iteration': 9375})
+            with patch.object(parity, 'build_setup', return_value=parity.EmptyShard(meta)):
+                self.assertEqual(parity.main(['run', '--config', 'c.json', '--out', str(Path(tmp) / 'e'), '--shard', '3', '--shards', '4',
+                    '--sample-rate', '.2', '--sample-decisions', '100'] + flags), 0)
+            run = json.loads((Path(tmp) / 'e' / 'summary.json').read_text())['runs'][0]
+            self.assertTrue(set(parity.REPORT_KEYS) <= set(run));self.assertEqual((run['sample_rate'], run['quota'], run['steps']), (.2, 25, 0))
 
 
 class BuildSetupTests(unittest.TestCase):
@@ -584,7 +702,9 @@ class BuildSetupTests(unittest.TestCase):
         with patch.object(v2_fused, 'prepare', return_value=dict(plan=plan, prepared=prepared, pool='pool', gender='g', declared={})), \
                 patch.object(h2h, 'champion_setup', return_value=('evaluator', SimpleNamespace(evaluator={}), 'params')), \
                 patch.object(v5_device_backend, 'RuntimeBackend', Backend):
-            self.assertIsNone(parity.build_setup(replace_ns(args, max_games=1, shard=1)))
+            empty = parity.build_setup(replace_ns(args, max_games=1, shard=1))
+        self.assertIsInstance(empty, parity.EmptyShard);self.assertEqual(empty.meta['games'], [])
+        self.assertTrue(set(parity.REPORT_KEYS) - {'sample_rate', 'sample_seed', 'policy'} <= set(empty.meta))
 
 
 def parity_swap():
