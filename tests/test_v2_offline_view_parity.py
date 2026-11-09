@@ -150,13 +150,17 @@ SCRIPT = {1: 4, 2: 5, 3: 4}   # public turn -> preferred request lane (switch la
 
 def scripted_forward(params, inputs):
     """Logits keyed by the public turn (TURN_COUNT = turn / 1000): turns 1-3 switch 0 -> 1 -> 2 -> 0 (lanes 4, 5, 4 in
-    request order), later turns use move 0. Sharp enough that sampling follows it whenever the lane is legal."""
-    from gpu_engine import v5_model
-    x = inputs['numeric_features'][:, 0];n = x.shape[0]
-    from gpu_engine import engine_device_observation as encoder
+    request order) at logit 30, so sampling follows the script; later turns prefer move 0 at logit 3 only, so the
+    remaining lanes keep real mass. Two POSITIONAL terms make the policy depend on bench order, as a network with
+    request-slot features may: move 0 reads the own token at request position 1 and switch lane 0 the one at position 2
+    (their BASE_ATK). An identity-aligned comparison of two bench orders therefore shows a nonzero effect."""
+    from gpu_engine import v5_model, engine_device_observation as encoder
+    x = inputs['numeric_features'][:, 0];n = x.shape[0];atk = encoder._index('BASE_ATK')
     turn = j.round(x[:, 0, encoder._index('TURN_COUNT')] * 1000).astype(j.int32)
     lane = j.select([turn == t for t in SCRIPT], [j.full(n, v, j.int32) for v in SCRIPT.values()], j.zeros(n, j.int32))
-    logits = 30. * (j.arange(9)[None, :] == lane[:, None]) + 0. * params['w']
+    sharp = j.where((turn >= 1) & (turn <= 3), 30., 3.)
+    logits = sharp[:, None] * (j.arange(9)[None, :] == lane[:, None]) + 0. * params['w']
+    logits = logits.at[:, 0].add(2. * x[:, 2, atk]).at[:, 4].add(3. * x[:, 3, atk])
     return v5_model.Output(logits.astype(j.float32), j.zeros(n, j.float32), None, j.ones(n, bool))
 
 
@@ -483,7 +487,7 @@ class EndToEndSmokeTest(unittest.TestCase):
         self.assertGreater(peer['redactions']['foe_hp_public_percent']['cells'], 0)
         self.assertEqual(sum(r['introduced_cells'] for r in peer['redactions'].values()), 0)
         # The scripted 0 -> 1 -> 2 -> 0 makes the foe order [0, 2, 1, ...]: a back-switch, order-only in the peer view.
-        flagged = [p for p in positions if p['order']['differs_real_coords']]
+        flagged = [p for p in positions if p['order']['differs_real_coords'] and p['step'] <= 3]   # the scripted steps
         self.assertTrue(flagged)
         self.assertTrue(all(p['order']['real'][:3] == [0, 2, 1] for p in flagged))
         for p in positions:
@@ -497,10 +501,30 @@ class EndToEndSmokeTest(unittest.TestCase):
         for name in ('peer_belief_columns', 'carry_fields'):self.assertEqual(merged['classes'][name]['verdict'], 'NOT_EXERCISED', name)
         self.assertTrue(all(r['verdict'] == 'NOT_EXERCISED' for r in merged['classes']['carry_fields']['evidence']['mechanisms'].values()))
         # History: no member re-entered before the scripted 2 -> 0, which is a back-switch.
-        self.assertTrue(all(p['history']['foe']['back_switched'] == (p['order']['real'][:3] == [0, 2, 1]) for p in positions if p['step'] < 7))
+        self.assertTrue(all(p['history']['foe']['back_switched'] == (p['order']['real'][:3] == [0, 2, 1]) for p in positions if p['step'] <= 3))
         self.assertGreater(merged['order']['foe_back_switched'], 0)
         self.assertGreater(peer['move_order_permuted'], 0)
         self.assertIn('Five-class verdict', parity.render(merged))
+        # Reply-prior effect: identical inputs give KL 0 (control row, repeated forward); a bench permutation does not.
+        effect = merged['peer_order_effect'];groups = {g['group']: g for g in effect['groups']}
+        self.assertEqual(effect['decisions'], peer['compared'])
+        self.assertLessEqual(groups['control: no order and no residual cells']['primary']['kl_max'], 1e-12)
+        self.assertGreater(groups['control: no order and no residual cells']['primary']['n'], 0)
+        self.assertLessEqual(effect['noise_floor']['repeat_forward']['kl_max'], 1e-12)
+        self.assertEqual(effect['noise_floor']['repeat_forward']['n'], peer['compared'])
+        self.assertGreater(groups['order-caused cells present (with or without residual)']['primary']['kl_max'], 1e-3)
+        headline = effect['headline']['primary'];self.assertEqual(effect['headline']['group'], parity.EFFECT_GROUPS[0][0])
+        self.assertEqual(headline['n'], peer['order_only']);self.assertGreater(headline['kl_max'], 1e-3)
+        self.assertEqual((headline['nonfinite'], headline['excluded_support_differs']), (0, 0))
+        self.assertEqual(effect['support_differs']['primary']['n'], 0)
+        self.assertEqual(groups['all compared']['primary']['support_differs'], 0)
+        self.assertEqual(merged['residual']['decisions'], 0)
+        for p in positions:
+            if p['peer']['status'] == 'compared':
+                e = p['peer']['effect']['primary'];self.assertAlmostEqual(sum(e['pa']), 1., places=5)
+                self.assertEqual(len(p['peer']['effect']['identities']), 9)
+                if not p['peer']['order_keys'] and not p['peer']['aligned']['total']:self.assertEqual(e['pa'], e['pb'])
+        self.assertIn('Reply-prior effect of the peer order', parity.render(merged))
 
 
 def planted(materialize):
@@ -615,6 +639,159 @@ class MechanismVerdictTests(unittest.TestCase):
         d = parity.diff(a, b)
         self.assertEqual(d['zeroed_types'], 24);self.assertEqual(parity._zeroed_types(parity.serial(d)), 24)
         self.assertEqual(len(d['numeric']['cells']), parity.CELL_CAP)
+
+
+class EffectTests(unittest.TestCase):
+    def test_kl_tv_and_top1_flip_on_aligned_distributions(self):
+        legal = np.asarray([True, True] + [False] * 7)
+        a = np.asarray([0., np.log(3.)] + [5.] * 7);b = np.zeros(9)   # a: (.25, .75) on the legal lanes, b: (.5, .5)
+        e = parity.effect(a, legal, b, legal)
+        self.assertAlmostEqual(e['kl'], .5 * np.log(4 / 3), places=12)
+        self.assertAlmostEqual(e['tv'], .25, places=12);self.assertAlmostEqual(e['max_abs_dp'], .25, places=12)
+        self.assertTrue(e['top1_flip']);self.assertEqual((e['top_a'], e['top_b']), (1, 0))   # b ties at lanes 0/1: lowest lane
+        self.assertEqual(e['legal'], 2);self.assertFalse(e['support_differs'])
+        self.assertEqual(e['pa'][2:], [0.] * 7)
+        same = parity.effect(a, legal, a, legal)
+        self.assertEqual((same['kl'], same['tv'], same['top1_flip'], same['max_abs_dp']), (0., 0., False, 0.))
+        # Different legal sets: compared on the common lanes, flagged.
+        wide = legal.copy();wide[4] = True
+        e = parity.effect(a, wide, b, legal);self.assertTrue(e['support_differs']);self.assertAlmostEqual(e['kl'], .5 * np.log(4 / 3), places=12)
+        self.assertIsNone(parity.effect(a, legal, b, ~legal))
+        self.assertTrue(np.isneginf(parity.masked_log_softmax([1., 2.], [True, False])[1]))
+
+    def test_switch_lanes_align_across_a_permuted_bench(self):
+        real_order, rule = [0, 2, 1, 3, 4, 5], parity.rule_order(0)
+        perm = parity.lane_permutation(rule, real_order, 0)
+        self.assertEqual(perm, [0, 1, 2, 3, 5, 4, 6, 7, 8])
+        # The same mapping as align() on the legal lanes, also for a non-front active and a move-slot map.
+        base = obs(4)
+        for world_order, order, active, moves in ((rule, real_order, 0, None), ([3, 0, 1, 2, 4, 5], [3, 1, 2, 0, 4, 5], 3, {0: 2, 1: 0, 2: 1, 3: 3})):
+            perm = parity.lane_permutation(world_order, order, active, move_map=moves)
+            np.testing.assert_array_equal(parity.align(base, world_order, order, active, move_map=moves)['legal_action_mask'],
+                base['legal_action_mask'][perm])
+            # Each real switch lane's member is the world lane's member.
+            world_members, real_members = parity.switch_members(world_order, active), parity.switch_members(order, active)
+            self.assertEqual([world_members[perm[4 + i] - 4] for i in range(5)], real_members)
+
+    def test_zero_order_difference_control_and_an_equivariant_policy(self):
+        rng = np.random.default_rng(5);logits = rng.normal(size=9);legal = rng.random(9) < .7;legal[[0, 4, 5]] = True   # lanes 4/5 swap below
+        e = parity.effect(logits, legal, logits, legal)
+        self.assertEqual((e['kl'], e['tv'], e['top1_flip']), (0., 0., False))
+        # A policy that follows members, not request positions: the world's lanes are the real ones permuted; aligned, KL 0.
+        real_order, rule = [0, 2, 1, 3, 4, 5], parity.rule_order(0);perm = parity.lane_permutation(rule, real_order, 0)
+        world_logits, world_legal = np.empty(9), np.empty(9, bool)
+        world_logits[perm], world_legal[perm] = logits, legal
+        e = parity.effect(world_logits[perm], world_legal[perm], logits, legal)
+        self.assertEqual((e['kl'], e['top1_flip']), (0., False))
+        # Unaligned, the same policy differs whenever the permuted lanes carry different mass.
+        self.assertGreater(parity.effect(world_logits, world_legal, logits, legal)['tv'], 0)
+
+    def test_effect_summary_groups(self):
+        def p(kl, *, back, rule, order, residual=0):
+            e = dict(kl=kl, tv=kl / 2, top1_flip=kl > .5, max_abs_dp=kl / 3, support_differs=False, top_a=0, top_b=1 if kl > .5 else 0,
+                top_a_identity='x', top_b_identity='y')
+            return dict(stream=1, frame=2, owner=0, turn=3, history=dict(foe=dict(back_switched=back)), order=dict(differs_real_coords=rule),
+                peer=dict(status='compared', order_keys=['own:numeric:HP_FRACTION'] if order else [], aligned=dict(total=residual),
+                    effect=dict(primary=e, layout=e, noise=dict(kl=0., tv=0., top1_flip=False, max_abs_dp=0.))))
+        P = [p(0., back=False, rule=False, order=False), p(.2, back=True, rule=True, order=True), p(.9, back=True, rule=True, order=True),
+             p(.1, back=False, rule=True, order=True, residual=2)]
+        s = parity.summarize_effect(P);groups = {g['group']: g['primary'] for g in s['groups']}
+        self.assertEqual(groups['all compared']['n'], 4);self.assertEqual(groups['foe back-switched']['n'], 2)
+        self.assertAlmostEqual(groups['foe back-switched']['kl_median'], .55);self.assertEqual(groups['foe back-switched']['top1_flip_share'], .5)
+        self.assertEqual(groups['control: no order and no residual cells']['n'], 1);self.assertEqual(groups['control: no order and no residual cells']['kl_max'], 0.)
+        self.assertEqual(groups['residual cells after alignment (any class)']['n'], 1);self.assertEqual(len(s['top1_flips']), 1)
+        self.assertEqual(s['noise_floor']['repeat_forward']['kl_max'], 0.)
+
+    def test_residual_member_detail_and_classification(self):
+        vocab = dict(species=('', 'kecleon', 'castform', 'ditto', 'porygon2'), moves=('', 'tackle', 'transform', 'conversion'),
+            abilities=('', 'colorchange', 'forecast', 'limber', 'trace'), items=('', 'leftovers'), types=('', 'normal', 'water', 'fire'))
+        z = lambda *shape:np.zeros((1, 2) + shape, np.int32)
+        st = SimpleNamespace(species=z(6), ability=z(6), base_ability=z(6), item=z(6), moves=z(6, 4), last_move=z(6), types=z(6, 2), base_types=z(6, 2))
+        for p, (sp, ab, mv) in enumerate(((1, 1, 1), (2, 2, 1), (3, 3, 2), (4, 4, 3))):
+            st.species[0, 1, p] = sp;st.ability[0, 1, p] = st.base_ability[0, 1, p] = ab;st.moves[0, 1, p, 0] = mv
+            st.types[0, 1, p, 0] = 2;st.base_types[0, 1, p, 0] = 1
+        world = SimpleNamespace(**{k: np.array(v, copy=True) for k, v in vars(st).items()});world.types[0, 1, :, 0] = 1
+        clone = SimpleNamespace(physical_to_public=np.asarray([[[0, -1, -1, -1, -1, -1], [0, 1, 2, 3, -1, -1]]]),
+            shown_types=np.zeros((1, 2, 6, 2), np.int32), last_moves=np.zeros((1, 2, 6), np.int32))
+        order = [0, 1, 2, 3, 4, 5]
+        exact = {('categorical', 1 + p, 4) for p in range(4)} | {('numeric', 0, 5)}
+        out = parity.describe_residual(exact, st, world, clone, 1, order, vocab)
+        kinds = [x.get('classification') for x in out if x['section'] == 'own']
+        self.assertEqual(kinds, ['color_change', 'forecast', 'transform_residue', 'conversion'])
+        first = next(x for x in out if x['token'] == 1)
+        self.assertEqual((first['species'], first['real_types'], first['world_types'], first['cells']), ('kecleon', ['water', ''], ['normal', ''], ['own:categorical:TYPE_1']))
+        self.assertNotIn('classification', next(x for x in out if x['token'] == 0))
+
+
+def effect_position(kl, *, back=False, order=True, residual=0, support_differs=False, dropped=None, flip=False):
+    """A compared positions.jsonl record carrying only what summarize_effect reads (dropped=None: a 7cef1753 record)."""
+    e = dict(kl=kl, tv=abs(kl) / 2 if np.isfinite(kl) else kl, top1_flip=flip, max_abs_dp=abs(kl) / 3 if np.isfinite(kl) else kl,
+        support_differs=support_differs, top_a=0, top_b=1 if flip else 0, top_a_identity='switch:p1', top_b_identity='switch:p2',
+        pa=[.5, .5], pb=[.5, .5])
+    if dropped is not None:e.update(dropped_b=dropped[0], dropped_a=dropped[1])
+    return dict(stream=1, frame=2, owner=0, turn=3, history=dict(foe=dict(back_switched=back)), order=dict(differs_real_coords=order),
+        peer=dict(status='compared', order_only=order and not residual, order_keys=['own:numeric:HP_FRACTION'] if order else [],
+            aligned=dict(total=residual), effect=dict(primary=e, layout=dict(e), noise=dict(kl=0., tv=0., top1_flip=False, max_abs_dp=0.))))
+
+
+class EffectReportTests(unittest.TestCase):
+    """report-side fixes, all from positions.jsonl as written by 7cef1753 (no new field needed except the dropped mass)."""
+    def test_order_only_headline_splits_by_back_switch(self):
+        P = [effect_position(.4, back=True), effect_position(.2, back=False),            # order only
+             effect_position(.9, back=True, residual=2),                                   # order and a residual (e.g. Color Change)
+             effect_position(0., order=False)]                                             # control
+        s = parity.summarize_effect(P);groups = {g['group']: g['primary'] for g in s['groups']}
+        self.assertEqual(s['headline']['group'], 'order only (headline): order-caused cells, no residual cells')
+        self.assertEqual(s['headline']['primary']['n'], 2);self.assertAlmostEqual(s['headline']['primary']['kl_max'], .4)
+        self.assertEqual(groups['order only, foe back-switched']['n'], 1);self.assertAlmostEqual(groups['order only, foe back-switched']['kl_max'], .4)
+        self.assertEqual(groups['order only, no foe back-switch']['n'], 1)
+        self.assertEqual(groups['order-caused cells present (with or without residual)']['n'], 3)
+        self.assertEqual(groups['residual cells after alignment (any class)']['n'], 1)
+        # A record without peer.order_only falls back to order-caused cells and no residual.
+        old = effect_position(.3);del old['peer']['order_only']
+        self.assertEqual(parity.summarize_effect([old])['headline']['primary']['n'], 1)
+
+    def test_support_differs_excluded_with_dropped_mass(self):
+        legal_a = np.asarray([True, True] + [False] * 7);legal_b = legal_a.copy();legal_b[4] = True
+        logits = np.zeros(9);logits[4] = np.log(2.)   # b: lanes 0, 1, 4 at 1/4, 1/4, 1/2
+        e = parity.effect(logits, legal_a, logits, legal_b)
+        self.assertTrue(e['support_differs']);self.assertAlmostEqual(e['dropped_b'], .5, places=12);self.assertEqual(e['dropped_a'], 0.)
+        self.assertEqual(e['kl'], 0.)   # equal on the common lanes
+        same = parity.effect(logits, legal_b, logits, legal_b);self.assertEqual((same['dropped_b'], same['dropped_a']), (0., 0.))
+        P = [effect_position(.1), effect_position(2., support_differs=True, dropped=(.5, 0.)), effect_position(3., support_differs=True)]
+        s = parity.summarize_effect(P);head = s['headline']['primary']
+        self.assertEqual((head['n'], head['excluded_support_differs']), (1, 2));self.assertAlmostEqual(head['kl_max'], .1)
+        row = s['support_differs']['primary']
+        self.assertEqual((row['n'], row['dropped_unavailable']), (2, 1));self.assertEqual((row['dropped_b_max'], row['dropped_a_max']), (.5, 0.))
+        self.assertAlmostEqual(row['kl_max'], 3.)
+        self.assertIn('legal sets differ', parity.render(dict(parity.summarize([], []), peer_order_effect=s)))
+
+    def test_nonfinite_values_are_excluded_and_counted(self):
+        P = [effect_position(.2), effect_position(float('nan')), effect_position(float('inf'), flip=True)]
+        s = parity.summarize_effect(P)
+        for g in s['groups'][:1] + [x for x in s['groups'] if x['group'] == 'all compared']:
+            self.assertEqual((g['primary']['n'], g['primary']['nonfinite']), (1, 2), g['group'])
+            self.assertAlmostEqual(g['primary']['kl_max'], .2);self.assertEqual(g['primary']['top1_flip_share'], 0.)
+        self.assertEqual(s['top1_flips'], [])
+        nan = parity.effect(np.full(9, np.nan), np.ones(9, bool), np.zeros(9), np.ones(9, bool))
+        self.assertFalse(parity._finite_effect(nan))
+        # A NaN in the stored probabilities alone also counts.
+        bad = effect_position(.1);bad['peer']['effect']['primary']['pa'] = [float('nan'), 1.]
+        self.assertEqual(parity.summarize_effect([bad])['headline']['primary']['nonfinite'], 1)
+        # JSON round trip (positions.jsonl writes NaN) keeps the guard working.
+        again = json.loads(json.dumps(P))
+        self.assertEqual(parity.summarize_effect(again)['headline']['primary']['nonfinite'], 2)
+
+    def test_no_common_legal_lane_is_counted_not_dropped(self):
+        # e.g. the world's foe not requested while the real one is: effect() is None; the group counts it apart from n.
+        legal = np.asarray([True] + [False] * 8)
+        self.assertIsNone(parity.effect(np.zeros(9), legal, np.zeros(9), ~legal))
+        lone = effect_position(.1);lone['peer']['effect']['primary'] = None;lone['peer']['effect']['layout'] = None
+        s = parity.summarize_effect([lone, effect_position(.2)]);head = s['headline']['primary']
+        self.assertEqual((head['n'], head['no_common_lane'], head['nonfinite']), (1, 1, 0))
+        self.assertEqual(s['headline']['layout']['no_common_lane'], 1)
+        self.assertEqual({g['group']: g['primary']['no_common_lane'] for g in s['groups']}['all compared'], 1)
+        self.assertIn('no common legal lane: 1', parity.render(dict(parity.summarize([], []), peer_order_effect=s)))
 
 
 class ReportTests(unittest.TestCase):
