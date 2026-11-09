@@ -528,7 +528,9 @@ class MainTests(unittest.TestCase):
                     BASE[:-2] + CHAMPION + run):   # no champion; no warmup file; no sample seed; both selections; the server's default rung
                 with self.subTest(argv=argv), redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):R.options(argv)
             self.assertEqual(R.options(BASE + CHAMPION + ['--run-directory', 'r', '--out', 'o', '--sample', '8', '--sample-seed', '3']).sample_seed, 3)
-            with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):R.options(BASE + CHAMPION + run + ['--reply-archive', 'p.npz'])   # dropped
+            with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):R.options(BASE + CHAMPION + run + ['--reply-archive', 'p.npz'])   # needs its sha256 flags
+            reply = ['--reply-archive', 'p.npz', '--reply-archive-sha256', 'e' * 64, '--reply-checkpoint-sha256', 'f' * 64]   # a br_fp replay (the server's flags)
+            self.assertEqual(R.options(BASE + CHAMPION + run + reply).reply_archive, 'p.npz')
 
     def replay(self, tmp, *extra, header=None, guard=None, peer_off=()):
         """main over a run directory with cell 1001: decisions 0-4, decision 1 single-legal, decision 4 refused by the constructor."""

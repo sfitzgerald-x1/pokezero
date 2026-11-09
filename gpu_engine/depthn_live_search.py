@@ -303,7 +303,7 @@ class DepthNLiveSearch:
             timings=dict.fromkeys(STAGES),
             batch_size=n,bucket=None,
             root_classes=None,root_class=None,root_class_source=None,root_class_crosscheck=None,
-            tree_commit=self.tree_commit,pricer=dict(self.pricer_identity),**({}if self.reply is None else dict(reply_prior=None)))
+            tree_commit=self.tree_commit,pricer=dict(self.pricer_identity),**({}if getattr(self,'reply',None)is None else dict(reply_prior=None)))
 
     @staticmethod
     def _problem(request):
@@ -399,7 +399,7 @@ class DepthNLiveSearch:
             try:blocks=[backups.backup(frame,r,backups.learner_max)for r in root['rows']]   # WorldPrices: averaging's value and logit rules
             except ValueError as error:results.append(dict(base,status='REFUSED',refusal=f'AVERAGING_ERROR: {error}'));continue
             reply=None
-            if self.reply is not None:   # br_fp: the reply model's logits on the same worlds; the champion's averaging is reported
+            if getattr(self,'reply',None)is not None:   # br_fp: the reply model's logits on the same worlds; the champion's averaging is reported
                 item=items[root['request_id']]
                 try:replied,seconds=self.reply.apply(blocks,item.made.worlds,int(item.detached.address.owner))
                 except FATAL:raise
@@ -427,7 +427,7 @@ class DepthNLiveSearch:
             elif result['status']=='COMPLETE':
                 out[i]=dict(base,**{k:result[k]for k in('status','action_index','q_values','completed_q','policy_target','root_value','action_mean_q',
                     'action_policy_target','mean_q_agrees','reduction_note','effect_guard')},decision_seconds=decided,
-                    **({}if self.reply is None else dict(reply_prior=result.get('reply_prior'))))
+                    **({}if getattr(self,'reply',None)is None else dict(reply_prior=result.get('reply_prior'))))
             else:out[i]=dict(base,cause=refusal_cause(result['refusal']),refusal=result['refusal'])
         return out
 

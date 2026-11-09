@@ -169,6 +169,7 @@ def parser():
 
 def options(argv=None):
     p = parser();args = p.parse_args(argv);server.evaluators.check_arguments(p, args);server.check_precision_environment(p, args)
+    server.check_reply_arguments(p, args)   # br_fp replays (--reply-archive with its two sha256 flags), as the server checks them
     if not args.champion_archive:p.error('--champion-archive with its two sha256 flags is required: the champion prices every root and leaf')
     for name in BENCH_ONLY:
         if getattr(args, name, None):p.error(f'--{name.replace("_", "-")} is the bench\'s; cells come from --cells or --sample')

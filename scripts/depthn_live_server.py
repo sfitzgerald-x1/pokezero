@@ -220,13 +220,18 @@ def parser():
     return p
 
 
-def options(argv=None):
-    p=parser();args=p.parse_args(argv);evaluators.check_arguments(p,args);check_precision_environment(p,args)
-    if not args.champion_archive:p.error('--champion-archive with its two sha256 flags is required: the champion prices every root and leaf')
-    reply=[args.reply_archive,args.reply_archive_sha256,args.reply_checkpoint_sha256]
+def check_reply_arguments(p,args):
+    """--reply-archive and its two sha256 flags go together, as 64-hex sha256s (the server's and the re-pricer's options)."""
+    reply=[getattr(args,k,None)for k in('reply_archive','reply_archive_sha256','reply_checkpoint_sha256')]
     if any(reply)and not all(reply):p.error('--reply-archive, --reply-archive-sha256 and --reply-checkpoint-sha256 go together')
     if all(reply)and not all(type(x)is str and len(x)==64 and all(c in'0123456789abcdef'for c in x)for x in reply[1:]):
         p.error('--reply-archive-sha256 and --reply-checkpoint-sha256 must be 64-hex sha256s')
+
+
+def options(argv=None):
+    p=parser();args=p.parse_args(argv);evaluators.check_arguments(p,args);check_precision_environment(p,args)
+    if not args.champion_archive:p.error('--champion-archive with its two sha256 flags is required: the champion prices every root and leaf')
+    check_reply_arguments(p,args)
     if args.max_requests is None:args.max_requests=args.buckets[-1]
     if not 1<=args.max_requests<=args.buckets[-1]:p.error('--max-requests must be in 1..the largest bucket')
     try:   # Codex's own queue/batch checks (phase_d_search_server.Server._initialize), before anything loads or compiles
