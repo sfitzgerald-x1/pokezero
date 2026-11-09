@@ -34,7 +34,7 @@ Was screen-r1's result caused by the broken search inputs, or does search lose t
      - **Facade** when its user has Guts and is brn, par, psn or tox;
      - **Aromatherapy** when the user's party has a non-fainted member with a status.
 
-     Our own items and abilities come from our request. The opponent's come from the public lines; where they are unrevealed, the pool facts apply: Deoxys and Deoxys-Attack hold White Herb (until an item line says otherwise), and every pool Facade user has Guts.
+     Our own items and abilities come from our request. The opponent's White Herb comes from the public lines and the pool facts: Deoxys and Deoxys-Attack hold White Herb until an item line says otherwise. The opponent's Guts is always the pool fact, never read from the lines: every pool Facade user has Guts.
    - **Fail-closed trips:** a root also plays greedy when its turn-2 capture is unavailable (cells expanded without labels) or when its guard inputs could not be read (an error record).
 
    **Unchanged guards:** the opponent-recharge refusal and the own-recharge guard.
@@ -52,9 +52,10 @@ Was screen-r1's result caused by the broken search inputs, or does search lose t
 
    The screen rule, bar, breakage, latency rule, confidence 0.9 and arm fairness are unchanged.
 
-   The verdict command (after the official readout exists):
+   The official readout is computed from a clean checkout of the dispatch commit (`5ca04a4b`), because the panel holds a readout's
+   tree to the run's tree. The verdict then runs from a checkout of this branch, from the repository root, with the root on the path:
    ```
-   python scripts/depthn_screen_amended_verdict.py \
+   PYTHONPATH=src:. python scripts/depthn_screen_amended_verdict.py \
      --readout /out/screen-r2/<readout>.json --readout-sha256 <its sha256> \
      --amendment evals/depthn-foulplay-dn2w16-amendment-unknown-cells-20261108.json --amendment-sha256 c4ff30a25a573f90fdd02957b40fb8307d8b87b56dfbfe60d85ea662b18e8b3b \
      --addendum evals/depthn-foulplay-dn2w16-amendment-harm-mirror-20261108.json --addendum-sha256 dbce9a54223969a213a3e584fd2e01bbe259ebad7530678fbba7cd38ecd9539f \
