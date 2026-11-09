@@ -307,6 +307,24 @@ RW_DEX = SimpleNamespace(move_info=lambda m: SimpleNamespace(name={'hiddenpower'
                                                              max_pp={'hiddenpower': 24, 'toxic': 16}.get(m, 8), target='normal'))
 
 
+class PeerViewRedactionTests(unittest.TestCase):
+    def test_public_percent_matches_showdowns_integer_rule_on_float32_fractions(self):
+        maxhp = np.concatenate([np.full(m + 1, m) for m in range(1, 801)]);hp = np.concatenate([np.arange(m + 1) for m in range(1, 801)])
+        exact = -(-100 * hp // maxhp);exact = np.where((hp < maxhp) & (exact == 100), 99, exact)
+        got = t.public_percent((hp / maxhp).astype(np.float32))
+        self.assertEqual(got.dtype, np.float32);np.testing.assert_array_equal(np.round(got.astype(np.float64) * 100).astype(int), exact)
+        np.testing.assert_allclose(t.public_percent(np.float32([0.939873, 0.94, 0.999, 1., 0.])), [.94, .94, .99, 1., 0.], rtol=1e-6)
+
+    def test_redaction_touches_only_the_three_peer_view_columns(self):
+        rng = np.random.default_rng(0);numeric = rng.random((5, 23, 132)).astype(np.float32);before = numeric.copy()
+        t.redact_peer_view(numeric)
+        self.assertTrue((numeric[:, 1, 39] == 0).all());self.assertTrue((numeric[:, 7:13, 38] == 0).all())
+        np.testing.assert_allclose(numeric[:, 7:13, 0], t.public_percent(before[:, 7:13, 0]))
+        changed = numeric != before;changed[:, 1, 39] = changed[:, 7:13, 38] = changed[:, 7:13, 0] = False
+        self.assertFalse(changed.any());self.assertEqual(before[:, 0, 39].tolist(), numeric[:, 0, 39].tolist())
+        with self.assertRaises(SystemExit):t.redact_peer_view(np.zeros((2, 22, 132), np.float32))
+
+
 class ReweightHelperTests(unittest.TestCase):
     def test_set_keys_match_request_ids_to_variant_names(self):
         row = _rw_request()['side']['pokemon'][0]

@@ -1,7 +1,7 @@
 """Train π_FP: fine-tune the champion's policy on Foul Play's own decisions, and report it against the champion's π.
 
 usage: python -m gpu_engine.fp_reply_train DATA_DIR OUT_DIR --checkpoint PT [--epochs 8] [--lr 2e-5] [--batch 256]
-       [--weight-decay 0.01] [--device cuda] [--seed 0]
+       [--weight-decay 0.01] [--device cuda] [--seed 0] [--redact peer-view-v1]
 
 DATA_DIR holds fp_reply_data shards (one row per Foul Play decision, games in decision order). Splits are by game, from the
 battle seed: seed % 10 == 0 is test, == 1 is validation, the rest train (fp_reply_data.split_of). Each row's input is the
@@ -16,6 +16,9 @@ stored float32 probabilities clipped at 1e-12, so tail actions share one floor; 
 Checks: TF32 and the MHA eval fast path are off, so CUDA runs exact fp32 (the fast path alone moved probabilities by up to 5.5e-3). Before training, the base model's validation probabilities through windows/batch
 must reproduce the stored π to 1e-3. --export-archive recomputes π_FP on CPU in fp32 and requires the JAX archive forward to
 match it to 1e-4.
+--redact peer-view-v1 trains and evaluates on Foul Play's view redacted the way the search's constructor builds the opponent's
+(peer) view (redact_peer_view); the input-parity check runs on the unredacted tensors first, and the checkpoint's fp_reply marker
+records the redaction.
 """
 import argparse
 import glob
@@ -218,6 +221,33 @@ def step_cost(model, arrays, index, rows, torch, device, single=200, batched=409
 ARCHIVE_TOLERANCE = 1e-4
 INPUT_TOLERANCE = 1e-3
 
+# The constructor's peer view (gpu_engine/phase_d_live_worlds.py) with Foul Play as the observer differs from env.observe(Foul Play)
+# by design in exactly these v4 columns (the input-parity session's 48-cell true-world run, November 9): Foul Play's own damage
+# history is unavailable to the reply policy, and our HP reaches it at Showdown's public percent precision.
+REDACTIONS = ('peer-view-v1',)
+SELF_ACTIVE_TOKEN, OPPONENT_TOKENS = 1, slice(7, 13)
+HP_FRACTION, LAST_DAMAGE_DEALT, LAST_DAMAGE_TAKEN = 0, 38, 39
+V4_SHAPE = (23, 132)
+
+
+def public_percent(x):
+    """Showdown's public HP percent of exact fractions x, as a fraction: ceil(100x), 99 for a damaged mon that would show 100, 0 for
+    fainted or absent. 100x is rounded to 3 decimals first: float32 noise lands just above an exact integer percent (2/5 -> 41 when
+    rounded to 6 decimals), while a non-integer percent is at least 1/maxhp (>= 0.00125 for maxhp <= 800) from one."""
+    p = np.ceil(np.round(100. * np.asarray(x, np.float64), 3))
+    p = np.where((np.asarray(x) < 1) & (p >= 100), 99., p)
+    return (np.clip(p, 0., 100.) / 100.).astype(np.asarray(x).dtype)
+
+
+def redact_peer_view(numeric):
+    """peer-view-v1, in place on v4 numeric features [..., 23, 132]: Foul Play's own active LAST_DAMAGE_TAKEN -> 0; our six
+    Pokémon's LAST_DAMAGE_DEALT -> 0 (it is Foul Play's exact HP loss); our six Pokémon's HP_FRACTION -> the public percent."""
+    if tuple(numeric.shape[-2:]) != V4_SHAPE:raise SystemExit(f'peer-view-v1 is defined on v4 {V4_SHAPE} numeric features, not {numeric.shape[-2:]}')
+    numeric[..., SELF_ACTIVE_TOKEN, LAST_DAMAGE_TAKEN] = 0.
+    numeric[..., OPPONENT_TOKENS, LAST_DAMAGE_DEALT] = 0.
+    numeric[..., OPPONENT_TOKENS, HP_FRACTION] = public_percent(numeric[..., OPPONENT_TOKENS, HP_FRACTION])
+    return numeric
+
 
 def archive_parity(checkpoint, archive, arrays, index, rows, torch, extra, size=512):
     """Export π_FP to the champion_evaluator weight archive and require the JAX fp32 forward to reproduce π_FP's torch probabilities,
@@ -263,6 +293,7 @@ def main(argv=None):
     parser.add_argument('--export-archive', metavar='NPZ', help='with --evaluate: export π_FP to a champion_evaluator archive and check parity')
     parser.add_argument('--window', type=int, default=None, help='train at this window (the base is widened; see widen)')
     parser.add_argument('--compare-to', metavar='RUN_DIR', help="another run's test-probs.npz to report beside this π_FP (same test rows)")
+    parser.add_argument('--redact', choices=REDACTIONS, help="train/evaluate on Foul Play's view redacted as the constructor's peer view")
     args = parser.parse_args(argv)
     if args.evaluate and (args.window or args.compare_to):parser.error('--window and --compare-to apply to training, not --evaluate')
     if args.export_archive and not args.evaluate:parser.error('--export-archive needs --evaluate')
@@ -292,10 +323,11 @@ def main(argv=None):
         for key in ('ordinal', 'seed', 'label', 'round'):
             if not np.array_equal(other[key], arrays[key][rows['test']]):raise SystemExit(f'--compare-to run has different test rows ({key})')
         compare = other['probs']
+    if args.evaluate and args.redact:redact_peer_view(arrays['numeric_features'])
     calibration, calibrated = recalibrate(arrays['probs'][rows['train']], labels[rows['train']], arrays['legal'][rows['train']], torch)
     if args.evaluate:
         test = rows['test'];probs = predict(model, arrays, index, test, torch, args.device)
-        report = dict(schema='v2s-fp-reply-model-eval.v1', data=str(args.data), base_checkpoint=str(args.checkpoint),
+        report = dict(schema='v2s-fp-reply-model-eval.v1', data=str(args.data), redaction=args.redact, base_checkpoint=str(args.checkpoint),
                       base_checkpoint_sha256=checkpoint_file_sha256(args.checkpoint), pi_fp=str(args.evaluate),
                       pi_fp_sha256=checkpoint_file_sha256(args.evaluate), window=window, rows={k: int(len(v)) for k, v in rows.items()},
                       games=games, seats=seats, split_rule='battle seed % 10: 0 test, 1 validation, else train', recalibration=calibration,
@@ -313,6 +345,14 @@ def main(argv=None):
     input_parity = float(np.abs(base_val - arrays['probs'][rows['val']]).max()) if len(rows['val']) else 0.
     print(json.dumps(dict(event='INPUT_PARITY', max_abs_probability_difference=input_parity, tolerance=INPUT_TOLERANCE)), flush=True)
     if not input_parity <= INPUT_TOLERANCE:raise SystemExit(f'base model through windows/batch differs from the stored π by {input_parity}')
+    if args.redact:
+        before = arrays['numeric_features'].copy();redact_peer_view(arrays['numeric_features'])
+        changed = (before != arrays['numeric_features']).any(-1);del before
+        redaction = dict(name=args.redact, rows_changed=float(changed.any(-1).mean()),
+                         token_rows_changed={int(t): float(changed[:, t].mean()) for t in range(changed.shape[1]) if changed[:, t].any()})
+        print(json.dumps(dict(event='REDACTED', **redaction)), flush=True)
+    else:
+        redaction = None
     best = dict(epoch=0, val_nll=nll(predict(model, arrays, index, rows['val'], torch, args.device), labels[rows['val']]))
     best_state = {k: v.detach().cpu().clone() for k, v in model.state_dict().items()}
     history = [dict(epoch=0, val_nll=best['val_nll'])]
@@ -339,12 +379,13 @@ def main(argv=None):
     if isinstance(payload.get('model_config'), dict) and 'policy_id' in payload['model_config']:
         payload['model_config'] = dict(payload['model_config'], policy_id=f"fp-reply-{payload['model_config']['policy_id']}")
     payload['fp_reply'] = dict(policy_only=True, base_checkpoint_sha256=base_sha, best_epoch=best['epoch'], data=str(args.data), window=window,
+                               redaction=args.redact,
                                note='policy fine-tuned on Foul Play decisions; the value output is not trained and must not be used')
     torch.save(payload, out / 'pi-fp.pt')
     cost = step_cost(model, arrays, index, test, torch, args.device)
     report = dict(schema='v2s-fp-reply-model.v1', data=str(args.data), checkpoint=str(args.checkpoint),
                   checkpoint_sha256=checkpoint_file_sha256(args.checkpoint), window=window, rows={k: int(len(v)) for k, v in rows.items()},
-                  games=games, seats=seats, input_parity=input_parity, split_rule='battle seed % 10: 0 test, 1 validation, else train',
+                  games=games, seats=seats, input_parity=input_parity, redaction=redaction, split_rule='battle seed % 10: 0 test, 1 validation, else train',
                   args=vars(args), history=history,
                   best_epoch=best['epoch'], recalibration=calibration, ece_bins=data_mod.ECE_BINS,
                   test=test_report(arrays, test, test_probs, calibrated, compare), compare_to=args.compare_to, inference_cost=cost,
