@@ -51,6 +51,18 @@ Checks per sampled decision (owner O, foe F):
    their cause (PP exhausted -> peer belief; trap/lock/disabled -> carry; otherwise their own 'legal' bucket). Owner
    worlds get the same per-class rollup (types, bench order, belief, carry, legal, other) and the would-be refusal codes.
 
+5. Reply-prior effect of the peer order (with a forward, i.e. always in `run`): at each compared peer decision, one batched
+   champion forward per step (the evaluator the offline pricer uses for the reply prior, on actor_inputs) on (a) the true
+   world's foe view, (b) the real foe view after the same named redactions, (l) the offline-layout world's foe view
+   (materializer order, variant move slots) and (b2) b again at another batch row. Lanes are aligned by identity (a move
+   lane = active member and move, a switch lane = its target member; align()'s mapping, lane_permutation) and compared
+   as masked softmaxes over the lanes legal in both: KL(b || a), total variation, top-1 identity flip, max |dp|.
+   summary: median/p95/max KL, flip share, mean TV for all compared decisions and split by foe back-switch, order vs the
+   rebase rule, order-caused cells, residual cells and a control row (no order and no residual cells, KL ~ 0); the
+   noise floor from b against b2. Decisions still differing after alignment are dumped per token and member (species,
+   ability, item, moves, last move, types on each side) and classified: color_change, forecast, transform_residue,
+   conversion, other.
+
 Self-checks: re-encoding the real root through the pricer's views equals decide's observation (both seats); root
 source is structural (decide's own_inputs row is O's own observation) and re-checked by A's forward on the Request's
 root inputs against decide's raw logits; the true world's foe species/levels/moves/stats/mapping equal the real ones
@@ -632,6 +644,91 @@ EXCLUDED_BY_DESIGN = dict(hazard_credit_self='peer_exact_hazard', damage_exact='
 ROOT_LOGIT_TOLERANCE = .05   # |re-forward - decide's raw logits| above this is a root-source mismatch (bf16 batch-shape noise is far below)
 
 
+# ---------------------------------------------------------------------------------------------- reply-prior effect size
+
+def lane_permutation(world_order, real_order, active, move_map=None):
+    """perm[real lane] = the world lane holding the same identity: align()'s mapping for 9-lane vectors (move lanes by
+    {world slot: real slot}, switch lanes by member through each side's request order)."""
+    perm = list(range(9))
+    for slot, target in (move_map or {}).items():perm[int(target)] = int(slot)
+    lanes = {p: i for i, p in enumerate(switch_members(world_order, active))}
+    for i, p in enumerate(switch_members(real_order, active)):perm[4 + i] = 4 + lanes[p]
+    return perm
+
+
+def masked_log_softmax(logits, legal):
+    """log softmax over the legal lanes (float64); -inf elsewhere."""
+    x = np.where(np.asarray(legal, bool), np.asarray(logits, np.float64), -np.inf)
+    top = np.max(x)
+    return x - (top + np.log(np.sum(np.exp(x - top))))
+
+
+def effect(a_logits, a_legal, b_logits, b_legal):
+    """How far reply prior a is from b over identity-aligned lanes: KL(b || a), total variation, top-1 flip and max |dp|,
+    on the lanes legal in both (support_differs when the legal sets differ). None without a common legal lane."""
+    a_legal, b_legal = np.asarray(a_legal, bool), np.asarray(b_legal, bool);support = a_legal & b_legal
+    if not support.any():return None
+    la, lb = masked_log_softmax(a_logits, support), masked_log_softmax(b_logits, support)
+    pa, pb = np.exp(la), np.exp(lb)
+    kl = float(np.sum(pb[support] * (lb[support] - la[support])))
+    top_a, top_b = int(np.argmax(np.where(support, pa, -1.))), int(np.argmax(np.where(support, pb, -1.)))
+    return dict(kl=kl, tv=float(.5 * np.sum(np.abs(pa - pb))), top1_flip=top_a != top_b, max_abs_dp=float(np.max(np.abs(pa - pb))),
+        top_a=top_a, top_b=top_b, support_differs=not np.array_equal(a_legal, b_legal), legal=int(support.sum()),
+        pa=[round(float(x), 6) for x in pa], pb=[round(float(x), 6) for x in pb])
+
+
+def lane_identities(state, side, order, active, vocab):
+    """The identity of each real request lane: a move lane is (active member, move), a switch lane its target member."""
+    name = lambda kind, i:vocab[kind][int(i)] if 0 < int(i) < len(vocab[kind]) else ''
+    a = int(active);out = ['move:p%d:%s' % (a, name('moves', state.moves[0, side, a, k])) for k in range(4)]
+    members = switch_members(order, a) if _is_perm(order) else [None] * 5
+    out += ['switch:p%s:%s' % (p, name('species', state.species[0, side, p]) if p is not None else '') for p in members]
+    return out
+
+
+TYPE_CHANGE_SOURCES = (('color_change', ('colorchange',)), ('forecast', ('forecast',)))
+
+
+def describe_residual(exact, real_state, world_state, clone, foe, real_order, vocab):
+    """The cells still differing after the redactions and the order alignment, by token, with the member they describe
+    (species, ability, item, moves, the last move that may have triggered a type change, types on each side) and a
+    classification: color_change, forecast, transform_residue, conversion or other."""
+    from pokezero.dex import normalize_id
+    name = lambda kind, i:vocab[kind][int(i)] if 0 < int(i) < len(vocab[kind]) else ''
+    types = lambda st, side, p:[name('types', x) for x in np.asarray(st.types)[0, side, p]]
+    tokens = collections.defaultdict(set)
+    for cell in exact:
+        if cell[0] in ('numeric', 'categorical', 'attention', 'token_type'):tokens[int(cell[1])].add(':'.join(cell_key(cell[0], cell[1:])))
+    owner = 1 - foe;out = []
+    mapping = np.asarray(clone.physical_to_public)[0]
+    for token in sorted(tokens):
+        sec = section(token);entry = dict(token=token, section=sec, cells=sorted(tokens[token]))
+        side = p = None
+        if sec == 'own':side, p = foe, int(real_order[token - 1])
+        elif sec in ('opponent', 'belief'):
+            slot = token - (7 if sec == 'opponent' else 23);hit = np.flatnonzero(mapping[owner] == slot)
+            if len(hit):side, p = owner, int(hit[0])
+        if p is not None:
+            slot = int(mapping[side, p])
+            moves = [normalize_id(name('moves', m)) for m in np.asarray(real_state.moves)[0, side, p] if int(m)]
+            ability, base = normalize_id(name('abilities', real_state.ability[0, side, p])), normalize_id(name('abilities', real_state.base_ability[0, side, p]))
+            last = normalize_id(name('moves', real_state.last_move[0, side, p]))
+            shown = [] if slot < 0 or clone.shown_types is None else [name('types', x) for x in np.asarray(clone.shown_types)[0, side, slot]]
+            public_last = '' if slot < 0 or clone.last_moves is None else name('moves', np.asarray(clone.last_moves)[0, side, slot])
+            kind = next((label for label, abilities in TYPE_CHANGE_SOURCES if ability in abilities or base in abilities), None)
+            if kind is None:
+                species = normalize_id(name('species', real_state.species[0, side, p]))
+                kind = ('transform_residue' if 'transform' in moves or last == 'transform' or species == 'ditto' else
+                    'conversion' if any(m in ('conversion', 'conversion2', 'camouflage') for m in moves) else 'other')
+            entry.update(side='peer' if side == foe else 'owner', member=p, public_slot=slot, species=name('species', real_state.species[0, side, p]),
+                ability=ability, base_ability=base, item=name('items', real_state.item[0, side, p]), moves=moves, last_move=last,
+                public_last_move=public_last, real_types=types(real_state, side, p), world_types=types(world_state, side, p),
+                base_types=[name('types', x) for x in np.asarray(real_state.base_types)[0, side, p]], shown_types=shown,
+                classification=kind)
+        out.append(entry)
+    return out
+
+
 def mechanisms(real_state, clone, owner, history, pressure, max_pp):
     """Which carry/belief mechanisms a decision exercises in the REAL game: per side (the active's carry state) and, for
     the peer's belief columns, the real public facts the reply prior reads. `history` = History.flags per side."""
@@ -663,15 +760,17 @@ class Checker:
         self.pressure = int(names.get('pressure', 0)) if names else 0
         self.max_pp = tuple(getattr(setup.materializer, 'max_pp', ()))
 
-    def forward_logits(self, own_inputs, count):
-        """A's forward on the Request's root inputs (actor_inputs layout), to re-check decide's raw logits."""
+    def forward_rows(self, rows):
+        """A's forward (the evaluator the offline pricer uses for root and reply priors) on views in actor_inputs layout,
+        one batched call padded to a power-of-two bucket. rows: dicts of the four observation tensors (no batch axis)."""
         import jax
         s = self.setup
+        if not rows:return np.zeros((0, 9), np.float32)
         if self._forward is None:self._forward = jax.jit(lambda params, inputs: s.forward(params, inputs).policy_logits)
-        bucket = max(64, 1 << (count - 1).bit_length())
-        pad = lambda x: np.concatenate([np.asarray(x), np.repeat(np.asarray(x)[:1], bucket - count, axis=0)])[:, None]
-        batch = {k: pad(v) for k, v in own_inputs.items()};batch['history_mask'] = np.ones((bucket, 1), bool)
-        return np.asarray(jax.device_get(self._forward(s.params[0], batch)))[:count]
+        count = len(rows);bucket = max(64, 1 << (count - 1).bit_length())
+        batch = {k: np.stack([np.asarray(r[k]) for r in rows] + [np.asarray(rows[0][k])] * (bucket - count))[:, None] for k in OBS_FIELDS[:4]}
+        batch['history_mask'] = np.ones((bucket, 1), bool)
+        return np.asarray(jax.device_get(self._forward(s.params[0], batch)), np.float32)[:count]
 
     def __call__(self, carry, decided, host, rows, step, history=None):
         import jax
@@ -693,10 +792,6 @@ class Checker:
         state_fields = {name: getattr(carry.state, name) for name in worlds.OWN_MON_FIELDS + worlds.OWN_SIDE_FIELDS}
         cloned, redacted = jax.device_get(worlds._detach_device()(carry.public, state_fields, carry.streams, carry.frames, r, o)[:2])
         self.timing['detach_seconds'] += time.perf_counter() - clock;clock = time.perf_counter()
-        logits = None
-        if s.forward is not None:
-            logits = self.forward_logits(own_inputs, count)
-            self.timing['forward_seconds'] += time.perf_counter() - clock;clock = time.perf_counter()
         plans = [[worlds.plan_starts(root, s.source, recipe) for recipe in s.recipes] for root in roots]
         self.timing['plan_seconds'] += time.perf_counter() - clock;clock = time.perf_counter()
         seeds = sorted({states.kernel_seed(root, start.world, recipe) for root, per in zip(roots, plans)
@@ -731,12 +826,9 @@ class Checker:
                 mechanisms=mechanisms(real_state, clone, owner, flags, self.pressure, self.max_pp),
                 carry=dict(owner_baton_pass=bool(real_state.baton_pass[0, owner]), foe_baton_pass=bool(real_state.baton_pass[0, foe]),
                     owner_forced_switch=bool(real_state.forced_switch[0, owner])))
-            if logits is not None:
-                raw = np.asarray(host['raw_logits'][row, owner], np.float32)
-                record['root_logits'] = dict(equal=bool(np.array_equal(logits[i], raw)), max_abs=float(np.max(np.abs(logits[i].astype(np.float64) - raw))))
             records.append(record)
             # Self checks and the real foe tiers.
-            add(real_state, clone, owner, 'real_owner', i, dict(state=real_state, order=owner_order))
+            add(real_state, clone, owner, 'real_owner', i, dict(state=real_state, order=owner_order, public=clone))
             tiers = redaction_tiers(clone, red)
             add(real_state, tiers['raw'], foe, 'real_foe:raw', i)
             add(real_state, tiers['peer_damage_exact'], foe, 'real_foe:peer_damage_exact', i)
@@ -777,8 +869,10 @@ class Checker:
         for (i, role, extra), view in zip(jobs, encoded):
             if role in ('world_owner', 'world_peer'):views[i].setdefault(role, {})[extra['label']] = (view, extra)
             else:views[i][role] = (view, extra)
+        logits = self._forward_all(records, views, own_inputs, host) if s.forward is not None else {}
+        self.timing['forward_seconds'] += time.perf_counter() - clock;clock = time.perf_counter()
         for i, record in enumerate(records):
-            self._compare(record, views[i], observed, own_inputs, host, i)
+            self._compare(record, views[i], observed, own_inputs, host, i, logits.get(i, {}))
         self.timing['compare_seconds'] += time.perf_counter() - clock
         self.timing['decisions'] += len(records)
         return records
@@ -799,7 +893,47 @@ class Checker:
         return dict(world=label, refusal=None, pre=pre_code(own, peer, inputs, root_legal), error=int(own['error']),
             max_abs=numeric_max_abs(own, root_view), order_keys=order_keys, aligned_keys=aligned_keys, classes=classes, **serial(d))
 
-    def _compare(self, record, views, observed, own_inputs, host, i):
+    def _forward_all(self, records, views, own_inputs, host):
+        """One batched forward per step: each decision's root inputs (the root-logit re-check) and, where the peer check
+        will compare, (a) the true world's foe view, (l) the offline-layout world's foe view, (b) the real foe view after the
+        named redactions and (b2) that same view again at another batch row (the forward noise floor)."""
+        rows, where = [], []
+        for i, record in enumerate(records):
+            rows.append({k: own_inputs[k][i] for k in OBS_FIELDS[:4]});where.append((i, 'root'))
+            v = views[i]
+            if record['foe_requested'] and 'true_foe' in v and 'layout_foe' in v:
+                for role, view in (('a', v['true_foe'][0]), ('l', v['layout_foe'][0]), ('b', v['real_foe:foe_hp_public_percent'][0])):
+                    rows.append(view);where.append((i, role))
+        for i, record in enumerate(records):   # b2 rows after every other row: a different batch position than b
+            v = views[i]
+            if record['foe_requested'] and 'true_foe' in v and 'layout_foe' in v:rows.append(v['real_foe:foe_hp_public_percent'][0]);where.append((i, 'b2'))
+        out = collections.defaultdict(dict)
+        for (i, role), row in zip(where, self.forward_rows(rows)):out[i][role] = row
+        for i, record in enumerate(records):
+            raw = np.asarray(host['raw_logits'][record['row'], record['owner']], np.float32);mine = out[i]['root']
+            record['root_logits'] = dict(equal=bool(np.array_equal(mine, raw)), max_abs=float(np.max(np.abs(mine.astype(np.float64) - raw))))
+        return out
+
+    def _peer_effect(self, logits, world_view, layout_view, layout_extra, final_real, final_state, foe, world_order, real_order, active):
+        """Reply-prior effect of the input differences, on identity-aligned lanes (see effect())."""
+        if not ('a' in logits and _is_perm(world_order) and _is_perm(real_order)):return None
+        perm_a = lane_permutation(world_order, real_order, active)
+        legal_b = np.asarray(final_real['legal_action_mask'], bool)
+        pick = lambda vector, perm:np.asarray(vector)[perm]
+        identities = lane_identities(final_state, foe, real_order, active, self.setup.source.vocabulary)
+        layout = None
+        if _is_perm(layout_extra['order']):
+            perm_l = lane_permutation(layout_extra['order'], real_order, active, move_map=layout_extra['move_map'])
+            layout = effect(pick(logits['l'], perm_l), pick(layout_view['legal_action_mask'], perm_l), logits['b'], legal_b)
+        out = dict(identities=identities,
+            primary=effect(pick(logits['a'], perm_a), pick(world_view['legal_action_mask'], perm_a), logits['b'], legal_b),
+            layout=layout, noise=effect(logits['b2'], legal_b, logits['b'], legal_b))
+        for key in ('primary', 'layout'):
+            if out[key]:out[key].update(top_a_identity=identities[out[key]['top_a']], top_b_identity=identities[out[key]['top_b']])
+        if out['noise']:out['noise'] = {k: out['noise'][k] for k in ('kl', 'tv', 'top1_flip', 'max_abs_dp')}
+        return out
+
+    def _compare(self, record, views, observed, own_inputs, host, i, logits=None):
         owner = record['owner'];foe = 1 - owner
         decide_owner = {f: observed[owner][f][i] for f in OBS_FIELDS + ('error',)}
         decide_foe = {f: observed[foe][f][i] for f in OBS_FIELDS + ('error',)}
@@ -849,7 +983,11 @@ class Checker:
             layout_raw = diff(layout_view, final_real)
             layout_aligned = (diff(align(layout_view, layout_extra['order'], real_order, active, move_map=layout_extra['move_map']), final_real)
                 if _is_perm(layout_extra['order']) and _is_perm(real_order) else layout_raw)
-            peer = dict(status='compared', reason=None, kind='compared', world_order=world_order,
+            peer_effect = self._peer_effect(logits or {}, world_view, layout_view, layout_extra, final_real, final_state, foe,
+                world_order, real_order, active)
+            residual = (describe_residual(aligned['exact'], final_state, extra['state'], real_extra['public'], foe, real_order,
+                self.setup.source.vocabulary) if aligned['total'] else None)
+            peer = dict(status='compared', reason=None, kind='compared', world_order=world_order, effect=peer_effect, residual=residual,
                 tiers={name: d['total'] for name, d in diffs}, explained=explained, introduced=introduced,
                 remaining=serial(remaining), aligned=serial(aligned), order_keys=order_keys,
                 order_only=remaining['total'] > 0 and aligned['total'] == 0,
@@ -999,6 +1137,59 @@ def class_verdict(differences, table, compared):
     return 'ABSENT' if all(v == 'ABSENT' for v in verdicts) else 'ABSENT_WHERE_EXERCISED'
 
 
+def effect_stats(values):
+    """median/p95/max KL(b || a), top-1 flip share, mean total variation, mean/max of max |dp| over effect dicts."""
+    values = [v for v in values if v]
+    if not values:return dict(n=0)
+    kl = np.asarray([v['kl'] for v in values]);tv = np.asarray([v['tv'] for v in values]);dp = np.asarray([v['max_abs_dp'] for v in values])
+    return dict(n=len(values), kl_median=float(np.median(kl)), kl_p95=float(np.quantile(kl, .95)), kl_max=float(kl.max()),
+        top1_flip_share=round(float(np.mean([v['top1_flip'] for v in values])), 6), tv_mean=float(tv.mean()),
+        max_abs_dp_mean=float(dp.mean()), max_abs_dp_max=float(dp.max()),
+        support_differs=sum(bool(v.get('support_differs')) for v in values))
+
+
+EFFECT_GROUPS = (
+    ('all compared', lambda p:True),
+    ('foe back-switched', lambda p:bool((p.get('history') or {}).get('foe', {}).get('back_switched'))),
+    ('no foe back-switch', lambda p:not (p.get('history') or {}).get('foe', {}).get('back_switched')),
+    ('foe order != rebase rule', lambda p:p['order']['differs_real_coords']),
+    ('foe order == rebase rule', lambda p:not p['order']['differs_real_coords']),
+    ('order-caused cells present', lambda p:bool(p['peer']['order_keys'])),
+    ('no order-caused cells', lambda p:not p['peer']['order_keys']),
+    ('residual cells after alignment (types)', lambda p:p['peer']['aligned']['total'] > 0),
+    ('control: no order and no residual cells', lambda p:not p['peer']['order_keys'] and p['peer']['aligned']['total'] == 0),
+)
+
+
+def summarize_effect(P):
+    """The reply-prior effect of the peer-order bug: (a) the true world's foe view against (b) the real foe view after
+    the same named redactions, identity-aligned; the offline-layout view (l) beside it; the noise floor from (b) forwarded
+    twice at different batch rows, and from the control row."""
+    rows = [p for p in P if p['peer']['status'] == 'compared' and p['peer'].get('effect')]
+    groups = []
+    for label, keep in EFFECT_GROUPS:
+        chosen = [p for p in rows if keep(p)]
+        groups.append(dict(group=label, primary=effect_stats([p['peer']['effect']['primary'] for p in chosen]),
+            layout=effect_stats([p['peer']['effect']['layout'] for p in chosen])))
+    control = next(g for g in groups if g['group'].startswith('control'))
+    flips = [dict(stream=p['stream'], frame=p['frame'], owner=p['owner'], turn=p['turn'], kl=round(p['peer']['effect']['primary']['kl'], 6),
+        real_top=p['peer']['effect']['primary']['top_b_identity'], world_top=p['peer']['effect']['primary']['top_a_identity'])
+        for p in rows if p['peer']['effect']['primary'] and p['peer']['effect']['primary']['top1_flip']]
+    return dict(decisions=len(rows), groups=groups, noise_floor=dict(repeat_forward=effect_stats([p['peer']['effect']['noise'] for p in rows]),
+        control_primary=control['primary']), top1_flips=flips[:50],
+        definition='KL(b || a) over the lanes legal in both, lanes aligned by identity (a move lane = active member and move, a '
+            'switch lane = its target member, through each side\'s request order); a = the true world\'s foe view (the offline '
+            'reply-prior input, real physical indices), l = the offline world layout (materializer order, variant move slots), '
+            'b = the real foe view after the named redactions; champion forward as the offline pricer\'s reply prior')
+
+
+def summarize_residual(P):
+    rows = [(p, p['peer']['residual']) for p in P if p['peer']['status'] == 'compared' and p['peer'].get('residual')]
+    entries = [dict(stream=p['stream'], frame=p['frame'], owner=p['owner'], turn=p['turn'], **entry) for p, residual in rows for entry in residual]
+    return dict(decisions=len(rows), tokens=len(entries), classification=dict(collections.Counter(e.get('classification', 'no member') for e in entries)),
+        entries=entries[:50])
+
+
 def summarize(positions, metas):
     P = positions;n = len(P)
     worlds = [w for p in P for w in p['owner_check']['worlds']]
@@ -1119,7 +1310,7 @@ def summarize(positions, metas):
     for m in runs:timing.update({k: v for k, v in m.get('timing', {}).items() if isinstance(v, (int, float))})
     check_seconds = sum(timing[k] for k in ('detach_seconds', 'forward_seconds', 'plan_seconds', 'materialize_seconds', 'encode_seconds', 'compare_seconds'))
     return dict(schema=SCHEMA, decisions=n, runs=runs, owner=owner, root_source=root, self_check=selfcheck, peer=peer, order=order,
-        other_remaining=other, legal_remaining=legal, classes=classes,
+        other_remaining=other, legal_remaining=legal, classes=classes, peer_order_effect=summarize_effect(P), residual=summarize_residual(P),
         timing=dict(total=dict(timing), check_seconds=check_seconds,
             check_seconds_per_100_decisions=None if not n else 100 * check_seconds / n,
             wall_seconds_per_100_decisions=None if not n else 100 * sum(m.get('timing', {}).get('wall_seconds', 0) for m in runs) / n),
@@ -1197,6 +1388,30 @@ def render(summary):
     lines += ['| %s | %s | %d | %s |' % (x['cell'], _class_of(x['cell']), x['decisions'], x['share']) for x in p['remaining_cells_ranked'][:30]]
     lines += ['', '| order-caused peer cell | decisions | share |', '|---|---|---|']
     lines += ['| %s | %d | %s |' % (x['cell'], x['decisions'], x['share']) for x in p['order_caused_cells_ranked'][:12]]
+    e = s['peer_order_effect']
+    fmt = lambda x:'-' if x is None else ('%.3g' % x if isinstance(x, float) else str(x))
+    lines += ['', '## Reply-prior effect of the peer order (champion forward, identity-aligned lanes)', '', e['definition'], '',
+        '| group | n | KL median | KL p95 | KL max | top-1 flip share | mean TV | mean max abs dp | layout KL median | layout KL p95 | layout flip share |',
+        '|---|---|---|---|---|---|---|---|---|---|---|']
+    for g in e['groups']:
+        a_, l_ = g['primary'], g['layout']
+        lines.append('| %s | %d | %s | %s | %s | %s | %s | %s | %s | %s | %s |' % (g['group'], a_.get('n', 0), fmt(a_.get('kl_median')),
+            fmt(a_.get('kl_p95')), fmt(a_.get('kl_max')), fmt(a_.get('top1_flip_share')), fmt(a_.get('tv_mean')), fmt(a_.get('max_abs_dp_mean')),
+            fmt(l_.get('kl_median')), fmt(l_.get('kl_p95')), fmt(l_.get('top1_flip_share'))))
+    nf = e['noise_floor']['repeat_forward']
+    lines += ['', '- forward noise floor, (b) forwarded twice at different batch rows: n %s, KL max %s, max abs dp max %s; control row KL max %s' % (
+        nf.get('n', 0), fmt(nf.get('kl_max')), fmt(nf.get('max_abs_dp_max')), fmt(e['noise_floor']['control_primary'].get('kl_max'))),
+        '- top-1 flips (first %d): %s' % (len(e['top1_flips']), json.dumps(e['top1_flips'][:10]))]
+    res = s['residual']
+    lines += ['', '## Residual peer cells after alignment (by token and member)', '',
+        '- decisions: %d; tokens: %d; classification: %s' % (res['decisions'], res['tokens'], json.dumps(res['classification'])), '',
+        '| stream/frame | token | member | species | ability (base) | item | last move (public) | real types | world types | shown types | class | cells |',
+        '|---|---|---|---|---|---|---|---|---|---|---|---|']
+    for x in res['entries'][:30]:
+        lines.append('| %s/%s | %s | %s %s | %s | %s (%s) | %s | %s (%s) | %s | %s | %s | %s | %s |' % (x['stream'], x['frame'], x['token'],
+            x.get('side', ''), x.get('member', ''), x.get('species', ''), x.get('ability', ''), x.get('base_ability', ''), x.get('item', ''),
+            x.get('last_move', ''), x.get('public_last_move', ''), '/'.join(x.get('real_types', [])), '/'.join(x.get('world_types', [])),
+            '/'.join(x.get('shown_types', [])), x.get('classification', ''), ', '.join(x['cells'][:4])))
     r = s['order']
     lines += ['', '## Peer order', '',
         '- foe order != rebase rule (real coordinates): %d of %d (%s); it counts first switch-ins out of party order, faint '
