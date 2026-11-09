@@ -194,3 +194,33 @@ class HostAccessorTest(unittest.TestCase):
 
 
 if __name__ == '__main__':unittest.main()
+
+
+class ListingTest(unittest.TestCase):
+    """The device-path pruner (gpu_engine.v2e_listing): static facts on a stand-in, and on the real step."""
+    def test_stand_in_pruning(self):
+        from gpu_engine import v2e_listing as LS
+        code = ['from . import helper as h', 'def f(x, table, _device_public=None, _public_trace=None, _lifecycle_trace=False, _toxic_context=None):',
+            '    y = x + 1', '    if _lifecycle_trace:', '        y = y * 2', '        y = y * 3', '    elif _public_trace is not None:', '        y = y - 1',
+            '    else:', '        y = y + 2', '    if _device_public is not None and table.entry is not None:', '        y = h.g(y)',
+            '    if _toxic_context is not None:', '        y = 0', '    if x > 0:', '        y = y + 1', '    else:', '        y = y - 1',
+            '    carry = table.items', '    if carry is None:', '        return y', '    return y', '', 'def g(v):', '    return v']
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / 'stand_in.py';path.write_text('\n'.join(code) + '\n')
+            module = LS.Module('stand_in', path)
+        pruned = LS.prune_function(module, module.functions['f'], LS.Facts({'table': {'entry', 'items'}, 'belief': set()}))
+        self.assertEqual(sorted(pruned.lines), [2, 3, 10, 11, 12, 15, 16, 17, 18, 19, 22])
+        self.assertEqual(sorted(pruned.static_headers), [11]);self.assertEqual(sorted(pruned.unknown_headers), [15])
+        self.assertEqual(LS.reached_calls(module, pruned), {('helper', 'g')})
+
+    def test_real_step_pruning(self):
+        from gpu_engine import v2e_listing as LS
+        modules = LS.load_modules();listed = LS.listing(modules, LS.present_attributes())
+        step = listed[LS.STEP_FUNCTION];text = modules['transition'].lines
+        self.assertIn(1124, step.static_headers, 'if table.effects is not None: is a statically true guard')
+        for n in step.lines:self.assertNotIn('_public_trace=', text[n - 1].replace(' ', '').split('#')[0][:40], n)
+        dead = [n for n in range(step.first, step.last + 1) if text[n - 1].strip().startswith('if _lifecycle_trace')]
+        self.assertTrue(dead);self.assertFalse(set(dead) & step.lines)
+        self.assertIn(('engine_device_public_hooks', 'observe'), listed);self.assertIn(('pursuit', 'intercept'), listed)
+        self.assertIn(('engine_device_trackers', '_gated'), listed, 'functions passed as callbacks are reached')
+        self.assertLess(len(step.lines), 800);self.assertGreater(len(step.lines) - len(step.static_headers), 550)
