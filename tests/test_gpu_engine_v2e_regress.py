@@ -217,15 +217,30 @@ class DigestAndRuleTests(unittest.TestCase):
     def test_allowed_fields_are_side_aware(self):
         from gpu_engine.v2e_regress import lane_verdict
         effects = {'curse': [0]}
-        ok, _ = lane_verdict({('state.boosts', 0), ('state.hp', 1), ('trackers.boosts', 0)}, effects, None)
+        ok = lane_verdict({('state.boosts', 0), ('state.hp', 1), ('trackers.boosts', 0)}, effects, None)[0]
         self.assertEqual(ok, [])
-        bad, _ = lane_verdict({('state.boosts', 1), ('state.turn', None)}, effects, None)
+        bad = lane_verdict({('state.boosts', 1), ('state.turn', None)}, effects, None)[0]
         self.assertEqual(bad, [('state.boosts', 1), ('state.turn', None)])
-        self.assertEqual(lane_verdict({('state.boosts', 1)}, effects, None, cascade=True), ([], []))
-        self.assertEqual(lane_verdict({('state.boosts', 1)}, effects, None, waive=(r'^state\.boosts$',)), ([], [('state.boosts', 1)]))
+        self.assertEqual(lane_verdict({('state.boosts', 1)}, effects, None, waive=(r'^state\.boosts$',))[:2], ([], [('state.boosts', 1)]))
         self.assertEqual(lane_verdict({('state.pp', 1), ('state.turn', None)}, {'sleep_clause': [0]}, None)[0], [])
         self.assertEqual(lane_verdict({('state.boosts', 1)}, {'charm': [0]}, None)[0], [])
         self.assertEqual(lane_verdict({('state.boosts', 0)}, {'charm': [0]}, None)[0], [('state.boosts', 0)])
+
+    def test_ko_cascade_accepts_only_ko_consequences(self):
+        from gpu_engine.v2e_regress import lane_verdict
+        effects = {'curse': [0]}
+        # Side 0 had a mon (un)faint; only side-0 mon 3's per-mon state may differ.
+        cascade = dict(ko_sides=np.array([True, False]), mon_ok=lambda leaf, side: side == 0)
+        entries = {('state.hp', 0), ('state.forced_switch', 0), ('state.done', None), ('state.status', 0), ('trackers.fainted', 0),
+                   ('trackers.hp_percent', 1), ("trackers.mon_features['turns_active']", 0)}
+        unexpected, _, by_ko = lane_verdict(entries, effects, None, cascade=cascade)
+        self.assertEqual(unexpected, [])
+        self.assertIn(('state.forced_switch', 0), by_ko);self.assertIn(('state.status', 0), by_ko)
+        # The reviewer's case: the foe's status (side 1, no faint there) and a side-less turn change stay unexpected.
+        unexpected, _, _ = lane_verdict({('state.status', 1), ('state.turn', None), ('state.hp', 0)}, effects, None, cascade=cascade)
+        self.assertEqual(unexpected, [('state.status', 1), ('state.turn', None)])
+        refused = dict(cascade, mon_ok=lambda leaf, side: False)                # a non-fainted mon's status on side 0
+        self.assertEqual(lane_verdict({('state.status', 0)}, effects, None, cascade=refused)[0], [('state.status', 0)])
 
 
 @unittest.skipUnless(HAS_JAX, 'requires JAX')
@@ -323,21 +338,28 @@ class TwoPassTests(unittest.TestCase):
         code, report, _ = self.patched('involved-none', curse_boosts, pr='none')
         self.assertEqual(code, 1);self.assertGreater(report['counts']['changed_but_uninvolved'], 0)
 
-    def test_ko_cascade_accepts_any_field_on_an_involved_lane(self):
+    def test_ko_cascade_is_limited_to_ko_consequences(self):
         import jax.numpy as j
-        def curse_ko(state, actions, t):
+        def curse_ko(state, actions, t, *, plant=False):
             out = base_step(state, actions, t);s = out.step.state
             uses = curse_users(state, actions)
-            hp = s.hp.at[:, 0, 3].set(j.where(uses, 0, s.hp[:, 0, 3]))   # a bench KO the base never had
-            return result(s._replace(hp=hp, turn=s.turn + uses.astype(s.turn.dtype)), out.trackers)
+            hp = s.hp.at[:, 0, 3].set(j.where(uses, 0, s.hp[:, 0, 3]))   # a bench KO the base never had (Curse side)
+            status = s.status.at[:, 0, 3].set(j.where(uses, 1, s.status[:, 0, 3]))   # the fainted mon's own state
+            if plant:status = status.at[:, 1, 0].set(j.where(uses, 1, status[:, 1, 0]))   # the foe paralysed: not a KO consequence
+            return result(s._replace(hp=hp, status=status), out.trackers)
         code, report, listing = self.patched('cascade', curse_ko)
         self.assertEqual(code, 0, report['counts']);self.assertGreater(report['counts']['ko_cascade'], 0)
         self.assertTrue(all(x['ko_cascade'] for x in listing))
+        self.assertEqual(set(report['by_effect']['curse']['ko_cascade_non_hp_fields']), {'state.status@user'})
+        code, report, listing = self.patched('cascade-plant', lambda s, a, t: curse_ko(s, a, t, plant=True))
+        self.assertEqual(code, 1);self.assertGreater(report['counts']['changed_involved_unexpected_fields'], 0)
+        self.assertEqual(set(report['by_effect']['curse']['unexpected_fields']), {'state.status@target'})
 
     def test_partial_runs_and_plugin_supersets_are_marked(self):
         code, report, _ = self.patched('partial', base_step, pr='A1,A2', limit=1)
-        self.assertEqual(code, 0);self.assertTrue(report['partial']);self.assertTrue(report['warnings'])
-        self.assertEqual(report['plug_ins'], ['A1', 'A2'])
+        self.assertEqual(code, 2);self.assertTrue(report['partial']);self.assertIsNone(report['passed'])
+        self.assertTrue(report['warnings']);self.assertEqual(report['plug_ins'], ['A1', 'A2'])
+        with self.assertRaises(SystemExit):self.patched('undeclared', base_step, pr='A2')   # the PR's own plug-in must declare
         from gpu_engine import v2e_regress
         with self.assertRaises(SystemExit):         # a base pass that is not this PR's merge base
             v2e_regress.patched_pass(self.args(out=self.tmp / 'nobase', base=str(self.base), pr='A1', faint_clear=False,

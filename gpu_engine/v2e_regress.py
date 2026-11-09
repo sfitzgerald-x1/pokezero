@@ -15,8 +15,11 @@ is attributed through the per-PR plug-in table:
 - each effect declares the leaves it may change on the acting (user) side, the
   other (target) side and side-less leaves. A change outside the union of the
   involved effects' allowances is changed-involved-unexpected-fields, a
-  failure, unless the lane's set of fainting mons differs from the base (a KO
-  cascade, which may change anything) or the leaf is waived (--waive).
+  failure, unless the leaf is waived (--waive) or it is a KO consequence on a
+  lane whose set of fainting mons differs from the base (a KO cascade): HP,
+  fainted, forced-switch/replacement and done/winner leaves, the newly
+  (un)fainted mon's own per-mon state (checked exactly against stored base
+  arrays) and the trackers of its side. Anything else stays unexpected.
 
 Report: unchanged, changed-and-involved per effect with its changed fields,
 changed-but-uninvolved and changed-involved-unexpected-fields (both must be
@@ -348,6 +351,13 @@ FAMILIES = {
     'all': (r'.*',),
 }
 ALL = dict(user=('all',), target=('all',), glob=('all',))
+# KO cascade: leaves any faint difference may change (both sides / side-less).
+FAMILIES['ko'] = (r'^state\.(forced_switch|pending_residual|queued_actor|queued_actions|queued_stall|residual_draws|'
+                  r'phazing_draws|secondary_draws|sleep_talk_draws|replacement_count|done|winner)$', r'^trackers\.fainted$')
+# Per-mon state a faint may change on the mon that (un)fainted; checked per mon against stored base arrays.
+KO_MON_LEAVES = tuple(f'state.{n}' for n in ('status', 'status_counter', 'sleep_skipped', 'rest_origin', 'volatile',
+    'confusion_counter', 'boosts', 'encore_move', 'encore_counter', 'charge_move', 'charge_counter', 'choice_move',
+    'protect_counter', 'truant_loaf'))
 # effect -> leaves it may change: user (acting side), target (the other side), glob (side-less).
 # A1's sets: a stat change alters damage taken later in the step (and pinch berries);
 # a sleep landing or not decides whether the target acts at all, so it may change anything.
@@ -393,11 +403,12 @@ def predicates(prs):
     return table
 
 
-def lane_verdict(changed, effects, side_axis, *, cascade=False, waive=()):
+def lane_verdict(changed, effects, side_axis, *, cascade=None, waive=()):
     """changed: {(leaf, side)} for side-axis leaves, {(leaf, None)} for side-less ones;
-    effects: {effect: [actor sides]}. Returns (unexpected entries, waived entries)."""
-    if cascade:return [], []
-    unexpected, waived = [], []
+    effects: {effect: [actor sides]}; cascade: None, or dict(ko_sides=[2] bool,
+    mon_ok=callable(leaf, side) -> the leaf differs only on that side's (un)fainted mons).
+    Returns (unexpected entries, waived entries, entries accepted only as KO consequences)."""
+    unexpected, waived, by_ko = [], [], []
     for leaf, side in sorted(changed, key=lambda x: (x[0], -1 if x[1] is None else x[1])):
         ok = False
         for effect, actors in effects.items():
@@ -405,9 +416,14 @@ def lane_verdict(changed, effects, side_axis, *, cascade=False, waive=()):
             if side is None:ok |= allowed_leaf(leaf, rule['glob'])
             else:ok |= any(allowed_leaf(leaf, rule['user' if side == a else 'target']) for a in actors)
             if ok:break
+        if not ok and cascade is not None:
+            ko = (allowed_leaf(leaf, ('hp', 'ko'))
+                  or (side is not None and leaf in KO_MON_LEAVES and cascade['mon_ok'](leaf, side))
+                  or (side is not None and leaf.startswith('trackers.') and bool(cascade['ko_sides'][side])))
+            if ko:by_ko.append((leaf, side));continue
         if ok:continue
         (waived if any(re.search(w, leaf) for w in waive) else unexpected).append((leaf, side))
-    return unexpected, waived
+    return unexpected, waived, by_ko
 
 
 # ---------------------------------------------------------------------------
@@ -507,6 +523,7 @@ class Stepper:
             pre = digest_named({n: named_in[n] for n in new}, lanes)[1] if new else j.zeros((lanes, 0, 2, 2), j.uint32)
             return dict(digests=digests, pre_digests=pre, fainted=(state.hp > 0) & (out.step.state.hp <= 0),
                 extra={n: named_out[n] for n in faint_leaves if n in named_out}, calls=calls,
+                ko={n: named_out[n] for n in KO_MON_LEAVES if n in named_out},
                 physical_to_public=out.trackers.physical_to_public, active_slot=out.trackers.active_slot,
                 public_order=named_out.get(PUBLIC_ORDER))
         self._jit = jax.jit(traced);self._names = names
@@ -588,6 +605,7 @@ def base_pass(args, *, step_override=None, prepared=None):
         record = dict(digests=result['digests'][:real], done=done, tick=np.int64(tick), level=np.int64(level),
             fainted=fainted, faint_lanes=faint_lanes)
         for i, n in enumerate(sorted(result['extra'])):record[f'faint_{i:02d}'] = result['extra'][n][faint_lanes]
+        for i, n in enumerate(sorted(result['ko'])):record[f'ko_{i:02d}'] = result['ko'][n][:real]
         np.savez_compressed(out / f'digest-{path.stem}.npz', **record)
         lane_steps += real;live += int((~done).sum())
         if index % 50 == 0:log('BASE_SHARD', index=index, shard=path.name, lanes=lanes, padded=pad or lanes, seconds=time.perf_counter() - begin)
@@ -596,7 +614,8 @@ def base_pass(args, *, step_override=None, prepared=None):
         oracle_digest=digest, oracle_modules=len(modules), capture_sha256=capture_sha, capture_commit=capture.get('source_commit'),
         shards=[p.name for p in shards], partial=bool(args.limit), lane_steps=lane_steps, live_lane_steps=live,
         output_names=names, side_axis=side_axis, input_names=[capture_name(p) for p in capture['paths']],
-        faint_leaves=sorted(n for n in FAINT_CLEAR_LEAVES if n in names), pad_lanes=pad, digest_seeds=list(DIGEST_SEEDS),
+        faint_leaves=sorted(n for n in FAINT_CLEAR_LEAVES if n in names), ko_leaves=sorted(n for n in KO_MON_LEAVES if n in names),
+        pad_lanes=pad, digest_seeds=list(DIGEST_SEEDS),
         jax=jax.__version__, backend=jax.default_backend(), seconds=time.perf_counter() - begin)
     (out / 'manifest.json').write_text(json.dumps(manifest, indent=1) + '\n')
     log('BASE_DONE', shards=len(shards), lane_steps=lane_steps, live_lane_steps=live, seconds=manifest['seconds'])
@@ -655,8 +674,14 @@ def patched_pass(args, *, step_override=None, prepared=None):
     capture_names = [capture_name(p) for p in capture['paths']]
     new_inputs = sorted(set(template_named) - set(capture_names))
     table = predicates(plugins)
+    # The PR's own plug-in (the first listed) must declare allowed fields for every effect;
+    # a superset's other plug-ins only warn.
+    own = PLUGINS[plugins[0]] if plugins else {}
+    undeclared_own = sorted(e for e in own if e not in ALLOWED)
+    if undeclared_own:
+        raise SystemExit(f'plug-in {plugins[0]} has effects without declared allowed fields: {undeclared_own}; add them to ALLOWED')
     undeclared = sorted(e for e in table if e not in ALLOWED)
-    if undeclared:warnings.append(f'effects without declared allowed fields (any change accepted): {undeclared}')
+    if undeclared:warnings.append(f'effects of other plug-ins without declared allowed fields (any change accepted): {undeclared}')
     tables = context['prepared'];metadata = context['pool'].metadata();vocab = metadata['vocabulary']
     public_order_rule = PUBLIC_ORDER in new_inputs
     base_names = manifest['output_names']
@@ -668,7 +693,10 @@ def patched_pass(args, *, step_override=None, prepared=None):
     destiny_bond = getattr(state_module, 'DESTINY_BOND', DEFAULT_DESTINY_BOND)
     counts = dict(lane_steps=0, done_skipped=0, unchanged=0, changed_and_involved=0, changed_but_uninvolved=0,
                   changed_involved_unexpected_fields=0, ko_cascade=0, waived=0, rule_explained=0)
-    by_effect = {k: dict(changed=0, involved_unchanged=0, changed_fields={}, unexpected_fields={}) for k in table}
+    by_effect = {k: dict(changed=0, involved_unchanged=0, changed_fields={}, unexpected_fields={}, ko_cascade=0,
+                         ko_cascade_non_hp_fields={}) for k in table}
+    ko_leaves = manifest.get('ko_leaves')
+    if ko_leaves is None:raise SystemExit('base pass predates the KO-cascade arrays; re-run the base pass')
     uninvolved_leaves = {};new_outputs = None
     listing = (out / 'changed.jsonl').open('x');begin = time.perf_counter()
     names_order = _template_names(template)
@@ -703,7 +731,9 @@ def patched_pass(args, *, step_override=None, prepared=None):
                 vocab, callable_moves, struggle, destiny_bond=destiny_bond)
             involved = {k: np.asarray(f(pre), bool) for k, f in table.items()}       # [L,2] actor sides
             done = np.asarray(named['state.done'])[:real]
-            cascade_lanes = (result['fainted'][:real] != base['fainted']).reshape(real, -1).any(-1)
+            ko_mons_all = result['fainted'][:real] != base['fainted']                       # [L,2,6] (un)fainted mons
+            cascade_lanes = ko_mons_all.reshape(real, -1).any(-1)
+            base_ko = {n: base[f'ko_{i:02d}'] for i, n in enumerate(ko_leaves)}
             faint_base = {};faint_set = set()
             if args.faint_clear:
                 lanes_list = base['faint_lanes'].tolist()
@@ -725,9 +755,17 @@ def patched_pass(args, *, step_override=None, prepared=None):
                     based = {n: faint_base[n][lane] for n in changed}
                     rule_ok = faint_clear_ok(changed, post, based, result['fainted'][lane], result['physical_to_public'][lane],
                                              result['active_slot'][lane])
-                cascade = bool(cascade_lanes[lane])
-                unexpected, waived = lane_verdict(entries, effects, side_axis, cascade=cascade, waive=args.waive or ()) \
-                    if changed and effects else ([], [])
+                cascade = bool(cascade_lanes[lane]);cascade_info = None
+                if cascade:
+                    ko_mons = ko_mons_all[lane]
+                    def mon_ok(leaf, side, lane=lane, ko_mons=ko_mons):
+                        if leaf not in base_ko:return False
+                        a = np.asarray(result['ko'][leaf][lane][side]);b = np.asarray(base_ko[leaf][lane][side])
+                        differ = (a != b).reshape(6, -1).any(-1)
+                        return not (differ & ~ko_mons[side]).any()
+                    cascade_info = dict(ko_sides=ko_mons.any(-1), mon_ok=mon_ok)
+                unexpected, waived, by_ko = lane_verdict(entries, effects, side_axis, cascade=cascade_info, waive=args.waive or ()) \
+                    if changed and effects else ([], [], [])
                 kind = classify(changed, bool(effects), rule_ok, unexpected)
                 if kind == 'unchanged':
                     counts['unchanged'] += 1
@@ -739,7 +777,11 @@ def patched_pass(args, *, step_override=None, prepared=None):
                     counts['changed_and_involved' if kind == 'involved' else 'changed_involved_unexpected_fields'] += 1
                     counts['ko_cascade'] += cascade;counts['waived'] += bool(waived)
                     for e, actors in effects.items():
-                        stats = by_effect[e];stats['changed'] += 1
+                        stats = by_effect[e];stats['changed'] += 1;stats['ko_cascade'] += cascade
+                        for leaf, side in by_ko:
+                            if allowed_leaf(leaf, ('hp',)):continue
+                            role = 'glob' if side is None else ('user' if side in actors else 'target')
+                            key = f'{leaf}@{role}';stats['ko_cascade_non_hp_fields'][key] = stats['ko_cascade_non_hp_fields'].get(key, 0) + 1
                         for leaf, side in entries:
                             role = 'glob' if side is None else ('user' if side in actors else 'target')
                             key = f'{leaf}@{role}';stats['changed_fields'][key] = stats['changed_fields'].get(key, 0) + 1
@@ -752,6 +794,7 @@ def patched_pass(args, *, step_override=None, prepared=None):
                 listing.write(json.dumps(dict(shard=path.name, lane=lane, tick=tick, kind=kind, ko_cascade=cascade,
                     involved={k: v for k, v in effects.items()}, leaves=changed, entries=labels,
                     unexpected=[f"{l}@{'glob' if s is None else s}" for l, s in unexpected],
+                    ko_consequences=[f"{l}@{'glob' if s is None else s}" for l, s in by_ko],
                     waived=[f"{l}@{'glob' if s is None else s}" for l, s in waived])) + '\n')
             if index % 50 == 0:
                 log('PATCHED_SHARD', index=index, shard=path.name, seconds=time.perf_counter() - begin, **counts)
@@ -759,17 +802,19 @@ def patched_pass(args, *, step_override=None, prepared=None):
         listing.close()
     digest, modules = oracle_digest()
     failures = counts['changed_but_uninvolved'] + counts['changed_involved_unexpected_fields']
+    partial = bool(args.limit) or manifest.get('partial', False)
+    # A partial run never passes: passed is None without failures (exit 2), False with them (exit 1).
     report = dict(schema=SCHEMA, digest_format=DIGEST_FORMAT, pass_='patched', plug_ins=plugins, source_commit=rev,
         source_dirty=dirty, allow_dirty=bool(args.allow_dirty), oracle_digest=digest, base_oracle_digest=manifest['oracle_digest'],
-        capture_sha256=capture_sha, **base_check, shards=len(shards), partial=bool(args.limit) or manifest.get('partial', False),
+        capture_sha256=capture_sha, **base_check, shards=len(shards), partial=partial, failures=failures,
         migrated_new_inputs=new_inputs, new_outputs=new_outputs, public_order_rule=public_order_rule,
         faint_clear_rule=bool(args.faint_clear), waive=list(args.waive or ()), counts=counts, by_effect=by_effect,
         allowed_fields={e: ALLOWED.get(e, 'UNDECLARED: any change') for e in table},
         uninvolved_leaves=dict(sorted(uninvolved_leaves.items(), key=lambda x: -x[1])), warnings=warnings,
-        passed=failures == 0, seconds=time.perf_counter() - begin)
+        passed=False if failures else (None if partial else True), seconds=time.perf_counter() - begin)
     (out / 'report.json').write_text(json.dumps(report, indent=1) + '\n')
     log('PATCHED_DONE', passed=report['passed'], partial=report['partial'], **counts)
-    return 0 if report['passed'] else 1
+    return 1 if failures else (2 if partial else 0)
 
 
 def state_defaults(template_named):
@@ -814,13 +859,13 @@ def main(argv=None):
         p.add_argument('--shards', required=True, help='directory of capture shards (capture.json beside it)')
         p.add_argument('--out', required=True, help='new output directory')
         p.add_argument('--arm', default='B', choices=('A', 'B'))
-        p.add_argument('--limit', type=int, default=0, help='first N shards (0: all); a limited run is marked partial')
+        p.add_argument('--limit', type=int, default=0, help='first N shards (0: all); a limited run is partial and never passes (exit 2)')
         p.add_argument('--allow-dirty', action='store_true', help='run from a tree with uncommitted gpu_engine/src changes')
         if name == 'base':
             p.add_argument('--pad-lanes', type=int, default=2048, help='pad every shard to this many lanes (one compile); 0 keeps native counts')
         else:
             p.add_argument('--base', required=True, help='output directory of the base pass')
-            p.add_argument('--pr', default='none', help=f'comma list of involvement plug-ins: {",".join(PLUGINS)}')
+            p.add_argument('--pr', default='none', help=f'comma list of involvement plug-ins, the PR\'s own first: {",".join(PLUGINS)}')
             p.add_argument('--faint-clear', action='store_true', help="apply PR0's faint-time public clear rule")
             p.add_argument('--integration', default=None, help='integration ref; the base pass must be at the merge base with it')
             p.add_argument('--allow-base-mismatch', action='store_true', help='accept a base pass not at the merge base (recorded)')
