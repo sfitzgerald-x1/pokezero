@@ -28,7 +28,7 @@ REQUEST_KEYS = {'schema','request_id','battle_id','owner','stream_id','decision_
                 'prefix_sha256','lines','own_request_line','rung','budget_seconds'}
 ROW_KEYS = {'schema','arm','policy_id','cell','battle_id','owner','stream_id','generation','turn','decision_index','request_kind',
             'prefix_sha256','archive_sha256','archive_source','deadline_seconds','reserve_seconds','encode_seconds','greedy','search','played_action_index','source','cause',
-            'search_differs','recharge_guard','select_seconds'}
+            'search_differs','recharge_guard','guard_causes','select_seconds'}
 
 
 def decode_edge():
@@ -53,7 +53,7 @@ def complete(request, *, action=4, q=.25, **extra):
         status='COMPLETE', action_index=action, q_values=values, refusal=None, cause=None, requested_worlds=8,
         constructed_worlds=8, decision_seconds=.5, root_operator='ARGMAX_MEAN_COMPLETED_Q', policy_target=[0.]*9,
         root_value=.2, timings=dict(queue_seconds=.01, prepare_seconds=.2, build_seconds=.05, price_seconds=.2,
-        reduce_seconds=.01), **extra)
+        reduce_seconds=.01), **dict(dict(effect_guard=dict(tripped=False, b=False, c=False, reasons=[])), **extra))
 
 
 def refused(request, cause):
@@ -714,6 +714,42 @@ class FactoryTests(unittest.TestCase):
         summary = decisions([row], deadline=3.)
         self.assertEqual(summary['by_request_kind']['move']['fallback_by_cause'], {'OWN_RECHARGE_UNREPRESENTED': 1})
         self.assertEqual((summary['fallback_by_cause']['OWN_RECHARGE_UNREPRESENTED']['count'], summary['transport_failure_share']), (1, 0.))
+
+
+    def test_an_unrepresented_effect_plays_greedy_and_the_first_guard_cause_stands(self):
+        """The server's effect guard tripped: greedy, cause UNREPRESENTED_EFFECT, the full response kept; with the own-recharge guard
+        too, OWN_RECHARGE_UNREPRESENTED stands and guard_causes lists both."""
+        tripped = dict(tripped=True, b=True, c=False, reasons=[dict(move='destinybond', side='opp', source='turn1', max_mass=.3)])
+        def responder(search):
+            def reply(r):return dict(complete(r, action=search), q_values=[.1] * 9, effect_guard=tripped)
+            return reply
+        for name, search, greedy, causes in (('effect', 1, 2, ['UNREPRESENTED_EFFECT']), ('both', 0, 1, ['OWN_RECHARGE_UNREPRESENTED', 'UNREPRESENTED_EFFECT']),
+                ('same', 2, 2, ['UNREPRESENTED_EFFECT'])):
+            with self.subTest(name):
+                self.fresh(name)
+                (decision,), _ = self.run_arm(responder(search), greedy=greedy, lines=[request_line(moves=BEAM)])
+                row, = self.rows()
+                self.assertEqual((decision.action_index, row['source'], row['cause'], row['guard_causes'], row['played_action_index']),
+                    (greedy, 'greedy_fallback', causes[0], causes, greedy))
+                self.assertEqual((row['search']['status'], row['search']['effect_guard']), ('COMPLETE', tripped))
+                self.assertEqual(decision.metadata['depthn_live']['cause'], causes[0]);self.assertEqual(set(row), ROW_KEYS)
+        self.fresh('clear')
+        (decision,), _ = self.run_arm(lambda r: dict(complete(r, action=1), q_values=[.1] * 9), greedy=2, lines=[request_line(moves=BEAM)])
+        self.assertEqual((decision.action_index, self.rows()[0]['guard_causes'], self.rows()[0]['source']), (1, [], 'search'))
+
+    def test_a_complete_response_without_the_effect_guard_is_a_server_error(self):
+        for name, guard in (('missing', None), ('not_bool', dict(tripped='no')), ('not_dict', [True])):
+            with self.subTest(name):
+                self.fresh(name)
+                def reply(r, guard=guard):
+                    out = complete(r, action=4)
+                    if guard is None:out.pop('effect_guard')
+                    else:out['effect_guard'] = guard
+                    return out
+                with FakeServer(lambda request, conn, reply=reply: conn.sendall(wire.encode(reply(request)))) as server:
+                    client = live.Client('127.0.0.1', server.port, rung='DN2W8')
+                    decision, = play(live.factory(NS(), raw_factory=raw_factory([]), client=client, telemetry_path=self.path, arm='DN2W8'))
+                self.assertEqual((decision.action_index, self.rows()[0]['cause']), (0, 'server_error'))
 
 
 class RechargeMoveTests(unittest.TestCase):
