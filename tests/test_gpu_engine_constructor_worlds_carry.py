@@ -235,6 +235,16 @@ class RealTablesTests(unittest.TestCase):
         engine=_remap(j.asarray([b2],j.int32),names,v['species'])
         self.assertEqual(engine.tolist(),[[v['species'].index('gardevoir'),v['species'].index('snorlax')]])
 
+    def test_carry_tables_hold_the_engine_ability_names(self):
+        v=self.metadata['vocabulary'];tables=cw.carry_tables(self.metadata,self.catalog)
+        self.assertEqual(tables.ability_names,tuple(map(cw.normalize_id,v['abilities'])))
+        self.assertEqual(len(tables.ability_names),len(tables.pressure))   # the same engine ability id space as the Pressure flags
+        # This fixture's engine vocabulary has no Trace: a tracer on the lines fails loudly (CarryLayoutError), never silently.
+        snorlax=v['species'].index('snorlax');species=np.zeros((1,2,6),np.int32);species[0,:,0]=snorlax
+        state=empty_state(1)._replace(species=j.asarray(species))
+        facts=cw.line_facts([switch('p1','snorlax'),switch('p2','snorlax'),'|-ability|p2a: Snorlax|Immunity|Trace|[from] ability: Trace|[of] p1a: Snorlax'],0)
+        with self.assertRaisesRegex(cw.CarryLayoutError,'Trace is outside'):cw.fix_trace_base_ability(state,0,facts,tables)
+
     def test_the_peer_pressure_count_matches_the_device_move_hook_with_the_real_tables(self):
         v=self.metadata['vocabulary'];pressure,surf=v['abilities'].index('pressure'),v['moves'].index('surf')
         rows=np.asarray(self.tables.belief.species_types)
@@ -303,6 +313,26 @@ class FromB2WorldTests(unittest.TestCase):
             for d in done[1:]:
                 for key in cw.CREDIT_KEYS:np.testing.assert_array_equal(d.public.field_features[key],done[0].public.field_features[key])
                 for x,y in zip(d.public.negative_items,done[0].public.negative_items):np.testing.assert_array_equal(x,y)
+
+
+    def test_b2s_fold_never_records_a_tracers_own_ability(self):
+        """The real fold on Showdown's Gen 3 setAbility line form (the copied ability, then the tracer's own Trace as a positional
+        argument): the tracer's public original stays 0 and its borrowed ability is the copy; the donor's original is the copy.
+        fix_peer_base_ability's precondition (a public original) therefore never holds for a tracer."""
+        from gpu_engine import phase_d_live_worlds as live
+        from pokezero.v5_contract import DecisionAddress
+        from pokezero.recorded_encoder_runner import JaxRecordedAdapter
+        f=self.fx;pressure=f.metadata['vocabulary']['abilities'].index('pressure')
+        for owner,tracer in((0,1),(1,1),(0,0)):
+            with self.subTest(owner=owner,tracer=tracer):
+                donor=1-tracer;seat=lambda side:f'p{side+1}a: '+('Alpha'if side==owner else'Beta')
+                lines=(f'|switch|p{owner+1}a: Alpha|Alpha, L80|291/291',f'|switch|p{2-owner}a: Beta|Beta, L80|100/100',
+                    f'|-ability|{seat(tracer)}|Pressure|Trace|[from] ability: Trace|[of] {seat(donor)}','|turn|1')
+                a=JaxRecordedAdapter(f.catalog,owner_side=owner);a.reset(stream_id=1,battle_id='authored');a.feed(lines)
+                root=live.from_b2(a,f.request(owner),f.source,f.metadata,address=DecisionAddress(1,0,owner))
+                original,borrowed=np.asarray(root.public.original_ability)[0],np.asarray(root.public.borrowed_ability)[0]
+                self.assertEqual((int(original[tracer,0]),int(borrowed[tracer,0]),int(original[donor,0])),(0,pressure,pressure))
+                self.assertEqual(cw.line_facts(lines,owner).tracers[tracer],('alpha'if tracer==owner else'beta',))
 
 
 NAMES=['','alpha','beta','gamma','delta','epsilon','zeta','eta','theta']   # engine species 1..8
@@ -437,7 +467,7 @@ ABILITIES=['','pressure','trace','swiftswim']
 
 def pressure_tables():
     return cw._table(np.zeros((len(PRESSURE_NAMES),2),np.int32),species_names=PRESSURE_NAMES,move_names=MOVES,
-        foe_targeted=[False,True,True,False,True],pressure=[n=='pressure'for n in ABILITIES])
+        foe_targeted=[False,True,True,False,True],pressure=[n=='pressure'for n in ABILITIES],ability_names=ABILITIES)
 
 
 def pressure_world(*,peer_abilities=(1,3,0,0,0,0),uses=((2,1,0,0),)):
@@ -486,9 +516,13 @@ class PeerPressureTests(unittest.TestCase):
         self.assertEqual(int(np.asarray(first.state.base_ability)[0,1,0]),2)   # Trace
         self.assertIs(cw.complete_world(first,pressure_tables(),0,facts=facts,root=root),first)   # the second pass changes nothing
         silent=World(0,state,t._replace(original_ability=j.zeros((1,2,6),j.int32),borrowed_ability=j.zeros((1,2,6),j.int32)),(),1,False)
-        once=cw.complete_world(silent,pressure_tables(),0,facts=facts,root=root)   # Beta's own Pressure, never public: one more
+        # B2's carry never holds a tracer's own ability; the Trace line alone proves Beta's is Trace (fix_trace_base_ability): no charge.
+        traced=cw.complete_world(silent,pressure_tables(),0,facts=facts,root=root)
+        np.testing.assert_array_equal(np.asarray(traced.public.pp_used)[0,0,0],[3,1,1,2]);self.assertEqual(int(np.asarray(traced.state.base_ability)[0,1,0]),2)
+        quiet=cw.line_facts([x for x in lines if not x.startswith('|-ability|')],0)   # Beta never traced: its own Pressure, never public
+        once=cw.complete_world(silent,pressure_tables(),0,facts=quiet,root=root)
         np.testing.assert_array_equal(np.asarray(once.public.pp_used)[0,0,0],[4,1,1,2])
-        self.assertIs(cw.complete_world(once,pressure_tables(),0,facts=facts,root=root),once)
+        self.assertIs(cw.complete_world(once,pressure_tables(),0,facts=quiet,root=root),once)
 
 
 class RechargeTests(unittest.TestCase):
@@ -524,6 +558,79 @@ class PeerBaseAbilityTests(unittest.TestCase):
         self.assertIs(out.ability,state.ability);self.assertIs(cw.fix_peer_base_ability(out,t,0),out)
         world=World(0,state,t,(),1,False);done=cw.complete_world(world,table(),0)
         self.assertEqual(np.asarray(done.state.base_ability)[0,1].tolist(),[2,3,0,0,0,0]);self.assertIs(cw.complete_world(done,table(),0),done)
+
+
+# The Gen 3 lines of the OV5 Trace misses (fp-collect-r1 owning-wire, verbatim): battles 335, 495 and 718.
+TRACE_LINES={
+    335:['|switch|p1a: Porygon2|Porygon2, L84|100/100','|switch|p2a: Sharpedo|Sharpedo, L83, M|100/100',
+        '|-ability|p1a: Porygon2|Rough Skin|Trace|[from] ability: Trace|[of] p2a: Sharpedo','|turn|1'],
+    495:['|switch|p1a: Gardevoir|Gardevoir, L82, F|100/100','|switch|p2a: Ampharos|Ampharos, L84, M|100/100',
+        '|-ability|p1a: Gardevoir|Static|Trace|[from] ability: Trace|[of] p2a: Ampharos','|turn|1',
+        '|switch|p2a: Jolteon|Jolteon, L82, M|100/100','|turn|2','|switch|p1a: Blissey|Blissey, L80, F|100/100','|turn|3',
+        '|switch|p1a: Gardevoir|Gardevoir, L82, F|60/100','|-ability|p1a: Gardevoir|Volt Absorb|Trace|[from] ability: Trace|[of] p2a: Jolteon',
+        '|turn|4'],
+    718:['|switch|p1a: Nidoking|Nidoking, L84, M|100/100','|switch|p2a: Porygon2|Porygon2, L84|100/100',
+        '|-ability|p2a: Porygon2|Poison Point|Trace|[from] ability: Trace|[of] p1a: Nidoking','|turn|1']}
+TRACE_SPECIES=['','porygon2','sharpedo','gardevoir','ampharos','jolteon','blissey','nidoking']
+TRACE_ABILITIES=['','roughskin','trace','static','voltabsorb','poisonpoint','swiftswim']
+
+
+def trace_tables():
+    return cw._table(np.zeros((len(TRACE_SPECIES),2),np.int32),species_names=TRACE_SPECIES,ability_names=TRACE_ABILITIES)
+
+
+def trace_world(side_species,active,copied,owner):
+    """(state, carry) as the materializer and B2's fold leave them: each side's party `side_species` (engine ids), the active
+    tracer's base_ability and ability both its current copy `copied` = {side: ability id} (every other member Swift Swim, its
+    set's), and B2's carry: the tracer's original 0, its borrowed the copy."""
+    species=np.zeros((2,6),np.int32);base=np.full((2,6),6,np.int32)
+    for side,team in enumerate(side_species):species[side,:len(team)]=team
+    base[species==0]=0;mapping=np.where(species>0,np.arange(6),-1)
+    for side,ability in copied.items():base[side,active[side]]=ability
+    state=empty_state(1)._replace(species=j.asarray(species[None]),active=j.asarray([list(active)],j.int32),
+        base_ability=j.asarray(base[None]),ability=j.asarray(base[None]))
+    borrowed=np.zeros((1,2,6),np.int32)
+    for side,ability in copied.items():borrowed[0,side,active[side]]=ability
+    t=carry(species,mapping)._replace(original_ability=j.zeros((1,2,6),j.int32),borrowed_ability=j.asarray(borrowed))
+    return state,t
+
+
+class TraceTests(unittest.TestCase):
+    def test_line_facts_name_each_side_s_tracers_on_the_real_line_form(self):
+        self.assertEqual([cw.line_facts(TRACE_LINES[b],0).tracers for b in(335,495,718)],
+            [(('porygon2',),()),(('gardevoir',),()),((),('porygon2',))])
+        self.assertEqual(cw.line_facts(TRACE_LINES[718],1).tracers,((),('porygon2',)))   # per side, whoever owns the lines
+        older=['|switch|p2a: Porygon2|Porygon2, L84|100/100','|-ability|p2a: Porygon2|Pressure|[from] ability: Trace|[of] p1a: Dusclops']
+        self.assertEqual(cw.line_facts(older,0).tracers,((),('porygon2',)))   # without the positional own ability too
+        plain=['|switch|p2a: Dusclops|Dusclops, L84|100/100','|-ability|p2a: Dusclops|Pressure']   # a direct reveal is no Trace
+        self.assertEqual(cw.line_facts(plain,0).tracers,((),()))
+
+    def test_the_tracer_takes_trace_as_its_base_on_either_side(self):
+        """Battle 335 seen by p2 (the tracer Porygon2 is the peer) and by p1 (the tracer is the owner's own), 718 by p1 (peer):
+        fix_peer_base_ability cannot fire (B2's original is 0); the completion sets base_ability Trace on the tracer only, keeps
+        the running copy, and a second pass changes nothing."""
+        cases=[(335,1,[[1,6],[2]],(0,0),{0:1},(0,0)),(335,0,[[1,6],[2]],(0,0),{0:1},(0,0)),(718,0,[[7],[1,5]],(0,0),{1:5},(1,0))]
+        for battle,owner,team,active,copied,where in cases:
+            with self.subTest(battle=battle,owner=owner):
+                state,t=trace_world(team,active,copied,owner);facts=cw.line_facts(TRACE_LINES[battle],owner)
+                self.assertIs(cw.fix_peer_base_ability(state,t,owner),state)   # the precondition that failed in OV5
+                fixed,_=cw.complete_carry(state,t,trace_tables(),owner,facts=facts)
+                base,run=np.asarray(fixed.base_ability)[0],np.asarray(fixed.ability)[0]
+                self.assertEqual(int(base[where]),TRACE_ABILITIES.index('trace'));self.assertEqual(int(run[where]),copied[where[0]])
+                want=np.asarray(state.base_ability)[0].copy();want[where]=2;np.testing.assert_array_equal(base,want)   # nothing else
+                again,_=cw.complete_carry(fixed,t,trace_tables(),owner,facts=facts);self.assertIs(again,fixed)
+        state,t=trace_world([[1,6],[2]],(0,0),{0:1},1);facts=cw.line_facts(TRACE_LINES[335],1)
+        with self.assertRaises(cw.CarryLayoutError):cw.complete_carry(state,t,table(),1,facts=facts)   # no ability names
+        with self.assertRaises(cw.CarryLayoutError):
+            cw.fix_trace_base_ability(state,1,facts,cw._table(np.zeros((8,2),np.int32),species_names=TRACE_SPECIES,ability_names=['','roughskin']))
+        with self.assertRaises(cw.PeerOrderUnavailable):cw.fix_trace_base_ability(state,1,cw.line_facts(TRACE_LINES[718],1),trace_tables())
+        self.assertIs(cw.fix_trace_base_ability(state,1,cw.LineFacts(('sharpedo',),()),trace_tables()),state)   # no tracer: unchanged
+
+    def test_gardevoirs_second_trace_keeps_one_tracer(self):
+        state,t=trace_world([[3,6],[4,5]],(0,1),{0:4},1);facts=cw.line_facts(TRACE_LINES[495],1)
+        self.assertEqual(facts.tracers,(('gardevoir',),()))
+        fixed,_=cw.complete_carry(state,t,trace_tables(),1,facts=facts)
+        self.assertEqual((int(np.asarray(fixed.base_ability)[0,0,0]),int(np.asarray(fixed.ability)[0,0,0])),(2,4))   # Trace; Volt Absorb
 
 
 class OwnerSpikesTests(unittest.TestCase):

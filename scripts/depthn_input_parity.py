@@ -59,10 +59,12 @@ report (CPU): summary.json and summary.md over the capture directories and torch
 is the capture's): a selected decision whose live greedy is illegal under root_legal, or whose re-pricer row (replay/rows-*.jsonl)
 carries a live_problem (duplicated or missing telemetry row, live prefix differing from the capture's), is excluded from the analysis
 and counted. The gate (`gate`) accounts for every selected decision: coverage (all captured), path 2 bit for bit (logits and value),
-selection (the replay's root prior and live greedy are the selection's), replay parity (action_equal and q_equal where the live actor
-searched), torch (a row per analysed decision, select_action agreeing on both paths) and path 1 (the live greedy reproduced on >=
-99.5%); any failure is HARNESS_NOT_EXACT with the misses, and "exact on k/n" counts the selected decisions passing every per-decision
-check. Then per path and set the argmax agreement with the live greedy and the server prior and max |dlogit| over legal actions
+selection (the replay's root prior and live greedy are the selection's), torch (a row per analysed decision, select_action agreeing
+on both paths) and path 1 (the live greedy reproduced on >= 99.5%), plus same_tree_replay (action_equal and q_equal where the live
+actor searched) only when the captures' re-pricer ran the live run's own tree (capture_same_tree); any failure is HARNESS_NOT_EXACT
+with the misses, and "exact on k/n" counts the selected decisions passing every per-decision check. On another tree (the fixes'
+tree replayed against the pre-fix live search) the replay's differences from the live search are the fixes' intended effect, so
+they are reported as an informational line ("changed by fixes (expected): Q k/n, action k/n") and never gate. Then per path and set the argmax agreement with the live greedy and the server prior and max |dlogit| over legal actions
 against path 1 and the recorded prior (p50/p95/max), the B2 vs world-0 encoding diff (per key, token, column and (section, kind,
 column) cell, by set, ranked by excess share (disagree share minus control share), tagged by side and information status; a
 differing structural-zero cell is an anomaly), the cross-world diff, the attribution, and the torch runs' environment.
@@ -933,14 +935,19 @@ def path_metrics(decisions, path):
         dlogit_vs_recorded=quantiles([max_gap(d['logits'][path], d['logits'].get(2), d['legal']) for d in have if 2 in d['logits']]))
 
 
-def gate(entries, torch_rows, *, selected=None, excluded=None):
+def gate(entries, torch_rows, *, selected=None, excluded=None, same_tree=None):
     """Every selected decision accounted for, and the harness exact on the rest (summary.md's gate). `entries`: every index entry;
-    `selected`: the selection's keys (default: the entries'); `excluded`: {key: reasons} (report-side exclusions). Checks:
-    coverage (every selected decision captured, none unexpected); path2 (every captured root prior re-run bit for bit, logits and
-    value); selection (the replay's root prior and live greedy are the selection's, for every captured decision); replay_parity
-    (action_equal and q_equal on every analysed decision the live actor searched); torch (a torch row for every analysed decision,
-    RawPolicy.select_action agreeing with the greedy on both paths); path1 (the live greedy reproduced on >= GATE_PATH1 of the
-    analysed decisions). exact_on: analysed decisions passing every per-decision check, out of the selected."""
+    `selected`: the selection's keys (default: the entries'); `excluded`: {key: reasons} (report-side exclusions); `same_tree`:
+    whether the captures' re-pricer ran the live run's own tree (capture_same_tree; None when unknown). Checks: coverage (every
+    selected decision captured, none unexpected); path2 (every captured root prior re-run bit for bit, logits and value);
+    selection (the replay's root prior and live greedy are the selection's, for every captured decision); torch (a torch row
+    for every analysed decision, RawPolicy.select_action agreeing with the greedy on both paths); path1 (the live greedy
+    reproduced on >= GATE_PATH1 of the analysed decisions); same_tree_replay, only when same_tree is True (action_equal and
+    q_equal on every analysed decision the live actor searched: the same tree must give the live search's answer).
+    live_replay always counts those decisions and how many the replay changed (action, Q). On another tree (the fixes'
+    tree against the pre-fix live search) or an unknown one it is informational, never a check: those changes are the fixes'
+    intended effect, not a harness failure. exact_on: analysed decisions passing every per-decision check, out of the
+    selected."""
     excluded = excluded or {};key = lambda e: (e['ordinal'], e['decision_index'])
     by = {key(e): e for e in entries};selected = set(by) if selected is None else set(selected)
     captured = sorted(k for k, e in by.items() if e.get('captured') and k in selected)
@@ -958,17 +965,23 @@ def gate(entries, torch_rows, *, selected=None, excluded=None):
         path2=dict(n=len(captured), misses=[dict(address(k), path2=by[k].get('path2')) for k in captured if not path2(by[k])]),
         selection=dict(n=len(captured), misses=[dict(address(k), root_logits=by[k].get('root_logits_match_selection'),
             live_greedy=by[k].get('live_greedy_matches_selection')) for k in captured if not selection(by[k])]),
-        replay_parity=dict(n=sum(searched(by[k]) for k in analysed), misses=[dict(address(k), parity=by[k].get('parity')) for k in analysed if not parity(by[k])]),
         torch=dict(n=len(analysed), misses=[dict(address(k), torch_row=k in torch_rows, select_agrees=None if k not in torch_rows else
             {p: torch_rows[k][p].get('select_agrees') for p in ('path1', 'path4')}) for k in analysed if not agrees(k)]))
-    for name in ('path2', 'selection', 'replay_parity', 'torch'):checks[name]['passed'] = bool(checks[name]['n']) and not checks[name]['misses'] if name != 'replay_parity' else not checks[name]['misses']
+    searched_keys = [k for k in analysed if searched(by[k])];changed = [dict(address(k), parity=by[k].get('parity')) for k in analysed if not parity(by[k])]
+    live_replay = dict(mode='gated' if same_tree is True else 'informational', same_tree=same_tree, n=len(searched_keys),
+        action_equal=sum(bool(by[k]['parity'].get('action_equal')) for k in searched_keys), q_equal=sum(bool(by[k]['parity'].get('q_equal')) for k in searched_keys),
+        changed=changed)
+    live_replay.update(action_changed=live_replay['n'] - live_replay['action_equal'], q_changed=live_replay['n'] - live_replay['q_equal'])
+    if same_tree is True:checks['same_tree_replay'] = dict(n=len(searched_keys), misses=changed)
+    for name in ('path2', 'selection', 'same_tree_replay', 'torch'):
+        if name in checks:checks[name]['passed'] = bool(checks[name]['n']) and not checks[name]['misses'] if name != 'same_tree_replay' else not checks[name]['misses']
     p1 = [k for k in analysed if k in torch_rows]
     misses = [dict(address(k), live=by[k]['selection']['live_greedy'], path1=torch_rows[k]['path1']['greedy']) for k in p1
         if torch_rows[k]['path1']['greedy'] != by[k]['selection']['live_greedy']]
     rate = 1 - len(misses) / len(p1) if p1 else None
     checks['path1'] = dict(n=len(p1), reproduced=len(p1) - len(misses), share=rate, threshold=GATE_PATH1, passed=rate is not None and rate >= GATE_PATH1, misses=misses)
-    exact = sum(path2(by[k]) and selection(by[k]) and parity(by[k]) and agrees(k) for k in analysed)
-    return dict(verdict='HARNESS_EXACT' if all(c['passed'] for c in checks.values()) else 'HARNESS_NOT_EXACT', exact_on=dict(k=exact, n=len(selected)),
+    exact = sum(path2(by[k]) and selection(by[k]) and (parity(by[k]) or same_tree is not True) and agrees(k) for k in analysed)
+    return dict(live_replay=live_replay, verdict='HARNESS_EXACT' if all(c['passed'] for c in checks.values()) else 'HARNESS_NOT_EXACT', exact_on=dict(k=exact, n=len(selected)),
         failed=[name for name, c in checks.items() if not c['passed']], excluded_reasons=dict(collections.Counter(r.split(':')[0] for k in captured
         for r in excluded.get(k, ()))), **checks)
 
@@ -1022,7 +1035,21 @@ class Tally:
         return [dict(feature=f, **{s: self.counts[s][f] for s in SETS}, **{f'{s}_share': self.share(s, f) for s in SETS}) for f in features]
 
 
-def report(entries, torch_rows, *, manifest=None, selection=None, coverage=None, selected=None, excluded=None, torch_runtime=None):
+def capture_same_tree(directories):
+    """Whether every capture's re-pricer (replay/header-*.json) ran the live run's own tree: its tree guard pinned the live trees
+    (no --accept-tree), or an accepted tree equal to them (differs_from_live empty). False when one ran a modified tree; None
+    when a capture has no re-pricer header (gate: informational)."""
+    found = []
+    for d in map(Path, directories):
+        headers = sorted((d / 'replay').glob('header-*.json'))
+        if not headers:return None
+        for path in headers:
+            guard = json.loads(path.read_text()).get('tree_guard') or {}
+            found.append(not guard.get('modified_tree') or ('differs_from_live' in guard and not guard['differs_from_live']))
+    return all(found) if found else None
+
+
+def report(entries, torch_rows, *, manifest=None, selection=None, coverage=None, selected=None, excluded=None, torch_runtime=None, same_tree=None):
     """The summary dict (module docstring) over capture entries, {(ordinal, decision_index): torch row}, the arrays, the selected keys
     and the report-side exclusions (gate)."""
     cells = feature_layout(manifest);tokens = token_layout();excluded = excluded or {}
@@ -1032,7 +1059,7 @@ def report(entries, torch_rows, *, manifest=None, selection=None, coverage=None,
     usable = [e for e in entries if e.get('captured') and e.get('root_legal') is not None and (e['ordinal'], e['decision_index']) not in excluded
         and (chosen is None or (e['ordinal'], e['decision_index']) in chosen)]
     decisions = [decision_paths(e, torch_rows.get((e['ordinal'], e['decision_index']))) for e in usable]
-    out = dict(schema=SUMMARY_SCHEMA, gate=gate(entries, torch_rows, selected=selected, excluded=excluded), paths={}, coverage=coverage, selection=selection,
+    out = dict(schema=SUMMARY_SCHEMA, gate=gate(entries, torch_rows, selected=selected, excluded=excluded, same_tree=same_tree), paths={}, coverage=coverage, selection=selection,
         excluded=[dict(ordinal=k[0], decision_index=k[1], reasons=v) for k, v in sorted(excluded.items())], torch_runtime=torch_runtime,
         caveats=CAVEATS)
     for path, what in PATHS.items():
@@ -1143,11 +1170,18 @@ def markdown(s):
     for d in cov.get('captures') or ():lines.append(f'- capture {d["directory"]}: selected in shard {d.get("selected_in_shard")}, recorded {d.get("recorded")}, '
         f'captured {d.get("captured")}, path 2 exact {d.get("path2_exact")}, missing {d.get("missing")}, errors {d.get("errors")}, interrupted {d.get("interrupted")}')
     lines += ['', '## Gate', '', '| check | n | misses | passed |', '|---|---|---|---|']
-    for name in ('path2', 'selection', 'replay_parity', 'torch'):lines.append(f'| {name} | {g[name]["n"]} | {len(g[name]["misses"])} | {g[name]["passed"]} |')
+    for name in ('path2', 'selection', 'same_tree_replay', 'torch'):
+        if name in g:lines.append(f'| {name} | {g[name]["n"]} | {len(g[name]["misses"])} | {g[name]["passed"]} |')
     lines.append(f'| path1 (live greedy reproduced, threshold {pct(GATE_PATH1)}) | {g["path1"]["n"]} | {len(g["path1"]["misses"])} ({pct(g["path1"]["share"])} '
         f'reproduced) | {g["path1"]["passed"]} |')
-    for name in ('path1', 'path2', 'selection', 'replay_parity', 'torch'):
-        if g[name]['misses']:lines.append(f'- {name} misses: {where(g[name]["misses"])}')
+    for name in ('path1', 'path2', 'selection', 'same_tree_replay', 'torch'):
+        if name in g and g[name]['misses']:lines.append(f'- {name} misses: {where(g[name]["misses"])}')
+    r = g['live_replay']
+    if r['mode'] == 'informational':
+        lines.append(f'- changed by fixes (expected): Q {r["q_changed"]}/{r["n"]}, action {r["action_changed"]}/{r["n"]} (informational, never gated: the '
+            f'replay ran {"a tree other than" if r["same_tree"] is False else "a tree not known to be"} the live run\'s, so its differences from the live '
+            'search are the fixes\' effect; equality is gated only on the live run\'s own tree)')
+    else:lines.append(f'- live run\'s own tree (gated as same_tree_replay): Q equal {r["q_equal"]}/{r["n"]}, action equal {r["action_equal"]}/{r["n"]}')
     t = s.get('torch') or {}
     lines += ['', f'torch: b2_legal_equals_root_legal {t.get("b2_legal_equals_root_legal")}; select_agrees {t.get("select_agrees")}']
     for h in s.get('torch_runtime') or ():
@@ -1222,10 +1256,12 @@ def report_main(argv):
         not_in_captures=len(selected - {(e['ordinal'], e['decision_index']) for e in entries}), replay_rows_with_live_problem=sum(bool(v) for v in problems.values()))
     out = Path(args.out);out.mkdir(parents=True, exist_ok=False)
     s = report(entries, torch_rows, manifest=manifest, selection=dict(counts=selection['counts'], select_seed=selection['select_seed']), coverage=coverage,
-        selected=selected, excluded=excluded, torch_runtime=runtimes)
+        selected=selected, excluded=excluded, torch_runtime=runtimes, same_tree=capture_same_tree(args.capture))
     write_json(out / 'summary.json', s)
     with (out / 'summary.md').open('x') as stream:stream.write(markdown(s))
+    r = s['gate']['live_replay']
     print(json.dumps(dict(done=str(out), verdict=s['gate']['verdict'], exact_on=s['gate']['exact_on'], failed=s['gate']['failed'],
+        live_replay=dict(mode=r['mode'], n=r['n'], q_changed=r['q_changed'], action_changed=r['action_changed']),
         attribution={k: s['attribution'][k] for k in SETS})), flush=True)
     return 0
 

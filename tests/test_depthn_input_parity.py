@@ -638,9 +638,19 @@ class ReportTests(unittest.TestCase):
         self.assertEqual((g['failed'], [m['decision_index'] for m in g['selection']['misses']]), (['selection'], [6, 7]))
         entries[6], entries[7] = gate_entry(6), gate_entry(7)
         entries[8] = gate_entry(8, parity=dict(live_searched=True, replay_complete=True, action_equal=True, q_equal=False))
-        self.assertEqual(check()['failed'], ['replay_parity'])
+        entries[9] = gate_entry(9, parity=dict(live_searched=True, replay_complete=True, action_equal=False, q_equal=False))
+        for tree in (None, False):   # another tree, or one not known to be the live run's: the replay's changes are informational
+            g = check(same_tree=tree)
+            self.assertEqual((g['verdict'], g['failed'], g['exact_on']['k']), ('HARNESS_EXACT', [], 200))
+            self.assertNotIn('same_tree_replay', g)
+            self.assertEqual({k: g['live_replay'][k] for k in ('mode', 'same_tree', 'n', 'q_changed', 'action_changed', 'q_equal', 'action_equal')},
+                dict(mode='informational', same_tree=tree, n=200, q_changed=2, action_changed=1, q_equal=198, action_equal=199))
+        g = check(same_tree=True)   # the live run's own tree: equality is required again
+        self.assertEqual((g['verdict'], g['failed'], [m['decision_index'] for m in g['same_tree_replay']['misses']], g['exact_on']['k'], g['live_replay']['mode']),
+            ('HARNESS_NOT_EXACT', ['same_tree_replay'], [8, 9], 198, 'gated'))
         entries[8] = gate_entry(8, parity=dict(live_searched=False, replay_complete=True, action_equal=None, q_equal=None))   # not searched live: no parity
-        self.assertEqual((check()['verdict'], check()['replay_parity']['n']), ('HARNESS_EXACT', 199))
+        entries[9] = gate_entry(9)
+        self.assertEqual((check(same_tree=True)['verdict'], check(same_tree=True)['same_tree_replay']['n']), ('HARNESS_EXACT', 199))
         rows[1, 9] = gate_torch(agrees=False);del rows[1, 10];g = check()
         self.assertEqual((g['failed'], [m['decision_index'] for m in g['torch']['misses']], g['path1']['n']), (['torch'], [9, 10], 199))
         rows[1, 9] = rows[1, 10] = gate_torch()
@@ -655,6 +665,23 @@ class ReportTests(unittest.TestCase):
         self.assertEqual((g['verdict'], g['path1']['misses'], g['coverage']['excluded'], g['coverage']['analysed'], g['exact_on']['k']), ('HARNESS_EXACT', [], 2, 198, 198))
         self.assertEqual(g['excluded_reasons'], {'live_greedy_illegal': 1, 'live_problem': 1})
         self.assertEqual(P.gate([], {})['verdict'], 'HARNESS_NOT_EXACT')   # nothing checked is not exact
+
+    def test_capture_same_tree_reads_the_re_pricers_tree_guard_and_the_report_says_which(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            def capture(name, guard):
+                d = Path(tmp) / name;(d / 'replay').mkdir(parents=True)
+                if guard is not None:(d / 'replay' / 'header-0.json').write_text(json.dumps(dict(tree_guard=guard)))
+                return d
+            live = capture('live', dict(head='h'));fixed = capture('fixed', dict(head='h', modified_tree=True, differs_from_live=['gpu_engine']))
+            accepted = capture('accepted', dict(head='h', modified_tree=True, differs_from_live=[]));bare = capture('bare', None)
+            self.assertEqual([P.capture_same_tree(x) for x in ([live], [fixed], [accepted], [live, fixed], [bare])], [True, False, True, False, None])
+        entries = [gate_entry(i, parity=dict(live_searched=True, replay_complete=True, action_equal=i < 22, q_equal=False)) for i in range(62)]
+        rows = {(1, i): gate_torch() for i in range(62)}
+        text = P.markdown(P.report(entries, rows, same_tree=False))
+        self.assertIn('changed by fixes (expected): Q 62/62, action 40/62', text);self.assertNotIn('replay_parity', text)
+        self.assertIn('Gate: HARNESS_EXACT', text)
+        same = P.markdown(P.report(entries, rows, same_tree=True))
+        self.assertIn('Gate: HARNESS_NOT_EXACT', same);self.assertIn('| same_tree_replay | 62 | 62 | False |', same)
 
     def test_tally_ranking(self):
         t = P.Tally()

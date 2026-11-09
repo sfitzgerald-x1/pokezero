@@ -170,6 +170,19 @@ class OverlayTests(unittest.TestCase):
         self.assertEqual((np.asarray(forced.pp)[0, 1, 2].tolist(), np.asarray(forced.hp)[0, 1, 2], notes), ([5, 5, 5, 0], 73, []))
 
 
+    def test_a_cosmetic_forme_joins_its_base_species(self):
+        """Battles 776 (Unown-V) and 669 (Unown-J): the world keeps the base species unown, the request names the forme."""
+        vocabulary = dict(RT.VOCABULARY, species=RT.VOCABULARY['species'] + ['Unown', 'Mew', 'Mewtwo'])
+        state = RT.STATE._replace(species=RT.STATE.species.at[0, 1, 2].set(7))   # Snorlax's slot holds Unown (the active)
+        request = fp_request();request['side']['pokemon'][0]['details'] = 'Unown-V, L80, N'
+        out, notes = P.overlay_private(state, 1, request, vocabulary)
+        self.assertEqual(notes, []);self.assertEqual((int(np.asarray(out.hp)[0, 1, 2]), np.asarray(out.pp)[0, 1, 2].tolist()), (73, [3, 4, 2, 0]))
+        names = ['', 'unown', 'mew', 'mewtwo', 'hooh']
+        self.assertEqual([P.forme_slots(names, d) for d in ('Unown-J, L80', 'Unown, L80', 'Mew, L80', 'Mewtwo, L80', 'Ho-Oh, L80', 'Mew-X, L80')],
+            [[1], [1], [2], [3], [4], [2]])
+        self.assertEqual(P.forme_slots(['', 'mewtwo'], 'Mew, L80'), [])   # never a prefix guess
+
+
 class ViewTests(unittest.TestCase):
     def test_the_view_is_the_peer_inputs_prefix_and_the_peer_legal_lanes(self):
         class Executor:   # _make_views calls legal() then observe() per seat; each seat's inputs are told apart
@@ -748,6 +761,33 @@ class ReportMathTests(unittest.TestCase):
         self.assertEqual(sorted(report['redactions']), sorted(P.DEFAULT_REDACTIONS))
         self.assertEqual((sorted(one['redactions']), one['parity_redacted']['true']['exact']['numeric']), (['hp_percent'], 0.))   # --redact selects
         self.assertIn('Exact match except the documented redactions', markdown)
+
+    def test_the_gate_counts_positions_passing_within_tolerance_and_ranks_failing_patterns(self):
+        """The gate after the redactions: float noise below --tolerance passes (bitwise exact pins it at 0), a real gap, a categorical
+        miss or a legal lane fails, and the failing positions are grouped by their exact set of failing cells."""
+        env, view = toy(6)
+        env['numeric'][:, 1, 0] = 1.;view['numeric'][:, 1, 0] = np.float32(.99999994)   # a full-HP float32 below tolerance: every position
+        view['categorical'][0, 1, 9] = 5;view['categorical'][1, 1, 9] = 5   # BELIEF_ABILITY[0] on self0: two positions alike
+        view['numeric'][2, 3, 4] = .5   # a real gap
+        view['legal'][3, 2] = False   # a legal lane
+        keys = dict(ordinal=np.arange(6) + 100, round=np.arange(6), decision_index=np.arange(6), turn=np.ones(6, int))
+        labels, numeric, categorical = P.token_labels(), P.numeric_names(), P.categorical_names()
+        g = P.gate_stats(env, view, keys, tolerance=1e-5, labels=labels, numeric=numeric, categorical=categorical)
+        self.assertEqual((g['positions'], g['passed'], g['share'], g['meets_bar']), (6, 2, 2 / 6, False))
+        self.assertEqual(P.diff_stats(env, view, tolerance=1e-5)['exact']['observation'], 0.)   # bitwise: no position exact
+        top = g['failing_patterns'][0]
+        self.assertEqual((top['cells'], top['positions'], top['examples']), ([f'self0.{categorical[9]}'], 2,
+            [dict(ordinal=100, round=0, decision_index=0), dict(ordinal=101, round=1, decision_index=1)]))
+        self.assertEqual(sorted(x['positions'] for x in g['failing_patterns']), [1, 1, 2]);self.assertIn('legal[2]', g['failing_cells'])
+        self.assertEqual(g['failing_cells'][f'{labels[3]}.{numeric[4]}'], 1)
+        clean = P.gate_stats(env, env, keys, tolerance=1e-5, labels=labels, numeric=numeric, categorical=categorical)
+        self.assertEqual((clean['share'], clean['meets_bar'], clean['failing_patterns']), (1., True, []))
+        with tempfile.TemporaryDirectory() as tmp:
+            noise = env['numeric'].copy();noise[:, 1, 0] = np.float32(.99999994)   # the float noise alone
+            capture = synthetic_capture(Path(tmp) / 'capture', env['numeric'], noise);report = P.build_report([capture])
+            markdown = P.render_markdown(report)
+        self.assertEqual((report['gate']['true']['share'], report['gate']['true']['meets_bar']), (1., True))   # numeric noise only here
+        self.assertIn('## Gate: positions passing after the redactions', markdown);self.assertIn('| true | 6 | 6 | 1.000 | yes |', markdown)
 
     def test_field_116_is_compared_against_the_env_recomputation_else_within_the_rounding_tolerance(self):
         env, view = toy(4);env, view = env['numeric'], view['numeric']

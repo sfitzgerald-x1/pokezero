@@ -94,11 +94,15 @@ dict keys and leaves two members None). This module turns prepared roots into De
     owner's own Pressure in search. B2 also charges an owner move a [from] tag attributes to an unknown caller (e.g.
     [from]Magic Coat: public_moves' OTHER_FROM caller); line_facts and the device do not count those declarations, so
     neither does this recount: an existing B2-vs-device difference, not one this fill introduces.
-  - a peer tracer's base ability (fix_peer_base_ability, on the world STATE): the materialized spec writes a Trace holder's
-    public copied ability into both ability and base_ability (engine_world._resolved_ability), so the peer's own ability
-    column (the encoder reads base_ability) showed the copy; base_ability becomes the public original (Trace), as the env
-    and the Gen 3 request's baseAbility show it, the running ability unchanged. The owner side is from_b2's request
-    baseAbility already.
+  - a Trace holder's base ability (on the world STATE, both sides): the materializer writes an ACTIVE Trace holder's current
+    copy into both ability and base_ability (local_showdown._apply_traced_ability_materialization_state ->
+    engine_world._resolved_ability -> v5_hypothetical_state.map_spec), for the owner's own tracer as for the peer's, so that
+    side's own ability column (the encoder reads base_ability) showed the copy and the engine would revert to the copy on
+    switch-out. fix_trace_base_ability sets base_ability to Trace for every member the lines show announcing Trace (the
+    subject of a [from] ability: Trace line: its own ability is Trace), the running copy unchanged; it is the rule that
+    fires on real lines. fix_peer_base_ability (the carry's public original over its borrowed ability, peer only) never
+    does for a tracer: B2's fold records the tracer's running copy and the DONOR's original, never the tracer's own
+    ability (pokezero.belief._trace_copy_source; public_abilities.trace_copy).
   The peer's own ability and item belief columns otherwise need nothing: the encoder writes the observer's own Pokemon's
   from the world's engine state (engine_device_observation.encode: base_ability and item as belief:possible_ability / item
   categories, in own_order), as the env writes a player's own (showdown._encode_pokemon_tokens' self rule: the request's
@@ -260,10 +264,14 @@ class CarryTables:
     move_names:tuple=()         # metadata['vocabulary']['moves'] normalized
     foe_targeted:tuple=()       # per engine move id: Pressure doubles its PP (the hooks' belief_tables.public_foe_targeted)
     pressure:tuple=()           # per engine ability id: the ability is Pressure (the hooks' belief_tables.public_pressure)
+    ability_names:tuple=()      # metadata['vocabulary']['abilities'] normalized
 
 
-def _table(species_types,species_count=None,type_count=None,species_names=(),move_names=(),foe_targeted=(),pressure=()):
+def _table(species_types,species_count=None,type_count=None,species_names=(),move_names=(),foe_targeted=(),pressure=(),ability_names=()):
     move_names=tuple(map(normalize_id,move_names));foe_targeted=tuple(map(bool,foe_targeted));pressure=tuple(map(bool,pressure))
+    ability_names=tuple(map(normalize_id,ability_names))
+    if ability_names and pressure and len(ability_names)!=len(pressure):
+        raise CarryLayoutError(f'ability_names: {len(ability_names)} names for {len(pressure)} engine abilities')
     if len(move_names)!=len(foe_targeted):raise CarryLayoutError(f'foe_targeted: {len(foe_targeted)} flags for {len(move_names)} engine moves')
     species_names=tuple(map(normalize_id,species_names))
     if species_names and len(species_names)!=np.shape(species_types)[0]:
@@ -275,7 +283,7 @@ def _table(species_types,species_count=None,type_count=None,species_names=(),mov
         raise CarryLayoutError(f'species_types: {st.shape[0]} rows for {species_count} engine species')
     if np.any(st<0)or type_count is not None and np.any(st>=type_count):raise CarryLayoutError('species_types: a type id outside the engine namespace')
     st=st.copy();st.setflags(write=False)
-    return CarryTables(st,species_names,move_names,foe_targeted,pressure)
+    return CarryTables(st,species_names,move_names,foe_targeted,pressure,ability_names)
 
 
 def carry_tables(metadata,catalog):
@@ -288,7 +296,7 @@ def carry_tables(metadata,catalog):
     with context:belief=engine_device_belief.compile_tables(metadata,catalog)
     v=metadata['vocabulary']
     return _table(jax.device_get(belief.species_types),len(v['species']),len(v['types']),v['species'],v['moves'],
-        np.asarray(jax.device_get(belief.public_foe_targeted)),np.asarray(jax.device_get(belief.public_pressure)))
+        np.asarray(jax.device_get(belief.public_foe_targeted)),np.asarray(jax.device_get(belief.public_pressure)),v['abilities'])
 
 
 _CARRY_TABLES={}
@@ -413,12 +421,15 @@ class LineFacts:
     Struggle, the actor not transformed), each (actor species, move, the peer's active species, whether that active was
     alive, whether its Pressure was public: revealed by an -ability line, a Trace copy until it next arrives); recharge: per
     side, whether its active must recharge (B2's public_active.project_line: set by -mustrecharge, cleared by that side's
-    |cant| recharge, arrival or faint)."""
+    |cant| recharge, arrival or faint); tracers: per side, the normalized species of each member that announced Trace (the
+    SUBJECT of an -ability line tagged [from] ability: Trace: Showdown's setAbility line
+    |-ability|<tracer>|<copied>|<tracer's own ability>|[from] ability: Trace|[of] <donor>), sorted."""
     peer_switches:tuple
     owner_spikes:tuple|None
     baton:tuple=(False,False)
     owner_moves:tuple=()
     recharge:tuple=(False,False)   # per side (p1, p2): its active must recharge (B2's public_active rule, line_facts)
+    tracers:tuple=((),())          # per side (p1, p2): the species that announced Trace on the lines (line_facts)
 
 
 def _seat_name(field):
@@ -440,6 +451,7 @@ def line_facts(lines,owner):
     own,peer=f'p{owner+1}',f'p{2-owner}';switches=[];spikes=[];hp={};complete=True
     species={};active={'p1':'','p2':''};alive={'p1':False,'p2':False};pending=set();baton={'p1':False,'p2':False}
     transformed=set();original_pressure=set();running_pressure=set();moves=[];recharge={'p1':False,'p2':False}
+    tracers={'p1':set(),'p2':set()}
     for line in lines:
         parts=str(line).split('|')
         if len(parts)<3 or parts[0]!='':continue
@@ -448,6 +460,8 @@ def line_facts(lines,owner):
         if kind=='-mustrecharge'and seat in recharge:recharge[seat]=True   # |-mustrecharge|IDENT
         if kind=='cant'and seat in recharge and len(parts)>3 and normalize_id(parts[3])=='recharge':recharge[seat]=False
         if len(parts)<4:continue
+        if kind=='-ability'and seat in tracers and any(t.startswith('[from] ability: trace')for t in tags):   # the subject traced
+            tracers[seat].add(species.get((seat,name))or normalize_id(name))
         if kind=='move'and seat in active:
             move=normalize_id(parts[3])
             if move=='batonpass':pending.add(seat)
@@ -476,7 +490,8 @@ def line_facts(lines,owner):
                 if before is None or maximum is None:complete=False
                 else:spikes.append((before[0],new,maximum))
             hp[name]=(new,maximum)
-    return LineFacts(tuple(switches),tuple(spikes)if complete else None,(baton['p1'],baton['p2']),tuple(moves),(recharge['p1'],recharge['p2']))
+    return LineFacts(tuple(switches),tuple(spikes)if complete else None,(baton['p1'],baton['p2']),tuple(moves),(recharge['p1'],recharge['p2']),
+        (tuple(sorted(tracers['p1'])),tuple(sorted(tracers['p2']))))
 
 
 def _member(names,want,where):
@@ -615,7 +630,8 @@ def fix_peer_base_ability(state,public,owner):
     spec wrote the publicly borrowed one into it (engine_world._resolved_ability: a Trace holder's revealedAbility is the
     copied ability): the peer's own ability column (engine_device_observation.encode reads base_ability) then shows the
     set's ability, as the env and the Gen 3 request's baseAbility do, and the engine reverts to it on switch-out. Running
-    abilities, the owner side (from_b2: the request's baseAbility) and every other member are unchanged."""
+    abilities, the owner side and every other member are unchanged. It needs the member's public ORIGINAL ability, which
+    B2's fold never records for a Trace holder (fix_trace_base_ability, from the lines, covers that case on both sides)."""
     b=_trackers(public);peer=1-owner
     if public.original_ability is None or public.borrowed_ability is None:return state
     for name,value,shape in(('original_ability',public.original_ability,(b,2,6)),('borrowed_ability',public.borrowed_ability,(b,2,6)),
@@ -626,6 +642,32 @@ def fix_peer_base_ability(state,public,owner):
         slot=int(mapping[p])
         if 0<=slot<6 and borrowed[slot]and original[slot]and original[slot]!=borrowed[slot]and new[0,peer,p]==borrowed[slot]:
             new[0,peer,p]=original[slot]
+    return state if np.array_equal(new,base)else state._replace(base_ability=jnp.asarray(new))
+
+
+TRACE='trace'
+
+
+def fix_trace_base_ability(state,owner,facts,tables):
+    """The world state with each member that announced Trace on the lines (facts.tracers, both sides) holding Trace as its
+    base_ability. The materializer writes a Trace holder's CURRENT copy into both abilities of the active row
+    (local_showdown._apply_traced_ability_materialization_state sets revealedAbility to the copy, engine_world._resolved_ability
+    takes it as the spec's ability, v5_hypothetical_state.map_spec defaults base_ability to it), and B2's fold never records a
+    tracer's own ability (pokezero.belief._trace_copy_source; public_abilities.trace_copy writes the donor's original and the
+    tracer's running override only), so fix_peer_base_ability's original-ability rule cannot fire for a tracer. The line is
+    the proof: its subject's own ability is Trace. Each side's own ability column (engine_device_observation reads
+    base_ability for own mons) then shows Trace, as the env and B2 do, and the engine reverts to Trace on switch-out. The
+    running ability (the active's copy) is unchanged. Members join by species as order_peer does (PeerOrderUnavailable when
+    a tracer does not join exactly one member); CarryLayoutError when the tables have no ability names or no Trace."""
+    if facts is None or not any(facts.tracers):return state
+    if not tables.species_names or not tables.ability_names:raise CarryLayoutError('CarryTables.species_names and ability_names required')
+    if TRACE not in tables.ability_names:raise CarryLayoutError('Trace is outside the engine ability vocabulary')
+    trace=tables.ability_names.index(TRACE)
+    for name,value in(('state.species',state.species),('state.base_ability',state.base_ability)):_leaf(value,(1,2,6),np.int32,name)
+    species=_host(state.species);base=_host(state.base_ability);new=base.copy();n=len(tables.species_names)
+    for side,tracers in enumerate(facts.tracers):
+        names=[tables.species_names[int(x)]if 0<int(x)<n else''for x in species[0,side]]
+        for want in tracers:new[0,side,_member(names,want,f'side p{side+1}\'s party')]=trace
     return state if np.array_equal(new,base)else state._replace(base_ability=jnp.asarray(new))
 
 
@@ -643,11 +685,12 @@ def complete_public(state,public,tables,owner,*,facts=None,root=None):
 
 
 def complete_carry(state,public,tables,owner,*,facts=None,root=None):
-    """(state, public) of one constructor world completed: fix_peer_base_ability on the state first, then complete_public on
+    """(state, public) of one constructor world completed: fix_peer_base_ability and (with the root's LineFacts)
+    fix_trace_base_ability on the state first, then complete_public on
     the carry against the CORRECTED state (fill_peer_pressure reads the peer's base abilities: a Trace holder running a
     copied Pressure has Trace as its own ability, so earlier moves against it are not recharged, and a second pass, which
     sees the corrected state, gives the same carry)."""
-    fixed=fix_peer_base_ability(state,public,owner)
+    fixed=fix_trace_base_ability(fix_peer_base_ability(state,public,owner),owner,facts,tables)
     return fixed,complete_public(fixed,public,tables,owner,facts=facts,root=root)
 
 

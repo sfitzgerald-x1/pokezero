@@ -85,7 +85,9 @@ env value replaced by a recomputation from the decision's own lines (env_opp_haz
 reads the same constructor_worlds.line_facts the view's fill reads, so where it exists this cell is a SELF-CONSISTENCY check of
 the view against its own rule and cannot catch a parsing bug both share; the raw `parity` table still compares the cell against
 Foul Play's real value), else kept and compared within OPP_HAZARD_TOLERANCE) on both sides, so "exact except the five documented
-redactions" is reported directly. Names: tokens field / self0-5 / opp0-5 / move0-3 / switch0-4 / tendency_stats (engine_device_observation.TOKEN_TYPES),
+redactions" is reported directly. gate: per kind, after those redactions, the share of positions that pass (every numeric cell
+within --tolerance; categorical ids, token types, attention and the legal mask exact), against GATE_BAR, with the failing
+positions' cell patterns ranked (the set of failing cells per position, and each cell's count). Names: tokens field / self0-5 / opp0-5 / move0-3 / switch0-4 / tendency_stats (engine_device_observation.TOKEN_TYPES),
 numeric columns through showdown.V4_NUMERIC_LEGACY_INDEX_BY_NEW_INDEX and the NUMERIC_* writer names (as
 engine_device_observation.column_manifest names them), categorical columns through the CATEGORY_* layout. Written as
 summary.json and summary.md in --out.
@@ -460,20 +462,32 @@ def build_true_world(call, team_rows, round0_request, *, index=0):
     return world, info
 
 
+def forme_slots(species, details):
+    """The world slots of a request member (`details`: its literal details, 'Unown-V, L80'): those of its exact normalized
+    species, else (a Gen 3 cosmetic forme, which the world keeps as its base species: the request's Unown-V is the world's
+    unown) those of the base before the details' last '-' (Ho-Oh, whose base 'ho' is no species, stays exact-only)."""
+    from pokezero.dex import normalize_id
+    raw = str(details or '').split(',')[0].strip();name = normalize_id(raw)
+    exact = [s for s, n in enumerate(species) if n and n == name]
+    if exact or '-' not in raw:return exact
+    base = normalize_id(raw.rsplit('-', 1)[0])
+    return [s for s, n in enumerate(species) if n and n == base]
+
+
 def overlay_private(state, foe, request, vocabulary):
     """(state with Foul Play's request-exact HP of every party member and its active member's PP, notes). Members join the
-    world's foe slots by species (the constructor's engine-id tables, metadata['vocabulary']); the active PP only when the
-    literal active moves list the member's moves in slot order (a locked or reduced list keeps the world's PP)."""
+    world's foe slots by species (the constructor's engine-id tables, metadata['vocabulary']; a cosmetic forme by its base:
+    forme_slots); the active PP only when the literal active moves list the member's moves in slot order (a locked or
+    reduced list keeps the world's PP)."""
     import jax.numpy as jnp
     from pokezero.dex import normalize_id
     from gpu_engine.phase_d_live_worlds import _source_move
     notes = [];hp = np.array(state.hp, copy=True);pp = np.array(state.pp, copy=True);max_hp = np.asarray(state.max_hp)
     species = [None if int(x) <= 0 else normalize_id(vocabulary['species'][int(x)]) for x in np.asarray(state.species)[0, foe]]
-    members = ((request or {}).get('side') or {}).get('pokemon') or ();active_name = None
+    members = ((request or {}).get('side') or {}).get('pokemon') or ();active_name = active_slots = None
     for mon in members:
-        name = normalize_id(str(mon.get('details', '')).split(',')[0])
-        if mon.get('active'):active_name = name
-        slots = [s for s, n in enumerate(species) if n == name]
+        name = normalize_id(str(mon.get('details', '')).split(',')[0]);slots = forme_slots(species, mon.get('details'))
+        if mon.get('active'):active_name, active_slots = name, slots
         if len(slots) != 1:notes.append(f'{name}: {len(slots)} world slots');continue
         slot = slots[0];head = (str(mon.get('condition') or '').split() or [''])[0]
         try:
@@ -487,7 +501,7 @@ def overlay_private(state, foe, request, vocabulary):
     if active and not any((request or {}).get('forceSwitch') or ()):
         slot = int(np.asarray(state.active)[0, foe]);literal = list(active[0].get('moves') or ())
         engine = [(i, int(m)) for i, m in enumerate(np.asarray(state.moves)[0, foe, slot]) if int(m) > 0]
-        if species[slot] != active_name:notes.append(f'active: world {species[slot]} != request {active_name}')
+        if active_slots != [slot]:notes.append(f'active: world {species[slot]} != request {active_name}')
         elif len(literal) != len(engine) or any(_source_move(str(m.get('id') or m.get('move') or '')) != _source_move(vocabulary['moves'][e])
                 for m, (_, e) in zip(literal, engine)):notes.append('active moves: the literal list is not the member\'s slots (PP kept)')
         else:
@@ -938,6 +952,34 @@ def diff_stats(env, view, *, tolerance):
         order=dict(self=share(up_to_order(env, view, SELF_TOKENS)), opponent=share(up_to_order(env, view, OPPONENT_TOKENS))))
 
 
+GATE_BAR = .99   # the opponent-view gate: share of true_private positions passing after the redactions
+
+
+def gate_stats(env, view, keys, *, tolerance, labels, numeric, categorical, top=10, examples=3):
+    """The gate over N positions (two sides as diff_stats takes them): a position passes when every numeric cell is within
+    `tolerance` and its categorical ids, token types, attention and legal mask are exact. Returns positions, passed, share,
+    meets_bar (share >= GATE_BAR), the failing positions' patterns (each the sorted set of its failing cells: token.column
+    for numeric beyond tolerance and categorical, token.token_type, token.attention, legal[lane]) ranked by count with up to
+    `examples` positions each, and per failing cell the number of failing positions it is in."""
+    a = np.asarray(env['numeric'], np.float64);b = np.asarray(view['numeric'], np.float64);n = len(a)
+    differ = (a != b) & ~(np.isnan(a) & np.isnan(b));beyond = np.where(differ, np.nan_to_num(np.abs(a - b), nan=np.inf, posinf=np.inf), 0.) > tolerance
+    cat = np.asarray(env['categorical']) != np.asarray(view['categorical'])
+    types = np.asarray(env['token_type']).astype(np.int64) != np.asarray(view['token_type']).astype(np.int64)
+    attention = np.asarray(env['attention'], bool) != np.asarray(view['attention'], bool);legal = np.asarray(env['legal'], bool) != np.asarray(view['legal'], bool)
+    passed = ~(beyond.any((1, 2)) | cat.any((1, 2)) | types.any(1) | attention.any(1) | legal.any(1))
+    patterns, cells, where = collections.Counter(), collections.Counter(), collections.defaultdict(list)
+    for i in np.nonzero(~passed)[0]:
+        found = ([f'{labels[t]}.{numeric[c]}' for t, c in np.argwhere(beyond[i])] + [f'{labels[t]}.{categorical[c]}' for t, c in np.argwhere(cat[i])]
+            + [f'{labels[t]}.token_type' for t in np.nonzero(types[i])[0]] + [f'{labels[t]}.attention' for t in np.nonzero(attention[i])[0]]
+            + [f'legal[{lane}]' for lane in np.nonzero(legal[i])[0]])
+        key = tuple(sorted(set(found)));patterns[key] += 1;cells.update(key)
+        if len(where[key]) < examples:where[key].append({k: int(keys[k][i]) for k in ('ordinal', 'round', 'decision_index')})
+    share = float(passed.mean()) if n else None
+    return dict(positions=n, passed=int(passed.sum()), share=share, bar=GATE_BAR, meets_bar=share is not None and share >= GATE_BAR,
+        failing_patterns=[dict(cells=list(key), positions=count, examples=where[key]) for key, count in patterns.most_common(top)],
+        failing_cells=dict(cells.most_common(top)))
+
+
 def ranked_cells(stats, kind, labels, names):
     """Every differing (token, column) cell of `kind` ('numeric' or 'categorical'), ranked: beyond-tolerance share, exact share,
     max |diff| (numeric), then token and column."""
@@ -1111,13 +1153,15 @@ def build_report(directories, *, tolerance=1e-5, top=30, examples=3, vocabulary=
     keys = {k: data[k] for k in ('ordinal', 'round', 'decision_index', 'turn')};env = side_of(data, 'env')
     out = dict(schema=REPORT_SCHEMA, captures=[str(d) for d in directories], positions=int(len(data['ordinal'])), kinds=list(kinds), tolerance=tolerance,
         capture=capture_counts(summaries), alignment=alignment_summary(rows), worlds=world_summary(rows, data, kinds), parity={}, sampled_vs_true={},
-        redactions={r: REDACTIONS[r][0] for r in redactions}, parity_redacted={})
+        redactions={r: REDACTIONS[r][0] for r in redactions}, parity_redacted={}, gate={})
     common = dict(tolerance=tolerance, top=top, examples=examples, labels=labels, numeric=numeric, categorical=categorical, decode=decode)
     for k, kind in enumerate(kinds):
         valid = data['view_valid'][:, k]
         out['parity'][kind] = kind_summary(side_of(data, 'env', mask=valid), side_of(data, 'view', k, valid), {n: v[valid] for n, v in keys.items()}, **common)
         a, b = redact_pair(side_of(data, 'env', mask=valid), side_of(data, 'view', k, valid), redactions, data['env_opp_hazard_credit'][valid])
         out['parity_redacted'][kind] = kind_summary(a, b, {n: v[valid] for n, v in keys.items()}, **common)
+        out['gate'][kind] = gate_stats(a, b, {n: v[valid] for n, v in keys.items()}, tolerance=tolerance, labels=labels, numeric=numeric,
+            categorical=categorical, examples=examples)
     if 'true' in kinds:
         t = kinds.index('true')
         for k, kind in enumerate(kinds):
@@ -1167,6 +1211,21 @@ def render_markdown(summary, *, top=30):
             e = p['exact'];cells = lambda xs: '; '.join(f'{x["token_label"]}.{x["column_name"]} {_f(x["share"])}' for x in xs[:5]) or '-'
             out.append(f'| {kind} | {p["positions"]} | {_f(e["observation_and_legal"])} | {_f(e["observation"])} | {_f(e["numeric"])} | {_f(e["categorical"])} | '
                 f'{_f(e["legal"])} | {cells(p["numeric_cells"])} | {cells(p["categorical_cells"])} |')
+    if s.get('gate'):
+        out += ['', f'## Gate: positions passing after the redactions (numeric within {s["tolerance"]}; categorical, token types, attention '
+            f'and legal exact; bar {_f(GATE_BAR)})', '', '| kind | positions | passing | share | meets bar | top failing cell patterns (positions) |',
+            '|---|---|---|---|---|---|']
+        for kind, g in s['gate'].items():
+            patterns = '; '.join(f'{" + ".join(x["cells"][:4])}{" (+" + str(len(x["cells"]) - 4) + ")" if len(x["cells"]) > 4 else ""} ({x["positions"]})'
+                for x in g['failing_patterns'][:3]) or '-'
+            out.append(f'| {kind} | {g["positions"]} | {g["passed"]} | {_f(g["share"])} | {"yes" if g["meets_bar"] else "no"} | {patterns} |')
+        for kind, g in s['gate'].items():
+            if not g['failing_patterns']:continue
+            out += ['', f'Failing patterns, {kind} ({g["positions"] - g["passed"]} positions; examples ordinal/round/decision):', '']
+            for x in g['failing_patterns']:
+                ex = ', '.join(f'{e["ordinal"]}/{e["round"]}/{e["decision_index"]}' for e in x['examples'])
+                out.append(f'- {x["positions"]}: {" + ".join(x["cells"])} [{ex}]')
+            out.append('- cells: ' + '; '.join(f'{c} {k}' for c, k in g['failing_cells'].items()))
     for kind, p in s['parity'].items():
         out += ['', f'## {kind}: differing features', '', f'Numeric cells, ranked (beyond-tolerance share, then share, then max |diff|); {len(p["numeric_cells"])} cells differ.', '',
             '| # | token | column | name | share | beyond tol | max abs diff | examples (ordinal/round: env -> view) |', '|---|---|---|---|---|---|---|---|']

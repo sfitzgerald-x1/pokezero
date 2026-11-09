@@ -71,9 +71,11 @@ tree guard) on the live inputs.
     pack_turn1 does) and the server's own champion (the pricer's forward, ChampionEvaluator's adapter, with the search's
     own parameters, under jax.jit) runs on them; on every world priced with the opponent requested its logits must equal
     the recorded root_peer_logits bit for bit. Per world: peer_inputs_index (its row in the sidecar), peer_self_check
-    (true / false, null where not applicable) and peer_self_check_max_abs_diff; per row peer_inputs_check (checked,
-    equal, failed_worlds, written); the summary's peer_inputs_check counts them, lists the failures and passes only when
-    at least one world was checked, every checked world was equal and every decided root was checked. The sidecar holds,
+    (true / false, null where not applicable; a priced, opponent-requested world whose capture raised is false, never
+    skipped) and peer_self_check_max_abs_diff; per row peer_inputs_check (checked, equal, failed_worlds, written); the
+    summary's peer_inputs_check counts them, lists the failures and passes only when every decided root had at least one
+    checked world and every checked world was equal (a decided root with none counts as unchecked). Only decided roots are
+    captured or written (a root refused after prepare_roots has no root_peer_logits). The sidecar holds,
     stacked over its K worlds, the champion adapter's own view slice (ChampionEvaluator.view: the first 23 tokens) of
     those inputs: numeric_features f32 [K,23,132], categorical_ids i32 [K,23,41], token_type_ids i32 [K,23],
     attention_mask bool [K,23], history_mask bool [K,1]; legal bool [K,9] (the peer view's legal mask); the key index
@@ -473,9 +475,10 @@ class PeerInputs:
         logits = self.forward(batch);view = {k: np.asarray(v) for k, v in self.champion.view(batch).items()}
         fields, kept = {}, []   # applied only once every world is done, so a failure leaves the sidecar's columns aligned
         for i, row in enumerate(worlds[:len(captured)]):
-            checked = captured[i] is not None and row.get('priced') is True and row.get('opponent_requested') is True
+            checkable = row.get('priced') is True and row.get('opponent_requested') is True;checked = checkable and captured[i] is not None
             recorded = np.asarray(row['root_peer_logits'], np.float32) if checked else None
-            same = None if not checked else bool(np.array_equal(logits[i], recorded))
+            # A checkable world whose inputs were not captured (its capture raised) fails: it is never skipped.
+            same = (False if checkable else None) if not checked else bool(np.array_equal(logits[i], recorded))
             fields[i] = dict(peer_self_check=same, peer_inputs_index=None,
                 peer_self_check_max_abs_diff=None if not checked else float(np.max(np.abs(logits[i].astype(np.float64) - recorded))))
             if captured[i] is None:continue
@@ -577,7 +580,7 @@ def describe(capture, peer_lanes, vocabulary, peer_inputs=None, key=None):
                     state, public = jax.device_get((w.state, w.public))   # as constructor_worlds.build reads a world
                     row['opponent'] = opponent_facts(state, owner, vocabulary, public);row['peer'] = peer_lanes(state, public, owner)
                     row['peer']['lanes'] = lane_labels(row['opponent'], row['peer'])
-                    if peer_inputs is not None:captured[-1] = peer_inputs.capture(state, public, owner)
+                    if peer_inputs is not None and decided is not None:captured[-1] = peer_inputs.capture(state, public, owner)   # decided roots only
                 except Exception as error:   # a capture problem never stops the replay
                     notes.append(f'world {i}: {type(error).__name__}: {error}')
             worlds.append(row)
@@ -660,12 +663,13 @@ def peer_inputs_summary(rows):
     """The summary's peer_inputs_check (module docstring): written, checked and equal worlds over every decided root, the
     failures, and passed (at least one world checked, every checked world equal, and every decided root checked)."""
     decided = [r for r in rows if r['replay']['status'] == 'COMPLETE']
-    checked = [r for r in decided if r.get('peer_inputs_check')]
+    checked = [r for r in decided if r.get('peer_inputs_check') and r['peer_inputs_check']['checked'] > 0]   # a root with no checked world is not
     address = lambda r: dict(ordinal=r['ordinal'], decision_index=r['decision_index'])
     worlds = sum(r['peer_inputs_check']['checked'] for r in checked);equal = sum(r['peer_inputs_check']['equal'] for r in checked)
     failures = [dict(address(r), worlds=r['peer_inputs_check']['failed_worlds']) for r in checked if r['peer_inputs_check']['failed_worlds']]
-    unchecked = [address(r) for r in decided if not r.get('peer_inputs_check')]
-    return dict(decided_roots=len(decided), roots_checked=len(checked), worlds_written=sum(r['peer_inputs_check']['written'] for r in checked),
+    seen = {id(r) for r in checked};unchecked = [address(r) for r in decided if id(r) not in seen]
+    return dict(decided_roots=len(decided), roots_checked=len(checked),
+        worlds_written=sum(r['peer_inputs_check']['written'] for r in decided if r.get('peer_inputs_check')),
         worlds_checked=worlds, worlds_equal=equal, failures=failures, unchecked_roots=unchecked,
         passed=worlds > 0 and equal == worlds and not failures and not unchecked)
 

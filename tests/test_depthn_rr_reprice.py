@@ -675,12 +675,37 @@ class MainTests(unittest.TestCase):
         self.assertIn('peer inputs: ValueError: slice', rows[0]['notes']);self.assertFalse(summary['peer_inputs_check']['passed'])
         self.assertEqual(self.sidecar['numeric_features'].shape, (0, 23, 132))   # nothing kept, every column still aligned
 
+    def test_a_checkable_world_whose_capture_raised_fails_and_undecided_roots_are_never_captured(self):
+        observe = PeerExecutor.observe
+        def broken(executor, state, public, seat, mask):
+            if int(np.asarray(public['w'])) == 5 and int(np.asarray(seat)[0]) == 1:raise ValueError('peer view')
+            return observe(executor, state, public, seat, mask)
+        with tempfile.TemporaryDirectory() as tmp, patch.object(PeerExecutor, 'observe', broken):
+            _, rows, summary, *_ = self.replay(tmp)
+        first = rows[0]
+        self.assertEqual([w['peer_self_check'] for w in first['worlds']], [w != 5 for w in range(16)])   # failed, not skipped
+        self.assertIsNone(first['worlds'][5]['peer_inputs_index']);self.assertIn('world 5: ValueError: peer view', first['notes'])
+        self.assertEqual(first['peer_inputs_check'], dict(checked=16, equal=15, failed_worlds=[5], written=15))
+        self.assertFalse(summary['peer_inputs_check']['passed'])
+        # A prepared root that never reached decide: its worlds are described, never captured or kept.
+        class Counting:
+            calls = 0
+            def capture(self, *a):Counting.calls += 1
+            def annotate(self, *a):raise AssertionError('annotated an undecided root')
+        detached, made, legal = FakeConstructor().prepare(dict(decision_index=0), 0)
+        prepared = SimpleNamespace(prepared=[(cw.Prepared('r', detached, made, legal, 0., 'binding'),)], decided=[])
+        detail = R.describe(prepared, fake_peer, VOCABULARY, Counting(), (1, 0))
+        self.assertEqual((Counting.calls, detail['root'], len(detail['worlds'])), (0, None, 16))
+        self.assertTrue(all('peer_self_check' not in w for w in detail['worlds']))
+
     def test_peer_inputs_summary_fails_closed(self):
         complete = lambda i, check: dict(ordinal=1, decision_index=i, replay=dict(status='COMPLETE'), peer_inputs_check=check)
         ok = dict(checked=2, equal=2, failed_worlds=[], written=2)
         self.assertTrue(R.peer_inputs_summary([complete(0, ok), dict(complete(1, None), replay=dict(status='REFUSED'))])['passed'])
         self.assertFalse(R.peer_inputs_summary([complete(0, ok), complete(1, None)])['passed'])   # a decided root left unchecked
         self.assertFalse(R.peer_inputs_summary([complete(0, dict(ok, checked=0, equal=0))])['passed'])   # nothing checked
+        none = R.peer_inputs_summary([complete(0, ok), complete(1, dict(ok, checked=0, equal=0))])   # a decided root with no checkable world
+        self.assertEqual((none['roots_checked'], none['unchecked_roots'], none['passed']), (1, [dict(ordinal=1, decision_index=1)], False))
         self.assertFalse(R.peer_inputs_summary([])['passed'])
 
     def test_max_decisions_stops_a_smoke_run(self):
