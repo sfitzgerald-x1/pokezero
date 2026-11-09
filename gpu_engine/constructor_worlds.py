@@ -68,6 +68,11 @@ dict keys and leaves two members None). This module turns prepared roots into De
     That rule is the env's pending flag: a passer that faints to Pursuit before its recipient arrives leaves the flag
     set, so the env and the fill mark the next switch a Baton Pass arrival where the device (no baton_copy) may not;
     very rare.
+  - a recharging active (fill_recharge): B2 holds "must recharge" beside its volatile bag and merges it in only when it
+    encodes, so from_b2's copy of the bag lacked it and the encoder showed no volatile:mustrecharge (15 owner-view roots of
+    the 160-battle replay: a Hyper Beam user's next decision). The lines carry B2's rule (-mustrecharge sets it; the side's
+    |cant| recharge, arrival or faint clears it), so the bit is set on that side's active, both sides. No device hook
+    writes it (the engine has no recharge turn), so in search it stays until a switch, like the other B2-only volatiles.
   - the peer's count of the owner's PP (fill_peer_pressure): from_b2 copies B2's uses, which charge an owner move twice only
     against a PUBLIC Pressure (public_abilities.move_context); Gen 3 Pressure is silent, and the peer knows its own
     ability, so the device move hook (the receiving observer's own active ability) and the env charge twice whenever the
@@ -384,11 +389,14 @@ class LineFacts:
     after that side's |move| Baton Pass with no other move of the side between, or a switch line naming Baton Pass);
     owner_moves: the owner's PP-charged move declarations in order (a |move| line of the owner without a [from] tag, not
     Struggle, the actor not transformed), each (actor species, move, the peer's active species, whether that active was
-    alive, whether its Pressure was public: revealed by an -ability line, a Trace copy until it next arrives)."""
+    alive, whether its Pressure was public: revealed by an -ability line, a Trace copy until it next arrives); recharge: per
+    side, whether its active must recharge (B2's public_active.project_line: set by -mustrecharge, cleared by that side's
+    |cant| recharge, arrival or faint)."""
     peer_switches:tuple
     owner_spikes:tuple|None
     baton:tuple=(False,False)
     owner_moves:tuple=()
+    recharge:tuple=(False,False)   # per side (p1, p2): its active must recharge (B2's public_active rule, line_facts)
 
 
 def _seat_name(field):
@@ -409,12 +417,14 @@ def line_facts(lines,owner):
     if owner not in(0,1):raise ValueError(f'owner 0 or 1 required, got {owner!r}')
     own,peer=f'p{owner+1}',f'p{2-owner}';switches=[];spikes=[];hp={};complete=True
     species={};active={'p1':'','p2':''};alive={'p1':False,'p2':False};pending=set();baton={'p1':False,'p2':False}
-    transformed=set();original_pressure=set();running_pressure=set();moves=[]
+    transformed=set();original_pressure=set();running_pressure=set();moves=[];recharge={'p1':False,'p2':False}
     for line in lines:
         parts=str(line).split('|')
         if len(parts)<3 or parts[0]!='':continue
         kind=parts[1];seat,name=_seat_name(parts[2]);tags=[x.strip().lower()for x in parts[4:]]
-        if kind=='faint'and seat in alive:alive[seat]=False   # |faint|IDENT: three fields
+        if kind=='faint'and seat in alive:alive[seat]=recharge[seat]=False   # |faint|IDENT: three fields
+        if kind=='-mustrecharge'and seat in recharge:recharge[seat]=True   # |-mustrecharge|IDENT
+        if kind=='cant'and seat in recharge and len(parts)>3 and normalize_id(parts[3])=='recharge':recharge[seat]=False
         if len(parts)<4:continue
         if kind=='move'and seat in active:
             move=normalize_id(parts[3])
@@ -429,7 +439,7 @@ def line_facts(lines,owner):
             (running_pressure if any(t.startswith('[from] ability: trace')for t in tags)else original_pressure).add(target)
         if kind in SWITCH_KINDS and seat in active:
             arrived=normalize_id(parts[3].split(',')[0]);species[(seat,name)]=arrived;active[seat]=arrived;alive[seat]=True
-            transformed.discard(seat);running_pressure.discard(arrived)
+            transformed.discard(seat);running_pressure.discard(arrived);recharge[seat]=False
             baton[seat]=kind=='switch'and(seat in pending or any('baton pass'in t for t in tags));pending.discard(seat)
         if kind in SWITCH_KINDS:
             if seat==peer:switches.append(normalize_id(parts[3].split(',')[0]))
@@ -444,7 +454,7 @@ def line_facts(lines,owner):
                 if before is None or maximum is None:complete=False
                 else:spikes.append((before[0],new,maximum))
             hp[name]=(new,maximum)
-    return LineFacts(tuple(switches),tuple(spikes)if complete else None,(baton['p1'],baton['p2']),tuple(moves))
+    return LineFacts(tuple(switches),tuple(spikes)if complete else None,(baton['p1'],baton['p2']),tuple(moves),(recharge['p1'],recharge['p2']))
 
 
 def _member(names,want,where):
@@ -517,6 +527,24 @@ def fill_baton(public,facts):
     return public if np.array_equal(new,last)else public._replace(last_moves=jnp.asarray(new))
 
 
+def fill_recharge(public,facts):
+    """The public carry with the mustrecharge volatile set on each side's active that must recharge (facts.recharge). B2 keeps
+    that fact in its own flag beside the volatile bag (public_active.ActiveState.recharge, merged into the bag only when it
+    encodes: public_active.project, `bag=state.volatiles.at[...,RECHARGE_ID].set(state.recharge)`), so from_b2's copy of the
+    bag (phase_d_live_worlds.py:311) drops it and the encoder showed no volatile:mustrecharge where B2 does. No device hook
+    writes it either (the engine models no recharge turn), so in search the bit stays until that Pokemon switches out (the
+    install hook clears the bag), as B2-only volatiles do."""
+    from .public_active import NAMES
+    b=_trackers(public)
+    if facts is None or not any(facts.recharge):return public
+    _leaf(public.public_volatiles,(b,2,6,len(NAMES)),np.bool_,'public_volatiles');_leaf(public.active_slot,(b,2),np.int32,'active_slot')
+    bag=_host(public.public_volatiles);slots=_host(public.active_slot);new=bag.copy();bit=NAMES.index('mustrecharge')
+    for side,must in enumerate(facts.recharge):
+        at=int(slots[0,side])
+        if must and 0<=at<6:new[0,side,at,bit]=True
+    return public if np.array_equal(new,bag)else public._replace(public_volatiles=jnp.asarray(new))
+
+
 def _name_index(names,want,*,move=False):
     """The one index of `names` naming `want`: exact, else (a move) any Hidden Power for 'hiddenpower...', else (a species) a
     unique forme prefix; None otherwise."""
@@ -581,13 +609,13 @@ def fix_peer_base_ability(state,public,owner):
 
 def complete_public(state,public,tables,owner,*,facts=None,root=None):
     """A constructor world's public carry completed (module docstring): fill_shown_types, fill_negative_items,
-    orient_credits, and with the root's LineFacts order_peer, fill_owner_spikes, fill_baton and (with the root's own carry,
-    `root`) fill_peer_pressure. Pure; the same carry when nothing changes. CarryLayoutError on another carry layout,
+    orient_credits, and with the root's LineFacts order_peer, fill_owner_spikes, fill_baton, fill_recharge and (with the root's
+    own carry, `root`) fill_peer_pressure. Pure; the same carry when nothing changes. CarryLayoutError on another carry layout,
     PeerOrderUnavailable when the peer order cannot be joined."""
     _trackers(public)
     done=orient_credits(fill_negative_items(fill_shown_types(state,public,tables)),owner)
     if facts is not None:
-        done=fill_baton(fill_owner_spikes(order_peer(state,done,owner,facts,tables),owner,facts),facts)
+        done=fill_recharge(fill_baton(fill_owner_spikes(order_peer(state,done,owner,facts,tables),owner,facts),facts),facts)
         done=fill_peer_pressure(state,done,owner,facts,tables,root)
     return done
 

@@ -491,6 +491,26 @@ class PeerPressureTests(unittest.TestCase):
         self.assertIs(cw.complete_world(once,pressure_tables(),0,facts=facts,root=root),once)
 
 
+class RechargeTests(unittest.TestCase):
+    def test_line_facts_follow_b2s_recharge_rule(self):
+        base=[switch('p1','alpha','300/300'),switch('p2','beta'),'|turn|1','|move|p2a: Beta|Hyper Beam|p1a: Alpha','|-damage|p1a: Alpha|100/300',
+            '|-mustrecharge|p2a: Beta']
+        cases={'set':(base+['|turn|2'],(False,True)),'its recharge turn clears it':(base+['|turn|2','|cant|p2a: Beta|recharge','|turn|3'],(False,False)),
+            'an arrival clears it':(base+['|turn|2',switch('p2','gamma')],(False,False)),'a faint clears it':(base+['|faint|p2a: Beta'],(False,False)),
+            'the other side\'s cant does not':(base+['|turn|2','|cant|p1a: Alpha|recharge'],(False,True)),
+            'another cant does not':(base+['|turn|2','|cant|p2a: Beta|par'],(False,True))}
+        for name,(lines,want)in cases.items():
+            with self.subTest(name):self.assertEqual(cw.line_facts(lines,0).recharge,want)
+
+    def test_the_fill_sets_the_volatile_on_the_sides_active(self):
+        from gpu_engine.public_active import NAMES
+        t=carry(SPECIES,MAPPING)._replace(public_volatiles=j.zeros((1,2,6,len(NAMES)),bool),active_slot=j.asarray([[0,1]],j.int32))
+        out=cw.fill_recharge(t,cw.LineFacts(('beta',),(),recharge=(False,True)))
+        bag=np.asarray(out.public_volatiles);self.assertEqual(np.argwhere(bag).tolist(),[[0,1,1,NAMES.index('mustrecharge')]])   # the peer's active slot 1
+        self.assertIs(cw.fill_recharge(out,cw.LineFacts(('beta',),(),recharge=(False,True))),out)
+        self.assertIs(cw.fill_recharge(t,cw.LineFacts(('beta',),())),t)
+
+
 class PeerBaseAbilityTests(unittest.TestCase):
     def test_a_peer_tracers_base_ability_is_its_public_original(self):
         state=empty_state(1)._replace(base_ability=j.asarray([[[3,0,0,0,0,0],[1,3,0,0,0,0]]],j.int32),ability=j.asarray([[[3,0,0,0,0,0],[1,3,0,0,0,0]]],j.int32))
@@ -572,6 +592,44 @@ class PeerViewLaneTests(unittest.TestCase):
             self.assertEqual(lane,4+physical-(physical>active))   # the engine's own switch lane for that physical
             self.assertEqual(bool(np.asarray(obs.legal_action_mask)[0,4+i]),bool(engine[0,lane]))
             self.assertAlmostEqual(float(num[17+i,e._index('HP_FRACTION')]),hp[physical]/100,places=6)
+
+
+class B2EncodingTests(unittest.TestCase):
+    """A real from_b2 root on authored lines (tests/test_phase_d_device_worlds' B2 fold) whose foe must recharge: world 0's completed
+    owner view, through the device encoder, equals B2's own encoding of the literal root on every token of the 23-token prefix."""
+    @classmethod
+    def setUpClass(cls):
+        import test_phase_d_device_worlds as D
+        from gpu_engine import engine_device_observation as e
+        D.WorldsTests.setUpClass();cls.fx=D.WorldsTests('test_real_b2_fold_to_16_and32_source_worlds_both_owners')
+        cls.carry=cw.carry_tables(cls.fx.metadata,cls.fx.catalog);cls.observation=e.compile_tables(cls.fx.metadata,catalog=cls.fx.catalog)
+
+    def encodings(self,body,owner=0,*,complete=True):
+        from gpu_engine import device_public_leaf as leaf,phase_d_live_worlds as live
+        from pokezero import v5_contract
+        from pokezero.recorded_encoder_runner import JaxRecordedAdapter
+        f=self.fx;own,peer=f'p{owner+1}',f'p{2-owner}'
+        lines=(f'|switch|{own}a: Alpha|Alpha, L80|291/291',f'|switch|{peer}a: Beta|Beta, L80|100/100','|turn|1',
+            *[x.replace('OWN',own).replace('PEER',peer)for x in body])
+        a=JaxRecordedAdapter(f.catalog,owner_side=owner);a.reset(stream_id=1,battle_id='authored');a.feed(lines)
+        root=live.from_b2(a,f.request(owner),f.source,f.metadata,address=v5_contract.DecisionAddress(1,0,owner))
+        w=live.sample_worlds(root,f.source,f.tables,count=16,seed=9).worlds[0]
+        if complete:w=cw.complete_world(w,self.carry,owner,facts=cw.line_facts(lines,owner),root=root.public)
+        b2=root.view['_b2_root_inputs']
+        out=leaf.from_public(w.state,w.public,self.observation,observer_sides=j.asarray([owner],j.int32),
+            legal_action_mask=j.asarray(np.asarray(b2['legal_action_mask'],bool)[None]),enable_device_leaf=True).observation
+        return b2,np.asarray(out.categorical_ids)[0,:23],np.asarray(out.numeric_features)[0,:23]
+
+    def test_a_recharging_foe_matches_b2(self):
+        recharge=['|move|PEERa: Beta|Tackle|OWNa: Alpha','|-damage|OWNa: Alpha|250/291','|-mustrecharge|PEERa: Beta',
+            '|move|OWNa: Alpha|Tackle|PEERa: Beta','|-damage|PEERa: Beta|90/100','|','|upkeep','|turn|2']
+        b2,cat,num=self.encodings(recharge)
+        np.testing.assert_array_equal(cat,np.asarray(b2['categorical_ids']));np.testing.assert_allclose(num,np.asarray(b2['numeric_features']),atol=1e-6)
+        from gpu_engine.public_moves import _static_category
+        self.assertEqual(int(cat[7,33]),_static_category(self.fx.catalog.vocabulary,'volatile:mustrecharge'))   # the foe's active token
+        _,raw,_=self.encodings(recharge,complete=False);self.assertEqual(int(raw[7,33]),0)   # from_b2's copy of B2's bag alone lacks it
+        b2,cat,_=self.encodings(recharge[:-1]+['|turn|2','|cant|PEERa: Beta|recharge','|','|upkeep','|turn|3'])   # recharged: gone on both
+        np.testing.assert_array_equal(cat,np.asarray(b2['categorical_ids']));self.assertEqual(int(cat[7,33]),0)
 
 
 if __name__=='__main__':unittest.main()

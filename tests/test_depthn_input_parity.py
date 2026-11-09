@@ -717,6 +717,20 @@ class ReportTests(unittest.TestCase):
         self.assertEqual(c['ranked_cells'][0]['feature'], ['own', 'numeric', 7]);self.assertIn('pre = 3 +', c['turn1_input_check'])
         self.assertEqual((s['replay']['captured'], s['torch']['b2_legal_equals_root_legal'], s['torch']['select_agrees']['path1']), (4, {'True': 4}, {'True': 4}))
 
+    def test_a_selection_with_an_empty_set_reports(self):
+        # --select-decisions labels each root by the classification rule, so one set can be empty (every root agrees, or none does)
+        move = lambda a: [5. if x == a else 0. for x in range(9)]
+        for name, greedy in (('control', 3), ('disagree', 0)):
+            decisions = [(0, name, .5, move(3), greedy, True, []), (1, name, .5, move(3), greedy, True, [['numeric_features', 3, 7]])]
+            with self.subTest(name), tempfile.TemporaryDirectory() as tmp:
+                toy_capture(Path(tmp) / 'cap', decisions);s = P.report(P.capture_entries([Path(tmp) / 'cap']), {})
+                with patch('sys.stdout', new_callable=io.StringIO):
+                    self.assertEqual(P.main(['report', '--capture', str(Path(tmp) / 'cap'), '--out', str(Path(tmp) / 'rep')]), 0)
+                top = s['encoding_diff']['ranked_cells'][0];other = 'disagree' if name == 'control' else 'control'
+                self.assertEqual((top['feature'], top[name], top[other], top[f'{other}_share'], top['excess_share'], top['ratio']),
+                    (['opponent', 'numeric', 43], 2, 0, None, None, None))
+                self.assertEqual(top[f'{name}_share'], 1.)
+
     def test_report_excludes_and_gates_coverage(self):
         move = lambda a: [5. if x == a else 0. for x in range(9)]
         decisions = [(0, 'disagree', .5, move(0), 0, True, []), (1, 'disagree', .5, move(0), 2, True, []),   # live greedy 2 is illegal

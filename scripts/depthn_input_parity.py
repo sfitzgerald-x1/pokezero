@@ -1013,7 +1013,7 @@ class Tally:
             d, c = self.counts['disagree'][f], self.counts['control'][f]
             ds, cs = (d / nd if nd else None), (c / nc if nc else None)
             rows.append(dict(feature=list(f) if isinstance(f, tuple) else f, **label(f), disagree=d, control=c, disagree_share=ds, control_share=cs,
-                excess_share=None if ds is None or cs is None else ds - cs, ratio=None if not cs else ds / cs, control_zero=c == 0,
+                excess_share=None if ds is None or cs is None else ds - cs, ratio=None if ds is None or not cs else ds / cs, control_zero=c == 0,
                 smoothed_ratio=((d + .5) / (nd + 1)) / ((c + .5) / (nc + 1))))
         return sorted(rows, key=lambda r: (-(r['excess_share'] if r['excess_share'] is not None else -math.inf), -r['smoothed_ratio'], -r['disagree'],
             str(r['feature'])))
