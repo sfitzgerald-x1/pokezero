@@ -691,12 +691,17 @@ class EndToEndTests(unittest.TestCase):
         self.assertIn('external_mix:alpha=0.5', (out / 'summary.md').read_text())
 
 
-GUARDS_OFF = dict(opponent_recharge_unrepresented=False, own_recharge_lanes=[])
+GUARDS_OFF = dict(opponent_recharge=False, unrepresented_effect=False, own_recharge_lanes=[False] * 4)
+
+
+def guards(opponent_recharge=False, unrepresented_effect=False, lanes=()):
+    return dict(opponent_recharge=opponent_recharge, unrepresented_effect=unrepresented_effect,
+                own_recharge_lanes=[b in lanes for b in range(4)])
 
 
 def definitive_decision(worlds, *, guards=GUARDS_OFF, **kw):
     row = raw_row(worlds, **kw)
-    if guards is not None:row['guards'] = guards
+    if guards is not None and row['root'] is not None:row['root'].update(guards)
     return S.normalize(row)
 
 
@@ -748,22 +753,29 @@ class DefinitiveOperatorTests(unittest.TestCase):
     def test_guards(self):
         model = [math.log(.1), math.log(.9)] + [0.] * 7
         free, _ = self.score(self.worlds(), model=model, greedy=0)
-        c, out = self.score(self.worlds(), model=model, guards=dict(opponent_recharge_unrepresented=True, own_recharge_lanes=[]), greedy=0)
+        c, out = self.score(self.worlds(), model=model, guards=guards(opponent_recharge=True), greedy=0)
         self.assertEqual(set(c.values()), {0})
         self.assertEqual(out['guard']['replaced'], {n: 'opponent_recharge_root' for n, x in free.items() if x != 0})
         self.assertEqual((free['br_fp'], free['bayes_hedge:lam=0']), (1, 1))
         for name, op in out['operators'].items():self.assertEqual(op['D']['pi_filled'], 0., name)
         # Our lane 1 is a recharge move: an override into it falls back to greedy (0); greedy itself may be one.
-        c, out = self.score(self.worlds(), model=model, guards=dict(opponent_recharge_unrepresented=False, own_recharge_lanes=[1]), greedy=0)
+        c, out = self.score(self.worlds(), model=model, guards=guards(lanes=(1,)), greedy=0)
         self.assertEqual((c['br_fp'], c['bayes_hedge:lam=0'], c['blend:lam=0.5']), (0, 0, 2))
         self.assertEqual(out['guard']['replaced']['br_fp'], 'own_recharge_override')
-        c, out = self.score(self.worlds(), model=model, guards=dict(opponent_recharge_unrepresented=False, own_recharge_lanes=[1]), greedy=1)
+        c, out = self.score(self.worlds(), model=model, guards=guards(lanes=(1,)), greedy=1)
         self.assertEqual((c['greedy'], c['br_fp']), (1, 1));self.assertNotIn('br_fp', out['guard']['replaced'])
+        self.assertIsNone(out['unguarded_operators'])
+        # An unrepresented effect: every operator plays greedy; the unguarded choices are kept for the context table.
+        c, out = self.score(self.worlds(), model=model, guards=guards(unrepresented_effect=True), greedy=0)
+        self.assertEqual(set(c.values()), {0})
+        self.assertEqual(out['guard']['replaced'], {n: 'unrepresented_effect_root' for n, x in free.items() if x != 0})
+        self.assertEqual({n: o['choice'] for n, o in out['unguarded_operators'].items()}, free)
 
     def test_missing_inputs_leave_the_decision_out_of_every_operator(self):
         legal = legal_mask(0, 1, 2);worlds = self.worlds()
         cases = (('guards_missing', dict(guards=None), {0: self.champion, 1: self.champion}, {0: 0., 1: 0.}),
-                 ('guards_missing', dict(guards=dict(opponent_recharge_unrepresented=False, own_recharge_lanes=[4])), {0: self.champion, 1: self.champion}, {0: 0., 1: 0.}),
+                 ('guards_missing', dict(guards=dict(GUARDS_OFF, own_recharge_lanes=[False] * 3)), {0: self.champion, 1: self.champion}, {0: 0., 1: 0.}),
+                 ('guards_missing', dict(guards=dict(GUARDS_OFF, unrepresented_effect=None)), {0: self.champion, 1: self.champion}, {0: 0., 1: 0.}),
                  ('reply_prior_missing', {}, {0: self.champion}, {0: 0., 1: 0.}),
                  ('world_weights_missing', {}, {0: self.champion, 1: self.champion}, {0: 0.}),
                  ('world_weights_missing', {}, {0: self.champion, 1: self.champion}, None))
@@ -797,12 +809,14 @@ class DefinitiveEndToEndTests(EndToEndTests):
 
     def test_main_with_reply_prior(self):pass
 
-    def definitive_inputs(self, slope):
+    def definitive_inputs(self, slope, unrepresented=()):
         run = self.root / 'run'
         for sub in ('results', 'telemetry', 'owning-wire'):(run / sub).mkdir(parents=True, exist_ok=True)
         rows = self.rows(run, random.Random(11));weights, prior = [], []
         for row in rows:
-            row['guards'] = dict(GUARDS_OFF, opponent_recharge_unrepresented=(row['ordinal'], row['decision_index']) == (1, 0))
+            if row['root'] is not None:
+                row['root'].update(guards(opponent_recharge=(row['ordinal'], row['decision_index']) == (1, 0),
+                                          unrepresented_effect=(row['ordinal'], row['decision_index']) in unrepresented))
             if row['worlds'] is None:continue
             for w, world in enumerate(row['worlds']):
                 if (row['ordinal'], row['decision_index']) != (1, 1):weights.append(dict(ordinal=row['ordinal'], decision_index=row['decision_index'], world=w, loglik=-w * slope))
@@ -832,6 +846,8 @@ class DefinitiveEndToEndTests(EndToEndTests):
         self.assertFalse(w['low_beta_reported']);self.assertNotIn('reweighted_br_fp:beta=0.25', summary['settings'])
         self.assertEqual(summary['scoring_rule'], S.SCORING_RULE);self.assertIn('Scoring rule:', (out / 'summary.md').read_text())
         self.assertEqual(cover['dropped_battles']['battles'], 0)
+        self.assertEqual((cover['guards']['unrepresented_effect_roots'], cover['guards']['unrepresented_effect_share']), (0, 0.))
+        self.assertEqual(summary['metrics_unrepresented_effect_unguarded']['pi_filled']['all']['decisions'], 0)
         self.assertIsNone(cover['external_prior'])
         for name in S.DEFINITIVE_SETTINGS:self.assertEqual(summary['metrics']['pi_filled']['all']['operators'][name]['decisions'], 5, name)
         decisions = {(d['ordinal'], d['decision_index']): d for d in map(json.loads, (out / 'decisions.jsonl').read_text().splitlines())}
@@ -841,6 +857,24 @@ class DefinitiveEndToEndTests(EndToEndTests):
         self.assertIn('recharge guards (definitive set)', (out / 'summary.md').read_text())
         with redirect_stdout(io.StringIO()), self.assertRaises(SystemExit):
             S.main(['--rows', str(path), '--run-directory', str(run), '--out', str(self.root / 'out2'), '--operator-set', 'definitive'])
+
+    def test_unrepresented_effect_roots_pause_above_ten_percent(self):
+        run, path, wpath, ppath = self.definitive_inputs(.25, unrepresented={(0, 0)})   # 1 of 5 scored roots: 20%
+        out = self.root / 'out'
+        with redirect_stdout(io.StringIO()):
+            S.main(['--rows', str(path), '--run-directory', str(run), '--out', str(out), '--operator-set', 'definitive',
+                    '--world-weights', str(wpath), '--reply-prior', str(ppath)])
+        summary = json.loads((out / 'summary.json').read_text());g = summary['coverage']['guards']
+        self.assertEqual((g['unrepresented_effect_roots'], g['unrepresented_effect_share']), (1, .2))
+        self.assertIn(summary['verdict'], ('PAUSED_UNREPRESENTED_EFFECT', 'PARITY_FAILED'))
+        self.assertIsNone(summary['selection']['chosen'])
+        self.assertEqual(summary['metrics_unrepresented_effect_unguarded']['pi_filled']['all']['decisions'], 1)
+        decisions = {(d['ordinal'], d['decision_index']): d for d in map(json.loads, (out / 'decisions.jsonl').read_text().splitlines())}
+        root = decisions[(0, 0)];self.assertTrue(root['guard']['unrepresented_effect'])
+        self.assertEqual({op['choice'] for op in root['operators'].values()}, {root['greedy_action']})
+        self.assertEqual(set(root['unguarded_operators']), set(root['operators']))
+        self.assertIn('Context only: unrepresented-effect roots', (out / 'summary.md').read_text())
+        self.assertEqual(S.verdict(True, dict(passed=True), dict(chosen=None), dict(passed=False), paused=True), 'PAUSED_UNREPRESENTED_EFFECT')
 
     def test_steep_weights_report_beta_quarter_and_dropped_battles_leave_every_operator(self):
         run, path, wpath, ppath = self.definitive_inputs(4.)   # ESS ~ 1 at beta .5

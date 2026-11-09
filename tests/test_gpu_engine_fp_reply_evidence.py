@@ -6,7 +6,7 @@ import unittest
 from gpu_engine import fp_reply_evidence as ev
 
 
-def member(species, moves, ability, item):return dict(species=species, moves=moves, ability=ability, item=item)
+def member(species, moves, ability, item):return dict(species=species, moves=moves, base_ability=ability, ability='Trace copy', item=item)
 
 
 GENGAR_A = ('Gengar', ['Thunderbolt', 'Ice Punch', 'Hypnosis', 'Explosion'], 'Levitate', 'Leftovers')
@@ -50,7 +50,7 @@ class EvidenceTests(unittest.TestCase):
     def test_weights_join_every_world_or_none(self):
         evidence, n = evidence_of(('gengar', [(GENGAR_A, -1.), (GENGAR_B, -3.)]))
         rows = [dict(ordinal=4, decision_index=7, round=9, mons=ev.snapshot(evidence, n, set()))]
-        world = lambda g: dict(opponent=dict(sets=[member(*g), member(*SNORLAX)]))
+        world = lambda g: dict(opponent=dict(party=[member(*g), member(*SNORLAX)]))
         rr = [dict(ordinal=4, decision_index=7, worlds=[world(GENGAR_A), world(GENGAR_B)]),
               dict(ordinal=4, decision_index=7, worlds=[world(GENGAR_A), dict(opponent={})]),
               dict(ordinal=4, decision_index=8, worlds=[world(GENGAR_A)]),

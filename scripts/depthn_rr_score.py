@@ -67,10 +67,14 @@ Definitive operator set (--operator-set definitive; the screen's set above stays
   p_w = softmax_w(beta * loglik_w) instead of 1/W, loglik_w the reply model's log-likelihood of Foul Play's earlier public
   choices given world w's sets (--world-weights rows {ordinal, decision_index, world, loglik}); a decision missing a world's
   loglik is unscorable ('world_weights_missing'). Their mean effective world count (1 / sum p_w^2) is reported.
-- Guards, on every operator (the live search's recharge guards): a root whose opponent must recharge
-  (guards.opponent_recharge_unrepresented) is played greedy by every operator; an operator choice other than greedy that is
-  one of guards.own_recharge_lanes (our recharge moves) is replaced by greedy. A row without both fields is unscorable
-  ('guards_missing'). Counts per operator and reason are reported.
+- Guards, on every operator (the live search's guards): a root whose opponent must recharge (root.opponent_recharge) or
+  that carries an audited unrepresented effect (root.unrepresented_effect: recharge, Destiny Bond, Transform, Yawn, Wrap,
+  Perish Song, Trick lock and the move table's other single-move effects, legal for either side at turn 1 or >= 5% of either
+  side's turn-2 prior in some world) is played greedy by every operator; an operator choice other than greedy in one of our
+  recharge lanes (root.own_recharge_lanes, bool[4] from the live actor's RECHARGE_MOVES) is replaced by greedy. A row without
+  these fields is unscorable ('guards_missing'). Replacements are counted per operator and reason; the unrepresented-effect
+  roots are also scored with each operator's unguarded choice, reported for context only; when they are more than 10% of
+  the scored roots the verdict is PAUSED_UNREPRESENTED_EFFECT and nothing is selected (the lead decides).
 - Candidates: bayes_hedge:lam=0, blend:lam=0.5, br_fp, rnr:lam=0.5 and both reweighted operators. Every other setting is
   reported only. Gate, selection (even seeds) and confirmation (odd seeds) are the screen's rules over these candidates.
 - Reweighting diagnostics per root (one weight vector serves both reweighted operators): the effective world count
@@ -132,7 +136,8 @@ REWEIGHTED = (f'reweighted_averaging:beta={REWEIGHT_BETA}', f'reweighted_br_fp:b
 DEFINITIVE_SETTINGS = SETTINGS + ('br_fp',) + tuple(f'rnr:lam={lam}' for lam in RNR_LAM) + REWEIGHTED
 DEFINITIVE_CANDIDATES = ('bayes_hedge:lam=0', 'blend:lam=0.5', 'br_fp', 'rnr:lam=0.5') + REWEIGHTED
 WORLD_WEIGHT_FIELDS = dict(ordinal='ordinal', decision_index='decision_index', world='world', loglik='loglik')
-GUARD_REASONS = ('opponent_recharge_root', 'own_recharge_override')
+GUARD_REASONS = ('opponent_recharge_root', 'unrepresented_effect_root', 'own_recharge_override')
+UNREPRESENTED_PAUSE_SHARE = .10   # above this share of scored roots under the unrepresented-effect guard, the RR pauses
 LOW_BETA = .25
 LOW_BETA_REWEIGHTED = (f'reweighted_averaging:beta={LOW_BETA}', f'reweighted_br_fp:beta={LOW_BETA}')
 LOW_BETA_IF_MEDIAN_ESS_UNDER = 4.
@@ -152,7 +157,8 @@ ROW_FIELDS = dict(
     replay_action=('replay', 'action_index'), replay_q=('replay', 'q_values'),
     action_equal=('parity', 'action_equal'), q_equal=('parity', 'q_equal'),
     root_logits=('root', 'root_logits'), root_legal=('root', 'root_legal'), worlds=('worlds',),
-    opponent_recharge=('guards', 'opponent_recharge_unrepresented'), own_recharge_lanes=('guards', 'own_recharge_lanes'))
+    opponent_recharge=('root', 'opponent_recharge'), own_recharge_lanes=('root', 'own_recharge_lanes'),
+    unrepresented_effect=('root', 'unrepresented_effect'))
 WORLD_FIELDS = dict(
     requested=('opponent_requested',), kept=('kept',), logits=('root_peer_logits',), grid=('grid',), refusals=('refusals',),
     active_slot=('opponent', 'active_slot'), active_species=('opponent', 'active_species'), active_moves=('opponent', 'active_moves'),
@@ -521,23 +527,25 @@ def definitive_operators(worlds, root_legal, reply, logliks, failures):
     return out, weights
 
 
-def guard_choices(choices, greedy, opponent_recharge, own_recharge_lanes):
-    """(choices with the recharge guards applied, {name: reason} for each choice the guards replaced by greedy)."""
+def guard_choices(choices, greedy, opponent_recharge, unrepresented, own_recharge_lanes):
+    """(choices with the guards applied, {name: reason} for each choice the guards replaced by greedy)."""
     out, events = {}, {}
     for name, choice in choices.items():
         if choice is None or choice == greedy:out[name] = choice
         elif opponent_recharge:out[name], events[name] = greedy, 'opponent_recharge_root'
+        elif unrepresented:out[name], events[name] = greedy, 'unrepresented_effect_root'
         elif choice in own_recharge_lanes:out[name], events[name] = greedy, 'own_recharge_override'
         else:out[name] = choice
     return out, events
 
 
 def guards_of(decision):
-    """(opponent_recharge, frozenset of own recharge lanes) from a row's guards fields; Unscorable('guards_missing') otherwise."""
-    flag, lanes = decision['opponent_recharge'], decision['own_recharge_lanes']
-    if type(flag) is not bool or type(lanes) is not list or any(type(b) is not int or not 0 <= b < 4 for b in lanes):
+    """(opponent_recharge, unrepresented_effect, frozenset of own recharge lanes) from a row's root fields
+    (own_recharge_lanes: bool[4]); Unscorable('guards_missing') otherwise."""
+    flag, effect, mask = decision['opponent_recharge'], decision['unrepresented_effect'], decision['own_recharge_lanes']
+    if type(flag) is not bool or type(effect) is not bool or type(mask) is not list or len(mask) != 4 or any(type(b) is not bool for b in mask):
         raise Unscorable('guards_missing')
-    return flag, frozenset(lanes)
+    return flag, effect, frozenset(b for b in range(4) if mask[b])
 
 
 def reply_logits_of(decision, worlds, prior):
@@ -680,8 +688,10 @@ def score_decision(decision, reply, target, failures, base=None, external=None, 
     external_missing = guard_events = weights = None
     if external is not None:
         found, external_missing = external_operators(gs, worlds, external);choices.update(found)
+    unguarded = None
     if definitive is not None:
         found, weights = definitive_operators(worlds, legal, model, logliks, failures);choices.update(found)
+        if guard[1]:unguarded = dict(choices)   # the unrepresented-effect context table scores these
         choices, guard_events = guard_choices(choices, greedy, *guard)
     lanes, drops = [], {}
     if reply.cause is None:
@@ -692,20 +702,25 @@ def score_decision(decision, reply, target, failures, base=None, external=None, 
     observed = reply.cause is None and bool(lanes)
     r_dropped = realized(worlds, lanes, legal) if observed else None
     r_filled = r_dropped if observed else list(average.q)
-    ops = {}
-    for name, choice in choices.items():
-        entry = dict(choice=choice, prior=None, band=None, R=dict(dropped=None, pi_filled=None), D=dict(dropped=None, pi_filled=None))
-        if choice is not None:
-            entry.update(prior=prior[choice], band=band(prior[choice]))
-            for scoring, r in (('dropped', r_dropped), ('pi_filled', r_filled)):
-                if r is None:continue
-                entry['R'][scoring] = r[choice];entry['D'][scoring] = 0. if choice == greedy else r[choice] - r[greedy]
-        ops[name] = entry
+    def entries(chosen):
+        out = {}
+        for name, choice in chosen.items():
+            entry = dict(choice=choice, prior=None, band=None, R=dict(dropped=None, pi_filled=None), D=dict(dropped=None, pi_filled=None))
+            if choice is not None:
+                entry.update(prior=prior[choice], band=band(prior[choice]))
+                for scoring, r in (('dropped', r_dropped), ('pi_filled', r_filled)):
+                    if r is None:continue
+                    entry['R'][scoring] = r[choice];entry['D'][scoring] = 0. if choice == greedy else r[choice] - r[greedy]
+            out[name] = entry
+        return out
+    ops = entries(choices)
     greedy_argmax = argmax(logits, [a for a in range(9) if legal[a]])
     return dict(observed=observed, unmapped=reply.cause is None and not lanes, mapped_worlds=[list(x) for x in lanes],
                 world_drops=drops, R=dict(dropped=r_dropped, pi_filled=r_filled), operators=ops, averaging_q=list(average.q),
                 greedy_argmax=greedy_argmax, target_fallback=fallback, worlds=len(worlds), external_missing_worlds=external_missing,
-                guard=None if guard is None else dict(opponent_recharge=guard[0], own_recharge_lanes=sorted(guard[1]), replaced=guard_events),
+                guard=None if guard is None else dict(opponent_recharge=guard[0], unrepresented_effect=guard[1], own_recharge_lanes=sorted(guard[2]),
+                                                      replaced=guard_events),
+                unguarded_operators=None if unguarded is None else entries(unguarded),
                 world_weights=weights, effective_worlds=None if weights is None else math.fsum(weights) ** 2 / math.fsum(w * w for w in weights),
                 max_world_weight=None if weights is None else max(weights))
 
@@ -785,20 +800,21 @@ def confirm(table, setting):
     return dict(setting=setting, pi_filled=pi, dropped=dropped, checks=checks, passed=all(checks.values()))
 
 
-def verdict(parity_ok, gate, selection, confirmation):
+def verdict(parity_ok, gate, selection, confirmation, paused=False):
     if not parity_ok:return 'PARITY_FAILED'
+    if paused:return 'PAUSED_UNREPRESENTED_EFFECT'
     if not gate['passed']:return 'GATE_FAILED'
     if selection['chosen'] is None:return 'NO_CANDIDATE'
     return 'PASS' if confirmation['passed'] else 'FAIL'
 
 
-def decide(table, parity_ok, candidates=CANDIDATES):
-    """Gate, selection and confirmation; no candidate is selected when parity or the gate fails."""
+def decide(table, parity_ok, candidates=CANDIDATES, paused=False):
+    """Gate, selection and confirmation; no candidate is selected when parity or the gate fails, or when the run is paused."""
     gate = validation_gate(table)
-    selection = select(table, candidates) if parity_ok and gate['passed'] else dict(chosen=None, candidates=None)
+    selection = select(table, candidates) if parity_ok and gate['passed'] and not paused else dict(chosen=None, candidates=None)
     confirmation = None if selection['chosen'] is None else confirm(table, selection['chosen'])
     return dict(gate=gate, selection=selection, confirmation=confirmation,
-                verdict=verdict(parity_ok, gate, selection, confirmation or dict(passed=False)))
+                verdict=verdict(parity_ok, gate, selection, confirmation or dict(passed=False), paused))
 
 
 # ---- the live run directory ----
@@ -891,6 +907,9 @@ class Coverage:
                 note='scored decisions of the definitive set: roots whose opponent must recharge (every operator plays greedy) and '
                      'operator choices replaced by greedy, by operator and reason',
                 decisions=self.guards['decisions'], opponent_recharge_roots=self.guards['opponent_recharge_roots'],
+                unrepresented_effect_roots=self.guards['unrepresented_effect_roots'],
+                unrepresented_effect_share=self.guards['unrepresented_effect_roots'] / self.guards['decisions'] if self.guards['decisions'] else None,
+                unrepresented_pause_above=UNREPRESENTED_PAUSE_SHARE,
                 with_own_recharge_lanes=self.guards['with_own_recharge_lanes'],
                 replaced={f'{name}:{reason}': n for (name, reason), n in sorted(self.replaced.items())}),
             world_weights=None if self.guards is None else self.weight_report(),
@@ -962,6 +981,7 @@ def process(decision, run, coverage, prior=None, weights=None, definitive=False)
     for why in scored['world_drops'].values():coverage.drops[why] += 1
     if scored['guard'] is not None:
         g = scored['guard'];coverage.guards['decisions'] += 1;coverage.guards['opponent_recharge_roots'] += g['opponent_recharge']
+        coverage.guards['unrepresented_effect_roots'] += g['unrepresented_effect']
         coverage.guards['with_own_recharge_lanes'] += bool(g['own_recharge_lanes'])
         for name, reason in g['replaced'].items():coverage.replaced[(name, reason)] += 1
         coverage.effective_worlds.append(scored['effective_worlds']);coverage.max_weights.append(scored['max_world_weight'])
@@ -974,9 +994,11 @@ def process(decision, run, coverage, prior=None, weights=None, definitive=False)
                  live_action=decision['live_action'], averaging_action=chosen, greedy_action=decision['greedy_action'],
                  greedy_argmax=scored['greedy_argmax'], target_fallback=scored['target_fallback'], R=scored['R'], operators=ops,
                  external_missing_worlds=scored['external_missing_worlds'], guard=scored['guard'], world_weights=scored['world_weights'],
-                 effective_worlds=scored['effective_worlds'], max_world_weight=scored['max_world_weight'])
+                 effective_worlds=scored['effective_worlds'], max_world_weight=scored['max_world_weight'],
+                 unguarded_operators=scored['unguarded_operators'])
+    compact = lambda table: {n: (o['choice'], (o['D']['dropped'], o['D']['pi_filled']), o['band']) for n, o in table.items()}
     record = dict(ordinal=ordinal, half=half, kind=decision['request_kind'], observed=scored['observed'], fp_requested=reply.kind != 'wait',
-                  ops={n: (o['choice'], (o['D']['dropped'], o['D']['pi_filled']), o['band']) for n, o in ops.items()})
+                  ops=compact(ops), unguarded=None if scored['unguarded_operators'] is None else compact(scored['unguarded_operators']))
     return entry, record
 
 
@@ -1016,7 +1038,11 @@ def score_run(rows, run_directory, out, reply_prior=None, operator_set='screen',
     cover = coverage.report(records)
     if definitive and cover['world_weights']['low_beta_reported']:settings = settings + LOW_BETA_REWEIGHTED
     table = metrics(records, settings)
-    outcome = decide(table, cover['parity']['passed'], candidates)
+    share = (cover['guards'] or {}).get('unrepresented_effect_share')
+    paused = definitive and share is not None and share > UNREPRESENTED_PAUSE_SHARE
+    outcome = decide(table, cover['parity']['passed'], candidates, paused)
+    guarded = [dict(r, ops=r['unguarded']) for r in records if r.get('unguarded') is not None]
+    unguarded_context = metrics(guarded, settings) if definitive else None
     # Reported only (the gate and selection use `metrics`): without 'wait' decisions. There every mapped world is a waiting
     # world (pi_w is column 0's unit mass), so R is averaging's own per-world value over them: exactly its q, and averaging's
     # D >= 0, when every world waits.
@@ -1029,7 +1055,8 @@ def score_run(rows, run_directory, out, reply_prior=None, operator_set='screen',
                                world_weights=None if world_weights is None else str(Path(world_weights).resolve()),
                                drop_battles=None if drop_battles is None else str(Path(drop_battles).resolve())),
                    settings=list(settings), candidates=list(candidates), reported_only=reported, level=LEVEL, override_min=OVERRIDE_MIN, parity_min=PARITY_MIN,
-                   bands=[b for b, _ in BANDS], **outcome, coverage=cover, metrics=table, metrics_fp_requested=requested)
+                   bands=[b for b, _ in BANDS], **outcome, coverage=cover, metrics=table, metrics_fp_requested=requested,
+                   metrics_unrepresented_effect_unguarded=unguarded_context)
     (out / 'summary.json').write_text(json.dumps(summary, indent=1) + '\n')
     (out / 'summary.md').write_text(markdown(summary))
     return summary
@@ -1108,6 +1135,12 @@ def markdown(summary):
         out += [f"## {scoring}, all: by prior band of the setting's action", '', HEADER.replace('| setting |', '| setting / band |')]
         out += [_metric_row(f'{name} / {b}', m[name]) for b, m in table[scoring]['all']['by_prior_band'].items() for name in settings
                 if m[name]['decisions']] + ['']
+    context = summary.get('metrics_unrepresented_effect_unguarded')
+    if context is not None:
+        block = context['pi_filled']['all']
+        out += [f"## Context only: unrepresented-effect roots scored with each operator's unguarded choice ({block['battles']} battles, "
+                f"{block['decisions']} decisions; every operator played greedy there)", '', HEADER]
+        out += [_metric_row(name, block['operators'][name]) for name in settings] + ['']
     requested = summary['metrics_fp_requested']
     out += ["# Reported view: decisions where Foul Play was requested (no 'wait' decisions; the gate and selection above are unchanged)", '']
     for scoring in SCORINGS:

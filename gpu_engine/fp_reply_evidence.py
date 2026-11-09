@@ -30,10 +30,11 @@ from gpu_engine import fp_reply_data as data_mod
 from gpu_engine import fp_reply_reweight as rw
 
 SCHEMA = 'v2s-fp-reply-evidence.v1'
-# The RR re-pricer's per-world opponent sets (one place: a rename is a one-line change): world[WORLD_SETS] is a list over
-# party slots of {species, moves, ability, item}.
-WORLD_SETS = ('opponent', 'sets')
-SET_FIELDS = dict(species='species', moves='moves', ability='ability', item='item')
+# The RR re-pricer's per-world opponent sets (scripts/depthn_rr_reprice.py at 5a035eb7; one place: a rename is a one-line
+# change): world[WORLD_SETS] is a list over party slots of {species, moves (Hidden Power typed), base_ability, ability, item}.
+# The set key uses base_ability (a Trace holder's current ability is the copy); ability only when base_ability is absent.
+WORLD_SETS = ('opponent', 'party')
+SET_FIELDS = dict(species='species', moves='moves', ability=('base_ability', 'ability'), item='item')
 
 
 def set_key(moves, ability, item):
@@ -77,8 +78,8 @@ def world_sets(world):
     out = {}
     for member in value:
         if type(member) is not dict or not member.get(SET_FIELDS['species']):return None
-        out[rw.toid(member[SET_FIELDS['species']])] = set_key(member.get(SET_FIELDS['moves']), member.get(SET_FIELDS['ability']),
-                                                                 member.get(SET_FIELDS['item']))
+        ability = next((member[k] for k in SET_FIELDS['ability'] if member.get(k)), None)
+        out[rw.toid(member[SET_FIELDS['species']])] = set_key(member.get(SET_FIELDS['moves']), ability, member.get(SET_FIELDS['item']))
     return out
 
 
