@@ -178,6 +178,9 @@ def install(c,state,side,use,*,initial=False):
         swapped=_li.put(order,r,(position,),order[:,0]).at[:,0].set(p)
         t=t._replace(own_order=_li.put(t.own_order,r,(side,),j.where(use[:,None],swapped,order)))
     t=tr._install(t,state,side,use);slot=_li.take(t.active_slot,r,side);at=j.clip(slot,0,5)
+    # A newly revealed member already holds its public slot here; every actual
+    # install (switch, replacement, drag, Baton target) moves it to the front.
+    if not initial:t=tr.public_order_install(t,side,use)
     t=port.arrival(t,c.port_tables,state,side,use)
     t=negative_items.hp_line(t,state,side,use,source_class=negative_items.HP_ACTION)
     c=c._replace(trackers=t)
