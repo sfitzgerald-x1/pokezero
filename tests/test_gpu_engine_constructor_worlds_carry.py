@@ -349,30 +349,41 @@ class PeerOrderTests(unittest.TestCase):
 
     def test_what_cannot_be_joined_refuses(self):
         team=[1,2,3,4,5,6]
-        cases={'no switch-in':['|turn|1'],'not in the party':[switch('p2','theta')],'not revealed here':[switch('p2','alpha'),switch('p2','delta')],
-            'not the active':[switch('p2','alpha'),switch('p2','beta')]}
-        for name,lines in cases.items():
-            with self.subTest(name),self.assertRaises(cw.PeerOrderUnavailable):self.order(lines,team,active=0,revealed=(0,))
+        # (lines, the world's peer active, its revealed members): each case trips one check only
+        cases={'no switch-in':(['|turn|1'],0,(0,)),'not in the party':([switch('p2','theta')],0,(0,)),
+            'not revealed here, though it is the active':([switch('p2','alpha'),switch('p2','delta')],3,(0,)),   # only the reveal check refuses
+            'every switch-in revealed, not the active':([switch('p2','alpha'),switch('p2','beta')],0,(0,1))}   # only the active check refuses
+        for name,(lines,active,revealed)in cases.items():
+            with self.subTest(name),self.assertRaises(cw.PeerOrderUnavailable)as caught:self.order(lines,team,active=active,revealed=revealed)
+            if name.startswith('not revealed'):self.assertIn('not a revealed member',str(caught.exception))
+            if name.startswith('every'):self.assertIn('is not the world',str(caught.exception))
+        self.assertEqual(self.order([switch('p2','alpha'),switch('p2','beta')],team,active=1,revealed=(0,1))[0],[1,0,2,3,4,5])   # both pass
         with self.assertRaises(cw.CarryLayoutError):
             s,t=peer_world(team,active=0,revealed=(0,));cw.order_peer(s,t,0,cw.line_facts([switch('p2','alpha')],0),table())   # no species names
         self.assertTrue(issubclass(cw.PeerOrderUnavailable,ValueError))
 
-    def test_formes_join_by_prefix(self):
-        tables=cw._table(np.zeros((3,2),np.int32),species_names=['','deoxysspeed','snorlax'])
-        s,t=peer_world([1,2,0,0,0,0],active=0,revealed=(0,))
-        out=cw.order_peer(s,t,0,cw.line_facts(['|switch|p2a: Deoxys|Deoxys-Speed, L80|100/100'],0),tables)
-        self.assertEqual(np.asarray(out.own_order)[0,1,0],0)
+    def test_formes_join_exactly_else_by_a_unique_prefix(self):
+        names=['','deoxysspeed','snorlax','unown','deoxysattack','swampert']
+        tables=cw._table(np.zeros((len(names),2),np.int32),species_names=names)
+        def joined(details,team,active):
+            s,t=peer_world(team,active=active,revealed=(active,))
+            return np.asarray(cw.order_peer(s,t,0,cw.line_facts([f'|switch|p2a: X|{details}, L80|100/100'],0),tables).own_order)[0,1].tolist()
+        self.assertEqual(joined('Deoxys-Speed',[2,1,5,0,0,0],1),[1,0,2,3,4,5])   # exact: deoxysspeed
+        self.assertEqual(joined('Unown-C',[2,3,5,0,0,0],1),[1,0,2,3,4,5])   # the engine collapses the forme (unown): a unique prefix
+        with self.assertRaisesRegex(cw.PeerOrderUnavailable,'deoxys: 2 members'):joined('Deoxys',[1,4,2,0,0,0],0)   # two prefix matches refuse
 
     def test_line_facts(self):
         lines=['|init|battle','|switch|p1a: Alpha|Alpha, L80, F|300/300','|switch|p2a: Beta|Beta, L80|100/100','|turn|1',
             '|request|{"side":{"id":"p1"}}','|move|p2a: Beta|Spikes|p1a: Alpha','|-sidestart|p1: Player|Spikes',
             '|switch|p1a: Gamma|Gamma, L80|299/300','|-damage|p1a: Gamma|262/300|[from] Spikes','|-heal|p1a: Gamma|281/300 par|[from] item: Leftovers',
             '|drag|p2a: Delta|Delta, L80, M|100/100','|-damage|p2a: Delta|88/100|[from] Spikes','|turn|2',
-            '|switch|p1a: Alpha|Alpha, L80, F|300/300','|-damage|p1a: Alpha|263/300|[from] Spikes','|faint|p1a: Gamma',
-            '|switch|p1a: Eta|Eta, L80|10/300','|-damage|p1a: Eta|0 fnt|[from] Spikes','|replace|p2a: Beta|Beta, L80|100/100']
+            '|move|p2a: Delta|Tackle|p1a: Gamma','|-damage|p1a: Gamma|250/300','|switch|p1a: Alpha|Alpha, L80, F|300/300',   # not Spikes: no hit
+            '|-damage|p1a: Alpha|263/300|[from] Spikes','|faint|p1a: Gamma',
+            '|switch|p1a: Eta|Eta, L80|10/300','|-damage|p1a: Eta|6/300|[from] psn','|-damage|p1a: Eta|0 fnt|[from] Spikes',   # psn first: before = 6
+            '|replace|p2a: Beta|Beta, L80|100/100']
         f=cw.line_facts(lines,0)
         self.assertEqual(f.peer_switches,('beta','delta','beta'))
-        self.assertEqual(f.owner_spikes,((299,262,300),(300,263,300),(10,0,300)))
+        self.assertEqual(f.owner_spikes,((299,262,300),(300,263,300),(6,0,300)))
         g=cw.line_facts(lines,1)   # the other seat: p2 owns, p1 is the peer
         self.assertEqual(g.peer_switches,('alpha','gamma','alpha','eta'));self.assertEqual(g.owner_spikes,((100,88,100),))   # p2's hit, as its lines read
         self.assertEqual(cw.line_facts(['|-damage|p1a: Alpha|263/300|[from] Spikes'],0).owner_spikes,None)   # no previous HP on the lines

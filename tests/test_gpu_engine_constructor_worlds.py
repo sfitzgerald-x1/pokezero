@@ -554,11 +554,16 @@ class ConstructorWorldsTests(unittest.TestCase):
             out=cw.prepare_roots(constructor,[dict(request_id=k,lines=lines[k])for k in roots])
         self.assertIs(type(out[0]),cw.Prepared);self.assertEqual(out[0].facts,cw.LineFacts(('snorlax',),()))
         self.assertIs(type(out[1]),cw.RootRefusal);self.assertEqual((out[1].kind,out[1].detail[:7]),('PEER_REQUEST_ORDER_UNAVAILABLE','nobody:'))
-        def refuse(world,owner,facts=None):raise cw.PeerOrderUnavailable('the last public switch-in is not the world\'s peer active')
-        with patch.object(cw,'world_completer',return_value=refuse),self.forward_patch():   # build applies the root's facts again
-            b=cw.build(constructor,out,self.pricer(carry_executor(),depth=2,k_own=(2,),k_opp=(2,),capacity=2),PARAMS,binding=self.binding,recipe=self.recipe)
+        def refuse(world,owner,facts=None):   # refuses only what it is handed the root's facts for
+            if facts is None:return world
+            raise cw.PeerOrderUnavailable('the last public switch-in is not the world\'s peer active')
+        pricer=self.pricer(carry_executor(),depth=2,k_own=(2,),k_opp=(2,),capacity=2)
+        with patch.object(cw,'world_completer',return_value=refuse),self.forward_patch():   # build applies the root's own facts again
+            b=cw.build(constructor,out,pricer,PARAMS,binding=self.binding,recipe=self.recipe)
+            unread=cw.build(constructor,[replace(out[0],facts=None)],pricer,PARAMS,binding=self.binding,recipe=self.recipe)
         self.assertEqual([r['status']for r in b.roots],['REFUSED','REFUSED']);self.assertTrue(b.roots[0]['reason'].startswith('PEER_REQUEST_ORDER_UNAVAILABLE: the last'))
         self.assertEqual(b.roots[1]['reason'][:47],'constructor-root:PEER_REQUEST_ORDER_UNAVAILABLE')
+        self.assertEqual(unread.roots[0]['status'],'PRICED')   # the same root without facts: nothing to refuse
 
     def test_a_reduction_error_refuses_its_root_only(self):
         """reduce_completed_q's range check raises when a block's completed-Q rounds outside [-1, 1]: here action 0 wins against

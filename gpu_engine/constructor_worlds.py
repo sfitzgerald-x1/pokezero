@@ -49,7 +49,10 @@ dict keys and leaves two members None). This module turns prepared roots into De
     members never move. The engine state is untouched (switch lanes map to physical slots through own_order), so the
     engine stays consistent; the owner's own order (from_b2: the request's) is unchanged. A switch-in that does not join
     exactly one revealed member, or a last switch-in that is not the world's peer active, refuses the root
-    (PeerOrderUnavailable: PEER_REQUEST_ORDER_UNAVAILABLE).
+    (PeerOrderUnavailable: PEER_REQUEST_ORDER_UNAVAILABLE). Every prepare_roots caller gets this refusal as a RootRefusal
+    of that kind, whose build reason is constructor-root:PEER_REQUEST_ORDER_UNAVAILABLE:<detail>: the live search counts it
+    constructor_refused; the D3 gate's R1-C (d3_depthn_gate.constructor_roots, prepare_roots per roster root) treats it as a
+    root that did not fully construct (listed among the selection's refused roots, never selected).
   - the peer's OPP_HAZARD_CREDIT (fill_owner_spikes): from_b2 fills only hazards[owner, exact] and hazards[foe, shown]
     (phase_d_live_worlds.py:415), so hazards[owner, shown], the peer's view of the owner's Spikes losses, read 0. The
     device's shown half is the per-hit sum of (_percent(hp) - _percent(new)) / 100 (engine_device_public_port.spikes);
@@ -338,7 +341,9 @@ def orient_credits(public,owner):
 
 
 # The owner's protocol prefix: the peer's request order and the owner's shown Spikes losses ------------------------------------------
-SWITCH_KINDS=('switch','drag','replace')   # a public switch-in (Baton Pass's included: its recipient arrives on a |switch| line)
+# A public switch-in (Baton Pass's included: its recipient arrives on a |switch| line). |replace| counts as one: it never occurs in
+# Gen 3; in Gen 5+ it ends an Illusion without moving anyone, so this rule is Gen 3's only.
+SWITCH_KINDS=('switch','drag','replace')
 
 
 class PeerOrderUnavailable(ValueError):

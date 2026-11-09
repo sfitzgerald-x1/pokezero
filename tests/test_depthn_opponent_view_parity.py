@@ -711,6 +711,31 @@ class ReportMathTests(unittest.TestCase):
         self.assertEqual(P.redact(env, ())['numeric'].tolist(), env['numeric'].tolist())
         b2 = P.redact(env, ('self_hazard_credit',));self.assertEqual(float(b2['numeric'][0, 0, 115]), 0.)
 
+    def test_the_report_redacts_both_sides_with_the_four_documented_redactions_by_default(self):
+        self.assertEqual(set(P.DEFAULT_REDACTIONS), {'last_damage_taken', 'last_damage_dealt', 'hp_percent', 'self_hazard_credit'})
+        env, view = toy(4);env, view = env['numeric'], view['numeric']
+        env[0, 1, 39] = .3   # the env's side of a redacted cell (the opponent's exact own loss)
+        view[1, 9, 38] = .2   # the view's side of a redacted cell
+        env[2, 0, 115] = .05   # the opponent's exact Spikes losses: the fourth redaction
+        env[3, 8, 0] = 263 / 300;view[3, 8, 0] = .88   # an exact fraction against the public percent
+        with tempfile.TemporaryDirectory() as tmp:
+            capture = Path(tmp) / 'capture';capture.mkdir();n = len(env);t = np.tile(TOKEN_TYPES, (n, 1)).astype(np.int16)
+            np.savez(capture / 'arrays-0-1.npz', kinds=np.asarray(['true']), env_numeric=env, env_categorical=np.zeros((n, 23, 41), np.int32), env_token_type=t,
+                env_attention=np.ones((n, 23), bool), env_legal=np.ones((n, 9), bool), view_numeric=view[:, None], view_categorical=np.zeros((n, 1, 23, 41), np.int32),
+                view_token_type=t[:, None], view_attention=np.ones((n, 1, 23), bool), view_legal=np.ones((n, 1, 9), bool), view_valid=np.ones((n, 1), bool),
+                view_error=np.zeros((n, 1), np.int32), ordinal=np.ones(n, np.int64), round=np.arange(n), decision_index=np.arange(n), turn=np.ones(n, np.int64))
+            (capture / 'positions-0.jsonl').write_text(''.join(json.dumps(dict(views=dict(true={}))) + '\n' for _ in range(n)))
+            (capture / 'summary-0.json').write_text(json.dumps(dict(positions=n)))
+            report = P.build_report([capture])
+            with patch('sys.stdout', new_callable=io.StringIO):
+                self.assertEqual(P.main(['report', '--capture', str(capture), '--out', str(Path(tmp) / 'one'), '--redact', 'hp_percent']), 0)
+            one = P.read_json(Path(tmp) / 'one' / 'summary.json');markdown = (Path(tmp) / 'one' / 'summary.md').read_text()
+        self.assertEqual(report['parity']['true']['exact']['numeric'], 0.)   # every position differs somewhere
+        self.assertEqual(report['parity_redacted']['true']['exact']['observation_and_legal'], 1.)   # exact except the four, both sides redacted
+        self.assertEqual(sorted(report['redactions']), sorted(P.DEFAULT_REDACTIONS))
+        self.assertEqual((sorted(one['redactions']), one['parity_redacted']['true']['exact']['numeric']), (['hp_percent'], .25))   # --redact selects
+        self.assertIn('Exact match except the documented redactions', markdown)
+
     def test_empty_kind(self):
         env, view = toy(0)
         s = P.diff_stats(env, view, tolerance=1e-5)

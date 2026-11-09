@@ -78,9 +78,10 @@ exact-match share per key (numeric, categorical, token types, attention, legal) 
 opponent (7-12) tokens match up to order; per token, per numeric column and per categorical column the share of positions
 that differ and the max |diff|; every differing (token, column) cell ranked (beyond --tolerance share, then exact share,
 then max |diff|) with examples from both sides; legal-lane disagreement both ways; the sampled worlds' views against the true
-world's. parity_redacted: the same comparison after the documented redactions (REDACTIONS, --redact; default the three:
-LAST_DAMAGE_TAKEN on self0 and LAST_DAMAGE_DEALT on opp0-5 zeroed, HP_FRACTION on opp0-5 at Showdown's public percent) on both
-sides, so "exact except the redactions" is reported directly. Names: tokens field / self0-5 / opp0-5 / move0-3 / switch0-4 / tendency_stats (engine_device_observation.TOKEN_TYPES),
+world's. parity_redacted: the same comparison after the documented redactions (REDACTIONS, --redact; default all four:
+LAST_DAMAGE_TAKEN on self0, LAST_DAMAGE_DEALT on opp0-5 and SELF_HAZARD_CREDIT on the field token zeroed, the opponent's exact
+own-HP history, redacted by design; HP_FRACTION on opp0-5 at Showdown's public percent) on both sides, so "exact except the four
+documented redactions" is reported directly. Names: tokens field / self0-5 / opp0-5 / move0-3 / switch0-4 / tendency_stats (engine_device_observation.TOKEN_TYPES),
 numeric columns through showdown.V4_NUMERIC_LEGACY_INDEX_BY_NEW_INDEX and the NUMERIC_* writer names (as
 engine_device_observation.column_manifest names them), categorical columns through the CATEGORY_* layout. Written as
 summary.json and summary.md in --out.
@@ -958,9 +959,11 @@ REDACTIONS = {
         tuple(OPPONENT_TOKENS)),
     'hp_percent': ('tokens 7-12 numeric 0 HP_FRACTION at Showdown\'s public percent: ceil(100 x), capped at 99 below max, 0 if fainted', 0,
         tuple(OPPONENT_TOKENS)),
-    'self_hazard_credit': ('field numeric 115 SELF_HAZARD_CREDIT -> 0: the opponent\'s exact Spikes losses, redacted by design (not a default)', 115, (0,)),
+    'self_hazard_credit': ('field numeric 115 SELF_HAZARD_CREDIT -> 0: the opponent\'s exact Spikes losses, redacted by design', 115, (0,)),
 }
-DEFAULT_REDACTIONS = ('last_damage_taken', 'last_damage_dealt', 'hp_percent')
+# All four by default: the first, second and fourth are device_public_teacher.REPLY_HISTORY_APPROXIMATION's columns (the
+# opponent's exact own-HP history, never borrowed); the third is the opponent's public view of our HP.
+DEFAULT_REDACTIONS = ('last_damage_taken', 'last_damage_dealt', 'hp_percent', 'self_hazard_credit')
 
 
 def public_percent(x):
@@ -1096,7 +1099,7 @@ def render_markdown(summary, *, top=30):
         out.append(f'| {kind} | {p["positions"]} | {_f(e["observation_and_legal"])} | {_f(e["observation"])} | {_f(e["numeric"])} | {_f(e["numeric_within_tolerance"])} | '
             f'{_f(e["categorical"])} | {_f(e["token_type"])} | {_f(e["attention"])} | {_f(e["legal"])} | {_f(p["order"]["self"])} | {_f(p["order"]["opponent"])} |')
     if s.get('parity_redacted'):
-        out += ['', '## Exact match except the redactions (applied to both sides)', '', *[f'- {k}: {v}' for k, v in s['redactions'].items()], '',
+        out += ['', '## Exact match except the documented redactions (applied to both sides)', '', *[f'- {k}: {v}' for k, v in s['redactions'].items()], '',
             '| kind | positions | observation + legal | observation | numeric | categorical | legal | remaining numeric cells (top 5) | remaining categorical cells (top 5) |',
             '|---|---|---|---|---|---|---|---|---|']
         for kind, p in s['parity_redacted'].items():
