@@ -634,22 +634,27 @@ def guard_facts(record, raw):
     is its live scope."""
     reasons = record.get('reasons') or ()
     tiers = lambda source: sorted({r['tier'] for r in reasons if r.get('source') == source and r.get('tier')})
-    any_turn2 = any(r.get('source') == 'turn2' for r in reasons)   # a priced any-cell turn-2 reason, not an unavailable capture
     sides1 = sorted({r['side'] for r in reasons if r.get('source') == 'turn1' and r.get('side')})
     live_reach = record.get('rule') == effect_guard.RULE
+    # the any-cell arm's hits: a reach record keeps them under any_cell_reasons (6eefb119's records still in reasons)
+    any_reasons = record.get('any_cell_reasons', reasons) if live_reach else reasons
+    any_turn2 = any(r.get('source') == 'turn2' for r in any_reasons)   # a priced any-cell turn-2 hit, not an unavailable capture
+    masses2 = {}
     if live_reach:
         arm = record.get('reach') or {};unavailable = bool(arm.get('unavailable'))
         turn2 = bool(record.get('b_turn2')) and not unavailable
-        per = arm.get('tiers') or {}
-        tiers2 = sorted({t for side in per.values() for t, m in side.items() if m >= effect_guard.THRESHOLD})
+        # a trip is the tiers whose combined mass crosses THRESHOLD on a side: every contributing tier, with its own mass
+        for side, per in (arm.get('tiers') or {}).items():
+            if (arm.get(f'm_{side}') or 0.) >= effect_guard.THRESHOLD:masses2[side] = {t: m for t, m in per.items() if m > 0}
+        tiers2 = sorted({t for per in masses2.values() for t in per})
     else:
         turn2, tiers2 = any_turn2, tiers('turn2')
         unavailable = any(r.get('source') in ('turn2_unavailable', 'guard_error') for r in reasons)
     any_b = bool(record['any_cell_b']) if live_reach else bool(record['b'])
     return dict(rule=record.get('rule', 'any_cell'), b=bool(record['b']), b_turn1=bool(record.get('b_turn1')), b_turn2=bool(record.get('b_turn2')),
-                turn2=turn2, tiers_turn1=tiers('turn1'), sides_turn1=sides1, tiers_turn2=tiers2, unavailable=unavailable,
+                turn2=turn2, tiers_turn1=tiers('turn1'), sides_turn1=sides1, tiers_turn2=tiers2, tier_masses_turn2=masses2, unavailable=unavailable,
                 m_own=record.get('m_own'), m_opp=record.get('m_opp'), arms=record.get('arms'),
-                any_cell=dict(b=any_b, turn2=any_turn2, unavailable=any(r.get('source') in ('turn2_unavailable', 'guard_error') for r in reasons)),
+                any_cell=dict(b=any_b, turn2=any_turn2, unavailable=any(r.get('source') in ('turn2_unavailable', 'guard_error') for r in list(any_reasons) + list(reasons))),
                 a=bool(record.get('a')), tier_b_legal=bool(record.get('tier_b_legal')),
                 c={name: effect_guard.trips(record, choice)['c'] for name, choice in raw.items() if choice is not None})
 
@@ -729,13 +734,15 @@ def reach_report(have, settings):
                exact_rows=sum(bool(g(r)['reach']['exact']) for r in have), unavailable=sum(bool(g(r)['reach']['unavailable']) for r in have))
     for scope in ('lower', 'upper'):
         reach2 = lambda r: bool(g(r)['reach'][f'tripped_{scope}'])
-        tier = lambda r, t: (t in g(r)['tiers_turn1']) or (g(r)['reach']['tiers'] is not None and any(
-            v[t] >= effect_guard.THRESHOLD for v in g(r)['reach']['tiers'][scope].values())) or g(r)['reach']['unavailable']
+        # a tripping side's every contributing tier (mass > 0), so an A + C combination is not dropped
+        tier = lambda r, t: (t in g(r)['tiers_turn1']) or g(r)['reach']['unavailable'] or (g(r)['reach']['tiers'] is not None and any(
+            v[t] > 0 and (g(r)['reach'][f'm_{side}_{scope}'] or 0.) >= effect_guard.THRESHOLD for side, v in g(r)['reach']['tiers'][scope].items()))
         side = lambda r, s: (s in g(r)['sides_turn1']) or g(r)['reach']['unavailable'] or (
             (g(r)['reach'][f'm_{s}_{scope}'] or 0.) >= effect_guard.THRESHOLD)
         guarded = [r for r in have if g(r)['scopes'][scope]];clean = [r for r in have if not g(r)['scopes'][scope]]
         t1 = sum(g(r)['b_turn1'] for r in have);added = sum(reach2(r) and not g(r)['b_turn1'] for r in have)
-        cross = collections.Counter((('any_cell' if g(r)['b'] else 'any_cell_clear'), ('reach' if g(r)['scopes'][scope] else 'reach_clear')) for r in have)
+        cross = collections.Counter((('any_cell' if g(r)['any_cell']['b'] else 'any_cell_clear'), ('reach' if g(r)['scopes'][scope] else 'reach_clear'))
+                                    for r in have)
         out[scope] = dict(roots=len(guarded), share=share(len(guarded)), turn1=t1, turn1_share=share(t1), turn2_added=added, turn2_added_share=share(added),
             tiers={t: dict(roots=sum(tier(r, t) for r in have), share=share(sum(tier(r, t) for r in have))) for t in ('A', 'C')},
             sides={s: dict(roots=sum(side(r, s) for r in have), share=share(sum(side(r, s) for r in have))) for s in ('own', 'opp')},

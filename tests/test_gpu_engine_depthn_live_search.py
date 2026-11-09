@@ -360,7 +360,12 @@ class LiveSearchTests(unittest.TestCase):
             clear,_=self.run_batch(self.search(pricers=make(lambda s:fake_labels(s,peer_moves=(TACKLE,REST,PROTECT,0)))),[request('g',0)],outcomes)
         guard=rows[0]['effect_guard'];encode(rows[0])
         self.assertEqual((rows[0]['status'],guard['tripped'],guard['b_turn1'],guard['b_turn2'],guard['choice']),('COMPLETE',True,True,True,rows[0]['action_index']))
-        self.assertEqual({(x['move'],x['side'])for x in guard['reasons']},{('surf','opp')});self.assertEqual(guard['turn2_cells']['p1_captures'],1)
+        self.assertEqual(guard['turn2_cells']['p1_captures'],1)
+        # reasons list what tripped (turn 1 and the reach, its tier A mass from Surf); the any-cell hits sit under any_cell_reasons
+        self.assertEqual({(x['move'],x['side'],x['source'])for x in guard['reasons']},{('surf','opp','turn1'),(None,'opp','reach')})
+        reach=next(x for x in guard['reasons'] if x['source']=='reach')
+        self.assertEqual((reach['tiers'],list(reach['moves']),guard['tiers']),({'A':guard['m_opp']},['surf'],['A']))
+        self.assertEqual({(x['move'],x['side'],x['source'])for x in guard['any_cell_reasons']},{('surf','opp','turn2')})
         # the live rule (reach): M_opp over the frame's own priors trips the turn-2 arm; the any-cell arm is kept for analysis
         self.assertEqual((guard['rule'],guard['arms'],guard['m_own'],guard['any_cell_b'],guard['any_cell_tripped']),('reach',['turn1','reach'],0.,True,True))
         self.assertGreaterEqual(guard['m_opp'],G.THRESHOLD);self.assertEqual(guard['reach']['m_opp'],guard['m_opp'])

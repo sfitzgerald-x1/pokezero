@@ -28,8 +28,9 @@ The earlier any-cell turn-2 arm (either side's turn-2 prior >= THRESHOLD on a gu
 every record for analysis only: any_cell_turn2, any_cell_b and any_cell_tripped.
 `evaluate` returns the record: tripped (for the search's own choice), b (b_turn1, b_turn2: the reach arm), c, m_own and m_opp
 (the reach M; reach: their arm's own summary), arms (which tripped: turn1, reach, unavailable, choice; error for an error
-record), the any-cell fields above, reasons (per move x side x
-source: turn1 / turn2 / choice, with the max mass, the tier and the effect class), the (a) flag (a guarded move legal for
+record), the any-cell fields above (its turn-2 hits under any_cell_reasons), reasons (only what tripped: per move x side for turn1
+and choice, with the max mass, the tier and the effect class; one per tripping side for the reach, with M as max_mass, its
+contributing tiers' masses, its moves' weighted masses and its worlds; turn2_unavailable), tiers (the tripped reasons'), the (a) flag (a guarded move legal for
 either side at turn 1 in any world: reporting only), tier_b_legal, our guarded lanes, the conditions per side and the masses
 of every GUARDED or TIER_B move (turn 1 per side and world, turn 2 per side, world and cell a * 9 + b with our lane a and the
 reply b, each turn-2 entry also carrying `guarded` (this guard's own decision at that child), the move's `tier` and its `user`
@@ -305,9 +306,10 @@ def evaluate(cond, *, own_turn1, peer_turn1, turn2, turn2_available=True, choice
     c_hit = type(choice) is int and 0 <= choice < 4 and own_guarded[choice] is not None
     if c_hit:
         tier, effect = own_guarded[choice];note(own_turn1['lanes'][choice], 'own', 'choice', 1., tier=tier, effect=effect)
-    reasons = sorted(({**r, 'worlds': sorted(r['worlds'])} for r in found.values()), key=lambda r: (str(r['source']), str(r['side']), str(r['move'])))
-    b_turn1 = any(r['source'] == 'turn1' for r in reasons)
-    any_cell_turn2 = any(r['source'] in ('turn2', 'turn2_unavailable') for r in reasons)   # the pre-reach rule, kept for analysis
+    found_all = sorted(({**r, 'worlds': sorted(r['worlds'])} for r in found.values()), key=lambda r: (str(r['source']), str(r['side']), str(r['move'])))
+    b_turn1 = any(r['source'] == 'turn1' for r in found_all)
+    any_cell_reasons = [r for r in found_all if r['source'] in ('turn2', 'turn2_unavailable')]   # the pre-reach arm, kept for analysis
+    any_cell_turn2 = bool(any_cell_reasons)
     # The live turn-2 arm: the reach M_s over the recorded turn-2 masses (their per-child `guarded`), our root prior and each
     # world's reply prior (a waiting world: reply 0), p_w uniform over the worlds peer_turn1 lists (the priced worlds).
     by_world = {w['world']: dict(requested=w.get('requested', True), logits=w['logits'], kept=w['legal']) for w in peer_turn1}
@@ -316,17 +318,30 @@ def evaluate(cond, *, own_turn1, peer_turn1, turn2, turn2_available=True, choice
     b_turn2 = bool(r['tripped']);b = b_turn1 or b_turn2
     arms = [name for name, hit in (('turn1', b_turn1), ('reach', b_turn2 and not r['unavailable']), ('unavailable', r['unavailable']),
         ('choice', c_hit)) if hit]
+    # reasons list only what tripped: turn 1, the reach per tripping side (its contributing tiers, moves and worlds), the choice,
+    # an unavailable capture
+    reasons = [x for x in found_all if x['source'] in ('turn1', 'choice')]
+    if r['unavailable']:reasons.append(dict(move=None, side=None, source='turn2_unavailable', tier=None, effect_class=None, max_mass=None, worlds=[]))
+    elif b_turn2:
+        for side in ('own', 'opp'):
+            m_side = r[f'm_{side}_lower']   # the exact M here (every live turn-2 entry carries `guarded`)
+            if m_side < threshold:continue
+            parts = {t: v for t, v in r['tiers']['lower'][side].items() if v > 0};detail = r['contributions']['lower'][side]
+            reasons.append(dict(move=None, side=side, source='reach', tier=None, effect_class=None, max_mass=m_side, worlds=detail['worlds'],
+                tiers=parts, moves=detail['moves']))
+    reasons.sort(key=lambda x: (str(x['source']), str(x['side']), str(x['move'])))
+    tiers = sorted({x['tier'] for x in reasons if x['tier']} | {t for x in reasons for t in x.get('tiers') or ()})
     return dict(schema=SCHEMA, rule=RULE, threshold=threshold, tripped=b or c_hit, b=b, b_turn1=b_turn1, b_turn2=b_turn2, c=c_hit, choice=choice,
         m_own=r['m_own'], m_opp=r['m_opp'], arms=arms,
         reach=dict(m_own=r['m_own'], m_opp=r['m_opp'], tripped=r['tripped'], unavailable=r['unavailable'], tiers=None if r['tiers'] is None else r['tiers']['lower']),
         any_cell_turn2=any_cell_turn2, any_cell_b=b_turn1 or any_cell_turn2, any_cell_tripped=b_turn1 or any_cell_turn2 or c_hit,
-        reasons=reasons, tiers=sorted({r['tier'] for r in reasons if r['tier']}), a=bool(a_moves), a_moves=sorted(a_moves),
+        any_cell_reasons=any_cell_reasons, reasons=reasons, tiers=tiers, a=bool(a_moves), a_moves=sorted(a_moves),
         tier_b_legal=bool(b_moves), tier_b_moves=sorted(b_moves), own_lanes=list(own_turn1['lanes']),
         own_guarded_lanes=[None if g is None else list(g) for g in own_guarded], conditions=cond, masses=recorded,
         turn2_available=turn2_available)
 
 
-# Reach (report only): the expected turn-2 guarded mass under the search's own root and reply priors ------------------------------
+# Reach (the live turn-2 arm): the expected turn-2 guarded mass under the search's own root and reply priors ---------------------
 def _psychoboost(record, side):
     """Whether Psycho Boost is certainly guarded for `side` (the lower bound): a revealed Deoxys or Deoxys-Attack of that side
     holds its White Herb in the root's item facts (a turn-2 child keeps them; one Deoxys form per side, species clause). With
@@ -337,7 +352,7 @@ def _psychoboost(record, side):
 
 
 def reach(record, root_logits, root_legal, worlds, *, threshold=THRESHOLD):
-    """The guard's turn-2 reach (the lead's narrower, report-only scope), per side s:
+    """The guard's turn-2 reach, the live turn-2 arm (RULE 'reach'; the RR's bounds for older records), per side s:
     M_s = sum_w p_w sum_(a,b) pi_own(a) pi_peer,w(b) q_(w,ab),s, with q the side's turn-2 prior mass on moves guarded for it at
     child cell a*9 + b of world w (record['masses']['turn2']), pi_own our root prior (root_logits over root_legal), pi_peer,w
     world w's turn-1 peer prior (its root_peer_logits over kept; a world whose opponent waits has the single reply 0 at mass 1:
@@ -346,15 +361,17 @@ def reach(record, root_logits, root_legal, worlds, *, threshold=THRESHOLD):
     that child); otherwise bounds: lower counts tier A and Psycho Boost when a revealed Deoxys or Deoxys-Attack of that side holds
     its White Herb (_psychoboost), upper every
     tier-C mass as guarded. tripped: True / False when the bounds (or the exact M) agree about THRESHOLD on either side, None
-    when they straddle it; a record without its turn-2 masses (an error record, an unavailable capture) trips, fail closed."""
+    when they straddle it; a record without its turn-2 masses (an error record, an unavailable capture) trips, fail closed.
+    contributions: per bound and side, each counted move's weighted mass and the worlds it came from (the reasons' detail)."""
     out = dict(exact=None, m_own=None, m_opp=None, m_own_lower=None, m_own_upper=None, m_opp_lower=None, m_opp_upper=None, tiers=None,
-        tripped=True, tripped_lower=True, tripped_upper=True, unavailable=True)
+        tripped=True, tripped_lower=True, tripped_upper=True, unavailable=True, contributions=None)
     entries = ((record or {}).get('masses') or {}).get('turn2')
     if entries is None or not record.get('turn2_available', True):return out
     if not entries:   # no turn-2 mass on any watched move: M is 0 whatever the worlds
         zero = {side: {'A': 0., 'C': 0.} for side in ('own', 'opp')}
         out.update(exact=True, m_own=0., m_opp=0., m_own_lower=0., m_own_upper=0., m_opp_lower=0., m_opp_upper=0.,
-            tiers=dict(lower=zero, upper={k: dict(v) for k, v in zero.items()}), tripped=False, tripped_lower=False, tripped_upper=False, unavailable=False)
+            tiers=dict(lower=zero, upper={k: dict(v) for k, v in zero.items()}), tripped=False, tripped_lower=False, tripped_upper=False, unavailable=False,
+            contributions={scope: {side: dict(moves={}, worlds=[]) for side in ('own', 'opp')} for scope in ('lower', 'upper')})
         return out
     priced = [w for w, x in enumerate(worlds) if x is not None and x.get('priced', True)]
     if not priced:return out
@@ -362,6 +379,8 @@ def reach(record, root_logits, root_legal, worlds, *, threshold=THRESHOLD):
     peer = {w: (masses(worlds[w]['logits'], worlds[w]['kept']) if worlds[w].get('requested') else [1.] + [0.] * 8) for w in priced}
     exact = all('guarded' in e for e in entries)
     sums = {scope: {side: {'A': [], 'C': []} for side in ('own', 'opp')} for scope in ('lower', 'upper')}
+    moves = {scope: {side: {} for side in ('own', 'opp')} for scope in ('lower', 'upper')}
+    where = {scope: {side: set() for side in ('own', 'opp')} for scope in ('lower', 'upper')}
     for e in entries:
         tier = tier_of(e['move']);w = e['world']
         if tier not in ('A', 'C') or w not in peer:continue
@@ -370,13 +389,16 @@ def reach(record, root_logits, root_legal, worlds, *, threshold=THRESHOLD):
         if exact:counted = dict(lower=e['guarded'], upper=e['guarded'])
         else:counted = dict(lower=tier == 'A' or e['move'] == 'psychoboost' and _psychoboost(record, e['side']), upper=True)
         for scope, yes in counted.items():
-            if yes:sums[scope][e['side']][tier].append(weight)
+            if yes:
+                sums[scope][e['side']][tier].append(weight);moves[scope][e['side']].setdefault(e['move'], []).append(weight)
+                where[scope][e['side']].add(w)
     tiers = {scope: {side: {t: math.fsum(v) for t, v in per.items()} for side, per in sides.items()} for scope, sides in sums.items()}
     m = {(scope, side): math.fsum(tiers[scope][side].values()) for scope in tiers for side in ('own', 'opp')}
     lower, upper = (max(m[(scope, 'own')], m[(scope, 'opp')]) >= threshold for scope in ('lower', 'upper'))
     out.update(exact=exact, m_own_lower=m[('lower', 'own')], m_own_upper=m[('upper', 'own')], m_opp_lower=m[('lower', 'opp')],
         m_opp_upper=m[('upper', 'opp')], tiers=tiers, tripped_lower=lower, tripped_upper=upper, tripped=True if lower else False if not upper else None,
-        unavailable=False)
+        unavailable=False, contributions={scope: {side: dict(moves={k: math.fsum(v) for k, v in sorted(moves[scope][side].items())},
+            worlds=sorted(where[scope][side])) for side in ('own', 'opp')} for scope in ('lower', 'upper')})
     if exact:out.update(m_own=m[('lower', 'own')], m_opp=m[('lower', 'opp')])
     return out
 
@@ -385,7 +407,7 @@ def error_record(error):
     """The fail-closed record of a root whose guard inputs could not be read: tripped, with the error."""
     return dict(schema=SCHEMA, rule=RULE, threshold=THRESHOLD, tripped=True, b=True, b_turn1=False, b_turn2=False, c=False, choice=None,
         m_own=None, m_opp=None, arms=['error'], reach=dict(m_own=None, m_opp=None, tripped=True, unavailable=True, tiers=None),
-        any_cell_turn2=False, any_cell_b=True, any_cell_tripped=True,
+        any_cell_turn2=False, any_cell_b=True, any_cell_tripped=True, any_cell_reasons=[],
         reasons=[dict(move=None, side=None, source='guard_error', tier=None, effect_class=None, max_mass=None, worlds=[])], tiers=[], a=False,
         a_moves=[], tier_b_legal=False, tier_b_moves=[], own_lanes=None, own_guarded_lanes=None, conditions=None, masses=None,
         turn2_available=False, error=str(error)[:500])

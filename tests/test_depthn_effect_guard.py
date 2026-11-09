@@ -184,6 +184,11 @@ class EvaluateTests(unittest.TestCase):
         self.assertAlmostEqual(asleep['m_own'], m, places=15);self.assertEqual(asleep['m_opp'], 0.)
         self.assertEqual((asleep['b'], asleep['b_turn1'], asleep['b_turn2'], asleep['arms'], asleep['tripped']), (True, False, True, ['reach'], True))
         self.assertEqual((asleep['masses']['turn2'][0]['guarded'], asleep['any_cell_turn2']), (True, True))
+        reach, = asleep['reasons']   # only what tripped: the reach on our side, with its tiers, moves and worlds
+        self.assertEqual((reach['source'], reach['side'], list(reach['tiers']), reach['worlds'], asleep['tiers']), ('reach', 'own', ['C'], [0], ['C']))
+        self.assertAlmostEqual(reach['tiers']['C'], m, places=15)
+        self.assertAlmostEqual(reach['max_mass'], m, places=15);self.assertAlmostEqual(reach['moves']['spore'], m, places=15)
+        self.assertEqual([(x['source'], x['move']) for x in asleep['any_cell_reasons']], [('turn2', 'spore')])
         for name, members in (('awake', [('snorlax', 0, True, False)]), ('rested', [('snorlax', 5, True, True)]), ('fainted', [('snorlax', 5, False, False)])):
             with self.subTest(name):
                 r = run(cell(0, 0, members))
@@ -191,11 +196,13 @@ class EvaluateTests(unittest.TestCase):
         faint = run(cell(3, 0, [('snorlax', 5, True, False)]))   # the same guarded mass where we play lane 3 (prior .01)
         self.assertAlmostEqual(faint['m_own'], .5 * .01 * .5 * .5, places=15)
         self.assertEqual((faint['b'], faint['tripped'], faint['any_cell_turn2'], faint['any_cell_b'], faint['any_cell_tripped']), (False, False, True, True, True))
+        self.assertEqual((faint['reasons'], faint['tiers'], len(faint['any_cell_reasons'])), ([], [], 1))   # nothing tripped: no reason
         waiting = self.record(own=(0, .97), peer=self.two_worlds(), turn2=[dict(cell(0, 0, [('snorlax', 5, True, False)]), world=1)])
         self.assertAlmostEqual(waiting['m_own'], .5 * .97 * 1. * .5, places=15)   # the waiting world: reply 0 at mass 1
         missing = self.record(available=False, peer=self.two_worlds())
         self.assertEqual((missing['tripped'], missing['b_turn2'], missing['arms'], missing['m_own'], [x['source'] for x in missing['reasons']]),
             (True, True, ['unavailable'], None, ['turn2_unavailable']))
+        self.assertEqual([x['source'] for x in missing['any_cell_reasons']], ['turn2_unavailable'])
 
     def test_the_live_m_is_the_exact_reach_of_its_own_record(self):
         """Agreement with #1873's exact path: re-running reach on the record (as the RR scorer does from a row: the root prior and
@@ -212,6 +219,18 @@ class EvaluateTests(unittest.TestCase):
         again = G.reach(json.loads(json.dumps(record)), own[0], own[1], worlds)
         self.assertTrue(again['exact']);self.assertEqual((again['m_own'], again['m_opp'], again['tripped']), (record['m_own'], record['m_opp'], record['b_turn2']))
         self.assertGreater(record['m_own'], 0);self.assertGreater(record['m_opp'], 0)
+
+    def test_a_reach_trip_lists_every_contributing_tier(self):
+        """Neither tier crosses 5% alone, their sum does: the reach reason lists both with their own masses."""
+        child = dict(own_side=G.child_side(self.cond['own'], [('breloom', 0, True, False)]),
+            opp_side=G.child_side(self.cond['opp'], [('snorlax', 5, True, False)], opponent=True))
+        logits, legal = prior(0, .5)
+        cell = dict(world=0, cell=0, side='own', lanes=['spore', 'gigadrain', None, None], logits=logits, legal=legal, user='breloom', **child)
+        r = self.record(own=(0, .97), peer=self.two_worlds(), turn2=[cell])   # spore .5 (C), gigadrain 1/6 (A) at (0, 0)
+        reach, = r['reasons'];w = .5 * .97 * .5
+        self.assertEqual((reach['source'], sorted(reach['tiers']), r['tiers']), ('reach', ['A', 'C'], ['A', 'C']))
+        self.assertAlmostEqual(reach['tiers']['C'], w * .5, places=15);self.assertAlmostEqual(reach['tiers']['A'], w / 6, places=15)
+        self.assertAlmostEqual(r['m_own'], w * .5 + w / 6, places=15)
 
     def test_tier_c_child_conditions_in_the_reach(self):
         """Frozen (Sacred Fire), statused (Refresh; Facade with Guts) and a consumed White Herb (Psycho Boost), each decided at its child."""
@@ -287,12 +306,16 @@ class GoldenTests(unittest.TestCase):
         cond, own, peer, turn2 = golden_inputs()
         record = json.loads(json.dumps(G.evaluate(cond, own_turn1=own, peer_turn1=peer, turn2=turn2, choice=1)))
         added = [{k: e.pop(k) for k in ('guarded', 'tier', 'user')} for e in record['masses']['turn2']]
-        live = {k: record.pop(k) for k in ('rule', 'm_own', 'm_opp', 'arms', 'reach', 'any_cell_turn2', 'any_cell_b', 'any_cell_tripped')}
+        live = {k: record.pop(k) for k in ('rule', 'm_own', 'm_opp', 'arms', 'reach', 'any_cell_turn2', 'any_cell_b', 'any_cell_tripped', 'any_cell_reasons')}
+        # reasons and tiers list only what tripped (turn 1, the choice; no reach here); the any-cell turn-2 hits moved to any_cell_reasons
+        turn2 = [r for r in GOLDEN['reasons'] if r['source'] == 'turn2']
+        self.assertEqual((live['any_cell_reasons'], record.pop('reasons'), record.pop('tiers')),
+            (turn2, [r for r in GOLDEN['reasons'] if r['source'] != 'turn2'], ['A']))
         # The live turn-2 arm is the reach now (its cells' worlds 2 and 3 have no turn-1 prior here: M 0); the any-cell arm the
         # golden record decided with is kept under any_cell_*, and b / tripped hold through turn 1 (Giga Drain at 20%).
         self.assertEqual((live['any_cell_turn2'], live['any_cell_b'], live['any_cell_tripped']), (GOLDEN['b_turn2'], GOLDEN['b'], GOLDEN['tripped']))
         self.assertEqual((record.pop('b_turn2'), live['m_own'], live['m_opp'], live['arms'], live['rule']), (False, 0., 0., ['turn1', 'choice'], 'reach'))
-        self.assertEqual(record, {k: v for k, v in GOLDEN.items() if k != 'b_turn2'})   # every other field unchanged
+        self.assertEqual(record, {k: v for k, v in GOLDEN.items() if k not in ('b_turn2', 'reasons', 'tiers')})   # every other field unchanged
         # spore (Sleep Clause binds: the child's opponent sleeps) and gigadrain (A); curse (A), facade (C, unstatused), irontail (B)
         self.assertEqual(added, [dict(guarded=True, tier='C', user='breloom'), dict(guarded=True, tier='A', user='breloom'),
             dict(guarded=True, tier='A', user='snorlax'), dict(guarded=False, tier='C', user='snorlax'), dict(guarded=False, tier='B', user='snorlax')])
