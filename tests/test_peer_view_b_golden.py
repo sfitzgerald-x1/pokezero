@@ -1,0 +1,178 @@
+"""The peer-view-b flag OFF is byte-identical to the code before the flag (golden: tests/data/peer_view_b_off_golden.json, generated
+from the pre-flag tree, commit 43f60b4f, by this module's write_golden on that tree's modules, see GENERATE).
+
+Golden outputs, all with every flag at its default:
+- live_search: the real DepthNLiveSearch's process_many responses (tests/test_depthn_rr_reprice's fake constructor and pricing, its
+  still clock), one refused root among them, as canonical JSON;
+- server_header: scripts/depthn_live_server.header for parsed default flags, with the private-reveal redaction off and on;
+- rr_rows: scripts/depthn_rr_reprice.decision_row for a COMPLETE and a refused response, with and without a private_reveals record;
+- carries: the real B2 fold (tests/test_phase_d_device_worlds' authored lines; both owners; damage, heal, the 99 cap, a faint, a
+  switch-in and a side-private Pressure line) to 16 sampled worlds, each completed by constructor_worlds.complete_world with the
+  root's line_facts and carry: the sha256 (constructor_worlds.tables_digest) of the root carry and of the sampled worlds before
+  completion (inputs), of every completed world's (state, public carry) (outputs), the LineFacts and the private-reveal record.
+The carry inputs come from JAX computations: on a platform whose B2 fold gives other inputs than the golden's, the carry comparison
+is skipped (named), never passed or failed by accident; the outputs are compared whenever the inputs agree."""
+import hashlib
+import json
+from pathlib import Path
+import unittest
+
+GOLDEN = Path(__file__).with_name('data') / 'peer_view_b_off_golden.json'
+GENERATE = ('cd <a checkout of 43f60b4f> && cp <this file> tests/ && PYTHONPATH=src:.:tests python -c '
+    '"import test_peer_view_b_golden as G; G.write_golden(\'golden.json\')"')
+HEAD = ('|switch|OWNa: Alpha|Alpha, L80|291/291', '|switch|PEERa: Beta|Beta, L80|100/100', '|turn|1')
+# (lines after HEAD, the owner's request conditions, the owner's active): the view-b scenarios, each a real root of the B2 fold
+SCENARIOS = dict(
+    heal=(('|move|PEERa: Beta|Tackle|OWNa: Alpha', '|-damage|OWNa: Alpha|250/291', '|move|OWNa: Alpha|Tackle|PEERa: Beta', '|-damage|PEERa: Beta|80/100',
+        '|-heal|OWNa: Alpha|268/291|[from] item: Leftovers', '|turn|2', '|move|PEERa: Beta|Tackle|OWNa: Alpha', '|-damage|OWNa: Alpha|200/291', '|turn|3'),
+        {'Alpha': '200/291'}, 'Alpha'),
+    cap=(('|move|PEERa: Beta|Tackle|OWNa: Alpha', '|-damage|OWNa: Alpha|290/291', '|turn|2'), {'Alpha': '290/291'}, 'Alpha'),
+    faint=(('|move|PEERa: Beta|Tackle|OWNa: Alpha', '|-damage|OWNa: Alpha|200/291', '|turn|2', '|move|PEERa: Beta|Tackle|OWNa: Alpha',
+        '|-damage|OWNa: Alpha|0 fnt', '|faint|OWNa: Alpha', '|upkeep', '|switch|OWNa: Gamma|Gamma, L80|291/291', '|turn|3'), {'Alpha': '0 fnt'}, 'Gamma'),
+    switch=(('|switch|OWNa: Gamma|Gamma, L80|291/291', '|move|PEERa: Beta|Tackle|OWNa: Gamma', '|-damage|OWNa: Gamma|251/291', '|turn|2'),
+        {'Gamma': '251/291'}, 'Gamma'),
+    pressure=(('|-ability|OWNa: Alpha|Pressure|[silent]', '|move|PEERa: Beta|Tackle|OWNa: Alpha', '|-damage|OWNa: Alpha|250/291', '|turn|2'),
+        {'Alpha': '250/291'}, 'Alpha'),
+)
+
+
+def canonical(value):
+    return json.dumps(value, sort_keys=True, separators=(',', ':'), default=repr)
+
+
+_FIXTURE = []
+
+
+def b2_fixture():
+    """tests/test_phase_d_device_worlds' authored B2 fixture (catalog, source, tables, metadata, request), built once per process."""
+    if not _FIXTURE:
+        import test_phase_d_device_worlds as D
+        D.WorldsTests.setUpClass();_FIXTURE.append(D.WorldsTests('test_real_b2_fold_to_16_and32_source_worlds_both_owners'))
+    return _FIXTURE[0]
+
+
+def scenario_lines(name, owner):
+    own, peer = f'p{owner + 1}', f'p{2 - owner}';body, _, _ = SCENARIOS[name]
+    return tuple(x.replace('OWN', own).replace('PEER', peer) for x in HEAD + body)
+
+
+def scenario_request(fx, name, owner):
+    """The fixture's own request with the scenario's conditions and active, in Showdown's request order (a switch-in swaps into 0)."""
+    _, conditions, active = SCENARIOS[name];out = fx.request(owner);party = out['side']['pokemon']
+    for mon in party:
+        who = mon['ident'].split(': ')[1];mon['active'] = who == active
+        if who in conditions:mon['condition'] = conditions[who]
+    at = [m['ident'].split(': ')[1] for m in party].index(active);party[0], party[at] = party[at], party[0]
+    return out
+
+
+def b2_root(fx, name, owner):
+    """(root, the 16 sampled worlds, lines) of one scenario through the real B2 fold and from_b2."""
+    from gpu_engine import phase_d_live_worlds as live
+    from pokezero import v5_contract
+    from pokezero.recorded_encoder_runner import JaxRecordedAdapter
+    lines = scenario_lines(name, owner);adapter = JaxRecordedAdapter(fx.catalog, owner_side=owner)
+    adapter.reset(stream_id=1, battle_id='authored');adapter.feed(lines)
+    root = live.from_b2(adapter, scenario_request(fx, name, owner), fx.source, fx.metadata, address=v5_contract.DecisionAddress(1, 0, owner))
+    return root, live.sample_worlds(root, fx.source, fx.tables, count=16, seed=9), lines
+
+
+def carry_outputs():
+    """{scenario/owner: dict(inputs, outputs, facts, private_reveals)} with every flag off (module docstring)."""
+    from dataclasses import asdict
+    from gpu_engine import constructor_worlds as cw
+    fx = b2_fixture();tables = cw.carry_tables(fx.metadata, fx.catalog);out = {}
+    for name in SCENARIOS:
+        for owner in (0, 1):
+            root, made, lines = b2_root(fx, name, owner);facts = cw.line_facts(lines, owner)
+            worlds = [cw.complete_world(w, tables, owner, facts=facts, root=root.public) for w in made.worlds]
+            out[f'{name}/{owner}'] = dict(
+                inputs=dict(root=cw.tables_digest(root.public), worlds=cw.tables_digest([(w.state, w.public) for w in made.worlds])),
+                outputs=[cw.tables_digest((w.state, w.public)) for w in worlds],
+                facts=json.loads(canonical({k: v for k, v in asdict(facts).items() if k != 'peer_damage'})),   # the pre-flag fields
+                peer_damage=getattr(facts, 'peer_damage', None), private_reveals=cw.private_reveal_record(root.public, owner, facts, tables, False))
+    return out
+
+
+def live_search_outputs():
+    """The fake live search's responses (tests/test_depthn_rr_reprice: FakeConstructor, pricing with a still clock), canonical JSON."""
+    from contextlib import ExitStack
+    from tests import test_depthn_rr_reprice as RT
+    with ExitStack() as stack:
+        RT.pricing(stack, still_clock=True)
+        search = RT.fake_search(RT.FakeConstructor(refuse={1}))
+        return [json.loads(canonical(search.process_many([RT.body(i)])[0])) for i in (0, 1, 2)]
+
+
+def server_header_outputs():
+    import os
+    from types import SimpleNamespace as NS
+    from unittest.mock import patch
+    from scripts import depthn_live_server as S
+    base = ['--showdown-root', 's', '--node-binary', 'n', '--metadata', 'm', '--expected-metadata-sha256', 'a' * 64, '--vocabulary', 'v',
+        '--expected-vocabulary-sha256', 'b' * 64, '--port', '9000', '--warmup-requests', 'w.jsonl', '--champion-archive', 'c.npz',
+        '--champion-archive-sha256', 'c' * 64, '--champion-checkpoint-sha256', 'd' * 64]
+    with patch.dict(os.environ, {'JAX_DEFAULT_MATMUL_PRECISION': 'highest'}):
+        args = S.options(base)
+        search = NS(tree_commit='t', rung='DN2W8', max_requests=4, min_price_seconds=1., session_cap=256, refuse_classes=(), pricer_identity={})
+        return [json.loads(canonical(S.header(args, NS(vars(search), redact_private_reveals=flag)))) for flag in (False, True)]
+
+
+def rr_row_outputs():
+    from tests import test_depthn_live_bench as BT
+    from tests.test_depthn_rr_reprice import LEGAL, LOGITS, R
+    raw = json.loads(BT.own_request(False)[len('|request|'):]);line = '|request|' + json.dumps(raw)
+    row = dict(battle_id='b', owner='p1', stream_id=1, decision_index=0, generation=1, prefix_sha256='0' * 64, turn=1, request_count=1)
+    request = dict(row, lines=['|turn|1', line], own_request_line=line)
+    response = dict(status='COMPLETE', action_index=1, q_values=[.1] * 9, cause=None, request_id='r')
+    detail = dict(root=dict(root_logits=list(LOGITS), root_legal=list(LEGAL)), prepared=None, worlds=[], notes=[], kept_disagreements=0)
+    found = dict(source='search', search_action_index=1, search_q_values=[.1] * 9, greedy_action_index=0)
+    record = dict(enabled=False, found=[], applicable=[], redacted=[], unmatched=[])
+    out = [R.decision_row(dict(ordinal=1), row, request, response, .1, found, detail, shard=0, capture_seconds=0.),
+        R.decision_row(dict(ordinal=1), row, request, dict(response, private_reveals=record), .1, found, detail, shard=0, capture_seconds=0.),
+        R.decision_row(dict(ordinal=1), row, request, dict(response, status='REFUSED', cause='depthn_refused'), .1, found, dict(detail, root=None),
+            shard=0, capture_seconds=0.)]
+    return [json.loads(canonical(x)) for x in out]
+
+
+def golden_outputs():
+    return dict(live_search=live_search_outputs(), server_header=server_header_outputs(), rr_rows=rr_row_outputs(), carries=carry_outputs())
+
+
+def write_golden(path):
+    import jax
+    import numpy
+    value = dict(generated_from='43f60b4f', jax=jax.__version__, numpy=numpy.__version__, outputs=golden_outputs())
+    Path(path).write_text(json.dumps(value, sort_keys=True, indent=1) + '\n')
+
+
+class FlagOffGoldenTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.golden = json.loads(GOLDEN.read_text())['outputs']
+
+    def test_live_search_responses_server_header_and_rr_rows_are_the_pre_flag_ones(self):
+        """No key, value or order changes with view b off: every response of a search built without the flag, the run header and the
+        re-pricer's rows, as canonical JSON, equal the pre-flag tree's byte for byte."""
+        for name, outputs in (('live_search', live_search_outputs()), ('server_header', server_header_outputs()), ('rr_rows', rr_row_outputs())):
+            with self.subTest(name=name):
+                self.assertEqual(canonical(outputs), canonical(self.golden[name]))
+                self.assertNotIn('peer_view_b', canonical(outputs))
+
+    def test_completed_carries_are_the_pre_flag_ones(self):
+        """Every completed world (state and public carry, every leaf's dtype, shape and bytes), the LineFacts and the private-reveal
+        record of each real B2 root, with every flag at its default, equal the pre-flag tree's."""
+        mine = carry_outputs();skipped = []
+        self.assertEqual(sorted(mine), sorted(self.golden['carries']))
+        for key, want in sorted(self.golden['carries'].items()):
+            got = mine[key]
+            if got['inputs'] != want['inputs']:skipped.append(key);continue   # another platform's B2 fold: the golden cannot speak
+            with self.subTest(root=key):
+                self.assertEqual(got['outputs'], want['outputs'])
+                self.assertEqual(canonical(got['facts']), canonical(want['facts']))
+                self.assertEqual(canonical(got['private_reveals']), canonical(want['private_reveals']))
+                self.assertIsNone(got['peer_damage'])   # the flag off reads nothing of view b
+        if skipped:self.skipTest(f'the B2 fold gives other inputs on this platform than the golden\'s for {skipped}: carry outputs not compared')
+
+
+if __name__ == '__main__':unittest.main()

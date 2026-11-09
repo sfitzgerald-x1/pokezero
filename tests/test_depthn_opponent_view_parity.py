@@ -592,6 +592,177 @@ class CaptureTests(unittest.TestCase):
         self.assertEqual((ctx.positions, ctx.done, constructor.calls), (2, True, [0, 1]))   # stopped before the next sent decision
 
 
+# The fp-wire-b reference: view b of Foul Play's own wire, on a synthetic game --------------------------------------------------------
+class ChannelFakeEnv(FakeEnv):
+    """FakeEnv keeping each player's channel as ChannelEnv does: per round, Foul Play's wire gains its own (exact-HP) lines and a
+    request line (which channel_lines drops)."""
+    def _load(self):
+        super()._load()
+        if not hasattr(self, 'channels') or self.round == 0:self.channels = {'p1': [], 'p2': []}
+        if self.round < len(self.script):
+            self.channels['p2'] += [f'|turn|{self.script[self.round]["turn"]}', f'|-heal|p2a: Snorlax|{self.round}/100', '|request|{}']
+
+
+def wire_view(state, public, owner):
+    """fake_view plus a view-b cell: numeric [7, 39] (our active's LAST_DAMAGE_TAKEN) reads the carry's 'd' (view b's completion sets it)."""
+    out = fake_view(state, public, owner);out['numeric_features'][7, 39] = float(np.asarray(public.get('d', 0.)))
+    return out
+
+
+def wire_reference(seen):
+    """ReferenceViews' stand-in: the true_private view with view b's cell [7, 39] at .25; credit .5."""
+    def build(lines, request, *, fp, ours, seed):
+        seen.append((tuple(lines), request, fp, ours, seed))
+        if 'boom' in str(request):raise ValueError('builder refused')
+        row = expected_row(next(step for step in SCRIPT if step['snorlax'] == request['side']['pokemon'][0]['condition']))
+        row['numeric_features'] = row['numeric_features'].copy();row['numeric_features'][7, 39] = .25
+        return row, np.float32(.5)
+    return build
+
+
+class WireReferenceTests(unittest.TestCase):
+    def test_peer_view_v2_is_fp_reply_trains(self):
+        row = np.zeros((23, 132), np.float32);row[1, 39] = .3;row[7:13, 38] = .2;row[7:13, 0] = np.float32(.4567);row[8, 0] = np.float32(.995)
+        row[0, 115] = .1;row[0, 116] = .9;row[1, 38] = .17;row[7, 39] = .35
+        out = P.peer_view_v2(row, .25)
+        self.assertEqual((out[1, 39], out[7:13, 38].tolist(), out[0, 115], out[0, 116]), (0., [0.] * 6, 0., np.float32(.25)))
+        self.assertEqual((out[7, 0], out[8, 0], out[1, 38], out[7, 39]), (np.float32(.46), np.float32(.99), np.float32(.17), np.float32(.35)))   # damage cells kept
+        self.assertEqual(row[1, 39], np.float32(.3))   # a copy
+        np.testing.assert_array_equal(P.pv2_public_percent(np.float32([.4, 1., .0001, 0.])), np.float32([.4, 1., .01, 0.]))
+
+    def test_foul_plays_own_hazard_credit_from_its_wire_equals_the_rule_on_ours(self):
+        """fp_view_opp_hazard_credit on Foul Play's wire (our HP N/100) equals recompute_opp_hazard_credit on our wire (exact HP)."""
+        omniscient = ['|switch|p1a: Alpha|Alpha, L80|300/300', '|switch|p2a: Beta|Beta, L80|200/200', '|turn|1', '|switch|p1a: Gamma|Gamma, L80|251/301',
+            '|-damage|p1a: Gamma|214/301|[from] Spikes', '|turn|2', '|switch|p1a: Alpha|Alpha, L80|300/300', '|-damage|p1a: Alpha|263/300|[from] Spikes']
+        from tests.test_gpu_engine_constructor_worlds_peer_view_b import wire
+        theirs, ours = P.fp_view_opp_hazard_credit(wire(omniscient, 'p2'), 'p1'), P.recompute_opp_hazard_credit(wire(omniscient, 'p1'), 0)
+        self.assertEqual(theirs, ours);self.assertGreater(theirs, 0)
+        self.assertEqual(P.fp_view_opp_hazard_credit(wire(omniscient[4:], 'p2'), 'p1'), 0.)   # a hit's previous HP unknown: 0, as the search leaves it
+
+    def test_the_reference_is_the_builders_view_b_after_peer_view_v2(self):
+        """ReferenceViews on Foul Play's wire of a game (the builder of tests/test_policy_opponent_view's fixture): view b after
+        peer-view-v2, whose damage cell of our active is the search's view-b rule on our own wire."""
+        from tests.test_gpu_engine_constructor_worlds_peer_view_b import OWN_HEAD, wire
+        from test_policy_opponent_view import VOCAB, request, FakeSetSource, V4_REPLAY_OBSERVATION_SPEC, _dex
+        from pokezero.observation import ObservationFeatureMasks
+        from gpu_engine import constructor_worlds as cw
+        omniscient = list(OWN_HEAD) + ['|move|p2a: Snorlax|Body Slam|p1a: Swampert', '|-damage|p1a: Swampert|250/300', '|move|p1a: Swampert|Earthquake|p2a: Snorlax',
+            '|-damage|p2a: Snorlax|300/400', '|turn|2']
+        build = object.__new__(P.ReferenceViews)
+        build.source, build.dex, build.spec, build.vocab = FakeSetSource(), _dex(), V4_REPLAY_OBSERVATION_SPEC, VOCAB
+        build.masks = ObservationFeatureMasks(transition_token_budget=0)
+        mine = request('p2');mine['side']['pokemon'][0]['condition'] = '300/400'
+        arrays, credit = build(wire(omniscient, 'p2'), mine, fp='p2', ours='p1', seed=1)
+        n = arrays['numeric_features'];d = cw.peer_damage_facts(wire(omniscient, 'p1'), 0)
+        self.assertEqual((n[7, 39], n[1, 38]), (np.float32(d.owner_taken), np.float32(d.peer_dealt)))   # .16, .16: view b's cells
+        self.assertEqual((n[1, 39], n[0, 115], n[0, 116], credit), (0., 0., 0., 0.))   # Foul Play's own loss redacted; no Spikes
+        self.assertEqual(n[7:13, 38].tolist(), [0.] * 6)
+        self.assertEqual((arrays['numeric_features'].shape, arrays['categorical_ids'].shape, arrays['legal'].shape), ((23, 132), (23, 41), (9,)))
+
+    def test_the_channel_env_keeps_each_players_stream_of_its_battle(self):
+        from pokezero import local_showdown as ls
+        with patch.object(ls.LocalShowdownEnv, '__init__', lambda self, config: None), patch.object(ls.LocalShowdownEnv, '_apply_event', lambda self, event: False), \
+                patch.object(ls.LocalShowdownEnv, 'reset', lambda self, **kw: None):
+            env = P.make_channel_environment('config');env._battle_token = 'b1';env.reset(seed=1)
+            for event in (dict(type='stream', battleId='b1', stream='p2', lines=['|switch|p2a: X|X, L80|200/200', '', '|request|{"side":{}}']),
+                    dict(type='stream', battleId='b0', stream='p2', lines=['|stale']), dict(type='stream', battleId='b1', stream='omniscient', lines=['|omni']),
+                    dict(type='stream', battleId='b1', stream='p1', lines=['|switch|p1a: Y|Y, L80|50/100']), dict(type='boundary', battleId='b1')):
+                self.assertFalse(env._apply_event(event))
+            self.assertEqual(env.channels, {'p1': ['|switch|p1a: Y|Y, L80|50/100'], 'p2': ['|switch|p2a: X|X, L80|200/200', '|request|{"side":{}}']})
+            self.assertEqual(P.channel_lines(env, 'p2'), ('|switch|p2a: X|X, L80|200/200',))
+            env.reset(seed=2);self.assertEqual(env.channels, {'p1': [], 'p2': []})   # a new battle starts empty
+        self.assertIsNone(P.channel_lines(FakeEnv(), 'p2'))
+
+    def test_the_replay_keeps_foul_plays_wire_per_round_and_aligns_without_reply_rows(self):
+        with tempfile.TemporaryDirectory() as tmp:rows = captured(tmp)
+        table, _ = P.replay_rounds(ChannelFakeEnv(), game(), {r['decision_index']: r['own_request_line'] for r in rows})
+        self.assertEqual(table[2]['fp_lines'], ('|turn|1', '|-heal|p2a: Snorlax|0/100', '|turn|1', '|-heal|p2a: Snorlax|1/100', '|turn|2',
+            '|-heal|p2a: Snorlax|2/100'))
+        self.assertIsNone(table[3]['fp_lines'])   # Foul Play waits
+        self.assertEqual([P.align_reference(r, table)['reason'] for r in rows], [None, None, 'fp_not_requested', None, None])   # decision 2: Foul Play waits
+        self.assertEqual(P.align_reference(rows[0], table)['turns'], dict(capture=1, env=1))
+        plain, _ = P.replay_rounds(FakeEnv(), game(), {r['decision_index']: r['own_request_line'] for r in rows})
+        self.assertEqual(P.align_reference(rows[0], plain)['reason'], 'no_fp_channel')
+
+    def run_wire_cell(self, tmp, stack, *, script_requests=None):
+        root = Path(tmp) / 'run';write_cell(root);out = Path(tmp) / 'out';out.mkdir()
+        (root / 'results' / '1001.json').write_text((root / 'results' / '1001.json').read_text().replace('"RAW"', '"DN2W16"').replace('"seed": 7', '"seed": 2103400007'))
+        RT.pricing(stack);stack.enter_context(patch.object(pw, 'sample', fake_sample))
+        stack.enter_context(patch.object(P, 'build_true_world', fake_true_world([])))
+        records = stack.enter_context(patch.object(P, 'view_b_records', return_value=dict(peer_view_b=dict(enabled=True), private_reveals=dict(enabled=True))))
+        seen = [];view_b = lambda state, public, owner, lines, root=None: (state, dict(public, d=jnp.asarray(.25, jnp.float32)))
+        ctx = P.Replay(run=root, search=RT.fake_search(SamplingConstructor()), views=wire_view, fp_rows={}, vocabulary=RT.VOCABULARY,
+            environment_factory=ChannelFakeEnv, sampled_worlds=1, shard=0, out=out, reference='fp-wire-b', complete=None, complete_b=view_b,
+            references=wire_reference(seen))
+        with (out / 'positions-0.jsonl').open('x') as stream, patch('sys.stdout', new_callable=io.StringIO):
+            ctx.stream = stream;count = P.capture_cell(ctx, P._rr().cell_of(root, 1001))
+        return ctx, count, seen, out, records
+
+    def test_a_live_game_is_captured_against_foul_plays_wire_with_view_b_on_and_off(self):
+        """fp-wire-b on a live cell (an arm other than RAW, a seed in the screen band): every position's reference is built from Foul
+        Play's wire and request of its round; the true kinds are viewed with view b on (the _b kinds) and off; the report's column
+        groups, view b's own effect (the control) and the residual causes read them."""
+        with tempfile.TemporaryDirectory() as tmp, ExitStack() as stack:
+            ctx, count, seen, out, records = self.run_wire_cell(tmp, stack)
+            rows = P.read_rows(out / 'positions-0.jsonl')
+            with np.load(out / 'arrays-0-1001.npz') as data:arrays = {k: np.asarray(data[k]) for k in data.files}
+            (out / 'header-0.json').write_text(json.dumps(dict(reference='fp-wire-b')))
+            (out / 'summary-0.json').write_text(json.dumps(dict(positions=count, not_aligned={}, reference_errors=[])))
+            report = P.build_report([out]);markdown = P.render_markdown(report)
+        self.assertEqual(count, 3);self.assertEqual([s[2:] for s in seen], [('p2', 'p1', 2103400007)] * 3)
+        self.assertEqual(seen[0][0], ('|turn|1', '|-heal|p2a: Snorlax|0/100'))   # round 0's wire, without its request line
+        self.assertEqual(arrays['kinds'].tolist(), ['true_b', 'true_private_b', 'true', 'true_private', 'sampled_0_b'])
+        self.assertEqual(arrays['view_numeric'][:, :, 7, 39].tolist(), [[.25, .25, 0., 0., .25]] * 3)
+        self.assertEqual(arrays['env_numeric'][:, 7, 39].tolist(), [.25] * 3)
+        self.assertEqual((arrays['obs_numeric'].shape, float(arrays['obs_numeric'][0, 0, 116])), ((3, 23, 132), .5))   # peer-view-v2 with Foul Play's credit
+        self.assertEqual(rows[0]['view_b'], dict(peer_view_b=dict(enabled=True), private_reveals=dict(enabled=True)))
+        self.assertTrue(all(r['exact']['true_private_b']['all'] for r in rows));self.assertFalse(rows[0]['exact']['true_private']['all'])
+        self.assertEqual(report['reference'], 'fp-wire-b');self.assertEqual(report['redactions'], {})
+        groups = report['column_groups']
+        self.assertEqual((groups['true_private_b']['all']['share'], groups['true_private']['damage_38_39']['share'], groups['true_private']['all']['share']), (1., 0., 0.))
+        self.assertEqual((groups['true_b']['damage_38_39']['share'], groups['true_b']['hp_fraction_0']['share'], groups['true_b']['numeric_other.actions']['share'],
+            groups['true_b']['numeric_other.self']['share']), (1., 0., 0., 1.))   # the true world's own HP and PP draws
+        control = report['control']['true_private_b']
+        self.assertEqual((control['changed_positions'], control['cells'], control['unexpected']), (3, {'numeric:7.39': 3}, {}))
+        causes = report['residuals']['true_b']
+        self.assertEqual([(c['token_label'], c['column_name'], c['positions']) for c in causes['closed by view b']], [('opp0', 'LAST_DAMAGE_TAKEN', 3)])
+        self.assertEqual({(c['token_label'], c['column']) for c in causes['present without view b']}, {('self2', 0), ('move0', 31), ('move1', 31), ('move2', 31)})
+        self.assertEqual(causes['introduced by view b'], [])
+        self.assertEqual(report['reference_vs_env']['groups']['damage_38_39']['share'], 0.)   # the env's own view lacks view b's cell
+        self.assertIn('## fp-wire-b: exact share per column group', markdown);self.assertIn('closed by view b', markdown)
+
+    def test_a_position_whose_reference_cannot_be_built_is_counted_never_compared(self):
+        real = wire_reference([])
+        def flaky(lines, request, **kw):
+            if request['side']['pokemon'][0]['condition'] == '60/100':raise ValueError('builder refused')
+            return real(lines, request, **kw)
+        with tempfile.TemporaryDirectory() as tmp, ExitStack() as stack:
+            ctx, count, _, out, _ = self.run_wire_cell_with(tmp, stack, flaky)
+            with np.load(out / 'arrays-0-1001.npz') as data:rounds = np.asarray(data['round']).tolist()
+        self.assertEqual((count, rounds, ctx.counts['not_aligned:reference_error']), (2, [0, 5], 1))
+        self.assertEqual(ctx.reference_errors, [dict(ordinal=1001, decision_index=1, error='ValueError: builder refused')])
+
+    def run_wire_cell_with(self, tmp, stack, references):
+        root = Path(tmp) / 'run';write_cell(root);out = Path(tmp) / 'out';out.mkdir()
+        RT.pricing(stack);stack.enter_context(patch.object(pw, 'sample', fake_sample))
+        stack.enter_context(patch.object(P, 'build_true_world', fake_true_world([])))
+        stack.enter_context(patch.object(P, 'view_b_records', return_value=None))
+        ctx = P.Replay(run=root, search=RT.fake_search(SamplingConstructor()), views=wire_view, fp_rows={}, vocabulary=RT.VOCABULARY,
+            environment_factory=ChannelFakeEnv, sampled_worlds=0, shard=0, out=out, reference='fp-wire-b', references=references)
+        with (out / 'positions-0.jsonl').open('x') as stream, patch('sys.stdout', new_callable=io.StringIO):
+            ctx.stream = stream;count = P.capture_cell(ctx, P._rr().cell_of(root, 1001))
+        return ctx, count, [], out, None
+
+    def test_cells_and_options_of_the_reference(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp);write_result(root, 1, arm='DN2W16', seed=2103400001);write_result(root, 2, status='RUNNING');write_result(root, 3, capture=False)
+            rr = P._rr()
+            self.assertEqual([P.cell_problem(rr.cell_of(root, o), root, frozenset(), 'fp-wire-b') for o in (1, 2, 3)], [None, 'not_complete', 'no_owner_capture'])
+            self.assertEqual(P.cell_problem(rr.cell_of(root, 1), root, frozenset()), 'not_raw')   # the env reference: unchanged
+            game = P.load_game(root, rr.cell_of(root, 1), 'fp-wire-b');self.assertEqual(game['seed'], 2103400001)
+            with self.assertRaises(P.CellError):P.load_game(root, dict(rr.cell_of(root, 1), arm='RAW'))   # the env reference keeps the band out
+
+
 BASE = ['--showdown-root', 's', '--node-binary', 'n', '--metadata', 'm', '--expected-metadata-sha256', 'x', '--vocabulary', 'v', '--expected-vocabulary-sha256', 'y',
     '--warmup-requests', 'w.jsonl', '--rung', 'DN2W16', '--collection', 'r', '--fp-reply-data', 'f', '--out', 'o']
 
@@ -610,6 +781,10 @@ class MainTests(unittest.TestCase):
                     BASE + RT.CHAMPION + ['--cells', '1', '--max-positions', '0'], BASE + RT.CHAMPION + ['--cells', '1', '--sessions', '2']):
                 with self.subTest(argv=argv), redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):P.capture_options(argv)
             self.assertEqual(P.capture_options(BASE + RT.CHAMPION + ['--sample', '4', '--sample-seed', '3', '--shard', '1', '--shards', '2']).shard, 1)
+            wire = [a for a in BASE if a not in ('--fp-reply-data', 'f')] + RT.CHAMPION + ['--cells', '1001', '--reference', 'fp-wire-b']
+            self.assertEqual((P.capture_options(wire).reference, P.capture_options(wire).fp_reply_data, args.reference), ('fp-wire-b', None, 'env'))
+            for argv in (wire + ['--fp-reply-data', 'f'], [a for a in wire if a not in ('--reference', 'fp-wire-b')], wire[:-1] + ['nope']):
+                with self.subTest(argv=argv[-3:]), redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):P.capture_options(argv)
 
     def capture(self, tmp, header=None):
         root = Path(tmp) / 'run';write_cell(root);out = Path(tmp) / 'out'
@@ -648,6 +823,35 @@ class MainTests(unittest.TestCase):
             summary['cells_replayed']), (3, 4, 1, dict(fp_not_requested=1), [], False, 1))
         self.assertEqual(len(positions), 3);self.assertEqual(report['capture']['not_aligned'], dict(fp_not_requested=1))
         self.assertIn('| true_private | 3 | 1.000 |', markdown);self.assertIn('self2 (3) | 0 | HP_FRACTION', markdown)
+
+    def test_capture_main_against_foul_plays_wire_writes_its_report_too(self):
+        """--reference fp-wire-b: no reply rows are read; the env keeps the channels; each shard writes its report beside it (one
+        command); the header records the reference."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / 'run';write_cell(root);out = Path(tmp) / 'out'
+            argv = [a for a in BASE if a not in ('--fp-reply-data', 'f')] + RT.CHAMPION + ['--cells', '1001', '--reference', 'fp-wire-b']
+            args = P.capture_parser().parse_args(argv);args.collection, args.out, args.port, args.max_requests = str(root), str(out), 0, 1
+            search = RT.fake_search(SamplingConstructor());search.warmup = lambda requests: dict(programs=3)
+            header = dict(P._rr().LIVE_IDENTITY, rung='DN2W16', pricer=dict(buckets=[1], W=16));server = P._rr().server
+            with ExitStack() as stack:
+                RT.pricing(stack);stack.enter_context(patch.object(pw, 'sample', fake_sample))
+                stack.enter_context(patch.object(P, 'build_true_world', fake_true_world([])))
+                stack.enter_context(patch.object(P, 'capture_options', return_value=args));stack.enter_context(patch.object(P, 'tree_state', return_value=dict(head='h')))
+                stack.enter_context(patch.object(P, 'FpReplyRows', side_effect=AssertionError('no reply rows in fp-wire-b')))
+                stack.enter_context(patch.object(P, 'OpponentView', return_value=wire_view))
+                stack.enter_context(patch.object(P, 'make_channel_environment', side_effect=lambda config: ChannelFakeEnv()))
+                stack.enter_context(patch.object(P, 'make_environment', side_effect=AssertionError('the channel env is fp-wire-b\'s')))
+                stack.enter_context(patch.object(P, 'ReferenceViews', return_value=wire_reference([])))
+                stack.enter_context(patch.object(P, 'make_completion', return_value=None))
+                stack.enter_context(patch.object(P, 'view_b_records', return_value=None))
+                stack.enter_context(patch.object(server, 'read_requests', return_value=[dict(saved=1)]));stack.enter_context(patch.object(server, 'build', return_value=search))
+                stack.enter_context(patch.object(server, 'header', return_value=header))
+                with patch('sys.stdout', new_callable=io.StringIO):code = P.main(['capture'])
+            written = P.read_json(out / 'header-0.json');report = P.read_json(out / 'report' / 'summary.json')
+            files = sorted(p.name for p in out.iterdir())
+        self.assertEqual(code, 0);self.assertEqual(files, ['arrays-0-1001.npz', 'header-0.json', 'positions-0.jsonl', 'report', 'summary-0.json'])
+        self.assertEqual((written['reference'], written['fp_reply_data'], written['kinds'][:2]), ('fp-wire-b', None, ['true_b', 'true_private_b']))
+        self.assertEqual((report['reference'], report['positions']), ('fp-wire-b', 3));self.assertIn('true_private_b', report['column_groups'])
 
     def test_a_search_unlike_the_live_servers_is_refused_before_warmup(self):
         with tempfile.TemporaryDirectory() as tmp, self.assertRaisesRegex(SystemExit, 'session_cap'):

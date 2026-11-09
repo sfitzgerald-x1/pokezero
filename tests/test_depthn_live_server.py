@@ -165,6 +165,12 @@ class ServerTests(unittest.TestCase):
             for target,name,value in stand_ins:stack.enter_context(patch.object(target,name,side_effect=value))
             S.build(args)
         self.assertIs(made['redact_private_reveals'],True)
+        self.assertNotIn('peer_view_b',made)   # off: the search is built exactly as before the flag
+        with patch.dict(os.environ,PINNED):args=S.options(base+['--peer-view-b'])
+        with ExitStack()as stack:
+            for target,name,value in stand_ins:stack.enter_context(patch.object(target,name,side_effect=value))
+            S.build(args)
+        self.assertEqual((made['peer_view_b'],made['redact_private_reveals']),(True,False))   # the search applies the implied redaction
 
     def test_the_matmul_precision_is_hard_pinned(self):
         """The environment is checked before anything loads; JAX's own setting again in build, before any input or champion."""
@@ -230,6 +236,10 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(S.header(args,search)['refuse_classes'],['forced_switch','wish'])   # recorded in READY and the telemetry header
         self.assertIs(S.header(args,search)['redact_private_reveals'],False)
         self.assertIs(S.header(args,NS(vars(search),redact_private_reveals=True))['redact_private_reveals'],True)
+        self.assertNotIn('peer_view_b',S.header(args,search));self.assertNotIn('peer_view_b',S.header(args,NS(vars(search),peer_view_b=False)))
+        on=S.header(args,NS(vars(search),peer_view_b=True,redact_private_reveals=True))   # view b's search: the redaction it implies is on
+        self.assertEqual((on['peer_view_b'],on['redact_private_reveals']),(True,True))
+        self.assertIs(S.options(base+champion+['--peer-view-b']).peer_view_b,True);self.assertIs(S.options(base+champion).peer_view_b,False)
         for bad in(base,base+champion[:2],base+champion+['--max-requests','5'],base+champion+['--buckets','0,1'],base+champion+['--rung','R1'],
                 base+champion[:2]+['--champion-archive-sha256','x'*64,'--champion-checkpoint-sha256','d'*64],base[:-2]+champion,
                 base+champion+['--batch-wait-seconds','.5'],base+champion+['--queue-limit','2'],base+champion+['--refuse-classes','nap']):   # the last two: Codex's queue checks, before any load

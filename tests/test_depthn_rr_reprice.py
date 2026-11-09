@@ -321,6 +321,13 @@ class OwnMovesTests(unittest.TestCase):
         self.assertEqual(R.decision_row(dict(ordinal=1), row, request, dict(response, private_reveals=record), .1, found, detail, shard=0,
             capture_seconds=0.)['private_reveals'], record)
         self.assertIsNone(out['private_reveals'])
+        # peer_view_b: only a view-b replay's responses carry it (--peer-view-b); a row has the key exactly when its response has it
+        view_b = dict(enabled=True, cells=[], projected=2, changed=1, exact_agrees=True)
+        self.assertEqual(R.decision_row(dict(ordinal=1), row, request, dict(response, peer_view_b=view_b), .1, found, detail, shard=0,
+            capture_seconds=0.)['peer_view_b'], view_b)
+        self.assertIsNone(R.decision_row(dict(ordinal=1), row, request, dict(response, peer_view_b=None), .1, found, detail, shard=0,
+            capture_seconds=0.)['peer_view_b'])
+        self.assertNotIn('peer_view_b', out)
 
 
 class JoinTests(unittest.TestCase):
@@ -535,6 +542,7 @@ class MainTests(unittest.TestCase):
                 with self.subTest(argv=argv), redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):R.options(argv)
             self.assertEqual(R.options(BASE + CHAMPION + ['--run-directory', 'r', '--out', 'o', '--sample', '8', '--sample-seed', '3']).sample_seed, 3)
             with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):R.options(BASE + CHAMPION + run + ['--reply-archive', 'p.npz'])   # dropped
+            self.assertEqual((args.peer_view_b, R.options(BASE + CHAMPION + run + ['--peer-view-b']).peer_view_b), (False, True))   # the bench parser's
 
     def replay(self, tmp, *extra, header=None, guard=None, peer_off=()):
         """main over a run directory with cell 1001: decisions 0-4, decision 1 single-legal, decision 4 refused by the constructor."""

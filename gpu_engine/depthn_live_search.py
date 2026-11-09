@@ -79,6 +79,11 @@ request_id. Per batch (process_many chunks a longer list into batches of max_req
   private_reveal_record (enabled, found, applicable, redacted, unmatched): the owner's abilities its lines revealed only on
   Showdown's side-private Gen 3 Pressure line, and, with redact_private_reveals (the server's --redact-private-reveals; off
   by default), the members whose public ability it cleared from the peer's view of the owner side in every world.
+- peer view b (`peer_view_b`; ONLY in the responses of a search built with peer_view_b, the server's --peer-view-b, off by
+  default: a search without it adds no key, so its responses are exactly as before the flag): constructor_worlds'
+  peer_view_b_record of every response whose root prepare() built (enabled, cells: per projected cell its column, side,
+  slot, species, from_b2's carry value, the exact rule's and view b's public value; projected, changed, exact_agrees), None
+  otherwise. View b implies the private-reveal redaction (private_reveals then reads enabled).
 Response, per the live contract: schema, request_id, rung, archive_sha256, status, action_index, q_values (9, None on
 illegal lanes), refusal, cause, requested_worlds, constructed_worlds, decision_seconds (batch start -> result, COMPLETE
 only); ours: root_operator, root_operator_impl, completed_q, policy_target, root_value, action_mean_q,
@@ -251,13 +256,18 @@ def _real(x):
 
 class DepthNLiveSearch:
     def __init__(self,*,constructor,pricers,params,binding,recipe,tree_commit,min_price_seconds=1.,max_requests=None,session_cap=256,
-            archive_sha256=None,device='cpu',clock=time.monotonic,refuse_classes=(),redact_private_reveals=False):
+            archive_sha256=None,device='cpu',clock=time.monotonic,refuse_classes=(),redact_private_reveals=False,peer_view_b=False):
         """`pricers`: make_pricers' {bucket: DepthNPricer}; `binding`: the pricer side's WorldBinding (constructor_worlds.binding of
         the executor's source, engine metadata and catalog); `recipe`: the lane-order Recipe; `clock` must be the server's
         arrival clock (time.monotonic); `redact_private_reveals`: constructor_worlds' private-reveal redaction in every
-        prepare_roots call (off by default; each response's private_reveals records what it found and redacted)."""
+        prepare_roots call (off by default; each response's private_reveals records what it found and redacted);
+        `peer_view_b`: constructor_worlds' view b in every prepare_roots call (off by default; it implies the redaction, so
+        redact_private_reveals then reads True; each built response carries its peer_view_b record, and a response of a
+        search with it off has no peer_view_b key at all)."""
         if type(redact_private_reveals)is not bool:raise ValueError('redact_private_reveals must be a bool')
-        self.redact_private_reveals=redact_private_reveals
+        if type(peer_view_b)is not bool:raise ValueError('peer_view_b must be a bool')
+        self.redact_private_reveals=redact_private_reveals or peer_view_b
+        self.peer_view_b=peer_view_b
         W=constructor.count;self.rung=next((r for r,w in RUNGS.items()if w==W),None)
         if self.rung is None:raise ValueError(f'a constructor of W in {tuple(RUNGS.values())} worlds required, got {W!r}')
         self.W,self.K=W,W//2;self.buckets=tuple(sorted(pricers))
@@ -294,9 +304,14 @@ class DepthNLiveSearch:
             root_operator_impl=ROOT_OPERATOR_IMPL,matmul_precision=str(jax.config.jax_default_matmul_precision or'default'))
 
     def _redaction(self):
-        """prepare_roots' keyword for the private-reveal redaction: given only when it is on (a search built before the flag, or
-        without __init__, has none: off)."""
-        return{'redact_private_reveals':True}if getattr(self,'redact_private_reveals',False)else{}
+        """prepare_roots' keywords for the private-reveal redaction and view b: each given only when it is on (a search built
+        before the flag, or without __init__, has none: off)."""
+        return{**({'redact_private_reveals':True}if getattr(self,'redact_private_reveals',False)else{}),
+            **({'peer_view_b':True}if self._view_b()else{})}
+
+    def _view_b(self):
+        """Whether this search builds view b (peer_view_b; False for one built before the flag or without __init__)."""
+        return getattr(self,'peer_view_b',False)is True
 
     @property
     def programs(self):
@@ -312,7 +327,7 @@ class DepthNLiveSearch:
             timings=dict.fromkeys(STAGES),
             batch_size=n,bucket=None,
             root_classes=None,root_class=None,root_class_source=None,root_class_crosscheck=None,
-            tree_commit=self.tree_commit,pricer=dict(self.pricer_identity))
+            tree_commit=self.tree_commit,pricer=dict(self.pricer_identity),**({'peer_view_b':None}if self._view_b()else{}))
 
     @staticmethod
     def _problem(request):
@@ -422,7 +437,8 @@ class DepthNLiveSearch:
             base=dict(row,**labels,constructed_worlds=sum(w.state is not None for w in worlds),world_refusals=[dict(world=w.index,kinds=list(w.refusals))for w in worlds if w.refusals],
                 timings=timings,bucket=chosen,block_causes=None if result['block_causes']is None else list(result['block_causes']),
                 root_view_source=result['root_view_source'],b2_view=result['b2_view'],
-                private_reveals=getattr(item,'private_reveals',None)if type(item)is cw.Prepared else None)
+                private_reveals=getattr(item,'private_reveals',None)if type(item)is cw.Prepared else None,
+                **({'peer_view_b':getattr(item,'peer_view_b',None)if type(item)is cw.Prepared else None}if self._view_b()else{}))
             if i in gates:out[i]=dict(base,cause=gates[i][0],refusal=gates[i][1])
             elif result['status']=='COMPLETE':
                 out[i]=dict(base,**{k:result[k]for k in('status','action_index','q_values','completed_q','policy_target','root_value','action_mean_q',
