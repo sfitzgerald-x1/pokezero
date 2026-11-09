@@ -345,12 +345,12 @@ FLOAT_RN = {'add': 'fadd (add.rn)', 'sub': 'fsub (sub.rn)', 'mul': 'fmul (mul.rn
 
 
 def _site_frame(e):
-    """file:line of equation e's innermost frame outside JAX and the v2e tools (None when its traceback has none)."""
+    """file:line of equation e's innermost frame outside JAX and the v2e tools (None when it has none)."""
     tb = getattr(e.source_info, 'traceback', None)
     if tb is None or not tb.frames:return None
     frames = [f for f in tb.frames if 'v2e_' not in f.file_name and '/jax/' not in f.file_name]
-    f = frames[0] if frames else tb.frames[0]
-    return f'{f.file_name.rsplit("/", 1)[-1]}:{f.line_num}'
+    if not frames:return None   # only JAX-internal frames (an inner equation of a jnp helper): the caller uses the enclosing site
+    return f'{frames[0].file_name.rsplit("/", 1)[-1]}:{frames[0].line_num}'
 
 
 def _f32_bits(values, limit=8):
@@ -595,7 +595,9 @@ void launch_{c}(const Params& p, cudaStream_t stream) {{
             before = len(self.k.lines);self.eq_start = before
             # Profile marks: a call's inner equations carry no outer frames, so they take their top-level equation's site.
             sites = self.profile or self.float_sites is not None
-            if sites:outer = getattr(self, 'mark_outer', None);self.mark_outer = outer or mark_site(e)
+            if sites:
+                outer = getattr(self, 'mark_outer', None);self.mark_outer = outer or mark_site(e)
+                outer_where = getattr(self, 'float_outer_where', None);self.float_outer_where = outer_where or _site_frame(e)
             key = self.cse_key(e, ins);hit = self.cse.get(key) if key is not None else None
             self.declined_runtime = False;self.float_note = None;reused = False
             folded = self.constant_fold(e, ins) if hit is None else None
@@ -636,7 +638,7 @@ void launch_{c}(const Params& p, cudaStream_t stream) {{
                 self.marks.append((e.primitive.name, where, ','.join(str(tuple(v.aval.shape)) for v in e.outvars)) + self.mark_outer)
                 self.k.emit(f'if ({self.mark_cond()}) err[1 + {len(self.marks) - 1}] = (uint32_t)(clock64() - T0);')
                 self.mark_lines = getattr(self, 'mark_lines', 0) + 1   # not counted toward the chunk size (maybe_split)
-            if sites:self.mark_outer = outer
+            if sites:self.mark_outer = outer;self.float_outer_where = outer_where
             self.maybe_split()
         outs = [self.read(a) for a in jaxpr.outvars]
         self.env = saved
@@ -974,7 +976,7 @@ void launch_{c}(const Params& p, cudaStream_t stream) {{
             else:note = dict(lowering='other', helper=p)
         category = ('arith' if p in FLOAT_ARITH else 'convert' if p == 'convert_element_type' else 'compare' if p in COMPARE
             else 'data' if p in DATA_MOVEMENT else 'reduce' if p.startswith(('reduce_', 'cum', 'arg')) else 'other')
-        where = _site_frame(e);outer = getattr(self, 'mark_outer', None)
+        where = _site_frame(e) or getattr(self, 'float_outer_where', None);outer = getattr(self, 'mark_outer', None)
         self.float_sites.append(dict(primitive=p, category=category, where=where, step_line=outer[0] if outer else None,
             module=outer[1] if outer else None, out=[f'{np.dtype(o.dtype)}{list(o.shape)}' for o in outs][:4],
             const_operands=[i for i, v in enumerate(ins) if v.cderived], **note))
