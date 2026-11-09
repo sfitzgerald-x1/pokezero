@@ -910,18 +910,19 @@ def cmd_probe(args):
         got_e = emulate_get(x, *[idx[:, k] for k in range(rank)]);out_e = emulate_set(x, [idx[:, k] for k in range(rank)], v)
         out_p = emulate_set_point(x, [idx[:, k] for k in range(rank)], v)
         out_c, got_c, kept_c, dbg_c, err_c = call(t, u, dims, x, idx, v, want_digest)
-        promoting = promotes(t, u);kept = kept_c.astype(bool)
-        written_j = out_j.reshape(x.shape[0], -1)[kept];written_c = out_c.reshape(x.shape[0], -1)[kept]
+        promoting = promotes(t, u);kept = kept_c.astype(bool);rows = np.flatnonzero(kept)
+        element = (rows,) + tuple(scatter_index(idx[rows, k], d)[0] for k, d in enumerate(dims))   # the written element of every kept lane
+        written_j = out_j[element];written_c = out_c[element]
         row = dict(case=case_name(t, u, dims), operand=t, update=u, dims=list(dims), lanes=int(x.shape[0]), promotes_operand=promoting,
             cuda_get_equals_jax=_bits_equal(got_c, got_j), cuda_set_equals_jax=_bits_equal(out_c, out_j),
-            cuda_set_equals_point_emulation=_bits_equal(out_c, out_p), cuda_written_rows_equal_jax=_bits_equal(written_c, written_j),
+            cuda_set_equals_point_emulation=_bits_equal(out_c, out_p), cuda_written_elements_equal_jax=_bits_equal(written_c, written_j),
             emulation_get_equals_jax=_bits_equal(got_e, got_j), emulation_set_equals_jax=_bits_equal(out_e, out_j),
             clamps=int(dbg_c[0]), drops=int(dbg_c[1]), kept=int(kept.sum()), error_word=int(err_c[0]),
             negative_indices=int((idx[:, :rank] < 0).sum()), out_of_range_indices=int(sum(((idx[:, k] < -d) | (idx[:, k] >= d)).sum() for k, d in enumerate(dims))))
         # A promoting pair (float update into an integer operand) round-trips the whole operand through float32 in JAX;
-        # the point accessor converts the update alone, so it must match JAX on the written rows and the point emulation
-        # everywhere (the oracle has no promoting scatter: scatter-census).
-        set_ok = row['cuda_set_equals_jax'] if not promoting else (row['cuda_written_rows_equal_jax'] and row['cuda_set_equals_point_emulation'])
+        # the point accessor converts the update alone, so it must match JAX on the written elements and the point
+        # emulation everywhere (the oracle has no promoting scatter: scatter-census).
+        set_ok = row['cuda_set_equals_jax'] if not promoting else (row['cuda_written_elements_equal_jax'] and row['cuda_set_equals_point_emulation'])
         row['equal'] = set_ok and row['cuda_get_equals_jax'] and row['emulation_get_equals_jax'] and row['emulation_set_equals_jax'] and row['error_word'] == 0
         all_equal &= row['equal'];report['cases'].append(row)
         if not row['equal']:print('MISMATCH', row)
