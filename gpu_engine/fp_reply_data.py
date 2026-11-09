@@ -14,7 +14,7 @@ recorded action and Foul Play's journal action for that round. Showdown is deter
 Foul Play's player view is rebuilt exactly, without an input log. The env config latches spec, vocabulary and masks from the
 checkpoint, as the bridge does.
 Checks per game (a failing game is dropped and counted, never patched):
-  - each of our seat's requests equals the captured own_request_line (rqid ignored);
+  - each of our seat's requests equals the captured own_request_line (rqid and the side's username ignored);
   - Foul Play has a journal entry exactly in the rounds it is requested, and its action is legal in its own view;
   - our seat's decision count and the terminal winner equal the result's.
 Reported, not a drop: encoder parity, the champion's argmax on our seat's env observation against the recorded greedy action.
@@ -54,6 +54,7 @@ def band(turn):
 def _request_body(line):
     body = json.loads(line[len('|request|'):] if line.startswith('|request|') else line)
     body = dict(body);body.pop('rqid', None)
+    if isinstance(body.get('side'), dict):body['side'] = {k: v for k, v in body['side'].items() if k != 'name'}   # usernames differ
     return body
 
 
