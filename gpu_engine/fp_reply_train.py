@@ -144,17 +144,65 @@ def game_bootstrap(models, arrays, rows, pairs, draws=BOOTSTRAP_DRAWS, seed=0):
     return out
 
 
-def test_report(arrays, test, pi_fp_probs, calibrated):
+def test_report(arrays, test, pi_fp_probs, calibrated, compare=None):
     """The four reply models on the test rows: uniform over legal actions, the champion's π (its stored probabilities), π recalibrated,
-    and π_FP; by group, by turn (the in-context curve), and game-bootstrap intervals for the NLL differences."""
+    and π_FP; by group, by turn (the in-context curve), and game-bootstrap intervals for the NLL differences. compare, when given,
+    is another run's π_FP on the same test rows (e.g. window 1 for a window-k run), reported as pi_fp_compare."""
     legal = arrays['legal'][test]
     models = dict(uniform_legal=legal / legal.sum(1, keepdims=True), champion_pi=arrays['probs'][test],
                   champion_pi_recalibrated=calibrated(arrays['probs'][test], legal), pi_fp=pi_fp_probs)
+    pairs = [('pi_fp', 'champion_pi'), ('pi_fp', 'champion_pi_recalibrated'), ('pi_fp', 'uniform_legal'), ('champion_pi', 'uniform_legal')]
+    if compare is not None:models['pi_fp_compare'] = compare;pairs.insert(0, ('pi_fp', 'pi_fp_compare'))
     report = {name: grouped(p, arrays, test, uniform=name == 'uniform_legal') for name, p in models.items()}
     report['in_context_curve'] = in_context_curve(models, arrays, test)
-    report['game_bootstrap_nll'] = game_bootstrap(models, arrays, test, (('pi_fp', 'champion_pi'), ('pi_fp', 'champion_pi_recalibrated'),
-                                                                         ('pi_fp', 'uniform_legal'), ('champion_pi', 'uniform_legal')))
+    report['game_bootstrap_nll'] = game_bootstrap(models, arrays, test, pairs)
     return report
+
+
+def widen(checkpoint, window, out, torch):
+    """The base checkpoint at a longer window. The model takes window_size from its config and attends over every frame's tokens
+    jointly; the one parameter sized by the window is history_position_embedding (window_size × width). Its rows all start as the
+    base's single row, so the current frame (index window − 1) keeps the base's embedding and, with earlier frames masked, the
+    widened model reproduces the base exactly. No other parameter changes. champion.export (window 1 only) can't take the result."""
+    payload = dict(torch.load(checkpoint, map_location='cpu', weights_only=True))
+    config = dict(payload['model_config']);base = int(config['window_size'])
+    if base != 1:raise SystemExit(f'widen expects a window-1 base, got {base}')
+    state = dict(payload['state_dict']);row = state['history_position_embedding.weight']
+    if row.shape[0] != 1:raise SystemExit(f'unexpected history_position_embedding shape {tuple(row.shape)}')
+    state['history_position_embedding.weight'] = row.repeat(window, 1).clone()
+    payload['model_config'] = dict(config, window_size=window);payload['state_dict'] = state
+    path = Path(out) / f'base-window-{window}.pt'
+    torch.save(payload, path)
+    return path
+
+
+def current_only(index):
+    """The same rows with every earlier frame masked: only the current observation, at the window's last slot."""
+    only = np.full_like(index, -1);only[:, -1] = index[:, -1]
+    return only
+
+
+def step_cost(model, arrays, index, rows, torch, device, single=200, batched=4096):
+    """Inference cost per decision: batch-1 latency (median over `single` decisions after warm-up) on the device and on CPU, and
+    batch-512 throughput on the device."""
+    import copy
+    def latency(m, dev, count):
+        m.eval();times = []
+        with torch.no_grad():
+            for i, r in enumerate(rows[:count + 10]):
+                b = batch(arrays, index, np.array([r]), torch, dev)
+                if dev != 'cpu':torch.cuda.synchronize()
+                started = time.perf_counter();forward(m, b)
+                if dev != 'cpu':torch.cuda.synchronize()
+                if i >= 10:times.append(time.perf_counter() - started)
+        return 1e3 * float(np.median(times))
+    out = dict(device=str(device), batch1_ms_device=latency(model, device, single))
+    with torch.no_grad():
+        chunk = rows[:batched];started = time.perf_counter();predict(model, arrays, index, chunk, torch, device)
+        if device != 'cpu':torch.cuda.synchronize()
+        out['batch512_ms_per_decision_device'] = 1e3 * (time.perf_counter() - started) / max(1, len(chunk))
+    out['batch1_ms_cpu'] = latency(copy.deepcopy(model).to('cpu'), 'cpu', min(single, 50))
+    return out
 
 
 ARCHIVE_TOLERANCE = 1e-4
@@ -201,6 +249,8 @@ def main(argv=None):
     parser.add_argument('--device', default='cuda');parser.add_argument('--seed', type=int, default=0)
     parser.add_argument('--evaluate', metavar='PI_FP_PT', help='skip training: report this trained π_FP on test')
     parser.add_argument('--export-archive', metavar='NPZ', help='with --evaluate: export π_FP to a champion_evaluator archive and check parity')
+    parser.add_argument('--window', type=int, default=None, help='train at this window (the base is widened; see widen)')
+    parser.add_argument('--compare-to', metavar='RUN_DIR', help="another run's test-probs.npz to report beside this π_FP (same test rows)")
     args = parser.parse_args(argv)
     import torch
     from pokezero.neural_policy import checkpoint_file_sha256, load_transformer_checkpoint
@@ -209,7 +259,9 @@ def main(argv=None):
     if args.export_archive and Path(args.export_archive).exists():raise SystemExit(f'{args.export_archive} exists; champion.export writes exclusively')
     out = Path(args.out);out.mkdir(parents=True, exist_ok=True);started = time.time()
     arrays = load(args.data)
-    model, result = load_transformer_checkpoint(args.evaluate or args.checkpoint, map_location=args.device)
+    base_path = args.checkpoint
+    if args.window and not args.evaluate:base_path = widen(args.checkpoint, args.window, out, torch)
+    model, result = load_transformer_checkpoint(args.evaluate or base_path, map_location=args.device)
     window = int(result.model_config.window_size)
     index = windows(arrays['ordinal'], window)
     split = data_mod.split_of(arrays['seed'])
@@ -235,11 +287,11 @@ def main(argv=None):
         print(json.dumps(dict(event='EVALUATED', test_all={k: v['all'] for k, v in report['test'].items() if isinstance(v, dict) and 'all' in v}, bootstrap=report['test']['game_bootstrap_nll'], archive=report.get('archive'))), flush=True)
         return 0
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
-    base_val = predict(model, arrays, index, rows['val'], torch, args.device)
+    base_val = predict(model, arrays, current_only(index), rows['val'], torch, args.device)
     input_parity = float(np.abs(base_val - arrays['probs'][rows['val']]).max()) if len(rows['val']) else 0.
     print(json.dumps(dict(event='INPUT_PARITY', max_abs_probability_difference=input_parity, tolerance=INPUT_TOLERANCE)), flush=True)
     if not input_parity <= INPUT_TOLERANCE:raise SystemExit(f'base model through windows/batch differs from the stored π by {input_parity}')
-    best = dict(epoch=0, val_nll=nll(base_val, labels[rows['val']]))
+    best = dict(epoch=0, val_nll=nll(predict(model, arrays, index, rows['val'], torch, args.device), labels[rows['val']]))
     best_state = {k: v.detach().cpu().clone() for k, v in model.state_dict().items()}
     history = [dict(epoch=0, val_nll=best['val_nll'])]
     print(json.dumps(dict(event='EPOCH', **history[-1])), flush=True)
@@ -255,26 +307,35 @@ def main(argv=None):
         if val < best['val_nll']:
             best = dict(epoch=epoch, val_nll=val);best_state = {k: v.detach().cpu().clone() for k, v in model.state_dict().items()}
     model.load_state_dict(best_state)
-    test = rows['test']
+    test = rows['test'];test_probs = predict(model, arrays, index, test, torch, args.device)
+    np.savez(out / 'test-probs.npz', rows=test, ordinal=arrays['ordinal'][test], seed=arrays['seed'][test], label=labels[test],
+             round=arrays['round'][test], probs=test_probs)
+    compare = None
+    if args.compare_to:
+        other = np.load(Path(args.compare_to) / 'test-probs.npz')
+        for key in ('ordinal', 'seed', 'label', 'round'):
+            if not np.array_equal(other[key], arrays[key][test]):raise SystemExit(f'--compare-to run has different test rows ({key})')
+        compare = other['probs']
+    cost = step_cost(model, arrays, index, test, torch, args.device)
     report = dict(schema='v2s-fp-reply-model.v1', data=str(args.data), checkpoint=str(args.checkpoint),
                   checkpoint_sha256=checkpoint_file_sha256(args.checkpoint), window=window, rows={k: int(len(v)) for k, v in rows.items()},
                   games=games, seats=seats, input_parity=input_parity, split_rule='battle seed % 10: 0 test, 1 validation, else train',
                   args=vars(args), history=history,
                   best_epoch=best['epoch'], recalibration=calibration, ece_bins=data_mod.ECE_BINS,
-                  test=test_report(arrays, test, predict(model, arrays, index, test, torch, args.device), calibrated),
+                  test=test_report(arrays, test, test_probs, calibrated, compare), compare_to=args.compare_to, inference_cost=cost,
                   seconds=round(time.time() - started, 1))
-    payload = dict(torch.load(args.checkpoint, map_location='cpu', weights_only=True))
+    payload = dict(torch.load(base_path, map_location='cpu', weights_only=True))
     base_sha = checkpoint_file_sha256(args.checkpoint)
     payload['state_dict'] = best_state;payload['value_calibration_transform'] = None
     if isinstance(payload.get('model_config'), dict) and 'policy_id' in payload['model_config']:
         payload['model_config'] = dict(payload['model_config'], policy_id=f"fp-reply-{payload['model_config']['policy_id']}")
-    payload['fp_reply'] = dict(policy_only=True, base_checkpoint_sha256=base_sha, best_epoch=best['epoch'], data=str(args.data),
+    payload['fp_reply'] = dict(policy_only=True, base_checkpoint_sha256=base_sha, best_epoch=best['epoch'], data=str(args.data), window=window,
                                note='policy fine-tuned on Foul Play decisions; the value output is not trained and must not be used')
     torch.save(payload, out / 'pi-fp.pt')
     report['saved'] = dict(path=str(out / 'pi-fp.pt'), sha256=checkpoint_file_sha256(out / 'pi-fp.pt'),
                            note='champion checkpoint format; policy fine-tuned on Foul Play decisions; the value head output is not trained')
     (out / 'report.json').write_text(json.dumps(report, indent=1) + '\n')
-    print(json.dumps(dict(event='DONE', best_epoch=best['epoch'], test_all={k: v['all'] for k, v in report['test'].items() if isinstance(v, dict) and 'all' in v}, bootstrap=report['test']['game_bootstrap_nll'])), flush=True)
+    print(json.dumps(dict(event='DONE', best_epoch=best['epoch'], test_all={k: v['all'] for k, v in report['test'].items() if isinstance(v, dict) and 'all' in v}, bootstrap=report['test']['game_bootstrap_nll'], inference_cost=cost)), flush=True)
     return 0
 
 

@@ -217,6 +217,10 @@ class WindowTests(unittest.TestCase):
         self.assertEqual(index.tolist(), [[-1, 0], [0, 1], [1, 2], [-1, 3], [3, 4]])
         self.assertEqual(t.windows(np.array([7, 7]), 1).tolist(), [[0], [1]])
 
+    def test_current_only_masks_every_earlier_frame(self):
+        index = t.windows(np.array([7, 7, 7]), 3)
+        self.assertEqual(t.current_only(index).tolist(), [[-1, -1, 0], [-1, -1, 1], [-1, -1, 2]])
+
 
 class CurveAndBootstrapTests(unittest.TestCase):
     def arrays(self):
@@ -239,6 +243,16 @@ class CurveAndBootstrapTests(unittest.TestCase):
 
 @unittest.skipUnless(__import__('importlib').util.find_spec('torch'), 'torch not installed')
 class RecalibrationTests(unittest.TestCase):
+    def test_widen_repeats_the_single_position_row_and_sets_the_window(self):
+        import torch
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp) / 'base.pt';row = torch.arange(4.).view(1, 4)
+            torch.save(dict(model_config=dict(window_size=1, policy_id='x'), state_dict={'history_position_embedding.weight': row, 'w': torch.ones(2)}), base)
+            payload = torch.load(t.widen(base, 3, tmp, torch), weights_only=True)
+            self.assertEqual(payload['model_config']['window_size'], 3)
+            self.assertTrue(torch.equal(payload['state_dict']['history_position_embedding.weight'], row.repeat(3, 1)))
+            self.assertTrue(torch.equal(payload['state_dict']['w'], torch.ones(2)))
+
     def test_recalibration_recovers_a_flattening_temperature(self):
         import torch
         rng = np.random.default_rng(0);n = 4000;logits = rng.normal(size=(n, 9));legality = np.ones((n, 9), bool)
