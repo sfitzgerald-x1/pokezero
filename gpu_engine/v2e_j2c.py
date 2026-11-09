@@ -339,12 +339,38 @@ def thread_index(n):
     return '0' if n <= 1 else ('t' if n >= REG else f'(t < {n} ? t : {n - 1})')
 
 
+FLOAT_ARITH = {'add', 'sub', 'mul', 'div', 'rem', 'max', 'min', 'neg', 'abs', 'sign', 'floor', 'ceil', 'round', 'square',
+    'integer_pow', 'clamp', 'sqrt', 'rsqrt', 'exp', 'log', 'tanh', 'logistic', 'pow', 'nextafter'}
+FLOAT_RN = {'add': 'fadd (add.rn)', 'sub': 'fsub (sub.rn)', 'mul': 'fmul (mul.rn)', 'square': 'fmul (mul.rn)'}
+
+
+def _site_frame(e):
+    """file:line of equation e's innermost frame outside JAX and the v2e tools (None when its traceback has none)."""
+    tb = getattr(e.source_info, 'traceback', None)
+    if tb is None or not tb.frames:return None
+    frames = [f for f in tb.frames if 'v2e_' not in f.file_name and '/jax/' not in f.file_name]
+    f = frames[0] if frames else tb.frames[0]
+    return f'{f.file_name.rsplit("/", 1)[-1]}:{f.line_num}'
+
+
+def _f32_bits(values, limit=8):
+    """Distinct f32 bit patterns (hex) of a constant, at most `limit`, in first-seen order."""
+    flat = np.asarray(values, np.float32).reshape(-1).view(np.uint32);out = []
+    for w in flat.tolist():
+        h = f'0x{w:08x}'
+        if h not in out:out.append(h)
+        if len(out) >= limit:break
+    return out
+
+
 class Generator:
     def __init__(self, name, profile=False):
         self.k = Kernel(name);self.env = {};self.profile = profile;self.marks = [];self.live = {};self.temps = []
         self.cse = {};self.cse_hits = 0;self.folds = 0;self.declined_runtime = False;self.fold_recip = False
         self.collective = True   # warp collectives (shuffles, warp scans) available
         self.rolled = 0          # depth of emitted loops that are not fully unrolled
+        self.float_sites = None  # list: record every f32 equation's lowering (float-site report); None: off
+        self.float_note = None   # the lowering decided for the current equation (set where the decision is made)
 
     # -- storage ------------------------------------------------------------------
     def new_reg(self, out):
@@ -568,14 +594,15 @@ void launch_{c}(const Params& p, cudaStream_t stream) {{
             dying = {id(v) for v in ins if v.src == 'store' and v.holder.refs == pending[id(v.holder)] == 1}
             before = len(self.k.lines);self.eq_start = before
             # Profile marks: a call's inner equations carry no outer frames, so they take their top-level equation's site.
-            if self.profile:outer = getattr(self, 'mark_outer', None);self.mark_outer = outer or mark_site(e)
+            sites = self.profile or self.float_sites is not None
+            if sites:outer = getattr(self, 'mark_outer', None);self.mark_outer = outer or mark_site(e)
             key = self.cse_key(e, ins);hit = self.cse.get(key) if key is not None else None
-            self.declined_runtime = False
+            self.declined_runtime = False;self.float_note = None;reused = False
             folded = self.constant_fold(e, ins) if hit is None else None
             if folded is not None:
                 outs = folded;self.folds += 1
             elif hit is not None and all(self.alive(v) for v in hit[1]):
-                outs = hit[1];self.cse_hits += 1
+                outs = hit[1];self.cse_hits += 1;reused = True
             else:
                 if not self.declined_runtime:self.evaluator_guard(e, ins)
                 self.neg_feeds_neg = bool(e.outvars) and e.outvars[0] in neg_fed
@@ -587,6 +614,8 @@ void launch_{c}(const Params& p, cudaStream_t stream) {{
                     ex.located = True
                     raise ex from None
                 if key is not None:self.cse[key] = (ins, outs)   # ins kept alive: their ids stay unique
+            if self.float_sites is not None and e.primitive.name not in CALLS:
+                self.record_float(e, ins, outs, folded is not None, reused)
             if ins and all(v.cderived for v in ins) and e.primitive.name not in OPAQUE | CALLS and not self.declined_runtime:
                 for val in outs:val.cderived = True
             for var, val in zip(e.outvars, outs):
@@ -607,7 +636,7 @@ void launch_{c}(const Params& p, cudaStream_t stream) {{
                 self.marks.append((e.primitive.name, where, ','.join(str(tuple(v.aval.shape)) for v in e.outvars)) + self.mark_outer)
                 self.k.emit(f'if ({self.mark_cond()}) err[1 + {len(self.marks) - 1}] = (uint32_t)(clock64() - T0);')
                 self.mark_lines = getattr(self, 'mark_lines', 0) + 1   # not counted toward the chunk size (maybe_split)
-            if self.profile:self.mark_outer = outer
+            if sites:self.mark_outer = outer
             self.maybe_split()
         outs = [self.read(a) for a in jaxpr.outvars]
         self.env = saved
@@ -639,12 +668,17 @@ void launch_{c}(const Params& p, cudaStream_t stream) {{
             if p == 'div' and ins[0].dtype == F32 and self.const_like(ins[1]) and not self.plain_const(ins[0]) and not (
                     ins[0].cderived and self.fold_signature('div', ins, e) != 'recip'):
                 return [self.divide_by_constant(ins[0], ins[1], outs[0])]
+            if p == 'div' and ins[0].dtype == F32:
+                self.float_note = dict(lowering='div.full', helper='v2e::fdiv', reason='runtime divisor' if not self.const_like(ins[1])
+                    else 'constant divisor, constant dividend: no reciprocal rewrite (XLA divides at run time or folds exactly)')
             return [self.elementwise(outs[0], ins, lambda a, b: binary(p, ins[0].dtype, a, b))]
         if p in COMPARE:return [self.elementwise(outs[0], ins, lambda a, b: compare(p, a, b))]
         if p in UNARY:
             if p == 'neg' and ins[0].dtype == F32:
                 inner = getattr(ins[0], 'neg_of', None)
-                if inner is not None and self.alive(inner):return [self.view(inner, outs[0])]   # XLA: neg(neg(x)) -> x
+                if inner is not None and self.alive(inner):
+                    self.float_note = dict(lowering='identity', rule='neg(neg(x)) -> x')
+                    return [self.view(inner, outs[0])]   # XLA: neg(neg(x)) -> x
                 out = self.elementwise(outs[0], ins, lambda a: unary(p, ins[0].dtype, a, params));out.neg_of = ins[0]
                 if ins[0].src == 'store' and out.src == 'store' and getattr(self, 'neg_feeds_neg', True):
                     # PTX neg.f32 canonicalizes NaN, so the fold (which keeps payloads) must stay available.
@@ -689,6 +723,10 @@ void launch_{c}(const Params& p, cudaStream_t stream) {{
         """XLA's A / C -> A * (1 / C) for a non-constant A and a constant (or broadcast constant) C. The
         product then folds by the usual rule (or runs at run time, an IEEE multiply on the device)."""
         recip = self.reciprocal(b)
+        if self.float_sites is not None:
+            value = lambda v: np.asarray(v.lit if v.kind == 'lit' else (v.lbc if v.lbc is not None else v.arr), np.float32)
+            self.float_note = dict(lowering='recip_mul', helper='v2e::fmul by a host reciprocal', divisor_bits=_f32_bits(value(b)),
+                reciprocal_bits=_f32_bits(value(recip)), divisor_values=[float(x) for x in np.unique(value(b))[:8]])
         if a.cderived:
             sig = self.fold_signature('mul', [a, recip], None)
             if sig not in ('runtime', 'uncertain', 'recip'):
@@ -702,6 +740,7 @@ void launch_{c}(const Params& p, cudaStream_t stream) {{
                 res = self.wrap(r, F32, out.shape, lane_mode=lane)
                 if res is not None:
                     res.bsig = sig;res.cderived = True
+                    if self.float_note is not None:self.float_note['lowering'] = 'folded_recip_mul'
                     return res
             if sig == 'uncertain':raise Unsupported('f32 division of a reshaped or sliced constant broadcast')
         res = self.elementwise(out, [a, recip], lambda x, y: binary('mul', F32, x, y))
@@ -895,6 +934,7 @@ void launch_{c}(const Params& p, cudaStream_t stream) {{
             for v in ins:
                 if v.kind == 'lit' and np.isnan(np.float32(v.lit)):
                     bits = (int(np.asarray(v.lit, np.float32).view(np.uint32)) | 0x00400000) & 0x7fffffff
+                    self.float_note = dict(lowering='nan_literal', result_bits=f'0x{bits:08x}')
                     return Val(F32, out.shape, 'lit', lit=np.array([bits], np.uint32).view(np.float32)[0], cderived=True)
         def is_lit(v, value):
             if v.kind == 'lit':return bool(np.float32(v.lit) == np.float32(value))
@@ -909,8 +949,35 @@ void launch_{c}(const Params& p, cudaStream_t stream) {{
         elif p == 'mul':x = ins[0] if is_lit(ins[1], 1.0) else (ins[1] if is_lit(ins[0], 1.0) else None)
         elif p == 'div':x = ins[0] if is_lit(ins[1], 1.0) else None
         if x is None:return None
+        self.float_note = dict(lowering='identity', rule=f'{p} by its identity element (x + 0, x * 1, x / 1, min/max)')
         if x.shape == out.shape:return self.view(x, out)
         return self.elementwise(out, [x], lambda a: a)
+
+    # -- float-site report (additive; on only when generate(..., float_sites=list)) ----------------------
+    def record_float(self, e, ins, outs, folded, reused):
+        """Append the lowering of equation e when it reads or writes f32: its source frame, the outermost step line, and how
+        the generator lowered it (folded on the host, reused by CSE, identity rewrite, div.full, host reciprocal x mul with the
+        constant's and the reciprocal's bits, an _rn helper, or another helper/data movement)."""
+        avals = [getattr(v, 'aval', None) for v in list(e.invars) + list(e.outvars)]
+        if not any(a is not None and getattr(a, 'dtype', None) == F32 for a in avals):return
+        p = e.primitive.name;note = dict(self.float_note or {})
+        if folded:note = dict(lowering='folded', note='evaluated on the host as XLA folds it (IEEE f32 numpy)')
+        elif reused:note = dict(lowering='cse', note='reuses an identical earlier equation\'s value')
+        elif 'lowering' not in note:
+            if p in FLOAT_RN and outs and outs[0].dtype == F32:note = dict(lowering='rn', helper=FLOAT_RN[p])
+            elif p in ('max', 'min') and outs and outs[0].dtype == F32:note = dict(lowering='other', helper=f'v2e::f{p}_x')
+            elif p in FLOAT_ARITH:note = dict(lowering='other', helper=p)
+            elif p == 'convert_element_type':note = dict(lowering='convert', helper=f'{ins[0].dtype}->{outs[0].dtype}')
+            elif p in COMPARE:note = dict(lowering='compare')
+            elif p in DATA_MOVEMENT:note = dict(lowering='data')
+            elif p.startswith(('reduce_', 'cum', 'arg')):note = dict(lowering='reduce', helper=p)
+            else:note = dict(lowering='other', helper=p)
+        category = ('arith' if p in FLOAT_ARITH else 'convert' if p == 'convert_element_type' else 'compare' if p in COMPARE
+            else 'data' if p in DATA_MOVEMENT else 'reduce' if p.startswith(('reduce_', 'cum', 'arg')) else 'other')
+        where = _site_frame(e);outer = getattr(self, 'mark_outer', None)
+        self.float_sites.append(dict(primitive=p, category=category, where=where, step_line=outer[0] if outer else None,
+            module=outer[1] if outer else None, out=[f'{np.dtype(o.dtype)}{list(o.shape)}' for o in outs][:4],
+            const_operands=[i for i, v in enumerate(ins) if v.cderived], **note))
 
     def operand_index(self, v, out):
         """(index_fn(i) -> expr, identity) for reading operand v at out element i (numpy broadcasting)."""
@@ -1897,13 +1964,20 @@ void launch_{c}(const Params& p, cudaStream_t stream) {{
 '''
 
 
-def generate(name, closed, input_avals, profile=False, mode='warp'):
+def generate(name, closed, input_avals, profile=False, mode='warp', aliases=None, float_sites=None):
     """CUDA sources for closed jaxpr over lane inputs (flattened avals with axis 0 = LANES).
 
     mode 'warp': one warp per lane (array-heavy modules); 'thread': one thread per lane (scalar-heavy modules).
+    aliases (optional, {output index: input index}): outputs that ARE that input, unchanged (a jaxpr outvar equal to an
+    invar); no code writes them, so the caller must alias the buffers (ffi_call input_output_aliases). A phase of
+    gpu_engine.v2e_phases passes the untouched state and trackers through this way.
+    float_sites (optional list): every f32 equation's source frame and the lowering chosen is appended to it (the float-site
+    report of gpu_engine.v2e_phases); the generated code is unchanged.
     """
     versions = check_pinned_versions()
     g = (ThreadGenerator if mode == 'thread' else Generator)(name, profile);k = g.k
+    g.float_sites = float_sites
+    aliases = {int(o): int(i) for o, i in (aliases or {}).items()}
     ins = []
     for n, aval in enumerate(input_avals):
         if not (len(aval.shape) and aval.shape[0] == LANES):raise Unsupported(f'input {n} lacks the lane axis')
@@ -1914,6 +1988,10 @@ def generate(name, closed, input_avals, profile=False, mode='warp'):
     g.eq_start = len(k.lines)
     for n, v in enumerate(outs):
         if not v.lane:raise Unsupported(f'output {n} has no lane axis')
+        if n in aliases:
+            if not (0 <= aliases[n] < len(ins) and v is ins[aliases[n]]):raise Unsupported(f'output {n} is not input {aliases[n]} unchanged; it cannot alias it')
+            k.emit(f'// out[{n}] aliases in{aliases[n]} (passed through unchanged)')
+            continue
         k.emit(f'{{ {ctype(v.dtype)}* o = reinterpret_cast<{ctype(v.dtype)}*>(p.out[{n}]);')
         g.emit_output(v)
         k.emit('}')
@@ -2009,4 +2087,5 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(V2eGen_{name}, {ns}::Impl,
         [(np.dtype(v.dtype), v.shape) for v in outs], k.lane_literals, g.marks)
     module.stats.update(versions=versions, chunks=len(chunks), cse_hits=g.cse_hits, folds=g.folds, consts=len(k.consts), lines=module.source_lines,
         mode=mode, reloads=getattr(g, 'reloads', 0))
+    module.aliases = aliases
     return module

@@ -166,6 +166,12 @@ def run(module, shard_paths, template, context, *, out, workers=8, repro_lanes=1
     # (`accumulate(want, lanes)` / `summary()`), e.g. the hook: module's exercised lane-steps per call site.
     info = getattr(cuda_fn, 'info', None) or getattr(jax_fn, 'info', None)
     accumulate = getattr(jax_fn, 'accumulate', None);summary = getattr(jax_fn, 'summary', None)
+    # Phase providers (gpu_engine.v2e_phases): `project(result)` maps a side's jitted result to what is compared (a program may
+    # keep extra outputs, e.g. tap_identity's taps); a CUDA side's `teacher(reference result)` replaces its own call, reading
+    # its inputs from the reference's outputs (teacher forcing: phase:, chain:); `observe_diffs(diffs, lanes, shard)` sees the
+    # per-leaf lane differences (chain:'s first differing boundary).
+    project_jax = getattr(jax_fn, 'project', None);project_cuda = getattr(cuda_fn, 'project', None)
+    teacher = getattr(cuda_fn, 'teacher', None);observe = getattr(jax_fn, 'observe_diffs', None)
     treedef = jax.tree.structure(template)
     jitted = {}
     def call(fn_name, fn, *args):
@@ -188,9 +194,12 @@ def run(module, shard_paths, template, context, *, out, workers=8, repro_lanes=1
         for path, (leaves, tick, level) in prefetched(list(shard_paths)):
             if lanes:leaves = [x[:lanes] for x in leaves]   # e.g. an odd lane count, to exercise lane-count-dependent addressing
             state, actions, trackers = jax.tree.unflatten(treedef, [jax.numpy.asarray(x) for x in leaves])
-            want = call('jax', jax_fn, state, actions, trackers);got = call('cuda', cuda_fn, state, actions, trackers)
+            raw = call('jax', jax_fn, state, actions, trackers);want = raw if project_jax is None else project_jax(raw)
+            got = teacher(raw) if teacher is not None else call('cuda', cuda_fn, state, actions, trackers)
+            if project_cuda is not None:got = project_cuda(got)
             diffs = jax.device_get(compare(want, got));n = state.hp.shape[0];compared += n   # one transfer for every leaf
             if accumulate is not None:accumulate(want, n)
+            if observe is not None:observe(diffs, n, path)
             any_lane = np.zeros(n, bool)
             for name, d in diffs.items():
                 d = np.asarray(d);totals[name] = totals.get(name, 0) + int(d.sum());any_lane |= d if d.shape == any_lane.shape else d.any()

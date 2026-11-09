@@ -73,6 +73,53 @@ class Generated:
         return jax.tree.unflatten(self.out_tree, out[:-2]), out[-1]
 
 
+class GeneratedFlat(Generated):
+    """A generated module over flat operand lists (a phase of gpu_engine.v2e_phases): call(*inputs) -> (outputs, err).
+    module.aliases ({output: input}) become the ffi_call's input_output_aliases: those outputs are the inputs' buffers,
+    unwritten by the kernels (passed through)."""
+
+    def __call__(self, *flat):
+        import jax
+        if len(flat) != len(self.module.inputs):raise ValueError(f'{self.module.name}: {len(flat)} operands, traced {len(self.module.inputs)}')
+        lanes = flat[0].shape[0]
+        for n, (x, (dtype, shape)) in enumerate(zip(flat, self.module.inputs)):
+            if x.shape[1:] != tuple(shape[1:]) or x.shape[0] != lanes or np.dtype(x.dtype) != dtype:
+                raise ValueError(f'{self.module.name} operand {n}: {x.shape}{x.dtype} vs traced {shape}{dtype}')
+        results = [jax.ShapeDtypeStruct((lanes,) + tuple(shape[1:]), dtype) for dtype, shape in self.module.outputs]
+        results += [jax.ShapeDtypeStruct((self.module.arena_words * lanes,), np.uint32),
+            jax.ShapeDtypeStruct((1 + len(getattr(self.module, 'marks', ())),), np.uint32)]
+        aliases = {i: o for o, i in (getattr(self.module, 'aliases', None) or {}).items()}
+        out = jax.ffi.ffi_call(self.target, results, input_output_aliases=aliases)(*flat, *self.consts)
+        return list(out[:-2]), out[-1]
+
+
+def compile_jaxpr(name, closed, avals, build_dir=None, profile=False, mode='thread', aliases=None):
+    """compile_function for an already traced closed jaxpr over flat lane operands `avals` (axis 0 = v2e_j2c.LANES), e.g. a
+    phase slice of the step: generate, build (cached by source digest), register; returns a GeneratedFlat. `aliases`
+    ({output index: input index}) marks outputs that are their input unchanged (v2e_j2c.generate)."""
+    import jax
+    import jax.numpy as j
+    cached = _registered.get(name)
+    if cached is not None:
+        if getattr(cached, 'closed', None) is not closed or cached.mode != mode or cached.profile != profile:
+            raise ValueError(f'generated module {name!r} already compiled for a different jaxpr, mode or profile flag')
+        return cached
+    begin = time.perf_counter()
+    module = v2e_j2c.generate(name, closed, avals, profile=profile, mode=mode, aliases=aliases)
+    generated = time.perf_counter()
+    path = build_module(module, build_dir)
+    module.stats.update(generate_s=generated - begin, build_s=time.perf_counter() - generated, equations=sum(1 for _ in _walk(closed.jaxpr)))
+    lib = ctypes.cdll.LoadLibrary(str(path))
+    target = f'v2e_gen_{name}_{module.digest}'
+    jax.ffi.register_ffi_target(target, jax.ffi.pycapsule(getattr(lib, f'V2eGen_{name}')), platform='CUDA')
+    consts = [j.asarray(c) for c in module.consts]
+    fn_ = GeneratedFlat(module, None, None, consts, target)
+    fn_.library = lib;fn_.path = path
+    fn_.closed = closed;fn_.mode = mode;fn_.profile = profile
+    _registered[name] = fn_
+    return fn_
+
+
 def _walk(jaxpr):
     from jax.extend import core as jcore
     for e in jaxpr.eqns:
