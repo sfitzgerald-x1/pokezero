@@ -210,15 +210,31 @@ def parser():
     p.add_argument('--server-id',help='this process\'s name in READY and every response (default HOSTNAME:PORT)')
     p.add_argument('--tree-commit',help='the code commit served (default: this checkout\'s HEAD, +dirty when tracked files differ)')
     p.add_argument('--compilation-cache',help='absolute directory for JAX\'s persistent compilation cache')
+    p.add_argument('--reply-archive',help='br_fp: a reply model (a champion_evaluator .npz export, e.g. pi_FP-red2) whose logits on each '
+        'world\'s peer view replace root_peer_logits before averaging; default off (the champion\'s own averaging)')
+    p.add_argument('--reply-archive-sha256',help='sha256 of --reply-archive\'s bytes (required with it)')
+    p.add_argument('--reply-checkpoint-sha256',help='the reply export\'s checkpoint sha256 (required with --reply-archive)')
+    p.add_argument('--reply-views',choices=('eager','jit','check'),default='eager',help='how --reply-archive builds the peer inputs: eager '
+        '(default; bit-exact with the RR re-pricer), jit (one vmapped program per root), or check (eager plays; jit reported beside)')
     p.add_argument('--matmul-precision',choices=('highest','high','default'),default='highest',
         help='the pinned JAX default matmul precision (default highest, the gates\' certified precision); the server refuses to start '
         'unless JAX_DEFAULT_MATMUL_PRECISION and JAX\'s own setting both name it')
     return p
 
 
+def check_reply_arguments(p,args):
+    """--reply-archive and its two sha256 flags go together, as 64-hex sha256s (the server's and the re-pricer's options)."""
+    reply=[getattr(args,k,None)for k in('reply_archive','reply_archive_sha256','reply_checkpoint_sha256')]
+    if any(reply)and not all(reply):p.error('--reply-archive, --reply-archive-sha256 and --reply-checkpoint-sha256 go together')
+    if not any(reply)and getattr(args,'reply_views','eager')!='eager':p.error('--reply-views goes with --reply-archive')
+    if all(reply)and not all(type(x)is str and len(x)==64 and all(c in'0123456789abcdef'for c in x)for x in reply[1:]):
+        p.error('--reply-archive-sha256 and --reply-checkpoint-sha256 must be 64-hex sha256s')
+
+
 def options(argv=None):
     p=parser();args=p.parse_args(argv);evaluators.check_arguments(p,args);check_precision_environment(p,args)
     if not args.champion_archive:p.error('--champion-archive with its two sha256 flags is required: the champion prices every root and leaf')
+    check_reply_arguments(p,args)
     if args.max_requests is None:args.max_requests=args.buckets[-1]
     if not 1<=args.max_requests<=args.buckets[-1]:p.error('--max-requests must be in 1..the largest bucket')
     try:   # Codex's own queue/batch checks (phase_d_search_server.Server._initialize), before anything loads or compiles
@@ -261,9 +277,15 @@ def build(args):
     executor=cw.live_executor(metadata,catalog)   # the constructor's own engine metadata and catalog (the depth-N gate's CONSTRUCTOR_ROOTS uses the same)
     params=(evaluator.params,)
     pricers=live.make_pricers(executor,evaluator,params,worlds=W,buckets=args.buckets,block_lanes=args.block_lanes,blocks_per_call=args.blocks_per_call)
+    reply=None
+    if getattr(args,'reply_archive',None):   # br_fp: the reply model at the champion's precision, on the same executor's views
+        from gpu_engine.depthn_reply_prior import ReplyPrior
+        model=evaluators.load(args.reply_archive,expected_archive_sha256=args.reply_archive_sha256,
+            expected_checkpoint_sha256=args.reply_checkpoint_sha256,precision=evaluators.PRECISIONS[args.champion_precision])
+        reply=ReplyPrior(executor,model,mode=args.reply_views)
     return live.DepthNLiveSearch(constructor=constructor,pricers=pricers,params=params,binding=cw.binding(source,metadata,catalog),
         recipe=v5_gumbel.Recipe(args.recipe_seed),tree_commit=args.tree_commit or tree_commit(),min_price_seconds=args.min_price_seconds,
-        max_requests=args.max_requests,session_cap=args.session_cap,refuse_classes=args.refuse_classes)
+        max_requests=args.max_requests,session_cap=args.session_cap,refuse_classes=args.refuse_classes,reply=reply)
 
 
 def header(args,search):
@@ -274,6 +296,8 @@ def header(args,search):
         recipe_seed=args.recipe_seed,saved_root_admission=args.saved_root_admission,metadata_sha256=args.expected_metadata_sha256,
         vocabulary_sha256=args.expected_vocabulary_sha256,champion_archive_sha256=args.champion_archive_sha256,
         champion_checkpoint_sha256=args.champion_checkpoint_sha256,champion_precision=args.champion_precision,pricer=search.pricer_identity,
+        **({}if not getattr(args,'reply_archive',None)else dict(root_operator='br_fp',reply_archive_sha256=args.reply_archive_sha256,
+            reply_checkpoint_sha256=args.reply_checkpoint_sha256,reply_views=args.reply_views)),
         jax_enable_x64=bool(jax.config.jax_enable_x64),matmul_precision=matmul_precision(),matmul_precision_pin=args.matmul_precision)
 
 

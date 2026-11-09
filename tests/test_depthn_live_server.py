@@ -159,6 +159,18 @@ class ServerTests(unittest.TestCase):
             for target,name,value in stand_ins:stack.enter_context(patch.object(target,name,side_effect=value))
             self.assertEqual(S.build(args),'search')
         self.assertEqual((made['refuse_classes'],made['max_requests'],made['session_cap'],made['tree_commit'],made['binding']),(('wish','sleep'),2,64,'t'*40,'binding'))
+        self.assertIsNone(made['reply'])   # br_fp off by default: the champion's own averaging
+        from gpu_engine import depthn_reply_prior as rp
+        reply=['--reply-archive','r.npz','--reply-archive-sha256','e'*64,'--reply-checkpoint-sha256','f'*64]
+        with patch.dict(os.environ,PINNED):args=S.options(base+reply)
+        loaded=[]
+        with ExitStack()as stack:
+            for target,name,value in stand_ins+((S.evaluators,'load',lambda path,**kw:loaded.append((path,kw))or NS(params='reply')),
+                    (rp,'ReplyPrior',lambda executor,model,mode:('reply-prior',executor,model.params,mode))):
+                stack.enter_context(patch.object(target,name,side_effect=value))
+            self.assertEqual(S.build(args),'search')
+        self.assertEqual(loaded,[('r.npz',dict(expected_archive_sha256='e'*64,expected_checkpoint_sha256='f'*64,precision=S.evaluators.PRECISIONS['bf16']))])
+        self.assertEqual(made['reply'][0],'reply-prior');self.assertEqual((made['reply'][2],made['reply'][3]),('reply','eager'))
 
     def test_the_matmul_precision_is_hard_pinned(self):
         """The environment is checked before anything loads; JAX's own setting again in build, before any input or champion."""
@@ -222,6 +234,13 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(S.options(base+champion).refuse_classes,())
         search=NS(tree_commit='t',rung='DN2W8',max_requests=4,min_price_seconds=1.,session_cap=256,refuse_classes=('forced_switch','wish'),pricer_identity={})
         self.assertEqual(S.header(args,search)['refuse_classes'],['forced_switch','wish'])   # recorded in READY and the telemetry header
+        self.assertNotIn('root_operator',S.header(args,search))
+        reply=['--reply-archive','r.npz','--reply-archive-sha256','e'*64,'--reply-checkpoint-sha256','f'*64]
+        self.assertEqual({k:S.header(S.options(base+champion+reply),search)[k]for k in('root_operator','reply_archive_sha256','reply_checkpoint_sha256')},
+            dict(root_operator='br_fp',reply_archive_sha256='e'*64,reply_checkpoint_sha256='f'*64))
+        self.assertEqual(S.header(S.options(base+champion+reply+['--reply-views','check']),search)['reply_views'],'check')
+        for bad in(reply[:2],reply[:4],reply[:2]+['--reply-archive-sha256','x'*64,'--reply-checkpoint-sha256','f'*64],['--reply-views','jit']):
+            with self.subTest(bad=bad),redirect_stderr(io.StringIO()),self.assertRaises(SystemExit):S.options(base+champion+bad)
         for bad in(base,base+champion[:2],base+champion+['--max-requests','5'],base+champion+['--buckets','0,1'],base+champion+['--rung','R1'],
                 base+champion[:2]+['--champion-archive-sha256','x'*64,'--champion-checkpoint-sha256','d'*64],base[:-2]+champion,
                 base+champion+['--batch-wait-seconds','.5'],base+champion+['--queue-limit','2'],base+champion+['--refuse-classes','nap']):   # the last two: Codex's queue checks, before any load
