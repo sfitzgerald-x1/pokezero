@@ -66,8 +66,9 @@ request_id. Per batch (process_many chunks a longer list into batches of max_req
 - the effect guard (`effect_guard`, every COMPLETE response; pokezero.depthn_effect_guard, its inputs
   depthn_guard_inputs): the pricers are ObservedDepthNPricers whose observer seam reads the P1 call's turn-1 children while
   this batch prices (observer only: the frame and every program are the base pricer's); the record of the root (our root
-  prior, the peer's per world, both sides' turn-2 priors per expanded cell, the search's own action) with `tripped`, which
-  the live actor turns into greedy (cause UNREPRESENTED_EFFECT). A root whose inputs cannot be read gets the fail-closed
+  prior, the peer's per world, both sides' turn-2 priors per expanded cell, the search's own action) with `tripped` (the
+  live rule 'reach': turn-1 (b), the reach M_own / M_opp >= 5%, or (c); the any-cell arm kept for analysis), which the live
+  actor turns into greedy (cause UNREPRESENTED_EFFECT). A root whose inputs cannot be read gets the fail-closed
   record (tripped, with its error), as does one whose expanded cells have no captured children.
 - the root prior's inputs (reported): `root_view_source`, the build root dict's ('b2': the champion read B2's own encoding of
   the literal root, as Codex's ladder; 'world0': world 0's own view, for a root without B2 inputs), and `b2_view`, its

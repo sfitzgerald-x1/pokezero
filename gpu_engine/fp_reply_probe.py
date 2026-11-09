@@ -181,8 +181,7 @@ def main(argv=None):
     pi_fp_model, pi_fp_result = load_transformer_checkpoint(args.pi_fp, map_location=args.device)
     if int(pi_fp_result.model_config.window_size) != 1:raise SystemExit(f'π_FP has window {pi_fp_result.model_config.window_size}; the probe feeds window 1')
     marker = torch.load(args.pi_fp, map_location='cpu', weights_only=True).get('fp_reply') or {}
-    if marker.get('redaction') == 'peer-view-v1':train_mod.redact_peer_view(arrays['numeric_features'])
-    elif marker.get('redaction') is not None:raise SystemExit(f"unknown redaction {marker['redaction']!r}")
+    train_mod.apply_redaction(arrays, marker.get('redaction'))
     args.pi_fp_data = args.pi_fp_data or marker.get('data')
     if args.pi_fp_data and Path(dataset_collection(args.pi_fp_data)).resolve() != Path(dataset_collection(args.data)).resolve():
         raise SystemExit(f'{args.pi_fp_data} and {args.data} come from different collections: their ordinals mean other games')
