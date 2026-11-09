@@ -1,0 +1,470 @@
+"""CPU tests of scripts/depthn_rr_reprice.py: no GPU, no pricer. The live search object is the real DepthNLiveSearch (its own
+process_many, _batch and _search) over a fake constructor and fake pricing (build, price and the backups patched), so the
+wrappers are exercised at the live call sites; decide and prepare_roots are the real functions underneath."""
+from collections import OrderedDict
+from contextlib import ExitStack, redirect_stderr
+import hashlib
+import io
+import json
+import os
+from pathlib import Path
+import subprocess
+import tempfile
+from types import SimpleNamespace
+import unittest
+from unittest.mock import patch
+
+import jax.numpy as jnp
+import numpy as np
+
+from scripts import depthn_rr_reprice as R
+from tests import test_depthn_live_bench as BT   # its own-request fakes: one or nine legal actions
+from gpu_engine import constructor_worlds as cw, depthn_backups as backups, depthn_live_search as live
+from gpu_engine.device_public_world_state import World
+from gpu_engine.phase_d_live_worlds import Refusal
+from gpu_engine.state import empty_state
+from pokezero import phase_d_owning_capture as owning, v5_gumbel
+from pokezero.phase_d_search_server import SCHEMA
+
+ORIGINAL_DECIDE, ORIGINAL_PREPARE = live.decide, cw.prepare_roots
+VOCABULARY = dict(species=['', 'Pikachu', 'Mr. Mime', 'Snorlax', "Farfetch’d", 'Ho-Oh', 'Gengar'],
+    moves=['', 'Thunderbolt', 'Hidden Power Fire', 'hiddenpowerwater70', 'Body Slam', 'Solar Beam'])
+LEGAL = (True, True, False, True, True, True, False, False, False)   # the root's own legal lanes
+LOGITS = (.5, -.2, 0., 1.1, -.7, .3, 0., 0., 0.)
+KEPT = (True, False, True, False, True, False, False, True, False)   # the opponent's lanes turn 1 enumerates
+
+
+def prices(w, kept=KEPT):
+    """World w's WorldPrices: values with long binary expansions, None off the legal x kept product."""
+    grid = [[(((a * 9 + b) * 7 + w * 3) % 23) / 23 - .5 + 1e-3 / 3 if LEGAL[a] and kept[b] else None for b in range(9)] for a in range(9)]
+    return v5_gumbel.WorldPrices(any(kept), kept, tuple(.1 * b - .3 + w / 300 for b in range(9)), grid)
+
+
+def battle_state(*, active=2, charge=0):
+    """A real BattleState: the opponent (p2) has species 1..6, its active `active` knows Thunderbolt, two Hidden Powers and an
+    empty slot; slots 1 and 3 fainted."""
+    s = empty_state(1)
+    moves = s.moves.at[0, 1, active].set(jnp.asarray([1, 2, 3, 0]))
+    return s._replace(species=s.species.at[0, 1].set(jnp.arange(1, 7)), moves=moves, pp=s.pp.at[0, 1, active].set(jnp.asarray([5, 5, 5, 0])),
+        hp=s.hp.at[0, 1].set(jnp.asarray([100, 0, 50, 0, 1, 2])), max_hp=s.max_hp.at[0, 1].set(jnp.full(6, 100)),
+        active=s.active.at[0, 1].set(active), charge_move=s.charge_move.at[0, 1, active].set(charge))
+
+
+STATE = battle_state()
+
+
+def world(i, state=STATE):
+    return World(i, state, dict(w=jnp.asarray(i, jnp.int32)), (), 1000 + i, False)
+
+
+class FakeConstructor:
+    count = 16
+
+    def __init__(self, refuse=()):
+        self.sessions, self.seen, self.metadata, self.refuse, self.calls = {}, set(), dict(vocabulary=VOCABULARY), set(refuse), []
+
+    def prepare(self, request, index):
+        self.calls.append(request['decision_index'])
+        if request['decision_index'] in self.refuse:raise Refusal('TEST_REFUSAL', 'no worlds')
+        made = SimpleNamespace(worlds=tuple(world(i) for i in range(16)), seeds=tuple(500 + i for i in range(16)), requested_worlds=16,
+            fully_constructed=True, mapper_diagnostics=())
+        return SimpleNamespace(address=SimpleNamespace(stream=1, frame=request['decision_index'], owner=0)), made, LEGAL
+
+
+def fake_build(constructor, prepared, pricer, params, *, binding, recipe, only_complete):
+    roots, requests = [], []
+    for item in prepared:
+        if type(item) is cw.RootRefusal:
+            roots.append(dict(request_id=item.request_id, status='REFUSED', reason='constructor-root:' + item.kind));continue
+        rows = tuple(range(len(requests), len(requests) + 8));requests += rows
+        roots.append(dict(request_id=item.request_id, status='PRICED', reason=None, rows=rows, root_logits=LOGITS, root_legal=item.legal))
+    return SimpleNamespace(requests=tuple(requests), roots=tuple(roots))
+
+
+def pricing(stack, *, still_clock=False):
+    """Fake pricing under the real _search: build, price and the backups (each row r is the block of worlds 2r, 2r+1)."""
+    stack.enter_context(patch.object(cw, 'constructor_binding', return_value='binding'))
+    stack.enter_context(patch.object(live, 'classify', return_value=([], 'protocol_facts')))
+    stack.enter_context(patch.object(cw, 'build', side_effect=fake_build))
+    stack.enter_context(patch.object(cw, 'price', return_value=(SimpleNamespace(), None)))
+    stack.enter_context(patch.object(backups, 'refusal_summary', return_value=dict(roots=[dict(cause=None)] * 64)))
+    stack.enter_context(patch.object(backups, 'backup', side_effect=lambda frame, r, rule: (prices(2 * r), prices(2 * r + 1))))
+    if still_clock:   # every stage timing 0, so whole responses compare
+        for module in (live, cw):stack.enter_context(patch.object(module, 'time', SimpleNamespace(perf_counter=lambda: 0.)))
+
+
+def fake_search(constructor):
+    """The real DepthNLiveSearch, its attributes set directly (no pricer or champion), warmed (a carry reference)."""
+    s = object.__new__(live.DepthNLiveSearch)
+    s.W, s.K, s.rung, s.buckets, s.pricers, s.params = 16, 8, 'DN2W16', (1,), {1: SimpleNamespace(executor='executor')}, ('params',)
+    s.binding, s.recipe, s.tree_commit, s.min_price_seconds, s.max_requests, s.session_cap = 'binding', 'recipe', 'replay', 1., 1, 256
+    s.archive_sha256, s.device, s.clock, s.battles, s.evicted, s.warm, s.refuse_classes = 'a' * 64, 'cpu', lambda: 0., OrderedDict(), 0, None, ()
+    s.warming, s.pricer_identity, s.constructor = False, dict(engine='fake'), constructor
+    s.carry = dict(structure=live.carry_structure(world(0)), signature='sig', provisional=False, root={})
+    s.warmup = lambda requests: dict(buckets={1: dict(cold_seconds=1., warm_seconds=.5)}, programs=3, seen=len(requests))
+    return s
+
+
+def body(i, single=False):
+    return dict(BT.live_request(i, single), schema=SCHEMA, request_id=f'r{i}', rung='DN2W16', budget_seconds=600.)
+
+
+def fake_peer(state, public, owner):
+    """The opponent's lanes: KEPT, except world 5, whose last lane differs (a kept/legal disagreement)."""
+    legal = list(KEPT)
+    if int(np.asarray(public['w'])) == 5:legal[8] = True
+    return dict(legal=legal, move_targets=[0, 1, 2, 3], switch_targets=[0, 1, 3, 4, 5], error=0, usable=[True, True, True, False])
+
+
+def expected_decision():
+    return ORIGINAL_DECIDE([(prices(2 * k), prices(2 * k + 1)) for k in range(8)], LOGITS, LEGAL)
+
+
+class CaptureTests(unittest.TestCase):
+    def test_call_sites_resolve_through_the_modules_at_call_time(self):
+        self.assertTrue(R.check_call_sites())
+
+        def bound(self, todo):   # a search holding its own reference to decide would escape the wrapper
+            decide = live.decide
+            return decide(None, None, None), cw.prepare_roots(None, todo)
+        with self.assertRaises(RuntimeError):R.check_call_sites(bound)
+
+    def test_wrappers_capture_restore_and_leave_responses_identical(self):
+        requests = [body(0), body(1), body(2)]
+        with ExitStack() as stack:
+            pricing(stack, still_clock=True)
+            plain = fake_search(FakeConstructor(refuse={1}))
+            without = [plain.process_many([r])[0] for r in requests]
+            wrapped, captures = fake_search(FakeConstructor(refuse={1})), []
+            within = []
+            for r in requests:
+                capture = R.Capture()
+                with capture.installed():
+                    self.assertIsNot(live.decide, ORIGINAL_DECIDE);self.assertIsNot(cw.prepare_roots, ORIGINAL_PREPARE)
+                    within.append(wrapped.process_many([r])[0])
+                captures.append(capture)
+                self.assertIs(live.decide, ORIGINAL_DECIDE);self.assertIs(cw.prepare_roots, ORIGINAL_PREPARE)
+        self.assertEqual([r['status'] for r in without], ['COMPLETE', 'REFUSED', 'COMPLETE'])
+        self.assertEqual(without[1]['cause'], 'constructor_refused')
+        self.assertEqual(within, without)
+        self.assertEqual(json.dumps(within, sort_keys=True), json.dumps(without, sort_keys=True))   # byte for byte, timings included
+        self.assertEqual(without[0]['q_values'], expected_decision()['q_values'])
+        self.assertEqual([len(c.decided) for c in captures], [1, 0, 1]);self.assertEqual([len(c.prepared) for c in captures], [1, 1, 1])
+        got = captures[0].decided[0]
+        self.assertEqual([w for pair in got.blocks for w in pair], [prices(w) for w in range(16)])   # block order: world 2k+j
+        self.assertEqual((tuple(got.root_logits), tuple(got.root_legal)), (LOGITS, LEGAL))
+        self.assertIs(type(captures[1].prepared[0][0]), cw.RootRefusal)
+
+    def test_wrappers_restore_when_the_call_raises(self):
+        capture = R.Capture()
+        with self.assertRaises(KeyError):
+            with capture.installed():raise KeyError('boom')
+        self.assertIs(live.decide, ORIGINAL_DECIDE);self.assertIs(cw.prepare_roots, ORIGINAL_PREPARE)
+
+    def test_prices_encode_none_as_null_and_floats_exactly(self):
+        p = prices(3);fields = R.prices_fields(p);text = json.dumps(fields, allow_nan=False)
+        back = json.loads(text)
+        self.assertIn('null', text);self.assertEqual(back['grid'][2], [None] * 9)   # an illegal root lane
+        self.assertEqual(back['grid'], [list(row) for row in p.joint_values])   # every float exact after the round trip
+        self.assertEqual((back['kept'], back['root_peer_logits'], back['opponent_requested']), (list(KEPT), list(p.opponent_logits), True))
+        self.assertEqual(R.prices_fields(None)['priced'], False)
+        self.assertIn('NaN', R.encode_row(dict(x=float('nan'))));self.assertTrue(json.loads(R.encode_row(dict(x=float('nan'))))['nonfinite'])
+
+
+class FactsTests(unittest.TestCase):
+    def test_opponent_facts_through_the_constructor_tables(self):
+        facts = R.opponent_facts(STATE, 0, VOCABULARY)
+        self.assertEqual((facts['side'], facts['active_slot'], facts['active_species']), ('p2', 2, 'snorlax'))   # slot 2 holds species id 3
+        self.assertEqual(facts['active_moves'], ['thunderbolt', 'hiddenpower', 'hiddenpower', None])   # Hidden Power collapsed; empty slot
+        self.assertEqual(facts['active_move_engine_ids'], [1, 2, 3, 0]);self.assertIsNone(facts['charge_move'])
+        self.assertEqual([m['species'] for m in facts['party']], ['pikachu', 'mrmime', 'snorlax', 'farfetchd', 'hooh', 'gengar'])
+        self.assertEqual([m['fainted'] for m in facts['party']], [False, True, False, True, False, False])
+        self.assertEqual(R.opponent_facts(battle_state(active=2, charge=5), 0, VOCABULARY)['charge_move'], 'solarbeam')
+        self.assertEqual(R.opponent_facts(STATE, 1, VOCABULARY)['side'], 'p1')
+
+    def test_peer_lanes_take_the_views_second_output(self):
+        class Executor:   # the pricer's views call legal() then observe() per seat; each seat's observation is told apart
+            def legal(self, state):return jnp.asarray([[[True] * 9, [True, False, True, False, True, True, False, False, False]]])
+
+            def observe(self, state, public, seat, mask):
+                s = int(np.asarray(seat)[0])
+                return SimpleNamespace(inputs={}, observation=SimpleNamespace(legal_action_mask=mask, move_targets=jnp.asarray([[s, 1, 2, 3]]),
+                    switch_targets=jnp.asarray([[0, 1, 3, 4, 5 - s]]), error=jnp.asarray([7 * s])))
+        lanes = R.PeerLanes(Executor())(STATE, {}, 0)
+        self.assertEqual(lanes['legal'], [True, False, True, False, True, True, False, False, False])   # seat 1's engine mask
+        self.assertEqual((lanes['move_targets'], lanes['switch_targets'], lanes['error']), ([1, 1, 2, 3], [0, 1, 3, 4, 4], 7))
+        self.assertEqual(lanes['usable'], [True, True, True, False])   # usable_moves on the opponent's active: pp 0 in the empty slot
+
+    def test_lane_labels_follow_the_encoder_lane_space(self):
+        facts = R.opponent_facts(STATE, 0, VOCABULARY)
+        peer = dict(legal=[True, True, False, False, True, False, True, False, True], move_targets=[0, 1, 2, 3], switch_targets=[0, 1, 3, 4, 5],
+            usable=[True, True, True, False])
+        self.assertEqual(R.lane_labels(facts, peer), ['move:thunderbolt', 'move:hiddenpower', None, None, 'switch:pikachu', None,
+            'switch:farfetchd', None, 'switch:gengar'])
+        self.assertEqual(R.lane_labels(facts, dict(peer, usable=[False] * 4))[:2], ['move:struggle', 'move:hiddenpower'])
+        charged = R.opponent_facts(battle_state(charge=5), 0, VOCABULARY)
+        self.assertEqual(R.lane_labels(charged, dict(peer, legal=[True] + [False] * 8))[0], 'move:solarbeam')
+
+
+class JoinTests(unittest.TestCase):
+    def test_q_equal_is_exact_after_a_json_round_trip(self):
+        q = [.1 + .2, None, -1 / 3, 1., None, None, None, None, None]
+        live_q = json.loads(json.dumps(q))
+        self.assertTrue(R.q_equal(q, live_q));self.assertTrue(R.q_equal(tuple(q), live_q))
+        self.assertFalse(R.q_equal([np.nextafter(q[0], 1.)] + q[1:], live_q))   # one ulp apart
+        self.assertFalse(R.q_equal(q, [0.] + live_q[1:]));self.assertFalse(R.q_equal(q, live_q[:-1]))
+        self.assertFalse(R.q_equal([.5, None], [.5, 0.]));self.assertFalse(R.q_equal([1.], [True]))   # None is not 0; a bool is not a q
+        self.assertTrue(R.q_equal([1.], [1]));self.assertTrue(R.q_equal(None, None));self.assertFalse(R.q_equal(None, live_q))
+
+    def test_live_join_and_parity(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / 't.jsonl'
+            rows = [dict(decision_index=0, source='search', search=dict(status='COMPLETE', action_index=3, q_values=[.1] * 9, tree_commit='live'),
+                greedy=dict(action_index=1), request_kind='move', turn=1, played_action_index=3, prefix_sha256='p0'),
+                dict(decision_index=1, source='single_legal', search=None, greedy=dict(action_index=4), request_kind='forced', turn=None,
+                    played_action_index=4, prefix_sha256='p1'), dict(decision_index=1, source='single_legal')]
+            path.write_text(''.join(json.dumps(r) + '\n' for r in rows) + '\n')
+            index, duplicated = R.live_index(path)
+            self.assertEqual((sorted(index), duplicated), ([0, 1], [1]));self.assertEqual(R.live_index(Path(tmp) / 'none.jsonl'), ({}, []))
+        found = R.live_fields(rows[0]);single = R.live_fields(rows[1])
+        self.assertEqual((found['search_action_index'], found['greedy_action_index'], found['tree_commit'], found['played_action_index']), (3, 1, 'live', 3))
+        self.assertEqual((single['search_q_values'], single['search_status'], single['request_kind']), (None, None, 'forced'))
+        complete = dict(status='COMPLETE', action_index=3, q_values=[.1] * 9)
+        self.assertEqual(R.parity(complete, found), dict(live_found=True, live_searched=True, replay_complete=True, status_match=True, action_equal=True,
+            q_equal=True))
+        p = R.parity(dict(complete, action_index=2, q_values=[.1] * 8 + [None]), found)
+        self.assertEqual((p['action_equal'], p['q_equal']), (False, False))
+        p = R.parity(dict(status='REFUSED', action_index=None, q_values=None), found)
+        self.assertEqual((p['status_match'], p['action_equal'], p['q_equal']), (False, None, None))   # parity only where both searched
+        p = R.parity(complete, dict(found, source='greedy_fallback'))
+        self.assertEqual((p['live_searched'], p['status_match'], p['q_equal']), (False, False, None))
+        self.assertEqual(R.parity(complete, None)['live_found'], False)
+
+    def test_single_legal_decisions_are_never_sent_as_the_bench(self):
+        for single in (True, False):
+            request = BT.live_request(0, single)
+            self.assertEqual(R.sent(request), not (sum(R.bench.legal_mask(request) or ()) == 1));self.assertEqual(R.sent(request), not single)
+        self.assertTrue(R.sent(dict(BT.address_request(0))))   # an unreadable request is sent, as the bench sends it
+
+
+def write_capture(path, singles, *, owner='p1', battle_id='battle-1001', stream_id=5):
+    """A valid owner capture (phase_d_owning_capture's chain) with one decision per entry of `singles` (one legal action or nine)."""
+    blobs, state = [], dict(prior='0' * 64, lines=0, requests=0)
+    prefix = hashlib.sha256()
+
+    def emit(**fields):
+        blob = owning.encoded(dict(schema=owning.SCHEMA, sequence=len(blobs), previous_sha256=state['prior'], **fields))
+        blobs.append(blob);state['prior'] = hashlib.sha256(blob).hexdigest()
+    emit(event='BEGIN', cell=dict(ordinal=1001), declaration_sha256='d' * 64, namespace='ns', battle_id=battle_id, owner=owner, seed=7, stream_id=stream_id)
+    for i, single in enumerate(singles):
+        line = BT.own_request(single);delta = [f'|turn|{i + 1}', line]
+        for x in delta:prefix.update(x.encode() + b'\n')
+        emit(event='WIRE', generation=i + 1, start=state['lines'], end=state['lines'] + 2, prefix_sha256=prefix.hexdigest(), lines=delta)
+        state['lines'] += 2;state['requests'] += 1
+        emit(event='ROOT', decision_index=i, turn=i + 1, generation=i + 1, request_count=state['requests'], prefix_sha256=prefix.hexdigest(),
+            own_request_line=line)
+    path.write_bytes(b''.join(b + b'\n' for b in blobs))
+    return {r['decision_index']: r for r in owning.read_capture(path)}
+
+
+def write_run(root, cells):
+    """results/<ordinal>.json (and an owner capture file) per (ordinal, arm, seed, seat, status)."""
+    for d in ('results', 'owning-wire', 'telemetry'):(root / d).mkdir(parents=True, exist_ok=True)
+    for ordinal, arm, seed, seat, status in cells:
+        (root / 'results' / f'{ordinal}.json').write_text(json.dumps(dict(status=status, cell=dict(ordinal=ordinal, arm=arm, seed=seed, seat=seat,
+            pair_ordinal=ordinal // 3))))
+        (root / 'owning-wire' / f'{ordinal}.jsonl').write_text('')
+
+
+class CellTests(unittest.TestCase):
+    def run_directory(self, tmp):
+        root = Path(tmp) / 'run'
+        cells = [(3 * p + a, ('RAW', 'DN2W8', 'DN2W16')[a], 100 + p // 2, p % 2, 'COMPLETE') for p in range(40) for a in (0, 2)]
+        write_run(root, cells + [(3 * 40 + 2, 'DN2W16', 120, 0, 'UNKNOWN')])
+        (root / 'owning-wire' / '5.jsonl').unlink()   # cell 5 (DN2W16) has no capture
+        return root
+
+    def args(self, root, **kw):
+        return SimpleNamespace(**dict(dict(run_directory=str(root), arm='DN2W16', cells=None, sample=None, sample_seed=None, shard=0, shards=1), **kw))
+
+    def test_sample_is_stratified_reproducible_and_sharded(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self.run_directory(tmp)
+            pool = R.arm_cells(root, 'DN2W16')
+            self.assertEqual(len(pool), 41);self.assertTrue(all(c['arm'] == 'DN2W16' for c in pool))
+            picked = R.select_cells(self.args(root, sample=8, sample_seed=1))
+            again = R.select_cells(self.args(root, sample=8, sample_seed=1));other = R.select_cells(self.args(root, sample=8, sample_seed=2))
+            self.assertEqual(picked, again);self.assertNotEqual(picked, other)
+            strata = lambda cells: [sum((c['seed'] % 2, c['seat']) == s for c in cells) for s in R.STRATA]
+            self.assertEqual(strata(picked), [2, 2, 2, 2]);self.assertEqual([c['ordinal'] for c in picked], sorted(c['ordinal'] for c in picked))
+            self.assertEqual(strata(R.select_cells(self.args(root, sample=10, sample_seed=1))), [3, 3, 2, 2])   # the remainder to the first strata
+            everything = R.select_cells(self.args(root, sample=36, sample_seed=4))
+            self.assertNotIn(122, [c['ordinal'] for c in everything]);self.assertNotIn(5, [c['ordinal'] for c in everything])   # UNKNOWN; no capture
+            shards = [R.select_cells(self.args(root, sample=36, sample_seed=4, shard=i, shards=3)) for i in range(3)]
+            self.assertEqual(sorted(c['ordinal'] for s in shards for c in s), [c['ordinal'] for c in everything])   # a partition
+            self.assertEqual([len(s) for s in shards], [12, 12, 12])
+            with self.assertRaises(ValueError):R.select_cells(self.args(root, sample=44, sample_seed=1))   # a stratum holds at most 10
+            self.assertEqual([c['ordinal'] for c in R.select_cells(self.args(root, cells=[8, 2, 8]))], [2, 8])
+            self.assertEqual([c['ordinal'] for c in R.select_cells(self.args(root, cells=[2, 8, 11], shard=1, shards=2))], [8])
+            with self.assertRaises(ValueError):R.select_cells(self.args(root, cells=[3]))   # a RAW cell
+            with self.assertRaises(ValueError):R.select_cells(self.args(root, cells=[5]))   # no capture
+            with self.assertRaises(OSError):R.select_cells(self.args(root, cells=[1]))   # no result
+
+    def test_sample_rank_is_a_fixed_hash(self):
+        self.assertEqual(R.sample_rank(1, 2), hashlib.sha256(json.dumps([R.SAMPLE_DOMAIN, 1, 2], separators=(',', ':')).encode()).hexdigest())
+
+
+class GuardTests(unittest.TestCase):
+    def runner(self, override=None):
+        answers = {('rev-parse', 'HEAD'): 'h' * 40, ('status', '--porcelain', '--untracked-files=all', '--', *R.LIVE_TREES): ''}
+        for path, tree in R.LIVE_TREES.items():answers[('rev-parse', f'HEAD:{path}')] = answers[('rev-parse', f'{R.LIVE_COMMIT}:{path}')] = tree
+        answers.update(override or {})
+
+        def run(root, *arguments):
+            value = answers[arguments]
+            if value is None:raise subprocess.CalledProcessError(128, 'git')
+            return value
+        return run
+
+    def test_the_guard_refuses_a_mismatched_tree(self):
+        self.assertEqual(R.tree_guard(run=self.runner())['trees'], R.LIVE_TREES)
+        with self.assertRaisesRegex(ValueError, 'HEAD:gpu_engine'):R.tree_guard(run=self.runner({('rev-parse', 'HEAD:gpu_engine'): 'f' * 40}))
+        with self.assertRaisesRegex(ValueError, 'HEAD:src'):R.tree_guard(run=self.runner({('rev-parse', 'HEAD:src'): None}))
+        with self.assertRaisesRegex(ValueError, 'pin'):R.tree_guard(run=self.runner({('rev-parse', f'{R.LIVE_COMMIT}:src'): 'e' * 40}))
+        with self.assertRaisesRegex(ValueError, 'tree-commit'):R.tree_guard(tree_commit='x' * 40, run=self.runner())
+        self.assertEqual(R.tree_guard(tree_commit='h' * 40, run=self.runner())['head'], 'h' * 40)
+        status = ('status', '--porcelain', '--untracked-files=all', '--', *R.LIVE_TREES)
+        with self.assertRaisesRegex(ValueError, 'working tree'):R.tree_guard(run=self.runner({status: 'M gpu_engine/state.py'}))
+        with self.assertRaisesRegex(ValueError, 'working tree'):R.tree_guard(run=self.runner({status: '?? src/pokezero/extra.py'}))
+        self.assertTrue(R.tree_guard(run=self.runner({status: '?? src/notes.txt'})))   # an untracked non-Python file is no code
+        shallow = {('rev-parse', f'{R.LIVE_COMMIT}:{p}'): None for p in R.LIVE_TREES}   # a clone without the live commit: the pins alone
+        self.assertFalse(R.tree_guard(run=self.runner(shallow))['live_commit_present'])
+        with self.assertRaisesRegex(ValueError, 'git checkout'):R.tree_guard(run=self.runner({('rev-parse', 'HEAD'): None}))
+
+    @unittest.skipUnless(subprocess.run(['git', '-C', str(R.ROOT), 'rev-parse', R.LIVE_COMMIT], capture_output=True).returncode == 0,
+        'needs a checkout holding the live commit')
+    def test_the_pins_are_the_live_commits_trees(self):
+        for path, tree in R.LIVE_TREES.items():self.assertEqual(R.git(R.ROOT, 'rev-parse', f'{R.LIVE_COMMIT}:{path}'), tree)
+
+    def test_identity_check(self):
+        good = dict(R.LIVE_IDENTITY, rung='DN2W16', pricer=dict(buckets=[1], W=16))
+        self.assertEqual(R.identity_problems(good, 'DN2W16'), [])
+        bad = R.identity_problems(dict(good, recipe_seed=1, session_cap=8, pricer=dict(buckets=[1, 2], W=8)), 'DN2W16')
+        self.assertEqual(len(bad), 4);self.assertEqual(len(R.identity_problems(good, 'DN2W8')), 2)   # the rung and W
+
+
+BASE = ['--showdown-root', 's', '--node-binary', 'n', '--metadata', 'm', '--expected-metadata-sha256', 'x', '--vocabulary', 'v',
+    '--expected-vocabulary-sha256', 'y', '--warmup-requests', 'w.jsonl', '--arm', 'DN2W16', '--rung', 'DN2W16']
+CHAMPION = ['--champion-archive', 'a', '--champion-archive-sha256', 'c' * 64, '--champion-checkpoint-sha256', 'd' * 64]
+
+
+class MainTests(unittest.TestCase):
+    def setUp(self):
+        environment = patch.dict(os.environ, {'JAX_DEFAULT_MATMUL_PRECISION': 'highest'});environment.start();self.addCleanup(environment.stop)
+
+    def test_options(self):
+        run = ['--run-directory', 'r', '--out', 'o', '--cells', '1001']
+        with patch.object(R.server.evaluators, 'check_arguments'):
+            args = R.options(BASE + CHAMPION + run)
+            self.assertEqual((args.buckets, args.max_requests, args.saved_root_admission, args.cells, args.port), ((1,), 1, False, [1001], 0))
+            refused = (['--roster', 'r.json', 'z'], ['--sessions', '2'], ['--buckets', '1,2'], ['--max-requests', '2'], ['--saved-root-admission'],
+                ['--rung', 'DN2W8'], ['--shard', '2', '--shards', '2'], ['--max-decisions', '0'])
+            for extra in refused:
+                with self.subTest(extra=extra), redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):R.options(BASE + CHAMPION + run + extra)
+            for argv in (BASE + run, [x for x in BASE + CHAMPION + run if x not in ('--warmup-requests', 'w.jsonl')],
+                    BASE + CHAMPION + ['--run-directory', 'r', '--out', 'o', '--sample', '8'], BASE + CHAMPION + run + ['--sample', '8', '--sample-seed', '1'],
+                    BASE[:-2] + CHAMPION + run):   # no champion; no warmup file; no sample seed; both selections; the server's default rung
+                with self.subTest(argv=argv), redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):R.options(argv)
+            self.assertEqual(R.options(BASE + CHAMPION + ['--run-directory', 'r', '--out', 'o', '--sample', '8', '--sample-seed', '3']).sample_seed, 3)
+
+    def replay(self, tmp, *extra, header=None):
+        """main over a run directory with cell 1001: decisions 0-4, decision 1 single-legal, decision 4 refused by the constructor."""
+        root = Path(tmp) / 'run';write_run(root, [(1001, 'DN2W16', 7, 1, 'COMPLETE')])
+        roots = write_capture(root / 'owning-wire' / '1001.jsonl', [False, True, False, False, False])
+        want = expected_decision();q = json.loads(json.dumps(want['q_values']))
+        lane = next(a for a in range(9) if q[a] is not None);off = list(q);off[lane] = float(np.nextafter(q[lane], 2.))
+        search = lambda q_values, source='search', cause=None, status='COMPLETE': dict(status=status, cause=cause, action_index=want['action_index'],
+            q_values=q_values, tree_commit=R.LIVE_COMMIT, server_id='gpu:7001')
+        live_rows = [dict(decision_index=0, source='search', search=search(q), request_kind='move'),
+            dict(decision_index=1, source='single_legal', search=None, request_kind='forced'),
+            dict(decision_index=2, source='search', search=search(off), request_kind='move'),   # one ulp off on one lane
+            dict(decision_index=3, source='greedy_fallback', cause='timeout', search=dict(status='REFUSED', cause='timeout', client_refused=True),
+                request_kind='move'),
+            dict(decision_index=4, source='search', search=search(q), request_kind='switch')]
+        with (root / 'telemetry' / '1001.jsonl').open('w') as f:
+            for r in live_rows:f.write(json.dumps(dict(r, prefix_sha256=roots[r['decision_index']]['prefix_sha256'], greedy=dict(action_index=0), turn=1,
+                played_action_index=0)) + '\n')
+        args = R.parser().parse_args(BASE + CHAMPION + ['--run-directory', str(root), '--out', str(Path(tmp) / 'out'), '--cells', '1001', *extra])
+        args.port, args.max_requests = 0, 1
+        constructor = FakeConstructor(refuse={4});search_object = fake_search(constructor);warmed = []
+        search_object.warmup = lambda requests: warmed.append(list(requests)) or dict(buckets={1: dict(cold_seconds=1.)}, programs=3)
+        header = dict(R.LIVE_IDENTITY, rung='DN2W16', pricer=dict(buckets=[1], W=16), tree_commit='t') if header is None else header
+        with ExitStack() as stack:
+            pricing(stack)
+            stack.enter_context(patch.object(R, 'options', return_value=args))
+            stack.enter_context(patch.object(R, 'tree_guard', return_value=dict(head='h')))
+            stack.enter_context(patch.object(R.server, 'read_requests', return_value=[dict(saved=1)]))
+            stack.enter_context(patch.object(R.server, 'build', return_value=search_object))
+            stack.enter_context(patch.object(R.server, 'header', return_value=header))
+            stack.enter_context(patch.object(R, 'PeerLanes', return_value=fake_peer))
+            stack.enter_context(redirect_stderr(io.StringIO()))
+            with patch('sys.stdout', new_callable=io.StringIO) as stdout:code = R.main([])
+        out = Path(tmp) / 'out'
+        rows = [json.loads(x) for x in (out / 'rows-0.jsonl').read_text().splitlines()]
+        return code, rows, json.loads((out / 'summary-0.json').read_text()), json.loads((out / 'header-0.json').read_text()), constructor, warmed, stdout.getvalue(), args
+
+    def test_main_replays_records_and_joins(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            code, rows, summary, header, constructor, warmed, stdout, args = self.replay(tmp)
+            with patch.object(R, 'options', return_value=args), patch.object(R, 'tree_guard', return_value={}), self.assertRaises(FileExistsError):
+                R.main([])   # never into an existing directory
+        self.assertEqual(code, 0)
+        self.assertIs(live.decide, ORIGINAL_DECIDE);self.assertIs(cw.prepare_roots, ORIGINAL_PREPARE)
+        self.assertEqual(warmed, [[dict(saved=1)]])   # the server's warmup file, once
+        self.assertEqual(constructor.calls, [0, 2, 3, 4])   # the single-legal decision 1 is never sent
+        self.assertEqual([r['decision_index'] for r in rows], [0, 2, 3, 4]);self.assertEqual(len(stdout.splitlines()), 5)   # progress + done
+        first = rows[0];want = expected_decision()
+        self.assertEqual((first['ordinal'], first['battle_id'], first['owner'], first['stream_id'], first['request_count']), (1001, 'battle-1001', 'p1', 5, 1))
+        self.assertEqual((rows[1]['request_count'], first['seat'], first['seed']), (3, 1, 7))
+        self.assertEqual((first['replay']['status'], first['replay']['action_index'], first['replay']['q_values']), ('COMPLETE', want['action_index'],
+            json.loads(json.dumps(want['q_values']))))
+        self.assertEqual(first['root'], dict(root_logits=list(LOGITS), root_legal=list(LEGAL)))
+        self.assertEqual(len(first['worlds']), 16)
+        for w, row in enumerate(first['worlds']):
+            self.assertEqual((row['world'], row['index'], row['seed'], row['kernel_seed'], row['constructed']), (w, w, 500 + w, 1000 + w, True))
+            self.assertEqual(row['grid'], [list(r) for r in prices(w).joint_values])
+            self.assertEqual((row['kept'], row['root_peer_logits']), (list(KEPT), list(prices(w).opponent_logits)))
+            self.assertEqual(row['kept_matches_peer_legal'], w != 5);self.assertTrue(row['requested_matches_peer'])
+        self.assertEqual(first['worlds'][0]['opponent']['active_species'], 'snorlax')
+        self.assertEqual(first['worlds'][0]['peer']['lanes'], ['move:thunderbolt', None, 'move:hiddenpower', None, 'switch:pikachu', None, None,
+            'switch:hooh', None])   # lane 7 is switch_targets[3]: party slot 4
+        self.assertEqual((first['kept_disagreements'], first['prepared']['kind'], first['capture_ok'], first['notes']), (1, 'Prepared', True, []))
+        self.assertEqual([r['parity']['action_equal'] for r in rows], [True, True, None, None])
+        self.assertEqual([r['parity']['q_equal'] for r in rows], [True, False, None, None])
+        self.assertEqual([r['parity']['status_match'] for r in rows], [True, True, False, False])
+        last = rows[3]
+        self.assertEqual((last['replay']['status'], last['replay']['cause'], last['prepared']['kind'], last['worlds'], last['root']),
+            ('REFUSED', 'constructor_refused', 'RootRefusal', [], None))
+        self.assertEqual((last['live']['source'], last['live']['request_kind'], last['live_problem']), ('search', 'switch', None))
+        self.assertEqual((summary['decisions_sent'], summary['complete'], summary['live_searched'], summary['skipped_single_legal']), (4, 3, 3, 1))
+        self.assertEqual({k: summary['parity'][k] for k in ('both', 'action_equal', 'q_equal')}, dict(both=2, action_equal=2, q_equal=1))
+        self.assertEqual(summary['parity']['q_mismatches'], [dict(ordinal=1001, decision_index=2)])
+        self.assertEqual([(m['decision_index'], m['live_cause'], m['replay_status']) for m in summary['status_mismatches']],
+            [(3, 'timeout', 'COMPLETE'), (4, None, 'REFUSED')])
+        self.assertEqual((summary['kept_legal_disagreements'], summary['skip_disagreements'], summary['live_problems'], summary['capture_anomalies']),
+            (3, [], [], []))
+        self.assertEqual((summary['live_tree_commits'], summary['interrupted'], summary['max_decisions_reached']), ({R.LIVE_COMMIT: 3}, False, False))
+        self.assertEqual((header['cells'][0]['ordinal'], header['tree_guard'], header['warmup']['programs']), (1001, dict(head='h'), 3))
+
+    def test_max_decisions_stops_a_smoke_run(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            code, rows, summary, *_ = self.replay(tmp, '--max-decisions', '2')
+        self.assertEqual((code, [r['decision_index'] for r in rows], summary['max_decisions_reached']), (0, [0, 2], True))
+
+    def test_a_search_unlike_the_live_servers_is_refused_before_warmup(self):
+        with tempfile.TemporaryDirectory() as tmp, self.assertRaisesRegex(SystemExit, 'session_cap'):
+            self.replay(tmp, header=dict(R.LIVE_IDENTITY, rung='DN2W16', session_cap=64, pricer=dict(buckets=[1], W=16)))
+
+
+if __name__ == '__main__':
+    unittest.main()
