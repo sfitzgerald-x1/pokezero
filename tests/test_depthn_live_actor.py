@@ -4,7 +4,9 @@ import json
 import os
 from pathlib import Path
 import random
+import shutil
 import socket
+import subprocess
 import struct
 import sys
 from tempfile import TemporaryDirectory
@@ -20,12 +22,13 @@ from pokezero.live_protocol_actor import ActorContract, JaxBackend, OwnedProvide
 from pokezero.live_protocol_bridge import OwningActorFactory
 from pokezero.policy import PolicyDecision
 from tests import test_phase_d_prerequisites as fixture
+from tests._showdown_root import has_showdown, showdown_root
 
 REQUEST_KEYS = {'schema','request_id','battle_id','owner','stream_id','decision_index','generation',
                 'prefix_sha256','lines','own_request_line','rung','budget_seconds'}
 ROW_KEYS = {'schema','arm','policy_id','cell','battle_id','owner','stream_id','generation','turn','decision_index','request_kind',
             'prefix_sha256','archive_sha256','archive_source','deadline_seconds','reserve_seconds','encode_seconds','greedy','search','played_action_index','source','cause',
-            'search_differs','select_seconds'}
+            'search_differs','recharge_guard','select_seconds'}
 
 
 def decode_edge():
@@ -113,13 +116,17 @@ def snapshot():
               lines=('|turn|1', line), own_request_line=line)
 
 
-def request_line(*, members=2, force=False, trapped=False):
+def request_line(*, members=2, force=False, trapped=False, moves=None):
     packet = json.loads(fixture.request()[len('|request|'):]); side = packet['side']; key = next(k for k in side if k != 'id')
     base = side[key][1]
     side[key] = side[key][:1]+[dict(base, ident=base['ident'][:-1]+str(i)) for i in range(1, members)]
+    if moves is not None: packet['active'][0]['moves'] = [m if isinstance(m, dict) else dict(id=m, pp=8, maxpp=8) for m in moves]
     if force: packet.pop('active'); packet['forceSwitch'] = [True]
     if trapped: packet['active'][0]['trapped'] = True
     return '|request|'+json.dumps(packet)
+
+
+BEAM = ('hyperbeam', 'bodyslam', 'earthquake', 'rest')   # lane 0 is a recharge move
 
 
 class ClientTests(unittest.TestCase):
@@ -663,6 +670,76 @@ class FactoryTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'owning root'):
             policy.select_action(NS(metadata={'owner_prefix_sha256': 'e'*64}, legal_action_mask=mask), rng=random.Random(1))
         self.assertEqual(calls, []); self.assertEqual(self.path.read_bytes(), b'')
+
+
+    def guarded(self, name, *, search, greedy, moves=BEAM):
+        self.fresh(name)
+        def responder(r): return dict(complete(r, action=search), q_values=[.1]*9)
+        (decision,), calls = self.run_arm(responder, greedy=greedy, lines=[request_line(moves=moves)])
+        self.assertEqual(sorted(calls), ['greedy', 'search']); row, = self.rows()
+        return decision, row
+
+    def test_an_override_into_an_own_recharge_move_plays_greedy(self):
+        """The lead's guard: search chose Hyper Beam (lane 0), greedy did not; greedy is played, source greedy_fallback, cause
+        OWN_RECHARGE_UNREPRESENTED, and the row keeps the COMPLETE response and names the guarded lane."""
+        for greedy, greedy_move in ((1, 'bodyslam'), (4, None)):   # a move greedy, a switch greedy
+            with self.subTest(greedy=greedy):
+                decision, row = self.guarded(f'into-{greedy}', search=0, greedy=greedy)
+                self.assertEqual((decision.action_index, decision.policy_id), (greedy, 'champion-raw'))
+                self.assertEqual(decision.metadata['depthn_live'],
+                    dict(arm='DN2W8', source='greedy_fallback', cause='OWN_RECHARGE_UNREPRESENTED', request_id='f'*32))
+                self.assertEqual((row['source'], row['cause'], row['played_action_index'], row['search_differs']),
+                    ('greedy_fallback', 'OWN_RECHARGE_UNREPRESENTED', greedy, None))
+                self.assertEqual((row['search']['status'], row['search']['action_index']), ('COMPLETE', 0))
+                self.assertEqual(row['recharge_guard'], dict(searched_action=0, searched_move='hyperbeam', greedy_move=greedy_move))
+                self.assertEqual(set(row), ROW_KEYS)
+        # Every Gen 3 recharge move is guarded, by its id or (no id) its display name.
+        for i, move in enumerate(('blastburn', 'hydrocannon', 'frenzyplant', dict(move='Hyper Beam', pp=8, maxpp=8))):
+            with self.subTest(move=move):
+                decision, row = self.guarded(f'move-{i}', search=2, greedy=1, moves=('rest', 'bodyslam', move, 'earthquake'))
+                self.assertEqual((decision.action_index, row['cause']), (1, 'OWN_RECHARGE_UNREPRESENTED'))
+
+    def test_overrides_away_from_or_without_a_recharge_move_are_played(self):
+        for name, search, greedy, differs in (('away', 1, 0, True), ('same', 0, 0, False), ('plain', 2, 1, True), ('switch', 4, 0, True)):
+            with self.subTest(name):
+                decision, row = self.guarded(name, search=search, greedy=greedy)
+                self.assertEqual((decision.action_index, row['source'], row['cause'], row['search_differs'], row['recharge_guard']),
+                    (search, 'search', None, differs, None))
+        decision, row = self.guarded('no-beam', search=0, greedy=1, moves=('bodyslam', 'rest', 'earthquake', 'shadowball'))
+        self.assertEqual((decision.action_index, row['source']), (0, 'search'))
+
+    def test_the_panel_counts_the_guard_as_a_fallback_cause(self):
+        from pokezero.depthn_live_panel import decisions
+        decision, row = self.guarded('panel', search=0, greedy=1)
+        summary = decisions([row], deadline=3.)
+        self.assertEqual(summary['by_request_kind']['move']['fallback_by_cause'], {'OWN_RECHARGE_UNREPRESENTED': 1})
+        self.assertEqual((summary['fallback_by_cause']['OWN_RECHARGE_UNREPRESENTED']['count'], summary['transport_failure_share']), (1, 0.))
+
+
+class RechargeMoveTests(unittest.TestCase):
+    def test_own_moves_reads_the_request_lanes(self):
+        self.assertEqual(live.own_moves(request_line(moves=BEAM)), BEAM)
+        self.assertEqual(live.own_moves(request_line(moves=('bodyslam', dict(move='Hyper Beam'), dict(id='', move='Rest')))),
+            ('bodyslam', 'hyperbeam', 'rest', None))
+        self.assertEqual(live.own_moves(request_line(force=True)), (None,)*4)   # a forceSwitch request has no active row
+        self.assertEqual(live.own_moves(request_line(moves=BEAM+('surf',))), BEAM)   # lanes 0-3 only
+        for bad in (None, '', '|request|', '|request|[]', '|request|{bad', '|turn|1'):
+            with self.subTest(bad=bad): self.assertIsNone(live.own_moves(bad))
+
+    def test_the_guard_rule(self):
+        moves = BEAM
+        self.assertTrue(live.recharge_guarded(moves, 0, 1)); self.assertTrue(live.recharge_guarded(moves, 0, 4))
+        for searched, greedy in ((1, 0), (0, 0), (2, 1), (4, 1), (5, 0)):
+            self.assertFalse(live.recharge_guarded(moves, searched, greedy), (searched, greedy))
+        self.assertFalse(live.recharge_guarded(None, 0, 1)); self.assertFalse(live.recharge_guarded((None,)*4, 0, 1))
+
+    @unittest.skipUnless(has_showdown() and (showdown_root()/'dist'/'sim').is_dir() and shutil.which('node'), 'needs a built Showdown and node')
+    def test_recharge_moves_are_showdowns_gen3_recharge_flag(self):
+        """RECHARGE_MOVES is exactly the standard Gen 3 moves Showdown's own move table flags recharge."""
+        script = ("const {Dex}=require(process.argv[1]+'/dist/sim');const g=Dex.forGen(3);"
+                  "console.log(JSON.stringify(g.moves.all().filter(m=>m.flags&&m.flags.recharge&&!m.isNonstandard).map(m=>m.id)))")
+        out = subprocess.run([shutil.which('node'), '-e', script, str(showdown_root())], check=True, capture_output=True, text=True, timeout=60)
+        self.assertEqual(frozenset(json.loads(out.stdout)), live.RECHARGE_MOVES)
 
 
 class RequestKindTests(unittest.TestCase):

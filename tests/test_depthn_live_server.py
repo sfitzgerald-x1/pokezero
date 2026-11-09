@@ -203,7 +203,8 @@ class ServerTests(unittest.TestCase):
             rows=await asyncio.gather(asyncio.to_thread(blocking_request,port,dict(L.request('s',0),**{live.ARRIVAL:0.})),   # forged: would be expired
                 asyncio.to_thread(blocking_request,port,L.request('t',0,budget=.5)))   # under min_price_seconds: expired
             server.stop();await asyncio.wait_for(task,30);return rows
-        with L.Codex(outcomes):rows=asyncio.run(scenario())
+        # The fake engine's carries are kept as built (LiveSearchTests.setUp's rule; this fixture instance never runs its setUp).
+        with L.Codex(outcomes),patch.object(L.cw,'world_completer',return_value=lambda world,owner,**kw:world):rows=asyncio.run(scenario())
         self.assertEqual([(r['request_id'],r['status'],r['cause'])for r in rows],[('s:0','COMPLETE',None),('t:0','REFUSED','expired_in_queue')])
         self.assertTrue(0<=rows[0]['timings']['queue_seconds']<1);self.assertGreater(rows[0]['server_wall_seconds'],0)
         self.assertEqual(set(rows[0])-{'server_wall_seconds'},L.KEYS)
