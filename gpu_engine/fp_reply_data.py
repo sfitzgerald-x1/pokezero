@@ -232,7 +232,27 @@ def opponent_head_logits(model, observation, torch):
     return [float(x) for x in output.opponent_action_logits[0]]
 
 
-def replay(env, policy, game, rng, extras=None):
+VIEW_KINDS = ('b', 'k')   # b: the seat-filtered builder view; k: the same keeping the opponent's [silent] ability lines
+
+
+def builder_views(env, player, request, seed, views):
+    """{kind: observation} of `player`'s view rebuilt from what it received (gpu_engine.g3rb_views.seat_lines on the env's lines) and
+    its true request by pokezero.policy_opponent_view.build_policy_opponent_view: 'b' drops the lines the other side never gets
+    (the opponent's [silent] ability lines, its Struggle activation, -hint) and shows the opponent's HP and damage at the public
+    percent; 'k' keeps the opponent's [silent] ability lines. views: dict(source, spec, masks, vocab, dex)."""
+    from gpu_engine import g3rb_views as gv
+    from pokezero.policy_opponent_view import build_policy_opponent_view
+    lines = [l for l in env.protocol_lines if l.startswith('|') and not l.startswith('|request|')]
+    out = {}
+    for kind in VIEW_KINDS:
+        view = build_policy_opponent_view(public_lines=gv.seat_lines(lines, player, keep_silent_ability=kind == 'k'),
+            hp_visibility={'p1': 'exact', 'p2': 'exact'}, sampled_self_request=request, opponent_slot=player, battle_id='fp-view',
+            battle_seed=int(seed), format_id=gv.FORMAT, set_source=views['source'], spec=views['spec'], feature_masks=views['masks'])
+        out[kind] = view.observation(category_vocab=views['vocab'], dex=views['dex'])
+    return out
+
+
+def replay(env, policy, game, rng, extras=None, views=None):
     """Replay one game; returns (Foul Play rows, our-seat parity hits, our-seat decisions). Raises Mismatch on any check.
     extras (dict(dex, model, torch)) adds per Foul Play row: its action classes and label class, both actives' HP fractions, and
     9375's opponent_action_head logits from our seat's view in the same round (NaN when our seat isn't requested)."""
@@ -265,6 +285,9 @@ def replay(env, policy, game, rng, extras=None):
                     classes = action_classes(request, observation.legal_action_mask, extras['dex'])
                     fp_row.update(candidate_class=classes, label_class=classes[action], own_hp=hp_fraction(request),
                                   opp_hp=hp_fraction(env._latest_requests.get(game['ours']) or {}))
+                if views is not None:   # --views: the builder's views of the same decision (fp_reply_train --view)
+                    try:fp_row['views'] = builder_views(env, player, request, game['seed'], views)
+                    except ValueError as error:raise Mismatch(f'builder view, round {round_}: {type(error).__name__}: {error}')
                 rows.append(fp_row)
                 actions[player] = action
             else:
@@ -306,7 +329,7 @@ def build(args):
     if args.extras:
         from pokezero.dex import load_showdown_dex_cached
         extras = dict(model=model, torch=torch, dex=None)
-    env = None;config_key = None;rng = random.Random(0)
+    env = None;config_key = None;rng = random.Random(0);views = None
     counts = collections.Counter();mismatches = collections.Counter();examples = {}
     columns = collections.defaultdict(list);parity_hits = 0;parity_total = 0;started = time.time()
     seats = collections.Counter();consecutive_errors = 0;hazard_gap = 0.
@@ -324,7 +347,13 @@ def build(args):
                 category_vocab=category_vocab_from_model_config(result.model_config, base['showdown_root']),
                 feature_masks=feature_masks_from_model_config(result.model_config),
                 set_belief_source=bool(base['belief_set_source'])))
-        try:rows, parity, decided = replay(env, policy, game, rng, extras)
+        if args.views and views is None:   # the builder views' inputs: the same spec, masks and vocabulary as env.observe
+            from pokezero.dex import load_showdown_dex_cached
+            from pokezero.randbat import load_gen3_randbat_source_cached
+            views = dict(source=load_gen3_randbat_source_cached(base['showdown_root']), dex=load_showdown_dex_cached(base['showdown_root']),
+                         spec=observation_spec_from_model_config(result.model_config), masks=feature_masks_from_model_config(result.model_config),
+                         vocab=category_vocab_from_model_config(result.model_config, base['showdown_root']))
+        try:rows, parity, decided = replay(env, policy, game, rng, extras, views)
         except Mismatch as error:
             reason = re.sub(r"'[^']*'|\"[^\"]*\"|\d+", '#', str(error));consecutive_errors = 0
             mismatches[reason] += 1;examples.setdefault(reason, dict(ordinal=game['ordinal'], detail=str(error)));continue
@@ -343,6 +372,14 @@ def build(args):
             columns['token_type_ids'].append(np.asarray(observation.token_type_ids, np.int16))
             columns['attention_mask'].append(np.asarray(observation.attention_mask, bool))
             columns['legal'].append(np.asarray(observation.legal_action_mask, bool))
+            for kind, other in (row.get('views') or {}).items():   # the builder views; their masks must be env.observe's
+                columns[f'numeric_features_{kind}'].append(np.asarray(other.numeric_features, np.float32))
+                columns[f'categorical_ids_{kind}'].append(np.asarray(other.categorical_ids, np.int32))
+                for name in ('token_type_ids', 'attention_mask', 'legal_action_mask'):
+                    counts[f'view_{kind}_{name}_differs'] += not np.array_equal(np.asarray(getattr(other, name)), np.asarray(getattr(observation, name)))
+                counts[f'view_{kind}_categorical_differs'] += not np.array_equal(np.asarray(other.categorical_ids), np.asarray(observation.categorical_ids))
+                counts[f'view_{kind}_numeric_differs'] += not np.array_equal(np.asarray(other.numeric_features), np.asarray(observation.numeric_features))
+                counts[f'view_{kind}_rows'] += 1
             columns['probs'].append(np.asarray(row['probs'], np.float32))
             columns['value'].append(np.float32(row['value'] if row['value'] is not None else np.nan))
             for key_ in ('label', 'round', 'turn', 'forced'):columns[key_].append(row[key_])
@@ -361,7 +398,7 @@ def build(args):
                                   mismatched=sum(mismatches.values()), seconds=round(time.time() - started, 1))), flush=True)
     if env is not None:env.close()
     arrays = {k: np.stack(v) if k in ('categorical_ids', 'numeric_features', 'token_type_ids', 'attention_mask', 'legal', 'probs',
-                                      'candidate_class', 'opp_head_logits')
+                                      'candidate_class', 'opp_head_logits') or k.startswith(('numeric_features_', 'categorical_ids_'))
               else np.asarray(v) for k, v in columns.items()}
     np.savez(out / f'shard-{args.shard}.npz', **arrays)
     summary = dict(schema='v2s-fp-reply-data.v1', collection=str(collection), checkpoint=str(args.checkpoint), checkpoint_sha256=sha,
@@ -433,6 +470,8 @@ def main(argv=None):
     parser.add_argument('--checkpoint');parser.add_argument('--shard', type=int, default=0);parser.add_argument('--shards', type=int, default=1)
     parser.add_argument('--limit', type=int, default=0)
     parser.add_argument('--extras', action='store_true', help="also record action classes, HP and our view's opponent-head logits")
+    parser.add_argument('--views', action='store_true', help="also record the builder's views of each Foul Play decision (VIEW_KINDS: "
+                        "numeric_features_<k> / categorical_ids_<k>; fp_reply_train --view)")
     parser.add_argument('--report', metavar='OUT_DIR');parser.add_argument('--split', choices=('all', 'test', 'val', 'train'), default='all')
     args = parser.parse_args(argv)
     if args.report:report(args.report, args.split);return 0

@@ -593,5 +593,25 @@ class RecalibrationTests(unittest.TestCase):
         self.assertLess(t.nll(probs[1::2], labels[1::2]), t.nll(sharp[1::2], labels[1::2]))
 
 
+class ViewsAndSplitTests(unittest.TestCase):
+    def test_split_rows_fixed_test_late_block_validation_and_train(self):
+        seed = np.array([10, 10, 21, 33, 40, 51, 62, 70]);ordinal = np.array([1, 1, 2, 3, 4, 5, 6, 7])
+        rows = t.split_rows(dict(seed=seed, ordinal=ordinal), test_seeds=[10, 70], late_from=5)
+        self.assertEqual({k: v.tolist() for k, v in rows.items()}, dict(train=[3, 4], val=[2], test=[0, 1, 7], late=[5, 6]))
+        default = t.split_rows(dict(seed=seed, ordinal=ordinal))
+        self.assertEqual(default['test'].tolist(), [0, 1, 4, 7]);self.assertNotIn('late', default)
+
+    def test_use_view_swaps_the_inputs_and_needs_them(self):
+        arrays = dict(numeric_features=np.zeros(2), categorical_ids=np.zeros(2), numeric_features_b=np.ones(2), categorical_ids_b=np.ones(2))
+        t.use_view(arrays, 'b');self.assertEqual((arrays['numeric_features'].tolist(), arrays['categorical_ids'].tolist()), ([1., 1.], [1., 1.]))
+        with self.assertRaises(SystemExit):t.use_view(arrays, 'k')
+        self.assertIs(t.use_view(arrays, 'env'), arrays)
+
+    def test_the_k_view_keeps_only_the_opponents_silent_ability_lines(self):
+        from gpu_engine import g3rb_views as gv
+        lines = ['|-ability|p2a: Snorlax|Pressure|[silent]', '|-activate|p2a: Snorlax|move: Struggle', '|-hint|x']
+        self.assertEqual(gv.seat_lines(lines, 'p1'), []);self.assertEqual(gv.seat_lines(lines, 'p1', keep_silent_ability=True), lines[:1])
+
+
 if __name__ == '__main__':
     unittest.main()

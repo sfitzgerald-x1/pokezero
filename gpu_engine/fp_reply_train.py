@@ -34,6 +34,32 @@ from gpu_engine import fp_reply_data as data_mod
 OBS_KEYS = ('categorical_ids', 'numeric_features', 'token_type_ids', 'attention_mask')
 
 
+VIEWS = ('env', 'b', 'k')   # env.observe's view, or fp_reply_data --views' builder views (b; k keeps the opponent's [silent] abilities)
+
+
+def use_view(arrays, view):
+    """In place: the inputs of `view` (numeric_features_<view> / categorical_ids_<view>) become the model's inputs."""
+    if view == 'env':return arrays
+    for key in ('numeric_features', 'categorical_ids'):
+        if f'{key}_{view}' not in arrays:raise SystemExit(f'view {view!r} needs {key}_{view}: build the data with fp_reply_data --views')
+        arrays[key] = arrays[f'{key}_{view}']
+    return arrays
+
+
+def split_rows(arrays, test_seeds=None, late_from=None):
+    """{train, val, test[, late]: row indices}. Default: battle seed % 10 (fp_reply_data.split_of). With test_seeds: test is those
+    games' rows (a fixed set, e.g. an earlier run's), late (with late_from) every game of ordinal >= late_from outside them, val the
+    other seed % 10 == 1 games, train the rest."""
+    if test_seeds is None:
+        split = data_mod.split_of(arrays['seed']);return {name: np.flatnonzero(split == name) for name in ('train', 'val', 'test')}
+    test = np.isin(arrays['seed'], np.asarray(sorted(test_seeds)))
+    late = (arrays['ordinal'] >= late_from) & ~test if late_from is not None else np.zeros(len(test), bool)
+    val = (arrays['seed'] % 10 == 1) & ~test & ~late
+    out = dict(train=np.flatnonzero(~test & ~late & ~val), val=np.flatnonzero(val), test=np.flatnonzero(test))
+    if late_from is not None:out['late'] = np.flatnonzero(late)
+    return out
+
+
 def load(data_dir):
     shards = sorted(glob.glob(str(Path(data_dir) / 'shard-*.npz')), key=lambda p: int(Path(p).stem.split('-')[1]))
     parts = [dict(np.load(p)) for p in shards]
@@ -316,6 +342,9 @@ def main(argv=None):
     parser.add_argument('--window', type=int, default=None, help='train at this window (the base is widened; see widen)')
     parser.add_argument('--compare-to', metavar='RUN_DIR', help="another run's test-probs.npz to report beside this π_FP (same test rows)")
     parser.add_argument('--redact', choices=REDACTIONS, help="train/evaluate on Foul Play's view redacted as the constructor's peer view")
+    parser.add_argument('--view', choices=VIEWS, default='env', help="the inputs: env.observe's (default) or fp_reply_data --views' builder views")
+    parser.add_argument('--test-seeds', metavar='JSON', help='a fixed test set: a JSON list of battle seeds (e.g. an earlier run\'s test games)')
+    parser.add_argument('--late-from', type=int, metavar='ORDINAL', help='with --test-seeds: every game of ordinal >= this is a second held-out set')
     args = parser.parse_args(argv)
     if args.evaluate and (args.window or args.compare_to):parser.error('--window and --compare-to apply to training, not --evaluate')
     if args.export_archive and not args.evaluate:parser.error('--export-archive needs --evaluate')
@@ -334,8 +363,11 @@ def main(argv=None):
     model, result = load_transformer_checkpoint(args.evaluate or base_path, map_location=args.device)
     window = int(result.model_config.window_size)
     index = windows(arrays['ordinal'], window)
-    split = data_mod.split_of(arrays['seed'])
-    rows = {name: np.flatnonzero(split == name) for name in ('train', 'val', 'test')}
+    test_seeds = None if not args.test_seeds else json.loads(Path(args.test_seeds).read_text())
+    rows = split_rows(arrays, test_seeds, args.late_from)
+    rule = ('battle seed % 10: 0 test, 1 validation, else train' if test_seeds is None else
+            f'test: {len(test_seeds)} fixed battle seeds ({args.test_seeds}); late: ordinal >= {args.late_from} outside them; '
+            'validation: the other battle seed % 10 == 1; train: the rest')
     games = {name: int(len(np.unique(arrays['ordinal'][r]))) for name, r in rows.items()}
     seats = seats_by_split(arrays, rows)
     print(json.dumps(dict(event='DATA', rows={k: int(len(v)) for k, v in rows.items()}, games=games, seats=seats, window=window)), flush=True)
@@ -350,7 +382,9 @@ def main(argv=None):
         checkpoint_redaction = (torch.load(args.evaluate, map_location='cpu', weights_only=True).get('fp_reply') or {}).get('redaction')
         if checkpoint_redaction is not None and checkpoint_redaction != args.redact:
             raise SystemExit(f'{args.evaluate} was trained on redaction {checkpoint_redaction!r}; pass --redact {checkpoint_redaction}')
-        apply_redaction(arrays, args.redact)
+        checkpoint_view = (torch.load(args.evaluate, map_location='cpu', weights_only=True).get('fp_reply') or {}).get('view', 'env')
+        if checkpoint_view != args.view:raise SystemExit(f'{args.evaluate} was trained on view {checkpoint_view!r}; pass --view {checkpoint_view}')
+        use_view(arrays, args.view);apply_redaction(arrays, args.redact)
     calibration, calibrated = recalibrate(arrays['probs'][rows['train']], labels[rows['train']], arrays['legal'][rows['train']], torch)
     if args.evaluate:
         test = rows['test'];probs = predict(model, arrays, index, test, torch, args.device)
@@ -358,8 +392,9 @@ def main(argv=None):
                       base_checkpoint=str(args.checkpoint),
                       base_checkpoint_sha256=checkpoint_file_sha256(args.checkpoint), pi_fp=str(args.evaluate),
                       pi_fp_sha256=checkpoint_file_sha256(args.evaluate), window=window, rows={k: int(len(v)) for k, v in rows.items()},
-                      games=games, seats=seats, split_rule='battle seed % 10: 0 test, 1 validation, else train', recalibration=calibration,
-                      ece_bins=data_mod.ECE_BINS, test=test_report(arrays, test, probs, calibrated))
+                      games=games, seats=seats, split_rule=rule, recalibration=calibration,
+                      ece_bins=data_mod.ECE_BINS, test=test_report(arrays, test, probs, calibrated), view=args.view)
+        if 'late' in rows:report['late'] = test_report(arrays, rows['late'], predict(model, arrays, index, rows['late'], torch, args.device), calibrated)
         (out / 'report-eval.json').write_text(json.dumps(report, indent=1) + '\n')
         if args.export_archive:
             if window != 1:raise SystemExit('champion_evaluator archives need window 1')
@@ -373,6 +408,7 @@ def main(argv=None):
     input_parity = float(np.abs(base_val - arrays['probs'][rows['val']]).max()) if len(rows['val']) else 0.
     print(json.dumps(dict(event='INPUT_PARITY', max_abs_probability_difference=input_parity, tolerance=INPUT_TOLERANCE)), flush=True)
     if not input_parity <= INPUT_TOLERANCE:raise SystemExit(f'base model through windows/batch differs from the stored π by {input_parity}')
+    use_view(arrays, args.view)   # after the parity check, which holds the env view against the stored π
     if args.redact:
         before = arrays['numeric_features'].copy();apply_redaction(arrays, args.redact)
         changed = (before != arrays['numeric_features']).any(-1);del before
@@ -407,16 +443,17 @@ def main(argv=None):
     if isinstance(payload.get('model_config'), dict) and 'policy_id' in payload['model_config']:
         payload['model_config'] = dict(payload['model_config'], policy_id=f"fp-reply-{payload['model_config']['policy_id']}")
     payload['fp_reply'] = dict(policy_only=True, base_checkpoint_sha256=base_sha, best_epoch=best['epoch'], data=str(args.data), window=window,
-                               redaction=args.redact,
+                               redaction=args.redact, view=args.view,
                                note='policy fine-tuned on Foul Play decisions; the value output is not trained and must not be used')
     torch.save(payload, out / 'pi-fp.pt')
     cost = step_cost(model, arrays, index, test, torch, args.device)
     report = dict(schema='v2s-fp-reply-model.v1', data=str(args.data), checkpoint=str(args.checkpoint),
                   checkpoint_sha256=checkpoint_file_sha256(args.checkpoint), window=window, rows={k: int(len(v)) for k, v in rows.items()},
-                  games=games, seats=seats, input_parity=input_parity, redaction=redaction, split_rule='battle seed % 10: 0 test, 1 validation, else train',
+                  games=games, seats=seats, input_parity=input_parity, redaction=redaction, split_rule=rule,
                   args=vars(args), history=history,
                   best_epoch=best['epoch'], recalibration=calibration, ece_bins=data_mod.ECE_BINS,
-                  test=test_report(arrays, test, test_probs, calibrated, compare), compare_to=args.compare_to, inference_cost=cost,
+                  test=test_report(arrays, test, test_probs, calibrated, compare), compare_to=args.compare_to, inference_cost=cost, view=args.view,
+                  late=None if 'late' not in rows else test_report(arrays, rows['late'], predict(model, arrays, index, rows['late'], torch, args.device), calibrated),
                   seconds=round(time.time() - started, 1))
     report['saved'] = dict(path=str(out / 'pi-fp.pt'), sha256=checkpoint_file_sha256(out / 'pi-fp.pt'),
                            note='champion checkpoint format; policy fine-tuned on Foul Play decisions; the value head output is not trained')
