@@ -240,7 +240,7 @@ def exercised(before, after, written):
     return hit
 
 
-STATIC_EXCLUDED = ('side',)   # per-side symmetric statics are not part of a signature
+STATIC_EXCLUDED = ('side', 'physical')   # indices the hooks are symmetric in (the seat; party_cure's Python slot) are not part of a signature
 
 
 def _is_static(value):
@@ -378,6 +378,13 @@ def cmd_sites(args):
 # ---------------------------------------------------------------------------
 # Signatures report: sites grouped by (hook, static-argument signature) with the exercised lane-steps of the hook: gates.
 
+def normalize_signature(sig):
+    """A recorded signature string with the STATIC_EXCLUDED parameters removed (reports over older diff.json files)."""
+    import re
+    for name in STATIC_EXCLUDED:sig = re.sub(rf"(?:, )?\b{name}=[^,()]*", '', sig)
+    return sig.replace('(, ', '(')
+
+
 def signatures_report(diffs, sites=None):
     """Group every hook: result's sites by (hook, signature) with exercised lane-step totals. `diffs` are loaded
     diff.json reports (their results carry `signatures`, `exercised_by_site`, `exercised_lane_steps_total`)."""
@@ -386,7 +393,7 @@ def signatures_report(diffs, sites=None):
         for r in report.get('results', []):
             sig_of = r.get('signatures') or {};by_site = r.get('exercised_by_site') or {}
             for key, n in by_site.items():
-                sig = sig_of.get(key, key.split('@')[0] + '(?)');hook = key.split('@')[0]
+                sig = normalize_signature(sig_of.get(key, key.split('@')[0] + '(?)'));hook = key.split('@')[0]
                 g = groups.setdefault(sig, dict(hook=hook, signature=sig, sites=[], exercised=0, lane_steps=r.get('exercised_lane_steps_total', r.get('lane_steps'))))
                 g['sites'].append(dict(site=key, exercised=int(n)));g['exercised'] += int(n)
                 lane_steps[hook] = r.get('exercised_lane_steps_total', r.get('lane_steps'))

@@ -177,6 +177,8 @@ class OutputsTest(unittest.TestCase):
         self.assertEqual(report['signatures'], 3);self.assertEqual(report['signatures_never_exercised'], ['x(a=2)'])
         self.assertEqual((report['sites'], report['sites_never_exercised'], report['sites_under_100']), (4, 2, 2))
         self.assertIn('`x(a=2)`', taps.signatures_markdown(report))
+        self.assertEqual(taps.normalize_signature("feature(add=False, name='x', physical=3)"), "feature(add=False, name='x')")
+        self.assertEqual(taps.normalize_signature('_refresh(physical=0)'), '_refresh()');self.assertEqual(taps.normalize_signature('hp_line(side=1, source_class=2)'), 'hp_line(source_class=2)')
 
 
 class SelfTestTest(unittest.TestCase):
