@@ -172,11 +172,19 @@ class OutputsTest(unittest.TestCase):
 
     def test_signatures_report(self):
         diffs = [dict(results=[dict(module='hook:x@all', lane_steps=10, exercised_lane_steps_total=10,
-            exercised_by_site={'x@m:1#0': 5, 'x@m:1#1': 0, 'x@m:2': 0, 'y@m:3': 7}, signatures={'x@m:1#0': 'x(a=1)', 'x@m:1#1': 'x(a=1)', 'x@m:2': 'x(a=2)', 'y@m:3': 'y()'})])]
+            exercised_by_site={'x@m:1#0': 5, 'x@m:1#1': 0, 'x@m:2': 0, 'y@m:3': 7}, signatures={'x@m:1#0': 'x(a=1)', 'x@m:1#1': 'x(a=1)', 'x@m:2': 'x(a=2)', 'y@m:3': 'y()'},
+            sides={'x@m:1#0': 0, 'x@m:1#1': 1, 'x@m:2': 0, 'y@m:3': None})])]
         report = taps.signatures_report(diffs)
         self.assertEqual(report['signatures'], 3);self.assertEqual(report['signatures_never_exercised'], ['x(a=2)'])
         self.assertEqual((report['sites'], report['sites_never_exercised'], report['sites_under_100']), (4, 2, 2))
-        self.assertIn('`x(a=2)`', taps.signatures_markdown(report))
+        self.assertEqual(report['signature_sides'], 4);self.assertEqual(report['side_source'], 'diff.json')
+        self.assertEqual([(g['signature'], g['side']) for g in report['signature_sides_never_exercised']], [('x(a=1)', 1), ('x(a=2)', 0)], 'x(a=1) is exercised on seat 0 only')
+        md = taps.signatures_markdown(report);self.assertIn('`x(a=2)`', md);self.assertIn('`x(a=1)` side 1 (1 sites)', md)
+        # older diff.json files without `sides`: the side comes from hook_sites.json key_statics
+        for r in diffs[0]['results']:del r['sides']
+        sites = dict(sites={'x': {'m:1': dict(key_statics={'x@m:1#0': {'a': 1, 'side': 0}, 'x@m:1#1': {'a': 1, 'side': 1}}), 'm:2': dict(key_statics={'x@m:2': {'a': 2, 'side': 0}})}})
+        report = taps.signatures_report(diffs, sites)
+        self.assertEqual(report['side_source'], 'hook_sites.json');self.assertEqual([(g['signature'], g['side']) for g in report['signature_sides_never_exercised']], [('x(a=1)', 1), ('x(a=2)', 0), ('y()', None)])
         self.assertEqual(taps.normalize_signature("feature(add=False, name='x', physical=3)"), "feature(add=False, name='x')")
         self.assertEqual(taps.normalize_signature('_refresh(physical=0)'), '_refresh()');self.assertEqual(taps.normalize_signature('hp_line(side=1, source_class=2)'), 'hp_line(source_class=2)')
 
@@ -190,7 +198,12 @@ class SelfTestTest(unittest.TestCase):
             self.assertIs(v2e_hooks.resolve('observe'), marker)
             self.assertTrue(v2e_hooks.implementation('observe')['registered'])
             with self.assertRaises(KeyError):v2e_hooks.resolve('hp_line')   # no fallback for the others
-            with self.assertRaises(ValueError):v2e_hooks.selftest('oracle')   # refused while anything is registered
+            previous = v2e_hooks.selftest('oracle', source='test')
+            try:   # self-test mode stands in for every hook, registered or not, and the record says so
+                info = v2e_hooks.implementation('observe')
+                self.assertEqual((info['selftest'], info['selftest_source'], info['registered']), ('oracle', 'test', True))
+                self.assertIn('selftest_oracle:observe', info['implementation']);self.assertIsNot(v2e_hooks.resolve('observe'), marker)
+            finally:v2e_hooks.selftest(previous)
         finally:del v2e_hooks.CUDA_HOOKS['observe']
         with self.assertRaises(ValueError):v2e_hooks.selftest('bogus')
         previous = v2e_hooks.selftest('oracle-as-cuda', source='test')
@@ -198,11 +211,6 @@ class SelfTestTest(unittest.TestCase):
             self.assertEqual(v2e_hooks.selftest_mode(), 'oracle')
             info = v2e_hooks.implementation('observe')
             self.assertEqual((info['selftest'], info['selftest_source'], info['registered']), ('oracle', 'test', False))
-            self.assertIn('selftest_oracle:observe', info['implementation'])
-            v2e_hooks.CUDA_HOOKS['observe'] = lambda *a, **k: None
-            try:
-                with self.assertRaises(ValueError):v2e_hooks.resolve('observe')   # a registration under an active self-test is refused too
-            finally:del v2e_hooks.CUDA_HOOKS['observe']
         finally:v2e_hooks.selftest(previous)
         self.assertIsNone(v2e_hooks.selftest_mode())
 

@@ -1058,10 +1058,16 @@ def cmd_probe(args):
     out_c, got_c, fill_c, kept_c, dbg_c, err_c = call(t, u, dims, x, idx, v, want_digest ^ 1)
     report['digest_refusal'] = dict(passed_digest=f'{want_digest ^ 1:016x}', compiled_digest=f'{want_digest:016x}', error_word=int(err_c[0]),
         expected_error_word=STALE_LAYOUT, refused=int(err_c[0]) == STALE_LAYOUT, operand_untouched=_bits_equal(out_c, x))
+    # A digest with bit 63 set travels as a negative int64 attribute: refused as well (and accepted when it is the compiled one).
+    high = (want_digest ^ 1) | (1 << 63)
+    out_h, got_h, fill_h, kept_h, dbg_h, err_h = call(t, u, dims, x, idx, v, high)
+    report['digest_refusal_negative_int64'] = dict(passed_digest=f'{high:016x}', attribute=int(digest_attr(high)), error_word=int(err_h[0]),
+        refused=int(err_h[0]) == STALE_LAYOUT, operand_untouched=_bits_equal(out_h, x))
     report['digests'] = {k: dict(digest64=f'{a:016x}', sha256=b) for k, (a, b) in digests(description, spec).items()}
     report['digests']['kLayoutDigest'] = dict(digest64=f'{want_digest:016x}', sha256=layout_digest(description, spec)[1])
     report['filled_total'] = sum(r['filled'] for r in report['cases'])
-    report['equal'] = all_equal and report['digest_refusal']['refused'] and report['digest_refusal']['operand_untouched'] and report['header_compile']['returncode'] == 0
+    report['equal'] = (all_equal and report['digest_refusal']['refused'] and report['digest_refusal']['operand_untouched'] and report['header_compile']['returncode'] == 0
+        and report['digest_refusal_negative_int64']['refused'] and report['digest_refusal_negative_int64']['operand_untouched'])
     report['jax'] = jax.__version__
     Path(args.out).mkdir(parents=True, exist_ok=True);(Path(args.out) / 'probe.json').write_text(json.dumps(report, indent=1) + '\n')
     print(f"probe: {len(cases)} cases, equal={report['equal']}, header_compile={report['header_compile']['returncode']}, "

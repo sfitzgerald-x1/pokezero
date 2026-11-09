@@ -296,7 +296,7 @@ def diff_hook(argument, ctx):
             raise ValueError(f'hook:{argument}: no call of {names} at {site!r} on the device path; sites reached: {reached}')
         keys = [c.key for c in chosen]
         if sites and sites['keys'] != keys:raise RuntimeError('hook call sites differ between the two traces')
-        sites.update(keys=keys, signatures={c.key: signature(c) for c in chosen}, step_lines={c.key: c.step_line for c in chosen})
+        sites.update(keys=keys, signatures={c.key: signature(c) for c in chosen}, step_lines={c.key: c.step_line for c in chosen}, sides={c.key: statics(c).get('side') for c in chosen})
         info.update(sites=keys)
         hits = j.stack([j.sum(exercised(c.before, c.after, written_paths(c.before, c.after)).astype(j.int32)) for c in chosen])
         return chosen, hits
@@ -318,7 +318,7 @@ def diff_hook(argument, ctx):
     def summary():
         by_site = totals['by_site']
         return dict(exercised_lane_steps_total=totals['lane_steps'], exercised_by_site=by_site,
-            sites_never_exercised=sorted(k for k, n in by_site.items() if n == 0), signatures=sites.get('signatures'), step_lines=sites.get('step_lines'))
+            sites_never_exercised=sorted(k for k, n in by_site.items() if n == 0), signatures=sites.get('signatures'), step_lines=sites.get('step_lines'), sides=sites.get('sides'))
     jax_fn.info = cuda_fn.info = info;jax_fn.accumulate = accumulate;jax_fn.summary = summary
     return jax_fn, cuda_fn
 
@@ -340,8 +340,8 @@ def trace_sites(ctx, names):
     sites = {}
     for name, site, key, context_first, written, sig, step_line, static in record['calls']:
         row = sites.setdefault(name, {})
-        entry = row.setdefault(site, dict(calls=0, context_first=context_first, written=set(), signatures=set(), keys=[], step_lines=set(), statics=[]))
-        entry['calls'] += 1;entry['signatures'].add(sig);entry['keys'].append(key);entry['step_lines'].add(step_line)
+        entry = row.setdefault(site, dict(calls=0, context_first=context_first, written=set(), signatures=set(), keys=[], step_lines=set(), statics=[], key_statics={}))
+        entry['calls'] += 1;entry['signatures'].add(sig);entry['keys'].append(key);entry['step_lines'].add(step_line);entry['key_statics'][key] = static
         if static not in entry['statics']:entry['statics'].append(static)
         if written is not None:entry['written'].update(written)
     for row in sites.values():
@@ -386,40 +386,55 @@ def normalize_signature(sig):
 
 
 def signatures_report(diffs, sites=None):
-    """Group every hook: result's sites by (hook, signature) with exercised lane-step totals. `diffs` are loaded
-    diff.json reports (their results carry `signatures`, `exercised_by_site`, `exercised_lane_steps_total`)."""
-    groups = {};lane_steps = {}
+    """Group every hook: result's sites by (hook, signature) and by (signature, side) with exercised lane-step totals.
+    `diffs` are loaded diff.json reports (their results carry `signatures`, `exercised_by_site`, `sides`); `sites` is an
+    optional hook_sites.json whose per-key statics supply the side for older diff.json files without `sides`."""
+    side_of_key = {}
+    for row in (sites or {}).get('sites', {}).values():
+        for entry in row.values():
+            for key, static in entry.get('key_statics', {}).items():side_of_key[key] = static.get('side')
+    groups = {};per_side = {}
     for report in diffs:
         for r in report.get('results', []):
-            sig_of = r.get('signatures') or {};by_site = r.get('exercised_by_site') or {}
+            sig_of = r.get('signatures') or {};by_site = r.get('exercised_by_site') or {};sides = r.get('sides') or {}
             for key, n in by_site.items():
                 sig = normalize_signature(sig_of.get(key, key.split('@')[0] + '(?)'));hook = key.split('@')[0]
+                side = sides.get(key, side_of_key.get(key));side = 'array' if side is None and key in sides else side
                 g = groups.setdefault(sig, dict(hook=hook, signature=sig, sites=[], exercised=0, lane_steps=r.get('exercised_lane_steps_total', r.get('lane_steps'))))
-                g['sites'].append(dict(site=key, exercised=int(n)));g['exercised'] += int(n)
-                lane_steps[hook] = r.get('exercised_lane_steps_total', r.get('lane_steps'))
+                g['sites'].append(dict(site=key, exercised=int(n), side=side));g['exercised'] += int(n)
+                ps = per_side.setdefault((sig, str(side)), dict(hook=hook, signature=sig, side=side, sites=0, exercised=0))
+                ps['sites'] += 1;ps['exercised'] += int(n)
     for g in groups.values():g['sites'].sort(key=lambda s: (-s['exercised'], s['site']));g['sites_never_exercised'] = sum(1 for s in g['sites'] if s['exercised'] == 0)
     rows = sorted(groups.values(), key=lambda g: (g['hook'], -g['exercised'], g['signature']))
+    side_rows = sorted(per_side.values(), key=lambda g: (g['hook'], g['signature'], str(g['side'])))
     never = [g['signature'] for g in rows if g['exercised'] == 0]
+    never_side = [dict(signature=g['signature'], side=g['side'], sites=g['sites']) for g in side_rows if g['exercised'] == 0]
     sites_total = sum(len(g['sites']) for g in rows);sites_never = sum(g['sites_never_exercised'] for g in rows)
-    return dict(schema='pokezero.v2e-hook-signatures.v1', hooks=sorted({g['hook'] for g in rows}), signatures=len(rows), signatures_never_exercised=never,
-        sites=sites_total, sites_never_exercised=sites_never, sites_under_100=sum(1 for g in rows for s in g['sites'] if 0 < s['exercised'] < 100), groups=rows)
+    return dict(schema='pokezero.v2e-hook-signatures.v2', hooks=sorted({g['hook'] for g in rows}), signatures=len(rows), signatures_never_exercised=never,
+        signature_sides=len(side_rows), signature_sides_never_exercised=never_side, side_source='diff.json' if any(r.get('sides') for d in diffs for r in d.get('results', [])) else ('hook_sites.json' if side_of_key else 'none'),
+        sites=sites_total, sites_never_exercised=sites_never, sites_under_100=sum(1 for g in rows for s in g['sites'] if 0 < s['exercised'] < 100), groups=rows, per_side=side_rows)
 
 
 def signatures_markdown(report):
     out = [f"# Hook call-site signatures: {report['signatures']} (hook, static-argument) signatures over {len(report['hooks'])} hooks; "
-        f"{report['sites']} sites, {report['sites_never_exercised']} never exercised, {report['sites_under_100']} under 100 lane-steps", '',
-        f"Signatures exercised nowhere ({len(report['signatures_never_exercised'])}; M1's synthetic-lane list):", '']
+        f"{report['sites']} sites, {report['sites_never_exercised']} never exercised, {report['sites_under_100']} under 100 lane-steps; "
+        f"{report['signature_sides']} (signature, side) pairs (side from {report['side_source']})", '',
+        f"Signatures exercised nowhere ({len(report['signatures_never_exercised'])}):", '']
     out += [f'- `{s}`' for s in report['signatures_never_exercised']] or ['- none']
+    out += ['', f"(signature, side) pairs exercised nowhere ({len(report['signature_sides_never_exercised'])}; M1's synthetic-lane list, per seat; side `array` means the seat is a per-lane array at that site, `None` means the hook has no side parameter):", '']
+    out += [f"- `{g['signature']}` side {g['side']} ({g['sites']} sites)" for g in report['signature_sides_never_exercised']] or ['- none']
     out += ['', '| Hook | Signature | Sites | Sites never exercised | Exercised lane-steps | Best site |', '| --- | --- | ---: | ---: | ---: | --- |']
     for g in report['groups']:
         best = g['sites'][0]
         out.append(f"| {g['hook']} | `{g['signature']}` | {len(g['sites'])} | {g['sites_never_exercised']} | {g['exercised']:,} | `{best['site']}` ({best['exercised']:,}) |")
+    out += ['', '| Hook | Signature | Side | Sites | Exercised lane-steps |', '| --- | --- | --- | ---: | ---: |']
+    out += [f"| {g['hook']} | `{g['signature']}` | {g['side']} | {g['sites']} | {g['exercised']:,} |" for g in report['per_side']]
     return '\n'.join(out) + '\n'
 
 
 def cmd_signatures(args):
     diffs = [json.loads(Path(p).read_text()) for p in args.diff]
-    report = signatures_report(diffs)
+    report = signatures_report(diffs, json.loads(Path(args.sites).read_text()) if args.sites else None)
     out = Path(args.out);out.mkdir(parents=True, exist_ok=True)
     (out / 'hook_signatures.json').write_text(json.dumps(report, indent=1) + '\n');(out / 'hook_signatures.md').write_text(signatures_markdown(report))
     print(f"signatures: {report['signatures']} signatures, {len(report['signatures_never_exercised'])} never exercised; {report['sites']} sites, "
@@ -435,6 +450,7 @@ def parser():
     q.set_defaults(fn=cmd_sites)
     q = sub.add_parser('signatures', help='group the hook: gates\' sites by (hook, static-argument signature) with exercised lane-steps')
     q.add_argument('--diff', nargs='+', required=True, help='diff.json files of hook: runs');q.add_argument('--out', required=True)
+    q.add_argument('--sites', help='hook_sites.json: supplies each site\'s side for diff.json files recorded without `sides`')
     q.set_defaults(fn=cmd_signatures)
     return p
 

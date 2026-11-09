@@ -19,7 +19,10 @@ site, teacher-forced (gpu_engine.v2e_hook_taps records it from the oracle's own 
   needs every signature exercised (a lane where the oracle hook changed a leaf) on real or synthetic lanes.
 - `tables` is HookTables(engine, belief, port): the engine tables (transition.MoveTable), observation_tables.belief
   (the Context's belief_tables) and engine_tables.public_port (its port_tables). Pack them once with
-  gpu_engine.v2e_layout.pack_tables for the EngineTables buffer of gpu_engine/cuda/v2e_layout.cuh.
+  gpu_engine.v2e_layout.pack_tables for the EngineTables buffer of gpu_engine/cuda/v2e_layout.cuh. The handler's
+  `layout_digest` attribute is gpu_engine.v2e_layout.digest_attr(live_digests(state, actions, trackers, tables.engine,
+  tables.belief)['kLayoutDigest'][0]), computed from the pytrees in hand, and the handler compares it with the header's
+  kLayoutDigest, returning kStaleLayout in `err` when they differ.
 - `err`, optional, is the handler's error word: uint32 of shape [1] (one word for the call) or [B] (per lane). The
   harness emits it as `<name>@<site>/err` and compares it with zeros, so a stale-layout refusal (v2e_layout.cuh
   kStaleLayout) or a debug clamp/drop count shows as a difference at its site. A hook that returns the carry alone
@@ -28,9 +31,10 @@ Hook names are the function names of engine_device_public_hooks (`observe`, `_wr
 for the callees the hooks reach through a module global (`trackers._observe`, `port.condition`,
 `visible_belief.refresh`, `negative_items.hp_line`, `damage_history._add`, ...); see v2e_hook_taps.TAP_MODULES.
 
-This module holds no CUDA. In normal mode a hook missing from CUDA_HOOKS is a hard error (KeyError). Self-tests of the
-harness itself are selected only by the v2e_diff flag `--hooks-selftest {oracle,negative,negative-untouched}` (or
-selftest(mode) in code), are refused while CUDA_HOOKS is non-empty, and are recorded in diff.json (`provider`):
+This module holds no CUDA. In normal mode a hook missing from CUDA_HOOKS is a hard error (KeyError), never a fallback.
+Self-tests of the harness itself are selected only by the v2e_diff flag `--hooks-selftest {oracle,negative,
+negative-untouched}` (or selftest(mode) in code); in self-test mode every hook resolves to the stand-in, registered or
+not, and diff.json records per hook the implementation that ran, the mode and where it was selected (`provider`):
 - 'oracle': every hook is the JAX oracle hook itself; hook:<name>@all must then show 0 differing lane-steps;
 - 'negative': the oracle hook with one bit of its first written leaf flipped at one lane; it must be detected;
 - 'negative-untouched': one bit of a leaf the hook does not write flipped at one lane; the untouched_equal check must
@@ -62,10 +66,9 @@ _selftest = {'mode': None, 'source': None}
 
 def selftest(mode, source='selftest()'):
     """Select a harness self-test (SELFTESTS; None disables) and record where it was selected. Returns the previous mode.
-    Refused while CUDA_HOOKS holds any registration: a self-test must never stand in for a registered hook."""
+    In self-test mode every hook resolves to the stand-in, registered or not (the result records which ran)."""
     mode = ALIASES.get(mode, mode)
     if mode is not None and mode not in SELFTESTS:raise ValueError(f'unknown self-test {mode!r}; one of {SELFTESTS}')
-    if mode is not None and CUDA_HOOKS:raise ValueError(f'self-test {mode!r} refused: CUDA_HOOKS has registrations {sorted(CUDA_HOOKS)}')
     previous = _selftest['mode'];_selftest.update(mode=mode, source=source if mode is not None else None)
     return previous
 
@@ -76,13 +79,12 @@ def selftest_mode():
 
 
 def resolve(name):
-    """The callable for a hook name: CUDA_HOOKS[name] in normal mode (KeyError when missing: never a fallback), or the
-    active self-test's stand-in (refused when CUDA_HOOKS is non-empty)."""
+    """The callable for a hook name: CUDA_HOOKS[name] in normal mode (KeyError when missing: never a fallback); in
+    self-test mode the stand-in, whether or not the hook is registered."""
     mode = selftest_mode()
     if mode is None:
         if name not in CUDA_HOOKS:raise KeyError(f'no CUDA hook registered for {name!r} (CUDA_HOOKS has {sorted(CUDA_HOOKS)})')
         return CUDA_HOOKS[name]
-    if CUDA_HOOKS:raise ValueError(f'self-test {mode!r} refused: CUDA_HOOKS has registrations {sorted(CUDA_HOOKS)}')
     return selftest_hook(name, mode)
 
 

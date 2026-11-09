@@ -221,6 +221,18 @@ class ListingTest(unittest.TestCase):
         h = LS.prune_function(module2, module2.functions['h'], LS.Facts({'table': {'items'}, 'belief': set()}, {'original': True}))
         self.assertIn('else-branch', h.notes[7]);self.assertIn('else-branch', h.notes[8])
 
+    def test_call_site_facts_need_a_static_at_every_call(self):
+        from gpu_engine import v2e_listing as LS
+        # observe: rest_side is None at most sites but an array (omitted from statics) at transition:1196 -> no fact;
+        # record_damage is a static at every call with one value -> a fact; reveal_item's original is a fact.
+        sites = dict(sites={'observe': {'transition:756': dict(statics=[{'record_damage': True, 'rest_side': None, 'rest_mask': False}]),
+            'transition:1196': dict(statics=[{'record_damage': True}])}, 'reveal_item': {'transition:1872': dict(statics=[{'side': 0, 'original': True}, {'side': 1, 'original': True}])},
+            'wish': {'transition:1499': dict(statics=[{'side': 0, 'start': True, 'resolved': False}]), 'transition:1741': dict(statics=[{'side': 0, 'start': False}])}})
+        facts = LS.call_site_facts(sites)
+        self.assertEqual(facts[('engine_device_public_hooks', 'observe')], {'record_damage': True})
+        self.assertEqual(facts[('engine_device_public_hooks', 'reveal_item')], {'original': True})
+        self.assertNotIn('resolved', facts[('engine_device_public_hooks', 'wish')]);self.assertNotIn('start', facts[('engine_device_public_hooks', 'wish')])
+
     def test_real_step_pruning(self):
         from gpu_engine import v2e_listing as LS
         modules = LS.load_modules();listed = LS.listing(modules, LS.present_attributes())

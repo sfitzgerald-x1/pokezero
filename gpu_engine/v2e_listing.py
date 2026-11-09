@@ -201,15 +201,6 @@ def else_line(module, body_end, orelse_start):
     return None
 
 
-def terminates(statements):
-    """Whether a statement list always leaves the function (ends in return/raise, or an if whose both branches do)."""
-    if not statements:return False
-    last = statements[-1]
-    if isinstance(last, (ast.Return, ast.Raise)):return True
-    if isinstance(last, ast.If):return terminates(last.body) and terminates(last.orelse)
-    return False
-
-
 def annotate(out, facts, node):
     """Note conditional expressions with a statically known test inside a kept statement (which branch is dead)."""
     for sub in ast.walk(node):
@@ -286,11 +277,14 @@ def call_site_facts(sites_report):
     out = {}
     for name, row in sites_report.get('sites', {}).items():
         alias, function = taps.split(name);module = taps.TAP_MODULES[alias].rsplit('.', 1)[-1]
-        values = {}
+        values = {};present = {};records = 0
         for entry in row.values():
-            for statics in entry.get('statics', []):
-                for k, v in statics.items():values.setdefault(k, set()).add(json.dumps(v))
-        facts = {k: json.loads(next(iter(v))) for k, v in values.items() if len(v) == 1}
+            for statics in entry.get('statics', []):   # one record per distinct static set at the site
+                records += 1
+                for k, v in statics.items():values.setdefault(k, set()).add(json.dumps(v));present[k] = present.get(k, 0) + 1
+        # A parameter is a fact only when it is a static with one value in every recorded call: a call where it is
+        # missing passed an array there (statics() omits array arguments), e.g. observe's rest_side at transition:1196.
+        facts = {k: json.loads(next(iter(v))) for k, v in values.items() if len(v) == 1 and present[k] == records}
         if facts:out[(module, function)] = facts
     return out
 
