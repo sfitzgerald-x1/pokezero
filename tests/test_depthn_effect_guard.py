@@ -1,5 +1,6 @@
 """pokezero.depthn_effect_guard on exact Gen 3 protocol lines: the tier-C conditions, (b) at turn 1 and turn 2, (c) per choice."""
 import json
+import math
 import unittest
 
 from pokezero import depthn_effect_guard as G
@@ -205,6 +206,163 @@ class EvaluateTests(unittest.TestCase):
         self.assertTrue({'hyperbeam', 'gigadrain', 'aromatherapy'} <= G.WATCHED and not G.WATCHED & {'surf', 'earthquake'})
         self.assertEqual(sorted(k for k, v in G.GUARDED.items() if v[0] == 'A'), sorted(('hyperbeam', 'destinybond', 'transform', 'yawn', 'wrap',
             'perishsong', 'trick', 'counter', 'mirrorcoat', 'curse', 'superpower', 'knockoff', 'charm', 'lovelykiss', 'bonemerang', 'gigadrain')))
+
+
+# The record of a fixed input as a62fb20b's guard wrote it (before turn-2 mass entries gained guarded / tier / user): every
+# existing field must stay exactly this.
+GOLDEN = json.loads('{"a": true, "a_moves": ["curse", "gigadrain"], "b": true, "b_turn1": true, "b_turn2": true, "c": true, "choice": 1, "conditions": {"opp": {"active": "snorlax", "members": {"snorlax": {"fainted": false, "guts": true, "sleep_source": null, "status": "", "white_herb": false}}, "party_statused": false, "sleep_clause": false}, "own": {"active": "breloom", "members": {"breloom": {"fainted": false, "guts": false, "sleep_source": null, "status": "", "white_herb": false}, "snorlax": {"fainted": false, "guts": false, "sleep_source": null, "status": "", "white_herb": false}}, "party_statused": false, "sleep_clause": false}}, "masses": {"turn1": [{"mass": 0.26666666666666666, "move": "spore", "side": "own", "world": null}, {"mass": 0.20000000000000004, "move": "gigadrain", "side": "own", "world": null}, {"mass": 0.3, "move": "curse", "side": "opp", "world": 0}, {"mass": 0.23333333333333334, "move": "irontail", "side": "opp", "world": 0}, {"mass": 0.02, "move": "curse", "side": "opp", "world": 1}, {"mass": 0.32666666666666666, "move": "irontail", "side": "opp", "world": 1}], "turn2": [{"cell": 10, "mass": 0.5, "move": "spore", "side": "own", "world": 2}, {"cell": 10, "mass": 0.16666666666666669, "move": "gigadrain", "side": "own", "world": 2}, {"cell": 11, "mass": 0.5, "move": "curse", "side": "opp", "world": 3}, {"cell": 11, "mass": 0.16666666666666669, "move": "facade", "side": "opp", "world": 3}, {"cell": 11, "mass": 0.16666666666666669, "move": "irontail", "side": "opp", "world": 3}]}, "own_guarded_lanes": [null, ["A", "other"], null, null], "own_lanes": ["spore", "gigadrain", "leechseed", "substitute"], "reasons": [{"effect_class": "other", "max_mass": 1.0, "move": "gigadrain", "side": "own", "source": "choice", "tier": "A", "worlds": []}, {"effect_class": "self_boost", "max_mass": 0.3, "move": "curse", "side": "opp", "source": "turn1", "tier": "A", "worlds": [0]}, {"effect_class": "other", "max_mass": 0.20000000000000004, "move": "gigadrain", "side": "own", "source": "turn1", "tier": "A", "worlds": []}, {"effect_class": "self_boost", "max_mass": 0.5, "move": "curse", "side": "opp", "source": "turn2", "tier": "A", "worlds": [3]}, {"effect_class": "other", "max_mass": 0.16666666666666669, "move": "gigadrain", "side": "own", "source": "turn2", "tier": "A", "worlds": [2]}, {"effect_class": "status", "max_mass": 0.5, "move": "spore", "side": "own", "source": "turn2", "tier": "C", "worlds": [2]}], "schema": "pokezero.depthn-effect-guard.v1", "threshold": 0.05, "tier_b_legal": true, "tier_b_moves": ["irontail"], "tiers": ["A", "C"], "tripped": true, "turn2_available": true}')
+
+
+def golden_inputs():
+    cond = G.conditions(BASE, 0, request(OURS))
+    own_logits, own_legal = prior(1, .2)
+    peer = [dict(world=w, lanes=['bodyslam', 'curse', 'irontail', 'sleeptalk'], logits=prior(1, m)[0], legal=prior(1, m)[1], requested=True, user='snorlax')
+            for w, m in ((0, .3), (1, .02))]
+    child = lambda members: dict(own_side=G.child_side(cond['own'], [('breloom', 0, True, False)]), opp_side=G.child_side(cond['opp'], members, opponent=True))
+    l2, g2 = prior(0, .5)
+    turn2 = [dict(world=2, cell=10, side='own', lanes=['spore', 'machpunch', 'leechseed', 'gigadrain'], logits=l2, legal=g2, user='breloom', **child([('snorlax', 5, True, False)])),
+             dict(world=3, cell=11, side='opp', lanes=['curse', 'facade', 'rest', 'irontail'], logits=l2, legal=g2, user='snorlax', **child([('snorlax', 0, True, False)]))]
+    return cond, dict(lanes=['spore', 'gigadrain', 'leechseed', 'substitute'], logits=own_logits, legal=own_legal), peer, turn2
+
+
+class GoldenTests(unittest.TestCase):
+    def test_the_new_turn_2_fields_change_nothing_else(self):
+        cond, own, peer, turn2 = golden_inputs()
+        record = json.loads(json.dumps(G.evaluate(cond, own_turn1=own, peer_turn1=peer, turn2=turn2, choice=1)))
+        added = [{k: e.pop(k) for k in ('guarded', 'tier', 'user')} for e in record['masses']['turn2']]
+        self.assertEqual(record, GOLDEN)   # tripped, b, c, reasons, the masses' old keys, conditions: unchanged
+        # spore (Sleep Clause binds: the child's opponent sleeps) and gigadrain (A); curse (A), facade (C, unstatused), irontail (B)
+        self.assertEqual(added, [dict(guarded=True, tier='C', user='breloom'), dict(guarded=True, tier='A', user='breloom'),
+            dict(guarded=True, tier='A', user='snorlax'), dict(guarded=False, tier='C', user='snorlax'), dict(guarded=False, tier='B', user='snorlax')])
+        self.assertTrue(all('guarded' not in e for e in record['masses']['turn1']))
+
+
+def reach_record(entries, *, opp_members=None, own_members=None, available=True):
+    return dict(masses=dict(turn1=[], turn2=entries), turn2_available=available,
+                conditions=dict(own=dict(members=own_members or {}), opp=dict(members=opp_members or {})))
+
+
+def entry(world, a, b, side, move, mass, guarded=None):
+    out = dict(side=side, world=world, move=move, mass=mass, cell=a * 9 + b)
+    if guarded is not None:out.update(guarded=guarded, tier=G.tier_of(move), user='x')
+    return out
+
+
+class ReachTests(unittest.TestCase):
+    """M_s = sum_w p_w sum_(a,b) pi_own(a) pi_peer,w(b) q_(w,ab),s on two worlds: our prior 3/4, 1/4 on lanes 0, 1; world 0's
+    reply prior 1/4, 3/4 on lanes 0, 1; world 1's opponent waits (reply 0 at mass 1); p_w = 1/2."""
+    root_logits = [math.log(3), 0.] + [0.] * 7
+    root_legal = [True, True] + [False] * 7
+    worlds = [dict(requested=True, logits=[0., math.log(3)] + [0.] * 7, kept=[True, True] + [False] * 7),
+              dict(requested=False, logits=[0.] * 9, kept=[False] * 9)]
+
+    def entries(self, flags):
+        g = (lambda x: x) if flags else (lambda x: None)
+        return [entry(0, 0, 1, 'opp', 'destinybond', .4, g(True)),   # tier A
+                entry(0, 1, 0, 'own', 'spore', .2, g(False)),   # tier C, its condition false at that child
+                entry(0, 0, 1, 'own', 'spore', .3, g(True)),   # tier C, true there
+                entry(1, 1, 0, 'opp', 'facade', .5, g(True)),   # the waiting world's cell (a=1, b=0)
+                entry(1, 0, 1, 'opp', 'curse', .9, g(True)),   # a reply the waiting world never has: weight 0
+                entry(0, 0, 0, 'opp', 'irontail', .6, g(False))]   # tier B: never counted
+
+    def reach(self, entries, **kw):
+        return G.reach(reach_record(entries, **kw), self.root_logits, self.root_legal, self.worlds)
+
+    def test_the_exact_path_by_hand(self):
+        r = self.reach(self.entries(True))
+        m_opp = .5 * (.75 * .75 * .4) + .5 * (.25 * 1. * .5);m_own = .5 * (.75 * .75 * .3)
+        self.assertTrue(r['exact']);self.assertAlmostEqual(r['m_opp'], m_opp, places=15);self.assertAlmostEqual(r['m_own'], m_own, places=15)
+        self.assertEqual((r['m_opp_lower'], r['m_own_lower']), (r['m_opp_upper'], r['m_own_upper']))
+        self.assertEqual((r['tripped'], r['tripped_lower'], r['tripped_upper']), (True, True, True))
+        self.assertAlmostEqual(r['tiers']['lower']['opp']['A'], .5 * .75 * .75 * .4, places=15)
+        self.assertAlmostEqual(r['tiers']['lower']['opp']['C'], .5 * .25 * .5, places=15)
+
+    def test_the_bounds_by_hand(self):
+        r = self.reach(self.entries(False))
+        self.assertFalse(r['exact']);self.assertIsNone(r['m_opp'])
+        self.assertAlmostEqual(r['m_opp_lower'], .5 * .75 * .75 * .4, places=15)   # tier A only
+        self.assertAlmostEqual(r['m_opp_upper'], .5 * .75 * .75 * .4 + .5 * .25 * .5, places=15)   # every tier-C mass too
+        self.assertEqual(r['m_own_lower'], 0.)
+        self.assertAlmostEqual(r['m_own_upper'], .5 * (.25 * .25 * .2 + .75 * .75 * .3), places=15)
+        self.assertEqual(r['tripped'], True)   # the lower bound already trips
+
+    def test_an_ambiguous_row_and_a_clear_one(self):
+        straddle = [e for e in self.entries(False) if e['move'] != 'destinybond']   # lower 0, upper above the threshold
+        r = self.reach(straddle)
+        self.assertEqual((r['tripped'], r['tripped_lower'], r['tripped_upper']), (None, False, True))
+        clear = self.reach([entry(0, 0, 1, 'opp', 'spore', .01), entry(1, 1, 0, 'own', 'hyperbeam', .001)])
+        self.assertEqual((clear['tripped'], clear['tripped_lower'], clear['tripped_upper']), (False, False, False))
+
+    def test_cells_and_the_waiting_world(self):
+        # a = our lane (cell // 9), b = the reply (cell % 9): (0, 1) weighs 3/4 x 3/4, (1, 0) weighs 1/4 x 1/4 in world 0
+        one = lambda a, b, w=0: self.reach([entry(w, a, b, 'opp', 'curse', 1.)])['m_opp_lower']
+        self.assertAlmostEqual(one(0, 1), .5 * .75 * .75, places=15);self.assertAlmostEqual(one(1, 0), .5 * .25 * .25, places=15)
+        self.assertAlmostEqual(one(1, 0, 1), .5 * .25, places=15)   # the waiting world: reply 0 at mass 1
+        self.assertEqual(one(1, 1, 1), 0.)   # and no other reply
+
+    def test_psycho_boost_counts_in_the_lower_bound_only_under_a_revealed_white_herb_holder(self):
+        pb = [entry(0, 0, 1, 'opp', 'psychoboost', .2)]
+        none = self.reach(pb)   # no Deoxys form revealed: it may be Deoxys-Speed (no White Herb), so upper only
+        self.assertEqual(none['m_opp_lower'], 0.);self.assertAlmostEqual(none['m_opp_upper'], .5 * .75 * .75 * .2, places=15)
+        held = self.reach(pb, opp_members={'deoxysattack': dict(white_herb=True)})
+        self.assertAlmostEqual(held['m_opp_lower'], .5 * .75 * .75 * .2, places=15)
+        gone = self.reach(pb, opp_members={'deoxysattack': dict(white_herb=False)})
+        self.assertEqual((gone['m_opp_lower'], gone['m_opp_upper'] > 0), (0., True))   # consumed: upper only
+        ours = self.reach([entry(0, 0, 1, 'own', 'psychoboost', .2)], own_members={'deoxys': dict(white_herb=True)})
+        self.assertGreater(ours['m_own_lower'], 0)
+        self.assertEqual(self.reach([entry(0, 0, 1, 'own', 'psychoboost', .2)])['m_own_lower'], 0.)   # ours without a Deoxys: no herb
+
+    def test_a_revealed_deoxys_speed_keeps_lower_at_most_exact(self):
+        """The review's repro: a revealed opponent Deoxys-Speed (Psycho Boost, no White Herb) with 0.6 of its turn-2 prior on it."""
+        cond = G.conditions([switch('p1', 'Snorlax'), switch('p2', 'Deoxys', details='Deoxys-Speed'), '|turn|1'], 0, None)
+        hit = G.guarded('psychoboost', G.child_side(cond['opp'], [('deoxysspeed', 0, True, False)], opponent=True), 'deoxysspeed')
+        self.assertIsNone(hit)   # the guard itself: not guarded
+        e = entry(0, 0, 1, 'opp', 'psychoboost', .6);flagged = dict(e, guarded=hit is not None, tier='C', user='deoxysspeed')
+        exact = G.reach(dict(reach_record([flagged]), conditions=cond), self.root_logits, self.root_legal, self.worlds)
+        bounds = G.reach(dict(reach_record([e]), conditions=cond), self.root_logits, self.root_legal, self.worlds)
+        self.assertEqual((exact['m_opp'], exact['tripped']), (0., False))
+        self.assertEqual(bounds['m_opp_lower'], 0.);self.assertAlmostEqual(bounds['m_opp_upper'], .5 * .75 * .75 * .6, places=15)
+        self.assertEqual(bounds['tripped'], None)   # the bounds straddle 5%: ambiguous, never a false trip
+
+    def test_lower_at_most_exact_at_most_upper_on_random_records(self):
+        """Randomized records whose turn-2 entries carry the guard's own flags (G.guarded on each child's sides, as evaluate decides):
+        the bounds of the same record without the flags bracket its exact M, both sides."""
+        import random
+        rng = random.Random(20261109);moves = sorted(G.WATCHED);status = (0, 0, 0, 1, 2, 3, 4, 5, 6)
+        opp_pool = ['snorlax', 'ursaring', 'swellow', 'gengar', 'deoxys', 'deoxysattack', 'deoxysspeed', 'bellossom']
+        for trial in range(300):
+            deoxys = rng.choice(['deoxys', 'deoxysattack', 'deoxysspeed', None])   # the opponent's one Deoxys form, if any
+            revealed = rng.sample([x for x in opp_pool if not x.startswith('deoxys')], 2) + ([deoxys] if deoxys and rng.random() < .5 else [])
+            lines = [switch('p1', 'Breloom')] + [switch('p2', x.title(), details=x) for x in revealed]
+            if deoxys in revealed and rng.random() < .3:lines.append(f'|-enditem|p2a: {deoxys.title()}|White Herb')
+            ours = [('Breloom', rng.choice(['100/100', '100/100 par', '50/100 brn']), 'leftovers', 'effectspore'),
+                    ('Deoxys', '100/100', rng.choice(['whiteherb', '']), 'pressure'), ('Ursaring', rng.choice(['100/100', '100/100 psn']), '', rng.choice(['guts', 'quickfeet']))]
+            cond = G.conditions(lines, 0, request(ours))
+            own_species = ['breloom', 'deoxys', 'ursaring'];opp_species = [x for x in opp_pool if not x.startswith('deoxys')] + ([deoxys] if deoxys else [])
+            entries = []
+            for _ in range(rng.randint(1, 8)):
+                side = rng.choice(['own', 'opp']);move = rng.choice(moves)
+                users = own_species if side == 'own' else opp_species
+                user = (('deoxys' if side == 'own' else deoxys) if move == 'psychoboost' else rng.choice(users))
+                if user is None:continue   # no Deoxys form on that side: nobody knows Psycho Boost
+                children = {s: G.child_side(cond[s], [(x, rng.choice(status), rng.random() < .9, rng.random() < .3) for x in (own_species if s == 'own' else opp_species)],
+                                            opponent=s == 'opp') for s in ('own', 'opp')}
+                hit = G.guarded(move, children[side], user, other=children['opp' if side == 'own' else 'own'])
+                e = entry(rng.randint(0, 1), rng.randint(0, 1), rng.randint(0, 1), side, move, rng.random())
+                entries.append(dict(e, guarded=hit is not None, tier=G.tier_of(move), user=user))
+            exact = G.reach(dict(reach_record(entries), conditions=cond), self.root_logits, self.root_legal, self.worlds)
+            bounds = G.reach(dict(reach_record([{k: v for k, v in e.items() if k not in ('guarded', 'tier', 'user')} for e in entries]), conditions=cond),
+                             self.root_logits, self.root_legal, self.worlds)
+            for side in ('own', 'opp'):
+                with self.subTest(trial=trial, side=side):
+                    self.assertLessEqual(bounds[f'm_{side}_lower'], exact[f'm_{side}'] + 1e-12)
+                    self.assertLessEqual(exact[f'm_{side}'], bounds[f'm_{side}_upper'] + 1e-12)
+            if bounds['tripped'] is not None:self.assertEqual(bounds['tripped'], exact['tripped'])   # the bounds never decide wrong
+
+    def test_a_record_without_turn_2_masses_fails_closed(self):
+        for record in (G.error_record('x'), reach_record([], available=False), None):
+            r = G.reach(record, self.root_logits, self.root_legal, self.worlds)
+            self.assertEqual((r['tripped'], r['tripped_lower'], r['tripped_upper'], r['unavailable'], r['m_own_lower']), (True, True, True, True, None))
 
 
 if __name__ == '__main__':

@@ -45,13 +45,13 @@ class SeamTests(unittest.TestCase):
     def setUp(self):
         keep = patch.object(cw, 'world_completer', return_value=lambda world, owner, **kw: world);keep.start();self.addCleanup(keep.stop)
 
-    def batch(self):
-        W = 8;roots = {f'r{i}': self.cw.made(i, owner, self.cw.modes(i, W)) for i, owner in ROOTS}
+    def batch(self, modes=None):
+        W = 8;roots = {f'r{i}': self.cw.made(i, owner, self.cw.modes(i, W) if modes is None else modes) for i, owner in ROOTS}
         constructor, prepared, _ = self.cw.prepared(roots, W)
         return constructor, prepared
 
-    def price(self, pricer, observe=False):
-        constructor, prepared = self.batch()
+    def price(self, pricer, observe=False, modes=None):
+        constructor, prepared = self.batch(modes)
         with self.cw.forward_patch():
             b = cw.build(constructor, prepared, pricer, CW.PARAMS, binding=self.cw.binding, recipe=self.cw.recipe)
             if observe:pricer.observe()
@@ -78,8 +78,8 @@ class SeamTests(unittest.TestCase):
         broken = self.make(gi.ObservedDepthNPricer, labels=lambda states: 1 / 0);_, frame_broken, (none, why) = self.price(broken, observe=True)
         self.cw.assert_frames_equal(reference, frame_broken);self.assertEqual((none, why[0][:30]), ([], 'P1 children: ZeroDivisionError'))
 
-    def record(self, labels, *, children=None, choice=None, lines=(), request_line=None, entry=('A', 'test', None), found_out=None):
-        pricer = self.make(gi.ObservedDepthNPricer, labels=labels);b, frame, (found, notes) = self.price(pricer, observe=True)
+    def record(self, labels, *, children=None, choice=None, lines=(), request_line=None, entry=('A', 'test', None), found_out=None, modes=None):
+        pricer = self.make(gi.ObservedDepthNPricer, labels=labels);b, frame, (found, notes) = self.price(pricer, observe=True, modes=modes)
         if found_out is not None:found_out.extend(found)
         root = b.roots[0];worlds = [w for r in root['rows'] for w in b.worlds.pairs[r]]
         request = dict(lines=list(lines), own_request_line=request_line)
@@ -133,6 +133,24 @@ class SeamTests(unittest.TestCase):
         self.assertEqual({(x['move'], x['side'], x['source']) for x in theirs['reasons']}, {('surf', 'own', 'turn2')})
         ours, _, _ = self.record(lambda s: varied_labels(s, seat=0, sleeper=0), entry=clause)   # only our own seat sleeps: no clause
         self.assertEqual(ours['reasons'], [])
+
+    def test_turn_2_cells_are_our_lane_times_9_plus_the_reply(self):
+        """Every turn-2 mass entry's cell is a * 9 + b on the frame's [own lane a, reply b] axes (what the reach reads), its mass
+        the prior of that cell's own logits; a world whose opponent waits at the root expands only its (a, 0) cells."""
+        record, frame, root = self.record(fake_labels)
+        for e in record['masses']['turn2']:
+            k, jw = divmod(e['world'], 2);r = root['rows'][k];a, b = divmod(e['cell'], 9);own = e['side'] == 'own'
+            self.assertEqual(int(frame.t1_status[r, jw, a, b]), 2)
+            self.assertTrue(bool((frame.t1_own_requested if own else frame.t1_peer_requested)[r, jw, a, b]))
+            p = G.masses([float(x) for x in (frame.t1_own_logits if own else frame.t1_peer_logits)[r, jw, a, b]],
+                [bool(x) for x in (frame.t1_own_legal if own else frame.t1_peer_legal)[r, jw, a, b]])
+            self.assertIn(e['mass'], p);self.assertEqual((e['guarded'], e['tier'], e['user']), (e['move'] == 'surf', 'A' if e['move'] == 'surf' else None,
+                'beta' if not own else 'alpha'))
+        waiting, frame, root = self.record(fake_labels, modes=(6,) * 8)   # the opponent waits at the root in every world
+        self.assertFalse(frame.root_peer_requested[root['rows'][0]].any())
+        cells = {e['cell'] for e in waiting['masses']['turn2']}
+        self.assertTrue(cells and all(c % 9 == 0 for c in cells))   # (a, 0) only
+        self.assertFalse(any(x['source'] == 'turn1' and x['side'] == 'opp' for x in waiting['reasons']))
 
     def test_c_reads_our_requests_lanes(self):
         line = '|request|{"side":{"id":"p1","pokemon":[{"ident":"p1: Alpha","details":"Alpha, L80","condition":"100/100","active":true}]},' \

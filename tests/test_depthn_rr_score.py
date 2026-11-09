@@ -703,13 +703,14 @@ class EndToEndTests(unittest.TestCase):
         self.assertIn('external_mix:alpha=0.5', (out / 'summary.md').read_text())
 
 
-def guard_record(*, b=False, turn1=(), turn2=(), lanes=(None, None, None, None), a=False, tier_b=False):
+def guard_record(*, b=False, turn1=(), turn2=(), lanes=(None, None, None, None), a=False, tier_b=False, masses=()):
     """A minimal effect-guard record (pokezero.depthn_effect_guard.evaluate's fields the scorer reads): (b) reasons per source as
     (move, tier), our guarded lanes as (tier, class) or None."""
     reasons = [dict(move=m, side='opp', source='turn1', tier=t, effect_class='x', max_mass=.3, worlds=[0]) for m, t in turn1]
     reasons += [dict(move=m, side='own', source='turn2', tier=t, effect_class='x', max_mass=.2, worlds=[1]) for m, t in turn2]
     return dict(b=b or bool(reasons), b_turn1=bool(turn1), b_turn2=bool(turn2), reasons=reasons, a=a, tier_b_legal=tier_b,
-                own_guarded_lanes=[None if x is None else list(x) for x in lanes])
+                own_guarded_lanes=[None if x is None else list(x) for x in lanes], turn2_available=True,
+                masses=dict(turn1=[], turn2=list(masses)), conditions=dict(own=dict(members={}), opp=dict(members={})))
 
 
 class GuardTests(unittest.TestCase):
@@ -783,9 +784,33 @@ class GuardTests(unittest.TestCase):
         with redirect_stdout(io.StringIO()):self.assertEqual(S.main(['--rows', str(path), '--run-directory', str(run), '--out', str(e2e.root / 'out')]), 0)
         summary = json.loads((e2e.root / 'out' / 'summary.json').read_text());g = summary['guard']
         self.assertEqual((g['priced_roots'], g['union']['total'], g['opponent_recharge_refused'], g['primary']['roots']), (6, 1, 1, 5))
-        first = json.loads((e2e.root / 'out' / 'decisions.jsonl').read_text().splitlines()[0])
+        decisions = [json.loads(x) for x in (e2e.root / 'out' / 'decisions.jsonl').read_text().splitlines()];first = decisions[0]
         self.assertTrue(all(o['choice'] == first['greedy_action'] for o in first['operators'].values()))
         self.assertIn('# Effect guard', (e2e.root / 'out' / 'summary.md').read_text())
+        # the reach fields on every scored decision (the measurement session keys on these names)
+        self.assertEqual(set(first['reach_turn2']), {'m_own_lower', 'm_own_upper', 'm_opp_lower', 'm_opp_upper', 'tripped', 'exact'})
+        self.assertEqual((first['reach_turn2']['tripped'], first['reach_scope_tripped_lower'], first['reach_scope_tripped_upper']), (False, True, True))   # turn 1
+        self.assertEqual((decisions[1]['reach_scope_tripped_lower'], decisions[1]['reach_scope_tripped_upper']), (False, False))
+        r = g['reach'];self.assertEqual((r['rows'], r['ambiguous'], r['lower']['roots'], r['upper']['turn1']), (6, 0, 1, 1))
+        self.assertEqual(r['lower']['cross_tab'], {'any_cell/reach': 1, 'any_cell/reach_clear': 0, 'any_cell_clear/reach': 0, 'any_cell_clear/reach_clear': 5})
+        self.assertIn('# Guard reach', (e2e.root / 'out' / 'summary.md').read_text())
+
+    def test_reach_scopes_per_row(self):
+        """The reach on a scored row: a turn-2 mass whose bounds straddle 5% is ambiguous (lower clear, upper guarded); the operators
+        follow each scope's own guard; the report counts it and its cross-tab against the any-cell scope."""
+        legal = self.legal;d = decision(waiting_worlds([{0: .5, 1: .1, 4: -.2}] * 2, legal), greedy=1, root_legal=legal)   # 2 waiting worlds
+        # Spore (tier C, no guarded flag) at our lane 0 against the waiting reply 0 in both worlds: M_own upper = pi_own(0) * .5
+        spore = [dict(side='own', world=w, move='spore', mass=.5, cell=0 * 9 + 0) for w in (0, 1)]
+        d.update(effect_guard=guard_record(turn2=[('spore', 'C')], masses=spore), own_moves=None)
+        out = S.score_decision(d, S.Reply('wait', None, None, ''), None, collections.Counter())
+        reach = out['guard']['reach'];prior = S.effect_guard.masses(d['root_logits'], d['root_legal'])
+        self.assertAlmostEqual(reach['m_own_upper'], prior[0] * .5, places=15);self.assertEqual(reach['m_own_lower'], 0.)
+        self.assertEqual((reach['tripped'], out['guard']['scopes']), (None, dict(lower=False, upper=True)))
+        self.assertEqual(out['reach_operators']['lower']['averaging']['choice'], 0)   # the lower scope's averaging plays its own choice
+        self.assertEqual(out['reach_operators']['upper']['averaging']['choice'], 1)   # the upper scope guards it: greedy
+        self.assertEqual(out['operators']['averaging']['choice'], 1)   # and the any-cell scope (b from its turn-2 reason) too
+        fields = S.reach_fields(out['guard'])
+        self.assertEqual((fields['reach_turn2']['tripped'], fields['reach_scope_tripped_lower'], fields['reach_scope_tripped_upper']), (None, False, True))
 
 
 class TemperedTests(unittest.TestCase):
