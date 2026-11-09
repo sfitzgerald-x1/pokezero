@@ -53,6 +53,27 @@ class LogTests(unittest.TestCase):
         self.assertNotIn(('p1', 2, 'switch'), by)   # and no fabricated forced-switch decision for it
         self.assertEqual(by[('p2', 3, 'move')][2], 'recharge')
 
+    def test_a_replacement_lost_inside_the_batch_is_its_own_decision(self):
+        head = ['|start', '|switch|p1a: Gengar|Gengar, L76|230/230', '|switch|p2a: Snorlax|Snorlax, L72|400/400', '|turn|1',
+                '|move|p1a: Gengar|Explosion|p2a: Snorlax', '|-damage|p2a: Snorlax|0 fnt', '|faint|p2a: Snorlax', '|faint|p1a: Gengar', '|upkeep']
+        # (b) p2's first replacement dies to Spikes before p1's switch runs: p1 chose without seeing it; p2's re-replacement saw p1's switch
+        spikes = head + ['|switch|p2a: Tyranitar|Tyranitar, L75|300/300', '|-damage|p2a: Tyranitar|0 fnt|[from] Spikes', '|faint|p2a: Tyranitar',
+                         '|switch|p1a: Dugtrio|Dugtrio, L80|180/180', '|switch|p2a: Starmie|Starmie, L77|260/260', '|turn|2']
+        ends = [(seat, end, label) for end, seat, kind, label, *_ in gv.decisions(spikes) if kind == 'switch']
+        first = spikes.index('|switch|p2a: Tyranitar|Tyranitar, L75|300/300')
+        self.assertEqual(ends, [('p2', first, 'switch tyranitar'), ('p1', first, 'switch dugtrio'),
+                                ('p2', spikes.index('|switch|p2a: Starmie|Starmie, L77|260/260'), 'switch starmie')])
+        # (a) both replace, then sandstorm KOs p1's replacement later that turn: that re-replacement sees the turn so far
+        sand = head + ['|switch|p2a: Tyranitar|Tyranitar, L75|300/300', '|switch|p1a: Dugtrio|Dugtrio, L80|10/180', '|-weather|Sandstorm|[upkeep]',
+                       '|-damage|p1a: Dugtrio|0 fnt|[from] Sandstorm', '|faint|p1a: Dugtrio', '|switch|p1a: Starmie|Starmie, L77|260/260', '|turn|2']
+        last = [(end, label) for end, seat, kind, label, *_ in gv.decisions(sand) if kind == 'switch' and seat == 'p1'][-1]
+        self.assertEqual(last, (sand.index('|switch|p1a: Starmie|Starmie, L77|260/260'), 'switch starmie'))
+        # a Baton Passer KOed by Pursuit still gets its replacement decision
+        bp = ['|start', '|switch|p1a: Gengar|Gengar, L76|230/230', '|switch|p2a: Snorlax|Snorlax, L72|400/400', '|turn|1',
+              '|move|p1a: Gengar|Baton Pass|p1a: Gengar', '|-activate|p1a: Gengar|move: Pursuit', '|move|p2a: Snorlax|Pursuit|p1a: Gengar',
+              '|-damage|p1a: Gengar|0 fnt', '|faint|p1a: Gengar', '|switch|p1a: Dugtrio|Dugtrio, L80|180/180', '|turn|2']
+        self.assertIn(('p1', 'switch', 'switch dugtrio'), [(seat, kind, label) for _, seat, kind, label, *_ in gv.decisions(bp)])
+
     def test_each_seat_loses_the_others_private_lines(self):
         p1 = gv.seat_lines(LOG, 'p1');p2 = gv.seat_lines(LOG, 'p2')
         self.assertIn('|-ability|p1a: Gengar|Pressure|[silent]', p1);self.assertNotIn('|-ability|p2a: Snorlax|Pressure|[silent]', p1)

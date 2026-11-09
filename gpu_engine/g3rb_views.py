@@ -32,7 +32,7 @@ Writes shard-<I>.npz in fp_reply_data's layout (categorical_ids, numeric_feature
 label (-1 censored), forced (a forced switch, as in fp_reply_data), locked (a [from]lockedmove or Struggle label), turn,
 kind (0 move, 1 switch), seat (0/1), replay (row index in CLEAN), vintage, rating, imputation, censor). Censored rows keep
 their reason (cant and fainted_before_acting only happen to a chosen move: a trainer can treat them as 'some move' partial
-labels; recharge had no choice). and shard-<I>.json with the counts by vintage, kind and censor reason."""
+labels; recharge had no choice), and shard-<I>.json with the counts by vintage, kind and censor reason."""
 import argparse
 import collections
 import hashlib
@@ -138,13 +138,14 @@ def decisions(lines):
     the switches), so both prefixes end before the first replacement switch. A mon KOed by Pursuit while switching out is no
     new decision: Showdown carries out the switch chosen at turn start, which labels that turn's decision."""
     out, turn, active, fainted = [], 0, {'p1': None, 'p2': None}, {'p1': False, 'p2': False}
-    passing = {'p1': False, 'p2': False};pursued = {'p1': None, 'p2': None};requeued = {'p1': False, 'p2': False};double = None
+    passing = {'p1': False, 'p2': False};pursued = {'p1': None, 'p2': None};requeued = {'p1': False, 'p2': False}
+    waiting = {'p1': None, 'p2': None}   # a seat that chose its replacement while the other seat's switch-in was already under way
     for i, line in enumerate(lines):
         p = line.split('|')
         if len(p) < 2:continue
         kind = p[1];who = ident(p[2]) if len(p) > 2 else None
         if kind == 'turn':
-            turn = int(p[2]) if len(p) > 2 and p[2].isdigit() else turn + 1;double = None;pursued = {'p1': None, 'p2': None}
+            turn = int(p[2]) if len(p) > 2 and p[2].isdigit() else turn + 1;pursued = {'p1': None, 'p2': None};waiting = {'p1': None, 'p2': None}
             for seat in ('p1', 'p2'):
                 if active[seat] and not fainted[seat]:out.append([i + 1, seat, 'move', None, False, None, turn])
         elif kind == '-activate' and who and 'move: Pursuit' in line:pursued[who[0]] = who[1]   # Pursuit hits this seat's switching mon
@@ -153,15 +154,15 @@ def decisions(lines):
             if requeued[seat]:requeued[seat] = False   # the switch chosen at turn start, carried out after a Pursuit KO
             elif active[seat] is not None and (fainted[seat] or passing[seat]):   # a replacement after a faint, or Baton Pass's switch
                 end = i
-                if fainted[seat]:
-                    if fainted[other] and active[other] is not None:double = i   # both replace at once: the first switch ends both prefixes
-                    elif double is not None:end = double
+                if fainted[seat]:   # both replaced at once: the first switch ends both prefixes, once (a later re-replacement is its own)
+                    if waiting[seat] is not None:end, waiting[seat] = waiting[seat], None
+                    elif fainted[other] and active[other] is not None:waiting[other] = i
                 out.append([end, seat, 'switch', 'switch ' + species_id(p[3]), False, 'none', turn])
             active[seat], fainted[seat], passing[seat], pursued[seat] = who[1], False, False, None
         elif kind == 'drag' and who:active[who[0]], fainted[who[0]] = who[1], False
         elif kind == 'faint' and who and who[1] == active[who[0]]:
             fainted[who[0]] = True
-            if pursued[who[0]] == who[1]:requeued[who[0]] = True
+            if pursued[who[0]] == who[1] and not passing[who[0]]:requeued[who[0]] = True   # a Baton Passer KOed still gets a replacement request
         elif kind == 'move' and who and len(p) > 3 and toid(p[3]) == 'batonpass' and '[from]' not in line:passing[who[0]] = True
     # labels of the move decisions: the seat's first own action after the turn line
     for d in out:
