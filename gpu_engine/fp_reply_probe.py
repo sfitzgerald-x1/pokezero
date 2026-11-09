@@ -1,6 +1,7 @@
 """Foul Play reply probes on fp_reply_data --extras shards: 9375's own opponent head, and the option C behavior-summary probe.
 
-usage: python -m gpu_engine.fp_reply_probe DATA_DIR OUT_DIR --base PT --pi-fp PT [--device cuda] [--epochs 30] [--seed 0]
+usage: python -m gpu_engine.fp_reply_probe DATA_DIR OUT_DIR --base PT --pi-fp PT [--pi-fp-data DIR] [--device cuda] [--epochs 30]
+       [--seed 0]
 
 Splits are fp_reply_data.split_of (battle seed % 10: 0 test, 1 validation, else train); intervals are fp_reply_train's 90% bootstrap
 clustered on battle seed.
@@ -14,7 +15,11 @@ clustered on battle seed.
    move, switch) and a log-temperature, logits' = log π_FP / T + b[class]. At initialisation it is π_FP exactly (gate 3). Gates:
    (1) test NLL minus π_FP's, upper bound < 0; (2) the improvement late (turn 18+) minus early (turns 1-3), upper bound < 0, and the
    turn-1 improvement not worse than 0 (lower bound <= 0).
+   With --pi-fp-data (the dataset π_FP was trained on) the probe fits only on games π_FP did not train on: every non-test game
+   whose ordinal is absent from that dataset's train split, divided by seed ((seed // 10) % 4 == 0 for early stopping, the rest to
+   fit). Otherwise it fits on train and early-stops on validation, which overstates π_FP wherever π_FP fit its own training games.
 """
+import glob
 import argparse
 import json
 import time
@@ -43,6 +48,25 @@ def cluster_bootstrap(values, clusters, masks, combine, draws=train_mod.BOOTSTRA
         pick = rng.integers(0, len(unique), len(unique))
         stats.append(combine(*[s[pick].sum() / max(c[pick].sum(), 1e-12) for s, c in zip(sums, counts)]))
     return dict(mean=float(point), interval_90=[float(q) for q in np.quantile(stats, [.05, .95])], seeds=int(len(unique)))
+
+
+def seen_ordinals(data_dir):
+    """Game ordinals in the train split of a fp_reply_data dataset (the games a π_FP trained on it has fit)."""
+    seen = set()
+    for path in glob.glob(str(Path(data_dir) / 'shard-*.npz')):
+        with np.load(path) as shard:
+            if 'ordinal' in shard.files and len(shard['ordinal']):
+                seen.update(shard['ordinal'][data_mod.split_of(shard['seed']) == 'train'].tolist())
+    if not seen:raise SystemExit(f'{data_dir} has no train-split rows')
+    return seen
+
+
+def fit_rows(split, ordinal, seed, seen=None):
+    """(probe fit rows, probe early-stopping rows): train and validation, or with `seen` the non-test rows of games outside it,
+    split by (seed // 10) % 4 == 0 so both seats of a battle seed land on one side."""
+    if seen is None:return np.flatnonzero(split == 'train'), np.flatnonzero(split == 'val')
+    pool = (split != 'test') & ~np.isin(ordinal, np.fromiter(seen, np.int64, len(seen)));inner = (seed // 10) % 4 == 0
+    return np.flatnonzero(pool & ~inner), np.flatnonzero(pool & inner)
 
 
 def masked_softmax(logits, legal):
@@ -112,6 +136,7 @@ def probe_probs(model, sequences, arrays, logp, torch, device, size=64):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.split('\n')[0])
     parser.add_argument('data');parser.add_argument('out');parser.add_argument('--base', required=True);parser.add_argument('--pi-fp', required=True)
+    parser.add_argument('--pi-fp-data', help="the dataset π_FP was trained on; the probe then fits only on games outside its train split")
     parser.add_argument('--device', default='cuda');parser.add_argument('--epochs', type=int, default=30);parser.add_argument('--seed', type=int, default=0)
     parser.add_argument('--lr', type=float, default=1e-3);parser.add_argument('--games-per-batch', type=int, default=16)
     args = parser.parse_args(argv)
@@ -154,14 +179,25 @@ def main(argv=None):
 
     # 2. option C probe on π_FP
     arrays['_features'] = step_features(arrays);logp = np.log(np.clip(pi_fp, 1e-12, 1.)).astype(np.float32)
-    seqs = {n: game_sequences(arrays['ordinal'], r) for n, r in rows.items()}
+    seen = seen_ordinals(args.pi_fp_data) if args.pi_fp_data else None
+    fit_train, fit_val = fit_rows(split, arrays['ordinal'], arrays['seed'], seen)
+    for name, r in (('fit', fit_train), ('early stopping', fit_val)):
+        if len(np.unique(arrays['seed'][r])) < train_mod.MIN_CLUSTERS:raise SystemExit(f'too few seeds for the probe {name} rows')
+    fitting = dict(source='unseen by π_FP' if seen is not None else 'train/validation',
+                   rows=dict(fit=int(len(fit_train)), early_stopping=int(len(fit_val))),
+                   games=dict(fit=int(len(np.unique(arrays['ordinal'][fit_train]))), early_stopping=int(len(np.unique(arrays['ordinal'][fit_val])))),
+                   pi_fp_nll=dict(fit=train_mod.nll(pi_fp[fit_train], labels[fit_train]), early_stopping=train_mod.nll(pi_fp[fit_val], labels[fit_val]),
+                                  train=train_mod.nll(pi_fp[rows['train']], labels[rows['train']]), test=train_mod.nll(pi_fp[test], labels[test])))
+    print(json.dumps(dict(event='PROBE_FIT_ROWS', **fitting)), flush=True)
+    seqs = dict(train=game_sequences(arrays['ordinal'], fit_train), val=game_sequences(arrays['ordinal'], fit_val),
+                test=game_sequences(arrays['ordinal'], test))
     model = build_probe(torch).to(args.device)
     identity = probe_probs(model, seqs['test'], arrays, logp, torch, args.device)
     identity_gap = float(np.abs(identity[test] - pi_fp[test]).max())
     print(json.dumps(dict(event='PROBE_IDENTITY', max_abs_probability_difference=identity_gap)), flush=True)
     if not identity_gap <= 1e-5:raise SystemExit(f'gate 3 failed: the zero-initialised probe differs from π_FP by {identity_gap}')
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=1e-4)
-    val_nll = lambda: train_mod.nll(probe_probs(model, seqs['val'], arrays, logp, torch, args.device)[rows['val']], labels[rows['val']])
+    val_nll = lambda: train_mod.nll(probe_probs(model, seqs['val'], arrays, logp, torch, args.device)[fit_val], labels[fit_val])
     best = dict(epoch=0, val_nll=val_nll());state = {k: v.detach().clone() for k, v in model.state_dict().items()};history = [dict(best)]
     for epoch in range(1, args.epochs + 1):
         model.train();order = rng.permutation(len(seqs['train']));losses = []
@@ -189,7 +225,7 @@ def main(argv=None):
     with torch.no_grad():
         f, lp, c, lg, _, valid = pad(seqs['test'], arrays, logp, torch, args.device)
         out_head = model.head(model.gru(torch.cat([torch.zeros_like(f[:, :1]), f[:, :-1]], 1))[0])[valid].cpu().numpy()
-    report['probe'] = dict(history=history, best_epoch=best['epoch'], gates=gates,
+    report['probe'] = dict(fitting=fitting, history=history, best_epoch=best['epoch'], gates=gates,
                            test=dict(pi_fp=train_mod.grouped(pi_fp[test], arrays, test), probe=train_mod.grouped(probe[test], arrays, test)),
                            in_context_curve=train_mod.in_context_curve(dict(pi_fp=pi_fp[test], probe=probe[test]), arrays, test),
                            head_output=dict(bias_mean=out_head[:, :CLASSES].mean(0).tolist(), bias_sd=out_head[:, :CLASSES].std(0).tolist(),

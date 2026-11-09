@@ -275,6 +275,19 @@ class ProbeHelperTests(unittest.TestCase):
         self.assertLessEqual(out['interval_90'][0], out['mean']);self.assertGreaterEqual(out['interval_90'][1], out['mean'])
         self.assertIsNone(probe.cluster_bootstrap(values[:4], clusters[:4], [late[:4]], lambda a: a)['interval_90'])
 
+    def test_fit_rows_exclude_test_and_games_pi_fp_trained_on(self):
+        # seed % 10: 0 test, 1 val, else train; (seed // 10) % 4 == 0 for 402, 403 and 41 (early stopping when fitting on unseen games)
+        seed = np.array([10, 11, 12, 13, 402, 403, 411, 41]);ordinal = np.arange(8);split = d.split_of(seed)
+        fit, stop = probe.fit_rows(split, ordinal, seed)
+        self.assertEqual(fit.tolist(), [2, 3, 4, 5]);self.assertEqual(stop.tolist(), [1, 6, 7])
+        with tempfile.TemporaryDirectory() as tmp:
+            np.savez(Path(tmp) / 'shard-0.npz', ordinal=np.array([2, 4, 1, 0]), seed=np.array([12, 402, 11, 10]))
+            np.savez(Path(tmp) / 'shard-1.npz', label=np.zeros(0))
+            seen = probe.seen_ordinals(tmp)
+        self.assertEqual(seen, {2, 4})
+        fit, stop = probe.fit_rows(split, ordinal, seed, seen)
+        self.assertEqual(fit.tolist(), [1, 3, 6]);self.assertEqual(stop.tolist(), [5, 7])
+
 
 @unittest.skipUnless(__import__('importlib').util.find_spec('torch'), 'torch not installed')
 class RecalibrationTests(unittest.TestCase):
