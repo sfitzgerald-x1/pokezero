@@ -243,4 +243,46 @@ class RealTablesTests(unittest.TestCase):
         self.assertTrue(np.asarray(device.shown_types).any())
 
 
+class FromB2WorldTests(unittest.TestCase):
+    """Real phase_d_live_worlds.from_b2 roots (tests/test_phase_d_device_worlds' authored B2 fold: each side's lead revealed) and their
+    16 sampled worlds through complete_world, for both owners."""
+    @classmethod
+    def setUpClass(cls):
+        import test_phase_d_device_worlds as D
+        D.WorldsTests.setUpClass();cls.fx=D.WorldsTests('test_real_b2_fold_to_16_and32_source_worlds_both_owners')
+        cls.tables=cw.carry_tables(cls.fx.metadata,cls.fx.catalog)
+
+    def test_real_from_b2_worlds_complete(self):
+        from gpu_engine import phase_d_live_worlds as live
+        from pokezero.v5_contract import DecisionAddress
+        f=self.fx;st=self.tables.species_types;normal=f.metadata['vocabulary']['types'].index('Normal')
+        for owner in(0,1):
+            root=live.from_b2(f.adapter(owner),f.request(owner),f.source,f.metadata,address=DecisionAddress(1,0,owner))
+            made=live.sample_worlds(root,f.source,f.tables,count=16,seed=9);self.assertTrue(made.fully_constructed)
+            done=[cw.complete_world(w,self.tables,owner)for w in made.worlds]   # no CarryLayoutError on the real carry
+            for w,d in zip(made.worlds,done):
+                with self.subTest(owner=owner,world=w.index):
+                    t,c=w.public,d.public
+                    self.assertFalse(np.asarray(t.shown_types).any())   # from_b2's zeros
+                    species,active,shown=np.asarray(c.species)[0],np.asarray(c.active_slot)[0],np.asarray(c.shown_types)[0]
+                    for side in(0,1):   # each side's revealed lead is filled with its species' types; every other slot stays 0
+                        at=int(active[side]);self.assertGreater(int(species[side,at]),0)
+                        np.testing.assert_array_equal(shown[side,at],st[species[side,at]]);np.testing.assert_array_equal(shown[side,at],[normal,0])
+                        rest=np.arange(6)!=at;self.assertFalse(species[side,rest].any());self.assertFalse(shown[side,rest].any())
+                    for key in cw.CREDIT_KEYS:
+                        self.assertEqual((np.shape(t.field_features[key]),np.shape(c.field_features[key])),((1,),(1,2)))
+                    removed=np.asarray(c.field_features['self_items_removed_credit'])
+                    self.assertEqual(removed[0,owner],int(np.asarray(t.field_features['self_items_removed_credit'])[0]))
+                    self.assertIsNone(t.negative_items);self.assertIs(type(c.negative_items),ni.State)
+                    changed=('shown_types','negative_items','self_items_removed_credit','opp_items_removed_credit')
+                    self.assertTrue(all(x is y for(_,x),(_,y)in zip(leaves(t,changed),leaves(c,changed))))
+                    self.assertIs(d.state,w.state);self.assertIs(cw.complete_world(d,self.tables,owner),d)   # a second pass is a no-op
+            # every world completes alike (the completion reads only the public species and the engine types)
+            for name in('shown_types',):
+                for d in done[1:]:np.testing.assert_array_equal(getattr(d.public,name),getattr(done[0].public,name))
+            for d in done[1:]:
+                for key in cw.CREDIT_KEYS:np.testing.assert_array_equal(d.public.field_features[key],done[0].public.field_features[key])
+                for x,y in zip(d.public.negative_items,done[0].public.negative_items):np.testing.assert_array_equal(x,y)
+
+
 if __name__=='__main__':unittest.main()

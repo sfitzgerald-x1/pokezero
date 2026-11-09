@@ -462,7 +462,7 @@ def describe(capture, peer_lanes, vocabulary):
 
 
 REPLAY_FIELDS = ('q_values', 'completed_q', 'policy_target', 'root_value', 'action_mean_q', 'action_policy_target', 'reduction_note', 'block_causes',
-    'world_refusals', 'bucket', 'batch_size', 'tree_commit')
+    'world_refusals', 'bucket', 'batch_size', 'tree_commit', 'root_view_source', 'b2_view')
 
 
 def decision_row(cell, row, request, response, wall, found, detail, *, shard, capture_seconds, live_problem=None):

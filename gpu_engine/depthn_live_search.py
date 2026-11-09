@@ -28,7 +28,7 @@ request_id. Per batch (process_many chunks a longer list into batches of max_req
   summing to 1 + ulp), or fails in any other way, those fields are None and reduction_note says why; the root still plays
   averaging's action.
 - causes: a root prepare() refused, or one with a refused world, is constructor_refused; one refused by build's root
-  checks (root view, legal mask, root forward), by DepthN's pricing (a block cause, depthn_backups.refusal_summary) or by
+  checks (root view, legal mask, B2 inputs: ROOT_B2_INPUTS_UNUSABLE, root forward), by DepthN's pricing (a block cause, depthn_backups.refusal_summary) or by
   averaging (an unknown price, or its error) is depthn_refused. Any other exception in the shared batch (prepare_roots,
   build, price, the backups) refuses every request of the batch server_error with its text; MemoryError propagates.
   Every response must pass phase_d_search_server.encode (else server_error), so no value breaks the wire.
@@ -66,7 +66,8 @@ request_id. Per batch (process_many chunks a longer list into batches of max_req
 - the root prior's inputs (reported): `root_view_source`, the build root dict's ('b2': the champion read B2's own encoding of
   the literal root, as Codex's ladder; 'world0': world 0's own view, for a root without B2 inputs), and `b2_view`, its
   diagnostic of world 0's view against B2's encoding (wire_b2_view: equal, per-key equal flags, the largest numeric
-  difference, error); both None for a root that never reached the root view.
+  difference, error). Both are None for a root that never reached the root view; a root refused ROOT_LEGAL_EMPTY has
+  b2_view set and root_view_source None (build checks the legal mask between the two).
 Response, per the live contract: schema, request_id, rung, archive_sha256, status, action_index, q_values (9, None on
 illegal lanes), refusal, cause, requested_worlds, constructed_worlds, decision_seconds (batch start -> result, COMPLETE
 only); ours: root_operator, root_operator_impl, completed_q, policy_target, root_value, action_mean_q,

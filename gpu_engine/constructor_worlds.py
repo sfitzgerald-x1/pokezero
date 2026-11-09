@@ -18,33 +18,71 @@ dict keys and leaves two members None). This module turns prepared roots into De
     the side other than the observer read 0 (<pad>), at the root and at every node and leaf. The hook rule
     (engine_device_public_hooks.install: species_types[clip(species)] where 0 < species < len(species_types), else 0) is
     applied to each (side, public slot) whose row is still (0, 0); a side's active whose engine types differ from its
-    base types (a type change the state carries) takes those types instead (the color_change hook's write). A non-zero
-    row is never touched (Transform, Color Change). species_types is the executor's own table:
+    base types (a type change the state carries) takes those types instead (the color_change hook's write, the only
+    device write of shown_types besides install's; no hook writes it for Transform). A non-zero row is never touched.
+    Today that branch cannot fire: from_b2 refuses a root whose active is retyped (PUBLIC_LIVE_RETYPE_NOT_MATERIALIZED:
+    Color Change, Forecast) or transformed (PUBLIC_TRANSFORM_NOT_MATERIALIZED), and the worlds' engine types are their
+    base types. species_types is the executor's own table:
     engine_device_belief.compile_tables(metadata, catalog), which engine_device_observation.compile_tables builds the
     executor's observation (and belief) tables with, here from the constructor's metadata and catalog (the binding
     check makes them the pricer's); the tracker's species are engine ids (from_b2 remaps B2's into the same
     metadata['vocabulary']['species'] the hook's state species index).
   - negative_items (fill_negative_items): from_b2 leaves None, which turns off the Leftovers non-proc rule for the whole
     search; the device path's empty(B) is exact at a root (upkeep clears the evidence) except an active installed after
-    the last upkeep (an end-of-turn faint replacement), whose install-time evidence is not recoverable here.
+    the last upkeep (an end-of-turn faint replacement), whose install-time evidence is not recoverable here. With the
+    evidence on, an in-tree upkeep can now rule Leftovers out (a Pokemon below 100% with no Leftovers heal and no item
+    shown): the hard belief mask narrows and the opponent's belief columns (posterior weights, possible-item count and
+    buckets, expected stats) change in the views after that upkeep, the depth-2 leaves, as on the device path. The root
+    view and the root parity check (B2 against world 0) do not see it.
   - the items-removed credits (orient_credits): from_b2 stores them owner-oriented as [B] arrays, which the readout
     passes through unchanged, so the peer's view read the owner's own counts; they become per-side [B, 2] arrays
     (self = items_removed[side], opp = items_removed[1 - side], B2's project_credits), the owner's view unchanged.
   The completion is pure host numpy on the world's own leaves (no other leaf changes) and raises CarryLayoutError (a
   RuntimeError, never a per-root refusal) when a carry is not the engine_device_trackers.Trackers layout it was
   written against.
+  Deliberately not completed (the carry and B2's public context do not determine the device's value; owner = the root's
+  owner, peer = the other seat, whose view is the reply prior):
+  - Baton Pass arrival: from_b2 writes last_moves -1 for an active whose last public action was a switch
+    (phase_d_live_worlds.py:320); the device writes -2 after a Baton Pass arrival (engine_device_public_hooks.baton_copy,
+    :569), so that active's LAST_USED_MOVE category is the plain switch's in both views until it moves. B2's own
+    mons.arrived_by_baton has the fact (B2's literal-root encoding shows it) but the carry does not keep it; the fix is
+    one line in from_b2.
+  - Peer-view hazard credit: from_b2 fills only hazards[owner, exact] and hazards[foe, shown]
+    (phase_d_live_worlds.py:415), so the peer's OPP_HAZARD_CREDIT (readout: hazards[owner, shown]) reads 0 at the root
+    and only counts Spikes damage taken in search. The device's shown half is the per-hit sum of
+    (_percent(hp) - _percent(new)) / 100 over the owner's Spikes hits (engine_device_public_port.spikes), the ceil
+    percentages the peer sees; B2 keeps only the exact sum (ctx.damage.hazard_suffered: (hp - new) / max per hit, the
+    owner seeing its own HP), and per-hit rounding is not a function of that sum (300 max HP, 37 damage: 300 -> 263 shows
+    12%, 299 -> 262 shows 11%). Only the owner's protocol (each Spikes -damage line and the switch-in HP before it) would
+    determine it.
+  - Peer-view last damage: the peer's exact own losses (own.LAST_DAMAGE_TAKEN, foe.LAST_DAMAGE_DEALT,
+    field.SELF_HAZARD_CREDIT: damage_exact_*, hazards[foe, exact]) are redacted to zero by design
+    (device_public_teacher.REPLY_HISTORY_APPROXIMATION, device_public_worlds._redact_peer_private); and from_b2's
+    shown-stream last_damage_taken[owner] / last_damage_dealt[foe] hold B2's exact owner-HP fractions where the device
+    holds shown-percent fractions (a rounding difference in the peer view at the root; the first TURN in search
+    overwrites both).
+  - A Pokemon benched after a type change: the device carry keeps the changed types (nothing clears shown_types before
+    the next install); B2 clears its overlay at the next arrival and the worlds' engine types are base types, so the
+    fill writes the species' types, as B2's encoding shows.
+  - Values the device path never writes but from_b2 copies from B2 (choice_locked, wrap_trap_turns, item_swapped,
+    B2-only volatile bits, the items-removed credits): kept, as B2's encoding shows them. In search the three
+    mon_features are not reset on switch-in (the install hook's reset list omits them); the volatile bits are.
 - build: W worlds become K = W/2 blocks of two, one Request per block, packed into ONE frame (row = the root's rows[b],
   root-major), since the worlds are pre-built (no per-block recipe or re-materialization). Plans are synthesized:
   selected=True (the quarter selection is bypassed), Start(world index, the constructor's world seed, no fixtures,
   refusals); source_fixture_unknown_mass is NaN (no D3 source-fixture draw exists here; the refused-world share is the
   root's `refused_world_share`). `root_legal` is B2's own mask (pre 2 holds each world's own encoder mask to it, as the
   ladder's legality check). Actors default to 0/0 (one evaluator bank, the champion's (champion,)).
-- The root prior: `root_logits` and `root_value` are the pricer's own evaluator (forward=, e.g. the champion) on B2's own
-  encoding of the literal root, as in Codex's ladder (phase_d_ladder_search.process_many forwards
-  detached.view['_b2_root_inputs']): root_inputs with the first TOKENS (23) tokens of each token tensor replaced by B2's
-  (splice; history_mask and the later tokens unchanged), through the same jitted root forward; `root_view_source` 'b2'. A
-  root without B2 inputs takes world 0's own view (root_inputs; 'world0'). B2 inputs that do not fit (a missing key, a
-  shape, a lossy cast) refuse the root, ROOT_B2_INPUTS_UNUSABLE.
+- The root prior (build's root_prior, ROOT_PRIORS): `root_logits` and `root_value` are the pricer's own evaluator
+  (forward=, e.g. the champion) through the same jitted root forward on
+  - 'b2' (the default, the live search): B2's own encoding of the literal root, as in Codex's ladder
+    (phase_d_ladder_search.process_many forwards detached.view['_b2_root_inputs']): root_inputs with the first TOKENS
+    (23) tokens of each token tensor replaced by B2's (splice; history_mask and the later tokens unchanged);
+    `root_view_source` 'b2'. A root without B2 inputs takes world 0's own view ('world0'). B2 inputs that do not fit (a
+    missing key, a shape, a lossy cast) refuse the root, ROOT_B2_INPUTS_UNUSABLE.
+  - 'world0': world 0's own view, root_inputs itself ('world0'), whatever the root carries: the D3 gate's R1-C
+    (d3_depthn_gate.constructor_roots), whose bind_constructor re-runs the champion on each Request's root_inputs and
+    fails closed unless that gives build's root logits exactly.
 - root_inputs (every Request's) stay world 0's own view under the pricer's executor (the v5 encoder), after the carry
   completion. The turn-1 input check (pre 3+) then holds every OTHER world of every block to world 0's view: a
   consistency check across the sampled worlds only. As a diagnostic (reported, never a gate), each root's `b2_view`
@@ -109,6 +147,7 @@ from . import engine_device_negative_items as negative_items,engine_device_track
 SOURCE='phase-d-protocol-constructor'
 # What ProtocolConstructor.construct treats as a root refusal (phase_d_live_worlds.Refusal is a ValueError).
 ROOT_ERRORS=(ValueError,KeyError,TypeError,IndexError,AttributeError)
+ROOT_PRIORS=('b2','world0')   # build's root_prior: B2's literal-root encoding (else world 0's view), or world 0's view
 UNNAMED='UNNAMED_CONSTRUCTOR_WORLD_REFUSAL'
 RANGE_EDGE='finite in-range numerical value required'   # v5_contract._real's error: on reduce's path only RootImprovement.validate raises it
 B2_TOKEN_KEYS=('numeric_features','categorical_ids','token_type_ids','attention_mask')   # B2's encode(): [23,F] / [23]
@@ -431,10 +470,10 @@ def b2_view_check(forward,root_inputs,detached):
         return dict(equal=None,error=f'{type(error).__name__}: {error}')
 
 
-def build(constructor,prepared,pricer,params,*,binding,recipe,learner_actor=0,opponent_actor=0,only_complete=False):
+def build(constructor,prepared,pricer,params,*,binding,recipe,learner_actor=0,opponent_actor=0,only_complete=False,root_prior='b2'):
     """Requests and pre-built worlds for `prepared` (prepare_roots' output for this constructor), for `pricer` (its executor
-    gives the root view, its evaluator the root prior on B2's encoding, else on world 0's view) under the pricer-side
-    `binding`. Every world's carry is completed first (a no-op on prepare_roots' worlds). ValueError on a binding mismatch
+    gives the root view, its evaluator the root prior: on B2's encoding, else world 0's view, for root_prior 'b2'; on world
+    0's view for 'world0') under the pricer-side `binding`. Every world's carry is completed first (a no-op on prepare_roots' worlds). ValueError on a binding mismatch
     (the pricer's, the constructor's, or a prepared root stamped by another constructor), a champion evaluator not bound
     to the constructor's catalog, a malformed world set or a bad actor index; CarryLayoutError from the completion;
     per-root refusals are recorded, never raised (module docstring). A priced root records root_view_source ('b2' or
@@ -445,6 +484,7 @@ def build(constructor,prepared,pricer,params,*,binding,recipe,learner_actor=0,op
     if isinstance(pricer.forward,evaluators.ChampionEvaluator):evaluators.check_binding(pricer.forward,constructor.catalog)
     if type(recipe)is not original.Recipe:raise ValueError('a random recipe (lane order) required')
     if any(type(x)is not int or not 0<=x<len(params)for x in(learner_actor,opponent_actor)):raise ValueError('verified actor index required')
+    if root_prior not in ROOT_PRIORS:raise ValueError(f'root_prior in {ROOT_PRIORS} required, got {root_prior!r}')
     W=constructor.count
     if type(W)is not int or W<2 or W%2:raise ValueError('an even declared world budget required')
     K=W//2;views=depth2._make_views(pricer.executor);forward=_root_forward(pricer.forward)
@@ -479,7 +519,7 @@ def build(constructor,prepared,pricer,params,*,binding,recipe,learner_actor=0,op
         if len(legal)!=9 or not any(legal):
             roots.append(dict(base,status='REFUSED',reason='ROOT_LEGAL_EMPTY'));continue
         # The root prior reads B2's encoding of the literal root (Codex's ladder), else world 0's view (module docstring).
-        b2=b2_root_inputs(detached);prior_inputs=root_inputs;base['root_view_source']='world0'
+        b2=b2_root_inputs(detached)if root_prior=='b2'else None;prior_inputs=root_inputs;base['root_view_source']='world0'
         if b2 is not None:
             base['root_view_source']='b2'
             try:prior_inputs,lossy=splice(root_inputs,b2)

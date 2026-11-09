@@ -4143,8 +4143,10 @@ def class_counts(roots):
 
 def bind_constructor(requests, params, plan, evaluator):
     """g2.bind_roots unchanged (the champion's exact first-root check) on the constructor requests, whose root logits build already took from
-    the same evaluator on the same root inputs: ValueError (fail closed) when a request is dropped, or its bound root logits or actors differ.
-    Returns (bound requests, root |v| values, arm_checked)."""
+    the same evaluator on the same root inputs (constructor_roots builds with root_prior='world0': each Request's root_inputs, world 0's own
+    view; the live search's default 'b2' prior reads B2's encoding instead, which this check would refuse wherever the two views differ):
+    ValueError (fail closed) when a request is dropped, or its bound root logits or actors differ. Returns (bound requests, root |v| values,
+    arm_checked)."""
     groups, values, dropped, checked = g2.bind_roots([list(requests)], params, plan, evaluator=evaluator)
     bound = [r for group in groups for r in group]
     if dropped or len(bound) != len(requests):
@@ -4373,7 +4375,7 @@ def constructor_roots(args):
     for i, record in held.items():   # only the selected roots' worlds are kept
         if i not in chosen:record['item'] = None
     batch = cw.build(constructor, [held[i]['item'] for i in chosen], SimpleNamespace(executor=provider.executor, forward=champion), params,
-        binding=binding, recipe=provider.recipe, only_complete=True)
+        binding=binding, recipe=provider.recipe, only_complete=True, root_prior='world0')   # bind_constructor's exact check: world 0's view
     refused = [f'{i}: {root["reason"]}' for i, root in zip(chosen, batch.roots) if root['status'] != 'PRICED']
     if refused:raise SystemExit('--constructor-roster (fail closed): constructor_worlds.build refused selected roots (never refilled): ' + '; '.join(refused[:FIRST]))
     try:

@@ -77,7 +77,8 @@ def fake_build(constructor, prepared, pricer, params, *, binding, recipe, only_c
         if type(item) is cw.RootRefusal:
             roots.append(dict(request_id=item.request_id, status='REFUSED', reason='constructor-root:' + item.kind));continue
         rows = tuple(range(len(requests), len(requests) + 8));requests += rows
-        roots.append(dict(request_id=item.request_id, status='PRICED', reason=None, rows=rows, root_logits=LOGITS, root_legal=item.legal))
+        roots.append(dict(request_id=item.request_id, status='PRICED', reason=None, rows=rows, root_logits=LOGITS, root_legal=item.legal,
+            root_view_source='b2', b2_view=dict(equal=True, keys=dict(numeric_features=True), numeric_max_abs_diff=0.)))
     return SimpleNamespace(requests=tuple(requests), roots=tuple(roots))
 
 
@@ -479,6 +480,9 @@ class MainTests(unittest.TestCase):
         first = rows[0];want = expected_decision()
         self.assertEqual((first['ordinal'], first['battle_id'], first['owner'], first['stream_id'], first['request_count']), (1001, 'battle-1001', 'p1', 5, 1))
         self.assertEqual((rows[1]['request_count'], first['seat'], first['seed']), (3, 1, 7))
+        self.assertEqual((first['replay']['root_view_source'], first['replay']['b2_view']),   # the lead's validation: world 0's view = B2's
+            ('b2', dict(equal=True, keys=dict(numeric_features=True), numeric_max_abs_diff=0., error=None)))
+        self.assertEqual((rows[-1]['replay']['root_view_source'], rows[-1]['replay']['b2_view']), (None, None))   # constructor-refused: never built
         self.assertEqual((first['replay']['status'], first['replay']['action_index'], first['replay']['q_values']), ('COMPLETE', want['action_index'],
             json.loads(json.dumps(want['q_values']))))
         self.assertEqual(first['root'], dict(root_logits=list(LOGITS), root_legal=list(LEGAL)))

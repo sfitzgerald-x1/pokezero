@@ -527,8 +527,9 @@ class WiringTests(unittest.TestCase):
             if i in refused:return (cw.RootRefusal(r['request_id'], 'SEARCH_PREFIX_OR_REQUEST_MISMATCH', '', .5, 'B'),)
             partial = i == 2;worlds = [SimpleNamespace(state=None if partial and w == 3 else 1, refusals=('MAPPER',) if partial and w == 3 else ()) for w in range(4)]
             return (cw.Prepared(r['request_id'], 'detached', SimpleNamespace(fully_constructed=not partial, worlds=worlds), (True,) * 9, .25, 'B'),)
-        def build(constructor, prepared, pricer, params, *, binding, recipe, only_complete):
-            self.assertEqual((pricer.executor, params, recipe, only_complete), ('EX', ('P',), provider.recipe, True))
+        def build(constructor, prepared, pricer, params, *, binding, recipe, only_complete, root_prior='b2'):
+            # R1-C prices on world 0's own view: bind_constructor re-runs the champion on each Request's root_inputs, exactly.
+            self.assertEqual((pricer.executor, params, recipe, only_complete, root_prior), ('EX', ('P',), provider.recipe, True, 'world0'))
             roots, requests, pairs = [], [], []
             for n, item in enumerate(prepared):
                 rows = (len(requests), len(requests) + 1);requests += [f'{item.request_id}-0', f'{item.request_id}-1']
@@ -572,6 +573,35 @@ class WiringTests(unittest.TestCase):
     def test_fail_closed(self):
         with self.assertRaisesRegex(SystemExit, 'build refused selected roots'):self.run_roots(refuse_build=True)
         with self.assertRaisesRegex(SystemExit, 'turn band 1'):self.run_roots(refused=(1, 6, 7))
+
+
+class BindConstructorRealPathTests(unittest.TestCase):
+    """bind_constructor on constructor_worlds.build's own requests (the fake engine and V2-shaped encoder of
+    tests/test_gpu_engine_constructor_worlds, a root whose B2 encoding differs from world 0's view in what the head reads): R1-C's
+    root_prior 'world0' binds exactly; the live search's 'b2' prior would fail closed there."""
+    def test_the_world0_prior_binds_exactly_and_the_b2_prior_fails_closed(self):
+        from gpu_engine import constructor_worlds as cw
+        from tests import test_gpu_engine_constructor_worlds as CW
+        CW.ConstructorWorldsTests.setUpClass();fx = CW.ConstructorWorldsTests('test_the_root_prior_reads_b2s_encoding_and_requests_keep_world0s_view')
+
+        class Champion(CW.Evaluator):   # the fake head under a champion identity, with bind_evaluator_roots' first-root check
+            def check(self, params, inputs):return True
+        evaluator, W = Champion(), 2;made, view = fx.wide_root(0, W)
+        with patch.object(cw, 'world_completer', return_value=lambda world, owner: world):   # the fake carry, kept as built
+            constructor, prepared, _ = fx.prepared({'r': made}, W)
+            pricer = fx.pricer(CW.wide_executor(), depth=2, k_own=(2,), k_opp=(2,), capacity=2, block_lanes=16, forward=evaluator)
+            built = {prior: cw.build(constructor, prepared, pricer, CW.PARAMS[:1], binding=fx.binding, recipe=fx.recipe, only_complete=True,
+                root_prior=prior) for prior in cw.ROOT_PRIORS}
+        world0, b2 = built['world0'], built['b2']
+        self.assertEqual((world0.roots[0]['root_view_source'], b2.roots[0]['root_view_source']), ('world0', 'b2'))
+        self.assertNotEqual(world0.roots[0]['root_logits'], b2.roots[0]['root_logits'])
+        for made_ in (world0, b2):   # both priors keep world 0's own view as every Request's root_inputs
+            for k, v in view.items():np.testing.assert_array_equal(made_.requests[0].root_inputs[k], v)
+        bound, values, checked = gate.bind_constructor(world0.requests, CW.PARAMS[:1], None, evaluator)
+        self.assertTrue(checked);self.assertEqual([r.root_logits for r in bound], [r.root_logits for r in world0.requests])
+        with self.assertRaisesRegex(ValueError, 'other root logits or actors than build'):gate.bind_constructor(b2.requests, CW.PARAMS[:1], None, evaluator)
+        with self.assertRaisesRegex(ValueError, 'root_prior'):
+            cw.build(constructor, prepared, pricer, CW.PARAMS[:1], binding=fx.binding, recipe=fx.recipe, root_prior='B2')
 
 
 if __name__ == '__main__':unittest.main()
