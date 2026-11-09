@@ -110,14 +110,51 @@ def grouped(probs, arrays, rows, uniform=False):
     return {name: data_mod.metrics(probs[m], labels[m], legal[m], uniform=uniform) for name, m in groups.items()}
 
 
+TURN_BUCKETS = ((1, 1), (2, 2), (3, 3), (4, 5), (6, 8), (9, 12), (13, 17), (18, 24), (25, 34), (35, 49), (50, 10**9))
+BOOTSTRAP_DRAWS = 2000
+
+
+def label_nll(probs, labels):
+    return -np.log(np.clip(probs[np.arange(len(labels)), labels], 1e-12, 1.))
+
+
+def in_context_curve(models, arrays, rows):
+    """NLL by turn bucket for each reply model on the given rows: a history model should improve as turns accumulate; a state-only
+    one shouldn't (any slope it shows comes from the state, e.g. revealed sets)."""
+    turn, labels = arrays['turn'][rows], arrays['label'][rows];curve = []
+    for low, high in TURN_BUCKETS:
+        m = (turn >= low) & (turn <= high)
+        if m.any():curve.append(dict(turns=f'{low}' if low == high else (f'{low}-{high}' if high < 10**9 else f'{low}+'), decisions=int(m.sum()),
+                                     **{name: float(label_nll(p[m], labels[m]).mean()) for name, p in models.items()}))
+    return curve
+
+
+def game_bootstrap(models, arrays, rows, pairs, draws=BOOTSTRAP_DRAWS, seed=0):
+    """90% game-cluster bootstrap intervals for mean-NLL differences (a − b) on the given rows: games are resampled with replacement,
+    because decisions within a game are correlated."""
+    labels, games = arrays['label'][rows], arrays['ordinal'][rows]
+    unique, inverse = np.unique(games, return_inverse=True);rng = np.random.default_rng(seed)
+    per = {name: label_nll(p, labels) for name, p in models.items()};out = {}
+    for a, b in pairs:
+        d = per[a] - per[b];sums = np.bincount(inverse, d, len(unique));counts = np.bincount(inverse, None, len(unique))
+        stats = [];idx = np.arange(len(unique))
+        for _ in range(draws):
+            pick = rng.choice(idx, len(idx));stats.append(sums[pick].sum() / counts[pick].sum())
+        out[f'{a} - {b}'] = dict(mean=float(d.mean()), interval_90=[float(q) for q in np.quantile(stats, [.05, .95])], games=int(len(unique)))
+    return out
+
+
 def test_report(arrays, test, pi_fp_probs, calibrated):
     """The four reply models on the test rows: uniform over legal actions, the champion's π (its stored probabilities), π recalibrated,
-    and π_FP."""
+    and π_FP; by group, by turn (the in-context curve), and game-bootstrap intervals for the NLL differences."""
     legal = arrays['legal'][test]
-    return dict(uniform_legal=grouped(legal / legal.sum(1, keepdims=True), arrays, test, uniform=True),
-                champion_pi=grouped(arrays['probs'][test], arrays, test),
-                champion_pi_recalibrated=grouped(calibrated(arrays['probs'][test], legal), arrays, test),
-                pi_fp=grouped(pi_fp_probs, arrays, test))
+    models = dict(uniform_legal=legal / legal.sum(1, keepdims=True), champion_pi=arrays['probs'][test],
+                  champion_pi_recalibrated=calibrated(arrays['probs'][test], legal), pi_fp=pi_fp_probs)
+    report = {name: grouped(p, arrays, test, uniform=name == 'uniform_legal') for name, p in models.items()}
+    report['in_context_curve'] = in_context_curve(models, arrays, test)
+    report['game_bootstrap_nll'] = game_bootstrap(models, arrays, test, (('pi_fp', 'champion_pi'), ('pi_fp', 'champion_pi_recalibrated'),
+                                                                         ('pi_fp', 'uniform_legal'), ('champion_pi', 'uniform_legal')))
+    return report
 
 
 ARCHIVE_TOLERANCE = 1e-4
@@ -195,7 +232,7 @@ def main(argv=None):
             payload = torch.load(args.evaluate, map_location='cpu', weights_only=True)
             report['archive'] = archive_parity(args.evaluate, args.export_archive, arrays, index, test, torch, payload.get('fp_reply'))
             (out / 'report-eval.json').write_text(json.dumps(report, indent=1) + '\n')
-        print(json.dumps(dict(event='EVALUATED', test_all={k: v['all'] for k, v in report['test'].items()}, archive=report.get('archive'))), flush=True)
+        print(json.dumps(dict(event='EVALUATED', test_all={k: v['all'] for k, v in report['test'].items() if isinstance(v, dict) and 'all' in v}, bootstrap=report['test']['game_bootstrap_nll'], archive=report.get('archive'))), flush=True)
         return 0
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
     base_val = predict(model, arrays, index, rows['val'], torch, args.device)
@@ -237,7 +274,7 @@ def main(argv=None):
     report['saved'] = dict(path=str(out / 'pi-fp.pt'), sha256=checkpoint_file_sha256(out / 'pi-fp.pt'),
                            note='champion checkpoint format; policy fine-tuned on Foul Play decisions; the value head output is not trained')
     (out / 'report.json').write_text(json.dumps(report, indent=1) + '\n')
-    print(json.dumps(dict(event='DONE', best_epoch=best['epoch'], test_all={k: report['test'][k]['all'] for k in report['test']})), flush=True)
+    print(json.dumps(dict(event='DONE', best_epoch=best['epoch'], test_all={k: v['all'] for k, v in report['test'].items() if isinstance(v, dict) and 'all' in v}, bootstrap=report['test']['game_bootstrap_nll'])), flush=True)
     return 0
 
 

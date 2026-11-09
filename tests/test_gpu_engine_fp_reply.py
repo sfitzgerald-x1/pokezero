@@ -218,6 +218,25 @@ class WindowTests(unittest.TestCase):
         self.assertEqual(t.windows(np.array([7, 7]), 1).tolist(), [[0], [1]])
 
 
+class CurveAndBootstrapTests(unittest.TestCase):
+    def arrays(self):
+        return dict(turn=np.array([1, 1, 2, 7, 60]), label=np.array([0, 1, 0, 0, 1]), ordinal=np.array([4, 4, 5, 5, 6]))
+
+    def test_curve_buckets_turns_and_averages_nll_per_model(self):
+        sure = np.tile(np.eye(9)[0] * .9 + .1 / 9, (5, 1))
+        curve = t.in_context_curve(dict(m=sure), self.arrays(), np.arange(5))
+        self.assertEqual([(c['turns'], c['decisions']) for c in curve], [('1', 2), ('2', 1), ('6-8', 1), ('50+', 1)])
+        p0, p1 = .9 + .1 / 9, .1 / 9
+        self.assertAlmostEqual(curve[0]['m'], -(np.log(p0) + np.log(p1)) / 2)
+
+    def test_bootstrap_of_identical_models_is_zero_and_resamples_games(self):
+        p = np.full((5, 9), 1 / 9);q = np.tile(np.eye(9)[0] * .5 + .5 / 9, (5, 1))
+        out = t.game_bootstrap(dict(a=p, b=p, c=q), self.arrays(), np.arange(5), (('a', 'b'), ('c', 'a')), draws=200)
+        self.assertEqual(out['a - b']['interval_90'], [0., 0.]);self.assertEqual(out['a - b']['games'], 3)
+        low, high = out['c - a']['interval_90'];self.assertLessEqual(low, out['c - a']['mean'] + 1e-12)
+        self.assertGreaterEqual(high, out['c - a']['mean'] - 1e-12)
+
+
 @unittest.skipUnless(__import__('importlib').util.find_spec('torch'), 'torch not installed')
 class RecalibrationTests(unittest.TestCase):
     def test_recalibration_recovers_a_flattening_temperature(self):
