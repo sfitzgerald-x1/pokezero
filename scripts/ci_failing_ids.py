@@ -389,7 +389,7 @@ def pod_run(args):
                 blocks=len(parsed['selected_blocks']), blocks_finished=len(parsed['blocks_finished']))
         # The CI entry point itself, selecting this module's block: --index i --count <blocks>.
         command = [sys.executable, '-u', str(tree / 'scripts/run_gpu_component_shard.py'), '--index', str(index[module]),
-                   '--count', str(len(blocks)), '--process-blocks', *isolate]
+                   '--count', str(len(blocks)), '--process-blocks', *isolate, '--resource-interval-seconds', '30']
         with path.open('w') as stream:
             process = subprocess.Popen(command, cwd=tree, env=env, stdout=stream, stderr=subprocess.STDOUT)
             try:code = process.wait(timeout=args.timeout)
@@ -415,7 +415,7 @@ def pod_run(args):
     node = subprocess.run(['node', '--version'], capture_output=True, text=True).stdout.strip()
     data = dict(schema=SCHEMA + '.pod', tree=str(tree), tree_commit=commit, tree_dirty=dirty, modules=modules,
         entry_point=('scripts/run_gpu_component_shard.py --index <block> --count <blocks> --process-blocks '
-                     '--isolate-standard-class <CI classes>; full CI discovery in parent and child'),
+                     '--isolate-standard-class <CI classes> --resource-interval-seconds 30; full CI discovery in parent and child'),
         discovery_blocks=len(blocks), module_blocks={m: index[m] for m in modules},
         reused_logs=dict(directory=str(args.reuse_logs), modules=sorted(reused)) if args.reuse_logs else None,
         environment=dict(python=platform.python_version(), machine=platform.machine(), jax_numpy=versions, node=node,
