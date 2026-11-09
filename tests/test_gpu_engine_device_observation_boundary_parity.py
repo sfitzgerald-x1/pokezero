@@ -168,6 +168,151 @@ class DeviceBoundaryParityTests(unittest.TestCase):
         h.move(fresh,state,0,j.ones(2,j.int32),yes,pp_use=True)
         self.assertEqual(int(fresh.trackers.mon_features['stayed_and_attacked'][0,0,0]),1)
 
+    def b2_active(self):
+        """B2's public active consumer (public_active.apply) over a fixture vocabulary, batch 1."""
+        from gpu_engine import public_active as a, public_mon_state as m
+        catalog=a.compile_active(self.catalog.vocabulary);t=catalog.device;sb=self.catalog.species.device.binding
+        box=dict(state=a.initialize(1,t,species_binding=sb),mons=m.initialize(1,species_binding=sb))
+        def fact(op,side=-1,value=0):
+            st,mons=box['state'],box['mons']
+            if op==a.ARRIVE:
+                mons,ok=m.arrive(mons,side=side,slot=0,encounter=1,species=1,source_species=0,level=80,gender=0,
+                    hp_numerator=100,hp_denominator=100,status=0);self.assertTrue(bool(ok.all()));box['mons']=mons
+            enc=0 if side<0 else int(mons.encounter[0,side,int(mons.active[0,side])])
+            st,ok=a.apply(st,t,mons,operation=op,side=side,encounter=enc,value=value,producer_binding=t.binding)
+            self.assertTrue(bool(ok.all()),op);box['state']=st
+        def project():
+            return a.project(box['state'],t,box['mons'],expected_vocabulary=t.vocabulary_binding)
+        return a,catalog,fact,project
+
+    def compare_active(self,trackers,expected,a,*,equal=True):
+        cols=j.asarray(a.NUMERIC_COLUMNS);cats=j.asarray(a.CATEGORY_COLUMNS);same=True
+        for seat in (0,1):
+            view=tr.readout(trackers,j.full(2,1-seat,j.int32))
+            n,cat,_=f.project_mon(j.zeros((2,6,132),j.float32),j.zeros((2,6,41),j.int32),view.mon_features,
+                active=view.active,present=view.present,tables=self.tables.features,volatiles=view.volatiles)
+            slot=int(trackers.active_slot[0,seat])
+            same &= bool(np.allclose(n[0,slot,cols],expected.numeric[0,seat,cols],atol=1e-7))
+            same &= bool(np.array_equal(cat[0,slot,cats],expected.categorical[0,seat,cats]))
+            if equal:
+                np.testing.assert_allclose(n[0,slot,cols],expected.numeric[0,seat,cols],atol=1e-7,err_msg=str(seat))
+                np.testing.assert_array_equal(cat[0,slot,cats],expected.categorical[0,seat,cats],err_msg=str(seat))
+        return same
+
+    def test_faint_clear_matches_b2_faint_on_the_fainted_seat_and_both_mean_looks(self):
+        a,catalog,fact,project=self.b2_active()
+        state=self.state();c=h.initialize(state,self.tables.belief);yes=j.ones(2,bool)
+        # One synthetic transaction on both sides: seat 1 Substitute + confusion + Leech Seed,
+        # one successful stall, a public Trick swap and one TURN of confusion; seat 0 Mean Looked.
+        fact(a.ARRIVE,0);fact(a.ARRIVE,1)
+        for name in ('confusion','substitute','leechseed'):
+            fact(a.ADD,1,catalog.ids[name]);h.volatile(c,state,1,name,yes,yes)
+        fact(a.STALL_ATTEMPT,1,1);fact(a.STALL_SUCCESS,1);fact(a.ITEM_SET,1,2);fact(a.TRAPPED,0);fact(a.TURN,-1,1)
+        for side,name,value in ((1,'confusion_turns',1),(1,'stall_counter',1),(1,'item_swapped',1),(1,'sub_present',1),(0,'meanlook_trap',1)):
+            h.feature(c,side,state.active[:,side],name,j.full(2,value,j.int32),yes)
+        self.compare_active(c.trackers,project(),a)
+        self.assertTrue(bool(project().numeric[0,1,j.asarray(a.NUMERIC_COLUMNS)].any()))
+        # Seat 1's active faints: B2 FAINT; device turn_end over the same HP transition.
+        fact(a.FAINT,1);expected=project()
+        after=state._replace(hp=state.hp.at[:,1,0].set(0))
+        before=c.trackers
+        h.turn_end(c,state,after,j.zeros(2,bool))
+        self.compare_active(c.trackers,expected,a)
+        self.assertFalse(bool(expected.numeric[0,:,j.asarray(a.NUMERIC_COLUMNS)].any()))
+        # Without the clear (the old device) the fainted active's bag and clocks stayed visible.
+        old=h.Context(before,self.tables.belief);h.observe(old,after,yes)
+        self.assertFalse(self.compare_active(old.trackers,expected,a,equal=False))
+
+    def test_entry_reveals_follow_showdowns_shared_lines(self):
+        import json,os
+        from types import SimpleNamespace as NS
+        from pokezero.belief import _confirmed_ability_from_event
+        from pokezero.showdown import _public_event_from_line
+        root=os.environ['POKEZERO_SHOWDOWN_ROOT']
+        code="""const {Battle}=require(process.argv[1]+'/dist/sim/battle.js');
+function mon(species,ability,moves){return {name:species,species,ability,item:'',moves,nature:'Hardy',level:80,gender:'M',
+ evs:{hp:84,atk:84,def:84,spa:84,spd:84,spe:84},ivs:{hp:31,atk:31,def:31,spa:31,spd:31,spe:31}};}
+function run(p1,p2,choices){const b=new Battle({formatid:'gen3customgame',seed:[1,2,3,4]});
+ b.setPlayer('p1',{name:'A',team:p1});b.setPlayer('p2',{name:'B',team:p2});for(const [x,y] of choices)b.makeChoices(x,y);return b.log;}
+const karp=[mon('Magikarp','Swift Swim',['splash']),mon('Gyarados','Intimidate',['splash'])];
+console.log(JSON.stringify({
+ sub:run([mon('Smeargle','Own Tempo',['substitute','splash'])],karp,[['move 1','move 1'],['move 2','switch 2']]),
+ open:run([mon('Smeargle','Own Tempo',['splash'])],karp,[['move 1','switch 2']]),
+ sand:run([mon('Tyranitar','Sand Stream',['splash'])],[mon('Tyranitar','Sand Stream',['splash'])],[])}));"""
+        logs=json.loads(subprocess.check_output(['node','-e',code,root],text=True))
+        def seen_by(log,observer):
+            out,i=[],0
+            while i<len(log):
+                if log[i].startswith('|split|'):
+                    out.append(log[i+1] if log[i].split('|')[2]==observer else log[i+2]);i+=3
+                else:out.append(log[i]);i+=1
+            return out
+        def revealed(log,holder):
+            # The B2/champion ability attribution: -ability lines and [from] ability tags.
+            found=set()
+            for line in seen_by(log,'p1' if holder=='p2' else 'p2'):
+                ident,name=_confirmed_ability_from_event(_public_event_from_line(line))
+                if ident and name and ident.startswith(holder):found.add(name)
+            return found
+        self.assertEqual(revealed(logs['sub'],'p2'),set())
+        self.assertTrue(any(x.startswith('|-hint|') for x in logs['sub']))
+        self.assertEqual(revealed(logs['open'],'p2'),{'Intimidate'})
+        sand={side:revealed(logs['sand'],side) for side in ('p1','p2')}
+        self.assertEqual(sorted(len(x) for x in sand.values()),[0,1])          # exactly one Sand Stream is public
+        # The device entry hook over the same transactions.
+        # Fixture ability ids stand in for the holders: 1 Intimidate, 2 Sand Stream.
+        flag=j.zeros(3,bool);SAND=3
+        table=NS(weather_ability=j.zeros(3,j.int32).at[2].set(SAND),intimidate=flag.at[1].set(True),
+            attack_drop_immune=flag,trace=None,own_tempo=None)
+        state=self.state();yes=j.ones(2,bool)
+        gyarados=state._replace(ability=state.ability.at[:,1,0].set(1),substitute_hp=state.substitute_hp.at[0,0,0].set(60))
+        c=h.initialize(gyarados,self.tables.belief);h.entry(c,gyarados,gyarados,1,table,yes)
+        self.assertEqual([bool(x) for x in c.trackers.shown_ability[:,1,0]!=0],
+            [bool(revealed(logs['sub'],'p2')),bool(revealed(logs['open'],'p2'))])
+        tyranitars=state._replace(ability=state.ability.at[:,:,0].set(2))
+        c=h.initialize(tyranitars,self.tables.belief);first=1 if sand['p2'] else 0
+        sanded=tyranitars._replace(weather=j.full(2,SAND,j.int32))
+        h.entry(c,tyranitars,sanded,first,table,yes);h.entry(c,sanded,sanded,1-first,table,yes)
+        for side in (0,1):
+            self.assertEqual(bool(c.trackers.shown_ability[0,side,0]),bool(sand[f'p{side+1}']))
+
+    def test_departed_color_change_shows_b2_species_types(self):
+        from gpu_engine import public_types as pt, public_mon_state as m
+        state=self.state();yes=j.ones(2,bool);owners=j.zeros(2,j.int32)
+        types=self.tables.belief.species_types[state.species];state=state._replace(types=types,base_types=types)
+        c=h.initialize(state,self.tables.belief)
+        gardevoir=state._replace(active=state.active.at[:,1].set(1));h.install(c,gardevoir,1,yes)
+        water=self.metadata['vocabulary']['types'].index('water')
+        hit=gardevoir._replace(types=gardevoir.types.at[:,1,1].set(j.asarray([water,0],j.int32)))
+        h.color_change(c,gardevoir,hit,1,yes)
+        stale=c.trackers
+        reverted=hit._replace(types=hit.types.at[:,1,1].set(hit.base_types[:,1,1]))
+        back=reverted._replace(active=reverted.active.at[:,1].set(0))
+        h.depart(c,hit,reverted,1,None,yes);h.install(c,back,1,yes);h.withdraw(c,back,1,j.ones(2,j.int32),yes)
+        cols=[s.CATEGORY_TYPE_1,s.CATEGORY_TYPE_2]
+        def bench_types(trackers):
+            out=e.encode(back,tr.readout(trackers,owners),self.tables,observer_sides=owners,legal_action_mask=j.ones((2,9),bool))
+            slot=int(trackers.physical_to_public[0,1,1]);return np.asarray(out.categorical_ids[0,7+slot,cols])
+        # B2: the team writer's species categories on the bench; the seat's overlay is cleared on arrival.
+        sid=self.catalog.species.species_id('gardevoir')
+        base=np.asarray(self.catalog.species.device.type_categories)[sid]
+        np.testing.assert_array_equal(bench_types(c.trackers),base)
+        self.assertFalse(np.array_equal(bench_types(stale._replace(active_slot=c.trackers.active_slot)),base))
+        tt=self.catalog.types.device;sb=self.catalog.species.device.binding
+        ts,mons=pt.initialize(1,tt,species_binding=sb),m.initialize(1,species_binding=sb)
+        def arrive(mons,ts,slot,name):
+            mons,ok=m.arrive(mons,side=1,slot=slot,encounter=slot+1,species=self.catalog.species.species_id(name),
+                source_species=0,level=80,gender=0,hp_numerator=100,hp_denominator=100,status=0);self.assertTrue(bool(ok.all()))
+            ts,ok=pt.apply(ts,tt,mons,operation=pt.ARRIVE,side=1,encounter=slot+1,producer_binding=tt.binding);self.assertTrue(bool(ok.all()))
+            return mons,ts
+        mons,ts=arrive(mons,ts,1,'gardevoir')
+        from gpu_engine.public_moves import _static_category
+        ts,ok=pt.apply(ts,tt,mons,operation=pt.TYPE,side=1,encounter=2,first=_static_category(self.catalog.vocabulary,'type:Water'),
+            producer_binding=tt.binding);self.assertTrue(bool(ok.all()))
+        self.assertTrue(bool(pt.project(ts,tt,mons,expected_vocabulary=tt.vocabulary_binding).write_mask[0,1].any()))
+        mons,ts=arrive(mons,ts,0,'absol')
+        self.assertFalse(bool(pt.project(ts,tt,mons,expected_vocabulary=tt.vocabulary_binding).write_mask.any()))
+
     def test_effective_gen3_failed_focus_retains_move_before_cant_order(self):
         import json,os
         root=os.environ['POKEZERO_SHOWDOWN_ROOT']

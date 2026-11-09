@@ -293,9 +293,16 @@ def entry(c,before,after,side,table,use):
     c=observe(c,after,use)
     if table is None:return c
     ability=_get(before,'ability',side);starts=use&(_get(after,'hp',side)>0)
-    reveal=starts&((table.weather_ability[ability]!=0)|table.intimidate[ability])
+    # Only an actual shared line reveals. Gen3 Intimidate prints -ability only
+    # with a living foe that has no Substitute (otherwise an owner-only hint);
+    # a weather ability prints -weather only when setWeather changes the field
+    # (the same permanent weather is a silent no-op): entry.py's change test.
+    requested=table.weather_ability[ability]
+    foe_open=(_get(before,'hp',1-side)>0)&(_get(before,'substitute_hp',1-side)==0)
+    sets_weather=(requested!=0)&((before.weather!=requested)|(before.weather_counter>0))
+    reveal=starts&(sets_weather|(table.intimidate[ability]&foe_open))
     c=reveal_ability(c,after,side,reveal,ability=ability)
-    blocked=starts&table.intimidate[ability]&(_get(before,'hp',1-side)>0)&(_get(before,'substitute_hp',1-side)==0)&table.attack_drop_immune[_get(before,'ability',1-side)]
+    blocked=starts&table.intimidate[ability]&foe_open&table.attack_drop_immune[_get(before,'ability',1-side)]
     c=reveal_ability(c,before,1-side,blocked)
     changed=starts&(table.weather_ability[ability]!=0)&((before.weather!=after.weather)|(before.weather_counter!=after.weather_counter))
     c=c._replace(trackers=port.spikes(c.trackers,before,after,side,use,tr._percent))
@@ -325,7 +332,27 @@ def depart(c,before,after,side,table,use):
     # A borrowed ability ends silently; known original identity is not guessed.
     c=c._replace(trackers=_write(c.trackers,'shown_ability',side,p,_li.take(c.trackers.original_ability,_r(before),side,j.clip(_li.take(c.trackers.active_slot,_r(before),side),0,5)),use&(_li.take(c.trackers.borrowed_ability,_r(before),side,j.clip(_li.take(c.trackers.active_slot,_r(before),side),0,5))!=0)))
     c=c._replace(trackers=_write(c.trackers,'borrowed_ability',side,p,j.zeros_like(use,j.int32),use))
+    c=type_revert(c,before,after,side,p,use)
     return _refresh(c,side,p,use&~_li.take(c.trackers.fainted,_r(before),side,j.clip(_li.take(c.trackers.active_slot,_r(before),side),0,5)))
+
+
+def type_revert(c,before,after,side,physical,use):
+    """A departing mon's public live-type overlay (Color Change) ends.
+
+    B2's public_types overlay belongs to the seat's current encounter and every
+    arrival clears it, so a benched mon shows its species base types (the team
+    writer's), exactly what install writes. The write follows the actual engine
+    departure revert (entry.depart: types <- base_types), the same operand
+    color_change wrote; without species tables the overlay is cleared to zero.
+    """
+    r=_r(before);b=len(r);p=j.clip(physical,0,5)
+    reverted=_mask(use,b)&j.any(_li.take(before.types,r,side,p)!=_li.take(after.types,r,side,p),axis=1)
+    base=j.zeros((b,2),j.int32)
+    if c.belief_tables is not None and hasattr(c.belief_tables,'species_types'):
+        species=_li.take(before.species,r,side,p);tab=c.belief_tables.species_initial_mask
+        known=(species>0)&(species<tab.shape[0])
+        base=j.where(known[:,None],c.belief_tables.species_types[j.clip(species,0,tab.shape[0]-1)],0)
+    return c._replace(trackers=_write(c.trackers,'shown_types',side,physical,base,reverted))
 
 
 def move(c,state,side,move,use,*,pp_use=False,original=True,count_turn=True,preparation=False):
@@ -445,8 +472,36 @@ def negative_hp_line(c,state,side,use,*,source_class):
     return c._replace(trackers=negative_items.hp_line(c.trackers,state,side,use,source_class=source_class))
 
 
+FAINT_CLEAR_KEYS=('confusion_turns','encore_turns','wrap_trap_turns','stall_counter','sub_present',
+                  'item_swapped','choice_locked')
+
+
+def faint_clear(c,before,after,use):
+    """B2's FAINT public clear for an active whose HP reached zero this step.
+
+    public_active.apply(FAINT) empties the fainted seat's volatile bag (recharge
+    included), resets its confusion/encore/partial-trap clocks, stall counter
+    and choice/swap flags, and clears Mean Look on BOTH seats. The fainted mon
+    stays the active token until its replacement arrives, so the replacement
+    request must see this. The SUB fraction is the bag's substitute bit in B2.
+    Keys absent from this carry (deferred features) are skipped.
+    """
+    r=_r(after);b=len(r);use=_mask(use,b);hit=[]
+    for side in range(2):
+        p=_li.take(after.active,r,side)
+        hit.append(use&(_li.take(before.hp,r,side,j.clip(p,0,5))>0)&(_get(after,'hp',side)==0))
+    for side in range(2):
+        p=_li.take(after.active,r,side)
+        c=c._replace(trackers=_write(c.trackers,'public_volatiles',side,p,j.zeros((b,len(VOLATILE_NAMES)),bool),hit[side]))
+        for name in FAINT_CLEAR_KEYS:
+            if name in c.trackers.mon_features:c=feature(c,side,p,name,j.zeros_like(p),hit[side])
+        c=feature(c,side,p,'meanlook_trap',j.zeros_like(p),hit[0]|hit[1])
+    return c
+
+
 def turn_end(c,before,after,ordinary,*,upkeep=None,leftovers=None):
     c=observe(c,after,~before.done)
+    c=faint_clear(c,before,after,~before.done)
     for side in range(2):
         p=_li.take(after.active,_r(after),side);alive=ordinary&(_get(after,'hp',side)>0)
         for name,active in [('confusion_turns',_get(after,'confusion_counter',side)>0),('encore_turns',_get(after,'encore_counter',side)>0)]:
