@@ -1,0 +1,48 @@
+{
+ "adopts": [
+  {
+   "change": "none",
+   "path": "evals/depthn-foulplay-dn2w16-amendment-unknown-cells-20261108.json",
+   "rule": "unknown-cells",
+   "sha256": "c4ff30a25a573f90fdd02957b40fb8307d8b87b56dfbfe60d85ea662b18e8b3b"
+  },
+  {
+   "change": "none",
+   "path": "evals/depthn-foulplay-dn2w16-amendment-harm-mirror-20261108.json",
+   "rule": "harm-mirror",
+   "sha256": "dbce9a54223969a213a3e584fd2e01bbe259ebad7530678fbba7cd38ecd9539f"
+  },
+  {
+   "change": "none",
+   "path": "evals/depthn-foulplay-dn2w16-amendment-both-bounds-20261108.json",
+   "rule": "both-bounds",
+   "sha256": "98e6120f30565c0b40d423504aa0d07a2929b2207551a5c901adb7579d361e13"
+  },
+  {
+   "change": "none",
+   "path": "evals/depthn-foulplay-dn2w16-amendment-final-fairness-20261108.json",
+   "rule": "final-fairness",
+   "sha256": "b2fccc253136b2bce3125cc773973c7186a0dff6a5ff8e6825a5618d6268050e"
+  }
+ ],
+ "application": "scripts/depthn_screen_amended_verdict.py --run-binding <this file> <its sha256> applies the four adopted rule files (each pinned by sha256 in the script, their rule text unchanged) to screen-r2's official readout and result files. This record supplies the run they bind to: the run directory, the declaration sha256 every result file and the readout must carry, and the readout's tree commit, in place of the four files' screen-r1 run fields (their own run fields and declaration sha256 stay as committed and still chain the four files to one another).",
+ "computed_before": "Nothing: this record is committed before any screen-r2 cell exists. No cell, latency, fairness, paired, score or outcome statistic of screen-r2 has been computed; its dispatch does not depend on this record.",
+ "decided_by": "the lead (search, V2, CUDA): screen-r2 uses screen-r1's decision rules as amended, unchanged",
+ "declaration": "evals/depthn-foulplay-dn2w16-declaration-r2-20261109.json",
+ "declaration_sha256": "f065fee350d9c9a27eb0c29595bec2292ca669ec47ff1e9defad71b97e9141a6",
+ "made_at_utc": "2026-11-09T17:32:44Z",
+ "not_adopted": [
+  {
+   "path": "evals/depthn-foulplay-dn2w16-amendment-extension-20261108.json",
+   "reason": "screen-r1-specific (it dispatches screen-r1's own 2,000-cell extension on screen-r1's tree). screen-r2 is a 500-cell screen and declares no extension to 2,000: a CONTINUE_TO_2000 verdict goes to the lead for a separate pre-registered decision.",
+   "sha256": "8a708ebbc6a4206dafc38b2d729656e25da6cf914931b5424353f441f6e9ed00"
+  }
+ ],
+ "run": {
+  "dispatch_note": "the dispatch tree is the declaration commit (the server tree c7808ad9 plus the declaration JSON alone, as depthn_live_panel.server_tree_check requires and as screen-r1 did); this record and the declaration note are pre-registered in later commits pushed before dispatch",
+  "run_directory": "/out/screen-r2",
+  "server_tree_commit": "c7808ad90f16d1338112e364487508f2042f198b",
+  "tree_commit": "5ca04a4b6eb0ba62f619fa5944d4737b52b5ad96"
+ },
+ "schema": "depthn-foulplay-panel.amendment-adoption.v1"
+}

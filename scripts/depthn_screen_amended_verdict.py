@@ -20,6 +20,12 @@ The amendment (the lead's ruling, committed before any paired or outcome statist
   STOP_BREAKAGE if any amended breakage, else CONTINUE_TO_2000; at the bar, BAR_MET when both lower bounds are > 0 with no amended
   breakage, else BAR_NOT_MET;
 - every UNKNOWN cell is classified by cause (round_cap, foulplay_challenge_timeout, foulplay_choice_timeout, other) and arm.
+The rule files are screen-r1's (their run fields name /out/screen-r1, its declaration and tree). Another run adopts them through a
+run binding (--run-binding PATH SHA256, pinned in RUN_BINDINGS: the adoption record, e.g.
+evals/depthn-foulplay-dn2w16-amendment-screen-r2-adoption-20261109.json): it adopts exactly the four pinned rule files by sha256 and
+supplies the run directory, the declaration sha256 the readout and every result file must carry, and the readout's tree commit, in
+place of the rule files' run fields; the rule logic is unchanged and still read from the rule files, whose own chain (each addendum's
+declaration and addendum_to) is checked as before. Without --run-binding the script is screen-r1's, byte for byte.
 Only the standard library and scipy (the declared estimator's own t quantile). Writes the verdict once with --output.
 """
 import argparse
@@ -39,6 +45,8 @@ PINNED = dict(amendment='c4ff30a25a573f90fdd02957b40fb8307d8b87b56dfbfe60d85ea66
               addendum='dbce9a54223969a213a3e584fd2e01bbe259ebad7530678fbba7cd38ecd9539f',
               both='98e6120f30565c0b40d423504aa0d07a2929b2207551a5c901adb7579d361e13',
               final='b2fccc253136b2bce3125cc773973c7186a0dff6a5ff8e6825a5618d6268050e')
+ADOPTION_SCHEMA = 'depthn-foulplay-panel.amendment-adoption.v1'
+RUN_BINDINGS = dict(screen_r2='fa582d862964bbbf6a6ffd4d5c97c970fdd424af2986d792edeaef8fd4fc21b8')   # committed adoption records (the CLI refuses others)
 CAUSES = (('round cap', 'round_cap'), ('foul-play challenge', 'foulplay_challenge_timeout'), ('foul-play choice', 'foulplay_choice_timeout'))
 
 
@@ -96,9 +104,29 @@ def conservative_interval(raw, search, limit):return clustered_interval(raw, sea
 def mirror_interval(raw, search, limit):return clustered_interval(raw, search, limit, search_unknown=1., raw_unknown=0.)
 
 
+def run_fields(binding, binding_sha256, rule_shas):
+    """(declaration_sha256, run_directory, tree_commit) of a run binding that adopts exactly the four rule files `rule_shas`;
+    ValueError otherwise."""
+    adopts = binding.get('adopts') if type(binding.get('adopts')) is list else []
+    run = binding.get('run') if type(binding.get('run')) is dict else {}
+    hexes = lambda value, n: type(value) is str and len(value) == n and all(c in '0123456789abcdef' for c in value)
+    if (binding.get('schema') != ADOPTION_SCHEMA or len(adopts) != 4 or any(type(x) is not dict or x.get('change') != 'none' for x in adopts)
+            or sorted(str(x.get('sha256')) for x in adopts) != sorted(rule_shas)):
+        raise ValueError(f'a run binding adopting exactly the four rule files unchanged required ({binding_sha256})')
+    if not (hexes(binding.get('declaration_sha256'), 64) and type(run.get('run_directory')) is str and hexes(run.get('tree_commit'), 40)):
+        raise ValueError('a run binding with its declaration sha256, run directory and tree commit required')
+    return binding['declaration_sha256'], run['run_directory'], run['tree_commit']
+
+
 def verdict(readout, amendment, run_directory, *, readout_sha256, amendment_sha256, addendum, addendum_sha256, both, both_sha256,
-            final, final_sha256, final_fairness):
-    if amendment.get('schema') != AMENDMENT_SCHEMA or readout.get('declaration_sha256') != amendment.get('declaration_sha256'):
+            final, final_sha256, final_fairness, binding=None, binding_sha256=None):
+    """The amended verdict (module docstring). `binding`: a run binding (the adoption record) whose run fields replace the rule
+    files' (screen-r1's); None: screen-r1, unchanged."""
+    if binding is not None:
+        declaration_sha256, bound_directory, tree_commit = run_fields(binding, binding_sha256, [amendment_sha256, addendum_sha256, both_sha256, final_sha256])
+        if str(Path(run_directory).resolve()) != bound_directory:raise ValueError('the bound run\'s directory required')
+    else:declaration_sha256, tree_commit = amendment.get('declaration_sha256'), (amendment.get('run') or {}).get('tree_commit')
+    if amendment.get('schema') != AMENDMENT_SCHEMA or readout.get('declaration_sha256') != declaration_sha256:
         raise ValueError('an amendment of this readout\'s declaration required')
     if (addendum.get('schema') != AMENDMENT_SCHEMA or addendum.get('declaration_sha256') != amendment['declaration_sha256']
             or (addendum.get('addendum_to') or {}).get('sha256') != amendment_sha256):
@@ -110,12 +138,12 @@ def verdict(readout, amendment, run_directory, *, readout_sha256, amendment_sha2
             or not {amendment_sha256, addendum_sha256, both_sha256} <= {x.get('sha256') for x in final.get('addendum_to') or ()}):
         raise ValueError('the final-fairness addendum to this amendment chain required')
     if type(final_fairness) is not dict or type(final_fairness.get('within')) is not bool:raise ValueError('the final fairness gate\'s result required')
-    if (readout.get('tree') or {}).get('commit') != amendment['run']['tree_commit']:raise ValueError('a readout of the amended run\'s tree required')
+    if (readout.get('tree') or {}).get('commit') != tree_commit:raise ValueError('a readout of the amended run\'s tree required')
     arm, limit = readout['arm'], readout['paired_cells']
     if limit not in (SCREEN_CELLS, BAR_CELLS) or readout['decision'] not in KEPT and (readout['bar'] is None) != (limit == SCREEN_CELLS):
         raise ValueError('a screen or bar readout required')   # a kept decision (void, held flag) carries no bar at either size
     screen = limit == SCREEN_CELLS;rule = amendment['rule'];cap = rule['unknown_share_max_per_arm']
-    arms = {name: cells(run_directory, name, limit, amendment['declaration_sha256']) for name in ('RAW', arm)}
+    arms = {name: cells(run_directory, name, limit, declaration_sha256) for name in ('RAW', arm)}
     unknown = {}
     for name, found in arms.items():
         official = readout['arms'][name]
@@ -155,7 +183,9 @@ def verdict(readout, amendment, run_directory, *, readout_sha256, amendment_sha2
     elif screen:decision = 'STOP_HARM' if harm else 'STOP_BREAKAGE' if breakage else 'CONTINUE_TO_2000'
     else:decision = 'BAR_MET' if met and not breakage else 'BAR_NOT_MET'
     paired = paired or {}
-    return dict(schema=VERDICT_SCHEMA, amendment_sha256=amendment_sha256, addendum_sha256=addendum_sha256, both_sha256=both_sha256,
+    bound_run = {} if binding is None else dict(run_binding_sha256=binding_sha256,
+        run_binding=dict(declaration_sha256=declaration_sha256, run_directory=bound_directory, tree_commit=tree_commit))
+    return dict(**bound_run, schema=VERDICT_SCHEMA, amendment_sha256=amendment_sha256, addendum_sha256=addendum_sha256, both_sha256=both_sha256,
         final_sha256=final_sha256, final_fairness=final_fairness,
         readout_sha256=readout_sha256, tree_commit=readout['tree']['commit'], bar_met=None if screen or void or readout['decision'] in KEPT else met,
         arm=arm, paired_cells=limit, official_decision=readout['decision'], official_breakage=readout['breakage'], official_harm=readout['harm'],
@@ -175,18 +205,28 @@ def main(argv=None):
                  'final-sha256', 'run-directory'):
         p.add_argument('--' + name, required=True)
     p.add_argument('--output', help='write the verdict once here')
+    p.add_argument('--run-binding', nargs=2, metavar=('PATH', 'SHA256'), help='a run binding (adoption record) pinned in RUN_BINDINGS: '
+        'its run directory, declaration sha256 and tree commit replace the rule files\' (screen-r1\'s)')
     args = p.parse_args(argv)
     for name, given in (('amendment', args.amendment_sha256), ('addendum', args.addendum_sha256), ('both', args.both_sha256), ('final', args.final_sha256)):
         if given != PINNED[name]:raise SystemExit(f'--{name}-sha256 must be the committed file\'s {PINNED[name]}')
-    amendment = read_bound(args.amendment, args.amendment_sha256)
-    if str(Path(args.run_directory).resolve()) != amendment['run']['run_directory']:raise SystemExit('--run-directory must be the amended run\'s')
+    amendment = read_bound(args.amendment, args.amendment_sha256);binding = binding_sha256 = None
+    if args.run_binding is not None:
+        path, binding_sha256 = args.run_binding
+        if binding_sha256 not in RUN_BINDINGS.values():raise SystemExit(f'--run-binding must be a committed run binding: {sorted(RUN_BINDINGS.values())}')
+        binding = read_bound(path, binding_sha256)
+        try:directory = run_fields(binding, binding_sha256, list(PINNED.values()))[1]
+        except ValueError as error:raise SystemExit(str(error))
+        if str(Path(args.run_directory).resolve()) != directory:raise SystemExit('--run-directory must be the bound run\'s')
+    elif str(Path(args.run_directory).resolve()) != amendment['run']['run_directory']:raise SystemExit('--run-directory must be the amended run\'s')
     from scripts import depthn_fairness_final   # the run's tree (pokezero) on the path
     readout = read_bound(args.readout, args.readout_sha256)
     final_fairness = depthn_fairness_final.final_gate(args.run_directory, readout['arm'], readout['paired_cells'])
     value = verdict(readout, read_bound(args.amendment, args.amendment_sha256), args.run_directory,
         readout_sha256=args.readout_sha256, amendment_sha256=args.amendment_sha256, addendum=read_bound(args.addendum, args.addendum_sha256),
         addendum_sha256=args.addendum_sha256, both=read_bound(args.both, args.both_sha256), both_sha256=args.both_sha256,
-        final=read_bound(args.final, args.final_sha256), final_sha256=args.final_sha256, final_fairness=final_fairness)
+        final=read_bound(args.final, args.final_sha256), final_sha256=args.final_sha256, final_fairness=final_fairness,
+        **({} if binding is None else dict(binding=binding, binding_sha256=binding_sha256)))
     text = json.dumps(value, indent=1, sort_keys=True) + '\n'
     if args.output:
         with open(args.output, 'x') as f:f.write(text)

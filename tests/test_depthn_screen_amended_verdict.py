@@ -21,31 +21,31 @@ CHALLENGE = 'TimeoutError: timed out waiting for foul-play challenge.'
 CHOICE = 'TimeoutError: timed out waiting for foul-play choice.'
 
 
-def write_run(root, raw, search, *, lost=(), arm='DN2W16'):
+def write_run(root, raw, search, *, lost=(), arm='DN2W16', declaration=DECLARATION_SHA256):
     """raw/search: {pair: score, or an error string for an UNKNOWN cell}; lost: (arm, pair) claimed with no result."""
     for name in ('results', 'claims'):(root/name).mkdir(parents=True, exist_ok=True)
     cell = lambda name, pair: dict(arm=name, pair_ordinal=pair, ordinal=3*pair + (0 if name == 'RAW' else 1))
     for name, values in (('RAW', raw), (arm, search)):
         for pair, value in values.items():
             known = not isinstance(value, str);c = cell(name, pair)
-            (root/'results'/f"{c['ordinal']}.json").write_text(json.dumps(dict(schema=V.CELL_SCHEMA, declaration_sha256=DECLARATION_SHA256, cell=c,
+            (root/'results'/f"{c['ordinal']}.json").write_text(json.dumps(dict(schema=V.CELL_SCHEMA, declaration_sha256=declaration, cell=c,
                 status='COMPLETE' if known else 'UNKNOWN', score=value if known else None, error=None if known else value)))
             (root/'claims'/f"{c['ordinal']}.json").write_text(json.dumps(dict(cell=c)))
     for name, pair in lost:
         c = cell(name, pair);(root/'claims'/f"{c['ordinal']}.json").write_text(json.dumps(dict(cell=c)))
 
 
-def official(root, limit, *, decision='CONTINUE_TO_2000', breakage=(), harm=False, arm='DN2W16'):
+def official(root, limit, *, decision='CONTINUE_TO_2000', breakage=(), harm=False, arm='DN2W16', declaration=DECLARATION_SHA256, tree=TREE):
     """The readout fields the script binds to, as the panel's arm_summary and paired() compute them from the same files."""
     arms, rows = {}, {}
     for name in ('RAW', arm):
-        found = V.cells(root, name, limit, DECLARATION_SHA256)
+        found = V.cells(root, name, limit, declaration)
         complete = [c for c in found.values() if c[0] == 'COMPLETE'];lost = sum(c[0] == V.LOST for c in found.values())
         arms[name] = dict(results=len(found) - lost, complete=len(complete), unknown=len(found) - len(complete), claimed_without_result=lost,
             not_attempted=limit - len(found), score_mean=None if not complete else sum(c[1] for c in complete)/len(complete))
         rows[name] = [dict(status=c[0], score=c[1], cell=dict(pair_ordinal=p)) for p, c in found.items() if c[0] != V.LOST]
     paired = panel.paired(rows['RAW'], rows[arm], limit=limit)
-    return dict(declaration_sha256=DECLARATION_SHA256, tree=dict(commit=TREE), arm=arm, paired_cells=limit, decision=decision,
+    return dict(declaration_sha256=declaration, tree=dict(commit=tree), arm=arm, paired_cells=limit, decision=decision,
                 breakage=list(breakage), harm=harm, bar=None if limit == V.SCREEN_CELLS else dict(met=False), paired=paired, arms=arms)
 
 
@@ -215,6 +215,126 @@ class AmendedVerdictTests(unittest.TestCase):
             self.assertEqual((written['readout_sha256'], written['final_fairness'], written['final_sha256']), (sha, FAIR, self.final_sha))
             self.assertEqual(gate.call_args.args, (str(self.root), 'DN2W16', 500))   # the whole run, at the readout's limit
             with self.assertRaises(FileExistsError): V.main(argv)
+
+
+ADOPTION = EVALS/'depthn-foulplay-dn2w16-amendment-screen-r2-adoption-20261109.json'
+R2_DECLARATION = EVALS/'depthn-foulplay-dn2w16-declaration-r2-20261109.json'
+R2_DECLARATION_SHA256 = 'f065fee350d9c9a27eb0c29595bec2292ca669ec47ff1e9defad71b97e9141a6'
+R2_TREE = '5ca04a4b6eb0ba62f619fa5944d4737b52b5ad96'
+# screen-r1's verdicts through the CLI on the seeded fixtures below, written by the script before --run-binding existed (5ca04a4b)
+R1_GOLDEN = ('cbd3d50968409d4377c655b728fa21fc7066864b67f0520df13c491c708ef7ff', 'ec66ae8fefde34105d34b5ae60abd36d67a5e141fcab307cca7a1c89bd4df9fd',
+             '2cfa4290e607ecae972d6d4f421c91837c7d6aefa2e19dfb6deb3863198d723f', '79efc9bf948b415393d879b7fc6f0e1ceb367afdbd7e69e4d0d2322549c7fc8e')
+SCENARIOS = ((4, 500, .5, .5, None, 'CONTINUE_TO_2000', (), False), (1, 500, .5, .5, 'unknown', 'STOP_BREAKAGE', ('unknown_cells',), False),
+             (7, 500, .5, .1, None, 'STOP_HARM', (), True), (9, 2000, .3, .8, None, 'BAR_MET', (), False))
+
+
+def scenario(root, seed, limit, mean_raw, mean_search, edit, decision, breakage, harm, **kw):
+    """One seeded run written at `root` and its official readout (the screen-r1 fixtures, or another run's with `declaration`/`tree`)."""
+    rng = random.Random(seed);raw, search = scores(limit, rng, mean_raw), scores(limit, rng, mean_search);lost = ()
+    if edit == 'unknown':raw[7] = ROUND_CAP;search[9] = CHALLENGE;del search[11];lost = [('DN2W16', 11)]
+    write_run(root, raw, search, lost=lost, declaration=kw.get('declaration', DECLARATION_SHA256))
+    return official(root, limit, decision=decision, breakage=breakage, harm=harm, **kw)
+
+
+class RunBindingTests(unittest.TestCase):
+    """--run-binding: the adoption record supplies the run directory, declaration sha256 and tree commit; the rules are unchanged."""
+    def setUp(self):
+        self.directory = TemporaryDirectory();self.root = Path(self.directory.name)
+        self.files = {k: (p, json.loads(p.read_bytes()), hashlib.sha256(p.read_bytes()).hexdigest())
+                      for k, p in (('amendment', AMENDMENT), ('addendum', ADDENDUM), ('both', BOTH), ('final', FINAL))}
+        self.adoption = json.loads(ADOPTION.read_bytes());self.adoption_sha = hashlib.sha256(ADOPTION.read_bytes()).hexdigest()
+
+    def tearDown(self):self.directory.cleanup()
+
+    def binding(self, **run):
+        """The committed adoption record, its run directory this temporary directory (or `run`'s overrides)."""
+        return dict(self.adoption, run={**self.adoption['run'], 'run_directory': str(self.root.resolve()), **run})
+
+    def run_verdict(self, value, binding=None, *, unbound=False):
+        f = self.files
+        return V.verdict(value, f['amendment'][1], self.root, readout_sha256='r'*64, amendment_sha256=f['amendment'][2],
+            addendum=f['addendum'][1], addendum_sha256=f['addendum'][2], both=f['both'][1], both_sha256=f['both'][2],
+            final=f['final'][1], final_sha256=f['final'][2], final_fairness=FAIR,
+            **({} if unbound else dict(binding=self.binding() if binding is None else binding, binding_sha256=self.adoption_sha)))
+
+    def cli(self, readout, *extra, binding=True):
+        path = self.root/'readout.json';path.write_text(json.dumps(readout));sha = hashlib.sha256(path.read_bytes()).hexdigest()
+        argv = ['--readout', str(path), '--readout-sha256', sha]
+        for k, (p, _, digest) in self.files.items():argv += [f'--{k}', str(p), f'--{k}-sha256', digest]
+        argv += ['--run-directory', str(self.root), '--output', str(self.root/'verdict.json')]
+        return argv + (['--run-binding', str(ADOPTION), self.adoption_sha] if binding else []) + list(extra)
+
+    def main(self, argv, rewrite):
+        """V.main with read_bound rewriting the run directory of `rewrite` (the committed amendment or adoption record) to this one."""
+        from unittest import mock
+        from scripts import depthn_fairness_final
+        real = V.read_bound
+        def here(p, digest):
+            value = real(p, digest)
+            return dict(value, run=dict(value['run'], run_directory=str(self.root.resolve()))) if Path(p) == rewrite else value
+        with mock.patch.object(V, 'read_bound', side_effect=here), mock.patch.object(depthn_fairness_final, 'final_gate', return_value=FAIR), \
+                mock.patch('sys.stdout'):
+            return V.main(argv)
+
+    def test_without_a_binding_screen_r1_is_byte_identical(self):
+        """screen-r1's verdict path (the CLI, no --run-binding) on four seeded runs writes the bytes the script wrote before the binding."""
+        got = []
+        for case in SCENARIOS:
+            self.tearDown();self.setUp()
+            self.assertEqual(self.main(self.cli(scenario(self.root, *case), binding=False), AMENDMENT), 0)
+            got.append(hashlib.sha256((self.root/'verdict.json').read_bytes()).hexdigest())
+        self.assertEqual(tuple(got), R1_GOLDEN)
+
+    def test_the_adoption_record_adopts_the_four_pinned_rules_for_screen_r2(self):
+        a = self.adoption
+        self.assertEqual((a['schema'], V.RUN_BINDINGS['screen_r2']), (V.ADOPTION_SCHEMA, self.adoption_sha))
+        self.assertEqual(sorted(x['sha256'] for x in a['adopts']), sorted(V.PINNED.values()))
+        self.assertEqual({x['change'] for x in a['adopts']}, {'none'})
+        for x in a['adopts']:self.assertEqual(hashlib.sha256((EVALS.parent/x['path']).read_bytes()).hexdigest(), x['sha256'])
+        self.assertEqual((a['declaration_sha256'], hashlib.sha256(R2_DECLARATION.read_bytes()).hexdigest()), (R2_DECLARATION_SHA256, R2_DECLARATION_SHA256))
+        self.assertEqual((a['run']['run_directory'], a['run']['tree_commit'], a['declaration']), ('/out/screen-r2', R2_TREE, 'evals/' + R2_DECLARATION.name))
+        self.assertEqual([x['sha256'] for x in a['not_adopted']], [hashlib.sha256((EVALS/'depthn-foulplay-dn2w16-amendment-extension-20261108.json').read_bytes()).hexdigest()])
+
+    def test_the_bound_run_gets_screen_r1s_rules_unchanged(self):
+        """The same seeded cells under r2's declaration (bound) and r1's (unbound): the same decision, intervals and unknowns."""
+        for case in SCENARIOS:
+            with self.subTest(seed=case[0]):
+                self.tearDown();self.setUp()
+                bound = self.run_verdict(scenario(self.root, *case, declaration=R2_DECLARATION_SHA256, tree=R2_TREE));here = str(self.root.resolve())
+                self.tearDown();self.setUp()
+                plain = self.run_verdict(scenario(self.root, *case), unbound=True)
+                self.assertEqual((bound.pop('run_binding_sha256'), bound.pop('run_binding')), (self.adoption_sha, dict(declaration_sha256=R2_DECLARATION_SHA256,
+                    run_directory=here, tree_commit=R2_TREE)))
+                self.assertEqual((bound.pop('tree_commit'), plain.pop('tree_commit')), (R2_TREE, TREE));self.assertEqual(bound, plain)
+
+    def test_the_binding_refuses_another_declaration_directory_or_tree(self):
+        value = scenario(self.root, *SCENARIOS[0], declaration=R2_DECLARATION_SHA256, tree=R2_TREE)
+        self.assertEqual(self.run_verdict(value)['decision'], 'CONTINUE_TO_2000')
+        with self.assertRaisesRegex(ValueError, "readout's declaration"):self.run_verdict(dict(value, declaration_sha256=DECLARATION_SHA256))
+        with self.assertRaisesRegex(ValueError, "amended run's tree"):self.run_verdict(dict(value, tree=dict(commit=TREE)))
+        with self.assertRaisesRegex(ValueError, "bound run's directory"):self.run_verdict(value, self.binding(run_directory='/out/screen-r2'))
+        with self.assertRaisesRegex(ValueError, "readout's declaration"):self.run_verdict(value, dict(self.binding(), declaration_sha256='0'*64))
+        with self.assertRaisesRegex(ValueError, "amended run's tree"):self.run_verdict(value, self.binding(tree_commit='0'*40))
+        for bad in (dict(self.binding(), adopts=self.adoption['adopts'][:3]), dict(self.binding(), schema=V.AMENDMENT_SCHEMA),
+                    dict(self.binding(), adopts=[dict(x, change='edited') for x in self.adoption['adopts']]),
+                    dict(self.binding(), adopts=self.adoption['adopts'][:3] + [dict(self.adoption['adopts'][3], sha256='0'*64)])):
+            with self.assertRaisesRegex(ValueError, 'exactly the four rule files'):self.run_verdict(value, bad)
+        with self.assertRaisesRegex(ValueError, 'tree commit required'):self.run_verdict(value, self.binding(tree_commit='5ca04a4b'))
+        path = next((self.root/'results').glob('*.json'));cell = json.loads(path.read_text());cell['declaration_sha256'] = DECLARATION_SHA256
+        path.write_text(json.dumps(cell))   # a screen-r1 result file in the bound run
+        with self.assertRaisesRegex(ValueError, 'another panel, declaration or cell'):self.run_verdict(value)
+
+    def test_the_cli_binds_screen_r2_through_the_committed_record_only(self):
+        value = scenario(self.root, *SCENARIOS[0], declaration=R2_DECLARATION_SHA256, tree=R2_TREE)
+        argv = self.cli(value)
+        with self.assertRaisesRegex(SystemExit, "bound run's"):V.main(argv)   # this temporary directory is not /out/screen-r2
+        with self.assertRaisesRegex(SystemExit, 'committed run binding'):V.main([x if x != self.adoption_sha else '0'*64 for x in argv])
+        self.assertEqual(self.main(argv, ADOPTION), 0)
+        written = json.loads((self.root/'verdict.json').read_text())
+        self.assertEqual((written['run_binding_sha256'], written['run_binding']['declaration_sha256'], written['tree_commit'], written['decision']),
+                         (self.adoption_sha, R2_DECLARATION_SHA256, R2_TREE, 'CONTINUE_TO_2000'))
+        unbound = self.cli(value, binding=False);unbound[unbound.index('--output') + 1] = str(self.root/'r1.json')
+        with self.assertRaisesRegex(ValueError, "readout's declaration"):self.main(unbound, AMENDMENT)   # screen-r1's rules alone refuse r2's readout
 
 
 if __name__ == '__main__':
