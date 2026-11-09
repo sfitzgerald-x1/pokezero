@@ -36,6 +36,24 @@ class ParseTests(unittest.TestCase):
         meta = dict(jobs=[dict(name='shard 0', conclusion='failure'), dict(name='shard 1', conclusion='failure')])
         self.assertEqual(ci.summarize('1', meta, jobs)['incomplete_jobs'], ['shard 1'])
 
+    def test_later_runs_only_fill_tests_the_killed_job_never_settled(self):
+        other = '\n'.join([
+            'shard 9\tRun\t2026-11-09T13:00:00.0Z test_d (test_w.D.test_d) ... FAIL',      # shard 1 started it last: unsettled there
+            'shard 9\tRun\t2026-11-09T13:00:01.0Z test_e (test_w.D.test_e) ... ERROR',     # never reached by the killed job
+            'shard 9\tRun\t2026-11-09T13:00:02.0Z test_b (test_x.A.test_b) ... ok',        # settled (failing) by the first run
+            'shard 9\tRun\t2026-11-09T13:00:03.0Z FAIL: test_d (test_w.D.test_d)',
+            'shard 9\tRun\t2026-11-09T13:00:03.0Z ERROR: test_e (test_w.D.test_e)',
+        ])
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp);(tmp / 'a.log').write_text(LOG);(tmp / 'b.log').write_text(other)
+            ci.main(['extract', '1', '2', '--log', str(tmp / 'a.log'), '--log', str(tmp / 'b.log'), '--out', str(tmp / 'x.txt')])
+            ids = set((tmp / 'x.txt').read_text().split())
+            self.assertIn('test_x.A.test_b', ids)
+            self.assertIn('test_w.D.test_d', ids);self.assertIn('test_w.D.test_e', ids)
+            sidecar = json.loads((tmp / 'x.json').read_text())
+            self.assertEqual(sidecar['failing_from_later_runs'], ['test_w.D.test_d', 'test_w.D.test_e'])
+            self.assertEqual(sidecar['unsettled_tests'], [])
+
     def test_extract_and_diff_on_saved_files(self):
         with tempfile.TemporaryDirectory() as tmp:
             tmp = Path(tmp);(tmp / 'run.log').write_text(LOG)
