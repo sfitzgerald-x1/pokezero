@@ -14,7 +14,8 @@ Foul Play's reply b_FP (proxy (a), the lead's rules), from the owner's capture:
   The window runs past an owner request inside the turn (our own Baton Pass replacement, a wait request) so a slower Foul
   Play's move after it is still seen; Foul Play's faint replacements always follow its faint, which decides first.
 - Forced-switch decision (the own request has forceSwitch; else request_kind 'switch'): Foul Play's |switch| before the
-  window's first |move| line is its reply (both sides replacing); otherwise Foul Play was not asked: 'wait'.
+  window's first |move| line, next owner |request| line or Foul Play |faint| is its reply (both sides replacing);
+  otherwise Foul Play was not asked: 'wait' (a later replacement after its own end-of-turn faint is not this round's).
 - Otherwise the first decisive Foul Play event in the window:
   its first |move| line (move id, lowercase alphanumerics, Hidden Power collapsed; Sleep Talk/Metronome callers come
   before the called move's [from] line, and locked turns' [from]lockedmove lines are the chosen move);
@@ -22,11 +23,15 @@ Foul Play's reply b_FP (proxy (a), the lead's rules), from the owner's capture:
   'other'; |drag| is never a choice;
   |-activate|<fp>a: ...|move: Pursuit (our Pursuit hitting its switch first): censored 'other';
   its |faint| before it acted: censored 'ko_first', or the earlier |cant| reason's cause.
-  A |cant| line waits for a later move line (Sleep Talk follows |cant|...|slp|); without one the decision is censored:
-  slp, par, flinch, frz -> 'sleep_para_flinch'; anything else (recharge, Truant, a |cant| naming a move such as Disable or
-  Taunt, no Foul Play event at all, a missing or invalid capture) -> 'other'.
-Mapping b_FP into world w (row world facts): a move to the lane b in 0-3 with move_targets[b] == the slot s holding it
-in active_moves and legal[b] (Struggle, or the world's charge_move: lane 0 if legal, the lane that stands for them); a switch to the lane b in 4-8 with switch_targets[b-4] == the
+  A |cant| naming Foul Play's own blocked move (|cant|<fp>a: X|move: Taunt|Thunder Wave, |Disable|Body Slam,
+  |move: Imprison|Body Slam, |Focus Punch|Focus Punch) shows its choice: that move is the reply. An [of] |cant| (Damp's
+  holder naming the other side's move) names none. Any other |cant| waits for a later move line (Sleep Talk follows
+  |cant|...|slp|); without one the decision is censored: slp, par, flinch, frz -> 'sleep_para_flinch'; anything else
+  (recharge, Truant, Attract, no Foul Play event at all, a missing or invalid capture) -> 'other'.
+Mapping b_FP into world w (row world facts): a move to the legal lane b in 0-3 that plays it as the re-pricer's
+lane_labels reads the encoder: lane 0 is Struggle when no move is usable (peer.usable) and the charge move while one
+charges, any other lane active_moves[move_targets[b]]. Struggle maps only in a world where its Foul Play must Struggle,
+and nothing else maps there; the lane's recorded label (peer.lanes) must agree. A switch to the lane b in 4-8 with switch_targets[b-4] == the
 unfainted party slot of that species and legal[b]; 'wait' to column 0 of a world whose opponent was not requested. A
 world is also dropped when that column is unpriced for any legal action of ours, so every action's R uses the same
 worlds. R(a) = the uniform mean over the mapped worlds of G_w[a][b_w]. 0 mapped worlds: 'unmapped' (not censored).
@@ -40,8 +45,10 @@ greedy. noise_gated plays averaging's a* only when a* != greedy and mean_w gap >
 Q_w(a*) - Q_w(greedy); world_lcb plays argmax q(a) - kappa sd_w(Q_w(a)) / sqrt(W) (sample sd; Q_w(a) = sum_b pi_w(b) G_w[a][b]).
 Statistics: D is summed per battle (ordinal); mean and SE over battles; a t interval with battles - 1 df at 90% for the
 mean per-battle sum. The per-decision mean D is sum D / decisions, and its interval is the per-battle one divided by
-the mean decisions per battle (the same t statistic, so the same signs). Parity (averaging == the live search action, over the
-decisions searched live: source 'search') below 99% is PARITY_FAILED: no candidate is selected, as for GATE_FAILED.
+the mean decisions per battle (the same t statistic, so the same signs). Parity, over every row searched live (source 'search'):
+the replay is COMPLETE, averaging recomputed from the captured worlds plays the live search action, and its q equals the
+replay's q_values exactly after a JSON round trip. Below 99% the verdict is PARITY_FAILED: no candidate is selected, as for
+GATE_FAILED. Also reported, never gating: every table restricted to decisions where Foul Play was requested (no 'wait').
 
 Run from the repository root with the venv that has numpy and scipy:
   python scripts/depthn_rr_score.py --rows ROWS/rows-*.jsonl --run-directory RUN --out NEW_DIRECTORY
@@ -89,14 +96,16 @@ ROW_FIELDS = dict(
     source=('live', 'source'), live_action=('live', 'search_action_index'), live_q=('live', 'search_q_values'),
     greedy_action=('live', 'greedy_action_index'), request_kind=('live', 'request_kind'), turn=('live', 'turn'),
     played_action=('live', 'played_action_index'),
-    replay_status=('replay', 'status'), replay_action=('replay', 'action_index'), replay_q=('replay', 'q_values'),
+    live_cause=('live', 'cause'), replay_status=('replay', 'status'), replay_cause=('replay', 'cause'),
+    replay_action=('replay', 'action_index'), replay_q=('replay', 'q_values'),
     action_equal=('parity', 'action_equal'), q_equal=('parity', 'q_equal'),
     root_logits=('root', 'root_logits'), root_legal=('root', 'root_legal'), worlds=('worlds',))
 WORLD_FIELDS = dict(
     requested=('opponent_requested',), kept=('kept',), logits=('root_peer_logits',), grid=('grid',), refusals=('refusals',),
     active_slot=('opponent', 'active_slot'), active_species=('opponent', 'active_species'), active_moves=('opponent', 'active_moves'),
     charge_move=('opponent', 'charge_move'), party=('opponent', 'party'),
-    move_targets=('peer', 'move_targets'), switch_targets=('peer', 'switch_targets'), legal=('peer', 'legal'))
+    move_targets=('peer', 'move_targets'), switch_targets=('peer', 'switch_targets'), legal=('peer', 'legal'),
+    usable=('peer', 'usable'), lanes=('peer', 'lanes'))
 PARTY_FIELDS = dict(slot='slot', species='species', fainted='fainted')   # one party member (a dict per slot)
 
 
@@ -183,14 +192,25 @@ def forced_request(request_line):
     return bool(force) and any(force)
 
 
+def cant_named_move(parts):
+    """The move a |cant| line names as the Pokemon's own blocked choice (|cant|X|move: Taunt|Thunder Wave, |cant|X|Disable|Body
+    Slam, |cant|X|move: Imprison|Body Slam, |cant|X|Focus Punch|Focus Punch), else None. An [of] line (Damp: the holder's
+    |cant| names the OTHER side's move) and a reason without a move (slp, par, flinch, frz, recharge, Truant) name none."""
+    rest = parts[3:]
+    if len(rest) < 2 or not rest[1] or rest[1].startswith('[') or any(p.startswith('[of]') for p in rest):return None
+    return showdown_id(rest[1])
+
+
 def fp_reply(window, owner, forced):
     """Foul Play's reply to one decision from its turn window (module docstring)."""
     fp = ('p2' if owner == 'p1' else 'p1') + 'a'
     if forced:
+        # Both sides replace at once, before anything else; a move, a later owner request or Foul Play's own faint (its
+        # end-of-turn replacement follows) ends this decision's round.
         for line in window:
             parts = line.split('|')
             if len(parts) < 3:continue
-            if parts[1] == 'move':break
+            if parts[1] in ('move', 'request') or parts[1] == 'faint' and _who(parts[2]) == fp:break
             if parts[1] == 'switch' and _who(parts[2]) == fp:return Reply('switch', showdown_id(parts[3].split(',')[0]), None, 'replacement_switch')
         return Reply('wait', None, None, 'not_requested')
     moved, cant = False, None
@@ -206,7 +226,11 @@ def fp_reply(window, owner, forced):
             if moved:return censored('other', 'switch_after_move')
             return Reply('switch', showdown_id(parts[3].split(',')[0]), None, 'voluntary_switch')
         elif kind == '-activate' and len(parts) > 3 and parts[3] == 'move: Pursuit':return censored('other', 'pursuit_on_switch')
-        elif kind == 'cant' and cant is None:cant = '|'.join(parts[3:])
+        elif kind == 'cant':
+            if any(p.startswith('[of]') for p in parts[3:]):continue   # its ability blocking OUR move (Damp): not its own action
+            named = cant_named_move(parts)
+            if named is not None:return Reply('move', named, None, 'cant_named:' + parts[3])
+            if cant is None:cant = '|'.join(parts[3:])
         elif kind == 'faint':
             if cant is not None:return censored(_cant_cause(cant), 'cant:' + cant)
             return censored('ko_first', 'faint_before_acting')
@@ -255,6 +279,21 @@ def reply_for(capture, decision):
 
 # ---- mapping b_FP into each world ----
 
+def move_lanes(facts, legal):
+    """{lane: move id} over the opponent's legal lanes 0-3, as the re-pricer's lane_labels reads its encoder: lane 0 is
+    Struggle when no move is usable (peer.usable) and the charge move while one charges; any other lane is
+    active_moves[move_targets[b]]. None without the facts."""
+    moves, targets, usable = facts.get('active_moves'), facts.get('move_targets'), facts.get('usable')
+    if type(moves) is not list or type(targets) is not list or type(usable) is not list or not usable:return None
+    struggle, charge, out = not any(usable), facts.get('charge_move'), {}
+    for b in range(4):
+        if not legal[b]:continue
+        if b == 0 and struggle:out[b] = 'struggle'
+        elif b == 0 and charge is not None:out[b] = charge
+        elif b < len(targets) and type(targets[b]) is int and 0 <= targets[b] < len(moves):out[b] = moves[targets[b]]
+    return out
+
+
 def map_world(reply, facts, world, root_legal):
     """(lane, None) or (None, why this world is dropped)."""
     if reply.kind == 'wait':
@@ -265,17 +304,15 @@ def map_world(reply, facts, world, root_legal):
         legal = facts.get('legal')
         if type(legal) is not list or len(legal) != 9:return None, 'facts_missing'
         if reply.kind == 'move':
-            if reply.id == 'struggle' or reply.id == facts.get('charge_move'):   # lane 0 also stands for Struggle or the charge
-                if not legal[0]:return None, 'move_not_legal'
-                lane = 0
-            else:
-                moves, targets = facts.get('active_moves'), facts.get('move_targets')
-                if type(moves) is not list or type(targets) is not list:return None, 'facts_missing'
-                slots = [s for s, m in enumerate(moves) if m == reply.id]
-                if not slots:return None, 'move_missing'
-                lanes = [b for b in range(4) if b < len(targets) and targets[b] in slots and legal[b]]
-                if not lanes:return None, 'move_not_legal'
-                lane = lanes[0]
+            lanes = move_lanes(facts, legal)
+            if lanes is None:return None, 'facts_missing'
+            struggle = not any(facts['usable'])
+            if struggle and reply.id != 'struggle':return None, 'struggle_world'   # this world's Foul Play can only Struggle
+            found = [b for b, m in sorted(lanes.items()) if m == reply.id]
+            if not found:
+                if reply.id == 'struggle':return None, 'struggle_not_forced'   # a usable move here: lane 0 is a real slot
+                return None, 'move_missing' if reply.id not in facts['active_moves'] and reply.id != facts.get('charge_move') else 'move_not_legal'
+            lane, label = found[0], 'move:' + reply.id
         else:
             party, fainted, targets = facts.get('party_species'), facts.get('fainted'), facts.get('switch_targets')
             if type(party) is not list or type(fainted) is not list or type(targets) is not list:return None, 'facts_missing'
@@ -283,9 +320,11 @@ def map_world(reply, facts, world, root_legal):
             if not slots:return None, 'species_missing'
             alive = [p for p in slots if not (p < len(fainted) and fainted[p])]
             if not alive:return None, 'species_fainted'
-            lanes = [b for b in range(4, 9) if b - 4 < len(targets) and targets[b - 4] in alive and legal[b]]
-            if not lanes:return None, 'switch_not_legal'
-            lane = lanes[0]
+            found = [b for b in range(4, 9) if b - 4 < len(targets) and targets[b - 4] in alive and legal[b]]
+            if not found:return None, 'switch_not_legal'
+            lane, label = found[0], 'switch:' + reply.id
+        labels = facts.get('lanes')   # the re-pricer's own reading of each legal lane: must agree with ours
+        if type(labels) is list and len(labels) == 9 and labels[lane] != label:return None, 'lane_label_mismatch'
     if any(root_legal[a] and world.joint_values[a][lane] is None for a in range(9)):return None, 'unpriced'
     return lane, None
 
@@ -368,21 +407,62 @@ def world_prices(decision):
     except (ValueError, TypeError):raise Unscorable('world_invalid') from None
 
 
-def score_decision(decision, reply, target, failures):
-    """The scored decision: operators' choices and R under both scorings; raises Unscorable."""
+@dataclass(frozen=True)
+class Base:
+    """One row's root and worlds through search_hedge (the averaging the live server played)."""
+    legal: tuple
+    logits: list
+    worlds: tuple
+    grids: tuple
+    prior: tuple
+    average: object
+
+
+def recompute(decision):
+    """Base from a row whose replay is COMPLETE; raises Unscorable."""
     if decision['replay_status'] != 'COMPLETE':raise Unscorable(f"replay_{decision['replay_status']}")
     legal, logits = decision['root_legal'], decision['root_logits']
     if type(legal) is not list or len(legal) != 9 or any(type(x) is not bool for x in legal) or not any(legal):raise Unscorable('root_legal_invalid')
     if type(logits) is not list or len(logits) != 9:raise Unscorable('root_logits_invalid')
     legal = tuple(legal)
-    greedy = decision['greedy_action']
-    if type(greedy) is not int or not 0 <= greedy < 9 or not legal[greedy]:raise Unscorable('greedy_missing')
     worlds = world_prices(decision)
     gs = hedge.grids(worlds, legal)
     if gs is None:raise Unscorable('unpriced_cell')
     try:prior = original._probabilities(logits, legal)
     except ValueError:raise Unscorable('root_logits_invalid') from None
-    average = hedge.averaging(worlds, legal)
+    return Base(legal, logits, worlds, gs, prior, hedge.averaging(worlds, legal))
+
+
+def q_json_equal(q, replay_q):
+    """Recomputed q against the replay's q_values: exact float equality after a JSON round trip; None only equals None."""
+    mine = json.loads(json.dumps(list(q)))
+    if type(replay_q) is not list or len(replay_q) != len(mine):return False
+    return all(x is None and y is None or x is not None and type(y) in (int, float) and float(x) == float(y) for x, y in zip(mine, replay_q))
+
+
+def parity_row(decision, base, reason):
+    """A live-searched row's parity: dict(match, action_equal, q_equal, cause). A replay that is not COMPLETE, a row whose
+    averaging cannot be recomputed, a recomputed action other than the live one, or a recomputed q other than the replay's
+    q_values is a mismatch."""
+    if decision['replay_status'] != 'COMPLETE':
+        return dict(match=False, action_equal=None, q_equal=None, cause=f"replay_{decision['replay_status']}:{decision['replay_cause']}")
+    if base is None:return dict(match=False, action_equal=None, q_equal=None, cause='recompute_' + reason)
+    live = decision['live_action']
+    action_equal = type(live) is int and live == hedge.top_action(base.average.strategy)
+    q_equal = q_json_equal(base.average.q, decision['replay_q'])
+    cause = None if action_equal and q_equal else 'q_differs' if action_equal else 'action_differs' if q_equal else 'action_and_q_differ'
+    return dict(match=cause is None, action_equal=action_equal, q_equal=q_equal, cause=cause)
+
+
+def parity_passed(matches, total):return total > 0 and matches / total >= PARITY_MIN
+
+
+def score_decision(decision, reply, target, failures, base=None):
+    """The scored decision: operators' choices and R under both scorings; raises Unscorable."""
+    base = recompute(decision) if base is None else base
+    legal, logits, worlds, gs, prior, average = base.legal, base.logits, base.worlds, base.grids, base.prior, base.average
+    greedy = decision['greedy_action']
+    if type(greedy) is not int or not 0 <= greedy < 9 or not legal[greedy]:raise Unscorable('greedy_missing')
     choices, fallback = operators(worlds, gs, average, greedy, logits, legal, target, failures)
     lanes, drops = [], {}
     if reply.cause is None:
@@ -483,20 +563,20 @@ def confirm(table, setting):
     return dict(setting=setting, pi_filled=pi, dropped=dropped, checks=checks, passed=all(checks.values()))
 
 
-def verdict(parity_passed, gate, selection, confirmation):
-    if not parity_passed:return 'PARITY_FAILED'
+def verdict(parity_ok, gate, selection, confirmation):
+    if not parity_ok:return 'PARITY_FAILED'
     if not gate['passed']:return 'GATE_FAILED'
     if selection['chosen'] is None:return 'NO_CANDIDATE'
     return 'PASS' if confirmation['passed'] else 'FAIL'
 
 
-def decide(table, parity_passed):
+def decide(table, parity_ok):
     """Gate, selection and confirmation; no candidate is selected when parity or the gate fails."""
     gate = validation_gate(table)
-    selection = select(table) if parity_passed and gate['passed'] else dict(chosen=None, candidates=None)
+    selection = select(table) if parity_ok and gate['passed'] else dict(chosen=None, candidates=None)
     confirmation = None if selection['chosen'] is None else confirm(table, selection['chosen'])
     return dict(gate=gate, selection=selection, confirmation=confirmation,
-                verdict=verdict(parity_passed, gate, selection, confirmation or dict(passed=False)))
+                verdict=verdict(parity_ok, gate, selection, confirmation or dict(passed=False)))
 
 
 # ---- the live run directory ----
@@ -533,20 +613,33 @@ class RunDirectory:
 class Coverage:
     def __init__(self):
         self.rows = 0;self.duplicates = 0;self.arms = collections.Counter();self.sources = collections.Counter()
-        self.replay_complete = 0;self.excluded = collections.Counter();self.parity = [0, 0];self.replay_agree = [0, 0]
+        self.replay_complete = 0;self.excluded = collections.Counter();self.replay_agree = [0, 0]
+        self.parity = collections.Counter();self.parity_causes = collections.Counter();self.status_mismatches = collections.Counter()
         self.greedy_disagree = [];self.replies = collections.Counter();self.details = collections.Counter()
         self.kind = collections.defaultdict(lambda: collections.Counter());self.causes = collections.Counter()
         self.unmapped = 0;self.mapped_hist = collections.Counter();self.drops = collections.Counter()
         self.target_fallbacks = 0;self.failures = collections.Counter();self.no_half = 0;self.seen = set()
 
+    def add_parity(self, check):
+        self.parity['rows'] += 1;self.parity['matches'] += check['match']
+        self.parity['action_equal'] += check['action_equal'] is True;self.parity['q_equal'] += check['q_equal'] is True
+        if check['cause'] is not None:self.parity_causes[check['cause']] += 1
+
     def report(self, records):
         scored = len(records);share = lambda a, b: a / b if b else None
         battles = {h: len({r['ordinal'] for r in records if r['half'] == h}) for h in ('even', 'odd')}
+        p = self.parity
         return dict(
             searched_decisions=self.rows, duplicate_rows=self.duplicates, arms=dict(self.arms), live_sources=dict(self.sources),
             replay_complete=self.replay_complete, scored=scored, excluded=dict(self.excluded),
-            parity=dict(rule=f'averaging top action == live search action_index, >= {PARITY_MIN:.0%}', with_live_action=self.parity[1],
-                        matches=self.parity[0], rate=share(*self.parity), passed=self.parity[1] > 0 and self.parity[0] / self.parity[1] >= PARITY_MIN),
+            parity=dict(rule=(f'every row searched live (source search): replay COMPLETE, averaging recomputed from the captured worlds '
+                              f'plays the live search action_index, and its q equals the replay q_values after a JSON round trip; >= {PARITY_MIN:.0%}'),
+                        live_searched=p['rows'], matches=p['matches'], rate=share(p['matches'], p['rows']),
+                        action_equal=p['action_equal'], action_rate=share(p['action_equal'], p['rows']),
+                        q_equal=p['q_equal'], q_rate=share(p['q_equal'], p['rows']), mismatches_by_cause=dict(self.parity_causes),
+                        passed=parity_passed(p['matches'], p['rows'])),
+            status_mismatches=dict(note='live searched but replay not COMPLETE (replay status:cause), or replay COMPLETE but not searched '
+                                        'live (live source:cause)', by_cause=dict(self.status_mismatches)),
             averaging_equals_replay_action=dict(with_replay_action=self.replay_agree[1], matches=self.replay_agree[0], rate=share(*self.replay_agree)),
             greedy_check=dict(rule='live greedy == argmax of root_logits over root_legal (lowest index on ties)',
                               disagreements=len(self.greedy_disagree), examples=self.greedy_disagree[:20]),
@@ -561,7 +654,13 @@ class Coverage:
                                histogram={str(k): self.mapped_hist[k] for k in sorted(self.mapped_hist)}),
             world_drop_reasons=dict(self.drops), target_argmax_fallbacks=self.target_fallbacks, operator_failures=dict(self.failures),
             halves=dict(even=dict(battles=battles['even'], decisions=sum(r['half'] == 'even' for r in records)),
-                        odd=dict(battles=battles['odd'], decisions=sum(r['half'] == 'odd' for r in records)), no_seed=self.no_half))
+                        odd=dict(battles=battles['odd'], decisions=sum(r['half'] == 'odd' for r in records)), no_seed=self.no_half),
+            fp_requested=dict(note="decisions whose reply is not 'wait'", decisions=sum(r['fp_requested'] for r in records)))
+
+
+def half_of(seed):
+    """'even' for an even battle seed (cell.seed % 2 == 0), 'odd' for an odd one, None without a seed."""
+    return None if type(seed) is not int else 'even' if seed % 2 == 0 else 'odd'
 
 
 def process(decision, run, coverage):
@@ -573,20 +672,29 @@ def process(decision, run, coverage):
                    source=decision['source'])
     if (ordinal, index) in coverage.seen:coverage.duplicates += 1;return dict(address, scored=False, reason='duplicate_row'), None
     coverage.seen.add((ordinal, index))
-    cell = run.cell(ordinal);seed = cell['seed']
-    half = ('even' if seed % 2 == 0 else 'odd') if type(seed) is int else None
+    cell = run.cell(ordinal);seed = cell['seed'];half = half_of(seed)
     coverage.arms[str(cell['arm'])] += 1;coverage.sources[str(decision['source'])] += 1
     address.update(seed=seed, half=half, arm=cell['arm'])
-    coverage.replay_complete += decision['replay_status'] == 'COMPLETE'
-    try:
-        reply = reply_for(run.capture(ordinal), decision) if decision['replay_status'] == 'COMPLETE' else None
-        scored = score_decision(decision, reply, run.policy_target(ordinal, index), coverage.failures)
+    complete = decision['replay_status'] == 'COMPLETE';searched = decision['source'] == 'search'
+    coverage.replay_complete += complete
+    if searched != complete:
+        coverage.status_mismatches[f"replay_{decision['replay_status']}:{decision['replay_cause']}" if searched
+                                   else f"live_{decision['source']}:{decision['live_cause']}"] += 1
+    base = reason = None
+    try:base = recompute(decision)
+    except Unscorable as error:reason = error.reason
+    parity = parity_row(decision, base, reason) if searched else None
+    if parity is not None:coverage.add_parity(parity)
+    address.update(parity=parity)
+    if base is None:
+        coverage.excluded[reason] += 1
+        return dict(address, scored=False, reason=reason), None
+    reply = reply_for(run.capture(ordinal), decision)
+    try:scored = score_decision(decision, reply, run.policy_target(ordinal, index), coverage.failures, base)
     except Unscorable as error:
         coverage.excluded[error.reason] += 1
         return dict(address, scored=False, reason=error.reason), None
     ops = scored['operators'];chosen = ops['averaging']['choice']
-    live = decision['live_action'];parity = None if decision['source'] != 'search' or type(live) is not int else live == chosen
-    if parity is not None:coverage.parity[0] += parity;coverage.parity[1] += 1
     if type(decision['replay_action']) is int:coverage.replay_agree[0] += decision['replay_action'] == chosen;coverage.replay_agree[1] += 1
     if scored['greedy_argmax'] != decision['greedy_action']:
         coverage.greedy_disagree.append(dict(ordinal=ordinal, decision_index=index, live=decision['greedy_action'], argmax=scored['greedy_argmax']))
@@ -599,9 +707,9 @@ def process(decision, run, coverage):
     entry = dict(address, scored=True, reply=dict(kind=reply.kind, id=reply.id, cause=reply.cause, detail=reply.detail),
                  censored=reply.cause is not None, unmapped=scored['unmapped'], observed=scored['observed'],
                  mapped_worlds=scored['mapped_worlds'], world_drops={str(k): v for k, v in scored['world_drops'].items()},
-                 live_action=live, averaging_action=chosen, parity=parity, greedy_action=decision['greedy_action'],
+                 live_action=decision['live_action'], averaging_action=chosen, greedy_action=decision['greedy_action'],
                  greedy_argmax=scored['greedy_argmax'], target_fallback=scored['target_fallback'], R=scored['R'], operators=ops)
-    record = dict(ordinal=ordinal, half=half, kind=decision['request_kind'], observed=scored['observed'],
+    record = dict(ordinal=ordinal, half=half, kind=decision['request_kind'], observed=scored['observed'], fp_requested=reply.kind != 'wait',
                   ops={n: (o['choice'], (o['D']['dropped'], o['D']['pi_filled']), o['band']) for n, o in ops.items()})
     return entry, record
 
@@ -617,9 +725,13 @@ def score_run(rows, run_directory, out):
             if record is not None:records.append(record)
     table = metrics(records);cover = coverage.report(records)
     outcome = decide(table, cover['parity']['passed'])
+    # Reported only (the gate and selection use `metrics`): without 'wait' decisions. There every mapped world is a waiting
+    # world (pi_w is column 0's unit mass), so R is averaging's own per-world value over them: exactly its q, and averaging's
+    # D >= 0, when every world waits.
+    requested = metrics([r for r in records if r['fp_requested']])
     summary = dict(schema=SCHEMA, inputs=dict(rows=[str(Path(p).resolve()) for p in rows], run_directory=str(Path(run_directory).resolve())),
                    settings=list(SETTINGS), candidates=list(CANDIDATES), level=LEVEL, override_min=OVERRIDE_MIN, parity_min=PARITY_MIN,
-                   bands=[b for b, _ in BANDS], **outcome, coverage=cover, metrics=table)
+                   bands=[b for b, _ in BANDS], **outcome, coverage=cover, metrics=table, metrics_fp_requested=requested)
     (out / 'summary.json').write_text(json.dumps(summary, indent=1) + '\n')
     (out / 'summary.md').write_text(markdown(summary))
     return summary
@@ -646,8 +758,9 @@ HEADER = '| setting | override | mean D | 90% CI | per-battle mean D | battles |
 def markdown(summary):
     cover, table, gate, selection, confirmation = (summary[k] for k in ('coverage', 'metrics', 'gate', 'selection', 'confirmation'))
     out = ['# RR (realized-reply re-pricing) score', '', f"**Verdict: {summary['verdict']}**", '',
-           f"- Parity (averaging == live search action): {cover['parity']['matches']}/{cover['parity']['with_live_action']} "
-           f"= {_pct(cover['parity']['rate'])} (required >= {_pct(PARITY_MIN)}): {'ok' if cover['parity']['passed'] else 'FAILED'}",
+           f"- Parity (rows searched live: replay COMPLETE, recomputed averaging's action == live, q == replay q): "
+           f"{cover['parity']['matches']}/{cover['parity']['live_searched']} = {_pct(cover['parity']['rate'])} "
+           f"(required >= {_pct(PARITY_MIN)}): {'ok' if cover['parity']['passed'] else 'PARITY_FAILED'}",
            f"- Gate (averaging D, pi_filled, all decisions, upper 90% bound < 0): mean {_num(gate['mean'])}, CI {_ci(gate['ci90'])}: "
            f"{'passed' if gate['passed'] else 'GATE_FAILED'}",
            f"- Selected (even seeds, pi_filled, override >= {_pct(OVERRIDE_MIN)}, highest mean D): {selection['chosen'] or 'none'}"]
@@ -658,7 +771,11 @@ def markdown(summary):
     out += ['', '## Coverage', '', '| item | value |', '|---|---|',
             f"| searched decisions (rows) | {cover['searched_decisions']} |", f"| replay COMPLETE | {cover['replay_complete']} |",
             f"| scored | {cover['scored']} |", f"| excluded | {cover['excluded']} |",
-            f"| parity | {cover['parity']['matches']}/{cover['parity']['with_live_action']} ({_pct(cover['parity']['rate'])}) |",
+            f"| parity | {cover['parity']['matches']}/{cover['parity']['live_searched']} ({_pct(cover['parity']['rate'])}); "
+            f"action {_pct(cover['parity']['action_rate'])}, q {_pct(cover['parity']['q_rate'])} |",
+            f"| parity mismatches by cause | {cover['parity']['mismatches_by_cause']} |",
+            f"| status mismatches by cause | {cover['status_mismatches']['by_cause']} |",
+            f"| decisions with Foul Play requested (not 'wait') | {cover['fp_requested']['decisions']} |",
             f"| averaging == replay action | {_pct(cover['averaging_equals_replay_action']['rate'])} |",
             f"| greedy check disagreements | {cover['greedy_check']['disagreements']} |",
             f"| censored | {cover['censored']['count']} ({_pct(cover['censored']['share'])}) |",
@@ -686,6 +803,13 @@ def markdown(summary):
         out += [f"## {scoring}, all: by prior band of the setting's action", '', HEADER.replace('| setting |', '| setting / band |')]
         out += [_metric_row(f'{name} / {b}', m[name]) for b, m in table[scoring]['all']['by_prior_band'].items() for name in SETTINGS
                 if m[name]['decisions']] + ['']
+    requested = summary['metrics_fp_requested']
+    out += ["# Reported view: decisions where Foul Play was requested (no 'wait' decisions; the gate and selection above are unchanged)", '']
+    for scoring in SCORINGS:
+        for half in HALVES:
+            block = requested[scoring][half]
+            out += [f"## requested only: {scoring}, {half} ({block['battles']} battles, {block['decisions']} decisions)", '', HEADER]
+            out += [_metric_row(name, block['operators'][name]) for name in SETTINGS] + ['']
     return '\n'.join(out) + '\n'
 
 
