@@ -313,6 +313,10 @@ class ReweightHelperTests(unittest.TestCase):
         variant = {'moves': ['crunch', 'earthquake', 'flamethrower', 'sludgebomb'], 'ability': 'Shed Skin', 'item': 'Leftovers'}
         self.assertEqual(rw.request_key(row), rw.variant_key(variant))
         self.assertEqual(rw.move_key('Hidden Power Steel 70'), 'hiddenpowersteel');self.assertEqual(rw.species_of(row), 'seviper')
+        self.assertEqual(rw.move_key('return102'), 'return');self.assertEqual(rw.request_move_id('return'), 'return102')
+        self.assertEqual(rw.request_move_id('hiddenpowergrass'), 'hiddenpowergrass')
+        self.assertEqual(rw.fresh_move_entry(RW_DEX, 'return'), {'move': 'Return 102', 'id': 'return', 'pp': 8, 'maxpp': 8,
+                                                                 'target': 'normal', 'disabled': False})
 
     def test_world_request_keeps_shared_slots_and_fills_new_moves_fresh(self):
         request = _rw_request();first = copy.deepcopy(request['side']['pokemon'][0])
@@ -325,6 +329,9 @@ class ReweightHelperTests(unittest.TestCase):
                                                           'target': 'normal', 'disabled': True})
         self.assertEqual((row['item'], row['baseAbility']), ('choiceband', 'shedskin'));self.assertEqual(labels, [0, 1, 2, None, 4, 5, 6, 7, 8])
         self.assertEqual(request['side']['pokemon'][0]['moves'][3], 'flamethrower')   # input untouched
+        powered = _rw_request();powered['side']['pokemon'][0]['moves'][2] = 'return102'
+        world, labels = rw.world_request(powered, first, {'moves': ['earthquake', 'frustration', 'return', 'sludgebomb']}, RW_DEX)
+        self.assertEqual(world['side']['pokemon'][0]['moves'], ['earthquake', 'sludgebomb', 'return102', 'frustration102'])
         same, labels = rw.world_request(request, first, {'moves': first['moves'], 'ability': 'Shed Skin', 'item': 'Leftovers'}, RW_DEX)
         self.assertEqual(same, request);self.assertEqual(labels, list(range(9)))
 

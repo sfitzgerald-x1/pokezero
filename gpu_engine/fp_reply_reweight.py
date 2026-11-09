@@ -47,6 +47,9 @@ from gpu_engine import fp_reply_probe as probe_mod
 from gpu_engine import fp_reply_train as train_mod
 
 BETAS = (0.25, 0.5, 1.0)
+# moves whose request id and name carry a power: Hidden Power's name (its side id carries the type only), Return / Frustration
+# both (randbats sets happiness so either is at 102)
+POWERED = {'hiddenpower': 70, 'return': 102, 'frustration': 102}
 OBS_DTYPES = dict(categorical_ids=np.int32, numeric_features=np.float32, token_type_ids=np.int16, attention_mask=bool)
 
 
@@ -55,9 +58,13 @@ def toid(value):
 
 
 def move_key(move):
-    """A move id; Hidden Power keeps its type and drops any power suffix ('hiddenpowersteel70' -> 'hiddenpowersteel')."""
-    key = toid(move)
-    return re.sub(r'\d+$', '', key) if key.startswith('hiddenpower') else key
+    """A move id without any power suffix ('return102' -> 'return', 'hiddenpowersteel70' -> 'hiddenpowersteel')."""
+    return re.sub(r'\d+$', '', toid(move))
+
+
+def request_move_id(move):
+    """A move key in a request's side.pokemon[].moves form ('return' -> 'return102'; Hidden Power keeps its type only)."""
+    return f'{move}{POWERED[move]}' if move in POWERED and move != 'hiddenpower' else move
 
 
 def variant_key(variant):
@@ -75,9 +82,11 @@ def species_of(row):
 def fresh_move_entry(dex, move, disabled=False):
     """A request's active-move entry for a move the mon has never used (full PP)."""
     if move.startswith('hiddenpower') and move != 'hiddenpower':
-        info = dex.move_info('hiddenpower');name, ident = f'Hidden Power {move[len("hiddenpower"):].capitalize()} 70', 'hiddenpower'
+        info = dex.move_info('hiddenpower')
+        name, ident = f'Hidden Power {move[len("hiddenpower"):].capitalize()} {POWERED["hiddenpower"]}', 'hiddenpower'
     else:
         info = dex.move_info(move);name, ident = (info.name if info else move), move
+        if move in POWERED:name = f'{name} {POWERED[move]}'
     pp = info.max_pp if info else 0
     return {'move': name, 'id': ident, 'pp': pp, 'maxpp': pp, 'target': info.target if info else 'normal', 'disabled': bool(disabled)}
 
@@ -87,12 +96,12 @@ def world_request(request, first_row, variant, dex):
     world's action index for true action a (None: the world lacks that move)."""
     req = copy.deepcopy(request);rows = req['side']['pokemon']
     row = next(r for r in rows if r.get('active'))
-    true_moves = [move_key(m) for m in row.get('moves') or ()];want = [move_key(m) for m in variant.get('moves') or ()]
+    raw = list(row.get('moves') or ());true_moves = [move_key(m) for m in raw];want = [move_key(m) for m in variant.get('moves') or ()]
     extra = sorted(set(want) - set(true_moves));slots = [m if m in want else None for m in true_moves]
     for j, m in enumerate(slots):
         if m is None and extra:slots[j] = extra.pop(0)
     slots = [m for m in slots if m is not None] + extra
-    row['moves'] = list(slots)
+    raw_of = dict(zip(true_moves, raw));row['moves'] = [raw_of.get(m) or request_move_id(m) for m in slots]
     active = (req.get('active') or [None])[0]
     locked = not active or len(active.get('moves') or ()) != len(true_moves)
     if not locked:
