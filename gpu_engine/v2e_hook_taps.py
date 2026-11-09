@@ -52,30 +52,30 @@ class Call:
         return f'{self.name}@{self.site}' + (f'#{self.occurrence}' if self.occurrence is not None else '')
 
 
-def split(name):
+def split(name, modules=TAP_MODULES):
     """('alias', 'function') of a hook name: 'observe' -> ('', 'observe'); 'port.condition' -> ('port', 'condition')."""
     alias, _, function = name.rpartition('.')
-    if alias not in TAP_MODULES:raise KeyError(f'unknown hook module alias {alias!r} in {name!r}; one of {sorted(TAP_MODULES)}')
+    if alias not in modules:raise KeyError(f'unknown hook module alias {alias!r} in {name!r}; one of {sorted(modules)}')
     return alias, function
 
 
-def module_of(name):
-    return importlib.import_module(TAP_MODULES[split(name)[0]])
+def module_of(name, modules=TAP_MODULES):
+    return importlib.import_module(modules[split(name, modules)[0]])
 
 
-def original(name):
+def original(name, modules=TAP_MODULES):
     """The unwrapped oracle function of a hook name (the installed wrapper's original while taps are active)."""
-    alias, function = split(name);module = module_of(name)
-    key = (TAP_MODULES[alias], function)
+    alias, function = split(name, modules);module = module_of(name, modules)
+    key = (modules[alias], function)
     if key in _installed:return _installed[key]
     fn = getattr(module, function, None)
-    if not callable(fn) or inspect.isclass(fn):raise KeyError(f'{name!r} is not a function of {TAP_MODULES[alias]}')
+    if not callable(fn) or inspect.isclass(fn):raise KeyError(f'{name!r} is not a function of {modules[alias]}')
     return fn
 
 
-def context_first(name):
+def context_first(name, modules=TAP_MODULES):
     """Whether the hook's first parameter is the Context `c` (its carry is c.trackers); False for carry-first functions."""
-    params = list(inspect.signature(original(name)).parameters)
+    params = list(inspect.signature(original(name, modules)).parameters)
     return bool(params) and params[0] == 'c'
 
 
@@ -98,9 +98,10 @@ def _carry(value, is_context):
 
 
 @contextmanager
-def tap(names):
-    """Install recording wrappers for the hook names (every module-global binding of each function); yields the list the
-    calls are appended to, in call order; restores the originals on exit."""
+def tap(names, modules=TAP_MODULES, scan=SCAN_MODULES):
+    """Install recording wrappers for the hook names (every binding of each function in the `scan` modules); yields the
+    list the calls are appended to, in call order; restores the originals on exit. `modules` maps the name aliases
+    (v2e_coverage taps the mechanics with its own map)."""
     from gpu_engine.engine_device_public_hooks import Context
     calls = [];counts = {}
     with _lock:
@@ -108,8 +109,8 @@ def tap(names):
         bindings = []
         try:
             for name in names:
-                fn = original(name);alias, function = split(name)
-                key = (TAP_MODULES[alias], function)
+                fn = original(name, modules);alias, function = split(name, modules)
+                key = (modules[alias], function)
                 def wrapper(*args, __name=name, __fn=fn, **kwargs):
                     frame = sys._getframe(1);site = _site(frame)
                     is_context = bool(args) and isinstance(args[0], Context)
@@ -122,7 +123,7 @@ def tap(names):
                     return result
                 functools.update_wrapper(wrapper, fn)
                 _installed[key] = fn
-                for module_name in SCAN_MODULES:
+                for module_name in scan:
                     module = sys.modules.get(module_name) or importlib.import_module(module_name)
                     for attr, value in list(vars(module).items()):
                         if value is fn:setattr(module, attr, wrapper);bindings.append((module, attr, fn))
