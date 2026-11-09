@@ -1,7 +1,7 @@
 """Train π_FP: fine-tune the champion's policy on Foul Play's own decisions, and report it against the champion's π.
 
 usage: python -m gpu_engine.fp_reply_train DATA_DIR OUT_DIR --checkpoint PT [--epochs 8] [--lr 2e-5] [--batch 256]
-       [--weight-decay 0.01] [--device cuda] [--seed 0] [--redact peer-view-v1]
+       [--weight-decay 0.01] [--device cuda] [--seed 0] [--redact peer-view-v1|peer-view-v2]
 
 DATA_DIR holds fp_reply_data shards (one row per Foul Play decision, games in decision order). Splits are by game, from the
 battle seed: seed % 10 == 0 is test, == 1 is validation, the rest train (fp_reply_data.split_of). Each row's input is the
@@ -16,8 +16,8 @@ stored float32 probabilities clipped at 1e-12, so tail actions share one floor; 
 Checks: TF32 and the MHA eval fast path are off, so CUDA runs exact fp32 (the fast path alone moved probabilities by up to 5.5e-3). Before training, the base model's validation probabilities through windows/batch
 must reproduce the stored π to 1e-3. --export-archive recomputes π_FP on CPU in fp32 and requires the JAX archive forward to
 match it to 1e-4.
---redact peer-view-v1 trains and evaluates on Foul Play's view redacted the way the search's constructor builds the opponent's
-(peer) view (redact_peer_view); the input-parity check runs on the unredacted tensors first, and the checkpoint's fp_reply marker
+--redact peer-view-v1|peer-view-v2 trains and evaluates on Foul Play's view redacted the way the search's constructor builds the
+opponent's (peer) view (redact_peer_view; v2 needs data with fp_opp_hazard_credit); the input-parity check runs on the unredacted tensors first, and the checkpoint's fp_reply marker
 records the redaction.
 """
 import argparse
@@ -222,11 +222,13 @@ ARCHIVE_TOLERANCE = 1e-4
 INPUT_TOLERANCE = 1e-3
 
 # The constructor's peer view (gpu_engine/phase_d_live_worlds.py) with Foul Play as the observer differs from env.observe(Foul Play)
-# by design in exactly these v4 columns (the input-parity session's 48-cell true-world run, November 9): Foul Play's own damage
+# by design in exactly these v4 columns (the input-parity session's 48-cell true-world runs, November 9): Foul Play's own damage
 # history is unavailable to the reply policy, and our HP reaches it at Showdown's public percent precision.
-REDACTIONS = ('peer-view-v1',)
-SELF_ACTIVE_TOKEN, OPPONENT_TOKENS = 1, slice(7, 13)
+#   peer-view-v1: items 1-3 below. peer-view-v2 (π_FP-red2): items 1-5.
+REDACTIONS = ('peer-view-v1', 'peer-view-v2')
+FIELD_TOKEN, SELF_ACTIVE_TOKEN, OPPONENT_TOKENS = 0, 1, slice(7, 13)
 HP_FRACTION, LAST_DAMAGE_DEALT, LAST_DAMAGE_TAKEN = 0, 38, 39
+SELF_HAZARD_CREDIT, OPP_HAZARD_CREDIT = 115, 116   # showdown.v4_numeric_index(NUMERIC_{SELF,OPP}_HAZARD_CREDIT)
 V4_SHAPE = (23, 132)
 
 
@@ -239,14 +241,34 @@ def public_percent(x):
     return (np.clip(p, 0., 100.) / 100.).astype(np.asarray(x).dtype)
 
 
-def redact_peer_view(numeric):
-    """peer-view-v1, in place on v4 numeric features [..., 23, 132]: Foul Play's own active LAST_DAMAGE_TAKEN -> 0; our six
-    Pokémon's LAST_DAMAGE_DEALT -> 0 (it is Foul Play's exact HP loss); our six Pokémon's HP_FRACTION -> the public percent."""
-    if tuple(numeric.shape[-2:]) != V4_SHAPE:raise SystemExit(f'peer-view-v1 is defined on v4 {V4_SHAPE} numeric features, not {numeric.shape[-2:]}')
+def redact_peer_view(numeric, redaction='peer-view-v1', opp_hazard_credit=None):
+    """In place on v4 numeric features [..., 23, 132]:
+      1. Foul Play's own active LAST_DAMAGE_TAKEN -> 0;
+      2. our six Pokémon's LAST_DAMAGE_DEALT -> 0 (it is Foul Play's exact HP loss);
+      3. our six Pokémon's HP_FRACTION -> the public percent;
+    peer-view-v2 also:
+      4. field SELF_HAZARD_CREDIT -> 0 (Foul Play's exact Spikes losses);
+      5. field OPP_HAZARD_CREDIT -> opp_hazard_credit [...] (the data's fp_opp_hazard_credit: our Spikes losses at the public percent
+         Foul Play sees, fp_reply_data.fp_view_opp_hazard_credit), replacing the env's sum of our exact HP fractions."""
+    if redaction not in REDACTIONS:raise SystemExit(f'unknown redaction {redaction!r}')
+    if tuple(numeric.shape[-2:]) != V4_SHAPE:raise SystemExit(f'{redaction} is defined on v4 {V4_SHAPE} numeric features, not {numeric.shape[-2:]}')
     numeric[..., SELF_ACTIVE_TOKEN, LAST_DAMAGE_TAKEN] = 0.
     numeric[..., OPPONENT_TOKENS, LAST_DAMAGE_DEALT] = 0.
     numeric[..., OPPONENT_TOKENS, HP_FRACTION] = public_percent(numeric[..., OPPONENT_TOKENS, HP_FRACTION])
+    if redaction == 'peer-view-v2':
+        credit = None if opp_hazard_credit is None else np.asarray(opp_hazard_credit, numeric.dtype)
+        if credit is None or credit.shape != numeric.shape[:-2]:
+            raise SystemExit(f'peer-view-v2 needs fp_opp_hazard_credit of shape {numeric.shape[:-2]}: build the data with this fp_reply_data')
+        numeric[..., FIELD_TOKEN, SELF_HAZARD_CREDIT] = 0.
+        numeric[..., FIELD_TOKEN, OPP_HAZARD_CREDIT] = credit
     return numeric
+
+
+def apply_redaction(arrays, redaction):
+    """redact_peer_view on a loaded dataset's numeric_features (None: unchanged); peer-view-v2 reads arrays['fp_opp_hazard_credit']."""
+    if redaction is None:return arrays
+    redact_peer_view(arrays['numeric_features'], redaction, arrays.get('fp_opp_hazard_credit'))
+    return arrays
 
 
 def archive_parity(checkpoint, archive, arrays, index, rows, torch, extra, size=512):
@@ -328,7 +350,7 @@ def main(argv=None):
         checkpoint_redaction = (torch.load(args.evaluate, map_location='cpu', weights_only=True).get('fp_reply') or {}).get('redaction')
         if checkpoint_redaction is not None and checkpoint_redaction != args.redact:
             raise SystemExit(f'{args.evaluate} was trained on redaction {checkpoint_redaction!r}; pass --redact {checkpoint_redaction}')
-        if args.redact:redact_peer_view(arrays['numeric_features'])
+        apply_redaction(arrays, args.redact)
     calibration, calibrated = recalibrate(arrays['probs'][rows['train']], labels[rows['train']], arrays['legal'][rows['train']], torch)
     if args.evaluate:
         test = rows['test'];probs = predict(model, arrays, index, test, torch, args.device)
@@ -352,7 +374,7 @@ def main(argv=None):
     print(json.dumps(dict(event='INPUT_PARITY', max_abs_probability_difference=input_parity, tolerance=INPUT_TOLERANCE)), flush=True)
     if not input_parity <= INPUT_TOLERANCE:raise SystemExit(f'base model through windows/batch differs from the stored π by {input_parity}')
     if args.redact:
-        before = arrays['numeric_features'].copy();redact_peer_view(arrays['numeric_features'])
+        before = arrays['numeric_features'].copy();apply_redaction(arrays, args.redact)
         changed = (before != arrays['numeric_features']).any(-1);del before
         redaction = dict(name=args.redact, rows_changed=float(changed.any(-1).mean()),
                          token_rows_changed={int(t): float(changed[:, t].mean()) for t in range(changed.shape[1]) if changed[:, t].any()})

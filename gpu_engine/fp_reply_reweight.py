@@ -254,11 +254,12 @@ def same_observation(a, b):
     return all(np.array_equal(np.asarray(getattr(a, k)), np.asarray(getattr(b, k))) for k in (*OBS_DTYPES, 'legal_action_mask'))
 
 
-def score(model, observations, labels, torch, redaction=None):
-    """log q(label | observation) under π_FP per observation (-inf for a None or illegal label), on π_FP's own redaction."""
+def score(model, observations, labels, torch, redaction=None, opp_hazard_credit=None):
+    """log q(label | observation) under π_FP per observation (-inf for a None or illegal label), on π_FP's own redaction
+    (peer-view-v2: opp_hazard_credit, one float for every observation, from the same lines)."""
     arrays = {k: np.stack([np.asarray(getattr(o, k), t) for o in observations]) for k, t in OBS_DTYPES.items()}
-    if redaction == 'peer-view-v1':train_mod.redact_peer_view(arrays['numeric_features'])
-    elif redaction is not None:raise SystemExit(f'unknown redaction {redaction!r}')
+    if opp_hazard_credit is not None:arrays['fp_opp_hazard_credit'] = np.full(len(observations), opp_hazard_credit, np.float32)
+    train_mod.apply_redaction(arrays, redaction)
     arrays['legal'] = np.stack([np.asarray(o.legal_action_mask, bool) for o in observations])
     arrays['label'] = np.array([0 if y is None else y for y in labels])
     rows = np.arange(len(observations))
@@ -368,7 +369,8 @@ def measure(env, model, game, dex, torch, checks, request, first, action, round_
         if k == true_key:checks['true_world_differs'] += not same_observation(observations[-1], baseline)
     if not same_observation(env.observe(fp), baseline):checks['observe_changed_by_worlds'] += 1
     if replaced_disabled:checks['replaced_disabled_slot_skipped'] += 1;return None
-    logq = score(model, observations + [baseline], labels + [action], torch, redaction);true_logq = logq[-1];logq = logq[:-1]
+    credit = data_mod.fp_view_opp_hazard_credit(env.protocol_lines, ours_seat) if redaction == 'peer-view-v2' else None
+    logq = score(model, observations + [baseline], labels + [action], torch, redaction, credit);true_logq = logq[-1];logq = logq[:-1]
     by_key = dict(zip(distinct, logq));checks['worlds'] += len(distinct)
     row = dict(seed=game['seed'], ordinal=game['ordinal'], turn=turn, round=round_, worlds=len(distinct), truth_in=true_key in by_key,
                evidence=evidence_n[active], incomplete=bool(evidence_n[active]) and any(k not in evidence[active] for k in distinct),
