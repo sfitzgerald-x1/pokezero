@@ -2,23 +2,43 @@
 
 `base` runs the jitted transition.step_with_public of this tree on every
 captured (state, actions, trackers) input and stores, per shard, a 64-bit
-digest of every output leaf for every lane, plus the full post arrays of the
-faint-clear tracker leaves on lanes where an active faints. `patched` runs a
-later tree on the same shards: inputs are migrated by leaf path (existing
-leaves must keep shape and dtype; new leaves are default-filled), the patched
-step runs, and every lane-step whose outputs differ from the base digests is
-attributed through a per-PR table of involvement predicates (pre-state and
-actions only, so a conservative superset). It reports unchanged,
-changed-and-involved per effect, changed-but-uninvolved (must be 0) and
-involved-but-unchanged lane-steps, and lists every changed lane-step.
+digest of every output leaf for every lane and side (leaves with a side axis
+are digested per side), plus the post arrays of the faint-clear tracker leaves
+on lanes where an active faints. `patched` runs a later tree on the same
+shards: inputs are migrated by leaf path (existing leaves keep shape and
+dtype; new state leaves take empty_state's values, new tracker leaves their
+declared neutral values), the patched step runs, and every changed lane-step
+is attributed through the per-PR plug-in table:
+
+- involvement predicates (pre-state and actions only, a conservative superset)
+  name the effects a lane may exercise and the side that acts;
+- each effect declares the leaves it may change on the acting (user) side, the
+  other (target) side and side-less leaves. A change outside the union of the
+  involved effects' allowances is changed-involved-unexpected-fields, a
+  failure, unless the lane's set of fainting mons differs from the base (a KO
+  cascade, which may change anything) or the leaf is waived (--waive).
+
+Report: unchanged, changed-and-involved per effect with its changed fields,
+changed-but-uninvolved and changed-involved-unexpected-fields (both must be
+0), involved-but-unchanged; every changed lane-step is listed.
 
 Special rules (PR0): `trackers.public_order` is checked against a numpy replay
 of its swap rule over the recorded install calls instead of bitwise, and with
 --faint-clear the PR0 faint-time public clear may change only the listed
-tracker entries on lanes where an active faints.
+tracker entries on lanes where an active faints (meanlook_trap: the actives'
+entries).
 
-Both passes must run on the same JAX version and lane padding. Paths are
-command-line arguments.
+The involvement superset resolves the executed move as the engine does (slot,
+charge, standing or same-turn Encore, Struggle, a resumed queued action, every
+Sleep Talk-callable move, a Magic Coat reflection) and covers Effect Spore and
+Yawn sleep under Sleep Clause, Rest or Effect Spore against Insomnia/Vital
+Spirit, and an incoming White Herb holder. Known gaps, which can only cause
+false failures: Snatch, Mirror Move, Metronome and Assist calls (not in the
+Gen 3 randbats pool); a foe's Roar/Whirlwind dragging in an Insomnia/Vital
+Spirit holder before a sleep move; the recharge override (M1 adds it).
+
+Both passes must run on the same JAX version, digest scheme and lane padding.
+Paths are command-line arguments.
 """
 import argparse
 from concurrent.futures import ThreadPoolExecutor
@@ -33,17 +53,20 @@ import time
 
 import numpy as np
 
-SCHEMA = 'pokezero.v2e_regress.v1'
+SCHEMA = 'pokezero.v2e_regress.v2'
+DIGEST_FORMAT = 'per-lane-per-side-v2'
 ROOT = Path(__file__).resolve().parents[1]
 DIGEST_SEEDS = (0x243F6A88, 0x85A308D3)
+# Leaves whose second axis is not a battle side.
+NOT_SIDE = ('state.keys',)
 # PR0's faint-time public clear (design 2.5): these tracker entries of the
-# fainted mon may be cleared; meanlook_trap may be cleared on both seats.
+# fainted mon may be cleared; meanlook_trap may be cleared on both actives.
 FAINT_CLEAR_MON = ('confusion_turns', 'encore_turns', 'wrap_trap_turns', 'stall_counter', 'sub_present',
                    'item_swapped', 'choice_locked')
 FAINT_CLEAR_SEATS = ('meanlook_trap',)
 FAINT_CLEAR_LEAVES = tuple(['trackers.public_volatiles'] + [f"trackers.mon_features['{k}']" for k in FAINT_CLEAR_MON + FAINT_CLEAR_SEATS])
 PUBLIC_ORDER = 'trackers.public_order'
-DESTINY_BOND = 64
+DEFAULT_DESTINY_BOND = 64
 SLEEP_MOVES = ('spore', 'hypnosis', 'sleeppowder', 'sing', 'lovelykiss', 'grasswhistle')
 
 
@@ -79,9 +102,13 @@ def capture_name(path):
     raise ValueError(f'unexpected capture leaf path {path}')
 
 
+def has_side_axis(name, shape, lanes):
+    return len(shape) >= 2 and shape[0] == lanes and shape[1] == 2 and name not in NOT_SIDE
+
+
 # ---------------------------------------------------------------------------
-# Digests: per lane, two independent 32-bit sums of a bijective mix of every
-# element (so any single-element change always changes both words).
+# Digests: per lane (and side), two independent 32-bit sums of a bijective mix
+# of every element (so any single-element change always changes both words).
 
 def _as_u32(x):
     import jax
@@ -109,10 +136,19 @@ def lane_digest(x, lanes):
     return j.stack([j.sum(_fmix(u ^ (index + j.uint32(seed))), axis=1, dtype=j.uint32) for seed in DIGEST_SEEDS], axis=1)
 
 
+def side_digest(name, x, lanes):
+    """[L,2 sides,2 words]: per side for a side-axis leaf, else the whole digest on both sides."""
+    import jax.numpy as j
+    x = j.asarray(x)
+    if has_side_axis(name, x.shape, lanes):return j.stack([lane_digest(x[:, s], lanes) for s in range(2)], axis=1)
+    whole = lane_digest(x, lanes)
+    return j.stack([whole, whole], axis=1)
+
+
 def digest_named(named, lanes):
     import jax.numpy as j
     names = list(named)
-    return names, j.stack([lane_digest(named[n], lanes) for n in names], axis=1)   # [L, N, 2]
+    return names, j.stack([side_digest(n, named[n], lanes) for n in names], axis=1)   # [L, N, 2, 2]
 
 
 # ---------------------------------------------------------------------------
@@ -122,14 +158,24 @@ class MigrationError(ValueError):
     pass
 
 
+def tracker_default(name, template):
+    """Declared neutral values for new tracker leaves (never a constructed game's lane 0)."""
+    if name == PUBLIC_ORDER:
+        if template.shape[1:] != (2, 6):raise MigrationError(f'{name}: expected [B,2,6], tree has {template.shape}')
+        return lambda lanes: np.broadcast_to(np.arange(6, dtype=template.dtype), (lanes, 2, 6))
+    if re.match(r"^trackers\.(mon_features|field_features)\[", name):
+        return lambda lanes: np.zeros((lanes,) + template.shape[1:], template.dtype)
+    raise MigrationError(f'new tracker leaf {name} has no declared neutral value; add it to tracker_default()')
+
+
 def migrate(capture_names, leaves, template_named, *, defaults=None):
     """Shard leaves (capture order) -> {name: array} in the template's leaf set.
 
-    Existing leaves must keep their per-lane shape and dtype. Template leaves
-    absent from the capture are filled from `defaults[name](lanes)` when given
-    (patched_pass passes empty_state's values for state leaves), else by
-    broadcasting the template's lane 0 (the initializer's neutral value).
-    A captured leaf missing from the template is refused.
+    Existing leaves must keep their per-lane shape and dtype. A template leaf
+    absent from the capture takes `defaults[name](lanes)` (patched_pass: empty_state
+    for state leaves), else its declared tracker neutral value; the default must
+    match the template's per-lane shape and dtype. A captured leaf missing from
+    the template is refused.
     """
     defaults = defaults or {}
     lanes = int(leaves[0].shape[0])
@@ -145,8 +191,11 @@ def migrate(capture_names, leaves, template_named, *, defaults=None):
                 raise MigrationError(f'{name}: captured {value.shape[1:]}{value.dtype} vs tree {template.shape[1:]}{template.dtype}')
             out[name] = value
         else:
-            value = defaults[name](lanes) if name in defaults else np.broadcast_to(template[:1], (lanes,) + template.shape[1:])
-            out[name] = np.ascontiguousarray(value, dtype=template.dtype);filled.append(name)
+            fill = defaults.get(name) or tracker_default(name, template)
+            value = np.asarray(fill(lanes))
+            if value.shape != (lanes,) + template.shape[1:] or value.dtype != template.dtype:
+                raise MigrationError(f'{name}: default {value.shape}{value.dtype} vs tree {template.shape[1:]}{template.dtype}')
+            out[name] = np.ascontiguousarray(value);filled.append(name)
     return out, filled
 
 
@@ -162,13 +211,14 @@ def pad_lanes(named, lanes):
 
 
 # ---------------------------------------------------------------------------
-# Involvement predicates (numpy, pre-state and actions only).
+# Involvement predicates (numpy, pre-state and actions only). Each returns
+# [L,2]: the side(s) that exercise the effect this step.
 
 class Pre:
     """Numpy view of a migrated pre-state plus the move resolution of the step."""
-    def __init__(self, named, vocab, sleep_talk_callable, struggle_mask):
+    def __init__(self, named, vocab, sleep_talk_callable, struggle_mask, *, destiny_bond=DEFAULT_DESTINY_BOND):
         self.s = {k[len('state.'):]: np.asarray(v) for k, v in named.items() if k.startswith('state.')}
-        self.actions = np.asarray(named['actions']);self.vocab = vocab
+        self.actions = np.asarray(named['actions']);self.vocab = vocab;self.destiny_bond = destiny_bond
         self.lanes = self.actions.shape[0];self.ids = {m: i for i, m in enumerate(vocab['moves'])}
         self.sleep_talk_callable = np.asarray(sleep_talk_callable);self.struggle = np.asarray(struggle_mask)
         self.candidates = self._candidates()
@@ -178,7 +228,12 @@ class Pre:
         return self.s[name][rows, sides, self.s['active']]
 
     def _candidates(self):
-        """[L,2,K] move ids a side may execute this step (0 = none); a superset."""
+        """[L,2,K] move ids a side may execute this step (0 = none); a superset.
+
+        Action slot, charge lock, Encore (standing, or applied this turn by a foe's
+        Encore to the side's last executed slot), Struggle, the queued action on a
+        resumed turn, every Sleep Talk-callable move, and a foe's move reflected
+        by this side's Magic Coat."""
         s = self.s;rows = np.arange(self.lanes)[:, None];sides = np.arange(2)[None, :]
         saved = np.where(s['pending_residual'], s['queued_actor'], -1)
         acts = np.where(saved[:, None] == sides, s['queued_actions'], self.actions)
@@ -187,62 +242,127 @@ class Pre:
         charge = self.active('charge_move')
         encore = np.where(self.active('encore_counter') > 0, self.active('encore_move'), 0)
         struggle = np.where(self.struggle, self.ids.get('struggle', 0), 0)
-        base = np.stack([chosen, charge, encore, struggle], axis=-1)
+        # Same-turn Encore: a faster foe's Encore overrides this side's queued move
+        # with its last executed slot (encore.override reads action history).
+        index = s['last_action_index'];valid = (s['last_action_kind'] == 2) & (index >= 0) & (index < 4)
+        last = np.where(valid, s['moves'][rows, sides, s['active'], np.clip(index, 0, 3)], 0)
         talk = self.ids.get('sleeptalk', -1)
         own = s['moves'][rows, sides, s['active']]                      # [L,2,4]
-        called = np.where(self.sleep_talk_callable[own] & (base == talk).any(-1, keepdims=True), own, 0)
-        return np.concatenate([base, called], axis=-1)
-
-    def uses(self, *names):
-        ids = [self.ids[n] for n in names if n in self.ids]
-        return np.isin(self.candidates, ids).any(axis=(1, 2)) if ids else np.zeros(self.lanes, bool)
+        def expand(base):
+            called = np.where(self.sleep_talk_callable[own] & (base == talk).any(-1, keepdims=True), own, 0)
+            return np.concatenate([base, called], axis=-1)
+        base = np.stack([chosen, charge, encore, struggle], axis=-1)
+        foe_encore = (expand(base) == self.ids.get('encore', -1)).any(-1)[:, ::-1]
+        candidates = expand(np.concatenate([base, np.where(foe_encore, last, 0)[..., None]], axis=-1))
+        coat = (candidates == self.ids.get('magiccoat', -1)).any(-1)    # [L,2]
+        reflected = np.where(coat[..., None], candidates[:, ::-1], 0)
+        return np.concatenate([candidates, reflected], axis=-1)
 
     def side_uses(self, *names):
         ids = [self.ids[n] for n in names if n in self.ids]
         return np.isin(self.candidates, ids).any(axis=2) if ids else np.zeros((self.lanes, 2), bool)
 
+    def uses(self, *names):
+        return self.side_uses(*names).any(axis=1)
+
+    def ability_ids(self, *names):
+        table = self.vocab['abilities'];return [table.index(n) for n in names if n in table]
+
+    def active_ability(self, *names):
+        return np.isin(self.active('ability'), self.ability_ids(*names))
 
 
-def sleep_clause(p):
-    """A primary-sleep move while the target's side has another living non-Rest sleeper."""
+def sleepers_besides_target(p):
+    """[L,2] a side holds a living non-Rest sleeper that is not its (possibly switching) active."""
     s = p.s;slp = 5
     sleepers = (s['hp'] > 0) & (s['status'] == slp) & ~s['rest_origin'].astype(bool)     # [L,2,6]
     other = np.arange(6)[None, None, :] != s['active'][..., None]
     switching = (p.actions >= 4)[..., None]          # a side switching may bring the sleeper in as target
-    has_other_sleeper = (sleepers & (other | switching)).any(-1)                         # [L,2] per target side
-    return (p.side_uses(*SLEEP_MOVES) & has_other_sleeper[:, ::-1]).any(axis=1)
+    return (sleepers & (other | switching)).any(-1)
+
+
+def sleep_clause(p):
+    """A sleep attempt while the slept side has another living non-Rest sleeper: a primary
+    sleep move or Yawn by the actor; Effect Spore on the actor's contact; a pending Yawn."""
+    others = sleepers_besides_target(p)
+    by_move = p.side_uses(*SLEEP_MOVES, 'yawn') & others[:, ::-1]
+    spore = p.active_ability('effectspore')[:, ::-1] & others & (p.candidates > 0).any(-1)
+    drowsy = ((p.s['yawn_counter'] > 0).any(-1) & others)[:, ::-1] if 'yawn_counter' in p.s else np.zeros_like(by_move)
+    return by_move | spore | drowsy
 
 
 def sleep_immunity(p):
-    """A primary-sleep move or Yawn aimed at a side holding Insomnia or Vital Spirit."""
-    names = p.vocab['abilities'];ids = [names.index(n) for n in ('insomnia', 'vitalspirit') if n in names]
+    """A sleep move or Yawn aimed at an Insomnia/Vital Spirit side; Rest by such a holder;
+    such a holder hitting an Effect Spore foe."""
+    ids = p.ability_ids('insomnia', 'vitalspirit')
     holder = np.isin(p.s['ability'], ids)                                                # [L,2,6]
-    active = holder[np.arange(p.lanes)[:, None], np.arange(2)[None, :], p.s['active']]
+    active = p.active_ability('insomnia', 'vitalspirit')
     exposed = active | (holder.any(-1) & (p.actions >= 4))                              # per holder side
-    return (p.side_uses(*SLEEP_MOVES, 'yawn') & exposed[:, ::-1]).any(axis=1)
+    aimed = p.side_uses(*SLEEP_MOVES, 'yawn') & exposed[:, ::-1]
+    rest = p.side_uses('rest') & active
+    spore = active & p.active_ability('effectspore')[:, ::-1] & (p.candidates > 0).any(-1)
+    return aimed | rest | spore
 
 
 def counter(name):
     def predicate(p):
-        return (p.s[name] > 0).any(axis=(1, 2)) if name in p.s else np.zeros(p.lanes, bool)
+        return (p.s[name] > 0).any(axis=2) if name in p.s else np.zeros((p.lanes, 2), bool)
     return predicate
 
 
 def destiny_bond_bit(p):
-    return ((p.s['volatile'] & DESTINY_BOND) != 0).any(axis=(1, 2))
+    return ((p.s['volatile'] & p.destiny_bond) != 0).any(axis=2)
 
 
 def white_herb(p):
+    """An active White Herb holder, or one that may come in this step (switch, Baton
+    Pass, the foe's Roar/Whirlwind, a replacement)."""
     items = p.vocab['items']
-    return (p.active('item') == items.index('whiteherb')).any(axis=1) if 'whiteherb' in items else np.zeros(p.lanes, bool)
+    if 'whiteherb' not in items:return np.zeros((p.lanes, 2), bool)
+    herb = items.index('whiteherb');holders = p.s['item'] == herb                       # [L,2,6]
+    rows = np.arange(p.lanes)[:, None];sides = np.arange(2)[None, :]
+    active_hp = p.s['hp'][rows, sides, p.s['active']]
+    incoming = ((p.actions >= 4) | p.side_uses('batonpass') | p.side_uses('roar', 'whirlwind')[:, ::-1]
+                | p.s['forced_switch'].astype(bool) | (active_hp <= 0))
+    return (p.active('item') == herb) | (holders.any(-1) & incoming)
 
 
 def confusion_active(p):
-    return (p.active('confusion_counter') > 0).any(axis=1)
+    return p.active('confusion_counter') > 0
 
 
 def move(*names):
-    return lambda p: p.uses(*names)
+    return lambda p: p.side_uses(*names)
+
+
+# Leaf families for the allowed-change sets (regexes over output names).
+FAMILIES = {
+    'hp': (r'^state\.(hp|substitute_hp)$', r'^trackers\.(hp_percent|damage_exact_(dealt|taken))$',
+           r'^trackers\.(damage_history|negative_items)\.', r"^trackers\.mon_features\['last_damage_(dealt|taken)'\]$"),
+    'boosts': (r'^state\.boosts$', r'^trackers\.boosts$'),
+    'status': (r'^state\.(status|status_counter|sleep_skipped|rest_origin)$', r'^trackers\.status$', r'^trackers\.public_volatiles$',
+               r"^trackers\.mon_features\['(sleep_turns|sleep_skipped_turns|sleep_cant_pending|sleep_usable_pending|rest_sleep|toxic_stage)'\]$"),
+    'item': (r'^state\.item$', r'^trackers\.(shown_item|item_removed|belief_mask)$', r'^trackers\.(visible_belief|negative_items)\.',
+             r"^trackers\.mon_features\['item_swapped'\]$"),
+    'reveal': (r'^trackers\.(shown_ability|original_ability|borrowed_ability|belief_mask)$', r'^trackers\.visible_belief\.'),
+    'all': (r'.*',),
+}
+ALL = dict(user=('all',), target=('all',), glob=('all',))
+# effect -> leaves it may change: user (acting side), target (the other side), glob (side-less).
+# A1's sets: a stat change alters damage taken later in the step (and pinch berries);
+# a sleep landing or not decides whether the target acts at all, so it may change anything.
+ALLOWED = {
+    'curse': dict(user=('boosts', 'hp', 'item'), target=('hp',), glob=()),
+    'superpower': dict(user=('boosts', 'hp', 'item'), target=('hp',), glob=()),
+    'charm': dict(user=('hp',), target=('boosts', 'hp', 'item', 'reveal'), glob=()),
+    'lovelykiss': ALL, 'sleep_clause': ALL, 'sleep_immunity': ALL,
+    'aromatherapy': dict(user=('status', 'hp'), target=('hp',), glob=()),
+    'refresh': dict(user=('status', 'hp'), target=('hp',), glob=()),
+}
+
+
+def allowed_leaf(name, families):
+    return any(re.search(p, name) for f in families for p in FAMILIES[f])
 
 
 # Per-PR plug-in table: effect -> predicate. Choice unlock and the effect stream
@@ -273,6 +393,23 @@ def predicates(prs):
     return table
 
 
+def lane_verdict(changed, effects, side_axis, *, cascade=False, waive=()):
+    """changed: {(leaf, side)} for side-axis leaves, {(leaf, None)} for side-less ones;
+    effects: {effect: [actor sides]}. Returns (unexpected entries, waived entries)."""
+    if cascade:return [], []
+    unexpected, waived = [], []
+    for leaf, side in sorted(changed, key=lambda x: (x[0], -1 if x[1] is None else x[1])):
+        ok = False
+        for effect, actors in effects.items():
+            rule = ALLOWED.get(effect, ALL)
+            if side is None:ok |= allowed_leaf(leaf, rule['glob'])
+            else:ok |= any(allowed_leaf(leaf, rule['user' if side == a else 'target']) for a in actors)
+            if ok:break
+        if ok:continue
+        (waived if any(re.search(w, leaf) for w in waive) else unexpected).append((leaf, side))
+    return unexpected, waived
+
+
 # ---------------------------------------------------------------------------
 # Special rules.
 
@@ -295,10 +432,12 @@ def replay_public_order(pre_order, calls):
     return order
 
 
-def faint_clear_ok(lane_changes, post, base, fainted, physical_to_public):
-    """True when every changed faint-clear leaf differs only on allowed, cleared entries.
+def faint_clear_ok(lane_changes, post, base, fainted, physical_to_public, active_slot):
+    """True when every changed faint-clear leaf differs only on allowed, cleared entries:
+    the fainted mon's public slot, and for meanlook_trap the two actives' slots.
 
-    post/base: {name: array for this lane}; fainted [2,6] physical; physical_to_public [2,6].
+    post/base: {name: array for this lane}; fainted [2,6] physical; physical_to_public [2,6];
+    active_slot [2] public slots of the actives.
     """
     for name in lane_changes:
         if name not in FAINT_CLEAR_LEAVES:return False
@@ -307,7 +446,9 @@ def faint_clear_ok(lane_changes, post, base, fainted, physical_to_public):
         differ = a != b
         allowed = np.zeros_like(differ)
         if name.endswith(tuple(f"['{k}']" for k in FAINT_CLEAR_SEATS)):
-            allowed[...] = True
+            for side in range(2):
+                slot = int(active_slot[side])
+                if 0 <= slot < 6:allowed[side, slot] = True
         else:
             for side, mon in zip(*np.nonzero(fainted)):
                 slot = int(physical_to_public[side, mon])
@@ -332,7 +473,7 @@ def context_and_template(args):
 
 
 class Stepper:
-    """The jitted step plus per-lane digests, faint data and (optionally) the install log.
+    """The jitted step plus per-lane, per-side digests, faint data and (optionally) the install log.
 
     base_names: output names of the base pass; outputs outside it are new, and
     their own pre values are digested too (new leaves must keep their defaults).
@@ -360,24 +501,30 @@ class Stepper:
                 out = step_fn(state, actions, trackers)
             named_in = name_inputs(state, actions, trackers);named_out = name_outputs(out)
             names['out'], digests = digest_named(named_out, lanes)
+            names['side_axis'] = [has_side_axis(n, named_out[n].shape, lanes) for n in names['out']]
             new = [n for n in sorted(named_out) if base_names is not None and n not in base_names and n in named_in]
             names['pre'] = new
-            pre = digest_named({n: named_in[n] for n in new}, lanes)[1] if new else j.zeros((lanes, 0, 2), j.uint32)
+            pre = digest_named({n: named_in[n] for n in new}, lanes)[1] if new else j.zeros((lanes, 0, 2, 2), j.uint32)
             return dict(digests=digests, pre_digests=pre, fainted=(state.hp > 0) & (out.step.state.hp <= 0),
                 extra={n: named_out[n] for n in faint_leaves if n in named_out}, calls=calls,
-                physical_to_public=out.trackers.physical_to_public, public_order=named_out.get(PUBLIC_ORDER))
+                physical_to_public=out.trackers.physical_to_public, active_slot=out.trackers.active_slot,
+                public_order=named_out.get(PUBLIC_ORDER))
         self._jit = jax.jit(traced);self._names = names
 
     def __call__(self, leaves):
         import jax
         result = jax.device_get(self._jit(leaves))
-        result.update(names=self._names['out'], pre_names=self._names['pre'])
+        result.update(names=self._names['out'], pre_names=self._names['pre'], side_axis=self._names['side_axis'])
         return result
 
 
+def git(*args):
+    return subprocess.run(['git', '-C', str(ROOT), *args], capture_output=True, text=True)
+
+
 def git_source():
-    rev = subprocess.run(['git', '-C', str(ROOT), 'rev-parse', 'HEAD'], capture_output=True, text=True).stdout.strip()
-    dirty = subprocess.run(['git', '-C', str(ROOT), 'status', '--porcelain', '--', 'gpu_engine', 'src'], capture_output=True, text=True).stdout
+    rev = git('rev-parse', 'HEAD').stdout.strip()
+    dirty = git('status', '--porcelain', '--', 'gpu_engine', 'src').stdout
     return rev, bool(dirty.strip())
 
 
@@ -418,6 +565,8 @@ def base_pass(args, *, step_override=None, prepared=None):
     import jax
     from gpu_engine.v2e_capture import leaf_paths
     from gpu_engine.v2e_diff import oracle_digest
+    rev, dirty = git_source()
+    if dirty and not args.allow_dirty:raise SystemExit('the source tree is dirty; commit it or pass --allow-dirty')
     out = Path(args.out);out.mkdir(parents=True, exist_ok=False)
     capture, capture_sha = capture_record(args)
     context, template = prepared or context_and_template(args)
@@ -426,14 +575,13 @@ def base_pass(args, *, step_override=None, prepared=None):
     tables = context['prepared']
     stepper = Stepper(step_override or _engine_step(tables), treedef)
     shards = shard_list(args, capture);pad = args.pad_lanes or 0
-    rev, dirty = git_source()
-    names = None;lane_steps = 0;live = 0;begin = time.perf_counter()
+    names = side_axis = None;lane_steps = 0;live = 0;begin = time.perf_counter()
     for index, (path, (leaves, tick, level)) in enumerate(prefetched(shards)):
         lanes = int(leaves[0].shape[0])
         named = dict(zip([capture_name(p) for p in capture['paths']], leaves))
         named, real = pad_lanes(named, pad)
         result = stepper([named[capture_name(p)] for p in capture['paths']])
-        names = result['names']
+        names, side_axis = result['names'], result['side_axis']
         done = np.asarray(named['state.done'])[:real]
         fainted = result['fainted'][:real]
         faint_lanes = np.flatnonzero(fainted.any(axis=(1, 2)) & ~done)
@@ -444,9 +592,10 @@ def base_pass(args, *, step_override=None, prepared=None):
         lane_steps += real;live += int((~done).sum())
         if index % 50 == 0:log('BASE_SHARD', index=index, shard=path.name, lanes=lanes, padded=pad or lanes, seconds=time.perf_counter() - begin)
     digest, modules = oracle_digest()
-    manifest = dict(schema=SCHEMA, pass_='base', source_commit=rev, source_dirty=dirty, oracle_digest=digest, oracle_modules=len(modules),
-        capture_sha256=capture_sha, capture_commit=capture.get('source_commit'), shards=[p.name for p in shards],
-        lane_steps=lane_steps, live_lane_steps=live, output_names=names, input_names=[capture_name(p) for p in capture['paths']],
+    manifest = dict(schema=SCHEMA, digest_format=DIGEST_FORMAT, pass_='base', source_commit=rev, source_dirty=dirty,
+        oracle_digest=digest, oracle_modules=len(modules), capture_sha256=capture_sha, capture_commit=capture.get('source_commit'),
+        shards=[p.name for p in shards], partial=bool(args.limit), lane_steps=lane_steps, live_lane_steps=live,
+        output_names=names, side_axis=side_axis, input_names=[capture_name(p) for p in capture['paths']],
         faint_leaves=sorted(n for n in FAINT_CLEAR_LEAVES if n in names), pad_lanes=pad, digest_seeds=list(DIGEST_SEEDS),
         jax=jax.__version__, backend=jax.default_backend(), seconds=time.perf_counter() - begin)
     (out / 'manifest.json').write_text(json.dumps(manifest, indent=1) + '\n')
@@ -454,10 +603,32 @@ def base_pass(args, *, step_override=None, prepared=None):
     return 0
 
 
-def classify(changed_names, involved, rule_ok):
-    if not changed_names:return 'unchanged'
+def classify(changed, involved, rule_ok, unexpected):
+    if not changed:return 'unchanged'
     if rule_ok:return 'rule'
-    return 'involved' if involved else 'uninvolved'
+    if not involved:return 'uninvolved'
+    return 'unexpected' if unexpected else 'involved'
+
+
+def check_base(args, manifest, rev):
+    """Digest scheme, JAX and the PR's merge base must match the stored base pass."""
+    import jax
+    problems = []
+    if manifest.get('schema') != SCHEMA or manifest.get('digest_format') != DIGEST_FORMAT:
+        problems.append(f"base schema {manifest.get('schema')}/{manifest.get('digest_format')} != {SCHEMA}/{DIGEST_FORMAT}")
+    if manifest.get('digest_seeds') != list(DIGEST_SEEDS):problems.append('digest seeds differ from the base pass')
+    if jax.__version__ != manifest['jax'] or jax.default_backend() != manifest['backend']:
+        problems.append(f"base pass ran on jax {manifest['jax']}/{manifest['backend']}, this is {jax.__version__}/{jax.default_backend()}")
+    if problems:raise SystemExit('; '.join(problems))
+    merge_base = None
+    if args.integration:
+        merge_base = git('merge-base', 'HEAD', args.integration).stdout.strip() or None
+    matches = merge_base is not None and merge_base == manifest['source_commit']
+    if not matches and not args.allow_base_mismatch:
+        raise SystemExit(f"base pass source {manifest['source_commit'][:12]} is not this PR's merge base "
+                         f"{(merge_base or 'unknown (give --integration REF)')[:12]}; pass --allow-base-mismatch to override")
+    return dict(merge_base=merge_base, base_source_commit=manifest['source_commit'], base_matches_merge_base=matches,
+        allow_base_mismatch=bool(args.allow_base_mismatch))
 
 
 def patched_pass(args, *, step_override=None, prepared=None):
@@ -466,18 +637,26 @@ def patched_pass(args, *, step_override=None, prepared=None):
     from gpu_engine import state as state_module
     from gpu_engine.v2e_diff import oracle_digest
     base_dir = Path(args.base);manifest = json.loads((base_dir / 'manifest.json').read_text())
+    rev, dirty = git_source()
+    if dirty and not args.allow_dirty:raise SystemExit('the source tree is dirty; commit it or pass --allow-dirty')
+    base_check = check_base(args, manifest, rev)
     out = Path(args.out);out.mkdir(parents=True, exist_ok=False)
     capture, capture_sha = capture_record(args)
     if capture_sha != manifest['capture_sha256']:raise ValueError('capture differs from the base pass')
-    if jax.__version__ != manifest['jax'] or jax.default_backend() != manifest['backend']:
-        raise ValueError(f"base pass ran on jax {manifest['jax']}/{manifest['backend']}, this is {jax.__version__}/{jax.default_backend()}")
+    plugins = [p for p in args.pr.split(',') if p]
+    warnings = []
+    if len([p for p in plugins if p != 'none']) > 1:
+        warnings.append(f'plug-in superset {plugins}: changes are attributed to every listed PR\'s effects')
+        log('WARNING', message_=warnings[-1])
     context, template = prepared or context_and_template(args)
     treedef = jax.tree.structure(template)
     template_named = {}
     for name, leaf in zip(_template_names(template), jax.tree.leaves(template)):template_named[name] = np.asarray(leaf)
     capture_names = [capture_name(p) for p in capture['paths']]
     new_inputs = sorted(set(template_named) - set(capture_names))
-    table = predicates(args.pr.split(','))
+    table = predicates(plugins)
+    undeclared = sorted(e for e in table if e not in ALLOWED)
+    if undeclared:warnings.append(f'effects without declared allowed fields (any change accepted): {undeclared}')
     tables = context['prepared'];metadata = context['pool'].metadata();vocab = metadata['vocabulary']
     public_order_rule = PUBLIC_ORDER in new_inputs
     base_names = manifest['output_names']
@@ -486,24 +665,26 @@ def patched_pass(args, *, step_override=None, prepared=None):
     if args.limit == 0 and len(shards) != len(manifest['shards']):raise ValueError('shard set differs from the base pass')
     usable = jax.jit(state_module.usable_moves)
     callable_moves = np.asarray(tables.engine_tables.sleep_talk.callable)
-    counts = dict(lane_steps=0, done_skipped=0, unchanged=0, changed_and_involved=0, changed_but_uninvolved=0, rule_explained=0)
-    by_effect = {k: dict(changed=0, involved_unchanged=0) for k in table}
+    destiny_bond = getattr(state_module, 'DESTINY_BOND', DEFAULT_DESTINY_BOND)
+    counts = dict(lane_steps=0, done_skipped=0, unchanged=0, changed_and_involved=0, changed_but_uninvolved=0,
+                  changed_involved_unexpected_fields=0, ko_cascade=0, waived=0, rule_explained=0)
+    by_effect = {k: dict(changed=0, involved_unchanged=0, changed_fields={}, unexpected_fields={}) for k in table}
     uninvolved_leaves = {};new_outputs = None
-    listing = (out / 'changed.jsonl').open('x');begin = time.perf_counter();rev, dirty = git_source()
+    listing = (out / 'changed.jsonl').open('x');begin = time.perf_counter()
     names_order = _template_names(template)
-    defaults = state_defaults()
+    defaults = state_defaults(template_named)
     try:
         for index, (path, (leaves, tick, level)) in enumerate(prefetched(shards)):
             named, filled = migrate(capture_names, leaves, template_named, defaults=defaults)
             named, real = pad_lanes(named, manifest['pad_lanes'])
             result = stepper([named[n] for n in names_order])
-            names = result['names'];position = {n: i for i, n in enumerate(names)}
+            names = result['names'];position = {n: i for i, n in enumerate(names)};side_axis = dict(zip(names, result['side_axis']))
             missing = [n for n in base_names if n not in position]
             if missing:raise ValueError(f'output leaves removed by this tree: {missing[:8]}')
             new_outputs = sorted(set(names) - set(base_names))
             digests = result['digests'][:real]
             base = np.load(base_dir / f'digest-{path.stem}.npz')
-            diff = np.zeros((real, len(names)), bool)
+            diff = np.zeros((real, len(names), 2), bool)
             shared = [position[n] for n in base_names]
             diff[:, shared] = (digests[:, shared] != base['digests']).any(-1)
             # New leaves must keep their default-filled pre values unless involved.
@@ -515,13 +696,15 @@ def patched_pass(args, *, step_override=None, prepared=None):
             if public_order_rule:
                 calls = [(np.asarray(a)[:real], np.asarray(b)[:real], np.asarray(c)[:real]) for a, b, c in result['calls']]
                 replay = replay_public_order(np.asarray(named[PUBLIC_ORDER])[:real], calls)
-                diff[:, position[PUBLIC_ORDER]] = (replay != result['public_order'][:real]).reshape(real, -1).any(-1)
+                bad = replay != result['public_order'][:real]                         # [L,2,6]
+                diff[:, position[PUBLIC_ORDER]] = bad.any(-1)
             struggle = ~np.asarray(usable(_state_only(named, template, real))).any(-1)
             pre = Pre({n: np.asarray(named[n])[:real] for n in named if n.startswith('state.') or n == 'actions'},
-                vocab, callable_moves, struggle)
-            involved = {k: np.asarray(f(pre), bool) for k, f in table.items()}
+                vocab, callable_moves, struggle, destiny_bond=destiny_bond)
+            involved = {k: np.asarray(f(pre), bool) for k, f in table.items()}       # [L,2] actor sides
             done = np.asarray(named['state.done'])[:real]
-            faint_base = {}
+            cascade_lanes = (result['fainted'][:real] != base['fainted']).reshape(real, -1).any(-1)
+            faint_base = {};faint_set = set()
             if args.faint_clear:
                 lanes_list = base['faint_lanes'].tolist()
                 for i, n in enumerate(manifest['faint_leaves']):faint_base[n] = dict(zip(lanes_list, base[f'faint_{i:02d}']))
@@ -529,51 +712,79 @@ def patched_pass(args, *, step_override=None, prepared=None):
             for lane in range(real):
                 counts['lane_steps'] += 1
                 if done[lane]:counts['done_skipped'] += 1;continue
-                changed = [names[i] for i in np.flatnonzero(diff[lane])]
-                effects = sorted(k for k, v in involved.items() if v[lane])
+                entries = set()
+                for i in np.flatnonzero(diff[lane].any(-1)):
+                    leaf = names[i]
+                    if side_axis[leaf]:entries |= {(leaf, s) for s in (0, 1) if diff[lane, i, s]}
+                    else:entries.add((leaf, None))
+                changed = sorted({leaf for leaf, _ in entries})
+                effects = {k: [s for s in (0, 1) if v[lane, s]] for k, v in involved.items() if v[lane].any()}
                 rule_ok = False
                 if changed and args.faint_clear and lane in faint_set and all(n in faint_base for n in changed):
                     post = {n: result['extra'][n][lane] for n in changed}
                     based = {n: faint_base[n][lane] for n in changed}
-                    rule_ok = faint_clear_ok(changed, post, based, result['fainted'][lane], result['physical_to_public'][lane])
-                kind = classify(changed, bool(effects), rule_ok)
+                    rule_ok = faint_clear_ok(changed, post, based, result['fainted'][lane], result['physical_to_public'][lane],
+                                             result['active_slot'][lane])
+                cascade = bool(cascade_lanes[lane])
+                unexpected, waived = lane_verdict(entries, effects, side_axis, cascade=cascade, waive=args.waive or ()) \
+                    if changed and effects else ([], [])
+                kind = classify(changed, bool(effects), rule_ok, unexpected)
                 if kind == 'unchanged':
                     counts['unchanged'] += 1
                     for e in effects:by_effect[e]['involved_unchanged'] += 1
                     continue
+                labels = [f"{leaf}@{'glob' if side is None else side}" for leaf, side in sorted(entries, key=str)]
                 if kind == 'rule':counts['rule_explained'] += 1
-                elif kind == 'involved':
-                    counts['changed_and_involved'] += 1
-                    for e in effects:by_effect[e]['changed'] += 1
+                elif kind in ('involved', 'unexpected'):
+                    counts['changed_and_involved' if kind == 'involved' else 'changed_involved_unexpected_fields'] += 1
+                    counts['ko_cascade'] += cascade;counts['waived'] += bool(waived)
+                    for e, actors in effects.items():
+                        stats = by_effect[e];stats['changed'] += 1
+                        for leaf, side in entries:
+                            role = 'glob' if side is None else ('user' if side in actors else 'target')
+                            key = f'{leaf}@{role}';stats['changed_fields'][key] = stats['changed_fields'].get(key, 0) + 1
+                        for leaf, side in unexpected:
+                            role = 'glob' if side is None else ('user' if side in actors else 'target')
+                            key = f'{leaf}@{role}';stats['unexpected_fields'][key] = stats['unexpected_fields'].get(key, 0) + 1
                 else:
                     counts['changed_but_uninvolved'] += 1
                     for n in changed:uninvolved_leaves[n] = uninvolved_leaves.get(n, 0) + 1
-                listing.write(json.dumps(dict(shard=path.name, lane=lane, tick=tick, kind=kind, involved=effects, leaves=changed)) + '\n')
+                listing.write(json.dumps(dict(shard=path.name, lane=lane, tick=tick, kind=kind, ko_cascade=cascade,
+                    involved={k: v for k, v in effects.items()}, leaves=changed, entries=labels,
+                    unexpected=[f"{l}@{'glob' if s is None else s}" for l, s in unexpected],
+                    waived=[f"{l}@{'glob' if s is None else s}" for l, s in waived])) + '\n')
             if index % 50 == 0:
                 log('PATCHED_SHARD', index=index, shard=path.name, seconds=time.perf_counter() - begin, **counts)
     finally:
         listing.close()
     digest, modules = oracle_digest()
-    report = dict(schema=SCHEMA, pass_='patched', plug_ins=args.pr, source_commit=rev, source_dirty=dirty, oracle_digest=digest,
-        base_source_commit=manifest['source_commit'], base_oracle_digest=manifest['oracle_digest'], capture_sha256=capture_sha,
-        shards=len(shards), migrated_new_inputs=new_inputs, new_outputs=new_outputs,
-        public_order_rule=public_order_rule, faint_clear_rule=bool(args.faint_clear), counts=counts, by_effect=by_effect,
-        uninvolved_leaves=dict(sorted(uninvolved_leaves.items(), key=lambda x: -x[1])),
-        passed=counts['changed_but_uninvolved'] == 0, seconds=time.perf_counter() - begin)
+    failures = counts['changed_but_uninvolved'] + counts['changed_involved_unexpected_fields']
+    report = dict(schema=SCHEMA, digest_format=DIGEST_FORMAT, pass_='patched', plug_ins=plugins, source_commit=rev,
+        source_dirty=dirty, allow_dirty=bool(args.allow_dirty), oracle_digest=digest, base_oracle_digest=manifest['oracle_digest'],
+        capture_sha256=capture_sha, **base_check, shards=len(shards), partial=bool(args.limit) or manifest.get('partial', False),
+        migrated_new_inputs=new_inputs, new_outputs=new_outputs, public_order_rule=public_order_rule,
+        faint_clear_rule=bool(args.faint_clear), waive=list(args.waive or ()), counts=counts, by_effect=by_effect,
+        allowed_fields={e: ALLOWED.get(e, 'UNDECLARED: any change') for e in table},
+        uninvolved_leaves=dict(sorted(uninvolved_leaves.items(), key=lambda x: -x[1])), warnings=warnings,
+        passed=failures == 0, seconds=time.perf_counter() - begin)
     (out / 'report.json').write_text(json.dumps(report, indent=1) + '\n')
-    log('PATCHED_DONE', passed=report['passed'], **counts)
+    log('PATCHED_DONE', passed=report['passed'], partial=report['partial'], **counts)
     return 0 if report['passed'] else 1
 
 
-def state_defaults():
-    """New BattleState leaves default to empty_state's values (counters 0, sources -1, ...);
-    new tracker leaves fall back to the initializer's lane-0 template (public_order identity)."""
+def state_defaults(template_named):
+    """New BattleState leaves default to empty_state's values (counters 0, sources -1, ...),
+    shape- and dtype-checked against the tree's leaf."""
     from gpu_engine.state import empty_state
-    blank = empty_state(1)
-    def fill(value):
-        value = np.asarray(value)
-        return lambda lanes: np.broadcast_to(value, (lanes,) + value.shape[1:])
-    return {f'state.{name}': fill(getattr(blank, name)) for name in blank._fields}
+    blank = empty_state(1);defaults = {}
+    for name in blank._fields:
+        key = f'state.{name}';value = np.asarray(getattr(blank, name))
+        if key in template_named:
+            template = template_named[key]
+            if value.shape[1:] != template.shape[1:] or value.dtype != template.dtype:
+                raise MigrationError(f'{key}: empty_state {value.shape[1:]}{value.dtype} vs tree {template.shape[1:]}{template.dtype}')
+        defaults[key] = (lambda v: lambda lanes: np.broadcast_to(v, (lanes,) + v.shape[1:]))(value)
+    return defaults
 
 
 def _engine_step(tables):
@@ -603,13 +814,17 @@ def main(argv=None):
         p.add_argument('--shards', required=True, help='directory of capture shards (capture.json beside it)')
         p.add_argument('--out', required=True, help='new output directory')
         p.add_argument('--arm', default='B', choices=('A', 'B'))
-        p.add_argument('--limit', type=int, default=0, help='first N shards (0: all)')
+        p.add_argument('--limit', type=int, default=0, help='first N shards (0: all); a limited run is marked partial')
+        p.add_argument('--allow-dirty', action='store_true', help='run from a tree with uncommitted gpu_engine/src changes')
         if name == 'base':
             p.add_argument('--pad-lanes', type=int, default=2048, help='pad every shard to this many lanes (one compile); 0 keeps native counts')
         else:
             p.add_argument('--base', required=True, help='output directory of the base pass')
             p.add_argument('--pr', default='none', help=f'comma list of involvement plug-ins: {",".join(PLUGINS)}')
             p.add_argument('--faint-clear', action='store_true', help="apply PR0's faint-time public clear rule")
+            p.add_argument('--integration', default=None, help='integration ref; the base pass must be at the merge base with it')
+            p.add_argument('--allow-base-mismatch', action='store_true', help='accept a base pass not at the merge base (recorded)')
+            p.add_argument('--waive', action='append', default=None, help='leaf regex whose unexpected changes are accepted (recorded)')
     args = parser.parse_args(argv)
     return base_pass(args) if args.command == 'base' else patched_pass(args)
 
