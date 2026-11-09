@@ -185,7 +185,7 @@ def run(module, shard_paths, template, context, *, out, workers=8, repro_lanes=1
             if lanes:leaves = [x[:lanes] for x in leaves]   # e.g. an odd lane count, to exercise lane-count-dependent addressing
             state, actions, trackers = jax.tree.unflatten(treedef, [jax.numpy.asarray(x) for x in leaves])
             want = call('jax', jax_fn, state, actions, trackers);got = call('cuda', cuda_fn, state, actions, trackers)
-            diffs = compare(want, got);n = state.hp.shape[0];compared += n
+            diffs = jax.device_get(compare(want, got));n = state.hp.shape[0];compared += n   # one transfer for every leaf
             any_lane = np.zeros(n, bool)
             for name, d in diffs.items():
                 d = np.asarray(d);totals[name] = totals.get(name, 0) + int(d.sum());any_lane |= d if d.shape == any_lane.shape else d.any()
