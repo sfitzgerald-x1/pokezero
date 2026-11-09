@@ -54,12 +54,16 @@ Checks per sampled decision (owner O, foe F):
 5. Reply-prior effect of the peer order (with a forward, i.e. always in `run`): at each compared peer decision, one batched
    champion forward per step (the evaluator the offline pricer uses for the reply prior, on actor_inputs) on (a) the true
    world's foe view, (b) the real foe view after the same named redactions, (l) the offline-layout world's foe view
-   (materializer order, variant move slots) and (b2) b again at another batch row. Lanes are aligned by identity (a move
+   (the true team in the offline layout: bench encounter order, source move order; not literally a searched world, whose
+   hidden members are sampled) and (b2) b again at another batch row. Lanes are aligned by identity (a move
    lane = active member and move, a switch lane = its target member; align()'s mapping, lane_permutation) and compared
    as masked softmaxes over the lanes legal in both: KL(b || a), total variation, top-1 identity flip, max |dp|.
-   summary: median/p95/max KL, flip share, mean TV for all compared decisions and split by foe back-switch, order vs the
-   rebase rule, order-caused cells, residual cells and a control row (no order and no residual cells, KL ~ 0); the
-   noise floor from b against b2. Decisions still differing after alignment are dumped per token and member (species,
+   summary (a pure function of positions.jsonl, so `report` recomputes it): the headline is the order-only group
+   (order-caused cells and no residual cell), split by foe back-switch; then median/p95/max KL, flip share and mean TV for
+   all compared decisions and by back-switch, order vs the rebase rule, order-caused cells, residual cells (any class)
+   and a control row (KL ~ 0). Decisions whose legal sets differ are excluded from every group and shown in their own row
+   with the dropped mass (per-decision dropped_b/dropped_a); non-finite values are excluded and counted; the noise floor
+   comes from b against b2. Decisions still differing after alignment are dumped per token and member (species,
    ability, item, moves, last move, types on each side) and classified: color_change, forecast, transform_residue,
    conversion, other.
 
@@ -672,9 +676,12 @@ def effect(a_logits, a_legal, b_logits, b_legal):
     pa, pb = np.exp(la), np.exp(lb)
     kl = float(np.sum(pb[support] * (lb[support] - la[support])))
     top_a, top_b = int(np.argmax(np.where(support, pa, -1.))), int(np.argmax(np.where(support, pb, -1.)))
+    # The mass the common support drops: b's own full prior on lanes illegal in a, and a's on lanes illegal in b.
+    dropped_b = float(np.sum(np.exp(masked_log_softmax(b_logits, b_legal))[b_legal & ~a_legal]))
+    dropped_a = float(np.sum(np.exp(masked_log_softmax(a_logits, a_legal))[a_legal & ~b_legal]))
     return dict(kl=kl, tv=float(.5 * np.sum(np.abs(pa - pb))), top1_flip=top_a != top_b, max_abs_dp=float(np.max(np.abs(pa - pb))),
         top_a=top_a, top_b=top_b, support_differs=not np.array_equal(a_legal, b_legal), legal=int(support.sum()),
-        pa=[round(float(x), 6) for x in pa], pb=[round(float(x), 6) for x in pb])
+        dropped_b=dropped_b, dropped_a=dropped_a, pa=[round(float(x), 6) for x in pa], pb=[round(float(x), 6) for x in pb])
 
 
 def lane_identities(state, side, order, active, vocab):
@@ -1137,50 +1144,93 @@ def class_verdict(differences, table, compared):
     return 'ABSENT' if all(v == 'ABSENT' for v in verdicts) else 'ABSENT_WHERE_EXERCISED'
 
 
-def effect_stats(values):
-    """median/p95/max KL(b || a), top-1 flip share, mean total variation, mean/max of max |dp| over effect dicts."""
+def _finite_effect(v):
+    """Whether an effect dict's KL, TV, max |dp| and probabilities are all finite (the NaN guard)."""
+    numbers = [v.get('kl'), v.get('tv'), v.get('max_abs_dp')] + list(v.get('pa', ())) + list(v.get('pb', ()))
+    return all(x is not None and np.isfinite(float(x)) for x in numbers)
+
+
+def effect_stats(values, *, keep_support_differs=False):
+    """median/p95/max KL(b || a), top-1 flip share, mean total variation and mean/max of max |dp| over effect dicts.
+
+    Decisions whose legal sets differ (support_differs: the statistics cover only the common lanes) are excluded
+    unless keep_support_differs, and counted; so are non-finite values (the NaN guard), counted as `nonfinite`. With
+    the per-decision dropped_b/dropped_a fields, the dropped mass is summarized (b's prior on lanes illegal in a, and
+    the reverse); positions written before those fields count as `dropped_unavailable`."""
     values = [v for v in values if v]
-    if not values:return dict(n=0)
-    kl = np.asarray([v['kl'] for v in values]);tv = np.asarray([v['tv'] for v in values]);dp = np.asarray([v['max_abs_dp'] for v in values])
-    return dict(n=len(values), kl_median=float(np.median(kl)), kl_p95=float(np.quantile(kl, .95)), kl_max=float(kl.max()),
-        top1_flip_share=round(float(np.mean([v['top1_flip'] for v in values])), 6), tv_mean=float(tv.mean()),
-        max_abs_dp_mean=float(dp.mean()), max_abs_dp_max=float(dp.max()),
-        support_differs=sum(bool(v.get('support_differs')) for v in values))
+    differs = [v for v in values if v.get('support_differs')]
+    kept = values if keep_support_differs else [v for v in values if not v.get('support_differs')]
+    finite = [v for v in kept if _finite_effect(v)]
+    out = dict(n=len(finite), support_differs=len(differs), excluded_support_differs=0 if keep_support_differs else len(differs),
+        nonfinite=len(kept) - len(finite))
+    if finite:
+        kl = np.asarray([v['kl'] for v in finite]);tv = np.asarray([v['tv'] for v in finite]);dp = np.asarray([v['max_abs_dp'] for v in finite])
+        out.update(kl_median=float(np.median(kl)), kl_p95=float(np.quantile(kl, .95)), kl_max=float(kl.max()),
+            top1_flip_share=round(float(np.mean([bool(v['top1_flip']) for v in finite])), 6), tv_mean=float(tv.mean()),
+            max_abs_dp_mean=float(dp.mean()), max_abs_dp_max=float(dp.max()))
+    dropped = [v for v in (finite if keep_support_differs else []) if v.get('support_differs')]
+    if dropped:
+        with_mass = [v for v in dropped if 'dropped_b' in v and 'dropped_a' in v]
+        out.update(dropped_unavailable=len(dropped) - len(with_mass))
+        if with_mass:
+            b_mass = np.asarray([v['dropped_b'] for v in with_mass]);a_mass = np.asarray([v['dropped_a'] for v in with_mass])
+            out.update(dropped_b_mean=float(b_mass.mean()), dropped_b_max=float(b_mass.max()),
+                dropped_a_mean=float(a_mass.mean()), dropped_a_max=float(a_mass.max()))
+    return out
+
+
+def _back(p):
+    return bool((p.get('history') or {}).get('foe', {}).get('back_switched'))
+
+
+def _order_only(p):
+    """Order-caused cells and no residual cell after the alignment (the peer view differs ONLY by bench order)."""
+    return bool(p['peer'].get('order_only', bool(p['peer']['order_keys']) and p['peer']['aligned']['total'] == 0))
 
 
 EFFECT_GROUPS = (
+    ('order only (headline): order-caused cells, no residual cells', _order_only),
+    ('order only, foe back-switched', lambda p:_order_only(p) and _back(p)),
+    ('order only, no foe back-switch', lambda p:_order_only(p) and not _back(p)),
     ('all compared', lambda p:True),
-    ('foe back-switched', lambda p:bool((p.get('history') or {}).get('foe', {}).get('back_switched'))),
-    ('no foe back-switch', lambda p:not (p.get('history') or {}).get('foe', {}).get('back_switched')),
+    ('foe back-switched', _back),
+    ('no foe back-switch', lambda p:not _back(p)),
     ('foe order != rebase rule', lambda p:p['order']['differs_real_coords']),
     ('foe order == rebase rule', lambda p:not p['order']['differs_real_coords']),
-    ('order-caused cells present', lambda p:bool(p['peer']['order_keys'])),
+    ('order-caused cells present (with or without residual)', lambda p:bool(p['peer']['order_keys'])),
     ('no order-caused cells', lambda p:not p['peer']['order_keys']),
-    ('residual cells after alignment (types)', lambda p:p['peer']['aligned']['total'] > 0),
+    ('residual cells after alignment (any class)', lambda p:p['peer']['aligned']['total'] > 0),
     ('control: no order and no residual cells', lambda p:not p['peer']['order_keys'] and p['peer']['aligned']['total'] == 0),
 )
+SUPPORT_GROUP = 'legal sets differ (excluded from every row above; common-lane statistics and dropped mass)'
 
 
 def summarize_effect(P):
     """The reply-prior effect of the peer-order bug: (a) the true world's foe view against (b) the real foe view after
-    the same named redactions, identity-aligned; the offline-layout view (l) beside it; the noise floor from (b) forwarded
-    twice at different batch rows, and from the control row."""
+    the same named redactions, identity-aligned; (l), the true team in the offline layout, beside it; the noise floor from
+    (b) forwarded twice at different batch rows, and from the control row. A pure function of positions.jsonl."""
     rows = [p for p in P if p['peer']['status'] == 'compared' and p['peer'].get('effect')]
     groups = []
     for label, keep in EFFECT_GROUPS:
         chosen = [p for p in rows if keep(p)]
         groups.append(dict(group=label, primary=effect_stats([p['peer']['effect']['primary'] for p in chosen]),
             layout=effect_stats([p['peer']['effect']['layout'] for p in chosen])))
+    support = dict(group=SUPPORT_GROUP,
+        primary=effect_stats([e for p in rows for e in [p['peer']['effect']['primary']] if e and e.get('support_differs')], keep_support_differs=True),
+        layout=effect_stats([e for p in rows for e in [p['peer']['effect']['layout']] if e and e.get('support_differs')], keep_support_differs=True))
     control = next(g for g in groups if g['group'].startswith('control'))
-    flips = [dict(stream=p['stream'], frame=p['frame'], owner=p['owner'], turn=p['turn'], kl=round(p['peer']['effect']['primary']['kl'], 6),
-        real_top=p['peer']['effect']['primary']['top_b_identity'], world_top=p['peer']['effect']['primary']['top_a_identity'])
-        for p in rows if p['peer']['effect']['primary'] and p['peer']['effect']['primary']['top1_flip']]
-    return dict(decisions=len(rows), groups=groups, noise_floor=dict(repeat_forward=effect_stats([p['peer']['effect']['noise'] for p in rows]),
-        control_primary=control['primary']), top1_flips=flips[:50],
+    flips = [dict(stream=p['stream'], frame=p['frame'], owner=p['owner'], turn=p['turn'], kl=round(e['kl'], 6), order_only=_order_only(p),
+        real_top=e['top_b_identity'], world_top=e['top_a_identity'])
+        for p in rows for e in [p['peer']['effect']['primary']] if e and e['top1_flip'] and _finite_effect(e) and not e.get('support_differs')]
+    return dict(decisions=len(rows), headline=groups[0], groups=groups, support_differs=support,
+        noise_floor=dict(repeat_forward=effect_stats([p['peer']['effect']['noise'] for p in rows]), control_primary=control['primary']),
+        top1_flips=flips[:50],
         definition='KL(b || a) over the lanes legal in both, lanes aligned by identity (a move lane = active member and move, a '
             'switch lane = its target member, through each side\'s request order); a = the true world\'s foe view (the offline '
-            'reply-prior input, real physical indices), l = the offline world layout (materializer order, variant move slots), '
-            'b = the real foe view after the named redactions; champion forward as the offline pricer\'s reply prior')
+            'reply-prior input, real physical indices), l = the true team in the offline layout (bench encounter order, source '
+            'move order; not literally a searched world, whose hidden members are sampled), b = the real foe view after the named '
+            'redactions; champion forward as the offline pricer\'s reply prior. Decisions whose legal sets differ are excluded '
+            'from every group and reported in their own row; non-finite values are excluded and counted')
 
 
 def summarize_residual(P):
@@ -1390,14 +1440,24 @@ def render(summary):
     lines += ['| %s | %d | %s |' % (x['cell'], x['decisions'], x['share']) for x in p['order_caused_cells_ranked'][:12]]
     e = s['peer_order_effect']
     fmt = lambda x:'-' if x is None else ('%.3g' % x if isinstance(x, float) else str(x))
+    head = e['headline']['primary']
     lines += ['', '## Reply-prior effect of the peer order (champion forward, identity-aligned lanes)', '', e['definition'], '',
-        '| group | n | KL median | KL p95 | KL max | top-1 flip share | mean TV | mean max abs dp | layout KL median | layout KL p95 | layout flip share |',
-        '|---|---|---|---|---|---|---|---|---|---|---|']
-    for g in e['groups']:
+        '**Headline (order only: the peer view differs only by bench order):** n %s, KL median %s, p95 %s, max %s, top-1 flip share %s, '
+        'mean TV %s (legal sets differ: %s excluded; non-finite: %s)' % (head.get('n', 0), fmt(head.get('kl_median')), fmt(head.get('kl_p95')),
+            fmt(head.get('kl_max')), fmt(head.get('top1_flip_share')), fmt(head.get('tv_mean')), head.get('excluded_support_differs', 0),
+            head.get('nonfinite', 0)), '',
+        '| group | n | KL median | KL p95 | KL max | top-1 flip share | mean TV | mean max abs dp | excl. legal differs | non-finite '
+        '| layout n | layout KL median | layout KL p95 | layout flip share |', '|---|---|---|---|---|---|---|---|---|---|---|---|---|---|']
+    for g in e['groups'] + [e['support_differs']]:
         a_, l_ = g['primary'], g['layout']
-        lines.append('| %s | %d | %s | %s | %s | %s | %s | %s | %s | %s | %s |' % (g['group'], a_.get('n', 0), fmt(a_.get('kl_median')),
+        lines.append('| %s | %d | %s | %s | %s | %s | %s | %s | %s | %s | %d | %s | %s | %s |' % (g['group'], a_.get('n', 0), fmt(a_.get('kl_median')),
             fmt(a_.get('kl_p95')), fmt(a_.get('kl_max')), fmt(a_.get('top1_flip_share')), fmt(a_.get('tv_mean')), fmt(a_.get('max_abs_dp_mean')),
-            fmt(l_.get('kl_median')), fmt(l_.get('kl_p95')), fmt(l_.get('top1_flip_share'))))
+            a_.get('excluded_support_differs', 0), a_.get('nonfinite', 0), l_.get('n', 0), fmt(l_.get('kl_median')), fmt(l_.get('kl_p95')),
+            fmt(l_.get('top1_flip_share'))))
+    sd = e['support_differs']['primary']
+    lines += ['', '- legal sets differ: %s decisions; dropped mass, b\'s prior on lanes illegal in a: mean %s, max %s; a\'s on lanes '
+        'illegal in b: mean %s, max %s; positions without the dropped-mass fields: %s' % (sd.get('n', 0), fmt(sd.get('dropped_b_mean')),
+            fmt(sd.get('dropped_b_max')), fmt(sd.get('dropped_a_mean')), fmt(sd.get('dropped_a_max')), sd.get('dropped_unavailable', 0))]
     nf = e['noise_floor']['repeat_forward']
     lines += ['', '- forward noise floor, (b) forwarded twice at different batch rows: n %s, KL max %s, max abs dp max %s; control row KL max %s' % (
         nf.get('n', 0), fmt(nf.get('kl_max')), fmt(nf.get('max_abs_dp_max')), fmt(e['noise_floor']['control_primary'].get('kl_max'))),

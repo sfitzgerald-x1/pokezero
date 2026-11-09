@@ -512,7 +512,11 @@ class EndToEndSmokeTest(unittest.TestCase):
         self.assertGreater(groups['control: no order and no residual cells']['primary']['n'], 0)
         self.assertLessEqual(effect['noise_floor']['repeat_forward']['kl_max'], 1e-12)
         self.assertEqual(effect['noise_floor']['repeat_forward']['n'], peer['compared'])
-        self.assertGreater(groups['order-caused cells present']['primary']['kl_max'], 1e-3)
+        self.assertGreater(groups['order-caused cells present (with or without residual)']['primary']['kl_max'], 1e-3)
+        headline = effect['headline']['primary'];self.assertEqual(effect['headline']['group'], parity.EFFECT_GROUPS[0][0])
+        self.assertEqual(headline['n'], peer['order_only']);self.assertGreater(headline['kl_max'], 1e-3)
+        self.assertEqual((headline['nonfinite'], headline['excluded_support_differs']), (0, 0))
+        self.assertEqual(effect['support_differs']['primary']['n'], 0)
         self.assertEqual(groups['all compared']['primary']['support_differs'], 0)
         self.assertEqual(merged['residual']['decisions'], 0)
         for p in positions:
@@ -695,7 +699,7 @@ class EffectTests(unittest.TestCase):
         self.assertEqual(groups['all compared']['n'], 4);self.assertEqual(groups['foe back-switched']['n'], 2)
         self.assertAlmostEqual(groups['foe back-switched']['kl_median'], .55);self.assertEqual(groups['foe back-switched']['top1_flip_share'], .5)
         self.assertEqual(groups['control: no order and no residual cells']['n'], 1);self.assertEqual(groups['control: no order and no residual cells']['kl_max'], 0.)
-        self.assertEqual(groups['residual cells after alignment (types)']['n'], 1);self.assertEqual(len(s['top1_flips']), 1)
+        self.assertEqual(groups['residual cells after alignment (any class)']['n'], 1);self.assertEqual(len(s['top1_flips']), 1)
         self.assertEqual(s['noise_floor']['repeat_forward']['kl_max'], 0.)
 
     def test_residual_member_detail_and_classification(self):
@@ -717,6 +721,66 @@ class EffectTests(unittest.TestCase):
         first = next(x for x in out if x['token'] == 1)
         self.assertEqual((first['species'], first['real_types'], first['world_types'], first['cells']), ('kecleon', ['water', ''], ['normal', ''], ['own:categorical:TYPE_1']))
         self.assertNotIn('classification', next(x for x in out if x['token'] == 0))
+
+
+def effect_position(kl, *, back=False, order=True, residual=0, support_differs=False, dropped=None, flip=False):
+    """A compared positions.jsonl record carrying only what summarize_effect reads (dropped=None: a 7cef1753 record)."""
+    e = dict(kl=kl, tv=abs(kl) / 2 if np.isfinite(kl) else kl, top1_flip=flip, max_abs_dp=abs(kl) / 3 if np.isfinite(kl) else kl,
+        support_differs=support_differs, top_a=0, top_b=1 if flip else 0, top_a_identity='switch:p1', top_b_identity='switch:p2',
+        pa=[.5, .5], pb=[.5, .5])
+    if dropped is not None:e.update(dropped_b=dropped[0], dropped_a=dropped[1])
+    return dict(stream=1, frame=2, owner=0, turn=3, history=dict(foe=dict(back_switched=back)), order=dict(differs_real_coords=order),
+        peer=dict(status='compared', order_only=order and not residual, order_keys=['own:numeric:HP_FRACTION'] if order else [],
+            aligned=dict(total=residual), effect=dict(primary=e, layout=dict(e), noise=dict(kl=0., tv=0., top1_flip=False, max_abs_dp=0.))))
+
+
+class EffectReportTests(unittest.TestCase):
+    """report-side fixes, all from positions.jsonl as written by 7cef1753 (no new field needed except the dropped mass)."""
+    def test_order_only_headline_splits_by_back_switch(self):
+        P = [effect_position(.4, back=True), effect_position(.2, back=False),            # order only
+             effect_position(.9, back=True, residual=2),                                   # order and a residual (e.g. Color Change)
+             effect_position(0., order=False)]                                             # control
+        s = parity.summarize_effect(P);groups = {g['group']: g['primary'] for g in s['groups']}
+        self.assertEqual(s['headline']['group'], 'order only (headline): order-caused cells, no residual cells')
+        self.assertEqual(s['headline']['primary']['n'], 2);self.assertAlmostEqual(s['headline']['primary']['kl_max'], .4)
+        self.assertEqual(groups['order only, foe back-switched']['n'], 1);self.assertAlmostEqual(groups['order only, foe back-switched']['kl_max'], .4)
+        self.assertEqual(groups['order only, no foe back-switch']['n'], 1)
+        self.assertEqual(groups['order-caused cells present (with or without residual)']['n'], 3)
+        self.assertEqual(groups['residual cells after alignment (any class)']['n'], 1)
+        # A record without peer.order_only falls back to order-caused cells and no residual.
+        old = effect_position(.3);del old['peer']['order_only']
+        self.assertEqual(parity.summarize_effect([old])['headline']['primary']['n'], 1)
+
+    def test_support_differs_excluded_with_dropped_mass(self):
+        legal_a = np.asarray([True, True] + [False] * 7);legal_b = legal_a.copy();legal_b[4] = True
+        logits = np.zeros(9);logits[4] = np.log(2.)   # b: lanes 0, 1, 4 at 1/4, 1/4, 1/2
+        e = parity.effect(logits, legal_a, logits, legal_b)
+        self.assertTrue(e['support_differs']);self.assertAlmostEqual(e['dropped_b'], .5, places=12);self.assertEqual(e['dropped_a'], 0.)
+        self.assertEqual(e['kl'], 0.)   # equal on the common lanes
+        same = parity.effect(logits, legal_b, logits, legal_b);self.assertEqual((same['dropped_b'], same['dropped_a']), (0., 0.))
+        P = [effect_position(.1), effect_position(2., support_differs=True, dropped=(.5, 0.)), effect_position(3., support_differs=True)]
+        s = parity.summarize_effect(P);head = s['headline']['primary']
+        self.assertEqual((head['n'], head['excluded_support_differs']), (1, 2));self.assertAlmostEqual(head['kl_max'], .1)
+        row = s['support_differs']['primary']
+        self.assertEqual((row['n'], row['dropped_unavailable']), (2, 1));self.assertEqual((row['dropped_b_max'], row['dropped_a_max']), (.5, 0.))
+        self.assertAlmostEqual(row['kl_max'], 3.)
+        self.assertIn('legal sets differ', parity.render(dict(parity.summarize([], []), peer_order_effect=s)))
+
+    def test_nonfinite_values_are_excluded_and_counted(self):
+        P = [effect_position(.2), effect_position(float('nan')), effect_position(float('inf'), flip=True)]
+        s = parity.summarize_effect(P)
+        for g in s['groups'][:1] + [x for x in s['groups'] if x['group'] == 'all compared']:
+            self.assertEqual((g['primary']['n'], g['primary']['nonfinite']), (1, 2), g['group'])
+            self.assertAlmostEqual(g['primary']['kl_max'], .2);self.assertEqual(g['primary']['top1_flip_share'], 0.)
+        self.assertEqual(s['top1_flips'], [])
+        nan = parity.effect(np.full(9, np.nan), np.ones(9, bool), np.zeros(9), np.ones(9, bool))
+        self.assertFalse(parity._finite_effect(nan))
+        # A NaN in the stored probabilities alone also counts.
+        bad = effect_position(.1);bad['peer']['effect']['primary']['pa'] = [float('nan'), 1.]
+        self.assertEqual(parity.summarize_effect([bad])['headline']['primary']['nonfinite'], 1)
+        # JSON round trip (positions.jsonl writes NaN) keeps the guard working.
+        again = json.loads(json.dumps(P))
+        self.assertEqual(parity.summarize_effect(again)['headline']['primary']['nonfinite'], 2)
 
 
 class ReportTests(unittest.TestCase):
