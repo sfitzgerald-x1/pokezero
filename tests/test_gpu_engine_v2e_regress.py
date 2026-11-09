@@ -232,7 +232,7 @@ class TwoPassTests(unittest.TestCase):
         def perturbed(state, actions, t):
             out = base_step(state, actions, t)
             s = out.step.state
-            return result(s._replace(hp=s.hp.at[:, 1, 5].add((state.turn % 3 == 0).astype(s.hp.dtype))), t)
+            return result(s._replace(hp=s.hp.at[:, 1, 5].add((state.turn % 3 == 0).astype(s.hp.dtype))), out.trackers)
         code, report, listing = self.patched('perturbed', perturbed)
         self.assertEqual(code, 1);self.assertFalse(report['passed'])
         self.assertGreater(report['counts']['changed_but_uninvolved'], 0)
@@ -246,7 +246,7 @@ class TwoPassTests(unittest.TestCase):
             s = out.step.state;rows = j.arange(s.hp.shape[0])
             slot = j.clip(actions[:, 0], 0, 3)
             uses = (actions[:, 0] < 4) & (state.moves[rows, 0, state.active[:, 0], slot] == CURSE)
-            return result(s._replace(turn=s.turn + uses.astype(s.turn.dtype)), t)
+            return result(s._replace(turn=s.turn + uses.astype(s.turn.dtype)), out.trackers)
         code, report, listing = self.patched('involved', curse_only)
         self.assertEqual(code, 0);self.assertEqual(report['counts']['changed_but_uninvolved'], 0)
         self.assertGreater(report['by_effect']['curse']['changed'], 0)

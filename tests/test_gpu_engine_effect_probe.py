@@ -22,7 +22,8 @@ VOCAB = dict(items=['_none', 'leftovers'], moves=['_none', 'tackle', 'encore'])
 
 def scenario(**extra):
     team = [dict(species='Snorlax', moves=['tackle'], ability='Thick Fat')] * 6
-    return dict(schema=probe.SCENARIO_SCHEMA, move='tackle', teams=[team, team], script=[['move 1', 'move 1']] * 2, **extra)
+    data = dict(schema=probe.SCENARIO_SCHEMA, move='tackle', teams=[team, team], script=[['move 1', 'move 1']] * 2)
+    data.update(extra);return data
 
 
 def mon(**extra):
@@ -129,7 +130,7 @@ class PureTests(unittest.TestCase):
                 self.assertLessEqual(len(probe.enumerate_cases(data)), 16)
 
 
-@requires_showdown
+@requires_showdown()
 @unittest.skipUnless(NODE, 'requires node')
 class ShowdownSideTests(unittest.TestCase):
     def test_prepare_start_and_step_protocol(self):

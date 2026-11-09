@@ -91,7 +91,7 @@ def kinds(result):
     return [e['kind'] for e in result['events']]
 
 
-@requires_showdown
+@requires_showdown()
 @unittest.skipUnless(NODE, 'requires node')
 class ChanceHooksV2Tests(unittest.TestCase):
     @classmethod

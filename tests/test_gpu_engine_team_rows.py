@@ -16,7 +16,7 @@ LABEL = 'f76228a1354b5d0f307ca2d16101294ad3a2308b'
 SEED, COUNT = 650100400, 400
 
 
-@requires_showdown
+@requires_showdown()
 @unittest.skipUnless(NODE, 'requires node')
 class TeamRowsTests(unittest.TestCase):
     def test_team_lines_are_byte_identical_to_generate_teams(self):
