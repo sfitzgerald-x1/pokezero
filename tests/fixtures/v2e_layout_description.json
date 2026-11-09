@@ -1,0 +1,3487 @@
+{
+ "schema": "pokezero.v2e-layout-desc.v1",
+ "state": [
+  {
+   "path": ".species",
+   "dtype": "int32",
+   "shape": [
+    2,
+    6
+   ]
+  },
+  {
+   "path": ".level",
+   "dtype": "int32",
+   "shape": [
+    2,
+    6
+   ]
+  },
+  {
+   "path": ".hidden_power_type",
+   "dtype": "int32",
+   "shape": [
+    2,
+    6
+   ]
+  },
+  {
+   "path": ".hidden_power_power",
+   "dtype": "int32",
+   "shape": [
+    2,
+    6
+   ]
+  },
+  {
+   "path": ".happiness",
+   "dtype": "int32",
+   "shape": [
+    2,
+    6
+   ]
+  },
+  {
+   "path": ".gender",
+   "dtype": "int32",
+   "shape": [
+    2,
+    6
+   ]
+  },
+  {
+   "path": ".types",
+   "dtype": "int32",
+   "shape": [
+    2,
+    6,
+    2
+   ]
+  },
+  {
+   "path": ".base_types",
+   "dtype": "int32",
+   "shape": [
+    2,
+    6,
+    2
+   ]
+  },
+  {
+   "path": ".stats",
+   "dtype": "int32",
+   "shape": [
+    2,
+    6,
+    6
+   ]
+  },
+  {
+   "path": ".hp",
+   "dtype": "int32",
+   "shape": [
+    2,
+    6
+   ]
+  },
+  {
+   "path": ".max_hp",
+   "dtype": "int32",
+   "shape": [
+    2,
+    6
+   ]
+  },
+  {
+   "path": ".status",
+   "dtype": "int32",
+   "shape": [
+    2,
+    6
+   ]
+  },
+  {
+   "path": ".status_counter",
+   "dtype": "int32",
+   "shape": [
+    2,
+    6
+   ]
+  },
+  {
+   "path": ".sleep_skipped",
+   "dtype": "int32",
+   "shape": [
+    2,
+    6
+   ]
+  },
+  {
+   "path": ".rest_origin",
+   "dtype": "bool",
+   "shape": [
+    2,
+    6
+   ]
+  },
+  {
+   "path": ".moves",
+   "dtype": "int32",
+   "shape": [
+    2,
+    6,
+    4
+   ]
+  },
+  {
+   "path": ".pp",
+   "dtype": "int32",
+   "shape": [
+    2,
+    6,
+    4
+   ]
+  },
+  {
+   "path": ".disabled",
+   "dtype": "bool",
+   "shape": [
+    2,
+    6,
+    4
+   ]
+  },
+  {
+   "path": ".choice_move",
+   "dtype": "int32",
+   "shape": [
+    2,
+    6
+   ]
+  },
+  {
+   "path": ".last_move",
+   "dtype": "int32",
+   "shape": [
+    2,
+    6
+   ]
+  },
+  {
+   "path": ".last_action_kind",
+   "dtype": "int32",
+   "shape": [
+    2
+   ]
+  },
+  {
+   "path": ".last_action_index",
+   "dtype": "int32",
+   "shape": [
+    2
+   ]
+  },
+  {
+   "path": ".encore_move",
+   "dtype": "int32",
+   "shape": [
+    2,
+    6
+   ]
+  },
+  {
+   "path": ".encore_counter",
+   "dtype": "int32",
+   "shape": [
+    2,
+    6
+   ]
+  },
+  {
+   "path": ".charge_move",
+   "dtype": "int32",
+   "shape": [
+    2,
+    6
+   ]
+  },
+  {
+   "path": ".charge_counter",
+   "dtype": "int32",
+   "shape": [
+    2,
+    6
+   ]
+  },
+  {
+   "path": ".item",
+   "dtype": "int32",
+   "shape": [
+    2,
+    6
+   ]
+  },
+  {
+   "path": ".ability",
+   "dtype": "int32",
+   "shape": [
+    2,
+    6
+   ]
+  },
+  {
+   "path": ".base_ability",
+   "dtype": "int32",
+   "shape": [
+    2,
+    6
+   ]
+  },
+  {
+   "path": ".boosts",
+   "dtype": "int32",
+   "shape": [
+    2,
+    6,
+    7
+   ]
+  },
+  {
+   "path": ".volatile",
+   "dtype": "uint32",
+   "shape": [
+    2,
+    6
+   ]
+  },
+  {
+   "path": ".confusion_counter",
+   "dtype": "int32",
+   "shape": [
+    2,
+    6
+   ]
+  },
+  {
+   "path": ".protect_counter",
+   "dtype": "int32",
+   "shape": [
+    2,
+    6
+   ]
+  },
+  {
+   "path": ".substitute_hp",
+   "dtype": "int32",
+   "shape": [
+    2,
+    6
+   ]
+  },
+  {
+   "path": ".active",
+   "dtype": "int32",
+   "shape": [
+    2
+   ]
+  },
+  {
+   "path": ".entry_pending",
+   "dtype": "bool",
+   "shape": [
+    2
+   ]
+  },
+  {
+   "path": ".active_turns",
+   "dtype": "int32",
+   "shape": [
+    2
+   ]
+  },
+  {
+   "path": ".trapped",
+   "dtype": "bool",
+   "shape": [
+    2
+   ]
+  },
+  {
+   "path": ".trap_source",
+   "dtype": "int32",
+   "shape": [
+    2,
+    6
+   ]
+  },
+  {
+   "path": ".forced_switch",
+   "dtype": "bool",
+   "shape": [
+    2
+   ]
+  },
+  {
+   "path": ".baton_pass",
+   "dtype": "bool",
+   "shape": [
+    2
+   ]
+  },
+  {
+   "path": ".queued_actor",
+   "dtype": "int32",
+   "shape": []
+  },
+  {
+   "path": ".queued_actions",
+   "dtype": "int32",
+   "shape": [
+    2
+   ]
+  },
+  {
+   "path": ".queued_stall",
+   "dtype": "int32",
+   "shape": [
+    2
+   ]
+  },
+  {
+   "path": ".pending_residual",
+   "dtype": "bool",
+   "shape": []
+  },
+  {
+   "path": ".residual_draws",
+   "dtype": "int32",
+   "shape": [
+    2,
+    12
+   ]
+  },
+  {
+   "path": ".phazing_draws",
+   "dtype": "int32",
+   "shape": [
+    2
+   ]
+  },
+  {
+   "path": ".secondary_draws",
+   "dtype": "int32",
+   "shape": [
+    2
+   ]
+  },
+  {
+   "path": ".sleep_talk_draws",
+   "dtype": "int32",
+   "shape": [
+    2
+   ]
+  },
+  {
+   "path": ".replacement_count",
+   "dtype": "int32",
+   "shape": []
+  },
+  {
+   "path": ".spikes",
+   "dtype": "int32",
+   "shape": [
+    2
+   ]
+  },
+  {
+   "path": ".wish_counter",
+   "dtype": "int32",
+   "shape": [
+    2
+   ]
+  },
+  {
+   "path": ".wish_amount",
+   "dtype": "int32",
+   "shape": [
+    2
+   ]
+  },
+  {
+   "path": ".weather",
+   "dtype": "int32",
+   "shape": []
+  },
+  {
+   "path": ".weather_counter",
+   "dtype": "int32",
+   "shape": []
+  },
+  {
+   "path": ".turn",
+   "dtype": "int32",
+   "shape": []
+  },
+  {
+   "path": ".keys",
+   "dtype": "uint32",
+   "shape": [
+    2
+   ]
+  },
+  {
+   "path": ".done",
+   "dtype": "bool",
+   "shape": []
+  },
+  {
+   "path": ".winner",
+   "dtype": "int32",
+   "shape": []
+  },
+  {
+   "path": ".truant_loaf",
+   "dtype": "bool",
+   "shape": [
+    2,
+    6
+   ]
+  }
+ ],
+ "actions": [
+  {
+   "path": "",
+   "dtype": "int32",
+   "shape": [
+    2
+   ]
+  }
+ ],
+ "trackers": [
+  {
+   "path": ".physical_to_public",
+   "dtype": "int32",
+   "shape": [
+    2,
+    6
+   ]
+  },
+  {
+   "path": ".active_physical",
+   "dtype": "int32",
+   "shape": [
+    2
+   ]
+  },
+  {
+   "path": ".active_slot",
+   "dtype": "int32",
+   "shape": [
+    2
+   ]
+  },
+  {
+   "path": ".next_slot",
+   "dtype": "int32",
+   "shape": [
+    2
+   ]
+  },
+  {
+   "path": ".own_order",
+   "dtype": "int32",
+   "shape": [
+    2,
+    6
+   ]
+  },
+  {
+   "path": ".species",
+   "dtype": "int32",
+   "shape": [
+    2,
+    6
+   ]
+  },
+  {
+   "path": ".level",
+   "dtype": "int32",
+   "shape": [
+    2,
+    6
+   ]
+  },
+  {
+   "path": ".gender",
+   "dtype": "int32",
+   "shape": [
+    2,
+    6
+   ]
+  },
+  {
+   "path": ".hp_percent",
+   "dtype": "int32",
+   "shape": [
+    2,
+    6
+   ]
+  },
+  {
+   "path": ".status",
+   "dtype": "int32",
+   "shape": [
+    2,
+    6
+   ]
+  },
+  {
+   "path": ".boosts",
+   "dtype": "int32",
+   "shape": [
+    2,
+    6,
+    7
+   ]
+  },
+  {
+   "path": ".present",
+   "dtype": "bool",
+   "shape": [
+    2,
+    6
+   ]
+  },
+  {
+   "path": ".fainted",
+   "dtype": "bool",
+   "shape": [
+    2,
+    6
+   ]
+  },
+  {
+   "path": ".turn",
+   "dtype": "int32",
+   "shape": []
+  },
+  {
+   "path": ".weather",
+   "dtype": "int32",
+   "shape": []
+  },
+  {
+   "path": ".spikes",
+   "dtype": "int32",
+   "shape": [
+    2
+   ]
+  },
+  {
+   "path": ".error",
+   "dtype": "int32",
+   "shape": []
+  },
+  {
+   "path": ".observed_moves",
+   "dtype": "int32",
+   "shape": [
+    2,
+    6,
+    4
+   ]
+  },
+  {
+   "path": ".pp_used",
+   "dtype": "int32",
+   "shape": [
+    2,
+    6,
+    4
+   ]
+  },
+  {
+   "path": ".last_moves",
+   "dtype": "int32",
+   "shape": [
+    2,
+    6
+   ]
+  },
+  {
+   "path": ".tendencies",
+   "dtype": "int32",
+   "shape": [
+    2,
+    6,
+    2
+   ]
+  },
+  {
+   "path": ".belief_mask",
+   "dtype": "uint32",
+   "shape": [
+    2,
+    6,
+    2
+   ]
+  },
+  {
+   "path": ".shown_ability",
+   "dtype": "int32",
+   "shape": [
+    2,
+    6
+   ]
+  },
+  {
+   "path": ".shown_item",
+   "dtype": "int32",
+   "shape": [
+    2,
+    6
+   ]
+  },
+  {
+   "path": ".shown_types",
+   "dtype": "int32",
+   "shape": [
+    2,
+    6,
+    2
+   ]
+  },
+  {
+   "path": ".borrowed_ability",
+   "dtype": "int32",
+   "shape": [
+    2,
+    6
+   ]
+  },
+  {
+   "path": ".mon_features['confusion_turns']",
+   "dtype": "int32",
+   "shape": [
+    2,
+    6
+   ]
+  },
+  {
+   "path": ".mon_features['encore_turns']",
+   "dtype": "int32",
+   "shape": [
+    2,
+    6
+   ]
+  },
+  {
+   "path": ".mon_features['item_swapped']",
+   "dtype": "int32",
+   "shape": [
+    2,
+    6
+   ]
+  },
+  {
+   "path": ".mon_features['last_damage_dealt']",
+   "dtype": "float32",
+   "shape": [
+    2,
+    6
+   ]
+  },
+  {
+   "path": ".mon_features['last_damage_taken']",
+   "dtype": "float32",
+   "shape": [
+    2,
+    6
+   ]
+  },
+  {
+   "path": ".mon_features['meanlook_trap']",
+   "dtype": "int32",
+   "shape": [
+    2,
+    6
+   ]
+  },
+  {
+   "path": ".mon_features['moves_shown']",
+   "dtype": "int32",
+   "shape": [
+    2,
+    6
+   ]
+  },
+  {
+   "path": ".mon_features['rest_sleep']",
+   "dtype": "int32",
+   "shape": [
+    2,
+    6
+   ]
+  },
+  {
+   "path": ".mon_features['sleep_cant_pending']",
+   "dtype": "int32",
+   "shape": [
+    2,
+    6
+   ]
+  },
+  {
+   "path": ".mon_features['sleep_skipped_turns']",
+   "dtype": "int32",
+   "shape": [
+    2,
+    6
+   ]
+  },
+  {
+   "path": ".mon_features['sleep_turns']",
+   "dtype": "int32",
+   "shape": [
+    2,
+    6
+   ]
+  },
+  {
+   "path": ".mon_features['sleep_usable_pending']",
+   "dtype": "int32",
+   "shape": [
+    2,
+    6
+   ]
+  },
+  {
+   "path": ".mon_features['stall_counter']",
+   "dtype": "int32",
+   "shape": [
+    2,
+    6
+   ]
+  },
+  {
+   "path": ".mon_features['stayed_and_attacked']",
+   "dtype": "int32",
+   "shape": [
+    2,
+    6
+   ]
+  },
+  {
+   "path": ".mon_features['sub_present']",
+   "dtype": "int32",
+   "shape": [
+    2,
+    6
+   ]
+  },
+  {
+   "path": ".mon_features['switched_before_attack']",
+   "dtype": "int32",
+   "shape": [
+    2,
+    6
+   ]
+  },
+  {
+   "path": ".mon_features['switches']",
+   "dtype": "int32",
+   "shape": [
+    2,
+    6
+   ]
+  },
+  {
+   "path": ".mon_features['toxic_stage']",
+   "dtype": "int32",
+   "shape": [
+    2,
+    6
+   ]
+  },
+  {
+   "path": ".mon_features['turns_active']",
+   "dtype": "int32",
+   "shape": [
+    2,
+    6
+   ]
+  },
+  {
+   "path": ".mon_features['turns_active_total']",
+   "dtype": "int32",
+   "shape": [
+    2,
+    6
+   ]
+  },
+  {
+   "path": ".field_features['weather_permanent']",
+   "dtype": "bool",
+   "shape": []
+  },
+  {
+   "path": ".field_features['weather_upkeeps']",
+   "dtype": "int32",
+   "shape": []
+  },
+  {
+   "path": ".field_features['wish_pending']",
+   "dtype": "bool",
+   "shape": [
+    2
+   ]
+  },
+  {
+   "path": ".field_features['wish_set_turn']",
+   "dtype": "int32",
+   "shape": [
+    2
+   ]
+  },
+  {
+   "path": ".field_features['wish_turns']",
+   "dtype": "int32",
+   "shape": [
+    2
+   ]
+  },
+  {
+   "path": ".original_ability",
+   "dtype": "int32",
+   "shape": [
+    2,
+    6
+   ]
+  },
+  {
+   "path": ".damage_exact_dealt",
+   "dtype": "float32",
+   "shape": [
+    2,
+    6
+   ]
+  },
+  {
+   "path": ".damage_exact_taken",
+   "dtype": "float32",
+   "shape": [
+    2,
+    6
+   ]
+  },
+  {
+   "path": ".public_volatiles",
+   "dtype": "bool",
+   "shape": [
+    2,
+    6,
+    40
+   ]
+  },
+  {
+   "path": ".item_removed",
+   "dtype": "bool",
+   "shape": [
+    2,
+    6
+   ]
+  },
+  {
+   "path": ".tendency.moved",
+   "dtype": "bool",
+   "shape": [
+    2
+   ]
+  },
+  {
+   "path": ".tendency.opportunity_turn",
+   "dtype": "int32",
+   "shape": [
+    2
+   ]
+  },
+  {
+   "path": ".tendency.switches",
+   "dtype": "int32",
+   "shape": [
+    2
+   ]
+  },
+  {
+   "path": ".tendency.opportunities",
+   "dtype": "int32",
+   "shape": [
+    2
+   ]
+  },
+  {
+   "path": ".tendency.matchup",
+   "dtype": "int32",
+   "shape": [
+    2,
+    6,
+    6,
+    2
+   ]
+  },
+  {
+   "path": ".damage_history.hp",
+   "dtype": "int32",
+   "shape": [
+    2
+   ]
+  },
+  {
+   "path": ".damage_history.maximum",
+   "dtype": "int32",
+   "shape": [
+    2
+   ]
+  },
+  {
+   "path": ".damage_history.taken",
+   "dtype": "float32",
+   "shape": [
+    2,
+    2,
+    2
+   ]
+  },
+  {
+   "path": ".damage_history.dealt",
+   "dtype": "float32",
+   "shape": [
+    2,
+    2,
+    2
+   ]
+  },
+  {
+   "path": ".negative_items.percent",
+   "dtype": "int32",
+   "shape": [
+    2,
+    6
+   ]
+  },
+  {
+   "path": ".negative_items.known",
+   "dtype": "bool",
+   "shape": [
+    2,
+    6
+   ]
+  },
+  {
+   "path": ".visible_belief.pin",
+   "dtype": "uint32",
+   "shape": [
+    2,
+    6,
+    2
+   ]
+  },
+  {
+   "path": ".visible_belief.pin_active",
+   "dtype": "bool",
+   "shape": [
+    2,
+    6
+   ]
+  },
+  {
+   "path": ".visible_belief.conflicts",
+   "dtype": "int32",
+   "shape": [
+    2,
+    6
+   ]
+  },
+  {
+   "path": ".visible_belief.visible_hard",
+   "dtype": "uint32",
+   "shape": [
+    2,
+    6,
+    2
+   ]
+  },
+  {
+   "path": ".visible_belief.visible_pin",
+   "dtype": "uint32",
+   "shape": [
+    2,
+    6,
+    2
+   ]
+  },
+  {
+   "path": ".visible_belief.visible_pin_active",
+   "dtype": "bool",
+   "shape": [
+    2,
+    6
+   ]
+  },
+  {
+   "path": ".visible_belief.excluded_abilities",
+   "dtype": "uint32",
+   "shape": [
+    2,
+    6,
+    3
+   ]
+  },
+  {
+   "path": ".visible_belief.excluded_items",
+   "dtype": "uint32",
+   "shape": [
+    2,
+    6,
+    5
+   ]
+  },
+  {
+   "path": ".public_port.holder",
+   "dtype": "int32",
+   "shape": [
+    2
+   ]
+  },
+  {
+   "path": ".public_port.victims",
+   "dtype": "bool",
+   "shape": [
+    2,
+    6
+   ]
+  },
+  {
+   "path": ".public_port.known",
+   "dtype": "bool",
+   "shape": [
+    2
+   ]
+  },
+  {
+   "path": ".public_port.loaf",
+   "dtype": "bool",
+   "shape": [
+    2
+   ]
+  },
+  {
+   "path": ".public_port.traced",
+   "dtype": "bool",
+   "shape": [
+    2
+   ]
+  },
+  {
+   "path": ".public_port.skip_flip",
+   "dtype": "bool",
+   "shape": [
+    2
+   ]
+  },
+  {
+   "path": ".public_port.post_upkeep",
+   "dtype": "bool",
+   "shape": []
+  },
+  {
+   "path": ".public_port.hazards",
+   "dtype": "float32",
+   "shape": [
+    2,
+    2,
+    2
+   ]
+  },
+  {
+   "path": ".public_port.blocked",
+   "dtype": "int32",
+   "shape": [
+    2
+   ]
+  },
+  {
+   "path": ".public_port.pursuit",
+   "dtype": "int32",
+   "shape": [
+    2
+   ]
+  },
+  {
+   "path": ".public_port.weather",
+   "dtype": "bool",
+   "shape": [
+    2,
+    3,
+    2
+   ]
+  }
+ ],
+ "step_output": [
+  {
+   "path": ".step.state.species",
+   "dtype": "int32",
+   "shape": [
+    2,
+    6
+   ]
+  },
+  {
+   "path": ".step.state.level",
+   "dtype": "int32",
+   "shape": [
+    2,
+    6
+   ]
+  },
+  {
+   "path": ".step.state.hidden_power_type",
+   "dtype": "int32",
+   "shape": [
+    2,
+    6
+   ]
+  },
+  {
+   "path": ".step.state.hidden_power_power",
+   "dtype": "int32",
+   "shape": [
+    2,
+    6
+   ]
+  },
+  {
+   "path": ".step.state.happiness",
+   "dtype": "int32",
+   "shape": [
+    2,
+    6
+   ]
+  },
+  {
+   "path": ".step.state.gender",
+   "dtype": "int32",
+   "shape": [
+    2,
+    6
+   ]
+  },
+  {
+   "path": ".step.state.types",
+   "dtype": "int32",
+   "shape": [
+    2,
+    6,
+    2
+   ]
+  },
+  {
+   "path": ".step.state.base_types",
+   "dtype": "int32",
+   "shape": [
+    2,
+    6,
+    2
+   ]
+  },
+  {
+   "path": ".step.state.stats",
+   "dtype": "int32",
+   "shape": [
+    2,
+    6,
+    6
+   ]
+  },
+  {
+   "path": ".step.state.hp",
+   "dtype": "int32",
+   "shape": [
+    2,
+    6
+   ]
+  },
+  {
+   "path": ".step.state.max_hp",
+   "dtype": "int32",
+   "shape": [
+    2,
+    6
+   ]
+  },
+  {
+   "path": ".step.state.status",
+   "dtype": "int32",
+   "shape": [
+    2,
+    6
+   ]
+  },
+  {
+   "path": ".step.state.status_counter",
+   "dtype": "int32",
+   "shape": [
+    2,
+    6
+   ]
+  },
+  {
+   "path": ".step.state.sleep_skipped",
+   "dtype": "int32",
+   "shape": [
+    2,
+    6
+   ]
+  },
+  {
+   "path": ".step.state.rest_origin",
+   "dtype": "bool",
+   "shape": [
+    2,
+    6
+   ]
+  },
+  {
+   "path": ".step.state.moves",
+   "dtype": "int32",
+   "shape": [
+    2,
+    6,
+    4
+   ]
+  },
+  {
+   "path": ".step.state.pp",
+   "dtype": "int32",
+   "shape": [
+    2,
+    6,
+    4
+   ]
+  },
+  {
+   "path": ".step.state.disabled",
+   "dtype": "bool",
+   "shape": [
+    2,
+    6,
+    4
+   ]
+  },
+  {
+   "path": ".step.state.choice_move",
+   "dtype": "int32",
+   "shape": [
+    2,
+    6
+   ]
+  },
+  {
+   "path": ".step.state.last_move",
+   "dtype": "int32",
+   "shape": [
+    2,
+    6
+   ]
+  },
+  {
+   "path": ".step.state.last_action_kind",
+   "dtype": "int32",
+   "shape": [
+    2
+   ]
+  },
+  {
+   "path": ".step.state.last_action_index",
+   "dtype": "int32",
+   "shape": [
+    2
+   ]
+  },
+  {
+   "path": ".step.state.encore_move",
+   "dtype": "int32",
+   "shape": [
+    2,
+    6
+   ]
+  },
+  {
+   "path": ".step.state.encore_counter",
+   "dtype": "int32",
+   "shape": [
+    2,
+    6
+   ]
+  },
+  {
+   "path": ".step.state.charge_move",
+   "dtype": "int32",
+   "shape": [
+    2,
+    6
+   ]
+  },
+  {
+   "path": ".step.state.charge_counter",
+   "dtype": "int32",
+   "shape": [
+    2,
+    6
+   ]
+  },
+  {
+   "path": ".step.state.item",
+   "dtype": "int32",
+   "shape": [
+    2,
+    6
+   ]
+  },
+  {
+   "path": ".step.state.ability",
+   "dtype": "int32",
+   "shape": [
+    2,
+    6
+   ]
+  },
+  {
+   "path": ".step.state.base_ability",
+   "dtype": "int32",
+   "shape": [
+    2,
+    6
+   ]
+  },
+  {
+   "path": ".step.state.boosts",
+   "dtype": "int32",
+   "shape": [
+    2,
+    6,
+    7
+   ]
+  },
+  {
+   "path": ".step.state.volatile",
+   "dtype": "uint32",
+   "shape": [
+    2,
+    6
+   ]
+  },
+  {
+   "path": ".step.state.confusion_counter",
+   "dtype": "int32",
+   "shape": [
+    2,
+    6
+   ]
+  },
+  {
+   "path": ".step.state.protect_counter",
+   "dtype": "int32",
+   "shape": [
+    2,
+    6
+   ]
+  },
+  {
+   "path": ".step.state.substitute_hp",
+   "dtype": "int32",
+   "shape": [
+    2,
+    6
+   ]
+  },
+  {
+   "path": ".step.state.active",
+   "dtype": "int32",
+   "shape": [
+    2
+   ]
+  },
+  {
+   "path": ".step.state.entry_pending",
+   "dtype": "bool",
+   "shape": [
+    2
+   ]
+  },
+  {
+   "path": ".step.state.active_turns",
+   "dtype": "int32",
+   "shape": [
+    2
+   ]
+  },
+  {
+   "path": ".step.state.trapped",
+   "dtype": "bool",
+   "shape": [
+    2
+   ]
+  },
+  {
+   "path": ".step.state.trap_source",
+   "dtype": "int32",
+   "shape": [
+    2,
+    6
+   ]
+  },
+  {
+   "path": ".step.state.forced_switch",
+   "dtype": "bool",
+   "shape": [
+    2
+   ]
+  },
+  {
+   "path": ".step.state.baton_pass",
+   "dtype": "bool",
+   "shape": [
+    2
+   ]
+  },
+  {
+   "path": ".step.state.queued_actor",
+   "dtype": "int32",
+   "shape": []
+  },
+  {
+   "path": ".step.state.queued_actions",
+   "dtype": "int32",
+   "shape": [
+    2
+   ]
+  },
+  {
+   "path": ".step.state.queued_stall",
+   "dtype": "int32",
+   "shape": [
+    2
+   ]
+  },
+  {
+   "path": ".step.state.pending_residual",
+   "dtype": "bool",
+   "shape": []
+  },
+  {
+   "path": ".step.state.residual_draws",
+   "dtype": "int32",
+   "shape": [
+    2,
+    12
+   ]
+  },
+  {
+   "path": ".step.state.phazing_draws",
+   "dtype": "int32",
+   "shape": [
+    2
+   ]
+  },
+  {
+   "path": ".step.state.secondary_draws",
+   "dtype": "int32",
+   "shape": [
+    2
+   ]
+  },
+  {
+   "path": ".step.state.sleep_talk_draws",
+   "dtype": "int32",
+   "shape": [
+    2
+   ]
+  },
+  {
+   "path": ".step.state.replacement_count",
+   "dtype": "int32",
+   "shape": []
+  },
+  {
+   "path": ".step.state.spikes",
+   "dtype": "int32",
+   "shape": [
+    2
+   ]
+  },
+  {
+   "path": ".step.state.wish_counter",
+   "dtype": "int32",
+   "shape": [
+    2
+   ]
+  },
+  {
+   "path": ".step.state.wish_amount",
+   "dtype": "int32",
+   "shape": [
+    2
+   ]
+  },
+  {
+   "path": ".step.state.weather",
+   "dtype": "int32",
+   "shape": []
+  },
+  {
+   "path": ".step.state.weather_counter",
+   "dtype": "int32",
+   "shape": []
+  },
+  {
+   "path": ".step.state.turn",
+   "dtype": "int32",
+   "shape": []
+  },
+  {
+   "path": ".step.state.keys",
+   "dtype": "uint32",
+   "shape": [
+    2
+   ]
+  },
+  {
+   "path": ".step.state.done",
+   "dtype": "bool",
+   "shape": []
+  },
+  {
+   "path": ".step.state.winner",
+   "dtype": "int32",
+   "shape": []
+  },
+  {
+   "path": ".step.state.truant_loaf",
+   "dtype": "bool",
+   "shape": [
+    2,
+    6
+   ]
+  },
+  {
+   "path": ".step.invalid_actions",
+   "dtype": "bool",
+   "shape": []
+  },
+  {
+   "path": ".step.placeholder_moves",
+   "dtype": "int32",
+   "shape": []
+  },
+  {
+   "path": ".trackers.physical_to_public",
+   "dtype": "int32",
+   "shape": [
+    2,
+    6
+   ]
+  },
+  {
+   "path": ".trackers.active_physical",
+   "dtype": "int32",
+   "shape": [
+    2
+   ]
+  },
+  {
+   "path": ".trackers.active_slot",
+   "dtype": "int32",
+   "shape": [
+    2
+   ]
+  },
+  {
+   "path": ".trackers.next_slot",
+   "dtype": "int32",
+   "shape": [
+    2
+   ]
+  },
+  {
+   "path": ".trackers.own_order",
+   "dtype": "int32",
+   "shape": [
+    2,
+    6
+   ]
+  },
+  {
+   "path": ".trackers.species",
+   "dtype": "int32",
+   "shape": [
+    2,
+    6
+   ]
+  },
+  {
+   "path": ".trackers.level",
+   "dtype": "int32",
+   "shape": [
+    2,
+    6
+   ]
+  },
+  {
+   "path": ".trackers.gender",
+   "dtype": "int32",
+   "shape": [
+    2,
+    6
+   ]
+  },
+  {
+   "path": ".trackers.hp_percent",
+   "dtype": "int32",
+   "shape": [
+    2,
+    6
+   ]
+  },
+  {
+   "path": ".trackers.status",
+   "dtype": "int32",
+   "shape": [
+    2,
+    6
+   ]
+  },
+  {
+   "path": ".trackers.boosts",
+   "dtype": "int32",
+   "shape": [
+    2,
+    6,
+    7
+   ]
+  },
+  {
+   "path": ".trackers.present",
+   "dtype": "bool",
+   "shape": [
+    2,
+    6
+   ]
+  },
+  {
+   "path": ".trackers.fainted",
+   "dtype": "bool",
+   "shape": [
+    2,
+    6
+   ]
+  },
+  {
+   "path": ".trackers.turn",
+   "dtype": "int32",
+   "shape": []
+  },
+  {
+   "path": ".trackers.weather",
+   "dtype": "int32",
+   "shape": []
+  },
+  {
+   "path": ".trackers.spikes",
+   "dtype": "int32",
+   "shape": [
+    2
+   ]
+  },
+  {
+   "path": ".trackers.error",
+   "dtype": "int32",
+   "shape": []
+  },
+  {
+   "path": ".trackers.observed_moves",
+   "dtype": "int32",
+   "shape": [
+    2,
+    6,
+    4
+   ]
+  },
+  {
+   "path": ".trackers.pp_used",
+   "dtype": "int32",
+   "shape": [
+    2,
+    6,
+    4
+   ]
+  },
+  {
+   "path": ".trackers.last_moves",
+   "dtype": "int32",
+   "shape": [
+    2,
+    6
+   ]
+  },
+  {
+   "path": ".trackers.tendencies",
+   "dtype": "int32",
+   "shape": [
+    2,
+    6,
+    2
+   ]
+  },
+  {
+   "path": ".trackers.belief_mask",
+   "dtype": "uint32",
+   "shape": [
+    2,
+    6,
+    2
+   ]
+  },
+  {
+   "path": ".trackers.shown_ability",
+   "dtype": "int32",
+   "shape": [
+    2,
+    6
+   ]
+  },
+  {
+   "path": ".trackers.shown_item",
+   "dtype": "int32",
+   "shape": [
+    2,
+    6
+   ]
+  },
+  {
+   "path": ".trackers.shown_types",
+   "dtype": "int32",
+   "shape": [
+    2,
+    6,
+    2
+   ]
+  },
+  {
+   "path": ".trackers.borrowed_ability",
+   "dtype": "int32",
+   "shape": [
+    2,
+    6
+   ]
+  },
+  {
+   "path": ".trackers.mon_features['confusion_turns']",
+   "dtype": "int32",
+   "shape": [
+    2,
+    6
+   ]
+  },
+  {
+   "path": ".trackers.mon_features['encore_turns']",
+   "dtype": "int32",
+   "shape": [
+    2,
+    6
+   ]
+  },
+  {
+   "path": ".trackers.mon_features['item_swapped']",
+   "dtype": "int32",
+   "shape": [
+    2,
+    6
+   ]
+  },
+  {
+   "path": ".trackers.mon_features['last_damage_dealt']",
+   "dtype": "float32",
+   "shape": [
+    2,
+    6
+   ]
+  },
+  {
+   "path": ".trackers.mon_features['last_damage_taken']",
+   "dtype": "float32",
+   "shape": [
+    2,
+    6
+   ]
+  },
+  {
+   "path": ".trackers.mon_features['meanlook_trap']",
+   "dtype": "int32",
+   "shape": [
+    2,
+    6
+   ]
+  },
+  {
+   "path": ".trackers.mon_features['moves_shown']",
+   "dtype": "int32",
+   "shape": [
+    2,
+    6
+   ]
+  },
+  {
+   "path": ".trackers.mon_features['rest_sleep']",
+   "dtype": "int32",
+   "shape": [
+    2,
+    6
+   ]
+  },
+  {
+   "path": ".trackers.mon_features['sleep_cant_pending']",
+   "dtype": "int32",
+   "shape": [
+    2,
+    6
+   ]
+  },
+  {
+   "path": ".trackers.mon_features['sleep_skipped_turns']",
+   "dtype": "int32",
+   "shape": [
+    2,
+    6
+   ]
+  },
+  {
+   "path": ".trackers.mon_features['sleep_turns']",
+   "dtype": "int32",
+   "shape": [
+    2,
+    6
+   ]
+  },
+  {
+   "path": ".trackers.mon_features['sleep_usable_pending']",
+   "dtype": "int32",
+   "shape": [
+    2,
+    6
+   ]
+  },
+  {
+   "path": ".trackers.mon_features['stall_counter']",
+   "dtype": "int32",
+   "shape": [
+    2,
+    6
+   ]
+  },
+  {
+   "path": ".trackers.mon_features['stayed_and_attacked']",
+   "dtype": "int32",
+   "shape": [
+    2,
+    6
+   ]
+  },
+  {
+   "path": ".trackers.mon_features['sub_present']",
+   "dtype": "int32",
+   "shape": [
+    2,
+    6
+   ]
+  },
+  {
+   "path": ".trackers.mon_features['switched_before_attack']",
+   "dtype": "int32",
+   "shape": [
+    2,
+    6
+   ]
+  },
+  {
+   "path": ".trackers.mon_features['switches']",
+   "dtype": "int32",
+   "shape": [
+    2,
+    6
+   ]
+  },
+  {
+   "path": ".trackers.mon_features['toxic_stage']",
+   "dtype": "int32",
+   "shape": [
+    2,
+    6
+   ]
+  },
+  {
+   "path": ".trackers.mon_features['turns_active']",
+   "dtype": "int32",
+   "shape": [
+    2,
+    6
+   ]
+  },
+  {
+   "path": ".trackers.mon_features['turns_active_total']",
+   "dtype": "int32",
+   "shape": [
+    2,
+    6
+   ]
+  },
+  {
+   "path": ".trackers.field_features['weather_permanent']",
+   "dtype": "bool",
+   "shape": []
+  },
+  {
+   "path": ".trackers.field_features['weather_upkeeps']",
+   "dtype": "int32",
+   "shape": []
+  },
+  {
+   "path": ".trackers.field_features['wish_pending']",
+   "dtype": "bool",
+   "shape": [
+    2
+   ]
+  },
+  {
+   "path": ".trackers.field_features['wish_set_turn']",
+   "dtype": "int32",
+   "shape": [
+    2
+   ]
+  },
+  {
+   "path": ".trackers.field_features['wish_turns']",
+   "dtype": "int32",
+   "shape": [
+    2
+   ]
+  },
+  {
+   "path": ".trackers.original_ability",
+   "dtype": "int32",
+   "shape": [
+    2,
+    6
+   ]
+  },
+  {
+   "path": ".trackers.damage_exact_dealt",
+   "dtype": "float32",
+   "shape": [
+    2,
+    6
+   ]
+  },
+  {
+   "path": ".trackers.damage_exact_taken",
+   "dtype": "float32",
+   "shape": [
+    2,
+    6
+   ]
+  },
+  {
+   "path": ".trackers.public_volatiles",
+   "dtype": "bool",
+   "shape": [
+    2,
+    6,
+    40
+   ]
+  },
+  {
+   "path": ".trackers.item_removed",
+   "dtype": "bool",
+   "shape": [
+    2,
+    6
+   ]
+  },
+  {
+   "path": ".trackers.tendency.moved",
+   "dtype": "bool",
+   "shape": [
+    2
+   ]
+  },
+  {
+   "path": ".trackers.tendency.opportunity_turn",
+   "dtype": "int32",
+   "shape": [
+    2
+   ]
+  },
+  {
+   "path": ".trackers.tendency.switches",
+   "dtype": "int32",
+   "shape": [
+    2
+   ]
+  },
+  {
+   "path": ".trackers.tendency.opportunities",
+   "dtype": "int32",
+   "shape": [
+    2
+   ]
+  },
+  {
+   "path": ".trackers.tendency.matchup",
+   "dtype": "int32",
+   "shape": [
+    2,
+    6,
+    6,
+    2
+   ]
+  },
+  {
+   "path": ".trackers.damage_history.hp",
+   "dtype": "int32",
+   "shape": [
+    2
+   ]
+  },
+  {
+   "path": ".trackers.damage_history.maximum",
+   "dtype": "int32",
+   "shape": [
+    2
+   ]
+  },
+  {
+   "path": ".trackers.damage_history.taken",
+   "dtype": "float32",
+   "shape": [
+    2,
+    2,
+    2
+   ]
+  },
+  {
+   "path": ".trackers.damage_history.dealt",
+   "dtype": "float32",
+   "shape": [
+    2,
+    2,
+    2
+   ]
+  },
+  {
+   "path": ".trackers.negative_items.percent",
+   "dtype": "int32",
+   "shape": [
+    2,
+    6
+   ]
+  },
+  {
+   "path": ".trackers.negative_items.known",
+   "dtype": "bool",
+   "shape": [
+    2,
+    6
+   ]
+  },
+  {
+   "path": ".trackers.visible_belief.pin",
+   "dtype": "uint32",
+   "shape": [
+    2,
+    6,
+    2
+   ]
+  },
+  {
+   "path": ".trackers.visible_belief.pin_active",
+   "dtype": "bool",
+   "shape": [
+    2,
+    6
+   ]
+  },
+  {
+   "path": ".trackers.visible_belief.conflicts",
+   "dtype": "int32",
+   "shape": [
+    2,
+    6
+   ]
+  },
+  {
+   "path": ".trackers.visible_belief.visible_hard",
+   "dtype": "uint32",
+   "shape": [
+    2,
+    6,
+    2
+   ]
+  },
+  {
+   "path": ".trackers.visible_belief.visible_pin",
+   "dtype": "uint32",
+   "shape": [
+    2,
+    6,
+    2
+   ]
+  },
+  {
+   "path": ".trackers.visible_belief.visible_pin_active",
+   "dtype": "bool",
+   "shape": [
+    2,
+    6
+   ]
+  },
+  {
+   "path": ".trackers.visible_belief.excluded_abilities",
+   "dtype": "uint32",
+   "shape": [
+    2,
+    6,
+    3
+   ]
+  },
+  {
+   "path": ".trackers.visible_belief.excluded_items",
+   "dtype": "uint32",
+   "shape": [
+    2,
+    6,
+    5
+   ]
+  },
+  {
+   "path": ".trackers.public_port.holder",
+   "dtype": "int32",
+   "shape": [
+    2
+   ]
+  },
+  {
+   "path": ".trackers.public_port.victims",
+   "dtype": "bool",
+   "shape": [
+    2,
+    6
+   ]
+  },
+  {
+   "path": ".trackers.public_port.known",
+   "dtype": "bool",
+   "shape": [
+    2
+   ]
+  },
+  {
+   "path": ".trackers.public_port.loaf",
+   "dtype": "bool",
+   "shape": [
+    2
+   ]
+  },
+  {
+   "path": ".trackers.public_port.traced",
+   "dtype": "bool",
+   "shape": [
+    2
+   ]
+  },
+  {
+   "path": ".trackers.public_port.skip_flip",
+   "dtype": "bool",
+   "shape": [
+    2
+   ]
+  },
+  {
+   "path": ".trackers.public_port.post_upkeep",
+   "dtype": "bool",
+   "shape": []
+  },
+  {
+   "path": ".trackers.public_port.hazards",
+   "dtype": "float32",
+   "shape": [
+    2,
+    2,
+    2
+   ]
+  },
+  {
+   "path": ".trackers.public_port.blocked",
+   "dtype": "int32",
+   "shape": [
+    2
+   ]
+  },
+  {
+   "path": ".trackers.public_port.pursuit",
+   "dtype": "int32",
+   "shape": [
+    2
+   ]
+  },
+  {
+   "path": ".trackers.public_port.weather",
+   "dtype": "bool",
+   "shape": [
+    2,
+    3,
+    2
+   ]
+  }
+ ],
+ "tables": [
+  {
+   "path": ".power",
+   "dtype": "int32",
+   "shape": [
+    374
+   ]
+  },
+  {
+   "path": ".type",
+   "dtype": "int32",
+   "shape": [
+    374
+   ]
+  },
+  {
+   "path": ".physical",
+   "dtype": "bool",
+   "shape": [
+    374
+   ]
+  },
+  {
+   "path": ".accuracy",
+   "dtype": "int32",
+   "shape": [
+    374
+   ]
+  },
+  {
+   "path": ".always_hit",
+   "dtype": "bool",
+   "shape": [
+    374
+   ]
+  },
+  {
+   "path": ".priority",
+   "dtype": "int32",
+   "shape": [
+    374
+   ]
+  },
+  {
+   "path": ".type_num",
+   "dtype": "int32",
+   "shape": [
+    18,
+    18
+   ]
+  },
+  {
+   "path": ".type_den",
+   "dtype": "int32",
+   "shape": [
+    18,
+    18
+   ]
+  },
+  {
+   "path": ".struggle",
+   "dtype": "int32",
+   "shape": []
+  },
+  {
+   "path": ".effects.status",
+   "dtype": "int32",
+   "shape": [
+    374
+   ]
+  },
+  {
+   "path": ".effects.self_boosts",
+   "dtype": "int32",
+   "shape": [
+    374,
+    7
+   ]
+  },
+  {
+   "path": ".effects.heal_half",
+   "dtype": "bool",
+   "shape": [
+    374
+   ]
+  },
+  {
+   "path": ".effects.rest",
+   "dtype": "bool",
+   "shape": [
+    374
+   ]
+  },
+  {
+   "path": ".effects.haze",
+   "dtype": "bool",
+   "shape": [
+    374
+   ]
+  },
+  {
+   "path": ".effects.thunderwave",
+   "dtype": "bool",
+   "shape": [
+    374
+   ]
+  },
+  {
+   "path": ".effects.status_immunity",
+   "dtype": "bool",
+   "shape": [
+    7,
+    18
+   ]
+  },
+  {
+   "path": ".effects.ground_type",
+   "dtype": "int32",
+   "shape": []
+  },
+  {
+   "path": ".effects.substitute",
+   "dtype": "bool",
+   "shape": [
+    374
+   ]
+  },
+  {
+   "path": ".effects.protect",
+   "dtype": "bool",
+   "shape": [
+    374
+   ]
+  },
+  {
+   "path": ".effects.endure",
+   "dtype": "bool",
+   "shape": [
+    374
+   ]
+  },
+  {
+   "path": ".effects.protectable",
+   "dtype": "bool",
+   "shape": [
+    374
+   ]
+  },
+  {
+   "path": ".effects.bypass_sub",
+   "dtype": "bool",
+   "shape": [
+    374
+   ]
+  },
+  {
+   "path": ".effects.heal_bell",
+   "dtype": "bool",
+   "shape": [
+    374
+   ]
+  },
+  {
+   "path": ".effects.soundproof",
+   "dtype": "bool",
+   "shape": [
+    81
+   ]
+  },
+  {
+   "path": ".effects.weather_heal",
+   "dtype": "bool",
+   "shape": [
+    374
+   ]
+  },
+  {
+   "path": ".effects.pain_split",
+   "dtype": "bool",
+   "shape": [
+    374
+   ]
+  },
+  {
+   "path": ".effects.belly_drum",
+   "dtype": "bool",
+   "shape": [
+    374
+   ]
+  },
+  {
+   "path": ".effects.hit_spa_drop",
+   "dtype": "bool",
+   "shape": [
+    374
+   ]
+  },
+  {
+   "path": ".items.leftovers",
+   "dtype": "bool",
+   "shape": [
+    130
+   ]
+  },
+  {
+   "path": ".items.lum",
+   "dtype": "bool",
+   "shape": [
+    130
+   ]
+  },
+  {
+   "path": ".items.choice_band",
+   "dtype": "bool",
+   "shape": [
+    130
+   ]
+  },
+  {
+   "path": ".items.thick_club",
+   "dtype": "bool",
+   "shape": [
+    130
+   ]
+  },
+  {
+   "path": ".items.light_ball",
+   "dtype": "bool",
+   "shape": [
+    130
+   ]
+  },
+  {
+   "path": ".items.club_species",
+   "dtype": "bool",
+   "shape": [
+    421
+   ]
+  },
+  {
+   "path": ".items.ball_species",
+   "dtype": "bool",
+   "shape": [
+    421
+   ]
+  },
+  {
+   "path": ".items.soul_dew",
+   "dtype": "bool",
+   "shape": [
+    130
+   ]
+  },
+  {
+   "path": ".items.dew_species",
+   "dtype": "bool",
+   "shape": [
+    421
+   ]
+  },
+  {
+   "path": ".items.pinch_stat",
+   "dtype": "int32",
+   "shape": [
+    130
+   ]
+  },
+  {
+   "path": ".weather.move_weather",
+   "dtype": "int32",
+   "shape": [
+    374
+   ]
+  },
+  {
+   "path": ".weather.thunder",
+   "dtype": "bool",
+   "shape": [
+    374
+   ]
+  },
+  {
+   "path": ".weather.fire_type",
+   "dtype": "int32",
+   "shape": []
+  },
+  {
+   "path": ".weather.water_type",
+   "dtype": "int32",
+   "shape": []
+  },
+  {
+   "path": ".weather.sand_immune_type",
+   "dtype": "bool",
+   "shape": [
+    18
+   ]
+  },
+  {
+   "path": ".weather.ice_type",
+   "dtype": "int32",
+   "shape": []
+  },
+  {
+   "path": ".weather.suppressor",
+   "dtype": "bool",
+   "shape": [
+    81
+   ]
+  },
+  {
+   "path": ".weather.sand_veil",
+   "dtype": "bool",
+   "shape": [
+    81
+   ]
+  },
+  {
+   "path": ".entry.weather_ability",
+   "dtype": "int32",
+   "shape": [
+    81
+   ]
+  },
+  {
+   "path": ".entry.intimidate",
+   "dtype": "bool",
+   "shape": [
+    81
+   ]
+  },
+  {
+   "path": ".entry.natural_cure",
+   "dtype": "bool",
+   "shape": [
+    81
+   ]
+  },
+  {
+   "path": ".entry.levitate",
+   "dtype": "bool",
+   "shape": [
+    81
+   ]
+  },
+  {
+   "path": ".entry.attack_drop_immune",
+   "dtype": "bool",
+   "shape": [
+    81
+   ]
+  },
+  {
+   "path": ".entry.swift_swim",
+   "dtype": "bool",
+   "shape": [
+    81
+   ]
+  },
+  {
+   "path": ".entry.chlorophyll",
+   "dtype": "bool",
+   "shape": [
+    81
+   ]
+  },
+  {
+   "path": ".entry.flying_type",
+   "dtype": "int32",
+   "shape": []
+  },
+  {
+   "path": ".entry.ground_type",
+   "dtype": "int32",
+   "shape": []
+  },
+  {
+   "path": ".entry.spikes_move",
+   "dtype": "bool",
+   "shape": [
+    374
+   ]
+  },
+  {
+   "path": ".entry.speed_boost",
+   "dtype": "bool",
+   "shape": [
+    81
+   ]
+  },
+  {
+   "path": ".entry.truant",
+   "dtype": "bool",
+   "shape": [
+    81
+   ]
+  },
+  {
+   "path": ".entry.trace",
+   "dtype": "bool",
+   "shape": [
+    81
+   ]
+  },
+  {
+   "path": ".entry.status_cure",
+   "dtype": "bool",
+   "shape": [
+    81,
+    7
+   ]
+  },
+  {
+   "path": ".entry.own_tempo",
+   "dtype": "bool",
+   "shape": [
+    81
+   ]
+  },
+  {
+   "path": ".entry.pressure",
+   "dtype": "bool",
+   "shape": [
+    81
+   ]
+  },
+  {
+   "path": ".entry.trace_copy",
+   "dtype": "bool",
+   "shape": [
+    81
+   ]
+  },
+  {
+   "path": ".entry.spikes_type_count",
+   "dtype": "int32",
+   "shape": []
+  },
+  {
+   "path": ".entry.spikes_item_count",
+   "dtype": "int32",
+   "shape": []
+  },
+  {
+   "path": ".entry.spikes_boots_item",
+   "dtype": "int32",
+   "shape": []
+  },
+  {
+   "path": ".absorption.water_absorb",
+   "dtype": "bool",
+   "shape": [
+    81
+   ]
+  },
+  {
+   "path": ".absorption.volt_absorb",
+   "dtype": "bool",
+   "shape": [
+    81
+   ]
+  },
+  {
+   "path": ".absorption.flash_fire",
+   "dtype": "bool",
+   "shape": [
+    81
+   ]
+  },
+  {
+   "path": ".absorption.water_type",
+   "dtype": "int32",
+   "shape": []
+  },
+  {
+   "path": ".absorption.electric_type",
+   "dtype": "int32",
+   "shape": []
+  },
+  {
+   "path": ".absorption.fire_type",
+   "dtype": "int32",
+   "shape": []
+  },
+  {
+   "path": ".absorption.thunderwave",
+   "dtype": "bool",
+   "shape": [
+    374
+   ]
+  },
+  {
+   "path": ".absorption.willowisp",
+   "dtype": "bool",
+   "shape": [
+    374
+   ]
+  },
+  {
+   "path": ".absorption.fire_thaws",
+   "dtype": "bool",
+   "shape": [
+    374
+   ]
+  },
+  {
+   "path": ".combat.guts",
+   "dtype": "bool",
+   "shape": [
+    81
+   ]
+  },
+  {
+   "path": ".combat.thick_fat",
+   "dtype": "bool",
+   "shape": [
+    81
+   ]
+  },
+  {
+   "path": ".combat.arena_trap",
+   "dtype": "bool",
+   "shape": [
+    81
+   ]
+  },
+  {
+   "path": ".combat.magnet_pull",
+   "dtype": "bool",
+   "shape": [
+    81
+   ]
+  },
+  {
+   "path": ".combat.shadow_tag",
+   "dtype": "bool",
+   "shape": [
+    81
+   ]
+  },
+  {
+   "path": ".combat.levitate",
+   "dtype": "bool",
+   "shape": [
+    81
+   ]
+  },
+  {
+   "path": ".combat.flying_type",
+   "dtype": "int32",
+   "shape": []
+  },
+  {
+   "path": ".combat.steel_type",
+   "dtype": "int32",
+   "shape": []
+  },
+  {
+   "path": ".combat.fire_type",
+   "dtype": "int32",
+   "shape": []
+  },
+  {
+   "path": ".combat.ice_type",
+   "dtype": "int32",
+   "shape": []
+  },
+  {
+   "path": ".combat.doubled_attack",
+   "dtype": "bool",
+   "shape": [
+    81
+   ]
+  },
+  {
+   "path": ".combat.hustle",
+   "dtype": "bool",
+   "shape": [
+    81
+   ]
+  },
+  {
+   "path": ".combat.physical_type",
+   "dtype": "bool",
+   "shape": [
+    18
+   ]
+  },
+  {
+   "path": ".combat.compound_eyes",
+   "dtype": "bool",
+   "shape": [
+    81
+   ]
+  },
+  {
+   "path": ".pressure.pressure",
+   "dtype": "bool",
+   "shape": [
+    81
+   ]
+  },
+  {
+   "path": ".pressure.targets_foe",
+   "dtype": "bool",
+   "shape": [
+    374
+   ]
+  },
+  {
+   "path": ".pressure.curse",
+   "dtype": "bool",
+   "shape": [
+    374
+   ]
+  },
+  {
+   "path": ".pressure.ghost_type",
+   "dtype": "int32",
+   "shape": []
+  },
+  {
+   "path": ".sustain.seed",
+   "dtype": "bool",
+   "shape": [
+    374
+   ]
+  },
+  {
+   "path": ".sustain.wish",
+   "dtype": "bool",
+   "shape": [
+    374
+   ]
+  },
+  {
+   "path": ".sustain.grass_type",
+   "dtype": "int32",
+   "shape": []
+  },
+  {
+   "path": ".sustain.spin",
+   "dtype": "bool",
+   "shape": [
+    374
+   ]
+  },
+  {
+   "path": ".damage_moves.level_damage",
+   "dtype": "bool",
+   "shape": [
+    374
+   ]
+  },
+  {
+   "path": ".damage_moves.constant_damage",
+   "dtype": "int32",
+   "shape": [
+    374
+   ]
+  },
+  {
+   "path": ".damage_moves.recoil_den",
+   "dtype": "int32",
+   "shape": [
+    374
+   ]
+  },
+  {
+   "path": ".damage_moves.struggle",
+   "dtype": "bool",
+   "shape": [
+    374
+   ]
+  },
+  {
+   "path": ".damage_moves.rock_head",
+   "dtype": "bool",
+   "shape": [
+    81
+   ]
+  },
+  {
+   "path": ".variable_moves.hidden_power",
+   "dtype": "bool",
+   "shape": [
+    374
+   ]
+  },
+  {
+   "path": ".variable_moves.returns",
+   "dtype": "bool",
+   "shape": [
+    374
+   ]
+  },
+  {
+   "path": ".variable_moves.frustration",
+   "dtype": "bool",
+   "shape": [
+    374
+   ]
+  },
+  {
+   "path": ".variable_moves.hp_dependent",
+   "dtype": "bool",
+   "shape": [
+    374
+   ]
+  },
+  {
+   "path": ".variable_moves.special_type",
+   "dtype": "bool",
+   "shape": [
+    18
+   ]
+  },
+  {
+   "path": ".variable_moves.dark_type",
+   "dtype": "int32",
+   "shape": []
+  },
+  {
+   "path": ".pursuit.pursuit",
+   "dtype": "bool",
+   "shape": [
+    374
+   ]
+  },
+  {
+   "path": ".baton.move",
+   "dtype": "bool",
+   "shape": [
+    374
+   ]
+  },
+  {
+   "path": ".phazing.move",
+   "dtype": "bool",
+   "shape": [
+    374
+   ]
+  },
+  {
+   "path": ".phazing.roar",
+   "dtype": "bool",
+   "shape": [
+    374
+   ]
+  },
+  {
+   "path": ".phazing.soundproof",
+   "dtype": "bool",
+   "shape": [
+    81
+   ]
+  },
+  {
+   "path": ".phazing.suction_cups",
+   "dtype": "bool",
+   "shape": [
+    81
+   ]
+  },
+  {
+   "path": ".linked_traps.move",
+   "dtype": "bool",
+   "shape": [
+    374
+   ]
+  },
+  {
+   "path": ".critical.high",
+   "dtype": "bool",
+   "shape": [
+    374
+   ]
+  },
+  {
+   "path": ".critical.armor",
+   "dtype": "bool",
+   "shape": [
+    81
+   ]
+  },
+  {
+   "path": ".secondary.chance",
+   "dtype": "int32",
+   "shape": [
+    374
+   ]
+  },
+  {
+   "path": ".secondary.status",
+   "dtype": "int32",
+   "shape": [
+    374
+   ]
+  },
+  {
+   "path": ".secondary.spd_drop",
+   "dtype": "bool",
+   "shape": [
+    374
+   ]
+  },
+  {
+   "path": ".secondary.flinch",
+   "dtype": "bool",
+   "shape": [
+    374
+   ]
+  },
+  {
+   "path": ".secondary.grace",
+   "dtype": "bool",
+   "shape": [
+    81
+   ]
+  },
+  {
+   "path": ".secondary.dust",
+   "dtype": "bool",
+   "shape": [
+    81
+   ]
+  },
+  {
+   "path": ".secondary.clear_body",
+   "dtype": "bool",
+   "shape": [
+    81
+   ]
+  },
+  {
+   "path": ".secondary.inner_focus",
+   "dtype": "bool",
+   "shape": [
+    81
+   ]
+  },
+  {
+   "path": ".secondary.ability_immunity",
+   "dtype": "bool",
+   "shape": [
+    81,
+    7
+   ]
+  },
+  {
+   "path": ".secondary.type_immunity",
+   "dtype": "bool",
+   "shape": [
+    7,
+    18
+   ]
+  },
+  {
+   "path": ".secondary.contact",
+   "dtype": "bool",
+   "shape": [
+    374
+   ]
+  },
+  {
+   "path": ".secondary.static",
+   "dtype": "bool",
+   "shape": [
+    81
+   ]
+  },
+  {
+   "path": ".secondary.speed_drop",
+   "dtype": "bool",
+   "shape": [
+    374
+   ]
+  },
+  {
+   "path": ".secondary.self_omni",
+   "dtype": "bool",
+   "shape": [
+    374
+   ]
+  },
+  {
+   "path": ".secondary.synchronize",
+   "dtype": "bool",
+   "shape": [
+    81
+   ]
+  },
+  {
+   "path": ".secondary.rough_skin",
+   "dtype": "bool",
+   "shape": [
+    81
+   ]
+  },
+  {
+   "path": ".secondary.color_change",
+   "dtype": "bool",
+   "shape": [
+    81
+   ]
+  },
+  {
+   "path": ".sleep_talk.move",
+   "dtype": "bool",
+   "shape": [
+    374
+   ]
+  },
+  {
+   "path": ".sleep_talk.callable",
+   "dtype": "bool",
+   "shape": [
+    374
+   ]
+  },
+  {
+   "path": ".sleep_talk.early_bird",
+   "dtype": "bool",
+   "shape": [
+    81
+   ]
+  },
+  {
+   "path": ".self_destruct.move",
+   "dtype": "bool",
+   "shape": [
+    374
+   ]
+  },
+  {
+   "path": ".self_destruct.damp",
+   "dtype": "bool",
+   "shape": [
+    81
+   ]
+  },
+  {
+   "path": ".encore.move",
+   "dtype": "bool",
+   "shape": [
+    374
+   ]
+  },
+  {
+   "path": ".encore.allowed_last",
+   "dtype": "bool",
+   "shape": [
+    374
+   ]
+  },
+  {
+   "path": ".focus_punch.move",
+   "dtype": "bool",
+   "shape": [
+    374
+   ]
+  },
+  {
+   "path": ".focus_punch.damaging",
+   "dtype": "bool",
+   "shape": [
+    374
+   ]
+  },
+  {
+   "path": ".solar_beam.move",
+   "dtype": "bool",
+   "shape": [
+    374
+   ]
+  },
+  {
+   "path": ".public_port.native_truant",
+   "dtype": "bool",
+   "shape": [
+    421
+   ]
+  },
+  {
+   "path": ".public_port.truant",
+   "dtype": "bool",
+   "shape": [
+    81
+   ]
+  },
+  {
+   "path": "belief.species_initial_mask",
+   "dtype": "uint32",
+   "shape": [
+    421,
+    2
+   ]
+  },
+  {
+   "path": "belief.move_mask",
+   "dtype": "uint32",
+   "shape": [
+    421,
+    374,
+    2
+   ]
+  },
+  {
+   "path": "belief.ability_mask",
+   "dtype": "uint32",
+   "shape": [
+    421,
+    81,
+    2
+   ]
+  },
+  {
+   "path": "belief.item_mask",
+   "dtype": "uint32",
+   "shape": [
+    421,
+    130,
+    2
+   ]
+  },
+  {
+   "path": "belief.source_species",
+   "dtype": "int32",
+   "shape": [
+    421
+   ]
+  },
+  {
+   "path": "belief.variant_valid",
+   "dtype": "bool",
+   "shape": [
+    221,
+    44
+   ]
+  },
+  {
+   "path": "belief.variant_ability",
+   "dtype": "int32",
+   "shape": [
+    221,
+    44
+   ]
+  },
+  {
+   "path": "belief.variant_item",
+   "dtype": "int32",
+   "shape": [
+    221,
+    44
+   ]
+  },
+  {
+   "path": "belief.variant_move",
+   "dtype": "int32",
+   "shape": [
+    221,
+    44,
+    4
+   ]
+  },
+  {
+   "path": "belief.ability_category",
+   "dtype": "int32",
+   "shape": [
+    72
+   ]
+  },
+  {
+   "path": "belief.item_category",
+   "dtype": "int32",
+   "shape": [
+    14
+   ]
+  },
+  {
+   "path": "belief.move_category",
+   "dtype": "int32",
+   "shape": [
+    955
+   ]
+  },
+  {
+   "path": "belief.engine_ability",
+   "dtype": "int32",
+   "shape": [
+    81
+   ]
+  },
+  {
+   "path": "belief.engine_item",
+   "dtype": "int32",
+   "shape": [
+    130
+   ]
+  },
+  {
+   "path": "belief.engine_move",
+   "dtype": "int32",
+   "shape": [
+    374
+   ]
+  },
+  {
+   "path": "belief.max_pp",
+   "dtype": "int32",
+   "shape": [
+    955
+   ]
+  },
+  {
+   "path": "belief.spreads",
+   "dtype": "uint16",
+   "shape": [
+    221,
+    101,
+    44,
+    6
+   ]
+  },
+  {
+   "path": "belief.spread_status",
+   "dtype": "uint8",
+   "shape": [
+    221,
+    101,
+    44
+   ]
+  },
+  {
+   "path": "belief.base_stats",
+   "dtype": "float32",
+   "shape": [
+    421,
+    6
+   ]
+  },
+  {
+   "path": "belief.info_present",
+   "dtype": "bool",
+   "shape": [
+    421
+   ]
+  },
+  {
+   "path": "belief.exact_hp",
+   "dtype": "uint16",
+   "shape": [
+    421
+   ]
+  },
+  {
+   "path": "belief.flying",
+   "dtype": "bool",
+   "shape": [
+    421
+   ]
+  },
+  {
+   "path": "belief.trapper",
+   "dtype": "bool",
+   "shape": [
+    72
+   ]
+  },
+  {
+   "path": "belief.early_bird",
+   "dtype": "int32",
+   "shape": []
+  },
+  {
+   "path": "belief.levitate",
+   "dtype": "int32",
+   "shape": []
+  },
+  {
+   "path": "belief.species_types",
+   "dtype": "int32",
+   "shape": [
+    421,
+    2
+   ]
+  },
+  {
+   "path": "belief.public_move",
+   "dtype": "int32",
+   "shape": [
+    374
+   ]
+  },
+  {
+   "path": "belief.source_move_evidence",
+   "dtype": "bool",
+   "shape": [
+    374
+   ]
+  },
+  {
+   "path": "belief.public_foe_targeted",
+   "dtype": "bool",
+   "shape": [
+    374
+   ]
+  },
+  {
+   "path": "belief.public_pressure",
+   "dtype": "bool",
+   "shape": [
+    81
+   ]
+  },
+  {
+   "path": "belief.standing_pins_enabled",
+   "dtype": "bool",
+   "shape": []
+  },
+  {
+   "path": "mechanics._ACCURACY_COUNTS",
+   "dtype": "int32",
+   "shape": [
+    6,
+    101,
+    13,
+    13
+   ]
+  }
+ ]
+}
