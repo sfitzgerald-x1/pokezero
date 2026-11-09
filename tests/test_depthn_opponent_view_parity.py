@@ -773,6 +773,17 @@ class ReportMathTests(unittest.TestCase):
         filled = cw.fill_owner_spikes(base, 0, cw.line_facts(lines, 0));pair = np.asarray(filled.public_port.hazards)[0, 0, 0]
         view = np.float32(np.clip(np.float32(pair[0] + pair[1]) / np.float32(6), 0, 1))   # what the encoder writes into field 116
         self.assertGreater(view, 0);self.assertEqual(P.recompute_opp_hazard_credit(lines, 0), view)
+        # Drops of 3, 16 and 11 points: the compensated sum's low-order term moves the column (a plain float32 sum gives 0.05 / 6 rounded
+        # differently), so the recomputation must carry the device's compensation to match the fill.
+        long = ['|switch|p1a: Alpha|Alpha, L80|100/100', '|switch|p2a: Beta|Beta, L80|100/100', '|turn|1']
+        for name, after in (('Gamma', 97), ('Delta', 84), ('Eta', 89)):
+            long += [f'|switch|p1a: {name}|{name}, L80|100/100', f'|-damage|p1a: {name}|{after}/100|[from] Spikes']
+        filled = cw.fill_owner_spikes(base, 0, cw.line_facts(long, 0));pair = np.asarray(filled.public_port.hazards)[0, 0, 0]
+        view = np.float32(np.clip(np.float32(pair[0] + pair[1]) / np.float32(6), 0, 1))
+        plain = np.float32(0)
+        for drop in (3, 16, 11):plain = np.float32(plain + np.float32(drop) / np.float32(100))
+        self.assertNotEqual(np.float32(np.clip(plain / np.float32(6), 0, 1)), view)   # the case does tell the two sums apart
+        self.assertEqual(P.recompute_opp_hazard_credit(long, 0), view)
         self.assertEqual(P.recompute_opp_hazard_credit(lines[:3], 0), 0.)   # no hit
         self.assertTrue(np.isnan(P.recompute_opp_hazard_credit(['|-damage|p1a: Gamma|262/300|[from] Spikes'], 0)))   # no previous HP
         self.assertEqual((P.showdown_percent(299, 300), P.showdown_percent(300, 300), P.showdown_percent(1, 300), P.showdown_percent(0, 300)), (99, 100, 1, 0))

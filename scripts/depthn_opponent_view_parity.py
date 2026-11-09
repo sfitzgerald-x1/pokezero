@@ -81,9 +81,11 @@ then max |diff|) with examples from both sides; legal-lane disagreement both way
 world's. parity_redacted: the same comparison after the documented redactions (REDACTIONS, --redact; default all five:
 LAST_DAMAGE_TAKEN on self0, LAST_DAMAGE_DEALT on opp0-5 and SELF_HAZARD_CREDIT on the field token zeroed, the opponent's exact
 own-HP history, redacted by design; HP_FRACTION on opp0-5 at Showdown's public percent; OPP_HAZARD_CREDIT on the field token: the
-env side recomputed at capture (env_opp_hazard_credit, from the decision's own lines as constructor_worlds.fill_owner_spikes builds
-the view's) and compared exactly, or, without a recomputation, compared within OPP_HAZARD_TOLERANCE) on both sides, so "exact
-except the five documented redactions" is reported directly. Names: tokens field / self0-5 / opp0-5 / move0-3 / switch0-4 / tendency_stats (engine_device_observation.TOKEN_TYPES),
+env value replaced by a recomputation from the decision's own lines (env_opp_hazard_credit, captured; recompute_opp_hazard_credit
+reads the same constructor_worlds.line_facts the view's fill reads, so where it exists this cell is a SELF-CONSISTENCY check of
+the view against its own rule and cannot catch a parsing bug both share; the raw `parity` table still compares the cell against
+Foul Play's real value), else kept and compared within OPP_HAZARD_TOLERANCE) on both sides, so "exact except the five documented
+redactions" is reported directly. Names: tokens field / self0-5 / opp0-5 / move0-3 / switch0-4 / tendency_stats (engine_device_observation.TOKEN_TYPES),
 numeric columns through showdown.V4_NUMERIC_LEGACY_INDEX_BY_NEW_INDEX and the NUMERIC_* writer names (as
 engine_device_observation.column_manifest names them), categorical columns through the CATEGORY_* layout. Written as
 summary.json and summary.md in --out.
@@ -544,11 +546,12 @@ def showdown_percent(hp, maximum):
 
 
 def recompute_opp_hazard_credit(lines, owner):
-    """The env side of field 116 (the opponent's OPP_HAZARD_CREDIT) recomputed from the decision's own lines the way
+    """Field 116 (the opponent's OPP_HAZARD_CREDIT) recomputed from the decision's own lines the way
     constructor_worlds.fill_owner_spikes builds the view's: each of our Spikes hits (constructor_worlds.line_facts' owner_spikes:
     the exact HP before and after) at Showdown's public percent drop / 100 in float32, accumulated by the device's compensated
     float32 sum (engine_device_damage_history._add, here in numpy), then the encoder's column value min(1, max(0, sum / 6)).
-    NaN when a hit's previous HP is not on the lines; 0 without a hit."""
+    NaN when a hit's previous HP is not on the lines; 0 without a hit. It shares line_facts with the fill, so the report's use
+    of it is a self-consistency check (the percent rule and the summation are this function's own), not Foul Play's value."""
     from gpu_engine import constructor_worlds as cw
     hits = cw.line_facts(lines, owner).owner_spikes
     if hits is None:return np.float32(np.nan)
@@ -995,10 +998,10 @@ REDACTIONS = {
     'hp_percent': ('tokens 7-12 numeric 0 HP_FRACTION at Showdown\'s public percent: ceil(100 x), capped at 99 below max, 0 if fainted', 0,
         tuple(OPPONENT_TOKENS)),
     'self_hazard_credit': ('field numeric 115 SELF_HAZARD_CREDIT -> 0: the opponent\'s exact Spikes losses, redacted by design', 115, (0,)),
-    'opp_hazard_credit': ('field numeric 116 OPP_HAZARD_CREDIT: the env side recomputed from the decision\'s own lines as '
-        'constructor_worlds.fill_owner_spikes builds the view\'s (per-hit public percents, the device\'s compensated sum; '
-        'recompute_opp_hazard_credit) and compared exactly; without a recomputation (an earlier capture, a hit whose previous HP is not on '
-        'the lines) the env value is kept and compared within OPP_HAZARD_TOLERANCE, the per-hit percent rounding', 116, (0,)),
+    'opp_hazard_credit': ('field numeric 116 OPP_HAZARD_CREDIT: the env value replaced by recompute_opp_hazard_credit (the decision\'s '
+        'own lines through the same line_facts the view\'s fill reads: a self-consistency check of the view against its own rule, not '
+        'against Foul Play\'s value, which the raw parity table keeps); without a recomputation (an earlier capture, a hit whose previous '
+        'HP is not on the lines) the env value is kept and compared within OPP_HAZARD_TOLERANCE, the per-hit percent rounding', 116, (0,)),
 }
 # All five by default: the first, second and fourth are device_public_teacher.REPLY_HISTORY_APPROXIMATION's columns (the
 # opponent's exact own-HP history, never borrowed); the third is the opponent's public view of our HP; the fifth the precision
@@ -1028,8 +1031,8 @@ def redact(side, names=DEFAULT_REDACTIONS):
 
 def redact_pair(env, view, names=DEFAULT_REDACTIONS, recomputed=None):
     """(env, view) with `names` applied: redact on each side, then opp_hazard_credit: the env's field 116 replaced by its
-    recomputation where one exists (`recomputed` [n], NaN where none), else the view's taken where the two are within
-    OPP_HAZARD_TOLERANCE (a larger gap stays a difference)."""
+    recomputation where one exists (`recomputed` [n], NaN where none: a self-consistency check, recompute_opp_hazard_credit),
+    else the view's taken where the two are within OPP_HAZARD_TOLERANCE (a larger gap stays a difference)."""
     a, b = redact(env, names), redact(view, names)
     if 'opp_hazard_credit' in names:
         _, column, (token,) = REDACTIONS['opp_hazard_credit'];numeric = np.array(a['numeric'], copy=True);theirs = np.asarray(b['numeric'])[:, token, column]
@@ -1155,7 +1158,9 @@ def render_markdown(summary, *, top=30):
         out.append(f'| {kind} | {p["positions"]} | {_f(e["observation_and_legal"])} | {_f(e["observation"])} | {_f(e["numeric"])} | {_f(e["numeric_within_tolerance"])} | '
             f'{_f(e["categorical"])} | {_f(e["token_type"])} | {_f(e["attention"])} | {_f(e["legal"])} | {_f(p["order"]["self"])} | {_f(p["order"]["opponent"])} |')
     if s.get('parity_redacted'):
-        out += ['', '## Exact match except the documented redactions (applied to both sides)', '', *[f'- {k}: {v}' for k, v in s['redactions'].items()], '',
+        out += ['', '## Exact match except the documented redactions (applied to both sides)', '', *[f'- {k}: {v}' for k, v in s['redactions'].items()],
+            '', 'Field 116 with a recomputation is a self-consistency check (the same line parse as the view\'s fill); the raw tables below compare it '
+            'against Foul Play\'s value.', '',
             '| kind | positions | observation + legal | observation | numeric | categorical | legal | remaining numeric cells (top 5) | remaining categorical cells (top 5) |',
             '|---|---|---|---|---|---|---|---|---|']
         for kind, p in s['parity_redacted'].items():

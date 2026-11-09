@@ -71,8 +71,10 @@ dict keys and leaves two members None). This module turns prepared roots into De
   - a recharging active (fill_recharge): B2 holds "must recharge" beside its volatile bag and merges it in only when it
     encodes, so from_b2's copy of the bag lacked it and the encoder showed no volatile:mustrecharge (15 owner-view roots of
     the 160-battle replay: a Hyper Beam user's next decision). The lines carry B2's rule (-mustrecharge sets it; the side's
-    |cant| recharge, arrival or faint clears it), so the bit is set on that side's active, both sides. No device hook
-    writes it (the engine has no recharge turn), so in search it stays until a switch, like the other B2-only volatiles.
+    |cant| recharge, arrival or faint clears it), so the bit is set on that side's active, both sides. In search: no
+    device hook writes or clears the bit and the engine has no recharge turn, so at every node after the root it stays set
+    on that Pokemon while it stays in (the install hook's bag reset clears it on a switch), whether or not it would still
+    have to recharge there.
   - the peer's count of the owner's PP (fill_peer_pressure): from_b2 copies B2's uses, which charge an owner move twice only
     against a PUBLIC Pressure (public_abilities.move_context); Gen 3 Pressure is silent, and the peer knows its own
     ability, so the device move hook (the receiving observer's own active ability) and the env charge twice whenever the
@@ -532,8 +534,8 @@ def fill_recharge(public,facts):
     that fact in its own flag beside the volatile bag (public_active.ActiveState.recharge, merged into the bag only when it
     encodes: public_active.project, `bag=state.volatiles.at[...,RECHARGE_ID].set(state.recharge)`), so from_b2's copy of the
     bag (phase_d_live_worlds.py:311) drops it and the encoder showed no volatile:mustrecharge where B2 does. No device hook
-    writes it either (the engine models no recharge turn), so in search the bit stays until that Pokemon switches out (the
-    install hook clears the bag), as B2-only volatiles do."""
+    writes or clears the bit and the engine models no recharge turn, so at every in-search node after the root the bit stays
+    set on that Pokemon while it stays in (the install hook's bag reset clears it on a switch)."""
     from .public_active import NAMES
     b=_trackers(public)
     if facts is None or not any(facts.recharge):return public
