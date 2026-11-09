@@ -665,6 +665,9 @@ class EndToEndTests(unittest.TestCase):
         self.assertIsNone(decisions[3]['parity'])
         text = (out / 'summary.md').read_text()
         self.assertTrue(text.startswith('# RR'));self.assertIn('requested only: dropped, all', text)
+        # The reading of D is stated before the verdict: a priced gain, and the gate as the RR's validation.
+        self.assertEqual(text.splitlines()[2], S.SIGN_NOTE)
+        self.assertIn('D > 0 = priced above greedy', S.SIGN_NOTE);self.assertIn('upper 90% bound < 0', S.SIGN_NOTE)
         # Without --reply-prior: no external operators anywhere; tempered is scored like the others.
         self.assertEqual(summary['settings'], list(S.SETTINGS));self.assertEqual(summary['reported_only'], [])
         self.assertIsNone(cover['external_prior']);self.assertNotIn('external_br', first['operators'])
@@ -700,13 +703,34 @@ class EndToEndTests(unittest.TestCase):
         self.assertIn('external_mix:alpha=0.5', (out / 'summary.md').read_text())
 
 
-def guard_record(*, b=False, turn1=(), turn2=(), lanes=(None, None, None, None), a=False, tier_b=False):
+def guard_record(*, b=False, turn1=(), turn2=(), lanes=(None, None, None, None), a=False, tier_b=False, masses=()):
     """A minimal effect-guard record (pokezero.depthn_effect_guard.evaluate's fields the scorer reads): (b) reasons per source as
     (move, tier), our guarded lanes as (tier, class) or None."""
     reasons = [dict(move=m, side='opp', source='turn1', tier=t, effect_class='x', max_mass=.3, worlds=[0]) for m, t in turn1]
     reasons += [dict(move=m, side='own', source='turn2', tier=t, effect_class='x', max_mass=.2, worlds=[1]) for m, t in turn2]
     return dict(b=b or bool(reasons), b_turn1=bool(turn1), b_turn2=bool(turn2), reasons=reasons, a=a, tier_b_legal=tier_b,
-                own_guarded_lanes=[None if x is None else list(x) for x in lanes])
+                own_guarded_lanes=[None if x is None else list(x) for x in lanes], turn2_available=True,
+                masses=dict(turn1=[], turn2=list(masses)), conditions=dict(own=dict(members={}), opp=dict(members={})))
+
+
+def reach_guard_record(*, turn1=(), reach_tiers=None, unavailable=False, any_cell=False):
+    """A reach-rule record (the live rule) for GuardTests' decision (two waiting worlds, our legal lanes 0, 1, 4): reach_tiers
+    {side: {tier: mass}} puts a guarded turn-2 entry (Destiny Bond for A, Spore for C) of that mass at every expanded cell, so
+    its reach M is the sum of its tiers' masses whatever our prior; unavailable a lost capture; any_cell the any-cell arm's hit."""
+    r = guard_record(turn1=turn1);moves = dict(A='destinybond', C='spore')
+    tiers = {side: {**dict(A=0., C=0.), **(reach_tiers or {}).get(side, {})} for side in ('own', 'opp')}
+    entries = [dict(move=moves[t], side=side, world=w, cell=a * 9, mass=v, guarded=True)
+               for side, per in tiers.items() for t, v in per.items() if v for w in (0, 1) for a in (0, 1, 4)]
+    m = {side: None if unavailable else sum(tiers[side].values()) for side in ('own', 'opp')}
+    trips = unavailable or max(m.values()) >= S.effect_guard.THRESHOLD
+    lost = [dict(move=None, side=None, source='turn2_unavailable', tier=None, effect_class=None, max_mass=None, worlds=[])] if unavailable else []
+    hit = [dict(move='curse', side='opp', source='turn2', tier='A', effect_class='x', max_mass=.6, worlds=[0])] if any_cell else []
+    r.update(rule=S.effect_guard.RULE, b=bool(turn1) or trips, b_turn2=trips, m_own=m['own'], m_opp=m['opp'],
+             reach=dict(m_own=m['own'], m_opp=m['opp'], tripped=trips, unavailable=unavailable, tiers=None if unavailable else tiers),
+             any_cell_turn2=bool(lost or hit), any_cell_b=bool(turn1 or lost or hit), any_cell_tripped=bool(turn1 or lost or hit),
+             any_cell_reasons=lost + hit, reasons=[x for x in r['reasons'] if x['source'] == 'turn1'] + lost,
+             turn2_available=not unavailable, masses=dict(turn1=[], turn2=None if unavailable else entries))
+    return r
 
 
 class GuardTests(unittest.TestCase):
@@ -780,9 +804,85 @@ class GuardTests(unittest.TestCase):
         with redirect_stdout(io.StringIO()):self.assertEqual(S.main(['--rows', str(path), '--run-directory', str(run), '--out', str(e2e.root / 'out')]), 0)
         summary = json.loads((e2e.root / 'out' / 'summary.json').read_text());g = summary['guard']
         self.assertEqual((g['priced_roots'], g['union']['total'], g['opponent_recharge_refused'], g['primary']['roots']), (6, 1, 1, 5))
-        first = json.loads((e2e.root / 'out' / 'decisions.jsonl').read_text().splitlines()[0])
+        decisions = [json.loads(x) for x in (e2e.root / 'out' / 'decisions.jsonl').read_text().splitlines()];first = decisions[0]
         self.assertTrue(all(o['choice'] == first['greedy_action'] for o in first['operators'].values()))
         self.assertIn('# Effect guard', (e2e.root / 'out' / 'summary.md').read_text())
+        # the reach fields on every scored decision (the measurement session keys on these names)
+        self.assertEqual(set(first['reach_turn2']), {'m_own_lower', 'm_own_upper', 'm_opp_lower', 'm_opp_upper', 'tripped', 'exact'})
+        self.assertEqual((first['reach_turn2']['tripped'], first['reach_scope_tripped_lower'], first['reach_scope_tripped_upper']), (False, True, True))   # turn 1
+        self.assertEqual((decisions[1]['reach_scope_tripped_lower'], decisions[1]['reach_scope_tripped_upper']), (False, False))
+        r = g['reach'];self.assertEqual((r['rows'], r['ambiguous'], r['lower']['roots'], r['upper']['turn1']), (6, 0, 1, 1))
+        self.assertEqual(r['lower']['cross_tab'], {'any_cell/reach': 1, 'any_cell/reach_clear': 0, 'any_cell_clear/reach': 0, 'any_cell_clear/reach_clear': 5})
+        self.assertIn('# Guard reach', (e2e.root / 'out' / 'summary.md').read_text())
+
+    def test_the_primary_follows_the_records_live_rule(self):
+        """A reach record (rule 'reach'): its b (turn-1 (b) or the reach M >= 5%) guards the primary; its any-cell arm is reported
+        only. Here the any-cell arm trips (a 60% guarded prior at one cell) while the reach does not: the operators play their own
+        choices, the any-cell scope's play greedy, and the cross-tab says so."""
+        def live_record(*, reach_trips):
+            r = guard_record(turn2=[('destinybond', 'A')])
+            r.update(rule=S.effect_guard.RULE, b=reach_trips, b_turn1=False, b_turn2=reach_trips, any_cell_turn2=True, any_cell_b=True,
+                     any_cell_tripped=True, m_own=0., m_opp=.08 if reach_trips else .01, arms=['reach'] if reach_trips else [],
+                     reach=dict(m_own=0., m_opp=.08 if reach_trips else .01, tripped=reach_trips, unavailable=False,
+                                tiers=dict(own=dict(A=0., C=0.), opp=dict(A=.08 if reach_trips else .01, C=0.))))
+            return r
+        quiet = self.score(live_record(reach_trips=False))
+        self.assertEqual((quiet['operators']['averaging']['choice'], quiet['operators']['averaging']['guard_causes']), (0, None))   # unguarded
+        self.assertEqual(quiet['reach_operators']['any_cell']['averaging']['choice'], 1)   # the any-cell scope would play greedy
+        self.assertEqual((quiet['guard']['rule'], quiet['guard']['b'], quiet['guard']['any_cell']['b'], quiet['guard']['m_opp']), ('reach', False, True, .01))
+        loud = self.score(live_record(reach_trips=True))
+        self.assertEqual((loud['operators']['averaging']['choice'], loud['guard']['tiers_turn2'], loud['guard']['turn2']), (1, ['A'], True))
+        def record(guard, ops):
+            return dict(ordinal=0, half='even', kind='move', observed=True, fp_requested=True, guard=guard, raw_ops=ops, reach_ops=dict(any_cell=ops, lower=ops, upper=ops),
+                        ops=ops)
+        ops = {n: (0, (.1, .1), '<1%') for n in S.SETTINGS};ops['greedy'] = (1, (0., 0.), '<1%')
+        g = S.guard_report([record(quiet['guard'], ops), record(loud['guard'], ops)], S.SETTINGS)
+        self.assertEqual((g['rules'], g['union']['total'], g['union']['turn2_added']), ({'reach': 2}, 1, 1))
+        self.assertEqual((g['any_cell']['roots'], g['any_cell']['turn2_added'], g['any_cell']['cross_tab']),
+            (2, 2, {'any_cell/live': 1, 'any_cell/live_clear': 1, 'any_cell_clear/live': 0, 'any_cell_clear/live_clear': 0}))
+        self.assertIn('# Any-cell scope', '\n'.join(S.any_cell_markdown(g['any_cell'], S.SETTINGS)))
+
+    def test_the_report_only_scopes_on_old_and_reach_rows(self):
+        """Old rows: the any-cell scope is the live one (a diagonal cross-tab). Reach rows: the union splits a reach trip (turn 2)
+        from an unavailable capture; a trip lists every tier whose mass contributes (A + C); the reach section's any-cell column
+        reads the record's any-cell fields, not its live (b)."""
+        def record(guard):
+            ops = {n: (0, (.1, .1), '<1%') for n in S.SETTINGS};ops['greedy'] = (1, (0., 0.), '<1%')
+            return dict(ordinal=0, half='even', kind='move', observed=True, fp_requested=True, guard=guard, raw_ops=ops, ops=ops,
+                        reach_ops=dict(any_cell=ops, lower=ops, upper=ops))
+        old = [self.score(guard_record(turn1=[('curse', 'A')])), self.score(guard_record())]
+        g = S.guard_report([record(x['guard']) for x in old], S.SETTINGS)
+        self.assertEqual((g['rules'], g['any_cell']['rows'], g['any_cell']['roots'], g['any_cell']['unguarded']['roots']), ({'any_cell': 2}, 2, 1, 1))
+        self.assertEqual(g['any_cell']['cross_tab'], {'any_cell/live': 1, 'any_cell/live_clear': 0, 'any_cell_clear/live': 0, 'any_cell_clear/live_clear': 1})
+        both = self.score(reach_guard_record(reach_tiers=dict(own=dict(A=.03, C=.03))))   # neither tier alone crosses 5%
+        self.assertEqual((both['guard']['turn2'], both['guard']['tiers_turn2']), (True, ['A', 'C']))
+        self.assertEqual(both['guard']['tier_masses_turn2'], dict(own=dict(A=.03, C=.03)))
+        lost = self.score(reach_guard_record(unavailable=True))
+        clear = self.score(reach_guard_record(any_cell=True))   # only the any-cell arm would trip
+        self.assertEqual((lost['guard']['turn2'], lost['guard']['unavailable'], clear['guard']['b'], clear['guard']['any_cell']['b']), (False, True, False, True))
+        g = S.guard_report([record(x['guard']) for x in (both, lost, clear)], S.SETTINGS)
+        u = g['union'];self.assertEqual((u['turn1'], u['turn2_added'], u['unavailable_or_error'], u['total']), (0, 1, 1, 2))
+        self.assertEqual((g['tiers']['A']['turn2_added'], g['tiers']['C']['turn2_added']), (1, 1))
+        # both: the reach trips, the any-cell arm does not; lost: both trip, fail closed; clear: the record's any-cell arm, not its (b)
+        self.assertEqual(g['reach']['lower']['cross_tab'], {'any_cell/reach': 1, 'any_cell/reach_clear': 1, 'any_cell_clear/reach': 1, 'any_cell_clear/reach_clear': 0})
+        self.assertEqual((g['reach']['lower']['tiers']['A']['roots'], g['reach']['lower']['tiers']['C']['roots']), (2, 2))   # both and lost
+
+    def test_reach_scopes_per_row(self):
+        """The reach on a scored row: a turn-2 mass whose bounds straddle 5% is ambiguous (lower clear, upper guarded); the operators
+        follow each scope's own guard; the report counts it and its cross-tab against the any-cell scope."""
+        legal = self.legal;d = decision(waiting_worlds([{0: .5, 1: .1, 4: -.2}] * 2, legal), greedy=1, root_legal=legal)   # 2 waiting worlds
+        # Spore (tier C, no guarded flag) at our lane 0 against the waiting reply 0 in both worlds: M_own upper = pi_own(0) * .5
+        spore = [dict(side='own', world=w, move='spore', mass=.5, cell=0 * 9 + 0) for w in (0, 1)]
+        d.update(effect_guard=guard_record(turn2=[('spore', 'C')], masses=spore), own_moves=None)
+        out = S.score_decision(d, S.Reply('wait', None, None, ''), None, collections.Counter())
+        reach = out['guard']['reach'];prior = S.effect_guard.masses(d['root_logits'], d['root_legal'])
+        self.assertAlmostEqual(reach['m_own_upper'], prior[0] * .5, places=15);self.assertEqual(reach['m_own_lower'], 0.)
+        self.assertEqual((reach['tripped'], out['guard']['scopes']), (None, dict(lower=False, upper=True)))
+        self.assertEqual(out['reach_operators']['lower']['averaging']['choice'], 0)   # the lower scope's averaging plays its own choice
+        self.assertEqual(out['reach_operators']['upper']['averaging']['choice'], 1)   # the upper scope guards it: greedy
+        self.assertEqual(out['operators']['averaging']['choice'], 1)   # and the any-cell scope (b from its turn-2 reason) too
+        fields = S.reach_fields(out['guard'])
+        self.assertEqual((fields['reach_turn2']['tripped'], fields['reach_scope_tripped_lower'], fields['reach_scope_tripped_upper']), (None, False, True))
 
 
 OWN_MOVES = ['surf', 'icebeam', 'recover', 'thunderbolt']

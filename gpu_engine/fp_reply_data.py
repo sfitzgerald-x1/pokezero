@@ -128,7 +128,10 @@ def hp_fraction(request):
 # The env's OPP_HAZARD_CREDIT in Foul Play's view sums our exact HP fractions lost to Spikes (showdown.py's hazard_damage_suffered,
 # read off the omniscient stream). Foul Play sees our HP only as Showdown's public percent, and the search's peer view (the
 # constructor's fill_owner_spikes, the device's engine_device_public_port.spikes) sums each hit's public-percent drop / 100 in float32
-# with a compensated (TwoSum) sum. fp_view_opp_hazard_credit is that rule on the env's own lines, written as the feature value.
+# with a compensated (TwoSum) sum. fp_view_opp_hazard_credit is that rule on the env's own lines, written as the feature value,
+# with the device's jitted float32 arithmetic (the GPU-built peer views, e.g. the 48-cell capture). The live root's
+# fill_owner_spikes runs its per-hit / 100 eagerly on the CPU, an exactly rounded division: on about 1% of rows that is one
+# float32 ulp (~1e-9) away from this value, immaterial for the reply model.
 SWITCH_KINDS = ('switch', 'drag', 'replace')
 HAZARD_CREDIT_DIVISOR = 6.   # engine_device_features.FIELD_FIELDS['opp_hazard_credit'] and showdown's / _TEAM_SIZE
 OPP_HAZARD_CREDIT_COLUMN = 116   # field token 0's numeric column: showdown.v4_numeric_index(NUMERIC_OPP_HAZARD_CREDIT)
@@ -194,9 +197,10 @@ def fp_view_opp_hazard_credit(lines, victim):
     """Foul Play's OPP_HAZARD_CREDIT feature value (v4 field token 0, numeric column 116) for victim = our seat ('p1' / 'p2'):
     clip((high + low) * float32(1/6), 0, 1) in float32 of the TwoSum over our Spikes hits of
     (shown_percent(before) - shown_percent(after)) * float32(1/100); 0 when a hit's previous HP is unknown, as the search side
-    leaves it. Both divisions are the float32 reciprocal multiplications XLA compiles the device's `/ 100` and `/ 6.` into
-    (10 * float32(0.01) rounds to 0.099999994, not 0.1): a correctly rounded division is one ulp off on 21 of the 48-cell
-    check's 1,622 rows."""
+    leaves it. Both divisions are the float32 reciprocal multiplications XLA compiles the device's jitted `/ 100` and `/ 6.`
+    into (10 * float32(0.01) rounds to 0.099999994, not 0.1): a correctly rounded division is one ulp off on 21 of the 48-cell
+    check's 1,622 rows. The live root's fill_owner_spikes divides the per-hit drop eagerly on the CPU (exactly rounded), so
+    there this value can be one ulp off (module comment above)."""
     hits = spikes_hits(lines, victim);high = low = np.float32(0)
     for before, after, maximum in hits or ():
         drop = max(0, shown_percent(before, maximum) - shown_percent(after, maximum))

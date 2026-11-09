@@ -53,6 +53,18 @@ is under the guards. The guard section (summary.json guard, summary.md "Effect g
 per tier and for the union (turn-1 and turn-2-added parts apart), (c) per operator, the primary result (RR on unguarded roots,
 (b) false), RR on the guarded roots with the raw choices for context, a tier-B-legal split of the unguarded roots, the
 sensitivity rows ((a) holds, neither (b) nor any operator's (c)), and above_20pct when the guarded share exceeds 20%.
+Live rule (screen-r2): a record of rule 'reach' trips on turn-1 (b), the reach M (below) >= 5% or (c); the primary, gate and
+selection follow each record's own live rule (an older record's: the any-cell turn-2 arm). The any-cell scope is reported
+only (summary guard.any_cell, summary.md "Any-cell scope": its share, RR on its unguarded roots, a cross-tab against live).
+Guard reach (report only; the lead's narrower scope): per row M_s = sum_w p_w sum_(a,b) pi_own(a) pi_peer,w(b) q_(w,ab),s
+(pokezero.depthn_effect_guard.reach over the row's effect_guard masses, root prior and worlds), exact when the record's turn-2
+masses carry the guard's own `guarded` flag, else lower (tier A, and Psycho Boost under a revealed White Herb holder) and upper
+(every tier-C mass) bounds; the
+reach scope at each bound is turn-1 (b) or a turn-2 M >= 5%, (c) per operator unchanged. decisions.jsonl gains reach_turn2
+{m_own_lower, m_own_upper, m_opp_lower, m_opp_upper, tripped (None: the bounds straddle 5%), exact} and
+reach_scope_tripped_lower / _upper; summary guard.reach and summary.md "Guard reach" report each bound's share (union, turn 1
+and reach-turn-2-added, per tier, per side), the ambiguous rows, RR on each bound's unguarded roots and a cross-tab against the
+any-cell scope.
 Statistics: D is summed per battle (ordinal); mean and SE over battles; a t interval with battles - 1 df at 90% for the
 mean per-battle sum. The per-decision mean D is sum D / decisions, and its interval is the per-battle one divided by
 the mean decisions per battle (the same t statistic, so the same signs). Parity, over every row searched live (source 'search'):
@@ -123,6 +135,10 @@ SCHEMA = 'pokezero.depthn-rr-score.v2'   # v2: operator_set, the definitive set 
 LEVEL = .90
 OVERRIDE_MIN = .05
 PARITY_MIN = .99
+# How to read D (stated at the top of every summary.md): R is the champion's priced value, so D > 0 is a priced gain, not a
+# live result; the gate is the RR's validation, which must reproduce the live harm before the RR may select anything.
+SIGN_NOTE = ('Reading: D = R(op) - R(greedy) in the champion\'s priced values; D > 0 = priced above greedy. The validation gate '
+             'needs averaging\'s upper 90% bound < 0 (the RR reproducing the live harm) before any operator is selected.')
 PARITY_MODES = ('live', 'replay')   # live: against the live search (the default); replay: the replay against itself (a modified tree)
 PRIOR_C = (.02, .05, .1, .2, .5)
 NOISE_K = (1, 2)
@@ -594,17 +610,18 @@ def operators(worlds, gs, average, greedy, root_logits, root_legal, target, fail
     return out, fallback
 
 
-def guard_choices(choices, greedy, own_moves, record):
+def guard_choices(choices, greedy, own_moves, record, b=None):
     """Every operator's choice after the live actor's guards (pokezero.depthn_effect_guard, the same functions): greedy plays
     where the own-recharge guard (an override INTO a recharge move greedy did not choose) or UNREPRESENTED_EFFECT ((b) at the
     root, or (c) on this operator's own choice) trips. Returns ({name: played choice}, {name: [causes] or None}); greedy is
-    never guarded; `record` None (a row without the guard) applies the recharge guard alone."""
+    never guarded; `record` None (a row without the guard) applies the recharge guard alone. `b` replaces the record's root-level
+    (b) (the reach scopes: turn-1 (b) or the reach's turn 2); (c) stays the record's."""
     played, causes = {}, {}
     for name, choice in choices.items():
         if name == 'greedy' or choice is None:played[name], causes[name] = choice, None;continue
         why = []
         if effect_guard.recharge_guarded(own_moves, choice, greedy):why.append(OWN_RECHARGE)
-        if record is not None and effect_guard.trips(record, choice)['tripped']:why.append(UNREPRESENTED)
+        if record is not None and ((record['b'] if b is None else b) or effect_guard.trips(record, choice)['c']):why.append(UNREPRESENTED)
         played[name], causes[name] = (greedy if why else choice), (why or None)
     return played, causes
 
@@ -704,6 +721,12 @@ def score_decision(decision, reply, target, failures, base=None, external=None, 
     if definitive is not None:
         found, weights = definitive_operators(worlds, legal, model, logliks, failures);raw.update(found)
     choices, guards = guard_choices(raw, greedy, decision.get('own_moves'), record)
+    reach = None if record is None else effect_guard.reach(record, logits, legal, decision['worlds'])
+    scopes = None if reach is None else {scope: bool(record.get('b_turn1')) or reach[f'tripped_{scope}'] for scope in ('lower', 'upper')}
+    reach_choices = {} if scopes is None else {scope: guard_choices(raw, greedy, decision.get('own_moves'), record, b=b)[0] for scope, b in scopes.items()}
+    if record is not None:   # the any-cell scope (report only): the record's any-cell (b), (c) per operator
+        reach_choices['any_cell'] = guard_choices(raw, greedy, decision.get('own_moves'), record,
+            b=bool(record['any_cell_b']) if record.get('rule') == effect_guard.RULE else bool(record['b']))[0]
     lanes, drops = [], {}
     if reply.cause is None:
         for w, (world, facts) in enumerate(zip(worlds, decision['worlds'])):
@@ -724,9 +747,10 @@ def score_decision(decision, reply, target, failures, base=None, external=None, 
     ops, raw_ops = {}, {}
     for name, choice in choices.items():ops[name] = dict(entry_of(choice), raw_choice=raw[name], guard_causes=guards[name])
     for name, choice in raw.items():raw_ops[name] = entry_of(choice)
+    reach_ops = {scope: {name: entry_of(choice) for name, choice in c.items()} for scope, c in reach_choices.items()}
     greedy_argmax = argmax(logits, [a for a in range(9) if legal[a]])
     return dict(observed=observed, unmapped=reply.cause is None and not lanes, mapped_worlds=[list(x) for x in lanes], raw_operators=raw_ops,
-                guard=None if record is None else guard_facts(record, raw),
+                guard=None if record is None else dict(guard_facts(record, raw), reach=reach, scopes=scopes), reach_operators=reach_ops,
                 world_drops=drops, R=dict(dropped=r_dropped, pi_filled=r_filled), operators=ops, averaging_q=list(average.q),
                 greedy_argmax=greedy_argmax, target_fallback=fallback, worlds=len(worlds), external_missing_worlds=external_missing,
                 world_weights=weights, effective_worlds=None if weights is None else math.fsum(weights) ** 2 / math.fsum(w * w for w in weights),
@@ -734,12 +758,34 @@ def score_decision(decision, reply, target, failures, base=None, external=None, 
 
 
 def guard_facts(record, raw):
-    """A root's guard facts for the report: (b) at turn 1 / turn 2, the tiers of its (b) reasons per source, (a), tier-B
-    legality, and per operator whether (c) trips on its raw choice."""
-    tiers = lambda source: sorted({r['tier'] for r in record.get('reasons') or () if r.get('source') == source and r.get('tier')})
-    turn2 = any(r.get('source') == 'turn2' for r in record.get('reasons') or ())   # a priced turn-2 reason, not an unavailable capture
-    return dict(b=bool(record['b']), b_turn1=bool(record.get('b_turn1')), b_turn2=bool(record.get('b_turn2')), turn2=turn2, tiers_turn1=tiers('turn1'),
-                tiers_turn2=tiers('turn2'), unavailable=any(r.get('source') in ('turn2_unavailable', 'guard_error') for r in record.get('reasons') or ()),
+    """A root's guard facts for the report under the record's own live rule: (b) at turn 1 / turn 2, the tiers of each arm, (a),
+    tier-B legality, per operator whether (c) trips on its raw choice, and the any-cell arm (report only). A reach record
+    (rule 'reach', screen-r2 on): its turn-2 arm is the reach M (its tiers: a side's tier mass >= THRESHOLD), unavailable /
+    error its fail-closed part; an older record's turn-2 arm is the any-cell one (its turn-2 reasons), and its any-cell scope
+    is its live scope."""
+    reasons = record.get('reasons') or ()
+    tiers = lambda source: sorted({r['tier'] for r in reasons if r.get('source') == source and r.get('tier')})
+    sides1 = sorted({r['side'] for r in reasons if r.get('source') == 'turn1' and r.get('side')})
+    live_reach = record.get('rule') == effect_guard.RULE
+    # the any-cell arm's hits: a reach record keeps them under any_cell_reasons (6eefb119's records still in reasons)
+    any_reasons = record.get('any_cell_reasons', reasons) if live_reach else reasons
+    any_turn2 = any(r.get('source') == 'turn2' for r in any_reasons)   # a priced any-cell turn-2 hit, not an unavailable capture
+    masses2 = {}
+    if live_reach:
+        arm = record.get('reach') or {};unavailable = bool(arm.get('unavailable'))
+        turn2 = bool(record.get('b_turn2')) and not unavailable
+        # a trip is the tiers whose combined mass crosses THRESHOLD on a side: every contributing tier, with its own mass
+        for side, per in (arm.get('tiers') or {}).items():
+            if (arm.get(f'm_{side}') or 0.) >= effect_guard.THRESHOLD:masses2[side] = {t: m for t, m in per.items() if m > 0}
+        tiers2 = sorted({t for per in masses2.values() for t in per})
+    else:
+        turn2, tiers2 = any_turn2, tiers('turn2')
+        unavailable = any(r.get('source') in ('turn2_unavailable', 'guard_error') for r in reasons)
+    any_b = bool(record['any_cell_b']) if live_reach else bool(record['b'])
+    return dict(rule=record.get('rule', 'any_cell'), b=bool(record['b']), b_turn1=bool(record.get('b_turn1')), b_turn2=bool(record.get('b_turn2')),
+                turn2=turn2, tiers_turn1=tiers('turn1'), sides_turn1=sides1, tiers_turn2=tiers2, tier_masses_turn2=masses2, unavailable=unavailable,
+                m_own=record.get('m_own'), m_opp=record.get('m_opp'), arms=record.get('arms'),
+                any_cell=dict(b=any_b, turn2=any_turn2, unavailable=any(r.get('source') in ('turn2_unavailable', 'guard_error') for r in list(any_reasons) + list(reasons))),
                 a=bool(record.get('a')), tier_b_legal=bool(record.get('tier_b_legal')),
                 c={name: effect_guard.trips(record, choice)['c'] for name, choice in raw.items() if choice is not None})
 
@@ -798,6 +844,59 @@ def operator_table(records, settings):
     return {scoring: {name: operator_metric(population(records, scoring), name, scoring) for name in settings} for scoring in SCORINGS}
 
 
+def reach_fields(guard):
+    """decisions.jsonl's reach fields (the measurement session keys on these names): reach_turn2 = {m_own_lower, m_own_upper,
+    m_opp_lower, m_opp_upper, tripped (None: the bounds straddle the threshold), exact}, reach_scope_tripped_lower and _upper
+    (turn-1 (b) or the reach's turn 2 at that bound; (c) applies per operator). All None for a row without the guard record."""
+    if guard is None or guard.get('reach') is None:
+        return dict(reach_turn2=None, reach_scope_tripped_lower=None, reach_scope_tripped_upper=None)
+    r = guard['reach']
+    return dict(reach_turn2={k: r[k] for k in ('m_own_lower', 'm_own_upper', 'm_opp_lower', 'm_opp_upper', 'tripped', 'exact')},
+                reach_scope_tripped_lower=guard['scopes']['lower'], reach_scope_tripped_upper=guard['scopes']['upper'])
+
+
+def reach_report(have, settings):
+    """The reach scopes (report only; module docstring) over the rows with the guard record: per bound its guarded share
+    (union; turn 1 and reach-turn-2-added; per tier and per side, turn 1 or the reach), the ambiguous rows, RR on its unguarded
+    roots under its own guards, and a cross-tab against the any-cell scope."""
+    have = [r for r in have if r['guard'].get('reach') is not None]   # rows scored here (score_decision's reach)
+    n = len(have);share = lambda k: k / n if n else None;g = lambda r: r['guard']
+    out = dict(rows=n, threshold=effect_guard.THRESHOLD, ambiguous=sum(g(r)['reach']['tripped'] is None for r in have),
+               exact_rows=sum(bool(g(r)['reach']['exact']) for r in have), unavailable=sum(bool(g(r)['reach']['unavailable']) for r in have))
+    for scope in ('lower', 'upper'):
+        reach2 = lambda r: bool(g(r)['reach'][f'tripped_{scope}'])
+        # a tripping side's every contributing tier (mass > 0), so an A + C combination is not dropped
+        tier = lambda r, t: (t in g(r)['tiers_turn1']) or g(r)['reach']['unavailable'] or (g(r)['reach']['tiers'] is not None and any(
+            v[t] > 0 and (g(r)['reach'][f'm_{side}_{scope}'] or 0.) >= effect_guard.THRESHOLD for side, v in g(r)['reach']['tiers'][scope].items()))
+        side = lambda r, s: (s in g(r)['sides_turn1']) or g(r)['reach']['unavailable'] or (
+            (g(r)['reach'][f'm_{s}_{scope}'] or 0.) >= effect_guard.THRESHOLD)
+        guarded = [r for r in have if g(r)['scopes'][scope]];clean = [r for r in have if not g(r)['scopes'][scope]]
+        t1 = sum(g(r)['b_turn1'] for r in have);added = sum(reach2(r) and not g(r)['b_turn1'] for r in have)
+        cross = collections.Counter((('any_cell' if g(r)['any_cell']['b'] else 'any_cell_clear'), ('reach' if g(r)['scopes'][scope] else 'reach_clear'))
+                                    for r in have)
+        out[scope] = dict(roots=len(guarded), share=share(len(guarded)), turn1=t1, turn1_share=share(t1), turn2_added=added, turn2_added_share=share(added),
+            tiers={t: dict(roots=sum(tier(r, t) for r in have), share=share(sum(tier(r, t) for r in have))) for t in ('A', 'C')},
+            sides={s: dict(roots=sum(side(r, s) for r in have), share=share(sum(side(r, s) for r in have))) for s in ('own', 'opp')},
+            unguarded=dict(roots=len(clean), table=operator_table([dict(r, ops=r['reach_ops'][scope]) for r in clean], settings)),
+            cross_tab={f'{a}/{b}': cross[(a, b)] for a in ('any_cell', 'any_cell_clear') for b in ('reach', 'reach_clear')})
+    return out
+
+
+def any_cell_report(have, settings):
+    """The any-cell scope (report only, the mirror of the reach section): turn-1 (b) or a guarded turn-2 prior >= THRESHOLD at
+    any expanded cell, (c) per operator. Its guarded share (union, turn 1 vs any-cell-turn-2-added, unavailable or error), RR
+    on its unguarded roots under its own guards, and a cross-tab against the live scope (the record's rule)."""
+    have = [r for r in have if 'any_cell' in (r.get('reach_ops') or {})];n = len(have);share = lambda k: k / n if n else None;g = lambda r: r['guard']
+    guarded = [r for r in have if g(r)['any_cell']['b']];clean = [r for r in have if not g(r)['any_cell']['b']]
+    t1 = sum(g(r)['b_turn1'] for r in have);added = sum(g(r)['any_cell']['turn2'] and not g(r)['b_turn1'] for r in have)
+    error = sum(g(r)['any_cell']['b'] and not g(r)['b_turn1'] and not g(r)['any_cell']['turn2'] for r in have)
+    cross = collections.Counter((('any_cell' if g(r)['any_cell']['b'] else 'any_cell_clear'), ('live' if g(r)['b'] else 'live_clear')) for r in have)
+    return dict(rows=n, rules=dict(collections.Counter(g(r)['rule'] for r in have)), roots=len(guarded), share=share(len(guarded)),
+        turn1=t1, turn1_share=share(t1), turn2_added=added, turn2_added_share=share(added), unavailable_or_error=error,
+        unguarded=dict(roots=len(clean), table=operator_table([dict(r, ops=r['reach_ops']['any_cell']) for r in clean], settings)),
+        cross_tab={f'{a}/{b}': cross[(a, b)] for a in ('any_cell', 'any_cell_clear') for b in ('live', 'live_clear')})
+
+
 def guard_report(records, settings, opponent_recharge=0):
     """The effect guard over the scored (priced) roots that carry its record (module docstring): its share of them per tier
     and for the union, turn-1 and turn-2-added parts apart, (c) per operator; the primary result, RR on the unguarded roots
@@ -827,7 +926,9 @@ def guard_report(records, settings, opponent_recharge=0):
         tier_b=dict(legal=dict(roots=sum(g(r)['tier_b_legal'] for r in unguarded), table=operator_table([r for r in unguarded if g(r)['tier_b_legal']], settings)),
                     not_legal=dict(roots=sum(not g(r)['tier_b_legal'] for r in unguarded),
                                    table=operator_table([r for r in unguarded if not g(r)['tier_b_legal']], settings))),
-        sensitivity=dict(roots=len(sensitive), share=share(len(sensitive)), table=operator_table(sensitive, settings)))
+        sensitivity=dict(roots=len(sensitive), share=share(len(sensitive)), table=operator_table(sensitive, settings)),
+        reach=reach_report(have, settings), any_cell=any_cell_report(have, settings),
+        rules=dict(collections.Counter(r['guard']['rule'] for r in have)))
 
 
 def validation_gate(table):
@@ -1040,11 +1141,14 @@ def process(decision, run, coverage, prior=None, parity_mode='live', weights=Non
                  mapped_worlds=scored['mapped_worlds'], world_drops={str(k): v for k, v in scored['world_drops'].items()},
                  live_action=decision['live_action'], averaging_action=chosen, greedy_action=decision['greedy_action'],
                  greedy_argmax=scored['greedy_argmax'], target_fallback=scored['target_fallback'], R=scored['R'], operators=ops, guard=scored['guard'],
+                 **reach_fields(scored['guard']),
                  external_missing_worlds=scored['external_missing_worlds'], world_weights=scored['world_weights'],
                  effective_worlds=scored['effective_worlds'], max_world_weight=scored['max_world_weight'])
     record = dict(ordinal=ordinal, half=half, kind=decision['request_kind'], observed=scored['observed'], fp_requested=reply.kind != 'wait',
                   ops={n: (o['choice'], (o['D']['dropped'], o['D']['pi_filled']), o['band']) for n, o in ops.items()},
                   raw_ops={n: (o['choice'], (o['D']['dropped'], o['D']['pi_filled']), o['band']) for n, o in scored['raw_operators'].items()},
+                  reach_ops={scope: {n: (o['choice'], (o['D']['dropped'], o['D']['pi_filled']), o['band']) for n, o in ops_.items()}
+                             for scope, ops_ in scored['reach_operators'].items()},
                   guard=scored['guard'])
     return entry, record
 
@@ -1131,7 +1235,7 @@ HEADER = '| setting | override | mean D | 90% CI | per-battle mean D | battles |
 def markdown(summary):
     cover, table, gate, selection, confirmation = (summary[k] for k in ('coverage', 'metrics', 'gate', 'selection', 'confirmation'))
     settings = summary['settings']
-    out = ['# RR (realized-reply re-pricing) score', '', f"**Verdict: {summary['verdict']}** (operator set: {summary['operator_set']})", '',
+    out = ['# RR (realized-reply re-pricing) score', '', SIGN_NOTE, '', f"**Verdict: {summary['verdict']}** (operator set: {summary['operator_set']})", '',
            f"Scope of the verdict: {summary['scope']}", '', f"Scoring rule: {summary['scoring_rule']}", '',
            f"Dropped battles (no operator scores them): {cover['dropped_battles']['battles']} {cover['dropped_battles']['by_reason']}", '',
            f"- Parity (rows searched live: replay COMPLETE, recomputed averaging's action == live, q == replay q): "
@@ -1198,6 +1302,8 @@ def guard_markdown(guard, settings):
     if guard is None:return []
     u, t = guard['union'], guard['tiers']
     out = ['# Effect guard (UNREPRESENTED_EFFECT; every operator plays greedy where a guard trips)', '',
+           f"- live rule per record: {guard.get('rules')} (reach: turn-1 (b), the reach M_own or M_opp >= 5%, or (c); any_cell: an older "
+           "record's any-cell turn-2 arm). The primary, the gate and the selection follow each record's live rule.",
            f"- priced roots with the guard record: {guard['priced_roots']} (without one: {guard['without_record']}); refused "
            f"OPPONENT_RECHARGE_UNREPRESENTED (no priced worlds, greedy plays): {guard['opponent_recharge_refused']}",
            f"- (b) guarded share: {_pct(guard['guarded_share'])} (turn 1 {_pct(u['turn1_share'])}, turn 2 added {_pct(u['turn2_added_share'])}, "
@@ -1218,6 +1324,45 @@ def guard_markdown(guard, settings):
                           guard['sensitivity']['table'])):
         for scoring in SCORINGS:
             out += ['', f'## {title}: {scoring}', '', HEADER] + [_metric_row(name, block[scoring][name]) for name in settings]
+    return out + [''] + reach_markdown(guard.get('reach'), settings) + any_cell_markdown(guard.get('any_cell'), settings)
+
+
+def any_cell_markdown(any_cell, settings):
+    """summary.md's any-cell section (report only)."""
+    if not any_cell or not any_cell['rows']:return []
+    c = any_cell['cross_tab']
+    out = ['# Any-cell scope (report only; the pre-screen-r2 turn-2 arm)', '',
+           f"Rows {any_cell['rows']} ({any_cell['rules']}): guarded {any_cell['roots']} ({_pct(any_cell['share'])}): turn 1 {any_cell['turn1']} "
+           f"({_pct(any_cell['turn1_share'])}), any-cell turn 2 added {any_cell['turn2_added']} ({_pct(any_cell['turn2_added_share'])}), unavailable or "
+           f"error {any_cell['unavailable_or_error']}. Against the live scope: any-cell and live {c['any_cell/live']}, any-cell only "
+           f"{c['any_cell/live_clear']}, live only {c['any_cell_clear/live']}, neither {c['any_cell_clear/live_clear']}."]
+    block = any_cell['unguarded']
+    for scoring in SCORINGS:
+        out += ['', f"## Any-cell scope: RR on its unguarded roots ({block['roots']}): {scoring}", '', HEADER]
+        out += [_metric_row(name, block['table'][scoring][name]) for name in settings]
+    return out + ['']
+
+
+def reach_markdown(reach, settings):
+    """summary.md's reach section (report only)."""
+    if not reach:return []
+    out = ['# Guard reach (report only; the primary, gate and selection above stay on the any-cell scope)', '',
+           f"Turn 2 trips when M_own or M_opp >= {reach['threshold']:g}: M_s = sum_w p_w sum_(a,b) pi_own(a) pi_peer,w(b) q_(w,ab),s. Rows "
+           f"{reach['rows']}: exact {reach['exact_rows']}, bounds {reach['rows'] - reach['exact_rows']} (lower: tier A, Psycho Boost under a revealed White Herb holder; upper: every "
+           f"tier-C mass guarded), ambiguous (the bounds straddle the threshold) {reach['ambiguous']}, unavailable (fail closed) {reach['unavailable']}.", '',
+           '| scope | guarded | turn 1 | reach turn 2 added | tier A | tier C | own | opp | any-cell / reach | any-cell / clear | clear / reach | clear / clear |',
+           '|---|---|---|---|---|---|---|---|---|---|---|---|']
+    for scope in ('lower', 'upper'):
+        x = reach[scope];c = x['cross_tab']
+        out.append(f"| {scope} | {x['roots']} ({_pct(x['share'])}) | {x['turn1']} ({_pct(x['turn1_share'])}) | {x['turn2_added']} ({_pct(x['turn2_added_share'])}) | "
+                   f"{x['tiers']['A']['roots']} ({_pct(x['tiers']['A']['share'])}) | {x['tiers']['C']['roots']} ({_pct(x['tiers']['C']['share'])}) | "
+                   f"{x['sides']['own']['roots']} ({_pct(x['sides']['own']['share'])}) | {x['sides']['opp']['roots']} ({_pct(x['sides']['opp']['share'])}) | "
+                   f"{c['any_cell/reach']} | {c['any_cell/reach_clear']} | {c['any_cell_clear/reach']} | {c['any_cell_clear/reach_clear']} |")
+    for scope, note in (('lower', 'the larger unguarded set'), ('upper', 'the smaller, certainly clean set')):
+        block = reach[scope]['unguarded']
+        for scoring in SCORINGS:
+            out += ['', f"## Reach {scope} scope: RR on its unguarded roots ({block['roots']}; {note}): {scoring}", '', HEADER]
+            out += [_metric_row(name, block['table'][scoring][name]) for name in settings]
     return out + ['']
 
 

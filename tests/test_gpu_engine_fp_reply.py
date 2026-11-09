@@ -410,8 +410,30 @@ class HazardCreditTests(unittest.TestCase):
 @unittest.skipUnless(__import__('importlib').util.find_spec('jax'), 'jax not installed')
 class HazardCreditDeviceTests(unittest.TestCase):
     """fp_view_opp_hazard_credit against the device's own pieces: engine_device_trackers._percent, engine_device_damage_history._add
-    and engine_device_features' clip(value / 6, 0, 1) under jit, the rule the search's peer view (fill_owner_spikes) runs; and
-    against device values recorded by the 48-cell opponent-view run."""
+    and engine_device_features' clip(value / 6, 0, 1) under jit, the GPU-built peer views' arithmetic (the live root's
+    fill_owner_spikes divides per hit eagerly on the CPU and can be one ulp away); against device values recorded by the
+    48-cell opponent-view run; and spikes_hits against the constructor's own parser (line_facts' owner_spikes)."""
+
+    def test_spikes_hits_equal_the_constructors_owner_spikes(self):
+        from gpu_engine import constructor_worlds as cw
+        rng = np.random.default_rng(11);cases = [SPIKES_LINES, SPIKES_LINES[1:], SPIKES_LINES[:7]]
+        for _ in range(300):   # random hit / heal / switch / faint sequences, both seats
+            lines, hp = [], {}
+            for _ in range(int(rng.integers(1, 12))):
+                seat = f'p{int(rng.integers(1, 3))}';mon = f'{seat}a: Mon{int(rng.integers(0, 3))}';top = int(rng.integers(20, 400))
+                kind = rng.choice(['switch', 'spikes', 'heal', 'faint', 'turn'])
+                now = int(rng.integers(0, top + 1))
+                if kind == 'switch':lines.append(f'|switch|{mon}|Mon, L80|{now}/{top}')
+                elif kind == 'spikes':lines.append(f'|-damage|{mon}|' + (f'{now}/{top}' if now else '0 fnt') + '|[from] Spikes')
+                elif kind == 'heal':lines.append(f'|-heal|{mon}|{now}/{top}|[from] item: Leftovers')
+                elif kind == 'faint':lines.append(f'|faint|{mon}')
+                else:lines.append(f'|turn|{int(rng.integers(1, 30))}')
+            cases.append(tuple(lines))
+        for lines in cases:
+            for owner, seat in ((0, 'p1'), (1, 'p2')):
+                theirs = cw.line_facts(list(lines), owner).owner_spikes
+                mine = d.spikes_hits(lines, seat)
+                self.assertEqual(None if mine is None else [tuple(x) for x in mine], None if theirs is None else [tuple(x) for x in theirs], lines)
 
     def test_matches_the_device_rule_bit_for_bit(self):
         import jax.numpy as jnp
