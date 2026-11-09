@@ -106,14 +106,54 @@ def choice_action(env, player, choice):
     return action_index_from_choice_string(env._state_for_player(player), choice or '')
 
 
-def replay(env, policy, game, rng):
-    """Replay one game; returns (Foul Play rows, our-seat parity hits, our-seat decisions). Raises Mismatch on any check."""
+DAMAGING, STATUS, SWITCH, ILLEGAL = 0, 1, 2, -1
+
+
+def hp_fraction(request):
+    """The active mon's HP fraction from a request's side ('cur/max status'; 'fnt' or missing is 0)."""
+    for mon in (request.get('side') or {}).get('pokemon') or ():
+        if mon.get('active'):
+            head = str(mon.get('condition') or '0').split()[0]
+            if '/' in head:
+                cur, top = head.split('/', 1)
+                return float(cur) / max(1., float(top))
+            return 0.
+    return float('nan')
+
+
+def action_classes(request, legal, dex):
+    """Per action index: DAMAGING or STATUS for the active's moves (by dex category), SWITCH for switches, ILLEGAL otherwise."""
+    moves = [m.get('id') for m in ((request.get('active') or [{}])[0].get('moves') or ())]
+    out = []
+    for a in range(ACTIONS):
+        if not legal[a]:out.append(ILLEGAL)
+        elif a >= MOVES:out.append(SWITCH)
+        else:
+            info = dex.move_info(moves[a]) if a < len(moves) and moves[a] else None
+            out.append(STATUS if info is not None and str(info.category).lower() == 'status' else DAMAGING)
+    return out
+
+
+def opponent_head_logits(model, observation, torch):
+    """9375's opponent_action_head on one observation (our seat's view): logits over the opponent's own action indices."""
+    from pokezero.neural_policy import observation_window_to_torch
+    tensors = observation_window_to_torch([observation], window_size=1, device='cpu')
+    with torch.no_grad():
+        output = model(categorical_ids=tensors['categorical_ids'], numeric_features=tensors['numeric_features'],
+                       token_type_ids=tensors['token_type_ids'], attention_mask=tensors['attention_mask'], history_mask=tensors['history_mask'])
+    return [float(x) for x in output.opponent_action_logits[0]]
+
+
+def replay(env, policy, game, rng, extras=None):
+    """Replay one game; returns (Foul Play rows, our-seat parity hits, our-seat decisions). Raises Mismatch on any check.
+    extras (dict(dex, model, torch)) adds per Foul Play row: its action classes and label class, both actives' HP fractions, and
+    9375's opponent_action_head logits from our seat's view in the same round (NaN when our seat isn't requested)."""
     env.reset(seed=game['seed']);policy.reset()
     journal = dict(game['journal']);rows = [];ours = 0;parity = 0;round_ = 0
     while env.terminal() is None:
         requested = env.requested_players()
         if not requested:raise Mismatch('no requested players before terminal')
-        actions = {}
+        actions = {};fp_row = None;our_logits = None
         for player in requested:
             observation = env.observe(player)
             decision = policy.select_action(observation, rng=rng)
@@ -128,9 +168,13 @@ def replay(env, policy, game, rng):
                 if decoded != action:
                     raise Mismatch(f'Foul Play choice {entry.get("choice")!r} decodes to {decoded}, not its action {action}, round {round_}')
                 request = env._latest_requests.get(player) or {}
-                rows.append(dict(observation=observation, label=action, probs=probs, value=decision.value_estimate,
-                                 round=round_, turn=int(env._latest_turn), forced=bool(request.get('forceSwitch')),
-                                 choice=entry.get('choice')))
+                fp_row = dict(observation=observation, label=action, probs=probs, value=decision.value_estimate,
+                              round=round_, turn=int(env._latest_turn), forced=bool(request.get('forceSwitch')), choice=entry.get('choice'))
+                if extras is not None:
+                    classes = action_classes(request, observation.legal_action_mask, extras['dex'])
+                    fp_row.update(candidate_class=classes, label_class=classes[action], own_hp=hp_fraction(request),
+                                  opp_hp=hp_fraction(env._latest_requests.get(game['ours']) or {}))
+                rows.append(fp_row)
                 actions[player] = action
             else:
                 if ours >= len(game['our_actions']):raise Mismatch(f'our seat requested beyond its {ours} recorded decisions')
@@ -138,7 +182,9 @@ def replay(env, policy, game, rng):
                 if captured is None or _request_body(captured) != _request_body(json.dumps(env._latest_requests.get(player))):
                     raise Mismatch(f'our request differs from the capture at decision {ours}')
                 parity += decision.action_index == game['our_greedy'][ours]
+                if extras is not None:our_logits = opponent_head_logits(extras['model'], observation, extras['torch'])
                 actions[player] = int(game['our_actions'][ours]);ours += 1
+        if extras is not None and fp_row is not None:fp_row['opp_head_logits'] = our_logits if our_logits is not None else [float('nan')] * ACTIONS
         env.step(actions);round_ += 1
         if round_ > MAX_ROUNDS:raise Mismatch('runaway replay')
     if journal:raise Mismatch(f'{len(journal)} journal entries never requested, first round {min(journal)}')
@@ -165,6 +211,10 @@ def build(args):
     model, result = load_transformer_checkpoint(args.checkpoint, map_location='cpu');model.eval()
     policy = TransformerSoftmaxPolicy(model=model, result=result, deterministic=True, device='cpu',
                                       record_policy_distribution=True, checkpoint_path=str(args.checkpoint), weights_sha256=sha)
+    extras = None
+    if args.extras:
+        from pokezero.dex import load_showdown_dex_cached
+        extras = dict(model=model, torch=torch, dex=None)
     env = None;config_key = None;rng = random.Random(0)
     counts = collections.Counter();mismatches = collections.Counter();examples = {}
     columns = collections.defaultdict(list);parity_hits = 0;parity_total = 0;started = time.time()
@@ -176,13 +226,14 @@ def build(args):
         base = game['base_config'];key = (base['showdown_root'], base['node_binary'], bool(base['belief_set_source']))
         if config_key is None:config_key = key
         elif key != config_key:counts['skipped_other_runtime'] += 1;continue
+        if extras is not None and extras['dex'] is None:extras['dex'] = load_showdown_dex_cached(base['showdown_root'])
         if env is None:
             env = LocalShowdownEnv(LocalShowdownConfig(showdown_root=base['showdown_root'], node_binary=base['node_binary'],
                 observation_spec=observation_spec_from_model_config(result.model_config),
                 category_vocab=category_vocab_from_model_config(result.model_config, base['showdown_root']),
                 feature_masks=feature_masks_from_model_config(result.model_config),
                 set_belief_source=bool(base['belief_set_source'])))
-        try:rows, parity, decided = replay(env, policy, game, rng)
+        try:rows, parity, decided = replay(env, policy, game, rng, extras)
         except Mismatch as error:
             reason = re.sub(r"'[^']*'|\"[^\"]*\"|\d+", '#', str(error));consecutive_errors = 0
             mismatches[reason] += 1;examples.setdefault(reason, dict(ordinal=game['ordinal'], detail=str(error)));continue
@@ -204,13 +255,18 @@ def build(args):
             columns['probs'].append(np.asarray(row['probs'], np.float32))
             columns['value'].append(np.float32(row['value'] if row['value'] is not None else np.nan))
             for key_ in ('label', 'round', 'turn', 'forced'):columns[key_].append(row[key_])
+            if extras is not None:
+                columns['candidate_class'].append(np.asarray(row['candidate_class'], np.int8));columns['label_class'].append(row['label_class'])
+                columns['own_hp'].append(np.float32(row['own_hp']));columns['opp_hp'].append(np.float32(row['opp_hp']))
+                columns['opp_head_logits'].append(np.asarray(row['opp_head_logits'], np.float32))
             columns['ordinal'].append(game['ordinal']);columns['seed'].append(game['seed']);columns['seat'].append(game['seat'])
         counts['decisions'] += len(rows)
         if counts['games'] % 25 == 0:
             print(json.dumps(dict(event='PROGRESS', shard=args.shard, games=counts['games'], decisions=counts['decisions'],
                                   mismatched=sum(mismatches.values()), seconds=round(time.time() - started, 1))), flush=True)
     if env is not None:env.close()
-    arrays = {k: np.stack(v) if k in ('categorical_ids', 'numeric_features', 'token_type_ids', 'attention_mask', 'legal', 'probs')
+    arrays = {k: np.stack(v) if k in ('categorical_ids', 'numeric_features', 'token_type_ids', 'attention_mask', 'legal', 'probs',
+                                      'candidate_class', 'opp_head_logits')
               else np.asarray(v) for k, v in columns.items()}
     np.savez(out / f'shard-{args.shard}.npz', **arrays)
     summary = dict(schema='v2s-fp-reply-data.v1', collection=str(collection), checkpoint=str(args.checkpoint), checkpoint_sha256=sha,
@@ -280,6 +336,7 @@ def main(argv=None):
     parser.add_argument('collection', nargs='?');parser.add_argument('out', nargs='?')
     parser.add_argument('--checkpoint');parser.add_argument('--shard', type=int, default=0);parser.add_argument('--shards', type=int, default=1)
     parser.add_argument('--limit', type=int, default=0)
+    parser.add_argument('--extras', action='store_true', help="also record action classes, HP and our view's opponent-head logits")
     parser.add_argument('--report', metavar='OUT_DIR');parser.add_argument('--split', choices=('all', 'test', 'val', 'train'), default='all')
     args = parser.parse_args(argv)
     if args.report:report(args.report, args.split);return 0
