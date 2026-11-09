@@ -1,5 +1,5 @@
 import collections
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 import hashlib
 import io
 import json
@@ -859,6 +859,33 @@ class DefinitiveOperatorTests(unittest.TestCase):
         c, out = self.score(self.worlds(), model=self.other_reply, greedy=1, own_moves=moves)
         self.assertEqual((c['greedy'], c['br_fp'], out['operators']['br_fp']['guard_causes']), (1, 1, None))
 
+    def test_each_world_gets_its_own_reply_logits_and_br_fp_is_averaging_exactly(self):
+        # world 0 rewards action 0 against reply 0, world 1 rewards action 1 against reply 0; reply priors per world decide br_fp
+        legal = legal_mask(0, 1, 2);cells = [{0: (1., -1.), 1: (0., 0.), 2: (-1., -1.)}, {0: (0., 0.), 1: (1., -1.), 2: (-1., -1.)}]
+        worlds = self.worlds(cells=cells);d = definitive_decision(worlds, greedy=2, root_legal=legal)
+        to_reply0, to_reply1 = [math.log(.9), math.log(.1)] + [0.] * 7, [math.log(.1), math.log(.9)] + [0.] * 7
+        def br(prior):
+            out = S.score_decision(d, S.censored('other', ''), None, collections.Counter(), definitive=dict(prior=prior, weights={0: 0., 1: 0.}))
+            return out['operators']['br_fp']['choice']
+        aligned, swapped = br({0: to_reply0, 1: to_reply1}), br({0: to_reply1, 1: to_reply0})
+        self.assertEqual((aligned, swapped), (0, 1))   # a world-index shuffle would swap them
+        base = S.recompute(d)
+        want = hedge.averaging(S.model_worlds(base.worlds, {0: tuple(to_reply0), 1: tuple(to_reply1)}), base.legal)
+        self.assertEqual(aligned, hedge.top_action(want.strategy))
+        three = self.worlds(cells=cells + [cells[0]]);d3 = definitive_decision(three, greedy=2, root_legal=legal)   # 3 worlds: not a power of 2
+        prior = {0: to_reply0, 1: to_reply1, 2: to_reply1}
+        got = S.score_decision(d3, S.censored('other', ''), None, collections.Counter(), definitive=dict(prior=prior, weights={0: 0., 1: 0., 2: 0.}))
+        b3 = S.recompute(d3);want = hedge.averaging(S.model_worlds(b3.worlds, {k: tuple(v) for k, v in prior.items()}), b3.legal)
+        self.assertEqual(got['operators']['br_fp']['choice'], hedge.top_action(want.strategy))
+
+    def test_inputs_from_other_rows_are_refused(self):
+        legal = legal_mask(0, 1, 2);d = definitive_decision(self.worlds(), greedy=1, root_legal=legal)
+        for reason, prior, weights in (('world_weights_mismatch', {0: self.champion, 1: self.champion}, {0: 0., 1: 0., 2: 0.}),
+                                       ('reply_prior_mismatch', {0: self.champion, 1: self.champion, 5: self.champion}, {0: 0., 1: 0.})):
+            with self.assertRaises(S.Unscorable) as caught:
+                S.score_decision(d, S.censored('other', ''), None, collections.Counter(), definitive=dict(prior=prior, weights=weights))
+            self.assertEqual(caught.exception.reason, reason)
+
     def test_missing_inputs_leave_the_decision_out_of_every_operator(self):
         legal = legal_mask(0, 1, 2);worlds = self.worlds()
         cases = (('effect_guard_missing', dict(record=None), {0: self.champion, 1: self.champion}, {0: 0., 1: 0.}),
@@ -945,6 +972,9 @@ class DefinitiveEndToEndTests(EndToEndTests):
         self.assertIn('world weights (definitive set)', (out / 'summary.md').read_text())
         with redirect_stdout(io.StringIO()), self.assertRaises(SystemExit):
             S.main(['--rows', str(path), '--run-directory', str(run), '--out', str(self.root / 'out2'), '--operator-set', 'definitive'])
+        with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):   # no --reply-prior
+            S.main(['--rows', str(path), '--run-directory', str(run), '--out', str(self.root / 'out4'), '--operator-set', 'definitive',
+                    '--world-weights', str(wpath)])
 
     def test_the_verdict_runs_on_the_unguarded_roots(self):
         run, path, wpath, ppath = self.definitive_inputs(.25, guarded={(0, 0)}, tier_b={(0, 2), (0, 3)}, a_only={(0, 3)})
@@ -963,6 +993,8 @@ class DefinitiveEndToEndTests(EndToEndTests):
         run, path, wpath, ppath = self.definitive_inputs(4.)   # ESS ~ 1 at beta .5
         drop = self.root / 'drop.json';drop.write_text(json.dumps([dict(ordinal=1, reason='journal_validation')]))
         summary = self.run_definitive(run, path, wpath, ppath, '--drop-battles', str(drop));cover = summary['coverage']
+        undropped = self.run_definitive(run, path, wpath, ppath, out='undropped')['coverage']
+        self.assertEqual(cover['parity'], undropped['parity'])   # the parity gate still counts a dropped battle's rows
         self.assertTrue(cover['world_weights']['low_beta_reported']);self.assertEqual(cover['world_weights']['share_ess_under_2'], 1.)
         self.assertEqual(summary['settings'], list(S.DEFINITIVE_SETTINGS + S.LOW_BETA_REWEIGHTED))
         self.assertIn('reweighted_br_fp:beta=0.25', summary['reported_only']);self.assertEqual(summary['candidates'], list(S.DEFINITIVE_CANDIDATES))

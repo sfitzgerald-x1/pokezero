@@ -115,6 +115,15 @@ class EvidenceTests(unittest.TestCase):
         self.assertEqual(ev.rw.variant_key(next(iter(extras[755]['aerodactyl'].values()))), ev.set_key(*aero[1:]))
         self.assertEqual(list(extras[755]['unown'].values()), [dict(moves=['hiddenpowerpsychic'], ability='levitate', item='choicespecs')])
 
+    def test_an_extra_set_skipped_at_a_round_is_incomplete_and_never_joins(self):
+        evidence, n = evidence_of(('gengar', [(GENGAR_A, -1.), (GENGAR_B, -2.)]))
+        evidence['gengar'][ev.set_key(*GENGAR_B[1:])] = float('nan')   # fp_reply_reweight marks a skipped extra set this way
+        rows = [dict(ordinal=4, decision_index=7, round=0, mons=json.loads(json.dumps(ev.snapshot(evidence, n, set()))))]
+        self.assertIn([sorted(ev.rw.move_key(m) for m in GENGAR_B[1]), 'levitate', 'leftovers', 'incomplete'], rows[0]['mons']['gengar']['sets'])
+        world = lambda g: dict(opponent=dict(party=[member(*g)]))
+        out, counts = ev.weights(rows, [dict(ordinal=4, decision_index=7, worlds=[world(GENGAR_A), world(GENGAR_B)])])
+        self.assertEqual((out, counts['worlds_failed_set_incomplete'], counts['worlds_joined']), ([], 1, 1))
+
     def test_cli_writes_weights_only_at_full_coverage(self):
         evidence, n = evidence_of(('gengar', [(GENGAR_A, -1.)]))
         world = dict(opponent=dict(party=[member(*GENGAR_A)]))

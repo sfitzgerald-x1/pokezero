@@ -68,7 +68,7 @@ def snapshot(evidence, evidence_n, misaligned):
     for mon, table in evidence.items():
         if not evidence_n[mon]:continue
         out[mon] = dict(n=int(evidence_n[mon]), stats_aligned=mon not in misaligned,
-                        sets=[[sorted(key[0]), key[1], key[2], None if not math.isfinite(value) else float(value)]
+                        sets=[[sorted(key[0]), key[1], key[2], INCOMPLETE if math.isnan(value) else None if not math.isfinite(value) else float(value)]
                               for key, value in sorted(table.items(), key=lambda kv: (sorted(kv[0][0]), kv[0][1], kv[0][2]))])
     return out
 
@@ -101,11 +101,13 @@ def world_loglik(table, sets, notes=None):
         if key is None:return None, why
         value = scored[key]
         if value is None:return None, 'set_ruled_out'
+        if value == INCOMPLETE:return None, 'set_incomplete'
         total += value
     return total, None
 
 
 TRACE = 'trace'
+INCOMPLETE = 'incomplete'   # an extra set skipped at a round with evidence (a new move into a disabled slot): its loglik misses a term
 
 
 def world_party(world):

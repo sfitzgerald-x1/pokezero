@@ -89,7 +89,9 @@ Definitive operator set (--operator-set definitive; the screen's set above stays
   ESS = (sum p_w)^2 / sum p_w^2 (median, share of roots under 2) and the largest single weight (median, max). When the median
   ESS is under 4, both reweighted operators at beta 0.25 are added, reported only.
 - --drop-battles FILE (JSON [{ordinal, reason}]): those battles' rows are scored by no operator (references included) and
-  counted by reason: the journal rebuild's validation drops and the leakage check's overlaps.
+  counted by reason: the journal rebuild's validation drops and the leakage check's overlaps. The parity gate still counts them.
+- Inputs must belong to the rows: a --world-weights or --reply-prior entry for a world index outside the row's worlds makes the
+  decision unscorable (world_weights_mismatch / reply_prior_mismatch). --reply-prior is required.
 The scoring rule is fixed and the same for every operator (SCORING_RULE); no operator's world weights or beta enter it.
 
 Run from the repository root with the venv that has numpy and scipy:
@@ -525,7 +527,8 @@ def definitive_operators(worlds, root_legal, reply, logliks, failures):
     """({br_fp, rnr:lam, reweighted_* (beta 0.5 and 0.25): action or None}, the beta 0.5 world weights) on one decision."""
     fp_worlds = model_worlds(worlds, reply);fp_grids = hedge.grids(fp_worlds, root_legal);gs = hedge.grids(worlds, root_legal)
     uniform = [1. / len(gs)] * len(gs);weights = world_weights(logliks);out = {}
-    q = weighted_q(fp_grids, uniform);out['br_fp'] = argmax(q, sorted(q))
+    choice = hedge.averaging(fp_worlds, root_legal)   # averaging itself on the reply model's logits: exact for every world count
+    out['br_fp'] = None if choice is None else hedge.top_action(choice.strategy)
     for lam in RNR_LAM:
         name = f'rnr:lam={lam}'
         try:out[name] = _hedge_top(fp_worlds, root_legal, lam)
@@ -540,6 +543,7 @@ def reply_logits_of(decision, worlds, prior):
     """{world: reply-model logits} for every requested world, from the rows' reply_peer_logits or else `prior` (this decision's
     load_reply_prior entry); Unscorable('reply_prior_missing') when a requested world has neither."""
     out = {}
+    if prior and any(type(w) is not int or not 0 <= w < len(worlds) for w in prior):raise Unscorable('reply_prior_mismatch')   # another rows' file
     for w, (world, facts) in enumerate(zip(worlds, decision['worlds'])):
         if not world.opponent_requested:continue
         logits = facts.get('reply_logits')
@@ -553,6 +557,7 @@ def reply_logits_of(decision, worlds, prior):
 def logliks_of(weights, count):
     """[loglik_w] for the decision's `count` worlds from its load_world_weights entry; Unscorable('world_weights_missing')."""
     if weights is None or any(w not in weights for w in range(count)):raise Unscorable('world_weights_missing')
+    if len(weights) != count:raise Unscorable('world_weights_mismatch')   # world indices beyond the row's: built from other rows
     return [weights[w] for w in range(count)]
 
 
@@ -984,9 +989,6 @@ def process(decision, run, coverage, prior=None, parity_mode='live', weights=Non
                    request_count=decision['request_count'], turn=decision['turn'], request_kind=decision['request_kind'],
                    source=decision['source'])
     if (ordinal, index) in coverage.seen:coverage.duplicates += 1;return dict(address, scored=False, reason='duplicate_row'), None
-    if ordinal in coverage.dropped_battles:   # before parity and scoring: a dropped battle counts for no operator
-        coverage.seen.add((ordinal, index));coverage.dropped_rows[coverage.dropped_battles[ordinal]] += 1
-        return dict(address, scored=False, reason='battle_dropped:' + coverage.dropped_battles[ordinal]), None
     coverage.seen.add((ordinal, index))
     cell = run.cell(ordinal);seed = cell['seed'];half = half_of(seed)
     coverage.arms[str(cell['arm'])] += 1;coverage.sources[str(decision['source'])] += 1
@@ -1004,6 +1006,9 @@ def process(decision, run, coverage, prior=None, parity_mode='live', weights=Non
     parity = parity_row(decision, base, reason, parity_mode) if checked else None
     if parity is not None:coverage.add_parity(parity)
     address.update(parity=parity)
+    if ordinal in coverage.dropped_battles:   # after parity (the gate still counts it), before scoring: no operator scores it
+        coverage.dropped_rows[coverage.dropped_battles[ordinal]] += 1
+        return dict(address, scored=False, reason='battle_dropped:' + coverage.dropped_battles[ordinal]), None
     if base is None:
         coverage.excluded[reason] += 1
         return dict(address, scored=False, reason=reason), None
@@ -1062,6 +1067,7 @@ def score_run(rows, run_directory, out, reply_prior=None, parity_mode='live', op
     if operator_set not in OPERATOR_SETS:raise ValueError(f'operator set {operator_set!r} not in {OPERATOR_SETS}')
     definitive = operator_set == 'definitive'
     if definitive and world_weights is None:raise ValueError('the definitive operator set needs --world-weights')
+    if definitive and reply_prior is None:raise ValueError('the definitive operator set needs --reply-prior (the reply model\'s logits per world)')
     if not definitive and world_weights is not None:raise ValueError('--world-weights goes with --operator-set definitive')
     prior = None if reply_prior is None else load_reply_prior(reply_prior)
     weights = None if world_weights is None else load_world_weights(world_weights)
@@ -1233,7 +1239,7 @@ def main(argv=None):
     try:summary = score_run(args.rows, args.run_directory, args.out, args.reply_prior, args.parity_mode, args.operator_set,
                             args.world_weights, args.drop_battles)
     except ValueError as error:
-        if 'operator set' in str(error) or 'world-weights' in str(error):parser.error(str(error))
+        if any(flag in str(error) for flag in ('operator set', 'world-weights', 'reply-prior')):parser.error(str(error))
         raise
     cover = summary['coverage']
     print(json.dumps(dict(verdict=summary['verdict'], operator_set=summary['operator_set'], scored=cover['scored'], parity=cover['parity']['rate'],

@@ -307,12 +307,13 @@ def replay_game(env, model, game, dex, torch, tables, redaction=None, on_ours=No
                               tables, misaligned, redaction, extra_variants)
         before = len(env._lines);env.step(actions)
         if pending is not None:
-            mon, keys, logq, act, move, aligned = pending
+            mon, keys, logq, act, move, aligned, skipped = pending
             observed = public_choice(env._lines[before:], fp, act, move);decisions[-1]['observed'] = observed
             if observed:
                 evidence_n[mon] += 1
                 if not aligned:misaligned.add(mon)
                 for k, lq in zip(keys, logq):evidence[mon][k] = evidence[mon].get(k, 0.) + lq
+                for k in skipped:evidence[mon][k] = float('nan')   # an extra set this round could not score: never complete again
         round_ += 1
         if round_ > data_mod.MAX_ROUNDS:raise data_mod.Mismatch('runaway replay')
     if journal:raise data_mod.Mismatch(f'{len(journal)} journal entries never requested')
@@ -377,13 +378,13 @@ def measure(env, model, game, dex, torch, checks, request, first, action, round_
         checks['replaced_disabled_slot_skipped'] += 1;return None
     # sets beyond the candidates (extra_variants): scored in their own batch, so the candidates' log q stay bit-identical; one
     # whose new move would take a disabled slot is skipped alone
-    extra_keys, extra_observations, extra_labels = [], [], []
+    extra_keys, extra_observations, extra_labels, skipped = [], [], [], []
     for variant in (extra_variants(active) if extra_variants is not None else ()):
         k = variant_key(variant)
         if k in representative or k in extra_keys:continue
         stats = generator_stats(species.base_stats, level, list(k[0]), dex, tables) if aligned else None
         world, label_map, disabled = world_request(request, first_row, variant, dex, stats)
-        if disabled:checks['extra_variant_disabled_skipped'] += 1;continue
+        if disabled:checks['extra_variant_disabled_skipped'] += 1;skipped.append(k);continue   # its evidence is incomplete from here
         with substituted_request(env, fp, world):extra_observations.append(env.observe(fp))
         extra_keys.append(k);extra_labels.append(label_map[action])
     if not same_observation(env.observe(fp), baseline):checks['observe_changed_by_worlds'] += 1
@@ -403,7 +404,7 @@ def measure(env, model, game, dex, torch, checks, request, first, action, round_
         if beta == 1.:row['nll_prior'] = float(-logsumexp(log_prior + q))
         row[f'nll_post_{beta}'] = float(-logsumexp(log_post + q))
     decisions.append(row)
-    return active, distinct, logq, action, chosen_move(request, action), aligned
+    return active, distinct, logq, action, chosen_move(request, action), aligned, skipped
 
 
 def run(args):
