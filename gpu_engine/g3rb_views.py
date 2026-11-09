@@ -21,15 +21,18 @@ Gen 3 random-battle support) is rebuilt, per seat, at every decision of that sea
   level; one variant of the pinned source matching those facts, drawn with a seeded RNG. The slots it never revealed draw a
   species and a variant from the source. Party order: the lead first, then the rest in order of appearance, the unrevealed
   last; every switch-in swaps the incoming mon with slot 0 (Showdown's side.switchIn). Stats are the generator's (85 EVs,
-  31 IVs, Hidden Power IVs, attack dump); HP = the public percent times the imputed max HP; PP = max PP minus the uses seen.
-  Choice lock, Disable, Taunt and Encore disable moves as Showdown's request does; trapping is not modelled (flagged).
+  31 IVs, Hidden Power IVs, attack dump); HP = the log's own exact HP; PP = max PP minus the uses seen (Pressure's extra PP is
+  not modelled); an item ended in public is gone. Choice lock, Disable, Taunt, Encore and 0 PP disable moves as Showdown's
+  request does; trapping is not modelled (switches stay legal; labels are unaffected).
 - View. pokezero.policy_opponent_view.build_policy_opponent_view on the public prefix and that request: the same parser,
   belief source and observation writer as the live player; the label is decoded on the view's own state
   (teacher_capture.action_index_from_choice_string).
 
 Writes shard-<I>.npz in fp_reply_data's layout (categorical_ids, numeric_features, token_type_ids, attention_mask, legal,
-label (-1 censored), forced, turn, kind (0 move, 1 switch), seat (0/1), replay (row index in CLEAN), vintage, rating,
-imputation, censor) and shard-<I>.json with the counts by vintage, kind and censor reason."""
+label (-1 censored), forced (a forced switch, as in fp_reply_data), locked (a [from]lockedmove or Struggle label), turn,
+kind (0 move, 1 switch), seat (0/1), replay (row index in CLEAN), vintage, rating, imputation, censor). Censored rows keep
+their reason (cant and fainted_before_acting only happen to a chosen move: a trainer can treat them as 'some move' partial
+labels; recharge had no choice). and shard-<I>.json with the counts by vintage, kind and censor reason."""
 import argparse
 import collections
 import hashlib
@@ -43,7 +46,7 @@ import numpy as np
 
 STATS = ('atk', 'def', 'spa', 'spd', 'spe')
 VINTAGES = ('strict', 'extended', 'outside')
-CENSORS = ('none', 'cant', 'fainted_before_acting', 'no_action', 'label_undecodable', 'view_error')
+CENSORS = ('none', 'cant', 'fainted_before_acting', 'no_action', 'label_undecodable', 'view_error', 'recharge')
 KINDS = ('move', 'switch')
 FORMAT = 'gen3randombattle'
 
@@ -129,40 +132,57 @@ def facts(lines):
 
 
 def decisions(lines):
-    """[(prefix_end, seat, kind, label, forced, censor, turn)] in log order: prefix_end is the number of lines of the prefix."""
+    """[(prefix_end, seat, kind, label, locked, censor, turn)] in log order: prefix_end is the number of lines of the prefix.
+
+    Replacements after faints: both seats choose at once when both actives fainted (Showdown sends forceSwitch to both, then runs
+    the switches), so both prefixes end before the first replacement switch. A mon KOed by Pursuit while switching out is no
+    new decision: Showdown carries out the switch chosen at turn start, which labels that turn's decision."""
     out, turn, active, fainted = [], 0, {'p1': None, 'p2': None}, {'p1': False, 'p2': False}
-    passing = {'p1': False, 'p2': False}
+    passing = {'p1': False, 'p2': False};pursued = {'p1': None, 'p2': None};requeued = {'p1': False, 'p2': False};double = None
     for i, line in enumerate(lines):
         p = line.split('|')
         if len(p) < 2:continue
         kind = p[1];who = ident(p[2]) if len(p) > 2 else None
         if kind == 'turn':
-            turn = int(p[2]) if len(p) > 2 and p[2].isdigit() else turn + 1
+            turn = int(p[2]) if len(p) > 2 and p[2].isdigit() else turn + 1;double = None;pursued = {'p1': None, 'p2': None}
             for seat in ('p1', 'p2'):
                 if active[seat] and not fainted[seat]:out.append([i + 1, seat, 'move', None, False, None, turn])
+        elif kind == '-activate' and who and 'move: Pursuit' in line:pursued[who[0]] = who[1]   # Pursuit hits this seat's switching mon
         elif kind in ('switch', 'replace') and who:
-            seat = who[0]
-            if active[seat] is not None and (fainted[seat] or passing[seat]):   # a replacement after a faint, or Baton Pass's switch
-                out.append([i, seat, 'switch', 'switch ' + species_id(p[3]), False, 'none', turn])
-            active[seat], fainted[seat], passing[seat] = who[1], False, False
+            seat = who[0];other = 'p2' if seat == 'p1' else 'p1'
+            if requeued[seat]:requeued[seat] = False   # the switch chosen at turn start, carried out after a Pursuit KO
+            elif active[seat] is not None and (fainted[seat] or passing[seat]):   # a replacement after a faint, or Baton Pass's switch
+                end = i
+                if fainted[seat]:
+                    if fainted[other] and active[other] is not None:double = i   # both replace at once: the first switch ends both prefixes
+                    elif double is not None:end = double
+                out.append([end, seat, 'switch', 'switch ' + species_id(p[3]), False, 'none', turn])
+            active[seat], fainted[seat], passing[seat], pursued[seat] = who[1], False, False, None
         elif kind == 'drag' and who:active[who[0]], fainted[who[0]] = who[1], False
-        elif kind == 'faint' and who and who[1] == active[who[0]]:fainted[who[0]] = True
+        elif kind == 'faint' and who and who[1] == active[who[0]]:
+            fainted[who[0]] = True
+            if pursued[who[0]] == who[1]:requeued[who[0]] = True
         elif kind == 'move' and who and len(p) > 3 and toid(p[3]) == 'batonpass' and '[from]' not in line:passing[who[0]] = True
     # labels of the move decisions: the seat's first own action after the turn line
     for d in out:
         if d[2] != 'move':continue
-        start, seat = d[0], d[1];d[5] = 'no_action'
-        for line in lines[start:]:
+        start, seat = d[0], d[1];d[5] = 'no_action';pursued_now = False
+        for j, line in enumerate(lines[start:], start):
             p = line.split('|')
             if len(p) < 3:continue
             kind, who = p[1], ident(p[2])
             if kind == 'turn':break
             if not who or who[0] != seat:continue
+            if kind == '-activate' and 'move: Pursuit' in line:pursued_now = True;continue
             if kind == 'switch':d[3], d[5] = 'switch ' + species_id(p[3]), 'none';break
             if kind == 'move' and len(p) > 3 and ('[from]' not in line or '[from]lockedmove' in line):
                 m = toid(p[3]);d[3], d[5] = 'move ' + m, 'none';d[4] = '[from]lockedmove' in line or m == 'struggle';break
-            if kind == 'cant':d[5] = 'cant';break
-            if kind == 'faint':d[5] = 'fainted_before_acting';break
+            if kind == 'cant':d[5] = 'recharge' if len(p) > 3 and toid(p[3]) == 'recharge' else 'cant';break   # recharge: no choice existed
+            if kind == 'faint':
+                if pursued_now:   # KOed by Pursuit while switching out: the chosen switch is the seat's next switch this turn
+                    nxt = next((l for l in lines[j + 1:] if l.startswith(f'|switch|{seat}') or l.startswith('|turn|')), '')
+                    if nxt.startswith('|switch|'):d[3], d[5] = 'switch ' + species_id(nxt.split('|')[3]), 'none';break
+                d[5] = 'fainted_before_acting';break
     return [tuple(d) for d in out]
 
 
@@ -210,8 +230,9 @@ def max_hp(tables, member):
     return (2 * int(info.base_stats['hp']) + iv + 85 // 4) * member['level'] // 100 + member['level'] + 10
 
 
-def request_move_id(rw, m):
-    return m + '70' if m.startswith('hiddenpower') and m != 'hiddenpower' else rw.request_move_id(m)
+def family(m):
+    """A move as the log names it: every typed Hidden Power is 'hiddenpower'."""
+    return 'hiddenpower' if m.startswith('hiddenpower') else m
 
 
 STRUGGLE = {'move': 'Struggle', 'id': 'struggle', 'pp': 1, 'maxpp': 1, 'target': 'randomNormal', 'disabled': False}
@@ -240,6 +261,7 @@ def request(tables, team, lines, seat, kind, struggle=False):
     """Showdown's request for `seat` at the end of the public prefix `lines` (module docstring), and the imputed flags."""
     rw = tables.rw;order = list(range(len(team)));by_nick = {m['nick']: i for i, m in enumerate(team)}
     hp = {i: (100., '') for i in order};exact = {};used = collections.Counter();active = None;since = None
+    items = {i: m['item'] for i, m in enumerate(team)}   # the current item: an ended one (eaten, knocked off) is gone
     volatile = dict(disable=None, taunt=False, encore=None);last_move = None
     for line in lines:
         p = line.split('|')
@@ -259,13 +281,16 @@ def request(tables, team, lines, seat, kind, struggle=False):
             if e:exact[i] = e
         elif k == '-status' and len(p) > 3:hp[i] = (hp[i][0], p[3])
         elif k == '-curestatus':hp[i] = (hp[i][0], '')
+        elif k == '-cureteam':hp.update({j: (v[0], '') for j, v in hp.items() if v[1] != 'fnt'})
+        elif k == '-enditem':items[i] = ''
+        elif k == '-item' and len(p) > 3:items[i] = toid(p[3])
         elif k == 'faint':hp[i] = (0., 'fnt')
         elif k == 'move' and len(p) > 3 and '[from]' not in line:
-            m = toid(p[3]);used[(i, m)] += 1;last_move = m
+            m = family(toid(p[3]));used[(i, m)] += 1;last_move = m
             if since is not None:since.append(m)
         elif k == '-start' and len(p) > 3:
             what = toid(p[3])
-            if what == 'disable' and len(p) > 4:volatile['disable'] = toid(p[4])
+            if what == 'disable' and len(p) > 4:volatile['disable'] = family(toid(p[4]))
             elif what in ('taunt', 'movetaunt'):volatile['taunt'] = True
             elif what == 'encore':volatile['encore'] = last_move
         elif k == '-end' and len(p) > 3:
@@ -280,16 +305,18 @@ def request(tables, team, lines, seat, kind, struggle=False):
         if slot in exact and status != 'fnt':cur, top = exact[slot]   # the server log's own exact HP (the seat knows it)
         stats = rw.generator_stats(tables.dex.species_info(m['species']).base_stats, m['level'], m['moves'], tables.dex, tables.gen)
         pokemon.append({'ident': f'{seat}: {m["nick"]}', 'details': m['details'], 'condition': f'{cur}/{top}' + (f' {status}' if status and status != 'fnt' else '')
-                        if cur else '0 fnt', 'active': slot == active, 'stats': stats, 'moves': [request_move_id(rw, x) for x in m['moves']],
-                        'baseAbility': m['ability'], 'ability': m['ability'], 'item': m['item'], 'pokeball': 'pokeball'})
+                        if cur else '0 fnt', 'active': slot == active, 'stats': stats, 'moves': [rw.request_move_id(x) for x in m['moves']],
+                        'baseAbility': m['ability'], 'ability': m['ability'], 'item': items[slot], 'pokeball': 'pokeball'})
     out = {'side': {'id': seat, 'name': seat, 'pokemon': pokemon}}
     if kind == 'switch':out['forceSwitch'] = [True];return out
     m = team[active];entries = []
-    choice = m['item'] == 'choiceband' and bool(since)
+    locked = items[active] == 'choiceband' and bool(since)
     for x in m['moves']:
-        disabled = (choice and x != since[0]) or x == volatile['disable'] or (volatile['encore'] is not None and x != volatile['encore']) \
+        f = family(x)
+        disabled = (locked and f != since[0]) or f == volatile['disable'] or (volatile['encore'] is not None and f != volatile['encore']) \
             or (volatile['taunt'] and (tables.dex.move_info(x) is not None and tables.dex.move_info(x).gen3_category == 'Status'))
-        e = rw.fresh_move_entry(tables.dex, x, disabled);e['pp'] = max(0, e['maxpp'] - used[(active, x)]);entries.append(e)
+        e = rw.fresh_move_entry(tables.dex, x, disabled);e['pp'] = max(0, e['maxpp'] - used[(active, f)])
+        e['disabled'] = bool(e['disabled'] or e['pp'] <= 0);entries.append(e)   # Showdown disables a move with no PP left
     out['active'] = [{'moves': [dict(STRUGGLE)] if struggle else entries}]   # Showdown offers Struggle alone when no move is usable
     return out
 
@@ -308,7 +335,7 @@ def replay_rows(tables, model, row_index, row, vintage, imputations, counts):
             seed = int(hashlib.sha256(f'{row["id"]}:{seat}:{imp}'.encode()).hexdigest()[:16], 16)
             team = draw_team(tables, all_facts[seat], lead.get(seat), random.Random(seed))
             if team is None:counts['seat_team_unmatched'] += 1;continue
-            for end, s, kind, label, forced, censor, turn in points:
+            for end, s, kind, label, locked, censor, turn in points:
                 if s != seat:continue
                 obs = None
                 try:
@@ -325,7 +352,7 @@ def replay_rows(tables, model, row_index, row, vintage, imputations, counts):
                     counts['view_error:' + type(error).__name__] += 1;counts.setdefault('view_error_example', f'{type(error).__name__}: {str(error)[:200]}')
                     censor, action = 'view_error', None
                 if obs is None:continue
-                rows.append(dict(obs=obs, label=-1 if censor != 'none' else int(action), forced=bool(forced), turn=turn, kind=KINDS.index(kind),
+                rows.append(dict(obs=obs, label=-1 if censor != 'none' else int(action), forced=kind == 'switch', locked=bool(locked), turn=turn, kind=KINDS.index(kind),
                                  seat=int(seat[1]) - 1, replay=row_index, vintage=VINTAGES.index(vintage), rating=float(row['rating'] or 0),
                                  imputation=imp, censor=CENSORS.index(censor)))
                 counts[f'{vintage}:{kind}:{censor}'] += 1

@@ -39,6 +39,20 @@ class LogTests(unittest.TestCase):
         self.assertEqual(LOG[ends[('p1', 1, 'move')] - 1], '|turn|1')   # a move decision's prefix ends at its turn line
         self.assertTrue(LOG[ends[('p2', 3, 'switch')]].startswith('|switch|p2a: Snorlax'))   # a switch decision's prefix stops before it
 
+    def test_double_faints_pursuit_kos_and_recharge(self):
+        log = ['|start', '|switch|p1a: Gengar|Gengar, L76|230/230', '|switch|p2a: Snorlax|Snorlax, L72|400/400', '|turn|1',
+               '|move|p1a: Gengar|Explosion|p2a: Snorlax', '|-damage|p2a: Snorlax|0 fnt', '|faint|p2a: Snorlax', '|faint|p1a: Gengar', '|upkeep',
+               '|switch|p2a: Tyranitar|Tyranitar, L75|300/300', '|switch|p1a: Dugtrio|Dugtrio, L80|180/180', '|turn|2',
+               '|-activate|p1a: Dugtrio|move: Pursuit', '|move|p2a: Tyranitar|Pursuit|p1a: Dugtrio', '|-damage|p1a: Dugtrio|0 fnt', '|faint|p1a: Dugtrio',
+               '|switch|p1a: Starmie|Starmie, L77|260/260', '|move|p2a: Tyranitar|Hyper Beam|p1a: Starmie', '|turn|3', '|cant|p2a: Tyranitar|recharge', '|turn|4']
+        got = gv.decisions(log);by = {(seat, turn, kind): (end, label, censor) for end, seat, kind, label, locked, censor, turn in got}
+        first = log.index('|switch|p2a: Tyranitar|Tyranitar, L75|300/300')
+        self.assertEqual((by[('p2', 1, 'switch')], by[('p1', 1, 'switch')]),
+                         ((first, 'switch tyranitar', 'none'), (first, 'switch dugtrio', 'none')))   # both chose at once: one shared prefix
+        self.assertEqual(by[('p1', 2, 'move')][1:], ('switch starmie', 'none'))   # the switch chosen at turn start, carried out after the KO
+        self.assertNotIn(('p1', 2, 'switch'), by)   # and no fabricated forced-switch decision for it
+        self.assertEqual(by[('p2', 3, 'move')][2], 'recharge')
+
     def test_each_seat_loses_the_others_private_lines(self):
         p1 = gv.seat_lines(LOG, 'p1');p2 = gv.seat_lines(LOG, 'p2')
         self.assertIn('|-ability|p1a: Gengar|Pressure|[silent]', p1);self.assertNotIn('|-ability|p2a: Snorlax|Pressure|[silent]', p1)
@@ -91,6 +105,19 @@ class RequestTests(unittest.TestCase):
         self.assertEqual((gv.choice(req, 'switch starmie'), gv.choice(req, 'switch gengar')), ('switch 3', None))   # the active never
         struggle = gv.request(t, self.team(), lines, 'p1', 'move', struggle=True)
         self.assertEqual([e['id'] for e in struggle['active'][0]['moves']], ['struggle']);self.assertEqual(gv.choice(struggle, 'move struggle'), 'move 1')
+        hp2 = self.team(item='choiceband');hp2[0]['moves'][3] = 'hiddenpowerfire'
+        hpl = ['|start', '|switch|p1a: Gengar|Gengar, L80|230/230', '|turn|1', '|move|p1a: Gengar|Hidden Power|p2a: X', '|move|p1a: Gengar|Hidden Power|p2a: X',
+               '|-cureteam|p1a: Gengar|[from] move: Aromatherapy', '|turn|3']
+        r = gv.request(t, hp2, hpl, 'p1', 'move');e = r['active'][0]['moves']
+        self.assertEqual((e[3]['pp'], [x['disabled'] for x in e]), (22, [True, True, True, False]))   # the log's family id: counted and locked on
+        self.assertEqual(r['side']['pokemon'][0]['moves'][3], 'hiddenpowerfire')
+        gone = gv.request(t, hp2, hpl[:-1] + ['|-enditem|p1a: Gengar|Choice Band|[from] move: Knock Off', '|turn|3'], 'p1', 'move')
+        self.assertEqual((gone['side']['pokemon'][0]['item'], [x['disabled'] for x in gone['active'][0]['moves']]), ('', [False] * 4))   # lock lifted
+        empty = self.team();empty[0]['moves'][3] = 'explosion'
+        boom = gv.request(t, empty, ['|start', '|switch|p1a: Gengar|Gengar, L80|230/230'] + ['|move|p1a: Gengar|Explosion|p2a: X'] * 8 + ['|turn|9'], 'p1', 'move')
+        self.assertEqual((boom['active'][0]['moves'][3]['pp'], boom['active'][0]['moves'][3]['disabled']), (0, True))   # no PP left: disabled
+        sick = gv.request(t, self.team(), lines[:5] + ['|-cureteam|p1a: Starmie|[from] move: Aromatherapy', '|turn|2'], 'p1', 'move')
+        self.assertEqual(sick['side']['pokemon'][0]['condition'], '200/250')   # Starmie's paralysis cured with the team
         forced = gv.request(t, self.team(), lines, 'p1', 'switch')
         self.assertEqual((forced['forceSwitch'], 'active' in forced), ([True], False))
 
