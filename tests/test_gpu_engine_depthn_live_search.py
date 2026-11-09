@@ -24,7 +24,7 @@ U=2.**-53
 KEYS={'schema','request_id','rung','archive_sha256','status','action_index','q_values','refusal','cause','requested_worlds','constructed_worlds',
     'decision_seconds','root_operator','policy_target','root_value','action_policy_target','block_causes','world_refusals','timings','batch_size',
     'bucket','tree_commit','pricer','root_operator_impl','completed_q','action_mean_q','mean_q_agrees','reduction_note','root_classes','root_class',
-    'root_class_source','root_class_crosscheck','root_view_source','b2_view','effect_guard'}
+    'root_class_source','root_class_crosscheck','root_view_source','b2_view','effect_guard','private_reveals'}
 TREE='0123456789abcdef'*2+'01234567'
 
 
@@ -372,6 +372,22 @@ class LiveSearchTests(unittest.TestCase):
         self.assertEqual((rows[1]['status'],rows[1]['effect_guard']),('REFUSED',None))
         self.assertEqual((clear[0]['status'],clear[0]['effect_guard']['tripped'],clear[0]['effect_guard']['reasons']),('COMPLETE',False,[]))
         self.assertEqual((clear[0]['effect_guard']['m_own'],clear[0]['effect_guard']['m_opp'],clear[0]['effect_guard']['arms']),(0.,0.,[]))
+
+    def test_the_private_reveal_flag_reaches_prepare_roots_and_every_built_response_records_it(self):
+        """redact_private_reveals (off by default) goes to every prepare_roots call; each response whose root prepare() built
+        carries constructor_worlds' private_reveal_record (the fake prefix reveals nothing privately); a refused root has none."""
+        outcomes={('g',0):self.outcome(0),('r',0):Refusal('SEARCH_PREFIX_OR_REQUEST_MISMATCH')}
+        for flag in(False,True):
+            with self.subTest(flag=flag):
+                calls=[];real=cw.prepare_roots
+                def spy(*a,**kw):calls.append(kw.get('redact_private_reveals',False));return real(*a,**kw)
+                search=self.search(**({'redact_private_reveals':True}if flag else{}))
+                self.assertIs(search.redact_private_reveals,flag)
+                with patch.object(cw,'prepare_roots',side_effect=spy):rows,_=self.run_batch(search,[request('g',0),request('r',0)],outcomes)
+                self.assertEqual((calls,rows[0]['status']),([flag],'COMPLETE'))
+                self.assertEqual(rows[0]['private_reveals'],dict(enabled=flag,found=[],applicable=[],redacted=[],unmatched=[]))
+                self.assertEqual((rows[1]['status'],rows[1]['private_reveals']),('REFUSED',None));encode(rows[0])
+        with self.assertRaisesRegex(ValueError,'redact_private_reveals'):self.search(redact_private_reveals=1)
 
     def test_a_root_whose_opponent_must_recharge_is_constructor_refused(self):
         """The lead's decision: the peer's -mustrecharge on the owner's lines refuses the root in prepare_roots (cause

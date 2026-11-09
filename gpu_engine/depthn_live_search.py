@@ -75,10 +75,14 @@ request_id. Per batch (process_many chunks a longer list into batches of max_req
   diagnostic of world 0's view against B2's encoding (wire_b2_view: equal, per-key equal flags, the largest numeric
   difference, error). Both are None for a root that never reached the root view; a root refused ROOT_LEGAL_EMPTY has
   b2_view set and root_view_source None (build checks the legal mask between the two).
+- private reveals (`private_reveals`, every response whose root prepare() built; None otherwise): constructor_worlds'
+  private_reveal_record (enabled, found, applicable, redacted, unmatched): the owner's abilities its lines revealed only on
+  Showdown's side-private Gen 3 Pressure line, and, with redact_private_reveals (the server's --redact-private-reveals; off
+  by default), the members whose public ability it cleared from the peer's view of the owner side in every world.
 Response, per the live contract: schema, request_id, rung, archive_sha256, status, action_index, q_values (9, None on
 illegal lanes), refusal, cause, requested_worlds, constructed_worlds, decision_seconds (batch start -> result, COMPLETE
 only); ours: root_operator, root_operator_impl, completed_q, policy_target, root_value, action_mean_q,
-action_policy_target, mean_q_agrees, reduction_note, root_view_source, b2_view, effect_guard, block_causes, world_refusals, timings (queue_seconds,
+action_policy_target, mean_q_agrees, reduction_note, root_view_source, b2_view, effect_guard, private_reveals, block_causes, world_refusals, timings (queue_seconds,
 prepare_seconds (the root's own), build/price/reduce_seconds (the shared batch's; reduce = backups, averaging and the
 reporting reduction)), batch_size, bucket, tree_commit, pricer. Fields a request never reached are None. `rung` echoes the
 request's when it is a string (so a RUNG_NOT_SERVED refusal still matches the client's rung), else this server's.
@@ -247,10 +251,13 @@ def _real(x):
 
 class DepthNLiveSearch:
     def __init__(self,*,constructor,pricers,params,binding,recipe,tree_commit,min_price_seconds=1.,max_requests=None,session_cap=256,
-            archive_sha256=None,device='cpu',clock=time.monotonic,refuse_classes=()):
+            archive_sha256=None,device='cpu',clock=time.monotonic,refuse_classes=(),redact_private_reveals=False):
         """`pricers`: make_pricers' {bucket: DepthNPricer}; `binding`: the pricer side's WorldBinding (constructor_worlds.binding of
         the executor's source, engine metadata and catalog); `recipe`: the lane-order Recipe; `clock` must be the server's
-        arrival clock (time.monotonic)."""
+        arrival clock (time.monotonic); `redact_private_reveals`: constructor_worlds' private-reveal redaction in every
+        prepare_roots call (off by default; each response's private_reveals records what it found and redacted)."""
+        if type(redact_private_reveals)is not bool:raise ValueError('redact_private_reveals must be a bool')
+        self.redact_private_reveals=redact_private_reveals
         W=constructor.count;self.rung=next((r for r,w in RUNGS.items()if w==W),None)
         if self.rung is None:raise ValueError(f'a constructor of W in {tuple(RUNGS.values())} worlds required, got {W!r}')
         self.W,self.K=W,W//2;self.buckets=tuple(sorted(pricers))
@@ -286,6 +293,11 @@ class DepthNLiveSearch:
             evaluator=evaluators.describe(self.forward)['identity'],world_source=cw.SOURCE,backup='learner_max',root_operator=ROOT_OPERATOR,
             root_operator_impl=ROOT_OPERATOR_IMPL,matmul_precision=str(jax.config.jax_default_matmul_precision or'default'))
 
+    def _redaction(self):
+        """prepare_roots' keyword for the private-reveal redaction: given only when it is on (a search built before the flag, or
+        without __init__, has none: off)."""
+        return{'redact_private_reveals':True}if getattr(self,'redact_private_reveals',False)else{}
+
     @property
     def programs(self):
         """Every compiled program of the live pricers (the union of their tables; one shared table from make_pricers)."""
@@ -296,7 +308,7 @@ class DepthNLiveSearch:
         return dict(schema=SCHEMA,request_id=request_id,rung=self.rung,archive_sha256=self.archive_sha256,status='REFUSED',action_index=None,q_values=None,
             refusal=None,cause=None,requested_worlds=self.W,constructed_worlds=0,decision_seconds=None,root_operator=ROOT_OPERATOR,
             root_operator_impl=ROOT_OPERATOR_IMPL,completed_q=None,policy_target=None,root_value=None,action_mean_q=None,action_policy_target=None,
-            mean_q_agrees=None,reduction_note=None,root_view_source=None,b2_view=None,effect_guard=None,block_causes=None,world_refusals=None,
+            mean_q_agrees=None,reduction_note=None,root_view_source=None,b2_view=None,effect_guard=None,private_reveals=None,block_causes=None,world_refusals=None,
             timings=dict.fromkeys(STAGES),
             batch_size=n,bucket=None,
             root_classes=None,root_class=None,root_class_source=None,root_class_crosscheck=None,
@@ -358,7 +370,8 @@ class DepthNLiveSearch:
         requests; {response index: response}."""
         for _,p,_ in todo:
             if type(p['battle_id'])is str:self.battles[p['battle_id']]=None;self.battles.move_to_end(p['battle_id'])
-        prepared=cw.prepare_roots(self.constructor,[p for _,p,_ in todo],device=self.device);t_prepare=time.perf_counter()
+        prepared=cw.prepare_roots(self.constructor,[p for _,p,_ in todo],device=self.device,
+            **self._redaction());t_prepare=time.perf_counter()
         gated=[];gates={}
         for(i,p,_),item in zip(todo,prepared):
             clock=time.perf_counter()
@@ -408,7 +421,8 @@ class DepthNLiveSearch:
                 build_seconds=t_build-t_classify,price_seconds=t_price-t_build,reduce_seconds=t_reduce-t_price)
             base=dict(row,**labels,constructed_worlds=sum(w.state is not None for w in worlds),world_refusals=[dict(world=w.index,kinds=list(w.refusals))for w in worlds if w.refusals],
                 timings=timings,bucket=chosen,block_causes=None if result['block_causes']is None else list(result['block_causes']),
-                root_view_source=result['root_view_source'],b2_view=result['b2_view'])
+                root_view_source=result['root_view_source'],b2_view=result['b2_view'],
+                private_reveals=getattr(item,'private_reveals',None)if type(item)is cw.Prepared else None)
             if i in gates:out[i]=dict(base,cause=gates[i][0],refusal=gates[i][1])
             elif result['status']=='COMPLETE':
                 out[i]=dict(base,**{k:result[k]for k in('status','action_index','q_values','completed_q','policy_target','root_value','action_mean_q',
@@ -501,7 +515,8 @@ class DepthNLiveSearch:
         self.reset_sessions()
         requests=[dict(r,schema=SCHEMA,request_id=f'warmup-structure-{j}')for j,r in enumerate(pool)]
         odd=[];labels=None;tried=False;gather=getattr(self.pricers[self.buckets[0]],'labels',guard_inputs.child_labels)
-        for request,item in zip(requests,cw.prepare_roots(self.constructor,requests,device=self.device)):
+        for request,item in zip(requests,cw.prepare_roots(self.constructor,requests,device=self.device,
+                **self._redaction())):
             if type(item)is not cw.Prepared or not item.made.fully_constructed:continue
             if not tried:
                 tried=True

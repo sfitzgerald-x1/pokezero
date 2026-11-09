@@ -739,4 +739,139 @@ class B2EncodingTests(unittest.TestCase):
         np.testing.assert_array_equal(cat,np.asarray(b2['categorical_ids']));self.assertEqual(int(cat[7,33]),0)
 
 
+# Private reveals: Showdown's Gen 3 Pressure start reaches the holder's side alone (constructor_worlds' module docstring).
+PRIVATE_LINES=['|switch|p1a: Birdy|Alpha, L80|100/100','|-ability|p1a: Birdy|Pressure|[silent]','|switch|p2a: Delta|Delta, L80|100/100',
+    '|-ability|p2a: Delta|Pressure|[silent]',   # the opponent's own private line (never on our wire): never the owner's
+    '|switch|p1a: Beta|Beta, L80|100/100','|-ability|p1a: Beta|Pressure|[silent]',
+    '|-ability|p2a: Delta|Pressure|Trace|[from] ability: Trace|[of] p1a: Beta',   # the opponent's tracer copies Beta's Pressure: public
+    '|switch|p1a: Gamma|Gamma, L80|100/100','|-ability|p1a: Gamma|Pressure|[silent]','|-ability|p1a: Gamma|Pressure',   # a public -ability
+    '|switch|p1a: Epsilon|Epsilon, L80|100/100','|-ability|p1a: Epsilon|Pressure|[silent]',
+    '|-heal|p1a: Epsilon|100/100|[from] ability: Volt Absorb|[of] p2a: Delta',   # another ability's attribution keeps nothing
+    '|switch|p1a: Zeta|Zeta, L80|100/100','|-ability|p1a: Zeta|Pressure|[silent]','|-damage|p2a: Delta|50/100|[from] ability: Pressure|[of] p1a: Zeta',
+    '|turn|1']
+
+
+def reveal_tables():
+    return cw._table(np.zeros((len(PRESSURE_NAMES),2),np.int32),species_names=PRESSURE_NAMES,ability_names=ABILITIES)
+
+
+class PrivateRevealTests(unittest.TestCase):
+    def test_line_facts_keep_only_the_owners_side_private_reveals(self):
+        """Own [silent] Pressure (by species, through a nickname) is private; a Trace copy [of] our member, a public -ability line
+        and a [from] ability: Pressure attribution keep it public; another ability's attribution does not; the opponent side is
+        never the owner's."""
+        facts=cw.line_facts(PRIVATE_LINES,0)
+        self.assertEqual(facts.private_reveals,((('alpha','pressure'),('epsilon','pressure')),()))
+        self.assertEqual(cw.line_facts(PRIVATE_LINES[:4],1).private_reveals,((),(('delta','pressure'),)))   # owner p2: its own line
+        # later lines attribute Pressure to Delta (the subject of its Trace copy and of a [from] ability: Pressure line): an
+        # over-attribution, which only keeps a reveal public (the conservative side)
+        self.assertEqual(cw.line_facts(PRIVATE_LINES,1).private_reveals,((),()))
+        self.assertEqual(cw.line_facts(PRIVATE_LINES[:2],0).private_reveals,((('alpha','pressure'),),()))
+        tagged=['|switch|p1a: Alpha|Alpha, L80|100/100','|-ability|p1a: Alpha|Pressure|[silent]|[of] p2a: Delta']   # a tag: not the private form
+        self.assertEqual(cw.line_facts(tagged,0).private_reveals,((),()))
+        self.assertEqual(cw.line_facts(['|switch|p1a: Alpha|Alpha, L80|100/100','|turn|1'],0),cw.LineFacts((),()))
+
+    def carry(self,*,borrowed=0):
+        """A from_b2-style carry, owner p1: Alpha (Pressure, shown; `borrowed` its running ability), Beta (Pressure), Gamma (Swift
+        Swim) on the owner side; Delta (Pressure) on the peer side."""
+        t=carry([[1,2,3,0,0,0],[4,0,0,0,0,0]],[[0,1,2,-1,-1,-1],[0,-1,-1,-1,-1,-1]])
+        original=np.asarray([[[1,1,3,0,0,0],[1,0,0,0,0,0]]],np.int32);borrow=np.zeros((1,2,6),np.int32);borrow[0,0,0]=borrowed
+        shown=np.where(borrow>0,borrow,original).astype(np.int32)
+        return t._replace(original_ability=j.asarray(original),shown_ability=j.asarray(shown),borrowed_ability=j.asarray(borrow))
+
+    def test_the_redaction_clears_the_owners_private_members_only(self):
+        lines=['|switch|p1a: Alpha|Alpha, L80|100/100','|-ability|p1a: Alpha|Pressure|[silent]','|switch|p2a: Delta|Delta, L80|100/100',
+            '|-ability|p2a: Delta|Pressure|[silent]','|switch|p1a: Gamma|Gamma, L80|100/100','|-ability|p1a: Gamma|Pressure|[silent]',
+            '|switch|p1a: Omega|Omega, L80|100/100','|-ability|p1a: Omega|Pressure|[silent]']
+        facts=cw.line_facts(lines,0);t=self.carry();tables=reveal_tables()
+        done=cw.redact_private_reveals(t,0,facts,tables)
+        self.assertEqual(np.asarray(done.original_ability)[0].tolist(),[[0,1,3,0,0,0],[1,0,0,0,0,0]])   # Alpha only; Delta (peer) kept
+        self.assertEqual(np.asarray(done.shown_ability)[0].tolist(),[[0,1,3,0,0,0],[1,0,0,0,0,0]])
+        self.assertIs(done.borrowed_ability,t.borrowed_ability)
+        same=('original_ability','shown_ability')
+        self.assertTrue(all(x is y for(_,x),(_,y)in zip(leaves(t,same),leaves(done,same))))
+        self.assertIs(cw.redact_private_reveals(done,0,facts,tables),done)   # a second pass is a no-op
+        record=cw.private_reveal_record(t,0,facts,tables,False)
+        self.assertEqual(record,dict(enabled=False,found=[dict(species=s,ability='pressure')for s in('alpha','gamma','omega')],
+            applicable=[dict(species='alpha',ability='pressure',slot=0)],redacted=[],
+            unmatched=[dict(species='gamma',ability='pressure',reason='not_shown'),dict(species='omega',ability='pressure',reason='no_member')]))
+        self.assertEqual(cw.private_reveal_record(t,0,facts,tables,True)['redacted'],[dict(species='alpha',ability='pressure',slot=0)])
+        self.assertIsNone(cw.private_reveal_record(t,0,None,tables,True))
+        theirs=cw.redact_private_reveals(t,1,cw.line_facts(lines,1),tables)   # owner p2: its own Delta, never p1's members
+        self.assertEqual(np.asarray(theirs.original_ability)[0].tolist(),[[1,1,3,0,0,0],[0,0,0,0,0,0]])
+        running=self.carry(borrowed=2);done=cw.redact_private_reveals(running,0,facts,tables)   # a running copy stays shown
+        self.assertEqual((np.asarray(done.original_ability)[0,0,0],np.asarray(done.shown_ability)[0,0,0],np.asarray(done.borrowed_ability)[0,0,0]),(0,2,2))
+
+
+class PrivateRevealB2Tests(unittest.TestCase):
+    """The real B2 fold (tests/test_phase_d_device_worlds' authored lines) on the owner's own side-private Pressure line: B2 records it
+    (the leak), the redaction clears it from every world; the owner's own view (and its parity with B2's encoding) is unchanged and
+    only the peer's view of that member changes (REVEALED_ABILITY); a Trace copy of it keeps it."""
+    @classmethod
+    def setUpClass(cls):
+        import test_phase_d_device_worlds as D
+        from gpu_engine import engine_device_observation as e
+        D.WorldsTests.setUpClass();cls.fx=D.WorldsTests('test_real_b2_fold_to_16_and32_source_worlds_both_owners')
+        cls.carry=cw.carry_tables(cls.fx.metadata,cls.fx.catalog);cls.observation=e.compile_tables(cls.fx.metadata,catalog=cls.fx.catalog)
+        cls.e=e
+
+    def root(self,owner,body):
+        from gpu_engine import phase_d_live_worlds as live
+        from pokezero import v5_contract
+        from pokezero.recorded_encoder_runner import JaxRecordedAdapter
+        f=self.fx;own,peer=f'p{owner+1}',f'p{2-owner}'
+        lines=(f'|switch|{own}a: Alpha|Alpha, L80|291/291',*[x.replace('OWN',own).replace('PEER',peer)for x in body])
+        a=JaxRecordedAdapter(f.catalog,owner_side=owner);a.reset(stream_id=1,battle_id='authored');a.feed(lines)
+        root=live.from_b2(a,f.request(owner),f.source,f.metadata,address=v5_contract.DecisionAddress(1,0,owner))
+        return root,live.sample_worlds(root,f.source,f.tables,count=16,seed=9),cw.line_facts(lines,owner)
+
+    def view(self,world,side,b2):
+        from gpu_engine import device_public_leaf as leaf
+        mask=j.asarray(np.asarray(b2['legal_action_mask'],bool)[None])
+        out=leaf.from_public(world.state,world.public,self.observation,observer_sides=j.asarray([side],j.int32),legal_action_mask=mask,
+            enable_device_leaf=True).observation
+        return{k:np.asarray(getattr(out,k))for k in('numeric_features','categorical_ids','token_type_ids','attention_mask')}
+
+    def test_the_owners_private_pressure_leaves_the_peers_view_only(self):
+        pressure=self.carry.ability_names.index('pressure');revealed=self.e._index('REVEALED_ABILITY')
+        for owner in(0,1):
+            with self.subTest(owner=owner):
+                root,made,facts=self.root(owner,['|-ability|OWNa: Alpha|Pressure|[silent]','|switch|PEERa: Beta|Beta, L80|100/100','|turn|1'])
+                self.assertEqual(int(np.asarray(root.public.original_ability)[0,owner,0]),pressure)   # B2's fold records it: the leak
+                self.assertEqual(facts.private_reveals[owner],(('alpha','pressure'),))
+                for enabled in(False,True):   # the record on the real root carry, a non-empty `found`
+                    self.assertEqual(cw.private_reveal_record(root.public,owner,facts,self.carry,enabled),dict(enabled=enabled,
+                        found=[dict(species='alpha',ability='pressure')],applicable=[dict(species='alpha',ability='pressure',slot=0)],
+                        redacted=[dict(species='alpha',ability='pressure',slot=0)]if enabled else[],unmatched=[]))
+                b2=root.view['_b2_root_inputs'];peer=1-owner
+                for w in made.worlds:
+                    off=cw.complete_world(w,self.carry,owner,facts=facts,root=root.public)
+                    on=cw.complete_world(w,self.carry,owner,facts=facts,root=root.public,redact_private_reveals=True)
+                    o,f=np.asarray(on.public.original_ability)[0],np.asarray(off.public.original_ability)[0]
+                    self.assertEqual((int(f[owner,0]),int(o[owner,0]),int(np.asarray(on.public.shown_ability)[0,owner,0])),(pressure,0,0))
+                    np.testing.assert_array_equal(o[peer],f[peer]);self.assertIs(on.state,off.state)
+                    self.assertIs(cw.complete_world(on,self.carry,owner,facts=facts,root=root.public,redact_private_reveals=True),on)
+                    if w.index>1:continue   # the views on two worlds (every world's carry is redacted alike above)
+                    mine_on,mine_off=self.view(on,owner,b2),self.view(off,owner,b2)
+                    for k in mine_on:np.testing.assert_array_equal(mine_on[k],mine_off[k],err_msg=k)   # the owner's view: unchanged
+                    if w.index==0:   # root/B2 parity of world 0's owner view holds with the redaction
+                        np.testing.assert_array_equal(mine_on['categorical_ids'][0,:23],np.asarray(b2['categorical_ids']))
+                        np.testing.assert_allclose(mine_on['numeric_features'][0,:23],np.asarray(b2['numeric_features']),atol=1e-6)
+                    theirs_on,theirs_off=self.view(on,peer,b2),self.view(off,peer,b2)
+                    changed=np.argwhere(theirs_on['numeric_features']!=theirs_off['numeric_features']).tolist()
+                    self.assertEqual(changed,[[0,7,revealed]])   # the peer's view of our Alpha (its foe token 7): REVEALED_ABILITY only
+                    self.assertEqual((theirs_off['numeric_features'][0,7,revealed],theirs_on['numeric_features'][0,7,revealed]),(1.,0.))
+                    for k in('categorical_ids','token_type_ids','attention_mask'):np.testing.assert_array_equal(theirs_on[k],theirs_off[k],err_msg=k)
+
+    def test_a_trace_copy_of_it_keeps_it_public(self):
+        root,made,facts=self.root(0,['|-ability|OWNa: Alpha|Pressure|[silent]','|switch|PEERa: Beta|Beta, L80|100/100',
+            '|-ability|PEERa: Beta|Pressure|Trace|[from] ability: Trace|[of] OWNa: Alpha','|turn|1'])
+        self.assertEqual(facts.private_reveals,((),()))
+        pressure=self.carry.ability_names.index('pressure')
+        self.assertEqual(int(np.asarray(root.public.original_ability)[0,0,0]),pressure)   # public through the copy's [of]
+        for w in made.worlds:self.assertIs(cw.redact_private_reveals(w.public,0,facts,self.carry),w.public)   # (the fixture has no Trace
+        # in its vocabulary, so the full completion's Trace fix cannot run here: the redaction step alone)
+        self.assertEqual(cw.private_reveal_record(root.public,0,facts,self.carry,True),dict(enabled=True,found=[],applicable=[],redacted=[],unmatched=[]))
+
+
 if __name__=='__main__':unittest.main()
