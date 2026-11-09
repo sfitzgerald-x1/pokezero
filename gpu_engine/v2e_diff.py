@@ -169,6 +169,9 @@ def run(module, shard_paths, template, context, *, out, workers=8, repro_lanes=1
         if key not in jitted:jitted[key] = jax.jit(lambda s, a, t: fn(s, a, t, context))
         return jitted[key](*args)
     totals = {};compared = 0;differing = 0;first = None;begin = time.perf_counter()
+    # One jitted comparison per output structure and lane count: a hook: module returns thousands of leaves, which eager
+    # per-leaf comparisons would dispatch one by one.
+    compare = jax.jit(lane_differences)
     def prefetched(paths):
         # Bounded read-ahead: at most `workers` shards in flight.
         with ThreadPoolExecutor(max_workers=workers) as pool:
@@ -182,7 +185,7 @@ def run(module, shard_paths, template, context, *, out, workers=8, repro_lanes=1
             if lanes:leaves = [x[:lanes] for x in leaves]   # e.g. an odd lane count, to exercise lane-count-dependent addressing
             state, actions, trackers = jax.tree.unflatten(treedef, [jax.numpy.asarray(x) for x in leaves])
             want = call('jax', jax_fn, state, actions, trackers);got = call('cuda', cuda_fn, state, actions, trackers)
-            diffs = lane_differences(want, got);n = state.hp.shape[0];compared += n
+            diffs = compare(want, got);n = state.hp.shape[0];compared += n
             any_lane = np.zeros(n, bool)
             for name, d in diffs.items():
                 d = np.asarray(d);totals[name] = totals.get(name, 0) + int(d.sum());any_lane |= d if d.shape == any_lane.shape else d.any()
