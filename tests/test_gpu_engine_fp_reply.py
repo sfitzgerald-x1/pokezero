@@ -69,7 +69,7 @@ def request(tag, *, force=False):
 
 
 def game(**overrides):
-    base = dict(seed=11, fp=FP_SEAT, ours=OUR_SEAT, journal={0: dict(round=0, action=2, choice='move x'), 1: dict(round=1, action=5, choice='switch 3')},
+    base = dict(seed=11, fp=FP_SEAT, ours=OUR_SEAT, journal={0: dict(round=0, action=2, choice='act 2'), 1: dict(round=1, action=5, choice='act 5')},
                 our_actions=[0, 1], our_greedy=[0, 4], winner=OUR_SEAT,
                 our_requests=['|request|' + json.dumps(dict(request('a'), side={'name': 'Other', 'id': OUR_SEAT, 'pokemon': ['a']}, rqid=1)),
                               '|request|' + json.dumps(request('b'))])
@@ -81,7 +81,19 @@ def two_rounds():
             {OUR_SEAT: (legal(1, 4), request('b')), FP_SEAT: (legal(2, 5), {'forceSwitch': [True]})}]
 
 
+def fake_choice_action(env, player, choice):
+    """Stands in for decoding a /choose body on the replayed state: 'act N' decodes to N, anything else to None."""
+    kind, _, arg = (choice or '').partition(' ')
+    return int(arg) if kind == 'act' and arg.isdigit() else None
+
+
 class ReplayTests(unittest.TestCase):
+    def setUp(self):
+        self.real_choice_action = d.choice_action;d.choice_action = fake_choice_action
+
+    def tearDown(self):
+        d.choice_action = self.real_choice_action
+
     def test_aligned_game_records_foul_play_rows_and_steps_both_choices(self):
         env = FakeEnv(two_rounds(), OUR_SEAT)
         rows, parity, decided = d.replay(env, FakePolicy(), game(), rng=None)
@@ -96,16 +108,45 @@ class ReplayTests(unittest.TestCase):
         with self.assertRaisesRegex(d.Mismatch, 'our request differs'):d.replay(FakeEnv(two_rounds(), OUR_SEAT), FakePolicy(), bad, rng=None)
 
     def test_foul_play_requested_without_entry(self):
-        g = game(journal={0: dict(round=0, action=2)})
+        g = game(journal={0: dict(round=0, action=2, choice='act 2')})
         with self.assertRaisesRegex(d.Mismatch, 'without a journal entry'):d.replay(FakeEnv(two_rounds(), OUR_SEAT), FakePolicy(), g, rng=None)
 
     def test_unused_journal_entry(self):
-        g = game(journal={0: dict(round=0, action=2), 1: dict(round=1, action=5), 4: dict(round=4, action=0)})
+        g = game(journal={0: dict(round=0, action=2, choice='act 2'), 1: dict(round=1, action=5, choice='act 5'), 4: dict(round=4, action=0, choice='act 0')})
         with self.assertRaisesRegex(d.Mismatch, 'never requested'):d.replay(FakeEnv(two_rounds(), OUR_SEAT), FakePolicy(), g, rng=None)
 
     def test_illegal_foul_play_action(self):
-        g = game(journal={0: dict(round=0, action=3), 1: dict(round=1, action=5)})
+        g = game(journal={0: dict(round=0, action=3, choice='act 3'), 1: dict(round=1, action=5, choice='act 5')})
         with self.assertRaisesRegex(d.Mismatch, 'illegal'):d.replay(FakeEnv(two_rounds(), OUR_SEAT), FakePolicy(), g, rng=None)
+
+    def test_one_seat_rounds_leave_journal_holes_and_keep_our_actions_in_order(self):
+        rounds = [{OUR_SEAT: (legal(0, 1, 4), request('a')), FP_SEAT: (legal(0, 2, 5), {'active': []})},
+                  {OUR_SEAT: (legal(1, 4), request('b'))},                               # Foul Play waits: a journal hole
+                  {FP_SEAT: (legal(5, 6), {'forceSwitch': [True]})},                     # only Foul Play: none of our actions
+                  {OUR_SEAT: (legal(1, 4), request('c')), FP_SEAT: (legal(0, 2), {'active': []})}]
+        g = game(journal={0: dict(round=0, action=2, choice='act 2'), 2: dict(round=2, action=6, choice='act 6'),
+                          3: dict(round=3, action=0, choice='act 0')},
+                 our_actions=[0, 4, 1], our_greedy=[0, 1, 1], our_requests=['|request|' + json.dumps(request(t)) for t in 'abc'])
+        env = FakeEnv(rounds, OUR_SEAT);rows, parity, decided = d.replay(env, FakePolicy(), g, rng=None)
+        self.assertEqual(env.steps, [{OUR_SEAT: 0, FP_SEAT: 2}, {OUR_SEAT: 4}, {FP_SEAT: 6}, {OUR_SEAT: 1, FP_SEAT: 0}])
+        self.assertEqual([(r['round'], r['label'], r['forced']) for r in rows], [(0, 2, False), (2, 6, True), (3, 0, False)])
+        self.assertEqual((parity, decided), (3, 3))
+
+    def test_journal_choice_must_decode_to_its_action(self):
+        g = game(journal={0: dict(round=0, action=2, choice='act 0'), 1: dict(round=1, action=5, choice='act 5')})
+        with self.assertRaisesRegex(d.Mismatch, 'decodes to 0, not its action 2'):d.replay(FakeEnv(two_rounds(), OUR_SEAT), FakePolicy(), g, rng=None)
+        g = game(journal={0: dict(round=0, action=2, choice='default'), 1: dict(round=1, action=5, choice='act 5')})
+        with self.assertRaisesRegex(d.Mismatch, 'decodes to None'):d.replay(FakeEnv(two_rounds(), OUR_SEAT), FakePolicy(), g, rng=None)
+
+    def test_our_seat_beyond_its_recorded_decisions_or_without_a_capture(self):
+        g = game(our_actions=[0], our_greedy=[0], our_requests=game()['our_requests'][:1])
+        with self.assertRaisesRegex(d.Mismatch, 'beyond its 1 recorded'):d.replay(FakeEnv(two_rounds(), OUR_SEAT), FakePolicy(), g, rng=None)
+        g = game(our_requests=[game()['our_requests'][0], None])
+        with self.assertRaisesRegex(d.Mismatch, 'our request differs'):d.replay(FakeEnv(two_rounds(), OUR_SEAT), FakePolicy(), g, rng=None)
+
+    def test_telemetry_count_must_match_the_result(self):
+        with self.assertRaisesRegex(d.Mismatch, 'telemetry has 2 decisions, the result 3'):
+            d.replay(FakeEnv(two_rounds(), OUR_SEAT), FakePolicy(), game(decisions=3), rng=None)
 
     def test_winner_and_decision_count(self):
         with self.assertRaisesRegex(d.Mismatch, 'winner'):d.replay(FakeEnv(two_rounds(), FP_SEAT), FakePolicy(), game(), rng=None)
@@ -158,6 +199,12 @@ class MetricTests(unittest.TestCase):
     def test_calibration_error(self):
         self.assertEqual(d.calibration_error(np.array([.5, .5]), np.array([1., 0.])), 0.)
         self.assertAlmostEqual(d.calibration_error(np.array([.9, .9, .3]), np.array([1., 0., 0.])), (2 / 3) * .4 + (1 / 3) * .3)
+        self.assertAlmostEqual(d.calibration_error(np.array([1., .95]), np.array([1., 1.])), .025)   # 1.0 lands in the last bin
+
+    def test_uniform_top1_is_the_expected_accuracy(self):
+        legality = np.array([legal(0, 1), legal(0, 1, 2, 3)]);probs = legality / legality.sum(1, keepdims=True)
+        m = d.metrics(probs, np.array([0, 0]), legality, uniform=True)
+        self.assertAlmostEqual(m['top1'], (1 / 2 + 1 / 4) / 2);self.assertIsNone(m['ece'])
 
     def test_split_and_band(self):
         self.assertEqual(list(d.split_of(np.array([10, 21, 32]))), ['test', 'val', 'train'])

@@ -7,10 +7,15 @@ DATA_DIR holds fp_reply_data shards (one row per Foul Play decision, games in de
 battle seed: seed % 10 == 0 is test, == 1 is validation, the rest train (fp_reply_data.split_of). Each row's input is the
 champion's own window: the last window_size Foul Play observations of that game, front-padded as observation_window_to_torch
 does. The loss is cross-entropy of Foul Play's action under the legal-masked policy logits; the value head gets no loss. The
-best epoch by validation NLL is kept and saved in the champion's checkpoint format (policy only; its value output is not
-trained).
-Reported on the test split, by the fp_reply_data groups: the champion's π zero-shot (its stored probabilities), π recalibrated
-(a temperature and a switch bias fitted on train), and π_FP.
+best epoch by validation NLL is kept and saved in the champion's checkpoint format, marked policy-only: a top-level `fp_reply`
+key, value_calibration_transform cleared, and policy_id renamed. The value head gets no gradient but the shared trunk moves, so
+its value output is meaningless.
+Reported on the test split, by the fp_reply_data groups: uniform over legal (top-1 is a uniform guess's expectation), the
+champion's π zero-shot (its stored probabilities), π recalibrated (a temperature and a switch bias fitted on train, from the
+stored float32 probabilities clipped at 1e-12, so tail actions share one floor; a slight approximation), and π_FP.
+Checks: TF32 is off, so CUDA matmuls are fp32. Before training, the base model's validation probabilities through windows/batch
+must reproduce the stored π to 1e-3. --export-archive recomputes π_FP on CPU in fp32 and requires the JAX archive forward to
+match it to 1e-4.
 """
 import argparse
 import glob
@@ -95,32 +100,40 @@ def recalibrate(probs, labels, legal, torch):
         lambda pr, lg: torch.exp(apply(p, torch.as_tensor(np.log(np.clip(pr, 1e-12, 1.)), dtype=torch.float64), torch.as_tensor(lg))).numpy()
 
 
-def grouped(probs, arrays, rows):
+def grouped(probs, arrays, rows, uniform=False):
     labels, legal, turn, forced = (arrays[k][rows] for k in ('label', 'legal', 'turn', 'forced'))
     can_switch = legal[:, data_mod.MOVES:].any(1);can_move = legal[:, :data_mod.MOVES].any(1)
     groups = dict(all=np.ones(len(rows), bool), move_request=~forced, forced_switch=forced, free_choice=can_move & can_switch & ~forced,
                   label_move=labels < data_mod.MOVES, label_switch=labels >= data_mod.MOVES)
     for low, high in data_mod.TURN_BANDS:
         groups[f'turn {low}-{high}' if high < 10**9 else f'turn {low}+'] = (turn >= low) & (turn <= high)
-    return {name: data_mod.metrics(probs[m], labels[m], legal[m]) for name, m in groups.items()}
+    return {name: data_mod.metrics(probs[m], labels[m], legal[m], uniform=uniform) for name, m in groups.items()}
 
 
 def test_report(arrays, test, pi_fp_probs, calibrated):
     """The four reply models on the test rows: uniform over legal actions, the champion's π (its stored probabilities), π recalibrated,
     and π_FP."""
     legal = arrays['legal'][test]
-    return dict(uniform_legal=grouped(legal / legal.sum(1, keepdims=True), arrays, test),
+    return dict(uniform_legal=grouped(legal / legal.sum(1, keepdims=True), arrays, test, uniform=True),
                 champion_pi=grouped(arrays['probs'][test], arrays, test),
                 champion_pi_recalibrated=grouped(calibrated(arrays['probs'][test], legal), arrays, test),
                 pi_fp=grouped(pi_fp_probs, arrays, test))
 
 
-def archive_parity(checkpoint, archive, arrays, rows, torch_probs, size=512):
-    """Export π_FP to the champion_evaluator weight archive and check the JAX forward reproduces the torch probabilities."""
+ARCHIVE_TOLERANCE = 1e-4
+INPUT_TOLERANCE = 1e-3
+
+
+def archive_parity(checkpoint, archive, arrays, index, rows, torch, extra, size=512):
+    """Export π_FP to the champion_evaluator weight archive and require the JAX fp32 forward to reproduce π_FP's torch probabilities,
+    recomputed on CPU in fp32, to ARCHIVE_TOLERANCE (an export bug that size can't hide behind kernel noise)."""
     import jax
     import jax.numpy as jnp
     from gpu_engine import champion
-    meta = champion.export(checkpoint, archive)
+    from pokezero.neural_policy import load_transformer_checkpoint
+    cpu_model, _ = load_transformer_checkpoint(checkpoint, map_location='cpu')
+    torch_probs = predict(cpu_model, arrays, index, rows, torch, 'cpu')
+    meta = champion.export(checkpoint, archive, extra=extra)
     params, config, loaded = champion.load(archive)
     worst = 0.;agree = 0
     for lo in range(0, len(rows), size):
@@ -131,8 +144,16 @@ def archive_parity(checkpoint, archive, arrays, rows, torch_probs, size=512):
         probs = np.asarray(jax.nn.softmax(logits, axis=-1));reference = torch_probs[lo:lo + size]
         worst = max(worst, float(np.abs(probs - reference).max()))
         agree += int((np.where(arrays['legal'][r], probs, -1).argmax(1) == np.where(arrays['legal'][r], reference, -1).argmax(1)).sum())
-    return dict(archive=str(archive), weights_archive_sha256=loaded['weights_archive_sha256'], checkpoint_sha256=meta['checkpoint_sha256'],
-                rows=int(len(rows)), max_abs_probability_difference=worst, argmax_agreement=agree / len(rows) if len(rows) else None)
+    result = dict(archive=str(archive), weights_archive_sha256=loaded['weights_archive_sha256'], checkpoint_sha256=meta['checkpoint_sha256'],
+                  extra=loaded.get('extra'), reference='torch fp32 on CPU', tolerance=ARCHIVE_TOLERANCE, rows=int(len(rows)),
+                  max_abs_probability_difference=worst, argmax_agreement=agree / len(rows) if len(rows) else None)
+    if not worst <= ARCHIVE_TOLERANCE:raise SystemExit(f'archive parity failed: {json.dumps(result)}')
+    return result
+
+
+def seats_by_split(arrays, rows):
+    """Rows per cell seat in each split (the collector may tie seat to seed parity, which would make a split single-seat)."""
+    return {name: {str(int(s)): int((arrays['seat'][r] == s).sum()) for s in np.unique(arrays['seat'])} for name, r in rows.items()}
 
 
 def main(argv=None):
@@ -146,7 +167,9 @@ def main(argv=None):
     args = parser.parse_args(argv)
     import torch
     from pokezero.neural_policy import checkpoint_file_sha256, load_transformer_checkpoint
+    torch.backends.cuda.matmul.allow_tf32 = False;torch.backends.cudnn.allow_tf32 = False
     torch.manual_seed(args.seed);rng = np.random.default_rng(args.seed)
+    if args.export_archive and Path(args.export_archive).exists():raise SystemExit(f'{args.export_archive} exists; champion.export writes exclusively')
     out = Path(args.out);out.mkdir(parents=True, exist_ok=True);started = time.time()
     arrays = load(args.data)
     model, result = load_transformer_checkpoint(args.evaluate or args.checkpoint, map_location=args.device)
@@ -155,7 +178,8 @@ def main(argv=None):
     split = data_mod.split_of(arrays['seed'])
     rows = {name: np.flatnonzero(split == name) for name in ('train', 'val', 'test')}
     games = {name: int(len(np.unique(arrays['ordinal'][r]))) for name, r in rows.items()}
-    print(json.dumps(dict(event='DATA', rows={k: int(len(v)) for k, v in rows.items()}, games=games, window=window)), flush=True)
+    seats = seats_by_split(arrays, rows)
+    print(json.dumps(dict(event='DATA', rows={k: int(len(v)) for k, v in rows.items()}, games=games, seats=seats, window=window)), flush=True)
     labels = arrays['label']
     calibration, calibrated = recalibrate(arrays['probs'][rows['train']], labels[rows['train']], arrays['legal'][rows['train']], torch)
     if args.evaluate:
@@ -163,16 +187,22 @@ def main(argv=None):
         report = dict(schema='v2s-fp-reply-model-eval.v1', data=str(args.data), base_checkpoint=str(args.checkpoint),
                       base_checkpoint_sha256=checkpoint_file_sha256(args.checkpoint), pi_fp=str(args.evaluate),
                       pi_fp_sha256=checkpoint_file_sha256(args.evaluate), window=window, rows={k: int(len(v)) for k, v in rows.items()},
-                      games=games, split_rule='battle seed % 10: 0 test, 1 validation, else train', recalibration=calibration,
+                      games=games, seats=seats, split_rule='battle seed % 10: 0 test, 1 validation, else train', recalibration=calibration,
                       ece_bins=data_mod.ECE_BINS, test=test_report(arrays, test, probs, calibrated))
+        (out / 'report-eval.json').write_text(json.dumps(report, indent=1) + '\n')
         if args.export_archive:
             if window != 1:raise SystemExit('champion_evaluator archives need window 1')
-            report['archive'] = archive_parity(args.evaluate, args.export_archive, arrays, test, probs)
-        (out / 'report-eval.json').write_text(json.dumps(report, indent=1) + '\n')
+            payload = torch.load(args.evaluate, map_location='cpu', weights_only=True)
+            report['archive'] = archive_parity(args.evaluate, args.export_archive, arrays, index, test, torch, payload.get('fp_reply'))
+            (out / 'report-eval.json').write_text(json.dumps(report, indent=1) + '\n')
         print(json.dumps(dict(event='EVALUATED', test_all={k: v['all'] for k, v in report['test'].items()}, archive=report.get('archive'))), flush=True)
         return 0
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
-    best = dict(epoch=0, val_nll=nll(predict(model, arrays, index, rows['val'], torch, args.device), labels[rows['val']]))
+    base_val = predict(model, arrays, index, rows['val'], torch, args.device)
+    input_parity = float(np.abs(base_val - arrays['probs'][rows['val']]).max()) if len(rows['val']) else 0.
+    print(json.dumps(dict(event='INPUT_PARITY', max_abs_probability_difference=input_parity, tolerance=INPUT_TOLERANCE)), flush=True)
+    if not input_parity <= INPUT_TOLERANCE:raise SystemExit(f'base model through windows/batch differs from the stored π by {input_parity}')
+    best = dict(epoch=0, val_nll=nll(base_val, labels[rows['val']]))
     best_state = {k: v.detach().cpu().clone() for k, v in model.state_dict().items()}
     history = [dict(epoch=0, val_nll=best['val_nll'])]
     print(json.dumps(dict(event='EPOCH', **history[-1])), flush=True)
@@ -191,12 +221,18 @@ def main(argv=None):
     test = rows['test']
     report = dict(schema='v2s-fp-reply-model.v1', data=str(args.data), checkpoint=str(args.checkpoint),
                   checkpoint_sha256=checkpoint_file_sha256(args.checkpoint), window=window, rows={k: int(len(v)) for k, v in rows.items()},
-                  games=games, split_rule='battle seed % 10: 0 test, 1 validation, else train', args=vars(args), history=history,
+                  games=games, seats=seats, input_parity=input_parity, split_rule='battle seed % 10: 0 test, 1 validation, else train',
+                  args=vars(args), history=history,
                   best_epoch=best['epoch'], recalibration=calibration, ece_bins=data_mod.ECE_BINS,
                   test=test_report(arrays, test, predict(model, arrays, index, test, torch, args.device), calibrated),
                   seconds=round(time.time() - started, 1))
-    payload = torch.load(args.checkpoint, map_location='cpu', weights_only=True)
-    payload = dict(payload);payload['state_dict'] = best_state
+    payload = dict(torch.load(args.checkpoint, map_location='cpu', weights_only=True))
+    base_sha = checkpoint_file_sha256(args.checkpoint)
+    payload['state_dict'] = best_state;payload['value_calibration_transform'] = None
+    if isinstance(payload.get('model_config'), dict) and 'policy_id' in payload['model_config']:
+        payload['model_config'] = dict(payload['model_config'], policy_id=f"fp-reply-{payload['model_config']['policy_id']}")
+    payload['fp_reply'] = dict(policy_only=True, base_checkpoint_sha256=base_sha, best_epoch=best['epoch'], data=str(args.data),
+                               note='policy fine-tuned on Foul Play decisions; the value output is not trained and must not be used')
     torch.save(payload, out / 'pi-fp.pt')
     report['saved'] = dict(path=str(out / 'pi-fp.pt'), sha256=checkpoint_file_sha256(out / 'pi-fp.pt'),
                            note='champion checkpoint format; policy fine-tuned on Foul Play decisions; the value head output is not trained')

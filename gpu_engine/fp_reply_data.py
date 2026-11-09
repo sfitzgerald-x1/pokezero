@@ -15,8 +15,11 @@ Foul Play's player view is rebuilt exactly, without an input log. The env config
 checkpoint, as the bridge does.
 Checks per game (a failing game is dropped and counted, never patched):
   - each of our seat's requests equals the captured own_request_line (rqid and the side's username ignored);
-  - Foul Play has a journal entry exactly in the rounds it is requested, and its action is legal in its own view;
-  - our seat's decision count and the terminal winner equal the result's.
+  - Foul Play has a journal entry exactly in the rounds it is requested, its action is legal in its own view, and its journaled
+    choice string decodes to that action on its own replayed state (teacher_capture.action_index_from_choice_string), which
+    constrains Foul Play's side of the replay directly;
+  - our seat's decisions are exactly the telemetry's (and the result's pokezero_decisions), and the terminal winner is the result's.
+An env error in one game (LocalShowdownError, ValueError) drops that game, counted by type, and the env is rebuilt.
 Reported, not a drop: encoder parity, the champion's argmax on our seat's env observation against the recorded greedy action.
 Games whose battle seed is in the screen band (2103400000 to 2103400999) are skipped: RR scores operators on those roots.
 Output per shard: shard-<I>.npz, one row per Foul Play decision (the observation arrays, legal mask, label, the champion's
@@ -28,6 +31,7 @@ import glob
 import json
 import math
 import random
+import re
 import sys
 import time
 from pathlib import Path
@@ -94,6 +98,12 @@ def load_game(collection, result_path):
                 checkpoint_sha256=request.get('checkpoint_sha256')), None
 
 
+def choice_action(env, player, choice):
+    """Foul Play's journaled /choose body decoded to our action index on its own replayed state (None if undecodable)."""
+    from pokezero.teacher_capture import action_index_from_choice_string
+    return action_index_from_choice_string(env._state_for_player(player), choice or '')
+
+
 def replay(env, policy, game, rng):
     """Replay one game; returns (Foul Play rows, our-seat parity hits, our-seat decisions). Raises Mismatch on any check."""
     env.reset(seed=game['seed']);policy.reset()
@@ -112,6 +122,9 @@ def replay(env, policy, game, rng):
                 action = int(entry['action'])
                 if not 0 <= action < ACTIONS or not observation.legal_action_mask[action]:
                     raise Mismatch(f'Foul Play action {action} illegal in its own view, round {round_}')
+                decoded = choice_action(env, player, entry.get('choice'))
+                if decoded != action:
+                    raise Mismatch(f'Foul Play choice {entry.get("choice")!r} decodes to {decoded}, not its action {action}, round {round_}')
                 request = env._latest_requests.get(player) or {}
                 rows.append(dict(observation=observation, label=action, probs=probs, value=decision.value_estimate,
                                  round=round_, turn=int(env._latest_turn), forced=bool(request.get('forceSwitch')),
@@ -128,6 +141,8 @@ def replay(env, policy, game, rng):
         if round_ > MAX_ROUNDS:raise Mismatch('runaway replay')
     if journal:raise Mismatch(f'{len(journal)} journal entries never requested, first round {min(journal)}')
     if ours != len(game['our_actions']):raise Mismatch(f'our seat made {ours} of {len(game["our_actions"])} decisions')
+    if game.get('decisions') is not None and game['decisions'] != len(game['our_actions']):
+        raise Mismatch(f'telemetry has {len(game["our_actions"])} decisions, the result {game["decisions"]}')
     terminal = env.terminal()
     if (terminal.winner or None) != (game['winner'] or None):raise Mismatch(f'winner {terminal.winner} != {game["winner"]}')
     return rows, parity, ours
@@ -135,7 +150,7 @@ def replay(env, policy, game, rng):
 
 def build(args):
     import torch
-    from pokezero.local_showdown import LocalShowdownConfig, LocalShowdownEnv
+    from pokezero.local_showdown import LocalShowdownConfig, LocalShowdownEnv, LocalShowdownError
     from pokezero.neural_policy import (TransformerSoftmaxPolicy, category_vocab_from_model_config, checkpoint_file_sha256,
                                         feature_masks_from_model_config, load_transformer_checkpoint,
                                         observation_spec_from_model_config)
@@ -151,23 +166,29 @@ def build(args):
     env = None;config_key = None;rng = random.Random(0)
     counts = collections.Counter();mismatches = collections.Counter();examples = {}
     columns = collections.defaultdict(list);parity_hits = 0;parity_total = 0;started = time.time()
+    seats = collections.Counter()
     for path in paths:
         game, skip = load_game(collection, path)
         if game is None:counts[f'skipped_{skip}'] += 1;continue
         if game['checkpoint_sha256'] != sha:counts['skipped_other_checkpoint'] += 1;continue
         base = game['base_config'];key = (base['showdown_root'], base['node_binary'], bool(base['belief_set_source']))
+        if config_key is None:config_key = key
+        elif key != config_key:counts['skipped_other_runtime'] += 1;continue
         if env is None:
-            config_key = key
             env = LocalShowdownEnv(LocalShowdownConfig(showdown_root=base['showdown_root'], node_binary=base['node_binary'],
                 observation_spec=observation_spec_from_model_config(result.model_config),
                 category_vocab=category_vocab_from_model_config(result.model_config, base['showdown_root']),
                 feature_masks=feature_masks_from_model_config(result.model_config),
                 set_belief_source=bool(base['belief_set_source'])))
-        elif key != config_key:counts['skipped_other_runtime'] += 1;continue
         try:rows, parity, decided = replay(env, policy, game, rng)
         except Mismatch as error:
-            reason = str(error).split(',')[0].split(' at ')[0].split(' in round')[0]
+            reason = re.sub(r"'[^']*'|\d+", '#', str(error))
             mismatches[reason] += 1;examples.setdefault(reason, dict(ordinal=game['ordinal'], detail=str(error)));continue
+        except (LocalShowdownError, ValueError, KeyError) as error:   # one bad game, not the shard; the env may be wedged
+            reason = f'env error {type(error).__name__}'
+            mismatches[reason] += 1;examples.setdefault(reason, dict(ordinal=game['ordinal'], detail=str(error)[:500]))
+            env.close();env = None;continue
+        seats[game['fp']] += 1
         counts['games'] += 1;parity_hits += parity;parity_total += decided
         for row in rows:
             observation = row['observation']
@@ -190,7 +211,7 @@ def build(args):
     np.savez(out / f'shard-{args.shard}.npz', **arrays)
     summary = dict(schema='v2s-fp-reply-data.v1', collection=str(collection), checkpoint=str(args.checkpoint), checkpoint_sha256=sha,
                    shard=args.shard, shards=args.shards, results_seen=len(paths), **counts, mismatched=sum(mismatches.values()),
-                   mismatch_reasons=dict(mismatches), mismatch_examples=examples,
+                   mismatch_reasons=dict(mismatches), mismatch_examples=examples, foul_play_seat_games=dict(seats),
                    encoder_parity=dict(hits=parity_hits, decisions=parity_total, share=parity_hits / parity_total if parity_total else None),
                    shapes={k: list(v.shape) for k, v in arrays.items()}, seconds=round(time.time() - started, 1))
     (out / f'shard-{args.shard}.json').write_text(json.dumps(summary, indent=1) + '\n')
@@ -213,16 +234,18 @@ def calibration_error(confidence, correct, bins=ECE_BINS):
                      for b in range(bins) if (which == b).any()))
 
 
-def metrics(probs, labels, legal):
+def metrics(probs, labels, legal, *, uniform=False):
     """top-1 (argmax over legal), NLL of the label, the share of labels under 1% and 5%, top-1 ECE, and switch mass (predicted vs
-    actual), on one set of rows."""
+    actual), on one set of rows. uniform=True (probs uniform over legal): top-1 is a uniform guess's expected accuracy, mean
+    1/|legal|, not the argmax's lowest-index tie-break, and ECE is not reported (every legal action ties)."""
     if not len(labels):return dict(decisions=0)
     masked = np.where(legal, probs, -1.);top = masked.argmax(1)
     raw = probs[np.arange(len(labels)), labels];p = np.clip(raw, 1e-12, 1.)
     predicted_switch = np.where(legal[:, MOVES:], probs[:, MOVES:], 0.).sum(1)
-    return dict(decisions=int(len(labels)), top1=float((top == labels).mean()), nll=float(-np.log(p).mean()),
+    top1 = float((1. / legal.sum(1)).mean()) if uniform else float((top == labels).mean())
+    return dict(decisions=int(len(labels)), top1=top1, nll=float(-np.log(p).mean()),
                 label_below_1pct=float((raw < .01).mean()), label_below_5pct=float((raw < .05).mean()),
-                ece=calibration_error(masked.max(1), (top == labels).astype(float)),
+                ece=None if uniform else calibration_error(masked.max(1), (top == labels).astype(float)),
                 predicted_switch_mass=float(predicted_switch.mean()), actual_switch_share=float((labels >= MOVES).mean()),
                 mean_label_probability=float(p.mean()))
 
