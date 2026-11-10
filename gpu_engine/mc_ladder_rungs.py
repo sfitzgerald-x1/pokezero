@@ -27,8 +27,9 @@ Rungs. Greedy is the argmax of root_logits over root_legal, lower index on ties 
 Identity. Foul Play rows (runs C, D): key (ordinal, target = decision_index), and the row's cell seed is echoed for the
 scorer's check. Self rows (run E) map through the self-capture manifest (--manifest: rows {ordinal, seed, ours, target}): the
 key is (seed, ours, target), and the row's decision_index must equal target, its owner ours and its seed (when present) the
-manifest's seed. A row whose target_kind names the other kind, or that fails those checks, is counted by reason and written
-to no rung. Two rows with one key are an error.
+manifest's seed, and the manifest row's status must be ok (manifest_<status> otherwise, a missing status included: a capture
+whose replayed root is not the bank's). A row whose target_kind names the other kind, or that fails those checks, is counted
+by reason and written to no rung. Two rows with one key are an error.
 
 Each rung row: the key, action (None when the rung cannot decide the root, with `reason`), greedy_action, guard_tripped
 (with guard_reason when true) and actions (the root's legal action indices, echoed for the scorer's identity check).
@@ -42,6 +43,8 @@ row never claims a trip, so mc_ladder_score counts it not_decided under every --
 Reasons for action None:
 - depth1_missing[:cause]: no depth-1 frame (the root was refused before pricing; cause is the row's root.refusal_cause);
 - refused_at_depth1: D3 itself refuses a block (depth1.refused_at_depth1);
+- row_schema_old: a row written before the depth-1 refusal flags (depth1.refused_at_depth1);
+- nonfinite: averaging's or a world's q is not finite (a backstop: WorldPrices already refuses a NaN cell as world_invalid);
 - root_prior_missing / root_prior_invalid: no usable root_logits and root_legal (the row's root, or for a root decide never saw,
   the priced batch entry's own under depth1.root_logits / root_legal);
 - world_missing, world_unpriced, world_invalid, unpriced_cell, averaging_error: a world or a needed cell has no price;
@@ -52,7 +55,7 @@ Reasons for action None:
 usage: python -m gpu_engine.mc_ladder_rungs --rows ROWS.jsonl [ROWS.jsonl ...] --run {C,D,E} [--manifest MANIFEST.jsonl] --out NEW_DIR
 --manifest is required for run E and refused for C and D. Writes NEW_DIR/rung-<NAME>.jsonl per rung and NEW_DIR/summary.json
 (rows read, identity mismatches by reason, per rung: decided, undecided by reason, guard trips by reason; R5 against the
-replay). Exit 1 when R5's recomputation disagrees with any COMPLETE replay, else 0.
+replay). Exit 1 when R5's recomputation disagrees with any COMPLETE replay or fails on one (recompute_failed), else 0.
 """
 import argparse
 import collections
@@ -98,7 +101,7 @@ def identity(raw, kind, manifest):
         return dict(kind=kind, ordinal=ordinal, target=index, **({'seed': seed} if type(seed) is int else {})), None
     entry = manifest.get(ordinal)
     if entry is None:return None, 'not_in_manifest'
-    if entry.get('status', 'ok') != 'ok':return None, f'manifest_{entry["status"]}'   # a capture whose replayed root is not the bank's
+    if entry.get('status') != 'ok':return None, f'manifest_{entry.get("status")}'   # a missing status too (manifest_None)   # a capture whose replayed root is not the bank's
     if index != entry['target']:return None, 'target_mismatch'
     if raw.get('owner') not in (None, entry['ours']):return None, 'seat_mismatch'
     if raw.get('seed') not in (None, entry['seed']):return None, 'seed_mismatch'
