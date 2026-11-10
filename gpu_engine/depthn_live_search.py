@@ -436,7 +436,8 @@ class DepthNLiveSearch:
                 except FATAL:raise
                 except Exception as error:results.append(dict(base,status='REFUSED',refusal=f'REPLY_PRIOR_ERROR: {type(error).__name__}: {error}'));continue
                 champion=decide(blocks,root['root_logits'],root['root_legal'])
-                reply=dict(operator='br_fp',views=self.reply.mode,seconds=seconds,champion_action_index=champion['action_index'],champion_q_values=champion['q_values'])
+                reply=dict(operator='br_fp',views=self.reply.mode,seconds=seconds,champion_action_index=champion['action_index'],champion_q_values=champion['q_values'],
+                    **{f'reply_{k}':v for k,v in (getattr(self.reply,'identity',None)or{}).items()})   # the served archive: the proxy's and panel's pin
                 if check is not None:   # --reply-views check: the jitted views' logits, averaged and reported beside (eager plays)
                     if check.get('error'):reply.update(jit_error=check['error'])
                     else:

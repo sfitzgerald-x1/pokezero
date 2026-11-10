@@ -145,6 +145,7 @@ KEYS={'schema','ladder_declaration_sha256','checkpoint_sha256','archive_sha256',
       'expected_searched_share','expected_searched_share_roster','matmul_precision','screen_latency_rule','bench_p95_wall_seconds',
       'bench_source','server_processes_per_gpu','interleave','arm_fairness','worker_lanes','fairness_observable','calibration','provenance',
       'search_choice','foulplay_move_wall','actor','server_tree_commit'}
+REPLY_PRIOR_KEYS={'archive_sha256','checkpoint_sha256','view','peer_view_b','union_guard','views'}   # optional: a br_fp screen's reply model
 ACTOR_KEYS={'cells_per_worker','warmup_decisions','search_overlaps_greedy','warm_p95_seconds','preflight_search_wall_p95_seconds','source'}
 SEARCH_CHOICE_KEYS={'arm','cell_commit','evidence','summary'}
 MOVE_WALL_SCHEMA='depthn-foulplay-panel.move-walls.v1'
@@ -166,7 +167,7 @@ def validate(declaration):
     """Our pre-registered eval declaration: exact keys, so no paths or extras."""
     from .live_protocol_actor import ActorContract
     d=declaration
-    if type(d)is not dict or set(d)!=KEYS:raise ValueError('exact DepthN panel declaration keys required')
+    if type(d)is not dict or set(d)not in (KEYS,KEYS|{'reply_prior'}):raise ValueError('exact DepthN panel declaration keys required')
     arms=d['arms']
     if (d['schema']!=SCHEMA or not _hex(d['ladder_declaration_sha256'])
             or d['checkpoint_sha256']!=ActorContract.champion().checkpoint_sha256 or d['archive_sha256']!=CHAMPION_ARCHIVE_SHA256
@@ -216,7 +217,33 @@ def validate(declaration):
     validate_move_wall(d['foulplay_move_wall']);validate_actor(d['actor'])
     if not _hex(d['server_tree_commit'],40):raise ValueError('the servers\' tree commit (40 hex) required')
     validate_provenance(d['provenance'])
+    if 'reply_prior'in d:validate_reply_prior(d['reply_prior'])
     return d
+
+
+def validate_reply_prior(value):
+    """A br_fp screen's reply model (depthn_live_server --reply-archive): its archive and checkpoint sha256, the view it was trained
+    on ('b' needs peer_view_b true, the server's own rule), and the union guard (automatic with a reply model) declared true. Every
+    COMPLETE search must then carry it (reply_prior.reply_archive_sha256); without this key none may."""
+    v=value
+    if (type(v)is not dict or set(v)!=REPLY_PRIOR_KEYS or not _hex(v['archive_sha256'])or not _hex(v['checkpoint_sha256'])
+            or v['view']not in ('b','env')or type(v['peer_view_b'])is not bool or (v['view']=='b')>v['peer_view_b']
+            or v['union_guard']is not True or v['views']not in ('eager','jit')):
+        raise ValueError('reply prior: archive and checkpoint sha256, view b (with peer_view_b) or env, union_guard true and views eager '
+                         'or jit required')
+    return v
+
+
+def served_reply(response):
+    """(the reply model's archive sha256 a response names, or None; whether it was built with peer view b; its views mode or None)."""
+    reply=response.get('reply_prior')if isinstance(response.get('reply_prior'),dict)else {}
+    return reply.get('reply_archive_sha256'),'peer_view_b'in response,reply.get('views')
+
+
+def declared_reply(d):
+    """(the declared reply archive sha256 or None; whether the declaration's searches are built with peer view b; views or None)."""
+    reply=d.get('reply_prior')or {}
+    return reply.get('archive_sha256'),bool(reply.get('peer_view_b')),reply.get('views')
 
 
 def validate_actor(value):
@@ -551,7 +578,7 @@ def probe(run_directory,*,arm,server,capture,roots=5,tree_commit=None):
         snapshot=SimpleNamespace(battle_id='probe-'+uuid.uuid4().hex,**{k:row[k]for k in ('owner','stream_id','generation','prefix_sha256','lines','own_request_line')})
         response=client.request(snapshot,decision_index=row['decision_index'],started=clock())
         tried.append({k:response.get(k)for k in ('request_id','status','cause','refusal','requested_worlds','root_operator',
-            'tree_commit','archive_sha256','pricer','client_wall_seconds')})
+            'tree_commit','archive_sha256','pricer','client_wall_seconds')}|dict(zip(('reply_archive_sha256','peer_view_b','reply_views'),served_reply(response))))
         if response.get('client_refused')is False and response.get('archive_sha256')!=d['archive_sha256']:
             reason='server archive differs from the declared champion archive';break
         if response.get('client_refused')is False and response.get('tree_commit')!=d['server_tree_commit']:
@@ -559,7 +586,9 @@ def probe(run_directory,*,arm,server,capture,roots=5,tree_commit=None):
         if response['status']=='COMPLETE':
             good=(response.get('requested_worlds')==d['search'][arm]['worlds']and response.get('root_operator')==d['root_operator']
                 and (response.get('pricer')or {}).get('matmul_precision')==d['matmul_precision'])
-            status,reason=('PASS',None)if good else('FAIL','COMPLETE response with another W, root operator or matmul precision');break
+            status,reason=('PASS',None)if good else('FAIL','COMPLETE response with another W, root operator or matmul precision')
+            if good and served_reply(response)!=declared_reply(d):status,reason='FAIL','COMPLETE response with another reply model or peer view'
+            break
         if response['cause']not in ('constructor_refused','depthn_refused','class_refused'):reason='refused: '+str(response['cause']);break
     value=dict(schema=PROBE_SCHEMA,arm=arm,server=server,capture=str(Path(capture).resolve()),status=status,reason=reason,tried=tried)
     write_new(root/'probes'/f'{arm}-{time.time_ns()}.json',value)
@@ -1180,7 +1209,7 @@ def decisions(rows,*,deadline,worlds=None,archive=None,precision=None):
     """
     seen=set();sources=Counter();causes=Counter();kinds={};differs=late=wrong_worlds=wrong_archive=wrong_precision=0
     times={k:[]for k in ('select','encode','greedy','client','server_wall','queue','prepare','build','price','reduce')}
-    provenance={k:Counter()for k in ('tree_commit','archive_sha256','root_operator','pricer')};servers={};kinds_refused=Counter()
+    provenance={k:Counter()for k in ('tree_commit','archive_sha256','root_operator','pricer','reply')};servers={};kinds_refused=Counter()
     for row in rows:
         key=(row.get('battle_id'),row.get('owner'),row.get('decision_index'),row.get('prefix_sha256'))
         source,cause,kind=row.get('source'),row.get('cause'),row.get('request_kind')
@@ -1211,7 +1240,8 @@ def decisions(rows,*,deadline,worlds=None,archive=None,precision=None):
             wrong_archive+=archive is not None and search.get('archive_sha256')!=archive
             wrong_precision+=precision is not None and (search.get('pricer')if isinstance(search.get('pricer'),dict)else {}).get('matmul_precision')!=precision
             for name in provenance:
-                value=search.get(name);provenance[name][value if type(value)is not dict else encoded(value).decode()]+=1
+                value=list(served_reply(search))if name=='reply'else search.get(name)
+                provenance[name][value if type(value)is not dict and name!='reply'else encoded(value).decode()]+=1
     off=non_home(rows);answered=nh=nh_refused=nh_searched=nh_differs=0
     for row in rows:
         x=row.get('search')if isinstance(row.get('search'),dict)else {}
@@ -1395,7 +1425,8 @@ def readout(run_directory,*,arm,limit,codex_raw_directory=None,server_telemetry=
     if p95 is not None and p95>rules['latency_p95_max_seconds']:breakage.append('latency_p95')
     if any(a['telemetry_mismatches']for a in arms.values()):breakage.append('telemetry')
     origin=search['provenance']
-    if any(len(v)>1 for v in origin.values())or origin['root_operator']not in ([],[d['root_operator']]):breakage.append('search_provenance')
+    if (any(len(v)>1 for v in origin.values())or origin['root_operator']not in ([],[d['root_operator']])
+            or origin.get('reply',[])not in ([],[encoded(list(declared_reply(d))).decode()])):breakage.append('search_provenance')
     servers=dict(server_tree_check(d['server_tree_commit'],tree['commit'],run['declaration']),observed=origin['tree_commit'])
     if not servers['ok']or origin['tree_commit']not in ([],[d['server_tree_commit']]):breakage.append('server_tree')
     if (search['non_home']['share_of_answered']or 0.)>NON_HOME_SHARE_MAX:breakage.append('non_home')   # routing not holding

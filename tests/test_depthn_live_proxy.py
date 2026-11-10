@@ -372,7 +372,7 @@ class CodexLikeBackendTests(unittest.TestCase):
         self.assertEqual(sum(o is None for o in outs), served.count('crash'))   # the client sees EOF; no second backend gets it
 
 
-def identity_backend(name, script, seen, *, tree='t1', archive='a1', worlds=16, precision='highest', K=8):
+def identity_backend(name, script, seen, *, tree='t1', archive='a1', worlds=16, precision='highest', K=8, reply=None, view_b=False, views='jit'):
     """Answers each framed request with the next status in `script` (COMPLETE, or a refusal cause) and the identity fields."""
     steps = iter(script)
     async def handle(reader, writer):
@@ -381,7 +381,9 @@ def identity_backend(name, script, seen, *, tree='t1', archive='a1', worlds=16, 
             step = next(steps, 'COMPLETE')
             out = json.dumps(dict(request_id=q['request_id'], status='COMPLETE' if step == 'COMPLETE' else 'REFUSED', cause=None if step == 'COMPLETE' else step,
                 refusal=None, rung=q['rung'], archive_sha256=archive, requested_worlds=worlds, root_operator='ARGMAX_MEAN_COMPLETED_Q',
-                tree_commit=tree, pricer=dict(matmul_precision=precision, K=K, W=worlds))).encode()
+                tree_commit=tree, pricer=dict(matmul_precision=precision, K=K, W=worlds),
+                **({} if reply is None else dict(reply_prior=dict(operator='br_fp', views=views, reply_archive_sha256=reply))),
+                **(dict(peer_view_b=dict(enabled=True)) if view_b else {}))).encode()
             writer.write(struct.pack('!I', len(out)) + out);await writer.drain()
         except asyncio.IncompleteReadError:pass
         finally:writer.close()
@@ -422,6 +424,20 @@ class IdentityTests(unittest.TestCase):
     def test_one_wrong_backend_refuses_to_start(self):
         for kw in (dict(archive='other'), dict(precision='default'), dict(worlds=8)):
             with self.subTest(kw=kw), self.assertRaisesRegex(SystemExit, 'differs from the expected'):self.go([('a', [], {}), ('b', [], kw)])
+
+    def test_the_reply_model_and_peer_view_b_are_pinned(self):
+        brfp = dict(reply='r' * 64, view_b=True)
+        ready, _ = self.go([('a', [], brfp), ('b', [], brfp)], expect=dict(self.EXPECT, reply_archive_sha256='r' * 64, peer_view_b='on', reply_views='jit'))
+        self.assertEqual((ready['identity']['reply_archive_sha256'], ready['identity']['peer_view_b']), ('r' * 64, 'on'))
+        ready, _ = self.go([('a', [], {})], expect=dict(self.EXPECT, reply_archive_sha256='none', peer_view_b='off'))   # r3/r4b: no reply model
+        self.assertEqual(ready['identity']['reply_archive_sha256'], 'none')
+        for kw in ({}, dict(reply='s' * 64, view_b=True), dict(reply='r' * 64)):   # a server without the reply model, another one, or view b off
+            with self.subTest(kw=kw), self.assertRaisesRegex(SystemExit, 'differs from the expected'):
+                self.go([('a', [], kw)], expect=dict(self.EXPECT, reply_archive_sha256='r' * 64, peer_view_b='on'))
+        with self.assertRaisesRegex(SystemExit, 'disagree'):self.go([('a', [], brfp), ('b', [], {})])   # unpinned: still must agree
+        with self.assertRaisesRegex(SystemExit, 'disagree'):self.go([('a', [], brfp), ('b', [], dict(brfp, views='eager'))])   # mixed views
+        with self.assertRaisesRegex(SystemExit, 'differs from the expected'):
+            self.go([('a', [], dict(brfp, views='eager'))], expect=dict(self.EXPECT, reply_archive_sha256='r' * 64, reply_views='jit'))
 
     def test_backends_that_disagree_refuse_to_start(self):
         for kw in (dict(tree='t2'), dict(K=4)):   # tree commit, or any pricer field

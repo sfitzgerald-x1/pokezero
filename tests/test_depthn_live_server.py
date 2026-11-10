@@ -178,15 +178,16 @@ class ServerTests(unittest.TestCase):
         loaded=[]
         with ExitStack()as stack:
             for target,name,value in stand_ins+((S.evaluators,'load',lambda path,**kw:loaded.append((path,kw))or NS(params='reply')),
-                    (rp,'ReplyPrior',lambda executor,model,mode:('reply-prior',executor,model.params,mode))):
+                    (rp,'ReplyPrior',lambda executor,model,mode,identity:('reply-prior',executor,model.params,mode,identity))):
                 stack.enter_context(patch.object(target,name,side_effect=value))
             self.assertEqual(S.build(args),'search')
         self.assertEqual(loaded,[('r.npz',dict(expected_archive_sha256='e'*64,expected_checkpoint_sha256='f'*64,precision=S.evaluators.PRECISIONS['bf16']))])
         self.assertEqual(made['reply'][0],'reply-prior');self.assertEqual((made['reply'][2],made['reply'][3]),('reply','eager'))
+        self.assertEqual(made['reply'][4],dict(archive_sha256='e'*64,checkpoint_sha256='f'*64,view='env'))   # the reply pin's identity
         with patch.dict(os.environ,PINNED):args=S.options(base+reply+['--peer-view-b'])   # both: br_fp on view b's worlds
         with ExitStack()as stack:
             for target,name,value in stand_ins+((S.evaluators,'load',lambda path,**kw:NS(params='reply')),
-                    (rp,'ReplyPrior',lambda executor,model,mode:('reply-prior',executor,model.params,mode))):
+                    (rp,'ReplyPrior',lambda executor,model,mode,identity:('reply-prior',executor,model.params,mode,identity))):
                 stack.enter_context(patch.object(target,name,side_effect=value))
             S.build(args)
         self.assertEqual((made['peer_view_b'],made['reply'][0]),(True,'reply-prior'))
