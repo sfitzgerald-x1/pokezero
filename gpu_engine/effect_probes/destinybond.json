@@ -1,0 +1,159 @@
+{
+ "schema": "pokezero.effect_probe.scenario.v1",
+ "move": "destinybond",
+ "note": "Broken (no Destiny Bond in the engine). Showdown holds the volatile after the first request and drops it at the holder's next move; the engine's absent bit compares as False.",
+ "teams": [
+  [
+   {
+    "species": "Gengar",
+    "moves": [
+     "destinybond",
+     "thunderbolt",
+     "icepunch",
+     "firepunch"
+    ],
+    "ability": "Levitate",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Starmie",
+    "moves": [
+     "surf",
+     "thunderbolt",
+     "icebeam",
+     "recover"
+    ],
+    "ability": "Natural Cure",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Swampert",
+    "moves": [
+     "earthquake",
+     "surf",
+     "icebeam",
+     "protect"
+    ],
+    "ability": "Torrent",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Gengar",
+    "moves": [
+     "thunderbolt",
+     "icepunch",
+     "firepunch",
+     "explosion"
+    ],
+    "ability": "Levitate",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Metagross",
+    "moves": [
+     "meteormash",
+     "earthquake",
+     "rockslide",
+     "explosion"
+    ],
+    "ability": "Clear Body",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Zapdos",
+    "moves": [
+     "thunderbolt",
+     "batonpass",
+     "agility",
+     "drillpeck"
+    ],
+    "ability": "Pressure",
+    "item": "Leftovers"
+   }
+  ],
+  [
+   {
+    "species": "Blissey",
+    "moves": [
+     "softboiled",
+     "protect",
+     "toxic",
+     "seismictoss"
+    ],
+    "ability": "Natural Cure",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Tyranitar",
+    "moves": [
+     "rockslide",
+     "earthquake",
+     "fireblast",
+     "icebeam"
+    ],
+    "ability": "Sand Stream",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Celebi",
+    "moves": [
+     "psychic",
+     "gigadrain",
+     "recover",
+     "calmmind"
+    ],
+    "ability": "Natural Cure",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Salamence",
+    "moves": [
+     "dragonclaw",
+     "earthquake",
+     "fireblast",
+     "rockslide"
+    ],
+    "ability": "Intimidate",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Suicune",
+    "moves": [
+     "surf",
+     "icebeam",
+     "calmmind",
+     "rest"
+    ],
+    "ability": "Pressure",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Jolteon",
+    "moves": [
+     "thunderbolt",
+     "batonpass",
+     "substitute",
+     "agility"
+    ],
+    "ability": "Volt Absorb",
+    "item": "Leftovers"
+   }
+  ]
+ ],
+ "script": [
+  [
+   "move 1",
+   "move 1"
+  ],
+  [
+   "move 2",
+   "move 1"
+  ]
+ ],
+ "axes": [],
+ "expect": {
+  "mismatch_fields": [
+   "destiny_bond"
+  ]
+ }
+}

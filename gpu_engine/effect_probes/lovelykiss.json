@@ -1,0 +1,201 @@
+{
+ "schema": "pokezero.effect_probe.scenario.v1",
+ "move": "lovelykiss",
+ "note": "Broken (Lovely Kiss is not a status move in the engine). A hit puts Blissey to sleep only in Showdown, so only the engine spends Softboiled PP; a miss (75%) is exact.",
+ "teams": [
+  [
+   {
+    "species": "Jynx",
+    "moves": [
+     "lovelykiss",
+     "icebeam",
+     "psychic",
+     "calmmind"
+    ],
+    "ability": "Oblivious",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Starmie",
+    "moves": [
+     "surf",
+     "thunderbolt",
+     "icebeam",
+     "recover"
+    ],
+    "ability": "Natural Cure",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Swampert",
+    "moves": [
+     "earthquake",
+     "surf",
+     "icebeam",
+     "protect"
+    ],
+    "ability": "Torrent",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Gengar",
+    "moves": [
+     "thunderbolt",
+     "icepunch",
+     "firepunch",
+     "explosion"
+    ],
+    "ability": "Levitate",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Metagross",
+    "moves": [
+     "meteormash",
+     "earthquake",
+     "rockslide",
+     "explosion"
+    ],
+    "ability": "Clear Body",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Zapdos",
+    "moves": [
+     "thunderbolt",
+     "batonpass",
+     "agility",
+     "drillpeck"
+    ],
+    "ability": "Pressure",
+    "item": "Leftovers"
+   }
+  ],
+  [
+   {
+    "species": "Blissey",
+    "moves": [
+     "softboiled",
+     "protect",
+     "toxic",
+     "seismictoss"
+    ],
+    "ability": "Natural Cure",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Tyranitar",
+    "moves": [
+     "rockslide",
+     "earthquake",
+     "fireblast",
+     "icebeam"
+    ],
+    "ability": "Sand Stream",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Celebi",
+    "moves": [
+     "psychic",
+     "gigadrain",
+     "recover",
+     "calmmind"
+    ],
+    "ability": "Natural Cure",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Salamence",
+    "moves": [
+     "dragonclaw",
+     "earthquake",
+     "fireblast",
+     "rockslide"
+    ],
+    "ability": "Intimidate",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Suicune",
+    "moves": [
+     "surf",
+     "icebeam",
+     "calmmind",
+     "rest"
+    ],
+    "ability": "Pressure",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Jolteon",
+    "moves": [
+     "thunderbolt",
+     "batonpass",
+     "substitute",
+     "agility"
+    ],
+    "ability": "Volt Absorb",
+    "item": "Leftovers"
+   }
+  ]
+ ],
+ "script": [
+  [
+   "move 1",
+   "move 1"
+  ],
+  [
+   "move 4",
+   "move 1"
+  ],
+  [
+   "move 4",
+   "move 1"
+  ],
+  [
+   "move 4",
+   "move 1"
+  ],
+  [
+   "move 4",
+   "move 1"
+  ]
+ ],
+ "axes": [
+  {
+   "name": "accuracy",
+   "field": "draws.0.6",
+   "steps": [
+    0
+   ],
+   "values": [
+    0,
+    99
+   ]
+  },
+  {
+   "name": "sleep_roll",
+   "field": "draws.0.7",
+   "steps": [
+    0
+   ],
+   "values": [
+    0,
+    3
+   ]
+  }
+ ],
+ "expect": {
+  "mismatch_fields": [
+   "status",
+   "status_counter",
+   "pp"
+  ],
+  "exact_cases": [
+   {
+    "accuracy": 99
+   }
+  ]
+ }
+}

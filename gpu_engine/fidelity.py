@@ -28,6 +28,15 @@ from pokezero.observation import ObservationFeatureMasks
 from pokezero.showdown import showdown_choice_for_action
 
 STATUS=['','par','brn','psn','tox','slp','frz']
+# Comparator formats. Sleep Clause Mod (design 3.A1.5) is the default; the plain
+# Custom Game format is kept only to record the before/after re-baseline.
+SLEEP_CLAUSE_FORMAT='gen3customgame@@@sleepclausemod'
+FORMATS={SLEEP_CLAUSE_FORMAT:'gen3customgame@@@sleepclausemod; Sleep Clause Mod, no Freeze Clause',
+    'gen3customgame':'gen3customgame; no Sleep/Freeze Clause'}
+TAPE_SCHEMA='pokezero.gpu_chance_tape.v2'
+# The appended ChanceInputs.effect stream (design 2.1); not consumed by this engine yet.
+EFFECT_SALT=1732050
+EFFECT_BOUNDS=(16,16,4,2)
 # The first 50000..50199 panel is immutable historical evidence. Following
 # its authored adapter correction, use one disjoint fixed panel, not a replay.
 FIRST_GAME=50200
@@ -60,15 +69,27 @@ def reconstruct(pool,metadata,showdown,node,*,first_game=FIRST_GAME,games=200):
         packed_sets_sha256=hashlib.sha256(json.dumps(packed,sort_keys=True).encode()).hexdigest())
 
 
-def chance_tape(state,game,index):
+def effect_draws(keys):
+    """ChanceInputs.effect exactly as design 2.1 derives it from the step's split keys."""
+    return jax.vmap(lambda key:jax.random.randint(jax.random.fold_in(key,EFFECT_SALT),(2,4),0,
+        j.array(EFFECT_BOUNDS,j.int32)))(keys)
+
+
+def chance_tape(state,game,index,saved_effect=None):
+    """Tape v2. A suspended turn replays its saved block; `effect` comes from the
+    engine's saved effect_draws once that leaf exists, else from the caller's copy
+    of the suspended turn's tape (saved_effect), else it is freshly derived."""
     split=jax.vmap(lambda key:jax.random.split(key,2))(state.keys)[:,1]
     draws=jax.vmap(lambda key:jax.random.randint(key,(2,12),0,j.array([2,100,100,100,16,16,100,4,8,2,2,2],j.int32)))(split)
     secondary=jax.vmap(lambda key:jax.random.randint(jax.random.fold_in(key,1618033),(2,),0,100))(split)
     sleep=jax.vmap(lambda key:jax.random.randint(jax.random.fold_in(key,1414213),(2,),0,60))(split)
+    effect=np.asarray(effect_draws(split))[0].tolist()
     if bool(np.asarray(state.pending_residual)[0]):
         draws=state.residual_draws;secondary=state.secondary_draws;sleep=state.sleep_talk_draws
-    return dict(schema='pokezero.gpu_chance_tape.v1',nonce=f'{game}:{index}',draws=np.asarray(draws)[0].tolist(),
-        secondary=np.asarray(secondary)[0].tolist(),sleep_talk=np.asarray(sleep)[0].tolist())
+        if hasattr(state,'effect_draws'):effect=np.asarray(state.effect_draws)[0].tolist()
+        elif saved_effect is not None:effect=[list(row) for row in saved_effect]
+    return dict(schema=TAPE_SCHEMA,nonce=f'{game}:{index}',draws=np.asarray(draws)[0].tolist(),
+        secondary=np.asarray(secondary)[0].tolist(),sleep_talk=np.asarray(sleep)[0].tolist(),effect=effect)
 
 
 def native_view(snapshot,original,vocab):
@@ -195,7 +216,8 @@ def protocol_completed(rows):
     return len(rows)==200 and all(row['status']!='HARNESS_ERROR' for row in rows)
 
 
-def run(pool_path,expected_sha,showdown,node,out):
+def run(pool_path,expected_sha,showdown,node,out,format_id=SLEEP_CLAUSE_FORMAT):
+    if format_id not in FORMATS:raise ValueError(f'unsupported comparator format: {format_id}')
     blob=Path(pool_path).read_bytes();pool_sha=hashlib.sha256(blob).hexdigest()
     if pool_sha!=expected_sha:raise ValueError('accepted pool digest differs')
     with np.load(io.BytesIO(blob),allow_pickle=False) as archive:
@@ -211,7 +233,7 @@ def run(pool_path,expected_sha,showdown,node,out):
     base=base._replace(keys=jax.vmap(lambda n:jax.random.fold_in(jax.random.PRNGKey(719),n))(j.arange(FIRST_GAME,FIRST_GAME+200)))
     base=jax.block_until_ready(transition.initialize(base,table));advance=jax.jit(lambda s,a:transition.step(s,a,table))
     header=dict(schema='pokezero.gpu_fidelity_trace.v1',source_commit=source,source_sha256=before,pool_sha256=pool_sha,
-        roster=roster,format='gen3customgame; no Sleep/Freeze Clause',ordinary_turn_cap=20,request_cap=200,
+        roster=roster,format=FORMATS[format_id],format_id=format_id,chance_tape_schema=TAPE_SCHEMA,ordinary_turn_cap=20,request_cap=200,
         action_law='Uniform over complete reference legal actions, per-game string-seeded RNG; no mask intersection or state repair',
         chance='Known semantic raw inputs coupled; unknown/repeated/raw native roles stop unresolved; initialization RNG separately audited and unresolved except documented inert gender/QuickClaw setup; no native PRNG-stream parity',
         scope='Unfiltered original real teams; HP/status/faints/active identities at each normalized request; full original tensor regeneration and initial represented-state contract',
@@ -238,8 +260,11 @@ def run(pool_path,expected_sha,showdown,node,out):
                 env=LocalShowdownEnv(LocalShowdownConfig(showdown_root=showdown,node_binary=node,bridge_path=bridge,
                     feature_masks=ObservationFeatureMasks(transition_token_budget=0)))
                 try:
+                    # Only the battle format carries the clause; the parsed observation
+                    # (unused here beyond legal sets) keeps the plain Custom Game format.
                     env.reset_with_start_override(seed=670000000+offset,start_override=BattleStartOverride(
-                        player_teams={'p1':packed[2*offset]['packed'],'p2':packed[2*offset+1]['packed']}))
+                        player_teams={'p1':packed[2*offset]['packed'],'p2':packed[2*offset+1]['packed']},
+                        format_id=format_id,observation_format_id='gen3customgame'))
                     initializing.unlink()
                     initial_events=[json.loads(line) for line in audit.read_text().splitlines()] if audit.exists() else []
                     row['initial_chance_audit']=initial_events
@@ -249,13 +274,15 @@ def run(pool_path,expected_sha,showdown,node,out):
                         row.update(status='UNRESOLVED_INITIAL_CHANCE',first_divergence=diff or None)
                     elif diff:row.update(status='INITIAL_CONTRACT_MISMATCH',first_divergence=diff)
                     else:
+                        saved_effect=None
                         for index in range(200):
                             native,actions,diff,maps=reference_actions(env,state,snapshot,original,metadata['vocabulary'],rng)
                             if diff:row.update(status='LEGAL_ACTION_MISMATCH',first_divergence=diff);break
                             if not native:row['status']='NO_REFERENCE_REQUEST';break
                             row.pop('post_boundary',None);row.pop('native_log_tail',None)
                             row['pre_boundary']=boundary_projection(state,snapshot,original,metadata['vocabulary'])
-                            tape=chance_tape(state,game,index);control.write_text(json.dumps(tape))
+                            tape=chance_tape(state,game,index,saved_effect);control.write_text(json.dumps(tape))
+                            if not bool(np.asarray(state.pending_residual)[0]):saved_effect=tape['effect']
                             step=dict(index=index,showdown_actions=native,gpu_actions=actions.tolist(),identity_maps=maps,chance=tape)
                             failure=None
                             try:env.step(native)
@@ -302,7 +329,9 @@ if __name__=='__main__':
     p=argparse.ArgumentParser(description=__doc__);p.add_argument('--team-pool',required=True)
     p.add_argument('--expected-pool-sha',required=True);p.add_argument('--showdown-root',required=True)
     p.add_argument('--node',required=True);p.add_argument('--out',required=True)
+    p.add_argument('--format',default=SLEEP_CLAUSE_FORMAT,choices=sorted(FORMATS),
+        help='comparator battle format (default: Sleep Clause Mod)')
     a=p.parse_args();out=Path(a.out)
     if out.exists() or out.with_suffix('.jsonl').exists():raise FileExistsError('exclusive result/journal required')
-    result=run(a.team_pool,a.expected_pool_sha,Path(a.showdown_root),a.node,out)
+    result=run(a.team_pool,a.expected_pool_sha,Path(a.showdown_root),a.node,out,format_id=a.format)
     raise SystemExit(0 if result['protocol_completed'] else 1)
