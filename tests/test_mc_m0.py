@@ -1,8 +1,12 @@
 """Monte Carlo scheduling, censoring and paired diagnostics without a device."""
 import unittest
+import json
+from pathlib import Path
+import tempfile
 from types import SimpleNamespace
 import numpy as np
 from gpu_engine import mc_m0 as m0, mc_root_labeller as lab
+from gpu_engine import mc_m0_readout as readout
 
 
 class Env:
@@ -55,3 +59,37 @@ class MeasurementTests(unittest.TestCase):
         roots=[dict(kind='self' if i<25 else 'foulplay',seed=i,target=1,root_seed=i,ours='p1') for i in range(50)]
         for changed in (roots[:-1], roots[:1]*25+roots[25:]):
             with self.assertRaises(ValueError):m0.validate(dict(roots=changed))
+
+    def test_readout_does_not_turn_empty_or_declared_success_into_completion(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp)
+            m0.write(root/'config.json',dict(roots=[{}]*50))
+            m0.write(root/'manifest.json',dict(config_sha256=m0.sha(root/'config.json')))
+            report=readout.readout(root)
+            self.assertFalse(report['experiment_completion_verified'])
+            self.assertEqual(report['completed_both_modes'],0)
+            m0.write(root/'summary.json',dict(status='COMPLETE'))
+            report=readout.readout(root)
+            self.assertFalse(report['experiment_completion_verified'])
+            (root/'config.json').write_text(json.dumps(dict(roots=[])))
+            with self.assertRaisesRegex(ValueError,'changed configuration'):readout.readout(root)
+
+    def test_failure_prevents_completion_even_with_complete_result_roster(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp)
+            roots=[dict(kind='self' if i<25 else 'foulplay',seed=i,actions=[0,1]) for i in range(50)]
+            m0.write(root/'config.json',dict(roots=roots))
+            m0.write(root/'manifest.json',dict(config_sha256=m0.sha(root/'config.json')))
+            m0.write(root/'prepared.json',[dict(index=i,status='READY',root=r) for i,r in enumerate(roots)])
+            m0.write(root/'runtime-smoke.json',[dict(kind=k,status='PASS') for k in ('self','foulplay')])
+            for i,r in enumerate(roots):
+                for k in (64,256):
+                    y=[[1.]*k,[-1.]*k];statuses=[['terminal']*k]*2
+                    m0.write(root/f'root-{i}-{k}.json',dict(index=i,root=r,K=k,mode='batched' if k==256 else 'unbatched',
+                        outcomes=y,statuses=statuses,pairs={str(n):m0.pair_stats(y,statuses,n) for n in (64,256) if n<=k},
+                        cpu_seconds=1.,wall_seconds=1.))
+            m0.write(root/'summary.json',dict(status='COMPLETE'))
+            self.assertTrue(readout.readout(root)['experiment_completion_verified'])
+            m0.write(root/'failure-summary.json',dict(status='FAILED'))
+            report=readout.readout(root)
+            self.assertFalse(report['experiment_completion_verified']);self.assertEqual(report['status'],'FAILED')
