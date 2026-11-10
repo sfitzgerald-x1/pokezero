@@ -108,7 +108,7 @@ def declaration(ladder_sha256, arms=('RAW', 'DN2W8'), expected=EXPECTED, deadlin
         interleave=panel.INTERLEAVE, arm_fairness=dict(panel.ARM_FAIRNESS) if arm_fairness is None else copy.deepcopy(arm_fairness))
 
 
-REPLY = dict(archive_sha256='d'*64, checkpoint_sha256='7'*64, view='b', peer_view_b=True, union_guard=True)   # a br_fp screen's reply model
+REPLY = dict(archive_sha256='d'*64, checkpoint_sha256='7'*64, view='b', peer_view_b=True, union_guard=True, views='jit')   # a br_fp screen's reply model
 
 
 def make_run(directory, arms=('RAW', 'DN2W8'), expected=EXPECTED, deadline=3., observable=True, ratios=RATIOS, arm_fairness=None, reply=None):
@@ -125,7 +125,8 @@ def make_run(directory, arms=('RAW', 'DN2W8'), expected=EXPECTED, deadline=3., o
 
 
 def decision_row(cell, i, *, source='search', cause=None, kind=None, differs=False, select=.5,
-                 operator='ARGMAX_MEAN_COMPLETED_Q', worlds=8, archive=live.CHAMPION_ARCHIVE_SHA256, precision='highest', reply=None, view_b=False):
+                 operator='ARGMAX_MEAN_COMPLETED_Q', worlds=8, archive=live.CHAMPION_ARCHIVE_SHA256, precision='highest', reply=None, view_b=False,
+                 views='jit'):
     kind = kind or ('forced' if source == 'single_legal' else 'move')
     search = None if source in ('raw_arm', 'single_legal') else dict(status='COMPLETE' if source == 'search' else 'REFUSED',
         cause=cause, client_wall_seconds=select-.05, server_wall_seconds=select-.1, tree_commit=SERVER_TREE, archive_sha256=archive,
@@ -133,7 +134,7 @@ def decision_row(cell, i, *, source='search', cause=None, kind=None, differs=Fal
         root_operator=operator if source == 'search' else None, requested_worlds=worlds if source == 'search' else None,
         pricer=dict(k=1, depth=2, W=8, K=4, matmul_precision=precision) if source == 'search' else None,
         timings=dict(queue_seconds=.01, prepare_seconds=.2, build_seconds=.05, price_seconds=.2, reduce_seconds=.01) if source == 'search' else None)
-    if search is not None and source == 'search' and reply is not None: search['reply_prior'] = dict(operator='br_fp', reply_archive_sha256=reply)
+    if search is not None and source == 'search' and reply is not None: search['reply_prior'] = dict(operator='br_fp', views=views, reply_archive_sha256=reply)
     if search is not None and source == 'search' and view_b: search['peer_view_b'] = dict(enabled=True)
     return dict(schema=live.ROW_SCHEMA, arm=cell['arm'], cell=cell, battle_id=f"b{cell['ordinal']}", owner='p1', decision_index=i,
         prefix_sha256=f'{i:064x}', request_kind=kind, source=source, cause=cause, search_differs=differs if source == 'search' else None,
@@ -715,11 +716,12 @@ class ProbeTests(unittest.TestCase):
     def test_a_br_fp_probe_must_name_the_declared_reply_model(self):
         root, run, d, lad = make_run(Path(self.directory.name)/'brfp', reply=REPLY)
         def answer(**change):return actor_tests.send(lambda r: champion_complete(r, **change))
-        served = dict(reply_prior=dict(operator='br_fp', reply_archive_sha256='d'*64), peer_view_b=dict(enabled=True))
+        served = dict(reply_prior=dict(operator='br_fp', views='jit', reply_archive_sha256='d'*64), peer_view_b=dict(enabled=True))
         with actor_tests.FakeServer(answer(**served)) as server:
             value = panel.probe(root, arm='DN2W8', server=dict(host='127.0.0.1', port=server.port), capture=self.capture)
         self.assertEqual((value['status'], value['tried'][0]['reply_archive_sha256'], value['tried'][0]['peer_view_b']), ('PASS', 'd'*64, True))
-        for change in ({}, dict(served, reply_prior=dict(operator='br_fp', reply_archive_sha256='e'*64)), dict(reply_prior=served['reply_prior'])):
+        for change in ({}, dict(served, reply_prior=dict(operator='br_fp', views='jit', reply_archive_sha256='e'*64)), dict(reply_prior=served['reply_prior']),
+                       dict(served, reply_prior=dict(operator='br_fp', views='eager', reply_archive_sha256='d'*64))):
             with self.subTest(change), actor_tests.FakeServer(answer(**change)) as server, self.assertRaisesRegex(ValueError, 'probe failed'):
                 panel.probe(root, arm='DN2W8', server=dict(host='127.0.0.1', port=server.port), capture=self.capture)
         with self.assertRaisesRegex(ValueError, 'probe failed'): self.probe(answer(**served))   # a reply model the champion's screen never declared
@@ -956,13 +958,14 @@ class ReadoutTests(unittest.TestCase):
 
     def test_a_br_fp_screen_needs_its_reply_model_on_every_search(self):
         root, run, d, lad = make_run(Path(self.directory.name)/'brfp', reply=REPLY)
-        def rows(served, view_b=True):
+        def rows(served, view_b=True, views='jit'):
             return lambda cell: [decision_row(cell, i, source='raw_arm' if cell['arm'] == 'RAW' else 'search', worlds=panel.WORLDS.get(cell['arm']),
-                                              reply=served, view_b=view_b) for i in range(2)]
-        for served, view_b, breakage in (('d'*64, True, []), (None, False, ['search_provenance']), ('e'*64, True, ['search_provenance']),
-                                         ('d'*64, False, ['search_provenance'])):
-            with self.subTest(served=served, view_b=view_b):
-                populate(root, run, lad, rows_for=rows(served, view_b))
+                                              reply=served, view_b=view_b, views=views) for i in range(2)]
+        for served, view_b, views, breakage in (('d'*64, True, 'jit', []), (None, False, 'jit', ['search_provenance']),
+                                                ('e'*64, True, 'jit', ['search_provenance']), ('d'*64, False, 'jit', ['search_provenance']),
+                                                ('d'*64, True, 'eager', ['search_provenance'])):
+            with self.subTest(served=served, view_b=view_b, views=views):
+                populate(root, run, lad, rows_for=rows(served, view_b, views))
                 value = panel.readout(root, arm='DN2W8', limit=500)
                 self.assertEqual(value['breakage'], breakage)
         populate(self.root, self.run, self.lad, rows_for=rows('d'*64))   # an undeclared reply model on the champion's own screen
@@ -1247,7 +1250,7 @@ class EvalReadinessTests(unittest.TestCase):
         self.assertEqual(panel.validate(d)['reply_prior'], REPLY)
         self.assertEqual(panel.validate(dict(d, reply_prior=dict(REPLY, view='env', peer_view_b=False)))['reply_prior']['view'], 'env')
         for change in (dict(archive_sha256='D'*64), dict(checkpoint_sha256='7'*63), dict(view='a'), dict(peer_view_b=False), dict(peer_view_b=1),
-                       dict(union_guard=False), dict(extra=1)):
+                       dict(union_guard=False), dict(extra=1), dict(views='check'), dict(views=None)):
             with self.subTest(change), self.assertRaises(ValueError): panel.validate(dict(d, reply_prior=dict(REPLY, **change)))
         bad = dict(REPLY); del bad['union_guard']
         with self.assertRaises(ValueError): panel.validate(dict(d, reply_prior=bad))
