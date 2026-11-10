@@ -205,7 +205,7 @@ class CaptureTests(unittest.TestCase):
 
     def test_describe_records_depth1_prices_and_reply_logits(self):
         detached, made, legal = FakeConstructor().prepare(dict(decision_index=0), 0)
-        batch = SimpleNamespace(roots=(dict(status='PRICED', rows=tuple(range(8))),))
+        batch = SimpleNamespace(roots=(dict(status='PRICED', rows=tuple(range(8)), root_logits=LOGITS, root_legal=LEGAL),))
         champion = R.Decided([(prices(2 * k), prices(2 * k + 1)) for k in range(8)], LOGITS, LEGAL)
         def fp(w):
             p, logits = prices(w), tuple(float(b) + w for b in range(9))
@@ -219,8 +219,8 @@ class CaptureTests(unittest.TestCase):
                 patch.object(backups, 'refusal_summary', return_value=dict(roots=[dict(cause=None)] * 7 + [dict(cause='turn2')])):
             detail = R.describe(capture, fake_peer, VOCABULARY, None, (1, 0), reply=True)
             plain = R.describe(capture, fake_peer, VOCABULARY, None, (1, 0))
-        self.assertEqual(detail['depth1'], dict(block_causes=[None] * 7 + ['turn2'], priced_worlds=15,
-                                                refused_at_depth1=[False] * 8))   # depth 2 refused block 7; depth 1 kept it
+        self.assertEqual(detail['depth1'], dict(block_causes=[None] * 7 + ['turn2'], priced_worlds=15, refused_at_depth1=[False] * 8,
+                                                root_logits=list(LOGITS), root_legal=list(LEGAL)))   # depth 2 refused block 7; depth 1 kept it
         self.assertEqual(detail['worlds'][0]['depth1'], R.prices_fields(prices(100)));self.assertFalse(detail['worlds'][7]['depth1']['priced'])
         self.assertEqual(detail['worlds'][0]['grid'], R.prices_fields(prices(0))['grid'])   # the depth-2 grid is the champion's decide
         self.assertEqual([w['reply_peer_logits'] for w in detail['worlds'][:2]], [[float(b) for b in range(9)], [float(b) + 1 for b in range(9)]])
