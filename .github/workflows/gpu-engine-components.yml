@@ -148,6 +148,7 @@ jobs:
             --low-optimization-case test_gpu_engine_belly_drum_owning.BellyDrumOwningTests.test_actual_original_frame_both_owners_witness_encoder_and_physics \
             --low-optimization-case test_gpu_engine_primary_plain_status_owning.PrimaryPlainStatusTests.test_actual_original_frame_both_owners_witness_encoder_and_physics \
             --low-optimization-case test_gpu_engine_status_kernel_owner_drain.StatusKernelOwnerDrainTests.test_actual_kernel_status_spans_drain_both_original_owner_consumers \
+            --low-optimization-case test_gpu_engine_secondary_status_frame_runtime.SecondaryStatusFrameRuntimeTests.test_actual_secondary_receipt_survives_end_turn_and_both_full_consumers \
             --low-optimization-case test_gpu_engine_rough_skin_owning.RoughSkinTests.test_actual_kernel_contact_write_both_full_and_legacy_physics \
             --resource-interval-seconds 30 2>&1 \
             | tee /tmp/gpu-components.log "$ci_memory_dir/component.log"
