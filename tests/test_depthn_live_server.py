@@ -172,6 +172,14 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(loaded,[('r.npz',dict(expected_archive_sha256='e'*64,expected_checkpoint_sha256='f'*64,precision=S.evaluators.PRECISIONS['bf16']))])
         self.assertEqual(made['reply'][0],'reply-prior');self.assertEqual((made['reply'][2],made['reply'][3]),('reply','eager'))
 
+    def test_a_view_b_reply_archive_needs_peer_view_b(self):
+        self.assertEqual((S.reply_view(None),S.reply_view({}),S.reply_view(dict(extra=dict(view='env')))),('env','env','env'))
+        self.assertEqual(S.reply_view(dict(extra=dict(view='b',redaction='peer-view-v2'))),'b')
+        with self.assertRaisesRegex(ValueError,'--peer-view-b'):S.check_reply_view(dict(extra=dict(view='b')),NS())
+        with self.assertRaisesRegex(ValueError,'--peer-view-b'):S.check_reply_view(dict(extra=dict(view='b')),NS(peer_view_b=False))
+        S.check_reply_view(dict(extra=dict(view='b')),NS(peer_view_b=True));S.check_reply_view(dict(extra=dict(view='env')),NS())
+        S.check_reply_view(None,NS())   # an archive without export metadata (red2's era): served as before
+
     def test_the_matmul_precision_is_hard_pinned(self):
         """The environment is checked before anything loads; JAX's own setting again in build, before any input or champion."""
         from gpu_engine import phase_d_protocol_constructor as pc
