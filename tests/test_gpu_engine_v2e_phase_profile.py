@@ -24,7 +24,7 @@ ROOT = Path(__file__).resolve().parents[1]
 # Statements of a stand-in step_with_chance on the real phase lines (A, B, D, E0, two actions E1/E4, F1, two residual events, G).
 CODE = {342: 'def step_with_chance(x, y):', 487: '    a = helper(x) + y', 544: '    b = a * y', 610: '    c = b - x', 714: '    c = c + 1',
     737: '    for order in range(2):', 739: '        c = c * 2 + order', 1826: '        c = jnp.where(c > 0, c, -c)', 1924: '    d = c - y',
-    2038: '    for event in range(2):', 2039: '        d = d + event', 2135: '        d = d * 3', 2276: '    return d + a'}
+    2038: '    for event in range(2):', 2039: '        d = d + event', 2135: '        d = d * 3', 2287: '    return d + a'}
 HEADER = ['import jax', 'import jax.numpy as jnp', '', '', '@jax.jit', 'def helper(x):', '    return x * 3 + 1']
 LABELS = ['A', 'B', 'D', 'E0', 'E1.0', 'E4.0', 'E1.1', 'E4.1', 'F1', 'F2.0', 'F2.1', 'G']
 
@@ -81,7 +81,7 @@ class PhaseTableTest(unittest.TestCase):
         for tag, label in cz.BOUNDARIES:self.assertTrue(label == 'END' or cz.base(label) in names, tag)
 
     def test_label_lines(self):
-        lines = [None, 488, 544, 573, 644, 724, 750, 963, 1346, 1826, 750, 963, 1885, 1935, 2032, 2039, 2135, 2045, 2070, 2047, 2291, None]
+        lines = [None, 488, 544, 573, 644, 724, 750, 963, 1346, 1826, 750, 963, 1885, 1935, 2032, 2039, 2135, 2045, 2070, 2047, 2302, None]
         want = ['outside', 'A', 'B', 'C', 'D', 'E0', 'E1.0', 'E2.0', 'E3.0', 'E4.0', 'E1.1', 'E2.1', 'E4.1', 'F1', 'F2.pre', 'F2.0', 'F2.0',
             'F2.1', 'F2.1', 'F2.2', 'G', 'outside']
         self.assertEqual(cz.label_lines(lines), want)
@@ -90,7 +90,7 @@ class PhaseTableTest(unittest.TestCase):
 
     def test_listing_lines(self):
         with tempfile.TemporaryDirectory() as d:
-            path = Path(d, 'listing.txt');path.write_text('  353:   check\n  487:   rows\n  544:   speed\n 1935:   x\n 2351:   return\nnoise\n')
+            path = Path(d, 'listing.txt');path.write_text('  353:   check\n  487:   rows\n  544:   speed\n 1935:   x\n 2362:   return\nnoise\n')
             self.assertEqual(cz.listing_lines(path), {'pre': 1, 'A': 1, 'B': 1, 'F1': 1, 'G': 1})
 
 
