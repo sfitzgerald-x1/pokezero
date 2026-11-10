@@ -57,7 +57,8 @@ class Model:
         self.torch = torch;self.model, self.result = load_transformer_checkpoint(path, map_location='cpu');self.model.eval()
         self.window = int(self.result.model_config.window_size)
 
-    def probabilities(self, observations):
+    def evaluate(self, observations):
+        """(probabilities [n, 9] over each legal mask, values [n]: the raw tanh value head)."""
         from pokezero.neural_policy import observation_windows_to_torch
         t = observation_windows_to_torch([[o] for o in observations], window_size=self.window, device='cpu')
         with self.torch.no_grad():
@@ -65,7 +66,9 @@ class Model:
                              attention_mask=t['attention_mask'], history_mask=t['history_mask'])
             legal = self.torch.tensor(np.array([np.asarray(o.legal_action_mask, bool) for o in observations]))
             logits = out.policy_logits.masked_fill(~legal, -1e9)
-            return self.torch.softmax(logits, dim=-1).numpy().astype(np.float64)
+            return self.torch.softmax(logits, dim=-1).numpy().astype(np.float64), out.value.reshape(-1).numpy().astype(np.float64)
+
+    def probabilities(self, observations):return self.evaluate(observations)[0]
 
 
 def sample(probs, legal, u):
@@ -129,6 +132,46 @@ def make_env(base, result, caching=True):
 
 
 def legal_of(observation):return np.asarray(observation.legal_action_mask, bool)
+
+
+def completed_q(child_values, opp_policy, actions, replies):
+    """Depth-1 completed-Q: q[a] = sum_b pi_opp(b) * mean over draws of child_values[(a, b)], the replies' weights renormalized
+    over `replies` (replies [None]: the opponent waits, weight 1). child_values: {(a, b): [values]}; returns q per action."""
+    out = []
+    for a in actions:
+        if replies == [None]:out.append(float(np.mean(child_values[(a, None)])));continue
+        w = np.array([opp_policy[b] for b in replies], float);w = w / w.sum()
+        out.append(float(sum(wi * np.mean(child_values[(a, b)]) for wi, b in zip(w, replies))))
+    return out
+
+
+def depth1_baseline(env, snapshot, root, models, draws):
+    """The current value head's depth-1 completed-Q at the root, on the true state (the real-Showdown U1 baseline). For every
+    legal action a of our seat, every opponent reply b with pi_opp(b) > 0.001 (no reply when the opponent waits), and `draws`
+    chance draws: restore, reseed with the draw's seed, step (a, b), then sample both seats' policies until our seat is requested
+    again, and take the champion's value from our seat there (a terminal state: its outcome). The draws' seeds are disjoint from
+    the rollouts' (an independent evaluation bank). Returns dict(completed_q, replies, child_values)."""
+    ours, opp, actions, root_seed = root['ours'], root['opp'], root['actions'], root['root_seed']
+    pi = root['opp_policy'];replies = [None] if pi is None else [b for b in range(ACTIONS) if pi[b] > .001]
+    model_of = {ours: models['ours'], opp: models['opp']};values = {}
+    for a in actions:
+        for b in replies:
+            for c in range(draws):
+                env.restore(snapshot);env.reseed_simulator_rng(int(np.random.default_rng([root_seed, 7_000_000 + c]).integers(1, 2**31 - 1)))
+                first = {ours: a}
+                if b is not None:first[opp] = b
+                obs = dict(env.step(first).observations);ply = 1;v = None
+                while v is None:
+                    if env.terminal() is not None:v = outcome(env, ours);break
+                    requested = list(env.requested_players())
+                    if ours in requested:v = float(models['ours'].evaluate([obs[ours]])[1][0]);break
+                    acts = {}
+                    for pl in requested:
+                        pr = model_of[pl].probabilities([obs[pl]])[0];acts[pl] = sample(pr, legal_of(obs[pl]), draw(root_seed, 7_000_000 + c, ply, 1))
+                    obs = dict(env.step(acts).observations);ply += 1
+                values.setdefault((a, b), []).append(v)
+    return dict(completed_q=completed_q(values, pi, actions, replies), replies=replies,
+                child_values={f'{a},{b}': vs for (a, b), vs in values.items()})
 
 
 def foulplay_root(env, game, target):
@@ -260,6 +303,11 @@ def main(argv=None):
     parser.add_argument('--seed', type=int, default=0);parser.add_argument('--threads', type=int, default=1)
     parser.add_argument('--worker', type=int, default=0);parser.add_argument('--workers', type=int, default=1)
     parser.add_argument('--plain-env', action='store_true', help='the plain LocalShowdownEnv instead of CachingEnv (timing comparisons)')
+    parser.add_argument('--ordinals', help="foulplay roots: a JSON list of the collection's game ordinals to draw from (e.g. held-out games); "
+                        "worker w takes ordinals[w::workers]")
+    parser.add_argument('--seed-base', type=int, default=None, help='self roots: battle seeds from [seed-base, seed-base + seed-span) (a reserved range)')
+    parser.add_argument('--seed-span', type=int, default=10**7)
+    parser.add_argument('--baseline-draws', type=int, default=0, help="depth-1 baseline: chance draws per (action, reply) (0: none)")
     args = parser.parse_args(argv)
     import torch
     torch.set_num_threads(args.threads)
@@ -268,6 +316,8 @@ def main(argv=None):
     collection = Path(args.collection);rng = random.Random(f'{args.seed}-{args.kind}-{args.worker}')
     paths = sorted(glob.glob(str(collection / 'results' / '*.json')), key=lambda p: int(Path(p).stem))
     base = json.loads((collection / 'requests' / f'{Path(paths[0]).stem}.json').read_bytes())['base_config']
+    if args.ordinals:   # a fixed game list (held-out or training), partitioned across workers
+        paths = [str(collection / 'results' / f'{o}.json') for o in json.loads(Path(args.ordinals).read_text())[args.worker::args.workers]]
     envs = [make_env(base, champion.result, caching=not args.plain_env) for _ in range(args.envs if args.mode == 'batched' else 1)]
     try:return label(args, envs, champion, pi_fp, collection, rng, paths, fpd)
     finally:
@@ -287,23 +337,32 @@ def label(args, envs, champion, pi_fp, collection, rng, paths, fpd):
                 why = type(error).__name__;skipped[why] = skipped.get(why, 0) + 1;continue
             ours, identity = game['ours'], dict(ordinal=game['ordinal'], seed=game['seed'], target=target)
         else:
-            seed = rng.randrange(1, 2**31 - 1);ours = rng.choice(('p1', 'p2'));target = rng.randrange(1, 40)
+            seed = (args.seed_base + rng.randrange(args.seed_span)) if args.seed_base is not None else rng.randrange(1, 2**31 - 1)
+            ours = rng.choice(('p1', 'p2'));target = rng.randrange(1, 40)
             ok = self_root(envs[0], champion, seed, ours, target);identity = dict(seed=seed, target=target)
         if not ok:continue
         env = envs[0];opp = {'p1': 'p2', 'p2': 'p1'}[ours];snapshot = env.snapshot()
         legal = legal_of(env.observe(ours));actions = [int(a) for a in np.flatnonzero(legal)]
         root_seed = rng.randrange(1, 2**31 - 1);opp_model = pi_fp if args.kind == 'foulplay' else champion
-        replies = None
+        replies = None;opp_policy = None
         if opp in env.requested_players():
-            o = env.observe(opp);pr = opp_model.probabilities([o])[0]
+            o = env.observe(opp);pr = opp_model.probabilities([o])[0];opp_policy = pr
             replies = [sample(pr, legal_of(o), draw(root_seed, k, 0, 1)) for k in range(args.K)]
-        root = dict(ours=ours, opp=opp, actions=actions, root_seed=root_seed, opp_replies=replies)
+        our_probs, our_value = champion.evaluate([env.observe(ours)])
+        root = dict(ours=ours, opp=opp, actions=actions, root_seed=root_seed, opp_replies=replies, opp_policy=opp_policy)
+        baseline = None
+        if args.baseline_draws:
+            started_b = time.perf_counter()
+            baseline = depth1_baseline(env, snapshot, root, dict(ours=champion, opp=opp_model), args.baseline_draws)
+            baseline['seconds'] = round(time.perf_counter() - started_b, 3)
         for e in envs[1:]:e.reset(seed=identity['seed'])   # a battle shell for the snapshot (restore needs a reset env)
         prepared = time.perf_counter();cpu0 = process_cpu_seconds()
         outcomes, decisions = run_root(envs, dict(ours=champion, opp=opp_model), root, snapshot, args.K, args.mode == 'batched')
         wall = time.perf_counter() - prepared;cpu1 = process_cpu_seconds();cpu = {k: cpu1[k] - cpu0[k] for k in cpu1}
         row = dict(schema='mc-root-labels.v1', kind=args.kind, mode=args.mode, envs=len(envs), K=args.K, threads=args.threads, worker=args.worker,
                    ours=ours, actions=actions, opp_requested=replies is not None, root_seed=root_seed, **identity,
+                   policy=[round(float(x), 6) for x in our_probs[0]], root_value=round(float(our_value[0]), 6),
+                   opp_policy=None if opp_policy is None else [round(float(x), 6) for x in opp_policy], baseline=baseline,
                    outcomes=outcomes.tolist(), decisions=decisions.tolist(), rollouts=int(outcomes.size),
                    wall_seconds=round(wall, 3), cpu_seconds=round(cpu['self'] + cpu['children'], 3), cpu_python_seconds=round(cpu['self'], 3),
                    cpu_node_seconds=round(cpu['children'], 3), prepare_seconds=round(prepared - started, 3))
