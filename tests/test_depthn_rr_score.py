@@ -691,6 +691,16 @@ class EndToEndTests(unittest.TestCase):
         first = json.loads((out / 'decisions.jsonl').read_text().splitlines()[0])
         op = first['operators']['target_argmax'];self.assertEqual((first['target_source'], op.get('raw_choice', op['choice'])), ('replay', 2))
 
+    def test_a_replay_mode_re_scoring_never_takes_the_live_trees_target(self):
+        run = self.root / 'run'
+        for sub in ('results', 'telemetry', 'owning-wire'):(run / sub).mkdir(parents=True)
+        path = self.root / 'rows-0.jsonl';path.write_text(''.join(json.dumps(r) + '\n' for r in self.rows(run, random.Random(11))))   # no replay targets
+        out = self.root / 'out'
+        with redirect_stdout(io.StringIO()):
+            self.assertEqual(S.main(['--rows', str(path), '--run-directory', str(run), '--out', str(out), '--parity-mode', 'replay']), 0)
+        cover = json.loads((out / 'summary.json').read_text())['coverage']
+        self.assertEqual((cover['target_sources'], cover['target_argmax_fallbacks']), ({'missing': 6}, 6))   # the telemetry is never read
+
     def test_row_policy_target_prefers_a_valid_replay_target(self):
         legal = [True, True, False] + [False] * 6
         class Run:

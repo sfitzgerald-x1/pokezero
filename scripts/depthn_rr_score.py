@@ -44,8 +44,8 @@ Scorings: dropped (censored and unmapped decisions excluded) and pi_filled (thos
 q(a) = sum_w 1/16 sum_b pi_w(b) G_w[a][b]). A decision is scored when its replay is COMPLETE, every world is priced for
 every legal action against every kept reply, and the live greedy action is legal. Operators on the same grids: greedy
 (live), averaging, bayes_hedge lam 0 and 0.5, prior_regularized c, noise_gated k, world_lcb kappa, target_argmax (the
-re-priced row's replay.policy_target, else the live telemetry's (target_source records which); argmax of root_logits + q,
-the same target, when both are missing), tempered T (2, 4, inf: averaging with
+re-priced row's replay.policy_target, else under --parity-mode live the live telemetry's (target_source records which); argmax
+of root_logits + q, the same target, when they are missing or invalid), tempered T (2, 4, inf: averaging with
 pi_w^T = softmax(root_peer_logits / T) over the kept lanes, T = inf uniform; a waiting world keeps column 0 at mass 1).
 D = R(op) - R(greedy), 0 when op is
 greedy. noise_gated plays averaging's a* only when a* != greedy and mean_w gap > k sd_w(gap) / sqrt(W), gap_w =
@@ -529,10 +529,12 @@ def valid_target(target, root_legal):
 
 def row_policy_target(decision, run, ordinal, index, live_fallback=True):
     """(the target target_argmax uses, its source). The re-priced row's replay.policy_target when valid (the search that was
-    re-priced, the same one whose q the other operators use) -> 'replay'. Otherwise, with live_fallback (--parity-mode live: the
+    re-priced) -> 'replay'. Otherwise, with live_fallback (--parity-mode live: the
     re-priced tree is the live one), the live run's telemetry search.policy_target when valid -> 'live_telemetry', present but
     unusable -> (None, 'live_telemetry_invalid'). Otherwise (None, 'missing'): target_argmax plays its own fallback (argmax of
-    root_logits + q). A replay or br_fp re-scoring (a modified tree) never takes the live tree's target."""
+    root_logits + q). A replay or br_fp re-scoring (a modified tree) never takes the live tree's target. On a br_fp replay the
+    replay target is br_fp's own (the server's decide on the reply-model blocks) while the recorded worlds, and so the other
+    operators, are the champion's."""
     legal = decision.get('root_legal')
     if valid_target(decision.get('replay_policy_target'), legal):return list(decision['replay_policy_target']), 'replay'
     if not live_fallback:return None, 'missing'
