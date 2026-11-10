@@ -10,8 +10,8 @@ seed) have none, so this module writes them the way the collection did:
   WIRE and ROOT row is the capture module's own;
 - at each of our decisions (every actionable own request, as the live actor decides) the actor's B2 observation (what its owning
   backend encoded from the wire) is compared with env.observe(ours) cell by cell; env.observe encodes the omniscient log, so the
-  known redactions differ (known_difference: opponent HP and damage at the public percent, an opponent ability revealed only by
-  [silent] lines, float32 rounding) and everything else counts as unexplained;
+  known redactions differ (known_difference: opponent HP, damage and Spikes losses at the public percent, an opponent ability
+  revealed only by [silent] lines, float32 rounding) and everything else counts as unexplained;
 - the replay stops at the root (our target-th decision), whose legal actions and champion probabilities must equal the bank row's.
 
 usage: python -m gpu_engine.mc_ladder_captures BANK_DIR OUT_DIR --collection DIR --checkpoint CHAMPION.pt [--sample N] [--seed S]
@@ -67,7 +67,8 @@ def owning_env(base, result):
 # The known differences between the owner's wire (the B2 observation) and env.observe, which encodes the omniscient log with our
 # own request: (v4 physical numeric index, token range, rule). Tokens: 0 field, 1-6 our side (1 the active), 7-12 the opponent's.
 SELF_TOKENS, OPP_TOKENS = range(1, 7), range(7, 13)
-HP_FRACTION, LAST_DAMAGE_DEALT, LAST_DAMAGE_TAKEN, REVEALED_ABILITY = 0, 38, 39, 48
+HP_FRACTION, LAST_DAMAGE_DEALT, LAST_DAMAGE_TAKEN, REVEALED_ABILITY, OPP_HAZARD_CREDIT = 0, 38, 39, 48, 116
+FIELD_TOKEN = 0
 PRECISION = 1e-6   # B2 numeric features are float32, env.observe's float64
 
 
@@ -76,6 +77,7 @@ def known_difference(token, feature, b2, env_value):
     if abs(b2 - env_value) <= PRECISION:return 'float32'
     if token in OPP_TOKENS and feature in (HP_FRACTION, LAST_DAMAGE_TAKEN):return 'opponent_hp_public_percent'
     if token in SELF_TOKENS and feature == LAST_DAMAGE_DEALT:return 'damage_dealt_public_percent'
+    if token == FIELD_TOKEN and feature == OPP_HAZARD_CREDIT:return 'opponent_hazard_public_percent'   # Spikes losses on the foe
     if token in OPP_TOKENS and feature == REVEALED_ABILITY and b2 == 0. and env_value == 1.:return 'silent_ability_reveal'
     return None
 
