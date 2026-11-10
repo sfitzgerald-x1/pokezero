@@ -495,6 +495,9 @@ class CellTests(unittest.TestCase):
             with self.assertRaises(ValueError):R.select_cells(self.args(root, targets=str(path)))
             write([])
             with self.assertRaisesRegex(ValueError, 'no targets'):R.select_cells(self.args(root, targets=str(path)))
+            write_capture(root / 'owning-wire' / '2.jsonl', [False])   # a results cell (seat 0) with its p1 capture
+            write([dict(ordinal=2, decision_index=0, ours='p2')])   # the capture's own owner decides, for a results cell too
+            with self.assertRaisesRegex(ValueError, 'its capture is'):R.select_cells(self.args(root, targets=str(path)))
             for bad, message in ((dict(ours='p2'), 'its capture is'), (dict(seed=8), 'the targets name seed')):   # another seat's root, another battle
                 write([dict(ordinal=500, decision_index=0, **bad)])
                 with self.assertRaisesRegex(ValueError, message):R.select_cells(self.args(root, targets=str(path)))
@@ -633,7 +636,7 @@ class MainTests(unittest.TestCase):
             code, rows, summary, header, constructor, *_ = self.replay(tmp, cells=('--targets', path))
             digest = hashlib.sha256(Path(path).read_bytes()).hexdigest()
         self.assertEqual((code, constructor.calls, [r['decision_index'] for r in rows]), (0, [3], [3]))   # only target 3 reaches prepare
-        self.assertEqual(summary['targets'], dict(file=path, requested=3, found=2, missing=[dict(ordinal=1001, decision_index=9)],
+        self.assertEqual(summary['targets'], dict(file=path, requested=3, found=2, missing=[dict(ordinal=1001, decision_index=9)], not_reached=[],
             single_legal=[dict(ordinal=1001, decision_index=1)], non_target_skipped=3))
         self.assertEqual(header['targets']['sha256'], digest)
         self.assertEqual((rows[0]['cell_arm'], rows[0]['target_kind'], rows[0]['live_problem']), ('DN2W16', None, None))
@@ -644,7 +647,8 @@ class MainTests(unittest.TestCase):
         self.assertEqual((rows[0]['live'], rows[0]['cell_arm']), (None, 'RAW'));self.assertIn('is not the replayed arm', rows[0]['live_problem'])
         with tempfile.TemporaryDirectory() as tmp:   # stopped by --max-decisions: the unreached target is reported as such
             summary = self.replay(tmp, '--max-decisions', '1', cells=('--targets', targets(tmp, (0, 2))))[2]
-        self.assertEqual((summary['targets']['found'], summary['targets']['not_reached']), (1, [dict(ordinal=1001, decision_index=2)]))
+        self.assertEqual((summary['targets']['found'], summary['targets']['not_reached'], summary['targets']['missing']),
+                         (1, [dict(ordinal=1001, decision_index=2)], []))
 
     def replay(self, tmp, *extra, header=None, guard=None, peer_off=(), cells=('--cells', '1001'), arm='DN2W16'):
         """main over a run directory with cell 1001: decisions 0-4, decision 1 single-legal, decision 4 refused by the constructor."""
