@@ -487,7 +487,8 @@ class RegressPluginTests(unittest.TestCase):
                ("trackers.field_features['wish_pending']", 1), ("trackers.field_features['wish_turns']", 1)}
         for effect in ('counter', 'mirrorcoat'):
             self.assertEqual(lane_verdict(sub, {effect: [0]}, None)[0], [])
-            self.assertEqual(lane_verdict({('trackers.public_volatiles', 0)}, {effect: [0]}, None)[0], [('trackers.public_volatiles', 0)])
+            user = ("trackers.mon_features['sub_present']", 0)       # the replier's own Substitute is not its effect
+            self.assertEqual(lane_verdict({user}, {effect: [0]}, None)[0], [user])
         self.assertEqual(lane_verdict({('state.hp', 0), ('trackers.shown_ability', 1)}, {'gigadrain': [0]}, None)[0], [])
         # L3: a cure's port allowance is the sleep-clause entries only.
         self.assertEqual(lane_verdict({('trackers.public_port.holder', 1), ('trackers.public_port.victims', 0)},
