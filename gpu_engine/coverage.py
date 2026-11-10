@@ -82,6 +82,15 @@ def registry():
         'effects','fidelity_a1')
     group('aromatherapy','Living own-party major-status cure, Soundproof holders included','effects','fidelity_a1')
     group('refresh','User paralysis/burn/poison cure; sleep and freeze fail','effects','fidelity_a1')
+    # Fidelity patch A2.
+    group('knockoff','Ordinary Dark damage plus permanent target item removal after the hit (KO included), '
+        'Sticky Hold block and Substitute exemption; end-of-turn Choice Band unlock','items','fidelity_a2')
+    group('gigadrain','Ordinary damage plus drain max(1,floor(dealt/2)) (ceil through a Substitute) and Liquid Ooze reversal',
+        'damage_moves','fidelity_a2')
+    group('counter mirrorcoat','Priority -5, twice the last physical-or-Hidden-Power (Counter) or special (Mirror Coat) foe hit '
+        'this turn; silent failure without one; Ghost/Dark immunity','damage_moves','fidelity_a2')
+    group('destinybond','Volatile until the next move attempt; a foe move KO (Pursuit included) faints the attacker',
+        'effects','fidelity_a2')
     return result
 
 

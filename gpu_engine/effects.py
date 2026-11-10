@@ -42,6 +42,8 @@ class MoveEffects(NamedTuple):
     drop_block: jax.Array         # [A,7], foe-caused drops an ability blocks (Clear Body, White Smoke, Hyper Cutter)
     aromatherapy: jax.Array       # [M], gen4-inherited party clearStatus, Soundproof included
     refresh: jax.Array            # [M], cure the user's par/brn/psn/tox
+    # Fidelity patch A2 (appended).
+    destinybond: jax.Array        # [M], volatileStatus destinybond (state.DESTINY_BOND)
 
 
 # Gen 3 inherits gen4's Curse (data/mods/gen4/moves.ts:268-281): a non-Ghost user
@@ -109,7 +111,7 @@ def from_metadata(metadata):
         flags({"overheat","psychoboost"}),flags({"curse"}),
         jnp.asarray(types.index("ghost") if "ghost" in types else -1,jnp.int32),
         jnp.asarray(hit_self),jnp.asarray(target),jnp.asarray(drop_block),
-        flags({"aromatherapy"}),flags({"refresh"}))
+        flags({"aromatherapy"}),flags({"refresh"}),flags({"destinybond"}))
 
 
 def cure_team(state,side,table,*,eligible,_return_write_mask=False):

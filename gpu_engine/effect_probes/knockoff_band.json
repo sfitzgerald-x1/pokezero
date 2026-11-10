@@ -1,0 +1,199 @@
+{
+ "schema": "pokezero.effect_probe.scenario.v1",
+ "move": "knockoff_band",
+ "note": "A2.1 Knock Off: Banette knocks the Choice Band off a faster Dodrio that already locked into Drill Peck; the lock ends at endTurn (choicelock onDisableMove), so Dodrio may pick Splash next turn. A level-5 Magikarp switching in is KO'd and still knocked; an itemless Smeargle has nothing to lose; a Salac Berry holder loses its berry before its pinch.",
+ "teams": [
+  [
+   {
+    "species": "Banette",
+    "moves": [
+     "knockoff",
+     "shadowball",
+     "splash",
+     "protect"
+    ],
+    "ability": "Insomnia",
+    "item": ""
+   },
+   {
+    "species": "Starmie",
+    "moves": [
+     "splash",
+     "surf",
+     "recover",
+     "protect"
+    ],
+    "ability": "Illuminate",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Blissey",
+    "moves": [
+     "splash",
+     "softboiled",
+     "protect",
+     "seismictoss"
+    ],
+    "ability": "Serene Grace",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Skarmory",
+    "moves": [
+     "splash",
+     "protect",
+     "spikes",
+     "peck"
+    ],
+    "ability": "Keen Eye",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Swampert",
+    "moves": [
+     "splash",
+     "protect",
+     "surf",
+     "earthquake"
+    ],
+    "ability": "Torrent",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Metagross",
+    "moves": [
+     "splash",
+     "protect",
+     "meteormash",
+     "earthquake"
+    ],
+    "ability": "Clear Body",
+    "item": "Leftovers"
+   }
+  ],
+  [
+   {
+    "species": "Dodrio",
+    "moves": [
+     "drillpeck",
+     "splash",
+     "protect",
+     "return"
+    ],
+    "ability": "Early Bird",
+    "item": "Choice Band"
+   },
+   {
+    "species": "Magikarp",
+    "moves": [
+     "splash",
+     "tackle",
+     "flail",
+     "protect"
+    ],
+    "ability": "Swift Swim",
+    "item": "Leftovers",
+    "level": 5
+   },
+   {
+    "species": "Smeargle",
+    "moves": [
+     "splash",
+     "spore",
+     "protect",
+     "sleeptalk"
+    ],
+    "ability": "Own Tempo",
+    "item": ""
+   },
+   {
+    "species": "Ninjask",
+    "moves": [
+     "splash",
+     "protect",
+     "batonpass",
+     "swordsdance"
+    ],
+    "ability": "Speed Boost",
+    "item": "Salac Berry"
+   },
+   {
+    "species": "Starmie",
+    "moves": [
+     "splash",
+     "surf",
+     "recover",
+     "protect"
+    ],
+    "ability": "Illuminate",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Blissey",
+    "moves": [
+     "splash",
+     "softboiled",
+     "protect",
+     "seismictoss"
+    ],
+    "ability": "Serene Grace",
+    "item": "Leftovers"
+   }
+  ]
+ ],
+ "script": [
+  [
+   "move 1",
+   "move 1"
+  ],
+  [
+   "move 3",
+   "move 2"
+  ],
+  [
+   "move 1",
+   "switch 2"
+  ],
+  [
+   "",
+   "switch 3"
+  ],
+  [
+   "move 1",
+   "move 1"
+  ],
+  [
+   "move 3",
+   "switch 4"
+  ],
+  [
+   "move 1",
+   "move 1"
+  ],
+  [
+   "move 2",
+   "move 1"
+  ],
+  [
+   "move 2",
+   "move 1"
+  ]
+ ],
+ "axes": [
+  {
+   "name": "roll",
+   "field": "draws.0.5",
+   "values": [
+    0,
+    15
+   ]
+  }
+ ],
+ "expect": {
+  "exact": true
+ },
+ "require_fields": [
+  "item_knocked",
+  "destiny_bond"
+ ]
+}

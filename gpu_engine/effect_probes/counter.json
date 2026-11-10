@@ -1,0 +1,215 @@
+{
+ "schema": "pokezero.effect_probe.scenario.v1",
+ "move": "counter",
+ "note": "A2.3 Counter/Mirror Coat (gen3 onDamage record, -5): Wobbuffet's Counter after a special Surf fails; Mirror Coat doubles it; Mirror Coat after Hidden Power (special Fire) fails and Counter doubles it; after Blissey's Splash Counter fails; Rapid Spin (physical) is Countered. PP is spent on every failure.",
+ "teams": [
+  [
+   {
+    "species": "Wobbuffet",
+    "moves": [
+     "counter",
+     "mirrorcoat",
+     "splash",
+     "encore"
+    ],
+    "ability": "Shadow Tag",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Starmie",
+    "moves": [
+     "splash",
+     "surf",
+     "recover",
+     "protect"
+    ],
+    "ability": "Illuminate",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Blissey",
+    "moves": [
+     "splash",
+     "softboiled",
+     "protect",
+     "seismictoss"
+    ],
+    "ability": "Serene Grace",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Skarmory",
+    "moves": [
+     "splash",
+     "protect",
+     "spikes",
+     "peck"
+    ],
+    "ability": "Keen Eye",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Swampert",
+    "moves": [
+     "splash",
+     "protect",
+     "surf",
+     "earthquake"
+    ],
+    "ability": "Torrent",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Metagross",
+    "moves": [
+     "splash",
+     "protect",
+     "meteormash",
+     "earthquake"
+    ],
+    "ability": "Clear Body",
+    "item": "Leftovers"
+   }
+  ],
+  [
+   {
+    "species": "Blissey",
+    "moves": [
+     "surf",
+     "hiddenpowerfire",
+     "splash",
+     "rapidspin"
+    ],
+    "ability": "Natural Cure",
+    "item": "",
+    "ivs": {
+     "hp": 30,
+     "atk": 31,
+     "def": 30,
+     "spa": 30,
+     "spd": 31,
+     "spe": 30
+    }
+   },
+   {
+    "species": "Starmie",
+    "moves": [
+     "splash",
+     "surf",
+     "recover",
+     "protect"
+    ],
+    "ability": "Illuminate",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Skarmory",
+    "moves": [
+     "splash",
+     "protect",
+     "spikes",
+     "peck"
+    ],
+    "ability": "Keen Eye",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Swampert",
+    "moves": [
+     "splash",
+     "protect",
+     "surf",
+     "earthquake"
+    ],
+    "ability": "Torrent",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Metagross",
+    "moves": [
+     "splash",
+     "protect",
+     "meteormash",
+     "earthquake"
+    ],
+    "ability": "Clear Body",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Blissey",
+    "moves": [
+     "splash",
+     "softboiled",
+     "protect",
+     "seismictoss"
+    ],
+    "ability": "Serene Grace",
+    "item": "Leftovers"
+   }
+  ]
+ ],
+ "script": [
+  [
+   "move 1",
+   "move 1"
+  ],
+  [
+   "move 2",
+   "move 1"
+  ],
+  [
+   "move 2",
+   "move 2"
+  ],
+  [
+   "move 1",
+   "move 2"
+  ],
+  [
+   "move 1",
+   "move 3"
+  ],
+  [
+   "move 1",
+   "move 4"
+  ],
+  [
+   "move 3",
+   "move 3"
+  ]
+ ],
+ "axes": [
+  {
+   "name": "foe_crit",
+   "field": "draws.1.4",
+   "steps": [
+    1
+   ],
+   "values": [
+    15,
+    0
+   ]
+  },
+  {
+   "name": "foe_roll",
+   "field": "draws.1.5",
+   "steps": [
+    0,
+    1,
+    2,
+    3
+   ],
+   "values": [
+    0,
+    15
+   ]
+  }
+ ],
+ "expect": {
+  "exact": true
+ },
+ "require_fields": [
+  "item_knocked",
+  "destiny_bond"
+ ]
+}

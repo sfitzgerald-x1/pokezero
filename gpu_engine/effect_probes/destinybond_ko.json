@@ -1,0 +1,175 @@
+{
+ "schema": "pokezero.effect_probe.scenario.v1",
+ "move": "destinybond_ko",
+ "note": "A2.4 Destiny Bond (data/moves.ts; gen6 onPrepareHit inherited by Gen 3): a level-50 Gengar bonds, then the slower Snorlax's Shadow Ball KOs it and Snorlax faints too (both replace); the next Gengar bonds twice in a row (reuse succeeds) and its KO again takes the attacker.",
+ "teams": [
+  [
+   {
+    "species": "Gengar",
+    "moves": [
+     "destinybond",
+     "splash",
+     "protect",
+     "thunderbolt"
+    ],
+    "ability": "Levitate",
+    "item": "",
+    "level": 50
+   },
+   {
+    "species": "Gengar",
+    "moves": [
+     "destinybond",
+     "splash",
+     "protect",
+     "thunderbolt"
+    ],
+    "ability": "Levitate",
+    "item": "",
+    "level": 50
+   },
+   {
+    "species": "Starmie",
+    "moves": [
+     "splash",
+     "surf",
+     "recover",
+     "protect"
+    ],
+    "ability": "Illuminate",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Blissey",
+    "moves": [
+     "splash",
+     "softboiled",
+     "protect",
+     "seismictoss"
+    ],
+    "ability": "Serene Grace",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Skarmory",
+    "moves": [
+     "splash",
+     "protect",
+     "spikes",
+     "peck"
+    ],
+    "ability": "Keen Eye",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Swampert",
+    "moves": [
+     "splash",
+     "protect",
+     "surf",
+     "earthquake"
+    ],
+    "ability": "Torrent",
+    "item": "Leftovers"
+   }
+  ],
+  [
+   {
+    "species": "Snorlax",
+    "moves": [
+     "shadowball",
+     "splash",
+     "protect",
+     "bodyslam"
+    ],
+    "ability": "Thick Fat",
+    "item": ""
+   },
+   {
+    "species": "Snorlax",
+    "moves": [
+     "shadowball",
+     "splash",
+     "protect",
+     "bodyslam"
+    ],
+    "ability": "Thick Fat",
+    "item": ""
+   },
+   {
+    "species": "Starmie",
+    "moves": [
+     "splash",
+     "surf",
+     "recover",
+     "protect"
+    ],
+    "ability": "Illuminate",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Blissey",
+    "moves": [
+     "splash",
+     "softboiled",
+     "protect",
+     "seismictoss"
+    ],
+    "ability": "Serene Grace",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Skarmory",
+    "moves": [
+     "splash",
+     "protect",
+     "spikes",
+     "peck"
+    ],
+    "ability": "Keen Eye",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Swampert",
+    "moves": [
+     "splash",
+     "protect",
+     "surf",
+     "earthquake"
+    ],
+    "ability": "Torrent",
+    "item": "Leftovers"
+   }
+  ]
+ ],
+ "script": [
+  [
+   "move 1",
+   "move 2"
+  ],
+  [
+   "move 1",
+   "move 1"
+  ],
+  [
+   "switch 2",
+   "switch 2"
+  ],
+  [
+   "move 1",
+   "move 2"
+  ],
+  [
+   "move 1",
+   "move 1"
+  ]
+ ],
+ "axes": [],
+ "expect": {
+  "exact": true
+ },
+ "require_fields": [
+  "item_knocked",
+  "destiny_bond"
+ ]
+}

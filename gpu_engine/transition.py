@@ -42,6 +42,7 @@ from . import solar_beam as charging
 from . import focus_punch as focusing
 from .effects import MoveEffects, from_metadata as effects_from_metadata, stall_success, cure_team, weather_healing
 from .state import FLINCH, FOCUS_PUNCH, FOCUS_LOST, BattleState, bench_indices, empty_state, legal_actions, usable_moves
+from .state import DESTINY_BOND
 
 
 class MoveTable(NamedTuple):
@@ -556,6 +557,17 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                 _public_trace=status_callbacks.unknown(_public_trace,used)
             if _lifecycle_trace:work,_public_trace=_lum_update(work,table,used,_public_trace,_device_public=_device_public)
             else:work = _lum_update(work,table,used,_device_public=_device_public)
+            # Destiny Bond holds through a switch until switch-out (gen4 pursuit's onBeforeSwitchOut,
+            # inherited by Gen 3, does not remove it, unlike later gens): a Pursuit KO of the bonded
+            # switcher faints the pursuer at faintMessages. useMove runs no BeforeMove, so the
+            # pursuer's own bond is untouched (B2 still expires its bag on the Pursuit move line).
+            _pursuit_bond=(fainted & ((_active(work.volatile,work,1-side)&jnp.uint32(DESTINY_BOND))!=0)
+                & (_active(work.hp,work,side)>0))
+            work=work._replace(hp=_set_active(work.hp,work,side,jnp.where(_pursuit_bond,0,_active(work.hp,work,side))))
+            if _lifecycle_trace:_public_trace=status_callbacks.unknown(_public_trace,_pursuit_bond)
+            if _device_public is not None:
+                device_public.observe(_device_public,work,_pursuit_bond,record_damage=False)
+                device_public.volatile(_device_public,work,side,'destinybond',jnp.zeros_like(used),used)
             work=_clear_fainted_boosts(work,_faint_before_hp,eligible=used)
             if _device_public is not None:
                 device_public.move(_device_public,work,side,moves[:,side],used,pp_use=True)
@@ -685,10 +697,16 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
     displaced=jnp.zeros_like(state.active,dtype=jnp.bool_)
     work = work._replace(protect_counter=jnp.where(
         (live & ~replacement)[:,None,None],0,work.protect_counter))
+    # Counter/Mirror Coat (design 3.A2.3): the 1-turn volatile's record of the last foe Move hit
+    # on the Pokemon this turn. Priority -5 and Gen 3's faint cancellation keep the hit and the
+    # reply in one step (a suspension follows only a Baton Pass, which deals no damage).
+    _taken_amount=jnp.zeros_like(state.active)
+    _taken_kind=jnp.zeros_like(state.active)    # 0 none, 1 Counter-able, 2 Mirror Coat-able
     for order in range(2):
         _faint_before_hp=work.hp
         side = jnp.where(order == 0, first, 1 - first)
         foe = 1 - side
+        _bond_foe_hp=_active(work.hp,work,foe)
         move = moves[rows, side]
         chosen_slot=slot[rows,side]
         move,chosen_slot=repeating.override(work,side,move,chosen_slot,struggle=struggle[rows,side])
@@ -698,6 +716,13 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
         move_context = ~replacement | (state.pending_residual & (saved_actor == side))
         eligible = (live & move_context & ~paused & ~moves_cancelled & ~switches[rows, side]
             & ~pursuit_used[rows,side] & ~displaced[rows,side] & (_active(work.hp, work, side) > 0))
+        # Destiny Bond ends at the holder's next move attempt: its onBeforeMove (priority -1), or
+        # MoveAborted when sleep, freeze, flinch, paralysis, a confusion self-hit or Truant stops the
+        # move (data/moves.ts destinybond condition). A Destiny Bond executed below sets it again
+        # (gen6 onPrepareHit, inherited by Gen 3: consecutive uses succeed).
+        work=work._replace(volatile=_set_active(work.volatile,work,side,jnp.where(eligible,
+            _active(work.volatile,work,side)&jnp.uint32(~DESTINY_BOND&0xffffffff),_active(work.volatile,work,side))))
+        if _device_public is not None:device_public.destiny_bond(_device_public,work,side,eligible)
         sleep_usable=jnp.zeros_like(live);early_bird=jnp.zeros_like(live)
         if table.sleep_talk is not None:
             sleep_usable=table.sleep_talk.move[move]
@@ -818,6 +843,12 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
         explodes=jnp.zeros_like(acts)
         if table.focus_punch is not None:
             acts &= ~focusing.failed(work,side,move,table.focus_punch)
+        if table.damage_moves is not None:
+            # Counter/Mirror Coat onTry (gen3 moves.ts): no volatile or no qualifying hit -> silent
+            # failure after PP, before accuracy. beforeTurnCallback adds the volatile only for the
+            # move queued at the start of the turn, so a Sleep Talk or same-turn Encore call fails.
+            _counter_kind=table.damage_moves.counter_kind[move]
+            acts &= ~((_counter_kind>0) & ((_taken_kind[rows,side]!=_counter_kind) | (moves[rows,side]!=move)))
         effective_weather=work.weather
         if table.weather is not None:
             effective_weather=climate.effective(table.weather,work.weather,
@@ -929,6 +960,11 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
         if table.damage_moves is not None:
             damage=special_hits.resolve_fixed(table.damage_moves,move,_active(work.level,work,side),
                 damage,immune=immune)
+        if table.damage_moves is not None:
+            # damageCallback: twice the recorded damage, no crit or roll; type immunity still applies
+            # (Ghost to Counter, Dark to Mirror Coat).
+            damage=jnp.where(table.damage_moves.counter_kind[move]>0,
+                jnp.where(immune,0,special_hits.counter_damage(_taken_amount[rows,side])),damage)
         # Gen3's Hustle accuracy handler checks TYPE, including Status moves.
         # Hidden Power's actor-owned type has already been resolved above.
         hustle_accuracy = (hustle & table.combat.physical_type[typ]
@@ -1041,6 +1077,31 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
             device_public.damage(_device_public,work,side,jnp.where(hits_sub,0,dealt),jnp.where(hits_sub,0,dealt),acts)
             device_public.negative_hp_line(_device_public,work,foe,acts & ~hits_sub & (dealt>0),source_class=device_public.negative_items.HP_ACTION)
             device_public.observe(_device_public,work,acts)
+        if table.damage_moves is not None:
+            # Counter/Mirror Coat's onDamage record (gen3 moves.ts, priority -101, so after Endure):
+            # a foe Move whose damage reaches the Pokemon; the last hit wins. Substitute hits never
+            # reach onDamage. Counter counts physical moves and Hidden Power, Mirror Coat the rest.
+            _taken=acts & hit & ~immune & ~hits_sub & (damage>0)
+            _taken_amount=_taken_amount.at[rows,foe].set(jnp.where(_taken,dealt,_taken_amount[rows,foe]))
+            _taken_kind=_taken_kind.at[rows,foe].set(jnp.where(_taken,
+                jnp.where(physical | table.damage_moves.hidden_power[move],1,2),_taken_kind[rows,foe]))
+        if table.damage_moves is not None:
+            # Giga Drain (drain [1,2]) heals the user from the damage dealt, also through a
+            # Substitute; at full HP the heal is silent. Liquid Ooze (gen4 abilities.ts, the target's
+            # onSourceTryHeal) instead damages the drainer by the same amount, even at full HP, and
+            # an Ooze KO faints the drainer first (instafaint).
+            _drained=acts & hit & ~immune & (dealt>0) & (table.damage_moves.drain_den[move]>0)
+            _ooze=_drained & table.damage_moves.liquid_ooze[_active(work.ability,work,foe)]
+            _drain=special_hits.drain_amount(dealt,hits_sub)
+            _drain_old=_active(work.hp,work,side)
+            _drain_new=jnp.where(_ooze,jnp.maximum(0,_drain_old-_drain),
+                jnp.minimum(_active(work.max_hp,work,side),_drain_old+_drain))
+            work=work._replace(hp=_set_active(work.hp,work,side,jnp.where(_drained,_drain_new,_drain_old)))
+            if _lifecycle_trace:_public_trace=status_callbacks.unknown(_public_trace,_drained)
+            if _device_public is not None:
+                device_public.reveal_ability(_device_public,work,foe,_ooze)
+                device_public.hp_line(_device_public,work,side,_drained & (_drain_new!=_drain_old),
+                    source_class=device_public.HP_ACTION)
         if _direct_hit_context is not None and _direct_hit_registered:
             _sub_damage_write=substitute_damage_callbacks.Write(power,hit,immune,_risk_protected,
                 enduring[rows,foe],bypass_sub,_risk_absorbed,critical,num,den,sub_hp,
@@ -1383,6 +1444,13 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
             if _device_public is not None:
                 device_public.reveal_ability(_device_public,work,foe,_drop_lands
                     & jnp.any(_drop_blocked & (jnp.clip(_drop_old+_drop,-6,6)!=_drop_old),axis=1))
+            # Destiny Bond: volatileStatus destinybond with -singlemove (accuracy true, targets the
+            # user, bypasses a Substitute; Gen 3 reuse never fails).
+            _bond=acts & effects.destinybond[move]
+            work=work._replace(volatile=_set_active(work.volatile,work,side,jnp.where(_bond,
+                _active(work.volatile,work,side)|jnp.uint32(DESTINY_BOND),_active(work.volatile,work,side))))
+            if _lifecycle_trace:_public_trace=status_callbacks.unknown(_public_trace,_bond)
+            if _device_public is not None:device_public.destiny_bond(_device_public,work,side,_bond)
             status = effects.status[move]
             target_types = _active(work.types,work,foe)
             status_immune = jnp.any(effects.status_immunity[status[:,None],target_types],axis=1)
@@ -1603,6 +1671,22 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                 work=secondaries.apply(work,side,move,secondary_draws[rows,side],table.secondary,
                     eligible=acts & hit & ~immune,effective_weather=effective_weather,
                     substitute_hit=hits_sub,item_table=table.items,_device_public=_device_public)
+        if table.items is not None:
+            # Knock Off (gen4 moves.ts onAfterHit, inherited by Gen 3): AfterHit runs after the
+            # secondaries and, in Gen 3, before DamagingHit; only for a damaged non-Substitute target,
+            # with the attacker still up, also when the hit KOs. TakeItem: Sticky Hold blocks with
+            # -activate (gen4 abilities.ts, no HP check). The item is gone for good (itemKnockedOff).
+            _knock=(acts & hit & ~immune & ~hits_sub & table.items.knock_off[move]
+                & (_active(work.item,work,foe)>0) & (_active(work.hp,work,side)>0))
+            _sticky=_knock & table.items.sticky_hold[_active(work.ability,work,foe)]
+            _knocked=_knock & ~_sticky
+            if _device_public is not None:_device_knock_before=work
+            work=work._replace(item=_set_active(work.item,work,foe,jnp.where(_knocked,0,_active(work.item,work,foe))),
+                item_knocked=_set_active(work.item_knocked,work,foe,_active(work.item_knocked,work,foe) | _knocked))
+            if _lifecycle_trace:_public_trace=status_callbacks.unknown(_public_trace,_knock)
+            if _device_public is not None:
+                device_public.reveal_ability(_device_public,work,foe,_sticky)
+                device_public.knock_off(_device_public,_device_knock_before,work,foe,_knocked)
         if table.absorption is not None:
             # Gen 3 onDamagingHit follows secondaries: a frozen target cannot
             # receive this Fire hit's burn, then thaws. Original-catalog Fire
@@ -1655,6 +1739,15 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
             _public_trace=recoil_callbacks.record_device(_public_trace,_recoil_pending,recoil_callbacks.Write(
                 _recoil_before.actor_physical,_recoil_before.target_physical,_recoil_before.ability,
                 _recoil_before.old_hp,_active(work.hp,work,side),_recoil_before.maximum,_recoil_before.status))
+        # Destiny Bond onFaint: the bonded foe fainted from this actor's move (every foe HP loss in
+        # the actor's action is its move's), so the attacker faints after it at faintMessages.
+        # Residual, recoil, confusion or Liquid Ooze faints are not Move effects and never trigger.
+        _bond_trigger=(acts & (_bond_foe_hp>0) & (_active(work.hp,work,foe)==0)
+            & ((_active(work.volatile,work,foe)&jnp.uint32(DESTINY_BOND))!=0) & (_active(work.hp,work,side)>0))
+        work=work._replace(hp=_set_active(work.hp,work,side,jnp.where(_bond_trigger,0,_active(work.hp,work,side))))
+        hp=jnp.where(_bond_trigger,0,hp)
+        if _lifecycle_trace:_public_trace=status_callbacks.unknown(_public_trace,_bond_trigger)
+        if _device_public is not None:device_public.observe(_device_public,work,_bond_trigger,record_damage=False)
         if _device_public is not None:_device_weather_before=work
         if table.weather is not None:
             if _lifecycle_trace:
@@ -2104,6 +2197,8 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
     # (sim/battle.ts faintMessages, sim/pokemon.ts clearVolatile). The fainted holder
     # stays the active token until replaced; its replacement request sees no Substitute.
     work=work._replace(substitute_hp=jnp.where(work.hp>0,work.substitute_hp,0))
+    # clearVolatile at the faint also ends Destiny Bond (design 2.4).
+    work=work._replace(volatile=jnp.where(work.hp>0,work.volatile,work.volatile & jnp.uint32(~DESTINY_BOND&0xffffffff)))
     alive = jnp.any(work.hp > 0, axis=2)
     done = ~jnp.all(alive, axis=1)
     winner = jnp.where(alive[:, 0], 0, jnp.where(alive[:, 1], 1, 2))
@@ -2148,6 +2243,15 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
         _public_trace=kernel_risks.end_on_tape(_public_trace,work,active=live)
     work = work._replace(volatile=jnp.where(ordinary[:, None, None],
         work.volatile & jnp.uint32(~(FLINCH|FOCUS_PUNCH|FOCUS_LOST) & 0xffffffff), work.volatile))
+    if table.items is not None:
+        # endTurn's DisableMove: choicelock's onDisableMove (data/conditions.ts) removes a lock whose
+        # holder no longer holds a Choice item (a Knock Off). endTurn runs when the turn's queue
+        # empties with no replacement request pending: exactly when a TURN line follows (an
+        # end-of-turn faint defers it to the replacement step). Identity otherwise: a lock is only
+        # set while the holder has Choice Band, and departure clears it.
+        _end_turn=~work.done & ~work.pending_residual & ~jnp.any(work.forced_switch,axis=1)
+        work=work._replace(choice_move=jnp.where(_end_turn[:,None,None] & ~table.items.choice_band[work.item],
+            0,work.choice_move))
     work = jax.tree.map(lambda old, new: jnp.where(live.reshape((-1,) + (1,) * (old.ndim - 1)), new, old), state, work)
     if _device_public is not None:
         device_public.turn_end(_device_public,state,work,ordinary,upkeep=residual_ready & ~work.done,

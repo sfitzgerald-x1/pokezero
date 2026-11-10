@@ -77,6 +77,7 @@ FIELD_POLICY = {
     "done": "derived from all12 party HP; inconsistency refuses",
     "winner": "derived from all12 party HP; inconsistency refuses",
     "truant_loaf": "native active TRUANT residual clock; bench clock overwritten on entry",
+    "item_knocked": "permanent knocked-off flag; native removed item (item none), refused beside a Trick inventory",
 }
 NATIVE_PATHS = {
     "species": ("side[].pokemon[].id",), "level": ("side[].pokemon[].level",),
@@ -130,6 +131,7 @@ NATIVE_PATHS = {
     "keys": ("EXTERNAL_CHANCE: PRNG address, not exact semantic outcome state",),
     "done": ("derived from complete party HP",), "winner": ("derived from complete party HP",),
     "truant_loaf": ("side[].volatile_statuses.TRUANT",),
+    "item_knocked": ("side[].pokemon[].item: none (no native itemKnockedOff; only Trick reads it)",),
 }
 SIDE_NAMES = ("side_one", "side_two")
 BOOST_NAMES = ("attack", "defense", "special_attack", "special_defense", "speed", "accuracy", "evasion")
@@ -139,7 +141,7 @@ CONDITIONS = ("aurora_veil", "crafty_shield", "healing_wish", "light_screen", "l
     "lunar_dance", "mat_block", "mist", "protect", "quick_guard", "reflect", "safeguard",
     "spikes", "stealth_rock", "sticky_web", "tailwind", "toxic_count", "toxic_spikes", "wide_guard")
 DURATIONS = ("confusion", "encore", "lockedmove", "slowstart", "taunt", "yawn")
-VOLATILES = {1: "flinch", 2: "flashfire", 4: "leechseed", 8: "ingrain"}
+VOLATILES = {1: "flinch", 2: "flashfire", 4: "leechseed", 8: "ingrain", 64: "destinybond"}
 MON_FIELDS = ("id", "level", "type0", "type1", "base_type0", "base_type1", "hp", "maxhp",
     "ability", "base_ability", "item", "nature", "evs", "attack", "defense", "special_attack",
     "special_defense", "speed", "status", "rest_turns", "sleep_turns", "weight_kg")
@@ -151,7 +153,7 @@ DYNAMIC_INVENTORY = frozenset(("transform", "mimic", "sketch", "metronome", "ass
 SHAPES = {name: (2, 6) for name in ("species", "level", "hidden_power_type", "hidden_power_power",
     "happiness", "gender", "hp", "max_hp", "status", "status_counter", "sleep_skipped", "rest_origin", "choice_move", "last_move",
     "encore_move", "encore_counter", "charge_move", "charge_counter", "item", "ability", "base_ability", "volatile",
-    "confusion_counter", "protect_counter", "substitute_hp", "trap_source", "truant_loaf")}
+    "confusion_counter", "protect_counter", "substitute_hp", "trap_source", "truant_loaf", "item_knocked")}
 SHAPES.update({name: (2,) for name in ("active", "entry_pending", "active_turns", "trapped", "forced_switch",
     "last_action_kind", "last_action_index",
     "baton_pass", "queued_actions", "queued_stall", "phazing_draws", "secondary_draws", "sleep_talk_draws",
@@ -330,7 +332,7 @@ def _prepare(data, metadata, certificate=None, *, boundary="ordinary",
         if set(dict(original_static)) != required or original_genders is None:
             add("source", "INCOMPLETE_ORIGINAL_STATIC", "All12 constructor records and retained genders required")
             return None, gaps, (), False, False
-    expected = set(FIELD_POLICY) - {"truant_loaf", "gender"}  # legacy fields remain explicitly unknown
+    expected = set(FIELD_POLICY) - {"truant_loaf", "gender", "item_knocked"}  # legacy fields remain explicitly unknown
     if set(data) - set(FIELD_POLICY) or expected - set(data):
         add("schema", "UNCLASSIFIED_JAX_FIELD", repr(sorted(set(data) ^ expected)))
         return None, gaps, (), False, False
@@ -449,6 +451,13 @@ def _prepare(data, metadata, certificate=None, *, boundary="ordinary",
             for name in ("confusion_counter", "encore_move", "encore_counter"):
                 if data[name][side][p]:
                     add(path+"."+name, "LATENT_DURATION_CONVENTION", "Sampled remaining duration is not an elapsed-hazard/pending-expiry state")
+            knocked = data.get("item_knocked", ((False,)*6,)*2)[side][p]
+            if knocked not in (0, 1):
+                add(path+".item_knocked", "INVALID_KNOCKED_ITEM", "Expected an explicit boolean knocked-off flag")
+            elif knocked and data["item"][side][p]:
+                add(path+".item_knocked", "INVALID_KNOCKED_ITEM", "A knocked-off Pokemon holds no item")
+            elif knocked and "trick" in inventory:
+                add(path+".item_knocked", "KNOCKED_ITEM_TRICK_UNREPRESENTED", "Native has no itemKnockedOff; Trick fails on a knocked-off Pokemon in Showdown")
             if p != active:
                 for name in ("boosts", "volatile", "protect_counter", "substitute_hp", "choice_move", "last_move", "charge_move", "charge_counter", "trap_source"):
                     value = data[name][side][p]

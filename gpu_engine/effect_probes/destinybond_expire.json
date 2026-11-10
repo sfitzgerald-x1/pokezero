@@ -1,0 +1,213 @@
+{
+ "schema": "pokezero.effect_probe.scenario.v1",
+ "move": "destinybond_expire",
+ "note": "A2.4 Destiny Bond ends at the holder's next move attempt: Gengar bonds, then uses Splash and Snorlax's KO takes nobody; the next Gengar bonds and is Spored, and its cant (MoveAborted) ends the bond, so Snorlax's KO of the sleeper takes nobody; a bonded Banette at 5 HP dies to Toxic at the residual (not a Move effect) and takes nobody.",
+ "teams": [
+  [
+   {
+    "species": "Gengar",
+    "moves": [
+     "destinybond",
+     "splash",
+     "protect",
+     "thunderbolt"
+    ],
+    "ability": "Levitate",
+    "item": "",
+    "level": 50
+   },
+   {
+    "species": "Gengar",
+    "moves": [
+     "destinybond",
+     "splash",
+     "protect",
+     "thunderbolt"
+    ],
+    "ability": "Levitate",
+    "item": "",
+    "level": 50
+   },
+   {
+    "species": "Banette",
+    "moves": [
+     "destinybond",
+     "splash",
+     "protect",
+     "shadowball"
+    ],
+    "ability": "Insomnia",
+    "item": "",
+    "level": 30
+   },
+   {
+    "species": "Starmie",
+    "moves": [
+     "splash",
+     "surf",
+     "recover",
+     "protect"
+    ],
+    "ability": "Illuminate",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Blissey",
+    "moves": [
+     "splash",
+     "softboiled",
+     "protect",
+     "seismictoss"
+    ],
+    "ability": "Serene Grace",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Skarmory",
+    "moves": [
+     "splash",
+     "protect",
+     "spikes",
+     "peck"
+    ],
+    "ability": "Keen Eye",
+    "item": "Leftovers"
+   }
+  ],
+  [
+   {
+    "species": "Snorlax",
+    "moves": [
+     "shadowball",
+     "splash",
+     "protect",
+     "bodyslam"
+    ],
+    "ability": "Thick Fat",
+    "item": ""
+   },
+   {
+    "species": "Smeargle",
+    "moves": [
+     "spore",
+     "splash",
+     "toxic",
+     "nightshade"
+    ],
+    "ability": "Own Tempo",
+    "item": ""
+   },
+   {
+    "species": "Starmie",
+    "moves": [
+     "splash",
+     "surf",
+     "recover",
+     "protect"
+    ],
+    "ability": "Illuminate",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Blissey",
+    "moves": [
+     "splash",
+     "softboiled",
+     "protect",
+     "seismictoss"
+    ],
+    "ability": "Serene Grace",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Skarmory",
+    "moves": [
+     "splash",
+     "protect",
+     "spikes",
+     "peck"
+    ],
+    "ability": "Keen Eye",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Swampert",
+    "moves": [
+     "splash",
+     "protect",
+     "surf",
+     "earthquake"
+    ],
+    "ability": "Torrent",
+    "item": "Leftovers"
+   }
+  ]
+ ],
+ "script": [
+  [
+   "move 1",
+   "move 2"
+  ],
+  [
+   "move 2",
+   "move 1"
+  ],
+  [
+   "switch 2",
+   ""
+  ],
+  [
+   "move 1",
+   "switch 2"
+  ],
+  [
+   "move 1",
+   "move 1"
+  ],
+  [
+   "move 1",
+   "switch 1"
+  ],
+  [
+   "move 1",
+   "move 1"
+  ],
+  [
+   "switch 3",
+   ""
+  ],
+  [
+   "move 2",
+   "switch 2"
+  ],
+  [
+   "move 2",
+   "move 4"
+  ],
+  [
+   "move 1",
+   "move 3"
+  ],
+  [
+   "switch 4",
+   ""
+  ],
+  [
+   "move 1",
+   "move 2"
+  ]
+ ],
+ "axes": [],
+ "expect": {
+  "exact": true
+ },
+ "require_fields": [
+  "item_knocked",
+  "destiny_bond"
+ ],
+ "tape_steps": {
+  "4": {
+   "draws.1.7": 3
+  }
+ }
+}

@@ -1,0 +1,219 @@
+{
+ "schema": "pokezero.effect_probe.scenario.v1",
+ "move": "gigadrain",
+ "note": "A2.2 Giga Drain (drain [1,2]): at full HP no heal; after two Seismic Tosses the drain into Jolteon's odd 57-HP Substitute heals ceil(57/2) = 29 (gen4 substitute), and a plain hit heals floor(dealt/2) (gen<=4 spreadDamage, min 1); Tentacruel's Liquid Ooze turns the heal into damage (its Sonic Boom first), and an Ooze hit KOs Exeggutor (instafaint) after Swalot's Seismic Toss; Exeggutor's replacement follows.",
+ "teams": [
+  [
+   {
+    "species": "Exeggutor",
+    "moves": [
+     "gigadrain",
+     "splash",
+     "protect",
+     "psychic"
+    ],
+    "ability": "Chlorophyll",
+    "item": ""
+   },
+   {
+    "species": "Starmie",
+    "moves": [
+     "splash",
+     "surf",
+     "recover",
+     "protect"
+    ],
+    "ability": "Illuminate",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Blissey",
+    "moves": [
+     "splash",
+     "softboiled",
+     "protect",
+     "seismictoss"
+    ],
+    "ability": "Serene Grace",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Skarmory",
+    "moves": [
+     "splash",
+     "protect",
+     "spikes",
+     "peck"
+    ],
+    "ability": "Keen Eye",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Swampert",
+    "moves": [
+     "splash",
+     "protect",
+     "surf",
+     "earthquake"
+    ],
+    "ability": "Torrent",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Metagross",
+    "moves": [
+     "splash",
+     "protect",
+     "meteormash",
+     "earthquake"
+    ],
+    "ability": "Clear Body",
+    "item": "Leftovers"
+   }
+  ],
+  [
+   {
+    "species": "Jolteon",
+    "moves": [
+     "seismictoss",
+     "substitute",
+     "splash",
+     "protect"
+    ],
+    "ability": "Volt Absorb",
+    "item": "Leftovers",
+    "level": 78
+   },
+   {
+    "species": "Tentacruel",
+    "moves": [
+     "splash",
+     "protect",
+     "surf",
+     "sonicboom"
+    ],
+    "ability": "Liquid Ooze",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Swalot",
+    "moves": [
+     "seismictoss",
+     "splash",
+     "protect",
+     "sludgebomb"
+    ],
+    "ability": "Liquid Ooze",
+    "item": ""
+   },
+   {
+    "species": "Starmie",
+    "moves": [
+     "splash",
+     "surf",
+     "recover",
+     "protect"
+    ],
+    "ability": "Illuminate",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Blissey",
+    "moves": [
+     "splash",
+     "softboiled",
+     "protect",
+     "seismictoss"
+    ],
+    "ability": "Serene Grace",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Skarmory",
+    "moves": [
+     "splash",
+     "protect",
+     "spikes",
+     "peck"
+    ],
+    "ability": "Keen Eye",
+    "item": "Leftovers"
+   }
+  ]
+ ],
+ "script": [
+  [
+   "move 1",
+   "move 3"
+  ],
+  [
+   "move 2",
+   "move 1"
+  ],
+  [
+   "move 2",
+   "move 1"
+  ],
+  [
+   "move 1",
+   "move 2"
+  ],
+  [
+   "move 1",
+   "move 3"
+  ],
+  [
+   "move 2",
+   "switch 2"
+  ],
+  [
+   "move 1",
+   "move 1"
+  ],
+  [
+   "move 2",
+   "switch 3"
+  ],
+  [
+   "move 2",
+   "move 1"
+  ],
+  [
+   "move 2",
+   "switch 2"
+  ],
+  [
+   "move 1",
+   "move 4"
+  ],
+  [
+   "move 1",
+   "move 4"
+  ],
+  [
+   "switch 2",
+   ""
+  ],
+  [
+   "move 2",
+   "move 1"
+  ]
+ ],
+ "axes": [
+  {
+   "name": "roll",
+   "field": "draws.0.5",
+   "values": [
+    0,
+    15
+   ]
+  }
+ ],
+ "expect": {
+  "exact": true
+ },
+ "require_fields": [
+  "item_knocked",
+  "destiny_bond"
+ ]
+}
