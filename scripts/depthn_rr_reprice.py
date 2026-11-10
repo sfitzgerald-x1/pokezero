@@ -820,7 +820,7 @@ def true_inputs(sidecar, kind, cell, owner, decision_index):
     refuses every world (another seed or seat than the root's, no root entry or a root the sidecar writer could not align)."""
     out = dict(kind=kind, fallback=None, problem=None, team_rows=None, round0_request=None, root_request=None)
     ours = f'p{owner + 1}'
-    if sidecar.get('ours') != ours:return dict(out, problem=f'the sidecar is {sidecar.get("ours")!r}\'s, the root {ours}\'s')
+    if sidecar.get('ours') != ours:return dict(out, problem=f'the sidecar is seat {sidecar.get("ours")}, the root seat {ours}')
     if cell.get('seed') is not None and sidecar.get('seed') != cell['seed']:
         return dict(out, problem=f'the sidecar names seed {sidecar.get("seed")}, the cell {cell["seed"]}')
     out.update(team_rows=sidecar['team_rows'], round0_request=sidecar['round0_request'])

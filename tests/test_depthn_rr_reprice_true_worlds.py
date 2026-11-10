@@ -120,7 +120,7 @@ class WrapperTests(unittest.TestCase):
     def test_every_world_fails_closed_when_the_true_world_cannot_be_built(self):
         cases = (('no sidecar', dict(), 'true', 0, None, 'no opponent sidecar foulplay-1001.json'),
             ('another seed', dict(seed=8), 'true', 0, None, 'the sidecar names seed 8, the cell 7'),
-            ('another seat', dict(ours='p2'), 'true', 0, None, 'the sidecar is \'p2\'s, the root p1\'s'),
+            ('another seat', dict(ours='p2'), 'true', 0, None, 'the sidecar is seat p2, the root seat p1'),
             ('no root entry', dict(write=True), 'true_private', 3, None, 'the sidecar has no root 3'),
             ('a root the writer could not align', dict(roots={0: dict(decision_index=0, error='no owner capture row')}), 'true_private', 0, None,
                 'the sidecar\'s root 0: no owner capture row'),
