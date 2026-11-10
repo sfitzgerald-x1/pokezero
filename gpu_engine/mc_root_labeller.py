@@ -84,10 +84,45 @@ def outcome(env, ours):
     return 0. if t.winner is None else (1. if t.winner == ours else -1.)
 
 
-def make_env(base, result):
+def caching_env_class():
+    """LocalShowdownEnv with each player's normalized state cached per battle position: env.step's own observations normalize
+    every next-requested player, and the next step's _choices_for_actions normalized them again (about 7 ms a decision). The
+    cache key is a generation bumped on every state change (step, reset, restore, reseed); a root-PUCT branch observation is
+    never cached. The labeller's only env; mc_root_labeller.parity checks it against the plain env."""
+    from pokezero.local_showdown import LocalShowdownEnv
+
+    class CachingEnv(LocalShowdownEnv):
+        def _bump(self):self._generation = getattr(self, '_generation', 0) + 1;self._state_cache = {}
+
+        def reset(self, *args, **kwargs):
+            self._bump();out = super().reset(*args, **kwargs);self._bump();return out
+
+        def restore(self, *args, **kwargs):
+            self._bump();out = super().restore(*args, **kwargs);self._bump();return out
+
+        def reseed_simulator_rng(self, *args, **kwargs):
+            self._bump();out = super().reseed_simulator_rng(*args, **kwargs);self._bump();return out
+
+        def _submit_step_choices(self, *args, **kwargs):
+            self._bump()   # the battle is about to move: what the step observes afterwards belongs to the new position
+            return super()._submit_step_choices(*args, **kwargs)
+
+        def _state_for_player(self, player, *, root_puct_branch_observation=False):
+            if root_puct_branch_observation:return super()._state_for_player(player, root_puct_branch_observation=True)
+            cache = getattr(self, '_state_cache', None)
+            if cache is None:self._bump();cache = self._state_cache
+            key = (player, self._generation)
+            if key not in cache:cache[key] = super()._state_for_player(player)
+            return cache[key]
+
+    return CachingEnv
+
+
+def make_env(base, result, caching=True):
     from pokezero.local_showdown import LocalShowdownConfig, LocalShowdownEnv
     from pokezero.neural_policy import category_vocab_from_model_config, feature_masks_from_model_config, observation_spec_from_model_config
-    return LocalShowdownEnv(LocalShowdownConfig(showdown_root=base['showdown_root'], node_binary=base['node_binary'],
+    cls = caching_env_class() if caching else LocalShowdownEnv
+    return cls(LocalShowdownConfig(showdown_root=base['showdown_root'], node_binary=base['node_binary'],
         observation_spec=observation_spec_from_model_config(result.model_config),
         category_vocab=category_vocab_from_model_config(result.model_config, base['showdown_root']),
         feature_masks=feature_masks_from_model_config(result.model_config), set_belief_source=bool(base['belief_set_source'])))
@@ -173,6 +208,46 @@ def run_root(envs, models, root, snapshot, K, batched):
             else:still.append((i, r))
         active = still
     return outcomes, decisions
+
+
+def parity(collection, checkpoint, games=2, seed=0):
+    """The caching env against the plain one: each of `games` Foul Play games replayed to a root, then the same seeded rollouts
+    of every legal action in both envs; every observation's arrays, every choice and every outcome must be identical. Returns
+    dict(decisions=, mismatches=)."""
+    import torch
+    from gpu_engine import fp_reply_data as fpd
+    champion = Model(checkpoint, torch);collection = Path(collection);rng = random.Random(seed)
+    paths = sorted(glob.glob(str(collection / 'results' / '*.json')), key=lambda p: int(Path(p).stem))
+    base = json.loads((collection / 'requests' / f'{Path(paths[0]).stem}.json').read_bytes())['base_config']
+    envs = [make_env(base, champion.result, caching=c) for c in (False, True)];decisions = mismatches = 0
+    try:
+        made = 0
+        while made < games:
+            game, _ = fpd.load_game(collection, rng.choice(paths))
+            if game is None or len(game['our_actions']) < 4:continue
+            target = rng.randrange(1, len(game['our_actions']) - 1)
+            if not all(foulplay_root(e, game, target) for e in envs):continue
+            made += 1;ours = game['ours'];opp = game['fp'];snaps = [e.snapshot() for e in envs]
+            actions = [int(a) for a in np.flatnonzero(legal_of(envs[0].observe(ours)))]
+            reply = None
+            if opp in envs[0].requested_players():
+                o = envs[0].observe(opp);reply = sample(champion.probabilities([o])[0], legal_of(o), .5)
+            for a in actions:
+                trace = []
+                for e, snap in zip(envs, snaps):
+                    r = Rollout(e, snap, a, 0, 12345, ours, opp, reply);steps = []
+                    while not r.done:
+                        pending = r.pending();acts = {}
+                        for p, o in pending:
+                            steps.append((p, tuple(np.asarray(o.numeric_features).ravel().round(9)), tuple(np.asarray(o.categorical_ids).ravel()),
+                                          tuple(legal_of(o))))
+                            pr = champion.probabilities([o])[0];acts[p] = sample(pr, legal_of(o), draw(12345, 0, r.ply, 0 if p == ours else 1))
+                        steps.append(('acts', tuple(sorted(acts.items()))));r.step(acts)
+                    trace.append((steps, r.value))
+                decisions += sum(1 for x in trace[0][0] if x[0] != 'acts');mismatches += trace[0] != trace[1]
+    finally:
+        for e in envs:e.close()
+    return dict(decisions=decisions, mismatches=mismatches)
 
 
 def main(argv=None):
