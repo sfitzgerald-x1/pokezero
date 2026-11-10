@@ -1,16 +1,16 @@
 {
  "schema": "pokezero.effect_probe.scenario.v1",
  "move": "curse",
- "note": "Broken (no non-Ghost Curse in the engine). Showdown: +1 Atk, +1 Def, -1 Spe per use; engine: no change.",
+ "note": "A1.1 non-Ghost Curse: +1 Atk, +1 Def, -1 Spe per use. Snorlax first makes a Substitute, then Curses under Blissey's Protect and behind its Substitute, then on to +6/+6/-6 (+5 Atk to +6 at step 6) and once more at the caps (silent).",
  "teams": [
   [
    {
     "species": "Snorlax",
     "moves": [
      "curse",
-     "bodyslam",
+     "substitute",
      "rest",
-     "sleeptalk"
+     "bodyslam"
     ],
     "ability": "Thick Fat",
     "item": "Leftovers"
@@ -23,7 +23,7 @@
      "icebeam",
      "recover"
     ],
-    "ability": "Natural Cure",
+    "ability": "Illuminate",
     "item": "Leftovers"
    },
    {
@@ -38,34 +38,34 @@
     "item": "Leftovers"
    },
    {
-    "species": "Gengar",
-    "moves": [
-     "thunderbolt",
-     "icepunch",
-     "firepunch",
-     "explosion"
-    ],
-    "ability": "Levitate",
-    "item": "Leftovers"
-   },
-   {
-    "species": "Metagross",
-    "moves": [
-     "meteormash",
-     "earthquake",
-     "rockslide",
-     "explosion"
-    ],
-    "ability": "Clear Body",
-    "item": "Leftovers"
-   },
-   {
     "species": "Zapdos",
     "moves": [
      "thunderbolt",
      "batonpass",
      "agility",
      "drillpeck"
+    ],
+    "ability": "Pressure",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Celebi",
+    "moves": [
+     "psychic",
+     "gigadrain",
+     "recover",
+     "calmmind"
+    ],
+    "ability": "Natural Cure",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Suicune",
+    "moves": [
+     "surf",
+     "icebeam",
+     "calmmind",
+     "rest"
     ],
     "ability": "Pressure",
     "item": "Leftovers"
@@ -84,14 +84,36 @@
     "item": "Leftovers"
    },
    {
-    "species": "Tyranitar",
+    "species": "Starmie",
     "moves": [
-     "rockslide",
-     "earthquake",
-     "fireblast",
-     "icebeam"
+     "surf",
+     "thunderbolt",
+     "icebeam",
+     "recover"
     ],
-    "ability": "Sand Stream",
+    "ability": "Illuminate",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Swampert",
+    "moves": [
+     "earthquake",
+     "surf",
+     "icebeam",
+     "protect"
+    ],
+    "ability": "Torrent",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Zapdos",
+    "moves": [
+     "thunderbolt",
+     "batonpass",
+     "agility",
+     "drillpeck"
+    ],
+    "ability": "Pressure",
     "item": "Leftovers"
    },
    {
@@ -106,17 +128,6 @@
     "item": "Leftovers"
    },
    {
-    "species": "Salamence",
-    "moves": [
-     "dragonclaw",
-     "earthquake",
-     "fireblast",
-     "rockslide"
-    ],
-    "ability": "Intimidate",
-    "item": "Leftovers"
-   },
-   {
     "species": "Suicune",
     "moves": [
      "surf",
@@ -126,21 +137,30 @@
     ],
     "ability": "Pressure",
     "item": "Leftovers"
-   },
-   {
-    "species": "Jolteon",
-    "moves": [
-     "thunderbolt",
-     "batonpass",
-     "substitute",
-     "agility"
-    ],
-    "ability": "Volt Absorb",
-    "item": "Leftovers"
    }
   ]
  ],
  "script": [
+  [
+   "move 2",
+   "move 1"
+  ],
+  [
+   "move 1",
+   "move 2"
+  ],
+  [
+   "move 1",
+   "move 1"
+  ],
+  [
+   "move 1",
+   "move 1"
+  ],
+  [
+   "move 1",
+   "move 1"
+  ],
   [
    "move 1",
    "move 1"
@@ -156,8 +176,6 @@
  ],
  "axes": [],
  "expect": {
-  "mismatch_fields": [
-   "boosts"
-  ]
+  "exact": true
  }
 }

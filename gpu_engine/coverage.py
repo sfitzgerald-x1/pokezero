@@ -70,6 +70,18 @@ def registry():
         partial='Reflect/Light Screen removal is not represented')
     group('sing','Primary sleep status application','effects','effects',
         partial='Soundproof admission guard is missing for this sound move')
+    # Fidelity patch A1. The status group above also gained Sleep Clause Mod and
+    # Insomnia/Vital Spirit admission (its text predates them and is unchanged).
+    group('lovelykiss','Primary sleep at 75% accuracy, Sleep Clause Mod and Insomnia/Vital Spirit admission',
+        'effects','fidelity_a1')
+    group('curse','Non-Ghost user +1 Atk/+1 Def/-1 Spe with +/-6 clamps (no pool Ghost user)','effects','fidelity_a1')
+    group('superpower','Ordinary damage plus user -1 Atk/-1 Def after a successful hit, Substitute and KO included; '
+        'exact only for holders without White Herb (Deoxys forms always hold one; its restore lands in fidelity PR C)',
+        'effects','fidelity_a1')
+    group('charm','Target Attack -2 with Protect/Substitute gates and Clear Body/White Smoke/Hyper Cutter blocks',
+        'effects','fidelity_a1')
+    group('aromatherapy','Living own-party major-status cure, Soundproof holders included','effects','fidelity_a1')
+    group('refresh','User paralysis/burn/poison cure; sleep and freeze fail','effects','fidelity_a1')
     return result
 
 
@@ -99,7 +111,7 @@ def ledger(metadata,*,root):
         weighted_status_shares=shares,game_qualified_move_share=None,
         top49_selection_share=sum(r['count'] for r in rows[:49])/total,
         qualification='Selected-effect source assessment only; tests/references do not establish full-game correctness or the divergence gate. Partial moves receive no whole-move credit.',
-        scope='Gen3 singles measurement subset. No Sleep/Freeze Clause, production encoder, full ability/contact/item/event coverage, or all volatile cross-products. Each move row states bounded selected support. Full-game qualification remains separate.')
+        scope='Gen3 singles measurement subset. Sleep Clause Mod only (no Freeze Clause); no production encoder, full ability/contact/item/event coverage, or all volatile cross-products. Each move row states bounded selected support. Full-game qualification remains separate.')
 
 
 def measure(pool_path,expected_sha):

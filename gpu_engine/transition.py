@@ -1172,6 +1172,12 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
             hp=jnp.where(acts & effects.weather_heal[move] & (hp>0),restored,hp)
             rest = (acts & effects.rest[move] & (hp < max_hp)
                     & (_active(work.status,work,side) != m.SLP))
+            # Rest's onTry (data/moves.ts Rest) fails an Insomnia/Vital Spirit user after
+            # its asleep and full-HP checks, with -fail [from] ability (revealed below).
+            _rest_immune=jnp.zeros_like(rest)
+            if table.secondary is not None:
+                _rest_immune=rest & table.secondary.ability_immunity[_active(work.ability,work,side),m.SLP]
+            rest &= ~_rest_immune
             if _lifecycle_trace:
                 _rest_write_ready=self_move_callbacks.rest_write_supported(_public_trace,_rest_pending,rest)
                 _public_trace=status_callbacks.unknown(_public_trace,rest&~_rest_write_ready)
@@ -1185,6 +1191,15 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                     jnp.where(rest,0,_active(work.sleep_skipped,work,side))),
                 rest_origin=_set_active(work.rest_origin,work,side,
                     jnp.where(rest,True,_active(work.rest_origin,work,side))))
+            # Refresh (data/moves.ts:14924-14927) fails on no status, slp or frz; otherwise
+            # cureStatus() clears par/brn/psn/tox with its toxic stage. Published by observe below.
+            _refresh_status=_active(work.status,work,side)
+            _refreshed=(acts & effects.refresh[move] & (_active(work.hp,work,side)>0)
+                & ((_refresh_status==m.PAR)|(_refresh_status==m.BRN)|(_refresh_status==m.PSN)|(_refresh_status==m.TOX)))
+            if _lifecycle_trace:_public_trace=status_callbacks.unknown(_public_trace,_refreshed)
+            work=work._replace(**{name:_set_active(getattr(work,name),work,side,jnp.where(_refreshed,
+                jnp.zeros_like(_active(getattr(work,name),work,side)),_active(getattr(work,name),work,side)))
+                for name in ("status","status_counter","sleep_skipped","rest_origin")})
             if _device_public is not None:
                 # Successful self-heals and Substitute publish a condition
                 # before residual items. Replace the pre-item HP snapshot at
@@ -1195,6 +1210,7 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                     source_class=device_public.HP_ACTION)
                 device_public.observe(_device_public,work,acts,rest_side=side,rest_mask=rest)
                 device_public.feature(_device_public,side,work.active[rows,side],'rest_sleep',jnp.ones_like(move),rest)
+            if _device_public is not None:device_public.reveal_ability(_device_public,work,side,_rest_immune)
             if _lifecycle_trace:
                 _public_trace,_rest_capture=self_move_callbacks.finish(_public_trace,_rest_pending,work)
                 _public_trace,_self_heal_capture=self_heal_callbacks.finish(_public_trace,_self_heal_pending,work,heal_weather,acts&hit&~immune)
@@ -1270,7 +1286,13 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                 from . import engine_self_boost_callbacks as self_boost_callbacks
                 _public_trace,_self_boost_pending=self_boost_callbacks.begin(_public_trace,work,side,move,caller_move,boosts,
                     _direct_hit_context if _direct_hit_registered else None,effects,eligible=caller_acts)
+            # Curse's table row is the non-Ghost form (gen4 onModifyMove, inherited by Gen 3).
+            # A Ghost-type user would take the unported Ghost form: keep its stages (placeholder).
+            _curse_ghost=(acts & effects.curse[move]
+                & jnp.any(_active(work.types,work,side)==effects.ghost_type,axis=1))
+            _curse_kept=boosts
             boosts = jnp.clip(boosts + jnp.where(acts[:,None],effects.self_boosts[move],0),-6,6)
+            boosts = jnp.where(_curse_ghost[:,None],_curse_kept,boosts)
             if _lifecycle_trace:
                 _public_trace,_self_boost_capture=self_boost_callbacks.finish(_public_trace,_self_boost_pending,boosts,acts&hit&~immune)
             if _lifecycle_trace:
@@ -1303,6 +1325,9 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                 _public_trace=kernel_risks.branch_on_tape(_public_trace,kernel_risks.Branch.HIT_SPA_DROP,
                     drop,active=live)
             boosts = boosts.at[:,2].set(jnp.where(drop,jnp.maximum(-6,boosts[:,2]-2),boosts[:,2]))
+            # Superpower's self boosts: selfDrops runs after the hit (sim/battle-actions.ts:1117,
+            # 1344-1350), on a Substitute hit and a KO too; same gate as the SpA drop. -6 is silent.
+            boosts = jnp.clip(boosts + jnp.where((acts & hit & ~immune)[:,None],effects.hit_self_boosts[move],0),-6,6)
             work = work._replace(boosts=_set_active(work.boosts,work,side,boosts))
             if _lifecycle_trace:
                 _public_trace,_belly_capture=belly_callbacks.finish(_public_trace,_belly_pending,work,acts&hit&~immune)
@@ -1323,6 +1348,16 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                     acts & effects.heal_bell[move],active=live,captured_heal_bell=_heal_bell_capture)
             else:
                 work=cure_team(work,side,effects,eligible=acts & effects.heal_bell[move])
+            # Aromatherapy: -cureteam, every living statused member of the user's side,
+            # Soundproof holders included (gen4 onHit inherited by Gen 3); never fails.
+            from .effects import cure_party
+            _aromatherapy=acts & effects.aromatherapy[move]
+            if _lifecycle_trace:
+                _public_trace=status_callbacks.unknown(_public_trace,_aromatherapy
+                    & jnp.any((work.hp[rows,side]>0) & (work.status[rows,side]!=m.NONE),axis=1))
+            work=cure_party(work,side,effects,eligible=_aromatherapy)
+            if _device_public is not None:
+                device_public.party_cure(_device_public,_device_party_before,work,side,_aromatherapy)
             if _device_public is not None:
                 device_public.party_cure(_device_public,_device_party_before,work,side,acts & effects.heal_bell[move],effects)
                 device_public.observe(_device_public,work,acts)
@@ -1333,6 +1368,21 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                 old = _active(work.boosts,work,target_side)
                 work = work._replace(boosts=_set_active(work.boosts,work,target_side,
                     jnp.where((acts & effects.haze[move])[:,None],0,old)))
+            # Charm's primary boosts (moveHit after TryHit): Protect is already in `hit`; a
+            # Substitute fails it (TryPrimaryHit); status moves ignore type immunity
+            # (tryMoveHit sets ignoreImmunity for Status). The drop is capped first, then
+            # TryBoost: Clear Body/White Smoke delete every negative stage, Hyper Cutter
+            # Attack's, printing -fail [from] ability only for a nonzero capped drop.
+            _drop=effects.target_boosts[move]
+            _drop_old=_active(work.boosts,work,foe)
+            _drop_blocked=effects.drop_block[_active(work.ability,work,foe)] & (_drop<0)
+            _drop_lands=(acts & hit & jnp.any(_drop!=0,axis=1) & (_active(work.hp,work,foe)>0)
+                & ((_active(work.substitute_hp,work,foe)==0) | effects.bypass_sub[move]))
+            work=work._replace(boosts=_set_active(work.boosts,work,foe,jnp.where(_drop_lands[:,None],
+                jnp.clip(_drop_old+jnp.where(_drop_blocked,0,_drop),-6,6),_drop_old)))
+            if _device_public is not None:
+                device_public.reveal_ability(_device_public,work,foe,_drop_lands
+                    & jnp.any(_drop_blocked & (jnp.clip(_drop_old+_drop,-6,6)!=_drop_old),axis=1))
             status = effects.status[move]
             target_types = _active(work.types,work,foe)
             status_immune = jnp.any(effects.status_immunity[status[:,None],target_types],axis=1)
@@ -1355,9 +1405,16 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                 status_immune |= ~secondaries.status_allowed(table.secondary,status,target_types,
                     _active(work.ability,work,foe))
             status_immune |= effects.thunderwave[move] & jnp.any(target_types == effects.ground_type,axis=1)
+            # Sleep Clause Mod (data/rulesets.ts:1386-1401): onSetStatus refuses a foe's
+            # sleep while another living member of the target's side sleeps from a foe's
+            # move; Rest's sleep does not count. Checked after accuracy, Protect, the
+            # Substitute and an existing status; the duration roll is then never drawn.
+            from .effects import sleep_clause_blocked
+            _sleep_clause=(status==m.SLP) & sleep_clause_blocked(work,foe)
             apply_status = (acts & hit & (status != m.NONE) & ~status_immune
                 & (_active(work.hp,work,foe) > 0) & (_active(work.status,work,foe) == m.NONE)
                 & ((_active(work.substitute_hp,work,foe) == 0) | effects.bypass_sub[move]))
+            apply_status &= ~_sleep_clause
             if _toxic_context is not None:
                 _toxic_requested=acts & (move==_toxic_context.data.move_id)
                 if _lifecycle_trace:
@@ -2043,6 +2100,10 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
         work.volatile & jnp.uint32(~(FOCUS_PUNCH|FOCUS_LOST)&0xffffffff)))
     work=work._replace(**{name:jnp.where(work.hp>0,getattr(work,name),0)
         for name in ("last_move","encore_move","encore_counter","charge_move","charge_counter")})
+    # faintMessages -> clearVolatile(false) empties the volatiles, the Substitute too
+    # (sim/battle.ts faintMessages, sim/pokemon.ts clearVolatile). The fainted holder
+    # stays the active token until replaced; its replacement request sees no Substitute.
+    work=work._replace(substitute_hp=jnp.where(work.hp>0,work.substitute_hp,0))
     alive = jnp.any(work.hp > 0, axis=2)
     done = ~jnp.all(alive, axis=1)
     winner = jnp.where(alive[:, 0], 0, jnp.where(alive[:, 1], 1, 2))

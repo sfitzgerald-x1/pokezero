@@ -1,0 +1,187 @@
+{
+ "schema": "pokezero.effect_probe.scenario.v1",
+ "move": "lovelykiss_block",
+ "note": "A1.4/A1.5/A1.6 Lovely Kiss fails on Jolteon's Substitute, Hypno's Insomnia and Primeape's Vital Spirit, puts Blissey to sleep (each duration), then Sleep Clause blocks it on Snorlax while Blissey sleeps on the bench.",
+ "teams": [
+  [
+   {
+    "species": "Jynx",
+    "moves": [
+     "lovelykiss",
+     "calmmind",
+     "icebeam",
+     "psychic"
+    ],
+    "ability": "Oblivious",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Starmie",
+    "moves": [
+     "surf",
+     "thunderbolt",
+     "icebeam",
+     "recover"
+    ],
+    "ability": "Illuminate",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Swampert",
+    "moves": [
+     "earthquake",
+     "surf",
+     "icebeam",
+     "protect"
+    ],
+    "ability": "Torrent",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Zapdos",
+    "moves": [
+     "thunderbolt",
+     "batonpass",
+     "agility",
+     "drillpeck"
+    ],
+    "ability": "Pressure",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Celebi",
+    "moves": [
+     "psychic",
+     "gigadrain",
+     "recover",
+     "calmmind"
+    ],
+    "ability": "Natural Cure",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Suicune",
+    "moves": [
+     "surf",
+     "icebeam",
+     "calmmind",
+     "rest"
+    ],
+    "ability": "Pressure",
+    "item": "Leftovers"
+   }
+  ],
+  [
+   {
+    "species": "Jolteon",
+    "moves": [
+     "substitute",
+     "splash",
+     "thunderbolt",
+     "batonpass"
+    ],
+    "ability": "Volt Absorb",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Hypno",
+    "moves": [
+     "splash",
+     "psychic",
+     "protect",
+     "rest"
+    ],
+    "ability": "Insomnia",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Primeape",
+    "moves": [
+     "splash",
+     "crosschop",
+     "rockslide",
+     "bulkup"
+    ],
+    "ability": "Vital Spirit",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Blissey",
+    "moves": [
+     "splash",
+     "softboiled",
+     "protect",
+     "seismictoss"
+    ],
+    "ability": "Serene Grace",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Snorlax",
+    "moves": [
+     "splash",
+     "bodyslam",
+     "rest",
+     "curse"
+    ],
+    "ability": "Thick Fat",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Starmie",
+    "moves": [
+     "surf",
+     "thunderbolt",
+     "icebeam",
+     "recover"
+    ],
+    "ability": "Illuminate",
+    "item": "Leftovers"
+   }
+  ]
+ ],
+ "script": [
+  [
+   "move 1",
+   "move 1"
+  ],
+  [
+   "move 1",
+   "switch 2"
+  ],
+  [
+   "move 1",
+   "switch 3"
+  ],
+  [
+   "move 1",
+   "switch 4"
+  ],
+  [
+   "move 1",
+   "switch 5"
+  ],
+  [
+   "move 2",
+   "move 1"
+  ]
+ ],
+ "axes": [
+  {
+   "name": "sleep_roll",
+   "field": "draws.0.7",
+   "steps": [
+    3
+   ],
+   "values": [
+    0,
+    1,
+    2,
+    3
+   ]
+  }
+ ],
+ "expect": {
+  "exact": true
+ }
+}

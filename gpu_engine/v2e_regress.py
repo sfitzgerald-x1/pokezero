@@ -18,9 +18,13 @@ every changed lane-step is attributed through the per-PR plug-in table:
   involved effects' allowances is changed-involved-unexpected-fields, a
   failure, unless the leaf is waived (--waive) or it is a KO consequence on a
   lane whose set of fainting mons differs from the base (a KO cascade): HP,
-  fainted, forced-switch/replacement and done/winner leaves, the newly
-  (un)fainted mon's own per-mon state (checked exactly against stored base
-  arrays) and the trackers of its side. Anything else stays unexpected.
+  fainted, forced-switch/replacement and done/winner leaves, a cancelled or
+  cleared last_move and a released trap link, the TURN-line bookkeeping of both
+  sides, the newly (un)fainted mon's own per-mon state (checked exactly against
+  stored base arrays) and the trackers of its side. A lane whose residual was
+  deferred in exactly one tree (a KO moved between the action and residual
+  phases: a phase shift) is a cascade on both sides that also accepts the
+  residual handlers' writes. Anything else stays unexpected.
 
 Report: unchanged, changed-and-involved per effect with its changed fields,
 changed-but-uninvolved and changed-involved-unexpected-fields (both must be
@@ -41,10 +45,10 @@ The involvement superset resolves the executed move as the engine does (slot,
 charge, standing or same-turn Encore, Struggle, a resumed queued action, every
 Sleep Talk-callable move, a Magic Coat reflection) and covers Effect Spore and
 Yawn sleep under Sleep Clause, Rest or Effect Spore against Insomnia/Vital
-Spirit, and an incoming White Herb holder. Known gaps, which can only cause
-false failures: Snatch, Mirror Move, Metronome and Assist calls (not in the
-Gen 3 randbats pool); a foe's Roar/Whirlwind dragging in an Insomnia/Vital
-Spirit holder before a sleep move; the recharge override (M1 adds it).
+Spirit (a Trace holder copying either, any install of a holder), and an incoming
+White Herb holder. Known gaps, which can only cause false failures: Snatch,
+Mirror Move, Metronome and Assist calls (not in the Gen 3 randbats pool); the
+recharge override (M1 adds it).
 
 Both passes must run on the same JAX version, digest scheme and lane padding.
 Paths are command-line arguments.
@@ -307,11 +311,16 @@ def sleep_clause(p):
 
 def sleep_immunity(p):
     """A sleep move or Yawn aimed at an Insomnia/Vital Spirit side; Rest by such a holder;
-    such a holder hitting an Effect Spore foe."""
+    such a holder hitting an Effect Spore foe. A Trace holder counts as a holder while the
+    opposing party holds one (it copies the foe's ability as it enters), and a benched holder
+    is exposed by any install this step (a switch, Baton Pass, the foe's Roar/Whirlwind, a
+    replacement)."""
     ids = p.ability_ids('insomnia', 'vitalspirit')
     holder = np.isin(p.s['ability'], ids)                                                # [L,2,6]
-    active = p.active_ability('insomnia', 'vitalspirit')
-    exposed = active | (holder.any(-1) & (p.actions >= 4))                              # per holder side
+    holder = holder | (np.isin(p.s['ability'], p.ability_ids('trace')) & holder.any(-1)[:, ::-1, None])
+    rows = np.arange(p.lanes)[:, None];sides = np.arange(2)[None, :]
+    active = holder[rows, sides, p.s['active']]
+    exposed = active | (holder.any(-1) & installs(p))                                   # per holder side
     aimed = p.side_uses(*SLEEP_MOVES, 'yawn') & exposed[:, ::-1]
     rest = p.side_uses('rest') & active
     spore = active & p.active_ability('effectspore')[:, ::-1] & (p.candidates > 0).any(-1)
@@ -395,6 +404,14 @@ def move(*names):
     return lambda p: p.side_uses(*names)
 
 
+def substitute_holder(p):
+    """A1 (design 13): a side whose active may faint behind a Substitute this step, whose
+    Substitute the faint now clears: one up in the pre-state (a Baton recipient inherits
+    the passer's), or a Substitute move this step."""
+    held = p.active('substitute_hp') > 0 if 'substitute_hp' in p.s else np.zeros((p.lanes, 2), bool)
+    return held | p.side_uses('substitute')
+
+
 # Leaf families for the allowed-change sets (regexes over output names).
 FAMILIES = {
     'hp': (r'^state\.(hp|substitute_hp)$', r'^trackers\.(hp_percent|damage_exact_(dealt|taken))$',
@@ -407,12 +424,33 @@ FAMILIES = {
     'reveal': (r'^trackers\.(shown_ability|original_ability|borrowed_ability|belief_mask)$', r'^trackers\.visible_belief\.'),
     'types': (r'^trackers\.shown_types$',),
     'meanlook': (r"^trackers\.mon_features\['meanlook_trap'\]$",),
+    # A1: a status write updates the sleep-clause port (holder on the other seat, victims
+    # on the cured one) and refreshes the subject's visible belief basis.
+    'port': (r'^trackers\.public_port\.',),
+    'visible': (r'^trackers\.visible_belief\.',),
+    'sub': (r'^state\.substitute_hp$',),
     'all': (r'.*',),
 }
 ALL = dict(user=('all',), target=('all',), glob=('all',))
 # KO cascade: leaves any faint difference may change (both sides / side-less).
 FAMILIES['ko'] = (r'^state\.(forced_switch|pending_residual|queued_actor|queued_actions|queued_stall|residual_draws|'
-                  r'phazing_draws|secondary_draws|sleep_talk_draws|replacement_count|done|winner)$', r'^trackers\.fainted$')
+                  r'phazing_draws|secondary_draws|sleep_talk_draws|replacement_count|done|winner)$', r'^trackers\.fainted$',
+                  # A1: a KO cancels the remaining queued action (that actor's last_move) and the end-of-step
+                  # clear zeroes a fainted mon's last_move; linking.prune releases a link whose owner or
+                  # target fainted, on either side.
+                  r'^state\.(last_move|trap_source)$')
+# A1: whether a step ends in a forced-replacement request or a new TURN line follows the faint set;
+# B2's per-turn bookkeeping follows it on both sides (turn counter, the actives' stint clocks, a
+# badly poisoned active's toxic stage, the post-upkeep port flag, weather upkeeps).
+FAMILIES['turnline'] = (r'^trackers\.turn$', r"^trackers\.mon_features\['(turns_active|turns_active_total|toxic_stage)'\]$",
+                        r'^trackers\.public_port\.post_upkeep$', r"^trackers\.field_features\['weather_upkeeps'\]$")
+# A1: a phase shift. An involved effect that changes damage taken (Curse, Superpower, Charm) or a
+# cure (Refresh, Aromatherapy) can move a KO between the action phase, which defers the residual
+# (state.pending_residual and the saved draws), and the residual phase. The residual handlers and
+# the ordinary end-of-turn clears then ran in exactly one tree: their writes may differ on both
+# sides (with all trackers), even when the set of fainted mons is the same.
+FAMILIES['residual'] = (r'^state\.(item|status_counter|volatile|boosts|encore_move|encore_counter|charge_move|charge_counter|'
+                        r'truant_loaf|wish_counter|wish_amount|weather|weather_counter)$', r'^trackers\.(weather|field_features)')
 # Per-mon state a faint may change on the mon that (un)fainted; checked per mon against stored base arrays.
 KO_MON_LEAVES = tuple(f'state.{n}' for n in ('status', 'status_counter', 'sleep_skipped', 'rest_origin', 'volatile',
     'confusion_counter', 'boosts', 'encore_move', 'encore_counter', 'charge_move', 'charge_counter', 'choice_move',
@@ -425,8 +463,12 @@ ALLOWED = {
     'superpower': dict(user=('boosts', 'hp', 'item'), target=('hp',), glob=()),
     'charm': dict(user=('hp',), target=('boosts', 'hp', 'item', 'reveal'), glob=()),
     'lovelykiss': ALL, 'sleep_clause': ALL, 'sleep_immunity': ALL,
-    'aromatherapy': dict(user=('status', 'hp'), target=('hp',), glob=()),
-    'refresh': dict(user=('status', 'hp'), target=('hp',), glob=()),
+    # A cure goes through party_cure/observe: port.condition and team_cure write the sleep-clause
+    # port (victims on the user's seat, holder on the foe's) and _refresh the visible belief.
+    'aromatherapy': dict(user=('status', 'hp', 'port', 'visible'), target=('hp', 'port'), glob=()),
+    'refresh': dict(user=('status', 'hp', 'port', 'visible'), target=('hp', 'port'), glob=()),
+    # The faint clears only the holder's Substitute HP (no tracker reads it).
+    'sub_faint': dict(user=('sub',), target=(), glob=()),
     # PR0 (tracker only): a gated reveal drops the entrant's own ability reveal; the
     # Color Change revert rewrites the departing mon's shown types. No state, no foe field.
     'intimidate_reveal': dict(user=('reveal',), target=(), glob=()),
@@ -452,7 +494,7 @@ PLUGINS = {
                 meanlook_arrival=meanlook_arrival),
     'A1': dict(curse=move('curse'), superpower=move('superpower'), charm=move('charm'), lovelykiss=move('lovelykiss'),
                aromatherapy=move('aromatherapy'), refresh=move('refresh'), sleep_clause=sleep_clause,
-               sleep_immunity=sleep_immunity),
+               sleep_immunity=sleep_immunity, sub_faint=substitute_holder),
     'A2': dict(knockoff=move('knockoff'), gigadrain=move('gigadrain'), counter=move('counter'), mirrorcoat=move('mirrorcoat'),
                destinybond=move('destinybond'), destinybond_trigger=destiny_bond_bit),
     'R': dict(bonemerang=move('bonemerang')),
@@ -477,7 +519,8 @@ def predicates(prs):
 def lane_verdict(changed, effects, side_axis, *, cascade=None, waive=()):
     """changed: {(leaf, side)} for side-axis leaves, {(leaf, None)} for side-less ones;
     effects: {effect: [actor sides]}; cascade: None, or dict(ko_sides=[2] bool,
-    mon_ok=callable(leaf, side) -> the leaf differs only on that side's (un)fainted mons).
+    mon_ok=callable(leaf, side) -> the leaf differs only on that side's (un)fainted mons,
+    optional families=extra leaf families accepted on both sides, e.g. ('residual',) on a phase shift).
     Returns (unexpected entries, waived entries, entries accepted only as KO consequences)."""
     unexpected, waived, by_ko = [], [], []
     for leaf, side in sorted(changed, key=lambda x: (x[0], -1 if x[1] is None else x[1])):
@@ -488,7 +531,7 @@ def lane_verdict(changed, effects, side_axis, *, cascade=None, waive=()):
             else:ok |= any(allowed_leaf(leaf, rule['user' if side == a else 'target']) for a in actors)
             if ok:break
         if not ok and cascade is not None:
-            ko = (allowed_leaf(leaf, ('hp', 'ko'))
+            ko = (allowed_leaf(leaf, ('hp', 'ko', 'turnline') + tuple(cascade.get('families', ())))
                   or (side is not None and leaf in KO_MON_LEAVES and cascade['mon_ok'](leaf, side))
                   or (side is not None and leaf.startswith('trackers.') and bool(cascade['ko_sides'][side])))
             if ko:by_ko.append((leaf, side));continue
@@ -824,6 +867,9 @@ def patched_pass(args, *, step_override=None, prepared=None):
             done = np.asarray(named['state.done'])[:real]
             ko_mons_all = result['fainted'][:real] != base['fainted']                       # [L,2,6] (un)fainted mons
             cascade_lanes = ko_mons_all.reshape(real, -1).any(-1)
+            # A phase shift: the residual was deferred in exactly one tree (see FAMILIES['residual']).
+            phase_lanes = diff[:, position['state.pending_residual']].any(-1) if 'state.pending_residual' in position \
+                else np.zeros(real, bool)
             base_ko = {n: base[f'ko_{i:02d}'] for i, n in enumerate(ko_leaves)}
             faint_base = {};faint_set = set()
             if args.faint_clear:
@@ -851,7 +897,7 @@ def patched_pass(args, *, step_override=None, prepared=None):
                     counts['faint_rule_leaves'] += bool(faint_explained)
                 rule_ok = bool(changed) and not entries
                 changed_rest = sorted({leaf for leaf, _ in entries})
-                cascade = bool(cascade_lanes[lane]);cascade_info = None
+                phase = bool(phase_lanes[lane]);cascade = bool(cascade_lanes[lane]) or phase;cascade_info = None
                 if cascade:
                     ko_mons = ko_mons_all[lane]
                     def mon_ok(leaf, side, lane=lane, ko_mons=ko_mons):
@@ -859,7 +905,7 @@ def patched_pass(args, *, step_override=None, prepared=None):
                         a = np.asarray(result['ko'][leaf][lane][side]);b = np.asarray(base_ko[leaf][lane][side])
                         differ = (a != b).reshape(6, -1).any(-1)
                         return not (differ & ~ko_mons[side]).any()
-                    cascade_info = dict(ko_sides=ko_mons.any(-1), mon_ok=mon_ok)
+                    cascade_info = dict(ko_sides=ko_mons.any(-1) | phase, mon_ok=mon_ok, families=('residual',) if phase else ())
                 unexpected, waived, by_ko = lane_verdict(entries, effects, side_axis, cascade=cascade_info, waive=args.waive or ()) \
                     if changed_rest and effects else ([], [], [])
                 kind = classify(changed, bool(effects), rule_ok, unexpected)
