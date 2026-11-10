@@ -99,8 +99,11 @@ def foulplay_sidecar(env, collection, ordinal, entry):
 
 # Self roots -----------------------------------------------------------------------------------------------------------------------
 def manifest_rows(captures):
-    """The self captures' manifest rows (manifest.jsonl, or a worker's manifest-<w>.jsonl), in ordinal order."""
-    rows = [json.loads(x) for p in sorted(glob.glob(str(Path(captures) / 'manifest*.jsonl'))) for x in Path(p).read_text().splitlines() if x.strip()]
+    """The self captures' manifest rows, in ordinal order: the merged manifest.jsonl when it exists, else every worker's
+    manifest-<w>.jsonl (a sharded capture run)."""
+    merged = Path(captures) / 'manifest.jsonl'
+    paths = [merged] if merged.exists() else sorted(Path(captures).glob('manifest-*.jsonl'))
+    rows = [json.loads(x) for p in paths for x in Path(p).read_text().splitlines() if x.strip()]
     ordinals = [int(r['ordinal']) for r in rows]
     if len(set(ordinals)) != len(ordinals):raise ValueError(f'{captures}: a capture ordinal appears twice in the manifests')
     if not rows:raise ValueError(f'{captures}: no manifest rows')

@@ -178,8 +178,11 @@ class SelfTests(unittest.TestCase):
             (Path(tmp) / 'manifest-0.jsonl').write_text(json.dumps(dict(ordinal=2, seed=1, ours='p1', target=3)) + '\n')
             (Path(tmp) / 'manifest-1.jsonl').write_text(json.dumps(dict(ordinal=1, seed=5, ours='p2', target=4)) + '\n')
             self.assertEqual([r['ordinal'] for r in M.manifest_rows(tmp)], [1, 2])
-            (Path(tmp) / 'manifest.jsonl').write_text(json.dumps(dict(ordinal=1, seed=5, ours='p2', target=4)) + '\n')
-            with self.assertRaisesRegex(ValueError, 'twice'):M.manifest_rows(tmp)
+            (Path(tmp) / 'manifest.jsonl').write_text(''.join(json.dumps(dict(ordinal=o, seed=1, ours='p1', target=3)) + '\n' for o in (2, 1)))
+            self.assertEqual([r['ordinal'] for r in M.manifest_rows(tmp)], [1, 2])   # the merged manifest wins over the workers'
+            (Path(tmp) / 'manifest.jsonl').write_text(json.dumps(dict(ordinal=1, seed=5, ours='p2', target=4)) + '\n' * 1 * 1
+                                                      + json.dumps(dict(ordinal=1, seed=5, ours='p2', target=4)) + '\n')
+            with self.assertRaisesRegex(ValueError, 'twice'):M.manifest_rows(tmp)   # one ordinal twice in a manifest
 
 
 # Writing -------------------------------------------------------------------------------------------------------------------------
