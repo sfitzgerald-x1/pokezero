@@ -44,9 +44,17 @@ action), exactly the server's path; nothing is re-implemented here.
   A single-legal decision is never sent (the live actor plays it without a search request), so the next one folds its lines
   too, as live; it is recorded SKIPPED_SINGLE_LEGAL, outside every count but `skipped_single_legal`. Rows record the
   battle (its capture path), the decision's turn (its last |turn| line; 0 before the first) and band.
+- Captures (--captures PATH..., session mode only, instead of --roster): the first --sessions N of these owner captures
+  (phase_d_owning_capture files: a live run's owning-wire/<ordinal>.jsonl) are the battles, replayed as above; a row's address
+  is the capture's (saved-root address when the row carries its cell, else battle, owner, decision index and prefix).
 - Latency (both modes) over eligible decisions (not single-legal, whatever their status: a refusal is a decision too):
   wall and prepare percentiles per turn band, the share within the LADDER_SECONDS cap and each DEADLINES client deadline's
   coverage, both as the client budgets them: the share whose wall + RESERVE_SECONDS fits (the lead's eval-deadline rule reads these; nothing is decided here).
+- Chance draws and world prefix (the server's --chance-seed, --chance-draws S and --worlds W', off by default): each root's
+  W' worlds are priced under S chance draws as W' x S world lanes of the one price call, and averaging plays the mean over
+  them (depthn_live_search's module docstring, chance seeds), so the stage table reads the W x S cost at the live shape;
+  scripts/depthn_chance_bench.py runs this bench once per (W, S) and tabulates them. The summary's `chance` names the
+  options set (none: the live search).
 Precision: the server's hard pin (--matmul-precision, default 'highest'): the environment is checked here before anything
 loads, and JAX's own setting again in the server's build; the header records both.
 Informational: no verdict, no bound. Exit 0 when any root priced, 2 when none did.
@@ -89,8 +97,10 @@ def parser():
     p = server.parser();p.prog = 'depthn_live_bench.py'
     for action in p._actions:   # the server's listener flags are unused here
         if action.dest in ('port', 'warmup_requests'):action.required = False
-    p.add_argument('--roster', nargs=2, action='append', required=True, metavar=('PATH', 'SHA256'),
-        help="one of Codex's frozen 200-root rosters and its sha256 (repeatable)")
+    p.add_argument('--roster', nargs=2, action='append', metavar=('PATH', 'SHA256'),
+        help="one of Codex's frozen 200-root rosters and its sha256 (repeatable; or --captures)")
+    p.add_argument('--captures', nargs='+', metavar='PATH', help='session mode without a roster: owner captures (a live run\'s '
+        'owning-wire/<ordinal>.jsonl), the first --sessions N of them replayed decision by decision')
     p.add_argument('--producer-review', nargs=2, metavar=('PATH', 'SHA256'), help="the rosters' producer review and its sha256 (checked when given)")
     p.add_argument('--warmup-count', type=int, default=8, help='roster roots used for the warmup (default 8)')
     p.add_argument('--limit', type=int, help='at most this many roots per roster (default all)')
@@ -107,12 +117,15 @@ def options(argv=None):
     p = parser();args = p.parse_args(argv);server.evaluators.check_arguments(p, args);server.check_precision_environment(p, args)
     if not args.champion_archive:p.error('--champion-archive with its two sha256 flags is required: the champion prices every root and leaf')
     if args.buckets != (1,):p.error('the bench prices at bucket 1 only (one decision per call)')
+    if bool(args.roster) == bool(args.captures):p.error('--roster (repeatable) or --captures required, not both')
+    if args.captures and args.sessions is None:p.error('--captures replays whole battles: session mode (--sessions N) required')
     if args.warmup_count < 1:p.error('--warmup-count must be >= 1')
     if args.limit is not None and args.limit < 1:p.error('--limit must be >= 1')
     if args.sessions is not None:
         if args.sessions < 1:p.error('--sessions must be >= 1')
         if args.limit is not None:p.error('--limit applies to roster roots; session mode replays whole battles (use --sessions N)')
         args.saved_root_admission = False   # the live server's per-battle sessions
+    server.check_chance_arguments(p, args)
     args.port = args.port or 0;args.max_requests = 1
     return args
 
@@ -159,6 +172,17 @@ def battle_requests(rosters, battles):
     for path in paths[:battles]:
         out[path] = [(i, admission.address(row), {k: row[k] for k in KEYS}, None, turn_of(row['lines'])) for i, row in enumerate(capture.read_capture(path))]
     return out
+
+
+def capture_battles(paths):
+    """{path: [(ordinal, address, request, None, turn)]}: each distinct owner capture's every decision, in its own order (the
+    address: the saved-root address when the row carries its cell, else (battle, owner, decision index, prefix))."""
+    from pokezero import phase_d_owning_capture as capture, phase_d_ladder_admission as admission
+    def address(row):
+        try:return admission.address(row)
+        except (KeyError, TypeError):return (row.get('battle_id'), row.get('owner'), row.get('decision_index'), row.get('prefix_sha256'))
+    return {str(path): [(i, address(row), {k: row[k] for k in KEYS}, None, turn_of(row['lines'])) for i, row in enumerate(capture.read_capture(path))]
+        for path in dict.fromkeys(paths)}
 
 
 def latency(eligible):
@@ -298,7 +322,9 @@ def class_lines(classes):
 
 
 def markdown(summary):
-    lines = [f"# Gap 4B: live search cost and coverage, {summary['rung']} (W={summary['W']}), bucket 1", '',
+    chance = summary.get('chance') or {}
+    lines = [f"# Gap 4B: live search cost and coverage, {summary['rung']} (W={summary['W']}), bucket 1"
+        + ('' if not chance else ', ' + ', '.join(f'{k} {v}' for k, v in chance.items())), '',
         f"- Tree `{summary['tree_commit']}`; warmup {summary['warmup_seconds']:.1f} s on {summary['warmup_count']} roots; saved-root admission {summary['saved_root_admission']}"
         + ('' if not summary.get('battles') else f"; session mode: {summary['battles']['count']} battles, {summary['battles']['decisions']} decisions"), '']
     for name, s in [*summary['rosters'].items(), ('pooled', summary['pooled'])]:
@@ -333,7 +359,7 @@ def main(argv=None):
     if args.producer_review:
         from pokezero.phase_d_ladder_panel import read_bound
         read_bound(*args.producer_review)
-    rosters = (battle_requests(args.roster, args.sessions) if args.sessions else
+    rosters = (capture_battles(list(dict.fromkeys(args.captures))[:args.sessions]) if args.captures else battle_requests(args.roster, args.sessions) if args.sessions else
         {f'{path}@{digest}': roster_requests(path, digest, limit=args.limit) for path, digest in args.roster})
     available = [req for items in rosters.values() for _, _, req, _, _ in items if req is not None]
     if not available:raise SystemExit('no roster root is available')
@@ -359,8 +385,9 @@ def main(argv=None):
         warmup_count=args.warmup_count, warmup_seconds=warm_seconds,
         rosters={} if args.sessions else {n: summarize([r for r in rows if r['roster'] == n], W, args.band_weights) for n in rosters},
         battles=None if not args.sessions else dict(count=len(rosters), decisions=len(rows), paths=list(rosters)),
-        pooled=summarize(rows, W, args.band_weights), rosters_declared=[dict(path=p, sha256=d) for p, d in args.roster], refuse_classes=list(args.refuse_classes),
-        band_weights=list(args.band_weights),
+        pooled=summarize(rows, W, args.band_weights), rosters_declared=[dict(path=p, sha256=d) for p, d in args.roster or ()],
+        captures=getattr(args, 'captures', None), refuse_classes=list(args.refuse_classes),
+        band_weights=list(args.band_weights), chance=server.chance_header(args),
         scope='INFORMATIONAL: warm per-decision cost at bucket 1 with no queue, and coverage; no verdict')
     summary['structural_classes'] = summary['pooled']['structural_classes']
     (out / 'summary.json').write_text(json.dumps(summary, indent=1, sort_keys=True, default=repr) + '\n')

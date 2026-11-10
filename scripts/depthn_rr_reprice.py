@@ -103,13 +103,33 @@ tree guard) on the live inputs.
   summary-<shard>.json (counts, parity, status mismatches, kept/legal disagreements, peer_inputs_check, timings; written on
   interruption too), peer-inputs-<shard>.npz (above);
   one progress JSON line per decision on stdout.
+- Chance noise (--chance-seeds 0,1,...,8; off by default): after each decision's replay (above, unchanged: its row is the
+  same), the batch the search built for it (constructor_worlds.build's output, captured around the same process_many call
+  like prepare_roots and decide) is priced once more per chance seed through DepthNLiveSearch.price_chance, the live
+  _price_decide (one price call, the backups, averaging, the reporting composition and the effect guard) on the same built
+  worlds with only their engine chance keys changed (constructor_worlds.rechance; depthn_live_search's module docstring):
+  the worlds are constructed, completed, classified, structure-checked and built once. One line per decision whose build
+  priced a root goes to chance-<shard>.jsonl (CHANCE_SCHEMA): the address, the cell's seed and seat, the root (root_logits,
+  root_legal, own_moves), the live greedy action (the telemetry's; greedy_source 'live', else 'root_argmax': argmax of
+  root_logits over root_legal, lowest index), the replay's status and its effect guard record (compact: guard_compact),
+  `priors` (per world opponent_requested, kept and root_peer_logits of the first seed priced; prior_invariant false and
+  each seed's own copy when a seed's differ), and per seed: status, refusal, block_causes, action_index, q_values,
+  completed_q, policy_target, root_value, action_mean_q, action_policy_target, reduction_note, its own effect guard
+  (compact), bucket, price_seconds, reduce_seconds and grids (per world, block order, the G_w[a][b] grid; null for a world
+  without a price surface). Seed 0 prices the batch as built, so it must reproduce the replay: `control` compares seed 0's
+  status, action, q_values, completed_q, policy_target, root_value, grids, kept and peer logits, and effect guard with the
+  replay's own (equal, and the fields that differ). A seed whose pricing raises records status ERROR and its error; MemoryError
+  propagates. The summary's `chance` counts the lines, statuses per seed and the control, with price / reduce / total seconds
+  percentiles per root; the header records chance_seeds and the sidecar's path. --chance-seeds needs --chance-seed 0 and
+  neither --chance-draws nor --worlds (those change the replay itself: --chance-seed K alone re-prices every decision under
+  K, its rows then expected to differ from live).
 Bit-exactness: the live tree, inputs, seeds and warmup make the same worlds and programs; the device cannot be pinned here.
 Run on the live servers' GPU model, image and environment (/out/env.sh: the same XLA flags), ideally on a copy of their
 compilation cache so every program loads the live executables instead of re-autotuning; q_equal is the test.
 Exit 0 when any decision was sent, 2 when none was.
 """
 import collections
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
 import dis
 import hashlib
@@ -140,8 +160,9 @@ LIVE_IDENTITY = dict(constructor_seed=20261103, recipe_seed=20261103, session_ca
     champion_checkpoint_sha256='0fd095923b4ac7e05d6e2b3ccab9c1e6869dff4893c2dae456caff10dce690be')
 SAMPLE_DOMAIN = 'pokezero.depthn-rr-reprice.sample.v1'
 STRATA = ((0, 0), (0, 1), (1, 0), (1, 1))   # (cell.seed % 2, cell.seat)
-BENCH_ONLY = ('roster', 'producer_review', 'sessions', 'limit')   # the bench's roster flags have no meaning here
+BENCH_ONLY = ('roster', 'captures', 'producer_review', 'sessions', 'limit')   # the bench's roster flags have no meaning here
 PEER_INPUTS_SCHEMA = 'pokezero.depthn-rr-reprice.peer-inputs.v1'
+CHANCE_SCHEMA = 'pokezero.depthn-rr-reprice.chance.v1'
 PEER_INPUT_KEYS = ('numeric_features', 'categorical_ids', 'token_type_ids', 'attention_mask', 'history_mask')   # ChampionEvaluator.view's keys
 ENVIRONMENT = ('JAX_DEFAULT_MATMUL_PRECISION', 'JAX_ENABLE_X64', 'JAX_PLATFORMS', 'XLA_FLAGS', 'XLA_PYTHON_CLIENT_MEM_FRACTION', 'CUDA_VISIBLE_DEVICES',
     'TF_CPP_MIN_LOG_LEVEL')
@@ -163,8 +184,19 @@ def parser():
     p.add_argument('--max-decisions', type=int, help='stop after this many sent decisions (smoke tests)')
     p.add_argument('--accept-tree', metavar='COMMIT', help='replay against a modified tree: COMMIT must be HEAD and clean in the guarded paths '
         'and scripts/; its trees replace the live pins (module docstring). Parity against live is recorded but expected to fail')
+    p.add_argument('--chance-seeds', type=chance_seeds_arg, help='chance noise: re-price every built root once per chance seed (comma-separated, '
+        'distinct, e.g. 0,1,2,3,4,5,6,7,8; 0 is the control) into chance-<shard>.jsonl (module docstring)')
     p.set_defaults(saved_root_admission=False, buckets=(1,))
     return p
+
+
+def chance_seeds_arg(text):
+    import argparse
+    try:values = tuple(int(x) for x in text.split(','))
+    except ValueError:values = ()
+    if not values or len(set(values)) != len(values) or any(not 0 <= v < 2 ** 32 for v in values):
+        raise argparse.ArgumentTypeError('comma-separated distinct integer chance seeds in [0, 2**32) required')
+    return values
 
 
 def options(argv=None):
@@ -180,6 +212,9 @@ def options(argv=None):
     if args.sample is None and args.sample_seed is not None:p.error('--sample-seed goes with --sample')
     if args.shards < 1 or not 0 <= args.shard < args.shards:p.error('--shard I --shards N with 0 <= I < N required')
     if args.max_decisions is not None and args.max_decisions < 1:p.error('--max-decisions must be >= 1')
+    server.check_chance_arguments(p, args)
+    if args.chance_draws != 1 or args.worlds is not None:p.error('--chance-draws and --worlds change what a decision prices: the bench\'s, not the replay\'s')
+    if args.chance_seeds is not None and args.chance_seed:p.error('--chance-seeds re-prices the replayed worlds itself: it needs --chance-seed 0')
     args.port = args.port or 0;args.max_requests = 1
     return args
 
@@ -234,17 +269,20 @@ def accepted_tree_guard(root, head, commit, *, run=git):
 
 
 def check_call_sites(function=None):
-    """True when `function` (DepthNLiveSearch._search) reads `decide` as a global of depthn_live_search and `prepare_roots` as an
-    attribute of the global `cw` at call time, so the wrappers take effect; RuntimeError otherwise."""
-    function = live.DepthNLiveSearch._search if function is None else function
-    found = {'decide': False, 'prepare_roots': False};previous = None
-    for instruction in dis.get_instructions(function):
-        if instruction.opname == 'LOAD_GLOBAL' and instruction.argval == 'decide':found['decide'] = True
-        if (instruction.opname in ('LOAD_ATTR', 'LOAD_METHOD') and instruction.argval == 'prepare_roots' and previous is not None
-                and previous.opname == 'LOAD_GLOBAL' and previous.argval == 'cw'):found['prepare_roots'] = True
-        previous = instruction
-    if not all(found.values()) or function.__globals__ is not vars(live) or live.cw is not cw:
-        raise RuntimeError(f'the search does not look decide / cw.prepare_roots up through their modules at call time: {found}')
+    """True when `function` (by default DepthNLiveSearch._search with the _price_decide it calls) reads `decide` as a global of
+    depthn_live_search and `prepare_roots` and `build` as attributes of the global `cw` at call time, so the wrappers take
+    effect; RuntimeError otherwise."""
+    functions = (live.DepthNLiveSearch._search, live.DepthNLiveSearch._price_decide) if function is None else (function,)
+    found = {'decide': False, 'prepare_roots': False, 'build': False}
+    for f in functions:
+        previous = None
+        for instruction in dis.get_instructions(f):
+            if instruction.opname == 'LOAD_GLOBAL' and instruction.argval == 'decide':found['decide'] = True
+            if (instruction.opname in ('LOAD_ATTR', 'LOAD_METHOD') and instruction.argval in ('prepare_roots', 'build') and previous is not None
+                    and previous.opname == 'LOAD_GLOBAL' and previous.argval == 'cw'):found[instruction.argval] = True
+            previous = instruction
+    if not all(found.values()) or any(f.__globals__ is not vars(live) for f in functions) or live.cw is not cw:
+        raise RuntimeError(f'the search does not look decide / cw.prepare_roots / cw.build up through their modules at call time: {found}')
     return True
 
 
@@ -379,13 +417,13 @@ class Decided:
 
 
 class Capture:
-    """References to every decide call's arguments and every prepare_roots result while installed() is active."""
+    """References to every decide call's arguments and every prepare_roots and build result while installed() is active."""
     def __init__(self):
-        self.decided, self.prepared = [], []
+        self.decided, self.prepared, self.built = [], [], []
 
     @contextmanager
     def installed(self):
-        decide, prepare_roots = live.decide, cw.prepare_roots
+        decide, prepare_roots, build = live.decide, cw.prepare_roots, cw.build
 
         def decide_wrapper(blocks, root_logits, root_legal):
             self.decided.append(Decided(blocks, root_logits, root_legal))
@@ -396,9 +434,14 @@ class Capture:
             self.prepared.append(out)
             return out
 
-        live.decide, cw.prepare_roots = decide_wrapper, prepare_wrapper
+        def build_wrapper(*arguments, **keywords):
+            out = build(*arguments, **keywords)
+            self.built.append(out)
+            return out
+
+        live.decide, cw.prepare_roots, cw.build = decide_wrapper, prepare_wrapper, build_wrapper
         try:yield self
-        finally:live.decide, cw.prepare_roots = decide, prepare_roots
+        finally:live.decide, cw.prepare_roots, cw.build = decide, prepare_roots, build
 
 
 def prices_fields(world):
@@ -664,6 +707,105 @@ def encode_row(row):
     except ValueError:return json.dumps(dict(row, nonfinite=True), sort_keys=True, default=repr)
 
 
+# Chance noise ---------------------------------------------------------------------------------------------------------------------
+GUARD_COMPACT = ('schema', 'threshold', 'tripped', 'b', 'b_turn1', 'b_turn2', 'c', 'choice', 'reasons', 'tiers', 'a', 'a_moves', 'tier_b_legal',
+    'tier_b_moves', 'own_lanes', 'own_guarded_lanes', 'turn2_available', 'turn2_cells', 'notes', 'error')   # everything but masses and conditions
+CHANCE_DECISION = ('action_index', 'q_values', 'completed_q', 'policy_target', 'root_value', 'action_mean_q', 'action_policy_target', 'mean_q_agrees',
+    'reduction_note')
+CONTROL_FIELDS = ('status', 'refusal') + CHANCE_DECISION
+
+
+def guard_compact(record):
+    """An effect guard record without its masses and conditions: what the RR's guard functions read ((b), (c) through
+    own_guarded_lanes, the reasons and tiers). None for a root without one."""
+    return None if not isinstance(record, dict) else {k: record[k] for k in GUARD_COMPACT if k in record}
+
+
+def canonical(value):
+    """`value` after a JSON round trip (tuples as lists, floats exact), for equality checks."""
+    return json.loads(json.dumps(value, default=repr))
+
+
+def root_argmax(root_logits, root_legal):
+    """argmax of root_logits over the legal lanes, lowest index on ties (the live greedy rule), or None."""
+    legal = [a for a in range(9) if root_legal and root_legal[a]]
+    return max(legal, key=lambda a: (float(root_logits[a]), -a)) if legal and root_logits is not None else None
+
+
+def seed_entry(search, made, body, seed):
+    """(one seed's entry, its worlds' priors or None) for the root of `body` in the built batch `made` (module docstring)."""
+    clock = time.perf_counter()
+    try:priced = search.price_chance(made, [body], seed)
+    except MemoryError:raise
+    except Exception as error:
+        return dict(seed=seed, status='ERROR', error=f'{type(error).__name__}: {error}'[:500], total_seconds=time.perf_counter() - clock), None
+    found = [r for r in priced['results'] if r['request_id'] == body['request_id']]
+    if len(found) != 1:return dict(seed=seed, status='ERROR', error=f'{len(found)} results for the request', total_seconds=time.perf_counter() - clock), None
+    result = found[0];worlds = [w for pair in result['blocks'] for w in pair] if 'blocks' in result else None
+    entry = dict(seed=seed, status=result['status'], refusal=result.get('refusal'), block_causes=result.get('block_causes'), bucket=priced['bucket'],
+        **{k: result.get(k) for k in CHANCE_DECISION}, effect_guard=guard_compact(result.get('effect_guard')),
+        grids=None if worlds is None else [None if w is None else [[None if v is None else float(v) for v in row] for row in w.joint_values] for w in worlds],
+        price_seconds=priced['price_seconds'], reduce_seconds=priced['reduce_seconds'], total_seconds=time.perf_counter() - clock)
+    priors = None if worlds is None else [None if w is None else dict(opponent_requested=bool(w.opponent_requested), kept=[bool(x) for x in w.opponent_legal],
+        root_peer_logits=[float(x) for x in w.opponent_logits]) for w in worlds]
+    return entry, priors
+
+
+def chance_control(entry, priors, response, detail):
+    """Seed 0 (the batch as built) against the replay's own response and captured worlds: dict(equal, differ)."""
+    differ = [k for k in CONTROL_FIELDS if canonical(entry.get(k)) != canonical(response.get(k))]
+    if canonical(entry.get('effect_guard')) != canonical(guard_compact(response.get('effect_guard'))):differ.append('effect_guard')
+    worlds = detail.get('worlds') or [];decided = detail.get('root') is not None
+    if decided or entry.get('grids') is not None:
+        grids = [w.get('grid') if w.get('priced') else None for w in worlds] if decided else None
+        if canonical(entry.get('grids')) != canonical(grids):differ.append('grids')
+        replayed = [dict(opponent_requested=w['opponent_requested'], kept=w['kept'], root_peer_logits=w['root_peer_logits']) if w.get('priced') else None
+            for w in worlds] if decided else None
+        if canonical(priors) != canonical(replayed):differ.append('priors')
+    return dict(equal=not differ, differ=differ)
+
+
+def chance_line(search, capture, body, response, detail, record, found, seeds, *, shard):
+    """One chance-<shard>.jsonl line (module docstring) for a decision whose build priced its root, else None."""
+    if len(capture.built) != 1:return None
+    made = capture.built[0];root = next((r for r in made.roots if r.get('request_id') == body['request_id']), None)
+    if root is None or root['status'] != 'PRICED':return None
+    clock = time.perf_counter();entries, priors = [], {}
+    for seed in seeds:
+        entry, seen = seed_entry(search, made, body, seed);entries.append(entry)
+        if seen is not None:priors[seed] = seen
+    first = next(iter(priors.values()), None);invariant = all(canonical(p) == canonical(first) for p in priors.values())
+    if not invariant:
+        for entry in entries:entry['priors'] = priors.get(entry['seed'])
+    logits, legal = list(root['root_logits']), [bool(x) for x in root['root_legal']]
+    live_greedy = None if found is None else found.get('greedy_action_index')
+    greedy, source = (live_greedy, 'live') if type(live_greedy) is int else (root_argmax(logits, legal), 'root_argmax')
+    zero = next((e for e in entries if e['seed'] == 0), None)
+    control = None if zero is None else chance_control(zero, priors.get(0), response, detail)
+    return dict(schema=CHANCE_SCHEMA, shard=shard, ordinal=record['ordinal'], decision_index=record['decision_index'], battle_id=record['battle_id'],
+        owner=record['owner'], seat=record['seat'], seed=record['seed'], request_count=record['request_count'], turn=record['replay'].get('turn'),
+        request_kind=None if found is None else found.get('request_kind'), live_source=None if found is None else found.get('source'),
+        replay_status=response.get('status'), replay_action_index=response.get('action_index'), greedy_action_index=greedy, greedy_source=source,
+        root=dict(root_logits=logits, root_legal=legal, own_moves=record['root']['own_moves']), effect_guard=guard_compact(response.get('effect_guard')),
+        worlds=len(first) if first is not None else None, priors=first, prior_invariant=invariant, chance_seeds=list(seeds), seeds=entries, control=control,
+        chance_seconds=time.perf_counter() - clock)
+
+
+def chance_summary(lines, seeds):
+    """The summary's `chance` section over the shard's chance lines (module docstring)."""
+    address = lambda r: dict(ordinal=r['ordinal'], decision_index=r['decision_index'])
+    controls = [r for r in lines if r['control'] is not None]
+    return dict(seeds=list(seeds), lines=len(lines), statuses={str(s): dict(collections.Counter(e['status'] for r in lines for e in r['seeds'] if e['seed'] == s))
+        for s in seeds}, all_seeds_complete=sum(all(e['status'] == 'COMPLETE' for e in r['seeds']) for r in lines),
+        prior_variant=[address(r) for r in lines if not r['prior_invariant']],
+        control=dict(compared=len(controls), equal=sum(r['control']['equal'] for r in controls),
+            mismatches=[dict(address(r), differ=r['control']['differ']) for r in controls if not r['control']['equal']][:50],
+            passed=bool(controls) and all(r['control']['equal'] for r in controls)),
+        seconds=dict(per_root=bench.percentiles(r['chance_seconds'] for r in lines),
+            price_per_seed=bench.percentiles(e.get('price_seconds') for r in lines for e in r['seeds']),
+            reduce_per_seed=bench.percentiles(e.get('reduce_seconds') for r in lines for e in r['seeds'])))
+
+
 # Summary -------------------------------------------------------------------------------------------------------------------------
 def peer_inputs_summary(rows):
     """The summary's peer_inputs_check (module docstring): written, checked and equal worlds over every decided root, the
@@ -721,16 +863,18 @@ def main(argv=None):
     peer_inputs = PeerInputs(pricer.executor, pricer.forward, search.params[0])   # build's opponent actor 0: the champion
     sidecar = dict(path=f'peer-inputs-{shard}.npz', tree_guard=guard, shard=shard, champion_identity=list(pricer.forward.identity),
         slice=getattr(server.evaluators, 'SLICE_RULE', None), key=['ordinal', 'decision_index', 'world'])
+    seeds = args.chance_seeds;chance = None if seeds is None else dict(path=f'chance-{shard}.jsonl', schema=CHANCE_SCHEMA, seeds=list(seeds))
     write_json(out / f'header-{shard}.json', dict(argv=argv, tree_guard=guard, run_header=header, live_identity=LIVE_IDENTITY, warmup=warm,
+        **({} if chance is None else dict(chance=chance)),
         peer_inputs=dict(path=sidecar['path'], schema=PEER_INPUTS_SCHEMA), recharge_moves=sorted(actor.RECHARGE_MOVES),
         warmup_requests=len(saved), build_seconds=build_seconds, warmup_seconds=warmup_seconds, cells=cells, run_directory=str(run),
         arm=args.arm, shard=shard, shards=args.shards, max_decisions=args.max_decisions, sample=args.sample, sample_seed=args.sample_seed,
         jax_version=jax.__version__, devices=[f'{d.platform}:{d.device_kind}' for d in jax.devices()], python=sys.version,
         environment={k: os.environ.get(k) for k in ENVIRONMENT}, pid=os.getpid(), **({'replay_against': MODIFIED_TREE} if guard.get('modified_tree') else {})))
-    rows, skipped, skip_disagreements, cell_errors, done, finished = [], 0, [], [], False, False
+    rows, skipped, skip_disagreements, cell_errors, done, finished, lines = [], 0, [], [], False, False, []
     started = time.perf_counter()
     try:
-        with (out / f'rows-{shard}.jsonl').open('x') as stream:
+        with (out / f'rows-{shard}.jsonl').open('x') as stream, ((out / chance['path']).open('x') if chance else nullcontext()) as chance_stream:
             for cell in cells:
                 if done:break
                 ordinal = cell['ordinal']
@@ -761,10 +905,17 @@ def main(argv=None):
                     record = decision_row(cell, row, body, response, wall, found, detail, shard=shard, capture_seconds=seconds, live_problem=problem)
                     stream.write(encode_row(record) + '\n');stream.flush();os.fsync(stream.fileno())
                     rows.append({k: v for k, v in record.items() if k not in BULK})   # the summary's fields; the grids stay on disk
+                    line = None if chance is None else chance_line(search, capture, body, response, detail, record, found, seeds, shard=shard)
+                    if line is not None:
+                        chance_stream.write(encode_row(line) + '\n');chance_stream.flush();os.fsync(chance_stream.fileno())
+                        lines.append({k: v for k, v in line.items() if k in ('ordinal', 'decision_index', 'control', 'prior_invariant', 'chance_seconds')}
+                            | dict(seeds=[{k: e.get(k) for k in ('seed', 'status', 'price_seconds', 'reduce_seconds')} for e in line['seeds']]))
                     p = record['parity']
                     print(json.dumps(dict(ordinal=ordinal, decision_index=row['decision_index'], status=response.get('status'), cause=response.get('cause'),
                         live_source=None if found is None else found['source'], action_equal=p['action_equal'], q_equal=p['q_equal'],
-                        kept_disagreements=detail['kept_disagreements'], notes=len(detail['notes']), wall=wall, capture=seconds)), flush=True)
+                        kept_disagreements=detail['kept_disagreements'], notes=len(detail['notes']), wall=wall, capture=seconds,
+                        **({} if line is None else dict(chance_control=(line['control'] or {}).get('equal'), chance_seconds=line['chance_seconds'],
+                            chance_actions=[e.get('action_index') for e in line['seeds']])))), flush=True)
                     if not record['capture_ok']:
                         raise RuntimeError(f'cell {ordinal} decision {row["decision_index"]}: the capture missed a decide or prepare_roots call')
         finished = True
@@ -772,12 +923,13 @@ def main(argv=None):
         write_json(out / f'summary-{shard}.json', summarize(rows, shard=shard, shards=args.shards, cells=cells, extra=dict(
             skipped_single_legal=skipped, skip_disagreements=skip_disagreements, cell_errors=cell_errors, max_decisions_reached=done,
             interrupted=not finished, timings=dict(build_seconds=build_seconds, warmup_seconds=warmup_seconds,
-            replay_seconds=time.perf_counter() - started))))
+            replay_seconds=time.perf_counter() - started), **({} if chance is None else dict(chance=chance_summary(lines, seeds))))))
         peer_inputs.write(out / sidecar['path'], sidecar)
     s = read_json(out / f'summary-{shard}.json')
     print(json.dumps(dict(done=str(out), shard=shard, sent=s['decisions_sent'], complete=s['complete'], live_searched=s['live_searched'],
         parity=dict((k, s['parity'][k]) for k in ('both', 'action_equal', 'q_equal')), status_mismatches=len(s['status_mismatches']),
-        kept_legal_disagreements=s['kept_legal_disagreements'], peer_inputs_check_passed=s['peer_inputs_check']['passed'])),
+        kept_legal_disagreements=s['kept_legal_disagreements'], peer_inputs_check_passed=s['peer_inputs_check']['passed'],
+        **({} if chance is None else dict(chance_lines=s['chance']['lines'], chance_control=s['chance']['control']['passed'])))),
         flush=True)
     return 0 if rows else 2
 

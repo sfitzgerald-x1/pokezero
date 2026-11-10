@@ -25,6 +25,12 @@ serves it until stopped (SIGTERM or an interrupt); it is never restarted per gam
   written, flushed and fsynced per batch by a writer thread, off the executor's critical path.
 - server_id (--server-id, default HOSTNAME:PORT): this process's name, in READY and in every response it sends, so a client
   behind a pool (scripts/depthn_live_proxy) records which process answered and the panel readout breaks latency down by it.
+- Chance and world options (off by default; depthn_live_search's module docstring, chance seeds): --chance-seed K prices every
+  world under chance seed K (only the engine's chance keys change; the constructed worlds are --seed's), --chance-draws S
+  prices S chance draws per world as extra world lanes (seeds K .. K+S-1; the pricers get capacity b x W/2 x S), --worlds W'
+  prices the first W' of the rung's W constructor worlds (W' = 4: the first 4 of DN2W8's 8). They are measurement options
+  (the re-pricer's chance noise, the W x S latency bench); the header names them only when set, so a flag-off header is the
+  one before the flags.
 JAX: x64 pinned off (as Codex's ladder server) and the matmul precision hard-pinned to --matmul-precision (default
 'highest', the precision the champion gates R1/R2/R3 were certified under, through the environment's
 JAX_DEFAULT_MATMUL_PRECISION; Codex's ladder server uses 'highest' too). The server refuses to start when the environment
@@ -181,6 +187,20 @@ def buckets_arg(text):
     return values
 
 
+def chance_seed_arg(text):
+    try:value=int(text)
+    except ValueError:value=-1
+    if not 0<=value<2**32:raise argparse.ArgumentTypeError('an integer chance seed in [0, 2**32) required (0: the constructed keys)')
+    return value
+
+
+def positive_arg(text):
+    try:value=int(text)
+    except ValueError:value=0
+    if value<1:raise argparse.ArgumentTypeError('a positive integer required')
+    return value
+
+
 def classes_arg(text):
     values=tuple(x for x in text.split(',')if x)
     if any(x not in live.CLASSES for x in values):raise argparse.ArgumentTypeError(f'comma-separated root classes from {", ".join(live.CLASSES)} required')
@@ -202,6 +222,12 @@ def parser():
         +', '.join(live.CLASSES)+' (default none)')
     p.add_argument('--seed',type=int,default=20261103,help='constructor world seed (Codex\'s default)')
     p.add_argument('--recipe-seed',type=int,default=20261103,help='the pricer\'s lane-order recipe seed')
+    p.add_argument('--chance-seed',type=chance_seed_arg,default=0,help='price every world under this engine chance seed (default 0: the worlds\' '
+        'constructed keys; the constructed worlds never change)')
+    p.add_argument('--chance-draws',type=positive_arg,default=1,help='chance draws per world, priced as extra world lanes (seeds --chance-seed '
+        'onwards; default 1)')
+    p.add_argument('--worlds',type=positive_arg,help='price only the first W of the rung\'s constructor worlds (an even W at most the rung\'s; '
+        'default all)')
     p.add_argument('--saved-root-admission',action='store_true',help='Codex\'s stateless mode: every prefix folded from scratch, no sessions')
     p.add_argument('--block-lanes',type=int,default=2187);p.add_argument('--blocks-per-call',type=int,default=16)
     p.add_argument('--warmup-requests',required=True,help='JSONL of saved Showdown requests, one object per line with the eight address keys of '
@@ -221,11 +247,24 @@ def options(argv=None):
     if not args.champion_archive:p.error('--champion-archive with its two sha256 flags is required: the champion prices every root and leaf')
     if args.max_requests is None:args.max_requests=args.buckets[-1]
     if not 1<=args.max_requests<=args.buckets[-1]:p.error('--max-requests must be in 1..the largest bucket')
+    check_chance_arguments(p,args)
     try:   # Codex's own queue/batch checks (phase_d_search_server.Server._initialize), before anything loads or compiles
         Server(SimpleNamespace(process_many=list),max_requests=args.max_requests,batch_wait_seconds=args.batch_wait_seconds,
             queue_limit=args.queue_limit).executor.shutdown()
     except ValueError as error:p.error(f'--max-requests/--batch-wait-seconds/--queue-limit: {error}')
     return args
+
+
+def check_chance_arguments(p,args):
+    """--worlds an even prefix of the rung's W; the last chance seed below 2**32."""
+    W=live.RUNGS[args.rung];worlds=getattr(args,'worlds',None)
+    if worlds is not None and(worlds%2 or not 2<=worlds<=W):p.error(f'--worlds must be even and at most the rung\'s {W}')
+    if getattr(args,'chance_seed',0)+getattr(args,'chance_draws',1)-1>=2**32:p.error('--chance-seed + --chance-draws - 1 must stay below 2**32')
+
+
+def chance_options(args):
+    """(chance_seed, chance_draws, worlds or None) of the arguments (the defaults when a caller's parser lacks them)."""
+    return getattr(args,'chance_seed',0),getattr(args,'chance_draws',1),getattr(args,'worlds',None)
 
 
 def read_requests(path):
@@ -256,14 +295,18 @@ def build(args):
     from gpu_engine import constructor_worlds as cw
     from gpu_engine.phase_d_protocol_constructor import ProtocolConstructor,load_inputs
     catalog,source,metadata,config=load_inputs(args);evaluator=evaluators.load_from_arguments(args);W=live.RUNGS[args.rung]
+    chance_seed,chance_draws,worlds=chance_options(args);priced=W if worlds is None else worlds
     constructor=ProtocolConstructor(catalog=catalog,source=source,metadata=metadata,owning_config=config,count=W,seed=args.seed,rung=args.rung,
         saved_root_admission=args.saved_root_admission)
     executor=cw.live_executor(metadata,catalog)   # the constructor's own engine metadata and catalog (the depth-N gate's CONSTRUCTOR_ROOTS uses the same)
     params=(evaluator.params,)
-    pricers=live.make_pricers(executor,evaluator,params,worlds=W,buckets=args.buckets,block_lanes=args.block_lanes,blocks_per_call=args.blocks_per_call)
+    pricers=live.make_pricers(executor,evaluator,params,worlds=priced*chance_draws,buckets=args.buckets,block_lanes=args.block_lanes,
+        blocks_per_call=args.blocks_per_call)
+    options=dict(chance_seed=chance_seed,chance_draws=chance_draws,worlds=worlds)
     return live.DepthNLiveSearch(constructor=constructor,pricers=pricers,params=params,binding=cw.binding(source,metadata,catalog),
         recipe=v5_gumbel.Recipe(args.recipe_seed),tree_commit=args.tree_commit or tree_commit(),min_price_seconds=args.min_price_seconds,
-        max_requests=args.max_requests,session_cap=args.session_cap,refuse_classes=args.refuse_classes)
+        max_requests=args.max_requests,session_cap=args.session_cap,refuse_classes=args.refuse_classes,
+        **{k:v for k,v in options.items()if v!=dict(chance_seed=0,chance_draws=1,worlds=None)[k]})
 
 
 def header(args,search):
@@ -274,7 +317,14 @@ def header(args,search):
         recipe_seed=args.recipe_seed,saved_root_admission=args.saved_root_admission,metadata_sha256=args.expected_metadata_sha256,
         vocabulary_sha256=args.expected_vocabulary_sha256,champion_archive_sha256=args.champion_archive_sha256,
         champion_checkpoint_sha256=args.champion_checkpoint_sha256,champion_precision=args.champion_precision,pricer=search.pricer_identity,
-        jax_enable_x64=bool(jax.config.jax_enable_x64),matmul_precision=matmul_precision(),matmul_precision_pin=args.matmul_precision)
+        jax_enable_x64=bool(jax.config.jax_enable_x64),matmul_precision=matmul_precision(),matmul_precision_pin=args.matmul_precision,
+        **chance_header(args))
+
+
+def chance_header(args):
+    """The chance and world options off their defaults (none: a flag-off header is the one before them)."""
+    chance_seed,chance_draws,worlds=chance_options(args)
+    return{k:v for k,v in(('chance_seed',chance_seed),('chance_draws',chance_draws),('worlds',worlds))if v!={'chance_seed':0,'chance_draws':1,'worlds':None}[k]}
 
 
 def main(argv=None):

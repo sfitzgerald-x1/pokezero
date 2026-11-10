@@ -186,6 +186,26 @@ dict keys and leaves two members None). This module turns prepared roots into De
 
 Chance: DepthN samples each node's own keys; constructor states carry kernel_seed-derived keys, so prices are
 reproducible but not bit-comparable to the ladder's R1/R7, which fold a domain seed into the keys.
+- Which seed keys what. The constructor's seed (the server's --seed) and the root's address give each world one sha256
+  (phase_d_protocol_world.sample): its first 8 bytes are the world seed (the belief start override's random.Random: the
+  sampled team and sets), bytes 8-12 the kernel seed. The kernel seed keys BOTH the rest of the construction (the
+  materializer's hp_rng = random.Random(kernel_seed): the opponent's exact HP inside its public percentage and the hidden
+  sleep counters) AND the engine's chance: empty_state(1, seed=kernel_seed).keys = fold_in(PRNGKey(kernel_seed), 0), which
+  transition.sample_chance_inputs reads at every node (turn 1: one draw per world shared by all 81 cells; each child's keys
+  are its parent's split, so the whole subtree follows the world's key), plus, at a replacement-phase root whose residual is
+  still due (phase_d_tail.restore, pending_residual), the residual capsule drawn at construction from the same keys. The
+  pricer's recipe seed (--recipe-seed) orders lanes only (pricing_order) and keys no chance.
+- chance seeds (rechance_state / rechance_world / rechance, chance_lanes): our split of the two. Chance seed 0 (the default)
+  is the identity: the same objects, so a flag-off run is bitwise the run before the flag. A chance seed K >= 1 replaces each
+  constructed world's state.keys by fold_in(fold_in(keys, CHANCE_DOMAIN), K) after the world is built and completed (nothing
+  of the construction reads them again), and a state whose residual is still due takes its capsule (residual, phazing,
+  secondary and Sleep Talk draws) redrawn from the new keys by the tail's own rule (sample_chance_inputs). Every other leaf,
+  the public carry, the world's index, refusals and kernel_seed stay as built: the constructed worlds (the hidden-information
+  samples) are fixed and only the engine's chance draws change. chance_lanes repeats each priced root's K blocks once per
+  seed (seed-major), each copy re-keyed by its seed: S chance draws of the same W worlds as W x S extra world lanes of one
+  frame.
+- world_prefix keeps the first `count` worlds of a prepared root (the constructor's draws are a prefix-stable sequence: world
+  i's seed does not depend on the budget), for a W the constructor does not build (W = 4 of its 8); build(count=) takes it.
 
 Constructor API this module depends on (part B, the batch 2 and tail sync, must keep it): ProtocolConstructor.prepare's
 (Root, WorldSet, legal) return and its `count`, `source`, `metadata`, `catalog` attributes; Refusal's `kind`/`detail`;
@@ -943,14 +963,15 @@ def b2_view_check(forward,root_inputs,detached):
         return dict(equal=None,error=f'{type(error).__name__}: {error}')
 
 
-def build(constructor,prepared,pricer,params,*,binding,recipe,learner_actor=0,opponent_actor=0,only_complete=False,root_prior='b2'):
+def build(constructor,prepared,pricer,params,*,binding,recipe,learner_actor=0,opponent_actor=0,only_complete=False,root_prior='b2',count=None):
     """Requests and pre-built worlds for `prepared` (prepare_roots' output for this constructor), for `pricer` (its executor
     gives the root view, its evaluator the root prior: on B2's encoding, else world 0's view, for root_prior 'b2'; on world
     0's view for 'world0') under the pricer-side `binding`. Every world's carry is completed first (a no-op on prepare_roots' worlds). ValueError on a binding mismatch
     (the pricer's, the constructor's, or a prepared root stamped by another constructor), a champion evaluator not bound
     to the constructor's catalog, a malformed world set or a bad actor index; CarryLayoutError from the completion;
     per-root refusals are recorded, never raised (module docstring). A priced root records root_view_source ('b2' or
-    'world0') and b2_view."""
+    'world0') and b2_view. `count`: the world budget of `prepared` when it is a world_prefix of the constructor's (default
+    the constructor's count)."""
     built=constructor_binding(constructor);_check_binding(built,binding,'constructor worlds are built under another binding than the pricer\'s')
     for item in prepared:
         _check_binding(getattr(item,'binding',None),built,'a prepared root comes from a constructor with another binding than this one\'s')
@@ -958,8 +979,9 @@ def build(constructor,prepared,pricer,params,*,binding,recipe,learner_actor=0,op
     if type(recipe)is not original.Recipe:raise ValueError('a random recipe (lane order) required')
     if any(type(x)is not int or not 0<=x<len(params)for x in(learner_actor,opponent_actor)):raise ValueError('verified actor index required')
     if root_prior not in ROOT_PRIORS:raise ValueError(f'root_prior in {ROOT_PRIORS} required, got {root_prior!r}')
-    W=constructor.count
+    W=constructor.count if count is None else count
     if type(W)is not int or W<2 or W%2:raise ValueError('an even declared world budget required')
+    if count is not None and W>constructor.count:raise ValueError(f'a world prefix of at most the constructor\'s {constructor.count} worlds required')
     K=W//2;views=depth2._make_views(pricer.executor);forward=_root_forward(pricer.forward)
     requests=[];pairs=[];roots=[];complete=None
     for index,item in enumerate(prepared):
@@ -1038,6 +1060,95 @@ def price(pricer,batch,binding,recipe,params,*,pass_pricer=None):
     raw=pass_pricer.price(batch.requests,binding,recipe,params,worlds=batch.worlds)
     own,opp,_=dn.searched_maps(dn.as_depth2_frame(raw),*pricer.searched_k)
     return pricer.price(batch.requests,binding,recipe,params,selection_maps={2:(own,opp)},worlds=batch.worlds),raw
+
+
+# Chance seeds -----------------------------------------------------------------------------------------------------------------------
+CHANCE_DOMAIN=int.from_bytes(hashlib.sha256(b'pokezero.depthn-chance-seed.v1').digest()[:4],'big')   # folded in before the seed
+CAPSULE=(('residual_draws','draws'),('phazing_draws','phazing'),('secondary_draws','secondary'),('sleep_talk_draws','sleep_talk'))
+
+
+def chance_seed(value):
+    """`value` as a chance seed: an int in [0, 2**32) (0 = the constructed keys, unchanged); ValueError otherwise."""
+    if type(value)is not int or not 0<=value<2**32:raise ValueError(f'a chance seed in [0, 2**32) required, got {value!r}')
+    return value
+
+
+@jax.jit
+def _rechance_keys(keys,seed):
+    return jax.vmap(lambda key:jax.random.fold_in(jax.random.fold_in(key,jnp.uint32(CHANCE_DOMAIN)),seed))(keys)
+
+
+def rechance_keys(keys,seed):
+    """[B, 2] legacy uint32 keys re-keyed by chance seed `seed` >= 1: fold_in(fold_in(key, CHANCE_DOMAIN), seed) per row (one
+    jitted program per key shape; the seed is an argument, so no seed recompiles)."""
+    return _rechance_keys(keys,jnp.uint32(seed))
+
+
+def rechance_state(state,seed):
+    """An engine BattleState with its chance re-keyed by `seed` (module docstring, Chance): 0 returns `state` itself; else
+    state.keys re-keyed (rechance_keys) and, on every row whose residual is still due (pending_residual), the residual capsule
+    redrawn from the new keys with transition.sample_chance_inputs (phase_d_tail.restore's rule); every other leaf is the
+    state's own array. ValueError for a state without keys."""
+    seed=chance_seed(seed)
+    if seed==0:return state
+    if not hasattr(state,'_replace')or not hasattr(state,'keys')or not hasattr(state,'pending_residual'):
+        raise ValueError('an engine BattleState (keys, pending_residual) required to re-key its chance')
+    keys=rechance_keys(state.keys,seed)
+    if keys.shape!=state.keys.shape or keys.dtype!=state.keys.dtype:raise ValueError(f'chance keys {keys.shape} {keys.dtype} for {state.keys.shape} {state.keys.dtype}')
+    out=state._replace(keys=keys);due=np.asarray(jax.device_get(state.pending_residual)).reshape(-1).astype(bool)
+    if due.any():
+        from .transition import sample_chance_inputs
+        chance=sample_chance_inputs(out);rows=jnp.asarray(due)
+        updates={}
+        for field,name in CAPSULE:
+            old=getattr(state,field);new=getattr(chance,name)
+            if new.shape!=old.shape:raise ValueError(f'{field}: a redrawn capsule of {new.shape} for {old.shape}')
+            updates[field]=jnp.where(rows.reshape((-1,)+(1,)*(old.ndim-1)),new.astype(old.dtype),old)
+        out=out._replace(**updates)
+    return out
+
+
+def rechance_world(world,seed):
+    """A constructor World with its state's chance re-keyed by `seed` (rechance_state); 0, or a world without a state, returns
+    the world itself. The index, public carry, refusals and kernel_seed are the world's own."""
+    if chance_seed(seed)==0 or world.state is None:return world
+    return replace(world,state=rechance_state(world.state,seed))
+
+
+def chance_lanes(batch,seeds):
+    """build's Batch with every PRICED root's blocks repeated once per chance seed of `seeds` (seed-major: the root's K blocks
+    under seeds[0], then under seeds[1], ...), each copy's worlds re-keyed by its seed (rechance_world); the root's rows list
+    them all and count/blocks scale with len(seeds). A REFUSED root is unchanged. seeds == (0,) returns `batch` itself."""
+    seeds=tuple(chance_seed(s)for s in seeds)
+    if not seeds or len(set(seeds))!=len(seeds):raise ValueError('distinct chance seeds required')
+    if seeds==(0,):return batch
+    requests,pairs,roots=[],[],[]
+    for root in batch.roots:
+        if root['status']!='PRICED':roots.append(root);continue
+        rows=[]
+        for seed in seeds:
+            for r in root['rows']:
+                rows.append(len(requests));requests.append(batch.requests[r]);pairs.append(tuple(rechance_world(w,seed)for w in batch.worlds.pairs[r]))
+        roots.append(dict(root,rows=tuple(rows)))
+    return replace(batch,requests=tuple(requests),worlds=replace(batch.worlds,pairs=tuple(pairs)),roots=tuple(roots),count=batch.count*len(seeds),
+        blocks=batch.blocks*len(seeds))
+
+
+def rechance(batch,seed):
+    """build's Batch priced under chance seed `seed`: chance_lanes(batch, (seed,)) (0 returns `batch` itself)."""
+    return chance_lanes(batch,(seed,))
+
+
+def world_prefix(item,count):
+    """A prepare_roots item with only the first `count` worlds of its world set (module docstring, Chance); a RootRefusal, or a
+    world set of `count` worlds already, is returned as it is."""
+    if type(item)is not Prepared or len(item.made.worlds)==count:return item
+    made=item.made
+    if type(count)is not int or count<2 or count%2 or count>len(made.worlds):raise ValueError(f'an even world prefix of at most {len(made.worlds)} required')
+    diagnostics=tuple(getattr(made,'mapper_diagnostics',())or())
+    trimmed=replace(made,worlds=tuple(made.worlds[:count]),seeds=tuple(made.seeds[:count]),requested_worlds=count,
+        **({'mapper_diagnostics':diagnostics[:count]}if diagnostics else{}))
+    return replace(item,made=trimmed)
 
 
 def root_actions(completed_q,policy_target,legal):
