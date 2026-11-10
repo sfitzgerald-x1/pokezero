@@ -93,3 +93,5 @@ class MeasurementTests(unittest.TestCase):
             m0.write(root/'failure-summary.json',dict(status='FAILED'))
             report=readout.readout(root)
             self.assertFalse(report['experiment_completion_verified']);self.assertEqual(report['status'],'FAILED')
+            (root/'failure-summary.json').write_text('{}')
+            self.assertFalse(readout.readout(root)['experiment_completion_verified'])

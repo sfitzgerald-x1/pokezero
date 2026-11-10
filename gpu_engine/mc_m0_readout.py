@@ -58,8 +58,8 @@ def readout(directory):
     qualified=len(smoke)==2 and {r['kind'] for r in smoke}=={'self','foulplay'} and all(r['status']=='PASS' for r in smoke)
     final_path=root/'summary.json';final=json.loads(final_path.read_bytes()) if final_path.exists() else None
     failure_path=root/'failure-summary.json';failure=json.loads(failure_path.read_bytes()) if failure_path.exists() else None
-    complete=bool(not failure and qualified and final and final['status']=='COMPLETE' and len(done[64]&done[256])==50 and len(ready)==50)
-    return dict(status='COMPLETE' if complete else 'FAILED' if failure or final else 'RUNNING_OR_UNOBSERVED',
+    complete=bool(not failure_path.exists() and qualified and final and final['status']=='COMPLETE' and len(done[64]&done[256])==50 and len(ready)==50)
+    return dict(status='COMPLETE' if complete else 'FAILED' if failure_path.exists() or final else 'RUNNING_OR_UNOBSERVED',
                 experiment_completion_verified=complete,expected_roots=50,prepared=len(prepared),ready=len(ready),
                 refused=len(prepared)-len(ready),completed_both_modes=len(done[64]&done[256]),
                 unbatched_completed=len(done[64]),batched_completed=len(done[256]),runtime_qualified=qualified,
