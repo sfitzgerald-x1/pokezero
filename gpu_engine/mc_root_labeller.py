@@ -33,19 +33,20 @@ ACTIONS = 9
 
 
 def process_cpu_seconds(pid=None):
-    """utime + stime (seconds) of `pid` (default this process) and every descendant, from /proc."""
-    tick = os.sysconf('SC_CLK_TCK');total = 0.;pending = [pid or os.getpid()];seen = set()
+    """dict(self=, children=): utime + stime (seconds) of `pid` (default this process) and of all its descendants (the Node
+    bridges), from /proc."""
+    tick = os.sysconf('SC_CLK_TCK');root = pid or os.getpid();out = dict(self=0., children=0.);pending = [root];seen = set()
     while pending:
         p = pending.pop()
         if p in seen:continue
         seen.add(p)
         try:
             stat = Path(f'/proc/{p}/stat').read_text();fields = stat[stat.rindex(')') + 2:].split()
-            total += (int(fields[11]) + int(fields[12])) / tick
+            out['self' if p == root else 'children'] += (int(fields[11]) + int(fields[12])) / tick
             for task in Path(f'/proc/{p}/task').iterdir():
                 children = (task / 'children').read_text().split();pending.extend(int(c) for c in children)
         except (OSError, ValueError, IndexError):continue
-    return total
+    return out
 
 
 class Model:
@@ -220,13 +221,14 @@ def label(args, envs, champion, pi_fp, collection, rng, paths, fpd):
         for e in envs[1:]:e.reset(seed=identity['seed'])   # a battle shell for the snapshot (restore needs a reset env)
         prepared = time.perf_counter();cpu0 = process_cpu_seconds()
         outcomes, decisions = run_root(envs, dict(ours=champion, opp=opp_model), root, snapshot, args.K, args.mode == 'batched')
-        wall = time.perf_counter() - prepared;cpu = process_cpu_seconds() - cpu0
+        wall = time.perf_counter() - prepared;cpu1 = process_cpu_seconds();cpu = {k: cpu1[k] - cpu0[k] for k in cpu1}
         row = dict(schema='mc-root-labels.v1', kind=args.kind, mode=args.mode, envs=len(envs), K=args.K, threads=args.threads, worker=args.worker,
                    ours=ours, actions=actions, opp_requested=replies is not None, root_seed=root_seed, **identity,
                    outcomes=outcomes.tolist(), decisions=decisions.tolist(), rollouts=int(outcomes.size),
-                   wall_seconds=round(wall, 3), cpu_seconds=round(cpu, 3), prepare_seconds=round(prepared - started, 3))
+                   wall_seconds=round(wall, 3), cpu_seconds=round(cpu['self'] + cpu['children'], 3), cpu_python_seconds=round(cpu['self'], 3),
+                   cpu_node_seconds=round(cpu['children'], 3), prepare_seconds=round(prepared - started, 3))
         out.write(json.dumps(row) + '\n');out.flush();made += 1
-        print(json.dumps({k: row[k] for k in ('kind', 'mode', 'actions', 'rollouts', 'wall_seconds', 'cpu_seconds')}), flush=True)
+        print(json.dumps({k: row[k] for k in ('kind', 'mode', 'actions', 'rollouts', 'wall_seconds', 'cpu_python_seconds', 'cpu_node_seconds')}), flush=True)
     print(json.dumps(dict(event='DONE', roots=made, attempts=attempts, skipped=skipped)), flush=True)
     return 0 if made else 1
 
