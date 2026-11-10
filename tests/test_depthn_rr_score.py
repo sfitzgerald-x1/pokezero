@@ -718,6 +718,40 @@ class EndToEndTests(unittest.TestCase):
         self.assertEqual(S.row_policy_target(none, Run([.3, .7]), 0, 0), (None, 'live_telemetry_invalid'))
         self.assertEqual(S.row_policy_target(none, live, 0, 0, live_fallback=False), (None, 'missing'))   # a modified tree: never the live target
 
+    def test_real_telemetry_reader_preserves_malformed_target_provenance(self):
+        telemetry = self.root / 'telemetry';telemetry.mkdir()
+        malformed = ['invalid', {'lane': 1}, False, 42, [.5] * 8, [True] * 9]
+        rows = [dict(decision_index=i, search=dict(policy_target=target)) for i, target in enumerate(malformed)]
+        rows += [dict(decision_index=6, search=dict(policy_target=None)), dict(decision_index=7, search={})]
+        (telemetry / '0.jsonl').write_text(''.join(json.dumps(row) + '\n' for row in rows))
+        run = S.RunDirectory(self.root)
+        decision = dict(root_legal=[True] * 9)
+        for i, target in enumerate(malformed):
+            with self.subTest(target=target):
+                self.assertEqual(run.policy_target(0, i), target)
+                self.assertEqual(S.row_policy_target(decision, run, 0, i), (None, 'live_telemetry_invalid'))
+        for i in (6, 7, 8):
+            self.assertEqual(S.row_policy_target(decision, run, 0, i), (None, 'missing'))
+        # a malformed (non-dict) search record: labelled invalid, never a crash
+        (telemetry / '1.jsonl').write_text(json.dumps(dict(decision_index=0, search='broken')) + '\n' + json.dumps(dict(decision_index=1, search=[1, 2])) + '\n')
+        for i in (0, 1):
+            self.assertEqual(S.row_policy_target(decision, run, 1, i), (None, 'live_telemetry_invalid'))
+
+    def test_main_counts_malformed_telemetry_targets_as_invalid(self):
+        run = self.root / 'run'
+        for sub in ('results', 'telemetry', 'owning-wire'):(run / sub).mkdir(parents=True)
+        rows = self.rows(run, random.Random(11))
+        for path in (run / 'telemetry').glob('*.jsonl'):
+            telemetry = [json.loads(line) for line in path.read_text().splitlines()]
+            for row in telemetry:row['search']['policy_target'] = 'invalid'
+            path.write_text(''.join(json.dumps(row) + '\n' for row in telemetry))
+        path = self.root / 'rows-0.jsonl';path.write_text(''.join(json.dumps(row) + '\n' for row in rows))
+        out = self.root / 'out'
+        with redirect_stdout(io.StringIO()):
+            self.assertEqual(S.main(['--rows', str(path), '--run-directory', str(run), '--out', str(out)]), 0)
+        cover = json.loads((out / 'summary.json').read_text())['coverage']
+        self.assertEqual((cover['target_sources'], cover['target_argmax_fallbacks']), ({'live_telemetry_invalid': 6}, 6))
+
     def test_main_with_reply_prior(self):
         run = self.root / 'run'
         for sub in ('results', 'telemetry', 'owning-wire'):(run / sub).mkdir(parents=True)
