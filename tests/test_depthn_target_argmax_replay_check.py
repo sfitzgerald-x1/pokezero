@@ -137,6 +137,20 @@ class ReplayCheckTests(unittest.TestCase):
                 self.assertEqual((code, report['error']), (2, 'input'))
         with redirect_stderr(io.StringIO()), patch('sys.stdout', io.StringIO()):self.assertEqual(check.main(['--rows', '/nonexistent/rows-0.jsonl']), 2)
 
+    def test_complete_payload_rejected_by_live_client_cannot_pass_gate(self):
+        # This root overrides greedy. Omitting the guard used to let both
+        # checker paths choose 3, although the live client would refuse it.
+        for record in (None, {}, {'tripped': 0}, {'tripped': 'false'}):
+            with self.subTest(record=record):
+                value = row(1, 0, target=favour(3))
+                value['effect_guard'] = record
+                code, report = self.run_check([value])
+                self.assertEqual((code, report['error']), (2, 'input'))
+                self.assertIn('COMPLETE response carries the effect guard', report['detail'])
+        value = row(1, 0, target=favour(3))
+        value['replay']['cause'] = 'server_error'
+        self.assertEqual(self.run_check([value])[0], 2)
+
     def test_the_check_uses_the_scorers_function_and_the_actors_rule(self):
         from scripts import depthn_rr_score as scorer
         from pokezero import depthn_live_actor as actor

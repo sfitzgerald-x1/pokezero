@@ -3,7 +3,8 @@
 
 Input: --rows, re-pricer rows (scripts/depthn_rr_reprice.py rows-*.jsonl) produced with --root-operator TARGET_ARGMAX (every
 row's replay names the operator: replay.root_operator TARGET_ARGMAX, with target_fallback). Each row is one decision sent to
-the live search; a root is compared when its replay is COMPLETE.
+the live search; a root is compared when its replay is COMPLETE. Its retained response payload must pass the live client's
+validation, including the required effect guard with boolean tripped; malformed COMPLETE payloads are input problems.
 
 Per compared root, from the row's own fields, through the scorer's own code (scripts/depthn_rr_score.py: normalize, recompute,
 target_argmax, guard_choices) on one side and the live stack's on the other:
@@ -75,7 +76,17 @@ def _int(x):return type(x) is int
 def compare_root(row):
     """dict(scorer=..., live=..., kinds=[mismatching KINDS], guard=...) of one COMPLETE row; scorer.Unscorable when the scorer
     leaves it out (its recompute refuses, or no legal live greedy action: 'greedy_missing', as score_decision)."""
-    decision = scorer.normalize(row);replay = row['replay']
+    replay = row['replay']
+    # Rows retain the decision payload, not the transport identity. Supply a
+    # synthetic envelope only to reuse the live client's payload validation;
+    # this does not certify the original wire schema/request ID/rung.
+    request = dict(request_id='replay-check')
+    response = dict(schema=actor.wire.SCHEMA, request_id=request['request_id'], rung='DN2W16',
+                    status=replay.get('status'), cause=replay.get('cause'),
+                    action_index=replay.get('action_index'), q_values=replay.get('q_values'),
+                    effect_guard=row.get('effect_guard'))
+    actor.Client._check(SimpleNamespace(rung=response['rung']), response, request)
+    decision = scorer.normalize(row)
     base = scorer.recompute(decision);greedy = decision['greedy_action'];legal = base.legal
     if not _int(greedy) or not 0 <= greedy < 9 or not legal[greedy]:raise scorer.Unscorable('greedy_missing')
     record = decision['effect_guard'] if type(decision['effect_guard']) is dict else None
@@ -83,8 +94,6 @@ def compare_root(row):
     raw, fallback = scorer.target_argmax(target, legal, decision['root_logits'], base.average.q)
     played, causes = scorer.guard_choices({OPERATOR: raw}, greedy, decision['own_moves'], record)
     mine = dict(raw=raw, fallback=fallback, played=played[OPERATOR], guard_causes=causes[OPERATOR] or [])
-    response = dict(status=replay.get('status'), cause=replay.get('cause'), action_index=replay.get('action_index'), q_values=replay.get('q_values'),
-                    effect_guard=row.get('effect_guard'))
     action, cause, guards, _ = actor.guarded_action(response, SimpleNamespace(legal_action_mask=legal), decision['own_moves'], greedy)
     live = dict(raw=replay.get('action_index'), fallback=replay.get('target_fallback'), played=greedy if action is None else action,
                 guard_causes=list(guards), cause=cause)
