@@ -409,6 +409,9 @@ class RegressPluginTests(unittest.TestCase):
         for effect in ('aromatherapy', 'refresh'):
             self.assertEqual(lane_verdict(ok, {effect: [0]}, None)[0], [])
             self.assertEqual(lane_verdict({('state.status', 1)}, {effect: [0]}, None)[0], [('state.status', 1)])
+            # A2 review L3: only the sleep-clause entries of the port.
+            self.assertEqual(lane_verdict({('trackers.public_port.post_upkeep', 0)}, {effect: [0]}, None)[0],
+                             [('trackers.public_port.post_upkeep', 0)])
 
     def test_trace_copying_insomnia_and_any_install_expose_a_sleep_target(self):
         from gpu_engine.v2e_regress import Pre, sleep_immunity
@@ -434,16 +437,22 @@ class RegressPluginTests(unittest.TestCase):
     def test_ko_cascade_turn_line_and_phase_shift(self):
         from gpu_engine.v2e_regress import lane_verdict
         effects = {'curse': [0]}
-        cascade = dict(ko_sides=np.array([True, False]), mon_ok=lambda leaf, side: side == 0)
+        # A2 review L2: last_move/trap_source are per-mon checks (mon_ok), never whole-leaf KO consequences.
+        cascade = dict(ko_sides=np.array([True, False]), mon_ok=lambda leaf, side: side == 0 or leaf in ('state.last_move', 'state.trap_source'))
         turn_line = {('trackers.turn', None), ("trackers.mon_features['turns_active']", 1), ('state.last_move', 1),
                      ('trackers.public_port.post_upkeep', None), ('state.trap_source', 1)}
         self.assertEqual(lane_verdict(turn_line, effects, None, cascade=cascade)[0], [])
         self.assertEqual(lane_verdict(turn_line, effects, None)[0], sorted(turn_line, key=lambda x: (x[0], -1 if x[1] is None else x[1])))
+        strict = dict(cascade, mon_ok=lambda leaf, side: side == 0)
+        self.assertEqual(lane_verdict({('state.last_move', 1), ('state.trap_source', 1)}, effects, None, cascade=strict)[0],
+                         [('state.last_move', 1), ('state.trap_source', 1)])
         # A residual write on the non-fainted side is a consequence only on a phase-shift lane.
         residual = {('state.status_counter', 1), ('state.item', 1), ('trackers.shown_item', 1), ('state.volatile', 1)}
         self.assertEqual(len(lane_verdict(residual, effects, None, cascade=cascade)[0]), 4)
-        phase = dict(cascade, ko_sides=np.array([True, True]), families=('residual',))
+        # A2 review L1: on a phase shift the non-KO seat accepts the residual tracker families, not every tracker.
+        phase = dict(cascade, families=('residual', 'residual_trackers'))
         self.assertEqual(lane_verdict(residual, effects, None, cascade=phase)[0], [])
+        self.assertEqual(lane_verdict({('trackers.observed_moves', 1)}, effects, None, cascade=phase)[0], [('trackers.observed_moves', 1)])
         self.assertEqual(lane_verdict({('state.status', 1), ('state.turn', None), ('state.moves', 1)}, effects, None, cascade=phase)[0],
                          [('state.moves', 1), ('state.status', 1), ('state.turn', None)])
 

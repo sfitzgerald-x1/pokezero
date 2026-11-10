@@ -18,13 +18,16 @@ every changed lane-step is attributed through the per-PR plug-in table:
   involved effects' allowances is changed-involved-unexpected-fields, a
   failure, unless the leaf is waived (--waive) or it is a KO consequence on a
   lane whose set of fainting mons differs from the base (a KO cascade): HP,
-  fainted, forced-switch/replacement and done/winner leaves, a cancelled or
-  cleared last_move and a released trap link, the TURN-line bookkeeping of both
-  sides, the newly (un)fainted mon's own per-mon state (checked exactly against
-  stored base arrays) and the trackers of its side. A lane whose residual was
-  deferred in exactly one tree (a KO moved between the action and residual
-  phases: a phase shift) is a cascade on both sides that also accepts the
-  residual handlers' writes. Anything else stays unexpected.
+  fainted, forced-switch/replacement and done/winner leaves, the TURN-line
+  bookkeeping of both sides, the newly (un)fainted mon's own per-mon state, a
+  cancelled or cleared last_move (an active's or a fainted mon's) and a released
+  trap link (a fainted or active mon's, or one pointing at such a foe), each
+  checked per mon against stored base arrays, and the trackers of its side. A
+  lane whose residual was deferred in exactly one tree (a KO moved between the
+  action and residual phases: a phase shift, counted and flagged per lane) is a
+  cascade on both sides that also accepts the residual handlers' state writes
+  and the tracker families they and the end-of-turn hooks write (not every
+  tracker). Anything else stays unexpected.
 
 Report: unchanged, changed-and-involved per effect with its changed fields,
 changed-but-uninvolved and changed-involved-unexpected-fields (both must be
@@ -429,16 +432,25 @@ FAMILIES = {
     'port': (r'^trackers\.public_port\.',),
     'visible': (r'^trackers\.visible_belief\.',),
     'sub': (r'^state\.substitute_hp$',),
+    # A2 review L3: a status write touches only the sleep-clause entries of the port.
+    'clause': (r'^trackers\.public_port\.(holder|victims)$',),
+    # A2: Knock Off's permanent flag and B2's removal credit; the end-of-turn Choice unlock; Destiny
+    # Bond's volatile bit and bag; Color Change's live type (state and shown); a Protect-blocked count.
+    'knock': (r'^state\.item_knocked$', r"^trackers\.field_features\['items_removed_credit'\]$"),
+    'choice': (r'^state\.choice_move$',),
+    'bond': (r'^state\.volatile$', r'^trackers\.public_volatiles$'),
+    'typechange': (r'^state\.types$', r'^trackers\.shown_types$'),
+    'blocked': (r'^trackers\.public_port\.blocked$',),
     'all': (r'.*',),
 }
 ALL = dict(user=('all',), target=('all',), glob=('all',))
 # KO cascade: leaves any faint difference may change (both sides / side-less).
 FAMILIES['ko'] = (r'^state\.(forced_switch|pending_residual|queued_actor|queued_actions|queued_stall|residual_draws|'
-                  r'phazing_draws|secondary_draws|sleep_talk_draws|replacement_count|done|winner)$', r'^trackers\.fainted$',
-                  # A1: a KO cancels the remaining queued action (that actor's last_move) and the end-of-step
-                  # clear zeroes a fainted mon's last_move; linking.prune releases a link whose owner or
-                  # target fainted, on either side.
-                  r'^state\.(last_move|trap_source)$')
+                  r'phazing_draws|secondary_draws|sleep_talk_draws|replacement_count|done|winner)$', r'^trackers\.fainted$')
+# A1: a KO cancels the remaining queued action (that actor's last_move) and the end-of-step clear zeroes a
+# fainted mon's last_move; linking.prune releases a link whose owner or target fainted, on either side.
+# A2 (review L2): accepted per mon against stored base arrays (KO_LINK_LEAVES, link_ok), never as whole leaves.
+KO_LINK_LEAVES = ('state.last_move', 'state.trap_source')
 # A1: whether a step ends in a forced-replacement request or a new TURN line follows the faint set;
 # B2's per-turn bookkeeping follows it on both sides (turn counter, the actives' stint clocks, a
 # badly poisoned active's toxic stage, the post-upkeep port flag, weather upkeeps).
@@ -451,6 +463,16 @@ FAMILIES['turnline'] = (r'^trackers\.turn$', r"^trackers\.mon_features\['(turns_
 # sides (with all trackers), even when the set of fainted mons is the same.
 FAMILIES['residual'] = (r'^state\.(item|status_counter|volatile|boosts|encore_move|encore_counter|charge_move|charge_counter|'
                         r'truant_loaf|wish_counter|wish_amount|weather|weather_counter)$', r'^trackers\.(weather|field_features)')
+# A2 (review L1): the tracker families the residual handlers (Wish, weather, Speed Boost, Leftovers, pinch
+# berries, status, Leech Seed) and turn_end (observe, faint clear, clocks, upkeep, negative items, TURN)
+# write. On a phase shift these are accepted on both seats instead of every tracker.
+FAMILIES['residual_trackers'] = (
+    r'^trackers\.(hp_percent|status|boosts|fainted|weather|spikes|turn|shown_item|item_removed|belief_mask|shown_ability|'
+    r'original_ability|borrowed_ability|public_volatiles|damage_exact_(dealt|taken))$',
+    r'^trackers\.(damage_history|negative_items|visible_belief|public_port)\.', r'^trackers\.field_features\[',
+    r"^trackers\.mon_features\['(sleep_turns|rest_sleep|toxic_stage|sleep_skipped_turns|sleep_cant_pending|sleep_usable_pending|"
+    r"confusion_turns|encore_turns|wrap_trap_turns|stall_counter|sub_present|meanlook_trap|item_swapped|choice_locked|"
+    r"last_damage_dealt|last_damage_taken|turns_active|turns_active_total)'\]$")
 # Per-mon state a faint may change on the mon that (un)fainted; checked per mon against stored base arrays.
 KO_MON_LEAVES = tuple(f'state.{n}' for n in ('status', 'status_counter', 'sleep_skipped', 'rest_origin', 'volatile',
     'confusion_counter', 'boosts', 'encore_move', 'encore_counter', 'charge_move', 'charge_counter', 'choice_move',
@@ -465,8 +487,8 @@ ALLOWED = {
     'lovelykiss': ALL, 'sleep_clause': ALL, 'sleep_immunity': ALL,
     # A cure goes through party_cure/observe: port.condition and team_cure write the sleep-clause
     # port (victims on the user's seat, holder on the foe's) and _refresh the visible belief.
-    'aromatherapy': dict(user=('status', 'hp', 'port', 'visible'), target=('hp', 'port'), glob=()),
-    'refresh': dict(user=('status', 'hp', 'port', 'visible'), target=('hp', 'port'), glob=()),
+    'aromatherapy': dict(user=('status', 'hp', 'clause', 'visible'), target=('hp', 'clause'), glob=()),
+    'refresh': dict(user=('status', 'hp', 'clause', 'visible'), target=('hp', 'clause'), glob=()),
     # The faint clears only the holder's Substitute HP (no tracker reads it).
     'sub_faint': dict(user=('sub',), target=(), glob=()),
     # PR0 (tracker only): a gated reveal drops the entrant's own ability reveal; the
@@ -476,6 +498,25 @@ ALLOWED = {
     'type_revert': dict(user=('types',), target=(), glob=()),
     # B2 clears the flag on both seats at an arrival; both sides are actors.
     'meanlook_arrival': dict(user=('meanlook',), target=('meanlook',), glob=()),
+    # A2. Knock Off: the target's item, flag, credit, end-of-turn Choice unlock and Sticky Hold reveal;
+    # without its item the target loses Leftovers (HP), pinch berries (stages), Lum (a status a contact
+    # ability gives it later stays, with the clause port) and Choice Band (less damage to the user, whose
+    # own HP-gated items follow).
+    'knockoff': dict(user=('hp', 'item', 'boosts', 'clause'),
+                     target=('item', 'knock', 'choice', 'hp', 'boosts', 'status', 'clause', 'visible', 'reveal'), glob=()),
+    # Giga Drain: the drainer's HP (heal, or Liquid Ooze damage) and its HP-gated items; the Ooze
+    # holder's reveal; a later Leech Seed drain from the drainer reads its HP (the target's HP).
+    'gigadrain': dict(user=('hp', 'item', 'boosts', 'visible'), target=('hp', 'reveal'), glob=()),
+    # Counter/Mirror Coat: the damage and its consequences on the target (HP-gated items, Color Change,
+    # contact-ability reveals); contact abilities hurt or status the Counter user (Lum, clause port);
+    # a failed attempt no longer reaches the foe's Protect count.
+    'counter': dict(user=('hp', 'status', 'item', 'boosts', 'clause', 'visible', 'blocked'),
+                    target=('hp', 'item', 'boosts', 'typechange', 'reveal', 'clause', 'visible'), glob=()),
+    'mirrorcoat': dict(user=('hp', 'item', 'boosts', 'blocked'),
+                       target=('hp', 'item', 'boosts', 'typechange', 'reveal', 'visible'), glob=()),
+    # Destiny Bond: the user's bit and bag; its trigger faints the foe (KO cascade rules for the rest).
+    'destinybond': dict(user=('bond',), target=('hp',), glob=()),
+    'destinybond_trigger': dict(user=('bond', 'hp'), target=('hp',), glob=()),
 }
 
 
@@ -518,9 +559,10 @@ def predicates(prs):
 
 def lane_verdict(changed, effects, side_axis, *, cascade=None, waive=()):
     """changed: {(leaf, side)} for side-axis leaves, {(leaf, None)} for side-less ones;
-    effects: {effect: [actor sides]}; cascade: None, or dict(ko_sides=[2] bool,
-    mon_ok=callable(leaf, side) -> the leaf differs only on that side's (un)fainted mons,
-    optional families=extra leaf families accepted on both sides, e.g. ('residual',) on a phase shift).
+    effects: {effect: [actor sides]}; cascade: None, or dict(ko_sides=[2] bool (sides whose every tracker
+    may follow a KO), mon_ok=callable(leaf, side) -> a KO_MON_LEAVES leaf differs only on that side's
+    (un)fainted mons, a KO_LINK_LEAVES leaf only where link_ok allows, optional families=extra leaf families
+    accepted on both sides, e.g. ('residual', 'residual_trackers') on a phase shift).
     Returns (unexpected entries, waived entries, entries accepted only as KO consequences)."""
     unexpected, waived, by_ko = [], [], []
     for leaf, side in sorted(changed, key=lambda x: (x[0], -1 if x[1] is None else x[1])):
@@ -532,12 +574,32 @@ def lane_verdict(changed, effects, side_axis, *, cascade=None, waive=()):
             if ok:break
         if not ok and cascade is not None:
             ko = (allowed_leaf(leaf, ('hp', 'ko', 'turnline') + tuple(cascade.get('families', ())))
-                  or (side is not None and leaf in KO_MON_LEAVES and cascade['mon_ok'](leaf, side))
+                  or (side is not None and leaf in KO_MON_LEAVES + KO_LINK_LEAVES and cascade['mon_ok'](leaf, side))
                   or (side is not None and leaf.startswith('trackers.') and bool(cascade['ko_sides'][side])))
             if ko:by_ko.append((leaf, side));continue
         if ok:continue
         (waived if any(re.search(w, leaf) for w in waive) else unexpected).append((leaf, side))
     return unexpected, waived, by_ko
+
+
+def active_mask(active):
+    """[2] active party indices -> [2,6] bool."""
+    active = np.asarray(active)
+    return np.arange(6)[None, :] == active[:, None]
+
+
+def link_ok(leaf, side, a, b, ko_mons, acting):
+    """[6] mons of `side` whose KO_LINK_LEAVES entry a KO cascade may change (a, b: patched and base values).
+
+    last_move: a fainted mon's is cleared at step end, and a cancelled action is an active's (the actor
+    at its turn: the pre-step or post-step active). trap_source: a fainted or departing (active) mon's own
+    link, or a link pointing at such a foe (linking.prune / entry.depart release it).
+    """
+    own = ko_mons[side] | acting[side]
+    if leaf == 'state.last_move':return own
+    other = ko_mons[1 - side] | acting[1 - side]
+    points = lambda v: (np.asarray(v) >= 0) & other[np.clip(np.asarray(v), 0, 5)]
+    return own | points(a) | points(b)
 
 
 # ---------------------------------------------------------------------------
@@ -650,7 +712,8 @@ class Stepper:
             pre = digest_named({n: named_in[n] for n in new}, lanes)[1] if new else j.zeros((lanes, 0, 2, 2), j.uint32)
             return dict(digests=digests, pre_digests=pre, fainted=(state.hp > 0) & (out.step.state.hp <= 0),
                 extra={n: named_out[n] for n in faint_leaves if n in named_out}, calls=calls,
-                ko={n: named_out[n] for n in KO_MON_LEAVES if n in named_out},
+                ko={n: named_out[n] for n in KO_MON_LEAVES + KO_LINK_LEAVES if n in named_out},
+                post_active=out.step.state.active,
                 physical_to_public=out.trackers.physical_to_public, active_slot=out.trackers.active_slot,
                 public_order=named_out.get(PUBLIC_ORDER))
         self._jit = jax.jit(traced);self._names = names
@@ -746,7 +809,8 @@ def base_pass(args, *, step_override=None, prepared=None):
         oracle_digest=digest, oracle_modules=len(modules), capture_sha256=capture_sha, capture_commit=capture.get('source_commit'),
         shards=[p.name for p in shards], partial=bool(args.limit), lane_steps=lane_steps, live_lane_steps=live,
         output_names=names, side_axis=side_axis, input_names=names_order, migrated_new_inputs=sorted(filled or ()),
-        faint_leaves=sorted(n for n in FAINT_CLEAR_LEAVES if n in names), ko_leaves=sorted(n for n in KO_MON_LEAVES if n in names),
+        faint_leaves=sorted(n for n in FAINT_CLEAR_LEAVES if n in names),
+        ko_leaves=sorted(n for n in KO_MON_LEAVES + KO_LINK_LEAVES if n in names),
         pad_lanes=pad, digest_seeds=list(DIGEST_SEEDS),
         jax=jax.__version__, backend=jax.default_backend(), seconds=time.perf_counter() - begin)
     (out / 'manifest.json').write_text(json.dumps(manifest, indent=1) + '\n')
@@ -826,11 +890,16 @@ def patched_pass(args, *, step_override=None, prepared=None):
     callable_moves = np.asarray(tables.engine_tables.sleep_talk.callable)
     destiny_bond = getattr(state_module, 'DESTINY_BOND', DEFAULT_DESTINY_BOND)
     counts = dict(lane_steps=0, done_skipped=0, unchanged=0, changed_and_involved=0, changed_but_uninvolved=0,
-                  changed_involved_unexpected_fields=0, ko_cascade=0, waived=0, rule_explained=0, faint_rule_leaves=0)
+                  changed_involved_unexpected_fields=0, ko_cascade=0, phase_shift=0, waived=0, rule_explained=0, faint_rule_leaves=0)
     by_effect = {k: dict(changed=0, involved_unchanged=0, changed_fields={}, unexpected_fields={}, ko_cascade=0,
-                         ko_cascade_non_hp_fields={}) for k in table}
+                         phase_shift=0, ko_cascade_non_hp_fields={}) for k in table}
     ko_leaves = manifest.get('ko_leaves')
     if ko_leaves is None:raise SystemExit('base pass predates the KO-cascade arrays; re-run the base pass')
+    # last_move/trap_source are checked per mon against the base arrays; a base pass without them gets the
+    # stricter whole-side fallback (only a side with a newly (un)fainted mon), recorded as a warning.
+    link_rule = 'per-mon' if all(n in ko_leaves for n in KO_LINK_LEAVES) else 'ko-side'
+    if link_rule != 'per-mon':
+        warnings.append('base pass predates the per-mon last_move/trap_source arrays: whole-KO-side fallback rule')
     uninvolved_leaves = {};new_outputs = None
     listing = (out / 'changed.jsonl').open('x');begin = time.perf_counter()
     names_order = _template_names(template)
@@ -871,6 +940,7 @@ def patched_pass(args, *, step_override=None, prepared=None):
             phase_lanes = diff[:, position['state.pending_residual']].any(-1) if 'state.pending_residual' in position \
                 else np.zeros(real, bool)
             base_ko = {n: base[f'ko_{i:02d}'] for i, n in enumerate(ko_leaves)}
+            pre_active = np.asarray(named['state.active'])[:real];post_active = np.asarray(result['post_active'])[:real]
             faint_base = {};faint_set = set()
             if args.faint_clear:
                 lanes_list = base['faint_lanes'].tolist()
@@ -900,12 +970,16 @@ def patched_pass(args, *, step_override=None, prepared=None):
                 phase = bool(phase_lanes[lane]);cascade = bool(cascade_lanes[lane]) or phase;cascade_info = None
                 if cascade:
                     ko_mons = ko_mons_all[lane]
-                    def mon_ok(leaf, side, lane=lane, ko_mons=ko_mons):
-                        if leaf not in base_ko:return False
+                    acting = active_mask(pre_active[lane]) | active_mask(post_active[lane])        # [2,6]
+                    def mon_ok(leaf, side, lane=lane, ko_mons=ko_mons, acting=acting):
+                        if leaf not in base_ko:
+                            return leaf in KO_LINK_LEAVES and bool(ko_mons[side].any())         # fallback, warned
                         a = np.asarray(result['ko'][leaf][lane][side]);b = np.asarray(base_ko[leaf][lane][side])
                         differ = (a != b).reshape(6, -1).any(-1)
-                        return not (differ & ~ko_mons[side]).any()
-                    cascade_info = dict(ko_sides=ko_mons.any(-1) | phase, mon_ok=mon_ok, families=('residual',) if phase else ())
+                        allowed = link_ok(leaf, side, a, b, ko_mons, acting) if leaf in KO_LINK_LEAVES else ko_mons[side]
+                        return not (differ & ~allowed).any()
+                    cascade_info = dict(ko_sides=ko_mons.any(-1), mon_ok=mon_ok,
+                        families=('residual', 'residual_trackers') if phase else ())
                 unexpected, waived, by_ko = lane_verdict(entries, effects, side_axis, cascade=cascade_info, waive=args.waive or ()) \
                     if changed_rest and effects else ([], [], [])
                 kind = classify(changed, bool(effects), rule_ok, unexpected)
@@ -917,9 +991,9 @@ def patched_pass(args, *, step_override=None, prepared=None):
                 if kind == 'rule':counts['rule_explained'] += 1
                 elif kind in ('involved', 'unexpected'):
                     counts['changed_and_involved' if kind == 'involved' else 'changed_involved_unexpected_fields'] += 1
-                    counts['ko_cascade'] += cascade;counts['waived'] += bool(waived)
+                    counts['ko_cascade'] += cascade;counts['phase_shift'] += phase;counts['waived'] += bool(waived)
                     for e, actors in effects.items():
-                        stats = by_effect[e];stats['changed'] += 1;stats['ko_cascade'] += cascade
+                        stats = by_effect[e];stats['changed'] += 1;stats['ko_cascade'] += cascade;stats['phase_shift'] += phase
                         for leaf, side in by_ko:
                             if allowed_leaf(leaf, ('hp',)):continue
                             role = 'glob' if side is None else ('user' if side in actors else 'target')
@@ -933,7 +1007,7 @@ def patched_pass(args, *, step_override=None, prepared=None):
                 else:
                     counts['changed_but_uninvolved'] += 1
                     for n in changed_rest:uninvolved_leaves[n] = uninvolved_leaves.get(n, 0) + 1
-                listing.write(json.dumps(dict(shard=path.name, lane=lane, tick=tick, kind=kind, ko_cascade=cascade,
+                listing.write(json.dumps(dict(shard=path.name, lane=lane, tick=tick, kind=kind, ko_cascade=cascade, phase_shift=phase,
                     involved={k: v for k, v in effects.items()}, leaves=changed, entries=labels, faint_rule=faint_explained,
                     unexpected=[f"{l}@{'glob' if s is None else s}" for l, s in unexpected],
                     ko_consequences=[f"{l}@{'glob' if s is None else s}" for l, s in by_ko],
@@ -949,7 +1023,7 @@ def patched_pass(args, *, step_override=None, prepared=None):
     report = dict(schema=SCHEMA, digest_format=DIGEST_FORMAT, pass_='patched', plug_ins=plugins, source_commit=rev,
         source_dirty=dirty, allow_dirty=bool(args.allow_dirty), oracle_digest=digest, base_oracle_digest=manifest['oracle_digest'],
         capture_sha256=capture_sha, **base_check, shards=len(shards), partial=partial, failures=failures,
-        migrated_new_inputs=new_inputs, new_outputs=new_outputs, public_order_rule=public_order_rule,
+        migrated_new_inputs=new_inputs, new_outputs=new_outputs, public_order_rule=public_order_rule, link_rule=link_rule,
         faint_clear_rule=bool(args.faint_clear), waive=list(args.waive or ()), counts=counts, by_effect=by_effect,
         allowed_fields={e: ALLOWED.get(e, 'UNDECLARED: any change') for e in table},
         uninvolved_leaves=dict(sorted(uninvolved_leaves.items(), key=lambda x: -x[1])), warnings=warnings,
