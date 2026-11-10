@@ -1,7 +1,7 @@
 {
  "schema": "pokezero.effect_probe.scenario.v1",
  "move": "sludgebomb",
- "note": "Regular poison from Sludge Bomb's 30% secondary (or none), then two turns of poison residual next to Leftovers and Synthesis. The tape pins secondary.1 = 99 on every step: no paralysis from Snorlax's Body Slam (30%), so the scenario stays on poison.",
+ "note": "Regular poison from Sludge Bomb's 30% secondary (or none), then three poison ticks (the first at the end of step 0) next to Leftovers and Synthesis. The tape pins secondary.1 = 99 on every step: no paralysis from Snorlax's Body Slam (30%), so the scenario stays on poison.",
  "teams": [
   [
    {

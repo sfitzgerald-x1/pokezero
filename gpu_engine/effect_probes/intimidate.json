@@ -1,7 +1,7 @@
 {
  "schema": "pokezero.effect_probe.scenario.v1",
  "move": "intimidate",
- "note": "Intimidate on switch-in: lands on Snorlax (-1 Atk), blocked by Clear Body (Metagross), blocked by a Substitute (Jolteon). Salamence switches in on steps 0, 2 and 5; p1 rotates its active between them.",
+ "note": "Intimidate on switch-in: lands on Snorlax (-1 Atk), blocked by Clear Body (Metagross), blocked by a Substitute (Jolteon). Salamence switches in on steps 0, 2 and 5; p1 rotates its active between them. The tape pins secondary.0 = 99 on every step: no paralysis from Snorlax's Body Slam and no +1 Atk from Metagross's Meteor Mash (not modelled yet), which would mix into the Atk value the Clear Body check reads.",
  "teams": [
   [
    {
@@ -166,6 +166,9 @@
    "switch 4"
   ]
  ],
+ "tape": {
+  "secondary.0": 99
+ },
  "axes": [],
  "expect": {
   "exact": true

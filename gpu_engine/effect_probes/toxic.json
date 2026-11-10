@@ -1,7 +1,7 @@
 {
  "schema": "pokezero.effect_probe.scenario.v1",
  "move": "toxic",
- "note": "Toxic hits (85%) or misses, then three turns of the escalating Toxic counter next to Leftovers; Blissey heals with Softboiled.",
+ "note": "Toxic hits (85%) or misses, then four Toxic ticks (counter 1 to 4, the first at the end of step 0) next to Leftovers; Blissey heals with Softboiled. The tape pins secondary.1 = 99 on every step: no paralysis from Snorlax's Body Slam.",
  "teams": [
   [
    {
@@ -158,6 +158,9 @@
    "move 2"
   ]
  ],
+ "tape": {
+  "secondary.1": 99
+ },
  "axes": [
   {
    "name": "accuracy",
