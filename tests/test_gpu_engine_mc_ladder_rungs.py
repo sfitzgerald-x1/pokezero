@@ -56,7 +56,8 @@ def row(ordinal=7, index=3, *, depth1=D1, depth2=D2, status='COMPLETE', action=1
 
 def one(raw, run):
     """{rung: rung row} of a single row."""
-    out, _ = M.build([raw], run, None if run != 'E' else {raw['ordinal']: dict(ordinal=raw['ordinal'], seed=11, ours='p1', target=raw['decision_index'])})
+    out, _ = M.build([raw], run, None if run != 'E' else {raw['ordinal']: dict(ordinal=raw['ordinal'], seed=11, ours='p1', target=raw['decision_index'],
+                                                                               status='ok')})
     return {name: rows[0] for name, rows in out.items()}
 
 
@@ -176,7 +177,7 @@ class UndecidedTests(unittest.TestCase):
 
 class IdentityTests(unittest.TestCase):
     MANIFEST = {0: dict(ordinal=0, seed=900, ours='p2', target=3, status='ok'), 1: dict(ordinal=1, seed=901, ours='p1', target=5, status='ok'),
-                2: dict(ordinal=2, seed=902, ours='p2', target=4, status='ok'), 3: dict(ordinal=3, seed=903, ours='p1', target=1)}
+                2: dict(ordinal=2, seed=902, ours='p2', target=4, status='ok'), 3: dict(ordinal=3, seed=903, ours='p1', target=1, status='ok')}
 
     def test_self_rows_map_through_the_manifest_and_mismatches_are_counted(self):
         rows = [row(0, 3, owner='p2', seed=900, reply=False),   # mapped
@@ -193,6 +194,8 @@ class IdentityTests(unittest.TestCase):
         manifest = {0: dict(self.MANIFEST[0], status='root_mismatch')}   # a capture whose replayed root is not the bank's
         out, summary = M.build([row(0, 3, owner='p2', seed=900, reply=False)], 'E', manifest)
         self.assertEqual((out['R4'], summary['identity_mismatches']), ([], dict(manifest_root_mismatch=1)))
+        manifest = {0: {k: v for k, v in self.MANIFEST[0].items() if k != 'status'}}   # an older manifest without a status
+        self.assertEqual(M.build([row(0, 3, owner='p2', seed=900, reply=False)], 'E', manifest)[1]['identity_mismatches'], dict(manifest_None=1))
 
     def test_old_rows_and_nonfinite_q_never_choose(self):
         old = row();del old['depth1']['refused_at_depth1']   # written before the depth-1 refusal flags
