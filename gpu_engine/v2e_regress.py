@@ -19,8 +19,10 @@ every changed lane-step is attributed through the per-PR plug-in table:
   failure, unless the leaf is waived (--waive) or it is a KO consequence on a
   lane whose set of fainting mons differs from the base (a KO cascade): HP,
   fainted, forced-switch/replacement and done/winner leaves, the TURN-line
-  bookkeeping of both sides, the newly (un)fainted mon's own per-mon state, a
-  cancelled or cleared last_move (an active's or a fainted mon's) and a released
+  bookkeeping of both sides, the newly (un)fainted mon's own per-mon state (its
+  PP included: a mon KO'd before its turn spends none), its side's action history
+  and the step's executed-move count, a cancelled or cleared last_move (an
+  active's or a fainted mon's) and a released
   trap link (a fainted or departed mon's own, or one pointing at such a foe; a
   departure is a pre-step active replaced in either tree), each checked per mon
   against stored base arrays, and the trackers of its side. A lane whose
@@ -472,7 +474,11 @@ FAMILIES = {
 ALL = dict(user=('all',), target=('all',), glob=('all',))
 # KO cascade: leaves any faint difference may change (both sides / side-less).
 FAMILIES['ko'] = (r'^state\.(forced_switch|pending_residual|queued_actor|queued_actions|queued_stall|residual_draws|'
-                  r'phazing_draws|secondary_draws|sleep_talk_draws|replacement_count|done|winner)$', r'^trackers\.fainted$')
+                  r'phazing_draws|secondary_draws|sleep_talk_draws|replacement_count|done|winner)$', r'^trackers\.fainted$',
+                  # R: a mon that faints before its turn executes no move: the step's executed-move count.
+                  r'^step\.placeholder_moves$')
+# R: ...nor records an action: its side's action history, accepted on a side with a newly (un)fainted mon.
+FAMILIES['ko_action'] = (r'^state\.(last_action_kind|last_action_index)$',)
 # A1: a KO cancels the remaining queued action (that actor's last_move) and the end-of-step clear zeroes a
 # fainted mon's last_move; linking.prune releases a link whose owner or target fainted, on either side.
 # A2 (review L2): accepted per mon against stored base arrays (KO_LINK_LEAVES, link_ok), never as whole leaves.
@@ -510,7 +516,7 @@ FAMILIES['focus'] = (r'^state\.volatile$',)
 # Per-mon state a faint may change on the mon that (un)fainted; checked per mon against stored base arrays.
 KO_MON_LEAVES = tuple(f'state.{n}' for n in ('status', 'status_counter', 'sleep_skipped', 'rest_origin', 'volatile',
     'confusion_counter', 'boosts', 'encore_move', 'encore_counter', 'charge_move', 'charge_counter', 'choice_move',
-    'protect_counter', 'truant_loaf'))
+    'protect_counter', 'truant_loaf', 'pp'))      # pp (R): a mon KO'd before its turn spends none
 # effect -> leaves it may change: user (acting side), target (the other side), glob (side-less).
 # A1's sets: a stat change alters damage taken later in the step (and pinch berries);
 # a sleep landing or not decides whether the target acts at all, so it may change anything.
@@ -556,7 +562,9 @@ ALLOWED = {
     # and stages), a pending Wish landing by HP, Color Change and its reveal when the second hit is the first
     # to reach it, the belief refresh of a changed condition, a Focus Punch losing focus. The user's HP follows
     # from the target's reply (Counter/Mirror Coat read the second hit, a lost Focus Punch) and its HP items.
-    'bonemerang': dict(user=('hp', 'item', 'boosts', 'visible'),
+    # A second-hit KO of a slower target also cancels its queued move, which can no longer status the user
+    # (seen: a thawing Parasect's Spore); the target's own cancelled bookkeeping is the KO cascade's.
+    'bonemerang': dict(user=('hp', 'item', 'boosts', 'visible', 'status', 'clause'),
                        target=('hp', 'item', 'boosts', 'typechange', 'reveal', 'visible', 'subtracker', 'wish', 'focus'),
                        glob=()),
     # R (optional carry from A2): Liquid Ooze on Leech Seed. The holder (user) is revealed; the seeder (target) takes
@@ -620,7 +628,8 @@ def lane_verdict(changed, effects, side_axis, *, cascade=None, waive=()):
         if not ok and cascade is not None:
             ko = (allowed_leaf(leaf, ('hp', 'ko', 'turnline') + tuple(cascade.get('families', ())))
                   or (side is not None and leaf in KO_MON_LEAVES + KO_LINK_LEAVES and cascade['mon_ok'](leaf, side))
-                  or (side is not None and leaf.startswith('trackers.') and bool(cascade['ko_sides'][side])))
+                  or (side is not None and (leaf.startswith('trackers.') or allowed_leaf(leaf, ('ko_action',)))
+                      and bool(cascade['ko_sides'][side])))
             if ko:by_ko.append((leaf, side));continue
         if ok:continue
         (waived if any(re.search(w, leaf) for w in waive) else unexpected).append((leaf, side))

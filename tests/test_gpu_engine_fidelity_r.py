@@ -340,6 +340,20 @@ class RegressPluginTests(unittest.TestCase):
         for bad in (('state.status', 1), ('state.volatile', 0), ('trackers.public_volatiles', 0), ('state.effect_draws', 0)):
             self.assertEqual(lane_verdict({bad}, {'bonemerang': [0]}, None)[0], [bad])
 
+    def test_a_ko_before_the_targets_turn_cancels_its_bookkeeping(self):
+        """A second-hit KO of a slower target cancels its move: its PP and its side's action history (KO side only),
+        the executed-move count, and a status that move would have given the user."""
+        from gpu_engine.v2e_regress import KO_MON_LEAVES, lane_verdict
+        self.assertIn('state.pp', KO_MON_LEAVES)
+        effects = {'bonemerang': [1]}
+        cascade = dict(ko_sides=np.array([True, False]), mon_ok=lambda leaf, side: side == 0)
+        cancelled = {('state.pp', 0), ('state.last_action_kind', 0), ('state.last_action_index', 0),
+                     ('step.placeholder_moves', None), ('state.status', 1), ('trackers.public_port.victims', 1)}
+        self.assertEqual(lane_verdict(cancelled, effects, None, cascade=cascade)[0], [])
+        for bad in (('state.last_action_kind', 1), ('state.pp', 1)):
+            self.assertEqual(lane_verdict({bad}, effects, None, cascade=cascade)[0], [bad])
+        self.assertEqual(lane_verdict({('step.placeholder_moves', None)}, effects, None)[0], [('step.placeholder_moves', None)])
+
     def test_trap_links_release_only_for_a_fainted_or_departed_mon(self):
         from gpu_engine.v2e_regress import active_mask, departed_mask, link_ok
         ko = np.zeros((2, 6), bool)
