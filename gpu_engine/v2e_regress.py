@@ -5,10 +5,11 @@ captured (state, actions, trackers) input and stores, per shard, a 64-bit
 digest of every output leaf for every lane and side (leaves with a side axis
 are digested per side), plus the post arrays of the faint-clear tracker leaves
 on lanes where an active faints. `patched` runs a later tree on the same
-shards: inputs are migrated by leaf path (existing leaves keep shape and
-dtype; new state leaves take empty_state's values, new tracker leaves their
-declared neutral values), the patched step runs, and every changed lane-step
-is attributed through the per-PR plug-in table:
+shards. Both passes migrate their inputs by leaf path (existing leaves keep
+shape and dtype; new state leaves take empty_state's values, new tracker
+leaves their declared neutral values; the filled leaves are recorded), so a
+base pass also runs on a capture that predates a leaf. In the patched pass
+every changed lane-step is attributed through the per-PR plug-in table:
 
 - involvement predicates (pre-state and actions only, a conservative superset)
   name the effects a lane may exercise and the side that acts;
@@ -26,7 +27,8 @@ changed-but-uninvolved and changed-involved-unexpected-fields (both must be
 0), involved-but-unchanged; every changed lane-step is listed.
 
 Special rules (PR0): `trackers.public_order` is checked against a numpy replay
-of its swap rule over the recorded install calls instead of bitwise, and with
+of its swap rule over the recorded install calls instead of bitwise while the
+base pass lacks it (bitwise once the base has it too), and with
 --faint-clear the PR0 faint-time public clear may change only the listed
 tracker entries on lanes where an active faints (meanlook_trap: the actives'
 entries). Leaves the faint rule explains are removed from the lane-step's
@@ -74,7 +76,7 @@ FAINT_CLEAR_SEATS = ('meanlook_trap',)
 FAINT_CLEAR_LEAVES = tuple(['trackers.public_volatiles'] + [f"trackers.mon_features['{k}']" for k in FAINT_CLEAR_MON + FAINT_CLEAR_SEATS])
 PUBLIC_ORDER = 'trackers.public_order'
 MEANLOOK = "trackers.mon_features['meanlook_trap']"
-PRE_TRACKERS = (MEANLOOK,)
+PRE_TRACKERS = (MEANLOOK, 'trackers.active_slot')
 TRAP_MOVES = ('meanlook', 'spiderweb', 'block')
 DEFAULT_DESTINY_BOND = 64
 SLEEP_MOVES = ('spore', 'hypnosis', 'sleeppowder', 'sing', 'lovelykiss', 'grasswhistle')
@@ -345,21 +347,33 @@ def white_herb(p):
 
 
 def entering_ability(*names):
-    """PR0 reveal gates: a side may install a holder of one of these abilities this step
-    (the reveal happens at its switch-in; the foe's HP/Substitute or the weather is not
-    predicted, so this is a superset)."""
+    """PR0 reveal gates: a side may install a holder of one of these abilities this step (the
+    reveal happens at its switch-in; the foe's HP/Substitute or the weather is not predicted).
+    A voluntary switch installs exactly its target, bench_indices(active)[action-4]; a
+    replacement, a Baton target or a drag may install any benched holder."""
     def predicate(p):
-        return np.isin(p.s['ability'], p.ability_ids(*names)).any(-1) & installs(p)
+        holder = np.isin(p.s['ability'], p.ability_ids(*names))                         # [L,2,6]
+        rows = np.arange(p.lanes)[:, None];sides = np.arange(2)[None, :]
+        active_hp = p.s['hp'][rows, sides, p.s['active']]
+        forced = p.s['forced_switch'].astype(bool) | (active_hp <= 0)
+        slot = np.clip(p.actions - 4, 0, 4);target = slot + (slot >= p.s['active'])   # state.bench_indices
+        voluntary = (p.actions >= 4) & ~forced & holder[rows, sides, target]
+        other = forced | p.side_uses('batonpass') | p.side_uses('roar', 'whirlwind')[:, ::-1]
+        return voluntary | (other & holder.any(-1))
     return predicate
 
 
 def meanlook_arrival(p):
     """PR0 Mean Look arrival clear (B2, Baton quirk included): any arrival clears both seats'
     public flag. Involved on both sides when a side may install this step and a flag may be set:
-    one in the tracker pre-state (it can outlive the engine link), an engine trap link, or a
-    trapping move this step."""
+    one on an active's entry in the tracker pre-state (it can outlive the engine link), an
+    engine trap link, or a trapping move this step."""
     held = np.zeros((p.lanes, 2), bool)
-    if MEANLOOK[len('trackers.'):] in p.t:held |= (p.t[MEANLOOK[len('trackers.'):]] > 0).any(-1)
+    flag, slot = p.t.get(MEANLOOK[len('trackers.'):]), p.t.get('active_slot')
+    if flag is not None and slot is not None:
+        # An arrival clears the actives' entries only (the incoming one is zeroed in both trees).
+        rows = np.arange(p.lanes)[:, None];sides = np.arange(2)[None, :]
+        held |= (slot >= 0) & (flag[rows, sides, np.clip(slot, 0, 5)] > 0)
     if 'trap_source' in p.s:held |= (p.s['trap_source'] >= 0).any(-1)
     held |= p.side_uses(*TRAP_MOVES)
     lane = installs(p).any(-1) & held.any(-1)
@@ -648,26 +662,31 @@ def capture_record(args):
 # Passes.
 
 def base_pass(args, *, step_override=None, prepared=None):
-    """step_override/prepared ((context, template)) let tests drive the pass without a V2 runtime."""
+    """step_override/prepared ((context, template)) let tests drive the pass without a V2 runtime.
+
+    Inputs are migrated by leaf path exactly as in the patched pass, so a tree with leaves the
+    capture predates (e.g. trackers.public_order) still runs on it; the filled leaves are
+    recorded in the manifest (migrated_new_inputs)."""
     import jax
-    from gpu_engine.v2e_capture import leaf_paths
     from gpu_engine.v2e_diff import oracle_digest
     rev, dirty = git_source()
     if dirty and not args.allow_dirty:raise SystemExit('the source tree is dirty; commit it or pass --allow-dirty')
     out = Path(args.out);out.mkdir(parents=True, exist_ok=False)
     capture, capture_sha = capture_record(args)
     context, template = prepared or context_and_template(args)
-    if capture['paths'] != leaf_paths(template):raise ValueError('capture leaf paths differ from this tree (base must equal the capture)')
     treedef = jax.tree.structure(template)
+    template_named = {n: np.asarray(leaf) for n, leaf in zip(_template_names(template), jax.tree.leaves(template))}
+    capture_names = [capture_name(p) for p in capture['paths']];names_order = _template_names(template)
+    defaults = state_defaults(template_named);filled = None
     tables = context['prepared']
     stepper = Stepper(step_override or _engine_step(tables), treedef)
     shards = shard_list(args, capture);pad = args.pad_lanes or 0
     names = side_axis = None;lane_steps = 0;live = 0;begin = time.perf_counter()
     for index, (path, (leaves, tick, level)) in enumerate(prefetched(shards)):
         lanes = int(leaves[0].shape[0])
-        named = dict(zip([capture_name(p) for p in capture['paths']], leaves))
+        named, filled = migrate(capture_names, leaves, template_named, defaults=defaults)
         named, real = pad_lanes(named, pad)
-        result = stepper([named[capture_name(p)] for p in capture['paths']])
+        result = stepper([named[n] for n in names_order])
         names, side_axis = result['names'], result['side_axis']
         done = np.asarray(named['state.done'])[:real]
         fainted = result['fainted'][:real]
@@ -683,7 +702,7 @@ def base_pass(args, *, step_override=None, prepared=None):
     manifest = dict(schema=SCHEMA, digest_format=DIGEST_FORMAT, pass_='base', source_commit=rev, source_dirty=dirty,
         oracle_digest=digest, oracle_modules=len(modules), capture_sha256=capture_sha, capture_commit=capture.get('source_commit'),
         shards=[p.name for p in shards], partial=bool(args.limit), lane_steps=lane_steps, live_lane_steps=live,
-        output_names=names, side_axis=side_axis, input_names=[capture_name(p) for p in capture['paths']],
+        output_names=names, side_axis=side_axis, input_names=names_order, migrated_new_inputs=sorted(filled or ()),
         faint_leaves=sorted(n for n in FAINT_CLEAR_LEAVES if n in names), ko_leaves=sorted(n for n in KO_MON_LEAVES if n in names),
         pad_lanes=pad, digest_seeds=list(DIGEST_SEEDS),
         jax=jax.__version__, backend=jax.default_backend(), seconds=time.perf_counter() - begin)
@@ -753,8 +772,10 @@ def patched_pass(args, *, step_override=None, prepared=None):
     undeclared = sorted(e for e in table if e not in ALLOWED)
     if undeclared:warnings.append(f'effects of other plug-ins without declared allowed fields (any change accepted): {undeclared}')
     tables = context['prepared'];metadata = context['pool'].metadata();vocab = metadata['vocabulary']
-    public_order_rule = PUBLIC_ORDER in new_inputs
     base_names = manifest['output_names']
+    # The replay rule is for the PR that adds public_order (its base pass lacks the leaf); once
+    # the base pass has it too (a migrated identity pre), the leaf is compared bitwise.
+    public_order_rule = PUBLIC_ORDER in new_inputs and PUBLIC_ORDER not in base_names
     stepper = Stepper(step_override or _engine_step(tables), treedef, base_names=set(base_names), record_installs=public_order_rule)
     shards = [p for p in shard_list(args, capture) if p.name in set(manifest['shards'])]
     if args.limit == 0 and len(shards) != len(manifest['shards']):raise ValueError('shard set differs from the base pass')
