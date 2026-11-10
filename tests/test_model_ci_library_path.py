@@ -48,8 +48,10 @@ class ModelRuntimePathTests(unittest.TestCase):
             def run(expression):
                 return subprocess.run(['bash', '-eu', '-c', expression + ' ' + shlex.quote(str(binary))],
                                       env=env, text=True, capture_output=True)
-            # Prove the fixture actually detects the historical failure.
-            old = run(assignment.replace('${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}', ''))
+            # Prove the fixture actually detects the historical failure (the step without its inherited-path suffix).
+            suffix = '${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}'
+            self.assertIn(suffix, assignment, 'the step must append the inherited LD_LIBRARY_PATH')
+            old = run(assignment.replace(suffix, ''))
             self.assertEqual(old.returncode, 127, old.stderr)
             self.assertIn('libci_python_probe.so', old.stderr)
             fixed = run(assignment)
