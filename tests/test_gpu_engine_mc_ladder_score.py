@@ -54,16 +54,19 @@ class LadderScoreTests(unittest.TestCase):
         s = L.score(self.bank, rung, L.r0_choices(self.bank), 'foulplay')
         self.assertEqual(s['skipped'], {'choice_not_legal': 1, 'not_decided': 1});self.assertEqual(s['scored'], 1)
         self.assertEqual((s['minus_r0']['mean'], s['guard_trips'], s['greedy_ne_policy']), (-.5, 1, 0))
-        self.assertEqual(s['minus_policy_intent_to_treat']['roots'], 2)   # the decided root plus the undecided one at D = 0
+        self.assertEqual(s['minus_policy_intent_to_treat']['roots'], 3)   # the decided root, plus the illegal and undecided ones at D = 0
         with self.assertRaises(ValueError):L.load_rung(self.rung([dict(kind='foulplay', ordinal=1, target=4, action=0)] * 2))
         with self.assertRaises(ValueError):L.load_rung(self.rung([dict(kind='foulplay', ordinal=1, target=4, action=0, guard_tripped=True)]))
 
     def test_echoed_identity_must_match_the_bank(self):
-        rows = [dict(kind='foulplay', ordinal=1, target=4, action=3, actions=[0, 3, 6], seed=5),
+        rows = [dict(kind='foulplay', ordinal=1, target=4, action=3, actions=[6, 0, 3], seed=5),   # the echo is order-free
                 dict(kind='foulplay', ordinal=2, target=7, action=1, actions=[0, 2]),
                 dict(kind='foulplay', ordinal=3, target=2, action=4, seed=9)]
         s = L.score(self.bank, L.load_rung(self.rung(rows)), {}, 'foulplay')
         self.assertEqual((s['scored'], s['skipped']), (1, {'identity_mismatch': 2}))
+        self.assertEqual(s['minus_policy_intent_to_treat']['roots'], 3)
+        off = L.load_rung(self.rung([dict(kind='foulplay', ordinal=1, target=4, guard_tripped=True, greedy_action=0)]), 'off')
+        self.assertEqual(L.score(self.bank, off, {}, 'foulplay')['guard_trips'], 1)   # counted when the row has no action too
 
     def test_a_bank_kind_must_not_mix_continuations(self):
         d = Path(self.dir.name)

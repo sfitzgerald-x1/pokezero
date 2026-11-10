@@ -4,9 +4,10 @@ truth (mc_root_labeller rows, K rollouts per legal action), against the policy's
 A rung is a JSONL of choices, one per root it decided:
   {"kind": "foulplay", "ordinal": 812, "target": 7, "action": 3}            Foul Play roots: the collection game and our decision
   {"kind": "self", "seed": 900123456, "ours": "p1", "target": 12, "action": 0}  self roots: the battle seed, our seat, our decision
-optionally "guard_tripped" (bool) and "greedy_action" (int): with --guards on, a root whose guard tripped plays greedy_action (the
-live fallback); with --guards policy it plays the bank's policy argmax (D = 0 exactly: the fallback without a policy-computation
-mismatch); with --guards off the rung's own action is scored. `action` is the engine's action index (0-8), as the bank's
+optionally "guard_tripped" (bool) and "greedy_action" (int):
+- --guards on: a root whose guard tripped plays greedy_action (the live fallback);
+- --guards policy: it plays the bank's policy argmax (D = 0 exactly: the fallback without a policy-computation mismatch);
+- --guards off: the rung's own action is scored. `action` is the engine's action index (0-8), as the bank's
 `actions` list spells them. A rung row may echo the root's legal "actions" (and "seed" for a Foul Play root); a row whose echo
 differs from the bank's is not scored (identity_mismatch): the key matched but the state did not. R0, the bank's own real-Showdown depth-1 value-head choice, is built in (rung name "R0"): the
 argmax of each row's baseline completed_q.
@@ -17,7 +18,8 @@ resampling battle seeds (mc_root_report.cluster_ci). Q is the action's Monte Car
 a root whose chosen or compared action has every rollout censored is skipped and counted, as is a choice outside the root's
 legal actions. Also per rung: guard trips and how often the fallback's greedy_action differs from the bank's policy argmax, rung
 rows with no bank root (unmatched), the share of capped rollouts on the chosen and the policy action, the intent-to-treat D
-(undecided roots scored as the greedy fallback, D = 0, over every bank root), and minus_r0's own skips (no R0 at the root).
+(undecided, illegal and identity-mismatched roots scored as the greedy fallback, D = 0; only roots whose policy action is fully
+censored are left out), and minus_r0's own skips (no R0 at the root).
 Unbiasedness assumes a rung's producer never reads the bank's outcomes and never reuses its rollout seed streams.
 
 usage: python -m gpu_engine.mc_ladder_score BANK_DIR --rung NAME=PATH [--rung NAME=PATH ...] [--guards on|policy|off] [--out REPORT.json]
@@ -117,15 +119,17 @@ def score(bank, records, r0, kind):
         record = records.get(key)
         if record is None or record['action'] is None:
             skipped['not_decided'] += 1
+            if record is not None:trips += record['tripped']
             if not np.isnan(q[p]):itt.append(0.);ittcl.append(seed)   # the live fallback: greedy, D = 0
             continue
-        if (record['actions'] is not None and [int(a) for a in record['actions']] != row['actions']) or \
-                (record['seed'] is not None and int(record['seed']) != int(seed)):
-            skipped['identity_mismatch'] += 1;continue
-        trips += record['tripped']
+        trips += record['tripped']   # every matched rung row, whatever the guard mode
         if record['tripped'] and record['greedy'] is not None:greedy_ne_policy += int(record['greedy']) != p
+        fallback = lambda: (itt.append(0.), ittcl.append(seed)) if not np.isnan(q[p]) else None   # scored as the greedy fallback
+        if (record['actions'] is not None and sorted(int(a) for a in record['actions']) != sorted(row['actions'])) or \
+                (record['seed'] is not None and int(record['seed']) != int(seed)):
+            skipped['identity_mismatch'] += 1;fallback();continue
         a = p if record['action'] == 'policy' else record['action']
-        if a not in q:skipped['choice_not_legal'] += 1;continue
+        if a not in q:skipped['choice_not_legal'] += 1;fallback();continue
         if np.isnan(q[a]) or np.isnan(q[p]):skipped['censored_choice'] += 1;continue
         scored += 1;x = q[a] - q[p];d.append(x);cl.append(seed);itt.append(x);ittcl.append(seed)
         cap_c.append(capped_share(row, a));cap_p.append(capped_share(row, p))
