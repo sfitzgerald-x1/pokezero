@@ -965,10 +965,11 @@ jobs:
       - name: Model-feature abort seam
         run: |
           set -o pipefail
+          python -m unittest tests.test_model_ci_library_path -v
           python -m pip install --quiet torch==2.13.0 \
             --index-url https://download.pytorch.org/whl/cpu
           LIBTORCH_USE_PYTORCH=1 \
-            LD_LIBRARY_PATH="$(python -c 'import torch,pathlib;print(pathlib.Path(torch.__file__).parent/"lib")')" \
+            LD_LIBRARY_PATH="$(python -c 'import torch,pathlib;print(pathlib.Path(torch.__file__).parent/"lib")')${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}" \
             RUSTFLAGS="-C debug-assertions=yes" \
             cargo test --release --features model --lib \
               tree::model_abort_seam_tests::the_gated_abort_seam_rejects_an_attribution_unsafe_branch_with_its_predicate \
