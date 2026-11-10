@@ -203,6 +203,11 @@ def parser():
     p.add_argument('--seed',type=int,default=20261103,help='constructor world seed (Codex\'s default)')
     p.add_argument('--recipe-seed',type=int,default=20261103,help='the pricer\'s lane-order recipe seed')
     p.add_argument('--saved-root-admission',action='store_true',help='Codex\'s stateless mode: every prefix folded from scratch, no sessions')
+    p.add_argument('--redact-private-reveals',action='store_true',help='clear the owner\'s abilities revealed only on Showdown\'s side-private '
+        'Gen 3 Pressure line from the peer\'s view of the owner side (constructor_worlds.redact_private_reveals; off by default)')
+    p.add_argument('--peer-view-b',action='store_true',help='view b in the peer\'s view (constructor_worlds\' Peer view b; off by default): it '
+        'implies --redact-private-reveals and projects the root\'s two peer damage cells to Showdown\'s public percent; the run header '
+        'records peer_view_b (and redact_private_reveals true), each built response its peer_view_b record')
     p.add_argument('--block-lanes',type=int,default=2187);p.add_argument('--blocks-per-call',type=int,default=16)
     p.add_argument('--warmup-requests',required=True,help='JSONL of saved Showdown requests, one object per line with the eight address keys of '
         'Codex\'s ladder request (battle_id, owner, stream_id, decision_index, generation, prefix_sha256, lines, own_request_line)')
@@ -299,14 +304,18 @@ def build(args):
         reply=ReplyPrior(executor,model,mode=args.reply_views)
     return live.DepthNLiveSearch(constructor=constructor,pricers=pricers,params=params,binding=cw.binding(source,metadata,catalog),
         recipe=v5_gumbel.Recipe(args.recipe_seed),tree_commit=args.tree_commit or tree_commit(),min_price_seconds=args.min_price_seconds,
-        max_requests=args.max_requests,session_cap=args.session_cap,refuse_classes=args.refuse_classes,reply=reply)
+        max_requests=args.max_requests,session_cap=args.session_cap,refuse_classes=args.refuse_classes,
+        redact_private_reveals=bool(getattr(args,'redact_private_reveals',False)),reply=reply,
+        **({'peer_view_b':True}if getattr(args,'peer_view_b',False)else{}))
 
 
 def header(args,search):
     """The run's identity for READY and the telemetry: code, champion, pricer, constructor and server settings."""
     import jax
     return dict(tree_commit=search.tree_commit,rung=search.rung,max_requests=search.max_requests,min_price_seconds=search.min_price_seconds,
-        session_cap=search.session_cap,refuse_classes=list(search.refuse_classes),batch_wait_seconds=args.batch_wait_seconds,queue_limit=args.queue_limit,constructor_seed=args.seed,
+        session_cap=search.session_cap,refuse_classes=list(search.refuse_classes),
+        redact_private_reveals=bool(getattr(search,'redact_private_reveals',False)),**({'peer_view_b':True}if getattr(search,'peer_view_b',False)is True else{}),
+        batch_wait_seconds=args.batch_wait_seconds,queue_limit=args.queue_limit,constructor_seed=args.seed,
         recipe_seed=args.recipe_seed,saved_root_admission=args.saved_root_admission,metadata_sha256=args.expected_metadata_sha256,
         vocabulary_sha256=args.expected_vocabulary_sha256,champion_archive_sha256=args.champion_archive_sha256,
         champion_checkpoint_sha256=args.champion_checkpoint_sha256,champion_precision=args.champion_precision,pricer=search.pricer_identity,

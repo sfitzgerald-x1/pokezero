@@ -24,7 +24,7 @@ U=2.**-53
 KEYS={'schema','request_id','rung','archive_sha256','status','action_index','q_values','refusal','cause','requested_worlds','constructed_worlds',
     'decision_seconds','root_operator','policy_target','root_value','action_policy_target','block_causes','world_refusals','timings','batch_size',
     'bucket','tree_commit','pricer','root_operator_impl','completed_q','action_mean_q','mean_q_agrees','reduction_note','root_classes','root_class',
-    'root_class_source','root_class_crosscheck','root_view_source','b2_view','effect_guard'}
+    'root_class_source','root_class_crosscheck','root_view_source','b2_view','effect_guard','private_reveals'}
 TREE='0123456789abcdef'*2+'01234567'
 
 
@@ -372,6 +372,47 @@ class LiveSearchTests(unittest.TestCase):
         self.assertEqual((rows[1]['status'],rows[1]['effect_guard']),('REFUSED',None))
         self.assertEqual((clear[0]['status'],clear[0]['effect_guard']['tripped'],clear[0]['effect_guard']['reasons']),('COMPLETE',False,[]))
         self.assertEqual((clear[0]['effect_guard']['m_own'],clear[0]['effect_guard']['m_opp'],clear[0]['effect_guard']['arms']),(0.,0.,[]))
+
+    def test_the_private_reveal_flag_reaches_prepare_roots_and_every_built_response_records_it(self):
+        """redact_private_reveals (off by default) goes to every prepare_roots call; each response whose root prepare() built
+        carries constructor_worlds' private_reveal_record (the fake prefix reveals nothing privately); a refused root has none."""
+        outcomes={('g',0):self.outcome(0),('r',0):Refusal('SEARCH_PREFIX_OR_REQUEST_MISMATCH')}
+        for flag in(False,True):
+            with self.subTest(flag=flag):
+                calls=[];real=cw.prepare_roots
+                def spy(*a,**kw):calls.append(kw.get('redact_private_reveals',False));return real(*a,**kw)
+                search=self.search(**({'redact_private_reveals':True}if flag else{}))
+                self.assertIs(search.redact_private_reveals,flag)
+                with patch.object(cw,'prepare_roots',side_effect=spy):rows,_=self.run_batch(search,[request('g',0),request('r',0)],outcomes)
+                self.assertEqual((calls,rows[0]['status']),([flag],'COMPLETE'))
+                self.assertEqual(rows[0]['private_reveals'],dict(enabled=flag,found=[],applicable=[],redacted=[],unmatched=[]))
+                self.assertEqual((rows[1]['status'],rows[1]['private_reveals']),('REFUSED',None));encode(rows[0])
+        with self.assertRaisesRegex(ValueError,'redact_private_reveals'):self.search(redact_private_reveals=1)
+
+    def test_the_peer_view_b_flag_reaches_prepare_roots_and_only_its_responses_record_it(self):
+        """peer_view_b (off by default) goes to every prepare_roots call with the redaction it implies (redact_private_reveals reads
+        True); each response of such a search carries peer_view_b (the root's peer_view_b_record; None for a refused root) and
+        private_reveals reads enabled. A search without the flag sends neither keyword and its responses have no peer_view_b key
+        (KEYS as before the flag). The fake engine's carry is not the tracker carry, so the record is stood in for."""
+        outcomes={('g',0):self.outcome(0),('r',0):Refusal('SEARCH_PREFIX_OR_REQUEST_MISMATCH')}
+        record=dict(enabled=True,cells=[],projected=0,changed=0,exact_agrees=True)
+        for flag in(False,True):
+            with self.subTest(flag=flag):
+                calls=[];real=cw.prepare_roots
+                def spy(*a,**kw):calls.append({k:kw[k]for k in('redact_private_reveals','peer_view_b')if k in kw});return real(*a,**kw)
+                search=self.search(**({'peer_view_b':True}if flag else{}))
+                self.assertEqual((search.peer_view_b,search.redact_private_reveals),(flag,flag))
+                with patch.object(cw,'prepare_roots',side_effect=spy),patch.object(cw,'peer_view_b_record',return_value=record):
+                    rows,_=self.run_batch(search,[request('g',0),request('r',0)],outcomes)
+                self.assertEqual((calls,rows[0]['status']),([dict(redact_private_reveals=True,peer_view_b=True)if flag else{}],'COMPLETE'))
+                self.assertEqual(set(rows[0]),KEYS|({'peer_view_b'}if flag else set()));self.assertEqual(set(rows[1]),set(rows[0]))
+                self.assertEqual(rows[0]['private_reveals']['enabled'],flag)
+                if flag:self.assertEqual((rows[0]['peer_view_b'],rows[1]['peer_view_b']),(record,None))
+                encode(rows[0]);encode(rows[1])
+        with self.assertRaisesRegex(ValueError,'peer_view_b'):self.search(peer_view_b=1)
+        with patch.object(cw,'prepare_roots',side_effect=AssertionError('unreachable')):   # a malformed request: the template only
+            self.assertNotIn('peer_view_b',self.search().process_many([dict(request('g',0),schema='other')])[0])
+            self.assertIsNone(self.search(peer_view_b=True).process_many([dict(request('g',0),schema='other')])[0]['peer_view_b'])
 
     def test_a_root_whose_opponent_must_recharge_is_constructor_refused(self):
         """The lead's decision: the peer's -mustrecharge on the owner's lines refuses the root in prepare_roots (cause

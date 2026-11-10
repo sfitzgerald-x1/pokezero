@@ -543,6 +543,61 @@ class ConstructorWorldsTests(unittest.TestCase):
             _,same,_=self.prepared({'r':roots['r']},W)
         self.assertIs(same[0].made,roots['r'][1])
 
+    def test_an_unreadable_private_reveal_record_never_touches_a_root_with_the_flag_off(self):
+        """The fake engine's root carry is not the tracker carry, so a privately revealed ability cannot be read from it: with the
+        redaction off the root is prepared as ever (the record names the error); with it on the root is refused
+        PRIVATE_REVEALS_UNAVAILABLE; lines without a private reveal never read the carry or the tables."""
+        W=2;made=self.made(0,0,self.modes(0,W))
+        private=['|switch|p1a: Zapdos|Zapdos, L80|100/100','|-ability|p1a: Zapdos|Pressure|[silent]','|switch|p2a: Snorlax|Snorlax, L80|100/100','|turn|1']
+        constructor=self.constructor(W);seen=[]
+        complete=lambda world,owner,facts=None,root=None,**kw:seen.append(kw)or world
+        with patch.object(ProtocolConstructor,'prepare',side_effect=lambda r,i:made),patch.object(cw,'world_completer',return_value=complete):
+            off=cw.prepare_roots(constructor,[dict(request_id='p',lines=private),dict(request_id='q',lines=private[2:])])
+            on=cw.prepare_roots(constructor,[dict(request_id='p',lines=private),dict(request_id='q',lines=private[2:])],redact_private_reveals=True)
+        self.assertEqual([type(x)for x in off],[cw.Prepared,cw.Prepared])
+        record=off[0].private_reveals
+        self.assertEqual({k:record[k]for k in('enabled','found','applicable','redacted','unmatched')},
+            dict(enabled=False,found=[dict(species='zapdos',ability='pressure')],applicable=None,redacted=[],unmatched=None))
+        self.assertTrue(record['error'])
+        self.assertEqual(off[1].private_reveals,dict(enabled=False,found=[],applicable=[],redacted=[],unmatched=[]))
+        self.assertEqual((type(on[0]),on[0].kind),(cw.RootRefusal,cw.PRIVATE_REVEALS_UNAVAILABLE))
+        self.assertEqual((type(on[1]),on[1].private_reveals['enabled']),(cw.Prepared,True))
+        self.assertIn(dict(redact_private_reveals=True),seen)   # the flag reaches the completion of the root it can read
+
+    def test_view_b_reads_the_damage_facts_records_the_root_and_build_applies_it(self):
+        """peer_view_b (off by default): with it off nothing of view b is read or recorded (the lines' facts have no peer_damage,
+        Prepared.peer_view_b is None, the completion gets no view-b keyword, build's roots have no peer_view_b key); with it on the
+        facts carry peer_damage, the Prepared its peer_view_b_record of the root's own carry, the private-reveal redaction is implied
+        (its record reads enabled, the completion gets both keywords) and build re-applies the same completion and records it. A root
+        whose record cannot be read (a carry of another layout; a request without lines) is refused PEER_VIEW_B_UNAVAILABLE, never
+        priced without view b."""
+        W=2;made=self.made(0,0,self.modes(0,W));lines=['|switch|p2a: Snorlax|Snorlax, L80|100/100','|move|p2a: Snorlax|Tackle|p1a: Snorlax',
+            '|-damage|p1a: Snorlax|250/300','|turn|1']
+        constructor=self.constructor(W);seen=[]
+        complete=lambda world,owner,facts=None,root=None,**kw:seen.append(kw)or world
+        with patch.object(ProtocolConstructor,'prepare',side_effect=lambda r,i:made),patch.object(cw,'world_completer',return_value=complete):
+            off=cw.prepare_roots(constructor,[dict(request_id='p',lines=lines)])
+            with patch.object(cw,'peer_view_b_record',side_effect=cw.CarryLayoutError('mon_features: another layout')):
+                refused=cw.prepare_roots(constructor,[dict(request_id='p',lines=lines),dict(request_id='q')],peer_view_b=True)
+            on=cw.prepare_roots(constructor,[dict(request_id='p',lines=lines)],peer_view_b=True)
+            for bad in(1,None):
+                with self.assertRaisesRegex(ValueError,'peer_view_b'):cw.prepare_roots(constructor,[],peer_view_b=bad)
+        self.assertEqual((type(off[0]),off[0].peer_view_b,off[0].facts.peer_damage,off[0].private_reveals['enabled']),(cw.Prepared,None,None,False))
+        self.assertEqual(seen[0],{})   # the off completion: no keyword at all, as before the flag
+        self.assertEqual([(type(x),getattr(x,'kind',None))for x in refused],[(cw.RootRefusal,cw.PEER_VIEW_B_UNAVAILABLE)]*2)
+        self.assertTrue(refused[0].detail.startswith('CarryLayoutError'));self.assertIn('without lines',refused[1].detail)
+        item=on[0];self.assertIs(type(item),cw.Prepared)
+        self.assertEqual(item.facts.peer_damage,cw.peer_damage_facts(lines,0))
+        self.assertEqual(item.peer_view_b,cw.peer_view_b_record(made[0].public,0,item.facts))   # read from the root's own carry
+        self.assertIs(item.peer_view_b['enabled'],True)
+        self.assertIs(item.private_reveals['enabled'],True)   # view b implies the redaction
+        self.assertEqual(seen[-1],dict(redact_private_reveals=True,peer_view_b=True))
+        pricer=self.pricer(carry_executor(),depth=2,k_own=(2,),k_opp=(2,),capacity=2);seen.clear()
+        with patch.object(cw,'world_completer',return_value=complete),self.forward_patch():   # build applies each Prepared's own completion
+            b=cw.build(constructor,[item,off[0]],pricer,PARAMS,binding=self.binding,recipe=self.recipe)
+        self.assertEqual(seen,[dict(redact_private_reveals=True,peer_view_b=True)]*W+[{}]*W)
+        self.assertEqual((b.roots[0]['peer_view_b'],'peer_view_b'in b.roots[1]),(item.peer_view_b,False))
+
     def test_prepare_roots_reads_the_requests_lines_and_an_unjoinable_peer_order_refuses_the_root(self):
         W=2;roots={'ok':self.made(0,0,self.modes(0,W)),'odd':self.made(1,0,self.modes(1,W))}
         lines={'ok':['|switch|p2a: Snorlax|Snorlax, L80|100/100','|turn|1'],'odd':['|switch|p2a: Nobody|Nobody, L80|100/100']}

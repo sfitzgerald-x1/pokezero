@@ -3,6 +3,8 @@
 
 usage: depthn_opponent_view_parity.py capture <the live server's flags> --collection RUN --fp-reply-data FPR --out DIR
            (--cells ORD... | --sample N --sample-seed S) [--shard I --shards N] [--max-positions N] [--sampled-worlds 2]
+       depthn_opponent_view_parity.py capture <the live server's flags> --reference fp-wire-b --collection PANEL_RUN --out DIR
+           (--cells ORD... | --sample N --sample-seed S) [--shard I --shards N] [--max-positions N] [--sampled-worlds 2]
        depthn_opponent_view_parity.py report --capture DIR [DIR ...] --out DIR [--top 30] [--examples 3] [--tolerance 1e-5]
            [--vocabulary vocabulary.json] [--redact NAME ...]
 
@@ -73,6 +75,28 @@ Capture (one GPU; the live server's build, as scripts/depthn_rr_reprice.py repla
   and summary-<shard>.json (counts, non-aligned reasons, cell errors; written on interruption too); a progress line per
   position on stdout. Exit 0 when a position was captured, 2 when none was.
 
+Reference fp-wire-b (--reference fp-wire-b; the default --reference env is everything above): the views are held to view b of
+Foul Play's OWN wire, what π_FP-red3-full reads (the lead's pifp-red3-full-20261109: view b after peer-view-v2), instead of
+fp_reply_data's env rows; --fp-reply-data is not used.
+- Cells: the run directory's COMPLETE cells of any arm (a live panel run: results/<ordinal>.json with Foul Play's journal,
+  source_game.opponent_moves, telemetry/ and owning-wire/), the screen band included.
+- Foul Play's wire: the same env replay (Showdown, seeded from the game, our recorded actions and Foul Play's journal), on a
+  LocalShowdownEnv that also keeps each player's own channel (make_channel_environment): the bridge's p1 / p2 stream lines, which
+  Showdown's getPlayerStreams fills from sim/battle.ts extractChannelMessages, so a |split| reaches Foul Play as Showdown sends it
+  (its own HP exact, ours N/100, our [silent] Pressure start never). Per position, its channel up to the round's request,
+  without |request| lines, and its literal request.
+- Reference (ReferenceViews): pokezero.policy_opponent_view.build_policy_opponent_view on those lines and that request (Foul
+  Play's own HP projected to the public percent by the builder, as fp_reply_data.builder_views did), the owning config's spec,
+  masks and vocabulary, the pinned Showdown's random-battle set source and dex; then peer_view_v2 (fp_reply_train.redact_peer_view
+  'peer-view-v2', with Foul Play's own OPP_HAZARD_CREDIT from its lines). The env's own observation of Foul Play in the same round,
+  after peer_view_v2 with the same credit, is kept beside it (obs_*): a check of the reference.
+- Kinds: true_b, true_private_b (view b ON: constructor_worlds.complete_carry with line_facts(..., peer_damage=True),
+  redact_private_reveals and peer_view_b, as prepare_roots(peer_view_b=True) completes the live worlds), true, true_private (view b
+  OFF: the control), sampled_<i>_b. The views are compared as served (the reply prior serves the raw peer inputs); each position's
+  view_b record holds the root's peer_view_b and private_reveals records.
+- Positions: aligned as above (request_count - 1); a position whose reference cannot be built is counted
+  not_aligned reference_error (summary reference_errors). Each shard also writes its report into DIR/report/.
+
 Report (CPU, numpy only; pokezero for column names when importable). Per world kind, over its constructed positions: the
 exact-match share per key (numeric, categorical, token types, attention, legal) and overall; whether the self (1-6) and
 opponent (7-12) tokens match up to order; per token, per numeric column and per categorical column the share of positions
@@ -90,7 +114,13 @@ within --tolerance; categorical ids, token types, attention and the legal mask e
 positions' cell patterns ranked (the set of failing cells per position, and each cell's count). Names: tokens field / self0-5 / opp0-5 / move0-3 / switch0-4 / tendency_stats (engine_device_observation.TOKEN_TYPES),
 numeric columns through showdown.V4_NUMERIC_LEGACY_INDEX_BY_NEW_INDEX and the NUMERIC_* writer names (as
 engine_device_observation.column_manifest names them), categorical columns through the CATEGORY_* layout. Written as
-summary.json and summary.md in --out.
+summary.json and summary.md in --out. For an fp-wire-b capture (its headers' reference), no redaction by default (the reference
+already is view b after peer-view-v2), and also: column_groups (per kind, the share of positions whose cells agree per column group:
+damage 38 / 39, REVEALED_ABILITY 48, the ability-dependent belief columns, HP 0, hazard credits 115 / 116, every other numeric column by
+token group, categorical ability / other, token types, attention, legal), control (each _b kind against its flag-off kind: view b's
+own effect, with any changed cell outside its columns listed as unexpected), residuals (each _b kind's failing cells, caused
+'present without view b' when the flag-off control fails the same cell on the same position, 'introduced by view b' otherwise; and
+the cells view b closed) and reference_vs_env (the env observation against the reference: the known differences only).
 """
 import argparse
 import collections
@@ -122,6 +152,7 @@ SAMPLE_PARAMETERS = ('root', 'detached', 'lines', 'catalog', 'source', 'metadata
 ARRAY_KEYS = ('env_numeric', 'env_categorical', 'env_token_type', 'env_attention', 'env_legal', 'view_numeric', 'view_categorical',
     'view_token_type', 'view_attention', 'view_legal', 'view_valid', 'view_error', 'ordinal', 'round', 'decision_index', 'turn')
 OPTIONAL_ARRAY_KEYS = ('env_opp_hazard_credit',)   # [n]; captures before it read NaN (no recomputation)
+OBSERVED_ARRAY_KEYS = ('obs_numeric', 'obs_categorical')   # fp-wire-b: env.observe(Foul Play) after peer-view-v2 [n, 23, 132] / [n, 23, 41]
 FPR_ARRAYS = ('numeric_features', 'categorical_ids', 'token_type_ids', 'attention_mask', 'legal')
 FPR_SCALARS = ('round', 'turn', 'forced', 'label', 'seed', 'seat')
 
@@ -233,9 +264,10 @@ def vocabulary_decoder(path):
 
 
 # Collection, cells and reply rows -------------------------------------------------------------------------------------------------
-def load_game(run, cell):
+def load_game(run, cell, reference='env'):
     """What the env replay needs of one collected game (fp_reply_data.load_game, fp_reply_data.py:69-98, re-derived): Foul Play's
-    and our seats, the battle seed, Foul Play's journal by round, our played actions by decision_index. CellError otherwise."""
+    and our seats, the battle seed, Foul Play's journal by round, our played actions by decision_index. CellError otherwise. The
+    screen band is the env reference's exclusion only (fp_reply_data has no rows there); fp-wire-b replays the live games in it."""
     run = Path(run);ordinal = cell['ordinal']
     result = read_json(run / 'results' / f'{ordinal}.json')
     if result.get('status') != 'COMPLETE':raise CellError('not_complete')
@@ -244,7 +276,7 @@ def load_game(run, cell):
     fp = (result.get('benchmark') or {}).get('foulplay_player');ours = {'p1': 'p2', 'p2': 'p1'}.get(fp)
     if ours is None:raise CellError('unknown_seats', fp)
     seed = int(game['seed'])
-    if in_screen_band(seed) or in_screen_band(cell.get('seed')):raise CellError('screen_band', seed)
+    if reference == 'env' and (in_screen_band(seed) or in_screen_band(cell.get('seed'))):raise CellError('screen_band', seed)
     if cell.get('seed') is not None and int(cell['seed']) != seed:raise CellError('seed_differs', f'cell {cell["seed"]} game {seed}')
     by_round = {}
     for entry in journal:
@@ -294,8 +326,13 @@ class FpReplyRows:
         return out
 
 
-def cell_problem(cell, run, fp_ordinals):
-    """Why a collection cell cannot be replayed here (None when it can)."""
+def cell_problem(cell, run, fp_ordinals, reference='env'):
+    """Why a collection cell cannot be replayed here (None when it can). The env reference: a COMPLETE RAW cell outside the screen
+    band with an owner capture and reply rows. fp-wire-b (the panel's live games, any arm, the screen band included): a COMPLETE
+    cell with an owner capture (Foul Play's journal is checked when the game loads)."""
+    if reference == 'fp-wire-b':
+        if cell['status'] != 'COMPLETE':return 'not_complete'
+        return None if (Path(run) / 'owning-wire' / f'{cell["ordinal"]}.jsonl').exists() else 'no_owner_capture'
     if cell['arm'] != 'RAW':return 'not_raw'
     if cell['status'] != 'COMPLETE':return 'not_complete'
     if in_screen_band(cell['seed']):return 'screen_band'
@@ -307,14 +344,14 @@ def cell_problem(cell, run, fp_ordinals):
 def select_cells(args, fp_ordinals):
     """--cells (each must be replayable) or --sample N --sample-seed S over the replayable cells (depthn_rr_reprice.sample_cells),
     then this shard's (depthn_rr_reprice.shard_cells)."""
-    rr = _rr();run = Path(args.collection)
+    rr = _rr();run = Path(args.collection);reference = getattr(args, 'reference', 'env')
     if args.cells:
         cells = [rr.cell_of(run, o) for o in dict.fromkeys(args.cells)]
-        bad = [(c['ordinal'], why) for c in cells if (why := cell_problem(c, run, fp_ordinals))]
+        bad = [(c['ordinal'], why) for c in cells if (why := cell_problem(c, run, fp_ordinals, reference))]
         if bad:raise ValueError(f'cells not replayable: {bad}')
     else:
         ordinals = sorted(int(p.stem) for p in (run / 'results').glob('*.json') if p.stem.isdigit())
-        pool = [c for c in (rr.cell_of(run, o) for o in ordinals) if cell_problem(c, run, fp_ordinals) is None]
+        pool = [c for c in (rr.cell_of(run, o) for o in ordinals) if cell_problem(c, run, fp_ordinals, reference) is None]
         cells = rr.sample_cells(pool, args.sample, args.sample_seed)
     return rr.shard_cells(cells, args.shard, args.shards)
 
@@ -343,7 +380,8 @@ def replay_rounds(env, game, our_requests):
     while env.terminal() is None:
         requested = tuple(env.requested_players())
         if not requested:raise Mismatch('no requested players before terminal')
-        entry = dict(turn=int(env._latest_turn), requested=list(requested), our_decision=None, fp_request=None, fp_observation=None, fp_action=None)
+        entry = dict(turn=int(env._latest_turn), requested=list(requested), our_decision=None, fp_request=None, fp_observation=None, fp_action=None,
+            fp_lines=None)
         actions = {}
         for player in requested:
             observation = env.observe(player)   # every requested player, in order, as fp_reply_data observes them (env state stays its)
@@ -357,7 +395,8 @@ def replay_rounds(env, game, our_requests):
                     rows = list((observation.metadata or {}).get('self_team') or ())
                     if round_ != 0 or len(rows) != TEAM:raise Mismatch(f'Foul Play\'s first observation (round {round_}) has {len(rows)} self_team rows')
                     team = json.loads(json.dumps(rows, default=repr))
-                entry.update(fp_request=json.loads(json.dumps(env._latest_requests.get(player))), fp_observation=observation_arrays(observation), fp_action=action)
+                entry.update(fp_request=json.loads(json.dumps(env._latest_requests.get(player))), fp_observation=observation_arrays(observation), fp_action=action,
+                    fp_lines=channel_lines(env, player))
                 actions[player] = action
             else:
                 if ours >= len(game['our_actions']):raise Mismatch(f'our seat requested beyond its {ours} recorded decisions')
@@ -389,6 +428,100 @@ def align(row, table, fp_rows):
     return dict(base, aligned=True, turns=turns, turns_equal=len(set(turns.values())) == 1, env_equals_fp_reply=equal,
         fp_action=entry['fp_action'], fp_reply_label=int(fpr['label']), label_equal=entry['fp_action'] == int(fpr['label']),
         fp_reply_forced=bool(fpr['forced']))
+
+
+# The fp-wire-b reference: view b of Foul Play's own wire ------------------------------------------------------------------------------
+REFERENCES = ('env', 'fp-wire-b')
+# The measurement code's own rules, imported (one source of truth): view b's format (gpu_engine/g3rb_views.FORMAT), the v4 columns
+# peer-view-v2 names (gpu_engine/fp_reply_train), its redaction and public percent, and Foul Play's own OPP_HAZARD_CREDIT
+# (gpu_engine/fp_reply_data.fp_view_opp_hazard_credit and spikes_hits). numpy only at import.
+from gpu_engine.fp_reply_data import fp_view_opp_hazard_credit, spikes_hits   # noqa: E402
+from gpu_engine.fp_reply_train import (FIELD_TOKEN, HP_FRACTION, LAST_DAMAGE_DEALT, LAST_DAMAGE_TAKEN, OPP_HAZARD_CREDIT,   # noqa: E402
+    SELF_ACTIVE_TOKEN, SELF_HAZARD_CREDIT, public_percent as pv2_public_percent, redact_peer_view)
+from gpu_engine.g3rb_views import FORMAT   # noqa: E402
+
+
+def channel_lines(env, player):
+    """`player`'s own channel so far without its |request| lines (what it received: Showdown's per-side split), or None when the env
+    keeps no channels (ChannelEnv does)."""
+    channels = getattr(env, 'channels', None)
+    if channels is None:return None
+    return tuple(line for line in channels[player] if not line.startswith('|request|'))
+
+
+def make_channel_environment(config):
+    """A LocalShowdownEnv that also keeps each player's own channel: every line of the bridge's p1 / p2 stream events of the current
+    battle, in order (scripts/battle_bridge.mjs emits each getPlayerStreams chunk as it comes; sim/battle-stream.ts
+    getPlayerStreams pushes each player sim/battle.ts extractChannelMessages(data, [...])[player]: a |split| line's secret half on the
+    owning side's channel, its shared half elsewhere, an empty shared half on no other channel). The env itself keeps the
+    omniscient stream and only the |request| lines of the player streams; nothing else of it changes."""
+    from pokezero.local_showdown import LocalShowdownEnv
+
+    class ChannelEnv(LocalShowdownEnv):
+        def reset(self, *arguments, **keywords):
+            self.channels = {'p1': [], 'p2': []}
+            return super().reset(*arguments, **keywords)
+
+        def _apply_event(self, event):
+            out = super()._apply_event(event)
+            battle_id = event.get('battleId')   # the base class's own routing filter: a finished battle's events still drain
+            if battle_id is not None and getattr(self, '_battle_token', None) is not None and battle_id != self._battle_token:return out
+            channels = getattr(self, 'channels', None)
+            if channels is not None and event.get('type') == 'stream' and event.get('stream') in channels and isinstance(event.get('lines'), list):
+                channels[event['stream']].extend(str(x) for x in event['lines'] if str(x))
+            return out
+    return ChannelEnv(config)
+
+
+def peer_view_v2(numeric, opp_hazard_credit):
+    """fp_reply_train.redact_peer_view(numeric, 'peer-view-v2', credit) on a float32 copy of one [23, 132] row: Foul Play's own
+    active's LAST_DAMAGE_TAKEN -> 0, our six's LAST_DAMAGE_DEALT -> 0, our six's HP_FRACTION -> the public percent, the field's
+    SELF_HAZARD_CREDIT -> 0 and OPP_HAZARD_CREDIT -> `opp_hazard_credit` (Foul Play's own value, fp_view_opp_hazard_credit).
+    π_FP-red3-full's input is view b after this."""
+    return redact_peer_view(np.array(numeric, np.float32, copy=True), 'peer-view-v2', np.float32(opp_hazard_credit))
+
+
+class ReferenceViews:
+    """View b of Foul Play's own wire, as π_FP-red3-full was trained on it (gpu_engine/fp_reply_data.builder_views 'b', then
+    peer-view-v2): pokezero.policy_opponent_view.build_policy_opponent_view on what Foul Play received and its literal request, with
+    the owning config's observation spec, feature masks and category vocabulary (the champion's: the env's) and the pinned
+    Showdown's random-battle set source and dex; then peer_view_v2 (fp_reply_train.redact_peer_view) with Foul Play's own
+    OPP_HAZARD_CREDIT (fp_reply_data.fp_view_opp_hazard_credit on the same lines). Where it departs from builder_views, by design:
+    builder_views reads the env's omniscient lines through the hand filter gpu_engine/g3rb_views.seat_lines (dropping the
+    opponent's [silent] -ability lines, its Struggle activation and every -hint) with every seat's HP exact
+    (hp_visibility exact for both, projected by the builder); here the lines are Foul Play's own channel, Showdown's split, without
+    |request| lines: its own HP exact (projected by the builder), ours already N/100 (hp_visibility percentage), which is the
+    builder's projection of the exact value (constructor_worlds.public_percent: Showdown's float rule equals the integer one)."""
+    def __init__(self, config):
+        from pokezero.dex import load_showdown_dex_cached
+        from pokezero.randbat import load_gen3_randbat_source_cached
+        root = config.resolved_showdown_root()
+        self.source, self.dex = load_gen3_randbat_source_cached(root), load_showdown_dex_cached(root)
+        self.spec, self.masks, self.vocab = config.observation_spec, config.feature_masks, config.category_vocab
+        if self.vocab is None:raise ValueError('the owning config carries no category vocabulary (the champion\'s is required)')
+
+    def __call__(self, lines, request, *, fp, ours, seed, format_id=FORMAT):
+        from pokezero.policy_opponent_view import build_policy_opponent_view
+        view = build_policy_opponent_view(public_lines=list(lines), hp_visibility={fp: 'exact', ours: 'percentage'}, sampled_self_request=request,
+            opponent_slot=fp, battle_id='fp-wire-b', battle_seed=int(seed), format_id=format_id, set_source=self.source, spec=self.spec,
+            feature_masks=self.masks)
+        observation = view.observation(category_vocab=self.vocab, dex=self.dex)
+        credit = fp_view_opp_hazard_credit(lines, ours);raw = observation_arrays(observation)
+        return dict(raw, numeric_features=peer_view_v2(raw['numeric_features'], credit)), credit
+
+
+def align_reference(row, table):
+    """One captured decision's alignment for the fp-wire-b reference: its round (request_count - 1), whether it is a position (the env
+    replay puts this very decision in that round and Foul Play was requested there, its channel kept) and the turn check."""
+    round_ = int(row['request_count']) - 1;base = dict(round=round_, aligned=False, reason=None)
+    entry = table.get(round_)
+    if entry is None:return dict(base, reason='round_not_replayed')
+    if entry['our_decision'] != row['decision_index']:return dict(base, reason='our_decision_elsewhere')
+    if entry['fp_observation'] is None:return dict(base, reason='fp_not_requested')
+    if entry.get('fp_lines') is None:return dict(base, reason='no_fp_channel')
+    turns = dict(capture=row.get('turn'), env=entry['turn'])
+    return dict(base, aligned=True, turns=turns, turns_equal=len(set(turns.values())) == 1, fp_action=entry['fp_action'], label_equal=None,
+        env_equals_fp_reply={})
 
 
 # The true start and world ---------------------------------------------------------------------------------------------------------
@@ -541,16 +674,19 @@ class Completion:
     the peer's count of the owner's PP against its own Pressure from the root's own carry, the peer tracer's base ability),
     with the live constructor's tables: (state, public, owner, lines, root) -> (state, public). The sampler's WorldSet and the
     true world are built before it."""
-    def __init__(self, constructor):
+    def __init__(self, constructor, *, peer_view_b=False):
         from gpu_engine import constructor_worlds as cw
-        self.cw, self.tables = cw, cw.constructor_carry_tables(constructor)
+        self.cw, self.tables, self.peer_view_b = cw, cw.constructor_carry_tables(constructor), bool(peer_view_b)
 
     def __call__(self, state, public, owner, lines, root=None):
-        return self.cw.complete_carry(state, public, self.tables, owner, facts=self.cw.line_facts(lines, owner), root=root)
+        if not self.peer_view_b:return self.cw.complete_carry(state, public, self.tables, owner, facts=self.cw.line_facts(lines, owner), root=root)
+        # view b, as prepare_roots(peer_view_b=True) completes the live worlds: the lines' facts with peer_damage, the redaction implied
+        return self.cw.complete_carry(state, public, self.tables, owner, facts=self.cw.line_facts(lines, owner, peer_damage=True), root=root,
+            redact_private_reveals=True, peer_view_b=True)
 
 
-def make_completion(search):
-    return Completion(search.constructor)
+def make_completion(search, *, peer_view_b=False):
+    return Completion(search.constructor, peer_view_b=peer_view_b)
 
 
 def showdown_percent(hp, maximum):
@@ -626,7 +762,11 @@ def check_call_site(function=None):
 
 
 # Capture --------------------------------------------------------------------------------------------------------------------------
-def kinds_of(sampled_worlds):
+def kinds_of(sampled_worlds, reference='env'):
+    """The world kinds of a capture. fp-wire-b: each true kind twice, completed with view b on (the _b kinds: the flag-on views
+    under test) and off (the control), and the sampled worlds with view b on."""
+    if reference == 'fp-wire-b':
+        return ('true_b', 'true_private_b', 'true', 'true_private') + tuple(f'sampled_{i}_b' for i in range(sampled_worlds))
     return ('true', 'true_private') + tuple(f'sampled_{i}' for i in range(sampled_worlds))
 
 
@@ -672,6 +812,9 @@ class Replay:
     environment_factory: object
     sampled_worlds: int = 2
     complete: object = None   # Completion (capture_main); None: the worlds' carries as built (tests on fake carries)
+    reference: str = 'env'    # REFERENCES: env (fp_reply_data's env rows) or fp-wire-b (view b of Foul Play's own wire)
+    complete_b: object = None   # Completion(peer_view_b=True) (fp-wire-b; None: the _b kinds keep the carries as `complete` leaves them)
+    references: object = None   # ReferenceViews (fp-wire-b)
     max_positions: object = None
     shard: int = 0
     out: object = None
@@ -681,10 +824,11 @@ class Replay:
     done: bool = False
     counts: collections.Counter = field(default_factory=collections.Counter)
     cell_errors: list = field(default_factory=list)
+    reference_errors: list = field(default_factory=list)
 
     @property
     def kinds(self):
-        return kinds_of(self.sampled_worlds)
+        return kinds_of(self.sampled_worlds, self.reference)
 
     def environment(self):
         if self.env is None:self.env = self.environment_factory()
@@ -695,18 +839,23 @@ class Replay:
             try:self.env.close()
             finally:self.env = None
 
-    def view(self, state, public, owner, lines=None, root=None):
+    def view(self, state, public, owner, lines=None, root=None, *, view_b=False):
         """The opponent view of one world, its carry completed first when the replay completes (lines: the decision's; root: its
-        root's own public carry)."""
+        root's own public carry; view_b: completed with view b on, complete_b)."""
         import jax
-        if self.complete is not None:state, public = self.complete(state, public, owner, lines, root)
+        complete = self.complete_b if view_b else self.complete
+        if complete is not None:state, public = complete(state, public, owner, lines, root)
         state, public = jax.device_get((state, public))
         return self.views(state, public, owner)
 
 
-def describe_position(ctx, cell, game, row, alignment, capture, response, table, team):
-    """One position's JSONL record and arrays (module docstring: the worlds per position)."""
-    fpr = ctx.fp_rows[cell['ordinal']][alignment['round']];kinds = ctx.kinds;views, worlds, notes = {}, {}, []
+def describe_position(ctx, cell, game, row, alignment, capture, response, table, team, reference=None):
+    """One position's JSONL record and arrays (module docstring: the worlds per position). `reference`: the fp-wire-b reference's
+    arrays (ReferenceViews), which stand where the env reference's reply row stands; the true kinds are then viewed twice, with view
+    b on (the _b kinds) and off, the sampled worlds with it on."""
+    fpr = ctx.fp_rows[cell['ordinal']][alignment['round']] if reference is None else reference
+    kinds = ctx.kinds;views, worlds, notes = {}, {}, [];flags = (True, False) if ctx.reference == 'fp-wire-b' else (False,)
+    named = lambda base, b: base + ('_b' if b else '');view_b = None
     calls = capture.calls;call = calls[0] if calls else None
     if len(calls) > 1:notes.append(f'{len(calls)} sample calls; the first is used')
     if call is None:notes.append('no constructor sample call (the root was refused before sampling)')
@@ -715,37 +864,54 @@ def describe_position(ctx, cell, game, row, alignment, capture, response, table,
         owner = int(call.named['detached'].address.owner);foe = 1 - owner;lines = tuple(call.named['lines'])
         root = getattr(call.named['detached'], 'public', None)
         if f'p{foe + 1}' != game['fp']:notes.append(f'the constructor\'s opponent p{foe + 1} is not Foul Play {game["fp"]}')
+        if True in flags:
+            try:view_b = view_b_records(ctx, root, owner, lines)
+            except Exception as error:notes.append(f'view b records: {type(error).__name__}: {error}'[:300])
         made = call.result
         try:
             world, info = build_true_world(call, team, table[0]['fp_request'])
             if 'kernel_seed' in info and made is not None and made.worlds:info['kernel_seed_is_world0s'] = info['kernel_seed'] == made.worlds[0].kernel_seed
         except Exception as error:
             world, info = None, dict(reason=f'{type(error).__name__}: {error}'[:300])
-        worlds['true'] = info
+        for b in flags:worlds[named('true', b)] = info
         if world is not None and world.state is not None:
-            try:views['true'] = ctx.view(world.state, world.public, owner, lines, root)
-            except Exception as error:notes.append(f'true view: {type(error).__name__}: {error}'[:300])
-            try:
-                state, overlay_notes = overlay_private(world.state, foe, table[alignment['round']]['fp_request'], ctx.vocabulary)
-                worlds['true_private'] = dict(notes=overlay_notes)
-                views['true_private'] = ctx.view(state, world.public, owner, lines, root)
-            except Exception as error:notes.append(f'true_private: {type(error).__name__}: {error}'[:300])
+            for b in flags:
+                try:views[named('true', b)] = ctx.view(world.state, world.public, owner, lines, root, view_b=b)
+                except Exception as error:notes.append(f'{named("true", b)} view: {type(error).__name__}: {error}'[:300])
+            try:state, overlay_notes = overlay_private(world.state, foe, table[alignment['round']]['fp_request'], ctx.vocabulary)
+            except Exception as error:notes.append(f'true_private: {type(error).__name__}: {error}'[:300]);state = None
+            for b in flags:
+                if state is None:continue
+                worlds[named('true_private', b)] = dict(notes=overlay_notes)
+                try:views[named('true_private', b)] = ctx.view(state, world.public, owner, lines, root, view_b=b)
+                except Exception as error:notes.append(f'{named("true_private", b)}: {type(error).__name__}: {error}'[:300])
         for i in range(ctx.sampled_worlds):
-            w = made.worlds[i] if made is not None and i < len(made.worlds) else None
-            worlds[f'sampled_{i}'] = None if w is None else dict(index=w.index, kernel_seed=w.kernel_seed, refusals=list(w.refusals),
+            w = made.worlds[i] if made is not None and i < len(made.worlds) else None;kind = named(f'sampled_{i}', True in flags)
+            worlds[kind] = None if w is None else dict(index=w.index, kernel_seed=w.kernel_seed, refusals=list(w.refusals),
                 constructed=w.state is not None)
             if w is not None and w.state is not None:
-                try:views[f'sampled_{i}'] = ctx.view(w.state, w.public, owner, lines, root)
-                except Exception as error:notes.append(f'sampled_{i} view: {type(error).__name__}: {error}'[:300])
+                try:views[kind] = ctx.view(w.state, w.public, owner, lines, root, view_b=True in flags)
+                except Exception as error:notes.append(f'{kind} view: {type(error).__name__}: {error}'[:300])
     arrays = position_arrays(fpr, views, kinds)
     try:arrays['env_opp_hazard_credit'] = np.float32(np.nan) if call is None or call.error is not None else recompute_opp_hazard_credit(lines, owner)
     except Exception as error:arrays['env_opp_hazard_credit'] = np.float32(np.nan);notes.append(f'opp hazard credit: {type(error).__name__}: {error}'[:300])
+    seat_seed = dict(seat=int(fpr['seat']), seed=int(fpr['seed'])) if reference is None else dict(seat=cell.get('seat'), seed=game['seed'])
     record = dict(schema=POSITION_SCHEMA, shard=ctx.shard, ordinal=cell['ordinal'], seed=game['seed'], seat=cell.get('seat'), fp=game['fp'], ours=game['ours'],
         battle_id=row['battle_id'], decision_index=row['decision_index'], request_count=row['request_count'], round=alignment['round'],
         turn=row.get('turn'), alignment={k: v for k, v in alignment.items() if k not in ('round', 'aligned', 'reason')},
-        fp_reply_seat_seed=dict(seat=int(fpr['seat']), seed=int(fpr['seed'])), response=response_fields(response), worlds=worlds,
+        fp_reply_seat_seed=seat_seed, response=response_fields(response), worlds=worlds,
         views={k: dict(error=v['error']) for k, v in views.items()}, exact={k: exact_flags(fpr, v) for k, v in views.items()}, notes=notes)
+    if True in flags:record['view_b'] = view_b
     return record, arrays
+
+
+def view_b_records(ctx, root, owner, lines):
+    """The position's view-b records from the root's own carry, as prepare_roots(peer_view_b=True) records them: peer_view_b
+    (constructor_worlds.peer_view_b_record: the projected damage cells, from_b2's, the exact rule's and view b's values) and
+    private_reveals (private_reveal_record, the redaction on)."""
+    cw, tables = ctx.complete_b.cw, ctx.complete_b.tables;facts = cw.line_facts(lines, owner, peer_damage=True)
+    return dict(peer_view_b=cw.peer_view_b_record(root, owner, facts),
+        private_reveals=cw.private_reveal_record(root, owner, facts, tables if facts.private_reveals[owner] else None, True))
 
 
 def capture_cell(ctx, cell):
@@ -753,7 +919,7 @@ def capture_cell(ctx, cell):
     the cell's positions go to positions-<shard>.jsonl and arrays-<shard>-<ordinal>.npz. CellError before anything is sent."""
     from pokezero import phase_d_owning_capture as owning
     rr = _rr();bench, server = rr.bench, rr.server;ordinal = cell['ordinal']
-    game = load_game(ctx.run, cell)
+    game = load_game(ctx.run, cell, ctx.reference)
     try:captured = list(owning.read_capture(ctx.run / 'owning-wire' / f'{ordinal}.jsonl'))
     except (ValueError, KeyError, TypeError, OSError) as error:raise CellError('capture_unreadable', error) from None
     if not captured:raise CellError('no_decisions')
@@ -767,7 +933,7 @@ def capture_cell(ctx, cell):
         request = {k: row[k] for k in bench.KEYS}
         if not rr.sent(request):ctx.counts['skipped_single_legal'] += 1;continue
         if ctx.max_positions is not None and ctx.positions >= ctx.max_positions:ctx.done = True;break
-        alignment = align(row, table, ctx.fp_rows.get(ordinal, {}))
+        alignment = align(row, table, ctx.fp_rows.get(ordinal, {})) if ctx.reference == 'env' else align_reference(row, table)
         body = dict(request, lines=list(request['lines']), schema=server.original.SCHEMA, request_id=f'ov-{ordinal}-{row["decision_index"]}-{os.getpid()}',
             rung=ctx.search.rung, budget_seconds=bench.BUDGET)
         capture = SampleCapture()
@@ -775,13 +941,22 @@ def capture_cell(ctx, cell):
             clock = time.perf_counter();response = ctx.search.process_many([body])[0];wall = time.perf_counter() - clock
         ctx.counts['sent'] += 1
         if not alignment['aligned']:ctx.counts['not_aligned:' + alignment['reason']] += 1;continue
-        clock = time.perf_counter()
-        record, arrays = describe_position(ctx, cell, game, row, alignment, capture, response, table, team)
+        clock = time.perf_counter();reference = observed = None
+        if ctx.reference == 'fp-wire-b':   # view b of what Foul Play received, then the env's own observation of it beside (a check)
+            entry = table[alignment['round']]
+            try:reference, credit = ctx.references(entry['fp_lines'], entry['fp_request'], fp=game['fp'], ours=game['ours'], seed=game['seed'])
+            except Exception as error:
+                ctx.counts['not_aligned:reference_error'] += 1
+                ctx.reference_errors.append(dict(ordinal=ordinal, decision_index=row['decision_index'], error=f'{type(error).__name__}: {error}'[:300]));continue
+            observed = dict(obs_numeric=peer_view_v2(entry['fp_observation']['numeric_features'], credit),
+                obs_categorical=np.asarray(entry['fp_observation']['categorical_ids'], np.int32))
+        record, arrays = describe_position(ctx, cell, game, row, alignment, capture, response, table, team, reference)
+        if observed is not None:arrays.update(observed)
         record.update(npz=f'arrays-{ctx.shard}-{ordinal}.npz', row=len(records), wall_seconds=wall, describe_seconds=time.perf_counter() - clock)
         records.append(record);ctx.positions += 1;ctx.counts['positions'] += 1
         for k, v in arrays.items():columns[k].append(v)
         print(dumps(dict(ordinal=ordinal, decision_index=row['decision_index'], round=alignment['round'], status=response.get('status'),
-            turns_equal=alignment['turns_equal'], env_equals_fp_reply=all(alignment['env_equals_fp_reply'].values()),
+            turns_equal=alignment['turns_equal'], env_equals_fp_reply=all(alignment['env_equals_fp_reply'].values()) if alignment['env_equals_fp_reply'] else None,
             exact={k: v['all'] for k, v in record['exact'].items()}, true=(record['worlds'].get('true') or {}).get('reason') or (record['worlds'].get('true') or {}).get('refusals'),
             notes=len(record['notes']), wall=wall)), flush=True)
     if records:
@@ -816,8 +991,12 @@ def capture_parser():
     for action in p._actions:
         if action.dest == 'roster':action.required = False
         if action.dest == 'warmup_requests':action.required = True   # the server's own warmup file
-    p.add_argument('--collection', required=True, help='the Foul Play collection run directory (results/, telemetry/, owning-wire/ per ordinal)')
-    p.add_argument('--fp-reply-data', required=True, help='fp_reply_data\'s output directory (shard-*.npz: Foul Play\'s env observations)')
+    p.add_argument('--collection', required=True, help='the run directory (results/, telemetry/, owning-wire/ per ordinal): the Foul Play '
+        'collection for the env reference, a live panel run for fp-wire-b')
+    p.add_argument('--reference', choices=REFERENCES, default='env', help='what the views are held to: env (fp_reply_data\'s env rows, '
+        'the default) or fp-wire-b (view b of Foul Play\'s own wire, replayed in Showdown: π_FP-red3-full\'s input; the views with view b '
+        'on and off)')
+    p.add_argument('--fp-reply-data', help='fp_reply_data\'s output directory (shard-*.npz: Foul Play\'s env observations; the env reference only)')
     pick = p.add_mutually_exclusive_group(required=True)
     pick.add_argument('--cells', type=int, nargs='+', metavar='ORD', help='these cell ordinals')
     pick.add_argument('--sample', type=int, metavar='N', help='N replayable RAW cells, stratified equally over (seed %% 2, seat)')
@@ -843,6 +1022,8 @@ def capture_options(argv):
     if args.sample is None and args.sample_seed is not None:p.error('--sample-seed goes with --sample')
     if args.shards < 1 or not 0 <= args.shard < args.shards:p.error('--shard I --shards N with 0 <= I < N required')
     if args.max_positions is not None and args.max_positions < 1:p.error('--max-positions must be >= 1')
+    if args.reference == 'env' and not args.fp_reply_data:p.error('the env reference needs --fp-reply-data')
+    if args.reference == 'fp-wire-b' and args.fp_reply_data:p.error('--fp-reply-data is the env reference\'s (fp-wire-b replays Foul Play\'s wire)')
     if not 0 <= args.sampled_worlds <= rr.live.RUNGS[args.rung]:p.error(f'--sampled-worlds must be in 0..{rr.live.RUNGS[args.rung]}')
     args.port = args.port or 0;args.max_requests = 1
     return args
@@ -855,11 +1036,14 @@ def make_environment(config):
 
 def capture_main(argv):
     args = capture_options(argv);rr = _rr();server = rr.server
-    try:tree = tree_state();check_call_site();fpr = FpReplyRows(args.fp_reply_data);cells = select_cells(args, fpr.ordinals)
+    wire = args.reference == 'fp-wire-b'
+    try:
+        tree = tree_state();check_call_site();fpr = None if wire else FpReplyRows(args.fp_reply_data)
+        cells = select_cells(args, frozenset() if fpr is None else fpr.ordinals)
     except (ValueError, RuntimeError, OSError) as error:raise SystemExit(f'depthn_opponent_view_parity: {error}')
     if not cells:raise SystemExit('depthn_opponent_view_parity: no cell in this shard')
     out = Path(args.out);out.mkdir(parents=True, exist_ok=False);shard = args.shard
-    rows = fpr.load([c['ordinal'] for c in cells])
+    rows = {} if fpr is None else fpr.load([c['ordinal'] for c in cells])
     saved = server.read_requests(args.warmup_requests)
     clock = time.perf_counter();search = server.build(args);build_seconds = time.perf_counter() - clock
     header = server.header(args, search);problems = rr.identity_problems(header, args.rung)
@@ -868,15 +1052,19 @@ def capture_main(argv):
     import jax
     config = search.constructor.owning_config
     ctx = Replay(run=Path(args.collection), search=search, views=OpponentView(search.pricers[search.buckets[0]].executor), fp_rows=rows,
-        vocabulary=search.constructor.metadata['vocabulary'], environment_factory=lambda: make_environment(config), sampled_worlds=args.sampled_worlds,
-        complete=make_completion(search), max_positions=args.max_positions, shard=shard, out=out)
+        vocabulary=search.constructor.metadata['vocabulary'],
+        environment_factory=(lambda: make_channel_environment(config)) if wire else (lambda: make_environment(config)), sampled_worlds=args.sampled_worlds,
+        complete=make_completion(search), max_positions=args.max_positions, shard=shard, out=out, reference=args.reference,
+        complete_b=make_completion(search, peer_view_b=True) if wire else None, references=ReferenceViews(config) if wire else None)
     write_json(out / f'header-{shard}.json', dict(argv=list(argv), tree=tree, run_header=header, live_identity=rr.LIVE_IDENTITY, warmup=warm,
         warmup_requests=len(saved), build_seconds=build_seconds, warmup_seconds=warmup_seconds, cells=cells, collection=str(args.collection),
-        fp_reply_data=str(args.fp_reply_data), fp_reply_shards=[p.name for p in fpr.paths], fp_reply_documents=fpr.documents,
+        reference=args.reference, reference_format=FORMAT if wire else None,
+        fp_reply_data=None if fpr is None else str(args.fp_reply_data), fp_reply_shards=None if fpr is None else [p.name for p in fpr.paths],
+        fp_reply_documents=None if fpr is None else fpr.documents,
         fp_reply_rows={str(o): len(r) for o, r in rows.items()}, kinds=list(ctx.kinds), rung=args.rung, shard=shard, shards=args.shards,
         max_positions=args.max_positions, sample=args.sample, sample_seed=args.sample_seed, jax_version=jax.__version__,
         devices=[f'{d.platform}:{d.device_kind}' for d in jax.devices()], python=sys.version, environment={k: os.environ.get(k) for k in rr.ENVIRONMENT},
-        pid=os.getpid(), carry_completion=ctx.complete is not None))
+        pid=os.getpid(), carry_completion=ctx.complete is not None, view_b_completion=ctx.complete_b is not None if wire else None))
     started, finished = time.perf_counter(), False
     try:
         with (out / f'positions-{shard}.jsonl').open('x') as stream:
@@ -892,14 +1080,29 @@ def capture_main(argv):
         write_json(out / f'summary-{shard}.json', dict(shard=shard, shards=args.shards, cells=[c['ordinal'] for c in cells], positions=ctx.positions,
             cells_replayed=counts.pop('cells_replayed', 0), sent=counts.pop('sent', 0), skipped_single_legal=counts.pop('skipped_single_legal', 0),
             not_aligned={k.split(':', 1)[1]: v for k, v in counts.items() if k.startswith('not_aligned:')}, cell_errors=ctx.cell_errors,
-            max_positions_reached=ctx.done, interrupted=not finished, seconds=time.perf_counter() - started))
+            reference_errors=ctx.reference_errors, max_positions_reached=ctx.done, interrupted=not finished, seconds=time.perf_counter() - started))
     print(dumps(dict(done=str(out), shard=shard, positions=ctx.positions, cell_errors=len(ctx.cell_errors))), flush=True)
+    if wire and ctx.positions:   # one command: this shard's report beside its capture (`report` over every shard's directory joins them)
+        summary = build_report([out]);(out / 'report').mkdir()
+        write_json(out / 'report' / 'summary.json', summary)
+        with (out / 'report' / 'summary.md').open('x') as stream:stream.write(render_markdown(summary))
     return 0 if ctx.positions else 2
 
 
 # Report ---------------------------------------------------------------------------------------------------------------------------
+def capture_reference(directories):
+    """The reference the capture directories were taken against (their header-*.json `reference`; 'env' for a header without one or
+    none); ValueError when they differ."""
+    found = set()
+    for directory in directories:
+        for path in sorted(Path(directory).glob('header-*.json')):found.add(read_json(path).get('reference') or 'env')
+    if len(found) > 1:raise ValueError(f'captures of different references: {sorted(found)}')
+    return found.pop() if found else 'env'
+
+
 def load_captures(directories):
-    """(position rows, shard summaries, kinds, arrays concatenated over every arrays-*.npz) of capture directories."""
+    """(position rows, shard summaries, kinds, arrays concatenated over every arrays-*.npz) of capture directories; the fp-wire-b
+    captures' env observations (OBSERVED_ARRAY_KEYS) when every file has them."""
     rows, summaries, kinds, arrays = [], [], None, collections.defaultdict(list)
     for directory in directories:
         directory = Path(directory)
@@ -913,7 +1116,10 @@ def load_captures(directories):
                 for key in ARRAY_KEYS:arrays[key].append(np.asarray(data[key]))
                 n = len(data['ordinal'])
                 for key in OPTIONAL_ARRAY_KEYS:arrays[key].append(np.asarray(data[key]) if key in data.files else np.full(n, np.nan, np.float32))
+                for key in OBSERVED_ARRAY_KEYS:arrays[key].append(np.asarray(data[key]) if key in data.files else None)
     if kinds is None:raise ValueError('no arrays-*.npz in ' + ', '.join(map(str, directories)))
+    for key in OBSERVED_ARRAY_KEYS:
+        if any(x is None for x in arrays[key]):arrays.pop(key)
     return rows, summaries, kinds, {k: np.concatenate(v) for k, v in arrays.items()}
 
 
@@ -1146,14 +1352,112 @@ def capture_counts(summaries):
     return out
 
 
-def build_report(directories, *, tolerance=1e-5, top=30, examples=3, vocabulary=None, redactions=DEFAULT_REDACTIONS):
+# The fp-wire-b report: column groups, the flag-off control, residuals by cause ------------------------------------------------------
+# Numeric v4 columns by what view b changes (the lead's report pifp-red3-full-20261109, Verification: env vs k differ only in 38 / 39
+# after peer-view-v2; k vs b in 48 and, through the same dropped reveal, the ability-dependent columns).
+VIEW_B_DAMAGE, VIEW_B_REVEAL = (LAST_DAMAGE_DEALT, LAST_DAMAGE_TAKEN), (48,)
+ABILITY_BELIEF = (43, 44, 45, 46, 47, 55, 63, 64, 65, 66, 67, 68, 79, 80, 81, 82, 83)
+NUMERIC_GROUPS = (('damage_38_39', VIEW_B_DAMAGE), ('revealed_ability_48', VIEW_B_REVEAL), ('ability_belief', ABILITY_BELIEF),
+    ('hp_fraction_0', (HP_FRACTION,)), ('hazard_credit_115_116', (SELF_HAZARD_CREDIT, OPP_HAZARD_CREDIT)))
+TOKEN_GROUPS = (('field', (0,)), ('self', tuple(SELF_TOKENS)), ('opponent', tuple(OPPONENT_TOKENS)), ('actions', tuple(range(13, 22))), ('tendency', (22,)))
+
+
+def ability_categorical_columns(names=None):
+    """The categorical columns whose name holds ABILITY (the ability token, its belief buckets, the traced ability)."""
+    names = categorical_names() if names is None else names
+    return tuple(c for c, n in enumerate(names) if 'ABILITY' in str(n))
+
+
+def view_b_columns(categorical=None):
+    """(numeric, categorical) columns view b may change: the damage cells, REVEALED_ABILITY and the ability-dependent columns."""
+    return frozenset(VIEW_B_DAMAGE + VIEW_B_REVEAL + ABILITY_BELIEF), frozenset(ability_categorical_columns(categorical))
+
+
+def group_stats(env, view, *, tolerance, categorical=None):
+    """Per column group the share of positions where every cell of the group agrees (numeric within `tolerance`, categorical exact) and
+    the group's largest numeric |diff|: NUMERIC_GROUPS, numeric_other (every other numeric column) by token group, categorical_ability,
+    categorical_other, token_type, attention, legal; and all (every group)."""
+    a = np.asarray(env['numeric'], np.float64);b = np.asarray(view['numeric'], np.float64);n = len(a)
+    gap = np.where((a != b) & ~(np.isnan(a) & np.isnan(b)), np.nan_to_num(np.abs(a - b), nan=np.inf, posinf=np.inf), 0.)
+    beyond = gap > tolerance;cat = np.asarray(env['categorical']) != np.asarray(view['categorical'])
+    share = lambda bad: float((~bad).mean()) if n else None;peak = lambda x: float(x.max()) if x.size else 0.
+    out = {};grouped = set()
+    for name, columns in NUMERIC_GROUPS:
+        cols = list(columns);grouped |= set(cols)
+        out[name] = dict(share=share(beyond[:, :, cols].any((1, 2))), max_abs_diff=peak(gap[:, :, cols]))
+    other = [c for c in range(NUMERIC) if c not in grouped]
+    for name, tokens in TOKEN_GROUPS:
+        part = beyond[:, list(tokens)][:, :, other]
+        out[f'numeric_other.{name}'] = dict(share=share(part.any((1, 2))), max_abs_diff=peak(gap[:, list(tokens)][:, :, other]))
+    ability = list(ability_categorical_columns(categorical));rest = [c for c in range(CATEGORICAL) if c not in ability]
+    out['categorical_ability'] = dict(share=share(cat[:, :, ability].any((1, 2))))
+    out['categorical_other'] = dict(share=share(cat[:, :, rest].any((1, 2))))
+    types = np.asarray(env['token_type']).astype(np.int64) != np.asarray(view['token_type']).astype(np.int64)
+    out['token_type'] = dict(share=share(types.any(1)));out['attention'] = dict(share=share((np.asarray(env['attention'], bool) != np.asarray(view['attention'], bool)).any(1)))
+    out['legal'] = dict(share=share((np.asarray(env['legal'], bool) != np.asarray(view['legal'], bool)).any(1)))
+    out['all'] = dict(share=share(beyond.any((1, 2)) | cat.any((1, 2)) | types.any(1)), positions=n)
+    return out
+
+
+def failing_cells(env, view, *, tolerance):
+    """[n, 23, 132] numeric beyond tolerance and [n, 23, 41] categorical mismatch masks."""
+    a = np.asarray(env['numeric'], np.float64);b = np.asarray(view['numeric'], np.float64)
+    gap = np.where((a != b) & ~(np.isnan(a) & np.isnan(b)), np.nan_to_num(np.abs(a - b), nan=np.inf, posinf=np.inf), 0.)
+    return gap > tolerance, np.asarray(env['categorical']) != np.asarray(view['categorical'])
+
+
+def residual_causes(env, on, off, keys, *, tolerance, labels, numeric, categorical, examples=3, top=30):
+    """The flag-on kind's residual cells against the reference, each with its cause as far as the capture shows it: 'present without
+    view b' (the same cell also fails, on the same position, in the flag-off control: a difference view b does not address);
+    'introduced by view b' (fails only with view b on); and the cells view b closed (fail only in the control). Per cell: kind
+    (numeric / categorical), token, column, positions, whether it is one of view b's columns, and example positions."""
+    on_num, on_cat = failing_cells(env, on, tolerance=tolerance);off_num, off_cat = failing_cells(env, off, tolerance=tolerance)
+    b_num, b_cat = view_b_columns(categorical)
+    out = {'present without view b': [], 'introduced by view b': [], 'closed by view b': []}
+    for kind, mine, theirs, names, columns in (('numeric', on_num, off_num, numeric, b_num), ('categorical', on_cat, off_cat, categorical, b_cat)):
+        for label, mask in (('present without view b', mine & theirs), ('introduced by view b', mine & ~theirs), ('closed by view b', ~mine & theirs)):
+            counts = mask.sum(0)
+            for t, c in sorted(zip(*np.nonzero(counts)), key=lambda tc: (-counts[tc], tc[0], tc[1])):
+                where = np.nonzero(mask[:, t, c])[0][:examples]
+                out[label].append(dict(kind=kind, token=int(t), token_label=labels[t], column=int(c), column_name=names[c], positions=int(counts[t, c]),
+                    view_b_column=int(c) in columns, examples=[{k: int(keys[k][i]) for k in ('ordinal', 'round', 'decision_index')} for i in where]))
+    return {k: v[:top] for k, v in out.items()}, {k: len(v) for k, v in out.items()}
+
+
+def control_delta(off, on, *, categorical=None):
+    """Where the flag-on view differs from the flag-off view of the same world (view b's own effect): positions changed, and per cell
+    (token, column) the positions; `unexpected` lists changed cells outside view_b_columns (there should be none)."""
+    num = np.asarray(off['numeric']) != np.asarray(on['numeric']);cat = np.asarray(off['categorical']) != np.asarray(on['categorical'])
+    b_num, b_cat = view_b_columns(categorical);cells = collections.Counter();unexpected = collections.Counter()
+    for kind, mask, columns in (('numeric', num, b_num), ('categorical', cat, b_cat)):
+        counts = mask.sum(0)
+        for t, c in zip(*np.nonzero(counts)):
+            cells[f'{kind}:{int(t)}.{int(c)}'] = int(counts[t, c])
+            if int(c) not in columns:unexpected[f'{kind}:{int(t)}.{int(c)}'] = int(counts[t, c])
+    other = (np.asarray(off['token_type']) != np.asarray(on['token_type'])).any(1) | (np.asarray(off['attention']) != np.asarray(on['attention'])).any(1)
+    other |= (np.asarray(off['legal']) != np.asarray(on['legal'])).any(1)
+    return dict(positions=int(len(num)), changed_positions=int((num.any((1, 2)) | cat.any((1, 2))).sum()), cells=dict(cells.most_common()),
+        unexpected=dict(unexpected.most_common()), masks_or_legal_changed=int(other.sum()))
+
+
+def build_report(directories, *, tolerance=1e-5, top=30, examples=3, vocabulary=None, redactions=None):
+    """The report over capture directories. `redactions` (None: the reference's default): the env reference's DEFAULT_REDACTIONS on
+    both sides; fp-wire-b none (its reference is already π_FP-red3-full's input, view b after peer-view-v2, and the search's views
+    are compared as served). fp-wire-b adds column_groups (per kind the exact share per column group), control (view b's own effect:
+    each _b kind against its flag-off kind), residuals (each _b kind's failing cells by cause) and reference_vs_env (the env's own
+    observation of Foul Play after peer-view-v2 against the reference: the measurement's known differences, 38 / 39 and the
+    [silent]-only reveals, a check of the reference)."""
+    reference = capture_reference(directories)
+    redactions = (DEFAULT_REDACTIONS if reference == 'env' else ()) if redactions is None else tuple(redactions)
     unknown = [r for r in redactions if r not in REDACTIONS]
     if unknown:raise ValueError(f'unknown redactions {unknown}: {sorted(REDACTIONS)}')
     rows, summaries, kinds, data = load_captures(directories)
     labels, numeric, categorical, decode = token_labels(), numeric_names(), categorical_names(), vocabulary_decoder(vocabulary)
     keys = {k: data[k] for k in ('ordinal', 'round', 'decision_index', 'turn')};env = side_of(data, 'env')
-    out = dict(schema=REPORT_SCHEMA, captures=[str(d) for d in directories], positions=int(len(data['ordinal'])), kinds=list(kinds), tolerance=tolerance,
-        capture=capture_counts(summaries), alignment=alignment_summary(rows), worlds=world_summary(rows, data, kinds), parity={}, sampled_vs_true={},
+    alignment = alignment_summary(rows)
+    if reference != 'env':alignment.update(label_equal=None, env_equals_fp_reply=None, env_equals_fp_reply_all=None)   # no reply rows
+    out = dict(schema=REPORT_SCHEMA, reference=reference, captures=[str(d) for d in directories], positions=int(len(data['ordinal'])), kinds=list(kinds),
+        tolerance=tolerance, capture=capture_counts(summaries), alignment=alignment, worlds=world_summary(rows, data, kinds), parity={}, sampled_vs_true={},
         redactions={r: REDACTIONS[r][0] for r in redactions}, parity_redacted={}, gate={})
     common = dict(tolerance=tolerance, top=top, examples=examples, labels=labels, numeric=numeric, categorical=categorical, decode=decode)
     for k, kind in enumerate(kinds):
@@ -1163,14 +1467,31 @@ def build_report(directories, *, tolerance=1e-5, top=30, examples=3, vocabulary=
         out['parity_redacted'][kind] = kind_summary(a, b, {n: v[valid] for n, v in keys.items()}, **common)
         out['gate'][kind] = gate_stats(a, b, {n: v[valid] for n, v in keys.items()}, tolerance=tolerance, labels=labels, numeric=numeric,
             categorical=categorical, examples=examples)
-    if 'true' in kinds:
-        t = kinds.index('true')
+    for k, kind in enumerate(kinds):
+        if not kind.startswith('sampled_'):continue
+        true = 'true_b' if kind.endswith('_b') else 'true'
+        if true not in kinds:continue
+        t = kinds.index(true);both = data['view_valid'][:, t] & data['view_valid'][:, k]
+        s = kind_summary(side_of(data, 'view', t, both), side_of(data, 'view', k, both), {n: v[both] for n, v in keys.items()}, **dict(common, top=10))
+        out['sampled_vs_true'][kind] = {f: s[f] for f in ('positions', 'exact', 'order', 'tokens', 'numeric_columns', 'categorical_columns', 'legal')}
+        out['sampled_vs_true'][kind].update(numeric_cells=s['numeric_cells'][:10], categorical_cells=s['categorical_cells'][:10])
+    if reference == 'fp-wire-b':
+        out.update(column_groups={}, control={}, residuals={}, residual_counts={}, reference_vs_env=None,
+            reference_errors=[e for s in summaries for e in s.get('reference_errors') or ()][:20])
         for k, kind in enumerate(kinds):
-            if not kind.startswith('sampled_'):continue
-            both = data['view_valid'][:, t] & data['view_valid'][:, k]
-            s = kind_summary(side_of(data, 'view', t, both), side_of(data, 'view', k, both), {n: v[both] for n, v in keys.items()}, **dict(common, top=10))
-            out['sampled_vs_true'][kind] = {f: s[f] for f in ('positions', 'exact', 'order', 'tokens', 'numeric_columns', 'categorical_columns', 'legal')}
-            out['sampled_vs_true'][kind].update(numeric_cells=s['numeric_cells'][:10], categorical_cells=s['categorical_cells'][:10])
+            valid = data['view_valid'][:, k]
+            out['column_groups'][kind] = group_stats(side_of(data, 'env', mask=valid), side_of(data, 'view', k, valid), tolerance=tolerance, categorical=categorical)
+            off = kind[:-2] if kind.endswith('_b') else None
+            if off not in kinds:continue
+            j = kinds.index(off);both = valid & data['view_valid'][:, j];sub = {n: v[both] for n, v in keys.items()}
+            out['control'][kind] = control_delta(side_of(data, 'view', j, both), side_of(data, 'view', k, both), categorical=categorical)
+            out['residuals'][kind], out['residual_counts'][kind] = residual_causes(side_of(data, 'env', mask=both), side_of(data, 'view', k, both),
+                side_of(data, 'view', j, both), sub, tolerance=tolerance, labels=labels, numeric=numeric, categorical=categorical, examples=examples, top=top)
+        if 'obs_numeric' in data:
+            observed = dict(env, numeric=data['obs_numeric'], categorical=data['obs_categorical'])
+            check = kind_summary(observed, env, keys, **dict(common, top=10))
+            out['reference_vs_env'] = dict(groups=group_stats(observed, env, tolerance=tolerance, categorical=categorical),
+                cells=check['numeric_cells'][:10], categorical_cells=check['categorical_cells'][:10])
     return out
 
 
@@ -1178,9 +1499,52 @@ def _f(x, digits=3):
     return '-' if x is None else f'{x:.{digits}f}' if isinstance(x, float) else str(x)
 
 
+def render_wire(s):
+    """summary.md's fp-wire-b sections: column groups, view b's own effect, residuals by cause, the reference check."""
+    groups = [g for g, _ in NUMERIC_GROUPS] + [f'numeric_other.{t}' for t, _ in TOKEN_GROUPS] + ['categorical_ability', 'categorical_other', 'token_type',
+        'attention', 'legal', 'all']
+    out = ['', f'## fp-wire-b: exact share per column group (numeric within {s["tolerance"]}, categorical exact)', '',
+        f'Decisions compared: {s["positions"]} (positions: sent decisions where Foul Play was requested in the same round and its wire was '
+        f'replayed; reference errors: {s["capture"].get("not_aligned", {}).get("reference_error", 0)}).', '',
+        '| kind | positions | ' + ' | '.join(groups) + ' |', '|---|---|' + '---|' * len(groups)]
+    for kind, g in s.get('column_groups', {}).items():
+        out.append(f'| {kind} | {g["all"]["positions"]} | ' + ' | '.join(_f(g[x]['share']) for x in groups) + ' |')
+    out += ['', 'Largest numeric |diff| per group: ' + '; '.join(f'{kind}: ' + ', '.join(f'{x} {_f(g[x]["max_abs_diff"], 5)}' for x in groups
+        if 'max_abs_diff' in g[x] and g[x]['max_abs_diff']) for kind, g in s.get('column_groups', {}).items())]
+    out += ['', '## View b\'s own effect: each _b kind against the same world with view b off', '',
+        '| kind | positions | changed | cells changed (positions) | outside view b\'s columns | masks or legal changed |', '|---|---|---|---|---|---|']
+    for kind, c in s.get('control', {}).items():
+        cells = '; '.join(f'{k} {v}' for k, v in list(c['cells'].items())[:8]) or '-'
+        out.append(f'| {kind} | {c["positions"]} | {c["changed_positions"]} | {cells} | {c["unexpected"] or "none"} | {c["masks_or_legal_changed"]} |')
+    out += ['', '## Residuals by cause (each _b kind against the reference; cause from the flag-off control on the same positions)', '']
+    for kind, causes in s.get('residuals', {}).items():
+        out.append(f'### {kind}: ' + ', '.join(f'{k} {v} cells' for k, v in s['residual_counts'][kind].items()))
+        for cause, cells in causes.items():
+            if not cells:continue
+            out.append(f'- {cause}:')
+            for c in cells[:12]:
+                ex = ', '.join(f'{e["ordinal"]}/{e["round"]}/{e["decision_index"]}' for e in c['examples'])
+                out.append(f'  - {c["kind"]} {c["token_label"]}.{c["column_name"]} ({c["token"]}, {c["column"]}): {c["positions"]} positions'
+                    f'{" (a view b column)" if c["view_b_column"] else ""} [{ex}]')
+    check = s.get('reference_vs_env')
+    if check:
+        out += ['', '## Reference check: the env\'s own observation of Foul Play (peer-view-v2) against view b', '',
+            'Expected (the measurement\'s verification): only 38 / 39 (public-percent damage) and the [silent]-only reveals differ.', '',
+            '| group | share equal | max abs diff |', '|---|---|---|']
+        for x in groups:
+            out.append(f'| {x} | {_f(check["groups"][x]["share"])} | {_f(check["groups"][x].get("max_abs_diff"), 5)} |')
+        out.append('')
+        out.append('Top numeric cells: ' + ('; '.join(f'{c["token_label"]}.{c["column_name"]} {_f(c["share"])} (max {_f(c["max_abs_diff"], 5)})' for c in check['cells']) or 'none'))
+        out.append('Top categorical cells: ' + ('; '.join(f'{c["token_label"]}.{c["column_name"]} {_f(c["share"])}' for c in check['categorical_cells']) or 'none'))
+    if s.get('reference_errors'):out += ['', 'Reference errors (first 20): ' + '; '.join(f'{e["ordinal"]}/{e["decision_index"]}: {e["error"]}' for e in s['reference_errors'])]
+    return out
+
+
 def render_markdown(summary, *, top=30):
     """summary.md: alignment, worlds, exact shares, then per kind its ranked cells, tokens and legal lanes."""
-    s = summary;out = ['# Opponent-view parity: the search\'s per-world opponent view against Foul Play\'s env observation', '',
+    s = summary;wire = s.get('reference') == 'fp-wire-b'
+    out = ['# Opponent-view parity: the search\'s per-world opponent view against ' + ('view b of Foul Play\'s own wire (fp-wire-b: π_FP-red3-full\'s '
+        'input, view b after peer-view-v2; the search\'s views as served, _b kinds with view b on)' if wire else 'Foul Play\'s env observation'), '',
         f'Captures: {", ".join(s["captures"])}. Positions (sent decisions where Foul Play was requested in the same round, with a reply row): '
         f'{s["positions"]}. Numeric tolerance for "beyond": {s["tolerance"]}.', '', '## Capture and alignment', '']
     c, a = s['capture'], s['alignment']
@@ -1188,7 +1552,7 @@ def render_markdown(summary, *, top=30):
         f'- not aligned (sent, not a position): {c["not_aligned"] or "none"}', f'- cell errors: {c["cell_errors"] or "none"}',
         f'- turns agree (capture, env replay, reply row): {_f(a["turns_equal"])}; Foul Play\'s journal action = the row\'s label: {_f(a["label_equal"])}',
         f'- re-computed env observation = reply row: all keys {_f(a["env_equals_fp_reply_all"])}; per key '
-        + ', '.join(f'{k} {_f(v)}' for k, v in a['env_equals_fp_reply'].items()), f'- response statuses: {a["statuses"]}', '', '## Worlds', '',
+        + ', '.join(f'{k} {_f(v)}' for k, v in (a['env_equals_fp_reply'] or {}).items()), f'- response statuses: {a["statuses"]}', '', '## Worlds', '',
         '| kind | constructed | not constructed (reasons) | encoder error bits |', '|---|---|---|---|']
     for kind, w in s['worlds'].items():
         out.append(f'| {kind} | {w["constructed"]} | {"; ".join(f"{k}: {v}" for k, v in list(w["not_constructed"].items())[:4]) or "-"} | {w["error_bits"] or "-"} |')
@@ -1227,6 +1591,7 @@ def render_markdown(summary, *, top=30):
                 ex = ', '.join(f'{e["ordinal"]}/{e["round"]}/{e["decision_index"]}' for e in x['examples'])
                 out.append(f'- {x["positions"]}: {" + ".join(x["cells"])} [{ex}]')
             out.append('- cells: ' + '; '.join(f'{c} {k}' for c, k in g['failing_cells'].items()))
+    if wire:out += render_wire(s)
     for kind, p in s['parity'].items():
         out += ['', f'## {kind}: differing features', '', f'Numeric cells, ranked (beyond-tolerance share, then share, then max |diff|); {len(p["numeric_cells"])} cells differ.', '',
             '| # | token | column | name | share | beyond tol | max abs diff | examples (ordinal/round: env -> view) |', '|---|---|---|---|---|---|---|---|']
@@ -1266,11 +1631,12 @@ def report_main(argv):
     p.add_argument('--top', type=int, default=30);p.add_argument('--examples', type=int, default=3)
     p.add_argument('--tolerance', type=float, default=1e-5, help='numeric |diff| above this counts as "beyond tolerance" (default 1e-5)')
     p.add_argument('--vocabulary', help='the champion\'s vocabulary document, to decode categorical ids in examples')
-    p.add_argument('--redact', nargs='*', choices=sorted(REDACTIONS), default=list(DEFAULT_REDACTIONS),
-        help='the redactions parity_redacted applies to both sides (default: ' + ' '.join(DEFAULT_REDACTIONS) + ')')
+    p.add_argument('--redact', nargs='*', choices=sorted(REDACTIONS), default=None,
+        help='the redactions parity_redacted applies to both sides (default: the env reference ' + ' '.join(DEFAULT_REDACTIONS) + '; fp-wire-b none)')
     args = p.parse_args(argv)
     if args.top < 1 or args.examples < 0 or not args.tolerance >= 0:p.error('--top >= 1, --examples >= 0, --tolerance >= 0 required')
-    summary = build_report(args.capture, tolerance=args.tolerance, top=args.top, examples=args.examples, vocabulary=args.vocabulary, redactions=tuple(args.redact))
+    summary = build_report(args.capture, tolerance=args.tolerance, top=args.top, examples=args.examples, vocabulary=args.vocabulary,
+        redactions=None if args.redact is None else tuple(args.redact))
     out = Path(args.out);out.mkdir(parents=True, exist_ok=True)
     write_json(out / 'summary.json', summary)
     with (out / 'summary.md').open('x') as stream:stream.write(render_markdown(summary, top=args.top))
