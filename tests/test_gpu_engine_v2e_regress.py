@@ -214,6 +214,60 @@ class DigestAndRuleTests(unittest.TestCase):
         named['state.moves'][8, 0, 0, 0] = BATONPASS
         self.assertTrue(white_herb(Pre(named, VOCAB, CALLABLE, np.zeros((L, 2), bool)))[8, 0])
 
+    def test_pr0_plug_in_predicates_allowances_and_faint_split(self):
+        from gpu_engine.v2e_regress import Pre, PLUGINS, ALLOWED, faint_rule, lane_verdict
+        ROAR = len(VOCAB['moves']);INTIM, SAND, COLOR = 4, 5, 6
+        vocab = dict(VOCAB, moves=VOCAB['moves'] + ['roar'], abilities=VOCAB['abilities'] + ['intimidate', 'sandstream', 'colorchange'])
+        L = 8;s = pre_arrays(L);actions = np.zeros((L, 2), np.int32)
+        s['types'] = np.ones((L, 2, 6, 2), np.int32);s['base_types'] = np.ones((L, 2, 6, 2), np.int32)
+        s['ability'][0, 1, 3] = INTIM;actions[0, 1] = 6                   # lane 0: switches to the holder (bench index 2)
+        s['ability'][1, 1, 3] = INTIM                                      # lane 1: a benched holder, no switch
+        s['ability'][7, 1, 3] = INTIM;actions[7, 1] = 7                   # lane 7: switches to a non-holder (physical 4)
+        s['ability'][2, 0, 2] = SAND;s['forced_switch'][2, 0] = True       # lane 2: a replacement may bring Sand Stream
+        s['ability'][3, 1, 4] = INTIM;s['moves'][3, 0, 0, 0] = ROAR        # lane 3: the foe's Roar may drag it in
+        s['types'][4, 0, 0] = [5, 0];actions[4, 0] = 4                     # lane 4: a Color Changed active leaves
+        s['ability'][5, 1, 0] = COLOR;actions[5, 1] = 5                    # lane 5: a Color Change active leaves (Pursuit)
+        s['types'][6, 0, 0] = [5, 0]                                       # lane 6: the overlay stays in
+        named = {f'state.{k}': v for k, v in s.items()};named['actions'] = actions
+        p = Pre(named, vocab, np.append(CALLABLE, False), np.zeros((L, 2), bool))
+        pr0 = PLUGINS['PR0'];no = [False, False]
+        self.assertEqual(pr0['intimidate_reveal'](p).tolist(), [[False, True], no, no, [False, True], no, no, no, no])
+        self.assertEqual(pr0['weather_reveal'](p).tolist(), [no, no, [True, False], no, no, no, no, no])
+        self.assertEqual(pr0['type_revert'](p).tolist(), [no, no, no, no, [True, False], [False, True], no, no])
+        self.assertTrue(all(e in ALLOWED for e in pr0))
+        self.assertEqual(lane_verdict({('trackers.shown_ability', 1), ('trackers.belief_mask', 1), ('trackers.visible_belief.pin', 1)},
+                                      {'intimidate_reveal': [1]}, None)[0], [])
+        self.assertEqual(lane_verdict({('trackers.shown_ability', 0), ('state.boosts', 1)}, {'weather_reveal': [1]}, None)[0],
+                         [('state.boosts', 1), ('trackers.shown_ability', 0)])
+        self.assertEqual(lane_verdict({('trackers.shown_types', 0)}, {'type_revert': [0]}, None)[0], [])
+        self.assertEqual(lane_verdict({('trackers.shown_types', 1)}, {'type_revert': [0]}, None)[0], [('trackers.shown_types', 1)])
+        # A faint lane-step: the rule removes the cleared leaves; another change still needs an effect.
+        vol = 'trackers.public_volatiles';fainted = np.zeros((2, 6), bool);fainted[1, 0] = True
+        base = np.zeros((2, 6, 3), bool);base[1, 0, 1] = True;post = np.zeros_like(base)
+        entries = {(vol, 1), ('trackers.shown_types', 1)};p2p = np.tile(np.arange(6), (2, 1));slots = np.zeros(2, np.int64)
+        self.assertEqual(faint_rule(entries, {vol: post}, {vol: base}, fainted, p2p, slots), ({('trackers.shown_types', 1)}, [vol]))
+        wrong = post.copy();wrong[0, 2, 0] = True
+        self.assertEqual(faint_rule(entries, {vol: wrong}, {vol: base}, fainted, p2p, slots), (entries, []))
+
+    def test_pr0_meanlook_arrival_predicate_reads_the_tracker_pre_value(self):
+        from gpu_engine.v2e_regress import Pre, PLUGINS, lane_verdict, MEANLOOK
+        L = 6;s = pre_arrays(L);actions = np.zeros((L, 2), np.int32);MEAN = len(VOCAB['moves'])
+        s['trap_source'] = np.full((L, 2, 6), -1, np.int32);flag = np.zeros((L, 2, 6), np.int32)
+        flag[5, 1, 4] = 1;actions[5, 0] = 5                                 # lane 5: a flag on a bench entry only
+        flag[0, 1, 0] = 1;actions[0, 0] = 5                                 # lane 0: a stale public flag, a switch
+        flag[1, 1, 0] = 1                                                   # lane 1: a flag, no arrival
+        s['trap_source'][2, 1, 0] = 0;s['forced_switch'][2, 0] = True       # lane 2: an engine link, a replacement
+        actions[3, 1] = 6                                                   # lane 3: an arrival, no trap anywhere
+        s['moves'][4, 0, 0, 0] = MEAN;actions[4, 1] = 4                     # lane 4: Mean Look this step, a switch
+        named = {f'state.{k}': v for k, v in s.items()};named['actions'] = actions;named[MEANLOOK] = flag
+        named['trackers.active_slot'] = np.zeros((L, 2), np.int32)
+        p = Pre(named, dict(VOCAB, moves=VOCAB['moves'] + ['meanlook']), np.append(CALLABLE, False), np.zeros((L, 2), bool))
+        both, no = [True, True], [False, False]
+        self.assertEqual(PLUGINS['PR0']['meanlook_arrival'](p).tolist(), [both, no, both, no, both, no])
+        self.assertEqual(lane_verdict({(MEANLOOK, 0), (MEANLOOK, 1)}, {'meanlook_arrival': [0, 1]}, None)[0], [])
+        self.assertEqual(lane_verdict({('trackers.shown_ability', 1)}, {'meanlook_arrival': [0, 1]}, None)[0],
+                         [('trackers.shown_ability', 1)])
+
     def test_allowed_fields_are_side_aware(self):
         from gpu_engine.v2e_regress import lane_verdict
         effects = {'curse': [0]}
@@ -382,6 +436,31 @@ class TwoPassTests(unittest.TestCase):
             self.assertEqual(report['counts']['changed_but_uninvolved'], 0)
             code, report, _ = self.patched('order-wrong', lambda s, a, t: step(s, a, t, wrong=True), template=self.template_v2)
             self.assertEqual(code, 1);self.assertIn('trackers.public_order', report['uninvolved_leaves'])
+
+    def test_base_pass_migrates_a_capture_that_predates_a_tracker_leaf(self):
+        from gpu_engine import v2e_regress
+        base = self.tmp / 'base-v2'
+        code = v2e_regress.base_pass(self.args(out=base, pad_lanes=self.LANES), step_override=base_step,
+            prepared=(self.context, self.template_v2))
+        self.assertEqual(code, 0)
+        m = json.loads((base / 'manifest.json').read_text())
+        self.assertEqual(m['migrated_new_inputs'], ['trackers.public_order'])
+        self.assertIn('trackers.public_order', m['input_names']);self.assertIn('trackers.public_order', m['output_names'])
+        self.assertEqual(self.manifest['migrated_new_inputs'], [])
+        # A later PR's patched pass on that base compares public_order bitwise, not by replay.
+        def run(name, step):
+            out = self.tmp / name
+            code = v2e_regress.patched_pass(self.args(out=out, base=str(base), pr='A1', faint_clear=False),
+                step_override=step, prepared=(self.context, self.template_v2))
+            return code, json.loads((out / 'report.json').read_text())
+        code, report = run('on-base-v2', base_step)
+        self.assertEqual(code, 0, report['counts']);self.assertFalse(report['public_order_rule'])
+        self.assertEqual(report['counts']['changed_but_uninvolved'], 0)
+        def moved(state, actions, t):
+            out = base_step(state, actions, t)
+            return result(out.step.state, out.trackers._replace(public_order=out.trackers.public_order.at[:, 1, 5].set(0)))
+        code, report = run('on-base-v2-moved', moved)
+        self.assertEqual(code, 1);self.assertIn('trackers.public_order', report['uninvolved_leaves'])
 
 
 if __name__ == '__main__':

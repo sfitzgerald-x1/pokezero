@@ -10,7 +10,7 @@ import jax
 import jax.numpy as j
 from . import lane_index as _li
 
-SCHEMA='pokezero.engine_device_public_trackers.v2'
+SCHEMA='pokezero.engine_device_public_trackers.v3'
 BAD_ACTIVE=1
 BAD_PUBLIC_VALUE=2
 BEFORE_ACTIVE_MISMATCH=4
@@ -104,6 +104,11 @@ class Trackers(NamedTuple):
     negative_items:object=None
     visible_belief:object=None     # standing pins + explicitly source-refreshed basis
     public_port:object=None
+    # [B,2,6] permutation of PUBLIC encounter slots: Showdown's request-order
+    # rule (each install swaps the installed member with position 0) replayed
+    # from public installs only. Reset only by initialize (identity: the lead
+    # holds public slot 0); never encoded, read out or redacted.
+    public_order:object=None
 
 
 class Tendency(NamedTuple):
@@ -177,12 +182,29 @@ def _install(t,state,side,active_rows):
     return _observe(t,state,side,physical,use,identity=True)
 
 
+def public_order_install(t,side,use):
+    """Request-order rule in public-slot coordinates, after an actual install.
+
+    The member just installed (its public slot already assigned by _install)
+    swaps places with position 0; a no-op when it is already first. Rows
+    outside `use` and carries without the field are unchanged.
+    """
+    if t.public_order is None:return t
+    r=j.arange(len(t.error));slot=_li.take(t.active_slot,r,side);order=_li.take(t.public_order,r,side)
+    hit=order==slot[:,None];found=j.any(hit,axis=1);position=j.argmax(hit,axis=1)
+    swapped=_li.put(order,r,(position,),order[:,0]).at[:,0].set(slot)
+    keep=j.broadcast_to(j.asarray(use,bool),found.shape)&found
+    return t._replace(public_order=_li.put(t.public_order,r,(side,),j.where(keep[:,None],swapped,order)))
+
+
 def initialize(state):
     """Only current initial actives are publicly revealed; own data stays in state."""
     b=_state_shape(state);z=j.zeros((b,2,6),j.int32);no=j.zeros((b,2,6),bool)
     order=j.broadcast_to(j.arange(6,dtype=j.int32),(b,2,6))
+    # public_order starts as identity: the lead's install below takes next_slot0.
     t=Trackers(j.full((b,2,6),-1,j.int32),j.full((b,2),-1,j.int32),j.full((b,2),-1,j.int32),j.zeros((b,2),j.int32),order,
-        z,z,j.full_like(z,-1),z,z,j.zeros((b,2,6,7),j.int32),no,no,state.turn,state.weather,state.spikes,j.zeros(b,j.int32))
+        z,z,j.full_like(z,-1),z,z,j.zeros((b,2,6,7),j.int32),no,no,state.turn,state.weather,state.spikes,j.zeros(b,j.int32),
+        public_order=order)
     r=j.arange(b);yes=j.ones(b,bool)
     for side in range(2):
         physical=j.clip(state.active[:,side],0,5)
@@ -217,6 +239,8 @@ def update(trackers,before,after,actions,*,active_rows=None):
         changed=use&(incoming>=0)&(incoming<6)&(incoming!=before.active[:,side])
         t=t._replace(own_order=t.own_order.at[:,side].set(j.where(changed[:,None],swapped,old_order)))
         t=_install(t,after,side,use)
+        # Same request-order rule as own_order, once per observed net install.
+        t=public_order_install(t,side,changed)
     return t._replace(turn=j.where(use,after.turn,t.turn),weather=j.where(use,after.weather,t.weather),spikes=j.where(use[:,None],after.spikes,t.spikes))
 
 

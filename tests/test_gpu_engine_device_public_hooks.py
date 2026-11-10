@@ -55,6 +55,8 @@ class PublicHooksTests(unittest.TestCase):
    s=s._replace(active=s.active.at[:,1].set(p));h.install(c,s,1,yes)
   self.assertEqual(c.trackers.next_slot[:,1].tolist(),[3,3])
   self.assertEqual(c.trackers.own_order[0,1].tolist(),[0,1,2,4,3,5])
+  # Schema v3: the same installs in public-slot coordinates (slots 1, 2, then 0).
+  self.assertEqual(c.trackers.public_order[0,1].tolist(),[0,2,1,3,4,5])
   self.assertEqual(tr.readout(c.trackers,j.zeros(2,j.int32)).species[0,:3].tolist(),[7,10,11])
  def test_transient_status_lum_and_reflected_ability_are_hooked_before_cure(self):
   s=state()._replace(item=state().item.at[:,1,0].set(4),status=state().status.at[:,1,0].set(1))
