@@ -75,8 +75,9 @@ class ConditionedRoleTests(unittest.TestCase):
         self.assertIsInstance(bound,c.SuspendedNativeInput,bound)
         # Independently generated native suspension and JAX suspension retain
         # the same complete represented physical/carry key before resumption.
+        # The JAX-only saved effect block (fidelity R) joins the key; the native side takes the bound input's.
         native_key=c._complete_key(self.f._canonical_native_future(native_paused,
-            original.certificate,boundary='suspended'),bound.capsule)
+            original.certificate,boundary='suspended'),bound.capsule,c._saved_block(dict(bound.raw_jax)))
         jax_key=c.canonical_resumed_jax(paused,0,self.meta,native_input=bound)
         self.assertNotIsInstance(native_key,self.f.Refused,native_key)
         self.assertNotIsInstance(jax_key,self.f.Refused,jax_key)
@@ -122,9 +123,9 @@ class ConditionedRoleTests(unittest.TestCase):
                     poison_carrier=True,copied_ability=current)
                 result=self.compare(state,certificate,side)
                 self.assertEqual(result['status'],'AGREE',result)
-                chance=self.t.ChanceInputs(self.j.zeros((1,2,12),self.j.int32),self.j.zeros((1,2),self.j.int32),
-                    self.j.zeros((1,2),self.j.int32),self.j.zeros((1,2),self.j.int32),
-                    self.j.array([[0,1]]),self.j.array([0]))
+                chance=self.t.ChanceInputs(draws=self.j.zeros((1,2,12),self.j.int32),phazing=self.j.zeros((1,2),self.j.int32),
+                    secondary=self.j.zeros((1,2),self.j.int32),sleep_talk=self.j.zeros((1,2),self.j.int32),
+                    entry_ties=self.j.array([[0,1]]),initial_tie=self.j.array([0]))
                 actions=self.j.array([[4,0] if side==0 else [0,4]])
                 after=self.step(state,actions,self.table,chance).state
                 self.assertEqual(int(after.status[0,side,0]),expected_status)
@@ -139,9 +140,9 @@ class ConditionedRoleTests(unittest.TestCase):
                 hp=state.hp.at[:,side,1].set(125))
             first=self.compare(state,certificate,side)
             self.assertEqual(first['status'],'AGREE',first)
-            chance=self.t.ChanceInputs(self.j.zeros((1,2,12),self.j.int32),self.j.zeros((1,2),self.j.int32),
-                self.j.zeros((1,2),self.j.int32),self.j.zeros((1,2),self.j.int32),
-                self.j.array([[0,1]]),self.j.array([0]))
+            chance=self.t.ChanceInputs(draws=self.j.zeros((1,2,12),self.j.int32),phazing=self.j.zeros((1,2),self.j.int32),
+                secondary=self.j.zeros((1,2),self.j.int32),sleep_talk=self.j.zeros((1,2),self.j.int32),
+                entry_ties=self.j.array([[0,1]]),initial_tie=self.j.array([0]))
             actions=self.j.array([[4,0] if side==0 else [0,4]])
             paused=self.step(state,actions,self.table,chance).state
             self.assertTrue(bool(paused.pending_residual[0]))

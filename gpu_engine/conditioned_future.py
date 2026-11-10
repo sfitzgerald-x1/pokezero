@@ -20,6 +20,22 @@ CAPSULE_FIELDS = (
 )
 _BOOLEANS = {"pending_residual", "forced_switch", "baton_pass"}
 _DRAW_BOUNDS = (2, 100, 100, 100, 16, 16, 100, 4, 8, 2, 2, 2)
+# Fidelity R: the engine's saved effect block is JAX-only. CAPSULE_FIELDS is also the native wire schema
+# (rust/pokezero-search/src/conditioned_resume.rs accepts exactly those fields), so the block is not sent there;
+# it joins every suspended future's key instead, and a native successor takes it by the engine's save rule (a
+# successor still suspended keeps the block its resumed step replayed; any other carries 0). Two suspended
+# futures that differ only in the saved block therefore never compare equal.
+SAVED_BLOCK = "effect_draws"
+_EFFECT_BOUNDS = (16, 16, 4, 2)
+_NO_BLOCK = ((0, 0, 0, 0), (0, 0, 0, 0))
+
+
+def _saved_block(data):
+    value = mapping._freeze(data[SAVED_BLOCK]) if SAVED_BLOCK in data else _NO_BLOCK
+    if (mapping._shape(value) != (2, 4) or any(type(v) is not int for v in _leaves(value))
+            or any(not 0 <= v < bound for row in value for v, bound in zip(row, _EFFECT_BOUNDS, strict=True))):
+        raise ValueError("INVALID_SAVED_EFFECT_BLOCK")
+    return value
 
 
 @dataclass(frozen=True)
@@ -153,7 +169,7 @@ def suspended_input_from_jax(state, index, metadata, *, certificate, module=None
             static_native=static, inactive_addresses=())
         if native_successor is not None:
             complete = _complete_key(mapping.CanonicalFuture(tuple(mapping._flat(expected)),
-                bound_certificate, raw, native_wire), capsule)
+                bound_certificate, raw, native_wire), capsule, _saved_block(data))
             if complete.key != native_successor.key:
                 raise ValueError("NATIVE_SUCCESSOR_KEY_MISMATCH")
         digest = _binding_digest(native_wire, raw, capsule, bound_certificate, certificate)
@@ -162,13 +178,13 @@ def suspended_input_from_jax(state, index, metadata, *, certificate, module=None
         return mapping.Refused((mapping.Gap("suspension", "SUSPENSION_INPUT_REFUSED", str(error)),), raw, native_wire)
 
 
-def _complete_key(physical, capsule):
+def _complete_key(physical, capsule, saved_block):
     if isinstance(physical, mapping.Refused):
         return physical
     # Complete physical state and all future-reused/external carry participate.
     # No capsule field can disappear merely because physical HP agrees.
     return ConditionedFuture(tuple(sorted((*physical.key,
-        *mapping._flat({"capsule": dict(capsule)})))), physical.certificate,
+        *mapping._flat({"capsule": dict(capsule), "saved": {SAVED_BLOCK: saved_block}})))), physical.certificate,
         physical.raw_jax, physical.raw_native, capsule)
 
 
@@ -228,7 +244,8 @@ def canonical_resumed_jax(state, index, metadata, *, native_input):
     else:
         physical = mapping.canonical_jax_future(state, index, metadata, certificate=native_input.certificate)
     try:
-        return _complete_key(physical, _from_data(mapping._sample(state, index)))
+        sampled = mapping._sample(state, index)
+        return _complete_key(physical, _from_data(sampled), _saved_block(sampled))
     except (ValueError, TypeError, KeyError, IndexError) as error:
         return mapping.Refused((mapping.Gap("capsule", "INVALID_SUCCESSOR_CAPSULE", str(error)),),
             physical.raw_jax)
@@ -270,6 +287,7 @@ def native_successors(native_input, replacement, entry_ties, *, module=None):
         if getattr(module, "CONDITIONED_ORACLE_ENABLED", False) is not True:
             raise ValueError("CONDITIONED_ORACLE_REQUIRED")
         capsule = dict(native_input.capsule, version=1, schema="pokezero.suspended-turn")
+        resumed_block = _saved_block(dict(native_input.raw_jax))
         if choices is None:
             report = json.loads(module.conditioned_resume(native_input.raw_native, json.dumps(capsule), replacement, ties))
         else:
@@ -296,7 +314,8 @@ def native_successors(native_input, replacement, entry_ties, *, module=None):
                 return refuse("UNSUPPORTED_POSITIVE_SUCCESSOR", repr(physical.gaps))
             if any(dict(carry)["baton_pass"]) and not dict(carry)["pending_residual"]:
                 return refuse("UNSUPPORTED_POSITIVE_SUCCESSOR", "Successor is still suspended")
-            results.append((mass / 100, _complete_key(physical, carry)))
+            results.append((mass / 100, _complete_key(physical, carry,
+                resumed_block if dict(carry)["pending_residual"] else _NO_BLOCK)))
         if not results or abs(math.fsum(mass for mass, _ in results) - 1) > 1e-6:
             raise ValueError("CONDITIONAL_MASS_NOT_ONE")
         return tuple(results)
