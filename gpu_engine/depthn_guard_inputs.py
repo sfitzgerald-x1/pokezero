@@ -145,8 +145,10 @@ def effect_record(frame, root, worlds, children, request, owner, vocabulary, cho
     `reply_logits` (a served reply model, br_fp): per world in block order its reply-model logits [9], None for a waiting world.
     The union guard: the guard is evaluated a second time with each requested world's turn-1 peer prior replaced by the reply
     model's (turn-1 peer mass and the reach's per-world reply weights; our prior and the turn-2 priors unchanged). The record
-    stays the champion's evaluation; `union` adds dict(tripped=champion OR reply, champion=..., reply=...) over UNION_FIELDS and
-    the top-level `tripped` becomes union['tripped'] (the live actor plays greedy on it). Without reply_logits: unchanged."""
+    stays the champion's evaluation; `union` adds dict(tripped=champion OR reply, champion=..., reply=...) over UNION_FIELDS,
+    `union_only` whether only the reply arm tripped (then the record's b, c, arms and m_* describe the champion, which did not), and
+    the top-level `tripped` becomes union['tripped'] (the live actor plays greedy on it). Without reply_logits: unchanged. Only (b)
+    can differ between the arms: (c) reads our own prior and lanes, the same in both."""
     names = Names(vocabulary);cond = guard.conditions(request['lines'], owner, request.get('own_request_line'))
     own_lanes = guard.own_moves(request.get('own_request_line')) or (None,) * 4
     own_turn1 = dict(lanes=list(own_lanes), logits=[float(x) for x in root['root_logits']], legal=[bool(x) for x in root['root_legal']])
@@ -192,5 +194,6 @@ def effect_record(frame, root, worlds, children, request, owner, vocabulary, cho
         reply = guard.evaluate(cond, own_turn1=own_turn1, peer_turn1=replied, turn2=[dict(t) for t in turn2], turn2_available=available, choice=choice)
         summary = lambda r: {k: r.get(k) for k in UNION_FIELDS}
         record['union'] = dict(tripped=bool(record['tripped'] or reply['tripped']), champion=summary(record), reply=summary(reply))
+        record['union_only'] = bool(record['union']['tripped'] and not record['tripped'])   # only the reply arm tripped: b, c, arms, m_* are the champion's
         record['tripped'] = record['union']['tripped']
     return record

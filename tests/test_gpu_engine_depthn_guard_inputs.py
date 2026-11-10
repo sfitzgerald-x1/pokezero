@@ -107,7 +107,8 @@ class SeamTests(unittest.TestCase):
         plain, frame, root = self.record(fake_labels)
         union, _, _ = self.record(fake_labels, reply=self.champion_reply)
         self.assertEqual(union['union']['champion'], union['union']['reply']);self.assertEqual(union['tripped'], plain['tripped'])
-        self.assertEqual({k: v for k, v in union.items() if k != 'union'}, plain)   # every champion field unchanged
+        self.assertFalse(union['union_only'])
+        self.assertEqual({k: v for k, v in union.items() if k not in ('union', 'union_only')}, plain)   # every champion field unchanged
         clear, _, _ = self.record(lambda s: fake_labels(s, peer_moves=(TACKLE, REST, PROTECT, 0)), reply=self.champion_reply)
         self.assertEqual((clear['tripped'], clear['union']['tripped']), (False, False))
         with self.assertRaisesRegex(ValueError, 'reply logits for'):self.record(fake_labels, reply=lambda f, r:self.champion_reply(f, r)[:-1])
@@ -130,6 +131,7 @@ class SeamTests(unittest.TestCase):
         union, _, _ = self.record(roots_only, edit=lowered, reply=lambda f, r:self.champion_reply(f, r, lane))
         self.assertEqual((union['tripped'], union['union']['champion']['tripped'], union['union']['reply']['tripped']), (True, False, True))
         self.assertTrue(union['union']['reply']['b_turn1']);self.assertEqual(union['b_turn1'], False)   # the record's own fields: the champion's
+        self.assertTrue(union['union_only'])
         lowered_reply, _, _ = self.record(roots_only, edit=lowered, reply=lambda f, r:self.champion_reply(f, r, lane, high=-50.))
         self.assertEqual((lowered_reply['tripped'], lowered_reply['union']['reply']['tripped']), (False, False))
 

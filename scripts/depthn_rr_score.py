@@ -618,13 +618,15 @@ def guard_choices(choices, greedy, own_moves, record, b=None):
     where the own-recharge guard (an override INTO a recharge move greedy did not choose) or UNREPRESENTED_EFFECT ((b) at the
     root, or (c) on this operator's own choice) trips. Returns ({name: played choice}, {name: [causes] or None}); greedy is
     never guarded; `record` None (a row without the guard) applies the recharge guard alone. `b` replaces the record's root-level
-    (b) (the reach scopes: turn-1 (b) or the reach's turn 2); (c) stays the record's."""
+    (b) (the reach scopes: turn-1 (b) or the reach's turn 2); (c) stays the record's. A union record (a br_fp row, depthn_guard_inputs
+    reply_logits) adds its reply arm's (b) to either, as the live actor's fallback does (only (b) differs between the arms)."""
     played, causes = {}, {}
+    reply_b = bool(((record or {}).get('union') or {}).get('reply', {}).get('b'))
     for name, choice in choices.items():
         if name == 'greedy' or choice is None:played[name], causes[name] = choice, None;continue
         why = []
         if effect_guard.recharge_guarded(own_moves, choice, greedy):why.append(OWN_RECHARGE)
-        if record is not None and ((record['b'] if b is None else b) or effect_guard.trips(record, choice)['c']):why.append(UNREPRESENTED)
+        if record is not None and ((record['b'] if b is None else b) or reply_b or effect_guard.trips(record, choice)['c']):why.append(UNREPRESENTED)
         played[name], causes[name] = (greedy if why else choice), (why or None)
     return played, causes
 

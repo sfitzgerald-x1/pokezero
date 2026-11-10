@@ -750,6 +750,17 @@ class GuardTests(unittest.TestCase):
         self.assertEqual(out['raw_operators']['averaging']['choice'], 0);self.assertAlmostEqual(out['raw_operators']['averaging']['D']['dropped'], .4)
         self.assertEqual((out['guard']['b'], out['guard']['tiers_turn1']), (True, ['A']))
 
+    def test_a_union_records_reply_arm_b_guards_every_operator_as_live_does(self):
+        clear = guard_record()
+        union = dict(clear, tripped=True, union_only=True, union=dict(tripped=True, champion=dict(tripped=False, b=False),
+                                                                    reply=dict(tripped=True, b=True)))
+        out = self.score(union)
+        for name, o in out['operators'].items():
+            self.assertEqual(o['choice'], 1, name)   # greedy plays: the live actor fell back on the union
+            if name != 'greedy' and o['raw_choice'] != 1:self.assertEqual(o['guard_causes'], ['UNREPRESENTED_EFFECT'], name)
+        quiet = dict(clear, union=dict(tripped=False, champion=dict(tripped=False, b=False), reply=dict(tripped=False, b=False)))
+        self.assertEqual(self.score(quiet)['operators']['averaging']['choice'], self.score(clear)['operators']['averaging']['choice'])
+
     def test_c_guards_only_the_operators_choosing_the_lane(self):
         out = self.score(guard_record(lanes=(('A', 'other'), None, None, None)))   # lane 0 (averaging's choice) guarded for us
         self.assertEqual((out['operators']['averaging']['choice'], out['operators']['averaging']['guard_causes']), (1, ['UNREPRESENTED_EFFECT']))
