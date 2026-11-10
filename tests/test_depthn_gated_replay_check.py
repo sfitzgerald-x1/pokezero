@@ -30,8 +30,8 @@ class GatedReplayCheckTests(unittest.TestCase):
             report = C.check([raw]);self.assertEqual((report['compared'], report['mismatches']), (1, {}), grids)
 
     def test_mismatches_are_counted_by_field(self):
-        raw, _, _ = gated(NG, played=1)   # the ungated br_fp choice where the gate keeps greedy
-        self.assertEqual(C.check([raw])['mismatches'], dict(action=1))
+        raw, _, _ = gated(NG, played=1)   # the ungated br_fp choice where the gate keeps greedy: its record says passed, the rule does not
+        self.assertEqual(C.check([raw])['mismatches'], dict(action=1, noise_gate=1))
         raw, _, _ = gated(D1, operator='ARGMAX_MEAN_COMPLETED_Q');self.assertEqual(C.check([raw])['mismatches'], dict(root_operator=1))
         raw, _, _ = gated(D1, gate=False);self.assertEqual(C.check([raw])['mismatches'], dict(noise_gate=1))
         raw, _, _ = gated(D1);raw['replay']['q_values'][1] += 1e-9;self.assertEqual(C.check([raw])['mismatches'], dict(q_values=1))
