@@ -395,6 +395,14 @@ def move(*names):
     return lambda p: p.side_uses(*names)
 
 
+def substitute_holder(p):
+    """A1 (design 13): a side whose active may faint behind a Substitute this step, whose
+    Substitute the faint now clears: one up in the pre-state (a Baton recipient inherits
+    the passer's), or a Substitute move this step."""
+    held = p.active('substitute_hp') > 0 if 'substitute_hp' in p.s else np.zeros((p.lanes, 2), bool)
+    return held | p.side_uses('substitute')
+
+
 # Leaf families for the allowed-change sets (regexes over output names).
 FAMILIES = {
     'hp': (r'^state\.(hp|substitute_hp)$', r'^trackers\.(hp_percent|damage_exact_(dealt|taken))$',
@@ -407,6 +415,11 @@ FAMILIES = {
     'reveal': (r'^trackers\.(shown_ability|original_ability|borrowed_ability|belief_mask)$', r'^trackers\.visible_belief\.'),
     'types': (r'^trackers\.shown_types$',),
     'meanlook': (r"^trackers\.mon_features\['meanlook_trap'\]$",),
+    # A1: a status write updates the sleep-clause port (holder on the other seat, victims
+    # on the cured one) and refreshes the subject's visible belief basis.
+    'port': (r'^trackers\.public_port\.',),
+    'visible': (r'^trackers\.visible_belief\.',),
+    'sub': (r'^state\.substitute_hp$',),
     'all': (r'.*',),
 }
 ALL = dict(user=('all',), target=('all',), glob=('all',))
@@ -425,8 +438,12 @@ ALLOWED = {
     'superpower': dict(user=('boosts', 'hp', 'item'), target=('hp',), glob=()),
     'charm': dict(user=('hp',), target=('boosts', 'hp', 'item', 'reveal'), glob=()),
     'lovelykiss': ALL, 'sleep_clause': ALL, 'sleep_immunity': ALL,
-    'aromatherapy': dict(user=('status', 'hp'), target=('hp',), glob=()),
-    'refresh': dict(user=('status', 'hp'), target=('hp',), glob=()),
+    # A cure goes through party_cure/observe: port.condition and team_cure write the sleep-clause
+    # port (victims on the user's seat, holder on the foe's) and _refresh the visible belief.
+    'aromatherapy': dict(user=('status', 'hp', 'port', 'visible'), target=('hp', 'port'), glob=()),
+    'refresh': dict(user=('status', 'hp', 'port', 'visible'), target=('hp', 'port'), glob=()),
+    # The faint clears only the holder's Substitute HP (no tracker reads it).
+    'sub_faint': dict(user=('sub',), target=(), glob=()),
     # PR0 (tracker only): a gated reveal drops the entrant's own ability reveal; the
     # Color Change revert rewrites the departing mon's shown types. No state, no foe field.
     'intimidate_reveal': dict(user=('reveal',), target=(), glob=()),
@@ -452,7 +469,7 @@ PLUGINS = {
                 meanlook_arrival=meanlook_arrival),
     'A1': dict(curse=move('curse'), superpower=move('superpower'), charm=move('charm'), lovelykiss=move('lovelykiss'),
                aromatherapy=move('aromatherapy'), refresh=move('refresh'), sleep_clause=sleep_clause,
-               sleep_immunity=sleep_immunity),
+               sleep_immunity=sleep_immunity, sub_faint=substitute_holder),
     'A2': dict(knockoff=move('knockoff'), gigadrain=move('gigadrain'), counter=move('counter'), mirrorcoat=move('mirrorcoat'),
                destinybond=move('destinybond'), destinybond_trigger=destiny_bond_bit),
     'R': dict(bonemerang=move('bonemerang')),

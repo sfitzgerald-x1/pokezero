@@ -123,6 +123,24 @@ confusion/other volatiles and the opposing party unchanged. Gen 3 Soundproof
 blocks each holder's cure, including the user; fainted party members are not
 cured. This is selected component support, not qualified move/game coverage.
 
+Fidelity patch A1 (status, boost and cure effects; no new state or chance):
+- Curse (non-Ghost, the only pool form): +1 Atk, +1 Def, -1 Spe on the user,
+  silent at the caps. A Ghost-type user's Curse stays an unported placeholder.
+- Superpower: -1 Atk, -1 Def on the user after a successful hit, Substitute
+  hits and KOs included; not on a miss, Protect or type immunity.
+- Charm: target Attack -2, blocked by Protect and Substitute, never by type
+  immunity; Clear Body, White Smoke and Hyper Cutter block it (revealed only
+  when the capped drop was nonzero).
+- Lovely Kiss: primary sleep at 75% accuracy through the status table.
+- Sleep Clause Mod (the comparator's `gen3customgame@@@sleepclausemod`): a
+  foe's sleep move fails while another living member of the target's side
+  sleeps from a foe; Rest's sleep (rest_origin) does not count.
+- Insomnia and Vital Spirit refuse sleep moves (revealed) and fail Rest.
+- Aromatherapy: Heal Bell's party cure without the Soundproof exemption.
+- Refresh: cures the user's paralysis, burn or poison, not sleep or freeze.
+- A fainted mon's Substitute is cleared with its other volatiles, so the
+  forced-replacement request no longer sees it.
+
 The existing fixed critical roll now resolves ordinary 1/16 and catalog +1
 high-crit 1/8 chances. Battle Armor and Shell Armor veto critical hits in both
 ordinary damage and pre-switch Pursuit, using the actual outgoing holder.

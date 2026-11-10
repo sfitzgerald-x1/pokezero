@@ -1,0 +1,184 @@
+{
+ "schema": "pokezero.effect_probe.scenario.v1",
+ "move": "refresh",
+ "note": "A1.8 Refresh cures paralysis, burn, toxic and poison the turn they land, fails with no status, and Sleep Talk's Refresh fails on sleep.",
+ "teams": [
+  [
+   {
+    "species": "Milotic",
+    "moves": [
+     "refresh",
+     "sleeptalk"
+    ],
+    "ability": "Marvel Scale",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Starmie",
+    "moves": [
+     "surf",
+     "thunderbolt",
+     "icebeam",
+     "recover"
+    ],
+    "ability": "Illuminate",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Swampert",
+    "moves": [
+     "earthquake",
+     "surf",
+     "icebeam",
+     "protect"
+    ],
+    "ability": "Torrent",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Zapdos",
+    "moves": [
+     "thunderbolt",
+     "batonpass",
+     "agility",
+     "drillpeck"
+    ],
+    "ability": "Pressure",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Celebi",
+    "moves": [
+     "psychic",
+     "gigadrain",
+     "recover",
+     "calmmind"
+    ],
+    "ability": "Natural Cure",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Suicune",
+    "moves": [
+     "surf",
+     "icebeam",
+     "calmmind",
+     "rest"
+    ],
+    "ability": "Pressure",
+    "item": "Leftovers"
+   }
+  ],
+  [
+   {
+    "species": "Smeargle",
+    "moves": [
+     "thunderwave",
+     "willowisp",
+     "toxic",
+     "splash"
+    ],
+    "ability": "Own Tempo",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Vileplume",
+    "moves": [
+     "poisonpowder",
+     "sleeppowder",
+     "splash",
+     "gigadrain"
+    ],
+    "ability": "Chlorophyll",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Starmie",
+    "moves": [
+     "surf",
+     "thunderbolt",
+     "icebeam",
+     "recover"
+    ],
+    "ability": "Illuminate",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Swampert",
+    "moves": [
+     "earthquake",
+     "surf",
+     "icebeam",
+     "protect"
+    ],
+    "ability": "Torrent",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Zapdos",
+    "moves": [
+     "thunderbolt",
+     "batonpass",
+     "agility",
+     "drillpeck"
+    ],
+    "ability": "Pressure",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Celebi",
+    "moves": [
+     "psychic",
+     "gigadrain",
+     "recover",
+     "calmmind"
+    ],
+    "ability": "Natural Cure",
+    "item": "Leftovers"
+   }
+  ]
+ ],
+ "script": [
+  [
+   "move 1",
+   "move 1"
+  ],
+  [
+   "move 1",
+   "move 2"
+  ],
+  [
+   "move 1",
+   "move 3"
+  ],
+  [
+   "move 1",
+   "switch 2"
+  ],
+  [
+   "move 1",
+   "move 1"
+  ],
+  [
+   "move 1",
+   "move 2"
+  ],
+  [
+   "move 2",
+   "move 3"
+  ],
+  [
+   "move 2",
+   "move 3"
+  ]
+ ],
+ "axes": [],
+ "expect": {
+  "exact": true
+ },
+ "tape_steps": {
+  "5": {
+   "draws.1.7": 3
+  }
+ }
+}

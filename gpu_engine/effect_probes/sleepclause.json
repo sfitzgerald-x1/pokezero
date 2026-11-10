@@ -1,0 +1,186 @@
+{
+ "schema": "pokezero.effect_probe.scenario.v1",
+ "move": "sleepclause",
+ "note": "A1.5 Sleep Clause Mod with Spore: the first sleep (Blissey) is allowed; Snorlax is blocked while Blissey sleeps on the bench; Snorlax's Aromatherapy cures the benched sleeper; Snorlax can then be slept; Blissey is blocked while Snorlax sleeps.",
+ "teams": [
+  [
+   {
+    "species": "Smeargle",
+    "moves": [
+     "spore",
+     "splash",
+     "seismictoss",
+     "sleeptalk"
+    ],
+    "ability": "Own Tempo",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Starmie",
+    "moves": [
+     "surf",
+     "thunderbolt",
+     "icebeam",
+     "recover"
+    ],
+    "ability": "Illuminate",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Swampert",
+    "moves": [
+     "earthquake",
+     "surf",
+     "icebeam",
+     "protect"
+    ],
+    "ability": "Torrent",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Zapdos",
+    "moves": [
+     "thunderbolt",
+     "batonpass",
+     "agility",
+     "drillpeck"
+    ],
+    "ability": "Pressure",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Celebi",
+    "moves": [
+     "psychic",
+     "gigadrain",
+     "recover",
+     "calmmind"
+    ],
+    "ability": "Natural Cure",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Suicune",
+    "moves": [
+     "surf",
+     "icebeam",
+     "calmmind",
+     "rest"
+    ],
+    "ability": "Pressure",
+    "item": "Leftovers"
+   }
+  ],
+  [
+   {
+    "species": "Blissey",
+    "moves": [
+     "splash",
+     "softboiled",
+     "protect",
+     "seismictoss"
+    ],
+    "ability": "Serene Grace",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Snorlax",
+    "moves": [
+     "aromatherapy",
+     "splash",
+     "rest",
+     "curse"
+    ],
+    "ability": "Thick Fat",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Starmie",
+    "moves": [
+     "surf",
+     "thunderbolt",
+     "icebeam",
+     "recover"
+    ],
+    "ability": "Illuminate",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Swampert",
+    "moves": [
+     "earthquake",
+     "surf",
+     "icebeam",
+     "protect"
+    ],
+    "ability": "Torrent",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Zapdos",
+    "moves": [
+     "thunderbolt",
+     "batonpass",
+     "agility",
+     "drillpeck"
+    ],
+    "ability": "Pressure",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Celebi",
+    "moves": [
+     "psychic",
+     "gigadrain",
+     "recover",
+     "calmmind"
+    ],
+    "ability": "Natural Cure",
+    "item": "Leftovers"
+   }
+  ]
+ ],
+ "script": [
+  [
+   "move 1",
+   "move 1"
+  ],
+  [
+   "move 1",
+   "switch 2"
+  ],
+  [
+   "move 2",
+   "move 1"
+  ],
+  [
+   "move 1",
+   "move 2"
+  ],
+  [
+   "move 1",
+   "switch 1"
+  ],
+  [
+   "move 2",
+   "move 2"
+  ]
+ ],
+ "axes": [
+  {
+   "name": "sleep_roll",
+   "field": "draws.0.7",
+   "steps": [
+    0,
+    3
+   ],
+   "values": [
+    2,
+    3
+   ]
+  }
+ ],
+ "expect": {
+  "exact": true
+ }
+}

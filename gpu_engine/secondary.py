@@ -65,8 +65,11 @@ def from_metadata(metadata):
     rows = [EFFECTS.get(name, (EXTRA_CHANCES.get(name, 0), m.NONE, False, False)) for name in vocab["moves"]]
     flags = lambda names: jnp.asarray([name in names for name in vocab["abilities"]])
     immunity = np.zeros((len(vocab["abilities"]), 7), bool)
+    # Insomnia/Vital Spirit onSetStatus refuse slp (data/abilities.ts:2129-2135,
+    # 5283-5289; gen3 inherits them): sleep moves fail with -immune [from] ability.
     blocked = {"limber": (m.PAR,), "magmaarmor": (m.FRZ,),
-        "waterveil": (m.BRN,), "immunity": (m.PSN, m.TOX)}
+        "waterveil": (m.BRN,), "immunity": (m.PSN, m.TOX),
+        "insomnia": (m.SLP,), "vitalspirit": (m.SLP,)}
     for index, name in enumerate(vocab["abilities"]):
         for status in blocked.get(name, ()): immunity[index, status] = True
     move_rows = metadata.get('moves')

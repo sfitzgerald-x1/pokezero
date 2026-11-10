@@ -1,0 +1,177 @@
+{
+ "schema": "pokezero.effect_probe.scenario.v1",
+ "move": "superpower_ko",
+ "note": "A1.2 Superpower: no drop into a Ghost (immune) or Skarmory's Protect; a KO of Tyranitar still drops; the drops are in place for Skarmory's slower Peck the same turn; Deoxys-Attack (Leftovers, not its White Herb) faints to the second Peck after its own Superpower, then its replacement.",
+ "teams": [
+  [
+   {
+    "species": "Deoxys-Attack",
+    "moves": [
+     "superpower",
+     "extremespeed",
+     "shadowball",
+     "psychoboost"
+    ],
+    "ability": "Pressure",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Starmie",
+    "moves": [
+     "surf",
+     "thunderbolt",
+     "icebeam",
+     "recover"
+    ],
+    "ability": "Illuminate",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Swampert",
+    "moves": [
+     "earthquake",
+     "surf",
+     "icebeam",
+     "protect"
+    ],
+    "ability": "Torrent",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Zapdos",
+    "moves": [
+     "thunderbolt",
+     "batonpass",
+     "agility",
+     "drillpeck"
+    ],
+    "ability": "Pressure",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Celebi",
+    "moves": [
+     "psychic",
+     "gigadrain",
+     "recover",
+     "calmmind"
+    ],
+    "ability": "Natural Cure",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Suicune",
+    "moves": [
+     "surf",
+     "icebeam",
+     "calmmind",
+     "rest"
+    ],
+    "ability": "Pressure",
+    "item": "Leftovers"
+   }
+  ],
+  [
+   {
+    "species": "Gengar",
+    "moves": [
+     "splash",
+     "protect",
+     "thunderbolt",
+     "icepunch"
+    ],
+    "ability": "Levitate",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Skarmory",
+    "moves": [
+     "protect",
+     "peck",
+     "splash",
+     "spikes"
+    ],
+    "ability": "Keen Eye",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Tyranitar",
+    "moves": [
+     "rockslide",
+     "earthquake",
+     "fireblast",
+     "icebeam"
+    ],
+    "ability": "Sand Stream",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Starmie",
+    "moves": [
+     "surf",
+     "thunderbolt",
+     "icebeam",
+     "recover"
+    ],
+    "ability": "Illuminate",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Swampert",
+    "moves": [
+     "earthquake",
+     "surf",
+     "icebeam",
+     "protect"
+    ],
+    "ability": "Torrent",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Zapdos",
+    "moves": [
+     "thunderbolt",
+     "batonpass",
+     "agility",
+     "drillpeck"
+    ],
+    "ability": "Pressure",
+    "item": "Leftovers"
+   }
+  ]
+ ],
+ "script": [
+  [
+   "move 1",
+   "move 1"
+  ],
+  [
+   "move 1",
+   "switch 3"
+  ],
+  [
+   "",
+   "switch 2"
+  ],
+  [
+   "move 1",
+   "move 1"
+  ],
+  [
+   "move 1",
+   "move 2"
+  ],
+  [
+   "move 1",
+   "move 2"
+  ],
+  [
+   "switch 2",
+   ""
+  ]
+ ],
+ "axes": [],
+ "expect": {
+  "exact": true
+ }
+}
