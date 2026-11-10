@@ -11,7 +11,8 @@ seed) have none, so this module writes them the way the collection did:
 - at each of our decisions (every actionable own request, as the live actor decides) the actor's B2 observation (what its owning
   backend encoded from the wire) is compared with env.observe(ours) cell by cell; env.observe encodes the omniscient log, so the
   known redactions differ (known_difference: opponent HP, damage and Spikes losses at the public percent, an opponent ability
-  revealed only by [silent] lines, float32 rounding) and everything else counts as unexplained;
+  revealed only by [silent] lines and that reveal's effect on the set belief (attribute_silent_reveals), float32 rounding) and
+  everything else counts as unexplained;
 - the replay stops at the root (our target-th decision), whose legal actions and champion probabilities must equal the bank row's.
 
 usage: python -m gpu_engine.mc_ladder_captures BANK_DIR OUT_DIR --collection DIR --checkpoint CHAMPION.pt [--sample N] [--seed S]
@@ -100,6 +101,25 @@ def compare(a, b):
     return out
 
 
+def attribute_silent_reveals(diff, env, idx, ours):
+    """An opponent ability revealed only by a [silent] line of the omniscient log (never on our wire) narrows env.observe's set
+    belief for that Pokemon (candidate-set, possible-ability/item/move counts, expected HP and the belief's categorical tokens).
+    When such a line exists before this decision and every unexplained cell is a categorical id or on an opponent token, the
+    unexplained cells are that reveal's consequence ('silent_ability_reveal_belief'); otherwise the diff is left unexplained."""
+    opp = 'p2' if ours == 'p1' else 'p1';wire = {line for chunk in env.owner_chunks[idx] for line in chunk}
+    silent = [line for line in env.protocol_lines if line.startswith('|-ability|') and line.endswith('|[silent]')
+              and line.split('|')[2].startswith(opp + 'a') and line not in wire]
+    unexplained = diff['unexplained']
+    numeric = unexplained.get('numeric_features', [])
+    if not silent or set(unexplained) - {'numeric_features', 'categorical_ids'} or type(numeric) is not list \
+            or any(t not in OPP_TOKENS for t, *_ in numeric):
+        return diff
+    out = {k: v for k, v in diff.items() if k != 'unexplained'}
+    out['silent_ability_reveal_belief'] = len(numeric) + int(unexplained.get('categorical_ids', 0))
+    out['silent_ability_lines'] = len(silent)
+    return out
+
+
 def capture_self_root(env, champion, out_dir, row, ordinal):
     """Write one self root's owner capture; returns the per-decision comparisons and the root check."""
     from gpu_engine.mc_root_labeller import draw, legal_of, sample
@@ -126,7 +146,9 @@ def capture_self_root(env, champion, out_dir, row, ordinal):
                                               prefix_sha256=actor.prefix_sha256, lines=chunk)
                 fed = len(env.owner_chunks[idx]);snapshot = actor.snapshot_boundary()
                 actor.decide(snapshot, rng=random.Random(0))
-                own = env.observe(ours);checks.append(dict(decision=count, diff=compare(actor._decision_observation, own)))
+                own = env.observe(ours);diff = compare(actor._decision_observation, own)
+                if 'unexplained' in diff:diff = attribute_silent_reveals(diff, env, idx, ours)
+                checks.append(dict(decision=count, diff=diff))
                 if count == target:
                     actions = [int(a) for a in np.flatnonzero(legal_of(own))]
                     probs = champion.probabilities([own])[0]
@@ -139,7 +161,7 @@ def capture_self_root(env, champion, out_dir, row, ordinal):
     known = {}
     for c in checks:
         for kind, n in c['diff'].items():
-            if kind != 'unexplained':known[kind] = known.get(kind, 0) + n
+            if kind not in ('unexplained', 'silent_ability_lines'):known[kind] = known.get(kind, 0) + n
     return dict(ordinal=ordinal, seed=seed, ours=ours, target=target, decisions=len(checks), known=known,
                 mismatched=[c for c in checks if 'unexplained' in c['diff']], root=root)
 
