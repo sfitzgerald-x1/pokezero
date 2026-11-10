@@ -732,6 +732,10 @@ class EndToEndTests(unittest.TestCase):
                 self.assertEqual(S.row_policy_target(decision, run, 0, i), (None, 'live_telemetry_invalid'))
         for i in (6, 7, 8):
             self.assertEqual(S.row_policy_target(decision, run, 0, i), (None, 'missing'))
+        # a malformed (non-dict) search record: labelled invalid, never a crash
+        (telemetry / '1.jsonl').write_text(json.dumps(dict(decision_index=0, search='broken')) + '\n' + json.dumps(dict(decision_index=1, search=[1, 2])) + '\n')
+        for i in (0, 1):
+            self.assertEqual(S.row_policy_target(decision, run, 1, i), (None, 'live_telemetry_invalid'))
 
     def test_main_counts_malformed_telemetry_targets_as_invalid(self):
         run = self.root / 'run'

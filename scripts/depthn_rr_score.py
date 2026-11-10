@@ -1021,7 +1021,8 @@ class RunDirectory:
                     try:row = json.loads(raw)
                     except ValueError:continue
                     if type(row) is dict and type(row.get('decision_index')) is int:
-                        target = (row.get('search') or {}).get('policy_target')
+                        search = row.get('search')   # a malformed (non-dict) search record is kept, to be labelled invalid
+                        target = search.get('policy_target') if type(search) is dict else search
                         targets[row['decision_index']] = target
             self._targets[ordinal] = targets
         target = self._targets[ordinal].get(decision_index)
