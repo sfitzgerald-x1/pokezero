@@ -30,7 +30,8 @@ is forwarded); when no backend accepts, the client's connection is closed, which
   COMPLETE at all, fails. The COMPLETE answer must carry the rung, archive_sha256, requested_worlds, root_operator and
   pricer.matmul_precision given by --expect-rung / --expect-archive-sha256 / --expect-worlds / --expect-root-operator /
   --expect-matmul-precision, its reply_prior record's reply_archive_sha256 ('none' without a reply model) given by
-  --expect-reply-archive-sha256, and whether it was built with peer view b (--expect-peer-view-b on/off), and all backends must agree on those, on tree_commit and on the whole pricer identity (evaluator, W, K,
+  --expect-reply-archive-sha256, its views mode given by --expect-reply-views, and whether it was built with peer view b
+  (--expect-peer-view-b on/off), and all backends must agree on those, on tree_commit and on the whole pricer identity (evaluator, W, K,
   buckets, precision); otherwise the proxy exits non-zero. (The rung is the request's own, echoed; a backend serving another rung
   refuses the probe as a bad request, which fails it. requested_worlds is the W check.)
 - --wait-ready SECONDS (0 to 3600): before the identity probe, wait until every backend accepts a connection, else exit non-zero.
@@ -226,7 +227,7 @@ def identity(answer):
     reply = answer.get('reply_prior') if isinstance(answer.get('reply_prior'), dict) else {}
     return dict(rung=answer.get('rung'), archive_sha256=answer.get('archive_sha256'), requested_worlds=answer.get('requested_worlds'),
         root_operator=answer.get('root_operator'), matmul_precision=pricer.get('matmul_precision'), tree_commit=answer.get('tree_commit'),
-        pricer=answer.get('pricer'), reply_archive_sha256=reply.get('reply_archive_sha256') or 'none',
+        pricer=answer.get('pricer'), reply_archive_sha256=reply.get('reply_archive_sha256') or 'none', reply_views=reply.get('views') or 'none',
         peer_view_b='on' if 'peer_view_b' in answer else 'off')
 
 
@@ -297,12 +298,13 @@ def main(argv=None):
     for name in ('rung', 'archive-sha256', 'root-operator', 'matmul-precision'):p.add_argument('--expect-' + name)
     p.add_argument('--expect-reply-archive-sha256', help="the served reply model's archive sha256 (br_fp), or 'none' for a server without one")
     p.add_argument('--expect-peer-view-b', choices=('on', 'off'), help='whether the COMPLETE probe answer was built with peer view b')
+    p.add_argument('--expect-reply-views', choices=('eager', 'jit', 'check', 'none'), help="the reply model's views mode (br_fp), or 'none'")
     p.add_argument('--expect-worlds', type=int)
     p.add_argument('--connection-log', help='JSONL, appended: one row per client connection (backend, timings, bytes)')
     args = p.parse_args(argv)
     expect = {k: v for k, v in dict(rung=args.expect_rung, archive_sha256=args.expect_archive_sha256, root_operator=args.expect_root_operator,
         matmul_precision=args.expect_matmul_precision, requested_worlds=args.expect_worlds, reply_archive_sha256=args.expect_reply_archive_sha256,
-        peer_view_b=args.expect_peer_view_b).items() if v is not None}
+        peer_view_b=args.expect_peer_view_b, reply_views=args.expect_reply_views).items() if v is not None}
     if args.probe_requests is None and expect:p.error('--expect-* needs --probe-requests')
     probe = None
     if args.probe_requests is not None:

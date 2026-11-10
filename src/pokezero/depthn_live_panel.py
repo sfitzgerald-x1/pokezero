@@ -145,7 +145,7 @@ KEYS={'schema','ladder_declaration_sha256','checkpoint_sha256','archive_sha256',
       'expected_searched_share','expected_searched_share_roster','matmul_precision','screen_latency_rule','bench_p95_wall_seconds',
       'bench_source','server_processes_per_gpu','interleave','arm_fairness','worker_lanes','fairness_observable','calibration','provenance',
       'search_choice','foulplay_move_wall','actor','server_tree_commit'}
-REPLY_PRIOR_KEYS={'archive_sha256','checkpoint_sha256','view','peer_view_b','union_guard'}   # optional: a br_fp screen's reply model
+REPLY_PRIOR_KEYS={'archive_sha256','checkpoint_sha256','view','peer_view_b','union_guard','views'}   # optional: a br_fp screen's reply model
 ACTOR_KEYS={'cells_per_worker','warmup_decisions','search_overlaps_greedy','warm_p95_seconds','preflight_search_wall_p95_seconds','source'}
 SEARCH_CHOICE_KEYS={'arm','cell_commit','evidence','summary'}
 MOVE_WALL_SCHEMA='depthn-foulplay-panel.move-walls.v1'
@@ -228,21 +228,22 @@ def validate_reply_prior(value):
     v=value
     if (type(v)is not dict or set(v)!=REPLY_PRIOR_KEYS or not _hex(v['archive_sha256'])or not _hex(v['checkpoint_sha256'])
             or v['view']not in ('b','env')or type(v['peer_view_b'])is not bool or (v['view']=='b')>v['peer_view_b']
-            or v['union_guard']is not True):
-        raise ValueError('reply prior: archive and checkpoint sha256, view b (with peer_view_b) or env, union_guard true required')
+            or v['union_guard']is not True or v['views']not in ('eager','jit')):
+        raise ValueError('reply prior: archive and checkpoint sha256, view b (with peer_view_b) or env, union_guard true and views eager '
+                         'or jit required')
     return v
 
 
 def served_reply(response):
-    """(the reply model's archive sha256 a response names, or None; whether it was built with peer view b)."""
+    """(the reply model's archive sha256 a response names, or None; whether it was built with peer view b; its views mode or None)."""
     reply=response.get('reply_prior')if isinstance(response.get('reply_prior'),dict)else {}
-    return reply.get('reply_archive_sha256'),'peer_view_b'in response
+    return reply.get('reply_archive_sha256'),'peer_view_b'in response,reply.get('views')
 
 
 def declared_reply(d):
-    """(the declared reply archive sha256 or None; whether the declaration's searches are built with peer view b)."""
+    """(the declared reply archive sha256 or None; whether the declaration's searches are built with peer view b; views or None)."""
     reply=d.get('reply_prior')or {}
-    return reply.get('archive_sha256'),bool(reply.get('peer_view_b'))
+    return reply.get('archive_sha256'),bool(reply.get('peer_view_b')),reply.get('views')
 
 
 def validate_actor(value):
@@ -577,7 +578,7 @@ def probe(run_directory,*,arm,server,capture,roots=5,tree_commit=None):
         snapshot=SimpleNamespace(battle_id='probe-'+uuid.uuid4().hex,**{k:row[k]for k in ('owner','stream_id','generation','prefix_sha256','lines','own_request_line')})
         response=client.request(snapshot,decision_index=row['decision_index'],started=clock())
         tried.append({k:response.get(k)for k in ('request_id','status','cause','refusal','requested_worlds','root_operator',
-            'tree_commit','archive_sha256','pricer','client_wall_seconds')}|dict(zip(('reply_archive_sha256','peer_view_b'),served_reply(response))))
+            'tree_commit','archive_sha256','pricer','client_wall_seconds')}|dict(zip(('reply_archive_sha256','peer_view_b','reply_views'),served_reply(response))))
         if response.get('client_refused')is False and response.get('archive_sha256')!=d['archive_sha256']:
             reason='server archive differs from the declared champion archive';break
         if response.get('client_refused')is False and response.get('tree_commit')!=d['server_tree_commit']:
