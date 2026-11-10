@@ -29,7 +29,6 @@ DEFERRED={
  'choice_locked':'Opponent choice lock is not publicly revealed by engine state alone.',
  'confusion_self_damage':'Ordinary direct-damage fractions are recorded; confusion self-hit damage metric remains deferred.',
  'item_swap_transform':'No corresponding numerical engine handler in this transition; item_swapped stays zero.',
- 'item_credit':'Consumed native items are retained/revealed, but removal attribution is not implemented.',
 }
 
 class Context:
@@ -90,6 +89,48 @@ def _narrow(c,side,physical,fact,use,kind):
     return _refresh(c,side,physical,use&(fact!=0))
 
 
+def _reset_item_narrowing(c,side,physical,use):
+    """B2 stops narrowing by a mutated item (design 13 item 4).
+
+    public_items.matching_item gives key 0 once an item is mutated while
+    item_belief_narrowing is False (src/pokezero/observation.py:382), so B2's
+    full belief is rebuilt from the facts that still narrow it: the species
+    pool, the original ability, the revealed moves and the standing ability/
+    item exclusions. _narrow's AND cannot be undone, so the subject's hard mask
+    is recomputed from exactly those retained facts (the same tables and gates
+    as _narrow and visible_belief.exclude), then its visible basis refreshed as
+    B2's mutation callback does.
+    """
+    if c.belief_tables is None or c.trackers.belief_mask is None:return c
+    t=c.trackers;tables=c.belief_tables;b=len(t.error);r=j.arange(b)
+    physical=j.broadcast_to(j.asarray(physical,j.int32),(b,))
+    slot=_li.take(t.physical_to_public,r,side,j.clip(physical,0,5));at=j.clip(slot,0,5)
+    use=_mask(use,b)&(slot>=0)&(slot<6)&(physical>=0)&(physical<6)
+    pools=tables.species_initial_mask;species=_li.take(t.species,r,side,at)
+    known=(species>0)&(species<pools.shape[0]);sp=j.clip(species,0,pools.shape[0]-1)
+    hard=j.where(known[:,None],pools[sp],j.uint32(0))
+    def narrowed(kind,fact):
+        table=getattr(tables,kind+'_mask')
+        good=(species>=0)&(species<table.shape[0])&(fact>=0)&(fact<table.shape[1])
+        bits=j.where(good[:,None],table[j.clip(species,0,table.shape[0]-1),j.clip(fact,0,table.shape[1]-1)],j.uint32(0))
+        return j.where((fact==0)[:,None],j.uint32(0xffffffff),bits)
+    if t.original_ability is not None:hard&=narrowed('ability',_li.take(t.original_ability,r,side,at))
+    if t.observed_moves is not None:
+        moves=_li.take(t.observed_moves,r,side,at)
+        for k in range(moves.shape[-1]):hard&=narrowed('move',moves[:,k])
+    carry=t.visible_belief
+    if carry is not None:
+        for kind,ledger in (('ability',carry.excluded_abilities),('item',carry.excluded_items)):
+            table=getattr(tables,kind+'_mask');names=_li.take(ledger,r,side,at)
+            ids=j.arange(table.shape[1])
+            excluded=((names[:,ids//32]>>(ids%32).astype(j.uint32)[None,:])&j.uint32(1))!=0
+            rows=table[j.clip(species,0,table.shape[0]-1)]
+            hard&=~j.bitwise_or.reduce(j.where(excluded[...,None],rows,j.uint32(0)),axis=1)
+    c=c._replace(trackers=t._replace(belief_mask=_li.update(t.belief_mask,r,(side,at),
+        lambda v,use,hard:j.where(use,hard,v),use[:,None],hard)))
+    return _refresh(c,side,physical,use)
+
+
 def initialize(state,belief_tables=None,*,port_tables=None):
     t=tr.initialize(state);b=len(t.error);z=j.zeros((b,2,6),j.int32)
     t=t._replace(observed_moves=j.zeros((b,2,6,4),j.int32),pp_used=j.zeros((b,2,6,4),j.int32),
@@ -102,7 +143,7 @@ def initialize(state,belief_tables=None,*,port_tables=None):
             j.zeros((b,2),j.int32),j.zeros((b,2,6,6,2),j.int32)),
         public_volatiles=j.zeros((b,2,6,len(VOLATILE_NAMES)),bool),field_features={'weather_upkeeps':j.zeros(b,j.int32),
             'weather_permanent':j.zeros(b,bool),'wish_turns':j.zeros((b,2),j.int32),'wish_pending':j.zeros((b,2),bool),
-            'wish_set_turn':j.full((b,2),-1,j.int32)})
+            'wish_set_turn':j.full((b,2),-1,j.int32),'items_removed_credit':j.zeros((b,2),j.int32)})
     t=t._replace(damage_history=damage_history.initialize(state),public_port=port.initialize(b))
     c=Context(t,belief_tables,port_tables)
     for side in range(2):c=install(c,state,side,j.ones(b,bool),initial=True)
@@ -438,6 +479,44 @@ def item_changes(c,before,after,use):
         c=reveal_item(c,before,side,old,consumed)
         c=c._replace(trackers=_write(c.trackers,'item_removed',side,_li.take(after.active,_r(after),side),j.ones_like(consumed),consumed))
     return observe(c,after,use)
+
+
+def knock_off(c,before,after,side,use):
+    """One actual Knock Off removal: -enditem|Y|Item|[from] move: Knock Off|[of] X.
+
+    B2: public_items REMOVE (revealed = the removed item, removed, mutated), the
+    public_active ITEM_END clear of the choice/swap flags, and public_damage's
+    removal credit on the victim's side (items_removed[victim] += 1). The
+    removed item is shown without narrowing: a mutated item no longer narrows
+    (_reset_item_narrowing). Never routed through item_changes, which would
+    treat it as a consumption and narrow by it.
+    """
+    b=len(c.trackers.error);use=_mask(use,b);r=_r(after);p=_li.take(after.active,r,side)
+    c=c._replace(trackers=_write(c.trackers,'shown_item',side,p,_get(before,'item',side),use))
+    c=c._replace(trackers=_write(c.trackers,'item_removed',side,p,j.ones_like(use),use))
+    for name in ('item_swapped','choice_locked'):
+        if c.trackers.mon_features is not None and name in c.trackers.mon_features:
+            c=feature(c,side,p,name,j.zeros_like(p),use)
+    c=_reset_item_narrowing(c,side,p,use)
+    t=c.trackers;fields=t.field_features
+    if fields is not None and 'items_removed_credit' in fields:
+        credit=fields['items_removed_credit']
+        credit=_li.put(credit,r,(side,),_li.take(credit,r,side)+use.astype(credit.dtype))
+        c=c._replace(trackers=t._replace(field_features={**fields,'items_removed_credit':credit}))
+    return c
+
+
+def destiny_bond(c,state,side,use):
+    """The active's public destinybond bag bit, written from the actual volatile.
+
+    B2 adds it on -singlemove|X|Destiny Bond and expires it (EXPIRE_ACTION) at
+    the holder's next move or cant line or confusion self-hit; the engine
+    clears the bit at that same move attempt and sets it when Destiny Bond
+    executes. FAINT and arrival clears are the existing faint_clear/install.
+    """
+    from .state import DESTINY_BOND
+    held=(_get(state,'volatile',side)&j.uint32(DESTINY_BOND))!=0
+    return volatile(c,state,side,'destinybond',held,_mask(use,len(c.trackers.error)))
 
 
 def party_cure(c,before,after,side,use,table=None):

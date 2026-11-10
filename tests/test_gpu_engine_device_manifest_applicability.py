@@ -16,7 +16,8 @@ def installed_readout():
         'switched_before_attack', 'stayed_and_attacked', 'turns_active_total',
         'switched_vs_active', 'stayed_vs_active')}
     fields = dict.fromkeys(('weather_upkeeps', 'weather_permanent', 'wish_turns', 'wish_pending',
-        'self_wish_turns', 'opp_wish_turns', 'self_wish_pending', 'opp_wish_pending', 'weather_turns'), sentinel)
+        'self_wish_turns', 'opp_wish_turns', 'self_wish_pending', 'opp_wish_pending', 'weather_turns',
+        'items_removed_credit', 'self_items_removed_credit', 'opp_items_removed_credit'), sentinel)
     return SimpleNamespace(types=sentinel, ability=sentinel, item=sentinel,
         mon_features=mon, own_mon_features=own, field_features=fields,
         stats_features=dict.fromkeys(('opp_switch_count', 'opp_decision_opportunities', 'my_switch_turns'), sentinel),
@@ -29,7 +30,7 @@ class ManifestApplicabilityTests(unittest.TestCase):
         rows = observation.column_manifest(installed_readout())
         by = {(r['section'], r['kind'], r['column']): r for r in rows}
         self.assertEqual(len(by), 1038)
-        self.assertEqual(Counter(r['status'] for r in rows), {'DIRECT': 76, 'TRACKED': 316, 'ZERO': 646})
+        self.assertEqual(Counter(r['status'] for r in rows), {'DIRECT': 76, 'TRACKED': 318, 'ZERO': 644})
         missing = {'field': (105, 106, 111, 112, 115, 116), 'own': (37,), 'opponent': (37,),
             'stats': (123, 124, 126, 127, 128, 129, 130, 131)}
         for section, columns in missing.items():
@@ -37,8 +38,12 @@ class ManifestApplicabilityTests(unittest.TestCase):
                 row = by[section, 'numeric', column]
                 self.assertEqual(row['status'], 'ZERO')
                 self.assertTrue(row['reason'].startswith('deferred'), row)
-        unsupported = [('field', c) for c in (119, 120)] + [
-            (section, c) for section in ('own', 'opponent') for c in (33, 40, 41)]
+        # Fidelity A2: Knock Off's removal credit (B2 public_damage) is a tracked field fact.
+        for column in (119, 120):
+            row = by['field', 'numeric', column]
+            self.assertEqual(row['status'], 'TRACKED', row)
+            self.assertIn('items_removed_credit', row['reason'])
+        unsupported = [(section, c) for section in ('own', 'opponent') for c in (33, 40, 41)]
         for section, column in unsupported:
             row = by[section, 'numeric', column]
             self.assertEqual(row['status'], 'ZERO')
@@ -46,7 +51,7 @@ class ManifestApplicabilityTests(unittest.TestCase):
         zero = [r for r in rows if r['status'] == 'ZERO']
         self.assertEqual(sum(r['reason'].startswith('structurally') for r in zero), 616)
         self.assertEqual(sum(r['reason'].startswith('deferred') for r in zero), 16)
-        self.assertEqual(sum(r['reason'].startswith('unavailable:') for r in zero), 8)
+        self.assertEqual(sum(r['reason'].startswith('unavailable:') for r in zero), 6)
         self.assertEqual(sum(r['reason'].startswith('unavailable hidden') for r in zero), 6)
 
     def test_sparse_writer_roles_and_absent_readout_do_not_claim_hooks(self):

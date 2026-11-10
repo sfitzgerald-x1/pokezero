@@ -15,6 +15,10 @@ LEECH_SEED = 4  # volatile bit 2; opposite singles slot receives the drain
 ROOTED = 8  # represented Ingrain condition; the move itself remains pending
 FOCUS_PUNCH = 16  # original queued move prepared before the ordinary turn
 FOCUS_LOST = 32   # direct damaging hit landed since that preparation
+# volatiles.destinybond (data/moves.ts Destiny Bond): set when the move executes,
+# cleared at the holder's next move attempt (BeforeMove or MoveAborted), on
+# switch-out (depart zeroes volatile) and at a faint; never Baton-passed.
+DESTINY_BOND = 64
 
 
 class BattleState(NamedTuple):
@@ -78,6 +82,7 @@ class BattleState(NamedTuple):
     done: jax.Array                # [B]
     winner: jax.Array              # [B], -1 undecided,0/1 seat,2 tie
     truant_loaf: jax.Array         # [B,2,6] explicit Gen3 residual clock, not action history
+    item_knocked: jax.Array        # [B,2,6] bool, pokemon.itemKnockedOff; never reset (sim/pokemon.ts)
 
 
 def empty_state(batch_size: int, *, seed: int = 0) -> BattleState:
@@ -119,7 +124,7 @@ def empty_state(batch_size: int, *, seed: int = 0) -> BattleState:
         phazing_draws=side(), secondary_draws=side(), sleep_talk_draws=side(),
         spikes=side(), wish_counter=side(),wish_amount=side(),weather=battle(), weather_counter=battle(), turn=battle(),
         keys=keys, done=jnp.ones((b,), jnp.bool_), winner=jnp.full((b,), -1, jnp.int32),
-        truant_loaf=jnp.zeros((b,2,6),jnp.bool_))
+        truant_loaf=jnp.zeros((b,2,6),jnp.bool_),item_knocked=jnp.zeros((b,2,6),jnp.bool_))
 
 
 def bench_indices(active: jax.Array) -> jax.Array:

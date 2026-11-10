@@ -618,9 +618,6 @@ def column_manifest(public=None, *, tracked_types=None, tracked_ability=None, tr
                             reason = 'unavailable: original public lock requires item acquisition; current engine has no Trick handler'
                         elif column == _index('ITEM_SWAPPED'):
                             reason = 'unavailable: current physical engine has no Trick item-swap handler'
-                    if section == 'field' and kind == 'numeric' and column in {
-                            _index('SELF_ITEMS_REMOVED_CREDIT'), _index('OPP_ITEMS_REMOVED_CREDIT')}:
-                        reason = 'unavailable: original removal credit requires Knock Off; current engine has no removal handler'
                     if section == 'belief' and kind == 'numeric' and column == 131:
                         reason = 'deferred public damage-evidence pin producer; no fabricated pin conflict'
                 start, stop = {'field': (0, 1), 'own': (1, 7), 'opponent': (7, 13),

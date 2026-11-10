@@ -144,6 +144,29 @@ Fidelity patch A1 (status, boost and cure effects; no new state or chance):
 - A fainted mon's Substitute is cleared with its other volatiles, so the
   forced-replacement request no longer sees it.
 
+Fidelity patch A2 (damage-changing effects and Destiny Bond; new state
+`item_knocked` and volatile bit `DESTINY_BOND`=64, no new chance):
+- Knock Off: after the secondaries (Gen 3 AfterHit), a hit on the Pokemon (not
+  a Substitute, KOs included) removes its item for good (`item_knocked`), so
+  Leftovers, berries and Choice Band stop working; Sticky Hold blocks it
+  (revealed). A Choice Band lock without the Band ends at endTurn (no TURN
+  line yet while a replacement is pending). Device: the removed item is shown
+  and marked removed, B2's removal credit counts per victim side, and the
+  mon's item narrowing is rebuilt without the item (B2 drops a mutated item).
+- Giga Drain: heals max(1, floor(dealt/2)), or ceil(sub damage/2) on a
+  Substitute; silent at full HP. Liquid Ooze turns it into that much damage to
+  the drainer, also at full HP, and can KO it (revealed).
+- Counter and Mirror Coat: priority -5, twice the last foe hit on the Pokemon
+  this turn (Counter: physical or any Hidden Power; Mirror Coat: special, not
+  Hidden Power); Substitute hits, status moves and a called (Sleep Talk) or
+  Encore-swapped Counter fail silently after PP; Ghost/Dark type immunity.
+- Destiny Bond: set when it executes (reuse succeeds), cleared at the holder's
+  next move attempt (a cant included), on switch-out and at a faint, never
+  Baton-passed. A foe's move (Pursuit on the switching holder included) that
+  KOs the holder faints the attacker; residual, recoil and Liquid Ooze KOs do
+  not. Device: the destinybond bag bit follows B2 (expired on the holder's
+  move line, Pursuit's included).
+
 The existing fixed critical roll now resolves ordinary 1/16 and catalog +1
 high-crit 1/8 chances. Battle Armor and Shell Armor veto critical hits in both
 ordinary damage and pre-switch Pursuit, using the actual outgoing holder.

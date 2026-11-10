@@ -1,7 +1,7 @@
 {
  "schema": "pokezero.effect_probe.scenario.v1",
  "move": "destinybond",
- "note": "Broken (no Destiny Bond in the engine). Showdown holds the volatile after the first request and drops it at the holder's next move; the engine's absent bit compares as False.",
+ "note": "A2.4 Destiny Bond: the volatile holds after the first request and drops at the holder's next move (Thunderbolt); the engine's DESTINY_BOND bit matches at every step.",
  "teams": [
   [
    {
@@ -152,8 +152,9 @@
  ],
  "axes": [],
  "expect": {
-  "mismatch_fields": [
-   "destiny_bond"
-  ]
- }
+  "exact": true
+ },
+ "require_fields": [
+  "destiny_bond"
+ ]
 }

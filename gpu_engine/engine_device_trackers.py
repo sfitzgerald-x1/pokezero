@@ -296,6 +296,10 @@ def readout(trackers,observer_sides):
             declared=raw['wish_set_turn'];elapsed=trackers.turn[:,None]-declared
             wish_pending=(declared>=0)&(elapsed<=1)
             wish_turns=j.where((declared>=0)&(elapsed>=0)&(elapsed<=1),2-elapsed,0)
+        if 'items_removed_credit' in raw:
+            # B2 public_damage: Knock Off removals counted per victim side, read as self/opp.
+            fields.update(self_items_removed_credit=_li.take(raw['items_removed_credit'],r,owner),
+                opp_items_removed_credit=_li.take(raw['items_removed_credit'],r,foe))
         fields.update(self_wish_turns=_li.take(wish_turns,r,owner),opp_wish_turns=_li.take(wish_turns,r,foe),
             self_wish_pending=_li.take(wish_pending,r,owner),opp_wish_pending=_li.take(wish_pending,r,foe),
             weather_turns=j.where(trackers.weather>0,j.where(raw['weather_permanent'],5,j.maximum(0,5-raw['weather_upkeeps'])),0))

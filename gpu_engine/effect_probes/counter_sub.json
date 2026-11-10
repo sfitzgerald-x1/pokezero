@@ -1,0 +1,202 @@
+{
+ "schema": "pokezero.effect_probe.scenario.v1",
+ "move": "counter_sub",
+ "note": "A2.3 Counter/Mirror Coat and Substitutes, Ghost and Dark: a Body Slam into Wobbuffet's Substitute leaves no record, so Counter fails; Snorlax hits Wobbuffet from behind its own Substitute and the Counter breaks that Substitute; Gengar is immune to Counter (Fighting) after its physical Tackle, Umbreon to Mirror Coat (Psychic) after its special Surf. Wobbuffet holds Insomnia instead of Shadow Tag so the foe can switch.",
+ "teams": [
+  [
+   {
+    "species": "Wobbuffet",
+    "moves": [
+     "counter",
+     "mirrorcoat",
+     "substitute",
+     "splash"
+    ],
+    "ability": "Insomnia",
+    "item": ""
+   },
+   {
+    "species": "Starmie",
+    "moves": [
+     "splash",
+     "surf",
+     "recover",
+     "protect"
+    ],
+    "ability": "Illuminate",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Blissey",
+    "moves": [
+     "splash",
+     "softboiled",
+     "protect",
+     "seismictoss"
+    ],
+    "ability": "Serene Grace",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Skarmory",
+    "moves": [
+     "splash",
+     "protect",
+     "spikes",
+     "peck"
+    ],
+    "ability": "Keen Eye",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Swampert",
+    "moves": [
+     "splash",
+     "protect",
+     "surf",
+     "earthquake"
+    ],
+    "ability": "Torrent",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Metagross",
+    "moves": [
+     "splash",
+     "protect",
+     "meteormash",
+     "earthquake"
+    ],
+    "ability": "Clear Body",
+    "item": "Leftovers"
+   }
+  ],
+  [
+   {
+    "species": "Snorlax",
+    "moves": [
+     "bodyslam",
+     "substitute",
+     "splash",
+     "protect"
+    ],
+    "ability": "Thick Fat",
+    "item": ""
+   },
+   {
+    "species": "Gengar",
+    "moves": [
+     "tackle",
+     "splash",
+     "protect",
+     "thunderbolt"
+    ],
+    "ability": "Levitate",
+    "item": ""
+   },
+   {
+    "species": "Umbreon",
+    "moves": [
+     "surf",
+     "splash",
+     "protect",
+     "faintattack"
+    ],
+    "ability": "Synchronize",
+    "item": ""
+   },
+   {
+    "species": "Starmie",
+    "moves": [
+     "splash",
+     "surf",
+     "recover",
+     "protect"
+    ],
+    "ability": "Illuminate",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Blissey",
+    "moves": [
+     "splash",
+     "softboiled",
+     "protect",
+     "seismictoss"
+    ],
+    "ability": "Serene Grace",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Skarmory",
+    "moves": [
+     "splash",
+     "protect",
+     "spikes",
+     "peck"
+    ],
+    "ability": "Keen Eye",
+    "item": "Leftovers"
+   }
+  ]
+ ],
+ "script": [
+  [
+   "move 3",
+   "move 3"
+  ],
+  [
+   "move 1",
+   "move 1"
+  ],
+  [
+   "move 4",
+   "move 1"
+  ],
+  [
+   "move 4",
+   "move 2"
+  ],
+  [
+   "move 1",
+   "move 1"
+  ],
+  [
+   "move 4",
+   "switch 2"
+  ],
+  [
+   "move 1",
+   "move 1"
+  ],
+  [
+   "move 4",
+   "switch 3"
+  ],
+  [
+   "move 2",
+   "move 1"
+  ],
+  [
+   "move 2",
+   "move 2"
+  ]
+ ],
+ "axes": [
+  {
+   "name": "foe_roll",
+   "field": "draws.1.5",
+   "values": [
+    0,
+    15
+   ]
+  }
+ ],
+ "expect": {
+  "exact": true
+ },
+ "require_fields": [
+  "item_knocked",
+  "destiny_bond"
+ ]
+}

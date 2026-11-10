@@ -404,6 +404,10 @@ class TwoPassTests(unittest.TestCase):
         code, report, listing = self.patched('cascade', curse_ko)
         self.assertEqual(code, 0, report['counts']);self.assertGreater(report['counts']['ko_cascade'], 0)
         self.assertTrue(all(x['ko_cascade'] for x in listing))
+        # A2 review L1/L2: phase shifts are counted and flagged per lane; link leaves use the base arrays.
+        self.assertEqual(report['link_rule'], 'per-mon');self.assertIn('state.last_move', self.manifest['ko_leaves'])
+        self.assertEqual(report['counts']['phase_shift'], sum(x['phase_shift'] for x in listing))
+        self.assertEqual(report['counts']['terminal'], sum(x['terminal'] for x in listing))
         self.assertEqual(set(report['by_effect']['curse']['ko_cascade_non_hp_fields']), {'state.status@user'})
         code, report, listing = self.patched('cascade-plant', lambda s, a, t: curse_ko(s, a, t, plant=True))
         self.assertEqual(code, 1);self.assertGreater(report['counts']['changed_involved_unexpected_fields'], 0)
@@ -413,7 +417,7 @@ class TwoPassTests(unittest.TestCase):
         code, report, _ = self.patched('partial', base_step, pr='A1,A2', limit=1)
         self.assertEqual(code, 2);self.assertTrue(report['partial']);self.assertIsNone(report['passed'])
         self.assertTrue(report['warnings']);self.assertEqual(report['plug_ins'], ['A1', 'A2'])
-        with self.assertRaises(SystemExit):self.patched('undeclared', base_step, pr='A2')   # the PR's own plug-in must declare
+        with self.assertRaises(SystemExit):self.patched('undeclared', base_step, pr='R')    # the PR's own plug-in must declare
         from gpu_engine import v2e_regress
         with self.assertRaises(SystemExit):         # a base pass that is not this PR's merge base
             v2e_regress.patched_pass(self.args(out=self.tmp / 'nobase', base=str(self.base), pr='A1', faint_clear=False,
