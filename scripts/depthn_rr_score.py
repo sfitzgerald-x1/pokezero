@@ -2,8 +2,11 @@
 
 Inputs: the re-pricer's rows (scripts/depthn_rr_reprice.py; one JSON line per decision sent to the server, with its 16
 re-priced depth-2 worlds; replay.policy_target, the re-priced search's own target) and the live run directory
-(results/<ordinal>.json: cell.seed and cell.arm; telemetry/<ordinal>.jsonl: search.policy_target by decision_index, used only for
-rows whose replay carries no target; owning-wire/<ordinal>.jsonl: the owner's capture).
+(results/<ordinal>.json: cell.seed and cell.arm; telemetry/<ordinal>.jsonl: search.policy_target by decision_index, used by
+target_argmax only under --parity-mode live and only for rows whose replay target is missing or invalid; owning-wire/<ordinal>.jsonl:
+the owner's capture). decisions.jsonl's target_source and summary coverage.target_sources (scored decisions only) record which
+target target_argmax used: replay, live_telemetry, live_telemetry_invalid (present but unusable: target_argmax's own fallback
+played) or missing.
 Output: --out, a new directory holding summary.json, summary.md and decisions.jsonl. Needs numpy and scipy (bayes_hedge's
 HiGHS LP and the t quantile); importing gpu_engine.search_hedge and pokezero.v5_gumbel pulls in no JAX.
 
@@ -524,13 +527,18 @@ def valid_target(target, root_legal):
             and all(type(target[a]) in (int, float) and math.isfinite(target[a]) for a in range(9) if root_legal[a]))
 
 
-def row_policy_target(decision, run, ordinal, index):
-    """(the target target_argmax uses, its source): the re-priced row's replay.policy_target (the search that was re-priced, the
-    same one whose q the other operators use), else the live run's telemetry search.policy_target (a row without one; on a
-    re-pricing of a modified tree that target belongs to the live tree, not the re-priced one), else (None, 'missing')."""
-    if valid_target(decision.get('replay_policy_target'), decision.get('root_legal')):return list(decision['replay_policy_target']), 'replay'
+def row_policy_target(decision, run, ordinal, index, live_fallback=True):
+    """(the target target_argmax uses, its source). The re-priced row's replay.policy_target when valid (the search that was
+    re-priced, the same one whose q the other operators use) -> 'replay'. Otherwise, with live_fallback (--parity-mode live: the
+    re-priced tree is the live one), the live run's telemetry search.policy_target when valid -> 'live_telemetry', present but
+    unusable -> (None, 'live_telemetry_invalid'). Otherwise (None, 'missing'): target_argmax plays its own fallback (argmax of
+    root_logits + q). A replay or br_fp re-scoring (a modified tree) never takes the live tree's target."""
+    legal = decision.get('root_legal')
+    if valid_target(decision.get('replay_policy_target'), legal):return list(decision['replay_policy_target']), 'replay'
+    if not live_fallback:return None, 'missing'
     live = run.policy_target(ordinal, index)
-    return (live, 'live_telemetry') if live is not None else (None, 'missing')
+    if live is None:return None, 'missing'
+    return (list(live), 'live_telemetry') if valid_target(live, legal) else (None, 'live_telemetry_invalid')
 
 
 def _hedge_top(worlds, legal, lam):
@@ -1136,7 +1144,7 @@ def process(decision, run, coverage, prior=None, parity_mode='live', weights=Non
     external = None if prior is None or definitive else prior.get((ordinal, index), {})
     model = None if not definitive else dict(prior=None if prior is None else prior.get((ordinal, index)),
                                              weights=None if weights is None else weights.get((ordinal, index)))
-    target, target_source = row_policy_target(decision, run, ordinal, index);coverage.target_sources[target_source] += 1
+    target, target_source = row_policy_target(decision, run, ordinal, index, live_fallback=parity_mode == 'live')
     try:scored = score_decision(decision, reply, target, coverage.failures, base, external, model)
     except Unscorable as error:
         coverage.excluded[error.reason] += 1
@@ -1150,6 +1158,7 @@ def process(decision, run, coverage, prior=None, parity_mode='live', weights=Non
     if reply.cause is not None:coverage.causes[reply.cause] += 1
     else:coverage.mapped_hist[len(scored['mapped_worlds'])] += 1
     coverage.unmapped += scored['unmapped'];coverage.target_fallbacks += scored['target_fallback'];coverage.no_half += half is None
+    coverage.target_sources[target_source] += 1   # scored decisions only, as target_fallbacks
     for why in scored['world_drops'].values():coverage.drops[why] += 1
     if scored['world_weights'] is not None:coverage.effective_worlds.append(scored['effective_worlds']);coverage.max_weights.append(scored['max_world_weight'])
     if external is not None:
@@ -1282,7 +1291,8 @@ def markdown(summary):
             f"| censored | {cover['censored']['count']} ({_pct(cover['censored']['share'])}) |",
             f"| unmapped | {cover['unmapped']['count']} ({_pct(cover['unmapped']['share'])}) |",
             f"| replies | {cover['replies']} |", f"| target_argmax fallbacks | {cover['target_argmax_fallbacks']} |",
-            f"| target_argmax target source (replay = the re-priced search's; live_telemetry = the live tree's) | {cover['target_sources']} |",
+            f"| target_argmax target source, scored decisions (replay: the re-priced search's; live_telemetry: the live tree's, --parity-mode live only; "
+            f"live_telemetry_invalid / missing: target_argmax's own fallback) | {cover['target_sources']} |",
             f"| operator failures | {cover['operator_failures']} |", f"| halves | {cover['halves']} |", '',
             '| censored by request_kind | decisions | censored | share |', '|---|---|---|---|']
     out += [f"| {k} | {c['decisions']} | {c['censored']} | {_pct(c['share'])} |" for k, c in cover['censored']['by_request_kind'].items()]
