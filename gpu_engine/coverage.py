@@ -75,7 +75,8 @@ def registry():
     group('lovelykiss','Primary sleep at 75% accuracy, Sleep Clause Mod and Insomnia/Vital Spirit admission',
         'effects','fidelity_a1')
     group('curse','Non-Ghost user +1 Atk/+1 Def/-1 Spe with +/-6 clamps (no pool Ghost user)','effects','fidelity_a1')
-    group('superpower','Ordinary damage plus user -1 Atk/-1 Def after a successful hit, Substitute and KO included',
+    group('superpower','Ordinary damage plus user -1 Atk/-1 Def after a successful hit, Substitute and KO included; '
+        'exact only for holders without White Herb (Deoxys forms always hold one; its restore lands in fidelity PR C)',
         'effects','fidelity_a1')
     group('charm','Target Attack -2 with Protect/Substitute gates and Clear Body/White Smoke/Hyper Cutter blocks',
         'effects','fidelity_a1')

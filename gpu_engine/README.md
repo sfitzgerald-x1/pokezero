@@ -127,7 +127,10 @@ Fidelity patch A1 (status, boost and cure effects; no new state or chance):
 - Curse (non-Ghost, the only pool form): +1 Atk, +1 Def, -1 Spe on the user,
   silent at the caps. A Ghost-type user's Curse stays an unported placeholder.
 - Superpower: -1 Atk, -1 Def on the user after a successful hit, Substitute
-  hits and KOs included; not on a miss, Protect or type immunity.
+  hits and KOs included; not on a miss, Protect or type immunity. Not exact
+  for a White Herb holder yet: Showdown restores the drop once and consumes
+  the herb (gen3 randbats gives every Deoxys and Deoxys-Attack a White Herb),
+  which arrives with fidelity PR C. Keep those holders guarded until then.
 - Charm: target Attack -2, blocked by Protect and Substitute, never by type
   immunity; Clear Body, White Smoke and Hyper Cutter block it (revealed only
   when the capped drop was nonzero).
