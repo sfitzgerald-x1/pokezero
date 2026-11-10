@@ -72,12 +72,12 @@ SELF_TOKENS, OPP_TOKENS = range(1, 7), range(7, 13)
 HP_FRACTION, LAST_DAMAGE_DEALT, LAST_DAMAGE_TAKEN, REVEALED_ABILITY, OPP_HAZARD_CREDIT = 0, 38, 39, 48, 116
 FIELD_TOKEN = 0
 PRECISION = 1e-6     # B2 numeric features are float32, env.observe's float64
-# Damage features sum a turn's damage events, each read off the wire as a difference of two public percents (ceil, and 99 for a
-# damaged Pokemon that would show 100): each event is off by less than 0.02, and the sum is a whole number of percent.
-EVENT_ERROR, MAX_EVENTS = 0.02, 3
-# OPP_HAZARD_CREDIT is min(1, the battle's cumulative Spikes losses / team size) (showdown.field_credit_values): the losses are a
-# sum of public-percent readings (a whole percent), one per Spikes hit so far, each off by less than EVENT_ERROR.
-TEAM_SIZE, MAX_SPIKES_HITS = 6, 12
+# The damage features (the active only, summed since the turn began, reset on switch-in) are read off the wire as differences of
+# public percents (ceil, and 99 for a damaged Pokemon that would show 100). Back-to-back damage lines cancel each other's
+# rounding, so the error grows only with the runs a heal or HP reset separates: each run is off by less than EVENT_ERROR, and
+# the sum is a whole number of percent. OPP_HAZARD_CREDIT is checked exactly against fp_reply_data.fp_view_opp_hazard_credit
+# (the opponent's Spikes losses at the public percent, / team size), recomputed from the omniscient log.
+EVENT_ERROR = 0.02
 
 
 def public_percent(x):
@@ -92,22 +92,37 @@ def whole_percent(x):
     return abs(100. * x - round(100. * x)) < 1e-3
 
 
-def known_difference(token, feature, b2, env_value):
-    """The known redaction a differing numeric cell belongs to, checked by location AND value, or None."""
+def decision_context(env, idx, ours):
+    """The log facts the value checks need at one decision: the opponent active's heal or HP-reset runs this turn, the public-
+    percent Spikes credit of the opponent's losses, the opponent team's names in token order and the omniscient [silent]
+    opponent ability lines our wire never carried."""
+    from gpu_engine import fp_reply_data as fpd
+    opp = 'p2' if ours == 'p1' else 'p1';lines = env.protocol_lines
+    last = max((i for i, line in enumerate(lines) if line.startswith('|turn|')), default=-1)
+    heals = sum(1 for line in lines[last + 1:] if line.startswith(('|-heal|', '|-sethp|')) and line.split('|')[2].startswith(opp + 'a'))
+    names = [p.ident.split(': ', 1)[-1] for p in env._state_for_player(ours).opponent_team]
+    wire = {line for chunk in env.owner_chunks[idx] for line in chunk}
+    silent = [line for line in lines if line.startswith('|-ability|') and line.endswith('|[silent]')
+              and line.split('|')[2].startswith(opp + 'a') and line not in wire]
+    return dict(heals=heals, credit=float(fpd.fp_view_opp_hazard_credit(lines, opp)), names=names, silent=silent)
+
+
+def known_difference(token, feature, b2, env_value, ctx):
+    """The known redaction a differing numeric cell belongs to, checked by location AND value against the log (ctx:
+    decision_context), or None."""
     d = abs(b2 - env_value)
     if d <= PRECISION:return 'float32'
     if token in OPP_TOKENS and feature == HP_FRACTION and abs(b2 - public_percent(env_value)) <= PRECISION:
         return 'opponent_hp_public_percent'
-    summed = whole_percent(b2) and d < MAX_EVENTS * EVENT_ERROR   # a sum of public-percent readings, within its rounding
-    if token in OPP_TOKENS and feature == LAST_DAMAGE_TAKEN and summed:return 'opponent_damage_public_percent'
-    if token in SELF_TOKENS and feature == LAST_DAMAGE_DEALT and summed:return 'damage_dealt_public_percent'
-    if token == FIELD_TOKEN and feature == OPP_HAZARD_CREDIT and b2 < 1 and whole_percent(TEAM_SIZE * b2) \
-            and TEAM_SIZE * d < MAX_SPIKES_HITS * EVENT_ERROR:
+    runs = whole_percent(b2) and d < EVENT_ERROR * (1 + ctx['heals'])   # public-percent readings, one rounding per run
+    if token in OPP_TOKENS and feature == LAST_DAMAGE_TAKEN and runs:return 'opponent_damage_public_percent'
+    if token in SELF_TOKENS and feature == LAST_DAMAGE_DEALT and runs:return 'damage_dealt_public_percent'
+    if token == FIELD_TOKEN and feature == OPP_HAZARD_CREDIT and abs(b2 - ctx['credit']) <= PRECISION:
         return 'opponent_hazard_public_percent'
     return None
 
 
-def compare(a, b):
+def compare(a, b, ctx):
     """How the B2 observation `a` differs from env.observe `b`: per known class its cells [token, feature, b2, env], and every
     other differing cell (numeric or categorical, located) under 'unexplained'. A REVEALED_ABILITY cell (b2 0, env 1) on an
     opponent token is held under 'ability_reveal_candidates' for attribute_silent_reveals to check against the log."""
@@ -120,7 +135,7 @@ def compare(a, b):
         cells = [(int(i[0]), int(i[1])) if x.ndim == 2 else (-1, int(i[0])) for i in zip(*np.nonzero(x != y))]
         for t, f in cells:
             xb, ye = (x[t, f], y[t, f]) if x.ndim == 2 else (x[f], y[f]);cell = [t, f, float(xb), float(ye)]
-            kind = known_difference(t, f, xb, ye) if name == 'numeric_features' else None
+            kind = known_difference(t, f, xb, ye, ctx) if name == 'numeric_features' else None
             if name == 'numeric_features' and kind is None and t in OPP_TOKENS and f == REVEALED_ABILITY and xb == 0. and ye == 1.:
                 kind = 'ability_reveal_candidates'
             if kind is None:unexplained.setdefault(name, []).append(cell)
@@ -130,21 +145,22 @@ def compare(a, b):
     return out
 
 
-def attribute_silent_reveals(diff, env, idx, ours):
+def attribute_silent_reveals(diff, ctx):
     """An opponent ability revealed only by a [silent] line of the omniscient log (never on our wire) shows in env.observe as that
-    Pokemon's REVEALED_ABILITY and narrows env.observe's set belief for that Pokemon. A candidate REVEALED_ABILITY cell is
-    attributed ('silent_ability_reveal') only when the log holds such a line before this decision, and then the unexplained
-    cells on that SAME token, numeric or categorical, are its belief consequence ('silent_ability_reveal_belief'). Cells on
-    any other token stay unexplained, and so do candidates without a silent line."""
+    Pokemon's REVEALED_ABILITY and narrows env.observe's set belief for that Pokemon. A candidate REVEALED_ABILITY cell on
+    token t is attributed ('silent_ability_reveal') only when a silent line before this decision names the Pokemon on t (the
+    opponent team in token order, ctx['names']); then the unexplained cells on that SAME token, numeric or categorical, are its
+    belief consequence ('silent_ability_reveal_belief'). Cells on any other token stay unexplained, and so do candidates whose
+    Pokemon no silent line names."""
     out = {k: v for k, v in diff.items() if k not in ('ability_reveal_candidates', 'unexplained')}
     candidates = diff.get('ability_reveal_candidates', []);unexplained = dict(diff.get('unexplained', {}))
-    opp = 'p2' if ours == 'p1' else 'p1';wire = {line for chunk in env.owner_chunks[idx] for line in chunk}
-    silent = [line for line in env.protocol_lines if line.startswith('|-ability|') and line.endswith('|[silent]')
-              and line.split('|')[2].startswith(opp + 'a') and line not in wire]
-    if candidates and not silent:unexplained.setdefault('numeric_features', []).extend(candidates)
-    elif candidates:
-        out['silent_ability_reveal'] = candidates;out['silent_ability_lines'] = silent
-        tokens = {t for t, *_ in candidates}
+    named = {line.split('|')[2].split(': ', 1)[-1] for line in ctx['silent']}
+    of = lambda t: ctx['names'][t - 7] if 0 <= t - 7 < len(ctx['names']) else None
+    kept = [c for c in candidates if of(c[0]) in named];orphan = [c for c in candidates if of(c[0]) not in named]
+    if orphan:unexplained.setdefault('numeric_features', []).extend(orphan)
+    if kept:
+        out['silent_ability_reveal'] = kept;out['silent_ability_lines'] = ctx['silent']
+        tokens = {t for t, *_ in kept}
         for name in list(unexplained):
             cells = unexplained[name]
             if type(cells) is not list:continue
@@ -173,8 +189,9 @@ def capture_self_root(env, champion, out_dir, row, ordinal):
         actor = capture_actor(actor)
         env.reset(seed=seed)
         actor.begin_game(battle_id=f'mc-self-{seed}-{ours}', owner=ours, seed=seed, stream_id=ordinal + 1)
-        fed, count, ply = 0, 0, 0
-        while env.terminal() is None:
+        fed, count, ply, close = 0, 0, 0, None
+        try:
+          while env.terminal() is None:
             requested = list(env.requested_players())
             if ours in requested:   # the wire our seat has received so far, then the actor's decision boundary
                 for chunk in env.owner_chunks[idx][fed:]:
@@ -182,7 +199,8 @@ def capture_self_root(env, champion, out_dir, row, ordinal):
                                               prefix_sha256=actor.prefix_sha256, lines=chunk)
                 fed = len(env.owner_chunks[idx]);snapshot = actor.snapshot_boundary()
                 actor.decide(snapshot, rng=random.Random(0))
-                own = env.observe(ours);diff = attribute_silent_reveals(compare(actor.decision_observation(snapshot), own), env, idx, ours)
+                own = env.observe(ours);ctx = decision_context(env, idx, ours)
+                diff = attribute_silent_reveals(compare(actor.decision_observation(snapshot), own, ctx), ctx)
                 checks.append(dict(decision=count, diff=diff))
                 if count == target:
                     actions = [int(a) for a in np.flatnonzero(legal_of(own))]
@@ -194,8 +212,10 @@ def capture_self_root(env, champion, out_dir, row, ordinal):
             obs = [env.observe(p) for p in requested];probs = champion.probabilities(obs)
             actions = {p: sample(probs[i], legal_of(o), draw(seed, 10**6, ply, i)) for i, (p, o) in enumerate(zip(requested, obs))}
             count += ours in requested;env.step(actions);ply += 1
-        try:actor.close_game()   # a CLOSE row and the capture file closed (ABORTED_UNQUALIFIED: the replay stops at the root)
-        except Exception:pass
+        finally:   # a CLOSE row and the capture file closed (ABORTED_UNQUALIFIED: the replay stops at the root), whatever happened
+            try:close = actor.close_game().get('status')
+            except Exception as error:close = f'close_error:{type(error).__name__}'
+
     known = {}
     for c in checks:
         for kind, cells in c['diff'].items():
@@ -203,12 +223,12 @@ def capture_self_root(env, champion, out_dir, row, ordinal):
     attributed = [dict(decision=c['decision'], **{k: c['diff'][k] for k in ('silent_ability_reveal', 'silent_ability_reveal_belief',
                   'silent_ability_lines') if k in c['diff']}) for c in checks if 'silent_ability_reveal' in c['diff']]
     return dict(ordinal=ordinal, seed=seed, ours=ours, target=target, decisions=len(checks), known=known, attributed=attributed,
-                mismatched=[c for c in checks if 'unexplained' in c['diff']], root=root)
+                mismatched=[c for c in checks if 'unexplained' in c['diff']], root=root, close=close)
 
 
 def root_ok(root):
     """The replayed root is the bank's: the same legal actions, the champion's policy within 1e-6 and its value within 1e-5."""
-    return bool(root and root['actions_equal'] and root['policy_max_abs'] < 1e-6 and (root['value_abs'] is None or root['value_abs'] < 1e-5))
+    return bool(root and root['actions_equal'] and root['policy_max_abs'] < 1e-6 and root['value_abs'] is not None and root['value_abs'] < 1e-5)
 
 
 def main(argv=None):
@@ -216,25 +236,30 @@ def main(argv=None):
     parser.add_argument('bank');parser.add_argument('out');parser.add_argument('--collection', required=True)
     parser.add_argument('--checkpoint', required=True);parser.add_argument('--sample', type=int, default=None)
     parser.add_argument('--seed', type=int, default=0)
+    parser.add_argument('--worker', type=int, default=0);parser.add_argument('--workers', type=int, default=1)
     args = parser.parse_args(argv)
+    if not 0 <= args.worker < args.workers:raise SystemExit('--worker W --workers N with 0 <= W < N required')
+    suffix = '' if args.workers == 1 else f'-{args.worker}'   # a worker's manifest and validation; ordinals stay global
     import torch
     torch.set_num_threads(1)
     from gpu_engine.mc_root_labeller import Model
     rows = sorted((json.loads(l) for p in glob.glob(str(Path(args.bank) / 'roots-self-*.jsonl')) for l in open(p) if l.strip()),
                   key=lambda r: (r['seed'], r['ours'], r['target']))
     if args.sample:rows = random.Random(args.seed).sample(rows, min(args.sample, len(rows)))
-    out = Path(args.out);(out / 'owning-wire').mkdir(parents=True, exist_ok=False)
+    out = Path(args.out);(out / 'owning-wire').mkdir(parents=True, exist_ok=args.workers > 1)
     collection = Path(args.collection);first = sorted(glob.glob(str(collection / 'requests' / '*.json')))[0]
     base = json.loads(Path(first).read_bytes())['base_config'];champion = Model(args.checkpoint, torch)
     env = owning_env(base, champion.result);results = []
     try:
-        with open(out / 'manifest.jsonl', 'w') as manifest:
+        with open(out / f'manifest{suffix}.jsonl', 'x') as manifest:
             for ordinal, row in enumerate(rows):
+                if ordinal % args.workers != args.worker:continue
                 try:result = capture_self_root(env, champion, out, row, ordinal)
                 except Exception as error:result = dict(ordinal=ordinal, seed=row['seed'], ours=row['ours'], target=row['target'],
                                                          error=f'{type(error).__name__}: {error}'[:400])
                 results.append(result)
-                result['status'] = ('error' if 'error' in result else 'root_mismatch' if not root_ok(result['root'])
+                result['status'] = ('error' if 'error' in result or str(result.get('close') or '').startswith('close_error')
+                                    else 'root_mismatch' if not root_ok(result['root'])
                                     else 'unexplained' if result['mismatched'] else 'ok')
                 manifest.write(json.dumps({k: result.get(k) for k in ('ordinal', 'seed', 'ours', 'target', 'status')}) + '\n');manifest.flush()
                 print(json.dumps({k: result.get(k) for k in ('ordinal', 'decisions', 'root', 'error')} | {'mismatched': len(result.get('mismatched') or [])}), flush=True)
@@ -250,7 +275,7 @@ def main(argv=None):
                    roots_matching_bank=sum(root_ok(r['root']) for r in decided),
                    statuses=dict(collections.Counter(r['status'] for r in results)),
                    declaration_sha256=DECLARATION, results=results)
-    (out / 'validation.json').write_text(json.dumps(summary, indent=1) + '\n')
+    (out / f'validation{suffix}.json').write_text(json.dumps(summary, indent=1) + '\n')
     print(json.dumps({k: v for k, v in summary.items() if k != 'results'}), flush=True)
     return 0 if summary['errors'] == 0 and summary['decisions_mismatched'] == 0 and summary['roots_matching_bank'] == len(results) else 1
 
