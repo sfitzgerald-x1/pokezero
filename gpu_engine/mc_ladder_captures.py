@@ -72,8 +72,9 @@ SELF_TOKENS, OPP_TOKENS = range(1, 7), range(7, 13)
 HP_FRACTION, LAST_DAMAGE_DEALT, LAST_DAMAGE_TAKEN, REVEALED_ABILITY, OPP_HAZARD_CREDIT = 0, 38, 39, 48, 116
 FIELD_TOKEN = 0
 PRECISION = 1e-6     # B2 numeric features are float32, env.observe's float64
-ROUNDING = 0.0101    # one public-percent rounding: a damage fraction read off two N/100 percents, or one Spikes hit
-SPIKES_HITS = 3      # the opponent's Spikes credit sums at most this many hits per decision window
+# Damage features sum a turn's damage events, each read off the wire as a difference of two public percents (ceil, and 99 for a
+# damaged Pokemon that would show 100): each event is off by less than 0.02, and the sum is a whole number of percent.
+EVENT_ERROR, MAX_EVENTS = 0.02, 3
 
 
 def public_percent(x):
@@ -83,15 +84,21 @@ def public_percent(x):
     return min(max(p, 0.), 100.) / 100.
 
 
+def whole_percent(x):
+    """Whether a fraction is a whole number of percent (float32 noise allowed)."""
+    return abs(100. * x - round(100. * x)) < 1e-3
+
+
 def known_difference(token, feature, b2, env_value):
     """The known redaction a differing numeric cell belongs to, checked by location AND value, or None."""
     d = abs(b2 - env_value)
     if d <= PRECISION:return 'float32'
     if token in OPP_TOKENS and feature == HP_FRACTION and abs(b2 - public_percent(env_value)) <= PRECISION:
         return 'opponent_hp_public_percent'
-    if token in OPP_TOKENS and feature == LAST_DAMAGE_TAKEN and d <= ROUNDING:return 'opponent_damage_public_percent'
-    if token in SELF_TOKENS and feature == LAST_DAMAGE_DEALT and d <= ROUNDING:return 'damage_dealt_public_percent'
-    if token == FIELD_TOKEN and feature == OPP_HAZARD_CREDIT and d <= SPIKES_HITS * ROUNDING:return 'opponent_hazard_public_percent'
+    summed = whole_percent(b2) and d < MAX_EVENTS * EVENT_ERROR   # a sum of public-percent readings, within its rounding
+    if token in OPP_TOKENS and feature == LAST_DAMAGE_TAKEN and summed:return 'opponent_damage_public_percent'
+    if token in SELF_TOKENS and feature == LAST_DAMAGE_DEALT and summed:return 'damage_dealt_public_percent'
+    if token == FIELD_TOKEN and feature == OPP_HAZARD_CREDIT and summed:return 'opponent_hazard_public_percent'
     return None
 
 
