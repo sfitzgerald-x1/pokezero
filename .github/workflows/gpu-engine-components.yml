@@ -152,6 +152,7 @@ jobs:
             --low-optimization-case test_gpu_engine_rough_skin_owning.RoughSkinTests.test_actual_kernel_contact_write_both_full_and_legacy_physics \
             --low-optimization-case test_gpu_engine_protect_owning.ProtectOwningTests.test_actual_success_queue_and_stall_fail_block_both_full_witness_encoder_physics \
             --low-optimization-case test_gpu_engine_status_kernel_owner_drain.StatusKernelOwnerDrainTests.test_one_row_second_owner_failure_rolls_back_both_and_does_not_drain \
+            --low-optimization-case test_gpu_engine_substitute_damage_owning.SubstituteDamageTests.test_actual_create_then_hit_survive_and_break_both_consumers \
             --resource-interval-seconds 30 2>&1 \
             | tee /tmp/gpu-components.log "$ci_memory_dir/component.log"
           if grep -Eq 'skipped=[1-9]|\.\.\. skipped' /tmp/gpu-components.log; then
