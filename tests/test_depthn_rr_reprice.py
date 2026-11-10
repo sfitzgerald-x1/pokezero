@@ -207,8 +207,11 @@ class CaptureTests(unittest.TestCase):
         detached, made, legal = FakeConstructor().prepare(dict(decision_index=0), 0)
         batch = SimpleNamespace(roots=(dict(status='PRICED', rows=tuple(range(8))),))
         champion = R.Decided([(prices(2 * k), prices(2 * k + 1)) for k in range(8)], LOGITS, LEGAL)
-        fp = lambda w: v5_gumbel.WorldPrices(prices(w).opponent_requested, prices(w).opponent_legal, tuple(float(b) + w for b in range(9)),
-                                             prices(w).joint_values)
+        def fp(w):
+            p, logits = prices(w), tuple(float(b) + w for b in range(9))
+            if w != 3:return v5_gumbel.WorldPrices(p.opponent_requested, p.opponent_legal, logits, p.joint_values)
+            waiting = [[row[0]] + [None] * 8 for row in p.joint_values]   # world 3: the opponent waits (no-action column 0 only)
+            return v5_gumbel.WorldPrices(False, (False,) * 9, logits, waiting)
         replied = R.Decided([(fp(2 * k), fp(2 * k + 1)) for k in range(8)], LOGITS, LEGAL)
         capture = SimpleNamespace(prepared=[(cw.Prepared('r', detached, made, legal, 0., 'binding'),)], decided=[champion, replied],
                                   frames=[('frame', batch)])
@@ -221,8 +224,13 @@ class CaptureTests(unittest.TestCase):
         self.assertEqual(detail['worlds'][0]['depth1'], R.prices_fields(prices(100)));self.assertFalse(detail['worlds'][7]['depth1']['priced'])
         self.assertEqual(detail['worlds'][0]['grid'], R.prices_fields(prices(0))['grid'])   # the depth-2 grid is the champion's decide
         self.assertEqual([w['reply_peer_logits'] for w in detail['worlds'][:2]], [[float(b) for b in range(9)], [float(b) + 1 for b in range(9)]])
+        self.assertIsNone(detail['worlds'][3]['reply_peer_logits'])   # a waiting opponent: the champion's column, no reply model logits
         self.assertTrue(all('reply_peer_logits' not in w for w in plain['worlds']))   # without a reply archive
         self.assertIsNone(R.describe(SimpleNamespace(prepared=capture.prepared, decided=[champion]), fake_peer, VOCABULARY)['depth1'])
+
+    def test_depth1_priced_errors_are_the_pricers_codes(self):
+        from gpu_engine import device_depth2_pricer as d2
+        self.assertEqual(backups.D3_PRICED_ERRORS, (d2.PEER_VIEW_ERROR, d2.PEER_PRIOR_REFUSED))
 
     def test_depth1_world_reads_the_priced_turn1_cells(self):
         status, value = np.zeros((2, 2, 9, 9), np.int8), np.zeros((2, 2, 9, 9), np.float32)

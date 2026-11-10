@@ -705,7 +705,7 @@ def describe(capture, peer_lanes, vocabulary, peer_inputs=None, key=None, reply=
         if frame is not None and entry is not None:
             try:
                 prices1 = [w for r in entry['rows'] for w in backups.backup_depth1(frame, r)]   # block k's world j is world 2k+j
-                causes = [backups.refusal_summary(frame)['roots'][r]['cause'] for r in entry['rows']]
+                summary = backups.refusal_summary(frame)['roots'];causes = [summary[r]['cause'] for r in entry['rows']]
                 depth1 = dict(block_causes=causes, priced_worlds=sum(w is not None for w in prices1),
                     refused_at_depth1=[c in backups.DEPTH1_CAUSES for c in causes])   # D3 itself would refuse these blocks
                 worlds = worlds if worlds is not None else []
