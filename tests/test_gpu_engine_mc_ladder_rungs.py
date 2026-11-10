@@ -35,8 +35,9 @@ def prices(values, requested=True):
 
 
 def row(ordinal=7, index=3, *, depth1=D1, depth2=D2, status='COMPLETE', action=1, decided=True, reply=True, guard=CLEAR, moves=MOVES,
-        refused=None, waiting=(), cause=None, **extra):
-    """One re-pricer row; `waiting` lists worlds whose opponent waits (column 0 only, no reply-model logits)."""
+        refused=None, waiting=(), cause=None, fp=False, **extra):
+    """One re-pricer row; `waiting` lists worlds whose opponent waits (column 0 only, no reply-model logits); `fp`: the replay
+    served a reply archive, so its q is br_fp's (the reply model's logits as each requested world's prior)."""
     worlds = []
     for w in range(len(depth1)):
         wait = w in waiting
@@ -45,7 +46,9 @@ def row(ordinal=7, index=3, *, depth1=D1, depth2=D2, status='COMPLETE', action=1
         worlds.append(world)
     q = None
     if status == 'COMPLETE':   # the live decide's own q on the depth-2 worlds
-        q = list(hedge.averaging(M.rr.world_prices(M.rr.normalize(dict(worlds=worlds))), tuple(LEGAL)).q)
+        live = M.rr.world_prices(M.rr.normalize(dict(worlds=worlds)))
+        if fp:live = M.rr.model_worlds(live, {w: REPLY for w, world in enumerate(worlds) if world['opponent_requested']})
+        q = list(hedge.averaging(live, tuple(LEGAL)).q)
     out = dict(ordinal=ordinal, decision_index=index, seed=11, owner='p1', worlds=worlds,
                replay=dict(status=status, action_index=action if status == 'COMPLETE' else None, q_values=q),
                root=dict(decided=decided, root_logits=LOGITS if decided else None, root_legal=LEGAL if decided else None, own_moves=moves,
@@ -77,8 +80,8 @@ class RungChoiceTests(unittest.TestCase):
         reply, champion = hand_q(D1, (.75, .25)), hand_q(D1, (.5, .5))
         self.assertEqual([round(x, 9) for x in reply], [.15, .05, .25]);self.assertEqual([round(x, 9) for x in champion], [-.1, -.1, .1])
         self.assertTrue(gate(reply))   # mean .15 > 2 * .1 / sqrt(3)
-        got = one(row(), 'C')
-        self.assertEqual({n: r['action'] for n, r in got.items()}, dict(R3=1, R3prime_ng=1, R4b=0))
+        got = one(row(fp=True), 'C')   # depth 2: br_fp on D2 plays 1 (reply gaps .15, .2, -.05); the gate keeps greedy
+        self.assertEqual({n: r['action'] for n, r in got.items()}, dict(R3=1, R3prime_ng=1, R4b=0, R5fp=1, R5fp_ng=0))
         for r in got.values():
             self.assertEqual((r['kind'], r['ordinal'], r['target'], r['seed']), ('foulplay', 7, 3, 11))
             self.assertEqual((r['greedy_action'], r['guard_tripped'], r['actions']), (0, False, [0, 1]));self.assertNotIn('reason', r)
@@ -89,8 +92,8 @@ class RungChoiceTests(unittest.TestCase):
     def test_noise_gate_holds_back_a_noisy_depth1_override(self):
         reply = hand_q(NG, (.75, .25))
         self.assertGreater(statistics.fmean(reply), 0);self.assertFalse(gate(reply))   # mean .15 < 2 * .265 / sqrt(3)
-        got = one(row(depth1=NG), 'C')
-        self.assertEqual({n: r['action'] for n, r in got.items()}, dict(R3=1, R3prime_ng=0, R4b=1))
+        got = one(row(depth1=NG, fp=True), 'C')
+        self.assertEqual({n: r['action'] for n, r in got.items()}, dict(R3=1, R3prime_ng=0, R4b=1, R5fp=1, R5fp_ng=0))
 
     def test_run_d_r5_is_the_replay_and_r5_ng_gates_the_depth2_q(self):
         gaps = hand_q(D2, (.5, .5))
@@ -99,6 +102,19 @@ class RungChoiceTests(unittest.TestCase):
         self.assertEqual({n: rows[0]['action'] for n, rows in out.items()}, dict(R4=0, R5=1, R5_ng=0))
         self.assertEqual(summary['r5_vs_replay'], dict(compared=1, action_disagreements=0, q_disagreements=0, recompute_failed={}, examples=[]))
         self.assertEqual(summary['rungs']['R5'], dict(rows=1, decided=1, undecided={}, guard_tripped={}))
+
+    def test_run_c_r5fp_is_the_br_fp_replay_and_r5fp_ng_gates_its_depth2_q(self):
+        raw = row(depth2=D1, fp=True)   # br_fp on D1's depth-2 grids plays 1 (reply gaps .15, .05, .25); the champion's averaging plays 0
+        got = one(raw, 'C');self.assertEqual((got['R5fp']['action'], got['R5fp_ng']['action']), (1, 1))
+        _, qw, q = M.averaged(raw, M.rr.normalize(raw), 2, True)
+        self.assertAlmostEqual(q[1], .15, places=12);self.assertEqual([round(w[1], 9) for w in qw], [.15, .05, .25])
+        self.assertEqual(M.build([raw], 'C')[1]['r5_vs_replay'], dict(compared=1, action_disagreements=0, q_disagreements=0, recompute_failed={},
+                                                                      examples=[]))
+        p = M.build([row(depth2=D1, action=0)], 'C')[1]['r5_vs_replay']   # a replay that played the champion's averaging: not br_fp
+        self.assertEqual((p['action_disagreements'], p['q_disagreements']), (1, 1))
+        gated = one(row(depth2=NG, fp=True), 'C')   # br_fp plays 1 (mean .15), but the per-world gaps .45, -.05, .05 are noisy
+        self.assertEqual((gated['R5fp']['action'], gated['R5fp_ng']['action']), (1, 0))
+        self.assertEqual(M.replay_rung('C'), ('R5fp', True));self.assertEqual(M.replay_rung('D'), ('R5', False));self.assertIsNone(M.replay_rung('A'))
 
     def test_r5_disagreeing_with_the_replay_is_counted(self):
         bad = row(action=0)   # the replay played 0 where averaging on its own grids plays 1
@@ -155,8 +171,10 @@ class RungChoiceTests(unittest.TestCase):
 
     def test_a_waiting_world_needs_no_reply_logits(self):
         depth1 = D1[:2] + [{0: (0.,), 1: (.1,)}]   # world 2 waits: column 0 at mass 1
-        got = one(row(depth1=depth1, depth2=D2[:2] + [{0: (0.,), 1: (.1,)}], waiting=(2,)), 'C')
+        raw = row(depth1=depth1, depth2=D2[:2] + [{0: (0.,), 1: (.1,)}], waiting=(2,), fp=True);got = one(raw, 'C')
         self.assertEqual((got['R3']['action'], got['R4b']['action']), (1, 0))   # reply mean (.15 + .05 + .1) / 3; champion (-.1 - .1 + .1) / 3
+        self.assertEqual((got['R5fp']['action'], got['R5fp_ng']['action']), (1, 1))   # br_fp gaps .15, .2 and the waiting world's .1: the gate passes
+        self.assertEqual(M.build([raw], 'C')[1]['r5_vs_replay']['q_disagreements'], 0)   # the waiting world keeps column 0 in br_fp too
 
 
 class GuardTests(unittest.TestCase):
@@ -173,7 +191,7 @@ class GuardTests(unittest.TestCase):
 
     def test_the_union_reply_arm_guards_only_reply_model_rungs(self):
         got = one(row(guard=dict(CLEAR, tripped=True, union=dict(tripped=True, champion=dict(b=False), reply=dict(b=True)))), 'C')
-        self.assertTrue(got['R3']['guard_tripped']);self.assertTrue(got['R3prime_ng']['guard_tripped'])
+        for name in ('R3', 'R3prime_ng', 'R5fp', 'R5fp_ng'):self.assertTrue(got[name]['guard_tripped'], name)   # br_fp's live fallback
         self.assertFalse(got['R4b']['guard_tripped'])   # the champion arm's own b is false
 
     def test_a_decided_root_without_a_guard_record_fails_closed(self):
@@ -183,8 +201,9 @@ class GuardTests(unittest.TestCase):
             self.assertIsNone(got[name]['action']);self.assertEqual(got[name]['reason'], 'replay_REFUSED:depthn_refused')
             self.assertFalse(got[name]['guard_tripped'])   # an undecided row never claims a trip
         got = one(row(status='REFUSED'), 'C')   # decide ran (so the reply model's logits exist) but refused: no guard record
-        self.assertEqual({n: r['action'] for n, r in got.items()}, dict(R3=1, R3prime_ng=1, R4b=0))
-        for r in got.values():self.assertEqual((r['guard_tripped'], r['guard_reason']), (True, 'no_guard_record'))
+        self.assertEqual({n: r['action'] for n, r in got.items()}, dict(R3=1, R3prime_ng=1, R4b=0, R5fp=None, R5fp_ng=None))
+        for name in ('R3', 'R3prime_ng', 'R4b'):self.assertEqual((got[name]['guard_tripped'], got[name]['guard_reason']), (True, 'no_guard_record'))
+        for name in ('R5fp', 'R5fp_ng'):self.assertEqual((got[name]['reason'], got[name]['guard_tripped']), ('replay_REFUSED:depthn_refused', False))
 
 
 class UndecidedTests(unittest.TestCase):
@@ -199,14 +218,15 @@ class UndecidedTests(unittest.TestCase):
         self.assertEqual((got['R4b']['guard_tripped'], got['R4b']['guard_reason']), (True, 'no_guard_record'))   # fail closed
 
     def test_reasons(self):
-        self.assertEqual(self.reasons(row(status='REFUSED', decided=False)), dict.fromkeys(('R3', 'R3prime_ng', 'R4b'), 'root_prior_missing'))
+        self.assertEqual(self.reasons(row(status='REFUSED', decided=False)), dict(dict.fromkeys(('R3', 'R3prime_ng', 'R4b'), 'root_prior_missing'),
+                                                                                    **dict.fromkeys(('R5fp', 'R5fp_ng'), 'replay_REFUSED:depthn_refused')))
         self.assertEqual(self.reasons(row(refused=[False, True])), dict.fromkeys(('R3', 'R3prime_ng', 'R4b'), 'refused_at_depth1'))
         recharge = dict(row(status='REFUSED', decided=False, cause='OPPONENT_RECHARGE_UNREPRESENTED'), depth1=None)   # refused before pricing
         self.assertEqual(self.reasons(recharge, 'D'), dict(R4='depth1_missing:OPPONENT_RECHARGE_UNREPRESENTED',
                          R5='replay_REFUSED:OPPONENT_RECHARGE_UNREPRESENTED', R5_ng='replay_REFUSED:OPPONENT_RECHARGE_UNREPRESENTED'))
         self.assertEqual(self.reasons(row(decided=False), 'D'), dict.fromkeys(('R4', 'R5', 'R5_ng'), 'root_prior_missing'))   # COMPLETE, no root
         missing = row();missing['worlds'][1]['reply_peer_logits'] = None
-        self.assertEqual(self.reasons(missing), dict(R3='reply_prior_missing', R3prime_ng='reply_prior_missing'))   # R4b still decides
+        self.assertEqual(self.reasons(missing), dict.fromkeys(('R3', 'R3prime_ng', 'R5fp_ng'), 'reply_prior_missing'))   # R4b and R5fp (the replay's) decide
         unpriced = row();unpriced['worlds'][0]['depth1'].update(priced=False, grid=None)
         self.assertEqual(set(self.reasons(unpriced).values()), {'world_unpriced'})
         hole = row();hole['worlds'][2]['depth1']['grid'][1][1] = None   # a needed cell (action 1 vs kept reply 1) unpriced
@@ -255,16 +275,18 @@ class IdentityTests(unittest.TestCase):
 class CommandLineTests(unittest.TestCase):
     def test_writes_one_file_per_rung_and_the_summary(self):
         with tempfile.TemporaryDirectory() as tmp:
-            rows = Path(tmp) / 'rows-0.jsonl';rows.write_text(json.dumps(row()) + '\n' + json.dumps(row(8, 1, status='REFUSED', decided=False)) + '\n')
+            rows = Path(tmp) / 'rows-0.jsonl';rows.write_text(json.dumps(row(fp=True)) + '\n' + json.dumps(row(8, 1, status='REFUSED', decided=False)) + '\n')
             with redirect_stdout(io.StringIO()):code = M.main(['--rows', str(rows), '--run', 'C', '--out', str(Path(tmp) / 'out')])
             self.assertEqual(code, 0)
-            self.assertEqual(sorted(p.name for p in (Path(tmp) / 'out').iterdir()), ['rung-R3.jsonl', 'rung-R3prime_ng.jsonl', 'rung-R4b.jsonl', 'summary.json'])
+            self.assertEqual(sorted(p.name for p in (Path(tmp) / 'out').iterdir()), ['rung-R3.jsonl', 'rung-R3prime_ng.jsonl', 'rung-R4b.jsonl', 'rung-R5fp.jsonl', 'rung-R5fp_ng.jsonl',
+                                                                                        'summary.json'])
             r3 = [json.loads(l) for l in (Path(tmp) / 'out' / 'rung-R3.jsonl').read_text().splitlines()]
             self.assertEqual([(r['ordinal'], r['action']) for r in r3], [(7, 1), (8, None)])
             summary = json.loads((Path(tmp) / 'out' / 'summary.json').read_text())
             self.assertEqual(summary['rungs']['R3'], dict(rows=2, decided=1, undecided=dict(root_prior_missing=1), guard_tripped={}))
-            self.assertIsNone(summary['r5_vs_replay'])
-            with redirect_stdout(io.StringIO()):code = M.main(['--rows', str(rows), '--run', 'D', '--out', str(Path(tmp) / 'd')])
+            self.assertEqual((summary['replay_rung'], summary['r5_vs_replay']['compared']), ('R5fp', 1))   # run C: the br_fp replay held to its recomputation
+            live = Path(tmp) / 'rows-d.jsonl';live.write_text(json.dumps(row()) + '\n')   # run D: a replay of the live (champion-prior) search
+            with redirect_stdout(io.StringIO()):code = M.main(['--rows', str(live), '--run', 'D', '--out', str(Path(tmp) / 'd')])
             self.assertEqual(code, 0)
             bad = Path(tmp) / 'bad.jsonl';bad.write_text(json.dumps(row(action=0)) + '\n')
             with redirect_stdout(io.StringIO()):self.assertEqual(M.main(['--rows', str(bad), '--run', 'D', '--out', str(Path(tmp) / 'bad')]), 1)

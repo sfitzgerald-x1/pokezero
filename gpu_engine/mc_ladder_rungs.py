@@ -6,7 +6,7 @@ world's depth-1 prices (worlds[i].depth1, depth1.refused_at_depth1) and, under -
 reply-model logits (worlds[i].reply_peer_logits). Five runs, one rung set each:
 - A: Foul Play roots, --true-worlds (true_private), --reply-archive pi_FP and --peer-view-b -> R1, R2;
 - B: self roots, --true-worlds (true_private), the live configuration -> R1, R2;
-- C: Foul Play roots, --reply-archive pi_FP and --peer-view-b, sampled worlds -> R3, R3prime_ng, R4b;
+- C: Foul Play roots, --reply-archive pi_FP and --peer-view-b, sampled worlds -> R3, R3prime_ng, R4b, R5fp, R5fp_ng;
 - D: Foul Play roots, the live configuration -> R4, R5, R5_ng;
 - E: self roots, the live configuration -> R3, R3prime_ng, R4, R5, R5_ng.
 
@@ -25,7 +25,12 @@ Rungs. Greedy is the argmax of root_logits over root_legal, lower index on ties 
   view b, the same worlds as R3).
 - R5: the replay's own action_index (the live code's DN2W16 averaging at depth 2). The chooser recomputes averaging on the
   rows' depth-2 grids (depthn_rr_score.recompute) and counts every COMPLETE root where its action or q differs from the replay's.
-- R5_ng: noise_gated k = 2 on the depth-2 per-world q of that recomputation. Greedy is the root logits' argmax, as the r4b
+- R5fp (run C): the replay's own action_index. A replay serving --reply-archive searches br_fp at depth 2 (DN2W16 with the reply
+  model's logits as each requested world's reply prior: the r4a screen's br_fp configuration). The chooser recomputes
+  br_fp on the depth-2 grids (depthn_rr_score.br_fp_average's rule: averaging on model_worlds) and counts every COMPLETE root
+  where its action or q differs from the replay's, as for R5.
+- R5_ng and R5fp_ng: noise_gated k = 2 on the depth-2 per-world q of that recomputation (R5fp_ng: of br_fp's, the reply model's
+  prior). Greedy is the root logits' argmax, as the r4b
   screen's NOISE_GATED_K2 operator takes it (depthn_root_operator.noise_gated_k2), not the live actor's greedy_action_index that
   depthn_rr_score's own noise_gated:k=2 reads; they differ only where those two greedies differ.
 
@@ -41,9 +46,9 @@ one (true_worlds_row); both are counted as identity mismatches. Two rows with on
 Each rung row: the key, action (None when the rung cannot decide the root, with `reason`), greedy_action, guard_tripped
 (with guard_reason when true) and actions (the root's legal action indices, echoed for the scorer's identity check).
 Guards: depthn_rr_score.guard_choices on the rung's own choice, the live actor's rule: the own-recharge guard, or the row's
-effect_guard (b), or (c) on this choice. Reply-model rungs (run C's R3 and R3prime_ng) keep a union record's reply arm, as
-the live br_fp actor does; champion-prior rungs drop it (the record's own b is the champion arm's). For R5 this is the live
-fallback exactly (effect_guard.tripped or the recharge guard). A decided root without a guard record (a replay that did not
+effect_guard (b), or (c) on this choice. Reply-model rungs (run A's, and run C's R3, R3prime_ng, R5fp and R5fp_ng) keep a union
+record's reply arm, as the live br_fp actor does; champion-prior rungs drop it (the record's own b is the champion arm's). For R5
+(and R5fp, under the br_fp replay's union record) this is the live fallback exactly (effect_guard.tripped or the recharge guard). A decided root without a guard record (a replay that did not
 end COMPLETE, whose depth-1 rungs still price) fails closed: guard_tripped true, guard_reason no_guard_record. An undecided
 row never claims a trip, so mc_ladder_score counts it not_decided under every --guards mode.
 
@@ -56,7 +61,7 @@ Reasons for action None:
   the priced batch entry's own under depth1.root_logits / root_legal);
 - world_missing, world_unpriced, world_invalid, unpriced_cell, averaging_error: a world or a needed cell has no price;
 - reply_prior_missing: a requested world has no reply_peer_logits (only roots that reached the reply model's decide have them);
-- replay_<status>[:cause]: R5 and R5_ng on a replay that did not end COMPLETE; replay_action_invalid;
+- replay_<status>[:cause]: R5, R5_ng, R5fp and R5fp_ng on a replay that did not end COMPLETE; replay_action_invalid;
 - one_world: noise gating needs at least two worlds;
 - true_worlds_failed[:cause], true_worlds_not_sampled[:cause] (runs A and B): the true worlds failed closed (a problem or error,
   fewer built than requested, or a kind other than true_private or its waiting-opponent fallback true), or were never sampled.
@@ -64,8 +69,9 @@ R1 and R2 can decide different roots (R2 needs only world 0's prices): compare t
 
 usage: python -m gpu_engine.mc_ladder_rungs --rows ROWS.jsonl [ROWS.jsonl ...] --run {A,B,C,D,E} [--manifest MANIFEST.jsonl] --out NEW_DIR
 --manifest is required for runs B and E (self roots) and refused for A, C and D. Writes NEW_DIR/rung-<NAME>.jsonl per rung and NEW_DIR/summary.json
-(rows read, identity mismatches by reason, per rung: decided, undecided by reason, guard trips by reason; R5 against the
-replay). Exit 1 when R5's recomputation disagrees with any COMPLETE replay or fails on one (recompute_failed), else 0.
+(rows read, identity mismatches by reason, per rung: decided, undecided by reason, guard trips by reason; r5_vs_replay: R5's or
+R5fp's recomputation against the replay). Exit 1 when that recomputation disagrees with any COMPLETE replay or fails on one
+(recompute_failed), else 0.
 """
 import argparse
 import collections
@@ -84,7 +90,8 @@ NOISE_K = 2
 RUNS = dict(
     A=('foulplay', dict(R1=(1, True, False, None), R2=(1, True, False, 1))),
     B=('self', dict(R1=(1, False, False, None), R2=(1, False, False, 1))),
-    C=('foulplay', dict(R3=(1, True, False, None), R3prime_ng=(1, True, True, None), R4b=(1, False, False, None))),
+    C=('foulplay', dict(R3=(1, True, False, None), R3prime_ng=(1, True, True, None), R4b=(1, False, False, None),
+                        R5fp=(2, True, False, None), R5fp_ng=(2, True, True, None))),
     D=('foulplay', dict(R4=(1, False, False, None), R5=(2, False, False, None), R5_ng=(2, False, True, None))),
     E=('self', dict(R3=(1, False, False, None), R3prime_ng=(1, False, True, None), R4=(1, False, False, None), R5=(2, False, False, None),
                     R5_ng=(2, False, True, None))))
@@ -123,6 +130,11 @@ def identity(raw, kind, manifest):
     if raw.get('owner') not in (None, entry['ours']):return None, 'seat_mismatch'
     if raw.get('seed') not in (None, entry['seed']):return None, 'seed_mismatch'
     return dict(kind=kind, seed=entry['seed'], ours=entry['ours'], target=entry['target']), None
+
+
+def replay_rung(run):
+    """(name, reply) of the run's replay-action rung (R5, or R5fp under a reply archive), or None."""
+    return next(((name, reply) for name, (depth, reply, gated, _) in RUNS[run][1].items() if depth == 2 and not gated), None)
 
 
 def true_worlds_check(raw, run):
@@ -168,12 +180,17 @@ def average(worlds, legal):
 
 def averaged(raw, d, depth, reply, first=None):
     """(a*, per-world q, q) of averaging on the row's depth-1 or depth-2 worlds, the reply model's logits standing in for each
-    requested world's reply prior when `reply`; raises Unscorable with the reason (module docstring)."""
+    requested world's reply prior when `reply` (at depth 2: br_fp); raises Unscorable with the reason (module docstring)."""
     if depth == 2:
         if d['replay_status'] == 'COMPLETE':root_prior(d)   # a COMPLETE replay without a usable root prior: the depth-1 rungs' reason
         try:base = rr.recompute(d)   # the replay's own worlds and root, as depthn_rr_score's parity recomputes them
         except ValueError:raise rr.Unscorable('averaging_error') from None
-        return hedge.top_action(base.average.strategy), rr.per_world_q(base.grids), base.average.q
+        if not reply:return hedge.top_action(base.average.strategy), rr.per_world_q(base.grids), base.average.q
+        worlds = rr.model_worlds(base.worlds, rr.reply_logits_of(d, base.worlds, None))   # br_fp: rr.br_fp_average's rule
+        try:gs, choice = hedge.grids(worlds, base.legal), hedge.averaging(worlds, base.legal)
+        except ValueError:raise rr.Unscorable('averaging_error') from None
+        if gs is None or choice is None:raise rr.Unscorable('unpriced_cell')
+        return hedge.top_action(choice.strategy), rr.per_world_q(gs), choice.q
     info = raw.get('depth1')
     if type(info) is not dict:raise rr.Unscorable('depth1_missing')
     if 'refused_at_depth1' not in info:raise rr.Unscorable('row_schema_old')   # a row written before the depth-1 refusal flags
@@ -196,7 +213,7 @@ def guard(d, action, greedy, reply):
 
 
 def choose(raw, run):
-    """(the normalized row, {rung: rung row without the key}, and for runs with R5 the depth-2 recomputation: ((a*, per-world q,
+    """(the normalized row, {rung: rung row without the key}, and for runs with R5 or R5fp the depth-2 recomputation: ((a*, per-world q,
     q), None) or (None, the failure reason))."""
     d = rr.normalize(raw);cause = d['refusal_cause'];ops = {};prior_reason = None
     depth1 = raw.get('depth1') if type(raw.get('depth1')) is dict else {}
@@ -216,7 +233,7 @@ def choose(raw, run):
 
     out = {}
     for name, (depth, reply, gated, first) in RUNS[run][1].items():
-        if depth == 2 and not gated:   # R5: the replay's own action
+        if depth == 2 and not gated:   # R5 / R5fp: the replay's own action
             action, reason = d['replay_action'], None
             if d['replay_status'] != 'COMPLETE':action, reason = None, f"replay_{d['replay_status']}" + (f':{cause}' if cause else '')
             elif legal is None:action, reason = None, prior_reason
@@ -234,7 +251,7 @@ def choose(raw, run):
             tripped, why = guard(d, action, greedy, reply)
             if tripped:row.update(guard_tripped=True, guard_reason=why)
         out[name] = row
-    recomputed = op(2, False) if 'R5' in RUNS[run][1] else None
+    rung = replay_rung(run);recomputed = None if rung is None else op(2, rung[1])
     return d, out, recomputed
 
 
@@ -272,8 +289,9 @@ def build(rows, run, manifest=None):
             if wrong and len(parity['examples']) < EXAMPLES:parity['examples'].append(dict(key, disagreement=wrong))
     plain = lambda c: dict(sorted(c.items()))
     summary = dict(schema=SCHEMA, run=run, kind=kind, rows=count, mapped=len(seen), identity_mismatches=plain(mismatches),
+                   replay_rung=None if replay_rung(run) is None else replay_rung(run)[0],   # the rung r5_vs_replay holds to its recomputation
                    rungs={name: dict(s, undecided=plain(s['undecided']), guard_tripped=plain(s['guard_tripped'])) for name, s in stats.items()},
-                   r5_vs_replay=dict(parity, recompute_failed=plain(parity['recompute_failed'])) if 'R5' in rungs else None)
+                   r5_vs_replay=dict(parity, recompute_failed=plain(parity['recompute_failed'])) if replay_rung(run) else None)
     if kind == 'self':summary['manifest_status'] = plain(statuses)
     return out, summary
 
