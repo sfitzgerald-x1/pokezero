@@ -7,9 +7,14 @@ The two-engine probes (gpu_engine/effect_probes/*.json) are the Showdown gate;
 these are the component checks. No chance is drawn beyond the fixed block.
 """
 import importlib.util
+import json
+import shutil
+import subprocess
 import unittest
 
 import numpy as np
+
+from _showdown_root import requires_showdown, showdown_root
 
 MOVES = ['_none', 'curse', 'superpower', 'charm', 'lovelykiss', 'spore', 'rest', 'aromatherapy', 'refresh',
          'healbell', 'splash', 'protect', 'substitute', 'tackle', 'struggle', 'sleeptalk', 'doubleteam']
@@ -296,6 +301,33 @@ class FidelityA1Tests(unittest.TestCase):
         self.assertEqual(int(out.status[6, 0, 2]), BRN)                                # the user only
         self.assertEqual(np.asarray(out.pp)[:5, 0, 0, 0].tolist(), [9] * 5)
 
+    # -- device: B2 attributes an ability from a -fail/-immune [from] ability line ------------
+    def test_device_reveals_follow_showdown_ability_lines(self):
+        """Charm blocked by Clear Body or Hyper Cutter prints -fail [from] ability; at -6 the capped drop
+        is zero and nothing prints (White Smoke row). A sleep move into Insomnia prints -immune [from]
+        ability (before Sleep Clause's message: the ability handler sorts first by Speed), and Rest by a
+        Vital Spirit holder -fail [from] ability. A landed Charm or an ordinary Rest reveals nothing."""
+        charm = self.uses(CHARM)
+        s = self.build([
+            self.merge(charm, {'ability': [((1, 0), CLEARBODY)]}),
+            self.merge(charm, {'ability': [((1, 0), HYPERCUTTER)]}),
+            self.merge(charm, {'ability': [((1, 0), WHITESMOKE)], 'boosts': [((1, 0, 0), -6)]}),
+            self.merge(charm, {'ability': [((1, 0), INSOMNIA)]}),
+            self.merge(self.uses(SPORE), {'ability': [((1, 0), INSOMNIA)], 'status': [((1, 3), SLP)]}),
+            self.merge(self.uses(SPLASH, REST), {'ability': [((1, 0), VITALSPIRIT)], 'hp': [((1, 0), 150)]}),
+            self.merge(self.uses(SPLASH, REST), {'hp': [((1, 0), 150)]}),
+        ])
+        init = self.t.initialize_with_public(s, self.table)
+        actions = self.j.zeros((B, 2), self.j.int32)
+        out = self.jax.jit(lambda st, a, tk, c: self.t.step_with_public(st, a, self.table, tk, chance_inputs=c))(
+            init.state, actions, init.trackers, self.chance())
+        shown = np.asarray(out.trackers.shown_ability)[:, 1, 0]
+        self.assertEqual((shown != 0).tolist(), [True, True, False, False, True, True, False, False])
+        self.assertEqual(shown[[0, 1, 4, 5]].tolist(), [CLEARBODY, HYPERCUTTER, INSOMNIA, VITALSPIRIT])
+        state = out.step.state
+        self.assertEqual(np.asarray(state.boosts)[:4, 1, 0, 0].tolist(), [0, 0, -6, -2])
+        self.assertEqual(np.asarray(state.status)[[4, 5, 6], 1, 0].tolist(), [NONE, NONE, SLP])
+
     # -- design 13: the own Substitute at a faint ---------------------------------------------
     def test_a_fainted_holder_loses_its_substitute(self):
         no_pp = {'pp': [((0, 0, k), 0) for k in range(4)]}
@@ -311,6 +343,43 @@ class FidelityA1Tests(unittest.TestCase):
         self.assertEqual((int(out.hp[2, 1, 0]), int(out.substitute_hp[2, 1, 0])), (0, 0))
         self.assertGreater(int(out.hp[3, 1, 0]), 0);self.assertEqual(int(out.substitute_hp[3, 1, 0]), 75)
         self.assertTrue(bool(out.forced_switch[0, 0]));self.assertTrue(bool(out.forced_switch[2, 1]))
+
+
+@requires_showdown()
+@unittest.skipUnless(shutil.which('node'), 'requires node')
+class ShowdownAbilityLineTests(unittest.TestCase):
+    """The Showdown f76228a1 lines the device reveals above stand for, read by B2's attribution."""
+    def test_b2_attributes_the_ability_lines_the_device_reveals(self):
+        from pokezero.belief import _confirmed_ability_from_event
+        from pokezero.showdown import _public_event_from_line
+        code = """const {Battle}=require(process.argv[1]+'/dist/sim/battle.js');
+function mon(species,ability,moves){return {name:species,species,ability,item:'',moves,nature:'Hardy',level:80,gender:'M',
+ evs:{hp:84,atk:84,def:84,spa:84,spd:84,spe:84},ivs:{hp:31,atk:31,def:31,spa:31,spd:31,spe:31}};}
+function run(p1,p2,choices){const b=new Battle({formatid:'gen3customgame@@@sleepclausemod',seed:[1,2,3,4]});
+ b.setPlayer('p1',{name:'A',team:p1});b.setPlayer('p2',{name:'B',team:p2});for(const [x,y] of choices)b.makeChoices(x,y);return b.log;}
+const smeargle=mon('Smeargle','Own Tempo',['charm','spore','seismictoss','splash']);
+console.log(JSON.stringify({
+ clearbody:run([smeargle],[mon('Metagross','Clear Body',['splash'])],[['move 1','move 1']]),
+ hypercutter:run([smeargle],[mon('Kingler','Hyper Cutter',['splash'])],[['move 1','move 1']]),
+ landed:run([smeargle],[mon('Hypno','Insomnia',['splash'])],[['move 1','move 1']]),
+ insomnia:run([smeargle],[mon('Blissey','Serene Grace',['splash']),mon('Hypno','Insomnia',['splash'])],
+  [['move 2','move 1'],['move 2','switch 2']]),
+ rest:run([smeargle],[mon('Primeape','Vital Spirit',['rest','splash'])],[['move 3','move 2'],['move 4','move 1']])}));"""
+        logs = json.loads(subprocess.check_output(['node', '-e', code, str(showdown_root())], text=True))
+        def revealed(log):
+            found = set()
+            for line in log:
+                ident, name = _confirmed_ability_from_event(_public_event_from_line(line))
+                if ident and name and ident.startswith('p2'):found.add(name)
+            return found
+        self.assertEqual(revealed(logs['clearbody']), {'Clear Body'})
+        self.assertEqual(revealed(logs['hypercutter']), {'Hyper Cutter'})
+        self.assertEqual(revealed(logs['landed']), set())
+        self.assertIn('|-unboost|p2a: Hypno|atk|2', logs['landed'])
+        self.assertEqual(revealed(logs['insomnia']), {'Insomnia'})                 # before Sleep Clause's handler
+        self.assertFalse(any('Sleep Clause Mod activated' in line for line in logs['insomnia']))
+        self.assertEqual(revealed(logs['rest']), {'Vital Spirit'})
+        self.assertFalse(any(line.startswith('|-status|p2a: Primeape') for line in logs['rest']))
 
 
 class RegressPluginTests(unittest.TestCase):
