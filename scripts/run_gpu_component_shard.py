@@ -16,6 +16,8 @@ import unittest
 
 
 ROOT = Path(__file__).resolve().parents[1]
+HEAVY_MANIFEST = ROOT / "tests" / "gpu_component_heavy.json"
+TIERS = ("all", "light", "heavy")
 
 
 def partition_suite(suite, index: int, count: int):
@@ -27,6 +29,83 @@ def partition_suite(suite, index: int, count: int):
     # their custom run behavior, rather than flattening individual test cases.
     blocks = list(suite)
     indices = list(range(index, len(blocks), count))
+    if not indices:
+        raise ValueError("empty component shard")
+    return unittest.TestSuite(blocks[offset] for offset in indices), indices, len(blocks)
+
+
+def load_heavy_modules(path=HEAVY_MANIFEST):
+    """The heavy tier's test modules (tests/gpu_component_heavy.json): run nightly and before main, not per pull request."""
+    data = json.loads(Path(path).read_text())
+    entries = data.get("modules", []) if type(data) is dict else None
+    modules = [entry.get("module") for entry in entries] if type(entries) is list and all(type(e) is dict for e in entries) else None
+    if (type(data) is not dict or data.get("schema") != "gpu-component-heavy.v1" or not modules
+            or any(type(name) is not str or not name.startswith("test_gpu_engine") for name in modules)
+            or len(set(modules)) != len(modules)):
+        raise ValueError("heavy manifest requires schema gpu-component-heavy.v1 and unique test_gpu_engine module names")
+    return frozenset(modules)
+
+
+class _ModuleRecordingLoader(unittest.TestLoader):
+    """The standard loader, recording which module produced each loaded suite (discovery itself is unchanged)."""
+
+    def __init__(self):
+        super().__init__()
+        self.suite_modules = {}
+
+    def loadTestsFromModule(self, module, *args, **kwargs):
+        tests = super().loadTestsFromModule(module, *args, **kwargs)
+        self.suite_modules[id(tests)] = module.__name__
+        return tests
+
+
+def _import_outcome(block):
+    """The single _FailedTest (import or load_tests failure) or ModuleSkipped (SkipTest at import) case discovery put in
+    `block` in place of a module, or None."""
+    if type(block) is not unittest.TestSuite:
+        return None
+    children = list(block)
+    if len(children) == 1 and type(children[0]).__name__ in ("_FailedTest", "ModuleSkipped"):
+        return children[0]
+    return None
+
+
+def _discover_modules(spec):
+    """(discovery suite, the module of each top-level block or None). A block is what discovery loaded from one module or
+    package; an import failure's or import-time skip's block is named by its module."""
+    loader = _ModuleRecordingLoader()
+    suite = loader.discover(**spec)
+    modules = []
+    for block in list(suite):
+        name = loader.suite_modules.get(id(block))
+        if name is None and _import_outcome(block) is not None:
+            name = _import_outcome(block)._testMethodName
+        modules.append(name)
+    return suite, modules
+
+
+def partition_tier(suite, modules, index: int, count: int, tier="all", heavy=frozenset()):
+    """partition_suite over one tier's blocks, keeping original top-level indices. Tier "all" is partition_suite itself;
+    "light" and "heavy" split every block by its module's membership in `heavy`, so the two tiers are disjoint and together
+    are every block (same tests, same blocks, same order). A block whose module failed to import (or skipped at import) is
+    light whatever the manifest says: it costs nothing to run and a heavy module's import failure must fail per PR."""
+    if tier == "all":
+        return partition_suite(suite, index, count)
+    if tier not in TIERS:
+        raise ValueError(f"tier must be one of {TIERS}")
+    if type(count) is not int or count <= 0:
+        raise ValueError("positive integer shard count required")
+    if type(index) is not int or not 0 <= index < count:
+        raise ValueError("shard index must be within the declared count")
+    blocks = list(suite)
+    if len(modules) != len(blocks) or any(type(name) is not str for name in modules):
+        raise ValueError("every discovery block needs its module for a tiered shard")
+    absent = sorted(set(heavy) - set(modules))
+    if absent:
+        raise ValueError(f"heavy manifest names modules discovery does not have: {absent}")
+    heavy_block = [name in heavy and _import_outcome(block) is None for name, block in zip(modules, blocks)]
+    eligible = [offset for offset, is_heavy in enumerate(heavy_block) if is_heavy == (tier == "heavy")]
+    indices = eligible[index::count]
     if not indices:
         raise ValueError("empty component shard")
     return unittest.TestSuite(blocks[offset] for offset in indices), indices, len(blocks)
@@ -68,10 +147,6 @@ def _identities(node):
     if node["kind"] == "case":
         return [node["id"]]
     return [identity for child in node["children"] for identity in _identities(child)]
-
-
-def _discover(spec):
-    return unittest.TestLoader().discover(**spec)
 
 
 def _digest(payload):
@@ -279,9 +354,10 @@ def _child(plan_path, plan_sha256, block_index, receipt_path, case_index=None):
     plan = json.loads(Path(plan_path).read_text())
     if plan.get("schema") != "component-block-plan.v1" or _digest(plan) != plan_sha256:
         raise ValueError("child discovery plan changed")
-    discovered = _discover(plan["discovery"])
+    discovered, modules = _discover_modules(plan["discovery"])
     blocks = list(discovered)
-    _, indices, total = partition_suite(discovered, plan["index"], plan["count"])
+    _, indices, total = partition_tier(discovered, modules, plan["index"], plan["count"],
+        plan.get("tier", "all"), frozenset(plan.get("heavy_modules", ())))
     if ([_manifest(block) for block in blocks] != plan["manifest"]
             or indices != plan["selected_blocks"] or total != len(plan["manifest"])
             or type(block_index) is not int or block_index not in indices):
@@ -313,7 +389,7 @@ def _child(plan_path, plan_sha256, block_index, receipt_path, case_index=None):
 
 def run_process_blocks(suite, index, count, *, start_dir, pattern="test_gpu_engine*.py",
                        top_level_dir=None, stream=None, resource_interval_seconds=0,
-                       isolate_standard_classes=()):
+                       isolate_standard_classes=(), tier="all", heavy=frozenset()):
     """Optional sequential fresh-exec blocks; default whole-suite API unchanged.
 
     Discovery is repeated and verified in each fresh sys.executable process.
@@ -328,15 +404,23 @@ def run_process_blocks(suite, index, count, *, start_dir, pattern="test_gpu_engi
         raise ValueError('case isolation requires explicit class names')
     classes = sorted(set(isolate_standard_classes))
     stream = sys.stdout if stream is None else stream
-    _, indices, _ = partition_suite(suite, index, count)
     spec = dict(start_dir=str(Path(start_dir).resolve()), pattern=pattern)
     if top_level_dir is not None:
         spec["top_level_dir"] = str(Path(top_level_dir).resolve())
     blocks = list(suite)
+    if tier == "all":
+        _, indices, _ = partition_suite(suite, index, count)
+    else:   # the block modules come from a recording rediscovery, which must describe the same blocks
+        rediscovered, modules = _discover_modules(spec)
+        if [_manifest(block) for block in rediscovered] != [_manifest(block) for block in blocks]:
+            raise ValueError("tiered selection rediscovery differs from the given suite")
+        _, indices, _ = partition_tier(suite, modules, index, count, tier, frozenset(heavy))
     units, decisions = _isolation_units(blocks, indices, classes)
     plan = dict(schema="component-block-plan.v1", discovery=spec, index=index, count=count,
         selected_blocks=indices, manifest=[_manifest(block) for block in blocks],
         isolate_standard_classes=classes, execution_units=units, isolation_decisions=decisions)
+    if tier != "all":
+        plan.update(tier=tier, heavy_modules=sorted(heavy))
     print(json.dumps(dict(case_isolation_decisions=decisions)), file=stream, flush=True)
     environment = dict(os.environ)
     # A fresh interpreter must exercise THIS checkout, not another editable
@@ -400,6 +484,10 @@ def main() -> int:
         help="sample numeric Linux memory/CPU counters during process blocks (0 disables)")
     parser.add_argument('--isolate-standard-class', action='append', default=[],
         help='explicit class whose plain suite cases each get fresh module/class fixtures')
+    parser.add_argument("--tier", choices=TIERS, default="all",
+        help="all (default) shards every block; light omits the heavy manifest's modules (per pull request); "
+             "heavy runs only them (nightly and before main)")
+    parser.add_argument("--heavy-manifest", default=str(HEAVY_MANIFEST), help=argparse.SUPPRESS)
     parser.add_argument("--_child-plan", help=argparse.SUPPRESS)
     parser.add_argument("--_plan-sha256", help=argparse.SUPPRESS)
     parser.add_argument("--_block-index", type=int, help=argparse.SUPPRESS)
@@ -413,17 +501,16 @@ def main() -> int:
         return _child(args._child_plan, args._plan_sha256, args._block_index, args._receipt, args._case_index)
     if args.index is None or args.count is None:
         parser.error("--index and --count are required")
-    discovered = unittest.defaultTestLoader.discover(
-        start_dir=str(ROOT / "tests"), pattern="test_gpu_engine*.py"
-    )
-    selected, indices, total = partition_suite(discovered, args.index, args.count)
-    print(json.dumps({"shard": args.index, "count": args.count,
+    heavy = frozenset() if args.tier == "all" else load_heavy_modules(args.heavy_manifest)
+    discovered, modules = _discover_modules(dict(start_dir=str(ROOT / "tests"), pattern="test_gpu_engine*.py"))
+    selected, indices, total = partition_tier(discovered, modules, args.index, args.count, args.tier, heavy)
+    print(json.dumps({"shard": args.index, "count": args.count, "tier": args.tier,
         "discovery_blocks": total, "selected_blocks": indices,
         "test_cases": selected.countTestCases()}), flush=True)
     if args.process_blocks:
         return run_process_blocks(discovered, args.index, args.count, start_dir=ROOT / "tests",
             resource_interval_seconds=args.resource_interval_seconds,
-            isolate_standard_classes=args.isolate_standard_class)
+            isolate_standard_classes=args.isolate_standard_class, tier=args.tier, heavy=heavy)
     return run_suite(selected)
 
 

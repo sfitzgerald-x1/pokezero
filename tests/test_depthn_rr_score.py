@@ -661,6 +661,7 @@ class EndToEndTests(unittest.TestCase):
         self.assertEqual((len(first['mapped_worlds']), first['parity']['match']), (16, True))
         self.assertEqual(set(first['operators']), set(S.SETTINGS))
         self.assertEqual(first['operators']['target_argmax']['choice'], 4)
+        self.assertEqual((first['target_source'], cover['target_sources']), ('live_telemetry', {'live_telemetry': 6}))   # the rows carry no replay target
         self.assertEqual((forced['reply']['kind'], len(forced['mapped_worlds'])), ('wait', 16))
         self.assertIsNone(decisions[3]['parity'])
         text = (out / 'summary.md').read_text()
@@ -673,6 +674,83 @@ class EndToEndTests(unittest.TestCase):
         self.assertIsNone(cover['external_prior']);self.assertNotIn('external_br', first['operators'])
         self.assertEqual(summary['metrics']['pi_filled']['all']['operators']['tempered:T=inf']['decisions'], 6)
         with self.assertRaises(FileExistsError):S.score_run([str(path)], str(run), str(out))
+
+    def test_the_re_priced_rows_target_wins_over_the_live_telemetry(self):
+        run = self.root / 'run'
+        for sub in ('results', 'telemetry', 'owning-wire'):(run / sub).mkdir(parents=True)
+        rows = self.rows(run, random.Random(11))
+        for r in rows:   # the re-priced target on a lane neither the telemetry (4) nor the logits + q fallback picks: 2 for moves, 5 for switches
+            legal = (r.get('root') or {}).get('root_legal')
+            if legal:lane = 2 if legal[2] else 5;r['replay']['policy_target'] = [1. if a == lane else 0. for a in range(9)]
+        rows[1]['live']['greedy_action_index'] = None   # excluded inside the scoring (greedy_missing): not counted as a target source
+        path = self.root / 'rows-0.jsonl';path.write_text(''.join(json.dumps(r) + '\n' for r in rows))
+        out = self.root / 'out'
+        with redirect_stdout(io.StringIO()):self.assertEqual(S.main(['--rows', str(path), '--run-directory', str(run), '--out', str(out)]), 0)
+        cover = json.loads((out / 'summary.json').read_text())['coverage']
+        self.assertEqual((cover['scored'], cover['target_sources'], cover['target_argmax_fallbacks']), (5, {'replay': 5}, 0))
+        first = json.loads((out / 'decisions.jsonl').read_text().splitlines()[0])
+        op = first['operators']['target_argmax'];self.assertEqual((first['target_source'], op.get('raw_choice', op['choice'])), ('replay', 2))
+
+    def test_a_replay_mode_re_scoring_never_takes_the_live_trees_target(self):
+        run = self.root / 'run'
+        for sub in ('results', 'telemetry', 'owning-wire'):(run / sub).mkdir(parents=True)
+        path = self.root / 'rows-0.jsonl';path.write_text(''.join(json.dumps(r) + '\n' for r in self.rows(run, random.Random(11))))   # no replay targets
+        out = self.root / 'out'
+        with redirect_stdout(io.StringIO()):
+            self.assertEqual(S.main(['--rows', str(path), '--run-directory', str(run), '--out', str(out), '--parity-mode', 'replay']), 0)
+        cover = json.loads((out / 'summary.json').read_text())['coverage']
+        self.assertEqual((cover['target_sources'], cover['target_argmax_fallbacks']), ({'missing': 6}, 6))   # the telemetry is never read
+
+    def test_row_policy_target_prefers_a_valid_replay_target(self):
+        legal = [True, True, False] + [False] * 6
+        class Run:
+            def __init__(self, target):self.target = target
+            def policy_target(self, ordinal, index):return self.target
+        live = Run([.3, .7] + [0.] * 7)
+        good = dict(replay_policy_target=[.9, .1] + [0.] * 7, root_legal=legal)
+        self.assertEqual(S.row_policy_target(good, live, 0, 0), ([.9, .1] + [0.] * 7, 'replay'))
+        nan_illegal = dict(replay_policy_target=[.9, .1, float('nan'), None] + [0.] * 5, root_legal=legal)   # only legal lanes count
+        self.assertEqual(S.row_policy_target(nan_illegal, live, 0, 0)[1], 'replay')
+        for bad in (None, [.9] * 8, [float('nan'), .1] + [0.] * 7, 'x', [True, False] + [0.] * 7):
+            self.assertEqual(S.row_policy_target(dict(replay_policy_target=bad, root_legal=legal), live, 0, 0), ([.3, .7] + [0.] * 7, 'live_telemetry'))
+        none = dict(replay_policy_target=None, root_legal=legal)
+        self.assertEqual(S.row_policy_target(none, Run(None), 0, 0), (None, 'missing'))
+        self.assertEqual(S.row_policy_target(none, Run([.3, .7]), 0, 0), (None, 'live_telemetry_invalid'))
+        self.assertEqual(S.row_policy_target(none, live, 0, 0, live_fallback=False), (None, 'missing'))   # a modified tree: never the live target
+
+    def test_real_telemetry_reader_preserves_malformed_target_provenance(self):
+        telemetry = self.root / 'telemetry';telemetry.mkdir()
+        malformed = ['invalid', {'lane': 1}, False, 42, [.5] * 8, [True] * 9]
+        rows = [dict(decision_index=i, search=dict(policy_target=target)) for i, target in enumerate(malformed)]
+        rows += [dict(decision_index=6, search=dict(policy_target=None)), dict(decision_index=7, search={})]
+        (telemetry / '0.jsonl').write_text(''.join(json.dumps(row) + '\n' for row in rows))
+        run = S.RunDirectory(self.root)
+        decision = dict(root_legal=[True] * 9)
+        for i, target in enumerate(malformed):
+            with self.subTest(target=target):
+                self.assertEqual(run.policy_target(0, i), target)
+                self.assertEqual(S.row_policy_target(decision, run, 0, i), (None, 'live_telemetry_invalid'))
+        for i in (6, 7, 8):
+            self.assertEqual(S.row_policy_target(decision, run, 0, i), (None, 'missing'))
+        # a malformed (non-dict) search record: labelled invalid, never a crash
+        (telemetry / '1.jsonl').write_text(json.dumps(dict(decision_index=0, search='broken')) + '\n' + json.dumps(dict(decision_index=1, search=[1, 2])) + '\n')
+        for i in (0, 1):
+            self.assertEqual(S.row_policy_target(decision, run, 1, i), (None, 'live_telemetry_invalid'))
+
+    def test_main_counts_malformed_telemetry_targets_as_invalid(self):
+        run = self.root / 'run'
+        for sub in ('results', 'telemetry', 'owning-wire'):(run / sub).mkdir(parents=True)
+        rows = self.rows(run, random.Random(11))
+        for path in (run / 'telemetry').glob('*.jsonl'):
+            telemetry = [json.loads(line) for line in path.read_text().splitlines()]
+            for row in telemetry:row['search']['policy_target'] = 'invalid'
+            path.write_text(''.join(json.dumps(row) + '\n' for row in telemetry))
+        path = self.root / 'rows-0.jsonl';path.write_text(''.join(json.dumps(row) + '\n' for row in rows))
+        out = self.root / 'out'
+        with redirect_stdout(io.StringIO()):
+            self.assertEqual(S.main(['--rows', str(path), '--run-directory', str(run), '--out', str(out)]), 0)
+        cover = json.loads((out / 'summary.json').read_text())['coverage']
+        self.assertEqual((cover['target_sources'], cover['target_argmax_fallbacks']), ({'live_telemetry_invalid': 6}, 6))
 
     def test_main_with_reply_prior(self):
         run = self.root / 'run'
@@ -750,6 +828,17 @@ class GuardTests(unittest.TestCase):
         self.assertEqual(out['raw_operators']['averaging']['choice'], 0);self.assertAlmostEqual(out['raw_operators']['averaging']['D']['dropped'], .4)
         self.assertEqual((out['guard']['b'], out['guard']['tiers_turn1']), (True, ['A']))
 
+    def test_a_union_records_reply_arm_b_guards_every_operator_as_live_does(self):
+        clear = guard_record()
+        union = dict(clear, tripped=True, union_only=True, union=dict(tripped=True, champion=dict(tripped=False, b=False),
+                                                                    reply=dict(tripped=True, b=True)))
+        out = self.score(union)
+        for name, o in out['operators'].items():
+            self.assertEqual(o['choice'], 1, name)   # greedy plays: the live actor fell back on the union
+            if name != 'greedy' and o['raw_choice'] != 1:self.assertEqual(o['guard_causes'], ['UNREPRESENTED_EFFECT'], name)
+        quiet = dict(clear, union=dict(tripped=False, champion=dict(tripped=False, b=False), reply=dict(tripped=False, b=False)))
+        self.assertEqual(self.score(quiet)['operators']['averaging']['choice'], self.score(clear)['operators']['averaging']['choice'])
+
     def test_c_guards_only_the_operators_choosing_the_lane(self):
         out = self.score(guard_record(lanes=(('A', 'other'), None, None, None)))   # lane 0 (averaging's choice) guarded for us
         self.assertEqual((out['operators']['averaging']['choice'], out['operators']['averaging']['guard_causes']), (1, ['UNREPRESENTED_EFFECT']))
@@ -789,6 +878,16 @@ class GuardTests(unittest.TestCase):
         self.assertAlmostEqual(g['primary']['table']['pi_filled']['averaging']['mean'], .1)
         text = '\n'.join(S.guard_markdown(g, S.SETTINGS))
         self.assertIn('**above 20%**', text);self.assertIn('Primary: RR on unguarded roots (2)', text)
+        # br_fp's union guard: a root guarded by the reply arm alone leaves the unguarded (primary) population, as live greedy plays
+        union_only = dict(guard_record(), union=dict(tripped=True, champion=dict(tripped=False, b=False), reply=dict(tripped=True, b=True)),
+                          union_only=True, tripped=True)
+        f = facts(union_only);self.assertEqual((f['b'], f['champion_b'], f['union_only']), (True, False, True))
+        mixed = S.guard_report([record(0, facts(guard_record())), record(1, f, d=0.)], S.SETTINGS)
+        self.assertEqual((mixed['primary']['roots'], mixed['union']['reply_arm_only'], mixed['union']['unavailable_or_error'], mixed['guarded_share']),
+                         (1, 1, 0, .5))
+        self.assertIn('reply arm only', '\n'.join(S.guard_markdown(mixed, S.SETTINGS)))
+        quiet = facts(dict(guard_record(), union=dict(tripped=False, champion=dict(tripped=False, b=False), reply=dict(tripped=False, b=False))))
+        self.assertEqual((quiet['b'], quiet['union_only']), (False, False))
 
     def test_end_to_end(self):
         """A small synthetic replay through main(): the rows carry their guard records; the guarded root plays greedy everywhere."""
@@ -977,6 +1076,22 @@ class DefinitiveOperatorTests(unittest.TestCase):
         got = S.score_decision(d3, S.censored('other', ''), None, collections.Counter(), definitive=dict(prior=prior, weights={0: 0., 1: 0., 2: 0.}))
         b3 = S.recompute(d3);want = hedge.averaging(S.model_worlds(b3.worlds, {k: tuple(v) for k, v in prior.items()}), b3.legal)
         self.assertEqual(got['operators']['br_fp']['choice'], hedge.top_action(want.strategy))
+
+    def test_br_fp_parity_mode_holds_a_reply_archive_replay_to_the_scorers_br_fp(self):
+        legal = legal_mask(0, 1, 2);worlds = self.worlds()
+        prior = {w: list(self.other_reply) for w in range(len(worlds))}
+        base = S.recompute(definitive_decision(worlds, root_legal=legal))
+        fp = hedge.averaging(S.model_worlds(base.worlds, {w: tuple(v) for w, v in prior.items()}), base.legal)
+        fp_action, fp_q = hedge.top_action(fp.strategy), json.loads(json.dumps(list(fp.q)))
+        champion_action = hedge.top_action(base.average.strategy);self.assertNotEqual(fp_action, champion_action)   # the modes differ here
+        row = definitive_decision(worlds, root_legal=legal, live_action=champion_action, replay_action=fp_action, replay_q=fp_q)
+        self.assertEqual(S.parity_row(row, S.recompute(row), None, 'br_fp', prior), dict(match=True, action_equal=True, q_equal=True, cause=None))
+        self.assertEqual(S.parity_row(row, S.recompute(row), None, 'replay')['cause'], 'action_and_q_differ')   # the champion's averaging is not what played
+        champ = definitive_decision(worlds, root_legal=legal, replay_action=champion_action, replay_q=json.loads(json.dumps(list(base.average.q))))
+        self.assertEqual(S.parity_row(champ, S.recompute(champ), None, 'br_fp', prior)['cause'], 'action_and_q_differ')
+        self.assertEqual(S.parity_row(row, S.recompute(row), None, 'br_fp', {0: prior[0]})['cause'], 'br_fp_reply_prior_missing')
+        self.assertEqual(S.parity_row(row, S.recompute(row), None, 'br_fp', None)['cause'], 'br_fp_reply_prior_missing')
+        with self.assertRaisesRegex(ValueError, 'needs --reply-prior'):S.score_run([], '/nonexistent', '/nonexistent', None, 'br_fp')
 
     def test_inputs_from_other_rows_are_refused(self):
         legal = legal_mask(0, 1, 2);d = definitive_decision(self.worlds(), greedy=1, root_legal=legal)

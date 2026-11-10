@@ -1,0 +1,193 @@
+{
+ "schema": "pokezero.effect_probe.scenario.v1",
+ "move": "superpower",
+ "note": "A1.2 Superpower self -1 Atk, -1 Def after a successful hit (Superpower has 8 PP): a hit, a Substitute hit, a hit or a miss after Crobat's Double Team (accuracy 75: roll 0 hits, 99 misses), then on to -6/-6 and silent at the floor. Clear Body does not block a self drop.",
+ "teams": [
+  [
+   {
+    "species": "Regirock",
+    "moves": [
+     "superpower",
+     "rockslide",
+     "earthquake",
+     "explosion"
+    ],
+    "ability": "Clear Body",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Starmie",
+    "moves": [
+     "surf",
+     "thunderbolt",
+     "icebeam",
+     "recover"
+    ],
+    "ability": "Illuminate",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Swampert",
+    "moves": [
+     "earthquake",
+     "surf",
+     "icebeam",
+     "protect"
+    ],
+    "ability": "Torrent",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Zapdos",
+    "moves": [
+     "thunderbolt",
+     "batonpass",
+     "agility",
+     "drillpeck"
+    ],
+    "ability": "Pressure",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Celebi",
+    "moves": [
+     "psychic",
+     "gigadrain",
+     "recover",
+     "calmmind"
+    ],
+    "ability": "Natural Cure",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Suicune",
+    "moves": [
+     "surf",
+     "icebeam",
+     "calmmind",
+     "rest"
+    ],
+    "ability": "Pressure",
+    "item": "Leftovers"
+   }
+  ],
+  [
+   {
+    "species": "Crobat",
+    "moves": [
+     "substitute",
+     "doubleteam",
+     "splash",
+     "protect"
+    ],
+    "ability": "Inner Focus",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Starmie",
+    "moves": [
+     "surf",
+     "thunderbolt",
+     "icebeam",
+     "recover"
+    ],
+    "ability": "Illuminate",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Swampert",
+    "moves": [
+     "earthquake",
+     "surf",
+     "icebeam",
+     "protect"
+    ],
+    "ability": "Torrent",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Zapdos",
+    "moves": [
+     "thunderbolt",
+     "batonpass",
+     "agility",
+     "drillpeck"
+    ],
+    "ability": "Pressure",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Celebi",
+    "moves": [
+     "psychic",
+     "gigadrain",
+     "recover",
+     "calmmind"
+    ],
+    "ability": "Natural Cure",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Suicune",
+    "moves": [
+     "surf",
+     "icebeam",
+     "calmmind",
+     "rest"
+    ],
+    "ability": "Pressure",
+    "item": "Leftovers"
+   }
+  ]
+ ],
+ "script": [
+  [
+   "move 1",
+   "move 3"
+  ],
+  [
+   "move 1",
+   "move 1"
+  ],
+  [
+   "move 1",
+   "move 2"
+  ],
+  [
+   "move 1",
+   "move 3"
+  ],
+  [
+   "move 1",
+   "move 3"
+  ],
+  [
+   "move 1",
+   "move 3"
+  ],
+  [
+   "move 1",
+   "move 3"
+  ],
+  [
+   "move 1",
+   "move 3"
+  ]
+ ],
+ "axes": [
+  {
+   "name": "accuracy",
+   "field": "draws.0.6",
+   "steps": [
+    2
+   ],
+   "values": [
+    0,
+    99
+   ]
+  }
+ ],
+ "expect": {
+  "exact": true
+ }
+}

@@ -1,0 +1,75 @@
+{
+ "adopts": [
+  {
+   "change": "none",
+   "path": "evals/depthn-foulplay-dn2w16-amendment-unknown-cells-20261108.json",
+   "rule": "unknown-cells",
+   "sha256": "c4ff30a25a573f90fdd02957b40fb8307d8b87b56dfbfe60d85ea662b18e8b3b"
+  },
+  {
+   "change": "none",
+   "path": "evals/depthn-foulplay-dn2w16-amendment-harm-mirror-20261108.json",
+   "rule": "harm-mirror",
+   "sha256": "dbce9a54223969a213a3e584fd2e01bbe259ebad7530678fbba7cd38ecd9539f"
+  },
+  {
+   "change": "none",
+   "path": "evals/depthn-foulplay-dn2w16-amendment-both-bounds-20261108.json",
+   "rule": "both-bounds",
+   "sha256": "98e6120f30565c0b40d423504aa0d07a2929b2207551a5c901adb7579d361e13"
+  },
+  {
+   "change": "none",
+   "note": "its VOID rule (|difference| > 5%: VOID_FAIRNESS) and tolerance apply unchanged; its coarse 1-2 / 3-4 / 5-6 alive stratification is replaced, for screen-r3, by the declared arm fairness rule RULE_R3 (final_fairness_rule)",
+   "path": "evals/depthn-foulplay-dn2w16-amendment-final-fairness-20261108.json",
+   "rule": "final-fairness",
+   "sha256": "b2fccc253136b2bce3125cc773973c7186a0dff6a5ff8e6825a5618d6268050e"
+  }
+ ],
+ "application": "scripts/depthn_screen_amended_verdict.py --run-binding <this file> <its sha256> applies the four adopted rule files (each pinned by sha256 in the script, their rule text unchanged) to screen-r3's official readout and result files. This record supplies the run they bind to (run directory, declaration sha256, readout tree commit) in place of the four files' screen-r1 run fields, and declares final_fairness_rule RULE_R3: the final-fairness amendment's VOID rule (|difference| > 5%: VOID_FAIRNESS) applies to the whole-run gate under the declared arm fairness rule RULE_R3 (scripts/depthn_fairness_final.py final --rule r3; pinned in RUN_FINAL_RULES), not to the coarse or exact alive-band gates. No run amendment is adopted or accepted. The verdict refuses to run (no verdict, not VOID) when the RULE_R3 gate counts any COMPLETE cell whose owner capture file is missing.",
+ "arm_fairness": {
+  "alive_bands": [
+   "1",
+   "2",
+   "3-4",
+   "5-6"
+  ],
+  "checkpoint_pairs": 50,
+  "combine": "POOLED_COUNT_WEIGHTED_RATIO_OF_MEANS",
+  "coverage_difference_max": 0.05,
+  "metric": "ITERATIONS_PER_BUDGET_SECOND",
+  "min_cell_moves": 120,
+  "min_moves_per_arm": 1000,
+  "min_pairs": 50,
+  "min_support_moves": 120,
+  "ratio_tolerance": 0.05,
+  "rearm_margin": 0.025,
+  "reference": "RAW",
+  "strata": "FOULPLAY_BUDGET_STRATUM_X_TURN_BAND_X_ALIVE_BANDS"
+ },
+ "computed_before": "Nothing of screen-r3: this record is committed before any screen-r3 cell or run directory exists. No cell, latency, fairness, paired, score or outcome statistic of screen-r3 has been computed; its dispatch does not depend on this record. No screen-r2 outcome has been read either (screen-r2 is VOID_FAIRNESS and sealed). RULE_R3 and N = 120 were designed from fairness data only: N is derived from screen-r1 (about 30 games per arm per cell at its 3.7-3.9 Foul Play moves per game in sparse exact-band groups) and was fixed before any screen-r2 reading under RULE_R3 was computed, but screen-r2's per-cell exact-alive-band diagnosis of its flag-2 window had already been seen when N was chosen (the declaration note reports the sensitivity: screen-r2 would flag at N = 30 and 75, passes from 100).",
+ "decided_by": "the lead (search, V2, CUDA): screen-r2 is VOID_FAIRNESS; screen-r3 asks the same question with the same arms and cells, servers on a separate node, and a pre-registered minimum-support fairness rule (RULE_R3) in the drift checkpoints and the final gate; a flag that fails RULE_R3 stops the run and goes to the lead, with no amendment mid-run",
+ "declaration": "evals/depthn-foulplay-dn2w16-declaration-r3-20261109.json",
+ "declaration_sha256": "3a05d247ab84e8e240fbd0733c10f3189626e70386a9076499a9587c7c0c3dbd",
+ "final_fairness_rule": "RULE_R3",
+ "made_at_utc": "2026-11-09T20:32:47Z",
+ "not_adopted": [
+  {
+   "path": "evals/depthn-foulplay-dn2w16-amendment-extension-20261108.json",
+   "reason": "screen-r1-specific (it dispatches screen-r1's own 2,000-cell extension on screen-r1's tree). screen-r3 is a 500-cell screen and declares no extension to 2,000: a CONTINUE_TO_2000 verdict goes to the lead for a separate pre-registered decision.",
+   "sha256": "8a708ebbc6a4206dafc38b2d729656e25da6cf914931b5424353f441f6e9ed00"
+  },
+  {
+   "path": "evals/depthn-foulplay-dn2w16-amendment-screen-r2-alive-bands-20261109.json",
+   "reason": "screen-r2-specific (bound to screen-r2's declaration, run and flag 2); screen-r3 declares RULE_R3, which already stratifies by exact alive bands",
+   "sha256": "fa7c32a51db058526e436a925ef2156b52ab9debd54881fae6829febcfaced53"
+  }
+ ],
+ "run": {
+  "dispatch_note": "the dispatch tree is the declaration commit c2c94a41 (the server tree e775c020 plus the declaration JSON alone, as depthn_live_panel.server_tree_check requires); this record, the declaration note and the verdict pins are pre-registered in later commits pushed before dispatch",
+  "run_directory": "/out/screen-r3",
+  "server_tree_commit": "e775c02084045916103152847b4c9605ab8506dc",
+  "tree_commit": "c2c94a4142c08f53169a89da3ce31c2843ef5be0"
+ },
+ "schema": "depthn-foulplay-panel.amendment-adoption.v1"
+}

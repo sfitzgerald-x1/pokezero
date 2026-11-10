@@ -134,16 +134,27 @@ def stack_worlds(worlds):
     return jax.tree.map(lambda *x: np.stack([np.asarray(v) for v in x]), *host)   # [W, 1, ...]: one-battle rows, as P1's children
 
 
-def effect_record(frame, root, worlds, children, request, owner, vocabulary, choice, *, labels=child_labels, notes=()):
+UNION_FIELDS = ('tripped', 'b', 'b_turn1', 'b_turn2', 'c', 'arms', 'm_own', 'm_opp')
+
+
+def effect_record(frame, root, worlds, children, request, owner, vocabulary, choice, *, labels=child_labels, notes=(), reply_logits=None):
     """The guard record of one priced root (module docstring). `frame`: the DepthN frame; `root`: build's root dict (rows,
     root_logits, root_legal); `worlds`: the root's worlds in block order (block k's world j is world 2k + j); `children`:
     ObservedDepthNPricer.observed()'s children of this frame's price call (one P1 call); `request`: the protocol request
-    (lines, own_request_line); `owner` 0 or 1; `choice`: the search's action."""
+    (lines, own_request_line); `owner` 0 or 1; `choice`: the search's action.
+    `reply_logits` (a served reply model, br_fp): per world in block order its reply-model logits [9], None for a waiting world.
+    The union guard: the guard is evaluated a second time with each requested world's turn-1 peer prior replaced by the reply
+    model's (turn-1 peer mass and the reach's per-world reply weights; our prior and the turn-2 priors unchanged). The record
+    stays the champion's evaluation; `union` adds dict(tripped=champion OR reply, champion=..., reply=...) over UNION_FIELDS,
+    `union_only` whether only the reply arm tripped (then the record's b, c, arms and m_* describe the champion, which did not), and
+    the top-level `tripped` becomes union['tripped'] (the live actor plays greedy on it). Without reply_logits: unchanged. Only (b)
+    can differ between the arms: (c) reads our own prior and lanes, the same in both."""
     names = Names(vocabulary);cond = guard.conditions(request['lines'], owner, request.get('own_request_line'))
     own_lanes = guard.own_moves(request.get('own_request_line')) or (None,) * 4
     own_turn1 = dict(lanes=list(own_lanes), logits=[float(x) for x in root['root_logits']], legal=[bool(x) for x in root['root_legal']])
     stacked = stack_worlds(worlds);root_labels = None if stacked is None else {k: np.asarray(v) for k, v in jax.device_get(labels(stacked)).items()}
     peer, turn2, expanded, missing = [], [], 0, 0
+    if reply_logits is not None and len(reply_logits) != len(worlds):raise ValueError(f'{len(reply_logits)} reply logits for {len(worlds)} worlds')
     child = children[0] if len(children) == 1 else None
     rows = {}
     if child is not None:
@@ -171,7 +182,19 @@ def effect_record(frame, root, worlds, children, request, owner, vocabulary, cho
                             opp_side=guard.child_side(cond['opp'], side_members(child['labels'], row, 1 - owner, names), opponent=True))
                     turn2.append(dict(world=world, cell=cell, side=side, lanes=lanes, user=user, logits=[float(x) for x in logits[r, jw, a, b]],
                         legal=[bool(x) for x in legal[r, jw, a, b]], **sides))
-    record = guard.evaluate(cond, own_turn1=own_turn1, peer_turn1=peer, turn2=turn2, turn2_available=not (expanded and (child is None or missing)),
-        choice=choice)
+    available = not (expanded and (child is None or missing))
+    record = guard.evaluate(cond, own_turn1=own_turn1, peer_turn1=peer, turn2=[dict(t) for t in turn2], turn2_available=available, choice=choice)
     record.update(turn2_cells=dict(expanded=expanded, unlabelled=missing, p1_captures=len(children)), notes=list(notes))
+    if reply_logits is not None:
+        replied = []
+        for w in peer:
+            logits = reply_logits[w['world']]
+            if w['requested'] and (logits is None or len(logits) != len(w['logits'])):
+                raise ValueError(f'reply logits for requested world {w["world"]}: {None if logits is None else len(logits)} values, not {len(w["logits"])}')
+            replied.append(dict(w, logits=[float(x) for x in logits]) if w['requested'] else dict(w))
+        reply = guard.evaluate(cond, own_turn1=own_turn1, peer_turn1=replied, turn2=[dict(t) for t in turn2], turn2_available=available, choice=choice)
+        summary = lambda r: {k: r.get(k) for k in UNION_FIELDS}
+        record['union'] = dict(tripped=bool(record['tripped'] or reply['tripped']), champion=summary(record), reply=summary(reply))
+        record['union_only'] = bool(record['union']['tripped'] and not record['tripped'])   # only the reply arm tripped: b, c, arms, m_* are the champion's
+        record['tripped'] = record['union']['tripped']
     return record

@@ -65,6 +65,19 @@ class ReplyPrior:
         out = self._jitted[owner](self.params, stack([w.state for w in worlds]), stack([w.public for w in worlds]))
         return np.asarray(jax.device_get(out), np.float32)
 
+    def warm(self, worlds):
+        """Compile what a live root of these worlds' shapes runs, for both owner seats, before READY (a seat first compiled on
+        its first live root cost a ~7 s outlier): eager and check build both seats' eager views and run the reply program;
+        jit and check also compile each seat's jitted program. Returns {owner: seconds}."""
+        import jax
+        seconds = {}
+        for owner in (0, 1):
+            started = time.perf_counter()
+            if self.mode in ('eager', 'check'):self.logits(worlds, owner)
+            if self.mode in ('jit', 'check'):jax.block_until_ready(self.jit_logits(worlds, owner))
+            seconds[owner] = time.perf_counter() - started
+        return seconds
+
     @staticmethod
     def substitute(blocks, reply):
         """`blocks` with each requested world's opponent_logits replaced by reply[i] (i in block order)."""

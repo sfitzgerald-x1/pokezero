@@ -1,0 +1,182 @@
+{
+ "schema": "pokezero.effect_probe.scenario.v1",
+ "move": "aromatherapy",
+ "note": "A1.7 Aromatherapy over a party of mixed statuses: Smeargle badly poisons Exploud (Soundproof), paralyses Snorlax, burns Gengar, sleeps Skarmory and paralyses Blissey; Blissey cures them all, Soundproof included; then a new sleep is allowed.",
+ "teams": [
+  [
+   {
+    "species": "Blissey",
+    "moves": [
+     "aromatherapy",
+     "softboiled",
+     "splash",
+     "seismictoss"
+    ],
+    "ability": "Serene Grace",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Exploud",
+    "moves": [
+     "splash",
+     "return",
+     "flamethrower",
+     "earthquake"
+    ],
+    "ability": "Soundproof",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Snorlax",
+    "moves": [
+     "splash",
+     "bodyslam",
+     "rest",
+     "curse"
+    ],
+    "ability": "Thick Fat",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Gengar",
+    "moves": [
+     "splash",
+     "thunderbolt",
+     "icepunch",
+     "firepunch"
+    ],
+    "ability": "Levitate",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Skarmory",
+    "moves": [
+     "splash",
+     "drillpeck",
+     "spikes",
+     "protect"
+    ],
+    "ability": "Keen Eye",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Starmie",
+    "moves": [
+     "surf",
+     "thunderbolt",
+     "icebeam",
+     "recover"
+    ],
+    "ability": "Illuminate",
+    "item": "Leftovers"
+   }
+  ],
+  [
+   {
+    "species": "Smeargle",
+    "moves": [
+     "toxic",
+     "thunderwave",
+     "willowisp",
+     "spore"
+    ],
+    "ability": "Own Tempo",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Starmie",
+    "moves": [
+     "surf",
+     "thunderbolt",
+     "icebeam",
+     "recover"
+    ],
+    "ability": "Illuminate",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Swampert",
+    "moves": [
+     "earthquake",
+     "surf",
+     "icebeam",
+     "protect"
+    ],
+    "ability": "Torrent",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Zapdos",
+    "moves": [
+     "thunderbolt",
+     "batonpass",
+     "agility",
+     "drillpeck"
+    ],
+    "ability": "Pressure",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Celebi",
+    "moves": [
+     "psychic",
+     "gigadrain",
+     "recover",
+     "calmmind"
+    ],
+    "ability": "Natural Cure",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Suicune",
+    "moves": [
+     "surf",
+     "icebeam",
+     "calmmind",
+     "rest"
+    ],
+    "ability": "Pressure",
+    "item": "Leftovers"
+   }
+  ]
+ ],
+ "script": [
+  [
+   "switch 2",
+   "move 1"
+  ],
+  [
+   "switch 3",
+   "move 2"
+  ],
+  [
+   "switch 4",
+   "move 3"
+  ],
+  [
+   "switch 5",
+   "move 4"
+  ],
+  [
+   "switch 1",
+   "move 2"
+  ],
+  [
+   "move 1",
+   "move 1"
+  ],
+  [
+   "move 3",
+   "move 4"
+  ]
+ ],
+ "axes": [],
+ "expect": {
+  "exact": true
+ },
+ "tape_steps": {
+  "3": {
+   "draws.1.7": 3
+  }
+ }
+}

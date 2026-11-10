@@ -41,7 +41,10 @@ Eval readiness (the lead's rulings):
   per phase (screen, extension) and per acknowledgement window. A flag stops
   dispatch until `acknowledge --cause benign|fault`: benign re-arms over the moves
   after it (depthn_live_fairness.flag's re-arm rule), fault voids the run
-  (VOID_FAIRNESS, never resumed). The extension starts un-acknowledged. Flags,
+  (VOID_FAIRNESS, never resumed). The extension starts un-acknowledged. The declared
+  rule is depthn_live_fairness.RULE (screen-r1, screen-r2) or RULE_R3 (screen-r3: our
+  and their exact alive bands from the owner capture, minimum support); the
+  checkpoints and the readout read under the declared one. Flags,
   acknowledgements and checks are phase-scoped files, so a pinned screen readout
   recomputes identically whatever the extension records. When not observable, the
   gate is UNMEASURABLE: it rests on structural isolation plus interleaving, and the
@@ -91,6 +94,7 @@ DEADLINES=(3.,5.,10.,15.)
 LATENCY_RULE=dict(searched_decisions=1000,timeout_rate_max=.01,coverage_deadlines=[5.,10.,15.],coverage_min=.995)
 INTERLEAVE='ALTERNATE_ARMS_BY_PAIR_ORDINAL_LEAD_AT_MOST_CONCURRENCY'
 ARM_FAIRNESS=fairness.RULE
+ARM_FAIRNESS_RULES=(fairness.RULE,fairness.RULE_R3)   # the declarable arm fairness rules: screen-r1/r2's, screen-r3's
 PHASES=('screen','extension')
 CALIBRATION_SCHEMA='depthn-foulplay-panel.calibration.v1'
 CALIBRATION_RUN_SCHEMA='depthn-foulplay-panel.calibration-run.v1'
@@ -174,7 +178,7 @@ def validate(declaration):
             or d['primary_comparison']!='SEARCH_MINUS_OUR_RAW_PAIRED_BY_CELL'
             or d['bar']!='LOWER_BOUND_GT_0_AT_2000_FULL_ROSTER_NO_BREAKAGE'or d['screen_rule']!=SCREEN_RULE
             or d['breakage']!=dict(BREAKAGE,latency_p95_max_seconds=d['deadline_seconds'])or d['matmul_precision']!='highest'
-            or d['screen_latency_rule']!=LATENCY_RULE or d['interleave']!=INTERLEAVE or d['arm_fairness']!=ARM_FAIRNESS):
+            or d['screen_latency_rule']!=LATENCY_RULE or d['interleave']!=INTERLEAVE or d['arm_fairness']not in ARM_FAIRNESS_RULES):
         raise ValueError('declared DepthN 500/2000 paired panel against our RAW required')
     expected=d['expected_searched_share']
     if expected is not None and (type(expected)is not dict or set(expected)!={'value','source'}
@@ -1078,10 +1082,13 @@ def read_result(root,ordinal):
     return json.loads(path.read_bytes())if path.exists()else {}
 
 
-def cell_moves(root,ordinal,result=None):
-    """One cell's Foul Play moves (depthn_live_fairness.moves), banded by its owner capture's turns."""
+def cell_moves(root,ordinal,result=None,rule=ARM_FAIRNESS):
+    """One cell's Foul Play moves (depthn_live_fairness.moves), banded by its owner capture's turns; under a rule with
+    alive_bands (RULE_R3) also labelled by both sides' alive bands from that capture (round_states)."""
     result=read_result(root,ordinal)if result is None else result
-    return fairness.moves(result,fairness.round_turns(result.get('owning_wire')or Path(root)/'owning-wire'/f'{ordinal}.jsonl'))
+    capture=result.get('owning_wire')or Path(root)/'owning-wire'/f'{ordinal}.jsonl'
+    if fairness.alive_labelled(rule):return fairness.moves(result,fairness.round_states(capture),alive=True)
+    return fairness.moves(result,fairness.round_turns(capture))
 
 
 def completed_pairs(entries,search_arm):
@@ -1122,7 +1129,7 @@ class Monitor:
         pairs=completed_pairs(entries,self.arm);done=[c for c in state['checks']if c['window']==start]
         if pairs<(done[-1]['pairs']if done else 0)+rule['checkpoint_pairs']:return None
         for entry in entries:
-            if entry['ordinal']not in self.moves:self.moves[entry['ordinal']]=cell_moves(self.root,entry['ordinal'])
+            if entry['ordinal']not in self.moves:self.moves[entry['ordinal']]=cell_moves(self.root,entry['ordinal'],rule=rule)
         arms={arm:fairness.pool([self.moves[e['ordinal']]for e in entries if e['arm']==arm])for arm in ('RAW',self.arm)}
         value=fairness.reading(arms['RAW'],arms[self.arm],rule)
         floors=pairs>=rule['min_pairs']and min(value['moves'].values())>=rule['min_moves_per_arm']
@@ -1364,7 +1371,8 @@ def readout(run_directory,*,arm,limit,codex_raw_directory=None,server_telemetry=
         accepted_uncalibrated=state_path(root,'accept_uncalibrated.json').exists(),phases={})
     for phase in PHASES[:1]if limit==d['screen_paired_cells']else PHASES:   # the screen readout reads screen-phase state only
         state=fairness_state(root,phase)
-        pooled={name:fairness.pool([cell_moves(root,r['cell']['ordinal'],r)for r in rows[name]if phase_of(d,r['cell']['pair_ordinal'])==phase])
+        pooled={name:fairness.pool([cell_moves(root,r['cell']['ordinal'],r,d['arm_fairness'])for r in rows[name]
+                                    if phase_of(d,r['cell']['pair_ordinal'])==phase])
                 for name in rows}
         reading=(fairness.reading(pooled['RAW'],pooled[arm],d['arm_fairness'])if observable else dict(status='UNMEASURABLE',
             basis='structural isolation (dedicated Foul Play cores; servers in their own pods) plus interleaving',

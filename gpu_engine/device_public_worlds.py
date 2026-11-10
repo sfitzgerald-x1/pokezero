@@ -133,7 +133,13 @@ def _redact_peer_private(cloned, owner):
             maximum=history.maximum.at[:, foe].set(0),
             taken=history.taken.at[:, foe, 1].set(0),
             dealt=history.dealt.at[:, owner, 1].set(0))
+    # public_order is public and never redacted. A carry built without it (a
+    # live B2 root) is seeded as identity; nothing reads it during live search.
+    order = cloned.public_order
+    if order is None:
+        order = j.broadcast_to(j.arange(6, dtype=j.int32), (cloned.error.shape[0], 2, 6))
     return cloned._replace(
+        public_order=order,
         damage_history=history,
         public_port=public_port.redact_for_owner(cloned.public_port,owner),
         physical_to_public=cloned.physical_to_public.at[:, foe].set(-1),

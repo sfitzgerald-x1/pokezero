@@ -1,14 +1,34 @@
 // Diagnostic-only semantic coupling. Never imported by the production bridge.
+//
+// Tape v1: draws [2][12], secondary [2], sleep_talk [2]. Tape v2 adds
+// effect [2][4] with bounds (16,16,4,2): the engine's appended ChanceInputs.effect
+// stream (fidelity-patch design 2.1). Roles that read it on a v1 tape stay
+// unresolved (EFFECT_STREAM_ABSENT); a v1 tape never carries `effect`.
+//   effect[s][0] second-hit critical, effect[s][1] second-hit damage roll (one
+//   multihit move, per hit index); effect[s][2] Yawn's residual sleep duration
+//   (s = the drowsy mon's side); effect[0][3] partial-trap residual pair tie;
+//   effect[1][3] Perish residual pair tie. A residual pair tie puts the side
+//   whose n equals the tape value first, as move_tie does with draws[0][0].
+// draws[s][7] is shared by sleep, Encore, partial-trap (3+d) and confusion (2+d)
+// durations; a second duration consumer on one side in one nonce stays REPEATED.
+// selfDrops' random(100) (self.boosts with no chance) is an inert, audited role, as is a
+// residual tie among one mon's callback-free countdowns (stall + protect).
+const TAPE_V1='pokezero.gpu_chance_tape.v1',TAPE_V2='pokezero.gpu_chance_tape.v2';
+const DRAW_BOUNDS=[2,100,100,100,16,16,100,4,8,2,2,2],EFFECT_BOUNDS=[16,16,4,2];
+function validTape(c){
+  const v2=c.schema===TAPE_V2,row=(x,bounds)=>Array.isArray(x)&&x.length===bounds.length
+    &&x.every((v,i)=>Number.isInteger(v)&&v>=0&&v<bounds[i]);
+  return (c.schema===TAPE_V1||v2)&&typeof c.nonce==='string'&&!!c.nonce
+    &&Array.isArray(c.draws)&&c.draws.length===2&&c.draws.every(x=>row(x,DRAW_BOUNDS))
+    &&['secondary','sleep_talk'].every(k=>Array.isArray(c[k])&&c[k].length===2
+      &&c[k].every(v=>Number.isInteger(v)&&v>=0&&v<(k==='secondary'?100:60)))
+    &&(v2?Array.isArray(c.effect)&&c.effect.length===2&&c.effect.every(x=>row(x,EFFECT_BOUNDS)):c.effect===undefined);
+}
 function install(Battle,PRNG,load,audit,initializing=()=>null,pokemonPath='') {
   let nonce,used=new Set(),inert=0;
   const control=()=>{
     const c=load();if(!c)return null;
-    const bounds=[2,100,100,100,16,16,100,4,8,2,2,2];
-    if(c.schema!=='pokezero.gpu_chance_tape.v1'||typeof c.nonce!=='string'||!c.nonce
-      ||!Array.isArray(c.draws)||c.draws.length!==2
-      ||c.draws.some(x=>x.length!==12||x.some((v,i)=>!Number.isInteger(v)||v<0||v>=bounds[i]))
-      ||['secondary','sleep_talk'].some(k=>!Array.isArray(c[k])||c[k].length!==2
-        ||c[k].some(v=>!Number.isInteger(v)||v<0||v>=(k==='secondary'?100:60))))throw Error('invalid chance tape');
+    if(!validTape(c))throw Error('invalid chance tape');
     if(c.nonce!==nonce){nonce=c.nonce;used=new Set();}return c;
   };
   function unknown(kind,detail){audit({kind:'UNRESOLVED',role:kind,detail});throw Error('SPIKE_UNRESOLVED:'+kind);}
@@ -16,6 +36,19 @@ function install(Battle,PRNG,load,audit,initializing=()=>null,pokemonPath='') {
     const key=role+':'+side;if(used.has(key))return unknown('REPEATED_ROLE',key);
     used.add(key);audit({kind:'COUPLED',nonce:c.nonce,role,side,raw:value});return value;
   }
+  function effectDraw(c,role,side,column){
+    if(!Array.isArray(c.effect))return unknown('EFFECT_STREAM_ABSENT',{role,side});
+    return take(c,role,side,c.effect[side][column]);
+  }
+  // Hit index inside one multihit move (gen3 trySpreadMoveHit sets move.hit=i+1).
+  const multihitIndex=b=>b.activeMove?.multihit?b.activeMove.hit:undefined;
+  // Yawn's residual sleep: slp onStart with no active move, from yawn's onEnd
+  // (removeVolatile -> trySetStatus) while the drowsy mon still holds the volatile.
+  const yawnSleeper=b=>{
+    const t=b.effectState?.target;
+    return b.effect?.id==='slp'&&!b.activeMove&&t?.volatiles?.yawn&&(t.side?.n===0||t.side?.n===1)
+      &&new Error().stack.includes('trySetStatus')?t:null;
+  };
   // Sleep and Encore share the SAME engine coordinate draws[actor][7].
   // An unexpected second duration consumer must remain unresolved, not become
   // two independent roles which silently reuse one finite tape coordinate.
@@ -26,10 +59,12 @@ function install(Battle,PRNG,load,audit,initializing=()=>null,pokemonPath='') {
   }
   const seat=b=>b.activePokemon?.side?.n;
   const encoreFrames=new WeakMap();let boundRandom;
-  let encoreCallbackPath='';
+  let encoreCallbackPath='',trapCallbackPath='';
   if(pokemonPath){
     const path=require('path'),crypto=require('crypto');
     const resolved=require.resolve(pokemonPath),{Pokemon}=require(resolved);
+    // Gen 3 inherits gen4's partiallytrapped.durationCallback: random(3,7).
+    trapCallbackPath=path.resolve(path.dirname(resolved),'../data/mods/gen4/conditions.js');
     const {Dex}=require(path.join(path.dirname(resolved),'dex.js'));
     const dex=Dex.mod('gen3'),condition=dex.conditions.get('encore');
     const original=condition.durationCallback,start=condition.onStart,add=Pokemon.prototype.addVolatile;
@@ -78,7 +113,12 @@ function install(Battle,PRNG,load,audit,initializing=()=>null,pokemonPath='') {
     }
     if(s!==0&&s!==1)return unknown('MISSING_ACTOR',from);
     if(from.includes('tryMoveHit')&&d===100)return take(c,'accuracy',s,c.draws[s][6])<n;
-    if(from.includes('getDamage')&&Number.isInteger(16*n/d))return take(c,'critical',s,c.draws[s][4])<16*n/d;
+    if(from.includes('getDamage')&&Number.isInteger(16*n/d)){
+      const hit=multihitIndex(this);
+      if(hit===2)return effectDraw(c,'critical_hit2',s,0)<16*n/d;
+      if(hit>2)return unknown('MULTIHIT_CRITICAL',{hit});
+      return take(c,'critical',s,c.draws[s][4])<16*n/d;
+    }
     if(effect==='par'&&n===1&&d===4)return take(c,'paralysis',s,c.draws[s][2])<25;
     if(effect==='frz'&&n===1&&d===5)return take(c,'thaw',s,c.draws[s][1])<20;
     if(effect==='confusion'&&n===1&&d===2)return take(c,'confusion',s,c.draws[s][3])<50;
@@ -87,9 +127,23 @@ function install(Battle,PRNG,load,audit,initializing=()=>null,pokemonPath='') {
   };
   Battle.prototype.random=function(m,n){
     const c=control();if(!c)return oldRandom.call(this,m,n);
-    const from=caller(),s=seat(this);if(s!==0&&s!==1)return unknown('MISSING_ACTOR',from);
-    if(from.includes('randomizer')&&m===16&&n===undefined)return 15-take(c,'damage',s,c.draws[s][5]);
+    const from=caller(),s=seat(this);
+    if(m===2&&n===6){const t=yawnSleeper(this);if(t)return 2+effectDraw(c,'yawn_sleep_duration',t.side.n,2);}
+    if(s!==0&&s!==1)return unknown('MISSING_ACTOR',from);
+    if(from.includes('randomizer')&&m===16&&n===undefined){
+      const hit=multihitIndex(this);
+      if(hit===2)return 15-effectDraw(c,'damage_hit2',s,1);
+      if(hit>2)return unknown('MULTIHIT_DAMAGE',{hit});
+      return 15-take(c,'damage',s,c.draws[s][5]);
+    }
     if(from.includes('secondaries')&&m===100&&n===undefined)return take(c,'secondary',s,c.secondary[s]);
+    if(from.includes('selfDrops')&&m===100&&n===undefined){
+      // BA selfDrops rolls random(100) even for an unconditional self.boosts; the
+      // value is unused when the chance is undefined. Any other shape stays unknown.
+      const move=this.activeMove;
+      if(!move?.self?.boosts||move.self.chance!==undefined)return unknown('SELF_DROPS_CHANCE',{move:move?.id});
+      audit({kind:'INERT_SELF_DROPS',nonce:c.nonce,side:s,move:move.id});return 0;
+    }
     const encore=encoreFrames.get(this);
     if(encore&&m===3&&n===7){
       const stack=new Error().stack.split('\n'),v=encore.target.volatiles?.encore;
@@ -102,6 +156,9 @@ function install(Battle,PRNG,load,audit,initializing=()=>null,pokemonPath='') {
       return 3+duration(c,'encore_duration',s);
     }
     if(this.effect?.id==='slp'&&m===2&&n===6)return 2+duration(c,'sleep_duration',s);
+    if(this.effect?.id==='confusion'&&m===2&&n===6)return 2+duration(c,'confusion_duration',s);
+    if(m===3&&n===7&&trapCallbackPath&&from.includes('durationCallback ('+trapCallbackPath+':'))
+      return 3+duration(c,'partial_trap_duration',s);
     return unknown('RANDOM',{from,m,n,effect:this.effect?.id});
   };
   boundRandom=Battle.prototype.random;
@@ -132,6 +189,20 @@ function install(Battle,PRNG,load,audit,initializing=()=>null,pokemonPath='') {
         const first=take(c,'move_tie',0,c.draws[0][0]);
         group.sort((a,b)=>(a.pokemon.side.n===first?-1:1));items.splice(start,2,...group);return;
       }
+      // Same-holder residual countdowns (no callback, no onEnd: stall+protect, ...) commute;
+      // their order cannot change the battle, so keep it and audit the tie as inert.
+      if(group.every(x=>x.effectHolder&&x.effectHolder===group[0].effectHolder&&!x.callback&&x.end
+        &&x.state?.duration&&x.effect&&!x.effect.onEnd)){
+        audit({kind:'INERT_RESIDUAL_TIE',nonce:c.nonce,effects:group.map(x=>x.effect.id)});return;
+      }
+      // Residual handler pairs on both actives: partiallytrapped (subOrder 9) and Perish.
+      const residual={partiallytrapped:['partial_trap_tie',0],perishsong:['perish_tie',1]}[group[0]?.effect?.id];
+      if(residual&&group.length===2&&group.every(x=>x.effect?.id===group[0].effect.id)
+        &&group.every(x=>x.effectHolder?.side?.n===0||x.effectHolder?.side?.n===1)
+        &&new Set(group.map(x=>x.effectHolder.side.n)).size===2){
+        const [role,row]=residual,first=effectDraw(c,role,row,3);
+        group.sort((a,b)=>(a.effectHolder.side.n===first?-1:1));items.splice(start,2,...group);return;
+      }
       return unknown('TIE_ORDER',group.map(x=>x.choice||x.effect?.id||x.constructor?.name));
     };
     try{return speedSort.call(this,list,comparator);}finally{this.prng.shuffle=shuffle;}
@@ -147,4 +218,4 @@ function install(Battle,PRNG,load,audit,initializing=()=>null,pokemonPath='') {
     return value;
   };
 }
-module.exports={install};
+module.exports={install,validTape,TAPE_V1,TAPE_V2,DRAW_BOUNDS,EFFECT_BOUNDS};

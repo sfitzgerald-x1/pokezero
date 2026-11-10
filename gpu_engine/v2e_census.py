@@ -32,8 +32,8 @@ import time
 import numpy as np
 
 SCHEMA = 'pokezero.v2e-census.v1'
-# transition.step_with_chance: def line and last line on tree 5bc2fe8c (design note section 1.1).
-SPAN = (315, 2099)
+# transition.step_with_chance: def line and last line (design note section 1.1; tree 5bc2fe8c, shifted by fidelity A1).
+SPAN = (315, 2160)
 # (phase, first line, last line, group). 'pre' is the host-side argument checks; boundary statements open the next phase.
 PHASES = (
     ('pre', 315, 458, 'pre'),
@@ -44,11 +44,11 @@ PHASES = (
     ('E0', 670, 687, 'E'),     # ordering
     ('E1', 688, 864, 'E'),     # per action: pre-move
     ('E2', 865, 1123, 'E'),    # damage
-    ('E3', 1124, 1581, 'E'),   # effects
-    ('E4', 1582, 1688, 'E'),   # post (recoil, move weather, Spikes, drag, Baton, fainted boosts)
-    ('F1', 1689, 1795, 'F'),   # defer/ready, end speeds, Wish, weather
-    ('F2', 1796, 2040, 'F'),   # residual events (argsort at 1802, loop at 1803)
-    ('G', 2041, 2099, 'G'),    # end of turn
+    ('E3', 1124, 1638, 'E'),   # effects
+    ('E4', 1639, 1745, 'E'),   # post (recoil, move weather, Spikes, drag, Baton, fainted boosts)
+    ('F1', 1746, 1852, 'F'),   # defer/ready, end speeds, Wish, weather
+    ('F2', 1853, 2097, 'F'),   # residual events (argsort at 1859, loop at 1860)
+    ('G', 2098, 2160, 'G'),    # end of turn
 )
 GROUPS = ('A', 'B', 'C', 'D', 'E', 'F', 'G')
 GROUP = {name: group for name, _, _, group in PHASES}
@@ -66,21 +66,21 @@ ANCHORS = {
     689: '_faint_before_hp=work.hp',
     865: 'attack_stats = _active(work.stats, work, side)',
     1124: 'if table.effects is not None:',
-    1582: '# Gen3 applies contact DamagingHit',
-    1658: 'work,changed,hazard_ko=dragging.drag(work,foe,move,phazing_draws[rows,side],',
-    1689: 'turn_context = live & (~replacement | state.pending_residual)',
-    1796: 'event_sides = jnp.array([0,1,0,1,0,1,0,1,0,1])',
-    1802: 'event_order = jnp.argsort(event_keys,axis=1)',
-    1803: 'for order in range(10):',
-    1815: 'if _status_residual_context is not None:',
-    2041: 'work=linking.prune(work)',
-    2090: 'work = jax.tree.map(lambda old, new: jnp.where(live.reshape(',
-    2099: 'return result if _public_trace is None else public_callbacks.TracedStep(result,_public_trace)',
+    1639: '# Gen3 applies contact DamagingHit',
+    1715: 'work,changed,hazard_ko=dragging.drag(work,foe,move,phazing_draws[rows,side],',
+    1746: 'turn_context = live & (~replacement | state.pending_residual)',
+    1853: 'event_sides = jnp.array([0,1,0,1,0,1,0,1,0,1])',
+    1859: 'event_order = jnp.argsort(event_keys,axis=1)',
+    1860: 'for order in range(10):',
+    1872: 'if _status_residual_context is not None:',
+    2098: 'work=linking.prune(work)',
+    2151: 'work = jax.tree.map(lambda old, new: jnp.where(live.reshape(',
+    2160: 'return result if _public_trace is None else public_callbacks.TracedStep(result,_public_trace)',
 }
 # Iteration rules over lines in program order (the scratch census's): an E1..E4 line <= E_RESTART after one >= E_LATE
 # starts the second action; in F2 a line <= F2_HEAD after one > F2_BODY starts the next of the 10 residual events.
-E_LATE, E_RESTART = 1600, 750
-F2_LOOP, F2_HEAD, F2_BODY = 1803, 1815, 1830
+E_LATE, E_RESTART = 1657, 750
+F2_LOOP, F2_HEAD, F2_BODY = 1860, 1872, 1887
 # Design boundaries: the phase label whose first equation each one is (b0: the first step_with_chance equation; b8: the end).
 BOUNDARIES = (('b0', 'A'), ('b1', 'B'), ('b2', 'D'), ('b3', 'E0'), ('b4', 'E1.0'), ('b5', 'E1.1'), ('b6', 'F1'), ('b7', 'G'), ('b8', 'END'))
 TRACKERS = {'engine_device_public_hooks', 'engine_device_trackers', 'engine_device_public_port', 'engine_device_visible_belief',
