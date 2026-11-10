@@ -223,6 +223,8 @@ def pi_fp_root_policy(env, opp, ours, seed, views, pi_fp):
     (fp_view_opp_hazard_credit), as π_FP-red3-full was trained."""
     from gpu_engine import fp_reply_data as fpd
     view = fpd.builder_views(env, opp, env._latest_requests.get(opp), seed, views)['b']
+    if not np.array_equal(legal_of(view), legal_of(env.observe(opp))):   # as fp_reply_data's BuilderMismatch: the views' masks agree
+        raise ValueError('the builder view b legal mask differs from env.observe')
     credit = fpd.fp_view_opp_hazard_credit(env.protocol_lines, ours)
     return pi_fp.evaluate([view], redact=('peer-view-v2', [credit]))[0][0]
 
@@ -375,10 +377,10 @@ def candidates(args, rng, paths, fpd, collection, counts):
     """Root candidates without replacement: (kind, game or seed, our seat, target). 'foulplay': passes over the games in a shuffled
     order, a not-yet-used target per game each pass (a game is dropped once every target is used or it cannot be loaded); 'self':
     battle seeds from the reserved range, each at most once."""
-    if args.kind == 'self':
-        used = set()
-        while len(used) < args.seed_span if args.seed_base is not None else True:
-            seed = (args.seed_base + rng.randrange(args.seed_span)) if args.seed_base is not None else rng.randrange(1, 2**31 - 1)
+    if args.kind == 'self':   # worker w draws from its own slice of the range, so a seed is used at most once over all workers
+        used = set();span = args.seed_span // args.workers;low = (args.seed_base or 0) + args.worker * span
+        while len(used) < span if args.seed_base is not None else True:
+            seed = (low + rng.randrange(span)) if args.seed_base is not None else rng.randrange(1, 2**31 - 1)
             if seed in used:continue
             used.add(seed);yield None, seed, rng.choice(('p1', 'p2')), rng.randrange(1, 40)
         return
@@ -405,6 +407,8 @@ def label(args, envs, champion, pi_fp, collection, rng, paths, fpd, views=None):
     written beside the output as <out>.accounting-<kind>-<worker>.json."""
     import collections
     counts = collections.Counter();made = 0
+    if Path(args.out).exists() and Path(args.out).stat().st_size:   # a restarted worker would append the same roots again
+        raise SystemExit(f'{args.out} already holds roots: write a new output (the candidate stream is deterministic)')
     with open(args.out, 'a') as out:
         for game, seed, ours, target in candidates(args, rng, paths, fpd, collection, counts):
             if made >= args.roots or counts['candidates'] >= 50 * args.roots:break   # a cap on candidates: never an endless search
@@ -433,7 +437,9 @@ def label_root(args, envs, champion, pi_fp, views, ours, identity, rng, started)
     seats after the root."""
     env = envs[0];opp = {'p1': 'p2', 'p2': 'p1'}[ours];snapshot = env.snapshot()
     legal = legal_of(env.observe(ours));actions = [int(a) for a in np.flatnonzero(legal)]
-    root_seed = rng.randrange(1, 2**31 - 1);replies = None;opp_policy = None
+    # the root's rollout seed from its identity, not from the candidate stream: the same root always gets the same bank
+    root_seed = int(np.random.default_rng([args.seed, 1 if args.kind == 'self' else 2, identity.get('ordinal', 0), identity['seed'],
+                                           identity['target']]).integers(1, 2**31 - 1));replies = None;opp_policy = None
     if opp in env.requested_players():
         o = env.observe(opp)
         opp_policy = pi_fp_root_policy(env, opp, ours, identity['seed'], views, pi_fp) if args.kind == 'foulplay' else champion.probabilities([o])[0]

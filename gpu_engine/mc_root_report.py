@@ -96,7 +96,8 @@ def main(argv=None):
     args = parser.parse_args(argv)
     rows = [json.loads(l) for p in args.roots for l in open(p) if l.strip()]
     report = {}
-    for (kind, mode, envs), group in itertools.groupby(sorted(rows, key=lambda r: (r['kind'], r['mode'], r['envs'])), key=lambda r: (r['kind'], r['mode'], r['envs'])):
+    key = lambda r: (r['kind'], r['mode'], r['envs'], r.get('continuation', 'v1_model_continuation'))   # never pool M0's v1 rows with v2
+    for (kind, mode, envs, continuation), group in itertools.groupby(sorted(rows, key=key), key=key):
         g = list(group);rollouts = sum(r['rollouts'] for r in g);decisions = sum(sum(map(sum, r['decisions'])) for r in g)
         cpu = sum(r.get('cpu_seconds', 0) for r in g);wall = sum(r['wall_seconds'] for r in g)
         actions = float(np.mean([len(r['actions']) for r in g]))
@@ -111,7 +112,7 @@ def main(argv=None):
         cost['projected_core_hours'] = round((args.train_roots * cost['core_seconds_per_root_at_train_K']
                                               + args.gate_roots * cost['core_seconds_per_root_at_gate_K']) / 3600, 1)
         noise = {f'K{K}': summarize(g, K) for K in sorted({64, max(np.asarray(r['outcomes']).shape[1] for r in g)} | {16})}
-        report[f'{kind}/{mode}/envs{envs}'] = dict(cost=cost, noise=noise, u1_baseline=baseline_report(g))
+        report[f'{kind}/{mode}/envs{envs}/{continuation}'] = dict(cost=cost, noise=noise, u1_baseline=baseline_report(g))
     print(json.dumps(dict(schema='mc-root-report.v1', train_roots=args.train_roots, train_K=args.train_K, gate_roots=args.gate_roots,
                           gate_K=args.gate_K, groups=report), indent=1))
     return 0

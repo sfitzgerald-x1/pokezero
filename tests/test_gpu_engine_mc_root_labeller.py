@@ -61,7 +61,32 @@ class CachingEnvTests(unittest.TestCase):
             with self.assertRaises(NotImplementedError):getattr(env, name)()   # paths the labeller never takes are refused
 
 
+    def test_self_seeds_come_from_disjoint_per_worker_slices(self):
+        import random
+        seeds = []
+        for w in range(2):
+            args = NS(kind='self', seed_base=1000, seed_span=20, workers=2, worker=w)
+            seeds.append([s for _, s, _, _ in L.candidates(args, random.Random(0), None, None, None, None)])
+        self.assertEqual([sorted(x) for x in seeds], [list(range(1000, 1010)), list(range(1010, 1020))])
+
+    def test_a_restarted_worker_refuses_an_output_that_already_holds_roots(self):
+        import tempfile
+        with tempfile.NamedTemporaryFile('w', suffix='.jsonl') as f:
+            f.write('{}\n');f.flush()
+            with self.assertRaises(SystemExit):L.label(NS(out=f.name), None, None, None, None, None, None, None)
+
+
 class ReportTests(unittest.TestCase):
+    def test_rows_of_different_continuations_are_reported_apart(self):
+        import contextlib, io, tempfile
+        row = dict(kind='self', mode='batched', envs=1, rollouts=4, decisions=[[1, 1], [1, 1]], wall_seconds=1., cpu_seconds=1.,
+                   actions=[0, 1], outcomes=[[1., -1.], [1., 1.]], seed=1, policy=None, baseline=None)
+        with tempfile.NamedTemporaryFile('w', suffix='.jsonl') as f, contextlib.redirect_stdout(io.StringIO()) as out:
+            f.write(json.dumps(row) + '\n' + json.dumps(dict(row, continuation='champion_both_seats')) + '\n');f.flush()
+            R.main([f.name])
+        self.assertEqual(sorted(json.loads(out.getvalue())['groups']),
+                         ['self/batched/envs1/champion_both_seats', 'self/batched/envs1/v1_model_continuation'])
+
     def test_capped_rollouts_are_censored_not_outcomes(self):
         o = [[1., L.CAPPED, 1., -1.], [1., 1., L.CAPPED, -1.]]
         self.assertTrue(np.isnan(R.censored(o)).sum() == 2)
