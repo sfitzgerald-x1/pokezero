@@ -103,10 +103,15 @@ class PublicOrderTests(unittest.TestCase):
             if x is None:continue
             for a, b in zip(jax.tree.leaves(x), jax.tree.leaves(getattr(c.trackers, name))):
                 np.testing.assert_array_equal(np.asarray(a)[1], np.asarray(b)[1], err_msg=name)
-        # An initial (start-of-battle) install never reorders.
+        # An initial (start-of-battle) install never reorders, even for a member whose public
+        # slot is not at position 0 (here a fresh member takes slot 1).
         fresh = h.initialize(s);order = fresh.trackers.public_order
-        h.install(fresh, s, 1, j.ones(3, bool), initial=True)
+        s = put_active(s, 1, 4);h.install(fresh, s, 1, j.ones(3, bool), initial=True)
+        self.assertEqual(fresh.trackers.active_slot[:, 1].tolist(), [1, 1, 1])
         np.testing.assert_array_equal(fresh.trackers.public_order, order)
+        # The same install as an ordinary arrival does reorder.
+        h.install(fresh, s, 1, j.ones(3, bool))
+        self.assertEqual(fresh.trackers.public_order[:, 1].tolist(), [[1, 0, 2, 3, 4, 5]] * 3)
 
     def test_random_install_log_agrees_with_reference_replays(self):
         from gpu_engine.v2e_regress import replay_public_order

@@ -279,7 +279,9 @@ const karp=[mon('Magikarp','Swift Swim',['splash']),mon('Gyarados','Intimidate',
 console.log(JSON.stringify({
  sub:run([mon('Smeargle','Own Tempo',['substitute','splash'])],karp,[['move 1','move 1'],['move 2','switch 2']]),
  open:run([mon('Smeargle','Own Tempo',['splash'])],karp,[['move 1','switch 2']]),
- sand:run([mon('Tyranitar','Sand Stream',['splash'])],[mon('Tyranitar','Sand Stream',['splash'])],[])}));"""
+ sand:run([mon('Tyranitar','Sand Stream',['splash'])],[mon('Tyranitar','Sand Stream',['splash'])],[]),
+ rain:run([mon('Smeargle','Own Tempo',['raindance','splash'])],[mon('Magikarp','Swift Swim',['splash']),mon('Politoed','Drizzle',['splash'])],
+  [['move 1','move 1'],['move 2','switch 2']])}));"""
         logs=json.loads(subprocess.check_output(['node','-e',code,root],text=True))
         def seen_by(log,observer):
             out,i=[],0
@@ -300,6 +302,7 @@ console.log(JSON.stringify({
         self.assertEqual(revealed(logs['open'],'p2'),{'Intimidate'})
         sand={side:revealed(logs['sand'],side) for side in ('p1','p2')}
         self.assertEqual(sorted(len(x) for x in sand.values()),[0,1])          # exactly one Sand Stream is public
+        self.assertEqual(revealed(logs['rain'],'p2'),{'Drizzle'})               # re-set over temporary Rain Dance
         # The device entry hook over the same transactions.
         # Fixture ability ids stand in for the holders: 1 Intimidate, 2 Sand Stream.
         flag=j.zeros(3,bool);SAND=3
@@ -316,6 +319,13 @@ console.log(JSON.stringify({
         h.entry(c,tyranitars,sanded,first,table,yes);h.entry(c,sanded,sanded,1-first,table,yes)
         for side in (0,1):
             self.assertEqual(bool(c.trackers.shown_ability[0,side,0]),bool(sand[f'p{side+1}']))
+        # Drizzle into Rain Dance's temporary rain (row 0) sets it permanent with a line; into
+        # permanent rain (row 1) it is the silent no-op of the Sand Stream case.
+        rain=NS(weather_ability=j.zeros(3,j.int32).at[2].set(1),intimidate=flag,attack_drop_immune=flag,trace=None,own_tempo=None)
+        politoed=state._replace(ability=state.ability.at[:,1,0].set(2),weather=j.ones(2,j.int32),weather_counter=j.array([4,0],j.int32))
+        c=h.initialize(politoed,self.tables.belief)
+        h.entry(c,politoed,politoed._replace(weather_counter=j.zeros(2,j.int32)),1,rain,yes)
+        self.assertEqual((c.trackers.shown_ability[:,1,0]!=0).tolist(),[True,False])
 
     def test_public_order_replays_showdowns_request_order(self):
         """Showdown's side.pokemon after each switch, in public encounter slots, equals public_order.
@@ -380,8 +390,19 @@ console.log(JSON.stringify(orders));"""
         ts,ok=pt.apply(ts,tt,mons,operation=pt.TYPE,side=1,encounter=2,first=_static_category(self.catalog.vocabulary,'type:Water'),
             producer_binding=tt.binding);self.assertTrue(bool(ok.all()))
         self.assertTrue(bool(pt.project(ts,tt,mons,expected_vocabulary=tt.vocabulary_binding).write_mask[0,1].any()))
+        # FAINT leaves the overlay on the still-current encounter; the replacement's ARRIVE clears it.
+        mons,ok=m.faint(mons,side=1,slot=1,encounter=2);self.assertTrue(bool(ok.all()))
+        self.assertTrue(bool(pt.project(ts,tt,mons,expected_vocabulary=tt.vocabulary_binding).write_mask[0,1].any()))
         mons,ts=arrive(mons,ts,0,'absol')
         self.assertFalse(bool(pt.project(ts,tt,mons,expected_vocabulary=tt.vocabulary_binding).write_mask.any()))
+        # The device over the same faint-then-replacement: overlay kept at the faint, reverted at the arrival.
+        c=h.initialize(state,self.tables.belief);h.install(c,gardevoir,1,yes);h.color_change(c,gardevoir,hit,1,yes)
+        fainted=hit._replace(hp=hit.hp.at[:,1,1].set(0));h.turn_end(c,hit,fainted,j.zeros(2,bool))
+        self.assertEqual(c.trackers.shown_types[:,1,int(c.trackers.physical_to_public[0,1,1])].tolist(),[[water,0]]*2)
+        gone=fainted._replace(types=fainted.types.at[:,1,1].set(fainted.base_types[:,1,1]))
+        replaced=gone._replace(active=gone.active.at[:,1].set(0))
+        h.depart(c,fainted,gone,1,None,yes);h.install(c,replaced,1,yes);h.withdraw(c,replaced,1,j.ones(2,j.int32),yes)
+        np.testing.assert_array_equal(bench_types(c.trackers),base)
 
     def test_effective_gen3_failed_focus_retains_move_before_cant_order(self):
         import json,os
