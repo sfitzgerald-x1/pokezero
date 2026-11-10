@@ -56,7 +56,7 @@ def row(ordinal=7, index=3, *, depth1=D1, depth2=D2, status='COMPLETE', action=1
 
 def one(raw, run):
     """{rung: rung row} of a single row."""
-    out, _ = M.build([raw], run, None if run != 'E' else {raw['ordinal']: dict(ordinal=raw['ordinal'], seed=11, ours='p1', target=raw['decision_index'],
+    out, _ = M.build([raw], run, None if M.RUNS[run][0] != 'self' else {raw['ordinal']: dict(ordinal=raw['ordinal'], seed=11, ours='p1', target=raw['decision_index'],
                                                                                status='ok')})
     return {name: rows[0] for name, rows in out.items()}
 
@@ -112,6 +112,19 @@ class RungChoiceTests(unittest.TestCase):
         self.assertEqual({n: r['action'] for n, r in got.items()}, dict(R3=0, R3prime_ng=0, R4=0, R5=1, R5_ng=0))
         self.assertEqual({k: got['R3'][k] for k in ('kind', 'seed', 'ours', 'target')}, dict(kind='self', seed=11, ours='p1', target=3))
         self.assertNotIn('ordinal', got['R3'])
+
+    def test_true_world_runs_r1_averages_every_world_and_r2_reads_world_0(self):
+        split = [{0: (0., 0.), 1: (-.4, -.4)}, {0: (0., 0.), 1: (.4, .4)}, {0: (0., 0.), 1: (.4, .4)}]   # world 0 alone disagrees
+        for run, reply in (('A', True), ('B', False)):
+            raw = row(depth1=split, reply=reply);got = one(raw, run)
+            self.assertEqual({n: r['action'] for n, r in got.items()}, dict(R1=1, R2=0), run)
+            self.assertEqual(got['R1']['kind'], M.RUNS[run][0])
+            d = M.rr.normalize(raw)
+            _, qw, q = M.averaged(raw, d, 1, reply, 1);self.assertEqual(len(qw), 1);self.assertAlmostEqual(q[1], -.4, places=12)
+            _, qw, q = M.averaged(raw, d, 1, reply);self.assertEqual(len(qw), 3);self.assertAlmostEqual(q[1], .4 / 3, places=12)
+        got = one(row(), 'A')   # D1 with the reply model: R1 is run C's R3; world 0's gap is .15
+        self.assertEqual((got['R1']['action'], got['R2']['action']), (one(row(), 'C')['R3']['action'], 1))
+        out, summary = M.build([row()], 'A');self.assertEqual(sorted(out), ['R1', 'R2']);self.assertIsNone(summary.get('r5_vs_replay'))
 
     def test_a_waiting_world_needs_no_reply_logits(self):
         depth1 = D1[:2] + [{0: (0.,), 1: (.1,)}]   # world 2 waits: column 0 at mass 1
@@ -229,8 +242,8 @@ class CommandLineTests(unittest.TestCase):
             bad = Path(tmp) / 'bad.jsonl';bad.write_text(json.dumps(row(action=0)) + '\n')
             with redirect_stdout(io.StringIO()):self.assertEqual(M.main(['--rows', str(bad), '--run', 'D', '--out', str(Path(tmp) / 'bad')]), 1)
 
-    def test_the_manifest_belongs_to_run_e_only(self):
-        for argv in (['--run', 'E'], ['--run', 'C', '--manifest', 'm.jsonl']):
+    def test_the_manifest_belongs_to_the_self_runs_only(self):
+        for argv in (['--run', 'E'], ['--run', 'B'], ['--run', 'C', '--manifest', 'm.jsonl'], ['--run', 'A', '--manifest', 'm.jsonl']):
             with self.assertRaises(SystemExit), redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
                 M.main(['--rows', 'r.jsonl', '--out', 'o'] + argv)
 
