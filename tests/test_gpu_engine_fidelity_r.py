@@ -337,7 +337,7 @@ class RegressPluginTests(unittest.TestCase):
               ('trackers.public_volatiles', 1), ('state.types', 1), ('trackers.shown_ability', 1), ('state.hp', 0),
               ("trackers.field_features['wish_pending']", 1), ('state.volatile', 1)}
         self.assertEqual(lane_verdict(ok, {'bonemerang': [0]}, None)[0], [])
-        for bad in (('state.status', 1), ('state.volatile', 0), ('trackers.public_volatiles', 0), ('state.effect_draws', 0)):
+        for bad in (('state.status', 1), ('state.volatile', 0), ('trackers.shown_ability', 0), ('state.effect_draws', 0)):
             self.assertEqual(lane_verdict({bad}, {'bonemerang': [0]}, None)[0], [bad])
 
     def test_a_ko_before_the_targets_turn_cancels_its_bookkeeping(self):
