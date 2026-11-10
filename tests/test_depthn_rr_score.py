@@ -978,6 +978,22 @@ class DefinitiveOperatorTests(unittest.TestCase):
         b3 = S.recompute(d3);want = hedge.averaging(S.model_worlds(b3.worlds, {k: tuple(v) for k, v in prior.items()}), b3.legal)
         self.assertEqual(got['operators']['br_fp']['choice'], hedge.top_action(want.strategy))
 
+    def test_br_fp_parity_mode_holds_a_reply_archive_replay_to_the_scorers_br_fp(self):
+        legal = legal_mask(0, 1, 2);worlds = self.worlds()
+        prior = {w: list(self.other_reply) for w in range(len(worlds))}
+        base = S.recompute(definitive_decision(worlds, root_legal=legal))
+        fp = hedge.averaging(S.model_worlds(base.worlds, {w: tuple(v) for w, v in prior.items()}), base.legal)
+        fp_action, fp_q = hedge.top_action(fp.strategy), json.loads(json.dumps(list(fp.q)))
+        champion_action = hedge.top_action(base.average.strategy);self.assertNotEqual(fp_action, champion_action)   # the modes differ here
+        row = definitive_decision(worlds, root_legal=legal, live_action=champion_action, replay_action=fp_action, replay_q=fp_q)
+        self.assertEqual(S.parity_row(row, S.recompute(row), None, 'br_fp', prior), dict(match=True, action_equal=True, q_equal=True, cause=None))
+        self.assertEqual(S.parity_row(row, S.recompute(row), None, 'replay')['cause'], 'action_and_q_differ')   # the champion's averaging is not what played
+        champ = definitive_decision(worlds, root_legal=legal, replay_action=champion_action, replay_q=json.loads(json.dumps(list(base.average.q))))
+        self.assertEqual(S.parity_row(champ, S.recompute(champ), None, 'br_fp', prior)['cause'], 'action_and_q_differ')
+        self.assertEqual(S.parity_row(row, S.recompute(row), None, 'br_fp', {0: prior[0]})['cause'], 'br_fp_reply_prior_missing')
+        self.assertEqual(S.parity_row(row, S.recompute(row), None, 'br_fp', None)['cause'], 'br_fp_reply_prior_missing')
+        with self.assertRaisesRegex(ValueError, 'needs --reply-prior'):S.score_run([], '/nonexistent', '/nonexistent', None, 'br_fp')
+
     def test_inputs_from_other_rows_are_refused(self):
         legal = legal_mask(0, 1, 2);d = definitive_decision(self.worlds(), greedy=1, root_legal=legal)
         for reason, prior, weights in (('world_weights_mismatch', {0: self.champion, 1: self.champion}, {0: 0., 1: 0., 2: 0.}),

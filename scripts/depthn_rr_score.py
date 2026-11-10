@@ -71,7 +71,9 @@ the mean decisions per battle (the same t statistic, so the same signs). Parity,
 the replay is COMPLETE, averaging recomputed from the captured worlds plays the live search action, and its q equals the
 replay's q_values exactly after a JSON round trip. Below 99% the verdict is PARITY_FAILED: no candidate is selected, as for
 GATE_FAILED. --parity-mode replay (a replay on a modified tree, e.g. a fixed server): every replay-COMPLETE row is held to
-the replay's own action and q_values instead of the live action. Also reported, never gating: every table restricted to decisions where Foul Play was requested (no 'wait').
+the replay's own action and q_values instead of the live action. --parity-mode br_fp (a replay serving a reply archive, whose
+search plays br_fp; needs --reply-prior): every replay-COMPLETE row's action and q_values are held to the scorer's br_fp, averaging
+on the captured worlds with each requested world's --reply-prior logits. Also reported, never gating: every table restricted to decisions where Foul Play was requested (no 'wait').
 External reply prior (--reply-prior, for a Foul Play reply model): rows {ordinal, decision_index, world, logits[9]} add
 external_br (averaging with pi_w = softmax of the external logits over the kept lanes) and external_mix alpha (0.25, 0.5,
 0.75: alpha * external + (1 - alpha) * the champion's pi_w), reported only, never candidates. A waiting world needs no
@@ -139,7 +141,8 @@ PARITY_MIN = .99
 # live result; the gate is the RR's validation, which must reproduce the live harm before the RR may select anything.
 SIGN_NOTE = ('Reading: D = R(op) - R(greedy) in the champion\'s priced values; D > 0 = priced above greedy. The validation gate '
              'needs averaging\'s upper 90% bound < 0 (the RR reproducing the live harm) before any operator is selected.')
-PARITY_MODES = ('live', 'replay')   # live: against the live search (the default); replay: the replay against itself (a modified tree)
+PARITY_MODES = ('live', 'replay', 'br_fp')   # live: against the live search (the default); replay: the replay against itself (a modified
+# tree); br_fp: a replay that served a reply archive (--reply-archive), held to the scorer's br_fp on the --reply-prior logits
 PRIOR_C = (.02, .05, .1, .2, .5)
 NOISE_K = (1, 2)
 LCB_KAPPA = (.5, 1, 2)
@@ -680,18 +683,31 @@ def q_json_equal(q, replay_q):
     return all(x is None and y is None or x is not None and type(y) in (int, float) and float(x) == float(y) for x, y in zip(mine, replay_q))
 
 
-def parity_row(decision, base, reason, mode='live'):
+def br_fp_average(decision, base, prior):
+    """The scorer's br_fp on a row (averaging on the reply model's logits for every requested world, model_worlds; `prior` this
+    decision's load_reply_prior entry): the hedge averaging result, or raises Unscorable (reply_prior_missing / _mismatch)."""
+    return hedge.averaging(model_worlds(base.worlds, reply_logits_of(decision, base.worlds, prior)), base.legal)
+
+
+def parity_row(decision, base, reason, mode='live', prior=None):
     """A row's parity: dict(match, action_equal, q_equal, cause). mode 'live' (a live-searched row): a replay that is not
     COMPLETE, a row whose averaging cannot be recomputed, a recomputed action other than the live one, or a recomputed q other
     than the replay's q_values is a mismatch. mode 'replay' (a replay-COMPLETE row of a replay on a modified tree, whose
-    decisions legitimately differ from live): the recomputed action is held to the replay's own action instead of the live one."""
+    decisions legitimately differ from live): the recomputed action is held to the replay's own action instead of the live one.
+    mode 'br_fp' (a replay-COMPLETE row of a replay serving a reply archive, whose search plays br_fp): the scorer's br_fp
+    (br_fp_average on `prior`, this decision's --reply-prior entry) is held to the replay's own action and q_values."""
     if mode not in PARITY_MODES:raise ValueError(f'parity mode in {PARITY_MODES} required')
     if decision['replay_status'] != 'COMPLETE':
         return dict(match=False, action_equal=None, q_equal=None, cause=f"replay_{decision['replay_status']}:{decision['replay_cause']}")
     if base is None:return dict(match=False, action_equal=None, q_equal=None, cause='recompute_' + reason)
+    average = base.average
+    if mode == 'br_fp':
+        try:average = br_fp_average(decision, base, prior)
+        except Unscorable as error:return dict(match=False, action_equal=None, q_equal=None, cause='br_fp_' + error.reason)
+        if average is None:return dict(match=False, action_equal=None, q_equal=None, cause='br_fp_unpriced')
     reference = decision['live_action'] if mode == 'live' else decision['replay_action']
-    action_equal = type(reference) is int and reference == hedge.top_action(base.average.strategy)
-    q_equal = q_json_equal(base.average.q, decision['replay_q'])
+    action_equal = type(reference) is int and reference == hedge.top_action(average.strategy)
+    q_equal = q_json_equal(average.q, decision['replay_q'])
     cause = None if action_equal and q_equal else 'q_differs' if action_equal else 'action_differs' if q_equal else 'action_and_q_differ'
     return dict(match=cause is None, action_equal=action_equal, q_equal=q_equal, cause=cause)
 
@@ -1035,7 +1051,11 @@ class Coverage:
                  f'plays the live search action_index, and its q equals the replay q_values after a JSON round trip; >= {PARITY_MIN:.0%}')
                 if getattr(self, 'parity_mode', 'live') == 'live' else
                 (f'replay mode (a modified tree): every replay-COMPLETE row; averaging recomputed from the captured worlds plays the '
-                 f"replay's own action_index and its q equals the replay q_values after a JSON round trip; >= {PARITY_MIN:.0%}")),
+                 f"replay's own action_index and its q equals the replay q_values after a JSON round trip; >= {PARITY_MIN:.0%}")
+                if getattr(self, 'parity_mode', 'live') == 'replay' else
+                (f'br_fp mode (a replay serving a reply archive): every replay-COMPLETE row; br_fp recomputed from the captured worlds '
+                 f"with the --reply-prior logits plays the replay's own action_index and its q equals the replay q_values after a JSON "
+                 f'round trip; >= {PARITY_MIN:.0%}')),
                         live_searched=p['rows'], matches=p['matches'], rate=share(p['matches'], p['rows']),
                         action_equal=p['action_equal'], action_rate=share(p['action_equal'], p['rows']),
                         q_equal=p['q_equal'], q_rate=share(p['q_equal'], p['rows']), mismatches_by_cause=dict(self.parity_causes),
@@ -1103,8 +1123,8 @@ def process(decision, run, coverage, prior=None, parity_mode='live', weights=Non
     base = reason = None
     try:base = recompute(decision)
     except Unscorable as error:reason = error.reason
-    checked = searched if parity_mode == 'live' else complete   # replay mode: every replay-COMPLETE row, held to itself
-    parity = parity_row(decision, base, reason, parity_mode) if checked else None
+    checked = searched if parity_mode == 'live' else complete   # replay and br_fp modes: every replay-COMPLETE row, held to itself
+    parity = parity_row(decision, base, reason, parity_mode, None if prior is None else prior.get((ordinal, index))) if checked else None
     if parity is not None:coverage.add_parity(parity)
     address.update(parity=parity)
     if ordinal in coverage.dropped_battles:   # after parity (the gate still counts it), before scoring: no operator scores it
@@ -1169,6 +1189,8 @@ def score_run(rows, run_directory, out, reply_prior=None, parity_mode='live', op
     under the screen set it adds the reported-only EXTERNAL_SETTINGS operators; under the definitive set it is the reply
     model's logits where the rows carry none. `world_weights`: load_world_weights' JSONL (definitive set only)."""
     if operator_set not in OPERATOR_SETS:raise ValueError(f'operator set {operator_set!r} not in {OPERATOR_SETS}')
+    if parity_mode not in PARITY_MODES:raise ValueError(f'parity mode in {PARITY_MODES} required')
+    if parity_mode == 'br_fp' and reply_prior is None:raise ValueError('--parity-mode br_fp needs --reply-prior (the reply model\'s logits)')
     definitive = operator_set == 'definitive'
     if definitive and world_weights is None:raise ValueError('the definitive operator set needs --world-weights')
     if definitive and reply_prior is None:raise ValueError('the definitive operator set needs --reply-prior (the reply model\'s logits per world)')
@@ -1178,7 +1200,6 @@ def score_run(rows, run_directory, out, reply_prior=None, parity_mode='live', op
     settings = DEFINITIVE_SETTINGS if definitive else SETTINGS + (EXTERNAL_SETTINGS if prior is not None else ())
     candidates = DEFINITIVE_CANDIDATES if definitive else CANDIDATES
     out = Path(out);out.mkdir(parents=True, exist_ok=False)
-    if parity_mode not in PARITY_MODES:raise ValueError(f'parity mode in {PARITY_MODES} required')
     run, coverage, records = RunDirectory(run_directory), Coverage(), [];coverage.parity_mode = parity_mode;coverage.definitive = definitive
     if prior is not None and not definitive:coverage.external = collections.Counter()
     if drop_battles is not None:coverage.dropped_battles = load_dropped_battles(drop_battles)
@@ -1379,7 +1400,8 @@ def main(argv=None):
     parser.add_argument('--drop-battles', help='JSON [{ordinal, reason}]: battles no operator scores (validation drops, leakage overlaps)')
     parser.add_argument('--parity-mode', choices=PARITY_MODES, default='live',
                         help="live (default): parity against the live search; replay: the replay against itself, for a replay on a "
-                             "modified tree whose decisions legitimately differ from live")
+                             "modified tree whose decisions legitimately differ from live; br_fp: a replay serving a reply archive, "
+                             "held to the scorer's br_fp on --reply-prior")
     args = parser.parse_args(argv)
     try:summary = score_run(args.rows, args.run_directory, args.out, args.reply_prior, args.parity_mode, args.operator_set,
                             args.world_weights, args.drop_battles)
