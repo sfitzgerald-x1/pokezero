@@ -24,7 +24,7 @@ from gpu_engine import constructor_worlds as cw, depthn_backups as backups, dept
 from gpu_engine.device_public_world_state import World
 from gpu_engine.phase_d_live_worlds import Refusal
 from gpu_engine.state import empty_state
-from pokezero import phase_d_owning_capture as owning, v5_gumbel
+from pokezero import depthn_effect_guard as G, depthn_root_operator as root_ops, phase_d_owning_capture as owning, v5_gumbel
 from pokezero.phase_d_search_server import SCHEMA
 
 ORIGINAL_DECIDE, ORIGINAL_PREPARE = live.decide, cw.prepare_roots
@@ -109,6 +109,14 @@ def fake_search(constructor):
     s.carry = dict(structure=live.carry_structure(world(0)), signature='sig', provisional=False, root={})
     s.warmup = lambda requests: dict(buckets={1: dict(cold_seconds=1., warm_seconds=.5)}, programs=3, seen=len(requests))
     return s
+
+
+def own_lane_guard(search, frame, root, made, request, children, notes, choice, labels):
+    """DepthNLiveSearch._effect_guard on the fake pricing (no frame or worlds to read): a real record (depthn_effect_guard.evaluate)
+    over the root's own lanes alone, its (c) evaluated on `choice`, the action the search plays."""
+    line = request.get('own_request_line');owner = {'p1': 0, 'p2': 1}[request['owner']]
+    return G.evaluate(G.conditions(request['lines'], owner, line), own_turn1=dict(lanes=list(G.own_moves(line) or (None,) * 4),
+        logits=[float(x) for x in root['root_logits']], legal=[bool(x) for x in root['root_legal']]), peer_turn1=[], turn2=[], choice=choice)
 
 
 def body(i, single=False):
@@ -199,6 +207,25 @@ class CaptureTests(unittest.TestCase):
         self.assertEqual([w for pair in got.blocks for w in pair], [prices(w) for w in range(16)])   # block order: world 2k+j
         self.assertEqual((tuple(got.root_logits), tuple(got.root_legal)), (LOGITS, LEGAL))
         self.assertIs(type(captures[1].prepared[0][0]), cw.RootRefusal)
+
+    def test_wrappers_pass_the_root_operator_through(self):
+        """A TARGET_ARGMAX search: decide gets the operator through the wrapper, and responses are byte-identical with and
+        without the wrappers; the played action is the scorer's target_argmax on the response's own fields."""
+        requests = [body(0), body(2)]
+        with ExitStack() as stack:
+            pricing(stack, still_clock=True)
+            searches = [fake_search(FakeConstructor()) for _ in range(2)]
+            for s in searches:s.root_operator = root_ops.TARGET_ARGMAX
+            without = [searches[0].process_many([r])[0] for r in requests];within = []
+            for r in requests:
+                capture = R.Capture()
+                with capture.installed():within.append(searches[1].process_many([r])[0])
+                self.assertEqual(len(capture.decided), 1)
+        self.assertEqual(json.dumps(within, sort_keys=True), json.dumps(without, sort_keys=True))
+        for response in within:
+            self.assertEqual((response['status'], response['root_operator'], response['target_fallback']), ('COMPLETE', 'TARGET_ARGMAX', False))
+            self.assertEqual(response['action_index'], root_ops.target_argmax(json.loads(json.dumps(response['policy_target'])), LEGAL, LOGITS,
+                json.loads(json.dumps(response['q_values'])))[0])
 
     def test_wrappers_restore_when_the_call_raises(self):
         capture = R.Capture()
@@ -529,6 +556,9 @@ class MainTests(unittest.TestCase):
                 with self.subTest(argv=argv), redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):R.options(argv)
             self.assertEqual(R.options(BASE + CHAMPION + ['--run-directory', 'r', '--out', 'o', '--sample', '8', '--sample-seed', '3']).sample_seed, 3)
             with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):R.options(BASE + CHAMPION + run + ['--reply-archive', 'p.npz'])   # dropped
+            self.assertEqual(args.root_operator, 'ARGMAX_MEAN_COMPLETED_Q')   # the server's flag, through the bench parser
+            self.assertEqual(R.options(BASE + CHAMPION + run + ['--root-operator', 'TARGET_ARGMAX']).root_operator, 'TARGET_ARGMAX')
+            with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):R.options(BASE + CHAMPION + run + ['--root-operator', 'ARGMAX_POLICY_TARGET'])
 
     def replay(self, tmp, *extra, header=None, guard=None, peer_off=()):
         """main over a run directory with cell 1001: decisions 0-4, decision 1 single-legal, decision 4 refused by the constructor."""
@@ -550,6 +580,7 @@ class MainTests(unittest.TestCase):
         args = R.parser().parse_args(BASE + CHAMPION + ['--run-directory', str(root), '--out', str(Path(tmp) / 'out'), '--cells', '1001', *extra])
         args.port, args.max_requests = 0, 1
         constructor = FakeConstructor(refuse={4});search_object = fake_search(constructor);warmed = []
+        search_object.root_operator = args.root_operator   # as server.build passes --root-operator to DepthNLiveSearch
         search_object.pricers[1].executor.off = peer_off   # these worlds' peer inputs are one ulp off their recorded logits
         search_object.warmup = lambda requests: warmed.append(list(requests)) or dict(buckets={1: dict(cold_seconds=1.)}, programs=3)
         header = dict(R.LIVE_IDENTITY, rung='DN2W16', pricer=dict(buckets=[1], W=16), tree_commit='t') if header is None else header
@@ -578,6 +609,41 @@ class MainTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:header = self.replay(tmp)[3]
         self.assertNotIn('replay_against', header);self.guard.assert_called_once_with(tree_commit=None, accept_tree=None)   # the default: unchanged
 
+    def test_main_under_target_argmax_records_the_operators_choice_and_passes_the_replay_check(self):
+        """--root-operator TARGET_ARGMAX: rows carry the operator (replay root_operator, root_operator_impl, target_fallback) and
+        the live search's choice under it; the effect guard record is evaluated on that choice. A default replay of the same
+        cell is unchanged: no operator field in its rows, and every field but the choice (and what depends on it) agrees.
+        scripts/depthn_target_argmax_replay_check passes on the TARGET_ARGMAX rows (exit 0) and refuses the default ones (exit 2)."""
+        from scripts import depthn_target_argmax_replay_check as check
+        def run(*extra):
+            with tempfile.TemporaryDirectory() as tmp, patch.object(live.DepthNLiveSearch, '_effect_guard', own_lane_guard):
+                code, rows, summary, *_ = self.replay(tmp, *extra)
+                out = io.StringIO()
+                with patch('sys.stdout', out), redirect_stderr(io.StringIO()):checked = check.main(['--rows', str(Path(tmp) / 'out' / 'rows-0.jsonl'), '--expect-battles', '1'])
+            return code, rows, summary, checked, out.getvalue()
+        code, rows, summary, checked, text = run('--root-operator', 'TARGET_ARGMAX')
+        base_code, base_rows, base_summary, base_checked, base_text = run()
+        self.assertEqual((code, base_code), (0, 0))
+        for row, base in zip(rows, base_rows):
+            replay, plain = row['replay'], base['replay']
+            self.assertFalse(set(R.OPERATOR_FIELDS) & set(plain))   # a default row is unchanged
+            self.assertEqual((replay['root_operator'], replay['root_operator_impl']), ('TARGET_ARGMAX', 'depthn_root_operator.target_argmax'))
+            volatile = ('wall_seconds', 'capture_seconds', *live.STAGES, 'decision_seconds', 'request_id', 'action_index', *R.OPERATOR_FIELDS)
+            self.assertEqual({k: v for k, v in replay.items() if k not in volatile}, {k: v for k, v in plain.items() if k not in volatile})
+            self.assertEqual(row['worlds'], base['worlds']);self.assertEqual(row['root'], base['root'])
+            if replay['status'] != 'COMPLETE':
+                self.assertEqual((replay['target_fallback'], row['effect_guard']), (None, None));continue
+            want = root_ops.target_argmax(replay['policy_target'], row['root']['root_legal'], row['root']['root_logits'], replay['q_values'])
+            self.assertEqual((replay['action_index'], replay['target_fallback']), want)
+            self.assertEqual((row['effect_guard']['choice'], base['effect_guard']['choice']), (replay['action_index'], plain['action_index']))
+        self.assertEqual(([r['replay']['action_index'] for r in rows], [r['replay']['action_index'] for r in base_rows]),
+            ([3, 3, 3, None], [5, 5, 5, None]))   # the target (root logits favour lane 3) overrides averaging's 5 on every decided root
+        report = json.loads(text)
+        self.assertEqual((checked, report['roots_compared'], report['mismatches'], report['battles'], report['statuses']), (0, 3, 0, 1, dict(COMPLETE=3, REFUSED=1)))
+        self.assertEqual((report['override']['raw_vs_greedy'], report['override']['raw_vs_averaging'], report['fallback']), (1., 1., dict(scorer=0, live=0)))
+        self.assertEqual((base_checked, json.loads(base_text)['error']), (2, 'input'))
+        self.assertEqual(check.ROW_SCHEMA, R.ROW_SCHEMA)   # the check reads this re-pricer's rows
+
     def test_main_replays_records_and_joins(self):
         with tempfile.TemporaryDirectory() as tmp:
             code, rows, summary, header, constructor, warmed, stdout, args = self.replay(tmp)
@@ -596,6 +662,7 @@ class MainTests(unittest.TestCase):
         self.assertEqual((rows[-1]['replay']['root_view_source'], rows[-1]['replay']['b2_view']), (None, None))   # constructor-refused: never built
         self.assertEqual((first['replay']['status'], first['replay']['action_index'], first['replay']['q_values']), ('COMPLETE', want['action_index'],
             json.loads(json.dumps(want['q_values']))))
+        self.assertFalse(set(R.OPERATOR_FIELDS) & set(first['replay']))   # the default operator's rows carry no operator field
         self.assertEqual(first['root'], dict(decided=True, root_logits=list(LOGITS), root_legal=list(LEGAL), own_moves=['m0', 'm1', 'm2', 'm3'],
             own_recharge_lanes=[False] * 4, opponent_recharge=False, refusal_cause=None))   # the own request's lanes 0-3 (BT.own_request: m0..m3)
         self.assertEqual(len(first['worlds']), 16)

@@ -5,7 +5,10 @@ Design. build() loads Codex's pinned constructor inputs (phase_d_protocol_constr
 source, engine metadata, owning config), the champion (champion_evaluator's flags: archive and checkpoint sha256s, bf16 by
 default), one ProtocolConstructor (W from the rung, sessions keyed by the rung), the executor over the same metadata and
 catalog, and one DepthNPricer per capacity bucket (depthn_live_search.make_pricers), and returns a DepthNLiveSearch
-(--refuse-classes passed through: those root classes are refused before pricing; recorded in the header and READY). run()
+(--refuse-classes passed through: those root classes are refused before pricing; recorded in the header and READY;
+--root-operator passed through: ARGMAX_MEAN_COMPLETED_Q, the default, or TARGET_ARGMAX, recorded in the pricer identity the
+header, READY and every response carry, in every response's root_operator and, when not the default, in the header's own
+root_operator). run()
 warms it up on --warmup-requests (every bucket's programs compile while nothing listens), wraps it for --telemetry and
 serves it until stopped (SIGTERM or an interrupt); it is never restarted per game.
 - Server is phase_d_search_server.Server set up through its own _initialize, as phase_d_ladder_transport.Server: Codex's
@@ -200,6 +203,9 @@ def parser():
     p.add_argument('--session-cap',type=int,default=256,help='constructor sessions kept, by least-recent battle')
     p.add_argument('--refuse-classes',type=classes_arg,default=(),help='root classes refused before pricing (class_refused), comma-separated from '
         +', '.join(live.CLASSES)+' (default none)')
+    p.add_argument('--root-operator',choices=live.ROOT_OPERATORS,default=live.ROOT_OPERATOR,
+        help='the root operator that picks the played action (default ARGMAX_MEAN_COMPLETED_Q: averaging\'s argmax; TARGET_ARGMAX: the RR '
+        'scorer\'s target_argmax on the reported policy_target); recorded in the pricer identity of READY, the header and every response')
     p.add_argument('--seed',type=int,default=20261103,help='constructor world seed (Codex\'s default)')
     p.add_argument('--recipe-seed',type=int,default=20261103,help='the pricer\'s lane-order recipe seed')
     p.add_argument('--saved-root-admission',action='store_true',help='Codex\'s stateless mode: every prefix folded from scratch, no sessions')
@@ -263,7 +269,8 @@ def build(args):
     pricers=live.make_pricers(executor,evaluator,params,worlds=W,buckets=args.buckets,block_lanes=args.block_lanes,blocks_per_call=args.blocks_per_call)
     return live.DepthNLiveSearch(constructor=constructor,pricers=pricers,params=params,binding=cw.binding(source,metadata,catalog),
         recipe=v5_gumbel.Recipe(args.recipe_seed),tree_commit=args.tree_commit or tree_commit(),min_price_seconds=args.min_price_seconds,
-        max_requests=args.max_requests,session_cap=args.session_cap,refuse_classes=args.refuse_classes)
+        max_requests=args.max_requests,session_cap=args.session_cap,refuse_classes=args.refuse_classes,
+        root_operator=getattr(args,'root_operator',live.ROOT_OPERATOR))
 
 
 def header(args,search):
@@ -274,7 +281,8 @@ def header(args,search):
         recipe_seed=args.recipe_seed,saved_root_admission=args.saved_root_admission,metadata_sha256=args.expected_metadata_sha256,
         vocabulary_sha256=args.expected_vocabulary_sha256,champion_archive_sha256=args.champion_archive_sha256,
         champion_checkpoint_sha256=args.champion_checkpoint_sha256,champion_precision=args.champion_precision,pricer=search.pricer_identity,
-        jax_enable_x64=bool(jax.config.jax_enable_x64),matmul_precision=matmul_precision(),matmul_precision_pin=args.matmul_precision)
+        jax_enable_x64=bool(jax.config.jax_enable_x64),matmul_precision=matmul_precision(),matmul_precision_pin=args.matmul_precision,
+        **({}if getattr(search,'root_operator',live.ROOT_OPERATOR)==live.ROOT_OPERATOR else dict(root_operator=search.root_operator)))
 
 
 def main(argv=None):

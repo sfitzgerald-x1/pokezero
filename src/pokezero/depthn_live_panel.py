@@ -57,6 +57,9 @@ Eval readiness (the lead's rulings):
   sha256 and the concurrent/solo ratios, init verifies them, and dispatch refuses
   unless every ratio is >= 0.90, or, when Foul Play is not observable, an explicit
   accept-uncalibrated is recorded.
+- Root operator: the declaration names one of depthn_root_operator.ROOT_OPERATORS (ARGMAX_MEAN_COMPLETED_Q through screen-r3,
+  TARGET_ARGMAX for screen-r4b); the probe passes only on a COMPLETE response naming it, and the readout reports
+  search_provenance breakage on any response naming another.
 - Search choice and provenance (descriptive, recorded before any dispatch): the
   evidence that chose the search arm's W (the cells' commit, their files by
   sha256, a summary of the result), and the opponent's and engine's identity.
@@ -80,6 +83,7 @@ import uuid
 from . import depthn_live_fairness as fairness
 from . import phase_d_ladder_panel as ladder
 from .depthn_live_actor import ARMS,CAUSES,CHAMPION_ARCHIVE_SHA256,REQUEST_KINDS,ROW_SCHEMA,SEARCH_ARMS,SOURCES
+from .depthn_root_operator import ROOT_OPERATORS
 
 SCHEMA='depthn-foulplay-panel.declaration.v1'
 RUN_SCHEMA='depthn-foulplay-panel.run.v1'
@@ -172,7 +176,7 @@ def validate(declaration):
             or d['checkpoint_sha256']!=ActorContract.champion().checkpoint_sha256 or d['archive_sha256']!=CHAMPION_ARCHIVE_SHA256
             or type(arms)is not list or len(arms)!=2 or arms[0]!='RAW'or arms[1]not in SEARCH_ARMS
             or d['search']!={a:dict(depth=2,worlds=WORLDS[a])for a in arms[1:]}
-            or d['root_operator']!='ARGMAX_MEAN_COMPLETED_Q'or type(d['deadline_seconds'])is not float
+            or type(d['root_operator'])is not str or d['root_operator']not in ROOT_OPERATORS or type(d['deadline_seconds'])is not float
             or d['deadline_seconds']not in DEADLINES or d['reserve_seconds']!=.15
             or d['screen_paired_cells']!=500 or d['max_paired_cells']!=2000 or d['confidence']!=.9
             or d['primary_comparison']!='SEARCH_MINUS_OUR_RAW_PAIRED_BY_CELL'

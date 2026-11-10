@@ -191,6 +191,24 @@ def searched_action(response,observation):
 from .depthn_effect_guard import CAUSE as EFFECT_GUARD,RECHARGE_MOVES,own_moves,recharge_guarded,recharge_lane  # noqa: E402,F401
 
 
+def guarded_action(response,observation,moves,greedy_action):
+    """A searched decision's played search action under the guards: (action or None, cause, guard_causes, recharge_guard).
+    searched_action's checks first; then, on its action, the own-recharge guard (recharge_guarded against greedy's action;
+    `moves` is own_moves of the owner's |request| line; recharge_guard names the lanes) and UNREPRESENTED_EFFECT (the
+    response's effect_guard record tripped: the server evaluates its (c) on the response's own action_index, whichever root
+    operator chose it). Any guard plays greedy (action None), the first cause standing; guard_causes keeps them all (module
+    docstring). select() plays through it; scripts/depthn_target_argmax_replay_check replays re-priced rows through it."""
+    action,cause=searched_action(response,observation);guards=[];guard=None
+    if action is not None:
+        base=int(greedy_action)
+        if recharge_guarded(moves,action,base):
+            guard=dict(searched_action=action,searched_move=moves[action],greedy_move=moves[base]if 0<=base<4 else None)
+            guards.append(OWN_RECHARGE)
+        if (response.get('effect_guard')or {}).get('tripped')is True:guards.append(EFFECT_GUARD)
+        if guards:action,cause=None,guards[0]   # the first cause stands; guard_causes keeps them all
+    return action,cause,guards,guard
+
+
 def battle_turn(lines):
     """The last |turn|N in the owner's lines; None before the first turn line."""
     for line in reversed(lines):
@@ -242,14 +260,7 @@ def factory(config,*,raw_factory,client,telemetry_path,arm,cell=None,archive_sha
             elif kind=='forced':source='single_legal'
             else:
                 response=searching.result()
-                action,cause=searched_action(response,observation)
-                if action is not None:
-                    moves=own_moves(snapshot.own_request_line);base=int(greedy.action_index)
-                    if recharge_guarded(moves,action,base):
-                        guard=dict(searched_action=action,searched_move=moves[action],greedy_move=moves[base]if 0<=base<4 else None)
-                        guards.append(OWN_RECHARGE)
-                    if (response.get('effect_guard')or {}).get('tripped')is True:guards.append(EFFECT_GUARD)
-                    if guards:action,cause=None,guards[0]   # the first cause stands; guard_causes keeps them all
+                action,cause,guards,guard=guarded_action(response,observation,own_moves(snapshot.own_request_line),greedy.action_index)
                 source='search'if action is not None else'greedy_fallback'
             if action is not None:
                 decision=PolicyDecision(action,policy_id,action_probability=1.,value_estimate=float(response['q_values'][action]),

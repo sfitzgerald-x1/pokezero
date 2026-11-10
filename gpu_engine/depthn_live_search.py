@@ -18,15 +18,25 @@ request_id. Per batch (process_many chunks a longer list into batches of max_req
   worlds in block order (block k's world j is averaging's world 2k+j), as v2_search_head_to_head's 'average' cell calls it:
   its argmax over the legal actions (lowest index on ties) is the played action_index and its per-action values are
   q_values (None on illegal lanes). Its validity rules hold on the way in: WorldPrices refuses a value outside [-1, 1] or
-  a non-finite value or logit, _mask a malformed legal mask, _probabilities an empty reply set. The label stays
-  ARGMAX_MEAN_COMPLETED_Q (the panel's declaration pins it); root_operator_impl names averaging.
+  a non-finite value or logit, _mask a malformed legal mask, _probabilities an empty reply set. The label is
+  ARGMAX_MEAN_COMPLETED_Q (the panel's declaration names it); root_operator_impl names averaging.
+- root_operator (pokezero.depthn_root_operator; the server's --root-operator): ARGMAX_MEAN_COMPLETED_Q, the default, plays
+  averaging's argmax as above. TARGET_ARGMAX (screen-r4b) plays depthn_root_operator.target_argmax(policy_target, root_legal,
+  root_logits, q_values), the RR scorer's own function on the quantities the response reports: the reported policy_target's
+  argmax over the legal actions (lowest index on ties), or, when the reporting reduction left it None, the argmax of
+  root_logits + q_values. Everything else is the default's: the worlds, their prices, averaging's q_values (still the
+  response's q_values), the reported fields (mean_q_agrees still compares action_mean_q with averaging's own argmax) and the
+  effect guard, whose (c) is evaluated on the played action_index. Its responses name it (root_operator TARGET_ARGMAX,
+  root_operator_impl depthn_root_operator.target_argmax, in the pricer identity too) and carry target_fallback (true when
+  root_logits + q_values decided, None when nothing was decided); a default response has no target_fallback key.
 - reporting only: constructor_worlds' composition on the same backups (reduce_completed_q per block, the equal-weight mean
   of the blocks' completed-Q, constructor_worlds.root_actions) gives completed_q, policy_target, root_value,
-  action_mean_q, action_policy_target (never played) and mean_q_agrees (action_mean_q == action_index; they can differ by
-  one ulp at a near tie). If it refuses or raises (reduce_completed_q's range check raises when a block's completed-Q
-  rounds outside [-1, 1]: an action winning, or losing, against every reply in both worlds of a block, its reply prior
-  summing to 1 + ulp), or fails in any other way, those fields are None and reduction_note says why; the root still plays
-  averaging's action.
+  action_mean_q, action_policy_target (never played by the default operator; TARGET_ARGMAX plays it whenever the target
+  is reported) and mean_q_agrees (action_mean_q == averaging's action; they can differ by one ulp at a near tie). If it
+  refuses or raises (reduce_completed_q's range check raises when a block's completed-Q rounds outside [-1, 1]: an action
+  winning, or losing, against every reply in both worlds of a block, its reply prior summing to 1 + ulp), or fails in any
+  other way, those fields are None and reduction_note says why; the root still plays averaging's action (TARGET_ARGMAX:
+  its fallback).
 - causes: a root prepare() refused, or one with a refused world, is constructor_refused; one refused by build's root
   checks (root view, legal mask, B2 inputs: ROOT_B2_INPUTS_UNUSABLE, root forward), by DepthN's pricing (a block cause, depthn_backups.refusal_summary) or by
   averaging (an unknown price, or its error) is depthn_refused. Any other exception in the shared batch (prepare_roots,
@@ -77,7 +87,7 @@ request_id. Per batch (process_many chunks a longer list into batches of max_req
   b2_view set and root_view_source None (build checks the legal mask between the two).
 Response, per the live contract: schema, request_id, rung, archive_sha256, status, action_index, q_values (9, None on
 illegal lanes), refusal, cause, requested_worlds, constructed_worlds, decision_seconds (batch start -> result, COMPLETE
-only); ours: root_operator, root_operator_impl, completed_q, policy_target, root_value, action_mean_q,
+only); ours: root_operator, root_operator_impl, target_fallback (TARGET_ARGMAX only), completed_q, policy_target, root_value, action_mean_q,
 action_policy_target, mean_q_agrees, reduction_note, root_view_source, b2_view, effect_guard, block_causes, world_refusals, timings (queue_seconds,
 prepare_seconds (the root's own), build/price/reduce_seconds (the shared batch's; reduce = backups, averaging and the
 reporting reduction)), batch_size, bucket, tree_commit, pricer. Fields a request never reached are None. `rung` echoes the
@@ -100,12 +110,16 @@ import numpy as np
 from pokezero import v5_gumbel as original
 from pokezero.phase_d_search_server import SCHEMA,encode
 from pokezero import depthn_effect_guard as effect_guard
+from pokezero import depthn_root_operator as root_ops
 from . import champion_evaluator as evaluators,constructor_worlds as cw,depthn_backups as backups,device_depthn_pricer as dn,search_hedge as hedge
 from . import depthn_guard_inputs as guard_inputs
 
 RUNGS={'DN2W8':8,'DN2W16':16}
-ROOT_OPERATOR='ARGMAX_MEAN_COMPLETED_Q'
-ROOT_OPERATOR_IMPL='search_hedge.averaging'
+ROOT_OPERATOR=root_ops.ARGMAX_MEAN_COMPLETED_Q   # the default
+ROOT_OPERATOR_IMPL=root_ops.IMPLS[ROOT_OPERATOR]
+ROOT_OPERATORS=root_ops.ROOT_OPERATORS
+ROOT_OPERATOR_IMPLS=dict(root_ops.IMPLS)
+TARGET_ARGMAX=root_ops.TARGET_ARGMAX
 CAUSES=('constructor_refused','depthn_refused','expired_in_queue','server_error','bad_request','class_refused')
 CLASSES=('forced_switch','fresh_substitute','wish','sleep')   # root_class priority order
 PROTOCOL_KEYS=('schema','request_id','battle_id','owner','stream_id','decision_index','generation','prefix_sha256','lines','own_request_line')
@@ -130,31 +144,44 @@ def make_pricers(executor,forward,params,*,worlds,buckets=(1,2,4),block_lanes=21
     return out
 
 
-def decide(blocks,root_logits,root_legal):
+def decide(blocks,root_logits,root_legal,operator=ROOT_OPERATOR):
     """One priced root's decision from its K blocks' backed-up worlds (blocks[k] = depthn_backups.backup(frame, row_k,
-    learner_max)): search_hedge.averaging over the 2K worlds in block order plays, constructor_worlds' composition only
-    reports (module docstring). dict(status COMPLETE or REFUSED, action_index, q_values, refusal, completed_q,
-    policy_target, root_value, action_mean_q, action_policy_target, mean_q_agrees, reduction_note)."""
-    from .d3_search_latency import compose,reduce_block
+    learner_max)): search_hedge.averaging over the 2K worlds in block order plays (the default operator), constructor_worlds'
+    composition only reports (module docstring); with operator TARGET_ARGMAX, depthn_root_operator.target_argmax on the
+    reported policy_target, root_legal, root_logits and averaging's q_values plays. dict(status COMPLETE or REFUSED,
+    action_index, q_values, refusal, completed_q, policy_target, root_value, action_mean_q, action_policy_target,
+    mean_q_agrees, reduction_note), and target_fallback with TARGET_ARGMAX."""
+    if operator not in ROOT_OPERATORS:raise ValueError(f'a root operator in {ROOT_OPERATORS} required, got {operator!r}')
     legal=tuple(root_legal);prices=tuple(w for pair in blocks for w in pair)
     out=dict(status='REFUSED',action_index=None,q_values=None,refusal=None,completed_q=None,policy_target=None,root_value=None,action_mean_q=None,
-        action_policy_target=None,mean_q_agrees=None,reduction_note=None)
+        action_policy_target=None,mean_q_agrees=None,reduction_note=None,**({'target_fallback':None}if operator==TARGET_ARGMAX else{}))
     try:choice=hedge.averaging(prices,legal)
     except ValueError as error:return dict(out,refusal=f'AVERAGING_ERROR: {error}')
     if choice is None:return dict(out,refusal='AVERAGING_UNKNOWN_PRICE')
     action=hedge.top_action(choice.strategy);q=choice.q
     if not legal[action]or any(legal[a]!=(q[a]is not None)or legal[a]and not math.isfinite(q[a])for a in range(9)):
         return dict(out,refusal='AVERAGING_INVALID_RESULT')
-    out.update(status='COMPLETE',action_index=action,q_values=list(q))
-    try:   # reporting only: whatever happens here never changes the decision (MemoryError and non-Exception errors propagate)
+    out.update(status='COMPLETE',action_index=action,q_values=list(q),**reported(blocks,root_logits,legal,action))
+    if operator==TARGET_ARGMAX:   # the RR scorer's own function on the reported quantities (None policy_target: the fallback)
+        played,fallback=root_ops.target_argmax(out['policy_target'],legal,root_logits,out['q_values'])
+        out.update(action_index=played,target_fallback=fallback)
+    return out
+
+
+def reported(blocks,root_logits,legal,action):
+    """The reported fields of a root averaging decided (constructor_worlds' composition: completed_q, policy_target, root_value,
+    action_mean_q, action_policy_target, mean_q_agrees against averaging's `action`), or dict(reduction_note) when it refuses
+    or raises (module docstring); reporting only: it never changes averaging's decision (MemoryError and non-Exception errors
+    propagate)."""
+    from .d3_search_latency import compose,reduce_block
+    try:
         composed=compose([reduce_block(pair,root_logits,legal,original)for pair in blocks],root_logits,legal,original)
-        if composed['status']!='LABELED':return dict(out,reduction_note='REDUCTION_REFUSED: a block reduce_completed_q refused')
+        if composed['status']!='LABELED':return dict(reduction_note='REDUCTION_REFUSED: a block reduce_completed_q refused')
         mean_q,target=cw.root_actions(composed['completed_q'],composed['policy_target'],legal)
-        report=dict(completed_q=list(composed['completed_q']),policy_target=list(composed['policy_target']),root_value=composed['root_value'],
+        return dict(completed_q=list(composed['completed_q']),policy_target=list(composed['policy_target']),root_value=composed['root_value'],
             action_mean_q=mean_q,action_policy_target=target,mean_q_agrees=mean_q==action)
     except FATAL:raise
-    except Exception as error:return dict(out,reduction_note=f'REDUCTION_ERROR: {type(error).__name__}: {error}')
-    return dict(out,**report)
+    except Exception as error:return dict(reduction_note=f'REDUCTION_ERROR: {type(error).__name__}: {error}')
 
 
 def classify(constructor,request):
@@ -246,11 +273,15 @@ def _real(x):
 
 
 class DepthNLiveSearch:
+    root_operator=ROOT_OPERATOR
+
     def __init__(self,*,constructor,pricers,params,binding,recipe,tree_commit,min_price_seconds=1.,max_requests=None,session_cap=256,
-            archive_sha256=None,device='cpu',clock=time.monotonic,refuse_classes=()):
+            archive_sha256=None,device='cpu',clock=time.monotonic,refuse_classes=(),root_operator=ROOT_OPERATOR):
         """`pricers`: make_pricers' {bucket: DepthNPricer}; `binding`: the pricer side's WorldBinding (constructor_worlds.binding of
         the executor's source, engine metadata and catalog); `recipe`: the lane-order Recipe; `clock` must be the server's
-        arrival clock (time.monotonic)."""
+        arrival clock (time.monotonic); `root_operator`: ROOT_OPERATORS' (module docstring)."""
+        if root_operator not in ROOT_OPERATORS:raise ValueError(f'a root operator in {ROOT_OPERATORS} required, got {root_operator!r}')
+        self.root_operator=root_operator
         W=constructor.count;self.rung=next((r for r,w in RUNGS.items()if w==W),None)
         if self.rung is None:raise ValueError(f'a constructor of W in {tuple(RUNGS.values())} worlds required, got {W!r}')
         self.W,self.K=W,W//2;self.buckets=tuple(sorted(pricers))
@@ -283,8 +314,8 @@ class DepthNLiveSearch:
         self.pricer_identity=dict(engine='DepthNPricer',depth=DEPTH,k=[WIDTH,WIDTH],k1=[WIDTH,WIDTH],selection='prior',W=W,K=self.K,
             buckets=list(self.buckets),capacities=[b*self.K for b in self.buckets],fixed_capacity=True,block_lanes=first.block_lanes,
             blocks_per_call=first.blocks_per_call,precision=getattr(self.forward,'precision',None)or(ident[2]if len(ident)>2 else None),
-            evaluator=evaluators.describe(self.forward)['identity'],world_source=cw.SOURCE,backup='learner_max',root_operator=ROOT_OPERATOR,
-            root_operator_impl=ROOT_OPERATOR_IMPL,matmul_precision=str(jax.config.jax_default_matmul_precision or'default'))
+            evaluator=evaluators.describe(self.forward)['identity'],world_source=cw.SOURCE,backup='learner_max',root_operator=root_operator,
+            root_operator_impl=ROOT_OPERATOR_IMPLS[root_operator],matmul_precision=str(jax.config.jax_default_matmul_precision or'default'))
 
     @property
     def programs(self):
@@ -294,8 +325,9 @@ class DepthNLiveSearch:
     # Requests -----------------------------------------------------------------------------------------------------------------------
     def _response(self,request_id,n):
         return dict(schema=SCHEMA,request_id=request_id,rung=self.rung,archive_sha256=self.archive_sha256,status='REFUSED',action_index=None,q_values=None,
-            refusal=None,cause=None,requested_worlds=self.W,constructed_worlds=0,decision_seconds=None,root_operator=ROOT_OPERATOR,
-            root_operator_impl=ROOT_OPERATOR_IMPL,completed_q=None,policy_target=None,root_value=None,action_mean_q=None,action_policy_target=None,
+            refusal=None,cause=None,requested_worlds=self.W,constructed_worlds=0,decision_seconds=None,root_operator=self.root_operator,
+            root_operator_impl=ROOT_OPERATOR_IMPLS[self.root_operator],**({'target_fallback':None}if self.root_operator==TARGET_ARGMAX else{}),
+            completed_q=None,policy_target=None,root_value=None,action_mean_q=None,action_policy_target=None,
             mean_q_agrees=None,reduction_note=None,root_view_source=None,b2_view=None,effect_guard=None,block_causes=None,world_refusals=None,
             timings=dict.fromkeys(STAGES),
             batch_size=n,bucket=None,
@@ -394,7 +426,7 @@ class DepthNLiveSearch:
             if any(block):results.append(dict(base,status='REFUSED',refusal=next(c for c in block if c)));continue   # DepthN's rule: a refused block refuses the root
             try:blocks=[backups.backup(frame,r,backups.learner_max)for r in root['rows']]   # WorldPrices: averaging's value and logit rules
             except ValueError as error:results.append(dict(base,status='REFUSED',refusal=f'AVERAGING_ERROR: {error}'));continue
-            decision=decide(blocks,root['root_logits'],root['root_legal'])
+            decision=decide(blocks,root['root_logits'],root['root_legal'],operator=self.root_operator)
             if decision['status']=='COMPLETE':decision['effect_guard']=self._effect_guard(frame,root,made,by_id[root['request_id']],children,seam_notes,
                 decision['action_index'],labels)
             results.append(dict(base,**decision))
@@ -412,7 +444,8 @@ class DepthNLiveSearch:
             if i in gates:out[i]=dict(base,cause=gates[i][0],refusal=gates[i][1])
             elif result['status']=='COMPLETE':
                 out[i]=dict(base,**{k:result[k]for k in('status','action_index','q_values','completed_q','policy_target','root_value','action_mean_q',
-                    'action_policy_target','mean_q_agrees','reduction_note','effect_guard')},decision_seconds=decided)
+                    'action_policy_target','mean_q_agrees','reduction_note','effect_guard')+(('target_fallback',)if 'target_fallback'in base else())},
+                    decision_seconds=decided)
             else:out[i]=dict(base,cause=refusal_cause(result['refusal']),refusal=result['refusal'])
         return out
 

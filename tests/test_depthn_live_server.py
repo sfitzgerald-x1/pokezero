@@ -140,6 +140,53 @@ class ServerTests(unittest.TestCase):
                 S.run(search,host='127.0.0.1',port=free_port(),warmup_requests=[{}],**{'max_requests':4,**bad})
         self.assertFalse(search.warmed)
 
+    def built(self,argv):
+        """build(options(argv)) on stand-ins for the GPU, Codex's inputs, the champion and the pricers: the keywords it gives
+        DepthNLiveSearch."""
+        import jax
+        from gpu_engine import constructor_worlds as cw,device_public_teacher as teacher,engine_device_observation,phase_d_protocol_constructor as pc,transition
+        with patch.dict(os.environ,PINNED):args=S.options(argv)
+        made={}
+        stand_ins=((S,'matmul_precision',lambda:'highest'),(jax,'devices',lambda:[NS(platform='gpu')]),(pc,'load_inputs',lambda a:('catalog','source','metadata','config')),
+            (S.evaluators,'load_from_arguments',lambda a:NS(params='champion')),(pc,'ProtocolConstructor',lambda **kw:NS(**kw)),
+            (teacher,'make_executor',lambda *a,**k:'executor'),(transition,'tables_from_metadata',lambda m:'tables'),
+            (engine_device_observation,'compile_tables',lambda m,catalog:'observation'),(S.live,'make_pricers',lambda *a,**k:'pricers'),
+            (cw,'binding',lambda *a:'binding'),(S.live,'DepthNLiveSearch',lambda **kw:made.update(kw)or'search'))
+        with ExitStack()as stack:
+            for target,name,value in stand_ins:stack.enter_context(patch.object(target,name,side_effect=value))
+            self.assertEqual(S.build(args),'search')
+        return made
+
+    def test_the_root_operator_reaches_the_search_its_header_and_the_proxys_identity(self):
+        """--root-operator (default ARGMAX_MEAN_COMPLETED_Q; TARGET_ARGMAX; nothing else) reaches DepthNLiveSearch; the header and
+        READY record it in the pricer identity (and, when not the default, in their own root_operator: the default header's keys
+        are unchanged), every response names it, and the proxy's identity (what --expect-root-operator compares) reads it."""
+        from scripts import depthn_live_proxy as proxy
+        from tests import test_gpu_engine_depthn_live_search as L
+        base=['--showdown-root','s','--node-binary','n','--metadata','m','--expected-metadata-sha256','a'*64,'--vocabulary','v',
+            '--expected-vocabulary-sha256','b'*64,'--port','9000','--warmup-requests','w.jsonl','--champion-archive','c.npz','--champion-archive-sha256','c'*64,
+            '--champion-checkpoint-sha256','d'*64,'--tree-commit','t'*40]
+        self.assertEqual(self.built(base)['root_operator'],'ARGMAX_MEAN_COMPLETED_Q')
+        self.assertEqual(self.built(base+['--root-operator','TARGET_ARGMAX'])['root_operator'],'TARGET_ARGMAX')
+        for bad in('ARGMAX_POLICY_TARGET','target_argmax',''):
+            with self.subTest(bad=bad),patch.dict(os.environ,PINNED),redirect_stderr(io.StringIO()),self.assertRaises(SystemExit):S.options(base+['--root-operator',bad])
+        L.LiveSearchTests.setUpClass();fixture=L.LiveSearchTests('test_configuration_is_checked')
+        keys={'tree_commit','rung','max_requests','min_price_seconds','session_cap','refuse_classes','batch_wait_seconds','queue_limit','constructor_seed',
+            'recipe_seed','saved_root_admission','metadata_sha256','vocabulary_sha256','champion_archive_sha256','champion_checkpoint_sha256',
+            'champion_precision','pricer','jax_enable_x64','matmul_precision','matmul_precision_pin'}
+        for operator,impl in(('ARGMAX_MEAN_COMPLETED_Q','search_hedge.averaging'),('TARGET_ARGMAX','depthn_root_operator.target_argmax')):
+            with self.subTest(operator=operator):
+                with patch.dict(os.environ,PINNED):args=S.options(base+['--root-operator',operator])
+                search=fixture.search(root_operator=operator)
+                with patch.object(S,'matmul_precision',return_value='highest'):header=S.header(args,search)
+                self.assertEqual(set(header),keys if operator=='ARGMAX_MEAN_COMPLETED_Q'else keys|{'root_operator'})   # the default's keys unchanged
+                self.assertEqual((header.get('root_operator',operator),header['pricer']['root_operator'],header['pricer']['root_operator_impl']),(operator,operator,impl))
+                with L.Codex({('p',0):fixture.outcome(0)}),patch.object(L.cw,'world_completer',return_value=lambda world,owner,**kw:world):
+                    row,=search.process_many([L.request('p',0)])
+                self.assertEqual((row['status'],row['root_operator'],row['pricer']),('COMPLETE',operator,header['pricer']))
+                mine=proxy.identity(json.loads(json.dumps(row)))
+                self.assertEqual((mine['root_operator'],mine['pricer']['root_operator']),(operator,operator))   # --expect-root-operator matches
+
     def test_build_passes_the_command_line_through(self):
         """build() on stand-ins for the GPU, Codex's inputs, the champion and the pricers: --refuse-classes (and the queue
         settings) reach the DepthNLiveSearch it returns."""

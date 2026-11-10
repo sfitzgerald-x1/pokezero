@@ -12,7 +12,7 @@ from unittest.mock import patch
 
 import numpy as np
 
-from pokezero import v5_gumbel as original
+from pokezero import depthn_effect_guard as G,depthn_live_actor as actor,depthn_root_operator as root_ops,v5_gumbel as original
 from pokezero.phase_d_search_server import SCHEMA,encode
 from gpu_engine import constructor_worlds as cw,depthn_backups as backups,depthn_live_search as live,search_hedge as hedge
 from gpu_engine import phase_d_protocol_constructor as pc
@@ -26,6 +26,29 @@ KEYS={'schema','request_id','rung','archive_sha256','status','action_index','q_v
     'bucket','tree_commit','pricer','root_operator_impl','completed_q','action_mean_q','mean_q_agrees','reduction_note','root_classes','root_class',
     'root_class_source','root_class_crosscheck','root_view_source','b2_view','effect_guard'}
 TREE='0123456789abcdef'*2+'01234567'
+TARGET='TARGET_ARGMAX'
+OPERATOR_KEYS=('root_operator','root_operator_impl','target_fallback')   # what a TARGET_ARGMAX response adds or names differently
+
+
+def wire(value):
+    """A response field as the wire (and every reader of the telemetry or the re-pricer rows) carries it."""
+    return json.loads(json.dumps(value))
+
+
+def favour(action):
+    """latency.compose with its reported policy_target replaced by one that puts .9 on `action` (when legal): the target's
+    argmax, so TARGET_ARGMAX's choice, is `action` whatever averaging plays."""
+    from gpu_engine import d3_search_latency as latency
+    compose=latency.compose
+    def composed(improvements,logits,legal,original):
+        out=compose(improvements,logits,legal,original)
+        return dict(out,policy_target=tuple((.9 if a==action else .05)if legal[a]else 0. for a in range(9)))
+    return patch.object(latency,'compose',side_effect=composed)
+
+
+def still_clocks(stack):
+    """Every stage timing 0 (live and constructor_worlds read time.perf_counter), so whole responses compare."""
+    for module in(live,cw):stack.enter_context(patch.object(module,'time',NS(perf_counter=lambda:0.,monotonic=lambda:0.)))
 
 
 def prefix(battle,decision,*,owner='p1',last=None,before=()):
@@ -510,6 +533,104 @@ class LiveSearchTests(unittest.TestCase):
         other=self.cw.constructor(8,metadata=dict(self.cw.metadata,moves=[None,*[dict(pp=11)]*4]))
         with self.assertRaisesRegex(ValueError,'another binding'):
             live.DepthNLiveSearch(constructor=other,pricers=self.pricers[8],params=PARAMS,binding=self.cw.binding,recipe=self.cw.recipe,tree_commit=TREE)
+        for bad in('ARGMAX_POLICY_TARGET','target_argmax',None):
+            with self.subTest(root_operator=bad),self.assertRaisesRegex(ValueError,'root operator'):self.search(root_operator=bad)
+
+    # the root operator (screen-r4b) ----------------------------------------------------------------------------------------------
+    def operator_rows(self,operator,requests,outcomes,*,target=None):
+        """Responses (stage timings 0) and the decide calls' (root_logits, root_legal) under `operator`; `target` forces the
+        reported policy_target's argmax (favour)."""
+        decided=[]
+        def spy(blocks,root_logits,root_legal,**kw):decided.append((tuple(root_logits),tuple(root_legal),kw));return decide(blocks,root_logits,root_legal,**kw)
+        decide=live.decide
+        with ExitStack()as stack:
+            still_clocks(stack);stack.enter_context(patch.object(live,'decide',side_effect=spy))
+            if target is not None:stack.enter_context(favour(target))
+            rows,_=self.run_batch(self.search(root_operator=operator,clock=lambda:0.),requests,outcomes)
+        return rows,decided
+
+    def test_the_default_operator_is_unchanged_and_target_argmax_changes_only_the_played_action(self):
+        """The same roots under the default and TARGET_ARGMAX (its reported target forced to favour action 0, where averaging
+        plays 2): the default responses carry the default operator and no target_fallback (KEYS, as before); a TARGET_ARGMAX
+        response names its operator (and its pricer identity does) and adds target_fallback; its played action is the RR
+        scorer's own target_argmax on the response's own policy_target and q_values (as the wire carries them) with the root's
+        legal mask and logits; everything else is the default's, the effect guard record but its `choice` (now the played
+        action) included."""
+        from scripts import depthn_rr_score as scorer
+        reqs=[request(f'b{i}',0,stream=10+i)for i in range(3)]+[request('r',0)]
+        outcomes={**{(f'b{i}',0):self.outcome(i)for i in range(3)},('r',0):Refusal('SEARCH_PREFIX_OR_REQUEST_MISMATCH')}
+        default,_=self.operator_rows(live.ROOT_OPERATOR,reqs,outcomes,target=0)
+        plain,_=self.operator_rows(live.ROOT_OPERATOR,reqs,outcomes)   # under the default the forced target is reported only: averaging plays
+        self.assertEqual([r['action_index']for r in plain],[2,2,2,None]);self.assertEqual([r['action_index']for r in default],[2,2,2,None])
+        rows,decided=self.operator_rows(TARGET,reqs,outcomes,target=0)
+        self.assertEqual([kw for *_,kw in decided],[dict(operator=TARGET)]*3)
+        for i,(base,row)in enumerate(zip(default,rows)):
+            with self.subTest(i):
+                encode(base);encode(row);self.assertEqual(set(base),KEYS);self.assertEqual(set(row),KEYS|{'target_fallback'})
+                self.assertEqual((base['root_operator'],base['root_operator_impl'],base['pricer']['root_operator'],base['pricer']['root_operator_impl']),
+                    ('ARGMAX_MEAN_COMPLETED_Q','search_hedge.averaging','ARGMAX_MEAN_COMPLETED_Q','search_hedge.averaging'))
+                self.assertEqual((row['root_operator'],row['root_operator_impl'],row['pricer']['root_operator'],row['pricer']['root_operator_impl']),
+                    (TARGET,'depthn_root_operator.target_argmax',TARGET,'depthn_root_operator.target_argmax'))
+                self.assertEqual({k:v for k,v in row['pricer'].items()if not k.startswith('root_operator')},
+                    {k:v for k,v in base['pricer'].items()if not k.startswith('root_operator')})
+                same=lambda r:{k:v for k,v in r.items()if k not in(*OPERATOR_KEYS,'pricer','action_index','effect_guard')}
+                self.assertEqual(same(row),same(base))
+                if base['status']!='COMPLETE':
+                    self.assertEqual((row['status'],row['action_index'],row['target_fallback'],row['effect_guard']),('REFUSED',None,None,None));continue
+                logits,legal,_=decided[i]
+                self.assertEqual((base['action_index'],row['action_index'],row['target_fallback']),(2,0,False))   # averaging's 2; the target's 0
+                self.assertEqual((row['action_index'],row['target_fallback']),scorer.target_argmax(wire(row['policy_target']),legal,logits,wire(row['q_values'])))
+                self.assertEqual(row['action_index'],row['action_policy_target'])   # the reported target's argmax (constructor_worlds.root_actions)
+                self.assertEqual((base['effect_guard']['choice'],row['effect_guard']['choice']),(2,0))
+                self.assertEqual({k:v for k,v in row['effect_guard'].items()if k!='choice'},{k:v for k,v in base['effect_guard'].items()if k!='choice'})
+        # without the forced target the reported policy_target follows q here: both operators play averaging's action
+        rows,_=self.operator_rows(TARGET,reqs,outcomes)
+        self.assertEqual([r['action_index']for r in rows],[2,2,2,None]);self.assertEqual([r['target_fallback']for r in rows],[False]*3+[None])
+        self.assertEqual([{k:v for k,v in r.items()if k not in(*OPERATOR_KEYS,'pricer')}for r in rows],
+            [{k:v for k,v in r.items()if k not in(*OPERATOR_KEYS,'pricer')}for r in plain])   # then whole responses agree but for the operator
+
+    def test_target_argmax_falls_back_to_root_logits_plus_q_without_a_reported_target(self):
+        """A reduction that refuses leaves policy_target None: TARGET_ARGMAX plays argmax(root_logits + q_values), target_fallback
+        true, as the scorer's target_argmax does on that response."""
+        from scripts import depthn_rr_score as scorer
+        with patch.object(live,'reported',return_value=dict(reduction_note='REDUCTION_REFUSED: a block reduce_completed_q refused')):
+            rows,decided=self.operator_rows(TARGET,[request('f',0)],{('f',0):self.outcome(0)})
+        row,=rows;(logits,legal,_),=decided
+        self.assertEqual((row['status'],row['policy_target'],row['target_fallback'],row['reduction_note']),
+            ('COMPLETE',None,True,'REDUCTION_REFUSED: a block reduce_completed_q refused'))
+        acts=[a for a in range(9)if legal[a]]
+        self.assertEqual(row['action_index'],max(acts,key=lambda a:(float(logits[a])+row['q_values'][a],-a)))
+        self.assertEqual((row['action_index'],True),scorer.target_argmax(wire(row['policy_target']),legal,logits,wire(row['q_values'])))
+
+    def test_guard_c_is_evaluated_on_the_target_argmax_choice(self):
+        """The effect guard's (c), our chosen move being guarded for us, is evaluated on the action TARGET_ARGMAX plays: the
+        search passes its played action_index to the record (choice). Our lane 0 is Counter (tier A), its root prior forced
+        under the turn-1 threshold so (b) does not trip: when the target plays lane 0, (c) alone trips the record, the live
+        actor plays greedy and the RR scorer's per-operator guard does too; when it plays lane 1, nothing trips and both play
+        it. Averaging's own choice (lane 2) would not have tripped (c): the record follows the operator's choice, not averaging's."""
+        from scripts import depthn_rr_score as scorer
+        build=cw.build
+        def low_counter_prior(*a,**k):   # our root prior on the Counter lane far under THRESHOLD: (b) at turn 1 does not trip
+            made=build(*a,**k)
+            for root in made.roots:
+                if root.get('root_logits')is not None:root['root_logits']=tuple(-30. if lane==0 else float(x)for lane,x in enumerate(root['root_logits']))
+            return made
+        own=dict(active=[dict(moves=[dict(id='counter'),dict(id='tackle'),dict(id='rest')])])
+        line=request('c',0,last=own)['own_request_line'];moves=actor.own_moves(line);greedy=1
+        self.assertEqual(moves,('counter','tackle','rest',None))
+        for target,c in((0,True),(1,False)):
+            with self.subTest(target=target),patch.object(live.cw,'build',side_effect=low_counter_prior):
+                (row,),_=self.operator_rows(TARGET,[request('c',0,last=own)],{('c',0):self.outcome(0)},target=target)
+            with self.subTest(target=target):
+                record=row['effect_guard'];played=row['action_index']
+                self.assertEqual((row['status'],played,record['choice'],record['b'],record['c'],record['tripped']),('COMPLETE',target,target,False,c,c))
+                self.assertEqual(record['arms'],['choice']if c else[])
+                self.assertEqual(G.trips(record,played)['tripped'],c);self.assertFalse(G.trips(record,2)['tripped'])   # averaging's lane 2: clear
+                response=wire(row);live_action,cause,guards,_=actor.guarded_action(response,NS(legal_action_mask=CW.T.ROOT_LEGAL),moves,greedy)
+                live_played=greedy if live_action is None else live_action
+                choices,causes=scorer.guard_choices(dict(target_argmax=played),greedy,list(moves),response['effect_guard'])
+                self.assertEqual(live_played,greedy if c else target);self.assertEqual(choices['target_argmax'],live_played)
+                self.assertEqual((guards,causes['target_argmax']),(['UNREPRESENTED_EFFECT'],['UNREPRESENTED_EFFECT'])if c else([],None))
 
 
 def world(values,*,opponent=None,logits=None):
@@ -641,6 +762,74 @@ class AveragingEquivalenceTests(unittest.TestCase):
         decision=self.check(prices,legal)
         self.assertEqual((decision['action_index'],decision['reduction_note']),(0,'REDUCTION_ERROR: ValueError: finite in-range numerical value required'))
         self.assertEqual([decision[k]for k in('completed_q','policy_target','root_value','action_mean_q','action_policy_target','mean_q_agrees')],[None]*6)
+
+    # TARGET_ARGMAX ---------------------------------------------------------------------------------------------------------------
+    def target_check(self,prices,legal,logits):
+        """decide under TARGET_ARGMAX against the default on the same root: every field but action_index the default's (plus
+        target_fallback), and (action_index, target_fallback) the RR scorer's target_argmax on the decision's own policy_target
+        and q_values as the wire carries them, with the root's legal mask and logits."""
+        from scripts import depthn_rr_score as scorer
+        blocks=[tuple(prices[2*k:2*k+2])for k in range(len(prices)//2)]
+        base=live.decide(blocks,tuple(logits),tuple(legal));mine=live.decide(blocks,tuple(logits),tuple(legal),operator=TARGET)
+        self.assertNotIn('target_fallback',base);self.assertEqual(set(mine),set(base)|{'target_fallback'})
+        self.assertEqual({k:v for k,v in mine.items()if k not in('action_index','target_fallback')},{k:v for k,v in base.items()if k!='action_index'})
+        want=scorer.target_argmax(wire(mine['policy_target']),tuple(legal),tuple(logits),wire(mine['q_values']))
+        self.assertEqual((mine['action_index'],mine['target_fallback']),want)
+        self.assertIs(scorer.target_argmax,root_ops.target_argmax);self.assertIs(scorer.argmax,root_ops.argmax)   # one definition
+        return base,mine
+
+    def test_target_argmax_is_the_scorers_function_on_random_roots(self):
+        """Random roots (every value mode, W 8 and 16, random root logits): the TARGET_ARGMAX decision is the scorer's
+        target_argmax, which with a reported target is that target's argmax (action_policy_target); ties in the target, the
+        tie-rich 'ties' mode's equal targets, go to the lowest index."""
+        rng=np.random.default_rng(20261109);overrides=ties=0
+        for mode,cases in(('f64',150),('f32',150),('terminal',150),('ties',400)):
+            for W in(8,16):
+                for case in range(cases):
+                    legal=tuple(bool(x)for x in rng.random(9)<.6)
+                    if not any(legal):legal=(True,)+legal[1:]
+                    logits=(0.,)*9 if mode=='ties'else tuple(float(x)for x in rng.normal(0,1,9))
+                    with self.subTest(mode=mode,W=W,case=case):
+                        base,mine=self.target_check([self.random_world(rng,legal,mode)for _ in range(W)],legal,logits)
+                        if mine['status']!='COMPLETE'or mine['target_fallback']:continue
+                        acts=[a for a in range(9)if legal[a]];target=mine['policy_target']
+                        self.assertEqual(mine['action_index'],mine['action_policy_target'])
+                        top=max(target[a]for a in acts);tied=[a for a in acts if target[a]==top]
+                        self.assertEqual(mine['action_index'],tied[0]);ties+=len(tied)>1;overrides+=mine['action_index']!=base['action_index']
+        self.assertGreater(ties,0);self.assertGreater(overrides,0)   # both regimes are exercised
+
+    def test_target_argmax_falls_back_on_a_missing_or_nonfinite_target_ties_included(self):
+        """No reported target (the reduction refused or raised: policy_target None) or a non-finite one on a legal action: the
+        scorer's fallback, argmax(root_logits + q), lowest index on ties."""
+        rng=np.random.default_rng(11);fallbacks=ties=0
+        with patch.object(live,'reported',return_value=dict(reduction_note='REDUCTION_REFUSED: a block reduce_completed_q refused')):
+            for mode,cases in(('f64',100),('ties',300)):
+                for case in range(cases):
+                    legal=tuple(bool(x)for x in rng.random(9)<.6)
+                    if not any(legal):legal=(True,)+legal[1:]
+                    logits=(0.,)*9 if mode=='ties'else tuple(float(x)for x in rng.normal(0,1,9))
+                    with self.subTest(mode=mode,case=case):
+                        base,mine=self.target_check([self.random_world(rng,legal,mode)for _ in range(8)],legal,logits)
+                        if mine['status']!='COMPLETE':continue
+                        self.assertTrue(mine['target_fallback']);fallbacks+=1
+                        acts=[a for a in range(9)if legal[a]];score={a:logits[a]+mine['q_values'][a]for a in acts};top=max(score.values())
+                        tied=[a for a in acts if score[a]==top];self.assertEqual(mine['action_index'],tied[0]);ties+=len(tied)>1
+        self.assertGreater(fallbacks,0);self.assertGreater(ties,0)
+        # the out-of-range block (REDUCTION_ERROR): no target, so root_logits + q decide; logits favouring action 1 override averaging's 0
+        legal=(True,True)+(False,)*7;base_worlds=[world({0:{0:.1},1:{0:.2}})for _ in range(8)]
+        wins=world({0:{0:1.,1:1.,2:1.},1:{0:0.,1:0.,2:0.}},opponent=[0,1,2],logits=[1.746,-2.561,-1.426]+[0.]*6)
+        base,mine=self.target_check([wins,wins]+base_worlds[2:],legal,(0.,5.)+(0.,)*7)
+        self.assertEqual((base['action_index'],mine['action_index'],mine['target_fallback'],mine['policy_target']),(0,1,True,None))
+        self.assertTrue(mine['reduction_note'].startswith('REDUCTION_ERROR'))
+        # a non-finite target on a legal action: the scorer's rule falls back too (such a response never passes encode)
+        from gpu_engine import d3_search_latency as latency
+        compose=latency.compose
+        nan=float('nan')   # one object, so the default's and TARGET_ARGMAX's reported targets compare equal
+        def nan_target(*a):out=compose(*a);return dict(out,policy_target=(nan,)+tuple(out['policy_target'][1:]))
+        prices=[world({0:{0:.1},1:{0:.3}})for _ in range(8)]
+        with patch.object(latency,'compose',side_effect=nan_target):base,mine=self.target_check(prices,legal,(2.,0.)+(0.,)*7)
+        self.assertEqual((base['action_index'],mine['action_index'],mine['target_fallback']),(1,0,True))   # 2 + .1 > 0 + .3
+        with self.assertRaisesRegex(ValueError,'root operator'):live.decide([tuple(prices[:2])],(0.,)*9,legal,operator='ARGMAX_POLICY_TARGET')
 
 
 if __name__=='__main__':unittest.main()

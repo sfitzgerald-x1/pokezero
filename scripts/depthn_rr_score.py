@@ -99,6 +99,8 @@ from gpu_engine import search_hedge as hedge  # noqa: E402
 from pokezero import v5_gumbel as original  # noqa: E402
 from pokezero.phase_d_owning_capture import read_capture  # noqa: E402
 from pokezero import depthn_effect_guard as effect_guard  # noqa: E402
+# argmax (lowest index on ties) and target_argmax: the live search's TARGET_ARGMAX plays this very function (one definition)
+from pokezero.depthn_root_operator import argmax, target_argmax  # noqa: E402,F401
 
 SCHEMA = 'pokezero.depthn-rr-score.v1'
 LEVEL = .90
@@ -375,11 +377,6 @@ def realized(worlds, mapped, root_legal):
 
 # ---- operators ----
 
-def argmax(values, actions):
-    """Highest value over `actions`, lowest index on ties."""
-    return max(actions, key=lambda a: (values[a], -a))
-
-
 def per_world_q(gs):
     """Q_w(a) = sum_b pi_w(b) G_w[a][b] per world: the grid's reply prior over kept replies, or the waiting column 0."""
     return [{a: math.fsum(g.prior[k] * g.values[i, k] for k in range(len(g.replies))) for i, a in enumerate(g.actions)} for g in gs]
@@ -459,14 +456,6 @@ def noise_gated(qw, chosen, greedy, k):
 def world_lcb(q, spread, kappa):
     """argmax over the legal actions of q(a) - kappa * sd_w(Q_w(a)) / sqrt(W); q is averaging's (= mean_w Q_w(a))."""
     return argmax({a: q[a] - (kappa * s if kappa else 0.) for a, s in spread.items()}, sorted(spread))
-
-
-def target_argmax(target, root_legal, root_logits, q):
-    """(the live policy_target's argmax over the legal actions, False), or (argmax of root_logits + q, True) without it."""
-    actions = [a for a in range(9) if root_legal[a]]
-    if (type(target) is list and len(target) == 9
-            and all(type(target[a]) in (int, float) and math.isfinite(target[a]) for a in actions)):return argmax(target, actions), False
-    return argmax({a: float(root_logits[a]) + q[a] for a in actions}, actions), True
 
 
 def _hedge_top(worlds, legal, lam):

@@ -737,6 +737,30 @@ class FactoryTests(unittest.TestCase):
         (decision,), _ = self.run_arm(lambda r: dict(complete(r, action=1), q_values=[.1] * 9), greedy=2, lines=[request_line(moves=BEAM)])
         self.assertEqual((decision.action_index, self.rows()[0]['guard_causes'], self.rows()[0]['source']), (1, [], 'search'))
 
+    def test_a_target_argmax_choice_guarded_by_c_alone_plays_greedy(self):
+        """screen-r4b: the server evaluates the guard's (c) on the action its root operator played (TARGET_ARGMAX here) and the
+        actor acts on the record's tripped. A real record (depthn_effect_guard.evaluate; our Counter lane's prior far under the
+        threshold, so (b) does not trip) on the searched Counter lane trips by (c) alone: greedy plays, UNREPRESENTED_EFFECT; the
+        same root's record on another action does not trip and that action plays. guarded_action is select's own rule."""
+        from pokezero import depthn_effect_guard as G
+        moves = ('counter', 'bodyslam', 'earthquake', 'rest');line = request_line(moves=moves)
+        own = dict(lanes=list(moves), logits=[-30., 0., 0., 0.] + [0.] * 5, legal=[True] * 4 + [False] * 5)
+        for search, tripped in ((0, True), (1, False)):
+            with self.subTest(search=search):
+                record = G.evaluate(G.conditions([line], 0, line), own_turn1=own, peer_turn1=[], turn2=[], choice=search)
+                self.assertEqual((record['choice'], record['b'], record['c'], record['tripped']), (search, False, tripped, tripped))
+                reply = lambda r, search=search, record=record: dict(complete(r, action=search), q_values=[.1] * 9, effect_guard=record,
+                                                                     root_operator='TARGET_ARGMAX', target_fallback=False)
+                response = reply(dict(request_id='f' * 32, rung='DN2W8'))
+                self.assertEqual(live.guarded_action(response, NS(legal_action_mask=(True,) * 9), live.own_moves(line), 2),
+                    (None, 'UNREPRESENTED_EFFECT', ['UNREPRESENTED_EFFECT'], None) if tripped else (search, None, [], None))
+                self.fresh(f'target-{search}')
+                (decision,), _ = self.run_arm(reply, greedy=2, lines=[line])
+                row, = self.rows()
+                self.assertEqual((decision.action_index, row['source'], row['cause'], row['guard_causes'], row['search']['root_operator']),
+                    (2, 'greedy_fallback', 'UNREPRESENTED_EFFECT', ['UNREPRESENTED_EFFECT'], 'TARGET_ARGMAX') if tripped
+                    else (search, 'search', None, [], 'TARGET_ARGMAX'))
+
     def test_a_complete_response_without_the_effect_guard_is_a_server_error(self):
         for name, guard in (('missing', None), ('not_bool', dict(tripped='no')), ('not_dict', [True])):
             with self.subTest(name):

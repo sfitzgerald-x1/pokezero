@@ -64,6 +64,12 @@ tree guard) on the live inputs.
     OPPONENT_RECHARGE_UNREPRESENTED has no priced worlds: the live actor plays greedy there. A scorer applies the
     live actor's own-recharge guard (recharge_guarded: never an override INTO a recharge move greedy did not choose) to
     every operator's choice against the live join's greedy_action_index with them.
+  - Root operator (--root-operator, the server's flag through the bench parser; default ARGMAX_MEAN_COMPLETED_Q): the replay
+    plays it, so replay.action_index is the live search's choice under it and the effect guard's (c) is evaluated on that
+    choice. Under a non-default operator (TARGET_ARGMAX) the row's replay also carries root_operator, root_operator_impl and
+    target_fallback (OPERATOR_FIELDS); a default row is unchanged. The run header's pricer identity records the operator.
+    Parity against a live run served under another operator compares the replay's choice with the live one (action_equal),
+    so it is expected to differ where the operators do; q_equal is unaffected.
   - Effect guard: the row's effect_guard is the replayed response's own (the live search's UNREPRESENTED_EFFECT record,
     pokezero.depthn_effect_guard, read through the pricers' observer seam in the same process_many call, so one pass gives the
     row and its turn-2 priors): tripped, b (turn 1 / turn 2: the reach M under the live rule 'reach'), m_own, m_opp, arms, the
@@ -389,9 +395,9 @@ class Capture:
     def installed(self):
         decide, prepare_roots = live.decide, cw.prepare_roots
 
-        def decide_wrapper(blocks, root_logits, root_legal):
+        def decide_wrapper(blocks, root_logits, root_legal, *arguments, **keywords):   # the root operator passes through
             self.decided.append(Decided(blocks, root_logits, root_legal))
-            return decide(blocks, root_logits, root_legal)
+            return decide(blocks, root_logits, root_legal, *arguments, **keywords)
 
         def prepare_wrapper(*arguments, **keywords):
             out = prepare_roots(*arguments, **keywords)
@@ -617,6 +623,7 @@ def describe(capture, peer_lanes, vocabulary, peer_inputs=None, key=None):
 
 REPLAY_FIELDS = ('q_values', 'completed_q', 'policy_target', 'root_value', 'action_mean_q', 'action_policy_target', 'reduction_note', 'block_causes',
     'world_refusals', 'bucket', 'batch_size', 'tree_commit', 'root_view_source', 'b2_view')
+OPERATOR_FIELDS = ('root_operator', 'root_operator_impl', 'target_fallback')   # a replay under a non-default --root-operator only
 
 
 def decision_row(cell, row, request, response, wall, found, detail, *, shard, capture_seconds, live_problem=None):
@@ -625,6 +632,7 @@ def decision_row(cell, row, request, response, wall, found, detail, *, shard, ca
     address = tuple(row[k] for k in ('battle_id', 'owner', 'stream_id', 'decision_index', 'generation', 'prefix_sha256'))
     replay = bench.record(None, cell['ordinal'], address, response, wall, request=request, turn=bench.turn_of(request['lines']))
     replay.update({k: response.get(k) for k in REPLAY_FIELDS}, request_id=response.get('request_id'))
+    if response.get('root_operator', live.ROOT_OPERATOR) != live.ROOT_OPERATOR:replay.update({k: response.get(k) for k in OPERATOR_FIELDS})
     for key in ('roster', 'ordinal', 'address'):replay.pop(key, None)
     decided = detail['root'] is not None;moves = actor.own_moves(request.get('own_request_line'))   # guard fields (module docstring)
     prepared = detail['prepared'] or {}

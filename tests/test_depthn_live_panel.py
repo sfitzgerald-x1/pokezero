@@ -89,7 +89,7 @@ PROVENANCE = dict(
 
 
 def declaration(ladder_sha256, arms=('RAW', 'DN2W8'), expected=EXPECTED, deadline=3., observable=True, ratios=RATIOS, calibration_sha='c'*64,
-                provenance=PROVENANCE, arm_fairness=None):
+                provenance=PROVENANCE, arm_fairness=None, root_operator='ARGMAX_MEAN_COMPLETED_Q'):
     return dict(schema=panel.SCHEMA, provenance=copy.deepcopy(provenance), ladder_declaration_sha256=ladder_sha256, expected_searched_share=copy.deepcopy(expected),
         foulplay_move_wall=copy.deepcopy(MOVE_WALL), actor=copy.deepcopy(ACTOR), server_tree_commit=SERVER_TREE,
         search_choice=dict(arm=arms[1], cell_commit='8'*40, evidence=[dict(path='cells/w16.json', sha256='4'*64), dict(path='out/w16-pairs.jsonl', sha256='5'*64)],
@@ -99,7 +99,7 @@ def declaration(ladder_sha256, arms=('RAW', 'DN2W8'), expected=EXPECTED, deadlin
                          seed_band=dict(CALIBRATION_BAND), floors=dict(panel.CALIBRATION_FLOORS)),
         expected_searched_share_roster=.955, checkpoint_sha256=ActorContract.champion().checkpoint_sha256,
         archive_sha256=live.CHAMPION_ARCHIVE_SHA256, arms=list(arms),
-        search={a: dict(depth=2, worlds=panel.WORLDS[a]) for a in arms[1:]}, root_operator='ARGMAX_MEAN_COMPLETED_Q',
+        search={a: dict(depth=2, worlds=panel.WORLDS[a]) for a in arms[1:]}, root_operator=root_operator,
         deadline_seconds=deadline, reserve_seconds=.15, screen_paired_cells=500, max_paired_cells=2000, confidence=.9,
         primary_comparison='SEARCH_MINUS_OUR_RAW_PAIRED_BY_CELL', bar='LOWER_BOUND_GT_0_AT_2000_FULL_ROSTER_NO_BREAKAGE',
         screen_rule=panel.SCREEN_RULE, breakage=dict(panel.BREAKAGE, latency_p95_max_seconds=deadline), matmul_precision='highest',
@@ -108,10 +108,12 @@ def declaration(ladder_sha256, arms=('RAW', 'DN2W8'), expected=EXPECTED, deadlin
         interleave=panel.INTERLEAVE, arm_fairness=dict(panel.ARM_FAIRNESS) if arm_fairness is None else copy.deepcopy(arm_fairness))
 
 
-def make_run(directory, arms=('RAW', 'DN2W8'), expected=EXPECTED, deadline=3., observable=True, ratios=RATIOS, arm_fairness=None):
+def make_run(directory, arms=('RAW', 'DN2W8'), expected=EXPECTED, deadline=3., observable=True, ratios=RATIOS, arm_fairness=None,
+             root_operator='ARGMAX_MEAN_COMPLETED_Q'):
     root = Path(directory).resolve(); inputs = root/'inputs'
     lad = ladder_fixture.declaration(); calibration = calibration_fixture(panel.sha(lad), observable=observable, ratios=ratios)
-    d = declaration(panel.sha(lad), arms, expected, deadline, observable, ratios, panel.sha(calibration), arm_fairness=arm_fairness); base = dict(BASE)
+    d = declaration(panel.sha(lad), arms, expected, deadline, observable, ratios, panel.sha(calibration), arm_fairness=arm_fairness,
+                    root_operator=root_operator); base = dict(BASE)
     for name, value in (('ladder', lad), ('declaration', d), ('base', base), ('calibration', calibration)):
         panel.write_new(inputs/f'{name}.json', value)
     run = panel.init(root/'run', declaration=inputs/'declaration.json', declaration_sha256=panel.sha(d),
@@ -372,6 +374,19 @@ class DeclarationTests(unittest.TestCase):
             with self.subTest(key=key, value=value), self.assertRaises(ValueError): panel.validate(d)
         d = declaration('a'*64); d.pop('bar')
         with self.assertRaises(ValueError): panel.validate(d)
+
+    def test_the_root_operator_is_averaging_or_target_argmax_only(self):
+        """screen-r4b: the declaration may name TARGET_ARGMAX; ARGMAX_MEAN_COMPLETED_Q validates exactly as before (screen-r3's
+        own declaration file included), and nothing else validates."""
+        for operator in ('ARGMAX_MEAN_COMPLETED_Q', 'TARGET_ARGMAX'):
+            d = declaration('a'*64, root_operator=operator); before = copy.deepcopy(d)
+            self.assertIs(panel.validate(d), d); self.assertEqual(d, before)
+        for bad in ('ARGMAX_POLICY_TARGET', 'target_argmax', 'TARGET_ARGMAX ', 'ARGMAX_MEAN_COMPLETED_Q_COMMON_ALL_RUNGS', '', None, 1, True,
+                    ['TARGET_ARGMAX'], ('TARGET_ARGMAX',), {'TARGET_ARGMAX': 1}):
+            with self.subTest(root_operator=bad), self.assertRaisesRegex(ValueError, 'declared DepthN 500/2000 paired panel'):
+                panel.validate(declaration('a'*64, root_operator=bad))
+        r3 = Path(__file__).resolve().parents[1]/'evals'/'depthn-foulplay-dn2w16-declaration-r3-20261109.json'
+        value = json.loads(r3.read_bytes()); self.assertEqual(value['root_operator'], 'ARGMAX_MEAN_COMPLETED_Q'); self.assertIs(panel.validate(value), value)
 
 
 class CellTests(unittest.TestCase):
@@ -706,6 +721,16 @@ class ProbeTests(unittest.TestCase):
         self.assertEqual((request['lines'], request['own_request_line'], request['prefix_sha256']),
                          (list(root['lines']), root['own_request_line'], root['prefix_sha256']))
 
+    def test_a_target_argmax_declaration_passes_only_on_target_argmax_responses(self):
+        root, run, d, lad = make_run(Path(self.directory.name)/'target', root_operator='TARGET_ARGMAX')
+        target = actor_tests.send(lambda r: champion_complete(r, root_operator='TARGET_ARGMAX', target_fallback=False))
+        with actor_tests.FakeServer(target) as server:
+            value = panel.probe(root, arm='DN2W8', server=dict(host='127.0.0.1', port=server.port), capture=self.capture)
+        self.assertEqual((value['status'], value['tried'][0]['root_operator']), ('PASS', 'TARGET_ARGMAX'))
+        with actor_tests.FakeServer(actor_tests.send(champion_complete)) as server, self.assertRaisesRegex(ValueError, 'root operator'):
+            panel.probe(root, arm='DN2W8', server=dict(host='127.0.0.1', port=server.port), capture=self.capture)   # an averaging server
+        with self.assertRaisesRegex(ValueError, 'probe failed'): self.probe(target)   # and a TARGET_ARGMAX server under the averaging declaration
+
     def test_the_probe_budgets_by_the_declared_deadline(self):
         root, run, d, lad = make_run(Path(self.directory.name)/'ten', deadline=10.)
         with actor_tests.FakeServer(actor_tests.send(champion_complete)) as server:
@@ -944,6 +969,18 @@ class ReadoutTests(unittest.TestCase):
         write_cell(self.root, cell, self.run['declaration_sha256'], score=1., rows=[decision_row(cell, 0, worlds=16)])
         value = self.readout()
         self.assertEqual(value['breakage'], ['requested_worlds']); self.assertEqual(value['arms']['DN2W8']['decisions']['wrong_worlds'], 1)
+
+    def test_search_provenance_holds_a_declared_target_argmax(self):
+        """A TARGET_ARGMAX declaration: responses naming it are clean provenance; one naming averaging is search_provenance breakage."""
+        directory = Path(self.directory.name)/'target'; root, run, d, lad = make_run(directory, root_operator='TARGET_ARGMAX')
+        rows = lambda operator: lambda cell: [decision_row(cell, i, source='raw_arm' if cell['arm'] == 'RAW' else 'search', differs=i == 0,
+                                                           worlds=panel.WORLDS.get(cell['arm']), operator=operator) for i in range(2)]
+        populate(root, run, lad, rows_for=rows('TARGET_ARGMAX'))
+        value = panel.readout(root, arm='DN2W8', limit=500)
+        self.assertEqual((value['breakage'], value['arms']['DN2W8']['decisions']['provenance']['root_operator']), ([], ['TARGET_ARGMAX']))
+        cell = panel.cells(lad, 'DN2W8', limit=500)[0]
+        write_cell(root, cell, run['declaration_sha256'], score=1., rows=[decision_row(cell, 0)])   # an averaging response
+        self.assertEqual(panel.readout(root, arm='DN2W8', limit=500)['breakage'], ['search_provenance'])
 
     def test_a_dead_or_failing_server_is_breakage(self):
         def rows(cause):
