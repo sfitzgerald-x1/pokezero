@@ -145,6 +145,7 @@ KEYS={'schema','ladder_declaration_sha256','checkpoint_sha256','archive_sha256',
       'expected_searched_share','expected_searched_share_roster','matmul_precision','screen_latency_rule','bench_p95_wall_seconds',
       'bench_source','server_processes_per_gpu','interleave','arm_fairness','worker_lanes','fairness_observable','calibration','provenance',
       'search_choice','foulplay_move_wall','actor','server_tree_commit'}
+ROOT_OPERATORS=('ARGMAX_MEAN_COMPLETED_Q','NOISE_GATED_K2')   # depthn_live_search.ROOT_OPERATORS: the declarable live root operators
 REPLY_PRIOR_KEYS={'archive_sha256','checkpoint_sha256','view','peer_view_b','union_guard'}   # optional: a br_fp screen's reply model
 ACTOR_KEYS={'cells_per_worker','warmup_decisions','search_overlaps_greedy','warm_p95_seconds','preflight_search_wall_p95_seconds','source'}
 SEARCH_CHOICE_KEYS={'arm','cell_commit','evidence','summary'}
@@ -173,7 +174,7 @@ def validate(declaration):
             or d['checkpoint_sha256']!=ActorContract.champion().checkpoint_sha256 or d['archive_sha256']!=CHAMPION_ARCHIVE_SHA256
             or type(arms)is not list or len(arms)!=2 or arms[0]!='RAW'or arms[1]not in SEARCH_ARMS
             or d['search']!={a:dict(depth=2,worlds=WORLDS[a])for a in arms[1:]}
-            or d['root_operator']!='ARGMAX_MEAN_COMPLETED_Q'or type(d['deadline_seconds'])is not float
+            or d['root_operator']not in ROOT_OPERATORS or type(d['deadline_seconds'])is not float
             or d['deadline_seconds']not in DEADLINES or d['reserve_seconds']!=.15
             or d['screen_paired_cells']!=500 or d['max_paired_cells']!=2000 or d['confidence']!=.9
             or d['primary_comparison']!='SEARCH_MINUS_OUR_RAW_PAIRED_BY_CELL'

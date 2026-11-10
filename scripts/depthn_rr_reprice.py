@@ -733,6 +733,7 @@ def decision_row(cell, row, request, response, wall, found, detail, *, shard, ca
     address = tuple(row[k] for k in ('battle_id', 'owner', 'stream_id', 'decision_index', 'generation', 'prefix_sha256'))
     replay = bench.record(None, cell['ordinal'], address, response, wall, request=request, turn=bench.turn_of(request['lines']))
     replay.update({k: response.get(k) for k in REPLAY_FIELDS}, request_id=response.get('request_id'))
+    if 'noise_gate' in response:replay.update(root_operator=response.get('root_operator'), noise_gate=response['noise_gate'])   # NOISE_GATED_K2 only
     for key in ('roster', 'ordinal', 'address'):replay.pop(key, None)
     decided = detail['root'] is not None;moves = actor.own_moves(request.get('own_request_line'))   # guard fields (module docstring)
     prepared = detail['prepared'] or {}
