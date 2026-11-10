@@ -661,6 +661,7 @@ class EndToEndTests(unittest.TestCase):
         self.assertEqual((len(first['mapped_worlds']), first['parity']['match']), (16, True))
         self.assertEqual(set(first['operators']), set(S.SETTINGS))
         self.assertEqual(first['operators']['target_argmax']['choice'], 4)
+        self.assertEqual((first['target_source'], cover['target_sources']), ('live_telemetry', {'live_telemetry': 6}))   # the rows carry no replay target
         self.assertEqual((forced['reply']['kind'], len(forced['mapped_worlds'])), ('wait', 16))
         self.assertIsNone(decisions[3]['parity'])
         text = (out / 'summary.md').read_text()
@@ -673,6 +674,33 @@ class EndToEndTests(unittest.TestCase):
         self.assertIsNone(cover['external_prior']);self.assertNotIn('external_br', first['operators'])
         self.assertEqual(summary['metrics']['pi_filled']['all']['operators']['tempered:T=inf']['decisions'], 6)
         with self.assertRaises(FileExistsError):S.score_run([str(path)], str(run), str(out))
+
+    def test_the_re_priced_rows_target_wins_over_the_live_telemetry(self):
+        run = self.root / 'run'
+        for sub in ('results', 'telemetry', 'owning-wire'):(run / sub).mkdir(parents=True)
+        rows = self.rows(run, random.Random(11))
+        for r in rows:   # the re-priced search's own target: all mass on the lowest legal lane, unlike the telemetry's lane 4
+            legal = (r.get('root') or {}).get('root_legal')
+            if legal:r['replay']['policy_target'] = [1. if a == legal.index(True) else 0. for a in range(9)]
+        path = self.root / 'rows-0.jsonl';path.write_text(''.join(json.dumps(r) + '\n' for r in rows))
+        out = self.root / 'out'
+        with redirect_stdout(io.StringIO()):S.main(['--rows', str(path), '--run-directory', str(run), '--out', str(out)])
+        cover = json.loads((out / 'summary.json').read_text())['coverage'];self.assertEqual(cover['target_sources'], {'replay': 6})
+        first = json.loads((out / 'decisions.jsonl').read_text().splitlines()[0])
+        self.assertEqual(first['target_source'], 'replay')
+        op = first['operators']['target_argmax'];self.assertEqual(op.get('raw_choice', op['choice']), rows[0]['root']['root_legal'].index(True))
+
+    def test_row_policy_target_prefers_a_valid_replay_target(self):
+        legal = [True, True, False] + [False] * 6
+        class Run:
+            def policy_target(self, ordinal, index):return [.3, .7] + [0.] * 7
+        good = dict(replay_policy_target=[.9, .1] + [0.] * 7, root_legal=legal)
+        self.assertEqual(S.row_policy_target(good, Run(), 0, 0), ([.9, .1] + [0.] * 7, 'replay'))
+        for bad in (None, [.9] * 8, [float('nan'), .1] + [0.] * 7, 'x'):
+            self.assertEqual(S.row_policy_target(dict(replay_policy_target=bad, root_legal=legal), Run(), 0, 0), ([.3, .7] + [0.] * 7, 'live_telemetry'))
+        class Missing:
+            def policy_target(self, ordinal, index):return None
+        self.assertEqual(S.row_policy_target(dict(replay_policy_target=None, root_legal=legal), Missing(), 0, 0), (None, 'missing'))
 
     def test_main_with_reply_prior(self):
         run = self.root / 'run'

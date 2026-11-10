@@ -1,8 +1,9 @@
 """RR (realized-reply re-pricing): score every searched DN2W16 decision against Foul Play's actual reply. CPU only.
 
 Inputs: the re-pricer's rows (scripts/depthn_rr_reprice.py; one JSON line per decision sent to the server, with its 16
-re-priced depth-2 worlds) and the live run directory (results/<ordinal>.json: cell.seed and cell.arm;
-telemetry/<ordinal>.jsonl: search.policy_target by decision_index; owning-wire/<ordinal>.jsonl: the owner's capture).
+re-priced depth-2 worlds; replay.policy_target, the re-priced search's own target) and the live run directory
+(results/<ordinal>.json: cell.seed and cell.arm; telemetry/<ordinal>.jsonl: search.policy_target by decision_index, used only for
+rows whose replay carries no target; owning-wire/<ordinal>.jsonl: the owner's capture).
 Output: --out, a new directory holding summary.json, summary.md and decisions.jsonl. Needs numpy and scipy (bayes_hedge's
 HiGHS LP and the t quantile); importing gpu_engine.search_hedge and pokezero.v5_gumbel pulls in no JAX.
 
@@ -40,7 +41,8 @@ Scorings: dropped (censored and unmapped decisions excluded) and pi_filled (thos
 q(a) = sum_w 1/16 sum_b pi_w(b) G_w[a][b]). A decision is scored when its replay is COMPLETE, every world is priced for
 every legal action against every kept reply, and the live greedy action is legal. Operators on the same grids: greedy
 (live), averaging, bayes_hedge lam 0 and 0.5, prior_regularized c, noise_gated k, world_lcb kappa, target_argmax (the
-live policy_target; argmax of root_logits + q, the same target, when it is missing), tempered T (2, 4, inf: averaging with
+re-priced row's replay.policy_target, else the live telemetry's (target_source records which); argmax of root_logits + q,
+the same target, when both are missing), tempered T (2, 4, inf: averaging with
 pi_w^T = softmax(root_peer_logits / T) over the kept lanes, T = inf uniform; a waiting world keeps column 0 at mass 1).
 D = R(op) - R(greedy), 0 when op is
 greedy. noise_gated plays averaging's a* only when a* != greedy and mean_w gap > k sd_w(gap) / sqrt(W), gap_w =
@@ -182,7 +184,7 @@ ROW_FIELDS = dict(
     greedy_action=('live', 'greedy_action_index'), request_kind=('live', 'request_kind'), turn=('live', 'turn'),
     played_action=('live', 'played_action_index'),
     live_cause=('live', 'cause'), replay_status=('replay', 'status'), replay_cause=('replay', 'cause'),
-    replay_action=('replay', 'action_index'), replay_q=('replay', 'q_values'),
+    replay_action=('replay', 'action_index'), replay_q=('replay', 'q_values'), replay_policy_target=('replay', 'policy_target'),
     action_equal=('parity', 'action_equal'), q_equal=('parity', 'q_equal'),
     root_logits=('root', 'root_logits'), root_legal=('root', 'root_legal'), worlds=('worlds',),
     own_moves=('root', 'own_moves'), refusal_cause=('root', 'refusal_cause'), effect_guard=('effect_guard',))
@@ -509,11 +511,26 @@ def world_lcb(q, spread, kappa):
 
 
 def target_argmax(target, root_legal, root_logits, q):
-    """(the live policy_target's argmax over the legal actions, False), or (argmax of root_logits + q, True) without it."""
+    """(the policy_target's argmax over the legal actions, False), or (argmax of root_logits + q, True) without it."""
     actions = [a for a in range(9) if root_legal[a]]
     if (type(target) is list and len(target) == 9
             and all(type(target[a]) in (int, float) and math.isfinite(target[a]) for a in actions)):return argmax(target, actions), False
     return argmax({a: float(root_logits[a]) + q[a] for a in actions}, actions), True
+
+
+def valid_target(target, root_legal):
+    """A policy target usable by target_argmax: 9 finite numbers on the legal actions."""
+    return (type(target) is list and len(target) == 9 and type(root_legal) is list and len(root_legal) == 9
+            and all(type(target[a]) in (int, float) and math.isfinite(target[a]) for a in range(9) if root_legal[a]))
+
+
+def row_policy_target(decision, run, ordinal, index):
+    """(the target target_argmax uses, its source): the re-priced row's replay.policy_target (the search that was re-priced, the
+    same one whose q the other operators use), else the live run's telemetry search.policy_target (a row without one; on a
+    re-pricing of a modified tree that target belongs to the live tree, not the re-priced one), else (None, 'missing')."""
+    if valid_target(decision.get('replay_policy_target'), decision.get('root_legal')):return list(decision['replay_policy_target']), 'replay'
+    live = run.policy_target(ordinal, index)
+    return (live, 'live_telemetry') if live is not None else (None, 'missing')
 
 
 def _hedge_top(worlds, legal, lam):
@@ -1012,7 +1029,7 @@ class Coverage:
         self.greedy_disagree = [];self.replies = collections.Counter();self.details = collections.Counter()
         self.kind = collections.defaultdict(lambda: collections.Counter());self.causes = collections.Counter()
         self.unmapped = 0;self.mapped_hist = collections.Counter();self.drops = collections.Counter()
-        self.target_fallbacks = 0;self.failures = collections.Counter();self.no_half = 0;self.seen = set()
+        self.target_fallbacks = 0;self.target_sources = collections.Counter();self.failures = collections.Counter();self.no_half = 0;self.seen = set()
         self.external = None   # with --reply-prior: Counter(decisions, missing_decisions, missing_worlds)
         self.opponent_recharge = 0   # rows refused OPPONENT_RECHARGE_UNREPRESENTED: no priced worlds, greedy plays (D = 0), never scored
         self.definitive = False;self.effective_worlds = [];self.max_weights = []   # the definitive set's world-weight diagnostics
@@ -1054,7 +1071,8 @@ class Coverage:
             unmapped=dict(count=self.unmapped, share=share(self.unmapped, scored)),
             mapped_worlds=dict(note='uncensored decisions: the number of worlds b_FP maps into',
                                histogram={str(k): self.mapped_hist[k] for k in sorted(self.mapped_hist)}),
-            world_drop_reasons=dict(self.drops), target_argmax_fallbacks=self.target_fallbacks, operator_failures=dict(self.failures),
+            world_drop_reasons=dict(self.drops), target_argmax_fallbacks=self.target_fallbacks, target_sources=dict(self.target_sources),
+            operator_failures=dict(self.failures),
             halves=dict(even=dict(battles=battles['even'], decisions=sum(r['half'] == 'even' for r in records)),
                         odd=dict(battles=battles['odd'], decisions=sum(r['half'] == 'odd' for r in records)), no_seed=self.no_half),
             fp_requested=dict(note="decisions whose reply is not 'wait'", decisions=sum(r['fp_requested'] for r in records)),
@@ -1118,7 +1136,8 @@ def process(decision, run, coverage, prior=None, parity_mode='live', weights=Non
     external = None if prior is None or definitive else prior.get((ordinal, index), {})
     model = None if not definitive else dict(prior=None if prior is None else prior.get((ordinal, index)),
                                              weights=None if weights is None else weights.get((ordinal, index)))
-    try:scored = score_decision(decision, reply, run.policy_target(ordinal, index), coverage.failures, base, external, model)
+    target, target_source = row_policy_target(decision, run, ordinal, index);coverage.target_sources[target_source] += 1
+    try:scored = score_decision(decision, reply, target, coverage.failures, base, external, model)
     except Unscorable as error:
         coverage.excluded[error.reason] += 1
         return dict(address, scored=False, reason=error.reason), None
@@ -1136,7 +1155,7 @@ def process(decision, run, coverage, prior=None, parity_mode='live', weights=Non
     if external is not None:
         missing = scored['external_missing_worlds']
         coverage.external['decisions'] += 1;coverage.external['missing_decisions'] += bool(missing);coverage.external['missing_worlds'] += len(missing)
-    entry = dict(address, scored=True, reply=dict(kind=reply.kind, id=reply.id, cause=reply.cause, detail=reply.detail),
+    entry = dict(address, scored=True, target_source=target_source, reply=dict(kind=reply.kind, id=reply.id, cause=reply.cause, detail=reply.detail),
                  censored=reply.cause is not None, unmapped=scored['unmapped'], observed=scored['observed'],
                  mapped_worlds=scored['mapped_worlds'], world_drops={str(k): v for k, v in scored['world_drops'].items()},
                  live_action=decision['live_action'], averaging_action=chosen, greedy_action=decision['greedy_action'],
@@ -1263,6 +1282,7 @@ def markdown(summary):
             f"| censored | {cover['censored']['count']} ({_pct(cover['censored']['share'])}) |",
             f"| unmapped | {cover['unmapped']['count']} ({_pct(cover['unmapped']['share'])}) |",
             f"| replies | {cover['replies']} |", f"| target_argmax fallbacks | {cover['target_argmax_fallbacks']} |",
+            f"| target_argmax target source (replay = the re-priced search's; live_telemetry = the live tree's) | {cover['target_sources']} |",
             f"| operator failures | {cover['operator_failures']} |", f"| halves | {cover['halves']} |", '',
             '| censored by request_kind | decisions | censored | share |', '|---|---|---|---|']
     out += [f"| {k} | {c['decisions']} | {c['censored']} | {_pct(c['share'])} |" for k, c in cover['censored']['by_request_kind'].items()]
