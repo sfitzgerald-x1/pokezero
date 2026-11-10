@@ -34,7 +34,7 @@ def from_metadata(metadata):
         flag("species",{"cubone","marowak"}),flag("species",{"pikachu"}),
         flag("items",{"souldew"}),flag("species",{"latias","latios"}),
         jnp.asarray([{"liechiberry":0,"petayaberry":2,"salacberry":4}.get(name,-1) for name in vocab["items"]]),
-        flag("moves",{"knockoff"}),
+        jnp.asarray([name=="knockoff" for name in vocab.get("moves",["_none"])]),
         jnp.asarray([name=="stickyhold" for name in vocab.get("abilities",["_none"])]))
 
 
