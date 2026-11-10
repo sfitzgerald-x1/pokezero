@@ -9,7 +9,9 @@ seed) have none, so this module writes them the way the collection did:
   capture-only stub whose choice is never used) wrapped by phase_d_owning_capture.capture_actor inside capture_to, so every
   WIRE and ROOT row is the capture module's own;
 - at each of our decisions (every actionable own request, as the live actor decides) the actor's B2 observation (what its owning
-  backend encoded from the wire) is compared with env.observe(ours), field by field;
+  backend encoded from the wire) is compared with env.observe(ours) cell by cell; env.observe encodes the omniscient log, so the
+  known redactions differ (known_difference: opponent HP and damage at the public percent, an opponent ability revealed only by
+  [silent] lines, float32 rounding) and everything else counts as unexplained;
 - the replay stops at the root (our target-th decision), whose legal actions and champion probabilities must equal the bank row's.
 
 usage: python -m gpu_engine.mc_ladder_captures BANK_DIR OUT_DIR --collection DIR --checkpoint CHAMPION.pt [--sample N] [--seed S]
@@ -62,14 +64,37 @@ def owning_env(base, result):
         feature_masks=feature_masks_from_model_config(result.model_config), set_belief_source=bool(base['belief_set_source'])))
 
 
+# The known differences between the owner's wire (the B2 observation) and env.observe, which encodes the omniscient log with our
+# own request: (v4 physical numeric index, token range, rule). Tokens: 0 field, 1-6 our side (1 the active), 7-12 the opponent's.
+SELF_TOKENS, OPP_TOKENS = range(1, 7), range(7, 13)
+HP_FRACTION, LAST_DAMAGE_DEALT, LAST_DAMAGE_TAKEN, REVEALED_ABILITY = 0, 38, 39, 48
+PRECISION = 1e-6   # B2 numeric features are float32, env.observe's float64
+
+
+def known_difference(token, feature, b2, env_value):
+    """The known redaction a differing numeric cell belongs to, or None."""
+    if abs(b2 - env_value) <= PRECISION:return 'float32'
+    if token in OPP_TOKENS and feature in (HP_FRACTION, LAST_DAMAGE_TAKEN):return 'opponent_hp_public_percent'
+    if token in SELF_TOKENS and feature == LAST_DAMAGE_DEALT:return 'damage_dealt_public_percent'
+    if token in OPP_TOKENS and feature == REVEALED_ABILITY and b2 == 0. and env_value == 1.:return 'silent_ability_reveal'
+    return None
+
+
 def compare(a, b):
-    """Fields where two observations differ, with the largest numeric difference."""
-    out = {}
+    """How the B2 observation `a` differs from env.observe `b`: per known redaction class the cell count, and every other
+    difference (non-numeric fields, or numeric cells outside the known classes) under 'unexplained'."""
+    out, unexplained = {}, {}
     for name in FIELDS:
         x, y = np.asarray(getattr(a, name)), np.asarray(getattr(b, name))
-        if x.shape != y.shape:out[name] = f'shape {x.shape} != {y.shape}';continue
-        if not np.array_equal(x, y):
-            out[name] = dict(cells=int(np.sum(x != y)), max_abs=float(np.max(np.abs(x.astype(float) - y.astype(float)))))
+        if x.shape != y.shape:unexplained[name] = f'shape {x.shape} != {y.shape}';continue
+        if np.array_equal(x, y):continue
+        if name != 'numeric_features':unexplained[name] = int(np.sum(x != y));continue
+        x, y = x.astype(float), y.astype(float)
+        for t, f in zip(*np.nonzero(x != y)):
+            kind = known_difference(int(t), int(f), x[t, f], y[t, f])
+            if kind is None:unexplained.setdefault('numeric_features', []).append([int(t), int(f), float(x[t, f]), float(y[t, f])])
+            else:out[kind] = out.get(kind, 0) + 1
+    if unexplained:out['unexplained'] = unexplained
     return out
 
 
@@ -109,8 +134,12 @@ def capture_self_root(env, champion, out_dir, row, ordinal):
             obs = [env.observe(p) for p in requested];probs = champion.probabilities(obs)
             actions = {p: sample(probs[i], legal_of(o), draw(seed, 10**6, ply, i)) for i, (p, o) in enumerate(zip(requested, obs))}
             count += ours in requested;env.step(actions);ply += 1
-    return dict(ordinal=ordinal, seed=seed, ours=ours, target=target, decisions=len(checks),
-                mismatched=[c for c in checks if c['diff']], root=root)
+    known = {}
+    for c in checks:
+        for kind, n in c['diff'].items():
+            if kind != 'unexplained':known[kind] = known.get(kind, 0) + n
+    return dict(ordinal=ordinal, seed=seed, ours=ours, target=target, decisions=len(checks), known=known,
+                mismatched=[c for c in checks if 'unexplained' in c['diff']], root=root)
 
 
 def main(argv=None):
@@ -145,7 +174,8 @@ def main(argv=None):
                    decisions=sum(r['decisions'] for r in decided),
                    decisions_mismatched=sum(len(r['mismatched']) for r in decided),
                    roots_with_a_mismatch=sum(bool(r['mismatched']) for r in decided),
-                   mismatched_fields=sorted({f for r in decided for c in r['mismatched'] for f in c['diff']}),
+                   known_cells={k: sum(r['known'].get(k, 0) for r in decided) for k in sorted({k for r in decided for k in r['known']})},
+                   unexplained_fields=sorted({f for r in decided for c in r['mismatched'] for f in c['diff']['unexplained']}),
                    roots_matching_bank=sum(bool(r['root'] and r['root']['actions_equal'] and r['root']['policy_max_abs'] < 1e-6) for r in decided),
                    declaration_sha256=DECLARATION, results=results)
     (out / 'validation.json').write_text(json.dumps(summary, indent=1) + '\n')
