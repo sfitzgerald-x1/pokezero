@@ -417,7 +417,8 @@ class DepthNLiveSearch:
             if reply is not None:
                 decision['reply_prior']=reply;self.reply_completed+=decision['status']=='COMPLETE'
             if decision['status']=='COMPLETE':decision['effect_guard']=self._effect_guard(frame,root,made,by_id[root['request_id']],children,seam_notes,
-                decision['action_index'],labels)
+                decision['action_index'],labels,reply_logits=None if reply is None else[None if w is None or not w.opponent_requested else
+                    w.opponent_logits for pair in blocks for w in pair])   # br_fp: the union guard on the reply model's logits
             results.append(dict(base,**decision))
         t_reduce=time.perf_counter();decided=self.clock()-started
         if len(prepared)!=len(todo)or len(results)!=len(todo)or any(r['request_id']!=p['request_id']for r,(_,p,_)in zip(results,todo)):
@@ -438,13 +439,13 @@ class DepthNLiveSearch:
             else:out[i]=dict(base,cause=refusal_cause(result['refusal']),refusal=result['refusal'])
         return out
 
-    def _effect_guard(self,frame,root,made,request,children,notes,choice,labels):
+    def _effect_guard(self,frame,root,made,request,children,notes,choice,labels,reply_logits=None):
         """The root's effect guard record (depthn_guard_inputs.effect_record over this frame's observed P1 children); the
         fail-closed error record when its inputs cannot be read (pokezero.depthn_effect_guard.error_record)."""
         try:
             pairs=made.worlds.pairs;worlds=[w for r in root['rows']for w in pairs[r]];owner={'p1':0,'p2':1}[request['owner']]
             return guard_inputs.effect_record(frame,root,worlds,children,request,owner,self.constructor.metadata['vocabulary'],choice,labels=labels,
-                notes=notes)
+                notes=notes,reply_logits=reply_logits)
         except FATAL:raise
         except Exception as error:return effect_guard.error_record(f'{type(error).__name__}: {error}')
 

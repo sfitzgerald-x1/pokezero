@@ -532,6 +532,10 @@ class ReplyPriorTests(unittest.TestCase):
             if b['status'] == 'COMPLETE':
                 self.assertEqual((b['reply_prior']['operator'], b['reply_prior']['champion_action_index'], b['reply_prior']['champion_q_values']),
                                  ('br_fp', a['action_index'], a['q_values']))
+                # the union guard: the reply model is the champion, so both arms agree and the record is the plain search's
+                union = b['effect_guard']['union'];self.assertEqual(union['champion'], union['reply'])
+                self.assertEqual({k: v for k, v in b['effect_guard'].items() if k != 'union'}, a['effect_guard'])
+                self.assertNotIn('union', a['effect_guard'])
             else:self.assertIsNone(b['reply_prior'])
 
     def test_another_reply_model_plays_averaging_on_its_logits(self):

@@ -78,15 +78,60 @@ class SeamTests(unittest.TestCase):
         broken = self.make(gi.ObservedDepthNPricer, labels=lambda states: 1 / 0);_, frame_broken, (none, why) = self.price(broken, observe=True)
         self.cw.assert_frames_equal(reference, frame_broken);self.assertEqual((none, why[0][:30]), ([], 'P1 children: ZeroDivisionError'))
 
-    def record(self, labels, *, children=None, choice=None, lines=(), request_line=None, entry=('A', 'test', None), found_out=None, modes=None):
+    def record(self, labels, *, children=None, choice=None, lines=(), request_line=None, entry=('A', 'test', None), found_out=None, modes=None,
+               reply=None, edit=None):
         pricer = self.make(gi.ObservedDepthNPricer, labels=labels);b, frame, (found, notes) = self.price(pricer, observe=True, modes=modes)
+        if edit is not None:frame = edit(frame)
         if found_out is not None:found_out.extend(found)
         root = b.roots[0];worlds = [w for r in root['rows'] for w in b.worlds.pairs[r]]
         request = dict(lines=list(lines), own_request_line=request_line)
         with ExitStack() as stack:   # surf guarded (tier A) for the test: the fixture pool has no guarded move
             stack.enter_context(patch.dict(G.GUARDED, surf=entry));stack.enter_context(patch.object(G, 'WATCHED', G.WATCHED | {'surf'}))
             return gi.effect_record(frame, root, worlds, found if children is None else children, request, 0, self.cw.metadata['vocabulary'], choice,
-                labels=labels, notes=notes), frame, root
+                labels=labels, notes=notes, reply_logits=None if reply is None else reply(frame, root)), frame, root
+
+    @staticmethod
+    def champion_reply(frame, root, lane=None, high=50.):
+        """Per world in block order: the frame's own peer logits for a requested world (None when waiting); with `lane`, that
+        lane's logit raised to `high` (the reply model puts its mass there)."""
+        out = []
+        for r in root['rows']:
+            for jw in (0, 1):
+                if not bool(frame.root_peer_requested[r, jw]):out.append(None);continue
+                logits = [float(x) for x in frame.root_peer_logits[r, jw]]
+                if lane is not None:logits[lane] = high
+                out.append(logits)
+        return out
+
+    def test_the_union_guard_is_the_champion_record_when_the_reply_model_is_the_champion(self):
+        plain, frame, root = self.record(fake_labels)
+        union, _, _ = self.record(fake_labels, reply=self.champion_reply)
+        self.assertEqual(union['union']['champion'], union['union']['reply']);self.assertEqual(union['tripped'], plain['tripped'])
+        self.assertEqual({k: v for k, v in union.items() if k != 'union'}, plain)   # every champion field unchanged
+        clear, _, _ = self.record(lambda s: fake_labels(s, peer_moves=(TACKLE, REST, PROTECT, 0)), reply=self.champion_reply)
+        self.assertEqual((clear['tripped'], clear['union']['tripped']), (False, False))
+        with self.assertRaisesRegex(ValueError, 'reply logits for'):self.record(fake_labels, reply=lambda f, r:self.champion_reply(f, r)[:-1])
+
+    def test_a_reply_model_moving_turn_1_peer_mass_onto_a_guarded_move_trips_the_union_only(self):
+        """Surf on the peer's lane 1 (a legal lane of the fixture's peer) at the roots only (no turn-2 child knows it), and the
+        champion's turn-1 logit on lane 1 lowered to -50 in every world: the champion's record stays clear; a reply model raising
+        lane 1 trips the union only."""
+        lane = 1
+        def roots_only(states):
+            out = fake_labels(states, peer_moves=(TACKLE, SURF, PROTECT, 0))
+            if out['moves'].shape[0] > 16:out['moves'][:, 1] = (TACKLE, REST, PROTECT, 0)   # the children: no Surf
+            return out
+        def lowered(frame):
+            logits = np.array(frame.root_peer_logits, np.float32);logits[..., lane] = -50.
+            return replace(frame, root_peer_logits=logits)
+        champion, frame, root = self.record(roots_only, edit=lowered)
+        self.assertTrue(any(bool(frame.root_peer_legal[r, jw][lane]) and bool(frame.root_peer_requested[r, jw]) for r in root['rows'] for jw in (0, 1)))
+        self.assertEqual((champion['tripped'], champion['b_turn1']), (False, False))
+        union, _, _ = self.record(roots_only, edit=lowered, reply=lambda f, r:self.champion_reply(f, r, lane))
+        self.assertEqual((union['tripped'], union['union']['champion']['tripped'], union['union']['reply']['tripped']), (True, False, True))
+        self.assertTrue(union['union']['reply']['b_turn1']);self.assertEqual(union['b_turn1'], False)   # the record's own fields: the champion's
+        lowered_reply, _, _ = self.record(roots_only, edit=lowered, reply=lambda f, r:self.champion_reply(f, r, lane, high=-50.))
+        self.assertEqual((lowered_reply['tripped'], lowered_reply['union']['reply']['tripped']), (False, False))
 
     def test_the_peers_turn_1_and_turn_2_priors_trip_the_guard(self):
         record, frame, root = self.record(fake_labels)
