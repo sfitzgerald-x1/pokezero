@@ -40,9 +40,10 @@ def replay_root(env, row, champion, collection, fpd):
     return bool(ok) and [int(a) for a in np.flatnonzero(L.legal_of(env.observe(row['ours'])))] == row['actions']
 
 
-def label(env, row, champion, draws, post_turn):
+def label(env, snapshot, row, champion, draws, post_turn):
+    """depth1_baseline at the bank row's root from `snapshot` (taken right after the replay: every child restores it)."""
     from gpu_engine import mc_root_labeller as L
-    ours = row['ours'];snapshot = env.snapshot()
+    ours = row['ours']
     root = dict(ours=ours, opp={'p1': 'p2', 'p2': 'p1'}[ours], actions=row['actions'], root_seed=row['root_seed'], opp_policy=row.get('opp_policy'))
     return L.depth1_baseline(env, snapshot, root, dict(ours=champion, opp=champion), draws, post_turn=post_turn)
 
@@ -69,9 +70,10 @@ def main(argv=None):
                 counts['roots'] += 1
                 try:
                     if not replay_root(env, row, champion, collection, fpd):counts['not_replayed'] += 1;continue
-                    b = label(env, row, champion, args.draws, post_turn=True)
+                    snapshot = env.snapshot()   # the root, once: both estimators restore it for every child
+                    b = label(env, snapshot, row, champion, args.draws, post_turn=True)
                     if i < args.check_r0:   # R0 again on the same replay: the bank's completed_q, to the 6-decimal policy
-                        b0 = label(env, row, champion, args.draws, post_turn=False);counts['r0_checked'] += 1
+                        b0 = label(env, snapshot, row, champion, args.draws, post_turn=False);counts['r0_checked'] += 1
                         counts['r0_max_abs'] = max(counts['r0_max_abs'], float(np.max(np.abs(np.asarray(b0['completed_q']) - np.asarray(row['baseline']['completed_q'])))))
                 except Exception as error:
                     counts['errors'] += 1;print(json.dumps(dict(error=f'{type(error).__name__}: {error}'[:300], kind=row['kind'], seed=row['seed'])), flush=True);continue
