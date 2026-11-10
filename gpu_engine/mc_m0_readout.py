@@ -19,6 +19,7 @@ def readout(directory):
     for i,r in ready.items():
         if not 0<=i<50 or any(r.get(k)!=v for k,v in config['roots'][i].items()):raise ValueError('prepared roster differs')
     stages=collections.defaultdict(list);done=collections.defaultdict(set)
+    phase_path=root/'execution-phases.json';phases=json.loads(phase_path.read_bytes()) if phase_path.exists() else None
     for path in sorted(root.glob('root-*.json')):
         row=json.loads(path.read_bytes());i=row['index'];k=row['K']
         if i not in ready or row['root']!=ready[i]:raise ValueError('unbound root result')
@@ -27,13 +28,15 @@ def readout(directory):
         for n in (64,256):
             if n<=k and row['pairs'][str(n)]!=pair_stats(row['outcomes'],row['statuses'],n):
                 raise ValueError('stored pair diagnostics differ from raw outcomes')
-        done[k].add(i);stages[(row['root']['kind'],k)].append(row)
+        phase=phases.get(f'{i}:{k}') if phases is not None else 'original_single_worker'
+        if phase not in ('original_single_worker','concurrent_partitions'):raise ValueError('missing/invalid execution phase')
+        done[k].add(i);stages[(row['root']['kind'],k,phase)].append(row)
     summaries=[]
-    for (kind,k),rows in sorted(stages.items()):
+    for (kind,k,phase),rows in sorted(stages.items()):
         rollouts=sum(len(r['root']['actions'])*k for r in rows)
         counts=collections.Counter(s for r in rows for action in r['statuses'] for s in action)
         if sum(counts.values())!=rollouts:raise ValueError('outcome denominator differs')
-        entry=dict(kind=kind,mode=rows[0]['mode'],K=k,roots=len(rows),rollouts=rollouts,statuses=dict(counts),
+        entry=dict(kind=kind,mode=rows[0]['mode'],execution_phase=phase,K=k,roots=len(rows),rollouts=rollouts,statuses=dict(counts),
                    cpu_seconds=sum(r['cpu_seconds'] for r in rows),wall_seconds=sum(r['wall_seconds'] for r in rows))
         entry.update(cpu_seconds_per_rollout=entry['cpu_seconds']/rollouts,
                      wall_seconds_per_root=entry['wall_seconds']/len(rows))

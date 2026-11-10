@@ -6,6 +6,7 @@ index has no live owner before launching it. Original results stay intact.
 """
 import argparse
 import json
+import os
 from pathlib import Path
 import time
 
@@ -43,11 +44,38 @@ def require_same_root(frozen, reconstructed, root):
         raise ValueError('root or source inputs differ from frozen qualified preparation')
 
 
+def validate_dispatch(plan,indices,worker,manifest):
+    if plan['config_sha256']!=manifest['config_sha256'] or plan['core_sha256']!=manifest['source_sha256']:
+        raise ValueError('dispatch plan is not bound to qualified inputs')
+    if not 0<=worker<len(plan['groups']) or list(indices)!=plan['groups'][worker]:raise ValueError('worker assignment differs')
+    flat=[i for group in plan['groups'] for i in group]
+    if any(type(i) is not int or not 0<=i<50 for i in flat) or len(flat)!=len(set(flat)):
+        raise ValueError('overlapping or invalid root assignments')
+    retained={i for i in range(50) if all(f'{i}:{k}' in plan['reuse'] for k in (64,256))}
+    if retained & set(flat) or retained | set(flat)!=set(range(50)):
+        raise ValueError('dispatch must cover exactly the unfinished frozen roots')
+    if plan['serial_release']['status']!='CONTROLLED_HANDOFF_AFTER_COMPLETE_ROOT':raise ValueError('serial release not certified')
+
+
 def main(argv=None):
     p=argparse.ArgumentParser(description=__doc__);p.add_argument('--qualified-run',required=True)
     p.add_argument('--indices',required=True);p.add_argument('--out',required=True)
+    p.add_argument('--plan',required=True);p.add_argument('--worker',type=int,required=True)
     args=p.parse_args(argv);indices=assignment(args.indices)
     config,reference,manifest=qualify(args.qualified_run);m0.validate(config)
+    from gpu_engine.mc_m0_pool import process, validate_stage
+    plan_path=Path(args.plan).resolve();plan=json.loads(plan_path.read_bytes())
+    validate_dispatch(plan,indices,args.worker,manifest)
+    if Path(plan['qualified_run']).resolve()!=Path(args.qualified_run).resolve():raise ValueError('qualified directory differs')
+    handoff=Path(args.qualified_run)/'handoff-claim.json'
+    claim=json.loads(handoff.read_bytes())
+    if (m0.sha(handoff)!=plan['handoff_claim_sha256'] or Path(claim['pool_out']).resolve()!=plan_path.parent
+            or claim['config_sha256']!=manifest['config_sha256']):raise ValueError('shared handoff ownership differs')
+    release=plan['serial_release'];old=process(release['pid'])
+    if old is not None and old['start']==release['start']:raise ValueError('serial worker still owns the roster')
+    claims=Path(args.qualified_run)/'root-claims';claims.mkdir(exist_ok=True)
+    for i in indices:
+        m0.write(claims/f'root-{i:03d}.json',dict(pid=os.getpid(),worker=args.worker,index=i,plan_sha256=m0.sha(plan_path)))
     # Runtime checks match the original driver. This adapter changes dispatch,
     # not continuation policies, sampling, batching shape or outcome handling.
     import subprocess
@@ -59,7 +87,7 @@ def main(argv=None):
     out=Path(args.out);out.mkdir(parents=True,exist_ok=False)
     m0.write(out/'assignment.json',dict(indices=indices,global_roots=50,qualified_run=args.qualified_run,
              config_sha256=manifest['config_sha256'],core_sha256=manifest['source_sha256'],
-             adapter_sha256=m0.sha(__file__)))
+             adapter_sha256=m0.sha(__file__),plan_sha256=m0.sha(plan_path)))
     start,cpu0=time.perf_counter(),m0.process_cpu();completed=[];envs=[]
     try:
         import torch
@@ -83,7 +111,14 @@ def main(argv=None):
             for env in envs:env.reset(seed=root['seed'])
             peer_model=peer if root['kind']=='foulplay' else champion
             for batched,k in ((False,64),(True,256)):
+                reused=plan['reuse'].get(f'{i}:{k}')
+                if reused is not None:
+                    source=Path(reused['path'])
+                    if m0.sha(source)!=reused['sha256']:raise ValueError('retained stage changed')
+                    validate_stage(json.loads(source.read_bytes()),reference)
+                    os.link(source,out/f'root-{i:03d}-{k}.json');continue
                 at,ct=time.perf_counter(),m0.process_cpu()
+                print(json.dumps(dict(event='PARTITION_STAGE_START',index=i,K=k)),flush=True)
                 y,decisions,statuses=lab.run_root(envs,dict(ours=champion,opp=peer_model),root,snapshot,k,batched)
                 row=dict(index=i,root=root,mode='batched' if batched else 'unbatched',K=k,
                     outcomes=[[None if np.isnan(v) else float(v) for v in a] for a in y],statuses=statuses,
