@@ -1,7 +1,7 @@
 {
  "schema": "pokezero.effect_probe.scenario.v1",
  "move": "destinybond_pursuer",
- "note": "A2 review: a bonded Tyranitar uses Pursuit on a switching Starmie (useMove, no BeforeMove: the bond holds in Showdown); the incoming faster Swampert KOs it and faints too.",
+ "note": "A2 review: a bonded Tyranitar uses Pursuit on a switching Starmie (useMove, no BeforeMove: the bond holds in Showdown); the incoming faster Swampert KOs it and faints too. The script ends at the KO step: the forced double replacement that follows hits the probe harness's MISSING_ACTOR gap, so it is not driven.",
  "teams": [
   [
    {
@@ -153,14 +153,6 @@
   [
    "move 3",
    "move 3"
-  ],
-  [
-   "switch 3",
-   "switch 2"
-  ],
-  [
-   "move 1",
-   "move 1"
   ]
  ],
  "axes": [],
