@@ -132,7 +132,7 @@ class BoundExtensionTests(unittest.TestCase):
                      extension=dict(path=E.FILES['extension'], sha256=real['extension'][1], change='none'))
         value.update(change);return value, hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()
 
-    def r3_fair(self):return dict(within=True, arm_fairness=V.FINAL_RULES['RULE_R3'], missing_captures=dict(total=0, per_arm={}, ordinals=[]))
+    def r3_fair(self):return dict(within=True, limit=500, arm_fairness=V.FINAL_RULES['RULE_R3'], missing_captures=dict(total=0, per_arm={}, ordinals=[]))
 
     def bound_verdict(self, binding):
         real = E.committed();(a, a_sha), (h, h_sha), (b, b_sha), (f, f_sha) = (real[k] for k in ('amendment', 'addendum', 'both', 'final'))
