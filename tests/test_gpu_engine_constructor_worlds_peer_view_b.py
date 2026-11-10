@@ -297,7 +297,7 @@ class PeerViewBB2Tests(unittest.TestCase):
 
 
 
-def env_candidates(fx, lines, owner):
+def env_candidates(fx, lines, owner, species='alpha'):
     """The env belief of our Alpha from the PEER's wire (constructor_worlds.peer_wire_lines: our lines without the side-private
     ability line): pokezero.belief's engine on pokezero.showdown's parse, the fixture's own set source; (candidate count,
     {(ability, item)} of its candidate sets, possible abilities)."""
@@ -307,7 +307,7 @@ def env_candidates(fx, lines, owner):
     replay = parse_showdown_replay(head + cw.peer_wire_lines(lines, owner), battle_id='peer', complete_prefix=True,
         hp_visibility={'p1': 'exact', 'p2': 'exact'})
     mon = PublicBattleBeliefEngine.from_events(replay.public_events, format_id='gen3randombattle',
-        set_source=fx.source.original).resolved_player_view(f'p{2 - owner}').opponent_by_species()['alpha']
+        set_source=fx.source.original).resolved_player_view(f'p{2 - owner}').opponent_by_species()[species]
     return mon.candidate_set_count, {(c['ability'], c['item']) for c in mon.candidate_variants}, tuple(mon.possible_abilities)
 
 
@@ -341,8 +341,8 @@ class PrivateRevealBeliefTests(unittest.TestCase):
                 off = prepare(self.fx, root, made, lines, owner)
                 on = prepare(self.fx, root, made, lines, owner, peer_view_b=True)
                 redacted = prepare(self.fx, root, made, lines, owner, redact_private_reveals=True)
-                self.assertEqual(on.private_reveals['belief'], [dict(slot=0, species='alpha', fold_species='alpha', variants_before=1, variants_after=2,
-                    changed=True)])
+                self.assertEqual(on.private_reveals['belief'], [dict(slot=0, species='alpha', fold_slot=0, fold_species='alpha', variants_before=1,
+                    variants_after=2, changed=True)])
                 self.assertNotIn('belief', off.private_reveals);self.assertIsNone(off.facts.peer_belief)
                 self.assertEqual(redacted.private_reveals['belief'], on.private_reveals['belief'])   # the redaction alone restores it too
                 for w_on, w_off, w_red, w in zip(on.made.worlds, off.made.worlds, redacted.made.worlds, made.worlds):
@@ -367,15 +367,112 @@ class PrivateRevealBeliefTests(unittest.TestCase):
                     self.assertTrue(cat and all(t == 7 for t, _ in cat))   # its belief tokens, nothing else
                     for k in ('token_type_ids', 'attention_mask'):np.testing.assert_array_equal(theirs_on[k], theirs_off[k], err_msg=k)
 
-    def test_a_fold_whose_species_is_not_the_carrys_refuses_the_root(self):
-        root, made, lines = G.b2_root(self.fx, 'pressure', 0)
-        rows = {f: np.asarray(cw._carry_belief(root.public, f, 1))[0, 0] for f in cw.PEER_BELIEF_FIELDS}
-        wrong = cw.PeerBelief((0,), rows, ('beta',))   # a fold whose slot 0 is another member
-        with patch.object(cw, 'peer_wire_belief', return_value=wrong):item = prepare(self.fx, root, made, lines, 0, battle='wrong', redact_private_reveals=True)
-        self.assertEqual((type(item), item.kind), (cw.RootRefusal, cw.PRIVATE_REVEALS_UNAVAILABLE));self.assertIn('species differ', item.detail)
-        with patch.object(cw, 'peer_wire_belief', side_effect=cw.CarryLayoutError('no catalog')):
-            self.assertEqual(prepare(self.fx, root, made, lines, 0, battle='wrong', redact_private_reveals=True).kind, cw.PRIVATE_REVEALS_UNAVAILABLE)
+    def test_a_member_the_fold_cannot_give_refuses_the_root_never_the_server(self):
+        """A redacted member the peer wire's fold has no single member for (here: the peer's Beta asked of our side) is
+        PeerBeliefUnavailable, a ValueError: prepare_roots refuses that root PRIVATE_REVEALS_UNAVAILABLE and goes on; with the
+        redaction off nothing folds."""
+        root, made, lines = G.b2_root(self.fx, 'pressure', 0);beta = self.fx.metadata['vocabulary']['species'].index('Beta')
+        constructor = NS(metadata=self.fx.metadata, catalog=self.fx.catalog, functions=None)
+        with self.assertRaisesRegex(cw.PeerBeliefUnavailable, '0 peer wire fold members join it'):
+            cw.peer_wire_belief(constructor, dict(lines=list(lines), battle_id='wrong', stream_id=1), 0, ((0, beta),))
+        self.assertTrue(issubclass(cw.PeerBeliefUnavailable, ValueError) and not issubclass(cw.PeerBeliefUnavailable, cw.CarryLayoutError))
+        with patch.object(cw, 'peer_wire_belief', side_effect=cw.PeerBeliefUnavailable('no member')):
+            item = prepare(self.fx, root, made, lines, 0, battle='wrong', redact_private_reveals=True)
+            self.assertEqual((type(item), item.kind, item.detail), (cw.RootRefusal, cw.PRIVATE_REVEALS_UNAVAILABLE, 'PeerBeliefUnavailable: no member'))
             self.assertIs(type(prepare(self.fx, root, made, lines, 0, battle='wrong')), cw.Prepared)   # the redaction off never folds
+
+    def test_several_members_in_another_order_than_the_request_join_by_identity(self):
+        """Our lead Alpha, then Zeta and Gamma switched in later, each with its Pressure revealed on our wire alone; the request
+        order (Gamma, Beta, Zeta, Delta, Epsilon, Alpha: each switch-in swapped to the front) is not the public order (Alpha,
+        Zeta, Gamma), and Zeta's and Gamma's ids differ between the B2 catalog (alphabetical) and the belief source (universe
+        order), which a join by slot or by the wrong namespace gets wrong. Both members' beliefs are restored, each to its own
+        fold row, equal to the env's belief from Foul Play's lines; Alpha (no private line) keeps B2's."""
+        count_column = self.e._index('CANDIDATE_SET_COUNT')
+        body = ('|switch|OWNa: Zeta|Zeta, L80|291/291', '|-ability|OWNa: Zeta|Pressure|[silent]', '|move|PEERa: Beta|Tackle|OWNa: Zeta',
+            '|-damage|OWNa: Zeta|250/291', '|turn|2', '|switch|OWNa: Gamma|Gamma, L80|291/291', '|-ability|OWNa: Gamma|Pressure|[silent]', '|turn|3')
+        order = ('Gamma', 'Beta', 'Zeta', 'Delta', 'Epsilon', 'Alpha')
+        for owner in (0, 1):
+            with self.subTest(owner=owner):
+                own, peer_seat = f'p{owner + 1}', f'p{2 - owner}';peer = 1 - owner
+                lines = tuple(x.replace('OWN', own).replace('PEER', peer_seat) for x in G.HEAD + body)
+                request = self.fx.request(owner);party = {m['ident'].split(': ')[1]: m for m in request['side']['pokemon']}
+                party['Zeta']['condition'] = '250/291';request['side']['pokemon'] = [dict(party[n], active=n == 'Gamma') for n in order]
+                root, made = G.fold_root(self.fx, lines, request, owner)
+                carried = [self.fx.metadata['vocabulary']['species'][int(x)] for x in np.asarray(root.public.species)[0, owner, :3]]
+                self.assertEqual(carried, ['Alpha', 'Zeta', 'Gamma'])
+                self.assertNotEqual([self.fx.catalog.species.names.index(n) for n in carried[1:]], [self.fx.catalog.source.species_names.index(n) for n in carried[1:]])
+                on = prepare(self.fx, root, made, lines, owner, battle='several', peer_view_b=True)
+                off = prepare(self.fx, root, made, lines, owner, battle='several')
+                self.assertIs(type(on), cw.Prepared, getattr(on, 'detail', ''))
+                self.assertEqual([(e['slot'], e['species'], e['fold_slot'], e['fold_species'], e['variants_before'], e['variants_after'], e['changed'])
+                    for e in on.private_reveals['belief']], [(1, 'zeta', 1, 'zeta', 1, 2, True), (2, 'gamma', 2, 'gamma', 1, 2, True)])
+                universes = self.fx.source.original.universes
+                for name, slot in (('zeta', 1), ('gamma', 2)):
+                    want = env_candidates(self.fx, lines, owner, name)[1]
+                    sets = [(v.ability, v.item) for v in universes[name].variants]
+                    for w in on.made.worlds:
+                        mask = np.asarray(w.public.belief_mask)[0, owner, slot];bits = int(mask[0]) | (int(mask[1]) << 32)
+                        self.assertEqual({v for i, v in enumerate(sets) if bits >> i & 1}, want)
+                for w_on, w_off in zip(on.made.worlds, off.made.worlds):   # Alpha, every other row and the peer side: B2's
+                    a, b = np.asarray(w_on.public.belief_mask)[0], np.asarray(w_off.public.belief_mask)[0]
+                    np.testing.assert_array_equal(a[peer], b[peer]);np.testing.assert_array_equal(a[owner, [0, 3, 4, 5]], b[owner, [0, 3, 4, 5]])
+                b2 = root.view['_b2_root_inputs'];theirs_on, theirs_off = self.view(on.made.worlds[0], peer, b2), self.view(off.made.worlds[0], peer, b2)
+                self.assertEqual([theirs_on['numeric_features'][0][7 + k, count_column] for k in (1, 2)], [2., 2.])
+                self.assertEqual([theirs_off['numeric_features'][0][7 + k, count_column] for k in (1, 2)], [1., 1.])
+                mine_on, mine_off = self.view(on.made.worlds[0], owner, b2), self.view(off.made.worlds[0], owner, b2)
+                for k in mine_on:np.testing.assert_array_equal(mine_on[k], mine_off[k], err_msg=k)   # the owner's view: unchanged
+
+
+def deoxys_fixture():
+    """tests/test_phase_d_device_worlds' authored B2 fixture with a Deoxys forme among our members (Alpha, Beta, Deoxys-Attack,
+    Gamma, Delta, Epsilon, Zeta: each with an Insomnia / Oran Berry and a Pressure / Leftovers set), the source keyed by normalized
+    id as the real one (the original fixture's name.lower() keys are the same for its plain names). Its B2 catalog orders species
+    alphabetically, the belief source in universe order: Deoxys-Attack is catalog id 4, source id 3."""
+    import test_gpu_engine_device_public_worlds as W
+    import test_phase_d_device_worlds as D
+    from pokezero.dex import normalize_id
+    from pokezero.randbat import Gen3RandbatSource, Gen3RandbatSpeciesUniverse, Gen3RandbatVariant, RandbatSourceMetadata
+    def source_fixture():
+        universes = {}
+        for name in ('Alpha', 'Beta', 'Deoxys-Attack', 'Gamma', 'Delta', 'Epsilon', 'Zeta'):
+            variants = tuple(Gen3RandbatVariant(f'{name}-{v}', 'source', name, 'synthetic', 80, ('tackle', 'surf', 'rest', 'protect'),
+                'pressure' if v else 'insomnia', 'leftovers' if v else 'oranberry') for v in range(2))
+            universes[normalize_id(name)] = Gen3RandbatSpeciesUniverse(name, 80, variants)
+        metadata = {k: v for key, u in universes.items() for v in [{'gender': 'N'}] for k in {key, u.species.lower()}}   # both spellings
+        source = Gen3RandbatSource(RandbatSourceMetadata('gen3randombattle', 3, None, None, None, 'synthetic-source'), universes,
+            move_metadata={'tackle': {'type': 'Normal', 'category': 'Physical'}}, species_metadata=metadata)
+        return source, {'vocabulary': {'species': ['', *[u.species for u in universes.values()]], 'moves': ['', 'tackle', 'surf', 'rest', 'protect'],
+            'abilities': ['', 'insomnia', 'pressure'], 'items': ['', 'oranberry', 'leftovers'], 'types': ['', 'Normal']}}
+    class Deoxys(D.WorldsTests):pass
+    with patch.object(W, 'source_fixture', source_fixture):Deoxys.setUpClass()
+    return Deoxys('test_real_b2_fold_to_16_and32_source_worlds_both_owners')
+
+
+class DeoxysFormeBeliefTests(unittest.TestCase):
+    """A Deoxys forme, nicknamed (|switch|<own>a: Deoxys|Deoxys-Attack, L80), switched in after our lead with its Pressure revealed
+    on our wire alone, first in the request order: its belief is restored from its own fold row (catalog and source ids differ),
+    equal to the env's belief from Foul Play's lines."""
+    def test_a_nicknamed_deoxys_forme_joins_by_species_not_by_id_or_name(self):
+        fx = deoxys_fixture();catalog, source = list(fx.catalog.species.names), list(fx.catalog.source.species_names)
+        self.assertNotEqual(catalog.index('Deoxys-Attack'), source.index('Deoxys-Attack'))
+        sets = [(v.ability, v.item) for v in fx.source.original.universes['deoxysattack'].variants]
+        for owner in (0, 1):
+            with self.subTest(owner=owner):
+                own, peer = f'p{owner + 1}', f'p{2 - owner}'
+                lines = (f'|switch|{own}a: Alpha|Alpha, L80|291/291', f'|switch|{peer}a: Beta|Beta, L80|100/100', '|turn|1',
+                    f'|switch|{own}a: Deoxys|Deoxys-Attack, L80|291/291', f'|-ability|{own}a: Deoxys|Pressure|[silent]', '|turn|2')
+                request = fx.request(owner);party = {m['ident'].split(': ')[1]: m for m in request['side']['pokemon']}
+                order = [dict(party['Deoxys-Attack'], ident=f'{own}: Deoxys'), party['Beta'], party['Alpha'], party['Gamma'], party['Delta'], party['Epsilon']]
+                request['side']['pokemon'] = [dict(m, active=i == 0) for i, m in enumerate(order)]
+                root, made = G.fold_root(fx, lines, request, owner)
+                item = prepare(fx, root, made, lines, owner, battle='deoxys', peer_view_b=True)
+                self.assertIs(type(item), cw.Prepared, getattr(item, 'detail', ''))
+                self.assertEqual(item.private_reveals['belief'], [dict(slot=1, species='deoxysattack', fold_slot=1, fold_species='deoxysattack',
+                    variants_before=1, variants_after=2, changed=True)])
+                want = env_candidates(fx, lines, owner, 'deoxysattack')[1];self.assertEqual(want, set(sets))
+                for w in item.made.worlds:
+                    mask = np.asarray(w.public.belief_mask)[0, owner, 1];bits = int(mask[0]) | (int(mask[1]) << 32)
+                    self.assertEqual({v for i, v in enumerate(sets) if bits >> i & 1}, want)
 
 class ReplyPriorCompositionTests(unittest.TestCase):
     """--peer-view-b with --reply-archive: the br_fp reply prior (gpu_engine/depthn_reply_prior.ReplyPrior) reads the worlds

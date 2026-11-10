@@ -71,13 +71,18 @@ def scenario_request(fx, name, owner):
 
 def b2_root(fx, name, owner):
     """(root, the 16 sampled worlds, lines) of one scenario through the real B2 fold and from_b2."""
+    lines = scenario_lines(name, owner)
+    return (*fold_root(fx, lines, scenario_request(fx, name, owner), owner), lines)
+
+
+def fold_root(fx, lines, request, owner):
+    """(root, the 16 sampled worlds) of `lines` and the owner's `request` through the real B2 fold and from_b2."""
     from gpu_engine import phase_d_live_worlds as live
     from pokezero import v5_contract
     from pokezero.recorded_encoder_runner import JaxRecordedAdapter
-    lines = scenario_lines(name, owner);adapter = JaxRecordedAdapter(fx.catalog, owner_side=owner)
-    adapter.reset(stream_id=1, battle_id='authored');adapter.feed(lines)
-    root = live.from_b2(adapter, scenario_request(fx, name, owner), fx.source, fx.metadata, address=v5_contract.DecisionAddress(1, 0, owner))
-    return root, live.sample_worlds(root, fx.source, fx.tables, count=16, seed=9), lines
+    adapter = JaxRecordedAdapter(fx.catalog, owner_side=owner);adapter.reset(stream_id=1, battle_id='authored');adapter.feed(tuple(lines))
+    root = live.from_b2(adapter, request, fx.source, fx.metadata, address=v5_contract.DecisionAddress(1, 0, owner))
+    return root, live.sample_worlds(root, fx.source, fx.tables, count=16, seed=9)
 
 
 def carry_outputs():
