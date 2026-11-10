@@ -259,6 +259,7 @@ def main(argv=None):
     parser.add_argument('--mode', choices=('batched', 'unbatched'), default='batched');parser.add_argument('--envs', type=int, default=32)
     parser.add_argument('--seed', type=int, default=0);parser.add_argument('--threads', type=int, default=1)
     parser.add_argument('--worker', type=int, default=0);parser.add_argument('--workers', type=int, default=1)
+    parser.add_argument('--plain-env', action='store_true', help='the plain LocalShowdownEnv instead of CachingEnv (timing comparisons)')
     args = parser.parse_args(argv)
     import torch
     torch.set_num_threads(args.threads)
@@ -267,7 +268,7 @@ def main(argv=None):
     collection = Path(args.collection);rng = random.Random(f'{args.seed}-{args.kind}-{args.worker}')
     paths = sorted(glob.glob(str(collection / 'results' / '*.json')), key=lambda p: int(Path(p).stem))
     base = json.loads((collection / 'requests' / f'{Path(paths[0]).stem}.json').read_bytes())['base_config']
-    envs = [make_env(base, champion.result) for _ in range(args.envs if args.mode == 'batched' else 1)]
+    envs = [make_env(base, champion.result, caching=not args.plain_env) for _ in range(args.envs if args.mode == 'batched' else 1)]
     try:return label(args, envs, champion, pi_fp, collection, rng, paths, fpd)
     finally:
         for e in envs:e.close()
