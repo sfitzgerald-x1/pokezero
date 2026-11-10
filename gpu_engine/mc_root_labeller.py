@@ -62,7 +62,8 @@ class Model:
         with self.torch.no_grad():
             out = self.model(categorical_ids=t['categorical_ids'], numeric_features=t['numeric_features'], token_type_ids=t['token_type_ids'],
                              attention_mask=t['attention_mask'], history_mask=t['history_mask'])
-            logits = out.policy_logits.masked_fill(~t['legal_action_mask'].bool(), -1e9)
+            legal = self.torch.tensor(np.array([np.asarray(o.legal_action_mask, bool) for o in observations]))
+            logits = out.policy_logits.masked_fill(~legal, -1e9)
             return self.torch.softmax(logits, dim=-1).numpy().astype(np.float64)
 
 
@@ -187,7 +188,13 @@ def main(argv=None):
     paths = sorted(glob.glob(str(collection / 'results' / '*.json')), key=lambda p: int(Path(p).stem))
     base = json.loads((collection / 'requests' / f'{Path(paths[0]).stem}.json').read_bytes())['base_config']
     envs = [make_env(base, champion.result) for _ in range(args.envs if args.mode == 'batched' else 1)]
-    out = open(args.out, 'a');made = 0;attempts = 0
+    try:return label(args, envs, champion, pi_fp, collection, rng, paths, fpd)
+    finally:
+        for e in envs:e.close()
+
+
+def label(args, envs, champion, pi_fp, collection, rng, paths, fpd):
+    out = open(args.out, 'a');made = 0;attempts = 0;skipped = {}
     while made < args.roots and attempts < 50 * args.roots:
         attempts += 1;started = time.perf_counter()
         if args.kind == 'foulplay':
@@ -195,7 +202,8 @@ def main(argv=None):
             if game is None or len(game['our_actions']) < 4:continue
             target = rng.randrange(1, len(game['our_actions']) - 1)
             try:ok = foulplay_root(envs[0], game, target)
-            except Exception:continue   # a game the replay cannot rebuild (counted as an attempt)
+            except Exception as error:   # a game the replay cannot rebuild (counted as an attempt and by cause)
+                why = type(error).__name__;skipped[why] = skipped.get(why, 0) + 1;continue
             ours, identity = game['ours'], dict(ordinal=game['ordinal'], seed=game['seed'], target=target)
         else:
             seed = rng.randrange(1, 2**31 - 1);ours = rng.choice(('p1', 'p2'));target = rng.randrange(1, 40)
@@ -219,8 +227,8 @@ def main(argv=None):
                    wall_seconds=round(wall, 3), cpu_seconds=round(cpu, 3), prepare_seconds=round(prepared - started, 3))
         out.write(json.dumps(row) + '\n');out.flush();made += 1
         print(json.dumps({k: row[k] for k in ('kind', 'mode', 'actions', 'rollouts', 'wall_seconds', 'cpu_seconds')}), flush=True)
-    for e in envs:e.close()
-    return 0
+    print(json.dumps(dict(event='DONE', roots=made, attempts=attempts, skipped=skipped)), flush=True)
+    return 0 if made else 1
 
 
 if __name__ == '__main__':
