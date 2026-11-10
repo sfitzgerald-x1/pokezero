@@ -11,9 +11,10 @@ reply model (the replay's reply_prior record present, or --reply) each requested
 - the replay's noise_gate record: candidate, greedy and passed (played == candidate) equal, its root_operator NOISE_GATED_K2.
 The mc ladder's R5fp_ng (gpu_engine.mc_ladder_rungs) is the same rule on a br_fp replay's rows.
 
-Output (stdout, JSON): rows, compared, mismatches by field, gate pass and override rates (played != greedy over compared), and
-up to 20 example addresses. Exit 0 when every compared row matches and at least one was compared; 1 on any mismatch; 2 when
-nothing was compared.
+Output (stdout, JSON): rows, compared, mismatches by field, unscorable (replay-COMPLETE rows the rule cannot be recomputed on:
+a healthy replay has none, as the MC ladder's recomputation has none), gate_refusals (rows the live gate refused, NOISE_GATE_ERROR),
+gate pass and override rates (played != greedy over compared), and up to 20 example addresses. Exit 0 when every replay-COMPLETE
+row was compared and matches and at least one was; 1 on any mismatch or unscorable row; 2 when nothing was compared.
 
 usage: python scripts/depthn_gated_replay_check.py ROWS.jsonl [ROWS.jsonl ...] [--reply]
 """
@@ -44,15 +45,21 @@ def expected(raw, d, reply):
 
 def check(rows, reply=False):
     """The report (module docstring) over raw re-priced rows."""
-    out = dict(rows=0, compared=0, mismatches=collections.Counter(), unscorable=collections.Counter(), passed=0, overrides=0, examples=[])
+    out = dict(rows=0, compared=0, mismatches=collections.Counter(), unscorable=collections.Counter(), gate_refusals=0, passed=0, overrides=0,
+               examples=[])
     for raw in rows:
         out['rows'] += 1;d = rr.normalize(raw)
-        if d['replay_status'] != 'COMPLETE':continue
+        if d['replay_status'] != 'COMPLETE':
+            replay = raw.get('replay') if type(raw.get('replay')) is dict else {}
+            out['gate_refusals'] += str(replay.get('refusal') or replay.get('search_refusal') or '').startswith('NOISE_GATE_ERROR');continue
         record = (raw.get('replay') or {}) if type(raw.get('replay')) is dict else {}
         served = reply or type(record.get('reply_prior')) is dict
         try:candidate, greedy, played, q = expected(raw, d, served)
         except (rr.Unscorable, ValueError) as error:
-            out['unscorable'][getattr(error, 'reason', type(error).__name__)] += 1;continue
+            out['unscorable'][getattr(error, 'reason', type(error).__name__)] += 1
+            if len(out['examples']) < EXAMPLES:out['examples'].append(dict(ordinal=raw.get('ordinal'), decision_index=raw.get('decision_index'),
+                                                                           wrong=['unscorable']))
+            continue
         out['compared'] += 1;gate = record.get('noise_gate') if type(record.get('noise_gate')) is dict else {};wrong = []
         if d['replay_action'] != played:wrong.append('action')
         if not rr.q_json_equal(q, d['replay_q']):wrong.append('q_values')
@@ -73,7 +80,7 @@ def main(argv=None):
     args = parser.parse_args(argv)
     rows = [json.loads(line) for path in args.rows for line in open(path) if line.strip()]
     report = check(rows, args.reply);print(json.dumps(report, sort_keys=True))
-    return 2 if not report['compared'] else 1 if report['mismatches'] else 0
+    return 2 if not report['compared'] else 1 if report['mismatches'] or report['unscorable'] else 0
 
 
 if __name__ == '__main__':

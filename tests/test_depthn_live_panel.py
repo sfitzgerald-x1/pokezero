@@ -1245,6 +1245,11 @@ class EvalReadinessTests(unittest.TestCase):
 
     def rule(self): return json.loads(panel.state_path(self.root, 'latency_rule.json').read_bytes())
 
+    def test_the_root_operator_may_be_the_noise_gate(self):
+        self.assertEqual(panel.validate(dict(declaration('a'*64), root_operator='NOISE_GATED_K2'))['root_operator'], 'NOISE_GATED_K2')
+        for other in ('TARGET_ARGMAX', 'br_fp', None):
+            with self.subTest(other), self.assertRaises(ValueError): panel.validate(dict(declaration('a'*64), root_operator=other))
+
     def test_the_reply_prior_block_is_validated(self):
         d = declaration('a'*64); d['reply_prior'] = dict(REPLY)
         self.assertEqual(panel.validate(d)['reply_prior'], REPLY)

@@ -36,6 +36,21 @@ class GatedReplayCheckTests(unittest.TestCase):
         raw, _, _ = gated(D1, gate=False);self.assertEqual(C.check([raw])['mismatches'], dict(noise_gate=1))
         raw, _, _ = gated(D1);raw['replay']['q_values'][1] += 1e-9;self.assertEqual(C.check([raw])['mismatches'], dict(q_values=1))
 
+    def test_a_row_the_rule_cannot_recompute_fails_the_check(self):
+        raw, _, _ = gated(D1);raw['worlds'][1]['reply_peer_logits'] = None   # a capture that lost a requested world's reply logits
+        report = C.check([raw]);self.assertEqual((report['compared'], report['unscorable']), (0, dict(reply_prior_missing=1)))
+        with tempfile.TemporaryDirectory() as tmp:
+            mixed = Path(tmp) / 'mixed.jsonl';mixed.write_text(json.dumps(gated(D1)[0]) + '\n' + json.dumps(raw) + '\n')
+            with redirect_stdout(io.StringIO()):self.assertEqual(C.main([str(mixed)]), 1)   # one good row does not hide it
+
+    def test_gate_refusals_are_counted(self):
+        refused = row(status='REFUSED');refused['replay']['refusal'] = 'NOISE_GATE_ERROR: ValueError: two or more priced worlds required'
+        self.assertEqual(C.check([refused, gated(D1)[0]])['gate_refusals'], 1)
+
+    def test_the_gate_has_one_definition(self):
+        self.assertIs(C.rr.noise_gated, hedge.noise_gated);self.assertIs(C.rr.per_world_q, hedge.per_world_q)
+        self.assertEqual([hedge.logits_greedy([0., 2., 2.] + [0.] * 6, [True] * 9), hedge.logits_greedy([5., 2., 2.] + [0.] * 6, [False] + [True] * 8)], [1, 1])
+
     def test_exit_codes(self):
         with tempfile.TemporaryDirectory() as tmp:
             good, bad, none = (Path(tmp) / f'{n}.jsonl' for n in ('good', 'bad', 'none'))

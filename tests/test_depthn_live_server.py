@@ -190,7 +190,14 @@ class ServerTests(unittest.TestCase):
                     (rp,'ReplyPrior',lambda executor,model,mode,identity:('reply-prior',executor,model.params,mode,identity))):
                 stack.enter_context(patch.object(target,name,side_effect=value))
             S.build(args)
-        self.assertEqual((made['peer_view_b'],made['reply'][0]),(True,'reply-prior'))
+        self.assertEqual((made['peer_view_b'],made['reply'][0],made['root_operator']),(True,'reply-prior','ARGMAX_MEAN_COMPLETED_Q'))
+        with patch.dict(os.environ,PINNED):args=S.options(base+reply+['--peer-view-b','--root-operator','NOISE_GATED_K2'])   # variant B
+        with ExitStack()as stack:
+            for target,name,value in stand_ins+((S.evaluators,'load',lambda path,**kw:NS(params='reply')),
+                    (rp,'ReplyPrior',lambda executor,model,mode,identity:('reply-prior',executor,model.params,mode,identity))):
+                stack.enter_context(patch.object(target,name,side_effect=value))
+            S.build(args)
+        self.assertEqual((made['root_operator'],made['reply'][0]),('NOISE_GATED_K2','reply-prior'))
 
     def test_a_view_b_reply_archive_needs_peer_view_b(self):
         self.assertEqual((S.reply_view(None),S.reply_view({}),S.reply_view(dict(extra=dict(view='env')))),('env','env','env'))
@@ -264,6 +271,11 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(S.header(args,search)['refuse_classes'],['forced_switch','wish'])   # recorded in READY and the telemetry header
         self.assertIs(S.header(args,search)['redact_private_reveals'],False)
         self.assertIs(S.header(args,NS(vars(search),redact_private_reveals=True))['redact_private_reveals'],True)
+        self.assertNotIn('live_root_operator',S.header(args,search))   # the default operator: the header is unchanged
+        gated=S.options(base+champion+['--root-operator','NOISE_GATED_K2'])
+        self.assertEqual((args.root_operator,gated.root_operator),('ARGMAX_MEAN_COMPLETED_Q','NOISE_GATED_K2'))
+        self.assertEqual(S.header(gated,search)['live_root_operator'],'NOISE_GATED_K2')
+        with self.assertRaises(SystemExit),redirect_stderr(io.StringIO()):S.options(base+champion+['--root-operator','TARGET_ARGMAX'])
         self.assertNotIn('peer_view_b',S.header(args,search));self.assertNotIn('peer_view_b',S.header(args,NS(vars(search),peer_view_b=False)))
         on=S.header(args,NS(vars(search),peer_view_b=True,redact_private_reveals=True))   # view b's search: the redaction it implies is on
         self.assertEqual((on['peer_view_b'],on['redact_private_reveals']),(True,True))
