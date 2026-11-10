@@ -453,10 +453,10 @@ class Decided:
 
 
 class Capture:
-    """References to every decide call's arguments, every prepare_roots result and every cw.price call's frame and batch while
-    installed() is active."""
+    """References to every decide call's arguments, every prepare_roots result and every cw.price call's (frame, batch) (in
+    `frames`: depthn_carry_audit's subclass keeps its own `priced`) while installed() is active."""
     def __init__(self):
-        self.decided, self.prepared, self.priced = [], [], []
+        self.decided, self.prepared, self.frames = [], [], []
 
     @contextmanager
     def installed(self):
@@ -473,7 +473,7 @@ class Capture:
 
         def price_wrapper(*arguments, **keywords):   # cw.price(pricer, batch, binding, recipe, params): the frame and the batch
             out = price(*arguments, **keywords)
-            self.priced.append((out[0], arguments[1] if len(arguments) > 1 else keywords.get('batch')))
+            self.frames.append((out[0], arguments[1] if len(arguments) > 1 else keywords.get('batch')))
             return out
 
         live.decide, cw.prepare_roots, cw.price = decide_wrapper, prepare_wrapper, price_wrapper
@@ -693,14 +693,21 @@ def describe(capture, peer_lanes, vocabulary, peer_inputs=None, key=None, reply=
                 notes.append(f'peer inputs: {type(error).__name__}: {error}')
                 for row in worlds:row['peer_self_check'] = False;row.setdefault('peer_inputs_index', None)
     depth1 = None
-    if getattr(capture, 'priced', None):
-        frame, batch = capture.priced[0]
-        entry = next((r for r in getattr(batch, 'roots', ()) if r.get('status') == 'PRICED'), None)
+    frames = getattr(capture, 'frames', None) or []
+    if len(frames) > 1:notes.append(f'{len(frames)} price calls')
+    if frames:
+        frame, batch = frames[0]
+        priced_roots = [r for r in getattr(batch, 'roots', ()) if r.get('status') == 'PRICED']
+        if len(priced_roots) > 1:notes.append(f'{len(priced_roots)} priced roots in one batch')
+        entry = priced_roots[0] if priced_roots else None
+        if entry is not None and type(item) is cw.Prepared and entry.get('request_id') not in (None, item.request_id):
+            notes.append('the priced root is not the prepared one');entry = None
         if frame is not None and entry is not None:
             try:
                 prices1 = [w for r in entry['rows'] for w in backups.backup_depth1(frame, r)]   # block k's world j is world 2k+j
-                causes = backups.refusal_summary(frame)['roots']
-                depth1 = dict(block_causes=[causes[r]['cause'] for r in entry['rows']], priced_worlds=sum(w is not None for w in prices1))
+                causes = [backups.refusal_summary(frame)['roots'][r]['cause'] for r in entry['rows']]
+                depth1 = dict(block_causes=causes, priced_worlds=sum(w is not None for w in prices1),
+                    refused_at_depth1=[c in backups.DEPTH1_CAUSES for c in causes])   # D3 itself would refuse these blocks
                 worlds = worlds if worlds is not None else []
                 for i, world in enumerate(prices1):
                     while i >= len(worlds):worlds.append(dict(world=len(worlds)))
@@ -709,8 +716,9 @@ def describe(capture, peer_lanes, vocabulary, peer_inputs=None, key=None, reply=
                 notes.append(f'depth 1: {type(error).__name__}: {error}')
     if reply and len(capture.decided) >= 2:   # br_fp: the champion's decide comes first, the played (replied) one last
         played = [w for pair in capture.decided[-1].blocks for w in pair]
-        for i, world in enumerate(played):
-            if i < len(worlds or []):worlds[i]['reply_peer_logits'] = None if world is None else [float(x) for x in world.opponent_logits]
+        for i, world in enumerate(played):   # a waiting opponent keeps the champion's column: no reply model logits there
+            if i < len(worlds or []):worlds[i]['reply_peer_logits'] = (None if world is None or not world.opponent_requested
+                else [float(x) for x in world.opponent_logits])
     return dict(root=root, prepared=prepared, worlds=worlds or [], notes=notes, kept_disagreements=disagreements, depth1=depth1)
 
 

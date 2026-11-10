@@ -196,8 +196,8 @@ class CaptureTests(unittest.TestCase):
         self.assertEqual(json.dumps(within, sort_keys=True), json.dumps(without, sort_keys=True))   # byte for byte, timings included
         self.assertEqual(without[0]['q_values'], expected_decision()['q_values'])
         self.assertEqual([len(c.decided) for c in captures], [1, 0, 1]);self.assertEqual([len(c.prepared) for c in captures], [1, 1, 1])
-        self.assertEqual([len(c.priced) for c in captures], [1, 0, 1])   # a refused root's batch has no request: cw.price is not called
-        self.assertEqual(captures[0].priced[0][1].roots[0]['rows'], tuple(range(8)))   # the batch: the root's frame rows
+        self.assertEqual([len(c.frames) for c in captures], [1, 0, 1])   # a refused root's batch has no request: cw.price is not called
+        self.assertEqual(captures[0].frames[0][1].roots[0]['rows'], tuple(range(8)))   # the batch: the root's frame rows
         got = captures[0].decided[0]
         self.assertEqual([w for pair in got.blocks for w in pair], [prices(w) for w in range(16)])   # block order: world 2k+j
         self.assertEqual((tuple(got.root_logits), tuple(got.root_legal)), (LOGITS, LEGAL))
@@ -211,12 +211,13 @@ class CaptureTests(unittest.TestCase):
                                              prices(w).joint_values)
         replied = R.Decided([(fp(2 * k), fp(2 * k + 1)) for k in range(8)], LOGITS, LEGAL)
         capture = SimpleNamespace(prepared=[(cw.Prepared('r', detached, made, legal, 0., 'binding'),)], decided=[champion, replied],
-                                  priced=[('frame', batch)])
+                                  frames=[('frame', batch)])
         with patch.object(backups, 'backup_depth1', side_effect=lambda frame, r: (prices(100 + 2 * r), None if r == 3 else prices(101 + 2 * r))), \
                 patch.object(backups, 'refusal_summary', return_value=dict(roots=[dict(cause=None)] * 7 + [dict(cause='turn2')])):
             detail = R.describe(capture, fake_peer, VOCABULARY, None, (1, 0), reply=True)
             plain = R.describe(capture, fake_peer, VOCABULARY, None, (1, 0))
-        self.assertEqual(detail['depth1'], dict(block_causes=[None] * 7 + ['turn2'], priced_worlds=15))   # depth 2 refused block 7; depth 1 kept
+        self.assertEqual(detail['depth1'], dict(block_causes=[None] * 7 + ['turn2'], priced_worlds=15,
+                                                refused_at_depth1=[False] * 8))   # depth 2 refused block 7; depth 1 kept it
         self.assertEqual(detail['worlds'][0]['depth1'], R.prices_fields(prices(100)));self.assertFalse(detail['worlds'][7]['depth1']['priced'])
         self.assertEqual(detail['worlds'][0]['grid'], R.prices_fields(prices(0))['grid'])   # the depth-2 grid is the champion's decide
         self.assertEqual([w['reply_peer_logits'] for w in detail['worlds'][:2]], [[float(b) for b in range(9)], [float(b) + 1 for b in range(9)]])
@@ -227,13 +228,17 @@ class CaptureTests(unittest.TestCase):
         status, value = np.zeros((2, 2, 9, 9), np.int8), np.zeros((2, 2, 9, 9), np.float32)
         status[0, 0, 0, 2], value[0, 0, 0, 2] = 2, .25   # expanded: the learner's value head on the child
         status[0, 0, 1, 2], value[0, 0, 1, 2] = 1, -1.   # terminal: exact
-        status[0, 0, 3, 4], value[0, 0, 3, 4] = 3, .9    # an error: not priced
+        error = np.zeros((2, 2, 9, 9), np.int8)
+        status[0, 0, 3, 4], value[0, 0, 3, 4], error[0, 0, 3, 4] = 3, .9, 2    # a D3 error: not priced
+        status[0, 0, 5, 4], value[0, 0, 5, 4], error[0, 0, 5, 4] = 3, .4, 5    # PEER_VIEW_ERROR: D3 priced it, only depth 2 failed
+        status[0, 0, 6, 4], value[0, 0, 6, 4], error[0, 0, 6, 4] = 3, -.3, 6   # PEER_PRIOR_REFUSED: likewise
         frame = SimpleNamespace(pre=np.array([[0, 1], [0, 0]]), root_peer_requested=np.array([[True, True], [False, False]]),
-            t1_status=status, t1_value=value, root_peer_logits=np.tile(np.arange(9, dtype=np.float32), (2, 2, 1)))
+            t1_status=status, t1_value=value, t1_error=error, root_peer_logits=np.tile(np.arange(9, dtype=np.float32), (2, 2, 1)))
         w0, w1 = backups.backup_depth1(frame, 0)
         self.assertIsNone(w1)   # pre != 0: no surface
         self.assertEqual((w0.joint_values[0][2], w0.joint_values[1][2]), (.25, -1.))
         self.assertIsNone(w0.joint_values[3][4]);self.assertIsNone(w0.joint_values[0][0])
+        self.assertEqual((w0.joint_values[5][4], w0.joint_values[6][4]), (np.float32(.4).item(), np.float32(-.3).item()))
         self.assertEqual(w0.opponent_legal, tuple(r in (2, 4) for r in range(9)));self.assertTrue(w0.opponent_requested)
         self.assertEqual(w0.opponent_logits, tuple(float(b) for b in range(9)))
         u0, _ = backups.backup_depth1(frame, 1)
