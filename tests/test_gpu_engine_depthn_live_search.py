@@ -414,6 +414,31 @@ class LiveSearchTests(unittest.TestCase):
             self.assertNotIn('peer_view_b',self.search().process_many([dict(request('g',0),schema='other')])[0])
             self.assertIsNone(self.search(peer_view_b=True).process_many([dict(request('g',0),schema='other')])[0]['peer_view_b'])
 
+    def test_a_peer_belief_the_fold_cannot_give_refuses_its_root_and_the_server_goes_on(self):
+        """View b on, a private reveal applicable: the peer wire fold's PeerBeliefUnavailable (a genuine disagreement) refuses that
+        root alone, constructor_refused with PRIVATE_REVEALS_UNAVAILABLE, the batch's other root priced; any other exception of
+        the fold refuses its batch server_error, and the search answers the next request."""
+        record=dict(enabled=True,found=[dict(species='snorlax',ability='pressure')],applicable=[dict(species='snorlax',ability='pressure',slot=0)],
+            redacted=[dict(species='snorlax',ability='pressure',slot=0)],unmatched=[])
+        view_b=dict(enabled=True,cells=[],projected=0,changed=0,exact_agrees=True)
+        calls=[]
+        def fold(constructor,request,owner,root,facts,applicable):
+            calls.append(request['battle_id'])
+            if request['battle_id']=='x':raise cw.PeerBeliefUnavailable('carry slot 0: 0 peer wire fold members join it')
+            if request['battle_id']=='y':raise RuntimeError('a device failure')
+            return facts,[]
+        search=self.search(peer_view_b=True)
+        with patch.object(cw,'_reveal_record',return_value=record),patch.object(cw,'peer_view_b_record',return_value=view_b),\
+                patch.object(cw,'peer_belief_facts',side_effect=fold):
+            rows,_=self.run_batch(search,[request('x',0),request('g',0)],{('x',0):self.outcome(0),('g',0):self.outcome(1)})
+            self.assertEqual([(r['status'],r['cause'])for r in rows],[('REFUSED','constructor_refused'),('COMPLETE',None)])
+            self.assertIn('PRIVATE_REVEALS_UNAVAILABLE',rows[0]['refusal']);self.assertIn('0 peer wire fold members',rows[0]['refusal'])
+            broken,_=self.run_batch(search,[request('y',0)],{('y',0):self.outcome(2)})
+            self.assertEqual((broken[0]['status'],broken[0]['cause']),('REFUSED','server_error'));self.assertIn('a device failure',broken[0]['refusal'])
+            after,_=self.run_batch(search,[request('h',0)],{('h',0):self.outcome(3)})
+            self.assertEqual(after[0]['status'],'COMPLETE')
+        self.assertEqual(calls,['x','g','y','h'])
+
     def test_a_root_whose_opponent_must_recharge_is_constructor_refused(self):
         """The lead's decision: the peer's -mustrecharge on the owner's lines refuses the root in prepare_roots (cause
         constructor_refused, refusal constructor-root:OPPONENT_RECHARGE_UNREPRESENTED:...); the owner's own does not."""
