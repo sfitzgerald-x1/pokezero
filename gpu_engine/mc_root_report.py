@@ -73,16 +73,18 @@ def baseline_report(rows):
     """The real-Showdown U1 baseline over roots with a baseline: per root the Monte Carlo value (the action's mean outcome, censored
     rollouts left out) of the value head's depth-1 completed-Q argmax and of the policy's argmax; their paired difference over all
     roots and over the roots where the two choices differ, clustered by battle seed."""
-    diffs, clusters, differ, dclusters, agree = [], [], [], [], 0
+    diffs, clusters, differ, dclusters, agree, censored_choice = [], [], [], [], 0, 0
     for r in rows:
         b = r.get('baseline')
         if not b or not r.get('policy'):continue
-        actions = r['actions'];q_mc = np.nanmean(censored(r['outcomes']), 1)
+        actions = r['actions'];c = censored(r['outcomes'])
+        q_mc = np.array([np.nanmean(row) if np.any(~np.isnan(row)) else np.nan for row in c])
         a_v = int(np.argmax(b['completed_q']));a_pi = int(np.argmax([r['policy'][a] for a in actions]))
+        if np.isnan(q_mc[a_v]) or np.isnan(q_mc[a_pi]):censored_choice += 1;continue   # every rollout of a chosen action censored
         d = float(q_mc[a_v] - q_mc[a_pi]);diffs.append(d);clusters.append(r['seed'])
         if a_v != a_pi:differ.append(d);dclusters.append(r['seed'])
         else:agree += 1
-    return dict(roots=len(diffs), same_choice=agree, value_minus_policy=cluster_ci(diffs, clusters),
+    return dict(roots=len(diffs), same_choice=agree, censored_choice=censored_choice, value_minus_policy=cluster_ci(diffs, clusters),
                 value_minus_policy_where_different=cluster_ci(differ, dclusters))
 
 
@@ -98,7 +100,9 @@ def main(argv=None):
         g = list(group);rollouts = sum(r['rollouts'] for r in g);decisions = sum(sum(map(sum, r['decisions'])) for r in g)
         cpu = sum(r.get('cpu_seconds', 0) for r in g);wall = sum(r['wall_seconds'] for r in g)
         actions = float(np.mean([len(r['actions']) for r in g]))
-        cost = dict(roots=len(g), rollouts=rollouts, mean_legal_actions=round(actions, 2), decisions_per_rollout=round(decisions / rollouts, 1),
+        capped = sum(int(np.sum(np.asarray(r['outcomes'], float) == CAPPED)) for r in g)
+        cost = dict(roots=len(g), rollouts=rollouts, capped_share=round(capped / rollouts, 5), mean_legal_actions=round(actions, 2),
+                    decisions_per_rollout=round(decisions / rollouts, 1),
                     wall_seconds_per_rollout=round(wall / rollouts, 4), cpu_seconds_per_rollout=round(cpu / rollouts, 4),
                     cpu_python_share=round(sum(r.get('cpu_python_seconds', 0) for r in g) / cpu, 3) if cpu else None,
                     cpu_ms_per_decision=round(1000 * cpu / decisions, 2))
