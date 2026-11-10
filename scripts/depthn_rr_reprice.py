@@ -189,7 +189,7 @@ def options(argv=None):
     server.check_reply_arguments(p, args)   # br_fp replays (--reply-archive with its two sha256 flags), as the server checks them
     if not args.champion_archive:p.error('--champion-archive with its two sha256 flags is required: the champion prices every root and leaf')
     for name in BENCH_ONLY:
-        if getattr(args, name, None):p.error(f'--{name.replace("_", "-")} is the bench\'s; cells come from --cells or --sample')
+        if getattr(args, name, None):p.error(f'--{name.replace("_", "-")} is the bench\'s; cells come from --cells, --sample or --targets')
     if args.buckets != (1,):p.error('the live servers priced at bucket 1 only')
     if args.max_requests not in (None, 1):p.error('the live servers took one request per batch (--max-requests 1)')
     if args.saved_root_admission:p.error('the live servers kept per-battle sessions (no --saved-root-admission)')
@@ -321,28 +321,42 @@ def shard_cells(cells, shard, shards):
 
 
 def read_targets(path):
-    """{ordinal: sorted decision indices} from a --targets JSONL; a malformed or duplicated row is an error."""
-    out = collections.defaultdict(set)
+    """{ordinal: dict(targets, ours, seed, kind)} from a --targets JSONL. ours, seed and kind are optional, but one ordinal's rows
+    must agree on them; a malformed, non-object or repeated row is an error."""
+    out = {}
     for number, raw in enumerate(Path(path).read_bytes().splitlines(), 1):
         if not raw.strip():continue
-        row = json.loads(raw);ordinal, index = row.get('ordinal'), row.get('decision_index')
+        row = json.loads(raw)
+        if type(row) is not dict:raise ValueError(f'{path}:{number}: a JSON object per line required')
+        ordinal, index = row.get('ordinal'), row.get('decision_index')
         if type(ordinal) is not int or ordinal < 0 or type(index) is not int or index < 0:
             raise ValueError(f'{path}:{number}: integer ordinal and decision_index (>= 0) required')
-        if index in out[ordinal]:raise ValueError(f'{path}:{number}: target ({ordinal}, {index}) repeated')
-        out[ordinal].add(index)
+        entry = out.setdefault(ordinal, dict(targets=set(), ours=None, seed=None, kind=None))
+        if index in entry['targets']:raise ValueError(f'{path}:{number}: target ({ordinal}, {index}) repeated')
+        entry['targets'].add(index)
+        for key in ('ours', 'seed', 'kind'):
+            if row.get(key) is None:continue
+            if entry[key] is not None and entry[key] != row[key]:raise ValueError(f'{path}:{number}: cell {ordinal}\'s {key} differs between rows')
+            entry[key] = row[key]
     if not out:raise ValueError(f'{path}: no targets')
-    return {o: sorted(v) for o, v in sorted(out.items())}
+    return {o: dict(e, targets=sorted(e['targets'])) for o, e in sorted(out.items())}
 
 
-def target_cell(run, ordinal, targets):
+def target_cell(run, ordinal, entry):
     """A --targets cell: results/<ordinal>.json's cell when it exists (any arm), else the capture's own registration (owner -> seat,
-    seed); with its target decision indices."""
-    if (Path(run) / 'results' / f'{ordinal}.json').exists():cell = cell_of(run, ordinal)
+    seed), which must name this ordinal; with its target decision indices and kind. A target row's ours and seed, when given,
+    must be the capture's owner and the cell's seed: a different seat's capture is a different root."""
+    if (Path(run) / 'results' / f'{ordinal}.json').exists():
+        cell = cell_of(run, ordinal);owner = ('p1', 'p2')[cell['seat']] if cell.get('seat') in (0, 1) else None
     else:
         first = next(iter(owning.read_capture(Path(run) / 'owning-wire' / f'{ordinal}.jsonl')), None)
         if first is None:raise ValueError(f'cell {ordinal}: its capture has no decision')
-        cell = dict(ordinal=ordinal, arm=None, seed=first['seed'], seat={'p1': 0, 'p2': 1}[first['owner']], pair_ordinal=None, status=None)
-    return dict(cell, targets=list(targets))
+        if (first.get('cell') or {}).get('ordinal') != ordinal:raise ValueError(f'owning-wire/{ordinal}.jsonl registers cell {(first.get("cell") or {}).get("ordinal")!r}')
+        owner = first['owner'];cell = dict(ordinal=ordinal, arm=None, seed=first['seed'], seat={'p1': 0, 'p2': 1}[owner], pair_ordinal=None, status=None)
+    if entry['ours'] is not None and entry['ours'] != owner:
+        raise ValueError(f'cell {ordinal}: the targets name seat {entry["ours"]!r}, its capture is {owner!r}\'s')
+    if entry['seed'] is not None and entry['seed'] != cell['seed']:raise ValueError(f'cell {ordinal}: the targets name seed {entry["seed"]}, the cell is {cell["seed"]}')
+    return dict(cell, targets=list(entry['targets']), target_kind=entry['kind'])
 
 
 def select_cells(args):
@@ -350,10 +364,10 @@ def select_cells(args):
     cells with an owner capture; --targets names cells of any arm and the decisions to replay in each."""
     run = Path(args.run_directory)
     missing = lambda ordinals: [o for o in ordinals if not (run / 'owning-wire' / f'{o}.jsonl').exists()]
-    if getattr(args, 'targets', None):
-        targets = read_targets(args.targets)
-        if missing(targets):raise ValueError(f'cells {missing(targets)} have no owner capture')
-        return shard_cells([target_cell(run, o, t) for o, t in targets.items()], args.shard, args.shards)
+    if getattr(args, 'targets', None):   # this shard's ordinals first: another shard's cells are never read
+        targets = read_targets(args.targets);mine = sorted(targets)[args.shard::args.shards]
+        if missing(mine):raise ValueError(f'cells {missing(mine)} have no owner capture')
+        return [target_cell(run, o, targets[o]) for o in mine]
     if args.cells:
         cells = [cell_of(run, o) for o in dict.fromkeys(args.cells)]
         odd = [c['ordinal'] for c in cells if c['arm'] != args.arm]
@@ -829,16 +843,18 @@ def main(argv=None):
                     cell_errors.append(dict(ordinal=ordinal, error=f'{type(error).__name__}: {error}'));continue
                 for row in captured:
                     if not is_target(cell, row['decision_index']):non_target += 1;continue   # never sent: the constructor folds the prefix itself
-                    if 'targets' in cell:targets_seen[ordinal].add(row['decision_index'])
                     request = {k: row[k] for k in bench.KEYS};found = live_fields(telemetry.get(row['decision_index']))
+                    foreign = 'targets' in cell and cell.get('arm') != args.arm   # another arm's cell: no live search to compare with
+                    if foreign:found = None
                     if not sent(request):
-                        if 'targets' in cell:target_single_legal.append(dict(ordinal=ordinal, decision_index=row['decision_index']))
+                        if 'targets' in cell:target_single_legal.append(dict(ordinal=ordinal, decision_index=row['decision_index']));targets_seen[ordinal].add(row['decision_index'])
                         skipped += 1
                         if found is not None and found['request_kind'] != 'forced':skip_disagreements.append(dict(ordinal=ordinal, decision_index=row['decision_index'],
                             live_request_kind=found['request_kind'], sent=False))
                         continue
                     if args.max_decisions is not None and len(rows) >= args.max_decisions:done = True;break
-                    problem = ('no live telemetry row' if found is None else 'duplicated live telemetry rows' if row['decision_index'] in duplicated
+                    if 'targets' in cell:targets_seen[ordinal].add(row['decision_index'])
+                    problem = (f'cell arm {cell.get("arm")!r} is not the replayed arm' if foreign else 'no live telemetry row' if found is None else 'duplicated live telemetry rows' if row['decision_index'] in duplicated
                         else 'live prefix differs from the capture\'s' if found['prefix_sha256'] != row['prefix_sha256'] else None)
                     if found is not None and found['request_kind'] == 'forced':skip_disagreements.append(dict(ordinal=ordinal, decision_index=row['decision_index'],
                         live_request_kind='forced', sent=True))
@@ -850,6 +866,7 @@ def main(argv=None):
                     clock = time.perf_counter();detail = describe(capture, peer_lanes, vocabulary, peer_inputs,
                         (ordinal, row['decision_index']), reply=bool(args.reply_archive));seconds = time.perf_counter() - clock
                     record = decision_row(cell, row, body, response, wall, found, detail, shard=shard, capture_seconds=seconds, live_problem=problem)
+                    if 'targets' in cell:record.update(cell_arm=cell.get('arm'), target_kind=cell.get('target_kind'))
                     stream.write(encode_row(record) + '\n');stream.flush();os.fsync(stream.fileno())
                     rows.append({k: v for k, v in record.items() if k not in BULK})   # the summary's fields; the grids stay on disk
                     p = record['parity']
@@ -863,7 +880,8 @@ def main(argv=None):
         write_json(out / f'summary-{shard}.json', summarize(rows, shard=shard, shards=args.shards, cells=cells, extra=dict(
             skipped_single_legal=skipped, skip_disagreements=skip_disagreements, cell_errors=cell_errors, max_decisions_reached=done,
             **(dict(targets=dict(file=args.targets, requested=sum(len(c['targets']) for c in cells), found=sum(map(len, targets_seen.values())),
-                missing=[dict(ordinal=c['ordinal'], decision_index=i) for c in cells for i in c['targets'] if i not in targets_seen[c['ordinal']]],
+                **{('not_reached' if done else 'missing'): [dict(ordinal=c['ordinal'], decision_index=i) for c in cells for i in c['targets']
+                    if i not in targets_seen[c['ordinal']]]},
                 single_legal=target_single_legal, non_target_skipped=non_target)) if args.targets else {}),
             interrupted=not finished, timings=dict(build_seconds=build_seconds, warmup_seconds=warmup_seconds,
             replay_seconds=time.perf_counter() - started))))
