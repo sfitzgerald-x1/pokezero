@@ -1,7 +1,7 @@
 {
  "schema": "pokezero.effect_probe.scenario.v1",
  "move": "willowisp",
- "note": "Will-O-Wisp hits (75%) or misses Metagross; Meteor Mash before the burn (Metagross is faster) and halved after it, then two turns of burn residual next to Leftovers while Dusclops uses Seismic Toss.",
+ "note": "Will-O-Wisp hits (75%) or misses Metagross; Meteor Mash before the burn (Metagross is faster) and halved after it, then two turns of burn residual next to Leftovers while Dusclops uses Seismic Toss. The tape pins secondary.1 = 99 on every step: Meteor Mash's 20% user +1 Atk secondary is not modelled in the engine yet (tier B), so the scenario stays on the burn and cannot flip on a tape-default change.",
  "teams": [
   [
    {
@@ -154,6 +154,9 @@
    "move 1"
   ]
  ],
+ "tape": {
+  "secondary.1": 99
+ },
  "axes": [
   {
    "name": "accuracy",
