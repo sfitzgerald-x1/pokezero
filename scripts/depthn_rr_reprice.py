@@ -114,6 +114,20 @@ tree guard) on the live inputs.
   registration must name its ordinal. A cell of another arm than --arm is replayed without the live join (live_problem names
   its arm); --targets rows carry cell_arm and target_kind. Sending a later decision alone is the live path's own: with no session, the constructor
   folds the battle's whole prefix from a fresh adapter, and world seeds do not depend on earlier calls.
+- True worlds (--true-worlds DIR --true-kind true|true_private; off by default; the MC ladder's rungs R1 and R2): around each
+  process_many call only, phase_d_protocol_world.sample is wrapped too (ProtocolConstructor.prepare looks it up as
+  `protocol.sample` at call time; depthn_opponent_view_parity.check_call_site verifies that before anything loads). The wrapper
+  calls the original sampler with the same arguments (it raises as usual) and returns its WorldSet (the carried root, the seeds,
+  the diagnostics) with its W = count worlds replaced by true worlds: world i is depthn_opponent_view_parity.build_true_world
+  (the opponent's true team, materialized with sampled world i's kernel seed: W chance draws of one true state); true_private
+  then writes the opponent's request-exact HP and active PP over it (overlay_private). The inputs come from the cell's opponent
+  sidecar DIR/opponent/<kind>-<ordinal>.json (gpu_engine/mc_ladder_opponents; kind: the --targets row's, else the ordinal's only
+  sidecar), its root keyed by the decision index. true_private where the opponent waits at the root falls back to true
+  (recorded). Fail closed: a world that cannot be built (no sidecar, another seed or seat, no root entry for true_private, a team
+  that cannot be reconstructed, a refused materialization, an error) has no state and its reason as its refusal, so the live
+  search refuses the root (constructor_refused, the all-W rule). Everything after the sampler is the live path. A row then holds
+  true_worlds (requested and played kind, fallback, problem, sidecar and its sha256, the true start, worlds built) and each world
+  true_world (true_kind, built, reason, overlay notes, kernel_seed and whether it is the sampled world's, refusals).
 - Output (--out, a new directory): rows-<shard>.jsonl (one row per sent decision, whatever its status, written and fsynced as
   it goes), header-<shard>.json (tree guard, run header and identity check, warmup report, argv, cells, peer_inputs: the
   sidecar's path and schema, recharge_moves) and
@@ -126,7 +140,7 @@ compilation cache so every program loads the live executables instead of re-auto
 Exit 0 when any decision was sent, 2 when none was.
 """
 import collections
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
 import dis
 import hashlib
@@ -162,6 +176,7 @@ PEER_INPUTS_SCHEMA = 'pokezero.depthn-rr-reprice.peer-inputs.v1'
 PEER_INPUT_KEYS = ('numeric_features', 'categorical_ids', 'token_type_ids', 'attention_mask', 'history_mask')   # ChampionEvaluator.view's keys
 ENVIRONMENT = ('JAX_DEFAULT_MATMUL_PRECISION', 'JAX_ENABLE_X64', 'JAX_PLATFORMS', 'XLA_FLAGS', 'XLA_PYTHON_CLIENT_MEM_FRACTION', 'CUDA_VISIBLE_DEVICES',
     'TF_CPP_MIN_LOG_LEVEL')
+TRUE_KINDS = ('true', 'true_private')   # --true-kind (module docstring: true worlds)
 
 
 # Command line ---------------------------------------------------------------------------------------------------------------------
@@ -183,6 +198,10 @@ def parser():
     p.add_argument('--max-decisions', type=int, help='stop after this many sent decisions (smoke tests)')
     p.add_argument('--accept-tree', metavar='COMMIT', help='replay against a modified tree: COMMIT must be HEAD and clean in the guarded paths '
         'and scripts/; its trees replace the live pins (module docstring). Parity against live is recorded but expected to fail')
+    p.add_argument('--true-worlds', metavar='SIDECAR_DIR', help='price true worlds instead of sampled ones (the MC ladder\'s R1/R2): the '
+        'opponent sidecars DIR/opponent/<kind>-<ordinal>.json (gpu_engine/mc_ladder_opponents); needs --true-kind')
+    p.add_argument('--true-kind', choices=TRUE_KINDS, help='true: the opponent\'s true team; true_private: plus its request-exact HP and '
+        'active PP at the root (true where it waits)')
     p.set_defaults(saved_root_admission=False, buckets=(1,))
     return p
 
@@ -201,6 +220,7 @@ def options(argv=None):
     if args.sample is None and args.sample_seed is not None:p.error('--sample-seed goes with --sample')
     if args.shards < 1 or not 0 <= args.shard < args.shards:p.error('--shard I --shards N with 0 <= I < N required')
     if args.max_decisions is not None and args.max_decisions < 1:p.error('--max-decisions must be >= 1')
+    if (args.true_worlds is None) != (args.true_kind is None):p.error('--true-worlds and --true-kind go together')
     args.port = args.port or 0;args.max_requests = 1
     return args
 
@@ -776,6 +796,140 @@ def encode_row(row):
     except ValueError:return json.dumps(dict(row, nonfinite=True), sort_keys=True, default=repr)
 
 
+# True worlds (--true-worlds) ---------------------------------------------------------------------------------------------------------
+def _ov():
+    from scripts import depthn_opponent_view_parity as ov   # the OV harness's true-world builders (only with --true-worlds)
+    return ov
+
+
+def sidecar_path(directory, cell):
+    """(path, None) of the cell's opponent sidecar DIR/opponent/<kind>-<ordinal>.json (kind: the --targets row's; without one, the
+    ordinal's only sidecar), or (None, why)."""
+    folder, kind, ordinal = Path(directory) / 'opponent', cell.get('target_kind'), cell['ordinal']
+    if kind is not None:
+        path = folder / f'{kind}-{ordinal}.json'
+        return (path, None) if path.exists() else (None, f'no opponent sidecar {path.name}')
+    found = sorted(folder.glob(f'*-{ordinal}.json'))
+    if len(found) == 1:return found[0], None
+    return None, f'no opponent sidecar for cell {ordinal}' if not found else f'cell {ordinal} has {len(found)} sidecars and no target kind'
+
+
+def true_inputs(sidecar, kind, cell, owner, decision_index):
+    """What one decision's true worlds are built from: the sidecar's team rows, round-0 request and (true_private) the root's
+    request, the played kind, the fallback (true_private where the opponent waits at the root: true), and the problem that
+    refuses every world (another seed or seat than the root's, no root entry or a root the sidecar writer could not align)."""
+    out = dict(kind=kind, fallback=None, problem=None, team_rows=None, round0_request=None, root_request=None)
+    ours = f'p{owner + 1}'
+    if sidecar.get('ours') != ours:return dict(out, problem=f'the sidecar is seat {sidecar.get("ours")}, the root seat {ours}')
+    if cell.get('seed') is not None and sidecar.get('seed') != cell['seed']:
+        return dict(out, problem=f'the sidecar names seed {sidecar.get("seed")}, the cell {cell["seed"]}')
+    out.update(team_rows=sidecar['team_rows'], round0_request=sidecar['round0_request'])
+    if kind == 'true':return out
+    root = (sidecar.get('roots') or {}).get(str(decision_index))
+    if root is None:return dict(out, problem=f'the sidecar has no root {decision_index}')
+    if root.get('error'):return dict(out, problem=f'the sidecar\'s root {decision_index}: {root["error"]}')
+    if root.get('root_request') is None:return dict(out, kind='true', fallback='the opponent waits at the root: no request to overlay')
+    return dict(out, root_request=root['root_request'])
+
+
+def true_world_set(ov, call, made, inputs):
+    """(the sampler's WorldSet with its worlds replaced by true worlds, per-world facts, the true start's facts). World i: the OV
+    harness's build_true_world with index i (sampled world i's kernel seed), then for true_private overlay_private on the
+    opponent's side. A world that cannot be built has no state and its reason as its refusal (fail closed)."""
+    from gpu_engine.device_public_world_state import World
+    from gpu_engine.phase_d_live_worlds import WorldSet
+    named = call.named;count = int(named['count']);owner = int(named['detached'].address.owner);worlds, facts, start = [], [], None
+    for i in range(count):
+        sampled = made.worlds[i].kernel_seed if i < len(made.worlds) else None
+        fact = dict(world=i, true_kind=inputs['kind'], built=False, reason=inputs['problem'], notes=[], kernel_seed=sampled, kernel_seed_is_sampled=None, refusals=[])
+        state = public = None
+        if inputs['problem'] is None:
+            try:
+                world, info = ov.build_true_world(call, inputs['team_rows'], inputs['round0_request'], index=i)
+                if start is None and 'species' in info:start = {k: info.get(k) for k in ('species', 'happiness', 'notes', 'packed_sha256')}
+                fact.update(reason=info.get('reason'), kernel_seed=info.get('kernel_seed', sampled), refusals=list(info.get('refusals') or ()))
+                fact['kernel_seed_is_sampled'] = None if sampled is None or 'kernel_seed' not in info else info['kernel_seed'] == sampled
+                if world is not None and world.state is None:fact['reason'] = 'the true world\'s materialization was refused'
+                elif world is not None:
+                    state, public = world.state, world.public
+                    if inputs['root_request'] is not None:
+                        with ov.cpu_device():state, fact['notes'] = ov.overlay_private(state, 1 - owner, inputs['root_request'], named['metadata']['vocabulary'])
+            except Exception as error:   # the world, not the replay: it is refused
+                state = public = None;fact['reason'] = f'{type(error).__name__}: {error}'[:300]
+        fact['built'] = state is not None
+        if state is None and not fact['refusals']:fact['refusals'] = [str(fact['reason'] or 'not built')]
+        worlds.append(World(i, state, public, tuple(fact['refusals']), fact['kernel_seed'], False));facts.append(fact)
+    return WorldSet(made.root, tuple(worlds), tuple(made.seeds), count, tuple(made.mapper_diagnostics)), facts, start
+
+
+class TrueWorlds:
+    """--true-worlds DIR --true-kind KIND (module docstring): installed(cell, decision_index) wraps phase_d_protocol_world.sample
+    for one process_many call so it returns true worlds, and yields the decision's record."""
+    def __init__(self, directory, kind):
+        if kind not in TRUE_KINDS:raise ValueError(f'--true-kind must be one of {TRUE_KINDS}, not {kind!r}')
+        if not (Path(directory) / 'opponent').is_dir():raise ValueError(f'--true-worlds {directory}: no opponent/ sidecar directory')
+        self.directory, self.kind = Path(directory), kind
+
+    def load(self, cell):
+        """(the cell's sidecar or None, its record: path, sha256, or the problem)."""
+        path, problem = sidecar_path(self.directory, cell)
+        if path is None:return None, dict(sidecar=None, sidecar_sha256=None, problem=problem)
+        raw = path.read_bytes()
+        try:doc = json.loads(raw)
+        except ValueError as error:   # a damaged sidecar refuses this root, never the shard
+            return None, dict(sidecar=str(path), sidecar_sha256=hashlib.sha256(raw).hexdigest(), problem=f'sidecar unreadable: {error}'[:200])
+        return doc, dict(sidecar=str(path), sidecar_sha256=hashlib.sha256(raw).hexdigest(), problem=None)
+
+    @contextmanager
+    def installed(self, cell, decision_index):
+        """phase_d_protocol_world.sample wrapped while the block runs (restored when it ends or raises). The record holds the
+        sidecar and, per sample call, the played kind, fallback, problem, true start and each world's facts (or the sampler's
+        error, which is raised on)."""
+        from gpu_engine import phase_d_protocol_world as pw
+        ov = _ov();original = pw.sample;sidecar, found = self.load(cell);record = dict(found, requested_kind=self.kind, calls=[])
+
+        def wrapper(*arguments, **keywords):
+            call = ov.SampleCall(dict(zip(ov.SAMPLE_PARAMETERS, arguments), **keywords))
+            try:made = original(*arguments, **keywords)
+            except BaseException as error:
+                record['calls'].append(dict(error=f'{type(error).__name__}: {error}'[:300]));raise
+            call.result = made;owner = int(call.named['detached'].address.owner)
+            inputs = (dict(kind=self.kind, fallback=None, problem=found['problem']) if sidecar is None
+                else true_inputs(sidecar, self.kind, cell, owner, decision_index))
+            out, facts, start = true_world_set(ov, call, made, inputs)
+            record['calls'].append(dict(kind=inputs['kind'], fallback=inputs['fallback'], problem=inputs['problem'], start=start, worlds=facts))
+            return out
+
+        pw.sample = wrapper
+        try:yield record
+        finally:pw.sample = original
+
+
+def true_worlds_fields(detail, record):
+    """Writes one decision's true-world record into describe's detail: the row's true_worlds (the last sample call's kind,
+    fallback, problem and start, the sidecar, the worlds built) and each world's true_world."""
+    calls = record['calls'];last = calls[-1] if calls else {};facts = last.get('worlds') or []
+    detail['true_worlds'] = dict({k: v for k, v in record.items() if k != 'calls'}, sample_calls=len(calls), error=last.get('error'),
+        **{k: last.get(k) for k in ('kind', 'fallback', 'start')}, problem=last.get('problem', record['problem']),
+        worlds=len(facts), built=sum(f['built'] for f in facts))
+    if len(calls) > 1:detail['notes'].append(f'{len(calls)} sample calls: the last one\'s true worlds are recorded')
+    worlds = detail['worlds']
+    for fact in facts:
+        while fact['world'] >= len(worlds):worlds.append(dict(world=len(worlds)))
+        worlds[fact['world']]['true_world'] = fact
+
+
+def true_worlds_summary(rows, kind):
+    """The summary's true_worlds: rows, the kinds played, the fallbacks to true, and the roots failed closed (a problem, or a
+    world not built)."""
+    marked = [r for r in rows if r.get('true_worlds')];address = lambda r: dict(ordinal=r['ordinal'], decision_index=r['decision_index'])
+    return dict(requested_kind=kind, rows=len(marked), played=dict(collections.Counter(r['true_worlds']['kind'] for r in marked if r['true_worlds']['kind'])),
+        fallbacks=[dict(address(r), fallback=r['true_worlds']['fallback']) for r in marked if r['true_worlds']['fallback']],
+        failed_closed=[dict(address(r), problem=r['true_worlds']['problem'], built=r['true_worlds']['built'], worlds=r['true_worlds']['worlds'])
+            for r in marked if r['true_worlds']['sample_calls'] and (r['true_worlds']['problem'] or r['true_worlds']['built'] < r['true_worlds']['worlds'])],
+        never_sampled=[address(r) for r in marked if not r['true_worlds']['sample_calls']])
+
+
 # Summary -------------------------------------------------------------------------------------------------------------------------
 def peer_inputs_summary(rows):
     """The summary's peer_inputs_check (module docstring): written, checked and equal worlds over every decided root, the
@@ -822,8 +976,11 @@ def write_json(path, value):
 
 
 def main(argv=None):
-    args = options(argv);argv = list(sys.argv[1:] if argv is None else argv)
-    try:guard = tree_guard(tree_commit=args.tree_commit, accept_tree=args.accept_tree);check_call_sites();cells = select_cells(args)
+    args = options(argv);argv = list(sys.argv[1:] if argv is None else argv);true_worlds = None
+    try:
+        guard = tree_guard(tree_commit=args.tree_commit, accept_tree=args.accept_tree);check_call_sites()
+        if getattr(args, 'true_worlds', None):_ov().check_call_site();true_worlds = TrueWorlds(args.true_worlds, args.true_kind)   # the sampler's call site
+        cells = select_cells(args)
     except (ValueError, RuntimeError, OSError) as error:raise SystemExit(f'depthn_rr_reprice: {error}')
     if not cells:raise SystemExit('depthn_rr_reprice: no cell in this shard')
     out = Path(args.out);out.mkdir(parents=True, exist_ok=False);shard = args.shard;run = Path(args.run_directory)
@@ -842,6 +999,7 @@ def main(argv=None):
         warmup_requests=len(saved), build_seconds=build_seconds, warmup_seconds=warmup_seconds, cells=cells, run_directory=str(run),
         arm=args.arm, shard=shard, shards=args.shards, max_decisions=args.max_decisions, sample=args.sample, sample_seed=args.sample_seed,
         targets=None if not args.targets else dict(file=str(args.targets), sha256=hashlib.sha256(Path(args.targets).read_bytes()).hexdigest()),
+        true_worlds=None if true_worlds is None else dict(directory=str(true_worlds.directory), kind=true_worlds.kind),
         jax_version=jax.__version__, devices=[f'{d.platform}:{d.device_kind}' for d in jax.devices()], python=sys.version,
         environment={k: os.environ.get(k) for k in ENVIRONMENT}, pid=os.getpid(), **({'replay_against': MODIFIED_TREE} if guard.get('modified_tree') else {})))
     rows, skipped, skip_disagreements, cell_errors, done, finished, scanned = [], 0, [], [], False, False, set()
@@ -877,10 +1035,12 @@ def main(argv=None):
                     body = dict(request, lines=list(request['lines']), schema=server.original.SCHEMA,
                         request_id=f'rr-{ordinal}-{row["decision_index"]}-{os.getpid()}', rung=search.rung, budget_seconds=bench.BUDGET)
                     capture = Capture()
-                    with capture.installed():
+                    with capture.installed(), (nullcontext() if true_worlds is None else true_worlds.installed(cell, row['decision_index'])) as truth:
                         clock = time.perf_counter();response = search.process_many([body])[0];wall = time.perf_counter() - clock
                     clock = time.perf_counter();detail = describe(capture, peer_lanes, vocabulary, peer_inputs,
-                        (ordinal, row['decision_index']), reply=bool(args.reply_archive));seconds = time.perf_counter() - clock
+                        (ordinal, row['decision_index']), reply=bool(args.reply_archive))
+                    if truth is not None:true_worlds_fields(detail, truth)
+                    seconds = time.perf_counter() - clock
                     record = decision_row(cell, row, body, response, wall, found, detail, shard=shard, capture_seconds=seconds, live_problem=problem)
                     if 'targets' in cell:record.update(cell_arm=cell.get('arm'), target_kind=cell.get('target_kind'))
                     stream.write(encode_row(record) + '\n');stream.flush();os.fsync(stream.fileno())
@@ -888,7 +1048,9 @@ def main(argv=None):
                     p = record['parity']
                     print(json.dumps(dict(ordinal=ordinal, decision_index=row['decision_index'], status=response.get('status'), cause=response.get('cause'),
                         live_source=None if found is None else found['source'], action_equal=p['action_equal'], q_equal=p['q_equal'],
-                        kept_disagreements=detail['kept_disagreements'], notes=len(detail['notes']), wall=wall, capture=seconds)), flush=True)
+                        kept_disagreements=detail['kept_disagreements'], notes=len(detail['notes']), wall=wall, capture=seconds,
+                        **({} if truth is None else dict(true_kind=detail['true_worlds']['kind'], true_built=detail['true_worlds']['built'],
+                            true_problem=detail['true_worlds']['problem'])))), flush=True)
                     if not record['capture_ok']:
                         raise RuntimeError(f'cell {ordinal} decision {row["decision_index"]}: the capture missed a decide or prepare_roots call')
                 else:scanned.add(ordinal)   # every captured decision of the cell was looked at (no --max-decisions stop inside it)
@@ -902,6 +1064,7 @@ def main(argv=None):
                 not_reached=[dict(ordinal=c['ordinal'], decision_index=i) for c in cells for i in c['targets']   # a stop or error before the cell ended
                     if c['ordinal'] not in scanned and i not in targets_seen[c['ordinal']]],
                 single_legal=target_single_legal, non_target_skipped=non_target)) if args.targets else {}),
+            **({'true_worlds': true_worlds_summary(rows, true_worlds.kind)} if true_worlds is not None else {}),
             interrupted=not finished, timings=dict(build_seconds=build_seconds, warmup_seconds=warmup_seconds,
             replay_seconds=time.perf_counter() - started))))
         peer_inputs.write(out / sidecar['path'], sidecar)
