@@ -40,8 +40,8 @@ row never claims a trip, so mc_ladder_score counts it not_decided under every --
 Reasons for action None:
 - depth1_missing[:cause]: no depth-1 frame (the root was refused before pricing; cause is the row's root.refusal_cause);
 - refused_at_depth1: D3 itself refuses a block (depth1.refused_at_depth1);
-- root_prior_missing / root_prior_invalid: no usable root_logits and root_legal. The re-pricer records them only for a root
-  that reached decide, so today every root refused at depth 2 alone lands here for the depth-1 rungs;
+- root_prior_missing / root_prior_invalid: no usable root_logits and root_legal (the row's root, or for a root decide never saw,
+  the priced batch entry's own under depth1.root_logits / root_legal);
 - world_missing, world_unpriced, world_invalid, unpriced_cell, averaging_error: a world or a needed cell has no price;
 - reply_prior_missing: a requested world has no reply_peer_logits (only roots that reached the reply model's decide have them);
 - replay_<status>[:cause]: R5 and R5_ng on a replay that did not end COMPLETE; replay_action_invalid;
@@ -153,6 +153,9 @@ def choose(raw, run):
     """(the normalized row, {rung: rung row without the key}, and for runs with R5 the depth-2 recomputation: ((a*, per-world q,
     q), None) or (None, the failure reason))."""
     d = rr.normalize(raw);cause = d['refusal_cause'];ops = {};prior_reason = None
+    depth1 = raw.get('depth1') if type(raw.get('depth1')) is dict else {}
+    if d['root_logits'] is None and d['root_legal'] is None and depth1.get('root_logits') is not None:   # a root decide never saw
+        d = dict(d, root_logits=depth1['root_logits'], root_legal=depth1['root_legal'])   # the priced batch entry's own root prior
     try:legal, greedy = root_prior(d)
     except rr.Unscorable as error:legal = greedy = None;prior_reason = error.reason
 

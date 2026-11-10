@@ -149,6 +149,14 @@ class GuardTests(unittest.TestCase):
 class UndecidedTests(unittest.TestCase):
     def reasons(self, raw, run='C'):return {n: r.get('reason') for n, r in one(raw, run).items() if r['action'] is None}
 
+    def test_a_root_decide_never_saw_uses_the_priced_entrys_root_prior(self):
+        raw = row(status='REFUSED', decided=False, reply=False)   # refused at depth 2: no decide, so no reply-model logits
+        raw['depth1'].update(root_logits=list(LOGITS), root_legal=list(LEGAL))
+        got = one(raw, 'C')
+        self.assertEqual(got['R3']['reason'], 'reply_prior_missing')
+        self.assertIsNotNone(got['R4b']['action'])
+        self.assertEqual((got['R4b']['guard_tripped'], got['R4b']['guard_reason']), (True, 'no_guard_record'))   # fail closed
+
     def test_reasons(self):
         self.assertEqual(self.reasons(row(status='REFUSED', decided=False)), dict.fromkeys(('R3', 'R3prime_ng', 'R4b'), 'root_prior_missing'))
         self.assertEqual(self.reasons(row(refused=[False, True])), dict.fromkeys(('R3', 'R3prime_ng', 'R4b'), 'refused_at_depth1'))
