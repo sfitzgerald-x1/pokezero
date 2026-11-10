@@ -231,6 +231,19 @@ def check_reply_arguments(p,args):
         p.error('--reply-archive-sha256 and --reply-checkpoint-sha256 must be 64-hex sha256s')
 
 
+def reply_view(meta):
+    """The peer view a reply archive was trained on: its export metadata's extra.view (fp_reply_train --view), 'env' when absent."""
+    return ((meta or {}).get('extra') or {}).get('view') or 'env'
+
+
+def check_reply_view(meta,args):
+    """A reply model trained on the builder's seat view b (view 'b': Foul Play's view without the [silent]-only reveals and with
+    the damage columns at public precision) is served only with --peer-view-b on, so its inputs are the view it learned; ValueError
+    otherwise (the server's and the re-pricer's loading). One-way: an env-view archive is still served with --peer-view-b."""
+    if reply_view(meta)=='b'and not getattr(args,'peer_view_b',False):
+        raise ValueError('the reply archive was trained on peer view b: serve it with --peer-view-b')
+
+
 def options(argv=None):
     p=parser();args=p.parse_args(argv);evaluators.check_arguments(p,args);check_precision_environment(p,args)
     if not args.champion_archive:p.error('--champion-archive with its two sha256 flags is required: the champion prices every root and leaf')
@@ -282,6 +295,7 @@ def build(args):
         from gpu_engine.depthn_reply_prior import ReplyPrior
         model=evaluators.load(args.reply_archive,expected_archive_sha256=args.reply_archive_sha256,
             expected_checkpoint_sha256=args.reply_checkpoint_sha256,precision=evaluators.PRECISIONS[args.champion_precision])
+        check_reply_view(getattr(model,'meta',None),args)
         reply=ReplyPrior(executor,model,mode=args.reply_views)
     return live.DepthNLiveSearch(constructor=constructor,pricers=pricers,params=params,binding=cw.binding(source,metadata,catalog),
         recipe=v5_gumbel.Recipe(args.recipe_seed),tree_commit=args.tree_commit or tree_commit(),min_price_seconds=args.min_price_seconds,
@@ -297,7 +311,7 @@ def header(args,search):
         vocabulary_sha256=args.expected_vocabulary_sha256,champion_archive_sha256=args.champion_archive_sha256,
         champion_checkpoint_sha256=args.champion_checkpoint_sha256,champion_precision=args.champion_precision,pricer=search.pricer_identity,
         **({}if not getattr(args,'reply_archive',None)else dict(root_operator='br_fp',reply_archive_sha256=args.reply_archive_sha256,
-            reply_checkpoint_sha256=args.reply_checkpoint_sha256,reply_views=args.reply_views)),
+            reply_checkpoint_sha256=args.reply_checkpoint_sha256,reply_views=args.reply_views,reply_archive_view=reply_view(getattr(getattr(getattr(search,'reply',None),'evaluator',None),'meta',None)))),
         jax_enable_x64=bool(jax.config.jax_enable_x64),matmul_precision=matmul_precision(),matmul_precision_pin=args.matmul_precision)
 
 

@@ -532,6 +532,10 @@ class ReplyPriorTests(unittest.TestCase):
             if b['status'] == 'COMPLETE':
                 self.assertEqual((b['reply_prior']['operator'], b['reply_prior']['champion_action_index'], b['reply_prior']['champion_q_values']),
                                  ('br_fp', a['action_index'], a['q_values']))
+                # the union guard: the reply model is the champion, so both arms agree and the record is the plain search's
+                union = b['effect_guard']['union'];self.assertEqual(union['champion'], union['reply'])
+                self.assertEqual({k: v for k, v in b['effect_guard'].items() if k not in ('union', 'union_only')}, a['effect_guard'])
+                self.assertNotIn('union', a['effect_guard'])
             else:self.assertIsNone(b['reply_prior'])
 
     def test_another_reply_model_plays_averaging_on_its_logits(self):
@@ -592,6 +596,25 @@ class ReplyPriorTests(unittest.TestCase):
                 self.assertRaisesRegex(RuntimeError, 'reply prior completed no warmup root'):
             self.search(reply=ReplyPrior(self.executor, self.evaluator, PARAMS[0])).warmup([request('w0', 0), request('w1', 0)])
         with Codex(outcomes):self.search(reply=ReplyPrior(self.executor, self.evaluator, PARAMS[0])).warmup([request('w0', 0), request('w1', 0)])
+
+    def test_warmup_compiles_both_owner_seats_whichever_seat_the_warmup_roots_have(self):
+        from gpu_engine.depthn_reply_prior import ReplyPrior
+        outcomes = {('w0', 0):self.outcome(0), ('w1', 0):self.outcome(1)}
+        for mode in ('eager', 'jit', 'check'):
+            with self.subTest(mode=mode), Codex(outcomes):
+                calls = []
+                reply = ReplyPrior(self.executor, self.evaluator, PARAMS[0], mode=mode)
+                real_logits, real_jit = reply.logits, reply.jit_logits
+                reply.logits = lambda worlds, owner:calls.append(('eager', owner)) or real_logits(worlds, owner)
+                reply.jit_logits = lambda worlds, owner:calls.append(('jit', owner)) or real_jit(worlds, owner)
+                search = self.search(reply=reply);warm = search.warmup([request('w0', 0), request('w1', 0)])   # every warmup root is p1's
+                self.assertEqual(set(warm['reply']['seats_seconds']), {0, 1});self.assertEqual(warm['reply']['views'], mode)
+                if mode in ('jit', 'check'):self.assertEqual(set(reply._jitted), {0, 1})   # both seats' jitted programs exist before READY
+                for kind in (('eager',) if mode == 'eager' else ('jit',) if mode == 'jit' else ('eager', 'jit')):
+                    self.assertEqual({o for k, o in calls if k == kind}, {0, 1}, (mode, kind, calls))
+        with Codex(outcomes), patch.object(ReplyPrior, 'warm', side_effect=RuntimeError('no compile')), \
+                self.assertRaisesRegex(RuntimeError, 'did not compile both seats'):
+            self.search(reply=ReplyPrior(self.executor, self.evaluator, PARAMS[0], mode='jit')).warmup([request('w0', 0), request('w1', 0)])
 
     def test_a_jit_failure_in_check_mode_is_recorded_and_eager_plays(self):
         from gpu_engine.depthn_reply_prior import ReplyPrior

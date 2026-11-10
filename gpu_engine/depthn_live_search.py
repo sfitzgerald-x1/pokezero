@@ -417,7 +417,8 @@ class DepthNLiveSearch:
             if reply is not None:
                 decision['reply_prior']=reply;self.reply_completed+=decision['status']=='COMPLETE'
             if decision['status']=='COMPLETE':decision['effect_guard']=self._effect_guard(frame,root,made,by_id[root['request_id']],children,seam_notes,
-                decision['action_index'],labels)
+                decision['action_index'],labels,reply_logits=None if reply is None else[None if w is None or not w.opponent_requested else
+                    w.opponent_logits for pair in blocks for w in pair])   # br_fp: the union guard on the reply model's logits
             results.append(dict(base,**decision))
         t_reduce=time.perf_counter();decided=self.clock()-started
         if len(prepared)!=len(todo)or len(results)!=len(todo)or any(r['request_id']!=p['request_id']for r,(_,p,_)in zip(results,todo)):
@@ -438,13 +439,13 @@ class DepthNLiveSearch:
             else:out[i]=dict(base,cause=refusal_cause(result['refusal']),refusal=result['refusal'])
         return out
 
-    def _effect_guard(self,frame,root,made,request,children,notes,choice,labels):
+    def _effect_guard(self,frame,root,made,request,children,notes,choice,labels,reply_logits=None):
         """The root's effect guard record (depthn_guard_inputs.effect_record over this frame's observed P1 children); the
         fail-closed error record when its inputs cannot be read (pokezero.depthn_effect_guard.error_record)."""
         try:
             pairs=made.worlds.pairs;worlds=[w for r in root['rows']for w in pairs[r]];owner={'p1':0,'p2':1}[request['owner']]
             return guard_inputs.effect_record(frame,root,worlds,children,request,owner,self.constructor.metadata['vocabulary'],choice,labels=labels,
-                notes=notes)
+                notes=notes,reply_logits=reply_logits)
         except FATAL:raise
         except Exception as error:return effect_guard.error_record(f'{type(error).__name__}: {error}')
 
@@ -500,7 +501,7 @@ class DepthNLiveSearch:
             if not isinstance(r,dict)or any(k not in r for k in keys):raise ValueError('saved requests with '+', '.join(keys)+' required')
             pool.append({k:r[k]for k in keys})
         if not pool:raise ValueError('at least one saved request required')
-        started=time.perf_counter();self.carry=None;self.warming=True;self.reply_completed=0
+        started=time.perf_counter();self.carry=None;self.warming=True;self.reply_completed=0;self.reply_warm=None
         try:report=self._warm_buckets(pool);labels=self._hold_to_reference(pool)
         finally:self.warming=False;self.reset_sessions()
         missing=[b for b in self.buckets if isinstance(self.pricers[b],guard_inputs.ObservedDepthNPricer)
@@ -510,11 +511,14 @@ class DepthNLiveSearch:
                 f'({"missing" if labels is None else "ok"})')
         if getattr(self,'reply',None)is not None and not self.reply_completed:   # a reply archive that fails on every root never reaches READY
             raise RuntimeError('warmup: the reply prior completed no warmup root (every one refused REPLY_PRIOR_ERROR or refused before it)')
+        if getattr(self,'reply',None)is not None and set(self.reply_warm or ())!={0,1}:
+            raise RuntimeError('warmup: the reply prior did not compile both owner seats (no fully constructed warmup root)')
         signatures={k[-1][2]for k in self.programs if type(k[-1])is tuple and k[-1][:2]==('worlds',cw.SOURCE)}
         if self.carry is None or signatures!={self.carry['signature']}:
             raise RuntimeError(f'warmup: the recorded carry signature {None if self.carry is None else self.carry["signature"]} is not the warmed programs\' {sorted(signatures)}')
         self.warm=dict(buckets=report,programs=len(self.programs),seconds=time.perf_counter()-started,carry_signature=self.carry['signature'],
-            carry_reference=self.carry['root'],labels=dict(p1_rows={b:2*b*self.K*dn.LANES for b in self.buckets},root_rows=labels))
+            carry_reference=self.carry['root'],labels=dict(p1_rows={b:2*b*self.K*dn.LANES for b in self.buckets},root_rows=labels),
+            **({}if getattr(self,'reply',None)is None else dict(reply=dict(views=self.reply.mode,seats_seconds=self.reply_warm))))
         return self.warm
 
     def _hold_to_reference(self,pool):
@@ -532,6 +536,10 @@ class DepthNLiveSearch:
                 try:jax.block_until_ready(gather(guard_inputs.stack_worlds(item.made.worlds)));labels=len(item.made.worlds)
                 except FATAL:raise
                 except Exception:labels=None   # warmup then refuses READY: the gather does not run on these worlds
+                if getattr(self,'reply',None)is not None:   # both owner seats' reply programs, whichever seat the warmup roots had
+                    try:self.reply_warm=self.reply.warm(item.made.worlds)
+                    except FATAL:raise
+                    except Exception as error:raise RuntimeError(f'warmup: the reply prior did not compile both seats: {type(error).__name__}: {error}')from error
             diff=self._structure(item,request,None)
             if diff:odd.append(f'{request["battle_id"]}/{request["decision_index"]}: {diff}')
         if odd:raise RuntimeError(f'warmup: every warmup root must share one carry structure; against the reference root {self.carry["root"]}: '+'; '.join(odd))

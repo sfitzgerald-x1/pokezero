@@ -76,7 +76,9 @@ the mean decisions per battle (the same t statistic, so the same signs). Parity,
 the replay is COMPLETE, averaging recomputed from the captured worlds plays the live search action, and its q equals the
 replay's q_values exactly after a JSON round trip. Below 99% the verdict is PARITY_FAILED: no candidate is selected, as for
 GATE_FAILED. --parity-mode replay (a replay on a modified tree, e.g. a fixed server): every replay-COMPLETE row is held to
-the replay's own action and q_values instead of the live action. Also reported, never gating: every table restricted to decisions where Foul Play was requested (no 'wait').
+the replay's own action and q_values instead of the live action. --parity-mode br_fp (a replay serving a reply archive, whose
+search plays br_fp; needs --reply-prior): every replay-COMPLETE row's action and q_values are held to the scorer's br_fp, averaging
+on the captured worlds with each requested world's --reply-prior logits. Also reported, never gating: every table restricted to decisions where Foul Play was requested (no 'wait').
 External reply prior (--reply-prior, for a Foul Play reply model): rows {ordinal, decision_index, world, logits[9]} add
 external_br (averaging with pi_w = softmax of the external logits over the kept lanes) and external_mix alpha (0.25, 0.5,
 0.75: alpha * external + (1 - alpha) * the champion's pi_w), reported only, never candidates. A waiting world needs no
@@ -144,7 +146,8 @@ PARITY_MIN = .99
 # live result; the gate is the RR's validation, which must reproduce the live harm before the RR may select anything.
 SIGN_NOTE = ('Reading: D = R(op) - R(greedy) in the champion\'s priced values; D > 0 = priced above greedy. The validation gate '
              'needs averaging\'s upper 90% bound < 0 (the RR reproducing the live harm) before any operator is selected.')
-PARITY_MODES = ('live', 'replay')   # live: against the live search (the default); replay: the replay against itself (a modified tree)
+PARITY_MODES = ('live', 'replay', 'br_fp')   # live: against the live search (the default); replay: the replay against itself (a modified
+# tree); br_fp: a replay that served a reply archive (--reply-archive), held to the scorer's br_fp on the --reply-prior logits
 PRIOR_C = (.02, .05, .1, .2, .5)
 NOISE_K = (1, 2)
 LCB_KAPPA = (.5, 1, 2)
@@ -643,13 +646,15 @@ def guard_choices(choices, greedy, own_moves, record, b=None):
     where the own-recharge guard (an override INTO a recharge move greedy did not choose) or UNREPRESENTED_EFFECT ((b) at the
     root, or (c) on this operator's own choice) trips. Returns ({name: played choice}, {name: [causes] or None}); greedy is
     never guarded; `record` None (a row without the guard) applies the recharge guard alone. `b` replaces the record's root-level
-    (b) (the reach scopes: turn-1 (b) or the reach's turn 2); (c) stays the record's."""
+    (b) (the reach scopes: turn-1 (b) or the reach's turn 2); (c) stays the record's. A union record (a br_fp row, depthn_guard_inputs
+    reply_logits) adds its reply arm's (b) to either, as the live actor's fallback does (only (b) differs between the arms)."""
     played, causes = {}, {}
+    reply_b = bool(((record or {}).get('union') or {}).get('reply', {}).get('b'))
     for name, choice in choices.items():
         if name == 'greedy' or choice is None:played[name], causes[name] = choice, None;continue
         why = []
         if effect_guard.recharge_guarded(own_moves, choice, greedy):why.append(OWN_RECHARGE)
-        if record is not None and ((record['b'] if b is None else b) or effect_guard.trips(record, choice)['c']):why.append(UNREPRESENTED)
+        if record is not None and ((record['b'] if b is None else b) or reply_b or effect_guard.trips(record, choice)['c']):why.append(UNREPRESENTED)
         played[name], causes[name] = (greedy if why else choice), (why or None)
     return played, causes
 
@@ -708,18 +713,31 @@ def q_json_equal(q, replay_q):
     return all(x is None and y is None or x is not None and type(y) in (int, float) and float(x) == float(y) for x, y in zip(mine, replay_q))
 
 
-def parity_row(decision, base, reason, mode='live'):
+def br_fp_average(decision, base, prior):
+    """The scorer's br_fp on a row (averaging on the reply model's logits for every requested world, model_worlds; `prior` this
+    decision's load_reply_prior entry): the hedge averaging result, or raises Unscorable (reply_prior_missing / _mismatch)."""
+    return hedge.averaging(model_worlds(base.worlds, reply_logits_of(decision, base.worlds, prior)), base.legal)
+
+
+def parity_row(decision, base, reason, mode='live', prior=None):
     """A row's parity: dict(match, action_equal, q_equal, cause). mode 'live' (a live-searched row): a replay that is not
     COMPLETE, a row whose averaging cannot be recomputed, a recomputed action other than the live one, or a recomputed q other
     than the replay's q_values is a mismatch. mode 'replay' (a replay-COMPLETE row of a replay on a modified tree, whose
-    decisions legitimately differ from live): the recomputed action is held to the replay's own action instead of the live one."""
+    decisions legitimately differ from live): the recomputed action is held to the replay's own action instead of the live one.
+    mode 'br_fp' (a replay-COMPLETE row of a replay serving a reply archive, whose search plays br_fp): the scorer's br_fp
+    (br_fp_average on `prior`, this decision's --reply-prior entry) is held to the replay's own action and q_values."""
     if mode not in PARITY_MODES:raise ValueError(f'parity mode in {PARITY_MODES} required')
     if decision['replay_status'] != 'COMPLETE':
         return dict(match=False, action_equal=None, q_equal=None, cause=f"replay_{decision['replay_status']}:{decision['replay_cause']}")
     if base is None:return dict(match=False, action_equal=None, q_equal=None, cause='recompute_' + reason)
+    average = base.average
+    if mode == 'br_fp':
+        try:average = br_fp_average(decision, base, prior)
+        except Unscorable as error:return dict(match=False, action_equal=None, q_equal=None, cause='br_fp_' + error.reason)
+        if average is None:return dict(match=False, action_equal=None, q_equal=None, cause='br_fp_unpriced')
     reference = decision['live_action'] if mode == 'live' else decision['replay_action']
-    action_equal = type(reference) is int and reference == hedge.top_action(base.average.strategy)
-    q_equal = q_json_equal(base.average.q, decision['replay_q'])
+    action_equal = type(reference) is int and reference == hedge.top_action(average.strategy)
+    q_equal = q_json_equal(average.q, decision['replay_q'])
     cause = None if action_equal and q_equal else 'q_differs' if action_equal else 'action_differs' if q_equal else 'action_and_q_differ'
     return dict(match=cause is None, action_equal=action_equal, q_equal=q_equal, cause=cause)
 
@@ -810,7 +828,11 @@ def guard_facts(record, raw):
         turn2, tiers2 = any_turn2, tiers('turn2')
         unavailable = any(r.get('source') in ('turn2_unavailable', 'guard_error') for r in reasons)
     any_b = bool(record['any_cell_b']) if live_reach else bool(record['b'])
-    return dict(rule=record.get('rule', 'any_cell'), b=bool(record['b']), b_turn1=bool(record.get('b_turn1')), b_turn2=bool(record.get('b_turn2')),
+    # a union record (br_fp, depthn_guard_inputs reply_logits): the reply arm's (b) guards the root as the live fallback does; the
+    # record's own fields (b_turn1, b_turn2, tiers, m_*) stay the champion's, and union_only marks a root guarded by the reply arm alone
+    reply_b = bool((((record.get('union') or {}).get('reply')) or {}).get('b'));champion_b = bool(record['b'])
+    return dict(rule=record.get('rule', 'any_cell'), b=champion_b or reply_b, champion_b=champion_b, union_only=reply_b and not champion_b,
+                b_turn1=bool(record.get('b_turn1')), b_turn2=bool(record.get('b_turn2')),
                 turn2=turn2, tiers_turn1=tiers('turn1'), sides_turn1=sides1, tiers_turn2=tiers2, tier_masses_turn2=masses2, unavailable=unavailable,
                 m_own=record.get('m_own'), m_opp=record.get('m_opp'), arms=record.get('arms'),
                 any_cell=dict(b=any_b, turn2=any_turn2, unavailable=any(r.get('source') in ('turn2_unavailable', 'guard_error') for r in list(any_reasons) + list(reasons))),
@@ -937,9 +959,13 @@ def guard_report(records, settings, opponent_recharge=0):
         return dict(turn1=t1, turn1_share=share(t1), turn2_added=added, turn2_added_share=share(added), total=t1 + added, share=share(t1 + added))
     tiers = {t: part(lambda r, t=t: t in g(r)['tiers_turn1'], lambda r, t=t: t in g(r)['tiers_turn2']) for t in ('A', 'C')}
     union = part(lambda r: g(r)['b_turn1'], lambda r: g(r).get('turn2', g(r)['b_turn2']))
-    # (b) without a turn-1 or a priced turn-2 reason: an unavailable turn-2 capture or an error record (fail closed): its own part
-    error = sum(g(r)['b'] and not g(r)['b_turn1'] and not g(r).get('turn2', g(r)['b_turn2']) for r in have)
-    union.update(unavailable_or_error=error, unavailable_or_error_share=share(error), total=union['total'] + error, share=share(union['total'] + error))
+    # (b) without a turn-1 or a priced turn-2 reason: an unavailable turn-2 capture or an error record (fail closed): its own part;
+    # a root guarded by a union record's reply arm alone (br_fp) is its own part too
+    error = sum(g(r)['b'] and not g(r).get('union_only') and not g(r)['b_turn1'] and not g(r).get('turn2', g(r)['b_turn2']) for r in have)
+    reply_only = sum(bool(g(r).get('union_only')) for r in have)
+    total = union['total'] + error + reply_only
+    union.update(unavailable_or_error=error, unavailable_or_error_share=share(error), reply_arm_only=reply_only, reply_arm_only_share=share(reply_only),
+                 total=total, share=share(total))
     c = {name: dict(c_only=sum(g(r)['c'].get(name, False) and not g(r)['b'] for r in have),
                     union=sum(g(r)['b'] or g(r)['c'].get(name, False) for r in have)) for name in settings}
     for v in c.values():v.update(union_share=share(v['union']))
@@ -1064,7 +1090,11 @@ class Coverage:
                  f'plays the live search action_index, and its q equals the replay q_values after a JSON round trip; >= {PARITY_MIN:.0%}')
                 if getattr(self, 'parity_mode', 'live') == 'live' else
                 (f'replay mode (a modified tree): every replay-COMPLETE row; averaging recomputed from the captured worlds plays the '
-                 f"replay's own action_index and its q equals the replay q_values after a JSON round trip; >= {PARITY_MIN:.0%}")),
+                 f"replay's own action_index and its q equals the replay q_values after a JSON round trip; >= {PARITY_MIN:.0%}")
+                if getattr(self, 'parity_mode', 'live') == 'replay' else
+                (f'br_fp mode (a replay serving a reply archive): every replay-COMPLETE row; br_fp recomputed from the captured worlds '
+                 f"with the --reply-prior logits plays the replay's own action_index and its q equals the replay q_values after a JSON "
+                 f'round trip; >= {PARITY_MIN:.0%}')),
                         live_searched=p['rows'], matches=p['matches'], rate=share(p['matches'], p['rows']),
                         action_equal=p['action_equal'], action_rate=share(p['action_equal'], p['rows']),
                         q_equal=p['q_equal'], q_rate=share(p['q_equal'], p['rows']), mismatches_by_cause=dict(self.parity_causes),
@@ -1133,8 +1163,8 @@ def process(decision, run, coverage, prior=None, parity_mode='live', weights=Non
     base = reason = None
     try:base = recompute(decision)
     except Unscorable as error:reason = error.reason
-    checked = searched if parity_mode == 'live' else complete   # replay mode: every replay-COMPLETE row, held to itself
-    parity = parity_row(decision, base, reason, parity_mode) if checked else None
+    checked = searched if parity_mode == 'live' else complete   # replay and br_fp modes: every replay-COMPLETE row, held to itself
+    parity = parity_row(decision, base, reason, parity_mode, None if prior is None else prior.get((ordinal, index))) if checked else None
     if parity is not None:coverage.add_parity(parity)
     address.update(parity=parity)
     if ordinal in coverage.dropped_battles:   # after parity (the gate still counts it), before scoring: no operator scores it
@@ -1201,6 +1231,8 @@ def score_run(rows, run_directory, out, reply_prior=None, parity_mode='live', op
     under the screen set it adds the reported-only EXTERNAL_SETTINGS operators; under the definitive set it is the reply
     model's logits where the rows carry none. `world_weights`: load_world_weights' JSONL (definitive set only)."""
     if operator_set not in OPERATOR_SETS:raise ValueError(f'operator set {operator_set!r} not in {OPERATOR_SETS}')
+    if parity_mode not in PARITY_MODES:raise ValueError(f'parity mode in {PARITY_MODES} required')
+    if parity_mode == 'br_fp' and reply_prior is None:raise ValueError('--parity-mode br_fp needs --reply-prior (the reply model\'s logits)')
     definitive = operator_set == 'definitive'
     if definitive and world_weights is None:raise ValueError('the definitive operator set needs --world-weights')
     if definitive and reply_prior is None:raise ValueError('the definitive operator set needs --reply-prior (the reply model\'s logits per world)')
@@ -1210,7 +1242,6 @@ def score_run(rows, run_directory, out, reply_prior=None, parity_mode='live', op
     settings = DEFINITIVE_SETTINGS if definitive else SETTINGS + (EXTERNAL_SETTINGS if prior is not None else ())
     candidates = DEFINITIVE_CANDIDATES if definitive else CANDIDATES
     out = Path(out);out.mkdir(parents=True, exist_ok=False)
-    if parity_mode not in PARITY_MODES:raise ValueError(f'parity mode in {PARITY_MODES} required')
     run, coverage, records = RunDirectory(run_directory), Coverage(), [];coverage.parity_mode = parity_mode;coverage.definitive = definitive
     if prior is not None and not definitive:coverage.external = collections.Counter()
     if drop_battles is not None:coverage.dropped_battles = load_dropped_battles(drop_battles)
@@ -1347,6 +1378,7 @@ def guard_markdown(guard, settings):
            '| tier | turn 1 | turn 2 added | total share |', '|---|---|---|---|']
     out += [f"| {k} | {v['turn1']} ({_pct(v['turn1_share'])}) | {v['turn2_added']} ({_pct(v['turn2_added_share'])}) | {_pct(v['share'])} |" for k, v in t.items()]
     out += [f"| unavailable or error | - | - | {u['unavailable_or_error']} ({_pct(u['unavailable_or_error_share'])}) |",
+            f"| reply arm only (br_fp union guard) | - | - | {u.get('reply_arm_only', 0)} ({_pct(u.get('reply_arm_only_share'))}) |",
             f"| union | {u['turn1']} ({_pct(u['turn1_share'])}) | {u['turn2_added']} ({_pct(u['turn2_added_share'])}) | {_pct(u['share'])} |", '',
             '| setting | (c) only roots | (b) or (c) share |', '|---|---|---|']
     out += [f"| {name} | {guard['c'][name]['c_only']} | {_pct(guard['c'][name]['union_share'])} |" for name in settings if name in guard['c']]
@@ -1413,7 +1445,8 @@ def main(argv=None):
     parser.add_argument('--drop-battles', help='JSON [{ordinal, reason}]: battles no operator scores (validation drops, leakage overlaps)')
     parser.add_argument('--parity-mode', choices=PARITY_MODES, default='live',
                         help="live (default): parity against the live search; replay: the replay against itself, for a replay on a "
-                             "modified tree whose decisions legitimately differ from live")
+                             "modified tree whose decisions legitimately differ from live; br_fp: a replay serving a reply archive, "
+                             "held to the scorer's br_fp on --reply-prior")
     args = parser.parse_args(argv)
     try:summary = score_run(args.rows, args.run_directory, args.out, args.reply_prior, args.parity_mode, args.operator_set,
                             args.world_weights, args.drop_battles)
