@@ -3,12 +3,17 @@ CPU only: host arithmetic on the rows through depthn_rr_score's and search_hedge
 
 Input: the rows of scripts/depthn_rr_reprice.py runs (--targets on the bank's roots; one row per sent decision) carrying each
 world's depth-1 prices (worlds[i].depth1, depth1.refused_at_depth1) and, under --reply-archive, each requested world's
-reply-model logits (worlds[i].reply_peer_logits). Three runs, one rung set each:
+reply-model logits (worlds[i].reply_peer_logits). Five runs, one rung set each:
+- A: Foul Play roots, --true-worlds (true_private), --reply-archive pi_FP and --peer-view-b -> R1, R2;
+- B: self roots, --true-worlds (true_private), the live configuration -> R1, R2;
 - C: Foul Play roots, --reply-archive pi_FP and --peer-view-b, sampled worlds -> R3, R3prime_ng, R4b;
 - D: Foul Play roots, the live configuration -> R4, R5, R5_ng;
 - E: self roots, the live configuration -> R3, R3prime_ng, R4, R5, R5_ng.
 
 Rungs. Greedy is the argmax of root_logits over root_legal, lower index on ties (depthn_rr_score.argmax).
+- R1 (runs A, B): averaging over the depth-1 grids of the W true worlds (the true state W times, each world its own chance
+  draws), with the reply model's logits (run A) or the champion's root_peer_logits (run B) as each world's reply prior.
+- R2 (runs A, B): R1 on world 0 alone, one chance draw of the true state.
 - R3: averaging over the worlds' depth-1 grids with the reply model's logits as each requested world's reply prior
   (depthn_rr_score.model_worlds then search_hedge.averaging: br_fp at depth 1; a waiting world keeps column 0). The bank's self
   roots use the champion as the opponent model, so on self roots (run E) R3 is the champion's depth-1 averaging: the same
@@ -24,12 +29,14 @@ Rungs. Greedy is the argmax of root_logits over root_legal, lower index on ties 
   screen's NOISE_GATED_K2 operator takes it (depthn_root_operator.noise_gated_k2), not the live actor's greedy_action_index that
   depthn_rr_score's own noise_gated:k=2 reads; they differ only where those two greedies differ.
 
-Identity. Foul Play rows (runs C, D): key (ordinal, target = decision_index), and the row's cell seed is echoed for the
-scorer's check. Self rows (run E) map through the self-capture manifest (--manifest: rows {ordinal, seed, ours, target}): the
+Identity. Foul Play rows (runs A, C, D): key (ordinal, target = decision_index), and the row's cell seed is echoed for the
+scorer's check. Self rows (runs B, E) map through the self-capture manifest (--manifest: rows {ordinal, seed, ours, target}): the
 key is (seed, ours, target), and the row's decision_index must equal target, its owner ours and its seed (when present) the
 manifest's seed, and the manifest row's status must be ok (manifest_<status> otherwise, a missing status included: a capture
 whose replayed root is not the bank's). A row whose target_kind names the other kind, or that fails those checks, is counted
-by reason and written to no rung. Two rows with one key are an error.
+by reason and written to no rung. Runs A and B take only rows of a --true-worlds --true-kind true_private replay (the row's
+true_worlds record with requested_kind true_private; not_true_worlds otherwise), and runs C, D and E refuse a row that carries
+one (true_worlds_row); both are counted as identity mismatches. Two rows with one key are an error.
 
 Each rung row: the key, action (None when the rung cannot decide the root, with `reason`), greedy_action, guard_tripped
 (with guard_reason when true) and actions (the root's legal action indices, echoed for the scorer's identity check).
@@ -50,10 +57,13 @@ Reasons for action None:
 - world_missing, world_unpriced, world_invalid, unpriced_cell, averaging_error: a world or a needed cell has no price;
 - reply_prior_missing: a requested world has no reply_peer_logits (only roots that reached the reply model's decide have them);
 - replay_<status>[:cause]: R5 and R5_ng on a replay that did not end COMPLETE; replay_action_invalid;
-- one_world: noise gating needs at least two worlds.
+- one_world: noise gating needs at least two worlds;
+- true_worlds_failed[:cause], true_worlds_not_sampled[:cause] (runs A and B): the true worlds failed closed (a problem or error,
+  fewer built than requested, or a kind other than true_private or its waiting-opponent fallback true), or were never sampled.
+R1 and R2 can decide different roots (R2 needs only world 0's prices): compare them on the roots both decided.
 
-usage: python -m gpu_engine.mc_ladder_rungs --rows ROWS.jsonl [ROWS.jsonl ...] --run {C,D,E} [--manifest MANIFEST.jsonl] --out NEW_DIR
---manifest is required for run E and refused for C and D. Writes NEW_DIR/rung-<NAME>.jsonl per rung and NEW_DIR/summary.json
+usage: python -m gpu_engine.mc_ladder_rungs --rows ROWS.jsonl [ROWS.jsonl ...] --run {A,B,C,D,E} [--manifest MANIFEST.jsonl] --out NEW_DIR
+--manifest is required for runs B and E (self roots) and refused for A, C and D. Writes NEW_DIR/rung-<NAME>.jsonl per rung and NEW_DIR/summary.json
 (rows read, identity mismatches by reason, per rung: decided, undecided by reason, guard trips by reason; R5 against the
 replay). Exit 1 when R5's recomputation disagrees with any COMPLETE replay or fails on one (recompute_failed), else 0.
 """
@@ -68,11 +78,18 @@ from gpu_engine import search_hedge as hedge
 
 SCHEMA = 'mc-ladder-rungs.v1'
 NOISE_K = 2
-# Per run: the root kind and each rung's (depth, reply-model prior, noise gated).
+# run: (root kind, {rung: (depth, reply model's logits, noise gated, worlds: None all or n the first n)}). Runs A and B are the
+# true-world replays (--true-worlds, --true-kind true_private): R1 averages the W true worlds (W chance draws of the true
+# state) at depth 1; R2 is world 0 alone (one draw).
 RUNS = dict(
-    C=('foulplay', dict(R3=(1, True, False), R3prime_ng=(1, True, True), R4b=(1, False, False))),
-    D=('foulplay', dict(R4=(1, False, False), R5=(2, False, False), R5_ng=(2, False, True))),
-    E=('self', dict(R3=(1, False, False), R3prime_ng=(1, False, True), R4=(1, False, False), R5=(2, False, False), R5_ng=(2, False, True))))
+    A=('foulplay', dict(R1=(1, True, False, None), R2=(1, True, False, 1))),
+    B=('self', dict(R1=(1, False, False, None), R2=(1, False, False, 1))),
+    C=('foulplay', dict(R3=(1, True, False, None), R3prime_ng=(1, True, True, None), R4b=(1, False, False, None))),
+    D=('foulplay', dict(R4=(1, False, False, None), R5=(2, False, False, None), R5_ng=(2, False, True, None))),
+    E=('self', dict(R3=(1, False, False, None), R3prime_ng=(1, False, True, None), R4=(1, False, False, None), R5=(2, False, False, None),
+                    R5_ng=(2, False, True, None))))
+TRUE_RUNS = frozenset('AB')   # the true-world runs: rows of a --true-worlds --true-kind true_private replay only
+TRUE_KIND = 'true_private'
 KEY_FIELDS = dict(foulplay=('kind', 'ordinal', 'target'), self=('kind', 'seed', 'ours', 'target'))
 EXAMPLES = 20   # disagreeing roots listed in the summary
 
@@ -108,6 +125,21 @@ def identity(raw, kind, manifest):
     return dict(kind=kind, seed=entry['seed'], ours=entry['ours'], target=entry['target']), None
 
 
+def true_worlds_check(raw, run):
+    """(identity mismatch or None, the root's undecided reason or None): runs A and B take only rows of a --true-kind true_private
+    replay and decide a root only when its true worlds were all built; the other runs refuse a true-world row (module docstring)."""
+    record = raw.get('true_worlds')
+    if run not in TRUE_RUNS:return ('true_worlds_row' if record else None), None
+    if type(record) is not dict or record.get('requested_kind') != TRUE_KIND:return 'not_true_worlds', None
+    calls, worlds = record.get('sample_calls'), record.get('worlds')
+    if type(calls) is not int or calls < 1:return None, 'true_worlds_not_sampled'
+    played = record.get('kind') == TRUE_KIND or (record.get('kind') == 'true' and bool(record.get('fallback')))   # the opponent waits: true
+    if (record.get('problem') is not None or record.get('error') is not None or not played or type(worlds) is not int or worlds < 1
+            or record.get('built') != worlds):
+        return None, 'true_worlds_failed'
+    return None, None
+
+
 def root_prior(d):
     """(root_legal, greedy) of a normalized row; raises Unscorable when the row has no usable root prior."""
     legal, logits = d['root_legal'], d['root_logits']
@@ -134,7 +166,7 @@ def average(worlds, legal):
     return hedge.top_action(choice.strategy), q, choice.q
 
 
-def averaged(raw, d, depth, reply):
+def averaged(raw, d, depth, reply, first=None):
     """(a*, per-world q, q) of averaging on the row's depth-1 or depth-2 worlds, the reply model's logits standing in for each
     requested world's reply prior when `reply`; raises Unscorable with the reason (module docstring)."""
     if depth == 2:
@@ -148,6 +180,7 @@ def averaged(raw, d, depth, reply):
     if any(info['refused_at_depth1']):raise rr.Unscorable('refused_at_depth1')
     legal, _ = root_prior(d)
     worlds = raw.get('worlds') if type(raw.get('worlds')) is list else []
+    worlds = worlds if first is None else worlds[:first]   # R2: the first world (one chance draw of the true state)
     prices = rr.world_prices(rr.normalize(dict(worlds=[w.get('depth1') if type(w) is dict else None for w in worlds])))
     if reply:prices = rr.model_worlds(prices, rr.reply_logits_of(d, prices, None))
     return average(prices, legal)
@@ -172,24 +205,24 @@ def choose(raw, run):
     try:legal, greedy = root_prior(d)
     except rr.Unscorable as error:legal = greedy = None;prior_reason = error.reason
 
-    def op(depth, reply):
-        if (depth, reply) not in ops:
-            try:ops[depth, reply] = averaged(raw, d, depth, reply), None
+    def op(depth, reply, first=None):
+        if (depth, reply, first) not in ops:
+            try:ops[depth, reply, first] = averaged(raw, d, depth, reply, first), None
             except rr.Unscorable as error:
                 reason = error.reason
                 if cause and (reason == 'depth1_missing' or reason.startswith('replay_')):reason += f':{cause}'
-                ops[depth, reply] = None, reason
-        return ops[depth, reply]
+                ops[depth, reply, first] = None, reason
+        return ops[depth, reply, first]
 
     out = {}
-    for name, (depth, reply, gated) in RUNS[run][1].items():
+    for name, (depth, reply, gated, first) in RUNS[run][1].items():
         if depth == 2 and not gated:   # R5: the replay's own action
             action, reason = d['replay_action'], None
             if d['replay_status'] != 'COMPLETE':action, reason = None, f"replay_{d['replay_status']}" + (f':{cause}' if cause else '')
             elif legal is None:action, reason = None, prior_reason
             elif type(action) is not int or not 0 <= action < 9 or not legal[action]:action, reason = None, 'replay_action_invalid'
         else:
-            result, reason = op(depth, reply);action = None
+            result, reason = op(depth, reply, first);action = None
             if result is not None:
                 chosen, qw, _ = result
                 if not gated:action = chosen
@@ -212,13 +245,18 @@ def build(rows, run, manifest=None):
     stats = {name: dict(rows=0, decided=0, undecided=collections.Counter(), guard_tripped=collections.Counter()) for name in rungs}
     parity = dict(compared=0, action_disagreements=0, q_disagreements=0, recompute_failed=collections.Counter(), examples=[])
     for raw in rows:
-        count += 1;key, problem = identity(raw, kind, manifest)
-        if key is None:mismatches[problem] += 1;continue
+        count += 1;key, problem = identity(raw, kind, manifest);truth = None
+        if key is not None:problem, truth = true_worlds_check(raw, run)
+        if problem is not None:mismatches[problem] += 1;continue
         index = tuple(key[f] for f in KEY_FIELDS[kind])
         if index in seen:raise ValueError(f'two rows for root {index}')
         seen.add(index)
         if kind == 'self':statuses[str(manifest[raw['ordinal']].get('status'))] += 1
         d, chosen, recomputed = choose(raw, run)
+        if truth is not None:   # a true-world root whose worlds were not all built: no rung decides it
+            truth += f":{d['refusal_cause']}" if d['refusal_cause'] else ''
+            chosen = {name: dict({k: v for k, v in row.items() if k not in ('reason', 'guard_reason')}, action=None, guard_tripped=False,
+                                 reason=truth) for name, row in chosen.items()}
         for name, row in chosen.items():
             out[name].append(dict(key, **row));s = stats[name];s['rows'] += 1
             if row['action'] is None:s['undecided'][row['reason']] += 1
@@ -251,10 +289,10 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--rows', nargs='+', required=True, help="the re-pricer's rows-<shard>.jsonl files of one run")
     parser.add_argument('--run', choices=sorted(RUNS), required=True)
-    parser.add_argument('--manifest', help='run E: the self-capture manifest.jsonl')
+    parser.add_argument('--manifest', help='runs B and E: the self-capture manifest.jsonl')
     parser.add_argument('--out', required=True, help='a new directory')
     args = parser.parse_args(argv)
-    if (RUNS[args.run][0] == 'self') != (args.manifest is not None):parser.error('--manifest is required for run E and refused for C and D')
+    if (RUNS[args.run][0] == 'self') != (args.manifest is not None):parser.error('--manifest is required for runs B and E (self roots) and refused for A, C and D')
     out, summary = build(read_rows(args.rows), args.run, load_manifest(args.manifest) if args.manifest else None)
     directory = Path(args.out);directory.mkdir(parents=True, exist_ok=False)
     for name, rows in out.items():(directory / f'rung-{name}.jsonl').write_text(''.join(json.dumps(r, sort_keys=True) + '\n' for r in rows))
