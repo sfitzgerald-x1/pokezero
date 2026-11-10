@@ -92,7 +92,7 @@ class RungChoiceTests(unittest.TestCase):
     def test_noise_gate_holds_back_a_noisy_depth1_override(self):
         reply = hand_q(NG, (.75, .25))
         self.assertGreater(statistics.fmean(reply), 0);self.assertFalse(gate(reply))   # mean .15 < 2 * .265 / sqrt(3)
-        got = one(row(depth1=NG), 'C')
+        got = one(row(depth1=NG, fp=True), 'C')
         self.assertEqual({n: r['action'] for n, r in got.items()}, dict(R3=1, R3prime_ng=0, R4b=1, R5fp=1, R5fp_ng=0))
 
     def test_run_d_r5_is_the_replay_and_r5_ng_gates_the_depth2_q(self):
@@ -171,8 +171,10 @@ class RungChoiceTests(unittest.TestCase):
 
     def test_a_waiting_world_needs_no_reply_logits(self):
         depth1 = D1[:2] + [{0: (0.,), 1: (.1,)}]   # world 2 waits: column 0 at mass 1
-        got = one(row(depth1=depth1, depth2=D2[:2] + [{0: (0.,), 1: (.1,)}], waiting=(2,)), 'C')
+        raw = row(depth1=depth1, depth2=D2[:2] + [{0: (0.,), 1: (.1,)}], waiting=(2,), fp=True);got = one(raw, 'C')
         self.assertEqual((got['R3']['action'], got['R4b']['action']), (1, 0))   # reply mean (.15 + .05 + .1) / 3; champion (-.1 - .1 + .1) / 3
+        self.assertEqual((got['R5fp']['action'], got['R5fp_ng']['action']), (1, 1))   # br_fp gaps .15, .2 and the waiting world's .1: the gate passes
+        self.assertEqual(M.build([raw], 'C')[1]['r5_vs_replay']['q_disagreements'], 0)   # the waiting world keeps column 0 in br_fp too
 
 
 class GuardTests(unittest.TestCase):
@@ -189,7 +191,7 @@ class GuardTests(unittest.TestCase):
 
     def test_the_union_reply_arm_guards_only_reply_model_rungs(self):
         got = one(row(guard=dict(CLEAR, tripped=True, union=dict(tripped=True, champion=dict(b=False), reply=dict(b=True)))), 'C')
-        self.assertTrue(got['R3']['guard_tripped']);self.assertTrue(got['R3prime_ng']['guard_tripped'])
+        for name in ('R3', 'R3prime_ng', 'R5fp', 'R5fp_ng'):self.assertTrue(got[name]['guard_tripped'], name)   # br_fp's live fallback
         self.assertFalse(got['R4b']['guard_tripped'])   # the champion arm's own b is false
 
     def test_a_decided_root_without_a_guard_record_fails_closed(self):
@@ -282,7 +284,7 @@ class CommandLineTests(unittest.TestCase):
             self.assertEqual([(r['ordinal'], r['action']) for r in r3], [(7, 1), (8, None)])
             summary = json.loads((Path(tmp) / 'out' / 'summary.json').read_text())
             self.assertEqual(summary['rungs']['R3'], dict(rows=2, decided=1, undecided=dict(root_prior_missing=1), guard_tripped={}))
-            self.assertEqual(summary['r5_vs_replay']['compared'], 1)   # run C's R5fp: the br_fp replay held to its recomputation
+            self.assertEqual((summary['replay_rung'], summary['r5_vs_replay']['compared']), ('R5fp', 1))   # run C: the br_fp replay held to its recomputation
             live = Path(tmp) / 'rows-d.jsonl';live.write_text(json.dumps(row()) + '\n')   # run D: a replay of the live (champion-prior) search
             with redirect_stdout(io.StringIO()):code = M.main(['--rows', str(live), '--run', 'D', '--out', str(Path(tmp) / 'd')])
             self.assertEqual(code, 0)

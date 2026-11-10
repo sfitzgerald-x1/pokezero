@@ -289,6 +289,7 @@ def build(rows, run, manifest=None):
             if wrong and len(parity['examples']) < EXAMPLES:parity['examples'].append(dict(key, disagreement=wrong))
     plain = lambda c: dict(sorted(c.items()))
     summary = dict(schema=SCHEMA, run=run, kind=kind, rows=count, mapped=len(seen), identity_mismatches=plain(mismatches),
+                   replay_rung=None if replay_rung(run) is None else replay_rung(run)[0],   # the rung r5_vs_replay holds to its recomputation
                    rungs={name: dict(s, undecided=plain(s['undecided']), guard_tripped=plain(s['guard_tripped'])) for name, s in stats.items()},
                    r5_vs_replay=dict(parity, recompute_failed=plain(parity['recompute_failed'])) if replay_rung(run) else None)
     if kind == 'self':summary['manifest_status'] = plain(statuses)
