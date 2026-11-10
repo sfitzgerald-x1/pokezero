@@ -92,8 +92,9 @@ def carry_outputs():
             out[f'{name}/{owner}'] = dict(
                 inputs=dict(root=cw.tables_digest(root.public), worlds=cw.tables_digest([(w.state, w.public) for w in made.worlds])),
                 outputs=[cw.tables_digest((w.state, w.public)) for w in worlds],
-                facts=json.loads(canonical({k: v for k, v in asdict(facts).items() if k != 'peer_damage'})),   # the pre-flag fields
-                peer_damage=getattr(facts, 'peer_damage', None), private_reveals=cw.private_reveal_record(root.public, owner, facts, tables, False))
+                facts=json.loads(canonical({k: v for k, v in asdict(facts).items() if k not in ('peer_damage', 'peer_belief')})),   # the pre-flag fields
+                peer_damage=getattr(facts, 'peer_damage', None), peer_belief=getattr(facts, 'peer_belief', None),
+                private_reveals=cw.private_reveal_record(root.public, owner, facts, tables, False))
     return out
 
 
@@ -174,7 +175,7 @@ class FlagOffGoldenTests(unittest.TestCase):
                 self.assertEqual(got['outputs'], want['outputs'])
                 self.assertEqual(canonical(got['facts']), canonical(want['facts']))
                 self.assertEqual(canonical(got['private_reveals']), canonical(want['private_reveals']))
-                self.assertIsNone(got['peer_damage'])   # the flag off reads nothing of view b
+                self.assertIsNone(got['peer_damage']);self.assertIsNone(got['peer_belief'])   # the flags off read nothing of view b
         if skipped:self.skipTest(f'the B2 fold gives other inputs on this platform than the golden\'s for {skipped}: carry outputs not compared')
 
 

@@ -757,6 +757,24 @@ class WireReferenceTests(unittest.TestCase):
             ctx.stream = stream;count = P.capture_cell(ctx, P._rr().cell_of(root, 1001))
         return ctx, count, [], out, None
 
+    def test_the_view_b_completion_restores_the_peer_wires_belief_as_prepare_roots_does(self):
+        """Completion(peer_view_b=True)'s facts: the lines' with peer_damage; with an owner's private reveal applicable to the root's
+        carry, constructor_worlds.peer_belief_facts on the decision's lines (prepare_roots' own step); otherwise no fold."""
+        from gpu_engine import constructor_worlds as cw
+        lines = ['|switch|p1a: Alpha|Alpha, L80|100/100', '|-ability|p1a: Alpha|Pressure|[silent]', '|switch|p2a: Beta|Beta, L80|100/100', '|turn|1']
+        completion = object.__new__(P.Completion);completion.cw, completion.tables, completion.constructor = cw, 'tables', 'constructor'
+        folds = []
+        def fold(constructor, request, owner, root, facts, applicable):
+            folds.append((constructor, request['lines'], owner, root, applicable));return cw.replace(facts, peer_belief='belief'), []
+        applicable = [dict(species='alpha', ability='pressure', slot=0)]
+        with patch.object(cw, 'private_reveal_record', return_value=dict(applicable=applicable)), patch.object(cw, 'peer_belief_facts', side_effect=fold):
+            facts = completion.facts(0, lines, 'root')
+            self.assertEqual((facts.peer_belief, facts.peer_damage, folds), ('belief', cw.peer_damage_facts(lines, 0), [('constructor', lines, 0, 'root', applicable)]))
+            self.assertIsNone(completion.facts(0, lines, None).peer_belief)   # no root carry: nothing to restore
+            self.assertIsNone(completion.facts(1, lines, 'root').peer_belief);self.assertEqual(len(folds), 1)   # no private reveal of owner p2
+        with patch.object(cw, 'private_reveal_record', return_value=dict(applicable=[])), patch.object(cw, 'peer_belief_facts', side_effect=fold):
+            self.assertIsNone(completion.facts(0, lines, 'root').peer_belief);self.assertEqual(len(folds), 1)   # not shown by the carry
+
     def test_cells_and_options_of_the_reference(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp);write_result(root, 1, arm='DN2W16', seed=2103400001);write_result(root, 2, status='RUNNING');write_result(root, 3, capture=False)

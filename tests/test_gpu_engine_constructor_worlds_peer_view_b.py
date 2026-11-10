@@ -18,6 +18,17 @@ from gpu_engine import engine_device_trackers as tr
 from tests.test_gpu_engine_constructor_worlds_carry import carry, leaves, reveal_tables, PRIVATE_LINES
 import test_peer_view_b_golden as G
 
+# view b's ability columns of a member (the lead's report: REVEALED_ABILITY and the ability-dependent belief columns)
+VIEW_B_BELIEF = (43, 44, 45, 46, 47, 48, 55, 63, 64, 65, 66, 67, 68, 79, 80, 81, 82, 83)
+def prepare(fx, root, made, lines, owner, battle='authored', **flags):
+    """prepare_roots of one real B2 root through a stand-in constructor (the fixture's metadata and catalog, no compiled functions:
+    the peer wire's fold compiles its own, as a JaxRecordedAdapter without them does; prepare returns the root and its sampled worlds;
+    the constructor binding is not under test)."""
+    constructor = NS(metadata=fx.metadata, catalog=fx.catalog, count=16, functions=None, prepare=lambda request, index: (root, made, (True,) * 9))
+    with patch.object(cw, 'constructor_binding', return_value='binding'):
+        item, = cw.prepare_roots(constructor, [dict(request_id='r', lines=list(lines), battle_id=f'{battle}-{owner}', stream_id=1)], **flags)
+    return item
+
 OWN_HEAD = ('|player|p1|Subject', '|player|p2|Opponent', '|start', '|switch|p1a: Swampert|Swampert, L84|300/300',
     '|switch|p2a: Snorlax|Snorlax, L80|400/400', '|turn|1')
 
@@ -285,6 +296,87 @@ class PeerViewBB2Tests(unittest.TestCase):
 
 
 
+
+def env_candidates(fx, lines, owner):
+    """The env belief of our Alpha from the PEER's wire (constructor_worlds.peer_wire_lines: our lines without the side-private
+    ability line): pokezero.belief's engine on pokezero.showdown's parse, the fixture's own set source; (candidate count,
+    {(ability, item)} of its candidate sets, possible abilities)."""
+    from pokezero.belief import PublicBattleBeliefEngine
+    from pokezero.showdown import parse_showdown_replay
+    head = ('|player|p1|A', '|player|p2|B', '|start')
+    replay = parse_showdown_replay(head + cw.peer_wire_lines(lines, owner), battle_id='peer', complete_prefix=True,
+        hp_visibility={'p1': 'exact', 'p2': 'exact'})
+    mon = PublicBattleBeliefEngine.from_events(replay.public_events, format_id='gen3randombattle',
+        set_source=fx.source.original).resolved_player_view(f'p{2 - owner}').opponent_by_species()['alpha']
+    return mon.candidate_set_count, {(c['ability'], c['item']) for c in mon.candidate_variants}, tuple(mon.possible_abilities)
+
+
+class PrivateRevealBeliefTests(unittest.TestCase):
+    """The Aerodactyl case (battle 1031 of the live check: our member whose sets differ in ability, its Pressure revealed on our wire
+    alone), on the real B2 fold for both owners: every fixture species has an Insomnia / Oran Berry and a Pressure / Leftovers set.
+    B2 narrows our Alpha to the Pressure set; with the redaction on (view b implies it), prepare_roots restores the peer's belief of
+    Alpha to the peer wire's fold, which is the env's own belief from Foul Play's lines; off, the carry is B2's as before."""
+    @classmethod
+    def setUpClass(cls):
+        from gpu_engine import engine_device_observation as e
+        cls.fx = G.b2_fixture();cls.e = e;cls.observation = e.compile_tables(cls.fx.metadata, catalog=cls.fx.catalog)
+        cls.alpha = [(v.ability, v.item) for v in cls.fx.source.original.universes['alpha'].variants]
+
+    def view(self, world, side, b2):
+        return PeerViewBB2Tests.view(self, world, side, b2)
+
+    def sets_of(self, mask):
+        """Alpha's candidate (ability, item) sets of a belief mask row (bit i: the source's variant i)."""
+        bits = int(np.asarray(mask)[0]) | (int(np.asarray(mask)[1]) << 32)
+        return {v for i, v in enumerate(self.alpha) if bits >> i & 1}
+
+    def test_the_peers_belief_of_a_privately_revealed_member_is_the_peer_wires(self):
+        count_column, abilities_column = self.e._index('CANDIDATE_SET_COUNT'), self.e._index('POSSIBLE_ABILITY_COUNT')
+        for owner in (0, 1):
+            with self.subTest(owner=owner):
+                root, made, lines = G.b2_root(self.fx, 'pressure', owner);peer = 1 - owner;b2 = root.view['_b2_root_inputs']
+                want_count, want_sets, want_abilities = env_candidates(self.fx, lines, owner)
+                self.assertEqual((want_count, want_sets, want_abilities), (2, set(self.alpha), ('insomnia', 'pressure')))
+                self.assertEqual(self.sets_of(np.asarray(root.public.belief_mask)[0, owner, 0]), {('pressure', 'leftovers')})   # B2: narrowed
+                off = prepare(self.fx, root, made, lines, owner)
+                on = prepare(self.fx, root, made, lines, owner, peer_view_b=True)
+                redacted = prepare(self.fx, root, made, lines, owner, redact_private_reveals=True)
+                self.assertEqual(on.private_reveals['belief'], [dict(slot=0, species='alpha', fold_species='alpha', variants_before=1, variants_after=2,
+                    changed=True)])
+                self.assertNotIn('belief', off.private_reveals);self.assertIsNone(off.facts.peer_belief)
+                self.assertEqual(redacted.private_reveals['belief'], on.private_reveals['belief'])   # the redaction alone restores it too
+                for w_on, w_off, w_red, w in zip(on.made.worlds, off.made.worlds, redacted.made.worlds, made.worlds):
+                    for public in (w_on.public, w_red.public):   # every world: the peer wire's belief of Alpha, the env's sets
+                        self.assertEqual(self.sets_of(np.asarray(public.belief_mask)[0, owner, 0]), want_sets)
+                        self.assertEqual(self.sets_of(np.asarray(public.visible_belief.visible_hard)[0, owner, 0]), want_sets)
+                        np.testing.assert_array_equal(np.asarray(public.belief_mask)[0, peer], np.asarray(w.public.belief_mask)[0, peer])   # the peer side: B2's
+                        np.testing.assert_array_equal(np.asarray(public.belief_mask)[0, owner, 1:], np.asarray(w.public.belief_mask)[0, owner, 1:])
+                    np.testing.assert_array_equal(np.asarray(w_off.public.belief_mask), np.asarray(w.public.belief_mask))   # off: B2's, as before
+                    self.assertIs(w_on.state, w_off.state)
+                    if w.index > 1:continue
+                    mine_on, mine_off = self.view(w_on, owner, b2), self.view(w_off, owner, b2)
+                    for k in mine_on:np.testing.assert_array_equal(mine_on[k], mine_off[k], err_msg=k)   # the owner's view (and B2 parity): unchanged
+                    theirs_on, theirs_off = self.view(w_on, peer, b2), self.view(w_off, peer, b2)
+                    numeric = theirs_on['numeric_features'][0];self.assertEqual((numeric[7, count_column], numeric[7, abilities_column]), (2., 2.))
+                    self.assertEqual(theirs_off['numeric_features'][0][7, count_column], 1.)
+                    # the 23-token v4 prefix the champion and the reply model read (ChampionEvaluator.view)
+                    changed = {tuple(x) for x in np.argwhere(theirs_on['numeric_features'][0, :23] != theirs_off['numeric_features'][0, :23]).tolist()}
+                    self.assertLessEqual(changed, {(1, self.e._index('LAST_DAMAGE_DEALT')), (7, self.e._index('LAST_DAMAGE_TAKEN'))}
+                        | {(7, c) for c in VIEW_B_BELIEF})   # Alpha (the peer's foe token 7) and the damage cells only
+                    cat = np.argwhere(theirs_on['categorical_ids'][0, :23] != theirs_off['categorical_ids'][0, :23]).tolist()
+                    self.assertTrue(cat and all(t == 7 for t, _ in cat))   # its belief tokens, nothing else
+                    for k in ('token_type_ids', 'attention_mask'):np.testing.assert_array_equal(theirs_on[k], theirs_off[k], err_msg=k)
+
+    def test_a_fold_whose_species_is_not_the_carrys_refuses_the_root(self):
+        root, made, lines = G.b2_root(self.fx, 'pressure', 0)
+        rows = {f: np.asarray(cw._carry_belief(root.public, f, 1))[0, 0] for f in cw.PEER_BELIEF_FIELDS}
+        wrong = cw.PeerBelief((0,), rows, ('beta',))   # a fold whose slot 0 is another member
+        with patch.object(cw, 'peer_wire_belief', return_value=wrong):item = prepare(self.fx, root, made, lines, 0, battle='wrong', redact_private_reveals=True)
+        self.assertEqual((type(item), item.kind), (cw.RootRefusal, cw.PRIVATE_REVEALS_UNAVAILABLE));self.assertIn('species differ', item.detail)
+        with patch.object(cw, 'peer_wire_belief', side_effect=cw.CarryLayoutError('no catalog')):
+            self.assertEqual(prepare(self.fx, root, made, lines, 0, battle='wrong', redact_private_reveals=True).kind, cw.PRIVATE_REVEALS_UNAVAILABLE)
+            self.assertIs(type(prepare(self.fx, root, made, lines, 0, battle='wrong')), cw.Prepared)   # the redaction off never folds
+
 class ReplyPriorCompositionTests(unittest.TestCase):
     """--peer-view-b with --reply-archive: the br_fp reply prior (gpu_engine/depthn_reply_prior.ReplyPrior) reads the worlds
     prepare_roots completed (DepthNLiveSearch._search: self.reply.apply(blocks, item.made.worlds, owner)) through
@@ -303,9 +395,7 @@ class ReplyPriorCompositionTests(unittest.TestCase):
         prepare_roots(peer_view_b=...) completes its worlds, and the root's slots and view-b record."""
         from gpu_engine.depthn_reply_prior import ReplyPrior
         root, made, lines = G.b2_root(self.fx, 'pressure', owner)
-        constructor = NS(metadata=self.fx.metadata, catalog=self.fx.catalog, count=16, prepare=lambda request, index: (root, made, (True,) * 9))
-        with patch.object(cw, 'constructor_binding', return_value='binding'):   # the stand-in constructor's binding is not under test
-            item, = cw.prepare_roots(constructor, [dict(request_id='r', lines=list(lines))], **({'peer_view_b': True} if peer_view_b else {}))
+        item = prepare(self.fx, root, made, lines, owner, **({'peer_view_b': True} if peer_view_b else {}))
         self.assertIs(type(item), cw.Prepared)
         inputs = ReplyPrior(self.executor, None, params=()).inputs(item.made.worlds[:2], owner)
         n = np.asarray(inputs['numeric_features']);return n.reshape(2, -1, n.shape[-1])[:, :23], np.asarray(root.public.active_slot)[0], item
@@ -325,7 +415,11 @@ class ReplyPriorCompositionTests(unittest.TestCase):
                 self.assertEqual(off[:, 1, dealt].tolist(), [cells['last_damage_dealt']['carry']] * 2)
                 self.assertEqual(off[:, ours, taken].tolist(), [cells['last_damage_taken']['carry']] * 2)
                 self.assertEqual(off[:, ours, revealed].tolist(), [1., 1.]);self.assertIsNone(plain.peer_view_b)
-                changed = {tuple(x[1:]) for x in np.argwhere(on != off).tolist()}
-                self.assertEqual(changed, {(1, dealt), (ours, taken), (ours, revealed)})   # nothing else of the reply prior's input moves
+                # nothing else of the reply prior's input moves: the damage cells, and our Alpha's ability columns and its belief, which
+                # the redaction restores to the peer wire's (the private Pressure line no longer narrows it: two candidate sets, not one)
+                changed = {tuple(x[1:]) for x in np.argwhere(on != off).tolist()};count = self.e._index('CANDIDATE_SET_COUNT')
+                self.assertLessEqual(changed, {(1, dealt), (ours, taken)} | {(ours, c) for c in VIEW_B_BELIEF})
+                self.assertLessEqual({(1, dealt), (ours, taken), (ours, revealed), (ours, count)}, changed)
+                self.assertEqual((on[0, ours, count], off[0, ours, count]), (2., 1.))
 
 if __name__ == '__main__':unittest.main()
