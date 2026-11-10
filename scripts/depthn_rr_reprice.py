@@ -140,7 +140,7 @@ import time
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:sys.path.insert(0, str(ROOT))
 from scripts import depthn_live_bench as bench   # noqa: E402
-from gpu_engine import constructor_worlds as cw, depthn_live_search as live   # noqa: E402
+from gpu_engine import constructor_worlds as cw, depthn_backups as backups, depthn_live_search as live   # noqa: E402
 from pokezero import depthn_effect_guard as actor, phase_d_owning_capture as owning   # noqa: E402   (the live guards' one module)
 
 server = bench.server
@@ -255,17 +255,18 @@ def accepted_tree_guard(root, head, commit, *, run=git):
 
 
 def check_call_sites(function=None):
-    """True when `function` (DepthNLiveSearch._search) reads `decide` as a global of depthn_live_search and `prepare_roots` as an
-    attribute of the global `cw` at call time, so the wrappers take effect; RuntimeError otherwise."""
+    """True when `function` (DepthNLiveSearch._search) reads `decide` as a global of depthn_live_search and `prepare_roots` and
+    `price` as attributes of the global `cw` at call time, so the wrappers take effect; RuntimeError otherwise."""
     function = live.DepthNLiveSearch._search if function is None else function
-    found = {'decide': False, 'prepare_roots': False};previous = None
+    found = {'decide': False, 'prepare_roots': False, 'price': False};previous = None
     for instruction in dis.get_instructions(function):
         if instruction.opname == 'LOAD_GLOBAL' and instruction.argval == 'decide':found['decide'] = True
-        if (instruction.opname in ('LOAD_ATTR', 'LOAD_METHOD') and instruction.argval == 'prepare_roots' and previous is not None
-                and previous.opname == 'LOAD_GLOBAL' and previous.argval == 'cw'):found['prepare_roots'] = True
+        for name in ('prepare_roots', 'price'):
+            if (instruction.opname in ('LOAD_ATTR', 'LOAD_METHOD') and instruction.argval == name and previous is not None
+                    and previous.opname == 'LOAD_GLOBAL' and previous.argval == 'cw'):found[name] = True
         previous = instruction
     if not all(found.values()) or function.__globals__ is not vars(live) or live.cw is not cw:
-        raise RuntimeError(f'the search does not look decide / cw.prepare_roots up through their modules at call time: {found}')
+        raise RuntimeError(f'the search does not look decide / cw.prepare_roots / cw.price up through their modules at call time: {found}')
     return True
 
 
@@ -452,13 +453,14 @@ class Decided:
 
 
 class Capture:
-    """References to every decide call's arguments and every prepare_roots result while installed() is active."""
+    """References to every decide call's arguments, every prepare_roots result and every cw.price call's (frame, batch) (in
+    `frames`: depthn_carry_audit's subclass keeps its own `priced`) while installed() is active."""
     def __init__(self):
-        self.decided, self.prepared = [], []
+        self.decided, self.prepared, self.frames = [], [], []
 
     @contextmanager
     def installed(self):
-        decide, prepare_roots = live.decide, cw.prepare_roots
+        decide, prepare_roots, price = live.decide, cw.prepare_roots, cw.price
 
         def decide_wrapper(blocks, root_logits, root_legal):
             self.decided.append(Decided(blocks, root_logits, root_legal))
@@ -469,9 +471,14 @@ class Capture:
             self.prepared.append(out)
             return out
 
-        live.decide, cw.prepare_roots = decide_wrapper, prepare_wrapper
+        def price_wrapper(*arguments, **keywords):   # cw.price(pricer, batch, binding, recipe, params): the frame and the batch
+            out = price(*arguments, **keywords)
+            self.frames.append((out[0], arguments[1] if len(arguments) > 1 else keywords.get('batch')))
+            return out
+
+        live.decide, cw.prepare_roots, cw.price = decide_wrapper, prepare_wrapper, price_wrapper
         try:yield self
-        finally:live.decide, cw.prepare_roots = decide, prepare_roots
+        finally:live.decide, cw.prepare_roots, cw.price = decide, prepare_roots, price
 
 
 def prices_fields(world):
@@ -633,10 +640,12 @@ def lane_labels(facts, peer):
     return out
 
 
-def describe(capture, peer_lanes, vocabulary, peer_inputs=None, key=None):
-    """dict(root, prepared, worlds, notes, kept_disagreements) of one replayed decision's capture (module docstring); with
+def describe(capture, peer_lanes, vocabulary, peer_inputs=None, key=None, reply=False):
+    """dict(root, prepared, worlds, notes, kept_disagreements, depth1) of one replayed decision's capture (module docstring); with
     `peer_inputs` (PeerInputs), each decided world's depth-0 peer inputs are self-checked and kept under `key`
-    (ordinal, decision_index)."""
+    (ordinal, decision_index). From the priced frame, each world's depth-1 prices (worlds[i]['depth1'], backup_depth1: the
+    turn-1 grid of t1_value) and the root's per-block refusal causes (depth1.block_causes), whatever depth 2 decided; with
+    `reply` (a --reply-archive search), each world's reply_peer_logits: the reply model's root logits on the played blocks."""
     import jax
     notes = [];items = [item for call in capture.prepared for item in call]
     if len(capture.prepared) > 1 or len(items) > 1:notes.append(f'{len(capture.prepared)} prepare_roots calls, {len(items)} roots')
@@ -683,7 +692,35 @@ def describe(capture, peer_lanes, vocabulary, peer_inputs=None, key=None):
             except Exception as error:   # recorded; the summary's peer_inputs_check fails on this root
                 notes.append(f'peer inputs: {type(error).__name__}: {error}')
                 for row in worlds:row['peer_self_check'] = False;row.setdefault('peer_inputs_index', None)
-    return dict(root=root, prepared=prepared, worlds=worlds or [], notes=notes, kept_disagreements=disagreements)
+    depth1 = None
+    frames = getattr(capture, 'frames', None) or []
+    if len(frames) > 1:notes.append(f'{len(frames)} price calls')
+    if frames:
+        frame, batch = frames[0]
+        priced_roots = [r for r in getattr(batch, 'roots', ()) if r.get('status') == 'PRICED']
+        if len(priced_roots) > 1:notes.append(f'{len(priced_roots)} priced roots in one batch')
+        entry = priced_roots[0] if priced_roots else None
+        if entry is not None and type(item) is cw.Prepared and entry.get('request_id') not in (None, item.request_id):
+            notes.append('the priced root is not the prepared one');entry = None
+        if frame is not None and entry is not None:
+            try:
+                prices1 = [w for r in entry['rows'] for w in backups.backup_depth1(frame, r)]   # block k's world j is world 2k+j
+                summary = backups.refusal_summary(frame)['roots'];causes = [summary[r]['cause'] for r in entry['rows']]
+                depth1 = dict(block_causes=causes, priced_worlds=sum(w is not None for w in prices1),
+                    refused_at_depth1=[c in backups.DEPTH1_CAUSES for c in causes],   # D3 itself would refuse these blocks
+                    root_logits=[float(x) for x in entry['root_logits']], root_legal=[bool(x) for x in entry['root_legal']])   # also for roots decide never saw
+                worlds = worlds if worlds is not None else []
+                for i, world in enumerate(prices1):
+                    while i >= len(worlds):worlds.append(dict(world=len(worlds)))
+                    worlds[i]['depth1'] = prices_fields(world)
+            except Exception as error:   # recorded; the depth-2 row is unchanged
+                notes.append(f'depth 1: {type(error).__name__}: {error}')
+    if reply and len(capture.decided) >= 2:   # br_fp: the champion's decide comes first, the played (replied) one last
+        played = [w for pair in capture.decided[-1].blocks for w in pair]
+        for i, world in enumerate(played):   # a waiting opponent keeps the champion's column: no reply model logits there
+            if i < len(worlds or []):worlds[i]['reply_peer_logits'] = (None if world is None or not world.opponent_requested
+                else [float(x) for x in world.opponent_logits])
+    return dict(root=root, prepared=prepared, worlds=worlds or [], notes=notes, kept_disagreements=disagreements, depth1=depth1)
 
 
 REPLAY_FIELDS = ('q_values', 'completed_q', 'policy_target', 'root_value', 'action_mean_q', 'action_policy_target', 'reduction_note', 'block_causes',
@@ -843,7 +880,7 @@ def main(argv=None):
                     with capture.installed():
                         clock = time.perf_counter();response = search.process_many([body])[0];wall = time.perf_counter() - clock
                     clock = time.perf_counter();detail = describe(capture, peer_lanes, vocabulary, peer_inputs,
-                        (ordinal, row['decision_index']));seconds = time.perf_counter() - clock
+                        (ordinal, row['decision_index']), reply=bool(args.reply_archive));seconds = time.perf_counter() - clock
                     record = decision_row(cell, row, body, response, wall, found, detail, shard=shard, capture_seconds=seconds, live_problem=problem)
                     if 'targets' in cell:record.update(cell_arm=cell.get('arm'), target_kind=cell.get('target_kind'))
                     stream.write(encode_row(record) + '\n');stream.flush();os.fsync(stream.fileno())
