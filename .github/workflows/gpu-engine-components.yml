@@ -105,7 +105,9 @@ jobs:
           # independent cases: release its process heap before the next case,
           # including fresh original module/class fixtures for every case.
           # Per pull request: the light tier, every block outside tests/gpu_component_heavy.json. The heavy
-          # tier (--tier heavy) runs on dedicated high-memory infrastructure nightly and before main.
+          # tier (--tier heavy) runs on dedicated high-memory infrastructure nightly and before main. Both
+          # isolated classes below are in heavy modules: inert under --tier light, kept so the heavy run's
+          # command line differs only in --tier.
           python scripts/run_gpu_component_shard.py --tier light --index '${{ matrix.shard }}' --count 16 --process-blocks \
             --isolate-standard-class test_gpu_engine_execution_runtime_plumbing.ExecutionRuntimePlumbingTests \
             --isolate-standard-class test_gpu_engine_status_kernel_owner_drain.StatusKernelOwnerDrainTests \

@@ -37,7 +37,8 @@ def partition_suite(suite, index: int, count: int):
 def load_heavy_modules(path=HEAVY_MANIFEST):
     """The heavy tier's test modules (tests/gpu_component_heavy.json): run nightly and before main, not per pull request."""
     data = json.loads(Path(path).read_text())
-    modules = [entry.get("module") for entry in data.get("modules", [])] if type(data) is dict else None
+    entries = data.get("modules", []) if type(data) is dict else None
+    modules = [entry.get("module") for entry in entries] if type(entries) is list and all(type(e) is dict for e in entries) else None
     if (type(data) is not dict or data.get("schema") != "gpu-component-heavy.v1" or not modules
             or any(type(name) is not str or not name.startswith("test_gpu_engine") for name in modules)
             or len(set(modules)) != len(modules)):
@@ -58,18 +59,27 @@ class _ModuleRecordingLoader(unittest.TestLoader):
         return tests
 
 
+def _import_outcome(block):
+    """The single _FailedTest (import or load_tests failure) or ModuleSkipped (SkipTest at import) case discovery put in
+    `block` in place of a module, or None."""
+    if type(block) is not unittest.TestSuite:
+        return None
+    children = list(block)
+    if len(children) == 1 and type(children[0]).__name__ in ("_FailedTest", "ModuleSkipped"):
+        return children[0]
+    return None
+
+
 def _discover_modules(spec):
     """(discovery suite, the module of each top-level block or None). A block is what discovery loaded from one module or
-    package; an import failure's block is named by its failed module."""
+    package; an import failure's or import-time skip's block is named by its module."""
     loader = _ModuleRecordingLoader()
     suite = loader.discover(**spec)
     modules = []
     for block in list(suite):
         name = loader.suite_modules.get(id(block))
-        if name is None and type(block) is unittest.TestSuite:
-            children = list(block)
-            if len(children) == 1 and type(children[0]).__name__ == "_FailedTest":
-                name = children[0]._testMethodName
+        if name is None and _import_outcome(block) is not None:
+            name = _import_outcome(block)._testMethodName
         modules.append(name)
     return suite, modules
 
@@ -77,7 +87,8 @@ def _discover_modules(spec):
 def partition_tier(suite, modules, index: int, count: int, tier="all", heavy=frozenset()):
     """partition_suite over one tier's blocks, keeping original top-level indices. Tier "all" is partition_suite itself;
     "light" and "heavy" split every block by its module's membership in `heavy`, so the two tiers are disjoint and together
-    are every block (same tests, same blocks, same order)."""
+    are every block (same tests, same blocks, same order). A block whose module failed to import (or skipped at import) is
+    light whatever the manifest says: it costs nothing to run and a heavy module's import failure must fail per PR."""
     if tier == "all":
         return partition_suite(suite, index, count)
     if tier not in TIERS:
@@ -92,7 +103,8 @@ def partition_tier(suite, modules, index: int, count: int, tier="all", heavy=fro
     absent = sorted(set(heavy) - set(modules))
     if absent:
         raise ValueError(f"heavy manifest names modules discovery does not have: {absent}")
-    eligible = [offset for offset, name in enumerate(modules) if (name in heavy) == (tier == "heavy")]
+    heavy_block = [name in heavy and _import_outcome(block) is None for name, block in zip(modules, blocks)]
+    eligible = [offset for offset, is_heavy in enumerate(heavy_block) if is_heavy == (tier == "heavy")]
     indices = eligible[index::count]
     if not indices:
         raise ValueError("empty component shard")

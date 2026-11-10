@@ -628,18 +628,20 @@ class Case(unittest.TestCase):
                 self.assertEqual(run_suite(suite, stream=io.StringIO()), 0)
 
     def test_light_and_heavy_tiers_are_disjoint_complete_and_all_is_unchanged(self):
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.dict(sys.modules):   # the fixture modules leave with the directory
             root = Path(tmp); self.fixture(root)
             (root / 'test_gpu_engine_gamma.py').write_text('import unittest\nclass Case(unittest.TestCase):\n def test_g(self):pass\n')
             (root / 'test_gpu_engine_broken.py').write_text('raise ImportError("fixture import failure")\n')
+            (root / 'test_gpu_engine_skipped.py').write_text('import unittest\nraise unittest.SkipTest("fixture import-time skip")\n')
             sys.path.insert(0, str(root))
             try:
                 suite, modules = _discover_modules(dict(start_dir=str(root), pattern='test_gpu_engine*.py'))
             finally:
                 sys.path.remove(str(root))
             self.assertEqual(modules, ['test_gpu_engine_alpha', 'test_gpu_engine_beta', 'test_gpu_engine_broken',
-                                       'test_gpu_engine_gamma', 'zz_shard_package'])
-            heavy = frozenset({'test_gpu_engine_beta', 'zz_shard_package'})
+                                       'test_gpu_engine_gamma', 'test_gpu_engine_skipped', 'zz_shard_package'])
+            # a heavy module that fails to import is still light: its import failure must fail per pull request
+            heavy = frozenset({'test_gpu_engine_beta', 'zz_shard_package', 'test_gpu_engine_broken'})
             def tier(name, count):   # every shard of a tier, an empty shard (more shards than blocks) refused
                 out = []
                 for k in range(count):
@@ -649,7 +651,7 @@ class Case(unittest.TestCase):
             for count in (1, 2, 3):
                 with self.subTest(count=count):
                     light, heavy_ix = tier('light', count), tier('heavy', count)
-                    self.assertEqual(sorted(light), [0, 2, 3]);self.assertEqual(sorted(heavy_ix), [1, 4])
+                    self.assertEqual(sorted(light), [0, 2, 3, 4]);self.assertEqual(sorted(heavy_ix), [1, 5])
                     self.assertEqual(len(light), len(set(light)));self.assertEqual(len(heavy_ix), len(set(heavy_ix)))
                     self.assertEqual(sorted(light + heavy_ix), list(range(len(modules))))
                     for k in range(count):   # the default tier is partition_suite's own selection
@@ -691,7 +693,8 @@ raise SystemExit(run_process_blocks(suite, 0, 1, start_dir=sys.argv[1], tier=sys
             self.assertIn(entry['reason'], ('wall', 'memory', 'wall+memory'), entry['module'])
         for bad in ({'schema': 'x', 'modules': [{'module': 'test_gpu_engine_a'}]}, {'schema': 'gpu-component-heavy.v1', 'modules': []},
                     {'schema': 'gpu-component-heavy.v1', 'modules': [{'module': 'test_gpu_engine_a'}, {'module': 'test_gpu_engine_a'}]},
-                    {'schema': 'gpu-component-heavy.v1', 'modules': [{'module': 'other_a'}]}):
+                    {'schema': 'gpu-component-heavy.v1', 'modules': [{'module': 'other_a'}]},
+                    {'schema': 'gpu-component-heavy.v1', 'modules': ['test_gpu_engine_a']}):
             with tempfile.TemporaryDirectory() as tmp:
                 path = Path(tmp) / 'heavy.json';path.write_text(json.dumps(bad))
                 with self.assertRaises(ValueError):load_heavy_modules(path)
