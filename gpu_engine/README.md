@@ -167,6 +167,22 @@ Fidelity patch A2 (damage-changing effects and Destiny Bond; new state
   not. Device: the destinybond bag bit follows B2 (expired on the holder's
   move line, Pursuit's included).
 
+Fidelity patch R (the appended effect chance stream and Bonemerang; new state
+`effect_draws`):
+- `ChanceInputs.effect` ([B,2,4], bounds 16,16,4,2) is an appended stream:
+  `fold_in(split key, 1732050)`, drawn beside the original fields without
+  changing any of them or the key advance. A caller that omits it gets exactly
+  the sampled value. A suspended turn saves it in `effect_draws` and its
+  resumed step replays it, like the other saved blocks. The hand-written CUDA
+  chance kernel does not draw it yet (deferred to CUDA option A), so
+  `v2e_diff chance` and `v2e_cuda_check p2` report `effect` as differing.
+- Bonemerang hits twice after one accuracy roll: the first hit uses
+  `draws[s][4..5]`, the second `effect[s][0]` (critical) and `effect[s][1]`
+  (damage roll). A first-hit KO ends the move. Each hit meets the Substitute
+  on its own (a first hit that breaks it lets the second reach the Pokemon)
+  and Endure on its own. Counter and Mirror Coat return twice the last hit
+  that reached the Pokemon. Device: one damage line per hit.
+
 The existing fixed critical roll now resolves ordinary 1/16 and catalog +1
 high-crit 1/8 chances. Battle Armor and Shell Armor veto critical hits in both
 ordinary damage and pre-switch Pursuit, using the actual outgoing holder.

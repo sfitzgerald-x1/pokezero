@@ -43,6 +43,11 @@ CONSUMERS = {
         ("sleep_talk", "sleep_talk.choose: draw modulo callable count before PP test"),
         ("entry_ties", "transition resumed switch/callback ordering"))},
     "initial_tie": ("transition.initialize unresolved initial entry ordering",),
+    # Fidelity R (design 2.1): the appended effect stream's consumers. finite_law.COORDINATES does not carry the
+    # stream, so plan_for_state builds no axis for them: re-pinning transition.py must add the coordinates first.
+    **{f"effect.{s}.{c}": (use,) for s in range(2) for c, use in (
+        (0, "transition Bonemerang second hit: critical<1 or<2 (critical.is_critical)"),
+        (1, "transition Bonemerang second hit: damage 85+draw"))},
 }
 
 # Changing any source that supplies the consumer/domain proof requires review.

@@ -423,7 +423,7 @@ class TraceWriter:
                     continue
                 payload = dict(stream_id=stream, request=int(request),
                     before=self._before_boundary(before, row), after=boundary(after, row),
-                    chance={name:_row(value,row).tolist() for name,value in chance._asdict().items()},
+                    chance={name:_row(value,row).tolist() for name,value in chance._asdict().items() if value is not None},
                     selected=selected_actions(before, actions, row, self.header['action_names']),
                     executed=bool(executed[row]), invalid=bool(invalid[row]))
                 first = []

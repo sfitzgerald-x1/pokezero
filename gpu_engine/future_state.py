@@ -78,6 +78,7 @@ FIELD_POLICY = {
     "winner": "derived from all12 party HP; inconsistency refuses",
     "truant_loaf": "native active TRUANT residual clock; bench clock overwritten on entry",
     "item_knocked": "permanent knocked-off flag; native removed item (item none), refused beside a Trick inventory",
+    "effect_draws": "future-reused while suspended; otherwise consumed inactive draws (appended effect stream)",
 }
 NATIVE_PATHS = {
     "species": ("side[].pokemon[].id",), "level": ("side[].pokemon[].level",),
@@ -132,6 +133,7 @@ NATIVE_PATHS = {
     "done": ("derived from complete party HP",), "winner": ("derived from complete party HP",),
     "truant_loaf": ("side[].volatile_statuses.TRUANT",),
     "item_knocked": ("side[].pokemon[].item: none (no native itemKnockedOff; only Trick reads it)",),
+    "effect_draws": ("EXTERNAL_CHANCE: future-reused while suspended; otherwise consumed inactive draw",),
 }
 SIDE_NAMES = ("side_one", "side_two")
 BOOST_NAMES = ("attack", "defense", "special_attack", "special_defense", "speed", "accuracy", "evasion")
@@ -161,7 +163,7 @@ SHAPES.update({name: (2,) for name in ("active", "entry_pending", "active_turns"
 SHAPES.update({name: () for name in ("queued_actor", "pending_residual", "replacement_count", "weather",
     "weather_counter", "turn", "done", "winner")})
 SHAPES.update(types=(2, 6, 2), base_types=(2, 6, 2), stats=(2, 6, 6), moves=(2, 6, 4), pp=(2, 6, 4), disabled=(2, 6, 4),
-    boosts=(2, 6, 7), residual_draws=(2, 12))
+    boosts=(2, 6, 7), residual_draws=(2, 12), effect_draws=(2, 4))
 
 
 @dataclass(frozen=True)
@@ -332,7 +334,7 @@ def _prepare(data, metadata, certificate=None, *, boundary="ordinary",
         if set(dict(original_static)) != required or original_genders is None:
             add("source", "INCOMPLETE_ORIGINAL_STATIC", "All12 constructor records and retained genders required")
             return None, gaps, (), False, False
-    expected = set(FIELD_POLICY) - {"truant_loaf", "gender", "item_knocked"}  # legacy fields remain explicitly unknown
+    expected = set(FIELD_POLICY) - {"truant_loaf", "gender", "item_knocked", "effect_draws"}  # legacy fields remain explicitly unknown
     if set(data) - set(FIELD_POLICY) or expected - set(data):
         add("schema", "UNCLASSIFIED_JAX_FIELD", repr(sorted(set(data) ^ expected)))
         return None, gaps, (), False, False
@@ -608,6 +610,7 @@ def _native_input_from_data(data, metadata, *, module=None,
         return Refused(tuple(gaps), raw)
     inactive = tuple((name, data[name]) for name in ("keys", "turn", "queued_actor", "queued_actions", "queued_stall",
         "residual_draws", "phazing_draws", "secondary_draws", "sleep_talk_draws", "replacement_count"))
+    if "effect_draws" in data:inactive += (("effect_draws", data["effect_draws"]),)
     certificate = Certificate(tuple((k, FIELD_POLICY[k]) for k in sorted(data)),
         tuple((k, NATIVE_PATHS[k]) for k in sorted(data)), raw, static, _metadata_sha(metadata), last, damage, inactive)
     module = import_module("poke_engine") if module is None else module

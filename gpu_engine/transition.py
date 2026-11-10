@@ -256,6 +256,9 @@ class ChanceInputs(NamedTuple):
     Phazing and contact cannot occur on the same dispatched Gen3 move.
     Saved ordinary-turn draws override these during suspended replacements.
     Reused columns remain shared; enumeration must not break that correlation.
+    ``effect`` (fidelity patch R, design 2.1) is an appended, independent
+    stream with bounds 16,16,4,2; None means "the value sample_chance_inputs
+    draws", so six-field explicit callers keep their exact trajectories.
     """
     draws: jax.Array               # [B,2,12]
     phazing: jax.Array             # [B,2]
@@ -263,10 +266,32 @@ class ChanceInputs(NamedTuple):
     sleep_talk: jax.Array          # [B,2]
     entry_ties: jax.Array          # [B,2]
     initial_tie: jax.Array         # [B]
+    effect: jax.Array | None = None  # [B,2,4]; appended last, so positional six-field constructors still work
+
+
+# Fidelity patch R (design 2.1): ChanceInputs.effect is fold_in(step key, EFFECT_SALT), drawn from the same
+# split key as `draws` but through its own fold_in, so no existing field and no key advance reads it. The salt
+# differs from 271828, 1618033, 1414213, 314159 and 982451653+n. Columns: [s][0] a second hit's critical roll,
+# [s][1] a second hit's damage roll (85+d) (Bonemerang), [s][2] the residual Yawn sleep duration (2+d), and the
+# residual pair ties [0][3] (partial trap) and [1][3] (Perish); M2 adds the last three consumers.
+# The hand-written CUDA chance kernel (cuda/v2e_ffi.cu) does not draw this field yet: it is deferred to the
+# CUDA option-A work (design 13 item 6), so `v2e_diff chance` and v2e_cuda_check p2 report it as differing.
+EFFECT_SALT = 1732050
+EFFECT_BOUNDS = (16, 16, 4, 2)
+
+
+def effect_chance(keys):
+    """ChanceInputs.effect from the step's split keys (split(state.keys, 2)[:, 1], as sample_chance_inputs uses)."""
+    return jax.vmap(lambda key:jax.random.randint(jax.random.fold_in(key,EFFECT_SALT),(2,4),0,
+        jnp.array(EFFECT_BOUNDS,jnp.int32)))(keys)
 
 
 def sample_chance_inputs(state: BattleState) -> ChanceInputs:
-    """The original streams, unchanged; the sampled API owns randomness here."""
+    """The original streams, unchanged; the sampled API owns randomness here.
+
+    The appended `effect` stream (design 2.1) is computed from the same split
+    keys by its own fold_in; the six original expressions are untouched.
+    """
     keys = jax.vmap(lambda key:jax.random.split(key,2))(state.keys)[:,1]
     draw = lambda salt,limit:jax.vmap(lambda key:jax.random.randint(
         jax.random.fold_in(key,salt),(2,),0,limit))(keys)
@@ -277,7 +302,8 @@ def sample_chance_inputs(state: BattleState) -> ChanceInputs:
         jax.vmap(lambda key,count:jax.random.randint(jax.random.fold_in(
             key,jnp.uint32(982451653)+count.astype(jnp.uint32)),(2,),0,2))(
                 state.keys,state.replacement_count),
-        jax.vmap(lambda key:jax.random.randint(jax.random.fold_in(key,314159),(),0,2))(state.keys))
+        jax.vmap(lambda key:jax.random.randint(jax.random.fold_in(key,314159),(),0,2))(state.keys),
+        effect=effect_chance(keys))
 
 
 def action_mask(state,table):
@@ -451,8 +477,9 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                 raise ValueError('owning birth record and original static weather profile required')
             _weather_hp_record=_weather_observer_context[0]
     batch = state.hp.shape[0]
-    shapes = ((batch,2,12),(batch,2),(batch,2),(batch,2),(batch,2),(batch,))
+    shapes = ((batch,2,12),(batch,2),(batch,2),(batch,2),(batch,2),(batch,),(batch,2,4))
     for value,shape in zip(chance_inputs,shapes,strict=True):
+        if value is None and shape == (batch,2,4):continue   # effect omitted: derived from the keys below
         if value.shape != shape or not jnp.issubdtype(value.dtype,jnp.integer):
             raise ValueError('chance inputs must have declared integer batch shapes')
     if actions.shape != state.active.shape or not jnp.issubdtype(actions.dtype, jnp.integer):
@@ -490,6 +517,11 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
     secondary_draws=jnp.where(resuming[:,None],state.secondary_draws,secondary_draws)
     sleep_talk_draws=chance_inputs.sleep_talk
     sleep_talk_draws=jnp.where(resuming[:,None],state.sleep_talk_draws,sleep_talk_draws)
+    # Fidelity patch R (design 2.1): the appended effect stream. A caller without it gets exactly what
+    # sample_chance_inputs draws from these keys; a resumed suspended turn replays its saved block.
+    effect_draws=chance_inputs.effect
+    if effect_draws is None:effect_draws=effect_chance(splits[:,1])
+    effect_draws=jnp.where(resuming[:,None,None],state.effect_draws,effect_draws)
     # Replacement requests do not consume another ordinary-turn chance block.
     # A separate counted fold-in distinguishes repeated hazard-KO entry ties.
     entry_ties = chance_inputs.entry_ties
@@ -965,6 +997,28 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
             # (Ghost to Counter, Dark to Mirror Coat).
             damage=jnp.where(table.damage_moves.counter_kind[move]>0,
                 jnp.where(immune,0,special_hits.counter_damage(_taken_amount[rows,side])),damage)
+        # Bonemerang's second hit (design R.2): every hit of Gen 3's multihit loop is its own moveHit, so it
+        # runs its own getDamage: a critical roll and a damage roll, here from the appended effect stream
+        # (effect[s][0], 85+effect[s][1]). Same attacker, target and modifiers as the first hit.
+        _effect=effect_draws[rows,side]
+        critical2=_effect[:,0]==0
+        if table.critical is not None:
+            critical2=crits.is_critical(table.critical,move,_active(work.ability,work,foe),_effect[:,0])
+        damage2=m.gen3_damage(level=_active(work.level, work, side), power=power,
+            attack=jnp.where(physical, attack_stats[:, 1], attack_stats[:, 3]),
+            defense=jnp.where(physical, defense_stats[:, 2], defense_stats[:, 4]),
+            attack_stage=jnp.where(physical, attack_boosts[:, 0], attack_boosts[:, 2]),
+            defense_stage=jnp.where(physical, defense_boosts[:, 1], defense_boosts[:, 3]),
+            physical=physical, critical=critical2,halve_defense=explodes & physical,hustle=hustle,
+            attack_num=attack_num,attack_den=attack_den,
+            defense_num=defense_num,defense_den=defense_den,
+            weather_num=weather_num,weather_den=weather_den,
+            phase1_num=phase1_num,phase1_den=phase1_den,
+            stab=jnp.any(own_types == typ[:, None], axis=1) & (typ != 0),
+            typeless=typ == 0,
+            burned=_active(work.status, work, side) == m.BRN,
+            guts=guts,
+            effectiveness_num=num, effectiveness_den=den, immune=immune, roll=85 + _effect[:, 1])
         # Gen3's Hustle accuracy handler checks TYPE, including Status moves.
         # Hidden Power's actor-owned type has already been resolved above.
         hustle_accuracy = (hustle & table.combat.physical_type[typ]
@@ -1135,6 +1189,37 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
             _public_trace=execution_accounting.capture_direct_hit_write(_public_trace,_direct_ticket,
                 side,work.active[rows,side],work.active[rows,foe],move,_direct_write,
                 requested=_direct_requested & (_direct_write.new_hp!=0) & ~no_damage_callbacks.scheduled(_no_damage_pending,_direct_write),data=_direct_hit_context.data)
+        if table.damage_moves is not None:
+            # Bonemerang (data/moves.ts multihit:2; design R.2). Gen 3's tryMoveHit (data/mods/gen3/scripts.ts)
+            # rolls accuracy once, then hits while `i < hits && target.hp && pokemon.hp`: a first-hit KO ends the
+            # move. Each hit is a full moveHit: the Substitute check (gen4 substitute onTryPrimaryHit), its own
+            # crit and damage roll (above), Endure. When the first hit breaks the Substitute the second hits the
+            # Pokemon (gen4's substitutebroken volatile has no handler). Counter/Mirror Coat's onDamage records
+            # every hit that reaches the Pokemon, so the last one wins; Endure's 0 at 1 HP stops the Damage event
+            # before it (runEvent breaks on a falsy relay), keeping the earlier record. B2 sees one -damage line per
+            # hit and a -hitcount (no tracker reads it). Downstream (Focus Punch, Color Change, the faint
+            # cancellation) reads the final hit, which reaches the Pokemon exactly when either hit did.
+            _second=(acts & hit & ~immune & (table.damage_moves.hits[move]>1)
+                & (_active(work.hp,work,foe)>0) & (_active(work.hp,work,side)>0))
+            _hp1=_active(work.hp,work,foe);_sub1=_active(work.substitute_hp,work,foe)
+            _sub2=(_sub1>0) & ~bypass_sub
+            _capacity2=jnp.where(_sub2,_sub1,jnp.where(enduring[rows,foe],jnp.maximum(0,_hp1-1),_hp1))
+            _dealt2=jnp.where(_second,jnp.minimum(_capacity2,damage2),0)
+            _foe_hp2=_hp1-jnp.where(_sub2,0,_dealt2)
+            work=work._replace(hp=_set_active(work.hp,work,foe,_foe_hp2),
+                substitute_hp=_set_active(work.substitute_hp,work,foe,_sub1-jnp.where(_sub2,_dealt2,0)))
+            if _lifecycle_trace:_public_trace=status_callbacks.unknown(_public_trace,_second)
+            if _device_public is not None:
+                device_public.damage(_device_public,work,side,jnp.where(_sub2,0,_dealt2),jnp.where(_sub2,0,_dealt2),_second)
+                device_public.negative_hp_line(_device_public,work,foe,_second & ~_sub2 & (_dealt2>0),source_class=device_public.negative_items.HP_ACTION)
+                device_public.observe(_device_public,work,_second)
+            _taken2=_second & ~_sub2 & (_dealt2>0)
+            _taken_amount=_taken_amount.at[rows,foe].set(jnp.where(_taken2,_dealt2,_taken_amount[rows,foe]))
+            _taken_kind=_taken_kind.at[rows,foe].set(jnp.where(_taken2,
+                jnp.where(physical | table.damage_moves.hidden_power[move],1,2),_taken_kind[rows,foe]))
+            dealt=jnp.where(_second,_dealt2,dealt)
+            hits_sub=jnp.where(_second,_sub2,hits_sub)
+            foe_hp=jnp.where(_second,_foe_hp2,foe_hp)
         if table.focus_punch is not None:
             work=focusing.hit(work,side,move,table.focus_punch,eligible=acts & hit & ~immune & ~hits_sub)
         # Gen 3 floors recoil from actual damage, including capped sub damage.
@@ -2160,6 +2245,15 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
             drained = recovery.leech(_active(work.hp,work,side),_active(work.max_hp,work,side),
                 _active(work.volatile,work,side),_active(work.hp,work,foe),_active(work.max_hp,work,foe),
                 eligible=eligible & seed_event)
+            if table.damage_moves is not None:
+                # Liquid Ooze on Leech Seed (gen4 abilities.ts liquidooze onSourceTryHeal, inherited by Gen 3:
+                # 'leechseed' is in canOoze): the seeder takes the drained amount instead of healing it, also at full
+                # HP (TryHeal runs before heal's full-HP check), and the seeded Ooze holder is revealed.
+                _seed_amount=_active(work.hp,work,side)-drained.hp
+                _seed_ooze=(_seed_amount>0) & table.damage_moves.liquid_ooze[_active(work.ability,work,side)]
+                drained=drained._replace(recipient_hp=jnp.where(_seed_ooze,
+                    jnp.maximum(0,_active(work.hp,work,foe)-_seed_amount),drained.recipient_hp))
+                if _lifecycle_trace:_public_trace=status_callbacks.unknown(_public_trace,_seed_ooze)
             work = work._replace(hp=_set_active(work.hp,work,side,drained.hp))
             if _lifecycle_trace:
                 _public_trace,_leech_capture=leech_callbacks.finish_drain(_public_trace,_leech_pending,work,drained)
@@ -2172,6 +2266,8 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                 device_public.hp_line(_device_public,work,foe,
                     eligible & seed_event & (drained.recipient_hp!=_active(_device_residual_before.hp,_device_residual_before,foe)),
                     source_class=device_public.HP_UNKNOWN)
+                # -damage|seeder|..|[from] ability: Liquid Ooze|[of] holder (B2 attributes the ability to the holder).
+                if table.damage_moves is not None:device_public.reveal_ability(_device_public,work,side,_seed_ooze)
             if _lifecycle_trace:
                 _public_trace,_leech_heal_capture=leech_callbacks.finish_heal(_public_trace,_leech_heal_pending,work)
         if table.encore is not None:
@@ -2218,6 +2314,8 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
         forced_switch=((jnp.take_along_axis(work.hp, work.active[..., None], axis=2)[..., 0] <= 0)
             | work.baton_pass) & alive,
         baton_pass=work.baton_pass & ~done[:,None])
+    # The effect stream is saved with the other blocks for a suspended turn (design 2.1), zero otherwise.
+    work = work._replace(effect_draws=jnp.where(defer_residual[:,None,None],effect_draws,0))
     if _lifecycle_trace:
         from . import engine_baton_pass_callbacks as baton_callbacks
         _public_trace=baton_callbacks.finalize_request(_public_trace,work)

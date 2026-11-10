@@ -66,13 +66,21 @@ def _identity():
 
 
 def _chance():
+    """Seven ChanceInputs fields plus the key advance. The hand-written CUDA chance kernel predates the
+    appended `effect` stream (fidelity R, design 2.1) and its update is deferred to the CUDA option-A work
+    (design 13 item 6): its side reports effect as -1, so this module is expected to fail on `effect`
+    (and only there) until that kernel draws it."""
     import jax
+    import jax.numpy as j
     from gpu_engine import transition, v2e_cuda
     def reference(s, a, t, c):
         x = transition.sample_chance_inputs(s)
         return (x.draws, x.phazing, x.secondary, x.sleep_talk, x.entry_ties, x.initial_tie,
-            jax.vmap(lambda k: jax.random.split(k, 2))(s.keys)[:, 0])
-    return reference, (lambda s, a, t, c: v2e_cuda.chance(s.keys, s.replacement_count))
+            jax.vmap(lambda k: jax.random.split(k, 2))(s.keys)[:, 0], x.effect)
+    def cuda(s, a, t, c):
+        out = v2e_cuda.chance(s.keys, s.replacement_count)
+        return tuple(out) + (j.full((s.keys.shape[0], 2, 4), -1, j.int32),)   # CUDA_EFFECT_DEFERRED
+    return reference, cuda
 
 
 def _negative_control():

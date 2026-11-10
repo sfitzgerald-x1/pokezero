@@ -32,55 +32,55 @@ import time
 import numpy as np
 
 SCHEMA = 'pokezero.v2e-census.v1'
-# transition.step_with_chance: def line and last line (design note section 1.1; tree 5bc2fe8c, shifted by fidelity A1 and A2).
-SPAN = (316, 2264)
+# transition.step_with_chance: def line and last line (design note section 1.1; tree 5bc2fe8c, shifted by fidelity A1, A2 and R).
+SPAN = (342, 2351)
 # (phase, first line, last line, group). 'pre' is the host-side argument checks; boundary statements open the next phase.
 PHASES = (
-    ('pre', 316, 459, 'pre'),
-    ('A', 460, 509, 'A'),      # request kind, validity, resuming draws, key split, age, initialize, Lum
-    ('B', 510, 539, 'B'),      # speeds, switches, saved actor, slot, Struggle, charge, Focus Punch preparation
-    ('C', 540, 577, 'C'),      # Pursuit per side
-    ('D', 578, 681, 'D'),      # switch order, Baton, depart/install/enter, forced replacement entries, post-switch Lum
-    ('E0', 682, 704, 'E'),     # ordering
-    ('E1', 705, 895, 'E'),     # per action: pre-move
-    ('E2', 896, 1184, 'E'),    # damage
-    ('E3', 1185, 1722, 'E'),   # effects
-    ('E4', 1723, 1838, 'E'),   # post (recoil, move weather, Spikes, drag, Baton, fainted boosts)
-    ('F1', 1839, 1945, 'F'),   # defer/ready, end speeds, Wish, weather
-    ('F2', 1946, 2190, 'F'),   # residual events (argsort at 1952, loop at 1953)
-    ('G', 2191, 2264, 'G'),    # end of turn
+    ('pre', 342, 486, 'pre'),
+    ('A', 487, 541, 'A'),      # request kind, validity, resuming draws, key split, age, initialize, Lum
+    ('B', 542, 571, 'B'),      # speeds, switches, saved actor, slot, Struggle, charge, Focus Punch preparation
+    ('C', 572, 609, 'C'),      # Pursuit per side
+    ('D', 610, 713, 'D'),      # switch order, Baton, depart/install/enter, forced replacement entries, post-switch Lum
+    ('E0', 714, 736, 'E'),     # ordering
+    ('E1', 737, 927, 'E'),     # per action: pre-move
+    ('E2', 928, 1269, 'E'),    # damage
+    ('E3', 1270, 1807, 'E'),   # effects
+    ('E4', 1808, 1923, 'E'),   # post (recoil, move weather, Spikes, drag, Baton, fainted boosts)
+    ('F1', 1924, 2030, 'F'),   # defer/ready, end speeds, Wish, weather
+    ('F2', 2031, 2275, 'F'),   # residual events (argsort at 2037, loop at 2038)
+    ('G', 2276, 2351, 'G'),    # end of turn
 )
 GROUPS = ('A', 'B', 'C', 'D', 'E', 'F', 'G')
 GROUP = {name: group for name, _, _, group in PHASES}
 # Source text each line must start with (stripped): a line shift anywhere above an anchor fails the drift test.
 ANCHORS = {
-    316: 'def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,',
-    460: 'rows = jnp.arange(state.hp.shape[0])',
-    510: '# All action speeds are frozen before ordinary switches.',
-    512: 'speed = _speeds(work,table)',
-    540: 'pursuit_used = jnp.zeros_like(switches)',
-    578: 'bench = bench_indices(state.active)',
-    681: 'else:work = _lum_update(work,table,live,_device_public=_device_public)',
-    682: 'priority = table.priority[moves]',
-    705: 'for order in range(2):',
-    706: '_faint_before_hp=work.hp',
-    896: 'attack_stats = _active(work.stats, work, side)',
-    1185: 'if table.effects is not None:',
-    1723: '# Gen3 applies contact DamagingHit',
-    1808: 'work,changed,hazard_ko=dragging.drag(work,foe,move,phazing_draws[rows,side],',
-    1839: 'turn_context = live & (~replacement | state.pending_residual)',
-    1946: 'event_sides = jnp.array([0,1,0,1,0,1,0,1,0,1])',
-    1952: 'event_order = jnp.argsort(event_keys,axis=1)',
-    1953: 'for order in range(10):',
-    1965: 'if _status_residual_context is not None:',
-    2191: 'work=linking.prune(work)',
-    2255: 'work = jax.tree.map(lambda old, new: jnp.where(live.reshape(',
-    2264: 'return result if _public_trace is None else public_callbacks.TracedStep(result,_public_trace)',
+    342: 'def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,',
+    487: 'rows = jnp.arange(state.hp.shape[0])',
+    542: '# All action speeds are frozen before ordinary switches.',
+    544: 'speed = _speeds(work,table)',
+    572: 'pursuit_used = jnp.zeros_like(switches)',
+    610: 'bench = bench_indices(state.active)',
+    713: 'else:work = _lum_update(work,table,live,_device_public=_device_public)',
+    714: 'priority = table.priority[moves]',
+    737: 'for order in range(2):',
+    738: '_faint_before_hp=work.hp',
+    928: 'attack_stats = _active(work.stats, work, side)',
+    1270: 'if table.effects is not None:',
+    1808: '# Gen3 applies contact DamagingHit',
+    1893: 'work,changed,hazard_ko=dragging.drag(work,foe,move,phazing_draws[rows,side],',
+    1924: 'turn_context = live & (~replacement | state.pending_residual)',
+    2031: 'event_sides = jnp.array([0,1,0,1,0,1,0,1,0,1])',
+    2037: 'event_order = jnp.argsort(event_keys,axis=1)',
+    2038: 'for order in range(10):',
+    2050: 'if _status_residual_context is not None:',
+    2276: 'work=linking.prune(work)',
+    2342: 'work = jax.tree.map(lambda old, new: jnp.where(live.reshape(',
+    2351: 'return result if _public_trace is None else public_callbacks.TracedStep(result,_public_trace)',
 }
 # Iteration rules over lines in program order (the scratch census's): an E1..E4 line <= E_RESTART after one >= E_LATE
 # starts the second action; in F2 a line <= F2_HEAD after one > F2_BODY starts the next of the 10 residual events.
-E_LATE, E_RESTART = 1741, 775
-F2_LOOP, F2_HEAD, F2_BODY = 1953, 1965, 1980
+E_LATE, E_RESTART = 1826, 807
+F2_LOOP, F2_HEAD, F2_BODY = 2038, 2050, 2065
 # Design boundaries: the phase label whose first equation each one is (b0: the first step_with_chance equation; b8: the end).
 BOUNDARIES = (('b0', 'A'), ('b1', 'B'), ('b2', 'D'), ('b3', 'E0'), ('b4', 'E1.0'), ('b5', 'E1.1'), ('b6', 'F1'), ('b7', 'G'), ('b8', 'END'))
 TRACKERS = {'engine_device_public_hooks', 'engine_device_trackers', 'engine_device_public_port', 'engine_device_visible_belief',

@@ -45,7 +45,8 @@ def _validate(snapshot):
         if value.ndim < 1 or value.shape[0] != b:
             raise ValueError('every state/public carry leaf must have the same batch')
     for key, value in zip(snapshot.chance._fields, snapshot.chance):
-        shape = (b, 2, 12) if key == 'draws' else (b,) if key == 'initial_tie' else (b, 2)
+        if key == 'effect' and value is None:continue   # appended stream (fidelity R): derived from the keys
+        shape = (b, 2, 12) if key == 'draws' else (b,) if key == 'initial_tie' else (b, 2, 4) if key == 'effect' else (b, 2)
         if value.shape != shape or value.dtype != np.int32:
             raise ValueError('original complete int32 chance capsule required: '+key)
     if snapshot.trackers.observed_moves is None or snapshot.trackers.mon_features is None:

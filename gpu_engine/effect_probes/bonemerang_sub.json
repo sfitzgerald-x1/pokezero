@@ -1,0 +1,208 @@
+{
+ "schema": "pokezero.effect_probe.scenario.v1",
+ "move": "bonemerang_sub",
+ "note": "R.2 Bonemerang into a Substitute (gen4 substitute onTryPrimaryHit, inherited by Gen 3): Snorlax (Substitute 86 HP) takes a level-46 Marowak's two hits. A critical first hit at the top roll breaks it and the second hit then hits Snorlax (substitutebroken has no Gen 3 handler); otherwise the second hit breaks it (damage capped at the remaining Substitute HP) or both hits stay on it. Each hit rolls its own critical and damage, also on the Substitute.",
+ "teams": [
+  [
+   {
+    "species": "Marowak",
+    "moves": [
+     "bonemerang",
+     "splash",
+     "protect",
+     "swordsdance"
+    ],
+    "ability": "Rock Head",
+    "item": "Thick Club",
+    "level": 46
+   },
+   {
+    "species": "Starmie",
+    "moves": [
+     "splash",
+     "surf",
+     "recover",
+     "protect"
+    ],
+    "ability": "Illuminate",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Blissey",
+    "moves": [
+     "splash",
+     "softboiled",
+     "protect",
+     "seismictoss"
+    ],
+    "ability": "Serene Grace",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Skarmory",
+    "moves": [
+     "splash",
+     "protect",
+     "spikes",
+     "peck"
+    ],
+    "ability": "Keen Eye",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Swampert",
+    "moves": [
+     "splash",
+     "protect",
+     "surf",
+     "earthquake"
+    ],
+    "ability": "Torrent",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Metagross",
+    "moves": [
+     "splash",
+     "protect",
+     "meteormash",
+     "earthquake"
+    ],
+    "ability": "Clear Body",
+    "item": "Leftovers"
+   }
+  ],
+  [
+   {
+    "species": "Snorlax",
+    "moves": [
+     "substitute",
+     "splash",
+     "protect",
+     "bodyslam"
+    ],
+    "ability": "Thick Fat",
+    "item": ""
+   },
+   {
+    "species": "Starmie",
+    "moves": [
+     "splash",
+     "surf",
+     "recover",
+     "protect"
+    ],
+    "ability": "Illuminate",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Blissey",
+    "moves": [
+     "splash",
+     "softboiled",
+     "protect",
+     "seismictoss"
+    ],
+    "ability": "Serene Grace",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Skarmory",
+    "moves": [
+     "splash",
+     "protect",
+     "spikes",
+     "peck"
+    ],
+    "ability": "Keen Eye",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Swampert",
+    "moves": [
+     "splash",
+     "protect",
+     "surf",
+     "earthquake"
+    ],
+    "ability": "Torrent",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Metagross",
+    "moves": [
+     "splash",
+     "protect",
+     "meteormash",
+     "earthquake"
+    ],
+    "ability": "Clear Body",
+    "item": "Leftovers"
+   }
+  ]
+ ],
+ "script": [
+  [
+   "move 2",
+   "move 1"
+  ],
+  [
+   "move 1",
+   "move 2"
+  ]
+ ],
+ "axes": [
+  {
+   "name": "crit1",
+   "field": "draws.0.4",
+   "values": [
+    15,
+    0
+   ],
+   "steps": [
+    1
+   ]
+  },
+  {
+   "name": "roll1",
+   "field": "draws.0.5",
+   "values": [
+    0,
+    15
+   ],
+   "steps": [
+    1
+   ]
+  },
+  {
+   "name": "crit2",
+   "field": "effect.0.0",
+   "values": [
+    15,
+    0
+   ],
+   "steps": [
+    1
+   ]
+  },
+  {
+   "name": "roll2",
+   "field": "effect.0.1",
+   "values": [
+    0,
+    15
+   ],
+   "steps": [
+    1
+   ]
+  }
+ ],
+ "expect": {
+  "exact": true
+ },
+ "require_fields": [
+  "item_knocked",
+  "destiny_bond",
+  "effect"
+ ]
+}

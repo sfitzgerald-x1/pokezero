@@ -1,0 +1,208 @@
+{
+ "schema": "pokezero.effect_probe.scenario.v1",
+ "move": "bonemerang_counter_sub",
+ "note": "R.2 / A2.3 Counter after Bonemerang into Wobbuffet's Substitute (111 HP): a level-60 Marowak's critical first hit breaks it, the second hit reaches Wobbuffet and Counter returns twice that hit; a non-critical first hit leaves the Substitute up, the second hit breaks it, nothing reaches Wobbuffet and Counter fails.",
+ "teams": [
+  [
+   {
+    "species": "Marowak",
+    "moves": [
+     "bonemerang",
+     "splash",
+     "protect",
+     "swordsdance"
+    ],
+    "ability": "Rock Head",
+    "item": "Thick Club",
+    "level": 60
+   },
+   {
+    "species": "Starmie",
+    "moves": [
+     "splash",
+     "surf",
+     "recover",
+     "protect"
+    ],
+    "ability": "Illuminate",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Blissey",
+    "moves": [
+     "splash",
+     "softboiled",
+     "protect",
+     "seismictoss"
+    ],
+    "ability": "Serene Grace",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Skarmory",
+    "moves": [
+     "splash",
+     "protect",
+     "spikes",
+     "peck"
+    ],
+    "ability": "Keen Eye",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Swampert",
+    "moves": [
+     "splash",
+     "protect",
+     "surf",
+     "earthquake"
+    ],
+    "ability": "Torrent",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Metagross",
+    "moves": [
+     "splash",
+     "protect",
+     "meteormash",
+     "earthquake"
+    ],
+    "ability": "Clear Body",
+    "item": "Leftovers"
+   }
+  ],
+  [
+   {
+    "species": "Wobbuffet",
+    "moves": [
+     "counter",
+     "mirrorcoat",
+     "substitute",
+     "splash"
+    ],
+    "ability": "Shadow Tag",
+    "item": ""
+   },
+   {
+    "species": "Starmie",
+    "moves": [
+     "splash",
+     "surf",
+     "recover",
+     "protect"
+    ],
+    "ability": "Illuminate",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Blissey",
+    "moves": [
+     "splash",
+     "softboiled",
+     "protect",
+     "seismictoss"
+    ],
+    "ability": "Serene Grace",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Skarmory",
+    "moves": [
+     "splash",
+     "protect",
+     "spikes",
+     "peck"
+    ],
+    "ability": "Keen Eye",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Swampert",
+    "moves": [
+     "splash",
+     "protect",
+     "surf",
+     "earthquake"
+    ],
+    "ability": "Torrent",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Metagross",
+    "moves": [
+     "splash",
+     "protect",
+     "meteormash",
+     "earthquake"
+    ],
+    "ability": "Clear Body",
+    "item": "Leftovers"
+   }
+  ]
+ ],
+ "script": [
+  [
+   "move 2",
+   "move 3"
+  ],
+  [
+   "move 1",
+   "move 1"
+  ]
+ ],
+ "axes": [
+  {
+   "name": "crit1",
+   "field": "draws.0.4",
+   "values": [
+    15,
+    0
+   ],
+   "steps": [
+    1
+   ]
+  },
+  {
+   "name": "roll1",
+   "field": "draws.0.5",
+   "values": [
+    0,
+    15
+   ],
+   "steps": [
+    1
+   ]
+  },
+  {
+   "name": "crit2",
+   "field": "effect.0.0",
+   "values": [
+    15,
+    0
+   ],
+   "steps": [
+    1
+   ]
+  },
+  {
+   "name": "roll2",
+   "field": "effect.0.1",
+   "values": [
+    0,
+    15
+   ],
+   "steps": [
+    1
+   ]
+  }
+ ],
+ "expect": {
+  "exact": true
+ },
+ "require_fields": [
+  "item_knocked",
+  "destiny_bond",
+  "effect"
+ ]
+}
