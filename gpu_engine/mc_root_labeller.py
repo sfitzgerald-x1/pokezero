@@ -131,14 +131,18 @@ class Rollout:
         env.restore(snapshot);env.reseed_simulator_rng(int(np.random.default_rng([root_seed, k]).integers(1, 2**31 - 1)))
         first = {ours: a}
         if opp_reply is not None:first[opp] = opp_reply
-        env.step(first);self.decisions = len(first);self.ply = 1;self.check()
+        self.obs = dict(env.step(first).observations);self.decisions = len(first);self.ply = 1;self.check()
 
     def check(self):
         if self.env.terminal() is not None or self.decisions >= MAX_DECISIONS:self.done = True;self.value = outcome(self.env, self.ours)
 
-    def pending(self):return [] if self.done else list(self.env.requested_players())
+    def pending(self):
+        """The requested players with their observations: the step's own (env.step observes every next-requested player), so
+        no second observe."""
+        return [] if self.done else [(p, self.obs[p]) for p in self.env.requested_players()]
 
-    def step(self, actions):self.env.step(actions);self.decisions += len(actions);self.ply += 1;self.check()
+    def step(self, actions):
+        self.obs = dict(self.env.step(actions).observations);self.decisions += len(actions);self.ply += 1;self.check()
 
 
 def run_root(envs, models, root, snapshot, K, batched):
@@ -154,7 +158,7 @@ def run_root(envs, models, root, snapshot, K, batched):
         while tasks and len(active) < (len(envs) if batched else 1):
             i, a, k = tasks.pop(0);env = next(e for e in envs if all(r.env is not e for _, r in active))
             active.append((i, Rollout(env, snapshot, a, k, root_seed, ours, opp, None if replies is None else replies[k])))
-        requests = [(j, p, r.env.observe(p)) for j, (i, r) in enumerate(active) for p in r.pending()]
+        requests = [(j, p, o) for j, (i, r) in enumerate(active) for p, o in r.pending()]
         chosen = {}
         for side in (ours, opp):
             group = [(j, p, o) for j, p, o in requests if p == side]
