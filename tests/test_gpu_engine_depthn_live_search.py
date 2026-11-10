@@ -719,6 +719,84 @@ def world(values,*,opponent=None,logits=None):
     return original.WorldPrices(bool(opponent),legal,tuple(logits or(0.,)*9),tuple(map(tuple,jv)))
 
 
+class NoiseGatedTests(unittest.TestCase):
+    """--root-operator NOISE_GATED_K2 (screen-r4a variant B): the scorer's noise_gated k=2 on the priced worlds' per-world q, greedy
+    the root logits' argmax; under a reply model on the reply model's worlds (br_fp). LiveSearchTests' harness."""
+    setUpClass = classmethod(LiveSearchTests.setUpClass.__func__);make_pricers = classmethod(LiveSearchTests.make_pricers.__func__)
+    setUp, search, outcome, run_batch = LiveSearchTests.setUp, LiveSearchTests.search, LiveSearchTests.outcome, LiveSearchTests.run_batch
+
+    def outcomes(self, n):return {(f'r{i}', 0):self.outcome(i) for i in range(n)}
+
+    @staticmethod
+    def rule(blocks, root_logits, legal):
+        """(candidate, greedy, played, q) by the scorer's rule on recorded blocks."""
+        flat = [w for pair in blocks for w in pair];choice = hedge.averaging(flat, legal)
+        candidate = hedge.top_action(choice.strategy);greedy = max((a for a in range(9) if legal[a]), key=lambda a: (root_logits[a], -a))
+        from scripts import depthn_rr_score as rr
+        return candidate, greedy, rr.noise_gated(rr.per_world_q(hedge.grids(flat, legal)), candidate, greedy, 2), list(choice.q)
+
+    def recorded(self, search, reqs):
+        calls, real = [], live.decide
+        def recording(blocks, root_logits, root_legal):calls.append((blocks, list(root_logits), tuple(root_legal)));return real(blocks, root_logits, root_legal)
+        with patch.object(live, 'decide', recording):rows, _ = self.run_batch(search, reqs, self.outcomes(len(reqs)))
+        return rows, calls
+
+    def test_the_gate_plays_the_scorers_rule_on_the_priced_worlds(self):
+        reqs = [request(f'r{i}', 0, stream=50 + i) for i in range(4)]
+        plain, _ = self.run_batch(self.search(), reqs, self.outcomes(4))
+        guarded, real_guard = [], live.DepthNLiveSearch._effect_guard
+        def guard(search, frame, root, made, request, children, notes, choice, labels, reply_logits=None):
+            guarded.append(choice);return real_guard(search, frame, root, made, request, children, notes, choice, labels, reply_logits=reply_logits)
+        with patch.object(live.DepthNLiveSearch, '_effect_guard', guard):rows, calls = self.recorded(self.search(root_operator=live.NOISE_GATED_K2), reqs)
+        self.assertEqual(guarded, [r['action_index'] for r in rows if r['status'] == 'COMPLETE'])   # the effect guard's (c) reads the played action
+        complete = [r for r in rows if r['status'] == 'COMPLETE'];self.assertTrue(complete);self.assertEqual(len(calls), len(complete))
+        for row, call in zip(complete, calls):
+            encode(row);self.assertEqual(set(row), KEYS | {'noise_gate'});self.assertEqual(row['root_operator'], 'NOISE_GATED_K2')
+            candidate, greedy, played, q = self.rule(*call)
+            self.assertEqual((row['action_index'], row['q_values']), (played, q))
+            gate = row['noise_gate'];self.assertEqual((gate['candidate'], gate['greedy'], gate['passed']), (candidate, greedy, played == candidate))
+            self.assertEqual(gate['mean_gap'] is None, candidate == greedy)
+        for a, b in zip(plain, rows):   # the gate changes only the played action: averaging's q and its choice are the default's
+            self.assertNotIn('noise_gate', a);self.assertEqual(a['root_operator'], 'ARGMAX_MEAN_COMPLETED_Q')
+            if b['status'] == 'COMPLETE':self.assertEqual((a['action_index'], a['q_values']), (b['noise_gate']['candidate'], b['q_values']))
+            else:self.assertIsNone(b['noise_gate'])
+        with self.assertRaises(ValueError):self.search(root_operator='TARGET_ARGMAX')
+
+    def test_under_a_reply_model_the_gate_reads_br_fps_worlds(self):
+        from collections import namedtuple
+        from gpu_engine.depthn_reply_prior import ReplyPrior
+        Out = namedtuple('Out', 'policy_logits');champion = self.evaluator
+        class Negated:
+            identity = ('champion', 'cd' * 32, 'bfloat16')
+            def __call__(self, params, inputs):return Out(-champion(params, inputs).policy_logits)
+        reqs = [request(f'r{i}', 0, stream=60 + i) for i in range(4)]
+        rows, calls = self.recorded(self.search(reply=ReplyPrior(self.executor, Negated(), PARAMS[0]), root_operator=live.NOISE_GATED_K2), reqs)
+        complete = [r for r in rows if r['status'] == 'COMPLETE'];self.assertTrue(complete);self.assertEqual(len(calls), 2 * len(complete))
+        for row, call in zip(complete, calls[1::2]):   # per root: the champion's averaging (reported), then br_fp's, which the gate reads
+            candidate, greedy, played, q = self.rule(*call)
+            self.assertEqual((row['action_index'], row['q_values'], row['noise_gate']['candidate']), (played, q, candidate))
+            self.assertEqual(row['reply_prior']['operator'], 'br_fp')
+
+    def test_a_gate_without_two_finite_worlds_refuses(self):
+        legal = tuple(a in (0, 1) for a in range(9));grid = [[(0. if b < 2 else None) if a == 0 else (.3 if b < 2 else None) if a == 1 else None
+                                                           for b in range(9)] for a in range(9)]
+        world = original.WorldPrices(True, legal, (0.,) * 9, grid);logits = [1.] + [0.] * 8
+        decision = live.decide([(world,)], logits, legal);self.assertEqual(decision['status'], 'COMPLETE')
+        gated = live.noise_gate(decision, [(world,)], logits, legal)
+        self.assertEqual((gated['status'], gated['action_index']), ('REFUSED', None));self.assertTrue(gated['refusal'].startswith('NOISE_GATE_ERROR'))
+        two = live.noise_gate(live.decide([(world, world)], logits, legal), [(world, world)], logits, legal)   # sd 0, mean .3 > 0: passes
+        self.assertEqual((two['action_index'], two['noise_gate']['passed'], two['noise_gate']['stderr']), (1, True, 0.))
+        def priced(q1):return original.WorldPrices(True, legal, (0.,) * 9, [[(0. if b < 2 else None) if a == 0 else (q1 if b < 2 else None) if a == 1
+                                                                             else None for b in range(9)] for a in range(9)])
+        noisy = [(priced(.9), priced(-.5))]   # averaging plays 1 (mean .2) but the gaps .9, -.5 are 1 SE apart: the gate keeps greedy 0
+        blocked = live.noise_gate(live.decide(noisy, logits, legal), noisy, logits, legal)
+        self.assertEqual((blocked['action_index'], blocked['noise_gate']['candidate'], blocked['noise_gate']['passed']), (0, 1, False))
+        self.assertAlmostEqual(blocked['noise_gate']['mean_gap'], .2);self.assertAlmostEqual(blocked['noise_gate']['stderr'], .7)
+        with patch.object(live.hedge, 'per_world_q', return_value=[{0: 0., 1: float('nan')}, {0: 0., 1: .3}]):
+            bad = live.noise_gate(live.decide([(world, world)], logits, legal), [(world, world)], logits, legal)
+        self.assertEqual((bad['status'], bad['action_index']), ('REFUSED', None));self.assertTrue(bad['refusal'].startswith('NOISE_GATE_ERROR'))
+
+
 class AveragingEquivalenceTests(unittest.TestCase):
     """The played action against the deployment cell's search_hedge.averaging (v2_search_head_to_head.Search.choose:
     `average = hedge.averaging(prices, root_legal)`, prices = every block's backed-up worlds concatenated in block order; the

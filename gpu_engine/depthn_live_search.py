@@ -116,6 +116,9 @@ from . import depthn_guard_inputs as guard_inputs
 RUNGS={'DN2W8':8,'DN2W16':16}
 ROOT_OPERATOR='ARGMAX_MEAN_COMPLETED_Q'
 ROOT_OPERATOR_IMPL='search_hedge.averaging'
+NOISE_GATED_K2='NOISE_GATED_K2'   # screen-r4a variant B: averaging's (br_fp's, under a reply model) choice only past a 2-SE per-world gap
+ROOT_OPERATORS=(ROOT_OPERATOR,NOISE_GATED_K2)   # the declarable live root operators; the first is the default
+NOISE_GATE_K=2
 CAUSES=('constructor_refused','depthn_refused','expired_in_queue','server_error','bad_request','class_refused')
 CLASSES=('forced_switch','fresh_substitute','wish','sleep')   # root_class priority order
 PROTOCOL_KEYS=('schema','request_id','battle_id','owner','stream_id','decision_index','generation','prefix_sha256','lines','own_request_line')
@@ -165,6 +168,28 @@ def decide(blocks,root_logits,root_legal):
     except FATAL:raise
     except Exception as error:return dict(out,reduction_note=f'REDUCTION_ERROR: {type(error).__name__}: {error}')
     return dict(out,**report)
+
+
+def noise_gate(decision,blocks,root_logits,root_legal):
+    """NOISE_GATED_K2 on a COMPLETE decide() result (DepthNLiveSearch's root_operator): the played action is
+    search_hedge.noise_gated(per_world_q of the 2K worlds in block order, decide's averaging choice, the root logits' argmax over
+    the legal actions, NOISE_GATE_K); q_values stay averaging's. Adds noise_gate = dict(candidate, greedy, passed: the candidate is
+    played, mean_gap and stderr of Q_w(candidate) - Q_w(greedy), None when they are equal). A gate that cannot be evaluated
+    refuses the root (NOISE_GATE_ERROR), never plays the ungated choice."""
+    legal=tuple(root_legal);prices=tuple(w for pair in blocks for w in pair)
+    candidate=decision['action_index']
+    try:
+        gs=hedge.grids(prices,legal)
+        if gs is None or len(gs)<2:raise ValueError('two or more priced worlds required')
+        qw=hedge.per_world_q(gs);greedy=hedge.logits_greedy(root_logits,legal);played=hedge.noise_gated(qw,candidate,greedy,NOISE_GATE_K)
+        gaps=None if candidate==greedy else[q[candidate]-q[greedy]for q in qw]
+        if not legal[played]or gaps is not None and not all(math.isfinite(g)for g in gaps):raise ValueError('a non-finite gap or illegal action')
+    except FATAL:raise
+    except Exception as error:
+        return dict(decision,status='REFUSED',action_index=None,q_values=None,refusal=f'NOISE_GATE_ERROR: {type(error).__name__}: {error}')
+    import statistics
+    stats=dict(mean_gap=None,stderr=None)if gaps is None else dict(mean_gap=statistics.fmean(gaps),stderr=statistics.stdev(gaps)/math.sqrt(len(gaps)))
+    return dict(decision,action_index=played,noise_gate=dict(candidate=candidate,greedy=greedy,passed=played==candidate,**stats))
 
 
 def classify(constructor,request):
@@ -257,7 +282,8 @@ def _real(x):
 
 class DepthNLiveSearch:
     def __init__(self,*,constructor,pricers,params,binding,recipe,tree_commit,min_price_seconds=1.,max_requests=None,session_cap=256,
-            archive_sha256=None,device='cpu',clock=time.monotonic,refuse_classes=(),redact_private_reveals=False,peer_view_b=False,reply=None):
+            archive_sha256=None,device='cpu',clock=time.monotonic,refuse_classes=(),redact_private_reveals=False,peer_view_b=False,reply=None,
+            root_operator=ROOT_OPERATOR):
         """`pricers`: make_pricers' {bucket: DepthNPricer}; `binding`: the pricer side's WorldBinding (constructor_worlds.binding of
         the executor's source, engine metadata and catalog); `recipe`: the lane-order Recipe; `clock` must be the server's
         arrival clock (time.monotonic); `redact_private_reveals`: constructor_worlds' private-reveal redaction in every
@@ -267,7 +293,13 @@ class DepthNLiveSearch:
         search with it off has no peer_view_b key at all). `reply`: a depthn_reply_prior.ReplyPrior or None; with one, every
         priced root's requested worlds use the reply model's logits in place of root_peer_logits, so the averaging played is
         br_fp (the champion's averaging action is reported beside it); every response then carries reply_prior. The reply
-        prior reads the worlds prepare_roots completed, so with peer_view_b its peer inputs are view b's."""
+        prior reads the worlds prepare_roots completed, so with peer_view_b its peer inputs are view b's. `root_operator` in
+        ROOT_OPERATORS: NOISE_GATED_K2 plays search_hedge.noise_gated(per_world_q of the 2K priced worlds, averaging's choice on
+        them, the root logits' argmax over the legal actions, 2): with a reply model the worlds are its (br_fp, the MC ladder's
+        R5fp_ng); every response then names it and carries noise_gate (candidate, greedy, passed, mean_gap, stderr), and the
+        effect guard's (c) reads the played action. The default's decisions and responses are unchanged."""
+        if root_operator not in ROOT_OPERATORS:raise ValueError(f'root_operator in {ROOT_OPERATORS} required')
+        self.root_operator=root_operator
         if type(redact_private_reveals)is not bool:raise ValueError('redact_private_reveals must be a bool')
         if type(peer_view_b)is not bool:raise ValueError('peer_view_b must be a bool')
         self.redact_private_reveals=redact_private_reveals or peer_view_b
@@ -306,7 +338,7 @@ class DepthNLiveSearch:
         self.pricer_identity=dict(engine='DepthNPricer',depth=DEPTH,k=[WIDTH,WIDTH],k1=[WIDTH,WIDTH],selection='prior',W=W,K=self.K,
             buckets=list(self.buckets),capacities=[b*self.K for b in self.buckets],fixed_capacity=True,block_lanes=first.block_lanes,
             blocks_per_call=first.blocks_per_call,precision=getattr(self.forward,'precision',None)or(ident[2]if len(ident)>2 else None),
-            evaluator=evaluators.describe(self.forward)['identity'],world_source=cw.SOURCE,backup='learner_max',root_operator=ROOT_OPERATOR,
+            evaluator=evaluators.describe(self.forward)['identity'],world_source=cw.SOURCE,backup='learner_max',root_operator=self._operator(),
             root_operator_impl=ROOT_OPERATOR_IMPL,matmul_precision=str(jax.config.jax_default_matmul_precision or'default'))
 
     def _redaction(self):
@@ -314,6 +346,12 @@ class DepthNLiveSearch:
         before the flag, or without __init__, has none: off)."""
         return{**({'redact_private_reveals':True}if getattr(self,'redact_private_reveals',False)else{}),
             **({'peer_view_b':True}if self._view_b()else{})}
+
+    def _operator(self):
+        """The live root operator (ROOT_OPERATOR for a search built before the option, or without __init__)."""
+        return getattr(self,'root_operator',ROOT_OPERATOR)
+
+    def _gated(self):return self._operator()==NOISE_GATED_K2
 
     def _view_b(self):
         """Whether this search builds view b (peer_view_b; False for one built before the flag or without __init__)."""
@@ -327,14 +365,14 @@ class DepthNLiveSearch:
     # Requests -----------------------------------------------------------------------------------------------------------------------
     def _response(self,request_id,n):
         return dict(schema=SCHEMA,request_id=request_id,rung=self.rung,archive_sha256=self.archive_sha256,status='REFUSED',action_index=None,q_values=None,
-            refusal=None,cause=None,requested_worlds=self.W,constructed_worlds=0,decision_seconds=None,root_operator=ROOT_OPERATOR,
+            refusal=None,cause=None,requested_worlds=self.W,constructed_worlds=0,decision_seconds=None,root_operator=self._operator(),
             root_operator_impl=ROOT_OPERATOR_IMPL,completed_q=None,policy_target=None,root_value=None,action_mean_q=None,action_policy_target=None,
             mean_q_agrees=None,reduction_note=None,root_view_source=None,b2_view=None,effect_guard=None,private_reveals=None,block_causes=None,world_refusals=None,
             timings=dict.fromkeys(STAGES),
             batch_size=n,bucket=None,
             root_classes=None,root_class=None,root_class_source=None,root_class_crosscheck=None,
             tree_commit=self.tree_commit,pricer=dict(self.pricer_identity),**({'peer_view_b':None}if self._view_b()else{}),
-            **({}if getattr(self,'reply',None)is None else dict(reply_prior=None)))
+            **({}if getattr(self,'reply',None)is None else dict(reply_prior=None)),**({'noise_gate':None}if self._gated()else{}))
 
     @staticmethod
     def _problem(request):
@@ -446,6 +484,7 @@ class DepthNLiveSearch:
                         reply.update(jit_action_index=alt['action_index'],jit_q_values=alt['q_values'],jit_max_abs_logit_diff=check['max_abs_logit_diff'])
                 blocks=replied
             decision=decide(blocks,root['root_logits'],root['root_legal'])
+            if self._gated()and decision['status']=='COMPLETE':decision=noise_gate(decision,blocks,root['root_logits'],root['root_legal'])
             if reply is not None:
                 decision['reply_prior']=reply;self.reply_completed+=decision['status']=='COMPLETE'
             if decision['status']=='COMPLETE':decision['effect_guard']=self._effect_guard(frame,root,made,by_id[root['request_id']],children,seam_notes,
@@ -469,7 +508,8 @@ class DepthNLiveSearch:
             elif result['status']=='COMPLETE':
                 out[i]=dict(base,**{k:result[k]for k in('status','action_index','q_values','completed_q','policy_target','root_value','action_mean_q',
                     'action_policy_target','mean_q_agrees','reduction_note','effect_guard')},decision_seconds=decided,
-                    **({}if getattr(self,'reply',None)is None else dict(reply_prior=result.get('reply_prior'))))
+                    **({}if getattr(self,'reply',None)is None else dict(reply_prior=result.get('reply_prior'))),
+                    **({'noise_gate':result.get('noise_gate')}if self._gated()else{}))
             else:out[i]=dict(base,cause=refusal_cause(result['refusal']),refusal=result['refusal'])
         return out
 
