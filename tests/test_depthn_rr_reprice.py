@@ -371,7 +371,7 @@ class JoinTests(unittest.TestCase):
         self.assertTrue(R.sent(dict(BT.address_request(0))))   # an unreadable request is sent, as the bench sends it
 
 
-def write_capture(path, singles, *, owner='p1', battle_id='battle-1001', stream_id=5):
+def write_capture(path, singles, *, owner='p1', battle_id='battle-1001', stream_id=5, ordinal=1001):
     """A valid owner capture (phase_d_owning_capture's chain) with one decision per entry of `singles` (one legal action or nine)."""
     blobs, state = [], dict(prior='0' * 64, lines=0, requests=0)
     prefix = hashlib.sha256()
@@ -379,7 +379,7 @@ def write_capture(path, singles, *, owner='p1', battle_id='battle-1001', stream_
     def emit(**fields):
         blob = owning.encoded(dict(schema=owning.SCHEMA, sequence=len(blobs), previous_sha256=state['prior'], **fields))
         blobs.append(blob);state['prior'] = hashlib.sha256(blob).hexdigest()
-    emit(event='BEGIN', cell=dict(ordinal=1001), declaration_sha256='d' * 64, namespace='ns', battle_id=battle_id, owner=owner, seed=7, stream_id=stream_id)
+    emit(event='BEGIN', cell=dict(ordinal=ordinal), declaration_sha256='d' * 64, namespace='ns', battle_id=battle_id, owner=owner, seed=7, stream_id=stream_id)
     for i, single in enumerate(singles):
         line = BT.own_request(single);delta = [f'|turn|{i + 1}', line]
         for x in delta:prefix.update(x.encode() + b'\n')
@@ -433,6 +433,46 @@ class CellTests(unittest.TestCase):
             with self.assertRaises(ValueError):R.select_cells(self.args(root, cells=[3]))   # a RAW cell
             with self.assertRaises(ValueError):R.select_cells(self.args(root, cells=[5]))   # no capture
             with self.assertRaises(OSError):R.select_cells(self.args(root, cells=[1]))   # no result
+
+    def test_targets_name_cells_of_any_arm_and_only_their_decisions(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self.run_directory(tmp)
+            write_capture(root / 'owning-wire' / '500.jsonl', [False, False, True], ordinal=500)   # a self root: no results/ file
+            path = Path(tmp) / 'targets.jsonl'
+            write = lambda rows: path.write_text(''.join(json.dumps(r) + '\n' for r in rows))
+            write([dict(ordinal=3, decision_index=4), dict(ordinal=500, decision_index=1), dict(ordinal=3, decision_index=2, kind='foulplay'),
+                   dict(ordinal=500, decision_index=0, kind='self', seed=7, ours='p1')])
+            cells = R.select_cells(self.args(root, targets=str(path)))
+            self.assertEqual([(c['ordinal'], c['targets']) for c in cells], [(3, [2, 4]), (500, [0, 1])])
+            self.assertEqual(cells[0]['arm'], 'RAW')   # any arm: the RAW cell's result is read, never checked against --arm
+            self.assertEqual((cells[1]['arm'], cells[1]['seed'], cells[1]['seat'], cells[1]['target_kind']), (None, 7, 0, 'self'))   # the capture's registration
+            self.assertEqual([c['ordinal'] for c in R.select_cells(self.args(root, targets=str(path), shard=1, shards=2))], [500])
+            self.assertTrue(R.is_target(cells[0], 4));self.assertFalse(R.is_target(cells[0], 3));self.assertTrue(R.is_target(dict(ordinal=3), 3))
+            write([dict(ordinal=3, decision_index=4), dict(ordinal=3, decision_index=4)])
+            with self.assertRaisesRegex(ValueError, 'repeated'):R.select_cells(self.args(root, targets=str(path)))
+            write([dict(ordinal=5, decision_index=0)])
+            with self.assertRaisesRegex(ValueError, 'no owner capture'):R.select_cells(self.args(root, targets=str(path)))
+            write([dict(ordinal=3, decision_index=-1)])
+            with self.assertRaises(ValueError):R.select_cells(self.args(root, targets=str(path)))
+            write([])
+            with self.assertRaisesRegex(ValueError, 'no targets'):R.select_cells(self.args(root, targets=str(path)))
+            write_capture(root / 'owning-wire' / '2.jsonl', [False])   # a results cell (seat 0) with its p1 capture
+            write([dict(ordinal=2, decision_index=0, ours='p2')])   # the capture's own owner decides, for a results cell too
+            with self.assertRaisesRegex(ValueError, 'its capture is'):R.select_cells(self.args(root, targets=str(path)))
+            for bad, message in ((dict(ours='p2'), 'its capture is'), (dict(seed=8), 'the targets name seed')):   # another seat's root, another battle
+                write([dict(ordinal=500, decision_index=0, **bad)])
+                with self.assertRaisesRegex(ValueError, message):R.select_cells(self.args(root, targets=str(path)))
+            write([dict(ordinal=500, decision_index=0, ours='p1'), dict(ordinal=500, decision_index=1, ours='p2')])
+            with self.assertRaisesRegex(ValueError, 'differs between rows'):R.select_cells(self.args(root, targets=str(path)))
+            write_capture(root / 'owning-wire' / '501.jsonl', [False], ordinal=1001)   # a capture registered as another cell
+            write([dict(ordinal=501, decision_index=0)])
+            with self.assertRaisesRegex(ValueError, 'registers cell'):R.select_cells(self.args(root, targets=str(path)))
+            path.write_text('[1, 2]\n')
+            with self.assertRaisesRegex(ValueError, 'object'):R.select_cells(self.args(root, targets=str(path)))
+
+    def test_targets_option_is_a_third_cell_source(self):
+        groups = [{a.dest for a in g._group_actions} for g in R.parser()._mutually_exclusive_groups]
+        self.assertIn({'cells', 'sample', 'targets'}, groups)   # exactly one of --cells, --sample, --targets
 
     def test_sample_rank_is_a_fixed_hash(self):
         self.assertEqual(R.sample_rank(1, 2), hashlib.sha256(json.dumps([R.SAMPLE_DOMAIN, 1, 2], separators=(',', ':')).encode()).hexdigest())
@@ -548,9 +588,32 @@ class MainTests(unittest.TestCase):
             both = R.options(BASE + CHAMPION + run + reply + ['--peer-view-b'])   # br_fp on view b's worlds
             self.assertEqual((both.reply_archive, both.peer_view_b), ('p.npz', True))
 
-    def replay(self, tmp, *extra, header=None, guard=None, peer_off=()):
+    def test_targets_send_only_their_decisions_and_account_for_the_rest(self):
+        def targets(tmp, indices):
+            path = Path(tmp) / 'targets.jsonl';path.write_text(''.join(json.dumps(dict(ordinal=1001, decision_index=i)) + '\n' for i in indices))
+            return str(path)
+        with tempfile.TemporaryDirectory() as tmp:
+            path = targets(tmp, (1, 3, 9))
+            code, rows, summary, header, constructor, *_ = self.replay(tmp, cells=('--targets', path))
+            digest = hashlib.sha256(Path(path).read_bytes()).hexdigest()
+        self.assertEqual((code, constructor.calls, [r['decision_index'] for r in rows]), (0, [3], [3]))   # only target 3 reaches prepare
+        self.assertEqual(summary['targets'], dict(file=path, requested=3, found=2, missing=[dict(ordinal=1001, decision_index=9)], not_reached=[],
+            single_legal=[dict(ordinal=1001, decision_index=1)], non_target_skipped=3))
+        self.assertEqual(header['targets']['sha256'], digest)
+        self.assertEqual((rows[0]['cell_arm'], rows[0]['target_kind'], rows[0]['live_problem']), ('DN2W16', None, None))
+        with tempfile.TemporaryDirectory() as tmp:   # two targets with a gap: the later one folds on from the earlier one's session
+            self.assertEqual(self.replay(tmp, cells=('--targets', targets(tmp, (0, 3))))[4].calls, [0, 3])
+        with tempfile.TemporaryDirectory() as tmp:   # another arm's cell: replayed, no live parity
+            rows = self.replay(tmp, cells=('--targets', targets(tmp, (0,))), arm='RAW')[1]
+        self.assertEqual((rows[0]['live'], rows[0]['cell_arm']), (None, 'RAW'));self.assertIn('is not the replayed arm', rows[0]['live_problem'])
+        with tempfile.TemporaryDirectory() as tmp:   # stopped by --max-decisions: the unreached target is reported as such
+            summary = self.replay(tmp, '--max-decisions', '1', cells=('--targets', targets(tmp, (0, 2))))[2]
+        self.assertEqual((summary['targets']['found'], summary['targets']['not_reached'], summary['targets']['missing']),
+                         (1, [dict(ordinal=1001, decision_index=2)], []))
+
+    def replay(self, tmp, *extra, header=None, guard=None, peer_off=(), cells=('--cells', '1001'), arm='DN2W16'):
         """main over a run directory with cell 1001: decisions 0-4, decision 1 single-legal, decision 4 refused by the constructor."""
-        root = Path(tmp) / 'run';write_run(root, [(1001, 'DN2W16', 7, 1, 'COMPLETE')])
+        root = Path(tmp) / 'run';write_run(root, [(1001, arm, 7, 1, 'COMPLETE')])
         roots = write_capture(root / 'owning-wire' / '1001.jsonl', [False, True, False, False, False])
         want = expected_decision();q = json.loads(json.dumps(want['q_values']))
         lane = next(a for a in range(9) if q[a] is not None);off = list(q);off[lane] = float(np.nextafter(q[lane], 2.))
@@ -565,7 +628,7 @@ class MainTests(unittest.TestCase):
         with (root / 'telemetry' / '1001.jsonl').open('w') as f:
             for r in live_rows:f.write(json.dumps(dict(r, prefix_sha256=roots[r['decision_index']]['prefix_sha256'], greedy=dict(action_index=0), turn=1,
                 played_action_index=0)) + '\n')
-        args = R.parser().parse_args(BASE + CHAMPION + ['--run-directory', str(root), '--out', str(Path(tmp) / 'out'), '--cells', '1001', *extra])
+        args = R.parser().parse_args(BASE + CHAMPION + ['--run-directory', str(root), '--out', str(Path(tmp) / 'out'), *cells, *extra])
         args.port, args.max_requests = 0, 1
         constructor = FakeConstructor(refuse={4});search_object = fake_search(constructor);warmed = []
         search_object.pricers[1].executor.off = peer_off   # these worlds' peer inputs are one ulp off their recorded logits
