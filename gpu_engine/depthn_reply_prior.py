@@ -23,14 +23,20 @@ VIEWS = ('eager', 'jit', 'check')
 
 
 class ReplyPrior:
-    def __init__(self, executor, evaluator, params=None, *, views=None, mode='eager'):
+    def __init__(self, executor, evaluator, params=None, *, views=None, mode='eager', identity=None):
         """`evaluator`: the reply model (a champion_evaluator.ChampionEvaluator of the reply archive, or any callable
-        (params, inputs) -> an object with policy_logits); `params` default evaluator.params; `mode` in VIEWS."""
+        (params, inputs) -> an object with policy_logits); `params` default evaluator.params; `mode` in VIEWS. `identity`: None, or
+        the served archive's {archive_sha256, checkpoint_sha256, view}, echoed in every br_fp response's reply_prior record so the
+        proxy and the panel can pin the reply model (a server started without it would otherwise answer as the champion's own
+        averaging under the same root_operator)."""
         import jax
         from . import device_depth2_pricer as depth2
         if mode not in VIEWS:raise ValueError(f'reply views mode in {VIEWS} required')
         self.views = depth2._make_views(executor) if views is None else views
         self.evaluator, self.params, self.mode = evaluator, (evaluator.params if params is None else params), mode
+        if identity is not None and (type(identity) is not dict or set(identity) != {'archive_sha256', 'checkpoint_sha256', 'view'}):
+            raise ValueError('identity: None or {archive_sha256, checkpoint_sha256, view} required')
+        self.identity = None if identity is None else dict(identity)
         self.program = jax.jit(lambda p, x: evaluator(p, x));self._jitted = {}
 
     def inputs(self, worlds, owner):
