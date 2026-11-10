@@ -417,7 +417,7 @@ class TwoPassTests(unittest.TestCase):
         code, report, _ = self.patched('partial', base_step, pr='A1,A2', limit=1)
         self.assertEqual(code, 2);self.assertTrue(report['partial']);self.assertIsNone(report['passed'])
         self.assertTrue(report['warnings']);self.assertEqual(report['plug_ins'], ['A1', 'A2'])
-        with self.assertRaises(SystemExit):self.patched('undeclared', base_step, pr='R')    # the PR's own plug-in must declare
+        with self.assertRaises(SystemExit):self.patched('undeclared', base_step, pr='B')    # the PR's own plug-in must declare
         from gpu_engine import v2e_regress
         with self.assertRaises(SystemExit):         # a base pass that is not this PR's merge base
             v2e_regress.patched_pass(self.args(out=self.tmp / 'nobase', base=str(self.base), pr='A1', faint_clear=False,
@@ -465,6 +465,140 @@ class TwoPassTests(unittest.TestCase):
             return result(out.step.state, out.trackers._replace(public_order=out.trackers.public_order.at[:, 1, 5].set(0)))
         code, report = run('on-base-v2-moved', moved)
         self.assertEqual(code, 1);self.assertIn('trackers.public_order', report['uninvolved_leaves'])
+
+
+
+def clocked(step, ran):
+    """A stand-in step that runs the residual weather clock with `ran(state, actions)` as its eligibility,
+    exactly where transition.step_with_chance reads residual_ready (the base pass records it)."""
+    def run(state, actions, t):
+        from gpu_engine import weather
+        weather.residual_clock(state.weather, state.weather_counter, eligible=ran(state, actions))
+        return step(state, actions, t)
+    return run
+
+
+def pending_step(state, actions, t):
+    """base_step whose even-turn lanes defer their residual (a suspended turn)."""
+    out = base_step(state, actions, t)
+    return result(out.step.state._replace(pending_residual=(state.turn % 2 == 0) & ~state.done), out.trackers)
+
+
+def even(state, actions):
+    return state.turn % 2 == 0
+
+
+def saved_block(state, post):
+    """The effect block the design saves on a deferring step (transition.effect_chance of the split key), else 0."""
+    import jax
+    import jax.numpy as j
+    from gpu_engine import transition
+    block = transition.effect_chance(jax.vmap(lambda k: jax.random.split(k, 2))(state.keys)[:, 1])
+    return j.where(post.pending_residual[:, None, None], block, 0)
+
+
+@unittest.skipUnless(HAS_JAX, 'requires JAX')
+class EffectAndResidualRuleTests(unittest.TestCase):
+    """R: a capture predating state.effect_draws, the saved effect block checked against the design derivation;
+    A2 review L1: the base pass records whether the residual ran, and a terminal step widens only where it differs."""
+    LANES = 8
+
+    @classmethod
+    def setUpClass(cls):
+        import jax
+        import jax.numpy as j
+        from gpu_engine.state import BattleState
+        from gpu_engine.v2e_capture import leaf_paths
+        cls.tmp = Path(tempfile.mkdtemp(prefix='v2e-regress-r-test-'))
+        legacy_type = NamedTuple('LegacyState', [(n, object) for n in BattleState._fields if n != 'effect_draws'])
+        legacy = lambda s: legacy_type(**{n: getattr(s, n) for n in legacy_type._fields})
+        shards = cls.tmp / 'cap' / 'shards';shards.mkdir(parents=True)
+        first = lambda tree: jax.tree.map(lambda x: x[:1], tree)
+        cls.old = (first(legacy(lanes_state(cls.LANES, 0))), j.zeros((1, 2), j.int32), first(trackers(cls.LANES)))
+        cls.new = (first(lanes_state(cls.LANES, 0)), j.zeros((1, 2), j.int32), first(trackers(cls.LANES)))
+        for k in range(2):
+            tree = (legacy(lanes_state(cls.LANES, k)), j.asarray(np.random.default_rng(k).integers(0, 9, (cls.LANES, 2)), j.int32),
+                    trackers(cls.LANES))
+            np.savez_compressed(shards / f'shard-{k:06d}.npz', tick=np.int64(k), level=np.int64(0),
+                **{f'l{i:03d}': np.asarray(x) for i, x in enumerate(jax.tree.leaves(tree))})
+        (cls.tmp / 'cap' / 'capture.json').write_text(json.dumps(dict(shards=2, paths=leaf_paths(cls.old))))
+        cls.context = dict(prepared=SimpleNamespace(engine_tables=SimpleNamespace(sleep_talk=SimpleNamespace(
+            callable=CALLABLE))), pool=SimpleNamespace(metadata=lambda: dict(vocabulary=VOCAB)))
+        from gpu_engine import v2e_regress
+        cls.base = cls.tmp / 'base'
+        code = v2e_regress.base_pass(TwoPassTests.args.__func__(cls, out=cls.base, pad_lanes=cls.LANES),
+            step_override=clocked(pending_step, even), prepared=(cls.context, cls.old))
+        assert code == 0
+        cls.manifest = json.loads((cls.base / 'manifest.json').read_text())
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.tmp)
+
+    def patched(self, name, step, pr='A1'):
+        from gpu_engine import v2e_regress
+        out = self.tmp / name
+        code = v2e_regress.patched_pass(TwoPassTests.args.__func__(type(self), out=out, base=str(self.base), pr=pr, faint_clear=False),
+            step_override=step, prepared=(self.context, self.new))
+        return code, json.loads((out / 'report.json').read_text()), [json.loads(x) for x in (out / 'changed.jsonl').read_text().splitlines()]
+
+    def inputs(self):
+        import jax.numpy as j
+        state = lanes_state(self.LANES, 0)
+        return state, j.zeros((self.LANES, 2), j.int32), trackers(self.LANES)
+
+    def test_base_pass_records_the_residual_and_the_actives(self):
+        self.assertTrue(self.manifest['residual_ran_recorded']);self.assertTrue(self.manifest['post_active_recorded'])
+        digest = np.load(self.base / 'digest-shard-000000.npz')
+        state = lanes_state(self.LANES, 0)
+        self.assertEqual(digest['residual_ran'].tolist(), (np.asarray(state.turn) % 2 == 0).tolist())
+        self.assertEqual(digest['post_active'].shape, (self.LANES, 2))
+        self.assertNotIn('state.effect_draws', self.manifest['output_names'])
+
+    def test_saved_effect_block_follows_the_design_derivation(self):
+        import jax
+        import jax.numpy as j
+        from gpu_engine import transition
+
+        def saving(state, actions, t, *, wrong=False):
+            out = pending_step(state, actions, t);s = out.step.state
+            block = transition.effect_chance(jax.vmap(lambda k: jax.random.split(k, 2))(state.keys)[:, 1])
+            block = (block + 1) % 2 if wrong else block
+            return result(s._replace(effect_draws=j.where(s.pending_residual[:, None, None], block, 0)), out.trackers)
+        np.testing.assert_array_equal(np.asarray(saving(*self.inputs())[0].state.effect_draws),
+            np.asarray(saved_block(self.inputs()[0], saving(*self.inputs())[0].state)))
+        code, report, listing = self.patched('effect', clocked(saving, even))
+        self.assertEqual(code, 0, report['counts']);self.assertTrue(report['effect_rule'])
+        self.assertIn('state.effect_draws', report['migrated_new_inputs'])
+        self.assertGreater(report['counts']['effect_draws_saved'], 0);self.assertEqual(listing, [])
+        code, report, _ = self.patched('effect-wrong', clocked(lambda s, a, t: saving(s, a, t, wrong=True), even))
+        self.assertEqual(code, 1);self.assertIn('state.effect_draws', report['uninvolved_leaves'])
+        code, report, _ = self.patched('effect-unsaved', clocked(pending_step, even))   # deferred lanes left at zero
+        self.assertEqual(code, 1);self.assertIn('state.effect_draws', report['uninvolved_leaves'])
+
+    def test_terminal_steps_widen_only_where_the_residual_ran_in_one_tree(self):
+        import jax.numpy as j
+
+        def ending(state, actions, t, *, item=False):
+            out = pending_step(state, actions, t);s = out.step.state
+            uses = curse_users(state, actions)
+            s = s._replace(done=s.done | uses,
+                truant_loaf=s.truant_loaf.at[:, 1, 0].set(j.where(uses, ~s.truant_loaf[:, 1, 0], s.truant_loaf[:, 1, 0])))
+            if item:s = s._replace(item=s.item.at[:, 1, 0].set(j.where(uses, 2, s.item[:, 1, 0])))
+            return result(s._replace(effect_draws=saved_block(state, s)), out.trackers)
+        code, report, listing = self.patched('terminal-same', clocked(ending, even))
+        curse = [x for x in listing if 'curse' in x['involved']]
+        self.assertTrue(curse);self.assertTrue(all(x['terminal'] and not x['terminal_residual'] for x in curse))
+        self.assertTrue(all(not x['unexpected'] for x in curse), [x['unexpected'] for x in curse])
+        self.assertEqual(report['residual_rule'], 'per-lane');self.assertEqual(report['counts']['terminal_residual'], 0)
+        code, report, listing = self.patched('terminal-same-item', clocked(lambda s, a, t: ending(s, a, t, item=True), even))
+        curse = [x for x in listing if 'curse' in x['involved']]
+        self.assertTrue(all('state.item@1' in x['unexpected'] for x in curse))
+        odd = lambda s, a: ~even(s, a)
+        code, report, listing = self.patched('terminal-shift', clocked(lambda s, a, t: ending(s, a, t, item=True), odd))
+        curse = [x for x in listing if 'curse' in x['involved']]
+        self.assertTrue(all(x['terminal_residual'] and not x['unexpected'] for x in curse))
+        self.assertEqual(report['counts']['terminal_residual'], len(curse))
 
 
 if __name__ == '__main__':
