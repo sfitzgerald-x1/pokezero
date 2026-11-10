@@ -1,6 +1,7 @@
 """DepthNLiveSearch on the fake engine: Codex's real ProtocolConstructor.prepare (its heavy collaborators faked), the real
 constructor_worlds path and DepthNPricer; the response contract, causes, buckets, sessions and warmup; and the lead's
 equivalence of action_mean_q with search_hedge.averaging."""
+import collections
 from contextlib import ExitStack
 from dataclasses import replace
 import hashlib
@@ -28,6 +29,12 @@ KEYS={'schema','request_id','rung','archive_sha256','status','action_index','q_v
 TREE='0123456789abcdef'*2+'01234567'
 TARGET='TARGET_ARGMAX'
 OPERATOR_KEYS=('root_operator','root_operator_impl','target_fallback')   # what a TARGET_ARGMAX response adds or names differently
+NOISE='NOISE_GATED_K2'
+NOISE_KEYS=('root_operator','root_operator_impl','noise_gate')   # what a NOISE_GATED_K2 response adds or names differently
+# sha256 of default_corpus's lines, computed by this very function (its source extracted from this file) on the 3bd60120 tree
+# (screen-r3's, before any root operator): the default operator's decisions and responses, byte for byte
+DEFAULT_CORPUS_3BD60120=dict(decide='4a7327b026c7833de9f3ab5bdc73744eb9b158342d57ff22c8588b2d8d004020',
+    responses='f9f7ba79992d575aeb1a3fea6a91721ee2a25135c4caa481f180f2cfff6e829e')
 
 
 def wire(value):
@@ -49,6 +56,38 @@ def favour(action):
 def still_clocks(stack):
     """Every stage timing 0 (live and constructor_worlds read time.perf_counter), so whole responses compare."""
     for module in(live,cw):stack.enter_context(patch.object(module,'time',NS(perf_counter=lambda:0.,monotonic=lambda:0.)))
+
+
+def default_corpus(test):
+    """{decide: [...], responses: [...]}: JSON lines of the DEFAULT operator's output on fixed inputs: live.decide (no operator
+    argument) on 720 seeded random roots (W 2, 4, 8, 16; every value mode, random and all-zero root logits), and, through the
+    LiveSearchTests harness `test`, process_many's responses (stage clocks still) for three priced roots and a refused one at
+    W 8 and 16. Uses only what the 3bd60120 tree has (DEFAULT_CORPUS_3BD60120)."""
+    rng=np.random.default_rng(20261110);decided=[]
+    def random_world(legal,mode):
+        requested=rng.random()<.8;opponent=[b for b in range(9)if rng.random()<.5]if requested else None
+        if requested and not opponent:opponent=[int(rng.integers(9))]
+        value={'f64':lambda:float(rng.uniform(-1,1)),'f32':lambda:float(np.float32(rng.uniform(-1,1))),
+            'terminal':lambda:float(rng.choice([-1.,0.,1.])),'ties':lambda:float(rng.choice([-1.,0.,1.]))}[mode]
+        logits=(0.,)*9 if mode=='ties'else[float(x)for x in rng.normal(0,2,9)]
+        return world({a:{b:value()for b in(opponent or[0])}for a in range(9)if legal[a]},opponent=opponent,logits=logits)
+    for mode,cases in(('f64',40),('f32',40),('terminal',40),('ties',60)):
+        for W in(2,4,8,16):
+            for _ in range(cases):
+                legal=tuple(bool(x)for x in rng.random(9)<.6)
+                if not any(legal):legal=(True,)+legal[1:]
+                logits=(0.,)*9 if mode=='ties'else tuple(float(x)for x in rng.normal(0,1,9))
+                prices=[random_world(legal,mode)for _ in range(W)]
+                decided.append(json.dumps(live.decide([tuple(prices[2*k:2*k+2])for k in range(W//2)],logits,legal)))
+    responses=[]
+    for W in(8,16):
+        reqs=[request(f'b{i}',0,stream=10+i,rung=f'DN2W{W}')for i in range(3)]+[request('r',0,rung=f'DN2W{W}')]
+        outcomes={**{(f'b{i}',0):test.outcome(i,W)for i in range(3)},('r',0):Refusal('SEARCH_PREFIX_OR_REQUEST_MISMATCH')}
+        with ExitStack()as stack:
+            for module in(live,cw):stack.enter_context(patch.object(module,'time',NS(perf_counter=lambda:0.,monotonic=lambda:0.)))
+            rows,_=test.run_batch(test.search(W,clock=lambda:0.),reqs,outcomes)
+        responses+=[json.dumps(r)for r in rows]
+    return dict(decide=decided,responses=responses)
 
 
 def prefix(battle,decision,*,owner='p1',last=None,before=()):
@@ -632,6 +671,86 @@ class LiveSearchTests(unittest.TestCase):
                 self.assertEqual(live_played,greedy if c else target);self.assertEqual(choices['target_argmax'],live_played)
                 self.assertEqual((guards,causes['target_argmax']),(['UNREPRESENTED_EFFECT'],['UNREPRESENTED_EFFECT'])if c else([],None))
 
+    # NOISE_GATED_K2 (screen-r4b) and the default against 3bd60120 ------------------------------------------------------------------
+    def test_the_default_operator_is_byte_identical_to_3bd60120(self):
+        """The default operator's decide outputs and whole responses (default_corpus) hash to what the same code gives on the
+        3bd60120 tree, before any root operator existed."""
+        corpus=default_corpus(self)
+        self.assertEqual({k:hashlib.sha256('\n'.join(v).encode()).hexdigest()for k,v in corpus.items()},DEFAULT_CORPUS_3BD60120)
+        self.assertEqual({k:len(v)for k,v in corpus.items()},dict(decide=720,responses=8))
+        self.assertTrue(all('noise_gate'not in json.loads(r)and 'target_fallback'not in json.loads(r)for r in corpus['responses']))
+
+    def gated_rows(self,operator,values,logits,*,last=None):
+        """One root's response (stage timings 0) under `operator`, its worlds' prices rewritten: every legal cell of our action a in
+        world w (block k's world j is world 2k+j) is values(w, a), whatever the reply; its root logits `logits`. Also the decide
+        call's (root_logits, root_legal) and the backed-up worlds decide saw (block order)."""
+        backup,build=backups.backup,cw.build;seen=[]
+        def rewritten(frame,row,rule):
+            pair=backup(frame,row,rule);k=row%4
+            out=tuple(original.WorldPrices(p.opponent_requested,p.opponent_legal,p.opponent_logits,
+                tuple(tuple(None if v is None else values(2*k+j,a)for v in p.joint_values[a])for a in range(9)))for j,p in enumerate(pair))
+            seen.extend(out);return out
+        def logits_of(*a,**k):
+            made=build(*a,**k)
+            for root in made.roots:
+                if root.get('root_logits')is not None:root['root_logits']=tuple(map(float,logits))
+            return made
+        with patch.object(live.backups,'backup',side_effect=rewritten),patch.object(live.cw,'build',side_effect=logits_of):
+            rows,decided=self.operator_rows(operator,[request('g',0,last=last)],{('g',0):self.outcome(0)})
+        return rows[0],decided[0],tuple(seen)
+
+    def test_noise_gated_k2_plays_the_scorers_noise_gated_and_changes_only_the_played_action(self):
+        """The same root under the default and NOISE_GATED_K2, in each regime of the gate (W 8; averaging plays lane 2 by
+        construction; the root logits' greedy g is lane 1, or lane 2 itself): a* == g (nothing to gate: g plays, passed false);
+        a constant per-world gap (sd 0, mean > 0: the gate passes, a* plays); a gap whose mean is under 2 standard errors (g
+        plays). The NOISE_GATED_K2 response names its operator (its pricer identity too) and adds noise_gate; its played action
+        is the RR scorer's own noise_gated(per_world_q(grids), a*, argmax root_logits, 2) on the worlds decide saw; everything
+        else is the default's, the effect guard record but its `choice` (the played action) included."""
+        from scripts import depthn_rr_score as scorer
+        noisy=lambda w,a:{2:.5 if w%2 else -.45,1:0.}.get(a,-.9)   # gaps +.5/-.45: mean .025, 2 SE about .34: the gate fails
+        flat=lambda w,a:{2:.6,1:.1}.get(a,-.9)                       # gap .5 in every world: sd 0, the gate passes
+        for name,values,logits,want in(('a* == g',flat,(0.,0.,3.)+(0.,)*6,(2,False,2)),('passes',flat,(0.,3.,0.)+(0.,)*6,(2,True,1)),
+                ('fails',noisy,(0.,3.,0.)+(0.,)*6,(1,False,1))):
+            with self.subTest(name):
+                base,_,_=self.gated_rows(live.ROOT_OPERATOR,values,logits);row,(root_logits,legal,kw),seen=self.gated_rows(NOISE,values,logits)
+                encode(base);encode(row);self.assertEqual(kw,dict(operator=NOISE))
+                self.assertEqual(set(base),KEYS);self.assertEqual(set(row),KEYS|{'noise_gate'})
+                self.assertEqual((base['status'],base['action_index'],row['status']),('COMPLETE',2,'COMPLETE'))
+                self.assertEqual((row['action_index'],row['noise_gate']['passed'],row['noise_gate']['greedy']),want)
+                self.assertEqual(row['noise_gate']['candidate'],2)
+                self.assertEqual((row['root_operator'],row['root_operator_impl'],row['pricer']['root_operator'],row['pricer']['root_operator_impl']),
+                    (NOISE,'depthn_root_operator.noise_gated',NOISE,'depthn_root_operator.noise_gated'))
+                same=lambda r:{k:v for k,v in r.items()if k not in(*NOISE_KEYS,'pricer','action_index','effect_guard')}
+                self.assertEqual(same(row),same(base))
+                self.assertEqual({k:v for k,v in row['effect_guard'].items()if k!='choice'},{k:v for k,v in base['effect_guard'].items()if k!='choice'})
+                self.assertEqual(row['effect_guard']['choice'],row['action_index'])
+                gs=hedge.grids(seen,legal);greedy=scorer.argmax(list(root_logits),[a for a in range(9)if legal[a]])
+                self.assertEqual(row['action_index'],scorer.noise_gated(scorer.per_world_q(gs),base['action_index'],greedy,2))
+                self.assertEqual(wire(row['noise_gate']),dict(passed=row['action_index']!=greedy,greedy=greedy,candidate=base['action_index']))
+        rows,_=self.operator_rows(NOISE,[request('r',0)],{('r',0):Refusal('SEARCH_PREFIX_OR_REQUEST_MISMATCH')})
+        self.assertEqual((rows[0]['status'],rows[0]['action_index'],rows[0]['noise_gate'],rows[0]['effect_guard']),('REFUSED',None,None,None))
+
+    def test_guard_c_is_evaluated_on_the_noise_gated_choice(self):
+        """The effect guard's (c) is evaluated on the action NOISE_GATED_K2 plays. Our lane 0 is Counter (tier A, its root prior far
+        under the turn-1 threshold, so (b) does not trip), the root logits' greedy is lane 1 (Tackle), averaging's a* lane 0:
+        when the gate passes, Counter plays and (c) alone trips the record, so the live actor and the RR scorer's per-operator
+        guard both play greedy; when it fails, lane 1 plays, nothing trips and both play it."""
+        from scripts import depthn_rr_score as scorer
+        own=dict(active=[dict(moves=[dict(id='counter'),dict(id='tackle'),dict(id='rest')])])
+        line=request('c',0,last=own)['own_request_line'];moves=actor.own_moves(line);greedy=1;logits=(-30.,3.,0.)+(0.,)*6
+        flat=lambda w,a:{0:.6,1:.1}.get(a,-.9);noisy=lambda w,a:{0:.5 if w%2 else -.45,1:0.}.get(a,-.9)
+        for name,values,played,c in(('passes',flat,0,True),('fails',noisy,1,False)):
+            with self.subTest(name):
+                row,_,_=self.gated_rows(NOISE,values,logits,last=own);record=row['effect_guard']
+                self.assertEqual((row['status'],row['action_index'],row['noise_gate']['candidate'],row['noise_gate']['passed']),('COMPLETE',played,0,c))
+                self.assertEqual((record['choice'],record['b'],record['c'],record['tripped']),(played,False,c,c))
+                self.assertEqual(G.trips(record,0)['c'],True);self.assertFalse(G.trips(record,1)['tripped'])   # a* would trip; g would not
+                response=wire(row);live_action,cause,guards,_=actor.guarded_action(response,NS(legal_action_mask=CW.T.ROOT_LEGAL),moves,greedy)
+                live_played=greedy if live_action is None else live_action
+                choices,causes=scorer.guard_choices({'noise_gated:k=2':played},greedy,list(moves),response['effect_guard'])
+                self.assertEqual(live_played,greedy if c else played);self.assertEqual(choices['noise_gated:k=2'],live_played)
+                self.assertEqual((guards,causes['noise_gated:k=2']),(['UNREPRESENTED_EFFECT'],['UNREPRESENTED_EFFECT'])if c else([],None))
+
 
 def world(values,*,opponent=None,logits=None):
     """WorldPrices with the given action -> {reply: value} rows; `opponent` the legal replies (None: a waiting opponent, column 0)."""
@@ -830,6 +949,72 @@ class AveragingEquivalenceTests(unittest.TestCase):
         with patch.object(latency,'compose',side_effect=nan_target):base,mine=self.target_check(prices,legal,(2.,0.)+(0.,)*7)
         self.assertEqual((base['action_index'],mine['action_index'],mine['target_fallback']),(1,0,True))   # 2 + .1 > 0 + .3
         with self.assertRaisesRegex(ValueError,'root operator'):live.decide([tuple(prices[:2])],(0.,)*9,legal,operator='ARGMAX_POLICY_TARGET')
+
+    # NOISE_GATED_K2 ----------------------------------------------------------------------------------------------------------------
+    def test_noise_gated_k2_is_the_scorers_function_on_random_roots(self):
+        """1,200 random roots (W 2, 4, 8, 16; every value mode, plus 'clone': one world repeated W times, so every per-world gap is
+        the same and sd = 0; root logits random, all zero (g the lowest legal index) or on averaging's own action (a* == g)): the
+        NOISE_GATED_K2 decision is the default's but for action_index and noise_gate, and its action is the RR scorer's
+        noise_gated:k=2 from depthn_rr_score.operators itself, on the worlds as a re-pricer row holds them (wire form, through
+        the scorer's recompute) with greedy = the scorer's greedy_argmax of the root logits. Every regime occurs: ties in q
+        (lowest index), a* == g, the gate passing and failing, sd = 0 with a positive and with a zero mean gap (the strict
+        comparison: g plays), W < 16."""
+        from scripts import depthn_rr_score as scorer
+        self.assertIs(scorer.noise_gated,root_ops.noise_gated);self.assertIs(scorer.per_world_q,root_ops.per_world_q)   # one definition
+        self.assertIn('noise_gated:k=2',scorer.SETTINGS);self.assertEqual(root_ops.NOISE_K2,2)
+        rng=np.random.default_rng(20261110);seen=collections.Counter();failures=collections.Counter()
+        def wire_world(p):return wire(dict(requested=p.opponent_requested,kept=list(p.opponent_legal),logits=list(p.opponent_logits),
+            grid=[list(r)for r in p.joint_values]))
+        for mode,cases in(('f64',60),('f32',60),('terminal',60),('ties',60),('clone',60)):
+            for W in(2,4,8,16):
+                for case in range(cases):
+                    legal=tuple(bool(x)for x in rng.random(9)<.6)
+                    if not any(legal):legal=(True,)+legal[1:]
+                    if mode=='clone':prices=[self.random_world(rng,legal,('f64','ties')[case%2])]*W
+                    else:prices=[self.random_world(rng,legal,mode)for _ in range(W)]
+                    blocks=[tuple(prices[2*k:2*k+2])for k in range(W//2)]
+                    kind=case%3;acts=[a for a in range(9)if legal[a]]
+                    if kind==0:logits=tuple(float(x)for x in rng.normal(0,1,9))
+                    elif kind==1:logits=(0.,)*9
+                    else:
+                        base=live.decide(blocks,(0.,)*9,legal)
+                        logits=tuple(4. if a==base['action_index']else 0. for a in range(9))if base['status']=='COMPLETE'else(0.,)*9
+                    with self.subTest(mode=mode,W=W,case=case):
+                        base=live.decide(blocks,logits,legal);mine=live.decide(blocks,logits,legal,operator=NOISE)
+                        self.assertNotIn('noise_gate',base);self.assertEqual(set(mine),set(base)|{'noise_gate'})
+                        self.assertEqual({k:v for k,v in mine.items()if k not in('action_index','noise_gate')},{k:v for k,v in base.items()if k!='action_index'})
+                        if base['status']!='COMPLETE':self.assertIsNone(mine['noise_gate']);seen['refused']+=1;continue
+                        decision=dict(replay_status='COMPLETE',root_legal=list(legal),root_logits=wire(list(logits)),worlds=[wire_world(p)for p in prices])
+                        b=scorer.recompute(decision);greedy=scorer.argmax(decision['root_logits'],acts)
+                        ops,_=scorer.operators(b.worlds,b.grids,b.average,greedy,b.logits,b.legal,None,failures)
+                        chosen=base['action_index']
+                        self.assertEqual(hedge.top_action(b.average.strategy),chosen)
+                        self.assertEqual(mine['action_index'],ops['noise_gated:k=2'])
+                        self.assertEqual(mine['noise_gate'],dict(passed=mine['action_index']!=greedy,greedy=greedy,candidate=chosen))
+                        q=base['q_values'];top=max(q[a]for a in acts);seen['q_tie']+=sum(q[a]==top for a in acts)>1
+                        seen[f'W{W}']+=1
+                        if chosen==greedy:seen['a*==g']+=1;self.assertEqual(mine['action_index'],greedy);continue
+                        gaps=[x[chosen]-x[greedy]for x in scorer.per_world_q(b.grids)]
+                        seen['passed'if mine['noise_gate']['passed']else'failed']+=1
+                        if len(set(gaps))==1:
+                            seen['sd0_positive'if gaps[0]>0 else'sd0_zero'if gaps[0]==0 else'sd0_negative']+=1
+                            self.assertEqual(mine['action_index'],chosen if gaps[0]>0 else greedy)
+        self.assertEqual(sum(seen[f'W{W}']for W in(2,4,8,16))+seen['refused'],1200)
+        for regime in('q_tie','a*==g','passed','failed','sd0_positive','sd0_zero','W2','W4','W8','W16'):
+            self.assertGreater(seen[regime],0,regime)
+        self.assertEqual(sum(failures.values()),0)
+
+    def test_noise_gated_is_strict_at_the_threshold(self):
+        """The scorer's rule on hand-made per-world Q: a mean gap exactly at k standard errors plays greedy (W 2, gaps 3 and 1: mean 2,
+        2 sd / sqrt 2 = 2 exactly), just above it averaging's choice; sd 0 with a zero gap greedy, with a positive gap the choice;
+        a* == greedy plays greedy without consulting the gate."""
+        q=lambda *gaps:[{0:g,1:0.}for g in gaps]
+        self.assertEqual(root_ops.noise_gated(q(3.,1.),0,1,2),1)
+        self.assertEqual(root_ops.noise_gated(q(3.,math.nextafter(1.,2.)),0,1,2),0)
+        self.assertEqual((root_ops.noise_gated(q(0.,0.,0.),0,1,2),root_ops.noise_gated(q(.1,.1,.1),0,1,2)),(1,0))
+        self.assertEqual(root_ops.noise_gated(q(-5.,-5.),1,1,2),1)
+        self.assertEqual(root_ops.logits_greedy((0.,2.,2.)+(0.,)*6,(True,True,True)+(False,)*6),1)   # lowest index on ties
+        self.assertEqual(root_ops.logits_greedy((9.,2.,2.)+(0.,)*6,(False,True,True)+(False,)*6),1)   # over the legal actions only
 
 
 if __name__=='__main__':unittest.main()

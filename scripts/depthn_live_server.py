@@ -6,7 +6,7 @@ source, engine metadata, owning config), the champion (champion_evaluator's flag
 default), one ProtocolConstructor (W from the rung, sessions keyed by the rung), the executor over the same metadata and
 catalog, and one DepthNPricer per capacity bucket (depthn_live_search.make_pricers), and returns a DepthNLiveSearch
 (--refuse-classes passed through: those root classes are refused before pricing; recorded in the header and READY;
---root-operator passed through: ARGMAX_MEAN_COMPLETED_Q, the default, or TARGET_ARGMAX, recorded in the pricer identity the
+--root-operator passed through: ARGMAX_MEAN_COMPLETED_Q, the default, TARGET_ARGMAX or NOISE_GATED_K2, recorded in the pricer identity the
 header, READY and every response carry, in every response's root_operator and, when not the default, in the header's own
 root_operator). run()
 warms it up on --warmup-requests (every bucket's programs compile while nothing listens), wraps it for --telemetry and
@@ -205,7 +205,8 @@ def parser():
         +', '.join(live.CLASSES)+' (default none)')
     p.add_argument('--root-operator',choices=live.ROOT_OPERATORS,default=live.ROOT_OPERATOR,
         help='the root operator that picks the played action (default ARGMAX_MEAN_COMPLETED_Q: averaging\'s argmax; TARGET_ARGMAX: the RR '
-        'scorer\'s target_argmax on the reported policy_target); recorded in the pricer identity of READY, the header and every response')
+        'scorer\'s target_argmax on the reported policy_target; NOISE_GATED_K2: the RR scorer\'s noise_gated k=2, averaging\'s action only '
+        'past the per-world gap gate over the root logits\' greedy); recorded in the pricer identity of READY, the header and every response')
     p.add_argument('--seed',type=int,default=20261103,help='constructor world seed (Codex\'s default)')
     p.add_argument('--recipe-seed',type=int,default=20261103,help='the pricer\'s lane-order recipe seed')
     p.add_argument('--saved-root-admission',action='store_true',help='Codex\'s stateless mode: every prefix folded from scratch, no sessions')

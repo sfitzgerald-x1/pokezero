@@ -73,9 +73,10 @@ def read_rows(paths):
 def _int(x):return type(x) is int
 
 
-def compare_root(row):
-    """dict(scorer=..., live=..., kinds=[mismatching KINDS], guard=...) of one COMPLETE row; scorer.Unscorable when the scorer
-    leaves it out (its recompute refuses, or no legal live greedy action: 'greedy_missing', as score_decision)."""
+def live_response(row):
+    """The response the live actor acts on, from a row's replay (status, cause, action_index, q_values) and effect_guard, after
+    the live client's own payload validation (depthn_live_actor.Client._check; ValueError when it refuses). The NOISE_GATED_K2
+    replay check (scripts/depthn_noise_gated_replay_check.py) uses it too."""
     replay = row['replay']
     # Rows retain the decision payload, not the transport identity. Supply a
     # synthetic envelope only to reuse the live client's payload validation;
@@ -86,6 +87,13 @@ def compare_root(row):
                     action_index=replay.get('action_index'), q_values=replay.get('q_values'),
                     effect_guard=row.get('effect_guard'))
     actor.Client._check(SimpleNamespace(rung=response['rung']), response, request)
+    return response
+
+
+def compare_root(row):
+    """dict(scorer=..., live=..., kinds=[mismatching KINDS], guard=...) of one COMPLETE row; scorer.Unscorable when the scorer
+    leaves it out (its recompute refuses, or no legal live greedy action: 'greedy_missing', as score_decision)."""
+    replay = row['replay'];response = live_response(row)
     decision = scorer.normalize(row)
     base = scorer.recompute(decision);greedy = decision['greedy_action'];legal = base.legal
     if not _int(greedy) or not 0 <= greedy < 9 or not legal[greedy]:raise scorer.Unscorable('greedy_missing')

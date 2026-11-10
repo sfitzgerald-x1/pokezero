@@ -558,6 +558,7 @@ class MainTests(unittest.TestCase):
             with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):R.options(BASE + CHAMPION + run + ['--reply-archive', 'p.npz'])   # dropped
             self.assertEqual(args.root_operator, 'ARGMAX_MEAN_COMPLETED_Q')   # the server's flag, through the bench parser
             self.assertEqual(R.options(BASE + CHAMPION + run + ['--root-operator', 'TARGET_ARGMAX']).root_operator, 'TARGET_ARGMAX')
+            self.assertEqual(R.options(BASE + CHAMPION + run + ['--root-operator', 'NOISE_GATED_K2']).root_operator, 'NOISE_GATED_K2')
             with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):R.options(BASE + CHAMPION + run + ['--root-operator', 'ARGMAX_POLICY_TARGET'])
 
     def replay(self, tmp, *extra, header=None, guard=None, peer_off=()):
@@ -642,6 +643,50 @@ class MainTests(unittest.TestCase):
         self.assertEqual((checked, report['roots_compared'], report['mismatches'], report['battles'], report['statuses']), (0, 3, 0, 1, dict(COMPLETE=3, REFUSED=1)))
         self.assertEqual((report['override']['raw_vs_greedy'], report['override']['raw_vs_averaging'], report['fallback']), (1., 1., dict(scorer=0, live=0)))
         self.assertEqual((base_checked, json.loads(base_text)['error']), (2, 'input'))
+        self.assertEqual(check.ROW_SCHEMA, R.ROW_SCHEMA)   # the check reads this re-pricer's rows
+
+    def test_main_under_noise_gated_k2_records_the_gate_and_passes_the_replay_check(self):
+        """--root-operator NOISE_GATED_K2: rows carry the operator (replay root_operator, root_operator_impl, noise_gate; no
+        target_fallback) and the live search's choice under it, the RR scorer's noise_gated(per_world_q, a*, argmax root_logits, 2)
+        on the row's own worlds; the effect guard record is evaluated on that choice. A default replay of the same cell differs
+        only in the choice (and what depends on it). scripts/depthn_noise_gated_replay_check passes on the NOISE_GATED_K2 rows
+        (exit 0; the live greedy 0 differs from the logits' greedy 3 on every root: reported under rr_greedy, never a mismatch)
+        and refuses the default and TARGET_ARGMAX ones (exit 2)."""
+        from scripts import depthn_noise_gated_replay_check as check
+        from scripts import depthn_rr_score as scorer
+        def run(*extra):
+            with tempfile.TemporaryDirectory() as tmp, patch.object(live.DepthNLiveSearch, '_effect_guard', own_lane_guard):
+                code, rows, summary, *_ = self.replay(tmp, *extra)
+                out = io.StringIO()
+                with patch('sys.stdout', out), redirect_stderr(io.StringIO()):checked = check.main(['--rows', str(Path(tmp) / 'out' / 'rows-0.jsonl'), '--expect-battles', '1'])
+            return code, rows, summary, checked, out.getvalue()
+        code, rows, summary, checked, text = run('--root-operator', 'NOISE_GATED_K2')
+        base_code, base_rows, _, base_checked, base_text = run()
+        target_checked, target_text = run('--root-operator', 'TARGET_ARGMAX')[3:]
+        self.assertEqual((code, base_code), (0, 0))
+        for row, base in zip(rows, base_rows):
+            replay, plain = row['replay'], base['replay']
+            self.assertFalse(set(R.OPERATOR_FIELDS) & set(plain))   # a default row is unchanged
+            self.assertEqual(set(R.OPERATOR_FIELDS) & set(replay), {'root_operator', 'root_operator_impl', 'noise_gate'})
+            self.assertEqual((replay['root_operator'], replay['root_operator_impl']), ('NOISE_GATED_K2', 'depthn_root_operator.noise_gated'))
+            volatile = ('wall_seconds', 'capture_seconds', *live.STAGES, 'decision_seconds', 'request_id', 'action_index', *R.OPERATOR_FIELDS)
+            self.assertEqual({k: v for k, v in replay.items() if k not in volatile}, {k: v for k, v in plain.items() if k not in volatile})
+            self.assertEqual(row['worlds'], base['worlds']);self.assertEqual(row['root'], base['root'])
+            if replay['status'] != 'COMPLETE':
+                self.assertEqual((replay['noise_gate'], row['effect_guard']), (None, None));continue
+            base_scored = scorer.recompute(scorer.normalize(row));legal = row['root']['root_legal']
+            greedy = root_ops.logits_greedy(row['root']['root_logits'], legal)
+            want = root_ops.noise_gated(root_ops.per_world_q(base_scored.grids), plain['action_index'], greedy, 2)
+            self.assertEqual((replay['action_index'], replay['noise_gate']), (want, dict(passed=want != greedy, greedy=greedy, candidate=plain['action_index'])))
+            self.assertEqual((row['effect_guard']['choice'], base['effect_guard']['choice']), (replay['action_index'], plain['action_index']))
+        self.assertEqual(([r['replay']['action_index'] for r in rows], [r['replay']['action_index'] for r in base_rows]),
+            ([3, 3, 3, None], [5, 5, 5, None]))   # averaging's 5 against the logits' greedy 3: the gate fails, greedy plays
+        self.assertEqual([r['replay']['noise_gate'] for r in rows], [dict(passed=False, greedy=3, candidate=5)] * 3 + [None])
+        report = json.loads(text)
+        self.assertEqual((checked, report['roots_compared'], report['mismatches'], report['battles'], report['statuses']), (0, 3, 0, 1, dict(COMPLETE=3, REFUSED=1)))
+        self.assertEqual((report['gate']['passed'], report['gate']['failed'], report['override']['all']['raw_vs_greedy'], report['rr_greedy']['greedy_differs']),
+                         (0, 3, 1., 3))   # the logits' greedy 3 against the live greedy 0: an override of the live greedy
+        self.assertEqual((base_checked, json.loads(base_text)['error'], target_checked, json.loads(target_text)['error']), (2, 'input', 2, 'input'))
         self.assertEqual(check.ROW_SCHEMA, R.ROW_SCHEMA)   # the check reads this re-pricer's rows
 
     def test_main_replays_records_and_joins(self):

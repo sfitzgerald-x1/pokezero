@@ -29,6 +29,14 @@ request_id. Per batch (process_many chunks a longer list into batches of max_req
   effect guard, whose (c) is evaluated on the played action_index. Its responses name it (root_operator TARGET_ARGMAX,
   root_operator_impl depthn_root_operator.target_argmax, in the pricer identity too) and carry target_fallback (true when
   root_logits + q_values decided, None when nothing was decided); a default response has no target_fallback key.
+  NOISE_GATED_K2 (screen-r4b) plays depthn_root_operator.noise_gated_k2: the RR scorer's own noise_gated with k 2 on the same
+  2K worlds' search_hedge grids (per_world_q: Q_w(a) under each world's reply prior), averaging's action a* and the greedy
+  g = the argmax of root_logits over the legal actions (lowest index on ties; the search never sees the live actor's own
+  greedy, which can differ: depthn_root_operator's docstring): a* when a* != g and the per-world gap's mean exceeds 2 standard
+  errors, else g. Everything else is the default's, as for TARGET_ARGMAX (the effect guard's (c) on the played
+  action_index). Its responses name it (root_operator NOISE_GATED_K2, root_operator_impl depthn_root_operator.noise_gated)
+  and carry noise_gate = dict(passed: the gate passed, a* played over g; greedy: g; candidate: a*), None when nothing was
+  decided.
 - reporting only: constructor_worlds' composition on the same backups (reduce_completed_q per block, the equal-weight mean
   of the blocks' completed-Q, constructor_worlds.root_actions) gives completed_q, policy_target, root_value,
   action_mean_q, action_policy_target (never played by the default operator; TARGET_ARGMAX plays it whenever the target
@@ -87,7 +95,7 @@ request_id. Per batch (process_many chunks a longer list into batches of max_req
   b2_view set and root_view_source None (build checks the legal mask between the two).
 Response, per the live contract: schema, request_id, rung, archive_sha256, status, action_index, q_values (9, None on
 illegal lanes), refusal, cause, requested_worlds, constructed_worlds, decision_seconds (batch start -> result, COMPLETE
-only); ours: root_operator, root_operator_impl, target_fallback (TARGET_ARGMAX only), completed_q, policy_target, root_value, action_mean_q,
+only); ours: root_operator, root_operator_impl, target_fallback (TARGET_ARGMAX only), noise_gate (NOISE_GATED_K2 only), completed_q, policy_target, root_value, action_mean_q,
 action_policy_target, mean_q_agrees, reduction_note, root_view_source, b2_view, effect_guard, block_causes, world_refusals, timings (queue_seconds,
 prepare_seconds (the root's own), build/price/reduce_seconds (the shared batch's; reduce = backups, averaging and the
 reporting reduction)), batch_size, bucket, tree_commit, pricer. Fields a request never reached are None. `rung` echoes the
@@ -119,7 +127,9 @@ ROOT_OPERATOR=root_ops.ARGMAX_MEAN_COMPLETED_Q   # the default
 ROOT_OPERATOR_IMPL=root_ops.IMPLS[ROOT_OPERATOR]
 ROOT_OPERATORS=root_ops.ROOT_OPERATORS
 ROOT_OPERATOR_IMPLS=dict(root_ops.IMPLS)
+OPERATOR_RESPONSE_KEYS=dict(root_ops.RESPONSE_KEYS)   # the keys each operator's responses add (the default none)
 TARGET_ARGMAX=root_ops.TARGET_ARGMAX
+NOISE_GATED_K2=root_ops.NOISE_GATED_K2
 CAUSES=('constructor_refused','depthn_refused','expired_in_queue','server_error','bad_request','class_refused')
 CLASSES=('forced_switch','fresh_substitute','wish','sleep')   # root_class priority order
 PROTOCOL_KEYS=('schema','request_id','battle_id','owner','stream_id','decision_index','generation','prefix_sha256','lines','own_request_line')
@@ -148,13 +158,14 @@ def decide(blocks,root_logits,root_legal,operator=ROOT_OPERATOR):
     """One priced root's decision from its K blocks' backed-up worlds (blocks[k] = depthn_backups.backup(frame, row_k,
     learner_max)): search_hedge.averaging over the 2K worlds in block order plays (the default operator), constructor_worlds'
     composition only reports (module docstring); with operator TARGET_ARGMAX, depthn_root_operator.target_argmax on the
-    reported policy_target, root_legal, root_logits and averaging's q_values plays. dict(status COMPLETE or REFUSED,
-    action_index, q_values, refusal, completed_q, policy_target, root_value, action_mean_q, action_policy_target,
-    mean_q_agrees, reduction_note), and target_fallback with TARGET_ARGMAX."""
+    reported policy_target, root_legal, root_logits and averaging's q_values plays; with NOISE_GATED_K2,
+    depthn_root_operator.noise_gated_k2 on the same worlds' grids, averaging's action and the root logits' greedy plays.
+    dict(status COMPLETE or REFUSED, action_index, q_values, refusal, completed_q, policy_target, root_value, action_mean_q,
+    action_policy_target, mean_q_agrees, reduction_note), and the operator's RESPONSE_KEYS (target_fallback, noise_gate)."""
     if operator not in ROOT_OPERATORS:raise ValueError(f'a root operator in {ROOT_OPERATORS} required, got {operator!r}')
     legal=tuple(root_legal);prices=tuple(w for pair in blocks for w in pair)
     out=dict(status='REFUSED',action_index=None,q_values=None,refusal=None,completed_q=None,policy_target=None,root_value=None,action_mean_q=None,
-        action_policy_target=None,mean_q_agrees=None,reduction_note=None,**({'target_fallback':None}if operator==TARGET_ARGMAX else{}))
+        action_policy_target=None,mean_q_agrees=None,reduction_note=None,**dict.fromkeys(OPERATOR_RESPONSE_KEYS[operator]))
     try:choice=hedge.averaging(prices,legal)
     except ValueError as error:return dict(out,refusal=f'AVERAGING_ERROR: {error}')
     if choice is None:return dict(out,refusal='AVERAGING_UNKNOWN_PRICE')
@@ -165,6 +176,9 @@ def decide(blocks,root_logits,root_legal,operator=ROOT_OPERATOR):
     if operator==TARGET_ARGMAX:   # the RR scorer's own function on the reported quantities (None policy_target: the fallback)
         played,fallback=root_ops.target_argmax(out['policy_target'],legal,root_logits,out['q_values'])
         out.update(action_index=played,target_fallback=fallback)
+    elif operator==NOISE_GATED_K2:   # the RR scorer's own noise_gated (k 2) on these worlds' per-world Q, a* averaging's, greedy the logits'
+        played,gate=root_ops.noise_gated_k2(hedge.grids(prices,legal),action,root_logits,legal)
+        out.update(action_index=played,noise_gate=gate)
     return out
 
 
@@ -326,7 +340,7 @@ class DepthNLiveSearch:
     def _response(self,request_id,n):
         return dict(schema=SCHEMA,request_id=request_id,rung=self.rung,archive_sha256=self.archive_sha256,status='REFUSED',action_index=None,q_values=None,
             refusal=None,cause=None,requested_worlds=self.W,constructed_worlds=0,decision_seconds=None,root_operator=self.root_operator,
-            root_operator_impl=ROOT_OPERATOR_IMPLS[self.root_operator],**({'target_fallback':None}if self.root_operator==TARGET_ARGMAX else{}),
+            root_operator_impl=ROOT_OPERATOR_IMPLS[self.root_operator],**dict.fromkeys(OPERATOR_RESPONSE_KEYS[self.root_operator]),
             completed_q=None,policy_target=None,root_value=None,action_mean_q=None,action_policy_target=None,
             mean_q_agrees=None,reduction_note=None,root_view_source=None,b2_view=None,effect_guard=None,block_causes=None,world_refusals=None,
             timings=dict.fromkeys(STAGES),
@@ -444,7 +458,7 @@ class DepthNLiveSearch:
             if i in gates:out[i]=dict(base,cause=gates[i][0],refusal=gates[i][1])
             elif result['status']=='COMPLETE':
                 out[i]=dict(base,**{k:result[k]for k in('status','action_index','q_values','completed_q','policy_target','root_value','action_mean_q',
-                    'action_policy_target','mean_q_agrees','reduction_note','effect_guard')+(('target_fallback',)if 'target_fallback'in base else())},
+                    'action_policy_target','mean_q_agrees','reduction_note','effect_guard')+OPERATOR_RESPONSE_KEYS[self.root_operator]},
                     decision_seconds=decided)
             else:out[i]=dict(base,cause=refusal_cause(result['refusal']),refusal=result['refusal'])
         return out

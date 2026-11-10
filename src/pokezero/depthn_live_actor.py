@@ -197,7 +197,8 @@ def guarded_action(response,observation,moves,greedy_action):
     `moves` is own_moves of the owner's |request| line; recharge_guard names the lanes) and UNREPRESENTED_EFFECT (the
     response's effect_guard record tripped: the server evaluates its (c) on the response's own action_index, whichever root
     operator chose it). Any guard plays greedy (action None), the first cause standing; guard_causes keeps them all (module
-    docstring). select() plays through it; scripts/depthn_target_argmax_replay_check replays re-priced rows through it."""
+    docstring). select() plays through it; scripts/depthn_target_argmax_replay_check and depthn_noise_gated_replay_check replay
+    re-priced rows through it."""
     action,cause=searched_action(response,observation);guards=[];guard=None
     if action is not None:
         base=int(greedy_action)

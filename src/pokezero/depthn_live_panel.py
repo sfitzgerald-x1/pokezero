@@ -58,7 +58,7 @@ Eval readiness (the lead's rulings):
   unless every ratio is >= 0.90, or, when Foul Play is not observable, an explicit
   accept-uncalibrated is recorded.
 - Root operator: the declaration names one of depthn_root_operator.ROOT_OPERATORS (ARGMAX_MEAN_COMPLETED_Q through screen-r3,
-  TARGET_ARGMAX for screen-r4b); the probe passes only on a COMPLETE response naming it, and the readout reports
+  TARGET_ARGMAX or NOISE_GATED_K2 for screen-r4b); the probe passes only on a COMPLETE response naming it, and the readout reports
   search_provenance breakage on any response naming another.
 - Search choice and provenance (descriptive, recorded before any dispatch): the
   evidence that chose the search arm's W (the cells' commit, their files by

@@ -158,7 +158,7 @@ class ServerTests(unittest.TestCase):
         return made
 
     def test_the_root_operator_reaches_the_search_its_header_and_the_proxys_identity(self):
-        """--root-operator (default ARGMAX_MEAN_COMPLETED_Q; TARGET_ARGMAX; nothing else) reaches DepthNLiveSearch; the header and
+        """--root-operator (default ARGMAX_MEAN_COMPLETED_Q; TARGET_ARGMAX; NOISE_GATED_K2; nothing else) reaches DepthNLiveSearch; the header and
         READY record it in the pricer identity (and, when not the default, in their own root_operator: the default header's keys
         are unchanged), every response names it, and the proxy's identity (what --expect-root-operator compares) reads it."""
         from scripts import depthn_live_proxy as proxy
@@ -168,13 +168,15 @@ class ServerTests(unittest.TestCase):
             '--champion-checkpoint-sha256','d'*64,'--tree-commit','t'*40]
         self.assertEqual(self.built(base)['root_operator'],'ARGMAX_MEAN_COMPLETED_Q')
         self.assertEqual(self.built(base+['--root-operator','TARGET_ARGMAX'])['root_operator'],'TARGET_ARGMAX')
-        for bad in('ARGMAX_POLICY_TARGET','target_argmax',''):
+        self.assertEqual(self.built(base+['--root-operator','NOISE_GATED_K2'])['root_operator'],'NOISE_GATED_K2')
+        for bad in('ARGMAX_POLICY_TARGET','target_argmax','','NOISE_GATED_K1','noise_gated:k=2'):
             with self.subTest(bad=bad),patch.dict(os.environ,PINNED),redirect_stderr(io.StringIO()),self.assertRaises(SystemExit):S.options(base+['--root-operator',bad])
         L.LiveSearchTests.setUpClass();fixture=L.LiveSearchTests('test_configuration_is_checked')
         keys={'tree_commit','rung','max_requests','min_price_seconds','session_cap','refuse_classes','batch_wait_seconds','queue_limit','constructor_seed',
             'recipe_seed','saved_root_admission','metadata_sha256','vocabulary_sha256','champion_archive_sha256','champion_checkpoint_sha256',
             'champion_precision','pricer','jax_enable_x64','matmul_precision','matmul_precision_pin'}
-        for operator,impl in(('ARGMAX_MEAN_COMPLETED_Q','search_hedge.averaging'),('TARGET_ARGMAX','depthn_root_operator.target_argmax')):
+        for operator,impl in(('ARGMAX_MEAN_COMPLETED_Q','search_hedge.averaging'),('TARGET_ARGMAX','depthn_root_operator.target_argmax'),
+                ('NOISE_GATED_K2','depthn_root_operator.noise_gated')):
             with self.subTest(operator=operator):
                 with patch.dict(os.environ,PINNED):args=S.options(base+['--root-operator',operator])
                 search=fixture.search(root_operator=operator)

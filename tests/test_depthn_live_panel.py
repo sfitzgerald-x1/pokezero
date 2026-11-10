@@ -388,6 +388,16 @@ class DeclarationTests(unittest.TestCase):
         r3 = Path(__file__).resolve().parents[1]/'evals'/'depthn-foulplay-dn2w16-declaration-r3-20261109.json'
         value = json.loads(r3.read_bytes()); self.assertEqual(value['root_operator'], 'ARGMAX_MEAN_COMPLETED_Q'); self.assertIs(panel.validate(value), value)
 
+    def test_the_panel_accepts_noise_gated_k2(self):
+        """screen-r4b: NOISE_GATED_K2 is the third declarable operator (depthn_root_operator.ROOT_OPERATORS); look-alikes are not."""
+        from pokezero import depthn_root_operator as root_ops
+        self.assertEqual(root_ops.ROOT_OPERATORS, ('ARGMAX_MEAN_COMPLETED_Q', 'TARGET_ARGMAX', 'NOISE_GATED_K2'))
+        d = declaration('a'*64, root_operator='NOISE_GATED_K2'); before = copy.deepcopy(d)
+        self.assertIs(panel.validate(d), d); self.assertEqual(d, before)
+        for bad in ('NOISE_GATED_K1', 'noise_gated:k=2', 'NOISE_GATED', 'NOISE_GATED_K2 ', ['NOISE_GATED_K2']):
+            with self.subTest(root_operator=bad), self.assertRaisesRegex(ValueError, 'declared DepthN 500/2000 paired panel'):
+                panel.validate(declaration('a'*64, root_operator=bad))
+
 
 class CellTests(unittest.TestCase):
     def test_cells_equal_codex_raw_cells_on_every_pairing_field(self):
@@ -731,6 +741,18 @@ class ProbeTests(unittest.TestCase):
             panel.probe(root, arm='DN2W8', server=dict(host='127.0.0.1', port=server.port), capture=self.capture)   # an averaging server
         with self.assertRaisesRegex(ValueError, 'probe failed'): self.probe(target)   # and a TARGET_ARGMAX server under the averaging declaration
 
+    def test_a_noise_gated_k2_declaration_passes_only_on_noise_gated_k2_responses(self):
+        root, run, d, lad = make_run(Path(self.directory.name)/'noise', root_operator='NOISE_GATED_K2')
+        gate = dict(passed=True, greedy=1, candidate=0)
+        noise = actor_tests.send(lambda r: champion_complete(r, root_operator='NOISE_GATED_K2', noise_gate=gate))
+        with actor_tests.FakeServer(noise) as server:
+            value = panel.probe(root, arm='DN2W8', server=dict(host='127.0.0.1', port=server.port), capture=self.capture)
+        self.assertEqual((value['status'], value['tried'][0]['root_operator']), ('PASS', 'NOISE_GATED_K2'))
+        for other in (champion_complete, lambda r: champion_complete(r, root_operator='TARGET_ARGMAX', target_fallback=False)):
+            with actor_tests.FakeServer(actor_tests.send(other)) as server, self.assertRaisesRegex(ValueError, 'root operator'):
+                panel.probe(root, arm='DN2W8', server=dict(host='127.0.0.1', port=server.port), capture=self.capture)
+        with self.assertRaisesRegex(ValueError, 'probe failed'): self.probe(noise)   # a NOISE_GATED_K2 server under the averaging declaration
+
     def test_the_probe_budgets_by_the_declared_deadline(self):
         root, run, d, lad = make_run(Path(self.directory.name)/'ten', deadline=10.)
         with actor_tests.FakeServer(actor_tests.send(champion_complete)) as server:
@@ -978,6 +1000,18 @@ class ReadoutTests(unittest.TestCase):
         populate(root, run, lad, rows_for=rows('TARGET_ARGMAX'))
         value = panel.readout(root, arm='DN2W8', limit=500)
         self.assertEqual((value['breakage'], value['arms']['DN2W8']['decisions']['provenance']['root_operator']), ([], ['TARGET_ARGMAX']))
+        cell = panel.cells(lad, 'DN2W8', limit=500)[0]
+        write_cell(root, cell, run['declaration_sha256'], score=1., rows=[decision_row(cell, 0)])   # an averaging response
+        self.assertEqual(panel.readout(root, arm='DN2W8', limit=500)['breakage'], ['search_provenance'])
+
+    def test_search_provenance_holds_a_declared_noise_gated_k2(self):
+        """A NOISE_GATED_K2 declaration: responses naming it are clean provenance; one naming averaging is search_provenance breakage."""
+        directory = Path(self.directory.name)/'noise'; root, run, d, lad = make_run(directory, root_operator='NOISE_GATED_K2')
+        rows = lambda cell: [decision_row(cell, i, source='raw_arm' if cell['arm'] == 'RAW' else 'search', differs=i == 0,
+                                          worlds=panel.WORLDS.get(cell['arm']), operator='NOISE_GATED_K2') for i in range(2)]
+        populate(root, run, lad, rows_for=rows)
+        value = panel.readout(root, arm='DN2W8', limit=500)
+        self.assertEqual((value['breakage'], value['arms']['DN2W8']['decisions']['provenance']['root_operator']), ([], ['NOISE_GATED_K2']))
         cell = panel.cells(lad, 'DN2W8', limit=500)[0]
         write_cell(root, cell, run['declaration_sha256'], score=1., rows=[decision_row(cell, 0)])   # an averaging response
         self.assertEqual(panel.readout(root, arm='DN2W8', limit=500)['breakage'], ['search_provenance'])

@@ -45,6 +45,8 @@ pi_w^T = softmax(root_peer_logits / T) over the kept lanes, T = inf uniform; a w
 D = R(op) - R(greedy), 0 when op is
 greedy. noise_gated plays averaging's a* only when a* != greedy and mean_w gap > k sd_w(gap) / sqrt(W), gap_w =
 Q_w(a*) - Q_w(greedy); world_lcb plays argmax q(a) - kappa sd_w(Q_w(a)) / sqrt(W) (sample sd; Q_w(a) = sum_b pi_w(b) G_w[a][b]).
+noise_gated and per_world_q are pokezero.depthn_root_operator's (the live NOISE_GATED_K2 plays noise_gated with k 2 and, the
+search not knowing the live greedy, greedy = the argmax of root_logits: greedy_argmax here).
 Guards (the live actor's, through pokezero.depthn_effect_guard's own functions): every operator but greedy plays greedy where
 the own-recharge guard trips on its choice (an override INTO a recharge move greedy did not choose: root.own_moves) or
 UNREPRESENTED_EFFECT does (the row's effect_guard record: (b) at the root, or (c) on that operator's own choice); a root the
@@ -99,8 +101,9 @@ from gpu_engine import search_hedge as hedge  # noqa: E402
 from pokezero import v5_gumbel as original  # noqa: E402
 from pokezero.phase_d_owning_capture import read_capture  # noqa: E402
 from pokezero import depthn_effect_guard as effect_guard  # noqa: E402
-# argmax (lowest index on ties) and target_argmax: the live search's TARGET_ARGMAX plays this very function (one definition)
-from pokezero.depthn_root_operator import argmax, target_argmax  # noqa: E402,F401
+# argmax (lowest index on ties), target_argmax, per_world_q and noise_gated: the live search's TARGET_ARGMAX and NOISE_GATED_K2
+# play these very functions (one definition)
+from pokezero.depthn_root_operator import argmax, noise_gated, per_world_q, target_argmax  # noqa: E402,F401
 
 SCHEMA = 'pokezero.depthn-rr-score.v1'
 LEVEL = .90
@@ -377,11 +380,6 @@ def realized(worlds, mapped, root_legal):
 
 # ---- operators ----
 
-def per_world_q(gs):
-    """Q_w(a) = sum_b pi_w(b) G_w[a][b] per world: the grid's reply prior over kept replies, or the waiting column 0."""
-    return [{a: math.fsum(g.prior[k] * g.values[i, k] for k in range(len(g.replies))) for i, a in enumerate(g.actions)} for g in gs]
-
-
 def prior_q(gs, priors):
     """q(a) = sum_w 1/W sum_b priors[w][b] G_w[a][b] over each grid's replies (its kept lanes, or the waiting column 0), summed
     exactly as search_hedge.averaging sums (fsum, world-major), so averaging's own priors give its q bit for bit."""
@@ -444,13 +442,6 @@ def load_reply_prior(path):
             if key[2] in worlds:raise ValueError(f'{path}:{number}: duplicate (ordinal, decision_index, world) {key}')
             worlds[key[2]] = array('d', logits)
     return out
-
-
-def noise_gated(qw, chosen, greedy, k):
-    """Averaging's choice only when it differs from greedy and the per-world gap's mean exceeds k standard errors."""
-    if chosen == greedy:return greedy
-    gaps = [q[chosen] - q[greedy] for q in qw]
-    return chosen if statistics.fmean(gaps) > k * statistics.stdev(gaps) / math.sqrt(len(gaps)) else greedy
 
 
 def world_lcb(q, spread, kappa):
