@@ -169,7 +169,7 @@ class BoundExtensionTests(unittest.TestCase):
             E.gate(self.root, screen=self.screen, verdict=verdict, files=E.committed(), binding=moved)
 
     def test_the_cli_takes_only_a_pinned_binding(self):
-        value, digest = self.binding();path = self.pin('binding', value)[0]
+        value = self.binding()[0];path, digest = self.pin('binding', value)   # the file's own bytes (the panel's encoding) fix its sha256
         argv = ['--run-directory', str(self.root), '--search-arm', 'DN2W8', '--screen-readout', 'r', '--screen-readout-sha256', 'r', '--amended-verdict', 'v',
                 '--amended-verdict-sha256', 'v', '--cache-directory', 'c', '--cpu-pair', '0', '1', '--server', 'h:1', '--run-binding', str(path), digest]
         with self.assertRaisesRegex(SystemExit, 'pinned in EXTENSION_BINDINGS'):E.main(argv)
