@@ -161,12 +161,15 @@ def completed_q(child_values, opp_policy, actions, replies):
     return out
 
 
-def depth1_baseline(env, snapshot, root, models, draws):
+def depth1_baseline(env, snapshot, root, models, draws, post_turn=False):
     """The current value head's depth-1 completed-Q at the root, on the true state (the real-Showdown U1 baseline). For every
     legal action a of our seat, every opponent reply b with pi_opp(b) > 0.001 (no reply when the opponent waits), and `draws`
     chance draws: restore, reseed with the draw's seed, step (a, b), then sample both seats' policies until our seat is requested
     again, and take the champion's value from our seat there (a terminal state: its outcome). The draws' seeds are disjoint from
-    the rollouts' (an independent evaluation bank). Returns dict(completed_q, replies, child_values)."""
+    the rollouts' (an independent evaluation bank). Returns dict(completed_q, replies, child_values).
+    post_turn (the ladder's R0′, the engine rungs' estimator): each child is valued by the champion's value head on our view of
+    the state right after the joint turn (env.observe(ours)), requested or not, never sampled further; a terminal state keeps its
+    outcome. Everything else (actions, replies, draws, their seeds, the weights) is the same."""
     ours, opp, actions, root_seed = root['ours'], root['opp'], root['actions'], root['root_seed']
     pi = root['opp_policy'];replies = [None] if pi is None else [b for b in range(ACTIONS) if pi[b] > .001]
     model_of = {ours: models['ours'], opp: models['opp']};values = {}
@@ -177,6 +180,7 @@ def depth1_baseline(env, snapshot, root, models, draws):
                 first = {ours: a}
                 if b is not None:first[opp] = b
                 obs = dict(env.step(first).observations);ply = 1;v = None
+                if post_turn:v = outcome(env, ours) if env.terminal() is not None else float(models['ours'].evaluate([env.observe(ours)])[1][0])
                 while v is None:
                     if env.terminal() is not None:v = outcome(env, ours);break
                     requested = list(env.requested_players())
