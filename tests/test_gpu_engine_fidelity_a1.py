@@ -410,6 +410,43 @@ class RegressPluginTests(unittest.TestCase):
             self.assertEqual(lane_verdict(ok, {effect: [0]}, None)[0], [])
             self.assertEqual(lane_verdict({('state.status', 1)}, {effect: [0]}, None)[0], [('state.status', 1)])
 
+    def test_trace_copying_insomnia_and_any_install_expose_a_sleep_target(self):
+        from gpu_engine.v2e_regress import Pre, sleep_immunity
+        vocab = dict(moves=['_none', 'tackle', 'hypnosis', 'batonpass'], abilities=['_none', 'insomnia', 'trace'], items=['_none'])
+        L = 4;z = lambda *shape: np.zeros(shape, np.int32)
+        s = {k: z(L, 2, 6) for k in ('hp', 'status', 'charge_move', 'encore_move', 'encore_counter', 'ability', 'item',
+                                     'confusion_counter', 'substitute_hp')}
+        s.update(hp=np.full((L, 2, 6), 50), rest_origin=np.zeros((L, 2, 6), bool), volatile=np.zeros((L, 2, 6), np.uint32),
+                 active=z(L, 2), pending_residual=np.zeros(L, bool), queued_actor=np.full(L, -1), queued_actions=z(L, 2),
+                 last_action_kind=z(L, 2), last_action_index=np.full((L, 2), -1), forced_switch=np.zeros((L, 2), bool),
+                 moves=np.full((L, 2, 6, 4), 1))
+        s['moves'][:, 0, 0, 0] = 2                                        # side 0 uses Hypnosis on every lane
+        s['ability'][:, 0, 0] = 1                                         # ... and holds Insomnia (Trace's donor)
+        s['ability'][0, 1, 3] = 2                                         # lane 0: a benched Trace holder comes in
+        s['ability'][1, 1, 3] = 2                                         # lane 1: the same, side 1 attacks (no install)
+        s['ability'][2, 1, 3] = 1;s['moves'][2, 1, 0, 0] = 3              # lane 2: a benched Insomnia holder, side 1 Baton Passes
+        s['ability'][3, 1, 3] = 2;s['ability'][3, 0, 0] = 0               # lane 3: Trace with no Insomnia to copy
+        actions = np.zeros((L, 2), np.int32);actions[0, 1] = 6;actions[3, 1] = 6
+        named = {f'state.{k}': v for k, v in s.items()};named['actions'] = actions
+        got = sleep_immunity(Pre(named, vocab, np.array([False, True, True, True]), np.zeros((L, 2), bool)))
+        self.assertEqual(got[:, 0].tolist(), [True, False, True, False])
+
+    def test_ko_cascade_turn_line_and_phase_shift(self):
+        from gpu_engine.v2e_regress import lane_verdict
+        effects = {'curse': [0]}
+        cascade = dict(ko_sides=np.array([True, False]), mon_ok=lambda leaf, side: side == 0)
+        turn_line = {('trackers.turn', None), ("trackers.mon_features['turns_active']", 1), ('state.last_move', 1),
+                     ('trackers.public_port.post_upkeep', None), ('state.trap_source', 1)}
+        self.assertEqual(lane_verdict(turn_line, effects, None, cascade=cascade)[0], [])
+        self.assertEqual(lane_verdict(turn_line, effects, None)[0], sorted(turn_line, key=lambda x: (x[0], -1 if x[1] is None else x[1])))
+        # A residual write on the non-fainted side is a consequence only on a phase-shift lane.
+        residual = {('state.status_counter', 1), ('state.item', 1), ('trackers.shown_item', 1), ('state.volatile', 1)}
+        self.assertEqual(len(lane_verdict(residual, effects, None, cascade=cascade)[0]), 4)
+        phase = dict(cascade, ko_sides=np.array([True, True]), families=('residual',))
+        self.assertEqual(lane_verdict(residual, effects, None, cascade=phase)[0], [])
+        self.assertEqual(lane_verdict({('state.status', 1), ('state.turn', None), ('state.moves', 1)}, effects, None, cascade=phase)[0],
+                         [('state.moves', 1), ('state.status', 1), ('state.turn', None)])
+
 
 if __name__ == '__main__':
     unittest.main()
