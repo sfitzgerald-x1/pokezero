@@ -183,6 +183,8 @@ class SelfTests(unittest.TestCase):
             (Path(tmp) / 'manifest.jsonl').write_text(json.dumps(dict(ordinal=1, seed=5, ours='p2', target=4)) + '\n' * 1 * 1
                                                       + json.dumps(dict(ordinal=1, seed=5, ours='p2', target=4)) + '\n')
             with self.assertRaisesRegex(ValueError, 'twice'):M.manifest_rows(tmp)   # one ordinal twice in a manifest
+            (Path(tmp) / 'manifest.jsonl').write_text(json.dumps(dict(ordinal=2, seed=1, ours='p1', target=3)) + '\n')
+            with self.assertRaisesRegex(ValueError, 'union'):M.manifest_rows(tmp)   # the merged manifest lost a worker's row
 
 
 # Writing -------------------------------------------------------------------------------------------------------------------------

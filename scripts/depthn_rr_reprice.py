@@ -875,7 +875,10 @@ class TrueWorlds:
         path, problem = sidecar_path(self.directory, cell)
         if path is None:return None, dict(sidecar=None, sidecar_sha256=None, problem=problem)
         raw = path.read_bytes()
-        return json.loads(raw), dict(sidecar=str(path), sidecar_sha256=hashlib.sha256(raw).hexdigest(), problem=None)
+        try:doc = json.loads(raw)
+        except ValueError as error:   # a damaged sidecar refuses this root, never the shard
+            return None, dict(sidecar=str(path), sidecar_sha256=hashlib.sha256(raw).hexdigest(), problem=f'sidecar unreadable: {error}'[:200])
+        return doc, dict(sidecar=str(path), sidecar_sha256=hashlib.sha256(raw).hexdigest(), problem=None)
 
     @contextmanager
     def installed(self, cell, decision_index):

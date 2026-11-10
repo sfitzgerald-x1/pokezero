@@ -26,6 +26,7 @@ import argparse
 import collections
 import glob
 import json
+import os
 from pathlib import Path
 import sys
 
@@ -101,11 +102,13 @@ def foulplay_sidecar(env, collection, ordinal, entry):
 def manifest_rows(captures):
     """The self captures' manifest rows, in ordinal order: the merged manifest.jsonl when it exists, else every worker's
     manifest-<w>.jsonl (a sharded capture run)."""
-    merged = Path(captures) / 'manifest.jsonl'
-    paths = [merged] if merged.exists() else sorted(Path(captures).glob('manifest-*.jsonl'))
-    rows = [json.loads(x) for p in paths for x in Path(p).read_text().splitlines() if x.strip()]
+    merged, workers = Path(captures) / 'manifest.jsonl', sorted(Path(captures).glob('manifest-*.jsonl'))
+    read = lambda paths: [json.loads(x) for p in paths for x in Path(p).read_text().splitlines() if x.strip()]
+    rows = read([merged]) if merged.exists() else read(workers)
     ordinals = [int(r['ordinal']) for r in rows]
     if len(set(ordinals)) != len(ordinals):raise ValueError(f'{captures}: a capture ordinal appears twice in the manifests')
+    if merged.exists() and workers and sorted(ordinals) != sorted(int(r['ordinal']) for r in read(workers)):
+        raise ValueError(f'{captures}: the merged manifest is not the union of the workers\' manifests')
     if not rows:raise ValueError(f'{captures}: no manifest rows')
     return sorted(rows, key=lambda r: int(r['ordinal']))
 
@@ -147,7 +150,8 @@ def write_all(kind, items, out, make_env, build):
     try:
         for ordinal, item in items:
             path = folder / f'{kind}-{ordinal}.json'
-            if path.exists():counts['existing'] += 1;continue
+            if path.exists():   # resume: a complete earlier file is kept (written atomically, so it parses or is absent)
+                json.loads(path.read_text());counts['existing'] += 1;continue
             if env is None:env = make_env()
             try:doc = build(env, ordinal, item)
             except Exception as error:
@@ -155,7 +159,9 @@ def write_all(kind, items, out, make_env, build):
                 try:env.close()
                 finally:env = None
                 continue
-            with path.open('x') as stream:stream.write(json.dumps(doc, sort_keys=True) + '\n')
+            partial = path.with_suffix('.json.partial')   # atomic: written, fsynced, then renamed into place
+            with partial.open('w') as stream:stream.write(json.dumps(doc, sort_keys=True) + '\n');stream.flush();os.fsync(stream.fileno())
+            os.replace(partial, path)
             counts['written'] += 1;roots = doc['roots'].values()
             counts['roots'] += len(roots);counts['root_errors'] += sum('error' in r for r in roots)
             counts['opponent_waits'] += sum('error' not in r and not r['opponent_requested'] for r in roots)
@@ -180,7 +186,7 @@ def main(argv=None):
         paths = sorted(glob.glob(args.bank))
         if not paths:p.error(f'--bank {args.bank}: no file')
         items = list(bank_roots(paths).items())
-    else:items = [(int(r['ordinal']), r) for r in manifest_rows(args.captures)]
+    else:items = [(int(r['ordinal']), r) for r in manifest_rows(args.captures) if r.get('status') == 'ok']   # only captures whose root is the bank's
     items = items[args.worker::args.workers]
     import torch
     torch.set_num_threads(1)
