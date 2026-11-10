@@ -154,10 +154,19 @@ class BoundExtensionTests(unittest.TestCase):
         cases = {'adopting the extension file unchanged': self.binding(extension=None),
                  "bound run's directory": self.binding(run=dict(run_directory='/out/other', tree_commit=self.run['tree']['commit'])),
                  'extension addendum to this declaration': self.binding(declaration_sha256='0' * 64),
-                 'adopting exactly the four rule files': self.binding(adopts=[])}
+                 'adopting exactly the four rule files': self.binding(adopts=[]),
+                 'adopting the extension file unchanged ': self.binding(extension=dict(path=E.FILES['extension'], sha256=E.committed()['extension'][1], change='amended')),
+                 'adopting the extension file unchanged  ': self.binding(extension=dict(path=E.FILES['extension'], sha256='0' * 64, change='none')),
+                 'declaring final_fairness_rule RULE_R3': {k: v for k, v in self.binding()[0].items() if k not in ('final_fairness_rule', 'arm_fairness')}}
+        cases = {k: (v if type(v) is tuple else (v, hashlib.sha256(json.dumps(v, sort_keys=True).encode()).hexdigest())) for k, v in cases.items()}
         for message, binding in cases.items():
-            with self.subTest(message), patch.object(E.FF, 'final_gate_r3', return_value=self.r3_fair()), self.assertRaisesRegex(ValueError, message):
+            with self.subTest(message), patch.object(E.FF, 'final_gate_r3', return_value=self.r3_fair()), self.assertRaisesRegex(ValueError, message.strip()):
                 E.gate(self.root, screen=self.screen, verdict=verdict, files=E.committed(), binding=binding)
+        with patch.object(E.FF, 'final_gate_r3', return_value=self.r3_fair()), self.assertRaisesRegex(ValueError, 'amended verdict differs'):
+            E.gate(self.root, screen=self.screen, verdict=self.pin_verdict('unbound', ExtensionTests.amended(self)), files=E.committed(), binding=self.binding())
+        moved = self.binding(run=dict(run_directory=str(Path(self.root).resolve()), tree_commit='e' * 40))   # another tree than the readout's
+        with patch.object(E.FF, 'final_gate_r3', return_value=self.r3_fair()), self.assertRaises(ValueError):
+            E.gate(self.root, screen=self.screen, verdict=verdict, files=E.committed(), binding=moved)
 
     def test_the_cli_takes_only_a_pinned_binding(self):
         value, digest = self.binding();path = self.pin('binding', value)[0]
@@ -165,6 +174,14 @@ class BoundExtensionTests(unittest.TestCase):
                 '--amended-verdict-sha256', 'v', '--cache-directory', 'c', '--cpu-pair', '0', '1', '--server', 'h:1', '--run-binding', str(path), digest]
         with self.assertRaisesRegex(SystemExit, 'pinned in EXTENSION_BINDINGS'):E.main(argv)
         with patch.dict(E.EXTENSION_BINDINGS, screen_x=digest), self.assertRaisesRegex(SystemExit, 'pinned in EXTENSION_BINDINGS'):E.main(argv)   # not in RUN_BINDINGS
+        with patch.dict(E.EXTENSION_BINDINGS, screen_x=digest), patch.dict(V.RUN_BINDINGS, screen_x=digest), self.assertRaisesRegex(SystemExit, 'RUN_FINAL_RULES'):
+            E.main(argv)   # pinned in both, but its final rule is not
+        class Reached(Exception):pass
+        def reached(*a, **k):raise Reached(k.get('binding'))
+        with patch.dict(E.EXTENSION_BINDINGS, screen_x=digest), patch.dict(V.RUN_BINDINGS, screen_x=digest), patch.dict(V.RUN_FINAL_RULES, {digest: 'RULE_R3'}), \
+                patch.object(E, 'gate', side_effect=reached), self.assertRaises(Reached) as got:
+            E.main(argv)
+        self.assertEqual(got.exception.args[0], (value, digest))   # a fully pinned binding reaches the gate with itself
 
 
 if __name__ == '__main__':

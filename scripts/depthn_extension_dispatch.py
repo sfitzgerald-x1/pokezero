@@ -64,7 +64,10 @@ def bound_run(binding, files):
     entry = value.get('extension') if type(value.get('extension')) is dict else {}
     if entry != dict(path=FILES['extension'], sha256=files['extension'][1], change='none'):
         raise ValueError(f'a run binding adopting the extension file unchanged required ({digest})')
-    return declaration_sha256, directory, V.final_rule(value, digest)
+    rule = V.final_rule(value, digest)
+    if rule != 'RULE_R3' or V.RUN_AMENDMENTS.get(digest):   # the bound route's only final gate; run amendments (screen-r2's) are not carried
+        raise ValueError(f'a run binding declaring final_fairness_rule RULE_R3 and needing no run amendment required ({digest})')
+    return declaration_sha256, directory, rule
 
 
 def gate(run_directory, *, screen, verdict, files, tree_commit=None, binding=None):
