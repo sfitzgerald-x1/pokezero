@@ -20,7 +20,9 @@ Rungs. Greedy is the argmax of root_logits over root_legal, lower index on ties 
   view b, the same worlds as R3).
 - R5: the replay's own action_index (the live code's DN2W16 averaging at depth 2). The chooser recomputes averaging on the
   rows' depth-2 grids (depthn_rr_score.recompute) and counts every COMPLETE root where its action or q differs from the replay's.
-- R5_ng: noise_gated k = 2 on the depth-2 per-world q of that recomputation.
+- R5_ng: noise_gated k = 2 on the depth-2 per-world q of that recomputation. Greedy is the root logits' argmax, as the r4b
+  screen's NOISE_GATED_K2 operator takes it (depthn_root_operator.noise_gated_k2), not the live actor's greedy_action_index that
+  depthn_rr_score's own noise_gated:k=2 reads; they differ only where those two greedies differ.
 
 Identity. Foul Play rows (runs C, D): key (ordinal, target = decision_index), and the row's cell seed is echoed for the
 scorer's check. Self rows (run E) map through the self-capture manifest (--manifest: rows {ordinal, seed, ours, target}): the
@@ -55,6 +57,7 @@ replay). Exit 1 when R5's recomputation disagrees with any COMPLETE replay, else
 import argparse
 import collections
 import json
+import math
 from pathlib import Path
 
 from scripts import depthn_rr_score as rr   # first: it puts src/ on sys.path for pokezero
@@ -95,6 +98,7 @@ def identity(raw, kind, manifest):
         return dict(kind=kind, ordinal=ordinal, target=index, **({'seed': seed} if type(seed) is int else {})), None
     entry = manifest.get(ordinal)
     if entry is None:return None, 'not_in_manifest'
+    if entry.get('status', 'ok') != 'ok':return None, f'manifest_{entry["status"]}'   # a capture whose replayed root is not the bank's
     if index != entry['target']:return None, 'target_mismatch'
     if raw.get('owner') not in (None, entry['ours']):return None, 'seat_mismatch'
     if raw.get('seed') not in (None, entry['seed']):return None, 'seed_mismatch'
@@ -113,13 +117,18 @@ def root_prior(d):
 
 
 def average(worlds, legal):
-    """(averaging's choice a*, per-world q, averaging's q) on WorldPrices; raises Unscorable."""
+    """(averaging's choice a*, per-world q, averaging's q) on WorldPrices; raises Unscorable (nonfinite: as decide's
+    AVERAGING_INVALID_RESULT, a non-finite q never chooses)."""
     try:
         gs = hedge.grids(worlds, legal)
         if gs is None:raise rr.Unscorable('unpriced_cell')
         choice = hedge.averaging(worlds, legal)
     except ValueError:raise rr.Unscorable('averaging_error') from None
-    return hedge.top_action(choice.strategy), rr.per_world_q(gs), choice.q
+    q = rr.per_world_q(gs)
+    if any(v is not None and not math.isfinite(float(v)) for v in choice.q) or any(
+            v is not None and not math.isfinite(float(v)) for world in q for v in (world.values() if type(world) is dict else world)):
+        raise rr.Unscorable('nonfinite')
+    return hedge.top_action(choice.strategy), q, choice.q
 
 
 def averaged(raw, d, depth, reply):
@@ -132,7 +141,8 @@ def averaged(raw, d, depth, reply):
         return hedge.top_action(base.average.strategy), rr.per_world_q(base.grids), base.average.q
     info = raw.get('depth1')
     if type(info) is not dict:raise rr.Unscorable('depth1_missing')
-    if any(info.get('refused_at_depth1') or ()):raise rr.Unscorable('refused_at_depth1')
+    if 'refused_at_depth1' not in info:raise rr.Unscorable('row_schema_old')   # a row written before the depth-1 refusal flags
+    if any(info['refused_at_depth1']):raise rr.Unscorable('refused_at_depth1')
     legal, _ = root_prior(d)
     worlds = raw.get('worlds') if type(raw.get('worlds')) is list else []
     prices = rr.world_prices(rr.normalize(dict(worlds=[w.get('depth1') if type(w) is dict else None for w in worlds])))

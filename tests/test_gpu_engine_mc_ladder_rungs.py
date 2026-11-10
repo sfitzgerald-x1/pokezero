@@ -176,7 +176,7 @@ class UndecidedTests(unittest.TestCase):
 
 class IdentityTests(unittest.TestCase):
     MANIFEST = {0: dict(ordinal=0, seed=900, ours='p2', target=3, status='ok'), 1: dict(ordinal=1, seed=901, ours='p1', target=5, status='ok'),
-                2: dict(ordinal=2, seed=902, ours='p2', target=4, status='unexplained'), 3: dict(ordinal=3, seed=903, ours='p1', target=1)}
+                2: dict(ordinal=2, seed=902, ours='p2', target=4, status='ok'), 3: dict(ordinal=3, seed=903, ours='p1', target=1)}
 
     def test_self_rows_map_through_the_manifest_and_mismatches_are_counted(self):
         rows = [row(0, 3, owner='p2', seed=900, reply=False),   # mapped
@@ -190,6 +190,15 @@ class IdentityTests(unittest.TestCase):
         self.assertEqual((summary['rows'], summary['mapped']), (6, 1))
         self.assertEqual(summary['identity_mismatches'], dict(kind_mismatch=1, not_in_manifest=1, seat_mismatch=1, seed_mismatch=1, target_mismatch=1))
         self.assertEqual(summary['manifest_status'], dict(ok=1))
+        manifest = {0: dict(self.MANIFEST[0], status='root_mismatch')}   # a capture whose replayed root is not the bank's
+        out, summary = M.build([row(0, 3, owner='p2', seed=900, reply=False)], 'E', manifest)
+        self.assertEqual((out['R4'], summary['identity_mismatches']), ([], dict(manifest_root_mismatch=1)))
+
+    def test_old_rows_and_nonfinite_q_never_choose(self):
+        old = row();del old['depth1']['refused_at_depth1']   # written before the depth-1 refusal flags
+        self.assertEqual({one(old, 'C')[n]['reason'] for n in ('R3', 'R3prime_ng', 'R4b')}, {'row_schema_old'})
+        nan = row();nan['worlds'][0]['depth1']['grid'][1][0] = float('nan')   # WorldPrices refuses it before averaging (world_invalid)
+        self.assertEqual({one(nan, 'C')[n]['reason'] for n in ('R3', 'R3prime_ng', 'R4b')}, {'world_invalid'})
 
     def test_foulplay_rows_key_on_ordinal_and_decision_index(self):
         out, summary = M.build([row(5, 2), row(5, 4), row(6, 2, seed=None)], 'D')
