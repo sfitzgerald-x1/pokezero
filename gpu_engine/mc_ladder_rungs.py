@@ -34,7 +34,9 @@ scorer's check. Self rows (runs B, E) map through the self-capture manifest (--m
 key is (seed, ours, target), and the row's decision_index must equal target, its owner ours and its seed (when present) the
 manifest's seed, and the manifest row's status must be ok (manifest_<status> otherwise, a missing status included: a capture
 whose replayed root is not the bank's). A row whose target_kind names the other kind, or that fails those checks, is counted
-by reason and written to no rung. Two rows with one key are an error.
+by reason and written to no rung. Runs A and B take only rows of a --true-worlds --true-kind true_private replay (the row's
+true_worlds record with requested_kind true_private; not_true_worlds otherwise), and runs C, D and E refuse a row that carries
+one (true_worlds_row); both are counted as identity mismatches. Two rows with one key are an error.
 
 Each rung row: the key, action (None when the rung cannot decide the root, with `reason`), greedy_action, guard_tripped
 (with guard_reason when true) and actions (the root's legal action indices, echoed for the scorer's identity check).
@@ -55,7 +57,10 @@ Reasons for action None:
 - world_missing, world_unpriced, world_invalid, unpriced_cell, averaging_error: a world or a needed cell has no price;
 - reply_prior_missing: a requested world has no reply_peer_logits (only roots that reached the reply model's decide have them);
 - replay_<status>[:cause]: R5 and R5_ng on a replay that did not end COMPLETE; replay_action_invalid;
-- one_world: noise gating needs at least two worlds.
+- one_world: noise gating needs at least two worlds;
+- true_worlds_failed[:cause], true_worlds_not_sampled[:cause] (runs A and B): the true worlds failed closed (a problem or error,
+  fewer built than requested, or a kind other than true_private or its waiting-opponent fallback true), or were never sampled.
+R1 and R2 can decide different roots (R2 needs only world 0's prices): compare them on the roots both decided.
 
 usage: python -m gpu_engine.mc_ladder_rungs --rows ROWS.jsonl [ROWS.jsonl ...] --run {A,B,C,D,E} [--manifest MANIFEST.jsonl] --out NEW_DIR
 --manifest is required for runs B and E (self roots) and refused for A, C and D. Writes NEW_DIR/rung-<NAME>.jsonl per rung and NEW_DIR/summary.json
@@ -73,7 +78,6 @@ from gpu_engine import search_hedge as hedge
 
 SCHEMA = 'mc-ladder-rungs.v1'
 NOISE_K = 2
-# Per run: the root kind and each rung's (depth, reply-model prior, noise gated).
 # run: (root kind, {rung: (depth, reply model's logits, noise gated, worlds: None all or n the first n)}). Runs A and B are the
 # true-world replays (--true-worlds, --true-kind true_private): R1 averages the W true worlds (W chance draws of the true
 # state) at depth 1; R2 is world 0 alone (one draw).
@@ -84,6 +88,8 @@ RUNS = dict(
     D=('foulplay', dict(R4=(1, False, False, None), R5=(2, False, False, None), R5_ng=(2, False, True, None))),
     E=('self', dict(R3=(1, False, False, None), R3prime_ng=(1, False, True, None), R4=(1, False, False, None), R5=(2, False, False, None),
                     R5_ng=(2, False, True, None))))
+TRUE_RUNS = frozenset('AB')   # the true-world runs: rows of a --true-worlds --true-kind true_private replay only
+TRUE_KIND = 'true_private'
 KEY_FIELDS = dict(foulplay=('kind', 'ordinal', 'target'), self=('kind', 'seed', 'ours', 'target'))
 EXAMPLES = 20   # disagreeing roots listed in the summary
 
@@ -117,6 +123,21 @@ def identity(raw, kind, manifest):
     if raw.get('owner') not in (None, entry['ours']):return None, 'seat_mismatch'
     if raw.get('seed') not in (None, entry['seed']):return None, 'seed_mismatch'
     return dict(kind=kind, seed=entry['seed'], ours=entry['ours'], target=entry['target']), None
+
+
+def true_worlds_check(raw, run):
+    """(identity mismatch or None, the root's undecided reason or None): runs A and B take only rows of a --true-kind true_private
+    replay and decide a root only when its true worlds were all built; the other runs refuse a true-world row (module docstring)."""
+    record = raw.get('true_worlds')
+    if run not in TRUE_RUNS:return ('true_worlds_row' if record else None), None
+    if type(record) is not dict or record.get('requested_kind') != TRUE_KIND:return 'not_true_worlds', None
+    calls, worlds = record.get('sample_calls'), record.get('worlds')
+    if type(calls) is not int or calls < 1:return None, 'true_worlds_not_sampled'
+    played = record.get('kind') == TRUE_KIND or (record.get('kind') == 'true' and bool(record.get('fallback')))   # the opponent waits: true
+    if (record.get('problem') is not None or record.get('error') is not None or not played or type(worlds) is not int or worlds < 1
+            or record.get('built') != worlds):
+        return None, 'true_worlds_failed'
+    return None, None
 
 
 def root_prior(d):
@@ -224,13 +245,18 @@ def build(rows, run, manifest=None):
     stats = {name: dict(rows=0, decided=0, undecided=collections.Counter(), guard_tripped=collections.Counter()) for name in rungs}
     parity = dict(compared=0, action_disagreements=0, q_disagreements=0, recompute_failed=collections.Counter(), examples=[])
     for raw in rows:
-        count += 1;key, problem = identity(raw, kind, manifest)
-        if key is None:mismatches[problem] += 1;continue
+        count += 1;key, problem = identity(raw, kind, manifest);truth = None
+        if key is not None:problem, truth = true_worlds_check(raw, run)
+        if problem is not None:mismatches[problem] += 1;continue
         index = tuple(key[f] for f in KEY_FIELDS[kind])
         if index in seen:raise ValueError(f'two rows for root {index}')
         seen.add(index)
         if kind == 'self':statuses[str(manifest[raw['ordinal']].get('status'))] += 1
         d, chosen, recomputed = choose(raw, run)
+        if truth is not None:   # a true-world root whose worlds were not all built: no rung decides it
+            truth += f":{d['refusal_cause']}" if d['refusal_cause'] else ''
+            chosen = {name: dict({k: v for k, v in row.items() if k not in ('reason', 'guard_reason')}, action=None, guard_tripped=False,
+                                 reason=truth) for name, row in chosen.items()}
         for name, row in chosen.items():
             out[name].append(dict(key, **row));s = stats[name];s['rows'] += 1
             if row['action'] is None:s['undecided'][row['reason']] += 1

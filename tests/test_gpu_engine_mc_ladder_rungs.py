@@ -15,7 +15,9 @@ LEGAL = [a in (0, 1) for a in range(9)]
 LOGITS = [1., 0.] + [0.] * 7            # greedy: action 0
 UNIFORM = [0.] * 9                      # the champion's reply logits: 1/2 on each kept reply
 REPLY = [math.log(3.), 0.] + [0.] * 7   # the reply model: 3/4 on reply 0, 1/4 on reply 1
+REVERSED = [0., math.log(3.)] + [0.] * 7   # 1/4 on reply 0, 3/4 on reply 1
 KEPT = [b in (0, 1) for b in range(9)]
+TRUE = dict(requested_kind='true_private', kind='true_private', fallback=None, problem=None, error=None, sample_calls=1, worlds=3, built=3)
 MOVES = ['tackle', 'surf', 'rest', 'icebeam']
 CLEAR = dict(tripped=False, b=False, c=False, own_guarded_lanes=[None] * 4)
 # {own action: (value vs reply 0, value vs reply 1)} per world. Action 0 is worth 0 everywhere, so Q(1) decides.
@@ -116,15 +118,40 @@ class RungChoiceTests(unittest.TestCase):
     def test_true_world_runs_r1_averages_every_world_and_r2_reads_world_0(self):
         split = [{0: (0., 0.), 1: (-.4, -.4)}, {0: (0., 0.), 1: (.4, .4)}, {0: (0., 0.), 1: (.4, .4)}]   # world 0 alone disagrees
         for run, reply in (('A', True), ('B', False)):
-            raw = row(depth1=split, reply=reply);got = one(raw, run)
+            raw = row(depth1=split, reply=reply, true_worlds=TRUE);got = one(raw, run)
             self.assertEqual({n: r['action'] for n, r in got.items()}, dict(R1=1, R2=0), run)
             self.assertEqual(got['R1']['kind'], M.RUNS[run][0])
             d = M.rr.normalize(raw)
             _, qw, q = M.averaged(raw, d, 1, reply, 1);self.assertEqual(len(qw), 1);self.assertAlmostEqual(q[1], -.4, places=12)
             _, qw, q = M.averaged(raw, d, 1, reply);self.assertEqual(len(qw), 3);self.assertAlmostEqual(q[1], .4 / 3, places=12)
-        got = one(row(), 'A')   # D1 with the reply model: R1 is run C's R3; world 0's gap is .15
+        got = one(row(true_worlds=TRUE), 'A')   # D1 with the reply model: R1 is run C's R3; world 0's gap is .15
         self.assertEqual((got['R1']['action'], got['R2']['action']), (one(row(), 'C')['R3']['action'], 1))
-        out, summary = M.build([row()], 'A');self.assertEqual(sorted(out), ['R1', 'R2']);self.assertIsNone(summary.get('r5_vs_replay'))
+        out, summary = M.build([row(true_worlds=TRUE)], 'A');self.assertEqual(sorted(out), ['R1', 'R2']);self.assertIsNone(summary.get('r5_vs_replay'))
+
+    def test_r2_prices_world_0_with_its_own_reply_logits(self):
+        for mine, others, action, gap in ((REPLY, REVERSED, 1, .15), (REVERSED, REPLY, 0, -.35)):   # world 0: .75 * .4 - .25 * .6 or .25 * .4 - .75 * .6
+            raw = row(true_worlds=TRUE)
+            for w, world in enumerate(raw['worlds']):world['reply_peer_logits'] = mine if w == 0 else others
+            self.assertEqual(one(raw, 'A')['R2']['action'], action)
+            _, _, q = M.averaged(raw, M.rr.normalize(raw), 1, True, 1);self.assertAlmostEqual(q[1], gap, places=12)
+
+    def test_runs_take_only_their_own_kind_of_replay(self):
+        for raw, run, reason in ((row(), 'A', 'not_true_worlds'), (row(true_worlds=dict(TRUE, requested_kind='true')), 'A', 'not_true_worlds'),
+                                 (row(true_worlds=TRUE), 'C', 'true_worlds_row'), (row(true_worlds=TRUE), 'D', 'true_worlds_row')):
+            out, summary = M.build([raw], run)
+            self.assertEqual(summary['identity_mismatches'], {reason: 1}, (run, reason));self.assertTrue(all(not rows for rows in out.values()))
+
+    def test_a_true_world_root_decides_only_when_every_world_was_built(self):
+        waits = dict(TRUE, kind='true', fallback='the opponent waits at the root: no request to overlay')
+        self.assertEqual({n: r['action'] for n, r in one(row(true_worlds=waits), 'A').items()}, dict(R1=1, R2=1))
+        for record, reason in ((dict(TRUE, built=2), 'true_worlds_failed'), (dict(TRUE, problem='the sidecar has no root 3'), 'true_worlds_failed'),
+                               (dict(TRUE, error='boom'), 'true_worlds_failed'), (dict(TRUE, kind='true'), 'true_worlds_failed'),
+                               (dict(TRUE, worlds=0, built=0), 'true_worlds_failed'), (dict(TRUE, sample_calls=0), 'true_worlds_not_sampled')):
+            got = one(row(true_worlds=record), 'B')
+            for r in got.values():
+                self.assertEqual((r['action'], r['reason'], r['guard_tripped']), (None, reason, False), record);self.assertNotIn('guard_reason', r)
+        got = one(row(true_worlds=dict(TRUE, sample_calls=0), status='REFUSED', decided=False, cause='depthn_refused'), 'A')
+        self.assertEqual(got['R1']['reason'], 'true_worlds_not_sampled:depthn_refused')
 
     def test_a_waiting_world_needs_no_reply_logits(self):
         depth1 = D1[:2] + [{0: (0.,), 1: (.1,)}]   # world 2 waits: column 0 at mass 1
