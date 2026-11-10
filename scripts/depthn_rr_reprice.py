@@ -106,6 +106,11 @@ tree guard) on the live inputs.
   status) with an owner capture, stratified equally over (cell.seed % 2, cell.seat) (a remainder goes to the first strata in
   STRATA order), each stratum ranked by sha256 of (SAMPLE_DOMAIN, S, ordinal). --shard I --shards N keeps every N-th selected
   cell in ordinal order from the I-th. --max-decisions stops after that many sent decisions (smoke tests).
+  --targets FILE (JSONL {ordinal, decision_index}, optionally kind, seed, ours) instead names decisions of cells of any arm:
+  results/<ordinal>.json is read when it exists, else the cell's seed and seat come from its capture's registration; only the
+  target decisions are sent, every other one is skipped before sent() and counted (summary targets: requested, found, missing,
+  single_legal, non_target_skipped). Sending a later decision alone is the live path's own: with no session, the constructor
+  folds the battle's whole prefix from a fresh adapter, and world seeds do not depend on earlier calls.
 - Output (--out, a new directory): rows-<shard>.jsonl (one row per sent decision, whatever its status, written and fsynced as
   it goes), header-<shard>.json (tree guard, run header and identity check, warmup report, argv, cells, peer_inputs: the
   sidecar's path and schema, recharge_moves) and
@@ -167,6 +172,9 @@ def parser():
     pick = p.add_mutually_exclusive_group(required=True)
     pick.add_argument('--cells', type=int, nargs='+', metavar='ORD', help='these cell ordinals')
     pick.add_argument('--sample', type=int, metavar='N', help='N of the arm\'s COMPLETE cells, stratified equally over (seed %% 2, seat)')
+    pick.add_argument('--targets', metavar='FILE', help='JSONL of {ordinal, decision_index} (optionally kind, seed, ours): replay only these '
+        'decisions of these cells, of any arm; results/ is optional (seed and seat from the capture); every other decision is skipped '
+        'before it is sent and counted, never priced')
     p.add_argument('--sample-seed', type=int, help='the sample\'s seed (required with --sample)')
     p.add_argument('--shard', type=int, default=0);p.add_argument('--shards', type=int, default=1)
     p.add_argument('--max-decisions', type=int, help='stop after this many sent decisions (smoke tests)')
@@ -311,10 +319,40 @@ def shard_cells(cells, shard, shards):
     return sorted(cells, key=lambda c: c['ordinal'])[shard::shards]
 
 
+def read_targets(path):
+    """{ordinal: sorted decision indices} from a --targets JSONL; a malformed or duplicated row is an error."""
+    out = collections.defaultdict(set)
+    for number, raw in enumerate(Path(path).read_bytes().splitlines(), 1):
+        if not raw.strip():continue
+        row = json.loads(raw);ordinal, index = row.get('ordinal'), row.get('decision_index')
+        if type(ordinal) is not int or ordinal < 0 or type(index) is not int or index < 0:
+            raise ValueError(f'{path}:{number}: integer ordinal and decision_index (>= 0) required')
+        if index in out[ordinal]:raise ValueError(f'{path}:{number}: target ({ordinal}, {index}) repeated')
+        out[ordinal].add(index)
+    if not out:raise ValueError(f'{path}: no targets')
+    return {o: sorted(v) for o, v in sorted(out.items())}
+
+
+def target_cell(run, ordinal, targets):
+    """A --targets cell: results/<ordinal>.json's cell when it exists (any arm), else the capture's own registration (owner -> seat,
+    seed); with its target decision indices."""
+    if (Path(run) / 'results' / f'{ordinal}.json').exists():cell = cell_of(run, ordinal)
+    else:
+        first = next(iter(owning.read_capture(Path(run) / 'owning-wire' / f'{ordinal}.jsonl')), None)
+        if first is None:raise ValueError(f'cell {ordinal}: its capture has no decision')
+        cell = dict(ordinal=ordinal, arm=None, seed=first['seed'], seat={'p1': 0, 'p2': 1}[first['owner']], pair_ordinal=None, status=None)
+    return dict(cell, targets=list(targets))
+
+
 def select_cells(args):
     """The cells this shard replays (module docstring): --cells must be the arm's; --sample draws from the arm's COMPLETE
-    cells with an owner capture."""
+    cells with an owner capture; --targets names cells of any arm and the decisions to replay in each."""
     run = Path(args.run_directory)
+    missing = lambda ordinals: [o for o in ordinals if not (run / 'owning-wire' / f'{o}.jsonl').exists()]
+    if getattr(args, 'targets', None):
+        targets = read_targets(args.targets)
+        if missing(targets):raise ValueError(f'cells {missing(targets)} have no owner capture')
+        return shard_cells([target_cell(run, o, t) for o, t in targets.items()], args.shard, args.shards)
     if args.cells:
         cells = [cell_of(run, o) for o in dict.fromkeys(args.cells)]
         odd = [c['ordinal'] for c in cells if c['arm'] != args.arm]
@@ -322,9 +360,13 @@ def select_cells(args):
     else:
         pool = [c for c in arm_cells(run, args.arm) if c['status'] == 'COMPLETE' and (run / 'owning-wire' / f'{c["ordinal"]}.jsonl').exists()]
         cells = sample_cells(pool, args.sample, args.sample_seed)
-    missing = [c['ordinal'] for c in cells if not (run / 'owning-wire' / f'{c["ordinal"]}.jsonl').exists()]
-    if missing:raise ValueError(f'cells {missing} have no owner capture')
+    if missing(c['ordinal'] for c in cells):raise ValueError(f'cells {missing(c["ordinal"] for c in cells)} have no owner capture')
     return shard_cells(cells, args.shard, args.shards)
+
+
+def is_target(cell, decision_index):
+    """Whether a captured decision is replayed: every decision of a --cells/--sample cell; only its targets for a --targets cell."""
+    return 'targets' not in cell or decision_index in cell['targets']
 
 
 def sent(request):
@@ -741,9 +783,11 @@ def main(argv=None):
         peer_inputs=dict(path=sidecar['path'], schema=PEER_INPUTS_SCHEMA), recharge_moves=sorted(actor.RECHARGE_MOVES),
         warmup_requests=len(saved), build_seconds=build_seconds, warmup_seconds=warmup_seconds, cells=cells, run_directory=str(run),
         arm=args.arm, shard=shard, shards=args.shards, max_decisions=args.max_decisions, sample=args.sample, sample_seed=args.sample_seed,
+        targets=None if not args.targets else dict(file=str(args.targets), sha256=hashlib.sha256(Path(args.targets).read_bytes()).hexdigest()),
         jax_version=jax.__version__, devices=[f'{d.platform}:{d.device_kind}' for d in jax.devices()], python=sys.version,
         environment={k: os.environ.get(k) for k in ENVIRONMENT}, pid=os.getpid(), **({'replay_against': MODIFIED_TREE} if guard.get('modified_tree') else {})))
     rows, skipped, skip_disagreements, cell_errors, done, finished = [], 0, [], [], False, False
+    non_target, targets_seen, target_single_legal = 0, collections.defaultdict(set), []   # --targets accounting
     started = time.perf_counter()
     try:
         with (out / f'rows-{shard}.jsonl').open('x') as stream:
@@ -756,8 +800,11 @@ def main(argv=None):
                 except (ValueError, KeyError, TypeError, OSError) as error:
                     cell_errors.append(dict(ordinal=ordinal, error=f'{type(error).__name__}: {error}'));continue
                 for row in captured:
+                    if not is_target(cell, row['decision_index']):non_target += 1;continue   # never sent: the constructor folds the prefix itself
+                    if 'targets' in cell:targets_seen[ordinal].add(row['decision_index'])
                     request = {k: row[k] for k in bench.KEYS};found = live_fields(telemetry.get(row['decision_index']))
                     if not sent(request):
+                        if 'targets' in cell:target_single_legal.append(dict(ordinal=ordinal, decision_index=row['decision_index']))
                         skipped += 1
                         if found is not None and found['request_kind'] != 'forced':skip_disagreements.append(dict(ordinal=ordinal, decision_index=row['decision_index'],
                             live_request_kind=found['request_kind'], sent=False))
@@ -787,6 +834,9 @@ def main(argv=None):
     finally:
         write_json(out / f'summary-{shard}.json', summarize(rows, shard=shard, shards=args.shards, cells=cells, extra=dict(
             skipped_single_legal=skipped, skip_disagreements=skip_disagreements, cell_errors=cell_errors, max_decisions_reached=done,
+            **(dict(targets=dict(file=args.targets, requested=sum(len(c['targets']) for c in cells), found=sum(map(len, targets_seen.values())),
+                missing=[dict(ordinal=c['ordinal'], decision_index=i) for c in cells for i in c['targets'] if i not in targets_seen[c['ordinal']]],
+                single_legal=target_single_legal, non_target_skipped=non_target)) if args.targets else {}),
             interrupted=not finished, timings=dict(build_seconds=build_seconds, warmup_seconds=warmup_seconds,
             replay_seconds=time.perf_counter() - started))))
         peer_inputs.write(out / sidecar['path'], sidecar)

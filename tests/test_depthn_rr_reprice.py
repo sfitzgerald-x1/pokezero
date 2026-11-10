@@ -434,6 +434,33 @@ class CellTests(unittest.TestCase):
             with self.assertRaises(ValueError):R.select_cells(self.args(root, cells=[5]))   # no capture
             with self.assertRaises(OSError):R.select_cells(self.args(root, cells=[1]))   # no result
 
+    def test_targets_name_cells_of_any_arm_and_only_their_decisions(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self.run_directory(tmp)
+            write_capture(root / 'owning-wire' / '500.jsonl', [False, False, True])   # a self root: no results/ file
+            path = Path(tmp) / 'targets.jsonl'
+            write = lambda rows: path.write_text(''.join(json.dumps(r) + '\n' for r in rows))
+            write([dict(ordinal=3, decision_index=4), dict(ordinal=500, decision_index=1), dict(ordinal=3, decision_index=2, kind='foulplay'),
+                   dict(ordinal=500, decision_index=0, kind='self', seed=7, ours='p2')])
+            cells = R.select_cells(self.args(root, targets=str(path)))
+            self.assertEqual([(c['ordinal'], c['targets']) for c in cells], [(3, [2, 4]), (500, [0, 1])])
+            self.assertEqual(cells[0]['arm'], 'RAW')   # any arm: the RAW cell's result is read, never checked against --arm
+            self.assertEqual((cells[1]['arm'], cells[1]['seed'], cells[1]['seat']), (None, 7, 0))   # the capture's own registration
+            self.assertEqual([c['ordinal'] for c in R.select_cells(self.args(root, targets=str(path), shard=1, shards=2))], [500])
+            self.assertTrue(R.is_target(cells[0], 4));self.assertFalse(R.is_target(cells[0], 3));self.assertTrue(R.is_target(dict(ordinal=3), 3))
+            write([dict(ordinal=3, decision_index=4), dict(ordinal=3, decision_index=4)])
+            with self.assertRaisesRegex(ValueError, 'repeated'):R.select_cells(self.args(root, targets=str(path)))
+            write([dict(ordinal=5, decision_index=0)])
+            with self.assertRaisesRegex(ValueError, 'no owner capture'):R.select_cells(self.args(root, targets=str(path)))
+            write([dict(ordinal=3, decision_index=-1)])
+            with self.assertRaises(ValueError):R.select_cells(self.args(root, targets=str(path)))
+            write([])
+            with self.assertRaisesRegex(ValueError, 'no targets'):R.select_cells(self.args(root, targets=str(path)))
+
+    def test_targets_option_is_a_third_cell_source(self):
+        groups = [{a.dest for a in g._group_actions} for g in R.parser()._mutually_exclusive_groups]
+        self.assertIn({'cells', 'sample', 'targets'}, groups)   # exactly one of --cells, --sample, --targets
+
     def test_sample_rank_is_a_fixed_hash(self):
         self.assertEqual(R.sample_rank(1, 2), hashlib.sha256(json.dumps([R.SAMPLE_DOMAIN, 1, 2], separators=(',', ':')).encode()).hexdigest())
 
