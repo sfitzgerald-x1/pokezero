@@ -175,6 +175,20 @@ class RolloutMachineryTests(unittest.TestCase):
         waiting = dict(root, opp_policy=None)
         self.assertEqual(L.depth1_baseline(FakeEnv(strict=False), dict(t=0, hist=[]), waiting, dict(ours=m, opp=m), draws=1)['replies'], [None])
 
+    def test_post_turn_values_the_state_right_after_the_joint_turn(self):
+        class WaitEnv(FakeEnv):   # after the joint turn only p2 is requested (a forced switch): R0 plays it, R0' does not
+            def requested_players(self):return () if self.terminal() else ('p2',) if self.t == 1 else ('p1', 'p2')
+
+            def step(self, actions):return super().step(dict(actions, p1=actions.get('p1', 5)))   # p1's wait appends 5
+        m = FakeModel();root = self.root(2);run = lambda env, **kw: L.depth1_baseline(env, dict(t=0, hist=[]), root, dict(ours=m, opp=m), draws=2, **kw)
+        r0, r0p = run(WaitEnv(strict=False)), run(WaitEnv(strict=False), post_turn=True)
+        self.assertEqual([round(q, 9) for q in r0['completed_q']], [.5, .6, .7])   # V at our next decision: (a + 5) / 10
+        self.assertEqual([round(q, 9) for q in r0p['completed_q']], [0., .1, .2])   # V right after the joint turn: a / 10
+        self.assertEqual(r0p['replies'], r0['replies'])
+        plain, post = run(FakeEnv(length=1, strict=False)), run(FakeEnv(length=1, strict=False), post_turn=True)
+        self.assertEqual(post['child_values'], plain['child_values'])   # a terminal child keeps its outcome, on the same draw seeds
+        self.assertTrue(all(abs(v) == 1 for vs in post['child_values'].values() for v in vs))
+
 
 class ReplayEnv:
     """Both seats requested every round with request 'req-<round>'; ends after 6 rounds."""
