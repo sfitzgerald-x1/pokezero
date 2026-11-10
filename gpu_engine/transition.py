@@ -1019,6 +1019,25 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
             burned=_active(work.status, work, side) == m.BRN,
             guts=guts,
             effectiveness_num=num, effectiveness_den=den, immune=immune, roll=85 + _effect[:, 1])
+        # The same second hit after a Color Change on hit 1 (gen4 colorchange onDamagingHit, per hit): the target
+        # is then the move's type alone, so hit 2's effectiveness is the move's type against [type, none].
+        _num_cc=table.type_num[typ,typ]*table.type_num[typ,jnp.zeros_like(typ)]
+        _den_cc=table.type_den[typ,typ]*table.type_den[typ,jnp.zeros_like(typ)]
+        damage2_cc=m.gen3_damage(level=_active(work.level, work, side), power=power,
+            attack=jnp.where(physical, attack_stats[:, 1], attack_stats[:, 3]),
+            defense=jnp.where(physical, defense_stats[:, 2], defense_stats[:, 4]),
+            attack_stage=jnp.where(physical, attack_boosts[:, 0], attack_boosts[:, 2]),
+            defense_stage=jnp.where(physical, defense_boosts[:, 1], defense_boosts[:, 3]),
+            physical=physical, critical=critical2,halve_defense=explodes & physical,hustle=hustle,
+            attack_num=attack_num,attack_den=attack_den,
+            defense_num=defense_num,defense_den=defense_den,
+            weather_num=weather_num,weather_den=weather_den,
+            phase1_num=phase1_num,phase1_den=phase1_den,
+            stab=jnp.any(own_types == typ[:, None], axis=1) & (typ != 0),
+            typeless=typ == 0,
+            burned=_active(work.status, work, side) == m.BRN,
+            guts=guts,
+            effectiveness_num=_num_cc, effectiveness_den=_den_cc, immune=immune, roll=85 + _effect[:, 1])
         # Gen3's Hustle accuracy handler checks TYPE, including Status moves.
         # Hidden Power's actor-owned type has already been resolved above.
         hustle_accuracy = (hustle & table.combat.physical_type[typ]
@@ -1197,10 +1216,19 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
             # Pokemon (gen4's substitutebroken volatile has no handler). Counter/Mirror Coat's onDamage records
             # every hit that reaches the Pokemon, so the last one wins; Endure's 0 at 1 HP stops the Damage event
             # before it (runEvent breaks on a falsy relay), keeping the earlier record. B2 sees one -damage line per
-            # hit and a -hitcount (no tracker reads it). Downstream (Focus Punch, Color Change, the faint
-            # cancellation) reads the final hit, which reaches the Pokemon exactly when either hit did.
+            # hit and a -hitcount (no tracker reads it). Downstream (Focus Punch, the end-of-move Color Change for a
+            # hit 2 that is the first to reach the Pokemon, the faint cancellation) reads the final hit, which reaches
+            # the Pokemon exactly when either hit did.
             _second=(acts & hit & ~immune & (table.damage_moves.hits[move]>1)
                 & (_active(work.hp,work,foe)>0) & (_active(work.hp,work,side)>0))
+            # DamagingHit runs after each hit (sim/battle-actions.ts spreadMoveHit): Color Change retypes a target
+            # that hit 1 damaged and left standing, before hit 2's getDamage reads the type (Kecleon after Rock Slide:
+            # Ground hit 1 is 2x, hit 2 against the new Ground type 1x). A later end-of-move call then finds it done.
+            if table.secondary is not None:
+                _types1=_active(work.types,work,foe)
+                work=secondaries.apply_color_change(work,side,typ,table.secondary,
+                    eligible=_second & ~hits_sub & (dealt>0),_device_public=_device_public)
+                damage2=jnp.where(jnp.any(_active(work.types,work,foe)!=_types1,axis=1),damage2_cc,damage2)
             _hp1=_active(work.hp,work,foe);_sub1=_active(work.substitute_hp,work,foe)
             _sub2=(_sub1>0) & ~bypass_sub
             _capacity2=jnp.where(_sub2,_sub1,jnp.where(enduring[rows,foe],jnp.maximum(0,_hp1-1),_hp1))
