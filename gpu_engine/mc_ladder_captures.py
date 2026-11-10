@@ -75,6 +75,9 @@ PRECISION = 1e-6     # B2 numeric features are float32, env.observe's float64
 # Damage features sum a turn's damage events, each read off the wire as a difference of two public percents (ceil, and 99 for a
 # damaged Pokemon that would show 100): each event is off by less than 0.02, and the sum is a whole number of percent.
 EVENT_ERROR, MAX_EVENTS = 0.02, 3
+# OPP_HAZARD_CREDIT is min(1, the battle's cumulative Spikes losses / team size) (showdown.field_credit_values): the losses are a
+# sum of public-percent readings (a whole percent), one per Spikes hit so far, each off by less than EVENT_ERROR.
+TEAM_SIZE, MAX_SPIKES_HITS = 6, 12
 
 
 def public_percent(x):
@@ -98,7 +101,9 @@ def known_difference(token, feature, b2, env_value):
     summed = whole_percent(b2) and d < MAX_EVENTS * EVENT_ERROR   # a sum of public-percent readings, within its rounding
     if token in OPP_TOKENS and feature == LAST_DAMAGE_TAKEN and summed:return 'opponent_damage_public_percent'
     if token in SELF_TOKENS and feature == LAST_DAMAGE_DEALT and summed:return 'damage_dealt_public_percent'
-    if token == FIELD_TOKEN and feature == OPP_HAZARD_CREDIT and summed:return 'opponent_hazard_public_percent'
+    if token == FIELD_TOKEN and feature == OPP_HAZARD_CREDIT and b2 < 1 and whole_percent(TEAM_SIZE * b2) \
+            and TEAM_SIZE * d < MAX_SPIKES_HITS * EVENT_ERROR:
+        return 'opponent_hazard_public_percent'
     return None
 
 
