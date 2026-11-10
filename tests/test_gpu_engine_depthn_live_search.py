@@ -590,14 +590,18 @@ class ReplyPriorTests(unittest.TestCase):
         from gpu_engine.depthn_reply_prior import ReplyPrior
         reqs = [request(f'r{i}', 0, stream=30 + i) for i in range(3)]
         plain, _ = self.run_batch(self.search(), reqs, self.outcomes(3))
-        rows, _ = self.run_batch(self.search(reply=ReplyPrior(self.executor, self.evaluator, PARAMS[0])), reqs, self.outcomes(3))
+        served = dict(archive_sha256='d' * 64, checkpoint_sha256='7' * 64, view='b')   # the served archive: echoed for the proxy's and panel's pin
+        rows, _ = self.run_batch(self.search(reply=ReplyPrior(self.executor, self.evaluator, PARAMS[0], identity=served)), reqs, self.outcomes(3))
         self.assertTrue(any(r['status'] == 'COMPLETE' for r in rows))
+        for bad in ({}, dict(served, extra=1), 'd' * 64):
+            with self.assertRaises(ValueError):ReplyPrior(self.executor, self.evaluator, PARAMS[0], identity=bad)
         for a, b in zip(plain, rows):
             encode(b);self.assertEqual(set(b), KEYS | {'reply_prior'});self.assertNotIn('reply_prior', a)
             self.assertEqual((b['status'], b['action_index'], b['q_values']), (a['status'], a['action_index'], a['q_values']))
             if b['status'] == 'COMPLETE':
                 self.assertEqual((b['reply_prior']['operator'], b['reply_prior']['champion_action_index'], b['reply_prior']['champion_q_values']),
                                  ('br_fp', a['action_index'], a['q_values']))
+                self.assertEqual({k: b['reply_prior'][f'reply_{k}'] for k in served}, served)
                 # the union guard: the reply model is the champion, so both arms agree and the record is the plain search's
                 union = b['effect_guard']['union'];self.assertEqual(union['champion'], union['reply'])
                 self.assertEqual({k: v for k, v in b['effect_guard'].items() if k not in ('union', 'union_only')}, a['effect_guard'])
