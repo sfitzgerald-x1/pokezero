@@ -407,6 +407,7 @@ class TwoPassTests(unittest.TestCase):
         # A2 review L1/L2: phase shifts are counted and flagged per lane; link leaves use the base arrays.
         self.assertEqual(report['link_rule'], 'per-mon');self.assertIn('state.last_move', self.manifest['ko_leaves'])
         self.assertEqual(report['counts']['phase_shift'], sum(x['phase_shift'] for x in listing))
+        self.assertEqual(report['counts']['terminal'], sum(x['terminal'] for x in listing))
         self.assertEqual(set(report['by_effect']['curse']['ko_cascade_non_hp_fields']), {'state.status@user'})
         code, report, listing = self.patched('cascade-plant', lambda s, a, t: curse_ko(s, a, t, plant=True))
         self.assertEqual(code, 1);self.assertGreater(report['counts']['changed_involved_unexpected_fields'], 0)

@@ -481,6 +481,13 @@ class RegressPluginTests(unittest.TestCase):
         self.assertEqual(lane_verdict({('state.volatile', 0), ('trackers.public_volatiles', 0)}, {'destinybond': [0]}, None)[0], [])
         self.assertEqual(lane_verdict({('state.volatile', 1)}, {'destinybond': [0]}, None)[0], [('state.volatile', 1)])
         self.assertEqual(lane_verdict({('state.types', 1), ('trackers.shown_ability', 1)}, {'counter': [0]}, None)[0], [])
+        # Counter/Mirror Coat now break a target's Substitute (device presence and bag) and can decide whether its
+        # side's pending Wish lands with a heal line.
+        sub = {("trackers.mon_features['sub_present']", 1), ('trackers.public_volatiles', 1), ('state.substitute_hp', 1),
+               ("trackers.field_features['wish_pending']", 1), ("trackers.field_features['wish_turns']", 1)}
+        for effect in ('counter', 'mirrorcoat'):
+            self.assertEqual(lane_verdict(sub, {effect: [0]}, None)[0], [])
+            self.assertEqual(lane_verdict({('trackers.public_volatiles', 0)}, {effect: [0]}, None)[0], [('trackers.public_volatiles', 0)])
         self.assertEqual(lane_verdict({('state.hp', 0), ('trackers.shown_ability', 1)}, {'gigadrain': [0]}, None)[0], [])
         # L3: a cure's port allowance is the sleep-clause entries only.
         self.assertEqual(lane_verdict({('trackers.public_port.holder', 1), ('trackers.public_port.victims', 0)},

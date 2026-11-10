@@ -23,11 +23,13 @@ every changed lane-step is attributed through the per-PR plug-in table:
   cancelled or cleared last_move (an active's or a fainted mon's) and a released
   trap link (a fainted or active mon's, or one pointing at such a foe), each
   checked per mon against stored base arrays, and the trackers of its side. A
-  lane whose residual was deferred in exactly one tree (a KO moved between the
-  action and residual phases: a phase shift, counted and flagged per lane) is a
-  cascade on both sides that also accepts the residual handlers' state writes
-  and the tracker families they and the end-of-turn hooks write (not every
-  tracker). Anything else stays unexpected.
+  lane whose residual ran in exactly one tree is a cascade on both sides that
+  also accepts the residual handlers' state writes and the tracker families they
+  and the end-of-turn hooks write (not every tracker): a phase shift (the
+  residual was deferred in exactly one tree: a KO moved between the action and
+  residual phases) or a terminal step (the battle ended in either tree, so an
+  action-phase KO may have skipped the residual the other tree ran); both are
+  counted and flagged per lane. Anything else stays unexpected.
 
 Report: unchanged, changed-and-involved per effect with its changed fields,
 changed-but-uninvolved and changed-involved-unexpected-fields (both must be
@@ -441,6 +443,10 @@ FAMILIES = {
     'bond': (r'^state\.volatile$', r'^trackers\.public_volatiles$'),
     'typechange': (r'^state\.types$', r'^trackers\.shown_types$'),
     'blocked': (r'^trackers\.public_port\.blocked$',),
+    # A2: the device's Substitute presence (feature and bag bit) when a hit now breaks one; a pending
+    # Wish lands with a heal line, or at full HP stays pending, by the recipient's HP.
+    'subtracker': (r"^trackers\.mon_features\['sub_present'\]$", r'^trackers\.public_volatiles$'),
+    'wish': (r"^trackers\.field_features\['wish_(pending|set_turn|turns)'\]$",),
     'all': (r'.*',),
 }
 ALL = dict(user=('all',), target=('all',), glob=('all',))
@@ -502,18 +508,18 @@ ALLOWED = {
     # without its item the target loses Leftovers (HP), pinch berries (stages), Lum (a status a contact
     # ability gives it later stays, with the clause port) and Choice Band (less damage to the user, whose
     # own HP-gated items follow).
-    'knockoff': dict(user=('hp', 'item', 'boosts', 'clause'),
+    'knockoff': dict(user=('hp', 'item', 'boosts', 'clause', 'wish'),
                      target=('item', 'knock', 'choice', 'hp', 'boosts', 'status', 'clause', 'visible', 'reveal'), glob=()),
     # Giga Drain: the drainer's HP (heal, or Liquid Ooze damage) and its HP-gated items; the Ooze
     # holder's reveal; a later Leech Seed drain from the drainer reads its HP (the target's HP).
-    'gigadrain': dict(user=('hp', 'item', 'boosts', 'visible'), target=('hp', 'reveal'), glob=()),
+    'gigadrain': dict(user=('hp', 'item', 'boosts', 'visible', 'wish'), target=('hp', 'reveal'), glob=()),
     # Counter/Mirror Coat: the damage and its consequences on the target (HP-gated items, Color Change,
     # contact-ability reveals); contact abilities hurt or status the Counter user (Lum, clause port);
     # a failed attempt no longer reaches the foe's Protect count.
     'counter': dict(user=('hp', 'status', 'item', 'boosts', 'clause', 'visible', 'blocked'),
-                    target=('hp', 'item', 'boosts', 'typechange', 'reveal', 'clause', 'visible'), glob=()),
+                    target=('hp', 'item', 'boosts', 'typechange', 'reveal', 'clause', 'visible', 'subtracker', 'wish'), glob=()),
     'mirrorcoat': dict(user=('hp', 'item', 'boosts', 'blocked'),
-                       target=('hp', 'item', 'boosts', 'typechange', 'reveal', 'visible'), glob=()),
+                       target=('hp', 'item', 'boosts', 'typechange', 'reveal', 'visible', 'subtracker', 'wish'), glob=()),
     # Destiny Bond: the user's bit and bag; its trigger faints the foe (KO cascade rules for the rest).
     'destinybond': dict(user=('bond',), target=('hp',), glob=()),
     'destinybond_trigger': dict(user=('bond', 'hp'), target=('hp',), glob=()),
@@ -713,7 +719,7 @@ class Stepper:
             return dict(digests=digests, pre_digests=pre, fainted=(state.hp > 0) & (out.step.state.hp <= 0),
                 extra={n: named_out[n] for n in faint_leaves if n in named_out}, calls=calls,
                 ko={n: named_out[n] for n in KO_MON_LEAVES + KO_LINK_LEAVES if n in named_out},
-                post_active=out.step.state.active,
+                post_active=out.step.state.active, post_done=out.step.state.done,
                 physical_to_public=out.trackers.physical_to_public, active_slot=out.trackers.active_slot,
                 public_order=named_out.get(PUBLIC_ORDER))
         self._jit = jax.jit(traced);self._names = names
@@ -890,9 +896,10 @@ def patched_pass(args, *, step_override=None, prepared=None):
     callable_moves = np.asarray(tables.engine_tables.sleep_talk.callable)
     destiny_bond = getattr(state_module, 'DESTINY_BOND', DEFAULT_DESTINY_BOND)
     counts = dict(lane_steps=0, done_skipped=0, unchanged=0, changed_and_involved=0, changed_but_uninvolved=0,
-                  changed_involved_unexpected_fields=0, ko_cascade=0, phase_shift=0, waived=0, rule_explained=0, faint_rule_leaves=0)
+                  changed_involved_unexpected_fields=0, ko_cascade=0, phase_shift=0, terminal=0, waived=0, rule_explained=0,
+                  faint_rule_leaves=0)
     by_effect = {k: dict(changed=0, involved_unchanged=0, changed_fields={}, unexpected_fields={}, ko_cascade=0,
-                         phase_shift=0, ko_cascade_non_hp_fields={}) for k in table}
+                         phase_shift=0, terminal=0, ko_cascade_non_hp_fields={}) for k in table}
     ko_leaves = manifest.get('ko_leaves')
     if ko_leaves is None:raise SystemExit('base pass predates the KO-cascade arrays; re-run the base pass')
     # last_move/trap_source are checked per mon against the base arrays; a base pass without them gets the
@@ -939,6 +946,9 @@ def patched_pass(args, *, step_override=None, prepared=None):
             # A phase shift: the residual was deferred in exactly one tree (see FAMILIES['residual']).
             phase_lanes = diff[:, position['state.pending_residual']].any(-1) if 'state.pending_residual' in position \
                 else np.zeros(real, bool)
+            # A terminal step: the battle ended in either tree (post done here, or done differing from the base).
+            done_diff = diff[:, position['state.done']].any(-1) if 'state.done' in position else np.zeros(real, bool)
+            terminal_lanes = np.asarray(result['post_done'])[:real].astype(bool) | done_diff
             base_ko = {n: base[f'ko_{i:02d}'] for i, n in enumerate(ko_leaves)}
             pre_active = np.asarray(named['state.active'])[:real];post_active = np.asarray(result['post_active'])[:real]
             faint_base = {};faint_set = set()
@@ -967,7 +977,8 @@ def patched_pass(args, *, step_override=None, prepared=None):
                     counts['faint_rule_leaves'] += bool(faint_explained)
                 rule_ok = bool(changed) and not entries
                 changed_rest = sorted({leaf for leaf, _ in entries})
-                phase = bool(phase_lanes[lane]);cascade = bool(cascade_lanes[lane]) or phase;cascade_info = None
+                phase = bool(phase_lanes[lane]);terminal = bool(terminal_lanes[lane]) and not phase
+                cascade = bool(cascade_lanes[lane]) or phase or terminal;cascade_info = None
                 if cascade:
                     ko_mons = ko_mons_all[lane]
                     acting = active_mask(pre_active[lane]) | active_mask(post_active[lane])        # [2,6]
@@ -979,7 +990,7 @@ def patched_pass(args, *, step_override=None, prepared=None):
                         allowed = link_ok(leaf, side, a, b, ko_mons, acting) if leaf in KO_LINK_LEAVES else ko_mons[side]
                         return not (differ & ~allowed).any()
                     cascade_info = dict(ko_sides=ko_mons.any(-1), mon_ok=mon_ok,
-                        families=('residual', 'residual_trackers') if phase else ())
+                        families=('residual', 'residual_trackers') if phase or terminal else ())
                 unexpected, waived, by_ko = lane_verdict(entries, effects, side_axis, cascade=cascade_info, waive=args.waive or ()) \
                     if changed_rest and effects else ([], [], [])
                 kind = classify(changed, bool(effects), rule_ok, unexpected)
@@ -991,9 +1002,11 @@ def patched_pass(args, *, step_override=None, prepared=None):
                 if kind == 'rule':counts['rule_explained'] += 1
                 elif kind in ('involved', 'unexpected'):
                     counts['changed_and_involved' if kind == 'involved' else 'changed_involved_unexpected_fields'] += 1
-                    counts['ko_cascade'] += cascade;counts['phase_shift'] += phase;counts['waived'] += bool(waived)
+                    counts['ko_cascade'] += cascade;counts['phase_shift'] += phase;counts['terminal'] += terminal
+                    counts['waived'] += bool(waived)
                     for e, actors in effects.items():
                         stats = by_effect[e];stats['changed'] += 1;stats['ko_cascade'] += cascade;stats['phase_shift'] += phase
+                        stats['terminal'] += terminal
                         for leaf, side in by_ko:
                             if allowed_leaf(leaf, ('hp',)):continue
                             role = 'glob' if side is None else ('user' if side in actors else 'target')
@@ -1008,6 +1021,7 @@ def patched_pass(args, *, step_override=None, prepared=None):
                     counts['changed_but_uninvolved'] += 1
                     for n in changed_rest:uninvolved_leaves[n] = uninvolved_leaves.get(n, 0) + 1
                 listing.write(json.dumps(dict(shard=path.name, lane=lane, tick=tick, kind=kind, ko_cascade=cascade, phase_shift=phase,
+                    terminal=terminal,
                     involved={k: v for k, v in effects.items()}, leaves=changed, entries=labels, faint_rule=faint_explained,
                     unexpected=[f"{l}@{'glob' if s is None else s}" for l, s in unexpected],
                     ko_consequences=[f"{l}@{'glob' if s is None else s}" for l, s in by_ko],
