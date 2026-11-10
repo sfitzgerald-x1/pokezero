@@ -268,11 +268,51 @@ def replay(env, policy, game, rng, extras=None, views=None):
     """Replay one game; returns (Foul Play rows, our-seat parity hits, our-seat decisions). Raises Mismatch on any check.
     extras (dict(dex, model, torch)) adds per Foul Play row: its action classes and label class, both actives' HP fractions, and
     9375's opponent_action_head logits from our seat's view in the same round (NaN when our seat isn't requested)."""
+    return _replay(env, policy, game, rng, extras=extras, views=views)
+
+
+def _check_our_request(env, game, index):
+    requests = game['our_requests']
+    captured = requests[index] if index < len(requests) else None
+    if captured is None or _request_body(captured) != _request_body(json.dumps(env._latest_requests.get(game['ours']))):
+        raise Mismatch(f'our request differs from the capture at decision {index}')
+
+
+def replay_to_root(env, policy, game, rng, *, decision_index, expected_checkpoint_sha256):
+    """Restore a captured own-seat boundary, preserving replay's prefix checks.
+
+    The checkpoint binding is mandatory. Runtime/simulator identity must also be
+    pinned by the caller's manifest. This validates the prefix and current own
+    request, not the terminal winner or the unplayed suffix. No recorded reply
+    at the target boundary is returned or played. Snapshot and all candidate
+    continuations must stay remote.
+    """
+    if type(decision_index) is not int or decision_index < 0:
+        raise ValueError('nonnegative integer decision_index required')
+    if (type(expected_checkpoint_sha256) is not str
+            or re.fullmatch(r'[0-9a-f]{64}', expected_checkpoint_sha256) is None):
+        raise ValueError('expected checkpoint SHA256 required')
+    if game.get('checkpoint_sha256') != expected_checkpoint_sha256:
+        raise Mismatch('source game checkpoint differs from the expected champion')
+    if decision_index >= len(game['our_actions']):
+        raise Mismatch(f'source has no own decision {decision_index}')
+    return _replay(env, policy, game, rng, stop_at_our_decision=decision_index)
+
+
+def _replay(env, policy, game, rng, extras=None, views=None, *, stop_at_our_decision=None):
     env.reset(seed=game['seed']);policy.reset()
     journal = dict(game['journal']);rows = [];ours = 0;parity = 0;round_ = 0
     while env.terminal() is None:
         requested = env.requested_players()
         if not requested:raise Mismatch('no requested players before terminal')
+        if game['ours'] in requested and ours == stop_at_our_decision:
+            _check_our_request(env, game, ours)
+            if any(key < round_ for key in journal):
+                raise Mismatch('unrequested Foul Play journal entry in replayed prefix')
+            return dict(snapshot=env.snapshot(), observation=env.observe(game['ours']),
+                        player=game['ours'], requested_players=tuple(requested),
+                        decision_index=ours, round_index=round_, prefix_parity_hits=parity,
+                        seed=game['seed'], checkpoint_sha256=game['checkpoint_sha256'])
         actions = {};fp_row = None;our_logits = None
         for player in requested:
             observation = env.observe(player)
@@ -309,15 +349,15 @@ def replay(env, policy, game, rng, extras=None, views=None):
                 actions[player] = action
             else:
                 if ours >= len(game['our_actions']):raise Mismatch(f'our seat requested beyond its {ours} recorded decisions')
-                captured = game['our_requests'][ours]
-                if captured is None or _request_body(captured) != _request_body(json.dumps(env._latest_requests.get(player))):
-                    raise Mismatch(f'our request differs from the capture at decision {ours}')
+                _check_our_request(env, game, ours)
                 parity += decision.action_index == game['our_greedy'][ours]
                 if extras is not None:our_logits = opponent_head_logits(extras['model'], observation, extras['torch'])
                 actions[player] = int(game['our_actions'][ours]);ours += 1
         if extras is not None and fp_row is not None:fp_row['opp_head_logits'] = our_logits if our_logits is not None else [float('nan')] * ACTIONS
         env.step(actions);round_ += 1
         if round_ > MAX_ROUNDS:raise Mismatch('runaway replay')
+    if stop_at_our_decision is not None:
+        raise Mismatch(f'terminal reached before own decision {stop_at_our_decision}')
     if journal:raise Mismatch(f'{len(journal)} journal entries never requested, first round {min(journal)}')
     if ours != len(game['our_actions']):raise Mismatch(f'our seat made {ours} of {len(game["our_actions"])} decisions')
     if game.get('decisions') is not None and game['decisions'] != len(game['our_actions']):
