@@ -192,6 +192,9 @@ process.stdout.write(JSON.stringify(out));'''
     lines.append(switch(side,sp,level,gender,hp,maximum))
    elif kind==24:
     if side==owner:lines.append(f'|-ability|{ident[side]}|Pressure|[silent]')
+   elif kind==life.TURNLOOP_PREFIX:
+    self.assertEqual(w.tolist(),[35,-1,-1,-1,-1,0,0,0,0,0])
+    lines.extend(['|','|t:|1'])
    elif kind==public.MOVE:
     move=self.catalog.dex.move_info(self.metadata['vocabulary']['moves'][int(w[5])]).name
     lines.append(f'|move|{ident[int(w[1])]}|{move}|{ident[side]}')
