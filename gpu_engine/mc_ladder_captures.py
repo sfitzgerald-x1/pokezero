@@ -93,13 +93,15 @@ def whole_percent(x):
 
 
 def decision_context(env, idx, ours):
-    """The log facts the value checks need at one decision: the opponent active's heal or HP-reset runs this turn, the public-
+    """The log facts the value checks need at one decision: the opponent active's heal or HP-reset lines since the second-to-last
+    |turn| (the damage features report the turn that just ended), the public-
     percent Spikes credit of the opponent's losses, the opponent team's names in token order and the omniscient [silent]
     opponent ability lines our wire never carried."""
     from gpu_engine import fp_reply_data as fpd
     opp = 'p2' if ours == 'p1' else 'p1';lines = env.protocol_lines
-    last = max((i for i, line in enumerate(lines) if line.startswith('|turn|')), default=-1)
-    heals = sum(1 for line in lines[last + 1:] if line.startswith(('|-heal|', '|-sethp|')) and line.split('|')[2].startswith(opp + 'a'))
+    turns = [i for i, line in enumerate(lines) if line.startswith('|turn|')]   # at a decision the damage features report the turn
+    since = turns[-2] if len(turns) >= 2 else -1                               # that just ended: the window spans the last two
+    heals = sum(1 for line in lines[since + 1:] if line.startswith(('|-heal|', '|-sethp|')) and line.split('|')[2].startswith(opp + 'a'))
     names = [p.ident.split(': ', 1)[-1] for p in env._state_for_player(ours).opponent_team]
     wire = {line for chunk in env.owner_chunks[idx] for line in chunk}
     silent = [line for line in lines if line.startswith('|-ability|') and line.endswith('|[silent]')
