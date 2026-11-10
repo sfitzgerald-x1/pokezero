@@ -19,6 +19,8 @@ class WhirlwindOwningTests(unittest.TestCase):
   for n in('metadata','catalog','table','producer','rules','helper','runtime','prepared'):setattr(cls,n,getattr(f,n))
   cls.fold=staticmethod(jax.jit(lambda s,f,p:full.project_and_fold(s,f,cls.runtime['public'].device,p,cls.catalog)))
   cls.data=cls.helper.device.whirlwind;cls.move=int(cls.data.move)
+  # Keep the shared runtime closed; compile tables only for this raw-tape check.
+  cls.raw_witness=witness.compile_witness(cls.prepared)
 
  def literal(self,consume=False,**kw):
   b=8;r=j.arange(b);side=r%2;z=j.zeros(b,j.int32);yes=j.ones(b,bool);d=self.data
@@ -41,7 +43,7 @@ class WhirlwindOwningTests(unittest.TestCase):
   return s,t,changed,ko
 
  def test_same_write_mixed_rows_strict_source_lifetime_and_default(self):
-  s,t,p,_=self.literal();after,done,changed,ko=self.run_write(s,t,p);self.assertEqual(changed.tolist(),[True]*8);self.assertFalse(bool(ko.any()));self.assertEqual(cb.owned(done,p.start).tolist(),[True]*8);self.assertEqual(cb.owned(done,p.start+1).tolist(),[True]*8);self.assertTrue(bool(witness._raw_complete(done,self.runtime['frame_witness_compiled'].device).all()))
+  s,t,p,_=self.literal();after,done,changed,ko=self.run_write(s,t,p);self.assertEqual(changed.tolist(),[True]*8);self.assertFalse(bool(ko.any()));self.assertEqual(cb.owned(done,p.start).tolist(),[True]*8);self.assertEqual(cb.owned(done,p.start+1).tolist(),[True]*8);self.assertTrue(bool(witness._raw_complete(done,self.raw_witness.device).all()))
   rec=done.execution.whirlwind[0]
   for name,value in [('caller',p.caller.at[0].add(1)),('roll',p.roll.at[0].set(60)),('hit',p.hit.at[0].set(False)),('source',p.source.at[0,0].add(1)),('stream',p.stream.at[0].add(1)),('generation',p.generation.at[0,0].add(1))]:
    bad=done._replace(execution=done.execution._replace(whirlwind=(rec._replace(pending=p._replace(**{name:value})),)));self.assertEqual(cb.owned(bad,p.start).tolist(),[False]+[True]*7,name)
