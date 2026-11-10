@@ -7,9 +7,12 @@ from types import SimpleNamespace
 import unittest
 import weakref
 BASE='0d51ac06e34af37ad868850456c5209b2b045e29'
+FEATURE='a6c75ad734a024825afbdd3d9f09b867ae405cd7'
+INTEGRATED='b8092a85d9c1f2ed9c0daf4c4bd8e833a94a2380'
 SOURCE=Path('gpu_engine/engine_retained_encoder_driver.py')
 
 def tree():return ast.parse(SOURCE.read_text())
+def tree_at(ref):return ast.parse(subprocess.check_output(['git','show',ref+':'+str(SOURCE)],text=True))
 def function(t,name):return next(n for n in t.body if isinstance(n,ast.FunctionDef)and n.name==name)
 def dump(n):return ast.dump(n,include_attributes=False)
 
@@ -47,7 +50,10 @@ class RequestProofReuseTests(unittest.TestCase):
   self.assertEqual(pair[0](second,None,None,None,True),(second,0));self.assertEqual(calls,[(first,0),(second,0)])
 
  def test_original_outer_guards_callbacks_barriers_session_commit_unchanged(self):
-  current=tree();old=ast.parse(subprocess.check_output(['git','show',BASE+':'+str(SOURCE)],text=True))
+  # The immutable feature-era proof stays separate from the integrated source.
+  live=tree();current=tree_at(FEATURE);old=tree_at(BASE);integrated=tree_at(INTEGRATED)
+  for name in ('_checked','_checked_witness','_session','_timed','_consume','_consume_accounted','advance','prepare'):
+   self.assertEqual(dump(function(live,name)),dump(function(integrated,name)),name)
   for name in ('_checked','_checked_witness','_session','_timed','_consume','_consume_accounted'):
    self.assertEqual(dump(function(current,name)),dump(function(old,name)),name)
   advance=deepcopy(function(current,'advance'));baseline=function(old,'advance');original_requests=next(n for n in ast.walk(baseline)if isinstance(n,ast.FunctionDef)and n.name=='requests_phase')
@@ -73,7 +79,9 @@ class RequestProofReuseTests(unittest.TestCase):
   preparation=function(t,'prepare');pairs=[n for n in ast.walk(preparation)if isinstance(n,ast.Call)and isinstance(n.func,ast.Name)and n.func.id=='_prepare_request_proof_pair']
   self.assertEqual([ast.unparse(x.args[0])for x in pairs],['color.expected_owned_types','encore_callbacks.expected_request'])
   for name in ('engine_color_change_callbacks.py','engine_encore_callbacks.py','transition.py','v4_encoder.py','engine_kernel_frame_risk.py'):
-   self.assertEqual(Path('gpu_engine',name).read_bytes(),subprocess.check_output(['git','show',BASE+':gpu_engine/'+name]))
+   # Preserve the feature-era unchanged-body proof and current drift guard.
+   self.assertEqual(subprocess.check_output(['git','show',FEATURE+':gpu_engine/'+name]),subprocess.check_output(['git','show',BASE+':gpu_engine/'+name]))
+   self.assertEqual(Path('gpu_engine',name).read_bytes(),subprocess.check_output(['git','show',INTEGRATED+':gpu_engine/'+name]))
 
  def test_actual_current_call_disabled_predicates_match_original(self):
   old=ast.parse(subprocess.check_output(['git','show',BASE+':'+str(SOURCE)],text=True));new=tree()
