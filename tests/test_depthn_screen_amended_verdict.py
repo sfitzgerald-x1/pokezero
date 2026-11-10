@@ -445,7 +445,14 @@ class FinalRuleR3Tests(unittest.TestCase):
 
     def test_the_pinned_rule_is_rule_r3_and_only_screen_r3_is_pinned(self):
         self.assertEqual(V.FINAL_RULES, dict(RULE_R3=fairness.RULE_R3))
-        self.assertEqual(V.RUN_FINAL_RULES, {V.RUN_BINDINGS['screen_r3']: 'RULE_R3'})
+        self.assertEqual(V.RUN_FINAL_RULES, {V.RUN_BINDINGS['screen_r3']: 'RULE_R3', V.RUN_BINDINGS['screen_r4b']: 'RULE_R3'})
+        r4b = EVALS/'depthn-foulplay-dn2w16-amendment-screen-r4b-adoption-20261110.json';raw4 = r4b.read_bytes();record4 = json.loads(raw4)
+        self.assertEqual(hashlib.sha256(raw4).hexdigest(), V.RUN_BINDINGS['screen_r4b'])   # the committed screen-r4b record is the pinned one
+        self.assertEqual(V.final_rule(record4, V.RUN_BINDINGS['screen_r4b']), 'RULE_R3')
+        declaration4 = json.loads((EVALS.parent/record4['declaration']).read_bytes())
+        self.assertEqual(record4['declaration_sha256'], hashlib.sha256((EVALS.parent/record4['declaration']).read_bytes()).hexdigest())
+        self.assertEqual(declaration4['arm_fairness'], fairness.RULE_R3);self.assertEqual(declaration4['root_operator'], 'NOISE_GATED_K2')
+        self.assertNotIn(V.RUN_BINDINGS['screen_r4b'], V.RUN_AMENDMENTS)
         r3 = EVALS/'depthn-foulplay-dn2w16-amendment-screen-r3-adoption-20261109.json';raw = r3.read_bytes();record = json.loads(raw)
         self.assertEqual(hashlib.sha256(raw).hexdigest(), V.RUN_BINDINGS['screen_r3'])   # the committed record is the pinned one
         self.assertEqual(V.final_rule(record, V.RUN_BINDINGS['screen_r3']), 'RULE_R3')
