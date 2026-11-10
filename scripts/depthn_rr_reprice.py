@@ -702,9 +702,9 @@ def opponent_recharge(request):
 BULK = ('worlds', 'root', 'prepared', 'effect_guard')   # per-world grids and facts: written, not kept for the summary
 
 
-def encode_row(row):
-    try:return json.dumps(row, sort_keys=True, allow_nan=False, default=repr)
-    except ValueError:return json.dumps(dict(row, nonfinite=True), sort_keys=True, default=repr)
+def encode_row(row, separators=None):
+    try:return json.dumps(row, sort_keys=True, allow_nan=False, default=repr, separators=separators)
+    except ValueError:return json.dumps(dict(row, nonfinite=True), sort_keys=True, default=repr, separators=separators)
 
 
 # Chance noise ---------------------------------------------------------------------------------------------------------------------
@@ -907,7 +907,7 @@ def main(argv=None):
                     rows.append({k: v for k, v in record.items() if k not in BULK})   # the summary's fields; the grids stay on disk
                     line = None if chance is None else chance_line(search, capture, body, response, detail, record, found, seeds, shard=shard)
                     if line is not None:
-                        chance_stream.write(encode_row(line) + '\n');chance_stream.flush();os.fsync(chance_stream.fileno())
+                        chance_stream.write(encode_row(line, (',', ':')) + '\n');chance_stream.flush();os.fsync(chance_stream.fileno())   # compact: mostly grids
                         lines.append({k: v for k, v in line.items() if k in ('ordinal', 'decision_index', 'control', 'prior_invariant', 'chance_seconds')}
                             | dict(seeds=[{k: e.get(k) for k in ('seed', 'status', 'price_seconds', 'reduce_seconds')} for e in line['seeds']]))
                     p = record['parity']

@@ -227,6 +227,9 @@ def view(root, population):
         double_estimator=g(root['double_estimator']), double_estimator_swapped=g(root['double_estimator_swapped']))
     out['lcb'] = {k: dict(in_sample=v['in_sample'] and g(root['gap']['best']) != root['greedy'],
         cross_fit=v['cross_fit'] and g(root['cross_fit']['action']) != root['greedy']) for k, v in root['lcb'].items()}
+    # a guarded override is not played: it leaves the gap's override roots and the single-draw overrides
+    out['gap'] = dict(root['gap'], best=g(root['gap']['best']))
+    out['single_draw_overrides'] = [d for d in root['single_draw_overrides'] if g(d['action']) != root['greedy']]
     return out
 
 
