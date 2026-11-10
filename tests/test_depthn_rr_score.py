@@ -661,6 +661,7 @@ class EndToEndTests(unittest.TestCase):
         self.assertEqual((len(first['mapped_worlds']), first['parity']['match']), (16, True))
         self.assertEqual(set(first['operators']), set(S.SETTINGS))
         self.assertEqual(first['operators']['target_argmax']['choice'], 4)
+        self.assertEqual((first['target_source'], cover['target_sources']), ('live_telemetry', {'live_telemetry': 6}))   # the rows carry no replay target
         self.assertEqual((forced['reply']['kind'], len(forced['mapped_worlds'])), ('wait', 16))
         self.assertIsNone(decisions[3]['parity'])
         text = (out / 'summary.md').read_text()
@@ -673,6 +674,49 @@ class EndToEndTests(unittest.TestCase):
         self.assertIsNone(cover['external_prior']);self.assertNotIn('external_br', first['operators'])
         self.assertEqual(summary['metrics']['pi_filled']['all']['operators']['tempered:T=inf']['decisions'], 6)
         with self.assertRaises(FileExistsError):S.score_run([str(path)], str(run), str(out))
+
+    def test_the_re_priced_rows_target_wins_over_the_live_telemetry(self):
+        run = self.root / 'run'
+        for sub in ('results', 'telemetry', 'owning-wire'):(run / sub).mkdir(parents=True)
+        rows = self.rows(run, random.Random(11))
+        for r in rows:   # the re-priced target on a lane neither the telemetry (4) nor the logits + q fallback picks: 2 for moves, 5 for switches
+            legal = (r.get('root') or {}).get('root_legal')
+            if legal:lane = 2 if legal[2] else 5;r['replay']['policy_target'] = [1. if a == lane else 0. for a in range(9)]
+        rows[1]['live']['greedy_action_index'] = None   # excluded inside the scoring (greedy_missing): not counted as a target source
+        path = self.root / 'rows-0.jsonl';path.write_text(''.join(json.dumps(r) + '\n' for r in rows))
+        out = self.root / 'out'
+        with redirect_stdout(io.StringIO()):self.assertEqual(S.main(['--rows', str(path), '--run-directory', str(run), '--out', str(out)]), 0)
+        cover = json.loads((out / 'summary.json').read_text())['coverage']
+        self.assertEqual((cover['scored'], cover['target_sources'], cover['target_argmax_fallbacks']), (5, {'replay': 5}, 0))
+        first = json.loads((out / 'decisions.jsonl').read_text().splitlines()[0])
+        op = first['operators']['target_argmax'];self.assertEqual((first['target_source'], op.get('raw_choice', op['choice'])), ('replay', 2))
+
+    def test_a_replay_mode_re_scoring_never_takes_the_live_trees_target(self):
+        run = self.root / 'run'
+        for sub in ('results', 'telemetry', 'owning-wire'):(run / sub).mkdir(parents=True)
+        path = self.root / 'rows-0.jsonl';path.write_text(''.join(json.dumps(r) + '\n' for r in self.rows(run, random.Random(11))))   # no replay targets
+        out = self.root / 'out'
+        with redirect_stdout(io.StringIO()):
+            self.assertEqual(S.main(['--rows', str(path), '--run-directory', str(run), '--out', str(out), '--parity-mode', 'replay']), 0)
+        cover = json.loads((out / 'summary.json').read_text())['coverage']
+        self.assertEqual((cover['target_sources'], cover['target_argmax_fallbacks']), ({'missing': 6}, 6))   # the telemetry is never read
+
+    def test_row_policy_target_prefers_a_valid_replay_target(self):
+        legal = [True, True, False] + [False] * 6
+        class Run:
+            def __init__(self, target):self.target = target
+            def policy_target(self, ordinal, index):return self.target
+        live = Run([.3, .7] + [0.] * 7)
+        good = dict(replay_policy_target=[.9, .1] + [0.] * 7, root_legal=legal)
+        self.assertEqual(S.row_policy_target(good, live, 0, 0), ([.9, .1] + [0.] * 7, 'replay'))
+        nan_illegal = dict(replay_policy_target=[.9, .1, float('nan'), None] + [0.] * 5, root_legal=legal)   # only legal lanes count
+        self.assertEqual(S.row_policy_target(nan_illegal, live, 0, 0)[1], 'replay')
+        for bad in (None, [.9] * 8, [float('nan'), .1] + [0.] * 7, 'x', [True, False] + [0.] * 7):
+            self.assertEqual(S.row_policy_target(dict(replay_policy_target=bad, root_legal=legal), live, 0, 0), ([.3, .7] + [0.] * 7, 'live_telemetry'))
+        none = dict(replay_policy_target=None, root_legal=legal)
+        self.assertEqual(S.row_policy_target(none, Run(None), 0, 0), (None, 'missing'))
+        self.assertEqual(S.row_policy_target(none, Run([.3, .7]), 0, 0), (None, 'live_telemetry_invalid'))
+        self.assertEqual(S.row_policy_target(none, live, 0, 0, live_fallback=False), (None, 'missing'))   # a modified tree: never the live target
 
     def test_main_with_reply_prior(self):
         run = self.root / 'run'
