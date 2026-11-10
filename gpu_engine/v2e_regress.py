@@ -562,15 +562,19 @@ ALLOWED = {
     # and stages), a pending Wish landing by HP, Color Change and its reveal when the second hit is the first
     # to reach it, the belief refresh of a changed condition, a Focus Punch losing focus. The user's HP follows
     # from the target's reply (Counter/Mirror Coat read the second hit, a lost Focus Punch) and its HP items.
-    # A second-hit KO of a slower target also cancels its queued move, which can no longer status the user
-    # (seen: a thawing Parasect's Spore); the target's own cancelled bookkeeping is the KO cascade's.
-    'bonemerang': dict(user=('hp', 'item', 'boosts', 'visible', 'status', 'clause'),
+    'bonemerang': dict(user=('hp', 'item', 'boosts', 'visible'),
                        target=('hp', 'item', 'boosts', 'typechange', 'reveal', 'visible', 'subtracker', 'wish', 'focus'),
                        glob=()),
     # R (optional carry from A2): Liquid Ooze on Leech Seed. The holder (user) is revealed; the seeder (target) takes
     # damage instead of healing, and a slower seeder's later residual handlers (a pinch berry, its condition) follow.
     'ooze_seed': dict(user=('reveal',), target=('hp', 'visible', 'item', 'boosts'), glob=()),
 }
+
+
+# Allowances an effect earns only on a KO cascade in which the other side (its target's) has a newly (un)fainted
+# mon: R: a second-hit KO of a slower target cancels its queued move, which can then no longer status the user
+# (seen: a thawing Parasect's Spore; the Sleep Clause port and the public status bag follow the status).
+KO_ALLOWED = {'bonemerang': dict(user=('status', 'clause'))}
 
 
 def allowed_leaf(name, families):
@@ -626,7 +630,10 @@ def lane_verdict(changed, effects, side_axis, *, cascade=None, waive=()):
             else:ok |= any(allowed_leaf(leaf, rule['user' if side == a else 'target']) for a in actors)
             if ok:break
         if not ok and cascade is not None:
-            ko = (allowed_leaf(leaf, ('hp', 'ko', 'turnline') + tuple(cascade.get('families', ())))
+            # An effect's KO-only allowance on its actor's side, when the other side has a newly (un)fainted mon.
+            ko = side is not None and any(side == a and bool(cascade['ko_sides'][1 - a])
+                and allowed_leaf(leaf, KO_ALLOWED.get(effect, {}).get('user', ())) for effect, actors in effects.items() for a in actors)
+            ko = ko or (allowed_leaf(leaf, ('hp', 'ko', 'turnline') + tuple(cascade.get('families', ())))
                   or (side is not None and leaf in KO_MON_LEAVES + KO_LINK_LEAVES and cascade['mon_ok'](leaf, side))
                   or (side is not None and (leaf.startswith('trackers.') or allowed_leaf(leaf, ('ko_action',)))
                       and bool(cascade['ko_sides'][side])))
@@ -1155,6 +1162,7 @@ def patched_pass(args, *, step_override=None, prepared=None):
         effect_rule=effect_rule, residual_rule=residual_rule,
         faint_clear_rule=bool(args.faint_clear), waive=list(args.waive or ()), counts=counts, by_effect=by_effect,
         allowed_fields={e: ALLOWED.get(e, 'UNDECLARED: any change') for e in table},
+        ko_allowed_fields={e: KO_ALLOWED[e] for e in table if e in KO_ALLOWED},
         uninvolved_leaves=dict(sorted(uninvolved_leaves.items(), key=lambda x: -x[1])), warnings=warnings,
         passed=False if failures else (None if partial else True), seconds=time.perf_counter() - begin)
     (out / 'report.json').write_text(json.dumps(report, indent=1) + '\n')

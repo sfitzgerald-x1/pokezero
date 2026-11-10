@@ -17,8 +17,9 @@ MOVES = ['_none', 'bonemerang', 'tackle', 'splash', 'substitute', 'counter', 'de
 TYPES = ['_none', 'normal', 'fighting', 'flying', 'poison', 'ground', 'rock', 'bug', 'ghost',
          'steel', 'fire', 'water', 'grass', 'electric', 'psychic', 'ice', 'dragon', 'dark']
 NORMAL, FIGHTING, FLYING, GROUND, GHOST = 1, 2, 3, 5, 8
-ABILITIES = ['_none', 'battlearmor', 'levitate', 'liquidooze']
-BATTLEARMOR, LEVITATE, LIQUIDOOZE = 1, 2, 3
+ABILITIES = ['_none', 'battlearmor', 'levitate', 'liquidooze', 'colorchange']
+BATTLEARMOR, LEVITATE, LIQUIDOOZE, COLORCHANGE = 1, 2, 3, 4
+ROCK = 6
 B = 8
 POWER = {BONEMERANG: 50, TACKLE: 35, STRUGGLE: 50}
 TYPE = {BONEMERANG: GROUND, COUNTER: FIGHTING, DESTINYBOND: GHOST}
@@ -42,9 +43,9 @@ def metadata():
 
 def components():
     import jax.numpy as j
-    from gpu_engine import critical, damage_moves, effects, items, sleep_talk, sustain, transition, variable_moves
+    from gpu_engine import critical, damage_moves, effects, items, secondary, sleep_talk, sustain, transition, variable_moves
     meta = metadata();n = len(MOVES)
-    num = np.ones((18, 18), np.int32);num[GROUND, FLYING] = 0;num[NORMAL, GHOST] = 0;num[FIGHTING, GHOST] = 0
+    num = np.ones((18, 18), np.int32);num[GROUND, FLYING] = 0;num[NORMAL, GHOST] = 0;num[FIGHTING, GHOST] = 0;num[GROUND, ROCK] = 2
     table = transition.MoveTable(
         j.asarray([POWER.get(i, 0) for i in range(n)], j.int32), j.asarray([TYPE.get(i, NORMAL) for i in range(n)], j.int32),
         j.asarray([i in PHYSICAL for i in range(n)]), j.asarray([ACCURACY.get(i, 100) for i in range(n)], j.int32),
@@ -52,12 +53,12 @@ def components():
         j.asarray(num), j.ones((18, 18), j.int32), j.array(STRUGGLE),
         effects=effects.from_metadata(meta), items=items.from_metadata(meta), damage_moves=damage_moves.from_metadata(meta),
         variable_moves=variable_moves.from_metadata(meta), sleep_talk=sleep_talk.from_metadata(meta),
-        critical=critical.from_metadata(meta), sustain=sustain.from_metadata(meta))
+        critical=critical.from_metadata(meta), sustain=sustain.from_metadata(meta), secondary=secondary.from_metadata(meta))
     return meta, table
 
 
 def frozen_sample_chance_inputs(state):
-    """transition.sample_chance_inputs exactly as it was before fidelity R (base eb3fc0c2), six fields."""
+    """transition.sample_chance_inputs exactly as it was before fidelity R (base 188de7a3), six fields."""
     import jax
     import jax.numpy as jnp
     keys = jax.vmap(lambda key:jax.random.split(key,2))(state.keys)[:,1]
@@ -255,6 +256,20 @@ class BonemerangTests(unittest.TestCase):
         np.testing.assert_array_equal(np.asarray(first.effect_draws)[:3], np.asarray(a.effect)[:3])
         self.assertFalse(np.asarray(first.effect_draws)[3:].any())
 
+    def test_color_change_after_the_first_hit_retypes_the_second(self):
+        # gen4 colorchange onDamagingHit runs after each hit: a Rock Kecleon takes a 2x first hit, turns Ground, and
+        # takes the second at 1x; without Color Change both are 2x; a Normal Kecleon takes two neutral hits.
+        rock = {'types': [((1, 0, 0), ROCK)]};cc = {'ability': [((1, 0), COLORCHANGE)]}
+        s = self.build([self.merge(rock, cc), rock, cc, self.merge(rock, cc, {'substitute_hp': [((1, 0), 200)]}), {}, {}, {}, {}])
+        out = self.play(s)
+        ref = self.single_hit(self.build([rock, {}] + [{}] * 6), [15] * B, [15] * B)
+        strong, plain = int(ref[0]), int(ref[1])
+        self.assertGreater(strong, plain)
+        taken = 300 - np.asarray(out.hp)[:, 1, 0]
+        self.assertEqual(taken[:3].tolist(), [strong + plain, 2 * strong, 2 * plain])
+        self.assertEqual(np.asarray(out.types)[:3, 1, 0].tolist(), [[GROUND, 0], [ROCK, 0], [GROUND, 0]])
+        self.assertEqual(np.asarray(out.types)[3, 1, 0].tolist(), [ROCK, 0])          # both hits on its Substitute
+
     def test_endure_caps_each_hit(self):
         endure = {'moves': [((1, 0, 0), ENDURE)]}
         s = self.build([self.merge(endure, {'hp': [((1, 0), 40)]}), self.merge(endure, {'hp': [((1, 0), 60)]}), {}, {}, {}, {}, {}, {}])
@@ -337,7 +352,8 @@ class RegressPluginTests(unittest.TestCase):
               ('trackers.public_volatiles', 1), ('state.types', 1), ('trackers.shown_ability', 1), ('state.hp', 0),
               ("trackers.field_features['wish_pending']", 1), ('state.volatile', 1)}
         self.assertEqual(lane_verdict(ok, {'bonemerang': [0]}, None)[0], [])
-        for bad in (('state.status', 1), ('state.volatile', 0), ('trackers.shown_ability', 0), ('state.effect_draws', 0)):
+        for bad in (('state.status', 1), ('state.volatile', 0), ('trackers.public_volatiles', 0), ('trackers.shown_ability', 0),
+                    ('state.status', 0), ('state.effect_draws', 0)):
             self.assertEqual(lane_verdict({bad}, {'bonemerang': [0]}, None)[0], [bad])
 
     def test_a_ko_before_the_targets_turn_cancels_its_bookkeeping(self):
@@ -353,6 +369,12 @@ class RegressPluginTests(unittest.TestCase):
         for bad in (('state.last_action_kind', 1), ('state.pp', 1)):
             self.assertEqual(lane_verdict({bad}, effects, None, cascade=cascade)[0], [bad])
         self.assertEqual(lane_verdict({('step.placeholder_moves', None)}, effects, None)[0], [('step.placeholder_moves', None)])
+        # The user's status allowance needs a KO on the target's side (review L1): not without a cascade, and not
+        # on a cascade where only the user's own side has a newly fainted mon.
+        own_ko = dict(ko_sides=np.array([False, True]), mon_ok=lambda leaf, side: False)
+        for verdict in (lane_verdict({('state.status', 1)}, effects, None),
+                        lane_verdict({('state.status', 1)}, effects, None, cascade=own_ko)):
+            self.assertEqual(verdict[0], [('state.status', 1)])
 
     def test_trap_links_release_only_for_a_fainted_or_departed_mon(self):
         from gpu_engine.v2e_regress import active_mask, departed_mask, link_ok
