@@ -189,7 +189,8 @@ def effect_record(frame, root, worlds, children, request, owner, vocabulary, cho
         replied = []
         for w in peer:
             logits = reply_logits[w['world']]
-            if w['requested'] and logits is None:raise ValueError(f'no reply logits for requested world {w["world"]}')
+            if w['requested'] and (logits is None or len(logits) != len(w['logits'])):
+                raise ValueError(f'reply logits for requested world {w["world"]}: {None if logits is None else len(logits)} values, not {len(w["logits"])}')
             replied.append(dict(w, logits=[float(x) for x in logits]) if w['requested'] else dict(w))
         reply = guard.evaluate(cond, own_turn1=own_turn1, peer_turn1=replied, turn2=[dict(t) for t in turn2], turn2_available=available, choice=choice)
         summary = lambda r: {k: r.get(k) for k in UNION_FIELDS}

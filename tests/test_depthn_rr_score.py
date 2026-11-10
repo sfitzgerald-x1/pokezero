@@ -800,6 +800,16 @@ class GuardTests(unittest.TestCase):
         self.assertAlmostEqual(g['primary']['table']['pi_filled']['averaging']['mean'], .1)
         text = '\n'.join(S.guard_markdown(g, S.SETTINGS))
         self.assertIn('**above 20%**', text);self.assertIn('Primary: RR on unguarded roots (2)', text)
+        # br_fp's union guard: a root guarded by the reply arm alone leaves the unguarded (primary) population, as live greedy plays
+        union_only = dict(guard_record(), union=dict(tripped=True, champion=dict(tripped=False, b=False), reply=dict(tripped=True, b=True)),
+                          union_only=True, tripped=True)
+        f = facts(union_only);self.assertEqual((f['b'], f['champion_b'], f['union_only']), (True, False, True))
+        mixed = S.guard_report([record(0, facts(guard_record())), record(1, f, d=0.)], S.SETTINGS)
+        self.assertEqual((mixed['primary']['roots'], mixed['union']['reply_arm_only'], mixed['union']['unavailable_or_error'], mixed['guarded_share']),
+                         (1, 1, 0, .5))
+        self.assertIn('reply arm only', '\n'.join(S.guard_markdown(mixed, S.SETTINGS)))
+        quiet = facts(dict(guard_record(), union=dict(tripped=False, champion=dict(tripped=False, b=False), reply=dict(tripped=False, b=False))))
+        self.assertEqual((quiet['b'], quiet['union_only']), (False, False))
 
     def test_end_to_end(self):
         """A small synthetic replay through main(): the rows carry their guard records; the guarded root plays greedy everywhere."""

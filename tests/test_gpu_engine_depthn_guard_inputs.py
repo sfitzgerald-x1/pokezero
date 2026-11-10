@@ -112,6 +112,12 @@ class SeamTests(unittest.TestCase):
         clear, _, _ = self.record(lambda s: fake_labels(s, peer_moves=(TACKLE, REST, PROTECT, 0)), reply=self.champion_reply)
         self.assertEqual((clear['tripped'], clear['union']['tripped']), (False, False))
         with self.assertRaisesRegex(ValueError, 'reply logits for'):self.record(fake_labels, reply=lambda f, r:self.champion_reply(f, r)[:-1])
+        def hole(f, r):   # a requested world without logits, and one with too few: both refused (the live search's error record trips)
+            out = self.champion_reply(f, r);w = next(i for i, x in enumerate(out) if x is not None);out[w] = None;return out
+        with self.assertRaisesRegex(ValueError, 'requested world'):self.record(fake_labels, reply=hole)
+        def short(f, r):
+            out = self.champion_reply(f, r);w = next(i for i, x in enumerate(out) if x is not None);out[w] = out[w][:8];return out
+        with self.assertRaisesRegex(ValueError, '8 values, not 9'):self.record(fake_labels, reply=short)
 
     def test_a_reply_model_moving_turn_1_peer_mass_onto_a_guarded_move_trips_the_union_only(self):
         """Surf on the peer's lane 1 (a legal lane of the fixture's peer) at the roots only (no turn-2 child knows it), and the

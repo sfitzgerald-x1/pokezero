@@ -800,7 +800,11 @@ def guard_facts(record, raw):
         turn2, tiers2 = any_turn2, tiers('turn2')
         unavailable = any(r.get('source') in ('turn2_unavailable', 'guard_error') for r in reasons)
     any_b = bool(record['any_cell_b']) if live_reach else bool(record['b'])
-    return dict(rule=record.get('rule', 'any_cell'), b=bool(record['b']), b_turn1=bool(record.get('b_turn1')), b_turn2=bool(record.get('b_turn2')),
+    # a union record (br_fp, depthn_guard_inputs reply_logits): the reply arm's (b) guards the root as the live fallback does; the
+    # record's own fields (b_turn1, b_turn2, tiers, m_*) stay the champion's, and union_only marks a root guarded by the reply arm alone
+    reply_b = bool((((record.get('union') or {}).get('reply')) or {}).get('b'));champion_b = bool(record['b'])
+    return dict(rule=record.get('rule', 'any_cell'), b=champion_b or reply_b, champion_b=champion_b, union_only=reply_b and not champion_b,
+                b_turn1=bool(record.get('b_turn1')), b_turn2=bool(record.get('b_turn2')),
                 turn2=turn2, tiers_turn1=tiers('turn1'), sides_turn1=sides1, tiers_turn2=tiers2, tier_masses_turn2=masses2, unavailable=unavailable,
                 m_own=record.get('m_own'), m_opp=record.get('m_opp'), arms=record.get('arms'),
                 any_cell=dict(b=any_b, turn2=any_turn2, unavailable=any(r.get('source') in ('turn2_unavailable', 'guard_error') for r in list(any_reasons) + list(reasons))),
@@ -927,9 +931,13 @@ def guard_report(records, settings, opponent_recharge=0):
         return dict(turn1=t1, turn1_share=share(t1), turn2_added=added, turn2_added_share=share(added), total=t1 + added, share=share(t1 + added))
     tiers = {t: part(lambda r, t=t: t in g(r)['tiers_turn1'], lambda r, t=t: t in g(r)['tiers_turn2']) for t in ('A', 'C')}
     union = part(lambda r: g(r)['b_turn1'], lambda r: g(r).get('turn2', g(r)['b_turn2']))
-    # (b) without a turn-1 or a priced turn-2 reason: an unavailable turn-2 capture or an error record (fail closed): its own part
-    error = sum(g(r)['b'] and not g(r)['b_turn1'] and not g(r).get('turn2', g(r)['b_turn2']) for r in have)
-    union.update(unavailable_or_error=error, unavailable_or_error_share=share(error), total=union['total'] + error, share=share(union['total'] + error))
+    # (b) without a turn-1 or a priced turn-2 reason: an unavailable turn-2 capture or an error record (fail closed): its own part;
+    # a root guarded by a union record's reply arm alone (br_fp) is its own part too
+    error = sum(g(r)['b'] and not g(r).get('union_only') and not g(r)['b_turn1'] and not g(r).get('turn2', g(r)['b_turn2']) for r in have)
+    reply_only = sum(bool(g(r).get('union_only')) for r in have)
+    total = union['total'] + error + reply_only
+    union.update(unavailable_or_error=error, unavailable_or_error_share=share(error), reply_arm_only=reply_only, reply_arm_only_share=share(reply_only),
+                 total=total, share=share(total))
     c = {name: dict(c_only=sum(g(r)['c'].get(name, False) and not g(r)['b'] for r in have),
                     union=sum(g(r)['b'] or g(r)['c'].get(name, False) for r in have)) for name in settings}
     for v in c.values():v.update(union_share=share(v['union']))
@@ -1336,6 +1344,7 @@ def guard_markdown(guard, settings):
            '| tier | turn 1 | turn 2 added | total share |', '|---|---|---|---|']
     out += [f"| {k} | {v['turn1']} ({_pct(v['turn1_share'])}) | {v['turn2_added']} ({_pct(v['turn2_added_share'])}) | {_pct(v['share'])} |" for k, v in t.items()]
     out += [f"| unavailable or error | - | - | {u['unavailable_or_error']} ({_pct(u['unavailable_or_error_share'])}) |",
+            f"| reply arm only (br_fp union guard) | - | - | {u.get('reply_arm_only', 0)} ({_pct(u.get('reply_arm_only_share'))}) |",
             f"| union | {u['turn1']} ({_pct(u['turn1_share'])}) | {u['turn2_added']} ({_pct(u['turn2_added_share'])}) | {_pct(u['share'])} |", '',
             '| setting | (c) only roots | (b) or (c) share |', '|---|---|---|']
     out += [f"| {name} | {guard['c'][name]['c_only']} | {_pct(guard['c'][name]['union_share'])} |" for name in settings if name in guard['c']]

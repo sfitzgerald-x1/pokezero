@@ -239,7 +239,7 @@ def reply_view(meta):
 def check_reply_view(meta,args):
     """A reply model trained on the builder's seat view b (view 'b': Foul Play's view without the [silent]-only reveals and with
     the damage columns at public precision) is served only with --peer-view-b on, so its inputs are the view it learned; ValueError
-    otherwise (the server's and the re-pricer's loading)."""
+    otherwise (the server's and the re-pricer's loading). One-way: an env-view archive is still served with --peer-view-b."""
     if reply_view(meta)=='b'and not getattr(args,'peer_view_b',False):
         raise ValueError('the reply archive was trained on peer view b: serve it with --peer-view-b')
 
@@ -311,7 +311,7 @@ def header(args,search):
         vocabulary_sha256=args.expected_vocabulary_sha256,champion_archive_sha256=args.champion_archive_sha256,
         champion_checkpoint_sha256=args.champion_checkpoint_sha256,champion_precision=args.champion_precision,pricer=search.pricer_identity,
         **({}if not getattr(args,'reply_archive',None)else dict(root_operator='br_fp',reply_archive_sha256=args.reply_archive_sha256,
-            reply_checkpoint_sha256=args.reply_checkpoint_sha256,reply_views=args.reply_views,reply_view=reply_view(getattr(getattr(getattr(search,'reply',None),'evaluator',None),'meta',None)))),
+            reply_checkpoint_sha256=args.reply_checkpoint_sha256,reply_views=args.reply_views,reply_archive_view=reply_view(getattr(getattr(getattr(search,'reply',None),'evaluator',None),'meta',None)))),
         jax_enable_x64=bool(jax.config.jax_enable_x64),matmul_precision=matmul_precision(),matmul_precision_pin=args.matmul_precision)
 
 
