@@ -19,16 +19,20 @@ Is screen-r3's loss (−0.116, STOP_HARM) the winner's curse, the search overrid
 - `/out/rr-r4b-noisegated-s160/replay-check.json`, sha256 `f2233fa916fa776cbb0513c1f620788b85836a94274c79881a670b95de101262`: **6,440 roots compared, 0 mismatches** between the live played choice and the scorer's rule on each row's own re-priced values, guards included. The server-greedy differences are reported separately (`rr_greedy`).
 - **Override rates on the fixed tree:**
 
-  | Population | Operator | Override rate against greedy |
-  |---|---|---|
-  | All roots | noise_gated k=2 | 24.7% played (31.9% raw); gate passes 31.8% |
-  | Reach-unguarded roots | noise_gated k=2 | 29.6% |
-  | Reach-unguarded roots | averaging | 54.8% |
+  All rates are against the actor's (FP32) greedy, as the RR scores them; "raw" is the operator's choice before the guards, "played" after them.
+
+  | Population | Operator | Raw | Played | Gate passes |
+  |---|---|---|---|---|
+  | All roots (6,440) | noise_gated k=2 | 31.9% | 24.7% | 31.8% |
+  | Reach-unguarded roots (~5,380) | noise_gated k=2 | 30.1% | 29.6% | 30.0% |
+  | Reach-unguarded roots (~5,380) | averaging | 54.8% | — | — |
+
+  The like-for-like contrast is raw against raw: 30.1% for noise_gated against 54.8% for averaging.
 
   That is the dose-response contrast the lead asked for. The RR's 34% was on the old any-cell guard's unguarded population.
 
 ## What changes from screen-r3 (and only this)
-1. **The root operator:** `NOISE_GATED_K2` (declared `root_operator`), on the server tree `79b1e51592a666b6a51b2ee15f1a78b7b5369330`. That tree is screen-r3's tree `3bd60120` plus the operator code (the TARGET_ARGMAX plumbing `3e16fc2e`, a replay-check hardening `85e681d2`, and NOISE_GATED_K2 `79b1e515`). The search, guard, actor and fairness code is otherwise screen-r3's, and a cross-tree dump shows the default path byte-identical to it.
+1. **The root operator:** `NOISE_GATED_K2` (declared `root_operator`), on the server tree `79b1e51592a666b6a51b2ee15f1a78b7b5369330`. screen-r3's servers ran `e775c020`; `3bd60120` adds only screen-r3's verdict tooling and records (no server or actor code). The r4b tree is `3bd60120` plus the operator code (the TARGET_ARGMAX plumbing `3e16fc2e`, a replay-check hardening `85e681d2`, and NOISE_GATED_K2 `79b1e515`). The search, guard, actor and fairness code is otherwise screen-r3's, and a cross-tree dump shows the default path byte-identical to it.
 2. **A second worker pod,** on its own machine, so r4b can run beside r4a. Its outcome-blind RAW calibration is MEASURED, ratios 2×1000 ms 1.044 and 4×500 ms 0.925 (`calibration.json` sha256 `23d871a8…`), and its move walls are sha256 `d9fdd9cf…`. The calibration uses the same seed band and the same journal-full base config.
 3. **The search servers** run in their own pod (4 GPUs on one machine), on a machine different from both worker pods and from the Foul Play collection's.
 4. **Pre-flight** on this tree and placement (`/out/preflight-s4b/preflight.json`, sha256 `3ea279aaa0f7f27663a08177cd881b1152681134ad4e3f61142ed4bcf55e43c2`): 24 games, outcome-blind, on this placement. Search wall p50 1.82 s, p95 2.26 s (screen-r3: 2.34 s); timeouts 0; searched share 83.1% of non-timeout decisions (screen-r3: 82.0%); constructor refusals 9.0%. The declared warm p95 is the RAW arm's (as `check_preflight` requires): encode 0.041 s, greedy 0.286 s; `panel.init` checks it matches the pre-flight and it feeds no decision rule.
@@ -48,7 +52,7 @@ Is screen-r3's loss (−0.116, STOP_HARM) the winner's curse, the search overrid
 - the one-sided Pressure caveat: no view b in averaging-family screens.
 
 ## Decision rules
-The official readout is the panel's, computed from a clean checkout of the dispatch commit. The verdict is `scripts/depthn_screen_amended_verdict.py --run-binding`, with screen-r1's four committed amendments, adopted by `evals/depthn-foulplay-dn2w16-amendment-screen-r4b-adoption-20261110.json` (sha256 `434369aefd7b0b8f7fdcb556798ff87b1f3964698103e20e91978f77663ab713`, pinned in `RUN_BINDINGS` and `RUN_FINAL_RULES`). That record binds them to this declaration, `/out/screen-r4b` and the dispatch tree, and declares `final_fairness_rule: RULE_R3`.
+The official readout is the panel's, computed from a clean checkout of the dispatch commit. The verdict is `scripts/depthn_screen_amended_verdict.py --run-binding`, with screen-r1's four committed amendments, adopted by `evals/depthn-foulplay-dn2w16-amendment-screen-r4b-adoption-20261110.json` (sha256 `0e4d44a3d26d75ed01babf267e0aff0ab33171c953c3aac641cb14ab7ef121bb`, pinned in `RUN_BINDINGS` and `RUN_FINAL_RULES`). That record binds them to this declaration, `/out/screen-r4b` and the dispatch tree, and declares `final_fairness_rule: RULE_R3`.
 - No run amendment is adopted or allowed.
 - No extension to 2,000 cells is declared.
 - Any fairness flag that fails `RULE_R3` stops the run and goes to the lead, with no amendment mid-run.
