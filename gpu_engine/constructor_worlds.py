@@ -1034,11 +1034,15 @@ def advance_peer_fold(constructor,request,owner):
     request's peer wire lines now, so the battle's first root with a private reveal (peer_wire_belief) folds only its own new
     lines instead of the whole battle from scratch (the live 1-2 s prepare spikes). The fold, and so every belief read from it,
     is the one peer_wire_belief makes: B2's fold is the same state however the lines are split across feeds (each feed folds
-    every event, in order). A cache warm only: any error here drops the fold and is not raised (the root is prepared as
-    without it; peer_wire_belief, if the root needs it, folds from scratch and raises where it always did). True when folded."""
+    every event, in order). A cache warm only: any error here (MemoryError aside: fatal, as everywhere in the live search) drops
+    the fold and is not raised; the root is prepared as without it, and peer_wire_belief, if the root needs it, folds from scratch
+    and raises where it always did. One difference in text only: when B2 refuses a peer line, the lazy refusal's detail
+    (PRIVATE_REVEALS_UNAVAILABLE's 'offset=' within the feed) can differ with the fold's history, as LRU eviction already makes
+    it differ; its kind never does. True when folded."""
     catalog=getattr(constructor,'catalog',None);functions=getattr(constructor,'functions',None)
     if catalog is None or getattr(catalog,'source',None)is None or type(request)is not dict or request.get('lines')is None:return False
     try:_peer_fold(constructor,request,owner,catalog,functions)
+    except MemoryError:raise
     except Exception:return False   # noqa: BLE001 -- a warm, never a refusal: the lazy path raises in its own place
     return True
 
@@ -1432,9 +1436,9 @@ def prepare_roots(constructor,protocol_requests,*,start_index=0,device='cpu',red
             rid=request.get('request_id')if isinstance(request,dict)else None;clock=time.perf_counter()
             try:result=constructor.prepare(request,start_index+i)
             except ROOT_ERRORS as error:
-                owner={'p1':0,'p2':1}.get(request.get('owner'))if isinstance(request,dict)else None
-                if redact_private_reveals and getattr(constructor,'eager_peer_fold',False)and owner is not None:
-                    advance_peer_fold(constructor,request,owner)   # a refused root's lines extend the battle too: no catch-up spike after a run of refusals
+                if redact_private_reveals and getattr(constructor,'eager_peer_fold',False):   # a refused root's lines extend the battle
+                    seat=request.get('owner')if isinstance(request,dict)else None             # too: no catch-up fold after a run of refusals
+                    if type(seat)is str and seat in ('p1','p2'):advance_peer_fold(constructor,request,int(seat[1])-1)
                 out.append(RootRefusal(rid,str(getattr(error,'kind',type(error).__name__)),str(getattr(error,'detail',error)),time.perf_counter()-clock,stamp))
                 continue
             # Outside the refusal net: a changed prepare() interface raises here instead of refusing every root.
