@@ -5,6 +5,7 @@ import unittest
 
 from gpu_engine import mc_ladder_backline as M
 from gpu_engine import mc_ladder_rungs as L
+from gpu_engine import mc_ladder_worlds as W
 from tests.test_gpu_engine_mc_ladder_rungs import D1, TRUE, row
 
 SKARM = dict(slot=0, species='skarmory', moves=['spikes', 'toxic', 'drillpeck', 'rest'], base_ability='keeneye', ability='keeneye', item='leftovers')
@@ -60,7 +61,7 @@ class BacklineRungTests(unittest.TestCase):
         logits = [[0., 2., -1.], [0., 2., -1.]]   # one prior in both worlds, unequal over the two unseen switches
         raw = three_lanes(make([THREE[0]] * 2, lanes, parties, logits=logits), logits)
         got = actions(M.build([raw], 'foulplay')[0]);self.assertEqual(got['R3pa'], got['R3sw'])
-        p = M.prices_of(M.depth1_worlds(raw), True)[0];labs = M.labels(raw['worlds'][0], {'skarmory'})
+        p = W.prices_of(W.depth1_worlds(raw), True)[0];labs = M.labels(raw['worlds'][0], {'skarmory'})
         pa = M.prior_average([p, p], [labs, labs], [.5, .5])[0];own = M.prior(p)
         for b in own:self.assertAlmostEqual(pa[b], own[b], places=12)   # proportional split: the world keeps its own prior
 
@@ -68,7 +69,7 @@ class BacklineRungTests(unittest.TestCase):
         lanes = [['move:tackle', 'switch:blissey', 'switch:chansey']] * 2;parties = [[SKARM, BLISSEY, dict(CHANSEY, slot=2)]] * 2
         logits = [[0., 0., 0.], [0., 0., 0.]]
         raw = three_lanes(make(THREE, lanes, parties, logits=logits), logits)
-        prices = M.prices_of(M.depth1_worlds(raw), True);labs = [M.labels(w, {'skarmory'}) for w in raw['worlds']]
+        prices = W.prices_of(W.depth1_worlds(raw), True);labs = [M.labels(w, {'skarmory'}) for w in raw['worlds']]
         legal = tuple(a in (0, 1) for a in range(9));unseen = M.unseen_lanes(prices, labs)
         lane = M.lane_means(prices, unseen, legal, [[0, 1], [0, 1]])
         self.assertAlmostEqual(lane[0, 1, 1], (.9 - .4) / 2);self.assertAlmostEqual(lane[0, 1, 2], (-.6 + .5) / 2)
@@ -133,7 +134,7 @@ class BacklineRungTests(unittest.TestCase):
         diag = summary['diagnostics']
         self.assertAlmostEqual(diag['unseen_switch_mass'], .5)
         self.assertEqual(diag['backline'], dict(unseen_mons=1, species_share=0., set_share=0., in_no_world=1.))
-        self.assertEqual(set(diag['grid_diff']), {'move', 'switch_unseen'})
+        self.assertEqual(set(diag['grid_diff']) - {'pairs'}, {'move', 'switch_unseen'})
         self.assertAlmostEqual(diag['grid_diff']['switch_unseen']['mean_abs'], (0. + .9 + 0. + 1.1) / 4)   # action 1: |.1 - 1|, |.1 + 1|
         self.assertEqual(diag['grid_diff']['move']['mean_abs'], 0.);self.assertEqual(diag['grid_diff']['pairs'], 4)
         self.assertAlmostEqual(diag['grid_diff']['switch_unseen']['contribution'], (.1 * .9 + .1 * 1.1) / 4)   # the true switch mass .1
