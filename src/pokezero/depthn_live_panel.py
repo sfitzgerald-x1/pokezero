@@ -663,6 +663,7 @@ async def worker(packet,*,expected_pair,original,runtime_class=None,warmup=None)
         # The bridge's per-game result keeps no protocol log; the owner's literal wire is this capture.
         owning_wire=str(root/'owning-wire'/f"{cell['ordinal']}.jsonl"),worker=worker_identity(),load_average=dict(load,end=list(os.getloadavg())))
     write_new(root/'results'/f"{cell['ordinal']}.json",outcome)
+    if client is not None:client.end()   # search arm, after the result is recorded: the proxy stops counting the battle (never raises)
     return 0
 
 
@@ -860,6 +861,7 @@ async def calibration_worker(packet,*,expected_pair,original,runtime_class=None,
     write_new(root/'results'/f"{cell['ordinal']}.json",dict(schema=CELL_SCHEMA,status=status,error=error,cell=cell,setting=packet['setting'],arm=arm,
         cpu_pair=list(expected_pair),source_game=game,benchmark=document,owning_wire=str(root/'owning-wire'/f"{cell['ordinal']}.jsonl"),
         worker=worker_identity(),load_average=dict(load,end=list(os.getloadavg()))))
+    if client is not None:client.end()   # a pre-flight's search arm, after the result is recorded (as cell_worker)
     return 0
 
 

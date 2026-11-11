@@ -16,10 +16,15 @@ is forwarded); when no backend accepts, the client's connection is closed, which
   and its JSON, within --first-frame-timeout) for its battle key (battle_id, owner: the two seats of one seed share a battle_id and
   are separate sessions on the server), sends those bytes on verbatim, and routes: a battle seen before goes
   to its home backend unless that backend is cooling down; a new battle (or a re-homed one) goes, the lead's rule, to the GPU with
-  the fewest live battles, then to that GPU's backend with the fewest (--backend HOST:PORT@GPU names each backend's GPU; live: a
-  decision within --sticky-idle seconds, default 60, so finished battles stop counting), ties by in-flight connections, then by
-  --backend order. Concurrent pricing on one GPU costs real time (r3: price p95 1.07 s against the bench's 0.67 s), so battles spread
-  across GPUs first. The home map is an LRU of at most --sticky-cap battles. A request without a string battle_id keeps the
+  the fewest live battles, then the fewest requests in flight on it, then the GPU least recently given a new battle, and within
+  it to the backend with the fewest live battles, then in flight, then --backend order (--backend HOST:PORT@GPU names each
+  backend's GPU). Live: a decision within --sticky-idle seconds (default 60), until the battle's end frame. A worker sends one
+  ({"schema": BATTLE_END_SCHEMA, "battle_id", "owner"}, pokezero.depthn_live_actor.Client.end) after its game's result is
+  recorded; the proxy answers it (status ENDED, or UNKNOWN_BATTLE, logged and otherwise ignored), never forwards it, and the battle
+  stops counting at once, so finished battles never steer a new one onto a busier GPU (r4a3 pre-flight runs 2 and 3: stale
+  counts tied idle GPUs with a busy one and backend order put three battles on GPU 0; run 2: 7 timeouts). The idle window stays
+  as the fallback for a lost end frame; an end frame is idempotent and keeps the battle's home. Concurrent pricing on one GPU
+  costs real time (r3: price p95 1.07 s against the bench's 0.67 s), so battles spread across GPUs first. The home map is an LRU of at most --sticky-cap battles. A request without a string battle_id keeps the
   least-busy order below. Each connection's log row records its battle_id, owner, backend, GPU and whether it went home (home false
   with a battle_id: an assignment). Connections that send no request (a health check, a client that gave up) are counted apart
   (no_request), not as unserved.
@@ -51,6 +56,9 @@ import time
 import uuid
 
 MAX_PACKET = 16 * 1024 * 1024
+# A worker's end of one battle (pokezero.depthn_live_actor.Client.end, sent after the game's result is recorded): answered here,
+# never forwarded. The battle stops counting toward its GPU's load at once instead of --sticky-idle seconds after its last decision.
+BATTLE_END_SCHEMA = 'depthn-live.battle-end.v1'
 
 
 def address(text):
@@ -88,6 +96,7 @@ class Pool:
         self.backends = list(backends);self.active = {b: 0 for b in backends};self.served = {b: 0 for b in backends}
         self.refused = {b: 0 for b in backends};self.failed_at = {b: None for b in backends};self.unserved = 0;self.no_request = 0;self.cooldown = cooldown
         self.homes = OrderedDict();self.sticky_idle = sticky_idle;self.sticky_cap = sticky_cap   # (battle_id, owner) -> [backend, last seen]
+        self.placed_at = {};self.ended = 0;self.ended_unknown = 0   # GPU -> its latest new-battle placement; battle end frames
         self._turn = itertools.cycle(range(len(backends)))
 
     def live(self, now):
@@ -99,8 +108,11 @@ class Pool:
         if battle is None:   # no battle to keep together: least busy, ties round-robin
             start = next(self._turn);ring = self.backends[start:] + self.backends[:start]
             return sorted(ring, key=lambda b: (self.cooling(b, now), self.active[b]))
-        live = self.live(now);per_gpu = self.per_gpu(live)
-        rank = sorted(self.backends, key=lambda b: (self.cooling(b, now), per_gpu[self.gpu[b]], live[b], self.active[b], self.backends.index(b)))
+        # A new battle's GPU: fewest live battles, then fewest requests in flight there, then the least recently placed on (never
+        # backend order: with stale ties that piled three battles on one GPU); within it, the backend with fewest live, then in flight.
+        live = self.live(now);per_gpu = self.per_gpu(live);inflight = self.per_gpu(Counter(self.active))
+        rank = sorted(self.backends, key=lambda b: (self.cooling(b, now), per_gpu[self.gpu[b]], inflight[self.gpu[b]],
+                                                    self.placed_at.get(self.gpu[b], -math.inf), live[b], self.active[b], self.backends.index(b)))
         home = self.homes.get(battle)
         if home is not None and not self.cooling(home[0], now):rank.remove(home[0]);rank.insert(0, home[0])
         return rank
@@ -109,7 +121,15 @@ class Pool:
         """The battle's home is now `backend` (LRU, at most sticky_cap); True when it already was."""
         now = time.monotonic() if now is None else now;before = self.homes.pop(battle, None);self.homes[battle] = [backend, now]
         while len(self.homes) > self.sticky_cap:self.homes.popitem(last=False)
+        if before is None or before[0] != backend:self.placed_at[self.gpu[backend]] = now   # a placement (new or re-homed), not a return home
         return before is not None and before[0] == backend
+
+    def end(self, battle):
+        """The battle's end frame: it no longer counts as live (its home is kept: a stray later request still goes home and counts
+        again). Idempotent; False, counted and changing nothing, for a battle the pool does not know."""
+        held = self.homes.get(battle)
+        if held is None:self.ended_unknown += 1;return False
+        held[1] = -math.inf;self.ended += 1;return True
 
     def cooling(self, backend, now=None):
         now = time.monotonic() if now is None else now
@@ -119,7 +139,7 @@ class Pool:
         live = self.live(time.monotonic())
         return dict(backends=[dict(backend=f'{h}:{p}', active=self.active[(h, p)], served=self.served[(h, p)], refused=self.refused[(h, p)],
             cooling=self.cooling((h, p)), live_battles=live[(h, p)], gpu=self.gpu[(h, p)]) for h, p in self.backends], unserved=self.unserved,
-            no_request=self.no_request,
+            no_request=self.no_request, battle_ends=self.ended, battle_ends_unknown=self.ended_unknown,
             battles=len(self.homes), live_battles_per_gpu=dict(sorted(self.per_gpu(live).items())))
 
     def per_gpu(self, live):
@@ -148,24 +168,34 @@ async def _close(writer):
 
 
 async def first_frame(reader, timeout):
-    """The connection's first frame as read (its bytes, sent on verbatim, within one `timeout` in all) and its battle key
-    (battle_id, owner), None if the request is not JSON or carries no string battle_id."""
+    """The connection's first frame as read (its bytes, sent on verbatim, within one `timeout` in all), its battle key
+    (battle_id, owner), None if the request is not JSON or carries no string battle_id, and whether it is a battle end frame."""
     deadline = time.monotonic() + timeout
     head = await asyncio.wait_for(reader.readexactly(4), timeout);n = struct.unpack('!I', head)[0]
-    if not 0 < n <= MAX_PACKET:return head, None   # an unbounded length: forwarded as is, for the server to refuse
+    if not 0 < n <= MAX_PACKET:return head, None, False   # an unbounded length: forwarded as is, for the server to refuse
     body = await asyncio.wait_for(reader.readexactly(n), max(0., deadline - time.monotonic()))
     try:value = json.loads(body)
-    except Exception:return head + body, None   # not JSON, or too deep to parse: least busy
+    except Exception:return head + body, None, False   # not JSON, or too deep to parse: least busy
     battle = value.get('battle_id') if isinstance(value, dict) else None;owner = value.get('owner') if isinstance(value, dict) else None
-    return head + body, (battle, owner if isinstance(owner, str) else None) if isinstance(battle, str) and battle else None
+    key = (battle, owner if isinstance(owner, str) else None) if isinstance(battle, str) and battle else None
+    return head + body, key, isinstance(value, dict) and value.get('schema') == BATTLE_END_SCHEMA
 
 
 async def handle(pool, client_reader, client_writer, *, connect_timeout=.25, first_frame_timeout=2., log_row=None):
     opened, chosen, upstream = time.time(), None, None
-    try:first, battle = await first_frame(client_reader, first_frame_timeout)
+    try:first, battle, end = await first_frame(client_reader, first_frame_timeout)
     except (OSError, asyncio.TimeoutError, asyncio.IncompleteReadError):   # no request to route: nothing forwarded
         pool.no_request += 1
         if log_row is not None:log_row(dict(backend=None, reason='no request', opened=opened, closed=time.time(), seconds=time.time() - opened))
+        await _close(client_writer);return
+    if end:   # a battle end frame: answered here, never forwarded
+        known = battle is not None and pool.end(battle)
+        out = json.dumps(dict(schema=BATTLE_END_SCHEMA, battle_id=None if battle is None else battle[0], owner=None if battle is None else battle[1],
+                              status='ENDED' if known else 'UNKNOWN_BATTLE'), sort_keys=True).encode()
+        try:client_writer.write(struct.pack('!I', len(out)) + out);await client_writer.drain()
+        except OSError:pass
+        if log_row is not None:log_row(dict(backend=None, reason='battle end' if known else 'battle end: unknown battle', opened=opened, closed=time.time(),
+            seconds=time.time() - opened, battle_id=None if battle is None else battle[0], owner=None if battle is None else battle[1]))
         await _close(client_writer);return
     now = time.monotonic()
     for backend in pool.order(now, battle=battle):
