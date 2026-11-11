@@ -457,6 +457,42 @@ def write_run(root, cells):
         (root / 'owning-wire' / f'{ordinal}.jsonl').write_text('')
 
 
+class Depth1CellsTests(unittest.TestCase):
+    def test_forced_switch_and_terminal_flags_per_cell(self):
+        R_, W, n = 2, 2, 9
+        status = np.zeros((R_, W, n, n), np.int8);peer_req = np.zeros((R_, W, n, n), bool);own_req = np.zeros((R_, W, n, n), bool)
+        peer_legal = np.zeros((R_, W, n, n, n), bool);own_legal = np.zeros((R_, W, n, n, n), bool)
+        status[1, 0, 0, 0] = 2;peer_req[1, 0, 0, 0] = True;peer_legal[1, 0, 0, 0, 4:6] = True      # the opponent must replace
+        status[1, 0, 0, 1] = 2;peer_req[1, 0, 0, 1] = True;peer_legal[1, 0, 0, 1, [0, 4]] = True    # a normal request: not forced
+        status[1, 0, 3, 2] = 2;own_req[1, 0, 3, 2] = True;own_legal[1, 0, 3, 2, 7] = True          # our seat must replace
+        status[1, 0, 3, 3] = 1                                                                       # the battle ended
+        peer_req[1, 0, 5, 5] = True;peer_legal[1, 0, 5, 5, 4] = True                                 # not enumerated (status 0)
+        frame = SimpleNamespace(t1_status=status, t1_peer_requested=peer_req, t1_peer_legal=peer_legal, t1_own_requested=own_req,
+                                t1_own_legal=own_legal)
+        self.assertEqual(R.depth1_cells(frame, 1, 0), dict(opp_forced=[[0, 0]], own_forced=[[3, 2]], terminal=[[3, 3]]))
+        self.assertEqual(R.depth1_cells(frame, 0, 0), dict(opp_forced=[], own_forced=[], terminal=[]))
+
+    def test_describe_attaches_each_worlds_cells_by_frame_row_and_isolates_failures(self):
+        detached, made, legal = FakeConstructor().prepare(dict(decision_index=0), 0)
+        rows = tuple(range(10, 18))   # frame rows that are not the block indices
+        batch = SimpleNamespace(roots=(dict(status='PRICED', rows=rows, root_logits=LOGITS, root_legal=LEGAL),))
+        champion = R.Decided([(prices(2 * k), prices(2 * k + 1)) for k in range(8)], LOGITS, LEGAL)
+        capture = SimpleNamespace(prepared=[(cw.Prepared('r', detached, made, legal, 0., 'binding'),)], decided=[champion], frames=[('frame', batch)])
+        def cells(frame, root, world):
+            if (root, world) == (12, 1):raise ValueError('boom')
+            return dict(opp_forced=[[root, world]], own_forced=[], terminal=[])
+        with patch.object(backups, 'backup_depth1', side_effect=lambda frame, r: (prices(100 + 2 * r), None if r == 13 else prices(101 + 2 * r))), \
+                patch.object(backups, 'refusal_summary', return_value=dict(roots=[dict(cause=None)] * 18)), patch.object(R, 'depth1_cells', side_effect=cells):
+            detail = R.describe(capture, fake_peer, VOCABULARY, None, (1, 0), cells=True)
+            plain = R.describe(capture, fake_peer, VOCABULARY, None, (1, 0))
+        got = {i: w['depth1'].get('cells') for i, w in enumerate(detail['worlds'])}
+        self.assertEqual(got[0]['opp_forced'], [[10, 0]]);self.assertEqual(got[3]['opp_forced'], [[11, 1]]);self.assertEqual(got[14]['opp_forced'], [[17, 0]])
+        self.assertIsNone(got[5]);self.assertTrue(detail['worlds'][5]['depth1']['priced'])   # world 5 = (row 12, world 1): its cells failed alone
+        self.assertIsNone(got[7]);self.assertFalse(detail['worlds'][7]['depth1']['priced'])  # an unpriced world has no cells
+        self.assertTrue(any('depth 1 cells, world 5' in n for n in detail['notes']))
+        self.assertTrue(all('cells' not in w['depth1'] for w in plain['worlds']))   # without the flag
+
+
 class CellTests(unittest.TestCase):
     def run_directory(self, tmp):
         root = Path(tmp) / 'run'

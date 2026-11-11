@@ -56,8 +56,9 @@ class DeterministicAbilityTests(unittest.TestCase):
         self.assertEqual(native.reverse_instructions(branches[0]).to_string(),source.state.to_string())
         bound=c.suspended_input_from_jax(paused,0,h.meta,certificate=source.certificate,module=h.engine)
         self.assertIsInstance(bound,c.SuspendedNativeInput,bound)
+        # The JAX-only saved effect block (fidelity R) joins the key; the native side takes the bound input's.
         native_key=c._complete_key(h.f._canonical_native_future(native,source.certificate,
-            boundary='suspended'),bound.capsule)
+            boundary='suspended'),bound.capsule,c._saved_block(dict(bound.raw_jax)))
         jax_key=c.canonical_resumed_jax(paused,0,h.meta,native_input=bound)
         self.assertNotIsInstance(native_key,h.f.Refused,native_key)
         self.assertNotIsInstance(jax_key,h.f.Refused,jax_key)

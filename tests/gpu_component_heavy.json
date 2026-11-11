@@ -155,30 +155,6 @@
    "completes_on_hosted": false
   },
   {
-   "module": "test_gpu_engine_public_annotations",
-   "reason": "wall",
-   "hosted_median_min": 18.8,
-   "isolated_wall_min": 28.7,
-   "isolated_peak_gib": 6.5,
-   "completes_on_hosted": true
-  },
-  {
-   "module": "test_gpu_engine_public_item_stream",
-   "reason": "wall",
-   "hosted_median_min": 12.0,
-   "isolated_wall_min": 15.9,
-   "isolated_peak_gib": 5.1,
-   "completes_on_hosted": true
-  },
-  {
-   "module": "test_gpu_engine_public_switch_context",
-   "reason": "wall",
-   "hosted_median_min": 10.4,
-   "isolated_wall_min": 16.8,
-   "isolated_peak_gib": 7.8,
-   "completes_on_hosted": true
-  },
-  {
    "module": "test_gpu_engine_seismic_toss_owning",
    "reason": "wall",
    "hosted_median_min": 14.0,

@@ -64,7 +64,7 @@ class AnnotationStreamTests(unittest.TestCase):
         from pokezero.belief import PublicBattleBeliefEngine
         before=[self.f.public.prefix[1],self.f.public.prefix[0]]
         base=self.f.ingest(before)
-        step=self.jax.jit(lambda s,c:self.f.e.fold_chunk(s,c,self.f.catalog))
+        step=self.f.shared()[0]
         for line in (*ANNOTATIONS,*SETUP):
             engine=PublicBattleBeliefEngine(format_id='gen3randombattle',set_source=self.f.public.source)
             calls=[];original=engine._with_set_summary

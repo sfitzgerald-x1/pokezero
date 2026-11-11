@@ -249,8 +249,11 @@ def child_step(executor,root,fields,group,action,reply):
     import jax.numpy as j
     from gpu_engine import transition,engine_device_observation as obs
     owner=group['selector']['owner'];s,p=root.state,root.public
-    if set(group['chance'])!=set(transition.ChanceInputs._fields):raise ValueError('complete original chance capsule required')
-    chance=transition.ChanceInputs(*(j.asarray(group['chance'][k],j.int32)for k in transition.ChanceInputs._fields))
+    # The appended effect stream (fidelity R) may be absent from a capsule saved before it; the
+    # transition then derives it from the keys exactly as sample_chance_inputs does.
+    fields=set(transition.ChanceInputs._fields)
+    if not fields-{'effect'}<=set(group['chance'])<=fields:raise ValueError('complete original chance capsule required')
+    chance=transition.ChanceInputs(**{k:j.asarray(group['chance'][k],j.int32)for k in transition.ChanceInputs._fields if k in group['chance']})
     choices=fields['actions'].at[0,owner].set(action).at[0,1-owner].set(reply)
     physical=j.stack([obs.map_actions(fields['observations'][side],s,j.asarray([side],j.int32),choices[:,side])for side in (0,1)],axis=1)
     return jax.block_until_ready(executor.advance(s,p,physical,chance))
