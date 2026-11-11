@@ -132,7 +132,8 @@ def main(argv=None):
     dex = load_showdown_dex_cached(base['showdown_root']);tables = rw.generator_tables(base['showdown_root'], base['node_binary'])
     extras = ev.extra_sets(ev._jsonl(sorted(args.extra_sets))) if args.extra_sets else {}
     env = make_env(base, champion.result, caching=False)
-    statuses, checks, examples, rows = collections.Counter(), collections.Counter(), {}, []
+    statuses, checks, examples, written = collections.Counter(), collections.Counter(), {}, 0
+    stream = open(rows_path, 'x')   # rows as they come (flushed), so an interrupted worker keeps its finished roots
     try:
         for n, entry in enumerate(entries, 1):
             key = (int(entry['seed']), entry['ours'], int(entry['target']))
@@ -147,15 +148,14 @@ def main(argv=None):
                 env.close();env = make_env(base, champion.result, caching=False)
             statuses[status] += 1;checks.update(game_checks)
             if status == 'root_mismatch':examples.setdefault(status, dict(ordinal=entry['ordinal'], root=root))
-            if row is not None:rows.append(row)
+            if row is not None:stream.write(json.dumps(row) + '\n');stream.flush();written += 1
             if n % 10 == 0:print(json.dumps(dict(event='PROGRESS', worker=args.worker, roots=n, ok=statuses['ok'],
                                                  seconds=round(time.time() - started, 1))), flush=True)
     finally:
-        env.close()
-    rows_path.write_text(''.join(json.dumps(r) + '\n' for r in rows))
+        env.close();stream.close()
     summary = dict(schema=SCHEMA, bank=str(args.bank), manifest=str(args.manifest), checkpoint=str(args.checkpoint),
                    checkpoint_sha256=checkpoint_file_sha256(args.checkpoint), worker=args.worker, workers=args.workers,
-                   roots=len(entries), rows=len(rows), statuses=dict(statuses), checks=dict(checks), examples=examples,
+                   roots=len(entries), rows=written, statuses=dict(statuses), checks=dict(checks), examples=examples,
                    extra_sets=sorted(str(Path(p).resolve()) for p in args.extra_sets or ()), seconds=round(time.time() - started, 1))
     summary_path.write_text(json.dumps(summary, indent=1) + '\n')
     print(json.dumps(dict(event='SHARD_DONE', **{k: summary[k] for k in ('worker', 'roots', 'rows', 'statuses', 'seconds')})), flush=True)
