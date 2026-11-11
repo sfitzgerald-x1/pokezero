@@ -88,6 +88,8 @@ class V4EncoderTests(unittest.TestCase):
     def shared(self):
         # One compiled fold and one compiled encode per catalog object, for fixtures that set
         # shared_jit: a fresh closure per call re-traces and recompiles the same program each time.
+        # The cache keys on catalog identity only: do not opt in for tests that patch engine internals
+        # (self.e.*, public_inputs.*) or mutate catalog arrays in place after the first call.
         catalog=self.catalog;cached=getattr(self,'_shared',None)
         if cached is None or cached[0] is not catalog:
             cached=self._shared=(catalog,self.jax.jit(lambda s,c:self.e.fold_chunk(s,c,catalog)),
