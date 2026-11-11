@@ -10,7 +10,7 @@
 - screen-r4a was voided by the panel's latency rule (VOID_LATENCY) after 59 cells: 46 timeouts in its first 1,000 searched decisions (4.6% > 1%).
 - Under continuous load the reply model's reduce stage pushed the end-to-end decision wall to p95 2.75 s and p99 3.13 s, against the 3.0 s deadline less the 0.15 s reserve. No server fault: every timeout was client-side.
 - **Pre-registered rule:** the deadline is re-declared from the void readout's coverage table (candidate deadlines 5, 10 and 15 s; coverage ≥ 0.995) and the screen restarts fresh. At 5.0 s the coverage is 1.0 over 1,359 searched decisions (max wall 4.21 s), so the deadline is **5.0 s**.
-- Only the void readout was read: latency and coverage, with no paired, score or outcome statistic. screen-r4a's 59 cells are not scored and do not enter screen-r4a2.
+- Of screen-r4a only the void readout's latency and coverage table and its server telemetry (load, refusals, stage timings) were read. No paired, score or outcome field was read. screen-r4a's 59 cells are not scored and do not enter screen-r4a2.
 - Foul Play's budget is unchanged. The search does not spend its time budget, so only the cutoffs move.
 
 ## What screen-r4a2 answers
@@ -39,6 +39,7 @@ The reply model and its pins, NOISE_GATED_K2, the arms, cells, reserve, RULE_R3 
 - The pre-registered latency re-declaration moved the deadline to 5.0 s but not this bound. At 5.0 s the slow tail completes and enters the measured wall instead of timing out: screen-r4a's pre-flight cut 3 decisions at 3.0 s and read p95 2.53 s, while the first valid pre-flight at 5.0 s read p95 2.70 s with no timeouts (screen-r4a under load: 2.75 s). So `check_preflight` refused a pre-flight whose wall was screen-r4a's own.
 - **The lead's call:** the bound is now `deadline − reserve − 0.25` (`preflight_wall_p95_max`). It is identical at 3.0 s, so every earlier screen and declaration is unchanged, and 4.6 s at 5.0 s. `check_preflight` also binds the pre-flight file's bound to the declaration's.
 - Running a pre-flight again until it read under 2.6 s was rejected as fishing on a gate.
+- The declared pre-flight (preflight-s4a2c) happens to read p95 2.54 s, which is also under the old 2.6 s. It was a forced re-run: the server-tree change alters the code digest that `check_preflight` binds, so the pre-flight had to run on 982909e1. It is the only pre-flight run on that tree. So the bound change did not decide this declaration: it would have passed under either bound.
 
 ## Restarted servers (a pre-flight that measured nothing)
 
