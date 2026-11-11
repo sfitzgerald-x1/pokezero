@@ -171,6 +171,14 @@
    "completes_on_hosted": false
   },
   {
+   "module": "test_gpu_engine_owning_drain_end_to_end",
+   "reason": "wall+memory",
+   "hosted_median_min": null,
+   "isolated_wall_min": 49.8,
+   "isolated_peak_gib": 81.1,
+   "completes_on_hosted": false
+  },
+  {
    "module": "test_gpu_engine_public_annotations",
    "reason": "wall",
    "hosted_median_min": 18.8,
