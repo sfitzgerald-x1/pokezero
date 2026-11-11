@@ -63,12 +63,12 @@ class SelfBoostInputTests(unittest.TestCase):
   new=j.clip(old+self.table.effects.self_boosts[move],-6,6);tape,c=cb.finish(tape,p,new,yes)
   return SimpleNamespace(state=s,cursor=cursor,initial=initial,before=before,tape=tape,capture=c,actor=actor,move=move,old=old,new=new)
  def test_original_source_default_actual_call_operands_and_legacy(self):
-  witness._source();self.assertEqual(len(witness.SOURCE_PINS),84)
+  witness._source();self.assertEqual(len(witness.SOURCE_PINS),88)
   d=self.helper.device.self_boost
   for name,stats,deltas in [('tailglow',[2,-1],[2,0]),('agility',[4,-1],[2,0]),('dragondance',[0,4],[1,1])]:
    i=self.metadata['vocabulary']['moves'].index(name);self.assertEqual(d.stats[i].tolist(),stats);self.assertEqual(d.deltas[i].tolist(),deltas);self.assertEqual(int(self.runtime['kernel_risk_compiled'].device.selected_risk[i]),0)
   self.assertIsNone(direct.compile_direct_hit_controls(engine_catalog=self.producer).device.self_boost)
-  old=ast.parse(subprocess.check_output(['git','show',BASE+':gpu_engine/transition.py'],text=True));after=ast.parse(Path('gpu_engine/transition.py').read_text());baseline=dump_default_program(old);self.assertEqual(dump_default_program(after),baseline);assert_hp_rng_mutations_detected(self,after,baseline)
+  old=ast.parse(subprocess.check_output(['git','show','b8092a85:gpu_engine/transition.py'],text=True));after=ast.parse(Path('gpu_engine/transition.py').read_text());baseline=dump_default_program(old);self.assertEqual(dump_default_program(after),baseline);assert_hp_rng_mutations_detected(self,after,baseline)
   self.assertEqual(static._undefined_step_globals(Path('gpu_engine/transition.py').read_text()),set())
   step=static._step(Path('gpu_engine/transition.py').read_text());calls={x.func.attr:x for x in ast.walk(step)if isinstance(x,ast.Call)and isinstance(x.func,ast.Attribute)and isinstance(x.func.value,ast.Name)and x.func.value.id=='self_boost_callbacks'}
   sentinel=object();env=dict(_public_trace=sentinel,work=sentinel,side=sentinel,move=sentinel,caller_move=sentinel,boosts=sentinel,_direct_hit_context=sentinel,_direct_hit_registered=True,effects=sentinel,caller_acts=True,acts=True,hit=True,immune=False,_self_boost_pending=sentinel,self_boost_callbacks=SimpleNamespace(begin=lambda *a,**kw:(a,kw),finish=lambda *a:(a,{})))

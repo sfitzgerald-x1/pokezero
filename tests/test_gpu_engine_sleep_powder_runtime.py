@@ -80,13 +80,13 @@ class SleepPowderRuntimeTests(unittest.TestCase):
         self.assertEqual(int(self.runtime['kernel_risk_compiled'].device.selected_risk[self.move_id]),0)
         plain=risks.compile_risks(self.producer,self.runtime['execution_compiled'])
         self.assertEqual(int(plain.device.selected_risk[self.move_id])&(risks.NON_WEATHER|risks.FIELD_VOLATILE),9)
-        before=ast.parse(subprocess.check_output(['git','show','4dfdfbd4:gpu_engine/transition.py'],text=True))
+        before=ast.parse(subprocess.check_output(['git','show','b8092a85:gpu_engine/transition.py'],text=True))
         from test_gpu_engine_v5_hypothetical_profile import normalized_hypothetical_default
-        before=normalized_hypothetical_default(subprocess.check_output(['git','show','4dfdfbd4:gpu_engine/transition.py'],text=True),as_tree=True)
+        before=normalized_hypothetical_default(subprocess.check_output(['git','show','b8092a85:gpu_engine/transition.py'],text=True),as_tree=True)
         after=normalized_hypothetical_default(Path('gpu_engine/transition.py').read_text(),as_tree=True);baseline=dump_default_program(before)
         self.assertEqual(dump_default_program(after),baseline);assert_hp_rng_mutations_detected(self,after,baseline)
-        self.assertEqual(Path('gpu_engine/engine_toxic_callbacks.py').read_bytes(),subprocess.check_output(['git','show','e5d38e3c:gpu_engine/engine_toxic_callbacks.py']))
-        self.assertEqual(Path('gpu_engine/public_sleep.py').read_bytes(),subprocess.check_output(['git','show','4dfdfbd4:gpu_engine/public_sleep.py']))
+        self.assertEqual(Path('gpu_engine/engine_toxic_callbacks.py').read_bytes(),subprocess.check_output(['git','show','b8092a85:gpu_engine/engine_toxic_callbacks.py']))
+        self.assertEqual(Path('gpu_engine/public_sleep.py').read_bytes(),subprocess.check_output(['git','show','b8092a85:gpu_engine/public_sleep.py']))
         side=j.zeros(1,j.int32);zero=j.zeros(1,j.int32);yes=j.ones(1,bool);no=j.zeros(1,bool)
         attempt=powder.Attempt(yes,yes,no,no,no,yes,yes,no,no,no,yes,zero,j.full(1,m.SLP,j.int32),zero,j.full_like(zero,2))
         raw=primary.words_device(side,side,side,j.full(1,self.move_id,j.int32),attempt)
@@ -95,7 +95,7 @@ class SleepPowderRuntimeTests(unittest.TestCase):
             changed=attempt._replace(**{field:value});self.assertFalse(bool(powder.supported_raw(primary.words_device(side,side,side,j.full(1,self.move_id,j.int32),changed)).any()),field)
         traces=[]
         with patch.object(risks,'_captured_toxic_matches',return_value=yes),patch.object(risks,'_captured_sleep_powder_matches',return_value=yes),patch.object(risks,'_captured_thunder_wave_matches',return_value=yes),patch.object(risks,'_observe',side_effect=lambda *a,**k:traces.append(a) or a[0]):
-            risks.observe_primary_status_device(NS(stream_id=zero),object(),yes,object(),active=yes,captured=object(),captured_sleep_powder=object())
+            risks.observe_primary_status_device(NS(stream_id=zero),NS(count=zero),yes,object(),active=yes,captured=object(),captured_sleep_powder=object())
         self.assertEqual(len(traces),1)
 
     def test_current_source_span_b8_and_lum_scope_stay_closed(self):

@@ -93,7 +93,7 @@ class SubstituteOwningTests(unittest.TestCase):
         default=transition.step_with_chance(s,acts,self.table,chance)
         self.same(out.step,default)
         tape=out.callbacks;ledger=tape.execution.ledger
-        self.assertEqual(ledger.count.tolist(),[2,2]);self.assertEqual(ledger.stage[:,:2].tolist(),[[2,2],[2,2]])
+        self.assertEqual(ledger.count.tolist(),[3,3]);self.assertEqual(ledger.site[:,0].tolist(),[int(execution.Site.TURNLOOP_PREFIX)]*2);self.assertEqual(ledger.stage[:,:3].tolist(),[[2,2,2]]*2)
         for row in range(2):
             raw=np.asarray(tape.words[row,:int(tape.count[row])]);writes=raw[raw[:,0]==sub.SUBSTITUTE_CREATED]
             self.assertEqual(writes[:,1:3].tolist(),[[0,25],[0,25]])
@@ -112,7 +112,7 @@ class SubstituteOwningTests(unittest.TestCase):
                 prefix=['|switch|p1a: Snorlax|Snorlax, L80, M|101/101' if owner==0 else '|switch|p1a: Snorlax|Snorlax, L80, M|100/100',
                     '|switch|p2a: Absol|Absol, L80, M|101/101' if owner==1 else '|switch|p2a: Absol|Absol, L80, M|100/100','|turn|1']
                 wire,_=public_wire.project_lines(public_wire.WireState(),prefix,**v4.wire_kwargs(self.catalog))
-                lines=['|move|p1a: Snorlax|Substitute|p1a: Snorlax','|-start|p1a: Snorlax|Substitute',f'|-damage|p1a: Snorlax|{own}',
+                lines=['|','|t:|1','|move|p1a: Snorlax|Substitute|p1a: Snorlax','|-start|p1a: Snorlax|Substitute',f'|-damage|p1a: Snorlax|{own}',
                     '|move|p2a: Absol|Substitute|p2a: Absol','|-start|p2a: Absol|Substitute',f'|-damage|p2a: Absol|{peer}','|','|upkeep','|turn|2']
                 _,ps=public_wire.project_lines(wire,lines,**v4.wire_kwargs(self.catalog))
                 expected=np.array([e.words() for p in ps for e in p.events],np.int32)
@@ -120,4 +120,4 @@ class SubstituteOwningTests(unittest.TestCase):
                 np.testing.assert_array_equal(actual,expected)
             self.assertFalse(bool(consumed.projection.B4_qualified.any()))
         joined,good=execution.join_consumed_owners(*drained,tables=self.account.device)
-        self.assertEqual(good.tolist(),[True,True]);self.assertEqual(joined.stage[:,:2].tolist(),[[3,3],[3,3]])
+        self.assertEqual(good.tolist(),[True,True]);self.assertEqual(joined.stage[:,:3].tolist(),[[3,3,3]]*2)

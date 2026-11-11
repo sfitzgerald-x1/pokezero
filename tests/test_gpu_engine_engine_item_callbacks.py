@@ -3,6 +3,7 @@ import ast
 import hashlib
 import inspect
 import json
+import subprocess
 import unittest
 from unittest.mock import patch
 
@@ -83,10 +84,13 @@ class ItemCallbacksTests(unittest.TestCase):
             if isinstance(node, list):
                 return [canonical(value) for value in node]
             return node
-        for function, expected in ((transition._lum_update,
-                'a3b44aafc4a5cb5c12e806430ddc19042bcd56602f01c8f7bdfa3349359edd9f'),
-                (secondary.after_status_event,
-                '6143ed888b4c1903a3686fc1e8750b84a7c0cd7383fd82c82fdc90bdf82fb41c')):
+        # Re-certify these complete functions against the integrated baseline;
+        # normalize only the same explicit disabled status observer as before.
+        for function,path in ((transition._lum_update,'gpu_engine/transition.py'),
+                              (secondary.after_status_event,'gpu_engine/secondary.py')):
+            frozen=ast.parse(subprocess.check_output(['git','show','b8092a85:'+path],text=True))
+            reference=next(n for n in frozen.body if isinstance(n,ast.FunctionDef)and n.name==function.__name__)
+            expected=hashlib.sha256(json.dumps(canonical(StripTrace().visit(reference)),separators=(',',':')).encode()).hexdigest()
             parsed = ast.parse(inspect.getsource(function)).body[0]
             value = json.dumps(canonical(StripTrace().visit(parsed)), separators=(',', ':'))
             self.assertEqual(hashlib.sha256(value.encode()).hexdigest(), expected)

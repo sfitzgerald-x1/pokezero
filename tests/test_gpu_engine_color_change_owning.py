@@ -4,6 +4,8 @@ import ast,json,os,subprocess,unittest
 from dataclasses import replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
+import gc
+from unittest.mock import patch
 import jax
 import jax.numpy as j
 import numpy as np
@@ -20,6 +22,26 @@ from _showdown_root import showdown_root
 import test_gpu_engine_no_damage_owning as fixtures
 
 class ColorChangeOwningTests(unittest.TestCase):
+ def setUp(self):
+  self.release_compilers()
+ @staticmethod
+ def release_compilers(*completed):
+  # Keep the exact arrays, but release completed CPU executable heaps before
+  # compiling the next genuine phase. This is a correctness fixture only.
+  jax.block_until_ready(completed);jax.clear_caches();gc.collect()
+ def completed_phase(self,name,_milliseconds):
+  # Source-witness mode completes both owner folds in public_pair.
+  if name in ('engine','requests','public_pair','public_p2','admission_p2'):
+   self.release_compilers()
+   print(type(self).__name__+' completed CPU phase '+name,flush=True)
+ def construct(self,*args,**kwargs):
+  original=driver._consume
+  def initial_consume(runtime,state,frame,*a,**kw):
+   self.release_compilers(state,frame)
+   print(type(self).__name__+' constructor inputs ready',flush=True)
+   return original(runtime,state,frame,*a,**dict(kw,timing_callback=self.completed_phase))
+  with patch.object(driver,'_consume',side_effect=initial_consume):
+   return driver.construct(*args,**kwargs)
  @classmethod
  def setUpClass(cls):
   fixtures.NoDamageOwningTests.setUpClass();cls.f=fixtures.NoDamageOwningTests;cls.metadata=deepcopy(cls.f.metadata)
@@ -91,8 +113,10 @@ const lines=[],p={hp,isActive:active,hasType:()=>same,setType(t){this.type=t;ret
        if ast.dump(key.value)!=ast.dump(ast.parse('values["types"]',mode='eval').body):raise AssertionError('constructor type storage expression changed')
      node.keywords=[x for x in node.keywords if x.arg!='base_types']
     return node
-  normalized=IntendedTypes().visit(ast.parse(Path('gpu_engine/transition.py').read_text()));baseline=dump_default_program(old)
+  normalized=IntendedTypes().visit(ast.parse(subprocess.check_output(['git','show','1da1c80d:gpu_engine/transition.py'],text=True)));baseline=dump_default_program(old)
   self.assertEqual(dump_default_program(normalized),baseline);assert_hp_rng_mutations_detected(self,normalized,baseline)
+  current=ast.parse(Path('gpu_engine/transition.py').read_text());integrated=ast.parse(subprocess.check_output(['git','show','b8092a85:gpu_engine/transition.py'],text=True))
+  self.assertEqual(ast.dump(current),ast.dump(integrated));assert_hp_rng_mutations_detected(self,current,dump_default_program(integrated))
   s=states.empty_state(1);base=j.broadcast_to(j.array([self.normal,0]),s.types.shape)
   s=s._replace(types=base,base_types=base,species=j.ones_like(s.species),level=j.ones_like(s.level)*80,hp=j.ones_like(s.hp)*100,max_hp=j.ones_like(s.hp)*100,stats=j.ones_like(s.stats)*100,ability=j.ones_like(s.ability)*self.pressure,base_ability=j.ones_like(s.ability)*self.pressure,moves=j.ones_like(s.moves)*self.surf,pp=j.ones_like(s.pp)*24,entry_pending=j.zeros_like(s.entry_pending))
   cursor=life.register(j.array([59001],j.int32),catalog=self.producer,expected_binding=self.producer.binding,expected_engine_binding=np.asarray(self.producer.engine_binding,np.uint32));tape=life._tape(cursor,self.producer,64)
@@ -187,14 +211,14 @@ const lines=[],p={hp,isActive:active,hasType:()=>same,setType(t){this.type=t;ret
    if capture_path:Path(capture_path).write_text(json.dumps(captured,sort_keys=True,allow_nan=False)+'\n')
   with TemporaryDirectory()as tmp:
    path=Path(tmp)/'literal.npz';np.savez_compressed(path,**dict(arrays,metadata_utf8=np.frombuffer(json.dumps(self.metadata).encode(),np.uint8)));pool=source_provenance.load_constructor_pool(path)
-   session=driver.construct(pool,np.array([[0,1],[1,0]],np.int64),prepared=self.prepared,stream_ids=j.array([58001,58002],j.int32),seed=31)
+   session=self.construct(pool,np.array([[0,1],[1,0]],np.int64),prepared=self.prepared,stream_ids=j.array([58001,58002],j.int32),seed=31)
   captured['initial']=snapshot(session.result);save()
   self.assertEqual(session.state.core.admitted.tolist(),[True,True])
   for owner in session.result.owners:self.assertEqual(owner.encoded.observation.admitted.tolist(),[True,True],str(owner.reason.tolist()))
   before=session.state;actions=j.array([[1,0],[0,1]],j.int32);draws=j.zeros((2,2,12),j.int32).at[:,:,4].set(1);chance=tr.ChanceInputs(draws,*[j.zeros((2,2),j.int32)for _ in range(4)],j.zeros(2,j.int32));frames=[];original=self.runtime['frame']
   def capture(*args,**kwargs):frame=original(*args,**kwargs);frames.append(frame);return frame
   self.runtime['frame']=capture
-  try:result=driver.advance(session,actions,chance_inputs=chance)
+  try:result=driver.advance(session,actions,chance_inputs=chance,timing_callback=self.completed_phase)
   finally:self.runtime['frame']=original
   frame=frames[-1];plain=jax.jit(lambda s,a:tr.step_with_chance(s,a,self.table,chance).state)(before.core.engine,actions)
   captured['frames'].append(snapshot(result,frame,plain));save()
@@ -213,7 +237,7 @@ const lines=[],p={hp,isActive:active,hasType:()=>same,setType(t){this.type=t;ret
    np.testing.assert_array_equal(expected,result.state.core.engine.types[:,owner])
   for frame_index in range(2):
    before=result.state.core.engine;switches=j.full((2,2),4,j.int32)
-   result=driver.advance(session,switches,chance_inputs=chance)
+   result=driver.advance(session,switches,chance_inputs=chance,timing_callback=self.completed_phase)
    plain=jax.jit(lambda s:tr.step_with_chance(s,switches,self.table,chance).state)(before)
    captured['frames'].append(snapshot(result,physical=plain));save()
    for key in plain._fields:np.testing.assert_array_equal(getattr(result.state.core.engine,key),getattr(plain,key),err_msg=key)

@@ -47,13 +47,15 @@ class ProtectOwningTests(unittest.TestCase):
   cls.fold=staticmethod(jax.jit(lambda s,f,p:full.project_and_fold(s,f,cls.runtime['public'].device,p,cls.catalog)))
  def test_original_source_default_and_compiler_capability(self):
   from gpu_engine import engine_source_frame_witness as witness
-  witness._source();self.assertEqual(len(witness.SOURCE_PINS),66)
+  witness._source();self.assertEqual(len(witness.SOURCE_PINS),88)
   for name in self.names[:2]:
    at=self.metadata['vocabulary']['moves'].index(name);self.assertTrue(bool(self.helper.device.protect.candidates[at]));self.assertEqual(int(self.runtime['kernel_risk_compiled'].device.selected_risk[at]),0)
   self.assertFalse(bool(self.helper.device.protect.candidates[self.metadata['vocabulary']['moves'].index('endure')]))
   self.assertIsNone(direct.compile_direct_hit_controls(engine_catalog=self.producer).device.protect)
-  old=ast.parse(subprocess.check_output(['git','show','0e1dc270:gpu_engine/transition.py'],text=True));after=ast.parse(Path('gpu_engine/transition.py').read_text())
+  old=ast.parse(subprocess.check_output(['git','show','0e1dc270:gpu_engine/transition.py'],text=True));after=ast.parse(subprocess.check_output(['git','show','5e2a0376:gpu_engine/transition.py'],text=True))
   baseline=dump_default_program(old);self.assertEqual(baseline,dump_default_program(after));assert_hp_rng_mutations_detected(self,after,baseline)
+  after=ast.parse(Path('gpu_engine/transition.py').read_text());integrated=ast.parse(subprocess.check_output(['git','show','b8092a85:gpu_engine/transition.py'],text=True))
+  self.assertEqual(ast.dump(after),ast.dump(integrated));assert_hp_rng_mutations_detected(self,after,dump_default_program(integrated))
   script="""const d=require(process.argv[1]+'/dist/sim/dex.js').Dex.mod('gen3'),out=[];
 for(const id of ['protect','detect']){const m=d.moves.get(id),c=d.conditions.get(m.volatileStatus),lines=[],p={toString:()=> 'p2a: Actor'};
 const b={add:(...v)=>lines.push(v.map(String).join('|')),checkMoveBypassesProtect:()=>false};c.onStart.call(b,p);c.onTryHit.call(b,p,{getVolatile:()=>null},d.moves.get('surf'));

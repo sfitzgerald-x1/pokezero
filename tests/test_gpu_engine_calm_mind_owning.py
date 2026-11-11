@@ -54,7 +54,10 @@ class CalmMindOwningTests(unittest.TestCase):
   closed=risk.compile_risks(self.producer,self.account);self.assertTrue(int(closed.device.selected_risk[move])&risk.BOOST)
   with self.assertRaises(ValueError):calm.check_compiled(replace(self.helper))
   with self.assertRaises(ValueError):jax.jit(lambda unused:calm.check_compiled(self.helper))(j.array(0))
-  before=ast.parse(subprocess.check_output(['git','show','e5d38e3c:gpu_engine/transition.py'],text=True));after=__import__('test_gpu_engine_v5_hypothetical_profile').normalized_hypothetical_default(Path('gpu_engine/transition.py').read_text(),as_tree=True);baseline=dump_default_program(before);self.assertEqual(baseline,dump_default_program(after));assert_hp_rng_mutations_detected(self,after,baseline)
+  # Re-certify the integrated device-hook program at the published PR base.
+  # Keep the whole normalized AST and HP/RNG mutation controls exact.
+  normalize=__import__('test_gpu_engine_v5_hypothetical_profile').normalized_hypothetical_default
+  before=normalize(subprocess.check_output(['git','show','b8092a85:gpu_engine/transition.py'],text=True),as_tree=True);after=normalize(Path('gpu_engine/transition.py').read_text(),as_tree=True);baseline=dump_default_program(before);self.assertEqual(baseline,dump_default_program(after));assert_hp_rng_mutations_detected(self,after,baseline)
   node=shutil.which('node')
   if not node:self.skipTest('node unavailable')
   root=Path(os.environ.get('POKEZERO_SHOWDOWN_ROOT',showdown_root_str()));self.assertEqual(subprocess.check_output(['git','-C',str(root),'rev-parse','HEAD'],text=True).strip(),events.SHOWDOWN)
@@ -74,7 +77,7 @@ class CalmMindOwningTests(unittest.TestCase):
   frame=life.LifecycleResult(actual.step.state,actual.callbacks.cursor,actual.callbacks,life.snapshot(cursor),life.snapshot(actual.callbacks.cursor),j.zeros(2,bool),j.zeros(2,j.int32));closed=[]
   for owner,(stream,public) in enumerate(consumers):
    ledger,result=ex.consume_frame_device(actual.callbacks.execution.ledger,frame,stream,public,active=j.ones(2,bool),tables=self.account.device,adapter_tables=self.adapter.device,catalog=self.catalog);closed.append(ledger)
-   self.assertEqual(result.projection.error.tolist(),[0,0]);self.assertEqual(ledger.stage[:,:2].tolist(),[[3,3],[3,3]]);self.assertEqual(result.public.mons.boosts[:,:,2:4].tolist(),[[[1,1],[1,1]]]*2);self.assertFalse(bool(result.projection.B4_qualified.any()))
+   self.assertEqual(result.projection.error.tolist(),[0,0]);self.assertEqual(ledger.site[:,0].tolist(),[int(ex.Site.TURNLOOP_PREFIX)]*2);self.assertEqual(ledger.stage[:,:3].tolist(),[[3,3,3],[3,3,3]]);self.assertEqual(result.public.mons.boosts[:,:,2:4].tolist(),[[[1,1],[1,1]]]*2);self.assertFalse(bool(result.projection.B4_qualified.any()))
    for row in (0,1):np.testing.assert_array_equal(self.f.words(result.projection,row),self.reference_words(actual.callbacks,row,owner))
   _,good=ex.join_consumed_owners(*closed,tables=self.account.device);self.assertTrue(bool(good.all()))
  def test_caps_blocked_other_boosts_and_prior_refusal_stay_unknown(self):
@@ -121,6 +124,9 @@ class CalmMindOwningTests(unittest.TestCase):
    k=int(w[0])
    if k==events.MOVE:lines.append(f'|move|{ident[int(w[1])]}|Calm Mind|{ident[int(w[1])]}')
    elif k==30:lines.append(f'|-boost|{ident[int(w[1])]}|'+('spa' if int(w[4])==2 else 'spd')+'|1')
+   elif k==life.TURNLOOP_PREFIX:
+    self.assertEqual(w.tolist(),[35,-1,-1,-1,-1,0,0,0,0,0])
+    lines.extend(['|','|t:|1'])
    elif k==life.ACTION_END:lines.append('|')
    elif k==life.UPKEEP:lines.append('|upkeep')
    elif k==life.TURN:lines.append(f'|turn|{int(tape.event_turn[row,index])}')

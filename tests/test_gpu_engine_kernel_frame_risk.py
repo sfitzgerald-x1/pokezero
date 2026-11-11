@@ -47,7 +47,9 @@ class KernelFrameRiskTests(unittest.TestCase):
         self.assertEqual(bad.risk.tolist(),[r.NAMESPACE]*2)
         inventory=json.loads(r.inventory_json(self.compiled))
         self.assertEqual(inventory['scope'],'DECLARED_CUTPOINT_IDENTITY_ONLY_UNWIRED_NO_COMPLETENESS')
-        self.assertEqual(len(inventory['declared']),24)
+        self.assertEqual(len(inventory['declared']),26)
+        self.assertEqual(inventory['declared'],{x.name:int(x) for x in r.Branch})
+        self.assertEqual((inventory['declared']['PRIMARY_STATUS'],inventory['declared']['HEAL_BELL']),(25,26))
         for label in ('complete','admitted','exhaustive'):self.assertFalse(hasattr(result,label))
 
     def test_constructor_baseline_is_literal_invariant_not_origin_proof(self):

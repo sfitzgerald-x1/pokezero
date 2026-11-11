@@ -75,7 +75,7 @@ class SubstituteFailureInputTests(unittest.TestCase):
   self.assertEqual([v['lines']for v in r],[['-fail|p1a: Actor|move: Substitute'],['-fail|p1a: Actor|move: Substitute'],['-fail|p1a: Actor|move: Substitute|[weak]'],['-fail|p1a: Actor|move: Substitute|[weak]'],[]]);self.assertEqual([v['result']for v in r],['nf']*4+[None]);self.assertEqual([v['hp']for v in r],[75,25,25,1,26]);self.assertEqual([v['sub']for v in r],[25,25,0,0,0])
   self.assertFalse(bool(sub.compile_substitute(engine_catalog=self.producer,metadata=self.metadata).device.failure));self.assertTrue(bool(self.sub.device.failure))
   with self.assertRaises(ValueError):sub.compile_substitute(engine_catalog=self.producer,metadata=self.metadata,source_rules=deepcopy(self.rules))
-  old=ast.parse(subprocess.check_output(['git','show',BASE+':gpu_engine/transition.py'],text=True));new=ast.parse(Path('gpu_engine/transition.py').read_text());baseline=dump_default_program(old);self.assertEqual(dump_default_program(new),baseline);assert_hp_rng_mutations_detected(self,new,baseline)
+  old=ast.parse(subprocess.check_output(['git','show','b8092a85:gpu_engine/transition.py'],text=True));new=ast.parse(Path('gpu_engine/transition.py').read_text());baseline=dump_default_program(old);self.assertEqual(dump_default_program(new),baseline);assert_hp_rng_mutations_detected(self,new,baseline)
   witness._source()
   for order in [('benchmark_retained_games','engine_lifecycle_event_device','engine_full_v4_event_device'),('engine_full_v4_event_device','engine_lifecycle_event_device','benchmark_retained_games')]:subprocess.run([__import__('sys').executable,'-c',';'.join('import gpu_engine.'+n for n in order)],check=True,capture_output=True)
 

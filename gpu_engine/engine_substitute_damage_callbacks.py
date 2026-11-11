@@ -289,6 +289,14 @@ def span_matches(tape,p,write):
 
 def record(tape,p,write):
     from . import engine_execution_completeness as ex
+    # A legacy direct compiler deliberately has no Substitute capability.
+    # route() requests no attempt there; do not inspect absent member data.
+    # A forged/requested attempt still remains unhandled, never credited.
+    if p.context.data.substitute_damage is None:
+        actual=ex._context(tape)
+        if actual is None:return tape
+        ledger=ex.unhandled(actual.ledger,p.ticket,active=p.requested,tables=actual.tables)
+        return ex._put_context(tape,ledger,actual)
     raw=raw_words(p,write);before=tape
     tape=public._append(tape,SUBSTITUTE_DAMAGE,p.actor,p.physical,1-p.actor,p.target,
         tuple(raw[:,i]for i in range(5,10)),p.requested&valid_write(write,len(tape.count),pending=p)&_return_power(p.context,p.move,write.power,p.actor_happiness,p.caller_move))

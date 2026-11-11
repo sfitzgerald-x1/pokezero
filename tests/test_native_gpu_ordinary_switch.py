@@ -51,7 +51,8 @@ class OrdinarySwitchTests(unittest.TestCase):
             moves=s.moves.at[:,foe,5].set(j.array([self.id('moves',name) for name in
                 ([name for name in ('explosion','fireblast','rockslide','earthquake') if name!=move][:3]+[move])])),
             hp=s.hp.at[:,switcher,3].set(incoming_hp))
-        s=s._replace(base_ability=s.ability)
+        # Initial immutable birth facts; later deliberate type changes stay separate.
+        s=s._replace(base_ability=s.ability,base_types=s.types)
         actions=[3,3];actions[switcher]=6
         return s,tuple(actions)
 

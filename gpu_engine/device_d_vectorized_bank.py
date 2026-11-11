@@ -97,6 +97,11 @@ def measure(plan,path,*,backend,enable_benchmark=False):
         timing_scope='One original bank including cold preparation/compilation, collection, labels, queue and cache drain; setup/export separately reported. Phase spans overlap and are not additive.',
         stop_rule='One bank; if miss and host-world-preparation is largest, one batched-world-preparation change and one separate declared measurement, then existing hold rule. No other speed loop.',
         scientific_strength_qualification=False)
+    if getattr(backend.teacher,'batched_prep',False):
+        report['batched_preparation']=True
+        report['root_prepare_timing_scope']='Per-root planning wall plus equal-per-pending-root share of chunk detach wall; not isolated per-frame detach timing.'
+        report['compile']['batched_prepare_seconds']=None
+        report['compile']['batched_prepare_scope']='First-use detach/readout compilation is included in root preparation and bank wall, not separately isolated.'
     store.emit('D3_BANK_END',**report)
     with (Path(path)/'d3-bank-result.json').open('x')as output:json.dump(report,output,allow_nan=False,indent=2)
     return report

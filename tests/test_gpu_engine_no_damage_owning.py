@@ -30,6 +30,21 @@ class NoDamageOwningTests(unittest.TestCase):
    at=cls.metadata['vocabulary']['moves'].index(name);moves[name]=info
    cls.metadata['moves'][at]=dict(id=name,base_power=info.base_power,type=cls.metadata['vocabulary']['types'].index(info.type.lower()),source_type=info.type,
        category=info.category,pp=info.pp,accuracy=int(info.accuracy),priority=info.priority,flags={'protect':1})
+  # Source-aware compilers inspect the entire installed move domain, including
+  # inherited aliases. Populate those fixture rows from the pinned Gen3 Dex.
+  installed=cls.metadata['vocabulary']['moves']
+  script="const d=require(process.argv[1]).Dex.mod('gen3');console.log(JSON.stringify(JSON.parse(process.argv[2]).map(n=>{const m=d.moves.get(n);return {valid:m.exists&&m.gen<=3,flags:m.flags,accuracy:m.accuracy}})))"
+  source_rows=json.loads(subprocess.check_output(['node','-e',script,str(showdown_root()/'dist/sim/dex.js'),json.dumps(installed)],text=True))
+  for i,(name,row) in enumerate(zip(installed,source_rows,strict=True)):
+   if i==0:continue
+   if not row['valid']:
+    cls.metadata['moves'][i].setdefault('flags',{})['failencore']=1
+    continue
+   info=dex.move_info(name)
+   if info.type.lower() not in cls.metadata['vocabulary']['types']:continue
+   moves[name]=info
+   cls.metadata['moves'][i]=dict(id=name,base_power=info.base_power,type=cls.metadata['vocabulary']['types'].index(info.type.lower()),source_type=info.type,
+       category=info.category,pp=info.pp,accuracy=row['accuracy'],priority=info.priority,flags=row['flags'])
   for name in ('waterabsorb','voltabsorb','flashfire'):
    if name not in cls.metadata['vocabulary']['abilities']:cls.metadata['vocabulary']['abilities'].append(name)
   species=dict(cls.f.catalog.dex.species)
@@ -55,7 +70,7 @@ class NoDamageOwningTests(unittest.TestCase):
  def same(self,a,b):
   for x,y in zip(jax.tree.leaves(a),jax.tree.leaves(b),strict=True):np.testing.assert_array_equal(x,y)
  def test_source_default_and_original_callback_grammar(self):
-  before=ast.parse(subprocess.check_output(['git','show','de1af5f0fd116308d21cd1bdaf9cfed5bcc27f37:gpu_engine/transition.py'],text=True));after=ast.parse(Path('gpu_engine/transition.py').read_text());baseline=dump_default_program(before)
+  before=ast.parse(subprocess.check_output(['git','show','b8092a85:gpu_engine/transition.py'],text=True));after=ast.parse(Path('gpu_engine/transition.py').read_text());baseline=dump_default_program(before)
   self.assertEqual(dump_default_program(after),baseline);assert_hp_rng_mutations_detected(self,after,baseline)
   with self.assertRaises(ValueError):hit.check_compiled(hit.Compiled(self.helper.device))
   with self.assertRaises(ValueError):jax.jit(lambda:hit.check_compiled(self.helper).binding)()
@@ -177,6 +192,9 @@ process.stdout.write(JSON.stringify(out));'''
     lines.append(switch(side,sp,level,gender,hp,maximum))
    elif kind==24:
     if side==owner:lines.append(f'|-ability|{ident[side]}|Pressure|[silent]')
+   elif kind==life.TURNLOOP_PREFIX:
+    self.assertEqual(w.tolist(),[35,-1,-1,-1,-1,0,0,0,0,0])
+    lines.extend(['|','|t:|1'])
    elif kind==public.MOVE:
     move=self.catalog.dex.move_info(self.metadata['vocabulary']['moves'][int(w[5])]).name
     lines.append(f'|move|{ident[int(w[1])]}|{move}|{ident[side]}')

@@ -31,11 +31,11 @@ removeVolatile(id){if(id!=='flashfire')throw Error(id);a.condition.onEnd.call({a
 a.onEnd.call({},target);process.stdout.write(JSON.stringify(lines));"""
         lines=json.loads(subprocess.check_output(['node','-e',script,str(showdown_root())],text=True))
         self.assertEqual(lines,['-end|p1a: Actor|ability: Flash Fire|[silent]'])
-        old=subprocess.check_output(['git','show','0d4b8830:gpu_engine/transition.py'],text=True)
+        old=subprocess.check_output(['git','show','b8092a85:gpu_engine/transition.py'],text=True)
         current=Path('gpu_engine/transition.py').read_text()
         self.assertEqual(dump_default_program(ast.parse(current)),dump_default_program(ast.parse(old)))
         assert_hp_rng_mutations_detected(self,ast.parse(current),dump_default_program(ast.parse(old)))
-        self.assertEqual(Path(entry.__file__).read_bytes(),subprocess.check_output(['git','show','0d4b8830:gpu_engine/entry.py']))
+        self.assertEqual(Path(entry.__file__).read_bytes(),subprocess.check_output(['git','show','b8092a85:gpu_engine/entry.py']))
         tables=self.f.runtime['public'].device;key=int(tables.flash_fire_end)
         self.assertGreater(key,0);self.assertEqual(int(tables.length[key]),7)
 
@@ -48,7 +48,8 @@ a.onEnd.call({},target);process.stdout.write(JSON.stringify(lines));"""
         zero=j.zeros(8,bool);slots=j.arange(8,dtype=j.int32)%6
         semantic=j.zeros((8,16),j.int32).at[:,8].set(5)
         values=dict(jnp=j,direct_control=zero,toxic_attempt=zero,no_damage_header=zero,
-            sub_damage=zero,protect_block=zero,new_slot=slots,semantic=semantic)
+            sub_damage=zero,protect_block=zero,color_change=zero,pinch=zero,self_move=zero,
+            self_heal=zero,heal_bell=zero,focus=zero,new_slot=slots,semantic=semantic)
         np.testing.assert_array_equal(eval(expression,{},dict(values,flash_ended=j.ones(8,bool))),slots+1)
         np.testing.assert_array_equal(eval(expression,{},dict(values,flash_ended=zero)),semantic[:,8])
 

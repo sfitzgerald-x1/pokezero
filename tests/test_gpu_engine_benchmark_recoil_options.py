@@ -23,7 +23,7 @@ class BenchmarkRecoilOptionsTests(unittest.TestCase):
    with self.assertRaises(ValueError):driver.prepare(None,None,fake_forward=lambda x:x,**kwargs)
  def test_all_measurement_and_model_functions_ast_unchanged(self):
   def funcs(s):return {n.name:ast.dump(n,include_attributes=False) for n in ast.parse(s).body if isinstance(n,(ast.FunctionDef,ast.AsyncFunctionDef)) and n.name!='prepare'}
-  old=subprocess.check_output(['git','show','58ec3459:gpu_engine/benchmark_retained_games.py'],text=True)
+  old=subprocess.check_output(['git','show','b8092a85:gpu_engine/benchmark_retained_games.py'],text=True)
   self.assertEqual(funcs(old),funcs(Path('gpu_engine/benchmark_retained_games.py').read_text()))
  def test_fresh_benchmark_import_and_all_frozen_source_pins(self):
   import os,sys

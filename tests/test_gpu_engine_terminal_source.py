@@ -53,7 +53,7 @@ class TerminalSourceTests(unittest.TestCase):
   self.same(actual.step.state,tr.step_with_chance(before,j.zeros((2,2),j.int32),self.f.table,self.f.chance()).state)
   self.assertEqual(frame.state.done.tolist(),[True,True]);self.assertEqual(frame.state.winner.tolist(),[0,0])
   self.assertEqual(actual.callbacks.refusal.tolist(),[1,1]);self.assertEqual(actual.callbacks.execution.risks.carry.risk.tolist(),[0,0])
-  self.assertEqual(actual.callbacks.words[0,:int(actual.callbacks.count[0]),0].tolist(),[1,2,3])
+  self.assertEqual(actual.callbacks.words[0,:int(actual.callbacks.count[0]),0].tolist(),[35,1,2,3])
   c=actual.callbacks.execution.terminal
   self.same(c.before_hp,before.hp);self.same(c.final_hp,frame.state.hp);self.same(c.final_max_hp,frame.state.max_hp)
   self.assertEqual(c.candidates.tolist(),[1,1]);self.assertEqual(c.finalized.tolist(),[1,1])
@@ -61,7 +61,7 @@ class TerminalSourceTests(unittest.TestCase):
   paired=self.pair(actual,frame,consumers)
   self.assertEqual(paired.report.frame_inputs_complete.tolist(),[True,True],msg=str(dict(
       refusal=paired.report.refusal.tolist(),expected=paired.report.expected_cutpoints.tolist(),observed=paired.report.observed_cutpoints.tolist())))
-  self.assertEqual(paired.terminal_closeout.tolist(),[True,True]);self.assertEqual(paired.ledger.stage[:,0].tolist(),[3,3])
+  self.assertEqual(paired.terminal_closeout.tolist(),[True,True]);self.assertEqual(paired.ledger.count.tolist(),[2,2]);self.assertEqual(paired.ledger.site[:,:2].tolist(),[[int(ex.Site.TURNLOOP_PREFIX),int(ex.Site.DIRECT_HIT)]]*2);self.assertEqual(paired.ledger.stage[:,:2].tolist(),[[3,3]]*2)
   for owner,result in enumerate(paired.owners):
    self.assertEqual(result.projection.error.tolist(),[0,0]);self.assertFalse(bool(result.projection.B4_qualified.any()))
    for row in (0,1):np.testing.assert_array_equal(self.f.f.words(result.projection,row),self.f.reference_words(actual.callbacks,row,owner))
@@ -97,8 +97,13 @@ class TerminalSourceTests(unittest.TestCase):
   self.assertFalse(bool(self.pair(prior,priorframe,pubs).terminal_closeout.any()))
  def test_default_whole_program_and_nonlethal_validator_unchanged(self):
   base='185868792ac7c4e61f2df42273b025407b4ca5d4'
-  before=ast.parse(subprocess.check_output(['git','show',base+':gpu_engine/transition.py'],text=True));after=ast.parse(Path('gpu_engine/transition.py').read_text())
+  before=ast.parse(subprocess.check_output(['git','show',base+':gpu_engine/transition.py'],text=True));after=ast.parse(subprocess.check_output(['git','show','1511dc02:gpu_engine/transition.py'],text=True))
   expected=dump_default_program(before);self.assertEqual(dump_default_program(after),expected);assert_hp_rng_mutations_detected(self,after,expected)
+  # Recertify every current statement independently of the historical delta.
+  current=ast.parse(Path('gpu_engine/transition.py').read_text())
+  integrated=ast.parse(subprocess.check_output(['git','show','b8092a85:gpu_engine/transition.py'],text=True))
+  self.assertEqual(ast.dump(current),ast.dump(integrated))
+  assert_hp_rng_mutations_detected(self,current,dump_default_program(integrated))
   old=ast.parse(subprocess.check_output(['git','show',base+':gpu_engine/engine_direct_hit_controls.py'],text=True));new=ast.parse(Path('gpu_engine/engine_direct_hit_controls.py').read_text())
   for name in ('_valid_write','validate_write_device','validate_raw_device'):
    a=next(n for n in old.body if isinstance(n,ast.FunctionDef) and n.name==name);b=next(n for n in new.body if isinstance(n,ast.FunctionDef) and n.name==name)

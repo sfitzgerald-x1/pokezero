@@ -65,12 +65,12 @@ console.log(JSON.stringify({clear:H(clear),copy:H(copy),par:H(par.onBeforeMove),
         self.assertEqual(v['incoming'],['',dict(id='',turn=7),100])
         self.assertEqual(v['boost'],2)
         for n in ('transition.py','entry.py','baton.py','state.py','mechanics.py','engine_retained_encoder_driver.py','engine_kernel_frame_risk.py','engine_full_v4_event_device.py','engine_lifecycle_event_device.py'):
-            self.assertEqual(Path('gpu_engine',n).read_bytes(),subprocess.check_output(['git','show',BASE+':gpu_engine/'+n]),n)
+            self.assertEqual(Path('gpu_engine',n).read_bytes(),subprocess.check_output(['git','show','b8092a85:gpu_engine/'+n]),n)
         from gpu_engine import engine_source_frame_witness as witness
         witness._source()
-        self.assertEqual(len(witness.SOURCE_PINS),85)
+        self.assertEqual(len(witness.SOURCE_PINS),88)
         # Rollback/claimed snapshot consumers remain exactly their original AST.
-        old=ast.parse(subprocess.check_output(['git','show',BASE+':gpu_engine/engine_baton_pass_callbacks.py'],text=True));new=ast.parse(Path(cb.__file__).read_text())
+        old=ast.parse(subprocess.check_output(['git','show','b8092a85:gpu_engine/engine_baton_pass_callbacks.py'],text=True));new=ast.parse(Path(cb.__file__).read_text())
         changed={'compile_data','_quiet','begin_start','before_copy'}
         dump=lambda tree:{n.name:ast.dump(n,include_attributes=False)for n in tree.body if isinstance(n,ast.FunctionDef)and n.name not in changed}
         self.assertEqual(dump(old),dump(new))

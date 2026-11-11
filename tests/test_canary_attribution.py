@@ -1,4 +1,5 @@
 import unittest
+import itertools
 from pokezero import canary_attribution as c
 
 
@@ -44,6 +45,14 @@ class AttributionTests(unittest.TestCase):
         self.assertIsNone(c.attribute(dict(direction='UNRESOLVED'),dict(direction='LOSS'),foulplay_failed=True)['training_route'])
         self.assertEqual(c.attribute(dict(direction='LOSS'),dict(direction='LOSS'),foulplay_failed=False)['training_route'],'V2')
         with self.assertRaises(ValueError):c.attribute(dict(direction='WIN'),dict(direction='WIN'),foulplay_failed=None)
+
+    def test_passing_fidelity_canary_selects_v2_for_every_direct_result(self):
+        for a,b in itertools.product(('WIN','LOSS','UNRESOLVED'),repeat=2):
+            with self.subTest(engine=a,showdown=b):
+                self.assertEqual(c.attribute(dict(direction=a),dict(direction=b),foulplay_failed=False),
+                    dict(cause='FOULPLAY_CANARY_NOT_FAILED',training_route='V2'))
+        self.assertEqual(c.attribute(None,None,foulplay_failed=False)['training_route'],'V2')
+        with self.assertRaises(ValueError):c.attribute(None,None,foulplay_failed=True)
 
 
 if __name__ == '__main__':unittest.main()

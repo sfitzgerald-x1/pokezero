@@ -70,14 +70,18 @@ class WispMissTests(unittest.TestCase):
   bad=c._replace(after=tuple(a.at[0].set(0) for a in c.after));self.assertFalse(bool(cb.captured_matches(tape,bad)[0]))
  def test_source_default_actual_observer_operands_and_legacy(self):
   f=self.f;self.assertEqual(int(f.helper.device.primary_plain_status.wisp_miss),f.metadata['vocabulary']['moves'].index('willowisp'));witness._source()
-  old=ast.parse(subprocess.check_output(['git','show',BASE+':gpu_engine/transition.py'],text=True));new=ast.parse(Path('gpu_engine/transition.py').read_text());baseline=dump_default_program(old);self.assertEqual(baseline,dump_default_program(new));assert_hp_rng_mutations_detected(self,new,baseline)
+  old=ast.parse(subprocess.check_output(['git','show',BASE+':gpu_engine/transition.py'],text=True));feature=ast.parse(subprocess.check_output(['git','show','5379f638:gpu_engine/transition.py'],text=True));baseline=dump_default_program(old)
+  self.assertEqual(baseline,dump_default_program(feature));assert_hp_rng_mutations_detected(self,feature,baseline)
+  new=ast.parse(Path('gpu_engine/transition.py').read_text());integrated=ast.parse(subprocess.check_output(['git','show','b8092a85:gpu_engine/transition.py'],text=True))
+  self.assertEqual(ast.dump(new),ast.dump(integrated));assert_hp_rng_mutations_detected(self,new,dump_default_program(integrated))
   # Whole production function symbol table catches observer-only undefined names.
   code=Path('gpu_engine/transition.py').read_text();symbols=symtable.symtable(code,'transition.py','exec');globals_={s.get_name()for s in symbols.get_symbols()}
   import builtins
   step=next(x for x in symbols.get_children() if x.get_name()=='step_with_chance')
   self.assertFalse({s.get_name()for s in step.get_symbols() if s.is_global() and s.is_referenced()}-globals_-set(dir(builtins)))
   for filename in ('effects.py','secondary.py','state.py','mechanics.py','engine_retained_encoder_driver.py'):
-   self.assertEqual(Path('gpu_engine',filename).read_bytes(),subprocess.check_output(['git','show',BASE+':gpu_engine/'+filename]))
+   self.assertEqual(subprocess.check_output(['git','show','5379f638:gpu_engine/'+filename]),subprocess.check_output(['git','show',BASE+':gpu_engine/'+filename]))
+   self.assertEqual(Path('gpu_engine',filename).read_bytes(),subprocess.check_output(['git','show','b8092a85:gpu_engine/'+filename]))
   # No source capability means the named new route stays closed.
   tape,c,_=self.component();data=c.pending.context.data;plain=data.primary_plain_status._replace(wisp_miss=j.array(0,j.int32));context=c.pending.context._replace(data=data._replace(primary_plain_status=plain));bad=c._replace(pending=c.pending._replace(context=context));self.assertFalse(bool(cb.captured_matches(tape,bad).any()))
  def test_original_miss_writer_both_owners_join_and_atomic_rollback(self):

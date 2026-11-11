@@ -76,9 +76,11 @@ class RestSuccessTests(unittest.TestCase):
   self.assertFalse(bool(cb.captured_matches(got._replace(words=got.words.at[:,2,8].set(0)),c).any()))
 
  def test_source_default_and_original_handlers(self):
-  witness._source();self.assertEqual(len(witness.SOURCE_PINS),77)
-  oldtree=ast.parse(subprocess.check_output(['git','show',BASE+':gpu_engine/transition.py'],text=True));new=ast.parse(Path('gpu_engine/transition.py').read_text());baseline=dump_default_program(oldtree)
+  witness._source();self.assertEqual(len(witness.SOURCE_PINS),88)
+  oldtree=ast.parse(subprocess.check_output(['git','show',BASE+':gpu_engine/transition.py'],text=True));new=ast.parse(subprocess.check_output(['git','show','da41da40:gpu_engine/transition.py'],text=True));baseline=dump_default_program(oldtree)
   self.assertEqual(dump_default_program(new),baseline);assert_hp_rng_mutations_detected(self,new,baseline)
+  new=ast.parse(Path('gpu_engine/transition.py').read_text());integrated=ast.parse(subprocess.check_output(['git','show','b8092a85:gpu_engine/transition.py'],text=True))
+  self.assertEqual(ast.dump(new),ast.dump(integrated));assert_hp_rng_mutations_detected(self,new,dump_default_program(integrated))
   script=r"""const d=require(process.argv[1]+'/dist/sim/dex.js').Dex.mod('gen3'),{Battle}=require(process.argv[1]+'/dist/sim/battle.js'),lines=[],p={hp:186,maxhp:288,status:'',isActive:true,hasAbility:()=>false,toString:()=> 'p1a: Actor',statusState:{},removeVolatile:()=>false,getHealth:()=>`${p.hp}/${p.maxhp} slp`},b={effectState:p.statusState,random:()=>4,trunc:Math.trunc,runEvent:(...x)=>x.at(-1),add:(...x)=>lines.push(x.map(v=>typeof v==='function'?v():String(v)).join('|'))};p.heal=x=>{const old=p.hp;p.hp=Math.min(p.maxhp,p.hp+x);return p.hp-old};p.setStatus=(x,s,m)=>{p.status=x;d.conditions.get(x).onStart.call(b,p,s,m);return true};b.heal=x=>Battle.prototype.heal.call(b,x,p,p,move);const move=d.moves.get('rest');move.onHit.call(b,p,p,move);console.log(JSON.stringify({lines,time:p.statusState.time,start:p.statusState.startTime}));"""
   got=json.loads(subprocess.check_output(['node','-e',script,str(showdown_root())],text=True));self.assertEqual(got['lines'],['-status|p1a: Actor|slp|[from] move: Rest','-heal|p1a: Actor|288/288 slp|[silent]']);self.assertEqual((got['time'],got['start']),(3,3))
   for modules in [('benchmark_retained_games','engine_lifecycle_event_device','engine_full_v4_event_device'),('engine_full_v4_event_device','engine_lifecycle_event_device','benchmark_retained_games')]:subprocess.run([__import__('sys').executable,'-c',';'.join('import gpu_engine.'+n for n in modules)],check=True,capture_output=True)

@@ -61,7 +61,12 @@ class RockHeadSilentInputTests(unittest.TestCase):
   sticky=recoil.record_device(t._replace(refusal=t.refusal|64),p,w);self.assertTrue(bool((sticky.refusal&64).all()))
   # Existing positive and target-KO paths still emit only their original spans.
   pos,kp,rp=self.a.pending();done=self.a.after(pos,kp,rp);self.assertEqual(done.execution.ledger.stage[:,:2].tolist(),[[2,2]]*8)
-  before=dump_default_program(ast.parse(subprocess.check_output(['git','show',BASE+':gpu_engine/transition.py'],text=True)));current=ast.parse(Path('gpu_engine/transition.py').read_text());self.assertEqual(before,dump_default_program(current));assert_hp_rng_mutations_detected(self,current,before)
+  before=dump_default_program(ast.parse(subprocess.check_output(['git','show',BASE+':gpu_engine/transition.py'],text=True)))
+  historical=ast.parse(subprocess.check_output(['git','show','c979e060:gpu_engine/transition.py'],text=True))
+  self.assertEqual(before,dump_default_program(historical));assert_hp_rng_mutations_detected(self,historical,before)
+  current=ast.parse(Path('gpu_engine/transition.py').read_text())
+  integrated=ast.parse(subprocess.check_output(['git','show','b8092a85:gpu_engine/transition.py'],text=True))
+  self.assertEqual(ast.dump(current),ast.dump(integrated));assert_hp_rng_mutations_detected(self,current,dump_default_program(integrated))
   for modules in(('benchmark_retained_games','engine_lifecycle_event_device','engine_full_v4_event_device'),('engine_full_v4_event_device','engine_lifecycle_event_device','benchmark_retained_games')):subprocess.run([__import__('sys').executable,'-c',';'.join('import gpu_engine.'+n for n in modules)],check=True,capture_output=True)
  def test_both_full_exact_original_zero_recoil_words_and_stage3(self):
   b=2;s,c,consumers,_,t,p=self.pending(b,consume=True);w=self.write(p);out=recoil.record_device(t,p,w);rows=j.arange(b);cap=p.captured

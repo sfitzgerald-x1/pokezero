@@ -49,8 +49,8 @@ class NaturalCureTests(unittest.TestCase):
   got=json.loads(subprocess.check_output(['node','-e',script,str(showdown_root())],text=True));self.assertEqual(got,[dict(status='',lines=[f'|-curestatus|p1a: Actor|{c}|[from] ability: Natural Cure'])for c in ('par','brn','psn','tox','slp','frz')])
  def test_default_physics_source_and_wiring(self):
   witness._source();self.assertEqual((self.ability,len(self.metadata['vocabulary']['abilities'])),(38,81));self.assertEqual(int(ex.Site.NATURAL_CURE),45)
-  old=ast.parse(subprocess.check_output(['git','show',BASE+':gpu_engine/transition.py'],text=True));new=ast.parse(Path('gpu_engine/transition.py').read_text());self.assertEqual(dump_default_program(old),dump_default_program(new));assert_hp_rng_mutations_detected(self,new,dump_default_program(old))
-  for name in ('entry.py','baton.py','state.py','mechanics.py','items.py'):self.assertEqual(Path('gpu_engine',name).read_bytes(),subprocess.check_output(['git','show',BASE+':gpu_engine/'+name]))
+  old=ast.parse(subprocess.check_output(['git','show','b8092a85:gpu_engine/transition.py'],text=True));new=ast.parse(Path('gpu_engine/transition.py').read_text());self.assertEqual(dump_default_program(old),dump_default_program(new));assert_hp_rng_mutations_detected(self,new,dump_default_program(old))
+  for name in ('entry.py','baton.py','state.py','mechanics.py','items.py'):self.assertEqual(Path('gpu_engine',name).read_bytes(),subprocess.check_output(['git','show','b8092a85:gpu_engine/'+name]))
   import builtins
   module=symtable.symtable(Path('gpu_engine/transition.py').read_text(),'transition.py','exec');step=next(c for c in module.get_children()if c.get_name()=='step_with_chance');self.assertEqual([s.get_name()for s in step.get_symbols()if s.is_referenced()and s.is_global()and s.get_name()not in set(module.get_identifiers())|set(dir(builtins))],[])
  def test_ordinary_late_owned_all_statuses_and_receipt_poison(self):

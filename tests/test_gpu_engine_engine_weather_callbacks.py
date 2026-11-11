@@ -2,6 +2,7 @@
 import ast
 import hashlib
 import inspect
+import subprocess
 import json
 import unittest
 from unittest.mock import patch
@@ -70,14 +71,23 @@ class WeatherCallbacksTests(unittest.TestCase):
             if isinstance(node, list):
                 return [canonical(value) for value in node]
             return node
-        parsed = ast.parse(inspect.getsource(entry.enter)).body[0]
+        # Retain the original weather-only proof on its immutable feature.
+        historical=ast.parse(subprocess.check_output(['git','show','2acde48408f02649e07b59ebdccf09f429cfa7ed:gpu_engine/entry.py'],text=True))
+        parsed=next(n for n in historical.body if isinstance(n,ast.FunctionDef)and n.name=='enter')
         index = [arg.arg for arg in parsed.args.kwonlyargs].index('_weather_trace')
         parsed.args.kwonlyargs.pop(index); parsed.args.kw_defaults.pop(index)
         text = json.dumps(canonical(StripTrace().visit(parsed)), separators=(',', ':'))
         self.assertEqual(hashlib.sha256(text.encode()).hexdigest(), 'c15078731b3eb22676586f59f5a322d443764d8f5e8eb2049443e26a84bd2eaf')
-        self.assertEqual(entry.EntryTable._fields, ('weather_ability', 'intimidate', 'natural_cure',
-            'levitate', 'attack_drop_immune', 'swift_swim', 'chlorophyll', 'flying_type', 'ground_type',
-            'spikes_move', 'speed_boost', 'truant', 'trace', 'status_cure', 'own_tempo'))
+        # The integrated entry ABI now includes later opt-in capabilities.
+        # Bind its complete current function and table to the published base;
+        # do not erase unfamiliar operands to force the historical proof.
+        integrated=ast.parse(subprocess.check_output(['git','show','b8092a85:gpu_engine/entry.py'],text=True))
+        original_enter=next(n for n in integrated.body if isinstance(n,ast.FunctionDef)and n.name=='enter')
+        current_enter=ast.parse(inspect.getsource(entry.enter)).body[0]
+        self.assertEqual(ast.dump(current_enter,include_attributes=False),ast.dump(original_enter,include_attributes=False))
+        table=next(n for n in integrated.body if isinstance(n,ast.ClassDef)and n.name=='EntryTable')
+        fields=tuple(n.target.id for n in table.body if isinstance(n,ast.AnnAssign))
+        self.assertEqual(entry.EntryTable._fields,fields)
 
     def test_actual_writes_mixed_same_weather_dead_and_noop_rows(self):
         s = state(8); rows = j.arange(8)

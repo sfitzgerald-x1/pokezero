@@ -92,7 +92,8 @@ class ComponentShardTests(unittest.TestCase):
                 self.assertEqual(result.errors, [])
                 self.assertEqual(result.skipped, [])
 
-    def isolated(self, root, index=0, count=1, resource_interval_seconds=0, isolate_standard_classes=()):
+    def isolated(self, root, index=0, count=1, resource_interval_seconds=0, isolate_standard_classes=(),
+                 low_optimization_cases=()):
         # Actual fresh parent AND child interpreters, no mocked process runner
         # and no real component discovery/JAX imports in these tiny fixtures.
         code = """
@@ -100,17 +101,79 @@ import json, sys, unittest
 from scripts.run_gpu_component_shard import run_process_blocks
 suite = unittest.TestLoader().discover(sys.argv[1], 'test_gpu_engine*.py')
 raise SystemExit(run_process_blocks(suite, int(sys.argv[2]), int(sys.argv[3]), start_dir=sys.argv[1],
-    resource_interval_seconds=float(sys.argv[4]), isolate_standard_classes=json.loads(sys.argv[5])))
+    resource_interval_seconds=float(sys.argv[4]), isolate_standard_classes=json.loads(sys.argv[5]),
+    low_optimization_cases=json.loads(sys.argv[6])))
 """
         environment = dict(os.environ)
         environment['PYTHONPATH'] = os.pathsep.join([str(ROOT / 'src'), str(ROOT), environment.get('PYTHONPATH', '')])
         result = subprocess.run([sys.executable, '-c', code, str(root), str(index), str(count),
-            str(resource_interval_seconds), json.dumps(isolate_standard_classes)],
+            str(resource_interval_seconds), json.dumps(isolate_standard_classes), json.dumps(low_optimization_cases)],
             cwd=ROOT, env=environment, text=True, capture_output=True, timeout=30)
         summaries = [json.loads(line) for line in result.stdout.splitlines() if line.startswith('{')]
         terminal = [row for row in summaries if row.get('process_blocks_terminal')]
         self.assertEqual(len(terminal), 1, (result.returncode, result.stdout, result.stderr))
         return result, terminal[0]
+
+    def test_low_optimization_is_only_in_named_original_case_process(self):
+        from scripts.run_gpu_component_shard import LOW_OPTIMIZATION_XLA_FLAGS
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder); log = root/'flags.jsonl'
+            (root/'test_gpu_engine_flags.py').write_text(textwrap.dedent(f'''
+                import json, os, unittest
+                from pathlib import Path
+                class Case(unittest.TestCase):
+                    def setUp(self):
+                        with Path({str(log)!r}).open('a') as stream:
+                            stream.write(json.dumps(dict(case=self._testMethodName,
+                                flags=os.environ.get('XLA_FLAGS'), pid=os.getpid()))+'\\n')
+                    def test_heavy(self):pass
+                    def test_light(self):pass
+            '''))
+            with mock.patch.dict(os.environ, {'XLA_FLAGS': 'canonical-parent-flags'}):
+                result, terminal = self.isolated(root, low_optimization_cases=[
+                    'test_gpu_engine_flags.Case.test_heavy'])
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertTrue(terminal['passed'])
+            self.assertEqual(terminal['expected_test_cases'], 2)
+            self.assertEqual(terminal['tests_run'], 2)
+            rows = [json.loads(line) for line in log.read_text().splitlines()]
+            self.assertEqual([row['case'] for row in rows], ['test_heavy', 'test_light'])
+            self.assertEqual([row['flags'] for row in rows],
+                [LOW_OPTIMIZATION_XLA_FLAGS, 'canonical-parent-flags'])
+            self.assertNotEqual(rows[0]['pid'], rows[1]['pid'])
+
+    def test_low_optimization_rejects_unknown_case_and_unsafe_custom_isolation(self):
+        class Case(unittest.TestCase):
+            def test_original(self):self.fail('must not run')
+        identity = unittest.TestCase.id(Case('test_original'))
+        class Custom(unittest.TestSuite):
+            def run(self, result, debug=False):raise AssertionError('must not run')
+        for suite, chosen in ((unittest.TestSuite([unittest.TestSuite([Case('test_original')])]), 'unknown'),
+                              (unittest.TestSuite([Custom([Case('test_original')])]), identity)):
+            with self.subTest(chosen=chosen), tempfile.TemporaryDirectory() as folder:
+                with self.assertRaises(ValueError), mock.patch('subprocess.Popen') as launch:
+                    run_process_blocks(suite, 0, 1, start_dir=folder, stream=io.StringIO(),
+                        low_optimization_cases=[chosen])
+                launch.assert_not_called()
+
+    def test_low_optimization_keeps_original_duplicate_case_multiplicity(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            # unittest discovers both original class aliases. Keep both actual
+            # case objects; never deduplicate or reload by their shared ID.
+            (root/'test_gpu_engine_alias.py').write_text(textwrap.dedent('''
+                import unittest
+                class Case(unittest.TestCase):
+                    def test_heavy(self):pass
+                Alias = Case
+            '''))
+            result, terminal = self.isolated(root, low_optimization_cases=[
+                'test_gpu_engine_alias.Case.test_heavy'])
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertTrue(terminal['passed'])
+            self.assertEqual(terminal['expected_test_cases'], 2)
+            self.assertEqual(terminal['tests_run'], 2)
+            self.assertEqual([row['case_index'] for row in terminal['blocks']], [0, 1])
 
     def test_real_standard_cases_have_fresh_heap_and_complete_original_fixture_lifecycle(self):
         with tempfile.TemporaryDirectory() as tmp:

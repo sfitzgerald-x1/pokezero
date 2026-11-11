@@ -3,6 +3,8 @@ import ast,json,subprocess,unittest
 from copy import deepcopy
 from pathlib import Path
 from tempfile import TemporaryDirectory
+import gc
+from unittest.mock import patch
 import jax
 import jax.numpy as j
 import numpy as np
@@ -21,6 +23,26 @@ from _showdown_root import showdown_root
 import test_gpu_engine_no_damage_owning as fixture
 
 class BellyDrumOwningTests(unittest.TestCase):
+ def setUp(self):
+  self.release_compilers()
+ @staticmethod
+ def release_compilers(*completed):
+  # Keep the exact arrays, but release completed CPU executable heaps before
+  # compiling the next genuine phase. This is a correctness fixture only.
+  jax.block_until_ready(completed);jax.clear_caches();gc.collect()
+ def completed_phase(self,name,_milliseconds):
+  # Source-witness mode completes both owner folds in public_pair.
+  if name in ('engine','requests','public_pair','public_p2','admission_p2'):
+   self.release_compilers()
+   print(type(self).__name__+' completed CPU phase '+name,flush=True)
+ def construct(self,*args,**kwargs):
+  original=driver._consume
+  def initial_consume(runtime,state,frame,*a,**kw):
+   self.release_compilers(state,frame)
+   print(type(self).__name__+' constructor inputs ready',flush=True)
+   return original(runtime,state,frame,*a,**dict(kw,timing_callback=self.completed_phase))
+  with patch.object(driver,'_consume',side_effect=initial_consume):
+   return driver.construct(*args,**kwargs)
  @classmethod
  def setUpClass(cls):
   fixture.NoDamageOwningTests.setUpClass();cls.f=fixture.NoDamageOwningTests;cls.metadata=deepcopy(cls.f.metadata)
@@ -42,11 +64,11 @@ class BellyDrumOwningTests(unittest.TestCase):
   from gpu_engine import engine_source_frame_witness as witness
   witness._source();self.assertTrue(bool(self.helper.device.belly_drum.candidates[self.move]));self.assertEqual(int(self.runtime['kernel_risk_compiled'].device.selected_risk[self.move]),0)
   self.assertIsNone(direct.compile_direct_hit_controls(engine_catalog=self.producer).device.belly_drum)
-  old=ast.parse(subprocess.check_output(['git','show','977d524d:gpu_engine/transition.py'],text=True));after=ast.parse(Path('gpu_engine/transition.py').read_text());baseline=dump_default_program(old)
-  # Normalize only the reviewed residual observer's import in this union;
-  # all numerical and RNG statements remain checked against the original.
-  observers=[n for n in after.body if isinstance(n,ast.ImportFrom) and n.level==1 and n.module is None and len(n.names)==1 and n.names[0].name=='engine_pinch_item_callbacks' and n.names[0].asname=='pinch_callbacks']
-  self.assertEqual(len(observers),1);after.body.remove(observers[0]);self.assertEqual(dump_default_program(after),baseline);assert_hp_rng_mutations_detected(self,after,baseline)
+  old=ast.parse(subprocess.check_output(['git','show','977d524d:gpu_engine/transition.py'],text=True));after=ast.parse(subprocess.check_output(['git','show','0087033e:gpu_engine/transition.py'],text=True));baseline=dump_default_program(old)
+  # The immutable Belly Drum delta precedes the later pinch observer.
+  self.assertEqual(dump_default_program(after),baseline);assert_hp_rng_mutations_detected(self,after,baseline)
+  current=ast.parse(Path('gpu_engine/transition.py').read_text());integrated=ast.parse(subprocess.check_output(['git','show','b8092a85:gpu_engine/transition.py'],text=True))
+  self.assertEqual(ast.dump(current),ast.dump(integrated));assert_hp_rng_mutations_detected(self,current,dump_default_program(integrated))
   script=r'''const d=require(process.argv[1]+'/dist/sim/dex.js').Dex.mod('gen3'),B=require(process.argv[1]+'/dist/sim/battle.js').Battle,P=require(process.argv[1]+'/dist/sim/pokemon.js').Pokemon,m=d.moves.get('bellydrum'),out=[];
 for(const [hp,maxhp,atk]of [[201,201,0],[101,201,-6],[100,201,0],[201,201,6],[1,1,0]]){
 const lines=[],p={hp,maxhp,isActive:true,boosts:{atk},battle:{clampIntRange:(v,a,z)=>Math.max(a,Math.min(z,v))},getCappedBoost:P.prototype.getCappedBoost,boostBy:P.prototype.boostBy,
@@ -128,12 +150,12 @@ const result=m.onHit.call(b,p);out.push({lines,hp:p.hp,atk:p.boosts.atk,failed:r
     self.assertEqual(arrays['types'][team,physical].tolist(),expected)
   with TemporaryDirectory()as tmp:
    p=Path(tmp)/'literal.npz';np.savez_compressed(p,**dict(arrays,metadata_utf8=np.frombuffer(json.dumps(self.metadata).encode(),np.uint8)));pool=source_provenance.load_constructor_pool(p)
-   session=driver.construct(pool,np.tile([[0,1]],(2,1)).astype(np.int64),prepared=self.prepared,stream_ids=j.array([60001,60002],j.int32),seed=31)
+   session=self.construct(pool,np.tile([[0,1]],(2,1)).astype(np.int64),prepared=self.prepared,stream_ids=j.array([60001,60002],j.int32),seed=31)
   self.assertEqual(session.state.core.admitted.tolist(),[True,True]);self.assertTrue(all(bool(o.encoded.observation.admitted.all())for o in session.result.owners));before=session.state
   actions=j.array([[0,1],[1,0]],j.int32);draws=j.zeros((2,2,12),j.int32).at[:,:,4].set(1);chance=tr.ChanceInputs(draws,*[j.zeros((2,2),j.int32)for _ in range(4)],j.zeros(2,j.int32));frames=[];original=self.runtime['frame']
   def capture(*a,**kw):f=original(*a,**kw);frames.append(f);return f
   self.runtime['frame']=capture
-  try:result=driver.advance(session,actions,chance_inputs=chance)
+  try:result=driver.advance(session,actions,chance_inputs=chance,timing_callback=self.completed_phase)
   finally:self.runtime['frame']=original
   frame=frames[-1];plain=jax.jit(lambda state,actions:tr.step_with_chance(state,actions,self.table,chance).state)(before.core.engine,actions)
   for a,z in zip(jax.tree.leaves(frame.state),jax.tree.leaves(plain),strict=True):np.testing.assert_array_equal(a,z)
