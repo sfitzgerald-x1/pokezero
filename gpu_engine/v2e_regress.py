@@ -568,6 +568,16 @@ ALLOWED = {
     # R (optional carry from A2): Liquid Ooze on Leech Seed. The holder (user) is revealed; the seeder (target) takes
     # damage instead of healing, and a slower seeder's later residual handlers (a pinch berry, its condition) follow.
     'ooze_seed': dict(user=('reveal',), target=('hp', 'visible', 'item', 'boosts'), glob=()),
+    # B. Iron Tail's Def drop is the target's stage only (nothing later in the step reads its own Def without
+    # confusion, which is its own involvement). Steel Wing's Def raise lowers the physical damage the user takes
+    # later in the step: its HP, Substitute and HP-gated items and Wish, and the attacker's recoil. Meteor Mash's
+    # Atk raise comes after the user's only hit of the step. A flinch or a confusion (Signal Beam, or a confused
+    # active) decides whether the target acts at all, so, like a sleep landing (A1), it may change anything.
+    'irontail': dict(user=(), target=('boosts',), glob=()),
+    'steelwing': dict(user=('boosts', 'hp', 'item', 'visible', 'subtracker', 'wish'), target=('hp', 'item', 'boosts', 'visible'),
+                      glob=()),
+    'meteormash': dict(user=('boosts',), target=(), glob=()),
+    'headbutt': ALL, 'needlearm': ALL, 'signalbeam': ALL, 'confusion': ALL,
 }
 
 
