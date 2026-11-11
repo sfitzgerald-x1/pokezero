@@ -1918,25 +1918,32 @@ class CalibrationTests(unittest.TestCase):
         panel.preflight_packets(self.root, arm='DN2W8', games=2, deadline_seconds=5., reserve_seconds=.15)   # a second deadline
         with self.assertRaisesRegex(ValueError, 'one search arm, deadline and reserve'): panel.preflight_summary(self.root)
 
-    def test_a_preflight_counts_server_refusals_and_battles_the_servers_already_held(self):
+    def test_a_preflight_counts_unpriced_searches_and_battles_the_servers_already_held(self):
         panel.calibration_init(self.root, band=dict(CALIBRATION_BAND), lanes=1, **self.kwargs)
         band = panel.calibration_cells(self.lad, CALIBRATION_BAND)
-        panel.preflight_packets(self.root, arm='DN2W8', games=4, deadline_seconds=3., reserve_seconds=.15)
+        panel.preflight_packets(self.root, arm='DN2W8', games=8, deadline_seconds=3., reserve_seconds=.15)
         def game(cell, arm, source, refusals=()):   # refusals: (cause, refusal text) of decisions 1, 2, ...
-            rows = [dict(decision_index=i, select_seconds=2., encode_seconds=.04, greedy=dict(seconds=.5), source=source, cause=None) for i in range(21)]
+            rows = [dict(decision_index=i, select_seconds=2., encode_seconds=.04, greedy=dict(seconds=.5), source=source, cause=None) for i in range(41)]
             for row, (cause, text) in zip(rows[1:], refusals): row.update(source='greedy_fallback', cause=cause, search=dict(refusal=text))
             panel.write_new(self.root/'results'/f"{cell['ordinal']}.json", dict(status='COMPLETE', setting='preflight', arm=arm, cell=cell))
             (self.root/'telemetry').mkdir(exist_ok=True)
             (self.root/'telemetry'/f"{cell['ordinal']}.jsonl").write_bytes(b''.join(panel.encoded(r)+b'\n' for r in rows))
         game(band[0], 'RAW', 'raw_arm')
-        game(band[1], 'DN2W8', 'search', refusals=[('constructor_refused', 'WORLD_CONSTRUCTOR_REFUSED:volatile:12')]*2 + [('depthn_refused', 'DEPTHN_X')])
-        value = panel.preflight_summary(self.root); search = value['arms']['DN2W8']
-        self.assertEqual((search['refused_share'], search['reuse_refusals']), (3/21, 0))
+        game(band[1], 'DN2W8', 'search', refusals=[('constructor_refused', 'WORLD_CONSTRUCTOR_REFUSED:volatile:12'), ('depthn_refused', 'DEPTHN_X'),
+             ('class_refused', 'CLASS:wish'), ('server_error', 'boom'), ('bad_request', 'RUNG_NOT_SERVED'), ('expired_in_queue', None),
+             ('connection_error', 'ConnectionRefusedError'), ('timeout', None), ('UNREPRESENTED_EFFECT', None)])   # 7 unpriced; a timeout and a
+        value = panel.preflight_summary(self.root); search = value['arms']['DN2W8']                                     # priced fallback are not
+        self.assertEqual((search['refused_share'], search['reuse_refusals'], search['timeout_share']), (7/41, 0, 1/41))
         self.assertEqual((value['refused_share_max'], value['refused_within'], value['reuse_refusals']), (.25, True, 0))
         self.assertIsNone(value['arms']['RAW']['refused_share'])   # RAW never asks the servers
-        game(band[3], 'DN2W8', 'search', refusals=[('constructor_refused', 'constructor-root:SEARCH_PREFIX_NOT_ORIGINAL_SUCCESSOR')]*20)   # a reused battle
+        game(band[3], 'DN2W8', 'search', refusals=[('constructor_refused', 'constructor-root:SEARCH_REQUEST_ALREADY_ATTEMPTED')])   # one reused battle
+        reused = panel.preflight_summary(self.root)
+        self.assertEqual((reused['reuse_refusals'], reused['refused_within']), (1, True))   # fails on reuse alone (8 of 82 unpriced: within)
+        game(band[5], 'DN2W8', 'search', refusals=[('constructor_refused', 'constructor-root:SEARCH_PREFIX_NOT_ORIGINAL_SUCCESSOR')]*40)
         late = panel.preflight_summary(self.root)
-        self.assertEqual((late['arms']['DN2W8']['reuse_refusals'], late['reuse_refusals'], late['refused_within']), (20, 20, False))   # 23 of 42 refused
+        self.assertEqual((late['arms']['DN2W8']['reuse_refusals'], late['reuse_refusals'], late['refused_within']), (41, 41, False))   # 48 of 123
+        game(band[7], 'DN2W8', 'search', refusals=[('connection_error', 'ConnectionRefusedError')]*40)   # unreachable servers: a greedy-only wall
+        self.assertFalse(panel.preflight_summary(self.root)['refused_within'])
 
     def test_a_preflight_at_a_redeclared_deadline_is_held_to_that_deadline_s_wall_bound(self):
         panel.calibration_init(self.root, band=dict(CALIBRATION_BAND), lanes=1, **self.kwargs)

@@ -79,7 +79,7 @@ import uuid
 
 from . import depthn_live_fairness as fairness
 from . import phase_d_ladder_panel as ladder
-from .depthn_live_actor import ARMS,CAUSES,CHAMPION_ARCHIVE_SHA256,REQUEST_KINDS,ROW_SCHEMA,SEARCH_ARMS,SOURCES
+from .depthn_live_actor import ARMS,CAUSES,CHAMPION_ARCHIVE_SHA256,REQUEST_KINDS,ROW_SCHEMA,SEARCH_ARMS,SERVER_CAUSES,SOURCES
 
 SCHEMA='depthn-foulplay-panel.declaration.v1'
 RUN_SCHEMA='depthn-foulplay-panel.run.v1'
@@ -101,7 +101,7 @@ CALIBRATION_RUN_SCHEMA='depthn-foulplay-panel.calibration-run.v1'
 CALIBRATION_REQUEST_SCHEMA='depthn-foulplay-panel.calibration-request.v1'
 PREFLIGHT_REQUEST_SCHEMA='depthn-foulplay-panel.preflight-request.v1'
 PREFLIGHT_SCHEMA='depthn-foulplay-panel.preflight.v1'
-PREFLIGHT_WALL_MARGIN=.25   # the lead's bound on the search arm's end-to-end decision wall p95: the declared deadline less the reserve and this margin
+PREFLIGHT_WALL_MARGIN=.25   # the margin in the lead's bound on the search arm's end-to-end decision wall p95 (preflight_wall_p95_max: deadline - reserve - margin)
 
 
 def preflight_wall_p95_max(deadline_seconds,reserve_seconds):
@@ -110,13 +110,15 @@ def preflight_wall_p95_max(deadline_seconds,reserve_seconds):
     moves it (4.6 s at 5.0 s), since a longer deadline lets the tail complete into the measured wall instead of timing out."""
     return round(float(deadline_seconds)-float(reserve_seconds)-PREFLIGHT_WALL_MARGIN,6)
 PREFLIGHT_TIMEOUT_SHARE_MAX=.01   # the lead's bound on the search arm's timeout share (of non-single-legal decisions)
-PREFLIGHT_REFUSED_SHARE_MAX=.25   # the lead's bound on the search arm's server-refused share (constructor, depthn and class refusals, of
-# non-single-legal decisions): pre-flights and screens through screen-r4a2 ran 4.6-10.4% constructor refusals; a pre-flight whose searches
-# the servers mostly refused measured nothing (screen-r4a2's first 5.0 s pre-flight: 100%, wall 0.32 s)
-PREFLIGHT_REFUSED_CAUSES=('constructor_refused','depthn_refused','class_refused')
-PREFLIGHT_REUSE_REFUSALS=('SEARCH_PREFIX_NOT_ORIGINAL_SUCCESSOR','SEARCH_REQUEST_ALREADY_ATTEMPTED')   # a live server already holds the battle:
-# the pre-flight's band was not disjoint from an earlier run in the same server lifetime (the servers keep one session per battle, owner and
-# stream for their whole life); a pre-flight passes only with none, so its band is disjoint or it runs on fresh servers
+PREFLIGHT_REFUSED_SHARE_MAX=.25   # the lead's bound on the search arm's unpriced share (of non-single-legal decisions): searches the servers
+# did not price (every server cause: refusals, expired in queue, server errors, bad requests) or the client could not reach them; pre-flights and
+# screens through screen-r4a2 ran 4.6-10.4% (constructor refusals); a pre-flight whose searches were mostly unpriced measured only greedy walls
+# (screen-r4a2's first 5.0 s pre-flight: 100% refused, wall 0.32 s). Timeouts have their own bound; a fallback after a priced response
+# (an unrepresented effect, an illegal action, a bad q) carries a real search wall and does not count.
+PREFLIGHT_REFUSED_CAUSES=SERVER_CAUSES+('connection_error',)
+PREFLIGHT_REUSE_REFUSALS=('SEARCH_PREFIX_NOT_ORIGINAL_SUCCESSOR','SEARCH_REQUEST_ALREADY_ATTEMPTED')   # a live server still held the battle
+# (its session and attempted addresses, kept until evicted beyond the session cap): the pre-flight reused a battle an earlier run in the same
+# server lifetime had played; a pre-flight passes only with no search refused for this reason
 
 
 NON_HOME_SHARE_MAX=.01   # the lead's breakage bound: answered search decisions off their battle's home server
