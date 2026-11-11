@@ -27,14 +27,6 @@
    "completes_on_hosted": true
   },
   {
-   "module": "test_gpu_engine_depthn_oracle",
-   "reason": "wall",
-   "hosted_median_min": 15.0,
-   "isolated_wall_min": 11.8,
-   "isolated_peak_gib": 1.8,
-   "completes_on_hosted": true
-  },
-  {
    "module": "test_gpu_engine_direct_ko_owning",
    "reason": "wall",
    "hosted_median_min": 16.2,
