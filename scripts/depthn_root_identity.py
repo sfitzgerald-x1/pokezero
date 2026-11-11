@@ -160,6 +160,9 @@ def compare(args):
     c0, c1 = ((h.get('code') or {}).get('code_sha256') for h in (h0, h1))
     if not c0 or not c1 or (c0 == c1 and h0['incremental_roots'] == h1['incremental_roots']):
         raise SystemExit('two records of different code (or of the incremental flag off then on) required: a record compared with itself proves nothing')
+    head = (h0.get('code') or {}).get('git_head') or ''
+    if args.expect_original_head and not head.startswith(args.expect_original_head):
+        raise SystemExit(f'the original record ran {head or "no git tree"}, not {args.expect_original_head}')
     mismatches = []
     for key in sorted(set(a) | set(b)):
         x, y = a.get(key), b.get(key)
@@ -185,6 +188,7 @@ def main(argv=None):
     r.add_argument('--battles', type=int, default=24);r.add_argument('--arm', default='DN2W16');r.add_argument('--seed', type=int, default=20261103)
     r.add_argument('--incremental-roots', action='store_true')
     c = sub.add_parser('compare');c.add_argument('original');c.add_argument('candidate');c.add_argument('--out', required=True)
+    c.add_argument('--expect-original-head', help='the original record must have run this commit (a prefix of its git HEAD)')
     args = p.parse_args(argv)
     return record(args) if args.mode == 'record' else compare(args)
 
