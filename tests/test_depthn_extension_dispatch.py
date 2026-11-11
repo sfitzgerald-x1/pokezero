@@ -118,5 +118,102 @@ class ExtensionTests(unittest.TestCase):
         self.assertEqual(sorted(x['sha256'] for x in real['final'][0]['addendum_to']), sorted(real[k][1] for k in ('amendment', 'addendum', 'both', 'extension')))
 
 
+
+class CommittedBindingTests(unittest.TestCase):
+    def test_screen_r4a_s_committed_binding_is_pinned_and_binds_its_run(self):
+        path = E.TREE/'evals/depthn-foulplay-dn2w16-amendment-screen-r4a-adoption-20261111.json'
+        raw = path.read_bytes();digest = hashlib.sha256(raw).hexdigest()
+        self.assertEqual(digest, E.EXTENSION_BINDINGS['screen_r4a']);self.assertEqual(digest, V.RUN_BINDINGS['screen_r4a'])
+        self.assertEqual(V.RUN_FINAL_RULES[digest], 'RULE_R3')
+        self.assertEqual(E.bound_run((json.loads(raw), digest), E.committed()),
+                         ('1697ae7ab209a3e0000351817112916998a63ad2485bffacbffd5131156801fa', '/out/screen-r4a', 'RULE_R3'))
+        self.assertEqual(json.loads(raw)['run']['tree_commit'], '44494b01228a72e03c90b254ebd743b2ac993af0')
+
+    def test_screen_r4a2_s_committed_binding_is_pinned_and_binds_its_run(self):
+        path = E.TREE/'evals/depthn-foulplay-dn2w16-amendment-screen-r4a2-adoption-20261111.json'
+        raw = path.read_bytes();digest = hashlib.sha256(raw).hexdigest()
+        self.assertEqual(digest, E.EXTENSION_BINDINGS['screen_r4a2']);self.assertEqual(digest, V.RUN_BINDINGS['screen_r4a2'])
+        self.assertEqual(V.RUN_FINAL_RULES[digest], 'RULE_R3')
+        self.assertEqual(E.bound_run((json.loads(raw), digest), E.committed()),
+                         ('77e9c133d4641e12559a14c29618a0ade7f1929455c515165d66325faf53973b', '/out/screen-r4a2', 'RULE_R3'))
+        self.assertEqual(json.loads(raw)['run']['tree_commit'], '0a157c8cacaeb48a7ea850aed9dc15b506742c61')
+        self.assertEqual(json.loads(raw)['run']['server_tree_commit'], '982909e10c141055164daa875860ec078e0817cd')
+
+    def test_screen_r4a3_s_committed_binding_is_pinned_and_binds_its_run(self):
+        path = E.TREE/'evals/depthn-foulplay-dn2w16-amendment-screen-r4a3-adoption-20261111.json'
+        raw = path.read_bytes();digest = hashlib.sha256(raw).hexdigest()
+        self.assertEqual(digest, E.EXTENSION_BINDINGS['screen_r4a3']);self.assertEqual(digest, V.RUN_BINDINGS['screen_r4a3'])
+        self.assertEqual(V.RUN_FINAL_RULES[digest], 'RULE_R3')
+        self.assertEqual(E.bound_run((json.loads(raw), digest), E.committed()),
+                         ('e2e39feb7e6c1000b4ea0f090bebc2303d75788d8fea9ea5014ed803c96ce422', '/out/screen-r4a3', 'RULE_R3'))
+        self.assertEqual(json.loads(raw)['run']['tree_commit'], '594a0ee2bd11ddd3a0e14b8a86a96f9a8d24a082')
+        self.assertEqual(json.loads(raw)['run']['server_tree_commit'], '92d8af8cb51b6c889fd359193275b3f63b05490b')
+
+
+class BoundExtensionTests(unittest.TestCase):
+    """--run-binding: a run that pre-registered the extension through its adoption record (screen-r4a's route): the committed rule
+    files unchanged, the run fields and the RULE_R3 final gate from the binding."""
+    setUp, tearDown, pin, pin_verdict = ExtensionTests.setUp, ExtensionTests.tearDown, ExtensionTests.pin, ExtensionTests.pin_verdict
+
+    def binding(self, **change):
+        real = E.committed()
+        value = dict(schema=V.ADOPTION_SCHEMA, adopts=[dict(path=E.FILES[k], sha256=real[k][1], change='none') for k in ('amendment', 'addendum', 'both', 'final')],
+                     declaration_sha256=self.run['declaration_sha256'], run=dict(run_directory=str(Path(self.root).resolve()), tree_commit=self.run['tree']['commit']),
+                     final_fairness_rule='RULE_R3', arm_fairness=V.FINAL_RULES['RULE_R3'],
+                     extension=dict(path=E.FILES['extension'], sha256=real['extension'][1], change='none'))
+        value.update(change);return value, hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()
+
+    def r3_fair(self):return dict(within=True, limit=500, arm_fairness=V.FINAL_RULES['RULE_R3'], missing_captures=dict(total=0, per_arm={}, ordinals=[]))
+
+    def bound_verdict(self, binding):
+        real = E.committed();(a, a_sha), (h, h_sha), (b, b_sha), (f, f_sha) = (real[k] for k in ('amendment', 'addendum', 'both', 'final'))
+        return V.verdict(self.genuine, a, self.root, readout_sha256=self.screen[1], amendment_sha256=a_sha, addendum=h, addendum_sha256=h_sha,
+                         both=b, both_sha256=b_sha, final=f, final_sha256=f_sha, final_fairness=self.r3_fair(), binding=binding[0], binding_sha256=binding[1])
+
+    def test_a_bound_run_extends_on_its_rule_r3_gate(self):
+        binding = self.binding();verdict = self.bound_verdict(binding)
+        self.assertEqual((verdict['decision'], verdict['breakage']), ('CONTINUE_TO_2000', []))
+        with patch.object(E.FF, 'final_gate_r3', return_value=self.r3_fair()) as r3:
+            got = E.gate(self.root, screen=self.screen, verdict=self.pin_verdict('bound', verdict), files=E.committed(), binding=binding)
+        self.assertEqual(got['decision'], 'CONTINUE_TO_2000');self.assertEqual(r3.call_args.args[1:], ('DN2W8', 500))
+        self.final_gate.assert_not_called()   # the binding's declared gate, not the coarse one
+        with patch.object(E.FF, 'final_gate_r3', return_value=dict(self.r3_fair(), within=False)), self.assertRaisesRegex(ValueError, 'final fairness gate fails'):
+            E.gate(self.root, screen=self.screen, verdict=self.pin_verdict('bound', verdict), files=E.committed(), binding=binding)
+
+    def test_a_binding_must_adopt_the_extension_and_bind_this_run(self):
+        verdict = self.pin_verdict('bound', self.bound_verdict(self.binding()))
+        cases = {'adopting the extension file unchanged': self.binding(extension=None),
+                 "bound run's directory": self.binding(run=dict(run_directory='/out/other', tree_commit=self.run['tree']['commit'])),
+                 'extension addendum to this declaration': self.binding(declaration_sha256='0' * 64),
+                 'adopting exactly the four rule files': self.binding(adopts=[]),
+                 'adopting the extension file unchanged ': self.binding(extension=dict(path=E.FILES['extension'], sha256=E.committed()['extension'][1], change='amended')),
+                 'adopting the extension file unchanged  ': self.binding(extension=dict(path=E.FILES['extension'], sha256='0' * 64, change='none')),
+                 'declaring final_fairness_rule RULE_R3': {k: v for k, v in self.binding()[0].items() if k not in ('final_fairness_rule', 'arm_fairness')}}
+        cases = {k: (v if type(v) is tuple else (v, hashlib.sha256(json.dumps(v, sort_keys=True).encode()).hexdigest())) for k, v in cases.items()}
+        for message, binding in cases.items():
+            with self.subTest(message), patch.object(E.FF, 'final_gate_r3', return_value=self.r3_fair()), self.assertRaisesRegex(ValueError, message.strip()):
+                E.gate(self.root, screen=self.screen, verdict=verdict, files=E.committed(), binding=binding)
+        with patch.object(E.FF, 'final_gate_r3', return_value=self.r3_fair()), self.assertRaisesRegex(ValueError, 'amended verdict differs'):
+            E.gate(self.root, screen=self.screen, verdict=self.pin_verdict('unbound', ExtensionTests.amended(self)), files=E.committed(), binding=self.binding())
+        moved = self.binding(run=dict(run_directory=str(Path(self.root).resolve()), tree_commit='e' * 40))   # another tree than the readout's
+        with patch.object(E.FF, 'final_gate_r3', return_value=self.r3_fair()), self.assertRaises(ValueError):
+            E.gate(self.root, screen=self.screen, verdict=verdict, files=E.committed(), binding=moved)
+
+    def test_the_cli_takes_only_a_pinned_binding(self):
+        value = self.binding()[0];path, digest = self.pin('binding', value)   # the file's own bytes (the panel's encoding) fix its sha256
+        argv = ['--run-directory', str(self.root), '--search-arm', 'DN2W8', '--screen-readout', 'r', '--screen-readout-sha256', 'r', '--amended-verdict', 'v',
+                '--amended-verdict-sha256', 'v', '--cache-directory', 'c', '--cpu-pair', '0', '1', '--server', 'h:1', '--run-binding', str(path), digest]
+        with self.assertRaisesRegex(SystemExit, 'pinned in EXTENSION_BINDINGS'):E.main(argv)
+        with patch.dict(E.EXTENSION_BINDINGS, screen_x=digest), self.assertRaisesRegex(SystemExit, 'pinned in EXTENSION_BINDINGS'):E.main(argv)   # not in RUN_BINDINGS
+        with patch.dict(E.EXTENSION_BINDINGS, screen_x=digest), patch.dict(V.RUN_BINDINGS, screen_x=digest), self.assertRaisesRegex(SystemExit, 'RUN_FINAL_RULES'):
+            E.main(argv)   # pinned in both, but its final rule is not
+        class Reached(Exception):pass
+        def reached(*a, **k):raise Reached(k.get('binding'))
+        with patch.dict(E.EXTENSION_BINDINGS, screen_x=digest), patch.dict(V.RUN_BINDINGS, screen_x=digest), patch.dict(V.RUN_FINAL_RULES, {digest: 'RULE_R3'}), \
+                patch.object(E, 'gate', side_effect=reached), self.assertRaises(Reached) as got:
+            E.main(argv)
+        self.assertEqual(got.exception.args[0], (value, digest))   # a fully pinned binding reaches the gate with itself
+
+
 if __name__ == '__main__':
     unittest.main()
