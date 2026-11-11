@@ -10,7 +10,7 @@ import numpy as np
 from gpu_engine import engine_retained_encoder_driver as driver,engine_request_source as source
 from gpu_engine import engine_own_facts as own,source_provenance,transition
 import test_gpu_engine_engine_weather_public as fixture
-from gpu_engine_eager_frame import eager_frame
+from gpu_engine_eager_frame import eager_call, eager_frame
 
 
 class WeatherHPRuntimeTests(unittest.TestCase):
@@ -38,8 +38,10 @@ class WeatherHPRuntimeTests(unittest.TestCase):
     def advance(self,session):
         before=session.state;record=driver._checked(self.prepared);actual=record['frame'];frames=[]
         def capture(*args):
-            # The prepared frame closure's own body, run eagerly (no whole-step compile).
-            frame=getattr(actual,'__wrapped__',actual)(*args);frames.append(frame);return frame
+            # The prepared frame closure's own body, run eagerly (no whole-step compile); inside an
+            # eager_frame scope the swapped-in body already is.
+            frame=eager_call(actual,*args) if hasattr(actual,'__wrapped__') else actual(*args)
+            frames.append(frame);return frame
         record['frame']=capture
         try:result=driver.advance(session,j.tile(j.array([[0,8]],j.int32),(2,1)),chance_inputs=self.f().chance())
         finally:record['frame']=actual
