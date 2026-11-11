@@ -22,6 +22,8 @@ class FakeAdapter:
 
     def feed(self, lines):
         if self.fail:raise ValueError('JAX public fold refused boundary')
+        if getattr(self, 'partway', False):   # a failure after part of the feed (B2's feed commits nothing then; the fake keeps the part)
+            self.fed.append(tuple(lines[:1]));raise ValueError('JAX public fold refused boundary')
         self.fed.append(tuple(lines))
 
 
@@ -56,6 +58,15 @@ class EagerPeerFoldTests(unittest.TestCase):
         self.assertEqual(len(FakeAdapter.made), 2);self.assertEqual(adapter.fed, [cw.peer_wire_lines(LINES, 0)])
         FakeAdapter.fail_next = True   # the lazy path still raises where it always did
         with self.assertRaises(ValueError):cw._peer_fold(self.c, request(9, battle='b2'), 0, self.c.catalog, self.c.functions)
+
+    def test_an_eager_feed_failing_partway_on_the_first_reveal_s_own_decision_leaves_nothing_the_lazy_fold_reuses(self):
+        cw.advance_peer_fold(self.c, request(5), 0);clean = cw._peer_fold(self.c, request(9), 0, self.c.catalog, self.c.functions)
+        cw._PEER_FOLDS.clear();FakeAdapter.made = []
+        cw.advance_peer_fold(self.c, request(5), 0);FakeAdapter.made[0].partway = True
+        self.assertFalse(cw.advance_peer_fold(self.c, request(9), 0));self.assertEqual(cw._PEER_FOLDS, {})   # dropped, partial feed and all
+        lazy = cw._peer_fold(self.c, request(9), 0, self.c.catalog, self.c.functions)   # the same decision's belief: from scratch
+        self.assertIsNot(lazy, FakeAdapter.made[0]);self.assertEqual(lazy.fed, [cw.peer_wire_lines(LINES, 0)])
+        self.assertEqual(sum(lazy.fed, ()), sum(clean.fed, ()))   # the same lines as the clean run's fold, none twice
 
     def test_no_catalog_or_no_lines_folds_nothing(self):
         for c, r in ((SimpleNamespace(catalog=None, functions=None), request(5)), (self.c, dict(battle_id='b1', stream_id=1)), (self.c, None)):
