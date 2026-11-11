@@ -59,17 +59,18 @@ class ProtocolConstructor:
             adapter.reset(stream_id=request['stream_id'],battle_id=request['battle_id']);old=()
         else:adapter,old=prior
         if lines[:len(old)]!=old or len(lines)<=len(old):raise worlds.Refusal('SEARCH_PREFIX_NOT_ORIGINAL_SUCCESSOR')
-        # Original Python public-root capture checks literal owning request and
-        # exact-foe/split contamination before either constructor can consume it.
-        public=self._capture(key,address,request,lines,owner)
-        packet=_packet(request['own_request_line'],request['owner'])
-        adapter.feed(tuple(x for x in lines[len(old):]if not x.startswith('|request|')))
-        if not self.saved_root_admission:self.sessions[key]=(adapter,lines)
-        facts=protocol.tail.facts(public,packet,lines)
-        detached=worlds.from_b2(adapter,packet,self.source,self.metadata,address=public.address,defer_sleep=True,protocol_facts=facts)
-        made=protocol.sample(public,detached,lines=lines,catalog=self.catalog,source=self.source,metadata=self.metadata,
-            config=self.owning_config,battle_id=request['battle_id'],seed=self.seed,count=self.count)
-        return made.root,made,tuple(map(bool,adapter.encode(packet,owner_side=owner)['legal_action_mask']))
+        with adapter.checked_catalog():   # the compiled catalog's structure walk once per request, not on every feed/encode
+            # Original Python public-root capture checks literal owning request and
+            # exact-foe/split contamination before either constructor can consume it.
+            public=self._capture(key,address,request,lines,owner)
+            packet=_packet(request['own_request_line'],request['owner'])
+            adapter.feed(tuple(x for x in lines[len(old):]if not x.startswith('|request|')))
+            if not self.saved_root_admission:self.sessions[key]=(adapter,lines)
+            facts=protocol.tail.facts(public,packet,lines)
+            detached=worlds.from_b2(adapter,packet,self.source,self.metadata,address=public.address,defer_sleep=True,protocol_facts=facts)
+            made=protocol.sample(public,detached,lines=lines,catalog=self.catalog,source=self.source,metadata=self.metadata,
+                config=self.owning_config,battle_id=request['battle_id'],seed=self.seed,count=self.count)
+            return made.root,made,tuple(map(bool,adapter.encode(packet,owner_side=owner)['legal_action_mask']))
 
 
     def _capture(self,key,address,request,lines,owner):
