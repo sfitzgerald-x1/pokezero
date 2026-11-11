@@ -85,9 +85,18 @@ class V4EncoderTests(unittest.TestCase):
         return list(public_inputs.pack_chunks(np.arange(1,batch+1,dtype=np.int32),[events]*batch,
             source_binding=self.catalog.source.device.binding,**bindings))
 
+    def shared(self):
+        # One compiled fold and one compiled encode per catalog object, for fixtures that set
+        # shared_jit: a fresh closure per call re-traces and recompiles the same program each time.
+        catalog=self.catalog;cached=getattr(self,'_shared',None)
+        if cached is None or cached[0] is not catalog:
+            cached=self._shared=(catalog,self.jax.jit(lambda s,c:self.e.fold_chunk(s,c,catalog)),
+                self.jax.jit(lambda s,o,p:self.e.encode(s,o,catalog,observer_sides=p)))
+        return cached[1:]
+
     def ingest(self,lines):
         state=self.e.initialize(self.catalog,stream_ids=self.j.array([1],self.j.int32))
-        step=self.jax.jit(lambda s,c:self.e.fold_chunk(s,c,self.catalog))
+        step=self.shared()[0] if getattr(self,'shared_jit',False) else self.jax.jit(lambda s,c:self.e.fold_chunk(s,c,self.catalog))
         for chunk in self.chunks(self.projections(lines)):
             state,error=step(state,chunk);self.assertEqual(error.tolist(),[0])
         return state
@@ -103,7 +112,8 @@ class V4EncoderTests(unittest.TestCase):
         from dataclasses import replace
         from pokezero import showdown as source
         state=self.ingest(lines)
-        encode=self.jax.jit(lambda s,o,p:self.e.encode(s,o,self.catalog,observer_sides=p))
+        encode=self.shared()[1] if getattr(self,'shared_jit',False) else self.jax.jit(
+            lambda s,o,p:self.e.encode(s,o,self.catalog,observer_sides=p))
         for owner,flip in ((0,False),(1,False),(0,True),(1,True)):
             raw=self.request(owner)
             raw['side']['pokemon'][1]['condition']='120/247'

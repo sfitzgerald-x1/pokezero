@@ -21,6 +21,8 @@ class ItemStreamTests(unittest.TestCase):
         f.source,f.vocab=source,vocab
         f.public=SimpleNamespace(source=raw,prefix=('|switch|p1a: Snorlax|Snorlax, L80|100/100',
             '|switch|p2a: Absol|Absol, L80|100/100'))
+        # One compiled fold and encode for this catalog across all ten source-parity prefixes.
+        f.shared_jit=True
         cls.f,cls.j,cls.jax=f,f.j,f.jax
 
     def test_raw_item_and_common_hp_order_matches_source(self):
