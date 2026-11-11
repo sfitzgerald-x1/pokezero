@@ -1,7 +1,7 @@
 """Reply-model evidence on Foul Play's sets, for the definitive RR's reweighted worlds.
 
 usage: python -m gpu_engine.fp_reply_evidence export RUN_DIRECTORY OUT --pi-fp PT [--shard I --shards N] [--limit N]
-           [--extra-sets RR/shard-*/rows-*.jsonl]
+           [--extra-sets RR/shard-*/rows-*.jsonl] [--ordinals ORDINALS.json]
        python -m gpu_engine.fp_reply_evidence weights --evidence OUT --rows ROWS/rows-*.jsonl --out WEIGHTS.jsonl
            [--drop-battles DROP.json] [--allow-partial]
 
@@ -15,7 +15,8 @@ training data are refused: the evidence must come from games the model never saw
 set a decided root's world drew for a Foul Play Pokémon (with its item, not one removed in public) is scored beside the belief
 engine's candidates when that Pokémon is active (the live constructor draws from a pool of generated teams, which can hold
 sets the belief engine does not offer). A set's loglik does not depend on the other candidates, and the extra sets are scored
-in their own batch, so every candidate's loglik is bit-identical to an export without them.
+in their own batch, so every candidate's loglik is bit-identical to an export without them. --ordinals: only those games (a JSON
+list of ordinals, e.g. the MC gate bank's Foul Play games).
 
 weights: join the evidence with the RR re-pricer's rows. A world's loglik is the sum over Foul Play's Pokémon in that world
 with evidence (n > 0) of the loglik of the world's set for it (set_key: move keys, ability, item, as fp_reply_reweight's
@@ -209,6 +210,8 @@ def export(args):
     if int(result.model_config.window_size) != 1:raise SystemExit(f'π_FP has window {result.model_config.window_size}; this export feeds window 1')
     paths = sorted(glob.glob(str(run / 'results' / '*.json')), key=lambda p: int(Path(p).stem))
     paths = [p for p in paths if int(Path(p).stem) % args.shards == args.shard]
+    if args.ordinals:   # only these games (e.g. the MC gate bank's Foul Play games)
+        keep = {int(x) for x in json.loads(Path(args.ordinals).read_text())};paths = [p for p in paths if int(Path(p).stem) in keep]
     data_mod.SCREEN_BAND = (0, 0)   # RR's games are the screen's
     extras = extra_sets(_jsonl(sorted(args.extra_sets))) if args.extra_sets else {}
     checks, mismatches, examples = collections.Counter(), collections.Counter(), {}
@@ -287,6 +290,7 @@ def main(argv=None):
     e = sub.add_parser('export');e.add_argument('run_directory');e.add_argument('out');e.add_argument('--pi-fp', required=True)
     e.add_argument('--shard', type=int, default=0);e.add_argument('--shards', type=int, default=1);e.add_argument('--limit', type=int, default=0)
     e.add_argument('--extra-sets', nargs='+', help="the RR re-pricer's rows: score their worlds' sets too")
+    e.add_argument('--ordinals', help="a JSON list of the run directory's game ordinals: export only those games")
     w = sub.add_parser('weights');w.add_argument('--evidence', required=True);w.add_argument('--rows', nargs='+', required=True)
     w.add_argument('--out', required=True);w.add_argument('--drop-battles', help="depthn_rr_score's --drop-battles JSON")
     w.add_argument('--allow-partial', action='store_true', help='write the weights below 100%% world coverage')
