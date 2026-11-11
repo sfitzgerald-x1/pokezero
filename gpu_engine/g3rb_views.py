@@ -19,12 +19,14 @@ Gen 3 random-battle support) is rebuilt, per seat, at every decision of that sea
 - Own team (imputation index m). Every species the seat revealed, with everything it revealed about it over the whole game
   (the player knows its own team): moves used, an announced ability, an item seen (Leftovers / a berry / an ended item), its
   level; one variant of the pinned source matching those facts, drawn with a seeded RNG. The slots it never revealed draw a
-  species and a variant from the source, and a gender from the species' Gen 3 data (fixed, genderless, or drawn by its ratio;
-  a revealed mon keeps the gender its log details show). Party order: the lead first, then the other five (revealed and
-  unrevealed alike) in a seeded random order, as a random-battle team's order is; every switch-in or drag swaps the incoming
-  mon with slot 0 (Showdown's side.switchIn). An order by appearance, or imputed mons without a gender, would tell the view
-  which mons are still to appear (the order and gender draws use their own RNG, derived after the variant draws, so the variants
-  are those of the order-by-appearance extraction). Stats are the generator's (85 EVs,
+  species (never a base species the seat already has: Species Clause) and a variant from the source, and a gender as Showdown
+  gives a random-battle mon one: the species' fixed gender, none when genderless, else M or F 50/50 (the generator sets
+  species.gender and the Pokemon constructor samples ['M', 'F']; genderRatio is never read); a revealed mon keeps the gender
+  its log details show. Party order: the lead first, then the other five (revealed and unrevealed alike) in a seeded random
+  order, as a random-battle team's order is; every switch-in or drag swaps the incoming mon with slot 0 (Showdown's
+  side.switchIn). Each mon's moves are in a random order, as the generator shuffles a set's moves. An order by appearance, or
+  imputed mons without a gender, would tell the view which mons are still to appear (the order, move-order and gender draws
+  use their own RNG, derived after the variant draws). Stats are the generator's (85 EVs,
   31 IVs, Hidden Power IVs, attack dump); HP = the log's own exact HP; PP = max PP minus the uses seen (Pressure's extra PP is
   not modelled); an item ended in public is gone. Choice lock, Disable, Taunt, Encore and 0 PP disable moves as Showdown's
   request does; trapping is not modelled (switches stay legal; labels are unaffected).
@@ -201,14 +203,14 @@ const {Dex} = require(root + '/dist/sim');
 const out = {};
 for (const s of Dex.forGen(3).species.all()) {
   if (!s.exists) continue;
-  out[s.id] = {gender: s.gender || '', M: (s.genderRatio && typeof s.genderRatio.M === 'number') ? s.genderRatio.M : 0.5};
+  out[s.id] = {gender: s.gender || '', base: Dex.forGen(3).species.get(s.baseSpecies).id || s.id};
 }
 console.log(JSON.stringify(out));
 """
 
 
 def gender_table(showdown_root, node='node'):
-    """{species id: {gender: 'M'|'F'|'N'|'', M: P(male)}} from Showdown's Gen 3 dex (gender '' = drawn by the ratio)."""
+    """{species id: {gender: 'M'|'F'|'N'|'', base: base species id}} from Showdown's Gen 3 dex (gender '': drawn 50/50)."""
     import subprocess
     out = subprocess.run([str(node), '-e', GEN3_GENDER_SCRIPT, str(Path(showdown_root).resolve())], check=True, capture_output=True,
                          text=True, timeout=60)
@@ -216,17 +218,22 @@ def gender_table(showdown_root, node='node'):
 
 
 def draw_gender(table, species, rng):
-    """'M', 'F' or '' (genderless) for an imputed mon of `species`, as Showdown assigns it: a fixed gender, or drawn by the ratio
-    (an unknown species: 50/50)."""
-    g = table.get(species) or table.get(toid(species)) or {}
-    fixed = g.get('gender', '')
+    """'M', 'F' or '' (genderless) for an imputed mon of `species`, as Showdown gives a random-battle mon one: the species' fixed
+    gender, none when genderless, else M or F 50/50 (module docstring). `species` must be in the table (Tables checks every
+    pinned species is)."""
+    fixed = table[species].get('gender', '')
     if fixed == 'N':return ''
     if fixed in ('M', 'F'):return fixed
-    return 'M' if rng.random() < float(g.get('M', .5)) else 'F'
+    return 'M' if rng.random() < .5 else 'F'
+
+
+def base_of(table, species):
+    """The base species id (Deoxys formes share 'deoxys'): Species Clause and nicknames go by it."""
+    return table[species].get('base') or species
 
 
 class Tables:
-    """The pinned source, the dex, the generator tables and Gen 3 genders, loaded once."""
+    """The pinned source, the dex, the generator tables and Gen 3 genders and base species, loaded once."""
     def __init__(self, showdown_root, node):
         from pokezero.dex import load_showdown_dex_cached
         from pokezero.randbat import load_gen3_randbat_source_cached
@@ -234,13 +241,16 @@ class Tables:
         self.rw = rw;self.source = load_gen3_randbat_source_cached(showdown_root);self.dex = load_showdown_dex_cached(showdown_root)
         self.gen = rw.generator_tables(showdown_root, node);self.gender = gender_table(showdown_root, node)
         self.universes = {species_id(u.species): u for u in self.source.universes.values()}
+        missing = sorted(s for s in self.universes if s not in self.gender)   # a missing genderless species would be gendered
+        if missing:raise ValueError(f'Gen 3 gender table lacks pinned species {missing[:5]} ({len(missing)})')
 
 
 def draw_team(tables, seat_facts, lead, rng):
     """[member] of 6 in the initial party order, or None when a revealed mon matches no pinned variant. member: dict(nick, species,
-    level, details, moves, ability, item, revealed (bool)). The variants are drawn first, in the order of appearance, from `rng`;
-    then an RNG derived from it gives each unrevealed mon a gender and the non-lead slots a random order (module docstring)."""
-    team = []
+    level, details, moves, ability, item, revealed (bool)). The variants are drawn first, in the order of appearance, from `rng`
+    (an unrevealed species never shares a base species with the team); then an RNG derived from it gives each unrevealed mon a
+    gender, each mon's moves and the non-lead slots a random order (module docstring)."""
+    team = [];genders = tables.gender
     order = [lead] + [n for n in seat_facts if n != lead] if lead in seat_facts else list(seat_facts)
     for nick in order:
         f = seat_facts[nick];u = tables.universes.get(f['species'])
@@ -251,18 +261,19 @@ def draw_team(tables, seat_facts, lead, rng):
         v = rng.choice(list(variants))
         team.append(dict(nick=nick, species=f['species'], level=f['level'], details=f['details'], moves=list(v.moves), ability=toid(v.ability),
                          item=toid(v.item), revealed=True))
-    taken = {m['species'] for m in team};pool = sorted(s for s in tables.universes if s not in taken)
+    taken = {base_of(genders, m['species']) for m in team};pool = sorted(s for s in tables.universes if base_of(genders, s) not in taken)
     while len(team) < 6 and pool:
         s = pool.pop(rng.randrange(len(pool)));u = tables.universes[s];v = rng.choice(list(u.variants))
+        pool = [x for x in pool if base_of(genders, x) != base_of(genders, s)]   # Species Clause (and no clash of a forme's nickname)
         name = tables.dex.species_info(s).name if tables.dex.species_info(s) else s
         team.append(dict(nick=name, species=s, level=u.level, details=f'{name}, L{u.level}', moves=list(v.moves), ability=toid(v.ability),
                          item=toid(v.item), revealed=False))
-    extra = random.Random(rng.getrandbits(64))   # after every variant draw: the variants match the order-by-appearance extraction
-    genders = getattr(tables, 'gender', {})
+    extra = random.Random(rng.getrandbits(64))   # after every variant draw
     for m in team:
         if not m['revealed']:
             g = draw_gender(genders, m['species'], extra)
             if g:m['details'] = f"{m['details']}, {g}"
+        extra.shuffle(m['moves'])   # the generator shuffles a set's moves; slots are labels, so an alphabetical order is an artefact
     head = 1 if lead in seat_facts else 0   # the lead stays first: it is the first switch-in
     rest = team[head:];extra.shuffle(rest)
     return team[:head] + rest

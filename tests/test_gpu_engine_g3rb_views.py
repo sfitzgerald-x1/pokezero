@@ -148,20 +148,24 @@ class RequestTests(unittest.TestCase):
 
 class TeamTests(unittest.TestCase):
     """draw_team: the lead first, the other five in a seeded random order (the first switch-in's slot is not degenerate), imputed
-    mons gendered by the species data, revealed details as logged."""
+    mons gendered as Showdown genders a random-battle mon (fixed, genderless, else 50/50), revealed details as logged, Species
+    Clause by base species, moves in a random order, and the variants exactly those of the order-by-appearance draw."""
     SPECIES = ('gengar', 'starmie', 'dugtrio', 'snorlax', 'magneton', 'tauros', 'chansey', 'jynx')
+    MOVES = ('thunderbolt', 'icepunch', 'hypnosis', 'explosion', 'hiddenpowerfire')
 
-    def tables(self):
-        variant = NS(moves=('thunderbolt', 'icepunch', 'hypnosis', 'explosion'), ability='Levitate', item='Leftovers')
+    def tables(self, species=SPECIES, base=None):
+        variants = tuple(NS(moves=tuple(self.MOVES[j:j + 4]), ability=f'ability{j}', item=f'item{j}') for j in range(2))
         class Universe:
-            level, variants = 80, (variant,)
-            def filter_variants(self, revealed_moves=(), revealed_ability=None, revealed_item=None):return [variant]
-        base = RequestTests.tables(RequestTests())
+            level = 80
+            def __init__(self):self.variants = variants
+            def filter_variants(self, revealed_moves=(), revealed_ability=None, revealed_item=None):
+                return [v for v in variants if set(revealed_moves) <= set(v.moves)]
+        req = RequestTests.tables(RequestTests())
         dex = NS(species_info=lambda s: NS(name=s.title(), base_stats=dict(hp=60, atk=60, **{'def': 60}, spa=60, spd=60, spe=60)),
-                 move_info=base.dex.move_info)
-        gender = {'magneton': dict(gender='N', M=.5), 'tauros': dict(gender='M', M=1.), 'chansey': dict(gender='F', M=0.),
-                  'jynx': dict(gender='F', M=0.), 'snorlax': dict(gender='', M=.875)}
-        return NS(universes={s: Universe() for s in self.SPECIES}, dex=dex, gender=gender, rw=base.rw, gen=base.gen)
+                 move_info=req.dex.move_info)
+        fixed = dict(magneton='N', tauros='M', chansey='F', jynx='F', starmie='N')
+        gender = {s: dict(gender=fixed.get(s, ''), base=(base or {}).get(s, s)) for s in species}
+        return NS(universes={s: Universe() for s in species}, dex=dex, gender=gender, rw=req.rw, gen=req.gen)
 
     def facts(self):
         f = lambda sp, details: dict(species=sp, details=details, level=80, moves=['thunderbolt'], ability=None, item=None)
@@ -176,26 +180,67 @@ class TeamTests(unittest.TestCase):
             slots[gv.choice(req, 'switch starmie')] += 1   # Starmie is the first switch-in: its slot used to be 2 every time
         self.assertEqual(set(slots), {f'switch {k}' for k in range(2, 7)})
         self.assertTrue(all(70 < c < 170 for c in slots.values()), slots)   # about 120 each
-        same = [[m['nick'] for m in gv.draw_team(t, self.facts(), 'Gengar', random.Random(7))] for _ in range(2)]
+        same = [[(m['nick'], tuple(m['moves'])) for m in gv.draw_team(t, self.facts(), 'Gengar', random.Random(7))] for _ in range(2)]
         self.assertEqual(same[0], same[1])   # seeded
 
-    def test_imputed_mons_get_the_species_gender_and_revealed_details_stay_as_logged(self):
-        t = self.tables();seen = collections.defaultdict(set)
-        for seed in range(300):
+    def test_variants_are_those_of_the_order_by_appearance_draw(self):
+        def reference(tables, seat_facts, lead, rng):   # draw_team before the order and gender fix
+            team = []
+            for nick in [lead] + [n for n in seat_facts if n != lead]:
+                f = seat_facts[nick];u = tables.universes[f['species']];v = rng.choice(list(u.filter_variants(revealed_moves=tuple(f['moves']))))
+                team.append((nick, f['species'], frozenset(v.moves), v.ability, v.item))
+            pool = sorted(s for s in tables.universes if s not in {m[1] for m in team})
+            while len(team) < 6 and pool:
+                s = pool.pop(rng.randrange(len(pool)));v = rng.choice(list(tables.universes[s].variants))
+                team.append((s.title(), s, frozenset(v.moves), v.ability, v.item))
+            return sorted(team)
+        t = self.tables()
+        for seed in range(200):
+            got = sorted((m['nick'], m['species'], frozenset(m['moves']), m['ability'], m['item'])
+                         for m in gv.draw_team(t, self.facts(), 'Gengar', random.Random(seed)))
+            self.assertEqual(got, reference(t, self.facts(), 'Gengar', random.Random(seed)), seed)
+
+    def test_moves_in_a_random_order(self):
+        t = self.tables();orders = collections.Counter()
+        for seed in range(200):
+            gengar = gv.draw_team(t, self.facts(), 'Gengar', random.Random(seed))[0]
+            orders[tuple(gengar['moves'])] += 1;self.assertEqual(len(set(gengar['moves'])), 4)
+        self.assertGreater(len(orders), 12)   # 24 orders of 4 moves (per variant): not the movepool's own order every time
+
+    def test_imputed_mons_are_gendered_as_showdown_does_and_revealed_details_stay_as_logged(self):
+        t = self.tables();seen = collections.defaultdict(collections.Counter)
+        for seed in range(400):
             for m in gv.draw_team(t, self.facts(), 'Gengar', random.Random(seed)):
-                seen[m['species']].add(m['details'].split(', ')[-1] if m['details'].count(',') == 2 else '')
+                seen[m['species']][m['details'].split(', ')[-1] if m['details'].count(',') == 2 else ''] += 1
                 if m['revealed']:self.assertEqual(m['details'], self.facts()[m['nick']]['details'])
-        self.assertEqual((seen['magneton'], seen['tauros'], seen['chansey'], seen['jynx']), ({''}, {'M'}, {'F'}, {'F'}))
-        self.assertEqual(seen['snorlax'], {'M', 'F'})   # drawn by the ratio
-        self.assertEqual(seen['starmie'], {''})   # revealed without a gender in its log: kept so
+        self.assertEqual([set(seen[s]) for s in ('magneton', 'tauros', 'chansey', 'jynx')], [{''}, {'M'}, {'F'}, {'F'}])
+        snorlax = seen['snorlax'];self.assertTrue(.35 < snorlax['M'] / sum(snorlax.values()) < .65, snorlax)   # 50/50, not the 87.5% ratio
+        self.assertEqual(set(seen['starmie']), {''})   # revealed without a gender in its log: kept so
+
+    def test_species_clause_by_base_species(self):
+        species = self.SPECIES + ('deoxys', 'deoxysattack', 'deoxysdefense', 'deoxysspeed')
+        t = self.tables(species, base={s: 'deoxys' for s in species if s.startswith('deoxys')})
+        facts = dict(self.facts(), Deoxys=dict(species='deoxysspeed', details='Deoxys-Speed, L72', level=72, moves=['thunderbolt'], ability=None, item=None))
+        for seed in range(300):
+            team = gv.draw_team(t, facts, 'Gengar', random.Random(seed))
+            self.assertEqual([m['species'] for m in team if m['species'].startswith('deoxys')], ['deoxysspeed'])   # no second Deoxys
+            self.assertEqual(len({m['nick'] for m in team}), 6)   # so no nickname clash in request()'s by_nick
 
     def test_gender_draw(self):
-        table = {'tauros': dict(gender='M'), 'magneton': dict(gender='N'), 'snorlax': dict(gender='', M=.875)}
+        table = {'tauros': dict(gender='M'), 'magneton': dict(gender='N'), 'snorlax': dict(gender='')}
         rng = random.Random(0);draws = collections.Counter(gv.draw_gender(table, 'snorlax', rng) for _ in range(4000))
         self.assertEqual((gv.draw_gender(table, 'tauros', rng), gv.draw_gender(table, 'magneton', rng)), ('M', ''))
-        self.assertTrue(.85 < draws['M'] / 4000 < .9);self.assertEqual(set(draws), {'M', 'F'})
-        self.assertIn(gv.draw_gender({}, 'unknownmon', rng), ('M', 'F'))   # an unknown species: 50/50
+        self.assertTrue(.47 < draws['M'] / 4000 < .53);self.assertEqual(set(draws), {'M', 'F'})
+        with self.assertRaises(KeyError):gv.draw_gender(table, 'unknownmon', rng)   # every pinned species must be in the table
 
+    @unittest.skipUnless(__import__('os').environ.get('POKEZERO_SHOWDOWN_ROOT') and __import__('shutil').which('node'),
+                         'needs a Showdown checkout (POKEZERO_SHOWDOWN_ROOT) and node')
+    def test_gender_table_from_showdown(self):
+        import os
+        table = gv.gender_table(os.environ['POKEZERO_SHOWDOWN_ROOT'])
+        self.assertEqual({s: table[s]['gender'] for s in ('tauros', 'starmie', 'chansey', 'snorlax', 'magneton')},
+                         dict(tauros='M', starmie='N', chansey='F', snorlax='', magneton='N'))
+        self.assertEqual((table['deoxysspeed']['base'], table['gengar']['base']), ('deoxys', 'gengar'))
 
 if __name__ == '__main__':
     unittest.main()
