@@ -21,6 +21,7 @@ screen-r4a2's operator (variant B: br_fp on π_FP red3-full, view b, gated by NO
      - the eager peer fold (`--eager-peer-fold`), which advances each battle's peer wire fold on every root so the first private reveal no longer folds the whole battle (1–2 s spikes).
    - **Routing-only proxy placement:** a worker's battle end frame stops the battle counting toward its GPU's load, and new battles go to the GPU with the fewest live battles, then fewest in flight, then least recently placed. The proxy runs with `--sticky-idle 20`. No module of the live server imports the changed client or panel code.
    - **The pre-flight seat balance** (pre-flights only).
+   - **Two new `check_preflight` conditions** (the panel checks): the search arm's unpriced share must be at most 0.25, and there must be zero reuse refusals (`SEARCH_REQUEST_ALREADY_ATTEMPTED`: a server asked about a battle address it already saw). Every pre-flight below meets both.
 3. **The calibration:** a new worker's.
    - RAW only, solo then at the planned 12 lanes, before any timed game; seed band 2103402000 / 2103502000 × 200.
    - Status MEASURED; ratios 2×1000 ms 0.947 and 4×500 ms 0.915.
@@ -48,7 +49,10 @@ Everything else is screen-r4a2's:
 
 ## Pre-flight history (all runs, failures included)
 
-Every run: 48 outcome-blind games, 12 lanes, 3.0 s deadline and 0.15 s reserve, the same gate. Each failure was fixed by removing its identified cause, never by re-rolling seeds.
+Every run: 48 outcome-blind games, 12 lanes, 3.0 s deadline and 0.15 s reserve, the same gate. Each failure was fixed by removing its identified cause; no run re-rolled seeds to pass.
+- **Why the seeds moved:** every run used fresh seeds, because each run is a fresh first-1,000 window that pools nothing with earlier runs, and because servers that keep running would refuse a battle address they had already seen.
+- **Bands:** run 1 ran on the calibration band (battle seeds from 2103402000). Runs 2, 3 and 4 used their own bands, from 2103402100, 2103402150 and 2103402200. All of them are disjoint from the eval cells (`calibration_cells` refuses an overlap).
+- **Seeds column:** the offset from 2103402000.
 
 | Run | Seeds | First 1,000 timeouts | Result | Cause | Fix |
 |---|---|---|---|---|---|
@@ -75,4 +79,6 @@ The declaration's `paired()` applies through screen-r4a2's adopted amendments, u
 
 A flag that fails RULE_R3 stops the run and goes to the lead, with no amendment mid-run. The readout also reports UNKNOWN cells by arm and cause, and a drop / loss / win sensitivity line (descriptive).
 
-**Launch timing:** screen-r4a3 launches on the lead's approval of this declaration, before screen-r4a2's outcome is known. None of screen-r4a2's paired, score or outcome statistics were read for this decision.
+**Launch timing and what was known:** screen-r4a3 launches on the lead's approval of this declaration, before **screen-r4a2's final 2,000-pair outcome** is known.
+- **Known when screen-r4a3 was decided:** screen-r4a2's 500-pair screen result, recorded in its note: CONTINUE_TO_2000; known pairs +0.043 [−0.002, +0.088]; conservative +0.038; harm mirror +0.046 [+0.001, +0.091]; RULE_R3 ratio 1.009.
+- **Read of its extension beyond 500 pairs:** only operational telemetry (result counts by status and arm, the UNKNOWN causes, decision-latency and server timings for the interference guard). No paired, score or outcome statistic.
