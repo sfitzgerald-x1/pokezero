@@ -427,35 +427,84 @@ class RegressPluginTests(unittest.TestCase):
             self.assertEqual(lane_verdict({bad}, {'hyperbeam': [0]}, None)[0], [bad])
         ok = {('state.item', 0), ('state.item', 1), ('state.choice_move', 0), ('state.choice_move', 1), ('state.hp', 0),
               ("trackers.mon_features['item_mutated']", 1), ("trackers.mon_features['choice_locked']", 1), ('trackers.shown_item', 0),
-              ('state.status', 0), ('state.confusion_counter', 0), ('trackers.belief_mask', 1)}
+              ('trackers.belief_mask', 1), ('trackers.visible_belief.visible_hard', 1)}
         self.assertEqual(lane_verdict(ok, {'trick': [0]}, None)[0], [])
+        # M1 review: a swapped berry's stages and cure and the bag are never an allowance (trick_rule / bag_rule witnesses).
         for bad in (('state.types', 1), ('state.trap_source', 0), ('state.encore_counter', 1), ('state.recharge_counter', 0),
-                    ('state.volatile', 1), ('state.item_knocked', 1)):
+                    ('state.volatile', 1), ('state.item_knocked', 1), ('state.status', 0), ('state.confusion_counter', 1),
+                    ('state.boosts', 1), ('trackers.boosts', 0), ('trackers.public_volatiles', 0), ('trackers.status', 1),
+                    ("trackers.mon_features['confusion_turns']", 1), ("trackers.mon_features['sub_present']", 1),
+                    ('trackers.public_port.victims', 0)):
             self.assertEqual(lane_verdict({bad}, {'trick': [0]}, None)[0], [bad])
 
-    def test_recharge_rule_checks_the_post_state(self):
+    def test_recharge_rule_needs_a_hit_and_the_bag_bit(self):
+        """M1 review: the counter is explained only with post-state evidence the move connected and the bag bit set."""
         from gpu_engine.v2e_regress import recharge_rule
         counter = np.zeros((2, 6), np.int64);counter[0, 0] = 1
         bag = np.zeros((2, 6), bool);bag[0, 2] = True                    # the active (physical 0) holds public slot 2
         p2p = np.tile(np.array([2, 0, 1, 3, 4, 5]), (2, 1));post_active = np.zeros(2, np.int64);hp = np.full((2, 6), 100)
-        digest = np.arange(4).reshape(2, 2);departed = np.zeros((2, 6), bool)
+        departed = np.zeros((2, 6), bool)
         entries = {('state.recharge_counter', 0), ('trackers.public_volatiles', 0), ('state.hp', 1)}
-        rule = lambda **kw: recharge_rule(entries, **dict(dict(counter=counter, bag=bag, masked=digest, base_bag=digest,
-            hyperbeam=np.array([True, False]), residual_ran=True, post_active=post_active, post_hp=hp, physical_to_public=p2p,
+        rule = lambda **kw: recharge_rule(entries, **dict(dict(counter=counter, bag=bag, hyperbeam=np.array([True, False]),
+            evidence=np.array([True, False]), residual_ran=True, post_active=post_active, post_hp=hp, physical_to_public=p2p,
             departed=departed), **kw))
-        rest, explained = rule()
-        self.assertEqual(rest, {('state.hp', 1)});self.assertEqual(len(explained), 2)
-        self.assertEqual(rule(hyperbeam=np.array([False, True]))[0], entries)              # not this side's Hyper Beam
+        rest, explained, cells = rule()
+        self.assertEqual(rest, {('trackers.public_volatiles', 0), ('state.hp', 1)})   # the bag is bag_rule's, per cell
+        self.assertEqual(explained, [('state.recharge_counter', 0)]);self.assertEqual(np.flatnonzero(cells[0]).tolist(), [2])
+        self.assertEqual(rule(evidence=np.array([False, False]))[1], [])                  # RMISS: acted, never connected
+        self.assertFalse(rule(evidence=np.array([False, False]))[2].any())
+        self.assertEqual(rule(bag=np.zeros((2, 6), bool))[1], [])                         # RNOBAG: no bit at its slot
+        stray = np.zeros((2, 6), bool);stray[0, 4] = True
+        self.assertEqual(rule(bag=stray)[1], [])                                         # the bit on another slot only
+        self.assertEqual(rule(hyperbeam=np.array([False, True]))[1], [])                  # not this side's Hyper Beam
         self.assertEqual(rule(residual_ran=False)[1], [])                                 # deferred: must still read 2
         wrong = counter.copy();wrong[0, 3] = 2
-        self.assertEqual(rule(counter=wrong)[1], [('trackers.public_volatiles', 0)])     # a second mon's counter
-        other = digest.copy();other[0, 1] += 1
-        self.assertEqual(rule(masked=other)[1], [('state.recharge_counter', 0)])         # another bag column changed
-        stray = bag.copy();stray[0, 4] = True
-        self.assertEqual(rule(bag=stray)[1], [('state.recharge_counter', 0)])            # the bit on a mon not recharging
+        self.assertEqual(rule(counter=wrong)[1], [])                                      # a second mon's counter
         gone = np.zeros((2, 6), np.int64);dep = departed.copy();dep[0, 0] = True
-        moved = bag.copy();post = np.array([1, 0])
-        self.assertEqual(rule(counter=gone, bag=moved, departed=dep, post_active=post)[1], [('trackers.public_volatiles', 0)])
+        rest, explained, cells = rule(counter=gone, departed=dep, post_active=np.array([1, 0]))
+        self.assertEqual(explained, []);self.assertEqual(np.flatnonzero(cells[0]).tolist(), [2])   # dragged after the hit
+
+    def test_bag_rule_explains_only_witnessed_cells(self):
+        from gpu_engine.v2e_regress import bag_rule
+        base = np.zeros((2, 6, 5), bool);bag = base.copy();bag[0, 2, 1] = True
+        allowed = np.zeros((2, 6, 5), bool);allowed[0, 2, 1] = True
+        entries = {('trackers.public_volatiles', 0)}
+        self.assertEqual(bag_rule(entries, bag, base, allowed)[0], set())
+        extra = bag.copy();extra[0, 2, 3] = True                                         # TWIDE: another column at that slot
+        self.assertEqual(bag_rule(entries, extra, base, allowed)[0], entries)
+        self.assertEqual(bag_rule(entries, bag, None, allowed)[0], entries)                # no stored base bag: never
+
+    def test_trick_witnesses_are_per_mon(self):
+        from gpu_engine.v2e_regress import item_witnesses, trick_rule
+        LUM, LIECHI, LEFT = 2, 3, 1;pinch = {LIECHI: 0}
+        pre_active = post_active = np.zeros(2, np.int64);p2p = np.tile(np.arange(6), (2, 1))
+        pre_item = np.zeros((2, 6), np.int64);pre_item[0, 0] = LIECHI;pre_item[1, 0] = LUM
+        post_item = np.zeros((2, 6), np.int64);post_item[0, 0] = 0;post_item[1, 0] = LIECHI   # the Tricker got the Lum, ate it
+        zero = np.zeros((2, 6), np.int64);conf = zero.copy();base_conf = zero.copy();base_conf[0, 0] = 2
+        boosts = np.zeros((2, 6, 7), np.int64);base_boosts = boosts.copy()
+        w = item_witnesses(pre_active, post_active, pre_item, post_item, zero, conf, zero, zero, zero, LUM, pinch)
+        self.assertEqual(np.flatnonzero(w['lum'][0]).tolist(), [0]);self.assertEqual(w['stats'], {0})
+        ko = {'state.confusion_counter': conf, 'state.status': zero, 'state.boosts': boosts}
+        base_ko = {'state.confusion_counter': base_conf, 'state.status': zero, 'state.boosts': base_boosts}
+        entries = {('state.confusion_counter', 0), ("trackers.mon_features['confusion_turns']", 0)}
+        rest, explained, confused = trick_rule(entries, w, ko, base_ko, {}, {}, p2p, pre_item, post_item, pinch)
+        self.assertEqual(rest, set());self.assertEqual(np.flatnonzero(confused[0]).tolist(), [0])
+        other = base_conf.copy();other[0, 3] = 1                                          # a bench mon differs too
+        self.assertEqual(trick_rule(entries, w, ko, dict(base_ko, **{'state.confusion_counter': other}), {}, {}, p2p, pre_item,
+                                    post_item, pinch)[0], entries)
+        # Stages: the Tricker gave away its own Liechi, which the base ate (this tree -1 Atk against it): explained;
+        # a second stat, or -1 Atk where neither active held an Atk berry (TWIDE), is not.
+        stage = base_boosts.copy();stage[0, 0, 0] = 1
+        entries = {('state.boosts', 0)}
+        self.assertEqual(trick_rule(entries, w, ko, dict(base_ko, **{'state.boosts': stage}), {}, {}, p2p, pre_item, post_item,
+                                    pinch)[0], set())
+        two = stage.copy();two[0, 0, 1] = 1
+        self.assertEqual(trick_rule(entries, w, ko, dict(base_ko, **{'state.boosts': two}), {}, {}, p2p, pre_item, post_item,
+                                    pinch)[0], entries)
+        no_berry = pre_item.copy();no_berry[0, 0] = LEFT
+        w2 = item_witnesses(pre_active, post_active, no_berry, post_item, zero, conf, zero, zero, zero, LUM, pinch)
+        self.assertEqual(trick_rule(entries, w2, ko, dict(base_ko, **{'state.boosts': stage}), {}, {}, p2p, no_berry, post_item,
+                                    pinch)[0], entries)
 
     def test_ledger_rule_checks_the_knocked_mons(self):
         from gpu_engine.v2e_regress import LEDGER_LEAVES, ledger_rule

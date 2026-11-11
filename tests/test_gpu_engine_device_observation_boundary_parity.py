@@ -536,7 +536,7 @@ console.log(JSON.stringify(orders));"""
         state=self.state();yes=j.ones(2,bool);band=j.asarray([False,False,True])
         state=state._replace(item=state.item.at[:,0,0].set(2).at[:,1,0].set(1))
         c=h.initialize(state,self.tables.belief);fact(a.ARRIVE,0);fact(a.ARRIVE,1)
-        cols=j.asarray(a.NUMERIC_COLUMNS);locked=a.NUMERIC_COLUMNS[a.CORE.index('CHOICE_LOCKED')]
+        locked=a.NUMERIC_COLUMNS[a.CORE.index('CHOICE_LOCKED')]
         swapped_col=a.NUMERIC_COLUMNS[a.CORE.index('ITEM_SWAPPED')]
         def move(st,side,line,**kw):
             h.move(c,st,side,j.ones(2,j.int32),yes,pp_use=True,**kw);self.b2_lines(a,catalog,fact,line)
@@ -672,7 +672,8 @@ class KnockOffLedgerBoundaryParityTests(unittest.TestCase):
             credits[observer]=[float(patch.numeric[0,col]) for col in d.FIELD_COLUMNS[2:]]
         items=result.context.items
         return dict(credits=credits,shown=self.f.item_catalog.names[int(items.revealed[0,1,0])],
-            removed=bool(items.removed[0,1,0]),mutated=bool(items.mutated[0,1,0]))
+            removed=bool(items.removed[0,1,0]),mutated=bool(items.mutated[0,1,0]),
+            original=self.f.item_catalog.names[int(items.original[0,1,0])],original_id=int(items.original[0,1,0]))
 
     def device(self,knocked):
         from gpu_engine import engine_device_trackers as dtr,engine_device_features as df
@@ -690,7 +691,9 @@ class KnockOffLedgerBoundaryParityTests(unittest.TestCase):
             self.assertFalse(bool(bad.any()))
             credits[observer]=[float(numeric[0,s_.v4_numeric_index(getattr(s_,'NUMERIC_'+n))])
                 for n in ('SELF_ITEMS_REMOVED_CREDIT','OPP_ITEMS_REMOVED_CREDIT')]
-        return dict(credits=credits,shown=int(c.trackers.shown_item[0,1,0]),removed=bool(c.trackers.item_removed[0,1,0]))
+        slot=int(c.trackers.physical_to_public[0,1,0])
+        return dict(credits=credits,shown=int(c.trackers.shown_item[0,1,0]),removed=bool(c.trackers.item_removed[0,1,0]),
+            mutated=bool(c.trackers.mon_features['item_mutated'][0,1,slot]),original=int(c.trackers.mon_features['item_original'][0,1,slot]))
 
     def test_knock_off_ledger_and_removal_credit_match_b2(self):
         prefix=[*self.f.prefix,'|turn|1','|move|p1a: Snorlax|Body Slam|p2a: Absol','|-damage|p2a: Absol|80/100']
@@ -707,6 +710,20 @@ class KnockOffLedgerBoundaryParityTests(unittest.TestCase):
             np.testing.assert_allclose(device['credits'][observer],knocked['credits'][observer],atol=1e-7)
             np.testing.assert_allclose(quiet['credits'][observer],plain['credits'][observer],atol=1e-7)
         np.testing.assert_allclose(knocked['credits'][1],[1/6,0.],atol=1e-7);np.testing.assert_allclose(knocked['credits'][0],[0.,1/6],atol=1e-7)
+
+    def test_knock_off_item_ledger_matches_b2_mutated_and_original(self):
+        """M1 review: the device's per-mon ledger written by knock_off (item_mutated, item_original) against B2's
+        public_items fold of the same -enditem line (items.mutated, items.original: REMOVE's own removal credits the
+        removed item as the original), and both untouched without the line."""
+        prefix=[*self.f.prefix,'|turn|1','|move|p1a: Snorlax|Body Slam|p2a: Absol','|-damage|p2a: Absol|80/100']
+        knocked=self.b2(prefix+['|-enditem|p2a: Absol|Leftovers|[from] move: Knock Off|[of] p1a: Snorlax'])
+        plain=self.b2(prefix)
+        device,quiet=self.device(True),self.device(False)
+        self.assertEqual((knocked['mutated'],knocked['original']),(True,'leftovers'))
+        self.assertEqual((device['mutated'],device['original']),(True,7))         # the knocked Leftovers' device id
+        self.assertEqual(device['original'],device['shown']);self.assertEqual(knocked['original'],knocked['shown'])
+        self.assertEqual((plain['mutated'],plain['original_id']),(False,0))
+        self.assertEqual((quiet['mutated'],quiet['original']),(False,0))
 
 
 if __name__=='__main__':unittest.main()
