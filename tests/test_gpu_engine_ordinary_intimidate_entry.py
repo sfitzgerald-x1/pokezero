@@ -143,6 +143,8 @@ class OrdinaryIntimidateEntryTests(unittest.TestCase):
   clean_state,clean_tape=self.before_tape(8);clean_state,clean_tape=self.install(clean_state,clean_tape,side)
   _,_,clean=entry.enter(clean_state,side,self.table.entry,eligible=mask,hazards=False,_weather_trace=clean_tape)
   self.assertEqual(clean.execution.ledger.stage[:7,0].tolist(),[2]*7);self.assertEqual(int(clean.execution.ledger.count[7]),0)
+  # ... and neither unknown bit the guard rows above require appears without a guard (bit 1, UNINSTRUMENTED, is the tape's baseline).
+  self.assertFalse(bool((clean.refusal[:7]&512).any()));self.assertFalse(bool((clean.refusal[:7]&256).any()))
  def test_original_default_ast_constructor_api_and_source_callback(self):
   path=Path('gpu_engine/entry.py');old=subprocess.check_output(['git','show','f3c9dbea:'+str(path)],text=True)
   self.assertEqual(default_entry_program(old),default_entry_program(path.read_text()))
