@@ -109,6 +109,9 @@ def record(args):
     if args.incremental_roots:
         if 'incremental_roots' not in inspect.signature(ProtocolConstructor).parameters:raise SystemExit('this tree has no incremental roots')
         extra['incremental_roots'] = True
+    if args.eager_peer_fold:
+        if 'eager_peer_fold' not in inspect.signature(ProtocolConstructor).parameters:raise SystemExit('this tree has no eager peer fold')
+        extra['eager_peer_fold'] = True
     constructor = ProtocolConstructor(catalog=catalog, source=source, metadata=metadata, owning_config=config, count=16, seed=args.seed,
                                       rung='DN2W16', saved_root_admission=False, **extra)
     shared = {id(x): n for n, x in (('catalog', catalog), ('source', source), ('metadata', metadata), ('owning_config', config),
@@ -119,7 +122,7 @@ def record(args):
         if (r.get('cell') or {}).get('arm') == args.arm and r.get('status') == 'COMPLETE' and (run / 'owning-wire' / f'{path.stem}.jsonl').exists():
             cells.append(int(path.stem))
     step = max(1, len(cells) // args.battles);chosen = cells[::step][:args.battles]
-    header = dict(event='HEADER', run=str(run), arm=args.arm, battles=chosen, incremental_roots=args.incremental_roots, seed=args.seed,
+    header = dict(event='HEADER', run=str(run), arm=args.arm, battles=chosen, incremental_roots=args.incremental_roots, eager_peer_fold=args.eager_peer_fold, seed=args.seed,
                   tree=os.environ.get('TREE_COMMIT'), code=code_identity(), source=str(Path(__file__).resolve()))
     index = 0
     with open(args.out, 'x') as stream:
@@ -158,8 +161,9 @@ def compare(args):
     if h0['battles'] != h1['battles'] or h0['run'] != h1['run'] or h0['arm'] != h1['arm'] or h0['seed'] != h1['seed']:
         raise SystemExit('the two records replay different battles, runs, arms or seeds')
     c0, c1 = ((h.get('code') or {}).get('code_sha256') for h in (h0, h1))
-    if not c0 or not c1 or (c0 == c1 and h0['incremental_roots'] == h1['incremental_roots']):
-        raise SystemExit('two records of different code (or of the incremental flag off then on) required: a record compared with itself proves nothing')
+    flags = lambda h: (h.get('incremental_roots'), h.get('eager_peer_fold'))
+    if not c0 or not c1 or (c0 == c1 and flags(h0) == flags(h1)):
+        raise SystemExit('two records of different code (or of different flags) required: a record compared with itself proves nothing')
     head = (h0.get('code') or {}).get('git_head') or ''
     if args.expect_original_head and not head.startswith(args.expect_original_head):
         raise SystemExit(f'the original record ran {head or "no git tree"}, not {args.expect_original_head}')
@@ -186,7 +190,7 @@ def main(argv=None):
     for name in ('showdown-root', 'node-binary', 'metadata', 'expected-metadata-sha256', 'vocabulary', 'expected-vocabulary-sha256', 'run', 'out'):
         r.add_argument('--' + name, required=True)
     r.add_argument('--battles', type=int, default=24);r.add_argument('--arm', default='DN2W16');r.add_argument('--seed', type=int, default=20261103)
-    r.add_argument('--incremental-roots', action='store_true')
+    r.add_argument('--incremental-roots', action='store_true');r.add_argument('--eager-peer-fold', action='store_true')
     c = sub.add_parser('compare');c.add_argument('original');c.add_argument('candidate');c.add_argument('--out', required=True)
     c.add_argument('--expect-original-head', help='the original record must have run this commit (a prefix of its git HEAD)')
     args = p.parse_args(argv)
