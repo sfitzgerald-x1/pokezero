@@ -14,8 +14,8 @@ import numpy as np
 TYPES = ['_none', 'normal', 'fire', 'water', 'electric', 'grass', 'ice', 'fighting', 'poison', 'ground', 'flying', 'psychic', 'bug',
          'rock', 'ghost', 'dragon', 'dark', 'steel']
 NORMAL, PSYCHIC, GHOST, DARK = 1, 11, 14, 16
-MOVES = ['_none', 'struggle', 'splash', 'hyperbeam', 'trick', 'tackle', 'protect', 'roar', 'explosion', 'return']
-STRUGGLE, SPLASH, HYPERBEAM, TRICK, TACKLE, PROTECT, ROAR, EXPLOSION, RETURN = range(1, 10)
+MOVES = ['_none', 'struggle', 'splash', 'hyperbeam', 'trick', 'tackle', 'protect', 'roar', 'explosion', 'return', 'encore']
+STRUGGLE, SPLASH, HYPERBEAM, TRICK, TACKLE, PROTECT, ROAR, EXPLOSION, RETURN, ENCORE = range(1, 11)
 ABILITIES = ['_none', 'truant', 'stickyhold', 'keeneye']
 TRUANT, STICKYHOLD, KEENEYE = range(1, 4)
 ITEMS = ['_none', 'leftovers', 'lumberry', 'choiceband']
@@ -35,7 +35,8 @@ def metadata():
             row('protect', 0, NORMAL, 'Status', True, {}, priority=3),
             row('roar', 0, NORMAL, 'Status', 100, {'sound': 1, 'bypasssub': 1}, priority=-6),
             row('explosion', 250, NORMAL, 'Physical', 100, {'protect': 1}),
-            row('return', 102, NORMAL, 'Physical', 100, {'contact': 1, 'protect': 1})]
+            row('return', 102, NORMAL, 'Physical', 100, {'contact': 1, 'protect': 1}),
+            row('encore', 0, NORMAL, 'Status', 100, {'protect': 1, 'failencore': 1})]
     chart = np.ones((17, 17));chart[NORMAL - 1, GHOST - 1] = 0;chart[PSYCHIC - 1, DARK - 1] = 0
     return {'vocabulary': dict(moves=MOVES, abilities=ABILITIES, items=ITEMS, species=['_none', 'a', 'b', 'c', 'd', 'e', 'f'],
                                types=TYPES), 'moves': rows, 'type_chart': chart.tolist()}
@@ -161,14 +162,19 @@ class TransitionTests(unittest.TestCase):
         self.assertEqual(int(np.asarray(out.pp)[6, 0, 0, 0]), 10)                       # the plain loaf, for comparison
 
     def test_recharge_pseudo_move_is_priority_zero_at_the_users_speed(self):
-        """A faster foe acts first; a slower one after (its Protect at +3 always first); ties follow draws[0][0]."""
-        one = {'recharge_counter': [((0, 0), 1)], 'moves': [((1, 0, 0), TACKLE)]}
+        """The foe Encores at priority 0. When the recharge goes first (faster recharger, or a Speed tie the coin draws[0][0]
+        gives side 0), Encore finds no queued move left and lasts one turn longer (3+0+1); otherwise 3 (Showdown: the
+        recharge action is a priority-0 move action at the user's Speed; its move-order tie is the same draws[0][0] coin)."""
+        one = {'recharge_counter': [((0, 0), 1)], 'moves': [((1, 0, 0), ENCORE)]}
         lanes = [dict(one), dict(one, stats=[((1, 0, 5), 400)]), dict(one, stats=[((1, 0, 5), 301)]),
                  dict(one, stats=[((1, 0, 5), 301)])]
         s = self.build(lanes)
+        s = s._replace(last_action_kind=s.last_action_kind.at[:, 0].set(2), last_action_index=s.last_action_index.at[:, 0].set(0))
         out = self.play(s, self.chance(4, [{}, {}, {(0, 0): 0}, {(0, 0): 1}]))
         self.assertFalse(np.asarray(out.recharge_counter).any())
-        self.assertTrue((np.asarray(out.hp)[:, 0, 0] < 300).all())
+        self.assertEqual(np.asarray(out.encore_move)[:, 0, 0].tolist(), [HYPERBEAM] * 4)
+        # Encore's residual already ran once this turn (counter - 1).
+        self.assertEqual(np.asarray(out.encore_counter)[:, 0, 0].tolist(), [3, 2, 3, 2])
 
     def test_a_faint_cancels_the_recharge_which_then_expires_at_the_residual(self):
         """The faster foe explodes (the recharger is a Ghost): Gen 3 cancels the queued recharge; mustrecharge stays 1 until

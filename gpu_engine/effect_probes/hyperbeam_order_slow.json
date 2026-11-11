@@ -1,20 +1,9 @@
 {
  "schema": "pokezero.effect_probe.scenario.v1",
- "move": "hyperbeam_tie",
- "note": "M1.1: the recharge pseudo-move is priority 0 at the user's Speed: two level-100 Snorlax tie (each enters by a switch so no lead tie is drawn). On the recharge turn the foe Encores; the tie coin orders the recharge and the Encore, which gets one extra turn when its target has no queued move left (the recharge went first). The encored recharger then repeats Hyper Beam.",
+ "move": "hyperbeam_order_slow",
+ "note": "M1.1: the recharge pseudo-move is priority 0 at the user's Speed (sim/side.ts queues moveid recharge; getActionSpeed). Two level-100 Snorlax; on the recharge turn the foe Encores at priority 0: the Encorer is slower: the recharge goes first, so Encore finds no queued move left and lasts one turn longer. The encored recharger repeats Hyper Beam. (An exact Speed tie is not probeable: the harness leaves a Pokemon-order tie in the Update event unresolved; the engine tie coin is unit-tested.)",
  "teams": [
   [
-   {
-    "species": "Starmie",
-    "moves": [
-     "splash",
-     "surf",
-     "recover",
-     "protect"
-    ],
-    "ability": "Illuminate",
-    "item": "Leftovers"
-   },
    {
     "species": "Snorlax",
     "moves": [
@@ -26,6 +15,17 @@
     "ability": "Thick Fat",
     "item": "Leftovers",
     "level": 100
+   },
+   {
+    "species": "Starmie",
+    "moves": [
+     "splash",
+     "surf",
+     "recover",
+     "protect"
+    ],
+    "ability": "Illuminate",
+    "item": "Leftovers"
    },
    {
     "species": "Blissey",
@@ -74,17 +74,6 @@
   ],
   [
    {
-    "species": "Blissey",
-    "moves": [
-     "splash",
-     "softboiled",
-     "protect",
-     "seismictoss"
-    ],
-    "ability": "Serene Grace",
-    "item": "Leftovers"
-   },
-   {
     "species": "Snorlax",
     "moves": [
      "splash",
@@ -94,7 +83,10 @@
     ],
     "ability": "Thick Fat",
     "item": "Leftovers",
-    "level": 100
+    "level": 100,
+    "evs": {
+     "spe": 0
+    }
    },
    {
     "species": "Starmie",
@@ -105,6 +97,17 @@
      "protect"
     ],
     "ability": "Illuminate",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Blissey",
+    "moves": [
+     "splash",
+     "softboiled",
+     "protect",
+     "seismictoss"
+    ],
+    "ability": "Serene Grace",
     "item": "Leftovers"
    },
    {
@@ -144,12 +147,8 @@
  ],
  "script": [
   [
-   "switch 2",
-   "move 1"
-  ],
-  [
    "move 1",
-   "switch 2"
+   "move 1"
   ],
   [
    "move 1",
@@ -168,19 +167,7 @@
    "move 1"
   ]
  ],
- "axes": [
-  {
-   "name": "tie",
-   "field": "draws.0.0",
-   "values": [
-    0,
-    1
-   ],
-   "steps": [
-    2
-   ]
-  }
- ],
+ "axes": [],
  "expect": {
   "exact": true
  },
