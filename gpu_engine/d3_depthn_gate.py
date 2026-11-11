@@ -4026,7 +4026,7 @@ CONSTRUCTOR_MODE = 'CONSTRUCTOR_ROOTS'
 CONSTRUCTOR_DEFAULTS = dict(constructor_worlds=8, constructor_seed=20261103, constructor_per_band=10)
 CONSTRUCTOR_PAIRS = ('constructor_roster', 'constructor_metadata', 'constructor_vocabulary')   # PATH SHA256 flags
 CONSTRUCTOR_FLAGS = CONSTRUCTOR_PAIRS + ('showdown_root', 'node_binary') + tuple(CONSTRUCTOR_DEFAULTS)
-CONSTRUCTOR_WORLD_COUNTS = (8, 16)   # the live rungs (depthn_live_search.RUNGS)
+CONSTRUCTOR_WORLD_COUNTS = (8, 16)   # the live rungs (depthn_live_search.RUNGS' DN2W8 / DN2W16; DN2W32 / DN2W64 are offline-replay only)
 CONSTRUCTOR_HARNESS = dict(capacity=512, block_lanes=2187, oracle_chunk=512)   # declaration A's, with --fixed-shapes and --block-invariance
 CONSTRUCTOR_COVERED = dict(depth=2, selection='prior', k_own='9', k_opp='9', k1_own=9, k1_opp=9, constructor_per_band=10)   # R1-C, A-C's and A-C16's scope
 CONSTRUCTOR_DECLARATIONS = {   # W -> the one declaration a run at that W runs under (repo_path under the checkout, sha256); any other pairing is refused

@@ -20,7 +20,8 @@ within 1e-6 and its value within 1e-5). A root that passes writes one row {ordin
 (fp_reply_evidence.snapshot: only Pokemon with evidence), fp_reply_evidence's evidence schema, so `fp_reply_evidence weights`
 joins it to the re-pricer's self rows (keyed by the capture ordinal and decision index) unchanged. A root that fails, ends before
 its target or raises writes no evidence row (its worlds then fail the join as no_evidence_row) and is counted in
-shard-<worker>.json by status.
+shard-<worker>.json by status. Exit 1 unless every root is ok and some candidate set was scored (checks.worlds > 0); a
+base_config without set beliefs (belief_set_source) is refused before anything runs.
 """
 import argparse
 import collections
@@ -128,6 +129,8 @@ def main(argv=None):
     if args.limit:entries = entries[:args.limit]
     collection = Path(args.collection);first = sorted(glob.glob(str(collection / 'requests' / '*.json')))[0]
     base = json.loads(Path(first).read_bytes())['base_config']
+    if not base.get('belief_set_source'):   # no candidate sets: every measure() would be active_unmeasured and every loglik 0
+        raise SystemExit(f'{first}: base_config.belief_set_source is off; the export needs the belief engine\'s candidate sets')
     champion = Model(args.checkpoint, torch);scorer = champion_scorer(champion, torch)
     dex = load_showdown_dex_cached(base['showdown_root']);tables = rw.generator_tables(base['showdown_root'], base['node_binary'])
     extras = ev.extra_sets(ev._jsonl(sorted(args.extra_sets))) if args.extra_sets else {}
@@ -159,7 +162,7 @@ def main(argv=None):
                    extra_sets=sorted(str(Path(p).resolve()) for p in args.extra_sets or ()), seconds=round(time.time() - started, 1))
     summary_path.write_text(json.dumps(summary, indent=1) + '\n')
     print(json.dumps(dict(event='SHARD_DONE', **{k: summary[k] for k in ('worker', 'roots', 'rows', 'statuses', 'seconds')})), flush=True)
-    return 0 if statuses['ok'] == len(entries) else 1
+    return 0 if statuses['ok'] == len(entries) and (checks['worlds'] or not entries) else 1   # some candidate set must have been scored
 
 
 if __name__ == '__main__':

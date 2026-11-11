@@ -99,12 +99,18 @@ class WorldRungTests(unittest.TestCase):
         self.assertEqual([q[a] for a in (0, 1)], list(M.hedge.averaging(prices, legal).q[:2]))   # bit for bit
 
     def test_true_world_reweighted_rungs_take_t0s_loglik(self):
-        out, _, _ = M.build([sampled_row(depth1=[LOW, LOW, LOW])], 'foulplay', [true_row()], weights([0., 0., 0.]), weights([0.]))
+        out, _, _ = M.build([sampled_row(depth1=[LOW, LOW, LOW])], 'foulplay', [true_row()], weights([0., 0., 0.]), weights([0.] * 3))
         got = by_rung(out);self.assertEqual((got['R3true'], got['R3true_rw_b1']), (0, 0))   # (.9 - .9 - .9) / 3
-        out, _, _ = M.build([sampled_row(depth1=[LOW, LOW, LOW])], 'foulplay', [true_row()], weights([0., -40., -40.]), weights([0.]))
+        out, _, _ = M.build([sampled_row(depth1=[LOW, LOW, LOW])], 'foulplay', [true_row()], weights([0., -40., -40.]), weights([0.] * 3))
         self.assertEqual(by_rung(out)['R3true_rw_b1'], 1)   # T0 (its own loglik 0) outweighs the two LOW worlds at -40
         out, _, _ = M.build([sampled_row()], 'foulplay', [true_row()], weights([0., 0., 0.]), {})
         self.assertEqual(reasons(out)['R3true_rw_b1'], 'true_weights_missing')
+        out, _, _ = M.build([sampled_row()], 'foulplay', [true_row()], weights([0., 0., 0.]), weights([0.]))   # one of three true worlds
+        self.assertEqual(reasons(out)['R3true_rw_b1'], 'true_weights_missing')
+        out, _, _ = M.build([sampled_row()], 'foulplay', [true_row()], weights([0., 0., 0.]), weights([0., -1., 0.]))   # sampled-like
+        self.assertEqual(reasons(out)['R3true_rw_b1'], 'true_weights_inconsistent')
+        out, _, _ = M.build([sampled_row()], 'foulplay', weights=weights([0., 0., 0., 0.]))   # a fourth world the row lacks
+        self.assertEqual(reasons(out)['R3rw_b1'], 'world_weights_mismatch')
 
     def test_undecided_reasons(self):
         out, _, _ = M.build([sampled_row()], 'foulplay')
@@ -115,6 +121,10 @@ class WorldRungTests(unittest.TestCase):
                                             **{'R3rw_b0.5': 'world_weights_missing', 'R3rw_b1': 'world_weights_missing'}))
         bad = true_row();bad['worlds'][0]['kernel_seed'] = 999
         self.assertEqual(reasons(M.build([sampled_row()], 'foulplay', [bad])[0])['R3true'], 'kernel_seed_mismatch')
+        none, unseeded = true_row(), sampled_row();none['worlds'][0]['kernel_seed'] = None;unseeded['worlds'][0]['kernel_seed'] = None
+        self.assertEqual(reasons(M.build([unseeded], 'foulplay', [none])[0])['R3true'], 'kernel_seed_mismatch')   # None never matches
+        shape = sampled_row(refused=[False])   # three worlds need two blocks
+        self.assertEqual(set(reasons(M.build([shape], 'foulplay')[0]).values()), {'block_shape'})
         failed = true_row();failed['true_worlds'] = dict(TRUE, built=2)
         self.assertEqual(reasons(M.build([sampled_row()], 'foulplay', [failed])[0])['R3true'], 'true_worlds_failed')
         other = true_row();other['root']['root_logits'] = [0., 1.] + [0.] * 7
@@ -131,6 +141,8 @@ class WorldRungTests(unittest.TestCase):
         self.assertEqual(summary['prefixes'], [2, 4])
         out, _, _ = M.build([sampled_row(depth1=[T0, T0, LOW, LOW])], 'foulplay', prefixes=[2, 4, 8])
         self.assertEqual((by_rung(out)['R3_W2'], by_rung(out)['R3_W4'], reasons(out)['R3_W8']), (1, 0, 'prefix_too_long'))
+        out, _, _ = M.build([sampled_row(depth1=[T0, T0, LOW, LOW])], 'foulplay', [true_row()], prefixes=[2, 4])   # three true worlds
+        self.assertEqual((by_rung(out)['R1_W2'], reasons(out)['R1_W4']), (1, 'prefix_too_long'))
 
     def test_r3_check_counts_disagreements(self):
         theirs = [dict(kind='foulplay', ordinal=7, target=3, action=0)]   # R3 plays 1 here
@@ -138,6 +150,21 @@ class WorldRungTests(unittest.TestCase):
         self.assertEqual((summary['r3_check']['compared'], summary['r3_check']['disagreements']), (1, 1))
         _, _, summary = M.build([sampled_row()], 'foulplay', check_r3=[dict(theirs[0], action=1)])
         self.assertEqual(summary['r3_check']['disagreements'], 0)
+        four = sampled_row(depth1=[T0, T0, LOW, LOW])   # R3_W2 plays 1, R3_W4 plays 0
+        _, _, summary = M.build([four], 'foulplay', prefixes=[2, 4], check_r3=[dict(theirs[0], action=1)], check_prefix=2)
+        self.assertEqual((summary['r3_check']['rung'], summary['r3_check']['compared'], summary['r3_check']['disagreements']), ('R3_W2', 1, 0))
+        with self.assertRaises(ValueError):M.build([four], 'foulplay', prefixes=[2, 4], check_r3=theirs)   # no R3 without the full W
+
+
+class GuardTests(unittest.TestCase):
+    def test_r1_takes_the_true_rows_guard_and_the_rest_the_sampled_rows(self):
+        tripping = dict(tripped=True, b=True, c=False, own_guarded_lanes=[None] * 4, reasons=['b'])
+        out, _, _ = M.build([sampled_row()], 'foulplay', [true_row(guard=tripping)])
+        self.assertEqual((out['R1'][0]['action'], out['R1'][0]['guard_tripped']), (1, True))
+        self.assertEqual((out['R3'][0]['action'], out['R3'][0]['guard_tripped']), (1, False))
+        self.assertEqual(out['R3true'][0]['guard_tripped'], False)
+        out, _, _ = M.build([sampled_row(guard=tripping)], 'foulplay', [true_row()])
+        self.assertEqual((out['R1'][0]['guard_tripped'], out['R3'][0]['guard_tripped']), (False, True))
 
 
 class TrueKindTests(unittest.TestCase):
@@ -165,12 +192,15 @@ class OracleTests(unittest.TestCase):
         none = [[OTHER_SKARM, OTHER_LAX]] * 3
         out, _, _ = M.build([sampled_row(parties=none)], 'foulplay', [true_row()])
         self.assertEqual((reasons(out)['R3or_active'], reasons(out)['R3or_seen']), ('oracle_empty', 'oracle_empty'))
+        unseen = [[member('blissey', ['softboiled'])], [member('chansey', ['softboiled'])], [member('raikou', ['thunderbolt'])]]
+        out, _, _ = M.build([sampled_row(parties=unseen)], 'foulplay', [true_row()])   # no species in every world: nothing seen
+        self.assertEqual((reasons(out)['R3or_active'], reasons(out)['R3or_seen']), ('oracle_empty', 'oracle_empty'))
 
 
 class DiagnosticTests(unittest.TestCase):
     def test_p_true_set_raw_and_reweighted(self):
         # worlds: 0 wrong Skarmory, 1 both true, 2 wrong Snorlax; Skarmory active
-        _, diag, summary = M.build([sampled_row()], 'foulplay', [true_row()], weights([0., math.log(2.), 0.]), weights([math.log(4.)]))
+        _, diag, summary = M.build([sampled_row()], 'foulplay', [true_row()], weights([0., math.log(2.), 0.]), weights([math.log(4.)] * 3))
         d = diag[0];self.assertEqual((d['seen'], d['active'], d['covered']), (['skarmory', 'snorlax'], 'skarmory', True))
         self.assertAlmostEqual(d['raw']['joint'], 1 / 3);self.assertAlmostEqual(d['raw']['per_mon']['skarmory'], 2 / 3)
         self.assertAlmostEqual(d['raw']['active'], 2 / 3);self.assertAlmostEqual(d['raw']['ess'], 3.)
@@ -208,6 +238,10 @@ class PairsTests(unittest.TestCase):
             report = json.loads((d / 'p.json').read_text())
             self.assertEqual(report['pairs']['A - B/foulplay']['roots'], 1);self.assertEqual(report['pairs']['A - B/foulplay']['mean'], .5)
             self.assertEqual(report['rungs']['A']['foulplay']['scored'], 2)
+            other = [dict(a[0], actions=[0, 2]), dict(a[1], seed=6)]   # root 7's echoed legal actions are not the bank's
+            (d / 'c.jsonl').write_text(''.join(json.dumps(r) + '\n' for r in other))
+            got = M.pairs(d, [('C', d / 'c.jsonl'), ('B', d / 'b.jsonl')], ['B'])
+            self.assertEqual((got['pairs']['C - B/foulplay']['roots'], got['pair_identity_mismatches']), (0, {'C': 1}))
 
 
 class CliTests(unittest.TestCase):

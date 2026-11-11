@@ -18,7 +18,8 @@ Rungs, in mc_ladder_score's rung format exactly as mc_ladder_rungs writes them (
 mc_ladder_rungs' R1 for a true_private replay; on the first N with --prefixes). The reply prior of every rung is R3's: the reply
 model's logits (reply_peer_logits) on Foul Play roots and the champion's root_peer_logits on self roots, at depth 1.
 - R3: averaging over the sampled worlds (mc_ladder_rungs.average): run C's / E's own R3, recomputed (summary r3_check counts any
-  disagreement with --check-r3, that run's rung-R3.jsonl).
+  disagreement of the unguarded action with --check-r3, that run's rung-R3.jsonl; --check-prefix N holds R3_W<N> to it instead,
+  e.g. a DN2W64 replay's first 16 worlds against run E's R3; exit 1 on any disagreement or when nothing was compared).
 - R3true: the true world in sampled world 0's place: worlds T0, S1, ..., S(W-1), averaged.
 - R3true_ins: the true world added: S0, ..., S(W-1), T0 (W + 1 worlds), averaged.
 - R3rw_b<beta>: the sampled worlds weighted p_w = softmax_w(beta * loglik_w) (depthn_rr_score.world_weights) instead of 1/W,
@@ -29,18 +30,27 @@ model's logits (reply_peer_logits) on Foul Play roots and the champion's root_pe
   worlds that hold the opponent's active Pokemon's true set / every seen Pokemon's true set (the diagnostics' truth and seen
   set); undecided (oracle_empty) when no sampled world does.
 - --prefixes N ...: every rung on the first N sampled worlds only, named <rung>_W<N> (a DN2W64 replay's first 16 worlds are a
-  DN2W16 replay's: phase_d_protocol_world.sample seeds world i independently of the world count). A prefix's depth-1 blocks must
-  be unrefused; later blocks do not matter to it.
-Guards: the live actor's on the sampled row for every rung (mc_ladder_rungs.guard on the rung's own choice: the row's effect_guard
-record, whose (b) the sampled worlds decided, and the own-recharge guard). An undecided root's reason is mc_ladder_rungs' (depth1_missing[:cause],
+  DN2W16 replay's: phase_d_protocol_world.sample seeds world i independently of the world count). A prefix's depth-1 blocks
+  (pairs: block k holds worlds 2k and 2k + 1) must be unrefused; later blocks do not matter to it. R1_W<N> needs N true worlds.
+  The all-W refusal still applies: a root the replay's constructor refused (any of its W worlds) has no prefix either.
+Guards: the live actor's on the sampled row for every rung but R1 (mc_ladder_rungs.guard on the rung's own choice: the row's
+effect_guard record, whose (b) the sampled worlds decided, and the own-recharge guard); R1 takes the true row's own record, as
+mc_ladder_rungs' R1. Prefix rungs carry the full replay's record: (b) is computed over all W worlds, so a DN2W64 row trips at least
+as often as a DN2W16 row of the same root would. Compare world counts between prefixes of ONE replay (same record), and also
+under mc_ladder_score --guards off or policy.
+Root sets: the reweighted rungs decide only the roots whose every world joined a loglik (fp_reply_evidence weights skips rows
+whose root decide never saw), so their per-rung scores and the raw-vs-rw diagnostics' means can cover fewer roots than R3's; the
+paired comparisons (pairs, *_minus_raw) are on shared roots. Undecided reasons are checked in this module's order (the root prior
+before the depth-1 frame), not mc_ladder_rungs', so the two summaries' per-reason counts can differ. An undecided root's reason is mc_ladder_rungs' (depth1_missing[:cause],
 refused_at_depth1, ...) or: true_row_missing, true_worlds_failed / true_worlds_not_sampled (mc_ladder_rungs.true_worlds_check),
 true_world_unpriced, kernel_seed_mismatch, root_prior_differs (the two rows' root logits or legal mask differ),
-world_weights_missing / world_weights_mismatch, true_weights_missing, prefix_too_long.
+world_weights_missing / world_weights_mismatch, true_weights_missing / true_weights_inconsistent (true worlds share one party,
+so one loglik), prefix_too_long, block_shape.
 
 Diagnostics (diag.jsonl, one row per root and prefix with a usable true row; summary.json's diagnostics aggregate them). A world's
 set for a Pokemon is fp_reply_evidence.set_key (move keys, base ability, item at the root) of the re-pricer's opponent party; the
 true sets are true world 0's party. Seen Pokemon: species in the true party and in every sampled world (the revealed ones; a
-hidden backline is drawn afresh per world). Per root, for the uniform weights (raw) and each beta's weights (rw_b<beta>):
+hidden backline is drawn afresh per world; at a small prefix a hidden species can be in every world by chance). Per root, for the uniform weights (raw) and each beta's weights (rw_b<beta>):
 - joint: the weight on worlds holding every seen Pokemon's true set (P(true set)); log_joint its log (None at 0);
 - per_mon: the weight on worlds holding that Pokemon's true set; active: the opponent's active Pokemon's (true world 0's
   opponent.active_species; None when not seen);
@@ -57,7 +67,9 @@ usage:
 rungs writes NEW_DIR/rung-<NAME>.jsonl per rung, diag.jsonl and summary.json (rows read, identity mismatches, per rung decided /
 undecided by reason / guard trips, the R3 check and the diagnostics). Exit 1 when the R3 check disagrees anywhere, else 0.
 pairs scores every rung (and the bank's own R0) with mc_ladder_score.score, and every rung against each --base on the roots both
-decided: D = Q(rung) - Q(base), the mean with a battle-clustered 90% interval (mc_root_report.cluster_ci), per root kind.
+decided: D = Q(rung) - Q(base), the mean with a battle-clustered 90% interval (mc_root_report.cluster_ci), per root kind. A root
+whose rung row fails score()'s identity check (echoed legal actions or Foul Play seed differ from the bank's) is left out of every
+pair it is in (pair_identity_mismatches counts it per rung).
 """
 import argparse
 import collections
@@ -128,8 +140,8 @@ def depth1_worlds(raw, count=None):
     refused = list(info['refused_at_depth1'])
     if count is None:count = len(worlds)
     if count > len(worlds):raise rr.Unscorable('prefix_too_long')
-    per = max(1, len(worlds) // max(1, len(refused)))   # block k holds worlds per*k .. per*k + per - 1
-    if any(refused[:-(-count // per)]):raise rr.Unscorable('refused_at_depth1')
+    if len(refused) != -(-len(worlds) // 2):raise rr.Unscorable('block_shape')   # block k holds worlds 2k and 2k + 1
+    if any(refused[:-(-count // 2)]):raise rr.Unscorable('refused_at_depth1')
     return worlds[:count]
 
 
@@ -163,31 +175,49 @@ def true_world(true_entry, sampled_world):
     if truth is not None:raise rr.Unscorable(truth)
     worlds = depth1_worlds(raw, 1)
     if not worlds or type(worlds[0]) is not dict or type(worlds[0].get('depth1')) is not dict:raise rr.Unscorable('true_world_unpriced')
-    if worlds[0].get('kernel_seed') != (sampled_world or {}).get('kernel_seed'):raise rr.Unscorable('kernel_seed_mismatch')
+    seed = worlds[0].get('kernel_seed')
+    if type(seed) is not int or seed != (sampled_world or {}).get('kernel_seed'):raise rr.Unscorable('kernel_seed_mismatch')
     return worlds[0]
 
 
+def normalized(raw):
+    """rr.normalize(raw) with mc_ladder_rungs.choose's fallback: a root decide never saw takes the priced batch entry's own root
+    prior (depth1.root_logits / root_legal)."""
+    d = rr.normalize(raw);depth1 = raw.get('depth1') if type(raw.get('depth1')) is dict else {}
+    if d['root_logits'] is None and d['root_legal'] is None and depth1.get('root_logits') is not None:
+        d = dict(d, root_logits=depth1['root_logits'], root_legal=depth1['root_legal'])
+    return d
+
+
 def same_root(a, b):
-    """The two rows' root prior (root_logits, root_legal) is the same."""
-    x, y = rr.normalize(a), rr.normalize(b)
+    """The two rows' root prior (root_logits, root_legal, after normalized's fallback) is the same."""
+    x, y = normalized(a), normalized(b)
     return x['root_logits'] == y['root_logits'] and x['root_legal'] == y['root_legal']
 
 
-def logliks(table, key, count, reason='world_weights_missing'):
-    """[loglik_w] of a root's first `count` worlds from a load_world_weights table (None: no table)."""
+def logliks(table, key, count):
+    """[loglik_w] of a root's `count` worlds (all of the row's) from a load_world_weights table (None: no table), as
+    depthn_rr_score.logliks_of: world_weights_missing, or world_weights_mismatch when the entry has other world indices."""
     if table is None:return None
     entry = table.get(key)
-    if entry is None or any(w not in entry for w in range(count)):raise rr.Unscorable(reason)
+    if entry is None or any(w not in entry for w in range(count)):raise rr.Unscorable('world_weights_missing')
+    if len(entry) != count:raise rr.Unscorable('world_weights_mismatch')
     return [entry[w] for w in range(count)]
+
+
+def true_loglik(table, key, count):
+    """T0's loglik from --true-weights: the entry must hold all `count` true worlds, every one with the same loglik (one true
+    party); true_weights_missing / true_weights_inconsistent otherwise (e.g. a sampled-rows weights file passed as --true-weights)."""
+    entry = table.get(key)
+    if entry is None or len(entry) != count or any(w not in entry for w in range(count)):raise rr.Unscorable('true_weights_missing')
+    if len(set(entry.values())) != 1:raise rr.Unscorable('true_weights_inconsistent')
+    return entry[0]
 
 
 def decide(sampled, true_entry, weights, true_weights, kind, count, with_true=True):
     """{rung: (action or None, reason or None)} for one root on its first `count` sampled worlds (the true-world rungs only
     `with_true`)."""
-    raw = sampled[1];d = rr.normalize(raw);reply = REPLY[kind];out = {}
-    depth1 = raw.get('depth1') if type(raw.get('depth1')) is dict else {}
-    if d['root_logits'] is None and d['root_legal'] is None and depth1.get('root_logits') is not None:   # as mc_ladder_rungs.choose
-        d = dict(d, root_logits=depth1['root_logits'], root_legal=depth1['root_legal'])
+    raw = sampled[1];d = normalized(raw);reply = REPLY[kind];out = {};guard_rows = {}
     names = rung_names(weights is not None, with_true, true_weights is not None)
 
     def undecided(reason):
@@ -197,7 +227,7 @@ def decide(sampled, true_entry, weights, true_weights, kind, count, with_true=Tr
 
     try:
         legal, _ = L.root_prior(d);worlds = depth1_worlds(raw, count)
-    except rr.Unscorable as error:return {name: undecided(error.reason) for name in names}, d
+    except rr.Unscorable as error:return {name: undecided(error.reason) for name in names}, d, guard_rows
     key = (raw['ordinal'], raw['decision_index'])
 
     def run(name, fn):
@@ -212,9 +242,9 @@ def decide(sampled, true_entry, weights, true_weights, kind, count, with_true=Tr
         if not same_root(raw, true_entry[1]):raise rr.Unscorable('root_prior_differs')
         mixed, added = [truth] + worlds[1:], worlds + [truth]
     except rr.Unscorable as error:problem = error.reason
-    if with_true:
+    if with_true:   # R1: the true row's worlds (its first `count`), under the true row's own guard record (mc_ladder_rungs' R1)
         if problem:out['R1'] = undecided(problem)
-        else:run('R1', lambda: choice(depth1_worlds(true_entry[1], min(count, len(true_entry[1].get('worlds') or ()))), legal, reply))
+        else:guard_rows['R1'] = normalized(true_entry[1]);run('R1', lambda: choice(depth1_worlds(true_entry[1], count), legal, reply))
     for name in ('R3true', 'R3true_ins') if with_true else ():
         if problem:out[name] = undecided(problem);continue
         run(name, lambda m=(mixed if name == 'R3true' else added): choice(m, legal, reply))
@@ -232,10 +262,10 @@ def decide(sampled, true_entry, weights, true_weights, kind, count, with_true=Tr
             for beta in BETAS:
                 name = f'R3true_rw_b{beta_name(beta)}'
                 if problem or ll_problem:out[name] = undecided(problem or ll_problem);continue
-                try:t0 = logliks(true_weights, key, 1, 'true_weights_missing')[0]
+                try:t0 = true_loglik(true_weights, key, len(true_entry[1].get('worlds') or ()))
                 except rr.Unscorable as error:out[name] = undecided(error.reason);continue
                 run(name, lambda b=beta: choice(mixed, legal, reply, rr.world_weights([t0] + sampled_ll[1:], b)))
-    return out, d
+    return out, d, guard_rows
 
 
 def oracle_worlds(worlds, true_entry, which):
@@ -244,6 +274,7 @@ def oracle_worlds(worlds, true_entry, which):
     twin = true_entry[1]['worlds'][0];truth = ev.world_sets(twin);sets = [ev.world_sets(w) if type(w) is dict else None for w in worlds]
     if truth is None or any(s is None for s in sets):raise rr.Unscorable('world_sets_missing')
     seen = [m for m in truth if all(m in s for s in sets)]
+    if not seen:raise rr.Unscorable('oracle_empty')   # nothing seen: no set to hold
     if which == 'active':
         active = (twin.get('opponent') or {}).get('active_species');seen = [ev.species_key(active)] if active else []
         if not seen or seen[0] not in truth or any(seen[0] not in s for s in sets):raise rr.Unscorable('oracle_empty')
@@ -282,8 +313,10 @@ def diagnose(sampled, true_entry, weights, true_weights, count):
         per = {m: math.fsum(x for x, h in zip(p, hits) if h[i]) for i, m in enumerate(seen)}
         out[label] = dict(joint=j, log_joint=math.log(j) if j > 0 else None, per_mon=per, active=per.get(active),
                           ess=1. / math.fsum(x * x for x in p))
-    if ll is not None and true_weights is not None and key in true_weights and 0 in true_weights[key]:
-        t0 = true_weights[key][0];out['true_loglik_minus_max'] = t0 - max(ll)
+    try:t0 = None if ll is None or true_weights is None else true_loglik(true_weights, key, len(true_entry[1].get('worlds') or ()))
+    except rr.Unscorable:t0 = None
+    if t0 is not None:
+        out['true_loglik_minus_max'] = t0 - max(ll)
         out['true_loglik_rank'] = (sum(x < t0 for x in ll) + .5 * sum(x == t0 for x in ll)) / count
         for b in BETAS:out[f'true_weight_b{beta_name(b)}'] = rr.world_weights([t0] + ll[1:], b)[0]
     return out, None
@@ -331,8 +364,8 @@ def summarize_diag(rows):
 
 
 def build(sampled_rows, kind, true_rows=None, weights=None, true_weights=None, manifest=None, prefixes=None, check_r3=None,
-          true_kind=L.TRUE_KIND):
-    """({rung: [rung rows]}, [diag rows], summary)."""
+          true_kind=L.TRUE_KIND, check_prefix=None):
+    """({rung: [rung rows]}, [diag rows], summary). check_r3 is held to R3 (check_prefix None) or R3_W<check_prefix>."""
     manifest = manifest or {};counts = collections.Counter();true_counts = collections.Counter()
     sampled = load(sampled_rows, kind, manifest, SAMPLED_RUN[kind], counts)
     with_true = true_rows is not None
@@ -344,18 +377,18 @@ def build(sampled_rows, kind, true_rows=None, weights=None, true_weights=None, m
         entry = sampled[index];key, raw, _ = entry;true_entry = truths.get(index)
         for size in sizes:
             count = len(raw.get('worlds') or ()) if size is None else size
-            chosen, d = decide(entry, true_entry, weights, true_weights, kind, count, with_true)
+            chosen, d, guard_rows = decide(entry, true_entry, weights, true_weights, kind, count, with_true)
             try:legal, greedy = L.root_prior(d)
             except rr.Unscorable:legal = greedy = None
-            for name, (action, reason) in chosen.items():
-                name = name if size is None else f'{name}_W{size}'
+            for base, (action, reason) in chosen.items():
+                name = base if size is None else f'{base}_W{size}'
                 row = dict(key, action=action, greedy_action=greedy, guard_tripped=False,
                            actions=None if legal is None else [a for a in range(9) if legal[a]])
                 s = stats.setdefault(name, dict(rows=0, decided=0, undecided=collections.Counter(), guard_tripped=collections.Counter()))
                 s['rows'] += 1
                 if action is None:row['reason'] = reason;s['undecided'][reason] += 1
                 else:
-                    s['decided'] += 1;tripped, why = L.guard(d, action, greedy, REPLY[kind])
+                    s['decided'] += 1;tripped, why = L.guard(guard_rows.get(base, d), action, greedy, REPLY[kind])
                     if tripped:row.update(guard_tripped=True, guard_reason=why);s['guard_tripped'][why] += 1
                 rungs[name].append(row)
             if with_true:
@@ -363,9 +396,11 @@ def build(sampled_rows, kind, true_rows=None, weights=None, true_weights=None, m
                 if found is None:diag_reasons[(size, reason)] += 1
                 else:diag.append(dict(key, prefix=size, seed=raw.get('seed') if kind == 'foulplay' else key['seed'], **found))
     check = None
-    if check_r3:
-        mine = {tuple(r[f] for f in L.KEY_FIELDS[kind]): r['action'] for r in rungs.get('R3' if sizes == [None] else f'R3_W{full}', ())}
-        check = dict(compared=0, disagreements=0, examples=[])
+    if check_r3 is not None:
+        target = 'R3' if check_prefix is None else f'R3_W{check_prefix}'
+        if target not in rungs:raise ValueError(f'--check-r3 needs the {target} rung (--prefixes must include --check-prefix; without it, no --prefixes)')
+        mine = {tuple(r[f] for f in L.KEY_FIELDS[kind]): r['action'] for r in rungs[target]}
+        check = dict(rung=target, compared=0, disagreements=0, examples=[])
         for r in check_r3:
             index = tuple(r[f] for f in L.KEY_FIELDS[kind])
             if index not in mine:continue
@@ -395,15 +430,17 @@ def run_rungs(args):
     manifest = L.load_manifest(args.manifest) if args.manifest else None
     weights = rr.load_world_weights(args.weights) if args.weights else None
     true_weights = rr.load_world_weights(args.true_weights) if args.true_weights else None
-    rungs, diag, summary = build(L.read_rows(args.sampled), args.kind, L.read_rows(args.true) if args.true else None, weights, true_weights,
-                                 manifest, args.prefixes, read_jsonl(args.check_r3) if args.check_r3 else None, args.true_kind)
+    if args.check_prefix is not None and not args.check_r3:raise SystemExit('--check-prefix needs --check-r3')
+    try:rungs, diag, summary = build(L.read_rows(args.sampled), args.kind, L.read_rows(args.true) if args.true else None, weights, true_weights,
+                                     manifest, args.prefixes, read_jsonl(args.check_r3) if args.check_r3 else None, args.true_kind, args.check_prefix)
+    except ValueError as error:raise SystemExit(str(error)) from None
     directory = Path(args.out);directory.mkdir(parents=True, exist_ok=False)
     for name, rows in rungs.items():(directory / f'rung-{name}.jsonl').write_text(''.join(json.dumps(r, sort_keys=True) + '\n' for r in rows))
     (directory / 'diag.jsonl').write_text(''.join(json.dumps(r, sort_keys=True) + '\n' for r in diag))
     (directory / 'summary.json').write_text(json.dumps(dict(summary, arguments=vars(args)), indent=1) + '\n')
     print(json.dumps({k: summary[k] for k in ('kind', 'roots', 'true_roots', 'worlds', 'r3_check')}
                      | {'decided': {n: s['decided'] for n, s in summary['rungs'].items()}}, sort_keys=True))
-    return 1 if summary['r3_check'] and summary['r3_check']['disagreements'] else 0
+    return 1 if summary['r3_check'] and (summary['r3_check']['disagreements'] or not summary['r3_check']['compared']) else 0
 
 
 def pairs(bank_dir, rungs, bases, guards='on'):
@@ -415,9 +452,17 @@ def pairs(bank_dir, rungs, bases, guards='on'):
         records[name] = S.load_rung(path, guards)
     kinds = sorted({k[0] for k in bank})
 
-    def q_of(key, record):
+    mismatched = collections.Counter()
+
+    def q_of(key, record, name):
+        """The rung's action's Monte Carlo value at a bank root, or None: undecided, censored, or (mc_ladder_score.score's identity
+        check) a record whose echoed legal actions or Foul Play seed differ from the bank row's (counted as identity_mismatch)."""
         if record is None or record['action'] is None:return None
-        row = bank[key];q = S.truth(row);a = S.policy_action(row) if record['action'] == 'policy' else record['action']
+        row = bank[key]
+        if ((record['actions'] is not None and sorted(int(a) for a in record['actions']) != sorted(row['actions']))
+                or (record['seed'] is not None and int(record['seed']) != int(row['seed']))):
+            mismatched[name] += 1;return None
+        q = S.truth(row);a = S.policy_action(row) if record['action'] == 'policy' else record['action']
         return q.get(a) if a in q and not math.isnan(q[a]) else None
 
     report = dict(schema=SCHEMA + ':pairs', bank=str(bank_dir), guards=guards, rungs={}, pairs={})
@@ -429,10 +474,11 @@ def pairs(bank_dir, rungs, bases, guards='on'):
             for kind in kinds:
                 d, cl = [], []
                 for key in (k for k in bank if k[0] == kind):
-                    qx, qy = q_of(key, records[base].get(key)), q_of(key, records[name].get(key))
+                    qx, qy = q_of(key, records[base].get(key), base), q_of(key, records[name].get(key), name)
                     if qx is None or qy is None:continue
                     d.append(qy - qx);cl.append(bank[key]['seed'])
                 report['pairs'][f'{name} - {base}/{kind}'] = S.cluster_ci(d, cl)
+    report['pair_identity_mismatches'] = dict(sorted(mismatched.items()))   # summed over every pair a rung appears in
     return report
 
 
@@ -456,6 +502,7 @@ def main(argv=None):
     r.add_argument('--weights');r.add_argument('--true-weights');r.add_argument('--manifest')
     r.add_argument('--prefixes', nargs='+', type=int);r.add_argument('--check-r3');r.add_argument('--out', required=True)
     r.add_argument('--true-kind', choices=(L.TRUE_KIND, 'true'), default=L.TRUE_KIND, help="--true's replay kind (true: public HP and PP)")
+    r.add_argument('--check-prefix', type=int, help='hold --check-r3 to R3_W<N> (e.g. 16 for a DN2W64 replay against run E\'s R3)')
     p = sub.add_parser('pairs');p.add_argument('bank');p.add_argument('--rung', action='append', default=[])
     p.add_argument('--base', action='append', default=[]);p.add_argument('--guards', choices=('on', 'policy', 'off'), default='on')
     p.add_argument('--out', required=True)
