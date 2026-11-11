@@ -6,6 +6,8 @@ terminal, invalid, encoder-error, waiting-seat and opponent-view cases at ply 2 
 over a power of two, so every float is exact. The pricer stand-in writes the oracle's own surface in the DepthNFrame
 layout; mutated stand-ins break selection, chance and masks at ply 3. Tests marked `real pricer` run the depth-N pricer
 (gpu_engine.device_depthn_pricer, gpu_engine.depthn_backups) when they are on the path and are skipped otherwise.
+The choice, declared-bound, N2-reverdict and default-path tests live in test_gpu_engine_depthn_oracle_reports and the
+real-pricer and fixed-shape tests in test_gpu_engine_depthn_oracle_real_pricer; their fixtures and helpers stay here.
 """
 import collections
 import contextlib
@@ -1134,10 +1136,8 @@ class GuardDepthNTests(FixtureN, unittest.TestCase):
                 self.assertEqual([c[n]['bound'] for n in gate.TURN1_LOGITS if n in c], [gate.g2.LOGIT_BOUND] * len([n for n in gate.TURN1_LOGITS if n in c]))
 
 
-# ---------------------------------------------------------------- (f) interior-node choices and the mutation kill test
-
-
-# ---------------------------------------------------------------- the real depth-N pricer (when on the path)
+# (f) interior-node choices and the mutation kill test: test_gpu_engine_depthn_oracle_reports.
+# The real depth-N pricer (when on the path): test_gpu_engine_depthn_oracle_real_pricer.
 
 
 # ---------------------------------------------------------------- the `searched` rule on random full-width depth-2 frames
@@ -1345,7 +1345,7 @@ class CommandLineRunTests(FixtureN, unittest.TestCase):
         self.assertEqual(code, 0, json.loads((out / 'n2-equivalence.json').read_text())['configs'])
 
 
-# ---------------------------------------------------------------- --fixed-shapes
+# ---------------------------------------------------------------- --fixed-shapes (helpers; FixedShapesTests is in test_gpu_engine_depthn_oracle_real_pricer)
 
 def recording(base):
     """(module, built): base's pricer surface with DepthNPricer wrapped to record every constructor's keyword arguments."""
