@@ -91,10 +91,11 @@ when this tree's block equals the design 2.1 derivation (the Stepper's
 effect_ok: the block a deferred step saves, else zero); any other change stays
 unexpected. Likewise (same pass, a Trick-given Choice Band moving a KO from the
 residual into the action phase): Color Change retypes its holder only when the
-hit leaves it standing (data/abilities.ts colorchange: `if (!target.hp)
-return`), so on a cascade lane a (state.types / trackers.shown_types, side)
-change is accepted only when a Color Change holder on that side fainted this
-step in this tree or (un)fainted relative to the base (RETYPE_LEAVES).
+hit leaves it standing (gen 3 inherits data/mods/gen4/abilities.ts:46-47,
+onDamagingHit `if (!damage || !target.hp) return`), so on a cascade lane a
+(state.types / trackers.shown_types, side) change is accepted only when a Color
+Change holder on that side fainted this step in this tree or (un)fainted
+relative to the base (RETYPE_LEAVES).
 
 The involvement superset resolves the executed move as the engine does (slot,
 charge, standing or same-turn Encore, Struggle, a resumed queued action, every
@@ -557,8 +558,9 @@ FAMILIES['terminal'] = (r'^state\.truant_loaf$',
     r"^trackers\.mon_features\['(sleep_skipped_turns|sleep_cant_pending|sleep_usable_pending)'\]$",
     r'^trackers\.public_port\.post_upkeep$', r'^trackers\.negative_items\.')
 # M1 GPU pass: a KO that moved (between the trees or between the action and residual phases) leaves a Color Change
-# holder's type differing: it retypes only when the hit leaves it standing. Accepted per side on a cascade lane only
-# where a holder on that side fainted this step in this tree or (un)fainted relative to the base (retype_ok).
+# holder's type differing: it retypes only when the hit leaves it standing (data/mods/gen4/abilities.ts:46-47).
+# Accepted per side on a cascade lane only where a holder on that side fainted this step in this tree or
+# (un)fainted relative to the base (retype_ok).
 RETYPE_LEAVES = ('state.types', 'trackers.shown_types')
 # R: a Focus Punch user losing focus (state.volatile's FOCUS_LOST bit) to a hit that now reaches it.
 FAMILIES['focus'] = (r'^state\.volatile$',)
