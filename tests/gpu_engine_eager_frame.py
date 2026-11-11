@@ -4,37 +4,28 @@ driver.advance runs the prepared runtime's frame closure, a jax.jit of the whole
 compiles it once per prepared runtime and batch shape. Component tests of the plumbing around the step run
 that closure's own unjitted body instead: the same _frame code, with its row selection and global-binding
 exclusion, without the whole-step XLA compile. Every other phase stays the prepared runtime's compiled
-closure. Each distinct frame call is also traced under jit once per process (no lowering or compile), so
-jit-only failures still surface; the heavy tier runs the compiled frame end to end.
+closure. Each prepared runtime's frame (one per public/accounting mode) is also traced under jit once per
+process, on the arguments of its first eager call (no lowering or compile), so jit-only failures still
+surface; the heavy tier runs the compiled frame end to end.
 
 Use it around single advances (`with eager_frame(prepared): driver.advance(...)`) or per test, never in a
 setUpClass that other modules borrow: the swap must not outlive the test that asked for it.
 """
 from contextlib import ExitStack, contextmanager
 
-import jax
-
 from gpu_engine import engine_retained_encoder_driver as driver
 
-# (id of the compiled frame, argument signature) -> the compiled frame, kept alive so ids stay unique.
+# id of a traced compiled frame -> that frame, kept alive so ids stay unique.
 _TRACED={}
-
-
-def _signature(args,kwargs):
-    # What the jit cache keys on: the tree and each leaf's shape, dtype and weak type.
-    leaves,tree=jax.tree.flatten((args,kwargs))
-    return tree,tuple((getattr(x,'shape',None),str(getattr(x,'dtype',type(x))),
-        getattr(getattr(x,'aval',None),'weak_type',None)) for x in leaves)
 
 
 def eager_call(compiled,*args,**kwargs):
     """The compiled frame closure's own body on these arguments, eagerly."""
-    key=(id(compiled),_signature(args,kwargs))
-    if key not in _TRACED:
-        # Trace the compiled frame under jit on these exact arguments, once per signature and process,
-        # without lowering or compiling it: jit-only failures (Python control flow on a traced value,
-        # tracer leaks) are raised while tracing.
-        compiled.trace(*args,**kwargs);_TRACED[key]=compiled
+    if id(compiled) not in _TRACED:
+        # Trace the compiled frame under jit on these arguments, once per frame and process, without
+        # lowering or compiling it: jit-only failures (Python control flow on a traced value, tracer
+        # leaks) are raised while tracing.
+        compiled.trace(*args,**kwargs);_TRACED[id(compiled)]=compiled
     return compiled.__wrapped__(*args,**kwargs)
 
 
