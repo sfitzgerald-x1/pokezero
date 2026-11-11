@@ -108,7 +108,8 @@ class WorldRungTests(unittest.TestCase):
         out, _, _ = M.build([sampled_row()], 'foulplay')
         self.assertEqual(sorted(out), ['R3'])   # no true rows, no weights: R3 alone
         out, _, _ = M.build([sampled_row()], 'foulplay', [true_row(ordinal=8)], weights({}))
-        self.assertEqual(reasons(out), dict(R3=None, R3true='true_row_missing', R3true_ins='true_row_missing',
+        self.assertEqual(reasons(out), dict(R3=None, R3true='true_row_missing', R3true_ins='true_row_missing', R3or_active='true_row_missing',
+                                            R3or_seen='true_row_missing',
                                             **{'R3rw_b0.5': 'world_weights_missing', 'R3rw_b1': 'world_weights_missing'}))
         bad = true_row();bad['worlds'][0]['kernel_seed'] = 999
         self.assertEqual(reasons(M.build([sampled_row()], 'foulplay', [bad])[0])['R3true'], 'kernel_seed_mismatch')
@@ -135,6 +136,20 @@ class WorldRungTests(unittest.TestCase):
         self.assertEqual((summary['r3_check']['compared'], summary['r3_check']['disagreements']), (1, 1))
         _, _, summary = M.build([sampled_row()], 'foulplay', check_r3=[dict(theirs[0], action=1)])
         self.assertEqual(summary['r3_check']['disagreements'], 0)
+
+
+class OracleTests(unittest.TestCase):
+    def test_oracle_rungs_keep_only_worlds_with_the_true_sets(self):
+        # worlds: 0 wrong Skarmory (active), 1 both true, 2 wrong Snorlax; grids LOW, T0, LOW
+        out, _, _ = M.build([sampled_row(depth1=[LOW, LOW, T0])], 'foulplay', [true_row()])
+        got = by_rung(out);self.assertEqual(got['R3'], 0)
+        self.assertEqual(got['R3or_active'], 0)   # worlds 1 and 2: (-.9 + .9) / 2, a tie: lowest index
+        self.assertEqual(got['R3or_seen'], 0)     # world 1 alone: LOW
+        out, _, _ = M.build([sampled_row(depth1=[LOW, T0, LOW])], 'foulplay', [true_row()])
+        self.assertEqual((by_rung(out)['R3or_seen'], by_rung(out)['R3']), (1, 0))
+        none = [[OTHER_SKARM, OTHER_LAX]] * 3
+        out, _, _ = M.build([sampled_row(parties=none)], 'foulplay', [true_row()])
+        self.assertEqual((reasons(out)['R3or_active'], reasons(out)['R3or_seen']), ('oracle_empty', 'oracle_empty'))
 
 
 class DiagnosticTests(unittest.TestCase):
@@ -187,7 +202,8 @@ class CliTests(unittest.TestCase):
             with redirect_stdout(io.StringIO()):
                 code = M.main(['rungs', '--kind', 'foulplay', '--sampled', str(d / 's.jsonl'), '--true', str(d / 't.jsonl'), '--out', str(d / 'o')])
             self.assertEqual(code, 0);self.assertEqual(sorted(p.name for p in (d / 'o').iterdir()),
-                                                       ['diag.jsonl', 'rung-R3.jsonl', 'rung-R3true.jsonl', 'rung-R3true_ins.jsonl', 'summary.json'])
+                                                       ['diag.jsonl', 'rung-R3.jsonl', 'rung-R3or_active.jsonl', 'rung-R3or_seen.jsonl', 'rung-R3true.jsonl',
+                                                        'rung-R3true_ins.jsonl', 'summary.json'])
             with self.assertRaises(SystemExit):M.main(['rungs', '--kind', 'self', '--sampled', str(d / 's.jsonl'), '--out', str(d / 'p')])
 
 

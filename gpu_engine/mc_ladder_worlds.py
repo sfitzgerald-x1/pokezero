@@ -23,6 +23,9 @@ model's logits (reply_peer_logits) on Foul Play roots and the champion's root_pe
   q(a) = sum_w p_w sum_b pi_w(b) G_w[a][b] (depthn_rr_score.weighted_q), argmax lowest index on ties. At beta = 0 and a
   power-of-two W this is averaging's q bit for bit.
 - R3true_rw_b<beta>: R3true's worlds weighted the same way (T0's loglik: --true-weights' world 0).
+- R3or_active / R3or_seen (oracle bounds on reweighting the sampled sets, not world rules): averaging over only the sampled
+  worlds that hold the opponent's active Pokemon's true set / every seen Pokemon's true set (the diagnostics' truth and seen
+  set); undecided (oracle_empty) when no sampled world does.
 - --prefixes N ...: every rung on the first N sampled worlds only, named <rung>_W<N> (a DN2W64 replay's first 16 worlds are a
   DN2W16 replay's: phase_d_protocol_world.sample seeds world i independently of the world count). A prefix's depth-1 blocks must
   be unrefused; later blocks do not matter to it.
@@ -79,7 +82,7 @@ def beta_name(beta):
 
 def rung_names(weighted, with_true, true_weighted):
     names = ['R3']
-    if with_true:names += ['R3true', 'R3true_ins']
+    if with_true:names += ['R3true', 'R3true_ins', 'R3or_active', 'R3or_seen']
     if weighted:names += [f'R3rw_b{beta_name(b)}' for b in BETAS]
     if with_true and weighted and true_weighted:names += [f'R3true_rw_b{beta_name(b)}' for b in BETAS]
     return names
@@ -196,6 +199,9 @@ def decide(sampled, true_entry, weights, true_weights, kind, count, with_true=Tr
     for name in ('R3true', 'R3true_ins') if with_true else ():
         if problem:out[name] = undecided(problem);continue
         run(name, lambda m=(mixed if name == 'R3true' else added): choice(m, legal, reply))
+    for name, which in (('R3or_active', 'active'), ('R3or_seen', 'seen')) if with_true else ():
+        if problem:out[name] = undecided(problem);continue
+        run(name, lambda which=which: choice(oracle_worlds(worlds, true_entry, which), legal, reply))
     if weights is not None:
         try:sampled_ll = logliks(weights, key, len(raw['worlds']))[:count];ll_problem = None
         except rr.Unscorable as error:sampled_ll, ll_problem = None, error.reason
@@ -211,6 +217,20 @@ def decide(sampled, true_entry, weights, true_weights, kind, count, with_true=Tr
                 except rr.Unscorable as error:out[name] = undecided(error.reason);continue
                 run(name, lambda b=beta: choice(mixed, legal, reply, rr.world_weights([t0] + sampled_ll[1:], b)))
     return out, d
+
+
+def oracle_worlds(worlds, true_entry, which):
+    """The sampled worlds holding the true set of the opponent's active Pokemon (which 'active') or of every seen Pokemon
+    ('seen'), true world 0's party as the truth (diagnose's rule); raises rr.Unscorable('oracle_empty' / 'world_sets_missing')."""
+    twin = true_entry[1]['worlds'][0];truth = ev.world_sets(twin);sets = [ev.world_sets(w) if type(w) is dict else None for w in worlds]
+    if truth is None or any(s is None for s in sets):raise rr.Unscorable('world_sets_missing')
+    seen = [m for m in truth if all(m in s for s in sets)]
+    if which == 'active':
+        active = (twin.get('opponent') or {}).get('active_species');seen = [ev.species_key(active)] if active else []
+        if not seen or seen[0] not in truth or any(seen[0] not in s for s in sets):raise rr.Unscorable('oracle_empty')
+    kept = [w for w, s in zip(worlds, sets) if all(s[m] == truth[m] for m in seen)]
+    if not kept:raise rr.Unscorable('oracle_empty')
+    return kept
 
 
 def weighting(count, ll, beta):
