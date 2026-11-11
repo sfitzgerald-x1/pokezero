@@ -1,6 +1,7 @@
 """DepthN depth-2 live search: Codex's ladder search-server requests answered over ProtocolConstructor worlds (gap 5).
 
-Design. A DepthNLiveSearch owns one ProtocolConstructor (W = 8 or 16 worlds: rung DN2W8 / DN2W16), one DepthNPricer per
+Design. A DepthNLiveSearch owns one ProtocolConstructor (W = 8 or 16 worlds: rung DN2W8 / DN2W16; DN2W32 / DN2W64 only for
+offline replays, the MC ladder's world-count rungs), one DepthNPricer per
 capacity bucket of roots (make_pricers: depth 2, full width k 9 and k1 9/9, `prior`, fixed_capacity, the champion as
 forward=, one shared program table) and the champion bank. phase_d_search_server.Server's single queue consumer calls
 process_many(requests) on its one executor thread with at most max_requests requests and checks the responses' order and
@@ -112,7 +113,7 @@ from pokezero import depthn_effect_guard as effect_guard
 from . import champion_evaluator as evaluators,constructor_worlds as cw,depthn_backups as backups,device_depthn_pricer as dn,search_hedge as hedge
 from . import depthn_guard_inputs as guard_inputs
 
-RUNGS={'DN2W8':8,'DN2W16':16}
+RUNGS={'DN2W8':8,'DN2W16':16,'DN2W32':32,'DN2W64':64}   # W32 and W64: the MC ladder's world-count rungs (offline replays)
 ROOT_OPERATOR='ARGMAX_MEAN_COMPLETED_Q'
 ROOT_OPERATOR_IMPL='search_hedge.averaging'
 NOISE_GATED_K2='NOISE_GATED_K2'   # screen-r4a variant B: averaging's (br_fp's, under a reply model) choice only past a 2-SE per-world gap

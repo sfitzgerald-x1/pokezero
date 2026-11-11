@@ -1,7 +1,7 @@
 """Codex's Phase D protocol constructor worlds as DepthNPricer input (gap 4, part A): depth-N prices on Showdown roots.
 
 Design. ProtocolConstructor.prepare(request, index) folds a Showdown protocol prefix plus the literal own request (B2)
-and returns (detached device_public_worlds.Root, phase_d_live_worlds.WorldSet of W in {2, 8, 16, 32} worlds, B2's own
+and returns (detached device_public_worlds.Root, phase_d_live_worlds.WorldSet of W in {2, 8, 16, 32, 64} worlds, B2's own
 legal mask). Its worlds are D3's world type (device_public_world_state.World: the engine BattleState plus the public
 tracker carry), so DepthN's executor steps them unchanged; only the carry's pytree differs from D3's (from_b2 adds four
 dict keys and leaves two members None). This module turns prepared roots into DepthN requests and pre-built worlds:

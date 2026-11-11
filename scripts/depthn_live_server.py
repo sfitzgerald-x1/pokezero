@@ -191,7 +191,7 @@ def parser():
     p=argparse.ArgumentParser(description=__doc__.split('\n')[0])
     for name in('showdown-root','node-binary','metadata','expected-metadata-sha256','vocabulary','expected-vocabulary-sha256'):p.add_argument('--'+name,required=True)
     evaluators.add_arguments(p)
-    p.add_argument('--rung',choices=tuple(live.RUNGS),default='DN2W8',help='DN2W8 (W=8) or DN2W16 (W=16)')
+    p.add_argument('--rung',choices=tuple(live.RUNGS),default='DN2W8',help='DN2W8 (W=8) or DN2W16 (W=16); DN2W32 / DN2W64 for offline replays')
     p.add_argument('--host',default='127.0.0.1');p.add_argument('--port',type=int,required=True)
     p.add_argument('--buckets',type=buckets_arg,default=(1,2,4),help='capacity buckets, in roots per price call (default 1,2,4)')
     p.add_argument('--max-requests',type=int,help='requests per batch (default the largest bucket; set from gap 4B)')
