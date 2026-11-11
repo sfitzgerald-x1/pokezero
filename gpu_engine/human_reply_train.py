@@ -16,6 +16,11 @@ cells the search's peer view leaves at zero (own LAST_DAMAGE_TAKEN, the other si
 Labels: a labelled row (label >= 0) is a full label. A `cant` or `fainted_before_acting` row is a partial label, 'some move':
 its likelihood is the legal moves' total probability (both only happen to a chosen move). Other censored rows (no_action,
 recharge, label_undecodable) carry no choice and are dropped.
+Bench order. g3rb_views writes the imputed own party lead first, then in order of appearance, and each switch token carries its
+party slot's id (categorical column 3), so the slot of a switch target leaks the future (every seat's first switch-in is to
+slot 1). load_views therefore shuffles the bench (party slots 1-5: own tokens 2-6 with their switch tokens 17-21, the legal mask
+and the label; the positional slot ids stay) with a fixed seed on every row, and training re-shuffles every batch, so no model
+can read the order. evaluate --as-built scores the unshuffled views instead (a leak diagnostic only).
 Splits: test is the strict vintage (the 33-day window inside the Showdown pin; never trained on, never used for selection);
 of the rest, validation is replay hash % 10 == 1 (sha256 of 'g3rb-split:<replay>'), train the rest. Both seats of a replay
 stay together.
@@ -68,6 +73,8 @@ PARTIAL = ('cant', 'fainted_before_acting')                        # 'some move'
 MOVES, ACTIONS = data_mod.MOVES, data_mod.ACTIONS
 ACTION_OFFSET = 13                                                  # showdown.ACTION_CANDIDATE_TOKEN_OFFSET (v4)
 EVENT_TOKENS = (0, 1, 7)                                            # field, own active, the other side's active
+BENCH, SWITCHES, SLOTS = 2, ACTION_OFFSET + 4, 5                     # own party slots 1-5 (tokens 2-6) and their switch tokens (17-21)
+SLOT_ID_COL = 3                                                      # a switch token's categorical column holding its party slot's action id
 EVENT_SCALARS = 6
 TURN_BUCKETS = fpt.TURN_BUCKETS
 EARLY, LATE = (1, 3), (18, 10**9)
@@ -106,16 +113,44 @@ def redact_own_credit(numeric):
     return fpt.redact_peer_view(numeric, 'peer-view-v2', credit)
 
 
-def load_views(views_dir, unredacted=False):
+def check_slot_ids(cat):
+    """The switch tokens' SLOT_ID_COL must be a fixed id per position (the party slot's action id), the column the shuffle keeps."""
+    ids = cat[:, SWITCHES:SWITCHES + SLOTS, SLOT_ID_COL]
+    if not len(ids):return
+    if not (ids == ids[:1]).all() or len(np.unique(ids[0])) != SLOTS:
+        raise SystemExit(f'switch tokens: categorical column {SLOT_ID_COL} is not a per-slot id; the bench shuffle would be wrong')
+
+
+def shuffle_bench(arrays, seed):
+    """In place: each row's bench in a seeded random order (module docstring); returns perm [n, 5] (new slot j holds old slot
+    perm[j]). Moves own tokens 2-6 with switch tokens 17-21 (every input array), the switch legal bits and switch labels; keeps the
+    switch tokens' positional slot ids."""
+    n = len(arrays['label']);rng = np.random.default_rng(seed)
+    perm = np.argsort(rng.random((n, SLOTS)), 1);rows = np.arange(n)[:, None]
+    check_slot_ids(arrays['categorical_ids'])
+    ids = arrays['categorical_ids'][:, SWITCHES:SWITCHES + SLOTS, SLOT_ID_COL].copy()
+    for key in ('categorical_ids', 'numeric_features', 'token_type_ids', 'attention_mask') + (('numeric_unredacted',) if 'numeric_unredacted' in arrays else ()):
+        x = arrays[key]
+        for base in (BENCH, SWITCHES):x[:, base:base + SLOTS] = x[rows, base + perm]
+    arrays['categorical_ids'][:, SWITCHES:SWITCHES + SLOTS, SLOT_ID_COL] = ids
+    arrays['legal'][:, MOVES:] = arrays['legal'][rows, MOVES + perm]
+    label = arrays['label'];sw = label >= MOVES;inv = np.argsort(perm, 1)
+    label[sw] = MOVES + inv[np.flatnonzero(sw), label[sw] - MOVES]
+    return perm
+
+
+def load_views(views_dir, unredacted=False, as_built=False, shuffle_seed=0):
     """The kept rows of every shard (games in order), redacted (peer-view-v2, own credit), with band, split, partial and group
-    (replay, imputation, seat); unredacted=True also keeps the test rows' builder view as numeric_unredacted_test (in test-row
-    order)."""
+    (replay, imputation, seat), the bench shuffled (shuffle_bench, seed shuffle_seed) unless as_built; unredacted=True also keeps
+    the test rows' builder view as numeric_unredacted_test (in test-row order, the same shuffle)."""
     arrays = fpt.load(views_dir)
     keep = keep_rows(arrays);arrays = {k: v[keep] for k, v in arrays.items()}
     split = replay_split(arrays['replay'])
     arrays['split'] = np.where(arrays['vintage'] == VINTAGES.index('strict'), 'test', split)
-    if unredacted:arrays['numeric_unredacted_test'] = arrays['numeric_features'][arrays['split'] == 'test'].copy()
+    if unredacted:arrays['numeric_unredacted'] = arrays['numeric_features'].copy()
     redact_own_credit(arrays['numeric_features'])
+    if not as_built:shuffle_bench(arrays, shuffle_seed)
+    if unredacted:arrays['numeric_unredacted_test'] = arrays.pop('numeric_unredacted')[arrays['split'] == 'test']
     arrays['partial'] = partial_mask(arrays)
     arrays['band'] = band_of(arrays['rating'])
     arrays['group'] = group_ids(arrays['replay'], arrays['imputation'], arrays['seat'])
@@ -277,6 +312,22 @@ class Store:
         scalars = torch.cat([age, self.flags[safe]], -1) * valid.unsqueeze(-1)
         emb = emb * valid.unsqueeze(-1).unsqueeze(-1)
         return emb, scalars, valid
+
+
+def shuffle_bench_batch(torch, inputs, legal, label, generator):
+    """shuffle_bench on a training batch on the device (a fresh order per row per step)."""
+    cat = inputs['cat'];n = cat.shape[0];dev = cat.device
+    perm = torch.argsort(torch.rand(n, SLOTS, device=dev, generator=generator), 1);rows = torch.arange(n, device=dev).unsqueeze(1)
+    out = dict(inputs)
+    for key in ('cat', 'num', 'tt', 'att'):
+        x = inputs[key].clone()
+        for base in (BENCH, SWITCHES):x[:, base:base + SLOTS] = inputs[key][rows, base + perm]
+        out[key] = x
+    out['cat'][:, SWITCHES:SWITCHES + SLOTS, SLOT_ID_COL] = cat[:, SWITCHES:SWITCHES + SLOTS, SLOT_ID_COL]
+    legal2 = legal.clone();legal2[:, MOVES:] = legal[rows, MOVES + perm]
+    inv = torch.argsort(perm, 1);sw = label >= MOVES;label2 = label.clone()
+    label2[sw] = MOVES + inv[sw, label[sw] - MOVES]
+    return out, legal2, label2
 
 
 def set_exact(torch):
@@ -481,8 +532,9 @@ def train(args):
         for lo in range(0, len(order), args.batch):
             model.train();idx = torch.as_tensor(order[lo:lo + args.batch], device=args.device)
             inputs = store.inputs(idx, embed_tokens, model, dropout=args.band_dropout if args.bands else 0., generator=generator)
+            inputs, legal, label = shuffle_bench_batch(torch, inputs, store.legal[idx], store.label[idx], generator)
             logits = model(**inputs)
-            loss = loss_terms(torch, logits, store.legal[idx], store.label[idx], store.partial[idx]).mean()
+            loss = loss_terms(torch, logits, legal, label, store.partial[idx]).mean()
             optimizer.zero_grad();loss.backward();torch.nn.utils.clip_grad_norm_(model.parameters(), 1.);optimizer.step();scheduler.step()
             losses.append(float(loss));step += 1
             if step % args.eval_every == 0 or step == total:
@@ -495,6 +547,7 @@ def train(args):
     marker = dict(policy_only=True, base_checkpoint_sha256=base_sha, view='b', redaction='peer-view-v2', data=str(args.views),
                   split='test: strict vintage; val: sha256(g3rb-split:<replay>) % 10 == 1; train: the rest', bands=list(BANDS),
                   band_dropout=args.band_dropout if args.bands else None, history_events=args.history_events if args.history else None,
+                  bench_order='shuffled (seed 0 at load, re-shuffled every training batch; module docstring)',
                   best_step=best['step'], note='policy fine-tuned on human decisions; the value output is not trained')
     torch.save(dict(schema=SCHEMA, base_checkpoint=str(args.checkpoint), base_checkpoint_sha256=base_sha,
                     wrapper=dict(bands=bool(args.bands), history=bool(args.history), events=args.history_events),
@@ -547,7 +600,7 @@ def evaluate(args):
     from pokezero.neural_policy import checkpoint_file_sha256
     set_exact(torch);out = Path(args.out);out.mkdir(parents=True, exist_ok=True);started = time.time()
     if (out / 'report-human.json').exists():raise SystemExit(f'{out} already holds an evaluation')
-    arrays = load_views(args.views, unredacted=True)
+    arrays = load_views(args.views, unredacted=True, as_built=args.as_built)
     test = np.flatnonzero(arrays['split'] == 'test');train = np.flatnonzero(arrays['split'] == 'train')
     champion, embed_tokens = plain_model(args.checkpoint, torch, args.device)
     check_trained_on(parse_models(args.model), args.views, torch)
@@ -578,6 +631,7 @@ def evaluate(args):
     np.savez(out / 'test-probs.npz', rows=test, replay=arrays['replay'][test], seat=arrays['seat'][test], turn=arrays['turn'][test],
              label=arrays['label'][test], partial=arrays['partial'][test], band=arrays['band'][test], **{f'probs_{k}': v for k, v in models.items()})
     report = dict(schema='v2s-human-reply-eval.v1', views=str(args.views), checkpoint=str(args.checkpoint),
+                  bench_order='as built (leaky party order; diagnostic)' if args.as_built else 'shuffled (seed 0)',
                   checkpoint_sha256=checkpoint_file_sha256(args.checkpoint), pi_fp=args.pi_fp,
                   pi_fp_sha256=checkpoint_file_sha256(args.pi_fp) if args.pi_fp else None, models=identities, recalibration=params,
                   recalibration_rows=int(len(fit)), held_out=dict(rows=int(len(test)), replays=int(len(np.unique(arrays['replay'][test])))),
@@ -721,6 +775,7 @@ def main(argv=None):
     e = sub.add_parser('evaluate');e.add_argument('views');e.add_argument('out');e.add_argument('--checkpoint', required=True)
     e.add_argument('--model', action='append', default=[]);e.add_argument('--pi-fp');e.add_argument('--players')
     e.add_argument('--recalibration-rows', type=int, default=100000);e.add_argument('--device', default='cuda')
+    e.add_argument('--as-built', action='store_true', help="score the views' own (leaky) party order: a diagnostic, not a result")
     f = sub.add_parser('foulplay');f.add_argument('fpr');f.add_argument('out');f.add_argument('--checkpoint', required=True)
     f.add_argument('--pi-fp', required=True);f.add_argument('--test-seeds', required=True);f.add_argument('--late-from', type=int)
     f.add_argument('--model', action='append', default=[]);f.add_argument('--device', default='cuda')

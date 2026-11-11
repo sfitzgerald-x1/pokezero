@@ -84,6 +84,40 @@ class DataTest(unittest.TestCase):
                       split=np.array(['train', 'train', 'test', 'test', 'test', 'test']))
         self.assertEqual(h.player_disjoint(arrays, players, np.array([2, 3, 4, 5])).tolist(), [2, 4, 5])   # ua played in train
 
+    def bench_rows(self, n=40):
+        rng = np.random.default_rng(5)
+        cat = rng.integers(1, 30, (n, 23, 41)).astype(np.int32);num = rng.random((n, 23, 132)).astype(np.float32)
+        num[:, 2:7, 0] = np.arange(5) + 10.;num[:, 17:22, 0] = np.arange(5) + 10.   # a marker pairing own slot j with switch token j
+        cat[:, 17:22, h.SLOT_ID_COL] = np.arange(808, 813)
+        legal = rng.random((n, 9)) < .7;legal[:, 0] = True
+        label = np.array([int(rng.choice(np.flatnonzero(l))) for l in legal]);label[::7] = -1
+        return dict(categorical_ids=cat, numeric_features=num, token_type_ids=np.tile(np.arange(23) % 16, (n, 1)).astype(np.int16),
+                    attention_mask=np.ones((n, 23), bool), legal=legal, label=label)
+
+    def assert_same_choice(self, before, after):
+        for i in range(len(before['label'])):
+            b, a = int(before['label'][i]), int(after['label'][i])
+            if b < 4:self.assertEqual(a, b);continue
+            self.assertTrue(after['legal'][i, a])
+            self.assertEqual(after['numeric_features'][i, 13 + a, 0], before['numeric_features'][i, 13 + b, 0])   # the same mon
+            mask = np.arange(41) != h.SLOT_ID_COL
+            self.assertTrue(np.array_equal(after['categorical_ids'][i, 13 + a, mask], before['categorical_ids'][i, 13 + b, mask]))
+        self.assertTrue((after['categorical_ids'][:, 17:22, h.SLOT_ID_COL] == np.arange(808, 813)).all())   # slot ids stay positional
+        self.assertTrue(np.array_equal(after['numeric_features'][:, 2:7, 0], after['numeric_features'][:, 17:22, 0]))   # own j <-> switch j
+        self.assertTrue(np.array_equal(after['legal'][:, :4], before['legal'][:, :4]))
+        self.assertEqual(int(after['legal'].sum()), int(before['legal'].sum()))
+
+    def test_bench_shuffle_keeps_each_choice_and_hides_the_order(self):
+        before = self.bench_rows();after = {k: v.copy() for k, v in before.items()}
+        perm = h.shuffle_bench(after, 0)
+        self.assertGreater((perm != np.arange(5)).any(1).mean(), .9)
+        self.assert_same_choice(before, after)
+
+    def test_bench_shuffle_refuses_data_without_positional_slot_ids(self):
+        rows = self.bench_rows();rows['categorical_ids'][3, 17, h.SLOT_ID_COL] = 1
+        with self.assertRaises(SystemExit):h.shuffle_bench(rows, 0)
+
+
     def test_model_names_cannot_shadow_baselines(self):
         self.assertEqual(h.parse_models(['a1=/x', 'a2s1=/y']), {'a1': '/x', 'a2s1': '/y'})
         for bad in ('champion=/x', 'pi_fp=/x', 'turns=/x', 'a1_band_unknown=/x', 'A1=/x', 'a1'):
@@ -147,6 +181,14 @@ class ModelTest(unittest.TestCase):
         p = torch.softmax(logits[0], -1)
         self.assertAlmostEqual(float(loss[0]), float(-torch.log(p[4])), places=5)
         self.assertAlmostEqual(float(loss[1]), float(-torch.log(p[:4].sum())), places=5)
+
+    def test_batch_bench_shuffle_matches_the_numpy_rule(self):
+        torch = self.torch;before = DataTest.bench_rows(DataTest())
+        inputs = dict(cat=torch.as_tensor(before['categorical_ids']).long(), num=torch.as_tensor(before['numeric_features']),
+                      tt=torch.as_tensor(before['token_type_ids']).long(), att=torch.as_tensor(before['attention_mask']))
+        out, legal, label = h.shuffle_bench_batch(torch, inputs, torch.as_tensor(before['legal']), torch.as_tensor(before['label']), torch.Generator().manual_seed(1))
+        after = dict(categorical_ids=out['cat'].numpy(), numeric_features=out['num'].numpy(), legal=legal.numpy(), label=label.numpy())
+        DataTest.assert_same_choice(self, before, after)
 
     def test_loss_gradient_is_finite_on_a_row_without_legal_moves(self):
         torch = self.torch
