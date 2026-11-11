@@ -736,7 +736,9 @@ class ProbeTests(unittest.TestCase):
     def test_pass_on_the_declared_rung_worlds_and_operator(self):
         value, server = self.probe(actor_tests.send(champion_complete))
         self.assertEqual((value['status'], len(value['tried'])), ('PASS', 1)); self.assertEqual(self.records(), [value])
-        request, = self.requests; root = next(capture.read_capture(self.capture))
+        end = [r for r in self.requests if r.get('schema') == live.BATTLE_END_SCHEMA]   # (review) the probe ends its battle at the proxy
+        request, = [r for r in self.requests if r not in end]; root = next(capture.read_capture(self.capture))
+        self.assertEqual(end, [dict(schema=live.BATTLE_END_SCHEMA, battle_id=request['battle_id'], owner=request['owner'])])
         self.assertTrue(request['battle_id'].startswith('probe-')); self.assertEqual(request['rung'], 'DN2W8')
         self.assertEqual((request['lines'], request['own_request_line'], request['prefix_sha256']),
                          (list(root['lines']), root['own_request_line'], root['prefix_sha256']))
@@ -758,7 +760,7 @@ class ProbeTests(unittest.TestCase):
         root, run, d, lad = make_run(Path(self.directory.name)/'ten', deadline=10.)
         with actor_tests.FakeServer(actor_tests.send(champion_complete)) as server:
             value = panel.probe(root, arm='DN2W8', server=dict(host='127.0.0.1', port=server.port), capture=self.capture)
-            request, = server.requests
+            request, = [r for r in server.requests if r.get('schema') != live.BATTLE_END_SCHEMA]
         self.assertEqual(value['status'], 'PASS'); self.assertTrue(3. < request['budget_seconds'] <= 9.85)
 
     def test_constructor_refusals_move_to_the_next_root(self):
