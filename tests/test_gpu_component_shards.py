@@ -767,7 +767,13 @@ raise SystemExit(run_process_blocks(suite, 0, 1, start_dir=sys.argv[1], tier=sys
         self.assertEqual(workflow.count('python scripts/run_gpu_component_shard.py'), 1)
         self.assertIn("python scripts/run_gpu_component_shard.py --tier light --index '${{ matrix.shard }}' --count 16", workflow)
         self.assertIn("- 'tests/gpu_component_heavy.json'", workflow)
-        self.assertNotIn('self-hosted', workflow)
+        # The default runner is hosted. Main's isolated runner (#1819) is opt-in through repository configuration,
+        # for same-repository pull requests only, and runs the same light-tier command.
+        self.assertEqual(workflow.count('runs-on:'), 2)
+        self.assertIn("    runs-on: ${{ fromJSON((github.event.pull_request.head.repo.full_name == github.repository"
+                      " && github.head_ref == vars.CPU_COMPONENT_RUNNER_BRANCH && vars.CPU_COMPONENT_RUNNER)"
+                      " || '\"ubuntu-latest\"') }}\n", workflow)
+        self.assertIn('    runs-on: ubuntu-latest\n', workflow)
 
     def test_invalid_partition_and_empty_discovery_fail(self):
         suite = unittest.TestSuite([unittest.TestSuite()])
