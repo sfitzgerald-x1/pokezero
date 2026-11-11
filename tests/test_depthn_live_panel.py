@@ -213,24 +213,17 @@ class PreflightBindingTests(unittest.TestCase):
         with self.assertRaises(ValueError): REAL_CHECK_PREFLIGHT(wrong, tree)
 
     def test_a_redeclared_5_s_declaration_binds_its_preflight_to_the_derived_bound(self):
-        d = declaration('a'*64, deadline=5.); d['actor']['preflight_search_wall_p95_seconds'] = 2.7   # over the old fixed 2.6 s
         tree = dict(source_sha256='e'*64)
-        self.assertEqual(REAL_CHECK_PREFLIGHT(self.declared(preflight_value(d)), tree)['search_wall_p95_max'], 4.6)
+        def bound(**change):   # a 5.0 s declaration whose actor block is bound to this pre-flight file
+            d = declaration('a'*64, deadline=5.); d['actor']['preflight_search_wall_p95_seconds'] = 2.7   # over the old fixed 2.6 s
+            value = preflight_value(d, **change); path = self.root/f'preflight-5s-{panel.sha(value)[:8]}.json'
+            if not path.exists(): panel.write_new(path, value)
+            d['actor']['source'] = dict(path=str(path), sha256=panel.sha(value)); return d
+        self.assertEqual(REAL_CHECK_PREFLIGHT(bound(), tree)['search_wall_p95_max'], 4.6)
         for change in (dict(search_wall_p95_max=2.6), dict(deadline_seconds=3.)):   # a file held to the 3.0 s bound, or run at 3.0 s
             with self.subTest(change), self.assertRaisesRegex(ValueError, 'must be its pre-flight'):
-                REAL_CHECK_PREFLIGHT(self.declared(preflight_value(d, **change)), tree)
+                REAL_CHECK_PREFLIGHT(bound(**change), tree)
 
-
-class CommittedDeclarationTests(unittest.TestCase):
-    """screen-r4a's (3.0 s) and screen-r4a2's (re-declared 5.0 s) committed declarations validate, each pre-flight wall within its own deadline's bound."""
-    def test_the_committed_r4a_and_r4a2_declarations_validate(self):
-        evals = Path(__file__).resolve().parents[1]/'evals'
-        for name, deadline, bound in (('depthn-foulplay-dn2w16-declaration-r4a-20261111.json', 3., 2.6),
-                                      ('depthn-foulplay-dn2w16-declaration-r4a2-20261111.json', 5., 4.6)):
-            with self.subTest(name):
-                d = json.loads((evals/name).read_bytes()); panel.validate(d)
-                self.assertEqual((d['deadline_seconds'], panel.preflight_wall_p95_max(d['deadline_seconds'], d['reserve_seconds'])), (deadline, bound))
-                self.assertLessEqual(d['actor']['preflight_search_wall_p95_seconds'], bound)
 
     def test_init_calls_the_preflight_check_and_refuses_a_dirty_tree(self):
         seen = []
@@ -256,6 +249,19 @@ class CommittedDeclarationTests(unittest.TestCase):
         panel.write_new(calibration/'claims'/'0.json', dict(setting='solo'))
         with self.assertRaisesRegex(ValueError, 'own directory'):
             panel.preflight_packets(calibration, arm='DN2W8', games=2, deadline_seconds=3., reserve_seconds=.15)
+
+
+
+class CommittedDeclarationTests(unittest.TestCase):
+    """screen-r4a's (3.0 s) and screen-r4a2's (re-declared 5.0 s) committed declarations validate, each pre-flight wall within its own deadline's bound."""
+    def test_the_committed_r4a_and_r4a2_declarations_validate(self):
+        evals = Path(__file__).resolve().parents[1]/'evals'
+        for name, deadline, bound in (('depthn-foulplay-dn2w16-declaration-r4a-20261111.json', 3., 2.6),
+                                      ('depthn-foulplay-dn2w16-declaration-r4a2-20261111.json', 5., 4.6)):
+            with self.subTest(name):
+                d = json.loads((evals/name).read_bytes()); panel.validate(d)
+                self.assertEqual((d['deadline_seconds'], panel.preflight_wall_p95_max(d['deadline_seconds'], d['reserve_seconds'])), (deadline, bound))
+                self.assertLessEqual(d['actor']['preflight_search_wall_p95_seconds'], bound)
 
 
 class ServerTreeTests(unittest.TestCase):
