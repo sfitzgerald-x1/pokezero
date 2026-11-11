@@ -6,6 +6,7 @@ import numpy as np
 from gpu_engine import benchmark_retained_games as bench, champion
 from gpu_engine import engine_retained_encoder_driver as driver, transition
 import test_gpu_engine_engine_own_facts as fixtures
+from gpu_engine_eager_frame import eager_frame
 
 
 class RetainedThroughputCompositionTests(unittest.TestCase):
@@ -27,11 +28,13 @@ class RetainedThroughputCompositionTests(unittest.TestCase):
             self.assertEqual(refused.tolist(), [True, True])
             self.assertTrue(np.all(reasons & driver.PUBLIC_COVERAGE))
             draws = j.zeros((2, 2, 12), j.int32).at[:, :, 4].set(1)
-            chance = transition.ChanceInputs(draws, *[j.zeros((2, 2), j.int32) for _ in range(4)],
-                j.zeros(2, j.int32))
+            zeros = j.zeros((2, 2), j.int32)
+            chance = transition.ChanceInputs(draws=draws, phazing=zeros, secondary=zeros, sleep_talk=zeros,
+                entry_ties=zeros, initial_tie=j.zeros(2, j.int32))
             names = []
-            result = driver.advance(session, j.full((2, 2), 8, j.int32), active_rows=j.array([False, True]),
-                timing_callback=lambda name, ms: names.append(name), chance_inputs=chance)
+            with eager_frame(self.prepared):
+                result = driver.advance(session, j.full((2, 2), 8, j.int32), active_rows=j.array([False, True]),
+                    timing_callback=lambda name, ms: names.append(name), chance_inputs=chance)
             diag = driver.latest_diagnostics(session)
             self.assertEqual(diag.active_rows.tolist(), [False, True])
             self.assertEqual(diag.executed_rows.tolist(), [False, True])
