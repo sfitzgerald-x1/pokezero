@@ -16,6 +16,7 @@ from gpu_engine import engine_device_observation as e, engine_device_public_hook
 from gpu_engine import engine_device_trackers as tr, engine_device_features as f, public_tendency as ref
 from gpu_engine.state import empty_state
 from pokezero import showdown as s
+s_=s
 
 BASE='03be68de16f4265f5f9c226ce6ada80b8dd8619d'
 
@@ -404,6 +405,50 @@ console.log(JSON.stringify(orders));"""
         h.depart(c,fainted,gone,1,None,yes);h.install(c,replaced,1,yes);h.withdraw(c,replaced,1,j.ones(2,j.int32),yes)
         np.testing.assert_array_equal(bench_types(c.trackers),base)
 
+    def b2_lines(self,a,catalog,fact,*lines):
+        """B2's own line consumer: public_active.project_line facts, applied by public_active.apply."""
+        for text in lines:
+            for op,side,value in a.project_line(text,catalog=catalog).facts:fact(op,side,value)
+
+    def test_destiny_bond_bag_matches_b2_singlemove_expiry_and_faint(self):
+        """A2's destinybond producer (hooks.destiny_bond) against B2: -singlemove adds the bag entry, the holder's
+        next move line expires it (EXPIRE_ACTION), and a faint clears it (review L5)."""
+        a,catalog,fact,project=self.b2_active()
+        state=self.state();c=h.initialize(state,self.tables.belief);yes=j.ones(2,bool)
+        fact(a.ARRIVE,0);fact(a.ARRIVE,1)
+        bonded=state._replace(volatile=state.volatile.at[:,1,0].set(64))
+        h.destiny_bond(c,bonded,1,yes);self.b2_lines(a,catalog,fact,'|-singlemove|p2a: Absol|Destiny Bond')
+        expected=project();self.compare_active(c.trackers,expected,a)
+        self.assertTrue(bool(expected.categorical[0,1,j.asarray(a.CATEGORY_COLUMNS)].any()))
+        # The holder's next move attempt: the engine clears the bit at BeforeMove; B2 expires on the move line.
+        h.destiny_bond(c,state,1,yes);self.b2_lines(a,catalog,fact,'|move|p2a: Absol|Splash|p2a: Absol')
+        expected=project();self.compare_active(c.trackers,expected,a)
+        self.assertFalse(bool(expected.categorical[0,1,j.asarray(a.CATEGORY_COLUMNS)].any()))
+        # Bonded again, then KO'd: B2's FAINT empties the bag; the device's faint clear in turn_end does too.
+        h.destiny_bond(c,bonded,1,yes);self.b2_lines(a,catalog,fact,'|-singlemove|p2a: Absol|Destiny Bond')
+        self.compare_active(c.trackers,project(),a)
+        fact(a.FAINT,1);h.turn_end(c,bonded,bonded._replace(hp=bonded.hp.at[:,1,0].set(0)),j.zeros(2,bool))
+        self.compare_active(c.trackers,project(),a)
+
+    def test_knock_off_clears_the_swap_flag_like_b2_item_end(self):
+        """A2's knock_off producer against B2's ITEM_END (public_active.py): a Tricked item, then knocked off;
+        -enditem clears item_swapped (and choice_public/choice_locked, which the device tracks from M1 on) (L5)."""
+        a,catalog,fact,project=self.b2_active()
+        state=self.state();c=h.initialize(state,self.tables.belief);yes=j.ones(2,bool)
+        fact(a.ARRIVE,0);fact(a.ARRIVE,1)
+        self.b2_lines(a,catalog,fact,'|-item|p2a: Absol|Leftovers|[from] move: Trick','|move|p2a: Absol|Tackle|p1a: Snorlax')
+        h.feature(c,1,state.active[:,1],'item_swapped',j.ones(2,j.int32),yes)
+        self.assertNotIn('choice_locked',c.trackers.mon_features)          # deferred to M1 (Trick/Choice lock)
+        swapped=project();self.compare_active(c.trackers,swapped,a)
+        cols=j.asarray(a.NUMERIC_COLUMNS)
+        self.assertTrue(bool(swapped.numeric[0,1,cols].any()))
+        item=1;before=state._replace(item=state.item.at[:,1,0].set(item))
+        after=before._replace(item=before.item.at[:,1,0].set(0),item_knocked=before.item_knocked.at[:,1,0].set(True))
+        h.knock_off(c,before,after,1,yes)
+        self.b2_lines(a,catalog,fact,'|-enditem|p2a: Absol|Leftovers|[from] move: Knock Off|[of] p1a: Snorlax')
+        cleared=project();self.compare_active(c.trackers,cleared,a)
+        self.assertFalse(bool(cleared.numeric[0,1,cols].any()))
+
     def test_effective_gen3_failed_focus_retains_move_before_cant_order(self):
         import json,os
         root=os.environ['POKEZERO_SHOWDOWN_ROOT']
@@ -419,6 +464,63 @@ console.log(JSON.stringify(orders));"""
                      '|move|p1a: Snorlax|Surf|p2a: Absol|[still]','|cant|p1a: Snorlax|Focus Punch|Focus Punch'):
             refstate=self.line(refstate,line)
         self.assertEqual(int(refstate.mon[0,0,0,1]),1);self.assertEqual(int(refstate.opportunities[0,0]),1)
+
+
+class KnockOffLedgerBoundaryParityTests(unittest.TestCase):
+    """A2's knock_off producer against B2's own fold of the Showdown lines (review L5): the item ledger's shown
+    and removed item (public_items REMOVE) and the removal credit columns 119/120 (public_damage.project_credits)."""
+    @classmethod
+    def setUpClass(cls):
+        import test_gpu_engine_public_damage_context as fixture
+        fixture.PublicDamageContextTests.setUpClass()
+        cls.f=fixture.PublicDamageContextTests()
+
+    def b2(self,lines):
+        result,_=self.f.run_lines(lines)
+        d=self.f.d;tables=self.f.damage_tables
+        credits={}
+        for observer in (0,1):
+            patch=d.project_credits(result.context.damage,tables,result.mon_state,observer_side=observer,
+                expected_vocabulary=tables.vocabulary_binding)
+            self.assertEqual(patch.admitted.tolist(),[True])
+            credits[observer]=[float(patch.numeric[0,col]) for col in d.FIELD_COLUMNS[2:]]
+        items=result.context.items
+        return dict(credits=credits,shown=self.f.item_catalog.names[int(items.revealed[0,1,0])],
+            removed=bool(items.removed[0,1,0]),mutated=bool(items.mutated[0,1,0]))
+
+    def device(self,knocked):
+        from gpu_engine import engine_device_trackers as dtr,engine_device_features as df
+        s=empty_state(1)
+        s=s._replace(species=s.species.at[0,0,0].set(1).at[0,1,0].set(2),level=j.full_like(s.level,80),
+            hp=j.full_like(s.hp,100),max_hp=j.full_like(s.max_hp,100),item=s.item.at[0,1,0].set(7),done=j.zeros(1,bool))
+        c=h.initialize(s,None);yes=j.ones(1,bool)
+        if knocked:
+            after=s._replace(item=s.item.at[0,1,0].set(0),item_knocked=s.item_knocked.at[0,1,0].set(True))
+            h.knock_off(c,s,after,1,yes)
+        credits={}
+        for observer in (0,1):
+            view=dtr.readout(c.trackers,j.full(1,observer,j.int32))
+            numeric,bad=df.project_field(j.zeros((1,132),j.float32),view.field_features)
+            self.assertFalse(bool(bad.any()))
+            credits[observer]=[float(numeric[0,s_.v4_numeric_index(getattr(s_,'NUMERIC_'+n))])
+                for n in ('SELF_ITEMS_REMOVED_CREDIT','OPP_ITEMS_REMOVED_CREDIT')]
+        return dict(credits=credits,shown=int(c.trackers.shown_item[0,1,0]),removed=bool(c.trackers.item_removed[0,1,0]))
+
+    def test_knock_off_ledger_and_removal_credit_match_b2(self):
+        prefix=[*self.f.prefix,'|turn|1','|move|p1a: Snorlax|Body Slam|p2a: Absol','|-damage|p2a: Absol|80/100']
+        knocked=self.b2(prefix+['|-enditem|p2a: Absol|Leftovers|[from] move: Knock Off|[of] p1a: Snorlax'])
+        plain=self.b2(prefix)
+        self.assertEqual((knocked['shown'],knocked['removed'],knocked['mutated']),('leftovers',True,True))
+        self.assertEqual((plain['removed'],plain['mutated']),(False,False))
+        device,quiet=self.device(True),self.device(False)
+        # The removed item is shown (the device's id for the knocked Leftovers) and marked removed, as in B2.
+        self.assertEqual((device['shown'],device['removed']),(7,knocked['removed']))
+        self.assertEqual((quiet['shown'],quiet['removed']),(0,plain['removed']))
+        # Columns 119/120 for both observers: the victim's side (p2) is credited one removal of six.
+        for observer in (0,1):
+            np.testing.assert_allclose(device['credits'][observer],knocked['credits'][observer],atol=1e-7)
+            np.testing.assert_allclose(quiet['credits'][observer],plain['credits'][observer],atol=1e-7)
+        np.testing.assert_allclose(knocked['credits'][1],[1/6,0.],atol=1e-7);np.testing.assert_allclose(knocked['credits'][0],[0.,1/6],atol=1e-7)
 
 
 if __name__=='__main__':unittest.main()

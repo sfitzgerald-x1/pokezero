@@ -83,6 +83,7 @@ class BattleState(NamedTuple):
     winner: jax.Array              # [B], -1 undecided,0/1 seat,2 tie
     truant_loaf: jax.Array         # [B,2,6] explicit Gen3 residual clock, not action history
     item_knocked: jax.Array        # [B,2,6] bool, pokemon.itemKnockedOff; never reset (sim/pokemon.ts)
+    effect_draws: jax.Array        # [B,2,4], ChanceInputs.effect saved for a suspended turn, else 0 (fidelity patch R)
 
 
 def empty_state(batch_size: int, *, seed: int = 0) -> BattleState:
@@ -124,7 +125,8 @@ def empty_state(batch_size: int, *, seed: int = 0) -> BattleState:
         phazing_draws=side(), secondary_draws=side(), sleep_talk_draws=side(),
         spikes=side(), wish_counter=side(),wish_amount=side(),weather=battle(), weather_counter=battle(), turn=battle(),
         keys=keys, done=jnp.ones((b,), jnp.bool_), winner=jnp.full((b,), -1, jnp.int32),
-        truant_loaf=jnp.zeros((b,2,6),jnp.bool_),item_knocked=jnp.zeros((b,2,6),jnp.bool_))
+        truant_loaf=jnp.zeros((b,2,6),jnp.bool_),item_knocked=jnp.zeros((b,2,6),jnp.bool_),
+        effect_draws=jnp.zeros((b,2,4),jnp.int32))
 
 
 def bench_indices(active: jax.Array) -> jax.Array:

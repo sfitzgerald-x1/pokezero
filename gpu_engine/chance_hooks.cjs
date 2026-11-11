@@ -5,7 +5,8 @@
 // stream (fidelity-patch design 2.1). Roles that read it on a v1 tape stay
 // unresolved (EFFECT_STREAM_ABSENT); a v1 tape never carries `effect`.
 //   effect[s][0] second-hit critical, effect[s][1] second-hit damage roll (one
-//   multihit move, per hit index); effect[s][2] Yawn's residual sleep duration
+//   multihit move, per hit index; the engine consumes both for Bonemerang since
+//   fidelity R, and a third hit stays unresolved); effect[s][2] Yawn's residual sleep duration
 //   (s = the drowsy mon's side); effect[0][3] partial-trap residual pair tie;
 //   effect[1][3] Perish residual pair tie. A residual pair tie puts the side
 //   whose n equals the tape value first, as move_tie does with draws[0][0].

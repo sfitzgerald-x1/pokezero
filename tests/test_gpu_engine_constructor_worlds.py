@@ -571,8 +571,8 @@ class ConstructorWorldsTests(unittest.TestCase):
         (its record reads enabled, the completion gets both keywords) and build re-applies the same completion and records it. A root
         whose record cannot be read (a carry of another layout; a request without lines) is refused PEER_VIEW_B_UNAVAILABLE, never
         priced without view b."""
-        W=2;made=self.made(0,0,self.modes(0,W));lines=['|switch|p2a: Snorlax|Snorlax, L80|100/100','|move|p2a: Snorlax|Tackle|p1a: Snorlax',
-            '|-damage|p1a: Snorlax|250/300','|turn|1']
+        W=2;made=self.made(0,0,self.modes(0,W))
+        lines=['|switch|p1a: Alpha|Alpha, L80|100/100','|switch|p2a: Alpha|Alpha, L80|100/100','|turn|1']   # the fake carry's actives, unhurt
         constructor=self.constructor(W);seen=[]
         complete=lambda world,owner,facts=None,root=None,**kw:seen.append(kw)or world
         with patch.object(ProtocolConstructor,'prepare',side_effect=lambda r,i:made),patch.object(cw,'world_completer',return_value=complete):
@@ -586,9 +586,16 @@ class ConstructorWorldsTests(unittest.TestCase):
         self.assertEqual(seen[0],{})   # the off completion: no keyword at all, as before the flag
         self.assertEqual([(type(x),getattr(x,'kind',None))for x in refused],[(cw.RootRefusal,cw.PEER_VIEW_B_UNAVAILABLE)]*2)
         self.assertTrue(refused[0].detail.startswith('CarryLayoutError'));self.assertIn('without lines',refused[1].detail)
+        # the record's own checks (the Opus review): another member at the carry's active slot, or B2's value not the exact rule's
+        for odd,why in((['|switch|p1a: Beta|Beta, L80|100/100','|switch|p2a: Alpha|Alpha, L80|100/100','|turn|1'],'is not the lines'),
+                (lines[:2]+['|move|p2a: Alpha|Tackle|p1a: Alpha','|-damage|p1a: Alpha|90/100','|turn|1'],'the exact rule disagrees')):
+            with patch.object(ProtocolConstructor,'prepare',side_effect=lambda r,i:made),patch.object(cw,'world_completer',return_value=complete):
+                bad,=cw.prepare_roots(constructor,[dict(request_id='p',lines=odd)],peer_view_b=True)
+            self.assertEqual((type(bad),bad.kind),(cw.RootRefusal,cw.PEER_VIEW_B_UNAVAILABLE));self.assertIn(why,bad.detail)
         item=on[0];self.assertIs(type(item),cw.Prepared)
         self.assertEqual(item.facts.peer_damage,cw.peer_damage_facts(lines,0))
-        self.assertEqual(item.peer_view_b,cw.peer_view_b_record(made[0].public,0,item.facts))   # read from the root's own carry
+        self.assertEqual(item.peer_view_b,cw.peer_view_b_record(made[0].public,0,item.facts,constructor.metadata['vocabulary']['species']))   # the root's own carry
+        self.assertEqual([(c['carry_species'],c['species_agrees'])for c in item.peer_view_b['cells']],[('alpha',True)]*2)
         self.assertIs(item.peer_view_b['enabled'],True)
         self.assertIs(item.private_reveals['enabled'],True)   # view b implies the redaction
         self.assertEqual(seen[-1],dict(redact_private_reveals=True,peer_view_b=True))

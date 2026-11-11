@@ -146,5 +146,47 @@ class EvidenceTests(unittest.TestCase):
                              (True, 1, {'9': 'replay diverges'}))
 
 
+
+class TrainingSeedsTests(unittest.TestCase):
+    def test_reads_every_shards_seed_array_only(self):
+        import numpy as np
+        with tempfile.TemporaryDirectory() as tmp:
+            d = Path(tmp)
+            np.savez(d / 'shard-0.npz', seed=np.array([5, 7, 5]), ordinal=np.array([1, 2, 1]), label=np.array([1, 2, 3]), numeric_features=np.zeros((3, 2)))
+            np.savez(d / 'shard-1.npz', seed=np.array([9], np.int64), ordinal=np.array([3]), label=np.array([0]))
+            np.savez(d / 'shard-2.npz', seed=np.array([], np.int64), ordinal=np.array([], np.int64), label=np.array([], np.int64))
+            np.savez(d / 'other.npz', seed=np.array([11]))   # not a shard
+            self.assertEqual(ev.training_seeds(d), {5, 7, 9})
+
+    def test_fails_closed_on_missing_data(self):
+        import numpy as np
+        with tempfile.TemporaryDirectory() as tmp:
+            d = Path(tmp)
+            with self.assertRaises(ValueError):ev.training_seeds(d)   # no shard at all
+            np.savez(d / 'shard-0.npz', seed=np.array([5]), ordinal=np.array([1]))
+            np.savez(d / 'shard-1.npz', label=np.array([0]))   # a shard without seeds
+            with self.assertRaises(ValueError):ev.training_seeds(d)
+
+    def test_a_recorded_split_is_exact_and_the_flags_must_agree(self):
+        import numpy as np
+        with tempfile.TemporaryDirectory() as tmp:
+            d = Path(tmp);np.savez(d / 'shard-0.npz', seed=np.array([20, 31, 42]), ordinal=np.array([1, 2, 3]))
+            self.assertEqual(ev.training_seeds(d, recorded=dict(fit_seeds=[42])), {42})
+            self.assertEqual(ev.training_seeds(d, [20], recorded=dict(fit_seeds=[31, 42])), {31, 42})
+            with self.assertRaises(ValueError):ev.training_seeds(d, [20], recorded=dict(fit_seeds=[42]))
+            with self.assertRaises(ValueError):ev.training_seeds(d, [99])   # a test seed with no rows
+            with self.assertRaises(ValueError):ev.training_seeds(d, ['20'])
+
+    def test_with_the_split_only_fitted_games_count(self):
+        import numpy as np
+        with tempfile.TemporaryDirectory() as tmp:
+            d = Path(tmp)   # seeds 20 test (fixed), 31 validation (% 10 == 1), 42 train, 53 late (first ordinal >= 100)
+            np.savez(d / 'shard-0.npz', seed=np.array([20, 31, 42, 42, 53]), ordinal=np.array([1, 2, 3, 3, 100]), label=np.zeros(5))
+            np.savez(d / 'shard-1.npz', seed=np.array([53, 64]), ordinal=np.array([101, 4]), label=np.zeros(2))
+            self.assertEqual(ev.training_seeds(d, [20], 100), {31, 42, 64})
+            self.assertEqual(ev.training_seeds(d, [20]), {31, 42, 53, 64})
+            with self.assertRaises(ValueError):ev.training_seeds(d, None, 100)
+
+
 if __name__ == '__main__':
     unittest.main()

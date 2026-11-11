@@ -191,7 +191,7 @@ def parser():
     p=argparse.ArgumentParser(description=__doc__.split('\n')[0])
     for name in('showdown-root','node-binary','metadata','expected-metadata-sha256','vocabulary','expected-vocabulary-sha256'):p.add_argument('--'+name,required=True)
     evaluators.add_arguments(p)
-    p.add_argument('--rung',choices=tuple(live.RUNGS),default='DN2W8',help='DN2W8 (W=8) or DN2W16 (W=16)')
+    p.add_argument('--rung',choices=tuple(live.RUNGS),default='DN2W8',help='DN2W8 (W=8) or DN2W16 (W=16); DN2W32 / DN2W64 for offline replays')
     p.add_argument('--host',default='127.0.0.1');p.add_argument('--port',type=int,required=True)
     p.add_argument('--buckets',type=buckets_arg,default=(1,2,4),help='capacity buckets, in roots per price call (default 1,2,4)')
     p.add_argument('--max-requests',type=int,help='requests per batch (default the largest bucket; set from gap 4B)')
@@ -218,6 +218,9 @@ def parser():
     p.add_argument('--reply-archive',help='br_fp: a reply model (a champion_evaluator .npz export, e.g. pi_FP-red2) whose logits on each '
         'world\'s peer view replace root_peer_logits before averaging; default off (the champion\'s own averaging)')
     p.add_argument('--reply-archive-sha256',help='sha256 of --reply-archive\'s bytes (required with it)')
+    p.add_argument('--root-operator',choices=live.ROOT_OPERATORS,default=live.ROOT_OPERATOR,help='the live root operator: '
+        'ARGMAX_MEAN_COMPLETED_Q (default: averaging plays, or br_fp under --reply-archive) or NOISE_GATED_K2 (that choice only past '
+        'a 2-standard-error per-world gap over the root logits\' argmax; screen-r4a variant B with --reply-archive)')
     p.add_argument('--reply-checkpoint-sha256',help='the reply export\'s checkpoint sha256 (required with --reply-archive)')
     p.add_argument('--reply-views',choices=('eager','jit','check'),default='eager',help='how --reply-archive builds the peer inputs: eager '
         '(default; bit-exact with the RR re-pricer), jit (one vmapped program per root), or check (eager plays; jit reported beside)')
@@ -307,6 +310,7 @@ def build(args):
         recipe=v5_gumbel.Recipe(args.recipe_seed),tree_commit=args.tree_commit or tree_commit(),min_price_seconds=args.min_price_seconds,
         max_requests=args.max_requests,session_cap=args.session_cap,refuse_classes=args.refuse_classes,
         redact_private_reveals=bool(getattr(args,'redact_private_reveals',False)),reply=reply,
+        root_operator=getattr(args,'root_operator',live.ROOT_OPERATOR),
         **({'peer_view_b':True}if getattr(args,'peer_view_b',False)else{}))
 
 
@@ -322,7 +326,8 @@ def header(args,search):
         champion_checkpoint_sha256=args.champion_checkpoint_sha256,champion_precision=args.champion_precision,pricer=search.pricer_identity,
         **({}if not getattr(args,'reply_archive',None)else dict(root_operator='br_fp',reply_archive_sha256=args.reply_archive_sha256,
             reply_checkpoint_sha256=args.reply_checkpoint_sha256,reply_views=args.reply_views,reply_archive_view=reply_view(getattr(getattr(getattr(search,'reply',None),'evaluator',None),'meta',None)))),
-        jax_enable_x64=bool(jax.config.jax_enable_x64),matmul_precision=matmul_precision(),matmul_precision_pin=args.matmul_precision)
+        jax_enable_x64=bool(jax.config.jax_enable_x64),matmul_precision=matmul_precision(),matmul_precision_pin=args.matmul_precision,
+        **({}if getattr(args,'root_operator',live.ROOT_OPERATOR)==live.ROOT_OPERATOR else dict(live_root_operator=args.root_operator)))
 
 
 def main(argv=None):

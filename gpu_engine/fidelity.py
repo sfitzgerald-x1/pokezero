@@ -34,7 +34,9 @@ SLEEP_CLAUSE_FORMAT='gen3customgame@@@sleepclausemod'
 FORMATS={SLEEP_CLAUSE_FORMAT:'gen3customgame@@@sleepclausemod; Sleep Clause Mod, no Freeze Clause',
     'gen3customgame':'gen3customgame; no Sleep/Freeze Clause'}
 TAPE_SCHEMA='pokezero.gpu_chance_tape.v2'
-# The appended ChanceInputs.effect stream (design 2.1); not consumed by this engine yet.
+# The appended ChanceInputs.effect stream (design 2.1), derived here independently of
+# transition.effect_chance so a drift between the two shows as a divergence. Fidelity R
+# consumes [s][0..1] (Bonemerang's second hit); the residual roles arrive with M2.
 EFFECT_SALT=1732050
 EFFECT_BOUNDS=(16,16,4,2)
 # The first 50000..50199 panel is immutable historical evidence. Following
@@ -77,8 +79,8 @@ def effect_draws(keys):
 
 def chance_tape(state,game,index,saved_effect=None):
     """Tape v2. A suspended turn replays its saved block; `effect` comes from the
-    engine's saved effect_draws once that leaf exists, else from the caller's copy
-    of the suspended turn's tape (saved_effect), else it is freshly derived."""
+    engine's saved effect_draws (fidelity R), else (an engine without the leaf) from
+    the caller's copy of the suspended turn's tape (saved_effect), else it is freshly derived."""
     split=jax.vmap(lambda key:jax.random.split(key,2))(state.keys)[:,1]
     draws=jax.vmap(lambda key:jax.random.randint(key,(2,12),0,j.array([2,100,100,100,16,16,100,4,8,2,2,2],j.int32)))(split)
     secondary=jax.vmap(lambda key:jax.random.randint(jax.random.fold_in(key,1618033),(2,),0,100))(split)

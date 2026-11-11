@@ -91,6 +91,10 @@ def registry():
         'this turn; silent failure without one; Ghost/Dark immunity','damage_moves','fidelity_a2')
     group('destinybond','Volatile until the next move attempt; a foe move KO (Pursuit included) faints the attacker',
         'effects','fidelity_a2')
+    # Fidelity patch R.
+    group('bonemerang','Two hits after one accuracy roll, each with its own critical and damage roll (the second from the '
+        'appended effect stream); a first-hit KO ends it; Substitute per hit (a broken one lets the second hit reach the '
+        'Pokemon); Endure per hit; Counter/Mirror Coat read the last hit','damage_moves','fidelity_r')
     return result
 
 

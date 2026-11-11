@@ -19,17 +19,22 @@ every changed lane-step is attributed through the per-PR plug-in table:
   failure, unless the leaf is waived (--waive) or it is a KO consequence on a
   lane whose set of fainting mons differs from the base (a KO cascade): HP,
   fainted, forced-switch/replacement and done/winner leaves, the TURN-line
-  bookkeeping of both sides, the newly (un)fainted mon's own per-mon state, a
-  cancelled or cleared last_move (an active's or a fainted mon's) and a released
-  trap link (a fainted or active mon's, or one pointing at such a foe), each
-  checked per mon against stored base arrays, and the trackers of its side. A
-  lane whose residual ran in exactly one tree is a cascade on both sides that
-  also accepts the residual handlers' state writes and the tracker families they
-  and the end-of-turn hooks write (not every tracker): a phase shift (the
-  residual was deferred in exactly one tree: a KO moved between the action and
-  residual phases) or a terminal step (the battle ended in either tree, so an
-  action-phase KO may have skipped the residual the other tree ran); both are
-  counted and flagged per lane. Anything else stays unexpected.
+  bookkeeping of both sides, the newly (un)fainted mon's own per-mon state (its
+  PP included: a mon KO'd before its turn spends none), its side's action history
+  and the step's executed-move count, a cancelled or cleared last_move (an
+  active's or a fainted mon's) and a released
+  trap link (a fainted or departed mon's own, or one pointing at such a foe; a
+  departure is a pre-step active replaced in either tree), each checked per mon
+  against stored base arrays, and the trackers of its side. A lane whose
+  residual ran in exactly one tree is a cascade on both sides that also accepts
+  the residual handlers' state writes and the tracker families they and the
+  end-of-turn hooks write (not every tracker): a phase shift (the residual was
+  deferred in exactly one tree: a KO moved between the action and residual
+  phases) or a terminal step (the battle ended in either tree) whose residual
+  ran in exactly one tree, which both passes record per lane. Any other terminal
+  step accepts only the end-of-turn writes gated on the battle ending (the
+  survivor's Truant flip and turn_end's upkeep). All are counted and flagged per
+  lane. Anything else stays unexpected.
 
 Report: unchanged, changed-and-involved per effect with its changed fields,
 changed-but-uninvolved and changed-involved-unexpected-fields (both must be
@@ -45,6 +50,11 @@ changes; any other changed leaf on it still needs an involved effect. PR0's
 remaining changes (the Intimidate and weather reveal gates, the Color Change
 type revert on departure, the Mean Look clear on both seats at every arrival)
 are the `PR0` plug-in; its Mean Look predicate also reads the tracker pre-value.
+
+Special rule (R): while the base pass lacks `state.effect_draws`, the leaf is
+checked against an independent copy of the design 2.1 derivation (the effect
+block a deferred step saves, the resumed block or zero otherwise) instead of
+against its migrated default, so the appended stream itself is never involvement.
 
 The involvement superset resolves the executed move as the engine does (slot,
 charge, standing or same-turn Encore, Struggle, a resumed queued action, every
@@ -84,6 +94,10 @@ FAINT_CLEAR_MON = ('confusion_turns', 'encore_turns', 'wrap_trap_turns', 'stall_
 FAINT_CLEAR_SEATS = ('meanlook_trap',)
 FAINT_CLEAR_LEAVES = tuple(['trackers.public_volatiles'] + [f"trackers.mon_features['{k}']" for k in FAINT_CLEAR_MON + FAINT_CLEAR_SEATS])
 PUBLIC_ORDER = 'trackers.public_order'
+# Fidelity R (design 2.1): the saved effect stream. While the base pass predates the leaf it is checked
+# against an independent copy of the design's derivation (EFFECT_SALT, EFFECT_BOUNDS) instead of bitwise.
+EFFECT_DRAWS = 'state.effect_draws'
+EFFECT_SALT, EFFECT_BOUNDS = 1732050, (16, 16, 4, 2)
 MEANLOOK = "trackers.mon_features['meanlook_trap']"
 PRE_TRACKERS = (MEANLOOK, 'trackers.active_slot')
 TRAP_MOVES = ('meanlook', 'spiderweb', 'block')
@@ -409,6 +423,14 @@ def move(*names):
     return lambda p: p.side_uses(*names)
 
 
+def ooze_leech_seed(p):
+    """R: a side holding Liquid Ooze in its party while Leech Seed may drain it at this step's residual: one of its
+    mons carries the seed (Baton Pass moves it to the recipient), or the foe may use Leech Seed now."""
+    ooze = np.isin(p.s['ability'], p.ability_ids('liquidooze')).any(-1)
+    seeded = ((np.asarray(p.s['volatile']).astype(np.uint32) & 4) != 0).any(-1)
+    return ooze & (seeded | p.side_uses('leechseed')[:, ::-1])
+
+
 def substitute_holder(p):
     """A1 (design 13): a side whose active may faint behind a Substitute this step, whose
     Substitute the faint now clears: one up in the pre-state (a Baton recipient inherits
@@ -452,7 +474,11 @@ FAMILIES = {
 ALL = dict(user=('all',), target=('all',), glob=('all',))
 # KO cascade: leaves any faint difference may change (both sides / side-less).
 FAMILIES['ko'] = (r'^state\.(forced_switch|pending_residual|queued_actor|queued_actions|queued_stall|residual_draws|'
-                  r'phazing_draws|secondary_draws|sleep_talk_draws|replacement_count|done|winner)$', r'^trackers\.fainted$')
+                  r'phazing_draws|secondary_draws|sleep_talk_draws|replacement_count|done|winner)$', r'^trackers\.fainted$',
+                  # R: a mon that faints before its turn executes no move: the step's executed-move count.
+                  r'^step\.placeholder_moves$')
+# R: ...nor records an action: its side's action history, accepted on a side with a newly (un)fainted mon.
+FAMILIES['ko_action'] = (r'^state\.(last_action_kind|last_action_index)$',)
 # A1: a KO cancels the remaining queued action (that actor's last_move) and the end-of-step clear zeroes a
 # fainted mon's last_move; linking.prune releases a link whose owner or target fainted, on either side.
 # A2 (review L2): accepted per mon against stored base arrays (KO_LINK_LEAVES, link_ok), never as whole leaves.
@@ -479,10 +505,18 @@ FAMILIES['residual_trackers'] = (
     r"^trackers\.mon_features\['(sleep_turns|rest_sleep|toxic_stage|sleep_skipped_turns|sleep_cant_pending|sleep_usable_pending|"
     r"confusion_turns|encore_turns|wrap_trap_turns|stall_counter|sub_present|meanlook_trap|item_swapped|choice_locked|"
     r"last_damage_dealt|last_damage_taken|turns_active|turns_active_total)'\]$")
+# A2 review L1: a terminal step whose residual ran in both trees or in neither. Only the end-of-turn writes gated
+# on `done` differ: the Truant flip of the survivor (transition, `ordinary & ~work.done`) and turn_end's upkeep
+# (`residual_ready & ~work.done`: the Sleep Talk pending clocks, the port's post-upkeep flag, negative items).
+FAMILIES['terminal'] = (r'^state\.truant_loaf$',
+    r"^trackers\.mon_features\['(sleep_skipped_turns|sleep_cant_pending|sleep_usable_pending)'\]$",
+    r'^trackers\.public_port\.post_upkeep$', r'^trackers\.negative_items\.')
+# R: a Focus Punch user losing focus (state.volatile's FOCUS_LOST bit) to a hit that now reaches it.
+FAMILIES['focus'] = (r'^state\.volatile$',)
 # Per-mon state a faint may change on the mon that (un)fainted; checked per mon against stored base arrays.
 KO_MON_LEAVES = tuple(f'state.{n}' for n in ('status', 'status_counter', 'sleep_skipped', 'rest_origin', 'volatile',
     'confusion_counter', 'boosts', 'encore_move', 'encore_counter', 'charge_move', 'charge_counter', 'choice_move',
-    'protect_counter', 'truant_loaf'))
+    'protect_counter', 'truant_loaf', 'pp'))      # pp (R): a mon KO'd before its turn spends none
 # effect -> leaves it may change: user (acting side), target (the other side), glob (side-less).
 # A1's sets: a stat change alters damage taken later in the step (and pinch berries);
 # a sleep landing or not decides whether the target acts at all, so it may change anything.
@@ -523,7 +557,24 @@ ALLOWED = {
     # Destiny Bond: the user's bit and bag; its trigger faints the foe (KO cascade rules for the rest).
     'destinybond': dict(user=('bond',), target=('hp',), glob=()),
     'destinybond_trigger': dict(user=('bond', 'hp'), target=('hp',), glob=()),
+    # R. Bonemerang's second hit: more damage to the target or its Substitute (the device's presence and bag
+    # when the second hit breaks it), and what follows from the target's HP: its HP-gated items (pinch berry
+    # and stages), a pending Wish landing by HP, Color Change and its reveal when the second hit is the first
+    # to reach it, the belief refresh of a changed condition, a Focus Punch losing focus. The user's HP follows
+    # from the target's reply (Counter/Mirror Coat read the second hit, a lost Focus Punch) and its HP items.
+    'bonemerang': dict(user=('hp', 'item', 'boosts', 'visible'),
+                       target=('hp', 'item', 'boosts', 'typechange', 'reveal', 'visible', 'subtracker', 'wish', 'focus'),
+                       glob=()),
+    # R (optional carry from A2): Liquid Ooze on Leech Seed. The holder (user) is revealed; the seeder (target) takes
+    # damage instead of healing, and a slower seeder's later residual handlers (a pinch berry, its condition) follow.
+    'ooze_seed': dict(user=('reveal',), target=('hp', 'visible', 'item', 'boosts'), glob=()),
 }
+
+
+# Allowances an effect earns only on a KO cascade in which the other side (its target's) has a newly (un)fainted
+# mon: R: a second-hit KO of a slower target cancels its queued move, which can then no longer status the user
+# (seen: a thawing Parasect's Spore; the Sleep Clause port and the public status bag follow the status).
+KO_ALLOWED = {'bonemerang': dict(user=('status', 'clause'))}
 
 
 def allowed_leaf(name, families):
@@ -544,7 +595,7 @@ PLUGINS = {
                sleep_immunity=sleep_immunity, sub_faint=substitute_holder),
     'A2': dict(knockoff=move('knockoff'), gigadrain=move('gigadrain'), counter=move('counter'), mirrorcoat=move('mirrorcoat'),
                destinybond=move('destinybond'), destinybond_trigger=destiny_bond_bit),
-    'R': dict(bonemerang=move('bonemerang')),
+    'R': dict(bonemerang=move('bonemerang'), ooze_seed=ooze_leech_seed),
     'B': dict(irontail=move('irontail'), signalbeam=move('signalbeam'), steelwing=move('steelwing'),
               meteormash=move('meteormash'), headbutt=move('headbutt'), needlearm=move('needlearm'),
               confusion=confusion_active),
@@ -579,9 +630,13 @@ def lane_verdict(changed, effects, side_axis, *, cascade=None, waive=()):
             else:ok |= any(allowed_leaf(leaf, rule['user' if side == a else 'target']) for a in actors)
             if ok:break
         if not ok and cascade is not None:
-            ko = (allowed_leaf(leaf, ('hp', 'ko', 'turnline') + tuple(cascade.get('families', ())))
+            # An effect's KO-only allowance on its actor's side, when the other side has a newly (un)fainted mon.
+            ko = side is not None and any(side == a and bool(cascade['ko_sides'][1 - a])
+                and allowed_leaf(leaf, KO_ALLOWED.get(effect, {}).get('user', ())) for effect, actors in effects.items() for a in actors)
+            ko = ko or (allowed_leaf(leaf, ('hp', 'ko', 'turnline') + tuple(cascade.get('families', ())))
                   or (side is not None and leaf in KO_MON_LEAVES + KO_LINK_LEAVES and cascade['mon_ok'](leaf, side))
-                  or (side is not None and leaf.startswith('trackers.') and bool(cascade['ko_sides'][side])))
+                  or (side is not None and (leaf.startswith('trackers.') or allowed_leaf(leaf, ('ko_action',)))
+                      and bool(cascade['ko_sides'][side])))
             if ko:by_ko.append((leaf, side));continue
         if ok:continue
         (waived if any(re.search(w, leaf) for w in waive) else unexpected).append((leaf, side))
@@ -594,18 +649,26 @@ def active_mask(active):
     return np.arange(6)[None, :] == active[:, None]
 
 
-def link_ok(leaf, side, a, b, ko_mons, acting):
+def link_ok(leaf, side, a, b, ko_mons, acting, *, departed):
     """[6] mons of `side` whose KO_LINK_LEAVES entry a KO cascade may change (a, b: patched and base values).
 
     last_move: a fainted mon's is cleared at step end, and a cancelled action is an active's (the actor
-    at its turn: the pre-step or post-step active). trap_source: a fainted or departing (active) mon's own
-    link, or a link pointing at such a foe (linking.prune / entry.depart release it).
+    at its turn: the pre-step or post-step active). trap_source (A2 review L2): only a mon that fainted or
+    departed ([2,6]: the pre-step active whose post-step active differs in either tree) releases a link:
+    its own, or one pointing at it from the other side (linking.prune / entry.depart release both).
     """
     own = ko_mons[side] | acting[side]
     if leaf == 'state.last_move':return own
-    other = ko_mons[1 - side] | acting[1 - side]
-    points = lambda v: (np.asarray(v) >= 0) & other[np.clip(np.asarray(v), 0, 5)]
-    return own | points(a) | points(b)
+    gone = ko_mons | departed
+    points = lambda v: (np.asarray(v) >= 0) & gone[1 - side][np.clip(np.asarray(v), 0, 5)]
+    return gone[side] | points(a) | points(b)
+
+
+def departed_mask(pre_active, post_active, base_post_active=None):
+    """[2,6] the pre-step actives that left the field in this tree or the base tree (A2 review L2)."""
+    pre = np.asarray(pre_active);left = pre != np.asarray(post_active)
+    if base_post_active is not None:left = left | (pre != np.asarray(base_post_active))
+    return active_mask(pre) & left[:, None]
 
 
 # ---------------------------------------------------------------------------
@@ -689,39 +752,64 @@ class Stepper:
     base_names: output names of the base pass; outputs outside it are new, and
     their own pre values are digested too (new leaves must keep their defaults).
     """
-    def __init__(self, step_fn, treedef, *, base_names=None, faint_leaves=FAINT_CLEAR_LEAVES, record_installs=False):
+    def __init__(self, step_fn, treedef, *, base_names=None, faint_leaves=FAINT_CLEAR_LEAVES, record_installs=False,
+                 effect_rule=False):
         import jax
         import jax.numpy as j
         names = {}
         def traced(leaves):
             state, actions, trackers = jax.tree.unflatten(treedef, leaves)
-            lanes = state.hp.shape[0];calls = []
-            if record_installs:
-                from gpu_engine import engine_device_public_hooks as hooks
-                original = hooks.install
-                def recorder(c, st, side, use, *, initial=False):
-                    out = original(c, st, side, use, initial=initial)
-                    s = j.broadcast_to(j.asarray(side, j.int32), (lanes,))
-                    slot = out.trackers.active_slot[j.arange(lanes), s]
-                    calls.append((s, slot, j.broadcast_to(j.asarray(use, j.bool_), (lanes,)) & (not initial)))
-                    return out
-                hooks.install = recorder
-                try:out = step_fn(state, actions, trackers)
-                finally:hooks.install = original
-            else:
-                out = step_fn(state, actions, trackers)
+            lanes = state.hp.shape[0];calls = [];ran = []
+            # A2 review L1: whether the residual ran, read at its one weather clock call (eligible is
+            # transition's residual_ready there: only Wish heals between the two). None if never called.
+            from gpu_engine import weather as climate
+            clock = climate.residual_clock
+            def clock_recorder(weather, counter, *, eligible=True, **extra):
+                ran.append(j.broadcast_to(j.asarray(eligible, j.bool_), (lanes,)))
+                return clock(weather, counter, eligible=eligible, **extra)
+            climate.residual_clock = clock_recorder
+            try:
+                if record_installs:
+                    from gpu_engine import engine_device_public_hooks as hooks
+                    original = hooks.install
+                    def recorder(c, st, side, use, *, initial=False):
+                        out = original(c, st, side, use, initial=initial)
+                        s = j.broadcast_to(j.asarray(side, j.int32), (lanes,))
+                        slot = out.trackers.active_slot[j.arange(lanes), s]
+                        calls.append((s, slot, j.broadcast_to(j.asarray(use, j.bool_), (lanes,)) & (not initial)))
+                        return out
+                    hooks.install = recorder
+                    try:out = step_fn(state, actions, trackers)
+                    finally:hooks.install = original
+                else:
+                    out = step_fn(state, actions, trackers)
+            finally:
+                climate.residual_clock = clock
             named_in = name_inputs(state, actions, trackers);named_out = name_outputs(out)
             names['out'], digests = digest_named(named_out, lanes)
             names['side_axis'] = [has_side_axis(n, named_out[n].shape, lanes) for n in names['out']]
             new = [n for n in sorted(named_out) if base_names is not None and n not in base_names and n in named_in]
             names['pre'] = new
             pre = digest_named({n: named_in[n] for n in new}, lanes)[1] if new else j.zeros((lanes, 0, 2, 2), j.uint32)
+            effect_ok = None
+            if effect_rule:
+                # The design's derivation, copied: fold_in(split(keys,2)[1], EFFECT_SALT); a resumed turn reuses its
+                # saved block; the block is saved exactly when the step defers its residual; idle lanes keep theirs.
+                split = jax.vmap(lambda k: jax.random.split(k, 2))(state.keys)[:, 1]
+                fresh = jax.vmap(lambda k: jax.random.randint(jax.random.fold_in(k, EFFECT_SALT), (2, 4), 0,
+                    j.array(EFFECT_BOUNDS, j.int32)))(split)
+                live = ~state.done & ~out.step.invalid_actions
+                used = j.where((live & state.pending_residual)[:, None, None], state.effect_draws, fresh)
+                saved = j.where(out.step.state.pending_residual[:, None, None], used, 0)
+                reference = j.where(live[:, None, None], saved, state.effect_draws)
+                effect_ok = (out.step.state.effect_draws == reference).all(-1)              # [L,2]
             return dict(digests=digests, pre_digests=pre, fainted=(state.hp > 0) & (out.step.state.hp <= 0),
                 extra={n: named_out[n] for n in faint_leaves if n in named_out}, calls=calls,
                 ko={n: named_out[n] for n in KO_MON_LEAVES + KO_LINK_LEAVES if n in named_out},
                 post_active=out.step.state.active, post_done=out.step.state.done,
                 physical_to_public=out.trackers.physical_to_public, active_slot=out.trackers.active_slot,
-                public_order=named_out.get(PUBLIC_ORDER))
+                public_order=named_out.get(PUBLIC_ORDER), residual_ran=ran[0] if len(ran) == 1 else None,
+                effect_ok=effect_ok)
         self._jit = jax.jit(traced);self._names = names
 
     def __call__(self, leaves):
@@ -793,7 +881,7 @@ def base_pass(args, *, step_override=None, prepared=None):
     tables = context['prepared']
     stepper = Stepper(step_override or _engine_step(tables), treedef)
     shards = shard_list(args, capture);pad = args.pad_lanes or 0
-    names = side_axis = None;lane_steps = 0;live = 0;begin = time.perf_counter()
+    names = side_axis = None;lane_steps = 0;live = 0;begin = time.perf_counter();residual_recorded = False
     for index, (path, (leaves, tick, level)) in enumerate(prefetched(shards)):
         lanes = int(leaves[0].shape[0])
         named, filled = migrate(capture_names, leaves, template_named, defaults=defaults)
@@ -807,6 +895,10 @@ def base_pass(args, *, step_override=None, prepared=None):
             fainted=fainted, faint_lanes=faint_lanes)
         for i, n in enumerate(sorted(result['extra'])):record[f'faint_{i:02d}'] = result['extra'][n][faint_lanes]
         for i, n in enumerate(sorted(result['ko'])):record[f'ko_{i:02d}'] = result['ko'][n][:real]
+        # A2 review L1/L2: whether the residual ran, and the post-step actives (a departure in this tree).
+        record['post_active'] = np.asarray(result['post_active'])[:real]
+        if result['residual_ran'] is not None:record['residual_ran'] = np.asarray(result['residual_ran'])[:real]
+        residual_recorded = result['residual_ran'] is not None
         np.savez_compressed(out / f'digest-{path.stem}.npz', **record)
         lane_steps += real;live += int((~done).sum())
         if index % 50 == 0:log('BASE_SHARD', index=index, shard=path.name, lanes=lanes, padded=pad or lanes, seconds=time.perf_counter() - begin)
@@ -817,6 +909,7 @@ def base_pass(args, *, step_override=None, prepared=None):
         output_names=names, side_axis=side_axis, input_names=names_order, migrated_new_inputs=sorted(filled or ()),
         faint_leaves=sorted(n for n in FAINT_CLEAR_LEAVES if n in names),
         ko_leaves=sorted(n for n in KO_MON_LEAVES + KO_LINK_LEAVES if n in names),
+        residual_ran_recorded=residual_recorded, post_active_recorded=True,
         pad_lanes=pad, digest_seeds=list(DIGEST_SEEDS),
         jax=jax.__version__, backend=jax.default_backend(), seconds=time.perf_counter() - begin)
     (out / 'manifest.json').write_text(json.dumps(manifest, indent=1) + '\n')
@@ -889,17 +982,20 @@ def patched_pass(args, *, step_override=None, prepared=None):
     # The replay rule is for the PR that adds public_order (its base pass lacks the leaf); once
     # the base pass has it too (a migrated identity pre), the leaf is compared bitwise.
     public_order_rule = PUBLIC_ORDER in new_inputs and PUBLIC_ORDER not in base_names
-    stepper = Stepper(step_override or _engine_step(tables), treedef, base_names=set(base_names), record_installs=public_order_rule)
+    # Fidelity R: likewise the saved effect block is checked against the design's derivation while the base lacks it.
+    effect_rule = EFFECT_DRAWS in new_inputs and EFFECT_DRAWS not in base_names
+    stepper = Stepper(step_override or _engine_step(tables), treedef, base_names=set(base_names), record_installs=public_order_rule,
+        effect_rule=effect_rule)
     shards = [p for p in shard_list(args, capture) if p.name in set(manifest['shards'])]
     if args.limit == 0 and len(shards) != len(manifest['shards']):raise ValueError('shard set differs from the base pass')
     usable = jax.jit(state_module.usable_moves)
     callable_moves = np.asarray(tables.engine_tables.sleep_talk.callable)
     destiny_bond = getattr(state_module, 'DESTINY_BOND', DEFAULT_DESTINY_BOND)
     counts = dict(lane_steps=0, done_skipped=0, unchanged=0, changed_and_involved=0, changed_but_uninvolved=0,
-                  changed_involved_unexpected_fields=0, ko_cascade=0, phase_shift=0, terminal=0, waived=0, rule_explained=0,
-                  faint_rule_leaves=0)
+                  changed_involved_unexpected_fields=0, ko_cascade=0, phase_shift=0, terminal=0, terminal_residual=0, waived=0,
+                  rule_explained=0, faint_rule_leaves=0, effect_draws_saved=0)
     by_effect = {k: dict(changed=0, involved_unchanged=0, changed_fields={}, unexpected_fields={}, ko_cascade=0,
-                         phase_shift=0, terminal=0, ko_cascade_non_hp_fields={}) for k in table}
+                         phase_shift=0, terminal=0, terminal_residual=0, ko_cascade_non_hp_fields={}) for k in table}
     ko_leaves = manifest.get('ko_leaves')
     if ko_leaves is None:raise SystemExit('base pass predates the KO-cascade arrays; re-run the base pass')
     # last_move/trap_source are checked per mon against the base arrays; a base pass without them gets the
@@ -907,6 +1003,12 @@ def patched_pass(args, *, step_override=None, prepared=None):
     link_rule = 'per-mon' if all(n in ko_leaves for n in KO_LINK_LEAVES) else 'ko-side'
     if link_rule != 'per-mon':
         warnings.append('base pass predates the per-mon last_move/trap_source arrays: whole-KO-side fallback rule')
+    # A2 review L1: a terminal step widens to the residual families only where the residual ran in exactly one tree.
+    residual_rule = 'per-lane' if manifest.get('residual_ran_recorded') else 'all-terminal'
+    if residual_rule != 'per-lane':
+        warnings.append('base pass predates the residual-ran record: every terminal step takes the residual families')
+    if not manifest.get('post_active_recorded'):
+        warnings.append('base pass predates the post-step actives: departures are read from this tree only')
     uninvolved_leaves = {};new_outputs = None
     listing = (out / 'changed.jsonl').open('x');begin = time.perf_counter()
     names_order = _template_names(template)
@@ -921,6 +1023,7 @@ def patched_pass(args, *, step_override=None, prepared=None):
             if missing:raise ValueError(f'output leaves removed by this tree: {missing[:8]}')
             new_outputs = sorted(set(names) - set(base_names))
             digests = result['digests'][:real]
+            done_now = np.asarray(named['state.done'])
             base = np.load(base_dir / f'digest-{path.stem}.npz')
             diff = np.zeros((real, len(names), 2), bool)
             shared = [position[n] for n in base_names]
@@ -929,6 +1032,10 @@ def patched_pass(args, *, step_override=None, prepared=None):
             for k, n in enumerate(result['pre_names']):
                 if n == PUBLIC_ORDER and public_order_rule:continue
                 diff[:, position[n]] = (digests[:, position[n]] != result['pre_digests'][:real, k]).any(-1)
+                if n == EFFECT_DRAWS and effect_rule:
+                    # A saved block equal to the derivation explains the change; anything else stays a change.
+                    counts['effect_draws_saved'] += int((diff[:, position[n]].any(-1) & ~done_now[:real]).sum())
+                    diff[:, position[n]] = ~np.asarray(result['effect_ok'])[:real]
             for n in new_outputs:
                 if n not in result['pre_names']:diff[:, position[n]] = True          # a new output with no pre value
             if public_order_rule:
@@ -949,6 +1056,12 @@ def patched_pass(args, *, step_override=None, prepared=None):
             # A terminal step: the battle ended in either tree (post done here, or done differing from the base).
             done_diff = diff[:, position['state.done']].any(-1) if 'state.done' in position else np.zeros(real, bool)
             terminal_lanes = np.asarray(result['post_done'])[:real].astype(bool) | done_diff
+            # A2 review L1: the residual ran in exactly one tree (unknown without both records: every terminal step).
+            if residual_rule == 'per-lane' and 'residual_ran' in base.files and result['residual_ran'] is not None:
+                residual_lanes = np.asarray(result['residual_ran'])[:real] != base['residual_ran']
+            else:
+                residual_lanes = np.ones(real, bool)
+            base_post_active = base['post_active'] if 'post_active' in base.files else None
             base_ko = {n: base[f'ko_{i:02d}'] for i, n in enumerate(ko_leaves)}
             pre_active = np.asarray(named['state.active'])[:real];post_active = np.asarray(result['post_active'])[:real]
             faint_base = {};faint_set = set()
@@ -978,19 +1091,26 @@ def patched_pass(args, *, step_override=None, prepared=None):
                 rule_ok = bool(changed) and not entries
                 changed_rest = sorted({leaf for leaf, _ in entries})
                 phase = bool(phase_lanes[lane]);terminal = bool(terminal_lanes[lane]) and not phase
+                terminal_residual = terminal and bool(residual_lanes[lane])
                 cascade = bool(cascade_lanes[lane]) or phase or terminal;cascade_info = None
                 if cascade:
                     ko_mons = ko_mons_all[lane]
                     acting = active_mask(pre_active[lane]) | active_mask(post_active[lane])        # [2,6]
-                    def mon_ok(leaf, side, lane=lane, ko_mons=ko_mons, acting=acting):
+                    departed = departed_mask(pre_active[lane], post_active[lane],
+                        None if base_post_active is None else base_post_active[lane])
+                    def mon_ok(leaf, side, lane=lane, ko_mons=ko_mons, acting=acting, departed=departed):
                         if leaf not in base_ko:
                             return leaf in KO_LINK_LEAVES and bool(ko_mons[side].any())         # fallback, warned
                         a = np.asarray(result['ko'][leaf][lane][side]);b = np.asarray(base_ko[leaf][lane][side])
                         differ = (a != b).reshape(6, -1).any(-1)
-                        allowed = link_ok(leaf, side, a, b, ko_mons, acting) if leaf in KO_LINK_LEAVES else ko_mons[side]
+                        allowed = (link_ok(leaf, side, a, b, ko_mons, acting, departed=departed) if leaf in KO_LINK_LEAVES
+                            else ko_mons[side])
                         return not (differ & ~allowed).any()
-                    cascade_info = dict(ko_sides=ko_mons.any(-1), mon_ok=mon_ok,
-                        families=('residual', 'residual_trackers') if phase or terminal else ())
+                    # A phase shift, or a terminal step whose residual ran in one tree only, accepts the residual
+                    # handlers' writes; any other terminal step only the done-gated end-of-turn writes (L1).
+                    families = (('residual', 'residual_trackers') if phase or terminal_residual
+                        else ('terminal',) if terminal else ())
+                    cascade_info = dict(ko_sides=ko_mons.any(-1), mon_ok=mon_ok, families=families)
                 unexpected, waived, by_ko = lane_verdict(entries, effects, side_axis, cascade=cascade_info, waive=args.waive or ()) \
                     if changed_rest and effects else ([], [], [])
                 kind = classify(changed, bool(effects), rule_ok, unexpected)
@@ -1003,10 +1123,11 @@ def patched_pass(args, *, step_override=None, prepared=None):
                 elif kind in ('involved', 'unexpected'):
                     counts['changed_and_involved' if kind == 'involved' else 'changed_involved_unexpected_fields'] += 1
                     counts['ko_cascade'] += cascade;counts['phase_shift'] += phase;counts['terminal'] += terminal
+                    counts['terminal_residual'] += terminal_residual
                     counts['waived'] += bool(waived)
                     for e, actors in effects.items():
                         stats = by_effect[e];stats['changed'] += 1;stats['ko_cascade'] += cascade;stats['phase_shift'] += phase
-                        stats['terminal'] += terminal
+                        stats['terminal'] += terminal;stats['terminal_residual'] += terminal_residual
                         for leaf, side in by_ko:
                             if allowed_leaf(leaf, ('hp',)):continue
                             role = 'glob' if side is None else ('user' if side in actors else 'target')
@@ -1021,7 +1142,7 @@ def patched_pass(args, *, step_override=None, prepared=None):
                     counts['changed_but_uninvolved'] += 1
                     for n in changed_rest:uninvolved_leaves[n] = uninvolved_leaves.get(n, 0) + 1
                 listing.write(json.dumps(dict(shard=path.name, lane=lane, tick=tick, kind=kind, ko_cascade=cascade, phase_shift=phase,
-                    terminal=terminal,
+                    terminal=terminal, terminal_residual=terminal_residual,
                     involved={k: v for k, v in effects.items()}, leaves=changed, entries=labels, faint_rule=faint_explained,
                     unexpected=[f"{l}@{'glob' if s is None else s}" for l, s in unexpected],
                     ko_consequences=[f"{l}@{'glob' if s is None else s}" for l, s in by_ko],
@@ -1038,8 +1159,10 @@ def patched_pass(args, *, step_override=None, prepared=None):
         source_dirty=dirty, allow_dirty=bool(args.allow_dirty), oracle_digest=digest, base_oracle_digest=manifest['oracle_digest'],
         capture_sha256=capture_sha, **base_check, shards=len(shards), partial=partial, failures=failures,
         migrated_new_inputs=new_inputs, new_outputs=new_outputs, public_order_rule=public_order_rule, link_rule=link_rule,
+        effect_rule=effect_rule, residual_rule=residual_rule,
         faint_clear_rule=bool(args.faint_clear), waive=list(args.waive or ()), counts=counts, by_effect=by_effect,
         allowed_fields={e: ALLOWED.get(e, 'UNDECLARED: any change') for e in table},
+        ko_allowed_fields={e: KO_ALLOWED[e] for e in table if e in KO_ALLOWED},
         uninvolved_leaves=dict(sorted(uninvolved_leaves.items(), key=lambda x: -x[1])), warnings=warnings,
         passed=False if failures else (None if partial else True), seconds=time.perf_counter() - begin)
     (out / 'report.json').write_text(json.dumps(report, indent=1) + '\n')

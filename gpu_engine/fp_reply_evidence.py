@@ -1,7 +1,7 @@
 """Reply-model evidence on Foul Play's sets, for the definitive RR's reweighted worlds.
 
 usage: python -m gpu_engine.fp_reply_evidence export RUN_DIRECTORY OUT --pi-fp PT [--shard I --shards N] [--limit N]
-           [--extra-sets RR/shard-*/rows-*.jsonl]
+           [--extra-sets RR/shard-*/rows-*.jsonl] [--ordinals ORDINALS.json]
        python -m gpu_engine.fp_reply_evidence weights --evidence OUT --rows ROWS/rows-*.jsonl --out WEIGHTS.jsonl
            [--drop-battles DROP.json] [--allow-partial]
 
@@ -15,7 +15,11 @@ training data are refused: the evidence must come from games the model never saw
 set a decided root's world drew for a Foul Play Pokémon (with its item, not one removed in public) is scored beside the belief
 engine's candidates when that Pokémon is active (the live constructor draws from a pool of generated teams, which can hold
 sets the belief engine does not offer). A set's loglik does not depend on the other candidates, and the extra sets are scored
-in their own batch, so every candidate's loglik is bit-identical to an export without them.
+in their own batch, so every candidate's loglik is bit-identical to an export without them. --ordinals: only those games (a JSON
+list of ordinals, e.g. the MC gate bank's Foul Play games). --test-seeds and --late-from: the split π_FP was trained under
+(fp_reply_train's flags), so only its fitted (train and validation) games are refused, not its held-out test and late games;
+a checkpoint that records its split (fp_reply.split.fit_seeds) is refused on exactly those seeds, and the flags must agree.
+An unreadable data directory (no shard, or a shard without seed and ordinal arrays) stops the export.
 
 weights: join the evidence with the RR re-pricer's rows. A world's loglik is the sum over Foul Play's Pokémon in that world
 with evidence (n > 0) of the loglik of the world's set for it (set_key: move keys, ability, item, as fp_reply_reweight's
@@ -193,6 +197,46 @@ def extra_sets(rr_rows):
     return out
 
 
+def data_seeds(data_dir):
+    """{seed, ordinal} arrays of π_FP's data directory, reading only those two arrays of each shard (fp_reply_train.load reads
+    every array). Fails closed: no shard, or a shard without a seed or ordinal array, raises (an unreadable data directory must
+    never refuse nothing)."""
+    import numpy as np
+    seeds, ordinals = [], []
+    paths = sorted(glob.glob(str(Path(data_dir) / 'shard-*.npz')))
+    if not paths:raise ValueError(f'{data_dir}: no shard-*.npz: π_FP\'s training games are unknown')
+    for path in paths:
+        with np.load(path) as shard:
+            if 'seed' not in shard.files or 'ordinal' not in shard.files:raise ValueError(f'{path}: no seed or ordinal array')
+            seeds.append(np.asarray(shard['seed']));ordinals.append(np.asarray(shard['ordinal']))
+    return dict(seed=np.concatenate(seeds), ordinal=np.concatenate(ordinals))
+
+
+def training_seeds(data_dir, test_seeds=None, late_from=None, recorded=None):
+    """The battle seeds π_FP was fitted on (fails closed through data_seeds).
+    - recorded: the checkpoint's own split record (fp_reply.split, written by fp_reply_train): its fit_seeds exactly. Given flags
+      must reproduce them (ValueError otherwise).
+    - else, with the split π_FP was trained under (fp_reply_train --test-seeds, optionally --late-from): its train and validation
+      games (fp_reply_train.split_rows); every test seed must have rows in the data (fp_reply_train.read_test_seeds' rule).
+    - else every battle seed in its data directory (which also holds its held-out games)."""
+    import numpy as np
+    arrays = data_seeds(data_dir)
+    if late_from is not None and test_seeds is None:raise ValueError('late_from needs test_seeds (fp_reply_train.split_rows)')
+    fit = None
+    if test_seeds is not None:
+        if not test_seeds or not all(type(x) is int for x in test_seeds):raise ValueError('test_seeds: a non-empty list of integer battle seeds')
+        absent = sorted(set(test_seeds) - set(np.unique(arrays['seed']).tolist()))
+        if absent:raise ValueError(f'{len(absent)} of {len(test_seeds)} test seeds have no rows in the data (first: {absent[:5]})')
+        from gpu_engine import fp_reply_train as train
+        rows = train.split_rows(arrays, set(test_seeds), late_from)
+        fit = {int(x) for x in arrays['seed'][np.concatenate([rows['train'], rows['val']])]}
+    if recorded is not None and recorded.get('fit_seeds') is not None:
+        exact = {int(x) for x in recorded['fit_seeds']}
+        if fit is not None and fit != exact:raise ValueError("the given split's fitted seeds differ from the checkpoint's recorded fit_seeds")
+        return exact
+    return fit if fit is not None else {int(x) for x in arrays['seed']}
+
+
 def export(args):
     import torch
     from pokezero.dex import load_showdown_dex_cached
@@ -204,11 +248,17 @@ def export(args):
     run, out = Path(args.run_directory), Path(args.out);out.mkdir(parents=True, exist_ok=True);started = time.time()
     marker = torch.load(args.pi_fp, map_location='cpu', weights_only=True).get('fp_reply') or {}
     if not marker.get('data'):raise SystemExit(f'{args.pi_fp} has no fp_reply.data marker: its training games are unknown')
-    trained_seeds = {int(x) for x in train_mod.load(marker['data'])['seed']}
+    split = None
+    if args.test_seeds:split = dict(test_seeds=json.loads(Path(args.test_seeds).read_text()), late_from=args.late_from)
+    elif args.late_from is not None:raise SystemExit('--late-from needs --test-seeds (the split π_FP was trained under)')
+    try:trained_seeds = training_seeds(marker['data'], **(split or {}), recorded=marker.get('split'))
+    except ValueError as error:raise SystemExit(f'π_FP training seeds: {error}') from None
     model, result = load_transformer_checkpoint(args.pi_fp, map_location='cpu');model.eval()
     if int(result.model_config.window_size) != 1:raise SystemExit(f'π_FP has window {result.model_config.window_size}; this export feeds window 1')
     paths = sorted(glob.glob(str(run / 'results' / '*.json')), key=lambda p: int(Path(p).stem))
     paths = [p for p in paths if int(Path(p).stem) % args.shards == args.shard]
+    if args.ordinals:   # only these games (e.g. the MC gate bank's Foul Play games)
+        keep = {int(x) for x in json.loads(Path(args.ordinals).read_text())};paths = [p for p in paths if int(Path(p).stem) in keep]
     data_mod.SCREEN_BAND = (0, 0)   # RR's games are the screen's
     extras = extra_sets(_jsonl(sorted(args.extra_sets))) if args.extra_sets else {}
     checks, mismatches, examples = collections.Counter(), collections.Counter(), {}
@@ -246,7 +296,8 @@ def export(args):
     if env is not None:env.close()
     (out / f'evidence-{args.shard}.jsonl').write_text(''.join(json.dumps(r) + '\n' for r in rows))
     summary = dict(schema=SCHEMA, run_directory=str(run), pi_fp=str(args.pi_fp), pi_fp_sha256=checkpoint_file_sha256(args.pi_fp),
-                   pi_fp_redaction=marker.get('redaction'), shard=args.shard, shards=args.shards, games=games, rows=len(rows), checks=dict(checks),
+                   pi_fp_redaction=marker.get('redaction'), refused_split=None if split is None else dict(split, test_seeds=len(split['test_seeds'])), refused_recorded_split=bool((marker.get('split') or {}).get('fit_seeds')),
+                   refused_seeds=len(trained_seeds), shard=args.shard, shards=args.shards, games=games, rows=len(rows), checks=dict(checks),
                    extra_sets=sorted(str(Path(p).resolve()) for p in args.extra_sets or ()),
                    mismatched=sum(mismatches.values()), mismatch_reasons=dict(mismatches), mismatch_examples=examples,
                    seconds=round(time.time() - started, 1))
@@ -287,6 +338,9 @@ def main(argv=None):
     e = sub.add_parser('export');e.add_argument('run_directory');e.add_argument('out');e.add_argument('--pi-fp', required=True)
     e.add_argument('--shard', type=int, default=0);e.add_argument('--shards', type=int, default=1);e.add_argument('--limit', type=int, default=0)
     e.add_argument('--extra-sets', nargs='+', help="the RR re-pricer's rows: score their worlds' sets too")
+    e.add_argument('--ordinals', help="a JSON list of the run directory's game ordinals: export only those games")
+    e.add_argument('--test-seeds', help="π_FP's fixed test battle seeds (fp_reply_train --test-seeds): refuse only its fitted games")
+    e.add_argument('--late-from', type=int, help="π_FP's late held-out ordinal (fp_reply_train --late-from), with --test-seeds")
     w = sub.add_parser('weights');w.add_argument('--evidence', required=True);w.add_argument('--rows', nargs='+', required=True)
     w.add_argument('--out', required=True);w.add_argument('--drop-battles', help="depthn_rr_score's --drop-battles JSON")
     w.add_argument('--allow-partial', action='store_true', help='write the weights below 100%% world coverage')

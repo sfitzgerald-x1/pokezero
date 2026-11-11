@@ -323,7 +323,9 @@ def replay_game(env, model, game, dex, torch, tables, redaction=None, on_ours=No
 
 
 def measure(env, model, game, dex, torch, checks, request, first, action, round_, evidence, evidence_n, mons, decisions, calib,
-            tables, misaligned, redaction=None, extra_variants=None):
+            tables, misaligned, redaction=None, extra_variants=None, scorer=None):
+    """scorer(observations, labels) -> log q per observation, when given, replaces score() with π_FP as the opponent model (the
+    MC ladder's self roots score the champion: gpu_engine.mc_ladder_evidence)."""
     fp = game['fp'];turn = int(env._latest_turn)
     baseline = env.observe(fp)   # also syncs the belief engine with this round's protocol lines
     truth = {species_of(r): (r.get('ident'), request_key(r)) for r in first['side']['pokemon']}
@@ -389,10 +391,11 @@ def measure(env, model, game, dex, torch, checks, request, first, action, round_
         extra_keys.append(k);extra_labels.append(label_map[action])
     if not same_observation(env.observe(fp), baseline):checks['observe_changed_by_worlds'] += 1
     credit = data_mod.fp_view_opp_hazard_credit(env.protocol_lines, game['ours']) if redaction == 'peer-view-v2' else None
-    logq = score(model, observations + [baseline], labels + [action], torch, redaction, credit);true_logq = logq[-1];logq = logq[:-1]
+    if scorer is None:scorer = lambda obs, labels: score(model, obs, labels, torch, redaction, credit)
+    logq = scorer(observations + [baseline], labels + [action]);true_logq = logq[-1];logq = logq[:-1]
     by_key = dict(zip(distinct, logq));checks['worlds'] += len(distinct)
     if extra_keys:
-        extra_logq = score(model, extra_observations, extra_labels, torch, redaction, credit);checks['extra_variants_scored'] += len(extra_keys)
+        extra_logq = scorer(extra_observations, extra_labels);checks['extra_variants_scored'] += len(extra_keys)
         distinct = distinct + extra_keys;logq = np.concatenate([logq, extra_logq])
     row = dict(seed=game['seed'], ordinal=game['ordinal'], turn=turn, round=round_, worlds=len(distinct), truth_in=true_key in by_key,
                evidence=evidence_n[active], incomplete=bool(evidence_n[active]) and any(k not in evidence[active] for k in distinct),

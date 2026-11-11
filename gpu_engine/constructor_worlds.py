@@ -1,7 +1,7 @@
 """Codex's Phase D protocol constructor worlds as DepthNPricer input (gap 4, part A): depth-N prices on Showdown roots.
 
 Design. ProtocolConstructor.prepare(request, index) folds a Showdown protocol prefix plus the literal own request (B2)
-and returns (detached device_public_worlds.Root, phase_d_live_worlds.WorldSet of W in {2, 8, 16, 32} worlds, B2's own
+and returns (detached device_public_worlds.Root, phase_d_live_worlds.WorldSet of W in {2, 8, 16, 32, 64} worlds, B2's own
 legal mask). Its worlds are D3's world type (device_public_world_state.World: the engine BattleState plus the public
 tracker carry), so DepthN's executor steps them unchanged; only the carry's pytree differs from D3's (from_b2 adds four
 dict keys and leaves two members None). This module turns prepared roots into DepthN requests and pre-built worlds:
@@ -123,11 +123,21 @@ dict keys and leaves two members None). This module turns prepared roots into De
     borrowed one runs) at those members' public slots on the owner side only. borrowed_ability is never touched (a running
     copy is always public in Gen 3, and the owner's own view reads it). The owner's own view (its own members come from the
     engine state), the root prior (B2's encoding) and the guard's conditions (the lines) do not change; only the peer's
-    view of the owner side does. Not redacted: B2's belief hard mask (the carry's belief_mask / visible_belief), which
-    public_context.rebuild narrows by the revealed abilities of both sides; it differs only for a species whose sets differ
-    in ability (in Gen 3 random battles, Aerodactyl: Rock Head / Pressure), and the world carry holds no unnarrowed base to
-    restore. prepare_roots records per root (Prepared.private_reveals, the live rows' private_reveals) what the lines
-    revealed privately, the members the carry shows from it and what it redacted.
+    view of the owner side does. B2's belief hard mask (the carry's belief_mask and visible_belief), which
+    public_context.rebuild narrows by the revealed abilities of both sides, is narrowed by the private line too; it differs
+    only for a species whose sets differ in ability (in Gen 3 random battles, Aerodactyl: Rock Head / Pressure), and the world
+    carry holds no unnarrowed base to restore. So with the redaction on, prepare_roots folds B2 again on the lines the peer's
+    wire carries (peer_wire_lines: the owner's lines without its side-private ability lines; peer_wire_belief: the constructor's
+    own catalog and compiled functions, then from_b2's observation-boundary copy, incremental per battle) and
+    restore_peer_belief writes that fold's belief of each redacted member (belief_mask, the visible belief's pins, conflicts and
+    hard mask) into every world (LineFacts.peer_belief; build re-applies it): the peer's candidate sets, counts, uncertainty,
+    expected stats, PP slots and belief tokens of that member are then what Foul Play's own lines give. Only the peer's view
+    reads the owner side's belief. Each redacted member is joined to the fold by identity, as from_b2 maps the carry's species
+    (the fold's B2 tracker species through the engine vocabulary), never by slot index; a member the fold cannot give
+    (PeerBeliefUnavailable: no fold member or several join it, or its row is another species') or a fold that cannot be read
+    refuses the root PRIVATE_REVEALS_UNAVAILABLE. prepare_roots records per root (Prepared.private_reveals, the live rows' private_reveals) what
+    the lines revealed privately, the members the carry shows from it, what it redacted and (belief) per redacted member the
+    variant count before and after and whether its belief changed.
   - Peer view b (peer_view_b; OFF by default: prepare_roots' / complete_world's peer_view_b, the live search's peer_view_b, the
     server's and the re-pricer's --peer-view-b): the reply model π_FP-red3-full reads view b, the policy builder's view
     (pokezero.policy_opponent_view.build_policy_opponent_view) of Foul Play's OWN wire after peer-view-v2. Against the
@@ -147,7 +157,10 @@ dict keys and leaves two members None). This module turns prepared roots into De
     view, the root prior (B2's encoding) and its B2 parity are unchanged; at the root the peer's view changes only in those
     two cells and the redaction's columns. Every world of a root gets the same values (they come from the lines);
     prepare_roots records per root (Prepared.peer_view_b, the live rows' peer_view_b: peer_view_b_record) the cells, from_b2's
-    value, the exact rule's (a cross-check of the line rule against B2's: exact_agrees) and view b's. In search the device's
+    value, the exact rule's (a cross-check of the line rule against B2's: exact_agrees) and view b's; a root whose record has
+    exact_agrees false, or a cell whose carry species at the active slot is not the lines' active (PeerDamage.owner_active /
+    peer_active), is refused PEER_VIEW_B_UNAVAILABLE (never priced on a value the rule and B2 do not agree on, or on another
+    member). In search the device's
     own hooks take over at the first TURN (below). Not projected: the in-flight current-round sums a replacement root's
     damage history carries (phase_d_tail.carry_current_damage leaves the shown half of the owner's victims zero), which only
     a depth >= 1 view reads.
@@ -461,6 +474,12 @@ def _constructor_reason(kind,detail=''):
     return 'constructor-root:'+kind+(':'+detail if detail and detail!=kind else '')
 
 
+class PeerBeliefUnavailable(ValueError):
+    """The peer wire's B2 fold cannot give a redacted member's belief (no fold member, or not exactly one, is that member; its
+    belief row is another species'): prepare_roots refuses the root PRIVATE_REVEALS_UNAVAILABLE, the redaction on. A genuine
+    disagreement of two folds, never a carry layout break (CarryLayoutError)."""
+
+
 class PeerOrderUnavailable(ValueError):
     """The peer's public switch history does not join this world's party: the root is refused (PEER_REQUEST_ORDER_UNAVAILABLE)."""
 
@@ -485,7 +504,9 @@ class LineFacts:
     the owner's own seat |-ability|<member>|<ability>|[silent] with no other tag: Showdown's addSplit form, which reaches
     the owner's side alone, module docstring) and no public line attributes to it, sorted; the peer side is always ();
     peer_damage: the peer's own wire's readings of the two damage cells view b projects (PeerDamage, peer_damage_facts), only
-    when line_facts is asked for them (peer_damage=True: the peer-view-b flag), None otherwise."""
+    when line_facts is asked for them (peer_damage=True: the peer-view-b flag), None otherwise; peer_belief: B2's belief of the
+    owner's privately revealed members as the peer's wire leaves it (PeerBelief, peer_wire_belief), set by prepare_roots only
+    when the redaction is on and applies, None otherwise."""
     peer_switches:tuple
     owner_spikes:tuple|None
     baton:tuple=(False,False)
@@ -494,6 +515,7 @@ class LineFacts:
     tracers:tuple=((),())          # per side (p1, p2): the species that announced Trace on the lines (line_facts)
     private_reveals:tuple=((),())  # per side (p1, p2): (species, ability) revealed to the owner's side alone (line_facts)
     peer_damage:object=None        # PeerDamage (line_facts(..., peer_damage=True)); None: not read (the flag off)
+    peer_belief:object=None        # PeerBelief (prepare_roots, the redaction on, a private reveal applicable); None otherwise
 
 
 def _seat_name(field):
@@ -920,8 +942,146 @@ def redact_private_reveals(public,owner,facts,tables):
     for slot,_,aid in matched:
         original[0,owner,slot]=0
         if int(shown[0,owner,slot])==aid and int(borrowed[0,owner,slot])==0:shown[0,owner,slot]=0
-    if np.array_equal(before[0],original)and np.array_equal(before[1],shown):return public
-    return public._replace(original_ability=jnp.asarray(original),shown_ability=jnp.asarray(shown))
+    done=public
+    if not(np.array_equal(before[0],original)and np.array_equal(before[1],shown)):
+        done=public._replace(original_ability=jnp.asarray(original),shown_ability=jnp.asarray(shown))
+    belief=getattr(facts,'peer_belief',None)
+    return done if belief is None else restore_peer_belief(done,owner,belief)
+
+
+PEER_BELIEF_FIELDS=('belief_mask',)+tuple('visible_belief.'+k for k in('pin','pin_active','conflicts','visible_hard','visible_pin','visible_pin_active'))
+
+
+@dataclass(frozen=True,eq=False)
+class PeerBelief:
+    """B2's belief of the owner side as the peer's wire leaves it (module docstring, Private reveals): `slots`, the owner's public
+    slots the redaction clears; `rows`, per PEER_BELIEF_FIELDS name, an owner-side array [6, ...] whose row at each of `slots`
+    is that member's belief in peer_wire_belief's fold (joined by member, not by slot index), in the carry's layout (from_b2's:
+    belief_mask = B2's hard mask, the visible belief (pin, pin_active, conflicts, hard, pin, pin_active)); `species`, per slot
+    the fold member's normalized species; `fold_slots`, per slot the fold's own public slot of that member. Compared by
+    identity (it holds arrays)."""
+    slots:tuple
+    rows:object
+    species:tuple=()
+    fold_slots:tuple=()
+
+
+def _carry_belief(public,field,b):
+    if field=='belief_mask':value=public.belief_mask
+    else:
+        if public.visible_belief is None:raise CarryLayoutError('visible_belief required')
+        value=getattr(public.visible_belief,field.split('.',1)[1])
+    if value is None or tuple(np.shape(value))[:3]!=(b,2,6):raise CarryLayoutError(f'{field}: [{b}, 2, 6, ...] required, got {np.shape(value)}')
+    return value
+
+
+def restore_peer_belief(public,owner,belief):
+    """The public carry with B2's belief of each of `belief.slots` (the owner's privately revealed members) replaced by the peer
+    wire's fold (PeerBelief.rows): belief_mask[owner, slot] and the visible belief's pin, pin_active, conflicts, visible_hard,
+    visible_pin and visible_pin_active[owner, slot]. Only the peer's view reads the owner side's belief (engine_device_trackers.readout
+    takes the observer's FOE side; the device hooks' refresh in search reads belief_mask, restored with the rest), so the owner's
+    view, the root prior and its B2 parity are unchanged. Pure; the same carry when nothing changes. CarryLayoutError on another
+    layout."""
+    if not belief.slots:return public
+    b=_trackers(public);new={}
+    for field in PEER_BELIEF_FIELDS:
+        current=_carry_belief(public,field,b);value=_host(current);row=np.asarray(belief.rows[field])
+        if row.shape!=value.shape[2:]or row.dtype!=value.dtype:raise CarryLayoutError(f'{field}: the fold\'s row {row.shape} {row.dtype} != {value.shape[2:]} {value.dtype}')
+        changed=value.copy()
+        for slot in belief.slots:changed[:,owner,slot]=row[slot]
+        if not np.array_equal(changed,value):new[field]=jnp.asarray(changed)
+    if not new:return public
+    if 'belief_mask'in new:public=public._replace(belief_mask=new['belief_mask'])
+    visible={k.split('.',1)[1]:v for k,v in new.items()if k!='belief_mask'}
+    return public._replace(visible_belief=public.visible_belief._replace(**visible))if visible else public
+
+
+def peer_wire_lines(lines,owner):
+    """The owner's protocol prefix as the peer's wire carries it, for B2's fold: no |request| line (the constructor never folds
+    one) and no side-private ability line of the owner (line_facts' private form, |-ability|<owner member>|X|[silent] with no
+    other tag: Showdown's addSplit with an empty shared half, which the peer's channel skips)."""
+    own=f'p{owner+1}';out=[]
+    for line in lines:
+        text=str(line);parts=text.split('|')
+        if text.startswith('|request|'):continue
+        if len(parts)==5 and parts[0]==''and parts[1]=='-ability'and _seat_name(parts[2])[0]==own and parts[4].strip().lower()=='[silent]':continue
+        out.append(text)
+    return tuple(out)
+
+
+_PEER_FOLDS={}     # (id(constructor), battle, owner, stream) -> (constructor, adapter, lines fed): incremental, as the constructor's sessions
+PEER_FOLD_CAP=256  # least recently folded battles beyond this lose their fold (refolded from scratch if they come back)
+
+
+def peer_wire_belief(constructor,request,owner,members):
+    """PeerBelief of `members` ([(carry public slot, carry engine species id)]: the owner's privately revealed members): B2's own
+    fold (pokezero.recorded_encoder_runner.JaxRecordedAdapter on the constructor's B2 catalog and compiled functions, as
+    ProtocolConstructor.prepare folds) of peer_wire_lines(the request's lines), then the observation-boundary copy from_b2 reads
+    its beliefs from (public_context.observation_boundary_copy), in from_b2's carry layout (phase_d_live_worlds.from_b2:
+    belief_mask = hard[:, ::-1], the visible belief from the same arrays). Each member is joined to the fold by identity, as
+    from_b2 maps the carry's species: the fold's members are B2's public tracker (state.mons.species, catalog species ids on the
+    absolute side), each mapped to the engine's species id through the constructor's metadata vocabulary
+    (phase_d_live_worlds._lookup on catalog.species.names: from_b2's _remap); the member is the one fold member with its engine
+    id. Its belief row is that fold slot's, whose own species (beliefs.species: the belief source's ids, another namespace than
+    the catalog's) must be the member's (catalog.source.species_id of its name). The fold is incremental per (battle, owner,
+    stream) when the peer's lines extend the last ones folded (PEER_FOLD_CAP battles kept). PeerBeliefUnavailable when a member
+    joins no fold member or several, its row is another species' or B2's boundary copy refuses the fold (a ValueError, as B2's
+    own fold refusals: the root's refusal); CarryLayoutError only when the constructor has no B2 catalog or species vocabulary."""
+    from pokezero.recorded_encoder_runner import JaxRecordedAdapter
+    from . import public_context
+    from .phase_d_live_worlds import Refusal,_lookup
+    catalog=getattr(constructor,'catalog',None);functions=getattr(constructor,'functions',None)
+    if catalog is None or getattr(catalog,'source',None)is None:raise CarryLayoutError('the peer wire fold needs the constructor\'s B2 catalog')
+    vocabulary=((getattr(constructor,'metadata',None)or{}).get('vocabulary')or{}).get('species')
+    if not vocabulary:raise CarryLayoutError('the peer wire fold needs the constructor\'s species vocabulary')
+    lines=peer_wire_lines(request['lines'],owner);key=(id(constructor),request.get('battle_id'),owner,request.get('stream_id'))
+    held=_PEER_FOLDS.pop(key,None)
+    if held is None or held[0]is not constructor or held[2]!=lines[:len(held[2])]:
+        adapter=JaxRecordedAdapter(catalog,owner_side=owner,compiled_functions=functions);adapter.reset(stream_id=1,battle_id='peer-wire');fed=()
+    else:_,adapter,fed=held
+    if len(lines)>len(fed):adapter.feed(lines[len(fed):])
+    _PEER_FOLDS[key]=(constructor,adapter,lines)
+    while len(_PEER_FOLDS)>PEER_FOLD_CAP:_PEER_FOLDS.pop(next(iter(_PEER_FOLDS)))
+    state=adapter.state
+    _,beliefs,ok=public_context.observation_boundary_copy(state.context,state.beliefs,state.mons,catalog.source.device,catalog.context,
+        valid=jnp.ones(1,bool))
+    if not bool(_host(ok).all()):raise PeerBeliefUnavailable('the peer wire fold\'s observation boundary copy refused (B2_OBSERVATION_BOUNDARY_COPY_REFUSED)')
+    side=lambda x:_host(x)[:,::-1][0,owner]   # the beliefs' layout (from_b2: [:, ::-1])
+    folded={'belief_mask':side(beliefs.hard),'visible_belief.pin':side(beliefs.pin),'visible_belief.pin_active':side(beliefs.pin_active),
+        'visible_belief.conflicts':side(beliefs.conflicts)}
+    folded.update({'visible_belief.visible_hard':folded['belief_mask'],'visible_belief.visible_pin':folded['visible_belief.pin'],
+        'visible_belief.visible_pin_active':folded['visible_belief.pin_active']})
+    names=catalog.species.names;ids=_host(state.mons.species)[0,owner];belief_species=side(beliefs.species)
+    def engine(index):
+        if not 0<int(index)<len(names):return 0
+        try:return _lookup(vocabulary,names[int(index)])
+        except Refusal:return -1   # a species the engine does not know: never any carry member
+    fold=[engine(x)for x in ids];rows={f:np.zeros_like(v)for f,v in folded.items()};slots,species,where=[],[],[]
+    for slot,member in members:
+        found=[i for i,e in enumerate(fold)if e>0 and e==int(member)]
+        if len(found)!=1:
+            raise PeerBeliefUnavailable(f'carry slot {slot} (engine species {int(member)}): {len(found)} peer wire fold members join it '
+                f'(fold members {[normalize_id(names[int(x)])if 0<int(x)<len(names)else"" for x in ids]})')
+        at=found[0];name=normalize_id(names[int(ids[at])])
+        if int(belief_species[at])!=catalog.source.species_id(name):
+            raise PeerBeliefUnavailable(f'{name}: the fold\'s belief row {at} is source species {int(belief_species[at])}, not {catalog.source.species_id(name)}')
+        for f,v in folded.items():rows[f][slot]=v[at]
+        slots.append(int(slot));species.append(name);where.append(at)
+    return PeerBelief(tuple(slots),rows,tuple(species),tuple(where))
+
+
+def peer_belief_record(public,owner,belief,tables):
+    """The private-reveal record's belief entries: per restored slot its species (the carry's), the fold's species, the
+    variant count (set bits of belief_mask) before and after, and whether the carry's belief changes."""
+    b=_trackers(public);mask=_host(_carry_belief(public,'belief_mask',b));row=np.asarray(belief.rows['belief_mask'])
+    count=lambda x:int(sum(int(w).bit_count()for w in np.asarray(x).reshape(-1)))
+    n=len(tables.species_names)if tables is not None and tables.species_names else 0;carry=_host(public.species)[0,owner]
+    out=[]
+    for slot,folded,at in zip(belief.slots,belief.species,belief.fold_slots or belief.slots):
+        name=normalize_id(tables.species_names[int(carry[slot])])if 0<int(carry[slot])<n else''
+        out.append(dict(slot=int(slot),species=name,fold_slot=int(at),fold_species=folded,variants_before=count(mask[0,owner,slot]),variants_after=count(row[slot]),
+            changed=not all(np.array_equal(_host(_carry_belief(public,f,b))[0,owner,slot],np.asarray(belief.rows[f])[slot])for f in PEER_BELIEF_FIELDS)))
+    return out
 
 
 def private_reveal_record(public,owner,facts,tables,enabled):
@@ -984,20 +1144,43 @@ def project_peer_damage(public,owner,facts):
     return public._replace(mon_features={k:(jnp.asarray(new[k])if k in new else v)for k,v in mon.items()})
 
 
-def peer_view_b_record(public,owner,facts):
+def peer_view_b_record(public,owner,facts,species_names=None):
     """The root's peer-view-b record (rows' peer_view_b), read from the root's own carry (from_b2's: every world's public
     knowledge before completion): enabled True; cells, per projected cell: column (the mon feature), side ('p1' / 'p2'),
     slot (public; -1: no active, nothing written), species (the lines' active), carry (from_b2's value: B2's exact owner-HP
-    fraction), exact (the rule on the owner's exact readings), public (view b's value, written in every world); projected (the
-    cells written), changed (those whose value changes) and exact_agrees (every written cell's carry within
-    PEER_DAMAGE_TOLERANCE of the exact rule: the projection replaces B2's own value at the peer's precision, nothing else)."""
+    fraction), exact (the rule on the owner's exact readings), public (view b's value, written in every world) and, with the
+    engine's `species_names` (metadata['vocabulary']['species'], the carry's species ids), carry_species (the carry's species at
+    that slot) and species_agrees (it is the lines' active: _name_index's
+    exact or forme-prefix join; a side whose lines name an active but whose carry has none disagrees); projected (the cells
+    written), changed (those whose value changes) and exact_agrees (every written cell's carry within PEER_DAMAGE_TOLERANCE of
+    the exact rule: the projection replaces B2's own value at the peer's precision, nothing else). prepare_roots refuses a root
+    whose record has exact_agrees false or a cell whose species disagree (PEER_VIEW_B_UNAVAILABLE)."""
     cells=_peer_damage_cells(public,owner,facts);mon=public.mon_features;out=[];agree=True
+    names=None if not species_names else list(species_names)
+    carried=None if names is None else _host(public.species)[0]
     for name,side,slot,value,exact,species in cells:
         carry=None if slot<0 else float(_host(mon[name])[0,side,slot])
         if carry is not None:agree=agree and abs(carry-exact)<=PEER_DAMAGE_TOLERANCE
-        out.append(dict(column=name,side=f'p{side+1}',slot=slot,species=species,carry=carry,exact=exact,public=float(value)))
+        cell=dict(column=name,side=f'p{side+1}',slot=slot,species=species,carry=carry,exact=exact,public=float(value))
+        if names is not None:
+            at=-1 if slot<0 else int(carried[side,slot]);held=normalize_id(names[at])if 0<at<len(names)else''
+            cell.update(carry_species=held,species_agrees=(not species and not held)or bool(held and species and _name_index([held],species)is not None))
+        out.append(cell)
     written=[c for c in out if c['slot']>=0]
     return dict(enabled=True,cells=out,projected=len(written),changed=sum(c['carry']!=c['public']for c in written),exact_agrees=agree)
+
+
+def _view_b_problem(record):
+    """Why a root's peer_view_b record refuses it (prepare_roots: PEER_VIEW_B_UNAVAILABLE), or None: the exact rule disagrees
+    with B2's carry (the line rule and B2's would not be the same quantity), or a cell's carry species is not the lines' active
+    (the value would land on another member)."""
+    if not record['exact_agrees']:
+        return 'the exact rule disagrees with the carry: '+'; '.join(f'{c["column"]} {c["side"]} carry {c["carry"]} exact {c["exact"]}'
+            for c in record['cells']if c['carry']is not None)
+    bad=[c for c in record['cells']if c.get('species_agrees')is False]
+    if bad:return 'the carry\'s active is not the lines\': '+'; '.join(f'{c["column"]} {c["side"]} slot {c["slot"]} carry {c["carry_species"]!r} lines {c["species"]!r}'
+        for c in bad)
+    return None
 
 
 def complete_public(state,public,tables,owner,*,facts=None,root=None,redact_private_reveals=False,peer_view_b=False):
@@ -1171,6 +1354,25 @@ def _reveal_record(constructor,detached,facts,enabled):
     return private_reveal_record(getattr(detached,'public',None),owner,facts,constructor_carry_tables(constructor)if facts.private_reveals[owner]else None,enabled)
 
 
+def _peer_belief(constructor,request,detached,facts,reveals):
+    """(facts with peer_belief, the record with its belief entries) of a root whose private reveals the redaction clears
+    (peer_belief_facts on the root's own carry)."""
+    facts,entries=peer_belief_facts(constructor,request,detached.address.owner,getattr(detached,'public',None),facts,reveals['applicable'])
+    return facts,dict(reveals,belief=entries)
+
+
+def peer_belief_facts(constructor,request,owner,root,facts,applicable):
+    """(facts with peer_belief, belief entries) for `applicable` (private_reveal_record's: the redacted members, their public
+    slots): peer_wire_belief of those members (their engine species in the root carry, `root`) from the request's lines, joined to
+    the fold by identity (PeerBeliefUnavailable when one does not join). prepare_roots' step with the redaction on; the
+    opponent-view harness completes its own worlds with it too."""
+    tables=constructor_carry_tables(constructor);b=_trackers(root)
+    _leaf(root.species,(b,2,6),np.int32,'species');carried=_host(root.species)[0,owner]
+    members=tuple((slot,int(carried[slot]))for slot in sorted({e['slot']for e in applicable}))
+    belief=peer_wire_belief(constructor,request,owner,members)
+    return replace(facts,peer_belief=belief),peer_belief_record(root,owner,belief,tables)
+
+
 def _redacting(item):
     """Whether a Prepared's completion redacts private reveals (its record's flag; build applies the same completion)."""
     return bool((getattr(item,'private_reveals',None)or{}).get('enabled'))
@@ -1224,13 +1426,21 @@ def prepare_roots(constructor,protocol_requests,*,start_index=0,device='cpu',red
             if peer_view_b:   # read from the root's own carry, inside the refusal net: view b on is never priced without it
                 try:
                     if facts is None:raise CarryLayoutError('a request without lines')
-                    view_b=peer_view_b_record(getattr(detached,'public',None),detached.address.owner,facts)
+                    names=((getattr(constructor,'metadata',None)or{}).get('vocabulary')or{}).get('species')
+                    if not names:raise CarryLayoutError('the constructor\'s metadata has no species vocabulary (the record\'s species check)')
+                    view_b=peer_view_b_record(getattr(detached,'public',None),detached.address.owner,facts,names)
+                    problem=_view_b_problem(view_b)
                 except RECORD_ERRORS as error:
                     out.append(RootRefusal(rid,PEER_VIEW_B_UNAVAILABLE,f'{type(error).__name__}: {error}'[:500],time.perf_counter()-clock,stamp));continue
+                if problem is not None:
+                    out.append(RootRefusal(rid,PEER_VIEW_B_UNAVAILABLE,problem[:500],time.perf_counter()-clock,stamp));continue
             # the record reads the root's own carry (from_b2's: every world's public knowledge before completion), inside the
             # refusal net: with the flag off a record that cannot be read never touches the root (the record names the error);
             # with it on, a root whose private reveals cannot be read is refused (never priced with them)
-            try:reveals=_reveal_record(constructor,detached,facts,redact_private_reveals)
+            try:
+                reveals=_reveal_record(constructor,detached,facts,redact_private_reveals)
+                if redact_private_reveals and reveals is not None and reveals['applicable']:   # the peer's belief of those members
+                    facts,reveals=_peer_belief(constructor,request,detached,facts,reveals)
             except RECORD_ERRORS as error:
                 if redact_private_reveals:
                     out.append(RootRefusal(rid,PRIVATE_REVEALS_UNAVAILABLE,f'{type(error).__name__}: {error}'[:500],time.perf_counter()-clock,stamp));continue
