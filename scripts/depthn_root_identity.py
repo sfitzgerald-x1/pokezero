@@ -119,7 +119,8 @@ def record(args):
     run = Path(args.run);cells = []
     for path in sorted((run / 'results').glob('*.json'), key=lambda p: int(p.stem)):
         r = json.loads(path.read_text())
-        if (r.get('cell') or {}).get('arm') == args.arm and r.get('status') == 'COMPLETE' and (run / 'owning-wire' / f'{path.stem}.jsonl').exists():
+        arm = r.get('arm') or (r.get('cell') or {}).get('arm')   # a pre-flight's result names its arm; its cell is the RAW calibration cell
+        if arm == args.arm and r.get('status') == 'COMPLETE' and (run / 'owning-wire' / f'{path.stem}.jsonl').exists():
             cells.append(int(path.stem))
     step = max(1, len(cells) // args.battles);chosen = cells[::step][:args.battles]
     header = dict(event='HEADER', run=str(run), arm=args.arm, battles=chosen, incremental_roots=args.incremental_roots, eager_peer_fold=args.eager_peer_fold, seed=args.seed,
