@@ -30,7 +30,8 @@ action), exactly the server's path; nothing is re-implemented here.
   warmup.json, summary.json and summary.md: per roster and pooled, the searched shares, the causes and constructor
   refusal kinds, p50 / p95 / p99 / max of each stage and of the wall over COMPLETE roots, and of the wall over every
   eligible (priced, not single-legal) root, as the panel's latency covers every decision; the lead's W=16 condition (p95
-  wall <= 2.6 s, COMPLETE roots) is reported as a flag, never decided here.
+  wall <= 2.6 s, COMPLETE roots: the 3.0 s deadline's bound) is reported as a flag, never decided here; the panel's pre-flight bound
+  derives from the declared deadline (depthn_live_panel.preflight_wall_p95_max).
 - Root classes (the live search's root_classes: forced_switch, fresh_substitute, wish, sleep): the same breakdown per class,
   per roster and pooled (roots, priced, single-legal, eligible, COMPLETE, both searched shares, causes, the stage table). A root in several classes counts
   in each, one in none counts as `other`, one the search could not classify (or never classified) as `unclassified`.

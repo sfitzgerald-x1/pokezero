@@ -175,7 +175,7 @@ def preflight_value(d, **change):
     value = dict(schema=panel.PREFLIGHT_SCHEMA, arm=arm, deadline_seconds=d['deadline_seconds'], reserve_seconds=d['reserve_seconds'],
         server=dict(host='h', port=7000), cells_per_worker=d['actor']['cells_per_worker'],
         dispatch=dict(dispatched=24, failed=[], not_dispatched=0, stopped=None), search_wall_p95_max=panel.preflight_wall_p95_max(d['deadline_seconds'], d['reserve_seconds']),
-        search_wall_within=True, timeouts_within=True,
+        search_wall_within=True, timeouts_within=True, refused_share_max=panel.PREFLIGHT_REFUSED_SHARE_MAX, refused_within=True, reuse_refusals=0,
         code_tree=dict(commit='c'*40, source_sha256='e'*64),
         arms={'RAW': dict(first_within_warm_p99=True, first_actor_within_warm_p99=True, warm_encode=q(d['actor']['warm_p95_seconds']['encode']),
                           warm_greedy=q(d['actor']['warm_p95_seconds']['greedy'])),
@@ -204,13 +204,27 @@ class PreflightBindingTests(unittest.TestCase):
         for change in (dict(arm='DN2W16'), dict(deadline_seconds=5.), dict(reserve_seconds=.2), dict(cells_per_worker=1),
                        dict(dispatch=dict(dispatched=3, failed=['x'], not_dispatched=21, stopped=None)),
                        dict(dispatch=dict(dispatched=3, failed=[], not_dispatched=21, stopped='interleave')), dict(dispatch=None),
-                       dict(search_wall_within=False), dict(search_wall_p95_max=2.5), dict(search_wall_p95_max=4.6), dict(timeouts_within=False), dict(timeouts_within=None), {'RAW.first_actor_within_warm_p99': False}, {'DN2W8.first_actor_within_warm_p99': None},
+                       dict(search_wall_within=False), dict(search_wall_p95_max=2.5), dict(search_wall_p95_max=4.6), dict(timeouts_within=False),
+                       dict(refused_within=False), dict(refused_within=None), dict(reuse_refusals=1), dict(reuse_refusals=None),
+                       dict(refused_share_max=.5), dict(refused_share_max=None), dict(timeouts_within=None), {'RAW.first_actor_within_warm_p99': False}, {'DN2W8.first_actor_within_warm_p99': None},
                        {'DN2W8.search_wall': dict(p95=2.0)}, {'RAW.warm_encode': dict(p95=.05)}, {'RAW.warm_greedy': dict(p95=.8)},
                        dict(schema='other'), dict(code_tree=dict(source_sha256='f'*64)), dict(code_tree=None)):
             with self.subTest(change), self.assertRaisesRegex(ValueError, 'must be its pre-flight'):
                 REAL_CHECK_PREFLIGHT(self.declared(preflight_value(d, **change)), tree)
         wrong = self.declared(preflight_value(d)); wrong['actor']['source']['sha256'] = '0'*64
         with self.assertRaises(ValueError): REAL_CHECK_PREFLIGHT(wrong, tree)
+
+    def test_a_redeclared_5_s_declaration_binds_its_preflight_to_the_derived_bound(self):
+        tree = dict(source_sha256='e'*64)
+        def bound(**change):   # a 5.0 s declaration whose actor block is bound to this pre-flight file
+            d = declaration('a'*64, deadline=5.); d['actor']['preflight_search_wall_p95_seconds'] = 2.7   # over the old fixed 2.6 s
+            value = preflight_value(d, **change); path = self.root/f'preflight-5s-{panel.sha(value)[:8]}.json'
+            if not path.exists(): panel.write_new(path, value)
+            d['actor']['source'] = dict(path=str(path), sha256=panel.sha(value)); return d
+        self.assertEqual(REAL_CHECK_PREFLIGHT(bound(), tree)['search_wall_p95_max'], 4.6)
+        for change in (dict(search_wall_p95_max=2.6), dict(deadline_seconds=3.)):   # a file held to the 3.0 s bound, or run at 3.0 s
+            with self.subTest(change), self.assertRaisesRegex(ValueError, 'must be its pre-flight'):
+                REAL_CHECK_PREFLIGHT(bound(**change), tree)
 
     def test_init_calls_the_preflight_check_and_refuses_a_dirty_tree(self):
         seen = []
@@ -1903,6 +1917,26 @@ class CalibrationTests(unittest.TestCase):
         for cell in band[:4]: panel.write_new(self.root/'claims'/f"{cell['ordinal']}.json", dict(setting='preflight'))
         panel.preflight_packets(self.root, arm='DN2W8', games=2, deadline_seconds=5., reserve_seconds=.15)   # a second deadline
         with self.assertRaisesRegex(ValueError, 'one search arm, deadline and reserve'): panel.preflight_summary(self.root)
+
+    def test_a_preflight_counts_server_refusals_and_battles_the_servers_already_held(self):
+        panel.calibration_init(self.root, band=dict(CALIBRATION_BAND), lanes=1, **self.kwargs)
+        band = panel.calibration_cells(self.lad, CALIBRATION_BAND)
+        panel.preflight_packets(self.root, arm='DN2W8', games=4, deadline_seconds=3., reserve_seconds=.15)
+        def game(cell, arm, source, refusals=()):   # refusals: (cause, refusal text) of decisions 1, 2, ...
+            rows = [dict(decision_index=i, select_seconds=2., encode_seconds=.04, greedy=dict(seconds=.5), source=source, cause=None) for i in range(21)]
+            for row, (cause, text) in zip(rows[1:], refusals): row.update(source='greedy_fallback', cause=cause, search=dict(refusal=text))
+            panel.write_new(self.root/'results'/f"{cell['ordinal']}.json", dict(status='COMPLETE', setting='preflight', arm=arm, cell=cell))
+            (self.root/'telemetry').mkdir(exist_ok=True)
+            (self.root/'telemetry'/f"{cell['ordinal']}.jsonl").write_bytes(b''.join(panel.encoded(r)+b'\n' for r in rows))
+        game(band[0], 'RAW', 'raw_arm')
+        game(band[1], 'DN2W8', 'search', refusals=[('constructor_refused', 'WORLD_CONSTRUCTOR_REFUSED:volatile:12')]*2 + [('depthn_refused', 'DEPTHN_X')])
+        value = panel.preflight_summary(self.root); search = value['arms']['DN2W8']
+        self.assertEqual((search['refused_share'], search['reuse_refusals']), (3/21, 0))
+        self.assertEqual((value['refused_share_max'], value['refused_within'], value['reuse_refusals']), (.25, True, 0))
+        self.assertIsNone(value['arms']['RAW']['refused_share'])   # RAW never asks the servers
+        game(band[3], 'DN2W8', 'search', refusals=[('constructor_refused', 'constructor-root:SEARCH_PREFIX_NOT_ORIGINAL_SUCCESSOR')]*20)   # a reused battle
+        late = panel.preflight_summary(self.root)
+        self.assertEqual((late['arms']['DN2W8']['reuse_refusals'], late['reuse_refusals'], late['refused_within']), (20, 20, False))   # 23 of 42 refused
 
     def test_a_preflight_at_a_redeclared_deadline_is_held_to_that_deadline_s_wall_bound(self):
         panel.calibration_init(self.root, band=dict(CALIBRATION_BAND), lanes=1, **self.kwargs)
