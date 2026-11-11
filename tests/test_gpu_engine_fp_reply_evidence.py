@@ -158,6 +158,16 @@ class TrainingSeedsTests(unittest.TestCase):
             np.savez(d / 'other.npz', seed=np.array([11]))   # not a shard
             self.assertEqual(ev.training_seeds(d), {5, 7, 9})
 
+    def test_with_the_split_only_fitted_games_count(self):
+        import numpy as np
+        with tempfile.TemporaryDirectory() as tmp:
+            d = Path(tmp)   # seeds 20 test (fixed), 31 validation (% 10 == 1), 42 train, 53 late (first ordinal >= 100)
+            np.savez(d / 'shard-0.npz', seed=np.array([20, 31, 42, 42, 53]), ordinal=np.array([1, 2, 3, 3, 100]), label=np.zeros(5))
+            np.savez(d / 'shard-1.npz', seed=np.array([53, 64]), ordinal=np.array([101, 4]), label=np.zeros(2))
+            self.assertEqual(ev.training_seeds(d, [20], 100), {31, 42, 64})
+            self.assertEqual(ev.training_seeds(d, [20]), {31, 42, 53, 64})
+            with self.assertRaises(ValueError):ev.training_seeds(d, None, 100)
+
 
 if __name__ == '__main__':
     unittest.main()
