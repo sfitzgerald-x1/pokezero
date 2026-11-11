@@ -10,10 +10,19 @@ import jax.numpy as j
 from gpu_engine import engine_retained_encoder_driver as driver
 from gpu_engine import engine_request_source as source, engine_own_facts as own
 from gpu_engine import transition
+from gpu_engine_eager_frame import eager_frame
 import test_gpu_engine_engine_own_facts as fixtures
 
 
 class RetainedEncoderDriverTests(unittest.TestCase):
+    # Light tier: every advance runs the prepared frame closure's own body eagerly (one jit trace). The heavy
+    # owning_drain_end_to_end module runs the hot-jit test below with the frame compiled.
+    compiled_frame = False
+
+    def setUp(self):
+        if not self.compiled_frame:
+            self.enterContext(eager_frame(self.prepared))
+
     @classmethod
     def setUpClass(cls):
         fixtures.DeviceOwnFactsTests.setUpClass()
@@ -96,7 +105,19 @@ class RetainedEncoderDriverTests(unittest.TestCase):
         counts = (len(source._REGISTRATIONS), len(source._CONSTRUCTED), len(driver.actions._CONSTRUCTORS))
         actions = j.full((2, 2), 8, j.int32)  # physical5 is only public encounter1
         legacy = transition.step_with_chance(old, actions, self.f.table, self.chance())
-        first = driver.advance(session, actions, chance_inputs=self.chance())
+        r = driver._PREPARED[self.prepared]; frame = r['frame']; signatures = []
+        def recorded(*args):
+            # What a compiled frame's cache keys on: the tree and each leaf's shape, dtype and weak type.
+            leaves, tree = jax.tree.flatten(args)
+            signatures.append((tree, [(x.shape, str(x.dtype), getattr(getattr(x, 'aval', None), 'weak_type', None)) for x in leaves]))
+            return frame(*args)
+        r['frame'] = recorded
+        try:
+            first = driver.advance(session, actions, chance_inputs=self.chance())
+            second_actions = j.full((2, 2), 4, j.int32)
+            second = driver.advance(session, second_actions, chance_inputs=self.chance())
+        finally:
+            r['frame'] = frame
         self.same(first.state.core.engine, legacy.state)
         self.assertEqual(first.state.core.frame_number.tolist(), [1, 1])
         self.assertEqual(first.state.core.engine.active.tolist(), [[5, 5], [5, 5]])
@@ -107,9 +128,8 @@ class RetainedEncoderDriverTests(unittest.TestCase):
             self.assertEqual(first.owners[side].basic_error.tolist(), [0, 0])
             self.assertTrue(bool(first.owners[side].own.admitted.all()))
             self.assertEqual(first.state.observers[side].basic.cursor.sequence.tolist(), [16, 16])
-        expected_second = transition.step_with_chance(first.state.core.engine, j.full((2, 2), 4, j.int32),
+        expected_second = transition.step_with_chance(first.state.core.engine, second_actions,
             self.f.table, self.chance())
-        second = driver.advance(session, j.full((2, 2), 4, j.int32), chance_inputs=self.chance())
         self.same(second.state.core.engine, expected_second.state)
         self.assertEqual(second.state.core.frame_number.tolist(), [2, 2])
         self.assertEqual(second.state.core.engine.active.tolist(), [[0, 0], [0, 0]])
@@ -118,9 +138,15 @@ class RetainedEncoderDriverTests(unittest.TestCase):
             self.assertEqual(observer.projection.cursor.generation.tolist(), [[2, 2], [2, 2]])
             self.assertEqual(observer.basic.cursor.sequence.tolist(), [26, 26])
         self.assertEqual(counts, (len(source._REGISTRATIONS), len(source._CONSTRUCTED), len(driver.actions._CONSTRUCTORS)))
-        r = driver._PREPARED[self.prepared]
-        for name in ('frame', 'request_fast', 'public_fast', 'encode_fast', 'score_fast'):
+        for name in ('request_fast', 'public_fast', 'encode_fast', 'score_fast'):
             self.assertEqual(r[name]._cache_size(), 1, name)
+        # One frame program across both turns: compiled, one executable; eager, both turns call the frame
+        # with the same input signature, so a compiled frame would reuse one executable (the eager scope itself
+        # fails if the frame compiles).
+        self.assertEqual(len(signatures), 2)
+        self.assertEqual(signatures[0], signatures[1])
+        if self.compiled_frame:
+            self.assertEqual(r['frame']._cache_size(), 1)
         program = str(jax.make_jaxpr(r['frame'])(second.state.core, actions, self.chance()))
         self.assertNotIn('pure_callback', program)
         self.assertNotIn('io_callback', program)
