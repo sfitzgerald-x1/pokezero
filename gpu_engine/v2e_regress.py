@@ -419,6 +419,13 @@ def confusion_active(p):
     return p.active('confusion_counter') > 0
 
 
+def choice_holder(p):
+    """B: an active that is Choice-locked or holds a Choice item (it may lock this step): a faint now clears its
+    lock at the step end, as clearVolatile does (it used to last until the departure)."""
+    items = p.vocab['items'];ids = [items.index(n) for n in ('choiceband', 'choicespecs', 'choicescarf') if n in items]
+    return (p.active('choice_move') > 0) | np.isin(p.active('item'), ids)
+
+
 def move(*names):
     return lambda p: p.side_uses(*names)
 
@@ -578,6 +585,8 @@ ALLOWED = {
                       glob=()),
     'meteormash': dict(user=('boosts',), target=(), glob=()),
     'headbutt': ALL, 'needlearm': ALL, 'signalbeam': ALL, 'confusion': ALL,
+    # B: the faint's clearVolatile now ends the fainted active's Choice lock at once: its choice_move only.
+    'choice_faint': dict(user=('choice',), target=(), glob=()),
 }
 
 
@@ -608,7 +617,7 @@ PLUGINS = {
     'R': dict(bonemerang=move('bonemerang'), ooze_seed=ooze_leech_seed),
     'B': dict(irontail=move('irontail'), signalbeam=move('signalbeam'), steelwing=move('steelwing'),
               meteormash=move('meteormash'), headbutt=move('headbutt'), needlearm=move('needlearm'),
-              confusion=confusion_active),
+              confusion=confusion_active, choice_faint=choice_holder),
     'M1': dict(hyperbeam=move('hyperbeam'), trick=move('trick'), recharge=counter('recharge_counter')),
     'M2': dict(perishsong=move('perishsong'), yawn=move('yawn'), wrap=move('wrap'), perish=counter('perish_counter'),
                drowsy=counter('yawn_counter'), partial_trap=counter('partial_trap_counter')),

@@ -81,7 +81,7 @@ class PhaseTableTest(unittest.TestCase):
         for tag, label in cz.BOUNDARIES:self.assertTrue(label == 'END' or cz.base(label) in names, tag)
 
     def test_label_lines(self):
-        lines = [None, 488, 544, 573, 644, 724, 750, 966, 1377, 1863, 750, 966, 1922, 1972, 2069, 2076, 2172, 2082, 2107, 2084, 2339, None]
+        lines = [None, 488, 544, 573, 644, 724, 750, 966, 1377, 1863, 750, 966, 1922, 1972, 2069, 2076, 2172, 2082, 2107, 2084, 2342, None]
         want = ['outside', 'A', 'B', 'C', 'D', 'E0', 'E1.0', 'E2.0', 'E3.0', 'E4.0', 'E1.1', 'E2.1', 'E4.1', 'F1', 'F2.pre', 'F2.0', 'F2.0',
             'F2.1', 'F2.1', 'F2.2', 'G', 'outside']
         self.assertEqual(cz.label_lines(lines), want)
@@ -90,7 +90,7 @@ class PhaseTableTest(unittest.TestCase):
 
     def test_listing_lines(self):
         with tempfile.TemporaryDirectory() as d:
-            path = Path(d, 'listing.txt');path.write_text('  353:   check\n  487:   rows\n  544:   speed\n 1972:   x\n 2399:   return\nnoise\n')
+            path = Path(d, 'listing.txt');path.write_text('  353:   check\n  487:   rows\n  544:   speed\n 1972:   x\n 2402:   return\nnoise\n')
             self.assertEqual(cz.listing_lines(path), {'pre': 1, 'A': 1, 'B': 1, 'F1': 1, 'G': 1})
 
 

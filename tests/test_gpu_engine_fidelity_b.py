@@ -231,7 +231,8 @@ class TransitionTests(unittest.TestCase):
                  {'confusion_counter': [((1, 0), 3)], 'status': [((1, 0), 5)], 'status_counter': [((1, 0), 3)]},
                  {'confusion_counter': [((1, 0), 3)], 'volatile': [((1, 0), 1)]},
                  {'confusion_counter': [((1, 0), 3)], 'substitute_hp': [((1, 0), 40)]},
-                 {'confusion_counter': [((1, 0), 3)], 'hp': [((1, 0), 3)]}, {}, {}]
+                 {'confusion_counter': [((1, 0), 3)], 'hp': [((1, 0), 3)]},
+                 {'confusion_counter': [((1, 0), 3)], 'hp': [((1, 0), 3)], 'choice_move': [((1, 0), SPLASH)]}, {}]
         s = self.build(lanes, move=SPLASH)
         out = self.play(s, self.chance(8, [{(1, 3): 99}] * 8, secondary=99))
         conf, hp, pp = np.asarray(out.confusion_counter)[:, 1, 0], np.asarray(out.hp)[:, 1, 0], np.asarray(out.pp)[:, 1, 0, 0]
@@ -241,6 +242,9 @@ class TransitionTests(unittest.TestCase):
         self.assertEqual(int(hp[0]), 300);self.assertLess(int(hp[1]), 300);self.assertEqual(int(hp[2]), 300)
         self.assertEqual(int(np.asarray(out.substitute_hp)[4, 1, 0]), 40);self.assertEqual(int(hp[4]), int(hp[1]))
         self.assertEqual(int(hp[5]), 0)                                        # a self-KO
+        # The faint's clearVolatile ends the confusion and the Choice lock at once (no departure yet).
+        self.assertEqual(conf[5:7].tolist(), [0, 0]);self.assertEqual(int(np.asarray(out.choice_move)[6, 1, 0]), 0)
+        self.assertEqual(np.asarray(out.active)[5:7, 1].tolist(), [0, 0])
         self.assertEqual((np.asarray(out.volatile)[3, 1, 0] & self.FLINCH), 0)   # the flinch ends with the turn
 
     def test_iron_tail_and_headbutt_through_the_step(self):
@@ -321,6 +325,9 @@ class RegressPluginTests(unittest.TestCase):
         self.assertEqual(lane_verdict(ok, {'steelwing': [0]}, None)[0], [])
         for bad in (('state.status', 1), ('state.status', 0), ('state.confusion_counter', 1), ('trackers.public_volatiles', 1)):
             self.assertEqual(lane_verdict({bad}, {'steelwing': [0]}, None)[0], [bad])
+        self.assertEqual(lane_verdict({('state.choice_move', 1)}, {'choice_faint': [1]}, None)[0], [])
+        for bad in (('state.choice_move', 0), ('state.confusion_counter', 1), ('trackers.public_volatiles', 1)):
+            self.assertEqual(lane_verdict({bad}, {'choice_faint': [1]}, None)[0], [bad])
         self.assertEqual(lane_verdict({('state.boosts', 0)}, {'meteormash': [0]}, None)[0], [])
         for bad in (('state.hp', 0), ('state.boosts', 1), ('state.hp', 1)):
             self.assertEqual(lane_verdict({bad}, {'meteormash': [0]}, None)[0], [bad])

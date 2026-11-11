@@ -2330,6 +2330,9 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
     # (sim/battle.ts faintMessages, sim/pokemon.ts clearVolatile). The fainted holder
     # stays the active token until replaced; its replacement request sees no Substitute.
     work=work._replace(substitute_hp=jnp.where(work.hp>0,work.substitute_hp,0))
+    # Fidelity B: the same clearVolatile ends confusion (reachable since Signal Beam starts it) and the Choice
+    # lock (choicelock), so a forced-replacement request sees neither; departure clears both later anyway.
+    work=work._replace(**{name:jnp.where(work.hp>0,getattr(work,name),0) for name in ("confusion_counter","choice_move")})
     # clearVolatile at the faint also ends Destiny Bond (design 2.4).
     work=work._replace(volatile=jnp.where(work.hp>0,work.volatile,work.volatile & jnp.uint32(~DESTINY_BOND&0xffffffff)))
     alive = jnp.any(work.hp > 0, axis=2)

@@ -220,6 +220,9 @@ doubles the chance (Dunsparce's Headbutt: 60%):
   burn, its own `draws[s][5]` roll and no crit, through its Substitute; a
   self-KO cancels the foe's queued move. A Lum Berry eats it at once, Own
   Tempo cures a Baton-passed one on entry, and Baton Pass carries the clock.
+- A faint's clearVolatile now also ends the fainted active's confusion and
+  Choice lock at the step end (before, only its departure did), so a
+  forced-replacement request sees neither, as in Showdown.
 - Device: B2's `-end|X|confusion` (bag entry off, CONFUSION_TURNS reset) at
   the before-move snap-out, a Lum cure and an Own Tempo cure; the self-hit's
   `-damage ... [from] confusion` line feeds B2's absent-Leftovers evidence as

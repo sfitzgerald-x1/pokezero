@@ -33,7 +33,7 @@ import numpy as np
 
 SCHEMA = 'pokezero.v2e-census.v1'
 # transition.step_with_chance: def line and last line (design note section 1.1; tree 5bc2fe8c, shifted by fidelity A1, A2, R and B).
-SPAN = (342, 2399)
+SPAN = (342, 2402)
 # (phase, first line, last line, group). 'pre' is the host-side argument checks; boundary statements open the next phase.
 PHASES = (
     ('pre', 342, 486, 'pre'),
@@ -48,7 +48,7 @@ PHASES = (
     ('E4', 1845, 1960, 'E'),   # post (recoil, move weather, Spikes, drag, Baton, fainted boosts)
     ('F1', 1961, 2067, 'F'),   # defer/ready, end speeds, Wish, weather
     ('F2', 2068, 2323, 'F'),   # residual events (argsort at 2074, loop at 2075)
-    ('G', 2324, 2399, 'G'),    # end of turn
+    ('G', 2324, 2402, 'G'),    # end of turn
 )
 GROUPS = ('A', 'B', 'C', 'D', 'E', 'F', 'G')
 GROUP = {name: group for name, _, _, group in PHASES}
@@ -74,8 +74,8 @@ ANCHORS = {
     2075: 'for order in range(10):',
     2087: 'if _status_residual_context is not None:',
     2324: 'work=linking.prune(work)',
-    2390: 'work = jax.tree.map(lambda old, new: jnp.where(live.reshape(',
-    2399: 'return result if _public_trace is None else public_callbacks.TracedStep(result,_public_trace)',
+    2393: 'work = jax.tree.map(lambda old, new: jnp.where(live.reshape(',
+    2402: 'return result if _public_trace is None else public_callbacks.TracedStep(result,_public_trace)',
 }
 # Iteration rules over lines in program order (the scratch census's): an E1..E4 line <= E_RESTART after one >= E_LATE
 # starts the second action; in F2 a line <= F2_HEAD after one > F2_BODY starts the next of the 10 residual events.

@@ -1,7 +1,7 @@
 {
  "schema": "pokezero.effect_probe.scenario.v1",
  "move": "confusion_selfhit_ko",
- "note": "B a confusion self-KO: a faster Choice Band Pure Power Medicham, confused by a slower Ariados, hits itself every turn (draws[s][3] = 99) until it faints; Gen 3 then cancels Ariados's queued move (no PP spent). The script ends at the KO. Axis: the self-hit damage roll.",
+ "note": "B a confusion self-KO: a faster Choice Band Pure Power Medicham (locked into Splash), confused by a slower Ariados, hits itself every turn (draws[s][3] = 99) until it faints; Gen 3 then cancels Ariados's queued move (no PP spent). The script ends at the KO, where the faint's clearVolatile has removed its confusion and Choice lock. Axis: the self-hit damage roll.",
  "teams": [
   [
    {
