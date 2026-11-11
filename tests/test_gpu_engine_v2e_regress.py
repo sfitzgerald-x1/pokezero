@@ -298,6 +298,12 @@ class DigestAndRuleTests(unittest.TestCase):
         self.assertEqual(unexpected, [('state.status', 1), ('state.turn', None)])
         refused = dict(cascade, mon_ok=lambda leaf, side: False)                # a non-fainted mon's status on side 0
         self.assertEqual(lane_verdict({('state.status', 0)}, effects, None, cascade=refused)[0], [('state.status', 0)])
+        # The saved effect block (M1 GPU pass): a cascade side accepts it only where this tree's block is the derivation.
+        derived = dict(cascade, effect_ok=np.array([True, False]))
+        unexpected, _, by_ko = lane_verdict({('state.effect_draws', 0), ('state.effect_draws', 1)}, effects, None, cascade=derived)
+        self.assertEqual((unexpected, by_ko), ([('state.effect_draws', 1)], [('state.effect_draws', 0)]))
+        self.assertEqual(lane_verdict({('state.effect_draws', 0)}, effects, None, cascade=cascade)[0], [('state.effect_draws', 0)])
+        self.assertEqual(lane_verdict({('state.effect_draws', 0)}, effects, None)[0], [('state.effect_draws', 0)])
 
 
 @unittest.skipUnless(HAS_JAX, 'requires JAX')
@@ -632,6 +638,41 @@ class EffectAndResidualRuleTests(unittest.TestCase):
         self.assertEqual(code, 1);self.assertIn('state.effect_draws', report['uninvolved_leaves'])
         code, report, _ = self.patched('effect-unsaved', clocked(pending_step, even))   # deferred lanes left at zero
         self.assertEqual(code, 1);self.assertIn('state.effect_draws', report['uninvolved_leaves'])
+
+    def test_a_phase_shift_changes_the_saved_effect_block_only_by_the_derivation(self):
+        """M1 GPU pass (2 lanes of 1.1M): once the base pass has state.effect_draws it is compared bitwise, and a
+        phase shift (the deferral moved) saves or drops the block. Accepted per side only where this tree's block
+        is the design derivation (effect_ok); a wrong block on the same lanes stays unexpected."""
+        import jax.numpy as j
+        from gpu_engine import v2e_regress
+
+        def saving(state, actions, t, *, shift=False, wrong=False):
+            out = pending_step(state, actions, t);s = out.step.state
+            uses = curse_users(state, actions)
+            if shift:s = s._replace(pending_residual=s.pending_residual ^ uses)      # Curse lanes move the deferral
+            block = saved_block(state, s)
+            if wrong:block = j.where(uses[:, None, None], (block + 1) % 2, block)
+            return result(s._replace(effect_draws=block), out.trackers)
+        args = lambda **extra: TwoPassTests.args.__func__(type(self), **extra)
+        base = self.tmp / 'base-with-effect'
+        code = v2e_regress.base_pass(args(out=base, pad_lanes=self.LANES), step_override=clocked(saving, even),
+            prepared=(self.context, self.new))
+        self.assertEqual(code, 0)
+        self.assertIn('state.effect_draws', json.loads((base / 'manifest.json').read_text())['output_names'])
+
+        def run(name, **kind):
+            out = self.tmp / name
+            code = v2e_regress.patched_pass(args(out=out, base=str(base), pr='A1', faint_clear=False),
+                step_override=clocked(lambda s, a, t: saving(s, a, t, **kind), even), prepared=(self.context, self.new))
+            return code, json.loads((out / 'report.json').read_text()), [json.loads(x) for x in (out / 'changed.jsonl').read_text().splitlines()]
+        code, report, listing = run('effect-shift', shift=True)
+        self.assertEqual(code, 0, report['counts']);self.assertFalse(report['effect_rule'])
+        shifted = [x for x in listing if x['phase_shift']]
+        self.assertTrue(shifted);self.assertEqual(len(shifted), len(listing))
+        self.assertTrue(all({'state.effect_draws@0', 'state.effect_draws@1'} <= set(x['ko_consequences']) for x in shifted))
+        code, report, _ = run('effect-shift-wrong', shift=True, wrong=True)
+        self.assertEqual(code, 1)
+        self.assertEqual(set(report['by_effect']['curse']['unexpected_fields']), {'state.effect_draws@user', 'state.effect_draws@target'})
 
     def test_terminal_steps_widen_only_where_the_residual_ran_in_one_tree(self):
         import jax.numpy as j

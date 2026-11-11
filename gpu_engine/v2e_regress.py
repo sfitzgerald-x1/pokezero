@@ -82,6 +82,15 @@ a pre-state predicate alone):
   Trick lanes take the ledger through the trick allowance instead.
 Explained lane-steps are counted as recharge_leaves and ledger_leaves.
 
+KO cascade rule for the saved effect block (fidelity R's state.effect_draws,
+found by the M1 GPU pass): once the base pass has the leaf it is compared
+bitwise, and a KO cascade or phase shift that moves the residual deferral
+saves (or no longer saves) the block, like the other saved draws in the 'ko'
+family. A (state.effect_draws, side) change on a cascade lane is accepted only
+when this tree's block equals the design 2.1 derivation (the Stepper's
+effect_ok: the block a deferred step saves, else zero); any other change stays
+unexpected.
+
 The involvement superset resolves the executed move as the engine does (slot,
 charge, standing or same-turn Encore, Struggle, a resumed queued action, every
 Sleep Talk-callable move, a Magic Coat reflection, and no move on a recharge
@@ -672,7 +681,8 @@ def lane_verdict(changed, effects, side_axis, *, cascade=None, waive=()):
     effects: {effect: [actor sides]}; cascade: None, or dict(ko_sides=[2] bool (sides whose every tracker
     may follow a KO), mon_ok=callable(leaf, side) -> a KO_MON_LEAVES leaf differs only on that side's
     (un)fainted mons, a KO_LINK_LEAVES leaf only where link_ok allows, optional families=extra leaf families
-    accepted on both sides, e.g. ('residual', 'residual_trackers') on a phase shift).
+    accepted on both sides, e.g. ('residual', 'residual_trackers') on a phase shift, optional effect_ok=[2] bool:
+    this tree's saved effect block equals the design derivation per side (state.effect_draws is accepted only there)).
     Returns (unexpected entries, waived entries, entries accepted only as KO consequences)."""
     unexpected, waived, by_ko = [], [], []
     for leaf, side in sorted(changed, key=lambda x: (x[0], -1 if x[1] is None else x[1])):
@@ -688,6 +698,8 @@ def lane_verdict(changed, effects, side_axis, *, cascade=None, waive=()):
                 and allowed_leaf(leaf, KO_ALLOWED.get(effect, {}).get('user', ())) for effect, actors in effects.items() for a in actors)
             ko = ko or (allowed_leaf(leaf, ('hp', 'ko', 'turnline') + tuple(cascade.get('families', ())))
                   or (side is not None and leaf in KO_MON_LEAVES + KO_LINK_LEAVES and cascade['mon_ok'](leaf, side))
+                  or (side is not None and leaf == EFFECT_DRAWS and cascade.get('effect_ok') is not None
+                      and bool(cascade['effect_ok'][side]))
                   or (side is not None and (leaf.startswith('trackers.') or allowed_leaf(leaf, ('ko_action',)))
                       and bool(cascade['ko_sides'][side])))
             if ko:by_ko.append((leaf, side));continue
@@ -923,7 +935,8 @@ class Stepper:
             names['pre'] = new
             pre = digest_named({n: named_in[n] for n in new}, lanes)[1] if new else j.zeros((lanes, 0, 2, 2), j.uint32)
             effect_ok = None
-            if effect_rule:
+            # Computed whenever the tree has the leaf: the effect rule (base lacks it) and the KO cascade rule read it.
+            if effect_rule or hasattr(state, 'effect_draws'):
                 # The design's derivation, copied: fold_in(split(keys,2)[1], EFFECT_SALT); a resumed turn reuses its
                 # saved block; the block is saved exactly when the step defers its residual; idle lanes keep theirs.
                 split = jax.vmap(lambda k: jax.random.split(k, 2))(state.keys)[:, 1]
@@ -1285,7 +1298,9 @@ def patched_pass(args, *, step_override=None, prepared=None):
                     # handlers' writes; any other terminal step only the done-gated end-of-turn writes (L1).
                     families = (('residual', 'residual_trackers') if phase or terminal_residual
                         else ('terminal',) if terminal else ())
-                    cascade_info = dict(ko_sides=ko_mons.any(-1), mon_ok=mon_ok, families=families)
+                    # The saved effect block follows the deferral: accepted per side where this tree's block is the derivation.
+                    effect_ok = None if result['effect_ok'] is None else np.asarray(result['effect_ok'])[lane]
+                    cascade_info = dict(ko_sides=ko_mons.any(-1), mon_ok=mon_ok, families=families, effect_ok=effect_ok)
                 unexpected, waived, by_ko = lane_verdict(entries, effects, side_axis, cascade=cascade_info, waive=args.waive or ()) \
                     if changed_rest and effects else ([], [], [])
                 kind = classify(changed, bool(effects), rule_ok, unexpected)
