@@ -11,7 +11,10 @@ class DoubleEdgeSourceBindingTests(unittest.TestCase):
  def test_device_port_recertification_keeps_guards_and_inventory(self):
   # Re-certify the already integrated device/driver source, without changing
   # the consumer inventory, partition math, mapper or source-drift rejection.
-  baseline='b8092a85d9c1f2ed9c0daf4c4bd8e833a94a2380'
+  # Baseline: the integration commit main (#1819) merged into. Main certified b8092a85; after it, the
+  # reviewed Fidelity R and B batches changed the chance_consumers.py and phase_d_chance.py bodies.
+  # The other three files have the same body and mappings at both commits.
+  baseline='0a3711dc9a833790a7b54547dda61cb4547cc88b'
   constants={'SOURCE_PINS','MAPPING_PINS','DOMAIN_SHA256','KERNEL_SHA256'}
   for file in ('chance_consumers.py','ordinary_law.py','conditional_law.py',
                'engine_source_frame_witness.py','phase_d_chance.py'):
