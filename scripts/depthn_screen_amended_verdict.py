@@ -57,7 +57,8 @@ PINNED = dict(amendment='c4ff30a25a573f90fdd02957b40fb8307d8b87b56dfbfe60d85ea66
               both='98e6120f30565c0b40d423504aa0d07a2929b2207551a5c901adb7579d361e13',
               final='b2fccc253136b2bce3125cc773973c7186a0dff6a5ff8e6825a5618d6268050e')
 ADOPTION_SCHEMA = 'depthn-foulplay-panel.amendment-adoption.v1'
-RUN_BINDINGS = dict(screen_r2='5e53654231abc940461decde4cdfa6b85ce89f22e20ff0ea7f9e626ea1855a75', screen_r3='facd0798ea97d2732811aad1baaf8ccd325809bc152503a28acef2d7bc205f05')   # committed adoption records (the CLI refuses others)
+RUN_BINDINGS = dict(screen_r2='5e53654231abc940461decde4cdfa6b85ce89f22e20ff0ea7f9e626ea1855a75', screen_r3='facd0798ea97d2732811aad1baaf8ccd325809bc152503a28acef2d7bc205f05',
+                    screen_r4a='8a7ef53684f732f86cc7522abebb9a40a416d51f86786b77b0a9840fed9ccb7d')   # committed adoption records (the CLI refuses others)
 # the run amendments each binding requires, {kind: committed sha256} (the CLI refuses a missing, extra or other one)
 RUN_AMENDMENTS = {RUN_BINDINGS['screen_r2']: dict(alive_bands='fa7c32a51db058526e436a925ef2156b52ab9debd54881fae6829febcfaced53')}
 EXACT_ALIVE_BANDS = ['1', '2', '3-4', '5-6']
@@ -65,7 +66,7 @@ EXACT_ALIVE_BANDS = ['1', '2', '3-4', '5-6']
 FINAL_RULES = dict(RULE_R3=dict(metric='ITERATIONS_PER_BUDGET_SECOND', strata='FOULPLAY_BUDGET_STRATUM_X_TURN_BAND_X_ALIVE_BANDS',
     combine='POOLED_COUNT_WEIGHTED_RATIO_OF_MEANS', reference='RAW', ratio_tolerance=.05, coverage_difference_max=.05, min_moves_per_arm=1000,
     min_pairs=50, checkpoint_pairs=50, rearm_margin=.025, min_cell_moves=120, alive_bands=['1', '2', '3-4', '5-6'], min_support_moves=120))
-RUN_FINAL_RULES = {RUN_BINDINGS['screen_r3']: 'RULE_R3'}   # {committed binding sha256: its final_fairness_rule} (the CLI refuses a binding declaring one that is not pinned here)
+RUN_FINAL_RULES = {RUN_BINDINGS['screen_r3']: 'RULE_R3', RUN_BINDINGS['screen_r4a']: 'RULE_R3'}   # {committed binding sha256: its final_fairness_rule} (the CLI refuses a binding declaring one that is not pinned here)
 CAUSES = (('round cap', 'round_cap'), ('foul-play challenge', 'foulplay_challenge_timeout'), ('foul-play choice', 'foulplay_choice_timeout'))
 
 
