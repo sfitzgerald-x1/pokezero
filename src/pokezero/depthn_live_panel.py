@@ -101,7 +101,14 @@ CALIBRATION_RUN_SCHEMA='depthn-foulplay-panel.calibration-run.v1'
 CALIBRATION_REQUEST_SCHEMA='depthn-foulplay-panel.calibration-request.v1'
 PREFLIGHT_REQUEST_SCHEMA='depthn-foulplay-panel.preflight-request.v1'
 PREFLIGHT_SCHEMA='depthn-foulplay-panel.preflight.v1'
-PREFLIGHT_WALL_P95_MAX=2.6   # the lead's bound on the search arm's end-to-end decision wall p95
+PREFLIGHT_WALL_MARGIN=.25   # the lead's bound on the search arm's end-to-end decision wall p95: the declared deadline less the reserve and this margin
+
+
+def preflight_wall_p95_max(deadline_seconds,reserve_seconds):
+    """The lead's bound on the pre-flight's search-arm end-to-end decision wall p95: deadline - reserve - PREFLIGHT_WALL_MARGIN.
+    2.6 s at the 3.0 s deadline and 0.15 s reserve (every screen through screen-r4a); a deadline re-declared under the latency rule
+    moves it (4.6 s at 5.0 s), since a longer deadline lets the tail complete into the measured wall instead of timing out."""
+    return round(float(deadline_seconds)-float(reserve_seconds)-PREFLIGHT_WALL_MARGIN,6)
 PREFLIGHT_TIMEOUT_SHARE_MAX=.01   # the lead's bound on the search arm's timeout share (of non-single-legal decisions)
 
 
@@ -215,7 +222,7 @@ def validate(declaration):
             or type(choice['summary'])is not str or not choice['summary'].strip()):
         raise ValueError('search choice: the declared search arm, the commit of the cells that chose it, their files (path and sha256) '
                          'and a summary of the result required')
-    validate_move_wall(d['foulplay_move_wall']);validate_actor(d['actor'])
+    validate_move_wall(d['foulplay_move_wall']);validate_actor(d['actor'],d['deadline_seconds'],d['reserve_seconds'])
     if not _hex(d['server_tree_commit'],40):raise ValueError('the servers\' tree commit (40 hex) required')
     validate_provenance(d['provenance'])
     if 'reply_prior'in d:validate_reply_prior(d['reply_prior'])
@@ -247,17 +254,17 @@ def declared_reply(d):
     return reply.get('archive_sha256'),bool(reply.get('peer_view_b')),reply.get('views')
 
 
-def validate_actor(value):
+def validate_actor(value,deadline_seconds,reserve_seconds):
     """The actor's time against search's budget (the lead's check; dispatch enforces cells_per_worker): persistent workers
     (cells_per_worker >= 2), each warmed once before its first claim (warm_actor on warmup_decisions captured decisions), the
     search request sent before the greedy forward, the measured warm p95s (encode, greedy) and the pre-flight's search-arm
-    end-to-end decision wall p95 (at most PREFLIGHT_WALL_P95_MAX), with their source (the pre-flight's preflight.json)."""
+    end-to-end decision wall p95 (at most preflight_wall_p95_max of the declared deadline and reserve), with their source (the pre-flight's preflight.json)."""
     v=value;warm=v.get('warm_p95_seconds')if type(v)is dict else None
     if (type(v)is not dict or set(v)!=ACTOR_KEYS or type(v['cells_per_worker'])is not int or v['cells_per_worker']<2
             or type(v['warmup_decisions'])is not int or v['warmup_decisions']!=WARMUP_DECISIONS or v['search_overlaps_greedy']is not True or not _evidence(v['source'])
             or type(warm)is not dict or set(warm)!={'encode','greedy'}
             or any(type(x)is not float or not math.isfinite(x)or x<=0 for x in (*warm.values(),v['preflight_search_wall_p95_seconds']))
-            or v['preflight_search_wall_p95_seconds']>PREFLIGHT_WALL_P95_MAX):
+            or v['preflight_search_wall_p95_seconds']>preflight_wall_p95_max(deadline_seconds,reserve_seconds)):
         raise ValueError('actor: persistent warmed workers (cells_per_worker >= 2, the declared warmup), the search request overlapping '
                          'greedy, the measured warm encode / greedy p95 and a pre-flight search wall p95 within the bound, with its source required')
     return v
@@ -714,7 +721,7 @@ def preflight_packets(directory,*,arm,games,deadline_seconds,reserve_seconds):
 def preflight_summary(directory,*,dispatch=None,server=None,cells_per_worker=None,code_tree=None,tree_commit=None):
     """The pre-flight's readings: per arm, each game's first-decision wall against the warm (decision >= 1) distribution's p99
     (the warmup's check), and the search arm's end-to-end decision wall (select_seconds, non-single-legal decisions) p95
-    against PREFLIGHT_WALL_P95_MAX, with fallback causes; plus the workers' warmups."""
+    against preflight_wall_p95_max of the pre-flight's deadline and reserve, with fallback causes; plus the workers' warmups."""
     root,run,lad,band=calibration_load(directory);arms={};conditions=set()
     for cell in band:
         request=root/'requests'/f"{cell['ordinal']}.json"
@@ -761,8 +768,8 @@ def preflight_summary(directory,*,dispatch=None,server=None,cells_per_worker=Non
     timeouts=[out[a]['timeout_share']for a in out if a in SEARCH_ARMS and out[a]['timeout_share']is not None]
     claims=[json.loads(p.read_bytes())for p in sorted((root/'claims').glob('*.json'))]
     return dict(schema=PREFLIGHT_SCHEMA,arm=arm,deadline_seconds=deadline,reserve_seconds=reserve,server=server,cells_per_worker=cells_per_worker,
-        dispatch=dispatch,arms=out,search_wall_p95_max=PREFLIGHT_WALL_P95_MAX,
-        search_wall_within=None if not walls else all(w['p95']<=PREFLIGHT_WALL_P95_MAX for w in walls),
+        dispatch=dispatch,arms=out,search_wall_p95_max=preflight_wall_p95_max(deadline,reserve),
+        search_wall_within=None if not walls else all(w['p95']<=preflight_wall_p95_max(deadline,reserve)for w in walls),
         timeout_share_max=PREFLIGHT_TIMEOUT_SHARE_MAX,timeouts_within=None if not timeouts else all(t<=PREFLIGHT_TIMEOUT_SHARE_MAX for t in timeouts),
         warmups=[c['warmup']for c in claims if c.get('setting')=='preflight'and c.get('warmup')is not None],
         seed_band=run['seed_band'],lanes=run['lanes'],calibration_tree=run['tree'],
@@ -779,7 +786,8 @@ def check_preflight(d,tree):
     """The declared actor block against its source (the pre-flight's preflight.json, sha256-bound): the declared arm, deadline,
     reserve and cells per worker; a dispatch that neither failed nor stopped; every game's first decision's actor time (encode +
     greedy) within its arm's warm actor p99 (the warmup worked; the end-to-end first decision, which also carries the server's time
-    and the start-together GPU wave, is descriptive); the search wall within the bound; the declared numbers equal to the file's; and the pre-flight's code
+    and the start-together GPU wave, is descriptive); the search wall within the bound, which is the declaration's
+    (preflight_wall_p95_max of its deadline and reserve); the declared numbers equal to the file's; and the pre-flight's code
     the eval's (the worker code digest: the declaration JSON is not part of it)."""
     a=d['actor'];value=read_bound(a['source']['path'],a['source']['sha256']);arm=d['arms'][1]
     raw=(value.get('arms')or {}).get('RAW')or {};search=(value.get('arms')or {}).get(arm)or {}
@@ -787,6 +795,7 @@ def check_preflight(d,tree):
     pick=lambda q,k:(q or {}).get(k)
     if (value.get('schema')!=PREFLIGHT_SCHEMA or value.get('arm')!=arm or value.get('deadline_seconds')!=d['deadline_seconds']
             or value.get('reserve_seconds')!=d['reserve_seconds']or value.get('cells_per_worker')!=a['cells_per_worker']
+            or value.get('search_wall_p95_max')!=preflight_wall_p95_max(d['deadline_seconds'],d['reserve_seconds'])
             or outcome.get('failed')!=[]or outcome.get('stopped')is not None or value.get('search_wall_within')is not True
             or value.get('timeouts_within')is not True
             or raw.get('first_actor_within_warm_p99')is not True or search.get('first_actor_within_warm_p99')is not True
