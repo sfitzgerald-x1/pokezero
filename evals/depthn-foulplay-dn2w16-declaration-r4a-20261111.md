@@ -31,7 +31,7 @@ Does the reply-model hypothesis hold live? This is variant B, called by the MC l
 
 Everything else is screen-r4b's:
 - arms, cells, deadline 3.0 s, reserve 0.15 s, RULE_R3 arm fairness;
-- the calibration of worker pod cpu-r3 (MEASURED, ratios 2×1000 ms 1.044 and 4×500 ms 0.925), its move walls, and the journal-full base config;
+- the calibration of screen-r4b's worker pod (MEASURED, ratios 2×1000 ms 1.044 and 4×500 ms 0.925), its move walls, and the journal-full base config;
 - engine tables and provenance.
 
 ## Replay check (final tree)
@@ -48,8 +48,8 @@ Everything else is screen-r4b's:
 
 ## Placement and dispatch
 
-- **Servers:** one 4-GPU pod on its own node (10.140.65.122), 3 processes per GPU behind the proxy on :7000.
-- **Workers:** cpu-r3 (pairs 96–119), on another node.
+- **Servers:** the search servers run in their own pod, 4 GPUs on one machine, a machine different from the worker pod's and the Foul Play collection's.
+- **Workers:** screen-r4b's calibrated worker pod (its 12 lanes).
 - **Dispatch** runs the declaration commit `44494b01228a72e03c90b254ebd743b2ac993af0`, which differs from the server tree by the declaration JSON alone (`server_tree_check`).
 - The verdict and the extension run from an archive of the rules commit with `--tree-commit 44494b01`. Its `src/pokezero` and `gpu_engine` are the dispatch tree's.
 - **A RULE_R3 fairness flag** stops the run and goes to the lead, with no amendment mid-run.
