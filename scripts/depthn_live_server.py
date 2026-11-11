@@ -262,6 +262,8 @@ def options(argv=None):
     p=parser();args=p.parse_args(argv);evaluators.check_arguments(p,args);check_precision_environment(p,args)
     if not args.champion_archive:p.error('--champion-archive with its two sha256 flags is required: the champion prices every root and leaf')
     check_reply_arguments(p,args)
+    if getattr(args,'eager_peer_fold',False)and not(args.redact_private_reveals or args.peer_view_b):
+        p.error('--eager-peer-fold folds the peer wire for the redaction: it needs --redact-private-reveals or --peer-view-b')
     if args.max_requests is None:args.max_requests=args.buckets[-1]
     if not 1<=args.max_requests<=args.buckets[-1]:p.error('--max-requests must be in 1..the largest bucket')
     try:   # Codex's own queue/batch checks (phase_d_search_server.Server._initialize), before anything loads or compiles

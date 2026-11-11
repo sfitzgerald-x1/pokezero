@@ -165,7 +165,7 @@ def compare(args):
     if h0['battles'] != h1['battles'] or h0['run'] != h1['run'] or h0['arm'] != h1['arm'] or h0['seed'] != h1['seed']:
         raise SystemExit('the two records replay different battles, runs, arms or seeds')
     c0, c1 = ((h.get('code') or {}).get('code_sha256') for h in (h0, h1))
-    flags = lambda h: (h.get('incremental_roots'), h.get('eager_peer_fold'))
+    flags = lambda h: (bool(h.get('incremental_roots')), bool(h.get('eager_peer_fold')))
     if not c0 or not c1 or (c0 == c1 and flags(h0) == flags(h1)):
         raise SystemExit('two records of different code (or of different flags) required: a record compared with itself proves nothing')
     head = (h0.get('code') or {}).get('git_head') or ''
@@ -187,7 +187,9 @@ def compare(args):
                 belief_decisions=dict(original=sum(bool(a[k].get('peer_belief')) for k in keys), candidate=sum(bool(b[k].get('peer_belief')) for k in keys),
                                       both=len(beliefs), matching=sum(a[k].get('belief') == b[k].get('belief') and a[k]['prepare'] == b[k]['prepare'] for k in beliefs)))
     summary = dict(decisions=len(a), candidate_decisions=len(b), mismatches=len(mismatches), first_mismatches=mismatches[:20], peer_fold=peer,
-                   identical=not mismatches and len(a) == len(b), original=h0, candidate=h1, walls=walls)
+                   identical=not mismatches and len(a) == len(b) and len(a) > 0, original=h0, candidate=h1, walls=walls)
+    if summary['identical'] and flags(h0)[1] != flags(h1)[1] and not peer['belief_decisions']['both']:
+        summary.update(identical=False, vacuous='the eager peer fold differs but no decision carries a peer belief: nothing about the fold was compared')
     Path(args.out).write_text(json.dumps(summary, indent=1) + '\n');print(json.dumps(dict(identical=summary['identical'], decisions=len(a), mismatches=len(mismatches), peer_fold=peer)))
     return 0 if summary['identical'] else 1
 

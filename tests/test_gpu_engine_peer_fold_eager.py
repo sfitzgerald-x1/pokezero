@@ -102,9 +102,18 @@ class PrepareRootsAdvanceTests(unittest.TestCase):
                 self.assertEqual((type(out[0]).__name__, out[0].detail), ('RootRefusal', 'PUBLIC_SUBSTITUTE_NOT_FRESH_OR_PASSED'))   # the refusal as before
                 if called:advance.assert_called_once_with(constructor, r, 1)
                 else:advance.assert_not_called()
-        constructor = SimpleNamespace(eager_peer_fold=True, prepare=Mock(side_effect=ValueError('MALFORMED_SEARCH_REQUEST')))
-        with patch.object(cw, 'advance_peer_fold') as advance, patch.object(cw, 'constructor_binding', return_value='stamp'):
-            cw.prepare_roots(constructor, [dict(request(9), owner='p3')], device=None, peer_view_b=True);advance.assert_not_called()   # no owner: no fold
+        for eager in (True, False):   # (review) an owner that is not a seat string, even unhashable, refuses its root alone, as before
+            constructor = SimpleNamespace(eager_peer_fold=eager, prepare=Mock(side_effect=ValueError('MALFORMED_SEARCH_REQUEST')))
+            for owner in ('p3', ['p1'], {'p': 1}, None):
+                with self.subTest(eager=eager, owner=owner), patch.object(cw, 'advance_peer_fold') as advance, \
+                        patch.object(cw, 'constructor_binding', return_value='stamp'):
+                    out = cw.prepare_roots(constructor, [dict(request(9), owner=owner)], device=None, peer_view_b=True)
+                    self.assertEqual((type(out[0]).__name__, out[0].detail), ('RootRefusal', 'MALFORMED_SEARCH_REQUEST'));advance.assert_not_called()
+
+    def test_a_memory_error_in_the_eager_fold_is_fatal_as_everywhere_in_the_live_search(self):
+        c = SimpleNamespace(catalog=SimpleNamespace(source=object()), functions=object())
+        with patch.object(cw, '_peer_fold', side_effect=MemoryError()), self.assertRaises(MemoryError):cw.advance_peer_fold(c, request(5), 0)
+        with patch.object(cw, '_peer_fold', side_effect=RuntimeError('anything else')):self.assertFalse(cw.advance_peer_fold(c, request(5), 0))
 
 
 if __name__ == '__main__':
