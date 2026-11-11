@@ -122,8 +122,9 @@ class RootSession:
     Identity with capture_root rests on the contract's installed one-frame masks: the session observes at the end of every
     request, capture_root only at the first request line and at the end, and observe() lets the Tier 2 / investment
     trackers score strikes against the belief state at that moment. With transition_token_budget 0 and investment
-    narrowing off (required here, as ActorContract does) none of that reaches the observation, its metadata or the
-    materialization; a contract that relaxes either is refused rather than risk a silent divergence."""
+    narrowing off (required here, as ActorContract does), and observation schema v4 (no pinned tracker columns; PythonBackend
+    requires it), none of that reaches the observation, its metadata or the materialization; a contract that relaxes either
+    mask is refused rather than risk a silent divergence."""
 
     def __init__(self, *, config, contract, battle_id, owner, stream_id):
         if type(contract) is not ActorContract or owner not in ('p1', 'p2'):raise ValueError('explicit original contract and owner required')

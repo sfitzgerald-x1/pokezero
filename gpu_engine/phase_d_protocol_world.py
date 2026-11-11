@@ -44,9 +44,9 @@ def _once(inputs,root,name,compute,*,shared=False):
     key=(name,id(root))
     if key not in inputs.memo:
         try:inputs.memo[key]=(True,compute())
-        except Exception as error:inputs.memo[key]=(False,error.with_traceback(None))   # no frames (world 0's arrays) kept alive
+        except Exception as error:inputs.memo[key]=(False,error)
     ok,value=inputs.memo[key]
-    if not ok:raise value
+    if not ok:raise value.with_traceback(None)   # each raise starts a fresh traceback: the memo keeps one world's frames at most
     return value if shared else copy.deepcopy(value)
 
 
