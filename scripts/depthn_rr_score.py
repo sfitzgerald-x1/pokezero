@@ -435,9 +435,7 @@ def argmax(values, actions):
     return max(actions, key=lambda a: (values[a], -a))
 
 
-def per_world_q(gs):
-    """Q_w(a) = sum_b pi_w(b) G_w[a][b] per world: the grid's reply prior over kept replies, or the waiting column 0."""
-    return [{a: math.fsum(g.prior[k] * g.values[i, k] for k in range(len(g.replies))) for i, a in enumerate(g.actions)} for g in gs]
+per_world_q = hedge.per_world_q   # one definition: the live NOISE_GATED_K2 operator (depthn_live_search) gates on it
 
 
 def prior_q(gs, priors):
@@ -504,11 +502,7 @@ def load_reply_prior(path):
     return out
 
 
-def noise_gated(qw, chosen, greedy, k):
-    """Averaging's choice only when it differs from greedy and the per-world gap's mean exceeds k standard errors."""
-    if chosen == greedy:return greedy
-    gaps = [q[chosen] - q[greedy] for q in qw]
-    return chosen if statistics.fmean(gaps) > k * statistics.stdev(gaps) / math.sqrt(len(gaps)) else greedy
+noise_gated = hedge.noise_gated   # one definition, as per_world_q
 
 
 def world_lcb(q, spread, kappa):
