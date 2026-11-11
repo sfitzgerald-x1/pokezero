@@ -56,3 +56,16 @@ The reply model and its pins, NOISE_GATED_K2, the arms, cells, reserve, RULE_R3 
 - **Placement:** as screen-r4a: the search servers in their own pod with 4 GPUs on one machine (not the worker pod's or the Foul Play collection's), and the same calibrated worker pod.
 - **Dispatch:** runs the declaration commit `0a157c8cacaeb48a7ea850aed9dc15b506742c61`, which differs from the server tree by the declaration JSON alone (`server_tree_check`). The verdict and the extension run from an archive of the rules commit with `--tree-commit 0a157c8c`.
 - **A RULE_R3 fairness flag** stops the run and goes to the lead, with no amendment mid-run.
+
+## Correction after the screen readout (November 11): how the extension runs
+
+The dispatch line above says the extension runs from an archive of the rules commit with `--tree-commit 0a157c8c`. That route cannot pass the extension's own gate, so it was not used.
+
+- **Why it fails:** the gate recomputes the official 500-pair readout and requires the same bytes. The readout records the panel's tree identity. In a git checkout that identity is the commit with `commit_source` `git` and a dirty flag. Outside git it is the declared commit with `commit_source` `declared` and no dirty flag. The official readout was computed on a clean git checkout of the dispatch commit, so a recomputation from an archive differs.
+- **Route used:** the Python path puts a clean git checkout of the dispatch commit `0a157c8c` first, then a checkout of the rules commit `d64e47ea`.
+  - The panel, and every worker it starts (`python -m pokezero.depthn_live_panel`), loads from the run's own checkout, so its tree identity equals the run manifest's.
+  - The extension dispatcher, the amended-verdict and final-fairness scripts, the four rule files, the extension file and this screen's adoption record come from the rules commit.
+  - The two commits differ only in `evals/`, `scripts/*.py` and `tests/`, none of which is in the panel's code digest.
+- **Checked before dispatch:** a gate-only run on this route reproduced the official readout and the amended verdict byte for byte, and recomputed the RULE_R3 final gate as within. The extension then dispatched to 2,000 pairs with `--resume` (`pending()` requires it once the screen's cells are claimed), on the same servers, worker lanes and calibration.
+- **What did not change:** no rule, gate or panel code changed. The amended verdict ran from a git checkout of the rules commit; it checks the readout's tree commit against the adoption record, not against git HEAD.
+- **Screen result that gated the extension:** amended decision CONTINUE_TO_2000 with no amended breakage. Known pairs +0.043 [−0.002, +0.088]; conservative +0.038 [−0.007, +0.083]; harm mirror +0.046 [+0.001, +0.091]. RULE_R3 final gate within (weighted ratio 1.009). 4 RAW round-cap unknowns, none for search.
