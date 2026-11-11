@@ -21,7 +21,7 @@ screen-r4a2's operator (variant B: br_fp on π_FP red3-full, view b, gated by NO
      - the eager peer fold (`--eager-peer-fold`), which advances each battle's peer wire fold on every root so the first private reveal no longer folds the whole battle (1–2 s spikes).
    - **Routing-only proxy placement:** a worker's battle end frame stops the battle counting toward its GPU's load, and new battles go to the GPU with the fewest live battles, then fewest in flight, then least recently placed. The proxy runs with `--sticky-idle 20`. No module of the live server imports the changed client or panel code.
    - **The pre-flight seat balance** (pre-flights only).
-   - **Two new `check_preflight` conditions** (the panel checks): the search arm's unpriced share must be at most 0.25, and there must be zero reuse refusals (`SEARCH_REQUEST_ALREADY_ATTEMPTED`: a server asked about a battle address it already saw). Every pre-flight below meets both.
+   - **Two new `check_preflight` conditions** (the panel checks): the search arm's unpriced share must be at most 0.25, and there must be zero reuse refusals (`SEARCH_REQUEST_ALREADY_ATTEMPTED`: a server asked about a battle address it already saw; `SEARCH_PREFIX_NOT_ORIGINAL_SUCCESSOR`: a battle's session asked to fold a prefix that does not extend its own). Every pre-flight below meets both.
 3. **The calibration:** a new worker's.
    - RAW only, solo then at the planned 12 lanes, before any timed game; seed band 2103402000 / 2103502000 × 200.
    - Status MEASURED; ratios 2×1000 ms 0.947 and 4×500 ms 0.915.
