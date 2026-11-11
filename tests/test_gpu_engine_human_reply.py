@@ -118,6 +118,23 @@ class DataTest(unittest.TestCase):
         with self.assertRaises(SystemExit):h.shuffle_bench(rows, 0)
 
 
+    def test_pi_fp_without_a_split_record_is_held_to_its_run_report(self):
+        from types import SimpleNamespace
+        arrays = dict(seed=np.array([10, 10, 11, 12, 13]));split = dict(train=np.array([0, 1]), test=np.array([2]), late=np.array([3, 4]))
+        with tempfile.TemporaryDirectory() as d:
+            run = Path(d) / 'run';run.mkdir();(Path(d) / 'fpr').mkdir();seeds = Path(d) / 'seeds.json';seeds.write_text('[11]')
+            args = SimpleNamespace(pi_fp=str(run / 'pi-fp.pt'), fpr=str(Path(d) / 'fpr'), test_seeds=str(seeds), late_from=5700)
+            with self.assertRaises(SystemExit):h.pi_fp_split_check(args, {}, arrays, split)   # no record, no report
+            report = dict(args=dict(data=args.fpr, test_seeds=args.test_seeds, late_from=5700, view='b', redact='peer-view-v2'),
+                          rows=dict(train=2, test=1, late=2))
+            (run / 'report.json').write_text(json.dumps(report))
+            self.assertIn('run report', h.pi_fp_split_check(args, {}, arrays, split))
+            (run / 'report.json').write_text(json.dumps(dict(report, rows=dict(train=3, test=1, late=2))))
+            with self.assertRaises(SystemExit):h.pi_fp_split_check(args, {}, arrays, split)   # a different split
+            marker = dict(split=dict(fit_seeds=[12]))   # a record that fitted a held-out seed
+            with self.assertRaises(SystemExit):h.pi_fp_split_check(args, marker, arrays, split)
+            self.assertIn('split record', h.pi_fp_split_check(args, dict(split=dict(fit_seeds=[10])), arrays, split))
+
     def test_model_names_cannot_shadow_baselines(self):
         self.assertEqual(h.parse_models(['a1=/x', 'a2s1=/y']), {'a1': '/x', 'a2s1': '/y'})
         for bad in ('champion=/x', 'pi_fp=/x', 'turns=/x', 'a1_band_unknown=/x', 'A1=/x', 'a1'):
