@@ -104,4 +104,54 @@ class PublicRootTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'source differ'):r.plan_starts(root, Recipe(11), set_source=foreign)
 
 
+def digest(root):
+    """What two PublicRoots of one prefix must share: identity, payload, counts, and the context's public state and observation."""
+    state = root.context.public_materialization_state;obs = root.context.observation
+    return (root.address, root.owner_lines_sha256, json.dumps(root.materialization_payload, sort_keys=True, default=repr), root.unsupported_counts,
+            state.player_id, state.format_id, state.replay.public_lines, json.dumps(state.self_request, sort_keys=True),
+            json.dumps(state.self_initial_request, sort_keys=True), repr(state.self_move_states), repr(sorted(obs.metadata.items())),
+            tuple(obs.legal_action_mask), root.context.requested_legal_action_masks, root.context.battle_id, root.context.seed)
+
+
+class RootSessionTests(unittest.TestCase):
+    setUp = PublicRootTests.setUp
+    lines = PublicRootTests.lines
+
+    def session(self, owner=0):
+        return r.RootSession(config=self.f.config, contract=self.contract, battle_id='authored-only', owner=('p1', 'p2')[owner], stream_id=17)
+
+    def root(self, session, lines, owner=0, index=2):
+        return session.root(contract=self.contract, lines=lines, address=DecisionAddress(17, index, owner), battle_id='authored-only', seed=7)
+
+    def prefixes(self, owner=0):
+        first = self.lines(('p1', 'p2')[owner]);side = ('p1', 'p2')[owner]
+        second = first + ['|move|p2a: Gengar|Thunderbolt|p1a: Blissey', '|-start|p2a: Gengar|confusion', '|turn|2', request(side)]
+        third = second + ['|-start|p2a: Gengar|Leech Seed', '|turn|3', request(side)]
+        return first, second, third
+
+    def test_a_session_over_successive_requests_gives_capture_root_s_root_for_each_prefix(self):
+        for owner in (0, 1):
+            session = self.session(owner)
+            for i, lines in enumerate(self.prefixes(owner)):
+                self.assertTrue(session.extends(lines))
+                held = self.root(session, lines, owner, index=i)
+                fresh = r.capture_root(config=self.f.config, contract=self.contract, lines=lines, address=DecisionAddress(17, i, owner),
+                    battle_id='authored-only', seed=7)
+                self.assertEqual(digest(held), digest(fresh))
+                self.assertFalse(session.extends(lines))   # a request is folded once
+
+    def test_a_non_successor_or_any_error_closes_the_session(self):
+        first, second, third = self.prefixes()
+        session = self.session();self.root(session, second)
+        self.assertFalse(session.extends(first))
+        with self.assertRaisesRegex(ValueError, 'successor'):self.root(session, first)
+        self.assertFalse(session.open);self.assertFalse(session.extends(third))
+        with self.assertRaisesRegex(ValueError, 'closed'):self.root(session, third)
+        session = self.session();self.root(session, first)
+        poisoned = first + ['|-sethp|p1a: Blissey|100/400|p2a: Gengar|100/301', request('p1')]
+        with self.assertRaisesRegex(ValueError, 'opponent exact HP'):self.root(session, poisoned)
+        self.assertFalse(session.open)
+        with self.assertRaisesRegex(ValueError, 'another owning stream'):self.root(self.session(), first, owner=1)
+
+
 if __name__ == '__main__':unittest.main()

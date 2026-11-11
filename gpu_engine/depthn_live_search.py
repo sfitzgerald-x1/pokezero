@@ -202,7 +202,8 @@ def classify(constructor,request):
         if world._sleep_origins(lines):classes.add('sleep')
     except cw.ROOT_ERRORS:pass
     try:
-        public=pc.capture_root(config=constructor.owning_config,contract=pc.ActorContract.champion(),lines=lines,battle_id=request['battle_id'],
+        if callable(getattr(constructor,'public_root',None)):public=constructor.public_root(request)   # prepare's root when held, else recomputed
+        else:public=pc.capture_root(config=constructor.owning_config,contract=pc.ActorContract.champion(),lines=lines,battle_id=request['battle_id'],
             address=pc.DecisionAddress(request['stream_id'],request['decision_index'],int(request['owner'][1])-1),seed=constructor.seed&0xffffffff)
         payload=public.materialization_payload;checks,facts=tail.inspect_facts(packet,payload,lines)
     except cw.ROOT_ERRORS:return sorted(classes),'request_and_lines'
@@ -546,11 +547,13 @@ class DepthNLiveSearch:
         sessions,seen=self.constructor.sessions,self.constructor.seen
         for key in[k for k in sessions if _battle(k)in drop]:del sessions[key]
         seen.difference_update([a for a in seen if type(a)is tuple and len(a)==3 and _battle(a[0])in drop])
+        if callable(getattr(self.constructor,'drop_roots',None)):self.constructor.drop_roots(drop)
         self.evicted+=len(drop)
 
     def reset_sessions(self):
         """Forget every constructor session and attempted address (warmup does, around each pass; a bench between rosters)."""
         self.constructor.seen.clear();self.constructor.sessions.clear();self.battles.clear()
+        if callable(getattr(self.constructor,'drop_roots',None)):self.constructor.drop_roots()
 
     # Warmup -------------------------------------------------------------------------------------------------------------------------
     def missing_programs(self,b):
