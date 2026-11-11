@@ -609,6 +609,7 @@ def probe(run_directory,*,arm,server,capture,roots=5,tree_commit=None):
         if response['cause']not in ('constructor_refused','depthn_refused','class_refused'):reason='refused: '+str(response['cause']);break
     value=dict(schema=PROBE_SCHEMA,arm=arm,server=server,capture=str(Path(capture).resolve()),status=status,reason=reason,tried=tried)
     write_new(root/'probes'/f'{arm}-{time.time_ns()}.json',value)
+    client.end()   # (review) the probe's battles stop counting at the proxy now, not --sticky-idle later: no skew on the first placements
     if status!='PASS':raise ValueError('search server probe failed: '+reason)
     return value
 

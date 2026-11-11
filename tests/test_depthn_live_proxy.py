@@ -175,7 +175,8 @@ class ProxyTests(unittest.TestCase):
 
 
 class StickyTests(unittest.TestCase):
-    """Battle affinity: a battle's decisions stay on one backend (its constructor session); new battles spread in --backend order."""
+    """Battle affinity: a battle's decisions stay on one backend (its constructor session); new battles go to the least-loaded GPU,
+    ties by in-flight requests, then the least recently placed on, then --backend order."""
     def run_sticky(self, scenario, names, **kw):
         async def main():
             served, servers, backends, rows = [], {}, [], []
@@ -191,7 +192,7 @@ class StickyTests(unittest.TestCase):
                 for s in servers.values():s.close()
         return asyncio.run(main())
 
-    def test_a_battle_sticks_to_its_home_and_new_battles_spread_in_backend_order(self):
+    def test_a_battle_sticks_to_its_home_and_new_battles_spread_to_the_least_recently_placed(self):
         async def scenario(port, pool, servers, rows):
             out = []
             for battle in ('x', 'y', 'x', 'z', 'y', 'x', 'w'):
@@ -306,8 +307,10 @@ class StickyTests(unittest.TestCase):
             first = (await request(port, dict(battle_id='x', owner='p1')))['backend']
             ended = await request(port, dict(schema=P.BATTLE_END_SCHEMA, battle_id='x', owner='p1'))
             unknown = await request(port, dict(schema=P.BATTLE_END_SCHEMA, battle_id='nope', owner='p2'))
+            nameless = await request(port, dict(schema=P.BATTLE_END_SCHEMA, owner='p2'))   # no battle_id: unknown, counted, no crash
+            assert nameless['status'] == 'UNKNOWN_BATTLE' and pool.ended_unknown == 2
             for _ in range(100):
-                if len(rows) >= 3:break
+                if len(rows) >= 4:break
                 await asyncio.sleep(.01)
             return first, ended, unknown, sum(pool.served.values()), pool.live(__import__('time').monotonic()), rows
         first, ended, unknown, served, live, rows = self.run_sticky(scenario, ['a', 'b'])
@@ -315,7 +318,7 @@ class StickyTests(unittest.TestCase):
         self.assertEqual(unknown['status'], 'UNKNOWN_BATTLE');self.assertEqual(served, 1)   # only the request reached a backend
         self.assertEqual(sum(live.values()), 0)   # x stopped counting at once, not 60 s after its last decision
         self.assertEqual(sorted((str(r.get('reason')), r['backend'] is None) for r in rows),
-                         [('None', False), ('battle end', True), ('battle end: unknown battle', True)])   # end frames: no backend
+                         [('None', False), ('battle end', True), ('battle end: unknown battle', True), ('battle end: unknown battle', True)])
 
     def test_the_end_schema_is_the_clients(self):
         from pokezero.depthn_live_actor import BATTLE_END_SCHEMA

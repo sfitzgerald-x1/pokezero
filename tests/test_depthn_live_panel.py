@@ -649,9 +649,12 @@ class WorkerTests(unittest.TestCase):
         root, run, d, lad = make_run(Path(self.directory.name)/'ten', deadline=10.)
         cell = panel.cells(lad, 'DN2W8')[0]; path = root/'requests'/f"{cell['ordinal']}.json"; value = panel.request(run, cell)
         panel.write_new(path, value)
-        with patch.dict(os.environ, {'POD_NAME': 'pod-x'}):
+        ended = []   # (review) the eval worker ends its search battle at the proxy once, after the result is recorded
+        record = lambda c, **k: ended.append((root/'results'/f"{cell['ordinal']}.json").exists()) or []
+        with patch.dict(os.environ, {'POD_NAME': 'pod-x'}), patch('pokezero.depthn_live_actor.Client.end', autospec=True, side_effect=record):
             asyncio.run(panel.worker(dict(path=str(path), sha256=panel.sha(value), server=dict(host='127.0.0.1', port=9)),
                                      expected_pair=(1, 2), original='shared', runtime_class=FakeRuntime))
+        self.assertEqual(ended, [True])
         runtime = FakeRuntime.made[-1]; self.assertEqual((runtime.client.deadline, runtime.client.reserve), (10., .15))
         result = json.loads((root/'results'/f"{cell['ordinal']}.json").read_bytes())
         self.assertEqual((result['worker']['hostname'], result['worker']['pod_name'], result['cpu_pair']), (socket.gethostname(), 'pod-x', [1, 2]))
