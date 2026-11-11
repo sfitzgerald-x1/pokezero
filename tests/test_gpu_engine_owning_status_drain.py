@@ -52,7 +52,7 @@ class OwningStatusDrainTests(unittest.TestCase):
             fake_forward=lambda _:d.FakeScores(j.ones(9),j.array(1,j.int32)))
         cls.diagnostic=d.prepare(*cls.args,**cls.kwargs)
         cls.kernel=d.prepare(*cls.args,**dict(cls.kwargs,status_residual_mode='kernel-event'))
-        cls.birth_cache=None;cls.heal_cache=None;cls.warm_cache=None
+        cls.birth_cache=None;cls.heal_cache=None;cls.next_cache=None;cls.warm_cache=None
 
     # The heavy owning_drain_end_to_end module reuses this flow with the compiled frame.
     compiled_frame=False
@@ -73,7 +73,7 @@ class OwningStatusDrainTests(unittest.TestCase):
 
     def birth(self):
         # One real kernel-event construct per class: constructor, both owners' public folds, join,
-        # encode and score. Shared read-only by every test; advances below never reuse its session.
+        # encode and score. Shared read-only by every test; only heal_turn and next_turn advance its session.
         cls=type(self)
         if cls.birth_cache is None:
             session=self.construct(prepared=self.kernel)
@@ -91,6 +91,18 @@ class OwningStatusDrainTests(unittest.TestCase):
             self.assertEqual(len(frames),1)
             cls.heal_cache=(birth,actions,frames[0],result)
         return d._checked(self.kernel),cls.heal_cache
+
+    def next_turn(self):
+        # The next real turn after the drained heal turn, through the same advance (requests phase,
+        # session continuity, executed mask) and the same frame phase.
+        cls=type(self)
+        if cls.next_cache is None:
+            r,(_,_,_,heal)=self.heal_turn();session,_,_=self.birth();frames=[]
+            self.assertIs(session.result,heal)
+            with self.frame_phase(r,frames):later=d.advance(session,j.zeros((2,2),j.int32),chance_inputs=self.chance())
+            self.assertEqual(len(frames),1)
+            cls.next_cache=(frames[0],later)
+        return d._checked(self.kernel),cls.next_cache
 
     def warm(self):
         # #1's component_before: after the real warm (heal) turn, BRN (side 0) and PSN (side 1) are
@@ -173,19 +185,22 @@ class OwningStatusDrainTests(unittest.TestCase):
         ledger=frame.callbacks.execution.ledger;core=result.state.core
         self.assertEqual(ledger.frame.tolist(),[2,2])
         for row in range(2):
-            # Exactly one Leftovers entry per side; the kernel's other entries on this turn (for example
-            # its turn-loop prefix) are not pinned by count or order. Every present entry is captured.
+            # The turn's entries: one Leftovers entry per side and the kernel's turn-loop prefix (site
+            # counts, not their order), every one captured.
             present=np.arange(ledger.site.shape[1])<int(ledger.count[row])
             sites=np.asarray(ledger.site[row])[present];stage=np.asarray(ledger.stage[row])[present]
+            self.assertEqual(sorted(sites.tolist()),sorted([int(e.Site.LEFTOVERS)]*2+[int(e.Site.TURNLOOP_PREFIX)]))
             leftovers=sites==int(e.Site.LEFTOVERS)
             self.assertEqual(sorted(np.asarray(ledger.side[row])[present][leftovers].tolist()),[0,1])
             self.assertTrue(bool((stage==2).all()))
-            # The kernel's own capture claims every emitted heal word (no test-side capture seam).
+            # The kernel's own capture claims every emitted heal word (no test-side capture seam): two
+            # distinct Leftovers entries, each on its heal word's side.
             words=np.asarray(frame.callbacks.words[row,:int(frame.callbacks.count[row])])
             heals=np.flatnonzero(words[:,0]==17);self.assertEqual(len(heals),2)
             slots=np.asarray(ledger.claimed[row])[heals]-1
-            self.assertTrue(bool((slots>=0).all()))
+            self.assertTrue(bool((slots>=0).all()));self.assertEqual(len(set(slots.tolist())),2)
             self.assertTrue(bool((np.asarray(ledger.site[row])[slots]==int(e.Site.LEFTOVERS)).all()))
+            self.assertEqual(np.asarray(ledger.side[row])[slots].tolist(),words[heals,3].tolist())
             # Both owners drained every entry of the frame.
             self.assertEqual(int(core.execution.count[row]),int(ledger.count[row]))
             self.assertTrue(bool((np.asarray(core.execution.stage[row])[present]==3).all()))
@@ -193,7 +208,12 @@ class OwningStatusDrainTests(unittest.TestCase):
         self.assertEqual(e.report(core.execution,tables=tables).scoped_drained.tolist(),[True,True])
         self.same(result.state.observers[0].accounting,result.state.observers[1].accounting)
         self.check_final_public_hp(result)
-        for owner in result.owners:
+        # The next real turn opens ledger frame 3 and is admitted.
+        _,(_,later)=self.next_turn()
+        self.assertEqual(later.state.core.admitted.tolist(),[True,True])
+        self.assertEqual(later.state.core.execution.frame.tolist(),[3,3])
+        self.assertEqual(e.report(later.state.core.execution,tables=tables).scoped_drained.tolist(),[True,True])
+        for owner in (*result.owners,*later.owners):
             self.assertFalse(bool(owner.scored.any()));self.assertFalse(bool(owner.B4_qualified.any()))
 
     # status_kernel_owner_drain
@@ -278,7 +298,7 @@ class OwningStatusDrainTests(unittest.TestCase):
         frame=self.frame_call(d._checked(self.diagnostic),birth.core,actions,self.chance())
         ordinary=self.frame_call(d._checked(self.plain),birth.core,actions,self.chance())
         self.same(frame,ordinary)
-        # advance revalidates the status helper before any device phase, warm closures or not.
+        # advance revalidates the status helper before any device phase: the guard precedes every closure.
         record=dict(advancing=False)
         with patch.object(d,'_session',return_value=record),\
                 patch.object(status,'check_compiled',side_effect=ValueError('status metadata changed')):
