@@ -7,7 +7,8 @@ does; a single-legal decision is not sent (the live actor never sends one). For 
 digest of prepare_roots' output (Prepared or RootRefusal; arrays by dtype, shape and bytes, floats exactly, dataclasses, mappings
 and sequences element by element in order; only timing fields and the request id left out), of classify's output, and of the
 decision's public root (the root the constructor holds with --incremental-roots, else capture_root's from scratch), with the
-unprofiled wall of prepare and of classify. Run it once on the original tree and once on the candidate tree (same inputs).
+unprofiled wall of prepare and of classify. Run it once on the original tree and once on the candidate tree (same inputs); the header records the imported tree's code digest
+and git HEAD (code_identity), and compare refuses two records of the same code with the same flag (a vacuous comparison).
 
 compare: two record files must hold the same decisions with equal digests; it reports every mismatch and both trees' walls by
 decision band (0-2, 3-9, 10-19, 20+). Exit 0 only when every decision matches.
@@ -74,6 +75,21 @@ def digest(value, shared):
     return hashlib.sha256(json.dumps(canonical(value, shared), separators=(',', ':')).encode()).hexdigest()
 
 
+def code_identity():
+    """(root, sha256 of the imported tree's gpu_engine and src/pokezero .py files, git HEAD or None) of the code this process runs."""
+    import subprocess
+    import gpu_engine
+    root = Path(gpu_engine.__file__).resolve().parents[1];h = hashlib.sha256()
+    for base in ('gpu_engine', 'src/pokezero'):
+        for path in sorted((root / base).rglob('*.py')):
+            if '__pycache__' not in path.parts:h.update(str(path.relative_to(root)).encode() + b'\0' + path.read_bytes())
+    try:head = subprocess.run(['git', '-C', str(root), 'rev-parse', 'HEAD'], capture_output=True, text=True, timeout=30).stdout.strip() or None
+    except (OSError, subprocess.SubprocessError):head = None
+    import pokezero
+    if Path(pokezero.__file__).resolve().parents[2] != root:raise SystemExit('gpu_engine and pokezero come from different trees')
+    return dict(root=str(root), code_sha256=h.hexdigest(), git_head=head)
+
+
 def record(args):
     os.environ['JAX_PLATFORMS'] = 'cpu'
     import jax
@@ -104,7 +120,7 @@ def record(args):
             cells.append(int(path.stem))
     step = max(1, len(cells) // args.battles);chosen = cells[::step][:args.battles]
     header = dict(event='HEADER', run=str(run), arm=args.arm, battles=chosen, incremental_roots=args.incremental_roots, seed=args.seed,
-                  tree=os.environ.get('TREE_COMMIT'), source=str(Path(__file__).resolve()))
+                  tree=os.environ.get('TREE_COMMIT'), code=code_identity(), source=str(Path(__file__).resolve()))
     index = 0
     with open(args.out, 'x') as stream:
         stream.write(json.dumps(header) + '\n')
@@ -139,7 +155,11 @@ def compare(args):
     def load(path):
         rows = [json.loads(l) for l in open(path) if l.strip()];return rows[0], {(r['ordinal'], r['decision_index']): r for r in rows[1:]}
     (h0, a), (h1, b) = load(args.original), load(args.candidate)
-    if h0['battles'] != h1['battles']:raise SystemExit('the two records replay different battles')
+    if h0['battles'] != h1['battles'] or h0['run'] != h1['run'] or h0['arm'] != h1['arm'] or h0['seed'] != h1['seed']:
+        raise SystemExit('the two records replay different battles, runs, arms or seeds')
+    c0, c1 = ((h.get('code') or {}).get('code_sha256') for h in (h0, h1))
+    if not c0 or not c1 or (c0 == c1 and h0['incremental_roots'] == h1['incremental_roots']):
+        raise SystemExit('two records of different code (or of the incremental flag off then on) required: a record compared with itself proves nothing')
     mismatches = []
     for key in sorted(set(a) | set(b)):
         x, y = a.get(key), b.get(key)

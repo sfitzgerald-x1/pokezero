@@ -117,10 +117,19 @@ class RootSession:
     capture_root does, and root() finishes with capture_root's own step (_root_of): the PublicRoot of the extended prefix,
     at the cost of its new lines instead of the whole battle. Every request still passes capture_root's identity and
     whole-prefix checks (_owning_lines). extends(lines) says whether a request continues this session; root() refuses one
-    that does not (ValueError). Any error closes the session, so a caller starts a new one, which folds from the start."""
+    that does not (ValueError). Any error closes the session, so a caller starts a new one, which folds from the start.
+
+    Identity with capture_root rests on the contract's installed one-frame masks: the session observes at the end of every
+    request, capture_root only at the first request line and at the end, and observe() lets the Tier 2 / investment
+    trackers score strikes against the belief state at that moment. With transition_token_budget 0 and investment
+    narrowing off (required here, as ActorContract does) none of that reaches the observation, its metadata or the
+    materialization; a contract that relaxes either is refused rather than risk a silent divergence."""
 
     def __init__(self, *, config, contract, battle_id, owner, stream_id):
         if type(contract) is not ActorContract or owner not in ('p1', 'p2'):raise ValueError('explicit original contract and owner required')
+        masks = dict(contract.feature_masks)
+        if masks.get('transition_token_budget') != 0 or masks.get('investment_belief_narrowing') is not False:
+            raise ValueError('incremental roots need the one-frame masks: no transition tokens, no investment narrowing')
         self.key = (battle_id, owner, stream_id);self.lines = ();self.first_observation = None;self.open = True
         self.backend = PythonBackend(contract, config=config, battle_id=battle_id, owner=owner, stream_id=stream_id)
 
