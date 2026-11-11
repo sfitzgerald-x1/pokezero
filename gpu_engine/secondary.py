@@ -47,7 +47,8 @@ EXTRA_CHANCES = {"silverwind": 10, "ancientpower": 10, "mudshot": 100,
 
 # Fidelity patch B. secondary.boosts on the target (data/moves.ts irontail: def -1), secondary.self.boosts
 # on the user (steelwing: def +1; meteormash: atk +1, gen5's 100 BP/85% inherited), and secondary
-# volatileStatus confusion (signalbeam, Special in Gen 3 by type). Stage order: atk def spa spd spe acc eva.
+# volatileStatus confusion (signalbeam; Bug is a Physical type in Gen 3, data/mods/gen3/scripts.ts:5-13).
+# Stage order: atk def spa spd spe acc eva.
 TARGET_DROPS = {"irontail": [0, -1, 0, 0, 0, 0, 0]}
 SELF_BOOSTS = {"steelwing": [0, 1, 0, 0, 0, 0, 0], "meteormash": [1, 0, 0, 0, 0, 0, 0]}
 CONFUSION_MOVES = ("signalbeam",)

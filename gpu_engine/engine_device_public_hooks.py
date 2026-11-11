@@ -482,6 +482,7 @@ def item_changes(c,before,after,use):
         c=c._replace(trackers=_write(c.trackers,'item_removed',side,_li.take(after.active,_r(after),side),j.ones_like(consumed),consumed))
         # Fidelity patch B: a Lum Berry's onEat removes confusion (-end|X|confusion), e.g. one Baton-passed in.
         # States without the leaf (authored fixtures) carry no confusion transition.
+        # Fixture-only guard: transition.py and secondary.py callers always pass BattleState, which has the leaf.
         if hasattr(before,'confusion_counter') and hasattr(after,'confusion_counter'):
             c=confusion_end(c,after,side,_mask(use,len(c.trackers.error))&_confusion_ended(before,after,side))
     return observe(c,after,use)
@@ -704,6 +705,7 @@ def before_move(c,state,side,result,use,*,loafing=False,sleep_usable=False):
     # Fidelity patch B (design 2.5): the snap-out (confusion's time reaches 0 at BeforeMove) prints
     # -end|X|confusion; public_move_state cannot see it, its before being the post-BeforeMove state.
     # A result without the field (an authored fixture) carries no confusion transition.
+    # Fixture-only guard: transition.py always passes mechanics.BeforeMove, which has the field.
     left=getattr(result,'confusion_counter',None)
     if left is not None:c=confusion_end(c,state,side,use&(_get(state,'confusion_counter',side)>0)&(j.asarray(left)==0))
     return _refresh(c,side,p,use&(_get(state,'status',side)==5)&(result.status==5))

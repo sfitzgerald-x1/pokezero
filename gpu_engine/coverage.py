@@ -100,8 +100,8 @@ def registry():
         'Clear Body/White Smoke delete it silently, -6 is a no-op','secondary','fidelity_b')
     group('steelwing meteormash','Ordinary damage plus 10% user Def +1 (Steel Wing) or 20% user Atk +1 (Meteor Mash), '
         'which survives Shield Dust, a Substitute and a KO; +6 is a no-op','secondary','fidelity_b')
-    group('headbutt needlearm','Ordinary damage plus 30% flinch: Inner Focus, Shield Dust, a Substitute or a fainted target '
-        'blocks it; it matters only before the target moves','secondary','fidelity_b')
+    group('headbutt needlearm','Ordinary damage plus 30% flinch: Inner Focus, Focus Punch\'s focus, Shield Dust, a Substitute '
+        'or a fainted target blocks it; it matters only before the target moves','secondary','fidelity_b')
     group('signalbeam','Ordinary damage plus 10% confusion for 2-5 moves (the attacker\'s draws[s][7]): Own Tempo, Shield '
         'Dust, a Substitute hit, a fainted or already confused target block it; 50% 40 BP typeless self-hit, snap-out, '
         'Lum Berry and Own Tempo cures, Baton Pass carry','secondary','fidelity_b')
