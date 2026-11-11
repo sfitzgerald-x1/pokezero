@@ -1,9 +1,20 @@
 {
  "schema": "pokezero.effect_probe.scenario.v1",
  "move": "hyperbeam_tie",
- "note": "M1.1: the recharge pseudo-move is priority 0 at the user's Speed: two level-100 Snorlax tie. On the recharge turn the foe Encores; the tie coin orders the recharge and the Encore, which gets one extra turn when its target has no queued move left (the recharge went first). The encored recharger then repeats Hyper Beam.",
+ "note": "M1.1: the recharge pseudo-move is priority 0 at the user's Speed: two level-100 Snorlax tie (each enters by a switch so no lead tie is drawn). On the recharge turn the foe Encores; the tie coin orders the recharge and the Encore, which gets one extra turn when its target has no queued move left (the recharge went first). The encored recharger then repeats Hyper Beam.",
  "teams": [
   [
+   {
+    "species": "Starmie",
+    "moves": [
+     "splash",
+     "surf",
+     "recover",
+     "protect"
+    ],
+    "ability": "Illuminate",
+    "item": "Leftovers"
+   },
    {
     "species": "Snorlax",
     "moves": [
@@ -15,17 +26,6 @@
     "ability": "Thick Fat",
     "item": "Leftovers",
     "level": 100
-   },
-   {
-    "species": "Starmie",
-    "moves": [
-     "splash",
-     "surf",
-     "recover",
-     "protect"
-    ],
-    "ability": "Illuminate",
-    "item": "Leftovers"
    },
    {
     "species": "Blissey",
@@ -74,6 +74,17 @@
   ],
   [
    {
+    "species": "Blissey",
+    "moves": [
+     "splash",
+     "softboiled",
+     "protect",
+     "seismictoss"
+    ],
+    "ability": "Serene Grace",
+    "item": "Leftovers"
+   },
+   {
     "species": "Snorlax",
     "moves": [
      "splash",
@@ -94,17 +105,6 @@
      "protect"
     ],
     "ability": "Illuminate",
-    "item": "Leftovers"
-   },
-   {
-    "species": "Blissey",
-    "moves": [
-     "splash",
-     "softboiled",
-     "protect",
-     "seismictoss"
-    ],
-    "ability": "Serene Grace",
     "item": "Leftovers"
    },
    {
@@ -144,8 +144,12 @@
  ],
  "script": [
   [
-   "move 1",
+   "switch 2",
    "move 1"
+  ],
+  [
+   "move 1",
+   "switch 2"
   ],
   [
    "move 1",
@@ -173,7 +177,7 @@
     1
    ],
    "steps": [
-    1
+    2
    ]
   }
  ],
