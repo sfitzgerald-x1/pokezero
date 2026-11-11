@@ -108,15 +108,16 @@ def redact_own_credit(numeric):
 
 def load_views(views_dir, unredacted=False):
     """The kept rows of every shard (games in order), redacted (peer-view-v2, own credit), with band, split, partial and group
-    (replay, imputation, seat); unredacted=True also keeps the builder's view as numeric_unredacted."""
+    (replay, imputation, seat); unredacted=True also keeps the test rows' builder view as numeric_unredacted_test (in test-row
+    order)."""
     arrays = fpt.load(views_dir)
     keep = keep_rows(arrays);arrays = {k: v[keep] for k, v in arrays.items()}
-    if unredacted:arrays['numeric_unredacted'] = arrays['numeric_features'].copy()
+    split = replay_split(arrays['replay'])
+    arrays['split'] = np.where(arrays['vintage'] == VINTAGES.index('strict'), 'test', split)
+    if unredacted:arrays['numeric_unredacted_test'] = arrays['numeric_features'][arrays['split'] == 'test'].copy()
     redact_own_credit(arrays['numeric_features'])
     arrays['partial'] = partial_mask(arrays)
     arrays['band'] = band_of(arrays['rating'])
-    split = replay_split(arrays['replay'])
-    arrays['split'] = np.where(arrays['vintage'] == VINTAGES.index('strict'), 'test', split)
     arrays['group'] = group_ids(arrays['replay'], arrays['imputation'], arrays['seat'])
     return arrays
 
@@ -291,7 +292,7 @@ def loss_terms(torch, logits, legal, label, partial):
     """Per-row negative log-likelihood: the full label's, or -log P(some legal move) for a partial label."""
     logp = torch.log_softmax(masked_logits(logits, legal), -1)
     full = -logp.gather(1, label.clamp(min=0).unsqueeze(1)).squeeze(1)
-    moves = logp[:, :MOVES].masked_fill(~legal[:, :MOVES], float('-inf'))
+    moves = logp[:, :MOVES].masked_fill(~legal[:, :MOVES], -1e9)   # finite: no inf/NaN in the unused branch's backward
     some = -torch.logsumexp(moves, -1)
     return torch.where(partial, some, full)
 
@@ -335,7 +336,10 @@ def store_events(specs, torch):
 def load_human(run_dir, torch, device):
     """A trained HumanReply from RUN_DIR/human.pt (the base checkpoint's architecture, then the wrapper's whole state)."""
     from pokezero.neural_policy import load_transformer_checkpoint
+    from pokezero.neural_policy import checkpoint_file_sha256
     saved = torch.load(Path(run_dir) / 'human.pt', map_location='cpu', weights_only=False)
+    if checkpoint_file_sha256(saved['base_checkpoint']) != saved['base_checkpoint_sha256']:
+        raise SystemExit(f"{saved['base_checkpoint']} is not the base checkpoint {run_dir} was trained from (sha256 differs)")
     base, _ = load_transformer_checkpoint(saved['base_checkpoint'], map_location=device)
     HumanReply, embed_tokens = build(torch)
     model = HumanReply(base, bands=saved['wrapper']['bands'], history=saved['wrapper']['history'], events=saved['wrapper']['events']).to(device)
@@ -461,7 +465,6 @@ def train(args):
         return .1 + .9 * .5 * (1 + math.cos(math.pi * min(1., (step - args.warmup) / max(1, total - args.warmup))))
     scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, factor)
     generator = torch.Generator(device=args.device);generator.manual_seed(args.seed)
-    val_full = rows['val'][~arrays['partial'][rows['val']]]
 
     def validate():
         p = predict(model, store, rows['val'], torch, embed_tokens)
@@ -511,13 +514,25 @@ def recalibration(probs, labels, legal, torch):
     return params, apply
 
 
+RESERVED = ('uniform_legal', 'champion', 'champion_unredacted', 'champion_recalibrated', 'champion_stored_env', 'pi_fp', 'turns', 'decisions')
+
+
 def parse_models(specs):
+    """{name: run dir} from NAME=RUN_DIR; names are lowercase and may not shadow a baseline or a derived (_band_*) column."""
     out = {}
     for s in specs or ():
         name, _, path = s.partition('=')
-        if not name or not path or not re.fullmatch(r'[a-z0-9_]+', name):raise SystemExit(f'--model NAME=RUN_DIR (lowercase name), got {s!r}')
+        if not name or not path or not re.fullmatch(r'[a-z0-9]+', name):raise SystemExit(f'--model NAME=RUN_DIR (lowercase letters and digits), got {s!r}')
+        if name in RESERVED or name in out:raise SystemExit(f'--model name {name!r} is reserved or repeated')
         out[name] = path
     return out
+
+
+def check_trained_on(specs, views, torch):
+    """Refuse a model trained on other views: its split (and so its held-out rows) is defined on its own data directory."""
+    for name, path in specs.items():
+        data = torch.load(Path(path) / 'human.pt', map_location='cpu', weights_only=False)['human_reply']['data']
+        if Path(data).resolve() != Path(views).resolve():raise SystemExit(f'{name} was trained on {data}, not {views}')
 
 
 def plain_model(path, torch, device):
@@ -535,13 +550,14 @@ def evaluate(args):
     arrays = load_views(args.views, unredacted=True)
     test = np.flatnonzero(arrays['split'] == 'test');train = np.flatnonzero(arrays['split'] == 'train')
     champion, embed_tokens = plain_model(args.checkpoint, torch, args.device)
+    check_trained_on(parse_models(args.model), args.views, torch)
     store = Store(arrays, torch, args.device, events=store_events(parse_models(args.model), torch))
     models = dict(uniform_legal=arrays['legal'][test] / arrays['legal'][test].sum(1, keepdims=True))
     models['champion'] = predict(champion, store, test, torch, embed_tokens, base_only=True)
     raw = Store({k: arrays[k][test] for k in ('categorical_ids', 'token_type_ids', 'attention_mask', 'legal', 'label')} |
-                dict(numeric_features=arrays['numeric_unredacted'][test]), torch, args.device)
+                dict(numeric_features=arrays.pop('numeric_unredacted_test')), torch, args.device)
     models['champion_unredacted'] = predict(champion, raw, np.arange(len(test)), torch, embed_tokens, base_only=True)
-    del raw;arrays.pop('numeric_unredacted')
+    del raw
     fit = np.random.default_rng(0).choice(train[~arrays['partial'][train]], min(args.recalibration_rows, int((~arrays['partial'][train]).sum())), replace=False)
     params, apply = recalibration(predict(champion, store, fit, torch, embed_tokens, base_only=True), arrays['label'][fit], arrays['legal'][fit], torch)
     models['champion_recalibrated'] = apply(models['champion'], arrays['legal'][test])
@@ -585,10 +601,16 @@ def foulplay(args):
     from pokezero.neural_policy import checkpoint_file_sha256
     set_exact(torch);out = Path(args.out);out.mkdir(parents=True, exist_ok=True);started = time.time()
     if (out / 'report-foulplay.json').exists():raise SystemExit(f'{out} already holds an evaluation')
+    marker = torch.load(args.pi_fp, map_location='cpu', weights_only=True).get('fp_reply') or {}
+    if marker.get('view') != 'b' or marker.get('redaction') != 'peer-view-v2':
+        raise SystemExit(f"{args.pi_fp} was trained on view {marker.get('view')!r}, redaction {marker.get('redaction')!r}: this comparison needs b, peer-view-v2")
     arrays = fpt.load(args.fpr)
     fpt.use_view(arrays, 'b');fpt.apply_redaction(arrays, 'peer-view-v2')
     test_seeds = fpt.read_test_seeds(args.test_seeds, arrays)
     split = fpt.split_rows(arrays, test_seeds, args.late_from)
+    overlap = fpt.held_out_overlap(marker, arrays, split)   # pi_FP's fitted seeds must not be scored as held out
+    if overlap is None or overlap:raise SystemExit(f'{args.pi_fp}: ' + ('no split record' if overlap is None else
+                                                    f'fitted on {len(overlap)} battle seeds this split holds out (first: {overlap[:5]})'))
     n = len(arrays['label'])
     arrays['partial'] = np.zeros(n, bool);arrays['kind'] = np.asarray(arrays['forced'], np.int64);arrays['locked'] = np.zeros(n, bool)
     arrays['group'] = group_ids(arrays['ordinal']);arrays['band'] = np.zeros(n, np.int64)
@@ -598,6 +620,10 @@ def foulplay(args):
     pi_fp, _ = plain_model(args.pi_fp, torch, args.device)
     report = dict(schema='v2s-human-reply-foulplay.v1', fpr=str(args.fpr), test_seeds=args.test_seeds, late_from=args.late_from,
                   pi_fp=args.pi_fp, pi_fp_sha256=checkpoint_file_sha256(args.pi_fp), checkpoint_sha256=checkpoint_file_sha256(args.checkpoint),
+                  pi_fp_record=dict(view=marker['view'], redaction=marker['redaction'], data=marker.get('data'),
+                                    held_out_check="held-out seeds disjoint from pi_FP's fitted seeds"),
+                  history_inputs_note='Foul Play rows are all full labels (no partial events) and locked is 0: a history model sees '
+                                      'every earlier choice, which a served model would not for a turn whose move never ran',
                   models={}, splits={})
     for split_name in [s for s in ('test', 'late') if s in split]:
         rows = split[split_name]
@@ -646,6 +672,7 @@ def export(args):
     if checkpoint.exists() or archive.exists():raise SystemExit(f'{out} already holds an export')
     model, embed_tokens, saved = load_human(args.run, torch, args.device)
     if saved['wrapper']['history']:raise SystemExit('a history model has no champion archive (its event inputs are not in the archive format)')
+    if model.band is None and args.band != 'unknown':raise SystemExit('this run has no band table: export it with --band unknown')
     band = BANDS.index(args.band)
     base_state = {k[len('base.'):]: v.detach().cpu() for k, v in model.state_dict().items() if k.startswith('base.')}
     state = fold_band(base_state, model.band.detach().cpu(), band) if model.band is not None else base_state
@@ -653,11 +680,14 @@ def export(args):
     payload['state_dict'] = state;payload['value_calibration_transform'] = None;payload['value_calibration_source_checkpoint_sha256'] = None
     if isinstance(payload.get('model_config'), dict) and 'policy_id' in payload['model_config']:
         payload['model_config'] = dict(payload['model_config'], policy_id=f"human-reply-{payload['model_config']['policy_id']}")
-    marker = dict(saved['human_reply'], band=args.band, source_run=str(args.run), source_sha256=checkpoint_file_sha256(Path(args.run) / 'human.pt'))
+    marker = dict(saved['human_reply'], band=args.band if model.band is not None else None, source_run=str(args.run),
+                  source_sha256=checkpoint_file_sha256(Path(args.run) / 'human.pt'))
+    payload.pop('fp_reply', None)
     payload['human_reply'] = marker
     torch.save(payload, checkpoint)
     arrays = load_views(args.views)
-    test = np.flatnonzero(arrays['split'] == 'test')[:args.parity_rows]
+    keep = np.flatnonzero(arrays['split'] == 'test')[:args.parity_rows]
+    arrays = {k: v[keep] for k, v in arrays.items()};test = np.arange(len(keep))
     store = Store(arrays, torch, args.device)
     wrapped = predict(model, store, test, torch, embed_tokens, band=band)
     folded, _ = load_transformer_checkpoint(checkpoint, map_location=args.device)

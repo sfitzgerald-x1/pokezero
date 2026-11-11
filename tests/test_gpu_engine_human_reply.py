@@ -84,6 +84,12 @@ class DataTest(unittest.TestCase):
                       split=np.array(['train', 'train', 'test', 'test', 'test', 'test']))
         self.assertEqual(h.player_disjoint(arrays, players, np.array([2, 3, 4, 5])).tolist(), [2, 4, 5])   # ua played in train
 
+    def test_model_names_cannot_shadow_baselines(self):
+        self.assertEqual(h.parse_models(['a1=/x', 'a2s1=/y']), {'a1': '/x', 'a2s1': '/y'})
+        for bad in ('champion=/x', 'pi_fp=/x', 'turns=/x', 'a1_band_unknown=/x', 'A1=/x', 'a1'):
+            with self.assertRaises(SystemExit, msg=bad):h.parse_models([bad])
+        with self.assertRaises(SystemExit):h.parse_models(['a1=/x', 'a1=/y'])
+
 
 @unittest.skipUnless(HAS_TORCH, 'torch not installed')
 class ModelTest(unittest.TestCase):
@@ -141,6 +147,12 @@ class ModelTest(unittest.TestCase):
         p = torch.softmax(logits[0], -1)
         self.assertAlmostEqual(float(loss[0]), float(-torch.log(p[4])), places=5)
         self.assertAlmostEqual(float(loss[1]), float(-torch.log(p[:4].sum())), places=5)
+
+    def test_loss_gradient_is_finite_on_a_row_without_legal_moves(self):
+        torch = self.torch
+        logits = torch.randn(2, 9, requires_grad=True);legal = torch.ones((2, 9), dtype=torch.bool);legal[0, :4] = False   # a forced switch
+        h.loss_terms(torch, logits, legal, torch.tensor([5, -1]), torch.tensor([False, True])).sum().backward()
+        self.assertTrue(torch.isfinite(logits.grad).all())
 
 
 if __name__ == '__main__':
