@@ -189,7 +189,8 @@ async def handle(pool, client_reader, client_writer, *, connect_timeout=.25, fir
         if log_row is not None:log_row(dict(backend=None, reason='no request', opened=opened, closed=time.time(), seconds=time.time() - opened))
         await _close(client_writer);return
     if end:   # a battle end frame: answered here, never forwarded
-        known = battle is not None and pool.end(battle)
+        known = pool.end(battle) if battle is not None else False
+        if battle is None:pool.ended_unknown += 1   # no string battle_id: unknown too
         out = json.dumps(dict(schema=BATTLE_END_SCHEMA, battle_id=None if battle is None else battle[0], owner=None if battle is None else battle[1],
                               status='ENDED' if known else 'UNKNOWN_BATTLE'), sort_keys=True).encode()
         try:client_writer.write(struct.pack('!I', len(out)) + out);await client_writer.drain()

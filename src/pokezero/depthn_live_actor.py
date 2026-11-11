@@ -133,7 +133,9 @@ class Client:
     def end(self,*,timeout_seconds=2.):
         """One battle end frame per battle this client searched, for the proxy's GPU load count (scripts/depthn_live_proxy). Called
         after the game's result is recorded, never on a decision's path. Best effort: never raises; returns each battle's status
-        (ENDED, UNKNOWN_BATTLE, a direct server's own answer, or the error's type name)."""
+        (ENDED, UNKNOWN_BATTLE, or the error's type name). Only this commit's proxy answers it: a search server reached directly
+        drops the connection (ConnectionError here, a traceback in its log), and an older proxy would forward it to the battle's
+        home and count the battle live again, so the proxy and the panel run from one commit."""
         out=[]
         for battle_id,owner in self.battles:
             try:
