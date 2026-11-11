@@ -85,10 +85,11 @@ def rung_names(weighted, with_true, true_weighted):
     return names
 
 
-def load(paths, kind, manifest, run, counts):
-    """{root index: (key, raw row)} of one run's rows (mc_ladder_rungs.identity and true_worlds_check); mismatches counted."""
+def load(rows, kind, manifest, run, counts):
+    """{root index: (key, raw row, undecided reason or None)} of one run's rows (mc_ladder_rungs.identity and
+    true_worlds_check); mismatches counted."""
     out = {}
-    for raw in L.read_rows(paths):
+    for raw in rows:
         counts['rows'] += 1;key, problem = L.identity(raw, kind, manifest);truth = None
         if key is not None:problem, truth = L.true_worlds_check(raw, run)
         if problem is not None:counts[f'identity_{problem}'] += 1;continue
