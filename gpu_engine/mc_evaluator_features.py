@@ -17,7 +17,7 @@ The champion's own value head output is kept per observation (old_value: the com
 come from the production forward through one encoder hook (value_precision_probe.frozen_token_features' method): float16
 [n, tokens, width] with the boolean attention mask [n, tokens], the root first, then the children in (a, b, c) order.
 
-Output per worker: OUT/features-<worker>.npz (tokens, valid, owner row index per observation) and OUT/index-<worker>.jsonl (one row per
+Output per worker: OUT/features-<worker>/{tokens,valid,owner,old_value}.npy (owner: the index row of each observation) and OUT/index-<worker>.jsonl (one row per
 root: identity, actions, replies with their prior, Q_MC, SE, per-(a, b) outcomes, the children's (a, b, c, terminal outcome or
 None, observation index)), and OUT/summary-<worker>.json. Exit 0 only when every root of the worker was written.
 
@@ -145,8 +145,9 @@ def main(argv=None):
                 counts['terminal_children'] += sum(c['terminal'] is not None for c in index['children'])
     finally:
         env.close()
-    if tokens:np.savez(out / f'features-{args.worker}.npz', tokens=np.concatenate(tokens), valid=np.concatenate(valid), owner=np.concatenate(owner),
-                       old_value=np.concatenate(old_value))
+    if tokens:   # plain .npy arrays (memory-mappable by the trainer)
+        shard = out / f'features-{args.worker}';shard.mkdir(exist_ok=True)
+        for name, parts in (('tokens', tokens), ('valid', valid), ('owner', owner), ('old_value', old_value)):np.save(shard / f'{name}.npy', np.concatenate(parts))
     (out / f'summary-{args.worker}.json').write_text(json.dumps(dict(counts, draws=args.draws, worker=args.worker, workers=args.workers)) + '\n')
     print(json.dumps(dict(event='DONE', **counts)), flush=True)
     return 0 if counts['written'] and counts['written'] == counts['roots'] else 1
