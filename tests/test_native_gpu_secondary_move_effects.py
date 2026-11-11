@@ -17,7 +17,7 @@ class NativeSecondaryMoveEffectsTests(unittest.TestCase):
         j=self.j;s=self.empty(1,seed=701);names=self.meta['vocabulary']['moves'];abilities=self.meta['vocabulary']['abilities']
         return s._replace(hp=j.full_like(s.hp,1000),max_hp=j.full_like(s.max_hp,1000),
             stats=j.full_like(s.stats,200).at[...,0].set(1000).at[:,side,:,5].set(301).at[:,1-side,:,5].set(199),
-            level=j.full_like(s.level,100),types=s.types.at[...,0].set(1),species=j.broadcast_to(j.arange(1,7),(1,2,6)),
+            level=j.full_like(s.level,100),types=s.types.at[...,0].set(1),base_types=s.types.at[...,0].set(1),species=j.broadcast_to(j.arange(1,7),(1,2,6)),
             moves=j.broadcast_to(j.array([1,3,4,5]),s.moves.shape)
                 .at[0,side,0].set(j.array([names.index(move),1,3,4]))
                 .at[0,1-side,0].set(j.array([4,1,3,5]) if endure else j.array([9,1,3,4]) if opposing_attack else j.array([1,3,4,5])),pp=j.full_like(s.pp,8),

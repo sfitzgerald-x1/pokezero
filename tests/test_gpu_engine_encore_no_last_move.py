@@ -47,7 +47,7 @@ class EncoreNoLastMoveTests(unittest.TestCase):
    before=start._replace(encore_counter=start.encore_counter.at[r,side,phys].set(count));y,pp=cb.begin(x,before,side,j.zeros(8,j.int32),self.runtime['direct_hit_context'],self.table.encore,eligible=j.ones(8,bool),residual=True);after_tick=encore.residual(before,side,eligible=j.ones(8,bool));y,cc=cb.finish(y,pp,after_tick);self.assertEqual(cc.raw[:,3].tolist(),[code]*8);self.assertTrue(bool(cb.captured_matches(y,cc).all()))
   observed=risk.branch_on_tape(out,risk.Branch.ENCORE,j.ones(8,bool),active=j.ones(8,bool),captured_encore=c);self.assertEqual(observed.execution.risks.carry.risk.tolist(),[0]*8)
   for file in ('transition.py','encore.py','state.py','action_history.py','engine_retained_encoder_driver.py'):
-   self.assertEqual(Path('gpu_engine',file).read_bytes(),subprocess.check_output(['git','show',('10843c23c68e58e5a3721a09aa00bac6eff8e59e' if file=='engine_retained_encoder_driver.py' else BASE)+':gpu_engine/'+file]))
+   self.assertEqual(Path('gpu_engine',file).read_bytes(),subprocess.check_output(['git','show','b8092a85:gpu_engine/'+file]))
  def test_fail_refuses_changed_actual_after_encore_fields(self):
   s,t,after,out,c,_=self.component();side=int(c.pending.side[0]);phys=int(c.pending.physical[0])
   for field in ('encore_move','encore_counter'):

@@ -139,7 +139,7 @@ class DeviceNegativeItemsTests(unittest.TestCase):
                 if any(isinstance(v, ast.Name) and v.id == '_device_public' for v in ast.walk(node.test)):
                     return None
                 return self.generic_visit(node)
-        old = ast.parse(subprocess.check_output(['git', 'show', BASE+':gpu_engine/transition.py'], text=True))
+        old = ast.parse(subprocess.check_output(['git', 'show', 'b8092a85:gpu_engine/transition.py'], text=True))
         current = ast.parse(Path('gpu_engine/transition.py').read_text())
         self.assertEqual(ast.dump(Remove().visit(old), include_attributes=False),
                          ast.dump(Remove().visit(current), include_attributes=False))

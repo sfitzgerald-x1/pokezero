@@ -206,7 +206,7 @@ class LeftoversOwningCallerTests(unittest.TestCase):
         self.same(checked.state,plain.state)
 
     def test_default_transition_ast_unchanged_outside_explicit_private_observer(self):
-        old=ast.parse(subprocess.check_output(['git','show','7e949065:gpu_engine/transition.py'],text=True))
+        old=ast.parse(subprocess.check_output(['git','show','b8092a85:gpu_engine/transition.py'],text=True))
         new=ast.parse(Path(transition.__file__).read_text())
         baseline=dump_default_program(old)
         self.assertEqual(dump_default_program(new),baseline)

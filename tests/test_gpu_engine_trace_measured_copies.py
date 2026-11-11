@@ -95,12 +95,18 @@ class MeasuredCopies(unittest.TestCase):
 
  def test_mixed_b8_later_entry_unknown_sticky_and_source_profile_guards(self):
   s,t,_,d,birth=self.case(8);mask=j.array([True]*6+[False]*2)
-  # Copies2/3 unsupported Pressure/Levitate; inactive6/7 retain every leaf.
+  # Pressure/Levitate now have their own measured masks in addition to the
+  # three original Trace targets. Keep missing-capability negatives separate.
   ids=j.array([4,5,1,6,4,5,4,5],j.int32)
   s=s._replace(ability=s.ability.at[:,1,5].set(ids),base_ability=s.base_ability.at[:,1,5].set(ids))
   birth=speed.qualify_birth_device(s,t.stream_id,d);t=t._replace(refusal=t.refusal.at[4].set(65))
-  run=jax.jit(lambda tape:entry.enter(s,0,self.table,eligible=mask,hazards=False,_weather_trace=tape))
-  after,_,out=run(t);plain,_=entry.enter(s,0,self.table,eligible=mask,hazards=False);self.same(after,plain)
+  supported=jax.jit(lambda tape:entry.enter(s,0,self.table,eligible=mask,hazards=False,_weather_trace=tape))(t)
+  self.assertEqual(supported[2].count.tolist(),[3]*6+[2,2])
+  self.assertEqual((supported[2].refusal[2:4]&256).tolist(),[0,0])
+  self.assertTrue(bool(speed.retain_frame_device(birth,supported[0],t.stream_id,d,supported[2]).qualified_birth.all()))
+  missing=self.table._replace(pressure=j.zeros_like(self.table.pressure),levitate=j.zeros_like(self.table.levitate))
+  run=jax.jit(lambda tape:entry.enter(s,0,missing,eligible=mask,hazards=False,_weather_trace=tape))
+  after,_,out=run(t);plain,_=entry.enter(s,0,missing,eligible=mask,hazards=False);self.same(after,plain);self.same(after,supported[0])
   self.assertEqual(out.count.tolist(),[3,3,2,2,3,3,2,2]);self.assertTrue(bool(out.refusal[2]&256));self.assertTrue(bool(out.refusal[3]&256));self.assertTrue(bool(out.refusal[4]&64))
   retained=speed.retain_frame_device(birth,after,t.stream_id,d,out)
   self.assertEqual(retained.qualified_birth.tolist(),[True,True,False,False,True,True,True,True])
@@ -119,19 +125,24 @@ class MeasuredCopies(unittest.TestCase):
  def test_closed_compiler_vocabulary_default_math_and_pinned_callback(self):
   self.assertEqual(self.table.trace_copy.tolist(),[False,False,False,True,True,True,False])
   mapping=np.asarray(self.adapter.device.causal.trace_public_ability)
-  self.assertEqual(np.nonzero(mapping)[0].tolist(),[3,4,5])
-  for engine_id,name in ((3,'sturdy'),(4,'naturalcure'),(5,'oblivious')):self.assertEqual(int(mapping[engine_id]),self.catalog.abilities.ids[name])
-  self.assertEqual(np.nonzero(np.asarray(self.adapter.device.trace_copy))[0].tolist(),[3,4,5])
+  # The generic Trace mask stays at three targets. Pressure and Levitate
+  # use the separate measured masks exercised in the mixed-row test above.
+  self.assertEqual(np.nonzero(mapping)[0].tolist(),[1,3,4,5,6])
+  for engine_id,name in ((1,'pressure'),(3,'sturdy'),(4,'naturalcure'),(5,'oblivious'),(6,'levitate')):self.assertEqual(int(mapping[engine_id]),self.catalog.abilities.ids[name])
+  self.assertEqual(np.nonzero(np.asarray(self.adapter.device.trace_copy))[0].tolist(),[1,3,4,5,6])
   for file in ('mechanics.py','engine_weather_speed_profile.py'):
-   self.assertEqual(Path('gpu_engine',file).read_bytes(),subprocess.check_output(['git','show','dc981dd8:gpu_engine/'+file]))
+   self.assertEqual(subprocess.check_output(['git','show','d7300cc4:gpu_engine/'+file]),subprocess.check_output(['git','show','dc981dd8:gpu_engine/'+file]))
+   self.assertEqual(Path('gpu_engine',file).read_bytes(),subprocess.check_output(['git','show','b8092a85:gpu_engine/'+file]))
   # The newly reviewed Sleep Powder observer and distinct hypothetical seam
   # intentionally change transition bytes. Preserve whole ordinary AST identity
   # after ONLY hypothetical normalization, rather than dropping that assertion.
   from test_gpu_engine_v5_hypothetical_profile import normalized_hypothetical_default
   ordinary=subprocess.check_output(['git','show','7c6c6042:gpu_engine/transition.py'],text=True)
-  self.assertEqual(normalized_hypothetical_default(ordinary),normalized_hypothetical_default(Path('gpu_engine/transition.py').read_text()))
+  historical=subprocess.check_output(['git','show','d7300cc4:gpu_engine/transition.py'],text=True)
+  self.assertEqual(normalized_hypothetical_default(ordinary),normalized_hypothetical_default(historical))
+  self.assertEqual(ast.dump(ast.parse(Path('gpu_engine/transition.py').read_text())),ast.dump(ast.parse(subprocess.check_output(['git','show','b8092a85:gpu_engine/transition.py'],text=True))))
   old_account=subprocess.check_output(['git','show','dc981dd8:gpu_engine/engine_execution_completeness.py'],text=True)
-  current_account=ast.parse(Path('gpu_engine/engine_execution_completeness.py').read_text())
+  current_account=ast.parse(subprocess.check_output(['git','show','d7300cc4:gpu_engine/engine_execution_completeness.py'],text=True))
   sites=next(n for n in current_account.body if isinstance(n,ast.ClassDef)and n.name=='Site')
   added=[n for n in sites.body if isinstance(n,ast.Assign)and any(isinstance(t,ast.Name)and t.id=='PRIMARY_SLEEP'for t in n.targets)]
   self.assertEqual(len(added),1);self.assertEqual(ast.dump(added[0].value),'Constant(value=20)')
@@ -139,7 +150,10 @@ class MeasuredCopies(unittest.TestCase):
   self.assertEqual(ast.dump(ast.parse(old_account),include_attributes=False),ast.dump(current_account,include_attributes=False))
   old_entry=subprocess.check_output(['git','show','552bd326:gpu_engine/entry.py'],text=True)
   enter=lambda source:next(n for n in ast.parse(source).body if isinstance(n,ast.FunctionDef)and n.name=='enter')
-  self.assertEqual(dump_default_program(enter(old_entry)),dump_default_program(enter(Path('gpu_engine/entry.py').read_text())))
+  historical_entry=subprocess.check_output(['git','show','d7300cc4:gpu_engine/entry.py'],text=True)
+  self.assertEqual(dump_default_program(enter(old_entry)),dump_default_program(enter(historical_entry)))
+  for file in ('engine_execution_completeness.py','entry.py'):
+   self.assertEqual(Path('gpu_engine',file).read_bytes(),subprocess.check_output(['git','show','b8092a85:gpu_engine/'+file]))
   root=Path(os.environ['POKEZERO_SHOWDOWN_ROOT']);self.assertEqual(subprocess.check_output(['git','-C',str(root),'rev-parse','HEAD'],text=True).strip(),'f76228a1354b5d0f307ca2d16101294ad3a2308b')
   script=r'''
 const path=require('node:path');const root=process.argv[1];const {Dex}=require(path.join(root,'dist/sim/dex.js'));const {Pokemon}=require(path.join(root,'dist/sim/pokemon.js'));

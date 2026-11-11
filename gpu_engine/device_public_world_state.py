@@ -19,7 +19,7 @@ from pokezero.gen3_damage import gen3_hp_stat, gen3_stat
 from pokezero.v5_gumbel import Recipe
 from . import device_public_worlds as plans
 from .public_active import NAMES as VOLATILES
-from .state import empty_state, LEECH_SEED, ROOTED
+from .state import empty_state, BattleState, LEECH_SEED, ROOTED
 
 
 @dataclass(frozen=True)
@@ -118,7 +118,74 @@ def _rebase(root, assignment, active, *, state):
         own_order=t.own_order.at[0, foe].set(j.asarray(order)))
 
 
+def world_keys(seeds):
+    """empty_state(1, seed=s).keys for many seeds in one call (fold_in(PRNGKey(s), 0))."""
+    import jax
+    seeds = np.asarray(seeds, np.uint32)
+    if not len(seeds):
+        return np.zeros((0, 1, 2), np.uint32)
+    # Padded to a power-of-two bucket (repeating seed 0's slot) so frames of varying world counts
+    # reuse the eager executables; keys are per seed, so padding changes none of the first len(seeds).
+    count = len(seeds);bucket = max(64, 1 << (count-1).bit_length())
+    padded = np.concatenate([seeds, np.full(bucket-count, seeds[0], np.uint32)])
+    keys = jax.vmap(lambda s: jax.vmap(jax.random.fold_in, in_axes=(None, 0))(
+        jax.random.PRNGKey(s), j.arange(1, dtype=j.uint32)))(j.asarray(padded))
+    return np.asarray(jax.device_get(keys))[:count]
+
+
+_EMPTY = {}
+
+
+def _empty_arrays():
+    """Host copy of empty_state(1)'s constant fields (keys are per world)."""
+    if not _EMPTY:
+        _EMPTY.update({name: np.asarray(value) for name, value in empty_state(1, seed=0)._asdict().items()})
+    return {name: np.array(value, copy=True) for name, value in _EMPTY.items()}
+
+
+def _rebase_host(root, assignment, active, *, state):
+    """_rebase on host numpy carries (same writes, same dtypes)."""
+    t = root.public
+    foe = 1-root.address.owner
+    mapping = np.full((6,), -1, np.int32)
+    for public_slot, physical in assignment.items():
+        mapping[physical] = public_slot
+    order = np.asarray([active, *[i for i in range(6) if i != active]], np.int32)
+    def put(array, index, value):
+        result = np.array(array, copy=True);result[index] = value;return result
+    history = t.damage_history
+    if history is not None:
+        history = history._replace(
+            hp=put(history.hp, (0, foe), state.hp[0, foe, active]),
+            maximum=put(history.maximum, (0, foe), state.max_hp[0, foe, active]))
+    return t._replace(
+        damage_history=history,
+        physical_to_public=put(t.physical_to_public, (0, foe), mapping),
+        active_physical=put(t.active_physical, (0, foe), active),
+        own_order=put(t.own_order, (0, foe), order))
+
+
+def kernel_seed(root, world, recipe):
+    """The hypothetical world's kernel seed (empty_state seed), as materialize() derives it."""
+    return int.from_bytes(recipe._digest(root.address, 'hypothetical-kernel', world)[:4], 'big')
+
+
+def materialize_host(root, start, tables, recipe, *, keys):
+    """materialize() for a detach_roots Root, entirely on host numpy (the D3 frame path).
+
+    The same checks, writes and refusals as materialize(); only its device-array steps change:
+    the empty state comes from a host template plus this world's key (keys maps kernel_seed to
+    world_keys of it), arrays stay numpy, and the public rebase is done in numpy. Results equal
+    materialize()'s byte for byte.
+    """
+    return _materialize(root, start, tables, recipe, host_keys=keys)
+
+
 def materialize(root, start, tables, recipe):
+    return _materialize(root, start, tables, recipe)
+
+
+def _materialize(root, start, tables, recipe, host_keys=None):
     """One declared draw -> current tensor world or named refused world slot.
 
     Only ordinary boundaries are represented in this first current-state port.
@@ -131,7 +198,8 @@ def materialize(root, start, tables, recipe):
             root.source_binding_sha256 != tables.source.binding_sha256 or
             start.world not in (0, 1) or start.seed != recipe.world_seed(root.address, start.world)):
         raise ValueError('same declared source/root/world/recipe required')
-    seed = int.from_bytes(recipe._digest(root.address, 'hypothetical-kernel', start.world)[:4], 'big')
+    seed = kernel_seed(root, start.world, recipe)
+    key = None if host_keys is None else np.array(host_keys[seed], np.uint32)   # a missing key is a bug, not a refusal
     try:
         if start.opponent_fixtures is None:
             raise ValueError('source draw refused: '+','.join(start.refusals))
@@ -141,8 +209,12 @@ def materialize(root, start, tables, recipe):
         own, view = root.own, root.view
         if any(bool(own[name]) for name in ('forced_switch', 'baton_pass', 'entry_pending')):
             raise ValueError('suspended/replacement/entry boundary not materialized')
-        state = empty_state(1, seed=seed)
-        arrays = {name: np.array(value, copy=True) for name, value in state._asdict().items()}
+        if host_keys is None:
+            state = empty_state(1, seed=seed)
+            arrays = {name: np.array(value, copy=True) for name, value in state._asdict().items()}
+        else:
+            arrays = _empty_arrays()
+            arrays['keys'] = key.reshape(arrays['keys'].shape)
         for name in plans.OWN_MON_FIELDS + plans.OWN_SIDE_FIELDS:
             value = np.asarray(own[name])
             if value.shape != arrays[name][0, owner].shape or value.dtype != arrays[name].dtype:
@@ -323,8 +395,12 @@ def materialize(root, start, tables, recipe):
         arrays['turn'][0] = turn-1
         arrays['entry_pending'][0] = False
         arrays['done'][0], arrays['winner'][0] = False, -1
-        state = type(state)(**{name: j.asarray(value) for name, value in arrays.items()})
-        carry = _rebase(root, assignment, active, state=state)
+        if host_keys is None:
+            state = type(state)(**{name: j.asarray(value) for name, value in arrays.items()})
+            carry = _rebase(root, assignment, active, state=state)
+        else:
+            state = BattleState(**arrays)
+            carry = _rebase_host(root, assignment, active, state=state)
         return World(start.world, state, carry, (), seed, root.reply_private_history_available)
     except (ValueError, KeyError, IndexError, TypeError) as error:
         return World(start.world, None, None, (str(error),), seed, False)

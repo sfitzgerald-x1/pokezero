@@ -66,17 +66,23 @@ def summarize(rows, *, pairs, bootstrap_seed, replicates=10000):
 
 def attribute(engine, showdown, *, foulplay_failed):
     """A Foul Play loss alone is not evidence of engine fidelity failure."""
-    a, b = engine['direction'], showdown['direction']
-    if type(foulplay_failed) is not bool or any(x not in ('WIN','LOSS','UNRESOLVED') for x in (a,b)):
-        raise ValueError('actual closed direct comparisons and typed FoulPlay verdict required')
+    if type(foulplay_failed) is not bool:
+        raise ValueError('typed closed FoulPlay verdict required')
+    # Scott applies attribution only to a failed fidelity canary. A passing
+    # canary selects V2 regardless of the descriptive direct comparisons.
+    if not foulplay_failed:
+        return dict(cause='FOULPLAY_CANARY_NOT_FAILED', training_route='V2')
+    if not isinstance(engine,dict)or not isinstance(showdown,dict):
+        raise ValueError('actual closed direct comparisons required for a failed canary')
+    a,b=engine.get('direction'),showdown.get('direction')
+    if any(x not in ('WIN','LOSS','UNRESOLVED')for x in(a,b)):
+        raise ValueError('actual closed direct comparisons required for a failed canary')
     if a == 'WIN' and b == 'LOSS':
         return dict(cause='ENGINE_OR_OBSERVATION_SKEW', training_route='PYTHON_A_B')
     if a == b == 'LOSS':
         return dict(cause='FINETUNE_DEGRADATION', training_route='V2')
     if a == b == 'WIN' and foulplay_failed:
         return dict(cause='SELFPLAY_DRIFT', training_route='V2')
-    if not foulplay_failed:
-        return dict(cause='FOULPLAY_CANARY_NOT_FAILED', training_route='V2')
     return dict(cause='UNRESOLVED_DIRECT_COMPARISONS', training_route=None)
 
 

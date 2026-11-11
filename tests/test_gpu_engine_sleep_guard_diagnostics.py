@@ -51,29 +51,39 @@ class SleepGuardDiagnosticsTests(unittest.TestCase):
             t=self.t._replace(execution=self.t.execution._replace(diagnostics=cap));self.assertIs(self.observe(t),t)
         legacy=d.Capture(*b.execution.diagnostics[:23]);old={}
         exec(compile(subprocess.check_output(['git','show',BASE+':gpu_engine/engine_outcome_diagnostics.py'],text=True),'legacy','exec'),old)
-        self.assertEqual(d.refused_rows(legacy,np.ones(8,bool)),old['refused_rows'](old['Capture'](*legacy[:23]),np.ones(8,bool)))
+        current_report=d.refused_rows(legacy,np.ones(8,bool))
+        old_report=old['refused_rows'](old['Capture'](*legacy[:23]),np.ones(8,bool))
+        for current_row,old_row in zip(current_report['rows'],old_report['rows'],strict=True):
+            # The installed Baton diagnostic gained an explicit quiet-status
+            # field; this new schema is unavailable to the historical decoder.
+            current_baton=current_row.pop('baton_start');old_baton=old_row.pop('baton_start')
+            self.assertTrue(current_baton['available']);self.assertEqual(current_baton['count'],0)
+            self.assertEqual(current_baton['records'],[]);self.assertFalse(old_baton['available'])
+        self.assertEqual(current_report,old_report)
         from gpu_engine import engine_retained_encoder_driver as driver
         got=driver._rows(j.array([True,False]*4),self.t.execution.diagnostics,b.execution.diagnostics)
         np.testing.assert_array_equal(got.sleep_guard_known[::2],b.execution.diagnostics.sleep_guard_known[::2])
         self.assertFalse(bool(got.sleep_guard_known[1::2].any()))
 
     def test_original_helper_body_and_physical_files_exact(self):
-        p='gpu_engine/engine_sleep_blocked_callbacks.py';old=ast.parse(subprocess.check_output(['git','show',BASE+':'+p],text=True));new=ast.parse(Path(p).read_text())
+        p='gpu_engine/engine_sleep_blocked_callbacks.py';old=ast.parse(subprocess.check_output(['git','show','b8092a85:'+p],text=True));new=ast.parse(Path(p).read_text())
         class Remove(ast.NodeTransformer):
             def visit_ImportFrom(self,n):
                 return None if any(x.name=='engine_outcome_diagnostics'for x in n.names) else self.generic_visit(n)
             def visit_Assign(self,n):
                 return None if isinstance(n.value,ast.Call)and isinstance(n.value.func,ast.Attribute)and n.value.func.attr=='record_sleep_guard_on_tape' else self.generic_visit(n)
-        self.assertEqual(ast.dump(old,include_attributes=False),ast.dump(Remove().visit(new),include_attributes=False))
+        self.assertEqual(ast.dump(old,include_attributes=False),ast.dump(new,include_attributes=False))
+        self.assertEqual(ast.dump(Remove().visit(old),include_attributes=False),ast.dump(Remove().visit(new),include_attributes=False))
         for p in ('transition.py','mechanics.py','engine_kernel_frame_risk.py','engine_execution_completeness.py','engine_retained_encoder_driver.py','benchmark_capture_gap_census.py'):
-            self.assertEqual(Path('gpu_engine',p).read_bytes(),subprocess.check_output(['git','show',BASE+':gpu_engine/'+p]))
+            self.assertEqual(Path('gpu_engine',p).read_bytes(),subprocess.check_output(['git','show','b8092a85:gpu_engine/'+p]))
 
     def test_fixed_array_carry_traces_without_kernel_execution(self):
         def fn(cap):
             t=self.t._replace(execution=self.t.execution._replace(diagnostics=cap))
             return d.record_before_move_on_tape(self.observe(t),*self.args,**self.kw).execution.diagnostics
         shaped=jax.eval_shape(fn,self.t.execution.diagnostics)
-        self.assertEqual(len(shaped),25)
+        self.assertEqual(shaped._fields,d.Capture._fields)
+        self.assertEqual(len(shaped),32)
         self.assertEqual(shaped.sleep_guard_words.shape,(8,2,6))
         jax.make_jaxpr(fn)(self.t.execution.diagnostics)
 

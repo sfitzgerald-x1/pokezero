@@ -54,7 +54,7 @@ class NoDamageDiagnosticTests(unittest.TestCase):
   r=d.refused_rows(a.execution.diagnostics,np.array([True]+[False]*7))['rows'][0]['no_damage_finish']['records'][0]
   self.assertEqual((r['finish_scheduled'],r['header_code'],r['finish_matches']),(1,9,0))
  def test_exact_predicates_source_scope_and_one_host_copy_per_used_array(self):
-  old=ast.parse(subprocess.check_output(['git','show',BASE+':gpu_engine/engine_no_damage_callbacks.py'],text=True));new=ast.parse(Path(nd.__file__).read_text());functions=lambda t:{n.name:n for n in t.body if isinstance(n,ast.FunctionDef)};a,b=functions(old),functions(new)
+  old=ast.parse(subprocess.check_output(['git','show',BASE+':gpu_engine/engine_no_damage_callbacks.py'],text=True));new=ast.parse(subprocess.check_output(['git','show','25af44e9:gpu_engine/engine_no_damage_callbacks.py'],text=True));current_source=ast.parse(Path(nd.__file__).read_text());integrated=ast.parse(subprocess.check_output(['git','show','b8092a85:gpu_engine/engine_no_damage_callbacks.py'],text=True));self.assertEqual(ast.dump(current_source),ast.dump(integrated));functions=lambda t:{n.name:n for n in t.body if isinstance(n,ast.FunctionDef)};a,b=functions(old),functions(new)
   for name in a:
    if name!='finish':self.assertEqual(ast.dump(a[name]),ast.dump(b[name]),name)
   current=deepcopy(b['finish']);current.body=[n for n in current.body if not(isinstance(n,ast.ImportFrom)and any(x.asname=='diagnostics'for x in n.names))and not(isinstance(n,ast.Assign)and any(isinstance(x,ast.Name)and x.id=='scheduled_result'for x in n.targets))and not(isinstance(n,ast.Assign)and isinstance(n.value,ast.Call)and isinstance(n.value.func,ast.Attribute)and n.value.func.attr=='record_no_damage_on_tape')]
@@ -62,7 +62,7 @@ class NoDamageDiagnosticTests(unittest.TestCase):
    def visit_Name(self,node):return ast.Call(ast.Name('scheduled',ast.Load()),[ast.Name('p',ast.Load()),ast.Name('w',ast.Load())],[])if node.id=='scheduled_result'else node
   self.assertEqual(ast.dump(OriginalScheduled().visit(current)),ast.dump(a['finish']))
   for file in ('transition.py','engine_retained_encoder_driver.py','benchmark_capture_gap_census.py','engine_execution_completeness.py','engine_kernel_frame_risk.py','engine_lifecycle_event_device.py','engine_full_v4_event_device.py'):
-   self.assertEqual(Path('gpu_engine',file).read_bytes(),subprocess.check_output(['git','show',('fd3256d2305a0770764e737640fc80157156cb29'if file=='engine_kernel_frame_risk.py'else BASE)+':gpu_engine/'+file]),file)
+   self.assertEqual(Path('gpu_engine',file).read_bytes(),subprocess.check_output(['git','show','b8092a85:gpu_engine/'+file]),file)
   t,p,w,kw=self.fixture();capture=d.record_no_damage_on_tape(t,p,w,**kw).execution.diagnostics
   class HostOnly:
    def __init__(self,value):self.value=np.asarray(value);self.shape=self.value.shape;self.dtype=self.value.dtype;self.copies=0

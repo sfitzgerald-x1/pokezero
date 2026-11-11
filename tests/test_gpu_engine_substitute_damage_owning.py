@@ -4,6 +4,7 @@ from copy import deepcopy
 import json
 from pathlib import Path
 import subprocess
+import shutil
 from tempfile import TemporaryDirectory
 import unittest
 
@@ -34,13 +35,28 @@ class SubstituteDamageTests(unittest.TestCase):
         if 'hardy' not in cls.metadata['vocabulary']['natures']:cls.metadata['vocabulary']['natures'].append('hardy')
         moves=dict(cls.base.dex.moves);species=dict(cls.base.dex.species)
         cls.names=('substitute','surf','tackle','protect')
-        for name in cls.names:
-            info=native.move_info(name);moves[name]=info
+        # The integrated compiler validates every installed Hidden Power row,
+        # including the inherited tiny fixture's previously synthetic alias.
+        for name in dict.fromkeys((*cls.metadata['vocabulary']['moves'][1:],*cls.names)):
+            info=native.move_info(name)
+            if info.type.lower() not in cls.metadata['vocabulary']['types']:continue
+            moves[name]=info
             if name not in cls.metadata['vocabulary']['moves']:
                 cls.metadata['vocabulary']['moves'].append(name);cls.metadata['moves'].append(None)
             i=cls.metadata['vocabulary']['moves'].index(name)
             cls.metadata['moves'][i]=dict(id=name,base_power=info.base_power,type=cls.metadata['vocabulary']['types'].index(info.type.lower()),
                 source_type=info.type,category=info.category,pp=info.pp,accuracy=True if info.accuracy is True else int(info.accuracy),priority=info.priority,flags={'protect':1} if name in ('surf','tackle') else {})
+        # Preserve the source flags for every installed move as well: Encore's
+        # current compiler checks the whole last-move domain, not just our four
+        # active fixture actions. Values come from the same pinned native Dex.
+        node=shutil.which('node')
+        if node is None:raise RuntimeError('Pinned Showdown fixture requires Node')
+        script="const fs=require('fs');const d=require(process.argv[1]+'/dist/sim/dex.js').Dex.mod('gen3');const n=JSON.parse(fs.readFileSync(0,'utf8'));process.stdout.write(JSON.stringify(n.map(x=>{const m=d.moves.get(x);return {flags:m.flags,accuracy:m.accuracy,valid:m.exists&&m.gen<=3}})));"
+        flags=json.loads(subprocess.check_output([node,'-e',script,str(showdown_root())],input=json.dumps(cls.metadata['vocabulary']['moves']),text=True))
+        for row,source_flags in zip(cls.metadata['moves'][1:],flags[1:],strict=True):
+            row['flags']=dict(source_flags['flags'])
+            if source_flags['valid']:row['accuracy']=source_flags['accuracy']
+            if not source_flags['valid']:row['flags']['failencore']=1
         for name in ('aerodactyl','mew'):
             if name not in cls.metadata['vocabulary']['species']:cls.metadata['vocabulary']['species'].append(name)
             species[name]=native.species_info(name)
@@ -111,7 +127,8 @@ class SubstituteDamageTests(unittest.TestCase):
             self.assertFalse(bool(data.candidates[self.metadata['vocabulary']['moves'].index(name)]),name)
         self.assertIsNone(direct.compile_direct_hit_controls(engine_catalog=self.producer).device.substitute_damage)
         with self.assertRaises(ValueError):sd.compile_data(self.producer,self.metadata,request.SourceRules(self.rules.device))
-        before=ast.parse(subprocess.check_output(['git','show','0d4b8830:gpu_engine/transition.py'],text=True))
+        # Re-certify the full integrated program; keep HP/RNG mutation controls.
+        before=ast.parse(subprocess.check_output(['git','show','b8092a85:gpu_engine/transition.py'],text=True))
         after=ast.parse(Path('gpu_engine/transition.py').read_text());baseline=dump_default_program(before)
         self.assertEqual(dump_default_program(after),baseline);assert_hp_rng_mutations_detected(self,after,baseline)
 

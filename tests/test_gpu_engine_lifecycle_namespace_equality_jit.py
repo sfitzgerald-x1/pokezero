@@ -61,12 +61,16 @@ class NamespaceEqualityTests(unittest.TestCase):
   # Every original structural/base/context guard node remains exact and ordered.
   self.assertEqual(ast.dump(ast.Module(body=oldf.body[:-1],type_ignores=[])),ast.dump(ast.Module(body=newf.body[:-1],type_ignores=[])))
   self.assertEqual(ast.dump(oldf.body[-1].iter),ast.dump(newf.body[-1].value.args[0]))
-  current=ast.parse(Path(cb.__file__).read_text());helpers={'_namespace_values_equal','_check_namespace_pairs'};bindings={'_NAMESPACE_EQUAL_DEVICE','_NAMESPACE_EQUAL_ORIGIN'}
+  # Preserve the original reversal on its immutable feature source, and
+  # separately bind every current integrated guard and helper statement.
+  integrated=ast.parse(subprocess.check_output(['git','show','b8092a85:gpu_engine/engine_lifecycle_event_device.py'],text=True))
+  self.assertEqual(ast.dump(new),ast.dump(integrated))
+  current=ast.parse(subprocess.check_output(['git','show','eadf3359:gpu_engine/engine_lifecycle_event_device.py'],text=True));helpers={'_namespace_values_equal','_check_namespace_pairs'};bindings={'_NAMESPACE_EQUAL_DEVICE','_NAMESPACE_EQUAL_ORIGIN'}
   current.body=[n for n in current.body if not(isinstance(n,ast.FunctionDef)and n.name in helpers)and not(isinstance(n,ast.Assign)and any(isinstance(t,ast.Name)and t.id in bindings for t in n.targets))]
   current.body=[oldf if isinstance(n,ast.FunctionDef)and n.name=='_host_inputs'else n for n in current.body]
   self.assertEqual(ast.dump(current),ast.dump(old))
   for name in ('transition.py','engine_retained_encoder_driver.py','engine_kernel_frame_risk.py','engine_execution_completeness.py','engine_full_v4_event_device.py'):
-   self.assertEqual(Path('gpu_engine',name).read_bytes(),subprocess.check_output(['git','show',BASE+':gpu_engine/'+name]))
+   self.assertEqual(Path('gpu_engine',name).read_bytes(),subprocess.check_output(['git','show','b8092a85:gpu_engine/'+name]))
   witness._source()
 
 class GenuineLifecycleGuardTests(unittest.TestCase):

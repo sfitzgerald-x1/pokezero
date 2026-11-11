@@ -86,7 +86,7 @@ def validate_records(frames,bank,recipe,records):
 
 class Provider:
     """Construct once from genuine Prepared+Plan, before any real constructor."""
-    def __init__(self,prepared,plan,*,batch_joint=True,frame_batch=False,chunk_batch=False,vectorized=False):
+    def __init__(self,prepared,plan,*,batch_joint=True,frame_batch=False,chunk_batch=False,vectorized=False,batched_prep=False):
         from .v5_device_backend import Prepared
         from pokezero.v5_run import Plan,_sha
         if type(prepared)is not Prepared or type(plan)is not Plan or plan.model.arm!='D':
@@ -97,7 +97,8 @@ class Provider:
         if type(chunk_batch)is not bool or chunk_batch and not frame_batch:
             raise ValueError('chunk batching requires the explicit frame teacher')
         if type(vectorized)is not bool or vectorized and not frame_batch:raise ValueError('vectorized pricing requires frame batching')
-        self.vectorized=vectorized
+        if type(batched_prep)is not bool or batched_prep and not vectorized:raise ValueError('batched preparation requires vectorized D3 pricing')
+        self.vectorized=vectorized;self.batched_prep=batched_prep
         self.chunk_batch=chunk_batch
         if prepared.pool_sha256!=plan.pool_sha256 or prepared.category_sha256!=plan.model.category_vocabulary_sha256 or prepared.category_size!=plan.model.category_vocab_size:
             raise ValueError('same declared device source/pool/category required')
@@ -113,7 +114,8 @@ class Provider:
         self.frame_batch=frame_batch;self.frame_counts={};self.batch_timings=[]
         if frame_batch:
             from .device_public_teacher_batch import FramePricer
-            self.frame_pricer=FramePricer(self.executor,plan.model,actor_capacity=plan.historical_window+1,**(dict(capacity=4096,vectorized=True)if vectorized else{}))
+            self.frame_pricer=FramePricer(self.executor,plan.model,actor_capacity=plan.historical_window+1,
+                **(dict(capacity=4096,vectorized=True,host_prep=batched_prep)if vectorized else{}))
 
     def reset_metrics(self):
         self.frame_counts={};self.batch_timings=[];self.root_prepare_seconds={}
@@ -137,6 +139,9 @@ class Provider:
             report['strategy']='D3_VECTORIZED_FRAME_QUEUE'
             report['frame_calls']=[dict(x)for x in self.batch_timings]
             report['root_prepare_by_frame']={str(k):v for k,v in getattr(self,'root_prepare_seconds',{}).items()}
+        if getattr(self,'batched_prep',False):
+            report['batched_preparation']=True
+            report['root_prepare_timing_scope']='Per-root planning wall plus equal-per-pending-root share of chunk detach wall; cold detach/readout compilation is included, not isolated.'
         return report
 
     def bind(self,bank,params):
@@ -202,8 +207,70 @@ class Provider:
         self.record_metrics(records)
         return records
 
+    def _prepare_batched(self,device_roots,frames,bank):
+        """The per-root preparation of _label_chunk_batched, with all roots of a scan step detached
+        in ONE batched pass (worlds.detach_roots). Records, refusals, requests and their grouping
+        order are the same as the per-root loop's."""
+        from .device_public_teacher_batch import Request
+        records=[];pending=[];contexts={};hosts={}
+        for step,row,owner in _requests(frames,bank):
+            step,row,owner=map(int,(step,row,owner));base=binding(frames,bank,step,row,owner)
+            record=dict(base,recipe_seed=self.recipe.seed,status='UNSELECTED',refusal=None,improvement=None,diagnostics=None)
+            records.append(record);address=c.DecisionAddress(**base['address'])
+            if not self.recipe.selected(address):continue
+            record.update(status='REFUSED',refusal='invalid-actual-root-input')
+            if not frames.trainable[step,row,owner]:continue
+            pending.append((record,step,row,owner,address))
+        started=time.perf_counter();roots={}
+        for step in sorted({x[1] for x in pending}):
+            try:
+                if step not in contexts:contexts[step]=jax.tree.map(lambda x:x[step],device_roots)
+                context=contexts[step];hosts[step]=jax.device_get((context.streams,context.frames))
+            except (ValueError,RuntimeError,TypeError,KeyError,IndexError)as error:
+                hosts[step]=error
+        batch={}
+        for record,step,row,owner,address in pending:
+            host=hosts[step]
+            if isinstance(host,Exception):continue
+            streams,frames_=host
+            if not (0<=row<len(streams))or int(streams[row])!=address.stream or int(frames_[row])!=address.frame:continue
+            batch.setdefault(step,[]).append((row,owner))
+        for step,items in batch.items():
+            # Rows, owners and addresses are checked above and every primitive is shape-uniform, so a
+            # detach_roots failure is systemic (e.g. device memory), never one root's: it stops the
+            # study instead of refusing the whole step.
+            for (row,owner),root in zip(items,worlds.detach_roots(contexts[step],self.source,rows=[r for r,_ in items],
+                    owners=[o for _,o in items],enable_device_worlds=True)):roots[(step,row,owner)]=root
+        detach_seconds=time.perf_counter()-started;grouped={}
+        for record,step,row,owner,address in pending:
+            preparation_started=time.perf_counter()
+            try:
+                host=hosts[step]
+                if isinstance(host,Exception):raise host
+                streams,frames_=host
+                if int(streams[row])!=address.stream or int(frames_[row])!=address.frame:
+                    raise ValueError('PRE root context address differs')
+                root=roots[(step,row,owner)]
+                plans=worlds.plan_starts(root,self.source,self.recipe)
+                inputs={name:getattr(frames,name)[step,row,owner][None,None]for name in INPUTS};inputs['history_mask']=np.ones((1,1),bool)
+                request=Request(plans,tuple(map(float,frames.raw_policy_logits[step,row,owner])),
+                    tuple(map(bool,frames.legal_action_mask[step,row,owner])),inputs,
+                    int(frames.actor_indices[step,row,owner]),int(frames.actor_indices[step,row,1-owner]))
+                grouped.setdefault(record['address']['frame'],[]).append((record,request))
+            except (ValueError,RuntimeError,TypeError,KeyError,IndexError)as error:
+                record.update(status='REFUSED',refusal=type(error).__name__+': '+str(error),improvement=None)
+            finally:
+                frame=record['address']['frame']
+                self.root_prepare_seconds[frame]=self.root_prepare_seconds.get(frame,0.)+time.perf_counter()-preparation_started+detach_seconds/len(pending)
+        return records,grouped
+
     def _label_chunk_batched(self,device_roots,frames,bank,params):
         from .device_public_teacher_batch import Request
+        if getattr(self,'batched_prep',False):
+            self.bind(bank,params)
+            if not hasattr(self,'root_prepare_seconds'):self.root_prepare_seconds={}
+            records,grouped=self._prepare_batched(device_roots,frames,bank)
+            return self._price_groups(records,grouped,frames,bank,params)
         self.bind(bank,params);records=[];grouped={};contexts={}
         for step,row,owner in _requests(frames,bank):
             step,row,owner=map(int,(step,row,owner));base=binding(frames,bank,step,row,owner)
@@ -232,6 +299,9 @@ class Provider:
                     if not hasattr(self,'root_prepare_seconds'):self.root_prepare_seconds={}
                     frame=record['address']['frame']
                     self.root_prepare_seconds[frame]=self.root_prepare_seconds.get(frame,0.)+time.perf_counter()-preparation_started
+        return self._price_groups(records,grouped,frames,bank,params)
+
+    def _price_groups(self,records,grouped,frames,bank,params):
         for step,group in grouped.items():
             # Queue mode groups original selected requests across chunk frames.
             # Capacity changes only packing, never world keys or per-root math.
