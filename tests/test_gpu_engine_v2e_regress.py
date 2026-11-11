@@ -39,9 +39,12 @@ def lanes_state(lanes, seed):
     from gpu_engine.state import empty_state
     rng = np.random.default_rng(seed)
     moves = np.full((lanes, 2, 6, 4), TACKLE, np.int32);moves[: lanes // 2, 0, 0, 0] = CURSE
-    return empty_state(lanes)._replace(hp=j.asarray(rng.integers(50, 100, (lanes, 2, 6)), j.int32), max_hp=j.full((lanes, 2, 6), 100, j.int32),
+    s = empty_state(lanes)
+    # Side 1's lead is Choice-locked into Tackle before every step (#1917 review): any holder-based allowance (a locked
+    # or Choice-holding active, under any name) then involves every lane, which the clear_volatile_rule test catches.
+    return s._replace(hp=j.asarray(rng.integers(50, 100, (lanes, 2, 6)), j.int32), max_hp=j.full((lanes, 2, 6), 100, j.int32),
         moves=j.asarray(moves), pp=j.full((lanes, 2, 6, 4), 10, j.int32), done=j.asarray(np.arange(lanes) == lanes - 1),
-        turn=j.asarray(rng.integers(0, 9, lanes), j.int32))
+        turn=j.asarray(rng.integers(0, 9, lanes), j.int32), choice_move=s.choice_move.at[:, 1, 0].set(TACKLE))
 
 
 def trackers(lanes, cls=Trackers):
@@ -449,12 +452,29 @@ class TwoPassTests(unittest.TestCase):
         c = report['counts'];living = c['lane_steps'] - c['done_skipped'] - fainted
         self.assertEqual(code, 1);self.assertEqual((c['clear_volatile_leaves'], c['changed_but_uninvolved']), (fainted, living))
         self.assertEqual(report['uninvolved_leaves'], {'state.choice_move': living, 'state.confusion_counter': living})
+        # Every pre-state has side 1's lead locked (lanes_state), so a holder-based involvement (the old choice_holder
+        # predicate with choice_faint's allowance, removed in 4aa184bb) involves every living lane and hides a planted
+        # clear of the living lead's lock: re-added, that run passes, so this test's uninvolved count above would be 0.
+        def lock_only(state, actions, t):
+            out = locked(state, actions, t);s = out.step.state
+            return result(s._replace(choice_move=s.choice_move.at[:, 1, 0].set(0)), out.trackers)
+        code, report, _ = run('clear-lock-living', lock_only, 'B')
+        c = report['counts']
+        self.assertEqual(code, 1);self.assertEqual(c['changed_but_uninvolved'], living)
+        def choice_holder(p):
+            items = p.vocab['items'];ids = [items.index(n) for n in ('choiceband', 'choicespecs', 'choicescarf') if n in items]
+            return (p.active('choice_move') > 0) | np.isin(p.active('item'), ids)
+        with mock.patch.dict(v2e_regress.PLUGINS, {'B': dict(v2e_regress.PLUGINS['B'], choice_faint=choice_holder)}), \
+                mock.patch.dict(v2e_regress.ALLOWED, {'choice_faint': dict(user=('choice',), target=(), glob=())}):
+            code, report, _ = run('clear-lock-living-oldpred', lock_only, 'B')
+        c = report['counts']
+        self.assertEqual(code, 0, c);self.assertEqual(c['changed_but_uninvolved'], 0)        # hidden: the reason it is gone
 
     def test_partial_runs_and_plugin_supersets_are_marked(self):
         code, report, _ = self.patched('partial', base_step, pr='A1,A2', limit=1)
         self.assertEqual(code, 2);self.assertTrue(report['partial']);self.assertIsNone(report['passed'])
         self.assertTrue(report['warnings']);self.assertEqual(report['plug_ins'], ['A1', 'A2'])
-        with self.assertRaises(SystemExit):self.patched('undeclared', base_step, pr='M1')   # the PR's own plug-in must declare
+        with self.assertRaises(SystemExit):self.patched('undeclared', base_step, pr='M2')   # the PR's own plug-in must declare
         from gpu_engine import v2e_regress
         with self.assertRaises(SystemExit):         # a base pass that is not this PR's merge base
             v2e_regress.patched_pass(self.args(out=self.tmp / 'nobase', base=str(self.base), pr='A1', faint_clear=False,

@@ -64,14 +64,32 @@ explained only when every differing mon on that side fainted this step (HP
 both passes store; any other change of those leaves still needs an involved
 effect. Explained lane-steps are counted as clear_volatile_leaves.
 
+Special rules (M1, with --pr M1; post-state rules that check this tree, never
+a pre-state predicate alone):
+- recharge_rule: Hyper Beam's mustrecharge. A (state.recharge_counter, side)
+  change is explained only on a side whose executed move may be Hyper Beam
+  (involvement) AND whose post counter in this tree is nonzero exactly at its
+  living post-step active, with the value the residual leaves (1 when it ran,
+  2 when it was deferred). A (trackers.public_volatiles, side) change is
+  explained only on such a side when the bag, with its mustrecharge column
+  masked, digests equal to the base (whose column is always clear) and the
+  column is set only at that recharging active's public slot or at a mon that
+  departed this step (a drag after the hit leaves its old slot's bag).
+- ledger_rule: B2's item ledger on Knock Off. A change of the per-mon
+  mon_features item_mutated / item_original on a side is explained only when
+  they are nonzero exactly at the mons whose state.item_knocked flipped this
+  step in this tree, with item_original the item each held before the step.
+  Trick lanes take the ledger through the trick allowance instead.
+Explained lane-steps are counted as recharge_leaves and ledger_leaves.
+
 The involvement superset resolves the executed move as the engine does (slot,
 charge, standing or same-turn Encore, Struggle, a resumed queued action, every
-Sleep Talk-callable move, a Magic Coat reflection) and covers Effect Spore and
+Sleep Talk-callable move, a Magic Coat reflection, and no move on a recharge
+turn) and covers Effect Spore and
 Yawn sleep under Sleep Clause, Rest or Effect Spore against Insomnia/Vital
 Spirit (a Trace holder copying either, any install of a holder), and an incoming
 White Herb holder. Known gaps, which can only cause false failures: Snatch,
-Mirror Move, Metronome and Assist calls (not in the Gen 3 randbats pool); the
-recharge override (M1 adds it).
+Mirror Move, Metronome and Assist calls (not in the Gen 3 randbats pool).
 
 Both passes must run on the same JAX version, digest scheme and lane padding.
 Paths are command-line arguments.
@@ -98,7 +116,7 @@ NOT_SIDE = ('state.keys',)
 # PR0's faint-time public clear (design 2.5): these tracker entries of the
 # fainted mon may be cleared; meanlook_trap may be cleared on both actives.
 FAINT_CLEAR_MON = ('confusion_turns', 'encore_turns', 'wrap_trap_turns', 'stall_counter', 'sub_present',
-                   'item_swapped', 'choice_locked')
+                   'item_swapped', 'choice_locked', 'choice_public')
 FAINT_CLEAR_SEATS = ('meanlook_trap',)
 FAINT_CLEAR_LEAVES = tuple(['trackers.public_volatiles'] + [f"trackers.mon_features['{k}']" for k in FAINT_CLEAR_MON + FAINT_CLEAR_SEATS])
 PUBLIC_ORDER = 'trackers.public_order'
@@ -284,6 +302,8 @@ class Pre:
         acts = np.where(saved[:, None] == sides, s['queued_actions'], self.actions)
         slot = np.clip(acts, 0, 3)
         chosen = np.where(acts < 4, s['moves'][rows, sides, s['active'], slot], 0)
+        # M1: a recharging active's action is the recharge pseudo-move (no move); the other overrides stay a superset.
+        if 'recharge_counter' in s:chosen = np.where(self.active('recharge_counter') > 0, 0, chosen)
         charge = self.active('charge_move')
         encore = np.where(self.active('encore_counter') > 0, self.active('encore_move'), 0)
         struggle = np.where(self.struggle, self.ids.get('struggle', 0), 0)
@@ -477,6 +497,9 @@ FAMILIES = {
     # Wish lands with a heal line, or at full HP stays pending, by the recipient's HP.
     'subtracker': (r"^trackers\.mon_features\['sub_present'\]$", r'^trackers\.public_volatiles$'),
     'wish': (r"^trackers\.field_features\['wish_(pending|set_turn|turns)'\]$",),
+    # M1: B2's per-stint Trick/Choice flags and per-mon item ledger; a Lum Berry the Trick hands over cures confusion.
+    'itemflags': (r"^trackers\.mon_features\['(item_swapped|choice_public|choice_locked|item_mutated|item_original)'\]$",),
+    'lum': (r'^state\.confusion_counter$', r"^trackers\.mon_features\['confusion_turns'\]$", r'^trackers\.public_volatiles$'),
     'all': (r'.*',),
 }
 ALL = dict(user=('all',), target=('all',), glob=('all',))
@@ -511,7 +534,7 @@ FAMILIES['residual_trackers'] = (
     r'original_ability|borrowed_ability|public_volatiles|damage_exact_(dealt|taken))$',
     r'^trackers\.(damage_history|negative_items|visible_belief|public_port)\.', r'^trackers\.field_features\[',
     r"^trackers\.mon_features\['(sleep_turns|rest_sleep|toxic_stage|sleep_skipped_turns|sleep_cant_pending|sleep_usable_pending|"
-    r"confusion_turns|encore_turns|wrap_trap_turns|stall_counter|sub_present|meanlook_trap|item_swapped|choice_locked|"
+    r"confusion_turns|encore_turns|wrap_trap_turns|stall_counter|sub_present|meanlook_trap|item_swapped|choice_locked|choice_public|"
     r"last_damage_dealt|last_damage_taken|turns_active|turns_active_total)'\]$")
 # A2 review L1: a terminal step whose residual ran in both trees or in neither. Only the end-of-turn writes gated
 # on `done` differ: the Truant flip of the survivor (transition, `ordinary & ~work.done`) and turn_end's upkeep
@@ -586,6 +609,18 @@ ALLOWED = {
                       glob=()),
     'meteormash': dict(user=('boosts',), target=(), glob=()),
     'headbutt': ALL, 'needlearm': ALL, 'signalbeam': ALL, 'confusion': ALL,
+    # M1. Hyper Beam's own changes (the counter and the bag bit) are explained only by recharge_rule, a post-state
+    # check on an involved side; nothing else may change. A recharge turn (a pre-state counter) decides whether the
+    # side acts at all, so, like a sleep landing, it may change anything (no capture carries one).
+    'hyperbeam': dict(user=(), target=(), glob=()),
+    'recharge': ALL,
+    # Trick: the actives' items and the device ledger, flags and narrowing on both seats; the Choice lock follows the
+    # current item (the Tricker no longer locks, a slower receiver does); the swapped items' own effects follow on
+    # either side: Choice Band damage (HP, a Substitute, Wish landing by HP), Leftovers and pinch berries at the
+    # residual (HP, stages), a Lum Berry eaten at once (status, the clause port, confusion).
+    'trick': dict(user=('item', 'itemflags', 'choice', 'hp', 'status', 'boosts', 'clause', 'visible', 'subtracker', 'wish', 'lum'),
+                  target=('item', 'itemflags', 'choice', 'hp', 'status', 'boosts', 'clause', 'visible', 'subtracker', 'wish', 'lum'),
+                  glob=()),
 }
 
 
@@ -769,6 +804,64 @@ def clear_volatile_rule(entries, post, base_post, fainted):
     return entries - explained, sorted(explained, key=str)
 
 
+# M1 special rules (post-state; see the docstring).
+RECHARGE_LEAVES = ('state.recharge_counter', 'trackers.public_volatiles')
+LEDGER_LEAVES = ("trackers.mon_features['item_mutated']", "trackers.mon_features['item_original']")
+MUSTRECHARGE = 'mustrecharge'
+
+
+def recharge_rule(entries, counter, bag, masked, base_bag, hyperbeam, residual_ran, post_active, post_hp, physical_to_public,
+                  departed):
+    """M1: Hyper Beam's mustrecharge counter and bag bit, on a lane whose `hyperbeam` sides ([2] bool, involvement)
+    may have hit with it. counter [2,6] this tree's post recharge_counter (physical); bag [2,6] its post mustrecharge
+    bag column (public slots); masked/base_bag [2,2] the bag's per-side digest with that column cleared / the base
+    digest (None: unknown); residual_ran: this lane's residual ran in this tree (None: unknown); post_active [2];
+    post_hp [2,6]; physical_to_public [2,6]; departed [2,6] pre-step actives that left the field.
+    Returns (remaining entries, explained entries)."""
+    explained = set();counter = np.asarray(counter);bag = np.asarray(bag, bool)
+    values = (1, 2) if residual_ran is None else ((1,) if residual_ran else (2,))
+    for leaf, side in entries:
+        if side is None or leaf not in RECHARGE_LEAVES or not bool(hyperbeam[side]):continue
+        active = int(post_active[side]);nonzero = counter[side] != 0
+        recharging = bool(nonzero[active]) and int(post_hp[side, active]) > 0 and int(counter[side, active]) in values
+        if leaf == 'state.recharge_counter':
+            ok = recharging and int(nonzero.sum()) == 1
+        else:
+            allowed = np.zeros(6, bool)
+            mons = [active] if recharging else []
+            mons += [int(k) for k in np.flatnonzero(np.asarray(departed[side], bool))]
+            for k in mons:
+                slot = int(physical_to_public[side, k])
+                if 0 <= slot < 6:allowed[slot] = True
+            ok = (base_bag is not None and bool((np.asarray(masked[side]) == np.asarray(base_bag[side])).all())
+                  and bool(bag[side].any()) and not bool((bag[side] & ~allowed).any()))
+        if ok:explained.add((leaf, side))
+    return entries - explained, sorted(explained, key=str)
+
+
+def ledger_rule(entries, mutated, original, knocked_pre, knocked_post, item_pre, physical_to_public, *, trick=False):
+    """M1: B2's item ledger written by A2's Knock Off (public_items REMOVE: mutated, and the removed item as the
+    original). mutated/original [2,6] this tree's post mon_features (public slots); knocked_pre/knocked_post [2,6]
+    state.item_knocked before and after the step and item_pre [2,6] state.item before it (physical). A ledger (leaf,
+    side) entry is explained iff both keys are nonzero exactly at the public slots of that side's mons knocked this
+    step, with item_original their pre-step item. A Trick lane (trick=True) is left to the trick allowance."""
+    explained = set()
+    if trick:return entries, []
+    for leaf, side in entries:
+        if side is None or leaf not in LEDGER_LEAVES:continue
+        expect_mutated = np.zeros(6, np.int64);expect_original = np.zeros(6, np.int64)
+        newly = np.asarray(knocked_post[side], bool) & ~np.asarray(knocked_pre[side], bool)
+        ok = True
+        for k in np.flatnonzero(newly):
+            slot = int(physical_to_public[side, k])
+            if not 0 <= slot < 6:ok = False;continue
+            expect_mutated[slot] = 1;expect_original[slot] = int(item_pre[side, k])
+        ok = ok and bool(newly.any()) and np.array_equal(np.asarray(mutated[side]), expect_mutated) \
+            and np.array_equal(np.asarray(original[side]), expect_original)
+        if ok:explained.add((leaf, side))
+    return entries - explained, sorted(explained, key=str)
+
+
 # ---------------------------------------------------------------------------
 # Engine plumbing.
 
@@ -841,7 +934,19 @@ class Stepper:
                 saved = j.where(out.step.state.pending_residual[:, None, None], used, 0)
                 reference = j.where(live[:, None, None], saved, state.effect_draws)
                 effect_ok = (out.step.state.effect_draws == reference).all(-1)              # [L,2]
-            return dict(digests=digests, pre_digests=pre, fainted=(state.hp > 0) & (out.step.state.hp <= 0),
+            # M1 rule arrays: this tree's post values the recharge and ledger rules read (absent leaves: None).
+            m1 = {}
+            if 'state.recharge_counter' in named_out:m1['counter'] = named_out['state.recharge_counter']
+            from gpu_engine.public_active import NAMES as bag_names
+            bag = named_out.get('trackers.public_volatiles')
+            if bag is not None and MUSTRECHARGE in bag_names and bag.ndim == 4 and bag.shape[-1] == len(bag_names):
+                column = bag_names.index(MUSTRECHARGE)
+                m1['bag'] = bag[..., column]
+                m1['masked'] = side_digest('trackers.public_volatiles', bag.at[..., column].set(False), lanes)
+            for key, leaf in (('mutated', LEDGER_LEAVES[0]), ('original', LEDGER_LEAVES[1]), ('knocked', 'state.item_knocked')):
+                if leaf in named_out:m1[key] = named_out[leaf]
+            m1['post_hp'] = out.step.state.hp
+            return dict(digests=digests, pre_digests=pre, fainted=(state.hp > 0) & (out.step.state.hp <= 0), m1=m1,
                 extra={n: named_out[n] for n in faint_leaves if n in named_out}, calls=calls,
                 ko={n: named_out[n] for n in KO_MON_LEAVES + KO_LINK_LEAVES if n in named_out},
                 post_active=out.step.state.active, post_done=out.step.state.done,
@@ -1031,8 +1136,10 @@ def patched_pass(args, *, step_override=None, prepared=None):
     destiny_bond = getattr(state_module, 'DESTINY_BOND', DEFAULT_DESTINY_BOND)
     counts = dict(lane_steps=0, done_skipped=0, unchanged=0, changed_and_involved=0, changed_but_uninvolved=0,
                   changed_involved_unexpected_fields=0, ko_cascade=0, phase_shift=0, terminal=0, terminal_residual=0, waived=0,
-                  rule_explained=0, faint_rule_leaves=0, clear_volatile_leaves=0, effect_draws_saved=0)
+                  rule_explained=0, faint_rule_leaves=0, clear_volatile_leaves=0, effect_draws_saved=0,
+                  recharge_leaves=0, ledger_leaves=0)
     clear_volatile = 'B' in plugins
+    m1_rules = 'M1' in plugins
     by_effect = {k: dict(changed=0, involved_unchanged=0, changed_fields={}, unexpected_fields={}, ko_cascade=0,
                          phase_shift=0, terminal=0, terminal_residual=0, ko_cascade_non_hp_fields={}) for k in table}
     ko_leaves = manifest.get('ko_leaves')
@@ -1103,6 +1210,10 @@ def patched_pass(args, *, step_override=None, prepared=None):
             base_post_active = base['post_active'] if 'post_active' in base.files else None
             base_ko = {n: base[f'ko_{i:02d}'] for i, n in enumerate(ko_leaves)}
             pre_active = np.asarray(named['state.active'])[:real];post_active = np.asarray(result['post_active'])[:real]
+            m1 = result.get('m1') or {}
+            bag_index = base_names.index('trackers.public_volatiles') if 'trackers.public_volatiles' in base_names else None
+            knocked_pre = np.asarray(named['state.item_knocked'])[:real] if 'state.item_knocked' in named else None
+            item_pre = np.asarray(named['state.item'])[:real]
             faint_base = {};faint_set = set()
             if args.faint_clear:
                 lanes_list = base['faint_lanes'].tolist()
@@ -1134,6 +1245,24 @@ def patched_pass(args, *, step_override=None, prepared=None):
                     entries, clear_explained = clear_volatile_rule(entries, {n: result['ko'][n][lane] for n in leaves},
                         {n: base_ko[n][lane] for n in leaves}, result['fainted'][lane])
                     counts['clear_volatile_leaves'] += bool(clear_explained)
+                # M1: Hyper Beam's counter and bag bit (recharge_rule) and Knock Off's item ledger (ledger_rule).
+                recharge_explained, ledger_explained = [], []
+                if changed and m1_rules:
+                    zero2 = np.zeros(2, bool)
+                    if 'counter' in m1 and 'bag' in m1:
+                        departed = departed_mask(pre_active[lane], post_active[lane],
+                            None if base_post_active is None else base_post_active[lane])
+                        ran = None if result['residual_ran'] is None else bool(np.asarray(result['residual_ran'])[lane])
+                        entries, recharge_explained = recharge_rule(entries, m1['counter'][lane], m1['bag'][lane], m1['masked'][lane],
+                            None if bag_index is None else base['digests'][lane, bag_index],
+                            involved['hyperbeam'][lane] if 'hyperbeam' in involved else zero2, ran, post_active[lane],
+                            m1['post_hp'][lane], result['physical_to_public'][lane], departed)
+                        counts['recharge_leaves'] += bool(recharge_explained)
+                    if 'mutated' in m1 and 'original' in m1 and 'knocked' in m1 and knocked_pre is not None:
+                        trick_lane = bool(involved['trick'][lane].any()) if 'trick' in involved else False
+                        entries, ledger_explained = ledger_rule(entries, m1['mutated'][lane], m1['original'][lane], knocked_pre[lane],
+                            m1['knocked'][lane], item_pre[lane], result['physical_to_public'][lane], trick=trick_lane)
+                        counts['ledger_leaves'] += bool(ledger_explained)
                 rule_ok = bool(changed) and not entries
                 changed_rest = sorted({leaf for leaf, _ in entries})
                 phase = bool(phase_lanes[lane]);terminal = bool(terminal_lanes[lane]) and not phase
@@ -1191,6 +1320,8 @@ def patched_pass(args, *, step_override=None, prepared=None):
                     terminal=terminal, terminal_residual=terminal_residual,
                     involved={k: v for k, v in effects.items()}, leaves=changed, entries=labels, faint_rule=faint_explained,
                     clear_volatile_rule=[f'{l}@{side}' for l, side in clear_explained],
+                    recharge_rule=[f'{l}@{side}' for l, side in recharge_explained],
+                    ledger_rule=[f'{l}@{side}' for l, side in ledger_explained],
                     unexpected=[f"{l}@{'glob' if s is None else s}" for l, s in unexpected],
                     ko_consequences=[f"{l}@{'glob' if s is None else s}" for l, s in by_ko],
                     waived=[f"{l}@{'glob' if s is None else s}" for l, s in waived])) + '\n')
@@ -1207,7 +1338,8 @@ def patched_pass(args, *, step_override=None, prepared=None):
         capture_sha256=capture_sha, **base_check, shards=len(shards), partial=partial, failures=failures,
         migrated_new_inputs=new_inputs, new_outputs=new_outputs, public_order_rule=public_order_rule, link_rule=link_rule,
         effect_rule=effect_rule, residual_rule=residual_rule,
-        faint_clear_rule=bool(args.faint_clear), clear_volatile_rule=clear_volatile, waive=list(args.waive or ()), counts=counts, by_effect=by_effect,
+        faint_clear_rule=bool(args.faint_clear), clear_volatile_rule=clear_volatile, m1_rules=m1_rules,
+        waive=list(args.waive or ()), counts=counts, by_effect=by_effect,
         allowed_fields={e: ALLOWED.get(e, 'UNDECLARED: any change') for e in table},
         ko_allowed_fields={e: KO_ALLOWED[e] for e in table if e in KO_ALLOWED},
         uninvolved_leaves=dict(sorted(uninvolved_leaves.items(), key=lambda x: -x[1])), warnings=warnings,

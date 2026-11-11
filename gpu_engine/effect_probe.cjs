@@ -19,6 +19,18 @@ function setup(root) {
   let tape = null, audit = [], initializing = null;
   require('./chance_hooks.cjs').install(Battle, PRNG, () => tape, row => audit.push(row), () => initializing,
     path.join(root, 'dist/sim/pokemon.js'));
+  // Probe-only (fidelity M1): Roar/Whirlwind's getRandomSwitchable samples the drag target. With exactly one
+  // switchable candidate the result is forced, so it is audited as inert instead of needing a tape role; the
+  // engine's choose_bench forces the same mon. Two or more candidates stay with the hooks (unresolved).
+  const hooked = Battle.prototype.sample;
+  Battle.prototype.sample = function (items) {
+    const move = this.activeMove && this.activeMove.id;
+    if (tape && items.length === 1 && (move === 'roar' || move === 'whirlwind')) {
+      audit.push({kind:'INERT_FORCED_SAMPLE', move, candidates:1});
+      return items[0];
+    }
+    return hooked.call(this, items);
+  };
   return {Battle, pool, levels, setTape(value) {tape = value;}, setInitializing(value) {initializing = value;},
     takeAudit() {const a = audit; audit = []; return a;}};
 }

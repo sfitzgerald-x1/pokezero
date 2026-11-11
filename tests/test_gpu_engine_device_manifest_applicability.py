@@ -30,7 +30,7 @@ class ManifestApplicabilityTests(unittest.TestCase):
         rows = observation.column_manifest(installed_readout())
         by = {(r['section'], r['kind'], r['column']): r for r in rows}
         self.assertEqual(len(by), 1038)
-        self.assertEqual(Counter(r['status'] for r in rows), {'DIRECT': 76, 'TRACKED': 318, 'ZERO': 644})
+        self.assertEqual(Counter(r['status'] for r in rows), {'DIRECT': 76, 'TRACKED': 322, 'ZERO': 640})
         missing = {'field': (105, 106, 111, 112, 115, 116), 'own': (37,), 'opponent': (37,),
             'stats': (123, 124, 126, 127, 128, 129, 130, 131)}
         for section, columns in missing.items():
@@ -43,15 +43,20 @@ class ManifestApplicabilityTests(unittest.TestCase):
             row = by['field', 'numeric', column]
             self.assertEqual(row['status'], 'TRACKED', row)
             self.assertIn('items_removed_credit', row['reason'])
-        unsupported = [(section, c) for section in ('own', 'opponent') for c in (33, 40, 41)]
+        unsupported = [(section, c) for section in ('own', 'opponent') for c in (33,)]
         for section, column in unsupported:
             row = by[section, 'numeric', column]
             self.assertEqual(row['status'], 'ZERO')
             self.assertTrue(row['reason'].startswith('unavailable:'), row)
+        # Fidelity M1: Trick's -item lines and the holder's move lines write CHOICE_LOCKED (40) and ITEM_SWAPPED (41).
+        for section in ('own', 'opponent'):
+            for column, key in ((40, 'choice_locked'), (41, 'item_swapped')):
+                row = by[section, 'numeric', column]
+                self.assertEqual(row['status'], 'TRACKED', row);self.assertIn(key, row['reason'])
         zero = [r for r in rows if r['status'] == 'ZERO']
         self.assertEqual(sum(r['reason'].startswith('structurally') for r in zero), 616)
         self.assertEqual(sum(r['reason'].startswith('deferred') for r in zero), 16)
-        self.assertEqual(sum(r['reason'].startswith('unavailable:') for r in zero), 6)
+        self.assertEqual(sum(r['reason'].startswith('unavailable:') for r in zero), 2)
         self.assertEqual(sum(r['reason'].startswith('unavailable hidden') for r in zero), 6)
 
     def test_sparse_writer_roles_and_absent_readout_do_not_claim_hooks(self):

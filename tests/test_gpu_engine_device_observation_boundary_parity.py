@@ -508,15 +508,16 @@ console.log(JSON.stringify(orders));"""
             self.assertEqual(bool(expected.categorical[0,1,j.asarray(a.CATEGORY_COLUMNS)].any()),not own_tempo)
 
     def test_knock_off_clears_the_swap_flag_like_b2_item_end(self):
-        """A2's knock_off producer against B2's ITEM_END (public_active.py): a Tricked item, then knocked off;
-        -enditem clears item_swapped (and choice_public/choice_locked, which the device tracks from M1 on) (L5)."""
+        """A2's knock_off producer against B2's ITEM_END (public_active.py): a Tricked Choice Band, locked by a move line,
+        then knocked off; -enditem clears item_swapped, choice_public and choice_locked (tracked since M1) (L5)."""
         a,catalog,fact,project=self.b2_active()
         state=self.state();c=h.initialize(state,self.tables.belief);yes=j.ones(2,bool)
         fact(a.ARRIVE,0);fact(a.ARRIVE,1)
-        self.b2_lines(a,catalog,fact,'|-item|p2a: Absol|Leftovers|[from] move: Trick','|move|p2a: Absol|Tackle|p1a: Snorlax')
-        h.feature(c,1,state.active[:,1],'item_swapped',j.ones(2,j.int32),yes)
-        self.assertNotIn('choice_locked',c.trackers.mon_features)          # deferred to M1 (Trick/Choice lock)
+        self.b2_lines(a,catalog,fact,'|-item|p2a: Absol|Choice Band|[from] move: Trick','|move|p2a: Absol|Tackle|p1a: Snorlax')
+        for name in ('item_swapped','choice_public','choice_locked'):
+            h.feature(c,1,state.active[:,1],name,j.ones(2,j.int32),yes)
         swapped=project();self.compare_active(c.trackers,swapped,a)
+        self.assertTrue(bool(swapped.numeric[0,1,a.NUMERIC_COLUMNS[a.CORE.index('CHOICE_LOCKED')]]))
         cols=j.asarray(a.NUMERIC_COLUMNS)
         self.assertTrue(bool(swapped.numeric[0,1,cols].any()))
         item=1;before=state._replace(item=state.item.at[:,1,0].set(item))
@@ -525,6 +526,114 @@ console.log(JSON.stringify(orders));"""
         self.b2_lines(a,catalog,fact,'|-enditem|p2a: Absol|Leftovers|[from] move: Knock Off|[of] p1a: Snorlax')
         cleared=project();self.compare_active(c.trackers,cleared,a)
         self.assertFalse(bool(cleared.numeric[0,1,cols].any()))
+
+    def test_trick_flags_follow_b2_item_set_item_end_and_choice_move(self):
+        """M1's trick hook and the move hook's CHOICE_MOVE against B2's public_active fold of the same lines: -item is
+        ITEM_SET (item_swapped; choice_public for a Choice item; choice_locked reset), -enditem [silent] is ITEM_END, and
+        the holder's own move line locks a public Choice Band (column 40). The Tricker's move line precedes the -item
+        lines, so the Tricker never locks on its Trick; a called child ([from]) or a preparation never locks."""
+        a,catalog,fact,project=self.b2_active()
+        state=self.state();yes=j.ones(2,bool);band=j.asarray([False,False,True])
+        state=state._replace(item=state.item.at[:,0,0].set(2).at[:,1,0].set(1))
+        c=h.initialize(state,self.tables.belief);fact(a.ARRIVE,0);fact(a.ARRIVE,1)
+        cols=j.asarray(a.NUMERIC_COLUMNS);locked=a.NUMERIC_COLUMNS[a.CORE.index('CHOICE_LOCKED')]
+        swapped_col=a.NUMERIC_COLUMNS[a.CORE.index('ITEM_SWAPPED')]
+        def move(st,side,line,**kw):
+            h.move(c,st,side,j.ones(2,j.int32),yes,pp_use=True,**kw);self.b2_lines(a,catalog,fact,line)
+        # Snorlax (Band) Tricks Absol (Leftovers): both -item lines; Absol's own move then locks it publicly.
+        move(state,0,'|move|p1a: Snorlax|Trick|p2a: Absol')
+        after=state._replace(item=state.item.at[:,0,0].set(1).at[:,1,0].set(2))
+        h.trick(c,state,after,0,yes,band)
+        self.b2_lines(a,catalog,fact,'|-activate|p1a: Snorlax|move: Trick|[of] p2a: Absol','|-item|p2a: Absol|Choice Band|[from] move: Trick',
+            '|-item|p1a: Snorlax|Leftovers|[from] move: Trick')
+        got=project();self.compare_active(c.trackers,got,a)
+        self.assertEqual((bool(got.numeric[0,0,swapped_col]),bool(got.numeric[0,1,swapped_col]),bool(got.numeric[0,1,locked])),(True,True,False))
+        h.move(c,after,1,j.ones(2,j.int32),yes,pp_use=False,count_turn=False)          # a called child ([from]): no lock
+        self.b2_lines(a,catalog,fact,'|move|p2a: Absol|Tackle|p1a: Snorlax|[from]move: Sleep Talk')
+        self.compare_active(c.trackers,project(),a);self.assertFalse(bool(project().numeric[0,1,locked]))
+        move(after,1,'|move|p2a: Absol|Tackle|p1a: Snorlax')
+        got=project();self.compare_active(c.trackers,got,a);self.assertTrue(bool(got.numeric[0,1,locked]))
+        h.turn_end(c,after,after,yes);fact(a.TURN,-1,1);self.compare_active(c.trackers,project(),a)
+        # Snorlax Tricks again: Absol gives the Band back and gets nothing (-enditem [silent]: ITEM_END).
+        move(after,0,'|move|p1a: Snorlax|Trick|p2a: Absol')
+        back=after._replace(item=after.item.at[:,0,0].set(2).at[:,1,0].set(1))
+        h.trick(c,after,back,0,yes,band)
+        self.b2_lines(a,catalog,fact,'|-activate|p1a: Snorlax|move: Trick|[of] p2a: Absol','|-item|p2a: Absol|Leftovers|[from] move: Trick',
+            '|-item|p1a: Snorlax|Choice Band|[from] move: Trick')
+        got=project();self.compare_active(c.trackers,got,a);self.assertFalse(bool(got.numeric[0,1,locked]))
+        move(back,0,'|move|p1a: Snorlax|Surf|p2a: Absol')
+        got=project();self.compare_active(c.trackers,got,a);self.assertTrue(bool(got.numeric[0,0,locked]))
+        # A one-sided Trick: Snorlax's Band for nothing: Snorlax's -enditem is ITEM_END, Absol's -item ITEM_SET.
+        empty=back._replace(item=back.item.at[:,1,0].set(0))
+        h.trick(c,empty,empty._replace(item=empty.item.at[:,0,0].set(0).at[:,1,0].set(2)),0,yes,band)
+        self.b2_lines(a,catalog,fact,'|-activate|p1a: Snorlax|move: Trick|[of] p2a: Absol','|-item|p2a: Absol|Choice Band|[from] move: Trick',
+            '|-enditem|p1a: Snorlax|Choice Band|[silent]|[from] move: Trick')
+        got=project();self.compare_active(c.trackers,got,a)
+        self.assertEqual((bool(got.numeric[0,0,swapped_col]),bool(got.numeric[0,0,locked])),(False,False))
+        # Band <-> Band (B2's identical-swap quirk): the state is unchanged but both -item lines are folded.
+        same=back._replace(item=back.item.at[:,1,0].set(2))
+        h.trick(c,same,same,0,yes,band)
+        self.b2_lines(a,catalog,fact,'|-activate|p1a: Snorlax|move: Trick|[of] p2a: Absol','|-item|p2a: Absol|Choice Band|[from] move: Trick',
+            '|-item|p1a: Snorlax|Choice Band|[from] move: Trick')
+        got=project();self.compare_active(c.trackers,got,a)
+        self.assertEqual((bool(got.numeric[0,0,swapped_col]),bool(got.numeric[0,1,swapped_col])),(True,True))
+        # Arrival resets the seat's flags (ARRIVE), not the per-mon ledger.
+        fact(a.ARRIVE,1,slot=1);moved=same._replace(active=same.active.at[:,1].set(1))
+        h.install(c,moved,1,yes);h.withdraw(c,moved,1,same.active[:,1],yes)
+        self.compare_active(c.trackers,project(),a)
+        self.assertEqual(int(c.trackers.mon_features['item_mutated'][0,1,int(c.trackers.physical_to_public[0,1,0])]),1)
+
+    def test_mustrecharge_bag_and_its_stale_bit_follow_b2(self):
+        """M1: -mustrecharge (B2 RECHARGE) when the counter starts, cant|X|recharge (CLEAR_RECHARGE) at the recharge turn's
+        hook; a recharge cancelled by a faint expires silently and both keep the bit (B2's stale bit, kept on purpose),
+        through the holder's later move lines; a faint or an arrival clears it."""
+        a,catalog,fact,project=self.b2_active()
+        state=self.state();c=h.initialize(state,self.tables.belief);yes=j.ones(2,bool)
+        fact(a.ARRIVE,0);fact(a.ARRIVE,1)
+        name=a.CATEGORY_COLUMNS;bag=lambda got:bool(got.categorical[0,0,j.asarray(name)].any())
+        hit=state._replace(recharge_counter=state.recharge_counter.at[:,0,0].set(2))
+        h.public_move_state(c,state,hit,0,j.ones(2,j.int32),yes);self.b2_lines(a,catalog,fact,'|-mustrecharge|p1a: Snorlax')
+        got=project();self.compare_active(c.trackers,got,a);self.assertTrue(bag(got))
+        h.turn_end(c,hit,hit,yes);fact(a.TURN,-1,1);self.compare_active(c.trackers,project(),a)
+        h.recharge_turn(c,state,0,yes);self.b2_lines(a,catalog,fact,'|cant|p1a: Snorlax|recharge')
+        got=project();self.compare_active(c.trackers,got,a);self.assertFalse(bag(got))
+        h.public_move_state(c,state,hit,0,j.ones(2,j.int32),yes);self.b2_lines(a,catalog,fact,'|-mustrecharge|p1a: Snorlax')
+        h.turn_end(c,hit,hit,yes);fact(a.TURN,-1,2)
+        h.turn_end(c,hit,state,yes);fact(a.TURN,-1,3)                              # silent expiry: no line, no hook
+        got=project();self.compare_active(c.trackers,got,a);self.assertTrue(bag(got))
+        h.destiny_bond(c,state,0,yes);h.move(c,state,0,j.ones(2,j.int32),yes,pp_use=True)
+        self.b2_lines(a,catalog,fact,'|move|p1a: Snorlax|Surf|p2a: Absol')
+        got=project();self.compare_active(c.trackers,got,a);self.assertTrue(bag(got))   # EXPIRE_ACTION leaves it
+        fact(a.FAINT,0);h.turn_end(c,state,state._replace(hp=state.hp.at[:,0,0].set(0)),j.zeros(2,bool))
+        got=project();self.compare_active(c.trackers,got,a);self.assertFalse(bag(got))
+
+    def test_recharge_request_matches_the_original_action_writer(self):
+        """M1: the device's recharge collapse against the original writer (showdown._encode_action_tokens) on the request
+        Showdown sends: moves [{move: 'Recharge', id: 'recharge'}], trapped."""
+        from typing import NamedTuple
+        from types import SimpleNamespace
+        state,public,owners,legal=self.fixture.facts(b=1)
+        Recharging=NamedTuple('Recharging',[(n,object) for n in state._fields]+[('recharge_counter',object)])
+        s=Recharging(*state,recharge_counter=j.zeros((1,2,6),j.int32).at[0,0,1].set(1))
+        legal=j.asarray([[True]+[False]*8])
+        out=e.encode(s,public,self.tables,observer_sides=owners,legal_action_mask=legal)
+        raw={'side':{'id':'p1','pokemon':[dict(ident='p1: '+name,details=name+', L80, M',condition='120/240',active=i==0,
+            ability='Immunity',item='Leftovers',stats={'atk':151,'def':160,'spa':170,'spd':180,'spe':190})
+            for i,name in enumerate(('Snorlax','Gardevoir'))]},
+            'active':[{'moves':[{'move':'Recharge','id':'recharge'}],'trapped':True}]}
+        team=s_._self_team_from_request(raw,'p1')
+        source=SimpleNamespace(request=raw,self_team=team,self_active=team[0],legal_action_mask=s_._legal_action_mask(raw))
+        self.assertEqual(list(source.legal_action_mask),[True]+[False]*8)
+        nums=[[0.]*s_.V4_PRIVATE_WRITER_NUMERIC_FEATURE_COUNT for _ in range(23)];cats=[['']*60 for _ in range(23)]
+        s_._encode_action_tokens(cats,nums,source,dex=self.catalog.dex)
+        np.testing.assert_allclose(out.numeric_features[0,13:22],s_._project_v4_numeric_rows(nums)[13:22],rtol=0,atol=1e-6)
+        expected=[[self.catalog.vocabulary.encode(label) for label in row[:41]] for row in cats[13:22]]
+        np.testing.assert_array_equal(out.categorical_ids[0,13:22],expected)
+        self.assertEqual(int(out.categorical_ids[0,13,0]),self.catalog.vocabulary.encode('move:recharge'))
+        self.assertEqual(out.move_targets[0].tolist(),[0,1,2,3])
+        # Without the leaf (an older struct) nothing collapses: the two ordinary rows come back.
+        plain=e.encode(state,public,self.tables,observer_sides=owners,legal_action_mask=legal)
+        self.assertEqual(int(plain.numeric_features[0,14,e._index('PRESENT')]),1)
 
     def test_effective_gen3_failed_focus_retains_move_before_cant_order(self):
         import json,os

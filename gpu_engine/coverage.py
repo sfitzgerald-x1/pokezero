@@ -105,6 +105,14 @@ def registry():
     group('signalbeam','Ordinary damage plus 10% confusion for 2-5 moves (the attacker\'s draws[s][7]): Own Tempo, Shield '
         'Dust, a Substitute hit, a fainted or already confused target block it; 50% 40 BP typeless self-hit, snap-out, '
         'Lum Berry and Own Tempo cures, Baton Pass carry','secondary','fidelity_b')
+    # Fidelity patch M1.
+    group('hyperbeam','Ordinary damage plus mustrecharge after a hit (Substitute and KO included): the next action is '
+        'the priority-0 recharge pseudo-move, ahead of sleep, freeze, flinch, confusion and Truant, with only that '
+        'request lane legal and switching trapped; it expires after the next residual and ends on a switch or faint',
+        'effects','fidelity_m1')
+    group('trick','Item swap between the actives (an identical pair included); fails on a miss, Protect, a Substitute, '
+        'Sticky Hold, a knocked-off item on either side or no item on both; the Choice Band lock follows the current '
+        'item','items','fidelity_m1')
     return result
 
 
