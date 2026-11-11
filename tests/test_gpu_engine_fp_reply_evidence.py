@@ -146,5 +146,18 @@ class EvidenceTests(unittest.TestCase):
                              (True, 1, {'9': 'replay diverges'}))
 
 
+
+class TrainingSeedsTests(unittest.TestCase):
+    def test_reads_every_shards_seed_array_only(self):
+        import numpy as np
+        with tempfile.TemporaryDirectory() as tmp:
+            d = Path(tmp)
+            np.savez(d / 'shard-0.npz', seed=np.array([5, 7, 5]), label=np.array([1, 2, 3]), numeric_features=np.zeros((3, 2)))
+            np.savez(d / 'shard-1.npz', seed=np.array([9], np.int64), label=np.array([0]))
+            np.savez(d / 'shard-2.npz', seed=np.array([], np.int64), label=np.array([], np.int64))
+            np.savez(d / 'other.npz', seed=np.array([11]))   # not a shard
+            self.assertEqual(ev.training_seeds(d), {5, 7, 9})
+
+
 if __name__ == '__main__':
     unittest.main()

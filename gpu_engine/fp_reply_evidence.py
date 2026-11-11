@@ -194,6 +194,16 @@ def extra_sets(rr_rows):
     return out
 
 
+def training_seeds(data_dir):
+    """The battle seeds of π_FP's training data: only each shard's seed array is read (fp_reply_train.load reads every array)."""
+    import numpy as np
+    seeds = set()
+    for path in sorted(glob.glob(str(Path(data_dir) / 'shard-*.npz'))):
+        with np.load(path) as shard:
+            if 'seed' in shard.files:seeds.update(int(x) for x in shard['seed'])
+    return seeds
+
+
 def export(args):
     import torch
     from pokezero.dex import load_showdown_dex_cached
@@ -205,7 +215,7 @@ def export(args):
     run, out = Path(args.run_directory), Path(args.out);out.mkdir(parents=True, exist_ok=True);started = time.time()
     marker = torch.load(args.pi_fp, map_location='cpu', weights_only=True).get('fp_reply') or {}
     if not marker.get('data'):raise SystemExit(f'{args.pi_fp} has no fp_reply.data marker: its training games are unknown')
-    trained_seeds = {int(x) for x in train_mod.load(marker['data'])['seed']}
+    trained_seeds = training_seeds(marker['data'])
     model, result = load_transformer_checkpoint(args.pi_fp, map_location='cpu');model.eval()
     if int(result.model_config.window_size) != 1:raise SystemExit(f'π_FP has window {result.model_config.window_size}; this export feeds window 1')
     paths = sorted(glob.glob(str(run / 'results' / '*.json')), key=lambda p: int(Path(p).stem))

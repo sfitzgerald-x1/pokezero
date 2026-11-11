@@ -115,7 +115,7 @@ def main(argv=None):
     args = parser.parse_args(argv)
     if not 0 <= args.worker < args.workers:raise SystemExit('--worker W --workers N with 0 <= W < N required')
     import torch
-    torch.set_num_threads(1);torch.backends.mha.set_fastpath_enabled(False);torch.set_float32_matmul_precision('highest')
+    torch.set_num_threads(1)   # mc_ladder_captures' torch settings exactly: the replayed root's policy matches the bank's within 1e-6
     from pokezero.dex import load_showdown_dex_cached
     from pokezero.neural_policy import checkpoint_file_sha256
     from gpu_engine.mc_root_labeller import Model, make_env
