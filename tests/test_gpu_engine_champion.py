@@ -69,8 +69,14 @@ class ChampionTests(unittest.TestCase):
             attention_heads=2,feedforward_dim=16)
         self.assertFalse(self.m.config_from_checkpoint(cfg).tanh_value)
         self.assertTrue(self.m.config_from_checkpoint(dict(cfg,value_activation='tanh')).tanh_value)
+        # Current model-config round trips spell the legacy linear head as an
+        # empty sequence; JSON turns the dataclass tuple into a list.
+        for empty in (0,None,(),[]):
+            self.assertEqual(self.m.config_from_checkpoint(dict(cfg,value_head_hidden_layers=empty)),
+                self.m.config_from_checkpoint(cfg))
         for values in ({'window_size':2},{'temporal_aggregator':'gru'},{'value_activation':'sigmoid'},
-                {'value_head_hidden_layers':2}):
+                {'value_head_hidden_layers':2},{'value_head_hidden_layers':(256,)},
+                {'value_head_hidden_layers':[256,256]}):
             with self.assertRaises(ValueError):self.m.config_from_checkpoint(dict(cfg,**values))
 
     def test_snapshot_digest_stays_bound_after_pathname_replacement(self):

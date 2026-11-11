@@ -7,6 +7,7 @@ import jax
 import jax.numpy as j
 import numpy as np
 from gpu_engine import engine_execution_completeness as accounting
+from gpu_engine import engine_lifecycle_callbacks as life
 from gpu_engine import engine_leftovers_no_output as no_output
 from gpu_engine import engine_retained_encoder_driver as driver,source_provenance,transition
 import test_gpu_engine_leftovers_no_output as fixture
@@ -98,11 +99,15 @@ class FullHPOwningRuntimeTests(unittest.TestCase):
         self.base().same(result.state.core.engine,transition.step_with_chance(before,actions,self.f.table,chance).state)
         self.assertEqual(result.state.core.admitted.tolist(),[True,True])
         for row in range(2):
-            entered=int(frame.callbacks.execution.ledger.count[row]);self.assertEqual(entered,2)
-            self.assertEqual(frame.callbacks.execution.ledger.no_output_kind[row,:entered].tolist(),[1,1])
-            self.assertEqual(frame.callbacks.execution.ledger.stage[row,:entered].tolist(),[2,2])
+            ledger=frame.callbacks.execution.ledger
+            entered=int(ledger.count[row]);self.assertEqual(entered,3)
+            self.assertEqual(ledger.site[row,:entered].tolist(),[int(accounting.Site.TURNLOOP_PREFIX),int(accounting.Site.LEFTOVERS),int(accounting.Site.LEFTOVERS)])
+            self.assertEqual(ledger.no_output_kind[row,:entered].tolist(),[0,1,1])
+            self.assertEqual(ledger.stage[row,:entered].tolist(),[2,2,2])
+            prefix=int(ledger.start[row,0]);self.assertEqual(int(ledger.end[row,0]),prefix+1)
+            self.assertEqual(frame.callbacks.words[row,prefix].tolist(),[life.TURNLOOP_PREFIX,-1,-1,-1,-1,0,0,0,0,0])
             self.assertFalse(bool((frame.callbacks.words[row,:,0]==17).any()))
-            self.assertEqual(result.state.core.execution.stage[row,:entered].tolist(),[3,3])
+            self.assertEqual(result.state.core.execution.stage[row,:entered].tolist(),[3,3,3])
         self.base().same(result.state.observers[0].accounting,result.state.observers[1].accounting)
         self.assertTrue(bool(accounting.report(result.state.core.execution,tables=r['execution_compiled'].device).scoped_drained.all()))
         for owner in result.owners:self.assertFalse(bool(owner.scored.any()));self.assertFalse(bool(owner.B4_qualified.any()))
@@ -112,19 +117,21 @@ class FullHPOwningRuntimeTests(unittest.TestCase):
             failed_session=self.construct()
             def corrupt(*args):
                 frame=actual(*args);tape=frame.callbacks;ledger=tape.execution.ledger
+                slots=np.flatnonzero(np.asarray(ledger.site[0,:int(ledger.count[0])])==int(accounting.Site.LEFTOVERS))
+                self.assertEqual(slots.tolist(),[1,2]);slot=int(slots[0])
                 if corruption=='binding':
-                    ledger=ledger._replace(no_output_binding=ledger.no_output_binding.at[0,0,0].add(j.uint32(1)))
+                    ledger=ledger._replace(no_output_binding=ledger.no_output_binding.at[0,slot,0].add(j.uint32(1)))
                 elif corruption=='physical':
-                    ledger=ledger._replace(no_output_facts=ledger.no_output_facts.at[0,0,0].set(
-                        (ledger.no_output_facts[0,0,0]+1)%6))
-                else:ledger=ledger._replace(generation=ledger.generation.at[0,0,0].add(1))
+                    ledger=ledger._replace(no_output_facts=ledger.no_output_facts.at[0,slot,0].set(
+                        (ledger.no_output_facts[0,slot,0]+1)%6))
+                else:ledger=ledger._replace(generation=ledger.generation.at[0,slot,0].add(1))
                 return frame._replace(callbacks=tape._replace(execution=tape.execution._replace(ledger=ledger)))
             r['frame']=corrupt
             try:failed=driver.advance(failed_session,actions,chance_inputs=chance)
             finally:r['frame']=actual
             self.assertEqual(failed.state.core.admitted.tolist(),[False,True],msg=corruption)
-            self.assertEqual(failed.state.core.execution.stage[0,:2].tolist(),[2,2])
-            self.assertEqual(failed.state.core.execution.stage[1,:2].tolist(),[3,3])
+            self.assertEqual(failed.state.core.execution.stage[0,:3].tolist(),[2,2,2])
+            self.assertEqual(failed.state.core.execution.stage[1,:3].tolist(),[3,3,3])
             self.assertTrue(int(failed.state.core.execution.refusal[0])&accounting.UNRESOLVED)
             for owner in failed.owners:
                 self.assertFalse(bool(owner.encoded.observation.attention_mask[0].any()))

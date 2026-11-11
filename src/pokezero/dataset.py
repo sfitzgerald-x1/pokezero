@@ -349,12 +349,17 @@ class TrainingBatch:
     search_policy_target_mask: Any | None = None
     search_value_targets: Any | None = None
     search_value_target_mask: Any | None = None
+    # Explicit v5 data adapter only. Legacy trajectories/caches leave this absent.
+    v5_columns: Mapping[str, Any] | None = None
 
     def __post_init__(self) -> None:
         batch_size = len(self.action_indices)
         if batch_size == 0:
             raise ValueError("TrainingBatch must contain at least one example.")
         validate_batch_columns(self)
+        if self.v5_columns is not None:
+            from .v5_data import validate_batch
+            validate_batch(self)
         row_indexed = self.window_row_indices is not None
         for name, values in (
             ("history_mask", self.history_mask),
@@ -1658,6 +1663,7 @@ def _combine_training_batches(batches: Sequence[TrainingBatch]) -> TrainingBatch
         terminal_capped=_concat_batch_field(tuple(batch.terminal_capped for batch in batches)),
         step_metadata=_concat_batch_field(tuple(batch.step_metadata for batch in batches)),
         **_combine_search_columns(batches),
+        v5_columns=_combine_v5_columns(batches),
     )
 
 
@@ -1701,6 +1707,7 @@ def _combine_row_indexed_training_batches(batches: Sequence[TrainingBatch]) -> T
         terminal_capped=_concat_batch_field(tuple(batch.terminal_capped for batch in batches)),
         step_metadata=_concat_batch_field(tuple(batch.step_metadata for batch in batches)),
         **_combine_search_columns(batches),
+        v5_columns=_combine_v5_columns(batches),
         row_categorical_ids=_concat_categorical_batch_field(tuple(batch.row_categorical_ids for batch in batches)),
         row_numeric_features=_concat_batch_field(tuple(batch.row_numeric_features for batch in batches)),
         row_token_type_ids=_concat_batch_field(tuple(batch.row_token_type_ids for batch in batches)),
@@ -1801,6 +1808,7 @@ def slice_training_batch(batch: TrainingBatch, start: int, stop: int) -> Trainin
         step_metadata=_slice_batch_field(batch.step_metadata, start, stop),
         **{name: _slice_batch_field(getattr(batch, name), start, stop)
            for name in SEARCH_COLUMNS if getattr(batch, name) is not None},
+        v5_columns=_slice_v5_columns(batch, start, stop),
         row_categorical_ids=row_categorical_ids,
         row_numeric_features=row_numeric_features,
         row_token_type_ids=row_token_type_ids,
@@ -2491,6 +2499,20 @@ def _combine_search_columns(batches):
     return {n: numpy.concatenate([numpy.asarray(p[n], dtype=numpy.bool_ if n.endswith("mask")
                                                else numpy.float32) for p in parts], axis=0)
             for n in SEARCH_COLUMNS}
+
+
+def _combine_v5_columns(batches):
+    if all(batch.v5_columns is None for batch in batches):
+        return None
+    from .v5_data import combine_columns
+    return combine_columns(tuple(batch.v5_columns for batch in batches))
+
+
+def _slice_v5_columns(batch, start, stop):
+    if batch.v5_columns is None:
+        return None
+    from .v5_data import slice_columns
+    return slice_columns(batch.v5_columns, start, stop)
 
 
 def _search_cache_columns(arrays, example_slice):

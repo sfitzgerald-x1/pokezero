@@ -50,6 +50,20 @@ class EnginePrivateActionsTests(unittest.TestCase):
             np.savez_compressed(path, **arrays)
             cls.pool = provenance.load_constructor_pool(path)
 
+    def test_unenumerated_type_keeps_catalog_row_unsupported_without_global_abort(self):
+        species=dict(self.dex.species)
+        species['pikachu']=replace(self.dex.species_info('pikachu'),types=('Bird','Normal'))
+        dex=replace(self.dex,species=species)
+        catalog=p.compile_actions(dex,self.vocab)
+        team=t.compile_engine_private_team(self.metadata,vocabulary=self.vocab,dex=dex,
+            checkpoint_sha256='a'*64,exposure=t.RequestExposure('current','physical',True,True))
+        self.assertFalse(bool(team.species_supported[1]))
+        self.assertEqual(int(team.type_categories[1,0]),0)
+        compiled=e.compile_engine_actions(self.metadata,catalog=catalog,vocabulary=self.vocab,
+            private_team=team,exposure=self.exposure)
+        self.assertIsNotNone(e.prepare_engine_actions(compiled,expected_binding=compiled.device.binding))
+        np.testing.assert_array_equal(team.species_supported[2:],self.team.species_supported[2:])
+
     def ledger(self):
         o = r.initialize_order(j.array([71, 72], j.int32), j.array([0, 1], j.int32),
             j.array([3, 2], j.int32), engine_binding=j.broadcast_to(self.team.engine_binding, (2, 8)))

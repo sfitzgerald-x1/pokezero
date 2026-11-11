@@ -141,7 +141,7 @@ def _active_values(state,tape,side):
     return (physical,*(getattr(state,name)[rows,safe,p] for name in ('item','hp','max_hp','status')))
 
 
-def capture_before_device(tape,ticket,state,residual_event,record,tables,*,requested):
+def capture_before_device(tape,ticket,state,residual_event,record,tables,*,requested,hypothetical=False):
     """Trusted exact pre-dispatch seam. requested is actual attempt eligibility.
 
     Full HP is an explicit BEFORE branch condition, not inferred from a later
@@ -153,7 +153,13 @@ def capture_before_device(tape,ticket,state,residual_event,record,tables,*,reque
     try:event=_vector(residual_event,b)
     except (TypeError,ValueError):event=jnp.zeros(b,jnp.int32);malformed=jnp.ones(b,jnp.bool_)
     side=event%2;physical,item,hp,maximum,status=_active_values(state,tape,side)
-    retained=speed.retain_device(record,state,tape.stream_id,tables.profile)
+    if hypothetical:
+        from . import v5_hypothetical_profile as hypothesis
+        retained=hypothesis.retain_device(record,state,tape.stream_id,tables.profile)
+        profile_ready=retained.qualified_origin
+    else:
+        retained=speed.retain_device(record,state,tape.stream_id,tables.profile)
+        profile_ready=retained.qualified_birth
     ledger=context.ledger;slot,same=accounting._ticket(ledger,ticket);rows=jnp.arange(b)
     attempt=(same&(ledger.site[rows,slot]==int(accounting.Site.LEFTOVERS))
         &(ledger.side[rows,slot]==side)&(ledger.stage[rows,slot]==1)
@@ -168,7 +174,7 @@ def capture_before_device(tape,ticket,state,residual_event,record,tables,*,reque
         &(tables.leftovers.leftovers_item>0)&(status>=0)&(status<7))
     reason=(jnp.where(namespace,0,NAMESPACE)|jnp.where(attempt,0,ATTEMPT)
         |jnp.where(branch,0,BRANCH)|jnp.where(before,0,BEFORE)
-        |jnp.where(retained.qualified_birth,0,PROFILE))
+        |jnp.where(profile_ready,0,PROFILE))
     # Keep this temporary witness finite: do not recursively retain the owning
     # accounting context inside a snapshot later passed back to accounting.
     return Before(tables.binding,tape._replace(execution=None),ticket,ledger.count,ledger.next_serial,state.turn,
@@ -176,7 +182,7 @@ def capture_before_device(tape,ticket,state,residual_event,record,tables,*,reque
         jnp.where(requested,reason,INACTIVE),requested)
 
 
-def finish_device(before,tape,state,record,tables):
+def finish_device(before,tape,state,record,tables,*,hypothetical=False):
     """Trusted AFTER-SAME-write seam; returns only this typed branch witness.
 
     Unchanged output storage is necessary but NOT sufficient: full-HP BEFORE,
@@ -192,7 +198,13 @@ def finish_device(before,tape,state,record,tables):
     life._typed(before.requested,(b,),jnp.bool_);life._typed(before.binding,(8,),jnp.uint32)
     namespace &= jnp.all(before.binding==tables.binding)
     physical,item,hp,maximum,status=_active_values(state,tape,before.side)
-    retained=speed.retain_device(record,state,tape.stream_id,tables.profile)
+    if hypothetical:
+        from . import v5_hypothetical_profile as hypothesis
+        retained=hypothesis.retain_device(record,state,tape.stream_id,tables.profile)
+        profile_ready=retained.qualified_origin
+    else:
+        retained=speed.retain_device(record,state,tape.stream_id,tables.profile)
+        profile_ready=retained.qualified_birth
     # Recheck the original entered attempt has not been emitted/spent/replaced.
     ledger=context.ledger;slot,same=accounting._ticket(ledger,before.ticket);rows=jnp.arange(b)
     same &= ((ledger.site[rows,slot]==int(accounting.Site.LEFTOVERS))&(ledger.side[rows,slot]==before.side)
@@ -225,7 +237,7 @@ def finish_device(before,tape,state,record,tables):
         &(before.physical==prior.cursor.physical_active[rows,jnp.clip(before.side,0,1)]))
     reason=(before.reason|jnp.where(namespace,0,NAMESPACE)|jnp.where(same,0,ATTEMPT)
         |jnp.where(branch,0,BRANCH)|jnp.where(bound_before,0,BEFORE)
-        |jnp.where(after,0,AFTER)|jnp.where(output,0,OUTPUT)|jnp.where(retained.qualified_birth,0,PROFILE))
+        |jnp.where(after,0,AFTER)|jnp.where(output,0,OUTPUT)|jnp.where(profile_ready,0,PROFILE))
     return Receipt(before,tape.count,hp,maximum,status,item,physical,prior.refusal|tape.refusal,reason)
 
 

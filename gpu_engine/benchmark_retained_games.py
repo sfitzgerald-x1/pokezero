@@ -7,8 +7,9 @@ inference is downstream, on compacted, admitted, currently requested rows only.
 
 No runtime is enabled by default. There is deliberately no checkpoint-loading
 CLI: the reviewed remote runner supplies original compiled catalogs, a bound
-constructor pool, and explicit enablement. Current full public admission remains
-closed, so the current actual driver produces no model calls or completions.
+constructor pool, and explicit enablement. Full public admission is closed by
+default. Explicit source-witness preparation can derive conditional per-frame
+coverage through the original runtime and both actual public consumers.
 Scientific use requires independent review of an immutable source freeze.
 """
 from dataclasses import dataclass
@@ -51,11 +52,19 @@ def _hex(value):
 
 def prepare(request_compiled, own_compiled, weights_path, *,
             expected_weights_sha256, expected_checkpoint_sha256,
-            enable_unqualified=False):
+            enable_unqualified=False, leftovers_compiled=None,
+            leftovers_mode='diagnostic', status_residual_compiled=None,
+            status_residual_mode='diagnostic', direct_hit_compiled=None,
+            direct_hit_mode='diagnostic', frame_input_mode='closed',
+            substitute_compiled=None, substitute_mode='diagnostic',
+            toxic_compiled=None, toxic_mode='diagnostic',recoil_compiled=None,recoil_mode='closed',calm_mind_compiled=None,calm_mind_mode='closed',swords_dance_compiled=None,swords_dance_mode='closed',spikes_compiled=None,spikes_mode='closed',thunder_wave_compiled=None,thunder_wave_mode='closed',sleep_powder_compiled=None,sleep_powder_mode='closed'):
     """Bind an exact existing champion; opt-in precedes checkpoint loading.
 
     Runtime preparation is host-only. Loading does not execute the model. The
     original request/OwnFacts/catalog/checkpoint identities remain mandatory.
+    Optional original helpers and modes are checked by the owning driver before
+    loading weights. Source-witness mode enables actual source accounting and
+    kernel-risk tracking; it confers no global or scientific qualification.
     """
     if enable_unqualified is not True:
         raise ValueError('explicit unqualified retained benchmark enablement required')
@@ -65,6 +74,35 @@ def prepare(request_compiled, own_compiled, weights_path, *,
     if (record['request_compiled'] is not request_compiled
             or record['catalog'].checkpoint_sha256 != expected_checkpoint_sha256):
         raise ValueError('original request/OwnFacts and exact encoder checkpoint required')
+    modes = (leftovers_mode, status_residual_mode, direct_hit_mode, substitute_mode, toxic_mode, frame_input_mode,recoil_mode,calm_mind_mode,swords_dance_mode,spikes_mode,thunder_wave_mode,sleep_powder_mode)
+    default_options = (all(x is None for x in
+        (leftovers_compiled, status_residual_compiled, direct_hit_compiled, substitute_compiled, toxic_compiled,recoil_compiled,calm_mind_compiled,swords_dance_compiled,spikes_compiled,thunder_wave_compiled,sleep_powder_compiled))
+        and all(type(x) is str for x in modes)
+        and modes == ('diagnostic', 'diagnostic', 'diagnostic', 'diagnostic', 'diagnostic', 'closed','closed','closed','closed','closed','closed','closed'))
+    prepared = None
+    if not default_options:
+        # These are deliberate runtime modes, never caller-supplied coverage
+        # booleans. The driver validates original helper/catalog identities and
+        # its own mode dependencies. Reuse this one Prepared after loading.
+        witness = type(frame_input_mode) is str and frame_input_mode == 'source-witness'
+        accounting = witness or any(type(x) is str and x == 'kernel-event'
+            for x in (status_residual_mode, direct_hit_mode, substitute_mode, toxic_mode,recoil_mode,calm_mind_mode,swords_dance_mode,spikes_mode,thunder_wave_mode,sleep_powder_mode))
+        prepared = driver.prepare(request_compiled, own_compiled,
+            public_mode='retained-full', fake_forward=_noop_fake,
+            leftovers_compiled=leftovers_compiled, leftovers_mode=leftovers_mode,
+            status_residual_compiled=status_residual_compiled,
+            status_residual_mode=status_residual_mode,
+            direct_hit_compiled=direct_hit_compiled, direct_hit_mode=direct_hit_mode,
+            substitute_compiled=substitute_compiled, substitute_mode=substitute_mode,
+            toxic_compiled=toxic_compiled, toxic_mode=toxic_mode,
+            recoil_compiled=recoil_compiled,recoil_mode=recoil_mode,
+            calm_mind_compiled=calm_mind_compiled,calm_mind_mode=calm_mind_mode,
+            swords_dance_compiled=swords_dance_compiled,swords_dance_mode=swords_dance_mode,
+            spikes_compiled=spikes_compiled,spikes_mode=spikes_mode,
+            thunder_wave_compiled=thunder_wave_compiled,thunder_wave_mode=thunder_wave_mode,sleep_powder_compiled=sleep_powder_compiled,sleep_powder_mode=sleep_powder_mode,
+            account_source_sites=accounting,
+            track_kernel_risks=witness,
+            frame_input_mode=frame_input_mode)
     # Hash before loading, then check the loader's own immutable byte snapshot.
     if precision_benchmark.digest(weights_path) != expected_weights_sha256:
         raise ValueError('weights archive hash mismatch')
@@ -75,8 +113,9 @@ def prepare(request_compiled, own_compiled, weights_path, *,
             or metadata['weights_archive_sha256'] != expected_weights_sha256
             or metadata['checkpoint_sha256'] != expected_checkpoint_sha256):
         raise ValueError('exact default champion/config/archive/checkpoint required')
-    prepared = driver.prepare(request_compiled, own_compiled,
-        public_mode='retained-full', fake_forward=_noop_fake)
+    if prepared is None:
+        prepared = driver.prepare(request_compiled, own_compiled,
+            public_mode='retained-full', fake_forward=_noop_fake)
     return _bind(prepared, jax.device_put(params, device), config, metadata)
 
 
@@ -95,11 +134,15 @@ def _bind(prepared, params, config, metadata):
     return runtime
 
 
-def _checked(runtime):
+def _checked(runtime, *, session=None):
     record = _RUNTIMES.get(runtime) if type(runtime) is Runtime else None
     if record is None or runtime.binding is not record['binding']:
         raise ValueError('original retained benchmark runtime required')
-    driver._checked(record['prepared'])
+    prepared_record = driver._checked(record['prepared'])
+    if prepared_record.get('frame_input_mode') == 'source-witness':
+        # Keep the driver's base guard witness-free. Check the original witness
+        # (and actual current Session when available) before downstream inference.
+        driver._checked_witness(prepared_record, session=session)
     return record
 
 
@@ -115,6 +158,22 @@ def _requested(state):
     return np.stack([np.asarray(private_requests.action_inputs(
         request.actions.facts.request, observer_side=ledger.owner_side).ready, bool)
         for request, ledger in zip(state.core.requests, state.core.orders)], axis=1)
+
+
+def _refusal_snapshot(result):
+    """Retain original refusal values for diagnosis, without deriving causes."""
+    packet = lambda value: None if value is None else np.asarray(value).tolist()
+    core = result.state.core
+    ledger = getattr(core, 'execution', None)
+    return dict(core_admitted=packet(core.admitted), unsafe=packet(getattr(core, 'unsafe', None)),
+        accounting_refusal=packet(getattr(ledger, 'refusal', None)),
+        accounting_upstream_refusal=packet(getattr(ledger, 'upstream_refusal', None)),
+        requests=[dict(reason=packet(getattr(request, 'reason', None)),
+            actions_admitted=packet(getattr(getattr(request, 'actions', None), 'admitted', None)))
+            for request in core.requests],
+        owners=[{name:packet(getattr(owner, name, None)) for name in
+            ('reason', 'basic_error', 'retained_error', 'policy_admitted',
+             'full_line_consumers_complete', 'full_encoder_admitted')} for owner in result.owners])
 
 
 def _admission(result, active, config):
@@ -253,7 +312,8 @@ def _source_snapshot():
 
 
 def measure(runtime, pool, team_indices, *, stream_ids, constructor_seed=719,
-            sampling_seed=9771, max_requests=1000, enable_unqualified=False):
+            sampling_seed=9771, max_requests=1000, enable_unqualified=False,
+            gender_initialization=None, gameplay_trace=None):
     """Advance one immutable finite cohort; no refill, replay, or warmup games.
 
     Host compaction/validation, cold shape compilations, per-phase barriers and
@@ -262,11 +322,20 @@ def measure(runtime, pool, team_indices, *, stream_ids, constructor_seed=719,
     """
     if enable_unqualified is not True:
         raise ValueError('explicit unqualified retained benchmark enablement required')
+    if gameplay_trace is not None:
+        from .engine_gameplay_trace import TraceWriter
+        if type(gameplay_trace) is not TraceWriter or gameplay_trace.closed or gameplay_trace.header is not None:
+            raise ValueError('explicit bounded gameplay TraceWriter required')
     if (type(max_requests) is not int or max_requests < 1
             or any(type(x) is not int or not 0 <= x < 2**32
                 for x in (constructor_seed, sampling_seed))):
         raise ValueError('positive finite request cap and uint32 seeds required')
     record = _checked(runtime)
+    # The original Prepared determines whether the two full folds run through
+    # the source-witness pair seam. Never time or invoke a second pair here.
+    prepared_record = driver._checked(record['prepared'])
+    paired_public = prepared_record.get('frame_input_mode') == 'source-witness'
+    public_phases = ('public_pair',) if paired_public else ('public_p1', 'public_p2')
     source = _source_snapshot()
     receipt = source_provenance._pool(pool, rehash=True)
     indices = np.asarray(team_indices)
@@ -279,13 +348,23 @@ def measure(runtime, pool, team_indices, *, stream_ids, constructor_seed=719,
         raise ValueError('distinct fixed team pairs and unique positive int32 stream IDs required')
     batch = len(indices)
     start = time.perf_counter_ns()
+    constructor_options={} if gender_initialization is None else {
+        'gender_initialization':gender_initialization}
     session = driver.construct(pool, indices, prepared=record['prepared'],
-        stream_ids=j.asarray(ids), seed=constructor_seed)
+        stream_ids=j.asarray(ids), seed=constructor_seed,**constructor_options)
     jax.block_until_ready(session.result)
     construction_ms = (time.perf_counter_ns() - start) / 1e6
+    initial = session.result  # immutable actual constructor output; never replay it
+    if gameplay_trace is not None:
+        gameplay_trace.begin(initial=initial, runtime_binding=runtime.binding, source=source,
+            pool_receipt=receipt, team_indices=indices, stream_ids=ids, max_requests=max_requests,
+            constructor_seed=constructor_seed, sampling_seed=sampling_seed,
+            action_names=prepared_record['request']['catalog'].names,
+            request_compiled=prepared_record.get('request_compiled'))
     completed, refused = np.zeros(batch, bool), np.zeros(batch, bool)
     details = [dict(stream_id=int(x), team_indices=pair.tolist(), refusal=None) for x, pair in zip(ids, indices)]
     full_steps, forward, compiles, phases, decisions = [], [], [], {}, []
+    host_attribution = []
     encoder_steps, valid_steps, model_rows = [], 0, 0
     placeholder_moves = np.zeros(batch, np.int64)
     executed_steps = np.zeros(batch, np.int64)
@@ -293,7 +372,9 @@ def measure(runtime, pool, team_indices, *, stream_ids, constructor_seed=719,
     status = 'REQUEST_CAP'
     for index in range(max_requests):
         step_start = time.perf_counter_ns()
-        _checked(runtime)  # original static/catalog guards run before every step
+        step_host = {}
+        with driver._host_span(step_host, 'outer_guard_ms'):
+            _checked(runtime, session=session)  # guards precede downstream inference
         active = ~completed & ~refused
         # An initially terminal or externally replaced state is never a measured
         # completion. The checked driver separately guards current-carry identity.
@@ -327,11 +408,23 @@ def measure(runtime, pool, team_indices, *, stream_ids, constructor_seed=719,
             if (type(name) is not str or not np.isfinite(milliseconds) or milliseconds < 0):
                 raise ValueError('finite synchronized driver phase timing required')
             step_phases[name] = step_phases.get(name, 0.) + float(milliseconds)
-        before_frames = np.asarray(session.state.core.frame_number).copy()
-        result = driver.advance(session, actions, active_rows=j.asarray(active), timing_callback=timing_callback)
-        jax.block_until_ready(result)
-        diagnostics = driver.latest_diagnostics(session)
-        jax.block_until_ready(diagnostics)
+        with driver._host_span(step_host, 'before_frames_transfer_ms'):
+            before_frames = np.asarray(session.state.core.frame_number).copy()
+        trace_before = session.result if gameplay_trace is not None else None
+        chance_options = {}
+        if gameplay_trace is not None:
+            # The ORIGINAL pure sampler runs ONCE, with the same state keys.
+            # Forward those exact arrays through the existing explicit API.
+            with driver._host_span(step_host, 'gameplay_chance_capture_ms'):
+                captured_chance = driver.transition.sample_chance_inputs(session.state.core.engine)
+            chance_options['chance_inputs'] = captured_chance
+        result = driver.advance(session, actions, active_rows=j.asarray(active), timing_callback=timing_callback, **chance_options)
+        with driver._host_span(step_host, 'advance_result_wait_ms'):
+            jax.block_until_ready(result)
+        with driver._host_span(step_host, 'latest_diagnostics_guard_ms'):
+            diagnostics = driver.latest_diagnostics(session)
+        with driver._host_span(step_host, 'diagnostics_wait_ms'):
+            jax.block_until_ready(diagnostics)
         if not np.array_equal(np.asarray(diagnostics.active_rows), active):
             raise RuntimeError('driver advanced a different physical row set')
         executed = np.asarray(diagnostics.executed_rows)
@@ -349,22 +442,34 @@ def measure(runtime, pool, team_indices, *, stream_ids, constructor_seed=719,
             & np.asarray(observer.retained_healthy)
             for report, observer in zip(result.owners, result.state.observers)])
         invalid = active & (~executed | np.asarray(diagnostics.invalid_actions)
-            | ~np.asarray(result.state.core.admitted) | ~public_ok)
+            | ~np.asarray(result.state.core.admitted) | ~public_ok
+            | (np.asarray(result.state.core.engine.done) & ~np.asarray(driver.terminal_complete(result.state.core))))
         refused |= invalid
         for row in np.flatnonzero(invalid):
             details[row]['refusal'] = dict(kind='engine-or-source-refusal', request=index,
                 invalid_action=bool(np.asarray(diagnostics.invalid_actions)[row]),
                 executed=bool(executed[row]), public_frame_admitted=bool(public_ok[row]))
-        completed |= executed & ~invalid & np.asarray(result.state.core.engine.done)
-        required = {'engine', 'requests', 'public_p1', 'public_p2', 'encode_p1', 'encode_p2',
-            'admission_p1', 'admission_p2'}
+        if gameplay_trace is not None:
+            step_host['gameplay_capture_ms'] = gameplay_trace.decision(request=index,
+                before=trace_before, after=result, actions=actions, active=active,
+                executed=executed, invalid=invalid, chance=captured_chance)
+        completed |= executed & ~invalid & np.asarray(driver.terminal_complete(result.state.core))
+        observation_phases = (*public_phases, 'encode_p1', 'encode_p2', 'admission_p1', 'admission_p2')
+        required = {'engine', 'requests', *observation_phases}
         if set(step_phases) != required:
             raise RuntimeError('complete synchronized driver timing phases required')
         for name, value in step_phases.items():
             phases.setdefault(name, []).append(value)
-        encoder_steps.append(sum(step_phases[x] for x in
-            ('public_p1', 'public_p2', 'encode_p1', 'encode_p2', 'admission_p1', 'admission_p2')))
+        encoder_steps.append(sum(step_phases[x] for x in observation_phases))
         full_steps.append((time.perf_counter_ns() - step_start) / 1e6)
+        # These intervals do not change the original required phase names.
+        # advance_wall_ms is inclusive and excluded from the disjoint subtotal.
+        driver_host = dict(getattr(diagnostics, 'host_timings', None) or {})
+        attributed = sum(step_phases.values()) + sum(step_host.values()) + sum(
+            value for name, value in driver_host.items() if name != 'advance_wall_ms')
+        host_attribution.append(dict(driver=driver_host, benchmark=step_host,
+            original_driver_phases_ms=sum(step_phases.values()), full_step_wall_ms=full_steps[-1],
+            unattributed_wall_ms=full_steps[-1]-attributed))
         valid_steps += 1
         if completed.all():
             status = 'COMPLETE_COHORT'
@@ -385,11 +490,30 @@ def measure(runtime, pool, team_indices, *, stream_ids, constructor_seed=719,
             final_owner_full_line_consumers_complete=[bool(np.asarray(owner.full_line_consumers_complete)[row])
                 for owner in session.result.owners])
     source_provenance._pool(pool, rehash=True)
-    _checked(runtime)
+    _checked(runtime, session=session)
     if _source_snapshot() != source:
         raise RuntimeError('bound source changed during retained measurement')
+    # Refused rows freeze at their first unsupported frame. Preserve that raw
+    # evidence remotely so later source work does not replay consumed roots.
+    witness = getattr(session.state.core, 'frame_input_report', None)
+    risks = getattr(session.state.core, 'risks', None)
+    raw_packet = lambda value: None if value is None else {
+        name: np.asarray(array).tolist() for name, array in value._asdict().items() if name!='outcome_diagnostics'}
+    from . import engine_outcome_diagnostics as outcome_diagnostics
+    refusal_outcomes=outcome_diagnostics.refused_rows(getattr(witness,'outcome_diagnostics',None),refused)
+    trace_fields = {} if gameplay_trace is None else {'gameplay_trace': gameplay_trace.finish(details)}
     return dict(schema=SCHEMA, status=status, runtime_binding=runtime.binding,
+        **trace_fields,
         source=source,
+        initial_refusal_diagnostics=_refusal_snapshot(initial),
+        final_refusal_diagnostics=_refusal_snapshot(session.result),
+        final_frame_input_witness=raw_packet(witness), final_kernel_risks=raw_packet(risks),
+        refusal_outcomes=refusal_outcomes,
+        initial_engine_state=raw_packet(initial.state.core.engine),
+        initial_frame_input_witness=raw_packet(getattr(initial.state.core,'frame_input_report',None)),
+        initial_owner_observations=[{name:np.asarray(getattr(owner.encoded.observation,name)).tolist()
+            for name in ('numeric_features','categorical_ids','token_type_ids','attention_mask',
+                         'legal_action_mask','admitted')} for owner in initial.owners],
         full_B4_qualified=False, fidelity_qualified=False, strength_qualified=False,
         compute_dtype='bfloat16', model_outputs=['policy_logits', 'value', 'opponent_action_logits'],
         weights=record['metadata'], pool_receipt=receipt, batch=batch, original_denominator=batch,
@@ -402,6 +526,10 @@ def measure(runtime, pool, team_indices, *, stream_ids, constructor_seed=719,
         engine_placeholder_moves=int(placeholder_moves.sum()), executed_game_steps=int(executed_steps.sum()),
         full_step=_stats(full_steps), bf16_forward=_stats(forward), cold_compile=_stats(compiles),
         driver_components={name: _stats(values) for name, values in phases.items()},
+        host_attribution=dict(schema='host-wall-attribution-v1', samples=host_attribution,
+            complete=False, scope='Read-only host intervals; inclusive advance wall is not additive. '
+                'Remainder includes inference, admission/transfer work outside these spans and instrumentation. '
+                'No component-derived throughput or attribution-completeness claim.'),
         retained_encoder=_stats(encoder_steps),
         **_observation_accounting(batch, encoder_steps, full_steps),
         constructor_seed=constructor_seed, sampling_seed=sampling_seed, cohort=details, decisions=decisions,

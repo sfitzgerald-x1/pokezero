@@ -36,7 +36,7 @@ def choose_bench(hp,active,roll):
     return chosen.astype(jnp.int32),count>0
 
 
-def drag(state,side,move,roll,table,entry_table,*,eligible):
+def drag(state,side,move,roll,table,entry_table,*,eligible,_public_trace=None,_whirlwind_pending=None):
     """Install a random living bench, clear outgoing state, then run entry.
 
     The caller cancels the displaced actor's queued action. Hazard KO is
@@ -54,9 +54,18 @@ def drag(state,side,move,roll,table,entry_table,*,eligible):
         trapped=state.trapped.at[rows,side].set(state.trapped[rows,side] & ~changed),
         baton_pass=state.baton_pass.at[rows,side].set(state.baton_pass[rows,side] & ~changed))
     state=history.record_switch(state,side,target,eligible=changed)
+    if _public_trace is not None:
+        from . import engine_whirlwind_callbacks as callbacks
+        _public_trace,_whirlwind_record=callbacks.install(_public_trace,_whirlwind_pending,state,changed)
     knocked_out=jnp.zeros_like(changed)
     if entry_table is not None:
-        state,knocked_out=entry.enter(state,side,entry_table,eligible=changed)
+        if _public_trace is not None:
+            state,knocked_out,_public_trace=entry.enter(state,side,entry_table,eligible=changed,_weather_trace=_public_trace)
+        else:
+            state,knocked_out=entry.enter(state,side,entry_table,eligible=changed)
     else:
         state=entry.restore_sleep(state,side,eligible=changed)
+    if _public_trace is not None:
+        _public_trace=callbacks.finish(_public_trace,_whirlwind_record,state)
+        return state,changed,knocked_out,_public_trace
     return state,changed,knocked_out

@@ -21,7 +21,10 @@ import weakref
 import jax
 import jax.numpy as jnp
 import numpy as np
+from pokezero.dex import normalize_id
 
+from . import engine_self_destruct_callbacks as self_destruct_callbacks
+from . import engine_before_move_blocked_callbacks as before_move_blocked_callbacks
 from . import engine_lifecycle_event_device as causal
 from . import engine_public_events as engine, public_context, public_inputs as inputs
 from . import public_wire, public_refresh_stream, public_toxic, v4_encoder
@@ -30,6 +33,43 @@ from . import engine_weather_progress_callbacks as weather_progress
 from . import engine_weather_effect_callbacks as weather_effects
 from . import engine_leftovers_callbacks as leftovers_callbacks
 from . import engine_status_residual_callbacks as status_residual_callbacks
+from . import engine_status_callbacks as status_callbacks
+from . import engine_direct_hit_controls as direct_hit_controls
+from . import engine_direct_ko_callbacks as direct_ko_callbacks
+from . import engine_no_damage_callbacks as no_damage
+from . import engine_secondary_status_callbacks as secondary_callbacks
+from . import engine_flash_fire_end_callbacks as flash_end
+from . import engine_protect_callbacks as protect_callbacks
+from . import engine_pinch_item_callbacks as pinch_callbacks
+from . import engine_bulk_up_callbacks as bulk_up_callbacks
+from . import engine_self_boost_callbacks as self_boost_callbacks
+from . import engine_baton_pass_callbacks as baton_callbacks
+from . import engine_whirlwind_callbacks as whirlwind_callbacks
+from . import engine_natural_cure_callbacks as natural_cure_callbacks
+from . import engine_self_heal_callbacks as self_heal_callbacks
+from . import engine_belly_drum_callbacks as belly_callbacks
+from . import engine_sleep_blocked_callbacks as sleep_blocked_callbacks
+from . import engine_sleep_talk_callbacks as sleep_talk_callbacks
+from . import engine_focus_punch_callbacks as focus_callbacks
+from . import engine_encore_callbacks as encore_callbacks
+from . import engine_self_move_callbacks as self_move_callbacks
+from . import engine_heal_bell_callbacks as heal_bell_callbacks
+from . import engine_leech_seed_callbacks as leech_callbacks
+from . import engine_color_change_callbacks as color_callbacks
+from . import engine_pressure_callbacks as pressure_callbacks
+from . import engine_trace_callbacks as trace_callbacks
+from . import engine_substitute_callbacks as substitute_callbacks
+from . import engine_toxic_callbacks as toxic_callbacks
+from . import engine_thunder_wave_callbacks as thunder_callbacks
+from . import engine_recoil_callbacks as recoil_callbacks
+from . import engine_rough_skin_callbacks as rough_callbacks
+from . import engine_swords_dance_callbacks as swords_dance_callbacks
+from . import engine_intimidate_callbacks as intimidate_callbacks
+from . import engine_entry_spikes_callbacks as entry_spikes_callbacks
+from . import engine_calm_mind_callbacks as calm_mind_callbacks
+from . import engine_spikes_callbacks as spikes_callbacks
+from . import engine_sleep_powder_callbacks as powder_callbacks
+from . import engine_substitute_damage_callbacks as substitute_damage
 
 SCHEMA = 'pokezero.engine_full_v4_raw_device.partial.v1'
 _NAMES = ('source_binding', 'species_binding', 'ability_binding', 'move_binding',
@@ -58,8 +98,49 @@ class Tables(NamedTuple):
     weather_chip: object
     leftovers_heal: object
     status_damage: object
+    direct_hit_control: object
+    pressure_start: object
+    trace_copy: object
+    substitute_created: object
+    toxic_no_effect: object
+    recoil_damage: object
+    calm_mind: object
+    swords_dance: object
+    ident_species: object
+    intimidate: object
+    spikes: object
+    no_damage_miss: object
+    no_damage: object
+    primary_sleep_status: object
+    sleep_powder_status: object
+    flash_fire_end: object
+    substitute_damage: object
+    bulk_up: object
+    color_change: object
+    protect_success: object
+    protect_block: object
+    protect_still_moves: object
+    pinch_items: object
+    rough_skin_damage: object
+    self_heal: object
+    wonder_guard_immune: object
+    belly_drum_setboost: object
+    before_move_blocked: object
+    sleep_blocked: object
+    encore: object
+    leech: object
+    entry_spikes_damage: object
+    self_move: object
+    self_move_still: object
+    status_damage_lethal: object
+    self_boost: object
+    heal_bell: object
+    sleep_talk_moves: object
+    focus_preparation: object
     namespaces: Bindings
     binding: object
+    natural_cure: object = None
+    thunder_wave_limber: object = None
 
 
 @dataclass(frozen=True, eq=False)
@@ -72,7 +153,7 @@ class Compiled:
 _COMPILED = weakref.WeakKeyDictionary()
 
 
-def compile_adapter(metadata, projector, *, catalog):
+def compile_adapter(metadata, projector, *, catalog, direct_hit_compiled=None):
     """Host-only original full catalog + reviewed causal projector boundary.
 
     Strings exist only here, at static schema compilation. Each engine move row
@@ -85,7 +166,7 @@ def compile_adapter(metadata, projector, *, catalog):
         raise ValueError('original engine/public FULL catalog move edge required')
     simple = public_context.compile_context(catalog.source, catalog.abilities, catalog.moves)
     lower = causal.compile_projector(metadata, projector, species_catalog=catalog.species,
-        source=catalog.source, context_tables=simple, status_events=True, items=catalog.items,weather_catalog=catalog)
+        source=catalog.source, context_tables=simple, status_events=True, items=catalog.items,weather_catalog=catalog,direct_hit_compiled=direct_hit_compiled)
     kwargs = v4_encoder.wire_kwargs(catalog)
     name = catalog.species.names[1]
     ident = ('p1a: '+name, 'p2a: '+name)
@@ -100,9 +181,9 @@ def compile_adapter(metadata, projector, *, catalog):
     allowed = {int(k) for k in (inputs.Kind.RAW_BEGIN, inputs.Kind.SWITCH_PRELUDE,
         inputs.Kind.MUDSHOT, inputs.Kind.NONPROC, inputs.Kind.TENDENCY,
         inputs.Kind.ACTIVE, inputs.Kind.TYPES, inputs.Kind.FIELD,
-        inputs.Kind.DAMAGE_CONTROL, inputs.Kind.SLEEP, inputs.Kind.TOXIC, inputs.Kind.STATUS,inputs.Kind.ABILITY,inputs.Kind.ITEM)}
+        inputs.Kind.DAMAGE_CONTROL, inputs.Kind.SLEEP, inputs.Kind.TOXIC, inputs.Kind.STATUS,inputs.Kind.ABILITY,inputs.Kind.ITEM,inputs.Kind.TRACE)}
 
-    def add(line, main_kind, before=prior):
+    def add(line, main_kind, before=prior, *, extra_kinds=(), last_main=False):
         try:
             if isinstance(line, tuple):
                 _, projections = public_wire.project_lines(before, line, **kwargs)
@@ -111,27 +192,38 @@ def compile_adapter(metadata, projector, *, catalog):
                 projections = (projection,)
             words = np.array([e.words() for p in projections for e in p.events], np.int32)
             indices = np.flatnonzero(words[:, 0] == int(main_kind))
-            if (len(indices) != 1 or not 1 <= len(words) <= 64
-                    or any(int(k) not in allowed | {int(main_kind)} for k in words[:, 0])):
+            if ((len(indices) < 1 if last_main else len(indices) != 1) or not 1 <= len(words) <= 64
+                    or any(int(k) not in allowed | {int(main_kind)} | {int(k) for k in extra_kinds} for k in words[:, 0])):
                 return 0
             templates.append(words)
-            lengths.append(len(words)); mains.append(int(indices[0]))
+            lengths.append(len(words)); mains.append(int(indices[-1] if last_main else indices[0]))
             return len(templates)-1
         except ValueError:
             return 0
 
     kinds = np.zeros(33, np.int32)
     kinds[inputs.Kind.SWITCH] = add(arrivals[0], inputs.Kind.SWITCH, public_wire.WireState())
+    kinds[inputs.Kind.DRAG] = add(arrivals[0].replace('|switch|','|drag|',1), inputs.Kind.DRAG, public_wire.WireState())
+    if catalog.moves.ids.get('batonpass',0):
+        baton_prior,_=public_wire.project_lines(prior,[f'|move|{ident[0]}|Baton Pass|{ident[0]}'],**kwargs)
+        kinds[inputs.Kind.BATON_PASS]=add(arrivals[0],inputs.Kind.BATON_PASS,baton_prior)
+        if not kinds[inputs.Kind.BATON_PASS]:raise ValueError('original Baton arrival writer required')
     kinds[inputs.Kind.TURN] = add('|turn|2', inputs.Kind.TURN)
     kinds[inputs.Kind.ACTION_CHUNK_END] = add('|', inputs.Kind.ACTION_CHUNK_END)
     kinds[inputs.Kind.UPKEEP] = add('|upkeep', inputs.Kind.UPKEEP)
     kinds[inputs.Kind.FAINT] = add('|faint|'+ident[0], inputs.Kind.FAINT)
+    # Original turnLoop emits this pair before every entered action queue.
+    # Timestamp magnitude is absent from its original canonical controls.
+    kinds[inputs.Kind.TOXIC] = add(('|','|t:|1'), inputs.Kind.TOXIC,
+        extra_kinds=(inputs.Kind.ACTION_CHUNK_END,))
+    # Partial legacy catalogs retain key0 (unsupported); no prefix is invented.
     conditions = np.array([add(f'|-damage|{ident[0]}|71/100'+suffix, inputs.Kind.CONDITION)
         for suffix in ('', ' slp', ' par', ' brn', ' frz', ' psn', ' tox')]
         + [add(f'|-damage|{ident[0]}|0 fnt', inputs.Kind.CONDITION)], np.int32)
     tokens=('', 'slp', 'par', 'brn', 'frz', 'psn', 'tox')
     statuses=np.array([0]+[add(f'|-status|{ident[0]}|{token}',inputs.Kind.STATUS) for token in tokens[1:]],np.int32)
     cures=np.array([0]+[add(f'|-curestatus|{ident[0]}|{token}|[msg]',inputs.Kind.STATUS) for token in tokens[1:]],np.int32)
+    natural_cure=np.array([0]+[add(f'|-curestatus|{ident[0]}|{token}|[from] ability: Natural Cure',inputs.Kind.STATUS)for token in tokens[1:]],np.int32)
     lum = np.zeros((7, 2), np.int32)
     if bool(lower.device.lum_events):
         # Effective Gen3 inherited eatItem/onEat emits these genuine source
@@ -173,6 +265,16 @@ def compile_adapter(metadata, projector, *, catalog):
     for pid, target in targets.items():
         if target in (0, 1):
             moves[pid] = add(f'|move|{ident[0]}|{catalog.moves.names[pid]}|{ident[target]}', inputs.Kind.MOVE)
+    sleep_talk_moves=np.zeros(len(moves),np.int32)
+    if projector.catalog.engine_table.sleep_talk is not None:
+        for pid,target in targets.items():
+            rest_self=(target==0 and catalog.moves.names[pid].lower().replace(' ','')=='rest' and projector.catalog.engine_table.effects is not None and any(int(projector.catalog.ids[i])==pid and bool(x)for i,x in enumerate(projector.catalog.engine_table.effects.rest)))
+            if target==1 or rest_self:
+                line=f'|move|{ident[0]}|{catalog.moves.names[pid]}|{ident[target]}|[from] sleeptalk'
+                called=add(line,inputs.Kind.MOVE);miss=add(line+'|[miss]',inputs.Kind.MOVE)
+                if called and miss and mains[called]==mains[miss] and np.array_equal(templates[called],templates[miss]):sleep_talk_moves[pid]=called
+    focus_preparation=add(f'|-singleturn|{ident[0]}|move: Focus Punch',inputs.Kind.NONPROC)
+    if not focus_preparation:raise ValueError('FULL writer lacks original Focus Punch annotation schema')
     weather_failure=add(f'|-fail|{ident[0]}',inputs.Kind.ACTIVE)
     weather_failure_moves=np.zeros(len(catalog.moves.names),bool)
     for pid,target in targets.items():
@@ -186,6 +288,55 @@ def compile_adapter(metadata, projector, *, catalog):
                 raise ValueError('FULL retained weather MOVE [still] equivalence changed')
             weather_failure_moves[pid]=True
     if not weather_failure:raise ValueError('FULL writer lacks exact failed-weather schema')
+    protect_still_moves=np.zeros(len(moves),bool)
+    effects=projector.catalog.engine_table.effects
+    if effects is not None:
+        for row in np.flatnonzero(np.asarray(effects.protect)):
+            pid=projector.catalog.ids[row]
+            if pid<=0 or targets.get(pid)!=0:continue
+            # Battle.attrLastMove('[still]') erases the declaration target.
+            # Bind the original parser's exact blank-target schema, including
+            # all unchanged prelude/payload words and the exact tendency target default.
+            still=add(f'|move|{ident[0]}|{catalog.moves.names[pid]}||[still]',inputs.Kind.MOVE)
+            plain=int(moves[pid])
+            patched=templates[plain].copy()
+            patched[mains[plain],6:8]=-1
+            # The original tendency codec defaults an absent MOVE target to
+            # the opposing side.  It is the last event of this same line.
+            from . import public_tendency
+            has_tendency=(patched[-1,0]==int(inputs.Kind.TENDENCY) and patched[-1,8]==public_tendency.MOVE)
+            patched[-1,11]=1
+            protect_still_moves[pid]=bool(plain and still and has_tendency and mains[plain]==mains[still] and np.array_equal(patched,templates[still]))
+    self_move_still=np.zeros(len(moves),bool)
+    if projector.catalog.engine_table.sleep_talk is not None or effects is not None:
+        from . import public_tendency
+        still_rows=np.zeros(len(projector.catalog.ids),bool)
+        if projector.catalog.engine_table.sleep_talk is not None:still_rows|=np.asarray(projector.catalog.engine_table.sleep_talk.move)
+        if effects is not None:still_rows|=np.asarray(effects.heal_half)|np.asarray(effects.rest)
+        for row in np.flatnonzero(still_rows):
+            pid=projector.catalog.ids[row]
+            if pid<=0 or targets.get(pid)!=0:continue
+            plain=int(moves[pid]);still=add(f'|move|{ident[0]}|{catalog.moves.names[pid]}||[still]',inputs.Kind.MOVE)
+            patched=templates[plain].copy();patched[mains[plain],6:8]=-1;patched[-1,11]=1
+            self_move_still[pid]=bool(plain and still and patched[-1,0]==int(inputs.Kind.TENDENCY) and patched[-1,8]==public_tendency.MOVE and mains[plain]==mains[still] and np.array_equal(patched,templates[still]))
+    self_move=np.asarray([add(f'|-fail|{ident[0]}|heal',inputs.Kind.ACTIVE),add(f'|-fail|{ident[0]}',inputs.Kind.ACTIVE),add(f'|-status|{ident[0]}|slp|[from] move: Rest',inputs.Kind.STATUS),add(f'|-heal|{ident[0]}|100/100 slp|[silent]',inputs.Kind.CONDITION)],np.int32)
+    if np.any(self_move<=0):raise ValueError('FULL writer lacks original self-move failure schemas')
+    color_change=np.asarray([0 if i==0 else add(f'|-start|{ident[0]}|typechange|{name.title()}|[from] ability: Color Change',inputs.Kind.TYPES) for i,name in enumerate(metadata['vocabulary']['types'])],np.int32)
+    # A narrow legacy public catalog can omit Color Change. Its zero schema
+    # stays unsupported; it must not prevent unrelated default preparation.
+    bulk_up=np.array([add(f'|-boost|{ident[0]}|{stat}|1',inputs.Kind.BOOST)for stat in ('atk','def')],np.int32)
+    self_boost=np.zeros((7,3),np.int32)
+    for stat,delta in ((0,1),(4,1),(2,2),(4,2)):
+        self_boost[stat,delta]=add(f'|-boost|{ident[0]}|{("atk","def","spa","spd","spe","accuracy","evasion")[stat]}|{delta}',inputs.Kind.BOOST)
+    belly_drum_setboost=add(f'|-setboost|{ident[0]}|atk|6|[from] move: Belly Drum',inputs.Kind.BOOST)
+    sleep_blocked=add(f'|cant|{ident[0]}|slp',inputs.Kind.SLEEP)
+    before_move_blocked=np.asarray([add(f'|cant|{ident[0]}|'+reason,inputs.Kind.ACTIVE,last_main=True)for reason in ('par','frz')],np.int32)
+    if np.any(before_move_blocked<=0):raise ValueError('original PAR/FRZ cant writer required')
+    encore=np.array([add(f'|-start|{ident[0]}|Encore',inputs.Kind.ACTIVE),add(f'|-end|{ident[0]}|Encore',inputs.Kind.ACTIVE)],np.int32)
+    leech_start=add(f'|-start|{ident[0]}|move: Leech Seed',inputs.Kind.ACTIVE)
+    leech=np.array([[leech_start]*7,[add(f'|-damage|{ident[0]}|71/100'+suffix+f'|[from] Leech Seed|[of] {ident[1]}',inputs.Kind.CONDITION)for suffix in ('',' slp',' par',' brn',' frz',' psn',' tox')],[add(f'|-heal|{ident[0]}|71/100'+suffix+'|[silent]',inputs.Kind.CONDITION)for suffix in ('',' slp',' par',' brn',' frz',' psn',' tox')]],np.int32)
+    protect_success=add(f'|-singleturn|{ident[0]}|Protect',inputs.Kind.ACTIVE)
+    protect_block=add(f'|-activate|{ident[0]}|Protect',inputs.Kind.NONPROC)
     # Exact source-tagged damage schemas; no generic direct-damage relabeling.
     # Nonlethal registration first; queued lethal/faint source ordering stays
     # unsupported until its own complete producer is installed.
@@ -201,14 +352,183 @@ def compile_adapter(metadata, projector, *, catalog):
             suffix=(' '+token) if token else ''
             leftovers_heal[status]=add(f'|-heal|{ident[0]}|81/100{suffix}|[from] item: Leftovers',inputs.Kind.CONDITION)
             if not leftovers_heal[status]:raise ValueError('FULL writer lacks exact Leftovers heal schema')
-    status_damage=np.zeros((3,7),np.int32)
-    for reason,tag in ((status_residual_callbacks.BURN,'brn'),(status_residual_callbacks.POISON,'psn')):
+    status_damage=np.zeros((4,7),np.int32)
+    for reason,tag in ((status_residual_callbacks.BURN,'brn'),(status_residual_callbacks.POISON,'psn'),(status_residual_callbacks.TOXIC,'psn')):
         for status,token in enumerate(tokens):
             suffix=(' '+token) if token else ''
             status_damage[reason,status]=add(f'|-damage|{ident[0]}|71/100{suffix}|[from] {tag}',inputs.Kind.CONDITION)
             if not status_damage[reason,status]:raise ValueError('FULL writer lacks exact residual status HP schema')
+    status_damage_lethal=np.zeros(4,np.int32)
+    for reason,tag in ((status_residual_callbacks.BURN,'brn'),(status_residual_callbacks.POISON,'psn'),(status_residual_callbacks.TOXIC,'psn')):
+        status_damage_lethal[reason]=add(f'|-damage|{ident[0]}|0 fnt|[from] {tag}',inputs.Kind.CONDITION)
+        if not status_damage_lethal[reason]:raise ValueError('FULL writer lacks exact lethal status HP schema')
+    entry_spikes_damage=np.array([add(f'|-damage|{ident[0]}|71/100'+(' '+token if token else '')+
+        '|[from] Spikes',inputs.Kind.CONDITION) for token in tokens],np.int32)
+    if not np.all(entry_spikes_damage):raise ValueError('FULL writer lacks exact entry Spikes schemas')
     if not all(kinds[k] for k in (1, 2, 3, 6, 12)) or not np.all(conditions) or not np.all(statuses[1:]) or not np.all(cures[1:]):
         raise ValueError('FULL writer lacks required causal lifecycle schemas')
+    direct_hit_control=np.array([add(f'|{label}|{ident[0]}',inputs.Kind.NONPROC)
+        for label in ('-crit','-supereffective','-resisted')],np.int32)
+    if not np.all(direct_hit_control):
+        raise ValueError('FULL writer lacks exact direct-hit annotation schemas')
+    recoil_damage=np.array([add(f'|-damage|{ident[0]}|71/100'+(' '+token if token else '')+
+        f'|[from] Recoil|[of] {ident[1]}',inputs.Kind.CONDITION) for token in tokens],np.int32)
+    if int(lower.device.recoil_move)>0 and not np.all(recoil_damage):raise ValueError('FULL writer lacks exact Gen3 Recoil/of schemas')
+    pinch_items=np.zeros(len(metadata["vocabulary"]["items"]),np.int32)
+    for i,item in enumerate(metadata["vocabulary"]["items"]):
+        if item in {"liechiberry":"atk","petayaberry":"spa","salacberry":"spe"}:
+            stat={"liechiberry":"atk","petayaberry":"spa","salacberry":"spe"}[item]
+            name={"liechiberry":"Liechi Berry","petayaberry":"Petaya Berry","salacberry":"Salac Berry"}[item]
+            pinch_items[i]=add((f"|-enditem|{ident[0]}|{name}|[eat]",f"|-boost|{ident[0]}|{stat}|1|[from] item: {name}"),inputs.Kind.BOOST)
+    rough_skin_damage=np.zeros(7,np.int32)
+    if 'roughskin' in metadata['vocabulary']['abilities']:
+        rough_skin_damage=np.array([add(f'|-damage|{ident[0]}|71/100'+(' '+token if token else '')+
+            f'|[from] ability: Rough Skin|[of] {ident[1]}',inputs.Kind.CONDITION) for token in tokens],np.int32)
+        if not np.all(rough_skin_damage):raise ValueError('FULL writer lacks exact Rough Skin/of schemas')
+    pressure_start=0
+    if int(lower.device.pressure_engine_ability)>0 and int(lower.device.pressure_public_ability)>0:
+        pressure_start=add(f'|-ability|{ident[0]}|Pressure|[silent]',inputs.Kind.ABILITY)
+        if not pressure_start:raise ValueError('FULL writer lacks exact owner-only Pressure schema')
+    intimidate=0
+    if int(lower.device.intimidate_engine_ability)>0 and int(lower.device.intimidate_public_ability)>0:
+        intimidate=add((f'|-ability|{ident[0]}|Intimidate|boost',f'|-unboost|{ident[1]}|atk|1'),inputs.Kind.BOOST)
+        if not intimidate:raise ValueError('FULL writer lacks exact positive Intimidate pair')
+    calm_mind=np.zeros(2,np.int32)
+    if int(lower.device.calm_mind_move)>0:
+        calm_mind=np.array([add(f'|-boost|{ident[0]}|{stat}|1',inputs.Kind.BOOST) for stat in ('spa','spd')],np.int32)
+        if not np.all(calm_mind):raise ValueError('FULL writer lacks exact Calm Mind SPA/SPD schemas')
+    swords_dance=0
+    if int(lower.device.swords_dance_move)>0:
+        swords_dance=add(f'|-boost|{ident[0]}|atk|2',inputs.Kind.BOOST)
+        if not swords_dance:raise ValueError('FULL writer lacks exact Swords Dance schema')
+    primary_sleep_status=np.zeros(len(metadata['moves']),np.int32)
+    for i,enabled in enumerate(np.asarray(lower.device.primary_sleep_moves)|np.asarray([name=='willowisp' for name in metadata['vocabulary']['moves']])):
+        if enabled:
+            info=catalog.dex.move_info(metadata['vocabulary']['moves'][i])
+            if info is not None and info.status=='slp' and info.target=='normal' and info.category=='Status' and info.base_power==0:
+                primary_sleep_status[i]=add(f'|-status|{ident[0]}|slp|[from] move: {info.name}',inputs.Kind.STATUS)
+    sleep_powder_status=0
+    if int(lower.device.sleep_powder_move)>0:
+        sleep_powder_status=add(f'|-status|{ident[0]}|slp|[from] move: Sleep Powder',inputs.Kind.STATUS)
+        if not sleep_powder_status:raise ValueError('FULL writer lacks exact Sleep Powder source status schema')
+    trace_copy=np.zeros(len(metadata['vocabulary']['abilities']),np.int32)
+    trace_names={'sturdy':'Sturdy','naturalcure':'Natural Cure','oblivious':'Oblivious',
+        'levitate':'Levitate','pressure':'Pressure'}
+    if int(lower.device.trace_engine_ability)>0:
+        for ability_id,name in enumerate(metadata['vocabulary']['abilities']):
+            copied=trace_names.get(normalize_id(name))
+            if copied is not None and int(lower.device.trace_public_ability[ability_id])>0:
+                trace_copy[ability_id]=add(f'|-ability|{ident[0]}|{copied}|Trace|[from] ability: Trace|[of] {ident[1]}',inputs.Kind.TRACE)
+                if not trace_copy[ability_id]:raise ValueError('FULL writer lacks exact supported Trace copy schema')
+    substitute_created=np.zeros(9,np.int32)
+    if int(lower.device.substitute_move)>0:
+        for status,token in enumerate(tokens):
+            suffix=(' '+token) if token else ''
+            substitute_created[status]=add((f'|-start|{ident[0]}|Substitute',
+                f'|-damage|{ident[0]}|71/100{suffix}'),inputs.Kind.CONDITION)
+            if not substitute_created[status]:raise ValueError('FULL writer lacks exact Substitute start/damage schemas')
+        substitute_created[7]=add(f'|-fail|{ident[0]}|move: Substitute',inputs.Kind.ACTIVE)
+        substitute_created[8]=add(f'|-fail|{ident[0]}|move: Substitute|[weak]',inputs.Kind.ACTIVE)
+        if np.any(substitute_created[7:]<=0):raise ValueError('original Substitute failure schemas required')
+    thunder_wave_limber=0
+    toxic_no_effect=np.zeros(7,np.int32)
+    if int(lower.device.toxic_move)>0:
+        pid=int(lower.device.base.public_ids[int(lower.device.toxic_move)])
+        if pid>0:
+            plain=int(moves[pid]);miss_move=add(f'|move|{ident[0]}|Toxic|{ident[1]}|[miss]',inputs.Kind.MOVE)
+            if not plain or not miss_move or not np.array_equal(templates[plain],templates[miss_move]):
+                raise ValueError('original Toxic MOVE [miss] retained words changed')
+            toxic_no_effect[toxic_callbacks.MISS]=add(f'|-miss|{ident[0]}|{ident[1]}',inputs.Kind.NONPROC)
+            toxic_no_effect[toxic_callbacks.PLAIN_TYPE_IMMUNITY]=add(f'|-immune|{ident[0]}',inputs.Kind.NONPROC)
+            blank=add(f'|move|{ident[0]}|Toxic||[still]',inputs.Kind.MOVE)
+            patched=templates[plain].copy();patched[mains[plain],6:8]=-1
+            # Toxic normally targets the foe. Original absent-target TENDENCY
+            # defaults to that same foe, so it needs no additional patch.
+            if not blank or mains[plain]!=mains[blank] or not np.array_equal(patched,templates[blank]):raise ValueError('original Toxic failed MOVE target-erasure schema changed')
+            toxic_no_effect[toxic_callbacks.SUBSTITUTE_BLOCK]=add(f'|-fail|{ident[0]}',inputs.Kind.ACTIVE)
+            toxic_no_effect[5]=add(f'|-fail|{ident[0]}|tox',inputs.Kind.ACTIVE)
+            toxic_no_effect[6]=add(f'|-fail|{ident[0]}',inputs.Kind.ACTIVE)
+            if not np.all(toxic_no_effect[[1,2,4,5,6]]):raise ValueError('original Toxic no-effect schemas missing')
+    if int(lower.device.thunder_wave_move)>0:
+        pid=int(lower.device.base.public_ids[int(lower.device.thunder_wave_move)])
+        if pid>0:
+            toxic_no_effect[toxic_callbacks.PLAIN_TYPE_IMMUNITY]=add(f'|-immune|{ident[0]}',inputs.Kind.NONPROC)
+            thunder_wave_limber=add(f'|-immune|{ident[0]}|[from] ability: Limber',inputs.Kind.NONPROC)
+            plain=int(moves[pid]);blank=add(f'|move|{ident[0]}|Thunder Wave||[still]',inputs.Kind.MOVE)
+            patched=templates[plain].copy();patched[mains[plain],6:8]=-1
+            if not blank or mains[plain]!=mains[blank] or not np.array_equal(patched,templates[blank]):raise ValueError('original Thunder Wave failed MOVE target-erasure schema changed')
+            toxic_no_effect[toxic_callbacks.SUBSTITUTE_BLOCK]=add(f'|-fail|{ident[0]}',inputs.Kind.ACTIVE)
+            if not toxic_no_effect[toxic_callbacks.SUBSTITUTE_BLOCK]:raise ValueError('original Thunder Wave failure schema missing')
+    no_damage_keys=np.zeros((10,7),np.int32)
+    no_damage_keys[no_damage.MISS,:]=add(f'|-miss|{ident[0]}|{ident[1]}',inputs.Kind.NONPROC)
+    no_damage_keys[no_damage.TYPE_IMMUNE,:]=add(f'|-immune|{ident[0]}',inputs.Kind.NONPROC)
+    if catalog.abilities.ids.get('levitate',0)>0:
+        no_damage_keys[no_damage.LEVITATE_IMMUNE,:]=add(f'|-immune|{ident[0]}|[from] ability: Levitate',inputs.Kind.NONPROC)
+        if not np.all(no_damage_keys[no_damage.LEVITATE_IMMUNE]):raise ValueError('original tagged Levitate immunity schema missing')
+    self_heal=np.zeros(7,np.int32)
+    # Runtime chip_status is PUBLIC, exactly the original tokens order above.
+    for status,token in enumerate(tokens):
+        suffix=(' '+token) if token else ''
+        self_heal[status]=add(f'|-heal|{ident[0]}|71/100{suffix}',inputs.Kind.CONDITION)
+        if not self_heal[status]:raise ValueError('FULL writer lacks original bare move heal schema')
+    wonder_guard_immune=0
+    if int(lower.device.wonder_guard_engine_ability)>0 and int(lower.device.wonder_guard_public_ability)>0:
+        wonder_guard_immune=add(f'|-immune|{ident[0]}|[from] ability: Wonder Guard',inputs.Kind.NONPROC)
+        if not wonder_guard_immune:raise ValueError('FULL writer lacks original tagged Wonder Guard immunity schema')
+    no_damage_miss=np.zeros(len(projector.catalog.ids),bool)
+    for row in np.flatnonzero(np.asarray(lower.device.no_damage.candidates)|np.asarray(lower.device.primary_sleep_moves)|np.asarray([name=='willowisp' for name in metadata['vocabulary']['moves']])):
+        pid=projector.catalog.ids[row];name=catalog.moves.names[pid]
+        annotated=add(f'|move|{ident[0]}|{name}|{ident[1]}|[miss]',inputs.Kind.MOVE)
+        no_damage_miss[row]=bool(annotated and int(moves[pid]) and np.array_equal(templates[int(moves[pid])],templates[annotated]))
+    for reason,ability in ((no_damage.WATER_HEAL,'Water Absorb'),(no_damage.VOLT_HEAL,'Volt Absorb')):
+        for status,token in enumerate(tokens):
+            suffix=(' '+token)if token else ''
+            no_damage_keys[reason,status]=add(f'|-heal|{ident[0]}|71/100{suffix}|[from] ability: {ability}|[of] {ident[1]}',inputs.Kind.CONDITION)
+    for reason,ability in ((no_damage.WATER_FULL,'Water Absorb'),(no_damage.VOLT_FULL,'Volt Absorb'),(no_damage.FLASH_REPEAT,'Flash Fire')):
+        no_damage_keys[reason,:]=add(f'|-immune|{ident[0]}|[from] ability: {ability}',inputs.Kind.NONPROC)
+    no_damage_keys[no_damage.FLASH_START,:]=add(f'|-start|{ident[0]}|ability: Flash Fire',inputs.Kind.ABILITY)
+    flash_fire_end=add(f'|-end|{ident[0]}|ability: Flash Fire|[silent]',inputs.Kind.NONPROC)
+    if bool(np.any(np.asarray(lower.device.no_damage.flash))) and not flash_fire_end:
+        raise ValueError('FULL writer lacks original silent Flash Fire end schema')
+    # An absent public ability row keeps that source form UNKNOWN.
+    # The original no-nickname Pokemon constructor uses baseSpecies for
+    # these exact Gen3 formes (sim/pokemon.ts329-334). This is lexical ident
+    # spelling only: details/current species and every encounter stay intact.
+    # Do not strip arbitrary hyphens (Ho-Oh/Nidoran forms remain distinct).
+    bases={'deoxysattack':'deoxys','deoxysdefense':'deoxys','deoxysspeed':'deoxys'}
+    ids={normalize_id(name):i for i,name in enumerate(catalog.species.names) if i}
+    ident_species=np.array([ids.get(bases[normalize_id(name)],0) if normalize_id(name) in bases else i
+        for i,name in enumerate(catalog.species.names)],np.int32)
+    spikes=add('|-sidestart|p2: Player 2|Spikes',inputs.Kind.FIELD)
+    if int(lower.device.spikes_move)>0 and not spikes:raise ValueError('FULL writer lacks original Spikes field schema')
+    sub_damage_keys=np.zeros((2,2,3),np.int32)
+    for broken in range(2):
+        for critical in range(2):
+            for effect in (-1,0,1):
+                lines=[]
+                if effect:lines.append(f'|-{"supereffective" if effect>0 else "resisted"}|{ident[0]}')
+                if critical:lines.append(f'|-crit|{ident[0]}')
+                lines.append(f'|-end|{ident[0]}|Substitute' if broken else f'|-activate|{ident[0]}|Substitute|[damage]')
+                sub_damage_keys[broken,critical,effect+1]=add(tuple(lines),inputs.Kind.ACTIVE if broken else inputs.Kind.NONPROC,last_main=not broken)
+    if not np.all(sub_damage_keys):raise ValueError('original FULL Substitute hit/end schemas required')
+    heal_bell_keys=np.zeros((3,7),np.int32)
+    if int(lower.device.heal_bell_move)>0:
+        heal_bell_keys[0,:]=add(f'|-activate|{ident[0]}|move: Heal Bell',inputs.Kind.NONPROC)
+        if int(lower.device.heal_bell_public_soundproof)>0:
+            heal_bell_keys[1,:]=add(f'|-immune|{ident[0]}|[from] ability: Soundproof',inputs.Kind.NONPROC)
+        for old_status in range(1,7):
+            heal_bell_keys[2,old_status]=add(f'|-curestatus|{ident[0]}|{tokens[old_status]}|[silent]',inputs.Kind.STATUS)
+        if not heal_bell_keys[0,0]or not np.all(heal_bell_keys[2,1:]):raise ValueError('original Heal Bell schemas unavailable')
+    # Bench spelling has no active a: token. It must resolve an ALREADY public
+    # unique encounter; no private roster discovery is synthesized here.
+    heal_bell_bench=np.zeros(7,np.int32)
+    if int(lower.device.heal_bell_move)>0 and len(catalog.species.names)>2:
+        bench_name=catalog.species.names[2];bench_ident='p1a: '+bench_name
+        bench_prior,_=public_wire.project_lines(public_wire.WireState(),[
+            f'|switch|{bench_ident}|{bench_name}, L80, M|100/100',arrivals[0],arrivals[1],'|turn|1'],**kwargs)
+        for old_status in range(1,7):
+            heal_bell_bench[old_status]=add(f'|-curestatus|p1: {bench_name}|{tokens[old_status]}|[silent]',inputs.Kind.STATUS,bench_prior)
+    heal_bell_keys=np.concatenate((heal_bell_keys,heal_bell_bench[None,:]),axis=0)
     width = max(lengths)
     packed = np.zeros((len(templates), width, 16), np.int32)
     for i, words in enumerate(templates): packed[i, :len(words)] = words
@@ -216,12 +536,19 @@ def compile_adapter(metadata, projector, *, catalog):
     payload += kinds.tobytes()+moves.tobytes()+conditions.tobytes()+statuses.tobytes()+cures.tobytes()+lum.tobytes()+weather_keys.tobytes()+np.asarray(catalog.binding).tobytes()+SCHEMA.encode()
     payload += weather_start.tobytes()+weather_upkeep.tobytes()+np.array(weather_end,np.int32).tobytes()
     payload += np.array(weather_failure,np.int32).tobytes()+weather_failure_moves.tobytes()+weather_chip.tobytes()+leftovers_heal.tobytes()+status_damage.tobytes()
+    payload += pinch_items.tobytes()+heal_bell_keys.tobytes()
+    payload += sub_damage_keys.tobytes()+rough_skin_damage.tobytes()
+    payload += sleep_talk_moves.tobytes()+np.array(focus_preparation,np.int32).tobytes()
+    payload += leech.tobytes()+encore.tobytes()+self_move.tobytes()+self_move_still.tobytes()
+    payload += before_move_blocked.tobytes()
+    payload += np.array(sleep_blocked,np.int32).tobytes()+np.array(belly_drum_setboost,np.int32).tobytes()+self_heal.tobytes()+np.array(wonder_guard_immune,np.int32).tobytes()+no_damage_miss.tobytes()+no_damage_keys.tobytes()+primary_sleep_status.tobytes()+np.array(sleep_powder_status,np.int32).tobytes()+direct_hit_control.tobytes()+np.array(pressure_start,np.int32).tobytes()+np.array(trace_copy,np.int32).tobytes()+substitute_created.tobytes()+toxic_no_effect.tobytes()+recoil_damage.tobytes()+calm_mind.tobytes()
+    payload += np.array(swords_dance,np.int32).tobytes()+bulk_up.tobytes()+color_change.tobytes()
+    payload += ident_species.tobytes()
+    payload += np.array(intimidate,np.int32).tobytes()+np.array(spikes,np.int32).tobytes()+np.array(flash_fire_end,np.int32).tobytes()+np.array([protect_success,protect_block],np.int32).tobytes()+protect_still_moves.tobytes()+entry_spikes_damage.tobytes()
+    payload += status_damage_lethal.tobytes() + self_boost.tobytes() + natural_cure.tobytes()
+    payload += np.array(thunder_wave_limber,np.int32).tobytes()
     binding = jnp.array(np.frombuffer(hashlib.sha256(payload).digest(), dtype='>u4').astype(np.uint32))
-    tables = Tables(lower.device, jnp.array(packed), jnp.array(lengths, jnp.int32),
-        jnp.array(mains, jnp.int32), jnp.array(kinds), jnp.array(moves), jnp.array(conditions),
-        jnp.array(statuses), jnp.array(cures), jnp.array(lum),jnp.array(weather_keys),
-        jnp.array(weather_start),jnp.array(weather_upkeep),jnp.array(weather_end,jnp.int32),
-        jnp.array(weather_failure,jnp.int32),jnp.array(weather_failure_moves),jnp.array(weather_chip),jnp.array(leftovers_heal),jnp.array(status_damage),ns, binding)
+    tables = Tables(lower.device, jnp.array(packed), jnp.array(lengths, jnp.int32), jnp.array(mains, jnp.int32), jnp.array(kinds), jnp.array(moves), jnp.array(conditions), jnp.array(statuses), jnp.array(cures), jnp.array(lum), jnp.array(weather_keys), jnp.array(weather_start), jnp.array(weather_upkeep), jnp.array(weather_end, jnp.int32), jnp.array(weather_failure, jnp.int32), jnp.array(weather_failure_moves), jnp.array(weather_chip), jnp.array(leftovers_heal), jnp.array(status_damage), jnp.array(direct_hit_control), jnp.array(pressure_start, jnp.int32), jnp.array(trace_copy, jnp.int32), jnp.array(substitute_created), jnp.array(toxic_no_effect), jnp.array(recoil_damage), jnp.array(calm_mind), jnp.array(swords_dance, jnp.int32), jnp.array(ident_species), jnp.array(intimidate, jnp.int32), jnp.array(spikes, jnp.int32), jnp.array(no_damage_miss), jnp.array(no_damage_keys), jnp.array(primary_sleep_status), jnp.array(sleep_powder_status, jnp.int32), jnp.array(flash_fire_end, jnp.int32), jnp.array(sub_damage_keys), jnp.array(bulk_up), jnp.array(color_change), jnp.array(protect_success, jnp.int32), jnp.array(protect_block, jnp.int32), jnp.array(protect_still_moves), jnp.array(pinch_items), jnp.array(rough_skin_damage), jnp.array(self_heal), jnp.array(wonder_guard_immune, jnp.int32), jnp.array(belly_drum_setboost, jnp.int32), jnp.array(before_move_blocked), jnp.array(sleep_blocked, jnp.int32), jnp.array(encore), jnp.array(leech), jnp.array(entry_spikes_damage), jnp.array(self_move), jnp.array(self_move_still), jnp.array(status_damage_lethal), jnp.array(self_boost), jnp.array(heal_bell_keys), jnp.array(sleep_talk_moves), jnp.array(focus_preparation, jnp.int32), ns, binding, jnp.array(natural_cure), jnp.array(thunder_wave_limber, jnp.int32))
     result = Compiled(catalog, lower, tables)
     _COMPILED[result] = (catalog, lower, tables, tuple(jax.tree.leaves(tables)))
     return result
@@ -271,6 +598,15 @@ class FrameChunks(NamedTuple):
     more: object                # [bounded chunks,B]
 
 
+# Private observations only. These fields never enter acceptance or rollback.
+FOLD_DIAGNOSTIC_FIELDS = ('projection_error','fold_error','prior_context_equal',
+    'prior_sequence_equal','prior_stream_equal','prior_turn_equal','prior_phase_equal',
+    'prior_toxic_visibility_equal','prior_species_equal','prior_status_equal',
+    'prior_hp_equal','prior_maximum_equal','prior_weather_equal',
+    'prior_weather_ability_equal','prior_weather_set_equal','prior_weather_remaining_equal',
+    'input_sequence','projected_sequence','folded_public_sequence','projected_word_count')
+
+
 class Projection(NamedTuple):
     state: StreamState
     chunk: inputs.EventChunk
@@ -281,6 +617,8 @@ class Projection(NamedTuple):
     full_encoder_admitted: object
     B4_qualified: object
     frames: FrameChunks
+    fold_diagnostics: object = None       # int32[B,len(FOLD_DIAGNOSTIC_FIELDS)]
+    consumption_diagnostics: object = None # private accounting observations
 
 
 def _commit(ok, old, new):
@@ -296,7 +634,7 @@ def _commit_public(ok, before, after):
     return candidate._replace(context=candidate.context._replace(refresh=refresh))
 
 
-def project_device(state, tape, before_registry, after_registry, tables, *, weather_hp=None, leftovers=None,status_residual=None):
+def project_device(state, tape, before_registry, after_registry, tables, *, weather_hp=None, leftovers=None,status_residual=None,hypothetical_hp=None):
     """Trusted, pure device closure; genuine same-core frame delivered ONCE.
 
     The causal scan resolves BEFORE identities. This second device scan expands
@@ -306,7 +644,7 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
     """
     if type(state) is not StreamState or type(tables) is not Tables:
         raise ValueError('typed FULL raw stream and static tables required')
-    lower = causal.project_device(state.causal, tape, before_registry, after_registry, tables.causal,weather_hp=weather_hp,leftovers=leftovers,status_residual=status_residual)
+    lower = causal.project_device(state.causal, tape, before_registry, after_registry, tables.causal,weather_hp=weather_hp,leftovers=leftovers,status_residual=status_residual,hypothetical_hp=hypothetical_hp)
     b = tape.stream_id.shape[0]; rows = jnp.arange(b)
     causal.base._shape(state.sequence, (b,), jnp.int32)
     causal.base._shape(state.live, (b, 2), jnp.bool_)
@@ -317,9 +655,52 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
     causal.base._shape(state.weather,(b,),jnp.int32)
     causal.base._shape(state.weather_permanent,(b,),jnp.bool_)
     causal.base._shape(state.weather_remaining,(b,),jnp.int32)
-    causal.base._shape(tables.status_damage,(3,7),jnp.int32)
+    causal.base._shape(tables.status_damage,(4,7),jnp.int32)
+    causal.base._shape(tables.status_damage_lethal,(4,),jnp.int32)
+    causal.base._shape(tables.direct_hit_control,(3,),jnp.int32)
+    causal.base._shape(tables.pressure_start,(),jnp.int32)
+    causal.base._shape(tables.flash_fire_end,(),jnp.int32)
+    causal.base._shape(tables.color_change,(18,),jnp.int32)
+    causal.base._shape(tables.bulk_up,(2,),jnp.int32)
+    causal.base._shape(tables.self_boost,(7,3),jnp.int32)
+    causal.base._shape(tables.protect_success,(),jnp.int32)
+    causal.base._shape(tables.protect_block,(),jnp.int32)
+    causal.base._shape(tables.protect_still_moves,tables.moves.shape,jnp.bool_)
+    causal.base._shape(tables.no_damage_miss,tables.causal.no_damage.candidates.shape,jnp.bool_)
+    causal.base._shape(tables.no_damage,(10,7),jnp.int32)
+    causal.base._shape(tables.self_heal,(7,),jnp.int32)
+    causal.base._shape(tables.wonder_guard_immune,(),jnp.int32)
+    causal.base._shape(tables.belly_drum_setboost,(),jnp.int32)
+    causal.base._shape(tables.before_move_blocked,(2,),jnp.int32)
+    causal.base._shape(tables.focus_preparation,(),jnp.int32)
+    causal.base._shape(tables.sleep_blocked,(),jnp.int32)
+    causal.base._shape(tables.self_move,(4,),jnp.int32)
+    causal.base._shape(tables.sleep_talk_moves,tables.moves.shape,jnp.int32)
+    causal.base._shape(tables.self_move_still,tables.moves.shape,jnp.bool_)
+    causal.base._shape(tables.encore,(2,),jnp.int32)
+    causal.base._shape(tables.leech,(3,7),jnp.int32)
+    causal.base._shape(tables.primary_sleep_status,(len(tables.causal.base.public_ids),),jnp.int32)
+    causal.base._shape(tables.sleep_powder_status,(),jnp.int32)
+    causal.base._shape(tables.trace_copy,tables.causal.trace_public_ability.shape,jnp.int32)
+    causal.base._shape(tables.substitute_created,(9,),jnp.int32)
+    causal.base._shape(tables.toxic_no_effect,(7,),jnp.int32)
+    causal.base._shape(tables.recoil_damage,(7,),jnp.int32)
+    causal.base._shape(tables.pinch_items,tables.pinch_items.shape,jnp.int32)
+    if tables.pinch_items.ndim!=1 or not len(tables.pinch_items):raise ValueError("original pinch item namespace required")
+    causal.base._shape(tables.rough_skin_damage,(7,),jnp.int32)
+    causal.base._shape(tables.intimidate,(),jnp.int32)
+    causal.base._shape(tables.entry_spikes_damage,(7,),jnp.int32)
+    causal.base._shape(tables.calm_mind,(2,),jnp.int32)
+    causal.base._shape(tables.swords_dance,(),jnp.int32)
+    causal.base._shape(tables.spikes,(),jnp.int32)
     error = jnp.where((lower.error == 0) & (state.sequence >= 0), 0,
         jnp.where(lower.error != 0, lower.error, int(inputs.Error.SEQUENCE)))
+    causal.base._shape(tables.ident_species,(tables.ident_species.shape[0],),jnp.int32)
+    present=jnp.arange(tape.words.shape[1])[None,:]<tape.count[:,None]
+    initial_drop=present&(tape.words[:,:,0]==intimidate_callbacks.INTIMIDATE)
+    unique=jnp.ones(b,bool)
+    for actor_side in (0,1):unique &= jnp.sum(initial_drop&(tape.words[:,:,1]==actor_side),axis=1)<=1
+    error=jnp.where((error==0)&~unique,int(inputs.Error.PAYLOAD),error)
     width = tables.templates.shape[1]
     # At most64 causal receipts, each expanding to at mostwidth events. This
     # is a proven finite storage bound, not a smaller roster/cap/truncation.
@@ -330,7 +711,28 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         semantic = lower.chunk.words[:, index]; kind = semantic[:, 0]
         present = lower.chunk.valid[:, index]
         move = kind == int(inputs.Kind.MOVE); condition = kind == int(inputs.Kind.CONDITION)
-        arrival = kind == int(inputs.Kind.SWITCH); faint = kind == int(inputs.Kind.FAINT)
+        no_damage_header=tape.words[:,index,0]==no_damage.TARGET_NO_DAMAGE
+        no_damage_facts=tape.words[:,index,0]==no_damage.ABSORB_FACTS
+        nd_owned,nd_raw,nd_facts=no_damage.owned_pair(tape,index,tables.causal.no_damage)
+        nd_code=nd_raw[:,6];nd_target=jnp.clip(nd_raw[:,3],0,1);nd_slot=slots[rows,nd_target]
+        nd_status=jnp.array([0,2,3,5,6,1,4],jnp.int32)[jnp.clip(nd_facts[:,7],0,6)]
+        nd_heal=no_damage_header&((nd_code==no_damage.WATER_HEAL)|(nd_code==no_damage.VOLT_HEAL))
+        nd_ability=no_damage_header&(nd_code==no_damage.FLASH_START)
+        nd_own=state.causal.owner==nd_target
+        nd_percent=(100*nd_raw[:,8]+jnp.maximum(1,nd_raw[:,9])-1)//jnp.maximum(1,nd_raw[:,9])
+        nd_percent=jnp.where((nd_raw[:,8]<nd_raw[:,9])&(nd_percent==100),99,nd_percent)
+        nd_hp=jnp.where(nd_own,nd_raw[:,8],nd_percent);nd_max=jnp.where(nd_own,nd_raw[:,9],100)
+        nd_semantic=semantic.at[:,0].set(jnp.where(nd_heal,int(inputs.Kind.CONDITION),jnp.where(nd_ability,int(inputs.Kind.ABILITY),semantic[:,0])))
+        nd_semantic=nd_semantic.at[:,6].set(nd_target).at[:,7].set(nd_slot).at[:,8].set(nd_slot+1)
+        nd_semantic=nd_semantic.at[:,9].set(jnp.where(nd_heal,nd_hp,0)).at[:,10].set(jnp.where(nd_heal,nd_max,0)).at[:,11].set(jnp.where(nd_heal,nd_status,0))
+        # Flash Fire's ABI payload is supplied by its original writer schema.
+        semantic=jnp.where(nd_heal[:,None],nd_semantic,semantic)
+        kind=semantic[:,0]
+        move=kind==int(inputs.Kind.MOVE);condition=kind==int(inputs.Kind.CONDITION)
+        arrival = (kind == int(inputs.Kind.SWITCH))|(kind==int(inputs.Kind.BATON_PASS))|(kind==int(inputs.Kind.DRAG)); faint = kind == int(inputs.Kind.FAINT)
+        baton_raw=tape.words[:,index,0]==baton_callbacks.BATON_PASS
+        whirlwind_raw=tape.words[:,index,0]==whirlwind_callbacks.WHIRLWIND
+        drag_raw=kind==int(inputs.Kind.DRAG)
         key = tables.kinds[jnp.clip(kind, 0, 32)]
         mid = semantic[:, 9]
         key = jnp.where(move, tables.moves[jnp.clip(mid, 0, tables.moves.shape[0]-1)], key)
@@ -339,6 +741,47 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         status_event = kind == int(inputs.Kind.STATUS)
         lum_event = kind == int(inputs.Kind.ITEM)
         raw_kind=tape.words[:,index,0]
+        focus=raw_kind==focus_callbacks.FOCUS_PREPARATION
+        sub_damage=raw_kind==substitute_damage.SUBSTITUTE_DAMAGE
+        secondary_cont=raw_kind==secondary_callbacks.SECONDARY_STATUS
+        leech=raw_kind==leech_callbacks.LEECH
+        leech_op=tape.words[:,index,5]
+        leech_silent=leech&(leech_op==leech_callbacks.HEAL)&(tape.words[:,index,6]==tape.words[:,index,8])&(tape.words[:,index,7]==tape.words[:,index,8])
+        heal_bell=raw_kind==heal_bell_callbacks.HEAL_BELL
+        bell_raw=tape.words[:,index];bell_header=heal_bell&(bell_raw[:,5]==heal_bell_callbacks.HEADER)
+        bell_status=heal_bell&(bell_raw[:,5]==heal_bell_callbacks.STATUS)
+        bell_cure=bell_status&(bell_raw[:,6]>0)&(bell_raw[:,7]==0)
+        bell_sp=tables.causal.heal_bell_soundproof[jnp.clip(bell_raw[:,9],0,len(tables.causal.heal_bell_soundproof)-1)]
+        bell_immune=bell_status&(bell_raw[:,4]==bell_raw[:,2])&bell_sp
+        bell_silent=heal_bell&~(bell_header|bell_cure|bell_immune)
+        self_move=raw_kind==self_move_callbacks.SELF_MOVE_INPUT
+        self_destruct=raw_kind==self_destruct_callbacks.SELF_DESTRUCT
+        sm_raw=tape.words[:,index];sm_code=sm_raw[:,3]&~self_move_callbacks.SECONDARY
+        sm_pid=tables.causal.base.public_ids[jnp.clip(sm_raw[:,4],0,len(tables.causal.base.public_ids)-1)]
+        sm_silent=self_move&((sm_code==self_move_callbacks.WISH_START)|(sm_code==self_move_callbacks.WISH_TICK))
+        sm_rest_status=self_move&(sm_code==self_move_callbacks.REST_STATUS)
+        sm_rest_heal=self_move&(sm_code==self_move_callbacks.REST_HEAL)
+        sm_sleep=self_move&((sm_code==self_move_callbacks.SLEEP_FAIL)|(sm_code==self_move_callbacks.REST_ASLEEP_FAIL))
+        encore=raw_kind==encore_callbacks.ENCORE
+        encore_fail=encore&(tape.words[:,index,3]==encore_callbacks.FAIL_NO_LAST)
+        encore_tick=encore&(tape.words[:,index,3]==encore_callbacks.TICK)
+        flash_ended=raw_kind==flash_end.FLASH_FIRE_END
+        color_change=raw_kind==color_callbacks.COLOR_CHANGE
+        protect_attempt=raw_kind==protect_callbacks.PROTECT_ATTEMPT
+        protect_block=raw_kind==protect_callbacks.PROTECT_BLOCK
+        substitute=condition & (raw_kind==substitute_callbacks.SUBSTITUTE_CREATED)
+        sub_failure=(kind==int(inputs.Kind.ACTIVE))&(raw_kind==substitute_callbacks.SUBSTITUTE_CREATED)
+        thunder_limber=thunder_callbacks.limber_raw(tape.words[:,index])&(tape.words[:,index,5]==tables.causal.thunder_wave_move)
+        thunder_ground=thunder_callbacks.ground_raw(tape.words[:,index])&(tape.words[:,index,5]==tables.causal.thunder_wave_move)
+        toxic_code=jnp.where(thunder_ground,toxic_callbacks.PLAIN_TYPE_IMMUNITY,toxic_callbacks.outcome_device(tape.words[:,index]))
+        toxic_sub_failure=(raw_kind==toxic_callbacks.TOXIC_ATTEMPT)&(kind==int(inputs.Kind.ACTIVE))&toxic_callbacks.substitute_failure_raw(tape.words[:,index])
+        toxic_existing=(raw_kind==toxic_callbacks.TOXIC_ATTEMPT)&(kind==int(inputs.Kind.ACTIVE))&toxic_callbacks.existing_status_raw(tape.words[:,index])
+        toxic_existing_other=toxic_existing&(tape.words[:,index,7]!=4)
+        toxic_erases=toxic_sub_failure|toxic_existing_other
+        toxic_attempt=((kind==int(inputs.Kind.NONPROC))|toxic_sub_failure|toxic_existing)&(raw_kind==toxic_callbacks.TOXIC_ATTEMPT)
+        pressure=(kind==int(inputs.Kind.ABILITY)) & (raw_kind==pressure_callbacks.PRESSURE_START)
+        pressure_visible=pressure & (state.causal.owner==semantic[:,6])
+        trace_copy=(kind==int(inputs.Kind.TRACE))&(raw_kind==trace_callbacks.TRACE_COPY)
         entry_weather=(kind==int(inputs.Kind.FIELD)) & (raw_kind==weather_callbacks.ENTRY_WEATHER)
         move_weather=(kind==int(inputs.Kind.FIELD)) & (raw_kind==weather_progress.MOVE_WEATHER)
         clock_weather=(kind==int(inputs.Kind.FIELD)) & (raw_kind==weather_progress.WEATHER_CLOCK)
@@ -346,15 +789,49 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         weather_event=entry_weather|move_weather|clock_weather
         weather_chip=condition & (raw_kind==weather_effects.WEATHER_CHIP)
         leftovers_heal=condition & (raw_kind==leftovers_callbacks.LEFTOVERS_HEAL)
+        self_heal=raw_kind==self_heal_callbacks.SELF_HEAL
+        heal_code=tape.words[:,index,9]&~self_heal_callbacks.SECONDARY
+        heal_half_full=self_heal&(heal_code==self_heal_callbacks.HALF_FULL)
+        heal_weather_full=self_heal&(heal_code==self_heal_callbacks.WEATHER_FULL)
         status_damage=condition & (raw_kind==status_residual_callbacks.STATUS_RESIDUAL)
+        entry_spikes=condition & (raw_kind==entry_spikes_callbacks.ENTRY_SPIKES_HP)
+        recoil=condition & (raw_kind==recoil_callbacks.RECOIL_HP)
+        recoil_silent=recoil&recoil_callbacks.owned_silent(tape,index)
+        rough=condition & (raw_kind==rough_callbacks.ROUGH_SKIN_HP)
+        intimidate=(kind==int(inputs.Kind.BOOST))&(raw_kind==intimidate_callbacks.INTIMIDATE)
+        pinch=raw_kind==pinch_callbacks.PINCH_ITEM
+        bulk_up=(kind==int(inputs.Kind.BOOST))&(raw_kind==bulk_up_callbacks.BULK_UP)
+        self_boost=(kind==int(inputs.Kind.BOOST))&(raw_kind==self_boost_callbacks.SELF_BOOST_INPUT)
+        belly=raw_kind==belly_callbacks.BELLY_DRUM
+        sleep_blocked=raw_kind==sleep_blocked_callbacks.SLEEP_BLOCKED
+        sleep_talk=raw_kind==sleep_talk_callbacks.SLEEP_TALK
+        sleep_talk_clock=sleep_talk&(tape.words[:,index,3]==sleep_talk_callbacks.CLOCK)
+        sleep_talk_child=(raw_kind==engine.MOVE)&sleep_talk_callbacks.owned(tape,index)
+        before_move_blocked=raw_kind==before_move_blocked_callbacks.BEFORE_MOVE_BLOCKED
+        belly_boost=belly&(tape.words[:,index,4]==1)
+        calm_mind=(kind==int(inputs.Kind.BOOST))&(raw_kind==calm_mind_callbacks.CALM_MIND)
+        swords_dance=(kind==int(inputs.Kind.BOOST))&(raw_kind==swords_dance_callbacks.SWORDS_DANCE)
+        spikes=(kind==int(inputs.Kind.FIELD))&(raw_kind==spikes_callbacks.SPIKES)
+        direct_control=(kind==int(inputs.Kind.NONPROC)) & (
+            (raw_kind==direct_hit_controls.CRITICAL)|(raw_kind==direct_hit_controls.SUPER_EFFECTIVE)
+            |(raw_kind==direct_hit_controls.RESISTED))
         # This is a SAME-index causal receipt join, not a final-state join:
         # status-enabled lower mode forbids RAW_BEGIN and emits exactly one
         # semantic per accepted input. It never drops a receipt. The actual
         # preceding-MOVE/HP -> wake-CURE regression locks this alignment.
-        old_engine_status = tape.words[:,index,5]
+        natural_cure=raw_kind==natural_cure_callbacks.NATURAL_CURE
+        old_engine_status = jnp.where(natural_cure,tape.words[:,index,3],jnp.where(bell_cure,bell_raw[:,6],tape.words[:,index,5]))
         old_public_status = jnp.array([0,2,3,5,6,1,4],jnp.int32)[jnp.clip(old_engine_status,0,6)]
         status_key=jnp.where(semantic[:,9]>0,tables.statuses[jnp.clip(semantic[:,9],0,6)],tables.cures[old_public_status])
         key=jnp.where(status_event,status_key,key)
+        if tables.natural_cure is not None:key=jnp.where(natural_cure,tables.natural_cure[old_public_status],key)
+        else:key=jnp.where(natural_cure,0,key)
+        next_raw=tape.words[:,jnp.minimum(index+1,tape.words.shape[1]-1)]
+        sleep_status=status_event&(raw_kind==status_callbacks.STATUS_APPLIED)&(tape.words[:,index,6]==5)
+        sleep_move=next_raw[:,5];sleep_safe=jnp.clip(sleep_move,0,len(tables.primary_sleep_status)-1)
+        sleep_status &= (next_raw[:,0]==toxic_callbacks.TOXIC_ATTEMPT)&(sleep_move>0)&(sleep_move<len(tables.primary_sleep_status))
+        sleep_pair=powder_callbacks.status_pair_device(tape,index,sleep_move)
+        key=jnp.where(sleep_status,jnp.where(sleep_pair,tables.primary_sleep_status[sleep_safe],0),key)
         lum_old_engine = tape.words[:,index,6]
         lum_old_public = jnp.array([0,2,3,5,6,1,4],jnp.int32)[jnp.clip(lum_old_engine,0,6)]
         lum_key = tables.lum[lum_old_public,jnp.clip(tape.words[:,index,8],0,1)]
@@ -368,16 +845,81 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         chip_status=jnp.array([0,2,3,5,6,1,4],jnp.int32)[jnp.clip(tape.words[:,index,8],0,6)]
         key=jnp.where(weather_chip,tables.weather_chip[jnp.clip(tape.words[:,index,9],0,4),chip_status],key)
         key=jnp.where(leftovers_heal,tables.leftovers_heal[chip_status],key)
-        key=jnp.where(status_damage,tables.status_damage[jnp.clip(tape.words[:,index,9],0,2),chip_status],key)
-        size = tables.length[key]; main = tables.main[key]
+        key=jnp.where(self_heal,jnp.where(heal_code!=0,tables.self_move[0],tables.self_heal[chip_status]),key)
+        key=jnp.where(status_damage,tables.status_damage[jnp.clip(tape.words[:,index,9],0,3),chip_status],key)
+        key=jnp.where(status_damage&(tape.words[:,index,6]==0),tables.status_damage_lethal[jnp.clip(tape.words[:,index,9],0,3)],key)
+        key=jnp.where(recoil,tables.recoil_damage[jnp.clip(semantic[:,11],0,6)],key)
+        key=jnp.where(rough,tables.rough_skin_damage[jnp.clip(semantic[:,11],0,6)],key)
+        key=jnp.where(direct_control,tables.direct_hit_control[jnp.clip(
+            raw_kind-direct_hit_controls.CRITICAL,0,2)],key)
+        # Kind9 already emits the sole STATUS line. Kind26 is its checked
+        # same-call accounting continuation and contributes no public words.
+        toxic_write=toxic_attempt&(toxic_code==toxic_callbacks.STATUS_WRITE)
+        key=jnp.where(toxic_attempt,tables.toxic_no_effect[jnp.where(toxic_existing,jnp.where(toxic_existing_other,6,5),jnp.clip(toxic_code,0,4))],key)
+        key=jnp.where(toxic_write,0,key)
+        key=jnp.where(thunder_limber,0 if tables.thunder_wave_limber is None else tables.thunder_wave_limber,key)
+        sleep_miss=toxic_attempt&(powder_callbacks.owned_miss_device(tape,index)|causal.plain_primary_callbacks.owned_miss(tape,index))
+        sleep_miss_safe=tables.no_damage_miss[jnp.clip(tape.words[:,index,5],0,len(tables.no_damage_miss)-1)]
+        key=jnp.where(sleep_miss,jnp.where(sleep_miss_safe,tables.no_damage[no_damage.MISS,0],0),key)
+        key=jnp.where(substitute,tables.substitute_created[chip_status],key)
+        key=jnp.where(sub_failure,tables.substitute_created[jnp.where(tape.words[:,index,1]>0,7,8)],key)
+        key=jnp.where(pressure,tables.pressure_start,key)
+        key=jnp.where(intimidate,tables.intimidate,key)
+        key=jnp.where(entry_spikes,tables.entry_spikes_damage[jnp.clip(semantic[:,11],0,6)],key)
+        key=jnp.where(spikes,tables.spikes,key)
+        key=jnp.where(trace_copy,tables.trace_copy[jnp.clip(tape.words[:,index,2],0,tables.trace_copy.shape[0]-1)],key)
+        key=jnp.where(color_change,tables.color_change[jnp.clip(tape.words[:,index,8],0,17)],key)
+        key=jnp.where(pinch,tables.pinch_items[jnp.clip(tape.words[:,index,5],0,len(tables.pinch_items)-1)],key)
+        key=jnp.where(bulk_up,tables.bulk_up[jnp.clip(tape.words[:,index,4],0,1)],key)
+        sb_raw=tape.words[:,index]
+        key=jnp.where(self_boost,tables.self_boost[jnp.clip(sb_raw[:,4],0,6),jnp.clip(sb_raw[:,6]-sb_raw[:,5],0,2)],key)
+        key=jnp.where(belly_boost,tables.belly_drum_setboost,key)
+        key=jnp.where(sleep_blocked|sleep_talk_clock,tables.sleep_blocked,key)
+        key=jnp.where(sleep_talk_child,tables.sleep_talk_moves[jnp.clip(mid,0,len(tables.sleep_talk_moves)-1)],key)
+        key=jnp.where(before_move_blocked,tables.before_move_blocked[(tape.words[:,index,4]==6).astype(jnp.int32)],key)
+        key=jnp.where(focus,tables.focus_preparation,key)
+        key=jnp.where(leech,tables.leech[jnp.clip(leech_op,0,2),jnp.where(leech_op==leech_callbacks.START,0,jnp.array([0,2,3,5,6,1,4],jnp.int32)[jnp.clip(tape.words[:,index,9],0,6)])],key)
+        key=jnp.where(self_move,tables.self_move[jnp.where(sm_rest_status,2,jnp.where(sm_rest_heal,3,jnp.clip(sm_code,0,1)))],key)
+        key=jnp.where(encore,jnp.where(encore_fail,tables.weather_failure,tables.encore[jnp.clip(tape.words[:,index,3],0,1)]),key)
+        key=jnp.where(calm_mind,tables.calm_mind[jnp.clip(tape.words[:,index,4]-2,0,1)],key)
+        key=jnp.where(swords_dance,tables.swords_dance,key)
+        nd_miss_safe=tables.no_damage_miss[jnp.clip(nd_raw[:,5],0,len(tables.no_damage_miss)-1)]
+        key=jnp.where(no_damage_header,jnp.where((nd_code!=no_damage.MISS)|nd_miss_safe,tables.no_damage[jnp.clip(nd_code,0,9),jnp.clip(nd_status,0,6)],0),key)
+        wonder_immunity=no_damage_header&(nd_code==no_damage.TYPE_IMMUNE)&(tables.causal.wonder_guard_engine_ability>0)&(nd_facts[:,6]==tables.causal.wonder_guard_engine_ability)
+        key=jnp.where(wonder_immunity,tables.wonder_guard_immune,key)
+        key=jnp.where(no_damage_facts,0,key)
+        key=jnp.where(secondary_cont,0,key)
+        key=jnp.where(flash_ended,tables.flash_fire_end,key)
+        sub_raw=tape.words[:,index]
+        key=jnp.where(sub_damage,tables.substitute_damage[(sub_raw[:,7]==0).astype(jnp.int32),
+            jnp.clip(sub_raw[:,8],0,1),jnp.clip(sub_raw[:,9]+1,0,2)],key)
+        key=jnp.where(protect_attempt,jnp.where((tape.words[:,index,6]&protect_callbacks.SUCCESS)!=0,tables.protect_success,tables.weather_failure),key)
+        key=jnp.where(protect_block,tables.protect_block,key)
+        bell_public_old=jnp.array([0,2,3,5,6,1,4],jnp.int32)[jnp.clip(bell_raw[:,6],0,6)]
+        bell_bench=bell_raw[:,4]!=bell_raw[:,2]
+        bell_key=jnp.where(bell_header,tables.heal_bell[0,0],jnp.where(bell_immune,tables.heal_bell[1,0],jnp.where(bell_cure,tables.heal_bell[jnp.where(bell_bench,3,2),bell_public_old],0)))
+        key=jnp.where(heal_bell,bell_key,key)
+        key=jnp.where(self_destruct|whirlwind_raw,0,key)
+        size = jnp.where(whirlwind_raw|baton_raw|(pressure & ~pressure_visible)|encore_tick|leech_silent|sm_silent|heal_weather_full|recoil_silent|bell_silent|self_destruct,0,tables.length[key]); main = tables.main[key]
         enough = (count <= capacity-size) & (sequence <= 2**31-1-size)
         overflow |= present & (error == 0) & (count > capacity-size)
-        good = (key > 0) & enough
+        good = ((key > 0)|toxic_write|no_damage_facts|secondary_cont|bell_silent|baton_raw|self_destruct|whirlwind_raw) & enough
         error = jnp.where(present & (error == 0) & ~good, int(inputs.Error.PAYLOAD), error)
         schema = tables.templates[key]
-        subject = jnp.where(entry_weather|move_weather,tape.words[:,index,1],jnp.where(move, semantic[:, 4], semantic[:, 6]))
+        subject = jnp.where(direct_control,tape.words[:,index,3],jnp.where(entry_weather|move_weather,tape.words[:,index,1],jnp.where(move, semantic[:, 4], semantic[:, 6])))
+        subject=jnp.where(toxic_attempt,jnp.where((toxic_code==toxic_callbacks.MISS)|toxic_erases,tape.words[:,index,1],tape.words[:,index,3]),subject)
+        subject=jnp.where(trace_copy,semantic[:,4],jnp.where(intimidate,tape.words[:,index,1],subject))
+        subject=jnp.where(spikes,tape.words[:,index,1],subject)
+        subject=jnp.where(focus,tape.words[:,index,1],subject)
+        subject=jnp.where(flash_ended|protect_block|color_change,tape.words[:,index,3],subject)
+        subject=jnp.where(sub_damage,tape.words[:,index,3],subject)
+        subject=jnp.where(heal_bell,bell_raw[:,1],subject)
+        subject=jnp.where(leech,jnp.where(leech_op==leech_callbacks.HEAL,tape.words[:,index,1],tape.words[:,index,3]),subject)
+        subject=jnp.where(no_damage_header|no_damage_facts,jnp.where(nd_code==no_damage.MISS,nd_raw[:,1],nd_raw[:,3]),subject)
         safe = jnp.clip(subject, 0, 1)
-        new_slot = jnp.where(entry_weather|move_weather,slots[rows,safe],jnp.where(move, semantic[:, 5], semantic[:, 7]))
+        new_slot = jnp.where(direct_control|entry_weather|move_weather|toxic_attempt|trace_copy|intimidate|spikes|no_damage_header|no_damage_facts|flash_ended|sub_damage|protect_block|color_change|leech|focus,slots[rows,safe],jnp.where(move, semantic[:, 5], semantic[:, 7]))
+        bell_slot=jnp.where(bell_cure,semantic[:,7],slots[rows,jnp.clip(bell_raw[:,1],0,1)])
+        new_slot=jnp.where(heal_bell,bell_slot,new_slot)
         safe_slot = jnp.clip(new_slot, 0, 5)
         prior_species = species[rows, safe, safe_slot]
         collision = jnp.any((species[rows, safe] == semantic[:, 9, None])
@@ -386,12 +928,193 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         # the same species would have the same species-form raw ident, which
         # the pinned writer reuses rather than assigning a new public slot.
         # Refuse that ambiguity and an unobserved forme change atomically.
-        identity = ~arrival | (~collision & ((prior_species == 0) | (prior_species == semantic[:, 9])))
+        identity = ~baton_raw|baton_callbacks.owned(tape,index)
+        identity &= ~(whirlwind_raw|drag_raw)|whirlwind_callbacks.owned(tape,index)
+        identity &= ~natural_cure|natural_cure_callbacks.owned(tape,index)
+        identity &= ~(kind==int(inputs.Kind.BATON_PASS))|baton_callbacks.owned(tape,index,baton_callbacks.INSTALL)
+        identity &= ~arrival | (~collision & ((prior_species == 0) | (prior_species == semantic[:, 9])))
         # Old status is a causal receipt fact, and must agree with the BEFORE
         # public ledger. An enum-valid false WAKE/THAW cannot rewrite CURE
         # lexical metadata or silently erase a different observed condition.
         previous_status=statuses[rows,safe,safe_slot]
+        toxic_raw=tape.words[:,index];toxic_actor=jnp.clip(toxic_raw[:,1],0,1);toxic_victim=jnp.clip(toxic_raw[:,3],0,1)
+        toxic_move=jnp.clip(toxic_raw[:,5],0,tables.causal.base.public_ids.shape[0]-1)
+        toxic_called=((called[:,0]==toxic_raw[:,1])&(called[:,1]==slots[rows,toxic_actor])
+            &(called[:,2]==tables.causal.base.public_ids[toxic_move])&(called[:,3]==semantic[:,2])
+            &(called[:,4]+1+toxic_write.astype(jnp.int32)==index))
+        status_map=jnp.array([0,2,3,5,6,1,4],jnp.int32)
+        toxic_observed=status_map[jnp.clip(jnp.where(toxic_write,toxic_raw[:,8],toxic_raw[:,7]),0,6)]
+        previous_index=jnp.maximum(index-1,0);previous_raw=tape.words[:,previous_index]
+        toxic_status=(index>0)&(previous_raw[:,0]==status_callbacks.STATUS_APPLIED)
+        toxic_status &= jnp.all(previous_raw[:,1:3]==-1,axis=1)&jnp.all(previous_raw[:,8:]==0,axis=1)
+        toxic_status &= ((previous_raw[:,3]==toxic_raw[:,3])&(previous_raw[:,4]==toxic_raw[:,4])
+            &(previous_raw[:,5]==toxic_raw[:,7])&(previous_raw[:,6]==toxic_raw[:,8])
+            &(previous_raw[:,7]==status_callbacks.PRIMARY))
+        toxic_status &= ((tape.event_turn[:,previous_index]==tape.event_turn[:,index])
+            &(tape.event_phase[:,previous_index]==tape.event_phase[:,index])
+            &jnp.all(tape.event_generation[:,previous_index]==tape.event_generation[:,index],axis=1))
+        identity &= ~toxic_attempt | (toxic_called & live[rows,toxic_actor]&live[rows,toxic_victim]
+            &(~toxic_write|toxic_status)
+            &(statuses[rows,toxic_victim,jnp.clip(slots[rows,toxic_victim],0,5)]==toxic_observed))
+        nd_actor=jnp.clip(nd_raw[:,1],0,1);nd_move=jnp.clip(nd_raw[:,5],0,tables.causal.base.public_ids.shape[0]-1)
+        nd_called=(called[:,0]==nd_raw[:,1])&(called[:,1]==slots[rows,nd_actor])&(called[:,2]==tables.causal.base.public_ids[nd_move])&(called[:,3]==semantic[:,2])
+        nd_called &= called[:,4]+jnp.where(no_damage_facts,2,1)==index
+        nd_old_percent=(100*nd_raw[:,7]+jnp.maximum(1,nd_raw[:,9])-1)//jnp.maximum(1,nd_raw[:,9])
+        nd_old_percent=jnp.where((nd_raw[:,7]<nd_raw[:,9])&(nd_old_percent==100),99,nd_old_percent)
+        nd_old_visible=jnp.where(nd_own,nd_raw[:,7],nd_old_percent)
+        nd_old_check=(observed_hp[rows,nd_target,jnp.clip(nd_slot,0,5)]==nd_old_visible)
+        # The continuation follows an already applied heal, so compare its new frontier.
+        nd_old_check=jnp.where(no_damage_facts&((nd_code==no_damage.WATER_HEAL)|(nd_code==no_damage.VOLT_HEAL)),
+            observed_hp[rows,nd_target,jnp.clip(nd_slot,0,5)]==nd_hp,nd_old_check)
+        identity &= ~(no_damage_header|no_damage_facts)|(nd_owned&nd_called&live[rows,nd_actor]&live[rows,nd_target]&nd_old_check
+            &(observed_maximum[rows,nd_target,jnp.clip(nd_slot,0,5)]==nd_max)&(statuses[rows,nd_target,jnp.clip(nd_slot,0,5)]==nd_status))
+        color_raw=tape.words[:,index];color_actor=jnp.clip(color_raw[:,1],0,1);color_move=jnp.clip(color_raw[:,5],0,tables.causal.base.public_ids.shape[0]-1)
+        identity &= ~color_change | (color_callbacks.owned(tape,index)&live[rows,safe]
+            &(called[:,0]==color_raw[:,1])&(called[:,1]==slots[rows,color_actor])
+            &(called[:,2]==tables.causal.base.public_ids[color_move])&(called[:,3]==semantic[:,2]))
+        identity &= ~pinch | (pinch_callbacks.owned(tape,index)&live[rows,safe])
+        identity &= ~pressure | live[rows,safe]
+        identity &= ~flash_ended | live[rows,safe]
+        protect_move=jnp.clip(tape.words[:,index,5],0,tables.causal.base.public_ids.shape[0]-1)
+        protect_pid=tables.causal.base.public_ids[protect_move]
+        protect_called=(called[:,0]==tape.words[:,index,1])&(called[:,1]==new_slot)&(called[:,2]==protect_pid)&(called[:,3]==semantic[:,2])&(called[:,4]+1==index)
+        protect_failed=(tape.words[:,index,6]&protect_callbacks.SUCCESS)==0
+        identity &= ~protect_attempt | (live[rows,safe]&protect_called&(~protect_failed|tables.protect_still_moves[jnp.clip(protect_pid,0,len(tables.protect_still_moves)-1)]))
+        # The validated receipt immediately follows its original MOVE.  Match
+        # that exact emitted declaration before applying the same retroactive
+        # target erasure as original Battle.attrLastMove; no comparison change.
+        toxic_pid=tables.causal.base.public_ids[jnp.clip(tape.words[:,index,5],0,len(tables.causal.base.public_ids)-1)]
+        erase_pid=jnp.where(toxic_erases,toxic_pid,jnp.where(sm_sleep,sm_pid,jnp.where(heal_half_full,tables.causal.base.public_ids[jnp.clip(tape.words[:,index,1],0,len(tables.causal.base.public_ids)-1)],protect_pid)))
+        encore_decl=tape.words[:,jnp.maximum(index-1,0)];encore_pid=tables.causal.base.public_ids[jnp.clip(encore_decl[:,5],0,len(tables.causal.base.public_ids)-1)]
+        erase_pid=jnp.where(encore_fail,encore_pid,erase_pid)
+        protect_move_key=tables.moves[jnp.clip(erase_pid,0,len(tables.moves)-1)]
+        protect_declaration=count-tables.length[protect_move_key]+tables.main[protect_move_key]
+        protect_declaration_at=jnp.clip(protect_declaration,0,capacity-1)
+        protect_previous=words[rows,protect_declaration_at]
+        protect_erases_target=(protect_attempt&protect_failed)|sm_sleep|toxic_erases|heal_half_full|encore_fail
+        erase_target_side=jnp.where(toxic_erases,toxic_victim,called[:,0])
+        erase_target_slot=jnp.where(toxic_erases,slots[rows,toxic_victim],called[:,1])
+        erase_target_side=jnp.where(encore_fail,tape.words[:,index,1],erase_target_side)
+        erase_target_slot=jnp.where(encore_fail,slots[rows,jnp.clip(tape.words[:,index,1],0,1)],erase_target_slot)
+        protect_previous_ok=(protect_declaration>=0)&(protect_declaration<count)
+        protect_previous_ok &= (protect_previous[:,0]==int(inputs.Kind.MOVE))
+        protect_previous_ok &= (protect_previous[:,4]==called[:,0])&(protect_previous[:,5]==called[:,1])
+        protect_previous_ok &= (protect_previous[:,6]==erase_target_side)&(protect_previous[:,7]==erase_target_slot)
+        protect_previous_ok &= (protect_previous[:,9]==erase_pid)
+        protect_previous_ok &= (protect_previous[:,2]==semantic[:,2])&(protect_previous[:,3]==semantic[:,3])
+        protect_tendency_at=jnp.clip(count-1,0,capacity-1)
+        protect_previous_tendency=words[rows,protect_tendency_at]
+        from . import public_tendency
+        protect_previous_ok &= protect_declaration<count-1
+        protect_previous_ok &= (protect_previous_tendency[:,0]==int(inputs.Kind.TENDENCY))&(protect_previous_tendency[:,8]==public_tendency.MOVE)
+        protect_previous_ok &= (protect_previous_tendency[:,6]==called[:,0])&(protect_previous_tendency[:,10]==erase_pid)&(protect_previous_tendency[:,11]==erase_target_side)
+        protect_previous_ok &= (protect_previous_tendency[:,2]==semantic[:,2])&(protect_previous_tendency[:,3]==semantic[:,3])
+        identity &= ~toxic_sub_failure|(toxic_callbacks.owned_substitute_failure(tape,index)|thunder_callbacks.owned_substitute_failure(tape,index))
+        identity &= ~thunder_ground|thunder_callbacks.owned_ground_immunity(tape,index)
+        identity &= ~thunder_limber|thunder_callbacks.owned_limber_immunity(tape,index)
+        identity &= ~toxic_existing|toxic_callbacks.owned_existing_status(tape,index)
+        identity &= ~protect_erases_target | (protect_previous_ok&(~heal_half_full|tables.self_move_still[jnp.clip(erase_pid,0,len(tables.self_move_still)-1)]))
+        identity &= ~protect_block | (live[rows,safe]&live[rows,1-safe]&(called[:,0]==tape.words[:,index,1])&(called[:,1]==slots[rows,1-safe])&(called[:,2]==protect_pid)&(called[:,3]==semantic[:,2])&(called[:,4]+1==index))
+        spikes_move=jnp.clip(tape.words[:,index,3],0,tables.causal.base.public_ids.shape[0]-1)
+        spikes_called=(called[:,0]==subject)&(called[:,1]==slots[rows,safe])&(called[:,2]==tables.causal.base.public_ids[spikes_move])&(called[:,3]==semantic[:,2])&(called[:,4]+1==index)
+        identity &= ~spikes | (live[rows,safe]&live[rows,1-safe]&(semantic[:,6]==1-subject)&spikes_called)
+        identity &= ~intimidate | (live[rows,safe]&live[rows,1-safe]&(semantic[:,3]==0)
+            &((~state.causal.cursor.initialized&(state.sequence==0)&(semantic[:,2]==0))
+                |(state.causal.cursor.initialized&(state.sequence>0)&(semantic[:,2]>0))))
+        identity &= ~trace_copy | (live[rows,safe]&live[rows,1-safe])
+        # One actual MOVE must be followed by the COMPLETE literal SPA->SPD
+        # pair; neither a single boost nor a migrated suffix can represent it.
+        calm_spa=tape.words[:,index,4]==2
+        first_at=index-jnp.where(calm_spa,0,1);second_at=first_at+1
+        first=tape.words[rows,jnp.clip(first_at,0,tape.words.shape[1]-1)]
+        second=tape.words[rows,jnp.clip(second_at,0,tape.words.shape[1]-1)]
+        pair=((first_at>0)&(second_at<tape.count)&(first[:,0]==calm_mind_callbacks.CALM_MIND)
+            &(second[:,0]==calm_mind_callbacks.CALM_MIND)&(first[:,4]==2)&(second[:,4]==3)
+            &jnp.all(first[:,1:4]==second[:,1:4],axis=1)&(first[:,7]==second[:,7])
+            &(first[:,5]>=-6)&(first[:,5]<6)&(first[:,6]==first[:,5]+1)
+            &(second[:,5]>=-6)&(second[:,5]<6)&(second[:,6]==second[:,5]+1)
+            &jnp.all(first[:,8:]==0,axis=1)&jnp.all(second[:,8:]==0,axis=1))
+        for at in (first_at,second_at):
+            clipped=jnp.clip(at,0,tape.words.shape[1]-1)
+            pair &= (tape.event_turn[rows,clipped]==semantic[:,2])&(tape.event_phase[rows,clipped]==semantic[:,3])
+            pair &= jnp.all(tape.event_generation[rows,clipped]==tape.event_generation[:,index],axis=1)
+        calm_move=jnp.clip(tape.words[:,index,3],0,tables.causal.base.public_ids.shape[0]-1)
+        identity &= ~calm_mind | (pair&live[rows,safe]&(called[:,0]==subject)&(called[:,1]==new_slot)
+            &(called[:,2]==tables.causal.base.public_ids[calm_move])&(called[:,3]==semantic[:,2])
+            &(called[:,4]+1==first_at))
+        bulk_move=jnp.clip(tape.words[:,index,3],0,tables.causal.base.public_ids.shape[0]-1)
+        identity &= ~bulk_up | (bulk_up_callbacks.owned_pair(tape,index)&live[rows,safe]
+            &(called[:,0]==subject)&(called[:,1]==new_slot)&(called[:,2]==tables.causal.base.public_ids[bulk_move])
+            &(called[:,3]==semantic[:,2])&(called[:,4]+1+tape.words[:,index,4]==index))
+        sb_move=jnp.clip(tape.words[:,index,3],0,tables.causal.base.public_ids.shape[0]-1)
+        identity &= ~self_boost | (self_boost_callbacks.owned(tape,index)&live[rows,safe]
+            &(called[:,0]==subject)&(called[:,1]==new_slot)&(called[:,2]==tables.causal.base.public_ids[sb_move])
+            &(called[:,3]==semantic[:,2])&(called[:,4]+1+tape.words[:,index,8]==index))
+        leech_raw=tape.words[:,index]
+        leech_old=leech_raw[:,6];leech_max=leech_raw[:,8];leech_percent=(100*leech_old+jnp.maximum(1,leech_max)-1)//jnp.maximum(1,leech_max)
+        leech_percent=jnp.where((leech_old<leech_max)&(leech_percent==100),99,leech_percent)
+        leech_own=state.causal.owner==subject;leech_status=jnp.array([0,2,3,5,6,1,4],jnp.int32)[jnp.clip(leech_raw[:,9],0,6)]
+        identity &= ~leech | (leech_callbacks.owned(tape,index)&live[rows,safe]&jnp.where(leech_op==leech_callbacks.START,True,
+            (previous_status==leech_status)&(observed_hp[rows,safe,safe_slot]==jnp.where(leech_own,leech_old,leech_percent))
+            &(observed_maximum[rows,safe,safe_slot]==jnp.where(leech_own,leech_max,100))))
+        sm_called=(called[:,0]==sm_raw[:,1])&(called[:,1]==new_slot)&(called[:,2]==sm_pid)&(called[:,3]==semantic[:,2])&(called[:,4]+1+sm_rest_heal.astype(jnp.int32)==index)
+        sm_percent=(100*sm_raw[:,5]+jnp.maximum(1,sm_raw[:,6])-1)//jnp.maximum(1,sm_raw[:,6]);sm_percent=jnp.where((sm_raw[:,5]<sm_raw[:,6])&(sm_percent==100),99,sm_percent)
+        sm_status=jnp.array([0,2,3,5,6,1,4],jnp.int32)[jnp.clip(sm_raw[:,7],0,6)]
+        sm_prior_status=jnp.where(sm_rest_status,jnp.array([0,2,3,5,6,1,4],jnp.int32)[jnp.clip(sm_raw[:,5],0,6)],jnp.where(sm_rest_heal,1,sm_status))
+        sm_maximum=jnp.where(sm_rest_heal,sm_raw[:,7],sm_raw[:,6]);sm_hp=sm_raw[:,5]
+        sm_old_percent=(100*sm_hp+jnp.maximum(1,sm_maximum)-1)//jnp.maximum(1,sm_maximum)
+        sm_old_percent=jnp.where((sm_hp<sm_maximum)&(sm_old_percent==100),99,sm_old_percent)
+        sm_health=(observed_hp[rows,safe,safe_slot]==jnp.where(state.causal.owner==subject,sm_hp,sm_old_percent))&(observed_maximum[rows,safe,safe_slot]==jnp.where(state.causal.owner==subject,sm_maximum,100))
+        identity &= ~self_destruct|self_destruct_callbacks.owned(tape,index)
+        identity &= ~self_move|(self_move_callbacks.owned(tape,index)&live[rows,safe]&((sm_code==self_move_callbacks.WISH_TICK)|sm_called)&(statuses[rows,safe,safe_slot]==sm_prior_status)&(sm_rest_status|sm_health)&(~sm_sleep|tables.self_move_still[jnp.clip(sm_pid,0,len(tables.self_move_still)-1)]))
+        identity &= ~encore | (encore_callbacks.owned(tape,index)&live[rows,safe])
+        identity &= ~encore_fail | ((called[:,0]==subject)&(called[:,1]==new_slot)&(called[:,2]==encore_pid)&(called[:,3]==semantic[:,2])&(called[:,4]+1==index))
+        identity &= ~before_move_blocked|(before_move_blocked_callbacks.owned(tape,index)&live[rows,safe]&(previous_status==jnp.where(tape.words[:,index,4]==6,4,2)))
+        identity &= ~sleep_talk | (sleep_talk_callbacks.owned(tape,index)&live[rows,safe]&(previous_status==1))
+        identity &= ~sleep_talk_child | (semantic[:,10]==1)&(semantic[:,11]==1)
+        identity &= ~sleep_blocked | (sleep_blocked_callbacks.owned(tape,index)&live[rows,safe]
+            &(previous_status==1))
+        belly_a,belly_z,belly_owned=belly_callbacks.pair(tape,index)
+        belly_move=jnp.clip(belly_a[:,3],0,tables.causal.base.public_ids.shape[0]-1)
+        belly_prior=jnp.where(belly_boost,belly_a[:,6],belly_a[:,5]);belly_max=belly_a[:,7]
+        belly_prior_percent=(100*belly_prior+jnp.maximum(1,belly_max)-1)//jnp.maximum(1,belly_max)
+        belly_prior_percent=jnp.where((belly_prior<belly_max)&(belly_prior_percent==100),99,belly_prior_percent)
+        belly_own=state.causal.owner==subject
+        belly_status=jnp.array([0,2,3,5,6,1,4],jnp.int32)[jnp.clip(belly_a[:,8],0,6)]
+        identity &= ~belly | (belly_owned&live[rows,safe]&(called[:,0]==subject)&(called[:,1]==new_slot)
+            &(called[:,2]==tables.causal.base.public_ids[belly_move])&(called[:,3]==semantic[:,2])
+            &(called[:,4]+1+tape.words[:,index,4]==index)&(previous_status==belly_status)
+            &(observed_hp[rows,safe,safe_slot]==jnp.where(belly_own,belly_prior,belly_prior_percent))
+            &(observed_maximum[rows,safe,safe_slot]==jnp.where(belly_own,belly_max,100)))
+        swords_move=jnp.clip(tape.words[:,index,3],0,tables.causal.base.public_ids.shape[0]-1)
+        identity &= ~swords_dance | (live[rows,safe]&(called[:,0]==subject)&(called[:,1]==new_slot)
+            &(called[:,2]==tables.causal.base.public_ids[swords_move])&(called[:,3]==semantic[:,2])
+            &(called[:,4]+1==index))
+
+        raw=tape.words[:,index]
+        recoil_move=jnp.clip(raw[:,5],0,tables.causal.base.public_ids.shape[0]-1)
+        recoil_old_percent=(100*raw[:,6]+jnp.maximum(1,raw[:,8])-1)//jnp.maximum(1,raw[:,8])
+        recoil_old_percent=jnp.where((raw[:,6]<raw[:,8])&(recoil_old_percent==100),99,recoil_old_percent)
+        recoil_owner=state.causal.owner==subject
+        recoil_old=jnp.where(recoil_owner,raw[:,6],recoil_old_percent);recoil_max=jnp.where(recoil_owner,raw[:,8],100)
+        identity &= ~(recoil|rough) | ((called[:,0]==subject)&(called[:,1]==new_slot)
+            &(called[:,2]==tables.causal.base.public_ids[recoil_move])&(called[:,3]==semantic[:,2])
+            &live[rows,safe]&live[rows,1-safe]&(semantic[:,11]==previous_status)
+            &(observed_hp[rows,safe,safe_slot]==recoil_old)&(observed_maximum[rows,safe,safe_slot]==recoil_max))
         identity &= ~status_event | (old_public_status==previous_status)
+        natural_raw=tape.words[:,index];natural_side=jnp.clip(natural_raw[:,1],0,1);natural_slot=slots[rows,natural_side]
+        natural_own=state.causal.owner==natural_side;natural_percent=(100*natural_raw[:,8]+jnp.maximum(1,natural_raw[:,9])-1)//jnp.maximum(1,natural_raw[:,9])
+        natural_percent=jnp.where((natural_raw[:,8]<natural_raw[:,9])&(natural_percent==100),99,natural_percent)
+        natural_hp=jnp.where(natural_own,natural_raw[:,8],natural_percent);natural_max=jnp.where(natural_own,natural_raw[:,9],100)
+        identity &= ~natural_cure|((observed_hp[rows,natural_side,jnp.clip(natural_slot,0,5)]==natural_hp)&(observed_maximum[rows,natural_side,jnp.clip(natural_slot,0,5)]==natural_max))
+        identity &= ~heal_bell | (heal_bell_callbacks.owned(tape,index)&(new_slot>=0)&(new_slot<6)&(prior_species>0))
+        if tape.execution is not None:
+            bell_start=jnp.take_along_axis(tape.execution.ledger.start,jnp.clip(tape.execution.ledger.claimed[:,index]-1,0,tape.execution.ledger.start.shape[1]-1)[:,None],axis=1)[:,0]
+            bell_declared=tape.words[rows,jnp.clip(bell_start-1,0,tape.words.shape[1]-1)]
+            bell_called=(called[:,0]==bell_raw[:,1])&(called[:,1]==slots[rows,jnp.clip(bell_raw[:,1],0,1)])&(called[:,2]==tables.causal.base.public_ids[jnp.clip(bell_declared[:,5],0,len(tables.causal.base.public_ids)-1)])&(called[:,3]==semantic[:,2])&(called[:,4]+1==bell_start)
+            identity &= ~heal_bell|bell_called
+        else:
+            identity &= ~heal_bell
         identity &= ~lum_event | ((lum_old_public==previous_status) & live[rows,safe])
         old_weather=tables.causal.weather_public[jnp.clip(tape.words[:,index,5],0,4)]
         temporary=tape.words[:,index,8]==1
@@ -409,6 +1132,39 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
             (tape.words[:,index,7]==remaining)&((remaining==0)==permanent)
             & weather_window & ~weather_seen)
         raw=tape.words[:,index]
+        # Controls belong to the same just-executed hit, before its existing HP
+        # callback. Validate the complete bounded source suffix rather than
+        # accepting a dangling annotation or joining a later unrelated HP row.
+        following=tape.words[:,jnp.minimum(index+1,63)]
+        needs_effect=(raw_kind==direct_hit_controls.CRITICAL)&(raw[:,8]!=raw[:,9])
+        effect_kind=jnp.where(raw[:,8]>raw[:,9],direct_hit_controls.SUPER_EFFECTIVE,direct_hit_controls.RESISTED)
+        pair_same=jnp.all(following[:,1:]==raw[:,1:],axis=1)&(following[:,0]==effect_kind)
+        hp_index=index+1+needs_effect.astype(jnp.int32)
+        hp_raw=tape.words[rows,jnp.minimum(hp_index,63)]
+        actor=jnp.clip(raw[:,1],0,1)
+        actor_slot=slots[rows,actor]
+        move_index=jnp.clip(raw[:,5],0,tables.causal.base.public_ids.shape[0]-1)
+        called_hit=(called[:,0]==raw[:,1])&(called[:,1]==actor_slot)&(
+            called[:,2]==tables.causal.base.public_ids[move_index])&(called[:,3]==semantic[:,2])
+        preceding=tape.words[:,jnp.maximum(index-1,0)]
+        previous_crit=(preceding[:,0]==direct_hit_controls.CRITICAL)&jnp.all(preceding[:,1:]==raw[:,1:],axis=1)
+        first_control=(index==called[:,4]+1)
+        sd_control=self_destruct_callbacks.owned(tape,index)
+        first_control |= sd_control&(index==called[:,4]+2)
+        control_order=jnp.where(raw_kind==direct_hit_controls.CRITICAL,first_control,
+            first_control|(((index==called[:,4]+2)|(sd_control&(index==called[:,4]+3)))&previous_crit))
+        hit_max=hp_raw[:,6]
+        hit_old_percent=(100*raw[:,6]+jnp.maximum(1,hit_max)-1)//jnp.maximum(1,hit_max)
+        hit_old_percent=jnp.where((raw[:,6]<hit_max)&(hit_old_percent==100),99,hit_old_percent)
+        hit_old_visible=jnp.where(state.causal.owner==subject,raw[:,6],hit_old_percent)
+        hit_max_visible=jnp.where(state.causal.owner==subject,hit_max,100)
+        hit_suffix=(hp_index<tape.count)&(hp_raw[:,0]==engine.MAIN_HP)&(
+            hp_raw[:,3]==raw[:,3])&(hp_raw[:,4]==raw[:,4])&(hp_raw[:,5]==raw[:,7])&(
+            hit_max>=raw[:,6])&(hit_max<=1_000_000)&(~needs_effect|pair_same)
+        identity &= ~direct_control | (called_hit & control_order & hit_suffix
+            & ((raw[:,7]>0)|direct_ko_callbacks.validate_owned_control_device(tape,index,raw)|recoil_callbacks.validate_owned_ko_control(tape,index,raw)|sd_control) & live[rows,safe]
+            & (observed_hp[rows,safe,safe_slot]==hit_old_visible)
+            & (observed_maximum[rows,safe,safe_slot]==hit_max_visible))
         old_percent=(100*raw[:,5]+jnp.maximum(1,raw[:,7])-1)//jnp.maximum(1,raw[:,7])
         old_percent=jnp.where((raw[:,5]<raw[:,7])&(old_percent==100),99,old_percent)
         owner=state.causal.owner==subject
@@ -423,6 +1179,20 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
             & (observed_maximum[rows,safe,safe_slot]==max_visible)
             & (first_chip | jnp.all(hp_speeds==raw[:,1:3],axis=1))
             & (chip_speed<hp_last_speed))
+        substitute_move=jnp.clip(raw[:,9],0,tables.causal.base.public_ids.shape[0]-1)
+        substitute_called=((called[:,0]==subject)&(called[:,1]==new_slot)
+            &(called[:,2]==tables.causal.base.public_ids[substitute_move])
+            &(called[:,3]==semantic[:,2])&(called[:,4]+1==index))
+        identity &= ~(substitute|sub_failure) | ((~sub_failure|substitute_callbacks.owned_failure(tape,index))&substitute_called & live[rows,safe] & (chip_status==previous_status)
+            &(observed_hp[rows,safe,safe_slot]==old_visible)
+            &(observed_maximum[rows,safe,safe_slot]==max_visible))
+        identity &= ~entry_spikes | (live[rows,safe]&(chip_status==previous_status)
+            &(observed_hp[rows,safe,safe_slot]==old_visible)
+            &(observed_maximum[rows,safe,safe_slot]==max_visible))
+        heal_move=jnp.clip(raw[:,1],0,len(tables.causal.base.public_ids)-1)
+        heal_called=(called[:,0]==subject)&(called[:,1]==new_slot)&(called[:,2]==tables.causal.base.public_ids[heal_move])&(called[:,3]==semantic[:,2])&(called[:,4]+1==index)
+        identity &= ~self_heal | (heal_called&live[rows,safe]&(chip_status==previous_status)
+            &(observed_hp[rows,safe,safe_slot]==old_visible)&(observed_maximum[rows,safe,safe_slot]==max_visible))
         identity &= ~leftovers_heal | (leftovers_open & ~leftovers_seen[rows,safe] & live[rows,safe]
             & (chip_status==previous_status)
             & (observed_hp[rows,safe,safe_slot]==old_visible)
@@ -453,6 +1223,7 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         def address(value):
             side = side_map(value)
             slot = current_slots[rows[:, None], jnp.clip(side, 0, 1)]
+            slot=jnp.where(heal_bell[:,None]&(side==subject[:,None]),new_slot[:,None],slot)
             return side, slot
         result = schema
         result = result.at[:, :, 1].set(sequence[:, None]+jnp.arange(width)[None, :]+1)
@@ -466,15 +1237,24 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         kinds = schema[:, :, 0]
         target_side = result[:, :, 6]
         target_enc = current_slots[rows[:, None], jnp.clip(target_side, 0, 1)]+1
+        target_enc=jnp.where(heal_bell[:,None]&(target_side==subject[:,None]),new_slot[:,None]+1,target_enc)
         addressed = ((kinds == int(inputs.Kind.ACTIVE)) | (kinds == int(inputs.Kind.TYPES))
             | (kinds == int(inputs.Kind.SLEEP)) | (kinds == int(inputs.Kind.STATUS))
             | (kinds == int(inputs.Kind.ITEM)) | (kinds == int(inputs.Kind.ABILITY)))
         result = result.at[:, :, 8].set(jnp.where(addressed, target_enc, result[:, :, 8]))
-        prelude = (kinds == int(inputs.Kind.SWITCH_PRELUDE)) & entry_weather[:,None]
+        prelude = (kinds == int(inputs.Kind.SWITCH_PRELUDE)) & (entry_weather|pressure|intimidate)[:,None] & (schema[:,:,10]>0)
         # Confirmed ability lexical facts use the already observed exact ident
         # and its raw species spelling, rather than schema-fixture encounter1.
-        for col,value in ((11,new_slot+1),(13,prior_species)):
+        for col,value in ((11,new_slot+1),(13,tables.ident_species[jnp.clip(prior_species,0,tables.ident_species.shape[0]-1)])):
             result=result.at[:,:,col].set(jnp.where(prelude,value[:,None],result[:,:,col]))
+        trace_prelude=(kinds==int(inputs.Kind.SWITCH_PRELUDE))&(trace_copy[:,None]|((no_damage_header|flash_ended|protect_attempt|protect_block|rough|color_change|encore|leech|heal_bell|focus|natural_cure|thunder_limber)[:,None]&(schema[:,:,10]>0)))
+        lexical_side=jnp.clip(result[:,:,4],0,1)
+        lexical_slot=current_slots[rows[:,None],lexical_side]
+        lexical_slot=jnp.where(heal_bell[:,None]&(lexical_side==subject[:,None]),new_slot[:,None],lexical_slot)
+        result=result.at[:,:,11].set(jnp.where(trace_prelude,lexical_slot+1,result[:,:,11]))
+        lexical_species=species[rows[:,None],lexical_side,jnp.clip(lexical_slot,0,5)]
+        lexical_species=tables.ident_species[jnp.clip(lexical_species,0,tables.ident_species.shape[0]-1)]
+        result=result.at[:,:,13].set(jnp.where(trace_prelude,lexical_species,result[:,:,13]))
         mud = kinds == int(inputs.Kind.MUDSHOT)
         ms, sl = address(schema[:, :, 9]); enc = jnp.where(ms >= 0, sl+1, 0)
         queue = schema[:, :, 12] == 1
@@ -497,19 +1277,48 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         for col, value in ((12, hp), (13, maximum)):
             result = result.at[:, :, col].set(jnp.where(targeted, value[:, None], result[:, :, col]))
         toxic = kinds == int(inputs.Kind.TOXIC)
-        result = result.at[:, :, 9].set(jnp.where(toxic & ~weather_event[:,None], semantic[:, 8, None], result[:, :, 9]))
-        result = result.at[:, :, 11].set(jnp.where(toxic & condition[:, None],
+        toxic_enc=jnp.where(direct_control|toxic_attempt|no_damage_header|flash_ended|sub_damage|protect_block|color_change|pinch|self_move|self_heal|heal_bell|focus,new_slot+1,semantic[:,8])
+        # Intimidate is TWO source lines: the ability actor and boost target
+        # can have different public encounters after an ordinary installation.
+        toxic_encounters=jnp.where(intimidate[:,None],
+            current_slots[rows[:,None],jnp.clip(result[:,:,6],0,1)]+1,toxic_enc[:,None])
+        prefix = raw_kind == causal.life.TURNLOOP_PREFIX
+        result = result.at[:, :, 9].set(jnp.where(toxic & ~(weather_event|spikes|prefix)[:,None], toxic_encounters, result[:, :, 9]))
+        result = result.at[:, :, 11].set(jnp.where(toxic & condition[:, None] & (~substitute[:,None]|(schema[:,:,11]>=0)),
             jnp.where(semantic[:, 12, None] == 1, -1, hp[:, None]), result[:, :, 11]))
-        result = result.at[:, :, 12].set(jnp.where(toxic & condition[:, None], maximum[:, None], result[:, :, 12]))
+        result = result.at[:, :, 12].set(jnp.where(toxic & condition[:, None] & (~substitute[:,None]|(schema[:,:,11]>=0)), maximum[:, None], result[:, :, 12]))
         tendency = kinds == int(inputs.Kind.TENDENCY)
         for col, value, active in ((9, semantic[:, 9], arrival), (10, semantic[:, 9], move),
                 (11, semantic[:, 6], move), (12, semantic[:, 2], kind == int(inputs.Kind.TURN))):
             result = result.at[:, :, col].set(jnp.where(tendency & active[:, None], value[:, None], result[:, :, col]))
+        result=result.at[:,:,11].set(jnp.where(tendency&(toxic_sub_failure|toxic_existing)[:,None]&(schema[:,:,11]>=0),subject[:,None],result[:,:,11]))
+        result=result.at[:,:,11].set(jnp.where(tendency & toxic_attempt[:,None]
+            & ((toxic_code==toxic_callbacks.PLAIN_TYPE_IMMUNITY)|thunder_limber)[:,None],subject[:,None],result[:,:,11]))
+        result=result.at[:,:,11].set(jnp.where(tendency&leech[:,None]&(schema[:,:,11]>=0),subject[:,None],result[:,:,11]))
+        result=result.at[:,:,11].set(jnp.where(tendency&heal_bell[:,None]&(schema[:,:,11]>=0),subject[:,None],result[:,:,11]))
+        result=result.at[:,:,11].set(jnp.where(tendency&(self_move|self_heal)[:,None]&(schema[:,:,11]>=0),subject[:,None],result[:,:,11]))
+        result=result.at[:,:,11].set(jnp.where(tendency&encore[:,None]&(schema[:,:,11]>=0),subject[:,None],result[:,:,11]))
+        result=result.at[:,:,11].set(jnp.where(tendency&color_change[:,None]&(schema[:,:,11]>=0),subject[:,None],result[:,:,11]))
+        result=result.at[:,:,11].set(jnp.where(tendency&protect_block[:,None],subject[:,None],result[:,:,11]))
+        result=result.at[:,:,11].set(jnp.where(tendency&no_damage_header[:,None]&((nd_code==no_damage.TYPE_IMMUNE)|(nd_code==no_damage.LEVITATE_IMMUNE)|(nd_code==no_damage.WATER_FULL)|(nd_code==no_damage.VOLT_FULL)|(nd_code==no_damage.FLASH_REPEAT)|(nd_code==no_damage.FLASH_START)|nd_heal)[:,None],subject[:,None],result[:,:,11]))
+        result=result.at[:,:,11].set(jnp.where(tendency&sub_damage[:,None]&(schema[:,:,11]>=0),subject[:,None],result[:,:,11]))
         raw_control = kinds == int(inputs.Kind.RAW_BEGIN)
+        # Original HP_ABSORB lexical metadata packs the healed proc's public
+        # encounter and side. Preserve its source ability ID and all flags.
+        nd_hp_metadata=(result[:,:,12]&~jnp.int32(120))|(new_slot[:,None]<<3)|(subject[:,None]<<6)
+        result=result.at[:,:,12].set(jnp.where(raw_control&nd_heal[:,None],nd_hp_metadata,result[:,:,12]))
         for col, value in ((13, hp), (14, maximum), (15, semantic[:, 11])):
-            result = result.at[:, :, col].set(jnp.where(raw_control & condition[:, None], value[:, None], result[:, :, col]))
+            result = result.at[:, :, col].set(jnp.where(raw_control & condition[:, None] & (~substitute[:,None]|(schema[:,:,14]>0)), value[:, None], result[:, :, col]))
+        nd_main=schema[rows,main]
+        nd_main=nd_main.at[:,2].set(semantic[:,2]).at[:,3].set(semantic[:,3]).at[:,6].set(nd_target).at[:,7].set(nd_slot).at[:,8].set(nd_slot+1)
+        semantic=jnp.where(nd_ability[:,None],nd_main,semantic)
+        semantic=jnp.where((sub_damage|heal_bell)[:,None],result[rows,main],semantic)
         semantic = semantic.at[:, 1].set(sequence+main+1)
         result = result.at[rows, main].set(semantic)
+        protect_blank=protect_previous.at[:,6].set(-1).at[:,7].set(-1)
+        words=words.at[rows,protect_declaration_at].set(jnp.where((use&protect_erases_target)[:,None],protect_blank,protect_previous))
+        protect_tendency=protect_previous_tendency.at[:,11].set(1-called[:,0])
+        words=words.at[rows,protect_tendency_at].set(jnp.where((use&protect_erases_target)[:,None],protect_tendency,protect_previous_tendency))
 
         def write(buffer, offset):
             valid = use & (offset < size)
@@ -571,10 +1380,10 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
     return Projection(next_state, chunk, error, lower.refusal | jnp.where(overflow, engine.OVERFLOW, 0), ok, no, no, no, frames)
 
 
-def project_frame(state, frame, tables, *, weather_hp=None, leftovers=None,status_residual=None):
+def project_frame(state, frame, tables, *, weather_hp=None, leftovers=None,status_residual=None,hypothetical_hp=None):
     if type(frame) is not causal.life.LifecycleResult:
         raise ValueError('genuine same-core lifecycle result required')
-    return project_device(state, frame.callbacks, frame.before_registry, frame.after_registry, tables,weather_hp=weather_hp,leftovers=leftovers,status_residual=status_residual)
+    return project_device(state, frame.callbacks, frame.before_registry, frame.after_registry, tables,weather_hp=weather_hp,leftovers=leftovers,status_residual=status_residual,hypothetical_hp=hypothetical_hp)
 
 
 class Consumed(NamedTuple):
@@ -582,9 +1391,9 @@ class Consumed(NamedTuple):
     public: v4_encoder.State
 
 
-def project_and_fold(state, frame, tables, public, catalog, *, weather_hp=None, leftovers=None,status_residual=None):
+def project_and_fold(state, frame, tables, public, catalog, *, weather_hp=None, leftovers=None,status_residual=None,hypothetical_hp=None):
     """Trusted device path into the ORIGINAL full retained public consumers."""
-    projection = project_frame(state, frame, tables,weather_hp=weather_hp,leftovers=leftovers,status_residual=status_residual)
+    projection = project_frame(state, frame, tables,weather_hp=weather_hp,leftovers=leftovers,status_residual=status_residual,hypothetical_hp=hypothetical_hp)
     def fold(carry, data):
         current,error=carry
         words,valid,more=data
@@ -609,6 +1418,26 @@ def project_and_fold(state, frame, tables, public, catalog, *, weather_hp=None, 
         & (public.context.field.weather_set==(state.weather>0))
         & (state.weather_remaining==jnp.where((state.weather>0)&~state.weather_permanent,
             jnp.maximum(0,5-public.context.field.weather_upkeeps),0)))
+    same &= baton_callbacks.public_guard(frame.callbacks,public)
+    # Copy the original inputs/errors BEFORE the atomic public rollback below.
+    # Redundant equality observations are data, never substitutes for `same`.
+    fold_diagnostics=jnp.stack((projection.error,fold_error,same,
+        public.cursor.sequence==state.sequence,
+        public.cursor.stream_id==state.causal.cursor.stream_id,
+        public.cursor.turn==state.causal.cursor.turn,
+        public.cursor.phase==state.causal.cursor.phase,
+        jnp.all(public.context.toxic.visibility==visibility,axis=1),
+        jnp.all(public.mons.species==state.species,axis=(1,2)),
+        jnp.all(public.mons.status==state.status,axis=(1,2)),
+        jnp.all(public.mons.hp_numerator==state.hp,axis=(1,2)),
+        jnp.all(public.mons.hp_denominator==state.maximum,axis=(1,2)),
+        public.context.field.weather==state.weather,
+        public.context.field.weather_ability==state.weather_permanent,
+        public.context.field.weather_set==(state.weather>0),
+        state.weather_remaining==jnp.where((state.weather>0)&~state.weather_permanent,
+            jnp.maximum(0,5-public.context.field.weather_upkeeps),0),
+        state.sequence,projection.state.sequence,candidate.cursor.sequence,
+        jnp.sum(projection.frames.valid,axis=(0,2),dtype=jnp.int32)),axis=1).astype(jnp.int32)
     error = jnp.where(projection.error != 0, projection.error,
         jnp.where(same, fold_error, int(inputs.Error.STREAM)))
     ok = error == 0
@@ -616,6 +1445,7 @@ def project_and_fold(state, frame, tables, public, catalog, *, weather_hp=None, 
     next_state = next_state._replace(causal=next_state.causal._replace(admitted=state.causal.admitted & ok,
         cursor=next_state.causal.cursor._replace(admitted=state.causal.cursor.admitted & ok)))
     projection = projection._replace(state=next_state, error=error, component_admitted=ok,
+        fold_diagnostics=fold_diagnostics,
         chunk=projection.chunk._replace(words=jnp.where(ok[:, None, None], projection.chunk.words, 0),
             valid=projection.chunk.valid & ok[:, None],more=projection.chunk.more & ok),
         frames=FrameChunks(jnp.where(ok[None,:,None,None],projection.frames.words,0),
