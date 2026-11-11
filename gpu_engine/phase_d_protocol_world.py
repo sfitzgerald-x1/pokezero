@@ -392,7 +392,7 @@ def diagnostic_inputs(public,detached,*,lines,metadata):
 def sample(root,detached,*,lines,catalog,source,metadata,config,battle_id,seed,count):
     """Same public posterior draws and their prefix at all ladder budgets."""
     from . import v5_public_world
-    if count not in (2,8,16,32):raise ValueError('declared2/8/16/32 world budget required')
+    if count not in (2,8,16,32,64):raise ValueError('declared2/8/16/32/64 world budget required')
     if detached.source_binding_sha256!=source.binding_sha256:
         raise live.Refusal('SAME_PUBLIC_ROOT_SOURCE_BINDING_REQUIRED')
     detached=_carried_root(root,detached,lines,metadata)

@@ -21,7 +21,7 @@ from . import phase_d_live_worlds as worlds,phase_d_protocol_world as protocol
 class ProtocolConstructor:
     def __init__(self,*,catalog,source,metadata,owning_config,count,seed=20261103,
                  rung='R1',saved_root_admission=True,functions=None,seen=None,sessions=None):
-        if count not in (2,8,16,32)or type(seed)is not int or type(saved_root_admission)is not bool:
+        if count not in (2,8,16,32,64)or type(seed)is not int or type(saved_root_admission)is not bool:
             raise ValueError('original fixed world budget, seed and saved-root mode required')
         self.catalog,self.source,self.metadata=catalog,source,metadata
         self.owning_config,self.count,self.seed,self.rung=owning_config,count,seed,rung
