@@ -288,9 +288,11 @@ class TransitionTests(unittest.TestCase):
 @unittest.skipUnless(HAS_JAX, 'requires JAX')
 class SelfHitNegativeItemTests(unittest.TestCase):
     def test_self_hit_hp_line_is_action_phase_evidence_like_b2(self):
-        """B2 (pokezero.belief _ACTION_PHASE_ONLY_HP_TAGS: '[from] confusion') takes the self-hit's -damage line as
-        action-phase HP: a confused Exploud at 80% that does not heal rules Leftovers out. The device's HP_ACTION line
-        at the self-hit gives the same narrowing; without it (the old device) nothing is learned."""
+        """The existing hooks.hp_line helper with HP_ACTION agrees with B2 (pokezero.belief _ACTION_PHASE_ONLY_HP_TAGS:
+        '[from] confusion') on a self-hit's -damage line: a confused Exploud at 80% that does not heal rules Leftovers
+        out, and an HP change without the line teaches nothing. This checks the helper B calls at the self-hit, not B's
+        wiring (it passes on the base too); TransitionTests.test_device_self_hit_hp_line_and_snap_out_clear checks
+        that step_with_public makes that call."""
         import jax
         import jax.numpy as j
         from gpu_engine import engine_device_public_hooks as h, engine_device_negative_items as n
@@ -325,12 +327,31 @@ class RegressPluginTests(unittest.TestCase):
         self.assertEqual(lane_verdict(ok, {'steelwing': [0]}, None)[0], [])
         for bad in (('state.status', 1), ('state.status', 0), ('state.confusion_counter', 1), ('trackers.public_volatiles', 1)):
             self.assertEqual(lane_verdict({bad}, {'steelwing': [0]}, None)[0], [bad])
-        self.assertEqual(lane_verdict({('state.choice_move', 1)}, {'choice_faint': [1]}, None)[0], [])
-        for bad in (('state.choice_move', 0), ('state.confusion_counter', 1), ('trackers.public_volatiles', 1)):
-            self.assertEqual(lane_verdict({bad}, {'choice_faint': [1]}, None)[0], [bad])
+        self.assertNotIn('choice_faint', PLUGINS['B']);self.assertNotIn('choice_faint', ALLOWED)
         self.assertEqual(lane_verdict({('state.boosts', 0)}, {'meteormash': [0]}, None)[0], [])
         for bad in (('state.hp', 0), ('state.boosts', 1), ('state.hp', 1)):
             self.assertEqual(lane_verdict({bad}, {'meteormash': [0]}, None)[0], [bad])
+
+
+class ClearVolatileRuleTests(unittest.TestCase):
+    """v2e_regress.clear_volatile_rule (a B special rule, not involvement): only a fainted mon's zeroed lock or
+    confusion is explained, side by side."""
+    def test_only_a_fainted_mons_zeroed_entry_is_explained(self):
+        from gpu_engine.v2e_regress import CLEAR_VOLATILE_LEAVES, clear_volatile_rule
+        self.assertEqual(CLEAR_VOLATILE_LEAVES, ('state.choice_move', 'state.confusion_counter'))
+        z = lambda: np.zeros((2, 6), np.int32)
+        base, post, fainted = {'state.choice_move': z(), 'state.confusion_counter': z()}, {'state.choice_move': z(),
+            'state.confusion_counter': z()}, np.zeros((2, 6), bool)
+        base['state.choice_move'][1, 0] = 7;fainted[1, 0] = True                        # side 1's lead fainted: lock zeroed
+        base['state.confusion_counter'][0, 0] = 3;post['state.confusion_counter'][0, 0] = 0   # side 0's living lead: not explained
+        entries = {('state.choice_move', 1), ('state.confusion_counter', 0), ('state.hp', 1), ('state.turn', None)}
+        rest, explained = clear_volatile_rule(entries, post, base, fainted)
+        self.assertEqual(explained, [('state.choice_move', 1)])
+        self.assertEqual(rest, {('state.confusion_counter', 0), ('state.hp', 1), ('state.turn', None)})
+        post['state.choice_move'][1, 0] = 9                                              # fainted but not zeroed
+        self.assertEqual(clear_volatile_rule({('state.choice_move', 1)}, post, base, fainted)[1], [])
+        post['state.choice_move'][1, 0] = 0;base['state.choice_move'][1, 3] = 4         # a second, living mon differs too
+        self.assertEqual(clear_volatile_rule({('state.choice_move', 1)}, post, base, fainted)[1], [])
 
 
 if __name__ == '__main__':unittest.main()

@@ -413,6 +413,43 @@ class TwoPassTests(unittest.TestCase):
         self.assertEqual(code, 1);self.assertGreater(report['counts']['changed_involved_unexpected_fields'], 0)
         self.assertEqual(set(report['by_effect']['curse']['unexpected_fields']), {'state.status@target'})
 
+    def test_clear_volatile_rule_explains_only_a_fainted_mons_zeroed_lock(self):
+        """B: a faint's clearVolatile zeroes the fainted mon's Choice lock and confusion: a special rule with --pr B,
+        not involvement. Against a base that locks and confuses side 1's lead, zeroing them on the lead that faints
+        this step (base_step's lane -2) is rule-explained; zeroing them on a living lead stays uninvolved; without
+        the B plug-in the rule is off."""
+        import jax.numpy as j
+        from gpu_engine import v2e_regress
+        def locked(state, actions, t):
+            out = base_step(state, actions, t);s = out.step.state
+            return result(s._replace(choice_move=s.choice_move.at[:, 1, 0].set(TACKLE),
+                confusion_counter=s.confusion_counter.at[:, 1, 0].set(3)), out.trackers)
+        base = self.tmp / 'base-locked'
+        v2e_regress.base_pass(self.args(out=base, pad_lanes=self.LANES), step_override=locked, prepared=(self.context, self.template))
+        def cleared(state, actions, t, *, everywhere=False):
+            out = locked(state, actions, t);s = out.step.state
+            gone = ((state.hp[:, 1, 0] > 0) & (s.hp[:, 1, 0] <= 0)) | everywhere
+            return result(s._replace(choice_move=s.choice_move.at[:, 1, 0].set(j.where(gone, 0, s.choice_move[:, 1, 0])),
+                confusion_counter=s.confusion_counter.at[:, 1, 0].set(j.where(gone, 0, s.confusion_counter[:, 1, 0]))), out.trackers)
+        def run(name, step, pr):
+            out = self.tmp / name
+            code = v2e_regress.patched_pass(self.args(out=out, base=str(base), pr=pr, faint_clear=False), step_override=step,
+                prepared=(self.context, self.template))
+            return code, json.loads((out / 'report.json').read_text()), [json.loads(x) for x in (out / 'changed.jsonl').read_text().splitlines()]
+        code, report, listing = run('clear-fainted', cleared, 'B')
+        c = report['counts'];fainted = c['clear_volatile_leaves']
+        self.assertEqual(code, 0, c);self.assertTrue(report['clear_volatile_rule']);self.assertGreater(fainted, 0)
+        self.assertEqual((c['rule_explained'], c['changed_but_uninvolved'], c['changed_and_involved']), (fainted, 0, 0))
+        self.assertTrue(all(x['kind'] == 'rule' and x['clear_volatile_rule'] == ['state.choice_move@1', 'state.confusion_counter@1']
+                            for x in listing))
+        code, report, _ = run('clear-fainted-a1', cleared, 'A1')                       # the rule belongs to B
+        self.assertEqual(code, 1);self.assertFalse(report['clear_volatile_rule'])
+        self.assertEqual(report['counts']['changed_but_uninvolved'], fainted)
+        code, report, listing = run('clear-living', lambda s, a, t: cleared(s, a, t, everywhere=True), 'B')
+        c = report['counts'];living = c['lane_steps'] - c['done_skipped'] - fainted
+        self.assertEqual(code, 1);self.assertEqual((c['clear_volatile_leaves'], c['changed_but_uninvolved']), (fainted, living))
+        self.assertEqual(report['uninvolved_leaves'], {'state.choice_move': living, 'state.confusion_counter': living})
+
     def test_partial_runs_and_plugin_supersets_are_marked(self):
         code, report, _ = self.patched('partial', base_step, pr='A1,A2', limit=1)
         self.assertEqual(code, 2);self.assertTrue(report['partial']);self.assertIsNone(report['passed'])
