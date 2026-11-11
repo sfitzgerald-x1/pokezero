@@ -1,8 +1,10 @@
 """Real owning risk carry and both full folds; tiny fixtures, no forwards/games.
 
-Light replacement coverage for kernel_risk_combined_runtime: the same constructs, advances and assertions,
-with the frame phase running the prepared frame closure's own body eagerly (tests/gpu_engine_eager_frame.py,
-which traces it under jit once) and the trace-off reference step run eagerly too (integer leaves only).
+Light replacement coverage for kernel_risk_combined_runtime, advance half: the same kernel-risk construct,
+advances and assertions, with the frame phase running the prepared frame closure's own body eagerly
+(tests/gpu_engine_eager_frame.py, which traces it under jit once) and the trace-off reference step run eagerly
+too (integer leaves only). The birth-identity half (against the plain construct) is
+test_gpu_engine_kernel_risk_owner_birth.
 """
 import unittest
 import jax
@@ -42,24 +44,10 @@ class KernelRiskOwnerRollbackTests(unittest.TestCase):
         # no fabricated Context, retrospective ticket or accepted fold result.
         fixture_instance=self.base()
         session=fixture_instance.construct(8,prepared=self.prepared)
-        plain=fixture_instance.construct(8,prepared=self.plain)
         runtime=d._checked(self.prepared)
         before=session.state
-        self.same(before.core.engine,plain.state.core.engine)
+        # Birth identity against the plain construct: test_gpu_engine_kernel_risk_owner_birth.
         self.assertEqual(before.core.admitted.tolist(),[True]*8)
-        self.assertEqual(before.core.risks.risk.tolist(),[0]*8)
-        self.assertEqual(before.core.risks.frame.tolist(),[1]*8)
-        self.assertEqual(before.core.risks.counts[:,r.Branch.CONSTRUCTOR-1].tolist(),[1]*8)
-        self.assertEqual(before.core.risks.counts[:,r.Branch.FRAME_END-1].tolist(),[1]*8)
-        original=d._session(session)['constructed']
-        self.same(original.callbacks.execution.risks.carry,before.core.risks)
-        for new,old in zip(before.observers,plain.state.observers):
-            self.same(new.retained,old.retained)
-            self.same(new.projection,old.projection)
-            self.assertEqual(new.retained_healthy.tolist(),[True]*8)
-        # Distinct streams remain B rows independently for each owner.
-        self.assertEqual(before.core.risks.stream_id.tolist(),list(range(1101,1109)))
-        self.assertEqual([o.owner.tolist() for o in before.observers],[[0]*8,[1]*8])
 
         # Every advance below runs its frame phase eagerly; the scope ends with the test.
         with eager_frame(self.prepared):
