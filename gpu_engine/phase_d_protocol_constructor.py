@@ -19,6 +19,9 @@ from pokezero.v5_teacher_public_root import RootSession,capture_root
 from . import phase_d_live_worlds as worlds,phase_d_protocol_world as protocol
 
 
+HELD_ROOTS=64   # roots kept for classify, most recent first (a batch larger than this recomputes the oldest, same value)
+
+
 class ProtocolConstructor:
     def __init__(self,*,catalog,source,metadata,owning_config,count,seed=20261103,
                  rung='R1',saved_root_admission=True,functions=None,seen=None,sessions=None,incremental_roots=False):
@@ -88,15 +91,16 @@ class ProtocolConstructor:
         except BaseException:
             self.root_sessions.pop(key,None);raise
         self.roots[address]=public;self.roots.move_to_end(address)
-        while len(self.roots)>8:self.roots.popitem(last=False)
+        while len(self.roots)>HELD_ROOTS:self.roots.popitem(last=False)
         return public
 
     def public_root(self,request):
         """The PublicRoot of a protocol request (classify's): the one prepare captured for this very address when it is held
         (incremental_roots), else capture_root's, recomputed. The same value either way."""
         lines=tuple(request['lines']);prefix=hashlib.sha256(''.join(x+'\n'for x in lines).encode()).hexdigest()
-        held=self.roots.get(((self.rung,request['battle_id'],request['owner'],request['stream_id']),request['decision_index'],prefix))
-        if held is not None:return held
+        if type(request['stream_id'])is int and type(request['decision_index'])is int:   # True == 1: a bool never matches a held root
+            held=self.roots.get(((self.rung,request['battle_id'],request['owner'],request['stream_id']),request['decision_index'],prefix))
+            if held is not None:return held
         return capture_root(config=self.owning_config,contract=ActorContract.champion(),lines=lines,battle_id=request['battle_id'],
             address=DecisionAddress(request['stream_id'],request['decision_index'],int(request['owner'][1])-1),seed=self.seed&0xffffffff)
 

@@ -44,7 +44,7 @@ def _once(inputs,root,name,compute,*,shared=False):
     key=(name,id(root))
     if key not in inputs.memo:
         try:inputs.memo[key]=(True,compute())
-        except Exception as error:inputs.memo[key]=(False,error)
+        except Exception as error:inputs.memo[key]=(False,error.with_traceback(None))   # no frames (world 0's arrays) kept alive
     ok,value=inputs.memo[key]
     if not ok:raise value
     return value if shared else copy.deepcopy(value)
