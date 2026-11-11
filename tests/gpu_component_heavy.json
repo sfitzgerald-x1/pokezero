@@ -19,27 +19,11 @@
    "completes_on_hosted": true
   },
   {
-   "module": "test_gpu_engine_constructor_worlds_carry",
-   "reason": "wall",
-   "hosted_median_min": 10.3,
-   "isolated_wall_min": 10.4,
-   "isolated_peak_gib": 5.4,
-   "completes_on_hosted": true
-  },
-  {
    "module": "test_gpu_engine_direct_ko_owning",
    "reason": "wall",
    "hosted_median_min": 16.2,
    "isolated_wall_min": 14.6,
    "isolated_peak_gib": 8.4,
-   "completes_on_hosted": true
-  },
-  {
-   "module": "test_gpu_engine_engine_execution_completeness",
-   "reason": "wall+memory",
-   "hosted_median_min": 15.2,
-   "isolated_wall_min": 13.9,
-   "isolated_peak_gib": 15.0,
    "completes_on_hosted": true
   },
   {
