@@ -1013,6 +1013,36 @@ _PEER_FOLDS={}     # (id(constructor), battle, owner, stream) -> (constructor, a
 PEER_FOLD_CAP=256  # least recently folded battles beyond this lose their fold (refolded from scratch if they come back)
 
 
+def _peer_fold(constructor,request,owner,catalog,functions):
+    """The peer wire fold's adapter after folding peer_wire_lines(the request's lines): incremental per (constructor, battle, owner,
+    stream) when those lines extend the last ones folded, else from scratch; a fold that raises is dropped (the next call starts
+    from scratch). The least recently folded beyond PEER_FOLD_CAP are dropped too."""
+    from pokezero.recorded_encoder_runner import JaxRecordedAdapter
+    lines=peer_wire_lines(request['lines'],owner);key=(id(constructor),request.get('battle_id'),owner,request.get('stream_id'))
+    held=_PEER_FOLDS.pop(key,None)
+    if held is None or held[0]is not constructor or held[2]!=lines[:len(held[2])]:
+        adapter=JaxRecordedAdapter(catalog,owner_side=owner,compiled_functions=functions);adapter.reset(stream_id=1,battle_id='peer-wire');fed=()
+    else:_,adapter,fed=held
+    if len(lines)>len(fed):adapter.feed(lines[len(fed):])
+    _PEER_FOLDS[key]=(constructor,adapter,lines)
+    while len(_PEER_FOLDS)>PEER_FOLD_CAP:_PEER_FOLDS.pop(next(iter(_PEER_FOLDS)))
+    return adapter
+
+
+def advance_peer_fold(constructor,request,owner):
+    """Eager peer fold (the constructor's eager_peer_fold; prepare_roots, every prepared root with the redaction on): fold this
+    request's peer wire lines now, so the battle's first root with a private reveal (peer_wire_belief) folds only its own new
+    lines instead of the whole battle from scratch (the live 1-2 s prepare spikes). The fold, and so every belief read from it,
+    is the one peer_wire_belief makes: B2's fold is the same state however the lines are split across feeds (each feed folds
+    every event, in order). A cache warm only: any error here drops the fold and is not raised (the root is prepared as
+    without it; peer_wire_belief, if the root needs it, folds from scratch and raises where it always did). True when folded."""
+    catalog=getattr(constructor,'catalog',None);functions=getattr(constructor,'functions',None)
+    if catalog is None or getattr(catalog,'source',None)is None or type(request)is not dict or request.get('lines')is None:return False
+    try:_peer_fold(constructor,request,owner,catalog,functions)
+    except Exception:return False   # noqa: BLE001 -- a warm, never a refusal: the lazy path raises in its own place
+    return True
+
+
 def peer_wire_belief(constructor,request,owner,members):
     """PeerBelief of `members` ([(carry public slot, carry engine species id)]: the owner's privately revealed members): B2's own
     fold (pokezero.recorded_encoder_runner.JaxRecordedAdapter on the constructor's B2 catalog and compiled functions, as
@@ -1027,22 +1057,13 @@ def peer_wire_belief(constructor,request,owner,members):
     stream) when the peer's lines extend the last ones folded (PEER_FOLD_CAP battles kept). PeerBeliefUnavailable when a member
     joins no fold member or several, its row is another species' or B2's boundary copy refuses the fold (a ValueError, as B2's
     own fold refusals: the root's refusal); CarryLayoutError only when the constructor has no B2 catalog or species vocabulary."""
-    from pokezero.recorded_encoder_runner import JaxRecordedAdapter
     from . import public_context
     from .phase_d_live_worlds import Refusal,_lookup
     catalog=getattr(constructor,'catalog',None);functions=getattr(constructor,'functions',None)
     if catalog is None or getattr(catalog,'source',None)is None:raise CarryLayoutError('the peer wire fold needs the constructor\'s B2 catalog')
     vocabulary=((getattr(constructor,'metadata',None)or{}).get('vocabulary')or{}).get('species')
     if not vocabulary:raise CarryLayoutError('the peer wire fold needs the constructor\'s species vocabulary')
-    lines=peer_wire_lines(request['lines'],owner);key=(id(constructor),request.get('battle_id'),owner,request.get('stream_id'))
-    held=_PEER_FOLDS.pop(key,None)
-    if held is None or held[0]is not constructor or held[2]!=lines[:len(held[2])]:
-        adapter=JaxRecordedAdapter(catalog,owner_side=owner,compiled_functions=functions);adapter.reset(stream_id=1,battle_id='peer-wire');fed=()
-    else:_,adapter,fed=held
-    if len(lines)>len(fed):adapter.feed(lines[len(fed):])
-    _PEER_FOLDS[key]=(constructor,adapter,lines)
-    while len(_PEER_FOLDS)>PEER_FOLD_CAP:_PEER_FOLDS.pop(next(iter(_PEER_FOLDS)))
-    state=adapter.state
+    state=_peer_fold(constructor,request,owner,catalog,functions).state
     _,beliefs,ok=public_context.observation_boundary_copy(state.context,state.beliefs,state.mons,catalog.source.device,catalog.context,
         valid=jnp.ones(1,bool))
     if not bool(_host(ok).all()):raise PeerBeliefUnavailable('the peer wire fold\'s observation boundary copy refused (B2_OBSERVATION_BOUNDARY_COPY_REFUSED)')
@@ -1417,6 +1438,8 @@ def prepare_roots(constructor,protocol_requests,*,start_index=0,device='cpu',red
             if type(result)is not tuple or len(result)!=3:
                 raise TypeError(f'ProtocolConstructor.prepare must return (Root, WorldSet, legal mask), got {type(result).__name__}')
             detached,made,legal=result
+            if redact_private_reveals and getattr(constructor,'eager_peer_fold',False):   # before any reveal needs it: no spike
+                advance_peer_fold(constructor,request,detached.address.owner)
             if complete is None:complete=world_completer(constructor)
             lines=request.get('lines')if isinstance(request,dict)else None
             facts=None if lines is None else line_facts(lines,detached.address.owner,**({'peer_damage':True}if peer_view_b else{}))

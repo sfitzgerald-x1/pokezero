@@ -24,11 +24,12 @@ HELD_ROOTS=64   # roots kept for classify, most recent first (a batch larger tha
 
 class ProtocolConstructor:
     def __init__(self,*,catalog,source,metadata,owning_config,count,seed=20261103,
-                 rung='R1',saved_root_admission=True,functions=None,seen=None,sessions=None,incremental_roots=False):
+                 rung='R1',saved_root_admission=True,functions=None,seen=None,sessions=None,incremental_roots=False,eager_peer_fold=False):
         if count not in (2,8,16,32,64)or type(seed)is not int or type(saved_root_admission)is not bool:
             raise ValueError('original fixed world budget, seed and saved-root mode required')
         if type(incremental_roots)is not bool or(incremental_roots and saved_root_admission):
             raise ValueError('incremental roots need per-battle sessions (saved-root admission off)')
+        if type(eager_peer_fold)is not bool:raise ValueError('eager_peer_fold must be a bool')
         self.catalog,self.source,self.metadata=catalog,source,metadata
         self.owning_config,self.count,self.seed,self.rung=owning_config,count,seed,rung
         self.saved_root_admission=saved_root_admission
@@ -39,6 +40,9 @@ class ProtocolConstructor:
         # Incremental public roots (off by default): one RootSession per session key, and the roots prepare captured, by address,
         # for classify (public_root). Outputs are capture_root's; only the cost changes.
         self.incremental_roots=incremental_roots;self.root_sessions={};self.roots=OrderedDict()
+        # Eager peer fold (off by default): constructor_worlds.prepare_roots advances each battle's peer wire fold on every root
+        # (advance_peer_fold), so a battle's first private reveal folds only its new lines. The same fold; only the cost moves.
+        self.eager_peer_fold=eager_peer_fold
 
     def prepare(self,request,index):
         required={'schema','request_id','battle_id','owner','stream_id','decision_index','generation','prefix_sha256','lines','own_request_line'}

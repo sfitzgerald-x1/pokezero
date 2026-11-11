@@ -206,6 +206,9 @@ def parser():
     p.add_argument('--incremental-roots',action='store_true',help='keep each session\'s public-root fold (RootSession) and fold only the new '
         'lines; classify reuses the root prepare captured. The same roots as capture_root from scratch, at the cost of the new lines '
         '(needs sessions: not with --saved-root-admission); the header records incremental_roots')
+    p.add_argument('--eager-peer-fold',action='store_true',help='advance each battle\'s peer wire fold on every root (with the redaction '
+        'on), so the first private reveal folds only the new lines instead of the whole battle (constructor_worlds.advance_peer_fold): the '
+        'same fold and beliefs, without the 1-2 s first-reveal spike; the header records eager_peer_fold')
     p.add_argument('--redact-private-reveals',action='store_true',help='clear the owner\'s abilities revealed only on Showdown\'s side-private '
         'Gen 3 Pressure line from the peer\'s view of the owner side (constructor_worlds.redact_private_reveals; off by default)')
     p.add_argument('--peer-view-b',action='store_true',help='view b in the peer\'s view (constructor_worlds\' Peer view b; off by default): it '
@@ -297,7 +300,8 @@ def build(args):
     from gpu_engine.phase_d_protocol_constructor import ProtocolConstructor,load_inputs
     catalog,source,metadata,config=load_inputs(args);evaluator=evaluators.load_from_arguments(args);W=live.RUNGS[args.rung]
     constructor=ProtocolConstructor(catalog=catalog,source=source,metadata=metadata,owning_config=config,count=W,seed=args.seed,rung=args.rung,
-        saved_root_admission=args.saved_root_admission,incremental_roots=bool(getattr(args,'incremental_roots',False)))
+        saved_root_admission=args.saved_root_admission,incremental_roots=bool(getattr(args,'incremental_roots',False)),
+        eager_peer_fold=bool(getattr(args,'eager_peer_fold',False)))
     executor=cw.live_executor(metadata,catalog)   # the constructor's own engine metadata and catalog (the depth-N gate's CONSTRUCTOR_ROOTS uses the same)
     params=(evaluator.params,)
     pricers=live.make_pricers(executor,evaluator,params,worlds=W,buckets=args.buckets,block_lanes=args.block_lanes,blocks_per_call=args.blocks_per_call)
@@ -325,6 +329,7 @@ def header(args,search):
         redact_private_reveals=bool(getattr(search,'redact_private_reveals',False)),**({'peer_view_b':True}if getattr(search,'peer_view_b',False)is True else{}),
         batch_wait_seconds=args.batch_wait_seconds,queue_limit=args.queue_limit,constructor_seed=args.seed,
         recipe_seed=args.recipe_seed,saved_root_admission=args.saved_root_admission,**({'incremental_roots':True}if getattr(args,'incremental_roots',False)else{}),
+        **({'eager_peer_fold':True}if getattr(args,'eager_peer_fold',False)else{}),
         metadata_sha256=args.expected_metadata_sha256,
         vocabulary_sha256=args.expected_vocabulary_sha256,champion_archive_sha256=args.champion_archive_sha256,
         champion_checkpoint_sha256=args.champion_checkpoint_sha256,champion_precision=args.champion_precision,pricer=search.pricer_identity,
