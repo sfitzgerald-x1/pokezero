@@ -1,0 +1,186 @@
+{
+ "schema": "pokezero.effect_probe.scenario.v1",
+ "move": "confusion_lum",
+ "note": "B Lum Berry against confusion (data/items.ts lumberry onUpdate: confusion eats it; onEat removes the volatile): Venomoth's Signal Beam confuses a Lum Snorlax, which eats the berry at once; the next confusion stays. Axis: the roll (0 triggers both Signal Beams, 99 neither).",
+ "teams": [
+  [
+   {
+    "species": "Venomoth",
+    "moves": [
+     "signalbeam",
+     "splash",
+     "sleeppowder",
+     "psychic"
+    ],
+    "ability": "Shield Dust",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Starmie",
+    "moves": [
+     "splash",
+     "surf",
+     "recover",
+     "protect"
+    ],
+    "ability": "Illuminate",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Blissey",
+    "moves": [
+     "splash",
+     "softboiled",
+     "protect",
+     "seismictoss"
+    ],
+    "ability": "Natural Cure",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Skarmory",
+    "moves": [
+     "splash",
+     "protect",
+     "spikes",
+     "peck"
+    ],
+    "ability": "Keen Eye",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Swampert",
+    "moves": [
+     "splash",
+     "protect",
+     "surf",
+     "earthquake"
+    ],
+    "ability": "Torrent",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Suicune",
+    "moves": [
+     "splash",
+     "surf",
+     "icebeam",
+     "rest"
+    ],
+    "ability": "Pressure",
+    "item": "Leftovers"
+   }
+  ],
+  [
+   {
+    "species": "Snorlax",
+    "moves": [
+     "splash",
+     "rest",
+     "curse",
+     "bodyslam"
+    ],
+    "ability": "Thick Fat",
+    "item": "Lum Berry"
+   },
+   {
+    "species": "Starmie",
+    "moves": [
+     "splash",
+     "surf",
+     "recover",
+     "protect"
+    ],
+    "ability": "Illuminate",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Blissey",
+    "moves": [
+     "splash",
+     "softboiled",
+     "protect",
+     "seismictoss"
+    ],
+    "ability": "Natural Cure",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Skarmory",
+    "moves": [
+     "splash",
+     "protect",
+     "spikes",
+     "peck"
+    ],
+    "ability": "Keen Eye",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Swampert",
+    "moves": [
+     "splash",
+     "protect",
+     "surf",
+     "earthquake"
+    ],
+    "ability": "Torrent",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Suicune",
+    "moves": [
+     "splash",
+     "surf",
+     "icebeam",
+     "rest"
+    ],
+    "ability": "Pressure",
+    "item": "Leftovers"
+   }
+  ]
+ ],
+ "script": [
+  [
+   "move 1",
+   "move 1"
+  ],
+  [
+   "move 1",
+   "move 1"
+  ],
+  [
+   "move 2",
+   "move 1"
+  ],
+  [
+   "move 2",
+   "move 1"
+  ]
+ ],
+ "axes": [
+  {
+   "name": "roll",
+   "field": "secondary.0",
+   "values": [
+    0,
+    99
+   ],
+   "steps": [
+    0,
+    1
+   ]
+  }
+ ],
+ "expect": {
+  "exact": true
+ },
+ "tape": {
+  "draws.0.7": 3
+ },
+ "require_fields": [
+  "item_knocked",
+  "destiny_bond",
+  "effect"
+ ]
+}

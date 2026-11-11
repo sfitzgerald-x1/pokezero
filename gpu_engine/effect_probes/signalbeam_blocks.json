@@ -1,0 +1,191 @@
+{
+ "schema": "pokezero.effect_probe.scenario.v1",
+ "move": "signalbeam_blocks",
+ "note": "B what stops Signal Beam's confusion (the roll triggers every step, duration 5): Slowbro's Own Tempo (onTryAddVolatile null, silent for a secondary), Dustox's Shield Dust, Snorlax already confused (addVolatile fails without onRestart: the clock keeps running), Snorlax's Protect, Electrode's Substitute (faster, so up before the hit), and a level-5 Smeargle knocked out by the hit. The script ends at that KO.",
+ "teams": [
+  [
+   {
+    "species": "Venomoth",
+    "moves": [
+     "signalbeam",
+     "splash",
+     "sleeppowder",
+     "psychic"
+    ],
+    "ability": "Shield Dust",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Starmie",
+    "moves": [
+     "splash",
+     "surf",
+     "recover",
+     "protect"
+    ],
+    "ability": "Illuminate",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Blissey",
+    "moves": [
+     "splash",
+     "softboiled",
+     "protect",
+     "seismictoss"
+    ],
+    "ability": "Natural Cure",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Skarmory",
+    "moves": [
+     "splash",
+     "protect",
+     "spikes",
+     "peck"
+    ],
+    "ability": "Keen Eye",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Swampert",
+    "moves": [
+     "splash",
+     "protect",
+     "surf",
+     "earthquake"
+    ],
+    "ability": "Torrent",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Suicune",
+    "moves": [
+     "splash",
+     "surf",
+     "icebeam",
+     "rest"
+    ],
+    "ability": "Pressure",
+    "item": "Leftovers"
+   }
+  ],
+  [
+   {
+    "species": "Slowbro",
+    "moves": [
+     "splash",
+     "surf",
+     "rest",
+     "protect"
+    ],
+    "ability": "Own Tempo",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Dustox",
+    "moves": [
+     "splash",
+     "psychic",
+     "moonlight",
+     "substitute"
+    ],
+    "ability": "Shield Dust",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Snorlax",
+    "moves": [
+     "splash",
+     "protect",
+     "rest",
+     "bodyslam"
+    ],
+    "ability": "Thick Fat",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Electrode",
+    "moves": [
+     "substitute",
+     "splash",
+     "protect",
+     "thunderbolt"
+    ],
+    "ability": "Soundproof",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Smeargle",
+    "moves": [
+     "splash",
+     "spore",
+     "spikes",
+     "encore"
+    ],
+    "ability": "Own Tempo",
+    "item": "",
+    "level": 5
+   },
+   {
+    "species": "Blissey",
+    "moves": [
+     "splash",
+     "softboiled",
+     "protect",
+     "seismictoss"
+    ],
+    "ability": "Natural Cure",
+    "item": "Leftovers"
+   }
+  ]
+ ],
+ "script": [
+  [
+   "move 1",
+   "move 1"
+  ],
+  [
+   "move 1",
+   "switch 2"
+  ],
+  [
+   "move 1",
+   "switch 3"
+  ],
+  [
+   "move 1",
+   "move 1"
+  ],
+  [
+   "move 1",
+   "move 2"
+  ],
+  [
+   "move 2",
+   "switch 4"
+  ],
+  [
+   "move 1",
+   "move 1"
+  ],
+  [
+   "move 1",
+   "switch 5"
+  ]
+ ],
+ "axes": [],
+ "expect": {
+  "exact": true
+ },
+ "tape": {
+  "secondary.0": 0,
+  "draws.0.7": 3
+ },
+ "require_fields": [
+  "item_knocked",
+  "destiny_bond",
+  "effect"
+ ]
+}

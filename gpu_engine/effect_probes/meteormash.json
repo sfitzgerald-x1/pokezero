@@ -1,0 +1,204 @@
+{
+ "schema": "pokezero.effect_probe.scenario.v1",
+ "move": "meteormash",
+ "note": "B Meteor Mash (gen5: 100 BP, 85% accuracy; data/moves.ts secondary 20% self atk +1): Metagross's boost raises its next hit on Steelix; the self entry survives Venomoth's Shield Dust and Substitute; Swords Dance to +6, then a trigger is a no-op. Axes: the roll at 0 and 19 (< 20 triggers) and 20; accuracy 0 hits, 85 misses.",
+ "teams": [
+  [
+   {
+    "species": "Metagross",
+    "moves": [
+     "meteormash",
+     "swordsdance",
+     "splash",
+     "agility"
+    ],
+    "ability": "Clear Body",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Starmie",
+    "moves": [
+     "splash",
+     "surf",
+     "recover",
+     "protect"
+    ],
+    "ability": "Illuminate",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Blissey",
+    "moves": [
+     "splash",
+     "softboiled",
+     "protect",
+     "seismictoss"
+    ],
+    "ability": "Natural Cure",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Skarmory",
+    "moves": [
+     "splash",
+     "protect",
+     "spikes",
+     "peck"
+    ],
+    "ability": "Keen Eye",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Swampert",
+    "moves": [
+     "splash",
+     "protect",
+     "surf",
+     "earthquake"
+    ],
+    "ability": "Torrent",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Suicune",
+    "moves": [
+     "splash",
+     "surf",
+     "icebeam",
+     "rest"
+    ],
+    "ability": "Pressure",
+    "item": "Leftovers"
+   }
+  ],
+  [
+   {
+    "species": "Steelix",
+    "moves": [
+     "splash",
+     "rest",
+     "roar",
+     "earthquake"
+    ],
+    "ability": "Rock Head",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Venomoth",
+    "moves": [
+     "splash",
+     "substitute",
+     "psychic",
+     "sleeppowder"
+    ],
+    "ability": "Shield Dust",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Starmie",
+    "moves": [
+     "splash",
+     "surf",
+     "recover",
+     "protect"
+    ],
+    "ability": "Illuminate",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Blissey",
+    "moves": [
+     "splash",
+     "softboiled",
+     "protect",
+     "seismictoss"
+    ],
+    "ability": "Natural Cure",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Skarmory",
+    "moves": [
+     "splash",
+     "protect",
+     "spikes",
+     "peck"
+    ],
+    "ability": "Keen Eye",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Swampert",
+    "moves": [
+     "splash",
+     "protect",
+     "surf",
+     "earthquake"
+    ],
+    "ability": "Torrent",
+    "item": "Leftovers"
+   }
+  ]
+ ],
+ "script": [
+  [
+   "move 1",
+   "move 1"
+  ],
+  [
+   "move 1",
+   "switch 2"
+  ],
+  [
+   "move 1",
+   "move 2"
+  ],
+  [
+   "move 2",
+   "switch 1"
+  ],
+  [
+   "move 2",
+   "move 1"
+  ],
+  [
+   "move 2",
+   "move 1"
+  ],
+  [
+   "move 1",
+   "move 1"
+  ],
+  [
+   "move 1",
+   "move 1"
+  ]
+ ],
+ "axes": [
+  {
+   "name": "roll",
+   "field": "secondary.0",
+   "values": [
+    0,
+    19,
+    20
+   ]
+  },
+  {
+   "name": "accuracy",
+   "field": "draws.0.6",
+   "values": [
+    0,
+    85
+   ]
+  }
+ ],
+ "expect": {
+  "exact": true
+ },
+ "require_fields": [
+  "item_knocked",
+  "destiny_bond",
+  "effect"
+ ]
+}

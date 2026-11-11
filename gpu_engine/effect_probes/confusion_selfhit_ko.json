@@ -1,0 +1,190 @@
+{
+ "schema": "pokezero.effect_probe.scenario.v1",
+ "move": "confusion_selfhit_ko",
+ "note": "B a confusion self-KO: a faster Choice Band Pure Power Medicham, confused by a slower Ariados, hits itself every turn (draws[s][3] = 99) until it faints; Gen 3 then cancels Ariados's queued move (no PP spent). The script ends at the KO. Axis: the self-hit damage roll.",
+ "teams": [
+  [
+   {
+    "species": "Ariados",
+    "moves": [
+     "signalbeam",
+     "splash",
+     "agility",
+     "batonpass"
+    ],
+    "ability": "Insomnia",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Starmie",
+    "moves": [
+     "splash",
+     "surf",
+     "recover",
+     "protect"
+    ],
+    "ability": "Illuminate",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Blissey",
+    "moves": [
+     "splash",
+     "softboiled",
+     "protect",
+     "seismictoss"
+    ],
+    "ability": "Natural Cure",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Skarmory",
+    "moves": [
+     "splash",
+     "protect",
+     "spikes",
+     "peck"
+    ],
+    "ability": "Keen Eye",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Swampert",
+    "moves": [
+     "splash",
+     "protect",
+     "surf",
+     "earthquake"
+    ],
+    "ability": "Torrent",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Suicune",
+    "moves": [
+     "splash",
+     "surf",
+     "icebeam",
+     "rest"
+    ],
+    "ability": "Pressure",
+    "item": "Leftovers"
+   }
+  ],
+  [
+   {
+    "species": "Medicham",
+    "moves": [
+     "splash",
+     "brickbreak",
+     "bulkup",
+     "rockslide"
+    ],
+    "ability": "Pure Power",
+    "item": "Choice Band",
+    "level": 80
+   },
+   {
+    "species": "Starmie",
+    "moves": [
+     "splash",
+     "surf",
+     "recover",
+     "protect"
+    ],
+    "ability": "Illuminate",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Blissey",
+    "moves": [
+     "splash",
+     "softboiled",
+     "protect",
+     "seismictoss"
+    ],
+    "ability": "Natural Cure",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Skarmory",
+    "moves": [
+     "splash",
+     "protect",
+     "spikes",
+     "peck"
+    ],
+    "ability": "Keen Eye",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Swampert",
+    "moves": [
+     "splash",
+     "protect",
+     "surf",
+     "earthquake"
+    ],
+    "ability": "Torrent",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Suicune",
+    "moves": [
+     "splash",
+     "surf",
+     "icebeam",
+     "rest"
+    ],
+    "ability": "Pressure",
+    "item": "Leftovers"
+   }
+  ]
+ ],
+ "script": [
+  [
+   "move 1",
+   "move 1"
+  ],
+  [
+   "move 2",
+   "move 1"
+  ],
+  [
+   "move 2",
+   "move 1"
+  ]
+ ],
+ "axes": [
+  {
+   "name": "damage",
+   "field": "draws.1.5",
+   "values": [
+    0,
+    15
+   ]
+  }
+ ],
+ "expect": {
+  "exact": true
+ },
+ "tape": {
+  "draws.0.7": 3
+ },
+ "tape_steps": {
+  "0": {
+   "secondary.0": 0
+  },
+  "1": {
+   "draws.1.3": 99
+  },
+  "2": {
+   "draws.1.3": 99
+  }
+ },
+ "require_fields": [
+  "item_knocked",
+  "destiny_bond",
+  "effect"
+ ]
+}

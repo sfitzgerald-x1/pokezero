@@ -1,0 +1,212 @@
+{
+ "schema": "pokezero.effect_probe.scenario.v1",
+ "move": "steelwing",
+ "note": "B Steel Wing (data/moves.ts: 90% accuracy, secondary 10% self def +1): Scizor's boost lowers Snorlax's Body Slam damage; the self entry survives Venomoth's Shield Dust (onModifySecondaries keeps self entries) and its Substitute (selfDrops moves the user itself); three Iron Defenses reach +6 and a later trigger is a no-op. Axes: the roll at 0 and 9 (< 10 triggers) and 10; accuracy 0 hits, 90 misses (no secondary).",
+ "teams": [
+  [
+   {
+    "species": "Scizor",
+    "moves": [
+     "steelwing",
+     "irondefense",
+     "splash",
+     "swordsdance"
+    ],
+    "ability": "Swarm",
+    "item": ""
+   },
+   {
+    "species": "Starmie",
+    "moves": [
+     "splash",
+     "surf",
+     "recover",
+     "protect"
+    ],
+    "ability": "Illuminate",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Blissey",
+    "moves": [
+     "splash",
+     "softboiled",
+     "protect",
+     "seismictoss"
+    ],
+    "ability": "Natural Cure",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Skarmory",
+    "moves": [
+     "splash",
+     "protect",
+     "spikes",
+     "peck"
+    ],
+    "ability": "Keen Eye",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Swampert",
+    "moves": [
+     "splash",
+     "protect",
+     "surf",
+     "earthquake"
+    ],
+    "ability": "Torrent",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Suicune",
+    "moves": [
+     "splash",
+     "surf",
+     "icebeam",
+     "rest"
+    ],
+    "ability": "Pressure",
+    "item": "Leftovers"
+   }
+  ],
+  [
+   {
+    "species": "Snorlax",
+    "moves": [
+     "bodyslam",
+     "splash",
+     "rest",
+     "curse"
+    ],
+    "ability": "Thick Fat",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Venomoth",
+    "moves": [
+     "splash",
+     "substitute",
+     "psychic",
+     "sleeppowder"
+    ],
+    "ability": "Shield Dust",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Starmie",
+    "moves": [
+     "splash",
+     "surf",
+     "recover",
+     "protect"
+    ],
+    "ability": "Illuminate",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Blissey",
+    "moves": [
+     "splash",
+     "softboiled",
+     "protect",
+     "seismictoss"
+    ],
+    "ability": "Natural Cure",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Skarmory",
+    "moves": [
+     "splash",
+     "protect",
+     "spikes",
+     "peck"
+    ],
+    "ability": "Keen Eye",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Swampert",
+    "moves": [
+     "splash",
+     "protect",
+     "surf",
+     "earthquake"
+    ],
+    "ability": "Torrent",
+    "item": "Leftovers"
+   }
+  ]
+ ],
+ "script": [
+  [
+   "move 1",
+   "move 1"
+  ],
+  [
+   "move 1",
+   "move 1"
+  ],
+  [
+   "move 1",
+   "switch 2"
+  ],
+  [
+   "move 1",
+   "move 2"
+  ],
+  [
+   "move 2",
+   "move 1"
+  ],
+  [
+   "move 2",
+   "move 1"
+  ],
+  [
+   "move 2",
+   "move 1"
+  ],
+  [
+   "move 1",
+   "move 1"
+  ],
+  [
+   "move 1",
+   "switch 1"
+  ],
+  [
+   "move 1",
+   "move 1"
+  ]
+ ],
+ "axes": [
+  {
+   "name": "roll",
+   "field": "secondary.0",
+   "values": [
+    0,
+    9,
+    10
+   ]
+  },
+  {
+   "name": "accuracy",
+   "field": "draws.0.6",
+   "values": [
+    0,
+    90
+   ]
+  }
+ ],
+ "expect": {
+  "exact": true
+ },
+ "require_fields": [
+  "item_knocked",
+  "destiny_bond",
+  "effect"
+ ]
+}

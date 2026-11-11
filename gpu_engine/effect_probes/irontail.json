@@ -1,0 +1,209 @@
+{
+ "schema": "pokezero.effect_probe.scenario.v1",
+ "move": "irontail",
+ "note": "B Iron Tail (data/moves.ts: 75% accuracy, secondary 30% target def -1): Persian Iron Tails each step while p2 rotates: Snorlax (the drop lands), Metagross (Clear Body deletes it, no line), Torkoal (White Smoke), Venomoth (Shield Dust filters the target entry), Electrode (lands; then the faster Electrode's Substitute takes the next two hits: a Substitute hit nulls the target before secondaries), Kingler (Hyper Cutter guards only Atk: lands). Axes: the roll at 0 and 29 (< 30 triggers) and 30; accuracy 0 and 74 hit, 75 misses (no secondary).",
+ "teams": [
+  [
+   {
+    "species": "Persian",
+    "moves": [
+     "irontail",
+     "splash",
+     "return",
+     "shadowball"
+    ],
+    "ability": "Limber",
+    "item": ""
+   },
+   {
+    "species": "Starmie",
+    "moves": [
+     "splash",
+     "surf",
+     "recover",
+     "protect"
+    ],
+    "ability": "Illuminate",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Blissey",
+    "moves": [
+     "splash",
+     "softboiled",
+     "protect",
+     "seismictoss"
+    ],
+    "ability": "Natural Cure",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Skarmory",
+    "moves": [
+     "splash",
+     "protect",
+     "spikes",
+     "peck"
+    ],
+    "ability": "Keen Eye",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Swampert",
+    "moves": [
+     "splash",
+     "protect",
+     "surf",
+     "earthquake"
+    ],
+    "ability": "Torrent",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Suicune",
+    "moves": [
+     "splash",
+     "surf",
+     "icebeam",
+     "rest"
+    ],
+    "ability": "Pressure",
+    "item": "Leftovers"
+   }
+  ],
+  [
+   {
+    "species": "Snorlax",
+    "moves": [
+     "splash",
+     "rest",
+     "curse",
+     "bodyslam"
+    ],
+    "ability": "Thick Fat",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Metagross",
+    "moves": [
+     "splash",
+     "meteormash",
+     "earthquake",
+     "agility"
+    ],
+    "ability": "Clear Body",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Torkoal",
+    "moves": [
+     "splash",
+     "flamethrower",
+     "rest",
+     "protect"
+    ],
+    "ability": "White Smoke",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Venomoth",
+    "moves": [
+     "splash",
+     "substitute",
+     "psychic",
+     "sleeppowder"
+    ],
+    "ability": "Shield Dust",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Electrode",
+    "moves": [
+     "substitute",
+     "splash",
+     "protect",
+     "thunderbolt"
+    ],
+    "ability": "Soundproof",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Kingler",
+    "moves": [
+     "splash",
+     "surf",
+     "swordsdance",
+     "protect"
+    ],
+    "ability": "Hyper Cutter",
+    "item": "Leftovers"
+   }
+  ]
+ ],
+ "script": [
+  [
+   "move 1",
+   "move 1"
+  ],
+  [
+   "move 1",
+   "switch 2"
+  ],
+  [
+   "move 1",
+   "switch 3"
+  ],
+  [
+   "move 1",
+   "switch 4"
+  ],
+  [
+   "move 1",
+   "switch 5"
+  ],
+  [
+   "move 1",
+   "move 1"
+  ],
+  [
+   "move 1",
+   "move 2"
+  ],
+  [
+   "move 1",
+   "switch 6"
+  ],
+  [
+   "move 1",
+   "move 1"
+  ]
+ ],
+ "axes": [
+  {
+   "name": "roll",
+   "field": "secondary.0",
+   "values": [
+    0,
+    29,
+    30
+   ]
+  },
+  {
+   "name": "accuracy",
+   "field": "draws.0.6",
+   "values": [
+    0,
+    74,
+    75
+   ]
+  }
+ ],
+ "expect": {
+  "exact": true
+ },
+ "require_fields": [
+  "item_knocked",
+  "destiny_bond",
+  "effect"
+ ]
+}

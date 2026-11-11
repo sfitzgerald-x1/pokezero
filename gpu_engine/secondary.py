@@ -35,9 +35,22 @@ EFFECTS = {
     "crunch": (20, m.NONE, True, False),
     "psychic": (10, m.NONE, True, False),
     "sacredfire": (50, m.BRN, False, False),
+    # Fidelity patch B: secondary {chance:30, volatileStatus:'flinch'} (data/moves.ts headbutt,
+    # needlearm; gen3 changes only Needle Arm's flags). The flinch path below, unchanged.
+    "headbutt": (30, m.NONE, False, True),
+    "needlearm": (30, m.NONE, False, True),
 }
 
-EXTRA_CHANCES = {"silverwind": 10, "ancientpower": 10, "mudshot": 100}
+EXTRA_CHANCES = {"silverwind": 10, "ancientpower": 10, "mudshot": 100,
+    # Fidelity patch B (apply_chance_effects): data/moves.ts secondary chances, no gen3-8 override.
+    "irontail": 30, "steelwing": 10, "meteormash": 20, "signalbeam": 10}
+
+# Fidelity patch B. secondary.boosts on the target (data/moves.ts irontail: def -1), secondary.self.boosts
+# on the user (steelwing: def +1; meteormash: atk +1, gen5's 100 BP/85% inherited), and secondary
+# volatileStatus confusion (signalbeam, Special in Gen 3 by type). Stage order: atk def spa spd spe acc eva.
+TARGET_DROPS = {"irontail": [0, -1, 0, 0, 0, 0, 0]}
+SELF_BOOSTS = {"steelwing": [0, 1, 0, 0, 0, 0, 0], "meteormash": [1, 0, 0, 0, 0, 0, 0]}
+CONFUSION_MOVES = ("signalbeam",)
 
 
 class SecondaryTable(NamedTuple):
@@ -58,6 +71,11 @@ class SecondaryTable(NamedTuple):
     synchronize: jax.Array       # [A], deterministic reflection of fresh status
     rough_skin: jax.Array        # [A], Gen3 deterministic contact HP damage
     color_change: jax.Array      # [A], original Gen3 inherited DamagingHit
+    # Fidelity patch B (appended; every field above keeps its position and value).
+    target_drops: jax.Array      # [M,7], secondary.boosts on the target (Iron Tail)
+    self_boosts: jax.Array       # [M,7], secondary.self.boosts on the user (Steel Wing, Meteor Mash)
+    confusion: jax.Array         # [M], secondary volatileStatus confusion (Signal Beam)
+    own_tempo: jax.Array         # [A], onTryAddVolatile refuses confusion
 
 
 def from_metadata(metadata):
@@ -77,6 +95,7 @@ def from_metadata(metadata):
         raise ValueError('move metadata/vocabulary mismatch')
     contact = [bool(row and row.get('flags', {}).get('contact')) for row in move_rows] \
         if move_rows is not None else [False]*len(vocab['moves'])
+    stages = lambda chosen: jnp.asarray([chosen.get(name, [0]*7) for name in vocab['moves']], jnp.int32).reshape(len(vocab['moves']), 7)
     return SecondaryTable(jnp.asarray([row[0] for row in rows], jnp.int32),
         jnp.asarray([row[1] for row in rows], jnp.int32),
         jnp.asarray([row[2] for row in rows]), jnp.asarray([row[3] for row in rows]),
@@ -85,7 +104,9 @@ def from_metadata(metadata):
         jnp.asarray(contact), flags({'static'}),
         jnp.asarray([name == 'mudshot' for name in vocab['moves']]),
         jnp.asarray([name in {'silverwind', 'ancientpower'} for name in vocab['moves']]),
-        flags({'synchronize'}),flags({'roughskin'}),flags({'colorchange'}))
+        flags({'synchronize'}),flags({'roughskin'}),flags({'colorchange'}),
+        stages(TARGET_DROPS),stages(SELF_BOOSTS),
+        jnp.asarray([name in CONFUSION_MOVES for name in vocab['moves']]),flags({'owntempo'}))
 
 
 def apply_color_change(state,side,move_type,table,*,eligible,_status_trace=None,_direct_hit_context=None,move=None,_device_public=None):
@@ -296,3 +317,59 @@ def apply(state, side, move, roll, table, *, eligible, effective_weather=0, subs
                 _secondary_write,_secondary_status_context,table)
         return after_status_event(state,side,foe,status,table,applied=changes,item_table=item_table,_status_trace=_status_trace,_device_public=_device_public)
     return after_status_event(state,side,foe,status,table,applied=changes,item_table=item_table,_device_public=_device_public)
+
+
+def apply_chance_effects(state, side, move, roll, duration_roll, table, *, eligible, substitute_hit=False,
+                         _device_public=None):
+    """Fidelity patch B: Iron Tail, Steel Wing, Meteor Mash and Signal Beam's chance secondaries.
+
+    Called right after apply() (whose AST-pinned call is unchanged) with the same eligibility (a hit
+    that was not missed, protected or type-immune) and the same side's [0,100) roll: each of these
+    moves has ONE secondary entry, and secondaries() (sim/battle-actions.ts:1357-1373) rolls
+    random(100) once per entry, so the shared draw maps one to one. Serene Grace doubles the chance
+    (gen4 abilities.ts onModifyMove, inherited by Gen 3). No chance is drawn here: the confusion
+    duration reads the caller's duration roll, the attacker's draws[s][7] (2+d), which Signal Beam
+    never shares with a primary sleep or Encore. Headbutt and Needle Arm flinch through apply().
+
+    Target entries (Iron Tail's Def -1, Signal Beam's confusion) need a living target that is not
+    behind the Substitute this hit met (spreadMoveHit nulls that target before secondaries) and has
+    no Shield Dust (onModifySecondaries keeps only self entries). Iron Tail's drop goes through
+    boost(): capped at -6 (a no-op), Clear Body and White Smoke delete it with no line because the
+    effect carries secondaries (data/abilities.ts:513-531, 5434-5452); Hyper Cutter and Keen Eye
+    guard stats no row here lowers. Signal Beam's addVolatile('confusion') fails silently on an
+    already confused target (no onRestart) and on Own Tempo (onTryAddVolatile returns null; its onHit
+    -immune line needs a primary volatileStatus); otherwise it starts at random(2,6), 2..5
+    (data/conditions.ts:165-174).
+
+    Self entries (Steel Wing's Def +1, Meteor Mash's Atk +1) survive Shield Dust, the Substitute and a
+    target KO (selfDrops moves the user itself) and need only a living user; +6 is a no-op, and the
+    user's own Clear Body never blocks its own boost (source === target).
+
+    Returns the state and the [B] mask of attempted writes (for the lifecycle trace's refusal).
+    """
+    rows = jnp.arange(state.hp.shape[0]); foe = 1 - side
+    own, target = state.active[rows, side], state.active[rows, foe]
+    get = lambda value: value[rows, foe, target]
+    ability = get(state.ability)
+    chance = table.chance[move] * jnp.where(table.grace[state.ability[rows, side, own]], 2, 1)
+    trigger = jnp.asarray(eligible) & (jnp.asarray(roll) < chance)
+    proc = (trigger & (get(state.hp) > 0) & ~table.dust[ability]
+        & ~jnp.asarray(substitute_hit))
+    drop = table.target_drops[move]
+    dropped = proc & jnp.any(drop != 0, axis=1)
+    old = get(state.boosts)
+    lowered = jnp.clip(old + jnp.where(table.clear_body[ability][:, None] & (drop < 0), 0, drop), -6, 6)
+    raise_ = table.self_boosts[move]
+    raised = trigger & jnp.any(raise_ != 0, axis=1) & (state.hp[rows, side, own] > 0)
+    own_old = state.boosts[rows, side, own]
+    confusing = proc & table.confusion[move]
+    confused = confusing & ~table.own_tempo[ability] & (get(state.confusion_counter) == 0)
+    state = state._replace(
+        boosts=state.boosts.at[rows, foe, target].set(jnp.where(dropped[:, None], lowered, old))
+            .at[rows, side, own].set(jnp.where(raised[:, None], jnp.clip(own_old + raise_, -6, 6), own_old)),
+        confusion_counter=state.confusion_counter.at[rows, foe, target].set(
+            jnp.where(confused, 2 + jnp.asarray(duration_roll, jnp.int32), get(state.confusion_counter))))
+    attempted = dropped | raised | confusing
+    # Publish the stages (the confusion bag is public_move_state's, at the end of the move).
+    if _device_public is not None:device_public.observe(_device_public, state, attempted)
+    return state, attempted
