@@ -5,7 +5,8 @@ no engine, model or device.
 Inputs: rows of scripts/depthn_rr_reprice.py --targets replays of the gate bank's roots, one root kind per call.
 - --sampled: a sampled-world replay: run C (Foul Play roots, --reply-archive pi_FP and --peer-view-b) or run E (self roots, the
   live configuration), or a wider replay of the same roots and configuration (--rung DN2W32 / DN2W64) for the world-count rungs.
-- --true (optional): the same roots' true-world replay, run A or B (--true-worlds, --true-kind true_private). World i of a true row
+- --true (optional): the same roots' true-world replay, run A or B (--true-worlds, --true-kind true_private; or, with this
+  module's --true-kind true, a replay of the true team at public HP and PP, no request overlay). World i of a true row
   is the true state materialized with sampled world i's kernel seed (checked per root: kernel_seed_mismatch otherwise), so true
   world 0 is sampled world 0 with the opponent's true sets in place of the sampled ones, under the same chance draw.
 - --weights / --true-weights (optional): gpu_engine.fp_reply_evidence weights rows ({ordinal, decision_index, world, loglik})
@@ -13,7 +14,8 @@ Inputs: rows of scripts/depthn_rr_reprice.py --targets replays of the gate bank'
   world's sets (pi_FP on Foul Play roots; the champion, gpu_engine.mc_ladder_evidence, on self roots).
 - --manifest: the self-capture manifest (self roots only), as mc_ladder_rungs takes it.
 
-Rungs, in mc_ladder_score's rung format exactly as mc_ladder_rungs writes them. The reply prior of every rung is R3's: the reply
+Rungs, in mc_ladder_score's rung format exactly as mc_ladder_rungs writes them (R1: averaging over the true row's worlds,
+mc_ladder_rungs' R1 for a true_private replay; on the first N with --prefixes). The reply prior of every rung is R3's: the reply
 model's logits (reply_peer_logits) on Foul Play roots and the champion's root_peer_logits on self roots, at depth 1.
 - R3: averaging over the sampled worlds (mc_ladder_rungs.average): run C's / E's own R3, recomputed (summary r3_check counts any
   disagreement with --check-r3, that run's rung-R3.jsonl).
@@ -82,19 +84,33 @@ def beta_name(beta):
 
 def rung_names(weighted, with_true, true_weighted):
     names = ['R3']
-    if with_true:names += ['R3true', 'R3true_ins', 'R3or_active', 'R3or_seen']
+    if with_true:names += ['R1', 'R3true', 'R3true_ins', 'R3or_active', 'R3or_seen']
     if weighted:names += [f'R3rw_b{beta_name(b)}' for b in BETAS]
     if with_true and weighted and true_weighted:names += [f'R3true_rw_b{beta_name(b)}' for b in BETAS]
     return names
 
 
-def load(rows, kind, manifest, run, counts):
-    """{root index: (key, raw row, undecided reason or None)} of one run's rows (mc_ladder_rungs.identity and
-    true_worlds_check); mismatches counted."""
+def true_check(raw, true_kind):
+    """mc_ladder_rungs.true_worlds_check for a true-world replay of `true_kind`: true_private (runs A and B; where the opponent
+    waits it falls back to true) or true (the true team at public HP and PP)."""
+    if true_kind == L.TRUE_KIND:return L.true_worlds_check(raw, 'A')
+    record = raw.get('true_worlds')
+    if type(record) is not dict or record.get('requested_kind') != true_kind:return 'not_true_worlds', None
+    calls, worlds = record.get('sample_calls'), record.get('worlds')
+    if type(calls) is not int or calls < 1:return None, 'true_worlds_not_sampled'
+    if (record.get('problem') is not None or record.get('error') is not None or record.get('kind') != true_kind or type(worlds) is not int
+            or worlds < 1 or record.get('built') != worlds):
+        return None, 'true_worlds_failed'
+    return None, None
+
+
+def load(rows, kind, manifest, run, counts, true_kind=None):
+    """{root index: (key, raw row, undecided reason or None)} of one run's rows (mc_ladder_rungs.identity, and
+    true_worlds_check for the sampled run or true_check for a true run of `true_kind`); mismatches counted."""
     out = {}
     for raw in rows:
         counts['rows'] += 1;key, problem = L.identity(raw, kind, manifest);truth = None
-        if key is not None:problem, truth = L.true_worlds_check(raw, run)
+        if key is not None:problem, truth = L.true_worlds_check(raw, run) if true_kind is None else true_check(raw, true_kind)
         if problem is not None:counts[f'identity_{problem}'] += 1;continue
         index = tuple(key[f] for f in L.KEY_FIELDS[kind])
         if index in out:raise ValueError(f'two rows for root {index}')
@@ -196,6 +212,9 @@ def decide(sampled, true_entry, weights, true_weights, kind, count, with_true=Tr
         if not same_root(raw, true_entry[1]):raise rr.Unscorable('root_prior_differs')
         mixed, added = [truth] + worlds[1:], worlds + [truth]
     except rr.Unscorable as error:problem = error.reason
+    if with_true:
+        if problem:out['R1'] = undecided(problem)
+        else:run('R1', lambda: choice(depth1_worlds(true_entry[1], min(count, len(true_entry[1].get('worlds') or ()))), legal, reply))
     for name in ('R3true', 'R3true_ins') if with_true else ():
         if problem:out[name] = undecided(problem);continue
         run(name, lambda m=(mixed if name == 'R3true' else added): choice(m, legal, reply))
@@ -311,12 +330,13 @@ def summarize_diag(rows):
     return out
 
 
-def build(sampled_rows, kind, true_rows=None, weights=None, true_weights=None, manifest=None, prefixes=None, check_r3=None):
+def build(sampled_rows, kind, true_rows=None, weights=None, true_weights=None, manifest=None, prefixes=None, check_r3=None,
+          true_kind=L.TRUE_KIND):
     """({rung: [rung rows]}, [diag rows], summary)."""
     manifest = manifest or {};counts = collections.Counter();true_counts = collections.Counter()
     sampled = load(sampled_rows, kind, manifest, SAMPLED_RUN[kind], counts)
     with_true = true_rows is not None
-    truths = load(true_rows, kind, manifest, TRUE_RUN[kind], true_counts) if with_true else {}
+    truths = load(true_rows, kind, manifest, TRUE_RUN[kind], true_counts, true_kind) if with_true else {}
     full = max((len(raw.get('worlds') or ()) for _, raw, _ in sampled.values()), default=0)
     sizes = sorted(set(prefixes)) if prefixes else [None]
     rungs = collections.defaultdict(list);diag = [];stats = {};diag_reasons = collections.Counter()
@@ -354,7 +374,8 @@ def build(sampled_rows, kind, true_rows=None, weights=None, true_weights=None, m
                 check['disagreements'] += 1
                 if len(check['examples']) < EXAMPLES:check['examples'].append(dict(root=list(index), mine=mine[index], theirs=r['action']))
     plain = lambda c: dict(sorted(c.items()))
-    summary = dict(schema=SCHEMA, kind=kind, sampled=plain(counts), true=plain(true_counts) if with_true else None, roots=len(sampled),
+    summary = dict(schema=SCHEMA, kind=kind, sampled=plain(counts), true=plain(true_counts) if with_true else None,
+                   true_kind=true_kind if with_true else None, roots=len(sampled),
                    true_roots=sum(1 for i in sampled if i in truths), worlds=full, prefixes=prefixes,
                    weighted=weights is not None, true_weighted=true_weights is not None,
                    rungs={name: dict(s, undecided=plain(s['undecided']), guard_tripped=plain(s['guard_tripped'])) for name, s in stats.items()},
@@ -375,7 +396,7 @@ def run_rungs(args):
     weights = rr.load_world_weights(args.weights) if args.weights else None
     true_weights = rr.load_world_weights(args.true_weights) if args.true_weights else None
     rungs, diag, summary = build(L.read_rows(args.sampled), args.kind, L.read_rows(args.true) if args.true else None, weights, true_weights,
-                                 manifest, args.prefixes, read_jsonl(args.check_r3) if args.check_r3 else None)
+                                 manifest, args.prefixes, read_jsonl(args.check_r3) if args.check_r3 else None, args.true_kind)
     directory = Path(args.out);directory.mkdir(parents=True, exist_ok=False)
     for name, rows in rungs.items():(directory / f'rung-{name}.jsonl').write_text(''.join(json.dumps(r, sort_keys=True) + '\n' for r in rows))
     (directory / 'diag.jsonl').write_text(''.join(json.dumps(r, sort_keys=True) + '\n' for r in diag))
@@ -434,6 +455,7 @@ def main(argv=None):
     r.add_argument('--sampled', nargs='+', required=True);r.add_argument('--true', nargs='+')
     r.add_argument('--weights');r.add_argument('--true-weights');r.add_argument('--manifest')
     r.add_argument('--prefixes', nargs='+', type=int);r.add_argument('--check-r3');r.add_argument('--out', required=True)
+    r.add_argument('--true-kind', choices=(L.TRUE_KIND, 'true'), default=L.TRUE_KIND, help="--true's replay kind (true: public HP and PP)")
     p = sub.add_parser('pairs');p.add_argument('bank');p.add_argument('--rung', action='append', default=[])
     p.add_argument('--base', action='append', default=[]);p.add_argument('--guards', choices=('on', 'policy', 'off'), default='on')
     p.add_argument('--out', required=True)

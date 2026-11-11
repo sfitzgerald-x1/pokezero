@@ -72,6 +72,8 @@ class WorldRungTests(unittest.TestCase):
         low, _, _ = M.build([sampled_row()], 'foulplay', [true_row(LOW)])   # the truth flips the sampled worlds' choice
         self.assertEqual((by_rung(low)['R3'], by_rung(low)['R3true']), (1, 0))
         self.assertEqual(summary['rungs']['R3true']['decided'], 1)
+        self.assertEqual(got['R1'], L.build([true_row()], 'A')[0]['R1'][0]['action'])   # mc_ladder_rungs' R1 on the true row
+        self.assertEqual(got['R1'], 1 if statistics.fmean([true] + reply[1:]) > 0 else 0)
         for r in out.values():self.assertEqual((r[0]['kind'], r[0]['ordinal'], r[0]['target'], r[0]['greedy_action']), ('foulplay', 7, 3, 0))
 
     def test_self_roots_use_the_champion_prior_and_the_manifest(self):
@@ -108,7 +110,7 @@ class WorldRungTests(unittest.TestCase):
         out, _, _ = M.build([sampled_row()], 'foulplay')
         self.assertEqual(sorted(out), ['R3'])   # no true rows, no weights: R3 alone
         out, _, _ = M.build([sampled_row()], 'foulplay', [true_row(ordinal=8)], weights({}))
-        self.assertEqual(reasons(out), dict(R3=None, R3true='true_row_missing', R3true_ins='true_row_missing', R3or_active='true_row_missing',
+        self.assertEqual(reasons(out), dict(R3=None, R1='true_row_missing', R3true='true_row_missing', R3true_ins='true_row_missing', R3or_active='true_row_missing',
                                             R3or_seen='true_row_missing',
                                             **{'R3rw_b0.5': 'world_weights_missing', 'R3rw_b1': 'world_weights_missing'}))
         bad = true_row();bad['worlds'][0]['kernel_seed'] = 999
@@ -136,6 +138,19 @@ class WorldRungTests(unittest.TestCase):
         self.assertEqual((summary['r3_check']['compared'], summary['r3_check']['disagreements']), (1, 1))
         _, _, summary = M.build([sampled_row()], 'foulplay', check_r3=[dict(theirs[0], action=1)])
         self.assertEqual(summary['r3_check']['disagreements'], 0)
+
+
+class TrueKindTests(unittest.TestCase):
+    def test_a_public_true_replay_is_taken_only_with_its_kind(self):
+        public = true_row();public['true_worlds'] = dict(public['true_worlds'], requested_kind='true', kind='true')
+        out, _, summary = M.build([sampled_row()], 'foulplay', [public], true_kind='true')
+        self.assertEqual((by_rung(out)['R1'], by_rung(out)['R3true'], summary['true_kind']), (1, 1, 'true'))
+        out, _, summary = M.build([sampled_row()], 'foulplay', [public])   # the default wants true_private
+        self.assertEqual(reasons(out)['R1'], 'true_row_missing');self.assertEqual(summary['true']['identity_not_true_worlds'], 1)
+        out, _, _ = M.build([sampled_row()], 'foulplay', [true_row()], true_kind='true')
+        self.assertEqual(reasons(out)['R1'], 'true_row_missing')
+        failed = true_row();failed['true_worlds'] = dict(failed['true_worlds'], requested_kind='true', kind='true', built=2)
+        self.assertEqual(reasons(M.build([sampled_row()], 'foulplay', [failed], true_kind='true')[0])['R1'], 'true_worlds_failed')
 
 
 class OracleTests(unittest.TestCase):
@@ -202,7 +217,7 @@ class CliTests(unittest.TestCase):
             with redirect_stdout(io.StringIO()):
                 code = M.main(['rungs', '--kind', 'foulplay', '--sampled', str(d / 's.jsonl'), '--true', str(d / 't.jsonl'), '--out', str(d / 'o')])
             self.assertEqual(code, 0);self.assertEqual(sorted(p.name for p in (d / 'o').iterdir()),
-                                                       ['diag.jsonl', 'rung-R3.jsonl', 'rung-R3or_active.jsonl', 'rung-R3or_seen.jsonl', 'rung-R3true.jsonl',
+                                                       ['diag.jsonl', 'rung-R1.jsonl', 'rung-R3.jsonl', 'rung-R3or_active.jsonl', 'rung-R3or_seen.jsonl', 'rung-R3true.jsonl',
                                                         'rung-R3true_ins.jsonl', 'summary.json'])
             with self.assertRaises(SystemExit):M.main(['rungs', '--kind', 'self', '--sampled', str(d / 's.jsonl'), '--out', str(d / 'p')])
 
