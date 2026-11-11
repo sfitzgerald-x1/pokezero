@@ -93,6 +93,19 @@ class PrepareRootsAdvanceTests(unittest.TestCase):
         for eager, view_b in ((False, True), (True, False)):
             with self.subTest(eager=eager, view_b=view_b):self.run_prepare(eager=eager, peer_view_b=view_b)[0].assert_not_called()
 
+    def test_a_refused_root_advances_the_fold_too_with_the_request_s_owner(self):
+        for eager, called in ((True, True), (False, False)):
+            constructor = SimpleNamespace(eager_peer_fold=eager, prepare=Mock(side_effect=ValueError('PUBLIC_SUBSTITUTE_NOT_FRESH_OR_PASSED')))
+            r = dict(request(9), owner='p2', request_id='x')
+            with self.subTest(eager=eager), patch.object(cw, 'advance_peer_fold') as advance, patch.object(cw, 'constructor_binding', return_value='stamp'):
+                out = cw.prepare_roots(constructor, [r], device=None, peer_view_b=True)
+                self.assertEqual((type(out[0]).__name__, out[0].detail), ('RootRefusal', 'PUBLIC_SUBSTITUTE_NOT_FRESH_OR_PASSED'))   # the refusal as before
+                if called:advance.assert_called_once_with(constructor, r, 1)
+                else:advance.assert_not_called()
+        constructor = SimpleNamespace(eager_peer_fold=True, prepare=Mock(side_effect=ValueError('MALFORMED_SEARCH_REQUEST')))
+        with patch.object(cw, 'advance_peer_fold') as advance, patch.object(cw, 'constructor_binding', return_value='stamp'):
+            cw.prepare_roots(constructor, [dict(request(9), owner='p3')], device=None, peer_view_b=True);advance.assert_not_called()   # no owner: no fold
+
 
 if __name__ == '__main__':
     unittest.main()

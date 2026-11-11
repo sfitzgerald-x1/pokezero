@@ -1030,7 +1030,7 @@ def _peer_fold(constructor,request,owner,catalog,functions):
 
 
 def advance_peer_fold(constructor,request,owner):
-    """Eager peer fold (the constructor's eager_peer_fold; prepare_roots, every prepared root with the redaction on): fold this
+    """Eager peer fold (the constructor's eager_peer_fold; prepare_roots, every root with the redaction on, refused ones too): fold this
     request's peer wire lines now, so the battle's first root with a private reveal (peer_wire_belief) folds only its own new
     lines instead of the whole battle from scratch (the live 1-2 s prepare spikes). The fold, and so every belief read from it,
     is the one peer_wire_belief makes: B2's fold is the same state however the lines are split across feeds (each feed folds
@@ -1432,6 +1432,9 @@ def prepare_roots(constructor,protocol_requests,*,start_index=0,device='cpu',red
             rid=request.get('request_id')if isinstance(request,dict)else None;clock=time.perf_counter()
             try:result=constructor.prepare(request,start_index+i)
             except ROOT_ERRORS as error:
+                owner={'p1':0,'p2':1}.get(request.get('owner'))if isinstance(request,dict)else None
+                if redact_private_reveals and getattr(constructor,'eager_peer_fold',False)and owner is not None:
+                    advance_peer_fold(constructor,request,owner)   # a refused root's lines extend the battle too: no catch-up spike after a run of refusals
                 out.append(RootRefusal(rid,str(getattr(error,'kind',type(error).__name__)),str(getattr(error,'detail',error)),time.perf_counter()-clock,stamp))
                 continue
             # Outside the refusal net: a changed prepare() interface raises here instead of refusing every root.
