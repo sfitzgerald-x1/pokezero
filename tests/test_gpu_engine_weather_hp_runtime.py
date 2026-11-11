@@ -10,6 +10,7 @@ import numpy as np
 from gpu_engine import engine_retained_encoder_driver as driver,engine_request_source as source
 from gpu_engine import engine_own_facts as own,source_provenance,transition
 import test_gpu_engine_engine_weather_public as fixture
+from gpu_engine_eager_frame import eager_frame
 
 
 class WeatherHPRuntimeTests(unittest.TestCase):
@@ -37,7 +38,8 @@ class WeatherHPRuntimeTests(unittest.TestCase):
     def advance(self,session):
         before=session.state;record=driver._checked(self.prepared);actual=record['frame'];frames=[]
         def capture(*args):
-            frame=actual(*args);frames.append(frame);return frame
+            # The prepared frame closure's own body, run eagerly (no whole-step compile).
+            frame=getattr(actual,'__wrapped__',actual)(*args);frames.append(frame);return frame
         record['frame']=capture
         try:result=driver.advance(session,j.tile(j.array([[0,8]],j.int32),(2,1)),chance_inputs=self.f().chance())
         finally:record['frame']=actual
@@ -87,37 +89,35 @@ class WeatherHPRuntimeTests(unittest.TestCase):
         from gpu_engine import engine_weather_hp_segment as segment
         # Fault injection at the internal source seam: a producer returns a
         # sticky refusal with no HP line. A safe final state must not erase it.
-        session=self.construct();r=driver._checked(self.prepared);r['frame'].clear_cache()
+        session=self.construct()
         actual=segment.order_segment_device
         def latch(*args,**kwargs):
             result=actual(*args,**kwargs)
             return result._replace(record=result.record._replace(
                 qualified_birth=j.zeros_like(result.record.qualified_birth)))
-        try:
+        # The frame runs eagerly, so the patch reaches the producer on the first frame and is gone
+        # on the second (the compiled frame needed clear_cache() for each).
+        with eager_frame(self.prepared):
             with patch.object(segment,'order_segment_device',side_effect=latch):
                 result=driver.advance(session,j.full((2,2),8,j.int32),chance_inputs=self.f().chance())
             self.assertEqual(result.state.core.weather_profile.qualified_birth.tolist(),[False,False])
             # A later safe frame retains the false origin after the fault hook
             # is removed. No synthetic callback result qualifies model input.
-            r['frame'].clear_cache()
             later=driver.advance(session,j.full((2,2),4,j.int32),chance_inputs=self.f().chance())
             self.assertEqual(later.state.core.weather_profile.qualified_birth.tolist(),[False,False])
-        finally:r['frame'].clear_cache()
 
     def test_missing_both_actual_hp_receipts_refuses_and_rolls_back_public(self):
         from gpu_engine import engine_weather_hp_segment as segment
         session=self.construct();before=session.state
-        r=driver._checked(self.prepared);r['frame'].clear_cache();actual=segment.order_segment_device
+        actual=segment.order_segment_device
         def omit(tape,before_count,*args,**kwargs):
             # Fault injection at the real post-write seam, with actual states.
             return actual(tape._replace(count=before_count),before_count,*args,**kwargs)
-        try:
-            with patch.object(segment,'order_segment_device',side_effect=omit):
-                result,frame=self.advance(session)
-            self.assertTrue(bool(((frame.callbacks.refusal&256)!=0).all()))
-            self.assertEqual(result.state.core.admitted.tolist(),[False,False])
-            for old,new in zip(before.observers,result.state.observers):self.f().same(old.retained,new.retained)
-        finally:r['frame'].clear_cache()
+        with patch.object(segment,'order_segment_device',side_effect=omit):
+            result,frame=self.advance(session)
+        self.assertTrue(bool(((frame.callbacks.refusal&256)!=0).all()))
+        self.assertEqual(result.state.core.admitted.tolist(),[False,False])
+        for old,new in zip(before.observers,result.state.observers):self.f().same(old.retained,new.retained)
 
 
 if __name__=='__main__':unittest.main()

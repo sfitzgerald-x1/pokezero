@@ -65,13 +65,14 @@ class RegisteredLeftoversDriverTests(unittest.TestCase):
 
     def frame(self, core, *, mask=None):
         b = core.engine.hp.shape[0]
-        return driver._checked(self.prepared)['frame'](core,
+        # The prepared frame closure's own body, run eagerly (no whole-step compile).
+        return driver._checked(self.prepared)['frame'].__wrapped__(core,
             j.tile(j.array([[0, 8]], j.int32), (b, 1)), self.chance(b), mask)
 
     def test_actual_strict_cached_speed_defers_only_new_helper_latch(self):
         session, core = self.construct()
         actual = self.frame(core)
-        diagnostic = driver._checked(self.f.prepared)['frame'](core,
+        diagnostic = driver._checked(self.f.prepared)['frame'].__wrapped__(core,
             j.tile(j.array([[0, 8]], j.int32), (2, 1)), self.chance())
         self.same(actual.state, diagnostic.state)
         self.assertTrue(bool(actual.weather_profile.qualified_birth.all()))
