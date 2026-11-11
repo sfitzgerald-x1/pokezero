@@ -82,6 +82,11 @@ class _Refused(Exception):
     def __init__(self,cause,message):super().__init__(message);self.cause=cause
 
 
+# A battle's end, sent once its game's result is recorded (Client.end): scripts/depthn_live_proxy.BATTLE_END_SCHEMA (a test pins
+# the two equal). The proxy answers it and stops counting the battle toward its GPU's load; it never reaches a search server.
+BATTLE_END_SCHEMA='depthn-live.battle-end.v1'
+
+
 class Client:
     """One connection per request to ONE address resolved here, never per request.
 
@@ -99,6 +104,7 @@ class Client:
         found=socket.getaddrinfo(host,port,type=socket.SOCK_STREAM)
         self.family,_,_,_,self.address=next((x for x in found if x[0]==socket.AF_INET),found[0])
         self.host=host;self.rung=rung;self.deadline=float(deadline_seconds);self.reserve=float(reserve_seconds)
+        self.battles=[]   # (battle_id, owner) of every battle this client searched, in order: end() closes them at the proxy
 
     def budget(self,started):
         """Deadline from the decision's start (encode), less elapsed and the reserve."""
@@ -106,6 +112,7 @@ class Client:
 
     def request(self,snapshot,*,decision_index,started):
         budget=self.budget(started)
+        if (snapshot.battle_id,snapshot.owner)not in self.battles:self.battles.append((snapshot.battle_id,snapshot.owner))
         request=dict(schema=wire.SCHEMA,request_id=uuid.uuid4().hex,battle_id=snapshot.battle_id,owner=snapshot.owner,
             stream_id=snapshot.stream_id,decision_index=decision_index,generation=snapshot.generation,
             prefix_sha256=snapshot.prefix_sha256,lines=list(snapshot.lines),own_request_line=snapshot.own_request_line,
@@ -122,6 +129,31 @@ class Client:
         except OSError as error:response=self._refused(request,'connection_error',error)
         except Exception as error:response=self._refused(request,'server_error',error)
         return dict(response,budget_seconds=budget,client_wall_seconds=clock()-sent)
+
+    def end(self,*,timeout_seconds=2.):
+        """One battle end frame per battle this client searched, for the proxy's GPU load count (scripts/depthn_live_proxy). Called
+        after the game's result is recorded, never on a decision's path. Best effort: never raises; returns each battle's status
+        (ENDED, UNKNOWN_BATTLE, a direct server's own answer, or the error's type name)."""
+        out=[]
+        for battle_id,owner in self.battles:
+            try:
+                raw=json.dumps(dict(schema=BATTLE_END_SCHEMA,battle_id=battle_id,owner=owner),sort_keys=True).encode()
+                with socket.socket(self.family,socket.SOCK_STREAM)as stream:
+                    stream.settimeout(timeout_seconds);stream.connect(self.address);stream.sendall(struct.pack('!I',len(raw))+raw)
+                    head=b''
+                    while len(head)<4:
+                        piece=stream.recv(4-len(head))
+                        if not piece:raise ConnectionError('closed without an answer')
+                        head+=piece
+                    n=struct.unpack('!I',head)[0];body=b''
+                    if not 0<n<=65536:raise ValueError('bounded answer required')
+                    while len(body)<n:
+                        piece=stream.recv(n-len(body))
+                        if not piece:raise ConnectionError('closed mid-answer')
+                        body+=piece
+                    answer=json.loads(body);out.append(str(answer.get('status')if isinstance(answer,dict)else answer))
+            except Exception as error:out.append(type(error).__name__)
+        return out
 
     def _exchange(self,packet,sent,budget):
         def remaining():

@@ -145,6 +145,23 @@ class ClientTests(unittest.TestCase):
         self.assertEqual(request['lines'], list(snapshot().lines)); self.assertEqual(request['request_id'], response['request_id'])
         self.assertTrue(0 < request['budget_seconds'] <= 2.85); self.assertEqual(response['budget_seconds'], request['budget_seconds'])
 
+    def test_end_closes_each_searched_battle_once_after_the_game_and_never_raises(self):
+        def reply(request, conn):
+            if request.get('schema') != live.BATTLE_END_SCHEMA:return conn.sendall(wire.encode(complete(request)))
+            body = json.dumps(dict(schema=live.BATTLE_END_SCHEMA, battle_id=request['battle_id'], owner=request['owner'], status='ENDED')).encode()
+            conn.sendall(struct.pack('!I', len(body))+body)
+        with FakeServer(reply) as server:
+            client = live.Client('127.0.0.1', server.port, rung='DN2W8')
+            for i in (3, 4):client.request(snapshot(), decision_index=i, started=live.clock())
+            self.assertEqual(client.battles, [('literal', 'p1')])   # one battle, however many decisions
+            self.assertEqual(client.end(), ['ENDED'])
+            self.assertEqual(server.requests[-1], dict(schema=live.BATTLE_END_SCHEMA, battle_id='literal', owner='p1'))
+            self.assertEqual(server.connections, 3)   # two decisions, one end frame
+        self.assertEqual(live.Client('127.0.0.1', 1, rung='DN2W8').end(), [])   # nothing searched: nothing sent
+        probe = socket.create_server(('127.0.0.1', 0)); port = probe.getsockname()[1]; probe.close()
+        gone = live.Client('127.0.0.1', port, rung='DN2W8'); gone.battles.append(('b', 'p2'))
+        self.assertEqual(gone.end(timeout_seconds=.5), ['ConnectionRefusedError'])   # never raises: the result is already recorded
+
     def test_every_server_refusal_cause_passes_through(self):
         for cause in live.SERVER_CAUSES:
             with FakeServer(send(lambda r, c=cause: refused(r, c))) as server:

@@ -1874,7 +1874,11 @@ class CalibrationTests(unittest.TestCase):
             for p, srv in ((packets[0], server), (packets[1], None)):   # RAW with a server, a search arm without one
                 with self.subTest(p['arm']), self.assertRaisesRegex(ValueError, 'RAW runs without a server'):
                     asyncio.run(panel.calibration_worker(wire(p, srv), expected_pair=(1, 2), original='o', runtime_class=Runtime))
-            self.assertEqual(asyncio.run(panel.calibration_worker(wire(packets[1], server), expected_pair=(1, 2), original='o', runtime_class=Runtime)), 0)
+            ended = []   # the search arm's battle end frames: once, after the game's result is recorded
+            record = lambda c, **k: ended.append((self.root/'results'/f"{request['cell']['ordinal']}.json").exists()) or []
+            with patch('pokezero.depthn_live_actor.Client.end', autospec=True, side_effect=record):
+                self.assertEqual(asyncio.run(panel.calibration_worker(wire(packets[1], server), expected_pair=(1, 2), original='o', runtime_class=Runtime)), 0)
+            self.assertEqual(ended, [True])
         client = seen[-1]['client']
         self.assertEqual((seen[-1]['arm'], client.rung, client.deadline, client.reserve), ('DN2W8', 'DN2W8', 5., .2))   # not the Client defaults
         claim = json.loads((self.root/'claims'/f"{request['cell']['ordinal']}.json").read_bytes())
