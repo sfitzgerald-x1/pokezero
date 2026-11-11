@@ -12,6 +12,7 @@ from gpu_engine import engine_full_v4_event_device as d
 from gpu_engine import engine_lifecycle_callbacks as life, engine_public_event_device as base, engine_own_facts as own
 from gpu_engine import public_wire, public_inputs as inputs, v4_encoder as v4, transition
 import test_gpu_engine_engine_own_facts as fixture
+import gpu_engine_shared_public_jits as shared
 
 
 class FullV4EventDeviceTests(unittest.TestCase):
@@ -45,7 +46,9 @@ class FullV4EventDeviceTests(unittest.TestCase):
 
     def chance(self):
         draws = j.zeros((2, 2, 12), j.int32).at[:, :, 4].set(1)
-        return transition.ChanceInputs(draws, *[j.zeros((2, 2), j.int32) for _ in range(4)], j.zeros(2, j.int32))
+        zeros = j.zeros((2, 2), j.int32)
+        return transition.ChanceInputs(draws=draws, phazing=zeros, secondary=zeros, sleep_talk=zeros,
+            entry_ties=zeros, initial_tie=j.zeros(2, j.int32))
 
     def step(self, frame, actions):
         return life.trace_step(frame.state, j.array(actions, j.int32), self.f.table,
@@ -57,7 +60,8 @@ class FullV4EventDeviceTests(unittest.TestCase):
     def reference(self, stream, frame, wire_states):
         # Test-only strings from the separately reviewed causal typed producer.
         # The adapter is NOT used to choose controls, metadata or ordering.
-        semantic = d.causal.project_frame(stream.causal, frame, self.compiled.causal.device)
+        # Compiled once per module (an eager call recompiles the projector's scan every time).
+        semantic = shared.lower(self.compiled.causal.device)(stream.causal, frame)
         self.assertEqual(semantic.error.tolist(), [0, 0])
         projections = []; new_states = []
         statuses = ('', ' slp', ' par', ' brn', ' frz', ' psn', ' tox')
@@ -93,7 +97,7 @@ class FullV4EventDeviceTests(unittest.TestCase):
 
     def compare(self, stream, frame, current, wire_states):
         reference, new_wire = self.reference(stream, frame, wire_states)
-        expected, error = v4.fold_chunk(current, reference, self.f.catalog)
+        expected, error = shared.fold(self.f.catalog)(current, reference)
         self.assertEqual(error.tolist(), [0, 0])
         result = self.fast(stream, frame, current)
         self.assertEqual(result.projection.error.tolist(), [0, 0])
@@ -208,7 +212,8 @@ class FullV4EventDeviceTests(unittest.TestCase):
         expanded = tape._replace(words=repeated(tape.words), event_turn=repeated(tape.event_turn),
             event_phase=repeated(tape.event_phase), event_generation=repeated(tape.event_generation),
             switch_details=repeated(tape.switch_details), count=j.full(2, len(selected), j.int32))
-        over = d.project_frame(result.projection.state, frame._replace(callbacks=expanded), self.compiled.device)
+        project = shared.project(self.compiled.device)   # one compile for both frames below (same shapes)
+        over = project(result.projection.state, frame._replace(callbacks=expanded))
         self.assertFalse(bool((over.refusal & d.engine.OVERFLOW).any()))
         self.assertEqual(over.error.tolist(),[0,0])
         self.assertTrue(bool(over.chunk.more.all()))
@@ -219,7 +224,7 @@ class FullV4EventDeviceTests(unittest.TestCase):
                 int(over.state.sequence[row])+1))
         # Sequence bound refuses ALL generated rows, including a valid prefix.
         huge = result.projection.state._replace(sequence=j.full(2, 2**31-3, j.int32))
-        refused = d.project_frame(huge, frame, self.compiled.device)
+        refused = project(huge, frame)
         self.assertFalse(bool(refused.chunk.words.any()))
         self.assertFalse(bool(refused.chunk.valid.any()))
         self.assertFalse(bool(refused.frames.valid.any()))

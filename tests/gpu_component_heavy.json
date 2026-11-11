@@ -27,14 +27,6 @@
    "completes_on_hosted": true
   },
   {
-   "module": "test_gpu_engine_depthn_oracle",
-   "reason": "wall",
-   "hosted_median_min": 15.0,
-   "isolated_wall_min": 11.8,
-   "isolated_peak_gib": 1.8,
-   "completes_on_hosted": true
-  },
-  {
    "module": "test_gpu_engine_direct_ko_owning",
    "reason": "wall",
    "hosted_median_min": 16.2,
@@ -51,22 +43,6 @@
    "completes_on_hosted": true
   },
   {
-   "module": "test_gpu_engine_engine_full_v4_event_device",
-   "reason": "wall+memory",
-   "hosted_median_min": 14.0,
-   "isolated_wall_min": 11.8,
-   "isolated_peak_gib": 12.4,
-   "completes_on_hosted": true
-  },
-  {
-   "module": "test_gpu_engine_engine_lum_public",
-   "reason": "wall",
-   "hosted_median_min": 11.9,
-   "isolated_wall_min": 10.3,
-   "isolated_peak_gib": 11.3,
-   "completes_on_hosted": true
-  },
-  {
    "module": "test_gpu_engine_engine_retained_encoder_driver",
    "reason": "memory",
    "hosted_median_min": 6.0,
@@ -80,14 +56,6 @@
    "hosted_median_min": 13.9,
    "isolated_wall_min": 10.2,
    "isolated_peak_gib": 17.1,
-   "completes_on_hosted": true
-  },
-  {
-   "module": "test_gpu_engine_engine_weather_public",
-   "reason": "wall+memory",
-   "hosted_median_min": 18.2,
-   "isolated_wall_min": 13.9,
-   "isolated_peak_gib": 13.9,
    "completes_on_hosted": true
   },
   {
@@ -139,19 +107,19 @@
    "completes_on_hosted": true
   },
   {
-   "module": "test_gpu_engine_leftovers_public",
-   "reason": "wall+memory",
-   "hosted_median_min": 27.3,
-   "isolated_wall_min": 21.9,
-   "isolated_peak_gib": 21.5,
-   "completes_on_hosted": true
-  },
-  {
    "module": "test_gpu_engine_ordinary_intimidate_owning",
    "reason": "wall",
    "hosted_median_min": null,
    "isolated_wall_min": 16.2,
    "isolated_peak_gib": 10.9,
+   "completes_on_hosted": false
+  },
+  {
+   "module": "test_gpu_engine_owning_drain_end_to_end",
+   "reason": "wall+memory",
+   "hosted_median_min": null,
+   "isolated_wall_min": 69.5,
+   "isolated_peak_gib": 84.6,
    "completes_on_hosted": false
   },
   {
@@ -179,14 +147,6 @@
    "completes_on_hosted": false
   },
   {
-   "module": "test_gpu_engine_status_residual_public",
-   "reason": "wall+memory",
-   "hosted_median_min": 14.6,
-   "isolated_wall_min": 11.7,
-   "isolated_peak_gib": 13.2,
-   "completes_on_hosted": true
-  },
-  {
    "module": "test_gpu_engine_status_residual_runtime",
    "reason": "wall+memory",
    "hosted_median_min": null,
@@ -208,14 +168,6 @@
    "hosted_median_min": 21.9,
    "isolated_wall_min": 15.8,
    "isolated_peak_gib": 12.0,
-   "completes_on_hosted": true
-  },
-  {
-   "module": "test_gpu_engine_toxic_residual_public",
-   "reason": "wall",
-   "hosted_median_min": 11.3,
-   "isolated_wall_min": 8.1,
-   "isolated_peak_gib": 10.3,
    "completes_on_hosted": true
   }
  ]

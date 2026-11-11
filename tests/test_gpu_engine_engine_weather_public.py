@@ -14,6 +14,7 @@ from gpu_engine import transition as t,engine_lifecycle_callbacks as life,engine
 from gpu_engine import engine_public_event_device as base,engine_full_v4_event_device as full
 from gpu_engine import engine_weather_callbacks as weather_callbacks,weather,public_wire,v4_encoder as v4
 import test_gpu_engine_engine_status_callbacks as fixture
+import gpu_engine_shared_public_jits as shared
 
 
 class WeatherPublicTests(unittest.TestCase):
@@ -23,7 +24,8 @@ class WeatherPublicTests(unittest.TestCase):
     step=fixture.StatusCallbacksTests.step
     same=fixture.StatusCallbacksTests.same
     start=fixture.StatusCallbacksTests.start
-    compare=fixture.StatusCallbacksTests.compare
+    # The same compare, with its causal projection and reference folds compiled once (not once per call).
+    compare=shared.compare(fixture)
 
     @classmethod
     def setUpClass(cls):
@@ -191,7 +193,7 @@ class WeatherPublicTests(unittest.TestCase):
             bad=repeated._replace(callbacks=repeated.callbacks._replace(words=words))
             # Each mutation retains a valid typed receipt grammar; the full
             # preceding declaration/observed-weather join must refuse it.
-            lower=full.causal.project_frame(accepted.projection.state.causal,bad,self.compiled.causal.device)
+            lower=shared.lower(self.compiled.causal.device)(accepted.projection.state.causal,bad)
             self.assertEqual(lower.error.tolist(),[0,0])
             refused=self.fast(accepted.projection.state,bad,accepted.public)
             self.assertNotEqual(int(refused.projection.error[0]),0)
