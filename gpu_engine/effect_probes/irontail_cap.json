@@ -1,7 +1,7 @@
 {
  "schema": "pokezero.effect_probe.scenario.v1",
  "move": "irontail_cap",
- "note": "B Iron Tail at the stage floor: a level-40 Persian's Iron Tail drops Snorlax's Def on each of seven hits (the roll pinned at 0); from -6 the drop is a no-op (boost() caps it, no line). Snorlax's damage taken grows with each stage. A miss (accuracy 75) on the last step leaves -6 too.",
+ "note": "B Iron Tail at the stage floor: a level-40 Persian's Iron Tail drops Skarmory's Def on each of seven hits (the roll pinned at 0); Keen Eye guards only accuracy (data/abilities.ts keeneye onTryBoost), and from -6 the drop is a no-op (boost() caps it, no line). Skarmory's damage taken grows with each stage. A miss (accuracy 75) on the last step leaves -6 too.",
  "teams": [
   [
    {
@@ -74,14 +74,14 @@
   ],
   [
    {
-    "species": "Snorlax",
+    "species": "Skarmory",
     "moves": [
      "splash",
-     "rest",
-     "curse",
-     "bodyslam"
+     "protect",
+     "spikes",
+     "peck"
     ],
-    "ability": "Thick Fat",
+    "ability": "Keen Eye",
     "item": "Leftovers"
    },
    {
@@ -107,17 +107,6 @@
     "item": "Leftovers"
    },
    {
-    "species": "Skarmory",
-    "moves": [
-     "splash",
-     "protect",
-     "spikes",
-     "peck"
-    ],
-    "ability": "Keen Eye",
-    "item": "Leftovers"
-   },
-   {
     "species": "Swampert",
     "moves": [
      "splash",
@@ -137,6 +126,17 @@
      "rest"
     ],
     "ability": "Pressure",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Celebi",
+    "moves": [
+     "splash",
+     "psychic",
+     "recover",
+     "calmmind"
+    ],
+    "ability": "Natural Cure",
     "item": "Leftovers"
    }
   ]
