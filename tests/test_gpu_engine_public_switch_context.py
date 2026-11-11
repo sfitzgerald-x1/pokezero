@@ -30,7 +30,8 @@ class SwitchContextTests(unittest.TestCase):
             return packet
         f.request=request
         cls.f,cls.j,cls.jax,cls.catalog=f,f.j,f.jax,catalog
-        cls.step=cls.jax.jit(lambda s,c:f.e.fold_chunk(s,c,catalog))
+        # One compiled fold and encode for this catalog, shared by every test and every module built on it.
+        f.shared_jit=True;cls.step=f.shared()[0]
         cls.lines=[*f.public.prefix,'|-ability|p2a: Absol|Pressure',
             '|switch|p1a: Gardevoir|Gardevoir, L80|100/100','|switch|p1a: Nick|Snorlax, L80|100/100',
             '|-boost|p2a: Absol|atk|1','|-damage|p2a: Absol|80/100','|',
@@ -117,7 +118,7 @@ class SwitchContextTests(unittest.TestCase):
         self.assertEqual(state.context.switches.side.tolist(),[0])
         before=[np.asarray(value).copy() for value in self.jax.tree.leaves(state)]
         own=self.f.e.parse_own_requests(self.catalog,[self.f.request(1)],owner_sides=[1])
-        encode=self.jax.jit(lambda s:self.f.e.encode(s,own,self.catalog,observer_sides=self.j.array([1],self.j.int32)))
+        shared=self.f.shared()[1];encode=lambda s:shared(s,own,self.j.array([1],self.j.int32))
         first=encode(state);second=encode(state)
         self.assertEqual(first.observation.admitted.tolist(),[True])
         for x,y in zip(self.jax.tree.leaves(first),self.jax.tree.leaves(second)):np.testing.assert_array_equal(x,y)
