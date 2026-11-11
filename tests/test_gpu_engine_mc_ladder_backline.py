@@ -26,9 +26,7 @@ def make(depth1, lanes, parties, logits=None, cells=None, refused=None, **extra)
 
 
 def cells_at(*forced):
-    grid = [[False] * 9 for _ in range(9)]
-    for a, b in forced:grid[a][b] = True
-    return dict(opp_forced=grid, own_forced=[[False] * 9 for _ in range(9)], terminal=[[False] * 9 for _ in range(9)])
+    return dict(opp_forced=[list(x) for x in forced], own_forced=[], terminal=[])
 
 
 def actions(out):
@@ -38,11 +36,64 @@ def actions(out):
 SWITCHY = [{0: (0., 0.), 1: (0., 1.)}, {0: (0., 0.), 1: (0., -1.)}]   # action 1 pays +1 / -1 on reply 1, 0 on reply 0
 
 
+THREE = [{0: (0., 0., 0.), 1: (.2, .9, -.6)}, {0: (0., 0., 0.), 1: (.1, -.4, .5)}]   # three kept replies
+
+
+def three_lanes(raw, logits):
+    """Kept replies 0, 1 and 2 in every world (lanes 1 and 2: unseen switches), with the given per-world reply logits."""
+    for world, lg in zip(raw['worlds'], logits):
+        world['depth1']['kept'] = [b < 3 for b in range(9)];world['reply_peer_logits'] = list(lg) + [0.] * 6
+    return raw
+
+
 class BacklineRungTests(unittest.TestCase):
-    def test_r3sw_is_r3(self):
+    def test_r3sw_is_r3_and_the_check_counts_it(self):
         raw = make(D1, [['move:tackle', 'switch:blissey']] * 3, [[SKARM, BLISSEY], [SKARM, CHANSEY], [SKARM, BLISSEY]])
+        r3 = L.build([raw], 'C')[0]['R3'][0]
+        out, summary = M.build([raw], 'foulplay', check_r3=[r3])
+        self.assertEqual(actions(out)['R3sw'], r3['action']);self.assertEqual(summary['r3_check'], dict(compared=1, disagreements=0, examples=[]))
+        _, summary = M.build([raw], 'foulplay', check_r3=[dict(r3, action=1 - r3['action'])])
+        self.assertEqual(summary['r3_check']['disagreements'], 1)
+
+    def test_prior_average_of_identical_worlds_is_r3_with_two_unequal_unseen_lanes(self):
+        lanes = [['move:tackle', 'switch:blissey', 'switch:chansey']] * 2;parties = [[SKARM, BLISSEY, dict(CHANSEY, slot=2)]] * 2
+        logits = [[0., 2., -1.], [0., 2., -1.]]   # one prior in both worlds, unequal over the two unseen switches
+        raw = three_lanes(make([THREE[0]] * 2, lanes, parties, logits=logits), logits)
+        got = actions(M.build([raw], 'foulplay')[0]);self.assertEqual(got['R3pa'], got['R3sw'])
+        p = M.prices_of(M.depth1_worlds(raw), True)[0];labs = M.labels(raw['worlds'][0], {'skarmory'})
+        pa = M.prior_average([p, p], [labs, labs], [.5, .5])[0];own = M.prior(p)
+        for b in own:self.assertAlmostEqual(pa[b], own[b], places=12)   # proportional split: the world keeps its own prior
+
+    def test_more_than_one_unseen_lane_lane_and_pool_differ(self):
+        lanes = [['move:tackle', 'switch:blissey', 'switch:chansey']] * 2;parties = [[SKARM, BLISSEY, dict(CHANSEY, slot=2)]] * 2
+        logits = [[0., 0., 0.], [0., 0., 0.]]
+        raw = three_lanes(make(THREE, lanes, parties, logits=logits), logits)
+        prices = M.prices_of(M.depth1_worlds(raw), True);labs = [M.labels(w, {'skarmory'}) for w in raw['worlds']]
+        legal = tuple(a in (0, 1) for a in range(9));unseen = M.unseen_lanes(prices, labs)
+        lane = M.lane_means(prices, unseen, legal, [[0, 1], [0, 1]])
+        self.assertAlmostEqual(lane[0, 1, 1], (.9 - .4) / 2);self.assertAlmostEqual(lane[0, 1, 2], (-.6 + .5) / 2)
+        pooled = M.switch_rungs(prices, labs, legal, [[0, 1], [0, 1]])['R3swavg_pool']
+        self.assertAlmostEqual(pooled[0].joint_values[1][1], (.9 - .6 - .4 + .5) / 4);self.assertAlmostEqual(pooled[1].joint_values[1][2], (.9 - .6 - .4 + .5) / 4)
+
+    def test_switch_averages_keep_unpriced_cells_unpriced(self):
+        raw = make(SWITCHY, [['move:tackle', 'switch:blissey'], ['move:tackle', 'switch:chansey']], [[SKARM, BLISSEY], [SKARM, CHANSEY]], logits=[LANE1, LANE0])
+        raw['worlds'][0]['depth1']['grid'][1][1] = None   # world 0's action-1 cell against the switch: unpriced
         out, _ = M.build([raw], 'foulplay')
-        self.assertEqual(actions(out)['R3sw'], L.build([raw], 'C')[0]['R3'][0]['action'])
+        for name in ('R3sw', 'R3swavg_lane', 'R3swavg_pool', 'R3swavg_seen'):self.assertEqual(out[name][0]['reason'], 'unpriced_cell')
+
+    def test_seen_groups_follow_the_seen_sets(self):
+        other = dict(SKARM, moves=['spikes', 'toxic', 'drillpeck', 'whirlwind'])
+        raw = make(SWITCHY, [['move:tackle', 'switch:blissey'], ['move:tackle', 'switch:chansey']], [[SKARM, BLISSEY], [other, CHANSEY]],
+                   logits=[LANE1, LANE0])
+        out, summary = M.build([raw], 'foulplay')
+        got = actions(out);self.assertEqual((got['R3swavg_lane'], got['R3swavg_seen']), (0, 1))   # two groups of one: seen = R3
+        self.assertEqual(summary['diagnostics']['seen_group_size'], 1.)
+
+    def test_unlabelled_lanes_refuse(self):
+        raw = make(SWITCHY, [['move:tackle', 'switch:blissey'], ['move:tackle']], [[SKARM, BLISSEY], [SKARM, CHANSEY]])   # world 1's lane 1
+        self.assertEqual({r[0].get('reason') for r in M.build([raw], 'foulplay')[0].values()}, {'lane_unlabelled'})
+        raw = make(SWITCHY, [['move:tackle', 'switch:blissey']] * 2, [[SKARM, BLISSEY], [SKARM, CHANSEY]]);raw['worlds'][1]['kept_matches_peer_legal'] = False
+        self.assertEqual({r[0].get('reason') for r in M.build([raw], 'foulplay')[0].values()}, {'lane_unlabelled'})
 
     def test_switch_average_drops_the_prior_payoff_covariance(self):
         # world 0: 0.9 on the unseen switch, which pays +1; world 1: 0.1 on it, paying -1. Averaging: (.9 - .1) / 2 = .4 > 0 plays 1;
@@ -84,9 +135,21 @@ class BacklineRungTests(unittest.TestCase):
         self.assertEqual(diag['backline'], dict(unseen_mons=1, species_share=0., set_share=0., in_no_world=1.))
         self.assertEqual(set(diag['grid_diff']), {'move', 'switch_unseen'})
         self.assertAlmostEqual(diag['grid_diff']['switch_unseen']['mean_abs'], (0. + .9 + 0. + 1.1) / 4)   # action 1: |.1 - 1|, |.1 + 1|
-        self.assertEqual(diag['grid_diff']['move']['mean_abs'], 0.)
+        self.assertEqual(diag['grid_diff']['move']['mean_abs'], 0.);self.assertEqual(diag['grid_diff']['pairs'], 4)
+        self.assertAlmostEqual(diag['grid_diff']['switch_unseen']['contribution'], (.1 * .9 + .1 * 1.1) / 4)   # the true switch mass .1
         out, _ = M.build([sampled], 'foulplay', [])
         self.assertEqual(out['R3tp'][0]['reason'], 'true_row_missing')
+        shifted = make([{0: (0., 0.), 1: (0., .1)}] * 2, [['move:tackle', 'switch:snorlax']] * 2, [[SKARM, dict(BLISSEY, species='snorlax')]] * 2,
+                       logits=[LANE0, LANE0], true_worlds=dict(TRUE, worlds=2, built=2))
+        shifted['worlds'][1]['kernel_seed'] = 999
+        self.assertEqual(M.build([sampled], 'foulplay', [shifted])[0]['R1sp'][0]['reason'], 'kernel_seed_mismatch')
+        other = make([{0: (0., 0.), 1: (0., .1)}] * 2, [['move:tackle', 'switch:snorlax']] * 2, [[SKARM, dict(BLISSEY, species='snorlax')]] * 2,
+                     logits=[LANE0, LANE0], true_worlds=dict(TRUE, worlds=2, built=2))
+        other['root']['root_logits'] = [0., 1.] + [0.] * 7
+        self.assertEqual(M.build([sampled], 'foulplay', [other])[0]['R3tp'][0]['reason'], 'root_prior_differs')
+        failed = make([{0: (0., 0.), 1: (0., .1)}] * 2, [['move:tackle', 'switch:snorlax']] * 2, [[SKARM, dict(BLISSEY, species='snorlax')]] * 2,
+                      logits=[LANE0, LANE0], true_worlds=dict(TRUE, worlds=2, built=1))
+        self.assertEqual(M.build([sampled], 'foulplay', [failed])[0]['R3tp'][0]['reason'], 'true_worlds_failed')
 
     def test_reweighted_prior_average_and_undecided(self):
         # action 1 pays .3 against the move and -1 against the unseen switch in both worlds: q(1) = .3 pi_bar(move) - pi_bar(switch)
