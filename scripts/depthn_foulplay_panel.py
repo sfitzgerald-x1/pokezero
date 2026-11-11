@@ -108,6 +108,7 @@ def main(argv=None):
         value=panel.preflight_summary(args.directory,dispatch=outcome,server=args.server,cells_per_worker=args.cells_per_worker,code_tree=code_tree)
         path=Path(args.directory)/'preflight.json';panel.write_new(path,value)
         print(json.dumps(dict(path=str(path.resolve()),sha256=panel.sha(value),dispatch=outcome,search_wall_within=value['search_wall_within'],
+            timeouts_within=value['timeouts_within'],refused_within=value['refused_within'],reuse_refusals=value['reuse_refusals'],
             arms={a:dict(first=v['first_decision'],warm_p99=(v['warm']or{}).get('p99'),first_within_warm_p99=v['first_within_warm_p99'],
                 search_wall=v['search_wall'])for a,v in value['arms'].items()})));return 0 if not outcome['failed']else 1
     if args.mode=='move-walls':
