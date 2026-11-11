@@ -150,6 +150,9 @@ class RetainedEncoderDriverTests(unittest.TestCase):
         # jitted frame with the same input signature, sharding and commitment, so a compiled frame would reuse
         # one executable (the eager scope itself fails if the frame compiles).
         self.assertEqual(len(signatures), 2)
+        # Every per-leaf component is populated under the pinned JAX (a missing attribute would make it vacuous).
+        for leaf in signatures[0][3]:
+            self.assertTrue(all(part is not None for part in leaf[2:]), leaf)
         self.assertEqual(signatures[0], signatures[1])
         if self.compiled_frame:
             self.assertEqual(r['frame']._cache_size(), 1)
