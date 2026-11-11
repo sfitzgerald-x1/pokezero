@@ -1,7 +1,7 @@
 """DepthNLiveSearch on the fake engine: Codex's real ProtocolConstructor.prepare (its heavy collaborators faked), the real
 constructor_worlds path and DepthNPricer; the response contract, causes, buckets, sessions and warmup; and the lead's
 equivalence of action_mean_q with search_hedge.averaging."""
-from contextlib import ExitStack
+from contextlib import ExitStack, contextmanager
 from dataclasses import replace
 import hashlib
 import json
@@ -67,6 +67,8 @@ class Codex:
             def reset(self,*,stream_id,battle_id):self.resets.append((stream_id,battle_id))
             def feed(self,lines):self.fed.extend(lines)
             def encode(self,packet,*,owner_side):return dict(legal_action_mask=harness.current[2])
+            @contextmanager
+            def checked_catalog(self):yield self   # the real adapter's once-per-request catalog check (nothing to check here)
         def capture(*,config,contract,lines,address,battle_id,seed):
             harness.captures.append((battle_id,address.frame));out=harness.outcomes[(battle_id,address.frame)]
             if isinstance(out,BaseException):raise out
