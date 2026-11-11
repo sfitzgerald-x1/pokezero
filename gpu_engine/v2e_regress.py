@@ -89,7 +89,12 @@ saves (or no longer saves) the block, like the other saved draws in the 'ko'
 family. A (state.effect_draws, side) change on a cascade lane is accepted only
 when this tree's block equals the design 2.1 derivation (the Stepper's
 effect_ok: the block a deferred step saves, else zero); any other change stays
-unexpected.
+unexpected. Likewise (same pass, a Trick-given Choice Band moving a KO from the
+residual into the action phase): Color Change retypes its holder only when the
+hit leaves it standing (data/abilities.ts colorchange: `if (!target.hp)
+return`), so on a cascade lane a (state.types / trackers.shown_types, side)
+change is accepted only when a Color Change holder on that side fainted this
+step in this tree or (un)fainted relative to the base (RETYPE_LEAVES).
 
 The involvement superset resolves the executed move as the engine does (slot,
 charge, standing or same-turn Encore, Struggle, a resumed queued action, every
@@ -551,6 +556,10 @@ FAMILIES['residual_trackers'] = (
 FAMILIES['terminal'] = (r'^state\.truant_loaf$',
     r"^trackers\.mon_features\['(sleep_skipped_turns|sleep_cant_pending|sleep_usable_pending)'\]$",
     r'^trackers\.public_port\.post_upkeep$', r'^trackers\.negative_items\.')
+# M1 GPU pass: a KO that moved (between the trees or between the action and residual phases) leaves a Color Change
+# holder's type differing: it retypes only when the hit leaves it standing. Accepted per side on a cascade lane only
+# where a holder on that side fainted this step in this tree or (un)fainted relative to the base (retype_ok).
+RETYPE_LEAVES = ('state.types', 'trackers.shown_types')
 # R: a Focus Punch user losing focus (state.volatile's FOCUS_LOST bit) to a hit that now reaches it.
 FAMILIES['focus'] = (r'^state\.volatile$',)
 # Per-mon state a faint may change on the mon that (un)fainted; checked per mon against stored base arrays.
@@ -682,7 +691,9 @@ def lane_verdict(changed, effects, side_axis, *, cascade=None, waive=()):
     may follow a KO), mon_ok=callable(leaf, side) -> a KO_MON_LEAVES leaf differs only on that side's
     (un)fainted mons, a KO_LINK_LEAVES leaf only where link_ok allows, optional families=extra leaf families
     accepted on both sides, e.g. ('residual', 'residual_trackers') on a phase shift, optional effect_ok=[2] bool:
-    this tree's saved effect block equals the design derivation per side (state.effect_draws is accepted only there)).
+    this tree's saved effect block equals the design derivation per side (state.effect_draws is accepted only there),
+    optional retype_ok=[2] bool: a Color Change holder on that side fainted this step here or (un)fainted relative to
+    the base (RETYPE_LEAVES are accepted only there)).
     Returns (unexpected entries, waived entries, entries accepted only as KO consequences)."""
     unexpected, waived, by_ko = [], [], []
     for leaf, side in sorted(changed, key=lambda x: (x[0], -1 if x[1] is None else x[1])):
@@ -700,6 +711,8 @@ def lane_verdict(changed, effects, side_axis, *, cascade=None, waive=()):
                   or (side is not None and leaf in KO_MON_LEAVES + KO_LINK_LEAVES and cascade['mon_ok'](leaf, side))
                   or (side is not None and leaf == EFFECT_DRAWS and cascade.get('effect_ok') is not None
                       and bool(cascade['effect_ok'][side]))
+                  or (side is not None and leaf in RETYPE_LEAVES and cascade.get('retype_ok') is not None
+                      and bool(cascade['retype_ok'][side]))
                   or (side is not None and (leaf.startswith('trackers.') or allowed_leaf(leaf, ('ko_action',)))
                       and bool(cascade['ko_sides'][side])))
             if ko:by_ko.append((leaf, side));continue
@@ -1134,6 +1147,7 @@ def patched_pass(args, *, step_override=None, prepared=None):
     undeclared = sorted(e for e in table if e not in ALLOWED)
     if undeclared:warnings.append(f'effects of other plug-ins without declared allowed fields (any change accepted): {undeclared}')
     tables = context['prepared'];metadata = context['pool'].metadata();vocab = metadata['vocabulary']
+    color_change = [vocab['abilities'].index('colorchange')] if 'colorchange' in vocab.get('abilities', ()) else []
     base_names = manifest['output_names']
     # The replay rule is for the PR that adds public_order (its base pass lacks the leaf); once
     # the base pass has it too (a migrated identity pre), the leaf is compared bitwise.
@@ -1227,6 +1241,7 @@ def patched_pass(args, *, step_override=None, prepared=None):
             bag_index = base_names.index('trackers.public_volatiles') if 'trackers.public_volatiles' in base_names else None
             knocked_pre = np.asarray(named['state.item_knocked'])[:real] if 'state.item_knocked' in named else None
             item_pre = np.asarray(named['state.item'])[:real]
+            holders = np.isin(np.asarray(named['state.ability'])[:real], color_change)       # [L,2,6] Color Change
             faint_base = {};faint_set = set()
             if args.faint_clear:
                 lanes_list = base['faint_lanes'].tolist()
@@ -1300,7 +1315,10 @@ def patched_pass(args, *, step_override=None, prepared=None):
                         else ('terminal',) if terminal else ())
                     # The saved effect block follows the deferral: accepted per side where this tree's block is the derivation.
                     effect_ok = None if result['effect_ok'] is None else np.asarray(result['effect_ok'])[lane]
-                    cascade_info = dict(ko_sides=ko_mons.any(-1), mon_ok=mon_ok, families=families, effect_ok=effect_ok)
+                    # A Color Change holder whose KO moved (this tree's faint this step, or a faint differing from the base).
+                    retype_ok = (holders[lane] & (ko_mons | np.asarray(result['fainted'][lane], bool))).any(-1)
+                    cascade_info = dict(ko_sides=ko_mons.any(-1), mon_ok=mon_ok, families=families, effect_ok=effect_ok,
+                                        retype_ok=retype_ok)
                 unexpected, waived, by_ko = lane_verdict(entries, effects, side_axis, cascade=cascade_info, waive=args.waive or ()) \
                     if changed_rest and effects else ([], [], [])
                 kind = classify(changed, bool(effects), rule_ok, unexpected)

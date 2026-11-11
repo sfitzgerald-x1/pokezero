@@ -304,6 +304,14 @@ class DigestAndRuleTests(unittest.TestCase):
         self.assertEqual((unexpected, by_ko), ([('state.effect_draws', 1)], [('state.effect_draws', 0)]))
         self.assertEqual(lane_verdict({('state.effect_draws', 0)}, effects, None, cascade=cascade)[0], [('state.effect_draws', 0)])
         self.assertEqual(lane_verdict({('state.effect_draws', 0)}, effects, None)[0], [('state.effect_draws', 0)])
+        # A moved KO's Color Change retype (M1 GPU pass): accepted only on a side whose holder's KO moved (retype_ok).
+        retyped = dict(cascade, retype_ok=np.array([False, True]))
+        unexpected, _, by_ko = lane_verdict({('state.types', 0), ('state.types', 1), ('trackers.shown_types', 1)}, effects, None,
+                                            cascade=retyped)
+        self.assertEqual(unexpected, [('state.types', 0)])
+        self.assertEqual(sorted(by_ko), [('state.types', 1), ('trackers.shown_types', 1)])
+        self.assertEqual(lane_verdict({('state.types', 1), ('trackers.shown_types', 1)}, effects, None, cascade=cascade)[0],
+                         [('state.types', 1), ('trackers.shown_types', 1)])
 
 
 @unittest.skipUnless(HAS_JAX, 'requires JAX')
@@ -673,6 +681,48 @@ class EffectAndResidualRuleTests(unittest.TestCase):
         code, report, _ = run('effect-shift-wrong', shift=True, wrong=True)
         self.assertEqual(code, 1)
         self.assertEqual(set(report['by_effect']['curse']['unexpected_fields']), {'state.effect_draws@user', 'state.effect_draws@target'})
+
+    def test_a_moved_ko_retypes_only_a_color_change_holder(self):
+        """M1 GPU pass (shard 176 lane 1687: a Trick-given Choice Band KOs Kecleon in the action phase, so Color Change
+        never retypes it; the base retyped it and it fainted at the residual). A cascade lane accepts a changed type only
+        on a side whose Color Change holder fainted this step here or (un)fainted relative to the base."""
+        import jax
+        import jax.numpy as j
+        from gpu_engine import v2e_regress
+        from gpu_engine.v2e_capture import leaf_paths
+        vocab = dict(VOCAB, abilities=VOCAB['abilities'] + ['colorchange'])
+        cap = self.tmp / 'cap-cc';shards = cap / 'shards';shards.mkdir(parents=True)
+        for k in range(2):
+            s = lanes_state(self.LANES, k)
+            s = s._replace(ability=s.ability.at[:, 0, 3].set(len(vocab['abilities']) - 1))   # side 0's bench mon 3 holds it
+            tree = (s, j.asarray(np.random.default_rng(k).integers(0, 9, (self.LANES, 2)), j.int32), trackers(self.LANES))
+            np.savez_compressed(shards / f'shard-{k:06d}.npz', tick=np.int64(k), level=np.int64(0),
+                **{f'l{i:03d}': np.asarray(x) for i, x in enumerate(jax.tree.leaves(tree))})
+        (cap / 'capture.json').write_text(json.dumps(dict(shards=2, paths=leaf_paths(self.new))))
+        context = dict(self.context, pool=SimpleNamespace(metadata=lambda: dict(vocabulary=vocab)))
+        args = lambda **extra: TwoPassTests.args.__func__(type(self), shards=str(shards), **extra)
+
+        def moved(state, actions, t, *, side=0):
+            out = base_step(state, actions, t);s = out.step.state
+            uses = curse_users(state, actions)
+            hp = s.hp.at[:, side, 3].set(j.where(uses, 0, s.hp[:, side, 3]))                # a bench KO the base never had
+            types = s.types.at[:, side, 3, 0].set(j.where(uses, 9, s.types[:, side, 3, 0]))  # and that mon's type differs
+            return result(s._replace(hp=hp, types=types), out.trackers)
+        base = self.tmp / 'base-cc'
+        code = v2e_regress.base_pass(args(out=base, pad_lanes=self.LANES), step_override=clocked(base_step, even),
+            prepared=(context, self.new))
+        self.assertEqual(code, 0)
+
+        def run(name, side):
+            out = self.tmp / name
+            code = v2e_regress.patched_pass(args(out=out, base=str(base), pr='A1', faint_clear=False),
+                step_override=clocked(lambda s, a, t: moved(s, a, t, side=side), even), prepared=(context, self.new))
+            return code, json.loads((out / 'report.json').read_text()), [json.loads(x) for x in (out / 'changed.jsonl').read_text().splitlines()]
+        code, report, listing = run('retype-holder', 0)
+        self.assertEqual(code, 0, report['counts'])
+        self.assertTrue(listing);self.assertTrue(all('state.types@0' in x['ko_consequences'] for x in listing))
+        code, report, _ = run('retype-no-holder', 1)                                # side 1's mon 3 holds no Color Change
+        self.assertEqual(code, 1);self.assertIn('state.types@target', report['by_effect']['curse']['unexpected_fields'])
 
     def test_terminal_steps_widen_only_where_the_residual_ran_in_one_tree(self):
         import jax.numpy as j
