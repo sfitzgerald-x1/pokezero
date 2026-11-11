@@ -430,6 +430,83 @@ console.log(JSON.stringify(orders));"""
         fact(a.FAINT,1);h.turn_end(c,bonded,bonded._replace(hp=bonded.hp.at[:,1,0].set(0)),j.zeros(2,bool))
         self.compare_active(c.trackers,project(),a)
 
+    def confused(self,state,side,value,slot=0):
+        return state._replace(confusion_counter=state.confusion_counter.at[:,side,slot].set(value))
+
+    def confusion_turn(self,c,a,fact,state,turn):
+        """One TURN while seat 1 is confused: turn_end's CONFUSION_TURNS tick and B2's TURN fact."""
+        h.turn_end(c,state,state,j.ones(2,bool));fact(a.TURN,-1,turn)
+
+    def test_confusion_snap_out_ends_the_bag_entry_and_clock_like_b2(self):
+        """B (design 2.5): Signal Beam's -start adds the confusion bag entry (public_move_state), each TURN ticks
+        CONFUSION_TURNS, a move attempt that does not end it prints -activate (no bag change), and the BeforeMove
+        snap-out's -end removes the entry and resets the clock: hooks.before_move's confusion_end, since
+        public_move_state's before is the post-BeforeMove state. The old device kept both."""
+        from gpu_engine.mechanics import BeforeMove
+        a,catalog,fact,project=self.b2_active()
+        state=self.state();c=h.initialize(state,self.tables.belief);yes=j.ones(2,bool);no=j.zeros(2,bool)
+        fact(a.ARRIVE,0);fact(a.ARRIVE,1)
+        two=self.confused(state,1,2)
+        h.public_move_state(c,state,two,0,j.zeros(2,j.int32),yes);self.b2_lines(a,catalog,fact,'|-start|p2a: Absol|confusion')
+        self.compare_active(c.trackers,project(),a)
+        self.confusion_turn(c,a,fact,two,1)
+        cols=j.asarray(a.NUMERIC_COLUMNS);clock=a.NUMERIC_COLUMNS[a.CORE.index('CONFUSION_TURNS')]
+        expected=project();self.compare_active(c.trackers,expected,a);self.assertTrue(bool(expected.numeric[0,1,clock]))
+        def attempt(before,left):
+            return BeforeMove(before.status[:,1,0],before.status_counter[:,1,0],j.full(2,left,j.int32),yes,no)
+        one=self.confused(state,1,1)
+        h.before_move(c,two,1,attempt(two,1),yes);self.b2_lines(a,catalog,fact,'|-activate|p2a: Absol|confusion')
+        self.compare_active(c.trackers,project(),a)
+        self.confusion_turn(c,a,fact,one,2)
+        stale=c.trackers;self.compare_active(stale,project(),a)
+        h.before_move(c,one,1,attempt(one,0),yes);self.b2_lines(a,catalog,fact,'|-end|p2a: Absol|confusion')
+        expected=project();self.compare_active(c.trackers,expected,a)
+        self.assertFalse(bool(expected.numeric[0,1,cols].any()));self.assertFalse(bool(expected.categorical[0,1,j.asarray(a.CATEGORY_COLUMNS)].any()))
+        self.assertFalse(self.compare_active(stale,expected,a,equal=False))
+
+    def test_confusion_lum_cure_ends_the_bag_entry_and_clock_like_b2(self):
+        """B: a Lum Berry's onEat removes confusion (-enditem|X|Lum Berry|[eat], -end|X|confusion), e.g. one Baton-passed
+        onto a holder: item_changes' confusion_end, from the item window's before/after confusion."""
+        a,catalog,fact,project=self.b2_active()
+        state=self.state();c=h.initialize(state,self.tables.belief);yes=j.ones(2,bool)
+        fact(a.ARRIVE,0);fact(a.ARRIVE,1)
+        held=self.confused(state,1,3)._replace(item=state.item.at[:,1,0].set(1))
+        h.public_move_state(c,state,held,0,j.zeros(2,j.int32),yes);self.b2_lines(a,catalog,fact,'|-start|p2a: Absol|confusion')
+        self.confusion_turn(c,a,fact,held,1)
+        stale=c.trackers;self.compare_active(stale,project(),a)
+        cured=self.confused(held,1,0)._replace(item=held.item.at[:,1,0].set(0))
+        h.item_changes(c,held,cured,yes)
+        self.b2_lines(a,catalog,fact,'|-enditem|p2a: Absol|Lum Berry|[eat]','|-end|p2a: Absol|confusion')
+        expected=project();self.compare_active(c.trackers,expected,a)
+        self.assertFalse(self.compare_active(stale,expected,a,equal=False))
+
+    def test_baton_passed_confusion_and_own_tempo_cure_like_b2(self):
+        """B: Baton Pass carries the confusion bag entry and its clock (B2 ARRIVE with baton_pass keeps transferable
+        entries and their elapsed clock; hooks.baton_copy). An Own Tempo recipient's onUpdate then prints
+        -activate|X|ability: Own Tempo and -end|X|confusion: entry's confusion_end removes both."""
+        from types import SimpleNamespace as NS
+        for own_tempo in (False,True):
+            a,catalog,fact,project=self.b2_active()
+            state=self.state()._replace(ability=j.zeros((2,2,6),j.int32).at[:,1,1].set(1))
+            c=h.initialize(state,self.tables.belief);yes=j.ones(2,bool)
+            fact(a.ARRIVE,0);fact(a.ARRIVE,1)
+            two=self.confused(state,1,2)
+            h.public_move_state(c,state,two,0,j.zeros(2,j.int32),yes);self.b2_lines(a,catalog,fact,'|-start|p2a: Absol|confusion')
+            self.confusion_turn(c,a,fact,two,1)
+            fact(a.ARRIVE,1,slot=1,bp=True)
+            passed=self.confused(two,1,2,slot=1)._replace(active=two.active.at[:,1].set(1))
+            h.install(c,passed,1,yes);h.baton_copy(c,passed,1,two.active[:,1],yes);h.withdraw(c,passed,1,two.active[:,1],yes)
+            carried=project();self.compare_active(c.trackers,carried,a)
+            self.assertTrue(bool(carried.numeric[0,1,a.NUMERIC_COLUMNS[a.CORE.index('CONFUSION_TURNS')]]),own_tempo)
+            n=len(self.metadata['vocabulary']['abilities'])
+            table=NS(weather_ability=j.zeros(n,j.int32),intimidate=j.zeros(n,bool),attack_drop_immune=j.zeros(n,bool),trace=None,
+                own_tempo=j.zeros(n,bool).at[1].set(own_tempo))
+            after=self.confused(passed,1,0,slot=1) if own_tempo else passed
+            h.entry(c,passed,after,1,table,yes)
+            if own_tempo:self.b2_lines(a,catalog,fact,'|-activate|p2a: Gardevoir|ability: Own Tempo','|-end|p2a: Gardevoir|confusion')
+            expected=project();self.compare_active(c.trackers,expected,a)
+            self.assertEqual(bool(expected.categorical[0,1,j.asarray(a.CATEGORY_COLUMNS)].any()),not own_tempo)
+
     def test_knock_off_clears_the_swap_flag_like_b2_item_end(self):
         """A2's knock_off producer against B2's ITEM_END (public_active.py): a Tricked item, then knocked off;
         -enditem clears item_swapped (and choice_public/choice_locked, which the device tracks from M1 on) (L5)."""
