@@ -115,6 +115,12 @@ class StatusCallbacksTests(unittest.TestCase):
                     lines.append(f'|-enditem|{active[target]}|Lum Berry|[eat]')
                     if old:lines.append(f'|-curestatus|{active[target]}|{tokens[old]}|[msg]')
                     if int(frame.callbacks.words[row,index,8]):lines.append(f'|-end|{active[target]}|confusion')
+                elif k==inputs.Kind.ABILITY:
+                    # Literal Gen3 Pressure onStart is visible only to its
+                    # owning seat. Keep the original raw-index alignment.
+                    self.assertEqual(int(frame.callbacks.words[row,index,0]),24)
+                    if int(state.causal.owner[row])==target:
+                        lines.append(f'|-ability|{active[target]}|Pressure|[silent]')
                 elif k==inputs.Kind.FIELD:
                     raw=frame.callbacks.words[row,index];label=('none','RainDance','SunnyDay','Sandstorm','Hail')[int(raw[6])]
                     if int(raw[0])==12:

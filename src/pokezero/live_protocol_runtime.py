@@ -205,4 +205,7 @@ def champion_actor_factory(config):
         return RawPolicy.from_transformer(c, raw)
 
     factory = OwningActorFactory(kind, contract, backend, policy)
+    from .owning_worker_runtime import register_factory
+    register_factory(factory, lambda: {} if 'functions' not in bound else {
+        'fold': bound['functions'].step, 'encode': bound['functions'].encode_step})
     return require_actor_factory(config, factory)

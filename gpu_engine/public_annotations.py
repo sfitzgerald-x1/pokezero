@@ -9,6 +9,12 @@ This module does not qualify transition tokens or a complete player wire.
 import re
 
 
+# Pinned Showdown f76228a sim/battle.ts:1842-1848 emits this at turn500.
+# It is a public warning, not a terminal, state assignment or generic error.
+TURN_500_WARNING = ("|bigerror|You will auto-tie if the battle doesn't end in "
+                    "500 turns (on turn 1000).")
+
+
 def attract_idents(line):
     """Closed singles before-move announcement, including its explicit source."""
     if not isinstance(line,str) or '\n' in line or '\r' in line or line.strip()!=line:
@@ -30,6 +36,7 @@ def classify(line):
     parts=line.split('|')
     if len(parts)<2 or parts[0]:return None
     kind=parts[1]
+    if line==TURN_500_WARNING:return 'text'
     if attract_idents(line) is not None:return 'attract'
     # Incidental proc tags retain their existing consumers; text cannot
     # manufacture a source ability/item reveal under this annotation contract.

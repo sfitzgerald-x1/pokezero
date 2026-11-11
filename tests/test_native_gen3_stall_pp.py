@@ -28,7 +28,7 @@ class NativeStallPPTests(unittest.TestCase):
         j=self.j;s=self.empty(1,seed=71);names=self.meta['vocabulary']['moves']
         return s._replace(hp=j.full_like(s.hp,101),max_hp=j.full_like(s.max_hp,101),
             stats=j.full_like(s.stats,200).at[...,0].set(101).at[:,side,:,5].set(301).at[:,1-side,:,5].set(199),
-            level=j.full_like(s.level,100),types=s.types.at[...,0].set(1),
+            level=j.full_like(s.level,100),types=s.types.at[...,0].set(1),base_types=s.types.at[...,0].set(1),
             species=j.broadcast_to(j.arange(1,7),(1,2,6)),
             moves=j.broadcast_to(j.array([3,1,6,7]),s.moves.shape).at[0,side,0,0].set(names.index(move)),
             pp=j.full_like(s.pp,16).at[0,side,0,0].set(pp),

@@ -83,7 +83,7 @@ def _stable_snapshots(before, after, b, *, before_writes):
 
 
 def order_segment_device(tape, before_count, pre_wish_state, after_writes_state,
-                         end_speed, birth_record, data, *, pre_writes_state, eligible):
+                         end_speed, birth_record, data, *, pre_writes_state, eligible,hypothetical=False):
     """Validate/order at the owning seam immediately after BOTH chip writes.
 
     ``before_count`` is captured after weather-clock receipts and before either
@@ -113,10 +113,15 @@ def order_segment_device(tape, before_count, pre_wish_state, after_writes_state,
         raise ValueError('physical scalar/B before-count required')
     before_count = jnp.broadcast_to(before_count, (b,))
 
-    retained = profile.retain_device(birth_record, pre_wish_state, tape.stream_id, data)
-    retained = profile.retain_device(retained, pre_writes_state, tape.stream_id, data)
-    retained = profile.retain_device(retained, after_writes_state, tape.stream_id, data)
-    # BirthRecord has ONLY B-leading leaves, including all three bindings.
+    if hypothetical:
+        from . import v5_hypothetical_profile as hypothesis
+        retain=hypothesis.retain_device
+    else:
+        retain=profile.retain_device
+    retained = retain(birth_record, pre_wish_state, tape.stream_id, data)
+    retained = retain(retained, pre_writes_state, tape.stream_id, data)
+    retained = retain(retained, after_writes_state, tape.stream_id, data)
+    # Both exact record types have ONLY B-leading leaves/bindings.
     retained = jax.tree.map(lambda a, z: jnp.where(
         eligible.reshape((b,) + (1,) * (a.ndim - 1)), z, a), birth_record, retained)
 
@@ -157,7 +162,7 @@ def order_segment_device(tape, before_count, pre_wish_state, after_writes_state,
         & jnp.all(retained.profile_binding == data.binding, axis=1)
         & (tape.turn == tape.cursor.turn) & (tape.cursor.phase == 0)
         & ((tape.refusal & public.OVERFLOW) == 0))
-    bound = retained.qualified_birth & seam_bound
+    bound = (retained.qualified_origin if hypothetical else retained.qualified_birth) & seam_bound
     active_ok = (jnp.all((active >= 0) & (active < 6), axis=1)
         & jnp.all(active == pre_writes_state.active, axis=1)
         & jnp.all(active == after_writes_state.active, axis=1)

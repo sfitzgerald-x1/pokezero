@@ -78,6 +78,7 @@ class SourceRequest(NamedTuple):
     disabled: object
     trapped: object
     engine_legal: object
+    encore_slot: object = None
 
 
 class Tables(NamedTuple):
@@ -260,7 +261,9 @@ def compile_engine_actions(metadata, *, catalog, vocabulary, private_team, expos
             values = [info.base_stats.get(k, 0) for k in ('hp', 'atk', 'def', 'spa', 'spd', 'spe')]
             if not np.array_equal(np.asarray(private_team.base_stats[index]), np.asarray(values, np.float32)):
                 raise ValueError('action and private-team source species snapshots differ')
-            kinds = [_static_category(vocabulary, 'type:' + info.types[i]) if i < len(info.types) else 0 for i in (0, 1)]
+            kinds = [_static_category(vocabulary, 'type:' + info.types[i])
+                if i < len(info.types) and vocabulary.is_enumerated('type:' + info.types[i]) else 0
+                for i in (0, 1)]
             if not np.array_equal(np.asarray(private_team.type_categories[index]), np.asarray(kinds, np.int32)):
                 raise ValueError('action and private-team source species types differ')
     struggle_mechanics = catalog.ids.get('struggle',0)
@@ -362,8 +365,15 @@ def _device(selected, owned, facts, ledger, source, constructor, tables, action_
     ok &= jnp.all(constructor.moves[rows, active] == selected.moves, axis=-1)
     ok &= jnp.all(source.binding == tables.binding, axis=-1)
     ok &= (source.request_id >= -1) & (moving | forced | waiting)
-    ok &= ~moving | ((selected.charge_move == 0) & (selected.encore_move == 0)
-        & (selected.encore_counter == 0))
+    encore_ok=jnp.zeros(b,jnp.bool_)
+    if source.encore_slot is not None:
+        _shape(source.encore_slot,(b,),jnp.int32,'source Encore exact slot')
+        exact_slot=jnp.clip(source.encore_slot,0,3)
+        encore_ok=(source.encore_slot>=0)&(source.encore_slot<4)&(selected.encore_counter>0)&(selected.encore_move>0)
+        encore_ok &= (selected.moves[rows,exact_slot]==selected.encore_move)&(selected.pp[rows,exact_slot]>0)
+        encore_ok &= jnp.all(source.disabled | (jnp.arange(4)[None,:]==source.encore_slot[:,None]) | ~physical_present,axis=1)
+    ok &= ~moving | ((selected.charge_move == 0) & (((selected.encore_move == 0)
+        & (selected.encore_counter == 0)) | (ordinary&encore_ok)))
     ok &= ~ordinary | jnp.any(present & ~source.disabled,axis=-1)
     # STRUGGLE is an explicitly source-produced synthetic row. Its proof uses
     # the precompression source disabled mask, never the server legality mask.

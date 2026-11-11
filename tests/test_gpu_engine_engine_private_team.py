@@ -118,6 +118,60 @@ class EnginePrivateTeamTests(unittest.TestCase):
     def test_every_team_fact_and_owned_writer_column_matches_source_both_owners(self):
         self.assert_source(self.e.RequestExposure('current', 'physical', True, True))
 
+    def test_source_enumerated_unown_forms_keep_wire_alias_and_original_base_facts(self):
+        from pokezero.category_vocab import CategoryVocabulary
+        from pokezero.dex import ShowdownDex, SpeciesInfo, normalize_id
+        from pokezero.randbat_vocab import UNOWN_FORMES
+        forms = tuple(UNOWN_FORMES)
+        metadata = copy.deepcopy(self.metadata)
+        metadata['vocabulary']['species'] += [normalize_id(name) for name in forms]
+        metadata['vocabulary']['species'] += ['unowncustom', 'deoxysattack']
+        base = SpeciesInfo('unown', 'Unown', ('Psychic',),
+            dict(hp=48, atk=72, **{'def': 48}, spa=72, spd=48, spe=48))
+        dex = ShowdownDex(self.dex.moves, dict(self.dex.species, unown=base), self.dex.type_chart)
+        vocab = CategoryVocabulary(tuple(sorted(set(self.vocab.tokens) | {'species:unown'})),
+            aliases=dict(self.vocab.aliases, **{'species:'+name:'species:unown' for name in forms}))
+        tables = self.tables(metadata=metadata, vocabulary=vocab, dex=dex)
+        start = len(self.metadata['vocabulary']['species'])
+        self.assertEqual(tables.species_supported[start:start+len(forms)].tolist(), [True]*len(forms))
+        self.assertEqual(tables.species_supported[-2:].tolist(), [False, False])
+        for index, name in enumerate(forms, start):
+            self.assertEqual(int(tables.species_categories[index]), vocab.encode('species:'+name))
+            self.np.testing.assert_array_equal(tables.base_stats[index], [48, 72, 48, 72, 48, 48])
+        no_alias = CategoryVocabulary(tuple(sorted(set(self.vocab.tokens) | {'species:unown'})),
+            aliases=self.vocab.aliases)
+        y_index = start + forms.index('Unown-Y')
+        self.assertFalse(bool(self.tables(metadata=metadata, vocabulary=no_alias, dex=dex)
+            .species_supported[y_index]))
+        self.assertFalse(bool(self.tables(metadata=metadata, vocabulary=vocab)
+            .species_supported[y_index]))  # No base dex row is no evidence.
+        wrong = ShowdownDex(self.dex.moves,
+            dict(self.dex.species, unown=self.dex.species['pikachu']), self.dex.type_chart)
+        with self.assertRaisesRegex(ValueError, 'base dex identity'):
+            self.tables(metadata=metadata, vocabulary=vocab, dex=wrong)
+        # Both owners consume the original request spelling and literal facts.
+        index = y_index
+        state = self.state()
+        updates = {}
+        for field, value in dict(species=index, level=100, gender=0, hp=258, max_hp=258,
+                status=0, item=0, ability=3, base_ability=3).items():
+            updates[field] = getattr(state, field).at[0,0,0].set(value).at[1,1,0].set(value)
+        stats = self.j.array([258,200,152,201,152,153], self.j.int32)
+        updates['stats'] = state.stats.at[0,0,0].set(stats).at[1,1,0].set(stats)
+        state = state._replace(**updates)
+        owned = self.owned(state, binding=self.j.broadcast_to(self.e.engine_metadata_binding(metadata), (2,8)))
+        result = self.e.team_facts(owned, tables, expected_binding=tables.binding)
+        self.assertEqual(result.admitted.tolist(), [True, True])
+        packets = self.requests(self.e.RequestExposure('current', 'physical', True, True))
+        for packet in packets:
+            packet['side']['pokemon'][0].update(details='Unown-Y, L100', condition='258/258',
+                ability='Levitate', item='', stats=dict(zip(('atk','def','spa','spd','spe'), stats.tolist()[1:])))
+        parsed = [self.p.parse_team_facts(packet, owner_side=side, vocabulary=vocab, dex=dex)
+            for side, packet in enumerate(packets)]
+        expected = self.jax.tree.map(lambda *values:self.j.stack(values), *parsed)
+        for actual, reference in zip(self.jax.tree.leaves(result.facts), self.jax.tree.leaves(expected)):
+            self.np.testing.assert_array_equal(actual, reference)
+
     def test_explicit_request_exposure_and_faint_denominator_quirks(self):
         for mode in ('current', 'base', 'hidden'):
             for gender in ('physical', 'absent'):

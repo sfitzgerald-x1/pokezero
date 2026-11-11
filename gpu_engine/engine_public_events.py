@@ -223,6 +223,14 @@ def compile_catalog(metadata, engine_table, *, public_moves, dex, exposure):
         # Do not generalize this lexical proof to other field/side targets.
         if wire_info and wire_info.target=='all' and wire_key in ('raindance','sunnyday','sandstorm','hail'):
             target=0
+        # Gen3 getRandomTarget returns foe.active[0] in singles for canonical
+        # Spikes; useMoveInner prints that actual Pokemon target. Other side
+        # moves remain unsupported rather than inferred from target category.
+        if wire_info and wire_info.target=='foeSide' and wire_key=='spikes':
+            target=1
+        # Pinned getRandomTarget(allyTeam) returns the user; Heal Bell only.
+        if wire_info and wire_info.target=='allyTeam' and wire_key=='healbell':
+            target=0
         # The source resolver documents the one Gen3 type-dependent case.
         # Never infer its target rewrite from a static row or physical types.
         dynamic = bool(wire_info and resolve_move_effect(wire_info,()) != resolve_move_effect(wire_info,('Ghost',)))

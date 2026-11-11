@@ -20,6 +20,8 @@ import jax.numpy as jnp
 import numpy as np
 
 from pokezero.dex import normalize_id
+from pokezero import showdown as reference
+from pokezero.randbat_vocab import UNOWN_FORMES
 from . import private_team
 from .state import BattleState
 
@@ -132,17 +134,25 @@ def compile_engine_private_team(metadata, *, vocabulary, dex,
             return 0
         return vocabulary.encode(value) if vocabulary.is_enumerated(value) else 0
     bases, types, categories, species_supported = [], [], [], []
+    cosmetic_spellings = {normalize_id(name): name for name in UNOWN_FORMES}
     for index, name in enumerate(species):
-        # Engine IDs erase punctuation. Only the exact dex row proves the
-        # request spelling; a base-form fallback cannot invent a wire forme.
+        # Preserve source-enumerated cosmetic spelling even though the dex
+        # exports its base row only. Other missing/distinct forms stay refused.
         info = dex.species_info(name) if index else None
-        if info is not None and (normalize_id(info.id) != normalize_id(name)
+        cosmetic = index and info is None and normalize_id(name) in cosmetic_spellings
+        spelling = info.name if info else None
+        if cosmetic:
+            spelling = cosmetic_spellings[normalize_id(name)]
+            info = reference._species_info_base_fallback(dex, spelling)
+            if info is not None and (normalize_id(info.id) != 'unown' or normalize_id(info.name) != 'unown'):
+                raise ValueError('source base dex identity differs from Unown')
+        elif info is not None and (normalize_id(info.id) != normalize_id(name)
                 or normalize_id(info.name) != normalize_id(name)):
             raise ValueError('source dex identity differs from engine species: '+name)
         bases.append([info.base_stats.get(k, 0) if info else 0 for k in private_team.STATS])
         types.append([label('type:'+info.types[i]) if info and i < len(info.types) else 0
             for i in (0, 1)])
-        categories.append(label('species:'+info.name) if info else 0)
+        categories.append(label('species:'+spelling) if info else 0)
         species_supported.append(bool(info and categories[-1] and all(
             label('type:'+kind) > 0 for kind in info.types)))
     base = np.asarray(bases, np.float32)

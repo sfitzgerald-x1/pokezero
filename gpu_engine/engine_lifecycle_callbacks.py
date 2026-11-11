@@ -21,6 +21,7 @@ from . import engine_request_order as request_order
 
 SCHEMA='pokezero.engine_lifecycle_callbacks.v1'
 TURN,UPKEEP,SWITCH_INSTALLED,ACTION_END,INITIAL_REVEAL=range(4,9)
+TURNLOOP_PREFIX=35  # INTERNAL composite: original turnLoop blank + timestamp
 UNKNOWN_DETAILS,UNKNOWN_BATON,MISSING_INSTALL,CLOCK=8,16,32,64
 
 
@@ -196,7 +197,7 @@ def _turn(tape,eligible):
     return _clock(tape,TURN,ok)
 
 
-def _reveal(tape,state,side,outgoing,incoming,*,eligible,replacement,baton,initial):
+def _reveal(tape,state,side,outgoing,incoming,*,eligible,replacement,baton,initial,drag=False):
     rows=jnp.arange(tape.count.shape[0]);cursor=tape.cursor
     eligible=eligible&cursor.admitted
     requested=eligible
@@ -211,12 +212,14 @@ def _reveal(tape,state,side,outgoing,incoming,*,eligible,replacement,baton,initi
         ('species','level','gender','hp','max_hp','status')],axis=1)
     species,level,gender,hp,maximum,status=details.T
     known=(species>0)&(level>0)&(level<=100)&(gender>=0)&(gender<=2)&(hp>0)&(hp<=maximum)&(status>=0)&(status<=6)
+    from . import engine_baton_pass_callbacks as baton_callbacks
+    owned_baton=baton_callbacks.reveal_matches(tape,state,side,outgoing,incoming)
     before=tape.count;index=jnp.minimum(before,tape.words.shape[1]-1)
     room=before<tape.words.shape[1]
     flags=jnp.asarray(baton,jnp.int32);replacing=jnp.asarray(replacement,jnp.int32)
     absent=jnp.full_like(before,-1);z=jnp.zeros_like(before)
     tape=public._append(tape,INITIAL_REVEAL if initial else SWITCH_INSTALLED,
-        absent if initial else side,absent if initial else outgoing,side,incoming,(replacing,flags,z,z,z),eligible)
+        absent if initial else side,absent if initial else outgoing,side,incoming,(replacing,flags,jnp.asarray(drag,jnp.int32)+z,z,z),eligible)
     old_details=tape.switch_details[rows,index]
     tape=tape._replace(switch_details=tape.switch_details.at[rows,index].set(
         jnp.where((eligible&room)[:,None],details,old_details)))
@@ -227,7 +230,7 @@ def _reveal(tape,state,side,outgoing,incoming,*,eligible,replacement,baton,initi
     gen=cursor.generation.at[rows,side].add((eligible&(not initial)).astype(jnp.int32))
     # Baton is a genuine new reveal/private swap, but its unported public flag
     # context must never silently reuse an old public encounter as established.
-    established=active('established',~jnp.asarray(baton))
+    established=active('established',~jnp.asarray(baton)|owned_baton)
     cursor=cursor._replace(generation=gen,physical_to_public=mapping,
         next_slot=active('next_slot',cursor.next_slot[rows,side]+(eligible&new).astype(jnp.int32)),
         physical_active=active('physical_active',incoming),public_slot=active('public_slot',public_slot),
@@ -235,12 +238,12 @@ def _reveal(tape,state,side,outgoing,incoming,*,eligible,replacement,baton,initi
         revealed_species_id=active('revealed_species_id',species),
         admitted=cursor.admitted&~(eligible&~room)&~(requested&~safe))
     return tape._replace(cursor=cursor,refusal=tape.refusal
-        |jnp.where(eligible&~known,UNKNOWN_DETAILS,0)|jnp.where(eligible&baton,UNKNOWN_BATON,0)
+        |jnp.where(eligible&~known,UNKNOWN_DETAILS,0)|jnp.where(eligible&baton&~owned_baton,UNKNOWN_BATON,0)
         |jnp.where(requested&~safe,CLOCK,0))
 
 
 def initialize_with_lifecycle(state,table,*,cursor,catalog,expected_binding,expected_engine_binding,
-                              tie_coin=None,capacity=64,execution_compiled=None):
+                              tie_coin=None,capacity=64,execution_compiled=None,kernel_risk_compiled=None):
     """Own NEW -> actual reveals0,1 -> SAME legacy initialize -> TURN1.
 
     Constructor wrappers must pass the uninitialized state_from_pool(table=None)
@@ -248,6 +251,8 @@ def initialize_with_lifecycle(state,table,*,cursor,catalog,expected_binding,expe
     """
     if execution_compiled is not None and isinstance(jnp.zeros((),jnp.int32),jax.core.Tracer):
         raise ValueError('checked accounting constructor must remain outside outer JIT')
+    if kernel_risk_compiled is not None and execution_compiled is None:
+        raise ValueError('kernel risk constructor requires genuine accounting')
     from . import transition
     public.check_catalog(catalog,table,expected_binding=expected_binding,expected_engine_binding=expected_engine_binding)
     execution_tables=None
@@ -256,6 +261,13 @@ def initialize_with_lifecycle(state,table,*,cursor,catalog,expected_binding,expe
         execution_tables,_,adapter=execution._checked(execution_compiled)
         if adapter.causal.projector.catalog is not catalog:
             raise ValueError('same original lifecycle catalog required for accounting constructor')
+    risk_tables=None
+    if kernel_risk_compiled is not None:
+        from . import engine_kernel_frame_risk as risks
+        risk_tables=risks.check_compiled(kernel_risk_compiled)
+        source_record=risks._COMPILED[kernel_risk_compiled]
+        if source_record[2] is not catalog or source_record[3] is not execution_compiled:
+            raise ValueError('same original kernel/accounting compiler required for constructor risk carry')
     ok=_valid(cursor)&~cursor.initialized&(cursor.turn==0)&(cursor.phase==0)&~state.done&(state.turn==0)
     ok &= jnp.all(cursor.engine_binding==jnp.array(catalog.engine_binding,jnp.uint32),axis=1)
     ok &= (jnp.all(cursor.next_slot==0,axis=1)&jnp.all(cursor.physical_to_public==-1,axis=(1,2))
@@ -271,6 +283,12 @@ def initialize_with_lifecycle(state,table,*,cursor,catalog,expected_binding,expe
     if execution_tables is not None:
         ledger=execution.initialize(cursor.stream_id,compiled=execution_compiled,capacity=32,receipt_capacity=capacity)
         tape=execution.begin_on_tape(tape,ledger,execution_tables,active=ok)
+    if risk_tables is not None:
+        carry=risks.initialize_device(tape.stream_id,risk_tables)
+        carry=risks.begin_frame_device(carry,tape,risk_tables,active=ok)
+        carry=risks.observe_constructor_device(carry,tape,state,risk_tables,active=ok)
+        tape=tape._replace(execution=tape.execution._replace(risks=risks.Context(carry,risk_tables)),
+            refusal=tape.refusal|jnp.where(ok&(carry.risk!=0),execution.UNKNOWN_KERNEL_RISK,0))
     for side in (0,1):
         seat=jnp.full_like(cursor.turn,side)
         tape=_reveal(tape,state,seat,jnp.full_like(cursor.turn,-1),state.active[:,side],
@@ -283,6 +301,11 @@ def initialize_with_lifecycle(state,table,*,cursor,catalog,expected_binding,expe
     complete=ok&jnp.all(~updated.entry_pending,axis=1)&tape.cursor.admitted
     tape=tape._replace(cursor=tape.cursor._replace(initialized=complete,admitted=complete))
     tape=_turn(tape,complete)
+    if risk_tables is not None:
+        context=tape.execution.risks
+        carry=risks.observe_end_device(context.carry,tape,updated,risk_tables,active=ok)
+        tape=tape._replace(execution=tape.execution._replace(risks=context._replace(carry=carry)),
+            refusal=tape.refusal|jnp.where(ok&(carry.risk!=0),execution.UNKNOWN_KERNEL_RISK,0))
     return LifecycleResult(updated,tape.cursor,tape,before,snapshot(tape.cursor),jnp.zeros_like(ok),jnp.zeros_like(cursor.turn))
 
 
@@ -295,12 +318,22 @@ def begin(tape,state,live,invalid):
     ok &= (tape.cursor.turn==expected)&jnp.all(tape.cursor.physical_active==state.active,axis=1)
     ok &= jnp.all(~state.entry_pending,axis=1)
     ok &= jnp.where(replacing,jnp.where(state.pending_residual,tape.cursor.phase==0,tape.cursor.phase==1),tape.cursor.phase==0)
-    return tape._replace(cursor=tape.cursor._replace(admitted=ok&~invalid),turn=tape.cursor.turn,
+    tape=tape._replace(cursor=tape.cursor._replace(admitted=ok&~invalid),turn=tape.cursor.turn,
         refusal=tape.refusal|jnp.where(~ok,CLOCK,0))
+    # The owning driver opens THIS frame's ledger before entering the kernel.
+    # Diagnostic tapes and constructor initialization have no turnLoop entry.
+    if tape.execution is not None:
+        from . import engine_execution_completeness as execution
+        context=execution._context(tape)
+        entered=live&ok&~invalid&context.ledger.opened&(context.ledger.frame>0)
+        tape,ticket=execution.open_attempt(tape,execution.Site.TURNLOOP_PREFIX,0,active=entered)
+        tape=_clock(tape,TURNLOOP_PREFIX,entered)
+        tape=execution.capture_turnloop_prefix(tape,ticket,requested=entered)
+    return tape
 
 
-def installed(tape,state,side,outgoing,incoming,*,eligible,replacement,baton):
-    return _reveal(tape,state,side,outgoing,incoming,eligible=eligible,replacement=replacement,baton=baton,initial=False)
+def installed(tape,state,side,outgoing,incoming,*,eligible,replacement,baton,drag=False):
+    return _reveal(tape,state,side,outgoing,incoming,eligible=eligible,replacement=replacement,baton=baton,initial=False,drag=drag)
 
 
 def action_end(tape,eligible):
@@ -325,11 +358,11 @@ def finish(tape,state,*,live,replacement,pending_before,residual_ready,defer_res
 
 def trace_step(state,actions,table,*,cursor,catalog,expected_binding,expected_engine_binding,
                chance_inputs=None,capacity=64,leftovers_compiled=None,status_residual_compiled=None,
-               status_residual_mode='diagnostic'):
+               status_residual_mode='diagnostic',direct_hit_compiled=None,substitute_compiled=None,toxic_compiled=None):
     # A checked host boundary cannot be captured even when only cursor/chance
     # (or no meaningful argument) is dynamic. Inspect this FRESH scalar, not
     # selected input leaves, before any host guard or cached core invocation.
-    if (leftovers_compiled is not None or status_residual_compiled is not None) and isinstance(jnp.zeros((),jnp.int32),jax.core.Tracer):
+    if (leftovers_compiled is not None or status_residual_compiled is not None or direct_hit_compiled is not None or substitute_compiled is not None or toxic_compiled is not None) and isinstance(jnp.zeros((),jnp.int32),jax.core.Tracer):
         raise ValueError('checked lifecycle helper API must remain outside outer JIT')
     from . import transition
     if type(status_residual_mode) is not str or status_residual_mode not in ('diagnostic','kernel-event'):
@@ -351,10 +384,32 @@ def trace_step(state,actions,table,*,cursor,catalog,expected_binding,expected_en
         if status_residual_callbacks._COMPILED[status_residual_compiled][4] is not catalog:
             raise ValueError('same original engine catalog required for status residual caller')
         status_residual_context=StatusResidualContext(data)
+    direct_hit_context=None
+    if direct_hit_compiled is not None:
+        from . import engine_direct_hit_controls as direct_hit_controls
+        data=direct_hit_controls.check_compiled(direct_hit_compiled)
+        if direct_hit_controls._COMPILED[direct_hit_compiled][2] is not catalog:
+            raise ValueError('same original engine catalog required for direct-hit caller')
+        direct_hit_context=direct_hit_controls.Context(data)
+    substitute_context=None
+    if substitute_compiled is not None:
+        from . import engine_substitute_callbacks as substitute_callbacks
+        data=substitute_callbacks.check_compiled(substitute_compiled)
+        if substitute_callbacks._COMPILED[substitute_compiled][2] is not catalog:
+            raise ValueError('same original engine catalog required for Substitute caller')
+        substitute_context=substitute_callbacks.Context(data)
+    toxic_context=None
+    if toxic_compiled is not None:
+        from . import engine_toxic_callbacks as toxic_callbacks
+        data=toxic_callbacks.check_compiled(toxic_compiled)
+        if toxic_callbacks._COMPILED[toxic_compiled][2] is not catalog:
+            raise ValueError('same original engine catalog required for Toxic caller')
+        toxic_context=toxic_callbacks.Context(data)
     before=snapshot(cursor);tape=_tape(cursor,catalog,capacity)
     chance_inputs=transition.sample_chance_inputs(state) if chance_inputs is None else chance_inputs
     result=transition.step_with_chance(state,actions,table,chance_inputs,_public_trace=tape,_lifecycle_trace=True,
-        _leftovers_context=leftovers_context,_status_residual_context=status_residual_context)
+        _leftovers_context=leftovers_context,_status_residual_context=status_residual_context,
+        _direct_hit_context=direct_hit_context,_substitute_context=substitute_context,_toxic_context=toxic_context)
     tape=result.callbacks
     return LifecycleResult(result.step.state,tape.cursor,tape,before,snapshot(tape.cursor),
         result.step.invalid_actions,result.step.placeholder_moves)

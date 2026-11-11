@@ -40,7 +40,7 @@ class WishHistoryTests(unittest.TestCase):
         j=self.j;s=self.empty(1,seed=818)
         return s._replace(hp=j.full_like(s.hp,10),max_hp=j.full_like(s.max_hp,101),
             stats=j.full_like(s.stats,200).at[...,0].set(101).at[:,0,:,5].set(301),
-            level=j.full_like(s.level,100),types=s.types.at[...,0].set(1),
+            level=j.full_like(s.level,100),types=s.types.at[...,0].set(1),base_types=s.base_types.at[...,0].set(1),
             species=j.broadcast_to(j.arange(1,7),(1,2,6)),
             moves=j.ones_like(s.moves),pp=j.full_like(s.pp,10),done=j.array([False]))
 

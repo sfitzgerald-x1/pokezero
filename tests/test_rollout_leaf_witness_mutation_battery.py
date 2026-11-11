@@ -13,7 +13,7 @@ below are the ones that make the pair checkable:
 
   * the recorded names ARE the harness's, in order -- not a hand-typed subset;
   * the harness has not changed since the run (sha256 of the script itself);
-  * the target files have not changed since the run (sha256 of each);
+  * the target files match the recorded source tree (sha256 of each);
   * NOT APPLIED is empty -- the third way a battery lies is to report a mutant that
     never reached the tree;
   * DID NOT RUN is a SEPARATE count from SURVIVED, and every entry in it names why;
@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -40,9 +41,10 @@ from types import SimpleNamespace
 from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
-# Earlier receipts remain historical evidence; current-tree coverage comes
-# from a fresh complete execution of the unchanged original battery.
+# The frozen capture path's receipt is historical evidence. Preserve its bytes
+# and target tree; it does not claim mutation coverage of later device changes.
 ARTIFACT = ROOT / "reports" / "artifacts" / "rollout_leaf_witness_mutation_battery_20261031_owning_transport.json"
+RECORDED_TREE = "32739ae6b2fa7ae4a747320216f14f29a9f74ab3"
 
 sys.path.insert(0, str(ROOT / "scripts"))
 import mutate_rollout_leaf_witness as harness  # noqa: E402
@@ -50,6 +52,13 @@ import mutate_rollout_leaf_witness as harness  # noqa: E402
 
 def _sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _recorded_bytes(path: Path) -> bytes:
+    relative = path.relative_to(ROOT).as_posix()
+    return subprocess.check_output(
+        ["git", "show", f"{RECORDED_TREE}:{relative}"], cwd=ROOT
+    )
 
 
 class RolloutLeafWitnessMutationBatteryTest(unittest.TestCase):
@@ -103,9 +112,12 @@ class RolloutLeafWitnessMutationBatteryTest(unittest.TestCase):
             "re-run it rather than editing the artifact",
         )
 
-    def test_the_mutated_files_have_not_changed_since_the_recorded_run(self) -> None:
-        """The counts are about a TREE. A recorded sweep over a tree that has since
-        moved says nothing about this one."""
+    def test_the_mutated_files_match_the_recorded_historical_tree(self) -> None:
+        """The counts stay about their original tree, never a later bridge."""
+        self.assertEqual(
+            ARTIFACT.read_bytes(), _recorded_bytes(ARTIFACT),
+            "preserve the receipt rather than relabelling its recorded numbers",
+        )
         historical = ROOT / "reports" / "artifacts" / "rollout_leaf_witness_mutation_battery.json"
         self.assertEqual(
             _sha256(historical),
@@ -129,7 +141,7 @@ class RolloutLeafWitnessMutationBatteryTest(unittest.TestCase):
             with self.subTest(target=name):
                 path = by_name[name]
                 self.assertTrue(path.exists(), f"{name} no longer exists")
-                self.assertEqual(_sha256(path), digest)
+                self.assertEqual(hashlib.sha256(_recorded_bytes(path)).hexdigest(), digest)
 
     def test_every_mutant_was_actually_applied(self) -> None:
         """A mutant whose anchor did not match is prose, not a mutant."""

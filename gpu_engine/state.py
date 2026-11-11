@@ -25,6 +25,7 @@ class BattleState(NamedTuple):
     happiness: jax.Array           # [B,2,6], Showdown team-object default 255
     gender: jax.Array              # [B,2,6], -1 unknown,0 genderless,1 male,2 female
     types: jax.Array               # [B,2,6,2]; type IDs require the pool vocabulary
+    base_types: jax.Array          # [B,2,6,2], immutable original constructor types
     stats: jax.Array               # [B,2,6,6]: HP,Atk,Def,SpA,SpD,Spe
     hp: jax.Array                  # [B,2,6]
     max_hp: jax.Array              # [B,2,6]
@@ -96,6 +97,7 @@ def empty_state(batch_size: int, *, seed: int = 0) -> BattleState:
         hidden_power_power=jnp.full((b,2,6),70,jnp.int32),
         happiness=jnp.full((b,2,6),255,jnp.int32),
         gender=jnp.full((b,2,6),-1,jnp.int32), types=jnp.zeros((b, 2, 6, 2), jnp.int32),
+        base_types=jnp.zeros((b, 2, 6, 2), jnp.int32),
         stats=jnp.zeros((b, 2, 6, 6), jnp.int32), hp=mon(), max_hp=mon(),
         status=mon(), status_counter=mon(), sleep_skipped=mon(),
         rest_origin=jnp.zeros((b,2,6),jnp.bool_), moves=jnp.zeros((b, 2, 6, 4), jnp.int32),

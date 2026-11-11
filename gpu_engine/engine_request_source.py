@@ -273,7 +273,7 @@ def _advance_registration(registration,state,rules):
     return value
 
 
-def _produce(state, ledger, arrival, original, constructor, unsafe_origin, rules, adapter_binding, engine_table):
+def _produce(state, ledger, arrival, original, constructor, unsafe_origin, rules, adapter_binding, engine_table, current_types=None, current_encore=None):
     """Server-only primitive. Hidden foe cells never become feature fields."""
     b = ledger.owner_side.shape[0]
     rows = jnp.arange(b); own = jnp.clip(ledger.owner_side,0,1); foe = 1-own
@@ -282,6 +282,7 @@ def _produce(state, ledger, arrival, original, constructor, unsafe_origin, rules
     same = jnp.ones(b,jnp.bool_)
     for key in Original._fields:
         value = owned[key]; expected = getattr(original,key)
+        if key=="types" and current_types is not None:value=state.base_types[rows,own]
         same &= jnp.all(value==expected,axis=tuple(range(1,value.ndim)))
     present = owned['species']>0
     safe_own_species = jnp.clip(owned['species'],0,rules.species_supported.shape[0]-1)
@@ -289,6 +290,10 @@ def _produce(state, ledger, arrival, original, constructor, unsafe_origin, rules
         & rules.species_supported[safe_own_species]),axis=-1)
     type_origin = jnp.all(~present[...,None] | (original.types==rules.species_types[safe_own_species]),axis=(-1,-2))
     same &= type_origin
+    if current_types is not None:
+        actions._shape(current_types,(b,6,2),jnp.int32,"source-current-types")
+        same &= jnp.all(owned["types"]==current_types,axis=(-1,-2))
+        same &= jnp.all((current_types>=0)&(current_types<rules.type_immune.shape[0]),axis=(-1,-2))
     gender_known = jnp.all(~present | ((owned['gender']>=0)&(owned['gender']<=2)),axis=-1)
     hp = state.hp[rows,own]
     active_hp = hp[rows,safe_active]
@@ -330,8 +335,11 @@ def _produce(state, ledger, arrival, original, constructor, unsafe_origin, rules
     disabled = slot_present & ((pp<=0)|(choice_active[:,None]&(moves!=choice[:,None])))
     source_disable_unknown = jnp.any(state.disabled[rows,own]&present[...,None],axis=(-1,-2))
     unsafe_history = unsafe_origin|_unsafe_history(state,rules)
-    locked = (state.charge_move[rows,own,safe_active]!=0)|(state.encore_move[rows,own,safe_active]!=0)|(
-        state.encore_counter[rows,own,safe_active]!=0)|unsafe_history
+    from . import engine_encore_callbacks as encore_callbacks
+    encore_slot,encore_known=encore_callbacks.request_slot(current_encore,state,ledger,rules,arrival)
+    disabled |= encore_known[:,None] & (jnp.arange(4)[None,:]!=encore_slot[:,None])
+    locked = (state.charge_move[rows,own,safe_active]!=0)|(((state.encore_move[rows,own,safe_active]!=0)|
+        (state.encore_counter[rows,own,safe_active]!=0))&~encore_known)|unsafe_history
     own_ability = state.ability[rows,own,safe_active]
     foe_ability = state.ability[rows,foe,foe_active]
     good_ab = ((own_ability>0)&(own_ability<rules.ability_supported.shape[0])
@@ -355,7 +363,8 @@ def _produce(state, ledger, arrival, original, constructor, unsafe_origin, rules
     # Gen3 Shadow Tag sets literal true; Arena/Magnet call tryTrap(true).
     visible_trap |= rules.shadow[fa]&(all_active_hp[rows,foe]>0)
     actual_hidden = ((rules.arena[fa]&grounded)|(rules.magnet[fa]&steel))&~immune
-    # knownType=true is proved by unchanged original types/identity. Source
+    # knownType=true uses unchanged constructor types/identity or the owning
+    # driver's exact previous-public/current-source live-type join. Source
     # Actual runEvent includes Any callbacks. Public alternatives dispatch only
     # singleEvent('FoeMaybeTrapPokemon'); the static eligibility preserves that
     # distinction (Gen3 Magnet Pull has no FoeMaybeTrapPokemon callback).
@@ -380,7 +389,7 @@ def _produce(state, ledger, arrival, original, constructor, unsafe_origin, rules
     packet = actions.SourceRequest(boundary,jnp.broadcast_to(adapter_binding,(b,8)),constructor.binding,
         jnp.full(b,-1,jnp.int32),jnp.where(ok,mode,actions.UNKNOWN),ok,same,
         jnp.where(ok[:,None]&ordinary[:,None],disabled,False),trapped&ok&ordinary,
-        transition.action_mask(state,engine_table)[rows,own])
+        transition.action_mask(state,engine_table)[rows,own],None if current_encore is None else jnp.where(encore_known,encore_slot,-1))
     return packet,reason
 
 
@@ -398,7 +407,7 @@ def produce_request(compiled, state, ledger, registration, arrival, *, lifecycle
             'hidden_power_type','hidden_power_power','charge_move','encore_move','encore_counter',
             'choice_move','last_move','trap_source'):
         actions._shape(getattr(state,name),(b,2,6),jnp.int32,'server '+name)
-    for name,tail,dtype in (('stats',(6,6),jnp.int32),('types',(6,2),jnp.int32),
+    for name,tail,dtype in (('stats',(6,6),jnp.int32),('types',(6,2),jnp.int32),('base_types',(6,2),jnp.int32),
             ('moves',(6,4),jnp.int32),('pp',(6,4),jnp.int32),('disabled',(6,4),jnp.bool_),
             ('volatile',(6,),jnp.uint32),('active',(),jnp.int32),('forced_switch',(),jnp.bool_),
             ('trapped',(),jnp.bool_),('entry_pending',(),jnp.bool_)):
@@ -481,7 +490,8 @@ def _gender(state, pool, indices, initialization):
 
 
 def construct_from_pool(pool, team_indices, *, compiled, stream_ids, seed=0,
-                        gender_initialization=None, capacity=64, _execution_compiled=None):
+                        gender_initialization=None, capacity=64, _execution_compiled=None,
+                        _kernel_risk_compiled=None):
     """Real opt-in constructor callsite; legacy state_from_pool stays unchanged.
 
     The same immutable pool and owned selection feed physical construction and
@@ -490,6 +500,8 @@ def construct_from_pool(pool, team_indices, *, compiled, stream_ids, seed=0,
     """
     if _execution_compiled is not None and isinstance(jnp.zeros((),jnp.int32),jax.core.Tracer):
         raise ValueError('checked accounting source constructor cannot be traced')
+    if _kernel_risk_compiled is not None and _execution_compiled is None:
+        raise ValueError('kernel risks require the actual accounting constructor')
     from . import engine_lifecycle_callbacks as lifecycle
     record = _checked(compiled)
     if _execution_compiled is not None:
@@ -523,7 +535,7 @@ def construct_from_pool(pool, team_indices, *, compiled, stream_ids, seed=0,
     frame = lifecycle.initialize_with_lifecycle(state,record['engine_table'],cursor=cursor,
         catalog=catalog,expected_binding=catalog.binding,
         expected_engine_binding=record['rules'].device.engine_binding,capacity=capacity,
-        execution_compiled=_execution_compiled)
+        execution_compiled=_execution_compiled,kernel_risk_compiled=_kernel_risk_compiled)
     requests = tuple(produce_request(compiled,frame.state,o,r,frame.after_registry,
         lifecycle_admitted=frame.cursor.admitted) for o,r in zip(orders,registrations))
     return _bind_constructed(frame.state,frame.cursor,tuple(orders),tuple(registrations),requests,
