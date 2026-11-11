@@ -1,0 +1,233 @@
+{
+ "schema": "pokezero.effect_probe.scenario.v1",
+ "move": "confusion_selfhit",
+ "note": "B the confusion self-hit's damage (gen4 confusion onBeforeMove: getDamage(pokemon, pokemon, 40), a typeless Physical move with no crit; gen3 modifyDamage halves a burned non-Guts attacker): a burned Guts Ursaring (x1.5, no halving), a burned Choice Band Snorlax (x1.5, halved), a Pure Power Medicham (x2), a Hustle Corsola (x1.5). Each is burned by Will-O-Wisp where noted, confused by Signal Beam and hits itself twice. Axis: the self-hit damage roll.",
+ "teams": [
+  [
+   {
+    "species": "Venomoth",
+    "moves": [
+     "signalbeam",
+     "willowisp",
+     "splash",
+     "psychic"
+    ],
+    "ability": "Shield Dust",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Starmie",
+    "moves": [
+     "splash",
+     "surf",
+     "recover",
+     "protect"
+    ],
+    "ability": "Illuminate",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Blissey",
+    "moves": [
+     "splash",
+     "softboiled",
+     "protect",
+     "seismictoss"
+    ],
+    "ability": "Natural Cure",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Skarmory",
+    "moves": [
+     "splash",
+     "protect",
+     "spikes",
+     "peck"
+    ],
+    "ability": "Keen Eye",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Swampert",
+    "moves": [
+     "splash",
+     "protect",
+     "surf",
+     "earthquake"
+    ],
+    "ability": "Torrent",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Suicune",
+    "moves": [
+     "splash",
+     "surf",
+     "icebeam",
+     "rest"
+    ],
+    "ability": "Pressure",
+    "item": "Leftovers"
+   }
+  ],
+  [
+   {
+    "species": "Ursaring",
+    "moves": [
+     "splash",
+     "facade",
+     "rest",
+     "swordsdance"
+    ],
+    "ability": "Guts",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Snorlax",
+    "moves": [
+     "splash",
+     "rest",
+     "curse",
+     "bodyslam"
+    ],
+    "ability": "Thick Fat",
+    "item": "Choice Band"
+   },
+   {
+    "species": "Medicham",
+    "moves": [
+     "splash",
+     "brickbreak",
+     "bulkup",
+     "rockslide"
+    ],
+    "ability": "Pure Power",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Corsola",
+    "moves": [
+     "splash",
+     "surf",
+     "recover",
+     "toxic"
+    ],
+    "ability": "Hustle",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Blissey",
+    "moves": [
+     "splash",
+     "softboiled",
+     "protect",
+     "seismictoss"
+    ],
+    "ability": "Natural Cure",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Skarmory",
+    "moves": [
+     "splash",
+     "protect",
+     "spikes",
+     "peck"
+    ],
+    "ability": "Keen Eye",
+    "item": "Leftovers"
+   }
+  ]
+ ],
+ "script": [
+  [
+   "move 2",
+   "move 1"
+  ],
+  [
+   "move 1",
+   "move 1"
+  ],
+  [
+   "move 3",
+   "move 1"
+  ],
+  [
+   "move 3",
+   "switch 2"
+  ],
+  [
+   "move 2",
+   "move 1"
+  ],
+  [
+   "move 1",
+   "move 1"
+  ],
+  [
+   "move 3",
+   "move 1"
+  ],
+  [
+   "move 3",
+   "switch 3"
+  ],
+  [
+   "move 1",
+   "move 1"
+  ],
+  [
+   "move 3",
+   "move 1"
+  ],
+  [
+   "move 3",
+   "switch 4"
+  ],
+  [
+   "move 1",
+   "move 1"
+  ],
+  [
+   "move 3",
+   "move 1"
+  ]
+ ],
+ "axes": [
+  {
+   "name": "damage",
+   "field": "draws.1.5",
+   "values": [
+    0,
+    15
+   ]
+  }
+ ],
+ "expect": {
+  "exact": true
+ },
+ "tape": {
+  "draws.1.3": 99,
+  "draws.0.7": 3
+ },
+ "tape_steps": {
+  "1": {
+   "secondary.0": 0
+  },
+  "5": {
+   "secondary.0": 0
+  },
+  "8": {
+   "secondary.0": 0
+  },
+  "11": {
+   "secondary.0": 0
+  }
+ },
+ "require_fields": [
+  "item_knocked",
+  "destiny_bond",
+  "effect"
+ ]
+}

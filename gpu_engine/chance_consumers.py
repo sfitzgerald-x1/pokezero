@@ -27,7 +27,7 @@ CONSUMERS = {
         (4, "transition/pursuit: critical<1 or<2"),
         (5, "transition/pursuit: damage85+draw; confusion damage reuses draw"),
         (6, "mechanics.accuracy_hit: pinned binary64/Q12 integer-roll predicates"),
-        (7, "transition primary sleep; encore.apply duration"),
+        (7, "transition primary sleep; encore.apply duration; secondary.apply_chance_effects Signal Beam confusion 2+draw"),
         (8, "effects.stall_success: draw<8//denominator"))},
     "draws.0.0": ("transition first move ordering",),
     "draws.1.0": ("transition residual SpeedBoost ordering",),
@@ -39,7 +39,7 @@ CONSUMERS = {
     "draws.1.11": ("transition residual Encore ordering",),
     **{f"{name}.{s}": (use,) for s in range(2) for name, use in (
         ("phazing", "phazing.choose_bench modulo bench count OR secondary.apply_contact Static<20; dispatched Gen3 moves are disjoint"),
-        ("secondary", "secondary.apply: shared draw<chance*SereneGrace"),
+        ("secondary", "secondary.apply and secondary.apply_chance_effects: shared draw<chance*SereneGrace"),
         ("sleep_talk", "sleep_talk.choose: draw modulo callable count before PP test"),
         ("entry_ties", "transition resumed switch/callback ordering"))},
     "initial_tie": ("transition.initialize unresolved initial entry ordering",),
@@ -256,7 +256,9 @@ def plan_for_state(state, index, actions, table, metadata, *, cap, native_input=
                 use(prefix+"1", Observation("less_than", 20))
             if live_move[s] and 1 in statuses[s]:
                 use(prefix+"2", Observation("less_than", 25))
-            if live_move[s] and any(data["confusion_counter"][s][p] for p in participants[s]):
+            # Fidelity B: a foe's Signal Beam may confuse this side before its own move this turn.
+            if live_move[s] and (any(data["confusion_counter"][s][p] for p in participants[s])
+                    or any(_at(t, "secondary", "confusion", move) for move in selected[1-s])):
                 use(prefix+"3", Observation("less_than", 50))
             random_damage = any(t["power"][move] > 0 or _at(t, "variable_moves", "hidden_power", move)
                 or _at(t, "variable_moves", "returns", move) or _at(t, "variable_moves", "frustration", move)
@@ -303,7 +305,8 @@ def plan_for_state(state, index, actions, table, metadata, *, cap, native_input=
                                             hustle=hustle,compound_eyes=bool(compound is not None and compound[ability]),
                                             sand_veil=bool(climate==3 and sand is not None and sand[target]))))
             use(prefix+"6", *(Observation("less_than", value) for value in sorted(accuracy)))
-            if any(_at(t, "effects", "status", move) == 5 or _at(t, "encore", "move", move) for move in selected[s]):
+            if any(_at(t, "effects", "status", move) == 5 or _at(t, "encore", "move", move)
+                    or _at(t, "secondary", "confusion", move) for move in selected[s]):
                 use(prefix+"7", Observation("identity"))
             if any(_at(t, "effects", "protect", move) or _at(t, "effects", "endure", move) for move in selected[s]):
                 # Input mapper admits only denominators0/2/4/8. Haze does not

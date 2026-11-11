@@ -1,0 +1,205 @@
+{
+ "schema": "pokezero.effect_probe.scenario.v1",
+ "move": "headbutt",
+ "note": "B Headbutt (data/moves.ts secondary 30% flinch), doubled to 60% by Dunsparce's Serene Grace (gen4 onModifyMove): a slower Snorlax flinches (cant, no Body Slam); a Starmie switching in takes the flinch after acting (it expires at the residual) and a faster Starmie moves first; a slower level-55 Dragonite has Inner Focus (onTryAddVolatile null); Gengar is immune to the Normal hit (no secondary); a slower Slowbro's Substitute takes the hit (target nulled before secondaries) and it still Surfs. Axes: the roll at 0 and 59 (< 60 triggers) and 60.",
+ "teams": [
+  [
+   {
+    "species": "Dunsparce",
+    "moves": [
+     "headbutt",
+     "splash",
+     "earthquake",
+     "thunderwave"
+    ],
+    "ability": "Serene Grace",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Starmie",
+    "moves": [
+     "splash",
+     "surf",
+     "recover",
+     "protect"
+    ],
+    "ability": "Illuminate",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Blissey",
+    "moves": [
+     "splash",
+     "softboiled",
+     "protect",
+     "seismictoss"
+    ],
+    "ability": "Natural Cure",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Skarmory",
+    "moves": [
+     "splash",
+     "protect",
+     "spikes",
+     "peck"
+    ],
+    "ability": "Keen Eye",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Swampert",
+    "moves": [
+     "splash",
+     "protect",
+     "surf",
+     "earthquake"
+    ],
+    "ability": "Torrent",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Suicune",
+    "moves": [
+     "splash",
+     "surf",
+     "icebeam",
+     "rest"
+    ],
+    "ability": "Pressure",
+    "item": "Leftovers"
+   }
+  ],
+  [
+   {
+    "species": "Snorlax",
+    "moves": [
+     "bodyslam",
+     "splash",
+     "rest",
+     "curse"
+    ],
+    "ability": "Thick Fat",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Starmie",
+    "moves": [
+     "surf",
+     "splash",
+     "recover",
+     "protect"
+    ],
+    "ability": "Natural Cure",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Dragonite",
+    "moves": [
+     "dragonclaw",
+     "splash",
+     "dragondance",
+     "protect"
+    ],
+    "ability": "Inner Focus",
+    "item": "Leftovers",
+    "level": 55
+   },
+   {
+    "species": "Gengar",
+    "moves": [
+     "splash",
+     "protect",
+     "thunderbolt",
+     "substitute"
+    ],
+    "ability": "Levitate",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Slowbro",
+    "moves": [
+     "substitute",
+     "surf",
+     "splash",
+     "rest"
+    ],
+    "ability": "Own Tempo",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Blissey",
+    "moves": [
+     "splash",
+     "softboiled",
+     "protect",
+     "seismictoss"
+    ],
+    "ability": "Natural Cure",
+    "item": "Leftovers"
+   }
+  ]
+ ],
+ "script": [
+  [
+   "move 1",
+   "move 1"
+  ],
+  [
+   "move 1",
+   "switch 2"
+  ],
+  [
+   "move 1",
+   "move 1"
+  ],
+  [
+   "move 1",
+   "switch 3"
+  ],
+  [
+   "move 1",
+   "move 1"
+  ],
+  [
+   "move 1",
+   "switch 4"
+  ],
+  [
+   "move 1",
+   "move 1"
+  ],
+  [
+   "move 2",
+   "switch 5"
+  ],
+  [
+   "move 2",
+   "move 1"
+  ],
+  [
+   "move 1",
+   "move 2"
+  ]
+ ],
+ "axes": [
+  {
+   "name": "roll",
+   "field": "secondary.0",
+   "values": [
+    0,
+    59,
+    60
+   ]
+  }
+ ],
+ "expect": {
+  "exact": true
+ },
+ "require_fields": [
+  "item_knocked",
+  "destiny_bond",
+  "effect"
+ ]
+}

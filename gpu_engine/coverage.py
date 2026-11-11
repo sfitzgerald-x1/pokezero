@@ -95,6 +95,16 @@ def registry():
     group('bonemerang','Two hits after one accuracy roll, each with its own critical and damage roll (the second from the '
         'appended effect stream); a first-hit KO ends it; Substitute per hit (a broken one lets the second hit reach the '
         'Pokemon); Endure per hit; Counter/Mirror Coat read the last hit','damage_moves','fidelity_r')
+    # Fidelity patch B (chance secondaries on the shared secondary roll; Serene Grace doubles each).
+    group('irontail','Ordinary damage plus 30% target Def -1; Shield Dust, a Substitute hit or a fainted target blocks it, '
+        'Clear Body/White Smoke delete it silently, -6 is a no-op','secondary','fidelity_b')
+    group('steelwing meteormash','Ordinary damage plus 10% user Def +1 (Steel Wing) or 20% user Atk +1 (Meteor Mash), '
+        'which survives Shield Dust, a Substitute and a KO; +6 is a no-op','secondary','fidelity_b')
+    group('headbutt needlearm','Ordinary damage plus 30% flinch: Inner Focus, Focus Punch\'s focus, Shield Dust, a Substitute '
+        'or a fainted target blocks it; it matters only before the target moves','secondary','fidelity_b')
+    group('signalbeam','Ordinary damage plus 10% confusion for 2-5 moves (the attacker\'s draws[s][7]): Own Tempo, Shield '
+        'Dust, a Substitute hit, a fainted or already confused target block it; 50% 40 BP typeless self-hit, snap-out, '
+        'Lum Berry and Own Tempo cures, Baton Pass carry','secondary','fidelity_b')
     return result
 
 

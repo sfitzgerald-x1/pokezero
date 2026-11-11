@@ -196,6 +196,38 @@ Fidelity patch R (the appended effect chance stream and Bonemerang; new state
   Counter and Mirror Coat return twice the last hit that reached the
   Pokemon. Device: one damage line per hit.
 
+Fidelity patch B (chance secondaries, and confusion switched on; no new state
+or chance). Each move has one secondary entry, so the side's existing
+`secondary_draws` roll is Showdown's single random(100) for it; Serene Grace
+doubles the chance (Dunsparce's Headbutt: 60%):
+- Iron Tail: 30% target Def -1. A Substitute hit, Shield Dust or a fainted
+  target blocks it; Clear Body and White Smoke delete it with no line (the
+  effect carries secondaries), so nothing is revealed; -6 is a no-op.
+- Steel Wing (10% user Def +1) and Meteor Mash (20% user Atk +1): self
+  entries, so they survive Shield Dust, the target's Substitute and a KO; +6
+  is a no-op.
+- Headbutt and Needle Arm: 30% flinch through the existing flinch path
+  (Inner Focus, Focus Punch's focus, Shield Dust, Substitute); a flinch only
+  stops a target that has not moved yet.
+- Signal Beam: 10% confusion for 2+d moves, d the attacker's `draws[s][7]`
+  (Signal Beam never also uses it for sleep or Encore). Own Tempo, Shield
+  Dust, a Substitute hit, a fainted or an already confused target (no
+  restart) block it. This switches on the existing confusion code: each move
+  attempt decrements it first (not while asleep without Sleep Talk, frozen,
+  loafing or flinched), 0 snaps out and the move proceeds, otherwise
+  `draws[s][3] >= 50` is a 40 BP typeless physical self-hit with the
+  confused mon's own stats, stages, Guts/Hustle/Huge Power, Choice Band and
+  burn, its own `draws[s][5]` roll and no crit, through its Substitute; a
+  self-KO cancels the foe's queued move. A Lum Berry eats it at once, Own
+  Tempo cures a Baton-passed one on entry, and Baton Pass carries the clock.
+- A faint's clearVolatile now also ends the fainted active's confusion and
+  Choice lock at the step end (before, only its departure did), so a
+  forced-replacement request sees neither, as in Showdown.
+- Device: B2's `-end|X|confusion` (bag entry off, CONFUSION_TURNS reset) at
+  the before-move snap-out, a Lum cure and an Own Tempo cure; the self-hit's
+  `-damage ... [from] confusion` line feeds B2's absent-Leftovers evidence as
+  action-phase HP.
+
 The existing fixed critical roll now resolves ordinary 1/16 and catalog +1
 high-crit 1/8 chances. Battle Armor and Shell Armor veto critical hits in both
 ordinary damage and pre-switch Pursuit, using the actual outgoing holder.

@@ -1,0 +1,213 @@
+{
+ "schema": "pokezero.effect_probe.scenario.v1",
+ "move": "signalbeam",
+ "note": "B Signal Beam's 10% confusion (data/moves.ts secondary volatileStatus) over its full lifetime: Venomoth confuses a slower Snorlax for 2+d turns (random(2,6), the attacker's draws[s][7]); Snorlax's own move that turn already decrements it (gen4 confusion onBeforeMove), then each later move decrements, a 50% check (draws[s][3] >= 50) hits itself (40 BP typeless, own Atk/Def, its own damage roll draws[s][5], no crit, no PP), and at 0 it snaps out and moves. Axes: duration d, the self-hit roll on every step, the self-hit damage roll.",
+ "teams": [
+  [
+   {
+    "species": "Venomoth",
+    "moves": [
+     "signalbeam",
+     "splash",
+     "sleeppowder",
+     "psychic"
+    ],
+    "ability": "Shield Dust",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Starmie",
+    "moves": [
+     "splash",
+     "surf",
+     "recover",
+     "protect"
+    ],
+    "ability": "Illuminate",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Blissey",
+    "moves": [
+     "splash",
+     "softboiled",
+     "protect",
+     "seismictoss"
+    ],
+    "ability": "Natural Cure",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Skarmory",
+    "moves": [
+     "splash",
+     "protect",
+     "spikes",
+     "peck"
+    ],
+    "ability": "Keen Eye",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Swampert",
+    "moves": [
+     "splash",
+     "protect",
+     "surf",
+     "earthquake"
+    ],
+    "ability": "Torrent",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Suicune",
+    "moves": [
+     "splash",
+     "surf",
+     "icebeam",
+     "rest"
+    ],
+    "ability": "Pressure",
+    "item": "Leftovers"
+   }
+  ],
+  [
+   {
+    "species": "Snorlax",
+    "moves": [
+     "splash",
+     "rest",
+     "curse",
+     "bodyslam"
+    ],
+    "ability": "Thick Fat",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Starmie",
+    "moves": [
+     "splash",
+     "surf",
+     "recover",
+     "protect"
+    ],
+    "ability": "Illuminate",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Blissey",
+    "moves": [
+     "splash",
+     "softboiled",
+     "protect",
+     "seismictoss"
+    ],
+    "ability": "Natural Cure",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Skarmory",
+    "moves": [
+     "splash",
+     "protect",
+     "spikes",
+     "peck"
+    ],
+    "ability": "Keen Eye",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Swampert",
+    "moves": [
+     "splash",
+     "protect",
+     "surf",
+     "earthquake"
+    ],
+    "ability": "Torrent",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Suicune",
+    "moves": [
+     "splash",
+     "surf",
+     "icebeam",
+     "rest"
+    ],
+    "ability": "Pressure",
+    "item": "Leftovers"
+   }
+  ]
+ ],
+ "script": [
+  [
+   "move 1",
+   "move 1"
+  ],
+  [
+   "move 2",
+   "move 1"
+  ],
+  [
+   "move 2",
+   "move 1"
+  ],
+  [
+   "move 2",
+   "move 1"
+  ],
+  [
+   "move 2",
+   "move 1"
+  ],
+  [
+   "move 2",
+   "move 1"
+  ]
+ ],
+ "axes": [
+  {
+   "name": "duration",
+   "field": "draws.0.7",
+   "values": [
+    0,
+    1,
+    2,
+    3
+   ],
+   "steps": [
+    0
+   ]
+  },
+  {
+   "name": "selfhit",
+   "field": "draws.1.3",
+   "values": [
+    0,
+    99
+   ]
+  },
+  {
+   "name": "damage",
+   "field": "draws.1.5",
+   "values": [
+    0,
+    15
+   ]
+  }
+ ],
+ "expect": {
+  "exact": true
+ },
+ "tape_steps": {
+  "0": {
+   "secondary.0": 0
+  }
+ },
+ "require_fields": [
+  "item_knocked",
+  "destiny_bond",
+  "effect"
+ ]
+}

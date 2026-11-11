@@ -23,8 +23,8 @@ from gpu_engine import v2e_census as cz, v2e_phase_profile as pp
 ROOT = Path(__file__).resolve().parents[1]
 # Statements of a stand-in step_with_chance on the real phase lines (A, B, D, E0, two actions E1/E4, F1, two residual events, G).
 CODE = {342: 'def step_with_chance(x, y):', 487: '    a = helper(x) + y', 544: '    b = a * y', 610: '    c = b - x', 714: '    c = c + 1',
-    737: '    for order in range(2):', 739: '        c = c * 2 + order', 1854: '        c = jnp.where(c > 0, c, -c)', 1952: '    d = c - y',
-    2066: '    for event in range(2):', 2067: '        d = d + event', 2163: '        d = d * 3', 2315: '    return d + a'}
+    737: '    for order in range(2):', 739: '        c = c * 2 + order', 1863: '        c = jnp.where(c > 0, c, -c)', 1961: '    d = c - y',
+    2075: '    for event in range(2):', 2076: '        d = d + event', 2172: '        d = d * 3', 2324: '    return d + a'}
 HEADER = ['import jax', 'import jax.numpy as jnp', '', '', '@jax.jit', 'def helper(x):', '    return x * 3 + 1']
 LABELS = ['A', 'B', 'D', 'E0', 'E1.0', 'E4.0', 'E1.1', 'E4.1', 'F1', 'F2.0', 'F2.1', 'G']
 
@@ -81,7 +81,7 @@ class PhaseTableTest(unittest.TestCase):
         for tag, label in cz.BOUNDARIES:self.assertTrue(label == 'END' or cz.base(label) in names, tag)
 
     def test_label_lines(self):
-        lines = [None, 488, 544, 573, 644, 724, 750, 963, 1374, 1854, 750, 963, 1913, 1963, 2060, 2067, 2163, 2073, 2098, 2075, 2330, None]
+        lines = [None, 488, 544, 573, 644, 724, 750, 966, 1377, 1863, 750, 966, 1922, 1972, 2069, 2076, 2172, 2082, 2107, 2084, 2342, None]
         want = ['outside', 'A', 'B', 'C', 'D', 'E0', 'E1.0', 'E2.0', 'E3.0', 'E4.0', 'E1.1', 'E2.1', 'E4.1', 'F1', 'F2.pre', 'F2.0', 'F2.0',
             'F2.1', 'F2.1', 'F2.2', 'G', 'outside']
         self.assertEqual(cz.label_lines(lines), want)
@@ -90,7 +90,7 @@ class PhaseTableTest(unittest.TestCase):
 
     def test_listing_lines(self):
         with tempfile.TemporaryDirectory() as d:
-            path = Path(d, 'listing.txt');path.write_text('  353:   check\n  487:   rows\n  544:   speed\n 1963:   x\n 2390:   return\nnoise\n')
+            path = Path(d, 'listing.txt');path.write_text('  353:   check\n  487:   rows\n  544:   speed\n 1972:   x\n 2402:   return\nnoise\n')
             self.assertEqual(cz.listing_lines(path), {'pre': 1, 'A': 1, 'B': 1, 'F1': 1, 'G': 1})
 
 
@@ -175,7 +175,7 @@ FileLocations
 2 {file_name_id=1 function_name_id=2 line=9 end_line=9 column=11 end_column=30}
 3 {file_name_id=1 function_name_id=3 line=750 end_line=750 column=8 end_column=15}
 4 {file_name_id=2 function_name_id=4 line=4 end_line=4 column=11 end_column=23}
-5 {file_name_id=1 function_name_id=3 line=1963 end_line=1963 column=11 end_column=16}
+5 {file_name_id=1 function_name_id=3 line=1972 end_line=1972 column=11 end_column=16}
 
 StackFrames
 1 {file_location_id=1 parent_frame_id=1}
@@ -207,12 +207,12 @@ class JaxAttribTest(unittest.TestCase):
         self.assertEqual(stack.offset, 1)
         self.assertEqual(stack(4), [('lane_index.py', 'leaf', 4), ('transition.py', 'step_with_chance', 750), ('transition.py', 'outer', 9),
             ('transition.py', '<module>', 10)])
-        self.assertEqual([f[2] for f in stack(5)], [1963, 9, 10])
+        self.assertEqual([f[2] for f in stack(5)], [1972, 9, 10])
 
     def test_index_and_attribution(self):
         index = pp.phase_hlo_index(HLO)
         self.assertEqual((index['fusion.1']['line'], index['fusion.1']['module'], index['fusion.1']['scope']), (750, 'lane_index', 'step'))
-        self.assertEqual(index['fusion.2']['line'], 1963);self.assertIsNone(index['fusion.3']['line']);self.assertEqual(index['fusion.4']['scope'], 'forward')
+        self.assertEqual(index['fusion.2']['line'], 1972);self.assertIsNone(index['fusion.3']['line']);self.assertEqual(index['fusion.4']['scope'], 'forward')
         event = lambda op, dur: dict(name=op, dur=dur, start=0, end=dur, line='Stream #1', stats={'hlo_op': op})
         events = [event('fusion.1', 4_000_000), event('fusion.2', 2_000_000), event('fusion.3', 1_000_000), event('fusion.4', 8_000_000),
             event('unknown.9', 5), dict(name='memcpy', dur=9, start=0, end=9, line='Stream #1', stats={})]
@@ -221,7 +221,7 @@ class JaxAttribTest(unittest.TestCase):
         self.assertEqual(got['ms_per_tick_by_phase'], {'E1': 2.0, 'F1': 1.0, 'outside': 0.5})
         self.assertEqual(got['ms_per_tick_by_group_category']['E'], {'tracker': 2.0})
         self.assertAlmostEqual(got['step_ms_per_tick'], 3.5);self.assertIn('forward', got['ms_per_tick_by_scope'])
-        # fusion.2 (root op at 1963, F1) fuses an op from line 750 (E1): charged whole to F1, and counted as spanning two phases.
+        # fusion.2 (root op at 1972, F1) fuses an op from line 750 (E1): charged whole to F1, and counted as spanning two phases.
         self.assertEqual(index['fusion.2']['phases'], ['E1', 'F1']);self.assertEqual(index['fusion.1']['phases'], ['E1'])
         self.assertAlmostEqual(got['multi_phase_fusion_share'], 2 / 7);self.assertAlmostEqual(got['multi_group_fusion_share'], 2 / 7)
         self.assertIn('root op', got['caveat'])

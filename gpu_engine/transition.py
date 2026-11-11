@@ -838,6 +838,9 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                 eligible & before.confusion_self_hit,active=live)
         hp = jnp.where(eligible & before.confusion_self_hit, jnp.maximum(0, hp - confusion_damage), hp)
         work = work._replace(hp=_set_active(work.hp, work, side, hp))
+        # Fidelity patch B: the self-hit's -damage|X|..|[from] confusion is an HP line; B2's absent-item evidence
+        # takes it as action-phase HP in either phase (pokezero.belief _ACTION_PHASE_ONLY_HP_TAGS).
+        if _device_public is not None:device_public.hp_line(_device_public,work,side,eligible & before.confusion_self_hit,source_class=device_public.HP_ACTION)
         # Gen 3 singles cancels all queued actions after any faint, not only
         # the fainted mon's move. A confusion self-KO therefore skips the foe.
         moves_cancelled |= eligible & (hp == 0)
@@ -1784,6 +1787,12 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                 work=secondaries.apply(work,side,move,secondary_draws[rows,side],table.secondary,
                     eligible=acts & hit & ~immune,effective_weather=effective_weather,
                     substitute_hit=hits_sub,item_table=table.items,_device_public=_device_public)
+        if table.secondary is not None:
+            # Fidelity patch B: Iron Tail's Def drop, Steel Wing's and Meteor Mash's self boost and Signal Beam's
+            # confusion, on the same roll (one secondary entry per move); confusion lasts 2+draws[s][7].
+            work,_chance_secondary=secondaries.apply_chance_effects(work,side,move,secondary_draws[rows,side],chance[:,7],
+                table.secondary,eligible=acts & hit & ~immune,substitute_hit=hits_sub,_device_public=_device_public)
+            if _lifecycle_trace:_public_trace=status_callbacks.unknown(_public_trace,_chance_secondary)
         if table.items is not None:
             # Knock Off (gen4 moves.ts onAfterHit, inherited by Gen 3): AfterHit runs after the
             # secondaries and, in Gen 3, before DamagingHit; only for a damaged non-Substitute target,
@@ -2321,6 +2330,9 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
     # (sim/battle.ts faintMessages, sim/pokemon.ts clearVolatile). The fainted holder
     # stays the active token until replaced; its replacement request sees no Substitute.
     work=work._replace(substitute_hp=jnp.where(work.hp>0,work.substitute_hp,0))
+    # Fidelity B: the same clearVolatile ends confusion (reachable since Signal Beam starts it) and the Choice
+    # lock (choicelock), so a forced-replacement request sees neither; departure clears both later anyway.
+    work=work._replace(**{name:jnp.where(work.hp>0,getattr(work,name),0) for name in ("confusion_counter","choice_move")})
     # clearVolatile at the faint also ends Destiny Bond (design 2.4).
     work=work._replace(volatile=jnp.where(work.hp>0,work.volatile,work.volatile & jnp.uint32(~DESTINY_BOND&0xffffffff)))
     alive = jnp.any(work.hp > 0, axis=2)

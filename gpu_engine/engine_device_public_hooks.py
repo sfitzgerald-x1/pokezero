@@ -369,6 +369,8 @@ def entry(c,before,after,side,table,use):
     cure=starts&(_get(before,'status',side)!=0)&(_get(after,'status',side)==0)
     if table.own_tempo is not None:
         cure |= starts&table.own_tempo[current]&(_get(before,'confusion_counter',side)>0)
+        # Fidelity patch B: Own Tempo's onUpdate removes a Baton-passed confusion (-end|X|confusion).
+        c=confusion_end(c,after,side,starts&table.own_tempo[current]&(_get(before,'confusion_counter',side)>0))
     c=reveal_ability(c,after,side,cure)
     # Pressure's Gen3 start line is owner-only; never shared with the foe here.
     return c
@@ -478,6 +480,11 @@ def item_changes(c,before,after,use):
         old=_get(before,'item',side);consumed=use&(old>0)&(_get(after,'item',side)==0)
         c=reveal_item(c,before,side,old,consumed)
         c=c._replace(trackers=_write(c.trackers,'item_removed',side,_li.take(after.active,_r(after),side),j.ones_like(consumed),consumed))
+        # Fidelity patch B: a Lum Berry's onEat removes confusion (-end|X|confusion), e.g. one Baton-passed in.
+        # States without the leaf (authored fixtures) carry no confusion transition.
+        # Fixture-only guard: transition.py and secondary.py callers always pass BattleState, which has the leaf.
+        if hasattr(before,'confusion_counter') and hasattr(after,'confusion_counter'):
+            c=confusion_end(c,after,side,_mask(use,len(c.trackers.error))&_confusion_ended(before,after,side))
     return observe(c,after,use)
 
 
@@ -695,6 +702,12 @@ def before_move(c,state,side,result,use,*,loafing=False,sleep_usable=False):
     c=feature(c,side,p,'sleep_cant_pending',j.ones_like(p),asleep)
     c=feature(c,side,p,'sleep_usable_pending',j.asarray(sleep_usable,j.int32),asleep)
     c=opportunity(c,side,use&~result.can_act&~result.confusion_self_hit)
+    # Fidelity patch B (design 2.5): the snap-out (confusion's time reaches 0 at BeforeMove) prints
+    # -end|X|confusion; public_move_state cannot see it, its before being the post-BeforeMove state.
+    # A result without the field (an authored fixture) carries no confusion transition.
+    # Fixture-only guard: transition.py always passes mechanics.BeforeMove, which has the field.
+    left=getattr(result,'confusion_counter',None)
+    if left is not None:c=confusion_end(c,state,side,use&(_get(state,'confusion_counter',side)>0)&(j.asarray(left)==0))
     return _refresh(c,side,p,use&(_get(state,'status',side)==5)&(result.status==5))
 
 
@@ -702,6 +715,27 @@ def volatile(c,state,side,name,value,use):
     r=_r(state);p=_li.take(state.active,r,side);slot=j.clip(_li.take(c.trackers.physical_to_public,r,side,p),0,5)
     old=_li.take(c.trackers.public_volatiles,r,side,slot);new=old.at[:,VOLATILE_NAMES.index(name)].set(value)
     return c._replace(trackers=_write(c.trackers,'public_volatiles',side,p,new,use))
+
+
+def _confusion_ended(before,after,side):
+    """[B] the same living active's actual confusion ended between before and after."""
+    r=_r(after)
+    return ((_li.take(before.active,r,side)==_li.take(after.active,r,side))&(_get(before,'confusion_counter',side)>0)
+        &(_get(after,'confusion_counter',side)==0)&(_get(after,'hp',side)>0))
+
+
+def confusion_end(c,state,side,use):
+    """Fidelity patch B: B2's -end|X|confusion on the active of `side`.
+
+    Showdown prints it whenever removeVolatile('confusion') ends a living active's
+    confusion: the BeforeMove snap-out, a Lum Berry's onEat, Own Tempo's onUpdate
+    (data/mods/gen4/conditions.ts, data/conditions.ts confusion onEnd). B2's REMOVE
+    (public_active.apply) drops the bag entry and resets the CONFUSION_TURNS clock.
+    A switch-out or a faint ends it silently: install/withdraw and faint_clear.
+    """
+    use=_mask(use,len(c.trackers.error));p=_li.take(state.active,_r(state),side)
+    c=volatile(c,state,side,'confusion',j.zeros_like(use),use)
+    return feature(c,side,p,'confusion_turns',j.zeros_like(p),use)
 
 
 def baton_copy(c,state,side,outgoing,use):

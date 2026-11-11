@@ -1,0 +1,211 @@
+{
+ "schema": "pokezero.effect_probe.scenario.v1",
+ "move": "confusion_baton_owntempo",
+ "note": "B Baton Pass into Own Tempo: Slowbro inherits Ariados's confusion and its onUpdate removes it at once (-activate ability: Own Tempo, -end confusion), so it never decrements or hits itself.",
+ "teams": [
+  [
+   {
+    "species": "Venomoth",
+    "moves": [
+     "signalbeam",
+     "splash",
+     "sleeppowder",
+     "psychic"
+    ],
+    "ability": "Shield Dust",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Starmie",
+    "moves": [
+     "splash",
+     "surf",
+     "recover",
+     "protect"
+    ],
+    "ability": "Illuminate",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Blissey",
+    "moves": [
+     "splash",
+     "softboiled",
+     "protect",
+     "seismictoss"
+    ],
+    "ability": "Natural Cure",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Skarmory",
+    "moves": [
+     "splash",
+     "protect",
+     "spikes",
+     "peck"
+    ],
+    "ability": "Keen Eye",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Swampert",
+    "moves": [
+     "splash",
+     "protect",
+     "surf",
+     "earthquake"
+    ],
+    "ability": "Torrent",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Suicune",
+    "moves": [
+     "splash",
+     "surf",
+     "icebeam",
+     "rest"
+    ],
+    "ability": "Pressure",
+    "item": "Leftovers"
+   }
+  ],
+  [
+   {
+    "species": "Ariados",
+    "moves": [
+     "batonpass",
+     "splash",
+     "signalbeam",
+     "agility"
+    ],
+    "ability": "Insomnia",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Slowbro",
+    "moves": [
+     "splash",
+     "surf",
+     "rest",
+     "protect"
+    ],
+    "ability": "Own Tempo",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Starmie",
+    "moves": [
+     "splash",
+     "surf",
+     "recover",
+     "protect"
+    ],
+    "ability": "Illuminate",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Blissey",
+    "moves": [
+     "splash",
+     "softboiled",
+     "protect",
+     "seismictoss"
+    ],
+    "ability": "Natural Cure",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Skarmory",
+    "moves": [
+     "splash",
+     "protect",
+     "spikes",
+     "peck"
+    ],
+    "ability": "Keen Eye",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Swampert",
+    "moves": [
+     "splash",
+     "protect",
+     "surf",
+     "earthquake"
+    ],
+    "ability": "Torrent",
+    "item": "Leftovers"
+   }
+  ]
+ ],
+ "script": [
+  [
+   "move 1",
+   "move 1"
+  ],
+  [
+   "",
+   "switch 2"
+  ],
+  [
+   "move 2",
+   "move 1"
+  ],
+  [
+   "move 2",
+   "move 1"
+  ],
+  [
+   "move 2",
+   "move 1"
+  ],
+  [
+   "move 2",
+   "move 1"
+  ]
+ ],
+ "axes": [
+  {
+   "name": "duration",
+   "field": "draws.0.7",
+   "values": [
+    0,
+    1,
+    2,
+    3
+   ],
+   "steps": [
+    0
+   ]
+  },
+  {
+   "name": "selfhit",
+   "field": "draws.1.3",
+   "values": [
+    0,
+    99
+   ],
+   "steps": [
+    2,
+    3,
+    4,
+    5
+   ]
+  }
+ ],
+ "expect": {
+  "exact": true
+ },
+ "tape_steps": {
+  "0": {
+   "secondary.0": 0
+  }
+ },
+ "require_fields": [
+  "item_knocked",
+  "destiny_bond",
+  "effect"
+ ]
+}

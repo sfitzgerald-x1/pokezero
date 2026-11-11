@@ -32,7 +32,7 @@ CONSUMERS = {
         (4, "transition/pursuit: critical<1 or<2"),
         (5, "transition/pursuit: damage85+draw; confusion damage reuses draw"),
         (6, "mechanics.accuracy_hit: pinned binary64/Q12 integer-roll predicates"),
-        (7, "transition primary sleep; encore.apply duration"),
+        (7, "transition primary sleep; encore.apply duration; secondary.apply_chance_effects Signal Beam confusion 2+draw"),
         (8, "effects.stall_success: draw<8//denominator"))},
     "draws.0.0": ("transition first move ordering",),
     "draws.1.0": ("transition residual SpeedBoost ordering",),
@@ -44,7 +44,7 @@ CONSUMERS = {
     "draws.1.11": ("transition residual Encore ordering",),
     **{f"{name}.{s}": (use,) for s in range(2) for name, use in (
         ("phazing", "phazing.choose_bench modulo bench count OR secondary.apply_contact Static<20; dispatched Gen3 moves are disjoint"),
-        ("secondary", "secondary.apply: shared draw<chance*SereneGrace"),
+        ("secondary", "secondary.apply and secondary.apply_chance_effects: shared draw<chance*SereneGrace"),
         ("sleep_talk", "sleep_talk.choose: draw modulo callable count before PP test"),
         ("entry_ties", "transition resumed switch/callback ordering"))},
     "initial_tie": ("transition.initialize unresolved initial entry ordering",),
@@ -56,7 +56,7 @@ CONSUMERS = {
 }
 
 # Changing any source that supplies the consumer/domain proof requires review.
-SOURCE_PINS = {'action_history.py': 'a47bdb2712f7eadaed12d91ede70be2ebe9f1c1ae3f70fe56495437997212407', 'critical.py': 'b66e6cf10c0d4df625b1c4f5e5db238af42052e556d7649a10f911745181401e', 'effects.py': '30af14ae26f0a56784898f1637998bcb71cc5356e3adaef540952530b6a726d3', 'encore.py': '63da39bbd181a8c6371b3bca853322291a03674c60f535ad0eacdbe1a440e0dd', 'entry.py': 'd1ec570e8b3e4692be31a1faea5ac5ab07f825a41755216c91c9b6e68180ee15', 'mechanics.py': 'e8476cc3e0029f3ed0bf82276312440e6dd8b340ffeb0c68cdd5611754eef661', 'phazing.py': 'c27039f267bd18660adb3c2bd826e58a7da953eea0e79677de5428f042447969', 'pursuit.py': '2b01102bb3819791fc1edea0ba0fe0a0b913e8dfa5a8f6501f48f3fe260a8309', 'secondary.py': 'cc16c0554ee33872103d2aa8f8471d80639e118bdcf880263f6df33c8b826588', 'sleep_talk.py': '968a78ddde87158b13f68dfcacc2158f07336d82c1be472d2283421e8583c154', 'state.py': 'e43e3c6daf86b9f76847082e6035760775706b3697dc3ca2180a9b317692c148', 'transition.py': '97086e6a630d602e5179b608a5d8d93d4d191c0b4559fb6dd546cfb0e267431e', 'weather.py': '3c861027e16d27917fa47fa5cf5d6dc0c68d3a74af282108dfb94369d4db57e5'}
+SOURCE_PINS = {'action_history.py': 'a47bdb2712f7eadaed12d91ede70be2ebe9f1c1ae3f70fe56495437997212407', 'critical.py': 'b66e6cf10c0d4df625b1c4f5e5db238af42052e556d7649a10f911745181401e', 'effects.py': '30af14ae26f0a56784898f1637998bcb71cc5356e3adaef540952530b6a726d3', 'encore.py': '63da39bbd181a8c6371b3bca853322291a03674c60f535ad0eacdbe1a440e0dd', 'entry.py': 'd1ec570e8b3e4692be31a1faea5ac5ab07f825a41755216c91c9b6e68180ee15', 'mechanics.py': 'e8476cc3e0029f3ed0bf82276312440e6dd8b340ffeb0c68cdd5611754eef661', 'phazing.py': 'c27039f267bd18660adb3c2bd826e58a7da953eea0e79677de5428f042447969', 'pursuit.py': '2b01102bb3819791fc1edea0ba0fe0a0b913e8dfa5a8f6501f48f3fe260a8309', 'secondary.py': 'ada20a946cc106dcf798fa053392ed895fe778c977af13774ab58e0c8c657fe6', 'sleep_talk.py': '968a78ddde87158b13f68dfcacc2158f07336d82c1be472d2283421e8583c154', 'state.py': 'e43e3c6daf86b9f76847082e6035760775706b3697dc3ca2180a9b317692c148', 'transition.py': '97086e6a630d602e5179b608a5d8d93d4d191c0b4559fb6dd546cfb0e267431e', 'weather.py': '3c861027e16d27917fa47fa5cf5d6dc0c68d3a74af282108dfb94369d4db57e5'}
 DOMAIN_MODULES = tuple("action_history absorption baton combat critical damage_moves effects encore entry focus_punch items linked_traps mechanics phazing pressure pursuit secondary self_destruct sleep_talk solar_beam state sustain transition variable_moves weather".split())
 DOMAIN_SHA256 = 'de58aa3ce6bc8df33be4894007f9a04bd714365289b5d5363a26700ff6223087'
 
@@ -261,7 +261,9 @@ def plan_for_state(state, index, actions, table, metadata, *, cap, native_input=
                 use(prefix+"1", Observation("less_than", 20))
             if live_move[s] and 1 in statuses[s]:
                 use(prefix+"2", Observation("less_than", 25))
-            if live_move[s] and any(data["confusion_counter"][s][p] for p in participants[s]):
+            # Fidelity B: a foe's Signal Beam may confuse this side before its own move this turn.
+            if live_move[s] and (any(data["confusion_counter"][s][p] for p in participants[s])
+                    or any(_at(t, "secondary", "confusion", move) for move in selected[1-s])):
                 use(prefix+"3", Observation("less_than", 50))
             random_damage = any(t["power"][move] > 0 or _at(t, "variable_moves", "hidden_power", move)
                 or _at(t, "variable_moves", "returns", move) or _at(t, "variable_moves", "frustration", move)
@@ -308,7 +310,8 @@ def plan_for_state(state, index, actions, table, metadata, *, cap, native_input=
                                             hustle=hustle,compound_eyes=bool(compound is not None and compound[ability]),
                                             sand_veil=bool(climate==3 and sand is not None and sand[target]))))
             use(prefix+"6", *(Observation("less_than", value) for value in sorted(accuracy)))
-            if any(_at(t, "effects", "status", move) == 5 or _at(t, "encore", "move", move) for move in selected[s]):
+            if any(_at(t, "effects", "status", move) == 5 or _at(t, "encore", "move", move)
+                    or _at(t, "secondary", "confusion", move) for move in selected[s]):
                 use(prefix+"7", Observation("identity"))
             if any(_at(t, "effects", "protect", move) or _at(t, "effects", "endure", move) for move in selected[s]):
                 # Input mapper admits only denominators0/2/4/8. Haze does not

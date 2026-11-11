@@ -56,6 +56,14 @@ checked against an independent copy of the design 2.1 derivation (the effect
 block a deferred step saves, the resumed block or zero otherwise) instead of
 against its migrated default, so the appended stream itself is never involvement.
 
+Special rule (B, with --pr B): a faint's clearVolatile now zeroes the fainted
+mon's Choice lock and confusion at the step end (state.choice_move,
+state.confusion_counter; CLEAR_VOLATILE_LEAVES). A (leaf, side) change is
+explained only when every differing mon on that side fainted this step (HP
+>0 -> 0 in this tree) and is 0 in this tree, read from the per-mon KO arrays
+both passes store; any other change of those leaves still needs an involved
+effect. Explained lane-steps are counted as clear_volatile_leaves.
+
 The involvement superset resolves the executed move as the engine does (slot,
 charge, standing or same-turn Encore, Struggle, a resumed queued action, every
 Sleep Talk-callable move, a Magic Coat reflection) and covers Effect Spore and
@@ -568,6 +576,16 @@ ALLOWED = {
     # R (optional carry from A2): Liquid Ooze on Leech Seed. The holder (user) is revealed; the seeder (target) takes
     # damage instead of healing, and a slower seeder's later residual handlers (a pinch berry, its condition) follow.
     'ooze_seed': dict(user=('reveal',), target=('hp', 'visible', 'item', 'boosts'), glob=()),
+    # B. Iron Tail's Def drop is the target's stage only (nothing later in the step reads its own Def without
+    # confusion, which is its own involvement). Steel Wing's Def raise lowers the physical damage the user takes
+    # later in the step: its HP, Substitute and HP-gated items and Wish, and the attacker's recoil. Meteor Mash's
+    # Atk raise comes after the user's only hit of the step. A flinch or a confusion (Signal Beam, or a confused
+    # active) decides whether the target acts at all, so, like a sleep landing (A1), it may change anything.
+    'irontail': dict(user=(), target=('boosts',), glob=()),
+    'steelwing': dict(user=('boosts', 'hp', 'item', 'visible', 'subtracker', 'wish'), target=('hp', 'item', 'boosts', 'visible'),
+                      glob=()),
+    'meteormash': dict(user=('boosts',), target=(), glob=()),
+    'headbutt': ALL, 'needlearm': ALL, 'signalbeam': ALL, 'confusion': ALL,
 }
 
 
@@ -729,6 +747,26 @@ def faint_rule(entries, post, base, fainted, physical_to_public, active_slot):
     if leaves and faint_clear_ok(leaves, post, base, fainted, physical_to_public, active_slot):
         return {(leaf, side) for leaf, side in entries if leaf not in leaves}, leaves
     return entries, []
+
+
+# B: a faint's clearVolatile (sim/battle.ts:2576) zeroes the fainted mon's Choice lock and confusion at the step end.
+CLEAR_VOLATILE_LEAVES = ('state.choice_move', 'state.confusion_counter')
+
+
+def clear_volatile_rule(entries, post, base_post, fainted):
+    """B special rule (a post-state rule like PR0's faint rule; not involvement): a faint's clearVolatile zeroes
+    the fainted mon's Choice lock and confusion. post/base_post: {leaf: [2,6]} this lane's post values in this
+    tree / the base; fainted: [2,6] this tree's mons whose HP went >0 -> 0 this step. A (leaf, side) entry is
+    explained iff every differing mon on that side fainted this step and is 0 in this tree; anything else stays
+    for involvement. Returns (remaining entries, explained entries)."""
+    explained = set()
+    for leaf, side in entries:
+        if leaf in post and leaf in base_post and side is not None:
+            a, b = np.asarray(post[leaf][side]), np.asarray(base_post[leaf][side])
+            differ = a != b
+            if differ.any() and not (differ & ~(np.asarray(fainted[side], bool) & (a == 0))).any():
+                explained.add((leaf, side))
+    return entries - explained, sorted(explained, key=str)
 
 
 # ---------------------------------------------------------------------------
@@ -993,7 +1031,8 @@ def patched_pass(args, *, step_override=None, prepared=None):
     destiny_bond = getattr(state_module, 'DESTINY_BOND', DEFAULT_DESTINY_BOND)
     counts = dict(lane_steps=0, done_skipped=0, unchanged=0, changed_and_involved=0, changed_but_uninvolved=0,
                   changed_involved_unexpected_fields=0, ko_cascade=0, phase_shift=0, terminal=0, terminal_residual=0, waived=0,
-                  rule_explained=0, faint_rule_leaves=0, effect_draws_saved=0)
+                  rule_explained=0, faint_rule_leaves=0, clear_volatile_leaves=0, effect_draws_saved=0)
+    clear_volatile = 'B' in plugins
     by_effect = {k: dict(changed=0, involved_unchanged=0, changed_fields={}, unexpected_fields={}, ko_cascade=0,
                          phase_shift=0, terminal=0, terminal_residual=0, ko_cascade_non_hp_fields={}) for k in table}
     ko_leaves = manifest.get('ko_leaves')
@@ -1088,6 +1127,13 @@ def patched_pass(args, *, step_override=None, prepared=None):
                         {n: faint_base[n][lane] for n in leaves}, result['fainted'][lane],
                         result['physical_to_public'][lane], result['active_slot'][lane])
                     counts['faint_rule_leaves'] += bool(faint_explained)
+                # B: the faint's clearVolatile of the fainted mon's Choice lock and confusion (CLEAR_VOLATILE_LEAVES).
+                clear_explained = []
+                if changed and clear_volatile:
+                    leaves = [n for n in CLEAR_VOLATILE_LEAVES if n in result['ko'] and n in base_ko]
+                    entries, clear_explained = clear_volatile_rule(entries, {n: result['ko'][n][lane] for n in leaves},
+                        {n: base_ko[n][lane] for n in leaves}, result['fainted'][lane])
+                    counts['clear_volatile_leaves'] += bool(clear_explained)
                 rule_ok = bool(changed) and not entries
                 changed_rest = sorted({leaf for leaf, _ in entries})
                 phase = bool(phase_lanes[lane]);terminal = bool(terminal_lanes[lane]) and not phase
@@ -1144,6 +1190,7 @@ def patched_pass(args, *, step_override=None, prepared=None):
                 listing.write(json.dumps(dict(shard=path.name, lane=lane, tick=tick, kind=kind, ko_cascade=cascade, phase_shift=phase,
                     terminal=terminal, terminal_residual=terminal_residual,
                     involved={k: v for k, v in effects.items()}, leaves=changed, entries=labels, faint_rule=faint_explained,
+                    clear_volatile_rule=[f'{l}@{side}' for l, side in clear_explained],
                     unexpected=[f"{l}@{'glob' if s is None else s}" for l, s in unexpected],
                     ko_consequences=[f"{l}@{'glob' if s is None else s}" for l, s in by_ko],
                     waived=[f"{l}@{'glob' if s is None else s}" for l, s in waived])) + '\n')
@@ -1160,7 +1207,7 @@ def patched_pass(args, *, step_override=None, prepared=None):
         capture_sha256=capture_sha, **base_check, shards=len(shards), partial=partial, failures=failures,
         migrated_new_inputs=new_inputs, new_outputs=new_outputs, public_order_rule=public_order_rule, link_rule=link_rule,
         effect_rule=effect_rule, residual_rule=residual_rule,
-        faint_clear_rule=bool(args.faint_clear), waive=list(args.waive or ()), counts=counts, by_effect=by_effect,
+        faint_clear_rule=bool(args.faint_clear), clear_volatile_rule=clear_volatile, waive=list(args.waive or ()), counts=counts, by_effect=by_effect,
         allowed_fields={e: ALLOWED.get(e, 'UNDECLARED: any change') for e in table},
         ko_allowed_fields={e: KO_ALLOWED[e] for e in table if e in KO_ALLOWED},
         uninvolved_leaves=dict(sorted(uninvolved_leaves.items(), key=lambda x: -x[1])), warnings=warnings,
