@@ -71,8 +71,8 @@ class IncrementalRootTests(unittest.TestCase):
         r = request();held = self.capture(r);pc.capture_root.reset_mock()
         self.assertIs(self.c.public_root(r), held);pc.capture_root.assert_not_called()
         self.assertEqual(self.c.public_root(request(index=1))[0], 'fresh')
-        self.assertEqual(self.c.public_root(request(stream=True))[0], 'fresh')   # True == 1 must not reach the held root
-        self.assertEqual(self.c.public_root(dict(r, decision_index=False))[0], 'fresh')
+        for bad in (request(stream=True), dict(r, decision_index=False)):   # True == 1, False == 0: never the held root
+            with self.assertRaises(ValueError):self.c.public_root(bad)   # the original refusal (DecisionAddress), as before
 
     def test_held_roots_are_capped_most_recent_first(self):
         for i in range(pc.HELD_ROOTS + 6):self.capture(request(battle=f'b{i}'))
