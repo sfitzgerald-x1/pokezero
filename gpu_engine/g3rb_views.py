@@ -26,7 +26,8 @@ Gen 3 random-battle support) is rebuilt, per seat, at every decision of that sea
   order, as a random-battle team's order is; every switch-in or drag swaps the incoming mon with slot 0 (Showdown's
   side.switchIn). Each mon's moves are in a random order, as the generator shuffles a set's moves. An order by appearance, or
   imputed mons without a gender, would tell the view which mons are still to appear (the order, move-order and gender draws
-  use their own RNG, derived after the variant draws). Stats are the generator's (85 EVs,
+  use their own RNG, derived after the variant draws, so the variants are the order-by-appearance extraction's except where
+  Species Clause removes a forme group from the imputation pool). Stats are the generator's (85 EVs,
   31 IVs, Hidden Power IVs, attack dump); HP = the log's own exact HP; PP = max PP minus the uses seen (Pressure's extra PP is
   not modelled); an item ended in public is gone. Choice lock, Disable, Taunt, Encore and 0 PP disable moves as Showdown's
   request does; trapping is not modelled (switches stay legal; labels are unaffected).

@@ -6,6 +6,7 @@ import random
 from types import SimpleNamespace as NS
 import unittest
 
+from _showdown_root import requires_showdown, showdown_root
 from gpu_engine import g3rb_views as gv
 
 LOG = [
@@ -226,6 +227,15 @@ class TeamTests(unittest.TestCase):
             self.assertEqual([m['species'] for m in team if m['species'].startswith('deoxys')], ['deoxysspeed'])   # no second Deoxys
             self.assertEqual(len({m['nick'] for m in team}), 6)   # so no nickname clash in request()'s by_nick
 
+    def test_species_clause_after_an_imputed_forme_is_drawn(self):
+        species = ('gengar', 'starmie', 'dugtrio', 'tauros', 'chansey', 'deoxys', 'deoxysattack', 'deoxysdefense', 'deoxysspeed')
+        t = self.tables(species, base={s: 'deoxys' for s in species if s.startswith('deoxys')});drawn = 0
+        for seed in range(300):
+            team = gv.draw_team(t, self.facts(), 'Gengar', random.Random(seed))   # 3 slots from 2 others and 4 Deoxys formes
+            formes = [m['species'] for m in team if m['species'].startswith('deoxys')]
+            self.assertLessEqual(len(formes), 1);self.assertEqual(len(team), 6);drawn += len(formes)
+        self.assertGreater(drawn, 100)   # a forme is drawn often, and its siblings are then dropped from the pool
+
     def test_gender_draw(self):
         table = {'tauros': dict(gender='M'), 'magneton': dict(gender='N'), 'snorlax': dict(gender='')}
         rng = random.Random(0);draws = collections.Counter(gv.draw_gender(table, 'snorlax', rng) for _ in range(4000))
@@ -233,11 +243,11 @@ class TeamTests(unittest.TestCase):
         self.assertTrue(.47 < draws['M'] / 4000 < .53);self.assertEqual(set(draws), {'M', 'F'})
         with self.assertRaises(KeyError):gv.draw_gender(table, 'unknownmon', rng)   # every pinned species must be in the table
 
-    @unittest.skipUnless(__import__('os').environ.get('POKEZERO_SHOWDOWN_ROOT') and __import__('shutil').which('node'),
-                         'needs a Showdown checkout (POKEZERO_SHOWDOWN_ROOT) and node')
+    @requires_showdown('needs a built Showdown checkout')
+    @unittest.skipUnless(__import__('shutil').which('node'), 'needs node')
     def test_gender_table_from_showdown(self):
-        import os
-        table = gv.gender_table(os.environ['POKEZERO_SHOWDOWN_ROOT'])
+        if not (showdown_root() / 'dist' / 'sim').exists():self.skipTest(f'no built dist/sim in {showdown_root()}')
+        table = gv.gender_table(showdown_root())
         self.assertEqual({s: table[s]['gender'] for s in ('tauros', 'starmie', 'chansey', 'snorlax', 'magneton')},
                          dict(tauros='M', starmie='N', chansey='F', snorlax='', magneton='N'))
         self.assertEqual((table['deoxysspeed']['base'], table['gengar']['base']), ('deoxys', 'gengar'))
