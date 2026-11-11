@@ -110,6 +110,13 @@ def preflight_wall_p95_max(deadline_seconds,reserve_seconds):
     moves it (4.6 s at 5.0 s), since a longer deadline lets the tail complete into the measured wall instead of timing out."""
     return round(float(deadline_seconds)-float(reserve_seconds)-PREFLIGHT_WALL_MARGIN,6)
 PREFLIGHT_TIMEOUT_SHARE_MAX=.01   # the lead's bound on the search arm's timeout share (of non-single-legal decisions)
+PREFLIGHT_REFUSED_SHARE_MAX=.25   # the lead's bound on the search arm's server-refused share (constructor, depthn and class refusals, of
+# non-single-legal decisions): pre-flights and screens through screen-r4a2 ran 4.6-10.4% constructor refusals; a pre-flight whose searches
+# the servers mostly refused measured nothing (screen-r4a2's first 5.0 s pre-flight: 100%, wall 0.32 s)
+PREFLIGHT_REFUSED_CAUSES=('constructor_refused','depthn_refused','class_refused')
+PREFLIGHT_REUSE_REFUSALS=('SEARCH_PREFIX_NOT_ORIGINAL_SUCCESSOR','SEARCH_REQUEST_ALREADY_ATTEMPTED')   # a live server already holds the battle:
+# the pre-flight's band was not disjoint from an earlier run in the same server lifetime (the servers keep one session per battle, owner and
+# stream for their whole life); a pre-flight passes only with none, so its band is disjoint or it runs on fresh servers
 
 
 NON_HOME_SHARE_MAX=.01   # the lead's breakage bound: answered search decisions off their battle's home server
@@ -734,7 +741,7 @@ def preflight_summary(directory,*,dispatch=None,server=None,cells_per_worker=Non
         if value.get('setting')!='preflight':continue
         arm=value.get('arm');rows=telemetry_rows(root,cell['ordinal']);off=non_home(rows)
         a=arms.setdefault(arm,dict(games=0,complete=0,first=[],warm=[],encode=[],greedy=[],search=[],causes=Counter(),kinds=Counter(),non_home=0,answered=0,
-            first_actor=[],warm_actor=[]));
+            first_actor=[],warm_actor=[],reuse=0));
         a['non_home']+=len(off);a['answered']+=sum(1 for r in rows if type((r.get('search')or {}).get('server_id'))is str and (r.get('search')or {}).get('client_refused')is not True)
         a['games']+=1;a['complete']+=value.get('status')=='COMPLETE'
         for r in rows:
@@ -745,6 +752,7 @@ def preflight_summary(directory,*,dispatch=None,server=None,cells_per_worker=Non
                 a['search'].append(r['select_seconds'])
                 if r.get('cause')is not None:a['causes'][r['cause']]+=1
                 if r.get('cause')=='constructor_refused':a['kinds'][refusal_kind((r.get('search')or {}).get('refusal'))]+=1
+                if any(k in str((r.get('search')or {}).get('refusal')or '')for k in PREFLIGHT_REUSE_REFUSALS):a['reuse']+=1
     out={}
     for arm,a in sorted(arms.items(),key=lambda x:str(x[0])):
         warm=_quantiles(a['warm']);p99=None if warm is None else warm['p99']
@@ -760,17 +768,22 @@ def preflight_summary(directory,*,dispatch=None,server=None,cells_per_worker=Non
             search_wall=_quantiles(a['search']),fallback_causes=dict(sorted(a['causes'].items())),
             timeout_share=_share(a['causes']['timeout'],len(a['search'])),constructor_refused_share=_share(a['causes']['constructor_refused'],len(a['search'])),
             searched_share_of_non_timeouts=_share(len(a['search'])-sum(a['causes'].values()),len(a['search'])-a['causes']['timeout']),
+            refused_share=_share(sum(a['causes'][c]for c in PREFLIGHT_REFUSED_CAUSES),len(a['search'])),reuse_refusals=a['reuse'],
             constructor_refusal_kinds=dict(a['kinds'].most_common(10)),non_home=a['non_home'],answered=a['answered'],
             non_home_share=_share(a['non_home'],a['answered']))
     if len(conditions)!=1:raise ValueError(f'one search arm, deadline and reserve per pre-flight required, found {sorted(conditions)}')
     (arm,deadline,reserve),=conditions
     walls=[out[a]['search_wall']for a in out if a in SEARCH_ARMS and out[a]['search_wall']]
     timeouts=[out[a]['timeout_share']for a in out if a in SEARCH_ARMS and out[a]['timeout_share']is not None]
+    refused=[out[a]['refused_share']for a in out if a in SEARCH_ARMS and out[a]['refused_share']is not None]
+    reuse=[out[a]['reuse_refusals']for a in out if a in SEARCH_ARMS]
     claims=[json.loads(p.read_bytes())for p in sorted((root/'claims').glob('*.json'))]
     return dict(schema=PREFLIGHT_SCHEMA,arm=arm,deadline_seconds=deadline,reserve_seconds=reserve,server=server,cells_per_worker=cells_per_worker,
         dispatch=dispatch,arms=out,search_wall_p95_max=preflight_wall_p95_max(deadline,reserve),
         search_wall_within=None if not walls else all(w['p95']<=preflight_wall_p95_max(deadline,reserve)for w in walls),
         timeout_share_max=PREFLIGHT_TIMEOUT_SHARE_MAX,timeouts_within=None if not timeouts else all(t<=PREFLIGHT_TIMEOUT_SHARE_MAX for t in timeouts),
+        refused_share_max=PREFLIGHT_REFUSED_SHARE_MAX,refused_within=None if not refused else all(x<=PREFLIGHT_REFUSED_SHARE_MAX for x in refused),
+        reuse_refusals=None if not reuse else sum(reuse),
         warmups=[c['warmup']for c in claims if c.get('setting')=='preflight'and c.get('warmup')is not None],
         seed_band=run['seed_band'],lanes=run['lanes'],calibration_tree=run['tree'],
         code_tree=code_tree if code_tree is not None else tree_identity(tree_commit))
@@ -787,7 +800,8 @@ def check_preflight(d,tree):
     reserve and cells per worker; a dispatch that neither failed nor stopped; every game's first decision's actor time (encode +
     greedy) within its arm's warm actor p99 (the warmup worked; the end-to-end first decision, which also carries the server's time
     and the start-together GPU wave, is descriptive); the search wall within the bound, which is the declaration's
-    (preflight_wall_p95_max of its deadline and reserve); the declared numbers equal to the file's; and the pre-flight's code
+    (preflight_wall_p95_max of its deadline and reserve); timeouts and server refusals (PREFLIGHT_REFUSED_CAUSES) within
+    their bounds and no reuse refusal (PREFLIGHT_REUSE_REFUSALS: a battle the live servers already held); the declared numbers equal to the file's; and the pre-flight's code
     the eval's (the worker code digest: the declaration JSON is not part of it)."""
     a=d['actor'];value=read_bound(a['source']['path'],a['source']['sha256']);arm=d['arms'][1]
     raw=(value.get('arms')or {}).get('RAW')or {};search=(value.get('arms')or {}).get(arm)or {}
@@ -797,13 +811,15 @@ def check_preflight(d,tree):
             or value.get('reserve_seconds')!=d['reserve_seconds']or value.get('cells_per_worker')!=a['cells_per_worker']
             or value.get('search_wall_p95_max')!=preflight_wall_p95_max(d['deadline_seconds'],d['reserve_seconds'])
             or outcome.get('failed')!=[]or outcome.get('stopped')is not None or value.get('search_wall_within')is not True
-            or value.get('timeouts_within')is not True
+            or value.get('timeouts_within')is not True or value.get('refused_within')is not True or value.get('reuse_refusals')!=0
+            or value.get('refused_share_max')!=PREFLIGHT_REFUSED_SHARE_MAX
             or raw.get('first_actor_within_warm_p99')is not True or search.get('first_actor_within_warm_p99')is not True
             or pick(search.get('search_wall'),'p95')!=a['preflight_search_wall_p95_seconds']
             or pick(raw.get('warm_encode'),'p95')!=a['warm_p95_seconds']['encode']or pick(raw.get('warm_greedy'),'p95')!=a['warm_p95_seconds']['greedy']
             or pick(value.get('code_tree'),'source_sha256')!=tree['source_sha256']):
         raise ValueError('the declared actor must be its pre-flight\'s: same arm, deadline, reserve and cells per worker, a clean dispatch, '
-                         'first decisions within the warm p99, the search wall and timeouts within their bounds, the same numbers and the same code')
+                         'first decisions within the warm p99, the search wall, timeouts and server refusals within their bounds, no reused battle, '
+                         'the same numbers and the same code')
     return value
 
 
