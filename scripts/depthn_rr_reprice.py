@@ -128,6 +128,10 @@ tree guard) on the live inputs.
   search refuses the root (constructor_refused, the all-W rule). Everything after the sampler is the live path. A row then holds
   true_worlds (requested and played kind, fallback, problem, sidecar and its sha256, the true start, worlds built) and each world
   true_world (true_kind, built, reason, overlay notes, kernel_seed and whether it is the sampled world's, refusals).
+- Depth-1 cells (--depth1-cells, off by default; the MC ladder's reveal-cell telemetry): each priced world's depth1 gains cells
+  (depth1_cells: opp_forced / own_forced / terminal, 9x9 over own action a and opponent reply b, from D3's turn-1 frame: a forced
+  side is requested at the child with only switch lanes legal, i.e. its active fainted this turn). Without the flag rows are
+  unchanged.
 - Output (--out, a new directory): rows-<shard>.jsonl (one row per sent decision, whatever its status, written and fsynced as
   it goes), header-<shard>.json (tree guard, run header and identity check, warmup report, argv, cells, peer_inputs: the
   sidecar's path and schema, recharge_moves) and
@@ -202,6 +206,8 @@ def parser():
         'opponent sidecars DIR/opponent/<kind>-<ordinal>.json (gpu_engine/mc_ladder_opponents); needs --true-kind')
     p.add_argument('--true-kind', choices=TRUE_KINDS, help='true: the opponent\'s true team; true_private: plus its request-exact HP and '
         'active PP at the root (true where it waits)')
+    p.add_argument('--depth1-cells', action='store_true', help='each priced world\'s depth1.cells: per depth-1 cell, whether the turn-1 '
+        'child has the opponent / our seat forced to switch (a faint this turn) or is terminal (depth1_cells; off by default)')
     p.set_defaults(saved_root_admission=False, buckets=(1,))
     return p
 
@@ -501,6 +507,21 @@ class Capture:
         finally:live.decide, cw.prepare_roots, cw.price = decide, prepare_roots, price
 
 
+def depth1_cells(frame, root, world):
+    """--depth1-cells: per depth-1 cell (own action a, opponent reply b) of one block world, what the turn-1 child is (D3's frame,
+    host arrays [root, world, a, b, ...]): opp_forced (the opponent is requested at the child with only switch lanes 4-8 legal:
+    its active fainted this turn and a replacement from its party is pending), own_forced (the same for our seat) and terminal
+    (t1_status 1: the battle ended). 9x9 lists of bools; cells D3 did not enumerate are False."""
+    import numpy as np
+    status = np.asarray(frame.t1_status[root, world])
+
+    def forced(requested, legal):
+        req, leg = np.asarray(requested[root, world]).astype(bool), np.asarray(legal[root, world]).astype(bool)
+        return [[bool(status[a, b] != 0 and req[a, b] and not leg[a, b, :4].any() and leg[a, b, 4:].any()) for b in range(9)] for a in range(9)]
+    return dict(opp_forced=forced(frame.t1_peer_requested, frame.t1_peer_legal), own_forced=forced(frame.t1_own_requested, frame.t1_own_legal),
+                terminal=[[bool(status[a, b] == 1) for b in range(9)] for a in range(9)])
+
+
 def prices_fields(world):
     """A WorldPrices (or None: a world without a price surface) as JSON-ready fields."""
     if world is None:return dict(priced=False, opponent_requested=None, kept=None, root_peer_logits=None, grid=None)
@@ -660,7 +681,7 @@ def lane_labels(facts, peer):
     return out
 
 
-def describe(capture, peer_lanes, vocabulary, peer_inputs=None, key=None, reply=False):
+def describe(capture, peer_lanes, vocabulary, peer_inputs=None, key=None, reply=False, cells=False):
     """dict(root, prepared, worlds, notes, kept_disagreements, depth1) of one replayed decision's capture (module docstring); with
     `peer_inputs` (PeerInputs), each decided world's depth-0 peer inputs are self-checked and kept under `key`
     (ordinal, decision_index). From the priced frame, each world's depth-1 prices (worlds[i]['depth1'], backup_depth1: the
@@ -733,6 +754,7 @@ def describe(capture, peer_lanes, vocabulary, peer_inputs=None, key=None, reply=
                 for i, world in enumerate(prices1):
                     while i >= len(worlds):worlds.append(dict(world=len(worlds)))
                     worlds[i]['depth1'] = prices_fields(world)
+                    if cells and world is not None:worlds[i]['depth1']['cells'] = depth1_cells(frame, entry['rows'][i // 2], i % 2)
             except Exception as error:   # recorded; the depth-2 row is unchanged
                 notes.append(f'depth 1: {type(error).__name__}: {error}')
     if reply and len(capture.decided) >= 2:   # br_fp: the champion's decide comes first, the played (replied) one last
@@ -1039,7 +1061,7 @@ def main(argv=None):
                     with capture.installed(), (nullcontext() if true_worlds is None else true_worlds.installed(cell, row['decision_index'])) as truth:
                         clock = time.perf_counter();response = search.process_many([body])[0];wall = time.perf_counter() - clock
                     clock = time.perf_counter();detail = describe(capture, peer_lanes, vocabulary, peer_inputs,
-                        (ordinal, row['decision_index']), reply=bool(args.reply_archive))
+                        (ordinal, row['decision_index']), reply=bool(args.reply_archive), cells=args.depth1_cells)
                     if truth is not None:true_worlds_fields(detail, truth)
                     seconds = time.perf_counter() - clock
                     record = decision_row(cell, row, body, response, wall, found, detail, shard=shard, capture_seconds=seconds, live_problem=problem)

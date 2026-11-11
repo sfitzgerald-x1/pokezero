@@ -457,6 +457,24 @@ def write_run(root, cells):
         (root / 'owning-wire' / f'{ordinal}.jsonl').write_text('')
 
 
+class Depth1CellsTests(unittest.TestCase):
+    def test_forced_switch_and_terminal_flags_per_cell(self):
+        R_, W, n = 2, 2, 9
+        status = np.zeros((R_, W, n, n), np.int8);peer_req = np.zeros((R_, W, n, n), bool);own_req = np.zeros((R_, W, n, n), bool)
+        peer_legal = np.zeros((R_, W, n, n, n), bool);own_legal = np.zeros((R_, W, n, n, n), bool)
+        status[1, 0, 0, 0] = 2;peer_req[1, 0, 0, 0] = True;peer_legal[1, 0, 0, 0, 4:6] = True      # the opponent must replace
+        status[1, 0, 0, 1] = 2;peer_req[1, 0, 0, 1] = True;peer_legal[1, 0, 0, 1, [0, 4]] = True    # a normal request: not forced
+        status[1, 0, 3, 2] = 2;own_req[1, 0, 3, 2] = True;own_legal[1, 0, 3, 2, 7] = True          # our seat must replace
+        status[1, 0, 3, 3] = 1                                                                       # the battle ended
+        peer_req[1, 0, 5, 5] = True;peer_legal[1, 0, 5, 5, 4] = True                                 # not enumerated (status 0)
+        frame = SimpleNamespace(t1_status=status, t1_peer_requested=peer_req, t1_peer_legal=peer_legal, t1_own_requested=own_req,
+                                t1_own_legal=own_legal)
+        cells = R.depth1_cells(frame, 1, 0)
+        flagged = {k: [(a, b) for a in range(n) for b in range(n) if v[a][b]] for k, v in cells.items()}
+        self.assertEqual(flagged, dict(opp_forced=[(0, 0)], own_forced=[(3, 2)], terminal=[(3, 3)]))
+        self.assertEqual({k: sum(map(sum, v)) for k, v in R.depth1_cells(frame, 0, 0).items()}, dict(opp_forced=0, own_forced=0, terminal=0))
+
+
 class CellTests(unittest.TestCase):
     def run_directory(self, tmp):
         root = Path(tmp) / 'run'
