@@ -650,6 +650,24 @@ def evaluate(args):
 
 # ---- Foul Play transfer -------------------------------------------------------------------------------------------------------------
 
+def pi_fp_split_check(args, marker, arrays, split):
+    """pi_FP must not be scored on battle seeds it was fitted on. With a split record in its marker, the fitted seeds must miss
+    the held-out ones (fp_reply_train.held_out_overlap). An older pi_FP without one is held to its run's report.json beside the
+    checkpoint: the same data, test seeds, late block, view and redaction, and the same row count in every split."""
+    overlap = fpt.held_out_overlap(marker, arrays, split)
+    if overlap:raise SystemExit(f'{args.pi_fp}: fitted on {len(overlap)} battle seeds this split holds out (first: {overlap[:5]})')
+    if overlap is not None:return "held-out seeds disjoint from pi_FP's fitted seeds (its split record)"
+    path = Path(args.pi_fp).parent / 'report.json'
+    if not path.exists():raise SystemExit(f'{args.pi_fp} has no split record and no run report beside it: its held-out seeds cannot be checked')
+    run = json.loads(path.read_text());a = run.get('args') or {}
+    same = lambda x, y: x is not None and y is not None and Path(x).resolve() == Path(y).resolve()
+    checks = dict(data=same(a.get('data'), args.fpr), test_seeds=same(a.get('test_seeds'), args.test_seeds), late_from=a.get('late_from') == args.late_from,
+                  view=a.get('view') == 'b', redaction=a.get('redact') == 'peer-view-v2',
+                  rows={k: int(len(v)) for k, v in split.items()} == run.get('rows'))
+    if not all(checks.values()):raise SystemExit(f'{args.pi_fp}: its run report does not match this split: {checks}')
+    return "pi_FP's run report: same data, test seeds, late block, view and redaction, and equal row counts in every split"
+
+
 def foulplay(args):
     import torch
     from pokezero.neural_policy import checkpoint_file_sha256
@@ -662,9 +680,7 @@ def foulplay(args):
     fpt.use_view(arrays, 'b');fpt.apply_redaction(arrays, 'peer-view-v2')
     test_seeds = fpt.read_test_seeds(args.test_seeds, arrays)
     split = fpt.split_rows(arrays, test_seeds, args.late_from)
-    overlap = fpt.held_out_overlap(marker, arrays, split)   # pi_FP's fitted seeds must not be scored as held out
-    if overlap is None or overlap:raise SystemExit(f'{args.pi_fp}: ' + ('no split record' if overlap is None else
-                                                    f'fitted on {len(overlap)} battle seeds this split holds out (first: {overlap[:5]})'))
+    held_out_check = pi_fp_split_check(args, marker, arrays, split)
     n = len(arrays['label'])
     arrays['partial'] = np.zeros(n, bool);arrays['kind'] = np.asarray(arrays['forced'], np.int64);arrays['locked'] = np.zeros(n, bool)
     arrays['group'] = group_ids(arrays['ordinal']);arrays['band'] = np.zeros(n, np.int64)
@@ -674,8 +690,7 @@ def foulplay(args):
     pi_fp, _ = plain_model(args.pi_fp, torch, args.device)
     report = dict(schema='v2s-human-reply-foulplay.v1', fpr=str(args.fpr), test_seeds=args.test_seeds, late_from=args.late_from,
                   pi_fp=args.pi_fp, pi_fp_sha256=checkpoint_file_sha256(args.pi_fp), checkpoint_sha256=checkpoint_file_sha256(args.checkpoint),
-                  pi_fp_record=dict(view=marker['view'], redaction=marker['redaction'], data=marker.get('data'),
-                                    held_out_check="held-out seeds disjoint from pi_FP's fitted seeds"),
+                  pi_fp_record=dict(view=marker['view'], redaction=marker['redaction'], data=marker.get('data'), held_out_check=held_out_check),
                   history_inputs_note='Foul Play rows are all full labels (no partial events) and locked is 0: a history model sees '
                                       'every earlier choice, which a served model would not for a turn whose move never ran',
                   models={}, splits={})
