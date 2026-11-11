@@ -10,15 +10,16 @@ from gpu_engine import engine_execution_completeness as a
 from gpu_engine import engine_public_events as event
 from gpu_engine import engine_lifecycle_callbacks as life
 from gpu_engine import engine_full_v4_event_device as full
-from test_gpu_engine_engine_full_v4_event_device import FullV4EventDeviceTests as Fixture
+# Reached through its module: a TestCase bound here by name would be collected, and its 9 tests run, a second time.
+import test_gpu_engine_engine_full_v4_event_device as full_v4_tests
 
 
 class ExecutionAccountingTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        Fixture.setUpClass()
-        cls.fixture=Fixture()
-        cls.adapter=Fixture.compiled
+        full_v4_tests.FullV4EventDeviceTests.setUpClass()
+        cls.fixture=full_v4_tests.FullV4EventDeviceTests()
+        cls.adapter=full_v4_tests.FullV4EventDeviceTests.compiled
         cls.compiled=a.compile_accounting(cls.adapter)
         cls.tables=cls.compiled.device
         cls.frame=cls.fixture.initial()
