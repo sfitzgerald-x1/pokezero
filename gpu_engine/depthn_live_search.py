@@ -79,7 +79,8 @@ request_id. Per batch (process_many chunks a longer list into batches of max_req
 - private reveals (`private_reveals`, every response whose root prepare() built; None otherwise): constructor_worlds'
   private_reveal_record (enabled, found, applicable, redacted, unmatched): the owner's abilities its lines revealed only on
   Showdown's side-private Gen 3 Pressure line, and, with redact_private_reveals (the server's --redact-private-reveals; off
-  by default), the members whose public ability it cleared from the peer's view of the owner side in every world.
+  by default), the members whose public ability it cleared from the peer's view of the owner side in every world and
+  (belief) per such member its belief restored to the peer wire's fold (variant counts before and after, changed).
 - peer view b (`peer_view_b`; ONLY in the responses of a search built with peer_view_b, the server's --peer-view-b, off by
   default: a search without it adds no key, so its responses are exactly as before the flag): constructor_worlds'
   peer_view_b_record of every response whose root prepare() built (enabled, cells: per projected cell its column, side,

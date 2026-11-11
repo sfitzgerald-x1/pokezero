@@ -90,8 +90,9 @@ fp_reply_data's env rows; --fp-reply-data is not used.
   masks and vocabulary, the pinned Showdown's random-battle set source and dex; then peer_view_v2 (fp_reply_train.redact_peer_view
   'peer-view-v2', with Foul Play's own OPP_HAZARD_CREDIT from its lines). The env's own observation of Foul Play in the same round,
   after peer_view_v2 with the same credit, is kept beside it (obs_*): a check of the reference.
-- Kinds: true_b, true_private_b (view b ON: constructor_worlds.complete_carry with line_facts(..., peer_damage=True),
-  redact_private_reveals and peer_view_b, as prepare_roots(peer_view_b=True) completes the live worlds), true, true_private (view b
+- Kinds: true_b, true_private_b (view b ON: constructor_worlds.complete_carry with line_facts(..., peer_damage=True), the peer
+  wire's belief of a privately revealed member (peer_belief_facts), redact_private_reveals and peer_view_b, as
+  prepare_roots(peer_view_b=True) completes the live worlds), true, true_private (view b
   OFF: the control), sampled_<i>_b. The views are compared as served (the reply prior serves the raw peer inputs); each position's
   view_b record holds the root's peer_view_b and private_reveals records.
 - Positions: aligned as above (request_count - 1); a position whose reference cannot be built is counted
@@ -676,13 +677,22 @@ class Completion:
     true world are built before it."""
     def __init__(self, constructor, *, peer_view_b=False):
         from gpu_engine import constructor_worlds as cw
-        self.cw, self.tables, self.peer_view_b = cw, cw.constructor_carry_tables(constructor), bool(peer_view_b)
+        self.cw, self.tables, self.peer_view_b, self.constructor = cw, cw.constructor_carry_tables(constructor), bool(peer_view_b), constructor
 
     def __call__(self, state, public, owner, lines, root=None):
         if not self.peer_view_b:return self.cw.complete_carry(state, public, self.tables, owner, facts=self.cw.line_facts(lines, owner), root=root)
-        # view b, as prepare_roots(peer_view_b=True) completes the live worlds: the lines' facts with peer_damage, the redaction implied
-        return self.cw.complete_carry(state, public, self.tables, owner, facts=self.cw.line_facts(lines, owner, peer_damage=True), root=root,
+        return self.cw.complete_carry(state, public, self.tables, owner, facts=self.facts(owner, lines, root), root=root,
             redact_private_reveals=True, peer_view_b=True)
+
+    def facts(self, owner, lines, root):
+        """The view-b facts prepare_roots(peer_view_b=True) completes the live worlds with: the lines' facts with peer_damage and,
+        when a private reveal of the owner applies to the root's carry, the peer wire's belief of those members
+        (constructor_worlds.peer_belief_facts; its fold is incremental over a game's decisions)."""
+        cw = self.cw;facts = cw.line_facts(lines, owner, peer_damage=True)
+        if root is None or not facts.private_reveals[owner]:return facts
+        applicable = cw.private_reveal_record(root, owner, facts, self.tables, True)['applicable']
+        if not applicable:return facts
+        return cw.peer_belief_facts(self.constructor, dict(lines=list(lines), battle_id='opponent-view', stream_id=0), owner, root, facts, applicable)[0]
 
 
 def make_completion(search, *, peer_view_b=False):
