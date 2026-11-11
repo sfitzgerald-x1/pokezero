@@ -4,30 +4,38 @@ Data: one or more feature directories (features-<w>/{tokens,valid,owner,old_valu
 with tokens is a training position. Its target is the outcomes of the labeller's rollouts whose action and root reply were the
 child's (a, b), so the value estimates Q(a, b), what a depth-1 completed-Q consumes.
 
-Heads (pokezero.value_precision_probe.make_value_head):
-- value: attention HL-Gauss over --bins bins on [-1, 1];
-- uncertainty: an attention MLP with softplus output.
+Heads (pokezero.value_precision_probe.make_value_head), --head:
+- hl_gauss (model A): value = attention HL-Gauss over --bins bins on [-1, 1];
+- residual: value = the champion's own value on the child (old_value) + delta, delta a scalar attention MLP whose output layer starts
+  at zero, so the untrained model is the old head exactly and moves only where the losses give evidence (with a small --lr);
+- uncertainty (both): an attention MLP with softplus output (its own --lr-unc).
 
 Losses:
-- value: HL-Gauss cross-entropy against the mixture of the child's rollout outcomes (each outcome Gaussian-smoothed, sigma = 0.75 bin
-  widths);
+- value: hl_gauss, the HL-Gauss cross-entropy against the mixture of the child's rollout outcomes (each outcome Gaussian-smoothed,
+  sigma = 0.75 bin widths); residual, E[(v - z)^2] over the child's rollout outcomes;
 - ranking: per root, Q_V(a) = sum_b prior(b) mean_c v(child(a, b, c)) (a terminal child's value is its outcome; the prior is the
-  row's opponent root policy renormalized over its support, or 1 for a waiting opponent). On action pairs whose CRN-paired Monte
-  Carlo gap exceeds --rank-c standard errors: softplus(-sign(dQ_MC) (Q_V(i) - Q_V(j)) / --rank-tau), weighted by min(|z|, 5);
+  row's opponent root policy renormalized over its support, or 1 for a waiting opponent). On action pairs whose CRN-paired z
+  (the paired mean difference d_pair over its SE se_pair, both on the rollouts where neither action is capped) exceeds --rank-c:
+  softplus(-sign(z) (Q_V(i) - Q_V(j)) / --rank-tau), weighted by min(|z|, 5). Rows without d_pair are refused
+  (gpu_engine.mc_evaluator_pairs backfills older feature directories);
 - uncertainty: Huber of u against the stop-gradient E[(v - z)^2] under the child's outcomes.
 - Weights: --w-value 1, --w-rank 0.5, --w-unc 0.1.
 
 Split by game: a Foul Play root by ordinal and a self root by battle seed, hashed; --val-fraction of games is validation.
 Validation metrics, for model A and for the champion's own value head on identical children (old_value):
-- value cross-entropy and MSE against the children's mean outcomes;
+- value cross-entropy (hl_gauss only) and MSE against the children's mean outcomes;
 - pairwise accuracy on the significant pairs;
 - top-1 agreement of argmax Q_V with argmax Q_MC;
 - the Monte Carlo value of argmax Q_V minus that of argmax over the policy-free Q_MC.
 
-Output: OUT/model-a.pt (both heads' state_dict and their config), OUT/metrics.json (per epoch), OUT/config.json.
+Early stopping (--early-stop-patience P > 0): training stops after P epochs without a better validation regret, and the saved
+model is the best epoch's (epoch 0, the untrained model, included: for the residual head that is the old head).
 
-usage: python -m gpu_engine.mc_evaluator_train --features DIR [DIR ...] --out NEW_DIR [--epochs 8] [--batch-roots 64] [--lr 3e-4]
-           [--bins 51] [--device cuda]
+Output: OUT/model-a.pt (both heads' state_dict, the head kind, the saved epoch and the config), OUT/metrics.json (per epoch),
+OUT/config.json.
+
+usage: python -m gpu_engine.mc_evaluator_train --features DIR [DIR ...] --out NEW_DIR [--head hl_gauss|residual] [--epochs 8]
+           [--batch-roots 64] [--lr 3e-4] [--lr-unc LR] [--early-stop-patience P] [--bins 51] [--device cuda]
 """
 import argparse
 import hashlib
@@ -109,13 +117,37 @@ def q_values(root, v, torch):
 
 
 def significant_pairs(row, c):
-    q, se = row['q_mc'], row['se_pair'];out = []
-    for i in range(len(q)):
-        for j in range(i + 1, len(q)):
-            if q[i] is None or q[j] is None or se[i][j] is None or se[i][j] <= 0:continue
-            z = (q[i] - q[j]) / se[i][j]
+    """[(i, j, sign, weight)] of the action pairs whose CRN-paired z exceeds c: the paired mean difference over the rollouts where
+    neither action is capped, over its standard error on those same rollouts (d_pair / se_pair; a row without d_pair is refused,
+    since the marginal means' difference over the paired SE is not that test under selective censoring)."""
+    if 'd_pair' not in row:raise ValueError('feature row without d_pair: run gpu_engine.mc_evaluator_pairs (or re-extract) first')
+    d, se = row['d_pair'], row['se_pair'];out = []
+    for i in range(len(d)):
+        for j in range(i + 1, len(d)):
+            if d[i][j] is None or se[i][j] is None or se[i][j] <= 0:continue
+            z = d[i][j] / se[i][j]
             if abs(z) > c:out.append((i, j, math.copysign(1., z), min(abs(z), 5.)))
     return out
+
+
+def make_heads(kind, width, bins, torch):
+    """(value head, uncertainty head). 'hl_gauss': model A's HL-Gauss value head. 'residual': a scalar attention MLP whose output
+    layer starts at zero, read as a correction delta on the champion's own value (v = old_value + delta), so the untrained model is
+    the old head exactly."""
+    from pokezero.value_precision_probe import make_value_head
+    if kind == 'hl_gauss':value_head = make_value_head('attention_hl_gauss', width, bins=bins)
+    elif kind == 'residual':
+        value_head = make_value_head('attention_mlp', width);last = value_head.network[-1]
+        with torch.no_grad():last.weight.zero_();last.bias.zero_()
+    else:raise ValueError(f'unknown head kind {kind}')
+    return value_head, make_value_head('attention_mlp', width)
+
+
+def predict(kind, value_head, batch):
+    """(child values [n], HL-Gauss logits or None) of a batch under the value head of this kind."""
+    if kind == 'residual':
+        delta, _ = value_head(batch.tokens, batch.valid);return batch.old + delta, None
+    return value_head(batch.tokens, batch.valid)
 
 
 def evaluate(heads, roots, torch, device, args, targets):
@@ -125,9 +157,9 @@ def evaluate(heads, roots, torch, device, args, targets):
         for start in range(0, len(roots), args.batch_roots):
             batch = Batch(roots[start:start + args.batch_roots], torch, device)
             if not batch.n:continue
-            mean, logits = value_head(batch.tokens, batch.valid);target = batch.counts @ targets / batch.counts.sum(-1, keepdim=True).clamp(min=1)
+            mean, logits = predict(args.head, value_head, batch);target = batch.counts @ targets / batch.counts.sum(-1, keepdim=True).clamp(min=1)
             has = batch.counts.sum(-1) > 0
-            stats['ce'].append(float((-(target * torch.log_softmax(logits, -1)).sum(-1))[has].mean()) if has.any() else math.nan)
+            if logits is not None:stats['ce'].append(float((-(target * torch.log_softmax(logits, -1)).sum(-1))[has].mean()) if has.any() else math.nan)
             z = (batch.counts[:, 2] - batch.counts[:, 0]) / batch.counts.sum(-1).clamp(min=1)
             stats['mse_new'].append(float(((mean - z) ** 2)[has].mean()) if has.any() else math.nan)
             stats['mse_old'].append(float(((batch.old - z) ** 2)[has].mean()) if has.any() else math.nan)
@@ -151,28 +183,36 @@ def main(argv=None):
     parser.add_argument('--w-unc', type=float, default=.1);parser.add_argument('--rank-c', type=float, default=2.)
     parser.add_argument('--rank-tau', type=float, default=.02);parser.add_argument('--val-fraction', type=float, default=.1)
     parser.add_argument('--seed', type=int, default=0);parser.add_argument('--device', default='cuda')
+    parser.add_argument('--head', choices=('hl_gauss', 'residual'), default='hl_gauss')
+    parser.add_argument('--lr-unc', type=float, help='the uncertainty head\'s learning rate (default: --lr)')
+    parser.add_argument('--early-stop-patience', type=int, default=0, help='stop after this many epochs without a better validation '
+                        'regret and save the best epoch (epoch 0 included); 0: train every epoch and save the last')
     args = parser.parse_args(argv)
+    import copy
     import torch
-    from pokezero.value_precision_probe import make_value_head
     out = Path(args.out);out.mkdir(parents=True, exist_ok=False);(out / 'config.json').write_text(json.dumps(vars(args), indent=1) + '\n')
     torch.manual_seed(args.seed);rng = np.random.default_rng(args.seed);device = torch.device(args.device)
     roots = load(args.features);train = [r for r in roots if not is_validation(r[0], args.val_fraction)]
     val = [r for r in roots if is_validation(r[0], args.val_fraction)]
     width = int(roots[0][1]['tokens'].shape[-1])
-    value_head = make_value_head('attention_hl_gauss', width, bins=args.bins).to(device);unc_head = make_value_head('attention_mlp', width).to(device)
-    optimizer = torch.optim.AdamW(list(value_head.parameters()) + list(unc_head.parameters()), lr=args.lr, weight_decay=1e-4)
+    value_head, unc_head = make_heads(args.head, width, args.bins, torch);value_head.to(device);unc_head.to(device)
+    optimizer = torch.optim.AdamW([dict(params=list(value_head.parameters()), lr=args.lr),
+                                   dict(params=list(unc_head.parameters()), lr=args.lr if args.lr_unc is None else args.lr_unc)], weight_decay=1e-4)
     targets = hl_gauss_rows(torch, [-1., 0., 1.], args.bins, device=device)   # rows for a loss, a draw, a win
     metrics = [dict(epoch=0, train_roots=len(train), val_roots=len(val), val=evaluate((value_head, unc_head), val, torch, device, args, targets))]
     print(json.dumps(metrics[-1]), flush=True)
+    best = dict(epoch=0, regret=metrics[0]['val']['regret_new'], state=copy.deepcopy((value_head.state_dict(), unc_head.state_dict())))
     for epoch in range(1, args.epochs + 1):
         order = rng.permutation(len(train));losses = []
         for start in range(0, len(order), args.batch_roots):
             batch = Batch([train[i] for i in order[start:start + args.batch_roots]], torch, device)
             if not batch.n:continue
-            mean, logits = value_head(batch.tokens, batch.valid);has = batch.counts.sum(-1) > 0
-            target = batch.counts @ targets / batch.counts.sum(-1, keepdim=True).clamp(min=1)
-            value_loss = (-(target * torch.log_softmax(logits, -1)).sum(-1))[has].mean() if has.any() else mean.sum() * 0
+            mean, logits = predict(args.head, value_head, batch);has = batch.counts.sum(-1) > 0
             n = batch.counts.sum(-1).clamp(min=1);ez = (batch.counts[:, 2] - batch.counts[:, 0]) / n;ez2 = (batch.counts[:, 2] + batch.counts[:, 0]) / n
+            if logits is not None:
+                target = batch.counts @ targets / batch.counts.sum(-1, keepdim=True).clamp(min=1)
+                value_loss = (-(target * torch.log_softmax(logits, -1)).sum(-1))[has].mean() if has.any() else mean.sum() * 0
+            else:value_loss = (mean ** 2 - 2 * mean * ez + ez2)[has].mean() if has.any() else mean.sum() * 0   # E[(v - z)^2] over the child's outcomes
             u, _ = unc_head(batch.tokens, batch.valid);u = torch.nn.functional.softplus(u)
             m = mean.detach();unc_target = m ** 2 - 2 * m * ez + ez2
             unc_loss = torch.nn.functional.huber_loss(u[has], unc_target[has]) if has.any() else u.sum() * 0
@@ -189,8 +229,16 @@ def main(argv=None):
         metrics.append(dict(epoch=epoch, train_loss=np.mean(losses, 0).round(5).tolist() if losses else None,
                             val=evaluate((value_head, unc_head), val, torch, device, args, targets)))
         print(json.dumps(metrics[-1]), flush=True);(out / 'metrics.json').write_text(json.dumps(metrics, indent=1) + '\n')
-    torch.save(dict(value_head=value_head.state_dict(), uncertainty_head=unc_head.state_dict(), bins=args.bins, width=width,
-                    features=args.features, config=vars(args)), out / 'model-a.pt')
+        regret = metrics[-1]['val']['regret_new']
+        if regret is not None and (best['regret'] is None or regret > best['regret']):
+            best = dict(epoch=epoch, regret=regret, state=copy.deepcopy((value_head.state_dict(), unc_head.state_dict())))
+        elif args.early_stop_patience and epoch - best['epoch'] >= args.early_stop_patience:break
+    if args.early_stop_patience:value_head.load_state_dict(best['state'][0]);unc_head.load_state_dict(best['state'][1])
+    saved_epoch = best['epoch'] if args.early_stop_patience else metrics[-1]['epoch']
+    (out / 'metrics.json').write_text(json.dumps(metrics, indent=1) + '\n')
+    torch.save(dict(value_head=value_head.state_dict(), uncertainty_head=unc_head.state_dict(), bins=args.bins, width=width, head=args.head,
+                    epoch=saved_epoch, features=args.features, config=vars(args)), out / 'model-a.pt')
+    print(json.dumps(dict(event='SAVED', head=args.head, epoch=saved_epoch, val_regret=metrics[saved_epoch]['val']['regret_new'])), flush=True)
     return 0
 
 

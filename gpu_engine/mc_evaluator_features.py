@@ -7,8 +7,9 @@ C chance draws per (a, b) from a seed bank disjoint from the rollouts' and the U
 our seat's view right after the joint turn (R0' and the engine rungs' estimator state), observed whether or not our seat is
 requested; a terminal child keeps its outcome and has no tokens.
 
-Targets, from the row: Q_MC(a) and its standard error (capped rollouts censored), the CRN-paired standard error of every action
-pair (se_pair: the rollouts share their seed and root reply across actions), and for each (a, b) the outcomes of the rollouts
+Targets, from the row: Q_MC(a) and its standard error (capped rollouts censored), the CRN-paired mean difference and its standard
+error for every action pair (d_pair, se_pair: the rollouts share their seed and root reply across actions; both over the rollouts
+where neither action is capped), and for each (a, b) the outcomes of the rollouts
 whose sampled root reply was b. The rollouts' replies are recomputed exactly as the labeller drew them
 (sample(opp_policy, the opponent's legal mask at the root, draw(root_seed, k, 0, 1))), from the row's 6-decimal opp_policy; the
 index records how many rollouts each (a, b) has.
@@ -45,14 +46,22 @@ def censored_q(outcomes):
     return q, se
 
 
-def pair_se(outcomes):
-    """[A][A] standard errors of the CRN-paired differences o[i, k] - o[j, k] over rollouts k where neither is capped (None: < 2)."""
-    o = np.asarray(outcomes, float);o = np.where(o == CAPPED, np.nan, o);A = len(o);out = [[None] * A for _ in range(A)]
+def pair_stats(outcomes):
+    """([A][A] mean, [A][A] standard error) of the CRN-paired differences o[i, k] - o[j, k], both over the same rollouts k where
+    neither action is capped (None: fewer than 2 such rollouts). The mean and its SE describe one sample, so their ratio is the
+    paired z (the marginal means differ from it under selective censoring)."""
+    o = np.asarray(outcomes, float);o = np.where(o == CAPPED, np.nan, o);A = len(o)
+    mean, se = [[None] * A for _ in range(A)], [[None] * A for _ in range(A)]
     for i in range(A):
         for j in range(A):
             d = o[i] - o[j];d = d[~np.isnan(d)]
-            if i != j and len(d) >= 2:out[i][j] = float(d.std(ddof=1) / math.sqrt(len(d)))
-    return out
+            if i != j and len(d) >= 2:mean[i][j] = float(d.mean());se[i][j] = float(d.std(ddof=1) / math.sqrt(len(d)))
+    return mean, se
+
+
+def pair_se(outcomes):
+    """[A][A] standard errors of the CRN-paired differences over rollouts k where neither is capped (pair_stats' SE)."""
+    return pair_stats(outcomes)[1]
 
 
 def reply_outcomes(outcomes, replies, support):
@@ -98,10 +107,10 @@ def expand(env, snapshot, row, champion, draws, torch):
                 env.step(first)
                 if env.terminal() is not None:children.append(dict(a=a, b=b, c=c, terminal=L.outcome(env, ours), obs=None));continue
                 children.append(dict(a=a, b=b, c=c, terminal=None, obs=len(observations)));observations.append(env.observe(ours))
-    q, se = censored_q(row['outcomes'])
+    q, se = censored_q(row['outcomes']);d_pair, se_pair = pair_stats(row['outcomes'])
     groups = reply_outcomes(row['outcomes'], replies, support)
     index = dict(actions=row['actions'], replies=support, reply_prior=None if pi is None else [float(pi[b]) for b in support], K=K,
-                 q_mc=q, se_mc=se, se_pair=pair_se(row['outcomes']), reply_outcomes={str(a): {str(b): groups[i][b] for b in support} for i, a in enumerate(row['actions'])},
+                 q_mc=q, se_mc=se, d_pair=d_pair, se_pair=se_pair, reply_outcomes={str(a): {str(b): groups[i][b] for b in support} for i, a in enumerate(row['actions'])},
                  children=children, root_obs=0, draws=draws)
     return index, observations
 
