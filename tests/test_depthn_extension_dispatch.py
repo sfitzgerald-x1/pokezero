@@ -119,6 +119,17 @@ class ExtensionTests(unittest.TestCase):
 
 
 
+class CommittedBindingTests(unittest.TestCase):
+    def test_screen_r4a_s_committed_binding_is_pinned_and_binds_its_run(self):
+        path = E.TREE/'evals/depthn-foulplay-dn2w16-amendment-screen-r4a-adoption-20261111.json'
+        raw = path.read_bytes();digest = hashlib.sha256(raw).hexdigest()
+        self.assertEqual(digest, E.EXTENSION_BINDINGS['screen_r4a']);self.assertEqual(digest, V.RUN_BINDINGS['screen_r4a'])
+        self.assertEqual(V.RUN_FINAL_RULES[digest], 'RULE_R3')
+        self.assertEqual(E.bound_run((json.loads(raw), digest), E.committed()),
+                         ('1697ae7ab209a3e0000351817112916998a63ad2485bffacbffd5131156801fa', '/out/screen-r4a', 'RULE_R3'))
+        self.assertEqual(json.loads(raw)['run']['tree_commit'], '44494b01228a72e03c90b254ebd743b2ac993af0')
+
+
 class BoundExtensionTests(unittest.TestCase):
     """--run-binding: a run that pre-registered the extension through its adoption record (screen-r4a's route): the committed rule
     files unchanged, the run fields and the RULE_R3 final gate from the binding."""
