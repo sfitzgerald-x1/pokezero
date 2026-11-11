@@ -29,8 +29,8 @@ Splits: test is the strict vintage (the 33-day window inside the Showdown pin; n
 of the rest, validation is replay hash % 10 == 1 (sha256 of 'g3rb-split:<replay>'), train the rest. Both seats of a replay
 stay together.
 
-Model (HumanReply). The champion's trunk, embeddings and policy head, window 1, with two additive inputs, both zero at
-initialisation so the untrained wrapper reproduces the champion exactly (checked before training):
+Model (HumanReply). The champion's trunk, embeddings and policy head, window 1 (made gender-blind, below), with two additive
+inputs, both zero at initialisation so the untrained wrapper reproduces its trunk exactly (checked before training):
 - bands (--bands): a learned [band, token type, width] table added to every token's input embedding. Bands: unknown (0),
   unrated, below 1200, 1200-1499, 1500+ from the replay's rating; --band-dropout replaces the band by unknown on that share of
   training rows, so unknown is the marginal. Because the term depends only on the token type, one band folds exactly into the
@@ -339,6 +339,11 @@ def shuffle_bench_batch(torch, inputs, legal, label, generator):
     return out, legal2, label2
 
 
+def gender_columns_zero(model):
+    """True when a gender-blind model's projection columns are still exactly zero (a lost hook would break this)."""
+    return bool((model.base.numeric_projection.weight[:, list(GENDER_COLS)] == 0).all())
+
+
 def set_exact(torch):
     torch.backends.cuda.matmul.allow_tf32 = False;torch.backends.cudnn.allow_tf32 = False
     torch.set_float32_matmul_precision('highest');torch.backends.mha.set_fastpath_enabled(False)
@@ -557,6 +562,7 @@ def train(args):
                 if v['val_nll'] < best['val_nll']:
                     best = dict(step=step, **v);best_state = {k: v_.detach().cpu().clone() for k, v_ in model.state_dict().items()}
     model.load_state_dict(best_state)
+    if model.ignore_gender and not gender_columns_zero(model):raise SystemExit('gender-blind run: the gender projection columns are not zero')
     base_sha = checkpoint_file_sha256(args.checkpoint)
     marker = dict(policy_only=True, base_checkpoint_sha256=base_sha, view='b', redaction='peer-view-v2', data=str(args.views),
                   split='test: strict vintage; val: sha256(g3rb-split:<replay>) % 10 == 1; train: the rest', bands=list(BANDS),
@@ -582,7 +588,8 @@ def recalibration(probs, labels, legal, torch):
     return params, apply
 
 
-RESERVED = ('uniform_legal', 'champion', 'champion_unredacted', 'champion_recalibrated', 'champion_stored_env', 'pi_fp', 'turns', 'decisions')
+RESERVED = ('uniform_legal', 'champion', 'champion_unredacted', 'champion_recalibrated', 'champion_gender_blind', 'champion_stored_env', 'pi_fp',
+            'turns', 'decisions')
 
 
 def parse_models(specs):
@@ -622,6 +629,9 @@ def evaluate(args):
     store = Store(arrays, torch, args.device, events=store_events(parse_models(args.model), torch))
     models = dict(uniform_legal=arrays['legal'][test] / arrays['legal'][test].sum(1, keepdims=True))
     models['champion'] = predict(champion, store, test, torch, embed_tokens, base_only=True)
+    blind, _ = plain_model(args.checkpoint, torch, args.device);HumanReply, _ = build(torch)
+    models['champion_gender_blind'] = predict(HumanReply(blind.base, ignore_gender=True).to(args.device).eval(), store, test, torch, embed_tokens, base_only=True)
+    del blind   # the trunk every gender-blind model starts from: separates that change from the fine-tuning gain
     raw = Store({k: arrays[k][test] for k in ('categorical_ids', 'token_type_ids', 'attention_mask', 'legal', 'label')} |
                 dict(numeric_features=arrays.pop('numeric_unredacted_test')), torch, args.device)
     models['champion_unredacted'] = predict(champion, raw, np.arange(len(test)), torch, embed_tokens, base_only=True)
@@ -640,7 +650,8 @@ def evaluate(args):
         if saved['wrapper']['bands']:models[f'{name}_band_unknown'] = predict(model, store, test, torch, embed_tokens, band=0)
         del model
     names = [n for n in parse_models(args.model)]
-    pairs = [('champion', 'uniform_legal'), ('champion_recalibrated', 'champion')] + [(n, 'champion') for n in names] + \
+    pairs = [('champion', 'uniform_legal'), ('champion_recalibrated', 'champion'), ('champion_gender_blind', 'champion')] + \
+            [(n, 'champion') for n in names] + [(n, 'champion_gender_blind') for n in names] + \
             [(n, 'champion_recalibrated') for n in names] + [(n, 'pi_fp') for n in names if args.pi_fp] + \
             [(n, f'{n}_band_unknown') for n in names if f'{n}_band_unknown' in models] + \
             [(a, b) for a in names for b in names if a < b] + ([('pi_fp', 'champion')] if args.pi_fp else [])
@@ -653,6 +664,8 @@ def evaluate(args):
                   bench_order='as built (leaky party order; diagnostic)' if args.as_built else 'shuffled (seed 0)',
                   checkpoint_sha256=checkpoint_file_sha256(args.checkpoint), pi_fp=args.pi_fp,
                   pi_fp_sha256=checkpoint_file_sha256(args.pi_fp) if args.pi_fp else None, models=identities, recalibration=params,
+                  diagnostic_models=sorted(n for n, m in identities.items() if not str(m['bench_order']).startswith('shuffled') or
+                                           not str(m['gender']).startswith('ignored')),
                   recalibration_rows=int(len(fit)), held_out=dict(rows=int(len(test)), replays=int(len(np.unique(arrays['replay'][test])))),
                   test=report_rows(models, arrays, test, 'replay', pairs, band_groups(arrays, test), contrasts))
     if args.players:
@@ -765,6 +778,8 @@ def export(args):
     if saved['wrapper']['history']:raise SystemExit('a history model has no champion archive (its event inputs are not in the archive format)')
     if not str(saved['human_reply'].get('bench_order', '')).startswith('shuffled'):
         raise SystemExit(f'{args.run} was trained on the views\' own party order, which leaks future switch-ins: retrain it (bench shuffle)')
+    if not str(saved['human_reply'].get('gender', '')).startswith('ignored') or not gender_columns_zero(model):
+        raise SystemExit(f'{args.run} reads gender bits, which leak which own mons ever appear in the views: retrain it gender-blind')
     if model.band is None and args.band != 'unknown':raise SystemExit('this run has no band table: export it with --band unknown')
     band = BANDS.index(args.band)
     base_state = {k[len('base.'):]: v.detach().cpu() for k, v in model.state_dict().items() if k.startswith('base.')}

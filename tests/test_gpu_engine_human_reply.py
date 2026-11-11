@@ -143,6 +143,10 @@ class DataTest(unittest.TestCase):
             with self.assertRaises(SystemExit):h.pi_fp_split_check(args, marker, arrays, split)
             self.assertIn('split record', h.pi_fp_split_check(args, dict(split=dict(fit_seeds=[10])), arrays, split))
 
+    def test_gender_columns_are_the_v4_gender_bits(self):
+        from pokezero import showdown as sd
+        self.assertEqual(h.GENDER_COLS, tuple(sd.numeric_index_for_schema('pokezero.observation.v4', i) for i in (sd.NUMERIC_GENDER_MALE, sd.NUMERIC_GENDER_FEMALE)))
+
     def test_model_names_cannot_shadow_baselines(self):
         self.assertEqual(h.parse_models(['a1=/x', 'a2s1=/y']), {'a1': '/x', 'a2s1': '/y'})
         for bad in ('champion=/x', 'pi_fp=/x', 'turns=/x', 'a1_band_unknown=/x', 'A1=/x', 'a1'):
@@ -218,7 +222,7 @@ class ModelTest(unittest.TestCase):
         h.loss_terms(torch, model(**st.inputs(idx, embed_tokens, model)), st.legal[idx], st.label[idx], st.partial[idx]).mean().backward()
         w = model.base.numeric_projection.weight
         self.assertTrue((w.grad[:, list(h.GENDER_COLS)] == 0).all());self.assertTrue((w[:, list(h.GENDER_COLS)] == 0).all())
-        self.assertGreater(float(w.grad.abs().sum()), 0.)
+        self.assertGreater(float(w.grad.abs().sum()), 0.);self.assertTrue(h.gender_columns_zero(model))
 
     def test_batch_bench_shuffle_matches_the_numpy_rule(self):
         torch = self.torch;before = DataTest.bench_rows(DataTest())
