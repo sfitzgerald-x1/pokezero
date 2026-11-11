@@ -143,7 +143,9 @@ class TransitionTests(unittest.TestCase):
         one = {'recharge_counter': [((0, 0), 1)]}
         lanes = [dict(one), dict(one, status=[((0, 0), SLP)], status_counter=[((0, 0), 3)]),
                  dict(one, confusion_counter=[((0, 0), 3)]), dict(one, ability=[((0, 0), TRUANT)], truant_loaf=[((0, 0), True)]),
-                 dict(one, volatile=[((0, 0), 64)]), dict(one, choice_move=[((0, 0), HYPERBEAM)]),
+                 dict(one, volatile=[((0, 0), 64)]),
+                 # A Band holder's lock survives the recharge turn (without a Choice item it is stale and ends at endTurn).
+                 dict(one, choice_move=[((0, 0), HYPERBEAM)], item=[((0, 0), ITEMS.index('choiceband'))]),
                  {'ability': [((0, 0), TRUANT)], 'truant_loaf': [((0, 0), True)]}]
         s = self.build(lanes)
         s = s._replace(last_action_kind=s.last_action_kind.at[:, 0].set(2), last_action_index=s.last_action_index.at[:, 0].set(0))
