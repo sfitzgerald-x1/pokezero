@@ -4,6 +4,7 @@ import jax.numpy as j
 import numpy as np
 from gpu_engine import engine_retained_encoder_driver as driver, engine_leftovers_callbacks as leftovers
 import test_gpu_engine_weather_hp_runtime as fixture
+from gpu_engine_eager_frame import eager_frame
 
 
 class RegisteredLeftoversRuntimeTests(unittest.TestCase):
@@ -47,7 +48,8 @@ class RegisteredLeftoversRuntimeTests(unittest.TestCase):
         self.check_final_public_hp(first)
         # A real subsequent owning transition starts from healed physical HP,
         # and the accepted public history must start from that SAME visible HP.
-        second=driver.advance(session,j.full((2,2),0,j.int32),chance_inputs=self.f().chance())
+        with eager_frame(self.prepared):
+            second=driver.advance(session,j.full((2,2),0,j.int32),chance_inputs=self.f().chance())
         self.assertEqual(second.state.core.admitted.tolist(),[True,True])
         self.check_final_public_hp(second)
         for result in (first,second):

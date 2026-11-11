@@ -9,6 +9,7 @@ import numpy as np
 
 from gpu_engine import engine_retained_encoder_driver as driver, transition
 import test_gpu_engine_engine_own_facts as fixtures
+from gpu_engine_eager_frame import eager_frame
 
 
 class FullRetainedDriverTests(unittest.TestCase):
@@ -26,8 +27,9 @@ class FullRetainedDriverTests(unittest.TestCase):
 
     def chance(self):
         draws = j.zeros((2, 2, 12), j.int32).at[:, :, 4].set(1)
-        return transition.ChanceInputs(draws, *[j.zeros((2, 2), j.int32) for _ in range(4)],
-            j.zeros(2, j.int32))
+        zeros = j.zeros((2, 2), j.int32)
+        return transition.ChanceInputs(draws=draws, phazing=zeros, secondary=zeros, sleep_talk=zeros,
+            entry_ties=zeros, initial_tie=j.zeros(2, j.int32))
 
     def test_initial_full_controls_reach_actual_writer_without_global_promotion(self):
         session = self.construct()
@@ -61,7 +63,8 @@ class FullRetainedDriverTests(unittest.TestCase):
         chance = self.chance()
         table = driver._checked(self.prepared)['request']['engine_table']
         expected = transition.step_with_chance(before, actions, table, chance).state
-        actual = driver.advance(session, actions, chance_inputs=chance)
+        with eager_frame(self.prepared):
+            actual = driver.advance(session, actions, chance_inputs=chance)
         for a, b in zip(jax.tree.leaves(expected), jax.tree.leaves(actual.state.core.engine)):
             np.testing.assert_array_equal(a, b)
         self.assertEqual(actual.state.core.frame_number.tolist(), [1, 1])

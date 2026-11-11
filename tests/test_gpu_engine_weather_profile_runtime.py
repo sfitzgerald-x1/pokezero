@@ -11,6 +11,7 @@ from gpu_engine import engine_retained_encoder_driver as driver
 from gpu_engine import engine_request_source as source,engine_public_events as events
 from gpu_engine import engine_own_facts as own,transition,engine_lifecycle_callbacks as lifecycle
 import test_gpu_engine_engine_full_retained_driver as fixture
+from gpu_engine_eager_frame import eager_frame
 
 
 class WeatherProfileRuntimeTests(unittest.TestCase):
@@ -36,8 +37,9 @@ class WeatherProfileRuntimeTests(unittest.TestCase):
         record=session.state.core.weather_profile
         self.assertEqual(record.qualified_birth.tolist(),[True,True])
         np.testing.assert_array_equal(record.birth_spe,constructed.birth_state.stats[...,5])
-        result=driver.advance(session,j.zeros((2,2),j.int32),
-            chance_inputs=fixture.FullRetainedDriverTests().chance())
+        with eager_frame(self.prepared):
+            result=driver.advance(session,j.zeros((2,2),j.int32),
+                chance_inputs=fixture.FullRetainedDriverTests().chance())
         self.assertEqual(result.state.core.weather_profile.qualified_birth.tolist(),[True,True])
         for report in result.owners:self.assertFalse(bool(report.scored.any()))
 
@@ -91,9 +93,12 @@ class WeatherProfileRuntimeTests(unittest.TestCase):
     def test_profile_binding_rows_are_not_globals_at_batch_eight(self):
         session=self.construct(batch=8);before=session.state.core.weather_profile
         draws=j.zeros((8,2,12),j.int32).at[:,:,4].set(1)
-        chance=transition.ChanceInputs(draws,*[j.zeros((8,2),j.int32) for _ in range(4)],j.zeros(8,j.int32))
+        zeros=j.zeros((8,2),j.int32)
+        chance=transition.ChanceInputs(draws=draws,phazing=zeros,secondary=zeros,sleep_talk=zeros,
+            entry_ties=zeros,initial_tie=j.zeros(8,j.int32))
         active=j.array([True,False]*4)
-        result=driver.advance(session,j.zeros((8,2),j.int32),active_rows=active,chance_inputs=chance)
+        with eager_frame(self.prepared):
+            result=driver.advance(session,j.zeros((8,2),j.int32),active_rows=active,chance_inputs=chance)
         after=result.state.core.weather_profile
         self.assertEqual(after.profile_binding.shape,(8,8))
         for old,new in zip(jax.tree.leaves(before),jax.tree.leaves(after)):
