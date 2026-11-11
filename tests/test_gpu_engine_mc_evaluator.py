@@ -163,6 +163,13 @@ class ResidualHeadTests(unittest.TestCase):
         out, _ = self.run_train('--head', 'residual', '--lr', '0', '--epochs', '1')
         with self.assertRaises(SystemExit):self.rungs(out / 'model-a.pt', self.features)
 
+    def test_the_rungs_refuse_a_model_whose_recorded_training_features_are_unreadable(self):
+        import torch
+        out, _ = self.run_train('--head', 'residual', '--lr', '0', '--epochs', '1')
+        saved = torch.load(out / 'model-a.pt', map_location='cpu');saved['features'] = saved['features'] + [str(Path(self.dir.name) / 'gone')]
+        torch.save(saved, out / 'model-b.pt')
+        with self.assertRaises(SystemExit):self.rungs(out / 'model-b.pt', self.gate)
+
     def test_early_stopping_without_a_validation_regret_is_refused(self):
         with self.assertRaises(SystemExit):
             T.main(['--features', str(self.features), '--out', str(Path(self.dir.name) / 'none'), '--device', 'cpu', '--val-fraction', '0',

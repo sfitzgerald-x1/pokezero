@@ -34,9 +34,13 @@ def main(argv=None):
         head, _ = T.make_heads(kind, saved['width'], saved['bins'], torch);head.to(device);head.load_state_dict(saved['value_head']);head.eval()
     roots = T.load(args.features)
     if head is not None:
-        seen = {(r['kind'], r['seed']) for d in saved['features'] for p in sorted(Path(d).glob('index-*.jsonl')) for r in map(json.loads, filter(str.strip, open(p)))}
+        seen = set()
+        for d in saved['features']:
+            games = {(r['kind'], r['seed']) for p in sorted(Path(d).glob('index-*.jsonl')) for r in map(json.loads, filter(str.strip, open(p)))}
+            if not games:raise SystemExit(f'the model\'s training features {d} give no index rows here (every recorded directory must be readable)')
+            seen |= games
         overlap = sorted({(r['kind'], r['seed']) for r, _ in roots} & seen)
-        if not seen or overlap:raise SystemExit(f"the model's training games must be readable and disjoint from the scored roots' ({len(overlap)} shared, e.g. {overlap[:3]})")
+        if overlap:raise SystemExit(f"the model's training games must be disjoint from the scored roots' ({len(overlap)} shared, e.g. {overlap[:3]})")
     out = Path(args.out);out.mkdir(parents=True, exist_ok=False);rows = dict(D1A=[], D1old=[]) if head else dict(D1old=[])
     with torch.no_grad():
         for start in range(0, len(roots), args.batch_roots):
