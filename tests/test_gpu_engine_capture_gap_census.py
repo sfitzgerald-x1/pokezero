@@ -76,8 +76,11 @@ class WitnessPredicateTests(unittest.TestCase):
   import jax.numpy as j
   from gpu_engine import engine_source_frame_witness as witness,engine_lifecycle_callbacks as life,engine_execution_completeness as ex
   path='gpu_engine/engine_source_frame_witness.py'
-  old=ast.parse(subprocess.check_output(['git','show','414d57a8:'+path],text=True));new=ast.parse(Path(path).read_text())
+  old=ast.parse(subprocess.check_output(['git','show','414d57a8:'+path],text=True));new=ast.parse(subprocess.check_output(['git','show','22f67f3a:'+path],text=True))
+  integrated=ast.parse(subprocess.check_output(['git','show','b8092a85:'+path],text=True));current=ast.parse(Path(path).read_text())
   select=lambda tree,name:next(n for n in tree.body if isinstance(n,ast.FunctionDef)and n.name==name)
+  for name in ('_raw_complete','_raw_complete_words'):
+   self.assertEqual(ast.dump(select(current,name)),ast.dump(select(integrated,name)),name)
   original=select(old,'_raw_complete');factored=select(new,'_raw_complete_words')
   self.assertEqual(ast.dump(ast.Module(body=original.body[:-1],type_ignores=[])),ast.dump(ast.Module(body=factored.body[:-1],type_ignores=[])))
   self.assertEqual(ast.dump(original.body[-1].value.args[0]),ast.dump(factored.body[-1].value))

@@ -49,7 +49,13 @@ class ToxicGuardTests(unittest.TestCase):
                 from gpu_engine import engine_status_callbacks as status
                 current=status.changed(current,1-side,target,attempt.old_status,attempt.new_status,status.PRIMARY,eligible=j.ones(8,bool))
             out=toxic.record_device(current,side,actor,target,move,attempt,ctx,eligible=j.ones(8,bool))
-            raw=out.words[j.arange(8),out.count-1];self.assertEqual(toxic.outcome_device(raw).tolist(),[code]*8)
+            if code==toxic.EXISTING_STATUS:
+                # The legacy context cannot publish an unbound existing-status
+                # event. Classify the literal attempt while requiring no append.
+                self.assertEqual(out.count.tolist(),current.count.tolist())
+                raw=toxic.words_device(side,actor,target,move,attempt)
+            else:raw=out.words[j.arange(8),out.count-1]
+            self.assertEqual(toxic.outcome_device(raw).tolist(),[code]*8)
             self.assertEqual(toxic.supported_raw(raw).tolist(),[supported]*8)
             out=execution.capture_toxic_attempt(out,ticket,side,actor,target,move,attempt,requested=j.ones(8,bool))
             self.assertEqual(out.execution.ledger.stage[:,0].tolist(),[2 if supported else 1]*8)

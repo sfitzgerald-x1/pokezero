@@ -18,7 +18,7 @@ class NativeSynchronizeTests(unittest.TestCase):
     def compare(self,side,move,*,compound=False,source_lum=False,target_lum=False,
                 switching=False,wrong_table=False):
         f=self.f;j=f.j;s=f.live(1,side,move)
-        s=s._replace(moves=j.broadcast_to(j.array([f.id(n) for n in ('splash','firepunch','icebeam','thunderwave')]),s.moves.shape).at[0,side,0,0].set(f.id(move)),species=j.broadcast_to(j.arange(1,7),(1,2,6)),types=s.types.at[...,0].set(1),
+        s=s._replace(moves=j.broadcast_to(j.array([f.id(n) for n in ('splash','firepunch','icebeam','thunderwave')]),s.moves.shape).at[0,side,0,0].set(f.id(move)),species=j.broadcast_to(j.arange(1,7),(1,2,6)),types=s.types.at[...,0].set(1),base_types=s.types.at[...,0].set(1),
             stats=s.stats.at[...,0].set(1000),item=s.item.at[:,side,0].set(int(source_lum)).at[:,1-side,0].set(int(target_lum)))
         if compound:
             a=s.ability.at[:,side,0].set(f.ability('synchronize')).at[:,1-side,0].set(f.ability('static'))

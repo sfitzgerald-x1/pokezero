@@ -98,7 +98,7 @@ class HiddenPowerSubstituteInputTests(unittest.TestCase):
   # Unused crit/type values still belong to this SAME final Outcome.
   c=cb.Captured(p,w);o=risk.Outcome(w.power,w.critical,w.hit,w.immune,w.numerator,w.denominator,j.zeros(8,bool),j.ones(8,bool),w.protected,w.enduring,j.zeros(8,j.int32),j.zeros(8,bool));good=risk.outcome_on_tape(out,o,eligible=p.requested,active=p.requested,captured_substitute_damage=c);self.assertEqual(good.execution.risks.carry.risk.tolist(),[0]*8)
   bad=risk.outcome_on_tape(out,o._replace(power=o.power+1),eligible=p.requested,active=p.requested,captured_substitute_damage=c);self.assertTrue(bool((bad.execution.risks.carry.risk!=0).all()))
-  old=dump_default_program(ast.parse(subprocess.check_output(['git','show',BASE+':gpu_engine/transition.py'],text=True)));current=ast.parse(Path('gpu_engine/transition.py').read_text());self.assertEqual(dump_default_program(current),old);assert_hp_rng_mutations_detected(self,current,old);witness._source()
+  old=dump_default_program(ast.parse(subprocess.check_output(['git','show','b8092a85:gpu_engine/transition.py'],text=True)));current=ast.parse(Path('gpu_engine/transition.py').read_text());self.assertEqual(dump_default_program(current),old);assert_hp_rng_mutations_detected(self,current,old);witness._source()
   for modules in(('benchmark_retained_games','engine_lifecycle_event_device','engine_full_v4_event_device'),('engine_full_v4_event_device','engine_lifecycle_event_device','benchmark_retained_games')):subprocess.run([__import__('sys').executable,'-c',';'.join('import gpu_engine.'+n for n in modules)],check=True,capture_output=True)
 
  def test_actual_alias_current_write_both_full_survive_and_break(self):

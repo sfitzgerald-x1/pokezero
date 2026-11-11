@@ -79,7 +79,9 @@ class RecoilOwningEventTests(unittest.TestCase):
     expected=self.reference_words(actual.callbacks,row,owner)
     np.testing.assert_array_equal(self.f.words(result.projection,row),expected)
   joined,good=ex.join_consumed_owners(*closed,tables=self.account.device);self.assertTrue(bool(good.all()))
-  for row in (0,1):self.assertEqual(joined.stage[row,:int(joined.count[row])].tolist(),[3,3,3,3])
+  for row in (0,1):
+   self.assertEqual(int(joined.site[row,0]),int(ex.Site.TURNLOOP_PREFIX))
+   self.assertEqual(joined.stage[row,:int(joined.count[row])].tolist(),[3,3,3,3,3])
  def test_rockhead_targetko_actorko_prior_and_no_context_never_admit(self):
   s,c,_=self.initial();variants=[s._replace(ability=s.ability.at[:,0,3].set(1)),s._replace(hp=s.hp.at[:,1,5].set(1)),s._replace(hp=s.hp.at[:,0,3].set(1))]
   for state in variants:
@@ -87,7 +89,7 @@ class RecoilOwningEventTests(unittest.TestCase):
   old=self.play(s,c,context=False);self.assertTrue(bool((old.callbacks.execution.risks.carry.risk&risks.SELF_HP).all()))
   sticky=self.play(s,c,prior=65);self.assertTrue(bool((sticky.callbacks.refusal&64).all()));self.assertTrue(bool((sticky.callbacks.execution.risks.carry.risk!=0).all()))
  def test_default_ast_rejects_hp_rng_keyword_mutations_and_recoil_requires_original_compiler(self):
-  old_source=subprocess.check_output(['git','show','58ec3459:gpu_engine/transition.py'],text=True);current_source=Path('gpu_engine/transition.py').read_text()
+  old_source=subprocess.check_output(['git','show','b8092a85:gpu_engine/transition.py'],text=True);current_source=Path('gpu_engine/transition.py').read_text()
   if '_hypothetical_profile' in current_source:
    from test_gpu_engine_v5_hypothetical_profile import normalized_hypothetical_default
    before=normalized_hypothetical_default(old_source,as_tree=True);after=normalized_hypothetical_default(current_source,as_tree=True)
@@ -160,15 +162,17 @@ class RecoilOwningEventTests(unittest.TestCase):
    if side!=owner:
     hp=min(99,(100*hp+maximum-1)//maximum) if hp<maximum else 100;maximum=100
    return f'{hp}/{maximum}'+tokens[status]
-  for raw in np.asarray(tape.words[row,:int(tape.count[row])]):
+  for index,raw in enumerate(np.asarray(tape.words[row,:int(tape.count[row])])):
    k=int(raw[0])
    if k==events.MOVE:lines.append(f'|move|{ident[int(raw[1])]}|Double-Edge|{ident[int(raw[3])]}')
    elif 21<=k<=23:lines.append('|'+{21:'-crit',22:'-supereffective',23:'-resisted'}[k]+'|'+ident[int(raw[3])])
    elif k==events.MAIN_HP:lines.append(f'|-damage|{ident[int(raw[3])]}|'+health(int(raw[3]),int(raw[5]),int(raw[6]),int(raw[7])))
    elif k==28:lines.append(f'|-damage|{ident[int(raw[1])]}|'+health(int(raw[1]),int(raw[7]),int(raw[8]),int(raw[9]))+f'|[from] Recoil|[of] {ident[int(raw[3])]}')
+   elif k==life.TURNLOOP_PREFIX:
+    self.assertEqual(raw.tolist(),[35,-1,-1,-1,-1,0,0,0,0,0]);lines.extend(['|','|t:|1'])
    elif k==life.ACTION_END:lines.append('|')
    elif k==life.UPKEEP:lines.append('|upkeep')
-   elif k==life.TURN:lines.append(f'|turn|{int(tape.event_turn[row,len(lines)])}')
+   elif k==life.TURN:lines.append(f'|turn|{int(tape.event_turn[row,index])}')
    else:self.fail('unrepresented reference raw '+str(k))
   _,projections=public_wire.project_lines(wire,lines,**v4.wire_kwargs(self.catalog))
   return np.array([event.words() for projection in projections for event in projection.events],np.int32)

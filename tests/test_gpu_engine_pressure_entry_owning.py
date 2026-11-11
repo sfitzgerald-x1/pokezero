@@ -99,11 +99,12 @@ class PressureEntryOwningTests(unittest.TestCase):
         plain,ko=entry.enter(s,1,self.entry,eligible=mask,hazards=False)
         traced,kt,out=entry.enter(s,1,self.entry,eligible=mask,hazards=False,_weather_trace=t)
         self.same(plain,traced);self.same(ko,kt)
-        self.assertEqual(out.count.tolist(),[3,2,2,2])
+        self.assertEqual(out.count.tolist(),[3,3,2,2])
+        self.assertEqual(out.words[1,2].tolist(),[27,2,1,1,5,0,3,1,0,0]) # Trace copy, not a new Pressure Start.
         self.assertEqual(int(out.words[0,2,0]),pressure.PRESSURE_START)
         self.assertEqual(int(out.words[0,2,4]),5)
         self.assertEqual(int(traced.ability[1,1,5]),1) # Trace gains Pressure, no onStart.
-        self.assertTrue(bool(out.refusal[1]&256))
+        self.assertFalse(bool(out.refusal[1]&256))
         self.assertEqual(out.words[3].tolist(),t.words[3].tolist())
 
     def test_bad_identity_generation_and_peer_invisible_receipt_refuse_whole_row(self):

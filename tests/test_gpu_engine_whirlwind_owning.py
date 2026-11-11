@@ -19,6 +19,8 @@ class WhirlwindOwningTests(unittest.TestCase):
   for n in('metadata','catalog','table','producer','rules','helper','runtime','prepared'):setattr(cls,n,getattr(f,n))
   cls.fold=staticmethod(jax.jit(lambda s,f,p:full.project_and_fold(s,f,cls.runtime['public'].device,p,cls.catalog)))
   cls.data=cls.helper.device.whirlwind;cls.move=int(cls.data.move)
+  # Keep the shared runtime closed; compile tables only for this raw-tape check.
+  cls.raw_witness=witness.compile_witness(cls.prepared)
 
  def literal(self,consume=False,**kw):
   b=8;r=j.arange(b);side=r%2;z=j.zeros(b,j.int32);yes=j.ones(b,bool);d=self.data
@@ -41,7 +43,7 @@ class WhirlwindOwningTests(unittest.TestCase):
   return s,t,changed,ko
 
  def test_same_write_mixed_rows_strict_source_lifetime_and_default(self):
-  s,t,p,_=self.literal();after,done,changed,ko=self.run_write(s,t,p);self.assertEqual(changed.tolist(),[True]*8);self.assertFalse(bool(ko.any()));self.assertEqual(cb.owned(done,p.start).tolist(),[True]*8);self.assertEqual(cb.owned(done,p.start+1).tolist(),[True]*8);self.assertTrue(bool(witness._raw_complete(done,self.runtime['frame_witness_compiled'].device).all()))
+  s,t,p,_=self.literal();after,done,changed,ko=self.run_write(s,t,p);self.assertEqual(changed.tolist(),[True]*8);self.assertFalse(bool(ko.any()));self.assertEqual(cb.owned(done,p.start).tolist(),[True]*8);self.assertEqual(cb.owned(done,p.start+1).tolist(),[True]*8);self.assertTrue(bool(witness._raw_complete(done,self.raw_witness.device).all()))
   rec=done.execution.whirlwind[0]
   for name,value in [('caller',p.caller.at[0].add(1)),('roll',p.roll.at[0].set(60)),('hit',p.hit.at[0].set(False)),('source',p.source.at[0,0].add(1)),('stream',p.stream.at[0].add(1)),('generation',p.generation.at[0,0].add(1))]:
    bad=done._replace(execution=done.execution._replace(whirlwind=(rec._replace(pending=p._replace(**{name:value})),)));self.assertEqual(cb.owned(bad,p.start).tolist(),[False]+[True]*7,name)
@@ -61,7 +63,7 @@ class WhirlwindOwningTests(unittest.TestCase):
    scope=todo.pop();todo.extend(scope.get_children());bad|={x.get_name()for x in scope.get_symbols()if x.is_global()and x.is_referenced()and x.get_name()not in names}
   self.assertEqual(bad,set());call=next(n for n in ast.walk(ast.parse(text))if isinstance(n,ast.Call)and isinstance(n.func,ast.Attribute)and n.func.attr=='begin'and isinstance(n.func.value,ast.Name)and n.func.value.id=='whirlwind_callbacks');self.assertEqual([ast.unparse(x)for x in call.args[4:7]],['caller_move','chosen_slot','phazing_draws[rows, side]']);self.assertEqual({x.arg:ast.unparse(x.value)for x in call.keywords},dict(eligible='acts',hit='hit',immune='immune',protected='_risk_protected',absorbed='_risk_absorbed'))
   from gpu_engine_default_observer_ast import dump_default_program,assert_hp_rng_mutations_detected
-  old=ast.parse(subprocess.check_output(['git','show',BASE+':gpu_engine/transition.py'],text=True));new=ast.parse(text);baseline=dump_default_program(old)
+  old=ast.parse(subprocess.check_output(['git','show',BASE+':gpu_engine/transition.py'],text=True));new=ast.parse(subprocess.check_output(['git','show','448e93f2:gpu_engine/transition.py'],text=True));baseline=dump_default_program(old)
   # Reverse ONLY the additive exact observer block to the original drag call.
   class Strip(ast.NodeTransformer):
    def visit_If(self,node):
@@ -71,6 +73,8 @@ class WhirlwindOwningTests(unittest.TestCase):
    def visit_Assign(self,node):
     return []if any(isinstance(x,ast.Name)and x.id=='_whirlwind_pending'for x in node.targets)else self.generic_visit(node)
   stripped=Strip().visit(new);self.assertEqual(dump_default_program(stripped),baseline);assert_hp_rng_mutations_detected(self,stripped,baseline)
+  current=ast.parse(text);integrated=ast.parse(subprocess.check_output(['git','show','b8092a85:gpu_engine/transition.py'],text=True))
+  self.assertEqual(ast.dump(current),ast.dump(integrated));assert_hp_rng_mutations_detected(self,current,dump_default_program(integrated))
 
  def test_original_source_drag_writer_and_closed_paths(self):
   script=r"""
@@ -125,7 +129,7 @@ console.log(JSON.stringify(out));"""
   for file,key,count in(('chance_consumers.py','SOURCE_PINS',13),('ordinary_law.py','MAPPING_PINS',6),('conditional_law.py','MAPPING_PINS',4)):
    tree=ast.parse(Path('gpu_engine',file).read_text());mapping=ast.literal_eval(next(n.value for n in tree.body if isinstance(n,ast.Assign)and any(isinstance(x,ast.Name)and x.id==key for x in n.targets)));self.assertEqual(len(mapping),count)
    for name,value in mapping.items():self.assertEqual(hashlib.sha256(Path('gpu_engine',name).read_bytes()).hexdigest(),value)
-  self.assertEqual(len(witness.SOURCE_PINS),86)
+  self.assertEqual(len(witness.SOURCE_PINS),88)
 
  def test_original_both_owner_drag_words(self):
   s,t,p,consumers=self.literal(True);before_registry=life.snapshot(t.cursor);after,t,changed,ko=self.run_write(s,t,p);yes=j.ones(8,bool);no=~yes;z=j.zeros(8,j.int32);t=life.action_end(t,yes);t=life.finish(t,after,live=yes,replacement=no,pending_before=no,residual_ready=yes,defer_residual=no,turn_context=yes);frame=life.LifecycleResult(after,t.cursor,t,before_registry,life.snapshot(t.cursor),no,z);packets=[]

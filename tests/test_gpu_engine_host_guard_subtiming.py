@@ -119,7 +119,9 @@ class HostGuardSubtimingTests(unittest.TestCase):
    self.assertIsNone(d._HOST_GUARD_TIMING.get())
 
  def test_reverse_source_exact_and_existing_census_transports_counts_unchanged(self):
-  before=ast.parse(subprocess.check_output(['git','show',BASE+':gpu_engine/engine_retained_encoder_driver.py'],text=True));after=ast.parse(Path(d.__file__).read_text())
+  before=ast.parse(subprocess.check_output(['git','show','b8092a85:gpu_engine/engine_retained_encoder_driver.py'],text=True));after=ast.parse(Path(d.__file__).read_text())
+  # Bind the complete integrated timing program, including the erased wrappers.
+  self.assertEqual(ast.dump(before,include_attributes=False),ast.dump(after,include_attributes=False))
   class Erase(ast.NodeTransformer):
    def visit_ImportFrom(self,n):return None if n.module=='contextvars'else n
    def visit_Assign(self,n):return None if any(isinstance(t,ast.Name)and t.id in('_HOST_GUARD_TIMING','token','scope')for t in n.targets)else self.generic_visit(n)
@@ -133,8 +135,8 @@ class HostGuardSubtimingTests(unittest.TestCase):
     n=self.generic_visit(n)
     if len(n.finalbody)==1 and isinstance(n.finalbody[0],ast.Expr)and ast.unparse(n.finalbody[0].value)=='_HOST_GUARD_TIMING.reset(token)':return n.body
     return n
-  self.assertEqual(ast.dump(before,include_attributes=False),ast.dump(Erase().visit(after),include_attributes=False))
-  path=Path(d.__file__).with_name('benchmark_capture_gap_census.py');original=subprocess.check_output(['git','show',BASE+':gpu_engine/benchmark_capture_gap_census.py']);self.assertEqual(path.read_bytes(),original)
+  self.assertEqual(ast.dump(Erase().visit(before),include_attributes=False),ast.dump(Erase().visit(after),include_attributes=False))
+  path=Path(d.__file__).with_name('benchmark_capture_gap_census.py');original=subprocess.check_output(['git','show','b8092a85:gpu_engine/benchmark_capture_gap_census.py']);self.assertEqual(path.read_bytes(),original)
   node=next(n for n in ast.parse(path.read_text()).body if isinstance(n,ast.FunctionDef)and n.name=='_driver_host_overlap_ms');space={};exec(compile(ast.Module([copy.deepcopy(node)],[]),'<existing literal timing ferry>','exec'),space)
   measured={'guard_call.extra_guards_ms.own_ms':2.5,'guard_call.extra_guards_ms.own_calls':3}
   result=space['_driver_host_overlap_ms'](NS(host_timings=measured));self.assertEqual(result,{'driver_host_overlap.'+k:v for k,v in measured.items()});self.assertNotIn('driver_host_overlap.guard_call.extra_guards_ms.risk_ms',result)

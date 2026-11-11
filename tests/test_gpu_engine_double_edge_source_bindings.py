@@ -8,6 +8,25 @@ def constant(file,key):
  tree=ast.parse((ROOT/'gpu_engine'/file).read_text())
  return ast.literal_eval(next(n.value for n in tree.body if isinstance(n,ast.Assign)and any(isinstance(t,ast.Name)and t.id==key for t in n.targets)))
 class DoubleEdgeSourceBindingTests(unittest.TestCase):
+ def test_device_port_recertification_keeps_guards_and_inventory(self):
+  # Re-certify the already integrated device/driver source, without changing
+  # the consumer inventory, partition math, mapper or source-drift rejection.
+  baseline='b8092a85d9c1f2ed9c0daf4c4bd8e833a94a2380'
+  constants={'SOURCE_PINS','MAPPING_PINS','DOMAIN_SHA256','KERNEL_SHA256'}
+  for file in ('chance_consumers.py','ordinary_law.py','conditional_law.py',
+               'engine_source_frame_witness.py','phase_d_chance.py'):
+   old=ast.parse(subprocess.check_output(['git','show',baseline+':gpu_engine/'+file],cwd=ROOT,text=True))
+   current=ast.parse((ROOT/'gpu_engine'/file).read_text())
+   def body(tree):
+    return [ast.dump(node) for node in tree.body if not (
+     isinstance(node,ast.Assign) and any(isinstance(target,ast.Name)
+      and target.id in constants for target in node.targets))]
+   self.assertEqual(body(old),body(current),file)
+   def mappings(tree):
+    return {target.id:tuple(ast.literal_eval(node.value)) for node in tree.body
+     if isinstance(node,ast.Assign) for target in node.targets
+     if isinstance(target,ast.Name) and target.id in ('SOURCE_PINS','MAPPING_PINS')}
+   self.assertEqual(mappings(old),mappings(current),file)
  def test_all_three_domain_guards_and_every_owned_mapping_pin(self):
   modules='action_history absorption baton combat critical damage_moves effects encore entry focus_punch items linked_traps mechanics phazing pressure pursuit secondary self_destruct sleep_talk solar_beam state sustain transition variable_moves weather'.split()
   domain=hashlib.sha256(b''.join(n.encode()+b'\0'+(ROOT/'gpu_engine'/(n+'.py')).read_bytes()+b'\0'for n in modules)).hexdigest()

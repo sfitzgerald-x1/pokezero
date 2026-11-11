@@ -3,7 +3,6 @@ import ast
 from copy import deepcopy
 from pathlib import Path
 import subprocess
-from typing import NamedTuple
 import unittest
 from unittest.mock import patch
 import jax
@@ -15,11 +14,9 @@ from gpu_engine import transition as t, secondary, entry
 import test_gpu_engine_engine_weather_public as fixture
 
 
-class ExecutionContext(NamedTuple):
-    # Test-only stand-in for the parent's separately owned Context field.
-    ledger: a.Ledger
-    tables: a.Tables
-    risks: object=None
+# Exercise the integrated lifecycle context, including its optional transaction
+# fields, rather than the three-field stand-in used before those hooks existed.
+ExecutionContext = a.Context
 
 
 class KernelRiskCallsitesTests(unittest.TestCase):
@@ -118,11 +115,19 @@ class KernelRiskCallsitesTests(unittest.TestCase):
             self.assertTrue(bool((trace.execution.risks.carry.risk&r.BOOST).all()))
             self.assertEqual(trace.execution.risks.carry.counts[:,r.Branch.SECONDARY_STATS-1].tolist(),[3,3])
             self.assertEqual(trace.execution.risks.carry.counts[:,r.Branch.SECONDARY_FLINCH-1].tolist(),[1,1])
-            # Literal entry table control exercises the actual Own Tempo set0
-            # branch at counter0; no original ability-physics claim is made.
+            # Zero is an absent confusion volatile: visiting Own Tempo's entry
+            # hook records the cutpoint without manufacturing a cure risk.
             ability=state.ability[:,0,0]
             entry_table=self.table.entry._replace(own_tempo=self.table.entry.own_tempo.at[ability].set(True))
             updated,_,trace=entry.enter(state,j.zeros(2,j.int32),entry_table,eligible=j.ones(2,bool),
+                hazards=False,_weather_trace=tape)
+            self.assertEqual(updated.confusion_counter[:,0,0].tolist(),[0,0])
+            self.assertFalse(bool((trace.execution.risks.carry.risk&r.FIELD_VOLATILE).any()))
+            self.assertEqual(trace.execution.risks.carry.counts[:,r.Branch.ENTRY_CONFUSION_CURE-1].tolist(),[1,1])
+            # Existing confusion, including a malformed negative counter,
+            # still takes the conservative risk path and is actually cleared.
+            confused=state._replace(confusion_counter=state.confusion_counter.at[:,0,0].set(j.array([3,-1],j.int32)))
+            updated,_,trace=entry.enter(confused,j.zeros(2,j.int32),entry_table,eligible=j.ones(2,bool),
                 hazards=False,_weather_trace=tape)
             self.assertEqual(updated.confusion_counter[:,0,0].tolist(),[0,0])
             self.assertTrue(bool((trace.execution.risks.carry.risk&r.FIELD_VOLATILE).all()))
@@ -144,12 +149,29 @@ class KernelRiskCallsitesTests(unittest.TestCase):
             self.assertEqual(changed.refusal.tolist(),[1025,1]*4)
 
     def test_all_nineteen_named_cutpoints_are_present_in_owned_actual_sources(self):
-        names=set()
+        names=set();calls=set()
         for filename in ('transition.py','secondary.py','entry.py'):
             tree=ast.parse(Path(t.__file__).with_name(filename).read_text())
             for node in ast.walk(tree):
+                if isinstance(node,ast.Call) and isinstance(node.func,ast.Attribute) and isinstance(node.func.value,ast.Name) and node.func.value.id=='kernel_risks':
+                    calls.add(node.func.attr)
                 if isinstance(node,ast.Call) and isinstance(node.func,ast.Attribute) and node.func.attr=='branch_on_tape':
                     names.add(node.args[1].attr)
+        # Five former generic visits now validate typed SAME-call captures.
+        # Follow their actual wrappers to the observer's exact Branch literal;
+        # do not remove those cutpoints from the required inventory.
+        helpers=ast.parse(Path(r.__file__).read_text())
+        functions={node.name:node for node in helpers.body if isinstance(node,ast.FunctionDef)}
+        for stem,branch in (('self_heal','SELF_HEAL'),('substitute','SUBSTITUTE'),
+                            ('primary_status','PRIMARY_STATUS'),('self_boost','SELF_BOOST'),('spikes','SPIKES')):
+            wrapper=stem+'_on_tape';observer='observe_'+stem+'_device'
+            self.assertIn(wrapper,calls)
+            delegated=[node for node in ast.walk(functions[wrapper]) if isinstance(node,ast.Call) and isinstance(node.func,ast.Name) and node.func.id=='_on_tape']
+            self.assertEqual(len(delegated),1)
+            self.assertEqual(delegated[0].args[1].id,observer)
+            observed=[node.args[3] for node in ast.walk(functions[observer]) if isinstance(node,ast.Call) and isinstance(node.func,ast.Name) and node.func.id=='_observe']
+            self.assertEqual([ast.unparse(node) for node in observed],['Branch.'+branch])
+            names.add(branch)
         self.assertEqual(names,{x.name for x in list(r.Branch)[5:]})
 
 

@@ -63,4 +63,6 @@ class FlatGroundRiskTests(unittest.TestCase):
   for packed,want in ((cb.pack_ground(None),False),(None,False),(cb.pack_ground(self.thunder.device.ground_immunity),True)):
    ns=dict(entries=j.ones((8,1),bool),ledger=ledger,execution=ex,tables=NS(risk=NS(thunder_wave_substitute_failure=j.array(False),thunder_wave_ground_immunity=packed)));exec(code,ns);self.assertEqual(ns['thunder_ticket'].tolist(),[[want]]*8)
   for file in ('transition.py','engine_retained_encoder_driver.py','engine_lifecycle_event_device.py','engine_full_v4_event_device.py','engine_execution_completeness.py'):
-   self.assertEqual(Path('gpu_engine',file).read_bytes(),subprocess.check_output(['git','show',BASE+':gpu_engine/'+file]))
+   historical=subprocess.check_output(['git','show','62ccffa7:gpu_engine/'+file])
+   self.assertEqual(historical,subprocess.check_output(['git','show',BASE+':gpu_engine/'+file]))
+   self.assertEqual(Path('gpu_engine',file).read_bytes(),subprocess.check_output(['git','show','b8092a85:gpu_engine/'+file]))

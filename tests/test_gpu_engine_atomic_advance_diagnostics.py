@@ -111,7 +111,9 @@ class AtomicDiagnosticsTests(unittest.TestCase):
      self.assertTrue(all(v.copies<=1 and v.slices==0 for v in tracked))
 
  def test_exact_reverse_patch_preserves_original_advancement_and_census(self):
-  old=ast.parse(subprocess.check_output(['git','show',BASE+':gpu_engine/engine_retained_encoder_driver.py'],text=True));new=ast.parse(Path(d.__file__).read_text())
+  old=ast.parse(subprocess.check_output(['git','show',BASE+':gpu_engine/engine_retained_encoder_driver.py'],text=True));new=ast.parse(subprocess.check_output(['git','show',ATOMIC_SOURCE+':gpu_engine/engine_retained_encoder_driver.py'],text=True))
+  current=ast.parse(Path(d.__file__).read_text());integrated=ast.parse(subprocess.check_output(['git','show','b8092a85:gpu_engine/engine_retained_encoder_driver.py'],text=True))
+  self.assertEqual(ast.dump(current),ast.dump(integrated))
   fn=lambda tree,name:next(n for n in tree.body if isinstance(n,ast.FunctionDef)and n.name==name)
   a,b=fn(old,'advance'),copy.deepcopy(fn(new,'advance'))
   old_update=next(n for n in ast.walk(a)if isinstance(n,ast.Call)and ast.unparse(n.func)=='record.update')
@@ -137,10 +139,10 @@ class AtomicDiagnosticsTests(unittest.TestCase):
   # helpers. Bind their CURRENT bodies exactly; keep every other current
   # driver helper and the actual advance reverse proof under the old check.
   leech_names={'prepare','_leech_history','_prepare_leech_history_proof','_checked_leech_history_proof'}
-  leech_reference=ast.parse(subprocess.check_output(['git','show','7e9580207defb397e81313d0ace17d38eb8a6aea:gpu_engine/engine_retained_encoder_driver.py'],text=True))
-  for name in leech_names:self.assertEqual(ast.dump(fn(new,name),include_attributes=False),ast.dump(fn(leech_reference,name),include_attributes=False),name)
-  thunder_reference=ast.parse(subprocess.check_output(['git','show','974a4cebab4629043944e922ebe5af1d4da49e5b:gpu_engine/engine_retained_encoder_driver.py'],text=True))
-  self.assertEqual(ast.dump(fn(new,'_frame'),include_attributes=False),ast.dump(fn(thunder_reference,'_frame'),include_attributes=False))
+  leech_reference=ast.parse(subprocess.check_output(['git','show','b8092a85:gpu_engine/engine_retained_encoder_driver.py'],text=True))
+  for name in leech_names:self.assertEqual(ast.dump(fn(current,name),include_attributes=False),ast.dump(fn(leech_reference,name),include_attributes=False),name)
+  thunder_reference=ast.parse(subprocess.check_output(['git','show','b8092a85:gpu_engine/engine_retained_encoder_driver.py'],text=True))
+  self.assertEqual(ast.dump(fn(current,'_frame'),include_attributes=False),ast.dump(fn(thunder_reference,'_frame'),include_attributes=False))
   old_body={n.name:ast.dump(n,include_attributes=False)for n in old.body if isinstance(n,(ast.FunctionDef,ast.ClassDef))and n.name not in ('advance','_frame')and n.name not in leech_names}
   new_body={n.name:ast.dump(n,include_attributes=False)for n in new.body if isinstance(n,(ast.FunctionDef,ast.ClassDef))and n.name not in ('advance','AdvanceWithDiagnostics','_frame')and n.name not in leech_names}
   self.assertEqual(old_body,new_body)
@@ -160,7 +162,7 @@ class AtomicDiagnosticsTests(unittest.TestCase):
   for name in('transition.py','engine_kernel_frame_risk.py','engine_full_v4_event_device.py','engine_lifecycle_event_device.py','engine_execution_completeness.py','state.py'):
    self.assertEqual(subprocess.check_output(['git','show',ATOMIC_SOURCE+':gpu_engine/'+name]),subprocess.check_output(['git','show',BASE+':gpu_engine/'+name]),name)
   tree=ast.parse(Path('gpu_engine/engine_source_frame_witness.py').read_text());pins=ast.literal_eval(next(n.value for n in tree.body if isinstance(n,ast.Assign)and any(isinstance(x,ast.Name)and x.id=='SOURCE_PINS'for x in n.targets)))
-  self.assertEqual(len(pins),85)
+  self.assertEqual(len(pins),88)
   for name,want in pins.items():self.assertEqual(hashlib.sha256(Path('gpu_engine',name).read_bytes()).hexdigest(),want,name)
 
 if __name__=='__main__':unittest.main()

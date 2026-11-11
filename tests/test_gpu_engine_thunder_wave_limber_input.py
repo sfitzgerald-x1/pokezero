@@ -70,7 +70,7 @@ class ThunderLimberTests(unittest.TestCase):
   closed=t._replace(execution=t.execution._replace(risks=t.execution.risks._replace(tables=t.execution.risks.tables._replace(thunder_wave_limber_ability=j.array(0,j.int32)))))
   self.assertFalse(bool(cb.owned_limber_immunity(closed,index).any()));self.assertEqual(int(self.legacy.device.limber_ability),0)
   for f in ('transition.py','entry.py','mechanics.py','effects.py','secondary.py','state.py','engine_retained_encoder_driver.py'):
-   self.assertEqual(Path('gpu_engine',f).read_bytes(),subprocess.check_output(['git','show',BASE+':gpu_engine/'+f]))
+   self.assertEqual(Path('gpu_engine',f).read_bytes(),subprocess.check_output(['git','show','b8092a85:gpu_engine/'+f]))
   witness._source()
   # Original current setStatus -> Limber callback -> runMoveEffects null
   # interruption emits immunity only, without fail/still or private writes.
