@@ -1857,6 +1857,10 @@ class CalibrationTests(unittest.TestCase):
         self.assertEqual(seats, {('RAW', 0): 2, ('RAW', 1): 2, ('DN2W8', 0): 2, ('DN2W8', 1): 2})   # each arm in both seats, equally
         self.assertEqual([p['arm'] for p in panel.preflight_packets(self.root, arm='DN2W8', games=4, deadline_seconds=5., reserve_seconds=.2)],
                          ['RAW', 'DN2W8', 'DN2W8', 'RAW'])   # the same cells, the same arms: the requests already written match
+        band = panel.calibration_cells(self.lad, CALIBRATION_BAND)
+        panel.write_new(self.root/'claims'/f"{band[0]['ordinal']}.json", dict(setting='preflight'))   # one cell claimed: positions shift by one
+        self.assertEqual([p['arm'] for p in panel.preflight_packets(self.root, arm='DN2W8', games=3, deadline_seconds=5., reserve_seconds=.2)],
+                         ['DN2W8', 'DN2W8', 'RAW'])   # each cell keeps its own arm (by position, cell 1 would be RAW: its written request differs)
         request = ladder.read_bound(packets[1]['path'], packets[1]['sha256'])
         self.assertEqual((request['schema'], request['arm'], request['deadline_seconds'], request['reserve_seconds']),
                          (panel.PREFLIGHT_REQUEST_SCHEMA, 'DN2W8', 5., .2))
