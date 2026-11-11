@@ -7,12 +7,14 @@ C chance draws per (a, b) from a seed bank disjoint from the rollouts' and the U
 our seat's view right after the joint turn (R0' and the engine rungs' estimator state), observed whether or not our seat is
 requested; a terminal child keeps its outcome and has no tokens.
 
-Targets, from the row: Q_MC(a) and its standard error (capped rollouts censored), and for each (a, b) the outcomes of the rollouts
+Targets, from the row: Q_MC(a) and its standard error (capped rollouts censored), the CRN-paired standard error of every action
+pair (se_pair: the rollouts share their seed and root reply across actions), and for each (a, b) the outcomes of the rollouts
 whose sampled root reply was b. The rollouts' replies are recomputed exactly as the labeller drew them
 (sample(opp_policy, the opponent's legal mask at the root, draw(root_seed, k, 0, 1))), from the row's 6-decimal opp_policy; the
 index records how many rollouts each (a, b) has.
 
-The tokens come from the production forward through one encoder hook (value_precision_probe.frozen_token_features' method): float16
+The champion's own value head output is kept per observation (old_value: the comparator on identical children). The tokens
+come from the production forward through one encoder hook (value_precision_probe.frozen_token_features' method): float16
 [n, tokens, width] with the boolean attention mask [n, tokens], the root first, then the children in (a, b, c) order.
 
 Output per worker: OUT/features-<worker>.npz (tokens, valid, owner row index per observation) and OUT/index-<worker>.jsonl (one row per
@@ -43,6 +45,16 @@ def censored_q(outcomes):
     return q, se
 
 
+def pair_se(outcomes):
+    """[A][A] standard errors of the CRN-paired differences o[i, k] - o[j, k] over rollouts k where neither is capped (None: < 2)."""
+    o = np.asarray(outcomes, float);o = np.where(o == CAPPED, np.nan, o);A = len(o);out = [[None] * A for _ in range(A)]
+    for i in range(A):
+        for j in range(A):
+            d = o[i] - o[j];d = d[~np.isnan(d)]
+            if i != j and len(d) >= 2:out[i][j] = float(d.std(ddof=1) / math.sqrt(len(d)))
+    return out
+
+
 def reply_outcomes(outcomes, replies, support):
     """{a_index: {b: [outcomes of the rollouts whose reply was b, capped left out]}} for b in support (None: a waiting opponent)."""
     o = np.asarray(outcomes, float);out = {}
@@ -52,19 +64,19 @@ def reply_outcomes(outcomes, replies, support):
 
 
 def encoder_tokens(model, torch, observations):
-    """(tokens float16 [n, tokens, width], valid bool [n, tokens]) of the champion's encoder on single observations."""
+    """(tokens float16 [n, tokens, width], valid bool [n, tokens], the champion's own value [n]) on single observations."""
     from pokezero.neural_policy import observation_windows_to_torch
     t = observation_windows_to_torch([[o] for o in observations], window_size=1, device='cpu');captured = []
     hook = model.encoder.register_forward_hook(lambda _m, _a, output: captured.append(output.detach()))
     try:
-        with torch.no_grad():model(categorical_ids=t['categorical_ids'], numeric_features=t['numeric_features'], token_type_ids=t['token_type_ids'],
-                                   attention_mask=t['attention_mask'], history_mask=t['history_mask'])
+        with torch.no_grad():output = model(categorical_ids=t['categorical_ids'], numeric_features=t['numeric_features'], token_type_ids=t['token_type_ids'],
+                                            attention_mask=t['attention_mask'], history_mask=t['history_mask'])
     finally:hook.remove()
     if len(captured) != 1:raise ValueError('expected exactly one encoder invocation')
     tokens = captured[0].reshape(len(observations), -1, captured[0].shape[-1])
     valid = t['attention_mask'].reshape(len(observations), -1).bool()
     if valid.shape != tokens.shape[:2]:raise ValueError(f'attention mask {tuple(valid.shape)} vs tokens {tuple(tokens.shape)}')
-    return tokens.numpy().astype(np.float16), valid.numpy()
+    return tokens.numpy().astype(np.float16), valid.numpy(), output.value.reshape(-1).numpy().astype(np.float32)
 
 
 def expand(env, snapshot, row, champion, draws, torch):
@@ -89,7 +101,7 @@ def expand(env, snapshot, row, champion, draws, torch):
     q, se = censored_q(row['outcomes'])
     groups = reply_outcomes(row['outcomes'], replies, support)
     index = dict(actions=row['actions'], replies=support, reply_prior=None if pi is None else [float(pi[b]) for b in support], K=K,
-                 q_mc=q, se_mc=se, reply_outcomes={str(a): {str(b): groups[i][b] for b in support} for i, a in enumerate(row['actions'])},
+                 q_mc=q, se_mc=se, se_pair=pair_se(row['outcomes']), reply_outcomes={str(a): {str(b): groups[i][b] for b in support} for i, a in enumerate(row['actions'])},
                  children=children, root_obs=0, draws=draws)
     return index, observations
 
@@ -112,7 +124,7 @@ def main(argv=None):
     base = json.loads(Path(first).read_bytes())['base_config'];champion = L.Model(args.checkpoint, torch)
     env = L.make_env(base, champion.result, caching=True)
     counts = dict(roots=0, written=0, not_replayed=0, root_mismatch=0, errors=0, observations=0, terminal_children=0)
-    tokens, valid, owner = [], [], []
+    tokens, valid, owner, old_value = [], [], [], []
     try:
         with open(index_path, 'w') as stream:
             for row in rows:
@@ -121,19 +133,20 @@ def main(argv=None):
                     why = R.replay_root(env, row, champion, collection, fpd)
                     if why is not None:counts[why] += 1;continue
                     snapshot = env.snapshot();index, observations = expand(env, snapshot, row, champion, args.draws, torch)
-                    t, v = encoder_tokens(champion.model, torch, observations)
+                    t, v, old = encoder_tokens(champion.model, torch, observations)
                 except Exception as error:
                     counts['errors'] += 1;print(json.dumps(dict(error=f'{type(error).__name__}: {error}'[:300], kind=row['kind'], ordinal=row.get('ordinal'),
                                                                 seed=row['seed'], ours=row['ours'], target=row['target'])), flush=True);continue
                 base_obs = sum(len(x) for x in owner)
                 identity = dict(kind=row['kind'], ordinal=row.get('ordinal'), seed=row['seed'], ours=row['ours'], target=row['target'])
                 stream.write(json.dumps(dict(identity, **index, obs_offset=base_obs, obs_count=len(observations))) + '\n');stream.flush()
-                tokens.append(t);valid.append(v);owner.append(np.full(len(observations), counts['written'], np.int32))
+                tokens.append(t);valid.append(v);old_value.append(old);owner.append(np.full(len(observations), counts['written'], np.int32))
                 counts['written'] += 1;counts['observations'] += len(observations)
                 counts['terminal_children'] += sum(c['terminal'] is not None for c in index['children'])
     finally:
         env.close()
-    if tokens:np.savez(out / f'features-{args.worker}.npz', tokens=np.concatenate(tokens), valid=np.concatenate(valid), owner=np.concatenate(owner))
+    if tokens:np.savez(out / f'features-{args.worker}.npz', tokens=np.concatenate(tokens), valid=np.concatenate(valid), owner=np.concatenate(owner),
+                       old_value=np.concatenate(old_value))
     (out / f'summary-{args.worker}.json').write_text(json.dumps(dict(counts, draws=args.draws, worker=args.worker, workers=args.workers)) + '\n')
     print(json.dumps(dict(event='DONE', **counts)), flush=True)
     return 0 if counts['written'] and counts['written'] == counts['roots'] else 1
