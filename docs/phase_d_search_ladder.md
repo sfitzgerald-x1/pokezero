@@ -38,8 +38,10 @@ score. An ongoing or unbound claim cannot make the prefix eligible.
 The constructor's new `ProtocolInputs` route under
 `v5_public_world.materialize` accepts genuine `PublicRoot` data, B2's public
 carry and the exact own request. It calls the original pure
-`world_battle_spec` → `map_spec` mapping. This route does not fabricate a driver
-Session, History, witness or true-opponent donor. Posterior draws are checked
+`battle_spec_from_payload` → `map_spec` mapping with the same original
+public payload. The bounded batch-2 sleep projection and removal arguments are
+described in [constructor batch 2](phase_d_constructor_batch2.md). This route
+does not fabricate a driver Session, History, witness or true-opponent donor. Posterior draws are checked
 against B2's public candidate bits. Unsupported clocks and mapping failures
 remain named refused world slots. The original retained-driver route remains
 unchanged. All requested 16/32-world roots remain in the construction table.
@@ -51,7 +53,7 @@ Return/Frustration request ID can determine it only when inversion of the
 pinned Showdown base-power callback leaves one integer in 0..255. The request
 producer is `sim/pokemon.ts:getSwitchRequestData` and the callbacks are in
 `data/moves.ts` at the pinned f76228a revision. No generator default is used:
-plain or ambiguous powers, unavailable sleep clocks, unsupported replacement
+plain or ambiguous powers, unreconstructable sleep evidence, unsupported replacement
 phases and ambiguous own static facts remain refused. This bounded repair
 shares the declared one-batch/one-remeasurement coverage budget.
 
@@ -66,6 +68,14 @@ claim. It shares the original single coverage fix/retest budget. The GPU
 Search delegates to the exact same `ProtocolConstructor.prepare` body using
 its existing compiled functions, seen set and public session dictionary; the
 separate saved-root search timing admission still requires the GPU.
+
+The final named constructor tail is documented in
+[final constructor tail](phase_d_constructor_tail.md): publicly resolved faint
+replacement phases, positively fresh Substitute, and public Wish timing under
+the pinned Gen 3 recipient-healing rule. It keeps the original 200 roots and
+16/32 draw prefixes, targets 90%, and ends the constructor program after one
+reviewed measurement regardless. Native/private and acting-latency admission
+remain separate and unavailable. No other tail mechanics are opened.
 
 The rung order is R1 (2 worlds, value), R3 (32 worlds, value), R4 (32 worlds,
 8 sampled chances), R7 (32 worlds, depth 2), and R5 (8 worlds, 8 raw-policy

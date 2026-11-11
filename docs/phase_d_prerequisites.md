@@ -40,10 +40,12 @@ opponent public encounter slots.
 Own HP, stats, moves, item, base ability, active PP and legality come from the
 request. The format's static source spreads are accepted only when they
 uniquely reproduce the owner's literal private stats; this resolves latent
-Hidden Power effects without reading an opponent. Bench PP charges use the
-complete B2 public prefix. Missing own private facts refuse. This first bounded
-source supports ordinary boundaries and explicitly refuses random sleep
-clocks, unsupported active volatiles, Transform/live retyping, unresolved trap,
+Hidden Power effects without reading an opponent. The protocol route carries
+bench PP from the latest exact owning active request plus later public costs. Its [bounded batch-2 rules](phase_d_constructor_batch2.md)
+restore reconstructable public sleep posteriors and positively removed items.
+Missing own private facts refuse. This source supports ordinary boundaries
+and explicitly refuses missing sleep evidence, unsupported active volatiles,
+Transform/live retyping, unresolved trap,
 Wish caster amount and mid-turn damage windows. These are coverage results,
 not opportunities to fill from hidden truth. Unseen opponent sets use only the
 original public belief sampler. All 16 or 32 requested draws remain present,
