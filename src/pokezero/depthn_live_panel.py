@@ -709,7 +709,9 @@ def calibration_packets(directory,*,setting):
 
 def preflight_packets(directory,*,arm,games,deadline_seconds,reserve_seconds):
     """Pre-flight packets (the lead's check of the overlapped path, outcome-blind, never counted): the band's first `games`
-    not-attempted cells, alternately RAW and `arm`, each request carrying its arm and the declared client deadline and reserve."""
+    not-attempted cells, each request carrying its arm and the declared client deadline and reserve. The arm is the cell's own:
+    RAW where the seat equals the offset's parity, else `arm`, so each arm plays both seats equally (consecutive offsets swap them;
+    alternating by position gave RAW every seat-0 cell and the search arm every seat-1 cell, since the band's seats alternate too)."""
     root,run,lad,band=calibration_load(directory);todo=[]
     if arm not in SEARCH_ARMS or type(games)is not int or games<1:raise ValueError('a declared search arm and games >= 1 required')
     if (root/'calibration.json').exists()or any(json.loads(c.read_bytes()).get('setting')in ('solo','concurrent')for c in (root/'claims').glob('*.json')):
@@ -718,7 +720,7 @@ def preflight_packets(directory,*,arm,games,deadline_seconds,reserve_seconds):
         if k>=games:break
         path=root/'requests'/f"{cell['ordinal']}.json"
         value=dict(schema=PREFLIGHT_REQUEST_SCHEMA,run_directory=run['run_directory'],cell=cell,checkpoint=run['checkpoint'],
-            checkpoint_sha256=run['checkpoint_sha256'],base_config=run['base_config'],arm='RAW'if k%2==0 else arm,
+            checkpoint_sha256=run['checkpoint_sha256'],base_config=run['base_config'],arm='RAW'if cell['seat']==cell['offset']%2 else arm,
             deadline_seconds=float(deadline_seconds),reserve_seconds=float(reserve_seconds))
         if path.exists():
             if path.read_bytes()!=encoded(value):raise ValueError('existing pre-flight request differs')
