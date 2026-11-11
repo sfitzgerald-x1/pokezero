@@ -70,11 +70,16 @@ class OrdinaryIntimidateEntryTests(unittest.TestCase):
   return frame.state,tape,observers
  def before_tape(self,b):
   # The same pre-entry tape without the owner consumers: the real initialized state, cursor and risk
-  # carry, with a fresh accounting frame (the entry guards read neither prior consumption).
+  # carry, with a fresh accounting ledger placed at the birth ledger's frame, so the entry opens frame 2
+  # exactly as after the consumed birth and the risk carry opens with it. The entry guards then decide
+  # each row on their own (a closed carry would refuse every row whatever the guards do).
   frame=self.initialized(b)
   tape=life._tape(frame.cursor,self.producer,64)
-  tape=ex.begin_on_tape(tape,ex.initialize(frame.cursor.stream_id,compiled=self.account),self.account.device,active=j.ones(b,bool))
+  ledger=ex.initialize(frame.cursor.stream_id,compiled=self.account)._replace(frame=frame.callbacks.execution.ledger.frame)
+  tape=ex.begin_on_tape(tape,ledger,self.account.device,active=j.ones(b,bool))
   carry=risks.begin_frame_device(frame.callbacks.execution.risks.carry,tape,self.risk.device,active=j.ones(b,bool))
+  self.assertEqual(carry.opened.tolist(),[True]*b);self.assertEqual(carry.risk.tolist(),[0]*b)
+  self.assertEqual(tape.execution.ledger.frame.tolist(),[2]*b)
   tape=tape._replace(execution=tape.execution._replace(risks=risks.Context(carry,self.risk.device)))
   return frame.state,tape
  def install(self,state,tape,side,*,active=None):
@@ -133,6 +138,11 @@ class OrdinaryIntimidateEntryTests(unittest.TestCase):
   self.assertTrue(bool((out.refusal[:7]&512).all()));self.assertEqual(out.count.tolist(),[1]*8)
   self.assertEqual(int(out.refusal[6])&257,257);self.assertEqual(int(out.execution.ledger.count[7]),0)
   self.same(tape.cursor.generation,out.cursor.generation)
+  # Positive control on the same consumer-free tape: with no guard triggered every active row captures its
+  # exact emission (stage 2) and the inactive row enters nothing, so each refusal above is its own guard's.
+  clean_state,clean_tape=self.before_tape(8);clean_state,clean_tape=self.install(clean_state,clean_tape,side)
+  _,_,clean=entry.enter(clean_state,side,self.table.entry,eligible=mask,hazards=False,_weather_trace=clean_tape)
+  self.assertEqual(clean.execution.ledger.stage[:7,0].tolist(),[2]*7);self.assertEqual(int(clean.execution.ledger.count[7]),0)
  def test_original_default_ast_constructor_api_and_source_callback(self):
   path=Path('gpu_engine/entry.py');old=subprocess.check_output(['git','show','f3c9dbea:'+str(path)],text=True)
   self.assertEqual(default_entry_program(old),default_entry_program(path.read_text()))

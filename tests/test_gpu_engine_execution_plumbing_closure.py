@@ -90,11 +90,17 @@ class ExecutionPlumbingClosureTests(unittest.TestCase):
         def score(*args):
             self.assertEqual(args[5].tolist(),[False,True]);calls.append('score')
             return actual['score_fast'](*args)
-        r.update(public_fast=public,encode_fast=encode,score_fast=score)
+        r.update(public_fast=public,encode_fast=encode,score_fast=score);frames=[]
         try:
             with eager_frame(self.prepared):
-                result=d.advance(session,j.tile(j.array([[0,8]],j.int32),(2,1)),chance_inputs=self.chance())
+                eager=r['frame']
+                def counted(*args):
+                    frames.append(1);return eager(*args)
+                r['frame']=counted
+                try:result=d.advance(session,j.tile(j.array([[0,8]],j.int32),(2,1)),chance_inputs=self.chance())
+                finally:r['frame']=eager
         finally:r.update(actual)
+        self.assertEqual(len(frames),1)   # one frame invocation per advance
         # Both public folds finish before any encoding; no fake credit reaches the scorer.
         self.assertEqual(calls,['public0','public1','encode','score','encode','score'])
         ledger=result.state.core.execution
