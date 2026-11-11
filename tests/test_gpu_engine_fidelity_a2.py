@@ -100,7 +100,8 @@ class FidelityA2Tests(unittest.TestCase):
         for lane, edits in enumerate(lanes):
             for (side, column), value in edits.items():draws[lane, side, column] = value
         z = j.zeros((B, 2), j.int32)
-        return self.t.ChanceInputs(j.asarray(draws), z, j.full((B, 2), 99, j.int32), z, z, j.zeros(B, j.int32))
+        return self.t.ChanceInputs(draws=j.asarray(draws), phazing=z, secondary=j.full((B, 2), 99, j.int32), sleep_talk=z,
+                                   entry_ties=z, initial_tie=j.zeros(B, j.int32))
 
     def play(self, s, a0=0, a1=0, chance=None, table=None):
         actions = self.j.zeros((B, 2), self.j.int32).at[:, 0].set(a0).at[:, 1].set(a1)
@@ -497,15 +498,19 @@ class RegressPluginTests(unittest.TestCase):
                          [('trackers.public_port.blocked', 0)])
 
     def test_link_leaves_per_mon_and_phase_shift_tracker_families(self):
-        from gpu_engine.v2e_regress import active_mask, lane_verdict, link_ok
+        from gpu_engine.v2e_regress import active_mask, departed_mask, lane_verdict, link_ok
         ko = np.zeros((2, 6), bool);ko[1, 2] = True
         acting = active_mask(np.array([0, 2])) | active_mask(np.array([0, 2]))
+        stay = departed_mask(np.array([0, 2]), np.array([0, 2]))
         # last_move: the fainted mon's and the actives' entries only (L2).
-        self.assertEqual(link_ok('state.last_move', 0, None, None, ko, acting).tolist(), [True] + [False] * 5)
-        self.assertEqual(link_ok('state.last_move', 1, None, None, ko, acting).tolist(), [False, False, True, False, False, False])
-        # trap_source: a link pointing at the fainted foe is released too.
+        self.assertEqual(link_ok('state.last_move', 0, None, None, ko, acting, departed=stay).tolist(), [True] + [False] * 5)
+        self.assertEqual(link_ok('state.last_move', 1, None, None, ko, acting, departed=stay).tolist(),
+                         [False, False, True, False, False, False])
+        # trap_source: a link pointing at the fainted foe is released too; an active that stayed (side 0's slot 0)
+        # no longer passes (R carries review L2: only a fainted or departed mon releases a link).
         a = np.array([-1, 2, -1, -1, -1, -1]);b = np.array([-1, -1, -1, -1, -1, 4])
-        self.assertEqual(link_ok('state.trap_source', 0, a, b, ko, acting).tolist(), [True, True, False, False, False, False])
+        self.assertEqual(link_ok('state.trap_source', 0, a, b, ko, acting, departed=stay).tolist(),
+                         [False, True, False, False, False, False])
         effects = {'curse': [0]}
         mon_ok = lambda leaf, side: side == 0
         cascade = dict(ko_sides=np.array([True, False]), mon_ok=mon_ok)

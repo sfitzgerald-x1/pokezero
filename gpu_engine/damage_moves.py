@@ -2,7 +2,8 @@
 
 Variable base powers and other special hits remain placeholders. These tables
 do not qualify complete move or game coverage. Fidelity A2 adds Giga Drain's
-drain with Liquid Ooze, and Counter/Mirror Coat (see transition.py).
+drain with Liquid Ooze, and Counter/Mirror Coat; fidelity R adds Bonemerang's
+second hit (see transition.py).
 """
 from typing import NamedTuple
 
@@ -21,6 +22,8 @@ class DamageMoveTable(NamedTuple):
     liquid_ooze: jax.Array    # [A], gen4 abilities.ts liquidooze onSourceTryHeal (drain -> damage)
     counter_kind: jax.Array   # [M], 1 Counter, 2 Mirror Coat (gen3 moves.ts counter/mirrorcoat)
     hidden_power: jax.Array   # [M], counted by Counter, never by Mirror Coat (gen3 onDamage)
+    # Fidelity patch R (appended).
+    hits: jax.Array           # [M], fixed multihit count: Bonemerang 2 (data/moves.ts multihit:2), else 1
 
 
 def from_metadata(metadata):
@@ -36,7 +39,8 @@ def from_metadata(metadata):
         jnp.asarray([{"gigadrain":2}.get(name,0) for name in names],jnp.int32),
         jnp.asarray([name=="liquidooze" for name in vocab["abilities"]]),
         jnp.asarray([{"counter":1,"mirrorcoat":2}.get(name,0) for name in names],jnp.int32),
-        jnp.asarray([name.startswith("hiddenpower") for name in names]))
+        jnp.asarray([name.startswith("hiddenpower") for name in names]),
+        jnp.asarray([{"bonemerang":2}.get(name,1) for name in names],jnp.int32))
 
 
 def resolve_fixed(table,move,level,ordinary_damage,*,immune):

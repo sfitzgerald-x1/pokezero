@@ -74,9 +74,10 @@ def _take(value,layout,index,batch):
 
 def _chance(value):
     if type(value) is not transition.ChanceInputs:raise ValueError('original finite ChanceInputs required')
-    shapes=((1,2,12),(1,2),(1,2),(1,2),(1,2),(1,))
-    limits=(np.array([2,100,100,100,16,16,100,4,8,2,2,2]),60,100,60,2,2)
+    shapes=((1,2,12),(1,2),(1,2),(1,2),(1,2),(1,),(1,2,4))
+    limits=(np.array([2,100,100,100,16,16,100,4,8,2,2,2]),60,100,60,2,2,np.array([16,16,4,2]))
     for x,shape,limit in zip(value,shapes,limits,strict=True):
+        if x is None and shape==(1,2,4):continue   # the appended effect stream (fidelity R) may be omitted
         if x.shape!=shape or x.dtype!=j.int32 or np.any(np.asarray(x)<0) or np.any(np.asarray(x)>=limit):
             raise ValueError('original lawful B1 finite chance block required')
 

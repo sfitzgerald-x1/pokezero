@@ -204,7 +204,7 @@ class GameplayReferenceTests(unittest.TestCase):
             secondary_draws=np.full((1,2),2,np.int32),sleep_talk_draws=np.full((1,2),3,np.int32))
         layout={k:dict(dtype=str(v.dtype),shape=list(v.shape[1:]))for k,v in before._asdict().items()}
         captured=dict(stream_id=101,request=2,before={'state':trace.state_packet(before,0)},
-            chance={k:v.tolist()for k,v in chance()._asdict().items()})
+            chance={k:v.tolist()for k,v in chance()._asdict().items() if v is not None})
         with tempfile.TemporaryDirectory()as tmp:
             control=comparison.ChanceControl(Path(tmp)/'native',comparison.original.LocalShowdownConfig())
             self.assertEqual(control.initialized(),[])

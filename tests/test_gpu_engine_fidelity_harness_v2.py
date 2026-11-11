@@ -39,13 +39,16 @@ class TapeV2Tests(unittest.TestCase):
         from gpu_engine.fidelity import chance_tape
         from gpu_engine.state import empty_state
         s = empty_state(1, seed=29);a = chance_tape(s, 50000, 0)
+        # Fidelity R: the engine saves the block in state.effect_draws, which the tape replays (over a caller's copy).
         pending = s._replace(pending_residual=j.array([True]), residual_draws=j.asarray([a['draws']]),
             secondary_draws=j.asarray([a['secondary']]), sleep_talk_draws=j.asarray([a['sleep_talk']]),
-            keys=s.keys + 1)
-        b = chance_tape(pending, 50000, 1, a['effect'])
+            effect_draws=j.asarray([a['effect']]), keys=s.keys + 1)
+        b = chance_tape(pending, 50000, 1, [[0] * 4] * 2)
         self.assertEqual((b['draws'], b['effect']), (a['draws'], a['effect']))
-        # Without the engine leaf or a saved copy, the stream is derived from the current keys.
-        self.assertEqual(chance_tape(pending, 50000, 2)['effect'], chance_tape(s._replace(keys=s.keys + 1), 50000, 3)['effect'])
+        self.assertNotEqual(chance_tape(s._replace(keys=s.keys + 1), 50000, 2)['effect'], a['effect'])
+        # An engine without the leaf: the caller's copy of the suspended turn's tape.
+        legacy = type('Legacy', (), {k: getattr(pending, k) for k in pending._fields if k != 'effect_draws'})
+        self.assertEqual(chance_tape(legacy, 50000, 3, a['effect'])['effect'], a['effect'])
 
     def test_comparator_formats(self):
         from gpu_engine import fidelity

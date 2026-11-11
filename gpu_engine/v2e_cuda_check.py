@@ -5,7 +5,9 @@ p0: the real collector chunk with every tick's lane carry passed through the
     start: all lanes, book and row buffers bitwise after each chunk, ms per
     tick, kernels and host graph launches per chunk.
 p2: CUDA chance inputs and key advance against transition.sample_chance_inputs
-    and jax.random.split on random and edge keys (>= 100M draws).
+    and jax.random.split on random and edge keys (>= 100M draws). The appended
+    `effect` field differs on every lane until the CUDA kernel draws it
+    (deferred to CUDA option A, design 13 item 6).
 
 All paths are command-line arguments.
 """
@@ -105,6 +107,8 @@ def p2(args):
     from gpu_engine.state import empty_state
     v2e_cuda.load(args.build_dir)
     names = ('draws', 'phazing', 'secondary', 'sleep_talk', 'entry_ties', 'initial_tie')
+    # The appended `effect` field (fidelity R, design 2.1) is not drawn by the hand-written CUDA kernel yet
+    # (deferred to CUDA option A, design 13 item 6): every lane counts as differing on it until it is.
     reference = jax.jit(lambda st: (transition.sample_chance_inputs(st), jax.vmap(lambda k: jax.random.split(k, 2))(st.keys)[:, 0]))
     cuda = jax.jit(v2e_cuda.chance)
     rng = np.random.default_rng(args.seed);b = args.lanes_per_batch;total = 0;bad = {n: 0 for n in names + ('next_keys',)}
@@ -122,6 +126,7 @@ def p2(args):
         ref, ref_keys = reference(st);got = cuda(keys, counts)
         for n, g in zip(names, got[:6]):bad[n] += int(j.sum(j.any((getattr(ref, n) != g).reshape(b, -1), axis=1)))
         bad['next_keys'] += int(j.sum(j.any(ref_keys != got[6], axis=1)))
+        bad['effect'] = bad.get('effect', 0) + (b if len(got) < 8 else int(j.sum(j.any((ref.effect != got[7]).reshape(b, -1), axis=1))))
         total += b
     draws = total * (24 + 2 * 4 + 1)
     begin = time.perf_counter()

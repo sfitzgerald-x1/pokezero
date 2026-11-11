@@ -27,14 +27,18 @@ class FaintBoostResetTests(unittest.TestCase):
         exec(compile(cls.old_source,'<original546-transition>','exec'),vars(cls.old))
 
     def chance(self,b):
-        return tr.ChanceInputs(j.zeros((b,2,12),j.int32),*[j.zeros((b,2),j.int32) for _ in range(4)],j.zeros(b,j.int32))
+        z=j.zeros((b,2),j.int32)
+        return tr.ChanceInputs(draws=j.zeros((b,2,12),j.int32),phazing=z,secondary=z,sleep_talk=z,entry_ties=z,initial_tie=j.zeros(b,j.int32))
 
     def compare_original(self,before,table,actions):
         chance=self.chance(len(actions))
         actual=tr.step_with_chance(before,actions,table,chance)
-        old=self.old.step_with_chance(before,actions,table,chance)
+        # The original predates the appended effect stream (fidelity R): its own six-field ChanceInputs, and
+        # effect_draws (the block a deferring step saves) is outside the comparison.
+        old=self.old.step_with_chance(before,actions,table,self.old.ChanceInputs(*chance[:6]))
         for name in actual.state._fields:
-            if name!='boosts':np.testing.assert_array_equal(getattr(actual.state,name),getattr(old.state,name),err_msg=name)
+            if name not in ('boosts','effect_draws'):
+                np.testing.assert_array_equal(getattr(actual.state,name),getattr(old.state,name),err_msg=name)
         np.testing.assert_array_equal(actual.invalid_actions,old.invalid_actions)
         return actual.state,old.state
 

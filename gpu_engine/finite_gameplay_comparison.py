@@ -52,7 +52,8 @@ class ChanceControl:
 
     def begin(self, captured, layout):
         state=decode_state(captured['before']['state'],layout);raw=captured['chance']
-        if set(raw)!= {'draws','phazing','secondary','sleep_talk','entry_ties','initial_tie'}:
+        legacy={'draws','phazing','secondary','sleep_talk','entry_ties','initial_tie'}
+        if set(raw) not in (legacy,legacy|{'effect'}):
             raise ValueError('complete original ChanceInputs required')
         # These are the original kernel's saved-array selectors on a suspended
         # action turn; not another RNG sample or reconstructed outcome.
@@ -68,6 +69,13 @@ class ChanceControl:
             raise ValueError('actual original finite chance operands required')
         value=dict(schema='pokezero.gpu_chance_tape.v1',nonce=f"{captured['stream_id']}:{captured['request']}",
             draws=draws.tolist(),secondary=secondary.tolist(),sleep_talk=sleep.tolist())
+        if 'effect' in raw:
+            # Tape v2 (fidelity R): the appended effect stream, from the saved block on a suspended turn.
+            effect=state.effect_draws[0] if pending else arrays['effect'][0]
+            if (effect.shape!=(2,4) or effect.dtype.kind not in 'iu' or np.any(effect<0)
+                    or np.any(effect>=np.array([16,16,4,2]))):
+                raise ValueError('actual original finite chance operands required')
+            value.update(schema='pokezero.gpu_chance_tape.v2',effect=effect.tolist())
         self.control.write_text(json.dumps(value));return value
 
     def end(self):

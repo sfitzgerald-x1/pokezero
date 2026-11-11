@@ -27,7 +27,7 @@ BURN_STATUS,POISON_STATUS=2,3
 START,INSTALL=0,1
 PRIVATE_FIELDS=('hp','max_hp','status','species','level','gender','stats','moves','pp','item','ability','base_ability','types','base_types','hidden_power_type','hidden_power_power','happiness','status_counter','substitute_hp')
 Private=NamedTuple('Private',[(n,object)for n in PRIVATE_FIELDS])
-SUSPENSION_FIELDS=('turn','pending_residual','baton_pass','forced_switch','queued_actor','queued_actions','queued_stall','residual_draws','phazing_draws','secondary_draws','sleep_talk_draws','replacement_count','keys')
+SUSPENSION_FIELDS=('turn','pending_residual','baton_pass','forced_switch','queued_actor','queued_actions','queued_stall','residual_draws','phazing_draws','secondary_draws','sleep_talk_draws','replacement_count','keys','effect_draws')
 Suspension=NamedTuple('Suspension',[(n,object)for n in SUSPENSION_FIELDS])
 class Data(NamedTuple):
     binding:object
@@ -159,7 +159,7 @@ def history_shape(h,b):
 def suspension_shape(s,b):
     if type(s)is not Suspension:raise ValueError('typed same-source Baton suspension required')
     for name,v in zip(SUSPENSION_FIELDS,s,strict=True):
-        tail=(2,12)if name=='residual_draws'else(2,)if name in ('baton_pass','forced_switch','queued_actions','queued_stall','phazing_draws','secondary_draws','sleep_talk_draws','keys')else()
+        tail=(2,12)if name=='residual_draws'else(2,4)if name=='effect_draws'else(2,)if name in ('baton_pass','forced_switch','queued_actions','queued_stall','phazing_draws','secondary_draws','sleep_talk_draws','keys')else()
         dtype=j.bool_ if name in ('pending_residual','baton_pass','forced_switch')else j.uint32 if name=='keys'else j.int32
         life._typed(v,(b,)+tail,dtype)
 
