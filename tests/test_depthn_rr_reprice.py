@@ -354,6 +354,11 @@ class OwnMovesTests(unittest.TestCase):
         self.assertEqual(detail['root'], dict(root_logits=list(LOGITS), root_legal=list(LEGAL)))   # the capture is not mutated
         from pokezero.depthn_live_actor import recharge_guarded   # the scorer's guard on this row: the live search went INTO Hyper Beam
         self.assertTrue(recharge_guarded(out['root']['own_moves'], found['search_action_index'], found['greedy_action_index']))
+        gate = dict(candidate=1, greedy=0, passed=True, mean_gap=.2, stderr=.05)   # a NOISE_GATED_K2 replay keeps its operator and gate
+        gated = R.decision_row(dict(ordinal=1), row, request, dict(response, root_operator='NOISE_GATED_K2', noise_gate=gate), .1, found, detail,
+                               shard=0, capture_seconds=0.)
+        self.assertEqual((gated['replay']['root_operator'], gated['replay']['noise_gate']), ('NOISE_GATED_K2', gate))
+        self.assertNotIn('noise_gate', out['replay']);self.assertNotIn('root_operator', out['replay'])   # the default's rows are unchanged
         unread = R.decision_row(dict(ordinal=1), row, dict(request, own_request_line=None), response, .1, found, detail, shard=0, capture_seconds=0.)
         self.assertEqual((unread['root']['own_moves'], unread['root']['own_recharge_lanes']), (None, None))
         # The opponent's -mustrecharge on the lines; the replay refused the root in prepare_roots (a RootRefusal of that kind).
