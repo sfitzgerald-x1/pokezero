@@ -105,6 +105,9 @@ class DataTest(unittest.TestCase):
         self.assertTrue((after['categorical_ids'][:, 17:22, h.SLOT_ID_COL] == np.arange(808, 813)).all())   # slot ids stay positional
         self.assertTrue(np.array_equal(after['numeric_features'][:, 2:7, 0], after['numeric_features'][:, 17:22, 0]))   # own j <-> switch j
         self.assertTrue(np.array_equal(after['legal'][:, :4], before['legal'][:, :4]))
+        old = (after['numeric_features'][:, 17:22, 0] - 10).astype(int)   # the marker names each new slot's old slot
+        for i in range(len(old)):
+            for j in range(5):self.assertEqual(after['legal'][i, 4 + j], before['legal'][i, 4 + old[i, j]])
         self.assertEqual(int(after['legal'].sum()), int(before['legal'].sum()))
 
     def test_bench_shuffle_keeps_each_choice_and_hides_the_order(self):
@@ -125,12 +128,17 @@ class DataTest(unittest.TestCase):
             run = Path(d) / 'run';run.mkdir();(Path(d) / 'fpr').mkdir();seeds = Path(d) / 'seeds.json';seeds.write_text('[11]')
             args = SimpleNamespace(pi_fp=str(run / 'pi-fp.pt'), fpr=str(Path(d) / 'fpr'), test_seeds=str(seeds), late_from=5700)
             with self.assertRaises(SystemExit):h.pi_fp_split_check(args, {}, arrays, split)   # no record, no report
-            report = dict(args=dict(data=args.fpr, test_seeds=args.test_seeds, late_from=5700, view='b', redact='peer-view-v2'),
+            (run / 'pi-fp.pt').write_bytes(b'unit checkpoint')
+            from pokezero.neural_policy import checkpoint_file_sha256
+            report = dict(schema='v2s-fp-reply-model.v1', saved=dict(sha256=checkpoint_file_sha256(run / 'pi-fp.pt')),
+                          args=dict(data=args.fpr, test_seeds=args.test_seeds, late_from=5700, view='b', redact='peer-view-v2'),
                           rows=dict(train=2, test=1, late=2))
             (run / 'report.json').write_text(json.dumps(report))
             self.assertIn('run report', h.pi_fp_split_check(args, {}, arrays, split))
             (run / 'report.json').write_text(json.dumps(dict(report, rows=dict(train=3, test=1, late=2))))
             with self.assertRaises(SystemExit):h.pi_fp_split_check(args, {}, arrays, split)   # a different split
+            (run / 'report.json').write_text(json.dumps(dict(report, saved=dict(sha256='0' * 64))))
+            with self.assertRaises(SystemExit):h.pi_fp_split_check(args, {}, arrays, split)   # another checkpoint's report
             marker = dict(split=dict(fit_seeds=[12]))   # a record that fitted a held-out seed
             with self.assertRaises(SystemExit):h.pi_fp_split_check(args, marker, arrays, split)
             self.assertIn('split record', h.pi_fp_split_check(args, dict(split=dict(fit_seeds=[10])), arrays, split))
@@ -198,6 +206,19 @@ class ModelTest(unittest.TestCase):
         p = torch.softmax(logits[0], -1)
         self.assertAlmostEqual(float(loss[0]), float(-torch.log(p[4])), places=5)
         self.assertAlmostEqual(float(loss[1]), float(-torch.log(p[:4].sum())), places=5)
+
+    def test_gender_blind_model_ignores_the_gender_bits_and_keeps_their_weights_zero(self):
+        torch = self.torch;HumanReply, embed_tokens = h.build(torch)
+        model = HumanReply(self.base, bands=True, ignore_gender=True)
+        flipped = {k: v.copy() for k, v in self.arrays.items()};flipped['numeric_features'][..., list(h.GENDER_COLS)] = 1. - flipped['numeric_features'][..., list(h.GENDER_COLS)]
+        a = h.predict(model, h.Store(self.arrays, torch, 'cpu'), np.arange(10), torch, embed_tokens)
+        b = h.predict(model, h.Store(flipped, torch, 'cpu'), np.arange(10), torch, embed_tokens)
+        self.assertLess(np.abs(a - b).max(), 1e-7)
+        model.train();st = h.Store(self.arrays, torch, 'cpu');idx = torch.arange(10)
+        h.loss_terms(torch, model(**st.inputs(idx, embed_tokens, model)), st.legal[idx], st.label[idx], st.partial[idx]).mean().backward()
+        w = model.base.numeric_projection.weight
+        self.assertTrue((w.grad[:, list(h.GENDER_COLS)] == 0).all());self.assertTrue((w[:, list(h.GENDER_COLS)] == 0).all())
+        self.assertGreater(float(w.grad.abs().sum()), 0.)
 
     def test_batch_bench_shuffle_matches_the_numpy_rule(self):
         torch = self.torch;before = DataTest.bench_rows(DataTest())

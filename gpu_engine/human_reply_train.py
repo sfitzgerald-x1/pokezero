@@ -16,11 +16,15 @@ cells the search's peer view leaves at zero (own LAST_DAMAGE_TAKEN, the other si
 Labels: a labelled row (label >= 0) is a full label. A `cant` or `fainted_before_acting` row is a partial label, 'some move':
 its likelihood is the legal moves' total probability (both only happen to a chosen move). Other censored rows (no_action,
 recharge, label_undecodable) carry no choice and are dropped.
-Bench order. g3rb_views writes the imputed own party lead first, then in order of appearance, and each switch token carries its
-party slot's id (categorical column 3), so the slot of a switch target leaks the future (every seat's first switch-in is to
-slot 1). load_views therefore shuffles the bench (party slots 1-5: own tokens 2-6 with their switch tokens 17-21, the legal mask
+Bench order. g3rb_views writes the imputed own party lead first, then in order of appearance (each switch-in then swapped into
+slot 0), and each switch token carries its party slot's id (categorical column 3), so the slot of a switch target leaks the
+future (every seat's first switch-in is to slot 1). load_views therefore shuffles the bench (party slots 1-5: own tokens 2-6 with their switch tokens 17-21, the legal mask
 and the label; the positional slot ids stay) with a fixed seed on every row, and training re-shuffles every batch, so no model
 can read the order. evaluate --as-built scores the unshuffled views instead (a leak diagnostic only).
+Gender. g3rb_views keeps the logged details (with gender) of every mon the seat reveals during the game and imputes the others
+without one, so an own mon's gender bits say whether it ever appears. New runs are gender-blind (--keep-gender to opt out): the two
+gender columns of the trunk's numeric projection are zeroed and their gradient masked, so no gender bit reaches the model in
+training, and the exported archive ignores gender when served. The champion and pi_FP baselines keep their own inputs.
 Splits: test is the strict vintage (the 33-day window inside the Showdown pin; never trained on, never used for selection);
 of the rest, validation is replay hash % 10 == 1 (sha256 of 'g3rb-split:<replay>'), train the rest. Both seats of a replay
 stay together.
@@ -75,6 +79,7 @@ ACTION_OFFSET = 13                                                  # showdown.A
 EVENT_TOKENS = (0, 1, 7)                                            # field, own active, the other side's active
 BENCH, SWITCHES, SLOTS = 2, ACTION_OFFSET + 4, 5                     # own party slots 1-5 (tokens 2-6) and their switch tokens (17-21)
 SLOT_ID_COL = 3                                                      # a switch token's categorical column holding its party slot's action id
+GENDER_COLS = (34, 35)                                               # v4 numeric MALE / FEMALE bits (showdown.NUMERIC_GENDER_*)
 EVENT_SCALARS = 6
 TURN_BUCKETS = fpt.TURN_BUCKETS
 EARLY, LATE = (1, 3), (18, 10**9)
@@ -149,7 +154,7 @@ def load_views(views_dir, unredacted=False, as_built=False, shuffle_seed=0):
     arrays['split'] = np.where(arrays['vintage'] == VINTAGES.index('strict'), 'test', split)
     if unredacted:arrays['numeric_unredacted'] = arrays['numeric_features'].copy()
     redact_own_credit(arrays['numeric_features'])
-    if not as_built:shuffle_bench(arrays, shuffle_seed)
+    if not as_built:arrays['bench_perm'] = shuffle_bench(arrays, shuffle_seed)   # new switch slot j holds the views' slot perm[j]
     if unredacted:arrays['numeric_unredacted_test'] = arrays.pop('numeric_unredacted')[arrays['split'] == 'test']
     arrays['partial'] = partial_mask(arrays)
     arrays['band'] = band_of(arrays['rating'])
@@ -239,12 +244,16 @@ def build(torch):
             return self.to_all(h), self.to_action(h)
 
     class HumanReply(nn.Module):
-        def __init__(self, base, bands=False, history=False, events=32):
+        def __init__(self, base, bands=False, history=False, events=32, ignore_gender=False):
             super().__init__()
             config = base.config
             if int(config.window_size) != 1 or base.encoder is None or base.temporal_gru is not None:
                 raise SystemExit('HumanReply needs a window-1 trunk with an encoder and no temporal GRU (the 9375 champion)')
-            self.base = base;width = config.embedding_dim;self.events = events
+            self.base = base;width = config.embedding_dim;self.events = events;self.ignore_gender = ignore_gender
+            if ignore_gender:   # module docstring: the gender columns' weights are zero and stay zero (their gradient is masked)
+                weight = base.numeric_projection.weight;cols = torch.tensor(GENDER_COLS, device=weight.device)
+                with torch.no_grad():weight[:, cols] = 0.
+                weight.register_hook(lambda g: g.index_fill(1, cols.to(g.device), 0.))
             self.band = nn.Parameter(torch.zeros(len(BANDS), config.token_type_vocab_size, width)) if bands else None
             self.history = History(width) if history else None
 
@@ -393,7 +402,8 @@ def load_human(run_dir, torch, device):
         raise SystemExit(f"{saved['base_checkpoint']} is not the base checkpoint {run_dir} was trained from (sha256 differs)")
     base, _ = load_transformer_checkpoint(saved['base_checkpoint'], map_location=device)
     HumanReply, embed_tokens = build(torch)
-    model = HumanReply(base, bands=saved['wrapper']['bands'], history=saved['wrapper']['history'], events=saved['wrapper']['events']).to(device)
+    model = HumanReply(base, bands=saved['wrapper']['bands'], history=saved['wrapper']['history'], events=saved['wrapper']['events'],
+                       ignore_gender=saved['wrapper'].get('ignore_gender', False)).to(device)
     model.load_state_dict(saved['state_dict']);model.eval()
     return model, embed_tokens, saved
 
@@ -498,12 +508,16 @@ def train(args):
     print(json.dumps(dict(event='DATA', **counts)), flush=True)
     base, _ = load_transformer_checkpoint(args.checkpoint, map_location=args.device)
     HumanReply, embed_tokens = build(torch)
-    model = HumanReply(base, bands=args.bands, history=args.history, events=args.history_events).to(args.device)
     store = Store(arrays, torch, args.device, events=args.history_events if args.history else 0)
-    # identity at initialisation: the wrapper (band and history paths at zero) is the champion's own forward
     probe = rows['val'][:4096]
+    champion_probe = predict(HumanReply(base).to(args.device), store, probe, torch, embed_tokens, base_only=True)
+    model = HumanReply(base, bands=args.bands, history=args.history, events=args.history_events, ignore_gender=not args.keep_gender).to(args.device)
+    # identity at initialisation: the wrapper (band and history paths at zero) is its trunk's own forward (the champion, made
+    # gender-blind unless --keep-gender: that change is reported, not checked)
     wrapped = predict(model, store, probe, torch, embed_tokens);plain = predict(model, store, probe, torch, embed_tokens, base_only=True)
     identity = float(np.abs(wrapped - plain).max())
+    gender_blind_change = float(np.abs(plain - champion_probe).max())
+    print(json.dumps(dict(event='GENDER_BLIND', ignore_gender=not args.keep_gender, max_abs_probability_change=gender_blind_change)), flush=True)
     print(json.dumps(dict(event='IDENTITY', max_abs_probability_difference=identity, tolerance=IDENTITY_TOLERANCE)), flush=True)
     if not identity <= IDENTITY_TOLERANCE:raise SystemExit(f'the untrained wrapper differs from the champion by {identity}')
     new = model.new_parameters();new_ids = {id(p) for p in new}
@@ -548,12 +562,13 @@ def train(args):
                   split='test: strict vintage; val: sha256(g3rb-split:<replay>) % 10 == 1; train: the rest', bands=list(BANDS),
                   band_dropout=args.band_dropout if args.bands else None, history_events=args.history_events if args.history else None,
                   bench_order='shuffled (seed 0 at load, re-shuffled every training batch; module docstring)',
+                  gender='ignored (zero, gradient-masked projection columns)' if not args.keep_gender else 'kept',
                   best_step=best['step'], note='policy fine-tuned on human decisions; the value output is not trained')
     torch.save(dict(schema=SCHEMA, base_checkpoint=str(args.checkpoint), base_checkpoint_sha256=base_sha,
-                    wrapper=dict(bands=bool(args.bands), history=bool(args.history), events=args.history_events),
+                    wrapper=dict(bands=bool(args.bands), history=bool(args.history), events=args.history_events, ignore_gender=not args.keep_gender),
                     state_dict=best_state, human_reply=marker), out / 'human.pt')
     report = dict(schema=SCHEMA, views=str(args.views), checkpoint=str(args.checkpoint), checkpoint_sha256=base_sha, args=vars(args),
-                  data=counts, identity=identity, history=history, best=best, steps_per_epoch=steps_per_epoch,
+                  data=counts, identity=identity, gender_blind_change=gender_blind_change, history=history, best=best, steps_per_epoch=steps_per_epoch,
                   saved=dict(path=str(out / 'human.pt'), sha256=checkpoint_file_sha256(out / 'human.pt')), seconds=round(time.time() - started, 1))
     (out / 'report.json').write_text(json.dumps(report, indent=1) + '\n')
     print(json.dumps(dict(event='DONE', best=best, seconds=report['seconds'])), flush=True)
@@ -600,10 +615,10 @@ def evaluate(args):
     from pokezero.neural_policy import checkpoint_file_sha256
     set_exact(torch);out = Path(args.out);out.mkdir(parents=True, exist_ok=True);started = time.time()
     if (out / 'report-human.json').exists():raise SystemExit(f'{out} already holds an evaluation')
+    check_trained_on(parse_models(args.model), args.views, torch)
     arrays = load_views(args.views, unredacted=True, as_built=args.as_built)
     test = np.flatnonzero(arrays['split'] == 'test');train = np.flatnonzero(arrays['split'] == 'train')
     champion, embed_tokens = plain_model(args.checkpoint, torch, args.device)
-    check_trained_on(parse_models(args.model), args.views, torch)
     store = Store(arrays, torch, args.device, events=store_events(parse_models(args.model), torch))
     models = dict(uniform_legal=arrays['legal'][test] / arrays['legal'][test].sum(1, keepdims=True))
     models['champion'] = predict(champion, store, test, torch, embed_tokens, base_only=True)
@@ -618,7 +633,9 @@ def evaluate(args):
         pi_fp, _ = plain_model(args.pi_fp, torch, args.device);models['pi_fp'] = predict(pi_fp, store, test, torch, embed_tokens, base_only=True);del pi_fp
     identities = {}
     for name, path in parse_models(args.model).items():
-        model, embed_tokens, saved = load_human(path, torch, args.device);identities[name] = dict(run=str(path), sha256=checkpoint_file_sha256(Path(path) / 'human.pt'), wrapper=saved['wrapper'])
+        model, embed_tokens, saved = load_human(path, torch, args.device)
+        identities[name] = dict(run=str(path), sha256=checkpoint_file_sha256(Path(path) / 'human.pt'), wrapper=saved['wrapper'],
+                                bench_order=saved['human_reply'].get('bench_order', 'as built (leaky)'), gender=saved['human_reply'].get('gender', 'kept'))
         models[name] = predict(model, store, test, torch, embed_tokens)
         if saved['wrapper']['bands']:models[f'{name}_band_unknown'] = predict(model, store, test, torch, embed_tokens, band=0)
         del model
@@ -628,7 +645,9 @@ def evaluate(args):
             [(n, f'{n}_band_unknown') for n in names if f'{n}_band_unknown' in models] + \
             [(a, b) for a in names for b in names if a < b] + ([('pi_fp', 'champion')] if args.pi_fp else [])
     contrasts = [(a, b) for a in names for b in names if a != b] + [(n, 'champion') for n in names]
-    np.savez(out / 'test-probs.npz', rows=test, replay=arrays['replay'][test], seat=arrays['seat'][test], turn=arrays['turn'][test],
+    np.savez(out / 'test-probs.npz', bench_order=np.asarray('as built' if args.as_built else 'shuffled (seed 0)'),
+             bench_perm=arrays['bench_perm'][test] if 'bench_perm' in arrays else np.zeros((0, SLOTS), np.int64),
+             rows=test, replay=arrays['replay'][test], seat=arrays['seat'][test], turn=arrays['turn'][test],
              label=arrays['label'][test], partial=arrays['partial'][test], band=arrays['band'][test], **{f'probs_{k}': v for k, v in models.items()})
     report = dict(schema='v2s-human-reply-eval.v1', views=str(args.views), checkpoint=str(args.checkpoint),
                   bench_order='as built (leaky party order; diagnostic)' if args.as_built else 'shuffled (seed 0)',
@@ -660,6 +679,9 @@ def pi_fp_split_check(args, marker, arrays, split):
     path = Path(args.pi_fp).parent / 'report.json'
     if not path.exists():raise SystemExit(f'{args.pi_fp} has no split record and no run report beside it: its held-out seeds cannot be checked')
     run = json.loads(path.read_text());a = run.get('args') or {}
+    from pokezero.neural_policy import checkpoint_file_sha256
+    if run.get('schema') != 'v2s-fp-reply-model.v1' or (run.get('saved') or {}).get('sha256') != checkpoint_file_sha256(args.pi_fp):
+        raise SystemExit(f'{path} is not the training report of {args.pi_fp} (schema or saved sha256 differs)')
     same = lambda x, y: x is not None and y is not None and Path(x).resolve() == Path(y).resolve()
     checks = dict(data=same(a.get('data'), args.fpr), test_seeds=same(a.get('test_seeds'), args.test_seeds), late_from=a.get('late_from') == args.late_from,
                   view=a.get('view') == 'b', redaction=a.get('redact') == 'peer-view-v2',
@@ -741,6 +763,8 @@ def export(args):
     if checkpoint.exists() or archive.exists():raise SystemExit(f'{out} already holds an export')
     model, embed_tokens, saved = load_human(args.run, torch, args.device)
     if saved['wrapper']['history']:raise SystemExit('a history model has no champion archive (its event inputs are not in the archive format)')
+    if not str(saved['human_reply'].get('bench_order', '')).startswith('shuffled'):
+        raise SystemExit(f'{args.run} was trained on the views\' own party order, which leaks future switch-ins: retrain it (bench shuffle)')
     if model.band is None and args.band != 'unknown':raise SystemExit('this run has no band table: export it with --band unknown')
     band = BANDS.index(args.band)
     base_state = {k[len('base.'):]: v.detach().cpu() for k, v in model.state_dict().items() if k.startswith('base.')}
@@ -769,7 +793,7 @@ def export(args):
     sub['label'] = np.clip(arrays['label'][test], 0, None)   # fp_reply_train.batch reads a label; the parity check does not use it
     extra = dict(marker, view='b', redaction='peer-view-v2', policy_only=True)
     parity = fpt.archive_parity(checkpoint, archive, sub, np.arange(len(test))[:, None], np.arange(len(test)), torch, extra)
-    result = dict(schema='v2s-human-reply-export.v1', run=str(args.run), band=args.band, checkpoint=str(checkpoint),
+    result = dict(schema='v2s-human-reply-export.v1', run=str(args.run), band=marker['band'], checkpoint=str(checkpoint),
                   checkpoint_sha256=checkpoint_file_sha256(checkpoint), fold_max_abs_probability_difference=fold_diff,
                   fold_tolerance=FOLD_TOLERANCE, archive=parity)
     (out / 'export.json').write_text(json.dumps(result, indent=1) + '\n')
@@ -787,6 +811,7 @@ def main(argv=None):
     t.add_argument('--weight-decay', type=float, default=0.01);t.add_argument('--warmup', type=int, default=200)
     t.add_argument('--band-dropout', type=float, default=.15);t.add_argument('--eval-every', type=int, default=300)
     t.add_argument('--seed', type=int, default=0);t.add_argument('--device', default='cuda')
+    t.add_argument('--keep-gender', action='store_true', help='let the model read the gender bits (they leak which own mons ever appear)')
     e = sub.add_parser('evaluate');e.add_argument('views');e.add_argument('out');e.add_argument('--checkpoint', required=True)
     e.add_argument('--model', action='append', default=[]);e.add_argument('--pi-fp');e.add_argument('--players')
     e.add_argument('--recalibration-rows', type=int, default=100000);e.add_argument('--device', default='cuda')
