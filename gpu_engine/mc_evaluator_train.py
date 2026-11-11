@@ -62,8 +62,7 @@ def load(directories):
             w = index.stem.split('-')[-1];shard = Path(directory) / f'features-{w}'
             if not (shard / 'tokens.npy').exists():continue
             arrays = {n: np.load(shard / f'{n}.npy', mmap_mode='r') for n in ('tokens', 'valid', 'old_value')}
-            for line in open(index):
-                if line.strip():roots.append((json.loads(line), arrays))
+            with open(index) as stream:roots.extend((json.loads(line), arrays) for line in stream if line.strip())
     return roots
 
 

@@ -59,8 +59,8 @@ class BackfillTests(unittest.TestCase):
         (self.features / 'index-0.jsonl').write_text(''.join(json.dumps(r) + '\n' for r in rows))
 
     def index_row(self, r, **change):
-        return dict(kind=r['kind'], ordinal=r.get('ordinal'), seed=r['seed'], ours=r['ours'], target=r['target'], actions=r['actions'],
-                    se_pair=F.pair_se(r['outcomes']), obs_offset=0, **change)
+        return dict(dict(kind=r['kind'], ordinal=r.get('ordinal'), seed=r['seed'], ours=r['ours'], target=r['target'], actions=r['actions'],
+                         se_pair=F.pair_se(r['outcomes']), obs_offset=0), **change)
 
     def test_the_backfill_adds_the_paired_mean_and_keeps_every_other_field(self):
         before = [self.index_row(r) for r in self.rows];self.index(before);out = Path(self.dir.name) / 'out'
