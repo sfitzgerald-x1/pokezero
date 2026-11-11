@@ -147,8 +147,11 @@ def record(args):
                     try:held = capture_root(config=config, contract=ActorContract.champion(), lines=tuple(req['lines']), battle_id=req['battle_id'],
                                             address=DecisionAddress(req['stream_id'], req['decision_index'], int(req['owner'][1]) - 1), seed=args.seed & 0xffffffff)
                     except Exception as error:held = ['error', type(error).__name__, str(error)[:200]]
+                belief = getattr(getattr(item, 'facts', None), 'peer_belief', None)   # view b's private-reveal belief rows (the peer fold's)
                 out = dict(ordinal=ordinal, decision_index=req['decision_index'], lines=len(req['lines']), kind=type(item).__name__,
                            prepare=digest(item, shared), classify=digest(classified, shared), root=digest(held, shared),
+                           reveal_members=len(((getattr(item, 'private_reveals', None) or {}).get('applicable')) or []),
+                           peer_belief=belief is not None, belief=digest(belief, shared),
                            prepare_wall=round(prepare_wall, 5), classify_wall=round(classify_wall, 5))
                 stream.write(json.dumps(out) + '\n');stream.flush()
             print(json.dumps(dict(event='BATTLE', ordinal=ordinal, decisions=index)), flush=True)
@@ -172,16 +175,20 @@ def compare(args):
     for key in sorted(set(a) | set(b)):
         x, y = a.get(key), b.get(key)
         if x is None or y is None:mismatches.append(dict(decision=key, missing='original' if x is None else 'candidate'));continue
-        diff = [f for f in ('kind', 'prepare', 'classify', 'root') if x[f] != y[f]]
+        diff = [f for f in ('kind', 'prepare', 'classify', 'root', 'belief') if (f in x or f in y) and x.get(f) != y.get(f)]
         if diff:mismatches.append(dict(decision=key, fields=diff, kind=(x['kind'], y['kind'])))
     def pct(xs):
         xs = sorted(xs);return None if not xs else dict(n=len(xs), p50=round(xs[len(xs) // 2], 4), p95=round(xs[min(len(xs) - 1, int(.95 * len(xs)))], 4))
     bands = {'0-2': (0, 2), '3-9': (3, 9), '10-19': (10, 19), '20+': (20, 10**6)}
     walls = {name: {stage: {band: pct([r[stage] for r in rows.values() if lo <= r['decision_index'] <= hi]) for band, (lo, hi) in bands.items()}
                     for stage in ('prepare_wall', 'classify_wall')} for name, rows in (('original', a), ('candidate', b))}
-    summary = dict(decisions=len(a), candidate_decisions=len(b), mismatches=len(mismatches), first_mismatches=mismatches[:20],
+    keys = sorted(set(a) & set(b));beliefs = [k for k in keys if a[k].get('peer_belief') and b[k].get('peer_belief')]
+    peer = dict(reveal_decisions=dict(original=sum(bool(a[k].get('reveal_members')) for k in keys), candidate=sum(bool(b[k].get('reveal_members')) for k in keys)),
+                belief_decisions=dict(original=sum(bool(a[k].get('peer_belief')) for k in keys), candidate=sum(bool(b[k].get('peer_belief')) for k in keys),
+                                      both=len(beliefs), matching=sum(a[k].get('belief') == b[k].get('belief') and a[k]['prepare'] == b[k]['prepare'] for k in beliefs)))
+    summary = dict(decisions=len(a), candidate_decisions=len(b), mismatches=len(mismatches), first_mismatches=mismatches[:20], peer_fold=peer,
                    identical=not mismatches and len(a) == len(b), original=h0, candidate=h1, walls=walls)
-    Path(args.out).write_text(json.dumps(summary, indent=1) + '\n');print(json.dumps(dict(identical=summary['identical'], decisions=len(a), mismatches=len(mismatches))))
+    Path(args.out).write_text(json.dumps(summary, indent=1) + '\n');print(json.dumps(dict(identical=summary['identical'], decisions=len(a), mismatches=len(mismatches), peer_fold=peer)))
     return 0 if summary['identical'] else 1
 
 
