@@ -8,6 +8,9 @@ and target; self: seed, ours and target), action, actions and q.
 
 Without --model only D1old is written (the old head's rung needs no trained model: a check of the features against the ladder).
 A residual model (mc_evaluator_train --head residual) gives D1A's child value as old_value + delta, the trainer's own predict().
+With a model, every scored root's game (its kind and battle seed) must be absent from the model's training features (the index rows
+of the directories it records); any overlap is refused, since a model that saw a gate game would be scored against the old head
+unfairly.
 
 usage: python -m gpu_engine.mc_evaluator_rungs --features DIR [DIR ...] [--model OUT/model-a.pt] --out NEW_DIR [--device cuda]
 """
@@ -29,7 +32,12 @@ def main(argv=None):
     if args.model:
         saved = torch.load(args.model, map_location=args.device);kind = saved.get('head', 'hl_gauss')
         head, _ = T.make_heads(kind, saved['width'], saved['bins'], torch);head.to(device);head.load_state_dict(saved['value_head']);head.eval()
-    roots = T.load(args.features);out = Path(args.out);out.mkdir(parents=True, exist_ok=False);rows = dict(D1A=[], D1old=[]) if head else dict(D1old=[])
+    roots = T.load(args.features)
+    if head is not None:
+        seen = {(r['kind'], r['seed']) for d in saved['features'] for p in sorted(Path(d).glob('index-*.jsonl')) for r in map(json.loads, filter(str.strip, open(p)))}
+        overlap = sorted({(r['kind'], r['seed']) for r, _ in roots} & seen)
+        if not seen or overlap:raise SystemExit(f"the model's training games must be readable and disjoint from the scored roots' ({len(overlap)} shared, e.g. {overlap[:3]})")
+    out = Path(args.out);out.mkdir(parents=True, exist_ok=False);rows = dict(D1A=[], D1old=[]) if head else dict(D1old=[])
     with torch.no_grad():
         for start in range(0, len(roots), args.batch_roots):
             batch = T.Batch(roots[start:start + args.batch_roots], torch, device)

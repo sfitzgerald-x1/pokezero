@@ -1,12 +1,13 @@
-"""Backfill the CRN-paired mean difference (d_pair) into an extracted feature directory whose index rows predate it.
+"""Backfill the worst-case paired bounds (d_lo, se_lo) into an extracted feature directory whose index rows predate them.
 
-Feature rows written before mc_evaluator_features stored d_pair carry only se_pair, so the trainer's significance test cannot pair
-its numerator with its SE. This recomputes, per index row, mc_evaluator_features.pair_stats from the bank row the extraction read
-(matched by identity: kind, ordinal, seed, ours, target) and writes NEW_DIR/index-<w>.jsonl with d_pair added, every other field
-unchanged; NEW_DIR/features-<w> links to the source's shard (the arrays are not copied).
+Feature rows written before mc_evaluator_features stored d_lo carry only se_pair, which the trainer's significance test no longer
+uses. This recomputes, per index row, mc_evaluator_features.pair_bounds from the bank row the extraction read (matched by identity:
+kind, ordinal, seed, ours, target) and writes NEW_DIR/index-<w>.jsonl with d_lo and se_lo added, every other field unchanged;
+NEW_DIR/features-<w> links to the source's shard (the arrays are not copied).
 
-It refuses (no output) unless every index row has exactly one bank row, the actions agree, and the recomputed se_pair equals the
-stored one (the same outcomes, within 1e-9): the backfill can only add the mean of the very samples the stored SE describes.
+It refuses (no output) unless every index row has exactly one bank row, the actions and K agree, and the row's stored targets are the
+bank row's (se_pair, Q_MC and its SE recomputed from the bank outcomes, within 1e-9): the backfill reads the very outcomes the
+extraction did, sign included.
 
 usage: python -m gpu_engine.mc_evaluator_pairs --features DIR --bank BANK_DIR --out NEW_DIR
 """
@@ -15,7 +16,7 @@ import glob
 import json
 from pathlib import Path
 
-from gpu_engine.mc_evaluator_features import pair_stats
+from gpu_engine.mc_evaluator_features import censored_q, pair_bounds, pair_se
 
 
 def identity(row):
@@ -39,12 +40,16 @@ def same(a, b, tol=1e-9):
 
 
 def backfill(index_row, bank_row):
-    """index_row with d_pair (pair_stats of the bank row's outcomes); ValueError when the bank row is not the extraction's."""
-    if bank_row['actions'] != index_row['actions']:raise ValueError(f'actions differ for {identity(index_row)}')
-    d_pair, se_pair = pair_stats(bank_row['outcomes']);stored = index_row['se_pair']
-    if len(stored) != len(se_pair) or any(not same(x, y) for r, s in zip(stored, se_pair) for x, y in zip(r, s)):
-        raise ValueError(f'se_pair differs from the bank row for {identity(index_row)}')
-    return dict(index_row, d_pair=d_pair)
+    """index_row with d_lo and se_lo (pair_bounds of the bank row's outcomes); ValueError when the bank row is not the extraction's."""
+    if bank_row['actions'] != index_row['actions'] or len(bank_row['outcomes'][0]) != index_row['K']:
+        raise ValueError(f'actions or K differ for {identity(index_row)}')
+    q, se = censored_q(bank_row['outcomes'])
+    for name, mine, theirs in (('se_pair', pair_se(bank_row['outcomes']), index_row['se_pair']), ('q_mc', [q], [index_row['q_mc']]),
+                               ('se_mc', [se], [index_row['se_mc']])):
+        if len(mine) != len(theirs) or any(len(r) != len(s) or any(not same(x, y) for x, y in zip(r, s)) for r, s in zip(mine, theirs)):
+            raise ValueError(f'{name} differs from the bank row for {identity(index_row)}')
+    d_lo, se_lo = pair_bounds(bank_row['outcomes'])
+    return dict(index_row, d_lo=d_lo, se_lo=se_lo)
 
 
 def main(argv=None):

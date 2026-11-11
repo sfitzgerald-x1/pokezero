@@ -14,10 +14,10 @@ Losses:
 - value: hl_gauss, the HL-Gauss cross-entropy against the mixture of the child's rollout outcomes (each outcome Gaussian-smoothed,
   sigma = 0.75 bin widths); residual, E[(v - z)^2] over the child's rollout outcomes;
 - ranking: per root, Q_V(a) = sum_b prior(b) mean_c v(child(a, b, c)) (a terminal child's value is its outcome; the prior is the
-  row's opponent root policy renormalized over its support, or 1 for a waiting opponent). On action pairs whose CRN-paired z
-  (the paired mean difference d_pair over its SE se_pair, both on the rollouts where neither action is capped) exceeds --rank-c:
-  softplus(-sign(z) (Q_V(i) - Q_V(j)) / --rank-tau), weighted by min(|z|, 5). Rows without d_pair are refused
-  (gpu_engine.mc_evaluator_pairs backfills older feature directories);
+  row's opponent root policy renormalized over its support, or 1 for a waiting opponent). On action pairs whose direction survives
+  the worst case (significant_pairs: the CRN-paired z over all K rollouts, the favoured action's capped rollouts scored as losses and
+  the other's as wins, exceeds --rank-c): softplus(-sign (Q_V(i) - Q_V(j)) / --rank-tau), weighted by min(z, 5). Rows without d_lo
+  are refused (gpu_engine.mc_evaluator_pairs backfills older feature directories);
 - uncertainty: Huber of u against the stop-gradient E[(v - z)^2] under the child's outcomes.
 - Weights: --w-value 1, --w-rank 0.5, --w-unc 0.1.
 
@@ -115,17 +115,23 @@ def q_values(root, v, torch):
     return torch.stack(out)
 
 
+MIN_ROLLOUTS = 8   # a row with fewer rollouts ranks no pair
+
+
 def significant_pairs(row, c):
-    """[(i, j, sign, weight)] of the action pairs whose CRN-paired z exceeds c: the paired mean difference over the rollouts where
-    neither action is capped, over its standard error on those same rollouts (d_pair / se_pair; a row without d_pair is refused,
-    since the marginal means' difference over the paired SE is not that test under selective censoring)."""
-    if 'd_pair' not in row:raise ValueError('feature row without d_pair: run gpu_engine.mc_evaluator_pairs (or re-extract) first')
-    d, se = row['d_pair'], row['se_pair'];out = []
+    """[(i, j, sign, weight)], i < j, of the action pairs whose direction survives the worst case: the CRN-paired z over all K
+    rollouts with the favoured action's capped rollouts scored -1 and the other's +1 (d_lo / se_lo, mc_evaluator_features.pair_bounds)
+    exceeds c; sign +1 when i is favoured, -1 when j is; weight min(z, 5) (a constant positive difference, se 0, weighs 5). Rows
+    without d_lo are refused (gpu_engine.mc_evaluator_pairs backfills older feature directories); rows with K < MIN_ROLLOUTS rank none."""
+    if 'd_lo' not in row:raise ValueError('feature row without d_lo: run gpu_engine.mc_evaluator_pairs (or re-extract) first')
+    if (row.get('K') or 0) < MIN_ROLLOUTS:return []
+    d, se = row['d_lo'], row['se_lo'];out = []
     for i in range(len(d)):
         for j in range(i + 1, len(d)):
-            if d[i][j] is None or se[i][j] is None or se[i][j] <= 0:continue
-            z = d[i][j] / se[i][j]
-            if abs(z) > c:out.append((i, j, math.copysign(1., z), min(abs(z), 5.)))
+            for a, b, sign in ((i, j, 1.), (j, i, -1.)):
+                if d[a][b] is None or se[a][b] is None:continue
+                z = d[a][b] / se[a][b] if se[a][b] > 0 else (math.inf if d[a][b] > 0 else -math.inf)
+                if z > c:out.append((i, j, sign, min(z, 5.)));break
     return out
 
 
@@ -200,6 +206,8 @@ def main(argv=None):
     targets = hl_gauss_rows(torch, [-1., 0., 1.], args.bins, device=device)   # rows for a loss, a draw, a win
     metrics = [dict(epoch=0, train_roots=len(train), val_roots=len(val), val=evaluate((value_head, unc_head), val, torch, device, args, targets))]
     print(json.dumps(metrics[-1]), flush=True)
+    if args.early_stop_patience and metrics[0]['val']['regret_new'] is None:
+        raise SystemExit('--early-stop-patience needs a validation regret (no scored validation roots)')
     best = dict(epoch=0, regret=metrics[0]['val']['regret_new'], state=copy.deepcopy((value_head.state_dict(), unc_head.state_dict())))
     for epoch in range(1, args.epochs + 1):
         order = rng.permutation(len(train));losses = []
