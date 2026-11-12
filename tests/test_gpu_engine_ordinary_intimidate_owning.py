@@ -34,9 +34,13 @@ def strip_m1_recharge(depart,*,required=False):
  return depart
 
 
+from test_gpu_engine_ordinary_intimidate_entry import strip_m2_volatiles     # fidelity M2's approved block (the light cover's)
+
+
 def default_entry_program(text):
  tree=ast.parse(text)
  strip_m1_recharge(next(n for n in tree.body if isinstance(n,ast.FunctionDef)and n.name=='depart'))
+ strip_m2_volatiles(next(n for n in tree.body if isinstance(n,ast.FunctionDef)and n.name=='depart'))
  fields=('spikes_type_count','spikes_item_count','spikes_boots_item')
  table=next(n for n in tree.body if isinstance(n,ast.ClassDef)and n.name=='EntryTable')
  added=[n for n in table.body if isinstance(n,ast.AnnAssign)and n.target.id in fields]
