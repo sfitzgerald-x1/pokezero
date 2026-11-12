@@ -63,9 +63,10 @@
    "module": "test_gpu_engine_owning_drain_end_to_end",
    "reason": "wall+memory",
    "hosted_median_min": null,
-   "isolated_wall_min": 74.0,
-   "isolated_peak_gib": 141.8,
-   "completes_on_hosted": false
+   "isolated_wall_min": null,
+   "isolated_peak_gib": 170,
+   "completes_on_hosted": false,
+   "note": "lower bound: K1 at R1 c8521ed9 (4 CPUs) reached 161 GiB with 1 of 6 tests settled at 187 min, still running; base 9640bbe1 88.6 GiB / 68 min. Measured values replace this when it settles."
   },
   {
    "module": "test_gpu_engine_status_callbacks_hot_jit",
