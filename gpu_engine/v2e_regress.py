@@ -119,7 +119,9 @@ at that line; the damage hook's HP damage after a Wrap line; port_protect's Prot
 - wrap tick (M2 review): on a side the other side's Wrap struck, state.hp is explained only when adding the tick
   max(1, maxhp//16) back at the trapped active reproduces the base's stored per-side digest exactly (mon_digest, a numpy
   copy of lane_digest) after a witnessed tick, or, for a lethal tick that cleared the trap with the trapper held, some
-  base HP 1..tick there; state.substitute_hp is never explained. Both are `must` entries: left unexplained, they are
+  base HP 1..tick there; state.substitute_hp is never explained. Where the handler cutpoint recorded the holder's HP
+  after the tick, a later heal in the same residual (a Leech Seed drain from a slower trapper) is replayed against the
+  base with its max-HP cap: base = pre + min(later, max - pre). Both are `must` entries: left unexplained, they are
   unexpected even on a KO cascade lane (counted as m2_forced). No allowance covers them (wrap allows the HP lines only).
 - reveals (M2 review): a reveal entry on side x is explained only when x's post-step active holds Soundproof on a
   Perish Song lane, or Insomnia/Vital Spirit after the other side's unblocked Yawn line at it (no allowance covers them).
@@ -1110,7 +1112,9 @@ def m2_rule(entries, w):
     state.hp and state.substitute_hp must be explained here (`must`: never an allowance or a KO cascade): state.hp only
     when adding the tick, max(1, maxhp//16), back at the trapped active reproduces the base's per-side digest exactly
     (after a witnessed tick; or, for a lethal tick that cleared the trap with the trapper held, any base HP 1..tick); a
-    Substitute's HP never. A reveal entry (shown/original ability, belief) on side x is explained only when x's post-step
+    Substitute's HP never. Where the handler cutpoint recorded the holder's HP right after its tick (tick_hp), the base is
+    taken as pre + min(later, max - pre), pre = tick_hp + tick and later = this tree's change after the handler: a later
+    heal (a Leech Seed drain from a slower trapper) is equal in both trees but the base's stops at max HP. A reveal entry (shown/original ability, belief) on side x is explained only when x's post-step
     active holds Soundproof on a Perish Song lane or Insomnia/Vital Spirit after the other side's unblocked Yawn line at it.
     Returns (remaining entries, explained entries, [2,6,len(M2_BAG)] bag cells the witnessed volatiles explain, each equal
     to the derived bit, the entries that must be explained here)."""
@@ -1176,8 +1180,15 @@ def m2_rule(entries, w):
         if bool(w['wrap_by'][f]) and hp_mine:
             must |= hp_mine
             if ('state.hp', side) in hp_mine and base_hp is not None and max_hp is not None and 0 <= a < 6:
-                tick = max(1, int(max_hp[side][a]) // 16);now = int(hp[side, a])
-                if ticked:candidates = (now + tick,)
+                tick = max(1, int(max_hp[side][a]) // 16);now = int(hp[side, a]);top = int(max_hp[side][a])
+                after = int(w['tick_hp'][side]) if w.get('tick_hp') is not None else -1
+                if ticked and after >= 0:
+                    # The holder had after+tick before its handler. A later change in the residual (a heal: the drain of
+                    # a Leech Seed it planted on a slower trapper) is the same amount in both trees, the trapper being
+                    # untouched by the tick, but the base's heal stops at max HP: the base ends at pre + min(later, max - pre).
+                    pre = after + tick;later = now - after
+                    candidates = (pre + (min(later, top - pre) if later >= 0 else later),)
+                elif ticked:candidates = (now + tick,)
                 elif (struck and now == 0 and int(counter[a]) == 0 and int(source[a]) == -1 and ran is not False and held):
                     candidates = range(1, tick + 1)                 # a lethal tick: the base kept 1..tick HP there
                 else:candidates = ()
@@ -1272,7 +1283,8 @@ class Stepper:
             sides2 = j.arange(2)[None, :];zero2 = j.zeros((lanes, 2), j.bool_)
             m2e = dict(perish_used=zero2, yawn_by=zero2, yawn_target=j.full((lanes, 2), -1, j.int32), wrap_line=zero2,
                        wrap_by=zero2, wrap_user=j.full((lanes, 2), -1, j.int32), wrap_target=j.full((lanes, 2), -1, j.int32),
-                       blocked=zero2, ordinary=None, tick_seen=zero2, tick_trapper=j.full((lanes, 2), -1, j.int32), tick_held=zero2)
+                       blocked=zero2, ordinary=None, tick_seen=zero2, tick_trapper=j.full((lanes, 2), -1, j.int32), tick_held=zero2,
+                       tick_hp=j.full((lanes, 2), -1, j.int32))
             wrap_calls = []
             def at_side(mask, s):
                 return (s[:, None] == sides2) & mask[:, None]
@@ -1334,6 +1346,9 @@ class Stepper:
                     m2e['tick_seen'] = m2e['tick_seen'] | ran_here
                     m2e['tick_trapper'] = j.where(ran_here, trapper[:, None], m2e['tick_trapper'])
                     m2e['tick_held'] = j.where(ran_here, held[:, None], m2e['tick_held'])
+                    # The holder's HP right after its handler (a later heal in the same residual, e.g. the drain of a Leech
+                    # Seed the holder planted on a slower trapper, may move it again before the step ends).
+                    m2e['tick_hp'] = j.where(ran_here, st.hp[r, s, st.active[r, s]][:, None], m2e['tick_hp'])
                 return hp_line_hook(c, st, side, use, *rest, **kw)
             hooks.damage, hooks.move = damage_recorder, move_recorder
             hooks.port_protect, hooks.turn_end, hooks.hp_line = protect_recorder, turn_end_recorder, hp_line_recorder
@@ -1355,7 +1370,7 @@ class Stepper:
                 climate.residual_clock = clock;hooks.damage, hooks.move = damage_hook, move_hook
                 hooks.port_protect, hooks.turn_end, hooks.hp_line = protect_hook, turn_end_hook, hp_line_hook
             if not wrap_calls:
-                for key in ('tick_seen', 'tick_trapper', 'tick_held'):m2e[key] = None      # no handler cutpoint: no evidence
+                for key in ('tick_seen', 'tick_trapper', 'tick_held', 'tick_hp'):m2e[key] = None   # no handler cutpoint: no evidence
             named_in = name_inputs(state, actions, trackers);named_out = name_outputs(out)
             names['out'], digests = digest_named(named_out, lanes)
             names['side_axis'] = [has_side_axis(n, named_out[n].shape, lanes) for n in names['out']]

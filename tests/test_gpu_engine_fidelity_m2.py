@@ -538,6 +538,21 @@ class RegressRuleTests(unittest.TestCase):
         self.assertEqual(self.rule([hp1], self.wrap_tick_lane(base_hp=13, now=0, ran=False, **cleared))[0], {hp1})
         self.assertEqual(self.rule([hp1], self.wrap_tick_lane(base_hp=13, now=0, post_active=np.array([1, 0], np.int32), **cleared))[0], {hp1})
 
+    def test_wrap_tick_hp_replays_a_later_capped_heal(self):
+        """M2 review (GPU, 3 lanes at 45e0e9f3): a full holder (320) ticks to 300, then the Leech Seed it planted on the
+        slower trapper drains 12 back to it (312); the base, never ticked, heals nothing past 320. With the handler
+        cutpoint's HP after the tick the witness replays the heal with its cap. An uncapped heal (base 250 -> 262 against
+        230 -> 242) matches too; RW7's 40 under the same heal, and a trapper not held at the cutpoint, still fail."""
+        trap = [('state.partial_trap_counter', 1), ('state.partial_trap_source', 1), (r_clock(), 1)];hp1 = ('state.hp', 1)
+        cut = dict(tick_seen=np.array([False, True]), tick_trapper=np.array([-1, 2]), tick_held=np.array([False, True]))
+        at = lambda v: np.array([-1, v])
+        for base_hp, now, after in ((320, 312, 300), (262, 242, 230), (320, 300, 300)):
+            self.assertEqual(self.rule(trap + [hp1], self.wrap_tick_lane(base_hp=base_hp, now=now, tick_hp=at(after), **cut))[0],
+                             set(), (base_hp, now, after))
+        self.assertEqual(self.rule(trap + [hp1], self.wrap_tick_lane(base_hp=320, now=292, tick_hp=at(280), **cut))[0], {hp1})
+        self.assertEqual(self.rule(trap + [hp1], self.wrap_tick_lane(base_hp=320, now=312, tick_hp=at(300),
+                                                                   **dict(cut, tick_held=np.array([False, False]))))[0], set(trap) | {hp1})
+
     def test_reveals_need_a_holder_of_the_immunity(self):
         """M2 review: a reveal entry is explained only at a Soundproof active on a Perish Song lane, or an Insomnia/Vital
         Spirit active the other side's unblocked Yawn line met; otherwise it stays (no allowance covers it)."""
