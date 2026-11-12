@@ -843,12 +843,22 @@ class RuntimeTests(unittest.TestCase):
         with self.assertRaises(ValueError): live.Runtime(client=None, telemetry_path='x', arm='RAW', cell=dict(cell, seat=True), original=original)
 
     def test_actor_module_does_not_import_the_gpu_stack(self):
+        """The actor brings in no jax, torch or gpu_engine. pokezero's package init imports torch whenever it is installed
+        (neural_policy's optional import), so this checks twice. With torch blocked, as in a torch-less CPU worker, none of
+        the three loads. With torch installed, importing the actor adds none of them to what a bare `import pokezero` loads."""
         import subprocess
-        code = ('import sys,pokezero.depthn_live_actor;'
-                'print(any(k=="gpu_engine" or k.startswith("gpu_engine.") or k in ("jax","torch") for k in sys.modules))')
-        out = subprocess.run([sys.executable, '-B', '-c', code], capture_output=True, text=True, check=True,
-                             env=dict(os.environ, PYTHONPATH=os.pathsep.join(sys.path)))
-        self.assertEqual(out.stdout.strip(), 'False')
+        stack = ('lambda names: sorted(k for k in names if sys.modules.get(k) is not None and '
+                 '(k in ("jax", "torch", "gpu_engine") or k.startswith(("jax.", "torch.", "gpu_engine."))))')
+        checks = dict(
+            torch_blocked=f'import sys;stack={stack};sys.modules["torch"]=None;import pokezero.depthn_live_actor;print(stack(list(sys.modules)))',
+            over_bare_package=(f'import sys;stack={stack};import pokezero;before=set(sys.modules);import pokezero.depthn_live_actor;'
+                               'print(stack(set(sys.modules)-before))'))
+        for name, code in checks.items():
+            with self.subTest(check=name):
+                out = subprocess.run([sys.executable, '-B', '-c', code], capture_output=True, text=True,
+                                     env=dict(os.environ, PYTHONPATH=os.pathsep.join(sys.path)))
+                self.assertEqual(out.returncode, 0, out.stderr)
+                self.assertEqual(out.stdout.strip(), '[]')
 
 
 if __name__ == '__main__': unittest.main()

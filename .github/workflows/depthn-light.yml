@@ -1,0 +1,88 @@
+name: DepthN light checks
+
+# Every tests/test_depthn_*.py module in one hosted job. All of them are CPU-only and light (largest peak under 1 GiB,
+# about three minutes in all), but six compile GPU-engine code and the actor and constructor import well beyond the
+# depthn_* files, so the job triggers on the whole engine and package.
+on:
+  pull_request:
+    paths:
+      - 'gpu_engine/**'
+      - 'src/pokezero/**'
+      - 'scripts/depthn_*'
+      - 'tests/test_depthn_*'
+      - 'tests/_showdown_root.py'
+      - 'scripts/run_component_memory_check.py'
+      - 'pyproject.toml'
+      - '**/requirements*.txt'
+      - '.github/workflows/depthn-light.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: depthn-light-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  depthn-light:
+    name: DepthN light tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      JAX_PLATFORMS: cpu
+      PYTHONPATH: src:.
+      OMP_NUM_THREADS: '2'
+      OPENBLAS_NUM_THREADS: '2'
+      XLA_FLAGS: '--xla_cpu_parallel_codegen_split_count=1 --xla_backend_optimization_level=3'
+      POKEZERO_SHOWDOWN_ROOT: ${{ github.workspace }}/.ci/pokemon-showdown
+    steps:
+      # Full history: rr_reprice resolves its live commit and live_panel reads the checkout.
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+      - uses: actions/checkout@v5
+        with:
+          repository: smogon/pokemon-showdown
+          ref: f76228a1354b5d0f307ca2d16101294ad3a2308b
+          path: .ci/pokemon-showdown
+          persist-credentials: false
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22.22.2'
+          cache: npm
+          cache-dependency-path: .ci/pokemon-showdown/package-lock.json
+      - name: Install CPU test environment and build pinned Showdown
+        run: |
+          set -o pipefail
+          python -m pip install 'jax==0.12.0' 'numpy==2.5.4'
+          python -m pip install --index-url https://download.pytorch.org/whl/cpu 'torch==2.13.0+cpu'
+          python -c 'import jax, numpy, torch; print("CPU dependencies:", jax.__version__, numpy.__version__, torch.__version__); assert torch.version.cuda is None'
+          npm ci --prefix "$POKEZERO_SHOWDOWN_ROOT"
+          npm run build --prefix "$POKEZERO_SHOWDOWN_ROOT"
+          test -f "$POKEZERO_SHOWDOWN_ROOT/dist/sim/dex.js"
+      - name: Run DepthN tests without skips
+        id: depthn
+        run: |
+          set -o pipefail
+          memory_dir="$RUNNER_TEMP/depthn-memory/${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          mkdir -p "$memory_dir"
+          echo "memory_report_dir=$memory_dir" >> "$GITHUB_OUTPUT"
+          # The same memory gate as the component shards: 75% of runner memory.
+          python scripts/run_component_memory_check.py --output "$memory_dir" --label depthn --summary "$GITHUB_STEP_SUMMARY" -- \
+            python -m unittest discover -s tests -t . -p 'test_depthn_*.py' -v 2>&1 | tee "$memory_dir/depthn.log"
+          # Every dependency is installed above, so a skip means one went missing: fail rather than pass silently.
+          if grep -Eq 'skipped=[1-9]|\.\.\. skipped' "$memory_dir/depthn.log"; then
+            echo '::error::DepthN tests skipped; torch, node, the built Showdown or full git history is missing'
+            exit 1
+          fi
+      - name: Retain memory report and test log
+        if: ${{ always() && steps.depthn.outputs.memory_report_dir != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: depthn-memory-attempt-${{ github.run_attempt }}
+          path: ${{ steps.depthn.outputs.memory_report_dir }}
+          if-no-files-found: error
