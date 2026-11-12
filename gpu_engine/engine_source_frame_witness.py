@@ -377,7 +377,9 @@ def _geometry(carry,tape):
     secondary_moves=secondary_moves-jnp.sum(bell_attempts,axis=1,dtype=jnp.int32)+jnp.sum(bell_attempts&(tape.words[:,:,8]==1),axis=1,dtype=jnp.int32)
     regular = np.full(len(risks.Branch),2,np.int32)
     regular[risks.Branch.CONSTRUCTOR-1]=0; regular[risks.Branch.FRAME_END-1]=1
-    regular[risks.Branch.ENCORE-1]=12
+    # Encore cutpoints: the two move-use cutpoints plus one per residual-scheduler event (14 since fidelity M2,
+    # which added the partial-trap and Yawn pairs to the order-10 list; transition.py's `for order in range(14)`).
+    regular[risks.Branch.ENCORE-1]=16
     expected = jnp.where(initial[:,None],0,jnp.asarray(regular)[None,:])
     expected = expected.at[:,risks.Branch.CONSTRUCTOR-1].set(initial.astype(jnp.int32))
     expected = expected.at[:,risks.Branch.FRAME_END-1].set(1)
