@@ -11,7 +11,7 @@ import jax.numpy as j
 
 from gpu_engine import engine_retained_encoder_driver as d
 from gpu_engine_eager_frame import eager_frame
-import test_gpu_engine_execution_runtime_plumbing as plumbing
+import gpu_engine_owning_runtime_fixture as plumbing
 
 
 class ExecutionPlumbingB8RowTests(unittest.TestCase):

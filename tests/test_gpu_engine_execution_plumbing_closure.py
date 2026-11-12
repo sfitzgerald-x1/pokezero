@@ -20,7 +20,7 @@ from gpu_engine import engine_execution_completeness as e
 from gpu_engine import engine_retained_encoder_driver as d, engine_request_source as source
 from gpu_engine import engine_lifecycle_callbacks as life
 from gpu_engine_eager_frame import eager_frame
-import test_gpu_engine_execution_runtime_plumbing as plumbing
+import gpu_engine_owning_runtime_fixture as plumbing
 
 
 class StopConstruct(Exception):

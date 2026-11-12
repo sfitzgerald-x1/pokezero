@@ -15,7 +15,7 @@ from pokezero.category_vocab import CategoryVocabulary
 from gpu_engine import transition as t, engine_lifecycle_callbacks as life, engine_public_events as events
 from gpu_engine import engine_public_event_device as base, engine_full_v4_event_device as full
 from gpu_engine import engine_status_callbacks as status, public_wire, public_inputs as inputs, v4_encoder as v4
-import test_gpu_engine_engine_status_callbacks as fixture
+import gpu_engine_status_callbacks_fixture as fixture
 
 
 class StatusCallbacksHotJitTests(unittest.TestCase):

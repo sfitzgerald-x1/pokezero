@@ -21,7 +21,7 @@ from gpu_engine import engine_lifecycle_callbacks as life
 from gpu_engine import engine_retained_encoder_driver as driver
 from gpu_engine import engine_weather_speed_profile as speed_profile
 from gpu_engine import source_provenance, transition, items
-import test_gpu_engine_leftovers_owning_callers as fixture
+import gpu_engine_leftovers_callers_fixture as fixture
 from gpu_engine_eager_frame import eager_call
 
 
