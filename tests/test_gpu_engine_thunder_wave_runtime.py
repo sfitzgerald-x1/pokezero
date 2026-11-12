@@ -1,11 +1,9 @@
 """Literal Thunder Wave source components, fake scores; no scientific roots."""
 from copy import deepcopy
 from dataclasses import replace
-import ast
 import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
-import subprocess
 import unittest
 from types import SimpleNamespace as NS
 from unittest.mock import patch
@@ -20,7 +18,6 @@ from gpu_engine import engine_public_events as public,engine_leftovers_callbacks
 from gpu_engine import engine_execution_completeness as accounting,engine_kernel_frame_risk as risks,engine_toxic_callbacks as primary
 from gpu_engine import engine_lifecycle_callbacks as life,engine_status_callbacks as status
 from gpu_engine import public_belief,source_provenance,transition,v4_encoder,mechanics as m
-from gpu_engine_default_observer_ast import dump_default_program,assert_hp_rng_mutations_detected
 import test_gpu_engine_engine_weather_public as fixture
 import gpu_engine_eager_witness as eager
 

@@ -4,14 +4,15 @@ The light source-witness modules (sleep_powder_runtime and the modules converted
 gpu_engine_eager_witness. There, the frame and witness closures run their own bodies, and execution.consume_frame_device
 runs under a stable jit. This module is what ties those light tests to the compiled path.
 
-It runs sleep_powder's advance compiled and eager from identical sessions, and requires every frame output, every witness
-output and the advance result to match field by field: the same structure, dtypes and shapes, and identical bits (integers
-and bools exactly, floats by bit pattern). A negative control flips one bit of one eager witness output and requires the
-comparison to fail.
+It runs sleep_powder's construct and advance compiled and eager from the same inputs, and requires every frame output,
+every witness output (construction's included) and the advance result to match field by field: the same structure, dtypes
+and shapes, and identical bits (integers and bools exactly, every other dtype by bit pattern). A negative control flips one
+bit of the eager witness outputs and requires the comparison to fail at that leaf.
 
 Heavy tier: the compiled route builds the whole frame, witness and consume programs.
 """
 import contextlib
+import re
 import unittest
 
 import jax
@@ -24,8 +25,16 @@ import test_gpu_engine_sleep_powder_runtime as fixture
 
 
 def _bits(x):
+    """Integers and bools as they are; every other dtype (float32, bfloat16, ...) by its bit pattern."""
     x = np.asarray(x)
-    return x.view(np.dtype(f'u{x.dtype.itemsize}')) if np.issubdtype(x.dtype, np.floating) else x
+    if x.dtype == bool or np.issubdtype(x.dtype, np.integer):return x
+    return x.view(np.dtype(f'u{x.dtype.itemsize}'))
+
+
+def first_leaf_path(output):
+    """The key path of the first non-empty array leaf, the one flip_first_bit changes."""
+    return next(jax.tree_util.keystr(path) for path, leaf in jax.tree_util.tree_flatten_with_path(output)[0]
+                if hasattr(leaf, 'dtype') and np.size(leaf))
 
 
 def flip_first_bit(output):
@@ -51,14 +60,13 @@ class SourceWitnessCompiledAnchorTests(unittest.TestCase):
         for name in ('base', 'move_id', 'metadata', 'names', 'prepared', 'runtime'):setattr(cls, name, getattr(f, name))
 
     def run_route(self, *, eager_route, perturb=None):
-        """One advance (Sleep Powder hits on both sides), recording every frame and witness output."""
+        """Construct, then one advance (Sleep Powder hits on both sides), recording every frame and witness output."""
         records = dict(frame=[], witness=[]);result = None
         draws = j.zeros((2, 2, 12), j.int32).at[:, :, 4].set(1)
         chance = transition.ChanceInputs(draws, *[j.zeros((2, 2), j.int32) for _ in range(4)], j.zeros(2, j.int32))
         actions = j.array([[0, 7], [0, 7]], j.int32)
         with contextlib.ExitStack() as stack:
             if eager_route:stack.enter_context(eager.eager_source_witness(self.prepared))
-            session = self.construct()
             for key, slot in (('frame', 'frame'), ('frame_witness_fast', 'witness')):
                 inner = self.runtime[key]
                 def record(*args, _inner=inner, _slot=slot, **kwargs):
@@ -67,9 +75,9 @@ class SourceWitnessCompiledAnchorTests(unittest.TestCase):
                     records[_slot].append(output);return output
                 self.runtime[key] = record
                 stack.callback(self.runtime.__setitem__, key, inner)
-            try:result = driver.advance(session, actions, chance_inputs=chance)
+            try:result = driver.advance(self.construct(), actions, chance_inputs=chance)
             except Exception:
-                if perturb is None:raise   # a perturbed witness output may be refused downstream; its record is kept
+                if perturb is None:raise   # a perturbed witness output may be refused downstream; its records are kept
         return records, result
 
     def route(self, name):
@@ -106,7 +114,8 @@ class SourceWitnessCompiledAnchorTests(unittest.TestCase):
         compiled, _ = self.route('compiled')
         perturbed, _ = self.run_route(eager_route=True, perturb=flip_first_bit)
         self.assertGreaterEqual(len(perturbed['witness']), 1)
-        with self.assertRaises(AssertionError):
+        leaf = 'witness[0]' + first_leaf_path(perturbed['witness'][0])
+        with self.assertRaisesRegex(AssertionError, re.escape(leaf)):
             self.assert_same(compiled['witness'][0], perturbed['witness'][0], 'witness[0]')
 
 

@@ -84,8 +84,10 @@ class SecondaryNonprocRuntimeTests(unittest.TestCase):
             path=Path(directory)/'literal.npz'
             np.savez_compressed(path,**dict(arrays,metadata_utf8=np.frombuffer(json.dumps(self.metadata).encode(),np.uint8)))
             pool=source_provenance.load_constructor_pool(path)
-            session=driver.construct(pool,np.asarray([[0,1],[0,1]],np.int64),prepared=self.prepared,
-                stream_ids=j.array([9301,9302],j.int32),seed=31)
+            # Construction runs the witness too: keep it eager.
+            with eager.eager_source_witness(self.prepared):
+                session=driver.construct(pool,np.asarray([[0,1],[0,1]],np.int64),prepared=self.prepared,
+                    stream_ids=j.array([9301,9302],j.int32),seed=31)
         self.assertEqual(session.state.core.admitted.tolist(),[True,True])
         for owner in session.result.owners:
             self.assertEqual(owner.reason.tolist(),[0,0])

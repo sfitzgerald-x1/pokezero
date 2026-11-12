@@ -68,8 +68,10 @@ class SubstituteRuntimeTests(unittest.TestCase):
         with TemporaryDirectory() as tmp:
             p=Path(tmp)/'literal.npz';np.savez_compressed(p,**dict(arrays,metadata_utf8=np.frombuffer(json.dumps(self.metadata).encode(),np.uint8)))
             pool=source_provenance.load_constructor_pool(p)
-            session=driver.construct(pool,np.array([[0,1],[0,1]],np.int64),prepared=self.prepared,
-                stream_ids=j.array([9601,9602],j.int32),seed=31)
+            # Construction runs the witness too: keep it eager.
+            with eager.eager_source_witness(self.prepared):
+                session=driver.construct(pool,np.array([[0,1],[0,1]],np.int64),prepared=self.prepared,
+                    stream_ids=j.array([9601,9602],j.int32),seed=31)
         self.assertEqual(session.state.core.admitted.tolist(),[True,True])
         return session
 
