@@ -112,8 +112,20 @@ at that line; the damage hook's HP damage after a Wrap line; port_protect's Prot
 - wrap: the other side's Wrap line dealt HP damage (a Substitute hit traps nothing); counter and source nonzero only at
   that same living target, the source the Wrap user's party index, the counter 3+draws[f][7] (the design derivation,
   recomputed from the keys) less one after the tick; partiallytrapped set in the bag; WRAP_TRAP_TURNS 1 at that slot
-  exactly when turn_end was ordinary, 0 elsewhere.
+  exactly when turn_end was ordinary, 0 elsewhere. A ticked counter (less one) needs the trapper held at the residual:
+  the Wrap user still the other side's living active with activeTurns > 0 at the step end.
+- wrap tick (M2 review): on a side the other side's Wrap struck, state.hp is explained only when adding the tick
+  max(1, maxhp//16) back at the trapped active reproduces the base's stored per-side digest exactly (mon_digest, a numpy
+  copy of lane_digest) after a witnessed tick, or, for a lethal tick that cleared the trap with the trapper held, some
+  base HP 1..tick there; state.substitute_hp is never explained. Both are `must` entries: left unexplained, they are
+  unexpected even on a KO cascade lane (counted as m2_forced). No allowance covers them (wrap allows the HP lines only).
+- reveals (M2 review): a reveal entry on side x is explained only when x's post-step active holds Soundproof on a
+  Perish Song lane, or Insomnia/Vital Spirit after the other side's unblocked Yawn line at it (no allowance covers them).
 The bag cells m2_rule witnesses join M1's in bag_rule. Explained lane-steps are counted as m2_leaves.
+Known limits: the pre-step allowances (perish: hp/m2/reveal on the holder's side; drowsy: status/item/clause/visible/m2;
+partial_trap: everything, as a captured switch the trap refuses freezes the lane) are pre-state predicates; no capture
+carries a pre-step M2 counter, so the shards never exercise them (unit tests and probes do), and the wrong-mon check
+bounds their per-mon writes to the actives.
 Wrong-mon check (M2, M1 re-review's benched-mon lesson): on a lane an M2 effect involves (move or pre-step counter),
 a remaining entry of M2_MON_LEAVES (HP, status, status counter, the M2 counters and source) is unexpected when its
 per-mon difference lies off that side's pre-step and post-step actives: against the base's per-mon KO arrays where
@@ -532,6 +544,9 @@ FAMILIES = {
     'hp': (r'^state\.(hp|substitute_hp)$', r'^trackers\.(hp_percent|damage_exact_(dealt|taken))$',
            r'^trackers\.(damage_history|negative_items)\.', r"^trackers\.mon_features\['last_damage_(dealt|taken)'\]$"),
     'boosts': (r'^state\.boosts$', r'^trackers\.boosts$'),
+    # M2 review: the HP lines without the HP itself (state.hp and a Substitute's HP need a witness on Wrap lanes).
+    'hp_lines': (r'^trackers\.(hp_percent|damage_exact_(dealt|taken))$', r'^trackers\.(damage_history|negative_items)\.',
+                 r"^trackers\.mon_features\['last_damage_(dealt|taken)'\]$"),
     'status': (r'^state\.(status|status_counter|sleep_skipped|rest_origin)$', r'^trackers\.status$', r'^trackers\.public_volatiles$',
                r"^trackers\.mon_features\['(sleep_turns|sleep_skipped_turns|sleep_cant_pending|sleep_usable_pending|rest_sleep|toxic_stage)'\]$"),
     'item': (r'^state\.item$', r'^trackers\.(shown_item|item_removed|belief_mask)$', r'^trackers\.(visible_belief|negative_items)\.',
@@ -686,12 +701,13 @@ ALLOWED = {
     # are never allowed here: trick_rule and bag_rule explain them per mon from post-state witnesses (M1 review).
     'trick': dict(user=('item', 'itemflags', 'choice', 'hp', 'wish'), target=('item', 'itemflags', 'choice', 'hp', 'wish'), glob=()),
     # M2. The counters, the source, the bag cells and the wrap clock are explained only by m2_rule (post-state, per mon);
-    # the allowances are what follows from them. Perish Song: a Soundproof foe's -immune reveal (a Soundproof user is not
-    # in the pool's Perish Song sets). Yawn: an Insomnia/Vital Spirit target's -immune reveal. Wrap: the residual tick on
-    # the target (HP and its HP lines: damage history, negative items, the belief refresh of an HP line).
-    'perishsong': dict(user=(), target=('reveal',), glob=()),
-    'yawn': dict(user=(), target=('reveal',), glob=()),
-    'wrap': dict(user=(), target=('hp', 'visible'), glob=()),
+    # the allowances are what follows from them. M2 review: Perish Song's Soundproof and Yawn's Insomnia/Vital Spirit
+    # -immune reveals are explained only by m2_rule's holder witness (no allowance), and Wrap's tick in the target's HP
+    # only by its digest witness (state.hp and a Substitute's HP are never allowed here); what remains is the tick's HP
+    # lines (damage history, negative items) and the belief refresh of an HP line.
+    'perishsong': dict(user=(), target=(), glob=()),
+    'yawn': dict(user=(), target=(), glob=()),
+    'wrap': dict(user=(), target=('hp_lines', 'visible'), glob=()),
     # Volatiles a pre-step state already carries (no capture has one: every captured counter is a migrated 0). A Perish
     # faint, a Yawn sleep (with Lum and the clause port) at the residual, and a partial trap's tick, release and switch
     # block (a captured switch the trap now refuses freezes the lane, so it may change anything, like M1's recharge).
@@ -1083,9 +1099,19 @@ def m2_rule(entries, w):
     after the residual or 2 without it. wrap (counter and source on side s): the other side's Wrap line dealt HP damage; the
     counter is nonzero only at that same target, still active and alive, with source the Wrap user's party index and the
     value 3+draws[f][7], less one after the residual tick. The wrap clock (B2's WRAP_TRAP_TURNS) is nonzero only at that
-    trapped mon's public slot, 1 when the step's turn_end was ordinary. Returns (remaining entries, explained entries,
-    [2,6,len(M2_BAG)] bag cells the witnessed volatiles explain, each equal to the derived bit)."""
-    explained = set();cells = np.zeros((2, 6, len(M2_BAG)), bool)
+    trapped mon's public slot, 1 when the step's turn_end was ordinary.
+    M2 review: a ticked counter (3+draws[f][7]-1) also needs the trapper held at the residual: the Wrap user still the
+    other side's living active with activeTurns > 0 at the step end (else the handler releases the trap silently,
+    data/mods/gen5/conditions.ts; nothing after the residual moves an active). On a side the other side's Wrap struck,
+    state.hp and state.substitute_hp must be explained here (`must`: never an allowance or a KO cascade): state.hp only
+    when adding the tick, max(1, maxhp//16), back at the trapped active reproduces the base's per-side digest exactly
+    (after a witnessed tick; or, for a lethal tick that cleared the trap with the trapper held, any base HP 1..tick); a
+    Substitute's HP never. A reveal entry (shown/original ability, belief) on side x is explained only when x's post-step
+    active holds Soundproof on a Perish Song lane or Insomnia/Vital Spirit after the other side's unblocked Yawn line at it.
+    Returns (remaining entries, explained entries, [2,6,len(M2_BAG)] bag cells the witnessed volatiles explain, each equal
+    to the derived bit, the entries that must be explained here)."""
+    explained = set();cells = np.zeros((2, 6, len(M2_BAG)), bool);must = set()
+    turns = np.asarray(w.get('active_turns', np.ones(2, np.int32)));max_hp = w.get('max_hp');base_hp = w.get('base_hp')
     bag = w.get('bag');p2p = np.asarray(w['p2p']);active = np.asarray(w['post_active']);hp = np.asarray(w['post_hp'])
     ran, done = w.get('ran'), bool(w.get('done', False))
     def slot(side, mon):
@@ -1116,14 +1142,17 @@ def m2_rule(entries, w):
                   and v in _m2_values(ran, done, 1, 2) and cell_ok(side, k, {'yawn': True}))
             if ok:
                 explained.add(('state.yawn_counter', side));cells[side, k, M2_BAG.index('yawn')] = True
-        # Wrap: counter, source and the clock together.
+        # Wrap: counter, source and the clock together; the trapper at the residual; the tick in the target's HP.
         counter = np.asarray(w['trap'][side]);source = np.asarray(w['source'][side]);nz = (counter != 0) | (source != -1)
         mine = {('state.partial_trap_counter', side), ('state.partial_trap_source', side), (WRAP_CLOCK, side)} & entries
+        d = 3 + int(w['draws7'][f]);user = int(w['wrap_user'][f])
+        struck = bool(w['wrap_by'][f]) and int(w['wrap_target'][f]) == a
+        held = 0 <= user < 6 and int(active[f]) == user and int(hp[f, user]) > 0 and int(turns[f]) > 0
+        ticked = False
         if mine and nz.any():
-            v = int(counter[a]) if 0 <= a < 6 else 0;d = 3 + int(w['draws7'][f])
-            ok = (bool(w['wrap_by'][f]) and int(w['wrap_target'][f]) == a and live and int(nz.sum()) == 1 and bool(nz[a])
-                  and int(source[a]) == int(w['wrap_user'][f]) and v in _m2_values(ran, done, d - 1, d)
-                  and cell_ok(side, k, {'partiallytrapped': True}))
+            v = int(counter[a]) if 0 <= a < 6 else 0
+            ok = (struck and live and int(nz.sum()) == 1 and bool(nz[a]) and int(source[a]) == user
+                  and v in _m2_values(ran, done, d - 1, d) and (v != d - 1 or held) and cell_ok(side, k, {'partiallytrapped': True}))
             # The clock is checked whenever the trap is (a missing tick of the clock is a missing producer), and must be
             # present when the clock leaf changed.
             clock = w.get('clock')
@@ -1132,8 +1161,44 @@ def m2_rule(entries, w):
                 if k >= 0 and bool(w.get('ordinary', False)):want[k] = 1
                 ok = clock is not None and np.array_equal(np.asarray(clock[side]).astype(np.int64), want)
             if ok:
-                explained |= mine;cells[side, k, M2_BAG.index('partiallytrapped')] = True
-    return entries - explained, sorted(explained, key=str), cells
+                explained |= mine;cells[side, k, M2_BAG.index('partiallytrapped')] = True;ticked = v == d - 1
+        hp_mine = {('state.hp', side), ('state.substitute_hp', side)} & entries
+        if bool(w['wrap_by'][f]) and hp_mine:
+            must |= hp_mine
+            if ('state.hp', side) in hp_mine and base_hp is not None and max_hp is not None and 0 <= a < 6:
+                tick = max(1, int(max_hp[side][a]) // 16);now = int(hp[side, a])
+                if ticked:candidates = (now + tick,)
+                elif (struck and now == 0 and int(counter[a]) == 0 and int(source[a]) == -1 and ran is not False and held):
+                    candidates = range(1, tick + 1)                 # a lethal tick: the base kept 1..tick HP there
+                else:candidates = ()
+                want = np.asarray(base_hp[side], np.uint32)
+                for c in candidates:
+                    trial = np.array(hp[side], np.int32);trial[a] = c
+                    if np.array_equal(mon_digest(trial), want):explained.add(('state.hp', side));break
+    # The -immune reveals, each at a holder of the immunity the line met.
+    for x in (0, 1):
+        reveals = {e for e in entries if e[1] == x and allowed_leaf(e[0], ('reveal',))}
+        a = int(active[x])
+        if not reveals or not 0 <= a < 6:continue
+        ability = int(w['ability'][x][a])
+        sound = ability in w['soundproof'] and bool(np.asarray(w['perish_used']).any())
+        sleepy = (ability in w['sleep_immune'] and bool(w['yawn_by'][1 - x]) and not bool(w['blocked'][1 - x])
+                  and int(w['yawn_target'][1 - x]) == a)
+        if sound or sleepy:explained |= reveals
+    return entries - explained, sorted(explained, key=str), cells, must
+
+
+def _np_fmix(h):
+    h = h ^ (h >> np.uint32(16));h = h * np.uint32(0x85EBCA6B);h = h ^ (h >> np.uint32(13));h = h * np.uint32(0xC2B2AE35)
+    return h ^ (h >> np.uint32(16))
+
+
+def mon_digest(values):
+    """numpy copy of lane_digest for one lane's per-side value (here a side's [6] HP): the two words the base pass stores
+    for that (leaf, side). The sum is over elements, so this reproduces a digest of an edited side exactly."""
+    u = np.ascontiguousarray(np.asarray(values, np.int32).reshape(-1)).view(np.uint32)
+    index = np.arange(u.size, dtype=np.uint32) * np.uint32(0x9E3779B9)
+    return np.array([np.sum(_np_fmix(u ^ (index + np.uint32(seed))), dtype=np.uint32) for seed in DIGEST_SEEDS], np.uint32)
 
 
 # M2: the effects whose lanes the wrong-mon check covers, and the per-mon leaves it checks.
@@ -1306,7 +1371,7 @@ class Stepper:
                 fresh = sample_chance_inputs(state).draws
                 draws = j.where((live & state.pending_residual)[:, None, None], state.residual_draws, fresh)
                 m2 = dict(perish=post.perish_counter, yawn=post.yawn_counter, trap=post.partial_trap_counter,
-                          source=post.partial_trap_source, ability=post.ability, draws7=draws[:, :, 7],
+                          source=post.partial_trap_source, ability=post.ability, draws7=draws[:, :, 7], active_turns=post.active_turns,
                           clock=named_out.get(WRAP_CLOCK), **{k: v for k, v in m2e.items() if v is not None})
                 if bag is not None and bag.ndim == 4 and bag.shape[-1] == len(bag_names):
                     m2['bag'] = j.stack([bag[..., bag_names.index(n)] for n in M2_BAG], axis=-1)
@@ -1513,7 +1578,7 @@ def patched_pass(args, *, step_override=None, prepared=None):
     counts = dict(lane_steps=0, done_skipped=0, unchanged=0, changed_and_involved=0, changed_but_uninvolved=0,
                   changed_involved_unexpected_fields=0, ko_cascade=0, phase_shift=0, terminal=0, terminal_residual=0, waived=0,
                   rule_explained=0, faint_rule_leaves=0, clear_volatile_leaves=0, effect_draws_saved=0,
-                  recharge_leaves=0, bag_leaves=0, trick_witness_leaves=0, ledger_leaves=0, m2_leaves=0, m2_wrong_mon=0)
+                  recharge_leaves=0, bag_leaves=0, trick_witness_leaves=0, ledger_leaves=0, m2_leaves=0, m2_wrong_mon=0, m2_forced=0)
     clear_volatile = 'B' in plugins
     m1_rules = 'M1' in plugins
     # M1 review: the base's per-lane witness arrays (wit_XX); the M1 rules compare per mon and per bag column.
@@ -1523,6 +1588,8 @@ def patched_pass(args, *, step_override=None, prepared=None):
     ability_names = vocab.get('abilities', [])
     soundproof = {ability_names.index(n) for n in ('soundproof',) if n in ability_names}
     sleep_immune = {ability_names.index(n) for n in ('insomnia', 'vitalspirit') if n in ability_names}
+    # M2 review: the base's per-side state.hp digest, which the Wrap tick witness reproduces (column in base_names order).
+    hp_base = base_names.index('state.hp') if 'state.hp' in base_names else None
     # A base pass run on the base engine with a newer harness is dirty in the harness only; anything else is recorded.
     if manifest.get('source_dirty') and set(manifest.get('dirty_paths') or ['?']) != {'gpu_engine/v2e_regress.py'}:
         warnings.append(f"base pass ran on a dirty tree beyond the harness: {manifest.get('dirty_paths')}")
@@ -1644,6 +1711,7 @@ def patched_pass(args, *, step_override=None, prepared=None):
                 # M1: Hyper Beam's counter (recharge_rule), the bag per cell (bag_rule), a Trick's berry and Substitute
                 # consequences (trick_rule) and Knock Off's item ledger (ledger_rule); all post-state, per mon.
                 recharge_explained, bag_explained, trick_explained, ledger_explained, m2_explained = [], [], [], [], []
+                m2_must = set()
                 if changed and (m1_rules or m2_rules):
                     zero2 = np.zeros(2, bool);p2p = result['physical_to_public'][lane]
                     lane_wit = {n: v[lane] for n, v in wit.items()};lane_base_wit = {n: v[lane] for n, v in base_wit.items()}
@@ -1657,9 +1725,10 @@ def patched_pass(args, *, step_override=None, prepared=None):
                     w.update(p2p=p2p, post_active=post_active[lane], post_hp=np.asarray(m1['post_hp'])[lane],
                              done=bool(np.asarray(result['post_done'])[lane]),
                              ran=None if result['residual_ran'] is None else bool(np.asarray(result['residual_ran'])[lane]),
-                             soundproof=soundproof, sleep_immune=sleep_immune)
+                             soundproof=soundproof, sleep_immune=sleep_immune, max_hp=np.asarray(named['state.max_hp'])[lane],
+                             base_hp=None if hp_base is None else np.asarray(base['digests'][lane, hp_base]))
                     if 'ordinary' in w:w['ordinary'] = bool(w['ordinary'])
-                    entries, m2_explained, m2_cells = m2_rule(entries, w)
+                    entries, m2_explained, m2_cells, m2_must = m2_rule(entries, w)
                     if allowed is not None:
                         for i, name in enumerate(M2_BAG):
                             if name in columns:allowed[:, :, columns[name]] |= m2_cells[:, :, i]
@@ -1758,6 +1827,11 @@ def patched_pass(args, *, step_override=None, prepared=None):
                     m2_wrong = m2_wrong_mon(entries, post_m, ref_m, pre_active[lane], post_active[lane])
                     unexpected = unexpected + [e for e in m2_wrong if e not in unexpected]
                     counts['m2_wrong_mon'] += bool(m2_wrong)
+                # M2 review: the struck side's HP and Substitute HP that m2_rule's witness did not explain are unexpected
+                # (never an allowance or a KO cascade).
+                m2_forced = [e for e in sorted(m2_must, key=str) if e in entries]
+                unexpected = unexpected + [e for e in m2_forced if e not in unexpected]
+                counts['m2_forced'] += bool(m2_forced)
                 kind = classify(changed, bool(effects), rule_ok, unexpected)
                 if kind == 'unchanged':
                     counts['unchanged'] += 1
@@ -1796,6 +1870,7 @@ def patched_pass(args, *, step_override=None, prepared=None):
                     ledger_rule=[f'{l}@{side}' for l, side in ledger_explained],
                     m2_rule=[f'{l}@{side}' for l, side in m2_explained],
                     m2_wrong_mon=[f'{l}@{side}' for l, side in m2_wrong],
+                    m2_forced=[f'{l}@{side}' for l, side in m2_forced],
                     unexpected=[f"{l}@{'glob' if s is None else s}" for l, s in unexpected],
                     ko_consequences=[f"{l}@{'glob' if s is None else s}" for l, s in by_ko],
                     waived=[f"{l}@{'glob' if s is None else s}" for l, s in waived])) + '\n')

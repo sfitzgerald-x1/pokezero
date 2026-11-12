@@ -24,7 +24,7 @@ ABILITIES = ['_none', 'soundproof', 'insomnia', 'vitalspirit']
 SOUNDPROOF, INSOMNIA, VITALSPIRIT = range(1, 4)
 ITEMS = ['_none', 'leftovers', 'lumberry']
 LEFTOVERS, LUM = 1, 2
-PAR, TOX, SLP = 1, 4, 5
+PAR, PSN, TOX, SLP = 1, 3, 4, 5
 N = 8          # every transition test runs one fixed batch shape: one compile
 
 
@@ -260,6 +260,22 @@ class TransitionTests(unittest.TestCase):
         self.assertEqual(self.at(s, 'hp', 1).tolist(), [320, 300, 320, 320, 320, 240, 0, 320])
         self.assertTrue(bool(np.asarray(s.forced_switch)[6, 1]))
 
+    def test_wrap_releases_for_a_trapper_fainted_in_this_residual_or_new_this_turn(self):
+        """M2 review (RW8, RW9): the holder's handler releases silently, with no tick, when its trapper is no longer held
+        (data/mods/gen5/conditions.ts onResidual: source.hp <= 0 or !source.activeTurns). Lane 0: the faster trapper, at
+        1 HP and poisoned, faints at its own subOrder-6 poison earlier in this residual. Lane 1: control, it ticks (3 -> 2,
+        320/16 = 20). Lane 2: the source switches in this turn (activeTurns 0). Lane 3: a slower trapper fainting at its own
+        poison after the holder's tick: the tick stands, the trap stays until the next residual."""
+        trap = lambda src=0: {'partial_trap_counter': [((1, 0), 3)], 'partial_trap_source': [((1, 0), src)]}
+        lanes = [dict(trap(), hp=[((0, 0), 1)], status=[((0, 0), PSN)]), trap(), trap(2),
+                 dict(trap(), hp=[((0, 0), 1)], status=[((0, 0), PSN)], stats=[((0, 0, 5), 100)])] + [{}] * 4
+        s = self.play(self.build(lanes), self.chance(), a0=j.asarray([0, 0, 5, 0, 0, 0, 0, 0]))
+        self.assertEqual(self.at(s, 'hp', 0)[[0, 3]].tolist(), [0, 0])                 # both poisoned trappers fainted
+        self.assertEqual(int(np.asarray(s.active)[2, 0]), 2)                            # lane 2: the source is the new active
+        self.assertEqual(self.at(s, 'partial_trap_counter', 1)[:4].tolist(), [0, 2, 0, 2])
+        self.assertEqual(self.at(s, 'partial_trap_source', 1)[:4].tolist(), [-1, 0, -1, 0])
+        self.assertEqual(self.at(s, 'hp', 1)[:4].tolist(), [320, 300, 320, 300])
+
     def test_residual_pair_ties(self):
         """Equal Speed, both last mons. Lanes 0/1: both trapped with lethal ticks; the subOrder-9 pair takes effect[0][3]:
         the first tick's KO ends the game, so the coin decides the winner, and the survivor's handler never runs. Lanes 2/3:
@@ -414,7 +430,8 @@ class RegressRuleTests(unittest.TestCase):
                  p2p=np.broadcast_to(np.arange(6), (2, 6)).copy(), post_active=np.zeros(2, np.int32), post_hp=z(100),
                  done=False, ran=True, ordinary=True, perish_used=np.zeros(2, bool), yawn_by=np.zeros(2, bool),
                  yawn_target=np.full(2, -1), blocked=np.zeros(2, bool), wrap_by=np.zeros(2, bool), wrap_user=np.full(2, -1),
-                 wrap_target=np.full(2, -1), draws7=np.zeros(2, np.int32), soundproof={SOUNDPROOF}, sleep_immune={INSOMNIA, VITALSPIRIT})
+                 wrap_target=np.full(2, -1), draws7=np.zeros(2, np.int32), soundproof={SOUNDPROOF}, sleep_immune={INSOMNIA, VITALSPIRIT},
+                 active_turns=np.ones(2, np.int32), max_hp=z(320), base_hp=None)
         w.update(over);return w
 
     def rule(self, entries, w):
@@ -424,7 +441,7 @@ class RegressRuleTests(unittest.TestCase):
     def test_perish_needs_the_move_a_living_non_soundproof_active_the_value_and_its_bag_bit(self):
         perish = np.zeros((2, 6), np.int32);perish[:, 0] = 3;bag = np.zeros((2, 6, 6), bool);bag[:, 0, 3] = True
         entries = [('state.perish_counter', 0), ('state.perish_counter', 1)]
-        rest, done, cells = self.rule(entries, self.lane(perish=perish, bag=bag, perish_used=np.array([True, False])))
+        rest, done, cells, _ = self.rule(entries, self.lane(perish=perish, bag=bag, perish_used=np.array([True, False])))
         self.assertEqual((rest, len(done)), (set(), 2));self.assertTrue(cells[:, 0, :4].all())
         self.assertEqual(len(self.rule(entries, self.lane(perish=perish, bag=bag))[0]), 2)                     # no move line
         ability = np.zeros((2, 6), np.int32);ability[1, 0] = SOUNDPROOF
@@ -450,12 +467,72 @@ class RegressRuleTests(unittest.TestCase):
         trap = np.zeros((2, 6), np.int32);trap[1, 0] = 4;source = np.full((2, 6), -1, np.int32);source[1, 0] = 2
         bag = np.zeros((2, 6, 6), bool);bag[1, 0, 5] = True;clock = np.zeros((2, 6), np.int32);clock[1, 0] = 1
         ok = dict(trap=trap, source=source, bag=bag, clock=clock, wrap_by=np.array([True, False]), wrap_user=np.array([2, -1]),
-                  wrap_target=np.array([0, -1]), draws7=np.array([2, 0]))
+                  wrap_target=np.array([0, -1]), draws7=np.array([2, 0]), post_active=np.array([2, 0], np.int32))
         entries = [('state.partial_trap_counter', 1), ('state.partial_trap_source', 1), (r_clock(), 1)]
         self.assertEqual(self.rule(entries, self.lane(**ok))[0], set())
+        fainted = np.full((2, 6), 100, np.int32);fainted[0, 2] = 0
         for bad in (dict(wrap_by=np.zeros(2, bool)), dict(draws7=np.array([1, 0])), dict(wrap_user=np.array([3, -1])),
-                    dict(clock=np.zeros((2, 6), np.int32)), dict(bag=np.zeros((2, 6, 6), bool)), dict(ordinary=False)):
+                    dict(clock=np.zeros((2, 6), np.int32)), dict(bag=np.zeros((2, 6, 6), bool)), dict(ordinary=False),
+                    # M2 review: a tick (4 = 3+2-1) needs the trapper held at the residual: still active, alive, activeTurns > 0.
+                    dict(post_active=np.array([1, 0], np.int32)), dict(post_hp=fainted), dict(active_turns=np.array([0, 1], np.int32))):
             self.assertEqual(self.rule(entries, self.lane(**dict(ok, **bad)))[0], set(entries), bad)
+        untick = dict(ok, trap=np.where(trap > 0, 5, 0), post_hp=fainted, ran=False)       # no residual: no tick, no trapper check
+        self.assertEqual(self.rule(entries, self.lane(**untick))[0], set())
+
+    def test_mon_digest_is_the_base_pass_side_digest(self):
+        from gpu_engine import v2e_regress as r
+        hp = np.random.default_rng(5).integers(0, 400, (3, 2, 6)).astype(np.int32)
+        jax_words = np.asarray(r.digest_named({'state.hp': j.asarray(hp)}, 3)[1])[:, 0]        # [L, 2 sides, 2 words]
+        for lane in range(3):
+            for side in range(2):self.assertEqual(r.mon_digest(hp[lane, side]).tolist(), jax_words[lane, side].tolist())
+
+    def wrap_tick_lane(self, *, tick=20, base_hp=320, now=None, **over):
+        """Side 0's Wrap (user 2) struck side 1's active 0 (maxhp 320): counter 4 = 3+2-1 after the tick, the base's side-1
+        HP digest taken with `base_hp` there."""
+        from gpu_engine import v2e_regress as r
+        trap = np.zeros((2, 6), np.int32);trap[1, 0] = 4;source = np.full((2, 6), -1, np.int32);source[1, 0] = 2
+        bag = np.zeros((2, 6, 6), bool);bag[1, 0, 5] = True;clock = np.zeros((2, 6), np.int32);clock[1, 0] = 1
+        hp = np.full((2, 6), 320, np.int32);hp[1, 0] = base_hp - tick if now is None else now
+        base = np.full((2, 6), 320, np.int32);base[1, 0] = base_hp
+        base_words = np.stack([r.mon_digest(base[0]), r.mon_digest(base[1])])
+        return self.lane(**dict(dict(trap=trap, source=source, bag=bag, clock=clock, wrap_by=np.array([True, False]),
+            wrap_user=np.array([2, -1]), wrap_target=np.array([0, -1]), draws7=np.array([2, 0]),
+            post_active=np.array([2, 0], np.int32), post_hp=hp, base_hp=base_words), **over))
+
+    def test_wrap_tick_hp_needs_the_exact_tick_at_the_trapped_active(self):
+        """M2 review (RW7): state.hp of the struck side is explained only by adding max(1, maxhp//16) back at the trapped
+        active and matching the base digest; a Substitute's HP never; both stay `must` entries when unexplained."""
+        trap = [('state.partial_trap_counter', 1), ('state.partial_trap_source', 1), (r_clock(), 1)]
+        hp1, sub1 = ('state.hp', 1), ('state.substitute_hp', 1)
+        rest, _, _, must = self.rule(trap + [hp1], self.wrap_tick_lane())
+        self.assertEqual((rest, must), (set(), {hp1}))
+        for lane in (self.wrap_tick_lane(tick=40),                               # baseMaxhp/8 (RW7)
+                     self.wrap_tick_lane(tick=19)):                              # one short
+            self.assertEqual(self.rule(trap + [hp1], lane)[0], {hp1})
+        self.assertEqual(self.rule(trap + [hp1, sub1], self.wrap_tick_lane())[0], {sub1})
+        unticked = dict(trap=np.where(self.wrap_tick_lane()['trap'] > 0, 5, 0), ran=False)
+        self.assertEqual(self.rule(trap + [hp1], self.wrap_tick_lane(**unticked))[0], {hp1})       # no tick: HP must not move
+        held_not = self.wrap_tick_lane(active_turns=np.array([0, 1], np.int32))
+        self.assertEqual(self.rule(trap + [hp1], held_not)[0], set(trap) | {hp1})
+        # A lethal tick: the faint cleared the trap; the base kept 1..20 HP there.
+        cleared = dict(trap=np.zeros((2, 6), np.int32), source=np.full((2, 6), -1, np.int32))
+        for base_hp, want in ((13, set()), (20, set()), (21, {hp1})):
+            self.assertEqual(self.rule([hp1], self.wrap_tick_lane(base_hp=base_hp, now=0, **cleared))[0], want, base_hp)
+        self.assertEqual(self.rule([hp1], self.wrap_tick_lane(base_hp=13, now=0, ran=False, **cleared))[0], {hp1})
+        self.assertEqual(self.rule([hp1], self.wrap_tick_lane(base_hp=13, now=0, post_active=np.array([1, 0], np.int32), **cleared))[0], {hp1})
+
+    def test_reveals_need_a_holder_of_the_immunity(self):
+        """M2 review: a reveal entry is explained only at a Soundproof active on a Perish Song lane, or an Insomnia/Vital
+        Spirit active the other side's unblocked Yawn line met; otherwise it stays (no allowance covers it)."""
+        reveal = [('trackers.shown_ability', 1), ('trackers.belief_mask', 1)]
+        sound = np.zeros((2, 6), np.int32);sound[1, 0] = SOUNDPROOF;awake = np.zeros((2, 6), np.int32);awake[1, 0] = VITALSPIRIT
+        perish = dict(perish_used=np.array([True, False]))
+        yawn = dict(yawn_by=np.array([True, False]), yawn_target=np.array([0, -1]))
+        self.assertEqual(self.rule(reveal, self.lane(ability=sound, **perish))[0], set())
+        self.assertEqual(self.rule(reveal, self.lane(ability=awake, **yawn))[0], set())
+        for bad in (dict(**perish), dict(ability=awake, **perish), dict(ability=sound), dict(ability=sound, **yawn),
+                    dict(ability=awake, **dict(yawn, blocked=np.array([True, False]))), dict(ability=awake)):
+            self.assertEqual(self.rule(reveal, self.lane(**bad))[0], set(reveal), bad)
 
 
 def r_clock():
