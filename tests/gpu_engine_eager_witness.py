@@ -16,6 +16,9 @@ scalars) are closed over, with one compile per distinct set of them.
 Only the execution route changes; every value is computed by the same code. The heavy anchor
 (test_gpu_engine_source_witness_compiled_anchor) checks compiled == eager on the frame and witness outputs.
 
+A jax.clear_caches() inside the scope (some tests release executables between phases) runs that check first, then counts
+again, so a compile followed by a clear can't hide.
+
 Enter it around a construct or an advance, inside a test or a test's own helper. Never enter it in a setUpClass that
 other modules borrow: the swap must not outlive the test that asked for it. Call clear() from the module's tearDownModule,
 because the jit cache holds compiled executables and the objects they close over.
@@ -90,7 +93,18 @@ def eager_source_witness(*prepared):
         if execution.consume_frame_device is not _CONSUME:raise ValueError('consume_frame_device already replaced')
         execution.consume_frame_device = stable_consume
         stack.callback(setattr, execution, 'consume_frame_device', _CONSUME)
+
+        def check():
+            # A new compile of the frame or witness inside the scope fails the scope.
+            for key, closure, size in compiled:
+                if closure._cache_size() != size:raise AssertionError(f'the {key} was compiled inside an eager scope')
+        clear_caches = jax.clear_caches
+
+        def checked_clear_caches():
+            # A jax.clear_caches() inside the scope would reset the counts check() reads: check first, then count again.
+            check();clear_caches()
+            compiled[:] = [(key, closure, closure._cache_size()) for key, closure, _ in compiled]
+        jax.clear_caches = checked_clear_caches
+        stack.callback(setattr, jax, 'clear_caches', clear_caches)
         yield
-        # A new compile of the frame or witness inside the scope fails the scope.
-        for key, closure, size in compiled:
-            if closure._cache_size() != size:raise AssertionError(f'the {key} was compiled inside an eager scope')
+        check()

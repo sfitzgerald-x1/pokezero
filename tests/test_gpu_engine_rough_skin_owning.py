@@ -254,6 +254,7 @@ class RoughSkinTests(unittest.TestCase):
                 self.assertTrue(any(np.array_equal(words[i:i+len(expected)],expected)for i in range(len(words)-len(expected)+1)),
                     f'owner{owner} row{row} missing literal original Rough Skin controls')
 
+
 def tearDownModule():
     eager.clear()   # drop the consume executables this module compiled
 
