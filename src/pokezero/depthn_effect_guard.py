@@ -3,12 +3,9 @@
 The GPU device engine keys every move effect by name and reads no effect fields (generate_teams.cjs:75-81); the static
 table of its handling of the Gen 3 random-battle pool is reports/gpu-engine-move-effect-table-20261109.md. GUARDED holds
 the moves whose missing effect carries over into the price (the lead's decision):
-- tier A, unconditional: transform, yawn, wrap, perishsong, superpower, knockoff, charm, bonemerang;
-- tier C, guarded for a side only while its condition holds (`conditions`): spore, sleeppowder, hypnosis while Sleep Clause
-  would bind (the target's side already has a non-fainted Pokemon asleep from a non-allied source: Showdown f76228a1
-  data/rulesets.ts sleepclausemod, whose onSetStatus skips a sleeper whose statusState.source is its ally, i.e. Rest; a
-  Yawn or move-induced sleep counts; a wake (-curestatus slp), a faint or a party cure ends it), sacredfire while the user
-  is frozen, psychoboost while the user's White Herb is unconsumed
+- tier A, unconditional: transform, yawn, wrap, perishsong, superpower, knockoff;
+- tier C, guarded for a side only while its condition holds (`conditions`): sacredfire while the user is frozen,
+  psychoboost while the user's White Herb is unconsumed
   (ours: the request's item; the opponent's: Deoxys and Deoxys-Attack always hold it in the pool, until an -enditem or an
   -item for that Pokemon is seen), facade while the user has Guts and a burn, paralysis or poison (every pool Facade user
   has Guts; ours: the request's ability), trick while either side has a non-fainted Pokemon whose item was
@@ -20,12 +17,17 @@ RETIRED (tier 'R') holds the moves the guard no longer trips on because the engi
 integration merge from which it does (a screen declares an engine at or after it): destinybond (A2, 286a5ffe: the DESTINY_BOND
 volatile, Showdown-probed), hyperbeam (M1, 8b212312: the recharge turn; the live roots' recharge refusals and the live actor's
 own-recharge guard, RECHARGE_MOVES, are separate and unchanged); curse, aromatherapy, refresh, lovelykiss (A1, 4ee5d3ee: Curse's
-Ghost and non-Ghost forms, the party and self cures, Sleep Clause; effect probes curse, aromatherapy, refresh, lovelykiss,
-lovelykiss_block, sleepclause*), gigadrain, mirrorcoat (A2, 286a5ffe: Liquid Ooze, Mirror Coat's special retaliation; probes
-gigadrain*, the A2 fidelity tests), counter (R, 0d661773: Counter after Bonemerang's two hits; probes counter*,
-bonemerang_counter*), each exact against Showdown f76228a1 in the engine session's 131-scenario probe run.
-The retired tier-C moves' conditions (refresh: user_brn_par_psn; aromatherapy: party_statused) stay in `guarded`'s vocabulary
-and in the recorded conditions, unused by any GUARDED move. They stay WATCHED, so their masses are still recorded (turn-2
+non-Ghost form -- a Ghost user's Curse stays an unported placeholder (gpu_engine/README.md), and no pool Curse user is a Ghost;
+a Transform copy stays guarded by Transform --, the party and self cures, Sleep Clause; effect probes curse, aromatherapy,
+refresh, lovelykiss, lovelykiss_block, sleepclause*), gigadrain (A2, 286a5ffe: Liquid Ooze; probes gigadrain*), mirrorcoat (A2,
+286a5ffe: special retaliation; probes counter, counter_sub, the A2 fidelity tests), counter (R, 0d661773: Counter after
+Bonemerang's two hits; probes counter*, bonemerang_counter*), charm (A1, 4ee5d3ee: probe charm), spore, sleeppowder, hypnosis (A1, 4ee5d3ee: Sleep Clause; probes
+sleepclause, sleepclause_rest, sleepclause_faint, lovelykiss_block), bonemerang (R, 0d661773: two hits after one accuracy
+roll, the second on the appended effect stream; 14 bonemerang* probes; live roots never resume a queued Bonemerang with an
+unsampled stream: the pricer draws it per node, transition.sample_chance_inputs, and a replacement-phase root clears the
+queue and samples it, phase_d_tail), each exact against Showdown f76228a1 in the engine session's probe runs. The retired
+tier-C moves' conditions (sleep_clause, user_brn_par_psn, party_statused) stay in `guarded`'s vocabulary and in the recorded
+conditions, unused by any GUARDED move. They stay WATCHED, so their masses are still recorded (turn-2
 entries: guarded False, tier 'R'), and never count toward (a), (b) (its turn-1 arm and the reach) or (c). Roots where a side is
 already bonded stay refused by the world constructor, not here.
 
@@ -68,8 +70,6 @@ GUARDED = {
     'transform': ('A', 'other', None),
     'yawn': ('A', 'volatile', None), 'wrap': ('A', 'volatile', None), 'perishsong': ('A', 'volatile', None),
     'superpower': ('A', 'self_stat_drop', None), 'knockoff': ('A', 'item_removal', None),
-    'charm': ('A', 'target_stat_change', None), 'bonemerang': ('A', 'other', None),
-    'spore': ('C', 'status', 'sleep_clause'), 'sleeppowder': ('C', 'status', 'sleep_clause'), 'hypnosis': ('C', 'status', 'sleep_clause'),
     'sacredfire': ('C', 'status', 'user_frozen'),
     'psychoboost': ('C', 'self_stat_drop', 'white_herb'), 'facade': ('C', 'other', 'guts_status'),
     'trick': ('C', 'item_removal', 'item_knocked'),
@@ -79,7 +79,8 @@ TIER_B = {'irontail': 'target_stat_change', 'signalbeam': 'volatile', 'steelwing
 RETIRED = {'destinybond': ('volatile', '286a5ffe'), 'hyperbeam': ('multi_turn', '8b212312'),
            'curse': ('self_boost', '4ee5d3ee'), 'aromatherapy': ('status', '4ee5d3ee'), 'refresh': ('status', '4ee5d3ee'),
            'lovelykiss': ('status', '4ee5d3ee'), 'gigadrain': ('other', '286a5ffe'), 'mirrorcoat': ('retaliation', '286a5ffe'),
-           'counter': ('retaliation', '0d661773')}
+           'counter': ('retaliation', '0d661773'), 'charm': ('target_stat_change', '4ee5d3ee'), 'spore': ('status', '4ee5d3ee'),
+           'sleeppowder': ('status', '4ee5d3ee'), 'hypnosis': ('status', '4ee5d3ee'), 'bonemerang': ('other', '0d661773')}
 WATCHED = frozenset(GUARDED) | frozenset(TIER_B) | frozenset(RETIRED)
 # The guarded tiers in force while records carried no per-entry `guarded` (before 49530d2a; GUARDED unchanged from 2c5c7b80 until
 # RETIRED): reach's bounds for those records use these, so a later guard set does not move them.

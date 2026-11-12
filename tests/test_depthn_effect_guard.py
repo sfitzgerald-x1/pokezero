@@ -1,5 +1,4 @@
 """pokezero.depthn_effect_guard on exact Gen 3 protocol lines: the tier-C conditions, (b) at turn 1 and turn 2, (c) per choice."""
-import contextlib
 import json
 import math
 import unittest
@@ -7,6 +6,34 @@ from unittest import mock
 
 from pokezero import depthn_effect_guard as G
 from pokezero import depthn_live_actor as actor
+
+# The guard's live tables, as this module defines them (pinned by LiveTableTests). Every other test here exercises the guard's
+# mechanics -- conditions, masses, the arms, the reach, the record -- against FIXTURE, a fixed table (the guard of #1932 / #1933,
+# before the A1 / A2 / R retirements), so that retiring a move changes the pins and nothing else.
+LIVE_GUARDED, LIVE_RETIRED = dict(G.GUARDED), dict(G.RETIRED)
+FIXTURE_GUARDED = {
+    'transform': ('A', 'other', None), 'yawn': ('A', 'volatile', None), 'wrap': ('A', 'volatile', None), 'perishsong': ('A', 'volatile', None),
+    'counter': ('A', 'retaliation', None), 'mirrorcoat': ('A', 'retaliation', None), 'curse': ('A', 'self_boost', None),
+    'superpower': ('A', 'self_stat_drop', None), 'knockoff': ('A', 'item_removal', None), 'charm': ('A', 'target_stat_change', None),
+    'lovelykiss': ('A', 'status', None), 'bonemerang': ('A', 'other', None), 'gigadrain': ('A', 'other', None),
+    'spore': ('C', 'status', 'sleep_clause'), 'sleeppowder': ('C', 'status', 'sleep_clause'), 'hypnosis': ('C', 'status', 'sleep_clause'),
+    'refresh': ('C', 'status', 'user_brn_par_psn'), 'sacredfire': ('C', 'status', 'user_frozen'), 'psychoboost': ('C', 'self_stat_drop', 'white_herb'),
+    'facade': ('C', 'other', 'guts_status'), 'aromatherapy': ('C', 'status', 'party_statused'), 'trick': ('C', 'item_removal', 'item_knocked')}
+FIXTURE_RETIRED = {'destinybond': ('volatile', '286a5ffe'), 'hyperbeam': ('multi_turn', '8b212312')}
+_TABLES = []
+
+
+def tables(guarded, retired):
+    return [mock.patch.dict(G.GUARDED, guarded, clear=True), mock.patch.object(G, 'RETIRED', dict(retired))]
+
+
+def setUpModule():
+    for patch in tables(FIXTURE_GUARDED, FIXTURE_RETIRED):
+        patch.start();_TABLES.append(patch)
+
+
+def tearDownModule():
+    while _TABLES:_TABLES.pop().stop()
 
 
 def switch(seat, species, hp='100/100', details=None):
@@ -98,14 +125,14 @@ class UserConditionTests(unittest.TestCase):
         c = G.conditions([switch('p1', 'Ursaring'), switch('p2', 'Swellow'), '|-status|p2a: Swellow|par', '|turn|2'], 0, request(ours))
         self.assertEqual(G.guarded('facade', c['own'], 'ursaring'), ('C', 'other'))   # Guts (the request) and a burn
         self.assertEqual(G.guarded('facade', c['opp'], 'swellow'), ('C', 'other'))   # every pool Facade user has Guts
-        self.assertEqual((c['opp']['members']['swellow']['status'], G.guarded('refresh', c['opp'], 'swellow')), ('par', None))   # Refresh: retired (A1)
+        self.assertEqual(G.guarded('refresh', c['opp'], 'swellow'), ('C', 'status'))
         self.assertEqual(G.guarded('sacredfire', c['own'], 'hooh'), ('C', 'status'))   # frozen
-        self.assertIsNone(G.guarded('sacredfire', c['own'], 'ursaring'))
+        self.assertIsNone(G.guarded('refresh', c['own'], 'milotic'));self.assertIsNone(G.guarded('sacredfire', c['own'], 'ursaring'))
         noguts = G.conditions([switch('p1', 'Ursaring'), switch('p2', 'Swellow')], 0, request([('Ursaring', '200/200 brn', '', 'quickfeet')]))
         self.assertIsNone(G.guarded('facade', noguts['own'], 'ursaring'))
         cured = G.conditions([switch('p1', 'Ursaring'), switch('p2', 'Swellow'), '|-status|p2a: Swellow|par', '|-curestatus|p2a: Swellow|par|[msg]'], 0,
             request(ours))
-        self.assertEqual(cured['opp']['members']['swellow']['status'], '')   # cured
+        self.assertIsNone(G.guarded('refresh', cured['opp'], 'swellow'))
         slept = G.conditions([switch('p1', 'Ursaring'), switch('p2', 'Swellow'), '|-status|p2a: Swellow|slp'], 0, request(ours))
         self.assertIsNone(G.guarded('facade', slept['opp'], 'swellow'))   # Facade does not double while asleep
 
@@ -124,12 +151,11 @@ class UserConditionTests(unittest.TestCase):
     def test_aromatherapy_reads_the_party(self):
         c = G.conditions([switch('p1', 'Meganium'), switch('p2', 'Vileplume'), '|-status|p2a: Vileplume|psn', switch('p2', 'Bellossom')], 0,
             request([('Meganium', '200/200', 'leftovers', 'overgrow'), ('Snorlax', '300/300', 'leftovers', 'thickfat')]))
-        self.assertEqual((c['opp']['party_statused'], c['own']['party_statused']), (True, False))   # the facts stay recorded
+        self.assertEqual((G.guarded('aromatherapy', c['opp'], 'bellossom'), G.guarded('aromatherapy', c['own'], 'meganium')), (('C', 'status'), None))
         mine = G.conditions([switch('p1', 'Meganium')], 0, request([('Meganium', '200/200', '', 'overgrow'), ('Snorlax', '300/300 par', '', 'thickfat')]))
-        self.assertTrue(mine['own']['party_statused'])
+        self.assertEqual(G.guarded('aromatherapy', mine['own'], 'meganium'), ('C', 'status'))
         fainted = G.conditions([switch('p1', 'Meganium')], 0, request([('Meganium', '200/200', '', 'overgrow'), ('Snorlax', '0 fnt', '', 'thickfat')]))
-        self.assertFalse(fainted['own']['party_statused'])
-        self.assertEqual([G.guarded('aromatherapy', x['own'], 'meganium') for x in (c, mine)], [None, None])   # Aromatherapy: retired (A1)
+        self.assertIsNone(G.guarded('aromatherapy', fainted['own'], 'meganium'))
 
 
 def prior(mass_on, mass, legal=None):
@@ -143,7 +169,7 @@ def prior(mass_on, mass, legal=None):
 class EvaluateTests(unittest.TestCase):
     def setUp(self):
         self.cond = G.conditions(BASE, 0, request(OURS))
-        self.own_lanes = ['spore', 'bonemerang', 'leechseed', 'substitute']   # Bonemerang is tier A
+        self.own_lanes = ['spore', 'gigadrain', 'leechseed', 'substitute']   # Giga Drain is tier A
 
     def record(self, *, own=(1, .01), peer=(), turn2=(), available=True, choice=None):
         logits, legal = prior(*own)
@@ -156,12 +182,12 @@ class EvaluateTests(unittest.TestCase):
     def test_b_at_turn_1(self):
         r = self.record(own=(1, .2))
         self.assertEqual((r['tripped'], r['b'], r['b_turn1'], r['b_turn2'], r['c']), (True, True, True, False, False))
-        self.assertEqual([(x['move'], x['side'], x['source'], x['tier'], round(x['max_mass'], 6)) for x in r['reasons']], [('bonemerang', 'own', 'turn1', 'A', .2)])
+        self.assertEqual([(x['move'], x['side'], x['source'], x['tier'], round(x['max_mass'], 6)) for x in r['reasons']], [('gigadrain', 'own', 'turn1', 'A', .2)])
         low = self.record(own=(1, .04999))   # below 5%
-        self.assertEqual((low['tripped'], low['a'], low['a_moves']), (False, True, ['bonemerang']))   # (a): legal, reported only
-        peer = self.record(peer=[self.peer(0, ['bodyslam', 'charm', 'rest', 'sleeptalk'], 1, .3), self.peer(1, ['bodyslam', 'charm', 'rest', 'sleeptalk'], 1, .02)])
-        self.assertEqual([(x['move'], x['side'], x['worlds']) for x in peer['reasons']], [('charm', 'opp', [0])])
-        waiting = self.record(peer=[self.peer(0, ['charm', None, None, None], 0, .9, requested=False)])
+        self.assertEqual((low['tripped'], low['a'], low['a_moves']), (False, True, ['gigadrain']))   # (a): legal, reported only
+        peer = self.record(peer=[self.peer(0, ['bodyslam', 'curse', 'rest', 'sleeptalk'], 1, .3), self.peer(1, ['bodyslam', 'curse', 'rest', 'sleeptalk'], 1, .02)])
+        self.assertEqual([(x['move'], x['side'], x['worlds']) for x in peer['reasons']], [('curse', 'opp', [0])])
+        waiting = self.record(peer=[self.peer(0, ['curse', None, None, None], 0, .9, requested=False)])
         self.assertFalse(waiting['b'])   # a waiting opponent has no prior
         tier_b = self.record(peer=[self.peer(3, ['irontail', 'earthquake', 'rest', 'protect'], 0, .9)])
         self.assertEqual((tier_b['b'], tier_b['tier_b_legal'], tier_b['tier_b_moves']), (False, True, ['irontail']))
@@ -214,8 +240,8 @@ class EvaluateTests(unittest.TestCase):
         child = dict(own_side=G.child_side(self.cond['own'], [('breloom', 0, True, False)]),
             opp_side=G.child_side(self.cond['opp'], [('snorlax', 5, True, False)], opponent=True))
         cells = [dict(world=w, cell=a * 9 + b, side=side, lanes=lanes, logits=prior(k, q)[0], legal=prior(k, q)[1], user=user, **child)
-                 for w, a, b, side, lanes, user, k, q in ((0, 0, 0, 'own', ['spore', 'bonemerang', None, None], 'breloom', 0, .3),
-                     (0, 1, 2, 'opp', ['charm', 'rest', 'facade', None], 'snorlax', 1, .7), (1, 2, 0, 'own', ['substitute', 'bonemerang', 'spore', None], 'breloom', 2, .6),
+                 for w, a, b, side, lanes, user, k, q in ((0, 0, 0, 'own', ['spore', 'gigadrain', None, None], 'breloom', 0, .3),
+                     (0, 1, 2, 'opp', ['curse', 'rest', 'facade', None], 'snorlax', 1, .7), (1, 2, 0, 'own', ['substitute', 'gigadrain', 'spore', None], 'breloom', 2, .6),
                      (1, 0, 0, 'opp', ['perishsong', None, None, None], 'snorlax', 0, .9))]
         own = prior(0, .4);record = G.evaluate(self.cond, own_turn1=dict(lanes=self.own_lanes, logits=own[0], legal=own[1]), peer_turn1=self.two_worlds(),
             turn2=cells)
@@ -229,15 +255,15 @@ class EvaluateTests(unittest.TestCase):
         child = dict(own_side=G.child_side(self.cond['own'], [('breloom', 0, True, False)]),
             opp_side=G.child_side(self.cond['opp'], [('snorlax', 5, True, False)], opponent=True))
         logits, legal = prior(0, .5)
-        cell = dict(world=0, cell=0, side='own', lanes=['spore', 'bonemerang', None, None], logits=logits, legal=legal, user='breloom', **child)
-        r = self.record(own=(0, .97), peer=self.two_worlds(), turn2=[cell])   # spore .5 (C), bonemerang 1/6 (A) at (0, 0)
+        cell = dict(world=0, cell=0, side='own', lanes=['spore', 'gigadrain', None, None], logits=logits, legal=legal, user='breloom', **child)
+        r = self.record(own=(0, .97), peer=self.two_worlds(), turn2=[cell])   # spore .5 (C), gigadrain 1/6 (A) at (0, 0)
         reach, = r['reasons'];w = .5 * .97 * .5
         self.assertEqual((reach['source'], sorted(reach['tiers']), r['tiers']), ('reach', ['A', 'C'], ['A', 'C']))
         self.assertAlmostEqual(reach['tiers']['C'], w * .5, places=15);self.assertAlmostEqual(reach['tiers']['A'], w / 6, places=15)
         self.assertAlmostEqual(r['m_own'], w * .5 + w / 6, places=15)
 
     def test_tier_c_child_conditions_in_the_reach(self):
-        """Frozen (Sacred Fire), statused (Facade with Guts; Refresh, retired) and a consumed White Herb (Psycho Boost), each decided at its child."""
+        """Frozen (Sacred Fire), statused (Refresh; Facade with Guts) and a consumed White Herb (Psycho Boost), each decided at its child."""
         lines = BASE[:-1] + [switch('p2', 'Deoxys', details='Deoxys-Attack'), '|-enditem|p2a: Deoxys|White Herb', switch('p2', 'Snorlax'), '|turn|2']
         cond = G.conditions(lines, 0, request([('Ho-Oh', '300/300', 'leftovers', 'pressure'), ('Ursaring', '200/200', '', 'guts')],
             moves=('sacredfire', 'refresh', 'facade', 'recover')))
@@ -250,7 +276,7 @@ class EvaluateTests(unittest.TestCase):
                 turn2=list(cells))
         cases = (('frozen Ho-Oh: Sacred Fire', 'own', ['sacredfire', None, None, None], 'hooh', [('hooh', 6, True, False)], True),
                  ('thawed', 'own', ['sacredfire', None, None, None], 'hooh', [('hooh', 0, True, False)], False),
-                 ('paralysed: Refresh, retired (A1): recorded, never guarded', 'own', ['refresh', None, None, None], 'hooh', [('hooh', 1, True, False)], False),
+                 ('paralysed: Refresh', 'own', ['refresh', None, None, None], 'hooh', [('hooh', 1, True, False)], True),
                  ('burned Guts user: Facade', 'own', ['facade', None, None, None], 'ursaring', [('ursaring', 2, True, False)], True),
                  ('asleep Guts user: Facade does not double', 'own', ['facade', None, None, None], 'ursaring', [('ursaring', 5, True, False)], False))
         for name, side, lanes, user, members, want in cases:
@@ -263,7 +289,7 @@ class EvaluateTests(unittest.TestCase):
     def test_c_per_choice(self):
         r = self.record(choice=1)
         self.assertEqual((r['tripped'], r['b'], r['c']), (True, False, True))
-        self.assertEqual([(x['move'], x['source']) for x in r['reasons']], [('bonemerang', 'choice')])
+        self.assertEqual([(x['move'], x['source']) for x in r['reasons']], [('gigadrain', 'choice')])
         self.assertEqual(r['own_guarded_lanes'], [None, ['A', 'other'], None, None])   # Spore: no clause at this root
         self.assertEqual([G.trips(r, a) for a in (0, 1, 4, None)], [dict(tripped=False, b=False, c=False), dict(tripped=True, b=False, c=True),
             dict(tripped=False, b=False, c=False), dict(tripped=False, b=False, c=False)])
@@ -285,27 +311,13 @@ class EvaluateTests(unittest.TestCase):
         self.assertIs(actor.recharge_guarded, G.recharge_guarded);self.assertEqual(actor.EFFECT_GUARD, 'UNREPRESENTED_EFFECT')
         self.assertTrue({'hyperbeam', 'gigadrain', 'aromatherapy'} <= G.WATCHED and not G.WATCHED & {'surf', 'earthquake'})
         self.assertEqual(sorted(k for k, v in G.GUARDED.items() if v[0] == 'A'), sorted(('transform', 'yawn', 'wrap',
-            'perishsong', 'superpower', 'knockoff', 'charm', 'bonemerang')))
-        self.assertEqual(sorted(k for k, v in G.GUARDED.items() if v[0] == 'C'), sorted(('spore', 'sleeppowder', 'hypnosis', 'sacredfire',
-            'psychoboost', 'facade', 'trick')))
+            'perishsong', 'counter', 'mirrorcoat', 'curse', 'superpower', 'knockoff', 'charm', 'lovelykiss', 'bonemerang', 'gigadrain')))
         self.assertEqual(G.GUARDED['trick'], ('C', 'item_removal', 'item_knocked'))
 
 
 # The record of a fixed input as a62fb20b's guard wrote it (before turn-2 mass entries gained guarded / tier / user): every
 # existing field must stay exactly this.
 GOLDEN = json.loads('{"a": true, "a_moves": ["curse", "gigadrain"], "b": true, "b_turn1": true, "b_turn2": true, "c": true, "choice": 1, "conditions": {"opp": {"active": "snorlax", "members": {"snorlax": {"fainted": false, "guts": true, "sleep_source": null, "status": "", "white_herb": false}}, "party_statused": false, "sleep_clause": false}, "own": {"active": "breloom", "members": {"breloom": {"fainted": false, "guts": false, "sleep_source": null, "status": "", "white_herb": false}, "snorlax": {"fainted": false, "guts": false, "sleep_source": null, "status": "", "white_herb": false}}, "party_statused": false, "sleep_clause": false}}, "masses": {"turn1": [{"mass": 0.26666666666666666, "move": "spore", "side": "own", "world": null}, {"mass": 0.20000000000000004, "move": "gigadrain", "side": "own", "world": null}, {"mass": 0.3, "move": "curse", "side": "opp", "world": 0}, {"mass": 0.23333333333333334, "move": "irontail", "side": "opp", "world": 0}, {"mass": 0.02, "move": "curse", "side": "opp", "world": 1}, {"mass": 0.32666666666666666, "move": "irontail", "side": "opp", "world": 1}], "turn2": [{"cell": 10, "mass": 0.5, "move": "spore", "side": "own", "world": 2}, {"cell": 10, "mass": 0.16666666666666669, "move": "gigadrain", "side": "own", "world": 2}, {"cell": 11, "mass": 0.5, "move": "curse", "side": "opp", "world": 3}, {"cell": 11, "mass": 0.16666666666666669, "move": "facade", "side": "opp", "world": 3}, {"cell": 11, "mass": 0.16666666666666669, "move": "irontail", "side": "opp", "world": 3}]}, "own_guarded_lanes": [null, ["A", "other"], null, null], "own_lanes": ["spore", "gigadrain", "leechseed", "substitute"], "reasons": [{"effect_class": "other", "max_mass": 1.0, "move": "gigadrain", "side": "own", "source": "choice", "tier": "A", "worlds": []}, {"effect_class": "self_boost", "max_mass": 0.3, "move": "curse", "side": "opp", "source": "turn1", "tier": "A", "worlds": [0]}, {"effect_class": "other", "max_mass": 0.20000000000000004, "move": "gigadrain", "side": "own", "source": "turn1", "tier": "A", "worlds": []}, {"effect_class": "self_boost", "max_mass": 0.5, "move": "curse", "side": "opp", "source": "turn2", "tier": "A", "worlds": [3]}, {"effect_class": "other", "max_mass": 0.16666666666666669, "move": "gigadrain", "side": "own", "source": "turn2", "tier": "A", "worlds": [2]}, {"effect_class": "status", "max_mass": 0.5, "move": "spore", "side": "own", "source": "turn2", "tier": "C", "worlds": [2]}], "schema": "pokezero.depthn-effect-guard.v1", "threshold": 0.05, "tier_b_legal": true, "tier_b_moves": ["irontail"], "tiers": ["A", "C"], "tripped": true, "turn2_available": true}')
-
-
-# The base guard's entries (8b212312 and before) for the moves retired since A1 / A2 / R: tests of a record written under that guard.
-BASE_RETIRED = {'curse': ('A', 'self_boost', None), 'aromatherapy': ('C', 'status', 'party_statused'), 'refresh': ('C', 'status', 'user_brn_par_psn'),
-                'lovelykiss': ('A', 'status', None), 'gigadrain': ('A', 'other', None), 'mirrorcoat': ('A', 'retaliation', None),
-                'counter': ('A', 'retaliation', None)}
-
-
-@contextlib.contextmanager
-def base_tiers():
-    with mock.patch.dict(G.GUARDED, BASE_RETIRED), mock.patch.object(G, 'RETIRED', {m: v for m, v in G.RETIRED.items() if m not in BASE_RETIRED}):
-        yield
 
 
 def golden_inputs():
@@ -323,8 +335,7 @@ def golden_inputs():
 class GoldenTests(unittest.TestCase):
     def test_the_new_turn_2_fields_change_nothing_else(self):
         cond, own, peer, turn2 = golden_inputs()
-        with base_tiers():   # the golden record's own guard: Curse and Giga Drain tier A (retired since A1 / A2)
-            record = json.loads(json.dumps(G.evaluate(cond, own_turn1=own, peer_turn1=peer, turn2=turn2, choice=1)))
+        record = json.loads(json.dumps(G.evaluate(cond, own_turn1=own, peer_turn1=peer, turn2=turn2, choice=1)))
         added = [{k: e.pop(k) for k in ('guarded', 'tier', 'user')} for e in record['masses']['turn2']]
         live = {k: record.pop(k) for k in ('rule', 'm_own', 'm_opp', 'arms', 'reach', 'any_cell_turn2', 'any_cell_b', 'any_cell_tripped', 'any_cell_reasons')}
         # reasons and tiers list only what tripped (turn 1, the choice; no reach here); the any-cell turn-2 hits moved to any_cell_reasons
@@ -480,10 +491,7 @@ class RetiredTests(unittest.TestCase):
     """RETIRED (destinybond since A2's merge 286a5ffe, hyperbeam since M1's 8b212312): watched and recorded, never guarded, never in
     the reach; a record written while it was tier A keeps its own M (and so does one with Trick, tier A until M1)."""
     def test_destiny_bond_is_watched_never_guarded(self):
-        self.assertEqual(G.RETIRED, {'destinybond': ('volatile', '286a5ffe'), 'hyperbeam': ('multi_turn', '8b212312'),
-            'curse': ('self_boost', '4ee5d3ee'), 'aromatherapy': ('status', '4ee5d3ee'), 'refresh': ('status', '4ee5d3ee'),
-            'lovelykiss': ('status', '4ee5d3ee'), 'gigadrain': ('other', '286a5ffe'), 'mirrorcoat': ('retaliation', '286a5ffe'),
-            'counter': ('retaliation', '0d661773')})   # A1 4ee5d3ee, A2 286a5ffe, R 0d661773, M1 8b212312: the engine merges
+        self.assertEqual(G.RETIRED, {'destinybond': ('volatile', '286a5ffe'), 'hyperbeam': ('multi_turn', '8b212312')})
         self.assertEqual((G.tier_of('hyperbeam'), G.guarded('hyperbeam', G.conditions(BASE, 0, request(OURS))['own'], 'breloom')), ('R', None))
         self.assertIn('hyperbeam', G.RECHARGE_MOVES)   # the live actor's own-recharge guard is separate and unchanged
         self.assertNotIn('destinybond', G.GUARDED);self.assertIn('destinybond', G.WATCHED);self.assertEqual(G.tier_of('destinybond'), 'R')
@@ -535,9 +543,54 @@ class RetiredTests(unittest.TestCase):
         self.assertEqual({m: t for m, (t, _, _) in G.GUARDED.items() if m not in changed},
                          {m: t for m, t in G.PRE_FLAG_TIERS.items() if m not in G.RETIRED and m not in changed})
         self.assertEqual({m: (G.PRE_FLAG_TIERS[m], G.GUARDED[m][0]) for m in changed}, changed)
-        self.assertEqual({m: G.PRE_FLAG_TIERS[m] for m in G.RETIRED}, {**dict.fromkeys(('destinybond', 'hyperbeam', 'curse', 'lovelykiss',
-            'gigadrain', 'mirrorcoat', 'counter'), 'A'), 'aromatherapy': 'C', 'refresh': 'C'})
-        self.assertEqual({m: c for m, (_, c, _) in BASE_RETIRED.items()}, {m: G.RETIRED[m][0] for m in BASE_RETIRED})   # same classes
+        self.assertEqual({m: G.PRE_FLAG_TIERS[m] for m in G.RETIRED}, {'destinybond': 'A', 'hyperbeam': 'A'})
+
+
+class LiveTableTests(unittest.TestCase):
+    """The guard's live tables: GUARDED after the A1 / A2 / R retirements, RETIRED with each move's engine merge (a screen declares
+    a move retired only on an engine at or after it), and every retired move recorded and never tripping, through evaluate."""
+    def live(self):
+        stack = tables(LIVE_GUARDED, LIVE_RETIRED)
+        for patch in stack:
+            patch.start();self.addCleanup(patch.stop)
+
+    def test_the_live_tables(self):
+        self.assertEqual(LIVE_RETIRED, {'destinybond': ('volatile', '286a5ffe'), 'hyperbeam': ('multi_turn', '8b212312'),
+            'curse': ('self_boost', '4ee5d3ee'), 'aromatherapy': ('status', '4ee5d3ee'), 'refresh': ('status', '4ee5d3ee'),
+            'lovelykiss': ('status', '4ee5d3ee'), 'charm': ('target_stat_change', '4ee5d3ee'), 'spore': ('status', '4ee5d3ee'),
+            'sleeppowder': ('status', '4ee5d3ee'), 'hypnosis': ('status', '4ee5d3ee'), 'gigadrain': ('other', '286a5ffe'),
+            'mirrorcoat': ('retaliation', '286a5ffe'), 'counter': ('retaliation', '0d661773'), 'bonemerang': ('other', '0d661773')})
+        self.assertEqual(sorted(m for m, v in LIVE_GUARDED.items() if v[0] == 'A'), ['knockoff', 'perishsong', 'superpower', 'transform', 'wrap', 'yawn'])
+        self.assertEqual(sorted(m for m, v in LIVE_GUARDED.items() if v[0] == 'C'), ['facade', 'psychoboost', 'sacredfire', 'trick'])
+        self.assertEqual({m: v for m, v in LIVE_GUARDED.items()}, {m: v for m, v in FIXTURE_GUARDED.items() if m not in LIVE_RETIRED})
+        self.assertEqual({m: FIXTURE_GUARDED[m][1] for m in LIVE_RETIRED if m in FIXTURE_GUARDED},
+                         {m: c for m, (c, _) in LIVE_RETIRED.items() if m in FIXTURE_GUARDED})   # each keeps its effect class
+        self.assertFalse(set(LIVE_RETIRED) & (set(LIVE_GUARDED) | set(G.TIER_B)));self.assertTrue(set(LIVE_RETIRED) <= G.WATCHED)
+        changed = {'trick': ('A', 'C')}   # M1: tier C under the knocked-off condition
+        self.assertEqual({m: t for m, (t, _, _) in LIVE_GUARDED.items() if m not in changed},
+                         {m: t for m, t in G.PRE_FLAG_TIERS.items() if m not in LIVE_RETIRED and m not in changed})
+
+    def test_every_retired_move_is_recorded_and_never_trips(self):
+        self.live()
+        for move in sorted(LIVE_RETIRED):
+            with self.subTest(move):
+                cond = G.conditions(BASE, 0, request(OURS, moves=(move, 'leechseed', 'substitute', 'protect')))
+                lanes = [move, 'leechseed', 'substitute', 'protect'];own = prior(0, .97)
+                child = dict(own_side=G.child_side(cond['own'], [('breloom', 0, True, False)]),
+                    opp_side=G.child_side(cond['opp'], [('snorlax', 0, True, False)], opponent=True))
+                logits, legal = prior(0, .9)
+                peer = [dict(world=0, lanes=[move, 'rest', 'sleeptalk', 'earthquake'], logits=logits, legal=legal, requested=True, user='snorlax')]
+                turn2 = [dict(world=0, cell=0, side=side, lanes=[move, 'rest', None, None], logits=logits, legal=legal, user=user, **child)
+                         for side, user in (('own', 'breloom'), ('opp', 'snorlax'))]
+                r = G.evaluate(cond, own_turn1=dict(lanes=lanes, logits=own[0], legal=own[1]), peer_turn1=peer, turn2=turn2, choice=0)
+                self.assertEqual((r['tripped'], r['b'], r['c'], r['a'], r['m_own'], r['m_opp'], r['reasons']), (False, False, False, False, 0., 0., []))
+                self.assertEqual(sorted((m['side'], m['move']) for m in r['masses']['turn1']), [('opp', move), ('own', move)])
+                self.assertEqual([(m['side'], m['guarded'], m['tier']) for m in r['masses']['turn2']], [('own', False, 'R'), ('opp', False, 'R')])
+                self.assertEqual(G.trips(r, 0), dict(tripped=False, b=False, c=False))
+        guarded = G.evaluate(G.conditions(BASE, 0, request(OURS, moves=('transform', 'leechseed', 'substitute', 'protect'))),
+            own_turn1=dict(lanes=['transform', 'leechseed', 'substitute', 'protect'], logits=prior(0, .97)[0], legal=prior(0, .97)[1]),
+            peer_turn1=[], turn2=[], choice=0)
+        self.assertEqual((guarded['tripped'], guarded['b_turn1'], guarded['c']), (True, True, True))   # Transform stays guarded
 
 
 KNOCK = ['|move|p1a: Breloom|Knock Off|p2a: Snorlax', '|-damage|p2a: Snorlax|80/100',
