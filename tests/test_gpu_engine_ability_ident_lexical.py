@@ -89,6 +89,4 @@ class AbilityIdentLexicalTests(unittest.TestCase):
    public=self.catalog.species.species_id(row['name']);mapped=int(self.adapter.device.ident_species[public]);base_id=self.catalog.species.species_id(row['baseSpecies'])
    self.assertEqual(mapped,base_id)
    if row['id'] in ('hooh','nidoranf','nidoranm'):self.assertEqual(public,mapped)
-  # transition.py is certified against CURRENT_TRANSITION (full AST plus mutations) by terminal_closeout and seismic_toss_components; entry.py: byte-exact against reviewed SOURCE_PINS in transition_observer_wiring's source-binding subtests.
-  for name in ('mechanics.py','engine_pressure_callbacks.py','engine_trace_callbacks.py'):
-   self.assertEqual(Path('gpu_engine',name).read_bytes(),subprocess.check_output(['git','show','b8092a85:gpu_engine/'+name]))
+  # transition.py is certified against CURRENT_TRANSITION (full AST plus mutations) by terminal_closeout and seismic_toss_components; entry, mechanics, engine_pressure_callbacks and engine_trace_callbacks: byte-exact against reviewed SOURCE_PINS in transition_observer_wiring's source-binding subtests.

@@ -66,16 +66,9 @@ class SleepGuardDiagnosticsTests(unittest.TestCase):
         self.assertFalse(bool(got.sleep_guard_known[1::2].any()))
 
     def test_original_helper_body_and_physical_files_exact(self):
-        p='gpu_engine/engine_sleep_blocked_callbacks.py';old=ast.parse(subprocess.check_output(['git','show','b8092a85:'+p],text=True));new=ast.parse(Path(p).read_text())
-        class Remove(ast.NodeTransformer):
-            def visit_ImportFrom(self,n):
-                return None if any(x.name=='engine_outcome_diagnostics'for x in n.names) else self.generic_visit(n)
-            def visit_Assign(self,n):
-                return None if isinstance(n.value,ast.Call)and isinstance(n.value.func,ast.Attribute)and n.value.func.attr=='record_sleep_guard_on_tape' else self.generic_visit(n)
-        self.assertEqual(ast.dump(old,include_attributes=False),ast.dump(new,include_attributes=False))
-        self.assertEqual(ast.dump(Remove().visit(old),include_attributes=False),ast.dump(Remove().visit(new),include_attributes=False))
+        # engine_sleep_blocked_callbacks, mechanics, kernel_frame_risk, execution_completeness and the driver: byte-exact against reviewed SOURCE_PINS in transition_observer_wiring's source-binding subtests.
         # transition.py is certified against CURRENT_TRANSITION (full AST plus mutations) by terminal_closeout and seismic_toss_components.
-        for p in ('mechanics.py','engine_kernel_frame_risk.py','engine_execution_completeness.py','engine_retained_encoder_driver.py','benchmark_capture_gap_census.py'):
+        for p in ('benchmark_capture_gap_census.py',):
             self.assertEqual(Path('gpu_engine',p).read_bytes(),subprocess.check_output(['git','show','b8092a85:gpu_engine/'+p]))
 
     def test_fixed_array_carry_traces_without_kernel_execution(self):

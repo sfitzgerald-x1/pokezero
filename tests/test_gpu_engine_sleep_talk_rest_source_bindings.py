@@ -16,9 +16,8 @@ class SleepTalkRestSourceTests(unittest.TestCase):
   old=subprocess.check_output(['git','show','3a1655ad73da6f61fa5cbe5961c40600587162dc:gpu_engine/transition.py'],text=True)
   historical=ast.parse(subprocess.check_output(['git','show','76ef9e6b:gpu_engine/transition.py'],text=True))
   baseline=dump_default_program(ast.parse(old));self.assertEqual(dump_default_program(historical),baseline);assert_hp_rng_mutations_detected(self,historical,baseline)
-  # transition.py is certified against CURRENT_TRANSITION (full AST plus mutations) by terminal_closeout and seismic_toss_components; state.py and effects.py: byte-exact against reviewed SOURCE_PINS in transition_observer_wiring's source-binding subtests.
+  # transition.py is certified against CURRENT_TRANSITION (full AST plus mutations) by terminal_closeout and seismic_toss_components; mechanics, sleep_talk, state, sustain and effects: byte-exact against reviewed SOURCE_PINS in transition_observer_wiring's source-binding subtests.
   for name in ('mechanics','sleep_talk','state','sustain','effects'):
    historical=subprocess.check_output(['git','show','76ef9e6b:gpu_engine/'+name+'.py'])
    self.assertEqual(historical,subprocess.check_output(['git','show','3a1655ad73da6f61fa5cbe5961c40600587162dc:gpu_engine/'+name+'.py']))
-   if name not in ('state','effects'):self.assertEqual((ROOT/(name+'.py')).read_bytes(),subprocess.check_output(['git','show','b8092a85:gpu_engine/'+name+'.py']))
 if __name__=='__main__':unittest.main()

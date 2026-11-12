@@ -84,7 +84,8 @@ class BeforeMoveDiagnosticsTests(unittest.TestCase):
         kw={k.arg:k.value for k in recorded.keywords}
         for k in original.keywords:self.assertEqual(dump(k.value),dump(kw[k.arg]),k.arg)
         self.assertEqual(recorded.args[1].id,'before');self.assertGreater(recorded.lineno,original.lineno)
-        for name in ('mechanics.py','engine_execution_completeness.py','engine_kernel_frame_risk.py','engine_retained_encoder_driver.py','benchmark_retained_games.py'):
+        # mechanics, engine_execution_completeness, engine_kernel_frame_risk and engine_retained_encoder_driver: byte-exact against reviewed SOURCE_PINS in transition_observer_wiring's source-binding subtests.
+        for name in ('benchmark_retained_games.py',):
             self.assertEqual(Path('gpu_engine',name).read_bytes(),subprocess.check_output(['git','show','b8092a85:gpu_engine/'+name]))
 
     def test_original_context_replacement_and_frame_row_commit_retain_tail(self):

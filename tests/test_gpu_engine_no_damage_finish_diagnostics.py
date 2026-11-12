@@ -62,7 +62,8 @@ class NoDamageDiagnosticTests(unittest.TestCase):
    def visit_Name(self,node):return ast.Call(ast.Name('scheduled',ast.Load()),[ast.Name('p',ast.Load()),ast.Name('w',ast.Load())],[])if node.id=='scheduled_result'else node
   self.assertEqual(ast.dump(OriginalScheduled().visit(current)),ast.dump(a['finish']))
   # transition.py is certified against CURRENT_TRANSITION (full AST plus mutations) by terminal_closeout and seismic_toss_components.
-  for file in ('engine_retained_encoder_driver.py','benchmark_capture_gap_census.py','engine_execution_completeness.py','engine_kernel_frame_risk.py','engine_lifecycle_event_device.py','engine_full_v4_event_device.py'):
+  # the driver, execution_completeness, kernel_frame_risk, lifecycle_event_device and full_v4_event_device: byte-exact against reviewed SOURCE_PINS in transition_observer_wiring's source-binding subtests.
+  for file in ('benchmark_capture_gap_census.py',):
    self.assertEqual(Path('gpu_engine',file).read_bytes(),subprocess.check_output(['git','show','b8092a85:gpu_engine/'+file]),file)
   t,p,w,kw=self.fixture();capture=d.record_no_damage_on_tape(t,p,w,**kw).execution.diagnostics
   class HostOnly:

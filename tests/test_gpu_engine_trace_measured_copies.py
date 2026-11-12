@@ -132,7 +132,7 @@ class MeasuredCopies(unittest.TestCase):
   self.assertEqual(np.nonzero(np.asarray(self.adapter.device.trace_copy))[0].tolist(),[1,3,4,5,6])
   for file in ('mechanics.py','engine_weather_speed_profile.py'):
    self.assertEqual(subprocess.check_output(['git','show','d7300cc4:gpu_engine/'+file]),subprocess.check_output(['git','show','dc981dd8:gpu_engine/'+file]))
-   self.assertEqual(Path('gpu_engine',file).read_bytes(),subprocess.check_output(['git','show','b8092a85:gpu_engine/'+file]))
+  # mechanics and engine_weather_speed_profile: byte-exact against reviewed SOURCE_PINS in transition_observer_wiring's source-binding subtests.
   # The newly reviewed Sleep Powder observer and distinct hypothetical seam
   # intentionally change transition bytes. Preserve whole ordinary AST identity
   # after ONLY hypothetical normalization, rather than dropping that assertion.
@@ -152,9 +152,7 @@ class MeasuredCopies(unittest.TestCase):
   enter=lambda source:next(n for n in ast.parse(source).body if isinstance(n,ast.FunctionDef)and n.name=='enter')
   historical_entry=subprocess.check_output(['git','show','d7300cc4:gpu_engine/entry.py'],text=True)
   self.assertEqual(dump_default_program(enter(old_entry)),dump_default_program(enter(historical_entry)))
-  # entry.py: byte-exact against reviewed SOURCE_PINS in transition_observer_wiring's source-binding subtests.
-  for file in ('engine_execution_completeness.py',):
-   self.assertEqual(Path('gpu_engine',file).read_bytes(),subprocess.check_output(['git','show','b8092a85:gpu_engine/'+file]))
+  # entry.py and engine_execution_completeness.py: byte-exact against reviewed SOURCE_PINS in transition_observer_wiring's source-binding subtests.
   root=Path(os.environ['POKEZERO_SHOWDOWN_ROOT']);self.assertEqual(subprocess.check_output(['git','-C',str(root),'rev-parse','HEAD'],text=True).strip(),'f76228a1354b5d0f307ca2d16101294ad3a2308b')
   script=r'''
 const path=require('node:path');const root=process.argv[1];const {Dex}=require(path.join(root,'dist/sim/dex.js'));const {Pokemon}=require(path.join(root,'dist/sim/pokemon.js'));

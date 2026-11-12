@@ -83,9 +83,8 @@ class HostTimingTests(unittest.TestCase):
   self.assertEqual(stripped,original)
   json.dumps(actual,allow_nan=False)
   # transition.py is certified against CURRENT_TRANSITION (full AST plus mutations) by terminal_closeout and seismic_toss_components.
-  for path in('engine_retained_encoder_driver.py',):
-   self.assertEqual(Path('gpu_engine',path).read_bytes(),subprocess.check_output(['git','show','b8092a85:gpu_engine/'+path]))
-  # The driver source remains exact at the reviewed current composition;
+  # engine_retained_encoder_driver.py: byte-exact against reviewed SOURCE_PINS in transition_observer_wiring's source-binding subtests.
+  # The driver source is bound by its reviewed pin;
   # historical ac13 preceded the separately reviewed built-in timing/inputs.
 
 if __name__=='__main__':unittest.main()
