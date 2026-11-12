@@ -149,8 +149,10 @@ base's arrays, the restored stages (this tree's = the base's + the recorded rais
 consumed item (White Herb in the base, none here), a holder the base knocked off afterwards (item_knocked, credit),
 and a Trick partner that got the herb only in the base; item-family slot differences must lie at an active of either
 side. Facade stays involved only for a side whose own Facade line ran under par/brn/psn/tox (recorded at the move hook).
-Explained lane-steps are counted as wh_leaves; malformed calls as wh_bad; lanes that lost the involvement as
-wh_dropped and facade_dropped.
+A pinch berry eaten in exactly one tree on a White Herb or Facade lane (its holder's damage moved across the
+quarter-HP line) is explained per mon by pinch_rule (one stage in its own stat, the item, the device's reveal at its
+slot). Explained lane-steps are counted as wh_leaves (pinch_leaves for berries); malformed calls as wh_bad; lanes that
+lost the involvement as wh_dropped and facade_dropped.
 
 KO cascade rule for the saved effect block (fidelity R's state.effect_draws,
 found by the M1 GPU pass): once the base pass has the leaf it is compared
@@ -506,8 +508,8 @@ def facade_status(p):
 
 
 def frozen_defrost(p):
-    """WH: a frozen active that may execute Sacred Fire (the only defrost move in the Gen 3 vocabulary with a pool user;
-    Ho-Oh is Fire, so no capture has one)."""
+    """WH: a frozen active that may execute Sacred Fire (the only defrost move with a pool user: Ho-Oh, which Gen 3 can
+    freeze, the typechart giving frz immunity to Ice alone)."""
     return p.side_uses('sacredfire') & (p.active('status') == FRZ)
 
 
@@ -760,7 +762,8 @@ FAMILIES['m2'] = tuple(f'^{re.escape(n)}$' for n in M2_COUNTER_LEAVES) + (rf'^{r
 # landing by HP, the belief refresh of an HP line). wh_rule also drops the effect from a lane with no valid recorded use.
 # Facade: its doubled damage (the target's HP and what follows, the user's HP from a Counter reply); facade_rule keeps the
 # effect only for a side whose own Facade line ran under par/brn/psn/tox in this tree. Sacred Fire: whether a frozen user
-# acts at all, so, like a sleep landing (A1), anything; only a frozen user is involved (no capture has one).
+# acts at all, so, like a sleep landing (A1), anything; only a frozen user is involved. pinch_rule (both effects): a pinch
+# berry eaten in exactly one tree because the damage differs, per mon (M1's pinch witness).
 ALLOWED['whiteherb'] = dict(user=('hp', 'visible', 'subtracker', 'wish'), target=('hp', 'visible', 'subtracker', 'wish'), glob=())
 ALLOWED['facade'] = dict(user=('hp', 'visible', 'subtracker', 'wish'), target=('hp', 'visible', 'subtracker', 'wish'), glob=())
 ALLOWED['sacredfire'] = ALL
@@ -1368,6 +1371,53 @@ def wh_rule(entries, w):
     return entries - explained, sorted(explained, key=str)
 
 
+def pinch_rule(entries, w):
+    """WH: a pinch berry (Liechi, Petaya, Salac) eaten in exactly one tree on a White Herb or Facade lane, whose changed
+    damage moved its holder across the quarter-HP line (the GPU pass at 5951098e: a doubled Facade's target ate its berry
+    in this tree only). w: wit / base (this tree's and the base's witness arrays for the lane), pre_item [2,6] (this
+    lane's pre-step items), pinch {item id: stat}, p2p, acting [2,6]. Per side, the berry mons are actives whose pre-step
+    item is a pinch berry held at the end in exactly one tree; then state.item differs only there, state.boosts only there
+    by exactly +1 (eaten here) or -1 (eaten only in the base) in the berry's own stat (trackers.boosts likewise per public
+    slot), and the device's item reveal, removal, narrowing, visible basis and flags only at their slots.
+    Returns (remaining entries, explained entries)."""
+    wit, base, pinch = w['wit'], w['base'], w['pinch'];explained = set()
+    if not pinch or 'state.item' not in wit or 'state.item' not in base:return entries, []
+    pre = np.asarray(w['pre_item']);p2p = np.asarray(w['p2p']);acting = np.asarray(w['acting'], bool)
+    stat = np.vectorize(lambda i: pinch.get(int(i), -1))(pre)
+    here, there = np.asarray(wit['state.item']), np.asarray(base['state.item'])
+    sign = np.where(acting & (stat >= 0) & (here == 0) & (there == pre), 1,
+                    np.where(acting & (stat >= 0) & (there == 0) & (here == pre), -1, 0))
+    for side in (0, 1):
+        berry = sign[side] != 0
+        if not berry.any():continue
+        slots = _slots(berry, p2p[side])
+        def staged(a, b, mons_stat, mons_sign):
+            d = np.asarray(a).astype(np.int64) - np.asarray(b).astype(np.int64);ok = True
+            for k in np.flatnonzero(d.reshape(d.shape[0], -1).any(-1)):
+                want = np.zeros(d.shape[1], np.int64)
+                if mons_stat[k] < 0:return False
+                want[mons_stat[k]] = mons_sign[k];ok &= bool(np.array_equal(d[k], want))
+            return ok
+        for leaf, s_ in sorted(entries, key=str):
+            if s_ != side or leaf not in wit or leaf not in base:continue
+            a, b = np.asarray(wit[leaf])[side], np.asarray(base[leaf])[side]
+            if a.ndim == 0:continue
+            diff = _differ(a, b)
+            if not diff.any():continue
+            if leaf == 'state.item':ok = not (diff & ~berry).any()
+            elif leaf == 'state.boosts':ok = not (diff & ~berry).any() and staged(a, b, np.where(berry, stat[side], -1), sign[side])
+            elif leaf == 'trackers.boosts':
+                by_slot_stat = np.full(6, -1);by_slot_sign = np.zeros(6, np.int64)
+                for m in np.flatnonzero(berry):
+                    k = int(p2p[side, m])
+                    if 0 <= k < 6:by_slot_stat[k] = stat[side, m];by_slot_sign[k] = sign[side, m]
+                ok = not (diff & ~slots).any() and staged(a, b, by_slot_stat, by_slot_sign)
+            elif leaf in WH_SLOT_LEAVES or leaf.startswith(WH_VISIBLE):ok = not (diff & ~slots).any()
+            else:continue
+            if ok:explained.add((leaf, side))
+    return entries - explained, sorted(explained, key=str)
+
+
 def facade_actors(sides, doubled):
     """WH: the Facade involvement a lane keeps: its pre-state actor sides whose own Facade line ran in this tree while the
     user had par, brn, psn or tox (recorded at the move hook: the status Facade's onBasePower reads)."""
@@ -1798,7 +1848,7 @@ def patched_pass(args, *, step_override=None, prepared=None):
                   changed_involved_unexpected_fields=0, ko_cascade=0, phase_shift=0, terminal=0, terminal_residual=0, waived=0,
                   rule_explained=0, faint_rule_leaves=0, clear_volatile_leaves=0, effect_draws_saved=0,
                   recharge_leaves=0, bag_leaves=0, trick_witness_leaves=0, ledger_leaves=0, m2_leaves=0, m2_wrong_mon=0, m2_forced=0,
-                  wh_leaves=0, wh_bad=0, wh_dropped=0, facade_dropped=0)
+                  wh_leaves=0, wh_bad=0, wh_dropped=0, facade_dropped=0, pinch_leaves=0)
     clear_volatile = 'B' in plugins
     m1_rules = 'M1' in plugins
     # M1 review: the base's per-lane witness arrays (wit_XX); the M1 rules compare per mon and per bag column.
@@ -2022,6 +2072,11 @@ def patched_pass(args, *, step_override=None, prepared=None):
                     w['raise'] = wh_lane['raise_']
                     entries, wh_explained = wh_rule(entries, w)
                     counts['wh_leaves'] += bool(wh_explained)
+                    if 'whiteherb' in effects or 'facade' in effects:
+                        # A pinch berry eaten in one tree only, the changed damage having moved its holder across 25%.
+                        w.update(pre_item=item_pre[lane], pinch=pinch_ids)
+                        entries, pinch_explained = pinch_rule(entries, w)
+                        wh_explained = wh_explained + pinch_explained;counts['pinch_leaves'] += bool(pinch_explained)
                 rule_ok = bool(changed) and not entries
                 changed_rest = sorted({leaf for leaf, _ in entries})
                 phase = bool(phase_lanes[lane]);terminal = bool(terminal_lanes[lane]) and not phase

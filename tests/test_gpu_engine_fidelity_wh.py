@@ -298,6 +298,35 @@ class RegressRuleTests(unittest.TestCase):
         lane = self.lane(base={'state.item': partner}, acting=np.zeros((2, 6), bool))
         self.assertEqual(self.rule([('state.item', 1)], lane)[0], {('state.item', 1)})                    # not an active
 
+    def test_a_pinch_berry_eaten_in_one_tree_only(self):
+        """pinch_rule (the GPU pass at 5951098e: a doubled Facade's target ate its Salac Berry here only): the berry mon's
+        item, its +1 in the berry's stat and the device's reveal at its slot are explained; a second stage, another stat,
+        a non-berry item or a bench mon are not."""
+        from gpu_engine import v2e_regress as r
+        SALAC = 3
+        pre = np.zeros((2, 6), np.int32);pre[0, 0] = SALAC
+        item_here = np.zeros((2, 6), np.int32);item_base = pre.copy()
+        boost_here = np.zeros((2, 6, 7), np.int32);boost_here[0, 0, 4] = 1;boost_base = np.zeros((2, 6, 7), np.int32)
+        shown_here = np.zeros((2, 6), np.int32);shown_here[0, 0] = SALAC
+        acting = np.zeros((2, 6), bool);acting[:, 0] = True
+        def lane(**over):
+            w = dict(wit={'state.item': item_here, 'state.boosts': boost_here, 'trackers.boosts': boost_here.copy(),
+                          'trackers.shown_item': shown_here}, base={'state.item': item_base, 'state.boosts': boost_base,
+                          'trackers.boosts': boost_base.copy(), 'trackers.shown_item': np.zeros((2, 6), np.int32)},
+                     pre_item=pre, pinch={SALAC: 4}, p2p=np.broadcast_to(np.arange(6), (2, 6)).copy(), acting=acting)
+            for k, v in over.items():
+                if k in ('wit', 'base'):w[k] = dict(w[k], **v)
+                else:w[k] = v
+            return w
+        entries = [('state.item', 0), ('state.boosts', 0), ('trackers.boosts', 0), ('trackers.shown_item', 0)]
+        self.assertEqual(r.pinch_rule(set(entries), lane())[0], set())
+        two = boost_here.copy();two[0, 0, 4] = 2
+        self.assertIn(('state.boosts', 0), r.pinch_rule(set(entries), lane(wit={'state.boosts': two}))[0])
+        other = np.zeros((2, 6, 7), np.int32);other[0, 0, 0] = 1
+        self.assertIn(('state.boosts', 0), r.pinch_rule(set(entries), lane(wit={'state.boosts': other}))[0])
+        self.assertEqual(r.pinch_rule(set(entries), lane(pinch={}))[0], set(entries))                    # not a pinch berry
+        self.assertEqual(r.pinch_rule(set(entries), lane(acting=np.zeros((2, 6), bool)))[0], set(entries))   # off the actives
+
     def test_facade_keeps_only_sides_whose_line_doubled(self):
         from gpu_engine.v2e_regress import facade_actors
         self.assertEqual(facade_actors([0, 1], np.array([True, False])), [0])
