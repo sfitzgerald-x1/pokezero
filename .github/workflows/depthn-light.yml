@@ -83,8 +83,9 @@ jobs:
           python scripts/run_component_memory_check.py --output "$memory_dir" --label depthn --summary "$GITHUB_STEP_SUMMARY" -- \
             python -m unittest discover -s tests -t . -p 'test_depthn_*.py' -v 2>&1 | tee "$memory_dir/depthn.log"
           # Every dependency is installed above, so a skip means one went missing: fail rather than pass silently.
-          # Anchored: the unittest summary line, or a verbose per-test, per-class or per-module skip.
-          if grep -Eq "^(OK|FAILED) \(.*skipped=[1-9]|\.\.\. skipped '" "$memory_dir/depthn.log"; then
+          # Anchored: the unittest summary line, or a verbose per-test, per-class or per-module skip. unittest prints the
+          # reason with repr, so a reason holding an apostrophe comes in double quotes.
+          if grep -Eq "^(OK|FAILED) \(.*skipped=[1-9]|\.\.\. skipped ['\"]" "$memory_dir/depthn.log"; then
             echo '::error::DepthN tests skipped; torch, node, the built Showdown or full git history is missing'
             exit 1
           fi
