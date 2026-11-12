@@ -70,7 +70,8 @@ class SleepClauseTests(unittest.TestCase):
         c = G.conditions(BASE + ['|-status|p2a: Snorlax|slp'], 0, request(OURS))
         self.assertEqual(G.guarded('spore', c['own'], 'breloom', other=c['opp']), ('C', 'status'))
         self.assertEqual(G.guarded('hypnosis', c['opp'], 'snorlax', other=c['own']), None)   # our side has no sleeper
-        self.assertEqual(G.guarded('destinybond', c['own'], 'breloom'), ('A', 'volatile'))   # tier A: always
+        self.assertEqual(G.guarded('perishsong', c['own'], 'breloom'), ('A', 'volatile'))   # tier A: always
+        self.assertIsNone(G.guarded('destinybond', c['own'], 'breloom'))   # retired: never guarded
         self.assertIsNone(G.guarded('irontail', c['own'], 'breloom'))   # tier B: never guarded
 
 
@@ -212,7 +213,7 @@ class EvaluateTests(unittest.TestCase):
         cells = [dict(world=w, cell=a * 9 + b, side=side, lanes=lanes, logits=prior(k, q)[0], legal=prior(k, q)[1], user=user, **child)
                  for w, a, b, side, lanes, user, k, q in ((0, 0, 0, 'own', ['spore', 'gigadrain', None, None], 'breloom', 0, .3),
                      (0, 1, 2, 'opp', ['curse', 'rest', 'facade', None], 'snorlax', 1, .7), (1, 2, 0, 'own', ['substitute', 'gigadrain', 'spore', None], 'breloom', 2, .6),
-                     (1, 0, 0, 'opp', ['destinybond', None, None, None], 'snorlax', 0, .9))]
+                     (1, 0, 0, 'opp', ['perishsong', None, None, None], 'snorlax', 0, .9))]
         own = prior(0, .4);record = G.evaluate(self.cond, own_turn1=dict(lanes=self.own_lanes, logits=own[0], legal=own[1]), peer_turn1=self.two_worlds(),
             turn2=cells)
         worlds = [dict(requested=w['requested'], logits=w['logits'], kept=w['legal']) for w in self.two_worlds()]
@@ -280,7 +281,7 @@ class EvaluateTests(unittest.TestCase):
         self.assertIs(actor.RECHARGE_MOVES, G.RECHARGE_MOVES);self.assertIs(actor.own_moves, G.own_moves)
         self.assertIs(actor.recharge_guarded, G.recharge_guarded);self.assertEqual(actor.EFFECT_GUARD, 'UNREPRESENTED_EFFECT')
         self.assertTrue({'hyperbeam', 'gigadrain', 'aromatherapy'} <= G.WATCHED and not G.WATCHED & {'surf', 'earthquake'})
-        self.assertEqual(sorted(k for k, v in G.GUARDED.items() if v[0] == 'A'), sorted(('hyperbeam', 'destinybond', 'transform', 'yawn', 'wrap',
+        self.assertEqual(sorted(k for k, v in G.GUARDED.items() if v[0] == 'A'), sorted(('hyperbeam', 'transform', 'yawn', 'wrap',
             'perishsong', 'trick', 'counter', 'mirrorcoat', 'curse', 'superpower', 'knockoff', 'charm', 'lovelykiss', 'bonemerang', 'gigadrain')))
 
 
@@ -343,7 +344,7 @@ class ReachTests(unittest.TestCase):
 
     def entries(self, flags):
         g = (lambda x: x) if flags else (lambda x: None)
-        return [entry(0, 0, 1, 'opp', 'destinybond', .4, g(True)),   # tier A
+        return [entry(0, 0, 1, 'opp', 'perishsong', .4, g(True)),   # tier A
                 entry(0, 1, 0, 'own', 'spore', .2, g(False)),   # tier C, its condition false at that child
                 entry(0, 0, 1, 'own', 'spore', .3, g(True)),   # tier C, true there
                 entry(1, 1, 0, 'opp', 'facade', .5, g(True)),   # the waiting world's cell (a=1, b=0)
@@ -372,7 +373,7 @@ class ReachTests(unittest.TestCase):
         self.assertEqual(r['tripped'], True)   # the lower bound already trips
 
     def test_an_ambiguous_row_and_a_clear_one(self):
-        straddle = [e for e in self.entries(False) if e['move'] != 'destinybond']   # lower 0, upper above the threshold
+        straddle = [e for e in self.entries(False) if e['move'] != 'perishsong']   # lower 0, upper above the threshold
         r = self.reach(straddle)
         self.assertEqual((r['tripped'], r['tripped_lower'], r['tripped_upper']), (None, False, True))
         clear = self.reach([entry(0, 0, 1, 'opp', 'spore', .01), entry(1, 1, 0, 'own', 'hyperbeam', .001)])
@@ -411,9 +412,11 @@ class ReachTests(unittest.TestCase):
 
     def test_lower_at_most_exact_at_most_upper_on_random_records(self):
         """Randomized records whose turn-2 entries carry the guard's own flags (G.guarded on each child's sides, as evaluate decides):
-        the bounds of the same record without the flags bracket its exact M, both sides."""
+        the bounds of the same record without the flags bracket its exact M, both sides. Moves whose tier changed since records
+        carried no flags (RETIRED ones) are left out: a record without the flags was written before that change."""
         import random
-        rng = random.Random(20261109);moves = sorted(G.WATCHED);status = (0, 0, 0, 1, 2, 3, 4, 5, 6)
+        rng = random.Random(20261109);moves = sorted(m for m in G.WATCHED if G.PRE_FLAG_TIERS.get(m, G.tier_of(m)) == G.tier_of(m))
+        status = (0, 0, 0, 1, 2, 3, 4, 5, 6)
         opp_pool = ['snorlax', 'ursaring', 'swellow', 'gengar', 'deoxys', 'deoxysattack', 'deoxysspeed', 'bellossom']
         for trial in range(300):
             deoxys = rng.choice(['deoxys', 'deoxysattack', 'deoxysspeed', None])   # the opponent's one Deoxys form, if any
@@ -448,6 +451,50 @@ class ReachTests(unittest.TestCase):
         for record in (G.error_record('x'), reach_record([], available=False), None):
             r = G.reach(record, self.root_logits, self.root_legal, self.worlds)
             self.assertEqual((r['tripped'], r['tripped_lower'], r['tripped_upper'], r['unavailable'], r['m_own_lower']), (True, True, True, True, None))
+
+
+
+
+class RetiredTests(unittest.TestCase):
+    """RETIRED (destinybond since A2's merge 286a5ffe): watched and recorded, never guarded, never in the reach; a record written
+    while it was tier A keeps its own M."""
+    def test_destiny_bond_is_watched_never_guarded(self):
+        self.assertEqual(G.RETIRED, {'destinybond': ('volatile', '286a5ffe')})
+        self.assertNotIn('destinybond', G.GUARDED);self.assertIn('destinybond', G.WATCHED);self.assertEqual(G.tier_of('destinybond'), 'R')
+        self.assertFalse(set(G.RETIRED) & (set(G.GUARDED) | set(G.TIER_B)))
+
+    def test_a_retired_lane_is_recorded_and_never_trips(self):
+        cond = G.conditions(BASE, 0, request(OURS, moves=('destinybond', 'leechseed', 'substitute', 'protect')))
+        lanes = ['destinybond', 'leechseed', 'substitute', 'protect'];own = prior(0, .97)
+        child = dict(own_side=G.child_side(cond['own'], [('breloom', 0, True, False)]),
+            opp_side=G.child_side(cond['opp'], [('snorlax', 0, True, False)], opponent=True))
+        logits, legal = prior(0, .9)
+        peer = [dict(world=0, lanes=['destinybond', 'rest', 'sleeptalk', 'earthquake'], logits=logits, legal=legal, requested=True, user='snorlax')]
+        turn2 = [dict(world=0, cell=0, side=side, lanes=['destinybond', 'rest', None, None], logits=logits, legal=legal, user=user, **child)
+                 for side, user in (('own', 'breloom'), ('opp', 'snorlax'))]
+        r = G.evaluate(cond, own_turn1=dict(lanes=lanes, logits=own[0], legal=own[1]), peer_turn1=peer, turn2=turn2, choice=0)
+        self.assertEqual((r['tripped'], r['b'], r['c'], r['a'], r['m_own'], r['m_opp'], r['reasons']), (False, False, False, False, 0., 0., []))
+        self.assertEqual(r['own_guarded_lanes'], [None] * 4)
+        self.assertEqual(sorted((m['side'], m['move']) for m in r['masses']['turn1']), [('opp', 'destinybond'), ('own', 'destinybond')])
+        self.assertEqual([(m['side'], m['guarded'], m['tier']) for m in r['masses']['turn2']], [('own', False, 'R'), ('opp', False, 'R')])
+        self.assertEqual(G.trips(r, 0), dict(tripped=False, b=False, c=False))
+
+    def test_an_exact_record_from_before_the_shrink_keeps_its_m(self):
+        root_logits, root_legal = ReachTests.root_logits, ReachTests.root_legal
+        before = dict(entry(0, 0, 1, 'opp', 'destinybond', .4), guarded=True, tier='A', user='x')   # as the tier-A guard wrote it
+        r = G.reach(reach_record([before]), root_logits, root_legal, ReachTests.worlds)
+        self.assertTrue(r['exact']);self.assertAlmostEqual(r['m_opp'], .5 * .75 * .75 * .4, places=15);self.assertTrue(r['tripped'])
+        now = G.reach(reach_record([entry(0, 0, 1, 'opp', 'destinybond', .4, False)]), root_logits, root_legal, ReachTests.worlds)
+        self.assertEqual((now['m_opp'], now['tripped']), (0., False))
+        old = G.reach(reach_record([entry(0, 0, 1, 'opp', 'destinybond', .4)]), root_logits, root_legal, ReachTests.worlds)
+        self.assertFalse(old['exact'])   # a pre-`guarded` record: its bounds keep the tiers it was written under (tier A)
+        self.assertEqual((old['m_opp_lower'], old['m_opp_upper'], old['tripped']), (.5 * .75 * .75 * .4, .5 * .75 * .75 * .4, True))
+        bare = dict(entry(0, 0, 1, 'opp', 'destinybond', .4), guarded=True)   # flagged but no tier: counted (bucket A)
+        self.assertAlmostEqual(G.reach(reach_record([bare]), root_logits, root_legal, ReachTests.worlds)['tiers']['lower']['opp']['A'], .1125, places=15)
+
+    def test_the_pre_flag_tiers_are_the_guard_before_retirement(self):
+        self.assertEqual({m: t for m, (t, _, _) in G.GUARDED.items()}, {m: t for m, t in G.PRE_FLAG_TIERS.items() if m not in G.RETIRED})
+        self.assertEqual({m: G.PRE_FLAG_TIERS[m] for m in G.RETIRED}, {'destinybond': 'A'})
 
 
 if __name__ == '__main__':
