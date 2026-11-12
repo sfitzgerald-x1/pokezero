@@ -79,6 +79,11 @@ for(const [name,t] of Object.entries({
   v2_short_effect_row:T('i4',{'effect':[[0,0,0],[0,0,0,0]]}),
 })){const b=battle([mon('Snorlax',['splash'],'Thick Fat')],[mon('Blissey',['splash'],'Natural Cure')]);out.invalid[name]=turn(b,t).error;}
 {const b=battle([mon('Snorlax',['splash'],'Thick Fat')],[mon('Blissey',['splash'],'Natural Cure')]);out.v1_ok=turn(b,T('ok',{},'v1')).error;}
+// M2: an equal-Speed turn (eachEvent BeforeTurn/Update Pokemon-order ties with no handler are inert), the same with an
+// Update handler (Insomnia's onUpdate: unresolved), and the Yawn residual pair (inert).
+{const b=battle([mon('Snorlax',['splash'],'Thick Fat')],[mon('Snorlax',['splash'],'Thick Fat')]);out.eachevent=turn(b,T('ee'));}
+{const b=battle([mon('Hypno',['splash'],'Insomnia')],[mon('Hypno',['splash'],'Insomnia')]);out.eachevent_handler=turn(b,T('eh'));}
+out.yawntie=pairTie('yawn',{});
 process.stdout.write(JSON.stringify(out));
 '''
 
@@ -150,6 +155,17 @@ class ChanceHooksV2Tests(unittest.TestCase):
         r = self.out['protect'];self.assertResolved(r)
         ties = [e for e in r['events'] if e['kind'] == 'INERT_RESIDUAL_TIE']
         self.assertEqual(len(ties), 1);self.assertEqual(sorted(ties[0]['effects']), ['protect', 'stall'])
+
+    def test_equal_speed_each_event_and_yawn_pair_ties(self):
+        """M2: an eachEvent Pokemon-order tie is inert only when neither Pokemon has a handler for that event (both runEvent
+        calls do nothing); the Yawn residual pair is inert (each countdown and sleep attempt touch only their holder)."""
+        r = self.out['eachevent'];self.assertResolved(r)
+        ties = [e for e in r['events'] if e['kind'] == 'INERT_EACH_EVENT_TIE']
+        self.assertTrue(ties);self.assertTrue({e['event'] for e in ties} <= {'BeforeTurn', 'Update'})
+        self.assertEqual(coupled(r), [('move_tie', 0, 0)])
+        self.assertIn('SPIKE_UNRESOLVED:TIE_ORDER', self.out['eachevent_handler']['error'])
+        r = self.out['yawntie'];self.assertResolved(r);self.assertEqual(coupled(r), [])
+        self.assertEqual([e['effects'] for e in r['events'] if e['kind'] == 'INERT_RESIDUAL_TIE'], [['yawn', 'yawn']])
 
     def test_tape_schema_validation(self):
         for name, error in self.out['invalid'].items():
