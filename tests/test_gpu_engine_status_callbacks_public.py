@@ -1,6 +1,6 @@
 """Literal actual-core status writes into existing FULL consumers, no games.
 
-Light replacement coverage for engine_status_callbacks' tests (its fixture API stays in that module): the same
+Light replacement coverage for engine_status_callbacks' tests (its fixture API is tests/gpu_engine_status_callbacks_fixture.py): the same
 tests and assertions, with compare's causal projection and reference folds on one compiled program each
 (tests/gpu_engine_shared_public_jits.py, test-local routing) instead of eager scans. The hot-jit test is
 test_gpu_engine_status_callbacks_hot_jit.
@@ -18,7 +18,7 @@ from gpu_engine import transition as t, engine_lifecycle_callbacks as life, engi
 from gpu_engine import engine_public_event_device as base, engine_full_v4_event_device as full
 from gpu_engine import engine_status_callbacks as status, public_wire, public_inputs as inputs, v4_encoder as v4
 import gpu_engine_shared_public_jits as shared
-import test_gpu_engine_engine_status_callbacks as fixture
+import gpu_engine_status_callbacks_fixture as fixture
 
 
 class StatusCallbacksPublicTests(unittest.TestCase):
