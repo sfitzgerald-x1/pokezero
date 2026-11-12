@@ -10,11 +10,12 @@ from scripts.run_component_memory_check import (CGROUP_SOURCE, PF_FORKNOEXEC, PS
     own_cgroup, run, snapshot)
 
 
-def fake_process(root, pid, *, rss, hwm, pss=0, flags=0, tasks=None):
+def fake_process(root, pid, *, rss, hwm, pss=0, flags=0, tasks=None, file=0):
     """A /proc/<pid> with status, stat, smaps_rollup and per-task children files."""
     directory = root / 'proc' / str(pid)
     directory.mkdir(parents=True)
-    (directory/'status').write_text(f'VmRSS: {rss} kB\nVmHWM: {hwm} kB\n')
+    (directory/'status').write_text(f'VmRSS: {rss} kB\nVmHWM: {hwm} kB\nRssAnon: {rss - file} kB\n'
+                                    f'RssFile: {file} kB\nRssShmem: 0 kB\n')
     (directory/'stat').write_text(f'{pid} (py thon) S 1 1 1 0 -1 {flags} 0 0 0 0 1 1\n')
     (directory/'smaps_rollup').write_text(f'Rss: {rss} kB\nPss: {pss} kB\n')
     for task, children in (tasks or {pid: ''}).items():
@@ -26,7 +27,7 @@ class ComponentMemoryCheckTests(unittest.TestCase):
     def tree(self, root, observer, *, child_flags=0, grandchild_on_thread=True):
         # observer -> 11 -> 12 (started from 11's second thread) -> 13 (forked, not exec'd)
         fake_process(root, observer, rss=1, hwm=1, pss=1, tasks={observer: '11'})
-        fake_process(root, 11, rss=10, hwm=15, pss=8,
+        fake_process(root, 11, rss=10, hwm=15, pss=8, file=4,
                      tasks={11: '' if grandchild_on_thread else '12', 99: '12' if grandchild_on_thread else ''})
         fake_process(root, 12, rss=20, hwm=25, pss=20, tasks={12: '13'})
         fake_process(root, 13, rss=20, hwm=20, pss=20, flags=child_flags)
@@ -43,6 +44,8 @@ class ComponentMemoryCheckTests(unittest.TestCase):
             # Summed RSS (not gating) counts the vfork child's shared pages again.
             self.assertEqual(row['tree_rss_bytes'], 51*1024)
             self.assertEqual(row['process_peak_rss_bytes'], 25*1024)
+            self.assertEqual((row['tree_rss_anon_bytes'], row['tree_rss_file_bytes'], row['tree_rss_shmem_bytes']),
+                             (47*1024, 4*1024, 0))
             # Child 12 was found through thread 99; 13 shares 12's mm and is counted once.
             self.assertEqual(row['memory_bytes'], 29*1024)
             self.assertEqual(row['tree_pss_bytes'], 29*1024)
@@ -68,14 +71,19 @@ class ComponentMemoryCheckTests(unittest.TestCase):
             group = root/'cgroup'/'job'
             group.mkdir(parents=True)
             (group/'memory.current').write_text('1000\n')
-            (group/'memory.stat').write_text('anon 600\nfile 400\nactive_file 150\ninactive_file 200\nshmem 50\n')
+            (group/'memory.stat').write_text('anon 600\nfile 400\nkernel 30\nshmem 50\nfile_mapped 40\n'
+                                             'file_dirty 20\nfile_writeback 10\nactive_file 150\ninactive_file 200\n'
+                                             'pgfault 7\n')
             row = snapshot(11, proc=root/'proc', group=group, shares=lambda *_: True)
-            self.assertEqual(row['memory_bytes'], 650)
-            self.assertEqual((row['cgroup_current_bytes'], row['cgroup_file_cache_bytes']), (1000, 350))
+            # Only clean, unmapped file cache is dropped: 150 + 200 - 20 dirty - 10 writeback - 40 mapped.
+            self.assertEqual(row['memory_bytes'], 720)
+            self.assertEqual((row['cgroup_current_bytes'], row['cgroup_clean_cache_bytes']), (1000, 280))
+            self.assertEqual(row['cgroup_stat'], dict(anon=600, file=400, shmem=50, kernel=30, file_mapped=40,
+                file_dirty=20, file_writeback=10, active_file=150, inactive_file=200))
             self.assertNotIn('tree_pss_bytes', row)
             self.assertEqual(row['tree_rss_bytes'], 51*1024)
             row = snapshot(11, proc=root/'proc', group=group, pss=True, shares=lambda *_: True)
-            self.assertEqual((row['memory_bytes'], row['tree_pss_bytes']), (650, 29*1024))
+            self.assertEqual((row['memory_bytes'], row['tree_pss_bytes']), (720, 29*1024))
             # A counter that disappears falls back to the larger summed RSS, never to zero.
             (group/'memory.stat').unlink()
             self.assertEqual(snapshot(11, proc=root/'proc', group=group)['memory_bytes'], 51*1024)
@@ -98,11 +106,12 @@ class ComponentMemoryCheckTests(unittest.TestCase):
 
     def observed(self, child_code, memory, limit, *, rss=None, hwm=None, group=None):
         rss = memory if rss is None else rss
+        row = dict(tree_rss_bytes=rss, process_peak_rss_bytes=memory if hwm is None else hwm, memory_bytes=memory)
+        if group is not None:
+            row.update(cgroup_current_bytes=memory + 9, cgroup_stat=dict(anon=memory - 3, kernel=3, file_dirty=0))
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
-            with mock.patch('scripts.run_component_memory_check.snapshot', return_value=dict(
-                    tree_rss_bytes=rss, process_peak_rss_bytes=memory if hwm is None else hwm,
-                    memory_bytes=memory)), mock.patch(
+            with mock.patch('scripts.run_component_memory_check.snapshot', return_value=row), mock.patch(
                     'scripts.run_component_memory_check.own_cgroup', return_value=group), mock.patch(
                     'scripts.run_component_memory_check.resource.getrusage',
                     return_value=mock.Mock(ru_maxrss=0)):
@@ -120,6 +129,7 @@ class ComponentMemoryCheckTests(unittest.TestCase):
         self.assertEqual((report['peak_bytes'], report['peak_rss_bytes']), (75, 75))
         self.assertEqual(report['bar_bytes'], 75)
         self.assertEqual(report['memory_source'], PSS_SOURCE)
+        self.assertIsNone(report['peak_memory_stat'])
         self.assertEqual(rows[-1]['child_exit_code'], 0)
         self.assertTrue(rows[-1]['terminal'])
         self.assertGreater(report['wall_seconds'], 0)
@@ -132,6 +142,10 @@ class ComponentMemoryCheckTests(unittest.TestCase):
         self.assertEqual((report['peak_bytes'], report['peak_rss_bytes']), (70, 140))
         self.assertEqual(report['memory_source'], CGROUP_SOURCE)
         self.assertEqual(rows[0]['tree_rss_bytes'], 140)
+        stat = report['peak_memory_stat']
+        self.assertEqual({k: stat[k] for k in ('memory_bytes', 'current_bytes', 'anon', 'kernel', 'file_dirty')},
+                         dict(memory_bytes=70, current_bytes=79, anon=67, kernel=3, file_dirty=0))
+        self.assertIn('memory.stat at the highest sampled value', summary)
 
     def test_above_bar_fails_without_changing_child_result(self):
         code, report, rows, summary = self.observed(0, 76, 100)

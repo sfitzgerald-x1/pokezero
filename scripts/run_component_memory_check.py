@@ -2,8 +2,9 @@
 
 The gate counts each resident page once, as the kernel does when it reclaims
 or kills. When the observer's cgroup v2 exposes memory.current and memory.stat,
-each sample is memory.current less the reclaimable file cache (active_file plus
-inactive_file); otherwise it is the sum of PSS over the observed process tree,
+each sample is memory.current less the clean, unmapped file cache the kernel can
+drop without I/O (see cgroup_memory); otherwise it is the sum of PSS over the
+observed process tree,
 where a child that still shares its parent's address space (vfork before exec)
 is counted once. The observed process and kernel child high-water marks still
 catch a single process's peak between samples.
@@ -33,7 +34,7 @@ import time
 PF_FORKNOEXEC = 0x40  # include/linux/sched.h: forked but has not exec'd
 KCMP_VM = 1           # include/uapi/linux/kcmp.h
 SYS_KCMP = {'x86_64': 312, 'aarch64': 272}
-CGROUP_SOURCE = 'cgroup v2 memory.current less file cache'
+CGROUP_SOURCE = 'cgroup v2 memory.current less clean unmapped file cache'
 PSS_SOURCE = 'process-tree PSS'
 
 
@@ -62,14 +63,32 @@ def own_cgroup(*, proc=Path('/proc'), cgroup=Path('/sys/fs/cgroup')):
     return None
 
 
+STAT_FIELDS = ('anon', 'file', 'shmem', 'kernel', 'file_mapped', 'file_dirty', 'file_writeback',
+               'active_file', 'inactive_file')
+
+
 def cgroup_memory(group):
-    """memory.current without reclaimable page cache; shmem stays (it is on the anon LRU)."""
+    """memory.current without the clean, unmapped page cache the kernel drops before an OOM kill.
+
+    The file LRU (active_file + inactive_file) is subtracted, except:
+    - dirty and writeback file pages, which cannot be dropped without I/O;
+    - mapped file pages (shared libraries, mmapped data), the running processes'
+      working set, which every process's RSS also counts; here each counts once.
+    A page that is both dirty and mapped is in file_dirty and in file_mapped, so
+    the reclaimable term can go below zero; it is clamped at 0, which keeps the
+    gate at or below memory.current. shmem and tmpfs pages are swap-backed and
+    sit on the anon LRU, so they are not in active_file/inactive_file and stay
+    counted (memory.stat's 'file' total does include them). Anon and kernel
+    memory are counted as charged.
+    """
     current = int((group / 'memory.current').read_text())
-    stat = dict(line.split() for line in (group / 'memory.stat').read_text().splitlines()
-                if len(line.split()) == 2)
-    cache = int(stat.get('active_file', 0)) + int(stat.get('inactive_file', 0))
-    return dict(cgroup_memory_bytes=max(current - cache, 0), cgroup_current_bytes=current,
-                cgroup_file_cache_bytes=cache)
+    stat = {name: int(value) for name, value in (line.split() for line in
+            (group / 'memory.stat').read_text().splitlines() if len(line.split()) == 2)}
+    clean = stat.get('active_file', 0) + stat.get('inactive_file', 0) - stat.get('file_dirty', 0) \
+        - stat.get('file_writeback', 0) - stat.get('file_mapped', 0)
+    return dict(cgroup_memory_bytes=max(current - max(clean, 0), 0), cgroup_current_bytes=current,
+                cgroup_clean_cache_bytes=max(clean, 0),
+                cgroup_stat={name: stat[name] for name in STAT_FIELDS if name in stat})
 
 
 _libc = None
@@ -95,7 +114,7 @@ def snapshot(pid, *, proc=Path('/proc'), group=None, pss=None,
     """
     pss = group is None if pss is None else pss
     pending, seen = [(os.getpid(), None), (pid, os.getpid())], set()
-    rss = process_peak = pss_total = 0
+    rss = process_peak = pss_total = anon = file = shmem = 0
     while pending:
         current, parent = pending.pop()
         if current in seen:
@@ -106,6 +125,9 @@ def snapshot(pid, *, proc=Path('/proc'), group=None, pss=None,
             fields = dict(line.split(':', 1) for line in
                           (directory / 'status').read_text().splitlines() if ':' in line)
             rss += int(fields.get('VmRSS', '0').split()[0]) * 1024
+            anon += int(fields.get('RssAnon', '0').split()[0]) * 1024
+            file += int(fields.get('RssFile', '0').split()[0]) * 1024
+            shmem += int(fields.get('RssShmem', '0').split()[0]) * 1024
             process_peak = max(process_peak, int(fields.get('VmHWM', '0').split()[0]) * 1024)
             if pss:
                 stat = (directory / 'stat').read_text()
@@ -124,7 +146,9 @@ def snapshot(pid, *, proc=Path('/proc'), group=None, pss=None,
             # An interpreter can exit between /proc reads. Kernel child HWM is
             # also collected at normal termination to retain short-lived peaks.
             continue
-    row = dict(tree_rss_bytes=rss, process_peak_rss_bytes=process_peak)
+    # The RSS split attributes any difference from the cgroup value (diagnostic).
+    row = dict(tree_rss_bytes=rss, process_peak_rss_bytes=process_peak, tree_rss_anon_bytes=anon,
+               tree_rss_file_bytes=file, tree_rss_shmem_bytes=shmem)
     if pss:
         row['tree_pss_bytes'] = pss_total
     if group is None:
@@ -154,7 +178,8 @@ def run(command, *, output, label, summary=None, limit_bytes=None, interval=.2, 
     output.mkdir(parents=True, exist_ok=True)
     group = own_cgroup()
     source = PSS_SOURCE if group is None else CGROUP_SOURCE
-    peak = legacy = 0
+    peak = legacy = sampled = 0
+    breakdown = None
     started = time.monotonic()
     # Exclusive creation prevents merging two attempts' evidence.
     with (output / 'samples.jsonl').open('x') as samples:
@@ -163,6 +188,12 @@ def run(command, *, output, label, summary=None, limit_bytes=None, interval=.2, 
                 row = snapshot(child.pid, group=group, pss=record_pss or group is None)
                 peak = max(peak, row['memory_bytes'], row['process_peak_rss_bytes'])
                 legacy = max(legacy, row['tree_rss_bytes'], row['process_peak_rss_bytes'])
+                if row['memory_bytes'] > sampled:
+                    sampled = row['memory_bytes']
+                    # memory.stat at the highest sampled gate value (cgroup source only).
+                    breakdown = None if 'cgroup_stat' not in row else dict(
+                        elapsed_seconds=round(time.monotonic()-started, 3), memory_bytes=row['memory_bytes'],
+                        current_bytes=row['cgroup_current_bytes'], **row['cgroup_stat'])
                 samples.write(json.dumps(dict(monotonic_ns=time.monotonic_ns(),
                     elapsed_seconds=time.monotonic()-started, peak_bytes=peak,
                     peak_rss_bytes=legacy, runner_limit_bytes=limit, **row))+'\n')
@@ -180,6 +211,7 @@ def run(command, *, output, label, summary=None, limit_bytes=None, interval=.2, 
             peak_method=f'max(sampled {source}, observed process HWM, kernel child HWM)',
             memory_source=source, peak_rss_bytes=legacy,
             peak_rss_method='not gating: max(sampled process-tree RSS sum, observed process HWM, kernel child HWM)',
+            peak_memory_stat=breakdown,
             sample_interval_seconds=interval, cgroup_memory_peak_bytes=cgroup_peak(group),
             runner_limit_bytes=limit, bar_bytes=limit * 3 // 4,
             memory_pass=0 < peak <= limit * 3 // 4,
@@ -198,6 +230,10 @@ def run(command, *, output, label, summary=None, limit_bytes=None, interval=.2, 
                          f"{report['wall_seconds']:.3f} | {code} | {'PASS' if report['memory_pass'] else 'FAIL'} |\n")
             stream.write(f'\nPeak: {source}, sampled every {interval*1000:g} ms, plus kernel high-water marks. '
                          'The summed process-tree RSS counts a forked child\'s shared pages twice until it execs.\n')
+            if breakdown:
+                stream.write('\nmemory.stat at the highest sampled value (GiB): ' + ', '.join(
+                    f'{name} {breakdown[name]/2**30:.3f}' for name in ('memory_bytes', 'current_bytes') + STAT_FIELDS
+                    if name in breakdown) + '\n')
     if code:
         return code if code > 0 else 128-code
     return int(not report['memory_pass'])
