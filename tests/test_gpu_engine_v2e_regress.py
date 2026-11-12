@@ -925,7 +925,8 @@ class M1PlantedBugTests(unittest.TestCase):
 M2_VOCAB = dict(moves=['_none', 'perishsong', 'yawn', 'wrap', 'tackle'], abilities=['_none', 'soundproof', 'insomnia'],
                 items=['_none', 'leftovers'])
 M2_PERISH, M2_YAWN, M2_WRAP, M2_TACKLE = 1, 2, 3, 4
-M2_LANES = 8           # 0 Perish Song acts, 1 it is selected but the user cannot act; 2 Yawn lands, 3 into Protect; 4 Wrap hits, 5 misses
+M2_LANES = 8           # 0 Perish Song acts, 1 it is selected but the user cannot act; 2 Yawn lands, 3 into Protect; 4 Wrap hits, 5 misses;
+                       # 6 side 1's active is drowsy before the step (its Yawn sleep lands at this residual)
 
 
 class TrackersM2(NamedTuple):
@@ -948,19 +949,23 @@ def m2_state(seed):
     s = lanes_state(M2_LANES, seed)
     moves = np.full((M2_LANES, 2, 6, 4), M2_TACKLE, np.int32)
     moves[:, 0, 0, 0] = [M2_PERISH, M2_PERISH, M2_YAWN, M2_YAWN, M2_WRAP, M2_WRAP, M2_TACKLE, M2_TACKLE]
-    return s._replace(moves=j.asarray(moves), choice_move=s.choice_move.at[:, 1, 0].set(0), item=s.item.at[:, 1, 0].set(1))
+    return s._replace(moves=j.asarray(moves), choice_move=s.choice_move.at[:, 1, 0].set(0), item=s.item.at[:, 1, 0].set(1),
+                      yawn_counter=s.yawn_counter.at[6, 1, 0].set(1))
 
 
 def m2_step(state, actions, t, *, perish_fail=False, perish_wide=False, perish_bag=True, yawn_protect=False, yawn_wide=False,
-            yawn_bag=True, wrap_miss=False, wrap_wide=False, wrap_bag=True, wrap_clock=True, m2=True):
+            yawn_bag=True, wrap_miss=False, wrap_wide=False, wrap_bag=True, wrap_clock=True, perish_bench=False, yawn_bench=False,
+            wrap_bench=False, trap_bench=False, sleep_bench=False, m2=True):
     """A stand-in engine with M2's writes: side 0's move line (the move hook), its hit (the damage hook) and the foe's Protect
     (port_protect) are reported as the engine reports them, then the residual has run (counters after one tick: Perish 3,
-    Yawn 1, Wrap 3+draws[0][7]-1 with source 0) and turn_end is ordinary. The base pass is m2=False. Keyword flags plant
-    the reviewer-style bugs: an effect on a failure, a wrong extra field, a removed bag or clock producer."""
+    Yawn 1, Wrap 3+draws[0][7]-1 with source 0; lane 6's drowsy active falls asleep) and turn_end is ordinary. The base pass
+    is m2=False. Keyword flags plant the reviewer-style bugs: an effect on a failure, a wrong extra field, a removed bag or
+    clock producer, and the effect on a benched mon (side 1's party index 1) instead of the active."""
     import jax.numpy as j
     from gpu_engine import engine_device_public_hooks as hooks
     from gpu_engine.public_active import NAMES
     from gpu_engine.transition import sample_chance_inputs
+    from gpu_engine.mechanics import SLP
     lanes = state.hp.shape[0];rows = j.arange(lanes);s = state
     live = ~s.done;z = j.zeros(lanes, j.int32)
     perish = live & (rows < 2);acting = live & (rows != 1)                 # lane 1: Perish Song selected, the user cannot act
@@ -970,27 +975,35 @@ def m2_step(state, actions, t, *, perish_fail=False, perish_wide=False, perish_b
     hooks.port_protect(None, z, acting, j.ones(lanes, j.bool_), protected, protected)
     hooks.move(None, s, z, move, acting)
     dealt = j.where(hit, 10, 0)
-    s = s._replace(hp=s.hp.at[:, 1, 0].add(-dealt))
+    s = s._replace(hp=s.hp.at[:, 1, 1 if m2 and wrap_bench else 0].add(-dealt))     # wrap_bench: Wrap's damage on the bench
     hooks.damage(None, s, z, dealt, dealt, acting & (move == M2_WRAP))
     v = t.public_volatiles;clock = t.mon_features['wrap_trap_turns']
-    def setbag(v, side, name, mask):
-        k = NAMES.index(name);return v.at[:, side, 0, k].set(v[:, side, 0, k] | mask)
+    def setbag(v, side, name, mask, mon=0):
+        k = NAMES.index(name);return v.at[:, side, mon, k].set(v[:, side, mon, k] | mask)
     if m2:
         lands = perish & (acting | perish_fail)
-        s = s._replace(perish_counter=s.perish_counter.at[:, :, 0].set(j.where(lands[:, None], 3, s.perish_counter[:, :, 0])))
+        foe = 1 if perish_bench else 0                                      # perish_bench: the foe's counter on its bench
+        s = s._replace(perish_counter=s.perish_counter.at[:, 0, 0].set(j.where(lands, 3, s.perish_counter[:, 0, 0]))
+                       .at[:, 1, foe].set(j.where(lands, 3, s.perish_counter[:, 1, foe])))
         if perish_bag:
-            for side in (0, 1):v = setbag(v, side, 'perish3', lands)
+            v = setbag(v, 0, 'perish3', lands);v = setbag(v, 1, 'perish3', lands, foe)
         if perish_wide:s = s._replace(boosts=s.boosts.at[:, 1, 0, 0].add(j.where(lands, -1, 0)))
         drowsy = yawn & (~protected | yawn_protect)
-        s = s._replace(yawn_counter=s.yawn_counter.at[:, 1, 0].set(j.where(drowsy, 1, s.yawn_counter[:, 1, 0])))
-        if yawn_bag:v = setbag(v, 1, 'yawn', drowsy)
+        mon = 1 if yawn_bench else 0                                        # yawn_bench: the target's bench mon drowses
+        s = s._replace(yawn_counter=s.yawn_counter.at[:, 1, mon].set(j.where(drowsy, 1, s.yawn_counter[:, 1, mon])))
+        if yawn_bag:v = setbag(v, 1, 'yawn', drowsy, mon)
+        # Lane 6: the pre-step drowsy active's countdown ends and it falls asleep (sleep_bench: a benched mon does).
+        sleeps = live & (rows == 6);mon = 1 if sleep_bench else 0
+        s = s._replace(yawn_counter=s.yawn_counter.at[:, 1, 0].set(j.where(sleeps, 0, s.yawn_counter[:, 1, 0])),
+                       status=s.status.at[:, 1, mon].set(j.where(sleeps, SLP, s.status[:, 1, mon])),
+                       status_counter=s.status_counter.at[:, 1, mon].set(j.where(sleeps, 2, s.status_counter[:, 1, mon])))
         if yawn_wide:s = s._replace(item=s.item.at[:, 1, 0].set(j.where(drowsy, 0, s.item[:, 1, 0])))
         trapped = wrap & (hit | wrap_miss)
-        d = 3 + sample_chance_inputs(state).draws[:, 0, 7]
-        s = s._replace(partial_trap_counter=s.partial_trap_counter.at[:, 1, 0].set(j.where(trapped, d - 1, 0)),
-                       partial_trap_source=s.partial_trap_source.at[:, 1, 0].set(j.where(trapped, 0, -1)))
-        if wrap_bag:v = setbag(v, 1, 'partiallytrapped', trapped)
-        if wrap_clock:clock = clock.at[:, 1, 0].set(j.where(trapped, 1, clock[:, 1, 0]))
+        d = 3 + sample_chance_inputs(state).draws[:, 0, 7];mon = 1 if trap_bench else 0   # trap_bench: the bench is trapped
+        s = s._replace(partial_trap_counter=s.partial_trap_counter.at[:, 1, mon].set(j.where(trapped, d - 1, 0)),
+                       partial_trap_source=s.partial_trap_source.at[:, 1, mon].set(j.where(trapped, 0, -1)))
+        if wrap_bag:v = setbag(v, 1, 'partiallytrapped', trapped, mon)
+        if wrap_clock:clock = clock.at[:, 1, mon].set(j.where(trapped, 1, clock[:, 1, mon]))
         if wrap_wide:s = s._replace(boosts=s.boosts.at[:, 1, 0, 1].add(j.where(trapped, -1, 0)))
     s = s._replace(turn=s.turn + 1)
     hooks.turn_end(None, state, s, live, upkeep=None, leftovers=None)
@@ -998,8 +1011,8 @@ def m2_step(state, actions, t, *, perish_fail=False, perish_wide=False, perish_b
 
 
 class M2PlantedBugTests(unittest.TestCase):
-    """M2: the effect on a failure, a wrong extra field and a removed bag or clock producer must each fail the gate; the
-    correct stand-in passes by m2_rule's post-state witnesses (the standing planted-mutant gate)."""
+    """M2: the effect on a failure, a wrong extra field, a removed bag or clock producer and the effect on a benched mon must
+    each fail the gate; the correct stand-in passes by m2_rule's post-state witnesses (the standing planted-mutant gate)."""
 
     @classmethod
     def setUpClass(cls):
@@ -1052,6 +1065,8 @@ class M2PlantedBugTests(unittest.TestCase):
         c = report['counts']
         self.assertEqual(code, 0, c);self.assertEqual((c['changed_but_uninvolved'], c['changed_involved_unexpected_fields']), (0, 0))
         self.assertEqual(c['m2_leaves'], 6)                               # Perish, Yawn, Wrap lanes x 2 shards
+        self.assertEqual(c['m2_wrong_mon'], 0)
+        self.assertEqual({x['lane'] for x in listing if 'drowsy' in x['involved']}, {6})   # the drowsy sleep, allowed per mon
         self.assertEqual(c['bag_leaves'], 6)
         by_lane = {(x['shard'], x['lane']): x for x in listing}
         self.assertEqual(sorted(by_lane[('shard-000000.npz', 4)]['m2_rule']), sorted(
@@ -1081,6 +1096,22 @@ class M2PlantedBugTests(unittest.TestCase):
         self.assert_flagged(('y3', dict(yawn_bag=False)), {2}, ['state.yawn_counter@target'], 'yawn')
         self.assert_flagged(('w3', dict(wrap_bag=False)), {4}, ['state.partial_trap_counter@target'], 'wrap')
         self.assert_flagged(('w4', dict(wrap_clock=False)), {4}, ['state.partial_trap_counter@target'], 'wrap')
+
+    def test_effects_on_a_benched_mon_are_flagged(self):
+        """Wrong mon (M1 re-review's benched-mon lesson): P4 Perish Song's foe counter, Y4 Yawn's drowsiness, W5 Wrap's
+        damage, W6 Wrap's trap and Y5 a Yawn sleep land on side 1's bench mon (party index 1) instead of its active; m2_rule
+        (the counters) or the wrong-mon check (HP, status, which their families would allow) flags each."""
+        self.assert_flagged(('p4', dict(perish_bench=True)), {0}, ['state.perish_counter@target'], 'perishsong')
+        self.assert_flagged(('y4', dict(yawn_bench=True)), {2}, ['state.yawn_counter@target'], 'yawn')
+        self.assert_flagged(('w6', dict(trap_bench=True)), {4}, ['state.partial_trap_counter@target'], 'wrap')
+        code, report, listing = self.patched('w5', wrap_bench=True)
+        self.assertEqual(code, 1);self.assertEqual({lane for _, lane in self.flagged(listing)}, {4})
+        self.assertIn('state.hp@target', report['by_effect']['wrap']['unexpected_fields'])
+        self.assertEqual([x['m2_wrong_mon'] for x in listing if x['lane'] == 4], [['state.hp@1']] * 2)
+        code, report, listing = self.patched('y5', sleep_bench=True)
+        self.assertEqual(code, 1);self.assertEqual({lane for _, lane in self.flagged(listing)}, {6})
+        self.assertTrue({'state.status@user', 'state.status_counter@user'} <= set(report['by_effect']['drowsy']['unexpected_fields']))
+        self.assertEqual(report['counts']['m2_wrong_mon'], 2)
 
 
 if __name__ == '__main__':

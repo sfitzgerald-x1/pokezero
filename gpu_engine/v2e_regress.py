@@ -114,6 +114,13 @@ at that line; the damage hook's HP damage after a Wrap line; port_protect's Prot
   recomputed from the keys) less one after the tick; partiallytrapped set in the bag; WRAP_TRAP_TURNS 1 at that slot
   exactly when turn_end was ordinary, 0 elsewhere.
 The bag cells m2_rule witnesses join M1's in bag_rule. Explained lane-steps are counted as m2_leaves.
+Wrong-mon check (M2, M1 re-review's benched-mon lesson): on a lane an M2 effect involves (move or pre-step counter),
+a remaining entry of M2_MON_LEAVES (HP, status, status counter, the M2 counters and source) is unexpected when its
+per-mon difference lies off that side's pre-step and post-step actives: against the base's per-mon KO arrays where
+both passes store the leaf (status, status counter), else this tree's own pre-to-post change (HP and the M2 leaves,
+which the base does not store; within one step only a mon active at its start or end changes there). An effect landing
+on a benched mon is so flagged even where the leaf's family is allowed. Flagged lane-steps are counted as
+m2_wrong_mon.
 
 KO cascade rule for the saved effect block (fidelity R's state.effect_draws,
 found by the M1 GPU pass): once the base pass has the leaf it is compared
@@ -1129,6 +1136,23 @@ def m2_rule(entries, w):
     return entries - explained, sorted(explained, key=str), cells
 
 
+# M2: the effects whose lanes the wrong-mon check covers, and the per-mon leaves it checks.
+M2_EFFECTS = ('perishsong', 'yawn', 'wrap', 'perish', 'drowsy', 'partial_trap')
+M2_MON_LEAVES = ('state.hp', 'state.status', 'state.status_counter') + M2_COUNTER_LEAVES
+
+
+def m2_wrong_mon(entries, post, ref, pre_active, post_active):
+    """M2: the (leaf, side) entries of M2_MON_LEAVES whose per-mon difference lies off that side's pre-step and post-step
+    actives (an effect landing on a benched mon). post: this tree's per-lane [2,6] post values; ref: per leaf, the base's
+    post values where both passes store it (the KO arrays), else this tree's pre-step values."""
+    ok = active_mask(pre_active) | active_mask(post_active)
+    bad = []
+    for leaf, side in sorted(entries, key=str):
+        if side is None or leaf not in M2_MON_LEAVES or leaf not in post or leaf not in ref:continue
+        if (_differ(post[leaf][side], ref[leaf][side]) & ~ok[side]).any():bad.append((leaf, side))
+    return bad
+
+
 # ---------------------------------------------------------------------------
 # Engine plumbing.
 
@@ -1489,7 +1513,7 @@ def patched_pass(args, *, step_override=None, prepared=None):
     counts = dict(lane_steps=0, done_skipped=0, unchanged=0, changed_and_involved=0, changed_but_uninvolved=0,
                   changed_involved_unexpected_fields=0, ko_cascade=0, phase_shift=0, terminal=0, terminal_residual=0, waived=0,
                   rule_explained=0, faint_rule_leaves=0, clear_volatile_leaves=0, effect_draws_saved=0,
-                  recharge_leaves=0, bag_leaves=0, trick_witness_leaves=0, ledger_leaves=0, m2_leaves=0)
+                  recharge_leaves=0, bag_leaves=0, trick_witness_leaves=0, ledger_leaves=0, m2_leaves=0, m2_wrong_mon=0)
     clear_volatile = 'B' in plugins
     m1_rules = 'M1' in plugins
     # M1 review: the base's per-lane witness arrays (wit_XX); the M1 rules compare per mon and per bag column.
@@ -1722,6 +1746,18 @@ def patched_pass(args, *, step_override=None, prepared=None):
                                         retype_ok=retype_ok)
                 unexpected, waived, by_ko = lane_verdict(entries, effects, side_axis, cascade=cascade_info, waive=args.waive or ()) \
                     if changed_rest and effects else ([], [], [])
+                m2_wrong = []
+                if changed_rest and m2_rules and any(e in effects for e in M2_EFFECTS):
+                    # M2: an M2 effect's per-mon leaves may differ only at that side's pre- or post-step active.
+                    post_m = {'state.hp': np.asarray(m1['post_hp'])[lane]};ref_m = {'state.hp': np.asarray(named['state.hp'])[lane]}
+                    for n in ('state.status', 'state.status_counter'):
+                        if n in result['ko'] and n in base_ko:post_m[n] = result['ko'][n][lane];ref_m[n] = base_ko[n][lane]
+                    for n, key in zip(M2_COUNTER_LEAVES, ('perish', 'yawn', 'trap', 'source')):
+                        if result.get('m2') is not None and result['m2'].get(key) is not None and n in named:
+                            post_m[n] = np.asarray(result['m2'][key])[lane];ref_m[n] = np.asarray(named[n])[lane]
+                    m2_wrong = m2_wrong_mon(entries, post_m, ref_m, pre_active[lane], post_active[lane])
+                    unexpected = unexpected + [e for e in m2_wrong if e not in unexpected]
+                    counts['m2_wrong_mon'] += bool(m2_wrong)
                 kind = classify(changed, bool(effects), rule_ok, unexpected)
                 if kind == 'unchanged':
                     counts['unchanged'] += 1
@@ -1759,6 +1795,7 @@ def patched_pass(args, *, step_override=None, prepared=None):
                     trick_rule=[f"{l}@{'glob' if side is None else side}" for l, side in trick_explained],
                     ledger_rule=[f'{l}@{side}' for l, side in ledger_explained],
                     m2_rule=[f'{l}@{side}' for l, side in m2_explained],
+                    m2_wrong_mon=[f'{l}@{side}' for l, side in m2_wrong],
                     unexpected=[f"{l}@{'glob' if s is None else s}" for l, s in unexpected],
                     ko_consequences=[f"{l}@{'glob' if s is None else s}" for l, s in by_ko],
                     waived=[f"{l}@{'glob' if s is None else s}" for l, s in waived])) + '\n')
