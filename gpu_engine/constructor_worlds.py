@@ -103,6 +103,22 @@ dict keys and leaves two members None). This module turns prepared roots into De
     fires on real lines. fix_peer_base_ability (the carry's public original over its borrowed ability, peer only) never
     does for a tracer: B2's fold records the tracer's running copy and the DONOR's original, never the tracer's own
     ability (pokezero.belief._trace_copy_source; public_abilities.trace_copy).
+  - Knock Off before the root (fix_knocked_items on the world STATE, fill_item_ledger on the carry; both sides): Showdown's
+    Gen 3 Knock Off (data/mods/gen4/moves.ts:694-706 at f76228a13, inherited by gen3) sets target.itemKnockedOff and prints
+    |-enditem|<target>|<Item>|[from] move: Knock Off|[of] <source>; line_facts' knocked records each such member (species, the
+    removed item). The world's item is already none (B2's REMOVE marks it removed, and the materializer writes item 0 for a
+    publicly removed item; the owner's request shows no item), but neither from_b2 nor the materializer writes A2's engine
+    leaf item_knocked, whose only engine consumer is Trick's Gen 3-4 failure check (transition.py's _trick: Trick fails when
+    either active has item_knocked; sim/pokemon.ts takeItem). fix_knocked_items sets it for every knocked member, refusing
+    the root (KnockedItemUnavailable: KNOCKED_ITEM_UNAVAILABLE) when a member does not join exactly one party member or its
+    world item is not 0; prepare_roots and build refuse it as they refuse PEER_REQUEST_ORDER_UNAVAILABLE (a RootRefusal of that
+    kind; constructor-root:KNOCKED_ITEM_UNAVAILABLE:<detail>, counted constructor_refused). And from_b2 builds mon_features
+    from hooks.MON_KEYS as zeros, so M1's per-mon item ledger (item_mutated, item_original: B2's public_items ledger, mutated
+    and original, which survives switches) read "never mutated": an in-tree item event would then count as the first
+    mutation and narrow the belief by an item B2 has stopped narrowing by (design 13 item 4). fill_item_ledger writes what the device knock_off hook and B2's REMOVE write on the
+    same line (item_mutated 1; item_original the removed item when the ledger is fresh). Only Knock Off: roots after a
+    public item swap are refused upstream (PUBLIC_ITEM_SWAP_NOT_SUPPORTED), so item_swapped and the Choice flags are never
+    touched. Not completed: the visible belief's exclusion ledgers (excluded_items, excluded_abilities: from_b2's zeros).
   - Private reveals (redact_private_reveals; OFF by default: prepare_roots' and the live search's redact_private_reveals,
     the server's and the re-pricer's --redact-private-reveals): Showdown sends Gen 3 Pressure's start line to the holder's
     side alone. At the pinned sim (pokerena/vendor/pokemon-showdown f76228a13), data/mods/gen3/abilities.ts:145-150,
@@ -333,11 +349,13 @@ class CarryTables:
     foe_targeted:tuple=()       # per engine move id: Pressure doubles its PP (the hooks' belief_tables.public_foe_targeted)
     pressure:tuple=()           # per engine ability id: the ability is Pressure (the hooks' belief_tables.public_pressure)
     ability_names:tuple=()      # metadata['vocabulary']['abilities'] normalized
+    item_names:tuple=()         # metadata['vocabulary']['items'] normalized (the engine item ids fill_item_ledger writes)
 
 
-def _table(species_types,species_count=None,type_count=None,species_names=(),move_names=(),foe_targeted=(),pressure=(),ability_names=()):
+def _table(species_types,species_count=None,type_count=None,species_names=(),move_names=(),foe_targeted=(),pressure=(),ability_names=(),
+        item_names=()):
     move_names=tuple(map(normalize_id,move_names));foe_targeted=tuple(map(bool,foe_targeted));pressure=tuple(map(bool,pressure))
-    ability_names=tuple(map(normalize_id,ability_names))
+    ability_names=tuple(map(normalize_id,ability_names));item_names=tuple(map(normalize_id,item_names))
     if ability_names and pressure and len(ability_names)!=len(pressure):
         raise CarryLayoutError(f'ability_names: {len(ability_names)} names for {len(pressure)} engine abilities')
     if len(move_names)!=len(foe_targeted):raise CarryLayoutError(f'foe_targeted: {len(foe_targeted)} flags for {len(move_names)} engine moves')
@@ -351,7 +369,7 @@ def _table(species_types,species_count=None,type_count=None,species_names=(),mov
         raise CarryLayoutError(f'species_types: {st.shape[0]} rows for {species_count} engine species')
     if np.any(st<0)or type_count is not None and np.any(st>=type_count):raise CarryLayoutError('species_types: a type id outside the engine namespace')
     st=st.copy();st.setflags(write=False)
-    return CarryTables(st,species_names,move_names,foe_targeted,pressure,ability_names)
+    return CarryTables(st,species_names,move_names,foe_targeted,pressure,ability_names,item_names)
 
 
 def carry_tables(metadata,catalog):
@@ -364,7 +382,7 @@ def carry_tables(metadata,catalog):
     with context:belief=engine_device_belief.compile_tables(metadata,catalog)
     v=metadata['vocabulary']
     return _table(jax.device_get(belief.species_types),len(v['species']),len(v['types']),v['species'],v['moves'],
-        np.asarray(jax.device_get(belief.public_foe_targeted)),np.asarray(jax.device_get(belief.public_pressure)),v['abilities'])
+        np.asarray(jax.device_get(belief.public_foe_targeted)),np.asarray(jax.device_get(belief.public_pressure)),v['abilities'],v.get('items',()))
 
 
 _CARRY_TABLES={}
@@ -484,6 +502,23 @@ class PeerOrderUnavailable(ValueError):
     """The peer's public switch history does not join this world's party: the root is refused (PEER_REQUEST_ORDER_UNAVAILABLE)."""
 
 
+KNOCKED_ITEM_UNAVAILABLE='KNOCKED_ITEM_UNAVAILABLE'
+
+
+class KnockedItemUnavailable(ValueError):
+    """A member the lines show knocked off (LineFacts.knocked) does not join exactly one member of this world (its party, or the
+    carry's public slots), its world item is not 0, or its removed item is outside the engine namespace: the root is refused
+    (KNOCKED_ITEM_UNAVAILABLE), never completed on a guess."""
+
+
+COMPLETION_REFUSALS=((PeerOrderUnavailable,'PEER_REQUEST_ORDER_UNAVAILABLE'),(KnockedItemUnavailable,KNOCKED_ITEM_UNAVAILABLE))
+
+
+def _completion_kind(error):
+    """The refusal kind of a completion refusal (COMPLETION_REFUSALS)."""
+    return next(kind for cls,kind in COMPLETION_REFUSALS if isinstance(error,cls))
+
+
 @dataclass(frozen=True)
 class LineFacts:
     """What the completion reads from the owner's protocol prefix (line_facts): public lines, and for private_reveals also the
@@ -506,7 +541,11 @@ class LineFacts:
     peer_damage: the peer's own wire's readings of the two damage cells view b projects (PeerDamage, peer_damage_facts), only
     when line_facts is asked for them (peer_damage=True: the peer-view-b flag), None otherwise; peer_belief: B2's belief of the
     owner's privately revealed members as the peer's wire leaves it (PeerBelief, peer_wire_belief), set by prepare_roots only
-    when the redaction is on and applies, None otherwise."""
+    when the redaction is on and applies, None otherwise; knocked: per side, the (species, item) pairs, sorted, of each member
+    whose held item Knock Off removed: the subject of a line |-enditem|<member>|<Item>|[from] move: Knock Off|[of] <attacker>
+    (Showdown's Gen 3 Knock Off, data/mods/gen4/moves.ts:702 at f76228a13; B2's REMOVE, public_items.project_line), the member's
+    normalized species as its switch-in named it and the removed item normalized (the first removal: an item knocked off is gone
+    for good, sim/pokemon.ts itemKnockedOff). A blocked Knock Off (Sticky Hold's -activate) removes nothing and is not here."""
     peer_switches:tuple
     owner_spikes:tuple|None
     baton:tuple=(False,False)
@@ -516,6 +555,7 @@ class LineFacts:
     private_reveals:tuple=((),())  # per side (p1, p2): (species, ability) revealed to the owner's side alone (line_facts)
     peer_damage:object=None        # PeerDamage (line_facts(..., peer_damage=True)); None: not read (the flag off)
     peer_belief:object=None        # PeerBelief (prepare_roots, the redaction on, a private reveal applicable); None otherwise
+    knocked:tuple=((),())          # per side (p1, p2): (species, item) of each member whose item Knock Off removed (line_facts)
 
 
 def _seat_name(field):
@@ -540,6 +580,7 @@ def line_facts(lines,owner,*,peer_damage=False):
     species={};active={'p1':'','p2':''};alive={'p1':False,'p2':False};pending=set();baton={'p1':False,'p2':False}
     transformed=set();original_pressure=set();running_pressure=set();moves=[];recharge={'p1':False,'p2':False}
     tracers={'p1':set(),'p2':set()};private=set();public=set()   # (seat, species, ability): side-private / public ability lines
+    knocked={'p1':{},'p2':{}}   # species -> the item Knock Off removed (the first: a knocked-off item is gone for good)
     member=lambda seat,name:species.get((seat,name))or normalize_id(name)
     for line in lines:
         parts=str(line).split('|')
@@ -552,6 +593,8 @@ def line_facts(lines,owner,*,peer_damage=False):
         if kind=='-mustrecharge'and seat in recharge:recharge[seat]=True   # |-mustrecharge|IDENT
         if kind=='cant'and seat in recharge and len(parts)>3 and normalize_id(parts[3])=='recharge':recharge[seat]=False
         if len(parts)<4:continue
+        if kind=='-enditem'and seat in knocked and '[from] move: knock off'in tags:   # |-enditem|X|Item|[from] move: Knock Off|[of] Y
+            knocked[seat].setdefault(member(seat,name),normalize_id(parts[3]))
         if kind=='-ability'and seat in tracers and any(t.startswith('[from] ability: trace')for t in tags):   # the subject traced
             tracers[seat].add(species.get((seat,name))or normalize_id(name))
         if kind=='move'and seat in active:
@@ -584,7 +627,8 @@ def line_facts(lines,owner,*,peer_damage=False):
             hp[name]=(new,maximum)
     hidden=tuple(sorted((who,ability)for side,who,ability in private if side==own and(side,who,ability)not in public))
     return LineFacts(tuple(switches),tuple(spikes)if complete else None,(baton['p1'],baton['p2']),tuple(moves),(recharge['p1'],recharge['p2']),
-        (tuple(sorted(tracers['p1'])),tuple(sorted(tracers['p2']))),(hidden,())if own=='p1'else((),hidden))
+        (tuple(sorted(tracers['p1'])),tuple(sorted(tracers['p2']))),(hidden,())if own=='p1'else((),hidden),
+        knocked=tuple(tuple(sorted(knocked[seat].items()))for seat in('p1','p2')))
 
 
 def _ability_attributions(kind,seat,subject,parts,tags,member):
@@ -813,6 +857,45 @@ def fill_recharge(public,facts):
     return public if np.array_equal(new,bag)else public._replace(public_volatiles=jnp.asarray(new))
 
 
+LEDGER_KEYS=('item_mutated','item_original')   # M1's per-mon item ledger in mon_features (engine_device_public_hooks.MON_KEYS)
+
+
+def fill_item_ledger(public,facts,tables):
+    """The public carry with M1's per-mon item ledger written for each member the lines show knocked off (facts.knocked, both
+    sides), as the device path and B2 hold it after the same -enditem line: mon_features['item_mutated'][side, slot] = 1 and,
+    when that member's ledger is fresh (item_mutated and item_original both 0), item_original[side, slot] = the engine item id of
+    the removed item (tables.item_names). `slot` is the member's public slot (the carry's species, joined as fix_knocked_items
+    joins). The rule is the device knock_off hook's (engine_device_public_hooks.py:538-544: fresh = item_mutated == 0 and
+    item_original == 0; item_original = the item held before the hit when fresh; item_mutated = 1) and B2's REMOVE
+    (public_items.py:185, a -enditem line tagged [from] move: Knock Off is REMOVE; public_items.py:130-138: REMOVE sets mutated,
+    and own_removal = REMOVE, not yet mutated and no recorded original, records the removed item as the original). Both ledgers
+    are per mon and survive switches (B2's public_items arrays are per public slot; the device's install hook resets only the
+    per-stint keys, engine_device_public_hooks.STINT_ITEM_KEYS), and so does this fill: it reads the whole prefix. from_b2 writes
+    both keys as zeros (hooks.MON_KEYS) and copies B2's item_swapped and choice_locked, which this never touches (roots after a
+    public item swap are refused upstream: PUBLIC_ITEM_SWAP_NOT_SUPPORTED). A carry without the ledger keys (pre-M1) is returned
+    unchanged; a second pass is a no-op (the member is then mutated, so the original is never rewritten). KnockedItemUnavailable
+    when a knocked member joins no public slot or several, or its item is outside the engine namespace; CarryLayoutError on
+    another layout."""
+    if facts is None or not any(getattr(facts,'knocked',((),()))):return public
+    b=_trackers(public);mon=public.mon_features
+    if not isinstance(mon,dict)or any(k not in mon for k in LEDGER_KEYS):return public   # a pre-M1 carry: no ledger to fill
+    if not tables.species_names or not tables.item_names:raise CarryLayoutError('CarryTables.species_names and item_names required')
+    if b!=1:raise CarryLayoutError(f'one world per carry required, got B={b}')
+    _leaf(public.species,(1,2,6),np.int32,'species')
+    for k in LEDGER_KEYS:_leaf(mon[k],(1,2,6),np.int32,'mon_features.'+k)
+    species=_host(public.species);mutated,original=(_host(mon[k]).copy()for k in LEDGER_KEYS);n=len(tables.species_names)
+    for side,members in enumerate(facts.knocked):
+        names=[tables.species_names[int(x)]if 0<int(x)<n else''for x in species[0,side]]
+        for want,item in members:
+            slot=_knocked_member(names,want,f'side p{side+1}\'s public slots')
+            if not item or item not in tables.item_names:raise KnockedItemUnavailable(f'{want}: knocked-off item {item!r} outside the engine namespace')
+            if mutated[0,side,slot]==0 and original[0,side,slot]==0:original[0,side,slot]=tables.item_names.index(item)
+            mutated[0,side,slot]=1
+    new={k:v for k,v in zip(LEDGER_KEYS,(mutated,original))if not np.array_equal(v,_host(mon[k]))}
+    if not new:return public
+    return public._replace(mon_features={k:(jnp.asarray(new[k])if k in new else v)for k,v in mon.items()})
+
+
 def _name_index(names,want,*,move=False):
     """The one index of `names` naming `want`: exact, else (a move) any Hidden Power for 'hiddenpower...', else (a species) a
     unique forme prefix; None otherwise."""
@@ -900,6 +983,42 @@ def fix_trace_base_ability(state,owner,facts,tables):
         names=[tables.species_names[int(x)]if 0<int(x)<n else''for x in species[0,side]]
         for want in tracers:new[0,side,_member(names,want,f'side p{side+1}\'s party')]=trace
     return state if np.array_equal(new,base)else state._replace(base_ability=jnp.asarray(new))
+
+
+def _knocked_member(names,want,where):
+    """The one index of `names` that is `want` (_name_index: exact, else a unique forme prefix); KnockedItemUnavailable otherwise."""
+    found=[p for p,n in enumerate(names)if n and n==want]
+    if not found:found=[p for p,n in enumerate(names)if n and(want.startswith(n)or n.startswith(want))]
+    if len(found)!=1:raise KnockedItemUnavailable(f'{want}: {len(found)} members of {where} match a knocked-off member')
+    return found[0]
+
+
+def fix_knocked_items(state,owner,facts,tables):
+    """The world state with item_knocked[0, side, p] set for each member the lines show knocked off (facts.knocked, both sides):
+    A2's engine leaf (gpu_engine/state.py: pokemon.itemKnockedOff, never reset), which Showdown's Gen 3 Knock Off sets on the
+    target whose item it removes (data/mods/gen4/moves.ts:700-701 at f76228a13) and the engine's own Knock Off sets on the same
+    hit (transition.py:1844-1847). Its only engine reader is Trick's Gen 3-4 failure check (transition.py:1579; Showdown's
+    sim/pokemon.ts:1853 takeItem: gen <= 4 and either mon's itemKnockedOff): without it an in-tree Trick on that member succeeds
+    where Showdown fails. from_b2 and the materializer predate the leaf and leave it False. Members join by normalized species,
+    as fix_trace_base_ability joins (the owner's side: the request's party; the peer's: this world's party, whose revealed
+    members are the public ones). Refuses (KnockedItemUnavailable) rather than guesses when a knocked member does not join
+    exactly one member or its world item is not 0 (the world must already hold no item there: B2's removal, the materializer's
+    item 0, the owner's request). A state without the item_knocked leaf (legacy) is returned unchanged, as is one with nothing
+    knocked; a second pass is a no-op. CarryLayoutError without species names or on another layout."""
+    if facts is None or not any(getattr(facts,'knocked',((),()))):return state
+    if 'item_knocked'not in getattr(state,'_fields',()):return state   # a legacy state: no leaf to fill
+    if not tables.species_names:raise CarryLayoutError('CarryTables.species_names required')
+    for name,value in(('state.species',state.species),('state.item',state.item)):_leaf(value,(1,2,6),np.int32,name)
+    _leaf(state.item_knocked,(1,2,6),np.bool_,'state.item_knocked')
+    species=_host(state.species);item=_host(state.item);knocked=_host(state.item_knocked);new=knocked.copy();n=len(tables.species_names)
+    for side,members in enumerate(facts.knocked):
+        names=[tables.species_names[int(x)]if 0<int(x)<n else''for x in species[0,side]]
+        for want,_ in members:
+            p=_knocked_member(names,want,f'side p{side+1}\'s party')
+            if int(item[0,side,p])!=0:
+                raise KnockedItemUnavailable(f'{want}: knocked off on the lines, but this world holds item {int(item[0,side,p])} there')
+            new[0,side,p]=True
+    return state if np.array_equal(new,knocked)else state._replace(item_knocked=jnp.asarray(new))
 
 
 def private_reveal_slots(public,owner,facts,tables):
@@ -1210,15 +1329,16 @@ def _view_b_problem(record):
 
 def complete_public(state,public,tables,owner,*,facts=None,root=None,redact_private_reveals=False,peer_view_b=False):
     """A constructor world's public carry completed (module docstring): fill_shown_types, fill_negative_items,
-    orient_credits, and with the root's LineFacts order_peer, fill_owner_spikes, fill_baton, fill_recharge, (with the root's
-    own carry, `root`) fill_peer_pressure and, when `redact_private_reveals`, redact_private_reveals; `peer_view_b` (module
+    orient_credits, and with the root's LineFacts order_peer, fill_owner_spikes, fill_baton, fill_recharge, fill_item_ledger,
+    (with the root's own carry, `root`) fill_peer_pressure and, when `redact_private_reveals`, redact_private_reveals; `peer_view_b` (module
     docstring, Peer view b) implies redact_private_reveals and adds project_peer_damage (its facts need peer_damage). Pure; the
     same carry when nothing changes. CarryLayoutError on another carry layout, PeerOrderUnavailable when the peer order cannot
-    be joined."""
+    be joined, KnockedItemUnavailable when a knocked-off member cannot."""
     _trackers(public)
     done=orient_credits(fill_negative_items(fill_shown_types(state,public,tables)),owner)
     if facts is not None:
         done=fill_recharge(fill_baton(fill_owner_spikes(order_peer(state,done,owner,facts,tables),owner,facts),facts),facts)
+        done=fill_item_ledger(done,facts,tables)
         done=fill_peer_pressure(state,done,owner,facts,tables,root)
         if redact_private_reveals or peer_view_b:done=_redact(done,owner,facts,tables)
         if peer_view_b:done=project_peer_damage(done,owner,facts)
@@ -1231,11 +1351,11 @@ _redact=redact_private_reveals   # complete_public's keyword of the same name sh
 
 def complete_carry(state,public,tables,owner,*,facts=None,root=None,redact_private_reveals=False,peer_view_b=False):
     """(state, public) of one constructor world completed: fix_peer_base_ability and (with the root's LineFacts)
-    fix_trace_base_ability on the state first, then complete_public on
+    fix_trace_base_ability and fix_knocked_items on the state first, then complete_public on
     the carry against the CORRECTED state (fill_peer_pressure reads the peer's base abilities: a Trace holder running a
     copied Pressure has Trace as its own ability, so earlier moves against it are not recharged, and a second pass, which
     sees the corrected state, gives the same carry)."""
-    fixed=fix_trace_base_ability(fix_peer_base_ability(state,public,owner),owner,facts,tables)
+    fixed=fix_knocked_items(fix_trace_base_ability(fix_peer_base_ability(state,public,owner),owner,facts,tables),owner,facts,tables)
     view_b={'peer_view_b':True}if peer_view_b else{}
     return fixed,complete_public(fixed,public,tables,owner,facts=facts,root=root,redact_private_reveals=redact_private_reveals,**view_b)
 
@@ -1477,8 +1597,8 @@ def prepare_roots(constructor,protocol_requests,*,start_index=0,device='cpu',red
                 reveals=dict(enabled=False,error=f'{type(error).__name__}: {error}'[:500],found=[dict(species=who,ability=ability)
                     for who,ability in facts.private_reveals[detached.address.owner]],applicable=None,redacted=[],unmatched=None)
             try:made=_completed(made,complete,detached.address.owner,facts,getattr(detached,'public',None),redact_private_reveals,peer_view_b)
-            except PeerOrderUnavailable as error:
-                out.append(RootRefusal(rid,'PEER_REQUEST_ORDER_UNAVAILABLE',str(error),time.perf_counter()-clock,stamp));continue
+            except(PeerOrderUnavailable,KnockedItemUnavailable)as error:
+                out.append(RootRefusal(rid,_completion_kind(error),str(error),time.perf_counter()-clock,stamp));continue
             jax.block_until_ready([(w.state,w.public)for w in made.worlds if w.state is not None])
             out.append(Prepared(rid,detached,made,tuple(map(bool,legal)),time.perf_counter()-clock,stamp,facts,reveals,
                 **({'peer_view_b':view_b}if peer_view_b else{})))
@@ -1612,8 +1732,8 @@ def build(constructor,prepared,pricer,params,*,binding,recipe,learner_actor=0,op
         # A world without a state always names its refusal, so it stays this root's refusal (the pricer refuses the frame otherwise).
         try:worlds=tuple(_complete(complete,w,detached.address.owner,item.facts,getattr(detached,'public',None),_redacting(item),_projecting(item))
             if w.state is not None else w if w.refusals else replace(w,refusals=(UNNAMED,))for w in made.worlds)
-        except PeerOrderUnavailable as error:
-            roots.append(dict(base,status='REFUSED',reason=_constructor_reason('PEER_REQUEST_ORDER_UNAVAILABLE',str(error)),constructed=0,refused_worlds=None,
+        except(PeerOrderUnavailable,KnockedItemUnavailable)as error:
+            roots.append(dict(base,status='REFUSED',reason=_constructor_reason(_completion_kind(error),str(error)),constructed=0,refused_worlds=None,
                 refused_world_share=None));continue
         refused=tuple(w.index for w in worlds if w.state is None);kinds=';'.join(sorted({r for w in worlds for r in w.refusals}))
         base.update(address=(detached.address.stream,detached.address.frame,detached.address.owner),constructed=W-len(refused),refused_worlds=refused,
