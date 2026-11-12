@@ -44,6 +44,8 @@ class MoveEffects(NamedTuple):
     refresh: jax.Array            # [M], cure the user's par/brn/psn/tox
     # Fidelity patch A2 (appended).
     destinybond: jax.Array        # [M], volatileStatus destinybond (state.DESTINY_BOND)
+    # Fidelity patch M1 (appended).
+    recharge: jax.Array           # [M], self volatileStatus mustrecharge (move flag `recharge`: Hyper Beam in the pool)
 
 
 # Gen 3 inherits gen4's Curse (data/mods/gen4/moves.ts:268-281): a non-Ghost user
@@ -111,7 +113,7 @@ def from_metadata(metadata):
         flags({"overheat","psychoboost"}),flags({"curse"}),
         jnp.asarray(types.index("ghost") if "ghost" in types else -1,jnp.int32),
         jnp.asarray(hit_self),jnp.asarray(target),jnp.asarray(drop_block),
-        flags({"aromatherapy"}),flags({"refresh"}),flags({"destinybond"}))
+        flags({"aromatherapy"}),flags({"refresh"}),flags({"destinybond"}),move_flag("recharge"))
 
 
 def cure_team(state,side,table,*,eligible,_return_write_mask=False):

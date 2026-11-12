@@ -96,6 +96,11 @@ def depart(state,side,table,*,eligible):
         value=getattr(state,name);old=value[rows,side,active]
         gate=eligible[:,None] if old.ndim==2 else eligible
         state=state._replace(**{name:value.at[rows,side,active].set(jnp.where(gate,0,old))})
+    # Fidelity M1: switchOut's clearVolatile also ends mustrecharge (a drag included; a recharging
+    # mon cannot switch or Baton Pass itself). States without the leaf (fixtures) skip it.
+    if hasattr(state,'recharge_counter'):
+        state=state._replace(recharge_counter=state.recharge_counter.at[rows,side,active].set(
+            jnp.where(eligible,0,state.recharge_counter[rows,side,active])))
     # Remove both ends of linked move traps. A direct Baton remaps/copies its
     # links to the recipient BEFORE departure, so those transferred links stay.
     own=state.trap_source[rows,side,active]

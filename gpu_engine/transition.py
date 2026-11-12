@@ -553,6 +553,11 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
     charge_moves=state.charge_move[rows[:,None],sides,state.active]
     moves=jnp.where(charge_moves>0,charge_moves,moves)
     moves = jnp.where(struggle, table.struggle, moves)
+    # Fidelity M1: a mustrecharge holder's queued action is the pseudo-move 'recharge' (sim/side.ts
+    # chooseMove, getLockedMove). It is no move (dex.moves.get misses): priority 0 and the user's
+    # Speed order it, and no Focus Punch preparation or Pursuit can fire. Move id 0 has exactly that.
+    _recharging = state.recharge_counter[rows[:, None], sides, state.active] > 0
+    moves = jnp.where(_recharging, 0, moves)
     if _lifecycle_trace:_focus_capture=None
     if table.focus_punch is not None:
         if _lifecycle_trace:
@@ -755,6 +760,15 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
         work=work._replace(volatile=_set_active(work.volatile,work,side,jnp.where(eligible,
             _active(work.volatile,work,side)&jnp.uint32(~DESTINY_BOND&0xffffffff),_active(work.volatile,work,side))))
         if _device_public is not None:device_public.destiny_bond(_device_public,work,side,eligible)
+        # Fidelity M1: mustrecharge's onBeforeMove (data/conditions.ts, priority 11) runs before sleep (10),
+        # freeze, flinch, confusion and Gen 3 Truant: cant|X|recharge, the volatile ends, the move stops
+        # (MoveAborted, so Destiny Bond above still ended). No sleep or confusion tick, Truant not shown.
+        _recharge_turn=eligible & (_active(work.recharge_counter,work,side)>0)
+        work=work._replace(recharge_counter=_set_active(work.recharge_counter,work,side,
+            jnp.where(_recharge_turn,0,_active(work.recharge_counter,work,side))))
+        if _lifecycle_trace:_public_trace=status_callbacks.unknown(_public_trace,_recharge_turn)
+        if _device_public is not None:device_public.recharge_turn(_device_public,work,side,_recharge_turn)
+        eligible=eligible & ~_recharge_turn
         sleep_usable=jnp.zeros_like(live);early_bird=jnp.zeros_like(live)
         if table.sleep_talk is not None:
             sleep_usable=table.sleep_talk.move[move]
@@ -1506,6 +1520,13 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
             # 1344-1350), on a Substitute hit and a KO too; same gate as the SpA drop. -6 is silent.
             boosts = jnp.clip(boosts + jnp.where((acts & hit & ~immune)[:,None],effects.hit_self_boosts[move],0),-6,6)
             work = work._replace(boosts=_set_active(work.boosts,work,side,boosts))
+            # Fidelity M1: Hyper Beam's self volatileStatus mustrecharge (data/moves.ts hyperbeam) comes from the
+            # same selfDrops: on a hit, a Substitute hit and a KO, never on a miss, Protect or an immunity.
+            # Duration 2; -mustrecharge is published by public_move_state (0 -> 2).
+            _recharge_set=acts & hit & ~immune & effects.recharge[move]
+            work=work._replace(recharge_counter=_set_active(work.recharge_counter,work,side,
+                jnp.where(_recharge_set,2,_active(work.recharge_counter,work,side))))
+            if _lifecycle_trace:_public_trace=status_callbacks.unknown(_public_trace,_recharge_set)
             if _lifecycle_trace:
                 _public_trace,_belly_capture=belly_callbacks.finish(_public_trace,_belly_pending,work,acts&hit&~immune)
                 _public_trace=kernel_risks.branch_on_tape(_public_trace,kernel_risks.Branch.BELLY_DRUM,
@@ -1545,6 +1566,25 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                 old = _active(work.boosts,work,target_side)
                 work = work._replace(boosts=_set_active(work.boosts,work,target_side,
                     jnp.where((acts & effects.haze[move])[:,None],0,old)))
+            if table.items is not None:
+                # Fidelity M1: Trick (data/moves.ts, Gen 3 = base). Accuracy 100 and Protect are in `hit`; a Status
+                # move ignores type immunity (Dark is hit). Sticky Hold is its onTryImmunity (-immune, no ability
+                # line); a Substitute fails it (TryPrimaryHit, no bypasssub). onHit: takeItem fails when either
+                # mon has itemKnockedOff (sim/pokemon.ts, gen<=4) or neither holds an item; otherwise the items
+                # swap, an identical pair included (unchanged state; the device still sees the -item lines).
+                # The Choice lock follows the current item: the lock site below and the end-of-turn unlock.
+                _trick=(acts & hit & table.items.trick[move] & (_active(work.hp,work,side)>0) & (_active(work.hp,work,foe)>0)
+                    & ((_active(work.substitute_hp,work,foe)==0) | effects.bypass_sub[move])
+                    & ~table.items.sticky_hold[_active(work.ability,work,foe)]
+                    & ~_active(work.item_knocked,work,side) & ~_active(work.item_knocked,work,foe)
+                    & ((_active(work.item,work,side)>0) | (_active(work.item,work,foe)>0)))
+                if _device_public is not None:_device_trick_before=work
+                _trick_own=_active(work.item,work,side);_trick_foe=_active(work.item,work,foe)
+                work=work._replace(item=_set_active(work.item,work,side,jnp.where(_trick,_trick_foe,_trick_own)))
+                work=work._replace(item=_set_active(work.item,work,foe,jnp.where(_trick,_trick_own,_trick_foe)))
+                if _lifecycle_trace:_public_trace=status_callbacks.unknown(_public_trace,_trick)
+                if _device_public is not None:
+                    device_public.trick(_device_public,_device_trick_before,work,side,_trick,table.items.choice_band)
             # Charm's primary boosts (moveHit after TryHit): Protect is already in `hit`; a
             # Substitute fails it (TryPrimaryHit); status moves ignore type immunity
             # (tryMoveHit sets ignoreImmunity for Status). The drop is capped first, then
@@ -2321,6 +2361,13 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                 _public_trace=kernel_risks.branch_on_tape(_public_trace,kernel_risks.Branch.ENCORE,
                     _encore_attempt,active=live,captured_encore=_encore_residual_capture)
         work=_clear_fainted_boosts(work,_faint_before_hp,eligible=eligible)
+    # Fidelity M1 (design 2.3): mustrecharge has a duration and no residual handler, so the Residual event
+    # still decrements it, last (order false sorts after every numbered handler, sim/battle.ts). At 0 it ends
+    # silently: a recharge action cancelled by a Gen 3 faint expires here. Fainted holders are cleared below;
+    # a residual faint that ends the battle stops the Residual event first (checkWin, `if (this.ended) return`).
+    _recharge_tick=residual_ready & jnp.all(jnp.any(work.hp>0,axis=2),axis=1)
+    work=work._replace(recharge_counter=jnp.where(_recharge_tick[:,None,None] & (work.recharge_counter>0),
+        work.recharge_counter-1,work.recharge_counter))
     work=linking.prune(work)
     work=work._replace(volatile=jnp.where(work.hp>0,work.volatile,
         work.volatile & jnp.uint32(~(FOCUS_PUNCH|FOCUS_LOST)&0xffffffff)))
@@ -2335,6 +2382,8 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
     work=work._replace(**{name:jnp.where(work.hp>0,getattr(work,name),0) for name in ("confusion_counter","choice_move")})
     # clearVolatile at the faint also ends Destiny Bond (design 2.4).
     work=work._replace(volatile=jnp.where(work.hp>0,work.volatile,work.volatile & jnp.uint32(~DESTINY_BOND&0xffffffff)))
+    # Fidelity M1: and mustrecharge (design 2.4).
+    work=work._replace(recharge_counter=jnp.where(work.hp>0,work.recharge_counter,0))
     alive = jnp.any(work.hp > 0, axis=2)
     done = ~jnp.all(alive, axis=1)
     winner = jnp.where(alive[:, 0], 0, jnp.where(alive[:, 1], 1, 2))

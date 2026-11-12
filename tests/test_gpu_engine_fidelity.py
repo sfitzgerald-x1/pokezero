@@ -83,6 +83,14 @@ class TraceTests(unittest.TestCase):
         self.assertEqual(canonical('hiddenpowergrass'),'hiddenpower')
         self.assertEqual(toid('Deoxys-Attack'),'deoxysattack')
 
+    def test_struggle_and_recharge_requests_are_the_slot_zero_lock(self):
+        from gpu_engine.fidelity import request_slot
+        own=['earthquake','hyperbeam','return','shadowball']
+        self.assertEqual(request_slot('return',own),2)
+        self.assertEqual(request_slot('recharge',own),0)
+        self.assertEqual(request_slot('struggle',own),0)
+        self.assertEqual(request_slot('transform',own),-1)
+
 
 @unittest.skipUnless(NODE and SHOWDOWN,'requires pinned compiled Showdown')
 class NativeChanceTests(unittest.TestCase):

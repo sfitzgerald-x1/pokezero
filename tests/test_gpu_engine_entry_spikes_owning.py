@@ -108,6 +108,7 @@ class EntrySpikesTests(unittest.TestCase):
   old=ast.parse(subprocess.check_output(['git','show','ad7ecc8987d849921aea7db9c10c46d363507674:gpu_engine/entry.py'],text=True));new=ast.parse(Path('gpu_engine/entry.py').read_text())
   for name in('enter','depart','speed_modifier','restore_sleep'):
    a=next(n for n in old.body if isinstance(n,ast.FunctionDef)and n.name==name);b=next(n for n in new.body if isinstance(n,ast.FunctionDef)and n.name==name)
+   if name=='depart':b=ordinary.strip_m1_recharge(deepcopy(b),required=True)     # fidelity M1's approved clear only
    self.assertEqual(dump_default_program(a),dump_default_program(b))
   a=next(n for n in old.body if isinstance(n,ast.FunctionDef)and n.name=='from_metadata');b=next(n for n in new.body if isinstance(n,ast.FunctionDef)and n.name=='from_metadata')
   self.assertEqual([ast.dump(x)for x in a.body[-1].value.args],[ast.dump(x)for x in b.body[-1].value.args[:-3]])
