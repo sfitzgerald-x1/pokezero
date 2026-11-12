@@ -84,6 +84,14 @@ class ComponentMemoryCheckTests(unittest.TestCase):
             self.assertEqual(row['tree_rss_bytes'], 51*1024)
             row = snapshot(11, proc=root/'proc', group=group, pss=True, shares=lambda *_: True)
             self.assertEqual((row['memory_bytes'], row['tree_pss_bytes']), (720, 29*1024))
+            # Of the readings before and after the /proc walk, the higher one gates.
+            real = __import__('scripts.run_component_memory_check', fromlist=['cgroup_memory']).cgroup_memory
+            readings = iter([dict(real(group), cgroup_memory_bytes=900), dict(real(group), cgroup_memory_bytes=700)])
+            with mock.patch('scripts.run_component_memory_check.cgroup_memory', side_effect=lambda _: next(readings)):
+                self.assertEqual(snapshot(11, proc=root/'proc', group=group)['memory_bytes'], 900)
+            readings = iter([dict(real(group), cgroup_memory_bytes=700), dict(real(group), cgroup_memory_bytes=900)])
+            with mock.patch('scripts.run_component_memory_check.cgroup_memory', side_effect=lambda _: next(readings)):
+                self.assertEqual(snapshot(11, proc=root/'proc', group=group)['memory_bytes'], 900)
             # A counter that disappears falls back to the larger summed RSS, never to zero.
             (group/'memory.stat').unlink()
             self.assertEqual(snapshot(11, proc=root/'proc', group=group)['memory_bytes'], 51*1024)

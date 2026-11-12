@@ -113,6 +113,10 @@ def snapshot(pid, *, proc=Path('/proc'), group=None, pss=None,
     when the cgroup gates (diagnostic only; it walks every page table).
     """
     pss = group is None if pss is None else pss
+    # The cgroup is read before and after the /proc walk and the higher reading
+    # kept: both are real readings inside the sample, and memory that moves
+    # during the walk can then only raise the gate, never lower it.
+    before = _read_cgroup(group)
     pending, seen = [(os.getpid(), None), (pid, os.getpid())], set()
     rss = process_peak = pss_total = anon = file = shmem = 0
     while pending:
@@ -154,13 +158,23 @@ def snapshot(pid, *, proc=Path('/proc'), group=None, pss=None,
     if group is None:
         row['memory_bytes'] = pss_total
     else:
-        try:
-            row.update(cgroup_memory(group))
+        readings = [reading for reading in (before, _read_cgroup(group)) if reading is not None]
+        if readings:
+            row.update(max(readings, key=lambda reading: reading['cgroup_memory_bytes']))
             row['memory_bytes'] = row['cgroup_memory_bytes']
-        except (OSError, ValueError):
+        else:
             # A missing counter never lowers the gate: use the larger RSS sum.
             row['memory_bytes'] = rss
     return row
+
+
+def _read_cgroup(group):
+    if group is None:
+        return None
+    try:
+        return cgroup_memory(group)
+    except (OSError, ValueError):
+        return None
 
 
 def cgroup_peak(group):
