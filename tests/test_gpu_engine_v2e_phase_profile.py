@@ -22,9 +22,9 @@ from gpu_engine import v2e_census as cz, v2e_phase_profile as pp
 
 ROOT = Path(__file__).resolve().parents[1]
 # Statements of a stand-in step_with_chance on the real phase lines (A, B, D, E0, two actions E1/E4, F1, two residual events, G).
-CODE = {342: 'def step_with_chance(x, y):', 487: '    a = helper(x) + y', 544: '    b = a * y', 615: '    c = b - x', 719: '    c = c + 1',
-    742: '    for order in range(2):', 744: '        c = c * 2 + order', 1953: '        c = jnp.where(c > 0, c, -c)', 2051: '    d = c - y',
-    2171: '    for event in range(2):', 2172: '        d = d + event', 2268: '        d = d * 3', 2497: '    return d + a'}
+CODE = {378: 'def step_with_chance(x, y):', 523: '    a = helper(x) + y', 580: '    b = a * y', 651: '    c = b - x', 771: '    c = c + 1',
+    794: '    for order in range(2):', 796: '        c = c * 2 + order', 2033: '        c = jnp.where(c > 0, c, -c)', 2143: '    d = c - y',
+    2263: '    for event in range(2):', 2264: '        d = d + event', 2360: '        d = d * 3', 2597: '    return d + a'}
 HEADER = ['import jax', 'import jax.numpy as jnp', '', '', '@jax.jit', 'def helper(x):', '    return x * 3 + 1']
 LABELS = ['A', 'B', 'D', 'E0', 'E1.0', 'E4.0', 'E1.1', 'E4.1', 'F1', 'F2.0', 'F2.1', 'G']
 
@@ -81,7 +81,7 @@ class PhaseTableTest(unittest.TestCase):
         for tag, label in cz.BOUNDARIES:self.assertTrue(label == 'END' or cz.base(label) in names, tag)
 
     def test_label_lines(self):
-        lines = [None, 488, 544, 578, 649, 729, 755, 980, 1391, 1953, 755, 980, 2012, 2062, 2164, 2172, 2268, 2177, 2203, 2180, 2517, None]
+        lines = [None, 524, 580, 614, 685, 781, 807, 1060, 1471, 2033, 807, 1060, 2099, 2154, 2256, 2264, 2360, 2269, 2295, 2272, 2617, None]
         want = ['outside', 'A', 'B', 'C', 'D', 'E0', 'E1.0', 'E2.0', 'E3.0', 'E4.0', 'E1.1', 'E2.1', 'E4.1', 'F1', 'F2.pre', 'F2.0', 'F2.0',
             'F2.1', 'F2.1', 'F2.2', 'G', 'outside']
         self.assertEqual(cz.label_lines(lines), want)
@@ -90,7 +90,7 @@ class PhaseTableTest(unittest.TestCase):
 
     def test_listing_lines(self):
         with tempfile.TemporaryDirectory() as d:
-            path = Path(d, 'listing.txt');path.write_text('  353:   check\n  487:   rows\n  544:   speed\n 2062:   x\n 2581:   return\nnoise\n')
+            path = Path(d, 'listing.txt');path.write_text('  389:   check\n  523:   rows\n  580:   speed\n 2154:   x\n 2681:   return\nnoise\n')
             self.assertEqual(cz.listing_lines(path), {'pre': 1, 'A': 1, 'B': 1, 'F1': 1, 'G': 1})
 
 
@@ -173,9 +173,9 @@ FunctionNames
 FileLocations
 1 {file_name_id=1 function_name_id=1 line=10 end_line=10 column=4 end_column=35}
 2 {file_name_id=1 function_name_id=2 line=9 end_line=9 column=11 end_column=30}
-3 {file_name_id=1 function_name_id=3 line=750 end_line=750 column=8 end_column=15}
+3 {file_name_id=1 function_name_id=3 line=802 end_line=802 column=8 end_column=15}
 4 {file_name_id=2 function_name_id=4 line=4 end_line=4 column=11 end_column=23}
-5 {file_name_id=1 function_name_id=3 line=2062 end_line=2062 column=11 end_column=16}
+5 {file_name_id=1 function_name_id=3 line=2154 end_line=2154 column=11 end_column=16}
 
 StackFrames
 1 {file_location_id=1 parent_frame_id=1}
@@ -205,14 +205,14 @@ class JaxAttribTest(unittest.TestCase):
     def test_stacks_reach_the_outermost_frame(self):
         stack = pp.hlo_stacks(HLO.splitlines())
         self.assertEqual(stack.offset, 1)
-        self.assertEqual(stack(4), [('lane_index.py', 'leaf', 4), ('transition.py', 'step_with_chance', 750), ('transition.py', 'outer', 9),
+        self.assertEqual(stack(4), [('lane_index.py', 'leaf', 4), ('transition.py', 'step_with_chance', 802), ('transition.py', 'outer', 9),
             ('transition.py', '<module>', 10)])
-        self.assertEqual([f[2] for f in stack(5)], [2062, 9, 10])
+        self.assertEqual([f[2] for f in stack(5)], [2154, 9, 10])
 
     def test_index_and_attribution(self):
         index = pp.phase_hlo_index(HLO)
-        self.assertEqual((index['fusion.1']['line'], index['fusion.1']['module'], index['fusion.1']['scope']), (750, 'lane_index', 'step'))
-        self.assertEqual(index['fusion.2']['line'], 2062);self.assertIsNone(index['fusion.3']['line']);self.assertEqual(index['fusion.4']['scope'], 'forward')
+        self.assertEqual((index['fusion.1']['line'], index['fusion.1']['module'], index['fusion.1']['scope']), (802, 'lane_index', 'step'))
+        self.assertEqual(index['fusion.2']['line'], 2154);self.assertIsNone(index['fusion.3']['line']);self.assertEqual(index['fusion.4']['scope'], 'forward')
         event = lambda op, dur: dict(name=op, dur=dur, start=0, end=dur, line='Stream #1', stats={'hlo_op': op})
         events = [event('fusion.1', 4_000_000), event('fusion.2', 2_000_000), event('fusion.3', 1_000_000), event('fusion.4', 8_000_000),
             event('unknown.9', 5), dict(name='memcpy', dur=9, start=0, end=9, line='Stream #1', stats={})]
@@ -221,7 +221,7 @@ class JaxAttribTest(unittest.TestCase):
         self.assertEqual(got['ms_per_tick_by_phase'], {'E1': 2.0, 'F1': 1.0, 'outside': 0.5})
         self.assertEqual(got['ms_per_tick_by_group_category']['E'], {'tracker': 2.0})
         self.assertAlmostEqual(got['step_ms_per_tick'], 3.5);self.assertIn('forward', got['ms_per_tick_by_scope'])
-        # fusion.2 (root op at 2062, F1) fuses an op from line 750 (E1): charged whole to F1, and counted as spanning two phases.
+        # fusion.2 (root op at 2154, F1) fuses an op from line 802 (E1): charged whole to F1, and counted as spanning two phases.
         self.assertEqual(index['fusion.2']['phases'], ['E1', 'F1']);self.assertEqual(index['fusion.1']['phases'], ['E1'])
         self.assertAlmostEqual(got['multi_phase_fusion_share'], 2 / 7);self.assertAlmostEqual(got['multi_group_fusion_share'], 2 / 7)
         self.assertIn('root op', got['caveat'])
@@ -231,7 +231,7 @@ class JaxAttribTest(unittest.TestCase):
         for k, p in ((2, 1), (3, 2), (4, 3), (5, 2)):
             fixed = fixed.replace(f'{k} {{file_location_id={k} parent_frame_id={p + 1}}}', f'{k} {{file_location_id={k} parent_frame_id={p}}}')
         stack = pp.hlo_stacks(fixed.splitlines());self.assertEqual(stack.offset, 0)
-        self.assertEqual([f[2] for f in stack(4)], [4, 750, 9, 10])
+        self.assertEqual([f[2] for f in stack(4)], [4, 802, 9, 10])
 
 
 class DivergenceTest(unittest.TestCase):
