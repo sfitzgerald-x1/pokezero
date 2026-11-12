@@ -159,7 +159,8 @@ EFFECTS = (
          'probes: 12 wrap* scenarios (20 cases), EXACT against Showdown f76228a1 at M2 + R1 (3e0878e4); each gated position fails a '
          'named probe when dropped (#1930 (M2 + R1) PR body, R1 section, position -> probe table: 4 wrap and seven more, 8 and 9 '
          'wrap_tie, 11 wrap_trapper_faint and wrap_trapper_switch)',
-         'live roots: a held partial trap is refused: an own-held one is refused first (gpu_engine/phase_d_live_worlds.py:344-345, OWN_VOLATILE_OR_LATENT_CLOCK_UNAVAILABLE); an opponent-held one because the protocol world is built with '
+         'live roots: a held partial trap is refused: an own-held one is refused first (gpu_engine/phase_d_live_worlds.py:344-345, OWN_VOLATILE_OR_LATENT_CLOCK_UNAVAILABLE); '
+         'an opponent-held one because the protocol world is built with '
          'approximate_partial_trap_turns=False (gpu_engine/phase_d_protocol_world.py:306-307), so pokezero.engine_world raises '
          'volatile_unsupported'),
         'Shuckle (Staller) only. In-tree since M2 the trap and its residual chip are modelled; a root already holding a partial trap '
@@ -172,7 +173,8 @@ EFFECTS = (
          'order-10 list, faster side first, an equal-Speed pair on a drawn effect bit, the count and the faint at 0 (not gated by R1)',
          'probes: 10 perishsong* scenarios (perishsong, _tie, _last_faster, _baton, _switch, _meanlook, _soundproof, _soundproof_user, '
          '_protect_sub, _reuse), EXACT against Showdown f76228a1 at M2 + R1 (3e0878e4)',
-         'live roots: a held perish count is refused: an own-held one is refused first (gpu_engine/phase_d_live_worlds.py:344-345, OWN_VOLATILE_OR_LATENT_CLOCK_UNAVAILABLE); an opponent-held one passes pokezero.engine_world and is refused '
+         'live roots: a held perish count is refused: an own-held one is refused first (gpu_engine/phase_d_live_worlds.py:344-345, OWN_VOLATILE_OR_LATENT_CLOCK_UNAVAILABLE); '
+         'an opponent-held one passes pokezero.engine_world and is refused '
          'by the protocol world\'s typed mapper (gpu_engine/phase_d_protocol_world.py:319-323 -> v5_hypothetical_state.py:46: any '
          'volatile but leechseed, substitute and truant, volatile:<seat>); '
          'gpu_engine/public_active.py:46, 217-233 keeps the public counts for the encoder'),
@@ -187,7 +189,8 @@ EFFECTS = (
          'probes: 11 yawn* scenarios, EXACT against Showdown f76228a1 at M2 + R1 (3e0878e4); each gated position fails a named probe '
          'when dropped (#1930 (M2 + R1) PR body, R1 section, position -> probe table: 6 yawn_faster, added because no earlier probe '
          'reached it; 12 yawn_tie; 13 yawn and six more)',
-         'live roots: a held drowsy is refused: an own-held one is refused first (gpu_engine/phase_d_live_worlds.py:344-345, OWN_VOLATILE_OR_LATENT_CLOCK_UNAVAILABLE); an opponent-held one because the protocol world is built with '
+         'live roots: a held drowsy is refused: an own-held one is refused first (gpu_engine/phase_d_live_worlds.py:344-345, OWN_VOLATILE_OR_LATENT_CLOCK_UNAVAILABLE); '
+         'an opponent-held one because the protocol world is built with '
          'approximate_hidden_duration_volatiles=False (gpu_engine/phase_d_protocol_world.py:306-307), so pokezero.engine_world '
          'raises volatile_unsupported'),
         'Swalot (Bulky Attacker) only.', engine_since='f3e71663'),
