@@ -811,8 +811,9 @@ class TrickWhiteHerbBoundaryParityTests(unittest.TestCase):
         import test_gpu_engine_fidelity_a2 as a2
         a2.KnockOffNarrowingB2Tests.setUpClass()
         cls.helper=a2.KnockOffNarrowingB2Tests();cls.f=cls.helper.f
-        cls.lines=[*cls.f.prefix,'|turn|1','|move|p2a: Absol|Charm|p1a: Snorlax','|-unboost|p1a: Snorlax|atk|2',
-            '|move|p1a: Snorlax|Trick|p2a: Absol','|-activate|p1a: Snorlax|move: Trick|[of] p2a: Absol',
+        # The fixture's frozen public move namespace has neither Charm nor Trick: their effect lines stand alone (as M1's
+        # Trick ledger test does).
+        cls.lines=[*cls.f.prefix,'|turn|1','|-unboost|p1a: Snorlax|atk|2','|-activate|p1a: Snorlax|move: Trick|[of] p2a: Absol',
             '|-item|p2a: Absol|Choice Band|[from] move: Trick','|-enditem|p1a: Snorlax|Leftovers',
             '|-clearnegativeboost|p1a: Snorlax|[silent]','|-item|p1a: Snorlax|Leftovers|[from] move: Trick']
 
