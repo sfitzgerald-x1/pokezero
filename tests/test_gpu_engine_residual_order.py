@@ -101,6 +101,8 @@ class ConstantsTests(unittest.TestCase):
         self.assertEqual({kind: set(positions) for kind, positions in ro.POSITIONS.items()}, table)
         self.assertEqual(sum(len(positions) for positions in table.values()), 26)   # of 7 x 14
         self.assertEqual(set(ro.POSITIONS['wrap']), WRAP);self.assertEqual(set(ro.POSITIONS['yawn']), YAWN)
+        with self.assertRaises(TypeError):ro.POSITIONS['wrap'] = frozenset()     # read-only (R1 review)
+        self.assertTrue(all(isinstance(positions, frozenset) for positions in ro.POSITIONS.values()))
 
     def test_module_is_jax_free(self):
         code = 'import sys\nimport gpu_engine.residual_order\nsys.exit(int(any(m == "jax" or m.startswith("jax.") for m in sys.modules)))'

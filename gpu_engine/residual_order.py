@@ -22,6 +22,7 @@ position the kind's event mask is all false. Fidelity M2's R1 emits the Wrap and
 POSITIONS['wrap'] and POSITIONS['yawn'], which cuts the traced step's size; every other handler runs at every position.
 """
 import itertools
+import types
 
 KINDS = ('ability', 'heal', 'seed', 'status', 'wrap', 'encore', 'yawn')
 # Speed Boost (subOrder 3), Leftovers and the pinch berries (4), Leech Seed (5), brn/psn/tox (6), partiallytrapped (9),
@@ -89,5 +90,6 @@ def reachable_positions():
     return {kind: frozenset(found[kind]) for kind in KINDS}
 
 
-# R1's gating sets, derived from the constants above (wrap: 4, 8, 9, 11; yawn: 6, 12, 13).
-POSITIONS = reachable_positions()
+# R1's gating sets, derived from the constants above (wrap: 4, 8, 9, 11; yawn: 6, 12, 13). Read-only (a mapping proxy of
+# frozensets), so nothing can change the gating sets at runtime.
+POSITIONS = types.MappingProxyType(reachable_positions())
