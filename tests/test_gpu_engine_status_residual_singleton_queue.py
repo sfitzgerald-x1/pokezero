@@ -83,8 +83,8 @@ class SingletonStatusQueueTests(unittest.TestCase):
   script=r"""const path=require('path'),r=process.argv[1],{Battle}=require(path.join(r,'dist/sim/battle.js')),d=require(path.join(r,'dist/sim/dex.js')).Dex.mod('gen3');const results=[];for(const statuses of [['tox'],['tox','brn']]){let calls=0;let a=statuses.map((n,i)=>{const x=d.conditions.get(n);return {side:i,order:x.onResidualOrder,priority:x.onResidualPriority||0,speed:151,subOrder:x.onResidualSubOrder}});Battle.prototype.speedSort.call({comparePriority:Battle.prototype.comparePriority,prng:{shuffle(){calls++}}},a);results.push(calls)}let damages=[],state={stage:0};d.conditions.get('tox').onResidual.call({effectState:state,clampIntRange:(x,min)=>Math.max(Math.trunc(x),min),damage:n=>damages.push(n)},{baseMaxhp:341});console.log(JSON.stringify({results,damages,stage:state.stage}));"""
   got=json.loads(subprocess.check_output(['node','-e',script,ROOT],text=True));self.assertEqual(got,dict(results=[0,1],damages=[21],stage=1))
   old=ast.parse(subprocess.check_output(['git','show','1376098:gpu_engine/transition.py'],text=True));new=ast.parse(subprocess.check_output(['git','show','2e35ba40:gpu_engine/transition.py'],text=True));baseline=dump_default_program(old);self.assertEqual(baseline,dump_default_program(new));assert_hp_rng_mutations_detected(self,new,baseline)
-  new=ast.parse(Path('gpu_engine/transition.py').read_text());integrated=ast.parse(subprocess.check_output(['git','show','b8092a85:gpu_engine/transition.py'],text=True))
-  self.assertEqual(ast.dump(new),ast.dump(integrated));assert_hp_rng_mutations_detected(self,new,dump_default_program(integrated))
+  # transition.py is certified against CURRENT_TRANSITION (full AST plus mutations) by terminal_closeout and seismic_toss_components.
+  new=ast.parse(Path('gpu_engine/transition.py').read_text())
   # The old strict unequal-speed guard remains byte/AST-identical.
   get=lambda tree:ast.dump(next(n for n in ast.walk(tree)if isinstance(n,ast.Assign)and any(isinstance(t,ast.Name)and t.id=='_status_cached_speed_ok'for t in n.targets)))
   self.assertEqual(get(old),get(new))

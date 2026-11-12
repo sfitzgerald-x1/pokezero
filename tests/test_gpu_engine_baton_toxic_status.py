@@ -296,10 +296,8 @@ class BatonToxicGuardTests(unittest.TestCase):
  def test_original_toxic_counter_not_copied_and_default_physics_exact(self):
   script=r"""const root=process.argv[1],d=require(root+'/dist/sim/dex.js').Dex.mod('gen3'),P=require(root+'/dist/sim/pokemon.js').Pokemon,out=[];for(const stage of[0,2]){const s={status:'tox',statusState:{stage},side:{},volatiles:{},boosts:{atk:0,def:0,spa:0,spd:0,spe:0,accuracy:0,evasion:0},clearVolatile(){this.boosts={atk:0,def:0,spa:0,spd:0,spe:0,accuracy:0,evasion:0}}},t={status:'',statusState:{},volatiles:{},clearVolatile(){this.volatiles={}},battle:{}};d.moves.get('batonpass').onHit.call({canSwitch:()=>true},s);d.moves.get('batonpass').self.onHit.call({},s);P.prototype.copyVolatileFrom.call(t,s,'copyvolatile');d.conditions.get('tox').onSwitchIn.call({effectState:s.statusState});out.push({outgoingStatus:s.status,incomingStatus:t.status,sourceStage:s.statusState.stage,targetState:t.statusState});}console.log(JSON.stringify(out));"""
   v=json.loads(subprocess.check_output(['node','-e',script,str(showdown_root())],text=True));self.assertEqual(v,[dict(outgoingStatus='tox',incomingStatus='',sourceStage=0,targetState={})]*2)
-  for n in('transition.py','entry.py','baton.py','state.py','mechanics.py'):
-   # Integrated physical baseline; BASE below still tests the pre-fix toxic regression.
-   physical_base='b8092a85'
-   self.assertEqual(Path('gpu_engine',n).read_bytes(),subprocess.check_output(['git','show',physical_base+':gpu_engine/'+n]))
+  # transition.py is certified against CURRENT_TRANSITION (full AST plus mutations) by terminal_closeout and seismic_toss_components; entry, state, baton and mechanics: byte-exact against reviewed SOURCE_PINS in transition_observer_wiring's source-binding subtests.
+  # BASE below still tests the pre-fix toxic regression.
   old=ast.parse(subprocess.check_output(['git','show',BASE+':gpu_engine/engine_baton_pass_callbacks.py'],text=True));ns={};exec(compile(ast.Module([n for n in old.body if isinstance(n,ast.FunctionDef)and n.name=='_quiet'],[]),'baseline-quiet','exec'),dict(j=j),ns)
   s=state.empty_state(1)._replace(hp=j.ones((1,2,6),j.int32),status=j.full((1,2,6),4,j.int32),ability=j.ones((1,2,6),j.int32),base_ability=j.ones((1,2,6),j.int32));d=__import__('types').SimpleNamespace(quiet_abilities=j.array([False,True]),quiet_items=j.array([True]));self.assertEqual(ns['_quiet'](s,j.array([0]),j.array([0]),d).tolist(),[False])
 

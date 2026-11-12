@@ -216,10 +216,7 @@ class RegisteredStatusResidualCallerTests(unittest.TestCase):
         baseline=dump_default_program(old)
         self.assertEqual(dump_default_program(new),baseline)
         assert_hp_rng_mutations_detected(self,new,baseline)
-        current=ast.parse(Path(t.__file__).read_text())
-        integrated=ast.parse(subprocess.check_output(['git','show','b8092a85:gpu_engine/transition.py'],text=True))
-        self.assertEqual(ast.dump(current),ast.dump(integrated))
-        assert_hp_rng_mutations_detected(self,current,dump_default_program(integrated))
+        # transition.py is certified against CURRENT_TRANSITION (full AST plus mutations) by terminal_closeout and seismic_toss_components.
 
 
 

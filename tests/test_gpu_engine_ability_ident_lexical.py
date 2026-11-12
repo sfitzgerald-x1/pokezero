@@ -89,9 +89,4 @@ class AbilityIdentLexicalTests(unittest.TestCase):
    public=self.catalog.species.species_id(row['name']);mapped=int(self.adapter.device.ident_species[public]);base_id=self.catalog.species.species_id(row['baseSpecies'])
    self.assertEqual(mapped,base_id)
    if row['id'] in ('hooh','nidoranf','nidoranm'):self.assertEqual(public,mapped)
-  from gpu_engine_default_observer_ast import dump_default_program
-  from test_gpu_engine_v5_hypothetical_profile import normalized_hypothetical_default
-  before=subprocess.check_output(['git','show','b8092a85:gpu_engine/transition.py'],text=True)
-  self.assertEqual(dump_default_program(normalized_hypothetical_default(before,as_tree=True)),dump_default_program(normalized_hypothetical_default(Path('gpu_engine/transition.py').read_text(),as_tree=True)))
-  for name in ('entry.py','mechanics.py','engine_pressure_callbacks.py','engine_trace_callbacks.py'):
-   self.assertEqual(Path('gpu_engine',name).read_bytes(),subprocess.check_output(['git','show','b8092a85:gpu_engine/'+name]))
+  # transition.py is certified against CURRENT_TRANSITION (full AST plus mutations) by terminal_closeout and seismic_toss_components; entry, mechanics, engine_pressure_callbacks and engine_trace_callbacks: byte-exact against reviewed SOURCE_PINS in transition_observer_wiring's source-binding subtests.
