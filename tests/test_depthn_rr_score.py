@@ -1360,6 +1360,12 @@ class AbilityGuardChoiceTests(unittest.TestCase):
         clear = S.guard_facts(dict(guard_record(), ability=dict(b=False, own_guarded_lanes=[None] * 4, arms={}, reasons=[])), dict(averaging=0))
         u = S.guard_report([rec(facts), rec(clear)], S.SETTINGS)['union']
         self.assertEqual((u['ability_only'], u['unavailable_or_error'], u['total']), (1, 0, 1))   # its own part, not an error
+        reply_held = S.guard_facts(dict(guard_record(), ability=dict(b=False, own_guarded_lanes=[None] * 4, arms={}, reasons=[]),
+            union=dict(reply=dict(b=False, ability_b=True, ability_own_lanes=[None, None, ['PINCH'], None]))), dict(averaging=2, worst=0))
+        self.assertEqual((reply_held['reply_ability_b'], reply_held['c']), (True, dict(averaging=True, worst=False)))   # the reply arm's (c) lanes
+        a = S.any_cell_report([dict(rec(facts), reach_ops=dict(any_cell={n: (0, (.1, .1), '<1%') for n in S.SETTINGS})),
+                               dict(rec(reply_held), reach_ops=dict(any_cell={n: (0, (.1, .1), '<1%') for n in S.SETTINGS}))], S.SETTINGS)
+        self.assertEqual((a['roots'], a['ability_only'], a['unguarded']['roots']), (2, 2, 0))   # held by either arm's ability (b), never clean
 
 
 if __name__ == '__main__':

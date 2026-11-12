@@ -263,6 +263,10 @@ class SeamTests(unittest.TestCase):
         plain, _, _ = self.record(lambda s: ability_labels(s, ours=WONDERGUARD, peer_moves=quiet))
         self.assertEqual((plain['tripped'], 'ability' in plain), (False, False))   # no metadata: the move guard alone
         with self.assertRaisesRegex(ValueError, 'ability_labels'):self.record(lambda s: fake_labels(s, peer_moves=quiet), metadata=meta)
+        union, _, _ = self.record(lambda s: ability_labels(s, ours=WONDERGUARD, peer_moves=quiet), metadata=meta, reply=self.champion_reply)
+        reply = union['union']['reply']   # the champion's logits as the reply model: the arms agree, ability fields included
+        self.assertEqual((reply['ability_b'], reply['ability_own_lanes'], union['tripped']), (wg['ability']['b'], [None] * 4, True))
+        self.assertNotIn('ability_b', self.record(lambda s: ability_labels(s, ours=WONDERGUARD, peer_moves=quiet), reply=self.champion_reply)[0]['union']['reply'])
 
 
 class AbilityRootTests(unittest.TestCase):

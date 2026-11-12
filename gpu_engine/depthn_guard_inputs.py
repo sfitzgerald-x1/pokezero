@@ -228,8 +228,9 @@ def effect_record(frame, root, worlds, children, request, owner, vocabulary, cho
     stays the champion's evaluation; `union` adds dict(tripped=champion OR reply, champion=..., reply=...) over UNION_FIELDS (with
     the ability guard also ability_b and ability_own_lanes, its (c) lanes: those can differ between the arms),
     `union_only` whether only the reply arm tripped (then the record's b, c, arms and m_* describe the champion, which did not), and
-    the top-level `tripped` becomes union['tripped'] (the live actor plays greedy on it). Without reply_logits: unchanged. Only (b)
-    can differ between the arms: (c) reads our own prior and lanes, the same in both.
+    the top-level `tripped` becomes union['tripped'] (the live actor plays greedy on it). Without reply_logits: unchanged. The move
+    guard's (c) reads our own prior and lanes, the same in both arms; the ability guard's (c) can differ (its root PINCH rule reads
+    the other side's prior), so the reply summary carries its (c) lanes (ability_own_lanes).
     `metadata` (the engine metadata: vocabulary, moves, type_chart): with it the ability guard runs too (AbilityFacts,
     ability_root at each world's root row, ability_lanes at each expanded child's two sides, exact; the record's `ability`);
     without it the record is the move guard's alone."""

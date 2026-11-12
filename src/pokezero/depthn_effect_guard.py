@@ -652,6 +652,7 @@ def ability_trips(ab, *, arms=None, pinch_root=None, threshold=None):
     'third' record keeps no 2/3 masses): ValueError otherwise."""
     arms = ab['arms'] if arms is None else arms;pinch_root = ab['pinch_root'] if pinch_root is None else pinch_root
     if threshold is not None and threshold != ab['threshold']:raise ValueError('ability_trips decides only at the record\'s threshold')
+    if pinch_root not in ('third', 'two_thirds'):raise ValueError(f'pinch_root third or two_thirds, not {pinch_root!r}')
     if pinch_root == 'two_thirds' and ab['pinch_root'] != 'two_thirds':raise ValueError('a \'third\' record cannot decide the two_thirds rule')
     threshold = ab['threshold'];fam = ab['families']
     on = lambda f, arm: arm in arms.get(f, ())

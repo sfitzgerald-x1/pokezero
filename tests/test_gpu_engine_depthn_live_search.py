@@ -119,7 +119,7 @@ class LiveSearchTests(unittest.TestCase):
     def test_the_ability_guard_needs_its_label_gather_and_the_move_catalog(self):
         from gpu_engine import depthn_guard_inputs as gi
         self.assertFalse(self.search().ability_guard)   # off by default
-        with self.assertRaisesRegex(ValueError, 'ability_labels'):self.search(ability_guard=True)   # pricers observing with child_labels
+        with self.assertRaisesRegex(ValueError, 'ability_labels'):self.search(ability_guard=True)   # pricers not observing with ability_labels
         with ExitStack() as stack:
             for p in self.pricers[8].values():stack.enter_context(patch.object(p, 'labels', gi.ability_labels))
             with self.assertRaisesRegex(ValueError, 'move catalog'):self.search(ability_guard=True)   # the fixture's metadata names no moves: at startup

@@ -729,6 +729,7 @@ class AbilityEvaluateTests(unittest.TestCase):
                 self.assertEqual(G.ability_trips(record, **kw), {k: fresh[k] for k in ('tripped', 'b_turn1', 'b_reach', 'b_switchin', 'c')})
         self.assertEqual(G.ability_trips(record)['tripped'], record['tripped'])
         with self.assertRaisesRegex(ValueError, 'threshold'):G.ability_trips(record, threshold=.07)
+        with self.assertRaisesRegex(ValueError, 'pinch_root'):G.ability_trips(record, pinch_root='half')
         third = G.ability_evaluate(own, peer, inputs, choice=0, pinch_root='third')
         with self.assertRaisesRegex(ValueError, 'two_thirds'):G.ability_trips(third, pinch_root='two_thirds')
 
