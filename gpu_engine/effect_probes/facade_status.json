@@ -1,0 +1,187 @@
+{
+ "schema": "pokezero.effect_probe.scenario.v1",
+ "move": "facade_status",
+ "note": "C-lite: Facade (data/moves.ts:5029-5046) doubles to 140 under each of par, brn, tox and psn (four Guts users statused in turn by the faster Skarmory: Thunder Wave, Will-O-Wisp, Toxic, Poison Powder); a burned Guts user is not halved (data/mods/gen3/scripts.ts:41-43).",
+ "teams": [
+  [
+   {
+    "species": "Ursaring",
+    "moves": [
+     "facade",
+     "splash",
+     "sleeptalk",
+     "protect"
+    ],
+    "ability": "Guts",
+    "item": "Leftovers",
+    "level": 60
+   },
+   {
+    "species": "Ursaring",
+    "moves": [
+     "facade",
+     "splash",
+     "sleeptalk",
+     "protect"
+    ],
+    "ability": "Guts",
+    "item": "Leftovers",
+    "level": 60
+   },
+   {
+    "species": "Raticate",
+    "moves": [
+     "facade",
+     "splash",
+     "protect",
+     "quickattack"
+    ],
+    "ability": "Guts",
+    "item": "Leftovers",
+    "level": 60
+   },
+   {
+    "species": "Swellow",
+    "moves": [
+     "facade",
+     "splash",
+     "protect",
+     "aerialace"
+    ],
+    "ability": "Guts",
+    "item": "Leftovers",
+    "level": 60
+   },
+   {
+    "species": "Starmie",
+    "moves": [
+     "splash",
+     "surf",
+     "recover",
+     "protect"
+    ],
+    "ability": "Illuminate",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Blissey",
+    "moves": [
+     "splash",
+     "softboiled",
+     "protect",
+     "seismictoss"
+    ],
+    "ability": "Serene Grace",
+    "item": "Leftovers"
+   }
+  ],
+  [
+   {
+    "species": "Skarmory",
+    "moves": [
+     "thunderwave",
+     "willowisp",
+     "toxic",
+     "poisonpowder"
+    ],
+    "ability": "Keen Eye",
+    "item": "",
+    "level": 80
+   },
+   {
+    "species": "Starmie",
+    "moves": [
+     "splash",
+     "surf",
+     "recover",
+     "protect"
+    ],
+    "ability": "Illuminate",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Blissey",
+    "moves": [
+     "splash",
+     "softboiled",
+     "protect",
+     "seismictoss"
+    ],
+    "ability": "Serene Grace",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Swampert",
+    "moves": [
+     "splash",
+     "protect",
+     "surf",
+     "earthquake"
+    ],
+    "ability": "Torrent",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Metagross",
+    "moves": [
+     "splash",
+     "protect",
+     "meteormash",
+     "earthquake"
+    ],
+    "ability": "Clear Body",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Celebi",
+    "moves": [
+     "splash",
+     "protect",
+     "psychic",
+     "recover"
+    ],
+    "ability": "Natural Cure",
+    "item": "Leftovers"
+   }
+  ]
+ ],
+ "script": [
+  [
+   "move 1",
+   "move 1"
+  ],
+  [
+   "switch 2",
+   "move 2"
+  ],
+  [
+   "move 1",
+   "move 4"
+  ],
+  [
+   "switch 3",
+   "move 3"
+  ],
+  [
+   "move 1",
+   "move 1"
+  ],
+  [
+   "switch 4",
+   "move 4"
+  ],
+  [
+   "move 1",
+   "move 1"
+  ]
+ ],
+ "axes": [],
+ "expect": {
+  "exact": true
+ },
+ "require_fields": [
+  "item_knocked",
+  "destiny_bond",
+  "effect"
+ ]
+}

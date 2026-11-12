@@ -50,6 +50,8 @@ class MoveEffects(NamedTuple):
     perishsong: jax.Array         # [M], onHitField: every active without perishsong and not Soundproof gets duration 4
     yawn: jax.Array               # [M], volatileStatus yawn (duration 2; sleep attempt when it ends)
     wrap: jax.Array               # [M], volatileStatus partiallytrapped (duration 3+draws[s][7]; Gen 3 pool: Wrap)
+    # Fidelity WH (C-lite, appended).
+    defrost: jax.Array            # [M], move flag `defrost`: a frozen user still moves and its ModifyMove thaws it (Sacred Fire)
 
 
 # Gen 3 inherits gen4's Curse (data/mods/gen4/moves.ts:268-281): a non-Ghost user
@@ -118,7 +120,7 @@ def from_metadata(metadata):
         jnp.asarray(types.index("ghost") if "ghost" in types else -1,jnp.int32),
         jnp.asarray(hit_self),jnp.asarray(target),jnp.asarray(drop_block),
         flags({"aromatherapy"}),flags({"refresh"}),flags({"destinybond"}),move_flag("recharge"),
-        flags({"perishsong"}),flags({"yawn"}),flags({"wrap"}))
+        flags({"perishsong"}),flags({"yawn"}),flags({"wrap"}),move_flag("defrost"))
 
 
 def cure_team(state,side,table,*,eligible,_return_write_mask=False):

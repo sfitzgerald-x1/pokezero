@@ -523,6 +523,24 @@ def item_changes(c,before,after,use):
     return observe(c,after,use)
 
 
+def white_herb(c,before,after,side,use):
+    """One White Herb use by `side`'s active (fidelity WH): -enditem|X|White Herb, then -clearnegativeboost|X|[silent]
+    (data/items.ts whiteherb: useItem, then onUse).
+
+    B2 folds them as a consumption, like a berry eaten: public_items CONSUME (the item revealed and removed; not a
+    mutation, so the item ledger stays), public_active ITEM_END (the per-stint item flags end), and CLEAR_NEGATIVE on
+    the holder's public stages. That is item_changes' consumption for this one active, with the holder's stage copy
+    observe makes; the lines carry no HP or status, so neither active's condition is polled here.
+    """
+    b=len(c.trackers.error);use=_mask(use,b);r=_r(after);p=_li.take(after.active,r,side)
+    c=reveal_item(c,before,side,_get(before,'item',side),use)
+    c=c._replace(trackers=_write(c.trackers,'item_removed',side,p,j.ones_like(use),use))
+    for name in STINT_ITEM_KEYS:
+        if c.trackers.mon_features is not None and name in c.trackers.mon_features:
+            c=feature(c,side,p,name,j.zeros_like(p),use)
+    return c._replace(trackers=_write(c.trackers,'boosts',side,p,_get(after,'boosts',side),use))
+
+
 def knock_off(c,before,after,side,use):
     """One actual Knock Off removal: -enditem|Y|Item|[from] move: Knock Off|[of] X.
 

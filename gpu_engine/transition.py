@@ -173,6 +173,32 @@ def _lum_update(state,table,eligible,_status_trace=None,*,_device_public=None):
     return state
 
 
+def _white_herb(state,table,side,eligible,*,_device_public=None):
+    """Fidelity WH: one White Herb trigger on `side`'s active (items.white_herb; data/items.ts:7653-7707, Gen 3 = base).
+
+    Showdown f76228a1's Gen 3 triggers, each calling the item's onStart on its holder:
+    - onAnyAfterMove: runMove's runEvent('AfterMove') (sim/battle-actions.ts:311-312) after every move that passed
+      BeforeMove and PP (caller_acts; a miss, a failure or a charge turn included), for BOTH actives, before that
+      runMove's faintMessages (347): a holder KO'd by Destiny Bond still uses it first, one already at 0 HP cannot
+      (useItem, sim/pokemon.ts:1812). Gen 3 Pursuit on a switch runs useMove, not runMove (data/mods/gen4/moves.ts:
+      1053-1080): no AfterMove there.
+    - onAnySwitchIn (priority -2): each entrant's runSwitch (data/mods/gen4/scripts.ts:18-52, inherited by Gen 3) runs
+      runEvent('SwitchIn') after hazards and BEFORE its Ability Start, then the entrant's item Start: an entrant's
+      Intimidate drop on the other active is NOT restored at that switch-in (Gen 5+ runs Intimidate's onStart inside
+      the SwitchIn field event, so there it is); it waits for the next AfterMove, SwitchIn or residual.
+    - onResidual, order 29: needed in Gen 3 because of that Intimidate timing (a turn whose only drop is an
+      Intimidate switch-in and in which no move reaches AfterMove ends with it restored here).
+    Returns (state, used)."""
+    if table.items is None:
+        return state,jnp.zeros(state.hp.shape[0],bool)
+    before=state
+    item,boosts,used=held.white_herb(table.items,_active(state.item,state,side),_active(state.boosts,state,side),
+        _active(state.hp,state,side),eligible=jnp.broadcast_to(jnp.asarray(eligible),(state.hp.shape[0],)))
+    state=state._replace(item=_set_active(state.item,state,side,item),boosts=_set_active(state.boosts,state,side,boosts))
+    if _device_public is not None:device_public.white_herb(_device_public,before,state,side,used)
+    return state,used
+
+
 def _clear_fainted_boosts(state,before_hp,*,eligible):
     """Gen3 faintMessages -> clearVolatile(false), seven boost stages only.
 
@@ -222,6 +248,12 @@ def initialize(state,table,*,eligible=True,tie_coin=None,_weather_trace=None,_de
     for order in range(2):
         side = jnp.where(order == 0,first,1-first)
         pending = live & state.entry_pending[rows,side]
+        # Fidelity WH: this lead's runSwitch. Its SwitchIn event runs the other active's White Herb (onAnySwitchIn) before
+        # this lead's Ability Start (a faster Intimidate lead's drop is restored at the slower holder's own runSwitch).
+        state,_herb=_white_herb(state,table,1-side,pending,_device_public=_device_public)
+        if _weather_trace is not None:
+            from . import engine_status_callbacks as _herb_status
+            _weather_trace=_herb_status.unknown(_weather_trace,_herb)
         if _device_public is not None:_device_entry_before=state
         if _weather_trace is not None:
             state,_,_weather_trace = arrival.enter(state,side,table.entry,eligible=pending,
@@ -229,6 +261,10 @@ def initialize(state,table,*,eligible=True,tie_coin=None,_weather_trace=None,_de
         else:
             state,_ = arrival.enter(state,side,table.entry,eligible=pending,hazards=False,startup=state.turn==0)
         if _device_public is not None:device_public.entry(_device_public,_device_entry_before,state,side,table.entry,pending)
+        # Fidelity WH: the entrant's own White Herb (its onAnySwitchIn, then its item Start); its own Ability Start never
+        # lowers its stages, so after the whole entry is the same state.
+        state,_herb=_white_herb(state,table,side,pending,_device_public=_device_public)
+        if _weather_trace is not None:_weather_trace=_herb_status.unknown(_weather_trace,_herb)
         state = state._replace(entry_pending=state.entry_pending.at[rows,side].set(
             state.entry_pending[rows,side] & ~pending))
     if _weather_trace is not None:return _lum_update(state,table,pending_battle,_device_public=_device_public),_weather_trace
@@ -679,6 +715,11 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
         # Air Lock/Cloud Nine entrant must not re-sort an already queued event.
         callback_speed = callback_speed.at[rows,side].set(_speeds(work,table)[rows,side])
         if table.entry is not None:
+            # Fidelity WH: this ordinary switch's runSwitch (Gen 3 runs each one at once, see below). Its SwitchIn event
+            # runs the other active's White Herb (onAnySwitchIn) after this entrant's Spikes, which touch only the
+            # entrant, and BEFORE this entrant's Ability Start: its Intimidate drop on that active stays for now.
+            work,_herb=_white_herb(work,table,1-side,do_switch & ~replacement,_device_public=_device_public)
+            if _lifecycle_trace:_public_trace=status_callbacks.unknown(_public_trace,_herb)
             if _device_public is not None:_device_entry_before=work
             _faint_before_hp=work.hp
             if _lifecycle_trace:
@@ -688,6 +729,10 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                 work,knocked_out = arrival.enter(work,side,table.entry,eligible=do_switch & ~replacement)
             if _device_public is not None:device_public.entry(_device_public,_device_entry_before,work,side,table.entry,do_switch & ~replacement)
             work=_clear_fainted_boosts(work,_faint_before_hp,eligible=do_switch & ~replacement)
+            # Fidelity WH: the entrant's own White Herb (onAnySwitchIn, then its item Start) restores a Baton-passed drop;
+            # its own Ability Start never lowers its stages, and a Spikes KO leaves it at 0 HP (no useItem).
+            work,_herb=_white_herb(work,table,side,do_switch & ~replacement,_device_public=_device_public)
+            if _lifecycle_trace:_public_trace=status_callbacks.unknown(_public_trace,_herb)
             switch_faint |= knocked_out
         else:
             work=arrival.restore_sleep(work,side,eligible=do_switch)
@@ -703,6 +748,11 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
             side = jnp.where(order == 0,first_entry,1-first_entry)
             continues = jnp.all(jnp.any(work.hp > 0,axis=2),axis=1)
             eligible = replacement & installed[rows,side] & continues & ~switch_faint
+            # Fidelity WH: as for an ordinary switch, the other active's White Herb at this callback's SwitchIn (before the
+            # Ability Start), then the entrant's own after its entry. With two entrants the first one's Intimidate drop
+            # on the second is restored at the second's own runSwitch.
+            work,_herb=_white_herb(work,table,1-side,eligible,_device_public=_device_public)
+            if _lifecycle_trace:_public_trace=status_callbacks.unknown(_public_trace,_herb)
             if _device_public is not None:_device_entry_before=work
             _faint_before_hp=work.hp
             if _lifecycle_trace:
@@ -712,6 +762,8 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                 work,knocked_out = arrival.enter(work,side,table.entry,eligible=eligible)
             if _device_public is not None:device_public.entry(_device_public,_device_entry_before,work,side,table.entry,eligible)
             work=_clear_fainted_boosts(work,_faint_before_hp,eligible=eligible)
+            work,_herb=_white_herb(work,table,side,eligible,_device_public=_device_public)
+            if _lifecycle_trace:_public_trace=status_callbacks.unknown(_public_trace,_herb)
             # A hazard KO cancels subsequent queued runSwitch callbacks too.
             switch_faint |= knocked_out
     if _lifecycle_trace:work,_public_trace=_lum_update(work,table,live,_public_trace,_device_public=_device_public)
@@ -798,6 +850,19 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
             paralysis_roll=chance[:, 2], confusion_roll=chance[:, 3],
             flinched=(_active(work.volatile, work, side) & FLINCH) != 0,
             sleep_usable=sleep_usable,early_bird=early_bird,loafing=loafing)
+        if table.effects is not None:
+            # Fidelity WH (C-lite): a defrost move (Sacred Fire). Gen 3's frz onBeforeMove (data/mods/gen4/conditions.ts:
+            # 89-97) consumes the 20% thaw roll first (draws[s][1] < 20 thaws it, as above); failing it, a defrost move
+            # still proceeds frozen (confusion and flinch can then stop it), and frz's onModifyMove thaws it in useMove
+            # below. For every other move this is the call above (defrost_move=False). The lifecycle observer records
+            # the non-defrost result, so that path refuses a frozen defrost user.
+            _defrost=table.effects.defrost[move]
+            before = m.before_move(_active(work.status, work, side), _active(work.status_counter, work, side),
+                _active(work.confusion_counter, work, side), thaw_roll=chance[:, 1],
+                paralysis_roll=chance[:, 2], confusion_roll=chance[:, 3],
+                flinched=(_active(work.volatile, work, side) & FLINCH) != 0,
+                sleep_usable=sleep_usable,early_bird=early_bird,loafing=loafing,defrost_move=_defrost)
+            if _lifecycle_trace:_public_trace=status_callbacks.unknown(_public_trace,eligible & _defrost & (_active(work.status,work,side)==m.FRZ))
         if _device_public is not None:device_public.before_move(_device_public,work,side,before,eligible,loafing=loafing,sleep_usable=sleep_usable)
         if _lifecycle_trace:
             from . import engine_outcome_diagnostics as _before_move_diagnostics
@@ -875,6 +940,15 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
         work=history.record_move(work,side,chosen_slot,eligible=acts,struggle=struggle[rows,side])
         placeholders += acts.astype(jnp.int32)
         caller_acts=acts
+        if table.effects is not None:
+            # Fidelity WH (C-lite): frz's onModifyMove (data/conditions.ts:106-111, inherited by Gen 3) runs in useMove's
+            # ModifyMove (data/mods/gen3/scripts.ts:145-153), before the move line, the accuracy roll, Protect and type
+            # immunity: a frozen user of a defrost move thaws even when the move then misses or fails
+            # (-curestatus|X|frz|[from] move: Sacred Fire). Published by the observe just below.
+            _thawed=caller_acts & table.effects.defrost[move] & (_active(work.status,work,side)==m.FRZ)
+            work=work._replace(status=_set_active(work.status,work,side,jnp.where(_thawed,m.NONE,_active(work.status,work,side))),
+                status_counter=_set_active(work.status_counter,work,side,jnp.where(_thawed,0,_active(work.status_counter,work,side))))
+            if _lifecycle_trace:_public_trace=status_callbacks.unknown(_public_trace,_thawed)
         if _device_public is not None:_device_move_before=work
         if _device_public is not None:
             device_public.observe(_device_public,work,eligible)
@@ -954,6 +1028,12 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
             power,typ,physical = variable.resolve(table.variable_moves,move,power,typ,physical,
                 _active(work.hidden_power_type,work,side),_active(work.hidden_power_power,work,side),
                 _active(work.happiness,work,side),_active(work.hp,work,side),_active(work.max_hp,work,side))
+            # Fidelity WH (C-lite): Facade's onBasePower (variable_moves.facade_power): 140 under par/brn/psn/tox. A burned
+            # user still halves its physical damage without Guts (gen3_damage). The lifecycle observers read the move's
+            # static power, so that path refuses a doubled Facade.
+            _facade_power=power
+            power=variable.facade_power(table.variable_moves,move,power,_active(work.status,work,side))
+            if _lifecycle_trace:_public_trace=status_callbacks.unknown(_public_trace,acts & (power!=_facade_power))
         attack_num,attack_den = (1,1)
         if table.items is not None:
             attack_num,attack_den = held.attack_modifier(table.items,
@@ -1951,6 +2031,13 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
             _public_trace=recoil_callbacks.record_device(_public_trace,_recoil_pending,recoil_callbacks.Write(
                 _recoil_before.actor_physical,_recoil_before.target_physical,_recoil_before.ability,
                 _recoil_before.old_hp,_active(work.hp,work,side),_recoil_before.maximum,_recoil_before.status))
+        # Fidelity WH: the move's runMove reached AfterMove (it passed BeforeMove and PP: caller_acts, a miss, a failure or a
+        # charge turn included), so every active White Herb holder's onAnyAfterMove runs (sim/battle-actions.ts:311-312),
+        # after all of the move's effects (recoil included) and before runMove's faintMessages: a holder at 0 HP cannot
+        # use it, and a Destiny Bond KO below comes after the user's restore. The user's here; the target's after a drag
+        # (below), since a dragged-out mon is no longer active at AfterMove and the drag's Intimidate comes after it.
+        work,_herb=_white_herb(work,table,side,caller_acts,_device_public=_device_public)
+        if _lifecycle_trace:_public_trace=status_callbacks.unknown(_public_trace,_herb)
         # Destiny Bond onFaint: the bonded foe fainted from this actor's move (every foe HP loss in
         # the actor's action is its move's), so the attacker faints after it at faintMessages.
         # Residual, recoil, confusion or Liquid Ooze faints are not Move effects and never trigger.
@@ -2024,6 +2111,11 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
             moves_cancelled |= hazard_ko
             if _lifecycle_trace:work,_public_trace=_lum_update(work,table,changed,_public_trace,_device_public=_device_public)
             else:work=_lum_update(work,table,changed,_device_public=_device_public)
+        # Fidelity WH: the target side's onAnyAfterMove, on whoever is its active at AfterMove. Gen 3 runs a dragged-in mon's
+        # runSwitch as a queued action after this runMove (sim/battle-actions.ts:150-158, gen < 5), so that entrant's
+        # Intimidate drop on the user above waits for the next trigger, and the entrant itself has no stage to restore.
+        work,_herb=_white_herb(work,table,foe,caller_acts,_device_public=_device_public)
+        if _lifecycle_trace:_public_trace=status_callbacks.unknown(_public_trace,_herb)
         if table.baton is not None:
             bench_alive = jnp.any(
                 (work.hp[rows,side] > 0) & (jnp.arange(6)[None,:] != work.active[rows,side,None]),axis=1)
@@ -2487,6 +2579,14 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
         # perish0 then faint: a faint line, no -damage (as Destiny Bond's and Self-Destruct's faints).
         if _device_public is not None:device_public.observe(_device_public,work,_perish_faint,record_damage=False)
         work=_clear_fainted_boosts(work,_faint_before_hp,eligible=_perish_continues)
+    # Fidelity WH: White Herb's onResidual (order 29, after every Gen 3 handler above; data/items.ts:7697-7700). fieldEvent
+    # skips a fainted holder and stops once the battle has ended (sim/battle.ts:510-514, 565-566). An equal-Speed pair is
+    # inert (each restore touches only its own holder). Reached in Gen 3 when an Intimidate switch-in's drop met no later
+    # AfterMove or SwitchIn this turn (see _white_herb).
+    _herb_residual=residual_ready & jnp.all(jnp.any(work.hp>0,axis=2),axis=1)
+    for side in range(2):
+        work,_herb=_white_herb(work,table,side,_herb_residual,_device_public=_device_public)
+        if _lifecycle_trace:_public_trace=status_callbacks.unknown(_public_trace,_herb)
     # Fidelity M1 (design 2.3): mustrecharge has a duration and no residual handler, so the Residual event
     # still decrements it, last (order false sorts after every numbered handler, sim/battle.ts). At 0 it ends
     # silently: a recharge action cancelled by a Gen 3 faint expires here. Fainted holders are cleared below;
