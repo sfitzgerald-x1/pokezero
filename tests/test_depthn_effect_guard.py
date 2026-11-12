@@ -673,6 +673,11 @@ class AbilityEvaluateTests(unittest.TestCase):
         self.assertFalse(G.ability_evaluate(own, peer, dict(turn1=root), pinch_root='third')['tripped'])   # exact rule: hp above a third
         declared = G.ability_evaluate(own, peer, dict(turn1=root))
         self.assertEqual((declared['pinch_root'], declared['tripped']), ('third', False))   # the declared root rule is the exact one
+        at_third = [ability_root(0, own=dict(PINCH=[True, False, False, False]))]
+        self.assertTrue(G.ability_evaluate(own, peer, dict(turn1=at_third), arms=G.ABILITY_ARMS_FULL)['b_turn1'])
+        declared = G.ability_evaluate(own, peer, dict(turn1=at_third), choice=1)   # declared: PINCH choice-only
+        self.assertEqual((declared['tripped'], declared['families']['PINCH']['turn1_third']['own'] > .8), (False, True))   # recorded
+        self.assertTrue(G.ability_evaluate(own, peer, dict(turn1=at_third), choice=0)['c'])   # our chosen pinch lane
 
     def test_the_choice_and_choice_only_families(self):
         own, peer = self.priors(own=(0, .01))
@@ -743,9 +748,9 @@ class AbilityEvaluateTests(unittest.TestCase):
             pinch_root='third')[k] for k in ('tripped', 'b_turn1', 'b_reach', 'b_switchin', 'c')})   # a 'third' record still decides its arms
 
     def test_the_declared_configuration(self):
-        """Gate 2's decisions (the lead's rules on the trip-share replay): CONTACT choice-only, WG and PINCH every arm, PINCH's exact
+        """Gate 2's decisions (the lead's rules on the trip-share replay): PINCH and CONTACT choice-only, WG every arm, PINCH's exact
         root rule. A record written under it carries them, so ability_trips reproduces it."""
-        self.assertEqual(G.ABILITY_ARMS, dict(WG=('turn1', 'reach', 'switchin', 'choice'), PINCH=('turn1', 'reach', 'choice'), CONTACT=('choice',)))
+        self.assertEqual(G.ABILITY_ARMS, dict(WG=('turn1', 'reach', 'switchin', 'choice'), PINCH=('choice',), CONTACT=('choice',)))
         self.assertEqual(G.PINCH_ROOT, 'third')
         r = G.ability_evaluate(*self.priors(), dict(turn1=[ability_root(0)]))
         self.assertEqual((r['arms'], r['pinch_root']), ({f: list(a) for f, a in G.ABILITY_ARMS.items()}, 'third'))
