@@ -9,6 +9,7 @@ import math
 import os
 from pathlib import Path
 import re
+import subprocess
 import tempfile
 from types import SimpleNamespace
 import unittest
@@ -52,6 +53,19 @@ class EnumerationTests(unittest.TestCase):
         moves = {m for e in A.NOT_IN_POOL for m in e.moves}
         self.assertTrue({'outrage', 'thrash', 'petaldance', 'uproar', 'rollout', 'iceball', 'bide', 'rage', 'fly', 'dig', 'dive', 'bounce',
             'skullbash', 'razorwind', 'skyattack'} <= moves)
+
+    @unittest.skipUnless(subprocess.run(['git', '-C', str(ROOT), 'rev-parse', '--verify', '--quiet', 'HEAD^{commit}'],
+                                        capture_output=True).returncode == 0, 'needs a git checkout (depthn-light runs one with full history)')
+    def test_every_engine_since_is_a_commit_and_an_ancestor_of_head(self):
+        """An effect is in-tree only on an engine at or after its merge: every engine_since resolves to a commit HEAD contains."""
+        git = lambda *args: subprocess.run(['git', '-C', str(ROOT), *args], capture_output=True, text=True, timeout=60)
+        self.assertNotEqual(git('rev-parse', '--is-shallow-repository').stdout.strip(), 'true', 'a shallow clone cannot check ancestry')
+        for e in A.EFFECTS:
+            if not e.engine_since:continue
+            with self.subTest(effect=e.id, engine_since=e.engine_since):
+                self.assertRegex(e.engine_since, r'^[0-9a-f]{8,40}$')
+                self.assertEqual(git('cat-file', '-e', f'{e.engine_since}^{{commit}}').returncode, 0, f'{e.id}: not a commit here')
+                self.assertEqual(git('merge-base', '--is-ancestor', e.engine_since, 'HEAD').returncode, 0, f'{e.id}: not an ancestor of HEAD')
 
     def test_every_engine_citation_names_an_existing_line(self):
         rows = A.enumeration()['rows'];found = 0
