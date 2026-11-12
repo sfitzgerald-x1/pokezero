@@ -119,11 +119,11 @@ def registry():
         'faintMessages; Baton Pass carries it, a switch clears it','effects','fidelity_m2')
     group('yawn','Drowsy for 2 residuals (subOrder 19), then trySetStatus(slp) for 2+effect[s][2]: silent if statused, '
         'Sleep Clause Mod applies; fails on a status, Protect, a Substitute, an existing yawn and Insomnia/Vital Spirit; a '
-        'switch clears it, Baton Pass does not carry it','effects','fidelity_m2')
+        'switch clears it, Baton Pass does not carry it','effects','fidelity_m2 residual_order')
     group('wrap','Ordinary damage plus a partial trap of 3+draws[s][7] (no restart, not on a Substitute hit): '
         'max(1,maxhp/16) per residual (subOrder 9, after Leftovers), d-1 ticks, a silent release once the trapper is not '
         'the active; switches illegal while the trapper is the living foe active; Rapid Spin and the holder\'s own '
-        'Substitute end it; Baton Pass carries it with its source','effects','fidelity_m2')
+        'Substitute end it; Baton Pass carries it with its source','effects','fidelity_m2 residual_order')
     return result
 
 
