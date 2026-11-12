@@ -296,7 +296,8 @@ class BatonToxicGuardTests(unittest.TestCase):
  def test_original_toxic_counter_not_copied_and_default_physics_exact(self):
   script=r"""const root=process.argv[1],d=require(root+'/dist/sim/dex.js').Dex.mod('gen3'),P=require(root+'/dist/sim/pokemon.js').Pokemon,out=[];for(const stage of[0,2]){const s={status:'tox',statusState:{stage},side:{},volatiles:{},boosts:{atk:0,def:0,spa:0,spd:0,spe:0,accuracy:0,evasion:0},clearVolatile(){this.boosts={atk:0,def:0,spa:0,spd:0,spe:0,accuracy:0,evasion:0}}},t={status:'',statusState:{},volatiles:{},clearVolatile(){this.volatiles={}},battle:{}};d.moves.get('batonpass').onHit.call({canSwitch:()=>true},s);d.moves.get('batonpass').self.onHit.call({},s);P.prototype.copyVolatileFrom.call(t,s,'copyvolatile');d.conditions.get('tox').onSwitchIn.call({effectState:s.statusState});out.push({outgoingStatus:s.status,incomingStatus:t.status,sourceStage:s.statusState.stage,targetState:t.statusState});}console.log(JSON.stringify(out));"""
   v=json.loads(subprocess.check_output(['node','-e',script,str(showdown_root())],text=True));self.assertEqual(v,[dict(outgoingStatus='tox',incomingStatus='',sourceStage=0,targetState={})]*2)
-  for n in('transition.py','entry.py','baton.py','state.py','mechanics.py'):
+  # transition.py is certified against CURRENT_TRANSITION (full AST plus mutations) by terminal_closeout and seismic_toss_components; entry.py and state.py: byte-exact against reviewed SOURCE_PINS in transition_observer_wiring's source-binding subtests.
+  for n in('baton.py','mechanics.py'):
    # Integrated physical baseline; BASE below still tests the pre-fix toxic regression.
    physical_base='b8092a85'
    self.assertEqual(Path('gpu_engine',n).read_bytes(),subprocess.check_output(['git','show',physical_base+':gpu_engine/'+n]))

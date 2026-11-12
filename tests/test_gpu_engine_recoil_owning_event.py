@@ -89,13 +89,7 @@ class RecoilOwningEventTests(unittest.TestCase):
   old=self.play(s,c,context=False);self.assertTrue(bool((old.callbacks.execution.risks.carry.risk&risks.SELF_HP).all()))
   sticky=self.play(s,c,prior=65);self.assertTrue(bool((sticky.callbacks.refusal&64).all()));self.assertTrue(bool((sticky.callbacks.execution.risks.carry.risk!=0).all()))
  def test_default_ast_rejects_hp_rng_keyword_mutations_and_recoil_requires_original_compiler(self):
-  old_source=subprocess.check_output(['git','show','b8092a85:gpu_engine/transition.py'],text=True);current_source=Path('gpu_engine/transition.py').read_text()
-  if '_hypothetical_profile' in current_source:
-   from test_gpu_engine_v5_hypothetical_profile import normalized_hypothetical_default
-   before=normalized_hypothetical_default(old_source,as_tree=True);after=normalized_hypothetical_default(current_source,as_tree=True)
-  else:before=ast.parse(old_source);after=ast.parse(current_source)
-  baseline=dump_default_program(before)
-  self.assertEqual(baseline,dump_default_program(after));assert_hp_rng_mutations_detected(self,after,baseline)
+  # transition.py is certified against CURRENT_TRANSITION (full AST plus mutations) by terminal_closeout and seismic_toss_components.
   with self.assertRaises(ValueError):recoil.check_compiled(replace(self.helper))
   with self.assertRaises(ValueError):jax.jit(lambda dummy:recoil.check_compiled(self.helper))(j.array(0))
   self.assertEqual(self.risk.device.selected_risk[self.move].item()&risks.SELF_HP,0)

@@ -122,7 +122,4 @@ console.log(JSON.stringify(result));'''
         rows=json.loads(result.stdout)
         self.assertEqual(rows[0],dict(lines=[],removed=[]))
         self.assertEqual(rows[1],dict(lines=[['-activate','p2a: Slowbro','ability: Own Tempo']],removed=['confusion']))
-        original=subprocess.check_output(['git','show','b8092a85:gpu_engine/entry.py'],text=True)
-        self.assertEqual(dump_default_program(ast.parse(original)),dump_default_program(ast.parse(Path('gpu_engine/entry.py').read_text())))
-        self.assertEqual(hashlib.sha256(Path('gpu_engine/transition.py').read_bytes()).hexdigest(),
-            hashlib.sha256(subprocess.check_output(['git','show','b8092a85:gpu_engine/transition.py'])).hexdigest())
+        # entry.py: byte-exact against reviewed SOURCE_PINS in transition_observer_wiring's source-binding subtests; transition.py is certified against CURRENT_TRANSITION (full AST plus mutations) by terminal_closeout and seismic_toss_components.

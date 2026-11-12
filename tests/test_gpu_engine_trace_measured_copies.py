@@ -140,7 +140,7 @@ class MeasuredCopies(unittest.TestCase):
   ordinary=subprocess.check_output(['git','show','7c6c6042:gpu_engine/transition.py'],text=True)
   historical=subprocess.check_output(['git','show','d7300cc4:gpu_engine/transition.py'],text=True)
   self.assertEqual(normalized_hypothetical_default(ordinary),normalized_hypothetical_default(historical))
-  self.assertEqual(ast.dump(ast.parse(Path('gpu_engine/transition.py').read_text())),ast.dump(ast.parse(subprocess.check_output(['git','show','b8092a85:gpu_engine/transition.py'],text=True))))
+  # transition.py is certified against CURRENT_TRANSITION (full AST plus mutations) by terminal_closeout and seismic_toss_components.
   old_account=subprocess.check_output(['git','show','dc981dd8:gpu_engine/engine_execution_completeness.py'],text=True)
   current_account=ast.parse(subprocess.check_output(['git','show','d7300cc4:gpu_engine/engine_execution_completeness.py'],text=True))
   sites=next(n for n in current_account.body if isinstance(n,ast.ClassDef)and n.name=='Site')
@@ -152,7 +152,8 @@ class MeasuredCopies(unittest.TestCase):
   enter=lambda source:next(n for n in ast.parse(source).body if isinstance(n,ast.FunctionDef)and n.name=='enter')
   historical_entry=subprocess.check_output(['git','show','d7300cc4:gpu_engine/entry.py'],text=True)
   self.assertEqual(dump_default_program(enter(old_entry)),dump_default_program(enter(historical_entry)))
-  for file in ('engine_execution_completeness.py','entry.py'):
+  # entry.py: byte-exact against reviewed SOURCE_PINS in transition_observer_wiring's source-binding subtests.
+  for file in ('engine_execution_completeness.py',):
    self.assertEqual(Path('gpu_engine',file).read_bytes(),subprocess.check_output(['git','show','b8092a85:gpu_engine/'+file]))
   root=Path(os.environ['POKEZERO_SHOWDOWN_ROOT']);self.assertEqual(subprocess.check_output(['git','-C',str(root),'rev-parse','HEAD'],text=True).strip(),'f76228a1354b5d0f307ca2d16101294ad3a2308b')
   script=r'''

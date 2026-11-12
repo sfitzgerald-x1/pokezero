@@ -14,6 +14,7 @@ import numpy as np
 from gpu_engine import v5_public_world as world,v5_public_branch as branch,v5_hypothetical_profile as h
 from gpu_engine import engine_weather_speed_profile as speed,engine_lifecycle_callbacks as life,transition
 from gpu_engine import v5_owning_history as capture,public_wire,v4_encoder
+from gpu_engine_transition_certification import CURRENT_TRANSITION
 import test_gpu_engine_v5_public_world as f
 
 
@@ -169,7 +170,7 @@ class DefaultAST(unittest.TestCase):
         self.assertEqual(normalized_hypothetical_default(original),normalized_hypothetical_default(introduced))
 
     def test_whole_default_transition_ast_and_mutations(self):
-        original=subprocess.check_output(['git','show','b8092a85d9c1f2ed9c0daf4c4bd8e833a94a2380:gpu_engine/transition.py'],text=True)
+        original=subprocess.check_output(['git','show',CURRENT_TRANSITION+':gpu_engine/transition.py'],text=True)
         current=Path('gpu_engine/transition.py').read_text()
         normalize=normalized_hypothetical_default
         self.assertEqual(normalize(original),normalize(current))

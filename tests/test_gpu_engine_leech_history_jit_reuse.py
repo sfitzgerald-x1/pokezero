@@ -160,8 +160,9 @@ class LeechHistoryJitReuseTests(unittest.TestCase):
             self.assertEqual(jit.call_count,1)
             for _ in range(3):equal_tree(self,proof(*args),leech.history_from_public(*args[:3],healthy=args[3],data=data,active_tables=table))
             self.assertEqual(jit.call_count,1)
-        # No helper, physics, catalog or admission code is changed.
-        for name in ('engine_leech_seed_callbacks.py','transition.py','state.py','v4_encoder.py'):
+        # No helper, physics, catalog or admission code is changed. transition.py is certified against CURRENT_TRANSITION (full AST plus mutations) by terminal_closeout and seismic_toss_components;
+        # state.py: byte-exact against reviewed SOURCE_PINS in transition_observer_wiring's source-binding subtests.
+        for name in ('engine_leech_seed_callbacks.py','v4_encoder.py'):
             self.assertEqual(Path('gpu_engine',name).read_bytes(),subprocess.check_output(['git','show','b8092a85:gpu_engine/'+name]))
 
 

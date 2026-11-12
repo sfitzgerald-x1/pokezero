@@ -133,16 +133,7 @@ class DeviceNegativeItemsTests(unittest.TestCase):
         dead = low._replace(hp=low.hp.at[:, 1, 0].set(0))
         h.turn_end(c, low, dead, j.zeros(2, bool), upkeep=j.ones(2, bool), leftovers=leftovers)
         self.assertEqual(c.trackers.belief_mask[:, 1, 0, 0].tolist(), [255, 255])
-        # Every non-observer transition node is identical to the frozen input.
-        class Remove(ast.NodeTransformer):
-            def visit_If(self, node):
-                if any(isinstance(v, ast.Name) and v.id == '_device_public' for v in ast.walk(node.test)):
-                    return None
-                return self.generic_visit(node)
-        old = ast.parse(subprocess.check_output(['git', 'show', 'b8092a85:gpu_engine/transition.py'], text=True))
-        current = ast.parse(Path('gpu_engine/transition.py').read_text())
-        self.assertEqual(ast.dump(Remove().visit(old), include_attributes=False),
-                         ast.dump(Remove().visit(current), include_attributes=False))
+        # transition.py is certified against CURRENT_TRANSITION (full AST plus mutations) by terminal_closeout and seismic_toss_components.
 
     def test_unavailable_hp_cannot_become_snapshot_or_current_absence_evidence(self):
         s, tables, leftovers, _ = fixture(batch=3)

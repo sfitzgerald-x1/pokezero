@@ -11,6 +11,7 @@ import jax
 import jax.numpy as j
 import numpy as np
 from gpu_engine import transition as tr,state,mechanics
+from gpu_engine_transition_certification import CURRENT_TRANSITION
 import test_gpu_engine_self_destruct as destruct
 import test_gpu_engine_weather as weather
 import test_gpu_engine_entry as entry
@@ -88,8 +89,8 @@ class FaintBoostResetTests(unittest.TestCase):
         np.testing.assert_array_equal(result.boosts,invalid.boosts)
 
     def test_default_delta_is_exact_boundary_calls_only_and_mutants_remain_visible(self):
-        current=ast.parse(Path(tr.__file__).read_text());original=ast.parse(subprocess.check_output(['git','show','b8092a85:gpu_engine/transition.py'],text=True))
-        # Re-certify the complete integrated program before the feature erasure.
+        current=ast.parse(Path(tr.__file__).read_text());original=ast.parse(subprocess.check_output(['git','show',CURRENT_TRANSITION+':gpu_engine/transition.py'],text=True))
+        # Re-certify the complete program at the reviewed CURRENT_TRANSITION before the feature erasure.
         self.assertEqual(ast.dump(current),ast.dump(original))
         expected_eligibility=['used','do_switch & ~replacement','eligible','live & move_context','ordinary','eligible']
         calls=[x for x in ast.walk(current) if isinstance(x,ast.Call) and isinstance(x.func,ast.Name) and x.func.id=='_clear_fainted_boosts']

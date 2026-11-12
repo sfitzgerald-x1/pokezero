@@ -74,7 +74,8 @@ class SleepGuardDiagnosticsTests(unittest.TestCase):
                 return None if isinstance(n.value,ast.Call)and isinstance(n.value.func,ast.Attribute)and n.value.func.attr=='record_sleep_guard_on_tape' else self.generic_visit(n)
         self.assertEqual(ast.dump(old,include_attributes=False),ast.dump(new,include_attributes=False))
         self.assertEqual(ast.dump(Remove().visit(old),include_attributes=False),ast.dump(Remove().visit(new),include_attributes=False))
-        for p in ('transition.py','mechanics.py','engine_kernel_frame_risk.py','engine_execution_completeness.py','engine_retained_encoder_driver.py','benchmark_capture_gap_census.py'):
+        # transition.py is certified against CURRENT_TRANSITION (full AST plus mutations) by terminal_closeout and seismic_toss_components.
+        for p in ('mechanics.py','engine_kernel_frame_risk.py','engine_execution_completeness.py','engine_retained_encoder_driver.py','benchmark_capture_gap_census.py'):
             self.assertEqual(Path('gpu_engine',p).read_bytes(),subprocess.check_output(['git','show','b8092a85:gpu_engine/'+p]))
 
     def test_fixed_array_carry_traces_without_kernel_execution(self):
