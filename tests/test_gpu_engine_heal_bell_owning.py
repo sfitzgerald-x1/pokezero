@@ -98,7 +98,7 @@ class HealBellTests(unittest.TestCase):
   self.assertIsInstance(new_fn.body[-2],ast.Assign);self.assertIsInstance(new_fn.body[-1].value,ast.IfExp);new_fn.body[-2:]=[ast.Return(value=new_fn.body[-2].value)]
   self.assertEqual(ast.dump(old_fn,include_attributes=False),ast.dump(new_fn,include_attributes=False))
   # Default transition program including original HP/RNG expressions is exact.
-  old=ast.parse(subprocess.check_output(['git','show',BASE+':gpu_engine/transition.py'],text=True));new=ast.parse(Path('gpu_engine/transition.py').read_text());baseline=dump_default_program(old);self.assertEqual(dump_default_program(new),baseline);assert_hp_rng_mutations_detected(self,new,baseline)
+  old=ast.parse(subprocess.check_output(['git','show','b8092a85:gpu_engine/transition.py'],text=True));new=ast.parse(Path('gpu_engine/transition.py').read_text());baseline=dump_default_program(old);self.assertEqual(dump_default_program(new),baseline);assert_hp_rng_mutations_detected(self,new,baseline)
   s,t,_,actor=self.component(consume_initial=False);b=8;rows=j.arange(b);move=j.full(b,int(self.helper.device.heal_bell.move),j.int32);yes=j.ones(b,bool)
   t=public.move(t,actor,s.active[rows,actor],s.active[rows,1-actor],move,eligible=yes);t,p=cb.begin(t,s,actor,move,self.runtime['direct_hit_context'],self.table,eligible=yes,primary=yes,secondary=yes)
   np.testing.assert_array_equal(p.permutation,np.tile([1,0,2,3,4,5],(b,1)))

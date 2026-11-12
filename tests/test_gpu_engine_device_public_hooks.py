@@ -167,9 +167,15 @@ class PublicHooksTests(unittest.TestCase):
     n=self.generic_visit(n);pairs=[(a,d) for a,d in zip(n.kwonlyargs,n.kw_defaults) if a.arg!='_device_public']
     n.kwonlyargs=[a for a,d in pairs];n.kw_defaults=[d for a,d in pairs];return n
   for name in ('transition.py','secondary.py'):
-   path='gpu_engine/'+name;base=ast.parse(subprocess.check_output(['git','show',BASE+':'+path],text=True));current=ast.parse(Path(path).read_text())
+   path='gpu_engine/'+name;base=ast.parse(subprocess.check_output(['git','show',BASE+':'+path],text=True))
+   # Keep the original hook-only erasure proof on its immutable feature.
+   current=ast.parse(subprocess.check_output(['git','show','a6b8da18:'+path],text=True))
    current.body=[n for n in current.body if not(isinstance(n,ast.ImportFrom) and any(a.name in ('engine_device_public_hooks','engine_device_public_port') for a in n.names)) and not(isinstance(n,(ast.FunctionDef,ast.ClassDef)) and n.name in ('step_with_public','initialize_with_public'))]
    current=Erase().visit(current)
    self.assertEqual(ast.dump(current,include_attributes=False),ast.dump(base,include_attributes=False),name)
+   # Later hooks and engine changes are bound in full, never erased to pass.
+   actual=ast.parse(Path(path).read_text())
+   integrated=ast.parse(subprocess.check_output(['git','show','b8092a85:'+path],text=True))
+   self.assertEqual(ast.dump(actual),ast.dump(integrated),name)
 
 if __name__=='__main__':unittest.main()

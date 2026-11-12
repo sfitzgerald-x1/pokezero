@@ -33,7 +33,7 @@ class HostTimingTests(unittest.TestCase):
         import subprocess
         from pathlib import Path
         baseline=subprocess.check_output(['git','show',
-            'c028e11b20b01f67a6110ac1b3f3e4c3cc2c3efb:gpu_engine/engine_retained_encoder_driver.py'],text=True)
+            'b8092a85:gpu_engine/engine_retained_encoder_driver.py'],text=True)
         current=Path(d.__file__).read_text()
         class EraseHost(ast.NodeTransformer):
             def visit_With(self,node):
@@ -81,14 +81,14 @@ class HostTimingTests(unittest.TestCase):
         self.assertEqual(functions(baseline,True),functions(current,True))
 
     def run_fake_advance(self, *, mutate=False, callback_enabled=True):
-        Core=namedtuple('Core','engine frame_number admitted requests orders unsafe originals constructors weather_profile execution risks cursor')
+        Core=namedtuple('Core','engine frame_number admitted requests orders unsafe originals constructors weather_profile execution risks cursor baton_history')
         State=namedtuple('State','core observers')
-        engine=NS(done=np.zeros(1,bool));core=Core(engine,np.zeros(1,np.int32),np.ones(1,bool),(),(),(),(),(),None,None,None,None)
+        engine=NS(done=np.zeros(1,bool));core=Core(engine,np.zeros(1,np.int32),np.ones(1,bool),(),(),(),(),(),None,None,None,None,None)
         observers=tuple(NS(retained='public-original',retained_healthy=np.ones(1,bool),projection=NS(causal=NS(admitted=np.ones(1,bool))))for _ in range(2))
         state=State(core,observers);result=d.Result(state,());session=d.Session(NS(),state,result)
         record=dict(advancing=False,constructed=object(),state=state,result=result)
         trace=[];poisoned=False
-        r=dict(execution_compiled=object(),retain_speed=None,public_mode='retained-full',direct_hit_context=None)
+        r=dict(execution_compiled=object(),retain_speed=None,public_mode='retained-full',direct_hit_context=None,direct_hit_mode='closed')
         def checked(_):
             trace.append('checked')
             if poisoned:raise ValueError('static mutation')

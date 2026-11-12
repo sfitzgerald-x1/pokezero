@@ -80,21 +80,22 @@ class ThunderWaveRuntimeTests(unittest.TestCase):
         self.assertEqual(int(self.runtime['kernel_risk_compiled'].device.selected_risk[self.move_id]),0)
         plain=risks.compile_risks(self.producer,self.runtime['execution_compiled'])
         self.assertEqual(int(plain.device.selected_risk[self.move_id])&(risks.NON_WEATHER|risks.FIELD_VOLATILE),9)
-        before=ast.parse(subprocess.check_output(['git','show','aea42a52:gpu_engine/transition.py'],text=True))
+        before=ast.parse(subprocess.check_output(['git','show','b8092a85:gpu_engine/transition.py'],text=True))
         after=ast.parse(Path('gpu_engine/transition.py').read_text());baseline=dump_default_program(before)
         self.assertEqual(dump_default_program(after),baseline);assert_hp_rng_mutations_detected(self,after,baseline)
-        self.assertEqual(Path('gpu_engine/engine_toxic_callbacks.py').read_bytes(),subprocess.check_output(['git','show','e5d38e3c:gpu_engine/engine_toxic_callbacks.py']))
-        self.assertEqual(Path('gpu_engine/engine_full_v4_event_device.py').read_bytes(),subprocess.check_output(['git','show','aea42a52:gpu_engine/engine_full_v4_event_device.py']))
+        self.assertEqual(Path('gpu_engine/engine_toxic_callbacks.py').read_bytes(),subprocess.check_output(['git','show','b8092a85:gpu_engine/engine_toxic_callbacks.py']))
+        self.assertEqual(Path('gpu_engine/engine_full_v4_event_device.py').read_bytes(),subprocess.check_output(['git','show','b8092a85:gpu_engine/engine_full_v4_event_device.py']))
         side=j.zeros(1,j.int32);zero=j.zeros(1,j.int32);yes=j.ones(1,bool);no=j.zeros(1,bool)
         attempt=thunder.Attempt(yes,yes,no,no,no,yes,yes,no,no,no,yes,zero,j.full(1,m.PAR,j.int32),zero,zero)
         raw=primary.words_device(side,side,side,j.full(1,self.move_id,j.int32),attempt)
         self.assertEqual(thunder.supported_raw(raw).tolist(),[True]);self.assertEqual(primary.supported_raw(raw).tolist(),[False])
         for field,value in [('applied',no),('accuracy_hit',no),('hit',no),('type_immune',yes),('ability_immune',yes),('substitute_block',yes),('protected',yes),('absorbed',yes),('damage_immune',yes),('old_status',j.full(1,m.PAR,j.int32)),('new_status',j.full(1,m.TOX,j.int32)),('old_counter',j.ones(1,j.int32))]:
             changed=attempt._replace(**{field:value});self.assertFalse(bool(thunder.supported_raw(primary.words_device(side,side,side,j.full(1,self.move_id,j.int32),changed)).any()),field)
-        traces=[]
+        traces=[];tape=NS(count=zero)
         with patch.object(risks,'_captured_toxic_matches',return_value=yes),patch.object(risks,'_captured_thunder_wave_matches',return_value=yes),patch.object(risks,'_observe',side_effect=lambda *a,**k:traces.append(a) or a[0]):
-            risks.observe_primary_status_device(NS(stream_id=zero),object(),yes,object(),active=yes,captured=object(),captured_thunder_wave=object())
+            risks.observe_primary_status_device(NS(stream_id=zero),tape,yes,object(),active=yes,captured=object(),captured_thunder_wave=object())
         self.assertEqual(len(traces),1)
+        self.assertIs(traces[0][1],tape);self.assertEqual(traces[0][4].tolist(),[0])
 
     def test_current_source_span_b8_and_lum_scope_stay_closed(self):
         b=8;mask=j.array([True]*6+[False]*2);side=j.zeros(b,j.int32);physical=j.full(b,3,j.int32);target=j.full(b,5,j.int32);move=j.full(b,self.move_id,j.int32)

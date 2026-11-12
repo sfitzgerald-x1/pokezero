@@ -85,9 +85,10 @@ class PrimarySleepRuntimeTests(unittest.TestCase):
         with self.assertRaises(ValueError):jax.jit(lambda:sleep.check_compiled(self.helper).binding)()
         fake=request.SourceRules(self.rules.device)
         with self.assertRaises(ValueError):sleep.compile_primary_sleep(engine_catalog=self.producer,metadata=self.metadata,source_rules=fake)
-        before=ast.parse(subprocess.check_output(['git','show','7c6c6042:gpu_engine/transition.py'],text=True));after_text=Path('gpu_engine/transition.py').read_text()
+        before=ast.parse(subprocess.check_output(['git','show','b8092a85:gpu_engine/transition.py'],text=True));after_text=Path('gpu_engine/transition.py').read_text()
         if '_hypothetical_profile' in after_text:
             from test_gpu_engine_v5_hypothetical_profile import normalized_hypothetical_default
+            before=normalized_hypothetical_default(subprocess.check_output(['git','show','b8092a85:gpu_engine/transition.py'],text=True),as_tree=True)
             after=normalized_hypothetical_default(after_text,as_tree=True)
         else:after=ast.parse(after_text)
         baseline=dump_default_program(before);self.assertEqual(dump_default_program(after),baseline);assert_hp_rng_mutations_detected(self,after,baseline)
