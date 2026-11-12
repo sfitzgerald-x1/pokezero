@@ -722,15 +722,17 @@ class AbilityEvaluateTests(unittest.TestCase):
                       switchin={0: [dict(side='own', lane=4, family='WG', holder='wonderguard', against=[True, False, False, False])]},
                       turn2=[cell(0, 0, 1, 'opp', both), cell(1, 0, 1, 'own', {f: [f == 'WG'] + [False] * 3 for f in G.FAMILIES})])
         full = dict(arms=G.ABILITY_ARMS_FULL, pinch_root='two_thirds')   # the record keeps every arm's masses and both root rules
-        configs = [dict(), full, dict(arms=dict(G.ABILITY_ARMS_FULL, CONTACT=('choice',))), dict(arms=dict(G.ABILITY_ARMS_FULL, WG=('switchin', 'choice'))),
-                   dict(pinch_root='third'), dict(arms=dict(G.ABILITY_ARMS_FULL, CONTACT=('choice',), PINCH=('choice',)), pinch_root='third')]
+        # a config names what differs from the record's own (ability_trips reads an absent key from the record), the declared one included
+        configs = [dict(), dict(arms=G.ABILITY_ARMS, pinch_root=G.PINCH_ROOT), dict(arms=dict(G.ABILITY_ARMS_FULL, CONTACT=('choice',))),
+                   dict(arms=dict(G.ABILITY_ARMS_FULL, WG=('switchin', 'choice'))), dict(pinch_root='third'),
+                   dict(arms=dict(G.ABILITY_ARMS_FULL, CONTACT=('choice',), PINCH=('choice',)), pinch_root='third')]
         record = G.ability_evaluate(own, peer, inputs, choice=0, **full)
         w = .5 * .75 * .75
         self.assertAlmostEqual(record['reach_subsets']['PINCH+CONTACT']['opp'], w * .475, places=12)   # the union, not the sum
         self.assertAlmostEqual(record['families']['PINCH']['reach']['opp'] + record['families']['CONTACT']['reach']['opp'], w * .875, places=12)
         for kw in configs:
             with self.subTest(**{k: str(v) for k, v in kw.items()}):
-                fresh = G.ability_evaluate(own, peer, inputs, choice=0, **kw)
+                fresh = G.ability_evaluate(own, peer, inputs, choice=0, **dict(full, **kw))
                 self.assertEqual(G.ability_trips(record, **kw), {k: fresh[k] for k in ('tripped', 'b_turn1', 'b_reach', 'b_switchin', 'c')})
         self.assertEqual(G.ability_trips(record)['tripped'], record['tripped'])
         with self.assertRaisesRegex(ValueError, 'threshold'):G.ability_trips(record, threshold=.07)
