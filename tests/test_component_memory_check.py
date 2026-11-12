@@ -141,6 +141,18 @@ class ComponentMemoryCheckTests(unittest.TestCase):
                 self.assertEqual(cgroup_memory(group)['cgroup_memory_bytes'], 820)
             with mock.patch('scripts.run_component_memory_check.STAT_ERROR_BYTES', 10**6):
                 self.assertEqual(cgroup_memory(group)['cgroup_memory_bytes'], 1000)
+            # A stale swapcached is covered too, even when no clean cache is left to absorb it.
+            none_clean = dict(stat, active_file=40, inactive_file=30, swapcached=150)
+            self.cgroup(Path(folder), none_clean, swap=300)
+            with mock.patch('scripts.run_component_memory_check.STAT_ERROR_BYTES', 100):
+                self.assertEqual(cgroup_memory(group, swap_baseline=100)['cgroup_memory_bytes'], 1000 + 200 - 50)
+        with mock.patch('platform.release', return_value='6.5.0-1025-azure'), \
+                mock.patch('os.sysconf', side_effect=lambda name: {'SC_NPROCESSORS_CONF': 4, 'SC_PAGE_SIZE': 4096}[name]):
+            from scripts.run_component_memory_check import _stat_error_bytes
+            self.assertEqual(_stat_error_bytes(), 3 * 64 * 4 * 4096)
+        with mock.patch('platform.release', return_value='6.11.0-1018-azure'), \
+                mock.patch('os.sysconf', side_effect=lambda name: {'SC_NPROCESSORS_CONF': 4, 'SC_PAGE_SIZE': 4096}[name]):
+            self.assertEqual(_stat_error_bytes(), 2 * 64 * 4 * 4096)
 
     def test_lazily_freed_anon_on_the_file_lru_is_not_dropped_as_cache(self):
         with tempfile.TemporaryDirectory() as folder:
