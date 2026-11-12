@@ -228,6 +228,38 @@ doubles the chance (Dunsparce's Headbutt: 60%):
   `-damage ... [from] confusion` line feeds B2's absent-Leftovers evidence as
   action-phase HP.
 
+Fidelity patch M1 (Hyper Beam's recharge and Trick; new state `recharge_counter`,
+no new chance):
+- Hyper Beam (move flag `recharge`): a hit sets `recharge_counter` 2 (Showdown's
+  `mustrecharge` duration), a Substitute hit and a KO included, never a miss,
+  Protect or an immunity. The next request is the single Recharge row (lane 0
+  only, switching trapped); its action is the pseudo-move `recharge`, priority 0
+  at the user's Speed (move id 0: no Focus Punch preparation, no Pursuit). At
+  BeforeMove priority 11 it is `cant|X|recharge` ahead of sleep, freeze, flinch,
+  confusion and Truant: no sleep or confusion tick, no Truant line, no PP or
+  history, Destiny Bond ends. The counter falls by one at each completed
+  residual, last (it has no handler), so a recharge cancelled by a Gen 3 faint
+  expires there silently. A switch-out (a drag included) and a faint clear it.
+  Slaking, the pool's only user, has Truant: the recharge turn is its loaf turn,
+  and the loaf clock still flips at that residual.
+- Trick: accuracy 100, Protect and a Substitute block it, a Status move ignores
+  type immunity (Dark is hit), Sticky Hold makes it `-immune` (no ability line).
+  It fails when either mon's item was knocked off (gen <= 4 takeItem) or neither
+  holds one; otherwise the actives' items swap, an identical pair included. The
+  Choice Band lock follows the current item: the Tricker no longer locks, a
+  slower receiver locks into its move this turn, a faster one on its next move,
+  an Encored one into its Encore move; a stale lock ends at endTurn.
+- Device: the `mustrecharge` bag bit is set when the counter starts and cleared
+  by the recharge turn (`recharge_turn`), an arrival or a faint, never at a silent
+  expiry: B2's stale bit, matched on purpose (design 13 item 3). The recharge
+  request collapses like the charge case (`move:recharge`, no mechanics, PP 1).
+  Trick: B2's per-mon item ledger (`item_mutated`, `item_original`, Knock Off's
+  removal included) and per-stint seat flags (`item_swapped` column 41,
+  `choice_public`, `choice_locked` column 40 set on the holder's next own move
+  line); an identical swap still counts (B2 folds its `-item` lines); a mutated
+  item never narrows the belief again (design 13 item 4). The absent-Leftovers
+  rule and the world sampler read the per-mon `item_mutated`.
+
 The existing fixed critical roll now resolves ordinary 1/16 and catalog +1
 high-crit 1/8 chances. Battle Armor and Shell Armor veto critical hits in both
 ordinary damage and pre-switch Pursuit, using the actual outgoing holder.

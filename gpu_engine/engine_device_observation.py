@@ -97,6 +97,9 @@ class Tables(NamedTuple):
     struggle_move: object
     belief: object = None
     features: object = None
+    # Fidelity M1: the recharge request's one move row, {move: 'Recharge', id: 'recharge'}: the action
+    # writer's primary category is move:recharge; 'recharge' is no dex move, so no mechanics or PP.
+    recharge_primary: object = None
 
 
 def compile_tables(metadata, *, catalog):
@@ -165,7 +168,7 @@ def compile_tables(metadata, *, catalog):
     from . import engine_device_belief, engine_device_features
     return Tables(*(j.asarray(value, j.float32 if name in floats else j.int32)
         for name, value in zip(Tables._fields, arrays)), engine_device_belief.compile_tables(metadata, catalog),
-        engine_device_features.compile_tables(metadata, catalog))
+        engine_device_features.compile_tables(metadata, catalog), j.asarray(category('move:recharge'), j.int32))
 
 
 class Observation(NamedTuple):
@@ -191,6 +194,7 @@ class _OwnRequest(NamedTuple):
     last_action_kind: object
     last_action_index: object
     charge_move: object
+    recharge_counter: object = None
 
 
 def _index(name):
@@ -288,7 +292,12 @@ def encode(state, public, tables, *, observer_sides, legal_action_mask):
     move = own['moves'][rows, actor]; pp = own['pp'][rows, actor]
     from .state import usable_moves
     # Run the unchanged request algebra on ONLY the selected owning side.
-    request = _OwnRequest(*(getattr(state, name)[rows, owner][:, None] for name in _OwnRequest._fields))
+    request = _OwnRequest(*(getattr(state, name)[rows, owner][:, None] for name in _OwnRequest._fields
+        if name != 'recharge_counter'))
+    # Fidelity M1: a mustrecharge request (sim/pokemon.ts getMoves: [{move: 'Recharge', id: 'recharge'}],
+    # trapped). Structs without the leaf (request fixtures) have no recharge.
+    if getattr(state, 'recharge_counter', None) is not None:
+        request = request._replace(recharge_counter=state.recharge_counter[rows, owner][:, None])
     usable = usable_moves(request)[:, 0]
     struggle = ~j.any(usable, axis=-1)
     charge_move = request.charge_move[:, 0][rows, actor]
@@ -301,7 +310,15 @@ def encode(state, public, tables, *, observer_sides, legal_action_mask):
     forced = state.forced_switch[rows, owner] | ~alive[rows, actor]
     acting = ~forced & ~state.done & j.any(legal_action_mask, axis=-1)
     move = j.where(struggle[:, None], j.where(j.arange(4) == 0, tables.struggle_move, 0), move)
-    moves_present = (move > 0) & acting[:, None]
+    # Fidelity M1: the recharge collapse, like the charge one: one present, usable row in lane 0 (engine
+    # slot 0), named move:recharge, with no mechanics (no dex move) and the writer's PP fraction 1 (no PP
+    # fields); lanes 1-3 absent; the engine mask already makes lane 0 the only legal action (trapped).
+    recharging = j.zeros(b, bool)
+    if getattr(state, 'recharge_counter', None) is not None and tables.recharge_primary is not None:
+        recharging = state.recharge_counter[rows, owner][rows, actor] > 0
+    recharge_row = recharging[:, None] & (j.arange(4) == 0) & acting[:, None]
+    move = j.where(recharging[:, None], 0, move)
+    moves_present = ((move > 0) & acting[:, None]) | recharge_row
     move = j.where(moves_present, move, 0)
     # Same original static Curse variants as private_actions, using own type.
     ghost = j.any(own['types'][rows, actor] == tables.ghost_type, axis=-1).astype(j.int32)
@@ -316,7 +333,7 @@ def encode(state, public, tables, *, observer_sides, legal_action_mask):
     action_num = j.zeros((b, 9, NUMERIC), j.float32)
     action_num = action_num.at[:, :4, j.asarray([_index(n) for n in ('BASE_POWER', 'PRIORITY', 'ACCURACY', 'EFFECT_CHANCE', 'SELF_HP_COST')])].set(values)
     action_num = action_num.at[:, :4, _index('MOVE_PP_FRACTION')].set(j.where(moves_present,
-        j.where((struggle | charged)[:, None], 1., j.clip(pp / j.maximum(1, tables.max_pp[safe_move]), 0, 1)), 0))
+        j.where((struggle | charged | recharging)[:, None], 1., j.clip(pp / j.maximum(1, tables.max_pp[safe_move]), 0, 1)), 0))
     action_num = action_num.at[:, :4, _index('PRESENT')].set(moves_present)
     action_num = action_num.at[:, :4, _index('ACTIVE')].set(moves_present & (usable | struggle[:, None]))
     request_active = j.argmax(gather(active), axis=-1)
@@ -332,7 +349,9 @@ def encode(state, public, tables, *, observer_sides, legal_action_mask):
     action_num = action_num.at[:, 4:, j.asarray(switch_columns)].set(switch_num[..., j.asarray(switch_columns)])
     action_num = action_num.at[:, 4:, _index('LEGAL')].set(legal[:, 4:])
     action_cat = j.zeros((b, 9, CATEGORICAL), j.int32)
-    primary = j.concatenate((j.where(moves_present, tables.move_primary[safe_move], tables.fallback[:4]),
+    move_primary = j.where(recharge_row, 0 if tables.recharge_primary is None else tables.recharge_primary,
+        tables.move_primary[safe_move])
+    primary = j.concatenate((j.where(moves_present, move_primary, tables.fallback[:4]),
         j.where(j.take_along_axis(present, targets, axis=1),
             j.take_along_axis(own_cat[..., 0], targets, axis=1), tables.fallback[4:])), axis=-1)
     action_cat = action_cat.at[..., 0].set(primary).at[..., 1].set(tables.action_secondary[(j.arange(9) >= 4).astype(j.int32)])
@@ -592,10 +611,8 @@ def column_manifest(public=None, *, tracked_types=None, tracked_ability=None, tr
                     status, reason = 'TRACKED', 'original source prior + public hard/pin mask fallback; uniform current sampler'
                     if column == 131:
                         status, reason = 'TRACKED', 'produced constant0: frozen investment_belief_narrowing=False disables both standing-pin producers'
-                # A zero-initialized dictionary key does not establish an
-                # original public write: current physics has no Trick handler.
-                if section in ('own', 'opponent') and kind == 'numeric' and column == _index('ITEM_SWAPPED'):
-                    status, reason = 'ZERO', 'unavailable: current physical engine has no Trick item-swap handler'
+                # Fidelity M1: Trick's -item lines (hooks.trick) and the holder's move lines (hooks.move)
+                # now write ITEM_SWAPPED and CHOICE_LOCKED, so the readout keys are tracked like the others.
                 if status == 'ZERO':
                     if section in ('actions', 'belief') or (section in ('own', 'opponent') and kind == 'numeric' and any(n.startswith(('STAT_', 'SELF_', 'OPP_', 'TT_', 'TM2_')) for n in labels)):
                         reason = 'structurally not applicable to this token section'
@@ -614,10 +631,6 @@ def column_manifest(public=None, *, tracked_types=None, tracked_ability=None, tr
                     if section in ('own', 'opponent') and kind == 'numeric':
                         if column == _index('WRAP_TRAP_TURNS'):
                             reason = 'unavailable: current physical engine has no partial-trap duration handler'
-                        elif column == _index('CHOICE_LOCKED'):
-                            reason = 'unavailable: original public lock requires item acquisition; current engine has no Trick handler'
-                        elif column == _index('ITEM_SWAPPED'):
-                            reason = 'unavailable: current physical engine has no Trick item-swap handler'
                     if section == 'belief' and kind == 'numeric' and column == 131:
                         reason = 'deferred public damage-evidence pin producer; no fabricated pin conflict'
                 start, stop = {'field': (0, 1), 'own': (1, 7), 'opponent': (7, 13),

@@ -23,12 +23,17 @@ MON_KEYS=('turns_active','turns_active_total','sleep_turns','rest_sleep','toxic_
           'sleep_skipped_turns','sleep_cant_pending','sleep_usable_pending',
           'confusion_turns','encore_turns','stall_counter','sub_present','meanlook_trap',
           'last_damage_dealt','last_damage_taken','switched_before_attack','stayed_and_attacked',
-          'moves_shown','switches','item_swapped')
+          'moves_shown','switches','item_swapped',
+          # Fidelity M1 (design 2.5). B2's per-stint active flags (public_active: ITEM_SET from a Trick -item line,
+          # ITEM_END from any -enditem, CHOICE_MOVE from the holder's own move line; ARRIVE and FAINT reset):
+          # item_swapped (column 41) beside them, choice_public and choice_locked (column 40). B2's per-mon item
+          # ledger (public_items: mutated, original), which survives switches: item_mutated, item_original.
+          'choice_public','choice_locked','item_mutated','item_original')
+# Per-stint flags: zeroed at every arrival (B2 ARRIVE), a faint and an -enditem (ITEM_END).
+STINT_ITEM_KEYS=('item_swapped','choice_public','choice_locked')
 DEFERRED={
  'wrap_trap_turns':'No supported numerical wrap-duration handler.',
- 'choice_locked':'Opponent choice lock is not publicly revealed by engine state alone.',
  'confusion_self_damage':'Ordinary direct-damage fractions are recorded; confusion self-hit damage metric remains deferred.',
- 'item_swap_transform':'No corresponding numerical engine handler in this transition; item_swapped stays zero.',
 }
 
 class Context:
@@ -251,6 +256,9 @@ def install(c,state,side,use,*,initial=False):
     for name in ('turns_active','confusion_turns','encore_turns','stall_counter','sub_present','meanlook_trap',
                  'sleep_skipped_turns','sleep_cant_pending','sleep_usable_pending','toxic_stage'):
         c=feature(c,side,p,name,j.zeros(b,j.int32),use)
+    # Fidelity M1: B2's ARRIVE resets the seat's Trick/Choice flags (the item ledger stays per mon).
+    for name in STINT_ITEM_KEYS:
+        if name in c.trackers.mon_features:c=feature(c,side,p,name,j.zeros(b,j.int32),use)
     # Every arrival (switch, replacement, drag, Baton target) clears the public Mean
     # Look flag on BOTH seats, matching B2 (public_active.py:246, ARRIVE ignores
     # baton_pass) and the champion parser (src/pokezero/showdown.py:2752-2770).
@@ -334,10 +342,24 @@ def reveal_ability(c,state,side,use,*,ability=None,original=True):
     return _refresh(c,side,p,use)
 
 
+def _mon_fact(c,name,side,physical):
+    """[B] one mon_features entry of `physical` on `side` (zeros when the carry lacks the key)."""
+    t=c.trackers;r=j.arange(len(t.error))
+    if t.mon_features is None or name not in t.mon_features:return j.zeros(len(r),j.int32)
+    slot=j.clip(_li.take(t.physical_to_public,r,side,j.clip(physical,0,5)),0,5)
+    return _li.take(t.mon_features[name],r,side,slot)
+
+
 def reveal_item(c,state,side,item,use,*,original=True):
     p=_li.take(state.active,_r(state),side);use=_mask(use,len(c.trackers.error))
     c=c._replace(trackers=_write(c.trackers,'shown_item',side,p,item,use))
-    return _narrow(c,side,p,item,use,'item') if original else _refresh(c,side,p,use)
+    if not original:return _refresh(c,side,p,use)
+    # Fidelity M1: B2 narrows by public_items.matching_item, which is 0 for a mutated item (Trick, Knock Off)
+    # while item_belief_narrowing is False (src/pokezero/observation.py:382): a later reveal of a Tricked-in
+    # item (its Leftovers heal, its berry) never narrows the holder's belief.
+    mutated=_mon_fact(c,'item_mutated',side,p)!=0
+    c=_narrow(c,side,p,item,use&~mutated,'item')
+    return _refresh(c,side,p,use&mutated)
 
 
 def entry(c,before,after,side,table,use):
@@ -424,7 +446,7 @@ def move(c,state,side,move,use,*,pp_use=False,original=True,count_turn=True,prep
     skipped=use&j.asarray(original)&~j.asarray(preparation)&(_li.take(facts['sleep_cant_pending'],r,side,slot)!=0)&(_li.take(facts['sleep_usable_pending'],r,side,slot)!=0)
     c=feature(c,side,p,'sleep_skipped_turns',j.ones_like(p),skipped,add=True)
     for key in ('sleep_cant_pending','sleep_usable_pending'):c=feature(c,side,p,key,j.zeros_like(p),skipped)
-    actual_move=move
+    actual_move=move;move_line=_mask(use,len(r))&(move>0)
     if c.belief_tables is not None and hasattr(c.belief_tables,'public_move'):
         valid=(move>=0)&(move<len(c.belief_tables.public_move))
         at=j.clip(move,0,len(c.belief_tables.public_move)-1)
@@ -464,6 +486,11 @@ def move(c,state,side,move,use,*,pp_use=False,original=True,count_turn=True,prep
         c=c._replace(trackers=port.anchor(c.trackers,side,declared,loaf=False))
     if not preparation:
         c=feature(c,side,p,'moves_shown',j.ones_like(move),declared,add=True)
+    if header and c.trackers.mon_features is not None and 'choice_locked' in c.trackers.mon_features:
+        # Fidelity M1: B2's CHOICE_MOVE (public_active) on the holder's own move line (no [from]: not a
+        # called child, not a preparation): a publicly received Choice Band now locks (column 40).
+        public=_mon_fact(c,'choice_public',side,p)!=0
+        c=feature(c,side,p,'choice_locked',j.ones_like(p),move_line&public&~j.asarray(preparation))
     if header:
         t=c.trackers;td=t.tendency;first=declared&~_li.take(td.moved,r,side)
         c=feature(c,side,p,'stayed_and_attacked',j.ones_like(move),first,add=True)
@@ -480,6 +507,10 @@ def item_changes(c,before,after,use):
         old=_get(before,'item',side);consumed=use&(old>0)&(_get(after,'item',side)==0)
         c=reveal_item(c,before,side,old,consumed)
         c=c._replace(trackers=_write(c.trackers,'item_removed',side,_li.take(after.active,_r(after),side),j.ones_like(consumed),consumed))
+        # Fidelity M1: the consumption's -enditem is B2's ITEM_END: the holder's Trick/Choice flags end.
+        for name in STINT_ITEM_KEYS:
+            if c.trackers.mon_features is not None and name in c.trackers.mon_features:
+                p=_li.take(after.active,_r(after),side);c=feature(c,side,p,name,j.zeros_like(p),consumed)
         # Fidelity patch B: a Lum Berry's onEat removes confusion (-end|X|confusion), e.g. one Baton-passed in.
         # States without the leaf (authored fixtures) carry no confusion transition.
         # Fixture-only guard: transition.py and secondary.py callers always pass BattleState, which has the leaf.
@@ -501,9 +532,16 @@ def knock_off(c,before,after,side,use):
     b=len(c.trackers.error);use=_mask(use,b);r=_r(after);p=_li.take(after.active,r,side)
     c=c._replace(trackers=_write(c.trackers,'shown_item',side,p,_get(before,'item',side),use))
     c=c._replace(trackers=_write(c.trackers,'item_removed',side,p,j.ones_like(use),use))
-    for name in ('item_swapped','choice_locked'):
+    for name in STINT_ITEM_KEYS:
         if c.trackers.mon_features is not None and name in c.trackers.mon_features:
             c=feature(c,side,p,name,j.zeros_like(p),use)
+    # Fidelity M1: B2's ledger REMOVE marks the item mutated and, for an unmutated mon with no recorded
+    # original, records the removed item as its original assignment (public_items.record own_removal).
+    if c.trackers.mon_features is not None and 'item_mutated' in c.trackers.mon_features:
+        lost=_get(before,'item',side)
+        fresh=(_mon_fact(c,'item_mutated',side,p)==0)&(_mon_fact(c,'item_original',side,p)==0)
+        c=feature(c,side,p,'item_original',lost,use&fresh)
+        c=feature(c,side,p,'item_mutated',j.ones_like(p),use)
     c=_reset_item_narrowing(c,side,p,use)
     t=c.trackers;fields=t.field_features
     if fields is not None and 'items_removed_credit' in fields:
@@ -511,6 +549,52 @@ def knock_off(c,before,after,side,use):
         credit=_li.put(credit,r,(side,),_li.take(credit,r,side)+use.astype(credit.dtype))
         c=c._replace(trackers=t._replace(field_features={**fields,'items_removed_credit':credit}))
     return c
+
+
+def trick(c,before,after,side,use,choice_items):
+    """One successful Trick by `side` (fidelity M1, design 2.5). Showdown prints -activate|S|move: Trick|[of] T,
+    then for T and for S: -item|X|received|[from] move: Trick, or -enditem|X|lost|[silent]|[from] move: Trick
+    when nothing comes back (data/moves.ts trick onHit).
+
+    Per mon, as B2 folds those lines: the ledger (public_items.record TRICK_RECEIVE / REMOVE) reveals the
+    received item, or the lost one when nothing came back (shown_item, read as the known item); removed
+    is "nothing received" (item_removed); the item is mutated; and a mon unmutated with no recorded original
+    before this Trick gets the item it held as its original (TRICK_RECEIVE's partner credit or REMOVE's own
+    removal). The seat flags (public_active): -item is ITEM_SET (item_swapped, choice_public = a Choice item
+    received, choice_locked reset), -enditem is ITEM_END (all three reset). A mutated item no longer narrows
+    (design 13 item 4: B2's matching key is 0), so both mons' item narrowing is reset.
+    B2's identical-swap quirk: a Band <-> Band Trick leaves the state unchanged but prints the same lines,
+    so `use` is the transition's success mask, never a before/after item difference.
+    """
+    b=len(c.trackers.error);use=_mask(use,b);r=_r(after)
+    for m in (side,1-side):
+        p=_li.take(after.active,r,m)
+        received=_get(after,'item',m);lost=_get(before,'item',m);got=received>0
+        c=c._replace(trackers=_write(c.trackers,'shown_item',m,p,j.where(got,received,lost),use))
+        c=c._replace(trackers=_write(c.trackers,'item_removed',m,p,~got,use))
+        facts=c.trackers.mon_features
+        if facts is not None and 'item_mutated' in facts:
+            fresh=(_mon_fact(c,'item_mutated',m,p)==0)&(_mon_fact(c,'item_original',m,p)==0)
+            c=feature(c,m,p,'item_original',lost,use&fresh)
+            c=feature(c,m,p,'item_mutated',j.ones_like(p),use)
+        choice=got&j.asarray(choice_items)[j.clip(received,0,len(choice_items)-1)]
+        for name,value in (('item_swapped',got),('choice_public',choice),('choice_locked',j.zeros_like(got))):
+            if c.trackers.mon_features is not None and name in c.trackers.mon_features:
+                c=feature(c,m,p,name,value.astype(j.int32),use)
+        c=_reset_item_narrowing(c,m,p,use)
+    return c
+
+
+def recharge_turn(c,state,side,use):
+    """B2 on cant|X|recharge (fidelity M1): CLEAR_RECHARGE ends the seat's mustrecharge flag, STALL_BREAK
+    its stall count (already zero after the Hyper Beam move), EXPIRE_ACTION its Destiny Bond (the
+    destiny_bond hook at the same attempt). It is no decision opportunity (public_tendency drops recharge
+    cants) and no Truant anchor. A recharge whose action a Gen 3 faint cancels expires silently at the
+    residual and B2 keeps the flag: its stale bit, matched on purpose (design 13 item 3); arrival (install)
+    and the faint clear end it."""
+    use=_mask(use,len(c.trackers.error));p=_li.take(state.active,_r(state),side)
+    c=volatile(c,state,side,'mustrecharge',j.zeros_like(use),use)
+    return feature(c,side,p,'stall_counter',j.zeros_like(p),use)
 
 
 def destiny_bond(c,state,side,use):
@@ -569,7 +653,7 @@ def negative_hp_line(c,state,side,use,*,source_class):
 
 
 FAINT_CLEAR_KEYS=('confusion_turns','encore_turns','wrap_trap_turns','stall_counter','sub_present',
-                  'item_swapped','choice_locked')
+                  'item_swapped','choice_locked','choice_public')
 
 
 def faint_clear(c,before,after,use):
@@ -660,6 +744,11 @@ def public_move_state(c,before,after,side,move,use):
             c=volatile(c,after,target,name,new,use&(old!=new))
         old=(_get(before,'volatile',target)&j.uint32(4))!=0;new=(_get(after,'volatile',target)&j.uint32(4))!=0
         c=volatile(c,after,target,'leechseed',new,use&(old!=new))
+        # Fidelity M1: -mustrecharge (mustrecharge onStart) is B2's RECHARGE: set when the counter starts (0 -> 2).
+        # Never cleared here: B2 clears it only on cant|X|recharge (recharge_turn), arrival or a faint.
+        if hasattr(before,'recharge_counter') and hasattr(after,'recharge_counter'):
+            started=use&(_get(before,'recharge_counter',target)==0)&(_get(after,'recharge_counter',target)>0)
+            c=volatile(c,after,target,'mustrecharge',j.ones_like(started),started)
     return observe(c,after,use)
 
 

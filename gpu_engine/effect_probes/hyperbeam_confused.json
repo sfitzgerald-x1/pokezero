@@ -1,0 +1,193 @@
+{
+ "schema": "pokezero.effect_probe.scenario.v1",
+ "move": "hyperbeam_confused",
+ "note": "M1.1: the slower Snorlax confuses Slaking with Signal Beam after its Hyper Beam; the recharge turn has no confusion tick or check (priority 11 before confusion 3). The next act turn ticks and checks it.",
+ "teams": [
+  [
+   {
+    "species": "Slaking",
+    "moves": [
+     "hyperbeam",
+     "return",
+     "earthquake",
+     "shadowball"
+    ],
+    "ability": "Truant",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Starmie",
+    "moves": [
+     "splash",
+     "surf",
+     "recover",
+     "protect"
+    ],
+    "ability": "Illuminate",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Blissey",
+    "moves": [
+     "splash",
+     "softboiled",
+     "protect",
+     "seismictoss"
+    ],
+    "ability": "Serene Grace",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Skarmory",
+    "moves": [
+     "splash",
+     "protect",
+     "spikes",
+     "peck"
+    ],
+    "ability": "Keen Eye",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Swampert",
+    "moves": [
+     "splash",
+     "protect",
+     "surf",
+     "earthquake"
+    ],
+    "ability": "Torrent",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Metagross",
+    "moves": [
+     "splash",
+     "protect",
+     "meteormash",
+     "earthquake"
+    ],
+    "ability": "Clear Body",
+    "item": "Leftovers"
+   }
+  ],
+  [
+   {
+    "species": "Snorlax",
+    "moves": [
+     "signalbeam",
+     "splash",
+     "protect",
+     "bodyslam"
+    ],
+    "ability": "Thick Fat",
+    "item": "Leftovers",
+    "level": 100
+   },
+   {
+    "species": "Starmie",
+    "moves": [
+     "splash",
+     "surf",
+     "recover",
+     "protect"
+    ],
+    "ability": "Illuminate",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Blissey",
+    "moves": [
+     "splash",
+     "softboiled",
+     "protect",
+     "seismictoss"
+    ],
+    "ability": "Serene Grace",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Skarmory",
+    "moves": [
+     "splash",
+     "protect",
+     "spikes",
+     "peck"
+    ],
+    "ability": "Keen Eye",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Swampert",
+    "moves": [
+     "splash",
+     "protect",
+     "surf",
+     "earthquake"
+    ],
+    "ability": "Torrent",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Metagross",
+    "moves": [
+     "splash",
+     "protect",
+     "meteormash",
+     "earthquake"
+    ],
+    "ability": "Clear Body",
+    "item": "Leftovers"
+   }
+  ]
+ ],
+ "script": [
+  [
+   "move 1",
+   "move 1"
+  ],
+  [
+   "move 1",
+   "move 2"
+  ],
+  [
+   "move 2",
+   "move 2"
+  ],
+  [
+   "move 2",
+   "move 2"
+  ],
+  [
+   "move 2",
+   "move 2"
+  ]
+ ],
+ "axes": [
+  {
+   "name": "selfhit",
+   "field": "draws.0.3",
+   "values": [
+    0,
+    60
+   ],
+   "steps": [
+    2
+   ]
+  }
+ ],
+ "tape_steps": {
+  "0": {
+   "secondary.1": 0,
+   "draws.1.7": 1
+  }
+ },
+ "expect": {
+  "exact": true
+ },
+ "require_fields": [
+  "recharge_counter",
+  "item_knocked",
+  "destiny_bond"
+ ]
+}

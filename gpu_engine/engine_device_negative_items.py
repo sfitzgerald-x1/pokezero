@@ -68,8 +68,12 @@ def upkeep(trackers, belief_tables, leftovers, use, *, current_state=None):
             slot = _li.take(trackers.active_slot,r,side); at = j.clip(slot, 0, 5)
             species = _li.take(trackers.species,r,side,at)
             changed = _li.take(trackers.item_removed,r,side,at)
-            if trackers.mon_features is not None and 'item_swapped' in trackers.mon_features:
-                changed |= _li.take(trackers.mon_features['item_swapped'],r,side,at) != 0
+            # Fidelity M1: B2's non-proc sweep skips a mutated item (public_item_nonproc: ~items.mutated), the
+            # per-mon ledger flag item_mutated, which outlives the seat's per-stint item_swapped (an arrival
+            # resets that one; it implies a mutation, so a carry without the ledger still uses it).
+            for mutation in ('item_mutated', 'item_swapped'):
+                if trackers.mon_features is not None and mutation in trackers.mon_features:
+                    changed |= _li.take(trackers.mon_features[mutation],r,side,at) != 0
             valid = use & (slot >= 0) & (slot < 6) & _li.take(trackers.present,r,side,at)
             # Validate the current condition itself, not its clamped display
             # or unrelated sticky identity/status errors. No current operands
