@@ -153,6 +153,10 @@ class ComponentMemoryCheckTests(unittest.TestCase):
         with mock.patch('platform.release', return_value='6.11.0-1018-azure'), \
                 mock.patch('os.sysconf', side_effect=lambda name: {'SC_NPROCESSORS_CONF': 4, 'SC_PAGE_SIZE': 4096}[name]):
             self.assertEqual(_stat_error_bytes(), 2 * 64 * 4 * 4096)
+        for release, factor in (('6', 3), ('6.8-rc1', 3), ('6.14.0-1', 2), ('5.15.0-1', 3)):
+            with mock.patch('platform.release', return_value=release):
+                from scripts.run_component_memory_check import _stat_flush_factor
+                self.assertEqual(_stat_flush_factor(), factor)
 
     def test_lazily_freed_anon_on_the_file_lru_is_not_dropped_as_cache(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -274,6 +278,8 @@ class ComponentMemoryCheckTests(unittest.TestCase):
         self.assertEqual(report['memory_source'], CGROUP_SOURCE)
         self.assertEqual(rows[0]['tree_rss_bytes'], 140)
         self.assertEqual(report['cgroup_fallback_samples'], 0)
+        self.assertIn(report['stat_flush_factor'], (2, 3))
+        self.assertNotIn('kernel', report)
         stat = report['peak_memory_stat']
         self.assertEqual({k: stat[k] for k in ('memory_bytes', 'current_bytes', 'anon', 'kernel', 'file_dirty')},
                          dict(memory_bytes=70, current_bytes=79, anon=67, kernel=3, file_dirty=0))

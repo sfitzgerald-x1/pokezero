@@ -70,6 +70,15 @@ def own_cgroup(*, proc=Path('/proc'), cgroup=Path('/sys/fs/cgroup')):
 
 STAT_FIELDS = ('anon', 'file', 'shmem', 'kernel', 'file_mapped', 'file_dirty', 'file_writeback',
                'active_file', 'inactive_file', 'swapcached')
+def _stat_flush_factor():
+    """2 on kernels 6.8 and later, else 3 (see _stat_error_bytes)."""
+    try:
+        major, minor = (int(part) for part in platform.release().split('.')[:2])
+    except ValueError:
+        return 3
+    return 2 if (major, minor) >= (6, 8) else 3
+
+
 def _stat_error_bytes():
     """How far memory.stat may lag the exact memory.current.
 
@@ -81,12 +90,7 @@ def _stat_error_bytes():
     PYTHON_CPU_COUNT) keep the bound on the safe side. 2 MiB on a 4-CPU runner with
     4 KiB pages.
     """
-    try:
-        major, minor = (int(part) for part in platform.release().split('.')[:2])
-        factor = 2 if (major, minor) >= (6, 8) else 3
-    except ValueError:
-        factor = 3
-    return factor * 64 * max(os.sysconf('SC_NPROCESSORS_CONF'), 1) * os.sysconf('SC_PAGE_SIZE')
+    return _stat_flush_factor() * 64 * max(os.sysconf('SC_NPROCESSORS_CONF'), 1) * os.sysconf('SC_PAGE_SIZE')
 
 
 STAT_ERROR_BYTES = _stat_error_bytes()
@@ -302,7 +306,8 @@ def run(command, *, output, label, summary=None, limit_bytes=None, interval=.2, 
             memory_source=source, peak_rss_bytes=legacy,
             peak_rss_method='not gating: max(sampled process-tree RSS sum, observed process HWM, kernel child HWM)',
             peak_memory_stat=breakdown, pss_errors=pss_errors, cgroup_fallback_samples=fallbacks,
-            stat_error_bytes=STAT_ERROR_BYTES if group is not None else None, kernel=platform.release(),
+            # The factor, not the kernel release: logs of a private runner stay generic.
+            stat_error_bytes=STAT_ERROR_BYTES if group is not None else None, stat_flush_factor=_stat_flush_factor(),
             swap_baseline_bytes=swap_baseline if group is not None else None,
             cgroup_swap_peak_bytes=cgroup_peak(group, 'memory.swap.peak'),
             sample_interval_seconds=interval, cgroup_memory_peak_bytes=cgroup_peak(group),
