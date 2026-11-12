@@ -3,8 +3,8 @@
 The GPU device engine keys every move effect by name and reads no effect fields (generate_teams.cjs:75-81); the static
 table of its handling of the Gen 3 random-battle pool is reports/gpu-engine-move-effect-table-20261109.md. GUARDED holds
 the moves whose missing effect carries over into the price (the lead's decision):
-- tier A, unconditional: hyperbeam, destinybond, transform, yawn, wrap, perishsong, trick, counter, mirrorcoat, curse,
-  superpower, knockoff, charm, lovelykiss, bonemerang, gigadrain;
+- tier A, unconditional: hyperbeam, transform, yawn, wrap, perishsong, trick, counter, mirrorcoat, curse, superpower,
+  knockoff, charm, lovelykiss, bonemerang, gigadrain;
 - tier C, guarded for a side only while its condition holds (`conditions`): spore, sleeppowder, hypnosis while Sleep Clause
   would bind (the target's side already has a non-fainted Pokemon asleep from a non-allied source: Showdown f76228a1
   data/rulesets.ts sleepclausemod, whose onSetStatus skips a sleeper whose statusState.source is its ally, i.e. Rest; a
@@ -15,6 +15,10 @@ the moves whose missing effect carries over into the price (the lead's decision)
   has Guts; ours: the request's ability), aromatherapy while the user's party has a statused, non-fainted Pokemon (ours:
   the request; the opponent's: its public statuses).
 TIER_B (irontail, signalbeam, steelwing, meteormash: chance secondaries) is never guarded, only reported (tier_b_legal).
+RETIRED (tier 'R') holds the moves the guard no longer trips on because the engine now models their effect, each with the
+integration merge from which it does (a screen declares an engine at or after it): destinybond (A2, 286a5ffe: the DESTINY_BOND
+volatile, Showdown-probed). They stay WATCHED, so their masses are still recorded (turn-2 entries: guarded False, tier 'R'), and
+never count toward (b), (c) or the reach. Roots where a side is already bonded stay refused by the world constructor, not here.
 
 The guard trips on (b) or (c) (RULE 'reach', the lead's live rule from screen-r2):
 - (b) turn 1: in any constructed world, either side's turn-1 prior puts >= THRESHOLD of its mass on a lane whose move is
@@ -32,7 +36,7 @@ record), the any-cell fields above (its turn-2 hits under any_cell_reasons), rea
 and choice, with the max mass, the tier and the effect class; one per tripping side for the reach, with M as max_mass, its
 contributing tiers' masses, its moves' weighted masses and its worlds; turn2_unavailable), tiers (the tripped reasons'), the (a) flag (a guarded move legal for
 either side at turn 1 in any world: reporting only), tier_b_legal, our guarded lanes, the conditions per side and the masses
-of every GUARDED or TIER_B move (turn 1 per side and world, turn 2 per side, world and cell a * 9 + b with our lane a and the
+of every WATCHED move (GUARDED, TIER_B, RETIRED; turn 1 per side and world, turn 2 per side, world and cell a * 9 + b with our lane a and the
 reply b, each turn-2 entry also carrying `guarded` (this guard's own decision at that child), the move's `tier` and its `user`
 species). A turn-2 capture that is missing while some turn-1 cell expanded fails closed: (b) trips (the reach is
 unavailable; the any-cell arm's source turn2_unavailable). `reach` weighs those turn-2 masses by the root and reply priors:
@@ -52,7 +56,7 @@ RULE = 'reach'   # the live turn-2 arm: the reach M_s (screen-r2); records befor
 
 # move id -> (tier, effect class, condition) ; tier A conditions are None.
 GUARDED = {
-    'hyperbeam': ('A', 'multi_turn', None), 'destinybond': ('A', 'volatile', None), 'transform': ('A', 'other', None),
+    'hyperbeam': ('A', 'multi_turn', None), 'transform': ('A', 'other', None),
     'yawn': ('A', 'volatile', None), 'wrap': ('A', 'volatile', None), 'perishsong': ('A', 'volatile', None),
     'trick': ('A', 'item_removal', None), 'counter': ('A', 'retaliation', None), 'mirrorcoat': ('A', 'retaliation', None),
     'curse': ('A', 'self_boost', None), 'superpower': ('A', 'self_stat_drop', None), 'knockoff': ('A', 'item_removal', None),
@@ -64,7 +68,9 @@ GUARDED = {
     'aromatherapy': ('C', 'status', 'party_statused'),
 }
 TIER_B = {'irontail': 'target_stat_change', 'signalbeam': 'volatile', 'steelwing': 'self_boost', 'meteormash': 'self_boost'}
-WATCHED = frozenset(GUARDED) | frozenset(TIER_B)
+# move id -> (effect class, the integration merge from which the engine models it): watched and recorded, never guarded.
+RETIRED = {'destinybond': ('volatile', '286a5ffe')}
+WATCHED = frozenset(GUARDED) | frozenset(TIER_B) | frozenset(RETIRED)
 # Showdown's Gen 3 move table (Dex.forGen(3)): every standard move with flags.recharge (the live actor's own-recharge guard).
 RECHARGE_MOVES = frozenset(('hyperbeam', 'blastburn', 'hydrocannon', 'frenzyplant'))
 STATUSES = ('par', 'brn', 'psn', 'tox', 'slp', 'frz')
@@ -241,8 +247,8 @@ def guarded(move, side, user, *, other=None):
 
 # Masses and lanes --------------------------------------------------------------------------------------------------------------
 def tier_of(move):
-    """A watched move's tier: 'A' or 'C' (GUARDED), 'B' (TIER_B), else None."""
-    return GUARDED[move][0] if move in GUARDED else 'B' if move in TIER_B else None
+    """A watched move's tier: 'A' or 'C' (GUARDED), 'B' (TIER_B), 'R' (RETIRED), else None."""
+    return GUARDED[move][0] if move in GUARDED else 'B' if move in TIER_B else 'R' if move in RETIRED else None
 
 
 def masses(logits, legal):
@@ -358,7 +364,8 @@ def reach(record, root_logits, root_legal, worlds, *, threshold=THRESHOLD):
     world w's turn-1 peer prior (its root_peer_logits over kept; a world whose opponent waits has the single reply 0 at mass 1:
     the pricer expands its cells (a, 0)), p_w uniform over the priced worlds. `worlds`: the row's worlds in block order, each
     dict(requested, logits, kept, priced=True). Exact when every turn-2 entry carries `guarded` (the guard's own decision at
-    that child); otherwise bounds: lower counts tier A and Psycho Boost when a revealed Deoxys or Deoxys-Attack of that side holds
+    that child, and its tier: a record written before a move was RETIRED keeps its M); otherwise bounds, under this module's
+    tiers: lower counts tier A and Psycho Boost when a revealed Deoxys or Deoxys-Attack of that side holds
     its White Herb (_psychoboost), upper every
     tier-C mass as guarded. tripped: True / False when the bounds (or the exact M) agree about THRESHOLD on either side, None
     when they straddle it; a record without its turn-2 masses (an error record, an unavailable capture) trips, fail closed.
@@ -382,7 +389,8 @@ def reach(record, root_logits, root_legal, worlds, *, threshold=THRESHOLD):
     moves = {scope: {side: {} for side in ('own', 'opp')} for scope in ('lower', 'upper')}
     where = {scope: {side: set() for side in ('own', 'opp')} for scope in ('lower', 'upper')}
     for e in entries:
-        tier = tier_of(e['move']);w = e['world']
+        # an exact entry carries its own guard's decision and tier: a record keeps its M under a later guard set (RETIRED)
+        tier = e['tier'] if exact and 'tier' in e else tier_of(e['move']);w = e['world']
         if tier not in ('A', 'C') or w not in peer:continue
         a, b = divmod(int(e['cell']), 9);weight = p * own[a] * peer[w][b] * float(e['mass'])
         if not weight:continue
