@@ -4,7 +4,7 @@ import jax
 import jax.numpy as j
 import numpy as np
 from types import SimpleNamespace
-import test_gpu_engine_calm_mind_owning as fixture
+import test_gpu_engine_calm_mind_components as fixture
 from gpu_engine import transition as tr,engine_lifecycle_callbacks as life
 from gpu_engine import engine_execution_completeness as ex,engine_kernel_frame_risk as risk
 from gpu_engine import engine_swords_dance_callbacks as swords,engine_source_frame_witness as witness
@@ -13,7 +13,7 @@ from gpu_engine import engine_full_v4_event_device as full,public_wire,v4_encode
 
 class SelfBoostUnionTests(unittest.TestCase):
     def test_both_registered_sources_one_literal_assignment_and_both_full_drains(self):
-        fixture.CalmMindOwningTests.setUpClass();f=fixture.CalmMindOwningTests()
+        fixture.CalmMindComponentTests.setUpClass();f=fixture.CalmMindComponentTests()
         sword=swords.compile_swords_dance(engine_catalog=f.producer,metadata=f.metadata)
         f.risks=risk.compile_risks(f.producer,f.account,calm_mind_compiled=f.helper,swords_dance_compiled=sword)
         sword_context=swords.Context(sword.device,f.account.device)
