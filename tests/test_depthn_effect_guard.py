@@ -571,5 +571,217 @@ class TrickConditionTests(unittest.TestCase):
                                  (['opp'] if tripped else [], tripped))
 
 
+def chart_of(pairs):
+    """A Gen 3 type chart by name: neutral everywhere but `pairs` {(attack, defend): multiplier}."""
+    names = ('normal', 'fighting', 'ground', 'ghost', 'bug', 'fire', 'water', 'grass', 'dragon', 'ice', 'dark', 'psychic', 'electric')
+    return {a: {d: pairs.get((a, d), 1.) for d in names} for a in names}
+
+
+CHART = chart_of({('normal', 'ghost'): 0., ('fighting', 'ghost'): 0., ('fighting', 'bug'): .5, ('ground', 'bug'): .5, ('ghost', 'ghost'): 2.,
+    ('dark', 'ghost'): 2., ('fire', 'bug'): 2., ('fire', 'grass'): 2., ('fire', 'fire'): .5, ('fire', 'water'): .5, ('water', 'fire'): 2.,
+    ('bug', 'ghost'): .5, ('bug', 'fire'): .5, ('bug', 'grass'): 2.})
+CATALOG = {m: dict(category=c, type=t, contact=k) for m, c, t, k in (
+    ('tackle', 'Physical', 'normal', True), ('seismictoss', 'Physical', 'fighting', True), ('earthquake', 'Physical', 'ground', False),
+    ('dragonrage', 'Special', 'dragon', False), ('sheercold', 'Special', 'ice', False), ('flamethrower', 'Special', 'fire', False),
+    ('firepunch', 'Special', 'fire', True), ('shadowball', 'Physical', 'ghost', False), ('crunch', 'Special', 'dark', True),
+    ('struggle', 'Physical', 'normal', True), ('beatup', 'Physical', 'dark', False), ('toxic', 'Status', 'poison', False),
+    ('hiddenpowerbug', 'Physical', 'bug', False), ('surf', 'Special', 'water', False), ('megahorn', 'Physical', 'bug', True))}
+SHEDINJA = dict(ability='wonderguard', hp=1, max_hp=1, types=['bug', 'ghost'], hp_type=None)
+BRELOOM = dict(ability='effectspore', hp=200, max_hp=200, types=['grass', 'fighting'], hp_type=None)
+
+
+def mon(ability, hp=100, top=300, types=('normal',), hp_type=None):
+    return dict(ability=ability, hp=hp, max_hp=top, types=list(types), hp_type=hp_type)
+
+
+class AbilityLaneTests(unittest.TestCase):
+    """ability_lanes: Showdown f76228a's Gen 3 Wonder Guard (gen4 abilities.ts:530-543), pinch abilities (gen4 :25-35) and contact
+    statusers (gen3 abilities.ts:12-30, 135-144), lane by lane."""
+    def lanes(self, user, target, moves, pinch='third'):
+        return G.ability_lanes(user, target, list(moves), CATALOG, CHART, pinch=pinch)
+
+    def test_wonder_guard_blocks_every_damaging_move_that_is_not_super_effective(self):
+        user = mon('pressure')
+        wg = self.lanes(user, SHEDINJA, ('tackle', 'dragonrage', 'flamethrower', 'shadowball'))['WG']
+        self.assertEqual(wg, [False, True, False, False])   # power-0 Dragon Rage (neutral) blocked, the engine KOs; immune Normal: 0 in both; Fire, Ghost hit
+        wg = self.lanes(user, SHEDINJA, ('sheercold', 'seismictoss', 'crunch', 'earthquake'))['WG']
+        self.assertEqual(wg, [True, False, False, True])   # OHKO (neutral) and Ground x0.5 blocked; immune Seismic Toss: 0 in both; Dark x2 hits
+        wg = self.lanes(user, SHEDINJA, ('struggle', 'beatup', 'toxic', None))['WG']
+        self.assertEqual(wg, [False] * 4)   # typeless moves pass Wonder Guard; a Status move is not its business; no move
+
+    def test_hidden_power_takes_the_users_own_type(self):
+        self.assertEqual(self.lanes(mon('pressure', hp_type='fire'), SHEDINJA, ('hiddenpowerbug',))['WG'][0], False)   # fire: super-effective
+        self.assertEqual(self.lanes(mon('pressure', hp_type='water'), SHEDINJA, ('hiddenpowerbug',))['WG'][0], True)
+        self.assertEqual(self.lanes(mon('pressure'), SHEDINJA, ('hiddenpowerbug',))['WG'][0], True)   # no sampled type: the row's (bug, x0.5)
+
+    def test_pinch_at_a_third_or_two_thirds(self):
+        moves = ('flamethrower', 'tackle', 'firepunch', 'toxic')
+        for hp, third, two in ((100, [True, False, True, False], [True, False, True, False]), (101, [False] * 4, [True, False, True, False]),
+                               (200, [False] * 4, [True, False, True, False]), (201, [False] * 4, [False] * 4), (0, [False] * 4, [False] * 4)):
+            with self.subTest(hp=hp):
+                self.assertEqual(self.lanes(mon('blaze', hp, 300), None, moves)['PINCH'], third)
+                self.assertEqual(self.lanes(mon('blaze', hp, 300), None, moves, 'two_thirds')['PINCH'], two)
+        self.assertEqual(self.lanes(mon('swarm', 1, 300), None, ('megahorn', 'hiddenpowerbug', 'tackle'))['PINCH'][:3], [True, True, False])
+        self.assertEqual(self.lanes(mon('blaze', 1, 300, hp_type='fire'), None, ('hiddenpowerbug',))['PINCH'][0], True)   # Hidden Power Fire
+        self.assertEqual(self.lanes(mon('torrent', 1, 300), None, ('flamethrower',))['PINCH'][0], False)
+
+    def test_contact_statusers_and_what_is_modelled(self):
+        moves = ('tackle', 'earthquake', 'toxic', 'firepunch')
+        self.assertEqual(self.lanes(mon('pressure'), BRELOOM, moves)['CONTACT'], [True, False, False, True])
+        for name in ('poisonpoint', 'flamebody'):
+            self.assertEqual(self.lanes(mon('pressure'), mon(name), moves)['CONTACT'], [True, False, False, True], name)
+        for name in ('static', 'roughskin', 'pressure', None):   # Static and Rough Skin the engine models
+            self.assertEqual(self.lanes(mon('pressure'), mon(name), moves), {f: [False] * 4 for f in G.FAMILIES}, name)
+        self.assertEqual(G.damaging_lanes(['tackle', 'toxic', None, 'unknownmove'], CATALOG), [True, False, False, False])
+        self.assertEqual([G.holder_family(mon(a)) for a in ('wonderguard', 'flamebody', 'blaze', None)], ['WG', 'CONTACT', None, None])
+
+
+def ability_root(world, own=None, opp=None, dmg=((True,) * 4, (True,) * 4)):
+    """A turn-1 ability entry: `own` / `opp` {family: [bool] * 4} for both PINCH rules (two_thirds overrides with 'PINCH2')."""
+    side = lambda m, d: dict(third={f: list((m or {}).get(f, [False] * 4)) for f in G.FAMILIES},
+        two_thirds={f: list((m or {}).get('PINCH2' if f == 'PINCH' else f, (m or {}).get(f, [False] * 4))) for f in G.FAMILIES}, damaging=list(d))
+    return dict(world=world, own=side(own, dmg[0]), opp=side(opp, dmg[1]))
+
+
+class AbilityEvaluateTests(unittest.TestCase):
+    """ability_evaluate on one world (p_w 1) and two (1/2 each): our prior and the peer's, the arms one by one."""
+    def priors(self, own=(0, .9), peer=(0, .6), requested=True, worlds=(0,)):
+        o = prior(*own, legal=[True] * 9);p = prior(*peer, legal=[True] * 9)
+        return dict(logits=o[0], legal=o[1]), [dict(world=w, logits=p[0], legal=p[1], requested=requested) for w in worlds]
+
+    def test_turn_1_both_sides_and_the_record(self):
+        own, peer = self.priors()
+        r = G.ability_evaluate(own, peer, dict(turn1=[ability_root(0, own=dict(WG=[True, False, False, False]))]))
+        self.assertEqual((r['tripped'], r['b_turn1'], r['b_reach'], r['b_switchin'], r['c']), (True, True, False, False, False))
+        reason, = r['reasons'];self.assertEqual((reason['source'], reason['family'], reason['side'], reason['worlds']), ('ability_turn1', ['WG'], 'own', [0]))
+        self.assertAlmostEqual(reason['max_mass'], .9, places=12);self.assertAlmostEqual(r['families']['WG']['turn1']['own'], .9, places=12)
+        theirs = G.ability_evaluate(own, peer, dict(turn1=[ability_root(0, opp=dict(CONTACT=[True, False, False, False]))]), arms=G.ABILITY_ARMS_FULL)
+        self.assertEqual([(x['side'], x['family']) for x in theirs['reasons']], [('opp', ['CONTACT'])])
+        declared = G.ability_evaluate(own, peer, dict(turn1=[ability_root(0, opp=dict(CONTACT=[True, False, False, False]))]))
+        self.assertEqual((declared['tripped'], declared['families']['CONTACT']['turn1']['opp']), (False, theirs['families']['CONTACT']['turn1']['opp']))   # choice-only: recorded
+        waiting = G.ability_evaluate(own, self.priors(requested=False)[1], dict(turn1=[ability_root(0, opp=dict(CONTACT=[True] * 4))]), arms=G.ABILITY_ARMS_FULL)
+        self.assertFalse(waiting['tripped'])   # a waiting opponent has no prior
+        low = G.ability_evaluate(*self.priors(own=(0, .04)), dict(turn1=[ability_root(0, own=dict(WG=[True, False, False, False]))]))
+        self.assertFalse(low['b_turn1'])   # 4% < 5%
+
+    def test_the_root_pinch_rule(self):
+        root = [ability_root(0, own=dict(PINCH2=[True, False, False, False]), dmg=((True,) * 4, (False,) * 4))]   # their lanes: no damage
+        own, peer = self.priors()
+        full = G.ABILITY_ARMS_FULL
+        self.assertFalse(G.ability_evaluate(own, peer, dict(turn1=root), arms=full, pinch_root='two_thirds')['tripped'])   # nothing can bring us to a third this turn
+        root = [ability_root(0, own=dict(PINCH2=[True, False, False, False]))]
+        self.assertTrue(G.ability_evaluate(own, peer, dict(turn1=root), arms=full, pinch_root='two_thirds')['b_turn1'])
+        self.assertFalse(G.ability_evaluate(own, peer, dict(turn1=root), arms=full, pinch_root='third')['tripped'])   # exact rule: hp above a third
+        declared = G.ability_evaluate(own, peer, dict(turn1=root))
+        self.assertEqual((declared['pinch_root'], declared['tripped']), ('third', False))   # the declared root rule is the exact one
+        at_third = [ability_root(0, own=dict(PINCH=[True, False, False, False]))]
+        self.assertTrue(G.ability_evaluate(own, peer, dict(turn1=at_third), arms=full)['b_turn1'])
+        declared = G.ability_evaluate(own, peer, dict(turn1=at_third), choice=1)   # declared: PINCH choice-only
+        self.assertEqual((declared['tripped'], declared['families']['PINCH']['turn1_third']['own'] > .8), (False, True))   # recorded
+        self.assertTrue(G.ability_evaluate(own, peer, dict(turn1=at_third), choice=0)['c'])   # our chosen pinch lane
+
+    def test_the_choice_and_choice_only_families(self):
+        own, peer = self.priors(own=(0, .01))
+        inputs = dict(turn1=[ability_root(0, own=dict(CONTACT=[True, False, False, False]))])
+        r = G.ability_evaluate(own, peer, inputs, choice=0)
+        self.assertEqual((r['tripped'], r['b'], r['c'], r['own_guarded_lanes'][0]), (True, False, True, ['CONTACT']))
+        only = G.ability_evaluate(*self.priors(), inputs, choice=1, arms=dict(G.ABILITY_ARMS, CONTACT=('choice',)))
+        self.assertEqual((only['tripped'], only['families']['CONTACT']['turn1']['own'] > .8), (False, True))   # recorded, not tripping
+        self.assertTrue(G.ability_evaluate(*self.priors(), inputs, choice=0, arms=dict(G.ABILITY_ARMS, CONTACT=('choice',)))['c'])
+
+    def test_the_turn_1_switch_in(self):
+        own, peer = self.priors(own=(4, .5), peer=(0, .6))   # we switch to lane 4 at .5; they attack with lane 0 at .6
+        entry = dict(side='own', lane=4, family='WG', holder='wonderguard', against=[True, False, False, False])
+        r = G.ability_evaluate(own, peer, dict(turn1=[ability_root(0)], switchin={0: [entry]}))
+        self.assertAlmostEqual(r['families']['WG']['switchin']['opp'], .5 * .6, places=12)   # credited to the attacker
+        self.assertEqual((r['b_switchin'], [(x['source'], x['side'], x['family']) for x in r['reasons']]), (True, [('ability_switchin', 'opp', ['WG'])]))
+        again = G.ability_evaluate(own, peer, json.loads(json.dumps(dict(turn1=[ability_root(0)], switchin={0: [entry]}))))
+        self.assertEqual(again['families'], r['families'])   # world keys survive a JSON round trip
+        theirs = dict(side='opp', lane=4, family='CONTACT', holder='flamebody', against=[True, False, False, False])
+        own2, peer2 = self.priors(own=(0, .3), peer=(4, .5))
+        self.assertAlmostEqual(G.ability_evaluate(own2, peer2, dict(switchin={0: [theirs]}))['families']['CONTACT']['switchin']['own'], .15, places=12)
+        self.assertFalse(G.ability_evaluate(own, self.priors(requested=False)[1], dict(switchin={0: [entry]}))['tripped'])   # they wait
+        self.assertFalse(G.ability_evaluate(own, peer, dict(switchin={0: [entry]}), arms=dict(G.ABILITY_ARMS, WG=('choice',)))['b_switchin'])
+
+    def test_the_reach_by_hand(self):
+        own, peer = self.priors(own=(0, .75), peer=(1, .75), worlds=(0, 1))
+        q = prior(0, .4, legal=[True] * 9)
+        cell = lambda w, a, b, side, lanes: dict(world=w, cell=a * 9 + b, side=side, lanes=lanes, logits=q[0], legal=q[1])
+        contact = {f: [f == 'CONTACT', False, False, False] for f in G.FAMILIES}
+        pinch = {f: [f == 'PINCH', f == 'PINCH', False, False] for f in G.FAMILIES}
+        r = G.ability_evaluate(own, peer, dict(turn2=[cell(0, 0, 1, 'opp', contact), cell(1, 0, 1, 'own', pinch)]), arms=G.ABILITY_ARMS_FULL)
+        w = .5 * .75 * .75   # p_w x pi_own(0) x pi_peer(1)
+        self.assertAlmostEqual(r['m_opp'], w * .4, places=12);self.assertAlmostEqual(r['m_own'], w * (.4 + .075), places=12)
+        self.assertEqual((r['b_reach'], sorted(x['side'] for x in r['reasons'])), (True, ['opp', 'own']))
+        self.assertAlmostEqual(r['families']['PINCH']['reach']['own'], w * .475, places=12)
+        off = G.ability_evaluate(own, peer, dict(turn2=[cell(0, 0, 1, 'opp', contact)]), arms=dict(G.ABILITY_ARMS, CONTACT=('choice',)))
+        self.assertEqual((off['b_reach'], off['m_opp']), (False, 0.));self.assertAlmostEqual(off['families']['CONTACT']['reach']['opp'], w * .4, places=12)
+
+    def test_any_configuration_from_the_record_alone(self):
+        """ability_trips: the record's own configuration reproduces its decision; every other one (choice-only families, the exact
+        root PINCH rule) equals a fresh evaluation under it, from the record alone (reach_subsets, turn1_third, choice_third)."""
+        own, peer = self.priors(own=(0, .75), peer=(1, .75), worlds=(0, 1))
+        q = prior(0, .4, legal=[True] * 9)
+        cell = lambda w, a, b, side, lanes: dict(world=w, cell=a * 9 + b, side=side, lanes=lanes, logits=q[0], legal=q[1])
+        both = {f: [f in ('CONTACT', 'PINCH'), f == 'PINCH', False, False] for f in G.FAMILIES}   # lane 0 guarded by two families
+        inputs = dict(turn1=[ability_root(0, own=dict(PINCH2=[True, False, False, False])), ability_root(1)],
+                      switchin={0: [dict(side='own', lane=4, family='WG', holder='wonderguard', against=[True, False, False, False])]},
+                      turn2=[cell(0, 0, 1, 'opp', both), cell(1, 0, 1, 'own', {f: [f == 'WG'] + [False] * 3 for f in G.FAMILIES})])
+        full = dict(arms=G.ABILITY_ARMS_FULL, pinch_root='two_thirds')   # the record keeps every arm's masses and both root rules
+        # a config names what differs from the record's own (ability_trips reads an absent key from the record), the declared one included
+        configs = [dict(), dict(arms=G.ABILITY_ARMS, pinch_root=G.PINCH_ROOT), dict(arms=dict(G.ABILITY_ARMS_FULL, CONTACT=('choice',))),
+                   dict(arms=dict(G.ABILITY_ARMS_FULL, WG=('switchin', 'choice'))), dict(pinch_root='third'),
+                   dict(arms=dict(G.ABILITY_ARMS_FULL, CONTACT=('choice',), PINCH=('choice',)), pinch_root='third')]
+        record = G.ability_evaluate(own, peer, inputs, choice=0, **full)
+        w = .5 * .75 * .75
+        self.assertAlmostEqual(record['reach_subsets']['PINCH+CONTACT']['opp'], w * .475, places=12)   # the union, not the sum
+        self.assertAlmostEqual(record['families']['PINCH']['reach']['opp'] + record['families']['CONTACT']['reach']['opp'], w * .875, places=12)
+        for kw in configs:
+            with self.subTest(**{k: str(v) for k, v in kw.items()}):
+                fresh = G.ability_evaluate(own, peer, inputs, choice=0, **dict(full, **kw))
+                self.assertEqual(G.ability_trips(record, **kw), {k: fresh[k] for k in ('tripped', 'b_turn1', 'b_reach', 'b_switchin', 'c')})
+        self.assertEqual(G.ability_trips(record)['tripped'], record['tripped'])
+        with self.assertRaisesRegex(ValueError, 'threshold'):G.ability_trips(record, threshold=.07)
+        with self.assertRaisesRegex(ValueError, 'pinch_root'):G.ability_trips(record, pinch_root='half')
+        third = G.ability_evaluate(own, peer, inputs, choice=0, pinch_root='third')
+        with self.assertRaisesRegex(ValueError, 'two_thirds'):G.ability_trips(third, pinch_root='two_thirds')
+        self.assertEqual(G.ability_trips(third, arms=G.ABILITY_ARMS_FULL), {k: G.ability_evaluate(own, peer, inputs, choice=0, arms=G.ABILITY_ARMS_FULL,
+            pinch_root='third')[k] for k in ('tripped', 'b_turn1', 'b_reach', 'b_switchin', 'c')})   # a 'third' record still decides its arms
+
+    def test_the_declared_configuration(self):
+        """Gate 2's decisions (the lead's rules on the trip-share replay): PINCH and CONTACT choice-only, WG every arm, PINCH's exact
+        root rule. A record written under it carries them, so ability_trips reproduces it, and the same record decides every arm."""
+        self.assertEqual(G.ABILITY_ARMS, dict(WG=('turn1', 'reach', 'switchin', 'choice'), PINCH=('choice',), CONTACT=('choice',)))
+        self.assertEqual(G.PINCH_ROOT, 'third')
+        own, peer = self.priors()   # our lane 0 at .9, theirs at .6
+        q = prior(0, .4, legal=[True] * 9)
+        contact = {f: [f == 'CONTACT', False, False, False] for f in G.FAMILIES}
+        inputs = dict(turn1=[ability_root(0, own=dict(PINCH=[True, False, False, False]), opp=dict(CONTACT=[True, False, False, False]))],
+                      turn2=[dict(world=0, cell=0, side='opp', lanes=contact, logits=q[0], legal=q[1])])   # a CONTACT-only reach cell
+        keys = ('tripped', 'b_turn1', 'b_reach', 'b_switchin', 'c')
+        r = G.ability_evaluate(own, peer, inputs, choice=1)   # a lane that is neither pinch nor contact
+        self.assertEqual((r['arms'], r['pinch_root']), ({f: list(a) for f, a in G.ABILITY_ARMS.items()}, 'third'))
+        self.assertEqual({k: r[k] for k in keys}, dict(tripped=False, b_turn1=False, b_reach=False, b_switchin=False, c=False))
+        self.assertEqual(G.ability_trips(r), {k: r[k] for k in keys})   # the record's own configuration
+        full = G.ability_evaluate(own, peer, inputs, choice=1, arms=G.ABILITY_ARMS_FULL)
+        self.assertEqual((full['b_turn1'], full['b_reach']), (True, True))   # PINCH turn 1 (ours), CONTACT reach (theirs): unguarded now
+        self.assertEqual(G.ability_trips(r, arms=G.ABILITY_ARMS_FULL), {k: full[k] for k in keys})   # a 'third' record decides every arm
+        self.assertTrue(G.ability_evaluate(own, peer, inputs, choice=0)['c'])   # our chosen pinch lane stays guarded
+
+    def test_evaluate_folds_the_ability_record_in(self):
+        cond = G.conditions(BASE, 0, request(OURS));lanes = ['tackle', 'leechseed', 'substitute', 'protect'];own = prior(1, .9)   # lane 0: 3%
+        plain = G.evaluate(cond, own_turn1=dict(lanes=lanes, logits=own[0], legal=own[1]), peer_turn1=[], turn2=[], choice=0)
+        self.assertNotIn('ability', plain);self.assertFalse(plain['tripped'])
+        with_ab = G.evaluate(cond, own_turn1=dict(lanes=lanes, logits=own[0], legal=own[1]), peer_turn1=[], turn2=[], choice=0,
+            ability=dict(turn1=[ability_root(0, own=dict(WG=[True, False, False, False]))]))
+        self.assertEqual((with_ab['tripped'], with_ab['b'], with_ab['arms'], with_ab['ability']['c']), (True, False, ['ability'], True))
+        self.assertEqual(G.trips(with_ab, 0), dict(tripped=True, b=False, c=True));self.assertEqual(G.trips(with_ab, 1), dict(tripped=False, b=False, c=False))
+        b_only = G.evaluate(cond, own_turn1=dict(lanes=lanes, logits=prior(0, .9)[0], legal=prior(0, .9)[1]), peer_turn1=[], turn2=[], choice=1,
+            ability=dict(turn1=[ability_root(0, own=dict(WG=[True, False, False, False]))]))   # the ability guard's (b) alone
+        self.assertEqual((b_only['b'], b_only['ability']['b'], G.trips(b_only, 1)), (False, True, dict(tripped=True, b=True, c=False)))
+        self.assertEqual({k: v for k, v in with_ab.items() if k not in ('ability', 'tripped', 'arms')}, {k: v for k, v in plain.items() if k not in ('tripped', 'arms')})
+
+
+
 if __name__ == '__main__':
     unittest.main()

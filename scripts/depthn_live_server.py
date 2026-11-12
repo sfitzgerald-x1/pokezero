@@ -209,6 +209,9 @@ def parser():
     p.add_argument('--eager-peer-fold',action='store_true',help='advance each battle\'s peer wire fold on every root (with the redaction '
         'on), so the first private reveal folds only the new lines instead of the whole battle (constructor_worlds.advance_peer_fold): the '
         'same fold and beliefs, without the 1-2 s first-reveal spike; the header records eager_peer_fold')
+    p.add_argument('--ability-guard',action='store_true',help='the effect guard also guards lanes whose outcome depends on an ability the '
+        'engine does not model (Wonder Guard, Blaze/Torrent/Overgrow/Swarm, Poison Point/Flame Body/Effect Spore: '
+        'pokezero.depthn_effect_guard.ability_evaluate under its ABILITY_ARMS and PINCH_ROOT); the header records ability_guard')
     p.add_argument('--redact-private-reveals',action='store_true',help='clear the owner\'s abilities revealed only on Showdown\'s side-private '
         'Gen 3 Pressure line from the peer\'s view of the owner side (constructor_worlds.redact_private_reveals; off by default)')
     p.add_argument('--peer-view-b',action='store_true',help='view b in the peer\'s view (constructor_worlds\' Peer view b; off by default): it '
@@ -306,7 +309,9 @@ def build(args):
         eager_peer_fold=bool(getattr(args,'eager_peer_fold',False)))
     executor=cw.live_executor(metadata,catalog)   # the constructor's own engine metadata and catalog (the depth-N gate's CONSTRUCTOR_ROOTS uses the same)
     params=(evaluator.params,)
-    pricers=live.make_pricers(executor,evaluator,params,worlds=W,buckets=args.buckets,block_lanes=args.block_lanes,blocks_per_call=args.blocks_per_call)
+    from gpu_engine import depthn_guard_inputs as guard_inputs
+    pricers=live.make_pricers(executor,evaluator,params,worlds=W,buckets=args.buckets,block_lanes=args.block_lanes,blocks_per_call=args.blocks_per_call,
+        labels=guard_inputs.ability_labels if getattr(args,'ability_guard',False)else guard_inputs.child_labels)
     reply=None
     if getattr(args,'reply_archive',None):   # br_fp: the reply model at the champion's precision, on the same executor's views
         from gpu_engine.depthn_reply_prior import ReplyPrior
@@ -320,18 +325,21 @@ def build(args):
         max_requests=args.max_requests,session_cap=args.session_cap,refuse_classes=args.refuse_classes,
         redact_private_reveals=bool(getattr(args,'redact_private_reveals',False)),reply=reply,
         root_operator=getattr(args,'root_operator',live.ROOT_OPERATOR),
-        **({'peer_view_b':True}if getattr(args,'peer_view_b',False)else{}))
+        **({'peer_view_b':True}if getattr(args,'peer_view_b',False)else{}),**({'ability_guard':True}if getattr(args,'ability_guard',False)else{}))
 
 
 def header(args,search):
     """The run's identity for READY and the telemetry: code, champion, pricer, constructor and server settings."""
     import jax
+    from pokezero import depthn_effect_guard as effect_guard
     return dict(tree_commit=search.tree_commit,rung=search.rung,max_requests=search.max_requests,min_price_seconds=search.min_price_seconds,
         session_cap=search.session_cap,refuse_classes=list(search.refuse_classes),
         redact_private_reveals=bool(getattr(search,'redact_private_reveals',False)),**({'peer_view_b':True}if getattr(search,'peer_view_b',False)is True else{}),
         batch_wait_seconds=args.batch_wait_seconds,queue_limit=args.queue_limit,constructor_seed=args.seed,
         recipe_seed=args.recipe_seed,saved_root_admission=args.saved_root_admission,**({'incremental_roots':True}if getattr(args,'incremental_roots',False)else{}),
         **({'eager_peer_fold':True}if getattr(args,'eager_peer_fold',False)else{}),
+        **({}if not getattr(search,'ability_guard',False)else dict(ability_guard=dict(arms={f:list(a)for f,a in effect_guard.ABILITY_ARMS.items()},
+            pinch_root=effect_guard.PINCH_ROOT,families=dict(effect_guard.ABILITY_FAMILIES)))),
         metadata_sha256=args.expected_metadata_sha256,
         vocabulary_sha256=args.expected_vocabulary_sha256,champion_archive_sha256=args.champion_archive_sha256,
         champion_checkpoint_sha256=args.champion_checkpoint_sha256,champion_precision=args.champion_precision,pricer=search.pricer_identity,
