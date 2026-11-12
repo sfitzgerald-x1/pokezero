@@ -2,9 +2,22 @@ name: DepthN light checks
 
 # Every tests/test_depthn_*.py module in one hosted job. All of them are CPU-only and light (largest peak under 1 GiB,
 # about three minutes in all), but six compile GPU-engine code and the actor and constructor import well beyond the
-# depthn_* files, so the job triggers on the whole engine and package.
+# depthn_* files, so the job triggers on the whole engine and package. The gate is green with no skips, not a reference
+# diff. Pushes to the integration branch run it too, so a combination of PRs that each passed alone is still checked.
 on:
   pull_request:
+    paths:
+      - 'gpu_engine/**'
+      - 'src/pokezero/**'
+      - 'scripts/depthn_*'
+      - 'tests/test_depthn_*'
+      - 'tests/_showdown_root.py'
+      - 'scripts/run_component_memory_check.py'
+      - 'pyproject.toml'
+      - '**/requirements*.txt'
+      - '.github/workflows/depthn-light.yml'
+  push:
+    branches: ['scott/v2-engine-accel-20261104']
     paths:
       - 'gpu_engine/**'
       - 'src/pokezero/**'
@@ -20,8 +33,10 @@ permissions:
   contents: read
 
 concurrency:
-  group: depthn-light-${{ github.event.pull_request.number }}
-  cancel-in-progress: true
+  # A newer push to a pull request supersedes its older run. Each integration push gets its own group (by commit), so no
+  # merge's run is cancelled or dropped while pending, and a red run names the merge that broke it.
+  group: depthn-light-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   depthn-light:
