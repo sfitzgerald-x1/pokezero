@@ -133,10 +133,10 @@ class SwordsDanceComponentTests(unittest.TestCase):
  def test_canonical_static_capability_default_ast_and_original_source_order(self):
   from gpu_engine import engine_source_frame_witness as witness
   # witness._source() checks the pin inventory and every pinned file's bytes. While the chance proof does not cover
-  # R's effect draws, the secondary.py and transition.py pins stay stale on purpose and it refuses, so this test
-  # checks the inventory and this callback's own pin; every pin's bytes are checked by
-  # test_gpu_engine_transition_observer_wiring.test_owned_source_bindings_match_actual_files.
-  self.assertEqual(tuple(sorted(witness.SOURCE_PINS.items())),witness._REGISTERED_SOURCE_PINS)
+  # R's effect draws, the secondary.py and transition.py pins stay stale on purpose and it refuses; this test checks
+  # this callback's own pin (every pin's bytes: transition_observer_wiring's owned-source-bindings test). Tripwire:
+  # the pin bump that ends the refusal fails the assertRaises below and must restore witness._source() here.
+  with self.assertRaisesRegex(ValueError,'ACTUAL_KERNEL_SOURCE_DRIFT: (secondary|transition)[.]py'):witness._source()
   self.assertIn('engine_swords_dance_callbacks.py',witness.SOURCE_PINS)
   self.assertEqual(hashlib.sha256(Path(witness.__file__).with_name('engine_swords_dance_callbacks.py').read_bytes()).hexdigest(),witness.SOURCE_PINS['engine_swords_dance_callbacks.py'])
   move=self.ids['swordsdance'];self.assertEqual(int(self.risks.device.selected_risk[move]),0)
