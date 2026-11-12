@@ -484,12 +484,16 @@ ABILITY_FAMILIES = {'wonderguard': 'WG', 'blaze': 'PINCH', 'torrent': 'PINCH', '
 FAMILIES = ('WG', 'PINCH', 'CONTACT')
 PINCH_TYPES = {'blaze': 'fire', 'torrent': 'water', 'overgrow': 'grass', 'swarm': 'bug'}
 WG_TYPELESS = frozenset(('struggle', 'beatup', 'futuresight', 'doomdesire'))
-ABILITY_ARMS = {'WG': ('turn1', 'reach', 'switchin', 'choice'), 'PINCH': ('turn1', 'reach', 'choice'),
-                'CONTACT': ('turn1', 'reach', 'switchin', 'choice')}
+ABILITY_ARMS_FULL = {'WG': ('turn1', 'reach', 'switchin', 'choice'), 'PINCH': ('turn1', 'reach', 'choice'),
+                     'CONTACT': ('turn1', 'reach', 'switchin', 'choice')}
+# The declared configuration, from the gate-2 trip-share replay (r4a3's search arm, 120 cells, 4,925 guarded decisions, the lead's
+# rules): CONTACT added 2.36 pp over the move guard (> 1.5) so it ships choice-only; WG added 0.59 pp and keeps every arm.
+ABILITY_ARMS = dict(ABILITY_ARMS_FULL, CONTACT=('choice',))
 # The root PINCH rule: 'two_thirds' guards a pinch-type lane at the root while hp <= 2 maxhp / 3 and the other side puts >= THRESHOLD
 # on damaging lanes in that world (the holder may fall to a third during turn 1, then move); 'third' only while hp <= maxhp / 3.
-# Turn-2 children are always exact ('third' on the child's own hp).
-PINCH_ROOT = 'two_thirds'
+# Turn-2 children are always exact ('third' on the child's own hp). Declared 'third': the 2/3 turn-1 arm added 2.15 pp at gate 2
+# (> 1.0, the fallback rule); 1.06 pp of it over the exact rule's own turn-1 arm.
+PINCH_ROOT = 'third'
 
 
 def effectiveness(move_type, types, chart):
