@@ -174,7 +174,7 @@ class OwningStatusDrainTests(unittest.TestCase):
                     self.assertEqual(int(observer.retained.mons.status[row,side,slot]),
                         public_mon_state.BURN if side==0 else public_mon_state.POISON)
 
-    # execution_runtime_plumbing: the heal drain (that module is retired separately)
+    # execution_runtime_plumbing: the heal drain (its fixture is now tests/gpu_engine_owning_runtime_fixture.py)
 
     def test_actual_heal_turn_captures_and_drains_both_owner_leftovers_spans(self):
         r,(birth,actions,frame,result)=self.heal_turn();tables=r['execution_compiled'].device

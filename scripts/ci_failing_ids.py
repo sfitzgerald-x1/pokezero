@@ -427,7 +427,7 @@ def pod_run(args):
     node = subprocess.run(['node', '--version'], capture_output=True, text=True).stdout.strip()
     data = dict(schema=SCHEMA + '.pod', tree=str(tree), tree_commit=commit, tree_dirty=dirty, modules=modules,
         entry_point=('scripts/run_gpu_component_shard.py --index <block> --count <blocks> --process-blocks '
-                     '--isolate-standard-class <CI classes> --resource-interval-seconds 30; full CI discovery in parent and child'),
+                     '--resource-interval-seconds 30 (plus --isolate-standard-class for each CI_ISOLATE class, none now); full CI discovery in parent and child'),
         discovery_blocks=len(blocks), module_blocks={m: index[m] for m in modules},
         reused_logs=dict(directory=str(args.reuse_logs), modules=sorted(reused)) if args.reuse_logs else None,
         environment=dict(python=platform.python_version(), machine=platform.machine(), jax_numpy=versions, node=node,

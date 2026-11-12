@@ -23,6 +23,45 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class ComponentShardTests(unittest.TestCase):
+    def test_runtime_cache_boundaries_keep_class_inputs_and_failed_cases(self):
+        # Exercise a real fixture hook through unittest without importing JAX, constructing a source session, or
+        # executing the scientific test body: ColorChangeOwningTests' setUp releases compiled heaps before each case.
+        path = ROOT / 'tests' / 'test_gpu_engine_color_change_owning.py'
+        source = ast.parse(path.read_text())
+        case = next(node for node in source.body if isinstance(node, ast.ClassDef) and node.name == 'ColorChangeOwningTests')
+        hooks = [node for node in case.body if isinstance(node, ast.FunctionDef) and node.name in ('setUp', 'release_compilers')]
+        self.assertEqual(sorted(node.name for node in hooks), ['release_compilers', 'setUp'])
+        events = []
+        namespace = {
+            'jax': mock.Mock(clear_caches=lambda: events.append('clear'),
+                block_until_ready=lambda values: events.append(('ready', values))),
+            'gc': mock.Mock(collect=lambda: events.append('collect')),
+        }
+        exec(compile(ast.Module(body=hooks, type_ignores=[]), str(path), 'exec'), namespace)
+        shared_input = object()
+        class Synthetic(unittest.TestCase):
+            setUp = namespace['setUp']
+            release_compilers = namespace['release_compilers']
+            @classmethod
+            def setUpClass(cls):
+                events.append('class_setup')
+                cls.prepared = shared_input
+            def test_first(self):
+                self.assertIs(self.prepared, shared_input)
+                events.append('first')
+                self.fail('intentional control')
+            def test_second(self):
+                self.assertIs(self.prepared, shared_input)
+                events.append('second')
+        result = unittest.TestResult()
+        unittest.TestSuite([Synthetic('test_first'), Synthetic('test_second')]).run(result)
+        release = [('ready', ()), 'clear', 'collect']
+        self.assertEqual(events, ['class_setup', *release, 'first', *release, 'second'])
+        self.assertEqual(result.testsRun, 2)
+        self.assertEqual(len(result.failures), 1)
+        self.assertEqual(result.errors, [])
+        self.assertEqual(result.skipped, [])
+
     def isolated(self, root, index=0, count=1, resource_interval_seconds=0, isolate_standard_classes=(),
                  low_optimization_cases=()):
         # Actual fresh parent AND child interpreters, no mocked process runner
