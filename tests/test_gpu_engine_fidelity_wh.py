@@ -48,8 +48,10 @@ class TableTests(unittest.TestCase):
     def test_tables_append_their_fields(self):
         from gpu_engine import effects, items, variable_moves
         meta = metadata()
-        self.assertEqual(items.ItemTable._fields[-1], 'white_herb');self.assertEqual(effects.MoveEffects._fields[-1], 'defrost')
-        self.assertEqual(variable_moves.VariableMoveTable._fields[-1], 'facade')
+        # Appended in order after the earlier PRs' fields (membership and order, not the tail: later PRs append more).
+        for table, before, name in ((items.ItemTable, 'trick', 'white_herb'), (effects.MoveEffects, 'wrap', 'defrost'),
+                                    (variable_moves.VariableMoveTable, 'dark_type', 'facade')):
+            self.assertEqual(table._fields[table._fields.index(before) + 1], name)
         self.assertEqual(np.flatnonzero(np.asarray(items.from_metadata(meta).white_herb)).tolist(), [HERB])
         self.assertEqual(np.flatnonzero(np.asarray(effects.from_metadata(meta).defrost)).tolist(), [SACREDFIRE])   # the move flag
         self.assertEqual(np.flatnonzero(np.asarray(variable_moves.from_metadata(meta).facade)).tolist(), [FACADE])
