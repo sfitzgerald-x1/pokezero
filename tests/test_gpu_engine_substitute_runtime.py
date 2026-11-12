@@ -20,6 +20,7 @@ from gpu_engine import engine_public_events as public,engine_leftovers_callbacks
 from gpu_engine import engine_execution_completeness as accounting,engine_kernel_frame_risk as risks
 from gpu_engine import public_belief,source_provenance,transition,v4_encoder
 import test_gpu_engine_engine_weather_public as fixture
+import gpu_engine_eager_witness as eager
 
 class SubstituteRuntimeTests(unittest.TestCase):
     @classmethod
@@ -67,21 +68,24 @@ class SubstituteRuntimeTests(unittest.TestCase):
         with TemporaryDirectory() as tmp:
             p=Path(tmp)/'literal.npz';np.savez_compressed(p,**dict(arrays,metadata_utf8=np.frombuffer(json.dumps(self.metadata).encode(),np.uint8)))
             pool=source_provenance.load_constructor_pool(p)
-            session=driver.construct(pool,np.array([[0,1],[0,1]],np.int64),prepared=self.prepared,
-                stream_ids=j.array([9601,9602],j.int32),seed=31)
+            # Construction runs the witness too: keep it eager.
+            with eager.eager_source_witness(self.prepared):
+                session=driver.construct(pool,np.array([[0,1],[0,1]],np.int64),prepared=self.prepared,
+                    stream_ids=j.array([9601,9602],j.int32),seed=31)
         self.assertEqual(session.state.core.admitted.tolist(),[True,True])
         return session
 
     def advance(self,session):
-        previous=session.state;frames=[];actual=self.runtime['frame']
-        def capture(*args):
-            f=actual(*args);frames.append(f);return f
-        chance=transition.ChanceInputs(j.zeros((2,2,12),j.int32).at[:,:,4].set(1),
-            *[j.zeros((2,2),j.int32) for _ in range(4)],j.zeros(2,j.int32))
-        actions=j.array([[0,8],[0,8]],j.int32)
-        self.runtime['frame']=capture
-        try:result=driver.advance(session,actions,chance_inputs=chance)
-        finally:self.runtime['frame']=actual
+        with eager.eager_source_witness(self.prepared):
+            previous=session.state;frames=[];actual=self.runtime['frame']
+            def capture(*args):
+                f=actual(*args);frames.append(f);return f
+            chance=transition.ChanceInputs(j.zeros((2,2,12),j.int32).at[:,:,4].set(1),
+                *[j.zeros((2,2),j.int32) for _ in range(4)],j.zeros(2,j.int32))
+            actions=j.array([[0,8],[0,8]],j.int32)
+            self.runtime['frame']=capture
+            try:result=driver.advance(session,actions,chance_inputs=chance)
+            finally:self.runtime['frame']=actual
         self.assertEqual(len(frames),1)
         legacy=transition.step_with_chance(previous.core.engine,actions,self.table,chance)
         self.same(result.state.core.engine,legacy.state)
@@ -112,3 +116,7 @@ class SubstituteRuntimeTests(unittest.TestCase):
         self.assertTrue(bool((failed.state.core.execution.refusal!=0).all()))
         words=np.asarray(badframe.callbacks.words);present=np.arange(words.shape[1])[None,:]<np.asarray(badframe.callbacks.count)[:,None]
         self.assertFalse(bool(np.any(present&(words[:,:,0]==sub.SUBSTITUTE_CREATED))))
+
+
+def tearDownModule():
+    eager.clear()   # drop the consume executables this module compiled
