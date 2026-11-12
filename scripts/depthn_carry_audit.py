@@ -17,7 +17,7 @@ escalated.
 
 Enumeration (`EFFECTS`, `REPRESENTED`, `NOT_IN_POOL`; every row cites file:line at this tree and at the pinned Showdown f76228a).
 The pool is the set source the constructor reads: pokezero.randbat.load_gen3_randbat_source_cached(showdown_root) loads
-data/random-battles/gen3/sets.json (gpu_engine/phase_d_protocol_constructor.py:129). Its 220 species hold 125 moves; the
+data/random-battles/gen3/sets.json (gpu_engine/phase_d_protocol_constructor.py:175). Its 220 species hold 125 moves; the
 pool_species of each row are the species with a set listing the move. With --showdown-root that file is re-read and every row's
 pool membership is checked against it (pool_check; a mismatch is reported, never silently accepted).
 - Audited (in the pool, not represented): recharge (Hyper Beam), partial_trap (Wrap), perish_count (Perish Song), drowsy (Yawn),
@@ -140,8 +140,8 @@ EFFECTS = (
          'Showdown data/conditions.ts:364-378: mustrecharge cancels the next move (onBeforeMovePriority 11) and is onLockMove recharge; '
          'sim/pokemon.ts:1085-1088: a locked move sets trapped, so the recharge turn has no switch',
          'in-tree since M1 (8b212312): gpu_engine/state.py:87 recharge_counter; transition.py:766-771 the recharge turn',
-         'live roots: gpu_engine/constructor_worlds.py:1454 and 1609 an opponent that must recharge is refused '
-         '(OPPONENT_RECHARGE_UNREPRESENTED, constructor_worlds.py:467); the owner\'s recharge turn is single-legal (the phase-D '
+         'live roots: gpu_engine/constructor_worlds.py:1573-1574 (prepare_roots) and 1728-1729 (build) an opponent that must '
+         'recharge is refused (OPPONENT_RECHARGE_UNREPRESENTED, constructor_worlds.py:485); the owner\'s recharge turn is single-legal (the phase-D '
          'mapper refuses a live mustrecharge too: future_state.py:476, RECHARGE_UNREPRESENTED)'),
         'Only Slaking carries it, and Slaking\'s one ability is Truant: a residual clock in Gen 3 (Showdown data/mods/gen3/abilities.ts:'
         '197-212) the engine models (state.py:84 truant_loaf, transition.py:583-585 and 777-778). In-tree since M1 the recharge turn '
@@ -159,8 +159,10 @@ EFFECTS = (
          'probes: 12 wrap* scenarios (20 cases), EXACT against Showdown f76228a1 at M2 + R1 (3e0878e4); each gated position fails a '
          'named probe when dropped (#1930 (M2 + R1) PR body, R1 section, position -> probe table: 4 wrap and seven more, 8 and 9 '
          'wrap_tie, 11 wrap_trapper_faint and wrap_trapper_switch)',
-         'live roots: a held partial trap is refused: the protocol world is built with approximate_partial_trap_turns=False '
-         '(gpu_engine/phase_d_protocol_world.py:306-307), so pokezero.engine_world raises volatile_unsupported'),
+         'live roots: a held partial trap is refused: an own-held one is refused first (gpu_engine/phase_d_live_worlds.py:344-345, OWN_VOLATILE_OR_LATENT_CLOCK_UNAVAILABLE); '
+         'an opponent-held one because the protocol world is built with '
+         'approximate_partial_trap_turns=False (gpu_engine/phase_d_protocol_world.py:306-307), so pokezero.engine_world raises '
+         'volatile_unsupported'),
         'Shuckle (Staller) only. In-tree since M2 the trap and its residual chip are modelled; a root already holding a partial trap '
         'is refused.', engine_since='f3e71663'),
     Effect('perish_count', ('perishsong',), ('misdreavus',), False, '',
@@ -171,8 +173,10 @@ EFFECTS = (
          'order-10 list, faster side first, an equal-Speed pair on a drawn effect bit, the count and the faint at 0 (not gated by R1)',
          'probes: 10 perishsong* scenarios (perishsong, _tie, _last_faster, _baton, _switch, _meanlook, _soundproof, _soundproof_user, '
          '_protect_sub, _reuse), EXACT against Showdown f76228a1 at M2 + R1 (3e0878e4)',
-         'live roots: a held perish count passes the protocol world (pokezero.engine_world) and is refused by '
-         'gpu_engine/v5_hypothetical_state.py:46 (any volatile but leechseed, substitute and truant: volatile:<seat>); '
+         'live roots: a held perish count is refused: an own-held one is refused first (gpu_engine/phase_d_live_worlds.py:344-345, OWN_VOLATILE_OR_LATENT_CLOCK_UNAVAILABLE); '
+         'an opponent-held one passes pokezero.engine_world and is refused '
+         'by the protocol world\'s typed mapper (gpu_engine/phase_d_protocol_world.py:319-323 -> v5_hypothetical_state.py:46: any '
+         'volatile but leechseed, substitute and truant, volatile:<seat>); '
          'gpu_engine/public_active.py:46, 217-233 keeps the public counts for the encoder'),
         'Misdreavus (Staller), the set that also carries Mean Look (a represented trap).', engine_since='f3e71663'),
     Effect('drowsy', ('yawn',), ('swalot',), False, '',
@@ -185,8 +189,10 @@ EFFECTS = (
          'probes: 11 yawn* scenarios, EXACT against Showdown f76228a1 at M2 + R1 (3e0878e4); each gated position fails a named probe '
          'when dropped (#1930 (M2 + R1) PR body, R1 section, position -> probe table: 6 yawn_faster, added because no earlier probe '
          'reached it; 12 yawn_tie; 13 yawn and six more)',
-         'live roots: a held drowsy is refused: the protocol world is built with approximate_hidden_duration_volatiles=False '
-         '(gpu_engine/phase_d_protocol_world.py:306-307), so pokezero.engine_world raises volatile_unsupported'),
+         'live roots: a held drowsy is refused: an own-held one is refused first (gpu_engine/phase_d_live_worlds.py:344-345, OWN_VOLATILE_OR_LATENT_CLOCK_UNAVAILABLE); '
+         'an opponent-held one because the protocol world is built with '
+         'approximate_hidden_duration_volatiles=False (gpu_engine/phase_d_protocol_world.py:306-307), so pokezero.engine_world '
+         'raises volatile_unsupported'),
         'Swalot (Bulky Attacker) only.', engine_since='f3e71663'),
     Effect('destiny_bond', ('destinybond',), ('banette', 'gengar', 'qwilfish', 'wobbuffet'), False, '',
         'a KO of the user by a move takes its attacker down, until the user moves again (so into the next turn)',
@@ -199,7 +205,7 @@ EFFECTS = (
         'request_source_rules.cjs:65-66 transform is a missing origin -> engine_request_source.py:380',
         'the user copies the target\'s species, types, stats, ability, boosts and moves while it stays in',
         ('Showdown data/moves.ts:19836 (gen4 mod data/mods/gen4/moves.ts:1443): Transform',
-         'gpu_engine/transition.py:81-113: no move table names transform (no effect in search); public_refresh_stream.py:17 is the '
+         'gpu_engine/transition.py:82-114: no move table names transform (no effect in search); public_refresh_stream.py:17 is the '
          'encoder\'s public refresh only',
          'gpu_engine/phase_d_live_worlds.py:278-279: a root with a transformed Pokemon is refused (PUBLIC_TRANSFORM_NOT_MATERIALIZED)'),
         'Ditto and Mew. A transformed root is refused, so the effect reaches the search only as a turn-1 or turn-2 move.'),
@@ -226,7 +232,7 @@ REPRESENTED = (
     Effect('move_trap', ('meanlook', 'spiderweb'), (), True, '', 'the target cannot switch while the source stays in',
         ('gpu_engine/state.py:63 trap_source', 'gpu_engine/linked_traps.py:12-25')),
     Effect('seed_and_wish', ('leechseed', 'wish'), (), True, '', 'residual drain; delayed heal',
-        ('gpu_engine/state.py:14, 76-77', 'gpu_engine/sustain.py:22-27', 'gpu_engine/transition.py:1799-1823')),
+        ('gpu_engine/state.py:14, 76-77', 'gpu_engine/sustain.py:22-27', 'gpu_engine/transition.py:1807-1816')),
     Effect('stall_counter', ('protect', 'endure'), (), True, '', 'consecutive-use success chance',
         ('gpu_engine/state.py:57 protect_counter', 'gpu_engine/effects.py:173 stall_success')),
     Effect('status_counters', ('rest', 'toxic'), (), True, '', 'sleep turns, Rest origin, Toxic count',

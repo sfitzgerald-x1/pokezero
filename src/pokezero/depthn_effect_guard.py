@@ -31,9 +31,10 @@ item swap stay refused by the world constructor, PUBLIC_ITEM_SWAP_NOT_SUPPORTED)
 partiallytrapped, yawn and perishsong volatiles in state (partial_trap_counter / partial_trap_source, yawn_counter, perish_counter)
 and the residual scheduler's Wrap tick, Yawn countdown and Perish count; R1 traces the Wrap and Yawn handlers only at the positions
 they can sort to, residual_order.POSITIONS, Wrap 4, 8, 9, 11 and Yawn 6, 12, 13, each failing a named probe when dropped; probes
-wrap* (12), yawn* (11), perishsong* (10); a root already holding a partial trap or a drowsy stays refused by the protocol world
-(phase_d_protocol_world builds it without approximating partial-trap or hidden-duration volatiles) and one holding a perish count
-by v5_hypothetical_state), each exact against Showdown f76228a1 in the engine session's probe runs. The retired tier-C moves'
+wrap* (12), yawn* (11), perishsong* (10); a root already holding one stays refused: an own-held one by phase_d_live_worlds
+(OWN_VOLATILE_OR_LATENT_CLOCK_UNAVAILABLE), an opponent-held partial trap or drowsy by the protocol world (built without
+approximating partial-trap or hidden-duration volatiles) and an opponent-held perish count by its typed mapper,
+v5_hypothetical_state), each exact against Showdown f76228a1 in the engine session's probe runs. The retired tier-C moves'
 conditions (sleep_clause, user_brn_par_psn, party_statused, item_knocked) stay in `guarded`'s vocabulary and in the recorded
 conditions, unused by any GUARDED move. They stay WATCHED, so their masses are still recorded (turn-2
 entries: guarded False, tier 'R'), and never count toward (a), (b) (its turn-1 arm and the reach) or (c). Roots where a side is
