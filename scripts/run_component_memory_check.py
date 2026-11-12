@@ -69,7 +69,7 @@ def own_cgroup(*, proc=Path('/proc'), cgroup=Path('/sys/fs/cgroup')):
 
 
 STAT_FIELDS = ('anon', 'file', 'shmem', 'kernel', 'file_mapped', 'file_dirty', 'file_writeback',
-               'active_file', 'inactive_file')
+               'active_file', 'inactive_file', 'swapcached')
 # Without any of these the reclaimable term cannot be bounded; the sample then uses summed RSS.
 REQUIRED_STAT = ('file', 'shmem', 'file_mapped', 'file_dirty', 'file_writeback', 'active_file', 'inactive_file')
 
@@ -93,7 +93,9 @@ def cgroup_memory(group, swap_baseline=0):
 
     memory.current excludes swapped-out pages; swap growth since the start of the
     run (memory.swap.current - swap_baseline) is added, so memory the kernel had
-    to push to swap still counts.
+    to push to swap still counts. A page read back from swap keeps its swap slot
+    (swapcached) while it is also charged to memory.current, so swapcached is
+    not added twice.
     """
     current = int((group / 'memory.current').read_text())
     stat = {}
@@ -108,7 +110,7 @@ def cgroup_memory(group, swap_baseline=0):
         swap = int((group / 'memory.swap.current').read_text())
     except (OSError, ValueError):
         swap = None   # no swap accounting: nothing to add
-    growth = 0 if swap is None else max(0, swap - swap_baseline)
+    growth = 0 if swap is None else max(0, swap - swap_baseline - stat.get('swapcached', 0))
     return dict(cgroup_memory_bytes=max(current - clean, 0) + growth, cgroup_current_bytes=current,
                 cgroup_clean_cache_bytes=clean, cgroup_swap_bytes=swap, cgroup_swap_growth_bytes=growth,
                 cgroup_stat={name: stat[name] for name in STAT_FIELDS if name in stat})
@@ -163,12 +165,14 @@ def snapshot(pid, *, proc=Path('/proc'), group=None, pss=None,
             file += int(fields.get('RssFile', '0').split()[0]) * 1024
             shmem += int(fields.get('RssShmem', '0').split()[0]) * 1024
             process_peak = max(process_peak, int(fields.get('VmHWM', '0').split()[0]) * 1024)
+            # An exited, unreaped child (zombie) has no address space and no PSS to read.
+            zombie = 'VmRSS' not in fields or fields.get('State', '').strip().startswith('Z')
         except (OSError, ValueError, IndexError):
             # An interpreter can exit between /proc reads. Kernel child HWM is
             # also collected at normal termination to retain short-lived peaks.
             continue
         rss += own_rss
-        if pss:
+        if pss and not zombie:
             try:
                 stat = (directory / 'stat').read_text()
                 flags = int(stat[stat.rindex(')') + 2:].split()[6])
@@ -205,7 +209,7 @@ def snapshot(pid, *, proc=Path('/proc'), group=None, pss=None,
             row['memory_bytes'] = row['cgroup_memory_bytes']
         else:
             # A missing counter never lowers the gate: use the larger RSS sum.
-            row['memory_bytes'] = rss
+            row.update(memory_bytes=rss, cgroup_fallback=True)
     return row
 
 
@@ -236,7 +240,7 @@ def run(command, *, output, label, summary=None, limit_bytes=None, interval=.2, 
     output.mkdir(parents=True, exist_ok=True)
     source = PSS_SOURCE if group is None else CGROUP_SOURCE
     swap_baseline = swap_now(group) if group is not None else 0
-    peak = legacy = sampled = pss_errors = 0
+    peak = legacy = sampled = pss_errors = fallbacks = 0
     breakdown = None
     started = time.monotonic()
     # Exclusive creation prevents merging two attempts' evidence.
@@ -246,6 +250,7 @@ def run(command, *, output, label, summary=None, limit_bytes=None, interval=.2, 
                 row = snapshot(child.pid, group=group, pss=record_pss or group is None,
                                swap_baseline=swap_baseline)
                 pss_errors += row.get('pss_errors', 0)
+                fallbacks += bool(row.get('cgroup_fallback'))
                 peak = max(peak, row['memory_bytes'], row['process_peak_rss_bytes'])
                 legacy = max(legacy, row['tree_rss_bytes'], row['process_peak_rss_bytes'])
                 if row['memory_bytes'] > sampled:
@@ -272,7 +277,7 @@ def run(command, *, output, label, summary=None, limit_bytes=None, interval=.2, 
             peak_method=f'max(sampled {source}, observed process HWM, kernel child HWM)',
             memory_source=source, peak_rss_bytes=legacy,
             peak_rss_method='not gating: max(sampled process-tree RSS sum, observed process HWM, kernel child HWM)',
-            peak_memory_stat=breakdown, pss_errors=pss_errors,
+            peak_memory_stat=breakdown, pss_errors=pss_errors, cgroup_fallback_samples=fallbacks,
             swap_baseline_bytes=swap_baseline if group is not None else None,
             cgroup_swap_peak_bytes=cgroup_peak(group, 'memory.swap.peak'),
             sample_interval_seconds=interval, cgroup_memory_peak_bytes=cgroup_peak(group),
@@ -295,8 +300,10 @@ def run(command, *, output, label, summary=None, limit_bytes=None, interval=.2, 
                          'The summed process-tree RSS counts a forked child\'s shared pages twice until it execs.\n')
             if breakdown:
                 stream.write('\nmemory.stat at the highest sampled value (GiB): ' + ', '.join(
-                    f'{name} {breakdown[name]/2**30:.3f}' for name in ('memory_bytes', 'current_bytes') + STAT_FIELDS
-                    if name in breakdown) + '\n')
+                    f'{name} {breakdown[name]/2**30:.3f}' for name in ('memory_bytes', 'current_bytes', 'swap_growth_bytes')
+                    + STAT_FIELDS if name in breakdown) + '\n')
+            if fallbacks:
+                stream.write(f'\n{fallbacks} samples could not read the cgroup counters and gated on summed RSS.\n')
     if code:
         return code if code > 0 else 128-code
     return int(not report['memory_pass'])

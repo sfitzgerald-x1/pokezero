@@ -111,6 +111,11 @@ class ComponentMemoryCheckTests(unittest.TestCase):
             self.assertEqual((row['memory_bytes'], row['pss_errors']), (31*1024, 1))
             self.assertEqual(row['process_peak_rss_bytes'], 25*1024)
             self.assertEqual(row['tree_rss_bytes'], 51*1024)
+            # A zombie (no VmRSS) is neither an error nor memory.
+            (root/'proc'/'13'/'status').write_text('State:\tZ (zombie)\nVmHWM: 0 kB\n')
+            (root/'proc'/'13'/'smaps_rollup').unlink()
+            row = snapshot(11, proc=root/'proc', shares=lambda *_: False)
+            self.assertEqual((row['memory_bytes'], row['pss_errors']), (31*1024, 1))
 
     def cgroup(self, root, stat, *, current=1000, swap=None):
         group = root/'cgroup'/'job'
@@ -136,6 +141,9 @@ class ComponentMemoryCheckTests(unittest.TestCase):
             row = cgroup_memory(group, swap_baseline=100)
             self.assertEqual((row['cgroup_memory_bytes'], row['cgroup_swap_growth_bytes']), (720 + 200, 200))
             self.assertEqual(cgroup_memory(group, swap_baseline=500)['cgroup_memory_bytes'], 720)
+            # Pages read back from swap keep their slot and are already in memory.current.
+            self.cgroup(Path(folder), dict(stat, swapcached=150), swap=300)
+            self.assertEqual(cgroup_memory(group, swap_baseline=100)['cgroup_memory_bytes'], 720 + 50)
             for name in REQUIRED_STAT:
                 self.cgroup(Path(folder), {k: v for k, v in stat.items() if k != name})
                 with self.assertRaises(ValueError):
@@ -237,10 +245,25 @@ class ComponentMemoryCheckTests(unittest.TestCase):
         self.assertEqual((report['peak_bytes'], report['peak_rss_bytes']), (70, 140))
         self.assertEqual(report['memory_source'], CGROUP_SOURCE)
         self.assertEqual(rows[0]['tree_rss_bytes'], 140)
+        self.assertEqual(report['cgroup_fallback_samples'], 0)
         stat = report['peak_memory_stat']
         self.assertEqual({k: stat[k] for k in ('memory_bytes', 'current_bytes', 'anon', 'kernel', 'file_dirty')},
                          dict(memory_bytes=70, current_bytes=79, anon=67, kernel=3, file_dirty=0))
         self.assertIn('memory.stat at the highest sampled value', summary)
+
+    def test_cgroup_fallback_samples_are_reported(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            with mock.patch('scripts.run_component_memory_check.snapshot', return_value=dict(
+                    tree_rss_bytes=50, process_peak_rss_bytes=50, memory_bytes=50, cgroup_fallback=True)), \
+                    mock.patch('scripts.run_component_memory_check.own_cgroup', return_value=Path('/unused')), \
+                    mock.patch('scripts.run_component_memory_check.resource.getrusage',
+                               return_value=mock.Mock(ru_maxrss=0)):
+                run([sys.executable, '-c', 'pass'], output=root/'data', label='synthetic',
+                    summary=root/'summary.md', limit_bytes=100, interval=.01)
+            report = json.loads((root/'data/report.json').read_text())
+            self.assertGreaterEqual(report['cgroup_fallback_samples'], 1)
+            self.assertIn('gated on summed RSS', (root/'summary.md').read_text())
 
     def test_above_bar_fails_without_changing_child_result(self):
         code, report, rows, summary = self.observed(0, 76, 100)
