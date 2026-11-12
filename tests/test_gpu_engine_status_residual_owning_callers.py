@@ -68,7 +68,7 @@ class StatusResidualOwningCallerTests(unittest.TestCase):
         with patch.object(c,'record_status_residual_device',side_effect=capture):frame=self.trace(state,cursor)
         default=self.trace(state,cursor,compiled=False)
         self.same(frame.state,default.state)
-        self.assertEqual(len(seen),10)
+        self.assertEqual(len(seen),14)   # one call per residual-scheduler event (14 since fidelity M2's Wrap and Yawn pairs)
         for row in range(2):
             words=self.words(frame,row);self.assertEqual(len(words),2)
             self.assertTrue(int(frame.callbacks.refusal[row])&256)
