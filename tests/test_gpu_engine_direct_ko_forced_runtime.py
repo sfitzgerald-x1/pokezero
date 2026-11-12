@@ -7,7 +7,7 @@ import jax.numpy as j
 import numpy as np
 from gpu_engine import engine_retained_encoder_driver as driver,engine_direct_hit_controls as hit
 from gpu_engine import source_provenance,transition,engine_execution_completeness as ex
-import test_gpu_engine_execution_runtime_plumbing as fixture
+import gpu_engine_owning_runtime_fixture as fixture
 
 class DirectKOForcedRuntimeTests(unittest.TestCase):
  @classmethod

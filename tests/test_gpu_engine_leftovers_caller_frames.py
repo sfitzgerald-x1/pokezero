@@ -23,7 +23,7 @@ from gpu_engine import transition
 from gpu_engine_eager_frame import eager_call, eager_frame
 from gpu_engine_default_observer_ast import dump_default_program, assert_hp_rng_mutations_detected
 from gpu_engine_transition_certification import CURRENT_TRANSITION
-import test_gpu_engine_leftovers_owning_callers as fixture
+import gpu_engine_leftovers_callers_fixture as fixture
 
 
 class LeftoversCallerFrameTests(unittest.TestCase):

@@ -3,8 +3,8 @@
 The GPU device engine keys every move effect by name and reads no effect fields (generate_teams.cjs:75-81); the static
 table of its handling of the Gen 3 random-battle pool is reports/gpu-engine-move-effect-table-20261109.md. GUARDED holds
 the moves whose missing effect carries over into the price (the lead's decision):
-- tier A, unconditional: hyperbeam, destinybond, transform, yawn, wrap, perishsong, trick, counter, mirrorcoat, curse,
-  superpower, knockoff, charm, lovelykiss, bonemerang, gigadrain;
+- tier A, unconditional: transform, yawn, wrap, perishsong, counter, mirrorcoat, curse, superpower, knockoff, charm,
+  lovelykiss, bonemerang, gigadrain;
 - tier C, guarded for a side only while its condition holds (`conditions`): spore, sleeppowder, hypnosis while Sleep Clause
   would bind (the target's side already has a non-fainted Pokemon asleep from a non-allied source: Showdown f76228a1
   data/rulesets.ts sleepclausemod, whose onSetStatus skips a sleeper whose statusState.source is its ally, i.e. Rest; a
@@ -13,8 +13,17 @@ the moves whose missing effect carries over into the price (the lead's decision)
   (ours: the request's item; the opponent's: Deoxys and Deoxys-Attack always hold it in the pool, until an -enditem or an
   -item for that Pokemon is seen), facade while the user has Guts and a burn, paralysis or poison (every pool Facade user
   has Guts; ours: the request's ability), aromatherapy while the user's party has a statused, non-fainted Pokemon (ours:
-  the request; the opponent's: its public statuses).
+  the request; the opponent's: its public statuses), trick while either side has a non-fainted Pokemon whose item was
+  publicly knocked off (-enditem ... [from] move: Knock Off: the engine models Trick since M1, but live roots do not carry
+  item_knocked yet, so an in-tree Trick on that Pokemon would succeed where Showdown fails; roots after a public item swap
+  stay refused by the world constructor, PUBLIC_ITEM_SWAP_NOT_SUPPORTED).
 TIER_B (irontail, signalbeam, steelwing, meteormash: chance secondaries) is never guarded, only reported (tier_b_legal).
+RETIRED (tier 'R') holds the moves the guard no longer trips on because the engine now models their effect, each with the
+integration merge from which it does (a screen declares an engine at or after it): destinybond (A2, 286a5ffe: the DESTINY_BOND
+volatile, Showdown-probed), hyperbeam (M1, 8b212312: the recharge turn; the live roots' recharge refusals and the live actor's
+own-recharge guard, RECHARGE_MOVES, are separate and unchanged). They stay WATCHED, so their masses are still recorded (turn-2
+entries: guarded False, tier 'R'), and never count toward (a), (b) (its turn-1 arm and the reach) or (c). Roots where a side is
+already bonded stay refused by the world constructor, not here.
 
 The guard trips on (b) or (c) (RULE 'reach', the lead's live rule from screen-r2):
 - (b) turn 1: in any constructed world, either side's turn-1 prior puts >= THRESHOLD of its mass on a lane whose move is
@@ -32,7 +41,7 @@ record), the any-cell fields above (its turn-2 hits under any_cell_reasons), rea
 and choice, with the max mass, the tier and the effect class; one per tripping side for the reach, with M as max_mass, its
 contributing tiers' masses, its moves' weighted masses and its worlds; turn2_unavailable), tiers (the tripped reasons'), the (a) flag (a guarded move legal for
 either side at turn 1 in any world: reporting only), tier_b_legal, our guarded lanes, the conditions per side and the masses
-of every GUARDED or TIER_B move (turn 1 per side and world, turn 2 per side, world and cell a * 9 + b with our lane a and the
+of every WATCHED move (GUARDED, TIER_B, RETIRED; turn 1 per side and world, turn 2 per side, world and cell a * 9 + b with our lane a and the
 reply b, each turn-2 entry also carrying `guarded` (this guard's own decision at that child), the move's `tier` and its `user`
 species). A turn-2 capture that is missing while some turn-1 cell expanded fails closed: (b) trips (the reach is
 unavailable; the any-cell arm's source turn2_unavailable). `reach` weighs those turn-2 masses by the root and reply priors:
@@ -52,19 +61,26 @@ RULE = 'reach'   # the live turn-2 arm: the reach M_s (screen-r2); records befor
 
 # move id -> (tier, effect class, condition) ; tier A conditions are None.
 GUARDED = {
-    'hyperbeam': ('A', 'multi_turn', None), 'destinybond': ('A', 'volatile', None), 'transform': ('A', 'other', None),
+    'transform': ('A', 'other', None),
     'yawn': ('A', 'volatile', None), 'wrap': ('A', 'volatile', None), 'perishsong': ('A', 'volatile', None),
-    'trick': ('A', 'item_removal', None), 'counter': ('A', 'retaliation', None), 'mirrorcoat': ('A', 'retaliation', None),
+    'counter': ('A', 'retaliation', None), 'mirrorcoat': ('A', 'retaliation', None),
     'curse': ('A', 'self_boost', None), 'superpower': ('A', 'self_stat_drop', None), 'knockoff': ('A', 'item_removal', None),
     'charm': ('A', 'target_stat_change', None), 'lovelykiss': ('A', 'status', None), 'bonemerang': ('A', 'other', None),
     'gigadrain': ('A', 'other', None),
     'spore': ('C', 'status', 'sleep_clause'), 'sleeppowder': ('C', 'status', 'sleep_clause'), 'hypnosis': ('C', 'status', 'sleep_clause'),
     'refresh': ('C', 'status', 'user_brn_par_psn'), 'sacredfire': ('C', 'status', 'user_frozen'),
     'psychoboost': ('C', 'self_stat_drop', 'white_herb'), 'facade': ('C', 'other', 'guts_status'),
-    'aromatherapy': ('C', 'status', 'party_statused'),
+    'aromatherapy': ('C', 'status', 'party_statused'), 'trick': ('C', 'item_removal', 'item_knocked'),
 }
 TIER_B = {'irontail': 'target_stat_change', 'signalbeam': 'volatile', 'steelwing': 'self_boost', 'meteormash': 'self_boost'}
-WATCHED = frozenset(GUARDED) | frozenset(TIER_B)
+# move id -> (effect class, the integration merge from which the engine models it): watched and recorded, never guarded.
+RETIRED = {'destinybond': ('volatile', '286a5ffe'), 'hyperbeam': ('multi_turn', '8b212312')}
+WATCHED = frozenset(GUARDED) | frozenset(TIER_B) | frozenset(RETIRED)
+# The guarded tiers in force while records carried no per-entry `guarded` (before 49530d2a; GUARDED unchanged from 2c5c7b80 until
+# RETIRED): reach's bounds for those records use these, so a later guard set does not move them.
+PRE_FLAG_TIERS = {**dict.fromkeys(('hyperbeam', 'destinybond', 'transform', 'yawn', 'wrap', 'perishsong', 'trick', 'counter', 'mirrorcoat',
+    'curse', 'superpower', 'knockoff', 'charm', 'lovelykiss', 'bonemerang', 'gigadrain'), 'A'),
+    **dict.fromkeys(('spore', 'sleeppowder', 'hypnosis', 'refresh', 'sacredfire', 'psychoboost', 'facade', 'aromatherapy'), 'C')}
 # Showdown's Gen 3 move table (Dex.forGen(3)): every standard move with flags.recharge (the live actor's own-recharge guard).
 RECHARGE_MOVES = frozenset(('hyperbeam', 'blastburn', 'hydrocannon', 'frenzyplant'))
 STATUSES = ('par', 'brn', 'psn', 'tox', 'slp', 'frz')
@@ -128,13 +144,14 @@ def _species(details):
 
 # Conditions ---------------------------------------------------------------------------------------------------------------------
 def _member():
-    return dict(status='', fainted=False, sleep_source=None, white_herb=None, guts=None)
+    return dict(status='', fainted=False, sleep_source=None, white_herb=None, guts=None, knocked=False)
 
 
 def conditions(lines, owner, own_request_line=None):
     """Both sides' guard conditions at the root (module docstring): {'own': side, 'opp': side}, each dict(active, members:
     {species: dict(status, fainted, sleep_source 'rest'/'other'/None, white_herb, guts)}, sleep_clause: this side's sleep
-    moves would hit Sleep Clause (the OTHER side has a non-fainted Pokemon asleep from a non-allied source), party_statused).
+    moves would hit Sleep Clause (the OTHER side has a non-fainted Pokemon asleep from a non-allied source), party_statused,
+    item_knocked: this side has a non-fainted Pokemon whose item was publicly knocked off; each member's `knocked`).
     Ours: the public lines, then our own request (statuses, faints, item and ability exact); the opponent's: public lines only.
     `owner` 0 or 1 (p1 / p2)."""
     if owner not in (0, 1):raise ValueError(f'owner 0 or 1 required, got {owner!r}')
@@ -169,7 +186,9 @@ def conditions(lines, owner, own_request_line=None):
             fainted, status = _condition(parts[3])
             if fainted:m['fainted'] = True;_set_status(m, '', None)
             elif status != m['status']:_set_status(m, status, 'other' if status == 'slp' else None)
-        elif kind == '-enditem':m['white_herb'] = False
+        elif kind == '-enditem':
+            m['white_herb'] = False
+            if '[from] move: knock off' in tags:m['knocked'] = True
         elif kind == '-item' and len(parts) > 3:m['white_herb'] = move_id(parts[3]) == 'whiteherb'
     packet = _packet(own_request_line)
     if packet is not None:
@@ -188,8 +207,14 @@ def conditions(lines, owner, own_request_line=None):
         members = sides[seat]['members']
         out[key] = dict(active=sides[seat]['active'], members={s: dict(m) for s, m in sorted(members.items())},
             sleep_clause=any(not m['fainted'] and m['status'] == 'slp' and m['sleep_source'] != 'rest' for m in other),
-            party_statused=any(not m['fainted'] and m['status'] for m in members.values()))
+            party_statused=any(not m['fainted'] and m['status'] for m in members.values()), item_knocked=_knocked(members))
     return out
+
+
+def _knocked(members):
+    """Whether a side has a non-fainted Pokemon whose item was publicly knocked off (Trick's condition; `knocked` is absent
+    from a record written before it: False)."""
+    return any(not m.get('fainted') and m.get('knocked') for m in members.values())
 
 
 def _opponent_defaults(species, m):
@@ -216,6 +241,7 @@ def child_side(side, members, *, opponent=False):
         m['status'] = STATUS_CODES.get(int(code), '');m['fainted'] = not alive
         m['sleep_source'] = ('rest' if rest else 'other') if m['status'] == 'slp' else None
     out['party_statused'] = any(not m['fainted'] and m['status'] for m in out['members'].values())
+    out['item_knocked'] = _knocked(out['members'])
     return out
 
 
@@ -226,7 +252,7 @@ def sleep_clause(other):
 
 def guarded(move, side, user, *, other=None):
     """(tier, effect class) when `move` is guarded for a side (its conditions `side`, its active `user`), else None. `other`:
-    the other side's conditions (Sleep Clause), default the side's own sleep_clause flag."""
+    the other side's conditions (Sleep Clause; Trick: either side's knocked-off item), default the side's own flags."""
     entry = GUARDED.get(move)
     if entry is None:return None
     tier, effect, condition = entry
@@ -235,14 +261,15 @@ def guarded(move, side, user, *, other=None):
     holds = dict(sleep_clause=lambda: sleep_clause(other) if other is not None else side['sleep_clause'],
         user_brn_par_psn=lambda: m['status'] in FACADE_STATUSES, user_frozen=lambda: m['status'] == 'frz',
         white_herb=lambda: bool(m['white_herb']), guts_status=lambda: bool(m['guts']) and m['status'] in FACADE_STATUSES,
-        party_statused=lambda: side['party_statused'])[condition]()
+        party_statused=lambda: side['party_statused'],
+        item_knocked=lambda: bool(side.get('item_knocked')) or bool((other or {}).get('item_knocked')))[condition]()
     return (tier, effect) if holds else None
 
 
 # Masses and lanes --------------------------------------------------------------------------------------------------------------
 def tier_of(move):
-    """A watched move's tier: 'A' or 'C' (GUARDED), 'B' (TIER_B), else None."""
-    return GUARDED[move][0] if move in GUARDED else 'B' if move in TIER_B else None
+    """A watched move's tier: 'A' or 'C' (GUARDED), 'B' (TIER_B), 'R' (RETIRED), else None."""
+    return GUARDED[move][0] if move in GUARDED else 'B' if move in TIER_B else 'R' if move in RETIRED else None
 
 
 def masses(logits, legal):
@@ -358,7 +385,9 @@ def reach(record, root_logits, root_legal, worlds, *, threshold=THRESHOLD):
     world w's turn-1 peer prior (its root_peer_logits over kept; a world whose opponent waits has the single reply 0 at mass 1:
     the pricer expands its cells (a, 0)), p_w uniform over the priced worlds. `worlds`: the row's worlds in block order, each
     dict(requested, logits, kept, priced=True). Exact when every turn-2 entry carries `guarded` (the guard's own decision at
-    that child); otherwise bounds: lower counts tier A and Psycho Boost when a revealed Deoxys or Deoxys-Attack of that side holds
+    that child, its recorded tier the bucket: a record written before a move was RETIRED keeps its M); otherwise bounds, under
+    the tiers in force when such records were written (PRE_FLAG_TIERS): lower counts tier A and Psycho Boost when a revealed
+    Deoxys or Deoxys-Attack of that side holds
     its White Herb (_psychoboost), upper every
     tier-C mass as guarded. tripped: True / False when the bounds (or the exact M) agree about THRESHOLD on either side, None
     when they straddle it; a record without its turn-2 masses (an error record, an unavailable capture) trips, fail closed.
@@ -382,11 +411,20 @@ def reach(record, root_logits, root_legal, worlds, *, threshold=THRESHOLD):
     moves = {scope: {side: {} for side in ('own', 'opp')} for scope in ('lower', 'upper')}
     where = {scope: {side: set() for side in ('own', 'opp')} for scope in ('lower', 'upper')}
     for e in entries:
-        tier = tier_of(e['move']);w = e['world']
-        if tier not in ('A', 'C') or w not in peer:continue
+        # A record keeps its M under a later guard set (RETIRED): an exact entry counts by its own guard's decision (the bucket: its
+        # recorded tier, else the move's current or pre-flag tier, else A); an older record's bounds use the tiers in force when
+        # it was written.
+        w = e['world']
+        if exact:
+            if not e['guarded']:continue
+            tier = next((t for t in (e.get('tier'), tier_of(e['move']), PRE_FLAG_TIERS.get(e['move'])) if t in ('A', 'C')), 'A')
+        else:
+            tier = PRE_FLAG_TIERS.get(e['move'])
+            if tier not in ('A', 'C'):continue
+        if w not in peer:continue
         a, b = divmod(int(e['cell']), 9);weight = p * own[a] * peer[w][b] * float(e['mass'])
         if not weight:continue
-        if exact:counted = dict(lower=e['guarded'], upper=e['guarded'])
+        if exact:counted = dict(lower=True, upper=True)
         else:counted = dict(lower=tier == 'A' or e['move'] == 'psychoboost' and _psychoboost(record, e['side']), upper=True)
         for scope, yes in counted.items():
             if yes:

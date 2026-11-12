@@ -137,30 +137,22 @@ jobs:
           ci_memory_dir="${CPU_COMPONENT_MEMORY_DIR:-$RUNNER_TEMP/component-memory}/${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}/shard-${{ matrix.shard }}"
           mkdir -p "$ci_memory_dir"
           echo "memory_report_dir=$ci_memory_dir" >> "$GITHUB_OUTPUT"
-          # Keep original custom suites intact. These heavy plain classes have
-          # independent cases: release its process heap before the next case,
-          # including fresh original module/class fixtures for every case.
+          # Keep original custom suites intact. The class of each low-optimization case runs one case per
+          # process, so every case starts with a fresh process heap and fresh module/class fixtures.
           # Per pull request: the light tier, every block outside tests/gpu_component_heavy.json. The heavy
-          # tier (--tier heavy) runs on dedicated high-memory infrastructure nightly and before main. Both
-          # isolated classes and the three low-optimization cases in status_kernel_owner_drain and
-          # status_residual_runtime are in heavy modules: inert under --tier light, kept so the heavy run's
-          # command line differs only in --tier.
+          # tier (--tier heavy) runs on dedicated high-memory infrastructure nightly and before main, with a
+          # command line that differs only in --tier.
           python scripts/run_component_memory_check.py --output "$ci_memory_dir" \
             --label 'shard-${{ matrix.shard }}' --summary "$GITHUB_STEP_SUMMARY" -- \
             python scripts/run_gpu_component_shard.py --tier light --index '${{ matrix.shard }}' --count 16 --process-blocks \
-            --isolate-standard-class test_gpu_engine_execution_runtime_plumbing.ExecutionRuntimePlumbingTests \
-            --isolate-standard-class test_gpu_engine_status_kernel_owner_drain.StatusKernelOwnerDrainTests \
             --low-optimization-case test_gpu_engine_color_change_owning.ColorChangeOwningTests.test_actual_original_frame_both_views_public_types_requests_and_physics \
             --low-optimization-case test_gpu_engine_bulk_up_owning.BulkUpOwningTests.test_actual_original_frame_both_owners_witness_encoder_and_physics \
             --low-optimization-case test_gpu_engine_belly_drum_owning.BellyDrumOwningTests.test_actual_original_frame_both_owners_witness_encoder_and_physics \
             --low-optimization-case test_gpu_engine_primary_plain_status_owning.PrimaryPlainStatusTests.test_actual_original_frame_both_owners_witness_encoder_and_physics \
-            --low-optimization-case test_gpu_engine_status_kernel_owner_drain.StatusKernelOwnerDrainTests.test_actual_kernel_status_spans_drain_both_original_owner_consumers \
             --low-optimization-case test_gpu_engine_secondary_status_frame_runtime.SecondaryStatusFrameRuntimeTests.test_actual_secondary_receipt_survives_end_turn_and_both_full_consumers \
             --low-optimization-case test_gpu_engine_rough_skin_owning.RoughSkinTests.test_actual_kernel_contact_write_both_full_and_legacy_physics \
             --low-optimization-case test_gpu_engine_protect_owning.ProtectOwningTests.test_actual_success_queue_and_stall_fail_block_both_full_witness_encoder_physics \
-            --low-optimization-case test_gpu_engine_status_kernel_owner_drain.StatusKernelOwnerDrainTests.test_one_row_second_owner_failure_rolls_back_both_and_does_not_drain \
             --low-optimization-case test_gpu_engine_substitute_damage_owning.SubstituteDamageTests.test_actual_create_then_hit_survive_and_break_both_consumers \
-            --low-optimization-case test_gpu_engine_status_residual_runtime.StatusResidualRuntimeTests.test_original_host_guards_and_default_actual_frame_remain_intact \
             --resource-interval-seconds 30 2>&1 \
             | tee /tmp/gpu-components.log "$ci_memory_dir/component.log"
           if grep -Eq 'skipped=[1-9]|\.\.\. skipped' /tmp/gpu-components.log; then

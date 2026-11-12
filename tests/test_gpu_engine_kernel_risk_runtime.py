@@ -7,7 +7,7 @@ import jax.numpy as j
 import numpy as np
 from gpu_engine import engine_retained_encoder_driver as driver
 from gpu_engine import engine_kernel_frame_risk as risks
-import test_gpu_engine_execution_runtime_plumbing as fixture
+import gpu_engine_owning_runtime_fixture as fixture
 
 
 class KernelRiskDriverPreparationTests(unittest.TestCase):

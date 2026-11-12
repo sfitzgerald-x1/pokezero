@@ -9,7 +9,7 @@ from pokezero.category_vocab import CategoryVocabulary
 from gpu_engine import public_belief, v4_encoder as v4, engine_public_events as events
 from gpu_engine import engine_public_event_device as base, engine_full_v4_event_device as full
 from gpu_engine import engine_item_callbacks as item, public_wire, public_inputs as inputs, mechanics as m
-import test_gpu_engine_engine_status_callbacks as fixture
+import gpu_engine_status_callbacks_fixture as fixture
 import gpu_engine_shared_public_jits as shared
 
 
