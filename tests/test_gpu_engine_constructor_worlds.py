@@ -633,6 +633,18 @@ class ConstructorWorldsTests(unittest.TestCase):
         from gpu_engine.depthn_live_search import refusal_cause
         self.assertEqual({refusal_cause(r['reason'])for r in b.roots},{'constructor_refused'})
         self.assertEqual(unread.roots[0]['status'],'PRICED')   # the same root without facts: nothing to refuse
+        # A knocked-off member the completion cannot join (KnockedItemUnavailable) refuses the root the same way, under its own kind.
+        detail='snorlax: knocked off on the lines, but this world holds item 7 there'
+        def knocked(world,owner,facts=None,root=None):
+            if facts is None:return world
+            raise cw.KnockedItemUnavailable(detail)
+        with patch.object(ProtocolConstructor,'prepare',side_effect=lambda r,i:roots[r['request_id']]),patch.object(cw,'world_completer',return_value=knocked):
+            refused=cw.prepare_roots(constructor,[dict(request_id='ok',lines=lines['ok'])])
+        self.assertEqual((type(refused[0]),refused[0].kind,refused[0].detail),(cw.RootRefusal,'KNOCKED_ITEM_UNAVAILABLE',detail))
+        with patch.object(cw,'world_completer',return_value=knocked),self.forward_patch():
+            k=cw.build(constructor,[out[0]],pricer,PARAMS,binding=self.binding,recipe=self.recipe)
+        self.assertEqual(k.roots[0]['reason'],'constructor-root:KNOCKED_ITEM_UNAVAILABLE:'+detail)
+        self.assertEqual(refusal_cause(k.roots[0]['reason']),'constructor_refused')
 
     def test_a_root_whose_opponent_must_recharge_is_refused_before_completion_or_pricing(self):
         """The lead's decision: the engine has no recharge turn, so a root whose opponent (the peer) must recharge is refused,

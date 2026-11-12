@@ -599,6 +599,91 @@ class BatonFillTests(unittest.TestCase):
         self.assertIs(cw.fill_baton(t,cw.LineFacts(('beta',),())),t)
 
 
+# Knock Off: Showdown f76228a13's own lines (a gen3randombattle game, p1's channel; the real-battle parity is
+# test_gpu_engine_constructor_worlds_knock_off).
+KNOCK_LINES=['|switch|p1a: Sableye|Sableye, L91, M|239/239','|switch|p2a: Lax|Snorlax, L71, M|100/100','|turn|1',
+    '|move|p1a: Sableye|Knock Off|p2a: Lax','|-damage|p2a: Lax|94/100','|-enditem|p2a: Lax|Leftovers|[from] move: Knock Off|[of] p1a: Sableye',
+    '|-hint|In Gens 3-4, Knock Off only makes the target\'s item unusable; it cannot obtain a new item.','|upkeep','|turn|2',
+    '|switch|p2a: Muk|Muk, L84, M|100/100','|move|p1a: Sableye|Knock Off|p2a: Muk','|-damage|p2a: Muk|94/100',
+    '|-activate|p2a: Muk|ability: Sticky Hold','|move|p2a: Muk|Knock Off|p1a: Sableye','|-damage|p1a: Sableye|230/239',
+    '|-enditem|p1a: Sableye|Leftovers|[from] move: Knock Off|[of] p2a: Muk','|upkeep','|turn|3']
+KNOCK_SPECIES=['','sableye','snorlax','muk','skarmory','deoxysattack','deoxysdefense']
+KNOCK_ITEMS=['_none','leftovers','choiceband']
+
+
+def knock_tables():
+    return cw._table(np.zeros((len(KNOCK_SPECIES),2),np.int32),species_names=KNOCK_SPECIES,item_names=KNOCK_ITEMS)
+
+
+def knock_state(species,item,knocked=None):
+    s=empty_state(1)
+    return s._replace(species=j.asarray(np.asarray(species,np.int32)[None]),item=j.asarray(np.asarray(item,np.int32)[None]),
+        item_knocked=s.item_knocked if knocked is None else j.asarray(np.asarray(knocked,bool)[None]))
+
+
+def knock_carry(species,mapping,mutated=None,original=None):
+    z=np.zeros((1,2,6),np.int32);t=carry(species,mapping)
+    return t._replace(mon_features=dict(t.mon_features,item_mutated=j.asarray(z if mutated is None else np.asarray(mutated,np.int32)[None]),
+        item_original=j.asarray(z if original is None else np.asarray(original,np.int32)[None])))
+
+
+class KnockOffFillTests(unittest.TestCase):
+    """line_facts' knocked, fix_knocked_items (the engine leaf item_knocked) and fill_item_ledger (M1's per-mon item ledger) on
+    synthetic worlds: the rules, the refusals and the no-op cases."""
+    def test_line_facts_record_each_knocked_off_member_by_species_with_its_item(self):
+        facts=cw.line_facts(KNOCK_LINES,0)
+        self.assertEqual(facts.knocked,((('sableye','leftovers'),),(('snorlax','leftovers'),)))   # a nickname joins its switch-in species
+        self.assertEqual(cw.line_facts(KNOCK_LINES,1).knocked,facts.knocked)   # public lines: the same for either owner
+        self.assertEqual(cw.line_facts(KNOCK_LINES[:13],0).knocked,((),(('snorlax','leftovers'),)))   # Sticky Hold's block removes nothing
+        others=['|switch|p1a: Sableye|Sableye, L91, M|239/239','|switch|p2a: Muk|Muk, L84, M|100/100',
+            '|-enditem|p2a: Muk|Leftovers|[from] move: Trick','|-enditem|p1a: Sableye|Lum Berry|[eat]','|-enditem|p2a: Muk|Leftovers']
+        self.assertEqual(cw.line_facts(others,0).knocked,((),()))   # a Trick's, an eaten berry's, a bare -enditem: not Knock Off
+        self.assertEqual(cw.LineFacts((),()).knocked,((),()))
+
+    def test_the_state_fill_sets_item_knocked_on_the_knocked_members_only(self):
+        facts=cw.line_facts(KNOCK_LINES,0);tables=knock_tables()
+        state=knock_state([[1,4,0,0,0,0],[3,2,0,0,0,0]],[[0,1,0,0,0,0],[1,0,0,0,0,0]])
+        fixed=cw.fix_knocked_items(state,0,facts,tables)
+        self.assertEqual(np.asarray(fixed.item_knocked)[0].tolist(),[[True]+[False]*5,[False,True]+[False]*4])   # Sableye; Snorlax (not Muk)
+        self.assertTrue(all(x is y for x,y in zip(fixed,state)if x is not fixed.item_knocked))   # nothing else changes
+        self.assertIs(cw.fix_knocked_items(fixed,0,facts,tables),fixed)   # a second pass is a no-op
+        for f in(None,cw.LineFacts(('snorlax',),())):self.assertIs(cw.fix_knocked_items(state,0,f,tables),state)
+        class Legacy(NamedTuple):
+            species:object
+            item:object
+        legacy=Legacy(state.species,state.item);self.assertIs(cw.fix_knocked_items(legacy,0,facts,tables),legacy)   # no leaf: unchanged
+        refusals={'holds an item':knock_state([[1,4,0,0,0,0],[3,2,0,0,0,0]],[[0,1,0,0,0,0],[1,1,0,0,0,0]]),   # Snorlax's world item is not 0
+            'no member':knock_state([[1,4,0,0,0,0],[3,4,0,0,0,0]],[[0,1,0,0,0,0],[1,0,0,0,0,0]])}
+        for name,bad in refusals.items():
+            with self.subTest(name),self.assertRaises(cw.KnockedItemUnavailable):cw.fix_knocked_items(bad,0,facts,tables)
+        two=cw.LineFacts((),(),knocked=((),(('deoxys','leftovers'),)))   # two forme-prefix members join one name
+        with self.assertRaisesRegex(cw.KnockedItemUnavailable,'deoxys: 2 members'):
+            cw.fix_knocked_items(knock_state([[1,0,0,0,0,0],[5,6,0,0,0,0]],np.zeros((2,6))),0,two,tables)
+        with self.assertRaises(cw.CarryLayoutError):cw.fix_knocked_items(state,0,facts,cw._table(np.zeros((7,2),np.int32)))
+        self.assertTrue(issubclass(cw.KnockedItemUnavailable,ValueError))
+
+    def test_the_ledger_fill_is_the_device_hooks_and_b2s_rule(self):
+        """item_mutated = 1 and, for a fresh ledger, item_original = the removed item's engine id, at the member's public slot (the
+        carry's species, not the physical order); a member already mutated keeps its original; nothing else changes."""
+        facts=cw.line_facts(KNOCK_LINES,1);tables=knock_tables()
+        t=knock_carry([[4,1,0,0,0,0],[2,3,0,0,0,0]],[[1,0,-1,-1,-1,-1],[0,1,-1,-1,-1,-1]])   # Sableye at public slot 1
+        out=cw.fill_item_ledger(t,facts,tables);f=out.mon_features
+        self.assertEqual(np.asarray(f['item_mutated'])[0].tolist(),[[0,1,0,0,0,0],[1,0,0,0,0,0]])
+        self.assertEqual(np.asarray(f['item_original'])[0].tolist(),[[0,1,0,0,0,0],[1,0,0,0,0,0]])   # leftovers = engine item 1
+        self.assertIs(f['turns_active'],t.mon_features['turns_active']);self.assertIs(out.species,t.species)
+        self.assertIs(cw.fill_item_ledger(out,facts,tables),out)   # a second pass is a no-op
+        held=knock_carry([[4,1,0,0,0,0],[2,3,0,0,0,0]],[[1,0,-1,-1,-1,-1],[0,1,-1,-1,-1,-1]],mutated=[[0,1,0,0,0,0],[0]*6],original=[[0,2,0,0,0,0],[0]*6])
+        kept=cw.fill_item_ledger(held,facts,tables).mon_features   # an earlier mutation (its original Choice Band) is kept, as both rules keep it
+        self.assertEqual((int(kept['item_mutated'][0,0,1]),int(kept['item_original'][0,0,1])),(1,2))
+        for f in(None,cw.LineFacts(('snorlax',),())):self.assertIs(cw.fill_item_ledger(t,f,tables),t)
+        old=carry([[4,1,0,0,0,0],[2,3,0,0,0,0]],[[1,0,-1,-1,-1,-1],[0,1,-1,-1,-1,-1]]);self.assertIs(cw.fill_item_ledger(old,facts,tables),old)   # pre-M1
+        unknown=cw.LineFacts((),(),knocked=((),(('snorlax','metalpowder'),)))
+        with self.assertRaisesRegex(cw.KnockedItemUnavailable,'outside the engine namespace'):cw.fill_item_ledger(t,unknown,tables)
+        with self.assertRaises(cw.KnockedItemUnavailable):   # the knocked member is no public slot of the carry
+            cw.fill_item_ledger(knock_carry([[4,1,0,0,0,0],[3,0,0,0,0,0]],[[1,0,-1,-1,-1,-1],[0,-1,-1,-1,-1,-1]]),facts,tables)
+        with self.assertRaises(cw.CarryLayoutError):cw.fill_item_ledger(t,facts,cw._table(np.zeros((7,2),np.int32),species_names=KNOCK_SPECIES))
+
+
 class PeerViewLaneTests(unittest.TestCase):
     """The real encoder (engine_device_observation on the repo's fixture tables) on a peer whose own order is not physical: self
     tokens, switch tokens, switch lanes, map_actions and the self tokens' ability / item belief columns all follow own_order[peer]."""
