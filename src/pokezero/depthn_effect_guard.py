@@ -543,7 +543,9 @@ def ability_evaluate(own_turn1, peer_turn1, ability, *, choice=None, threshold=T
         guarded against the incoming holder))];
       turn2: [dict(world, cell, side, lanes {family: [bool] * 4} (exact at the child), logits, legal)]).
     Returns the ability record: tripped, b (b_turn1 / b_reach / b_switchin), c, per family and arm the masses that decide them, the
-    reasons (source ability_turn1 / ability_reach / ability_switchin / ability_choice, each with its family), own_guarded_lanes."""
+    reasons (source ability_turn1 / ability_reach / ability_switchin / ability_choice, each with its family), own_guarded_lanes,
+    and for any other configuration: reach_subsets (the reach M of every family subset) and PINCH's turn1_third / choice_third
+    (the exact root rule), so a record decides every ABILITY_ARMS / PINCH_ROOT variant exactly (ability_trips)."""
     arms = ABILITY_ARMS if arms is None else arms;pinch_root = PINCH_ROOT if pinch_root is None else pinch_root
     on = lambda family, arm: arm in arms.get(family, ())
     own_p = masses(own_turn1['logits'], own_turn1['legal'])
@@ -551,6 +553,8 @@ def ability_evaluate(own_turn1, peer_turn1, ability, *, choice=None, threshold=T
     priced = sorted(peers);pw = 1 / len(priced) if priced else 0.
     peer_p = {w: (masses(peers[w]['logits'], peers[w]['legal']) if peers[w].get('requested', True) else None) for w in priced}
     by = {f: dict(turn1=dict(own=0., opp=0.), reach=dict(own=0., opp=0.), switchin=dict(own=0., opp=0.), choice=False) for f in FAMILIES}
+    by['PINCH'].update(turn1_third=dict(own=0., opp=0.), choice_third=False)   # PINCH under the exact root rule too (the fallback)
+    own_third = [False] * 4
     reasons = [];own_lanes = [set() for _ in range(4)]
     def root_mask(side, family, other_damaging):
         if family != 'PINCH' or pinch_root == 'third' or other_damaging < threshold:return side['third'][family]
@@ -562,6 +566,10 @@ def ability_evaluate(own_turn1, peer_turn1, ability, *, choice=None, threshold=T
         dmg = dict(own=math.fsum(own_p[k] for k in range(4) if t['own']['damaging'][k]),
                    opp=0. if pp is None else math.fsum(pp[k] for k in range(4) if t['opp']['damaging'][k]))
         for side, prior, other in (('own', own_p, 'opp'), ('opp', pp, 'own')):
+            third = t[side]['third']['PINCH']
+            if side == 'own':own_third = [a or bool(b) for a, b in zip(own_third, third)]
+            if prior is not None:
+                by['PINCH']['turn1_third'][side] = max(by['PINCH']['turn1_third'][side], math.fsum(prior[k] for k in range(4) if third[k]))
             for f in FAMILIES:
                 mask = root_mask(t[side], f, dmg[other])
                 if side == 'own':
@@ -576,6 +584,7 @@ def ability_evaluate(own_turn1, peer_turn1, ability, *, choice=None, threshold=T
         reasons.append(dict(source='ability_turn1', family=f, side=side, max_mass=m, worlds=sorted(ws)))
     c_hit = type(choice) is int and 0 <= choice < 4 and any(on(f, 'choice') for f in own_lanes[choice])
     for f in FAMILIES:by[f]['choice'] = type(choice) is int and 0 <= choice < 4 and f in own_lanes[choice]
+    by['PINCH']['choice_third'] = type(choice) is int and 0 <= choice < 4 and own_third[choice]
     if c_hit:reasons.append(dict(source='ability_choice', family=sorted(f for f in own_lanes[choice] if on(f, 'choice')), side='own',
         max_mass=1., worlds=[]))
     # the turn-1 switch-in: S = sum_w p_w pi_switcher(lane) sum_x pi_other(x) against(x), credited to the attacking side
@@ -598,6 +607,8 @@ def ability_evaluate(own_turn1, peer_turn1, ability, *, choice=None, threshold=T
                 b_switchin = True;reasons.append(dict(source='ability_switchin', family=f, side=side, max_mass=m, worlds=sorted(where[(f, side)])))
     # the reach: M_s over the enabled families' lanes (their union per lane), and each family's own M
     msum = {s: [] for s in ('own', 'opp')};fsum = {(f, s): [] for f in FAMILIES for s in ('own', 'opp')}
+    subsets = [tuple(f for i, f in enumerate(FAMILIES) if bits >> i & 1) for bits in range(1, 2 ** len(FAMILIES))]
+    ssum = {(sub, s): [] for sub in subsets for s in ('own', 'opp')}   # the reach M of every family subset (any configuration, exact)
     rworlds = {s: set() for s in ('own', 'opp')}
     for e in ability.get('turn2') or ():
         w = e['world']
@@ -612,6 +623,9 @@ def ability_evaluate(own_turn1, peer_turn1, ability, *, choice=None, threshold=T
         for f in FAMILIES:
             v = math.fsum(q[k] for k in range(4) if e['lanes'][f][k])
             if v:fsum[(f, e['side'])].append(weight * v)
+        for sub in subsets:
+            v = math.fsum(q[k] for k in range(4) if any(e['lanes'][f][k] for f in sub))
+            if v:ssum[(sub, e['side'])].append(weight * v)
     m_reach = {s: math.fsum(v) for s, v in msum.items()}
     for (f, s), v in fsum.items():by[f]['reach'][s] = math.fsum(v)
     b_reach = max(m_reach.values()) >= threshold
@@ -624,5 +638,25 @@ def ability_evaluate(own_turn1, peer_turn1, ability, *, choice=None, threshold=T
     return dict(schema=ABILITY_SCHEMA, threshold=threshold, arms={f: list(arms.get(f, ())) for f in FAMILIES}, pinch_root=pinch_root,
         tripped=b or c_hit, b=b, b_turn1=b_turn1, b_reach=b_reach, b_switchin=b_switchin, c=c_hit, m_own=m_reach['own'], m_opp=m_reach['opp'],
         families=by, reasons=reasons, own_guarded_lanes=[sorted(x) or None for x in own_lanes],
+        reach_subsets={'+'.join(sub): {s: math.fsum(ssum[(sub, s)]) for s in ('own', 'opp')} for sub in subsets},
         cells=dict(turn1=len(ability.get('turn1') or ()), switchin=sum(len(v) for v in (ability.get('switchin') or {}).values()),
                    turn2=len(ability.get('turn2') or ())))
+
+
+def ability_trips(ab, *, arms=None, pinch_root=None, threshold=None):
+    """Whether an ability record trips under another configuration (`arms` per family, `pinch_root`), from the record alone:
+    dict(tripped, b_turn1, b_reach, b_switchin, c). The record's own configuration reproduces its own tripped."""
+    arms = ab['arms'] if arms is None else arms;pinch_root = ab['pinch_root'] if pinch_root is None else pinch_root
+    threshold = ab['threshold'] if threshold is None else threshold;fam = ab['families']
+    on = lambda f, arm: arm in arms.get(f, ())
+    def turn1(f):
+        m = fam[f]['turn1_third'] if f == 'PINCH' and pinch_root == 'third' else fam[f]['turn1']
+        return max(m.values()) >= threshold
+    def choice(f):
+        return bool(fam[f]['choice_third'] if f == 'PINCH' and pinch_root == 'third' else fam[f]['choice'])
+    b_turn1 = any(on(f, 'turn1') and turn1(f) for f in FAMILIES)
+    sub = '+'.join(f for f in FAMILIES if on(f, 'reach'))
+    b_reach = bool(sub) and max(ab['reach_subsets'][sub].values()) >= threshold
+    b_switchin = any(on(f, 'switchin') and max(fam[f]['switchin'].values()) >= threshold for f in FAMILIES)
+    c = any(on(f, 'choice') and choice(f) for f in FAMILIES)
+    return dict(tripped=b_turn1 or b_reach or b_switchin or c, b_turn1=b_turn1, b_reach=b_reach, b_switchin=b_switchin, c=c)

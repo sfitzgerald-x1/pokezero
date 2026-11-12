@@ -707,6 +707,28 @@ class AbilityEvaluateTests(unittest.TestCase):
         off = G.ability_evaluate(own, peer, dict(turn2=[cell(0, 0, 1, 'opp', contact)]), arms=dict(G.ABILITY_ARMS, CONTACT=('choice',)))
         self.assertEqual((off['b_reach'], off['m_opp']), (False, 0.));self.assertAlmostEqual(off['families']['CONTACT']['reach']['opp'], w * .4, places=12)
 
+    def test_any_configuration_from_the_record_alone(self):
+        """ability_trips: the record's own configuration reproduces its decision; every other one (choice-only families, the exact
+        root PINCH rule) equals a fresh evaluation under it, from the record alone (reach_subsets, turn1_third, choice_third)."""
+        own, peer = self.priors(own=(0, .75), peer=(1, .75), worlds=(0, 1))
+        q = prior(0, .4, legal=[True] * 9)
+        cell = lambda w, a, b, side, lanes: dict(world=w, cell=a * 9 + b, side=side, lanes=lanes, logits=q[0], legal=q[1])
+        both = {f: [f in ('CONTACT', 'PINCH'), f == 'PINCH', False, False] for f in G.FAMILIES}   # lane 0 guarded by two families
+        inputs = dict(turn1=[ability_root(0, own=dict(PINCH2=[True, False, False, False])), ability_root(1)],
+                      switchin={0: [dict(side='own', lane=4, family='WG', holder='wonderguard', against=[True, False, False, False])]},
+                      turn2=[cell(0, 0, 1, 'opp', both), cell(1, 0, 1, 'own', {f: [f == 'WG'] + [False] * 3 for f in G.FAMILIES})])
+        configs = [dict(), dict(arms=dict(G.ABILITY_ARMS, CONTACT=('choice',))), dict(arms=dict(G.ABILITY_ARMS, WG=('switchin', 'choice'))),
+                   dict(pinch_root='third'), dict(arms=dict(G.ABILITY_ARMS, CONTACT=('choice',), PINCH=('choice',)), pinch_root='third')]
+        record = G.ability_evaluate(own, peer, inputs, choice=0)
+        w = .5 * .75 * .75
+        self.assertAlmostEqual(record['reach_subsets']['PINCH+CONTACT']['opp'], w * .475, places=12)   # the union, not the sum
+        self.assertAlmostEqual(record['families']['PINCH']['reach']['opp'] + record['families']['CONTACT']['reach']['opp'], w * .875, places=12)
+        for kw in configs:
+            with self.subTest(**{k: str(v) for k, v in kw.items()}):
+                fresh = G.ability_evaluate(own, peer, inputs, choice=0, **kw)
+                self.assertEqual(G.ability_trips(record, **kw), {k: fresh[k] for k in ('tripped', 'b_turn1', 'b_reach', 'b_switchin', 'c')})
+        self.assertEqual(G.ability_trips(record)['tripped'], record['tripped'])
+
     def test_evaluate_folds_the_ability_record_in(self):
         cond = G.conditions(BASE, 0, request(OURS));lanes = ['tackle', 'leechseed', 'substitute', 'protect'];own = prior(1, .9)   # lane 0: 3%
         plain = G.evaluate(cond, own_turn1=dict(lanes=lanes, logits=own[0], legal=own[1]), peer_turn1=[], turn2=[], choice=0)
