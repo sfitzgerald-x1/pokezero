@@ -36,9 +36,10 @@ user was frozen); Facade's doubled base power under par, brn, psn or tox, variab
 kept without Guts (tier C while the user had Guts and one of those statuses); probes wh_* (16: baton, charm, destinybond,
 intimidate, intimidate_explosion, knockoff, lead_fast, lead_slow, psychoboost, pursuit, residual, sd_superpower, superpower, tie,
 trick, trick_receive_negative), sacredfire_* (fail, hooh, statused, thaw) and rev_sacredfire_confused, facade_* (burn_noguts, frz,
-ghost, sleep, status, sub), the whole 168-probe suite EXACT against Showdown f76228a1 in WH's GPU round 2; v2e_regress at WH's
-clean head: 82 involved (whiteherb 40, facade 32, sacredfire 10), 0 unexpected; the B2 producer parity for white_herb), wrap, yawn
-and perishsong (M2 + R1, f3e71663: the
+ghost, sleep, status, sub); the full probe set, 168 scenarios / 448 cases / 2,078 compared steps, all EXACT against Showdown
+f76228a1, 0 unresolved (WH round 2, 92503ddf, the CPU probe harness); v2e_regress at WH's clean head (the GPU round, 964 shards):
+82 involved (whiteherb 40, facade 32, sacredfire 10), 0 unexpected; the B2 producer parity for white_herb), wrap, yawn and
+perishsong (M2 + R1, f3e71663: the
 partiallytrapped, yawn and perishsong volatiles in state (partial_trap_counter / partial_trap_source, yawn_counter, perish_counter)
 and the residual scheduler's Wrap tick, Yawn countdown and Perish count; R1 traces the Wrap and Yawn handlers only at the positions
 they can sort to, residual_order.POSITIONS, Wrap 4, 8, 9, 11 and Yawn 6, 12, 13, each failing a named probe when dropped; probes
