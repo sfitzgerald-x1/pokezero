@@ -10,7 +10,7 @@ Why. The live search prices depth-2 trees on the GPU engine (gpu_engine/transiti
 in the Gen 3 random battle move pool and was absent from that engine, so inside the tree it was mispriced: a recharge turn is free,
 a Wrap does not trap or chip, a Perish Song never counts down, and so on. The fidelity patches model some of them in-tree from a
 named integration merge (Effect.engine_since: Destiny Bond from A2, 286a5ffe; Hyper Beam's recharge and Trick from M1, 8b212312;
-Wrap's partial trap, Perish Song's count and Yawn's drowsy from M2 + R1, f00dfeed);
+Wrap's partial trap, Perish Song's count and Yawn's drowsy from M2 + R1, f3e71663);
 the live root carry still drops or refuses them (the evidence rows), so they stay audited. The audit counts, per effect, the priced roots it touches
 and applies the lead's rule: an effect whose (b) and (c) together cover <= 2% of priced roots is a named residual; otherwise it is
 escalated.
@@ -23,7 +23,7 @@ pool membership is checked against it (pool_check; a mismatch is reported, never
 - Audited (in the pool, not represented): recharge (Hyper Beam), partial_trap (Wrap), perish_count (Perish Song), drowsy (Yawn),
   destiny_bond (Destiny Bond), transform (Transform), trick_lock (Trick: its user always holds Choice Band, so the target ends up
   choice-locked). recharge, partial_trap and transform are also LOCK-class at gpu_engine/engine_request_source.py:380.
-  engine_since: destiny_bond 286a5ffe (A2); recharge and trick_lock 8b212312 (M1); partial_trap, perish_count and drowsy f00dfeed (M2 + R1);
+  engine_since: destiny_bond 286a5ffe (A2); recharge and trick_lock 8b212312 (M1); partial_trap, perish_count and drowsy f3e71663 (M2 + R1);
   transform none.
 - Not in the pool (zero by construction): the locked-move family (Outrage, Thrash, Petal Dance), Uproar, Rollout, Ice Ball, Bide,
   Rage, the two-turn moves other than Solar Beam (Fly, Dig, Dive, Bounce, Skull Bash, Razor Wind, Sky Attack), the other partial
@@ -153,7 +153,7 @@ EFFECTS = (
         ('Showdown data/moves.ts:21091 (gen4 mod data/mods/gen4/moves.ts:1515, inherited by gen3): Wrap sets volatile partiallytrapped',
          'Showdown data/conditions.ts:222-252: partiallytrapped lasts several turns, damages at each residual and traps (onTrapPokemon)',
          'gpu_engine/linked_traps.py:12-14: the represented move traps are Mean Look, Spider Web and Block only (Wrap is its own volatile)',
-         'in-tree since M2 + R1 (f00dfeed): gpu_engine/state.py:91-92 partial_trap_counter (3 + draws[s][7] at Wrap) and '
+         'in-tree since M2 + R1 (f3e71663): gpu_engine/state.py:91-92 partial_trap_counter (3 + draws[s][7] at Wrap) and '
          'partial_trap_source; transition.py:1844-1849 the Wrap set (the counter and partial_trap_source); transition.py:2409-2429 its residual tick (the trapper read at '
          'the holder\'s own handler), traced by R1 only at residual_order.POSITIONS wrap 4, 8, 9, 11 (gpu_engine/residual_order.py:95)',
          'probes: 12 wrap* scenarios (20 cases), EXACT against Showdown f76228a1 at M2 + R1 (3e0878e4); each gated position fails a '
@@ -162,11 +162,11 @@ EFFECTS = (
          'live roots: a held partial trap is refused: the protocol world is built with approximate_partial_trap_turns=False '
          '(gpu_engine/phase_d_protocol_world.py:306-307), so pokezero.engine_world raises volatile_unsupported'),
         'Shuckle (Staller) only. In-tree since M2 the trap and its residual chip are modelled; a root already holding a partial trap '
-        'is refused.', engine_since='f00dfeed'),
+        'is refused.', engine_since='f3e71663'),
     Effect('perish_count', ('perishsong',), ('misdreavus',), False, '',
         'both actives faint at the end of the third following turn unless they switch',
         ('Showdown data/moves.ts:13232 (gen4 mod data/mods/gen4/moves.ts:993): Perish Song starts a 3-turn count on both actives',
-         'in-tree since M2 + R1 (f00dfeed): gpu_engine/state.py:89 perish_counter (4 at Perish Song, -1 per residual, faint at 0); '
+         'in-tree since M2 + R1 (f3e71663): gpu_engine/state.py:89 perish_counter (4 at Perish Song, -1 per residual, faint at 0); '
          'transition.py:1623-1631 the count set (Soundproof exempt); transition.py:2478-2491 its residual, a two-holder pass after the '
          'order-10 list, faster side first, an equal-Speed pair on a drawn effect bit, the count and the faint at 0 (not gated by R1)',
          'probes: 10 perishsong* scenarios (perishsong, _tie, _last_faster, _baton, _switch, _meanlook, _soundproof, _soundproof_user, '
@@ -174,11 +174,11 @@ EFFECTS = (
          'live roots: a held perish count passes the protocol world (pokezero.engine_world) and is refused by '
          'gpu_engine/v5_hypothetical_state.py:46 (any volatile but leechseed, substitute and truant: volatile:<seat>); '
          'gpu_engine/public_active.py:46, 217-233 keeps the public counts for the encoder'),
-        'Misdreavus (Staller), the set that also carries Mean Look (a represented trap).', engine_since='f00dfeed'),
+        'Misdreavus (Staller), the set that also carries Mean Look (a represented trap).', engine_since='f3e71663'),
     Effect('drowsy', ('yawn',), ('swalot',), False, '',
         'the target falls asleep at the end of the next turn',
         ('Showdown data/moves.ts:21141 (gen4 mod data/mods/gen4/moves.ts:1527): Yawn puts the target to sleep a turn later',
-         'in-tree since M2 + R1 (f00dfeed): gpu_engine/state.py:90 yawn_counter (2 at Yawn, -1 at residual subOrder 19, a sleep attempt '
+         'in-tree since M2 + R1 (f3e71663): gpu_engine/state.py:90 yawn_counter (2 at Yawn, -1 at residual subOrder 19, a sleep attempt '
          'at 0); transition.py:1636-1644 the Yawn set; transition.py:2430-2458 its countdown (2440-2444 Sleep Clause and the '
          'immunities) and the after-status step, '
          'traced by R1 only at residual_order.POSITIONS yawn 6, 12, 13 (gpu_engine/residual_order.py:95)',
@@ -187,7 +187,7 @@ EFFECTS = (
          'reached it; 12 yawn_tie; 13 yawn and six more)',
          'live roots: a held drowsy is refused: the protocol world is built with approximate_hidden_duration_volatiles=False '
          '(gpu_engine/phase_d_protocol_world.py:306-307), so pokezero.engine_world raises volatile_unsupported'),
-        'Swalot (Bulky Attacker) only.', engine_since='f00dfeed'),
+        'Swalot (Bulky Attacker) only.', engine_since='f3e71663'),
     Effect('destiny_bond', ('destinybond',), ('banette', 'gengar', 'qwilfish', 'wobbuffet'), False, '',
         'a KO of the user by a move takes its attacker down, until the user moves again (so into the next turn)',
         ('Showdown data/moves.ts:3479-3520: the destinybond volatile ends only at the user\'s next move (onBeforeMove)',

@@ -561,7 +561,7 @@ class LiveTableTests(unittest.TestCase):
             'sleeppowder': ('status', '4ee5d3ee'), 'hypnosis': ('status', '4ee5d3ee'), 'gigadrain': ('other', '286a5ffe'),
             'mirrorcoat': ('retaliation', '286a5ffe'), 'counter': ('retaliation', '0d661773'), 'bonemerang': ('other', '0d661773'),
             'trick': ('item_removal', '3f48093b'), 'knockoff': ('item_removal', '3f48093b'),
-            'wrap': ('volatile', 'f00dfeed'), 'yawn': ('volatile', 'f00dfeed'), 'perishsong': ('volatile', 'f00dfeed')})
+            'wrap': ('volatile', 'f3e71663'), 'yawn': ('volatile', 'f3e71663'), 'perishsong': ('volatile', 'f3e71663')})
         self.assertEqual(sorted(m for m, v in LIVE_GUARDED.items() if v[0] == 'A'), ['superpower', 'transform'])
         self.assertEqual(sorted(m for m, v in LIVE_GUARDED.items() if v[0] == 'C'), ['facade', 'psychoboost', 'sacredfire'])
         self.assertEqual({m: v for m, v in LIVE_GUARDED.items()}, {m: v for m, v in FIXTURE_GUARDED.items() if m not in LIVE_RETIRED})

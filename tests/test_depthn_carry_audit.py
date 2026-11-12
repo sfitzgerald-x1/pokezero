@@ -46,7 +46,7 @@ class EnumerationTests(unittest.TestCase):
                 self.assertTrue(any('gpu_engine/' in x for x in e.evidence))   # an engine citation
         self.assertEqual({e.id for e in A.EFFECTS if e.lock_class}, {'recharge', 'partial_trap', 'transform'})
         self.assertEqual({e.id: e.engine_since for e in A.EFFECTS if e.engine_since}, dict(recharge='8b212312', destiny_bond='286a5ffe', trick_lock='8b212312',
-                         partial_trap='f00dfeed', perish_count='f00dfeed', drowsy='f00dfeed'))
+                         partial_trap='f3e71663', perish_count='f3e71663', drowsy='f3e71663'))
         self.assertTrue(all(not e.pool_species for e in A.NOT_IN_POOL))
         self.assertTrue(all(e.represented for e in A.REPRESENTED))
         moves = {m for e in A.NOT_IN_POOL for m in e.moves}

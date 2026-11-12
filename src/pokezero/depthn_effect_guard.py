@@ -27,7 +27,7 @@ and M1's item ledger, gpu_engine/constructor_worlds.py; in-tree Trick since M1, 
 trick_empty, trick_encore, trick_faster, trick_knocked_target, trick_knocked_user, trick_lum, trick_protect, trick_stickyhold,
 trick_sub, trick_takeband; Knock Off since A2, 286a5ffe, probes knockoff, knockoff_band, knockoff_midturn_lock; Sticky Hold's
 block is in-engine, gpu_engine/items.py sticky_hold, and a blocked Knock Off marks nothing at the root; roots after a public
-item swap stay refused by the world constructor, PUBLIC_ITEM_SWAP_NOT_SUPPORTED), wrap, yawn and perishsong (M2 + R1, f00dfeed: the
+item swap stay refused by the world constructor, PUBLIC_ITEM_SWAP_NOT_SUPPORTED), wrap, yawn and perishsong (M2 + R1, f3e71663: the
 partiallytrapped, yawn and perishsong volatiles in state (partial_trap_counter / partial_trap_source, yawn_counter, perish_counter)
 and the residual scheduler's Wrap tick, Yawn countdown and Perish count; R1 traces the Wrap and Yawn handlers only at the positions
 they can sort to, residual_order.POSITIONS, Wrap 4, 8, 9, 11 and Yawn 6, 12, 13, each failing a named probe when dropped; probes
@@ -88,7 +88,7 @@ RETIRED = {'destinybond': ('volatile', '286a5ffe'), 'hyperbeam': ('multi_turn', 
            'counter': ('retaliation', '0d661773'), 'charm': ('target_stat_change', '4ee5d3ee'), 'spore': ('status', '4ee5d3ee'),
            'sleeppowder': ('status', '4ee5d3ee'), 'hypnosis': ('status', '4ee5d3ee'), 'bonemerang': ('other', '0d661773'),
            'trick': ('item_removal', '3f48093b'), 'knockoff': ('item_removal', '3f48093b'),
-           'wrap': ('volatile', 'f00dfeed'), 'yawn': ('volatile', 'f00dfeed'), 'perishsong': ('volatile', 'f00dfeed')}
+           'wrap': ('volatile', 'f3e71663'), 'yawn': ('volatile', 'f3e71663'), 'perishsong': ('volatile', 'f3e71663')}
 WATCHED = frozenset(GUARDED) | frozenset(TIER_B) | frozenset(RETIRED)
 # The guarded tiers in force while records carried no per-entry `guarded` (before 49530d2a; GUARDED unchanged from 2c5c7b80 until
 # RETIRED): reach's bounds for those records use these, so a later guard set does not move them.
