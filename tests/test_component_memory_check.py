@@ -6,8 +6,13 @@ import tempfile
 import unittest
 from unittest import mock
 
-from scripts.run_component_memory_check import (CGROUP_SOURCE, PF_FORKNOEXEC, PSS_SOURCE,
-    own_cgroup, run, snapshot)
+import os
+import subprocess
+import threading
+import time
+
+from scripts.run_component_memory_check import (CGROUP_SOURCE, PF_FORKNOEXEC, PSS_SOURCE, REQUIRED_STAT,
+    cgroup_memory, effective_limit, own_cgroup, run, shares_address_space, snapshot)
 
 
 def fake_process(root, pid, *, rss, hwm, pss=0, flags=0, tasks=None, file=0):
@@ -87,14 +92,96 @@ class ComponentMemoryCheckTests(unittest.TestCase):
             # Of the readings before and after the /proc walk, the higher one gates.
             real = __import__('scripts.run_component_memory_check', fromlist=['cgroup_memory']).cgroup_memory
             readings = iter([dict(real(group), cgroup_memory_bytes=900), dict(real(group), cgroup_memory_bytes=700)])
-            with mock.patch('scripts.run_component_memory_check.cgroup_memory', side_effect=lambda _: next(readings)):
+            with mock.patch('scripts.run_component_memory_check.cgroup_memory', side_effect=lambda *_: next(readings)):
                 self.assertEqual(snapshot(11, proc=root/'proc', group=group)['memory_bytes'], 900)
             readings = iter([dict(real(group), cgroup_memory_bytes=700), dict(real(group), cgroup_memory_bytes=900)])
-            with mock.patch('scripts.run_component_memory_check.cgroup_memory', side_effect=lambda _: next(readings)):
+            with mock.patch('scripts.run_component_memory_check.cgroup_memory', side_effect=lambda *_: next(readings)):
                 self.assertEqual(snapshot(11, proc=root/'proc', group=group)['memory_bytes'], 900)
             # A counter that disappears falls back to the larger summed RSS, never to zero.
             (group/'memory.stat').unlink()
             self.assertEqual(snapshot(11, proc=root/'proc', group=group)['memory_bytes'], 51*1024)
+
+    def test_unreadable_pss_keeps_the_subtree_and_counts_that_process_rss(self):
+        with tempfile.TemporaryDirectory() as folder, mock.patch('os.getpid', return_value=7):
+            root = Path(folder)
+            self.tree(root, 7, child_flags=PF_FORKNOEXEC)
+            (root/'proc'/'11'/'smaps_rollup').unlink()
+            row = snapshot(11, proc=root/'proc', shares=lambda *_: True)
+            # 11 counts its RSS (10) instead of PSS (8); 12 and 13 are still walked.
+            self.assertEqual((row['memory_bytes'], row['pss_errors']), (31*1024, 1))
+            self.assertEqual(row['process_peak_rss_bytes'], 25*1024)
+            self.assertEqual(row['tree_rss_bytes'], 51*1024)
+
+    def cgroup(self, root, stat, *, current=1000, swap=None):
+        group = root/'cgroup'/'job'
+        group.mkdir(parents=True, exist_ok=True)
+        (group/'memory.current').write_text(f'{current}\n')
+        (group/'memory.stat').write_text(''.join(f'{k} {v}\n' for k, v in stat.items()))
+        if swap is not None:
+            (group/'memory.swap.current').write_text(f'{swap}\n')
+        return group
+
+    def test_lazily_freed_anon_on_the_file_lru_is_not_dropped_as_cache(self):
+        with tempfile.TemporaryDirectory() as folder:
+            group = self.cgroup(Path(folder), dict(file=100, shmem=0, file_mapped=0, file_dirty=0, file_writeback=0,
+                                                   active_file=50, inactive_file=500))
+            # 550 on the file LRU, but only 100 is page cache: MADV_FREE anon pages stay counted.
+            self.assertEqual(cgroup_memory(group)['cgroup_memory_bytes'], 900)
+
+    def test_swap_growth_since_the_start_counts_and_missing_stat_keys_refuse(self):
+        stat = dict(file=400, shmem=50, file_mapped=40, file_dirty=20, file_writeback=10, active_file=150,
+                    inactive_file=200)
+        with tempfile.TemporaryDirectory() as folder:
+            group = self.cgroup(Path(folder), stat, swap=300)
+            row = cgroup_memory(group, swap_baseline=100)
+            self.assertEqual((row['cgroup_memory_bytes'], row['cgroup_swap_growth_bytes']), (720 + 200, 200))
+            self.assertEqual(cgroup_memory(group, swap_baseline=500)['cgroup_memory_bytes'], 720)
+            for name in REQUIRED_STAT:
+                self.cgroup(Path(folder), {k: v for k, v in stat.items() if k != name})
+                with self.assertRaises(ValueError):
+                    cgroup_memory(group)
+        with tempfile.TemporaryDirectory() as folder, mock.patch('os.getpid', return_value=7):
+            root = Path(folder)
+            self.tree(root, 7)
+            group = self.cgroup(root, {k: v for k, v in stat.items() if k != 'file_mapped'})
+            self.assertEqual(snapshot(11, proc=root/'proc', group=group)['memory_bytes'], 51*1024)
+
+    def test_limit_reads_the_gated_cgroup_and_its_ancestors(self):
+        with tempfile.TemporaryDirectory() as folder:
+            mount = Path(folder).resolve()/'cgroup'
+            group = mount/'system.slice'/'runner'
+            group.mkdir(parents=True)
+            (mount/'memory.max').write_text('max\n')
+            (mount/'system.slice'/'memory.max').write_text('1000\n')
+            (group/'memory.max').write_text('max\n')
+            self.assertEqual(effective_limit(group, cgroup=mount), 1000)
+            self.assertGreater(effective_limit(None, cgroup=mount), 1000)
+
+    @unittest.skipUnless(sys.platform.startswith('linux'), 'real /proc, kcmp and cgroup v2 are Linux-only')
+    def test_linux_kernel_interfaces(self):
+        self.assertTrue(shares_address_space(os.getpid(), os.getpid()))
+        tids, done = [], threading.Event()
+        worker = threading.Thread(target=lambda: (tids.append(threading.get_native_id()), done.wait(5)))
+        worker.start()
+        try:
+            while not tids:
+                time.sleep(.01)
+            self.assertTrue(shares_address_space(os.getpid(), tids[0]))
+        finally:
+            done.set(); worker.join()
+        with subprocess.Popen(['sleep', '5']) as other:
+            try:
+                self.assertFalse(shares_address_space(os.getpid(), other.pid))
+                row = snapshot(other.pid, pss=True)
+                self.assertGreater(row['tree_pss_bytes'], 0)
+                self.assertEqual(row['pss_errors'], 0)
+            finally:
+                other.kill()
+        group = own_cgroup()
+        if group is not None:
+            row = cgroup_memory(group)
+            self.assertTrue(set(REQUIRED_STAT) <= set(row['cgroup_stat']))
+            self.assertGreater(row['cgroup_memory_bytes'], 0)
 
     def test_own_cgroup_needs_v2_counters_inside_the_mount(self):
         with tempfile.TemporaryDirectory() as folder:

@@ -38,10 +38,15 @@ CGROUP_SOURCE = 'cgroup v2 memory.current less clean unmapped file cache'
 PSS_SOURCE = 'process-tree PSS'
 
 
-def effective_limit():
+def effective_limit(group=None, *, cgroup=Path('/sys/fs/cgroup')):
+    """Physical memory, or a lower cgroup limit on the gated cgroup, any ancestor, or the mount root."""
     limits = []
-    for path in (Path('/sys/fs/cgroup/memory.max'),
-                 Path('/sys/fs/cgroup/memory/memory.limit_in_bytes')):
+    paths = [cgroup / 'memory.max', cgroup / 'memory' / 'memory.limit_in_bytes']
+    node = group
+    while node is not None and node.is_relative_to(cgroup.resolve()):
+        paths.append(node / 'memory.max')
+        node = None if node == cgroup.resolve() else node.parent
+    for path in paths:
         if path.exists() and (value := path.read_text().strip()).isdigit():
             limits.append(int(value))
     physical = os.sysconf('SC_PHYS_PAGES') * os.sysconf('SC_PAGE_SIZE')
@@ -65,9 +70,11 @@ def own_cgroup(*, proc=Path('/proc'), cgroup=Path('/sys/fs/cgroup')):
 
 STAT_FIELDS = ('anon', 'file', 'shmem', 'kernel', 'file_mapped', 'file_dirty', 'file_writeback',
                'active_file', 'inactive_file')
+# Without any of these the reclaimable term cannot be bounded; the sample then uses summed RSS.
+REQUIRED_STAT = ('file', 'shmem', 'file_mapped', 'file_dirty', 'file_writeback', 'active_file', 'inactive_file')
 
 
-def cgroup_memory(group):
+def cgroup_memory(group, swap_baseline=0):
     """memory.current without the clean, unmapped page cache the kernel drops before an OOM kill.
 
     The file LRU (active_file + inactive_file) is subtracted, except:
@@ -76,19 +83,42 @@ def cgroup_memory(group):
       working set, which every process's RSS also counts; here each counts once.
     A page that is both dirty and mapped is in file_dirty and in file_mapped, so
     the reclaimable term can go below zero; it is clamped at 0, which keeps the
-    gate at or below memory.current. shmem and tmpfs pages are swap-backed and
-    sit on the anon LRU, so they are not in active_file/inactive_file and stay
-    counted (memory.stat's 'file' total does include them). Anon and kernel
-    memory are counted as charged.
+    gate at or below memory.current plus swap growth. shmem and tmpfs pages are
+    swap-backed and sit on the anon LRU, so they are not in active_file or
+    inactive_file and stay counted (memory.stat's 'file' total does include
+    them). Lazily freed anon pages (MADV_FREE) sit on the inactive file LRU
+    without being page cache, so the reclaimable term is also capped by the
+    page cache itself (file - shmem, less dirty, writeback and mapped pages).
+    Anon and kernel memory are counted as charged.
+
+    memory.current excludes swapped-out pages; swap growth since the start of the
+    run (memory.swap.current - swap_baseline) is added, so memory the kernel had
+    to push to swap still counts.
     """
     current = int((group / 'memory.current').read_text())
-    stat = {name: int(value) for name, value in (line.split() for line in
-            (group / 'memory.stat').read_text().splitlines() if len(line.split()) == 2)}
-    clean = stat.get('active_file', 0) + stat.get('inactive_file', 0) - stat.get('file_dirty', 0) \
-        - stat.get('file_writeback', 0) - stat.get('file_mapped', 0)
-    return dict(cgroup_memory_bytes=max(current - max(clean, 0), 0), cgroup_current_bytes=current,
-                cgroup_clean_cache_bytes=max(clean, 0),
+    stat = {}
+    for line in (group / 'memory.stat').read_text().splitlines():
+        if len(parts := line.split()) == 2:
+            stat[parts[0]] = int(parts[1])
+    if missing := [name for name in REQUIRED_STAT if name not in stat]:
+        raise ValueError('memory.stat lacks ' + ','.join(missing))
+    held = stat['file_dirty'] + stat['file_writeback'] + stat['file_mapped']
+    clean = max(0, min(stat['active_file'] + stat['inactive_file'] - held, stat['file'] - stat['shmem'] - held))
+    try:
+        swap = int((group / 'memory.swap.current').read_text())
+    except (OSError, ValueError):
+        swap = None   # no swap accounting: nothing to add
+    growth = 0 if swap is None else max(0, swap - swap_baseline)
+    return dict(cgroup_memory_bytes=max(current - clean, 0) + growth, cgroup_current_bytes=current,
+                cgroup_clean_cache_bytes=clean, cgroup_swap_bytes=swap, cgroup_swap_growth_bytes=growth,
                 cgroup_stat={name: stat[name] for name in STAT_FIELDS if name in stat})
+
+
+def swap_now(group):
+    try:
+        return int((group / 'memory.swap.current').read_text())
+    except (OSError, ValueError, TypeError):
+        return 0
 
 
 _libc = None
@@ -106,7 +136,7 @@ def shares_address_space(first, second):
 
 
 def snapshot(pid, *, proc=Path('/proc'), group=None, pss=None,
-             shares=shares_address_space):
+             shares=shares_address_space, swap_baseline=0):
     """One sample of the observer, the child and every descendant.
 
     group: the cgroup that gates (None for the PSS fallback). pss: also sum PSS
@@ -116,9 +146,9 @@ def snapshot(pid, *, proc=Path('/proc'), group=None, pss=None,
     # The cgroup is read before and after the /proc walk and the higher reading
     # kept: both are real readings inside the sample, and memory that moves
     # during the walk can then only raise the gate, never lower it.
-    before = _read_cgroup(group)
+    before = _read_cgroup(group, swap_baseline)
     pending, seen = [(os.getpid(), None), (pid, os.getpid())], set()
-    rss = process_peak = pss_total = anon = file = shmem = 0
+    rss = process_peak = pss_total = anon = file = shmem = pss_errors = 0
     while pending:
         current, parent = pending.pop()
         if current in seen:
@@ -128,37 +158,48 @@ def snapshot(pid, *, proc=Path('/proc'), group=None, pss=None,
         try:
             fields = dict(line.split(':', 1) for line in
                           (directory / 'status').read_text().splitlines() if ':' in line)
-            rss += int(fields.get('VmRSS', '0').split()[0]) * 1024
+            own_rss = int(fields.get('VmRSS', '0').split()[0]) * 1024
             anon += int(fields.get('RssAnon', '0').split()[0]) * 1024
             file += int(fields.get('RssFile', '0').split()[0]) * 1024
             shmem += int(fields.get('RssShmem', '0').split()[0]) * 1024
             process_peak = max(process_peak, int(fields.get('VmHWM', '0').split()[0]) * 1024)
-            if pss:
+        except (OSError, ValueError, IndexError):
+            # An interpreter can exit between /proc reads. Kernel child HWM is
+            # also collected at normal termination to retain short-lived peaks.
+            continue
+        rss += own_rss
+        if pss:
+            try:
                 stat = (directory / 'stat').read_text()
                 flags = int(stat[stat.rindex(')') + 2:].split()[6])
                 if not (parent is not None and flags & PF_FORKNOEXEC and shares(parent, current)):
                     rollup = dict(line.split(':', 1) for line in
                                   (directory / 'smaps_rollup').read_text().splitlines() if ':' in line)
-                    pss_total += int(rollup.get('Pss', '0').split()[0]) * 1024
-            # Any thread can start a child; every task's children are descendants.
-            for task in (directory / 'task').iterdir():
-                try:
-                    pending.extend((int(value), current) for value in (task / 'children').read_text().split())
-                except OSError:
-                    continue
-        except (OSError, ValueError, IndexError):
-            # An interpreter can exit between /proc reads. Kernel child HWM is
-            # also collected at normal termination to retain short-lived peaks.
-            continue
+                    pss_total += int(rollup['Pss'].split()[0]) * 1024
+            except (OSError, ValueError, IndexError, KeyError):
+                # Unreadable PSS (exiting, non-dumpable, no smaps_rollup): count its RSS.
+                pss_errors += 1
+                pss_total += own_rss
+        # Any thread can start a child; every task's children are descendants.
+        # A failed read here never hides the rest of the tree.
+        try:
+            tasks = list((directory / 'task').iterdir())
+        except OSError:
+            tasks = []
+        for task in tasks:
+            try:
+                pending.extend((int(value), current) for value in (task / 'children').read_text().split())
+            except (OSError, ValueError):
+                continue
     # The RSS split attributes any difference from the cgroup value (diagnostic).
     row = dict(tree_rss_bytes=rss, process_peak_rss_bytes=process_peak, tree_rss_anon_bytes=anon,
                tree_rss_file_bytes=file, tree_rss_shmem_bytes=shmem)
     if pss:
-        row['tree_pss_bytes'] = pss_total
+        row.update(tree_pss_bytes=pss_total, pss_errors=pss_errors)
     if group is None:
         row['memory_bytes'] = pss_total
     else:
-        readings = [reading for reading in (before, _read_cgroup(group)) if reading is not None]
+        readings = [reading for reading in (before, _read_cgroup(group, swap_baseline)) if reading is not None]
         if readings:
             row.update(max(readings, key=lambda reading: reading['cgroup_memory_bytes']))
             row['memory_bytes'] = row['cgroup_memory_bytes']
@@ -168,38 +209,43 @@ def snapshot(pid, *, proc=Path('/proc'), group=None, pss=None,
     return row
 
 
-def _read_cgroup(group):
+def _read_cgroup(group, swap_baseline=0):
     if group is None:
         return None
     try:
-        return cgroup_memory(group)
+        return cgroup_memory(group, swap_baseline)
     except (OSError, ValueError):
         return None
 
 
-def cgroup_peak(group):
+def cgroup_peak(group, name='memory.peak'):
     try:
-        return int((group / 'memory.peak').read_text())
+        return int((group / name).read_text())
     except (OSError, ValueError, TypeError):
         return None
 
 
 def run(command, *, output, label, summary=None, limit_bytes=None, interval=.2, record_pss=False):
-    limit = effective_limit() if limit_bytes is None else limit_bytes
-    if limit <= 0 or not 0 < interval <= 1:
+    if not 0 < interval <= 1:
+        raise ValueError('positive runner limit and sampling interval <=1s required')
+    group = own_cgroup()
+    limit = effective_limit(group) if limit_bytes is None else limit_bytes
+    if limit <= 0:
         raise ValueError('positive runner limit and sampling interval <=1s required')
     output = Path(output)
     output.mkdir(parents=True, exist_ok=True)
-    group = own_cgroup()
     source = PSS_SOURCE if group is None else CGROUP_SOURCE
-    peak = legacy = sampled = 0
+    swap_baseline = swap_now(group) if group is not None else 0
+    peak = legacy = sampled = pss_errors = 0
     breakdown = None
     started = time.monotonic()
     # Exclusive creation prevents merging two attempts' evidence.
     with (output / 'samples.jsonl').open('x') as samples:
         with subprocess.Popen(command) as child:
             while True:
-                row = snapshot(child.pid, group=group, pss=record_pss or group is None)
+                row = snapshot(child.pid, group=group, pss=record_pss or group is None,
+                               swap_baseline=swap_baseline)
+                pss_errors += row.get('pss_errors', 0)
                 peak = max(peak, row['memory_bytes'], row['process_peak_rss_bytes'])
                 legacy = max(legacy, row['tree_rss_bytes'], row['process_peak_rss_bytes'])
                 if row['memory_bytes'] > sampled:
@@ -207,7 +253,8 @@ def run(command, *, output, label, summary=None, limit_bytes=None, interval=.2, 
                     # memory.stat at the highest sampled gate value (cgroup source only).
                     breakdown = None if 'cgroup_stat' not in row else dict(
                         elapsed_seconds=round(time.monotonic()-started, 3), memory_bytes=row['memory_bytes'],
-                        current_bytes=row['cgroup_current_bytes'], **row['cgroup_stat'])
+                        current_bytes=row['cgroup_current_bytes'],
+                        swap_growth_bytes=row.get('cgroup_swap_growth_bytes', 0), **row['cgroup_stat'])
                 samples.write(json.dumps(dict(monotonic_ns=time.monotonic_ns(),
                     elapsed_seconds=time.monotonic()-started, peak_bytes=peak,
                     peak_rss_bytes=legacy, runner_limit_bytes=limit, **row))+'\n')
@@ -225,7 +272,9 @@ def run(command, *, output, label, summary=None, limit_bytes=None, interval=.2, 
             peak_method=f'max(sampled {source}, observed process HWM, kernel child HWM)',
             memory_source=source, peak_rss_bytes=legacy,
             peak_rss_method='not gating: max(sampled process-tree RSS sum, observed process HWM, kernel child HWM)',
-            peak_memory_stat=breakdown,
+            peak_memory_stat=breakdown, pss_errors=pss_errors,
+            swap_baseline_bytes=swap_baseline if group is not None else None,
+            cgroup_swap_peak_bytes=cgroup_peak(group, 'memory.swap.peak'),
             sample_interval_seconds=interval, cgroup_memory_peak_bytes=cgroup_peak(group),
             runner_limit_bytes=limit, bar_bytes=limit * 3 // 4,
             memory_pass=0 < peak <= limit * 3 // 4,
