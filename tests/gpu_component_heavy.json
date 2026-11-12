@@ -64,9 +64,9 @@
    "reason": "wall+memory",
    "hosted_median_min": null,
    "isolated_wall_min": null,
-   "isolated_peak_gib": 170,
+   "isolated_peak_gib": 180,
    "completes_on_hosted": false,
-   "note": "lower bound: K1 at R1 c8521ed9 (4 CPUs) reached 161 GiB with 1 of 6 tests settled at 187 min, still running; base 9640bbe1 88.6 GiB / 68 min. Measured values replace this when it settles."
+   "note": "lower bound: K1 at R1 c8521ed9 (4 CPUs) timed out at 14000 s with 1 of 6 tests settled, 173 GiB RSS; base 9640bbe1 88.6 GiB / 68 min. Rerun on 16 CPUs with a 12 h timeout; measured values replace this when it settles."
   },
   {
    "module": "test_gpu_engine_status_callbacks_hot_jit",
