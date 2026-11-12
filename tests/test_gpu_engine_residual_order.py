@@ -73,6 +73,13 @@ class ConstantsTests(unittest.TestCase):
         for e in range(ro.EVENTS):
             self.assertEqual([kind for kind in ro.KINDS if ro.is_kind(e, kind)], [ro.EVENT_KIND[e]], e)
         self.assertEqual(ro.EVENT_SUBORDER, (3, 3, 4, 4, 5, 5, 6, 6, 9, 9, 14, 14, 19, 19))
+        # R1 review: pin which handler each event runs and which draw its pair shares, not only the subOrders. A swapped
+        # label (e.g. 'status' <-> 'encore') would run brn/psn/tox at subOrder 14 and Encore at 6, and still pass the rest.
+        self.assertEqual(ro.EVENT_KIND, ('ability', 'ability', 'heal', 'heal', 'seed', 'seed', 'status', 'status',
+                                         'wrap', 'wrap', 'encore', 'encore', 'yawn', 'yawn'))
+        self.assertEqual(ro.TIE_PAIR, (0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6))
+        self.assertEqual({ro.EVENT_KIND[e]: ro.EVENT_SUBORDER[e] for e in range(ro.EVENTS)},
+                         {'ability': 3, 'heal': 4, 'seed': 5, 'status': 6, 'wrap': 9, 'encore': 14, 'yawn': 19})
 
     def test_key_separation_premise(self):
         """The multiplier exceeds the span of subOrder*2+tie (so Speed decides every cross-side comparison) and every key is
@@ -130,6 +137,22 @@ class StepSourceTests(unittest.TestCase):
             self.assertTrue(same(node, source), f'{name}: {ast.unparse(node)}')
             self.assertIn(node, self.before, name)
         for name in ('end_speed', 'tie'):self.assertIn(self.assignment(name), self.before, name)
+        # R1 review: the derivation assumes every tie is one bit, draw ^ side (complementary per pair; the Yawn pair's fixed
+        # `sides`). Pin the step's tie expression and the bounds of every column it reads, so a wider column (e.g. a
+        # 0..99 roll) cannot widen a kind's positions past the gated sets unnoticed.
+        tie_source = ('tie = jnp.concatenate((draws[:,1,0,None] ^ sides, draws[:,0,9,None] ^ sides,draws[:,0,10,None] ^ sides,'
+                      'draws[:,1,9,None] ^ sides, effect_draws[:,0,3,None] ^ sides,draws[:,1,11,None] ^ sides,'
+                      ' jnp.broadcast_to(sides,(draws.shape[0],2))),axis=1)')
+        self.assertTrue(same(self.assignment('tie'), tie_source), ast.unparse(self.assignment('tie')))
+        self.assertTrue(same(self.assignment('sides'), 'sides = jnp.arange(2)[None, :]'), ast.unparse(self.assignment('sides')))
+        module = ast.parse((ROOT / 'gpu_engine' / 'transition.py').read_text())
+        bounds = [ast.literal_eval(n.args[0]) for n in ast.walk(module) if isinstance(n, ast.Call)
+                  and ast.unparse(n.func) == 'jnp.array' and n.args and isinstance(n.args[0], ast.List) and len(n.args[0].elts) == 12]
+        self.assertEqual(bounds, [[2, 100, 100, 100, 16, 16, 100, 4, 8, 2, 2, 2]])
+        self.assertEqual([bounds[0][c] for c in (0, 9, 10, 11)], [2, 2, 2, 2])
+        effect = next(ast.literal_eval(n.value) for n in module.body if isinstance(n, ast.Assign)
+                      and any(isinstance(t, ast.Name) and t.id == 'EFFECT_BOUNDS' for t in n.targets))
+        self.assertEqual(effect[3], 2)
         self.assertLess(self.before.index(self.assignment('end_speed')), self.before.index(self.assignment('event_keys')))
         self.assertTrue(same(self.loop.body[1], 'event = event_order[:,order]'))
         self.assertEqual(self.before[-1], self.assignment('event_order'))

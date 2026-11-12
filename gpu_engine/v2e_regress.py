@@ -1334,7 +1334,8 @@ class Stepper:
                 return turn_end_hook(c, before, after, ordinary, **kw)
             def hp_line_recorder(c, st, side, use, *rest, **kw):
                 # M2 review: the trapper at the holder's own partiallytrapped handler. Transition emits this HP-line cutpoint
-                # once per residual event right after the Wrap handler, its use mask being the handler's tick; the handler
+                # right after the Wrap handler at each residual position a Wrap event can take (residual_order.POSITIONS
+                # ['wrap'], R1), its use mask being the handler's tick; the handler
                 # ran for a holder where the caller's _wrap_holder is set. Recorded there from this tree's state (the trapper
                 # is the other side's active then; the holder's tick does not touch it): its index, alive, activeTurns > 0.
                 caller = sys._getframe(1).f_locals
