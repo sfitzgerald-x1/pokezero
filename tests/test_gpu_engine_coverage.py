@@ -10,7 +10,7 @@ class CoverageTests(unittest.TestCase):
     def fixture(self):
         return dict(move_slots=100,move_frequency=[
             {'id':'earthquake','count':40},{'id':'hiddenpowergrass','count':20},
-            {'id':'brickbreak','count':10},{'id':'rapidspin','count':10},
+            {'id':'brickbreak','count':10},{'id':'sing','count':10},
             {'id':'transform','count':20}])
 
     def test_partial_and_placeholders_receive_no_selected_effect_credit(self):
@@ -43,7 +43,9 @@ class CoverageTests(unittest.TestCase):
         r=registry()
         self.assertEqual(r['brickbreak']['status'],'PARTIAL')
         self.assertIn('Screen',r['brickbreak']['missing_intrinsic_effect'])
-        self.assertIn('Partial-trap',r['rapidspin']['missing_intrinsic_effect'])
+        self.assertIn('Soundproof',r['sing']['missing_intrinsic_effect'])
+        # Fidelity M2: Rapid Spin now releases Wrap's partial trap, so it is no longer partial.
+        self.assertEqual((r['rapidspin']['status'],r['rapidspin']['missing_intrinsic_effect']),('SELECTED_EFFECT_IMPLEMENTED',None))
 
     def test_pain_split_registration_is_not_fidelity_credit(self):
         for name in ('painsplit','reversal','flail'):

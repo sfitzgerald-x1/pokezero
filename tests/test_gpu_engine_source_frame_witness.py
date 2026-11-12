@@ -95,7 +95,7 @@ class SourceFrameWitnessTests(unittest.TestCase):
             observed=step.report.observed_cutpoints.tolist(),ledger_refusal=step.ledger.refusal.tolist(),
             raw_count=actual.callbacks.count.tolist(),kinds=actual.callbacks.words[0,:int(actual.callbacks.count[0]),0].tolist())))
         self.assertEqual(step.carry.frame.tolist(),[2,2])
-        self.assertEqual(step.report.observed_cutpoints[:,risks.Branch.ENCORE-1].tolist(),[12,12])
+        self.assertEqual(step.report.observed_cutpoints[:,risks.Branch.ENCORE-1].tolist(),[16,16])
         self.assertEqual(step.report.observed_cutpoints[:,risks.Branch.SECONDARY_STATS-1].tolist(),[6,6])
         self.assertEqual(step.report.observed_cutpoints[:,risks.Branch.SECONDARY_FLINCH-1].tolist(),[2,2])
         no_dispatch=self.tables._replace(secondary_weather=j.zeros_like(self.tables.secondary_weather))

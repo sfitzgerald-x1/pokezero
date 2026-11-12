@@ -628,9 +628,8 @@ def column_manifest(public=None, *, tracked_types=None, tracked_ability=None, tr
                     if section in applicable and column not in applicable[section] and not reason.startswith('unavailable hidden'):
                         if not reason.startswith('structurally not applicable: owning party'):
                             reason = 'structurally not applicable to this token section'
-                    if section in ('own', 'opponent') and kind == 'numeric':
-                        if column == _index('WRAP_TRAP_TURNS'):
-                            reason = 'unavailable: current physical engine has no partial-trap duration handler'
+                    # Fidelity M2: WRAP_TRAP_TURNS (33) is tracked (hooks MON_KEYS wrap_trap_turns), so it no longer
+                    # carries the 'unavailable: no partial-trap duration handler' reason.
                     if section == 'belief' and kind == 'numeric' and column == 131:
                         reason = 'deferred public damage-evidence pin producer; no fabricated pin conflict'
                 start, stop = {'field': (0, 1), 'own': (1, 7), 'opponent': (7, 13),

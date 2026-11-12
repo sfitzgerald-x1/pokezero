@@ -28,17 +28,25 @@ def from_metadata(metadata):
 
 
 def spin_cleanup(state,side,*,eligible):
-    """Clear represented seed/Spikes, never Mean Look/ability/Ingrain traps.
+    """Clear represented seed/Spikes and the spinner's partial trap (Wrap), never Mean Look/ability/Ingrain traps.
 
-    Partial-trap damage/clocks are not represented by this spike yet. Do not
-    erase anonymous external or linked trapping flags to pretend they are Bind.
+    Do not erase anonymous external or linked trapping flags to pretend they are Bind.
     """
     rows=jnp.arange(state.hp.shape[0]);active=state.active[rows,side]
     applies=jnp.asarray(eligible) & (state.hp[rows,side,active]>0)
     old=state.volatile[rows,side,active]
-    return state._replace(volatile=state.volatile.at[rows,side,active].set(
+    state=state._replace(volatile=state.volatile.at[rows,side,active].set(
         jnp.where(applies,old & ~jnp.uint32(LEECH_SEED),old)),
         spikes=state.spikes.at[rows,side].set(jnp.where(applies,0,state.spikes[rows,side])))
+    # Fidelity M2: Rapid Spin also ends the spinner's partial trap (data/mods/gen4/moves.ts:1096-1098 self onHit;
+    # data/moves.ts onAfterHit/onAfterSubDamage), a Substitute hit included: removeVolatile prints -end ...
+    # [partiallytrapped]. States without the leaves (fixtures) skip it.
+    if hasattr(state,'partial_trap_counter'):
+        state=state._replace(partial_trap_counter=state.partial_trap_counter.at[rows,side,active].set(
+            jnp.where(applies,0,state.partial_trap_counter[rows,side,active])),
+            partial_trap_source=state.partial_trap_source.at[rows,side,active].set(
+                jnp.where(applies,-1,state.partial_trap_source[rows,side,active])))
+    return state
 
 
 def seed_target(table,move,types,hp,sub_hp,volatile,*,eligible):

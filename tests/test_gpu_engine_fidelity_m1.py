@@ -51,7 +51,7 @@ class TableAndMaskTests(unittest.TestCase):
         t = items.from_metadata(meta)
         self.assertEqual(np.flatnonzero(np.asarray(t.trick)).tolist(), [TRICK])
         self.assertEqual(items.ItemTable._fields[-3:], ('knock_off', 'sticky_hold', 'trick'))
-        self.assertEqual(effects.MoveEffects._fields[-1], 'recharge')
+        self.assertIn('recharge', effects.MoveEffects._fields)   # M1 appended it; later tiers append after it (M2: perishsong, yawn, wrap)
 
     def test_recharge_request_is_lane_zero_and_trapped(self):
         """getMoves(lockedMove 'recharge') is one Recharge row and getMoveRequestData sets trapped: only lane 0, over Choice

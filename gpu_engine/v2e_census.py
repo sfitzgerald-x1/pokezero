@@ -32,8 +32,8 @@ import time
 import numpy as np
 
 SCHEMA = 'pokezero.v2e-census.v1'
-# transition.step_with_chance: def line and last line (design note section 1.1; tree 5bc2fe8c, shifted by fidelity A1, A2, R, B and M1).
-SPAN = (342, 2451)
+# transition.step_with_chance: def line and last line (design note section 1.1; tree 5bc2fe8c, shifted by fidelity A1, A2, R, B, M1, M2 and R1).
+SPAN = (342, 2583)
 # (phase, first line, last line, group). 'pre' is the host-side argument checks; boundary statements open the next phase.
 PHASES = (
     ('pre', 342, 486, 'pre'),
@@ -44,11 +44,11 @@ PHASES = (
     ('E0', 719, 741, 'E'),     # ordering
     ('E1', 742, 944, 'E'),     # per action: pre-move (the recharge turn included)
     ('E2', 945, 1314, 'E'),    # damage
-    ('E3', 1315, 1884, 'E'),   # effects
-    ('E4', 1885, 2000, 'E'),   # post (recoil, move weather, Spikes, drag, Baton, fainted boosts)
-    ('F1', 2001, 2107, 'F'),   # defer/ready, end speeds, Wish, weather
-    ('F2', 2108, 2370, 'F'),   # residual events (argsort at 2114, loop at 2115) and the last-expiring recharge tick
-    ('G', 2371, 2451, 'G'),    # end of turn
+    ('E3', 1315, 1934, 'E'),   # effects (Perish Song, Yawn, the Substitute's trap release and Wrap's trap included)
+    ('E4', 1935, 2050, 'E'),   # post (recoil, move weather, Spikes, drag, Baton, fainted boosts)
+    ('F1', 2051, 2162, 'F'),   # defer/ready, end speeds, Wish, weather
+    ('F2', 2163, 2498, 'F'),   # residual events (argsort at 2170, the 14-event loop at 2171), the Perish pass and the recharge tick
+    ('G', 2499, 2583, 'G'),    # end of turn
 )
 GROUPS = ('A', 'B', 'C', 'D', 'E', 'F', 'G')
 GROUP = {name: group for name, _, _, group in PHASES}
@@ -66,21 +66,21 @@ ANCHORS = {
     743: '_faint_before_hp=work.hp',
     945: 'attack_stats = _active(work.stats, work, side)',
     1315: 'if table.effects is not None:',
-    1885: '# Gen3 applies contact DamagingHit',
-    1970: 'work,changed,hazard_ko=dragging.drag(work,foe,move,phazing_draws[rows,side],',
-    2001: 'turn_context = live & (~replacement | state.pending_residual)',
-    2108: 'event_sides = jnp.array([0,1,0,1,0,1,0,1,0,1])',
-    2114: 'event_order = jnp.argsort(event_keys,axis=1)',
-    2115: 'for order in range(10):',
-    2127: 'if _status_residual_context is not None:',
-    2371: 'work=linking.prune(work)',
-    2442: 'work = jax.tree.map(lambda old, new: jnp.where(live.reshape(',
-    2451: 'return result if _public_trace is None else public_callbacks.TracedStep(result,_public_trace)',
+    1935: '# Gen3 applies contact DamagingHit',
+    2020: 'work,changed,hazard_ko=dragging.drag(work,foe,move,phazing_draws[rows,side],',
+    2051: 'turn_context = live & (~replacement | state.pending_residual)',
+    2163: 'event_sides = jnp.array(residual_order.EVENT_SIDES)',
+    2170: 'event_order = jnp.argsort(event_keys,axis=1)',
+    2171: 'for order in range(residual_order.EVENTS):',
+    2186: 'if _status_residual_context is not None:',
+    2499: 'work=linking.prune(work)',
+    2574: 'work = jax.tree.map(lambda old, new: jnp.where(live.reshape(',
+    2583: 'return result if _public_trace is None else public_callbacks.TracedStep(result,_public_trace)',
 }
 # Iteration rules over lines in program order (the scratch census's): an E1..E4 line <= E_RESTART after one >= E_LATE
-# starts the second action; in F2 a line <= F2_HEAD after one > F2_BODY starts the next of the 10 residual events.
-E_LATE, E_RESTART = 1903, 821
-F2_LOOP, F2_HEAD, F2_BODY = 2115, 2127, 2142
+# starts the second action; in F2 a line <= F2_HEAD after one > F2_BODY starts the next of the 14 residual events.
+E_LATE, E_RESTART = 1953, 821
+F2_LOOP, F2_HEAD, F2_BODY = 2171, 2186, 2201
 # Design boundaries: the phase label whose first equation each one is (b0: the first step_with_chance equation; b8: the end).
 BOUNDARIES = (('b0', 'A'), ('b1', 'B'), ('b2', 'D'), ('b3', 'E0'), ('b4', 'E1.0'), ('b5', 'E1.1'), ('b6', 'F1'), ('b7', 'G'), ('b8', 'END'))
 TRACKERS = {'engine_device_public_hooks', 'engine_device_trackers', 'engine_device_public_port', 'engine_device_visible_belief',
@@ -98,7 +98,7 @@ def phase_of(line):
 
 def label_lines(lines):
     """Per-item labels for step_with_chance lines in program order: the phase name, 'E1.0'..'E4.1' with the action
-    iteration, 'F2.pre' before the residual loop and 'F2.0'..'F2.9' per event, 'outside' for None."""
+    iteration, 'F2.pre' before the residual loop and 'F2.0'..'F2.13' per event, 'outside' for None."""
     labels = [];action = 0;last_e = None;event = -1;last_f = None
     for line in lines:
         name = phase_of(line)

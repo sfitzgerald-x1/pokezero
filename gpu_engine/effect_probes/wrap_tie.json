@@ -1,0 +1,283 @@
+{
+ "schema": "pokezero.effect_probe.scenario.v1",
+ "move": "wrap_tie",
+ "note": "M2.3: both last mons wrapped at equal Speed and low HP: the subOrder-9 pair sorts by effect[0][3] (axis); the first tick's KO runs faintMessages and checkWin ends the game, so the coin decides the winner. Setup: last_mons.",
+ "teams": [
+  [
+   {
+    "species": "Electrode",
+    "moves": [
+     "explosion",
+     "splash",
+     "protect",
+     "thunderbolt"
+    ],
+    "ability": "Soundproof",
+    "item": "",
+    "level": 1
+   },
+   {
+    "species": "Electrode",
+    "moves": [
+     "explosion",
+     "splash",
+     "protect",
+     "thunderbolt"
+    ],
+    "ability": "Soundproof",
+    "item": "",
+    "level": 1
+   },
+   {
+    "species": "Electrode",
+    "moves": [
+     "explosion",
+     "splash",
+     "protect",
+     "thunderbolt"
+    ],
+    "ability": "Soundproof",
+    "item": "",
+    "level": 1
+   },
+   {
+    "species": "Electrode",
+    "moves": [
+     "explosion",
+     "splash",
+     "protect",
+     "thunderbolt"
+    ],
+    "ability": "Soundproof",
+    "item": "",
+    "level": 1
+   },
+   {
+    "species": "Electrode",
+    "moves": [
+     "explosion",
+     "splash",
+     "protect",
+     "thunderbolt"
+    ],
+    "ability": "Soundproof",
+    "item": "",
+    "level": 1
+   },
+   {
+    "species": "Arbok",
+    "moves": [
+     "wrap",
+     "splash",
+     "protect",
+     "glare"
+    ],
+    "ability": "Intimidate",
+    "item": "",
+    "level": 1
+   }
+  ],
+  [
+   {
+    "species": "Arbok",
+    "moves": [
+     "wrap",
+     "splash",
+     "protect",
+     "glare"
+    ],
+    "ability": "Intimidate",
+    "item": "",
+    "level": 1
+   },
+   {
+    "species": "Voltorb",
+    "moves": [
+     "explosion",
+     "splash",
+     "protect",
+     "thunderbolt"
+    ],
+    "ability": "Soundproof",
+    "item": "",
+    "level": 1
+   },
+   {
+    "species": "Voltorb",
+    "moves": [
+     "explosion",
+     "splash",
+     "protect",
+     "thunderbolt"
+    ],
+    "ability": "Soundproof",
+    "item": "",
+    "level": 1
+   },
+   {
+    "species": "Voltorb",
+    "moves": [
+     "explosion",
+     "splash",
+     "protect",
+     "thunderbolt"
+    ],
+    "ability": "Soundproof",
+    "item": "",
+    "level": 1
+   },
+   {
+    "species": "Voltorb",
+    "moves": [
+     "explosion",
+     "splash",
+     "protect",
+     "thunderbolt"
+    ],
+    "ability": "Soundproof",
+    "item": "",
+    "level": 1
+   },
+   {
+    "species": "Voltorb",
+    "moves": [
+     "explosion",
+     "splash",
+     "protect",
+     "thunderbolt"
+    ],
+    "ability": "Soundproof",
+    "item": "",
+    "level": 1
+   }
+  ]
+ ],
+ "script": [
+  [
+   "move 1",
+   "move 3"
+  ],
+  [
+   "switch 2",
+   ""
+  ],
+  [
+   "move 1",
+   "move 3"
+  ],
+  [
+   "switch 3",
+   ""
+  ],
+  [
+   "move 1",
+   "move 3"
+  ],
+  [
+   "switch 4",
+   ""
+  ],
+  [
+   "move 1",
+   "move 3"
+  ],
+  [
+   "switch 5",
+   ""
+  ],
+  [
+   "move 1",
+   "move 3"
+  ],
+  [
+   "switch 6",
+   ""
+  ],
+  [
+   "move 3",
+   "switch 2"
+  ],
+  [
+   "move 3",
+   "move 1"
+  ],
+  [
+   "",
+   "switch 3"
+  ],
+  [
+   "move 3",
+   "move 1"
+  ],
+  [
+   "",
+   "switch 4"
+  ],
+  [
+   "move 3",
+   "move 1"
+  ],
+  [
+   "",
+   "switch 5"
+  ],
+  [
+   "move 3",
+   "move 1"
+  ],
+  [
+   "",
+   "switch 6"
+  ],
+  [
+   "move 3",
+   "move 1"
+  ],
+  [
+   "",
+   "switch 1"
+  ],
+  [
+   "move 1",
+   "move 1"
+  ],
+  [
+   "move 1",
+   "move 1"
+  ],
+  [
+   "move 1",
+   "move 1"
+  ],
+  [
+   "move 1",
+   "move 1"
+  ]
+ ],
+ "axes": [
+  {
+   "name": "tie",
+   "field": "effect.0.3",
+   "values": [
+    0,
+    1
+   ]
+  }
+ ],
+ "expect": {
+  "exact": true
+ },
+ "require_fields": [
+  "perish_counter",
+  "yawn_counter",
+  "partial_trap_counter",
+  "partial_trap_source",
+  "item_knocked",
+  "destiny_bond",
+  "effect"
+ ],
+ "tape": {
+  "draws.0.7": 3,
+  "draws.1.7": 3
+ }
+}

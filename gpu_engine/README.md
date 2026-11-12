@@ -54,7 +54,8 @@ blocks Roar only, and a represented Ingrain root blocks dragging/voluntary
 switching (the Ingrain move itself remains a placeholder). Natural Cure and
 outgoing volatile cleanup share the ordinary switch path. Hazard KO suspends
 the original turn until a healthy replacement; incoming Lum/weather/Intimidate
-resolve at entry. Broader reflection, partial traps and event effects remain pending.
+resolve at entry. Broader reflection and event effects remain pending (partial
+traps landed with fidelity M2).
 
 Mean Look, Spider Web and Block now record the opposing owner's stable party
 index rather than setting an anonymous trapped flag. Protect/Substitute block
@@ -259,6 +260,38 @@ no new chance):
   line); an identical swap still counts (B2 folds its `-item` lines); a mutated
   item never narrows the belief again (design 13 item 4). The absent-Leftovers
   rule and the world sampler read the per-mon `item_mutated`.
+
+Fidelity patch M2 (Perish Song, Yawn, Wrap and the residual scheduler; new state
+`perish_counter`, `yawn_counter`, `partial_trap_counter`, `partial_trap_source`):
+- Residual scheduler: the order-10 sorted list is 14 events (partiallytrapped at
+  subOrder 9 and Yawn at 19 join Speed Boost 3, Leftovers 4, Leech Seed 5, status
+  6 and Encore 14), keyed by Speed then subOrder with the multiplier 64; the old
+  events keep their relative order. An equal-Speed Wrap pair takes `effect[0][3]`,
+  the Yawn pair a fixed (inert) order. Perish Song is a two-event order-12 pass
+  after the list (`effect[1][3]` on a tie). A faint clears all four leaves.
+  The keys' constants live in the jax-free `residual_order.py`, which derives the
+  positions each kind can sort to (Wrap 4, 8, 9, 11; Yawn 6, 12, 13); to bound the
+  compiled step, the Wrap and Yawn handlers are traced only at those positions.
+- Perish Song: every active without the volatile and not Soundproof (the user
+  included) counts 4, then 3, 2, 1 at the order-12 residual, and faints at 0. Its
+  end path runs no faintMessages, so both holders resolve even when the first
+  faint empties a side (two last mons tie whichever goes first). Protect and a
+  Substitute never block it; Baton Pass carries it; a switch clears it.
+- Yawn: accuracy true, Protect and a Substitute block it, it fails on a status, an
+  existing yawn and Insomnia/Vital Spirit (`-immune`, revealed on the device).
+  Two residuals later `trySetStatus(slp)`: silent if statused, Sleep Clause Mod
+  applies, sleep 2+`effect[s][2]`, Lum Berry cures at once. Not Baton-passed.
+- Wrap: accuracy 85; a hit on a target that is not already trapped (never through
+  a Substitute) traps it for 3+`draws[s][7]` (the attacker's column). Each
+  residual lowers the count first; at 0 the trap ends, otherwise a trapper that is
+  not the foe's living active (or entered this turn) releases it silently, else
+  the holder takes max(1, maxhp/16) after Leftovers. Switches are illegal while
+  the trapper is the foe's living active. Rapid Spin (a Substitute hit included)
+  and the holder's own Substitute end it; Baton Pass carries it and its source.
+- Device: `derived_volatiles` writes B2's perishN, yawn and partiallytrapped bag
+  entries from the counters at each move and turn end, and B2's WRAP_TRAP_TURNS
+  (column 33, `wrap_trap_turns`) counts TURN lines while trapped, resets on every
+  `-end`, an arrival without Baton Pass and a faint, and rides a Baton Pass.
 
 The existing fixed critical roll now resolves ordinary 1/16 and catalog +1
 high-crit 1/8 chances. Battle Armor and Shell Armor veto critical hits in both
@@ -513,8 +546,9 @@ No training, policy-quality or full-fidelity claim follows from this spike.
 Rapid Spin uses Gen 3 power 20 and clears represented Leech Seed/own Spikes
 after a successful nonimmune hit, including unbroken Substitute and Endure at
 one HP. Miss/Protect/Ghost leave them intact; Mean Look/ability/Ingrain traps
-remain, and there is no modern Speed boost. Partial-trap clocks/damage are not
-represented, so this does not qualify all of Rapid Spin or move/game coverage.
+remain, and there is no modern Speed boost. Since fidelity M2 it also ends the
+spinner's own partial trap (Wrap), a Substitute hit included; this still does not
+qualify move/game coverage.
 
 ## Selected Solar Beam integration
 
@@ -632,9 +666,9 @@ continuation guard is unchanged and still refuses any nonzero Wish tuple.
 --out LEDGER.json` reconciles frequencies against every nonempty tensor move
 slot and reports source-assessed selected effects, partial effects and
 placeholders. Rows name runtime dispatch, authored check references and missing
-intrinsic effects. Brick Break's screen removal, Rapid Spin's partial-trap
-cleanup and Sing's Soundproof admission remain partial, with no whole-move
-credit. Hidden Power aliases contribute their actual counts once each.
+intrinsic effects. Brick Break's screen removal and Sing's Soundproof admission
+remain partial, with no whole-move credit (Rapid Spin's partial-trap cleanup
+landed with fidelity M2). Hidden Power aliases contribute their actual counts once each.
 This is the declared singles measurement subset, not every ability, clause or
 volatile cross-product. Implementation assessment is not qualified gameplay;
 game-qualified coverage remains unset pending the separate divergence check.

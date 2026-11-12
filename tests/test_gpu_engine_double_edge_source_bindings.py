@@ -15,10 +15,18 @@ class DoubleEdgeSourceBindingTests(unittest.TestCase):
   # reviewed Fidelity R and B batches changed the chance_consumers.py and phase_d_chance.py bodies.
   # The other three files have the same body and mappings at both commits.
   baseline='0a3711dc9a833790a7b54547dda61cb4547cc88b'
+  # Fidelity M2 (#1930, covered by its Opus review) re-certifies three bodies at its own reviewed commits; their
+  # mappings are unchanged. 7cc1d9f6 changed chance_consumers.py's and phase_d_chance.py's CONSUMERS rows (Wrap's
+  # duration on draws.{s}.7, Yawn's sleep on effect column 2, the Wrap and Perish pair ties on effect column 3) and
+  # plan_for_state's draws[s][7] for a selected Wrap. 7476bce7 changed engine_source_frame_witness.py's Encore cutpoint
+  # geometry (12 to 16, one per residual event). No later commit (M2's R1 included) changes these bodies.
+  certified={'chance_consumers.py':'7cc1d9f68e370f6e1676f4ae4898ec453cdce923',
+             'phase_d_chance.py':'7cc1d9f68e370f6e1676f4ae4898ec453cdce923',
+             'engine_source_frame_witness.py':'7476bce75526840de2b8d8c5e68fac31b1aa6cc6'}
   constants={'SOURCE_PINS','MAPPING_PINS','DOMAIN_SHA256','KERNEL_SHA256'}
   for file in ('chance_consumers.py','ordinary_law.py','conditional_law.py',
                'engine_source_frame_witness.py','phase_d_chance.py'):
-   old=ast.parse(subprocess.check_output(['git','show',baseline+':gpu_engine/'+file],cwd=ROOT,text=True))
+   old=ast.parse(subprocess.check_output(['git','show',certified.get(file,baseline)+':gpu_engine/'+file],cwd=ROOT,text=True))
    current=ast.parse((ROOT/'gpu_engine'/file).read_text())
    def body(tree):
     return [ast.dump(node) for node in tree.body if not (
