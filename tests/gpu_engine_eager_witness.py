@@ -43,7 +43,9 @@ def stable_consume(*args, **kwargs):
     if entry is None:
         def body(values, _closed=closed, _count=len(args)):
             merged = dict(_closed, **values)
-            return _CONSUME(*(merged.pop(f'_{i}') for i in range(_count)), **merged)
+            # Pop the positional arguments before the call: `**merged` would otherwise be evaluated first.
+            positional = [merged.pop(f'_{i}') for i in range(_count)]
+            return _CONSUME(*positional, **merged)
         entry = _JIT[key] = (jax.jit(body), closed)
     return entry[0](dynamic)
 
