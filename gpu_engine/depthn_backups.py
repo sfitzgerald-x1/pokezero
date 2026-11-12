@@ -94,6 +94,29 @@ def _world(frame,root,world,rule):
     return original.WorldPrices(requested,kept,tuple(map(float,frame.root_peer_logits[root,world])),grid)
 
 
+# device_depth2_pricer's PEER_VIEW_ERROR and PEER_PRIOR_REFUSED: set after D3 priced the cell (only the opponent's child view or
+# prior failed, for depth 2), so t1_value holds D3's value there.
+D3_PRICED_ERRORS=(5,6)
+
+
+def depth1_world(frame,root,world):
+    """The depth-1 WorldPrices of one block world: D3's turn-1 value (t1_value, the learner's value head on its own view of each
+    child, or the exact terminal value) on every enumerated cell D3 priced (t1_status 1 terminal or 2 expanded, or 3 with a
+    D3_PRICED_ERRORS code), None on any other cell; the same kept replies and root prior as _world. None for a world without a
+    price surface (pre != 0)."""
+    if int(frame.pre[root,world])!=0:return None
+    requested=bool(frame.root_peer_requested[root,world]);status=frame.t1_status[root,world];error=frame.t1_error[root,world]
+    kept=tuple(bool(np.any(status[:,r]!=0))for r in range(9))if requested else(False,)*9
+    priced=lambda a,r:int(status[a,r])in(1,2)or(int(status[a,r])==3 and int(error[a,r])in D3_PRICED_ERRORS)
+    grid=[[float(frame.t1_value[root,world,a,r])if priced(a,r)else None for r in range(9)]for a in range(9)]
+    return original.WorldPrices(requested,kept,tuple(map(float,frame.root_peer_logits[root,world])),grid)
+
+
+def backup_depth1(frame,root):
+    """Both block worlds' depth-1 WorldPrices (depth1_world): the turn-1 grid the depth-2 backup recurses below."""
+    return tuple(depth1_world(frame,root,world)for world in range(2))
+
+
 def backup(frame,root,rule=learner_max):
     """Both worlds' WorldPrices under `rule` at every node (None for a world without a surface)."""
     return tuple(_world(frame,root,world,rule)for world in range(2))

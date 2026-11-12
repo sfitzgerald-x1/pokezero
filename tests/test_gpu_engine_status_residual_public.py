@@ -14,6 +14,7 @@ from gpu_engine import engine_full_v4_event_device as full,engine_lifecycle_call
 from gpu_engine import engine_status_residual_callbacks as status,engine_public_events as events
 from gpu_engine import public_wire,public_inputs as inputs,v4_encoder as v4,mechanics as m
 import test_gpu_engine_leftovers_public as fixtures
+import gpu_engine_shared_public_jits as shared
 
 
 class StatusResidualPublicTests(unittest.TestCase):
@@ -68,9 +69,9 @@ class StatusResidualPublicTests(unittest.TestCase):
             rows.append([event for projection in ps for event in projection.events])
         namespaces={key:np.array(getattr(self.f.compiled.device.namespaces,key)) for key in full._NAMES}
         chunks=list(inputs.pack_chunks(np.array(frame.cursor.stream_id),rows,**namespaces))
-        expected=before.public
+        expected=before.public;fold=shared.fold(self.f.catalog)
         for chunk in chunks:
-            expected,error=v4.fold_chunk(expected,chunk,self.f.catalog);self.assertEqual(error.tolist(),[0,0])
+            expected,error=fold(expected,chunk);self.assertEqual(error.tolist(),[0,0])
         return chunks,expected
 
     def test_exact_original_full_words_and_public_leaves_for_both_statuses_owners_and_nonphysical_slots(self):

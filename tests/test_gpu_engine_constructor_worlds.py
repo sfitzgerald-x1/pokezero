@@ -50,6 +50,25 @@ def carry_executor():
     return serial.Executor(base.legal,jax.jit(observe),base.dispatch,base.sample,jax.jit(advance))
 
 
+def wide_executor():
+    """carry_executor with V2-shaped encoder inputs ([n,1,29,132] / [n,1,29,41] / [n,1,29] / [n,1,29] / [n,1]): the fake's three
+    features in token 0, so a B2 encoding's 23 tokens can be spliced in and the fake head (token 0's features) reads them."""
+    base=carry_executor()
+    def observe(state,public,owner,mask):
+        leaf=base.observe(state,public,owner,mask);x=leaf.inputs['numeric_features'];n=x.shape[0]
+        return leaf._replace(inputs=dict(numeric_features=j.zeros((n,1,29,132),j.float32).at[:,:,:1,:3].set(x),
+            categorical_ids=j.zeros((n,1,29,41),j.int32),token_type_ids=j.zeros((n,1,29),j.int32),attention_mask=j.ones((n,1,29),bool),
+            history_mask=j.ones((n,1),bool)))
+    return serial.Executor(base.legal,jax.jit(observe),base.dispatch,base.sample,base.advance)
+
+
+def b2_of(view,*,shift=.5):
+    """B2's encoding of a root whose world-0 own (wide) view is `view`: its 23-token prefix, token 0's first numeric feature moved by
+    `shift` (the fake head reads it), plus B2's legal mask."""
+    b2={k:np.array(np.asarray(view[k])[0,0,:23])for k in cw.B2_TOKEN_KEYS};b2['numeric_features'][0,0]+=np.float32(shift)
+    b2['legal_action_mask']=np.asarray(T.ROOT_LEGAL,bool);return b2
+
+
 def catalog(source_hash,checkpoint='c'*64):
     return NS(checkpoint_sha256=checkpoint,vocabulary=NS(tokens=('field','pokemon:self'),size=2),
         masks=NS(**{k:(0 if k=='transition_token_budget'else True)for k in MASK_NAMES}),source=NS(source_hash=source_hash))
@@ -74,6 +93,11 @@ class ConstructorWorldsTests(unittest.TestCase):
         cls.metadata=dict(vocabulary={k:list(v)for k,v in cls.source.vocabulary.items()},moves=[None,*[dict(pp=10)]*4])
         cls.catalog=catalog(cls.source.source_hash)
         cls.binding=cw.binding(cls.source,cls.metadata,cls.catalog)
+
+    def setUp(self):
+        # The fake engine's carries are not the device tracker carry: prepare_roots and build keep them as built here (the carry
+        # completion is tests/test_gpu_engine_constructor_worlds_carry's subject; its order in prepare_roots and build is below).
+        keep=patch.object(cw,'world_completer',return_value=lambda world,owner,**kw:world);keep.start();self.addCleanup(keep.stop)
 
     # fixtures ----------------------------------------------------------------------------------------------------------------
     def constructor(self,count,**kw):
@@ -450,11 +474,192 @@ class ConstructorWorldsTests(unittest.TestCase):
         tail=dict(v2,numeric_features=v2['numeric_features'].copy());tail['numeric_features'][0,0,25]+=1   # belief tokens 23..28 are not B2's
         self.assertTrue(cw.b2_view_check(None,tail,root(b2))['equal'])
         self.assertEqual(cw.b2_view_check(champion,dict(v2,numeric_features=v2['numeric_features'][...,:5,:]),root(b2))['equal'],None)   # an error, not a gate
-        # Through build: reported per root, never a gate (the fake encoder's inputs cannot be compared: the root still prices).
+        # Through build: reported per root, never a gate; but B2's encoding is now the root prior's input, and the fake encoder's
+        # inputs (no V2 token tensors) cannot take it: the root is refused before pricing, the diagnostic still recorded.
         W=2;constructor,prepared,_=self.prepared({'r':self.made(0,0,self.modes(0,W),b2=b2)},W)
         with self.forward_patch():b=cw.build(constructor,prepared,self.pricer(carry_executor(),depth=2,k_own=(2,),k_opp=(2,),capacity=2),
             PARAMS,binding=self.binding,recipe=self.recipe)
-        self.assertEqual(b.roots[0]['status'],'PRICED');self.assertIsNone(b.roots[0]['b2_view']['equal']);self.assertIn('KeyError',b.roots[0]['b2_view']['error'])
+        root=b.roots[0];self.assertEqual((root['status'],root['root_view_source'],b.requests),('REFUSED','b2',()))
+        self.assertTrue(root['reason'].startswith('ROOT_B2_INPUTS_UNUSABLE: ValueError: root inputs without categorical_ids'),root['reason'])
+        self.assertIsNone(root['b2_view']['equal']);self.assertIn('KeyError',root['b2_view']['error'])
+
+    def wide_root(self,i,W,**kw):
+        """(made() tuple with B2 from world 0's own wide view, that view): B2 differs from it in token 0's first numeric feature."""
+        ex=wide_executor();plain=self.made(i,0,self.modes(i,W));w0=plain[1].worlds[0]
+        view=ex.observe(w0.state,w0.public,j.asarray([0],j.int32),ex.legal(w0.state)[:,0]).inputs
+        return self.made(i,0,self.modes(i,W),b2=b2_of(view,**kw)),{k:np.asarray(v)for k,v in view.items()}
+
+    def test_the_root_prior_reads_b2s_encoding_and_requests_keep_world0s_view(self):
+        W=2;(with_b2,view),plain=self.wide_root(0,W),self.made(1,0,self.modes(1,W))
+        constructor,prepared,_=self.prepared({'b2':with_b2,'plain':plain},W)
+        ex=wide_executor();engine=self.pricer(ex,depth=2,k_own=(2,),k_opp=(2,),capacity=8,block_lanes=16)
+        with self.forward_patch():b=cw.build(constructor,prepared,engine,PARAMS,binding=self.binding,recipe=self.recipe)
+        first,second=b.roots;b2=with_b2[0].view['_b2_root_inputs']
+        X,lossy=cw.splice(view,b2);self.assertEqual(lossy,[])
+        prior=lambda inputs:T.forward(PARAMS[0],inputs)
+        logits=lambda out:tuple(map(float,np.asarray(out.policy_logits,np.float32).reshape(-1)))
+        self.assertEqual((first['status'],first['root_view_source'],second['status'],second['root_view_source']),('PRICED','b2','PRICED','world0'))
+        self.assertEqual(first['root_logits'],logits(prior(X)));self.assertEqual(first['root_value'],float(np.asarray(prior(X).value).reshape(-1)[0]))
+        self.assertNotEqual(first['root_logits'],logits(prior(view)))   # B2's token 0 differs: the prior is B2's, not world 0's
+        for row in first['rows']:   # every Request keeps world 0's own view (the pricer's turn-1 cross-world check is unchanged)
+            for k,v in view.items():np.testing.assert_array_equal(b.requests[row].root_inputs[k],v)
+        self.assertEqual((first['b2_view']['equal'],first['b2_view']['keys']['numeric_features'],first['b2_view']['keys']['categorical_ids'],
+            first['b2_view']['numeric_max_abs_diff']),(False,False,True,.5))
+        w0=plain[1].worlds[0];own=ex.observe(w0.state,w0.public,j.asarray([0],j.int32),ex.legal(w0.state)[:,0]).inputs
+        self.assertEqual(second['root_logits'],logits(prior(own)));self.assertIsNone(second['b2_view'])
+        np.testing.assert_array_equal(X['numeric_features'][0,0,0,:3],np.asarray(b2['numeric_features'])[0,:3])   # the splice is the prefix only
+        np.testing.assert_array_equal(X['history_mask'],view['history_mask'])
+        # B2 inputs that do not fit, or do not survive the cast, refuse the root before pricing.
+        bad={'short':dict(b2,numeric_features=np.asarray(b2['numeric_features'])[:22]),'lossy':dict(b2,categorical_ids=np.full((23,41),2**40,np.int64)),
+            'missing':{k:v for k,v in b2.items()if k!='attention_mask'}}
+        for name,inputs in bad.items():
+            detached=replace(with_b2[0],view=MappingProxyType(dict(with_b2[0].view,_b2_root_inputs=inputs)))
+            made=(detached,replace(with_b2[1],root=detached),with_b2[2])
+            constructor,prepared,_=self.prepared({name:made},W)
+            with self.subTest(name),self.forward_patch():
+                root=cw.build(constructor,prepared,engine,PARAMS,binding=self.binding,recipe=self.recipe).roots[0]
+                self.assertEqual((root['status'],root['root_view_source']),('REFUSED','b2'));self.assertTrue(root['reason'].startswith('ROOT_B2_INPUTS_UNUSABLE'),root['reason'])
+
+    def test_prepare_roots_and_build_complete_every_world_before_the_root_view(self):
+        W=8;calls=[];constructed=[w for w in range(W)if w!=2]
+        def complete(world,owner):   # a stand-in completion: idempotent, visible in the fake encoder's token 0 feature 0
+            calls.append((world.index,owner));return replace(world,state=world.state._replace(value=j.asarray([.375],j.float32)))
+        roots={'r':self.made(0,1,self.modes(0,W),refused=(2,))}
+        with patch.object(cw,'world_completer',return_value=complete)as completer:
+            constructor,prepared,_=self.prepared(roots,W)
+            self.assertEqual(calls,[(w,1)for w in constructed]);completer.assert_called_once_with(constructor)   # constructed worlds only
+            made=prepared[0].made;self.assertIsNot(made,roots['r'][1]);self.assertIs(made.root,roots['r'][1].root)
+            self.assertEqual([None if w.state is None else float(w.state.value[0])for w in made.worlds],[.375,.375,None]+[.375]*5)
+            # build completes worlds it is handed as built (here: the uncompleted world set) before the root view and the pairs.
+            raw=cw.Prepared('r',roots['r'][0],roots['r'][1],T.ROOT_LEGAL,0.,cw.constructor_binding(constructor));calls.clear()
+            ex=wide_executor()
+            with self.forward_patch():b=cw.build(constructor,[raw],self.pricer(ex,depth=2,k_own=(2,),k_opp=(2,),capacity=2,block_lanes=16),PARAMS,
+                binding=self.binding,recipe=self.recipe)
+        self.assertEqual(sorted(calls),[(w,1)for w in constructed])   # constructed worlds only; the refused one keeps its named refusal
+        self.assertEqual(float(b.requests[0].root_inputs['numeric_features'][0,0,0,0]),.375)   # the root view reads the completed world 0
+        self.assertEqual([None if w.state is None else float(w.state.value[0])for pair in b.worlds.pairs for w in pair],[.375,.375,None]+[.375]*5)
+        # A completion that changes nothing keeps prepare()'s own world set object.
+        with patch.object(cw,'world_completer',return_value=lambda world,owner,**kw:world):
+            _,same,_=self.prepared({'r':roots['r']},W)
+        self.assertIs(same[0].made,roots['r'][1])
+
+    def test_an_unreadable_private_reveal_record_never_touches_a_root_with_the_flag_off(self):
+        """The fake engine's root carry is not the tracker carry, so a privately revealed ability cannot be read from it: with the
+        redaction off the root is prepared as ever (the record names the error); with it on the root is refused
+        PRIVATE_REVEALS_UNAVAILABLE; lines without a private reveal never read the carry or the tables."""
+        W=2;made=self.made(0,0,self.modes(0,W))
+        private=['|switch|p1a: Zapdos|Zapdos, L80|100/100','|-ability|p1a: Zapdos|Pressure|[silent]','|switch|p2a: Snorlax|Snorlax, L80|100/100','|turn|1']
+        constructor=self.constructor(W);seen=[]
+        complete=lambda world,owner,facts=None,root=None,**kw:seen.append(kw)or world
+        with patch.object(ProtocolConstructor,'prepare',side_effect=lambda r,i:made),patch.object(cw,'world_completer',return_value=complete):
+            off=cw.prepare_roots(constructor,[dict(request_id='p',lines=private),dict(request_id='q',lines=private[2:])])
+            on=cw.prepare_roots(constructor,[dict(request_id='p',lines=private),dict(request_id='q',lines=private[2:])],redact_private_reveals=True)
+        self.assertEqual([type(x)for x in off],[cw.Prepared,cw.Prepared])
+        record=off[0].private_reveals
+        self.assertEqual({k:record[k]for k in('enabled','found','applicable','redacted','unmatched')},
+            dict(enabled=False,found=[dict(species='zapdos',ability='pressure')],applicable=None,redacted=[],unmatched=None))
+        self.assertTrue(record['error'])
+        self.assertEqual(off[1].private_reveals,dict(enabled=False,found=[],applicable=[],redacted=[],unmatched=[]))
+        self.assertEqual((type(on[0]),on[0].kind),(cw.RootRefusal,cw.PRIVATE_REVEALS_UNAVAILABLE))
+        self.assertEqual((type(on[1]),on[1].private_reveals['enabled']),(cw.Prepared,True))
+        self.assertIn(dict(redact_private_reveals=True),seen)   # the flag reaches the completion of the root it can read
+
+    def test_view_b_reads_the_damage_facts_records_the_root_and_build_applies_it(self):
+        """peer_view_b (off by default): with it off nothing of view b is read or recorded (the lines' facts have no peer_damage,
+        Prepared.peer_view_b is None, the completion gets no view-b keyword, build's roots have no peer_view_b key); with it on the
+        facts carry peer_damage, the Prepared its peer_view_b_record of the root's own carry, the private-reveal redaction is implied
+        (its record reads enabled, the completion gets both keywords) and build re-applies the same completion and records it. A root
+        whose record cannot be read (a carry of another layout; a request without lines) is refused PEER_VIEW_B_UNAVAILABLE, never
+        priced without view b."""
+        W=2;made=self.made(0,0,self.modes(0,W))
+        lines=['|switch|p1a: Alpha|Alpha, L80|100/100','|switch|p2a: Alpha|Alpha, L80|100/100','|turn|1']   # the fake carry's actives, unhurt
+        constructor=self.constructor(W);seen=[]
+        complete=lambda world,owner,facts=None,root=None,**kw:seen.append(kw)or world
+        with patch.object(ProtocolConstructor,'prepare',side_effect=lambda r,i:made),patch.object(cw,'world_completer',return_value=complete):
+            off=cw.prepare_roots(constructor,[dict(request_id='p',lines=lines)])
+            with patch.object(cw,'peer_view_b_record',side_effect=cw.CarryLayoutError('mon_features: another layout')):
+                refused=cw.prepare_roots(constructor,[dict(request_id='p',lines=lines),dict(request_id='q')],peer_view_b=True)
+            on=cw.prepare_roots(constructor,[dict(request_id='p',lines=lines)],peer_view_b=True)
+            for bad in(1,None):
+                with self.assertRaisesRegex(ValueError,'peer_view_b'):cw.prepare_roots(constructor,[],peer_view_b=bad)
+        self.assertEqual((type(off[0]),off[0].peer_view_b,off[0].facts.peer_damage,off[0].private_reveals['enabled']),(cw.Prepared,None,None,False))
+        self.assertEqual(seen[0],{})   # the off completion: no keyword at all, as before the flag
+        self.assertEqual([(type(x),getattr(x,'kind',None))for x in refused],[(cw.RootRefusal,cw.PEER_VIEW_B_UNAVAILABLE)]*2)
+        self.assertTrue(refused[0].detail.startswith('CarryLayoutError'));self.assertIn('without lines',refused[1].detail)
+        # the record's own checks (the Opus review): another member at the carry's active slot, or B2's value not the exact rule's
+        for odd,why in((['|switch|p1a: Beta|Beta, L80|100/100','|switch|p2a: Alpha|Alpha, L80|100/100','|turn|1'],'is not the lines'),
+                (lines[:2]+['|move|p2a: Alpha|Tackle|p1a: Alpha','|-damage|p1a: Alpha|90/100','|turn|1'],'the exact rule disagrees')):
+            with patch.object(ProtocolConstructor,'prepare',side_effect=lambda r,i:made),patch.object(cw,'world_completer',return_value=complete):
+                bad,=cw.prepare_roots(constructor,[dict(request_id='p',lines=odd)],peer_view_b=True)
+            self.assertEqual((type(bad),bad.kind),(cw.RootRefusal,cw.PEER_VIEW_B_UNAVAILABLE));self.assertIn(why,bad.detail)
+        item=on[0];self.assertIs(type(item),cw.Prepared)
+        self.assertEqual(item.facts.peer_damage,cw.peer_damage_facts(lines,0))
+        self.assertEqual(item.peer_view_b,cw.peer_view_b_record(made[0].public,0,item.facts,constructor.metadata['vocabulary']['species']))   # the root's own carry
+        self.assertEqual([(c['carry_species'],c['species_agrees'])for c in item.peer_view_b['cells']],[('alpha',True)]*2)
+        self.assertIs(item.peer_view_b['enabled'],True)
+        self.assertIs(item.private_reveals['enabled'],True)   # view b implies the redaction
+        self.assertEqual(seen[-1],dict(redact_private_reveals=True,peer_view_b=True))
+        pricer=self.pricer(carry_executor(),depth=2,k_own=(2,),k_opp=(2,),capacity=2);seen.clear()
+        with patch.object(cw,'world_completer',return_value=complete),self.forward_patch():   # build applies each Prepared's own completion
+            b=cw.build(constructor,[item,off[0]],pricer,PARAMS,binding=self.binding,recipe=self.recipe)
+        self.assertEqual(seen,[dict(redact_private_reveals=True,peer_view_b=True)]*W+[{}]*W)
+        self.assertEqual((b.roots[0]['peer_view_b'],'peer_view_b'in b.roots[1]),(item.peer_view_b,False))
+
+    def test_prepare_roots_reads_the_requests_lines_and_an_unjoinable_peer_order_refuses_the_root(self):
+        W=2;roots={'ok':self.made(0,0,self.modes(0,W)),'odd':self.made(1,0,self.modes(1,W))}
+        lines={'ok':['|switch|p2a: Snorlax|Snorlax, L80|100/100','|turn|1'],'odd':['|switch|p2a: Nobody|Nobody, L80|100/100']}
+        roots_seen=[]
+        def complete(world,owner,facts=None,root=None):   # a stand-in completion that cannot join 'nobody'
+            roots_seen.append(root)
+            if facts.peer_switches==('nobody',):raise cw.PeerOrderUnavailable('nobody: 0 members of the peer\'s party match a public switch-in')
+            return world
+        constructor=self.constructor(W)
+        with patch.object(ProtocolConstructor,'prepare',side_effect=lambda r,i:roots[r['request_id']]),patch.object(cw,'world_completer',return_value=complete):
+            out=cw.prepare_roots(constructor,[dict(request_id=k,lines=lines[k])for k in roots])
+        self.assertIs(type(out[0]),cw.Prepared);self.assertEqual(out[0].facts,cw.LineFacts(('snorlax',),()))
+        self.assertTrue(roots_seen and all(r is roots['ok'][0].public or r is roots['odd'][0].public for r in roots_seen))   # the root's own carry
+        self.assertIs(type(out[1]),cw.RootRefusal);self.assertEqual((out[1].kind,out[1].detail[:7]),('PEER_REQUEST_ORDER_UNAVAILABLE','nobody:'))
+        def refuse(world,owner,facts=None,root=None):   # refuses only what it is handed the root's facts for
+            if facts is None:return world
+            raise cw.PeerOrderUnavailable('the last public switch-in is not the world\'s peer active')
+        pricer=self.pricer(carry_executor(),depth=2,k_own=(2,),k_opp=(2,),capacity=2)
+        with patch.object(cw,'world_completer',return_value=refuse),self.forward_patch():   # build applies the root's own facts again
+            b=cw.build(constructor,out,pricer,PARAMS,binding=self.binding,recipe=self.recipe)
+            unread=cw.build(constructor,[replace(out[0],facts=None)],pricer,PARAMS,binding=self.binding,recipe=self.recipe)
+        self.assertEqual([r['status']for r in b.roots],['REFUSED','REFUSED'])
+        # build's own refusal and prepare_roots' RootRefusal carry the same reason format, so the live search counts both constructor_refused.
+        self.assertEqual(b.roots[0]['reason'],'constructor-root:PEER_REQUEST_ORDER_UNAVAILABLE:the last public switch-in is not the world\'s peer active')
+        self.assertEqual(b.roots[1]['reason'][:55],'constructor-root:PEER_REQUEST_ORDER_UNAVAILABLE:nobody:')
+        from gpu_engine.depthn_live_search import refusal_cause
+        self.assertEqual({refusal_cause(r['reason'])for r in b.roots},{'constructor_refused'})
+        self.assertEqual(unread.roots[0]['status'],'PRICED')   # the same root without facts: nothing to refuse
+
+    def test_a_root_whose_opponent_must_recharge_is_refused_before_completion_or_pricing(self):
+        """The lead's decision: the engine has no recharge turn, so a root whose opponent (the peer) must recharge is refused,
+        OPPONENT_RECHARGE_UNREPRESENTED, in prepare_roots (before the completion runs) and in build (a Prepared made elsewhere);
+        both reasons count constructor_refused. The owner's own recharge does not refuse the root."""
+        from gpu_engine.depthn_live_search import refusal_cause
+        W=2;roots={k:self.made(i,owner,self.modes(i,W))for i,(k,owner)in enumerate((('peer',0),('own',0),('spent',0),('peer1',1)))}
+        beam=lambda seat:[f'|move|{seat}a: Snorlax|Hyper Beam|{"p2"if seat=="p1"else"p1"}a: Snorlax',f'|-mustrecharge|{seat}a: Snorlax','|turn|2']
+        lines={'peer':beam('p2'),'own':beam('p1'),'spent':beam('p2')+['|cant|p2a: Snorlax|recharge','|turn|3'],'peer1':beam('p1')}
+        calls=[]
+        def complete(world,owner,facts=None,root=None):calls.append((owner,facts.recharge));return world
+        constructor=self.constructor(W)
+        with patch.object(ProtocolConstructor,'prepare',side_effect=lambda r,i:roots[r['request_id']]),patch.object(cw,'world_completer',return_value=complete):
+            out=cw.prepare_roots(constructor,[dict(request_id=k,lines=lines[k])for k in roots])
+        self.assertEqual([type(x).__name__ for x in out],['RootRefusal','Prepared','Prepared','RootRefusal'])
+        for x in(out[0],out[3]):
+            self.assertEqual((x.kind,x.request_id),('OPPONENT_RECHARGE_UNREPRESENTED',x.request_id));self.assertIn('recharge',x.detail)
+        self.assertEqual((out[1].facts.recharge,out[2].facts.recharge),((True,False),(False,False)))   # own recharge; the opponent's, spent
+        self.assertEqual(calls,[(0,(True,False))]*W+[(0,(False,False))]*W)   # the refused roots never reach the completion
+        refused=lambda x:replace(x,facts=replace(x.facts,recharge=(False,True)))   # a Prepared whose facts say the peer must recharge
+        pricer=self.pricer(carry_executor(),depth=2,k_own=(2,),k_opp=(2,),capacity=2)
+        with patch.object(cw,'world_completer',return_value=complete),self.forward_patch():
+            calls.clear();b=cw.build(constructor,[out[0],refused(out[1]),out[1],out[3]],pricer,PARAMS,binding=self.binding,recipe=self.recipe)
+        self.assertEqual([r['status']for r in b.roots],['REFUSED','REFUSED','PRICED','REFUSED']);self.assertEqual(calls,[(0,(True,False))]*W)
+        self.assertEqual({r['reason']for r in b.roots if r['status']=='REFUSED'},
+            {'constructor-root:OPPONENT_RECHARGE_UNREPRESENTED:'+cw.OPPONENT_RECHARGE_DETAIL})
+        self.assertEqual({refusal_cause(r['reason'])for r in b.roots if r['status']=='REFUSED'},{'constructor_refused'})
 
     def test_a_reduction_error_refuses_its_root_only(self):
         """reduce_completed_q's range check raises when a block's completed-Q rounds outside [-1, 1]: here action 0 wins against

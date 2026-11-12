@@ -191,7 +191,7 @@ def parser():
     p=argparse.ArgumentParser(description=__doc__.split('\n')[0])
     for name in('showdown-root','node-binary','metadata','expected-metadata-sha256','vocabulary','expected-vocabulary-sha256'):p.add_argument('--'+name,required=True)
     evaluators.add_arguments(p)
-    p.add_argument('--rung',choices=tuple(live.RUNGS),default='DN2W8',help='DN2W8 (W=8) or DN2W16 (W=16)')
+    p.add_argument('--rung',choices=tuple(live.RUNGS),default='DN2W8',help='DN2W8 (W=8) or DN2W16 (W=16); DN2W32 / DN2W64 for offline replays')
     p.add_argument('--host',default='127.0.0.1');p.add_argument('--port',type=int,required=True)
     p.add_argument('--buckets',type=buckets_arg,default=(1,2,4),help='capacity buckets, in roots per price call (default 1,2,4)')
     p.add_argument('--max-requests',type=int,help='requests per batch (default the largest bucket; set from gap 4B)')
@@ -203,6 +203,11 @@ def parser():
     p.add_argument('--seed',type=int,default=20261103,help='constructor world seed (Codex\'s default)')
     p.add_argument('--recipe-seed',type=int,default=20261103,help='the pricer\'s lane-order recipe seed')
     p.add_argument('--saved-root-admission',action='store_true',help='Codex\'s stateless mode: every prefix folded from scratch, no sessions')
+    p.add_argument('--redact-private-reveals',action='store_true',help='clear the owner\'s abilities revealed only on Showdown\'s side-private '
+        'Gen 3 Pressure line from the peer\'s view of the owner side (constructor_worlds.redact_private_reveals; off by default)')
+    p.add_argument('--peer-view-b',action='store_true',help='view b in the peer\'s view (constructor_worlds\' Peer view b; off by default): it '
+        'implies --redact-private-reveals and projects the root\'s two peer damage cells to Showdown\'s public percent; the run header '
+        'records peer_view_b (and redact_private_reveals true), each built response its peer_view_b record')
     p.add_argument('--block-lanes',type=int,default=2187);p.add_argument('--blocks-per-call',type=int,default=16)
     p.add_argument('--warmup-requests',required=True,help='JSONL of saved Showdown requests, one object per line with the eight address keys of '
         'Codex\'s ladder request (battle_id, owner, stream_id, decision_index, generation, prefix_sha256, lines, own_request_line)')
@@ -210,15 +215,47 @@ def parser():
     p.add_argument('--server-id',help='this process\'s name in READY and every response (default HOSTNAME:PORT)')
     p.add_argument('--tree-commit',help='the code commit served (default: this checkout\'s HEAD, +dirty when tracked files differ)')
     p.add_argument('--compilation-cache',help='absolute directory for JAX\'s persistent compilation cache')
+    p.add_argument('--reply-archive',help='br_fp: a reply model (a champion_evaluator .npz export, e.g. pi_FP-red2) whose logits on each '
+        'world\'s peer view replace root_peer_logits before averaging; default off (the champion\'s own averaging)')
+    p.add_argument('--reply-archive-sha256',help='sha256 of --reply-archive\'s bytes (required with it)')
+    p.add_argument('--root-operator',choices=live.ROOT_OPERATORS,default=live.ROOT_OPERATOR,help='the live root operator: '
+        'ARGMAX_MEAN_COMPLETED_Q (default: averaging plays, or br_fp under --reply-archive) or NOISE_GATED_K2 (that choice only past '
+        'a 2-standard-error per-world gap over the root logits\' argmax; screen-r4a variant B with --reply-archive)')
+    p.add_argument('--reply-checkpoint-sha256',help='the reply export\'s checkpoint sha256 (required with --reply-archive)')
+    p.add_argument('--reply-views',choices=('eager','jit','check'),default='eager',help='how --reply-archive builds the peer inputs: eager '
+        '(default; bit-exact with the RR re-pricer), jit (one vmapped program per root), or check (eager plays; jit reported beside)')
     p.add_argument('--matmul-precision',choices=('highest','high','default'),default='highest',
         help='the pinned JAX default matmul precision (default highest, the gates\' certified precision); the server refuses to start '
         'unless JAX_DEFAULT_MATMUL_PRECISION and JAX\'s own setting both name it')
     return p
 
 
+def check_reply_arguments(p,args):
+    """--reply-archive and its two sha256 flags go together, as 64-hex sha256s (the server's and the re-pricer's options)."""
+    reply=[getattr(args,k,None)for k in('reply_archive','reply_archive_sha256','reply_checkpoint_sha256')]
+    if any(reply)and not all(reply):p.error('--reply-archive, --reply-archive-sha256 and --reply-checkpoint-sha256 go together')
+    if not any(reply)and getattr(args,'reply_views','eager')!='eager':p.error('--reply-views goes with --reply-archive')
+    if all(reply)and not all(type(x)is str and len(x)==64 and all(c in'0123456789abcdef'for c in x)for x in reply[1:]):
+        p.error('--reply-archive-sha256 and --reply-checkpoint-sha256 must be 64-hex sha256s')
+
+
+def reply_view(meta):
+    """The peer view a reply archive was trained on: its export metadata's extra.view (fp_reply_train --view), 'env' when absent."""
+    return ((meta or {}).get('extra') or {}).get('view') or 'env'
+
+
+def check_reply_view(meta,args):
+    """A reply model trained on the builder's seat view b (view 'b': Foul Play's view without the [silent]-only reveals and with
+    the damage columns at public precision) is served only with --peer-view-b on, so its inputs are the view it learned; ValueError
+    otherwise (the server's and the re-pricer's loading). One-way: an env-view archive is still served with --peer-view-b."""
+    if reply_view(meta)=='b'and not getattr(args,'peer_view_b',False):
+        raise ValueError('the reply archive was trained on peer view b: serve it with --peer-view-b')
+
+
 def options(argv=None):
     p=parser();args=p.parse_args(argv);evaluators.check_arguments(p,args);check_precision_environment(p,args)
     if not args.champion_archive:p.error('--champion-archive with its two sha256 flags is required: the champion prices every root and leaf')
+    check_reply_arguments(p,args)
     if args.max_requests is None:args.max_requests=args.buckets[-1]
     if not 1<=args.max_requests<=args.buckets[-1]:p.error('--max-requests must be in 1..the largest bucket')
     try:   # Codex's own queue/batch checks (phase_d_search_server.Server._initialize), before anything loads or compiles
@@ -261,20 +298,36 @@ def build(args):
     executor=cw.live_executor(metadata,catalog)   # the constructor's own engine metadata and catalog (the depth-N gate's CONSTRUCTOR_ROOTS uses the same)
     params=(evaluator.params,)
     pricers=live.make_pricers(executor,evaluator,params,worlds=W,buckets=args.buckets,block_lanes=args.block_lanes,blocks_per_call=args.blocks_per_call)
+    reply=None
+    if getattr(args,'reply_archive',None):   # br_fp: the reply model at the champion's precision, on the same executor's views
+        from gpu_engine.depthn_reply_prior import ReplyPrior
+        model=evaluators.load(args.reply_archive,expected_archive_sha256=args.reply_archive_sha256,
+            expected_checkpoint_sha256=args.reply_checkpoint_sha256,precision=evaluators.PRECISIONS[args.champion_precision])
+        check_reply_view(getattr(model,'meta',None),args)
+        reply=ReplyPrior(executor,model,mode=args.reply_views,identity=dict(archive_sha256=args.reply_archive_sha256,
+            checkpoint_sha256=args.reply_checkpoint_sha256,view=reply_view(getattr(model,'meta',None))))
     return live.DepthNLiveSearch(constructor=constructor,pricers=pricers,params=params,binding=cw.binding(source,metadata,catalog),
         recipe=v5_gumbel.Recipe(args.recipe_seed),tree_commit=args.tree_commit or tree_commit(),min_price_seconds=args.min_price_seconds,
-        max_requests=args.max_requests,session_cap=args.session_cap,refuse_classes=args.refuse_classes)
+        max_requests=args.max_requests,session_cap=args.session_cap,refuse_classes=args.refuse_classes,
+        redact_private_reveals=bool(getattr(args,'redact_private_reveals',False)),reply=reply,
+        root_operator=getattr(args,'root_operator',live.ROOT_OPERATOR),
+        **({'peer_view_b':True}if getattr(args,'peer_view_b',False)else{}))
 
 
 def header(args,search):
     """The run's identity for READY and the telemetry: code, champion, pricer, constructor and server settings."""
     import jax
     return dict(tree_commit=search.tree_commit,rung=search.rung,max_requests=search.max_requests,min_price_seconds=search.min_price_seconds,
-        session_cap=search.session_cap,refuse_classes=list(search.refuse_classes),batch_wait_seconds=args.batch_wait_seconds,queue_limit=args.queue_limit,constructor_seed=args.seed,
+        session_cap=search.session_cap,refuse_classes=list(search.refuse_classes),
+        redact_private_reveals=bool(getattr(search,'redact_private_reveals',False)),**({'peer_view_b':True}if getattr(search,'peer_view_b',False)is True else{}),
+        batch_wait_seconds=args.batch_wait_seconds,queue_limit=args.queue_limit,constructor_seed=args.seed,
         recipe_seed=args.recipe_seed,saved_root_admission=args.saved_root_admission,metadata_sha256=args.expected_metadata_sha256,
         vocabulary_sha256=args.expected_vocabulary_sha256,champion_archive_sha256=args.champion_archive_sha256,
         champion_checkpoint_sha256=args.champion_checkpoint_sha256,champion_precision=args.champion_precision,pricer=search.pricer_identity,
-        jax_enable_x64=bool(jax.config.jax_enable_x64),matmul_precision=matmul_precision(),matmul_precision_pin=args.matmul_precision)
+        **({}if not getattr(args,'reply_archive',None)else dict(root_operator='br_fp',reply_archive_sha256=args.reply_archive_sha256,
+            reply_checkpoint_sha256=args.reply_checkpoint_sha256,reply_views=args.reply_views,reply_archive_view=reply_view(getattr(getattr(getattr(search,'reply',None),'evaluator',None),'meta',None)))),
+        jax_enable_x64=bool(jax.config.jax_enable_x64),matmul_precision=matmul_precision(),matmul_precision_pin=args.matmul_precision,
+        **({}if getattr(args,'root_operator',live.ROOT_OPERATOR)==live.ROOT_OPERATOR else dict(live_root_operator=args.root_operator)))
 
 
 def main(argv=None):

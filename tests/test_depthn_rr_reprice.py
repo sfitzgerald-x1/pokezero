@@ -12,6 +12,7 @@ import subprocess
 import tempfile
 from types import SimpleNamespace
 import unittest
+from typing import NamedTuple
 from unittest.mock import patch
 
 import jax.numpy as jnp
@@ -28,7 +29,8 @@ from pokezero.phase_d_search_server import SCHEMA
 
 ORIGINAL_DECIDE, ORIGINAL_PREPARE = live.decide, cw.prepare_roots
 VOCABULARY = dict(species=['', 'Pikachu', 'Mr. Mime', 'Snorlax', "Farfetch’d", 'Ho-Oh', 'Gengar'],
-    moves=['', 'Thunderbolt', 'Hidden Power Fire', 'hiddenpowerwater70', 'Body Slam', 'Solar Beam'])
+    moves=['', 'Thunderbolt', 'Hidden Power Fire', 'hiddenpowerwater70', 'Body Slam', 'Solar Beam', 'Hidden Power', 'Return 102'],
+    abilities=['', 'Static', 'Pressure', 'Thick Fat', 'Trace'], items=['', 'Leftovers', 'Choice Band'], types=['', 'Fire', 'Water', 'Ice'])
 LEGAL = (True, True, False, True, True, True, False, False, False)   # the root's own legal lanes
 LOGITS = (.5, -.2, 0., 1.1, -.7, .3, 0., 0., 0.)
 KEPT = (True, False, True, False, True, False, False, True, False)   # the opponent's lanes turn 1 enumerates
@@ -77,18 +79,22 @@ def fake_build(constructor, prepared, pricer, params, *, binding, recipe, only_c
         if type(item) is cw.RootRefusal:
             roots.append(dict(request_id=item.request_id, status='REFUSED', reason='constructor-root:' + item.kind));continue
         rows = tuple(range(len(requests), len(requests) + 8));requests += rows
-        roots.append(dict(request_id=item.request_id, status='PRICED', reason=None, rows=rows, root_logits=LOGITS, root_legal=item.legal))
+        roots.append(dict(request_id=item.request_id, status='PRICED', reason=None, rows=rows, root_logits=LOGITS, root_legal=item.legal,
+            root_view_source='b2', b2_view=dict(equal=True, keys=dict(numeric_features=True), numeric_max_abs_diff=0.)))
     return SimpleNamespace(requests=tuple(requests), roots=tuple(roots))
 
 
 def pricing(stack, *, still_clock=False):
-    """Fake pricing under the real _search: build, price and the backups (each row r is the block of worlds 2r, 2r+1)."""
+    """Fake pricing under the real _search: build, price and the backups (each row r is the block of worlds 2r, 2r+1). The fake
+    worlds' carries are not the device tracker carry: the real prepare_roots keeps them as built (no carry completion)."""
     stack.enter_context(patch.object(cw, 'constructor_binding', return_value='binding'))
+    stack.enter_context(patch.object(cw, 'world_completer', return_value=lambda world, owner, **kw: world))
     stack.enter_context(patch.object(live, 'classify', return_value=([], 'protocol_facts')))
     stack.enter_context(patch.object(cw, 'build', side_effect=fake_build))
     stack.enter_context(patch.object(cw, 'price', return_value=(SimpleNamespace(), None)))
     stack.enter_context(patch.object(backups, 'refusal_summary', return_value=dict(roots=[dict(cause=None)] * 64)))
     stack.enter_context(patch.object(backups, 'backup', side_effect=lambda frame, r, rule: (prices(2 * r), prices(2 * r + 1))))
+    stack.enter_context(patch.object(backups, 'backup_depth1', side_effect=lambda frame, r: (prices(2 * r), prices(2 * r + 1))))
     if still_clock:   # every stage timing 0, so whole responses compare
         for module in (live, cw):stack.enter_context(patch.object(module, 'time', SimpleNamespace(perf_counter=lambda: 0.)))
 
@@ -96,7 +102,8 @@ def pricing(stack, *, still_clock=False):
 def fake_search(constructor):
     """The real DepthNLiveSearch, its attributes set directly (no pricer or champion), warmed (a carry reference)."""
     s = object.__new__(live.DepthNLiveSearch)
-    s.W, s.K, s.rung, s.buckets, s.pricers, s.params = 16, 8, 'DN2W16', (1,), {1: SimpleNamespace(executor='executor')}, ('params',)
+    s.W, s.K, s.rung, s.buckets, s.params = 16, 8, 'DN2W16', (1,), (jnp.float32(1.),)
+    s.pricers = {1: SimpleNamespace(executor=PeerExecutor(), forward=FakeEvaluator())}   # the views' executor and the champion: fakes
     s.binding, s.recipe, s.tree_commit, s.min_price_seconds, s.max_requests, s.session_cap = 'binding', 'recipe', 'replay', 1., 1, 256
     s.archive_sha256, s.device, s.clock, s.battles, s.evicted, s.warm, s.refuse_classes = 'a' * 64, 'cpu', lambda: 0., OrderedDict(), 0, None, ()
     s.warming, s.pricer_identity, s.constructor = False, dict(engine='fake'), constructor
@@ -114,6 +121,45 @@ def fake_peer(state, public, owner):
     legal = list(KEPT)
     if int(np.asarray(public['w'])) == 5:legal[8] = True
     return dict(legal=legal, move_targets=[0, 1, 2, 3], switch_targets=[0, 1, 3, 4, 5], error=0, usable=[True, True, True, False])
+
+
+class Out(NamedTuple):
+    policy_logits: object
+    value: object
+    value_logits: object
+    valid: object
+
+
+class FakeEvaluator:
+    """A ChampionEvaluator stand-in, jittable: policy logits = the params x token 0's first nine numerics of the inputs it is
+    handed (exact for params 1); its view is ChampionEvaluator.view itself (the adapter's 23-token slice)."""
+    identity = ('champion', 'e' * 64, 'bfloat16')
+
+    def __call__(self, p, x):
+        logits = x['numeric_features'][:, 0, 0, :9] * p;n = logits.shape[0]
+        return Out(logits, jnp.zeros(n, jnp.float32), None, jnp.ones(n, bool))
+
+    def view(self, inputs):
+        from gpu_engine.champion_evaluator import ChampionEvaluator
+        return ChampionEvaluator.view(self, inputs)
+
+
+class PeerExecutor:
+    """The views' executor: the peer seat's (seat 1's) inputs carry world w's recorded root_peer_logits (prices(w), as f32) in
+    token 0's first nine numerics, the owner's seat 100 more (so the peer inputs are told apart); worlds in `off` are one f32
+    ulp off on lane 3."""
+    def __init__(self, off=()):
+        self.off = off
+
+    def legal(self, state):return jnp.asarray([[[True] * 9, list(KEPT)]])   # the peer seat's (seat 1's) mask is KEPT
+
+    def observe(self, state, public, seat, mask):
+        w, s = int(np.asarray(public['w'])) if 'w' in public else 0, int(np.asarray(seat)[0])
+        values = np.asarray(prices(w).opponent_logits, np.float32) + np.float32(100 if s == 0 else 0)
+        if w in self.off and s == 1:values[3] = np.nextafter(values[3], np.float32(9))
+        numeric = np.zeros((1, 1, 29, 132), np.float32);numeric[0, 0, 0, :9] = values
+        return SimpleNamespace(observation=SimpleNamespace(legal_action_mask=mask), inputs=dict(numeric_features=numeric, categorical_ids=np.zeros((1, 1, 29, 41), np.int32),
+            token_type_ids=np.zeros((1, 1, 29), np.int32), attention_mask=np.ones((1, 1, 29), bool), history_mask=np.ones((1, 1), bool)))
 
 
 def expected_decision():
@@ -150,10 +196,61 @@ class CaptureTests(unittest.TestCase):
         self.assertEqual(json.dumps(within, sort_keys=True), json.dumps(without, sort_keys=True))   # byte for byte, timings included
         self.assertEqual(without[0]['q_values'], expected_decision()['q_values'])
         self.assertEqual([len(c.decided) for c in captures], [1, 0, 1]);self.assertEqual([len(c.prepared) for c in captures], [1, 1, 1])
+        self.assertEqual([len(c.frames) for c in captures], [1, 0, 1])   # a refused root's batch has no request: cw.price is not called
+        self.assertEqual(captures[0].frames[0][1].roots[0]['rows'], tuple(range(8)))   # the batch: the root's frame rows
         got = captures[0].decided[0]
         self.assertEqual([w for pair in got.blocks for w in pair], [prices(w) for w in range(16)])   # block order: world 2k+j
         self.assertEqual((tuple(got.root_logits), tuple(got.root_legal)), (LOGITS, LEGAL))
         self.assertIs(type(captures[1].prepared[0][0]), cw.RootRefusal)
+
+    def test_describe_records_depth1_prices_and_reply_logits(self):
+        detached, made, legal = FakeConstructor().prepare(dict(decision_index=0), 0)
+        batch = SimpleNamespace(roots=(dict(status='PRICED', rows=tuple(range(8)), root_logits=LOGITS, root_legal=LEGAL),))
+        champion = R.Decided([(prices(2 * k), prices(2 * k + 1)) for k in range(8)], LOGITS, LEGAL)
+        def fp(w):
+            p, logits = prices(w), tuple(float(b) + w for b in range(9))
+            if w != 3:return v5_gumbel.WorldPrices(p.opponent_requested, p.opponent_legal, logits, p.joint_values)
+            waiting = [[row[0]] + [None] * 8 for row in p.joint_values]   # world 3: the opponent waits (no-action column 0 only)
+            return v5_gumbel.WorldPrices(False, (False,) * 9, logits, waiting)
+        replied = R.Decided([(fp(2 * k), fp(2 * k + 1)) for k in range(8)], LOGITS, LEGAL)
+        capture = SimpleNamespace(prepared=[(cw.Prepared('r', detached, made, legal, 0., 'binding'),)], decided=[champion, replied],
+                                  frames=[('frame', batch)])
+        with patch.object(backups, 'backup_depth1', side_effect=lambda frame, r: (prices(100 + 2 * r), None if r == 3 else prices(101 + 2 * r))), \
+                patch.object(backups, 'refusal_summary', return_value=dict(roots=[dict(cause=None)] * 7 + [dict(cause='turn2')])):
+            detail = R.describe(capture, fake_peer, VOCABULARY, None, (1, 0), reply=True)
+            plain = R.describe(capture, fake_peer, VOCABULARY, None, (1, 0))
+        self.assertEqual(detail['depth1'], dict(block_causes=[None] * 7 + ['turn2'], priced_worlds=15, refused_at_depth1=[False] * 8,
+                                                root_logits=list(LOGITS), root_legal=list(LEGAL)))   # depth 2 refused block 7; depth 1 kept it
+        self.assertEqual(detail['worlds'][0]['depth1'], R.prices_fields(prices(100)));self.assertFalse(detail['worlds'][7]['depth1']['priced'])
+        self.assertEqual(detail['worlds'][0]['grid'], R.prices_fields(prices(0))['grid'])   # the depth-2 grid is the champion's decide
+        self.assertEqual([w['reply_peer_logits'] for w in detail['worlds'][:2]], [[float(b) for b in range(9)], [float(b) + 1 for b in range(9)]])
+        self.assertIsNone(detail['worlds'][3]['reply_peer_logits'])   # a waiting opponent: the champion's column, no reply model logits
+        self.assertTrue(all('reply_peer_logits' not in w for w in plain['worlds']))   # without a reply archive
+        self.assertIsNone(R.describe(SimpleNamespace(prepared=capture.prepared, decided=[champion]), fake_peer, VOCABULARY)['depth1'])
+
+    def test_depth1_priced_errors_are_the_pricers_codes(self):
+        from gpu_engine import device_depth2_pricer as d2
+        self.assertEqual(backups.D3_PRICED_ERRORS, (d2.PEER_VIEW_ERROR, d2.PEER_PRIOR_REFUSED))
+
+    def test_depth1_world_reads_the_priced_turn1_cells(self):
+        status, value = np.zeros((2, 2, 9, 9), np.int8), np.zeros((2, 2, 9, 9), np.float32)
+        status[0, 0, 0, 2], value[0, 0, 0, 2] = 2, .25   # expanded: the learner's value head on the child
+        status[0, 0, 1, 2], value[0, 0, 1, 2] = 1, -1.   # terminal: exact
+        error = np.zeros((2, 2, 9, 9), np.int8)
+        status[0, 0, 3, 4], value[0, 0, 3, 4], error[0, 0, 3, 4] = 3, .9, 2    # a D3 error: not priced
+        status[0, 0, 5, 4], value[0, 0, 5, 4], error[0, 0, 5, 4] = 3, .4, 5    # PEER_VIEW_ERROR: D3 priced it, only depth 2 failed
+        status[0, 0, 6, 4], value[0, 0, 6, 4], error[0, 0, 6, 4] = 3, -.3, 6   # PEER_PRIOR_REFUSED: likewise
+        frame = SimpleNamespace(pre=np.array([[0, 1], [0, 0]]), root_peer_requested=np.array([[True, True], [False, False]]),
+            t1_status=status, t1_value=value, t1_error=error, root_peer_logits=np.tile(np.arange(9, dtype=np.float32), (2, 2, 1)))
+        w0, w1 = backups.backup_depth1(frame, 0)
+        self.assertIsNone(w1)   # pre != 0: no surface
+        self.assertEqual((w0.joint_values[0][2], w0.joint_values[1][2]), (.25, -1.))
+        self.assertIsNone(w0.joint_values[3][4]);self.assertIsNone(w0.joint_values[0][0])
+        self.assertEqual((w0.joint_values[5][4], w0.joint_values[6][4]), (np.float32(.4).item(), np.float32(-.3).item()))
+        self.assertEqual(w0.opponent_legal, tuple(r in (2, 4) for r in range(9)));self.assertTrue(w0.opponent_requested)
+        self.assertEqual(w0.opponent_logits, tuple(float(b) for b in range(9)))
+        u0, _ = backups.backup_depth1(frame, 1)
+        self.assertEqual((u0.opponent_requested, u0.opponent_legal), (False, (False,) * 9))
 
     def test_wrappers_restore_when_the_call_raises(self):
         capture = R.Capture()
@@ -182,6 +279,33 @@ class FactsTests(unittest.TestCase):
         self.assertEqual(R.opponent_facts(battle_state(active=2, charge=5), 0, VOCABULARY)['charge_move'], 'solarbeam')
         self.assertEqual(R.opponent_facts(STATE, 1, VOCABULARY)['side'], 'p1')
 
+    def test_opponent_party_sets_in_party_and_request_order(self):
+        """opponent.party[]: each member's set in party (slot) order, `order` its position in the peer's request order (the
+        completed carry's own_order[peer]); request_order lists the slots in that order."""
+        s = STATE;slot = lambda field, values: getattr(s, field).at[0, 1].set(jnp.asarray(values, jnp.int32))
+        s = s._replace(ability=slot('ability', [1, 2, 4, 0, 3, 3]), base_ability=slot('base_ability', [1, 2, 4, 0, 3, 2]),
+            item=slot('item', [1, 0, 2, 0, 1, 9]), moves=s.moves.at[0, 1, 4].set(jnp.asarray([4, 5, 0, 0])).at[0, 1, 5].set(jnp.asarray([6, 7, 6, 0])),
+            hidden_power_type=slot('hidden_power_type', [0, 0, 1, 0, 0, 3]), hidden_power_power=slot('hidden_power_power', [0, 0, 70, 0, 0, 70]))
+        order = np.tile(np.arange(6, dtype=np.int32), (1, 2, 1));order[0, 1] = [2, 0, 1, 3, 4, 5]   # the peer's active (slot 2) leads
+        facts = R.opponent_facts(s, 0, VOCABULARY, SimpleNamespace(own_order=order))
+        party = facts['party'];self.assertEqual(facts['request_order'], [2, 0, 1, 3, 4, 5])
+        self.assertEqual([m['order'] for m in party], [1, 2, 0, 3, 4, 5])
+        self.assertEqual([m['ability'] for m in party], ['static', 'pressure', 'trace', None, 'thickfat', 'thickfat'])
+        self.assertEqual(party[5]['base_ability'], 'pressure')   # the engine's original ability beside the current one
+        self.assertEqual([m['item'] for m in party], ['leftovers', None, 'choiceband', None, 'leftovers', None])   # 9: outside the table
+        # Hidden Power keeps its type, as the request spells it: the engine id's own typed name (power suffix kept), or a typeless
+        # engine entry typed from the world's hidden_power_type / hidden_power_power; the active's facts stay collapsed.
+        self.assertEqual((party[2]['moves'], party[4]['moves'], party[4]['move_engine_ids']),
+            (['thunderbolt', 'hiddenpowerfire', 'hiddenpowerwater70', None], ['bodyslam', 'solarbeam', None, None], [4, 5, 0, 0]))
+        self.assertEqual(party[5]['moves'], ['hiddenpowerice70', 'return', 'hiddenpowerice70', None])
+        self.assertEqual(facts['active_moves'], ['thunderbolt', 'hiddenpower', 'hiddenpower', None])
+        untyped = R.opponent_facts(s._replace(hidden_power_type=slot('hidden_power_type', [0] * 6)), 0, VOCABULARY)
+        self.assertEqual(untyped['party'][5]['moves'][0], 'hiddenpower')   # no type in the world either: the typeless id
+        self.assertEqual([(m['slot'], m['fainted'], m['hp'], m['max_hp']) for m in party][:2], [(0, False, 100, 100), (1, True, 0, 100)])
+        bare = R.opponent_facts(s, 0, VOCABULARY, dict(w=0))   # a carry without own_order: no request order
+        self.assertEqual((bare['request_order'], {m['order'] for m in bare['party']}), (None, {None}))
+        self.assertEqual(R.opponent_facts(s, 0, VOCABULARY, SimpleNamespace(own_order=order))['party'][0]['species'], 'pikachu')
+
     def test_peer_lanes_take_the_views_second_output(self):
         class Executor:   # the pricer's views call legal() then observe() per seat; each seat's observation is told apart
             def legal(self, state):return jnp.asarray([[[True] * 9, [True, False, True, False, True, True, False, False, False]]])
@@ -204,6 +328,63 @@ class FactsTests(unittest.TestCase):
         self.assertEqual(R.lane_labels(facts, dict(peer, usable=[False] * 4))[:2], ['move:struggle', 'move:hiddenpower'])
         charged = R.opponent_facts(battle_state(charge=5), 0, VOCABULARY)
         self.assertEqual(R.lane_labels(charged, dict(peer, legal=[True] + [False] * 8))[0], 'move:solarbeam')
+
+
+class OwnMovesTests(unittest.TestCase):
+    def test_decision_rows_carry_the_own_moves_and_recharge_lanes_of_a_decided_root(self):
+        """root.own_moves / root.own_recharge_lanes: the live actor's own_moves and recharge_lane on the request's own_request_line,
+        so a scorer can apply the actor's own-recharge guard to every operator; every row has a root (decided false when it never
+        reached decide), with opponent_recharge from the lines and the refusal cause."""
+        raw = json.loads(BT.own_request(False)[len('|request|'):])
+        raw['active'][0]['moves'] = [dict(id=m, move=m, pp=5, maxpp=5) for m in ('bodyslam', 'hyperbeam', 'earthquake')]
+        line = '|request|' + json.dumps(raw)
+        row = dict(battle_id='b', owner='p1', stream_id=1, decision_index=0, generation=1, prefix_sha256='0' * 64, turn=1, request_count=1)
+        request = dict(row, lines=['|turn|1', line], own_request_line=line)
+        response = dict(status='COMPLETE', action_index=1, q_values=[.1] * 9, cause=None, request_id='r')
+        detail = dict(root=dict(root_logits=list(LOGITS), root_legal=list(LEGAL)), prepared=None, worlds=[], notes=[], kept_disagreements=0)
+        found = dict(source='search', search_action_index=1, search_q_values=[.1] * 9, greedy_action_index=0)
+        out = R.decision_row(dict(ordinal=1), row, request, response, .1, found, detail, shard=0, capture_seconds=0.)
+        self.assertEqual((out['root']['own_moves'], out['root']['own_recharge_lanes']), (['bodyslam', 'hyperbeam', 'earthquake', None],
+            [False, True, False, False]))
+        self.assertEqual({k: out['root'][k] for k in ('decided', 'root_logits', 'opponent_recharge', 'refusal_cause')},
+            dict(decided=True, root_logits=list(LOGITS), opponent_recharge=False, refusal_cause=None))
+        with patch.object(R.actor, 'RECHARGE_MOVES', frozenset({'earthquake'})):   # the live guards' one set (depthn_effect_guard), read at call time
+            moved = R.decision_row(dict(ordinal=1), row, request, response, .1, found, detail, shard=0, capture_seconds=0.)
+        self.assertEqual(moved['root']['own_recharge_lanes'], [False, False, True, False])
+        self.assertEqual(detail['root'], dict(root_logits=list(LOGITS), root_legal=list(LEGAL)))   # the capture is not mutated
+        from pokezero.depthn_live_actor import recharge_guarded   # the scorer's guard on this row: the live search went INTO Hyper Beam
+        self.assertTrue(recharge_guarded(out['root']['own_moves'], found['search_action_index'], found['greedy_action_index']))
+        gate = dict(candidate=1, greedy=0, passed=True, mean_gap=.2, stderr=.05)   # a NOISE_GATED_K2 replay keeps its operator and gate
+        gated = R.decision_row(dict(ordinal=1), row, request, dict(response, root_operator='NOISE_GATED_K2', noise_gate=gate), .1, found, detail,
+                               shard=0, capture_seconds=0.)
+        self.assertEqual((gated['replay']['root_operator'], gated['replay']['noise_gate']), ('NOISE_GATED_K2', gate))
+        self.assertNotIn('noise_gate', out['replay']);self.assertNotIn('root_operator', out['replay'])   # the default's rows are unchanged
+        unread = R.decision_row(dict(ordinal=1), row, dict(request, own_request_line=None), response, .1, found, detail, shard=0, capture_seconds=0.)
+        self.assertEqual((unread['root']['own_moves'], unread['root']['own_recharge_lanes']), (None, None))
+        # The opponent's -mustrecharge on the lines; the replay refused the root in prepare_roots (a RootRefusal of that kind).
+        beam = dict(request, lines=['|turn|1', '|move|p2a: Snorlax|Hyper Beam|p1a: Snorlax', '|-mustrecharge|p2a: Snorlax', line])
+        refusal = dict(kind='RootRefusal', refusal_kind='OPPONENT_RECHARGE_UNREPRESENTED', refusal_detail='d', seconds=0.)
+        refused = R.decision_row(dict(ordinal=1), row, beam, dict(response, status='REFUSED', cause='constructor_refused'), .1, found,
+            dict(detail, root=None, prepared=refusal), shard=0, capture_seconds=0.)
+        self.assertEqual({k: refused['root'][k] for k in ('decided', 'root_logits', 'root_legal', 'opponent_recharge', 'refusal_cause')},
+            dict(decided=False, root_logits=None, root_legal=None, opponent_recharge=True, refusal_cause='OPPONENT_RECHARGE_UNREPRESENTED'))
+        self.assertEqual(refused['root']['own_recharge_lanes'], [False, True, False, False]);self.assertTrue(refused['capture_ok'])
+        other = R.decision_row(dict(ordinal=1), row, request, dict(response, status='REFUSED', cause='depthn_refused'), .1, found,
+            dict(detail, root=None), shard=0, capture_seconds=0.)
+        self.assertEqual((other['root']['refusal_cause'], other['root']['opponent_recharge'], other['peer_inputs_check']), ('depthn_refused', False, None))
+        # private_reveals: the response's own record (constructor_worlds.private_reveal_record), None when the response has none
+        record = dict(enabled=True, found=[dict(species='zapdos', ability='pressure')], applicable=[dict(species='zapdos', ability='pressure', slot=1)],
+            redacted=[dict(species='zapdos', ability='pressure', slot=1)], unmatched=[])
+        self.assertEqual(R.decision_row(dict(ordinal=1), row, request, dict(response, private_reveals=record), .1, found, detail, shard=0,
+            capture_seconds=0.)['private_reveals'], record)
+        self.assertIsNone(out['private_reveals'])
+        # peer_view_b: only a view-b replay's responses carry it (--peer-view-b); a row has the key exactly when its response has it
+        view_b = dict(enabled=True, cells=[], projected=2, changed=1, exact_agrees=True)
+        self.assertEqual(R.decision_row(dict(ordinal=1), row, request, dict(response, peer_view_b=view_b), .1, found, detail, shard=0,
+            capture_seconds=0.)['peer_view_b'], view_b)
+        self.assertIsNone(R.decision_row(dict(ordinal=1), row, request, dict(response, peer_view_b=None), .1, found, detail, shard=0,
+            capture_seconds=0.)['peer_view_b'])
+        self.assertNotIn('peer_view_b', out)
 
 
 class JoinTests(unittest.TestCase):
@@ -247,7 +428,7 @@ class JoinTests(unittest.TestCase):
         self.assertTrue(R.sent(dict(BT.address_request(0))))   # an unreadable request is sent, as the bench sends it
 
 
-def write_capture(path, singles, *, owner='p1', battle_id='battle-1001', stream_id=5):
+def write_capture(path, singles, *, owner='p1', battle_id='battle-1001', stream_id=5, ordinal=1001):
     """A valid owner capture (phase_d_owning_capture's chain) with one decision per entry of `singles` (one legal action or nine)."""
     blobs, state = [], dict(prior='0' * 64, lines=0, requests=0)
     prefix = hashlib.sha256()
@@ -255,7 +436,7 @@ def write_capture(path, singles, *, owner='p1', battle_id='battle-1001', stream_
     def emit(**fields):
         blob = owning.encoded(dict(schema=owning.SCHEMA, sequence=len(blobs), previous_sha256=state['prior'], **fields))
         blobs.append(blob);state['prior'] = hashlib.sha256(blob).hexdigest()
-    emit(event='BEGIN', cell=dict(ordinal=1001), declaration_sha256='d' * 64, namespace='ns', battle_id=battle_id, owner=owner, seed=7, stream_id=stream_id)
+    emit(event='BEGIN', cell=dict(ordinal=ordinal), declaration_sha256='d' * 64, namespace='ns', battle_id=battle_id, owner=owner, seed=7, stream_id=stream_id)
     for i, single in enumerate(singles):
         line = BT.own_request(single);delta = [f'|turn|{i + 1}', line]
         for x in delta:prefix.update(x.encode() + b'\n')
@@ -274,6 +455,42 @@ def write_run(root, cells):
         (root / 'results' / f'{ordinal}.json').write_text(json.dumps(dict(status=status, cell=dict(ordinal=ordinal, arm=arm, seed=seed, seat=seat,
             pair_ordinal=ordinal // 3))))
         (root / 'owning-wire' / f'{ordinal}.jsonl').write_text('')
+
+
+class Depth1CellsTests(unittest.TestCase):
+    def test_forced_switch_and_terminal_flags_per_cell(self):
+        R_, W, n = 2, 2, 9
+        status = np.zeros((R_, W, n, n), np.int8);peer_req = np.zeros((R_, W, n, n), bool);own_req = np.zeros((R_, W, n, n), bool)
+        peer_legal = np.zeros((R_, W, n, n, n), bool);own_legal = np.zeros((R_, W, n, n, n), bool)
+        status[1, 0, 0, 0] = 2;peer_req[1, 0, 0, 0] = True;peer_legal[1, 0, 0, 0, 4:6] = True      # the opponent must replace
+        status[1, 0, 0, 1] = 2;peer_req[1, 0, 0, 1] = True;peer_legal[1, 0, 0, 1, [0, 4]] = True    # a normal request: not forced
+        status[1, 0, 3, 2] = 2;own_req[1, 0, 3, 2] = True;own_legal[1, 0, 3, 2, 7] = True          # our seat must replace
+        status[1, 0, 3, 3] = 1                                                                       # the battle ended
+        peer_req[1, 0, 5, 5] = True;peer_legal[1, 0, 5, 5, 4] = True                                 # not enumerated (status 0)
+        frame = SimpleNamespace(t1_status=status, t1_peer_requested=peer_req, t1_peer_legal=peer_legal, t1_own_requested=own_req,
+                                t1_own_legal=own_legal)
+        self.assertEqual(R.depth1_cells(frame, 1, 0), dict(opp_forced=[[0, 0]], own_forced=[[3, 2]], terminal=[[3, 3]]))
+        self.assertEqual(R.depth1_cells(frame, 0, 0), dict(opp_forced=[], own_forced=[], terminal=[]))
+
+    def test_describe_attaches_each_worlds_cells_by_frame_row_and_isolates_failures(self):
+        detached, made, legal = FakeConstructor().prepare(dict(decision_index=0), 0)
+        rows = tuple(range(10, 18))   # frame rows that are not the block indices
+        batch = SimpleNamespace(roots=(dict(status='PRICED', rows=rows, root_logits=LOGITS, root_legal=LEGAL),))
+        champion = R.Decided([(prices(2 * k), prices(2 * k + 1)) for k in range(8)], LOGITS, LEGAL)
+        capture = SimpleNamespace(prepared=[(cw.Prepared('r', detached, made, legal, 0., 'binding'),)], decided=[champion], frames=[('frame', batch)])
+        def cells(frame, root, world):
+            if (root, world) == (12, 1):raise ValueError('boom')
+            return dict(opp_forced=[[root, world]], own_forced=[], terminal=[])
+        with patch.object(backups, 'backup_depth1', side_effect=lambda frame, r: (prices(100 + 2 * r), None if r == 13 else prices(101 + 2 * r))), \
+                patch.object(backups, 'refusal_summary', return_value=dict(roots=[dict(cause=None)] * 18)), patch.object(R, 'depth1_cells', side_effect=cells):
+            detail = R.describe(capture, fake_peer, VOCABULARY, None, (1, 0), cells=True)
+            plain = R.describe(capture, fake_peer, VOCABULARY, None, (1, 0))
+        got = {i: w['depth1'].get('cells') for i, w in enumerate(detail['worlds'])}
+        self.assertEqual(got[0]['opp_forced'], [[10, 0]]);self.assertEqual(got[3]['opp_forced'], [[11, 1]]);self.assertEqual(got[14]['opp_forced'], [[17, 0]])
+        self.assertIsNone(got[5]);self.assertTrue(detail['worlds'][5]['depth1']['priced'])   # world 5 = (row 12, world 1): its cells failed alone
+        self.assertIsNone(got[7]);self.assertFalse(detail['worlds'][7]['depth1']['priced'])  # an unpriced world has no cells
+        self.assertTrue(any('depth 1 cells, world 5' in n for n in detail['notes']))
+        self.assertTrue(all('cells' not in w['depth1'] for w in plain['worlds']))   # without the flag
 
 
 class CellTests(unittest.TestCase):
@@ -310,6 +527,46 @@ class CellTests(unittest.TestCase):
             with self.assertRaises(ValueError):R.select_cells(self.args(root, cells=[5]))   # no capture
             with self.assertRaises(OSError):R.select_cells(self.args(root, cells=[1]))   # no result
 
+    def test_targets_name_cells_of_any_arm_and_only_their_decisions(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self.run_directory(tmp)
+            write_capture(root / 'owning-wire' / '500.jsonl', [False, False, True], ordinal=500)   # a self root: no results/ file
+            path = Path(tmp) / 'targets.jsonl'
+            write = lambda rows: path.write_text(''.join(json.dumps(r) + '\n' for r in rows))
+            write([dict(ordinal=3, decision_index=4), dict(ordinal=500, decision_index=1), dict(ordinal=3, decision_index=2, kind='foulplay'),
+                   dict(ordinal=500, decision_index=0, kind='self', seed=7, ours='p1')])
+            cells = R.select_cells(self.args(root, targets=str(path)))
+            self.assertEqual([(c['ordinal'], c['targets']) for c in cells], [(3, [2, 4]), (500, [0, 1])])
+            self.assertEqual(cells[0]['arm'], 'RAW')   # any arm: the RAW cell's result is read, never checked against --arm
+            self.assertEqual((cells[1]['arm'], cells[1]['seed'], cells[1]['seat'], cells[1]['target_kind']), (None, 7, 0, 'self'))   # the capture's registration
+            self.assertEqual([c['ordinal'] for c in R.select_cells(self.args(root, targets=str(path), shard=1, shards=2))], [500])
+            self.assertTrue(R.is_target(cells[0], 4));self.assertFalse(R.is_target(cells[0], 3));self.assertTrue(R.is_target(dict(ordinal=3), 3))
+            write([dict(ordinal=3, decision_index=4), dict(ordinal=3, decision_index=4)])
+            with self.assertRaisesRegex(ValueError, 'repeated'):R.select_cells(self.args(root, targets=str(path)))
+            write([dict(ordinal=5, decision_index=0)])
+            with self.assertRaisesRegex(ValueError, 'no owner capture'):R.select_cells(self.args(root, targets=str(path)))
+            write([dict(ordinal=3, decision_index=-1)])
+            with self.assertRaises(ValueError):R.select_cells(self.args(root, targets=str(path)))
+            write([])
+            with self.assertRaisesRegex(ValueError, 'no targets'):R.select_cells(self.args(root, targets=str(path)))
+            write_capture(root / 'owning-wire' / '2.jsonl', [False])   # a results cell (seat 0) with its p1 capture
+            write([dict(ordinal=2, decision_index=0, ours='p2')])   # the capture's own owner decides, for a results cell too
+            with self.assertRaisesRegex(ValueError, 'its capture is'):R.select_cells(self.args(root, targets=str(path)))
+            for bad, message in ((dict(ours='p2'), 'its capture is'), (dict(seed=8), 'the targets name seed')):   # another seat's root, another battle
+                write([dict(ordinal=500, decision_index=0, **bad)])
+                with self.assertRaisesRegex(ValueError, message):R.select_cells(self.args(root, targets=str(path)))
+            write([dict(ordinal=500, decision_index=0, ours='p1'), dict(ordinal=500, decision_index=1, ours='p2')])
+            with self.assertRaisesRegex(ValueError, 'differs between rows'):R.select_cells(self.args(root, targets=str(path)))
+            write_capture(root / 'owning-wire' / '501.jsonl', [False], ordinal=1001)   # a capture registered as another cell
+            write([dict(ordinal=501, decision_index=0)])
+            with self.assertRaisesRegex(ValueError, 'registers cell'):R.select_cells(self.args(root, targets=str(path)))
+            path.write_text('[1, 2]\n')
+            with self.assertRaisesRegex(ValueError, 'object'):R.select_cells(self.args(root, targets=str(path)))
+
+    def test_targets_option_is_a_third_cell_source(self):
+        groups = [{a.dest for a in g._group_actions} for g in R.parser()._mutually_exclusive_groups]
+        self.assertIn({'cells', 'sample', 'targets'}, groups)   # exactly one of --cells, --sample, --targets
+
     def test_sample_rank_is_a_fixed_hash(self):
         self.assertEqual(R.sample_rank(1, 2), hashlib.sha256(json.dumps([R.SAMPLE_DOMAIN, 1, 2], separators=(',', ':')).encode()).hexdigest())
 
@@ -340,6 +597,47 @@ class GuardTests(unittest.TestCase):
         shallow = {('rev-parse', f'{R.LIVE_COMMIT}:{p}'): None for p in R.LIVE_TREES}   # a clone without the live commit: the pins alone
         self.assertFalse(R.tree_guard(run=self.runner(shallow))['live_commit_present'])
         with self.assertRaisesRegex(ValueError, 'git checkout'):R.tree_guard(run=self.runner({('rev-parse', 'HEAD'): None}))
+
+    def accept_runner(self, override=None, *, head='a' * 40, trees=None):
+        """git answers for --accept-tree: HEAD `head`, its trees `trees` (default: gpu_engine modified, the rest the live pins)."""
+        trees = dict(R.LIVE_TREES, gpu_engine='9' * 40) if trees is None else trees
+        answers = {('rev-parse', 'HEAD'): head, ('rev-parse', '--verify', f'{head}^{{commit}}'): head, ('rev-parse', '--verify', 'HEAD^{commit}'): head,
+            ('rev-parse', '--verify', 'b' * 40 + '^{commit}'): 'b' * 40, ('rev-parse', '--verify', 'nope^{commit}'): None,
+            ('status', '--porcelain', '--untracked-files=all', '--', *R.ACCEPT_PATHS): ''}
+        for path, tree in trees.items():answers[('rev-parse', f'{head}:{path}')] = answers[('rev-parse', f'HEAD:{path}')] = tree
+        for path, tree in R.LIVE_TREES.items():answers[('rev-parse', f'{R.LIVE_COMMIT}:{path}')] = tree
+        answers.update(override or {})
+
+        def run(root, *arguments):
+            value = answers[arguments]
+            if value is None:raise subprocess.CalledProcessError(128, 'git')
+            return value
+        return run
+
+    def test_accept_tree_replays_a_modified_clean_head_and_refuses_anything_else(self):
+        head = 'a' * 40;run = self.accept_runner()
+        with self.assertRaisesRegex(ValueError, 'HEAD:gpu_engine'):R.tree_guard(run=run)   # the default guard is unchanged: refused
+        for commit in (head, 'HEAD'):
+            got = R.tree_guard(accept_tree=commit, run=run)
+            self.assertEqual((got['head'], got['accepted_tree'], got['modified_tree'], got['note'], got['live_trees']), (head, head, True, R.MODIFIED_TREE, R.LIVE_TREES))
+            self.assertEqual((got['trees']['gpu_engine'], got['trees']['src'], got['differs_from_live']), ('9' * 40, R.LIVE_TREES['src'], ['gpu_engine']))
+        with self.assertRaisesRegex(ValueError, 'is not HEAD'):R.tree_guard(accept_tree='b' * 40, run=run)   # a commit, not HEAD
+        with self.assertRaisesRegex(ValueError, 'not a commit'):R.tree_guard(accept_tree='nope', run=run)
+        with self.assertRaisesRegex(ValueError, 'needs a commit'):R.tree_guard(accept_tree='  ', run=run)
+        status = ('status', '--porcelain', '--untracked-files=all', '--', *R.ACCEPT_PATHS)
+        for dirty in ('M gpu_engine/constructor_worlds.py', ' M scripts/depthn_rr_reprice.py', '?? scripts/extra.py'):   # tracked change, untracked .py
+            with self.subTest(dirty=dirty), self.assertRaisesRegex(ValueError, 'clean HEAD'):R.tree_guard(accept_tree=head, run=self.accept_runner({status: dirty}))
+        self.assertTrue(R.tree_guard(accept_tree=head, run=self.accept_runner({status: '?? scripts/notes.txt'})))   # no code
+        with self.assertRaisesRegex(ValueError, 'tree-commit'):R.tree_guard(tree_commit='c' * 40, accept_tree=head, run=run)
+        with self.assertRaisesRegex(ValueError, 'has no src'):R.tree_guard(accept_tree=head, run=self.accept_runner({('rev-parse', f'{head}:src'): None}))
+        default = R.tree_guard(run=self.runner())   # the live tree: no accept keys, the live pins
+        self.assertEqual(set(default), {'head', 'live_commit', 'live_commit_present', 'trees'})
+
+    def test_accept_tree_option(self):
+        args = R.parser().parse_args(BASE + CHAMPION + ['--run-directory', 'r', '--out', 'o', '--cells', '1001'])
+        self.assertIsNone(args.accept_tree)
+        args = R.parser().parse_args(BASE + CHAMPION + ['--run-directory', 'r', '--out', 'o', '--cells', '1001', '--accept-tree', 'abc'])
+        self.assertEqual(args.accept_tree, 'abc')
 
     @unittest.skipUnless(subprocess.run(['git', '-C', str(R.ROOT), 'rev-parse', R.LIVE_COMMIT], capture_output=True).returncode == 0,
         'needs a checkout holding the live commit')
@@ -376,10 +674,39 @@ class MainTests(unittest.TestCase):
                     BASE[:-2] + CHAMPION + run):   # no champion; no warmup file; no sample seed; both selections; the server's default rung
                 with self.subTest(argv=argv), redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):R.options(argv)
             self.assertEqual(R.options(BASE + CHAMPION + ['--run-directory', 'r', '--out', 'o', '--sample', '8', '--sample-seed', '3']).sample_seed, 3)
+            with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):R.options(BASE + CHAMPION + run + ['--reply-archive', 'p.npz'])   # needs its sha256 flags
+            reply = ['--reply-archive', 'p.npz', '--reply-archive-sha256', 'e' * 64, '--reply-checkpoint-sha256', 'f' * 64]   # a br_fp replay (the server's flags)
+            self.assertEqual(R.options(BASE + CHAMPION + run + reply).reply_archive, 'p.npz')
+            self.assertEqual((args.peer_view_b, R.options(BASE + CHAMPION + run + ['--peer-view-b']).peer_view_b), (False, True))   # the bench parser's
+            both = R.options(BASE + CHAMPION + run + reply + ['--peer-view-b'])   # br_fp on view b's worlds
+            self.assertEqual((both.reply_archive, both.peer_view_b), ('p.npz', True))
 
-    def replay(self, tmp, *extra, header=None):
+    def test_targets_send_only_their_decisions_and_account_for_the_rest(self):
+        def targets(tmp, indices):
+            path = Path(tmp) / 'targets.jsonl';path.write_text(''.join(json.dumps(dict(ordinal=1001, decision_index=i)) + '\n' for i in indices))
+            return str(path)
+        with tempfile.TemporaryDirectory() as tmp:
+            path = targets(tmp, (1, 3, 9))
+            code, rows, summary, header, constructor, *_ = self.replay(tmp, cells=('--targets', path))
+            digest = hashlib.sha256(Path(path).read_bytes()).hexdigest()
+        self.assertEqual((code, constructor.calls, [r['decision_index'] for r in rows]), (0, [3], [3]))   # only target 3 reaches prepare
+        self.assertEqual(summary['targets'], dict(file=path, requested=3, found=2, missing=[dict(ordinal=1001, decision_index=9)], not_reached=[],
+            single_legal=[dict(ordinal=1001, decision_index=1)], non_target_skipped=3))
+        self.assertEqual(header['targets']['sha256'], digest)
+        self.assertEqual((rows[0]['cell_arm'], rows[0]['target_kind'], rows[0]['live_problem']), ('DN2W16', None, None))
+        with tempfile.TemporaryDirectory() as tmp:   # two targets with a gap: the later one folds on from the earlier one's session
+            self.assertEqual(self.replay(tmp, cells=('--targets', targets(tmp, (0, 3))))[4].calls, [0, 3])
+        with tempfile.TemporaryDirectory() as tmp:   # another arm's cell: replayed, no live parity
+            rows = self.replay(tmp, cells=('--targets', targets(tmp, (0,))), arm='RAW')[1]
+        self.assertEqual((rows[0]['live'], rows[0]['cell_arm']), (None, 'RAW'));self.assertIn('is not the replayed arm', rows[0]['live_problem'])
+        with tempfile.TemporaryDirectory() as tmp:   # stopped by --max-decisions: the unreached target is reported as such
+            summary = self.replay(tmp, '--max-decisions', '1', cells=('--targets', targets(tmp, (0, 2))))[2]
+        self.assertEqual((summary['targets']['found'], summary['targets']['not_reached'], summary['targets']['missing']),
+                         (1, [dict(ordinal=1001, decision_index=2)], []))
+
+    def replay(self, tmp, *extra, header=None, guard=None, peer_off=(), cells=('--cells', '1001'), arm='DN2W16'):
         """main over a run directory with cell 1001: decisions 0-4, decision 1 single-legal, decision 4 refused by the constructor."""
-        root = Path(tmp) / 'run';write_run(root, [(1001, 'DN2W16', 7, 1, 'COMPLETE')])
+        root = Path(tmp) / 'run';write_run(root, [(1001, arm, 7, 1, 'COMPLETE')])
         roots = write_capture(root / 'owning-wire' / '1001.jsonl', [False, True, False, False, False])
         want = expected_decision();q = json.loads(json.dumps(want['q_values']))
         lane = next(a for a in range(9) if q[a] is not None);off = list(q);off[lane] = float(np.nextafter(q[lane], 2.))
@@ -394,15 +721,16 @@ class MainTests(unittest.TestCase):
         with (root / 'telemetry' / '1001.jsonl').open('w') as f:
             for r in live_rows:f.write(json.dumps(dict(r, prefix_sha256=roots[r['decision_index']]['prefix_sha256'], greedy=dict(action_index=0), turn=1,
                 played_action_index=0)) + '\n')
-        args = R.parser().parse_args(BASE + CHAMPION + ['--run-directory', str(root), '--out', str(Path(tmp) / 'out'), '--cells', '1001', *extra])
+        args = R.parser().parse_args(BASE + CHAMPION + ['--run-directory', str(root), '--out', str(Path(tmp) / 'out'), *cells, *extra])
         args.port, args.max_requests = 0, 1
         constructor = FakeConstructor(refuse={4});search_object = fake_search(constructor);warmed = []
+        search_object.pricers[1].executor.off = peer_off   # these worlds' peer inputs are one ulp off their recorded logits
         search_object.warmup = lambda requests: warmed.append(list(requests)) or dict(buckets={1: dict(cold_seconds=1.)}, programs=3)
         header = dict(R.LIVE_IDENTITY, rung='DN2W16', pricer=dict(buckets=[1], W=16), tree_commit='t') if header is None else header
         with ExitStack() as stack:
             pricing(stack)
             stack.enter_context(patch.object(R, 'options', return_value=args))
-            stack.enter_context(patch.object(R, 'tree_guard', return_value=dict(head='h')))
+            self.guard = stack.enter_context(patch.object(R, 'tree_guard', return_value=dict(head='h') if guard is None else guard))
             stack.enter_context(patch.object(R.server, 'read_requests', return_value=[dict(saved=1)]))
             stack.enter_context(patch.object(R.server, 'build', return_value=search_object))
             stack.enter_context(patch.object(R.server, 'header', return_value=header))
@@ -411,7 +739,18 @@ class MainTests(unittest.TestCase):
             with patch('sys.stdout', new_callable=io.StringIO) as stdout:code = R.main([])
         out = Path(tmp) / 'out'
         rows = [json.loads(x) for x in (out / 'rows-0.jsonl').read_text().splitlines()]
+        with np.load(out / 'peer-inputs-0.npz') as sidecar:self.sidecar = {k: sidecar[k] for k in sidecar.files}
         return code, rows, json.loads((out / 'summary-0.json').read_text()), json.loads((out / 'header-0.json').read_text()), constructor, warmed, stdout.getvalue(), args
+
+    def test_main_with_accept_tree_records_a_modified_tree_replay(self):
+        accepted = dict(head='h', trees={}, accepted_tree='h', modified_tree=True, note=R.MODIFIED_TREE)
+        with tempfile.TemporaryDirectory() as tmp:
+            code, rows, summary, header, *_ = self.replay(tmp, '--accept-tree', 'h', guard=accepted)
+        self.assertEqual(code, 0);self.guard.assert_called_once_with(tree_commit=None, accept_tree='h')
+        self.assertEqual((header['tree_guard'], header['replay_against']), (accepted, R.MODIFIED_TREE))
+        self.assertTrue(all('parity' in r for r in rows))   # parity against live is still recorded
+        with tempfile.TemporaryDirectory() as tmp:header = self.replay(tmp)[3]
+        self.assertNotIn('replay_against', header);self.guard.assert_called_once_with(tree_commit=None, accept_tree=None)   # the default: unchanged
 
     def test_main_replays_records_and_joins(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -426,9 +765,13 @@ class MainTests(unittest.TestCase):
         first = rows[0];want = expected_decision()
         self.assertEqual((first['ordinal'], first['battle_id'], first['owner'], first['stream_id'], first['request_count']), (1001, 'battle-1001', 'p1', 5, 1))
         self.assertEqual((rows[1]['request_count'], first['seat'], first['seed']), (3, 1, 7))
+        self.assertEqual((first['replay']['root_view_source'], first['replay']['b2_view']),   # the lead's validation: world 0's view = B2's
+            ('b2', dict(equal=True, keys=dict(numeric_features=True), numeric_max_abs_diff=0., error=None)))
+        self.assertEqual((rows[-1]['replay']['root_view_source'], rows[-1]['replay']['b2_view']), (None, None))   # constructor-refused: never built
         self.assertEqual((first['replay']['status'], first['replay']['action_index'], first['replay']['q_values']), ('COMPLETE', want['action_index'],
             json.loads(json.dumps(want['q_values']))))
-        self.assertEqual(first['root'], dict(root_logits=list(LOGITS), root_legal=list(LEGAL)))
+        self.assertEqual(first['root'], dict(decided=True, root_logits=list(LOGITS), root_legal=list(LEGAL), own_moves=['m0', 'm1', 'm2', 'm3'],
+            own_recharge_lanes=[False] * 4, opponent_recharge=False, refusal_cause=None))   # the own request's lanes 0-3 (BT.own_request: m0..m3)
         self.assertEqual(len(first['worlds']), 16)
         for w, row in enumerate(first['worlds']):
             self.assertEqual((row['world'], row['index'], row['seed'], row['kernel_seed'], row['constructed']), (w, w, 500 + w, 1000 + w, True))
@@ -443,8 +786,11 @@ class MainTests(unittest.TestCase):
         self.assertEqual([r['parity']['q_equal'] for r in rows], [True, False, None, None])
         self.assertEqual([r['parity']['status_match'] for r in rows], [True, True, False, False])
         last = rows[3]
-        self.assertEqual((last['replay']['status'], last['replay']['cause'], last['prepared']['kind'], last['worlds'], last['root']),
-            ('REFUSED', 'constructor_refused', 'RootRefusal', [], None))
+        self.assertEqual((last['replay']['status'], last['replay']['cause'], last['prepared']['kind'], last['worlds'], last['root']['decided'],
+            last['root']['refusal_cause']), ('REFUSED', 'constructor_refused', 'RootRefusal', [], False, 'TEST_REFUSAL'))
+        self.assertEqual((header['peer_inputs'], header['recharge_moves']), (dict(path='peer-inputs-0.npz', schema=R.PEER_INPUTS_SCHEMA),
+            ['blastburn', 'frenzyplant', 'hydrocannon', 'hyperbeam']))
+        self.assertEqual((summary['peer_inputs_check']['passed'], last['peer_inputs_check']), (True, None))
         self.assertEqual((last['live']['source'], last['live']['request_kind'], last['live_problem']), ('search', 'switch', None))
         self.assertEqual((summary['decisions_sent'], summary['complete'], summary['live_searched'], summary['skipped_single_legal']), (4, 3, 3, 1))
         self.assertEqual({k: summary['parity'][k] for k in ('both', 'action_equal', 'q_equal')}, dict(both=2, action_equal=2, q_equal=1))
@@ -455,6 +801,92 @@ class MainTests(unittest.TestCase):
             (3, [], [], []))
         self.assertEqual((summary['live_tree_commits'], summary['interrupted'], summary['max_decisions_reached']), ({R.LIVE_COMMIT: 3}, False, False))
         self.assertEqual((header['cells'][0]['ordinal'], header['tree_guard'], header['warmup']['programs']), (1001, dict(head='h'), 3))
+
+    def test_peer_inputs_sidecar_and_the_champion_self_check(self):
+        """peer-inputs-<shard>.npz: per decided world the champion adapter's 23-token view of that world's depth-0 peer inputs
+        (the views' fourth output) and the peer legal mask, keyed by (ordinal, decision_index, world); the champion on the same
+        stacked inputs equals the recorded root_peer_logits bit for bit."""
+        with tempfile.TemporaryDirectory() as tmp:
+            code, rows, summary, header, *_ = self.replay(tmp)
+        x = self.sidecar;self.assertEqual(code, 0)
+        self.assertEqual(sorted(x), ['attention_mask', 'categorical_ids', 'decision_index', 'header', 'history_mask', 'legal', 'numeric_features',
+            'opponent_requested', 'ordinal', 'root_peer_logits', 'self_check', 'token_type_ids', 'world'])
+        shapes = {k: (v.shape, str(v.dtype)) for k, v in x.items() if k != 'header'}
+        self.assertEqual(shapes, dict(numeric_features=((48, 23, 132), 'float32'), categorical_ids=((48, 23, 41), 'int32'), token_type_ids=((48, 23), 'int32'),
+            attention_mask=((48, 23), 'bool'), history_mask=((48, 1), 'bool'), legal=((48, 9), 'bool'), ordinal=((48,), 'int64'),
+            decision_index=((48,), 'int64'), world=((48,), 'int32'), root_peer_logits=((48, 9), 'float32'), opponent_requested=((48,), 'bool'),
+            self_check=((48,), 'int8')))
+        self.assertEqual(list(zip(x['ordinal'].tolist(), x['decision_index'].tolist(), x['world'].tolist())),
+            [(1001, d, w) for d in (0, 2, 3) for w in range(16)])   # the three decided roots; the refused one has no worlds
+        for k in range(48):
+            w = int(x['world'][k]);want = np.asarray(prices(w).opponent_logits, np.float32)
+            np.testing.assert_array_equal(x['numeric_features'][k, 0, :9], want)   # the PEER seat's inputs (the owner's are 100 more)
+            np.testing.assert_array_equal(x['root_peer_logits'][k], want)
+        self.assertTrue((x['legal'] == np.asarray(KEPT)).all() and x['self_check'].tolist() == [1] * 48 and x['opponent_requested'].all())
+        document = json.loads(str(x['header']))
+        self.assertEqual({k: document[k] for k in ('schema', 'worlds', 'shard', 'champion_identity', 'key', 'path')},
+            dict(schema=R.PEER_INPUTS_SCHEMA, worlds=48, shard=0, champion_identity=['champion', 'e' * 64, 'bfloat16'],
+                key=['ordinal', 'decision_index', 'world'], path='peer-inputs-0.npz'))
+        self.assertEqual((document['tree_guard'], document['arrays']['categorical_ids']), (dict(head='h'), dict(shape=[48, 23, 41], dtype='int32')))
+        first = rows[0]
+        self.assertEqual([(w['peer_inputs_index'], w['peer_self_check'], w['peer_self_check_max_abs_diff']) for w in first['worlds']],
+            [(w, True, 0.) for w in range(16)])
+        self.assertEqual(first['peer_inputs_check'], dict(checked=16, equal=16, failed_worlds=[], written=16, applicable=True))
+        self.assertEqual(summary['peer_inputs_check'], dict(decided_roots=3, roots_checked=3, roots_not_applicable=0, worlds_written=48,
+            worlds_checked=48, worlds_equal=48, failures=[], unchecked_roots=[], passed=True))
+        with tempfile.TemporaryDirectory() as tmp:   # one world's peer inputs one ulp off its recorded logits: the check fails
+            _, rows, summary, *_ = self.replay(tmp, peer_off=(3,))
+        self.assertEqual([w['peer_self_check'] for w in rows[0]['worlds']], [w != 3 for w in range(16)])
+        self.assertGreater(rows[0]['worlds'][3]['peer_self_check_max_abs_diff'], 0.)
+        self.assertEqual(self.sidecar['self_check'].tolist(), [int(w != 3) for _ in range(3) for w in range(16)])
+        c = summary['peer_inputs_check'];self.assertEqual((c['worlds_checked'], c['worlds_equal'], c['passed']), (48, 45, False))
+        self.assertEqual(c['failures'], [dict(ordinal=1001, decision_index=d, worlds=[3]) for d in (0, 2, 3)])
+
+    def test_a_failed_peer_capture_fails_the_check_and_keeps_the_sidecar_aligned(self):
+        with tempfile.TemporaryDirectory() as tmp, patch.object(FakeEvaluator, 'view', side_effect=ValueError('slice')):
+            _, rows, summary, *_ = self.replay(tmp)
+        self.assertEqual(rows[0]['peer_inputs_check'], dict(checked=16, equal=0, failed_worlds=list(range(16)), written=0, applicable=True))
+        self.assertIn('peer inputs: ValueError: slice', rows[0]['notes']);self.assertFalse(summary['peer_inputs_check']['passed'])
+        self.assertEqual(self.sidecar['numeric_features'].shape, (0, 23, 132))   # nothing kept, every column still aligned
+
+    def test_a_checkable_world_whose_capture_raised_fails_and_undecided_roots_are_never_captured(self):
+        observe = PeerExecutor.observe
+        def broken(executor, state, public, seat, mask):
+            if int(np.asarray(public['w'])) == 5 and int(np.asarray(seat)[0]) == 1:raise ValueError('peer view')
+            return observe(executor, state, public, seat, mask)
+        with tempfile.TemporaryDirectory() as tmp, patch.object(PeerExecutor, 'observe', broken):
+            _, rows, summary, *_ = self.replay(tmp)
+        first = rows[0]
+        self.assertEqual([w['peer_self_check'] for w in first['worlds']], [w != 5 for w in range(16)])   # failed, not skipped
+        self.assertIsNone(first['worlds'][5]['peer_inputs_index']);self.assertIn('world 5: ValueError: peer view', first['notes'])
+        self.assertEqual(first['peer_inputs_check'], dict(checked=16, equal=15, failed_worlds=[5], written=15, applicable=True))
+        self.assertFalse(summary['peer_inputs_check']['passed'])
+        # A prepared root that never reached decide: its worlds are described, never captured or kept.
+        class Counting:
+            calls = 0
+            def capture(self, *a):Counting.calls += 1
+            def annotate(self, *a):raise AssertionError('annotated an undecided root')
+        detached, made, legal = FakeConstructor().prepare(dict(decision_index=0), 0)
+        prepared = SimpleNamespace(prepared=[(cw.Prepared('r', detached, made, legal, 0., 'binding'),)], decided=[])
+        detail = R.describe(prepared, fake_peer, VOCABULARY, Counting(), (1, 0))
+        self.assertEqual((Counting.calls, detail['root'], len(detail['worlds'])), (0, None, 16))
+        self.assertTrue(all('peer_self_check' not in w for w in detail['worlds']))
+
+    def test_peer_inputs_summary_fails_closed(self):
+        complete = lambda i, check: dict(ordinal=1, decision_index=i, replay=dict(status='COMPLETE'), peer_inputs_check=check)
+        ok = dict(checked=2, equal=2, failed_worlds=[], written=2)
+        self.assertTrue(R.peer_inputs_summary([complete(0, ok), dict(complete(1, None), replay=dict(status='REFUSED'))])['passed'])
+        self.assertFalse(R.peer_inputs_summary([complete(0, ok), complete(1, None)])['passed'])   # a decided root left unchecked
+        self.assertFalse(R.peer_inputs_summary([complete(0, dict(ok, checked=0, equal=0))])['passed'])   # nothing checked
+        # a decided root with no priced opponent-requested world: not applicable, counted, never failing (the definitive run's 362)
+        na = R.peer_inputs_summary([complete(0, ok), complete(1, dict(ok, checked=0, equal=0, applicable=False))])
+        self.assertEqual((na['roots_checked'], na['roots_not_applicable'], na['unchecked_roots'], na['passed']), (1, 1, [], True))
+        self.assertFalse(R.peer_inputs_summary([complete(0, dict(ok, checked=0, equal=0, applicable=False))])['passed'])   # still nothing checked
+        broken = R.peer_inputs_summary([complete(0, ok), complete(1, dict(ok, checked=0, equal=0, applicable=False, failed_worlds=[2]))])
+        self.assertFalse(broken['passed'])   # a failure is never not applicable
+        none = R.peer_inputs_summary([complete(0, ok), complete(1, dict(ok, checked=0, equal=0))])   # a decided root with no checkable world
+        self.assertEqual((none['roots_checked'], none['unchecked_roots'], none['passed']), (1, [dict(ordinal=1, decision_index=1)], False))
+        self.assertFalse(R.peer_inputs_summary([])['passed'])
 
     def test_max_decisions_stops_a_smoke_run(self):
         with tempfile.TemporaryDirectory() as tmp:

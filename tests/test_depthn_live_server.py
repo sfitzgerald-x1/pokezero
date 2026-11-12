@@ -159,6 +159,53 @@ class ServerTests(unittest.TestCase):
             for target,name,value in stand_ins:stack.enter_context(patch.object(target,name,side_effect=value))
             self.assertEqual(S.build(args),'search')
         self.assertEqual((made['refuse_classes'],made['max_requests'],made['session_cap'],made['tree_commit'],made['binding']),(('wish','sleep'),2,64,'t'*40,'binding'))
+        self.assertIs(made['redact_private_reveals'],False)   # off by default
+        with patch.dict(os.environ,PINNED):args=S.options(base+['--redact-private-reveals'])
+        with ExitStack()as stack:
+            for target,name,value in stand_ins:stack.enter_context(patch.object(target,name,side_effect=value))
+            S.build(args)
+        self.assertIs(made['redact_private_reveals'],True)
+        self.assertNotIn('peer_view_b',made)   # off: the search is built exactly as before the flag
+        with patch.dict(os.environ,PINNED):args=S.options(base+['--peer-view-b'])
+        with ExitStack()as stack:
+            for target,name,value in stand_ins:stack.enter_context(patch.object(target,name,side_effect=value))
+            S.build(args)
+        self.assertEqual((made['peer_view_b'],made['redact_private_reveals']),(True,False))   # the search applies the implied redaction
+        self.assertIsNone(made['reply'])   # br_fp off by default: the champion's own averaging
+        from gpu_engine import depthn_reply_prior as rp
+        reply=['--reply-archive','r.npz','--reply-archive-sha256','e'*64,'--reply-checkpoint-sha256','f'*64]
+        with patch.dict(os.environ,PINNED):args=S.options(base+reply)
+        loaded=[]
+        with ExitStack()as stack:
+            for target,name,value in stand_ins+((S.evaluators,'load',lambda path,**kw:loaded.append((path,kw))or NS(params='reply')),
+                    (rp,'ReplyPrior',lambda executor,model,mode,identity:('reply-prior',executor,model.params,mode,identity))):
+                stack.enter_context(patch.object(target,name,side_effect=value))
+            self.assertEqual(S.build(args),'search')
+        self.assertEqual(loaded,[('r.npz',dict(expected_archive_sha256='e'*64,expected_checkpoint_sha256='f'*64,precision=S.evaluators.PRECISIONS['bf16']))])
+        self.assertEqual(made['reply'][0],'reply-prior');self.assertEqual((made['reply'][2],made['reply'][3]),('reply','eager'))
+        self.assertEqual(made['reply'][4],dict(archive_sha256='e'*64,checkpoint_sha256='f'*64,view='env'))   # the reply pin's identity
+        with patch.dict(os.environ,PINNED):args=S.options(base+reply+['--peer-view-b'])   # both: br_fp on view b's worlds
+        with ExitStack()as stack:
+            for target,name,value in stand_ins+((S.evaluators,'load',lambda path,**kw:NS(params='reply')),
+                    (rp,'ReplyPrior',lambda executor,model,mode,identity:('reply-prior',executor,model.params,mode,identity))):
+                stack.enter_context(patch.object(target,name,side_effect=value))
+            S.build(args)
+        self.assertEqual((made['peer_view_b'],made['reply'][0],made['root_operator']),(True,'reply-prior','ARGMAX_MEAN_COMPLETED_Q'))
+        with patch.dict(os.environ,PINNED):args=S.options(base+reply+['--peer-view-b','--root-operator','NOISE_GATED_K2'])   # variant B
+        with ExitStack()as stack:
+            for target,name,value in stand_ins+((S.evaluators,'load',lambda path,**kw:NS(params='reply')),
+                    (rp,'ReplyPrior',lambda executor,model,mode,identity:('reply-prior',executor,model.params,mode,identity))):
+                stack.enter_context(patch.object(target,name,side_effect=value))
+            S.build(args)
+        self.assertEqual((made['root_operator'],made['reply'][0]),('NOISE_GATED_K2','reply-prior'))
+
+    def test_a_view_b_reply_archive_needs_peer_view_b(self):
+        self.assertEqual((S.reply_view(None),S.reply_view({}),S.reply_view(dict(extra=dict(view='env')))),('env','env','env'))
+        self.assertEqual(S.reply_view(dict(extra=dict(view='b',redaction='peer-view-v2'))),'b')
+        with self.assertRaisesRegex(ValueError,'--peer-view-b'):S.check_reply_view(dict(extra=dict(view='b')),NS())
+        with self.assertRaisesRegex(ValueError,'--peer-view-b'):S.check_reply_view(dict(extra=dict(view='b')),NS(peer_view_b=False))
+        S.check_reply_view(dict(extra=dict(view='b')),NS(peer_view_b=True));S.check_reply_view(dict(extra=dict(view='env')),NS())
+        S.check_reply_view(None,NS())   # an archive without export metadata (red2's era): served as before
 
     def test_the_matmul_precision_is_hard_pinned(self):
         """The environment is checked before anything loads; JAX's own setting again in build, before any input or champion."""
@@ -203,7 +250,8 @@ class ServerTests(unittest.TestCase):
             rows=await asyncio.gather(asyncio.to_thread(blocking_request,port,dict(L.request('s',0),**{live.ARRIVAL:0.})),   # forged: would be expired
                 asyncio.to_thread(blocking_request,port,L.request('t',0,budget=.5)))   # under min_price_seconds: expired
             server.stop();await asyncio.wait_for(task,30);return rows
-        with L.Codex(outcomes):rows=asyncio.run(scenario())
+        # The fake engine's carries are kept as built (LiveSearchTests.setUp's rule; this fixture instance never runs its setUp).
+        with L.Codex(outcomes),patch.object(L.cw,'world_completer',return_value=lambda world,owner,**kw:world):rows=asyncio.run(scenario())
         self.assertEqual([(r['request_id'],r['status'],r['cause'])for r in rows],[('s:0','COMPLETE',None),('t:0','REFUSED','expired_in_queue')])
         self.assertTrue(0<=rows[0]['timings']['queue_seconds']<1);self.assertGreater(rows[0]['server_wall_seconds'],0)
         self.assertEqual(set(rows[0])-{'server_wall_seconds'},L.KEYS)
@@ -221,6 +269,26 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(S.options(base+champion).refuse_classes,())
         search=NS(tree_commit='t',rung='DN2W8',max_requests=4,min_price_seconds=1.,session_cap=256,refuse_classes=('forced_switch','wish'),pricer_identity={})
         self.assertEqual(S.header(args,search)['refuse_classes'],['forced_switch','wish'])   # recorded in READY and the telemetry header
+        self.assertIs(S.header(args,search)['redact_private_reveals'],False)
+        self.assertIs(S.header(args,NS(vars(search),redact_private_reveals=True))['redact_private_reveals'],True)
+        self.assertNotIn('live_root_operator',S.header(args,search))   # the default operator: the header is unchanged
+        gated=S.options(base+champion+['--root-operator','NOISE_GATED_K2'])
+        self.assertEqual((args.root_operator,gated.root_operator),('ARGMAX_MEAN_COMPLETED_Q','NOISE_GATED_K2'))
+        self.assertEqual(S.header(gated,search)['live_root_operator'],'NOISE_GATED_K2')
+        with self.assertRaises(SystemExit),redirect_stderr(io.StringIO()):S.options(base+champion+['--root-operator','TARGET_ARGMAX'])
+        self.assertNotIn('peer_view_b',S.header(args,search));self.assertNotIn('peer_view_b',S.header(args,NS(vars(search),peer_view_b=False)))
+        on=S.header(args,NS(vars(search),peer_view_b=True,redact_private_reveals=True))   # view b's search: the redaction it implies is on
+        self.assertEqual((on['peer_view_b'],on['redact_private_reveals']),(True,True))
+        self.assertIs(S.options(base+champion+['--peer-view-b']).peer_view_b,True);self.assertIs(S.options(base+champion).peer_view_b,False)
+        self.assertNotIn('root_operator',S.header(args,search))
+        reply=['--reply-archive','r.npz','--reply-archive-sha256','e'*64,'--reply-checkpoint-sha256','f'*64]
+        self.assertEqual({k:S.header(S.options(base+champion+reply),search)[k]for k in('root_operator','reply_archive_sha256','reply_checkpoint_sha256')},
+            dict(root_operator='br_fp',reply_archive_sha256='e'*64,reply_checkpoint_sha256='f'*64))
+        self.assertEqual(S.header(S.options(base+champion+reply+['--reply-views','check']),search)['reply_views'],'check')
+        for bad in(reply[:2],reply[:4],reply[:2]+['--reply-archive-sha256','x'*64,'--reply-checkpoint-sha256','f'*64],['--reply-views','jit']):
+            with self.subTest(bad=bad),redirect_stderr(io.StringIO()),self.assertRaises(SystemExit):S.options(base+champion+bad)
+        both=S.header(S.options(base+champion+reply+['--peer-view-b']),NS(vars(search),peer_view_b=True,redact_private_reveals=True))
+        self.assertEqual((both['root_operator'],both['peer_view_b'],both['redact_private_reveals']),('br_fp',True,True))
         for bad in(base,base+champion[:2],base+champion+['--max-requests','5'],base+champion+['--buckets','0,1'],base+champion+['--rung','R1'],
                 base+champion[:2]+['--champion-archive-sha256','x'*64,'--champion-checkpoint-sha256','d'*64],base[:-2]+champion,
                 base+champion+['--batch-wait-seconds','.5'],base+champion+['--queue-limit','2'],base+champion+['--refuse-classes','nap']):   # the last two: Codex's queue checks, before any load

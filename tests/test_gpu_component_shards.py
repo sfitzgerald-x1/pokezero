@@ -14,7 +14,8 @@ from unittest import mock
 
 from scripts.run_gpu_component_shard import (
     partition_suite, run_suite, run_process_blocks, _valid_receipt, _digest, _resource_snapshot,
-    _manifest, _isolation_units, _one_case_suite,
+    _manifest, _isolation_units, _one_case_suite, _discover_modules, partition_tier, load_heavy_modules,
+    HEAVY_MANIFEST,
 )
 
 
@@ -625,6 +626,85 @@ class Case(unittest.TestCase):
             self.assertEqual(sum(suite.countTestCases() for suite in parts), 3)
             for suite in parts:
                 self.assertEqual(run_suite(suite, stream=io.StringIO()), 0)
+
+    def test_light_and_heavy_tiers_are_disjoint_complete_and_all_is_unchanged(self):
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.dict(sys.modules):   # the fixture modules leave with the directory
+            root = Path(tmp); self.fixture(root)
+            (root / 'test_gpu_engine_gamma.py').write_text('import unittest\nclass Case(unittest.TestCase):\n def test_g(self):pass\n')
+            (root / 'test_gpu_engine_broken.py').write_text('raise ImportError("fixture import failure")\n')
+            (root / 'test_gpu_engine_skipped.py').write_text('import unittest\nraise unittest.SkipTest("fixture import-time skip")\n')
+            sys.path.insert(0, str(root))
+            try:
+                suite, modules = _discover_modules(dict(start_dir=str(root), pattern='test_gpu_engine*.py'))
+            finally:
+                sys.path.remove(str(root))
+            self.assertEqual(modules, ['test_gpu_engine_alpha', 'test_gpu_engine_beta', 'test_gpu_engine_broken',
+                                       'test_gpu_engine_gamma', 'test_gpu_engine_skipped', 'zz_shard_package'])
+            # a heavy module that fails to import is still light: its import failure must fail per pull request
+            heavy = frozenset({'test_gpu_engine_beta', 'zz_shard_package', 'test_gpu_engine_broken'})
+            def tier(name, count):   # every shard of a tier, an empty shard (more shards than blocks) refused
+                out = []
+                for k in range(count):
+                    try:out += partition_tier(suite, modules, k, count, name, heavy)[1]
+                    except ValueError as error:self.assertIn('empty component shard', str(error))
+                return out
+            for count in (1, 2, 3):
+                with self.subTest(count=count):
+                    light, heavy_ix = tier('light', count), tier('heavy', count)
+                    self.assertEqual(sorted(light), [0, 2, 3, 4]);self.assertEqual(sorted(heavy_ix), [1, 5])
+                    self.assertEqual(len(light), len(set(light)));self.assertEqual(len(heavy_ix), len(set(heavy_ix)))
+                    self.assertEqual(sorted(light + heavy_ix), list(range(len(modules))))
+                    for k in range(count):   # the default tier is partition_suite's own selection
+                        self.assertEqual(partition_tier(suite, modules, k, count)[1], partition_suite(suite, k, count)[1])
+            with self.assertRaises(ValueError):partition_tier(suite, modules, 2, 3, 'heavy', heavy)   # an empty tier shard
+            with self.assertRaisesRegex(ValueError, 'does not have'):partition_tier(suite, modules, 0, 1, 'light', heavy | {'test_gpu_engine_gone'})
+            with self.assertRaises(ValueError):partition_tier(suite, modules[:-1] + [None], 0, 1, 'light', heavy)
+            with self.assertRaises(ValueError):partition_tier(suite, modules, 0, 1, 'medium', heavy)
+
+    def test_real_tiered_process_blocks_run_only_their_tier(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp); log = self.fixture(root)
+            code = """
+import json, sys, unittest
+from scripts.run_gpu_component_shard import run_process_blocks
+suite = unittest.TestLoader().discover(sys.argv[1], 'test_gpu_engine*.py')
+raise SystemExit(run_process_blocks(suite, 0, 1, start_dir=sys.argv[1], tier=sys.argv[2], heavy=frozenset({'test_gpu_engine_beta'})))
+"""
+            environment = dict(os.environ)
+            environment['PYTHONPATH'] = os.pathsep.join([str(ROOT / 'src'), str(ROOT), environment.get('PYTHONPATH', '')])
+            seen = {}
+            for tier in ('light', 'heavy'):
+                result = subprocess.run([sys.executable, '-c', code, str(root), tier], cwd=ROOT, env=environment, text=True,
+                                        capture_output=True, timeout=30)
+                terminal = [json.loads(l) for l in result.stdout.splitlines() if l.startswith('{') and 'process_blocks_terminal' in l]
+                self.assertEqual(result.returncode, 0, result.stderr);self.assertTrue(terminal[0]['passed'])
+                seen[tier] = terminal[0]['selected_blocks']
+            self.assertEqual(seen, dict(light=[0, 2], heavy=[1]))
+            labels = [json.loads(line)['label'] for line in log.read_text().splitlines()]
+            self.assertEqual(labels.count('beta'), 1);self.assertEqual(labels.count('nested'), 1)
+
+    def test_heavy_manifest_names_existing_unique_modules_with_their_measurements(self):
+        heavy = load_heavy_modules()
+        self.assertTrue(heavy)
+        for name in heavy:
+            self.assertTrue((ROOT / 'tests' / f'{name}.py').is_file(), name)
+        data = json.loads(HEAVY_MANIFEST.read_text())
+        for entry in data['modules']:
+            self.assertIn(entry['reason'], ('wall', 'memory', 'wall+memory'), entry['module'])
+        for bad in ({'schema': 'x', 'modules': [{'module': 'test_gpu_engine_a'}]}, {'schema': 'gpu-component-heavy.v1', 'modules': []},
+                    {'schema': 'gpu-component-heavy.v1', 'modules': [{'module': 'test_gpu_engine_a'}, {'module': 'test_gpu_engine_a'}]},
+                    {'schema': 'gpu-component-heavy.v1', 'modules': [{'module': 'other_a'}]},
+                    {'schema': 'gpu-component-heavy.v1', 'modules': ['test_gpu_engine_a']}):
+            with tempfile.TemporaryDirectory() as tmp:
+                path = Path(tmp) / 'heavy.json';path.write_text(json.dumps(bad))
+                with self.assertRaises(ValueError):load_heavy_modules(path)
+
+    def test_per_pull_request_checks_run_only_the_light_tier(self):
+        workflow = (ROOT / '.github' / 'workflows' / 'gpu-engine-components.yml').read_text()
+        self.assertEqual(workflow.count('python scripts/run_gpu_component_shard.py'), 1)
+        self.assertIn("python scripts/run_gpu_component_shard.py --tier light --index '${{ matrix.shard }}' --count 16", workflow)
+        self.assertIn("- 'tests/gpu_component_heavy.json'", workflow)
+        self.assertNotIn('self-hosted', workflow)
 
     def test_invalid_partition_and_empty_discovery_fail(self):
         suite = unittest.TestSuite([unittest.TestSuite()])

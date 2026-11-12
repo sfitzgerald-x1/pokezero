@@ -7,6 +7,7 @@ import jax.numpy as j
 
 from gpu_engine import engine_retained_encoder_driver as d, transition
 import test_gpu_engine_engine_own_facts as fixtures
+from gpu_engine_eager_frame import eager_frame
 
 
 class AdvancingDriverTests(unittest.TestCase):
@@ -18,13 +19,19 @@ class AdvancingDriverTests(unittest.TestCase):
         cls.basic = d.prepare(cls.f.request, cls.f.compiled, fake_forward=fake)
         cls.full = d.prepare(cls.f.request, cls.f.compiled, fake_forward=fake, public_mode='retained-full')
 
+    def setUp(self):
+        # Every advance runs its frame phase eagerly; the scope ends with the test.
+        self.enterContext(eager_frame(self.basic, self.full))
+
     def construct(self, full=False, b=2):
         return d.construct(self.f.pool, np.tile([[0, 1]], (b, 1)), prepared=self.full if full else self.basic,
             stream_ids=j.arange(800, 800+b, dtype=j.int32), seed=37)
 
     def chance(self, b=2):
         draws = j.zeros((b, 2, 12), j.int32).at[:, :, 4].set(1)
-        return transition.ChanceInputs(draws, *[j.zeros((b, 2), j.int32) for _ in range(4)], j.zeros(b, j.int32))
+        zeros = j.zeros((b, 2), j.int32)
+        return transition.ChanceInputs(draws=draws, phazing=zeros, secondary=zeros, sleep_talk=zeros,
+            entry_ties=zeros, initial_tie=j.zeros(b, j.int32))
 
     def same(self, before, after, row=None):
         old, new = jax.tree.leaves(before), jax.tree.leaves(after)
@@ -68,7 +75,7 @@ class AdvancingDriverTests(unittest.TestCase):
     def test_masked_frame_has_no_callbacks_cursor_changes_or_diagnostics(self):
         session = self.construct()
         core = session.state.core
-        frame = d._checked(self.basic)['frame'](core, j.full((2, 2), 8, j.int32), self.chance(), j.array([False, True]))
+        frame = d._checked(self.basic)['frame'](core, j.full((2, 2), 8, j.int32), self.chance(), j.array([False, True]))  # eager (setUp scope)
         self.same(core.cursor, frame.cursor, row=0)
         self.same(frame.before_registry, frame.after_registry, row=0)
         self.assertEqual(frame.callbacks.count[0], 0)

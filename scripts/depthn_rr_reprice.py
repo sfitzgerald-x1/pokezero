@@ -14,6 +14,11 @@ tree guard) on the live inputs.
   (depthn_live_server.py, depthn_live_bench.py), must equal those of the live server tree LIVE_COMMIT (pinned in LIVE_TREES,
   and checked against the commit itself when the clone has it), with no tracked change and no untracked .py file there.
   --tree-commit (the server's label for the code served, which the bench passes through) must name HEAD when given.
+  --accept-tree COMMIT replays against a modified tree instead: COMMIT must be HEAD (git rev-parse --verify COMMIT^{commit}),
+  the guarded paths' trees are taken from it (git rev-parse COMMIT:<path>) and recorded with the live pins and the paths that
+  differ from them, and the guarded paths and scripts/ must hold no tracked change and no untracked .py file. The header
+  records it (tree_guard.modified_tree, replay_against: 'replay against a modified tree ...'); parity against the live run is
+  still recorded, but expected to fail. Without the flag the guard is unchanged.
 - Identity: the built search's run header (depthn_live_server.header) must match the live READY identity (LIVE_IDENTITY:
   seeds, session cap, precision pins, x64 off, sessions, champion and input sha256s) with the arm's rung, bucket 1 and
   max_requests 1; the replay refuses to warm up otherwise.
@@ -31,7 +36,15 @@ tree guard) on the live inputs.
     - the opponent's (the non-owner side's) mapping facts through the constructor's own engine-id tables, metadata
       ['vocabulary'] (what phase_d_protocol_world and phase_d_live_worlds map with): the active party slot, its species
       (normalize_id), its four move ids (phase_d_live_worlds._source_move: Hidden Power collapsed; None for an empty slot),
-      its charge move, and the party in slot order (species, fainted: hp <= 0, the engine's own rule, hp, max_hp);
+      its charge move, and the party (opponent.party[]) in party (physical slot) order, each member's set: slot, order
+      (its position in the peer's Showdown request order: the completed carry's own_order[peer], which
+      constructor_worlds.order_peer sets; None when the carry has none), species, moves (its four move ids as the request
+      spells them, Hidden Power typed: the engine move id's own typed name, e.g. hiddenpowerfire70, or, for a typeless
+      engine entry, hiddenpower + the world's hidden_power_type (+ hidden_power_power); a power suffix stays, so a reader
+      strips trailing digits; unlike active_moves and the lane labels, which keep _source_move's collapsed form),
+      move_engine_ids, ability (the engine's current ability: Trace's copy included), base_ability, item (None: no item),
+      fainted (hp <= 0, the engine's own rule), hp, max_hp; opponent.request_order lists the party slots in that request
+      order (None without a carry order);
     - the opponent's encoder lanes: the second output of device_depth2_pricer._make_views(executor)(state, public, owner),
       the pricer's own peer view (build's root-view call; turn 1's peer view), on the live pricers' shared executor:
       legal (9), move_targets (4), switch_targets (5) and error bits; gpu_engine.state.usable_moves on the opponent's side
@@ -39,6 +52,51 @@ tree guard) on the live inputs.
       (move:<id> through move_targets, switch:<species> through switch_targets). The grid's column b is this lane space.
     Per world, when the opponent is requested, kept must equal the peer legal lanes (and opponent_requested any of them): a
     disagreement is recorded (kept_matches_peer_legal false), never raised.
+  - Guard fields: every sent row's `root` (a dict on every row; `decided` false for a root that never reached decide, whose
+    root_logits and root_legal are then null) holds own_moves: the owner's move id on each action lane 0-3, read from the
+    request's own_request_line by the live guards' own depthn_effect_guard.own_moves (the live actor's) (None on a lane without a move);
+    own_recharge_lanes: depthn_effect_guard.recharge_lane on each move lane 0-3 (true when its move is in
+    depthn_effect_guard.RECHARGE_MOVES, the one set the live actor's guard uses, imported from it and recorded in the header
+    as recharge_moves; a switch lane is never a recharge move); opponent_recharge: the peer must recharge at the root by
+    constructor_worlds.line_facts on the request's lines (B2's rule), whatever the replayed tree does with it; and
+    refusal_cause: null for a COMPLETE replay, else the constructor's RootRefusal kind when prepare_roots refused the root
+    (OPPONENT_RECHARGE_UNREPRESENTED, PEER_REQUEST_ORDER_UNAVAILABLE, ...), else the replay's cause. A root refused
+    OPPONENT_RECHARGE_UNREPRESENTED has no priced worlds: the live actor plays greedy there. A scorer applies the
+    live actor's own-recharge guard (recharge_guarded: never an override INTO a recharge move greedy did not choose) to
+    every operator's choice against the live join's greedy_action_index with them.
+  - Effect guard: the row's effect_guard is the replayed response's own (the live search's UNREPRESENTED_EFFECT record,
+    pokezero.depthn_effect_guard, read through the pricers' observer seam in the same process_many call, so one pass gives the
+    row and its turn-2 priors): tripped, b (turn 1 / turn 2: the reach M under the live rule 'reach'), m_own, m_opp, arms, the
+    any-cell arm kept for analysis (any_cell_turn2 / _b / _tripped), c for the search's own choice, the reasons, the (a) flag,
+    tier_b_legal, our guarded lanes, the conditions per side and the masses of every watched move (turn 1 per side and world,
+    turn 2 per side, world and cell); None for a root the replay did not decide. The RR scorer applies it per operator.
+  - Private reveals: the row's private_reveals is the replayed response's own (constructor_worlds.private_reveal_record:
+    enabled (--redact-private-reveals, off by default), found, applicable, redacted, unmatched); None for a root prepare()
+    did not build. scripts/depthn_private_reveal_effect.py compares a run with the flag against one without.
+  - Peer view b: with --peer-view-b (off by default; it implies --redact-private-reveals) the row's peer_view_b is the replayed
+    response's own (constructor_worlds.peer_view_b_record: enabled, cells, projected, changed, exact_agrees; None for a root
+    prepare() did not build); without the flag a row has no peer_view_b key, as before the flag. The peer-inputs sidecar
+    then holds view b's depth-0 peer inputs (the completed worlds').
+  - Peer inputs (peer-inputs-<shard>.npz, every run): per decided root, each constructed world's depth-0 peer inputs, the
+    fourth output of device_depth2_pricer._make_views(executor)(state, public, owner) on the completed world (the tensors
+    the pricer's turn 1 evaluates root_peer_logits from), and that view's peer legal mask. Self-check: the worlds are
+    stacked in block order as the pricer stacks them (a world without a state takes the first constructed world's, as
+    pack_turn1 does) and the server's own champion (the pricer's forward, ChampionEvaluator's adapter, with the search's
+    own parameters, under jax.jit) runs on them; on every world priced with the opponent requested its logits must equal
+    the recorded root_peer_logits bit for bit. Per world: peer_inputs_index (its row in the sidecar), peer_self_check
+    (true / false, null where not applicable; a priced, opponent-requested world whose capture raised is false, never
+    skipped) and peer_self_check_max_abs_diff; per row peer_inputs_check (checked, equal, failed_worlds, written); the
+    summary's peer_inputs_check counts them, lists the failures and passes only when every decided root had at least one
+    checked world and every checked world was equal (a decided root with none counts as unchecked, except one with no priced
+    opponent-requested world at all: not applicable, counted as roots_not_applicable, never failing). Only decided roots are
+    captured or written (a root refused after prepare_roots has no root_peer_logits). The sidecar holds,
+    stacked over its K worlds, the champion adapter's own view slice (ChampionEvaluator.view: the first 23 tokens) of
+    those inputs: numeric_features f32 [K,23,132], categorical_ids i32 [K,23,41], token_type_ids i32 [K,23],
+    attention_mask bool [K,23], history_mask bool [K,1]; legal bool [K,9] (the peer view's legal mask); the key index
+    ordinal i64 [K], decision_index i64 [K], world i32 [K] (block order = the constructor's world index); the recorded
+    root_peer_logits f32 [K,9], opponent_requested bool [K] and self_check i8 [K] (1 equal, 0 not, -1 not checked); and
+    header, a JSON string (schema PEER_INPUTS_SCHEMA, the tree guard, shard, the champion's identity, the slice rule, and
+    each array's shape and dtype). Written with the summary (on interruption too), never over an existing file.
 - Live join: the cell's telemetry/<ordinal>.jsonl row of the same decision_index (the actor's index): source,
   search.action_index / q_values / status / cause, greedy.action_index, request_kind, turn, played_action_index; its
   prefix_sha256 is held to the capture's. Parity over the decisions searched live (source 'search') and COMPLETE in the
@@ -48,9 +106,37 @@ tree guard) on the live inputs.
   status) with an owner capture, stratified equally over (cell.seed % 2, cell.seat) (a remainder goes to the first strata in
   STRATA order), each stratum ranked by sha256 of (SAMPLE_DOMAIN, S, ordinal). --shard I --shards N keeps every N-th selected
   cell in ordinal order from the I-th. --max-decisions stops after that many sent decisions (smoke tests).
+  --targets FILE (JSONL {ordinal, decision_index}, optionally kind, seed, ours) instead names decisions of cells of any arm:
+  results/<ordinal>.json is read when it exists, else the cell's seed and seat come from its capture's registration; only the
+  target decisions are sent, every other one is skipped before sent() and counted (summary targets: requested, found, missing:
+  absent from a fully scanned capture, not_reached: in a cell a stop or an error left unfinished, single_legal, non_target_skipped).
+  A target row's ours and seed, when given, must be the capture's owner and the cell's seed, and a capture-only cell's
+  registration must name its ordinal. A cell of another arm than --arm is replayed without the live join (live_problem names
+  its arm); --targets rows carry cell_arm and target_kind. Sending a later decision alone is the live path's own: with no session, the constructor
+  folds the battle's whole prefix from a fresh adapter, and world seeds do not depend on earlier calls.
+- True worlds (--true-worlds DIR --true-kind true|true_private; off by default; the MC ladder's rungs R1 and R2): around each
+  process_many call only, phase_d_protocol_world.sample is wrapped too (ProtocolConstructor.prepare looks it up as
+  `protocol.sample` at call time; depthn_opponent_view_parity.check_call_site verifies that before anything loads). The wrapper
+  calls the original sampler with the same arguments (it raises as usual) and returns its WorldSet (the carried root, the seeds,
+  the diagnostics) with its W = count worlds replaced by true worlds: world i is depthn_opponent_view_parity.build_true_world
+  (the opponent's true team, materialized with sampled world i's kernel seed: W chance draws of one true state); true_private
+  then writes the opponent's request-exact HP and active PP over it (overlay_private). The inputs come from the cell's opponent
+  sidecar DIR/opponent/<kind>-<ordinal>.json (gpu_engine/mc_ladder_opponents; kind: the --targets row's, else the ordinal's only
+  sidecar), its root keyed by the decision index. true_private where the opponent waits at the root falls back to true
+  (recorded). Fail closed: a world that cannot be built (no sidecar, another seed or seat, no root entry for true_private, a team
+  that cannot be reconstructed, a refused materialization, an error) has no state and its reason as its refusal, so the live
+  search refuses the root (constructor_refused, the all-W rule). Everything after the sampler is the live path. A row then holds
+  true_worlds (requested and played kind, fallback, problem, sidecar and its sha256, the true start, worlds built) and each world
+  true_world (true_kind, built, reason, overlay notes, kernel_seed and whether it is the sampled world's, refusals).
+- Depth-1 cells (--depth1-cells, off by default; the MC ladder's reveal-cell telemetry): each priced world's depth1 gains cells
+  (depth1_cells: opp_forced / own_forced / terminal, each a list of [own action a, opponent reply b] pairs, from D3's turn-1
+  frame: a forced side is requested at the child with only switch lanes legal, after a faint from any source or a Baton Pass).
+  A failure there is a note and leaves that world's depth-1 prices in place. Without the flag rows are unchanged.
 - Output (--out, a new directory): rows-<shard>.jsonl (one row per sent decision, whatever its status, written and fsynced as
-  it goes), header-<shard>.json (tree guard, run header and identity check, warmup report, argv, cells) and
-  summary-<shard>.json (counts, parity, status mismatches, kept/legal disagreements, timings; written on interruption too);
+  it goes), header-<shard>.json (tree guard, run header and identity check, warmup report, argv, cells, peer_inputs: the
+  sidecar's path and schema, recharge_moves) and
+  summary-<shard>.json (counts, parity, status mismatches, kept/legal disagreements, peer_inputs_check, timings; written on
+  interruption too), peer-inputs-<shard>.npz (above);
   one progress JSON line per decision on stdout.
 Bit-exactness: the live tree, inputs, seeds and warmup make the same worlds and programs; the device cannot be pinned here.
 Run on the live servers' GPU model, image and environment (/out/env.sh: the same XLA flags), ideally on a copy of their
@@ -58,7 +144,7 @@ compilation cache so every program loads the live executables instead of re-auto
 Exit 0 when any decision was sent, 2 when none was.
 """
 import collections
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
 import dis
 import hashlib
@@ -72,8 +158,8 @@ import time
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:sys.path.insert(0, str(ROOT))
 from scripts import depthn_live_bench as bench   # noqa: E402
-from gpu_engine import constructor_worlds as cw, depthn_live_search as live   # noqa: E402
-from pokezero import phase_d_owning_capture as owning   # noqa: E402
+from gpu_engine import constructor_worlds as cw, depthn_backups as backups, depthn_live_search as live   # noqa: E402
+from pokezero import depthn_effect_guard as actor, phase_d_owning_capture as owning   # noqa: E402   (the live guards' one module)
 
 server = bench.server
 ROW_SCHEMA = 'pokezero.depthn-rr-reprice.row.v1'
@@ -90,8 +176,11 @@ LIVE_IDENTITY = dict(constructor_seed=20261103, recipe_seed=20261103, session_ca
 SAMPLE_DOMAIN = 'pokezero.depthn-rr-reprice.sample.v1'
 STRATA = ((0, 0), (0, 1), (1, 0), (1, 1))   # (cell.seed % 2, cell.seat)
 BENCH_ONLY = ('roster', 'producer_review', 'sessions', 'limit')   # the bench's roster flags have no meaning here
+PEER_INPUTS_SCHEMA = 'pokezero.depthn-rr-reprice.peer-inputs.v1'
+PEER_INPUT_KEYS = ('numeric_features', 'categorical_ids', 'token_type_ids', 'attention_mask', 'history_mask')   # ChampionEvaluator.view's keys
 ENVIRONMENT = ('JAX_DEFAULT_MATMUL_PRECISION', 'JAX_ENABLE_X64', 'JAX_PLATFORMS', 'XLA_FLAGS', 'XLA_PYTHON_CLIENT_MEM_FRACTION', 'CUDA_VISIBLE_DEVICES',
     'TF_CPP_MIN_LOG_LEVEL')
+TRUE_KINDS = ('true', 'true_private')   # --true-kind (module docstring: true worlds)
 
 
 # Command line ---------------------------------------------------------------------------------------------------------------------
@@ -105,18 +194,30 @@ def parser():
     pick = p.add_mutually_exclusive_group(required=True)
     pick.add_argument('--cells', type=int, nargs='+', metavar='ORD', help='these cell ordinals')
     pick.add_argument('--sample', type=int, metavar='N', help='N of the arm\'s COMPLETE cells, stratified equally over (seed %% 2, seat)')
+    pick.add_argument('--targets', metavar='FILE', help='JSONL of {ordinal, decision_index} (optionally kind, seed, ours): replay only these '
+        'decisions of these cells, of any arm; results/ is optional (seed and seat from the capture); every other decision is skipped '
+        'before it is sent and counted, never priced')
     p.add_argument('--sample-seed', type=int, help='the sample\'s seed (required with --sample)')
     p.add_argument('--shard', type=int, default=0);p.add_argument('--shards', type=int, default=1)
     p.add_argument('--max-decisions', type=int, help='stop after this many sent decisions (smoke tests)')
+    p.add_argument('--accept-tree', metavar='COMMIT', help='replay against a modified tree: COMMIT must be HEAD and clean in the guarded paths '
+        'and scripts/; its trees replace the live pins (module docstring). Parity against live is recorded but expected to fail')
+    p.add_argument('--true-worlds', metavar='SIDECAR_DIR', help='price true worlds instead of sampled ones (the MC ladder\'s R1/R2): the '
+        'opponent sidecars DIR/opponent/<kind>-<ordinal>.json (gpu_engine/mc_ladder_opponents); needs --true-kind')
+    p.add_argument('--true-kind', choices=TRUE_KINDS, help='true: the opponent\'s true team; true_private: plus its request-exact HP and '
+        'active PP at the root (true where it waits)')
+    p.add_argument('--depth1-cells', action='store_true', help='each priced world\'s depth1.cells: the depth-1 cells whose turn-1 child '
+        'has the opponent / our seat forced to switch (a faint or a Baton Pass) or is terminal (depth1_cells; off by default)')
     p.set_defaults(saved_root_admission=False, buckets=(1,))
     return p
 
 
 def options(argv=None):
     p = parser();args = p.parse_args(argv);server.evaluators.check_arguments(p, args);server.check_precision_environment(p, args)
+    server.check_reply_arguments(p, args)   # br_fp replays (--reply-archive with its two sha256 flags), as the server checks them
     if not args.champion_archive:p.error('--champion-archive with its two sha256 flags is required: the champion prices every root and leaf')
     for name in BENCH_ONLY:
-        if getattr(args, name, None):p.error(f'--{name.replace("_", "-")} is the bench\'s; cells come from --cells or --sample')
+        if getattr(args, name, None):p.error(f'--{name.replace("_", "-")} is the bench\'s; cells come from --cells, --sample or --targets')
     if args.buckets != (1,):p.error('the live servers priced at bucket 1 only')
     if args.max_requests not in (None, 1):p.error('the live servers took one request per batch (--max-requests 1)')
     if args.saved_root_admission:p.error('the live servers kept per-battle sessions (no --saved-root-admission)')
@@ -125,6 +226,7 @@ def options(argv=None):
     if args.sample is None and args.sample_seed is not None:p.error('--sample-seed goes with --sample')
     if args.shards < 1 or not 0 <= args.shard < args.shards:p.error('--shard I --shards N with 0 <= I < N required')
     if args.max_decisions is not None and args.max_decisions < 1:p.error('--max-decisions must be >= 1')
+    if (args.true_worlds is None) != (args.true_kind is None):p.error('--true-worlds and --true-kind go together')
     args.port = args.port or 0;args.max_requests = 1
     return args
 
@@ -134,12 +236,18 @@ def git(root, *arguments):
     return subprocess.check_output(['git', '-C', str(root), *arguments], text=True, stderr=subprocess.DEVNULL).strip()
 
 
-def tree_guard(root=ROOT, *, tree_commit=None, run=git):
+MODIFIED_TREE = 'replay against a modified tree: parity against the live run is recorded but expected to fail'
+ACCEPT_PATHS = (*LIVE_TREES, 'scripts')   # what --accept-tree holds clean: the guarded paths and every script the replay may run
+
+
+def tree_guard(root=ROOT, *, tree_commit=None, accept_tree=None, run=git):
     """dict(head, live_commit, live_commit_present, trees) when HEAD's guarded paths are the live tree's (module docstring);
-    ValueError otherwise."""
+    with accept_tree (a commit that must be HEAD, clean in ACCEPT_PATHS), its trees instead, plus accepted_tree, modified_tree,
+    live_trees, differs_from_live and the MODIFIED_TREE note. ValueError otherwise."""
     try:head = run(root, 'rev-parse', 'HEAD')
     except (OSError, subprocess.CalledProcessError) as error:raise ValueError(f'tree guard: {root} must be a git checkout ({error})') from None
     if tree_commit is not None and tree_commit != head:raise ValueError(f'tree guard: --tree-commit {tree_commit} is not HEAD {head}')
+    if accept_tree is not None:return accepted_tree_guard(root, head, accept_tree, run=run)
     trees, present = {}, True
     for path, pinned in LIVE_TREES.items():
         try:theirs = run(root, 'rev-parse', f'{LIVE_COMMIT}:{path}')
@@ -155,18 +263,36 @@ def tree_guard(root=ROOT, *, tree_commit=None, run=git):
     return dict(head=head, live_commit=LIVE_COMMIT, live_commit_present=present, trees=trees)
 
 
+def accepted_tree_guard(root, head, commit, *, run=git):
+    """tree_guard's --accept-tree branch (module docstring): ValueError unless `commit` is HEAD and the ACCEPT_PATHS are clean."""
+    if type(commit) is not str or not commit.strip():raise ValueError('tree guard: --accept-tree needs a commit')
+    try:resolved = run(root, 'rev-parse', '--verify', f'{commit}^{{commit}}')
+    except subprocess.CalledProcessError:raise ValueError(f'tree guard: --accept-tree {commit} is not a commit of {root}') from None
+    if resolved != head:raise ValueError(f'tree guard: --accept-tree {commit} ({resolved}) is not HEAD {head}')
+    trees = {}
+    for path in LIVE_TREES:
+        try:trees[path] = run(root, 'rev-parse', f'{resolved}:{path}')
+        except subprocess.CalledProcessError:raise ValueError(f'tree guard: --accept-tree {resolved[:8]} has no {path}') from None
+    changed = run(root, 'status', '--porcelain', '--untracked-files=all', '--', *ACCEPT_PATHS).splitlines()
+    odd = [x for x in changed if not x.startswith('??') or x.endswith('.py')]
+    if odd:raise ValueError('tree guard: --accept-tree needs a clean HEAD; the working tree differs: ' + '; '.join(odd[:5]))
+    return dict(head=head, live_commit=LIVE_COMMIT, live_commit_present=None, trees=trees, accepted_tree=resolved, modified_tree=True,
+        live_trees=dict(LIVE_TREES), differs_from_live=[p for p in LIVE_TREES if trees[p] != LIVE_TREES[p]], note=MODIFIED_TREE)
+
+
 def check_call_sites(function=None):
-    """True when `function` (DepthNLiveSearch._search) reads `decide` as a global of depthn_live_search and `prepare_roots` as an
-    attribute of the global `cw` at call time, so the wrappers take effect; RuntimeError otherwise."""
+    """True when `function` (DepthNLiveSearch._search) reads `decide` as a global of depthn_live_search and `prepare_roots` and
+    `price` as attributes of the global `cw` at call time, so the wrappers take effect; RuntimeError otherwise."""
     function = live.DepthNLiveSearch._search if function is None else function
-    found = {'decide': False, 'prepare_roots': False};previous = None
+    found = {'decide': False, 'prepare_roots': False, 'price': False};previous = None
     for instruction in dis.get_instructions(function):
         if instruction.opname == 'LOAD_GLOBAL' and instruction.argval == 'decide':found['decide'] = True
-        if (instruction.opname in ('LOAD_ATTR', 'LOAD_METHOD') and instruction.argval == 'prepare_roots' and previous is not None
-                and previous.opname == 'LOAD_GLOBAL' and previous.argval == 'cw'):found['prepare_roots'] = True
+        for name in ('prepare_roots', 'price'):
+            if (instruction.opname in ('LOAD_ATTR', 'LOAD_METHOD') and instruction.argval == name and previous is not None
+                    and previous.opname == 'LOAD_GLOBAL' and previous.argval == 'cw'):found[name] = True
         previous = instruction
     if not all(found.values()) or function.__globals__ is not vars(live) or live.cw is not cw:
-        raise RuntimeError(f'the search does not look decide / cw.prepare_roots up through their modules at call time: {found}')
+        raise RuntimeError(f'the search does not look decide / cw.prepare_roots / cw.price up through their modules at call time: {found}')
     return True
 
 
@@ -223,10 +349,58 @@ def shard_cells(cells, shard, shards):
     return sorted(cells, key=lambda c: c['ordinal'])[shard::shards]
 
 
+def read_targets(path):
+    """{ordinal: dict(targets, ours, seed, kind)} from a --targets JSONL. ours, seed and kind are optional, but one ordinal's rows
+    must agree on them; a malformed, non-object or repeated row is an error."""
+    out = {}
+    for number, raw in enumerate(Path(path).read_bytes().splitlines(), 1):
+        if not raw.strip():continue
+        row = json.loads(raw)
+        if type(row) is not dict:raise ValueError(f'{path}:{number}: a JSON object per line required')
+        ordinal, index = row.get('ordinal'), row.get('decision_index')
+        if type(ordinal) is not int or ordinal < 0 or type(index) is not int or index < 0:
+            raise ValueError(f'{path}:{number}: integer ordinal and decision_index (>= 0) required')
+        entry = out.setdefault(ordinal, dict(targets=set(), ours=None, seed=None, kind=None))
+        if index in entry['targets']:raise ValueError(f'{path}:{number}: target ({ordinal}, {index}) repeated')
+        entry['targets'].add(index)
+        for key in ('ours', 'seed', 'kind'):
+            if row.get(key) is None:continue
+            if entry[key] is not None and entry[key] != row[key]:raise ValueError(f'{path}:{number}: cell {ordinal}\'s {key} differs between rows')
+            entry[key] = row[key]
+    if not out:raise ValueError(f'{path}: no targets')
+    return {o: dict(e, targets=sorted(e['targets'])) for o, e in sorted(out.items())}
+
+
+def target_cell(run, ordinal, entry):
+    """A --targets cell: results/<ordinal>.json's cell when it exists (any arm), else the capture's own registration (owner -> seat,
+    seed), which must name this ordinal; with its target decision indices and kind. A target row's ours and seed, when given,
+    must be the capture's owner and the cell's seed: a different seat's capture is a different root."""
+    first = None
+    if (Path(run) / 'results' / f'{ordinal}.json').exists():
+        cell = cell_of(run, ordinal)
+        if entry['ours'] is not None:first = next(iter(owning.read_capture(Path(run) / 'owning-wire' / f'{ordinal}.jsonl')), None)
+        owner = None if first is None else first['owner']   # the capture's own owner, whatever the result says
+        if entry['ours'] is not None and first is None:raise ValueError(f'cell {ordinal}: its capture has no decision')
+    else:
+        first = next(iter(owning.read_capture(Path(run) / 'owning-wire' / f'{ordinal}.jsonl')), None)
+        if first is None:raise ValueError(f'cell {ordinal}: its capture has no decision')
+        if (first.get('cell') or {}).get('ordinal') != ordinal:raise ValueError(f'owning-wire/{ordinal}.jsonl registers cell {(first.get("cell") or {}).get("ordinal")!r}')
+        owner = first['owner'];cell = dict(ordinal=ordinal, arm=None, seed=first['seed'], seat={'p1': 0, 'p2': 1}[owner], pair_ordinal=None, status=None)
+    if entry['ours'] is not None and entry['ours'] != owner:
+        raise ValueError(f'cell {ordinal}: the targets name seat {entry["ours"]!r}, its capture is {owner!r}\'s')
+    if entry['seed'] is not None and entry['seed'] != cell['seed']:raise ValueError(f'cell {ordinal}: the targets name seed {entry["seed"]}, the cell is {cell["seed"]}')
+    return dict(cell, targets=list(entry['targets']), target_kind=entry['kind'])
+
+
 def select_cells(args):
     """The cells this shard replays (module docstring): --cells must be the arm's; --sample draws from the arm's COMPLETE
-    cells with an owner capture."""
+    cells with an owner capture; --targets names cells of any arm and the decisions to replay in each."""
     run = Path(args.run_directory)
+    missing = lambda ordinals: [o for o in ordinals if not (run / 'owning-wire' / f'{o}.jsonl').exists()]
+    if getattr(args, 'targets', None):   # this shard's ordinals first: another shard's cells are never read
+        targets = read_targets(args.targets);mine = sorted(targets)[args.shard::args.shards]
+        if missing(mine):raise ValueError(f'cells {missing(mine)} have no owner capture')
+        return [target_cell(run, o, targets[o]) for o in mine]
     if args.cells:
         cells = [cell_of(run, o) for o in dict.fromkeys(args.cells)]
         odd = [c['ordinal'] for c in cells if c['arm'] != args.arm]
@@ -234,9 +408,13 @@ def select_cells(args):
     else:
         pool = [c for c in arm_cells(run, args.arm) if c['status'] == 'COMPLETE' and (run / 'owning-wire' / f'{c["ordinal"]}.jsonl').exists()]
         cells = sample_cells(pool, args.sample, args.sample_seed)
-    missing = [c['ordinal'] for c in cells if not (run / 'owning-wire' / f'{c["ordinal"]}.jsonl').exists()]
-    if missing:raise ValueError(f'cells {missing} have no owner capture')
+    if missing(c['ordinal'] for c in cells):raise ValueError(f'cells {missing(c["ordinal"] for c in cells)} have no owner capture')
     return shard_cells(cells, args.shard, args.shards)
+
+
+def is_target(cell, decision_index):
+    """Whether a captured decision is replayed: every decision of a --cells/--sample cell; only its targets for a --targets cell."""
+    return 'targets' not in cell or decision_index in cell['targets']
 
 
 def sent(request):
@@ -301,13 +479,14 @@ class Decided:
 
 
 class Capture:
-    """References to every decide call's arguments and every prepare_roots result while installed() is active."""
+    """References to every decide call's arguments, every prepare_roots result and every cw.price call's (frame, batch) (in
+    `frames`: depthn_carry_audit's subclass keeps its own `priced`) while installed() is active."""
     def __init__(self):
-        self.decided, self.prepared = [], []
+        self.decided, self.prepared, self.frames = [], [], []
 
     @contextmanager
     def installed(self):
-        decide, prepare_roots = live.decide, cw.prepare_roots
+        decide, prepare_roots, price = live.decide, cw.prepare_roots, cw.price
 
         def decide_wrapper(blocks, root_logits, root_legal):
             self.decided.append(Decided(blocks, root_logits, root_legal))
@@ -318,9 +497,33 @@ class Capture:
             self.prepared.append(out)
             return out
 
-        live.decide, cw.prepare_roots = decide_wrapper, prepare_wrapper
+        def price_wrapper(*arguments, **keywords):   # cw.price(pricer, batch, binding, recipe, params): the frame and the batch
+            out = price(*arguments, **keywords)
+            self.frames.append((out[0], arguments[1] if len(arguments) > 1 else keywords.get('batch')))
+            return out
+
+        live.decide, cw.prepare_roots, cw.price = decide_wrapper, prepare_wrapper, price_wrapper
         try:yield self
-        finally:live.decide, cw.prepare_roots = decide, prepare_roots
+        finally:live.decide, cw.prepare_roots, cw.price = decide, prepare_roots, price
+
+
+def depth1_cells(frame, root, world):
+    """--depth1-cells: the depth-1 cells (own action a, opponent reply b) of one block world by what the turn-1 child is (D3's
+    frame, host arrays [root, world, a, b(, lane)]), each a sorted list of [a, b] pairs:
+    - opp_forced: the opponent is requested at the child with only switch lanes 4-8 legal (the engine forces a switch after a faint
+      from any source, or a Baton Pass: gpu_engine.transition's forced_switch; state.legal_actions then clears its move lanes), so
+      a replacement from its party is pending;
+    - own_forced: the same for our seat;
+    - terminal: t1_status 1, the battle ended.
+    Cells D3 did not enumerate (status 0) are never listed; its requested/legal fields are zero outside the viewed cells."""
+    import numpy as np
+    status = np.asarray(frame.t1_status[root, world])
+
+    def forced(requested, legal):
+        req, leg = np.asarray(requested[root, world]).astype(bool), np.asarray(legal[root, world]).astype(bool)
+        return [[a, b] for a in range(9) for b in range(9) if status[a, b] != 0 and req[a, b] and not leg[a, b, :4].any() and leg[a, b, 4:].any()]
+    return dict(opp_forced=forced(frame.t1_peer_requested, frame.t1_peer_legal), own_forced=forced(frame.t1_own_requested, frame.t1_own_legal),
+                terminal=[[a, b] for a in range(9) for b in range(9) if status[a, b] == 1])
 
 
 def prices_fields(world):
@@ -331,21 +534,116 @@ def prices_fields(world):
         grid=[[None if v is None else float(v) for v in row] for row in world.joint_values])
 
 
-def opponent_facts(state, owner, vocabulary):
+def opponent_facts(state, owner, vocabulary, public=None):
     """The opponent's (1 - owner) mapping facts in one world's (host) engine state, through the constructor's engine-id tables
-    (metadata['vocabulary']: normalize_id for species, phase_d_live_worlds._source_move for moves)."""
+    (metadata['vocabulary']: normalize_id for species, abilities and items, phase_d_live_worlds._source_move for moves), its
+    party in slot order with each member's set, and (from `public`, the completed carry, when it has own_order) the peer's
+    request order (module docstring)."""
     import numpy as np
     from pokezero.dex import normalize_id
     from gpu_engine.phase_d_live_worlds import _source_move
     foe = 1 - owner;at = lambda name: np.asarray(getattr(state, name))[0, foe]
     species_ids, move_ids, hp, max_hp, charge = at('species'), at('moves'), at('hp'), at('max_hp'), at('charge_move');active = int(at('active'))
+    abilities, base_abilities, items = at('ability'), at('base_ability'), at('item')
+    name = lambda table, i: None if i <= 0 or i >= len(vocabulary.get(table, ())) else normalize_id(vocabulary[table][i]) or None
     species = lambda i: None if i <= 0 else normalize_id(vocabulary['species'][i])
     move = lambda i: None if i <= 0 else _source_move(vocabulary['moves'][i])
-    party = [dict(slot=s, species=species(int(species_ids[s])), species_engine_id=int(species_ids[s]), fainted=bool(hp[s] <= 0), hp=int(hp[s]),
-        max_hp=int(max_hp[s])) for s in range(len(species_ids))]
+    hp_types, hp_powers = at('hidden_power_type'), at('hidden_power_power')
+
+    def typed(i, slot):   # a party move id as the request spells it: Hidden Power keeps its type (module docstring)
+        if i <= 0:return None
+        value = normalize_id(vocabulary['moves'][i])
+        if not value.startswith('hiddenpower'):return move(i)
+        if value != 'hiddenpower':return value
+        kind = name('types', int(hp_types[slot]));power = int(hp_powers[slot])
+        return value if kind is None else f'hiddenpower{kind}' + (str(power) if power > 0 else '')
+    order = getattr(public, 'own_order', None)
+    order = None if order is None else [int(x) for x in np.asarray(order).reshape(-1, 2, 6)[0, foe]]
+    party = [dict(slot=s, order=None if order is None or s not in order else order.index(s), species=species(int(species_ids[s])),
+        species_engine_id=int(species_ids[s]), moves=[typed(int(m), s) for m in move_ids[s]], move_engine_ids=[int(m) for m in move_ids[s]],
+        ability=name('abilities', int(abilities[s])), base_ability=name('abilities', int(base_abilities[s])), item=name('items', int(items[s])),
+        fainted=bool(hp[s] <= 0), hp=int(hp[s]), max_hp=int(max_hp[s])) for s in range(len(species_ids))]
     inside = 0 <= active < len(party);moves = [int(m) for m in move_ids[active]] if inside else []
     return dict(side=f'p{foe + 1}', active_slot=active, active_species=party[active]['species'] if inside else None,
-        active_moves=[move(m) for m in moves], active_move_engine_ids=moves, charge_move=move(int(charge[active])) if inside else None, party=party)
+        active_moves=[move(m) for m in moves], active_move_engine_ids=moves, charge_move=move(int(charge[active])) if inside else None, party=party,
+        request_order=order)
+
+
+class PeerInputs:
+    """Each decided root's depth-0 peer inputs (module docstring): captured per world from the views, checked against the
+    server's champion on the stack the pricer evaluates, and kept (the champion adapter's view slice) for the shard's
+    sidecar."""
+    def __init__(self, executor, champion, params):
+        from gpu_engine import device_depth2_pricer as depth2
+        self.views = depth2._make_views(executor);self.champion, self.params, self.program = champion, params, None
+        self.columns = {k: [] for k in PEER_INPUT_KEYS + ('legal', 'ordinal', 'decision_index', 'world', 'root_peer_logits', 'opponent_requested',
+            'self_check')}
+
+    def capture(self, state, public, owner):
+        """(the V2 encoder inputs, host copies [1, 1, 29, F], the peer view's legal mask [9]) of one world."""
+        import numpy as np
+        _, peer, _, inputs = self.views(state, public, owner)
+        legal = np.asarray(peer.legal_action_mask, bool).reshape(-1)
+        if legal.shape != (9,):raise ValueError(f'one world\'s peer legal mask required, got {legal.shape}')
+        return {k: np.asarray(v) for k, v in inputs.items()}, legal
+
+    def forward(self, inputs):
+        """The champion's policy logits [N, 9] f32 on stacked V2 inputs: its own adapter under jax.jit."""
+        import jax
+        import numpy as np
+        if self.program is None:self.program = jax.jit(lambda p, x: self.champion(p, x))
+        return np.asarray(jax.device_get(self.program(self.params, inputs)).policy_logits, np.float32)
+
+    def annotate(self, key, worlds, captured):
+        """Self-checks and keeps one decided root's worlds (block order). `key` (ordinal, decision_index); `captured` per world
+        capture()'s pair or None (no state, or its capture failed). Sets peer_inputs_index / peer_self_check /
+        peer_self_check_max_abs_diff on each world row."""
+        import numpy as np
+        first = next((x for x in captured if x is not None), None)
+        if first is None:raise ValueError('no constructed world')
+        batch = {k: np.concatenate([(x if x is not None else first)[0][k] for x in captured]) for k in first[0]}
+        logits = self.forward(batch);view = {k: np.asarray(v) for k, v in self.champion.view(batch).items()}
+        fields, kept = {}, []   # applied only once every world is done, so a failure leaves the sidecar's columns aligned
+        for i, row in enumerate(worlds[:len(captured)]):
+            checkable = row.get('priced') is True and row.get('opponent_requested') is True;checked = checkable and captured[i] is not None
+            recorded = np.asarray(row['root_peer_logits'], np.float32) if checked else None
+            # A checkable world whose inputs were not captured (its capture raised) fails: it is never skipped.
+            same = (False if checkable else None) if not checked else bool(np.array_equal(logits[i], recorded))
+            fields[i] = dict(peer_self_check=same, peer_inputs_index=None,
+                peer_self_check_max_abs_diff=None if not checked else float(np.max(np.abs(logits[i].astype(np.float64) - recorded))))
+            if captured[i] is None:continue
+            kept.append((i, dict({k: (view[k][i, 0] if k != 'history_mask' else view[k][i]).copy() for k in PEER_INPUT_KEYS}, legal=captured[i][1],
+                ordinal=key[0], decision_index=key[1], world=i, root_peer_logits=np.asarray(row.get('root_peer_logits') or [0.] * 9, np.float32),
+                opponent_requested=bool(row.get('opponent_requested')), self_check=-1 if same is None else int(same))))
+        for i, entry in kept:
+            fields[i]['peer_inputs_index'] = len(self.columns['world'])
+            for k, v in entry.items():self.columns[k].append(v)
+        for i, value in fields.items():worlds[i].update(value)
+
+    DTYPES = dict(numeric_features='float32', categorical_ids='int32', token_type_ids='int32', attention_mask='bool', history_mask='bool', legal='bool',
+        ordinal='int64', decision_index='int64', world='int32', root_peer_logits='float32', opponent_requested='bool', self_check='int8')
+    SHAPES = dict(numeric_features=(23, 132), categorical_ids=(23, 41), token_type_ids=(23,), attention_mask=(23,), history_mask=(1,), legal=(9,),
+        root_peer_logits=(9,))
+
+    def arrays(self):
+        """The sidecar's arrays (module docstring), stacked over the K kept worlds."""
+        import numpy as np
+        out = {}
+        for k, dtype in self.DTYPES.items():
+            values = self.columns[k];shape = (len(values),) + self.SHAPES.get(k, ())
+            out[k] = np.asarray(values, dtype).reshape(shape) if values else np.zeros(shape, dtype)
+        return out
+
+    def write(self, path, header):
+        """peer-inputs-<shard>.npz: the arrays and `header` (with each array's shape and dtype) as a JSON string; never over a file."""
+        import numpy as np
+        arrays = self.arrays()
+        document = dict(header, schema=PEER_INPUTS_SCHEMA, worlds=len(self.columns['world']),
+            arrays={k: dict(shape=list(v.shape), dtype=str(v.dtype)) for k, v in arrays.items()})
+        with Path(path).open('xb') as stream:
+            np.savez_compressed(stream, header=np.asarray(json.dumps(document, sort_keys=True, default=repr)), **arrays)
+            stream.flush();os.fsync(stream.fileno())
+        return document
 
 
 class PeerLanes:
@@ -387,14 +685,18 @@ def lane_labels(facts, peer):
     return out
 
 
-def describe(capture, peer_lanes, vocabulary):
-    """dict(root, prepared, worlds, notes, kept_disagreements) of one replayed decision's capture (module docstring)."""
+def describe(capture, peer_lanes, vocabulary, peer_inputs=None, key=None, reply=False, cells=False):
+    """dict(root, prepared, worlds, notes, kept_disagreements, depth1) of one replayed decision's capture (module docstring); with
+    `peer_inputs` (PeerInputs), each decided world's depth-0 peer inputs are self-checked and kept under `key`
+    (ordinal, decision_index). From the priced frame, each world's depth-1 prices (worlds[i]['depth1'], backup_depth1: the
+    turn-1 grid of t1_value) and the root's per-block refusal causes (depth1.block_causes), whatever depth 2 decided; with
+    `reply` (a --reply-archive search), each world's reply_peer_logits: the reply model's root logits on the played blocks."""
     import jax
     notes = [];items = [item for call in capture.prepared for item in call]
     if len(capture.prepared) > 1 or len(items) > 1:notes.append(f'{len(capture.prepared)} prepare_roots calls, {len(items)} roots')
     if len(capture.decided) > 1:notes.append(f'{len(capture.decided)} decide calls')
     item = items[0] if items else None;decided = capture.decided[0] if capture.decided else None
-    prepared = worlds = None
+    prepared = worlds = None;captured = []
     if type(item) is cw.RootRefusal:prepared = dict(kind='RootRefusal', refusal_kind=item.kind, refusal_detail=str(item.detail)[:500], seconds=item.seconds)
     elif type(item) is cw.Prepared:
         made = item.made;owner = int(item.detached.address.owner)
@@ -404,11 +706,13 @@ def describe(capture, peer_lanes, vocabulary):
         for i, w in enumerate(made.worlds):
             row = dict(world=i, index=w.index, seed=made.seeds[i] if i < len(made.seeds) else None, kernel_seed=w.kernel_seed, refusals=list(w.refusals),
                 constructed=w.state is not None, opponent=None, peer=None)
+            captured.append(None)
             if w.state is not None:
                 try:
                     state, public = jax.device_get((w.state, w.public))   # as constructor_worlds.build reads a world
-                    row['opponent'] = opponent_facts(state, owner, vocabulary);row['peer'] = peer_lanes(state, public, owner)
+                    row['opponent'] = opponent_facts(state, owner, vocabulary, public);row['peer'] = peer_lanes(state, public, owner)
                     row['peer']['lanes'] = lane_labels(row['opponent'], row['peer'])
+                    if peer_inputs is not None and decided is not None:captured[-1] = peer_inputs.capture(state, public, owner)   # decided roots only
                 except Exception as error:   # a capture problem never stops the replay
                     notes.append(f'world {i}: {type(error).__name__}: {error}')
             worlds.append(row)
@@ -428,11 +732,47 @@ def describe(capture, peer_lanes, vocabulary):
             row['requested_matches_peer'] = row['opponent_requested'] == any(peer['legal'])
             row['kept_matches_peer_legal'] = row['kept'] == peer['legal'] if row['opponent_requested'] else None
             disagreements += row['requested_matches_peer'] is False or row['kept_matches_peer_legal'] is False
-    return dict(root=root, prepared=prepared, worlds=worlds or [], notes=notes, kept_disagreements=disagreements)
+        if peer_inputs is not None and captured:
+            try:peer_inputs.annotate(key, worlds, captured)
+            except Exception as error:   # recorded; the summary's peer_inputs_check fails on this root
+                notes.append(f'peer inputs: {type(error).__name__}: {error}')
+                for row in worlds:row['peer_self_check'] = False;row.setdefault('peer_inputs_index', None)
+    depth1 = None
+    frames = getattr(capture, 'frames', None) or []
+    if len(frames) > 1:notes.append(f'{len(frames)} price calls')
+    if frames:
+        frame, batch = frames[0]
+        priced_roots = [r for r in getattr(batch, 'roots', ()) if r.get('status') == 'PRICED']
+        if len(priced_roots) > 1:notes.append(f'{len(priced_roots)} priced roots in one batch')
+        entry = priced_roots[0] if priced_roots else None
+        if entry is not None and type(item) is cw.Prepared and entry.get('request_id') not in (None, item.request_id):
+            notes.append('the priced root is not the prepared one');entry = None
+        if frame is not None and entry is not None:
+            try:
+                prices1 = [w for r in entry['rows'] for w in backups.backup_depth1(frame, r)]   # block k's world j is world 2k+j
+                summary = backups.refusal_summary(frame)['roots'];causes = [summary[r]['cause'] for r in entry['rows']]
+                depth1 = dict(block_causes=causes, priced_worlds=sum(w is not None for w in prices1),
+                    refused_at_depth1=[c in backups.DEPTH1_CAUSES for c in causes],   # D3 itself would refuse these blocks
+                    root_logits=[float(x) for x in entry['root_logits']], root_legal=[bool(x) for x in entry['root_legal']])   # also for roots decide never saw
+                worlds = worlds if worlds is not None else []
+                for i, world in enumerate(prices1):
+                    while i >= len(worlds):worlds.append(dict(world=len(worlds)))
+                    worlds[i]['depth1'] = prices_fields(world)
+                    if cells and world is not None:   # its own try: a failure here costs only this world's cells
+                        try:worlds[i]['depth1']['cells'] = depth1_cells(frame, entry['rows'][i // 2], i % 2)
+                        except Exception as error:notes.append(f'depth 1 cells, world {i}: {type(error).__name__}: {error}')
+            except Exception as error:   # recorded; the depth-2 row is unchanged
+                notes.append(f'depth 1: {type(error).__name__}: {error}')
+    if reply and len(capture.decided) >= 2:   # br_fp: the champion's decide comes first, the played (replied) one last
+        played = [w for pair in capture.decided[-1].blocks for w in pair]
+        for i, world in enumerate(played):   # a waiting opponent keeps the champion's column: no reply model logits there
+            if i < len(worlds or []):worlds[i]['reply_peer_logits'] = (None if world is None or not world.opponent_requested
+                else [float(x) for x in world.opponent_logits])
+    return dict(root=root, prepared=prepared, worlds=worlds or [], notes=notes, kept_disagreements=disagreements, depth1=depth1)
 
 
 REPLAY_FIELDS = ('q_values', 'completed_q', 'policy_target', 'root_value', 'action_mean_q', 'action_policy_target', 'reduction_note', 'block_causes',
-    'world_refusals', 'bucket', 'batch_size', 'tree_commit')
+    'world_refusals', 'bucket', 'batch_size', 'tree_commit', 'root_view_source', 'b2_view', 'reply_prior')   # reply_prior: --reply-archive (br_fp) only
 
 
 def decision_row(cell, row, request, response, wall, found, detail, *, shard, capture_seconds, live_problem=None):
@@ -441,20 +781,43 @@ def decision_row(cell, row, request, response, wall, found, detail, *, shard, ca
     address = tuple(row[k] for k in ('battle_id', 'owner', 'stream_id', 'decision_index', 'generation', 'prefix_sha256'))
     replay = bench.record(None, cell['ordinal'], address, response, wall, request=request, turn=bench.turn_of(request['lines']))
     replay.update({k: response.get(k) for k in REPLAY_FIELDS}, request_id=response.get('request_id'))
+    if 'noise_gate' in response:replay.update(root_operator=response.get('root_operator'), noise_gate=response['noise_gate'])   # NOISE_GATED_K2 only
     for key in ('roster', 'ordinal', 'address'):replay.pop(key, None)
+    decided = detail['root'] is not None;moves = actor.own_moves(request.get('own_request_line'))   # guard fields (module docstring)
+    prepared = detail['prepared'] or {}
+    refusal = (None if response.get('status') == 'COMPLETE' else prepared.get('refusal_kind') if prepared.get('kind') == 'RootRefusal'
+        else response.get('cause'))
+    root = dict(decided=decided, **(detail['root'] if decided else dict(root_logits=None, root_legal=None)),
+        own_moves=None if moves is None else list(moves),
+        own_recharge_lanes=None if moves is None else [actor.recharge_lane(moves, lane) for lane in range(4)],
+        opponent_recharge=opponent_recharge(request), refusal_cause=refusal)
     count = row.get('request_count')
     if count is None:count = sum(x.startswith('|request|') for x in request['lines'])
     out = dict(schema=ROW_SCHEMA, shard=shard, ordinal=cell['ordinal'], seat=cell.get('seat'), seed=cell.get('seed'), battle_id=row['battle_id'],
         owner=row['owner'], stream_id=row['stream_id'], decision_index=row['decision_index'], generation=row['generation'],
         prefix_sha256=row['prefix_sha256'], request_count=count, capture_turn=row.get('turn'), replay=replay, live=found,
-        live_problem=live_problem, parity=parity(response, found), capture_seconds=capture_seconds, **detail)
+        live_problem=live_problem, parity=parity(response, found), capture_seconds=capture_seconds, effect_guard=response.get('effect_guard'),
+        private_reveals=response.get('private_reveals'), **({'peer_view_b': response['peer_view_b']} if 'peer_view_b' in response else {}),
+        **dict(detail, root=root))
     # A COMPLETE decision went through decide; a root that reached prepare (its prepare_seconds) through prepare_roots.
-    out['capture_ok'] = ((response.get('status') != 'COMPLETE' or detail['root'] is not None)
+    checks = [w['peer_self_check'] for w in out['worlds'] if 'peer_self_check' in w]
+    out['peer_inputs_check'] = None if not checks else dict(checked=sum(c is not None for c in checks), equal=sum(c is True for c in checks),
+        failed_worlds=[w['world'] for w in out['worlds'] if w.get('peer_self_check') is False],
+        written=sum(w.get('peer_inputs_index') is not None for w in out['worlds']),
+        applicable=any(w.get('priced') is True and w.get('opponent_requested') is True for w in out['worlds']))   # no requested world: nothing to check
+    out['capture_ok'] = ((response.get('status') != 'COMPLETE' or decided)
         and ((response.get('timings') or {}).get('prepare_seconds') is None or detail['prepared'] is not None))
     return out
 
 
-BULK = ('worlds', 'root', 'prepared')   # per-world grids and facts: written, not kept for the summary
+def opponent_recharge(request):
+    """The peer must recharge at this root: constructor_worlds.line_facts' recharge (B2's rule) on the request's lines; None
+    when the owner is not p1 or p2."""
+    owner = {'p1': 0, 'p2': 1}.get(request.get('owner'))
+    return None if owner is None else bool(cw.line_facts(request['lines'], owner).recharge[1 - owner])
+
+
+BULK = ('worlds', 'root', 'prepared', 'effect_guard')   # per-world grids and facts: written, not kept for the summary
 
 
 def encode_row(row):
@@ -462,7 +825,160 @@ def encode_row(row):
     except ValueError:return json.dumps(dict(row, nonfinite=True), sort_keys=True, default=repr)
 
 
+# True worlds (--true-worlds) ---------------------------------------------------------------------------------------------------------
+def _ov():
+    from scripts import depthn_opponent_view_parity as ov   # the OV harness's true-world builders (only with --true-worlds)
+    return ov
+
+
+def sidecar_path(directory, cell):
+    """(path, None) of the cell's opponent sidecar DIR/opponent/<kind>-<ordinal>.json (kind: the --targets row's; without one, the
+    ordinal's only sidecar), or (None, why)."""
+    folder, kind, ordinal = Path(directory) / 'opponent', cell.get('target_kind'), cell['ordinal']
+    if kind is not None:
+        path = folder / f'{kind}-{ordinal}.json'
+        return (path, None) if path.exists() else (None, f'no opponent sidecar {path.name}')
+    found = sorted(folder.glob(f'*-{ordinal}.json'))
+    if len(found) == 1:return found[0], None
+    return None, f'no opponent sidecar for cell {ordinal}' if not found else f'cell {ordinal} has {len(found)} sidecars and no target kind'
+
+
+def true_inputs(sidecar, kind, cell, owner, decision_index):
+    """What one decision's true worlds are built from: the sidecar's team rows, round-0 request and (true_private) the root's
+    request, the played kind, the fallback (true_private where the opponent waits at the root: true), and the problem that
+    refuses every world (another seed or seat than the root's, no root entry or a root the sidecar writer could not align)."""
+    out = dict(kind=kind, fallback=None, problem=None, team_rows=None, round0_request=None, root_request=None)
+    ours = f'p{owner + 1}'
+    if sidecar.get('ours') != ours:return dict(out, problem=f'the sidecar is seat {sidecar.get("ours")}, the root seat {ours}')
+    if cell.get('seed') is not None and sidecar.get('seed') != cell['seed']:
+        return dict(out, problem=f'the sidecar names seed {sidecar.get("seed")}, the cell {cell["seed"]}')
+    out.update(team_rows=sidecar['team_rows'], round0_request=sidecar['round0_request'])
+    if kind == 'true':return out
+    root = (sidecar.get('roots') or {}).get(str(decision_index))
+    if root is None:return dict(out, problem=f'the sidecar has no root {decision_index}')
+    if root.get('error'):return dict(out, problem=f'the sidecar\'s root {decision_index}: {root["error"]}')
+    if root.get('root_request') is None:return dict(out, kind='true', fallback='the opponent waits at the root: no request to overlay')
+    return dict(out, root_request=root['root_request'])
+
+
+def true_world_set(ov, call, made, inputs):
+    """(the sampler's WorldSet with its worlds replaced by true worlds, per-world facts, the true start's facts). World i: the OV
+    harness's build_true_world with index i (sampled world i's kernel seed), then for true_private overlay_private on the
+    opponent's side. A world that cannot be built has no state and its reason as its refusal (fail closed)."""
+    from gpu_engine.device_public_world_state import World
+    from gpu_engine.phase_d_live_worlds import WorldSet
+    named = call.named;count = int(named['count']);owner = int(named['detached'].address.owner);worlds, facts, start = [], [], None
+    for i in range(count):
+        sampled = made.worlds[i].kernel_seed if i < len(made.worlds) else None
+        fact = dict(world=i, true_kind=inputs['kind'], built=False, reason=inputs['problem'], notes=[], kernel_seed=sampled, kernel_seed_is_sampled=None, refusals=[])
+        state = public = None
+        if inputs['problem'] is None:
+            try:
+                world, info = ov.build_true_world(call, inputs['team_rows'], inputs['round0_request'], index=i)
+                if start is None and 'species' in info:start = {k: info.get(k) for k in ('species', 'happiness', 'notes', 'packed_sha256')}
+                fact.update(reason=info.get('reason'), kernel_seed=info.get('kernel_seed', sampled), refusals=list(info.get('refusals') or ()))
+                fact['kernel_seed_is_sampled'] = None if sampled is None or 'kernel_seed' not in info else info['kernel_seed'] == sampled
+                if world is not None and world.state is None:fact['reason'] = 'the true world\'s materialization was refused'
+                elif world is not None:
+                    state, public = world.state, world.public
+                    if inputs['root_request'] is not None:
+                        with ov.cpu_device():state, fact['notes'] = ov.overlay_private(state, 1 - owner, inputs['root_request'], named['metadata']['vocabulary'])
+            except Exception as error:   # the world, not the replay: it is refused
+                state = public = None;fact['reason'] = f'{type(error).__name__}: {error}'[:300]
+        fact['built'] = state is not None
+        if state is None and not fact['refusals']:fact['refusals'] = [str(fact['reason'] or 'not built')]
+        worlds.append(World(i, state, public, tuple(fact['refusals']), fact['kernel_seed'], False));facts.append(fact)
+    return WorldSet(made.root, tuple(worlds), tuple(made.seeds), count, tuple(made.mapper_diagnostics)), facts, start
+
+
+class TrueWorlds:
+    """--true-worlds DIR --true-kind KIND (module docstring): installed(cell, decision_index) wraps phase_d_protocol_world.sample
+    for one process_many call so it returns true worlds, and yields the decision's record."""
+    def __init__(self, directory, kind):
+        if kind not in TRUE_KINDS:raise ValueError(f'--true-kind must be one of {TRUE_KINDS}, not {kind!r}')
+        if not (Path(directory) / 'opponent').is_dir():raise ValueError(f'--true-worlds {directory}: no opponent/ sidecar directory')
+        self.directory, self.kind = Path(directory), kind
+
+    def load(self, cell):
+        """(the cell's sidecar or None, its record: path, sha256, or the problem)."""
+        path, problem = sidecar_path(self.directory, cell)
+        if path is None:return None, dict(sidecar=None, sidecar_sha256=None, problem=problem)
+        raw = path.read_bytes()
+        try:doc = json.loads(raw)
+        except ValueError as error:   # a damaged sidecar refuses this root, never the shard
+            return None, dict(sidecar=str(path), sidecar_sha256=hashlib.sha256(raw).hexdigest(), problem=f'sidecar unreadable: {error}'[:200])
+        return doc, dict(sidecar=str(path), sidecar_sha256=hashlib.sha256(raw).hexdigest(), problem=None)
+
+    @contextmanager
+    def installed(self, cell, decision_index):
+        """phase_d_protocol_world.sample wrapped while the block runs (restored when it ends or raises). The record holds the
+        sidecar and, per sample call, the played kind, fallback, problem, true start and each world's facts (or the sampler's
+        error, which is raised on)."""
+        from gpu_engine import phase_d_protocol_world as pw
+        ov = _ov();original = pw.sample;sidecar, found = self.load(cell);record = dict(found, requested_kind=self.kind, calls=[])
+
+        def wrapper(*arguments, **keywords):
+            call = ov.SampleCall(dict(zip(ov.SAMPLE_PARAMETERS, arguments), **keywords))
+            try:made = original(*arguments, **keywords)
+            except BaseException as error:
+                record['calls'].append(dict(error=f'{type(error).__name__}: {error}'[:300]));raise
+            call.result = made;owner = int(call.named['detached'].address.owner)
+            inputs = (dict(kind=self.kind, fallback=None, problem=found['problem']) if sidecar is None
+                else true_inputs(sidecar, self.kind, cell, owner, decision_index))
+            out, facts, start = true_world_set(ov, call, made, inputs)
+            record['calls'].append(dict(kind=inputs['kind'], fallback=inputs['fallback'], problem=inputs['problem'], start=start, worlds=facts))
+            return out
+
+        pw.sample = wrapper
+        try:yield record
+        finally:pw.sample = original
+
+
+def true_worlds_fields(detail, record):
+    """Writes one decision's true-world record into describe's detail: the row's true_worlds (the last sample call's kind,
+    fallback, problem and start, the sidecar, the worlds built) and each world's true_world."""
+    calls = record['calls'];last = calls[-1] if calls else {};facts = last.get('worlds') or []
+    detail['true_worlds'] = dict({k: v for k, v in record.items() if k != 'calls'}, sample_calls=len(calls), error=last.get('error'),
+        **{k: last.get(k) for k in ('kind', 'fallback', 'start')}, problem=last.get('problem', record['problem']),
+        worlds=len(facts), built=sum(f['built'] for f in facts))
+    if len(calls) > 1:detail['notes'].append(f'{len(calls)} sample calls: the last one\'s true worlds are recorded')
+    worlds = detail['worlds']
+    for fact in facts:
+        while fact['world'] >= len(worlds):worlds.append(dict(world=len(worlds)))
+        worlds[fact['world']]['true_world'] = fact
+
+
+def true_worlds_summary(rows, kind):
+    """The summary's true_worlds: rows, the kinds played, the fallbacks to true, and the roots failed closed (a problem, or a
+    world not built)."""
+    marked = [r for r in rows if r.get('true_worlds')];address = lambda r: dict(ordinal=r['ordinal'], decision_index=r['decision_index'])
+    return dict(requested_kind=kind, rows=len(marked), played=dict(collections.Counter(r['true_worlds']['kind'] for r in marked if r['true_worlds']['kind'])),
+        fallbacks=[dict(address(r), fallback=r['true_worlds']['fallback']) for r in marked if r['true_worlds']['fallback']],
+        failed_closed=[dict(address(r), problem=r['true_worlds']['problem'], built=r['true_worlds']['built'], worlds=r['true_worlds']['worlds'])
+            for r in marked if r['true_worlds']['sample_calls'] and (r['true_worlds']['problem'] or r['true_worlds']['built'] < r['true_worlds']['worlds'])],
+        never_sampled=[address(r) for r in marked if not r['true_worlds']['sample_calls']])
+
+
 # Summary -------------------------------------------------------------------------------------------------------------------------
+def peer_inputs_summary(rows):
+    """The summary's peer_inputs_check (module docstring): written, checked and equal worlds over every decided root, the
+    failures, the not-applicable roots (decided, no priced world where the opponent was requested: no root_peer_logits to check;
+    counted, never failing), and passed (at least one world checked, every checked world equal, and every other decided root
+    checked)."""
+    decided = [r for r in rows if r['replay']['status'] == 'COMPLETE']
+    checked = [r for r in decided if r.get('peer_inputs_check') and r['peer_inputs_check']['checked'] > 0]   # a root with no checked world is not
+    na = [r for r in decided if r.get('peer_inputs_check') and r['peer_inputs_check']['checked'] == 0
+          and r['peer_inputs_check'].get('applicable') is False and not r['peer_inputs_check']['failed_worlds']]
+    address = lambda r: dict(ordinal=r['ordinal'], decision_index=r['decision_index'])
+    worlds = sum(r['peer_inputs_check']['checked'] for r in checked);equal = sum(r['peer_inputs_check']['equal'] for r in checked)
+    failures = [dict(address(r), worlds=r['peer_inputs_check']['failed_worlds']) for r in checked if r['peer_inputs_check']['failed_worlds']]
+    seen = {id(r) for r in checked + na};unchecked = [address(r) for r in decided if id(r) not in seen]
+    return dict(decided_roots=len(decided), roots_checked=len(checked), roots_not_applicable=len(na),
+        worlds_written=sum(r['peer_inputs_check']['written'] for r in decided if r.get('peer_inputs_check')),
+        worlds_checked=worlds, worlds_equal=equal, failures=failures, unchecked_roots=unchecked,
+        passed=worlds > 0 and equal == worlds and not failures and not unchecked)
+
+
 def summarize(rows, *, shard, shards, cells, extra=None):
     """The shard's summary over its decision rows (module docstring)."""
     both = [r for r in rows if r['parity']['live_searched'] and r['parity']['replay_complete']]
@@ -479,7 +995,8 @@ def summarize(rows, *, shard, shards, cells, extra=None):
         live_problems=[dict(address(r), problem=r['live_problem']) for r in rows if r['live_problem']],
         capture_anomalies=[dict(address(r), notes=r['notes'], capture_ok=r['capture_ok']) for r in rows if r['notes'] or not r['capture_ok']],
         live_tree_commits=dict(collections.Counter(r['live']['tree_commit'] for r in rows if r['live'] and r['live']['tree_commit'])),
-        wall=bench.percentiles(r['replay']['wall_seconds'] for r in rows), capture=bench.percentiles(r['capture_seconds'] for r in rows), **(extra or {}))
+        wall=bench.percentiles(r['replay']['wall_seconds'] for r in rows), capture=bench.percentiles(r['capture_seconds'] for r in rows),
+        peer_inputs_check=peer_inputs_summary(rows), **(extra or {}))
 
 
 # Main ------------------------------------------------------------------------------------------------------------------------------
@@ -488,8 +1005,11 @@ def write_json(path, value):
 
 
 def main(argv=None):
-    args = options(argv);argv = list(sys.argv[1:] if argv is None else argv)
-    try:guard = tree_guard(tree_commit=args.tree_commit);check_call_sites();cells = select_cells(args)
+    args = options(argv);argv = list(sys.argv[1:] if argv is None else argv);true_worlds = None
+    try:
+        guard = tree_guard(tree_commit=args.tree_commit, accept_tree=args.accept_tree);check_call_sites()
+        if getattr(args, 'true_worlds', None):_ov().check_call_site();true_worlds = TrueWorlds(args.true_worlds, args.true_kind)   # the sampler's call site
+        cells = select_cells(args)
     except (ValueError, RuntimeError, OSError) as error:raise SystemExit(f'depthn_rr_reprice: {error}')
     if not cells:raise SystemExit('depthn_rr_reprice: no cell in this shard')
     out = Path(args.out);out.mkdir(parents=True, exist_ok=False);shard = args.shard;run = Path(args.run_directory)
@@ -499,13 +1019,20 @@ def main(argv=None):
     if problems:raise SystemExit('depthn_rr_reprice: the built search is not the live servers\': ' + '; '.join(problems))
     clock = time.perf_counter();warm = search.warmup(saved);warmup_seconds = time.perf_counter() - clock
     import jax
-    vocabulary = search.constructor.metadata['vocabulary'];peer_lanes = PeerLanes(search.pricers[search.buckets[0]].executor)
+    pricer = search.pricers[search.buckets[0]];vocabulary = search.constructor.metadata['vocabulary'];peer_lanes = PeerLanes(pricer.executor)
+    peer_inputs = PeerInputs(pricer.executor, pricer.forward, search.params[0])   # build's opponent actor 0: the champion
+    sidecar = dict(path=f'peer-inputs-{shard}.npz', tree_guard=guard, shard=shard, champion_identity=list(pricer.forward.identity),
+        slice=getattr(server.evaluators, 'SLICE_RULE', None), key=['ordinal', 'decision_index', 'world'])
     write_json(out / f'header-{shard}.json', dict(argv=argv, tree_guard=guard, run_header=header, live_identity=LIVE_IDENTITY, warmup=warm,
+        peer_inputs=dict(path=sidecar['path'], schema=PEER_INPUTS_SCHEMA), recharge_moves=sorted(actor.RECHARGE_MOVES),
         warmup_requests=len(saved), build_seconds=build_seconds, warmup_seconds=warmup_seconds, cells=cells, run_directory=str(run),
         arm=args.arm, shard=shard, shards=args.shards, max_decisions=args.max_decisions, sample=args.sample, sample_seed=args.sample_seed,
+        targets=None if not args.targets else dict(file=str(args.targets), sha256=hashlib.sha256(Path(args.targets).read_bytes()).hexdigest()),
+        true_worlds=None if true_worlds is None else dict(directory=str(true_worlds.directory), kind=true_worlds.kind),
         jax_version=jax.__version__, devices=[f'{d.platform}:{d.device_kind}' for d in jax.devices()], python=sys.version,
-        environment={k: os.environ.get(k) for k in ENVIRONMENT}, pid=os.getpid()))
-    rows, skipped, skip_disagreements, cell_errors, done, finished = [], 0, [], [], False, False
+        environment={k: os.environ.get(k) for k in ENVIRONMENT}, pid=os.getpid(), **({'replay_against': MODIFIED_TREE} if guard.get('modified_tree') else {})))
+    rows, skipped, skip_disagreements, cell_errors, done, finished, scanned = [], 0, [], [], False, False, set()
+    non_target, targets_seen, target_single_legal = 0, collections.defaultdict(set), []   # --targets accounting
     started = time.perf_counter()
     try:
         with (out / f'rows-{shard}.jsonl').open('x') as stream:
@@ -518,42 +1045,63 @@ def main(argv=None):
                 except (ValueError, KeyError, TypeError, OSError) as error:
                     cell_errors.append(dict(ordinal=ordinal, error=f'{type(error).__name__}: {error}'));continue
                 for row in captured:
+                    if not is_target(cell, row['decision_index']):non_target += 1;continue   # never sent: the constructor folds the prefix itself
                     request = {k: row[k] for k in bench.KEYS};found = live_fields(telemetry.get(row['decision_index']))
+                    foreign = 'targets' in cell and cell.get('arm') != args.arm   # another arm's cell: no live search to compare with
+                    if foreign:found = None
                     if not sent(request):
+                        if 'targets' in cell:target_single_legal.append(dict(ordinal=ordinal, decision_index=row['decision_index']));targets_seen[ordinal].add(row['decision_index'])
                         skipped += 1
                         if found is not None and found['request_kind'] != 'forced':skip_disagreements.append(dict(ordinal=ordinal, decision_index=row['decision_index'],
                             live_request_kind=found['request_kind'], sent=False))
                         continue
                     if args.max_decisions is not None and len(rows) >= args.max_decisions:done = True;break
-                    problem = ('no live telemetry row' if found is None else 'duplicated live telemetry rows' if row['decision_index'] in duplicated
+                    if 'targets' in cell:targets_seen[ordinal].add(row['decision_index'])
+                    problem = (f'cell arm {cell.get("arm")!r} is not the replayed arm' if foreign else 'no live telemetry row' if found is None else 'duplicated live telemetry rows' if row['decision_index'] in duplicated
                         else 'live prefix differs from the capture\'s' if found['prefix_sha256'] != row['prefix_sha256'] else None)
                     if found is not None and found['request_kind'] == 'forced':skip_disagreements.append(dict(ordinal=ordinal, decision_index=row['decision_index'],
                         live_request_kind='forced', sent=True))
                     body = dict(request, lines=list(request['lines']), schema=server.original.SCHEMA,
                         request_id=f'rr-{ordinal}-{row["decision_index"]}-{os.getpid()}', rung=search.rung, budget_seconds=bench.BUDGET)
                     capture = Capture()
-                    with capture.installed():
+                    with capture.installed(), (nullcontext() if true_worlds is None else true_worlds.installed(cell, row['decision_index'])) as truth:
                         clock = time.perf_counter();response = search.process_many([body])[0];wall = time.perf_counter() - clock
-                    clock = time.perf_counter();detail = describe(capture, peer_lanes, vocabulary);seconds = time.perf_counter() - clock
+                    clock = time.perf_counter();detail = describe(capture, peer_lanes, vocabulary, peer_inputs,
+                        (ordinal, row['decision_index']), reply=bool(args.reply_archive), cells=args.depth1_cells)
+                    if truth is not None:true_worlds_fields(detail, truth)
+                    seconds = time.perf_counter() - clock
                     record = decision_row(cell, row, body, response, wall, found, detail, shard=shard, capture_seconds=seconds, live_problem=problem)
+                    if 'targets' in cell:record.update(cell_arm=cell.get('arm'), target_kind=cell.get('target_kind'))
                     stream.write(encode_row(record) + '\n');stream.flush();os.fsync(stream.fileno())
                     rows.append({k: v for k, v in record.items() if k not in BULK})   # the summary's fields; the grids stay on disk
                     p = record['parity']
                     print(json.dumps(dict(ordinal=ordinal, decision_index=row['decision_index'], status=response.get('status'), cause=response.get('cause'),
                         live_source=None if found is None else found['source'], action_equal=p['action_equal'], q_equal=p['q_equal'],
-                        kept_disagreements=detail['kept_disagreements'], notes=len(detail['notes']), wall=wall, capture=seconds)), flush=True)
+                        kept_disagreements=detail['kept_disagreements'], notes=len(detail['notes']), wall=wall, capture=seconds,
+                        **({} if truth is None else dict(true_kind=detail['true_worlds']['kind'], true_built=detail['true_worlds']['built'],
+                            true_problem=detail['true_worlds']['problem'])))), flush=True)
                     if not record['capture_ok']:
                         raise RuntimeError(f'cell {ordinal} decision {row["decision_index"]}: the capture missed a decide or prepare_roots call')
+                else:scanned.add(ordinal)   # every captured decision of the cell was looked at (no --max-decisions stop inside it)
         finished = True
     finally:
         write_json(out / f'summary-{shard}.json', summarize(rows, shard=shard, shards=args.shards, cells=cells, extra=dict(
             skipped_single_legal=skipped, skip_disagreements=skip_disagreements, cell_errors=cell_errors, max_decisions_reached=done,
+            **(dict(targets=dict(file=args.targets, requested=sum(len(c['targets']) for c in cells), found=sum(map(len, targets_seen.values())),
+                missing=[dict(ordinal=c['ordinal'], decision_index=i) for c in cells for i in c['targets']   # absent from a fully scanned capture
+                    if c['ordinal'] in scanned and i not in targets_seen[c['ordinal']]],
+                not_reached=[dict(ordinal=c['ordinal'], decision_index=i) for c in cells for i in c['targets']   # a stop or error before the cell ended
+                    if c['ordinal'] not in scanned and i not in targets_seen[c['ordinal']]],
+                single_legal=target_single_legal, non_target_skipped=non_target)) if args.targets else {}),
+            **({'true_worlds': true_worlds_summary(rows, true_worlds.kind)} if true_worlds is not None else {}),
             interrupted=not finished, timings=dict(build_seconds=build_seconds, warmup_seconds=warmup_seconds,
             replay_seconds=time.perf_counter() - started))))
+        peer_inputs.write(out / sidecar['path'], sidecar)
     s = read_json(out / f'summary-{shard}.json')
     print(json.dumps(dict(done=str(out), shard=shard, sent=s['decisions_sent'], complete=s['complete'], live_searched=s['live_searched'],
         parity=dict((k, s['parity'][k]) for k in ('both', 'action_equal', 'q_equal')), status_mismatches=len(s['status_mismatches']),
-        kept_legal_disagreements=s['kept_legal_disagreements'])), flush=True)
+        kept_legal_disagreements=s['kept_legal_disagreements'], peer_inputs_check_passed=s['peer_inputs_check']['passed'])),
+        flush=True)
     return 0 if rows else 2
 
 

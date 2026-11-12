@@ -24,7 +24,7 @@ U=2.**-53
 KEYS={'schema','request_id','rung','archive_sha256','status','action_index','q_values','refusal','cause','requested_worlds','constructed_worlds',
     'decision_seconds','root_operator','policy_target','root_value','action_policy_target','block_causes','world_refusals','timings','batch_size',
     'bucket','tree_commit','pricer','root_operator_impl','completed_q','action_mean_q','mean_q_agrees','reduction_note','root_classes','root_class',
-    'root_class_source','root_class_crosscheck'}
+    'root_class_source','root_class_crosscheck','root_view_source','b2_view','effect_guard','private_reveals'}
 TREE='0123456789abcdef'*2+'01234567'
 
 
@@ -93,7 +93,14 @@ class LiveSearchTests(unittest.TestCase):
         cls.pricers={8:cls.make_pricers(8,(1,2,4)),16:cls.make_pricers(16,(1,))}
 
     @classmethod
-    def make_pricers(cls,W,buckets):return live.make_pricers(cls.executor,cls.evaluator,PARAMS,worlds=W,buckets=buckets,block_lanes=81,blocks_per_call=4)
+    def make_pricers(cls,W,buckets,executor=None):
+        from tests.test_gpu_engine_depthn_guard_inputs import fake_labels   # the fake engine's states: the effect guard's label gather
+        return live.make_pricers(executor or cls.executor,cls.evaluator,PARAMS,worlds=W,buckets=buckets,block_lanes=81,blocks_per_call=4,labels=fake_labels)
+
+    def setUp(self):
+        # The fake engine's carries are not the device tracker carry: prepare_roots and build keep them as built (the carry
+        # completion is tests/test_gpu_engine_constructor_worlds_carry's subject).
+        keep=patch.object(cw,'world_completer',return_value=lambda world,owner,**kw:world);keep.start();self.addCleanup(keep.stop)
 
     def search(self,W=8,*,pricers=None,saved_root_admission=False,**kw):
         kw.setdefault('tree_commit',TREE)
@@ -107,6 +114,23 @@ class LiveSearchTests(unittest.TestCase):
         return rows,codex
 
     # the contract --------------------------------------------------------------------------------------------------------------
+    def test_responses_name_the_root_priors_source_and_carry_b2_view(self):
+        made,_=self.cw.wide_root(0,8)
+        s=self.search(pricers=self.make_pricers(8,(1,),executor=CW.wide_executor()))
+        bad=self.cw.made(1,0,self.cw.modes(1,8),b2=made[0].view['_b2_root_inputs'])   # the narrow fake encoder cannot take B2's tokens
+        rows,_=self.run_batch(s,[request('b2',0)],{('b2',0):made})
+        row=rows[0];encode(row);self.assertEqual(set(row),KEYS)
+        self.assertEqual((row['status'],row['root_view_source']),('COMPLETE','b2'))
+        self.assertEqual(row['b2_view'],dict(equal=False,keys=dict(numeric_features=False,categorical_ids=True,token_type_ids=True,attention_mask=True),
+            numeric_max_abs_diff=.5,error=None))
+        rows,_=self.run_batch(self.search(),[request('bad',0)],{('bad',0):bad})
+        row=rows[0];encode(row)
+        self.assertEqual((row['status'],row['cause'],row['root_view_source'],row['b2_view']['equal']),('REFUSED','depthn_refused','b2',None))
+        self.assertTrue(row['refusal'].startswith('ROOT_B2_INPUTS_UNUSABLE'));self.assertIn('KeyError',row['b2_view']['error'])
+        self.assertEqual(live.wire_b2_view(dict(equal=True,keys={'numeric_features':np.bool_(True)},numeric_max_abs_diff=float('nan'))),
+            dict(equal=True,keys={'numeric_features':True},numeric_max_abs_diff=None,error=None))   # never a NaN on the wire
+        self.assertIsNone(live.wire_b2_view(None))
+
     def test_complete_responses_follow_the_contract_and_the_direct_pipeline(self):
         reqs=[request(f'b{i}',0,stream=10+i)for i in range(3)];outcomes={(f'b{i}',0):self.outcome(i)for i in range(3)}
         s=self.search();rows,codex=self.run_batch(s,reqs,outcomes)
@@ -114,6 +138,7 @@ class LiveSearchTests(unittest.TestCase):
         legal=CW.T.ROOT_LEGAL
         for row in rows:
             self.assertEqual(set(row),KEYS);encode(row);json.loads(json.dumps(row,allow_nan=False))
+            self.assertEqual((row['root_view_source'],row['b2_view']),('world0',None))   # no B2 encoding on these roots: world 0's view
             self.assertEqual((row['schema'],row['rung'],row['status'],row['cause'],row['refusal'],row['root_operator'],row['root_operator_impl'],row['reduction_note']),
                 (SCHEMA,'DN2W8','COMPLETE',None,None,'ARGMAX_MEAN_COMPLETED_Q','search_hedge.averaging',None))
             self.assertEqual(row['mean_q_agrees'],row['action_mean_q']==row['action_index'])
@@ -323,6 +348,107 @@ class LiveSearchTests(unittest.TestCase):
         rows,_=self.run_batch(s,[dict(request('ok',0),request_id='again')],outcomes)   # Codex's no-retry rule holds
         self.assertEqual((rows[0]['cause'],rows[0]['refusal'],rows[0]['bucket']),('constructor_refused','constructor-root:SEARCH_REQUEST_ALREADY_ATTEMPTED',None))
 
+    def test_complete_responses_carry_the_effect_guard_record(self):
+        """The pricers' observer seam feeds the record of every COMPLETE response (the fake engine's labels; surf guarded for the
+        test): the peer's Surf trips it at turn 1 and turn 2; a peer without it does not; a refused root has none."""
+        from pokezero import depthn_effect_guard as G
+        from tests.test_gpu_engine_depthn_guard_inputs import fake_labels, TACKLE, REST, PROTECT
+        make=lambda labels:live.make_pricers(self.executor,self.evaluator,PARAMS,worlds=8,buckets=(1,),block_lanes=81,blocks_per_call=4,labels=labels)
+        outcomes={('g',0):self.outcome(0),('r',0):Refusal('SEARCH_PREFIX_OR_REQUEST_MISMATCH')}
+        with patch.dict(G.GUARDED,surf=('A','test',None)),patch.object(G,'WATCHED',G.WATCHED|{'surf'}):
+            rows,_=self.run_batch(self.search(pricers=make(fake_labels)),[request('g',0),request('r',0)],outcomes)
+            clear,_=self.run_batch(self.search(pricers=make(lambda s:fake_labels(s,peer_moves=(TACKLE,REST,PROTECT,0)))),[request('g',0)],outcomes)
+        guard=rows[0]['effect_guard'];encode(rows[0])
+        self.assertEqual((rows[0]['status'],guard['tripped'],guard['b_turn1'],guard['b_turn2'],guard['choice']),('COMPLETE',True,True,True,rows[0]['action_index']))
+        self.assertEqual(guard['turn2_cells']['p1_captures'],1)
+        # reasons list what tripped (turn 1 and the reach, its tier A mass from Surf); the any-cell hits sit under any_cell_reasons
+        self.assertEqual({(x['move'],x['side'],x['source'])for x in guard['reasons']},{('surf','opp','turn1'),(None,'opp','reach')})
+        reach=next(x for x in guard['reasons'] if x['source']=='reach')
+        self.assertEqual((reach['tiers'],list(reach['moves']),guard['tiers']),({'A':guard['m_opp']},['surf'],['A']))
+        self.assertEqual({(x['move'],x['side'],x['source'])for x in guard['any_cell_reasons']},{('surf','opp','turn2')})
+        # the live rule (reach): M_opp over the frame's own priors trips the turn-2 arm; the any-cell arm is kept for analysis
+        self.assertEqual((guard['rule'],guard['arms'],guard['m_own'],guard['any_cell_b'],guard['any_cell_tripped']),('reach',['turn1','reach'],0.,True,True))
+        self.assertGreaterEqual(guard['m_opp'],G.THRESHOLD);self.assertEqual(guard['reach']['m_opp'],guard['m_opp'])
+        self.assertEqual((rows[1]['status'],rows[1]['effect_guard']),('REFUSED',None))
+        self.assertEqual((clear[0]['status'],clear[0]['effect_guard']['tripped'],clear[0]['effect_guard']['reasons']),('COMPLETE',False,[]))
+        self.assertEqual((clear[0]['effect_guard']['m_own'],clear[0]['effect_guard']['m_opp'],clear[0]['effect_guard']['arms']),(0.,0.,[]))
+
+    def test_the_private_reveal_flag_reaches_prepare_roots_and_every_built_response_records_it(self):
+        """redact_private_reveals (off by default) goes to every prepare_roots call; each response whose root prepare() built
+        carries constructor_worlds' private_reveal_record (the fake prefix reveals nothing privately); a refused root has none."""
+        outcomes={('g',0):self.outcome(0),('r',0):Refusal('SEARCH_PREFIX_OR_REQUEST_MISMATCH')}
+        for flag in(False,True):
+            with self.subTest(flag=flag):
+                calls=[];real=cw.prepare_roots
+                def spy(*a,**kw):calls.append(kw.get('redact_private_reveals',False));return real(*a,**kw)
+                search=self.search(**({'redact_private_reveals':True}if flag else{}))
+                self.assertIs(search.redact_private_reveals,flag)
+                with patch.object(cw,'prepare_roots',side_effect=spy):rows,_=self.run_batch(search,[request('g',0),request('r',0)],outcomes)
+                self.assertEqual((calls,rows[0]['status']),([flag],'COMPLETE'))
+                self.assertEqual(rows[0]['private_reveals'],dict(enabled=flag,found=[],applicable=[],redacted=[],unmatched=[]))
+                self.assertEqual((rows[1]['status'],rows[1]['private_reveals']),('REFUSED',None));encode(rows[0])
+        with self.assertRaisesRegex(ValueError,'redact_private_reveals'):self.search(redact_private_reveals=1)
+
+    def test_the_peer_view_b_flag_reaches_prepare_roots_and_only_its_responses_record_it(self):
+        """peer_view_b (off by default) goes to every prepare_roots call with the redaction it implies (redact_private_reveals reads
+        True); each response of such a search carries peer_view_b (the root's peer_view_b_record; None for a refused root) and
+        private_reveals reads enabled. A search without the flag sends neither keyword and its responses have no peer_view_b key
+        (KEYS as before the flag). The fake engine's carry is not the tracker carry, so the record is stood in for."""
+        outcomes={('g',0):self.outcome(0),('r',0):Refusal('SEARCH_PREFIX_OR_REQUEST_MISMATCH')}
+        record=dict(enabled=True,cells=[],projected=0,changed=0,exact_agrees=True)
+        for flag in(False,True):
+            with self.subTest(flag=flag):
+                calls=[];real=cw.prepare_roots
+                def spy(*a,**kw):calls.append({k:kw[k]for k in('redact_private_reveals','peer_view_b')if k in kw});return real(*a,**kw)
+                search=self.search(**({'peer_view_b':True}if flag else{}))
+                self.assertEqual((search.peer_view_b,search.redact_private_reveals),(flag,flag))
+                with patch.object(cw,'prepare_roots',side_effect=spy),patch.object(cw,'peer_view_b_record',return_value=record):
+                    rows,_=self.run_batch(search,[request('g',0),request('r',0)],outcomes)
+                self.assertEqual((calls,rows[0]['status']),([dict(redact_private_reveals=True,peer_view_b=True)if flag else{}],'COMPLETE'))
+                self.assertEqual(set(rows[0]),KEYS|({'peer_view_b'}if flag else set()));self.assertEqual(set(rows[1]),set(rows[0]))
+                self.assertEqual(rows[0]['private_reveals']['enabled'],flag)
+                if flag:self.assertEqual((rows[0]['peer_view_b'],rows[1]['peer_view_b']),(record,None))
+                encode(rows[0]);encode(rows[1])
+        with self.assertRaisesRegex(ValueError,'peer_view_b'):self.search(peer_view_b=1)
+        with patch.object(cw,'prepare_roots',side_effect=AssertionError('unreachable')):   # a malformed request: the template only
+            self.assertNotIn('peer_view_b',self.search().process_many([dict(request('g',0),schema='other')])[0])
+            self.assertIsNone(self.search(peer_view_b=True).process_many([dict(request('g',0),schema='other')])[0]['peer_view_b'])
+
+    def test_a_peer_belief_the_fold_cannot_give_refuses_its_root_and_the_server_goes_on(self):
+        """View b on, a private reveal applicable: the peer wire fold's PeerBeliefUnavailable (a genuine disagreement) refuses that
+        root alone, constructor_refused with PRIVATE_REVEALS_UNAVAILABLE, the batch's other root priced; any other exception of
+        the fold refuses its batch server_error, and the search answers the next request."""
+        record=dict(enabled=True,found=[dict(species='snorlax',ability='pressure')],applicable=[dict(species='snorlax',ability='pressure',slot=0)],
+            redacted=[dict(species='snorlax',ability='pressure',slot=0)],unmatched=[])
+        view_b=dict(enabled=True,cells=[],projected=0,changed=0,exact_agrees=True)
+        calls=[]
+        def fold(constructor,request,owner,root,facts,applicable):
+            calls.append(request['battle_id'])
+            if request['battle_id']=='x':raise cw.PeerBeliefUnavailable('carry slot 0: 0 peer wire fold members join it')
+            if request['battle_id']=='y':raise RuntimeError('a device failure')
+            return facts,[]
+        search=self.search(peer_view_b=True)
+        with patch.object(cw,'_reveal_record',return_value=record),patch.object(cw,'peer_view_b_record',return_value=view_b),\
+                patch.object(cw,'peer_belief_facts',side_effect=fold):
+            rows,_=self.run_batch(search,[request('x',0),request('g',0)],{('x',0):self.outcome(0),('g',0):self.outcome(1)})
+            self.assertEqual([(r['status'],r['cause'])for r in rows],[('REFUSED','constructor_refused'),('COMPLETE',None)])
+            self.assertIn('PRIVATE_REVEALS_UNAVAILABLE',rows[0]['refusal']);self.assertIn('0 peer wire fold members',rows[0]['refusal'])
+            broken,_=self.run_batch(search,[request('y',0)],{('y',0):self.outcome(2)})
+            self.assertEqual((broken[0]['status'],broken[0]['cause']),('REFUSED','server_error'));self.assertIn('a device failure',broken[0]['refusal'])
+            after,_=self.run_batch(search,[request('h',0)],{('h',0):self.outcome(3)})
+            self.assertEqual(after[0]['status'],'COMPLETE')
+        self.assertEqual(calls,['x','g','y','h'])
+
+    def test_a_root_whose_opponent_must_recharge_is_constructor_refused(self):
+        """The lead's decision: the peer's -mustrecharge on the owner's lines refuses the root in prepare_roots (cause
+        constructor_refused, refusal constructor-root:OPPONENT_RECHARGE_UNREPRESENTED:...); the owner's own does not."""
+        s=self.search();beam=lambda seat:(f'|move|{seat}a: Snorlax|Hyper Beam|{"p2"if seat=="p1"else"p1"}a: Snorlax',f'|-mustrecharge|{seat}a: Snorlax')
+        outcomes={('peer',0):self.outcome(0),('own',0):self.outcome(1)}
+        rows,_=self.run_batch(s,[request('peer',0,before=beam('p2')),request('own',0,before=beam('p1'))],outcomes)
+        self.assertEqual([(r['status'],r['cause'])for r in rows],[('REFUSED','constructor_refused'),('COMPLETE',None)])
+        self.assertEqual(rows[0]['refusal'],'constructor-root:OPPONENT_RECHARGE_UNREPRESENTED:'+cw.OPPONENT_RECHARGE_DETAIL)
+        self.assertEqual((rows[0]['constructed_worlds'],rows[0]['world_refusals']),(0,[]))
+
     def test_depthn_refusals(self):
         s=self.search();empty=self.outcome(1);empty=empty[:2]+((False,)*9,)
         outcomes={('pre',0):self.outcome(0,values={5:.5}),('empty',0):empty,('ok',0):self.outcome(2),('bad',0):self.outcome(3)}
@@ -411,6 +537,9 @@ class LiveSearchTests(unittest.TestCase):
         self.assertEqual(report['programs'],len(pricers[1].programs));self.assertEqual({k[1]for k in pricers[1].programs if k[0]=='P1'},{4,8,16})
         self.assertEqual((s.constructor.seen,s.constructor.sessions,s.battles),(set(),{},{}));self.assertIs(s.warm,report)
         self.assertEqual([s.missing_programs(b)for b in(1,2,4)],[[]]*3)   # P1, selection, gather and the leaf program, per bucket
+        # the effect guard's label gather compiled at both shapes: each bucket's P1 children and the root worlds [W, 1, ...]
+        self.assertEqual(report['labels'],dict(p1_rows={1:2*4*81,2:2*8*81,4:2*16*81},root_rows=8))
+        self.assertTrue(all(2*b*4*81 in pricers[b].label_rows for b in(1,2,4)))
         for n,b in((1,1),(2,2),(3,4)):
             rows,_=self.run_batch(s,[dict(request(f'l{i}',0),request_id=f'l{i}:{n}')for i in range(n)],outcomes)
             self.assertEqual({(r['status'],r['bucket'])for r in rows},{('COMPLETE',b)});self.assertEqual(pricers[b].compiles,())
@@ -425,6 +554,10 @@ class LiveSearchTests(unittest.TestCase):
             return out
         with Codex(outcomes),patch.object(live.cw,'price',side_effect=leafless),self.assertRaisesRegex(RuntimeError,r'bucket 1 with every program compiled \(missing: leaf\)'):
             self.search(pricers=bare).warmup([request('w0',0)])
+        # a label gather that fails on the pricer's children never compiled: warmup raises before READY
+        broken=live.make_pricers(self.executor,self.evaluator,PARAMS,worlds=8,buckets=(1,),block_lanes=81,blocks_per_call=4,labels=lambda s:1/0)
+        with Codex(outcomes),self.assertRaisesRegex(RuntimeError,r"label gather did not compile for buckets \[1\]"):
+            self.search(pricers=broken).warmup([request('w0',0)])
         with self.assertRaisesRegex(ValueError,'saved requests with'):self.search().warmup([{'battle_id':'x'}])
         with self.assertRaisesRegex(ValueError,'at least one'):self.search().warmup([])
 
@@ -445,6 +578,138 @@ class LiveSearchTests(unittest.TestCase):
             live.DepthNLiveSearch(constructor=other,pricers=self.pricers[8],params=PARAMS,binding=self.cw.binding,recipe=self.cw.recipe,tree_commit=TREE)
 
 
+class ReplyPriorTests(unittest.TestCase):
+    """depthn_live_server --reply-archive: the reply model's logits on the same worlds' peer inputs replace root_peer_logits
+    before averaging (br_fp); the champion's own averaging is reported beside it. LiveSearchTests' harness, not its tests."""
+    setUpClass = classmethod(LiveSearchTests.setUpClass.__func__);make_pricers = classmethod(LiveSearchTests.make_pricers.__func__)
+    setUp, search, outcome, run_batch = LiveSearchTests.setUp, LiveSearchTests.search, LiveSearchTests.outcome, LiveSearchTests.run_batch
+
+    def outcomes(self, n):return {(f'r{i}', 0):self.outcome(i) for i in range(n)}
+
+    def test_the_champion_as_reply_model_plays_averaging_exactly(self):
+        from gpu_engine.depthn_reply_prior import ReplyPrior
+        reqs = [request(f'r{i}', 0, stream=30 + i) for i in range(3)]
+        plain, _ = self.run_batch(self.search(), reqs, self.outcomes(3))
+        served = dict(archive_sha256='d' * 64, checkpoint_sha256='7' * 64, view='b')   # the served archive: echoed for the proxy's and panel's pin
+        rows, _ = self.run_batch(self.search(reply=ReplyPrior(self.executor, self.evaluator, PARAMS[0], identity=served)), reqs, self.outcomes(3))
+        self.assertTrue(any(r['status'] == 'COMPLETE' for r in rows))
+        for bad in ({}, dict(served, extra=1), 'd' * 64):
+            with self.assertRaises(ValueError):ReplyPrior(self.executor, self.evaluator, PARAMS[0], identity=bad)
+        for a, b in zip(plain, rows):
+            encode(b);self.assertEqual(set(b), KEYS | {'reply_prior'});self.assertNotIn('reply_prior', a)
+            self.assertEqual((b['status'], b['action_index'], b['q_values']), (a['status'], a['action_index'], a['q_values']))
+            if b['status'] == 'COMPLETE':
+                self.assertEqual((b['reply_prior']['operator'], b['reply_prior']['champion_action_index'], b['reply_prior']['champion_q_values']),
+                                 ('br_fp', a['action_index'], a['q_values']))
+                self.assertEqual({k: b['reply_prior'][f'reply_{k}'] for k in served}, served)
+                # the union guard: the reply model is the champion, so both arms agree and the record is the plain search's
+                union = b['effect_guard']['union'];self.assertEqual(union['champion'], union['reply'])
+                self.assertEqual({k: v for k, v in b['effect_guard'].items() if k not in ('union', 'union_only')}, a['effect_guard'])
+                self.assertNotIn('union', a['effect_guard'])
+            else:self.assertIsNone(b['reply_prior'])
+
+    def test_another_reply_model_plays_averaging_on_its_logits(self):
+        from collections import namedtuple
+        from gpu_engine.depthn_reply_prior import ReplyPrior
+        Out = namedtuple('Out', 'policy_logits');champion = self.evaluator
+        class Negated:
+            identity = ('champion', 'cd' * 32, 'bfloat16')
+            def __call__(self, params, inputs):return Out(-champion(params, inputs).policy_logits)
+        calls, real = [], live.decide
+        def recording(blocks, root_logits, root_legal):calls.append((blocks, tuple(root_legal)));return real(blocks, root_logits, root_legal)
+        reqs = [request(f'r{i}', 0, stream=40 + i) for i in range(4)]
+        with patch.object(live, 'decide', recording):
+            rows, _ = self.run_batch(self.search(reply=ReplyPrior(self.executor, Negated(), PARAMS[0])), reqs, self.outcomes(4))
+        complete = [r for r in rows if r['status'] == 'COMPLETE'];self.assertTrue(complete)
+        self.assertEqual(len(calls), 2 * len(complete))   # per priced root: the champion's averaging (reported), then br_fp's
+        moved = 0
+        for row, (blocks, legal) in zip(complete, calls[0::2]):
+            flat = [original.WorldPrices(w.opponent_requested, w.opponent_legal, tuple(-x for x in w.opponent_logits) if w.opponent_requested
+                                         else w.opponent_logits, w.joint_values) for pair in blocks for w in pair]
+            want = hedge.averaging(flat, legal)
+            self.assertEqual((row['action_index'], row['q_values']), (hedge.top_action(want.strategy), list(want.q)))
+            moved += row['q_values'] != row['reply_prior']['champion_q_values']
+        self.assertGreater(moved, 0, 'a negated reply prior should move some root\'s q')
+
+    def test_jit_views_reproduce_the_eager_path_and_check_reports_them(self):
+        from gpu_engine.depthn_reply_prior import ReplyPrior
+        reqs = [request(f'r{i}', 0, stream=60 + i) for i in range(3)]
+        eager, _ = self.run_batch(self.search(reply=ReplyPrior(self.executor, self.evaluator, PARAMS[0])), reqs, self.outcomes(3))
+        jitted, _ = self.run_batch(self.search(reply=ReplyPrior(self.executor, self.evaluator, PARAMS[0], mode='jit')), reqs, self.outcomes(3))
+        checked, _ = self.run_batch(self.search(reply=ReplyPrior(self.executor, self.evaluator, PARAMS[0], mode='check')), reqs, self.outcomes(3))
+        for e, j, c in zip(eager, jitted, checked):
+            self.assertEqual((j['status'], j['action_index']), (e['status'], e['action_index']))
+            self.assertEqual((c['action_index'], c['q_values']), (e['action_index'], e['q_values']))   # check plays eager
+            if e['status'] != 'COMPLETE':continue
+            for name, value in (('eager', e), ('jit', j)):self.assertEqual(value['reply_prior']['views'], name)
+            r = c['reply_prior'];self.assertEqual(r['views'], 'check');self.assertEqual(r['jit_action_index'], j['action_index'])
+            self.assertLessEqual(r['jit_max_abs_logit_diff'], 1e-5)
+        with self.assertRaises(ValueError):ReplyPrior(self.executor, self.evaluator, PARAMS[0], mode='fast')
+
+    def test_the_reply_prior_sees_the_priced_worlds_in_block_order_for_either_owner(self):
+        from gpu_engine.depthn_reply_prior import ReplyPrior
+        seen, real = [], ReplyPrior.apply
+        def recording(rp, blocks, worlds, owner):
+            seen.append(([w.index for w in worlds], len([w for pair in blocks for w in pair]), owner));return real(rp, blocks, worlds, owner)
+        reqs = [request('o1', 0, stream=70), request('o2', 0, stream=71, owner='p2')]
+        with patch.object(ReplyPrior, 'apply', recording):
+            rows, _ = self.run_batch(self.search(reply=ReplyPrior(self.executor, self.evaluator, PARAMS[0])), reqs,
+                                     {('o1', 0): self.outcome(0), ('o2', 0): self.outcome(1)})
+        self.assertTrue(seen)
+        for indices, priced, owner in seen:self.assertEqual((indices, priced), (list(range(priced)), priced))   # world i is block-order world i
+        self.assertEqual({owner for *_, owner in seen} <= {0, 1}, True)
+
+    def test_warmup_refuses_ready_when_the_reply_prior_never_completes(self):
+        from gpu_engine.depthn_reply_prior import ReplyPrior
+        outcomes = {('w0', 0):self.outcome(0), ('w1', 0):self.outcome(1)}
+        with Codex(outcomes), patch.object(ReplyPrior, 'apply', side_effect=RuntimeError('broken archive')), \
+                self.assertRaisesRegex(RuntimeError, 'reply prior completed no warmup root'):
+            self.search(reply=ReplyPrior(self.executor, self.evaluator, PARAMS[0])).warmup([request('w0', 0), request('w1', 0)])
+        with Codex(outcomes):self.search(reply=ReplyPrior(self.executor, self.evaluator, PARAMS[0])).warmup([request('w0', 0), request('w1', 0)])
+
+    def test_warmup_compiles_both_owner_seats_whichever_seat_the_warmup_roots_have(self):
+        from gpu_engine.depthn_reply_prior import ReplyPrior
+        outcomes = {('w0', 0):self.outcome(0), ('w1', 0):self.outcome(1)}
+        for mode in ('eager', 'jit', 'check'):
+            with self.subTest(mode=mode), Codex(outcomes):
+                calls = []
+                reply = ReplyPrior(self.executor, self.evaluator, PARAMS[0], mode=mode)
+                real_logits, real_jit = reply.logits, reply.jit_logits
+                reply.logits = lambda worlds, owner:calls.append(('eager', owner)) or real_logits(worlds, owner)
+                reply.jit_logits = lambda worlds, owner:calls.append(('jit', owner)) or real_jit(worlds, owner)
+                search = self.search(reply=reply);warm = search.warmup([request('w0', 0), request('w1', 0)])   # every warmup root is p1's
+                self.assertEqual(set(warm['reply']['seats_seconds']), {0, 1});self.assertEqual(warm['reply']['views'], mode)
+                if mode in ('jit', 'check'):self.assertEqual(set(reply._jitted), {0, 1})   # both seats' jitted programs exist before READY
+                for kind in (('eager',) if mode == 'eager' else ('jit',) if mode == 'jit' else ('eager', 'jit')):
+                    self.assertEqual({o for k, o in calls if k == kind}, {0, 1}, (mode, kind, calls))
+        with Codex(outcomes), patch.object(ReplyPrior, 'warm', side_effect=RuntimeError('no compile')), \
+                self.assertRaisesRegex(RuntimeError, 'did not compile both seats'):
+            self.search(reply=ReplyPrior(self.executor, self.evaluator, PARAMS[0], mode='jit')).warmup([request('w0', 0), request('w1', 0)])
+
+    def test_a_jit_failure_in_check_mode_is_recorded_and_eager_plays(self):
+        from gpu_engine.depthn_reply_prior import ReplyPrior
+        with patch.object(ReplyPrior, 'jit_logits', side_effect=RuntimeError('no compile')):
+            rows, _ = self.run_batch(self.search(reply=ReplyPrior(self.executor, self.evaluator, PARAMS[0], mode='check')),
+                                     [request('c0', 0, stream=80)], {('c0', 0):self.outcome(0)})
+        self.assertEqual(rows[0]['status'], 'COMPLETE');self.assertEqual(rows[0]['reply_prior']['jit_error'], 'RuntimeError: no compile')
+
+    def test_apply_replaces_requested_worlds_only_and_a_failure_refuses_the_root(self):
+        from gpu_engine.depthn_reply_prior import ReplyPrior
+        rp = ReplyPrior(None, self.evaluator, PARAMS[0], views=lambda *a:None)
+        grid = ((0.,) * 9,) * 9
+        asked = original.WorldPrices(True, (True,) * 9, (0.,) * 9, grid);waiting = original.WorldPrices(False, (False,) * 9, (1.,) + (0.,) * 8, grid)
+        with patch.object(ReplyPrior, 'logits', return_value=np.arange(36, dtype=np.float32).reshape(4, 9)):
+            out, seconds, check = rp.apply([(asked, waiting), (None, asked)], [NS()] * 4, 0);self.assertIsNone(check)
+            self.assertEqual(out[0][0].opponent_logits, tuple(float(x) for x in range(9)));self.assertEqual(out[0][1], waiting)
+            self.assertIsNone(out[1][0]);self.assertEqual(out[1][1].opponent_logits, tuple(float(x) for x in range(27, 36)))
+            self.assertGreaterEqual(seconds, 0.)
+            with self.assertRaises(ValueError):rp.apply([(asked, waiting)], [NS()] * 3, 0)
+        with patch.object(ReplyPrior, 'apply', side_effect=RuntimeError('boom')):
+            rows, _ = self.run_batch(self.search(reply=rp), [request('r0', 0, stream=50)], self.outcomes(1))
+        self.assertEqual((rows[0]['status'], rows[0]['cause'], rows[0]['refusal']), ('REFUSED', 'depthn_refused', 'REPLY_PRIOR_ERROR: RuntimeError: boom'))
+        with self.assertRaises(ValueError):self.search(reply=object())
+
+
 def world(values,*,opponent=None,logits=None):
     """WorldPrices with the given action -> {reply: value} rows; `opponent` the legal replies (None: a waiting opponent, column 0)."""
     jv=[[None]*9 for _ in range(9)]
@@ -452,6 +717,84 @@ def world(values,*,opponent=None,logits=None):
         for b,v in row.items():jv[a][b]=v
     legal=tuple(b in opponent for b in range(9))if opponent else(False,)*9
     return original.WorldPrices(bool(opponent),legal,tuple(logits or(0.,)*9),tuple(map(tuple,jv)))
+
+
+class NoiseGatedTests(unittest.TestCase):
+    """--root-operator NOISE_GATED_K2 (screen-r4a variant B): the scorer's noise_gated k=2 on the priced worlds' per-world q, greedy
+    the root logits' argmax; under a reply model on the reply model's worlds (br_fp). LiveSearchTests' harness."""
+    setUpClass = classmethod(LiveSearchTests.setUpClass.__func__);make_pricers = classmethod(LiveSearchTests.make_pricers.__func__)
+    setUp, search, outcome, run_batch = LiveSearchTests.setUp, LiveSearchTests.search, LiveSearchTests.outcome, LiveSearchTests.run_batch
+
+    def outcomes(self, n):return {(f'r{i}', 0):self.outcome(i) for i in range(n)}
+
+    @staticmethod
+    def rule(blocks, root_logits, legal):
+        """(candidate, greedy, played, q) by the scorer's rule on recorded blocks."""
+        flat = [w for pair in blocks for w in pair];choice = hedge.averaging(flat, legal)
+        candidate = hedge.top_action(choice.strategy);greedy = max((a for a in range(9) if legal[a]), key=lambda a: (root_logits[a], -a))
+        from scripts import depthn_rr_score as rr
+        return candidate, greedy, rr.noise_gated(rr.per_world_q(hedge.grids(flat, legal)), candidate, greedy, 2), list(choice.q)
+
+    def recorded(self, search, reqs):
+        calls, real = [], live.decide
+        def recording(blocks, root_logits, root_legal):calls.append((blocks, list(root_logits), tuple(root_legal)));return real(blocks, root_logits, root_legal)
+        with patch.object(live, 'decide', recording):rows, _ = self.run_batch(search, reqs, self.outcomes(len(reqs)))
+        return rows, calls
+
+    def test_the_gate_plays_the_scorers_rule_on_the_priced_worlds(self):
+        reqs = [request(f'r{i}', 0, stream=50 + i) for i in range(4)]
+        plain, _ = self.run_batch(self.search(), reqs, self.outcomes(4))
+        guarded, real_guard = [], live.DepthNLiveSearch._effect_guard
+        def guard(search, frame, root, made, request, children, notes, choice, labels, reply_logits=None):
+            guarded.append(choice);return real_guard(search, frame, root, made, request, children, notes, choice, labels, reply_logits=reply_logits)
+        with patch.object(live.DepthNLiveSearch, '_effect_guard', guard):rows, calls = self.recorded(self.search(root_operator=live.NOISE_GATED_K2), reqs)
+        self.assertEqual(guarded, [r['action_index'] for r in rows if r['status'] == 'COMPLETE'])   # the effect guard's (c) reads the played action
+        complete = [r for r in rows if r['status'] == 'COMPLETE'];self.assertTrue(complete);self.assertEqual(len(calls), len(complete))
+        for row, call in zip(complete, calls):
+            encode(row);self.assertEqual(set(row), KEYS | {'noise_gate'});self.assertEqual(row['root_operator'], 'NOISE_GATED_K2')
+            candidate, greedy, played, q = self.rule(*call)
+            self.assertEqual((row['action_index'], row['q_values']), (played, q))
+            gate = row['noise_gate'];self.assertEqual((gate['candidate'], gate['greedy'], gate['passed']), (candidate, greedy, played == candidate))
+            self.assertEqual(gate['mean_gap'] is None, candidate == greedy)
+        for a, b in zip(plain, rows):   # the gate changes only the played action: averaging's q and its choice are the default's
+            self.assertNotIn('noise_gate', a);self.assertEqual(a['root_operator'], 'ARGMAX_MEAN_COMPLETED_Q')
+            if b['status'] == 'COMPLETE':self.assertEqual((a['action_index'], a['q_values']), (b['noise_gate']['candidate'], b['q_values']))
+            else:self.assertIsNone(b['noise_gate'])
+        with self.assertRaises(ValueError):self.search(root_operator='TARGET_ARGMAX')
+
+    def test_under_a_reply_model_the_gate_reads_br_fps_worlds(self):
+        from collections import namedtuple
+        from gpu_engine.depthn_reply_prior import ReplyPrior
+        Out = namedtuple('Out', 'policy_logits');champion = self.evaluator
+        class Negated:
+            identity = ('champion', 'cd' * 32, 'bfloat16')
+            def __call__(self, params, inputs):return Out(-champion(params, inputs).policy_logits)
+        reqs = [request(f'r{i}', 0, stream=60 + i) for i in range(4)]
+        rows, calls = self.recorded(self.search(reply=ReplyPrior(self.executor, Negated(), PARAMS[0]), root_operator=live.NOISE_GATED_K2), reqs)
+        complete = [r for r in rows if r['status'] == 'COMPLETE'];self.assertTrue(complete);self.assertEqual(len(calls), 2 * len(complete))
+        for row, call in zip(complete, calls[1::2]):   # per root: the champion's averaging (reported), then br_fp's, which the gate reads
+            candidate, greedy, played, q = self.rule(*call)
+            self.assertEqual((row['action_index'], row['q_values'], row['noise_gate']['candidate']), (played, q, candidate))
+            self.assertEqual(row['reply_prior']['operator'], 'br_fp')
+
+    def test_a_gate_without_two_finite_worlds_refuses(self):
+        legal = tuple(a in (0, 1) for a in range(9));grid = [[(0. if b < 2 else None) if a == 0 else (.3 if b < 2 else None) if a == 1 else None
+                                                           for b in range(9)] for a in range(9)]
+        world = original.WorldPrices(True, legal, (0.,) * 9, grid);logits = [1.] + [0.] * 8
+        decision = live.decide([(world,)], logits, legal);self.assertEqual(decision['status'], 'COMPLETE')
+        gated = live.noise_gate(decision, [(world,)], logits, legal)
+        self.assertEqual((gated['status'], gated['action_index']), ('REFUSED', None));self.assertTrue(gated['refusal'].startswith('NOISE_GATE_ERROR'))
+        two = live.noise_gate(live.decide([(world, world)], logits, legal), [(world, world)], logits, legal)   # sd 0, mean .3 > 0: passes
+        self.assertEqual((two['action_index'], two['noise_gate']['passed'], two['noise_gate']['stderr']), (1, True, 0.))
+        def priced(q1):return original.WorldPrices(True, legal, (0.,) * 9, [[(0. if b < 2 else None) if a == 0 else (q1 if b < 2 else None) if a == 1
+                                                                             else None for b in range(9)] for a in range(9)])
+        noisy = [(priced(.9), priced(-.5))]   # averaging plays 1 (mean .2) but the gaps .9, -.5 are 1 SE apart: the gate keeps greedy 0
+        blocked = live.noise_gate(live.decide(noisy, logits, legal), noisy, logits, legal)
+        self.assertEqual((blocked['action_index'], blocked['noise_gate']['candidate'], blocked['noise_gate']['passed']), (0, 1, False))
+        self.assertAlmostEqual(blocked['noise_gate']['mean_gap'], .2);self.assertAlmostEqual(blocked['noise_gate']['stderr'], .7)
+        with patch.object(live.hedge, 'per_world_q', return_value=[{0: 0., 1: float('nan')}, {0: 0., 1: .3}]):
+            bad = live.noise_gate(live.decide([(world, world)], logits, legal), [(world, world)], logits, legal)
+        self.assertEqual((bad['status'], bad['action_index']), ('REFUSED', None));self.assertTrue(bad['refusal'].startswith('NOISE_GATE_ERROR'))
 
 
 class AveragingEquivalenceTests(unittest.TestCase):

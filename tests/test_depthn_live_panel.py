@@ -1,5 +1,6 @@
 """Inert DepthN panel controls: declarations, cells, claims, probe, dispatch and readout."""
 import asyncio
+from collections import Counter
 from contextlib import contextmanager, redirect_stderr, redirect_stdout
 import copy
 import importlib.util
@@ -24,6 +25,7 @@ from pokezero import phase_d_ladder_panel as ladder
 from pokezero import phase_d_owning_capture as capture
 from pokezero.live_protocol_actor import ActorContract
 from tests import test_depthn_live_actor as actor_tests
+from tests.test_depthn_fairness_r3 import lopsided_capture
 from tests import test_phase_d_ladder_panel as ladder_fixture
 from tests import test_phase_d_prerequisites as fixture
 
@@ -88,7 +90,7 @@ PROVENANCE = dict(
 
 
 def declaration(ladder_sha256, arms=('RAW', 'DN2W8'), expected=EXPECTED, deadline=3., observable=True, ratios=RATIOS, calibration_sha='c'*64,
-                provenance=PROVENANCE):
+                provenance=PROVENANCE, arm_fairness=None):
     return dict(schema=panel.SCHEMA, provenance=copy.deepcopy(provenance), ladder_declaration_sha256=ladder_sha256, expected_searched_share=copy.deepcopy(expected),
         foulplay_move_wall=copy.deepcopy(MOVE_WALL), actor=copy.deepcopy(ACTOR), server_tree_commit=SERVER_TREE,
         search_choice=dict(arm=arms[1], cell_commit='8'*40, evidence=[dict(path='cells/w16.json', sha256='4'*64), dict(path='out/w16-pairs.jsonl', sha256='5'*64)],
@@ -104,13 +106,17 @@ def declaration(ladder_sha256, arms=('RAW', 'DN2W8'), expected=EXPECTED, deadlin
         screen_rule=panel.SCREEN_RULE, breakage=dict(panel.BREAKAGE, latency_p95_max_seconds=deadline), matmul_precision='highest',
         screen_latency_rule=copy.deepcopy(panel.LATENCY_RULE), bench_p95_wall_seconds=1.39,
         bench_source=dict(path='bench/w8-sessions/summary.json', sha256='e'*64), server_processes_per_gpu=1,
-        interleave=panel.INTERLEAVE, arm_fairness=dict(panel.ARM_FAIRNESS))
+        interleave=panel.INTERLEAVE, arm_fairness=dict(panel.ARM_FAIRNESS) if arm_fairness is None else copy.deepcopy(arm_fairness))
 
 
-def make_run(directory, arms=('RAW', 'DN2W8'), expected=EXPECTED, deadline=3., observable=True, ratios=RATIOS):
+REPLY = dict(archive_sha256='d'*64, checkpoint_sha256='7'*64, view='b', peer_view_b=True, union_guard=True, views='jit')   # a br_fp screen's reply model
+
+
+def make_run(directory, arms=('RAW', 'DN2W8'), expected=EXPECTED, deadline=3., observable=True, ratios=RATIOS, arm_fairness=None, reply=None):
     root = Path(directory).resolve(); inputs = root/'inputs'
     lad = ladder_fixture.declaration(); calibration = calibration_fixture(panel.sha(lad), observable=observable, ratios=ratios)
-    d = declaration(panel.sha(lad), arms, expected, deadline, observable, ratios, panel.sha(calibration)); base = dict(BASE)
+    d = declaration(panel.sha(lad), arms, expected, deadline, observable, ratios, panel.sha(calibration), arm_fairness=arm_fairness); base = dict(BASE)
+    if reply is not None: d['reply_prior'] = dict(reply)
     for name, value in (('ladder', lad), ('declaration', d), ('base', base), ('calibration', calibration)):
         panel.write_new(inputs/f'{name}.json', value)
     run = panel.init(root/'run', declaration=inputs/'declaration.json', declaration_sha256=panel.sha(d),
@@ -120,7 +126,8 @@ def make_run(directory, arms=('RAW', 'DN2W8'), expected=EXPECTED, deadline=3., o
 
 
 def decision_row(cell, i, *, source='search', cause=None, kind=None, differs=False, select=.5,
-                 operator='ARGMAX_MEAN_COMPLETED_Q', worlds=8, archive=live.CHAMPION_ARCHIVE_SHA256, precision='highest'):
+                 operator='ARGMAX_MEAN_COMPLETED_Q', worlds=8, archive=live.CHAMPION_ARCHIVE_SHA256, precision='highest', reply=None, view_b=False,
+                 views='jit'):
     kind = kind or ('forced' if source == 'single_legal' else 'move')
     search = None if source in ('raw_arm', 'single_legal') else dict(status='COMPLETE' if source == 'search' else 'REFUSED',
         cause=cause, client_wall_seconds=select-.05, server_wall_seconds=select-.1, tree_commit=SERVER_TREE, archive_sha256=archive,
@@ -128,6 +135,8 @@ def decision_row(cell, i, *, source='search', cause=None, kind=None, differs=Fal
         root_operator=operator if source == 'search' else None, requested_worlds=worlds if source == 'search' else None,
         pricer=dict(k=1, depth=2, W=8, K=4, matmul_precision=precision) if source == 'search' else None,
         timings=dict(queue_seconds=.01, prepare_seconds=.2, build_seconds=.05, price_seconds=.2, reduce_seconds=.01) if source == 'search' else None)
+    if search is not None and source == 'search' and reply is not None: search['reply_prior'] = dict(operator='br_fp', views=views, reply_archive_sha256=reply)
+    if search is not None and source == 'search' and view_b: search['peer_view_b'] = dict(enabled=True)
     return dict(schema=live.ROW_SCHEMA, arm=cell['arm'], cell=cell, battle_id=f"b{cell['ordinal']}", owner='p1', decision_index=i,
         prefix_sha256=f'{i:064x}', request_kind=kind, source=source, cause=cause, search_differs=differs if source == 'search' else None,
         encode_seconds=.01, select_seconds=select, greedy=dict(seconds=.05), search=search)
@@ -166,7 +175,8 @@ def preflight_value(d, **change):
     arm = d['arms'][1]; q = lambda p95: dict(n=100, p50=p95/2, p95=p95, p99=p95, max=p95)
     value = dict(schema=panel.PREFLIGHT_SCHEMA, arm=arm, deadline_seconds=d['deadline_seconds'], reserve_seconds=d['reserve_seconds'],
         server=dict(host='h', port=7000), cells_per_worker=d['actor']['cells_per_worker'],
-        dispatch=dict(dispatched=24, failed=[], not_dispatched=0, stopped=None), search_wall_p95_max=2.6, search_wall_within=True, timeouts_within=True,
+        dispatch=dict(dispatched=24, failed=[], not_dispatched=0, stopped=None), search_wall_p95_max=panel.preflight_wall_p95_max(d['deadline_seconds'], d['reserve_seconds']),
+        search_wall_within=True, timeouts_within=True, refused_share_max=panel.PREFLIGHT_REFUSED_SHARE_MAX, refused_within=True, reuse_refusals=0,
         code_tree=dict(commit='c'*40, source_sha256='e'*64),
         arms={'RAW': dict(first_within_warm_p99=True, first_actor_within_warm_p99=True, warm_encode=q(d['actor']['warm_p95_seconds']['encode']),
                           warm_greedy=q(d['actor']['warm_p95_seconds']['greedy'])),
@@ -195,13 +205,27 @@ class PreflightBindingTests(unittest.TestCase):
         for change in (dict(arm='DN2W16'), dict(deadline_seconds=5.), dict(reserve_seconds=.2), dict(cells_per_worker=1),
                        dict(dispatch=dict(dispatched=3, failed=['x'], not_dispatched=21, stopped=None)),
                        dict(dispatch=dict(dispatched=3, failed=[], not_dispatched=21, stopped='interleave')), dict(dispatch=None),
-                       dict(search_wall_within=False), dict(timeouts_within=False), dict(timeouts_within=None), {'RAW.first_actor_within_warm_p99': False}, {'DN2W8.first_actor_within_warm_p99': None},
+                       dict(search_wall_within=False), dict(search_wall_p95_max=2.5), dict(search_wall_p95_max=4.6), dict(timeouts_within=False),
+                       dict(refused_within=False), dict(refused_within=None), dict(reuse_refusals=1), dict(reuse_refusals=None),
+                       dict(refused_share_max=.5), dict(refused_share_max=None), dict(timeouts_within=None), {'RAW.first_actor_within_warm_p99': False}, {'DN2W8.first_actor_within_warm_p99': None},
                        {'DN2W8.search_wall': dict(p95=2.0)}, {'RAW.warm_encode': dict(p95=.05)}, {'RAW.warm_greedy': dict(p95=.8)},
                        dict(schema='other'), dict(code_tree=dict(source_sha256='f'*64)), dict(code_tree=None)):
             with self.subTest(change), self.assertRaisesRegex(ValueError, 'must be its pre-flight'):
                 REAL_CHECK_PREFLIGHT(self.declared(preflight_value(d, **change)), tree)
         wrong = self.declared(preflight_value(d)); wrong['actor']['source']['sha256'] = '0'*64
         with self.assertRaises(ValueError): REAL_CHECK_PREFLIGHT(wrong, tree)
+
+    def test_a_redeclared_5_s_declaration_binds_its_preflight_to_the_derived_bound(self):
+        tree = dict(source_sha256='e'*64)
+        def bound(**change):   # a 5.0 s declaration whose actor block is bound to this pre-flight file
+            d = declaration('a'*64, deadline=5.); d['actor']['preflight_search_wall_p95_seconds'] = 2.7   # over the old fixed 2.6 s
+            value = preflight_value(d, **change); path = self.root/f'preflight-5s-{panel.sha(value)[:8]}.json'
+            if not path.exists(): panel.write_new(path, value)
+            d['actor']['source'] = dict(path=str(path), sha256=panel.sha(value)); return d
+        self.assertEqual(REAL_CHECK_PREFLIGHT(bound(), tree)['search_wall_p95_max'], 4.6)
+        for change in (dict(search_wall_p95_max=2.6), dict(deadline_seconds=3.)):   # a file held to the 3.0 s bound, or run at 3.0 s
+            with self.subTest(change), self.assertRaisesRegex(ValueError, 'must be its pre-flight'):
+                REAL_CHECK_PREFLIGHT(bound(**change), tree)
 
     def test_init_calls_the_preflight_check_and_refuses_a_dirty_tree(self):
         seen = []
@@ -321,6 +345,15 @@ class DeclarationTests(unittest.TestCase):
             d = declaration('a'*64); d['actor'] = value
             with self.subTest(value), self.assertRaisesRegex(ValueError, 'actor: persistent warmed workers'):
                 panel.validate(d)
+
+    def test_the_preflight_wall_bound_derives_from_the_declared_deadline(self):
+        self.assertEqual([panel.preflight_wall_p95_max(t, .15) for t in panel.DEADLINES], [2.6, 4.6, 9.6, 14.6])   # 2.6 s at 3.0 s: every screen through r4a
+        for deadline, wall, ok in ((3., 2.6, True), (3., 2.61, False), (5., 2.7, True), (5., 4.6, True), (5., 4.61, False)):
+            d = declaration('a'*64, deadline=deadline); d['actor'] = dict(ACTOR, preflight_search_wall_p95_seconds=wall)
+            with self.subTest(deadline=deadline, wall=wall):
+                if ok: panel.validate(d)
+                else:
+                    with self.assertRaisesRegex(ValueError, 'actor: persistent warmed workers'): panel.validate(d)
 
     def test_init_refuses_a_move_wall_for_another_search_time(self):
         with TemporaryDirectory() as directory:
@@ -705,6 +738,19 @@ class ProbeTests(unittest.TestCase):
         self.assertEqual((request['lines'], request['own_request_line'], request['prefix_sha256']),
                          (list(root['lines']), root['own_request_line'], root['prefix_sha256']))
 
+    def test_a_br_fp_probe_must_name_the_declared_reply_model(self):
+        root, run, d, lad = make_run(Path(self.directory.name)/'brfp', reply=REPLY)
+        def answer(**change):return actor_tests.send(lambda r: champion_complete(r, **change))
+        served = dict(reply_prior=dict(operator='br_fp', views='jit', reply_archive_sha256='d'*64), peer_view_b=dict(enabled=True))
+        with actor_tests.FakeServer(answer(**served)) as server:
+            value = panel.probe(root, arm='DN2W8', server=dict(host='127.0.0.1', port=server.port), capture=self.capture)
+        self.assertEqual((value['status'], value['tried'][0]['reply_archive_sha256'], value['tried'][0]['peer_view_b']), ('PASS', 'd'*64, True))
+        for change in ({}, dict(served, reply_prior=dict(operator='br_fp', views='jit', reply_archive_sha256='e'*64)), dict(reply_prior=served['reply_prior']),
+                       dict(served, reply_prior=dict(operator='br_fp', views='eager', reply_archive_sha256='d'*64))):
+            with self.subTest(change), actor_tests.FakeServer(answer(**change)) as server, self.assertRaisesRegex(ValueError, 'probe failed'):
+                panel.probe(root, arm='DN2W8', server=dict(host='127.0.0.1', port=server.port), capture=self.capture)
+        with self.assertRaisesRegex(ValueError, 'probe failed'): self.probe(answer(**served))   # a reply model the champion's screen never declared
+
     def test_the_probe_budgets_by_the_declared_deadline(self):
         root, run, d, lad = make_run(Path(self.directory.name)/'ten', deadline=10.)
         with actor_tests.FakeServer(actor_tests.send(champion_complete)) as server:
@@ -934,6 +980,21 @@ class ReadoutTests(unittest.TestCase):
         self.assertEqual(value['breakage'], ['unknown_cells', 'timeout_forfeits', 'latency_p95', 'telemetry'])
         self.assertEqual(value['arms']['RAW']['telemetry_mismatch_pairs'], [11]); self.assertEqual(value['arms']['DN2W8']['timeout_forfeits'], 1)
         self.assertEqual(value['paired']['unknown_pairs'], 1); self.assertIsNone(value['paired']['point_difference'])
+
+    def test_a_br_fp_screen_needs_its_reply_model_on_every_search(self):
+        root, run, d, lad = make_run(Path(self.directory.name)/'brfp', reply=REPLY)
+        def rows(served, view_b=True, views='jit'):
+            return lambda cell: [decision_row(cell, i, source='raw_arm' if cell['arm'] == 'RAW' else 'search', worlds=panel.WORLDS.get(cell['arm']),
+                                              reply=served, view_b=view_b, views=views) for i in range(2)]
+        for served, view_b, views, breakage in (('d'*64, True, 'jit', []), (None, False, 'jit', ['search_provenance']),
+                                                ('e'*64, True, 'jit', ['search_provenance']), ('d'*64, False, 'jit', ['search_provenance']),
+                                                ('d'*64, True, 'eager', ['search_provenance'])):
+            with self.subTest(served=served, view_b=view_b, views=views):
+                populate(root, run, lad, rows_for=rows(served, view_b, views))
+                value = panel.readout(root, arm='DN2W8', limit=500)
+                self.assertEqual(value['breakage'], breakage)
+        populate(self.root, self.run, self.lad, rows_for=rows('d'*64))   # an undeclared reply model on the champion's own screen
+        self.assertEqual(self.readout()['breakage'], ['search_provenance'])
 
     def test_search_provenance_and_worlds_must_match_the_declaration(self):
         populate(self.root, self.run, self.lad)
@@ -1208,6 +1269,21 @@ class EvalReadinessTests(unittest.TestCase):
         return reasons
 
     def rule(self): return json.loads(panel.state_path(self.root, 'latency_rule.json').read_bytes())
+
+    def test_the_root_operator_may_be_the_noise_gate(self):
+        self.assertEqual(panel.validate(dict(declaration('a'*64), root_operator='NOISE_GATED_K2'))['root_operator'], 'NOISE_GATED_K2')
+        for other in ('TARGET_ARGMAX', 'br_fp', None):
+            with self.subTest(other), self.assertRaises(ValueError): panel.validate(dict(declaration('a'*64), root_operator=other))
+
+    def test_the_reply_prior_block_is_validated(self):
+        d = declaration('a'*64); d['reply_prior'] = dict(REPLY)
+        self.assertEqual(panel.validate(d)['reply_prior'], REPLY)
+        self.assertEqual(panel.validate(dict(d, reply_prior=dict(REPLY, view='env', peer_view_b=False)))['reply_prior']['view'], 'env')
+        for change in (dict(archive_sha256='D'*64), dict(checkpoint_sha256='7'*63), dict(view='a'), dict(peer_view_b=False), dict(peer_view_b=1),
+                       dict(union_guard=False), dict(extra=1), dict(views='check'), dict(views=None)):
+            with self.subTest(change), self.assertRaises(ValueError): panel.validate(dict(d, reply_prior=dict(REPLY, **change)))
+        bad = dict(REPLY); del bad['union_guard']
+        with self.assertRaises(ValueError): panel.validate(dict(d, reply_prior=bad))
 
     def test_new_declaration_fields_are_validated(self):
         self.assertEqual(panel.validate(declaration('a'*64))['expected_searched_share_roster'], .955)
@@ -1504,6 +1580,90 @@ class FairnessMonitorTests(unittest.TestCase):
         self.assertEqual(len(panel.pending(self.root, arm='DN2W8', limit=2000, resume=True, screen=screen)), 10)
 
 
+class FairnessR3Tests(unittest.TestCase):
+    """Screen-r3's declared rule (depthn_live_fairness.RULE_R3): exact alive bands from the owner capture and minimum support, at the
+    Monitor's checkpoints (cumulative and drift) and in the readout."""
+    def setUp(self):
+        self.directory = TemporaryDirectory()
+        self.root, self.run, self.d, self.lad = make_run(self.directory.name, arm_fairness=json.loads(json.dumps(fairness.RULE_R3)))
+        self.raws, self.searches = panel.cells(self.lad, 'RAW'), panel.cells(self.lad, 'DN2W8')
+
+    def tearDown(self): self.directory.cleanup()
+
+    def play(self, monitor, ks, *, search_rate, lopsided_pairs=(), rounds=30, lopsided_from=20):
+        """Pairs ks, RAW then search: each cell's owner capture (one request per round; in lopsided_pairs, ours 1 vs theirs 2 from round
+        lopsided_from) and its Foul Play rates (RAW 100; the search arm search_rate, doubled in the lopsided endgame)."""
+        reasons = []
+        for k in ks:
+            lopsided = lopsided_from if k in lopsided_pairs else None
+            for cell in (self.raws[k], self.searches[k]):
+                lopsided_capture(self.root/'owning-wire'/f"{cell['ordinal']}.jsonl", rounds, lopsided)
+                rate = (lambda r: 100.) if cell['arm'] == 'RAW' else (lambda r: search_rate * (2. if lopsided is not None and r >= lopsided else 1.))
+                think = [dict(round=r, stratum='2x1000ms', iterations_per_budget_second=rate(r), wait_seconds=.4, overlap_seconds=.6) for r in range(rounds)]
+                panel.write_new(self.root/'claims'/f"{cell['ordinal']}.json", {})
+                write_cell(self.root, cell, self.run['declaration_sha256'], score=1., rows=[decision_row(cell, 0, source='raw_arm' if cell['arm'] == 'RAW' else 'search')],
+                           think=think)
+                reasons.append(monitor(completed(self.root, cell)))
+        return reasons
+
+    def window_moves(self, ks, rule):
+        return {arm: fairness.pool([panel.cell_moves(self.root, c['ordinal'], rule=rule) for k in ks for c in (self.raws[k], self.searches[k]) if c['arm'] == arm])
+                for arm in ('RAW', 'DN2W8')}
+
+    def state(self): return panel.fairness_state(self.root, 'screen')
+
+    def test_validate_accepts_rule_and_rule_r3_only(self):
+        for rule in (fairness.RULE, fairness.RULE_R3):
+            with self.subTest(rule=rule['strata']):
+                self.assertEqual(panel.validate(json.loads(json.dumps(declaration('a'*64, arm_fairness=rule))))['arm_fairness'], rule)
+        self.assertEqual(panel.load(self.root)[2]['arm_fairness'], fairness.RULE_R3)   # init accepted the JSON declaration
+        for rule in (dict(fairness.RULE_R3, min_support_moves=60), dict(fairness.RULE_R3, min_cell_moves=30), dict(fairness.RULE_R3, ratio_tolerance=.1),
+                     dict(fairness.RULE_R3, alive_bands=['1-2', '3-4', '5-6']), dict(fairness.RULE, alive_bands=['1', '2', '3-4', '5-6']),
+                     dict(fairness.RULE, min_support_moves=120), {k: v for k, v in fairness.RULE_R3.items() if k != 'min_support_moves'},
+                     dict(fairness.RULE_R3, strata=fairness.RULE['strata']), [fairness.RULE], {}, 'RULE_R3'):
+            d = declaration('a'*64, arm_fairness=rule)
+            with self.subTest(rule=rule), self.assertRaises(ValueError): panel.validate(d)
+
+    def test_a_sparse_lopsided_cell_flags_the_cumulative_checkpoint_only_without_minimum_support(self):
+        monitor = panel.Monitor(self.root, search_arm='DN2W8')
+        lopsided = range(11)   # 11 games x 10 endgame moves: 110 per arm (ours 1 vs theirs 2), the search arm's rate doubled there
+        self.assertEqual(set(self.play(monitor, range(50), search_rate=100., lopsided_pairs=lopsided)), {None})
+        check, = self.state()['checks']; self.assertEqual(self.state()['flags'], [])
+        self.assertEqual((check['pairs'], check['floors'], check['reason'], check['weighted_ratio']), (50, True, None, 1.))
+        labelled, plain = self.window_moves(range(50), fairness.RULE_R3), self.window_moves(range(50), fairness.RULE)
+        self.assertIn('2x1000ms|ours 1|theirs 2', {s for s, _, _ in labelled['DN2W8']['rated']})
+        exact = fairness.reading(labelled['RAW'], labelled['DN2W8'], fairness.RULE)   # the alive labels without minimum support (RULE's merge)
+        self.assertEqual(fairness.flag(exact, fairness.RULE), 'ratio'); self.assertAlmostEqual(exact['difference'], 220/3000)
+        r3 = fairness.reading(labelled['RAW'], labelled['DN2W8'], fairness.RULE_R3)
+        self.assertEqual((r3['weighted_ratio'], r3['moves']), (check['weighted_ratio'], check['moves']))   # the checkpoint read the alive labels
+        self.assertNotEqual(fairness.reading(plain['RAW'], plain['DN2W8'], fairness.RULE_R3)['weighted_ratio'], check['weighted_ratio'])
+        value = panel.readout(self.root, arm='DN2W8', limit=500)['arm_fairness']
+        reading = value['phases']['screen']['reading']
+        self.assertEqual(value['rule'], fairness.RULE_R3)
+        self.assertEqual((reading['weighted_ratio'], reading['supported_cells'], reading['unsupported_cells']), (1., 4, 1))
+        self.assertEqual(reading['supported_share'], dict(RAW=1390/1500, search=1390/1500))
+        unsupported, = [c for c in reading['cells'] if not c['supported']]
+        self.assertEqual((unsupported['stratum'], unsupported['raw_moves'], unsupported['ratio']), ('2x1000ms|ours 1|theirs 2', 110, 2.))
+
+    def test_the_drift_checkpoint_reads_under_the_declared_rule(self):
+        monitor = panel.Monitor(self.root, search_arm='DN2W8')
+        self.assertEqual(self.play(monitor, range(50), search_rate=106.)[-1], 'FLAG_ARM_FAIRNESS')   # a uniform 6%: flags under RULE_R3 too
+        self.assertAlmostEqual(self.state()['flags'][0]['reading']['difference'], .06)
+        self.assertEqual(self.state()['flags'][0]['reading']['supported_share'], dict(RAW=1., search=1.))
+        ack = panel.acknowledge_arm_fairness(self.root, cause='benign', note='residual position mix after a host restart')
+        self.assertEqual(set(self.play(monitor, range(50, 100), search_rate=106., lopsided_pairs=range(50, 61))), {None})
+        checks = self.state()['checks']; self.assertEqual([(c['window'], c['pairs'], c['reason']) for c in checks], [(0, 50, 'ratio'), (100, 50, None)])
+        self.assertAlmostEqual(checks[1]['difference'], .06)
+        labelled = self.window_moves(range(50, 100), fairness.RULE_R3)   # without minimum support the sparse cell would re-flag: drift
+        self.assertEqual(fairness.flag(fairness.reading(labelled['RAW'], labelled['DN2W8'], fairness.RULE), fairness.RULE, ack), 'drift')
+
+    def test_a_cell_without_a_capture_counts_six_alive_by_round(self):
+        result = dict(source_game=dict(opponent_think=think(3, 100)))
+        value = panel.cell_moves(self.root, 12345, result, fairness.RULE_R3)
+        self.assertEqual((value['rated'], value['band_from_round']), ([('2x1000ms|ours 5-6|theirs 5-6', 0, 100.)]*3, 3))
+        self.assertEqual(panel.cell_moves(self.root, 12345, result), fairness.moves(result))   # the default rule: unchanged
+
+
 class CalibrationTests(unittest.TestCase):
     def setUp(self):
         self.directory = TemporaryDirectory(); root = Path(self.directory.name).resolve(); inputs = root/'inputs'
@@ -1689,10 +1849,18 @@ class CalibrationTests(unittest.TestCase):
         self.assertEqual((value['status'], value['strata']['4x500ms']['concurrent']['moves'], value['strata']['2x1000ms']['concurrent']['moves']),
                          ('MEASURED', 60, 300))
 
-    def test_preflight_alternates_arms_with_the_declared_client(self):
+    def test_preflight_balances_arms_across_seats_with_the_declared_client(self):
         panel.calibration_init(self.root, band=dict(CALIBRATION_BAND), lanes=1, **self.kwargs)
-        packets = panel.preflight_packets(self.root, arm='DN2W8', games=4, deadline_seconds=5., reserve_seconds=.2)
-        self.assertEqual([p['arm'] for p in packets], ['RAW', 'DN2W8', 'RAW', 'DN2W8']); self.assertEqual({p['setting'] for p in packets}, {'preflight'})
+        packets = panel.preflight_packets(self.root, arm='DN2W8', games=8, deadline_seconds=5., reserve_seconds=.2)
+        self.assertEqual([p['arm'] for p in packets], ['RAW', 'DN2W8', 'DN2W8', 'RAW']*2); self.assertEqual({p['setting'] for p in packets}, {'preflight'})
+        seats = Counter((p['arm'], ladder.read_bound(p['path'], p['sha256'])['cell']['seat']) for p in packets)
+        self.assertEqual(seats, {('RAW', 0): 2, ('RAW', 1): 2, ('DN2W8', 0): 2, ('DN2W8', 1): 2})   # each arm in both seats, equally
+        self.assertEqual([p['arm'] for p in panel.preflight_packets(self.root, arm='DN2W8', games=4, deadline_seconds=5., reserve_seconds=.2)],
+                         ['RAW', 'DN2W8', 'DN2W8', 'RAW'])   # the same cells, the same arms: the requests already written match
+        band = panel.calibration_cells(self.lad, CALIBRATION_BAND)
+        panel.write_new(self.root/'claims'/f"{band[0]['ordinal']}.json", dict(setting='preflight'))   # one cell claimed: positions shift by one
+        self.assertEqual([p['arm'] for p in panel.preflight_packets(self.root, arm='DN2W8', games=3, deadline_seconds=5., reserve_seconds=.2)],
+                         ['DN2W8', 'DN2W8', 'RAW'])   # each cell keeps its own arm (by position, cell 1 would be RAW: its written request differs)
         request = ladder.read_bound(packets[1]['path'], packets[1]['sha256'])
         self.assertEqual((request['schema'], request['arm'], request['deadline_seconds'], request['reserve_seconds']),
                          (panel.PREFLIGHT_REQUEST_SCHEMA, 'DN2W8', 5., .2))
@@ -1745,7 +1913,7 @@ class CalibrationTests(unittest.TestCase):
         with self.assertRaises(KeyError): panel.calibration_summary(self.root)['strata']['4x500ms']['preflight']   # pre-flight games never count
         self.assertEqual(panel.calibration_summary(self.root)['games'], dict(solo=0, concurrent=0))
         self.assertEqual((search['non_home'], search['answered']), (0, 0))   # no server_id in these rows: nothing answered by a known server
-        game(band[3], 'DN2W8', [2.7]*21, 'search', causes=('timeout',)*3); late = panel.preflight_summary(self.root)
+        game(band[2], 'DN2W8', [2.7]*21, 'search', causes=('timeout',)*3); late = panel.preflight_summary(self.root)
         self.assertFalse(late['search_wall_within']); self.assertFalse(late['timeouts_within'])   # 3 of 42: over 1%
         self.assertEqual(late['arms']['DN2W8']['searched_share_of_non_timeouts'], 37/39)
         cold = band[5]   # the review's case: a cold actor on decision 0 (encode 1.5 + greedy 2.2) fails the gate, though end to end it is in range
@@ -1758,6 +1926,48 @@ class CalibrationTests(unittest.TestCase):
         for cell in band[:4]: panel.write_new(self.root/'claims'/f"{cell['ordinal']}.json", dict(setting='preflight'))
         panel.preflight_packets(self.root, arm='DN2W8', games=2, deadline_seconds=5., reserve_seconds=.15)   # a second deadline
         with self.assertRaisesRegex(ValueError, 'one search arm, deadline and reserve'): panel.preflight_summary(self.root)
+
+    def test_a_preflight_counts_unpriced_searches_and_battles_the_servers_already_held(self):
+        panel.calibration_init(self.root, band=dict(CALIBRATION_BAND), lanes=1, **self.kwargs)
+        band = panel.calibration_cells(self.lad, CALIBRATION_BAND)
+        panel.preflight_packets(self.root, arm='DN2W8', games=8, deadline_seconds=3., reserve_seconds=.15)
+        def game(cell, arm, source, refusals=()):   # refusals: (cause, refusal text) of decisions 1, 2, ...
+            rows = [dict(decision_index=i, select_seconds=2., encode_seconds=.04, greedy=dict(seconds=.5), source=source, cause=None) for i in range(41)]
+            for row, (cause, text) in zip(rows[1:], refusals): row.update(source='greedy_fallback', cause=cause, search=dict(refusal=text))
+            panel.write_new(self.root/'results'/f"{cell['ordinal']}.json", dict(status='COMPLETE', setting='preflight', arm=arm, cell=cell))
+            (self.root/'telemetry').mkdir(exist_ok=True)
+            (self.root/'telemetry'/f"{cell['ordinal']}.jsonl").write_bytes(b''.join(panel.encoded(r)+b'\n' for r in rows))
+        game(band[0], 'RAW', 'raw_arm')
+        game(band[1], 'DN2W8', 'search', refusals=[('constructor_refused', 'WORLD_CONSTRUCTOR_REFUSED:volatile:12'), ('depthn_refused', 'DEPTHN_X'),
+             ('class_refused', 'CLASS:wish'), ('server_error', 'boom'), ('bad_request', 'RUNG_NOT_SERVED'), ('expired_in_queue', None),
+             ('connection_error', 'ConnectionRefusedError'), ('timeout', None), ('UNREPRESENTED_EFFECT', None)])   # 7 unpriced; a timeout and a
+        value = panel.preflight_summary(self.root); search = value['arms']['DN2W8']                                     # priced fallback are not
+        self.assertEqual((search['refused_share'], search['reuse_refusals'], search['timeout_share']), (7/41, 0, 1/41))
+        self.assertEqual((value['refused_share_max'], value['refused_within'], value['reuse_refusals']), (.25, True, 0))
+        self.assertIsNone(value['arms']['RAW']['refused_share'])   # RAW never asks the servers
+        game(band[2], 'DN2W8', 'search', refusals=[('constructor_refused', 'constructor-root:SEARCH_REQUEST_ALREADY_ATTEMPTED')])   # one reused battle
+        reused = panel.preflight_summary(self.root)
+        self.assertEqual((reused['reuse_refusals'], reused['refused_within']), (1, True))   # fails on reuse alone (8 of 82 unpriced: within)
+        game(band[5], 'DN2W8', 'search', refusals=[('constructor_refused', 'constructor-root:SEARCH_PREFIX_NOT_ORIGINAL_SUCCESSOR')]*40)
+        late = panel.preflight_summary(self.root)
+        self.assertEqual((late['arms']['DN2W8']['reuse_refusals'], late['reuse_refusals'], late['refused_within']), (41, 41, False))   # 48 of 123
+        game(band[6], 'DN2W8', 'search', refusals=[('connection_error', 'ConnectionRefusedError')]*40)   # unreachable servers: a greedy-only wall
+        self.assertFalse(panel.preflight_summary(self.root)['refused_within'])
+
+    def test_a_preflight_at_a_redeclared_deadline_is_held_to_that_deadline_s_wall_bound(self):
+        panel.calibration_init(self.root, band=dict(CALIBRATION_BAND), lanes=1, **self.kwargs)
+        band = panel.calibration_cells(self.lad, CALIBRATION_BAND)
+        panel.preflight_packets(self.root, arm='DN2W8', games=4, deadline_seconds=5., reserve_seconds=.15)
+        def game(cell, arm, wall, source):
+            rows = [dict(decision_index=i, select_seconds=wall, encode_seconds=.04, greedy=dict(seconds=.5), source=source, cause=None) for i in range(21)]
+            panel.write_new(self.root/'results'/f"{cell['ordinal']}.json", dict(status='COMPLETE', setting='preflight', arm=arm, cell=cell))
+            (self.root/'telemetry').mkdir(exist_ok=True)
+            (self.root/'telemetry'/f"{cell['ordinal']}.jsonl").write_bytes(b''.join(panel.encoded(r)+b'\n' for r in rows))
+        game(band[0], 'RAW', .5, 'raw_arm'); game(band[1], 'DN2W8', 2.7, 'search')   # over 2.6 s, within 5.0 - 0.15 - 0.25
+        value = panel.preflight_summary(self.root)
+        self.assertEqual((value['deadline_seconds'], value['search_wall_p95_max'], value['search_wall_within']), (5., 4.6, True))
+        game(band[2], 'DN2W8', 4.7, 'search');late = panel.preflight_summary(self.root)
+        self.assertEqual((late['arms']['DN2W8']['search_wall']['p95'], late['search_wall_within']), (4.7, False))
 
     def test_init_verifies_the_calibration_and_dispatch_gates_on_it(self):
         with TemporaryDirectory() as directory:

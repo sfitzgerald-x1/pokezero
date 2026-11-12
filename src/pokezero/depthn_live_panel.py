@@ -41,7 +41,10 @@ Eval readiness (the lead's rulings):
   per phase (screen, extension) and per acknowledgement window. A flag stops
   dispatch until `acknowledge --cause benign|fault`: benign re-arms over the moves
   after it (depthn_live_fairness.flag's re-arm rule), fault voids the run
-  (VOID_FAIRNESS, never resumed). The extension starts un-acknowledged. Flags,
+  (VOID_FAIRNESS, never resumed). The extension starts un-acknowledged. The declared
+  rule is depthn_live_fairness.RULE (screen-r1, screen-r2) or RULE_R3 (screen-r3: our
+  and their exact alive bands from the owner capture, minimum support); the
+  checkpoints and the readout read under the declared one. Flags,
   acknowledgements and checks are phase-scoped files, so a pinned screen readout
   recomputes identically whatever the extension records. When not observable, the
   gate is UNMEASURABLE: it rests on structural isolation plus interleaving, and the
@@ -76,7 +79,7 @@ import uuid
 
 from . import depthn_live_fairness as fairness
 from . import phase_d_ladder_panel as ladder
-from .depthn_live_actor import ARMS,CAUSES,CHAMPION_ARCHIVE_SHA256,REQUEST_KINDS,ROW_SCHEMA,SEARCH_ARMS,SOURCES
+from .depthn_live_actor import ARMS,CAUSES,CHAMPION_ARCHIVE_SHA256,REQUEST_KINDS,ROW_SCHEMA,SEARCH_ARMS,SERVER_CAUSES,SOURCES
 
 SCHEMA='depthn-foulplay-panel.declaration.v1'
 RUN_SCHEMA='depthn-foulplay-panel.run.v1'
@@ -91,14 +94,31 @@ DEADLINES=(3.,5.,10.,15.)
 LATENCY_RULE=dict(searched_decisions=1000,timeout_rate_max=.01,coverage_deadlines=[5.,10.,15.],coverage_min=.995)
 INTERLEAVE='ALTERNATE_ARMS_BY_PAIR_ORDINAL_LEAD_AT_MOST_CONCURRENCY'
 ARM_FAIRNESS=fairness.RULE
+ARM_FAIRNESS_RULES=(fairness.RULE,fairness.RULE_R3)   # the declarable arm fairness rules: screen-r1/r2's, screen-r3's
 PHASES=('screen','extension')
 CALIBRATION_SCHEMA='depthn-foulplay-panel.calibration.v1'
 CALIBRATION_RUN_SCHEMA='depthn-foulplay-panel.calibration-run.v1'
 CALIBRATION_REQUEST_SCHEMA='depthn-foulplay-panel.calibration-request.v1'
 PREFLIGHT_REQUEST_SCHEMA='depthn-foulplay-panel.preflight-request.v1'
 PREFLIGHT_SCHEMA='depthn-foulplay-panel.preflight.v1'
-PREFLIGHT_WALL_P95_MAX=2.6   # the lead's bound on the search arm's end-to-end decision wall p95
+PREFLIGHT_WALL_MARGIN=.25   # the margin in the lead's bound on the search arm's end-to-end decision wall p95 (preflight_wall_p95_max: deadline - reserve - margin)
+
+
+def preflight_wall_p95_max(deadline_seconds,reserve_seconds):
+    """The lead's bound on the pre-flight's search-arm end-to-end decision wall p95: deadline - reserve - PREFLIGHT_WALL_MARGIN.
+    2.6 s at the 3.0 s deadline and 0.15 s reserve (every screen through screen-r4a); a deadline re-declared under the latency rule
+    moves it (4.6 s at 5.0 s), since a longer deadline lets the tail complete into the measured wall instead of timing out."""
+    return round(float(deadline_seconds)-float(reserve_seconds)-PREFLIGHT_WALL_MARGIN,6)
 PREFLIGHT_TIMEOUT_SHARE_MAX=.01   # the lead's bound on the search arm's timeout share (of non-single-legal decisions)
+PREFLIGHT_REFUSED_SHARE_MAX=.25   # the lead's bound on the search arm's unpriced share (of non-single-legal decisions): searches the servers
+# did not price (every server cause: refusals, expired in queue, server errors, bad requests) or the client could not reach them; pre-flights and
+# screens through screen-r4a2 ran 4.6-10.4% (constructor refusals); a pre-flight whose searches were mostly unpriced measured only greedy walls
+# (screen-r4a2's first 5.0 s pre-flight: 100% refused, wall 0.32 s). Timeouts have their own bound; a fallback after a priced response
+# (an unrepresented effect, an illegal action, a bad q) carries a real search wall and does not count.
+PREFLIGHT_REFUSED_CAUSES=SERVER_CAUSES+('connection_error',)
+PREFLIGHT_REUSE_REFUSALS=('SEARCH_PREFIX_NOT_ORIGINAL_SUCCESSOR','SEARCH_REQUEST_ALREADY_ATTEMPTED')   # a live server still held the battle
+# (its session and attempted addresses, kept until evicted beyond the session cap): the pre-flight reused a battle an earlier run in the same
+# server lifetime had played; a pre-flight passes only with no search refused for this reason
 
 
 NON_HOME_SHARE_MAX=.01   # the lead's breakage bound: answered search decisions off their battle's home server
@@ -141,6 +161,8 @@ KEYS={'schema','ladder_declaration_sha256','checkpoint_sha256','archive_sha256',
       'expected_searched_share','expected_searched_share_roster','matmul_precision','screen_latency_rule','bench_p95_wall_seconds',
       'bench_source','server_processes_per_gpu','interleave','arm_fairness','worker_lanes','fairness_observable','calibration','provenance',
       'search_choice','foulplay_move_wall','actor','server_tree_commit'}
+ROOT_OPERATORS=('ARGMAX_MEAN_COMPLETED_Q','NOISE_GATED_K2')   # depthn_live_search.ROOT_OPERATORS: the declarable live root operators
+REPLY_PRIOR_KEYS={'archive_sha256','checkpoint_sha256','view','peer_view_b','union_guard','views'}   # optional: a br_fp screen's reply model
 ACTOR_KEYS={'cells_per_worker','warmup_decisions','search_overlaps_greedy','warm_p95_seconds','preflight_search_wall_p95_seconds','source'}
 SEARCH_CHOICE_KEYS={'arm','cell_commit','evidence','summary'}
 MOVE_WALL_SCHEMA='depthn-foulplay-panel.move-walls.v1'
@@ -162,19 +184,19 @@ def validate(declaration):
     """Our pre-registered eval declaration: exact keys, so no paths or extras."""
     from .live_protocol_actor import ActorContract
     d=declaration
-    if type(d)is not dict or set(d)!=KEYS:raise ValueError('exact DepthN panel declaration keys required')
+    if type(d)is not dict or set(d)not in (KEYS,KEYS|{'reply_prior'}):raise ValueError('exact DepthN panel declaration keys required')
     arms=d['arms']
     if (d['schema']!=SCHEMA or not _hex(d['ladder_declaration_sha256'])
             or d['checkpoint_sha256']!=ActorContract.champion().checkpoint_sha256 or d['archive_sha256']!=CHAMPION_ARCHIVE_SHA256
             or type(arms)is not list or len(arms)!=2 or arms[0]!='RAW'or arms[1]not in SEARCH_ARMS
             or d['search']!={a:dict(depth=2,worlds=WORLDS[a])for a in arms[1:]}
-            or d['root_operator']!='ARGMAX_MEAN_COMPLETED_Q'or type(d['deadline_seconds'])is not float
+            or d['root_operator']not in ROOT_OPERATORS or type(d['deadline_seconds'])is not float
             or d['deadline_seconds']not in DEADLINES or d['reserve_seconds']!=.15
             or d['screen_paired_cells']!=500 or d['max_paired_cells']!=2000 or d['confidence']!=.9
             or d['primary_comparison']!='SEARCH_MINUS_OUR_RAW_PAIRED_BY_CELL'
             or d['bar']!='LOWER_BOUND_GT_0_AT_2000_FULL_ROSTER_NO_BREAKAGE'or d['screen_rule']!=SCREEN_RULE
             or d['breakage']!=dict(BREAKAGE,latency_p95_max_seconds=d['deadline_seconds'])or d['matmul_precision']!='highest'
-            or d['screen_latency_rule']!=LATENCY_RULE or d['interleave']!=INTERLEAVE or d['arm_fairness']!=ARM_FAIRNESS):
+            or d['screen_latency_rule']!=LATENCY_RULE or d['interleave']!=INTERLEAVE or d['arm_fairness']not in ARM_FAIRNESS_RULES):
         raise ValueError('declared DepthN 500/2000 paired panel against our RAW required')
     expected=d['expected_searched_share']
     if expected is not None and (type(expected)is not dict or set(expected)!={'value','source'}
@@ -209,23 +231,49 @@ def validate(declaration):
             or type(choice['summary'])is not str or not choice['summary'].strip()):
         raise ValueError('search choice: the declared search arm, the commit of the cells that chose it, their files (path and sha256) '
                          'and a summary of the result required')
-    validate_move_wall(d['foulplay_move_wall']);validate_actor(d['actor'])
+    validate_move_wall(d['foulplay_move_wall']);validate_actor(d['actor'],d['deadline_seconds'],d['reserve_seconds'])
     if not _hex(d['server_tree_commit'],40):raise ValueError('the servers\' tree commit (40 hex) required')
     validate_provenance(d['provenance'])
+    if 'reply_prior'in d:validate_reply_prior(d['reply_prior'])
     return d
 
 
-def validate_actor(value):
+def validate_reply_prior(value):
+    """A br_fp screen's reply model (depthn_live_server --reply-archive): its archive and checkpoint sha256, the view it was trained
+    on ('b' needs peer_view_b true, the server's own rule), and the union guard (automatic with a reply model) declared true. Every
+    COMPLETE search must then carry it (reply_prior.reply_archive_sha256); without this key none may."""
+    v=value
+    if (type(v)is not dict or set(v)!=REPLY_PRIOR_KEYS or not _hex(v['archive_sha256'])or not _hex(v['checkpoint_sha256'])
+            or v['view']not in ('b','env')or type(v['peer_view_b'])is not bool or (v['view']=='b')>v['peer_view_b']
+            or v['union_guard']is not True or v['views']not in ('eager','jit')):
+        raise ValueError('reply prior: archive and checkpoint sha256, view b (with peer_view_b) or env, union_guard true and views eager '
+                         'or jit required')
+    return v
+
+
+def served_reply(response):
+    """(the reply model's archive sha256 a response names, or None; whether it was built with peer view b; its views mode or None)."""
+    reply=response.get('reply_prior')if isinstance(response.get('reply_prior'),dict)else {}
+    return reply.get('reply_archive_sha256'),'peer_view_b'in response,reply.get('views')
+
+
+def declared_reply(d):
+    """(the declared reply archive sha256 or None; whether the declaration's searches are built with peer view b; views or None)."""
+    reply=d.get('reply_prior')or {}
+    return reply.get('archive_sha256'),bool(reply.get('peer_view_b')),reply.get('views')
+
+
+def validate_actor(value,deadline_seconds,reserve_seconds):
     """The actor's time against search's budget (the lead's check; dispatch enforces cells_per_worker): persistent workers
     (cells_per_worker >= 2), each warmed once before its first claim (warm_actor on warmup_decisions captured decisions), the
     search request sent before the greedy forward, the measured warm p95s (encode, greedy) and the pre-flight's search-arm
-    end-to-end decision wall p95 (at most PREFLIGHT_WALL_P95_MAX), with their source (the pre-flight's preflight.json)."""
+    end-to-end decision wall p95 (at most preflight_wall_p95_max of the declared deadline and reserve), with their source (the pre-flight's preflight.json)."""
     v=value;warm=v.get('warm_p95_seconds')if type(v)is dict else None
     if (type(v)is not dict or set(v)!=ACTOR_KEYS or type(v['cells_per_worker'])is not int or v['cells_per_worker']<2
             or type(v['warmup_decisions'])is not int or v['warmup_decisions']!=WARMUP_DECISIONS or v['search_overlaps_greedy']is not True or not _evidence(v['source'])
             or type(warm)is not dict or set(warm)!={'encode','greedy'}
             or any(type(x)is not float or not math.isfinite(x)or x<=0 for x in (*warm.values(),v['preflight_search_wall_p95_seconds']))
-            or v['preflight_search_wall_p95_seconds']>PREFLIGHT_WALL_P95_MAX):
+            or v['preflight_search_wall_p95_seconds']>preflight_wall_p95_max(deadline_seconds,reserve_seconds)):
         raise ValueError('actor: persistent warmed workers (cells_per_worker >= 2, the declared warmup), the search request overlapping '
                          'greedy, the measured warm encode / greedy p95 and a pre-flight search wall p95 within the bound, with its source required')
     return v
@@ -547,7 +595,7 @@ def probe(run_directory,*,arm,server,capture,roots=5,tree_commit=None):
         snapshot=SimpleNamespace(battle_id='probe-'+uuid.uuid4().hex,**{k:row[k]for k in ('owner','stream_id','generation','prefix_sha256','lines','own_request_line')})
         response=client.request(snapshot,decision_index=row['decision_index'],started=clock())
         tried.append({k:response.get(k)for k in ('request_id','status','cause','refusal','requested_worlds','root_operator',
-            'tree_commit','archive_sha256','pricer','client_wall_seconds')})
+            'tree_commit','archive_sha256','pricer','client_wall_seconds')}|dict(zip(('reply_archive_sha256','peer_view_b','reply_views'),served_reply(response))))
         if response.get('client_refused')is False and response.get('archive_sha256')!=d['archive_sha256']:
             reason='server archive differs from the declared champion archive';break
         if response.get('client_refused')is False and response.get('tree_commit')!=d['server_tree_commit']:
@@ -555,7 +603,9 @@ def probe(run_directory,*,arm,server,capture,roots=5,tree_commit=None):
         if response['status']=='COMPLETE':
             good=(response.get('requested_worlds')==d['search'][arm]['worlds']and response.get('root_operator')==d['root_operator']
                 and (response.get('pricer')or {}).get('matmul_precision')==d['matmul_precision'])
-            status,reason=('PASS',None)if good else('FAIL','COMPLETE response with another W, root operator or matmul precision');break
+            status,reason=('PASS',None)if good else('FAIL','COMPLETE response with another W, root operator or matmul precision')
+            if good and served_reply(response)!=declared_reply(d):status,reason='FAIL','COMPLETE response with another reply model or peer view'
+            break
         if response['cause']not in ('constructor_refused','depthn_refused','class_refused'):reason='refused: '+str(response['cause']);break
     value=dict(schema=PROBE_SCHEMA,arm=arm,server=server,capture=str(Path(capture).resolve()),status=status,reason=reason,tried=tried)
     write_new(root/'probes'/f'{arm}-{time.time_ns()}.json',value)
@@ -659,7 +709,9 @@ def calibration_packets(directory,*,setting):
 
 def preflight_packets(directory,*,arm,games,deadline_seconds,reserve_seconds):
     """Pre-flight packets (the lead's check of the overlapped path, outcome-blind, never counted): the band's first `games`
-    not-attempted cells, alternately RAW and `arm`, each request carrying its arm and the declared client deadline and reserve."""
+    not-attempted cells, each request carrying its arm and the declared client deadline and reserve. The arm is the cell's own:
+    RAW where the seat equals the offset's parity, else `arm`, so each arm plays both seats equally (consecutive offsets swap them;
+    alternating by position gave RAW every seat-0 cell and the search arm every seat-1 cell, since the band's seats alternate too)."""
     root,run,lad,band=calibration_load(directory);todo=[]
     if arm not in SEARCH_ARMS or type(games)is not int or games<1:raise ValueError('a declared search arm and games >= 1 required')
     if (root/'calibration.json').exists()or any(json.loads(c.read_bytes()).get('setting')in ('solo','concurrent')for c in (root/'claims').glob('*.json')):
@@ -668,7 +720,7 @@ def preflight_packets(directory,*,arm,games,deadline_seconds,reserve_seconds):
         if k>=games:break
         path=root/'requests'/f"{cell['ordinal']}.json"
         value=dict(schema=PREFLIGHT_REQUEST_SCHEMA,run_directory=run['run_directory'],cell=cell,checkpoint=run['checkpoint'],
-            checkpoint_sha256=run['checkpoint_sha256'],base_config=run['base_config'],arm='RAW'if k%2==0 else arm,
+            checkpoint_sha256=run['checkpoint_sha256'],base_config=run['base_config'],arm='RAW'if cell['seat']==cell['offset']%2 else arm,
             deadline_seconds=float(deadline_seconds),reserve_seconds=float(reserve_seconds))
         if path.exists():
             if path.read_bytes()!=encoded(value):raise ValueError('existing pre-flight request differs')
@@ -680,7 +732,7 @@ def preflight_packets(directory,*,arm,games,deadline_seconds,reserve_seconds):
 def preflight_summary(directory,*,dispatch=None,server=None,cells_per_worker=None,code_tree=None,tree_commit=None):
     """The pre-flight's readings: per arm, each game's first-decision wall against the warm (decision >= 1) distribution's p99
     (the warmup's check), and the search arm's end-to-end decision wall (select_seconds, non-single-legal decisions) p95
-    against PREFLIGHT_WALL_P95_MAX, with fallback causes; plus the workers' warmups."""
+    against preflight_wall_p95_max of the pre-flight's deadline and reserve, with fallback causes; plus the workers' warmups."""
     root,run,lad,band=calibration_load(directory);arms={};conditions=set()
     for cell in band:
         request=root/'requests'/f"{cell['ordinal']}.json"
@@ -693,7 +745,7 @@ def preflight_summary(directory,*,dispatch=None,server=None,cells_per_worker=Non
         if value.get('setting')!='preflight':continue
         arm=value.get('arm');rows=telemetry_rows(root,cell['ordinal']);off=non_home(rows)
         a=arms.setdefault(arm,dict(games=0,complete=0,first=[],warm=[],encode=[],greedy=[],search=[],causes=Counter(),kinds=Counter(),non_home=0,answered=0,
-            first_actor=[],warm_actor=[]));
+            first_actor=[],warm_actor=[],reuse=0));
         a['non_home']+=len(off);a['answered']+=sum(1 for r in rows if type((r.get('search')or {}).get('server_id'))is str and (r.get('search')or {}).get('client_refused')is not True)
         a['games']+=1;a['complete']+=value.get('status')=='COMPLETE'
         for r in rows:
@@ -704,6 +756,7 @@ def preflight_summary(directory,*,dispatch=None,server=None,cells_per_worker=Non
                 a['search'].append(r['select_seconds'])
                 if r.get('cause')is not None:a['causes'][r['cause']]+=1
                 if r.get('cause')=='constructor_refused':a['kinds'][refusal_kind((r.get('search')or {}).get('refusal'))]+=1
+                if any(k in str((r.get('search')or {}).get('refusal')or '')for k in PREFLIGHT_REUSE_REFUSALS):a['reuse']+=1
     out={}
     for arm,a in sorted(arms.items(),key=lambda x:str(x[0])):
         warm=_quantiles(a['warm']);p99=None if warm is None else warm['p99']
@@ -719,17 +772,22 @@ def preflight_summary(directory,*,dispatch=None,server=None,cells_per_worker=Non
             search_wall=_quantiles(a['search']),fallback_causes=dict(sorted(a['causes'].items())),
             timeout_share=_share(a['causes']['timeout'],len(a['search'])),constructor_refused_share=_share(a['causes']['constructor_refused'],len(a['search'])),
             searched_share_of_non_timeouts=_share(len(a['search'])-sum(a['causes'].values()),len(a['search'])-a['causes']['timeout']),
+            refused_share=_share(sum(a['causes'][c]for c in PREFLIGHT_REFUSED_CAUSES),len(a['search'])),reuse_refusals=a['reuse'],
             constructor_refusal_kinds=dict(a['kinds'].most_common(10)),non_home=a['non_home'],answered=a['answered'],
             non_home_share=_share(a['non_home'],a['answered']))
     if len(conditions)!=1:raise ValueError(f'one search arm, deadline and reserve per pre-flight required, found {sorted(conditions)}')
     (arm,deadline,reserve),=conditions
     walls=[out[a]['search_wall']for a in out if a in SEARCH_ARMS and out[a]['search_wall']]
     timeouts=[out[a]['timeout_share']for a in out if a in SEARCH_ARMS and out[a]['timeout_share']is not None]
+    refused=[out[a]['refused_share']for a in out if a in SEARCH_ARMS and out[a]['refused_share']is not None]
+    reuse=[out[a]['reuse_refusals']for a in out if a in SEARCH_ARMS]
     claims=[json.loads(p.read_bytes())for p in sorted((root/'claims').glob('*.json'))]
     return dict(schema=PREFLIGHT_SCHEMA,arm=arm,deadline_seconds=deadline,reserve_seconds=reserve,server=server,cells_per_worker=cells_per_worker,
-        dispatch=dispatch,arms=out,search_wall_p95_max=PREFLIGHT_WALL_P95_MAX,
-        search_wall_within=None if not walls else all(w['p95']<=PREFLIGHT_WALL_P95_MAX for w in walls),
+        dispatch=dispatch,arms=out,search_wall_p95_max=preflight_wall_p95_max(deadline,reserve),
+        search_wall_within=None if not walls else all(w['p95']<=preflight_wall_p95_max(deadline,reserve)for w in walls),
         timeout_share_max=PREFLIGHT_TIMEOUT_SHARE_MAX,timeouts_within=None if not timeouts else all(t<=PREFLIGHT_TIMEOUT_SHARE_MAX for t in timeouts),
+        refused_share_max=PREFLIGHT_REFUSED_SHARE_MAX,refused_within=None if not refused else all(x<=PREFLIGHT_REFUSED_SHARE_MAX for x in refused),
+        reuse_refusals=None if not reuse else sum(reuse),
         warmups=[c['warmup']for c in claims if c.get('setting')=='preflight'and c.get('warmup')is not None],
         seed_band=run['seed_band'],lanes=run['lanes'],calibration_tree=run['tree'],
         code_tree=code_tree if code_tree is not None else tree_identity(tree_commit))
@@ -745,7 +803,9 @@ def check_preflight(d,tree):
     """The declared actor block against its source (the pre-flight's preflight.json, sha256-bound): the declared arm, deadline,
     reserve and cells per worker; a dispatch that neither failed nor stopped; every game's first decision's actor time (encode +
     greedy) within its arm's warm actor p99 (the warmup worked; the end-to-end first decision, which also carries the server's time
-    and the start-together GPU wave, is descriptive); the search wall within the bound; the declared numbers equal to the file's; and the pre-flight's code
+    and the start-together GPU wave, is descriptive); the search wall within the bound, which is the declaration's
+    (preflight_wall_p95_max of its deadline and reserve); timeouts and server refusals (PREFLIGHT_REFUSED_CAUSES) within
+    their bounds and no reuse refusal (PREFLIGHT_REUSE_REFUSALS: a battle the live servers already held); the declared numbers equal to the file's; and the pre-flight's code
     the eval's (the worker code digest: the declaration JSON is not part of it)."""
     a=d['actor'];value=read_bound(a['source']['path'],a['source']['sha256']);arm=d['arms'][1]
     raw=(value.get('arms')or {}).get('RAW')or {};search=(value.get('arms')or {}).get(arm)or {}
@@ -753,14 +813,17 @@ def check_preflight(d,tree):
     pick=lambda q,k:(q or {}).get(k)
     if (value.get('schema')!=PREFLIGHT_SCHEMA or value.get('arm')!=arm or value.get('deadline_seconds')!=d['deadline_seconds']
             or value.get('reserve_seconds')!=d['reserve_seconds']or value.get('cells_per_worker')!=a['cells_per_worker']
+            or value.get('search_wall_p95_max')!=preflight_wall_p95_max(d['deadline_seconds'],d['reserve_seconds'])
             or outcome.get('failed')!=[]or outcome.get('stopped')is not None or value.get('search_wall_within')is not True
-            or value.get('timeouts_within')is not True
+            or value.get('timeouts_within')is not True or value.get('refused_within')is not True or value.get('reuse_refusals')!=0
+            or value.get('refused_share_max')!=PREFLIGHT_REFUSED_SHARE_MAX
             or raw.get('first_actor_within_warm_p99')is not True or search.get('first_actor_within_warm_p99')is not True
             or pick(search.get('search_wall'),'p95')!=a['preflight_search_wall_p95_seconds']
             or pick(raw.get('warm_encode'),'p95')!=a['warm_p95_seconds']['encode']or pick(raw.get('warm_greedy'),'p95')!=a['warm_p95_seconds']['greedy']
             or pick(value.get('code_tree'),'source_sha256')!=tree['source_sha256']):
         raise ValueError('the declared actor must be its pre-flight\'s: same arm, deadline, reserve and cells per worker, a clean dispatch, '
-                         'first decisions within the warm p99, the search wall and timeouts within their bounds, the same numbers and the same code')
+                         'first decisions within the warm p99, the search wall, timeouts and server refusals within their bounds, no reused battle, '
+                         'the same numbers and the same code')
     return value
 
 
@@ -1078,10 +1141,13 @@ def read_result(root,ordinal):
     return json.loads(path.read_bytes())if path.exists()else {}
 
 
-def cell_moves(root,ordinal,result=None):
-    """One cell's Foul Play moves (depthn_live_fairness.moves), banded by its owner capture's turns."""
+def cell_moves(root,ordinal,result=None,rule=ARM_FAIRNESS):
+    """One cell's Foul Play moves (depthn_live_fairness.moves), banded by its owner capture's turns; under a rule with
+    alive_bands (RULE_R3) also labelled by both sides' alive bands from that capture (round_states)."""
     result=read_result(root,ordinal)if result is None else result
-    return fairness.moves(result,fairness.round_turns(result.get('owning_wire')or Path(root)/'owning-wire'/f'{ordinal}.jsonl'))
+    capture=result.get('owning_wire')or Path(root)/'owning-wire'/f'{ordinal}.jsonl'
+    if fairness.alive_labelled(rule):return fairness.moves(result,fairness.round_states(capture),alive=True)
+    return fairness.moves(result,fairness.round_turns(capture))
 
 
 def completed_pairs(entries,search_arm):
@@ -1122,7 +1188,7 @@ class Monitor:
         pairs=completed_pairs(entries,self.arm);done=[c for c in state['checks']if c['window']==start]
         if pairs<(done[-1]['pairs']if done else 0)+rule['checkpoint_pairs']:return None
         for entry in entries:
-            if entry['ordinal']not in self.moves:self.moves[entry['ordinal']]=cell_moves(self.root,entry['ordinal'])
+            if entry['ordinal']not in self.moves:self.moves[entry['ordinal']]=cell_moves(self.root,entry['ordinal'],rule=rule)
         arms={arm:fairness.pool([self.moves[e['ordinal']]for e in entries if e['arm']==arm])for arm in ('RAW',self.arm)}
         value=fairness.reading(arms['RAW'],arms[self.arm],rule)
         floors=pairs>=rule['min_pairs']and min(value['moves'].values())>=rule['min_moves_per_arm']
@@ -1173,7 +1239,7 @@ def decisions(rows,*,deadline,worlds=None,archive=None,precision=None):
     """
     seen=set();sources=Counter();causes=Counter();kinds={};differs=late=wrong_worlds=wrong_archive=wrong_precision=0
     times={k:[]for k in ('select','encode','greedy','client','server_wall','queue','prepare','build','price','reduce')}
-    provenance={k:Counter()for k in ('tree_commit','archive_sha256','root_operator','pricer')};servers={};kinds_refused=Counter()
+    provenance={k:Counter()for k in ('tree_commit','archive_sha256','root_operator','pricer','reply')};servers={};kinds_refused=Counter()
     for row in rows:
         key=(row.get('battle_id'),row.get('owner'),row.get('decision_index'),row.get('prefix_sha256'))
         source,cause,kind=row.get('source'),row.get('cause'),row.get('request_kind')
@@ -1204,7 +1270,8 @@ def decisions(rows,*,deadline,worlds=None,archive=None,precision=None):
             wrong_archive+=archive is not None and search.get('archive_sha256')!=archive
             wrong_precision+=precision is not None and (search.get('pricer')if isinstance(search.get('pricer'),dict)else {}).get('matmul_precision')!=precision
             for name in provenance:
-                value=search.get(name);provenance[name][value if type(value)is not dict else encoded(value).decode()]+=1
+                value=list(served_reply(search))if name=='reply'else search.get(name)
+                provenance[name][value if type(value)is not dict and name!='reply'else encoded(value).decode()]+=1
     off=non_home(rows);answered=nh=nh_refused=nh_searched=nh_differs=0
     for row in rows:
         x=row.get('search')if isinstance(row.get('search'),dict)else {}
@@ -1364,7 +1431,8 @@ def readout(run_directory,*,arm,limit,codex_raw_directory=None,server_telemetry=
         accepted_uncalibrated=state_path(root,'accept_uncalibrated.json').exists(),phases={})
     for phase in PHASES[:1]if limit==d['screen_paired_cells']else PHASES:   # the screen readout reads screen-phase state only
         state=fairness_state(root,phase)
-        pooled={name:fairness.pool([cell_moves(root,r['cell']['ordinal'],r)for r in rows[name]if phase_of(d,r['cell']['pair_ordinal'])==phase])
+        pooled={name:fairness.pool([cell_moves(root,r['cell']['ordinal'],r,d['arm_fairness'])for r in rows[name]
+                                    if phase_of(d,r['cell']['pair_ordinal'])==phase])
                 for name in rows}
         reading=(fairness.reading(pooled['RAW'],pooled[arm],d['arm_fairness'])if observable else dict(status='UNMEASURABLE',
             basis='structural isolation (dedicated Foul Play cores; servers in their own pods) plus interleaving',
@@ -1387,7 +1455,8 @@ def readout(run_directory,*,arm,limit,codex_raw_directory=None,server_telemetry=
     if p95 is not None and p95>rules['latency_p95_max_seconds']:breakage.append('latency_p95')
     if any(a['telemetry_mismatches']for a in arms.values()):breakage.append('telemetry')
     origin=search['provenance']
-    if any(len(v)>1 for v in origin.values())or origin['root_operator']not in ([],[d['root_operator']]):breakage.append('search_provenance')
+    if (any(len(v)>1 for v in origin.values())or origin['root_operator']not in ([],[d['root_operator']])
+            or origin.get('reply',[])not in ([],[encoded(list(declared_reply(d))).decode()])):breakage.append('search_provenance')
     servers=dict(server_tree_check(d['server_tree_commit'],tree['commit'],run['declaration']),observed=origin['tree_commit'])
     if not servers['ok']or origin['tree_commit']not in ([],[d['server_tree_commit']]):breakage.append('server_tree')
     if (search['non_home']['share_of_answered']or 0.)>NON_HOME_SHARE_MAX:breakage.append('non_home')   # routing not holding

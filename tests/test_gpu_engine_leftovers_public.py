@@ -14,6 +14,7 @@ from gpu_engine import engine_status_callbacks as statuses
 from gpu_engine import engine_weather_speed_profile as speed, engine_request_source as source
 from gpu_engine import public_wire, public_inputs as inputs, v4_encoder as v4
 import test_gpu_engine_engine_weather_public as fixture
+import gpu_engine_shared_public_jits as shared
 
 
 class LeftoversPublicTests(unittest.TestCase):
@@ -105,9 +106,9 @@ class LeftoversPublicTests(unittest.TestCase):
         ns={k:np.array(getattr(self.f.compiled.device.namespaces,k)) for k in full._NAMES if k!='source_binding'}
         chunks=list(inputs.pack_chunks(np.array(frame.cursor.stream_id),rows,
             source_binding=np.array(self.f.catalog.source.device.binding),**ns))
-        expected=before.public
+        expected=before.public;fold=shared.fold(self.f.catalog)
         for chunk in chunks:
-            expected,error=v4.fold_chunk(expected,chunk,self.f.catalog)
+            expected,error=fold(expected,chunk)
             self.assertEqual(error.tolist(),[0,0])
         return chunks,expected
 

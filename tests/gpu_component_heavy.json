@@ -1,0 +1,150 @@
+{
+ "schema": "gpu-component-heavy.v1",
+ "rule": "heavy: hosted median wall over 10 min, or a module that never completes on a hosted runner, or an isolated peak RSS over 12 GiB (isolated: one process per module on 4 CPUs with the CI runtime)",
+ "modules": [
+  {
+   "module": "test_gpu_engine_calm_mind_owning",
+   "reason": "wall",
+   "hosted_median_min": 12.5,
+   "isolated_wall_min": 8.0,
+   "isolated_peak_gib": 7.4,
+   "completes_on_hosted": true
+  },
+  {
+   "module": "test_gpu_engine_canary_tracker_repairs",
+   "reason": "wall+memory",
+   "hosted_median_min": 18.2,
+   "isolated_wall_min": 10.7,
+   "isolated_peak_gib": 29.9,
+   "completes_on_hosted": true
+  },
+  {
+   "module": "test_gpu_engine_direct_ko_owning",
+   "reason": "wall",
+   "hosted_median_min": 16.2,
+   "isolated_wall_min": 14.6,
+   "isolated_peak_gib": 8.4,
+   "completes_on_hosted": true
+  },
+  {
+   "module": "test_gpu_engine_engine_status_callbacks",
+   "reason": "wall+memory",
+   "hosted_median_min": 13.9,
+   "isolated_wall_min": 10.2,
+   "isolated_peak_gib": 17.1,
+   "completes_on_hosted": true
+  },
+  {
+   "module": "test_gpu_engine_entry_spikes_owning",
+   "reason": "wall",
+   "hosted_median_min": 13.0,
+   "isolated_wall_min": 10.8,
+   "isolated_peak_gib": 8.3,
+   "completes_on_hosted": true
+  },
+  {
+   "module": "test_gpu_engine_execution_actual_sites",
+   "reason": "wall+memory",
+   "hosted_median_min": 24.8,
+   "isolated_wall_min": 16.8,
+   "isolated_peak_gib": 25.1,
+   "completes_on_hosted": true
+  },
+  {
+   "module": "test_gpu_engine_execution_runtime_plumbing",
+   "reason": "wall+memory",
+   "hosted_median_min": null,
+   "isolated_wall_min": 116.8,
+   "isolated_peak_gib": 47.8,
+   "completes_on_hosted": false
+  },
+  {
+   "module": "test_gpu_engine_kernel_risk_combined_runtime",
+   "reason": "wall+memory",
+   "hosted_median_min": 20.6,
+   "isolated_wall_min": 11.7,
+   "isolated_peak_gib": 24.2,
+   "completes_on_hosted": true
+  },
+  {
+   "module": "test_gpu_engine_leftovers_no_output_runtime",
+   "reason": "wall+memory",
+   "hosted_median_min": null,
+   "isolated_wall_min": 18.9,
+   "isolated_peak_gib": 48.0,
+   "completes_on_hosted": false
+  },
+  {
+   "module": "test_gpu_engine_leftovers_owning_callers",
+   "reason": "wall+memory",
+   "hosted_median_min": 11.8,
+   "isolated_wall_min": 8.1,
+   "isolated_peak_gib": 15.0,
+   "completes_on_hosted": true
+  },
+  {
+   "module": "test_gpu_engine_ordinary_intimidate_owning",
+   "reason": "wall",
+   "hosted_median_min": null,
+   "isolated_wall_min": 16.2,
+   "isolated_peak_gib": 10.9,
+   "completes_on_hosted": false
+  },
+  {
+   "module": "test_gpu_engine_owning_drain_end_to_end",
+   "reason": "wall+memory",
+   "hosted_median_min": null,
+   "isolated_wall_min": 74.0,
+   "isolated_peak_gib": 87.9,
+   "completes_on_hosted": false
+  },
+  {
+   "module": "test_gpu_engine_seismic_toss_owning",
+   "reason": "wall",
+   "hosted_median_min": 14.0,
+   "isolated_wall_min": 11.1,
+   "isolated_peak_gib": 8.5,
+   "completes_on_hosted": true
+  },
+  {
+   "module": "test_gpu_engine_spikes_owning",
+   "reason": "wall",
+   "hosted_median_min": 10.6,
+   "isolated_wall_min": 9.5,
+   "isolated_peak_gib": 7.6,
+   "completes_on_hosted": true
+  },
+  {
+   "module": "test_gpu_engine_status_kernel_owner_drain",
+   "reason": "wall+memory",
+   "hosted_median_min": null,
+   "isolated_wall_min": 142.5,
+   "isolated_peak_gib": 75.3,
+   "completes_on_hosted": false
+  },
+  {
+   "module": "test_gpu_engine_status_residual_runtime",
+   "reason": "wall+memory",
+   "hosted_median_min": null,
+   "isolated_wall_min": 54.8,
+   "isolated_peak_gib": 53.6,
+   "completes_on_hosted": false
+  },
+  {
+   "module": "test_gpu_engine_swords_dance_owning",
+   "reason": "wall",
+   "hosted_median_min": 10.6,
+   "isolated_wall_min": 7.7,
+   "isolated_peak_gib": 7.3,
+   "completes_on_hosted": true
+  },
+  {
+   "module": "test_gpu_engine_terminal_source",
+   "reason": "wall",
+   "hosted_median_min": 21.9,
+   "isolated_wall_min": 15.8,
+   "isolated_peak_gib": 12.0,
+   "completes_on_hosted": true
+  }
+ ]
+}
