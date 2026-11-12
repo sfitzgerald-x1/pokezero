@@ -148,11 +148,12 @@ Herb stays involved only on a lane with a valid use; wh_rule then explains, per 
 base's arrays, the restored stages (this tree's = the base's + the recorded raise, or a mon whose faint differs), the
 consumed item (White Herb in the base, none here), a holder the base knocked off afterwards (item_knocked, credit),
 and a Trick partner that got the herb only in the base; item-family slot differences must lie at an active of either
-side. Facade stays involved only for a side whose own Facade line ran under par/brn/psn/tox (recorded at the move hook).
+side. Facade stays involved only for a side whose own Facade line ran under par/brn/psn/tox (recorded at the move hook);
+a frozen user's Sacred Fire loses a side whose Sacred Fire line ran with its user still frozen (the thaw precedes it).
 A pinch berry eaten in exactly one tree on a White Herb or Facade lane (its holder's damage moved across the
 quarter-HP line) is explained per mon by pinch_rule (one stage in its own stat, the item, the device's reveal at its
 slot). Explained lane-steps are counted as wh_leaves (pinch_leaves for berries); malformed calls as wh_bad; lanes that
-lost the involvement as wh_dropped and facade_dropped.
+lost the involvement as wh_dropped, facade_dropped and sacredfire_dropped.
 
 KO cascade rule for the saved effect block (fidelity R's state.effect_draws,
 found by the M1 GPU pass): once the base pass has the leaf it is compared
@@ -1424,6 +1425,14 @@ def facade_actors(sides, doubled):
     return [s for s in sides if bool(doubled[s])]
 
 
+def sacred_actors(sides, frozen_line):
+    """WH: the Sacred Fire involvement a lane keeps: its pre-state frozen-user sides whose Sacred Fire line never ran in
+    this tree with the user still frozen (frz's onModifyMove thaws the user in useMove before the line, so a correct tree
+    never records one; a user stopped before its line, e.g. by confusion, keeps it). The GPU pass at edfcba5d: the thaw
+    planted on the foe (mutant S3) passed under the ALL allowance alone."""
+    return [s for s in sides if not bool(frozen_line[s])]
+
+
 # ---------------------------------------------------------------------------
 # Engine plumbing.
 
@@ -1474,7 +1483,7 @@ class Stepper:
             # WH: this tree's White Herb uses, read at the device hook from the before/after states it is given, and the
             # status of each side's own Facade line (wh_rule, facade_actors).
             whe = dict(used=j.zeros((lanes, 2, 6), j.bool_), raise_=j.zeros((lanes, 2, 6, 7), j.int32), bad=j.zeros((lanes,), j.bool_),
-                       facade=zero2)
+                       facade=zero2, sacred_frz=zero2)
             herb_hook = getattr(hooks, 'white_herb', None)
             def herb_recorder(c, before, after, side, use):
                 out = herb_hook(c, before, after, side, use)
@@ -1515,6 +1524,10 @@ class Stepper:
                     status = st.status[j.arange(lanes), s, st.active[j.arange(lanes), s]]
                     doubled = use & (mv == wh_ids['facade']) & (status >= 1) & (status <= 4)
                     whe['facade'] = whe['facade'] | at_side(doubled, s)
+                    # Sacred Fire's line with use while its user is still frozen there (frz's onModifyMove thaw precedes
+                    # the line, so a correct tree never records one).
+                    frozen_line = use & (mv == wh_ids['sacredfire']) & (status == FRZ)
+                    whe['sacred_frz'] = whe['sacred_frz'] | at_side(frozen_line, s)
                 if m2_ids is not None and len(rest) >= 2:
                     # M2: a move line (the caller's, or a called child's) of Perish Song, Yawn or Wrap with use set. Yawn: the
                     # target at the line holds no status and no Substitute and lives (its onTryHit and TryPrimaryHit, read
@@ -1836,7 +1849,8 @@ def patched_pass(args, *, step_override=None, prepared=None):
     # WH: White Herb's post-state rule and recorded uses, and Facade's recorded line status.
     wh_rules = 'WH' in plugins
     wh_ids = dict(herb=vocab['items'].index('whiteherb') if 'whiteherb' in vocab.get('items', ()) else -9,
-                  facade=vocab['moves'].index('facade') if 'facade' in vocab['moves'] else None) if wh_rules else None
+                  facade=vocab['moves'].index('facade') if 'facade' in vocab['moves'] else None,
+                  sacredfire=vocab['moves'].index('sacredfire') if 'sacredfire' in vocab['moves'] else -9) if wh_rules else None
     stepper = Stepper(step_override or _engine_step(tables), treedef, base_names=set(base_names), record_installs=public_order_rule,
         effect_rule=effect_rule, m2_ids=m2_ids, wh_ids=wh_ids)
     shards = [p for p in shard_list(args, capture) if p.name in set(manifest['shards'])]
@@ -1848,7 +1862,7 @@ def patched_pass(args, *, step_override=None, prepared=None):
                   changed_involved_unexpected_fields=0, ko_cascade=0, phase_shift=0, terminal=0, terminal_residual=0, waived=0,
                   rule_explained=0, faint_rule_leaves=0, clear_volatile_leaves=0, effect_draws_saved=0,
                   recharge_leaves=0, bag_leaves=0, trick_witness_leaves=0, ledger_leaves=0, m2_leaves=0, m2_wrong_mon=0, m2_forced=0,
-                  wh_leaves=0, wh_bad=0, wh_dropped=0, facade_dropped=0, pinch_leaves=0)
+                  wh_leaves=0, wh_bad=0, wh_dropped=0, facade_dropped=0, sacredfire_dropped=0, pinch_leaves=0)
     clear_volatile = 'B' in plugins
     m1_rules = 'M1' in plugins
     # M1 review: the base's per-lane witness arrays (wit_XX); the M1 rules compare per mon and per bag column.
@@ -1975,6 +1989,10 @@ def patched_pass(args, *, step_override=None, prepared=None):
                         kept = facade_actors(effects['facade'], wh_lane['facade'])
                         if kept:effects['facade'] = kept
                         else:effects.pop('facade');counts['facade_dropped'] += bool(changed)
+                    if 'sacredfire' in effects and 'sacred_frz' in wh_lane:
+                        kept = sacred_actors(effects['sacredfire'], wh_lane['sacred_frz'])
+                        if kept:effects['sacredfire'] = kept
+                        else:effects.pop('sacredfire');counts['sacredfire_dropped'] += bool(changed)
                 # The faint-clear rule explains its own leaves; any other changed leaf on the
                 # same lane-step still needs an involved effect (e.g. a revert on a faint lane).
                 faint_explained = []

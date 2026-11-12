@@ -332,6 +332,13 @@ class RegressRuleTests(unittest.TestCase):
         self.assertEqual(facade_actors([0, 1], np.array([True, False])), [0])
         self.assertEqual(facade_actors([1], np.array([True, False])), [])
 
+    def test_sacred_fire_drops_sides_whose_line_ran_frozen(self):
+        # GPU mutant S3 at edfcba5d (the thaw on the foe): its user's line ran still frozen, so the side loses Sacred Fire.
+        from gpu_engine.v2e_regress import sacred_actors
+        self.assertEqual(sacred_actors([0, 1], np.array([False, False])), [0, 1])   # thawed lines, or stopped before one
+        self.assertEqual(sacred_actors([0, 1], np.array([True, False])), [1])
+        self.assertEqual(sacred_actors([0], np.array([True, False])), [])
+
 
 if __name__ == '__main__':
     unittest.main()
