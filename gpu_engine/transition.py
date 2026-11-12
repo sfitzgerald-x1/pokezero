@@ -1691,12 +1691,14 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                 # data/moves.ts:19904-19915): the target's first, then the user's, so a receiver with a negative stage
                 # uses a received White Herb there (data/items.ts:7674-7686), before its -item|X|White Herb|[from] move:
                 # Trick line. Its state is the AfterMove trigger's (nothing between reads the holder's item or stages);
-                # the device sees -enditem and -clearnegativeboost first and Trick's -item lines last, as B2 folds them.
+                # the device sees -enditem and -clearnegativeboost first and Trick's -item lines last, as B2 folds them
+                # (a -clearnegativeboost line ends B2's Trick pairing: herb_used drops the partner credits it loses).
                 _trick_swapped=work
                 work,_herb=_white_herb_pair(work,table,foe,_trick,_device_public=_device_public)
                 if _lifecycle_trace:_public_trace=status_callbacks.unknown(_public_trace,jnp.any(_herb,axis=1))
                 if _device_public is not None:
-                    device_public.trick(_device_public,_device_trick_before,_trick_swapped,side,_trick,table.items.choice_band)
+                    device_public.trick(_device_public,_device_trick_before,_trick_swapped,side,_trick,table.items.choice_band,
+                        herb_used=_herb)
             # Charm's primary boosts (moveHit after TryHit): Protect is already in `hit`; a
             # Substitute fails it (TryPrimaryHit); status moves ignore type immunity
             # (tryMoveHit sets ignoreImmunity for Status). The drop is capped first, then

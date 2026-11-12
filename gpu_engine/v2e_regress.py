@@ -1299,6 +1299,7 @@ WH_MON_LEAVES = ('state.item', 'state.item_knocked', 'state.boosts')
 WH_SLOT_LEAVES = ('trackers.shown_item', 'trackers.item_removed', 'trackers.belief_mask', 'trackers.boosts') + tuple(
     f"trackers.mon_features['{k}']" for k in ('item_swapped', 'choice_public', 'choice_locked', 'item_mutated', 'item_original'))
 WH_VISIBLE = 'trackers.visible_belief.'
+WH_ORIGINAL = "trackers.mon_features['item_original']"
 WH_CREDIT = "trackers.field_features['items_removed_credit']"
 
 
@@ -1329,9 +1330,13 @@ def wh_rule(entries, w):
       state.item_knocked differs only at a used mon the base knocked off (base True, here False).
     - the removal credit (field_features items_removed_credit, per side): the base's exceeds this tree's by exactly the
       used mons the base knocked off on that side.
+    - credit [2] (recorded at the trick hook): a side whose Trick partner credit B2 loses (a receiver's herb lines end
+      the pairing); with no use or partner of its own there, only its active's ledger original may differ, unrecorded
+      (0) here, plus the item-family slot rule above.
     Returns (remaining entries, explained entries)."""
     explained = set();wit, base = w['wit'], w['base'];used = np.asarray(w['used'], bool);herb = w['herb']
     if w.get('bad') or not used.any():return entries, []
+    credit = np.asarray(w.get('credit', np.zeros(2, bool)), bool)
     raised = np.asarray(w['raise']);ko = np.asarray(w.get('ko', np.zeros((2, 6), bool)), bool)
     p2p = np.asarray(w['p2p']);acting = np.asarray(w['acting'], bool)
     def have(leaf):return leaf in wit and leaf in base
@@ -1345,7 +1350,7 @@ def wh_rule(entries, w):
         partner = acting & (np.asarray(base['state.item']) == herb) & (np.asarray(wit['state.item']) == 0) & ~used
     for side in (0, 1):
         mine = used[side]
-        if not (mine.any() or partner[side].any()):continue
+        if not (mine.any() or partner[side].any() or credit[side]):continue
         for leaf, s_ in sorted(entries, key=str):
             if s_ != side or not have(leaf):continue
             if leaf not in WH_MON_LEAVES and leaf not in WH_SLOT_LEAVES and not leaf.startswith(WH_VISIBLE):continue
@@ -1364,6 +1369,9 @@ def wh_rule(entries, w):
                 ok = not (diff & ~((mine | partner[side]) & (b == herb) & (a == 0))).any()
             elif leaf == 'state.item_knocked':
                 ok = not (diff & ~knocked_base[side]).any()
+            elif leaf == WH_ORIGINAL and credit[side] and not (mine.any() or partner[side].any()):
+                # Only a lost Trick partner credit on this side: its active's ledger original unrecorded here.
+                ok = not (diff & ~(slots(acting[side], side) & (np.asarray(a) == 0))).any()
             elif leaf in WH_SLOT_LEAVES or leaf.startswith(WH_VISIBLE):
                 ok = not (diff & ~slots(acting[side], side)).any()
             else:
@@ -1496,7 +1504,7 @@ class Stepper:
             # after frz let it pass, or a line run still frozen (wh_rule, facade_actors, sacred_actors).
             whe = dict(used=j.zeros((lanes, 2, 6), j.bool_), raise_=j.zeros((lanes, 2, 6, 7), j.int32), bad=j.zeros((lanes,), j.bool_),
                        facade=zero2, sacred_pre=zero2, sacred_line=zero2, sacred_stopped=zero2, sacred_frz=zero2,
-                       trick_order=j.zeros((lanes,), j.bool_))
+                       trick_order=j.zeros((lanes,), j.bool_), credit_lost=zero2)
             from gpu_engine import action_history as act_history
             record_move_fn = act_history.record_move
             def record_move_recorder(st, side, slot, *, eligible, struggle=False):
@@ -1529,7 +1537,7 @@ class Stepper:
                                & ~j.broadcast_to(j.asarray(result.can_act, j.bool_), (lanes,)))
                     whe['sacred_stopped'] = whe['sacred_stopped'] | at_side(stopped, s)
                 return before_move_hook(c, st, side, result, use, **kw)
-            def trick_recorder(c, before, after, side, use, choice_items):
+            def trick_recorder(c, before, after, side, use, choice_items, **kw):
                 if wh_ids is not None:
                     # White Herb received by Trick (review finding 1): setItem's Start runs inside Trick's onHit, before
                     # the -item lines, so at this hook a living receiver of White Herb with a negative stage has already
@@ -1540,7 +1548,15 @@ class Stepper:
                         due = (u & (after.item[r, m_, mon] == wh_ids['herb']) & (after.hp[r, m_, mon] > 0)
                                & (after.boosts[r, m_, mon] < 0).any(-1))
                         whe['trick_order'] = whe['trick_order'] | (due & ~whe['used'][r, m_, mon])
-                return trick_hook(c, before, after, side, use, choice_items)
+                    # The partner credits B2 loses when a receiver's herb lines end its Trick pairing (the device hook's
+                    # herb_used rule): the user's when the target used one, the target's when either did.
+                    herb = kw.get('herb_used')
+                    if herb is not None:
+                        s = j.broadcast_to(j.asarray(side, j.int32), (lanes,));t = 1 - s;herb = j.asarray(herb, j.bool_)
+                        got = lambda m_: after.item[r, m_, after.active[r, m_]] > 0
+                        lost_u = u & herb[r, t] & got(s);lost_t = u & (herb[r, t] | herb[r, s]) & got(t)
+                        whe['credit_lost'] = whe['credit_lost'] | at_side(lost_u, s) | at_side(lost_t, t)
+                return trick_hook(c, before, after, side, use, choice_items, **kw)
             herb_hook = getattr(hooks, 'white_herb', None)
             def herb_recorder(c, before, after, side, use):
                 out = herb_hook(c, before, after, side, use)
@@ -2162,7 +2178,7 @@ def patched_pass(args, *, step_override=None, prepared=None):
                              p2p=result['physical_to_public'][lane], ko=ko_mons_all[lane],
                              acting=active_mask(pre_active[lane]) | active_mask(post_active[lane]),
                              wit={n: v[lane] for n, v in wit.items()}, base={n: v[lane] for n, v in base_wit.items()})
-                    w['raise'] = wh_lane['raise_']
+                    w['raise'] = wh_lane['raise_'];w['credit'] = wh_lane.get('credit_lost', np.zeros(2, bool))
                     entries, wh_explained = wh_rule(entries, w)
                     counts['wh_leaves'] += bool(wh_explained)
                     if 'whiteherb' in effects or 'facade' in effects:

@@ -320,6 +320,21 @@ class RegressRuleTests(unittest.TestCase):
         lane = self.lane(base={'state.item': partner}, acting=np.zeros((2, 6), bool))
         self.assertEqual(self.rule([('state.item', 1)], lane)[0], {('state.item', 1)})                    # not an active
 
+    def test_a_lost_trick_partner_credit_explains_only_the_ledger_original(self):
+        """The trick hook's herb_used (B2 ends the Trick pairing at the receiver's -clearnegativeboost): side 1 has no use
+        of its own, so with credit only its active's ledger original may differ, and only as unrecorded (0) here."""
+        from gpu_engine import v2e_regress as r
+        leaf = r.WH_ORIGINAL
+        here = np.zeros((2, 6), np.int32);there = here.copy();there[1, 0] = LEFTOVERS
+        entries = set(self.ENTRIES) | {(leaf, 1)}
+        w = self.lane(wit={leaf: here}, base={leaf: there}, credit=np.array([False, True]))
+        self.assertNotIn((leaf, 1), self.rule(entries, w)[0])
+        self.assertIn((leaf, 1), self.rule(entries, self.lane(wit={leaf: here}, base={leaf: there}))[0])   # no credit
+        wrong = here.copy();wrong[1, 0] = HERB                                                              # not 0 here
+        self.assertIn((leaf, 1), self.rule(entries, self.lane(wit={leaf: wrong}, base={leaf: there}, credit=np.array([False, True])))[0])
+        bench = np.zeros((2, 6), np.int32);bench[1, 2] = LEFTOVERS                                         # off the actives
+        self.assertIn((leaf, 1), self.rule(entries, self.lane(wit={leaf: here}, base={leaf: bench}, credit=np.array([False, True])))[0])
+
     def test_a_pinch_berry_eaten_in_one_tree_only(self):
         """pinch_rule (the GPU pass at 5951098e: a doubled Facade's target ate its Salac Berry here only): the berry mon's
         item, its +1 in the berry's stat and the device's reveal at its slot are explained; a second stage, another stat,

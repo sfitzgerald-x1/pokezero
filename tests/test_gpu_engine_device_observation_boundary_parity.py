@@ -561,7 +561,7 @@ console.log(JSON.stringify(orders));"""
         dropped=state._replace(boosts=state.boosts.at[:,0,0,0].set(-2))
         swapped=dropped._replace(item=dropped.item.at[:,0,0].set(1).at[:,1,0].set(2))
         used=swapped._replace(item=swapped.item.at[:,0,0].set(0),boosts=swapped.boosts.at[:,0,0,0].set(0))
-        h.white_herb(c,swapped,used,0,yes);h.trick(c,dropped,swapped,0,yes,band)
+        h.white_herb(c,swapped,used,0,yes);h.trick(c,dropped,swapped,0,yes,band,herb_used=j.asarray([[True,False]]*2))
         self.b2_lines(a,catalog,fact,'|-activate|p1a: Snorlax|move: Trick|[of] p2a: Absol','|-item|p2a: Absol|Choice Band|[from] move: Trick',
             '|-enditem|p1a: Snorlax|Leftovers','|-clearnegativeboost|p1a: Snorlax|[silent]','|-item|p1a: Snorlax|Leftovers|[from] move: Trick')
         got=project();self.compare_active(c.trackers,got,a)
@@ -804,8 +804,10 @@ class TrickWhiteHerbBoundaryParityTests(unittest.TestCase):
     The transition's device order (white_herb on the swapped state, then trick with that pre-herb state, so its -item writes
     land last) against B2's fold of the same four lines, here as Snorlax (Choice Band, -2 Atk) Tricking Absol: the item
     ledger (revealed, removed, mutated, original) and the receiver's stages. B2 reads a bare -enditem alike for any item
-    (public_items CONSUME), so the fixture's Leftovers stands in for White Herb. The old order (trick, then white_herb at
-    AfterMove) leaves the herb removed where B2 does not."""
+    (public_items CONSUME), so the fixture's Leftovers stands in for White Herb. The -clearnegativeboost line ends B2's
+    Trick pairing (public_items.begin_event), so the target's original, credited from the receiver's later -item line, stays
+    unknown: the hook's herb_used. The old order (trick, then white_herb at AfterMove) leaves the herb removed where B2
+    does not, and credits the target's original."""
     @classmethod
     def setUpClass(cls):
         import test_gpu_engine_fidelity_a2 as a2
@@ -834,7 +836,7 @@ class TrickWhiteHerbBoundaryParityTests(unittest.TestCase):
         dropped=s0._replace(boosts=s0.boosts.at[0,0,0,0].set(-2));h.observe(c,dropped,yes)
         swapped=dropped._replace(item=dropped.item.at[0,0,0].set(1).at[0,1,0].set(2))
         used=swapped._replace(item=swapped.item.at[0,0,0].set(0),boosts=swapped.boosts.at[0,0,0,0].set(0))
-        if herb_first:h.white_herb(c,swapped,used,0,yes);h.trick(c,dropped,swapped,0,yes,band)
+        if herb_first:h.white_herb(c,swapped,used,0,yes);h.trick(c,dropped,swapped,0,yes,band,herb_used=j.asarray([[True,False]]))
         else:h.trick(c,dropped,swapped,0,yes,band);h.white_herb(c,swapped,used,0,yes)
         out={};f_=c.trackers.mon_features
         for side in (0,1):
@@ -847,9 +849,10 @@ class TrickWhiteHerbBoundaryParityTests(unittest.TestCase):
     def test_trick_received_white_herb_four_lines_match_b2(self):
         b2=self.b2()
         self.assertEqual(b2[0],dict(revealed='leftovers',original='choiceband',removed=False,mutated=True,boosts=[0]*7))
-        self.assertEqual(b2[1]['revealed'],'choiceband')
+        self.assertEqual(b2[1],dict(revealed='choiceband',original='',removed=False,mutated=True,boosts=[0]*7))
         self.assertEqual(self.device(True),b2)
         old=self.device(False)
         self.assertNotEqual(old[0]['removed'],b2[0]['removed'])        # the old order: the herb shown removed after the -item
+        self.assertNotEqual(old[1]['original'],b2[1]['original'])      # and the target's original credited
 
 if __name__=='__main__':unittest.main()
