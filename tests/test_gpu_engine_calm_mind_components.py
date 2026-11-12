@@ -6,7 +6,7 @@ per class (every input an argument) instead of called eagerly, and ChanceInputs 
 test (test_canonical_static_capability_default_ast_and_original_source_order) certifies transition.py at gpu_engine_transition_certification.CURRENT_TRANSITION.
 """
 from _showdown_root import showdown_root_str
-import ast,json,os,shutil,subprocess,unittest
+import ast,hashlib,json,os,shutil,subprocess,unittest
 from copy import deepcopy
 from dataclasses import replace
 from pathlib import Path
@@ -132,7 +132,13 @@ class CalmMindComponentTests(unittest.TestCase):
   _,packets=public_wire.project_lines(wire,lines,**v4.wire_kwargs(self.catalog));return np.array([e.words() for p in packets for e in p.events],np.int32)
  def test_canonical_static_capability_default_ast_and_original_source_order(self):
   from gpu_engine import engine_source_frame_witness as witness
-  witness._source();self.assertIn('engine_calm_mind_callbacks.py',witness.SOURCE_PINS)
+  # witness._source() checks the pin inventory and every pinned file's bytes. While the chance proof does not cover
+  # R's effect draws, the secondary.py and transition.py pins stay stale on purpose and it refuses, so this test
+  # checks the inventory and this callback's own pin; every pin's bytes are checked by
+  # test_gpu_engine_transition_observer_wiring.test_owned_source_bindings_match_actual_files.
+  self.assertEqual(tuple(sorted(witness.SOURCE_PINS.items())),witness._REGISTERED_SOURCE_PINS)
+  self.assertIn('engine_calm_mind_callbacks.py',witness.SOURCE_PINS)
+  self.assertEqual(hashlib.sha256(Path(witness.__file__).with_name('engine_calm_mind_callbacks.py').read_bytes()).hexdigest(),witness.SOURCE_PINS['engine_calm_mind_callbacks.py'])
   move=self.ids['calmmind'];self.assertEqual(int(self.risks.device.selected_risk[move]),0)
   self.assertEqual(int(self.risks.device.selected_risk[self.ids['swordsdance']])&(risk.NON_WEATHER|risk.BOOST),risk.NON_WEATHER|risk.BOOST)
   closed=risk.compile_risks(self.producer,self.account);self.assertTrue(int(closed.device.selected_risk[move])&risk.BOOST)
