@@ -7,8 +7,10 @@ usage: depthn_carry_audit.py enumerate [--showdown-root ROOT] [--out DIR]
        depthn_carry_audit.py capture --out DIR [--like HEADER_JSON] [--watch MOVE ...] [--dry-run] [<re-pricer flags> ...]
 
 Why. The live search prices depth-2 trees on the GPU engine (gpu_engine/transition.py and the device hooks). Every effect below is
-in the Gen 3 random battle move pool and is absent from that engine, so inside the tree it is mispriced: a recharge turn is free, a
-Wrap does not trap or chip, a Perish Song never counts down, and so on. The audit counts, per effect, the priced roots it touches
+in the Gen 3 random battle move pool and was absent from that engine, so inside the tree it was mispriced: a recharge turn is free,
+a Wrap does not trap or chip, a Perish Song never counts down, and so on. The fidelity patches model some of them in-tree from a
+named integration merge (Effect.engine_since: Destiny Bond from A2, 286a5ffe; Hyper Beam's recharge and Trick from M1, 8b212312);
+the live root carry still drops or refuses them (the evidence rows), so they stay audited. The audit counts, per effect, the priced roots it touches
 and applies the lead's rule: an effect whose (b) and (c) together cover <= 2% of priced roots is a named residual; otherwise it is
 escalated.
 
@@ -20,6 +22,7 @@ pool membership is checked against it (pool_check; a mismatch is reported, never
 - Audited (in the pool, not represented): recharge (Hyper Beam), partial_trap (Wrap), perish_count (Perish Song), drowsy (Yawn),
   destiny_bond (Destiny Bond), transform (Transform), trick_lock (Trick: its user always holds Choice Band, so the target ends up
   choice-locked). recharge, partial_trap and transform are also LOCK-class at gpu_engine/engine_request_source.py:380.
+  engine_since: destiny_bond 286a5ffe (A2); recharge and trick_lock 8b212312 (M1); the rest none yet.
 - Not in the pool (zero by construction): the locked-move family (Outrage, Thrash, Petal Dance), Uproar, Rollout, Ice Ball, Bide,
   Rage, the two-turn moves other than Solar Beam (Fly, Dig, Dive, Bounce, Skull Bash, Razor Wind, Sky Attack), the other partial
   traps, Future Sight / Doom Desire, Taunt / Disable / Torment.
@@ -122,6 +125,7 @@ class Effect:
     mechanism: str
     evidence: tuple
     note: str = ''
+    engine_since: str = ''         # the integration merge from which the engine models it in-tree ('' : not modelled)
 
 
 EFFECTS = (
@@ -131,13 +135,14 @@ EFFECTS = (
         ('Showdown data/moves.ts:9108-9119: Hyper Beam has flags.recharge and self.volatileStatus mustrecharge',
          'Showdown data/conditions.ts:364-378: mustrecharge cancels the next move (onBeforeMovePriority 11) and is onLockMove recharge; '
          'sim/pokemon.ts:1085-1088: a locked move sets trapped, so the recharge turn has no switch',
-         'gpu_engine/state.py:20-80: BattleState has no recharge field (charge_move, state.py:45, is the Solar Beam lock alone)',
-         'gpu_engine/transition.py:81-113: no move table names hyperbeam; in search it is a plain 150 BP Normal special hit',
-         'gpu_engine/constructor_worlds.py:536-537: no device hook writes or clears mustrecharge; the engine models no recharge turn'),
+         'in-tree since M1 (8b212312): gpu_engine/state.py:87 recharge_counter; transition.py:763-768 the recharge turn',
+         'live roots: gpu_engine/constructor_worlds.py:1454 and 1609 an opponent that must recharge is refused '
+         '(OPPONENT_RECHARGE_UNREPRESENTED, constructor_worlds.py:467); the owner\'s recharge turn is single-legal (the phase-D '
+         'mapper refuses a live mustrecharge too: future_state.py:467, RECHARGE_UNREPRESENTED)'),
         'Only Slaking carries it, and Slaking\'s one ability is Truant: a residual clock in Gen 3 (Showdown data/mods/gen3/abilities.ts:'
-        '197-212) the engine models (state.py:80, transition.py:706-707 and 2071-2080). The recharge turn is the loaf turn, so the '
-        'engine\'s free turn after Hyper Beam is spent loafing anyway; what remains is the switch the engine allows on it (reality: '
-        'trapped) and a Transform user copying Slaking (Transform is itself unrepresented).'),
+        '197-212) the engine models (state.py:84 truant_loaf, transition.py:583-585 and 777-778). In-tree since M1 the recharge turn '
+        'is modelled (trapped, no move); before it the engine\'s free turn after Hyper Beam was spent loafing anyway. A Transform '
+        'user copying Slaking remains (Transform is itself unrepresented).', engine_since='8b212312'),
     Effect('partial_trap', ('wrap',), ('shuckle',), False,
         'request_source_rules.cjs:57-64 the partiallytrapped condition defines onTrapPokemon (missingCondition) -> engine_request_source.py:380',
         'the target is trapped and chipped each turn for several turns',
@@ -163,9 +168,10 @@ EFFECTS = (
     Effect('destiny_bond', ('destinybond',), ('banette', 'gengar', 'qwilfish', 'wobbuffet'), False, '',
         'a KO of the user by a move takes its attacker down, until the user moves again (so into the next turn)',
         ('Showdown data/moves.ts:3479-3520: the destinybond volatile ends only at the user\'s next move (onBeforeMove)',
-         'gpu_engine/state.py:13-17, absorption.py:13: the volatile bits are flinch, Flash Fire, Leech Seed, Ingrain and Focus Punch',
-         'gpu_engine/transition.py:81-113: no move table names destinybond (pressure.py:21 lists it for PP only)'),
-        'Gengar, Wobbuffet, Qwilfish, Banette.'),
+         'in-tree since A2 (286a5ffe): gpu_engine/state.py:21 DESTINY_BOND; effects.py:46; transition.py:756-761 its end at the '
+         'holder\'s next move',
+         'live roots: gpu_engine/phase_d_live_worlds.py:344-345 a bonded own active is refused (OWN_VOLATILE_OR_LATENT_CLOCK_UNAVAILABLE)'),
+        'Gengar, Wobbuffet, Qwilfish, Banette.', engine_since='286a5ffe'),
     Effect('transform', ('transform',), ('ditto', 'mew'), False,
         'request_source_rules.cjs:65-66 transform is a missing origin -> engine_request_source.py:380',
         'the user copies the target\'s species, types, stats, ability, boosts and moves while it stays in',
@@ -178,9 +184,10 @@ EFFECTS = (
         'items swap: the user\'s Choice Band choice-locks the target from its next move, the user gets the target\'s item',
         ('Showdown data/random-battles/gen3/teams.ts:473: a set with Trick always holds Choice Band',
          'Showdown data/moves.ts:19875: Trick swaps the two items',
-         'gpu_engine/engine_device_observation.py:596-598, 618-620: the current physical engine has no Trick item-swap handler',
-         'gpu_engine/phase_d_protocol_world.py:85-90: a root whose prefix holds a Trick item line is refused (PUBLIC_ITEM_SWAP_NOT_SUPPORTED)'),
-        'Furret and Kecleon. Not LOCK-class at the request source (choice_move and item are read from the state).'),
+         'in-tree since M1 (8b212312): gpu_engine/items.py:27-28 the Trick table; transition.py:1576-1587 the swap; state.py:85 '
+         'item_knocked (live roots do not carry it yet)',
+         'live roots: gpu_engine/phase_d_protocol_world.py:105-107 a root after a public item swap is refused (PUBLIC_ITEM_SWAP_NOT_SUPPORTED)'),
+        'Furret and Kecleon. Not LOCK-class at the request source (choice_move and item are read from the state).', engine_since='8b212312'),
 )
 
 REPRESENTED = (
@@ -266,7 +273,7 @@ def enumeration(showdown_root=None):
     for group, effects in (('audited', EFFECTS), ('represented', REPRESENTED), ('not_in_pool', NOT_IN_POOL)):
         for e in effects:
             rows.append(dict(group=group, effect=e.id, moves=list(e.moves), pool_species=list(e.pool_species), in_pool=bool(e.pool_species) or group == 'represented',
-                represented=e.represented, lock_class=e.lock_class, mechanism=e.mechanism, evidence=list(e.evidence), note=e.note))
+                represented=e.represented, engine_since=e.engine_since, lock_class=e.lock_class, mechanism=e.mechanism, evidence=list(e.evidence), note=e.note))
     check = None
     if showdown_root is not None:
         path = Path(showdown_root) / SETS_PATH;revision = None
