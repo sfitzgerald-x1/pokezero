@@ -145,8 +145,8 @@ white_herb: a valid use is the side's living active holding White Herb with a ne
 max(stage, 0), no other state leaf of any mon changed by the call, and the hook's consumption reveal (shown_item White
 Herb, item_removed) at its slot; any other call with use, or a change without use, is bad (forced unexpected). White
 Herb stays involved only on a lane with a valid use. A Tricked-in White Herb whose living receiver has a negative stage
-must already be used when the device's trick hook runs (setItem's Start inside Trick's onHit precedes the -item lines);
-otherwise the lane is bad too (wh_trick_order). wh_rule then explains, per mon and per public slot against the
+must already be used when the device's trick hook runs (setItem's Start inside Trick's onHit precedes the -item lines),
+and the hook's herb_used must equal those uses; otherwise the lane is bad too (wh_trick_order). wh_rule then explains, per mon and per public slot against the
 base's arrays, the restored stages (this tree's = the base's + the recorded raise, or a mon whose faint differs), the
 consumed item (White Herb in the base, none here), a holder the base knocked off afterwards (item_knocked, credit),
 and a Trick partner that got the herb only in the base; item-family slot differences must lie at an active of either
@@ -1330,9 +1330,9 @@ def wh_rule(entries, w):
       state.item_knocked differs only at a used mon the base knocked off (base True, here False).
     - the removal credit (field_features items_removed_credit, per side): the base's exceeds this tree's by exactly the
       used mons the base knocked off on that side.
-    - credit [2] (recorded at the trick hook): a side whose Trick partner credit B2 loses (a receiver's herb lines end
-      the pairing); with no use or partner of its own there, only its active's ledger original may differ, unrecorded
-      (0) here, plus the item-family slot rule above.
+    - credit [2] (recorded at the trick hook from the recorder's own due mask): a side whose Trick partner credit B2
+      loses (a receiver's herb lines end the pairing); with no use or partner of its own there, only its active's ledger
+      original may differ, unrecorded (0) here.
     Returns (remaining entries, explained entries)."""
     explained = set();wit, base = w['wit'], w['base'];used = np.asarray(w['used'], bool);herb = w['herb']
     if w.get('bad') or not used.any():return entries, []
@@ -1369,9 +1369,10 @@ def wh_rule(entries, w):
                 ok = not (diff & ~((mine | partner[side]) & (b == herb) & (a == 0))).any()
             elif leaf == 'state.item_knocked':
                 ok = not (diff & ~knocked_base[side]).any()
-            elif leaf == WH_ORIGINAL and credit[side] and not (mine.any() or partner[side].any()):
-                # Only a lost Trick partner credit on this side: its active's ledger original unrecorded here.
-                ok = not (diff & ~(slots(acting[side], side) & (np.asarray(a) == 0))).any()
+            elif credit[side] and not (mine.any() or partner[side].any()):
+                # Only a lost Trick partner credit on this side: its active's ledger original, unrecorded here, and nothing
+                # else (review round 2).
+                ok = leaf == WH_ORIGINAL and not (diff & ~(slots(acting[side], side) & (np.asarray(a) == 0))).any()
             elif leaf in WH_SLOT_LEAVES or leaf.startswith(WH_VISIBLE):
                 ok = not (diff & ~slots(acting[side], side)).any()
             else:
@@ -1542,20 +1543,24 @@ class Stepper:
                     # White Herb received by Trick (review finding 1): setItem's Start runs inside Trick's onHit, before
                     # the -item lines, so at this hook a living receiver of White Herb with a negative stage has already
                     # used it here; one that has not marks the device order wrong (forced unexpected, like a bad use).
-                    u = j.broadcast_to(j.asarray(use, j.bool_), (lanes,));r = j.arange(lanes)
+                    # `after` is the swapped state before any herb use (the trick hook's own -item operand).
+                    u = j.broadcast_to(j.asarray(use, j.bool_), (lanes,));r = j.arange(lanes);due = []
                     for m_ in (0, 1):
                         mon = after.active[r, m_]
-                        due = (u & (after.item[r, m_, mon] == wh_ids['herb']) & (after.hp[r, m_, mon] > 0)
-                               & (after.boosts[r, m_, mon] < 0).any(-1))
-                        whe['trick_order'] = whe['trick_order'] | (due & ~whe['used'][r, m_, mon])
-                    # The partner credits B2 loses when a receiver's herb lines end its Trick pairing (the device hook's
-                    # herb_used rule): the user's when the target used one, the target's when either did.
+                        due.append(u & (after.item[r, m_, mon] == wh_ids['herb']) & (after.hp[r, m_, mon] > 0)
+                                   & (after.boosts[r, m_, mon] < 0).any(-1))
+                        whe['trick_order'] = whe['trick_order'] | (due[m_] & ~whe['used'][r, m_, mon])
+                    due = j.stack(due, axis=1)                                                       # [L,2] by side
+                    # The partner credits B2 loses when a receiver's herb lines end its Trick pairing, from this recorder's
+                    # own due mask (never the engine's herb_used): the user's when the target used one, the target's when
+                    # either did. herb_used disagreeing with it (or missing where a use is due) is bad too.
                     herb = kw.get('herb_used')
-                    if herb is not None:
-                        s = j.broadcast_to(j.asarray(side, j.int32), (lanes,));t = 1 - s;herb = j.asarray(herb, j.bool_)
-                        got = lambda m_: after.item[r, m_, after.active[r, m_]] > 0
-                        lost_u = u & herb[r, t] & got(s);lost_t = u & (herb[r, t] | herb[r, s]) & got(t)
-                        whe['credit_lost'] = whe['credit_lost'] | at_side(lost_u, s) | at_side(lost_t, t)
+                    told = j.zeros((lanes, 2), j.bool_) if herb is None else j.broadcast_to(j.asarray(herb, j.bool_), (lanes, 2))
+                    whe['trick_order'] = whe['trick_order'] | (u & (told != due).any(-1))
+                    s = j.broadcast_to(j.asarray(side, j.int32), (lanes,));t = 1 - s
+                    got = lambda m_: after.item[r, m_, after.active[r, m_]] > 0
+                    lost_u = u & due[r, t] & got(s);lost_t = u & (due[r, t] | due[r, s]) & got(t)
+                    whe['credit_lost'] = whe['credit_lost'] | at_side(lost_u, s) | at_side(lost_t, t)
                 return trick_hook(c, before, after, side, use, choice_items, **kw)
             herb_hook = getattr(hooks, 'white_herb', None)
             def herb_recorder(c, before, after, side, use):

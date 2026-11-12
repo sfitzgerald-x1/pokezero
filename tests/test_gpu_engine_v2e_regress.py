@@ -1334,10 +1334,11 @@ def wht_state(seed):
     return s._replace(moves=j.asarray(moves), choice_move=s.choice_move.at[:, 1, 0].set(0), item=j.asarray(item), boosts=j.asarray(boosts))
 
 
-def wht_step(state, actions, t, *, herb=True, old_order=False):
+def wht_step(state, actions, t, *, herb=True, old_order=False, herb_used_lie=False):
     """A stand-in for review finding 1: side 0's Trick swaps the actives' items; with herb, a receiver with a negative stage
     uses a received White Herb at the swap, its white_herb hook (the consumption reveal) before the trick hook (the -item
-    writes last, B2's order); old_order calls the trick hook first. The base pass is herb=False."""
+    writes last, B2's order); old_order calls the trick hook first; herb_used_lie hands the trick hook no uses (the
+    credit it drops is then not the one the uses lose). The base pass is herb=False."""
     import jax.numpy as j
     from types import SimpleNamespace
     from gpu_engine import engine_device_public_hooks as hooks
@@ -1368,7 +1369,8 @@ def wht_step(state, actions, t, *, herb=True, old_order=False):
         hooks.white_herb(SimpleNamespace(trackers=v), before, s, side, used)
         used_by = used_by.at[:, side].set(used)
     if herb and not old_order:
-        v = trick_writes(v);hooks.trick(SimpleNamespace(trackers=v), pre, swapped, 0, trick, j.zeros(3, j.bool_), herb_used=used_by)
+        v = trick_writes(v);hooks.trick(SimpleNamespace(trackers=v), pre, swapped, 0, trick, j.zeros(3, j.bool_),
+                                        herb_used=j.zeros_like(used_by) if herb_used_lie else used_by)
     v = v._replace(boosts=v.boosts.at[:, 0, 0].set(s.boosts[:, 0, 0]).at[:, 1, 0].set(s.boosts[:, 1, 0]))
     return result(s._replace(turn=s.turn + 1), v)
 
@@ -1429,6 +1431,12 @@ class WHTrickOrderPlantedTests(unittest.TestCase):
         """The old device order: the trick hook before the receiver's White Herb use."""
         report, _ = self.assert_bad(('old_order', dict(old_order=True)), {0})
         self.assertEqual(report['counts']['wh_trick_order'], 2);self.assertGreater(report['counts']['wh_bad'], 0)
+
+    def test_a_herb_used_that_disagrees_with_the_uses_is_flagged(self):
+        """The trick hook's herb_used is checked against the recorder's own due mask (review round 2): the engine reporting
+        no use where the receiver used its herb is bad, and the lost credits come from the recorder, not from herb_used."""
+        report, _ = self.assert_bad(('herb_used_lie', dict(herb_used_lie=True)), {0})
+        self.assertEqual(report['counts']['wh_trick_order'], 2)
 
 if __name__ == '__main__':
     unittest.main()
