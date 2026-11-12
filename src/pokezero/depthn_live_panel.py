@@ -609,6 +609,7 @@ def probe(run_directory,*,arm,server,capture,roots=5,tree_commit=None):
         if response['cause']not in ('constructor_refused','depthn_refused','class_refused'):reason='refused: '+str(response['cause']);break
     value=dict(schema=PROBE_SCHEMA,arm=arm,server=server,capture=str(Path(capture).resolve()),status=status,reason=reason,tried=tried)
     write_new(root/'probes'/f'{arm}-{time.time_ns()}.json',value)
+    client.end()   # (review) the probe's battles stop counting at the proxy now, not --sticky-idle later: no skew on the first placements
     if status!='PASS':raise ValueError('search server probe failed: '+reason)
     return value
 
@@ -663,6 +664,7 @@ async def worker(packet,*,expected_pair,original,runtime_class=None,warmup=None)
         # The bridge's per-game result keeps no protocol log; the owner's literal wire is this capture.
         owning_wire=str(root/'owning-wire'/f"{cell['ordinal']}.jsonl"),worker=worker_identity(),load_average=dict(load,end=list(os.getloadavg())))
     write_new(root/'results'/f"{cell['ordinal']}.json",outcome)
+    if client is not None:client.end()   # search arm, after the result is recorded: the proxy stops counting the battle (never raises)
     return 0
 
 
@@ -709,7 +711,9 @@ def calibration_packets(directory,*,setting):
 
 def preflight_packets(directory,*,arm,games,deadline_seconds,reserve_seconds):
     """Pre-flight packets (the lead's check of the overlapped path, outcome-blind, never counted): the band's first `games`
-    not-attempted cells, alternately RAW and `arm`, each request carrying its arm and the declared client deadline and reserve."""
+    not-attempted cells, each request carrying its arm and the declared client deadline and reserve. The arm is the cell's own:
+    RAW where the seat equals the offset's parity, else `arm`, so each arm plays both seats equally (consecutive offsets swap them;
+    alternating by position gave RAW every seat-0 cell and the search arm every seat-1 cell, since the band's seats alternate too)."""
     root,run,lad,band=calibration_load(directory);todo=[]
     if arm not in SEARCH_ARMS or type(games)is not int or games<1:raise ValueError('a declared search arm and games >= 1 required')
     if (root/'calibration.json').exists()or any(json.loads(c.read_bytes()).get('setting')in ('solo','concurrent')for c in (root/'claims').glob('*.json')):
@@ -718,7 +722,7 @@ def preflight_packets(directory,*,arm,games,deadline_seconds,reserve_seconds):
         if k>=games:break
         path=root/'requests'/f"{cell['ordinal']}.json"
         value=dict(schema=PREFLIGHT_REQUEST_SCHEMA,run_directory=run['run_directory'],cell=cell,checkpoint=run['checkpoint'],
-            checkpoint_sha256=run['checkpoint_sha256'],base_config=run['base_config'],arm='RAW'if k%2==0 else arm,
+            checkpoint_sha256=run['checkpoint_sha256'],base_config=run['base_config'],arm='RAW'if cell['seat']==cell['offset']%2 else arm,
             deadline_seconds=float(deadline_seconds),reserve_seconds=float(reserve_seconds))
         if path.exists():
             if path.read_bytes()!=encoded(value):raise ValueError('existing pre-flight request differs')
@@ -858,6 +862,7 @@ async def calibration_worker(packet,*,expected_pair,original,runtime_class=None,
     write_new(root/'results'/f"{cell['ordinal']}.json",dict(schema=CELL_SCHEMA,status=status,error=error,cell=cell,setting=packet['setting'],arm=arm,
         cpu_pair=list(expected_pair),source_game=game,benchmark=document,owning_wire=str(root/'owning-wire'/f"{cell['ordinal']}.jsonl"),
         worker=worker_identity(),load_average=dict(load,end=list(os.getloadavg()))))
+    if client is not None:client.end()   # a pre-flight's search arm, after the result is recorded (as cell_worker)
     return 0
 
 

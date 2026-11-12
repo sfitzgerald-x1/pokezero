@@ -1,5 +1,6 @@
 """Inert DepthN panel controls: declarations, cells, claims, probe, dispatch and readout."""
 import asyncio
+from collections import Counter
 from contextlib import contextmanager, redirect_stderr, redirect_stdout
 import copy
 import importlib.util
@@ -648,9 +649,12 @@ class WorkerTests(unittest.TestCase):
         root, run, d, lad = make_run(Path(self.directory.name)/'ten', deadline=10.)
         cell = panel.cells(lad, 'DN2W8')[0]; path = root/'requests'/f"{cell['ordinal']}.json"; value = panel.request(run, cell)
         panel.write_new(path, value)
-        with patch.dict(os.environ, {'POD_NAME': 'pod-x'}):
+        ended = []   # (review) the eval worker ends its search battle at the proxy once, after the result is recorded
+        record = lambda c, **k: ended.append((root/'results'/f"{cell['ordinal']}.json").exists()) or []
+        with patch.dict(os.environ, {'POD_NAME': 'pod-x'}), patch('pokezero.depthn_live_actor.Client.end', autospec=True, side_effect=record):
             asyncio.run(panel.worker(dict(path=str(path), sha256=panel.sha(value), server=dict(host='127.0.0.1', port=9)),
                                      expected_pair=(1, 2), original='shared', runtime_class=FakeRuntime))
+        self.assertEqual(ended, [True])
         runtime = FakeRuntime.made[-1]; self.assertEqual((runtime.client.deadline, runtime.client.reserve), (10., .15))
         result = json.loads((root/'results'/f"{cell['ordinal']}.json").read_bytes())
         self.assertEqual((result['worker']['hostname'], result['worker']['pod_name'], result['cpu_pair']), (socket.gethostname(), 'pod-x', [1, 2]))
@@ -732,7 +736,9 @@ class ProbeTests(unittest.TestCase):
     def test_pass_on_the_declared_rung_worlds_and_operator(self):
         value, server = self.probe(actor_tests.send(champion_complete))
         self.assertEqual((value['status'], len(value['tried'])), ('PASS', 1)); self.assertEqual(self.records(), [value])
-        request, = self.requests; root = next(capture.read_capture(self.capture))
+        end = [r for r in self.requests if r.get('schema') == live.BATTLE_END_SCHEMA]   # (review) the probe ends its battle at the proxy
+        request, = [r for r in self.requests if r not in end]; root = next(capture.read_capture(self.capture))
+        self.assertEqual(end, [dict(schema=live.BATTLE_END_SCHEMA, battle_id=request['battle_id'], owner=request['owner'])])
         self.assertTrue(request['battle_id'].startswith('probe-')); self.assertEqual(request['rung'], 'DN2W8')
         self.assertEqual((request['lines'], request['own_request_line'], request['prefix_sha256']),
                          (list(root['lines']), root['own_request_line'], root['prefix_sha256']))
@@ -754,7 +760,7 @@ class ProbeTests(unittest.TestCase):
         root, run, d, lad = make_run(Path(self.directory.name)/'ten', deadline=10.)
         with actor_tests.FakeServer(actor_tests.send(champion_complete)) as server:
             value = panel.probe(root, arm='DN2W8', server=dict(host='127.0.0.1', port=server.port), capture=self.capture)
-            request, = server.requests
+            request, = [r for r in server.requests if r.get('schema') != live.BATTLE_END_SCHEMA]
         self.assertEqual(value['status'], 'PASS'); self.assertTrue(3. < request['budget_seconds'] <= 9.85)
 
     def test_constructor_refusals_move_to_the_next_root(self):
@@ -1848,10 +1854,18 @@ class CalibrationTests(unittest.TestCase):
         self.assertEqual((value['status'], value['strata']['4x500ms']['concurrent']['moves'], value['strata']['2x1000ms']['concurrent']['moves']),
                          ('MEASURED', 60, 300))
 
-    def test_preflight_alternates_arms_with_the_declared_client(self):
+    def test_preflight_balances_arms_across_seats_with_the_declared_client(self):
         panel.calibration_init(self.root, band=dict(CALIBRATION_BAND), lanes=1, **self.kwargs)
-        packets = panel.preflight_packets(self.root, arm='DN2W8', games=4, deadline_seconds=5., reserve_seconds=.2)
-        self.assertEqual([p['arm'] for p in packets], ['RAW', 'DN2W8', 'RAW', 'DN2W8']); self.assertEqual({p['setting'] for p in packets}, {'preflight'})
+        packets = panel.preflight_packets(self.root, arm='DN2W8', games=8, deadline_seconds=5., reserve_seconds=.2)
+        self.assertEqual([p['arm'] for p in packets], ['RAW', 'DN2W8', 'DN2W8', 'RAW']*2); self.assertEqual({p['setting'] for p in packets}, {'preflight'})
+        seats = Counter((p['arm'], ladder.read_bound(p['path'], p['sha256'])['cell']['seat']) for p in packets)
+        self.assertEqual(seats, {('RAW', 0): 2, ('RAW', 1): 2, ('DN2W8', 0): 2, ('DN2W8', 1): 2})   # each arm in both seats, equally
+        self.assertEqual([p['arm'] for p in panel.preflight_packets(self.root, arm='DN2W8', games=4, deadline_seconds=5., reserve_seconds=.2)],
+                         ['RAW', 'DN2W8', 'DN2W8', 'RAW'])   # the same cells, the same arms: the requests already written match
+        band = panel.calibration_cells(self.lad, CALIBRATION_BAND)
+        panel.write_new(self.root/'claims'/f"{band[0]['ordinal']}.json", dict(setting='preflight'))   # one cell claimed: positions shift by one
+        self.assertEqual([p['arm'] for p in panel.preflight_packets(self.root, arm='DN2W8', games=3, deadline_seconds=5., reserve_seconds=.2)],
+                         ['DN2W8', 'DN2W8', 'RAW'])   # each cell keeps its own arm (by position, cell 1 would be RAW: its written request differs)
         request = ladder.read_bound(packets[1]['path'], packets[1]['sha256'])
         self.assertEqual((request['schema'], request['arm'], request['deadline_seconds'], request['reserve_seconds']),
                          (panel.PREFLIGHT_REQUEST_SCHEMA, 'DN2W8', 5., .2))
@@ -1869,7 +1883,11 @@ class CalibrationTests(unittest.TestCase):
             for p, srv in ((packets[0], server), (packets[1], None)):   # RAW with a server, a search arm without one
                 with self.subTest(p['arm']), self.assertRaisesRegex(ValueError, 'RAW runs without a server'):
                     asyncio.run(panel.calibration_worker(wire(p, srv), expected_pair=(1, 2), original='o', runtime_class=Runtime))
-            self.assertEqual(asyncio.run(panel.calibration_worker(wire(packets[1], server), expected_pair=(1, 2), original='o', runtime_class=Runtime)), 0)
+            ended = []   # the search arm's battle end frames: once, after the game's result is recorded
+            record = lambda c, **k: ended.append((self.root/'results'/f"{request['cell']['ordinal']}.json").exists()) or []
+            with patch('pokezero.depthn_live_actor.Client.end', autospec=True, side_effect=record):
+                self.assertEqual(asyncio.run(panel.calibration_worker(wire(packets[1], server), expected_pair=(1, 2), original='o', runtime_class=Runtime)), 0)
+            self.assertEqual(ended, [True])
         client = seen[-1]['client']
         self.assertEqual((seen[-1]['arm'], client.rung, client.deadline, client.reserve), ('DN2W8', 'DN2W8', 5., .2))   # not the Client defaults
         claim = json.loads((self.root/'claims'/f"{request['cell']['ordinal']}.json").read_bytes())
@@ -1904,7 +1922,7 @@ class CalibrationTests(unittest.TestCase):
         with self.assertRaises(KeyError): panel.calibration_summary(self.root)['strata']['4x500ms']['preflight']   # pre-flight games never count
         self.assertEqual(panel.calibration_summary(self.root)['games'], dict(solo=0, concurrent=0))
         self.assertEqual((search['non_home'], search['answered']), (0, 0))   # no server_id in these rows: nothing answered by a known server
-        game(band[3], 'DN2W8', [2.7]*21, 'search', causes=('timeout',)*3); late = panel.preflight_summary(self.root)
+        game(band[2], 'DN2W8', [2.7]*21, 'search', causes=('timeout',)*3); late = panel.preflight_summary(self.root)
         self.assertFalse(late['search_wall_within']); self.assertFalse(late['timeouts_within'])   # 3 of 42: over 1%
         self.assertEqual(late['arms']['DN2W8']['searched_share_of_non_timeouts'], 37/39)
         cold = band[5]   # the review's case: a cold actor on decision 0 (encode 1.5 + greedy 2.2) fails the gate, though end to end it is in range
@@ -1936,13 +1954,13 @@ class CalibrationTests(unittest.TestCase):
         self.assertEqual((search['refused_share'], search['reuse_refusals'], search['timeout_share']), (7/41, 0, 1/41))
         self.assertEqual((value['refused_share_max'], value['refused_within'], value['reuse_refusals']), (.25, True, 0))
         self.assertIsNone(value['arms']['RAW']['refused_share'])   # RAW never asks the servers
-        game(band[3], 'DN2W8', 'search', refusals=[('constructor_refused', 'constructor-root:SEARCH_REQUEST_ALREADY_ATTEMPTED')])   # one reused battle
+        game(band[2], 'DN2W8', 'search', refusals=[('constructor_refused', 'constructor-root:SEARCH_REQUEST_ALREADY_ATTEMPTED')])   # one reused battle
         reused = panel.preflight_summary(self.root)
         self.assertEqual((reused['reuse_refusals'], reused['refused_within']), (1, True))   # fails on reuse alone (8 of 82 unpriced: within)
         game(band[5], 'DN2W8', 'search', refusals=[('constructor_refused', 'constructor-root:SEARCH_PREFIX_NOT_ORIGINAL_SUCCESSOR')]*40)
         late = panel.preflight_summary(self.root)
         self.assertEqual((late['arms']['DN2W8']['reuse_refusals'], late['reuse_refusals'], late['refused_within']), (41, 41, False))   # 48 of 123
-        game(band[7], 'DN2W8', 'search', refusals=[('connection_error', 'ConnectionRefusedError')]*40)   # unreachable servers: a greedy-only wall
+        game(band[6], 'DN2W8', 'search', refusals=[('connection_error', 'ConnectionRefusedError')]*40)   # unreachable servers: a greedy-only wall
         self.assertFalse(panel.preflight_summary(self.root)['refused_within'])
 
     def test_a_preflight_at_a_redeclared_deadline_is_held_to_that_deadline_s_wall_bound(self):
@@ -1957,7 +1975,7 @@ class CalibrationTests(unittest.TestCase):
         game(band[0], 'RAW', .5, 'raw_arm'); game(band[1], 'DN2W8', 2.7, 'search')   # over 2.6 s, within 5.0 - 0.15 - 0.25
         value = panel.preflight_summary(self.root)
         self.assertEqual((value['deadline_seconds'], value['search_wall_p95_max'], value['search_wall_within']), (5., 4.6, True))
-        game(band[3], 'DN2W8', 4.7, 'search');late = panel.preflight_summary(self.root)
+        game(band[2], 'DN2W8', 4.7, 'search');late = panel.preflight_summary(self.root)
         self.assertEqual((late['arms']['DN2W8']['search_wall']['p95'], late['search_wall_within']), (4.7, False))
 
     def test_init_verifies_the_calibration_and_dispatch_gates_on_it(self):

@@ -66,10 +66,7 @@ def capture_root(*, config, contract, lines, address, battle_id, seed):
     history itself. No opposing numeric action index is invented. The sampler
     uses a new hypothetical party order, not replay of historical slot actions.
     """
-    if type(contract) is not ActorContract or type(address) is not c.DecisionAddress:
-        raise ValueError('explicit original contract and decision address required')
-    if type(seed) is not int or not 0 <= seed < 2**32 or type(battle_id) is not str or not battle_id:
-        raise ValueError('explicit original battle identity required')
+    _check_identity(contract, address, battle_id, seed)
     owner = ('p1', 'p2')[address.owner]
     lines = _owning_lines(lines, owner)
     backend = PythonBackend(contract, config=config, battle_id=battle_id, owner=owner, stream_id=address.stream)
@@ -79,26 +76,88 @@ def capture_root(*, config, contract, lines, address, battle_id, seed):
             backend.ingest((line,))
             if first_observation is None and line.startswith('|request|'):
                 first_observation = backend.env.observe(owner)
-        observation = backend.env.observe(owner)
-        materialization = backend.env.public_materialization_state(owner)
-        if materialization.replay.requests or materialization.player_id != owner:
-            raise ValueError('materialization must strip all replay requests')
-        # No artificial trajectory choices: original direct materialization
-        # consumes the complete public replay independently of action indexes.
-        observation = replace(observation, metadata={**dict(observation.metadata),
-            'self_team': first_observation.metadata['self_team']})
-        context = PolicyContext(owner, address.frame, battle_id, materialization.format_id, seed, observation,
-            (owner,), BattleTrajectory(battle_id, materialization.format_id, seed),
-            {owner: tuple(observation.legal_action_mask)}, {owner: observation}, materialization)
-        payload = _public_materialization_payload(materialization)
-        counts = {}
-        for side in payload['sides'].values():
-            for reason in side['materializationBlockers']:counts[reason] = counts.get(reason, 0) + 1
-        if payload['pendingBatonPassSides']:counts['pending-baton-phase-needs-device-constructor'] = 1
-        prefix = hashlib.sha256(''.join(line+'\n' for line in lines).encode()).hexdigest()
-        return PublicRoot(address, prefix, context, payload, tuple(sorted(counts.items())))
+        return _root_of(backend, owner, first_observation, lines, address, battle_id, seed)
     finally:
         backend.close()
+
+
+def _check_identity(contract, address, battle_id, seed):
+    if type(contract) is not ActorContract or type(address) is not c.DecisionAddress:
+        raise ValueError('explicit original contract and decision address required')
+    if type(seed) is not int or not 0 <= seed < 2**32 or type(battle_id) is not str or not battle_id:
+        raise ValueError('explicit original battle identity required')
+
+
+def _root_of(backend, owner, first_observation, lines, address, battle_id, seed):
+    """The PublicRoot of a backend that has ingested exactly `lines` (capture_root's own final step, shared with RootSession)."""
+    observation = backend.env.observe(owner)
+    materialization = backend.env.public_materialization_state(owner)
+    if materialization.replay.requests or materialization.player_id != owner:
+        raise ValueError('materialization must strip all replay requests')
+    # No artificial trajectory choices: original direct materialization
+    # consumes the complete public replay independently of action indexes.
+    observation = replace(observation, metadata={**dict(observation.metadata),
+        'self_team': first_observation.metadata['self_team']})
+    context = PolicyContext(owner, address.frame, battle_id, materialization.format_id, seed, observation,
+        (owner,), BattleTrajectory(battle_id, materialization.format_id, seed),
+        {owner: tuple(observation.legal_action_mask)}, {owner: observation}, materialization)
+    payload = _public_materialization_payload(materialization)
+    counts = {}
+    for side in payload['sides'].values():
+        for reason in side['materializationBlockers']:counts[reason] = counts.get(reason, 0) + 1
+    if payload['pendingBatonPassSides']:counts['pending-baton-phase-needs-device-constructor'] = 1
+    prefix = hashlib.sha256(''.join(line+'\n' for line in lines).encode()).hexdigest()
+    return PublicRoot(address, prefix, context, payload, tuple(sorted(counts.items())))
+
+
+class RootSession:
+    """capture_root's fold kept across the successive requests of one owning stream (a live server's per-battle session).
+
+    The backend ingests only the lines beyond the previous request's prefix, observing at the first request line exactly as
+    capture_root does, and root() finishes with capture_root's own step (_root_of): the PublicRoot of the extended prefix,
+    at the cost of its new lines instead of the whole battle. Every request still passes capture_root's identity and
+    whole-prefix checks (_owning_lines). extends(lines) says whether a request continues this session; root() refuses one
+    that does not (ValueError). Any error closes the session, so a caller starts a new one, which folds from the start.
+
+    Identity with capture_root rests on the contract's installed one-frame masks: the session observes at the end of every
+    request, capture_root only at the first request line and at the end, and observe() lets the Tier 2 / investment
+    trackers score strikes against the belief state at that moment. With transition_token_budget 0 and investment
+    narrowing off (required here, as ActorContract does), and observation schema v4 (no pinned tracker columns; PythonBackend
+    requires it), none of that reaches the observation, its metadata or the materialization; a contract that relaxes either
+    mask is refused rather than risk a silent divergence."""
+
+    def __init__(self, *, config, contract, battle_id, owner, stream_id):
+        if type(contract) is not ActorContract or owner not in ('p1', 'p2'):raise ValueError('explicit original contract and owner required')
+        masks = dict(contract.feature_masks)
+        if masks.get('transition_token_budget') != 0 or masks.get('investment_belief_narrowing') is not False:
+            raise ValueError('incremental roots need the one-frame masks: no transition tokens, no investment narrowing')
+        self.key = (battle_id, owner, stream_id);self.lines = ();self.first_observation = None;self.open = True
+        self.backend = PythonBackend(contract, config=config, battle_id=battle_id, owner=owner, stream_id=stream_id)
+
+    def extends(self, lines):
+        lines = tuple(lines)
+        return self.open and len(lines) > len(self.lines) and lines[:len(self.lines)] == self.lines
+
+    def root(self, *, contract, lines, address, battle_id, seed):
+        if not self.open:raise ValueError('closed root session')
+        try:
+            _check_identity(contract, address, battle_id, seed)
+            owner = ('p1', 'p2')[address.owner]
+            if (battle_id, owner, address.stream) != self.key:raise ValueError("another owning stream's request")
+            lines = _owning_lines(lines, owner)
+            if not self.extends(lines):raise ValueError('an original successor of the session prefix required')
+            for line in lines[len(self.lines):]:
+                self.backend.ingest((line,))
+                if self.first_observation is None and line.startswith('|request|'):
+                    self.first_observation = self.backend.env.observe(owner)
+            self.lines = lines
+            return _root_of(self.backend, owner, self.first_observation, lines, address, battle_id, seed)
+        except BaseException:
+            self.close();raise
+
+    def close(self):
+        if self.open:
+            self.open = False;self.backend.close()
 
 
 @dataclass(frozen=True)
