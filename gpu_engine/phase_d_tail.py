@@ -40,8 +40,11 @@ def replacement_phase(request,payload,lines):
     return dict(pending_residual=not paid,queued_actor=-1,turn=payload['turn'],ages=tuple(ages))
 
 
-def fresh_substitutes(payload,lines):
-    active={};stints={}
+def fresh_substitutes(payload,lines,origins=None):
+    """Sides whose live substitute is full and public: started on the active, or
+    started on a passer and received whole by Baton Pass (then origins[side] is
+    the passer, whose max HP // 4 is the substitute's HP)."""
+    active={};stints={};passing={};passed={}
     for line in lines:
         if line.startswith('|request|'):continue
         p=line.split('|')
@@ -49,22 +52,27 @@ def fresh_substitutes(payload,lines):
         side=p[2][:2]
         if side not in ('p1','p2'):continue
         if p[1] in ('switch','drag','replace'):
-            active[side]=normalize_id(p[3].split(',')[0]);stints.pop(side,None)
-        elif len(p)>3 and p[1]=='move' and normalize_id(p[3])=='batonpass':stints.pop(side,None)
+            active[side]=normalize_id(p[3].split(',')[0]);stints.pop(side,None);passed.pop(side,None);origin=passing.pop(side,None)
+            if p[1]=='switch' and '[from] Baton Pass' in p[4:] and origin is not None:stints[side]=origin;passed[side]=active[side]
+        elif len(p)>3 and p[1]=='move' and normalize_id(p[3])=='batonpass':
+            origin=stints.pop(side,None)
+            if origin is not None:passing[side]=origin
         elif len(p)>3 and normalize_id(p[3])=='substitute':
             if p[1]=='-start':stints[side]=active.get(side)
             elif p[1] in ('-activate','-end'):stints.pop(side,None)
-        elif p[1]=='faint':stints.pop(side,None)
+        elif p[1]=='faint':stints.pop(side,None);passing.pop(side,None)
     result={}
     for side,data in payload['sides'].items():
         if 'substitute' not in data.get('volatiles',()):continue
         rows=[row for row in data['pokemon'] if row.get('active')is True]
         name=normalize_id(rows[0]['species']) if len(rows)==1 else ''
+        origin=normalize_id(data.get('substituteOriginSpecies') or '')
         if (not name or data.get('substituteHealthState')!='full' or type(data.get('substituteDepletion'))is not int
                 or data['substituteDepletion']!=0 or type(data.get('substituteMinDepletion'))is not int or data['substituteMinDepletion']!=0
-                or normalize_id(data.get('substituteOriginSpecies') or '')!=name or stints.get(side)!=name):
+                or not origin or stints.get(side)!=origin or origin!=name and passed.get(side)!=name):
             raise ValueError('PUBLIC_SUBSTITUTE_NOT_FRESH_OR_PASSED')
         result[side]=name
+        if origin!=name and origins is not None:origins[side]=origin
     return result
 
 
@@ -86,9 +94,9 @@ def inspect_facts(request,payload,lines):
         except (ValueError,KeyError,IndexError,TypeError) as error:
             result[key]=None;checks.append(dict(kind=str(error),status='TRIGGERED',fatal=True))
         else:checks.append(dict(kind=kind,status='CLEAR',fatal=True))
-    result['fresh_substitutes']={}
+    result['fresh_substitutes']={};result['substitute_origins']={}
     for side,data in payload['sides'].items():
-        try:result['fresh_substitutes'].update(fresh_substitutes(dict(sides={side:data}),lines))
+        try:result['fresh_substitutes'].update(fresh_substitutes(dict(sides={side:data}),lines,result['substitute_origins']))
         except (ValueError,KeyError,IndexError,TypeError) as error:checks.append(dict(kind=str(error),status='TRIGGERED',fatal=True,side=side))
         else:checks.append(dict(kind='PUBLIC_FRESH_SUBSTITUTE',status='CLEAR',fatal=True,side=side))
     return checks,result
@@ -127,12 +135,14 @@ def mapping_spec(spec,phase):
             living=[k for k,mon in enumerate(side.pokemon) if mon.hp>0]
             if not living:raise ValueError('PUBLIC_REPLACEMENT_NO_LIVING_MEMBER')
             # Effects belong to the actual fainted cursor, never the temporary
-            # storage cursor. Unsupported effects are not erased by projection.
-            if (any(side.boosts.values()) or side.volatile_statuses or side.volatile_status_durations or side.substitute_health
-                    or side.side_conditions.get('protect',0) or side.side_conditions.get('toxic_count',0)):
-                raise ValueError('PUBLIC_REPLACEMENT_FAINTED_EFFECT_UNSUPPORTED')
+            # storage cursor. Showdown's faintMessages already ran clearVolatile
+            # on the fainted member before this request: its boosts, volatiles
+            # and their clocks and its substitute are gone (the toxic counter
+            # resets on switch-in). They are cleared, never moved to storage.
             conditions={k:v for k,v in side.side_conditions.items() if k not in ('protect','toxic_count')}
-            side=replace(side,active_index=living[0],side_conditions=conditions,last_used_move='')
+            side=replace(side,active_index=living[0],side_conditions=conditions,last_used_move='',
+                boosts={k:0 for k in side.boosts},volatile_statuses=type(side.volatile_statuses)(),
+                volatile_status_durations=type(side.volatile_status_durations)(),substitute_health=0)
         sides.append(replace(side,force_switch=False))
     return replace(spec,side_one=sides[0],side_two=sides[1]),tuple(cursors)
 
@@ -173,7 +183,12 @@ def restore(state,original_spec,cursors,tail,*,metadata,checks):
     for side,name in tail['fresh_substitutes'].items():
         seat=int(side[1])-1;slot=int(state.active[0,seat]);actual=normalize_id(metadata['vocabulary']['species'][int(state.species[0,seat,slot])])
         if actual!=name:raise ValueError('PUBLIC_SUBSTITUTE_ACTIVE_DISAGREEMENT')
-        state=state._replace(substitute_hp=state.substitute_hp.at[0,seat,slot].set(state.max_hp[0,seat,slot]//4))
+        hp_slot=slot;origin=tail.get('substitute_origins',{}).get(side)
+        if origin is not None:
+            names=[normalize_id(metadata['vocabulary']['species'][int(x)]) for x in state.species[0,seat]]
+            if names.count(origin)!=1:raise ValueError('PUBLIC_SUBSTITUTE_ORIGIN_UNAVAILABLE')
+            hp_slot=names.index(origin)
+        state=state._replace(substitute_hp=state.substitute_hp.at[0,seat,slot].set(state.max_hp[0,seat,hp_slot]//4))
         checks.append(dict(kind='PUBLIC_FRESH_SUBSTITUTE',status='CLEAR',fatal=True,side=seat,slot=slot))
     for side,start in tail['wish_set_turns'].items():
         seat=int(side[1])-1;slot=int(state.active[0,seat]);remaining=2-(tail['turn']-start)
