@@ -54,9 +54,9 @@ KILLED = (re.compile(r'Process completed with exit code 143'), re.compile(r'runn
 FAILED_WORDS = ('FAIL', 'ERROR', 'unexpected success')
 PASSED_WORDS = ('ok', 'skipped', 'expected failure')
 DEFAULT_PATTERNS = ('test_gpu_engine*.py',)
-# The component workflow's isolated classes (.github/workflows/gpu-engine-components.yml).
-CI_ISOLATE = ('test_gpu_engine_execution_runtime_plumbing.ExecutionRuntimePlumbingTests',
-              'test_gpu_engine_status_kernel_owner_drain.StatusKernelOwnerDrainTests')
+# The component workflow's isolated classes (.github/workflows/gpu-engine-components.yml): none since
+# execution_runtime_plumbing and status_kernel_owner_drain left the tree.
+CI_ISOLATE = ()
 
 
 def strip_package(target):

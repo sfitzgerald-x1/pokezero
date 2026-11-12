@@ -121,7 +121,7 @@ class DirectHitFullRuntimeTests(unittest.TestCase):
             self.assertFalse(bool(result.projection.B4_qualified.any()))
 
     def test_registered_actual_span_both_owner_words_and_consumption(self):
-        import test_gpu_engine_execution_runtime_plumbing as owning_fixture
+        import gpu_engine_owning_runtime_fixture as owning_fixture
         owning_fixture.ExecutionRuntimePlumbingTests.setUpClass()
         base=owning_fixture.ExecutionRuntimePlumbingTests
         original=driver._checked(base.prepared)

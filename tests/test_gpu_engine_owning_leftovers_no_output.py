@@ -18,7 +18,7 @@ from gpu_engine import engine_execution_completeness as accounting
 from gpu_engine import engine_lifecycle_callbacks as life
 from gpu_engine import engine_retained_encoder_driver as driver, source_provenance, transition
 from gpu_engine_eager_frame import eager_call
-import test_gpu_engine_execution_runtime_plumbing as runtime_fixture
+import gpu_engine_owning_runtime_fixture as runtime_fixture
 
 
 class OwningLeftoversNoOutputTests(unittest.TestCase):

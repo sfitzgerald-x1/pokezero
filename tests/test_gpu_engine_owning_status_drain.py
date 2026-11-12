@@ -24,7 +24,7 @@ from gpu_engine import engine_status_callbacks as statuses, engine_status_residu
 from gpu_engine import engine_full_v4_event_device as full, engine_execution_completeness as e
 from gpu_engine import engine_request_source as source
 from gpu_engine import mechanics as m, transition, public_mon_state
-import test_gpu_engine_execution_runtime_plumbing as fixtures
+import gpu_engine_owning_runtime_fixture as fixtures
 import test_gpu_engine_leftovers_registered_runtime as heal_fixture
 
 

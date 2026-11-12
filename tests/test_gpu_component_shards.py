@@ -23,76 +23,6 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class ComponentShardTests(unittest.TestCase):
-    def test_status_phase_cleanup_synchronizes_before_releasing_and_keeps_original_consume(self):
-        path=ROOT/'tests/test_gpu_engine_status_kernel_owner_drain.py'
-        case=next(node for node in ast.parse(path.read_text()).body if isinstance(node,ast.ClassDef))
-        selected=[node for node in case.body if isinstance(node,ast.FunctionDef)
-            and node.name in ('release_compilers','completed_phase','construct')]
-        events=[];sentinel=object()
-        def original(runtime,state,frame,**kwargs):
-            self.assertEqual((runtime,state,frame),('runtime','state','frame'))
-            self.assertIs(kwargs['timing_callback'],sentinel);events.append('original_consume');return 'unchanged_result'
-        driver=types.SimpleNamespace(_consume=original)
-        def construct(owner):
-            events.append('source_construct')
-            return driver._consume('runtime','state','frame')
-        namespace=dict(jax=types.SimpleNamespace(block_until_ready=lambda values:events.append(('ready',values)),
-                clear_caches=lambda:events.append('clear')),gc=types.SimpleNamespace(collect=lambda:events.append('collect')),
-            patch=mock.patch,d=driver,fixtures=types.SimpleNamespace(StatusResidualRuntimeTests=types.SimpleNamespace(construct=construct)))
-        exec(compile(ast.Module(body=selected,type_ignores=[]),str(path),'exec'),namespace)
-        release=namespace['release_compilers'].__func__
-        release('physical','rng');self.assertEqual(events,[('ready',('physical','rng')),'clear','collect'])
-        events.clear();owner=types.SimpleNamespace(release_compilers=release,completed_phase=sentinel)
-        self.assertEqual(namespace['construct'](owner),'unchanged_result')
-        self.assertEqual(events,['source_construct',('ready',('state','frame')),'clear','collect','original_consume'])
-        self.assertIs(driver._consume,original)
-        events.clear();owner.release_compilers=lambda:events.append('release')
-        for name in ('engine','requests','public_p1','public_p2','encode_p1','admission_p1','encode_p2','admission_p2'):
-            namespace['completed_phase'](owner,name,0.)
-        self.assertEqual(events,['release']*4)
-
-    def test_heavy_runtime_cache_boundaries_keep_class_inputs_and_failed_cases(self):
-        # Exercise the real fixture hook through unittest without importing JAX,
-        # constructing a source session, or executing the scientific test body.
-        fixtures = (
-            ('test_gpu_engine_execution_runtime_plumbing.py', 'ExecutionRuntimePlumbingTests'),
-            ('test_gpu_engine_status_residual_runtime.py', 'StatusResidualRuntimeTests'),
-            ('test_gpu_engine_status_kernel_owner_drain.py', 'StatusKernelOwnerDrainTests'),
-        )
-        for filename, name in fixtures:
-            with self.subTest(fixture=name):
-                path = ROOT / 'tests' / filename
-                source = ast.parse(path.read_text())
-                case = next(node for node in source.body if isinstance(node, ast.ClassDef) and node.name == name)
-                hook = next(node for node in case.body if isinstance(node, ast.FunctionDef) and node.name == 'setUp')
-                events = []
-                namespace = {
-                    'jax': mock.Mock(clear_caches=lambda: events.append('clear')),
-                    'gc': mock.Mock(collect=lambda: events.append('collect')),
-                }
-                exec(compile(ast.Module(body=[hook], type_ignores=[]), str(path), 'exec'), namespace)
-                shared_input = object()
-                class Synthetic(unittest.TestCase):
-                    setUp = namespace['setUp']
-                    @classmethod
-                    def setUpClass(cls):
-                        events.append('class_setup')
-                        cls.prepared = shared_input
-                    def test_first(self):
-                        self.assertIs(self.prepared, shared_input)
-                        events.append('first')
-                        self.fail('intentional control')
-                    def test_second(self):
-                        self.assertIs(self.prepared, shared_input)
-                        events.append('second')
-                result = unittest.TestResult()
-                unittest.TestSuite([Synthetic('test_first'), Synthetic('test_second')]).run(result)
-                self.assertEqual(events, ['class_setup', 'clear', 'collect', 'first', 'clear', 'collect', 'second'])
-                self.assertEqual(result.testsRun, 2)
-                self.assertEqual(len(result.failures), 1)
-                self.assertEqual(result.errors, [])
-                self.assertEqual(result.skipped, [])
-
     def isolated(self, root, index=0, count=1, resource_interval_seconds=0, isolate_standard_classes=(),
                  low_optimization_cases=()):
         # Actual fresh parent AND child interpreters, no mocked process runner
@@ -388,29 +318,32 @@ raise SystemExit(run_process_blocks(suite, int(sys.argv[2]), int(sys.argv[3]), s
         unauthorized = dict(plan, execution_units=[])
         self.assertFalse(_valid_receipt(dict(receipt, plan_sha256=_digest(unauthorized)), unauthorized, 0, 0))
 
-    def test_real_heavy_class_source_keeps_all_six_case_objects_and_nested_manifests(self):
-        name = 'test_gpu_engine_execution_runtime_plumbing'
+    def test_real_isolated_class_source_keeps_every_case_object_and_nested_manifests(self):
+        # A real class whose low-optimization case isolates every case of it in the workflow.
+        name, class_name = 'test_gpu_engine_color_change_owning', 'ColorChangeOwningTests'
         path = ROOT / 'tests' / (name + '.py')
         tree = ast.parse(path.read_text())
         case = next(node for node in tree.body if isinstance(node, ast.ClassDef)
-            and node.name == 'ExecutionRuntimePlumbingTests')
+            and node.name == class_name)
+        count = sum(isinstance(node, ast.FunctionDef) and node.name.startswith('test') for node in case.body)
+        self.assertGreater(count, 1)
         module = types.ModuleType(name); module.unittest = unittest
         # Method bodies remain unexecuted: no JAX/source fixture imports or setup.
         with mock.patch.dict(sys.modules, {name: module}):
             exec(compile(ast.Module(body=[case], type_ignores=[]), str(path), 'exec'), module.__dict__)
-            suite = unittest.TestSuite([unittest.TestLoader().loadTestsFromTestCase(module.ExecutionRuntimePlumbingTests)])
+            suite = unittest.TestSuite([unittest.TestLoader().loadTestsFromTestCase(getattr(module, class_name))])
             original = list(next(iter(suite)))
-            units, decisions = _isolation_units([suite], [0], [name + '.ExecutionRuntimePlumbingTests'])
-            self.assertEqual(len(units), 6)
+            units, decisions = _isolation_units([suite], [0], [name + '.' + class_name])
+            self.assertEqual(len(units), count)
             self.assertTrue(decisions[0]['case_isolation'])
-            self.assertEqual([row['case_index'] for row in units], list(range(6)))
+            self.assertEqual([row['case_index'] for row in units], list(range(count)))
             ids = []
-            for offset in range(6):
+            for offset in range(count):
                 selected = _one_case_suite(suite, offset)
                 self.assertIs(next(iter(next(iter(selected)))), original[offset])
                 ids.append(_manifest(selected)['children'][0]['children'][0]['id'])
             self.assertEqual(ids, [unittest.TestCase.id(case) for case in original])
-            self.assertEqual(_manifest(suite)['count'], 6)
+            self.assertEqual(_manifest(suite)['count'], count)
 
     def test_resource_samples_preserve_real_success_skip_and_crash_dispositions(self):
         for body, expected, child_exit in [('pass', 0, 0), ("self.skipTest('control')", 1, 1),
