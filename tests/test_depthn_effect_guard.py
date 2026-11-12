@@ -31,6 +31,10 @@ def setUpModule():
         patch.start();unittest.addModuleCleanup(patch.stop)   # registered as each starts: a failed setup still restores
 
 
+def tearDownModule():
+    unittest.doModuleCleanups()   # pytest calls tearDownModule but not the module cleanups; under unittest the later call finds none
+
+
 def switch(seat, species, hp='100/100', details=None):
     return f'|switch|{seat}a: {species}|{details or species}, L80|{hp}'
 
@@ -575,10 +579,10 @@ class LiveTableTests(unittest.TestCase):
         run = lambda: G.evaluate(hit, own_turn1=dict(lanes=['leechseed', 'substitute', 'protect', None], logits=prior(0, .97)[0], legal=prior(0, .97)[1]),
             peer_turn1=peer, turn2=[], choice=0)
         self.assertEqual([G.guarded(m, hit['opp'], 'snorlax') for m in ('spore', 'sleeppowder', 'hypnosis')], [('C', 'status')] * 3)
-        self.assertEqual((run()['b_turn1'], [x['move'] for x in run()['reasons']]), (True, ['spore']))   # FIXTURE: tier C, bound
+        r = run();self.assertEqual((r['b_turn1'], [x['move'] for x in r['reasons']]), (True, ['spore']))   # FIXTURE: tier C, bound
         self.live()
         self.assertEqual([G.guarded(m, hit['opp'], 'snorlax') for m in ('spore', 'sleeppowder', 'hypnosis')], [None] * 3)
-        self.assertEqual((run()['tripped'], run()['reasons']), (False, []))
+        r = run();self.assertEqual((r['tripped'], r['reasons']), (False, []))
 
     def test_every_retired_move_is_recorded_and_never_trips(self):
         self.live()
