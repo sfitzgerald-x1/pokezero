@@ -32,8 +32,8 @@ import time
 import numpy as np
 
 SCHEMA = 'pokezero.v2e-census.v1'
-# transition.step_with_chance: def line and last line (design note section 1.1; tree 5bc2fe8c, shifted by fidelity A1, A2, R, B, M1, M2 and WH).
-SPAN = (378, 2681)
+# transition.step_with_chance: def line and last line (design note section 1.1; tree 5bc2fe8c, shifted by fidelity A1, A2, R, B, M1, M2, R1 and WH).
+SPAN = (378, 2683)
 # (phase, first line, last line, group). 'pre' is the host-side argument checks; boundary statements open the next phase.
 PHASES = (
     ('pre', 378, 522, 'pre'),
@@ -47,8 +47,8 @@ PHASES = (
     ('E3', 1395, 2014, 'E'),   # effects (Perish Song, Yawn, the Substitute's trap release and Wrap's trap included)
     ('E4', 2015, 2142, 'E'),   # post (recoil, move weather, Spikes, drag, Baton, fainted boosts)
     ('F1', 2143, 2254, 'F'),   # defer/ready, end speeds, Wish, weather
-    ('F2', 2255, 2596, 'F'),   # residual events (argsort at 2262, the 14-event loop at 2263), the Perish pass, White Herb's order 29 and the recharge tick
-    ('G', 2597, 2681, 'G'),    # end of turn
+    ('F2', 2255, 2598, 'F'),   # residual events (argsort at 2262, the 14-event loop at 2263), the Perish pass, White Herb's order 29 and the recharge tick
+    ('G', 2599, 2683, 'G'),    # end of turn
 )
 GROUPS = ('A', 'B', 'C', 'D', 'E', 'F', 'G')
 GROUP = {name: group for name, _, _, group in PHASES}
@@ -69,13 +69,13 @@ ANCHORS = {
     2015: '# Gen3 applies contact DamagingHit',
     2107: 'work,changed,hazard_ko=dragging.drag(work,foe,move,phazing_draws[rows,side],',
     2143: 'turn_context = live & (~replacement | state.pending_residual)',
-    2255: 'event_sides = jnp.array([0,1,0,1,0,1,0,1,0,1,0,1,0,1])',
+    2255: 'event_sides = jnp.array(residual_order.EVENT_SIDES)',
     2262: 'event_order = jnp.argsort(event_keys,axis=1)',
-    2263: 'for order in range(14):',
+    2263: 'for order in range(residual_order.EVENTS):',
     2278: 'if _status_residual_context is not None:',
-    2597: 'work=linking.prune(work)',
-    2672: 'work = jax.tree.map(lambda old, new: jnp.where(live.reshape(',
-    2681: 'return result if _public_trace is None else public_callbacks.TracedStep(result,_public_trace)',
+    2599: 'work=linking.prune(work)',
+    2674: 'work = jax.tree.map(lambda old, new: jnp.where(live.reshape(',
+    2683: 'return result if _public_trace is None else public_callbacks.TracedStep(result,_public_trace)',
 }
 # Iteration rules over lines in program order (the scratch census's): an E1..E4 line <= E_RESTART after one >= E_LATE
 # starts the second action; in F2 a line <= F2_HEAD after one > F2_BODY starts the next of the 14 residual events.

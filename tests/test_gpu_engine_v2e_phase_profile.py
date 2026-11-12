@@ -24,7 +24,7 @@ ROOT = Path(__file__).resolve().parents[1]
 # Statements of a stand-in step_with_chance on the real phase lines (A, B, D, E0, two actions E1/E4, F1, two residual events, G).
 CODE = {378: 'def step_with_chance(x, y):', 523: '    a = helper(x) + y', 580: '    b = a * y', 651: '    c = b - x', 771: '    c = c + 1',
     794: '    for order in range(2):', 796: '        c = c * 2 + order', 2033: '        c = jnp.where(c > 0, c, -c)', 2143: '    d = c - y',
-    2263: '    for event in range(2):', 2264: '        d = d + event', 2360: '        d = d * 3', 2597: '    return d + a'}
+    2263: '    for event in range(2):', 2264: '        d = d + event', 2360: '        d = d * 3', 2599: '    return d + a'}
 HEADER = ['import jax', 'import jax.numpy as jnp', '', '', '@jax.jit', 'def helper(x):', '    return x * 3 + 1']
 LABELS = ['A', 'B', 'D', 'E0', 'E1.0', 'E4.0', 'E1.1', 'E4.1', 'F1', 'F2.0', 'F2.1', 'G']
 

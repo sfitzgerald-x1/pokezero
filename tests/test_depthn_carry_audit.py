@@ -45,6 +45,7 @@ class EnumerationTests(unittest.TestCase):
                 self.assertFalse(e.represented);self.assertTrue(e.moves and e.pool_species and e.evidence and e.mechanism)
                 self.assertTrue(any('gpu_engine/' in x for x in e.evidence))   # an engine citation
         self.assertEqual({e.id for e in A.EFFECTS if e.lock_class}, {'recharge', 'partial_trap', 'transform'})
+        self.assertEqual({e.id: e.engine_since for e in A.EFFECTS if e.engine_since}, dict(recharge='8b212312', destiny_bond='286a5ffe', trick_lock='8b212312'))
         self.assertTrue(all(not e.pool_species for e in A.NOT_IN_POOL))
         self.assertTrue(all(e.represented for e in A.REPRESENTED))
         moves = {m for e in A.NOT_IN_POOL for m in e.moves}
@@ -65,11 +66,17 @@ class EnumerationTests(unittest.TestCase):
         self.assertIn('move.flags.recharge', rules[66]);self.assertIn("'transform'", rules[64]);self.assertIn('TrapPokemon', rules[59])
         source = (ROOT / 'gpu_engine/engine_request_source.py').read_text().splitlines()
         self.assertIn('LOCK', source[379]);self.assertIn('charge_move', source[340])
-        state = (ROOT / 'gpu_engine/state.py').read_text()
-        for word in ('recharge', 'perish', 'yawn', 'destiny', 'partial', 'transform'):self.assertNotIn(word, state.lower())
+        state = (ROOT / 'gpu_engine/state.py').read_text().lower()
+        # an effect the engine models in-tree (engine_since) names its state; the others still have none
+        words = dict(recharge='recharge', perish_count='perish', drowsy='yawn', destiny_bond='destiny', partial_trap='partial', transform='transform')
+        for e in A.EFFECTS:
+            if e.id in words:(self.assertIn if e.engine_since else self.assertNotIn)(words[e.id], state, e.id)
         traps = (ROOT / 'gpu_engine/linked_traps.py').read_text().splitlines()[12]
         self.assertIn('meanlook', traps);self.assertNotIn('wrap', traps)
-        for move in ('hyperbeam', 'wrap', 'perishsong', 'yawn', 'destinybond'):self.assertNotIn(f'"{move}"', (ROOT / 'gpu_engine/transition.py').read_text())
+        transition = (ROOT / 'gpu_engine/transition.py').read_text()
+        for e in A.EFFECTS:
+            for move in set(e.moves) & {'hyperbeam', 'wrap', 'perishsong', 'yawn', 'destinybond'}:
+                if not e.engine_since:self.assertNotIn(f'"{move}"', transition, move)
 
     def test_pool_check_against_a_sets_file(self):
         sets = {}

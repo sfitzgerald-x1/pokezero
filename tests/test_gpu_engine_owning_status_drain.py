@@ -24,7 +24,7 @@ from gpu_engine import engine_status_callbacks as statuses, engine_status_residu
 from gpu_engine import engine_full_v4_event_device as full, engine_execution_completeness as e
 from gpu_engine import engine_request_source as source
 from gpu_engine import mechanics as m, transition, public_mon_state
-import test_gpu_engine_execution_runtime_plumbing as fixtures
+import gpu_engine_owning_runtime_fixture as fixtures
 import test_gpu_engine_leftovers_registered_runtime as heal_fixture
 
 
@@ -174,7 +174,7 @@ class OwningStatusDrainTests(unittest.TestCase):
                     self.assertEqual(int(observer.retained.mons.status[row,side,slot]),
                         public_mon_state.BURN if side==0 else public_mon_state.POISON)
 
-    # execution_runtime_plumbing: the heal drain (that module is retired separately)
+    # execution_runtime_plumbing: the heal drain (its fixture is now tests/gpu_engine_owning_runtime_fixture.py)
 
     def test_actual_heal_turn_captures_and_drains_both_owner_leftovers_spans(self):
         r,(birth,actions,frame,result)=self.heal_turn();tables=r['execution_compiled'].device
