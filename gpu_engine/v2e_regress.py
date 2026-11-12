@@ -99,6 +99,22 @@ WITNESS_LEAVES (wit_XX) so these rules compare per mon and per bag column:
 Explained lane-steps are counted as recharge_leaves, bag_leaves,
 trick_witness_leaves and ledger_leaves.
 
+Special rule (M2, with --pr M2; post-state, per mon, never a pre-state predicate alone): m2_rule explains the new
+leaves Perish Song, Yawn and Wrap set this step (the captures carry none, so any nonzero value differs from the migrated
+default) from this tree's own evidence, recorded around the device hooks (the move hook's line with use, and the target
+at that line; the damage hook's HP damage after a Wrap line; port_protect's Protect block; turn_end's ordinary flag):
+- perish: a Perish Song line with use on some side; each side's counter nonzero only at its living post-step active,
+  which is not Soundproof, with 3 after the order-12 tick or 4 without it; the bag's perish bits at that slot are
+  perish{min(count,3)}.
+- yawn: the other side's Yawn line had use, met no Protect and found this side's active unstatused, without a
+  Substitute and alive; the counter is nonzero only at that same living active (not Insomnia/Vital Spirit), 1 after
+  the residual or 2 without it; the bag's yawn bit is set there.
+- wrap: the other side's Wrap line dealt HP damage (a Substitute hit traps nothing); counter and source nonzero only at
+  that same living target, the source the Wrap user's party index, the counter 3+draws[f][7] (the design derivation,
+  recomputed from the keys) less one after the tick; partiallytrapped set in the bag; WRAP_TRAP_TURNS 1 at that slot
+  exactly when turn_end was ordinary, 0 elsewhere.
+The bag cells m2_rule witnesses join M1's in bag_rule. Explained lane-steps are counted as m2_leaves.
+
 KO cascade rule for the saved effect block (fidelity R's state.effect_draws,
 found by the M1 GPU pass): once the base pass has the leaf it is compared
 bitwise, and a KO cascade or phase shift that moves the residual deferral
@@ -162,6 +178,10 @@ PRE_TRACKERS = (MEANLOOK, 'trackers.active_slot')
 TRAP_MOVES = ('meanlook', 'spiderweb', 'block')
 DEFAULT_DESTINY_BOND = 64
 SLEEP_MOVES = ('spore', 'hypnosis', 'sleeppowder', 'sing', 'lovelykiss', 'grasswhistle')
+# M2: the new leaves (the captures predate them) and the bag columns m2_rule reads.
+WRAP_CLOCK = "trackers.mon_features['wrap_trap_turns']"
+M2_BAG = ('perish0', 'perish1', 'perish2', 'perish3', 'yawn', 'partiallytrapped')
+M2_COUNTER_LEAVES = ('state.perish_counter', 'state.yawn_counter', 'state.partial_trap_counter', 'state.partial_trap_source')
 
 
 def log(message, **values):
@@ -658,7 +678,22 @@ ALLOWED = {
     # swapped berry's stages (pinch), cure (Lum: status, clause port, confusion) and a Substitute's bag bit and presence
     # are never allowed here: trick_rule and bag_rule explain them per mon from post-state witnesses (M1 review).
     'trick': dict(user=('item', 'itemflags', 'choice', 'hp', 'wish'), target=('item', 'itemflags', 'choice', 'hp', 'wish'), glob=()),
+    # M2. The counters, the source, the bag cells and the wrap clock are explained only by m2_rule (post-state, per mon);
+    # the allowances are what follows from them. Perish Song: a Soundproof foe's -immune reveal (a Soundproof user is not
+    # in the pool's Perish Song sets). Yawn: an Insomnia/Vital Spirit target's -immune reveal. Wrap: the residual tick on
+    # the target (HP and its HP lines: damage history, negative items, the belief refresh of an HP line).
+    'perishsong': dict(user=(), target=('reveal',), glob=()),
+    'yawn': dict(user=(), target=('reveal',), glob=()),
+    'wrap': dict(user=(), target=('hp', 'visible'), glob=()),
+    # Volatiles a pre-step state already carries (no capture has one: every captured counter is a migrated 0). A Perish
+    # faint, a Yawn sleep (with Lum and the clause port) at the residual, and a partial trap's tick, release and switch
+    # block (a captured switch the trap now refuses freezes the lane, so it may change anything, like M1's recharge).
+    'perish': dict(user=('hp', 'm2', 'reveal'), target=(), glob=()),
+    'drowsy': dict(user=('status', 'item', 'clause', 'visible', 'm2'), target=('clause',), glob=()),
+    'partial_trap': ALL,
 }
+# M2: the leaves m2_rule explains, for the pre-step effects above.
+FAMILIES['m2'] = tuple(f'^{re.escape(n)}$' for n in M2_COUNTER_LEAVES) + (rf'^{re.escape(WRAP_CLOCK)}$', r'^trackers\.public_volatiles$')
 
 
 # Allowances an effect earns only on a KO cascade in which the other side (its target's) has a newly (un)fainted
@@ -1019,6 +1054,81 @@ def ledger_rule(entries, mutated, original, knocked_pre, knocked_post, item_pre,
     return entries - explained, sorted(explained, key=str)
 
 
+# M2 special rules (post-state; see the docstring). The counters and the wrap clock are leaves the captures predate, so
+# any nonzero value differs from its migrated default and must be explained here (or by a pre-state effect's allowance).
+
+
+def _m2_values(ran, done, settled, started):
+    """Counter values a volatile started this step may show at the step end: `settled` after its residual tick, `started`
+    when the residual did not run (deferred) or the battle ended before its handler (a residual KO)."""
+    if ran is None:return {settled, started}
+    if not ran:return {started}
+    return {settled, started} if done else {settled}
+
+
+def m2_rule(entries, w):
+    """M2: Perish Song, Yawn and Wrap set this step, from this tree's post state and hook evidence (w: this lane's arrays).
+
+    perish (state.perish_counter on side s): Perish Song executed on some side (a move line with use); side s's counter is
+    nonzero only at its living post-step active, which is not Soundproof, with 3 after the order-12 tick or 4 without it.
+    yawn (side s): the other side's Yawn line had use, met no Protect, and found side s's active unstatused, without a
+    Substitute and alive; the counter is nonzero only at that same, living, post-step active (not Insomnia/Vital Spirit), 1
+    after the residual or 2 without it. wrap (counter and source on side s): the other side's Wrap line dealt HP damage; the
+    counter is nonzero only at that same target, still active and alive, with source the Wrap user's party index and the
+    value 3+draws[f][7], less one after the residual tick. The wrap clock (B2's WRAP_TRAP_TURNS) is nonzero only at that
+    trapped mon's public slot, 1 when the step's turn_end was ordinary. Returns (remaining entries, explained entries,
+    [2,6,len(M2_BAG)] bag cells the witnessed volatiles explain, each equal to the derived bit)."""
+    explained = set();cells = np.zeros((2, 6, len(M2_BAG)), bool)
+    bag = w.get('bag');p2p = np.asarray(w['p2p']);active = np.asarray(w['post_active']);hp = np.asarray(w['post_hp'])
+    ran, done = w.get('ran'), bool(w.get('done', False))
+    def slot(side, mon):
+        k = int(p2p[side, mon]) if 0 <= mon < 6 else -1
+        return k if 0 <= k < 6 else -1
+    def cell_ok(side, k, values):
+        """The bag's M2 columns at (side, public slot k) equal `values` (a dict column -> bit) where given."""
+        if bag is None or k < 0:return False
+        return all(bool(bag[side, k, M2_BAG.index(c)]) == v for c, v in values.items())
+    for side in (0, 1):
+        f = 1 - side;a = int(active[side]);k = slot(side, a);live = 0 <= a < 6 and int(hp[side, a]) > 0
+        # Perish Song.
+        counter = np.asarray(w['perish'][side]);nz = counter != 0
+        if ('state.perish_counter', side) in entries and nz.any():
+            v = int(counter[a]) if 0 <= a < 6 else 0
+            bits = {c: (v > 0 and min(v, 3) == i) for i, c in enumerate(M2_BAG[:4])}
+            ok = (bool(np.asarray(w['perish_used']).any()) and live and int(nz.sum()) == 1 and bool(nz[a])
+                  and int(w['ability'][side][a]) not in w['soundproof'] and v in _m2_values(ran, done, 3, 4) and cell_ok(side, k, bits))
+            if ok:
+                explained.add(('state.perish_counter', side))
+                for i in range(4):cells[side, k, i] = True
+        # Yawn.
+        counter = np.asarray(w['yawn'][side]);nz = counter != 0
+        if ('state.yawn_counter', side) in entries and nz.any():
+            v = int(counter[a]) if 0 <= a < 6 else 0
+            ok = (bool(w['yawn_by'][f]) and not bool(w['blocked'][f]) and int(w['yawn_target'][f]) == a and live
+                  and int(nz.sum()) == 1 and bool(nz[a]) and int(w['ability'][side][a]) not in w['sleep_immune']
+                  and v in _m2_values(ran, done, 1, 2) and cell_ok(side, k, {'yawn': True}))
+            if ok:
+                explained.add(('state.yawn_counter', side));cells[side, k, M2_BAG.index('yawn')] = True
+        # Wrap: counter, source and the clock together.
+        counter = np.asarray(w['trap'][side]);source = np.asarray(w['source'][side]);nz = (counter != 0) | (source != -1)
+        mine = {('state.partial_trap_counter', side), ('state.partial_trap_source', side), (WRAP_CLOCK, side)} & entries
+        if mine and nz.any():
+            v = int(counter[a]) if 0 <= a < 6 else 0;d = 3 + int(w['draws7'][f])
+            ok = (bool(w['wrap_by'][f]) and int(w['wrap_target'][f]) == a and live and int(nz.sum()) == 1 and bool(nz[a])
+                  and int(source[a]) == int(w['wrap_user'][f]) and v in _m2_values(ran, done, d - 1, d)
+                  and cell_ok(side, k, {'partiallytrapped': True}))
+            # The clock is checked whenever the trap is (a missing tick of the clock is a missing producer), and must be
+            # present when the clock leaf changed.
+            clock = w.get('clock')
+            if ok and (clock is not None or (WRAP_CLOCK, side) in mine):
+                want = np.zeros(6, np.int64)
+                if k >= 0 and bool(w.get('ordinary', False)):want[k] = 1
+                ok = clock is not None and np.array_equal(np.asarray(clock[side]).astype(np.int64), want)
+            if ok:
+                explained |= mine;cells[side, k, M2_BAG.index('partiallytrapped')] = True
+    return entries - explained, sorted(explained, key=str), cells
+
+
 # ---------------------------------------------------------------------------
 # Engine plumbing.
 
@@ -1041,7 +1151,7 @@ class Stepper:
     their own pre values are digested too (new leaves must keep their defaults).
     """
     def __init__(self, step_fn, treedef, *, base_names=None, faint_leaves=FAINT_CLEAR_LEAVES, record_installs=False,
-                 effect_rule=False):
+                 effect_rule=False, m2_ids=None):
         import jax
         import jax.numpy as j
         names = {}
@@ -1058,6 +1168,14 @@ class Stepper:
             climate.residual_clock = clock_recorder
             from gpu_engine import engine_device_public_hooks as hooks
             damage_hook, move_hook = hooks.damage, hooks.move;hits = [];opened = {}
+            protect_hook, turn_end_hook = hooks.port_protect, hooks.turn_end
+            # M2: this tree's own evidence, recorded around the device hooks (never read from the engine's M2 writes).
+            sides2 = j.arange(2)[None, :];zero2 = j.zeros((lanes, 2), j.bool_)
+            m2e = dict(perish_used=zero2, yawn_by=zero2, yawn_target=j.full((lanes, 2), -1, j.int32), wrap_line=zero2,
+                       wrap_by=zero2, wrap_user=j.full((lanes, 2), -1, j.int32), wrap_target=j.full((lanes, 2), -1, j.int32),
+                       blocked=zero2, ordinary=None)
+            def at_side(mask, s):
+                return (s[:, None] == sides2) & mask[:, None]
             def foe_sub(st, s):
                 r = j.arange(lanes);foe = 1 - s
                 return st.substitute_hp[r, foe, st.active[r, foe]]
@@ -1066,6 +1184,21 @@ class Stepper:
                 # the step included); the damage hook that follows reads it again after the hit.
                 s = j.broadcast_to(j.asarray(side, j.int32), (lanes,))
                 opened.update(side=s, sub=foe_sub(st, s))
+                if m2_ids is not None and len(rest) >= 2:
+                    # M2: a move line (the caller's, or a called child's) of Perish Song, Yawn or Wrap with use set. Yawn: the
+                    # target at the line holds no status and no Substitute and lives (its onTryHit and TryPrimaryHit, read
+                    # from this tree's state at the line). Wrap: the user's and the target's party indices at the line.
+                    mv = j.broadcast_to(j.asarray(rest[0], j.int32), (lanes,));use = j.broadcast_to(j.asarray(rest[1], j.bool_), (lanes,))
+                    r = j.arange(lanes);foe = 1 - s;target = st.active[r, foe]
+                    clear = (st.status[r, foe, target] == 0) & (st.substitute_hp[r, foe, target] == 0) & (st.hp[r, foe, target] > 0)
+                    m2e['perish_used'] = m2e['perish_used'] | at_side(use & (mv == m2_ids.get('perishsong', -9)), s)
+                    yawn = use & (mv == m2_ids.get('yawn', -9)) & clear
+                    m2e['yawn_by'] = m2e['yawn_by'] | at_side(yawn, s)
+                    m2e['yawn_target'] = j.where(at_side(yawn, s), target[:, None], m2e['yawn_target'])
+                    wrap = use & (mv == m2_ids.get('wrap', -9))
+                    m2e['wrap_line'] = m2e['wrap_line'] | at_side(wrap, s)
+                    m2e['wrap_user'] = j.where(at_side(wrap, s), st.active[r, s][:, None], m2e['wrap_user'])
+                    m2e['wrap_target'] = j.where(at_side(wrap, s), target[:, None], m2e['wrap_target'])
                 return move_hook(c, st, side, *rest, **kw)
             def damage_recorder(c, st, side, dealt, taken, use):
                 # M1 review: this tree's hit record (recorded around the device hooks, never read from the engine's own
@@ -1073,10 +1206,22 @@ class Stepper:
                 # or the foe's Substitute lower than when this side's move line opened.
                 s = j.broadcast_to(j.asarray(side, j.int32), (lanes,));use = j.broadcast_to(j.asarray(use, j.bool_), (lanes,))
                 struck = use & (j.broadcast_to(j.asarray(taken), (lanes,)) > 0)
+                # M2: Wrap's evidence is HP damage alone (a Substitute hit traps nothing), after this side's Wrap line.
+                m2e['wrap_by'] = m2e['wrap_by'] | (at_side(struck, s) & m2e['wrap_line'])
                 if opened:struck = struck | (use & (opened['side'] == s) & (foe_sub(st, s) < opened['sub']))
                 hits.append((s, struck))
                 return damage_hook(c, st, side, dealt, taken, use)
+            def protect_recorder(c, side, acts, accuracy_pass, protected, protectable):
+                # M2: this side's move passed accuracy and met the foe's Protect (Yawn has the protect flag).
+                s = j.broadcast_to(j.asarray(side, j.int32), (lanes,))
+                met = j.broadcast_to(j.asarray(acts) & j.asarray(accuracy_pass) & j.asarray(protected) & j.asarray(protectable), (lanes,))
+                m2e['blocked'] = m2e['blocked'] | at_side(met, s)
+                return protect_hook(c, side, acts, accuracy_pass, protected, protectable)
+            def turn_end_recorder(c, before, after, ordinary, **kw):
+                m2e['ordinary'] = j.broadcast_to(j.asarray(ordinary, j.bool_), (lanes,))
+                return turn_end_hook(c, before, after, ordinary, **kw)
             hooks.damage, hooks.move = damage_recorder, move_recorder
+            hooks.port_protect, hooks.turn_end = protect_recorder, turn_end_recorder
             try:
                 if record_installs:
                     original = hooks.install
@@ -1093,6 +1238,7 @@ class Stepper:
                     out = step_fn(state, actions, trackers)
             finally:
                 climate.residual_clock = clock;hooks.damage, hooks.move = damage_hook, move_hook
+                hooks.port_protect, hooks.turn_end = protect_hook, turn_end_hook
             named_in = name_inputs(state, actions, trackers);named_out = name_outputs(out)
             names['out'], digests = digest_named(named_out, lanes)
             names['side_axis'] = [has_side_axis(n, named_out[n].shape, lanes) for n in names['out']]
@@ -1126,13 +1272,27 @@ class Stepper:
             for key, leaf in (('mutated', LEDGER_LEAVES[0]), ('original', LEDGER_LEAVES[1]), ('knocked', 'state.item_knocked')):
                 if leaf in named_out:m1[key] = named_out[leaf]
             m1['post_hp'] = out.step.state.hp
+            # M2 rule arrays: this tree's post counters, bag columns, wrap clock and ability, the hook evidence, and the
+            # Wrap duration draw the step used (the design derivation: draws[s][7] of sample_chance_inputs on these keys,
+            # or the saved block on a resumed turn).
+            m2 = None
+            if m2_ids is not None and hasattr(out.step.state, 'perish_counter'):
+                from gpu_engine.transition import sample_chance_inputs
+                post = out.step.state;live = ~state.done & ~out.step.invalid_actions
+                fresh = sample_chance_inputs(state).draws
+                draws = j.where((live & state.pending_residual)[:, None, None], state.residual_draws, fresh)
+                m2 = dict(perish=post.perish_counter, yawn=post.yawn_counter, trap=post.partial_trap_counter,
+                          source=post.partial_trap_source, ability=post.ability, draws7=draws[:, :, 7],
+                          clock=named_out.get(WRAP_CLOCK), **{k: v for k, v in m2e.items() if v is not None})
+                if bag is not None and bag.ndim == 4 and bag.shape[-1] == len(bag_names):
+                    m2['bag'] = j.stack([bag[..., bag_names.index(n)] for n in M2_BAG], axis=-1)
             return dict(digests=digests, pre_digests=pre, fainted=(state.hp > 0) & (out.step.state.hp <= 0), m1=m1,
                 extra={n: named_out[n] for n in faint_leaves if n in named_out}, calls=calls,
                 ko={n: named_out[n] for n in KO_MON_LEAVES + KO_LINK_LEAVES if n in named_out},
                 post_active=out.step.state.active, post_done=out.step.state.done,
                 physical_to_public=out.trackers.physical_to_public, active_slot=out.trackers.active_slot,
                 public_order=named_out.get(PUBLIC_ORDER), residual_ran=ran[0] if len(ran) == 1 else None,
-                effect_ok=effect_ok, wit={n: named_out[n] for n in WITNESS_LEAVES if n in named_out})
+                effect_ok=effect_ok, wit={n: named_out[n] for n in WITNESS_LEAVES if n in named_out}, m2=m2)
         self._jit = jax.jit(traced);self._names = names
 
     def __call__(self, leaves):
@@ -1317,8 +1477,10 @@ def patched_pass(args, *, step_override=None, prepared=None):
     public_order_rule = PUBLIC_ORDER in new_inputs and PUBLIC_ORDER not in base_names
     # Fidelity R: likewise the saved effect block is checked against the design's derivation while the base lacks it.
     effect_rule = EFFECT_DRAWS in new_inputs and EFFECT_DRAWS not in base_names
+    m2_rules = 'M2' in plugins
+    m2_ids = {n: vocab['moves'].index(n) for n in ('perishsong', 'yawn', 'wrap') if n in vocab['moves']} if m2_rules else None
     stepper = Stepper(step_override or _engine_step(tables), treedef, base_names=set(base_names), record_installs=public_order_rule,
-        effect_rule=effect_rule)
+        effect_rule=effect_rule, m2_ids=m2_ids)
     shards = [p for p in shard_list(args, capture) if p.name in set(manifest['shards'])]
     if args.limit == 0 and len(shards) != len(manifest['shards']):raise ValueError('shard set differs from the base pass')
     usable = jax.jit(state_module.usable_moves)
@@ -1327,13 +1489,16 @@ def patched_pass(args, *, step_override=None, prepared=None):
     counts = dict(lane_steps=0, done_skipped=0, unchanged=0, changed_and_involved=0, changed_but_uninvolved=0,
                   changed_involved_unexpected_fields=0, ko_cascade=0, phase_shift=0, terminal=0, terminal_residual=0, waived=0,
                   rule_explained=0, faint_rule_leaves=0, clear_volatile_leaves=0, effect_draws_saved=0,
-                  recharge_leaves=0, bag_leaves=0, trick_witness_leaves=0, ledger_leaves=0)
+                  recharge_leaves=0, bag_leaves=0, trick_witness_leaves=0, ledger_leaves=0, m2_leaves=0)
     clear_volatile = 'B' in plugins
     m1_rules = 'M1' in plugins
     # M1 review: the base's per-lane witness arrays (wit_XX); the M1 rules compare per mon and per bag column.
     witness_leaves = manifest.get('witness_leaves')
-    if m1_rules and witness_leaves is None:
+    if (m1_rules or m2_rules) and witness_leaves is None:
         raise SystemExit('base pass predates the M1 witness arrays (wit_XX); re-run the base pass with this harness')
+    ability_names = vocab.get('abilities', [])
+    soundproof = {ability_names.index(n) for n in ('soundproof',) if n in ability_names}
+    sleep_immune = {ability_names.index(n) for n in ('insomnia', 'vitalspirit') if n in ability_names}
     # A base pass run on the base engine with a newer harness is dirty in the harness only; anything else is recorded.
     if manifest.get('source_dirty') and set(manifest.get('dirty_paths') or ['?']) != {'gpu_engine/v2e_regress.py'}:
         warnings.append(f"base pass ran on a dirty tree beyond the harness: {manifest.get('dirty_paths')}")
@@ -1343,7 +1508,7 @@ def patched_pass(args, *, step_override=None, prepared=None):
     lum_id = item_names.index(LUM_BERRY) if LUM_BERRY in item_names else None
     pinch_ids = {item_names.index(n): stat for n, stat in PINCH_STATS.items() if n in item_names}
     from gpu_engine.public_active import NAMES as bag_columns
-    columns = {n: bag_columns.index(n) for n in (MUSTRECHARGE, 'substitute', 'confusion') if n in bag_columns}
+    columns = {n: bag_columns.index(n) for n in (MUSTRECHARGE, 'substitute', 'confusion', *M2_BAG) if n in bag_columns}
     by_effect = {k: dict(changed=0, involved_unchanged=0, changed_fields={}, unexpected_fields={}, ko_cascade=0,
                          phase_shift=0, terminal=0, terminal_residual=0, ko_cascade_non_hp_fields={}) for k in table}
     ko_leaves = manifest.get('ko_leaves')
@@ -1454,13 +1619,28 @@ def patched_pass(args, *, step_override=None, prepared=None):
                     counts['clear_volatile_leaves'] += bool(clear_explained)
                 # M1: Hyper Beam's counter (recharge_rule), the bag per cell (bag_rule), a Trick's berry and Substitute
                 # consequences (trick_rule) and Knock Off's item ledger (ledger_rule); all post-state, per mon.
-                recharge_explained, bag_explained, trick_explained, ledger_explained = [], [], [], []
-                if changed and m1_rules:
+                recharge_explained, bag_explained, trick_explained, ledger_explained, m2_explained = [], [], [], [], []
+                if changed and (m1_rules or m2_rules):
                     zero2 = np.zeros(2, bool);p2p = result['physical_to_public'][lane]
                     lane_wit = {n: v[lane] for n, v in wit.items()};lane_base_wit = {n: v[lane] for n, v in base_wit.items()}
                     lane_ko = {n: v[lane] for n, v in result['ko'].items()};lane_base_ko = {n: v[lane] for n, v in base_ko.items()}
                     bag = lane_wit.get(BAG)
                     allowed = np.zeros(np.asarray(bag).shape, bool) if bag is not None else None
+                if changed and m2_rules and result.get('m2') is not None:
+                    # M2: Perish Song, Yawn and Wrap from this tree's post state and hook evidence (m2_rule).
+                    m2 = result['m2']
+                    w = {k: np.asarray(v)[lane] for k, v in m2.items() if v is not None}
+                    w.update(p2p=p2p, post_active=post_active[lane], post_hp=np.asarray(m1['post_hp'])[lane],
+                             done=bool(np.asarray(result['post_done'])[lane]),
+                             ran=None if result['residual_ran'] is None else bool(np.asarray(result['residual_ran'])[lane]),
+                             soundproof=soundproof, sleep_immune=sleep_immune)
+                    if 'ordinary' in w:w['ordinary'] = bool(w['ordinary'])
+                    entries, m2_explained, m2_cells = m2_rule(entries, w)
+                    if allowed is not None:
+                        for i, name in enumerate(M2_BAG):
+                            if name in columns:allowed[:, :, columns[name]] |= m2_cells[:, :, i]
+                    counts['m2_leaves'] += bool(m2_explained)
+                if changed and m1_rules:
                     departed = departed_mask(pre_active[lane], post_active[lane],
                         None if base_post_active is None else base_post_active[lane])
                     if 'counter' in m1 and 'bag' in m1:
@@ -1499,12 +1679,13 @@ def patched_pass(args, *, step_override=None, prepared=None):
                                     if 'confusion' in columns and confused[side, m]:
                                         c = columns['confusion']
                                         allowed[side, slot, c] = bool(bag[side, slot, c]) == (int(lane_ko['state.confusion_counter'][side, m]) > 0)
-                    entries, bag_explained = bag_rule(entries, bag, lane_base_wit.get(BAG), allowed)
-                    counts['bag_leaves'] += bool(bag_explained)
                     if 'mutated' in m1 and 'original' in m1 and 'knocked' in m1 and knocked_pre is not None:
                         entries, ledger_explained = ledger_rule(entries, m1['mutated'][lane], m1['original'][lane], knocked_pre[lane],
                             m1['knocked'][lane], item_pre[lane], result['physical_to_public'][lane], trick=trick_lane)
                         counts['ledger_leaves'] += bool(ledger_explained)
+                if changed and (m1_rules or m2_rules):
+                    entries, bag_explained = bag_rule(entries, bag, lane_base_wit.get(BAG), allowed)
+                    counts['bag_leaves'] += bool(bag_explained)
                 rule_ok = bool(changed) and not entries
                 changed_rest = sorted({leaf for leaf, _ in entries})
                 phase = bool(phase_lanes[lane]);terminal = bool(terminal_lanes[lane]) and not phase
@@ -1577,6 +1758,7 @@ def patched_pass(args, *, step_override=None, prepared=None):
                     bag_rule=[f'{l}@{side}' for l, side in bag_explained],
                     trick_rule=[f"{l}@{'glob' if side is None else side}" for l, side in trick_explained],
                     ledger_rule=[f'{l}@{side}' for l, side in ledger_explained],
+                    m2_rule=[f'{l}@{side}' for l, side in m2_explained],
                     unexpected=[f"{l}@{'glob' if s is None else s}" for l, s in unexpected],
                     ko_consequences=[f"{l}@{'glob' if s is None else s}" for l, s in by_ko],
                     waived=[f"{l}@{'glob' if s is None else s}" for l, s in waived])) + '\n')
@@ -1593,7 +1775,7 @@ def patched_pass(args, *, step_override=None, prepared=None):
         capture_sha256=capture_sha, **base_check, shards=len(shards), partial=partial, failures=failures,
         migrated_new_inputs=new_inputs, new_outputs=new_outputs, public_order_rule=public_order_rule, link_rule=link_rule,
         effect_rule=effect_rule, residual_rule=residual_rule,
-        faint_clear_rule=bool(args.faint_clear), clear_volatile_rule=clear_volatile, m1_rules=m1_rules,
+        faint_clear_rule=bool(args.faint_clear), clear_volatile_rule=clear_volatile, m1_rules=m1_rules, m2_rules=m2_rules,
         witness_leaves=witness_leaves, base_source_dirty=manifest.get('source_dirty'), base_dirty_paths=manifest.get('dirty_paths'),
         base_harness_sha256=manifest.get('harness_sha256'), harness_sha256=hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
         waive=list(args.waive or ()), counts=counts, by_effect=by_effect,
