@@ -20,7 +20,6 @@ FIXTURE_GUARDED = {
     'refresh': ('C', 'status', 'user_brn_par_psn'), 'sacredfire': ('C', 'status', 'user_frozen'), 'psychoboost': ('C', 'self_stat_drop', 'white_herb'),
     'facade': ('C', 'other', 'guts_status'), 'aromatherapy': ('C', 'status', 'party_statused'), 'trick': ('C', 'item_removal', 'item_knocked')}
 FIXTURE_RETIRED = {'destinybond': ('volatile', '286a5ffe'), 'hyperbeam': ('multi_turn', '8b212312')}
-_TABLES = []
 
 
 def tables(guarded, retired):
@@ -29,11 +28,7 @@ def tables(guarded, retired):
 
 def setUpModule():
     for patch in tables(FIXTURE_GUARDED, FIXTURE_RETIRED):
-        patch.start();_TABLES.append(patch)
-
-
-def tearDownModule():
-    while _TABLES:_TABLES.pop().stop()
+        patch.start();unittest.addModuleCleanup(patch.stop)   # registered as each starts: a failed setup still restores
 
 
 def switch(seat, species, hp='100/100', details=None):
@@ -569,6 +564,21 @@ class LiveTableTests(unittest.TestCase):
         changed = {'trick': ('A', 'C')}   # M1: tier C under the knocked-off condition
         self.assertEqual({m: t for m, (t, _, _) in LIVE_GUARDED.items() if m not in changed},
                          {m: t for m, t in G.PRE_FLAG_TIERS.items() if m not in LIVE_RETIRED and m not in changed})
+
+    def test_a_binding_sleep_clause_no_longer_guards_the_sleep_moves(self):
+        """Our Breloom asleep from a non-allied source binds Sleep Clause for the opponent: FIXTURE guards its Spore, Sleep Powder
+        and Hypnosis (tier C) and its turn-1 Spore trips; the live tables retire them (A1), so nothing trips."""
+        hit = G.conditions(BASE + ['|-status|p1a: Breloom|slp'], 0, request([('Breloom', '100/100 slp', '', 'effectspore')]))
+        self.assertTrue(hit['opp']['sleep_clause'])
+        logits, legal = prior(0, .9)
+        peer = [dict(world=0, lanes=['spore', 'rest', 'sleeptalk', 'earthquake'], logits=logits, legal=legal, requested=True, user='snorlax')]
+        run = lambda: G.evaluate(hit, own_turn1=dict(lanes=['leechseed', 'substitute', 'protect', None], logits=prior(0, .97)[0], legal=prior(0, .97)[1]),
+            peer_turn1=peer, turn2=[], choice=0)
+        self.assertEqual([G.guarded(m, hit['opp'], 'snorlax') for m in ('spore', 'sleeppowder', 'hypnosis')], [('C', 'status')] * 3)
+        self.assertEqual((run()['b_turn1'], [x['move'] for x in run()['reasons']]), (True, ['spore']))   # FIXTURE: tier C, bound
+        self.live()
+        self.assertEqual([G.guarded(m, hit['opp'], 'snorlax') for m in ('spore', 'sleeppowder', 'hypnosis')], [None] * 3)
+        self.assertEqual((run()['tripped'], run()['reasons']), (False, []))
 
     def test_every_retired_move_is_recorded_and_never_trips(self):
         self.live()
