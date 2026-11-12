@@ -3,7 +3,7 @@
 Light replacement coverage for swords_dance_owning with #1819's current-kernel expectations (the turn-loop
 prefix entry): the same fixtures and assertions, with the full public fold and the full consumer compiled once
 per class (every input an argument) instead of called eagerly, and ChanceInputs built by keyword. Its static-capability/AST/source-pin
-test (test_canonical_static_capability_default_ast_and_original_source_order) joins after #1819 re-pins its sources.
+test (test_canonical_static_capability_default_ast_and_original_source_order) certifies transition.py at gpu_engine_transition_certification.CURRENT_TRANSITION.
 """
 from _showdown_root import showdown_root_str
 import ast,json,os,shutil,subprocess,unittest
@@ -21,6 +21,7 @@ from pokezero.category_vocab import CategoryVocabulary
 from pokezero.dex import ShowdownDex
 import test_gpu_engine_pressure_entry_owning as fixtures
 from gpu_engine_default_observer_ast import dump_default_program,assert_hp_rng_mutations_detected
+from gpu_engine_transition_certification import CURRENT_TRANSITION
 
 def _chance(b):
  draws=j.zeros((b,2,12),j.int32).at[:,:,4].set(1);zeros=j.zeros((b,2),j.int32)
@@ -129,3 +130,20 @@ class SwordsDanceComponentTests(unittest.TestCase):
    elif k==life.TURN:lines.append(f'|turn|{int(tape.event_turn[row,index])}')
    else:self.fail('unexpected raw '+str(k))
   _,packets=public_wire.project_lines(wire,lines,**v4.wire_kwargs(self.catalog));return np.array([e.words() for p in packets for e in p.events],np.int32)
+ def test_canonical_static_capability_default_ast_and_original_source_order(self):
+  from gpu_engine import engine_source_frame_witness as witness
+  witness._source();self.assertIn('engine_swords_dance_callbacks.py',witness.SOURCE_PINS)
+  move=self.ids['swordsdance'];self.assertEqual(int(self.risks.device.selected_risk[move]),0)
+  self.assertEqual(int(self.risks.device.selected_risk[self.ids['calmmind']])&(risk.NON_WEATHER|risk.BOOST),risk.NON_WEATHER|risk.BOOST)
+  closed=risk.compile_risks(self.producer,self.account);self.assertTrue(int(closed.device.selected_risk[move])&risk.BOOST)
+  with self.assertRaises(ValueError):swords.check_compiled(replace(self.helper))
+  with self.assertRaises(ValueError):jax.jit(lambda unused:swords.check_compiled(self.helper))(j.array(0))
+  # Re-certify the integrated device-hook program at the current certification.
+  # Keep the whole normalized AST and HP/RNG mutation controls exact.
+  normalize=__import__('test_gpu_engine_v5_hypothetical_profile').normalized_hypothetical_default
+  before=normalize(subprocess.check_output(['git','show',CURRENT_TRANSITION+':gpu_engine/transition.py'],text=True),as_tree=True);after=normalize(Path('gpu_engine/transition.py').read_text(),as_tree=True);baseline=dump_default_program(before);self.assertEqual(baseline,dump_default_program(after));assert_hp_rng_mutations_detected(self,after,baseline)
+  node=shutil.which('node')
+  if not node:self.skipTest('node unavailable')
+  root=Path(os.environ.get('POKEZERO_SHOWDOWN_ROOT',showdown_root_str()));self.assertEqual(subprocess.check_output(['git','-C',str(root),'rev-parse','HEAD'],text=True).strip(),events.SHOWDOWN)
+  script="const root=process.argv[1];const {Dex}=require(root+'/dist/sim/dex.js');const {Battle}=require(root+'/dist/sim/battle.js');const m=Dex.mod('gen3').moves.get('swordsdance');const lines=[];const p={hp:100,isActive:true,boosts:{atk:0},getCappedBoost:x=>x,boostBy(x){const k=Object.keys(x)[0];this.boosts[k]+=x[k];return x[k]},toString:()=> 'p1a: Snorlax'};Battle.prototype.boost.call({gen:3,runEvent:(event,t,s,e,x)=>x,add:(...x)=>lines.push(x.map(String).join('|'))},m.boosts,p,p,m);process.stdout.write(JSON.stringify(lines));"
+  self.assertEqual(json.loads(subprocess.check_output([node,'-e',script,str(root)],text=True)),['-boost|p1a: Snorlax|atk|2'])

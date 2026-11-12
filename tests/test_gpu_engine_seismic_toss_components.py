@@ -21,7 +21,7 @@ from pokezero.category_vocab import CategoryVocabulary
 from pokezero.dex import ShowdownDex
 import test_gpu_engine_pressure_entry_owning as fixtures
 from gpu_engine_default_observer_ast import dump_default_program,assert_hp_rng_mutations_detected
-from test_gpu_engine_direct_ko_components import CURRENT_TRANSITION
+from gpu_engine_transition_certification import CURRENT_TRANSITION
 
 
 class SeismicTossComponentTests(unittest.TestCase):
@@ -108,7 +108,6 @@ class SeismicTossComponentTests(unittest.TestCase):
   after=ast.parse(subprocess.check_output(['git','show','1c02d5d6:gpu_engine/transition.py'],text=True))
   baseline=dump_default_program(before);self.assertEqual(baseline,dump_default_program(after));assert_hp_rng_mutations_detected(self,after,baseline)
   current=ast.parse(Path('gpu_engine/transition.py').read_text())
-  # Current certification: see test_gpu_engine_direct_ko_components.CURRENT_TRANSITION.
   integrated=ast.parse(subprocess.check_output(['git','show',CURRENT_TRANSITION+':gpu_engine/transition.py'],text=True))
   self.assertEqual(ast.dump(current),ast.dump(integrated))
   assert_hp_rng_mutations_detected(self,current,dump_default_program(integrated))

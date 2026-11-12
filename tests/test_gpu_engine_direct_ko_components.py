@@ -17,11 +17,7 @@ from gpu_engine import engine_kernel_frame_risk as risk,engine_execution_complet
 from gpu_engine import engine_public_events as events,engine_public_event_device as base,engine_full_v4_event_device as full,v4_encoder as v4,public_wire
 import test_gpu_engine_pressure_entry_owning as fixtures
 from gpu_engine_default_observer_ast import dump_default_program,assert_hp_rng_mutations_detected
-
-# The current transition.py certification. #1819 certified b8092a85; integration's reviewed Fidelity A1, A2,
-# R and B batches changed transition.py after it. 0a3711dc is the integration commit main (#1819) merged
-# into; the merge left transition.py unchanged.
-CURRENT_TRANSITION='0a3711dc9a833790a7b54547dda61cb4547cc88b'
+from gpu_engine_transition_certification import CURRENT_TRANSITION
 
 
 class DirectKOComponentTests(unittest.TestCase):

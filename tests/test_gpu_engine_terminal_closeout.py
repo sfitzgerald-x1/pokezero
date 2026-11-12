@@ -19,6 +19,7 @@ from gpu_engine import engine_lifecycle_callbacks as life,engine_retained_encode
 from gpu_engine import engine_source_frame_witness as witness,transition as tr
 import test_gpu_engine_direct_ko_components as ko_fixture
 from gpu_engine_default_observer_ast import dump_default_program,assert_hp_rng_mutations_detected
+from gpu_engine_transition_certification import CURRENT_TRANSITION
 
 
 class TerminalCloseoutTests(unittest.TestCase):
@@ -113,9 +114,9 @@ class TerminalCloseoutTests(unittest.TestCase):
   base='185868792ac7c4e61f2df42273b025407b4ca5d4'
   before=ast.parse(subprocess.check_output(['git','show',base+':gpu_engine/transition.py'],text=True));after=ast.parse(subprocess.check_output(['git','show','1511dc02:gpu_engine/transition.py'],text=True))
   expected=dump_default_program(before);self.assertEqual(dump_default_program(after),expected);assert_hp_rng_mutations_detected(self,after,expected)
-  # Recertify every current statement independently of the historical delta (see ko_fixture.CURRENT_TRANSITION).
+  # Recertify every current statement independently of the historical delta.
   current=ast.parse(Path('gpu_engine/transition.py').read_text())
-  integrated=ast.parse(subprocess.check_output(['git','show',ko_fixture.CURRENT_TRANSITION+':gpu_engine/transition.py'],text=True))
+  integrated=ast.parse(subprocess.check_output(['git','show',CURRENT_TRANSITION+':gpu_engine/transition.py'],text=True))
   self.assertEqual(ast.dump(current),ast.dump(integrated))
   assert_hp_rng_mutations_detected(self,current,dump_default_program(integrated))
   old=ast.parse(subprocess.check_output(['git','show',base+':gpu_engine/engine_direct_hit_controls.py'],text=True));new=ast.parse(Path('gpu_engine/engine_direct_hit_controls.py').read_text())
