@@ -7,6 +7,7 @@ Fidelity M1 (#1926: Hyper Beam's recharge and Trick) moved it to 3a05573e, its t
 Fidelity M2 (Perish Song, Yawn, Wrap and the residual scheduler) moved it to 7cc1d9f6, its transition.py commit.
 M2's R1 (the Wrap and Yawn residual handlers traced only at their reachable positions) moved it to 703abcb8.
 Fidelity WH (White Herb, Sacred Fire's thaw and Facade) merged with R1 moved it to a19958b5, the merge's transition.py;
-its review fixes (Trick's received herb, fewer traced triggers) move it to 91346285.
+its review fixes (Trick's received herb, fewer traced triggers) moved it to 91346285, and the B2 Trick-credit rule
+to 13f76e5e.
 """
-CURRENT_TRANSITION = '913462859a93462e4de76c3fa7f2aeee423d9183'
+CURRENT_TRANSITION = '13f76e5e180b7c737a0818638fa20072617fc042'
