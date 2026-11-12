@@ -639,8 +639,9 @@ class GuardTests(unittest.TestCase):
         args = R.parser().parse_args(BASE + CHAMPION + ['--run-directory', 'r', '--out', 'o', '--cells', '1001', '--accept-tree', 'abc'])
         self.assertEqual(args.accept_tree, 'abc')
 
-    @unittest.skipUnless(subprocess.run(['git', '-C', str(R.ROOT), 'rev-parse', R.LIVE_COMMIT], capture_output=True).returncode == 0,
-        'needs a checkout holding the live commit')
+    # cat-file -e, not rev-parse: rev-parse exits 0 for any well-formed hash, so a missing commit would error, not skip.
+    @unittest.skipUnless(subprocess.run(['git', '-C', str(R.ROOT), 'cat-file', '-e', f'{R.LIVE_COMMIT}^{{commit}}'], capture_output=True).returncode == 0,
+        f'needs a checkout holding the live commit {R.LIVE_COMMIT}')
     def test_the_pins_are_the_live_commits_trees(self):
         for path, tree in R.LIVE_TREES.items():self.assertEqual(R.git(R.ROOT, 'rev-parse', f'{R.LIVE_COMMIT}:{path}'), tree)
 

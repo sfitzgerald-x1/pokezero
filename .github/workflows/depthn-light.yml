@@ -1,0 +1,98 @@
+name: DepthN light checks
+
+# Every tests/test_depthn_*.py module in one hosted job. All of them are CPU-only and light (largest peak under 1 GiB,
+# about three minutes in all), but six compile GPU-engine code and the actor and constructor import well beyond the
+# depthn_* files, so pull requests trigger it on the whole engine, package and test tree. The gate is green with no
+# skips, not a reference diff. Integration pushes run it too, so a combination of PRs that each passed alone is checked.
+on:
+  pull_request:
+    paths:
+      - 'gpu_engine/**'
+      - 'src/pokezero/**'
+      - 'scripts/depthn_*'
+      # All tests: depthn modules import other test modules (mc_ladder_rungs, constructor_worlds_peer_view_b,
+      # policy_opponent_view and theirs), and tests/__init__.py sets the path for every module.
+      - 'tests/**'
+      - 'scripts/run_component_memory_check.py'
+      - 'pyproject.toml'
+      - '**/requirements*.txt'
+      - '.github/workflows/depthn-light.yml'
+  # Every push to integration (and to main, where integration lands), with no path filter: one cheap job per merge, and
+  # GitHub matches a push's paths against only its first 300 changed files, so a large merge could otherwise skip it.
+  push:
+    branches: ['scott/v2-engine-accel-20261104', 'main']
+
+permissions:
+  contents: read
+
+concurrency:
+  # A newer push to a pull request supersedes its older run. Each integration push gets its own group (by commit), so no
+  # merge's run is cancelled or dropped while pending, and a red run names the merge that broke it.
+  group: depthn-light-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  depthn-light:
+    name: DepthN light tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      JAX_PLATFORMS: cpu
+      PYTHONPATH: src:.
+      OMP_NUM_THREADS: '2'
+      OPENBLAS_NUM_THREADS: '2'
+      XLA_FLAGS: '--xla_cpu_parallel_codegen_split_count=1 --xla_backend_optimization_level=3'
+      POKEZERO_SHOWDOWN_ROOT: ${{ github.workspace }}/.ci/pokemon-showdown
+    steps:
+      # Full history: rr_reprice resolves its live commit and live_panel reads the checkout.
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+      - uses: actions/checkout@v5
+        with:
+          repository: smogon/pokemon-showdown
+          ref: f76228a1354b5d0f307ca2d16101294ad3a2308b
+          path: .ci/pokemon-showdown
+          persist-credentials: false
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22.22.2'
+          cache: npm
+          cache-dependency-path: .ci/pokemon-showdown/package-lock.json
+      - name: Install CPU test environment and build pinned Showdown
+        run: |
+          set -o pipefail
+          python -m pip install 'jax==0.12.0' 'numpy==2.5.4' 'scipy==1.18.1'
+          python -m pip install --index-url https://download.pytorch.org/whl/cpu 'torch==2.13.0+cpu'
+          python -c 'import jax, numpy, scipy, torch; print("CPU dependencies:", jax.__version__, numpy.__version__, scipy.__version__, torch.__version__); assert torch.version.cuda is None'
+          npm ci --prefix "$POKEZERO_SHOWDOWN_ROOT"
+          npm run build --prefix "$POKEZERO_SHOWDOWN_ROOT"
+          test -f "$POKEZERO_SHOWDOWN_ROOT/dist/sim/dex.js"
+      - name: Run DepthN tests without skips
+        id: depthn
+        run: |
+          set -o pipefail
+          memory_dir="$RUNNER_TEMP/depthn-memory/${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          mkdir -p "$memory_dir"
+          echo "memory_report_dir=$memory_dir" >> "$GITHUB_OUTPUT"
+          # The same memory gate as the component shards: 75% of runner memory.
+          python scripts/run_component_memory_check.py --output "$memory_dir" --label depthn --summary "$GITHUB_STEP_SUMMARY" -- \
+            python -m unittest discover -s tests -t . -p 'test_depthn_*.py' -v 2>&1 | tee "$memory_dir/depthn.log"
+          # Every dependency is installed above, so a skip means one went missing: fail rather than pass silently.
+          # Anchored: the unittest summary line, or a verbose per-test, per-class or per-module skip. unittest prints the
+          # reason with repr, so a reason holding an apostrophe comes in double quotes.
+          if grep -Eq "^(OK|FAILED) \(.*skipped=[1-9]|\.\.\. skipped ['\"]" "$memory_dir/depthn.log"; then
+            echo '::error::DepthN tests skipped; torch, node, the built Showdown or full git history is missing'
+            exit 1
+          fi
+      - name: Retain memory report and test log
+        if: ${{ always() && steps.depthn.outputs.memory_report_dir != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: depthn-memory-attempt-${{ github.run_attempt }}
+          path: ${{ steps.depthn.outputs.memory_report_dir }}
+          if-no-files-found: error

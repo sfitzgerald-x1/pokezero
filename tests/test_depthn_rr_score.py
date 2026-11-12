@@ -1331,5 +1331,42 @@ class ExternalPriorTests(unittest.TestCase):
         self.assertEqual((set(found.values()), missing), ({0}, []))
 
 
+class AbilityGuardChoiceTests(unittest.TestCase):
+    """The ability guard (the record's `ability`) guards every operator as live: its (b) alone, the reply arm's ability_b, its (c)
+    and the reply arm's (c) lanes, in every scope."""
+    def played(self, record, **kw):
+        return S.guard_choices(dict(averaging=0, greedy=1), 1, None, record, **kw)
+
+    def test_the_ability_guard_sends_operators_to_greedy(self):
+        clear = guard_record()
+        self.assertEqual(self.played(clear)[0]['averaging'], 0)
+        b_only = dict(guard_record(), ability=dict(b=True, own_guarded_lanes=[None] * 4, arms={}))
+        self.assertEqual(self.played(b_only), (dict(averaging=1, greedy=1), dict(averaging=['UNREPRESENTED_EFFECT'], greedy=None)))
+        reply = dict(guard_record(), union=dict(reply=dict(b=False, ability_b=True)))
+        self.assertEqual(self.played(reply)[0]['averaging'], 1)
+        c_only = dict(guard_record(), ability=dict(b=False, own_guarded_lanes=[['CONTACT'], None, None, None], arms=dict(CONTACT=['choice'])))
+        self.assertEqual(self.played(c_only)[0]['averaging'], 1)   # (c) on lane 0
+        self.assertEqual(self.played(dict(c_only, ability=dict(c_only['ability'], arms=dict(CONTACT=[]))))[0]['averaging'], 0)   # its choice arm off
+        reply_c = dict(guard_record(), union=dict(reply=dict(b=False, ability_b=False, ability_own_lanes=[['PINCH'], None, None, None])))
+        self.assertEqual(self.played(reply_c)[0]['averaging'], 1)   # the reply arm's (c): the root PINCH rule read the reply prior
+        for scope_b in (False, True):self.assertEqual(self.played(b_only, b=scope_b)[0]['averaging'], 1)   # a reach scope's (b) override
+        facts = S.guard_facts(dict(b_only, rule=S.effect_guard.RULE, any_cell_b=False, any_cell_reasons=[], reach=None,
+                                   ability=dict(b_only['ability'], reasons=[dict(source='ability_turn1', family=['WG'])])), dict(averaging=0, greedy=1))
+        self.assertEqual((facts['b'], facts['move_b'], facts['ability_b'], facts['ability_families']), (True, False, True, ['WG']))
+        rec = lambda guard: dict(ordinal=0, half='even', kind='move', observed=True, fp_requested=True, guard=guard,
+            raw_ops={n: (0, (.1, .1), '<1%') for n in S.SETTINGS}, ops={n: (0, (.1, .1), '<1%') for n in S.SETTINGS},
+            reach_ops=dict(any_cell={n: (0, (.1, .1), '<1%') for n in S.SETTINGS}, lower={n: (0, (.1, .1), '<1%') for n in S.SETTINGS},
+                           upper={n: (0, (.1, .1), '<1%') for n in S.SETTINGS}))
+        clear = S.guard_facts(dict(guard_record(), ability=dict(b=False, own_guarded_lanes=[None] * 4, arms={}, reasons=[])), dict(averaging=0))
+        u = S.guard_report([rec(facts), rec(clear)], S.SETTINGS)['union']
+        self.assertEqual((u['ability_only'], u['unavailable_or_error'], u['total']), (1, 0, 1))   # its own part, not an error
+        reply_held = S.guard_facts(dict(guard_record(), ability=dict(b=False, own_guarded_lanes=[None] * 4, arms={}, reasons=[]),
+            union=dict(reply=dict(b=False, ability_b=True, ability_own_lanes=[None, None, ['PINCH'], None]))), dict(averaging=2, worst=0))
+        self.assertEqual((reply_held['reply_ability_b'], reply_held['c']), (True, dict(averaging=True, worst=False)))   # the reply arm's (c) lanes
+        a = S.any_cell_report([dict(rec(facts), reach_ops=dict(any_cell={n: (0, (.1, .1), '<1%') for n in S.SETTINGS})),
+                               dict(rec(reply_held), reach_ops=dict(any_cell={n: (0, (.1, .1), '<1%') for n in S.SETTINGS}))], S.SETTINGS)
+        self.assertEqual((a['roots'], a['ability_only'], a['unguarded']['roots']), (2, 2, 0))   # held by either arm's ability (b), never clean
+
+
 if __name__ == '__main__':
     unittest.main()

@@ -641,14 +641,19 @@ def guard_choices(choices, greedy, own_moves, record, b=None):
     root, or (c) on this operator's own choice) trips. Returns ({name: played choice}, {name: [causes] or None}); greedy is
     never guarded; `record` None (a row without the guard) applies the recharge guard alone. `b` replaces the record's root-level
     (b) (the reach scopes: turn-1 (b) or the reach's turn 2); (c) stays the record's. A union record (a br_fp row, depthn_guard_inputs
-    reply_logits) adds its reply arm's (b) to either, as the live actor's fallback does (only (b) differs between the arms)."""
+    reply_logits) adds its reply arm's (b) to either, as the live actor's fallback does (the move guard's (c) is the same in both arms). The
+    ability guard's (b) (the record's `ability`, and the reply arm's ability_b) guards the root in every scope, as live; its (c) is
+    the record's (trips) or the reply arm's (ability_own_lanes: the ability's (c) can differ between the arms)."""
     played, causes = {}, {}
-    reply_b = bool(((record or {}).get('union') or {}).get('reply', {}).get('b'))
+    reply = ((record or {}).get('union') or {}).get('reply', {})
+    reply_b = bool(reply.get('b')) or bool(reply.get('ability_b'));ability_b = bool(((record or {}).get('ability') or {}).get('b'))
+    reply_c = reply.get('ability_own_lanes') or [None] * 4   # the reply arm's ability (c) lanes: its root PINCH rule reads the reply prior
     for name, choice in choices.items():
         if name == 'greedy' or choice is None:played[name], causes[name] = choice, None;continue
         why = []
         if effect_guard.recharge_guarded(own_moves, choice, greedy):why.append(OWN_RECHARGE)
-        if record is not None and ((record['b'] if b is None else b) or reply_b or effect_guard.trips(record, choice)['c']):why.append(UNREPRESENTED)
+        if record is not None and ((record['b'] if b is None else b) or reply_b or ability_b or effect_guard.trips(record, choice)['c']
+                                   or (type(choice) is int and 0 <= choice < 4 and bool(reply_c[choice]))):why.append(UNREPRESENTED)
         played[name], causes[name] = (greedy if why else choice), (why or None)
     return played, causes
 
@@ -824,14 +829,20 @@ def guard_facts(record, raw):
     any_b = bool(record['any_cell_b']) if live_reach else bool(record['b'])
     # a union record (br_fp, depthn_guard_inputs reply_logits): the reply arm's (b) guards the root as the live fallback does; the
     # record's own fields (b_turn1, b_turn2, tiers, m_*) stay the champion's, and union_only marks a root guarded by the reply arm alone
-    reply_b = bool((((record.get('union') or {}).get('reply')) or {}).get('b'));champion_b = bool(record['b'])
+    reply = ((record.get('union') or {}).get('reply')) or {};reply_b = bool(reply.get('b')) or bool(reply.get('ability_b'))
+    ability_b = bool((record.get('ability') or {}).get('b'));champion_b = bool(record['b']) or ability_b
+    reply_c = reply.get('ability_own_lanes') or [None] * 4
     return dict(rule=record.get('rule', 'any_cell'), b=champion_b or reply_b, champion_b=champion_b, union_only=reply_b and not champion_b,
+                **({'move_b': bool(record['b']), 'ability_b': ability_b, 'reply_ability_b': bool(reply.get('ability_b')),
+                    'ability_families': sorted({f for x in record['ability'].get('reasons') or ()
+                    if x.get('source') != 'ability_choice' for f in x.get('family') or ()})} if isinstance(record.get('ability'), dict) else {}),
                 b_turn1=bool(record.get('b_turn1')), b_turn2=bool(record.get('b_turn2')),
                 turn2=turn2, tiers_turn1=tiers('turn1'), sides_turn1=sides1, tiers_turn2=tiers2, tier_masses_turn2=masses2, unavailable=unavailable,
                 m_own=record.get('m_own'), m_opp=record.get('m_opp'), arms=record.get('arms'),
                 any_cell=dict(b=any_b, turn2=any_turn2, unavailable=any(r.get('source') in ('turn2_unavailable', 'guard_error') for r in list(any_reasons) + list(reasons))),
                 a=bool(record.get('a')), tier_b_legal=bool(record.get('tier_b_legal')),
-                c={name: effect_guard.trips(record, choice)['c'] for name, choice in raw.items() if choice is not None})
+                c={name: effect_guard.trips(record, choice)['c'] or (type(choice) is int and 0 <= choice < 4 and bool(reply_c[choice]))
+                   for name, choice in raw.items() if choice is not None})
 
 
 # ---- statistics ----
@@ -905,6 +916,7 @@ def reach_report(have, settings):
     roots under its own guards, and a cross-tab against the any-cell scope."""
     have = [r for r in have if r['guard'].get('reach') is not None]   # rows scored here (score_decision's reach)
     n = len(have);share = lambda k: k / n if n else None;g = lambda r: r['guard']
+    by_ability = lambda r: bool(g(r).get('ability_b')) or bool(g(r).get('reply_ability_b'));flagged = any('ability_b' in g(r) for r in have)
     out = dict(rows=n, threshold=effect_guard.THRESHOLD, ambiguous=sum(g(r)['reach']['tripped'] is None for r in have),
                exact_rows=sum(bool(g(r)['reach']['exact']) for r in have), unavailable=sum(bool(g(r)['reach']['unavailable']) for r in have))
     for scope in ('lower', 'upper'):
@@ -914,11 +926,16 @@ def reach_report(have, settings):
             v[t] > 0 and (g(r)['reach'][f'm_{side}_{scope}'] or 0.) >= effect_guard.THRESHOLD for side, v in g(r)['reach']['tiers'][scope].items()))
         side = lambda r, s: (s in g(r)['sides_turn1']) or g(r)['reach']['unavailable'] or (
             (g(r)['reach'][f'm_{s}_{scope}'] or 0.) >= effect_guard.THRESHOLD)
-        guarded = [r for r in have if g(r)['scopes'][scope]];clean = [r for r in have if not g(r)['scopes'][scope]]
+        # the scope flags are the move guard's (depthn_guard_equivalence reads them); a root the ability guard's (b) guards (either
+        # arm) plays greedy in every scope, so it is guarded here too, never in the clean (unguarded) table: its own part
+        held = lambda r: g(r)['scopes'][scope] or by_ability(r)
+        guarded = [r for r in have if held(r)];clean = [r for r in have if not held(r)]
         t1 = sum(g(r)['b_turn1'] for r in have);added = sum(reach2(r) and not g(r)['b_turn1'] for r in have)
         cross = collections.Counter((('any_cell' if g(r)['any_cell']['b'] else 'any_cell_clear'), ('reach' if g(r)['scopes'][scope] else 'reach_clear'))
                                     for r in have)
-        out[scope] = dict(roots=len(guarded), share=share(len(guarded)), turn1=t1, turn1_share=share(t1), turn2_added=added, turn2_added_share=share(added),
+        extra = {} if not flagged else dict(ability_only=sum(by_ability(r) and not g(r)['scopes'][scope] for r in have))
+        if extra:extra['ability_only_share'] = share(extra['ability_only'])
+        out[scope] = dict(roots=len(guarded), share=share(len(guarded)), turn1=t1, turn1_share=share(t1), turn2_added=added, turn2_added_share=share(added), **extra,
             tiers={t: dict(roots=sum(tier(r, t) for r in have), share=share(sum(tier(r, t) for r in have))) for t in ('A', 'C')},
             sides={s: dict(roots=sum(side(r, s) for r in have), share=share(sum(side(r, s) for r in have))) for s in ('own', 'opp')},
             unguarded=dict(roots=len(clean), table=operator_table([dict(r, ops=r['reach_ops'][scope]) for r in clean], settings)),
@@ -931,12 +948,15 @@ def any_cell_report(have, settings):
     any expanded cell, (c) per operator. Its guarded share (union, turn 1 vs any-cell-turn-2-added, unavailable or error), RR
     on its unguarded roots under its own guards, and a cross-tab against the live scope (the record's rule)."""
     have = [r for r in have if 'any_cell' in (r.get('reach_ops') or {})];n = len(have);share = lambda k: k / n if n else None;g = lambda r: r['guard']
-    guarded = [r for r in have if g(r)['any_cell']['b']];clean = [r for r in have if not g(r)['any_cell']['b']]
+    by_ability = lambda r: bool(g(r).get('ability_b')) or bool(g(r).get('reply_ability_b'))
+    held = lambda r: g(r)['any_cell']['b'] or by_ability(r)   # as the reach scopes: the ability guard (either arm) holds in every scope
+    flagged = {} if not any('ability_b' in g(r) for r in have) else dict(ability_only=sum(by_ability(r) and not g(r)['any_cell']['b'] for r in have))
+    guarded = [r for r in have if held(r)];clean = [r for r in have if not held(r)]
     t1 = sum(g(r)['b_turn1'] for r in have);added = sum(g(r)['any_cell']['turn2'] and not g(r)['b_turn1'] for r in have)
     error = sum(g(r)['any_cell']['b'] and not g(r)['b_turn1'] and not g(r)['any_cell']['turn2'] for r in have)
     cross = collections.Counter((('any_cell' if g(r)['any_cell']['b'] else 'any_cell_clear'), ('live' if g(r)['b'] else 'live_clear')) for r in have)
     return dict(rows=n, rules=dict(collections.Counter(g(r)['rule'] for r in have)), roots=len(guarded), share=share(len(guarded)),
-        turn1=t1, turn1_share=share(t1), turn2_added=added, turn2_added_share=share(added), unavailable_or_error=error,
+        turn1=t1, turn1_share=share(t1), turn2_added=added, turn2_added_share=share(added), unavailable_or_error=error, **flagged,
         unguarded=dict(roots=len(clean), table=operator_table([dict(r, ops=r['reach_ops']['any_cell']) for r in clean], settings)),
         cross_tab={f'{a}/{b}': cross[(a, b)] for a in ('any_cell', 'any_cell_clear') for b in ('live', 'live_clear')})
 
@@ -955,10 +975,14 @@ def guard_report(records, settings, opponent_recharge=0):
     union = part(lambda r: g(r)['b_turn1'], lambda r: g(r).get('turn2', g(r)['b_turn2']))
     # (b) without a turn-1 or a priced turn-2 reason: an unavailable turn-2 capture or an error record (fail closed): its own part;
     # a root guarded by a union record's reply arm alone (br_fp) is its own part too
-    error = sum(g(r)['b'] and not g(r).get('union_only') and not g(r)['b_turn1'] and not g(r).get('turn2', g(r)['b_turn2']) for r in have)
-    reply_only = sum(bool(g(r).get('union_only')) for r in have)
-    total = union['total'] + error + reply_only
+    # a root guarded by the ability guard's (b) alone (the move guard clear): its own part
+    ability_only = lambda r: bool(g(r).get('ability_b')) and not g(r).get('move_b', True)
+    error = sum(g(r)['b'] and not g(r).get('union_only') and not ability_only(r) and not g(r)['b_turn1'] and not g(r).get('turn2', g(r)['b_turn2'])
+                for r in have)
+    reply_only = sum(bool(g(r).get('union_only')) for r in have);ability = sum(ability_only(r) for r in have)
+    total = union['total'] + error + reply_only + ability
     union.update(unavailable_or_error=error, unavailable_or_error_share=share(error), reply_arm_only=reply_only, reply_arm_only_share=share(reply_only),
+                 **({'ability_only': ability, 'ability_only_share': share(ability)} if any('ability_b' in g(r) for r in have) else {}),
                  total=total, share=share(total))
     c = {name: dict(c_only=sum(g(r)['c'].get(name, False) and not g(r)['b'] for r in have),
                     union=sum(g(r)['b'] or g(r)['c'].get(name, False) for r in have)) for name in settings}
@@ -1373,6 +1397,7 @@ def guard_markdown(guard, settings):
     out += [f"| {k} | {v['turn1']} ({_pct(v['turn1_share'])}) | {v['turn2_added']} ({_pct(v['turn2_added_share'])}) | {_pct(v['share'])} |" for k, v in t.items()]
     out += [f"| unavailable or error | - | - | {u['unavailable_or_error']} ({_pct(u['unavailable_or_error_share'])}) |",
             f"| reply arm only (br_fp union guard) | - | - | {u.get('reply_arm_only', 0)} ({_pct(u.get('reply_arm_only_share'))}) |",
+            *([f"| ability guard only (--ability-guard) | - | - | {u['ability_only']} ({_pct(u['ability_only_share'])}) |"] if 'ability_only' in u else []),
             f"| union | {u['turn1']} ({_pct(u['turn1_share'])}) | {u['turn2_added']} ({_pct(u['turn2_added_share'])}) | {_pct(u['share'])} |", '',
             '| setting | (c) only roots | (b) or (c) share |', '|---|---|---|']
     out += [f"| {name} | {guard['c'][name]['c_only']} | {_pct(guard['c'][name]['union_share'])} |" for name in settings if name in guard['c']]
