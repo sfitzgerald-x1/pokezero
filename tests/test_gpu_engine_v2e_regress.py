@@ -1146,5 +1146,176 @@ class M2PlantedBugTests(unittest.TestCase):
         self.assertTrue({'state.partial_trap_counter@target', 'state.hp@target'} <= set(report['by_effect']['wrap']['unexpected_fields']))
 
 
+WH_VOCAB = dict(moves=['_none', 'tackle', 'superpower', 'facade', 'struggle'], abilities=['_none', 'pressure'],
+                items=['_none', 'leftovers', 'whiteherb'])
+WH_TACKLE, WH_SUPERPOWER, WH_FACADE = 1, 2, 3
+WH_LEFTOVERS, WH_HERB = 1, 2
+WH_LANES = 8           # 0 the holder's Superpower drops (restored); 1 it is blocked (no drop); 2 +2 Atk then Superpower; 3 a paralysed
+                       # Facade (doubled); 4 a healthy Facade into a paralysed foe; 5 the foe holds the herb at -1 Atk (restored at
+                       # the user's AfterMove); 6 a Leftovers holder at -1 Atk; 7 done
+
+
+class TrackersWH(NamedTuple):
+    physical_to_public: object
+    active_slot: object
+    public_volatiles: object
+    mon_features: object
+    shown_item: object
+    item_removed: object
+    boosts: object
+
+
+def wh_trackers(lanes):
+    import jax.numpy as j
+    from gpu_engine.public_active import NAMES
+    z = j.zeros((lanes, 2, 6), j.int32)
+    return TrackersWH(physical_to_public=j.broadcast_to(j.arange(6, dtype=j.int32), (lanes, 2, 6)), active_slot=j.zeros((lanes, 2), j.int32),
+        public_volatiles=j.zeros((lanes, 2, 6, len(NAMES)), j.bool_),
+        mon_features={'meanlook_trap': z, 'item_swapped': z, 'choice_public': z, 'choice_locked': z},
+        shown_item=z, item_removed=j.zeros((lanes, 2, 6), j.bool_), boosts=j.zeros((lanes, 2, 6, 7), j.int32))
+
+
+def wh_state(seed):
+    import jax.numpy as j
+    s = lanes_state(WH_LANES, seed)
+    moves = np.full((WH_LANES, 2, 6, 4), WH_TACKLE, np.int32)
+    moves[:, 0, 0, 0] = [WH_SUPERPOWER, WH_SUPERPOWER, WH_SUPERPOWER, WH_FACADE, WH_FACADE, WH_TACKLE, WH_TACKLE, WH_TACKLE]
+    item = np.zeros((WH_LANES, 2, 6), np.int32);item[[0, 1, 2], 0, 0] = WH_HERB;item[5, 1, 0] = WH_HERB;item[6, 0, 0] = WH_LEFTOVERS
+    boosts = np.zeros((WH_LANES, 2, 6, 7), np.int32);boosts[2, 0, 0, 0] = 2;boosts[5, 1, 0, 0] = -1;boosts[6, 0, 0, 0] = -1
+    status = np.zeros((WH_LANES, 2, 6), np.int32);status[3, 0, 0] = 1;status[4, 1, 0] = 1
+    return s._replace(moves=j.asarray(moves), choice_move=s.choice_move.at[:, 1, 0].set(0), item=j.asarray(item), boosts=j.asarray(boosts),
+                      status=j.asarray(status))
+
+
+def wh_step(state, actions, t, *, wh=True, facade=True, no_negative=False, no_item=False, positive=False, keep_item=False,
+            wrong_mon=False, no_producer=False, wide=False, facade_none=False, facade_wide=False, facade_foe=False):
+    """A stand-in engine with WH's writes: side 0's move line (the move hook, where Facade's user status is read), Superpower's
+    -1/-1 (both trees; not on lane 1, blocked), Facade's damage (20 doubled, else 10, to side 1's active), then White Herb at
+    AfterMove on each side's active with its device hook (the consumption reveal and the holder's public stages). The base
+    pass is wh=False, facade=False. Keyword flags plant the bugs: a restore without a negative stage or without the herb, a
+    positive stage reset too, the item kept, the restore on the bench (party 1), the device producer removed, an extra field
+    written by the White Herb call; Facade doubling with no status, also lowering the foe's Def, or keyed on the foe's status."""
+    import jax.numpy as j
+    from types import SimpleNamespace
+    from gpu_engine import engine_device_public_hooks as hooks
+    lanes = state.hp.shape[0];rows = j.arange(lanes);s = state;live = ~s.done;z = j.zeros(lanes, j.int32)
+    move = s.moves[:, 0, 0, 0]
+    hooks.move(None, s, z, move, live)
+    drop = live & (move == WH_SUPERPOWER) & (rows != 1)
+    s = s._replace(boosts=s.boosts.at[:, 0, 0, :2].add(j.where(drop[:, None], -1, 0)))
+    key = s.status[:, 1, 0] if facade_foe else s.status[:, 0, 0]
+    used_facade = live & (move == WH_FACADE)
+    doubled = used_facade & ((key != 5) if facade_none else (key >= 1) & (key <= 4)) & facade
+    s = s._replace(hp=s.hp.at[:, 1, 0].add(-j.where(used_facade, j.where(doubled, 20, 10), 0)))
+    if facade_wide:s = s._replace(boosts=s.boosts.at[:, 1, 0, 1].add(j.where(doubled, -1, 0)))
+    v = t
+    for side in (0, 1):
+        if not wh:break
+        before = s;item = s.item[:, side, 0];b = s.boosts[:, side, 0]
+        used = live & (s.hp[:, side, 0] > 0) & (j.ones_like(live) if no_item else item == WH_HERB) & (j.ones_like(live) if no_negative else (b < 0).any(-1))
+        restored = j.where(used[:, None], j.zeros_like(b) if positive else j.maximum(b, 0), b)
+        mon = 1 if wrong_mon else 0
+        s = s._replace(boosts=s.boosts.at[:, side, mon].set(j.where(used[:, None], restored, s.boosts[:, side, mon])),
+                       item=s.item.at[:, side, mon].set(j.where(used & (not keep_item), 0, s.item[:, side, mon])))
+        if wide:s = s._replace(status_counter=s.status_counter.at[:, side, 0].add(used.astype(j.int32)))
+        if no_producer:continue
+        v = v._replace(shown_item=v.shown_item.at[:, side, 0].set(j.where(used, WH_HERB, v.shown_item[:, side, 0])),
+                       item_removed=v.item_removed.at[:, side, 0].set(v.item_removed[:, side, 0] | used),
+                       boosts=v.boosts.at[:, side, 0].set(j.where(used[:, None], s.boosts[:, side, 0], v.boosts[:, side, 0])))
+        hooks.white_herb(SimpleNamespace(trackers=v), before, s, side, used)
+    # The step's closing observe copies both actives' stages into the device (both trees).
+    v = v._replace(boosts=v.boosts.at[:, 0, 0].set(s.boosts[:, 0, 0]).at[:, 1, 0].set(s.boosts[:, 1, 0]))
+    return result(s._replace(turn=s.turn + 1), v)
+
+
+class WHPlantedBugTests(unittest.TestCase):
+    """WH: a restore without a negative stage or without the herb, a positive stage reset, the item kept, the restore on the
+    wrong mon, the device producer removed and a wrong field must each fail the gate, as must Facade doubling on the wrong
+    condition, writing a wrong field or keyed on the wrong mon; the correct stand-in passes by wh_rule's post-state
+    witnesses and Facade's recorded line status (the standing planted-mutant gate)."""
+
+    @classmethod
+    def setUpClass(cls):
+        import jax
+        import jax.numpy as j
+        from gpu_engine import engine_device_public_hooks as hooks
+        from gpu_engine.v2e_capture import leaf_paths
+        cls.tmp = Path(tempfile.mkdtemp(prefix='v2e-regress-wh-test-'))
+        shards = cls.tmp / 'cap' / 'shards';shards.mkdir(parents=True)
+        first = lambda tree: jax.tree.map(lambda x: x[:1], tree)
+        cls.template = (first(wh_state(0)), j.zeros((1, 2), j.int32), first(wh_trackers(WH_LANES)))
+        for k in range(2):
+            tree = (wh_state(k), j.zeros((WH_LANES, 2), j.int32), wh_trackers(WH_LANES))
+            np.savez_compressed(shards / f'shard-{k:06d}.npz', tick=np.int64(k), level=np.int64(0),
+                **{f'l{i:03d}': np.asarray(x) for i, x in enumerate(jax.tree.leaves(tree))})
+        (cls.tmp / 'cap' / 'capture.json').write_text(json.dumps(dict(shards=2, paths=leaf_paths(cls.template))))
+        cls.context = dict(prepared=SimpleNamespace(engine_tables=SimpleNamespace(sleep_talk=SimpleNamespace(
+            callable=np.array([False, True, True, True, False])))), pool=SimpleNamespace(metadata=lambda: dict(vocabulary=WH_VOCAB)))
+        cls.stubs = [mock.patch.object(hooks, 'move', lambda c, *rest, **kw: c),
+                     mock.patch.object(hooks, 'white_herb', lambda c, before, after, side, use: c)]
+        for stub in cls.stubs:stub.start()
+        from gpu_engine import v2e_regress
+        cls.base = cls.tmp / 'base'
+        code = v2e_regress.base_pass(cls.args(out=cls.base, pad_lanes=WH_LANES),
+            step_override=clocked(lambda s, a, t: wh_step(s, a, t, wh=False, facade=False), cls.ran), prepared=(cls.context, cls.template))
+        assert code == 0
+
+    @classmethod
+    def tearDownClass(cls):
+        for stub in cls.stubs:stub.stop()
+        shutil.rmtree(cls.tmp)
+
+    ran = staticmethod(M1PlantedBugTests.ran)
+    args = classmethod(M1PlantedBugTests.args.__func__)
+
+    def patched(self, name, **kind):
+        from gpu_engine import v2e_regress
+        out = self.tmp / name
+        code = v2e_regress.patched_pass(self.args(out=out, base=str(self.base), pr='WH', faint_clear=False),
+            step_override=clocked(lambda s, a, t: wh_step(s, a, t, **kind), self.ran), prepared=(self.context, self.template))
+        return code, json.loads((out / 'report.json').read_text()), [json.loads(x) for x in (out / 'changed.jsonl').read_text().splitlines()]
+
+    def bad_lanes(self, listing):
+        return {x['lane'] for x in listing if x['kind'] in ('unexpected', 'uninvolved')}
+
+    def test_correct_stand_in_passes_by_post_state_witnesses(self):
+        code, report, listing = self.patched('correct')
+        c = report['counts']
+        self.assertEqual(code, 0, c);self.assertEqual((c['changed_but_uninvolved'], c['changed_involved_unexpected_fields']), (0, 0))
+        self.assertEqual(c['wh_leaves'], 6);self.assertEqual(c['wh_bad'], 0)                    # lanes 0, 2, 5 x 2 shards
+        kinds = {x['lane']: x['kind'] for x in listing if x['shard'] == 'shard-000000.npz'}
+        self.assertEqual(kinds, {0: 'rule', 2: 'rule', 3: 'involved', 5: 'rule'})
+        rule = {x['lane']: sorted(x['wh_rule']) for x in listing if x['shard'] == 'shard-000000.npz'}
+        self.assertEqual(rule[0], sorted(['state.boosts@0', 'state.item@0', 'trackers.boosts@0', 'trackers.item_removed@0',
+                                          'trackers.shown_item@0']))
+        self.assertEqual(rule[5], [r.replace('@0', '@1') for r in rule[0]])
+
+    def assert_bad(self, kind, lanes):
+        code, report, listing = self.patched(kind[0], **kind[1])
+        self.assertEqual(code, 1, report['counts']);self.assertEqual(self.bad_lanes(listing), lanes)
+        return report, listing
+
+    def test_white_herb_mutants_are_flagged(self):
+        """A restore without a negative stage (lane 1) or without the herb (lane 6, Leftovers eaten), a positive reset
+        (lane 2), the item kept, the restore on the bench and an extra field (lanes 0, 2, 5) are malformed recorded calls
+        (wh_bad); the producer removed leaves the restores without evidence: White Herb is not involved there."""
+        for name, kind, lanes in (('no_negative', dict(no_negative=True), {1}), ('no_item', dict(no_item=True), {6}),
+                                  ('positive', dict(positive=True), {2}), ('keep_item', dict(keep_item=True), {0, 2, 5}),
+                                  ('wrong_mon', dict(wrong_mon=True), {0, 2, 5}), ('wide', dict(wide=True), {0, 2, 5})):
+            report, listing = self.assert_bad((name, kind), lanes)
+            self.assertGreater(report['counts']['wh_bad'], 0, name)
+        report, listing = self.assert_bad(('no_producer', dict(no_producer=True)), {0, 2, 5})
+        self.assertEqual(report['counts']['changed_but_uninvolved'], 6);self.assertEqual(report['counts']['wh_dropped'], 6)
+
+    def test_facade_mutants_are_flagged(self):
+        """Facade doubling with no status (lane 4) or keyed on the foe's status (lane 4) keeps no recorded doubled line, so
+        Facade is not involved there; also lowering the foe's Def (lane 3) is a field Facade's allowance never covers."""
+        report, _ = self.assert_bad(('facade_none', dict(facade_none=True)), {4})
+        self.assertEqual(report['counts']['facade_dropped'], 2)
+        self.assert_bad(('facade_foe', dict(facade_foe=True)), {4})
+        report, _ = self.assert_bad(('facade_wide', dict(facade_wide=True)), {3})
+        self.assertIn('state.boosts@target', report['by_effect']['facade']['unexpected_fields'])
+
+
 if __name__ == '__main__':
     unittest.main()

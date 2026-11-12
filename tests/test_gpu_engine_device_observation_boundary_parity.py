@@ -531,6 +531,24 @@ console.log(JSON.stringify(orders));"""
         cleared=project();self.compare_active(c.trackers,cleared,a)
         self.assertFalse(bool(cleared.numeric[0,1,cols].any()))
 
+    def test_white_herb_ends_the_item_flags_like_b2_item_end(self):
+        """WH's white_herb producer against B2's ITEM_END (public_active.py): a Tricked Choice Band's flags, then a bare
+        -enditem (White Herb's useItem; the item name does not enter public_active) clears item_swapped, choice_public and
+        choice_locked; the bag is untouched."""
+        a,catalog,fact,project=self.b2_active()
+        state=self.state();c=h.initialize(state,self.tables.belief);yes=j.ones(2,bool)
+        fact(a.ARRIVE,0);fact(a.ARRIVE,1)
+        self.b2_lines(a,catalog,fact,'|-item|p2a: Absol|Choice Band|[from] move: Trick','|move|p2a: Absol|Tackle|p1a: Snorlax')
+        for name in ('item_swapped','choice_public','choice_locked'):
+            h.feature(c,1,state.active[:,1],name,j.ones(2,j.int32),yes)
+        self.compare_active(c.trackers,project(),a)
+        before=state._replace(item=state.item.at[:,1,0].set(2),boosts=state.boosts.at[:,1,0,0].set(-1))
+        after=before._replace(item=before.item.at[:,1,0].set(0),boosts=before.boosts.at[:,1,0,0].set(0))
+        h.white_herb(c,before,after,1,yes)
+        self.b2_lines(a,catalog,fact,'|-enditem|p2a: Absol|White Herb','|-clearnegativeboost|p2a: Absol|[silent]')
+        cleared=project();self.compare_active(c.trackers,cleared,a)
+        self.assertFalse(bool(cleared.numeric[0,1,j.asarray(a.NUMERIC_COLUMNS)].any()))
+
     def test_trick_flags_follow_b2_item_set_item_end_and_choice_move(self):
         """M1's trick hook and the move hook's CHOICE_MOVE against B2's public_active fold of the same lines: -item is
         ITEM_SET (item_swapped; choice_public for a Choice item; choice_locked reset), -enditem [silent] is ITEM_END, and
@@ -714,6 +732,31 @@ class KnockOffLedgerBoundaryParityTests(unittest.TestCase):
             np.testing.assert_allclose(device['credits'][observer],knocked['credits'][observer],atol=1e-7)
             np.testing.assert_allclose(quiet['credits'][observer],plain['credits'][observer],atol=1e-7)
         np.testing.assert_allclose(knocked['credits'][1],[1/6,0.],atol=1e-7);np.testing.assert_allclose(knocked['credits'][0],[0.,1/6],atol=1e-7)
+
+    def test_white_herb_consumption_matches_b2_consume_and_clear_negative(self):
+        """WH's white_herb producer against B2's own fold of -enditem|X|White Herb and -clearnegativeboost|X|[silent]:
+        public_items CONSUME (the item revealed and removed, no mutation, no original: the ledger stays) and public_mon_state
+        CLEAR_NEGATIVE on the active's stages (only the negative ones). B2's projection of a bare -enditem does not depend
+        on the item's name (public_items.project_line: CONSUME), so the fixture's catalog item stands in for White Herb."""
+        prefix=[*self.f.prefix,'|turn|1','|-boost|p2a: Absol|spa|1','|-unboost|p2a: Absol|atk|1','|-unboost|p2a: Absol|def|2']
+        result,_=self.f.run_lines(prefix+['|-enditem|p2a: Absol|Leftovers','|-clearnegativeboost|p2a: Absol|[silent]'])
+        items=result.context.items
+        b2=dict(shown=self.f.item_catalog.names[int(items.revealed[0,1,0])],removed=bool(items.removed[0,1,0]),
+            mutated=bool(items.mutated[0,1,0]),original=int(items.original[0,1,0]),boosts=np.asarray(result.mon_state.boosts[0,1]).tolist())
+        self.assertEqual(b2,dict(shown='leftovers',removed=True,mutated=False,original=0,boosts=[0,0,1,0,0,0,0]))
+        s=empty_state(1)
+        s=s._replace(species=s.species.at[0,0,0].set(1).at[0,1,0].set(2),level=j.full_like(s.level,80),hp=j.full_like(s.hp,100),
+            max_hp=j.full_like(s.max_hp,100),item=s.item.at[0,1,0].set(7),done=j.zeros(1,bool))
+        c=h.initialize(s,None);yes=j.ones(1,bool)
+        dropped=s._replace(boosts=s.boosts.at[0,1,0].set(j.asarray([-1,-2,1,0,0,0,0])))
+        h.observe(c,dropped,yes)
+        used=dropped._replace(item=dropped.item.at[0,1,0].set(0),boosts=dropped.boosts.at[0,1,0].set(j.asarray([0,0,1,0,0,0,0])))
+        h.white_herb(c,dropped,used,1,yes)
+        slot=int(c.trackers.physical_to_public[0,1,0])
+        device=dict(shown=int(c.trackers.shown_item[0,1,slot]),removed=bool(c.trackers.item_removed[0,1,slot]),
+            mutated=bool(c.trackers.mon_features['item_mutated'][0,1,slot]),original=int(c.trackers.mon_features['item_original'][0,1,slot]),
+            boosts=np.asarray(c.trackers.boosts[0,1,slot]).tolist())
+        self.assertEqual(device,dict(shown=7,removed=b2['removed'],mutated=b2['mutated'],original=b2['original'],boosts=b2['boosts']))
 
     def test_knock_off_item_ledger_matches_b2_mutated_and_original(self):
         """M1 review: the device's per-mon ledger written by knock_off (item_mutated, item_original) against B2's
