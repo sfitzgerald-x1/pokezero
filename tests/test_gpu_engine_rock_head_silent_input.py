@@ -64,9 +64,7 @@ class RockHeadSilentInputTests(unittest.TestCase):
   before=dump_default_program(ast.parse(subprocess.check_output(['git','show',BASE+':gpu_engine/transition.py'],text=True)))
   historical=ast.parse(subprocess.check_output(['git','show','c979e060:gpu_engine/transition.py'],text=True))
   self.assertEqual(before,dump_default_program(historical));assert_hp_rng_mutations_detected(self,historical,before)
-  current=ast.parse(Path('gpu_engine/transition.py').read_text())
-  integrated=ast.parse(subprocess.check_output(['git','show','b8092a85:gpu_engine/transition.py'],text=True))
-  self.assertEqual(ast.dump(current),ast.dump(integrated));assert_hp_rng_mutations_detected(self,current,dump_default_program(integrated))
+  # transition.py is certified against CURRENT_TRANSITION (full AST plus mutations) by terminal_closeout and seismic_toss_components.
   for modules in(('benchmark_retained_games','engine_lifecycle_event_device','engine_full_v4_event_device'),('engine_full_v4_event_device','engine_lifecycle_event_device','benchmark_retained_games')):subprocess.run([__import__('sys').executable,'-c',';'.join('import gpu_engine.'+n for n in modules)],check=True,capture_output=True)
  def test_both_full_exact_original_zero_recoil_words_and_stage3(self):
   b=2;s,c,consumers,_,t,p=self.pending(b,consume=True);w=self.write(p);out=recoil.record_device(t,p,w);rows=j.arange(b);cap=p.captured

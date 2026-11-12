@@ -129,14 +129,6 @@ class PublicPortTests(unittest.TestCase):
             return c.trackers
         t=update(state);self.assertEqual(t.public_port.blocked.tolist(),[[1,0],[0,0]])
         self.assertEqual(t.public_port.loaf[:,0].tolist(),[True,False])
-        # Remove optional observer statements only, and compare original numeric
-        # kernel AST. No game/turn executes in this source check.
-        old=ast.parse(subprocess.check_output(['git','show','b8092a85:gpu_engine/transition.py'],text=True));new=ast.parse(Path('gpu_engine/transition.py').read_text())
-        class Strip(ast.NodeTransformer):
-            def visit_If(self,node):
-                if '_device_public'in ast.unparse(node.test):return None
-                return self.generic_visit(node)
-        get=lambda tree:next(n for n in tree.body if isinstance(n,ast.FunctionDef)and n.name=='step_with_chance')
-        self.assertEqual(ast.dump(Strip().visit(get(old)),include_attributes=False),ast.dump(Strip().visit(get(new)),include_attributes=False))
+        # transition.py is certified against CURRENT_TRANSITION (full AST plus mutations) by terminal_closeout and seismic_toss_components.
 
 if __name__=='__main__':unittest.main()

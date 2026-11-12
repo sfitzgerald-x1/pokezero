@@ -3,7 +3,7 @@
 The GPU device engine keys every move effect by name and reads no effect fields (generate_teams.cjs:75-81); the static
 table of its handling of the Gen 3 random-battle pool is reports/gpu-engine-move-effect-table-20261109.md. GUARDED holds
 the moves whose missing effect carries over into the price (the lead's decision):
-- tier A, unconditional: transform, yawn, wrap, perishsong, superpower;
+- tier A, unconditional: transform, superpower;
 - tier C, guarded for a side only while its condition holds (`conditions`): sacredfire while the user is frozen,
   psychoboost while the user's White Herb is unconsumed
   (ours: the request's item; the opponent's: Deoxys and Deoxys-Attack always hold it in the pool, until an -enditem or an
@@ -27,9 +27,16 @@ and M1's item ledger, gpu_engine/constructor_worlds.py; in-tree Trick since M1, 
 trick_empty, trick_encore, trick_faster, trick_knocked_target, trick_knocked_user, trick_lum, trick_protect, trick_stickyhold,
 trick_sub, trick_takeband; Knock Off since A2, 286a5ffe, probes knockoff, knockoff_band, knockoff_midturn_lock; Sticky Hold's
 block is in-engine, gpu_engine/items.py sticky_hold, and a blocked Knock Off marks nothing at the root; roots after a public
-item swap stay refused by the world constructor, PUBLIC_ITEM_SWAP_NOT_SUPPORTED), each exact against Showdown f76228a1 in the
-engine session's probe runs. The retired tier-C moves' conditions (sleep_clause, user_brn_par_psn, party_statused,
-item_knocked) stay in `guarded`'s vocabulary and in the recorded conditions, unused by any GUARDED move. They stay WATCHED, so their masses are still recorded (turn-2
+item swap stay refused by the world constructor, PUBLIC_ITEM_SWAP_NOT_SUPPORTED), wrap, yawn and perishsong (M2 + R1, f3e71663: the
+partiallytrapped, yawn and perishsong volatiles in state (partial_trap_counter / partial_trap_source, yawn_counter, perish_counter)
+and the residual scheduler's Wrap tick, Yawn countdown and Perish count; R1 traces the Wrap and Yawn handlers only at the positions
+they can sort to, residual_order.POSITIONS, Wrap 4, 8, 9, 11 and Yawn 6, 12, 13, each failing a named probe when dropped; probes
+wrap* (12), yawn* (11), perishsong* (10); a root already holding one stays refused: an own-held one by phase_d_live_worlds
+(OWN_VOLATILE_OR_LATENT_CLOCK_UNAVAILABLE), an opponent-held partial trap or drowsy by the protocol world (built without
+approximating partial-trap or hidden-duration volatiles) and an opponent-held perish count by its typed mapper,
+v5_hypothetical_state), each exact against Showdown f76228a1 in the engine session's probe runs. The retired tier-C moves'
+conditions (sleep_clause, user_brn_par_psn, party_statused, item_knocked) stay in `guarded`'s vocabulary and in the recorded
+conditions, unused by any GUARDED move. They stay WATCHED, so their masses are still recorded (turn-2
 entries: guarded False, tier 'R'), and never count toward (a), (b) (its turn-1 arm and the reach) or (c). Roots where a side is
 already bonded stay refused by the world constructor, not here.
 
@@ -70,7 +77,6 @@ RULE = 'reach'   # the live turn-2 arm: the reach M_s (screen-r2); records befor
 # move id -> (tier, effect class, condition) ; tier A conditions are None.
 GUARDED = {
     'transform': ('A', 'other', None),
-    'yawn': ('A', 'volatile', None), 'wrap': ('A', 'volatile', None), 'perishsong': ('A', 'volatile', None),
     'superpower': ('A', 'self_stat_drop', None),
     'sacredfire': ('C', 'status', 'user_frozen'),
     'psychoboost': ('C', 'self_stat_drop', 'white_herb'), 'facade': ('C', 'other', 'guts_status'),
@@ -82,7 +88,8 @@ RETIRED = {'destinybond': ('volatile', '286a5ffe'), 'hyperbeam': ('multi_turn', 
            'lovelykiss': ('status', '4ee5d3ee'), 'gigadrain': ('other', '286a5ffe'), 'mirrorcoat': ('retaliation', '286a5ffe'),
            'counter': ('retaliation', '0d661773'), 'charm': ('target_stat_change', '4ee5d3ee'), 'spore': ('status', '4ee5d3ee'),
            'sleeppowder': ('status', '4ee5d3ee'), 'hypnosis': ('status', '4ee5d3ee'), 'bonemerang': ('other', '0d661773'),
-           'trick': ('item_removal', '3f48093b'), 'knockoff': ('item_removal', '3f48093b')}
+           'trick': ('item_removal', '3f48093b'), 'knockoff': ('item_removal', '3f48093b'),
+           'wrap': ('volatile', 'f3e71663'), 'yawn': ('volatile', 'f3e71663'), 'perishsong': ('volatile', 'f3e71663')}
 WATCHED = frozenset(GUARDED) | frozenset(TIER_B) | frozenset(RETIRED)
 # The guarded tiers in force while records carried no per-entry `guarded` (before 49530d2a; GUARDED unchanged from 2c5c7b80 until
 # RETIRED): reach's bounds for those records use these, so a later guard set does not move them.

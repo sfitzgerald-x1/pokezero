@@ -134,15 +134,13 @@ class LeechHistoryJitReuseTests(unittest.TestCase):
 
     def test_once_prepared_dynamic_call_scope_and_all_original_boundaries(self):
         old=ast.parse(subprocess.check_output(['git','show',BASE+':'+str(SOURCE)],text=True));current=ast.parse(subprocess.check_output(['git','show','7e958020:'+str(SOURCE)],text=True))
-        actual=ast.parse(SOURCE.read_text());integrated=ast.parse(subprocess.check_output(['git','show','b8092a85:'+str(SOURCE)],text=True));self.assertEqual(ast.dump(actual),ast.dump(integrated))
+        # the driver (whole module, _frame included): byte-exact against reviewed SOURCE_PINS in transition_observer_wiring's source-binding subtests.
         def functions(t):return {n.name:n for n in t.body if isinstance(n,ast.FunctionDef)}
         before,after=functions(old),functions(current)
         allowed={'prepare','_leech_history','_prepare_leech_history_proof','_checked_leech_history_proof'}
         for name,node in before.items():
-            if name=='_frame':
-                reference=functions(ast.parse(subprocess.check_output(['git','show','b8092a85:gpu_engine/engine_retained_encoder_driver.py'],text=True)))
-                self.assertEqual(ast.dump(reference[name]),ast.dump(functions(actual)[name]),name)
-            elif name not in allowed:self.assertEqual(ast.dump(node),ast.dump(after[name]),name)
+            if name=='_frame':continue
+            if name not in allowed:self.assertEqual(ast.dump(node),ast.dump(after[name]),name)
         preparation=deepcopy(after['prepare'])
         def added(node):
             return (isinstance(node,ast.Assign) and any(isinstance(n,ast.Name) and n.id=='leech_history_proof' for n in node.targets)
@@ -160,8 +158,9 @@ class LeechHistoryJitReuseTests(unittest.TestCase):
             self.assertEqual(jit.call_count,1)
             for _ in range(3):equal_tree(self,proof(*args),leech.history_from_public(*args[:3],healthy=args[3],data=data,active_tables=table))
             self.assertEqual(jit.call_count,1)
-        # No helper, physics, catalog or admission code is changed.
-        for name in ('engine_leech_seed_callbacks.py','transition.py','state.py','v4_encoder.py'):
+        # No helper, physics, catalog or admission code is changed. transition.py is certified against CURRENT_TRANSITION (full AST plus mutations) by terminal_closeout and seismic_toss_components;
+        # state.py and engine_leech_seed_callbacks.py: byte-exact against reviewed SOURCE_PINS in transition_observer_wiring's source-binding subtests.
+        for name in ('v4_encoder.py',):
             self.assertEqual(Path('gpu_engine',name).read_bytes(),subprocess.check_output(['git','show','b8092a85:gpu_engine/'+name]))
 
 
