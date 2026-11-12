@@ -16,7 +16,7 @@ def fixture():
     data = {name: nested(shape) for name, shape in f.SHAPES.items()}
     for name, value in (("level", 100), ("hp", 1000), ("max_hp", 1000),
                         ("happiness", 255), ("hidden_power_power", 70), ("pp", 8),
-                        ("moves", 1), ("species", 1), ("trap_source", -1)):
+                        ("moves", 1), ("species", 1), ("trap_source", -1), ("partial_trap_source", -1)):
         data[name] = nested(f.SHAPES[name], value)
     for side in range(2):
         for p in range(6):
@@ -374,6 +374,20 @@ class FutureStateTests(unittest.TestCase):
         data["boosts"][0][1][0] = 1
         out = f.native_input_from_jax(data, None, meta, module=FAKE)
         self.assertIn("BENCH_STATE_NOT_REPRESENTED", {g.code for g in out.gaps})
+
+    def test_live_m2_volatiles_refuse_and_neutral_values_admit(self):
+        """Fidelity M2: a live Perish count, Yawn duration or partial trap (counter or source) refuses with its code; the
+        engine's neutral values (0, source -1) construct."""
+        self.construct()
+        for field, value, code in (("perish_counter", 3, "PERISH_UNREPRESENTED"), ("yawn_counter", 1, "YAWN_UNREPRESENTED"),
+                                   ("partial_trap_counter", 4, "PARTIAL_TRAP_UNREPRESENTED"),
+                                   ("partial_trap_source", 0, "PARTIAL_TRAP_UNREPRESENTED")):
+            data, meta = fixture()
+            data[field][1][0] = value
+            out = f.native_input_from_jax(data, None, meta, module=FAKE)
+            self.assertIsInstance(out, f.Refused)
+            self.assertEqual({(g.field, g.code) for g in out.gaps if "UNREPRESENTED" in g.code},
+                             {("side_two.pokemon[0]." + field.replace("_source", "_counter"), code)})
 
     def test_unknown_nonzero_native_fields_refuse_not_disappear(self):
         mutations = (("side_conditions", "reflect", 4), ("volatile_status_durations", "yawn", 1))

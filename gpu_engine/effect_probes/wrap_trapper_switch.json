@@ -1,0 +1,177 @@
+{
+ "schema": "pokezero.effect_probe.scenario.v1",
+ "move": "wrap_trapper_switch",
+ "note": "M2.3: the trapper switches out: the foe may switch at once (onTrapPokemon needs the source active) and its next residual releases the trap silently (the source is not active).",
+ "teams": [
+  [
+   {
+    "species": "Shuckle",
+    "moves": [
+     "wrap",
+     "splash",
+     "rest",
+     "substitute"
+    ],
+    "ability": "Sturdy",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Starmie",
+    "moves": [
+     "splash",
+     "surf",
+     "recover",
+     "protect"
+    ],
+    "ability": "Illuminate",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Skarmory",
+    "moves": [
+     "splash",
+     "protect",
+     "spikes",
+     "peck"
+    ],
+    "ability": "Keen Eye",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Swampert",
+    "moves": [
+     "splash",
+     "protect",
+     "surf",
+     "earthquake"
+    ],
+    "ability": "Torrent",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Metagross",
+    "moves": [
+     "splash",
+     "protect",
+     "meteormash",
+     "earthquake"
+    ],
+    "ability": "Clear Body",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Celebi",
+    "moves": [
+     "splash",
+     "protect",
+     "psychic",
+     "recover"
+    ],
+    "ability": "Natural Cure",
+    "item": "Leftovers"
+   }
+  ],
+  [
+   {
+    "species": "Blissey",
+    "moves": [
+     "splash",
+     "softboiled",
+     "protect",
+     "seismictoss"
+    ],
+    "ability": "Natural Cure",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Starmie",
+    "moves": [
+     "splash",
+     "surf",
+     "recover",
+     "protect"
+    ],
+    "ability": "Illuminate",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Skarmory",
+    "moves": [
+     "splash",
+     "protect",
+     "spikes",
+     "peck"
+    ],
+    "ability": "Keen Eye",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Swampert",
+    "moves": [
+     "splash",
+     "protect",
+     "surf",
+     "earthquake"
+    ],
+    "ability": "Torrent",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Metagross",
+    "moves": [
+     "splash",
+     "protect",
+     "meteormash",
+     "earthquake"
+    ],
+    "ability": "Clear Body",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Celebi",
+    "moves": [
+     "splash",
+     "protect",
+     "psychic",
+     "recover"
+    ],
+    "ability": "Natural Cure",
+    "item": "Leftovers"
+   }
+  ]
+ ],
+ "script": [
+  [
+   "move 1",
+   "move 1"
+  ],
+  [
+   "switch 2",
+   "move 1"
+  ],
+  [
+   "move 1",
+   "move 1"
+  ],
+  [
+   "move 1",
+   "switch 3"
+  ]
+ ],
+ "axes": [],
+ "expect": {
+  "exact": true
+ },
+ "require_fields": [
+  "perish_counter",
+  "yawn_counter",
+  "partial_trap_counter",
+  "partial_trap_source",
+  "item_knocked",
+  "destiny_bond",
+  "effect"
+ ],
+ "tape": {
+  "draws.0.7": 3
+ }
+}

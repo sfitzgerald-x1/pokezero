@@ -14,6 +14,12 @@
 // durations; a second duration consumer on one side in one nonce stays REPEATED.
 // selfDrops' random(100) (self.boosts with no chance) is an inert, audited role, as is a
 // residual tie among one mon's callback-free countdowns (stall + protect).
+// Fidelity M2: a Yawn pair (both actives drowsy at equal Speed) is an inert residual tie:
+// each countdown and its sleep attempt touch only their holder (Sleep Clause reads the
+// holder's own side, the duration is that side's effect[s][2]). An eachEvent (BeforeTurn,
+// Update) Pokemon-order tie between equal-Speed actives is inert when neither Pokemon has a
+// handler for that event (findEventHandlers is empty, so both runEvent calls do nothing);
+// with a handler it stays unresolved (TIE_ORDER).
 const TAPE_V1='pokezero.gpu_chance_tape.v1',TAPE_V2='pokezero.gpu_chance_tape.v2';
 const DRAW_BOUNDS=[2,100,100,100,16,16,100,4,8,2,2,2],EFFECT_BOUNDS=[16,16,4,2];
 function validTape(c){
@@ -179,13 +185,22 @@ function install(Battle,PRNG,load,audit,initializing=()=>null,pokemonPath='') {
       return items[take(c,'sleep_talk',s,c.sleep_talk[s])%items.length];
     return unknown('SAMPLE',{move:this.activeMove?.id,length:items.length});
   };
+  const eachEvent=Battle.prototype.eachEvent;let eachEventId=null;
+  Battle.prototype.eachEvent=function(eventid,...rest){
+    const outer=eachEventId;eachEventId=eventid;
+    try{return eachEvent.call(this,eventid,...rest);}finally{eachEventId=outer;}
+  };
   const speedSort=Battle.prototype.speedSort;
   Battle.prototype.speedSort=function(list,comparator){
     const c=control();if(!c)return speedSort.call(this,list,comparator);
-    const shuffle=this.prng.shuffle;
+    const shuffle=this.prng.shuffle,battle=this;
     this.prng.shuffle=(items,start=0,end=items.length)=>{
       if(end-start<2)return;
       const group=items.slice(start,end);
+      if(eachEventId&&group.every(x=>x&&x.side&&Array.isArray(x.moveSlots))
+        &&group.every(x=>battle.findEventHandlers(x,eachEventId).length===0)){
+        audit({kind:'INERT_EACH_EVENT_TIE',nonce:c.nonce,event:eachEventId,sides:group.map(x=>x.side.n)});return;
+      }
       if(group.length===2&&group.every(x=>x.choice==='move')&&new Set(group.map(x=>x.pokemon.side.n)).size===2){
         const first=take(c,'move_tie',0,c.draws[0][0]);
         group.sort((a,b)=>(a.pokemon.side.n===first?-1:1));items.splice(start,2,...group);return;
@@ -195,6 +210,10 @@ function install(Battle,PRNG,load,audit,initializing=()=>null,pokemonPath='') {
       if(group.every(x=>x.effectHolder&&x.effectHolder===group[0].effectHolder&&!x.callback&&x.end
         &&x.state?.duration&&x.effect&&!x.effect.onEnd)){
         audit({kind:'INERT_RESIDUAL_TIE',nonce:c.nonce,effects:group.map(x=>x.effect.id)});return;
+      }
+      if(group.length===2&&group.every(x=>x.effect?.id==='yawn'&&(x.effectHolder?.side?.n===0||x.effectHolder?.side?.n===1))
+        &&new Set(group.map(x=>x.effectHolder.side.n)).size===2){
+        audit({kind:'INERT_RESIDUAL_TIE',nonce:c.nonce,effects:['yawn','yawn']});return;
       }
       // Residual handler pairs on both actives: partiallytrapped (subOrder 9) and Perish.
       const residual={partiallytrapped:['partial_trap_tie',0],perishsong:['perish_tie',1]}[group[0]?.effect?.id];

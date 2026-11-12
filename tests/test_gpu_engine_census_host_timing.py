@@ -82,9 +82,9 @@ class HostTimingTests(unittest.TestCase):
    sample['phases_ms']={k:v for k,v in sample['phases_ms'].items()if not k.startswith('census_host_overlap.')}
   self.assertEqual(stripped,original)
   json.dumps(actual,allow_nan=False)
-  for path in('engine_retained_encoder_driver.py','transition.py'):
-   self.assertEqual(Path('gpu_engine',path).read_bytes(),subprocess.check_output(['git','show','b8092a85:gpu_engine/'+path]))
-  # Both physical sources remain exact at the reviewed current composition;
+  # transition.py is certified against CURRENT_TRANSITION (full AST plus mutations) by terminal_closeout and seismic_toss_components.
+  # engine_retained_encoder_driver.py: byte-exact against reviewed SOURCE_PINS in transition_observer_wiring's source-binding subtests.
+  # The driver source is bound by its reviewed pin;
   # historical ac13 preceded the separately reviewed built-in timing/inputs.
 
 if __name__=='__main__':unittest.main()

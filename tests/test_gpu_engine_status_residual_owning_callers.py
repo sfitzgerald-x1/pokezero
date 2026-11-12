@@ -68,7 +68,7 @@ class StatusResidualOwningCallerTests(unittest.TestCase):
         with patch.object(c,'record_status_residual_device',side_effect=capture):frame=self.trace(state,cursor)
         default=self.trace(state,cursor,compiled=False)
         self.same(frame.state,default.state)
-        self.assertEqual(len(seen),10)
+        self.assertEqual(len(seen),14)   # one call per residual-scheduler event (14 since fidelity M2's Wrap and Yawn pairs)
         for row in range(2):
             words=self.words(frame,row);self.assertEqual(len(words),2)
             self.assertTrue(int(frame.callbacks.refusal[row])&256)
@@ -170,19 +170,8 @@ class StatusResidualOwningCallerTests(unittest.TestCase):
         with self.assertRaises(ValueError):t.step_with_chance(state,actions,self.f.table,chance,
             _status_residual_context=life.StatusResidualContext(self.compiled.device))
 
-    def test_default_entire_transition_ast_unchanged_outside_optional_status_observer(self):
-        old=ast.parse(subprocess.check_output(['git','show','b8092a85:gpu_engine/transition.py'],text=True))
-        new=ast.parse(Path(t.__file__).read_text())
-        baseline=dump_default_program(old)
-        self.assertEqual(dump_default_program(new),baseline)
-        assert_hp_rng_mutations_detected(self,new,baseline)
-        changed=deepcopy(new)
-        function=next(node for node in ast.walk(changed) if isinstance(node,ast.FunctionDef)
-            and node.name=='step_with_chance')
-        index=[arg.arg for arg in function.args.kwonlyargs].index('_status_residual_context')
-        function.args.kw_defaults[index]=ast.Constant(True)
-        with self.assertRaisesRegex(ValueError,'changed explicit observer default'):
-            dump_default_program(changed)
+    # The whole-default-transition check (with its observer-default refusal) lives once, against
+    # CURRENT_TRANSITION, in test_gpu_engine_leftovers_caller_frames.
 
 
 

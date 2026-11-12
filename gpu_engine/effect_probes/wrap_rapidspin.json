@@ -1,0 +1,177 @@
+{
+ "schema": "pokezero.effect_probe.scenario.v1",
+ "move": "wrap_rapidspin",
+ "note": "M2.3: Rapid Spin frees its user (removeVolatile: -end ... [partiallytrapped]); the second case's Spin hits the trapper's Substitute and frees it too.",
+ "teams": [
+  [
+   {
+    "species": "Shuckle",
+    "moves": [
+     "wrap",
+     "splash",
+     "substitute",
+     "rest"
+    ],
+    "ability": "Sturdy",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Starmie",
+    "moves": [
+     "splash",
+     "surf",
+     "recover",
+     "protect"
+    ],
+    "ability": "Illuminate",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Skarmory",
+    "moves": [
+     "splash",
+     "protect",
+     "spikes",
+     "peck"
+    ],
+    "ability": "Keen Eye",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Swampert",
+    "moves": [
+     "splash",
+     "protect",
+     "surf",
+     "earthquake"
+    ],
+    "ability": "Torrent",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Metagross",
+    "moves": [
+     "splash",
+     "protect",
+     "meteormash",
+     "earthquake"
+    ],
+    "ability": "Clear Body",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Celebi",
+    "moves": [
+     "splash",
+     "protect",
+     "psychic",
+     "recover"
+    ],
+    "ability": "Natural Cure",
+    "item": "Leftovers"
+   }
+  ],
+  [
+   {
+    "species": "Starmie",
+    "moves": [
+     "rapidspin",
+     "splash",
+     "recover",
+     "substitute"
+    ],
+    "ability": "Illuminate",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Skarmory",
+    "moves": [
+     "splash",
+     "protect",
+     "spikes",
+     "peck"
+    ],
+    "ability": "Keen Eye",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Swampert",
+    "moves": [
+     "splash",
+     "protect",
+     "surf",
+     "earthquake"
+    ],
+    "ability": "Torrent",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Metagross",
+    "moves": [
+     "splash",
+     "protect",
+     "meteormash",
+     "earthquake"
+    ],
+    "ability": "Clear Body",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Celebi",
+    "moves": [
+     "splash",
+     "protect",
+     "psychic",
+     "recover"
+    ],
+    "ability": "Natural Cure",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Zapdos",
+    "moves": [
+     "splash",
+     "thunderbolt",
+     "protect",
+     "drillpeck"
+    ],
+    "ability": "Pressure",
+    "item": "Leftovers"
+   }
+  ]
+ ],
+ "script": [
+  [
+   "move 1",
+   "move 2"
+  ],
+  [
+   "move 2",
+   "move 1"
+  ],
+  [
+   "move 2",
+   "switch 2"
+  ],
+  [
+   "move 2",
+   "move 1"
+  ]
+ ],
+ "axes": [],
+ "expect": {
+  "exact": true
+ },
+ "require_fields": [
+  "perish_counter",
+  "yawn_counter",
+  "partial_trap_counter",
+  "partial_trap_source",
+  "item_knocked",
+  "destiny_bond",
+  "effect"
+ ],
+ "tape": {
+  "draws.0.7": 3
+ }
+}

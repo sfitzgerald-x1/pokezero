@@ -46,4 +46,13 @@ def copy_to_recipient(state, side, target, *, eligible):
         value = value.at[rows, side, target].set(jnp.where(
             gate, source, value[rows, side, target]))
         state = state._replace(**{name: value})
+    # Fidelity M2 (design 2.4): copyVolatileFrom carries perishsong and partiallytrapped (no noCopy) with their
+    # durations and the original trapper as source (no remap: the trap holds only while that trapper is active);
+    # yawn is noCopy, so the recipient has none. States without the leaves (fixtures) skip it.
+    if hasattr(state, "perish_counter"):
+        for name in ("perish_counter", "partial_trap_counter", "partial_trap_source", "yawn_counter"):
+            value = getattr(state, name)
+            source = value[rows, side, old] if name != "yawn_counter" else jnp.zeros_like(value[rows, side, old])
+            state = state._replace(**{name: value.at[rows, side, target].set(jnp.where(
+                eligible, source, value[rows, side, target]))})
     return state

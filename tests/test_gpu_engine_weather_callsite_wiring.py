@@ -10,6 +10,7 @@ import numpy as np
 from gpu_engine import transition, weather
 from gpu_engine import engine_weather_callbacks as callbacks
 from test_gpu_engine_engine_weather_callbacks import table, state, tape
+from gpu_engine_transition_certification import CURRENT_TRANSITION
 
 
 class WeatherCallsiteTests(unittest.TestCase):
@@ -65,11 +66,11 @@ class WeatherCallsiteTests(unittest.TestCase):
             if any(isinstance(x,ast.Name) and x.id=='WeatherProfileTracedStep' for x in ast.walk(tree)):
                 raise ValueError('observer type is reachable from the default program')
             return ast.dump(tree,include_attributes=False)
-        # Re-certify the complete integrated program, including the repaired
-        # tracker guards. This does not claim byte identity with the earlier
+        # Re-certify the complete program at the reviewed CURRENT_TRANSITION, including the
+        # repaired tracker guards. This does not claim byte identity with the earlier
         # device snapshot. All numerical/default/import mutation checks below
         # still apply to the current program; no observer predicate is erased.
-        old=subprocess.check_output(['git','show','b8092a85d9c1f2ed9c0daf4c4bd8e833a94a2380:gpu_engine/transition.py'])
+        old=subprocess.check_output(['git','show',CURRENT_TRANSITION+':gpu_engine/transition.py'])
         from pathlib import Path
         current=Path(transition.__file__).read_text()
         baseline=normalized(old)

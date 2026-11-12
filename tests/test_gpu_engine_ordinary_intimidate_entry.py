@@ -40,9 +40,29 @@ def strip_m1_recharge(depart,*,required=False):
  return depart
 
 
+# Fidelity M2's approved entry physics change, a second block beside M1's: switchOut's clearVolatile also ends
+# perishsong, yawn and the departing mon's own partiallytrapped. Removed only when it is exactly this code, once.
+M2_VOLATILES_DEPART=ast.parse("""if hasattr(state,'perish_counter'):
+    state=state._replace(**{name:getattr(state,name).at[rows,side,active].set(jnp.where(eligible,
+        -1 if name=='partial_trap_source' else 0,getattr(state,name)[rows,side,active]))
+        for name in ('perish_counter','yawn_counter','partial_trap_counter','partial_trap_source')})""").body[0]
+
+
+def strip_m2_volatiles(depart,*,required=False):
+ """entry.depart (a FunctionDef, edited in place) without M2's approved perish/yawn/partial-trap clear."""
+ test=ast.dump(M2_VOLATILES_DEPART.test)
+ found=[n for n in depart.body if isinstance(n,ast.If)and ast.dump(n.test)==test]
+ assert len(found)<=1 and (found or not required),'entry.depart: the M2 volatile clear is missing or repeated'
+ for n in found:
+  assert ast.dump(n)==ast.dump(M2_VOLATILES_DEPART),'entry.depart: the M2 volatile clear differs from the approved code'
+  depart.body.remove(n)
+ return depart
+
+
 def default_entry_program(text):
  tree=ast.parse(text)
  strip_m1_recharge(next(n for n in tree.body if isinstance(n,ast.FunctionDef)and n.name=='depart'))
+ strip_m2_volatiles(next(n for n in tree.body if isinstance(n,ast.FunctionDef)and n.name=='depart'))
  fields=('spikes_type_count','spikes_item_count','spikes_boots_item')
  table=next(n for n in tree.body if isinstance(n,ast.ClassDef)and n.name=='EntryTable')
  added=[n for n in table.body if isinstance(n,ast.AnnAssign)and n.target.id in fields]

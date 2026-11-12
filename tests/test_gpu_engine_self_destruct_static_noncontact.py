@@ -44,8 +44,7 @@ console.log(JSON.stringify({allowed:Object.fromEntries(names.map(n=>[n,PREDICATE
   transition=ast.parse(Path('gpu_engine/transition.py').read_text())
   caller=next(n for n in ast.walk(transition)if isinstance(n,ast.If)and ast.unparse(n.test)=='table.secondary is not None'and any(isinstance(c,ast.Call)and ast.unparse(c.func)=='secondaries.apply_contact'for c in ast.walk(n)))
   self.assertEqual(ast.unparse(caller.test),'table.secondary is not None')
-  for n in ('transition.py','secondary.py','self_destruct.py','entry.py','mechanics.py','state.py'):
-   self.assertEqual(Path('gpu_engine',n).read_bytes(),subprocess.check_output(['git','show','b8092a85:gpu_engine/'+n]))
+  # transition.py is certified against CURRENT_TRANSITION (full AST plus mutations) by terminal_closeout and seismic_toss_components; secondary, entry, state, self_destruct and mechanics: byte-exact against reviewed SOURCE_PINS in transition_observer_wiring's source-binding subtests.
 
 import ast, json, subprocess, unittest
 from copy import deepcopy

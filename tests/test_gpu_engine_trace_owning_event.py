@@ -106,14 +106,13 @@ class TraceOwningEventTests(unittest.TestCase):
   baseline=dump_default_program(old_tree)
   self.assertEqual(baseline,dump_default_program(current))
   assert_hp_rng_mutations_detected(self,current,baseline)
-  integrated=ast.parse(subprocess.check_output(['git','show','b8092a85:gpu_engine/transition.py'],text=True));current=ast.parse(Path('gpu_engine/transition.py').read_text())
-  self.assertEqual(ast.dump(current),ast.dump(integrated));assert_hp_rng_mutations_detected(self,current,dump_default_program(integrated))
+  # transition.py is certified against CURRENT_TRANSITION (full AST plus mutations) by terminal_closeout and seismic_toss_components.
   def enter_body(text):
    return next(n for n in ast.parse(text).body if isinstance(n,ast.FunctionDef) and n.name=='enter')
   old_entry=subprocess.check_output(['git','show','cc42bce4:gpu_engine/entry.py'],text=True)
   feature_entry=subprocess.check_output(['git','show','47a15a55:gpu_engine/entry.py'],text=True)
   self.assertEqual(dump_default_program(enter_body(old_entry)),dump_default_program(enter_body(feature_entry)))
-  self.assertEqual(ast.dump(ast.parse(Path('gpu_engine/entry.py').read_text())),ast.dump(ast.parse(subprocess.check_output(['git','show','b8092a85:gpu_engine/entry.py'],text=True))))
+  # entry.py: byte-exact against reviewed SOURCE_PINS in transition_observer_wiring's source-binding subtests.
   root=Path(showdown_root_str())
   callback=(root/'data/mods/gen3/abilities.ts').read_text().split('\ttrace: {',1)[1].split('\n\t},',1)[0]
   self.assertIn('pokemon.setAbility(ability, target)',callback);self.assertIn('onUpdate: undefined',callback)

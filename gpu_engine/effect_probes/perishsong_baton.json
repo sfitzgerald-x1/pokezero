@@ -1,0 +1,186 @@
+{
+ "schema": "pokezero.effect_probe.scenario.v1",
+ "move": "perishsong_baton",
+ "note": "M2.1: the foe Baton Passes at count 2 (copyVolatileFrom carries perishsong); the recipient counts 1 and faints with the user.",
+ "teams": [
+  [
+   {
+    "species": "Misdreavus",
+    "moves": [
+     "perishsong",
+     "splash",
+     "meanlook",
+     "shadowball"
+    ],
+    "ability": "Levitate",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Starmie",
+    "moves": [
+     "splash",
+     "surf",
+     "recover",
+     "protect"
+    ],
+    "ability": "Illuminate",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Skarmory",
+    "moves": [
+     "splash",
+     "protect",
+     "spikes",
+     "peck"
+    ],
+    "ability": "Keen Eye",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Swampert",
+    "moves": [
+     "splash",
+     "protect",
+     "surf",
+     "earthquake"
+    ],
+    "ability": "Torrent",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Metagross",
+    "moves": [
+     "splash",
+     "protect",
+     "meteormash",
+     "earthquake"
+    ],
+    "ability": "Clear Body",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Celebi",
+    "moves": [
+     "splash",
+     "protect",
+     "psychic",
+     "recover"
+    ],
+    "ability": "Natural Cure",
+    "item": "Leftovers"
+   }
+  ],
+  [
+   {
+    "species": "Jolteon",
+    "moves": [
+     "splash",
+     "batonpass",
+     "thunderbolt",
+     "protect"
+    ],
+    "ability": "Volt Absorb",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Starmie",
+    "moves": [
+     "splash",
+     "surf",
+     "recover",
+     "protect"
+    ],
+    "ability": "Illuminate",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Skarmory",
+    "moves": [
+     "splash",
+     "protect",
+     "spikes",
+     "peck"
+    ],
+    "ability": "Keen Eye",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Swampert",
+    "moves": [
+     "splash",
+     "protect",
+     "surf",
+     "earthquake"
+    ],
+    "ability": "Torrent",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Metagross",
+    "moves": [
+     "splash",
+     "protect",
+     "meteormash",
+     "earthquake"
+    ],
+    "ability": "Clear Body",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Celebi",
+    "moves": [
+     "splash",
+     "protect",
+     "psychic",
+     "recover"
+    ],
+    "ability": "Natural Cure",
+    "item": "Leftovers"
+   }
+  ]
+ ],
+ "script": [
+  [
+   "move 1",
+   "move 1"
+  ],
+  [
+   "move 2",
+   "move 1"
+  ],
+  [
+   "move 2",
+   "move 2"
+  ],
+  [
+   "",
+   "switch 3"
+  ],
+  [
+   "move 2",
+   "move 1"
+  ],
+  [
+   "switch 2",
+   "switch 4"
+  ],
+  [
+   "move 2",
+   "move 1"
+  ]
+ ],
+ "axes": [],
+ "expect": {
+  "exact": true
+ },
+ "require_fields": [
+  "perish_counter",
+  "yawn_counter",
+  "partial_trap_counter",
+  "partial_trap_source",
+  "item_knocked",
+  "destiny_bond",
+  "effect"
+ ]
+}
