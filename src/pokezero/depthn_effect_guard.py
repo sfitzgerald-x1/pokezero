@@ -18,7 +18,7 @@ TIER_B (irontail, signalbeam, steelwing, meteormash: chance secondaries) is neve
 RETIRED (tier 'R') holds the moves the guard no longer trips on because the engine now models their effect, each with the
 integration merge from which it does (a screen declares an engine at or after it): destinybond (A2, 286a5ffe: the DESTINY_BOND
 volatile, Showdown-probed). They stay WATCHED, so their masses are still recorded (turn-2 entries: guarded False, tier 'R'), and
-never count toward (b), (c) or the reach. Roots where a side is already bonded stay refused by the world constructor, not here.
+never count toward (a), (b) (its turn-1 arm and the reach) or (c). Roots where a side is already bonded stay refused by the world constructor, not here.
 
 The guard trips on (b) or (c) (RULE 'reach', the lead's live rule from screen-r2):
 - (b) turn 1: in any constructed world, either side's turn-1 prior puts >= THRESHOLD of its mass on a lane whose move is
@@ -71,6 +71,11 @@ TIER_B = {'irontail': 'target_stat_change', 'signalbeam': 'volatile', 'steelwing
 # move id -> (effect class, the integration merge from which the engine models it): watched and recorded, never guarded.
 RETIRED = {'destinybond': ('volatile', '286a5ffe')}
 WATCHED = frozenset(GUARDED) | frozenset(TIER_B) | frozenset(RETIRED)
+# The guarded tiers in force while records carried no per-entry `guarded` (before 49530d2a; GUARDED unchanged from 2c5c7b80 until
+# RETIRED): reach's bounds for those records use these, so a later guard set does not move them.
+PRE_FLAG_TIERS = {**dict.fromkeys(('hyperbeam', 'destinybond', 'transform', 'yawn', 'wrap', 'perishsong', 'trick', 'counter', 'mirrorcoat',
+    'curse', 'superpower', 'knockoff', 'charm', 'lovelykiss', 'bonemerang', 'gigadrain'), 'A'),
+    **dict.fromkeys(('spore', 'sleeppowder', 'hypnosis', 'refresh', 'sacredfire', 'psychoboost', 'facade', 'aromatherapy'), 'C')}
 # Showdown's Gen 3 move table (Dex.forGen(3)): every standard move with flags.recharge (the live actor's own-recharge guard).
 RECHARGE_MOVES = frozenset(('hyperbeam', 'blastburn', 'hydrocannon', 'frenzyplant'))
 STATUSES = ('par', 'brn', 'psn', 'tox', 'slp', 'frz')
@@ -364,8 +369,9 @@ def reach(record, root_logits, root_legal, worlds, *, threshold=THRESHOLD):
     world w's turn-1 peer prior (its root_peer_logits over kept; a world whose opponent waits has the single reply 0 at mass 1:
     the pricer expands its cells (a, 0)), p_w uniform over the priced worlds. `worlds`: the row's worlds in block order, each
     dict(requested, logits, kept, priced=True). Exact when every turn-2 entry carries `guarded` (the guard's own decision at
-    that child, and its tier: a record written before a move was RETIRED keeps its M); otherwise bounds, under this module's
-    tiers: lower counts tier A and Psycho Boost when a revealed Deoxys or Deoxys-Attack of that side holds
+    that child, its recorded tier the bucket: a record written before a move was RETIRED keeps its M); otherwise bounds, under
+    the tiers in force when such records were written (PRE_FLAG_TIERS): lower counts tier A and Psycho Boost when a revealed
+    Deoxys or Deoxys-Attack of that side holds
     its White Herb (_psychoboost), upper every
     tier-C mass as guarded. tripped: True / False when the bounds (or the exact M) agree about THRESHOLD on either side, None
     when they straddle it; a record without its turn-2 masses (an error record, an unavailable capture) trips, fail closed.
@@ -389,12 +395,20 @@ def reach(record, root_logits, root_legal, worlds, *, threshold=THRESHOLD):
     moves = {scope: {side: {} for side in ('own', 'opp')} for scope in ('lower', 'upper')}
     where = {scope: {side: set() for side in ('own', 'opp')} for scope in ('lower', 'upper')}
     for e in entries:
-        # an exact entry carries its own guard's decision and tier: a record keeps its M under a later guard set (RETIRED)
-        tier = e['tier'] if exact and 'tier' in e else tier_of(e['move']);w = e['world']
-        if tier not in ('A', 'C') or w not in peer:continue
+        # A record keeps its M under a later guard set (RETIRED): an exact entry counts by its own guard's decision (the bucket: its
+        # recorded tier, else the move's current or pre-flag tier, else A); an older record's bounds use the tiers in force when
+        # it was written.
+        w = e['world']
+        if exact:
+            if not e['guarded']:continue
+            tier = next((t for t in (e.get('tier'), tier_of(e['move']), PRE_FLAG_TIERS.get(e['move'])) if t in ('A', 'C')), 'A')
+        else:
+            tier = PRE_FLAG_TIERS.get(e['move'])
+            if tier not in ('A', 'C'):continue
+        if w not in peer:continue
         a, b = divmod(int(e['cell']), 9);weight = p * own[a] * peer[w][b] * float(e['mass'])
         if not weight:continue
-        if exact:counted = dict(lower=e['guarded'], upper=e['guarded'])
+        if exact:counted = dict(lower=True, upper=True)
         else:counted = dict(lower=tier == 'A' or e['move'] == 'psychoboost' and _psychoboost(record, e['side']), upper=True)
         for scope, yes in counted.items():
             if yes:

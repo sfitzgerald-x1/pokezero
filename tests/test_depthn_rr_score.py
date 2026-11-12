@@ -793,9 +793,9 @@ def guard_record(*, b=False, turn1=(), turn2=(), lanes=(None, None, None, None),
 
 def reach_guard_record(*, turn1=(), reach_tiers=None, unavailable=False, any_cell=False):
     """A reach-rule record (the live rule) for GuardTests' decision (two waiting worlds, our legal lanes 0, 1, 4): reach_tiers
-    {side: {tier: mass}} puts a guarded turn-2 entry (Perish Song for A, Spore for C) of that mass at every expanded cell, so
+    {side: {tier: mass}} puts a guarded turn-2 entry (Destiny Bond for A, Spore for C) of that mass at every expanded cell, so
     its reach M is the sum of its tiers' masses whatever our prior; unavailable a lost capture; any_cell the any-cell arm's hit."""
-    r = guard_record(turn1=turn1);moves = dict(A='perishsong', C='spore')
+    r = guard_record(turn1=turn1);moves = dict(A='destinybond', C='spore')
     tiers = {side: {**dict(A=0., C=0.), **(reach_tiers or {}).get(side, {})} for side in ('own', 'opp')}
     entries = [dict(move=moves[t], side=side, world=w, cell=a * 9, mass=v, guarded=True)
                for side, per in tiers.items() for t, v in per.items() if v for w in (0, 1) for a in (0, 1, 4)]

@@ -412,9 +412,11 @@ class ReachTests(unittest.TestCase):
 
     def test_lower_at_most_exact_at_most_upper_on_random_records(self):
         """Randomized records whose turn-2 entries carry the guard's own flags (G.guarded on each child's sides, as evaluate decides):
-        the bounds of the same record without the flags bracket its exact M, both sides."""
+        the bounds of the same record without the flags bracket its exact M, both sides. Moves whose tier changed since records
+        carried no flags (RETIRED ones) are left out: a record without the flags was written before that change."""
         import random
-        rng = random.Random(20261109);moves = sorted(G.WATCHED);status = (0, 0, 0, 1, 2, 3, 4, 5, 6)
+        rng = random.Random(20261109);moves = sorted(m for m in G.WATCHED if G.PRE_FLAG_TIERS.get(m, G.tier_of(m)) == G.tier_of(m))
+        status = (0, 0, 0, 1, 2, 3, 4, 5, 6)
         opp_pool = ['snorlax', 'ursaring', 'swellow', 'gengar', 'deoxys', 'deoxysattack', 'deoxysspeed', 'bellossom']
         for trial in range(300):
             deoxys = rng.choice(['deoxys', 'deoxysattack', 'deoxysspeed', None])   # the opponent's one Deoxys form, if any
@@ -451,8 +453,6 @@ class ReachTests(unittest.TestCase):
             self.assertEqual((r['tripped'], r['tripped_lower'], r['tripped_upper'], r['unavailable'], r['m_own_lower']), (True, True, True, True, None))
 
 
-if __name__ == '__main__':
-    unittest.main()
 
 
 class RetiredTests(unittest.TestCase):
@@ -487,4 +487,15 @@ class RetiredTests(unittest.TestCase):
         now = G.reach(reach_record([entry(0, 0, 1, 'opp', 'destinybond', .4, False)]), root_logits, root_legal, ReachTests.worlds)
         self.assertEqual((now['m_opp'], now['tripped']), (0., False))
         old = G.reach(reach_record([entry(0, 0, 1, 'opp', 'destinybond', .4)]), root_logits, root_legal, ReachTests.worlds)
-        self.assertEqual((old['exact'], old['m_opp_lower'], old['m_opp_upper']), (False, 0., 0.))   # a pre-`guarded` record: this module's tiers
+        self.assertFalse(old['exact'])   # a pre-`guarded` record: its bounds keep the tiers it was written under (tier A)
+        self.assertEqual((old['m_opp_lower'], old['m_opp_upper'], old['tripped']), (.5 * .75 * .75 * .4, .5 * .75 * .75 * .4, True))
+        bare = dict(entry(0, 0, 1, 'opp', 'destinybond', .4), guarded=True)   # flagged but no tier: counted (bucket A)
+        self.assertAlmostEqual(G.reach(reach_record([bare]), root_logits, root_legal, ReachTests.worlds)['tiers']['lower']['opp']['A'], .1125, places=15)
+
+    def test_the_pre_flag_tiers_are_the_guard_before_retirement(self):
+        self.assertEqual({m: t for m, (t, _, _) in G.GUARDED.items()}, {m: t for m, t in G.PRE_FLAG_TIERS.items() if m not in G.RETIRED})
+        self.assertEqual({m: G.PRE_FLAG_TIERS[m] for m in G.RETIRED}, {'destinybond': 'A'})
+
+
+if __name__ == '__main__':
+    unittest.main()
