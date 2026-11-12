@@ -2,9 +2,37 @@
 import json
 import math
 import unittest
+from unittest import mock
 
 from pokezero import depthn_effect_guard as G
 from pokezero import depthn_live_actor as actor
+
+# The guard's live tables, as this module defines them (pinned by LiveTableTests). Every other test here exercises the guard's
+# mechanics -- conditions, masses, the arms, the reach, the record -- against FIXTURE, a fixed table (the guard of #1932 / #1933,
+# before the A1 / A2 / R retirements), so that retiring a move changes the pins and nothing else.
+LIVE_GUARDED, LIVE_RETIRED = dict(G.GUARDED), dict(G.RETIRED)
+FIXTURE_GUARDED = {
+    'transform': ('A', 'other', None), 'yawn': ('A', 'volatile', None), 'wrap': ('A', 'volatile', None), 'perishsong': ('A', 'volatile', None),
+    'counter': ('A', 'retaliation', None), 'mirrorcoat': ('A', 'retaliation', None), 'curse': ('A', 'self_boost', None),
+    'superpower': ('A', 'self_stat_drop', None), 'knockoff': ('A', 'item_removal', None), 'charm': ('A', 'target_stat_change', None),
+    'lovelykiss': ('A', 'status', None), 'bonemerang': ('A', 'other', None), 'gigadrain': ('A', 'other', None),
+    'spore': ('C', 'status', 'sleep_clause'), 'sleeppowder': ('C', 'status', 'sleep_clause'), 'hypnosis': ('C', 'status', 'sleep_clause'),
+    'refresh': ('C', 'status', 'user_brn_par_psn'), 'sacredfire': ('C', 'status', 'user_frozen'), 'psychoboost': ('C', 'self_stat_drop', 'white_herb'),
+    'facade': ('C', 'other', 'guts_status'), 'aromatherapy': ('C', 'status', 'party_statused'), 'trick': ('C', 'item_removal', 'item_knocked')}
+FIXTURE_RETIRED = {'destinybond': ('volatile', '286a5ffe'), 'hyperbeam': ('multi_turn', '8b212312')}
+
+
+def tables(guarded, retired):
+    return [mock.patch.dict(G.GUARDED, guarded, clear=True), mock.patch.object(G, 'RETIRED', dict(retired))]
+
+
+def setUpModule():
+    for patch in tables(FIXTURE_GUARDED, FIXTURE_RETIRED):
+        patch.start();unittest.addModuleCleanup(patch.stop)   # registered as each starts: a failed setup still restores
+
+
+def tearDownModule():
+    unittest.doModuleCleanups()   # pytest calls tearDownModule but not the module cleanups; under unittest the later call finds none
 
 
 def switch(seat, species, hp='100/100', details=None):
@@ -515,6 +543,68 @@ class RetiredTests(unittest.TestCase):
                          {m: t for m, t in G.PRE_FLAG_TIERS.items() if m not in G.RETIRED and m not in changed})
         self.assertEqual({m: (G.PRE_FLAG_TIERS[m], G.GUARDED[m][0]) for m in changed}, changed)
         self.assertEqual({m: G.PRE_FLAG_TIERS[m] for m in G.RETIRED}, {'destinybond': 'A', 'hyperbeam': 'A'})
+
+
+class LiveTableTests(unittest.TestCase):
+    """The guard's live tables: GUARDED after the A1 / A2 / R retirements, RETIRED with each move's engine merge (a screen declares
+    a move retired only on an engine at or after it), and every retired move recorded and never tripping, through evaluate."""
+    def live(self):
+        stack = tables(LIVE_GUARDED, LIVE_RETIRED)
+        for patch in stack:
+            patch.start();self.addCleanup(patch.stop)
+
+    def test_the_live_tables(self):
+        self.assertEqual(LIVE_RETIRED, {'destinybond': ('volatile', '286a5ffe'), 'hyperbeam': ('multi_turn', '8b212312'),
+            'curse': ('self_boost', '4ee5d3ee'), 'aromatherapy': ('status', '4ee5d3ee'), 'refresh': ('status', '4ee5d3ee'),
+            'lovelykiss': ('status', '4ee5d3ee'), 'charm': ('target_stat_change', '4ee5d3ee'), 'spore': ('status', '4ee5d3ee'),
+            'sleeppowder': ('status', '4ee5d3ee'), 'hypnosis': ('status', '4ee5d3ee'), 'gigadrain': ('other', '286a5ffe'),
+            'mirrorcoat': ('retaliation', '286a5ffe'), 'counter': ('retaliation', '0d661773'), 'bonemerang': ('other', '0d661773')})
+        self.assertEqual(sorted(m for m, v in LIVE_GUARDED.items() if v[0] == 'A'), ['knockoff', 'perishsong', 'superpower', 'transform', 'wrap', 'yawn'])
+        self.assertEqual(sorted(m for m, v in LIVE_GUARDED.items() if v[0] == 'C'), ['facade', 'psychoboost', 'sacredfire', 'trick'])
+        self.assertEqual({m: v for m, v in LIVE_GUARDED.items()}, {m: v for m, v in FIXTURE_GUARDED.items() if m not in LIVE_RETIRED})
+        self.assertEqual({m: FIXTURE_GUARDED[m][1] for m in LIVE_RETIRED if m in FIXTURE_GUARDED},
+                         {m: c for m, (c, _) in LIVE_RETIRED.items() if m in FIXTURE_GUARDED})   # each keeps its effect class
+        self.assertFalse(set(LIVE_RETIRED) & (set(LIVE_GUARDED) | set(G.TIER_B)));self.assertTrue(set(LIVE_RETIRED) <= G.WATCHED)
+        changed = {'trick': ('A', 'C')}   # M1: tier C under the knocked-off condition
+        self.assertEqual({m: t for m, (t, _, _) in LIVE_GUARDED.items() if m not in changed},
+                         {m: t for m, t in G.PRE_FLAG_TIERS.items() if m not in LIVE_RETIRED and m not in changed})
+
+    def test_a_binding_sleep_clause_no_longer_guards_the_sleep_moves(self):
+        """Our Breloom asleep from a non-allied source binds Sleep Clause for the opponent: FIXTURE guards its Spore, Sleep Powder
+        and Hypnosis (tier C) and its turn-1 Spore trips; the live tables retire them (A1), so nothing trips."""
+        hit = G.conditions(BASE + ['|-status|p1a: Breloom|slp'], 0, request([('Breloom', '100/100 slp', '', 'effectspore')]))
+        self.assertTrue(hit['opp']['sleep_clause'])
+        logits, legal = prior(0, .9)
+        peer = [dict(world=0, lanes=['spore', 'rest', 'sleeptalk', 'earthquake'], logits=logits, legal=legal, requested=True, user='snorlax')]
+        run = lambda: G.evaluate(hit, own_turn1=dict(lanes=['leechseed', 'substitute', 'protect', None], logits=prior(0, .97)[0], legal=prior(0, .97)[1]),
+            peer_turn1=peer, turn2=[], choice=0)
+        self.assertEqual([G.guarded(m, hit['opp'], 'snorlax') for m in ('spore', 'sleeppowder', 'hypnosis')], [('C', 'status')] * 3)
+        r = run();self.assertEqual((r['b_turn1'], [x['move'] for x in r['reasons']]), (True, ['spore']))   # FIXTURE: tier C, bound
+        self.live()
+        self.assertEqual([G.guarded(m, hit['opp'], 'snorlax') for m in ('spore', 'sleeppowder', 'hypnosis')], [None] * 3)
+        r = run();self.assertEqual((r['tripped'], r['reasons']), (False, []))
+
+    def test_every_retired_move_is_recorded_and_never_trips(self):
+        self.live()
+        for move in sorted(LIVE_RETIRED):
+            with self.subTest(move):
+                cond = G.conditions(BASE, 0, request(OURS, moves=(move, 'leechseed', 'substitute', 'protect')))
+                lanes = [move, 'leechseed', 'substitute', 'protect'];own = prior(0, .97)
+                child = dict(own_side=G.child_side(cond['own'], [('breloom', 0, True, False)]),
+                    opp_side=G.child_side(cond['opp'], [('snorlax', 0, True, False)], opponent=True))
+                logits, legal = prior(0, .9)
+                peer = [dict(world=0, lanes=[move, 'rest', 'sleeptalk', 'earthquake'], logits=logits, legal=legal, requested=True, user='snorlax')]
+                turn2 = [dict(world=0, cell=0, side=side, lanes=[move, 'rest', None, None], logits=logits, legal=legal, user=user, **child)
+                         for side, user in (('own', 'breloom'), ('opp', 'snorlax'))]
+                r = G.evaluate(cond, own_turn1=dict(lanes=lanes, logits=own[0], legal=own[1]), peer_turn1=peer, turn2=turn2, choice=0)
+                self.assertEqual((r['tripped'], r['b'], r['c'], r['a'], r['m_own'], r['m_opp'], r['reasons']), (False, False, False, False, 0., 0., []))
+                self.assertEqual(sorted((m['side'], m['move']) for m in r['masses']['turn1']), [('opp', move), ('own', move)])
+                self.assertEqual([(m['side'], m['guarded'], m['tier']) for m in r['masses']['turn2']], [('own', False, 'R'), ('opp', False, 'R')])
+                self.assertEqual(G.trips(r, 0), dict(tripped=False, b=False, c=False))
+        guarded = G.evaluate(G.conditions(BASE, 0, request(OURS, moves=('transform', 'leechseed', 'substitute', 'protect'))),
+            own_turn1=dict(lanes=['transform', 'leechseed', 'substitute', 'protect'], logits=prior(0, .97)[0], legal=prior(0, .97)[1]),
+            peer_turn1=[], turn2=[], choice=0)
+        self.assertEqual((guarded['tripped'], guarded['b_turn1'], guarded['c']), (True, True, True))   # Transform stays guarded
 
 
 KNOCK = ['|move|p1a: Breloom|Knock Off|p2a: Snorlax', '|-damage|p2a: Snorlax|80/100',
