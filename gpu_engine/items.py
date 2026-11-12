@@ -24,6 +24,8 @@ class ItemTable(NamedTuple):
     # Fidelity patch A2 (appended): Knock Off removes the target's item; Sticky Hold blocks it.
     knock_off: jax.Array       # [M], gen4 moves.ts knockoff onAfterHit (inherited by Gen 3)
     sticky_hold: jax.Array     # [A], gen4 abilities.ts stickyhold onTakeItem
+    # Fidelity patch M1 (appended): Trick swaps the actives' items (data/moves.ts trick, Gen 3 = base).
+    trick: jax.Array           # [M]
 
 
 def from_metadata(metadata):
@@ -35,7 +37,8 @@ def from_metadata(metadata):
         flag("items",{"souldew"}),flag("species",{"latias","latios"}),
         jnp.asarray([{"liechiberry":0,"petayaberry":2,"salacberry":4}.get(name,-1) for name in vocab["items"]]),
         jnp.asarray([name=="knockoff" for name in vocab.get("moves",["_none"])]),
-        jnp.asarray([name=="stickyhold" for name in vocab.get("abilities",["_none"])]))
+        jnp.asarray([name=="stickyhold" for name in vocab.get("abilities",["_none"])]),
+        jnp.asarray([name=="trick" for name in vocab.get("moves",["_none"])]))
 
 
 def attack_modifier(table,item,species,physical):

@@ -43,6 +43,14 @@
    "completes_on_hosted": true
   },
   {
+   "module": "test_gpu_engine_fidelity_m1",
+   "reason": "wall+memory",
+   "hosted_median_min": null,
+   "isolated_wall_min": 38.2,
+   "isolated_peak_gib": 58.7,
+   "completes_on_hosted": false
+  },
+  {
    "module": "test_gpu_engine_fidelity_r",
    "reason": "memory",
    "hosted_median_min": 9.7,

@@ -44,6 +44,13 @@ EFFECT_BOUNDS=(16,16,4,2)
 FIRST_GAME=50200
 canonical=lambda name:'hiddenpower' if name.startswith('hiddenpower') else name
 toid=lambda name:''.join(x for x in name.lower() if x.isalnum())
+# A request move outside the moveset is a lock the engine plays from slot 0
+# (Struggle; fidelity M1: Hyper Beam's Recharge turn, state.usable_moves).
+LOCK_MOVES=('struggle','recharge')
+
+
+def request_slot(name,own):
+    return own.index(name) if name in own else 0 if name in LOCK_MOVES else -1
 
 
 def reconstruct(pool,metadata,showdown,node,*,first_game=FIRST_GAME,games=200):
@@ -201,7 +208,7 @@ def reference_actions(env,state,snapshot,original,vocab,rng,*,choose=True):
                 else:
                     name=canonical(request['active'][0]['moves'][number]['id'])
                     own=[canonical(vocab['moves'][int(x)]) for x in state.moves[0,side,active[side]]]
-                    translated=own.index(name) if name in own else 0 if name=='struggle' else -1
+                    translated=request_slot(name,own)
                     if translated<0:
                         differences.append(dict(field=player+':action_identity',showdown=name,gpu=own))
                         continue  # e.g. unsupported Transform: first mismatch, never a harness retry

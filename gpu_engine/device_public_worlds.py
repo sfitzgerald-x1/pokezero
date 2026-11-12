@@ -344,10 +344,17 @@ def _revealed(root, source):
     gender = _array(view, 'gender', (1, 6), np.dtype('int32'))[0]
     level = _array(view, 'level', (1, 6), np.dtype('int32'))[0]
     features = view.get('mon_features')
-    swapped = None if features is None else features.get('item_swapped')
-    if swapped is not None and (swapped.shape != (1, 6) or
-            swapped.dtype not in (np.dtype('int32'), np.dtype('bool'))):
-        raise ValueError('public item mutation facts malformed')
+    # Fidelity M1: the original sampler excludes a mutated current item (determinization: item_mutated ->
+    # revealed_item None), B2's per-mon ledger flag `item_mutated`. The seat's per-stint `item_swapped`
+    # (an arrival resets it) implies a mutation, so a root carry without the ledger (e.g. a live root that
+    # does not import it) still excludes its Trick receipt as before.
+    swapped = None
+    for key in ('item_mutated', 'item_swapped'):
+        flag = None if features is None else features.get(key)
+        if flag is None:continue
+        if flag.shape != (1, 6) or flag.dtype not in (np.dtype('int32'), np.dtype('bool')):
+            raise ValueError('public item mutation facts malformed')
+        swapped = (flag != 0) if swapped is None else swapped | (flag != 0)
     result, seen = [], set()
     for slot in range(6):
         if not present[slot]:

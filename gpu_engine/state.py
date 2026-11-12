@@ -84,6 +84,7 @@ class BattleState(NamedTuple):
     truant_loaf: jax.Array         # [B,2,6] explicit Gen3 residual clock, not action history
     item_knocked: jax.Array        # [B,2,6] bool, pokemon.itemKnockedOff; never reset (sim/pokemon.ts)
     effect_draws: jax.Array        # [B,2,4], ChanceInputs.effect saved for a suspended turn, else 0 (fidelity patch R)
+    recharge_counter: jax.Array    # [B,2,6], volatiles.mustrecharge.duration: 2 after a Hyper Beam hit, 1 after its residual (fidelity M1)
 
 
 def empty_state(batch_size: int, *, seed: int = 0) -> BattleState:
@@ -126,7 +127,7 @@ def empty_state(batch_size: int, *, seed: int = 0) -> BattleState:
         spikes=side(), wish_counter=side(),wish_amount=side(),weather=battle(), weather_counter=battle(), turn=battle(),
         keys=keys, done=jnp.ones((b,), jnp.bool_), winner=jnp.full((b,), -1, jnp.int32),
         truant_loaf=jnp.zeros((b,2,6),jnp.bool_),item_knocked=jnp.zeros((b,2,6),jnp.bool_),
-        effect_draws=jnp.zeros((b,2,4),jnp.int32))
+        effect_draws=jnp.zeros((b,2,4),jnp.int32),recharge_counter=mon())
 
 
 def bench_indices(active: jax.Array) -> jax.Array:
@@ -158,7 +159,22 @@ def usable_moves(state: BattleState) -> jax.Array:
     # Baton can copy the charge even when its recipient does not know the move.
     charge_slots=charge_slots.at[...,0].set(charge_slots[...,0]|~jnp.any(charge_slots,axis=-1))
     moves=jnp.where(charge[...,None]>0,charge_slots,moves)
+    # Fidelity M1: a mustrecharge holder's request is the single pseudo-move Recharge
+    # (sim/pokemon.ts getMoves: lockedMove 'recharge'), sent as slot 0; it overrides the
+    # Choice, Encore and PP filters. Structs without the leaf (request fixtures) skip it.
+    recharge=getattr(state,'recharge_counter',None)
+    if recharge is not None:
+        recharging=jnp.take_along_axis(recharge,state.active[...,None],axis=2)[...,0]>0
+        moves=jnp.where(recharging[...,None],jnp.arange(4)==0,moves)
     return moves
+
+
+def recharging(state: BattleState) -> jax.Array:
+    """[B,2] the active must recharge (fidelity M1): getMoveRequestData's hard lock sets
+    trapped (sim/pokemon.ts getLockedMove), so switches are illegal too."""
+    recharge=getattr(state,'recharge_counter',None)
+    if recharge is None:return jnp.zeros(state.active.shape,jnp.bool_)
+    return jnp.take_along_axis(recharge,state.active[...,None],axis=2)[...,0]>0
 
 
 def legal_actions(state: BattleState) -> jax.Array:
@@ -175,6 +191,7 @@ def legal_actions(state: BattleState) -> jax.Array:
     linked=(source>=0) & (source==state.active[:,::-1]) & (active_hp[:,::-1]>0)
     # Gen 3 has no later-generation Ghost exemption for these move traps.
     charge=jnp.take_along_axis(state.charge_move,state.active[...,None],axis=2)[...,0]>0
+    charge|=recharging(state)
     switches = (bench_hp > 0) & (~(state.trapped | rooted | linked | charge) | forced)[..., None]
     mask = jnp.concatenate((moves, switches), axis=-1)
     return mask & ~state.done[:, None, None]

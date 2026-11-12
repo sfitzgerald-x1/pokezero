@@ -22,8 +22,27 @@ from gpu_engine_default_observer_ast import dump_default_program
 import test_gpu_engine_intimidate_owning_event as initial_fixture
 
 
+# Fidelity M1's approved entry physics change: switchOut's clearVolatile ends mustrecharge (entry.depart). The block
+# is removed only when it is exactly this code, once; any other edit of entry's default program still fails.
+M1_RECHARGE_DEPART=ast.parse("""if hasattr(state,'recharge_counter'):
+    state=state._replace(recharge_counter=state.recharge_counter.at[rows,side,active].set(
+        jnp.where(eligible,0,state.recharge_counter[rows,side,active])))""").body[0]
+
+
+def strip_m1_recharge(depart,*,required=False):
+ """entry.depart (a FunctionDef, edited in place) without M1's approved recharge clear."""
+ test=ast.dump(M1_RECHARGE_DEPART.test)
+ found=[n for n in depart.body if isinstance(n,ast.If)and ast.dump(n.test)==test]
+ assert len(found)<=1 and (found or not required),'entry.depart: the M1 recharge clear is missing or repeated'
+ for n in found:
+  assert ast.dump(n)==ast.dump(M1_RECHARGE_DEPART),'entry.depart: the M1 recharge clear differs from the approved code'
+  depart.body.remove(n)
+ return depart
+
+
 def default_entry_program(text):
  tree=ast.parse(text)
+ strip_m1_recharge(next(n for n in tree.body if isinstance(n,ast.FunctionDef)and n.name=='depart'))
  fields=('spikes_type_count','spikes_item_count','spikes_boots_item')
  table=next(n for n in tree.body if isinstance(n,ast.ClassDef)and n.name=='EntryTable')
  added=[n for n in table.body if isinstance(n,ast.AnnAssign)and n.target.id in fields]
