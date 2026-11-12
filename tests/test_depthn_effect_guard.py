@@ -603,9 +603,9 @@ class AbilityLaneTests(unittest.TestCase):
     def test_wonder_guard_blocks_every_damaging_move_that_is_not_super_effective(self):
         user = mon('pressure')
         wg = self.lanes(user, SHEDINJA, ('tackle', 'dragonrage', 'flamethrower', 'shadowball'))['WG']
-        self.assertEqual(wg, [True, True, False, False])   # immune Normal and power-0 Dragon Rage blocked (the engine KOs); Fire, Ghost hit
+        self.assertEqual(wg, [False, True, False, False])   # power-0 Dragon Rage (neutral) blocked, the engine KOs; immune Normal: 0 in both; Fire, Ghost hit
         wg = self.lanes(user, SHEDINJA, ('sheercold', 'seismictoss', 'crunch', 'earthquake'))['WG']
-        self.assertEqual(wg, [True, True, False, True])   # OHKO and a fixed-damage immune move blocked; Dark x2 hits; Ground x0.5 blocked
+        self.assertEqual(wg, [True, False, False, True])   # OHKO (neutral) and Ground x0.5 blocked; immune Seismic Toss: 0 in both; Dark x2 hits
         wg = self.lanes(user, SHEDINJA, ('struggle', 'beatup', 'toxic', None))['WG']
         self.assertEqual(wg, [False] * 4)   # typeless moves pass Wonder Guard; a Status move is not its business; no move
 
@@ -653,10 +653,10 @@ class AbilityEvaluateTests(unittest.TestCase):
         own, peer = self.priors()
         r = G.ability_evaluate(own, peer, dict(turn1=[ability_root(0, own=dict(WG=[True, False, False, False]))]))
         self.assertEqual((r['tripped'], r['b_turn1'], r['b_reach'], r['b_switchin'], r['c']), (True, True, False, False, False))
-        reason, = r['reasons'];self.assertEqual((reason['source'], reason['family'], reason['side'], reason['worlds']), ('ability_turn1', 'WG', 'own', [0]))
+        reason, = r['reasons'];self.assertEqual((reason['source'], reason['family'], reason['side'], reason['worlds']), ('ability_turn1', ['WG'], 'own', [0]))
         self.assertAlmostEqual(reason['max_mass'], .9, places=12);self.assertAlmostEqual(r['families']['WG']['turn1']['own'], .9, places=12)
         theirs = G.ability_evaluate(own, peer, dict(turn1=[ability_root(0, opp=dict(CONTACT=[True, False, False, False]))]))
-        self.assertEqual([(x['side'], x['family']) for x in theirs['reasons']], [('opp', 'CONTACT')])
+        self.assertEqual([(x['side'], x['family']) for x in theirs['reasons']], [('opp', ['CONTACT'])])
         waiting = G.ability_evaluate(own, self.priors(requested=False)[1], dict(turn1=[ability_root(0, opp=dict(CONTACT=[True] * 4))]))
         self.assertFalse(waiting['tripped'])   # a waiting opponent has no prior
         low = G.ability_evaluate(*self.priors(own=(0, .04)), dict(turn1=[ability_root(0, own=dict(WG=[True, False, False, False]))]))
@@ -684,7 +684,7 @@ class AbilityEvaluateTests(unittest.TestCase):
         entry = dict(side='own', lane=4, family='WG', holder='wonderguard', against=[True, False, False, False])
         r = G.ability_evaluate(own, peer, dict(turn1=[ability_root(0)], switchin={0: [entry]}))
         self.assertAlmostEqual(r['families']['WG']['switchin']['opp'], .5 * .6, places=12)   # credited to the attacker
-        self.assertEqual((r['b_switchin'], [(x['source'], x['side'], x['family']) for x in r['reasons']]), (True, [('ability_switchin', 'opp', 'WG')]))
+        self.assertEqual((r['b_switchin'], [(x['source'], x['side'], x['family']) for x in r['reasons']]), (True, [('ability_switchin', 'opp', ['WG'])]))
         again = G.ability_evaluate(own, peer, json.loads(json.dumps(dict(turn1=[ability_root(0)], switchin={0: [entry]}))))
         self.assertEqual(again['families'], r['families'])   # world keys survive a JSON round trip
         theirs = dict(side='opp', lane=4, family='CONTACT', holder='flamebody', against=[True, False, False, False])
@@ -737,6 +737,9 @@ class AbilityEvaluateTests(unittest.TestCase):
             ability=dict(turn1=[ability_root(0, own=dict(WG=[True, False, False, False]))]))
         self.assertEqual((with_ab['tripped'], with_ab['b'], with_ab['arms'], with_ab['ability']['c']), (True, False, ['ability'], True))
         self.assertEqual(G.trips(with_ab, 0), dict(tripped=True, b=False, c=True));self.assertEqual(G.trips(with_ab, 1), dict(tripped=False, b=False, c=False))
+        b_only = G.evaluate(cond, own_turn1=dict(lanes=lanes, logits=prior(0, .9)[0], legal=prior(0, .9)[1]), peer_turn1=[], turn2=[], choice=1,
+            ability=dict(turn1=[ability_root(0, own=dict(WG=[True, False, False, False]))]))   # the ability guard's (b) alone
+        self.assertEqual((b_only['b'], b_only['ability']['b'], G.trips(b_only, 1)), (False, True, dict(tripped=True, b=True, c=False)))
         self.assertEqual({k: v for k, v in with_ab.items() if k not in ('ability', 'tripped', 'arms')}, {k: v for k, v in plain.items() if k not in ('tripped', 'arms')})
 
 

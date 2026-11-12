@@ -145,6 +145,14 @@ def stack_worlds(worlds):
 
 
 UNION_FIELDS = ('tripped', 'b', 'b_turn1', 'b_turn2', 'c', 'arms', 'm_own', 'm_opp')
+_FACTS = {}
+
+
+def ability_facts(metadata):
+    """AbilityFacts of one metadata object, built once per process (the live search's constructor metadata never changes)."""
+    key = id(metadata)
+    if key not in _FACTS or _FACTS[key][0] is not metadata:_FACTS[key] = (metadata, AbilityFacts(metadata))
+    return _FACTS[key][1]
 
 
 class AbilityFacts:
@@ -159,6 +167,7 @@ class AbilityFacts:
             t = int(row.get('type') or 0)
             self.catalog[normalize_id(row['id'])] = dict(category=row.get('category'), type=self.types[t] if 0 < t < len(self.types) else None,
                 contact=bool((row.get('flags') or {}).get('contact')))
+        if not self.catalog:raise ValueError('the ability guard needs the move catalog (metadata moves)')
         names = self.types[1:];chart = metadata['type_chart']
         self.chart = {a: {d: float(chart[i][j]) for j, d in enumerate(names)} for i, a in enumerate(names)}
         self.relevant = frozenset(i for i, name in enumerate(self.abilities) if name in guard.ABILITY_FAMILIES)
@@ -177,17 +186,23 @@ class AbilityFacts:
         """Whether either active at this row holds an ability the guard watches (else no lane there can be guarded)."""
         return any(int(labels['ability'][row, seat, int(labels['active'][row, seat])]) in self.relevant for seat in (0, 1))
 
-    def lanes(self, labels, row, seat, lanes, pinch='third'):
-        return guard.ability_lanes(self.active(labels, row, seat), self.active(labels, row, 1 - seat), lanes, self.catalog, self.chart, pinch=pinch)
+    def lanes(self, labels, row, seat, lanes, pinch='third', actives=None):
+        """ability_lanes of `seat` at a row; `actives` {seat: active facts} when the caller already read them."""
+        actives = actives or {s: self.active(labels, row, s) for s in (0, 1)}
+        return guard.ability_lanes(actives[seat], actives[1 - seat], lanes, self.catalog, self.chart, pinch=pinch)
+
+    def unknown(self, lanes):
+        """How many of a side's lanes name a move the catalog does not know (recorded: such a lane is never guarded)."""
+        return sum(1 for m in list(lanes)[:4] if m and m not in self.catalog)
 
 
 def ability_root(facts, labels, world, owner, own_lanes, peer_lanes):
     """The ability guard's turn-1 inputs of one world's root row: (turn1 entry, switch-in entries)."""
     lanes = {owner: list(own_lanes)[:4], 1 - owner: list(peer_lanes)[:4]};side = {owner: 'own', 1 - owner: 'opp'}
-    entry = dict(world=world)
+    entry = dict(world=world);actives = {s: facts.active(labels, world, s) for s in (0, 1)}
     for seat in (owner, 1 - owner):
-        entry[side[seat]] = dict(third=facts.lanes(labels, world, seat, lanes[seat]), two_thirds=facts.lanes(labels, world, seat, lanes[seat], 'two_thirds'),
-            damaging=guard.damaging_lanes(lanes[seat], facts.catalog))
+        entry[side[seat]] = dict(third=facts.lanes(labels, world, seat, lanes[seat], actives=actives),
+            two_thirds=facts.lanes(labels, world, seat, lanes[seat], 'two_thirds', actives=actives), damaging=guard.damaging_lanes(lanes[seat], facts.catalog))
     switchin = []
     for seat in (owner, 1 - owner):
         active = int(labels['active'][world, seat]);other = 1 - seat
@@ -196,7 +211,7 @@ def ability_root(facts, labels, world, owner, own_lanes, peer_lanes):
             if slot >= labels['ability'].shape[2] or not bool(labels['alive'][world, seat, slot]):continue
             mon = facts.mon(labels, world, seat, slot);family = guard.holder_family(mon)
             if family is None:continue
-            against = guard.ability_lanes(facts.active(labels, world, other), mon, lanes[other], facts.catalog, facts.chart)[family]
+            against = guard.ability_lanes(actives[other], mon, lanes[other], facts.catalog, facts.chart)[family]
             if any(against):switchin.append(dict(side=side[seat], lane=4 + i, family=family, holder=normalize_id(str(mon['ability'])), against=list(against)))
     return entry, switchin
 
@@ -222,7 +237,7 @@ def effect_record(frame, root, worlds, children, request, owner, vocabulary, cho
     own_turn1 = dict(lanes=list(own_lanes), logits=[float(x) for x in root['root_logits']], legal=[bool(x) for x in root['root_legal']])
     stacked = stack_worlds(worlds);root_labels = None if stacked is None else {k: np.asarray(v) for k, v in jax.device_get(labels(stacked)).items()}
     peer, turn2, expanded, missing = [], [], 0, 0
-    facts = None if metadata is None else AbilityFacts(metadata);ab = dict(turn1=[], switchin={}, turn2=[])
+    facts = None if metadata is None else ability_facts(metadata);ab = dict(turn1=[], switchin={}, turn2=[], unknown_lanes=0)
     if facts is not None and root_labels is not None and 'ability' not in root_labels:raise ValueError('the ability guard needs ability_labels')
     if reply_logits is not None and len(reply_logits) != len(worlds):raise ValueError(f'{len(reply_logits)} reply logits for {len(worlds)} worlds')
     child = children[0] if len(children) == 1 else None
@@ -239,19 +254,20 @@ def effect_record(frame, root, worlds, children, request, owner, vocabulary, cho
                     legal=[bool(x) for x in frame.root_peer_legal[r, jw]], requested=bool(frame.root_peer_requested[r, jw])))
                 if facts is not None:
                     entry, switchin = ability_root(facts, root_labels, world, owner, own_lanes, lanes)
-                    ab['turn1'].append(entry)
+                    ab['turn1'].append(entry);ab['unknown_lanes'] += facts.unknown(own_lanes) + facts.unknown(lanes)
                     if switchin:ab['switchin'][world] = switchin
             status = frame.t1_status[r, jw]
             for a, b in zip(*np.nonzero(status == 2)):
                 expanded += 1;cell = int(a) * 9 + int(b);row = rows.get((2 * r + jw, cell), -1)
                 if row < 0:missing += 1;continue
-                sides = None
+                sides = None;touched = facts is not None and facts.touches(child['labels'], row);actives = None
                 for side, seat, requested, logits, legal in (('own', owner, frame.t1_own_requested, frame.t1_own_logits, frame.t1_own_legal),
                         ('opp', 1 - owner, frame.t1_peer_requested, frame.t1_peer_logits, frame.t1_peer_legal)):
                     if not bool(requested[r, jw, a, b]):continue
                     lanes, user = side_lanes(child['labels'], row, seat, names)
-                    if facts is not None and facts.touches(child['labels'], row):
-                        masks = facts.lanes(child['labels'], row, seat, lanes)
+                    if touched:
+                        actives = actives or {s: facts.active(child['labels'], row, s) for s in (0, 1)}
+                        masks = facts.lanes(child['labels'], row, seat, lanes, actives=actives)
                         if any(any(v) for v in masks.values()):
                             ab['turn2'].append(dict(world=world, cell=cell, side=side, lanes=masks, logits=[float(x) for x in logits[r, jw, a, b]],
                                 legal=[bool(x) for x in legal[r, jw, a, b]]))
@@ -275,7 +291,7 @@ def effect_record(frame, root, worlds, children, request, owner, vocabulary, cho
             replied.append(dict(w, logits=[float(x) for x in logits]) if w['requested'] else dict(w))
         reply = guard.evaluate(cond, own_turn1=own_turn1, peer_turn1=replied, turn2=[dict(t) for t in turn2], turn2_available=available, choice=choice,
             ability=ability)
-        summary = lambda r: {k: r.get(k) for k in UNION_FIELDS}
+        summary = lambda r: {**{k: r.get(k) for k in UNION_FIELDS}, **({'ability_b': bool(r['ability']['b'])} if 'ability' in r else {})}
         record['union'] = dict(tripped=bool(record['tripped'] or reply['tripped']), champion=summary(record), reply=summary(reply))
         record['union_only'] = bool(record['union']['tripped'] and not record['tripped'])   # only the reply arm tripped: b, c, arms, m_* are the champion's
         record['tripped'] = record['union']['tripped']

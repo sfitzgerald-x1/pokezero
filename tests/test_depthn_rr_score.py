@@ -1331,5 +1331,26 @@ class ExternalPriorTests(unittest.TestCase):
         self.assertEqual((set(found.values()), missing), ({0}, []))
 
 
+class AbilityGuardChoiceTests(unittest.TestCase):
+    """The ability guard (the record's `ability`) guards every operator as live: its (b) alone, the reply arm's ability_b, its (c)."""
+    legal = legal_mask(0, 1, 4)
+
+    def played(self, record):
+        return S.guard_choices(dict(averaging=0, greedy=1), 1, None, record)
+
+    def test_the_ability_guard_sends_operators_to_greedy(self):
+        clear = guard_record()
+        self.assertEqual(self.played(clear)[0]['averaging'], 0)
+        b_only = dict(guard_record(), ability=dict(b=True, own_guarded_lanes=[None] * 4, arms={}))
+        self.assertEqual(self.played(b_only), (dict(averaging=1, greedy=1), dict(averaging=['UNREPRESENTED_EFFECT'], greedy=None)))
+        reply = dict(guard_record(), union=dict(reply=dict(b=False, ability_b=True)))
+        self.assertEqual(self.played(reply)[0]['averaging'], 1)
+        c_only = dict(guard_record(), ability=dict(b=False, own_guarded_lanes=[['CONTACT'], None, None, None], arms=dict(CONTACT=['choice'])))
+        self.assertEqual(self.played(c_only)[0]['averaging'], 1)   # (c) on lane 0
+        facts = S.guard_facts(dict(b_only, rule=S.effect_guard.RULE, any_cell_b=False, any_cell_reasons=[], reach=None,
+                                   ability=dict(b_only['ability'], reasons=[dict(source='ability_turn1', family=['WG'])])), dict(averaging=0, greedy=1))
+        self.assertEqual((facts['b'], facts['ability_b'], facts['ability_families']), (True, True, ['WG']))
+
+
 if __name__ == '__main__':
     unittest.main()

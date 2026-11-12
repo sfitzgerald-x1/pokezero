@@ -461,7 +461,7 @@ def trips(record, choice):
     """The guard for an action `choice` of ours at a root whose record is `record` (the RR's per-operator rule): dict(tripped,
     b, c). (b) is the root's; (c) is whether `choice` is a move lane guarded for us."""
     c = type(choice) is int and 0 <= choice < 4 and (record.get('own_guarded_lanes') or [None] * 4)[choice] is not None
-    ab = record.get('ability') or {};b = bool(record['b']) or bool(ab.get('b'))
+    ab = record.get('ability') or {};b = bool(record['b']) or bool(ab.get('b'))   # the ability guard's (b) guards the root too
     if type(choice) is int and 0 <= choice < 4 and (ab.get('own_guarded_lanes') or [None] * 4)[choice]:   # the ability guard's (c)
         c = c or any(a in ab.get('arms', ABILITY_ARMS).get(f, ()) for a in ('choice',) for f in ab['own_guarded_lanes'][choice])
     return dict(tripped=b or c, b=b, c=c)
@@ -470,7 +470,9 @@ def trips(record, choice):
 # Abilities the engine does not model (the ability guard; the lead's decisions of 2026-11-12) -------------------------------------
 # Showdown f76228a (gen3 inherits data/mods/gen4/abilities.ts): Wonder Guard (gen4 :530-543) blocks every damaging move that is not
 # super-effective, except a Status move or a typeless one (Struggle, gen4/moves.ts:1273-1281; Beat Up, gen4/moves.ts:81; the Future
-# Sight / Doom Desire hit, gen3/moves.ts:228, 244), immune moves included; Blaze / Torrent / Overgrow / Swarm (gen4 :25-35 and
+# Sight / Doom Desire hit, gen3/moves.ts:228, 244); WG guards the resisted and neutral ones (0 < effectiveness < 2), power-0
+# fixed-damage and OHKO moves included: an immune move does nothing in the engine either (fixed and Counter damage too,
+# damage_moves.resolve_fixed, transition.py:1015-1016), so it is priced exactly; Blaze / Torrent / Overgrow / Swarm (gen4 :25-35 and
 # alike) give their type 1.5x base power while hp <= maxhp / 3; Poison Point, Flame Body, Effect Spore (gen3 abilities.ts:12-30,
 # 135-144) may status a contact attacker that dealt damage. The engine models none of them (Static and Rough Skin it does). A lane
 # is guarded at a node for a family when its move's outcome there depends on that family's ability (ability_lanes); the families'
@@ -513,7 +515,7 @@ def ability_lanes(user, target, lanes, catalog, chart, *, pinch='third'):
         move = lanes[lane] if lane < len(lanes) else None;info = catalog.get(move) if move else None
         if not info or info.get('category') == 'Status':continue
         kind = user.get('hp_type') if move.startswith('hiddenpower') and user.get('hp_type') else info.get('type')
-        if wg and move not in WG_TYPELESS and effectiveness(kind, target.get('types'), chart) < 2:out['WG'][lane] = True
+        if wg and move not in WG_TYPELESS and 0 < effectiveness(kind, target.get('types'), chart) < 2:out['WG'][lane] = True
         if pinch_type and low and kind == pinch_type:out['PINCH'][lane] = True
         if contact and info.get('contact'):out['CONTACT'][lane] = True
     return out
@@ -581,7 +583,7 @@ def ability_evaluate(own_turn1, peer_turn1, ability, *, choice=None, threshold=T
                 if m >= threshold and on(f, 'turn1'):
                     x = turn1_worlds.setdefault((side, f), [0., set()]);x[0] = max(x[0], m);x[1].add(w)
     for (side, f), (m, ws) in sorted(turn1_worlds.items()):
-        reasons.append(dict(source='ability_turn1', family=f, side=side, max_mass=m, worlds=sorted(ws)))
+        reasons.append(dict(source='ability_turn1', family=[f], side=side, max_mass=m, worlds=sorted(ws)))
     c_hit = type(choice) is int and 0 <= choice < 4 and any(on(f, 'choice') for f in own_lanes[choice])
     for f in FAMILIES:by[f]['choice'] = type(choice) is int and 0 <= choice < 4 and f in own_lanes[choice]
     by['PINCH']['choice_third'] = type(choice) is int and 0 <= choice < 4 and own_third[choice]
@@ -604,7 +606,7 @@ def ability_evaluate(own_turn1, peer_turn1, ability, *, choice=None, threshold=T
         for side in ('own', 'opp'):
             m = by[f]['switchin'][side]
             if m >= threshold and on(f, 'switchin'):
-                b_switchin = True;reasons.append(dict(source='ability_switchin', family=f, side=side, max_mass=m, worlds=sorted(where[(f, side)])))
+                b_switchin = True;reasons.append(dict(source='ability_switchin', family=[f], side=side, max_mass=m, worlds=sorted(where[(f, side)])))
     # the reach: M_s over the enabled families' lanes (their union per lane), and each family's own M
     msum = {s: [] for s in ('own', 'opp')};fsum = {(f, s): [] for f in FAMILIES for s in ('own', 'opp')}
     subsets = [tuple(f for i, f in enumerate(FAMILIES) if bits >> i & 1) for bits in range(1, 2 ** len(FAMILIES))]
@@ -640,7 +642,7 @@ def ability_evaluate(own_turn1, peer_turn1, ability, *, choice=None, threshold=T
         families=by, reasons=reasons, own_guarded_lanes=[sorted(x) or None for x in own_lanes],
         reach_subsets={'+'.join(sub): {s: math.fsum(ssum[(sub, s)]) for s in ('own', 'opp')} for sub in subsets},
         cells=dict(turn1=len(ability.get('turn1') or ()), switchin=sum(len(v) for v in (ability.get('switchin') or {}).values()),
-                   turn2=len(ability.get('turn2') or ())))
+                   turn2=len(ability.get('turn2') or ()), unknown_lanes=int(ability.get('unknown_lanes') or 0)))
 
 
 def ability_trips(ab, *, arms=None, pinch_root=None, threshold=None):

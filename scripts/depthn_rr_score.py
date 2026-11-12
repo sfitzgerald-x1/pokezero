@@ -641,14 +641,16 @@ def guard_choices(choices, greedy, own_moves, record, b=None):
     root, or (c) on this operator's own choice) trips. Returns ({name: played choice}, {name: [causes] or None}); greedy is
     never guarded; `record` None (a row without the guard) applies the recharge guard alone. `b` replaces the record's root-level
     (b) (the reach scopes: turn-1 (b) or the reach's turn 2); (c) stays the record's. A union record (a br_fp row, depthn_guard_inputs
-    reply_logits) adds its reply arm's (b) to either, as the live actor's fallback does (only (b) differs between the arms)."""
+    reply_logits) adds its reply arm's (b) to either, as the live actor's fallback does (only (b) differs between the arms). The
+    ability guard's (b) (the record's `ability`, and the reply arm's ability_b) guards the root in every scope, as live."""
     played, causes = {}, {}
-    reply_b = bool(((record or {}).get('union') or {}).get('reply', {}).get('b'))
+    reply = ((record or {}).get('union') or {}).get('reply', {})
+    reply_b = bool(reply.get('b')) or bool(reply.get('ability_b'));ability_b = bool(((record or {}).get('ability') or {}).get('b'))
     for name, choice in choices.items():
         if name == 'greedy' or choice is None:played[name], causes[name] = choice, None;continue
         why = []
         if effect_guard.recharge_guarded(own_moves, choice, greedy):why.append(OWN_RECHARGE)
-        if record is not None and ((record['b'] if b is None else b) or reply_b or effect_guard.trips(record, choice)['c']):why.append(UNREPRESENTED)
+        if record is not None and ((record['b'] if b is None else b) or reply_b or ability_b or effect_guard.trips(record, choice)['c']):why.append(UNREPRESENTED)
         played[name], causes[name] = (greedy if why else choice), (why or None)
     return played, causes
 
@@ -824,8 +826,11 @@ def guard_facts(record, raw):
     any_b = bool(record['any_cell_b']) if live_reach else bool(record['b'])
     # a union record (br_fp, depthn_guard_inputs reply_logits): the reply arm's (b) guards the root as the live fallback does; the
     # record's own fields (b_turn1, b_turn2, tiers, m_*) stay the champion's, and union_only marks a root guarded by the reply arm alone
-    reply_b = bool((((record.get('union') or {}).get('reply')) or {}).get('b'));champion_b = bool(record['b'])
+    reply = ((record.get('union') or {}).get('reply')) or {};reply_b = bool(reply.get('b')) or bool(reply.get('ability_b'))
+    ability_b = bool((record.get('ability') or {}).get('b'));champion_b = bool(record['b']) or ability_b
     return dict(rule=record.get('rule', 'any_cell'), b=champion_b or reply_b, champion_b=champion_b, union_only=reply_b and not champion_b,
+                **({'ability_b': ability_b, 'ability_families': sorted({f for x in record['ability'].get('reasons') or () for f in x.get('family') or ()})}
+                   if isinstance(record.get('ability'), dict) else {}),
                 b_turn1=bool(record.get('b_turn1')), b_turn2=bool(record.get('b_turn2')),
                 turn2=turn2, tiers_turn1=tiers('turn1'), sides_turn1=sides1, tiers_turn2=tiers2, tier_masses_turn2=masses2, unavailable=unavailable,
                 m_own=record.get('m_own'), m_opp=record.get('m_opp'), arms=record.get('arms'),
