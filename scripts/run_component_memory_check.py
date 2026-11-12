@@ -70,6 +70,11 @@ def own_cgroup(*, proc=Path('/proc'), cgroup=Path('/sys/fs/cgroup')):
 
 STAT_FIELDS = ('anon', 'file', 'shmem', 'kernel', 'file_mapped', 'file_dirty', 'file_writeback',
                'active_file', 'inactive_file', 'swapcached')
+# memory.current is exact, but memory.stat is flushed lazily: up to MEMCG_CHARGE_BATCH (64) pages of
+# updates per online CPU can wait per CPU and as many again in the flush counter (mm/memcontrol.c,
+# memcg_vmstats_needs_flush). The clean-cache estimate is lowered by that bound so a stale memory.stat
+# can never lower the gate: 2 MiB on a 4-CPU runner with 4 KiB pages.
+STAT_ERROR_BYTES = 2 * 64 * (os.cpu_count() or 1) * os.sysconf('SC_PAGE_SIZE')
 # Without any of these the reclaimable term cannot be bounded; the sample then uses summed RSS.
 REQUIRED_STAT = ('file', 'shmem', 'file_mapped', 'file_dirty', 'file_writeback', 'active_file', 'inactive_file')
 
@@ -89,7 +94,8 @@ def cgroup_memory(group, swap_baseline=0):
     them). Lazily freed anon pages (MADV_FREE) sit on the inactive file LRU
     without being page cache, so the reclaimable term is also capped by the
     page cache itself (file - shmem, less dirty, writeback and mapped pages).
-    Anon and kernel memory are counted as charged.
+    Anon and kernel memory are counted as charged. memory.stat may lag
+    memory.current by STAT_ERROR_BYTES; the reclaimable term is lowered by it.
 
     memory.current excludes swapped-out pages; swap growth since the start of the
     run (memory.swap.current - swap_baseline) is added, so memory the kernel had
@@ -105,7 +111,8 @@ def cgroup_memory(group, swap_baseline=0):
     if missing := [name for name in REQUIRED_STAT if name not in stat]:
         raise ValueError('memory.stat lacks ' + ','.join(missing))
     held = stat['file_dirty'] + stat['file_writeback'] + stat['file_mapped']
-    clean = max(0, min(stat['active_file'] + stat['inactive_file'] - held, stat['file'] - stat['shmem'] - held))
+    clean = max(0, min(stat['active_file'] + stat['inactive_file'], stat['file'] - stat['shmem'])
+                - held - STAT_ERROR_BYTES)
     try:
         swap = int((group / 'memory.swap.current').read_text())
     except (OSError, ValueError):
@@ -278,6 +285,7 @@ def run(command, *, output, label, summary=None, limit_bytes=None, interval=.2, 
             memory_source=source, peak_rss_bytes=legacy,
             peak_rss_method='not gating: max(sampled process-tree RSS sum, observed process HWM, kernel child HWM)',
             peak_memory_stat=breakdown, pss_errors=pss_errors, cgroup_fallback_samples=fallbacks,
+            stat_error_bytes=STAT_ERROR_BYTES if group is not None else None,
             swap_baseline_bytes=swap_baseline if group is not None else None,
             cgroup_swap_peak_bytes=cgroup_peak(group, 'memory.swap.peak'),
             sample_interval_seconds=interval, cgroup_memory_peak_bytes=cgroup_peak(group),

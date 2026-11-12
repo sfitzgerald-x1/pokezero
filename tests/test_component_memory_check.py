@@ -29,6 +29,12 @@ def fake_process(root, pid, *, rss, hwm, pss=0, flags=0, tasks=None, file=0):
 
 
 class ComponentMemoryCheckTests(unittest.TestCase):
+    def setUp(self):
+        # Exact arithmetic below; the stale-stat allowance has its own test.
+        patcher = mock.patch('scripts.run_component_memory_check.STAT_ERROR_BYTES', 0)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     def tree(self, root, observer, *, child_flags=0, grandchild_on_thread=True):
         # observer -> 11 -> 12 (started from 11's second thread) -> 13 (forked, not exec'd)
         fake_process(root, observer, rss=1, hwm=1, pss=1, tasks={observer: '11'})
@@ -125,6 +131,16 @@ class ComponentMemoryCheckTests(unittest.TestCase):
         if swap is not None:
             (group/'memory.swap.current').write_text(f'{swap}\n')
         return group
+
+    def test_stale_memory_stat_allowance_only_raises_the_gate(self):
+        stat = dict(file=400, shmem=50, file_mapped=40, file_dirty=20, file_writeback=10, active_file=150,
+                    inactive_file=200)
+        with tempfile.TemporaryDirectory() as folder:
+            group = self.cgroup(Path(folder), stat)
+            with mock.patch('scripts.run_component_memory_check.STAT_ERROR_BYTES', 100):
+                self.assertEqual(cgroup_memory(group)['cgroup_memory_bytes'], 820)
+            with mock.patch('scripts.run_component_memory_check.STAT_ERROR_BYTES', 10**6):
+                self.assertEqual(cgroup_memory(group)['cgroup_memory_bytes'], 1000)
 
     def test_lazily_freed_anon_on_the_file_lru_is_not_dropped_as_cache(self):
         with tempfile.TemporaryDirectory() as folder:
