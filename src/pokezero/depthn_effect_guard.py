@@ -220,8 +220,8 @@ def conditions(lines, owner, own_request_line=None):
 
 
 def _knocked(members):
-    """Whether a side has a non-fainted Pokemon whose item was publicly knocked off (Trick's tier-C condition until #1935 retired
-    it; still recorded; `knocked` is absent from a record written before it: False)."""
+    """Whether a side has a non-fainted Pokemon whose item was publicly knocked off (Trick's tier-C condition until Trick's retirement
+    at #1935's merge; still recorded; `knocked` is absent from a record written before it: False)."""
     return any(not m.get('fainted') and m.get('knocked') for m in members.values())
 
 
