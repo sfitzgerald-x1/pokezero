@@ -9,7 +9,8 @@ from pokezero import depthn_live_actor as actor
 
 # The guard's live tables, as this module defines them (pinned by LiveTableTests). Every other test here exercises the guard's
 # mechanics -- conditions, masses, the arms, the reach, the record -- against FIXTURE, a fixed table (the guard of #1932 / #1933,
-# before the A1 / A2 / R retirements), so that retiring a move changes the pins and nothing else.
+# before the A1 / A2 / R, #1935 and M2 retirements; its RETIRED holds only Destiny Bond and Hyper Beam), so that retiring a move
+# changes the pins and nothing else.
 LIVE_GUARDED, LIVE_RETIRED = dict(G.GUARDED), dict(G.RETIRED)
 FIXTURE_GUARDED = {
     'transform': ('A', 'other', None), 'yawn': ('A', 'volatile', None), 'wrap': ('A', 'volatile', None), 'perishsong': ('A', 'volatile', None),
@@ -546,7 +547,7 @@ class RetiredTests(unittest.TestCase):
 
 
 class LiveTableTests(unittest.TestCase):
-    """The guard's live tables: GUARDED after the A1 / A2 / R / M1 and #1935 retirements, RETIRED with each move's engine merge (a screen declares
+    """The guard's live tables: GUARDED after the A1 / A2 / R / M1, #1935 and M2 retirements, RETIRED with each move's engine merge (a screen declares
     a move retired only on an engine at or after it), and every retired move recorded and never tripping, through evaluate."""
     def live(self):
         stack = tables(LIVE_GUARDED, LIVE_RETIRED)
@@ -559,8 +560,9 @@ class LiveTableTests(unittest.TestCase):
             'lovelykiss': ('status', '4ee5d3ee'), 'charm': ('target_stat_change', '4ee5d3ee'), 'spore': ('status', '4ee5d3ee'),
             'sleeppowder': ('status', '4ee5d3ee'), 'hypnosis': ('status', '4ee5d3ee'), 'gigadrain': ('other', '286a5ffe'),
             'mirrorcoat': ('retaliation', '286a5ffe'), 'counter': ('retaliation', '0d661773'), 'bonemerang': ('other', '0d661773'),
-            'trick': ('item_removal', '3f48093b'), 'knockoff': ('item_removal', '3f48093b')})
-        self.assertEqual(sorted(m for m, v in LIVE_GUARDED.items() if v[0] == 'A'), ['perishsong', 'superpower', 'transform', 'wrap', 'yawn'])
+            'trick': ('item_removal', '3f48093b'), 'knockoff': ('item_removal', '3f48093b'),
+            'wrap': ('volatile', 'f00dfeed'), 'yawn': ('volatile', 'f00dfeed'), 'perishsong': ('volatile', 'f00dfeed')})
+        self.assertEqual(sorted(m for m, v in LIVE_GUARDED.items() if v[0] == 'A'), ['superpower', 'transform'])
         self.assertEqual(sorted(m for m, v in LIVE_GUARDED.items() if v[0] == 'C'), ['facade', 'psychoboost', 'sacredfire'])
         self.assertEqual({m: v for m, v in LIVE_GUARDED.items()}, {m: v for m, v in FIXTURE_GUARDED.items() if m not in LIVE_RETIRED})
         self.assertEqual({m: FIXTURE_GUARDED[m][1] for m in LIVE_RETIRED if m in FIXTURE_GUARDED},
