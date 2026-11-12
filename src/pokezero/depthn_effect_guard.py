@@ -3,15 +3,12 @@
 The GPU device engine keys every move effect by name and reads no effect fields (generate_teams.cjs:75-81); the static
 table of its handling of the Gen 3 random-battle pool is reports/gpu-engine-move-effect-table-20261109.md. GUARDED holds
 the moves whose missing effect carries over into the price (the lead's decision):
-- tier A, unconditional: transform, yawn, wrap, perishsong, superpower, knockoff;
+- tier A, unconditional: transform, yawn, wrap, perishsong, superpower;
 - tier C, guarded for a side only while its condition holds (`conditions`): sacredfire while the user is frozen,
   psychoboost while the user's White Herb is unconsumed
   (ours: the request's item; the opponent's: Deoxys and Deoxys-Attack always hold it in the pool, until an -enditem or an
   -item for that Pokemon is seen), facade while the user has Guts and a burn, paralysis or poison (every pool Facade user
-  has Guts; ours: the request's ability), trick while either side has a non-fainted Pokemon whose item was
-  publicly knocked off (-enditem ... [from] move: Knock Off: the engine models Trick since M1, but live roots do not carry
-  item_knocked yet, so an in-tree Trick on that Pokemon would succeed where Showdown fails; roots after a public item swap
-  stay refused by the world constructor, PUBLIC_ITEM_SWAP_NOT_SUPPORTED).
+  has Guts; ours: the request's ability).
 TIER_B (irontail, signalbeam, steelwing, meteormash: chance secondaries) is never guarded, only reported (tier_b_legal).
 RETIRED (tier 'R') holds the moves the guard no longer trips on because the engine now models their effect, each with the
 integration merge from which it does (a screen declares an engine at or after it): destinybond (A2, 286a5ffe: the DESTINY_BOND
@@ -25,9 +22,14 @@ Bonemerang's two hits; probes counter*, bonemerang_counter*), charm (A1, 4ee5d3e
 sleepclause, sleepclause_rest, sleepclause_faint, lovelykiss_block), bonemerang (R, 0d661773: two hits after one accuracy
 roll, the second on the appended effect stream; 14 bonemerang* probes; live roots never resume a queued Bonemerang with an
 unsampled stream: the pricer draws it per node, transition.sample_chance_inputs, and a replacement-phase root clears the
-queue and samples it, phase_d_tail), each exact against Showdown f76228a1 in the engine session's probe runs. The retired
-tier-C moves' conditions (sleep_clause, user_brn_par_psn, party_statused) stay in `guarded`'s vocabulary and in the recorded
-conditions, unused by any GUARDED move. They stay WATCHED, so their masses are still recorded (turn-2
+queue and samples it, phase_d_tail), trick and knockoff (#1935, 3f48093b: live roots carry a public Knock Off's item_knocked
+and M1's item ledger, gpu_engine/constructor_worlds.py; in-tree Trick since M1, 8b212312, probes trick, trick_bandband,
+trick_empty, trick_encore, trick_faster, trick_knocked_target, trick_knocked_user, trick_lum, trick_protect, trick_stickyhold,
+trick_sub, trick_takeband; Knock Off since A2, 286a5ffe, probes knockoff, knockoff_band, knockoff_midturn_lock; Sticky Hold's
+block is in-engine, gpu_engine/items.py sticky_hold, and a blocked Knock Off marks nothing at the root; roots after a public
+item swap stay refused by the world constructor, PUBLIC_ITEM_SWAP_NOT_SUPPORTED), each exact against Showdown f76228a1 in the
+engine session's probe runs. The retired tier-C moves' conditions (sleep_clause, user_brn_par_psn, party_statused,
+item_knocked) stay in `guarded`'s vocabulary and in the recorded conditions, unused by any GUARDED move. They stay WATCHED, so their masses are still recorded (turn-2
 entries: guarded False, tier 'R'), and never count toward (a), (b) (its turn-1 arm and the reach) or (c). Roots where a side is
 already bonded stay refused by the world constructor, not here.
 
@@ -69,10 +71,9 @@ RULE = 'reach'   # the live turn-2 arm: the reach M_s (screen-r2); records befor
 GUARDED = {
     'transform': ('A', 'other', None),
     'yawn': ('A', 'volatile', None), 'wrap': ('A', 'volatile', None), 'perishsong': ('A', 'volatile', None),
-    'superpower': ('A', 'self_stat_drop', None), 'knockoff': ('A', 'item_removal', None),
+    'superpower': ('A', 'self_stat_drop', None),
     'sacredfire': ('C', 'status', 'user_frozen'),
     'psychoboost': ('C', 'self_stat_drop', 'white_herb'), 'facade': ('C', 'other', 'guts_status'),
-    'trick': ('C', 'item_removal', 'item_knocked'),
 }
 TIER_B = {'irontail': 'target_stat_change', 'signalbeam': 'volatile', 'steelwing': 'self_boost', 'meteormash': 'self_boost'}
 # move id -> (effect class, the integration merge from which the engine models it): watched and recorded, never guarded.
@@ -80,7 +81,8 @@ RETIRED = {'destinybond': ('volatile', '286a5ffe'), 'hyperbeam': ('multi_turn', 
            'curse': ('self_boost', '4ee5d3ee'), 'aromatherapy': ('status', '4ee5d3ee'), 'refresh': ('status', '4ee5d3ee'),
            'lovelykiss': ('status', '4ee5d3ee'), 'gigadrain': ('other', '286a5ffe'), 'mirrorcoat': ('retaliation', '286a5ffe'),
            'counter': ('retaliation', '0d661773'), 'charm': ('target_stat_change', '4ee5d3ee'), 'spore': ('status', '4ee5d3ee'),
-           'sleeppowder': ('status', '4ee5d3ee'), 'hypnosis': ('status', '4ee5d3ee'), 'bonemerang': ('other', '0d661773')}
+           'sleeppowder': ('status', '4ee5d3ee'), 'hypnosis': ('status', '4ee5d3ee'), 'bonemerang': ('other', '0d661773'),
+           'trick': ('item_removal', '3f48093b'), 'knockoff': ('item_removal', '3f48093b')}
 WATCHED = frozenset(GUARDED) | frozenset(TIER_B) | frozenset(RETIRED)
 # The guarded tiers in force while records carried no per-entry `guarded` (before 49530d2a; GUARDED unchanged from 2c5c7b80 until
 # RETIRED): reach's bounds for those records use these, so a later guard set does not move them.
@@ -218,8 +220,8 @@ def conditions(lines, owner, own_request_line=None):
 
 
 def _knocked(members):
-    """Whether a side has a non-fainted Pokemon whose item was publicly knocked off (Trick's condition; `knocked` is absent
-    from a record written before it: False)."""
+    """Whether a side has a non-fainted Pokemon whose item was publicly knocked off (Trick's tier-C condition until Trick's retirement
+    at #1935's merge; still recorded; `knocked` is absent from a record written before it: False)."""
     return any(not m.get('fainted') and m.get('knocked') for m in members.values())
 
 
@@ -258,7 +260,7 @@ def sleep_clause(other):
 
 def guarded(move, side, user, *, other=None):
     """(tier, effect class) when `move` is guarded for a side (its conditions `side`, its active `user`), else None. `other`:
-    the other side's conditions (Sleep Clause; Trick: either side's knocked-off item), default the side's own flags."""
+    the other side's conditions (Sleep Clause; item_knocked: either side's knocked-off item), default the side's own flags."""
     entry = GUARDED.get(move)
     if entry is None:return None
     tier, effect, condition = entry

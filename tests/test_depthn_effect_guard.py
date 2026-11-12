@@ -546,7 +546,7 @@ class RetiredTests(unittest.TestCase):
 
 
 class LiveTableTests(unittest.TestCase):
-    """The guard's live tables: GUARDED after the A1 / A2 / R retirements, RETIRED with each move's engine merge (a screen declares
+    """The guard's live tables: GUARDED after the A1 / A2 / R / M1 and #1935 retirements, RETIRED with each move's engine merge (a screen declares
     a move retired only on an engine at or after it), and every retired move recorded and never tripping, through evaluate."""
     def live(self):
         stack = tables(LIVE_GUARDED, LIVE_RETIRED)
@@ -558,16 +558,33 @@ class LiveTableTests(unittest.TestCase):
             'curse': ('self_boost', '4ee5d3ee'), 'aromatherapy': ('status', '4ee5d3ee'), 'refresh': ('status', '4ee5d3ee'),
             'lovelykiss': ('status', '4ee5d3ee'), 'charm': ('target_stat_change', '4ee5d3ee'), 'spore': ('status', '4ee5d3ee'),
             'sleeppowder': ('status', '4ee5d3ee'), 'hypnosis': ('status', '4ee5d3ee'), 'gigadrain': ('other', '286a5ffe'),
-            'mirrorcoat': ('retaliation', '286a5ffe'), 'counter': ('retaliation', '0d661773'), 'bonemerang': ('other', '0d661773')})
-        self.assertEqual(sorted(m for m, v in LIVE_GUARDED.items() if v[0] == 'A'), ['knockoff', 'perishsong', 'superpower', 'transform', 'wrap', 'yawn'])
-        self.assertEqual(sorted(m for m, v in LIVE_GUARDED.items() if v[0] == 'C'), ['facade', 'psychoboost', 'sacredfire', 'trick'])
+            'mirrorcoat': ('retaliation', '286a5ffe'), 'counter': ('retaliation', '0d661773'), 'bonemerang': ('other', '0d661773'),
+            'trick': ('item_removal', '3f48093b'), 'knockoff': ('item_removal', '3f48093b')})
+        self.assertEqual(sorted(m for m, v in LIVE_GUARDED.items() if v[0] == 'A'), ['perishsong', 'superpower', 'transform', 'wrap', 'yawn'])
+        self.assertEqual(sorted(m for m, v in LIVE_GUARDED.items() if v[0] == 'C'), ['facade', 'psychoboost', 'sacredfire'])
         self.assertEqual({m: v for m, v in LIVE_GUARDED.items()}, {m: v for m, v in FIXTURE_GUARDED.items() if m not in LIVE_RETIRED})
         self.assertEqual({m: FIXTURE_GUARDED[m][1] for m in LIVE_RETIRED if m in FIXTURE_GUARDED},
                          {m: c for m, (c, _) in LIVE_RETIRED.items() if m in FIXTURE_GUARDED})   # each keeps its effect class
         self.assertFalse(set(LIVE_RETIRED) & (set(LIVE_GUARDED) | set(G.TIER_B)));self.assertTrue(set(LIVE_RETIRED) <= G.WATCHED)
-        changed = {'trick': ('A', 'C')}   # M1: tier C under the knocked-off condition
-        self.assertEqual({m: t for m, (t, _, _) in LIVE_GUARDED.items() if m not in changed},
-                         {m: t for m, t in G.PRE_FLAG_TIERS.items() if m not in LIVE_RETIRED and m not in changed})
+        self.assertEqual({m: t for m, (t, _, _) in LIVE_GUARDED.items()},   # every still-guarded move keeps its frozen tier
+                         {m: t for m, t in G.PRE_FLAG_TIERS.items() if m not in LIVE_RETIRED})
+
+    def test_a_public_knock_off_no_longer_guards_trick(self):
+        """After a public Knock Off on their Snorlax, FIXTURE guards both sides' Trick (tier C, item_knocked) and our turn-1 Trick
+        trips; the live tables retire Trick and Knock Off (#1935 carries item_knocked to live roots), so the condition is still
+        recorded and nothing trips."""
+        c = G.conditions(BASE + KNOCK, 0, request(OURS, moves=('trick', 'knockoff', 'substitute', 'protect')))
+        self.assertEqual((c['opp']['item_knocked'], c['opp']['members']['snorlax']['knocked']), (True, True))
+        lanes = ['trick', 'knockoff', 'substitute', 'protect'];own = prior(0, .97)
+        run = lambda: G.evaluate(c, own_turn1=dict(lanes=lanes, logits=own[0], legal=own[1]), peer_turn1=[], turn2=[], choice=0)
+        self.assertEqual((G.guarded('trick', c['own'], 'breloom', other=c['opp']), G.guarded('trick', c['opp'], 'snorlax', other=c['own']),
+                          G.guarded('knockoff', c['own'], 'breloom')), (('C', 'item_removal'), ('C', 'item_removal'), ('A', 'item_removal')))
+        r = run();self.assertEqual((r['tripped'], r['c'], sorted(x['move'] for x in r['reasons'])), (True, True, ['trick', 'trick']))
+        self.live()
+        self.assertEqual((G.guarded('trick', c['own'], 'breloom', other=c['opp']), G.guarded('trick', c['opp'], 'snorlax', other=c['own']),
+                          G.guarded('knockoff', c['own'], 'breloom')), (None, None, None))
+        r = run();self.assertEqual((r['tripped'], r['b'], r['c'], r['reasons']), (False, False, False, []))
+        self.assertEqual((r['conditions']['opp']['item_knocked'], sorted(m['move'] for m in r['masses']['turn1'])), (True, ['knockoff', 'trick']))
 
     def test_a_binding_sleep_clause_no_longer_guards_the_sleep_moves(self):
         """Our Breloom asleep from a non-allied source binds Sleep Clause for the opponent: FIXTURE guards its Spore, Sleep Powder
@@ -612,8 +629,9 @@ KNOCK = ['|move|p1a: Breloom|Knock Off|p2a: Snorlax', '|-damage|p2a: Snorlax|80/
 
 
 class TrickConditionTests(unittest.TestCase):
-    """Trick (tier C since M1, 8b212312): guarded for either side while either side has a non-fainted Pokemon whose item was
-    publicly knocked off (live roots do not carry item_knocked; Showdown's takeItem fails on a knocked-off item, user or target)."""
+    """FIXTURE's Trick (tier C from M1, 8b212312, until #1935's merge, 3f48093b, retired it in the live tables): guarded for either
+    side while either side has a non-fainted Pokemon whose item was publicly knocked off (live roots did not carry item_knocked
+    before #1935; Showdown's takeItem fails on a knocked-off item, user or target)."""
     def test_a_public_knock_off_guards_both_sides_trick(self):
         c = G.conditions(BASE + KNOCK, 0, request(OURS))
         self.assertEqual((c['opp']['members']['snorlax']['knocked'], c['opp']['item_knocked'], c['own']['item_knocked']), (True, True, False))
