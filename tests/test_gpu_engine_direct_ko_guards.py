@@ -5,11 +5,11 @@ import jax.numpy as j
 import numpy as np
 from gpu_engine import engine_direct_ko_callbacks as ko,engine_direct_hit_controls as hit
 from gpu_engine import engine_execution_completeness as ex,engine_public_events as events,engine_lifecycle_callbacks as life,engine_kernel_frame_risk as risk
-import test_gpu_engine_direct_ko_owning as fixture
+import test_gpu_engine_direct_ko_components as fixture
 
 class DirectKOGuardsTests(unittest.TestCase):
  @classmethod
- def setUpClass(cls):fixture.DirectKOOwningTests.setUpClass();cls.f=fixture.DirectKOOwningTests()
+ def setUpClass(cls):fixture.DirectKOComponentTests.setUpClass();cls.f=fixture.DirectKOComponentTests()
  def source(self):
   f=self.f;state,cursor,_=f.initial(8,consume=False);mask=j.array([True,True]+[False]*6)
   tape=life._tape(cursor,f.producer,64);tape=ex.begin_on_tape(tape,ex.initialize(cursor.stream_id,compiled=f.account),f.account.device,active=j.ones(8,bool));carry=risk.begin_frame_device(risk.initialize_device(tape.stream_id,f.risks.device),tape,f.risks.device,active=j.ones(8,bool));tape=tape._replace(execution=tape.execution._replace(risks=risk.Context(carry,f.risks.device)))
