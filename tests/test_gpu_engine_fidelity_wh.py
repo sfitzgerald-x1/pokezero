@@ -334,12 +334,16 @@ class RegressRuleTests(unittest.TestCase):
         self.assertEqual(facade_actors([0, 1], np.array([True, False])), [0])
         self.assertEqual(facade_actors([1], np.array([True, False])), [])
 
-    def test_sacred_fire_drops_sides_whose_line_ran_frozen(self):
-        # GPU mutant S3 at edfcba5d (the thaw on the foe): its user's line ran still frozen, so the side loses Sacred Fire.
+    def test_sacred_fire_keeps_only_sides_tied_to_the_frozen_user(self):
+        # GPU mutant S3 at edfcba5d (the thaw on the foe): its user's line ran still frozen, so the side loses Sacred Fire;
+        # a side keeps it only where its frozen pre-step active thawed at its own line, or was stopped still frozen.
         from gpu_engine.v2e_regress import sacred_actors
-        self.assertEqual(sacred_actors([0, 1], np.array([False, False])), [0, 1])   # thawed lines, or stopped before one
-        self.assertEqual(sacred_actors([0, 1], np.array([True, False])), [1])
-        self.assertEqual(sacred_actors([0], np.array([True, False])), [])
+        no, yes = np.array([False, False]), np.array([True, True])
+        self.assertEqual(sacred_actors([0, 1], yes, no, no), [0, 1])                            # thawed at their own lines
+        self.assertEqual(sacred_actors([0, 1], no, np.array([False, True]), no), [1])           # side 1 stopped, still frozen
+        self.assertEqual(sacred_actors([0, 1], no, no, no), [])                                 # no witness at all
+        self.assertEqual(sacred_actors([0, 1], yes, no, np.array([True, False])), [1])          # side 0 also ran a frozen line
+        self.assertEqual(sacred_actors([0], no, no, np.array([True, False])), [])
 
 
 if __name__ == '__main__':
