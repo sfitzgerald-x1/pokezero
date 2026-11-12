@@ -5,12 +5,14 @@ also runs the frame. Both are jit closures over whole programs: the frame, and t
 execution.consume_frame_device (called once per owner) inlined. Each one compiles once per prepared runtime.
 
 Component tests of what a construct or an advance produces run the two closures' own unjitted bodies instead, on the same
-_frame and consume_pair_device code. Each compiled closure is traced under jit once per process, on the arguments of its
-first eager call (gpu_engine_eager_frame.eager_call: no lowering or compile), so jit-only failures still surface.
+_frame and consume_pair_device code. Each compiled closure is traced under jit (no lowering or compile) once per process and
+argument structure: construction's witness call and an advance's differ, because the frame-input report is still None at
+construction. Jit-only failures therefore still surface on both.
 
 Run eagerly, consume_frame_device would recompile its projection scans on every call, because each call builds fresh scan
-closures. Inside the scope it therefore runs under a jit with a stable identity: its array leaves are dynamic arguments,
-and its other leaves (catalogs, tables, Python scalars) are closed over, with one compile per distinct set of them.
+closures. Inside the scope it therefore runs under a jit with a stable identity. Its array leaves are dynamic arguments; the
+table NamedTuples flatten into them. Its other leaves (the encoder Catalog, which is not a registered pytree, and Python
+scalars) are closed over, with one compile per distinct set of them.
 Only the execution route changes; every value is computed by the same code. The heavy anchor
 (test_gpu_engine_source_witness_compiled_anchor) checks compiled == eager on the frame and witness outputs.
 
@@ -24,16 +26,26 @@ import jax
 
 from gpu_engine import engine_execution_completeness as execution
 from gpu_engine import engine_retained_encoder_driver as driver
-from gpu_engine_eager_frame import eager_call
 
 _CONSUME = execution.consume_frame_device
 # key -> (jitted, closed-over leaves). The entry holds those leaves, so the identities in its key stay unique.
 _JIT = {}
+# (id of a compiled closure, argument structure) -> that closure, kept alive so ids stay unique.
+_TRACED = {}
+
+
+def eager_call(compiled, *args, **kwargs):
+    """The compiled closure's own body on these arguments, after one jit trace per argument structure (no compile)."""
+    key = (id(compiled), jax.tree.structure((args, kwargs)))
+    if key not in _TRACED:
+        compiled.trace(*args, **kwargs);_TRACED[key] = compiled
+    return compiled.__wrapped__(*args, **kwargs)
 
 
 def _closed_key(leaf):
     """A closed-over leaf in a cache key: Python scalars and None by value, everything else by identity."""
-    if leaf is None or type(leaf) in (bool, int, float, str):return (type(leaf).__name__, leaf)
+    if type(leaf) is float:return ('float', leaf.hex())   # keeps 0.0 and -0.0 apart; every NaN shares one key
+    if leaf is None or type(leaf) in (bool, int, str):return (type(leaf).__name__, leaf)
     return ('id', id(leaf))
 
 
@@ -44,11 +56,7 @@ def stable_consume(*args, **kwargs):
     leaves, tree = jax.tree_util.tree_flatten(named)
     dynamic_at = tuple(i for i, leaf in enumerate(leaves) if hasattr(leaf, 'dtype'))
     closed = tuple((i, leaf) for i, leaf in enumerate(leaves) if not hasattr(leaf, 'dtype'))
-    try:
-        hash(tree);tree_key = tree
-    except TypeError:
-        tree_key = str(tree)
-    key = (len(args), tree_key, dynamic_at, tuple((i, _closed_key(leaf)) for i, leaf in closed))
+    key = (len(args), tree, dynamic_at, tuple((i, _closed_key(leaf)) for i, leaf in closed))   # an unhashable tree raises
     entry = _JIT.get(key)
     if entry is None:
         def body(values, _closed=dict(closed), _tree=tree, _count=len(args), _total=len(leaves)):
@@ -62,8 +70,8 @@ def stable_consume(*args, **kwargs):
 
 
 def clear():
-    """Drop the cached consume executables (and the objects they close over)."""
-    _JIT.clear()
+    """Drop the cached consume executables and traced closures (and the objects they hold)."""
+    _JIT.clear();_TRACED.clear()
 
 
 @contextmanager
