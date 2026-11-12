@@ -4,8 +4,8 @@ import jax
 import jax.numpy as j
 import numpy as np
 from gpu_engine import engine_weather_speed_profile as profile,engine_request_source as source
-from gpu_engine import engine_full_v4_event_device as full,public_wire,v4_encoder as v4,public_inputs as inputs
-from gpu_engine import engine_public_events as events,weather
+from gpu_engine import engine_full_v4_event_device as full,public_wire,public_toxic,v4_encoder as v4,public_inputs as inputs
+from gpu_engine import engine_public_events as events,weather,engine_lifecycle_callbacks as life
 import test_gpu_engine_engine_weather_public as fixture
 
 
@@ -50,7 +50,15 @@ class WeatherHPPublicTests(unittest.TestCase):
             sem=np.array(lower.chunk.words[row])[np.array(lower.chunk.valid[row])]
             for index,w in enumerate(sem):
                 kind,_,turn,_,actor,_,target,_,*p=map(int,w);raw=np.asarray(frame.callbacks.words[row,index])
-                if kind==inputs.Kind.SWITCH:
+                if int(raw[0])==life.TURNLOOP_PREFIX:
+                    self.assertEqual(kind,int(inputs.Kind.TOXIC))
+                    self.assertEqual(p,[public_toxic.TIMESTAMP,0,0,-1,0,1,0,0])
+                    self.assertEqual(raw.tolist(),[35,-1,-1,-1,-1,0,0,0,0,0])
+                    lines.extend(['|','|t:|1'])
+                elif kind==inputs.Kind.ABILITY and int(raw[0])==24:
+                    if int(before.projection.state.causal.owner[row])==target:
+                        lines.append(f'|-ability|{active[target]}|Pressure|[silent]')
+                elif kind==inputs.Kind.SWITCH:
                     name=self.f.catalog.species.names[p[1]];active[target]=f'p{target+1}a: {name}'
                     lines.append(f'|switch|{active[target]}|{name}, L{p[3]}'+(', M' if p[4]==1 else ', F' if p[4]==2 else '')+f'|{p[5]}/{p[6]}')
                 elif kind==inputs.Kind.MOVE:lines.append(f'|move|{active[actor]}|{self.f.catalog.moves.names[p[1]]}|{active[target]}')

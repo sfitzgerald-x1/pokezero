@@ -31,7 +31,7 @@ class HustleTests(unittest.TestCase):
         stats=j.full_like(s.stats,101).at[...,0].set(1000).at[:,side,:,1].set(103).at[:,side,:,3].set(103).at[:,side,:,5].set(300)
         return s._replace(hp=j.full_like(s.hp,1000),max_hp=j.full_like(s.max_hp,1000),stats=stats,
             species=j.broadcast_to(j.arange(1,7),(batch,2,6)),level=j.full_like(s.level,73),
-            types=s.types.at[...,0].set(7),ability=ability,base_ability=ability,
+            types=s.types.at[...,0].set(7),base_types=s.types.at[...,0].set(7),ability=ability,base_ability=ability,
             moves=j.full_like(s.moves,self.id('splash')).at[:,side,0,0].set(self.id(move)),
             pp=j.full_like(s.pp,10),done=j.zeros_like(s.done),
             hidden_power_type=s.hidden_power_type.at[:,side,0].set(15 if move=='hiddenpowerice' else 5),

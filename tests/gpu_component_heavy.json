@@ -1,6 +1,6 @@
 {
  "schema": "gpu-component-heavy.v1",
- "rule": "heavy: hosted median wall over 10 min, or a module that never completes on a hosted runner, or an isolated peak RSS over 12 GiB (isolated: one process per module on 4 CPUs with the CI runtime)",
+ "rule": "heavy: hosted median wall over 10 min, or a module that never completes on a hosted runner, or a peak RSS over 11 GiB, isolated or hosted (the CI memory check fails a shard above 75% of runner memory: 11.7 GiB on hosted; isolated: one process per module on 4 CPUs with the CI runtime)",
  "modules": [
   {
    "module": "test_gpu_engine_calm_mind_owning",
@@ -16,6 +16,22 @@
    "hosted_median_min": 18.2,
    "isolated_wall_min": 10.7,
    "isolated_peak_gib": 29.9,
+   "completes_on_hosted": true
+  },
+  {
+   "module": "test_gpu_engine_constructor_worlds_peer_view_b",
+   "reason": "wall+memory",
+   "hosted_median_min": 41.5,
+   "isolated_wall_min": 49.4,
+   "isolated_peak_gib": 14.8,
+   "completes_on_hosted": true
+  },
+  {
+   "module": "test_gpu_engine_direct_hit_full_runtime",
+   "reason": "wall+memory",
+   "hosted_median_min": 40.5,
+   "isolated_wall_min": 24.0,
+   "isolated_peak_gib": 32.9,
    "completes_on_hosted": true
   },
   {
@@ -59,12 +75,36 @@
    "completes_on_hosted": false
   },
   {
+   "module": "test_gpu_engine_fidelity_b",
+   "reason": "wall+memory",
+   "hosted_median_min": 23.7,
+   "isolated_wall_min": 15.6,
+   "isolated_peak_gib": 41.0,
+   "completes_on_hosted": true
+  },
+  {
    "module": "test_gpu_engine_fidelity_m1",
    "reason": "wall+memory",
    "hosted_median_min": null,
    "isolated_wall_min": 38.2,
    "isolated_peak_gib": 58.7,
    "completes_on_hosted": false
+  },
+  {
+   "module": "test_gpu_engine_fidelity_r",
+   "reason": "memory",
+   "hosted_median_min": 9.7,
+   "isolated_wall_min": 7.4,
+   "isolated_peak_gib": 17.7,
+   "completes_on_hosted": true
+  },
+  {
+   "module": "test_gpu_engine_kernel_risk_callsites",
+   "reason": "memory",
+   "hosted_median_min": 5.7,
+   "isolated_wall_min": 3.7,
+   "isolated_peak_gib": 11.1,
+   "completes_on_hosted": true
   },
   {
    "module": "test_gpu_engine_kernel_risk_combined_runtime",
@@ -120,6 +160,14 @@
    "hosted_median_min": 10.6,
    "isolated_wall_min": 9.5,
    "isolated_peak_gib": 7.6,
+   "completes_on_hosted": true
+  },
+  {
+   "module": "test_gpu_engine_status_callbacks_hot_jit",
+   "reason": "memory",
+   "hosted_median_min": 3.3,
+   "isolated_wall_min": 3.4,
+   "isolated_peak_gib": 11.1,
    "completes_on_hosted": true
   },
   {

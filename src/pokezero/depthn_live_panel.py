@@ -609,6 +609,7 @@ def probe(run_directory,*,arm,server,capture,roots=5,tree_commit=None):
         if response['cause']not in ('constructor_refused','depthn_refused','class_refused'):reason='refused: '+str(response['cause']);break
     value=dict(schema=PROBE_SCHEMA,arm=arm,server=server,capture=str(Path(capture).resolve()),status=status,reason=reason,tried=tried)
     write_new(root/'probes'/f'{arm}-{time.time_ns()}.json',value)
+    client.end()   # (review) the probe's battles stop counting at the proxy now, not --sticky-idle later: no skew on the first placements
     if status!='PASS':raise ValueError('search server probe failed: '+reason)
     return value
 
@@ -663,6 +664,7 @@ async def worker(packet,*,expected_pair,original,runtime_class=None,warmup=None)
         # The bridge's per-game result keeps no protocol log; the owner's literal wire is this capture.
         owning_wire=str(root/'owning-wire'/f"{cell['ordinal']}.jsonl"),worker=worker_identity(),load_average=dict(load,end=list(os.getloadavg())))
     write_new(root/'results'/f"{cell['ordinal']}.json",outcome)
+    if client is not None:client.end()   # search arm, after the result is recorded: the proxy stops counting the battle (never raises)
     return 0
 
 
@@ -860,6 +862,7 @@ async def calibration_worker(packet,*,expected_pair,original,runtime_class=None,
     write_new(root/'results'/f"{cell['ordinal']}.json",dict(schema=CELL_SCHEMA,status=status,error=error,cell=cell,setting=packet['setting'],arm=arm,
         cpu_pair=list(expected_pair),source_game=game,benchmark=document,owning_wire=str(root/'owning-wire'/f"{cell['ordinal']}.jsonl"),
         worker=worker_identity(),load_average=dict(load,end=list(os.getloadavg()))))
+    if client is not None:client.end()   # a pre-flight's search arm, after the result is recorded (as cell_worker)
     return 0
 
 

@@ -649,9 +649,12 @@ class WorkerTests(unittest.TestCase):
         root, run, d, lad = make_run(Path(self.directory.name)/'ten', deadline=10.)
         cell = panel.cells(lad, 'DN2W8')[0]; path = root/'requests'/f"{cell['ordinal']}.json"; value = panel.request(run, cell)
         panel.write_new(path, value)
-        with patch.dict(os.environ, {'POD_NAME': 'pod-x'}):
+        ended = []   # (review) the eval worker ends its search battle at the proxy once, after the result is recorded
+        record = lambda c, **k: ended.append((root/'results'/f"{cell['ordinal']}.json").exists()) or []
+        with patch.dict(os.environ, {'POD_NAME': 'pod-x'}), patch('pokezero.depthn_live_actor.Client.end', autospec=True, side_effect=record):
             asyncio.run(panel.worker(dict(path=str(path), sha256=panel.sha(value), server=dict(host='127.0.0.1', port=9)),
                                      expected_pair=(1, 2), original='shared', runtime_class=FakeRuntime))
+        self.assertEqual(ended, [True])
         runtime = FakeRuntime.made[-1]; self.assertEqual((runtime.client.deadline, runtime.client.reserve), (10., .15))
         result = json.loads((root/'results'/f"{cell['ordinal']}.json").read_bytes())
         self.assertEqual((result['worker']['hostname'], result['worker']['pod_name'], result['cpu_pair']), (socket.gethostname(), 'pod-x', [1, 2]))
@@ -733,7 +736,9 @@ class ProbeTests(unittest.TestCase):
     def test_pass_on_the_declared_rung_worlds_and_operator(self):
         value, server = self.probe(actor_tests.send(champion_complete))
         self.assertEqual((value['status'], len(value['tried'])), ('PASS', 1)); self.assertEqual(self.records(), [value])
-        request, = self.requests; root = next(capture.read_capture(self.capture))
+        end = [r for r in self.requests if r.get('schema') == live.BATTLE_END_SCHEMA]   # (review) the probe ends its battle at the proxy
+        request, = [r for r in self.requests if r not in end]; root = next(capture.read_capture(self.capture))
+        self.assertEqual(end, [dict(schema=live.BATTLE_END_SCHEMA, battle_id=request['battle_id'], owner=request['owner'])])
         self.assertTrue(request['battle_id'].startswith('probe-')); self.assertEqual(request['rung'], 'DN2W8')
         self.assertEqual((request['lines'], request['own_request_line'], request['prefix_sha256']),
                          (list(root['lines']), root['own_request_line'], root['prefix_sha256']))
@@ -755,7 +760,7 @@ class ProbeTests(unittest.TestCase):
         root, run, d, lad = make_run(Path(self.directory.name)/'ten', deadline=10.)
         with actor_tests.FakeServer(actor_tests.send(champion_complete)) as server:
             value = panel.probe(root, arm='DN2W8', server=dict(host='127.0.0.1', port=server.port), capture=self.capture)
-            request, = server.requests
+            request, = [r for r in server.requests if r.get('schema') != live.BATTLE_END_SCHEMA]
         self.assertEqual(value['status'], 'PASS'); self.assertTrue(3. < request['budget_seconds'] <= 9.85)
 
     def test_constructor_refusals_move_to_the_next_root(self):
@@ -1878,7 +1883,11 @@ class CalibrationTests(unittest.TestCase):
             for p, srv in ((packets[0], server), (packets[1], None)):   # RAW with a server, a search arm without one
                 with self.subTest(p['arm']), self.assertRaisesRegex(ValueError, 'RAW runs without a server'):
                     asyncio.run(panel.calibration_worker(wire(p, srv), expected_pair=(1, 2), original='o', runtime_class=Runtime))
-            self.assertEqual(asyncio.run(panel.calibration_worker(wire(packets[1], server), expected_pair=(1, 2), original='o', runtime_class=Runtime)), 0)
+            ended = []   # the search arm's battle end frames: once, after the game's result is recorded
+            record = lambda c, **k: ended.append((self.root/'results'/f"{request['cell']['ordinal']}.json").exists()) or []
+            with patch('pokezero.depthn_live_actor.Client.end', autospec=True, side_effect=record):
+                self.assertEqual(asyncio.run(panel.calibration_worker(wire(packets[1], server), expected_pair=(1, 2), original='o', runtime_class=Runtime)), 0)
+            self.assertEqual(ended, [True])
         client = seen[-1]['client']
         self.assertEqual((seen[-1]['arm'], client.rung, client.deadline, client.reserve), ('DN2W8', 'DN2W8', 5., .2))   # not the Client defaults
         claim = json.loads((self.root/'claims'/f"{request['cell']['ordinal']}.json").read_bytes())

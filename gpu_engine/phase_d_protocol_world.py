@@ -5,7 +5,8 @@ Session, witness or History. The original materialize route for retained-driver
 roots is untouched; its explicit protocol route calls the same typed
 battle_spec_from_payload -> map_spec construction and rebases B2 public carry only.
 """
-from dataclasses import dataclass,replace
+import copy
+from dataclasses import dataclass,field,replace
 import hashlib
 import json
 import random
@@ -33,6 +34,20 @@ class ProtocolInputs:
     catalog:object
     metadata:dict
     source:object
+    # One root's world-independent line scans, computed once for its worlds (_once); not part of the inputs' identity.
+    memo:dict=field(default_factory=dict,compare=False,repr=False)
+
+
+def _once(inputs,root,name,compute,*,shared=False):
+    """compute() once per (inputs, root) for every world of one sample(): the same value (a deep copy per world unless shared,
+    for read-only results) or the same exception re-raised at the same call site, exactly as computing it in every world."""
+    key=(name,id(root))
+    if key not in inputs.memo:
+        try:inputs.memo[key]=(True,compute())
+        except Exception as error:inputs.memo[key]=(False,error)
+    ok,value=inputs.memo[key]
+    if not ok:raise value.with_traceback(None)   # each raise starts a fresh traceback: the memo keeps one world's frames at most
+    return value if shared else copy.deepcopy(value)
 
 
 @dataclass(frozen=True)
@@ -259,19 +274,20 @@ def materialize_protocol(root,start,*,inputs,seed):
     detached=inputs.root;catalog=inputs.catalog;metadata=inputs.metadata;owner=detached.address.owner;foe=1-owner
     diagnostics=[]
     try:
-        if root.address!=detached.address or root.owner_lines_sha256!=hashlib.sha256(''.join(x+'\n'for x in inputs.lines).encode()).hexdigest():
+        if root.address!=detached.address or root.owner_lines_sha256!=_once(inputs,root,'prefix',lambda:hashlib.sha256(''.join(x+'\n'for x in inputs.lines).encode()).hexdigest()):
             raise ValueError('same genuine owning prefix/address required')
         if catalog.source.source_hash!=root.context.public_materialization_state.belief_engine.set_source.metadata.source_hash:
             raise ValueError('same public source namespace required')
         state=root.context.public_materialization_state
-        tail_facts=tail.facts(root,state.self_request,inputs.lines)
-        removed=_removed_items(root.materialization_payload,detached,metadata,inputs.lines)
+        tail_facts=_once(inputs,root,'tail_facts',lambda:tail.facts(root,state.self_request,inputs.lines))
+        removed=_once(inputs,root,'removed',lambda:_removed_items(root.materialization_payload,detached,metadata,inputs.lines))
         diagnostics.extend(preflight_checks(root.materialization_payload,removed))
         _preflight(root.materialization_payload,removed)
         projected,sleepers=_defer_sleep(root.materialization_payload)
         projected=tail.defer_substitutes(projected,tail_facts['fresh_substitutes'])
-        origins=_sleep_origins(inputs.lines)
-        revealed={normalize_id(name):candidates for slot,universe,candidates,gender,name in public_worlds._revealed(detached,inputs.source)}
+        origins=_once(inputs,root,'origins',lambda:_sleep_origins(inputs.lines))
+        revealed={normalize_id(name):candidates for slot,universe,candidates,gender,name in
+                  _once(inputs,root,'revealed',lambda:tuple(public_worlds._revealed(detached,inputs.source)),shared=True)}
         for mon in unpack_team(start.player_teams[f'p{foe+1}']):
             candidates=revealed.get(normalize_id(mon.species))
             if candidates is None:continue
@@ -301,13 +317,13 @@ def materialize_protocol(root,start,*,inputs,seed):
         mood[owner]=tuple(map(int,detached.own['happiness']))
         mapping_spec,cursors=tail.mapping_spec(world.spec,tail_facts['replacement'])
         mapped=map_spec(mapping_spec,metadata=metadata,dex=catalog.dex,seed=seed,
-            turn=root.materialization_payload['turn'],active_turns=_chronology(inputs.lines),happiness=tuple(mood))
+            turn=root.materialization_payload['turn'],active_turns=_once(inputs,root,'chronology',lambda:_chronology(inputs.lines)),happiness=tuple(mood))
         if mapped.state is None:
             _downstream_unknowns(diagnostics,'Typed mapper refused: '+repr(mapped.refusals))
             return ProtocolWorld(None,None,mapped.refusals,mapper_diagnostics=tuple(diagnostics))
         physical=tail.restore(mapped.state,world.spec,cursors,tail_facts,metadata=metadata,checks=diagnostics)
         maximum_pp={live._source_move(metadata['vocabulary']['moves'][int(mid)]):int(metadata['moves'][int(mid)]['pp'])*8//5 for row in detached.own['moves'] for mid in row if mid}
-        own=dict(detached.own);own['pp']=np.asarray(own_pp_carry(inputs.lines,state.self_request,maximum_pp),np.int32)
+        own=dict(detached.own);own['pp']=np.asarray(_once(inputs,root,'own_pp',lambda:own_pp_carry(inputs.lines,state.self_request,maximum_pp)),np.int32)
         # Exact facts were read from the owning packet by B2's detached root.
         # Check all mapper-provided literal own fields before preserving the
         # complete own packet state (including exact private request flags).

@@ -71,9 +71,13 @@ class SecondaryStatusTests(unittest.TestCase):
         with self.assertRaises(ValueError):direct.compile_direct_hit_controls(engine_catalog=self.f.producer,metadata=self.f.metadata)
         for name in ('secondary.py','transition.py'):
             before=ast.parse(subprocess.check_output(['git','show','27fa443a:gpu_engine/'+name],text=True))
-            after=ast.parse(Path(secondary.__file__).with_name(name).read_text())
+            after=ast.parse(subprocess.check_output(['git','show','108c6c27:gpu_engine/'+name],text=True))
             self.assertEqual(dump_default_program(before),dump_default_program(after),name)
             if name=='transition.py':assert_hp_rng_mutations_detected(self,after,dump_default_program(before))
+            current=ast.parse(Path(secondary.__file__).with_name(name).read_text())
+            integrated=ast.parse(subprocess.check_output(['git','show','b8092a85:gpu_engine/'+name],text=True))
+            self.assertEqual(ast.dump(current),ast.dump(integrated),name)
+            if name=='transition.py':assert_hp_rng_mutations_detected(self,current,dump_default_program(integrated))
 
     def test_empty_secondary_context_witness_path_remains_defined(self):
         cursor=life.register(j.array([25001],j.int32),**self.kw)

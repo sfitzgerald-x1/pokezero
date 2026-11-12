@@ -102,7 +102,7 @@ class SleepTalkToxicChildTests(unittest.TestCase):
   separate=risk.compile_risks(self.producer,self.runtime['execution_compiled'],direct_hit_compiled=self.helper,toxic_compiled=other_toxic)
   self.assertFalse(bool(separate.device.sleep_talk_toxic_child))
   for name in('sleep_talk.py','engine_toxic_callbacks.py','engine_execution_completeness.py','engine_lifecycle_event_device.py'):
-   self.assertEqual(Path('gpu_engine',name).read_bytes(),subprocess.check_output(['git','show',BASE+':gpu_engine/'+name]))
+   self.assertEqual(Path('gpu_engine',name).read_bytes(),subprocess.check_output(['git','show','b8092a85:gpu_engine/'+name]))
   script=r'''const d=require(process.argv[1]+'/dist/sim/dex.js').Dex.mod('gen3'),lines=[],p={statusState:{time:3},hasAbility:()=>false,toString:()=> 'p2a: Actor',moveSlots:[{id:'sleeptalk',pp:8},{id:'toxic',pp:8},{id:'rest',pp:8}]};const b={effectState:{skippedTime:0},add:(...a)=>lines.push('|'+a.map(String).join('|')),sample:xs=>xs[0],dex:d,actions:{useMove:id=>lines.push('|move|p2a: Actor|'+d.moves.get(id).name+'|p1a: Target|[from] '+d.conditions.get('sleeptalk').name)}};d.conditions.get('slp').onBeforeMove.call(b,p,null,d.moves.get('sleeptalk'));lines.push('|move|p2a: Actor|Sleep Talk|p2a: Actor');d.moves.get('sleeptalk').onHit.call(b,p);console.log(JSON.stringify({time:p.statusState.time,skipped:b.effectState.skippedTime,lines}));'''
   actual=json.loads(subprocess.check_output(['node','-e',script,str(showdown_root())],text=True));self.assertEqual(actual,dict(time=2,skipped=1,lines=['|cant|p2a: Actor|slp','|move|p2a: Actor|Sleep Talk|p2a: Actor','|move|p2a: Actor|Toxic|p1a: Target|[from] sleeptalk']))
   witness._source()

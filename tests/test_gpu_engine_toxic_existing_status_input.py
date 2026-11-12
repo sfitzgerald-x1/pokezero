@@ -76,7 +76,7 @@ class ToxicExistingStatusInputTests(unittest.TestCase):
   for bad in(raw.at[:,8].set(0),raw.at[:,9].add(1),raw.at[:,7:9].set(0)):self.assertFalse(bool(cb.existing_status_raw(bad).any()))
   self.assertTrue(bool(self.toxic.device.existing_status));self.assertFalse(bool(cb.compile_toxic(engine_catalog=self.producer,metadata=self.metadata).device.existing_status))
   with self.assertRaises(ValueError):cb.compile_toxic(engine_catalog=self.producer,metadata=self.metadata,source_rules=deepcopy(self.rules))
-  baseline=dump_default_program(ast.parse(subprocess.check_output(['git','show',BASE+':gpu_engine/transition.py'],text=True)));current=ast.parse(Path('gpu_engine/transition.py').read_text())
+  baseline_tree=ast.parse(subprocess.check_output(['git','show','b8092a85:gpu_engine/transition.py'],text=True));current=ast.parse(Path('gpu_engine/transition.py').read_text())
   def dump(tree):
    tree=deepcopy(tree)
    for node in ast.walk(tree):
@@ -85,6 +85,7 @@ class ToxicExistingStatusInputTests(unittest.TestCase):
      if extra:
       self.assertEqual(len(extra),1);self.assertEqual(ast.dump(extra[0].value),ast.dump(ast.Name(id='caller_move',ctx=ast.Load())));node.keywords=[k for k in node.keywords if k.arg!='caller_move']
    return dump_default_program(tree)
+  baseline=dump(baseline_tree)
   self.assertEqual(dump(current),baseline);assert_hp_rng_mutations_detected(self,current,baseline,dump=dump);witness._source()
   for order in[('benchmark_retained_games','engine_lifecycle_event_device','engine_full_v4_event_device'),('engine_full_v4_event_device','engine_lifecycle_event_device','benchmark_retained_games')]:subprocess.run([__import__('sys').executable,'-c',';'.join('import gpu_engine.'+n for n in order)],check=True,capture_output=True)
 

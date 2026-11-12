@@ -122,7 +122,7 @@ console.log(JSON.stringify(result));'''
         rows=json.loads(result.stdout)
         self.assertEqual(rows[0],dict(lines=[],removed=[]))
         self.assertEqual(rows[1],dict(lines=[['-activate','p2a: Slowbro','ability: Own Tempo']],removed=['confusion']))
-        original=subprocess.check_output(['git','show','ad6f1d9e:gpu_engine/entry.py'],text=True)
+        original=subprocess.check_output(['git','show','b8092a85:gpu_engine/entry.py'],text=True)
         self.assertEqual(dump_default_program(ast.parse(original)),dump_default_program(ast.parse(Path('gpu_engine/entry.py').read_text())))
         self.assertEqual(hashlib.sha256(Path('gpu_engine/transition.py').read_bytes()).hexdigest(),
-            '6fbd113db922e28f6d1f7b9f8c49de8d8c61a8cde6ff64fda5c302960c82598c')
+            hashlib.sha256(subprocess.check_output(['git','show','b8092a85:gpu_engine/transition.py'])).hexdigest())

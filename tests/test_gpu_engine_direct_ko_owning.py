@@ -44,23 +44,23 @@ class DirectKOOwningTests(unittest.TestCase):
   self.assertTrue(bool(self.helper.device.ko_candidates[1]));self.assertFalse(bool(self.helper.device.ko_candidates[int(self.table.struggle)]))
   write=hit.HitWrite(j.full(2,40,j.int32),j.zeros(2,bool),j.ones(2,bool),j.zeros(2,bool),j.ones(2,j.int32),j.ones(2,j.int32),j.zeros(2,bool),j.zeros(2,bool),j.zeros(2,bool),j.full(2,10,j.int32),j.zeros(2,j.int32),j.full(2,100,j.int32))
   self.assertFalse(bool(hit.validate_write_device(write,2,data=self.helper.device,move=j.ones(2,j.int32)).any()))
-  before=ast.parse(subprocess.check_output(['git','show','e5d38e3cf802c355ee944c440666dd84b4948f3c:gpu_engine/transition.py'],text=True));after=ast.parse(Path('gpu_engine/transition.py').read_text());baseline=dump_default_program(before);self.assertEqual(baseline,dump_default_program(after));assert_hp_rng_mutations_detected(self,after,baseline)
+  before=ast.parse(subprocess.check_output(['git','show','b8092a85:gpu_engine/transition.py'],text=True));after=ast.parse(Path('gpu_engine/transition.py').read_text());baseline=dump_default_program(before);self.assertEqual(baseline,dump_default_program(after));assert_hp_rng_mutations_detected(self,after,baseline)
  def test_actual_hp0_faint_span_both_full_and_no_terminal_promotion(self):
   state,cursor,consumers=self.initial();actual=self.play(state,cursor);self.same(actual.step.state,tr.step_with_chance(state,j.zeros((2,2),j.int32),self.table,self.chance()).state)
   self.assertEqual(actual.callbacks.refusal.tolist(),[1,1]);self.assertEqual(actual.callbacks.execution.risks.carry.risk.tolist(),[0,0]);self.assertEqual(actual.step.state.hp[:,1,0].tolist(),[0,0]);self.assertEqual(actual.step.state.done.tolist(),[False,False]);self.assertEqual(actual.step.state.pending_residual.tolist(),[True,True]);self.assertEqual(actual.step.state.forced_switch.tolist(),[[False,True]]*2)
-  raw=np.array(actual.callbacks.words[0,:int(actual.callbacks.count[0])]);self.assertEqual(raw[:,0].tolist(),[1,2,3]);self.assertEqual(actual.callbacks.execution.ledger.stage[:,0].tolist(),[2,2])
+  raw=np.array(actual.callbacks.words[0,:int(actual.callbacks.count[0])]);self.assertEqual(raw[:,0].tolist(),[35,1,2,3]);self.assertEqual(actual.callbacks.execution.ledger.count.tolist(),[2,2]);self.assertEqual(actual.callbacks.execution.ledger.site[:,:2].tolist(),[[int(ex.Site.TURNLOOP_PREFIX),int(ex.Site.DIRECT_HIT)]]*2);self.assertEqual(actual.callbacks.execution.ledger.stage[:,:2].tolist(),[[2,2]]*2)
   frame=life.LifecycleResult(actual.step.state,actual.callbacks.cursor,actual.callbacks,life.snapshot(cursor),life.snapshot(actual.callbacks.cursor),j.zeros(2,bool),j.zeros(2,j.int32));closed=[]
   for owner,(stream,public) in enumerate(consumers):
    ledger,result=ex.consume_frame_device(actual.callbacks.execution.ledger,frame,stream,public,active=j.ones(2,bool),tables=self.account.device,adapter_tables=self.adapter.device,catalog=self.catalog);closed.append(ledger)
-   self.assertEqual(result.projection.error.tolist(),[0,0]);self.assertEqual(ledger.stage[:,0].tolist(),[3,3]);self.assertFalse(bool(result.projection.B4_qualified.any()))
+   self.assertEqual(result.projection.error.tolist(),[0,0]);self.assertEqual(ledger.stage[:,:2].tolist(),[[3,3]]*2);self.assertFalse(bool(result.projection.B4_qualified.any()))
    for row in (0,1):np.testing.assert_array_equal(self.f.words(result.projection,row),self.reference_words(actual.callbacks,row,owner))
   _,good=ex.join_consumed_owners(*closed,tables=self.account.device);self.assertTrue(bool(good.all()))
  def test_critical_resisted_ko_controls_are_exact_owned_suffixes_both_full(self):
   state,cursor,consumers=self.initial();state=state._replace(types=state.types.at[:,1,0,0].set(6));chance=self.chance()._replace(draws=self.chance().draws.at[:,0,4].set(0));actual=self.play(state,cursor,chance=chance)
-  self.same(actual.step.state,tr.step_with_chance(state,j.zeros((2,2),j.int32),self.table,chance).state);self.assertEqual(actual.callbacks.refusal.tolist(),[1,1]);self.assertEqual(actual.callbacks.words[0,:5,0].tolist(),[1,21,23,2,3])
+  self.same(actual.step.state,tr.step_with_chance(state,j.zeros((2,2),j.int32),self.table,chance).state);self.assertEqual(actual.callbacks.refusal.tolist(),[1,1]);self.assertEqual(actual.callbacks.words[0,:6,0].tolist(),[35,1,21,23,2,3])
   frame=life.LifecycleResult(actual.step.state,actual.callbacks.cursor,actual.callbacks,life.snapshot(cursor),life.snapshot(actual.callbacks.cursor),j.zeros(2,bool),j.zeros(2,j.int32));closed=[]
   for owner,(stream,public) in enumerate(consumers):
-   ledger,result=ex.consume_frame_device(actual.callbacks.execution.ledger,frame,stream,public,active=j.ones(2,bool),tables=self.account.device,adapter_tables=self.adapter.device,catalog=self.catalog);closed.append(ledger);self.assertEqual(result.projection.error.tolist(),[0,0]);self.assertEqual(ledger.stage[:,0].tolist(),[3,3])
+   ledger,result=ex.consume_frame_device(actual.callbacks.execution.ledger,frame,stream,public,active=j.ones(2,bool),tables=self.account.device,adapter_tables=self.adapter.device,catalog=self.catalog);closed.append(ledger);self.assertEqual(result.projection.error.tolist(),[0,0]);self.assertEqual(ledger.stage[:,:2].tolist(),[[3,3]]*2)
    for row in (0,1):np.testing.assert_array_equal(self.f.words(result.projection,row),self.reference_words(actual.callbacks,row,owner))
   _,good=ex.join_consumed_owners(*closed,tables=self.account.device);self.assertTrue(bool(good.all()))
  def pending(self,b=8,*,mask=None,write_change=None,last=False):
@@ -99,5 +99,7 @@ class DirectKOOwningTests(unittest.TestCase):
    elif k in (21,22,23):lines.append('|'+{21:'-crit',22:'-supereffective',23:'-resisted'}[k]+'|'+ident[int(w[3])])
    elif k==2:lines.append(f'|-damage|{ident[int(w[3])]}|0 fnt')
    elif k==3:lines.append('|faint|'+ident[int(w[3])])
+   elif k==life.TURNLOOP_PREFIX:
+    self.assertEqual(w.tolist(),[35,-1,-1,-1,-1,0,0,0,0,0]);lines.extend(['|','|t:|1'])
    else:self.fail('unrepresented KO reference '+str(k))
   _,packets=public_wire.project_lines(wire,lines,**v4.wire_kwargs(self.catalog));return np.array([e.words() for p in packets for e in p.events],np.int32)

@@ -37,7 +37,10 @@ class InsomniaBurnPoisonTests(unittest.TestCase):
   for field,value in [('ability',natural),('status',5),('status',1),('status',4),('status_counter',1),('hp',0),('base_ability',self.ability)]:
    bad=s._replace(**{field:getattr(s,field).at[0,side[0],0].set(value)})
    if field=='ability':bad=bad._replace(base_ability=bad.base_ability.at[0,side[0],0].set(value))
-   self.assertEqual(cb.begin_start(t,bad,side,move,move,context,acts=yes,eligible=yes)[1].valid.tolist(),[False]+[True]*7,(field,value))
+   # The integrated Natural Cure callback admits a coherent outgoing status.
+   # Other malformed or unsupported envelopes must still refuse.
+   accepted=field=='ability' and value==natural
+   self.assertEqual(cb.begin_start(t,bad,side,move,move,context,acts=yes,eligible=yes)[1].valid.tolist(),[accepted]+[True]*7,(field,value))
   for caller,acts in((move+1,yes),(move,~yes)):
    self.assertEqual(cb.begin_start(t,s,side,move,caller,context,acts=acts,eligible=yes)[1].valid.tolist(),[False]*8)
   # Literal original before-copy boundary: no private-request/FULL completion
@@ -48,10 +51,10 @@ class InsomniaBurnPoisonTests(unittest.TestCase):
   for field,value in [('status',3),('status_counter',1),('hp',99)]:
    bad=s._replace(**{field:getattr(s,field).at[0,side[0],0].set(value)})
    self.assertEqual(cb.before_copy(t,bad,side,z+3,context,eligible=yes)[1].valid.tolist(),[False]+[True]*7,(field,value))
-  # Coherent Natural Cure replacement still refuses, including at before-copy.
+  # Integrated Natural Cure also admits the coherent before-copy boundary.
   bad=s._replace(ability=s.ability.at[0,side[0],0].set(natural),base_ability=s.base_ability.at[0,side[0],0].set(natural));tr=t.execution.baton_transaction
   changed=t._replace(execution=t.execution._replace(baton_transaction=tr._replace(history=tr.history._replace(private=cb.snapshot(bad)))))
-  self.assertEqual(cb.before_copy(changed,bad,side,z+3,context,eligible=yes)[1].valid.tolist(),[False]+[True]*7)
+  self.assertEqual(cb.before_copy(changed,bad,side,z+3,context,eligible=yes)[1].valid.tolist(),[True]*8)
   # Incoming major status and incoming dormant ability keep their old closure.
   for field,value in [('status',2),('ability',insomnia)]:
    bad=s._replace(**{field:getattr(s,field).at[0,side[0],3].set(value)})
@@ -108,8 +111,8 @@ console.log(JSON.stringify({abilities,rows}));
   with patch.object(cb,'INSOMNIA_UPDATE_SHA256','0'*64):
    with self.assertRaisesRegex(ValueError,'dormant outgoing'):cb.compile_data(self.producer,self.metadata,self.rules)
   for name in('transition.py','entry.py','baton.py','state.py','mechanics.py','engine_retained_encoder_driver.py','engine_full_v4_event_device.py','engine_lifecycle_event_device.py'):
-   self.assertEqual(Path('gpu_engine',name).read_bytes(),subprocess.check_output(['git','show',BASE+':gpu_engine/'+name]),name)
-  before=ast.parse(subprocess.check_output(['git','show',BASE+':gpu_engine/engine_baton_pass_callbacks.py'],text=True));after=ast.parse(Path(cb.__file__).read_text());changed={'compile_data','shape','_bound','_data','_ability_quiet','_quiet','_start_diagnostics'}
+   self.assertEqual(Path('gpu_engine',name).read_bytes(),subprocess.check_output(['git','show','b8092a85:gpu_engine/'+name]),name)
+  before=ast.parse(subprocess.check_output(['git','show','b8092a85:gpu_engine/engine_baton_pass_callbacks.py'],text=True));after=ast.parse(Path(cb.__file__).read_text());changed={'compile_data','shape','_bound','_data','_ability_quiet','_quiet','_start_diagnostics'}
   functions=lambda tree:{n.name:ast.dump(n,include_attributes=False)for n in tree.body if isinstance(n,ast.FunctionDef)and n.name not in changed|{'_insomnia_status'}}
   self.assertEqual(functions(before),functions(after))
   self.assertEqual([n.name for n in ast.walk(after)if isinstance(n,ast.FunctionDef)and n.name in('begin_start','before_copy')],['begin_start','before_copy'])

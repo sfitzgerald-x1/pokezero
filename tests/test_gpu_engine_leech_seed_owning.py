@@ -53,7 +53,7 @@ class LeechSeedOwningTests(unittest.TestCase):
   from gpu_engine import engine_source_frame_witness as witness
   witness._source();d=self.helper.device.leech_seed;self.assertEqual(int(d.move_id),self.move);self.assertEqual(int(self.runtime['kernel_risk_compiled'].device.selected_risk[self.move]),0)
   self.assertIsNone(direct.compile_direct_hit_controls(engine_catalog=self.producer).device.leech_seed)
-  baseline=subprocess.check_output(['git','show','6ea75db3:gpu_engine/transition.py'],text=True);self.assertEqual(dump_default_program(ast.parse(baseline)),dump_default_program(ast.parse(Path(tr.__file__).read_text())));assert_hp_rng_mutations_detected(self,ast.parse(Path(tr.__file__).read_text()),dump_default_program(ast.parse(baseline)))
+  baseline=subprocess.check_output(['git','show','b8092a85:gpu_engine/transition.py'],text=True);self.assertEqual(dump_default_program(ast.parse(baseline)),dump_default_program(ast.parse(Path(tr.__file__).read_text())));assert_hp_rng_mutations_detected(self,ast.parse(Path(tr.__file__).read_text()),dump_default_program(ast.parse(baseline)))
   from gpu_engine import v5_public_branch as branch,v5_hypothetical_batch as batch
   for file in(branch.__file__,batch.__file__):self.assertIn('driver._leech_history',Path(file).read_text())
   self.assertTrue(np.all(np.asarray(self.runtime['public'].device.leech)>0))
