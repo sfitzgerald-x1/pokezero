@@ -285,7 +285,7 @@ def _real(x):
 class DepthNLiveSearch:
     def __init__(self,*,constructor,pricers,params,binding,recipe,tree_commit,min_price_seconds=1.,max_requests=None,session_cap=256,
             archive_sha256=None,device='cpu',clock=time.monotonic,refuse_classes=(),redact_private_reveals=False,peer_view_b=False,reply=None,
-            root_operator=ROOT_OPERATOR):
+            root_operator=ROOT_OPERATOR,ability_guard=False):
         """`pricers`: make_pricers' {bucket: DepthNPricer}; `binding`: the pricer side's WorldBinding (constructor_worlds.binding of
         the executor's source, engine metadata and catalog); `recipe`: the lane-order Recipe; `clock` must be the server's
         arrival clock (time.monotonic); `redact_private_reveals`: constructor_worlds' private-reveal redaction in every
@@ -302,6 +302,7 @@ class DepthNLiveSearch:
         effect guard's (c) reads the played action. The default's decisions and responses are unchanged."""
         if root_operator not in ROOT_OPERATORS:raise ValueError(f'root_operator in {ROOT_OPERATORS} required')
         self.root_operator=root_operator
+        self.ability_guard=bool(ability_guard)   # the effect guard's ability arms (depthn_guard_inputs.effect_record's metadata); off by default
         if type(redact_private_reveals)is not bool:raise ValueError('redact_private_reveals must be a bool')
         if type(peer_view_b)is not bool:raise ValueError('peer_view_b must be a bool')
         self.redact_private_reveals=redact_private_reveals or peer_view_b
@@ -521,7 +522,7 @@ class DepthNLiveSearch:
         try:
             pairs=made.worlds.pairs;worlds=[w for r in root['rows']for w in pairs[r]];owner={'p1':0,'p2':1}[request['owner']]
             return guard_inputs.effect_record(frame,root,worlds,children,request,owner,self.constructor.metadata['vocabulary'],choice,labels=labels,
-                notes=notes,reply_logits=reply_logits)
+                notes=notes,reply_logits=reply_logits,metadata=self.constructor.metadata if getattr(self,'ability_guard',False)else None)
         except FATAL:raise
         except Exception as error:return effect_guard.error_record(f'{type(error).__name__}: {error}')
 

@@ -27,6 +27,23 @@ def fake_labels(states, *, children_only=False, peer_moves=(SURF, TACKLE, REST, 
         usable=np.ones((n, 2, 4), bool), party=party, status=np.zeros((n, 2, 6), np.int32), alive=np.ones((n, 2, 6), bool), rest=np.zeros((n, 2, 6), bool))
 
 
+WONDERGUARD, STATIC, EFFECTSPORE = 1, 2, 3   # the ability fixture's ids (ability_metadata)
+NORMAL, WATER, BUG, GHOST = 1, 2, 3, 4
+
+
+def ability_labels(states, *, ours=0, bench=0, **kw):
+    """fake_labels plus the ability gather (gi.ability_labels' fields): our active (seat 0, slot 0) holds ability `ours` and our slot 1
+    `bench`; a Wonder Guard holder is Bug/Ghost, every other Pokemon Normal; everyone at 100/100, no Hidden Power type."""
+    out = fake_labels(states, **kw);n = out['moves'].shape[0]
+    ability = np.zeros((n, 2, 6), np.int32);ability[:, 0, 0], ability[:, 0, 1] = ours, bench
+    types = np.zeros((n, 2, 6, 2), np.int32);types[..., 0] = NORMAL
+    for slot, a in ((0, ours), (1, bench)):
+        if a == WONDERGUARD:types[:, 0, slot] = (BUG, GHOST)
+    out.update(ability=ability, hp=np.full((n, 2, 6), 100, np.int32), max_hp=np.full((n, 2, 6), 100, np.int32), types=types,
+        hp_type=np.zeros((n, 2, 6), np.int32))
+    return out
+
+
 def varied_labels(states, *, seat=1, sleeper=None, move=SURF):
     """Labels that vary per row and per seat: on P1's flat children (N > 16) `seat` knows `move` on lane 0 only on the rows whose
     lane (row % 81) is odd (tackle elsewhere; the other seat tackle/rest/protect everywhere), and seat `sleeper`'s slot 0 sleeps."""
@@ -79,7 +96,7 @@ class SeamTests(unittest.TestCase):
         self.cw.assert_frames_equal(reference, frame_broken);self.assertEqual((none, why[0][:30]), ([], 'P1 children: ZeroDivisionError'))
 
     def record(self, labels, *, children=None, choice=None, lines=(), request_line=None, entry=('A', 'test', None), found_out=None, modes=None,
-               reply=None, edit=None):
+               reply=None, edit=None, metadata=None):
         pricer = self.make(gi.ObservedDepthNPricer, labels=labels);b, frame, (found, notes) = self.price(pricer, observe=True, modes=modes)
         if edit is not None:frame = edit(frame)
         if found_out is not None:found_out.extend(found)
@@ -88,7 +105,7 @@ class SeamTests(unittest.TestCase):
         with ExitStack() as stack:   # surf guarded (tier A) for the test: the fixture pool has no guarded move
             stack.enter_context(patch.dict(G.GUARDED, surf=entry));stack.enter_context(patch.object(G, 'WATCHED', G.WATCHED | {'surf'}))
             return gi.effect_record(frame, root, worlds, found if children is None else children, request, 0, self.cw.metadata['vocabulary'], choice,
-                labels=labels, notes=notes, reply_logits=None if reply is None else reply(frame, root)), frame, root
+                labels=labels, notes=notes, reply_logits=None if reply is None else reply(frame, root), metadata=metadata), frame, root
 
     @staticmethod
     def champion_reply(frame, root, lane=None, high=50.):
@@ -216,6 +233,35 @@ class SeamTests(unittest.TestCase):
         self.assertEqual((record['c'], record['tripped'], record['own_lanes'][:2]), (True, True, ['surf', 'tackle']))
         self.assertEqual(record['own_guarded_lanes'], [['A', 'test'], None, None, None])   # our lanes are the request's
         self.assertEqual((G.trips(record, 0)['c'], G.trips(record, 1)['c'], G.trips(record, 4)['c']), (True, False, False))
+
+    def ability_metadata(self):
+        """The fixture's engine metadata with the ability guard's parts: abilities, types, move rows (tackle Normal contact, surf
+        Water, rest and protect Status) and the type chart (Normal does nothing to Ghost)."""
+        v = dict(self.cw.metadata['vocabulary'], abilities=['_none', 'wonderguard', 'static', 'effectspore'], types=['_none', 'normal', 'water', 'bug', 'ghost'])
+        rows = [None, dict(id='tackle', type=NORMAL, category='Physical', flags=dict(contact=1)), dict(id='surf', type=WATER, category='Special', flags={}),
+                dict(id='rest', type=NORMAL, category='Status', flags={}), dict(id='protect', type=NORMAL, category='Status', flags={})]
+        chart = [[0. if (a, d) == (0, 3) else 1. for d in range(4)] for a in range(4)]
+        return dict(self.cw.metadata, vocabulary=v, moves=rows, type_chart=chart)
+
+    def test_the_ability_guard_reads_each_worlds_root_and_each_child(self):
+        """With metadata the record gains `ability`: their Tackle into our Wonder Guard active (immune, so Wonder Guard's) trips turn 1
+        and the reach; Effect Spore makes the same Tackle a CONTACT lane; Static (modelled) guards nothing and no child is read."""
+        meta = self.ability_metadata();quiet = (TACKLE, REST, PROTECT, 0)   # no surf: the move guard stays clear
+        wg, frame, root = self.record(lambda s: ability_labels(s, ours=WONDERGUARD, peer_moves=quiet), metadata=meta)
+        ab = wg['ability'];self.assertEqual((wg['b'], wg['tripped'], wg['arms'], ab['b_turn1']), (False, True, ['ability'], True))
+        self.assertIn(('ability_turn1', 'WG', 'opp'), [(x['source'], x['family'], x['side']) for x in ab['reasons']])
+        p = G.masses([float(x) for x in frame.root_peer_logits[0, 0]], [bool(x) for x in frame.root_peer_legal[0, 0]])
+        self.assertAlmostEqual(ab['families']['WG']['turn1']['opp'], max(p[0], ab['families']['WG']['turn1']['opp']), places=12)   # lane 0 Tackle
+        self.assertGreater(ab['cells']['turn2'], 0);self.assertGreater(ab['families']['WG']['reach']['opp'], 0)
+        spore, _, _ = self.record(lambda s: ability_labels(s, ours=EFFECTSPORE, peer_moves=quiet), metadata=meta)
+        self.assertTrue(spore['ability']['families']['CONTACT']['turn1']['opp'] > 0 and spore['ability']['families']['WG']['turn1']['opp'] == 0)
+        static, _, _ = self.record(lambda s: ability_labels(s, ours=STATIC, peer_moves=quiet), metadata=meta)
+        self.assertEqual((static['tripped'], static['ability']['tripped'], static['ability']['cells']['turn2'], static['ability']['cells']['switchin']), (False, False, 0, 0))
+        bench, _, _ = self.record(lambda s: ability_labels(s, ours=STATIC, bench=WONDERGUARD, peer_moves=quiet), metadata=meta)
+        self.assertGreater(bench['ability']['cells']['switchin'], 0)   # our bench Shedinja could switch in on turn 1
+        plain, _, _ = self.record(lambda s: ability_labels(s, ours=WONDERGUARD, peer_moves=quiet))
+        self.assertEqual((plain['tripped'], 'ability' in plain), (False, False))   # no metadata: the move guard alone
+        with self.assertRaisesRegex(ValueError, 'ability_labels'):self.record(lambda s: fake_labels(s, peer_moves=quiet), metadata=meta)
 
 
 if __name__ == '__main__':

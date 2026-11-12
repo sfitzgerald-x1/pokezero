@@ -28,16 +28,19 @@ from . import device_depthn_pricer as dn
 LANES = dn.LANES
 
 
-def _labels(states):
+def _labels(states, ability=False):
     """Per battle row of a stacked BattleState [N, 1, ...]: active [N, 2], the active's species, four moves, charge move and
-    usable mask (gpu_engine.state.usable_moves), and each party slot's species, status, alive (hp > 0) and Rest origin."""
+    usable mask (gpu_engine.state.usable_moves), and each party slot's species, status, alive (hp > 0) and Rest origin; for the
+    ability guard (`ability`: ability_labels) also each party slot's ability, hp, max_hp, types and Hidden Power type."""
     from .state import usable_moves
     s = jax.tree.map(lambda x: x[:, 0], states)
     act = j.clip(s.active, 0, 5)
     at = lambda x: j.take_along_axis(x, act[:, :, None], axis=2)[:, :, 0]
     moves = j.take_along_axis(s.moves, act[:, :, None, None], axis=2)[:, :, 0]
-    return dict(active=act, species=at(s.species), moves=moves, charge=at(s.charge_move), usable=usable_moves(s), party=s.species, status=s.status,
+    out = dict(active=act, species=at(s.species), moves=moves, charge=at(s.charge_move), usable=usable_moves(s), party=s.species, status=s.status,
         alive=s.hp > 0, rest=s.rest_origin)
+    if ability:out.update(ability=s.ability, hp=s.hp, max_hp=s.max_hp, types=s.types, hp_type=s.hidden_power_type)
+    return out
 
 
 _PROGRAM = {}
@@ -47,6 +50,13 @@ def child_labels(states):
     """_labels through one jitted program per process (device arrays; the caller fetches them)."""
     if 'program' not in _PROGRAM:_PROGRAM['program'] = jax.jit(_labels)
     return _PROGRAM['program'](states)
+
+
+def ability_labels(states):
+    """child_labels plus each party slot's ability, hp, max_hp, types and Hidden Power type: the ability guard's gather (a server
+    with --ability-guard observes with it; without the flag the gather, its transfer and the record are child_labels' alone)."""
+    if 'ability' not in _PROGRAM:_PROGRAM['ability'] = jax.jit(lambda states: _labels(states, ability=True))
+    return _PROGRAM['ability'](states)
 
 
 class ObservedDepthNPricer(dn.DepthNPricer):
@@ -137,7 +147,62 @@ def stack_worlds(worlds):
 UNION_FIELDS = ('tripped', 'b', 'b_turn1', 'b_turn2', 'c', 'arms', 'm_own', 'm_opp')
 
 
-def effect_record(frame, root, worlds, children, request, owner, vocabulary, choice, *, labels=child_labels, notes=(), reply_logits=None):
+class AbilityFacts:
+    """The ability guard's view of engine metadata: ability and type names (vocabulary), the move catalog (category, type name,
+    contact; metadata['moves'], vocabulary ordered) and the Gen 3 type chart by name (metadata['type_chart'][attack][defend] over
+    vocabulary types 1..; type 0 is typeless)."""
+    def __init__(self, metadata):
+        v = metadata['vocabulary'];self.abilities = [normalize_id(x) for x in v['abilities']];self.types = [normalize_id(x) for x in v['types']]
+        self.catalog = {}
+        for row in metadata.get('moves') or ():
+            if not row:continue
+            t = int(row.get('type') or 0)
+            self.catalog[normalize_id(row['id'])] = dict(category=row.get('category'), type=self.types[t] if 0 < t < len(self.types) else None,
+                contact=bool((row.get('flags') or {}).get('contact')))
+        names = self.types[1:];chart = metadata['type_chart']
+        self.chart = {a: {d: float(chart[i][j]) for j, d in enumerate(names)} for i, a in enumerate(names)}
+        self.relevant = frozenset(i for i, name in enumerate(self.abilities) if name in guard.ABILITY_FAMILIES)
+
+    def mon(self, labels, row, seat, slot):
+        """dict(ability, hp, max_hp, types, hp_type, species index) of one party slot at one labelled row."""
+        a = int(labels['ability'][row, seat, slot]);t = [int(x) for x in labels['types'][row, seat, slot]];h = int(labels['hp_type'][row, seat, slot])
+        return dict(ability=self.abilities[a] if 0 < a < len(self.abilities) else None, hp=int(labels['hp'][row, seat, slot]),
+            max_hp=int(labels['max_hp'][row, seat, slot]), types=[self.types[x] for x in t if 0 < x < len(self.types)],
+            hp_type=self.types[h] if 0 < h < len(self.types) else None)
+
+    def active(self, labels, row, seat):
+        return self.mon(labels, row, seat, int(labels['active'][row, seat]))
+
+    def touches(self, labels, row):
+        """Whether either active at this row holds an ability the guard watches (else no lane there can be guarded)."""
+        return any(int(labels['ability'][row, seat, int(labels['active'][row, seat])]) in self.relevant for seat in (0, 1))
+
+    def lanes(self, labels, row, seat, lanes, pinch='third'):
+        return guard.ability_lanes(self.active(labels, row, seat), self.active(labels, row, 1 - seat), lanes, self.catalog, self.chart, pinch=pinch)
+
+
+def ability_root(facts, labels, world, owner, own_lanes, peer_lanes):
+    """The ability guard's turn-1 inputs of one world's root row: (turn1 entry, switch-in entries)."""
+    lanes = {owner: list(own_lanes)[:4], 1 - owner: list(peer_lanes)[:4]};side = {owner: 'own', 1 - owner: 'opp'}
+    entry = dict(world=world)
+    for seat in (owner, 1 - owner):
+        entry[side[seat]] = dict(third=facts.lanes(labels, world, seat, lanes[seat]), two_thirds=facts.lanes(labels, world, seat, lanes[seat], 'two_thirds'),
+            damaging=guard.damaging_lanes(lanes[seat], facts.catalog))
+    switchin = []
+    for seat in (owner, 1 - owner):
+        active = int(labels['active'][world, seat]);other = 1 - seat
+        for i in range(5):
+            slot = i + (i >= active)
+            if slot >= labels['ability'].shape[2] or not bool(labels['alive'][world, seat, slot]):continue
+            mon = facts.mon(labels, world, seat, slot);family = guard.holder_family(mon)
+            if family is None:continue
+            against = guard.ability_lanes(facts.active(labels, world, other), mon, lanes[other], facts.catalog, facts.chart)[family]
+            if any(against):switchin.append(dict(side=side[seat], lane=4 + i, family=family, holder=normalize_id(str(mon['ability'])), against=list(against)))
+    return entry, switchin
+
+
+def effect_record(frame, root, worlds, children, request, owner, vocabulary, choice, *, labels=child_labels, notes=(), reply_logits=None,
+                  metadata=None):
     """The guard record of one priced root (module docstring). `frame`: the DepthN frame; `root`: build's root dict (rows,
     root_logits, root_legal); `worlds`: the root's worlds in block order (block k's world j is world 2k + j); `children`:
     ObservedDepthNPricer.observed()'s children of this frame's price call (one P1 call); `request`: the protocol request
@@ -148,12 +213,17 @@ def effect_record(frame, root, worlds, children, request, owner, vocabulary, cho
     stays the champion's evaluation; `union` adds dict(tripped=champion OR reply, champion=..., reply=...) over UNION_FIELDS,
     `union_only` whether only the reply arm tripped (then the record's b, c, arms and m_* describe the champion, which did not), and
     the top-level `tripped` becomes union['tripped'] (the live actor plays greedy on it). Without reply_logits: unchanged. Only (b)
-    can differ between the arms: (c) reads our own prior and lanes, the same in both."""
+    can differ between the arms: (c) reads our own prior and lanes, the same in both.
+    `metadata` (the engine metadata: vocabulary, moves, type_chart): with it the ability guard runs too (AbilityFacts,
+    ability_root at each world's root row, ability_lanes at each expanded child's two sides, exact; the record's `ability`);
+    without it the record is the move guard's alone."""
     names = Names(vocabulary);cond = guard.conditions(request['lines'], owner, request.get('own_request_line'))
     own_lanes = guard.own_moves(request.get('own_request_line')) or (None,) * 4
     own_turn1 = dict(lanes=list(own_lanes), logits=[float(x) for x in root['root_logits']], legal=[bool(x) for x in root['root_legal']])
     stacked = stack_worlds(worlds);root_labels = None if stacked is None else {k: np.asarray(v) for k, v in jax.device_get(labels(stacked)).items()}
     peer, turn2, expanded, missing = [], [], 0, 0
+    facts = None if metadata is None else AbilityFacts(metadata);ab = dict(turn1=[], switchin={}, turn2=[])
+    if facts is not None and root_labels is not None and 'ability' not in root_labels:raise ValueError('the ability guard needs ability_labels')
     if reply_logits is not None and len(reply_logits) != len(worlds):raise ValueError(f'{len(reply_logits)} reply logits for {len(worlds)} worlds')
     child = children[0] if len(children) == 1 else None
     rows = {}
@@ -167,6 +237,10 @@ def effect_record(frame, root, worlds, children, request, owner, vocabulary, cho
                 lanes, user = side_lanes(root_labels, world, 1 - owner, names)
                 peer.append(dict(world=world, lanes=lanes, user=user, logits=[float(x) for x in frame.root_peer_logits[r, jw]],
                     legal=[bool(x) for x in frame.root_peer_legal[r, jw]], requested=bool(frame.root_peer_requested[r, jw])))
+                if facts is not None:
+                    entry, switchin = ability_root(facts, root_labels, world, owner, own_lanes, lanes)
+                    ab['turn1'].append(entry)
+                    if switchin:ab['switchin'][world] = switchin
             status = frame.t1_status[r, jw]
             for a, b in zip(*np.nonzero(status == 2)):
                 expanded += 1;cell = int(a) * 9 + int(b);row = rows.get((2 * r + jw, cell), -1)
@@ -176,6 +250,11 @@ def effect_record(frame, root, worlds, children, request, owner, vocabulary, cho
                         ('opp', 1 - owner, frame.t1_peer_requested, frame.t1_peer_logits, frame.t1_peer_legal)):
                     if not bool(requested[r, jw, a, b]):continue
                     lanes, user = side_lanes(child['labels'], row, seat, names)
+                    if facts is not None and facts.touches(child['labels'], row):
+                        masks = facts.lanes(child['labels'], row, seat, lanes)
+                        if any(any(v) for v in masks.values()):
+                            ab['turn2'].append(dict(world=world, cell=cell, side=side, lanes=masks, logits=[float(x) for x in logits[r, jw, a, b]],
+                                legal=[bool(x) for x in legal[r, jw, a, b]]))
                     if not any(m in guard.WATCHED for m in lanes):continue   # nothing to weigh at this child
                     if sides is None:
                         sides = dict(own_side=guard.child_side(cond['own'], side_members(child['labels'], row, owner, names)),
@@ -183,7 +262,9 @@ def effect_record(frame, root, worlds, children, request, owner, vocabulary, cho
                     turn2.append(dict(world=world, cell=cell, side=side, lanes=lanes, user=user, logits=[float(x) for x in logits[r, jw, a, b]],
                         legal=[bool(x) for x in legal[r, jw, a, b]], **sides))
     available = not (expanded and (child is None or missing))
-    record = guard.evaluate(cond, own_turn1=own_turn1, peer_turn1=peer, turn2=[dict(t) for t in turn2], turn2_available=available, choice=choice)
+    ability = None if facts is None else ab
+    record = guard.evaluate(cond, own_turn1=own_turn1, peer_turn1=peer, turn2=[dict(t) for t in turn2], turn2_available=available, choice=choice,
+        ability=ability)
     record.update(turn2_cells=dict(expanded=expanded, unlabelled=missing, p1_captures=len(children)), notes=list(notes))
     if reply_logits is not None:
         replied = []
@@ -192,7 +273,8 @@ def effect_record(frame, root, worlds, children, request, owner, vocabulary, cho
             if w['requested'] and (logits is None or len(logits) != len(w['logits'])):
                 raise ValueError(f'reply logits for requested world {w["world"]}: {None if logits is None else len(logits)} values, not {len(w["logits"])}')
             replied.append(dict(w, logits=[float(x) for x in logits]) if w['requested'] else dict(w))
-        reply = guard.evaluate(cond, own_turn1=own_turn1, peer_turn1=replied, turn2=[dict(t) for t in turn2], turn2_available=available, choice=choice)
+        reply = guard.evaluate(cond, own_turn1=own_turn1, peer_turn1=replied, turn2=[dict(t) for t in turn2], turn2_available=available, choice=choice,
+            ability=ability)
         summary = lambda r: {k: r.get(k) for k in UNION_FIELDS}
         record['union'] = dict(tripped=bool(record['tripped'] or reply['tripped']), champion=summary(record), reply=summary(reply))
         record['union_only'] = bool(record['union']['tripped'] and not record['tripped'])   # only the reply arm tripped: b, c, arms, m_* are the champion's

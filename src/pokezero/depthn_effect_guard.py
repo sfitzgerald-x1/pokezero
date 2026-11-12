@@ -290,12 +290,13 @@ def lanes_of(moves, charge=None, usable=None):
 
 
 # The guard ----------------------------------------------------------------------------------------------------------------------
-def evaluate(cond, *, own_turn1, peer_turn1, turn2, turn2_available=True, choice=None, threshold=THRESHOLD):
+def evaluate(cond, *, own_turn1, peer_turn1, turn2, turn2_available=True, choice=None, threshold=THRESHOLD, ability=None):
     """The guard record (module docstring). `cond`: conditions(); `own_turn1`: dict(lanes [4], logits [9], legal [9]) (our
     root prior, the same in every world); `peer_turn1`: per world dict(world, lanes [4], logits, legal, requested, user);
     `turn2`: per expanded cell and side dict(world, cell, side 'own'/'opp', lanes, logits, legal, user, own_side, opp_side)
     (the child's conditions: child_side), `turn2_available` False when cells expanded but no labels were captured;
-    `choice`: the search's own action (None: none)."""
+    `choice`: the search's own action (None: none). `ability`: the ability guard's inputs (ability_evaluate); with them the
+    record gains `ability` (its own record) and `tripped` / `arms` include it ('ability'); without them the record is unchanged."""
     found = {};recorded = dict(turn1=[], turn2=[]);a_moves = set();b_moves = set()
     def note(move, side, source, mass, world=None, cell=None, tier=None, effect=None):
         key = (move, side, source)
@@ -358,7 +359,7 @@ def evaluate(cond, *, own_turn1, peer_turn1, turn2, turn2_available=True, choice
                 tiers=parts, moves=detail['moves']))
     reasons.sort(key=lambda x: (str(x['source']), str(x['side']), str(x['move'])))
     tiers = sorted({x['tier'] for x in reasons if x['tier']} | {t for x in reasons for t in x.get('tiers') or ()})
-    return dict(schema=SCHEMA, rule=RULE, threshold=threshold, tripped=b or c_hit, b=b, b_turn1=b_turn1, b_turn2=b_turn2, c=c_hit, choice=choice,
+    out = dict(schema=SCHEMA, rule=RULE, threshold=threshold, tripped=b or c_hit, b=b, b_turn1=b_turn1, b_turn2=b_turn2, c=c_hit, choice=choice,
         m_own=r['m_own'], m_opp=r['m_opp'], arms=arms,
         reach=dict(m_own=r['m_own'], m_opp=r['m_opp'], tripped=r['tripped'], unavailable=r['unavailable'], tiers=None if r['tiers'] is None else r['tiers']['lower']),
         any_cell_turn2=any_cell_turn2, any_cell_b=b_turn1 or any_cell_turn2, any_cell_tripped=b_turn1 or any_cell_turn2 or c_hit,
@@ -366,6 +367,11 @@ def evaluate(cond, *, own_turn1, peer_turn1, turn2, turn2_available=True, choice
         tier_b_legal=bool(b_moves), tier_b_moves=sorted(b_moves), own_lanes=list(own_turn1['lanes']),
         own_guarded_lanes=[None if g is None else list(g) for g in own_guarded], conditions=cond, masses=recorded,
         turn2_available=turn2_available)
+    if ability is not None:
+        ab = ability_evaluate(own_turn1, peer_turn1, ability, choice=choice, threshold=threshold)
+        out['ability'] = ab;out['tripped'] = bool(out['tripped'] or ab['tripped'])
+        if ab['tripped']:out['arms'] = out['arms'] + ['ability']
+    return out
 
 
 # Reach (the live turn-2 arm): the expected turn-2 guarded mass under the search's own root and reply priors ---------------------
@@ -455,4 +461,168 @@ def trips(record, choice):
     """The guard for an action `choice` of ours at a root whose record is `record` (the RR's per-operator rule): dict(tripped,
     b, c). (b) is the root's; (c) is whether `choice` is a move lane guarded for us."""
     c = type(choice) is int and 0 <= choice < 4 and (record.get('own_guarded_lanes') or [None] * 4)[choice] is not None
-    return dict(tripped=bool(record['b']) or c, b=bool(record['b']), c=c)
+    ab = record.get('ability') or {};b = bool(record['b']) or bool(ab.get('b'))
+    if type(choice) is int and 0 <= choice < 4 and (ab.get('own_guarded_lanes') or [None] * 4)[choice]:   # the ability guard's (c)
+        c = c or any(a in ab.get('arms', ABILITY_ARMS).get(f, ()) for a in ('choice',) for f in ab['own_guarded_lanes'][choice])
+    return dict(tripped=b or c, b=b, c=c)
+
+
+# Abilities the engine does not model (the ability guard; the lead's decisions of 2026-11-12) -------------------------------------
+# Showdown f76228a (gen3 inherits data/mods/gen4/abilities.ts): Wonder Guard (gen4 :530-543) blocks every damaging move that is not
+# super-effective, except a Status move or a typeless one (Struggle, gen4/moves.ts:1273-1281; Beat Up, gen4/moves.ts:81; the Future
+# Sight / Doom Desire hit, gen3/moves.ts:228, 244), immune moves included; Blaze / Torrent / Overgrow / Swarm (gen4 :25-35 and
+# alike) give their type 1.5x base power while hp <= maxhp / 3; Poison Point, Flame Body, Effect Spore (gen3 abilities.ts:12-30,
+# 135-144) may status a contact attacker that dealt damage. The engine models none of them (Static and Rough Skin it does). A lane
+# is guarded at a node for a family when its move's outcome there depends on that family's ability (ability_lanes); the families'
+# arms are those of the move guard: turn 1 (b), the reach (b), a turn-1 switch-in into a WG or CONTACT holder (b, new), the choice
+# (c). ABILITY_ARMS is the declared configuration (a family shipped choice-only keeps 'choice' and, for WG, 'switchin').
+ABILITY_SCHEMA = 'pokezero.depthn-ability-guard.v1'
+ABILITY_FAMILIES = {'wonderguard': 'WG', 'blaze': 'PINCH', 'torrent': 'PINCH', 'overgrow': 'PINCH', 'swarm': 'PINCH',
+                    'poisonpoint': 'CONTACT', 'flamebody': 'CONTACT', 'effectspore': 'CONTACT'}
+FAMILIES = ('WG', 'PINCH', 'CONTACT')
+PINCH_TYPES = {'blaze': 'fire', 'torrent': 'water', 'overgrow': 'grass', 'swarm': 'bug'}
+WG_TYPELESS = frozenset(('struggle', 'beatup', 'futuresight', 'doomdesire'))
+ABILITY_ARMS = {'WG': ('turn1', 'reach', 'switchin', 'choice'), 'PINCH': ('turn1', 'reach', 'choice'),
+                'CONTACT': ('turn1', 'reach', 'switchin', 'choice')}
+# The root PINCH rule: 'two_thirds' guards a pinch-type lane at the root while hp <= 2 maxhp / 3 and the other side puts >= THRESHOLD
+# on damaging lanes in that world (the holder may fall to a third during turn 1, then move); 'third' only while hp <= maxhp / 3.
+# Turn-2 children are always exact ('third' on the child's own hp).
+PINCH_ROOT = 'two_thirds'
+
+
+def effectiveness(move_type, types, chart):
+    """The type multiplier of a `move_type` hit on a Pokemon of `types` (Gen 3 chart[attack][defend]; a typeless move: 1)."""
+    out = 1.
+    if not move_type:return out
+    for t in types or ():
+        if t:out *= chart[move_type][t]
+    return out
+
+
+def ability_lanes(user, target, lanes, catalog, chart, *, pinch='third'):
+    """{family: [bool] * 4}: the side's move lanes 0-3 whose outcome at this node depends on an ability the engine does not model.
+    `user` / `target`: this side's and the other side's active, dict(ability, hp, max_hp, types, hp_type) (None: no such
+    Pokemon); `lanes`: the side's move ids per lane (lanes_of); `catalog`: move id -> dict(category, type, contact); `chart`: the
+    Gen 3 type chart by name; `pinch`: 'third' or 'two_thirds' (the root rule). Hidden Power's type is the user's own."""
+    out = {f: [False] * 4 for f in FAMILIES}
+    user = user or {};target = target or {}
+    pinch_type = PINCH_TYPES.get(user.get('ability'));hp, top = int(user.get('hp') or 0), int(user.get('max_hp') or 0)
+    low = hp > 0 and top > 0 and 3 * hp <= (2 * top if pinch == 'two_thirds' else top)
+    wg = target.get('ability') == 'wonderguard';contact = ABILITY_FAMILIES.get(target.get('ability')) == 'CONTACT'
+    for lane in range(4):
+        move = lanes[lane] if lane < len(lanes) else None;info = catalog.get(move) if move else None
+        if not info or info.get('category') == 'Status':continue
+        kind = user.get('hp_type') if move.startswith('hiddenpower') and user.get('hp_type') else info.get('type')
+        if wg and move not in WG_TYPELESS and effectiveness(kind, target.get('types'), chart) < 2:out['WG'][lane] = True
+        if pinch_type and low and kind == pinch_type:out['PINCH'][lane] = True
+        if contact and info.get('contact'):out['CONTACT'][lane] = True
+    return out
+
+
+def damaging_lanes(lanes, catalog):
+    """[bool] * 4: the lanes whose move is not a Status move (the root PINCH rule's other side)."""
+    return [bool(m) and bool(catalog.get(m)) and catalog[m].get('category') != 'Status' for m in (list(lanes) + [None] * 4)[:4]]
+
+
+def holder_family(mon):
+    """WG or CONTACT for a Pokemon holding such an ability (a turn-1 switch-in that takes the other side's move), else None."""
+    family = ABILITY_FAMILIES.get((mon or {}).get('ability'))
+    return family if family in ('WG', 'CONTACT') else None
+
+
+def _nine(mask):
+    return [bool(x) for x in mask[:4]] + [False] * 5
+
+
+def ability_evaluate(own_turn1, peer_turn1, ability, *, choice=None, threshold=THRESHOLD, arms=None, pinch_root=None):
+    """The ability guard over one root (module section above). `own_turn1`: dict(logits, legal) (our root prior); `peer_turn1`: the
+    move guard's per-world list (world, logits, legal, requested); `ability`: dict(
+      turn1: per world dict(world, own, opp), each side dict(third, two_thirds: {family: [bool] * 4} (ability_lanes under each rule),
+        damaging [bool] * 4);
+      switchin: per world [dict(side 'own'/'opp' (who switches), lane 4-8, family, holder, against [bool] * 4 (the other side's lanes
+        guarded against the incoming holder))];
+      turn2: [dict(world, cell, side, lanes {family: [bool] * 4} (exact at the child), logits, legal)]).
+    Returns the ability record: tripped, b (b_turn1 / b_reach / b_switchin), c, per family and arm the masses that decide them, the
+    reasons (source ability_turn1 / ability_reach / ability_switchin / ability_choice, each with its family), own_guarded_lanes."""
+    arms = ABILITY_ARMS if arms is None else arms;pinch_root = PINCH_ROOT if pinch_root is None else pinch_root
+    on = lambda family, arm: arm in arms.get(family, ())
+    own_p = masses(own_turn1['logits'], own_turn1['legal'])
+    peers = {w['world']: w for w in peer_turn1}
+    priced = sorted(peers);pw = 1 / len(priced) if priced else 0.
+    peer_p = {w: (masses(peers[w]['logits'], peers[w]['legal']) if peers[w].get('requested', True) else None) for w in priced}
+    by = {f: dict(turn1=dict(own=0., opp=0.), reach=dict(own=0., opp=0.), switchin=dict(own=0., opp=0.), choice=False) for f in FAMILIES}
+    reasons = [];own_lanes = [set() for _ in range(4)]
+    def root_mask(side, family, other_damaging):
+        if family != 'PINCH' or pinch_root == 'third' or other_damaging < threshold:return side['third'][family]
+        return side['two_thirds'][family]
+    # turn 1 (b) and the choice (c): any world
+    turn1_worlds = {}
+    for t in ability.get('turn1') or ():
+        w = t['world'];pp = peer_p.get(w)
+        dmg = dict(own=math.fsum(own_p[k] for k in range(4) if t['own']['damaging'][k]),
+                   opp=0. if pp is None else math.fsum(pp[k] for k in range(4) if t['opp']['damaging'][k]))
+        for side, prior, other in (('own', own_p, 'opp'), ('opp', pp, 'own')):
+            for f in FAMILIES:
+                mask = root_mask(t[side], f, dmg[other])
+                if side == 'own':
+                    for k in range(4):
+                        if mask[k]:own_lanes[k].add(f)
+                if prior is None:continue
+                m = math.fsum(prior[k] for k in range(4) if mask[k])
+                by[f]['turn1'][side] = max(by[f]['turn1'][side], m)
+                if m >= threshold and on(f, 'turn1'):
+                    x = turn1_worlds.setdefault((side, f), [0., set()]);x[0] = max(x[0], m);x[1].add(w)
+    for (side, f), (m, ws) in sorted(turn1_worlds.items()):
+        reasons.append(dict(source='ability_turn1', family=f, side=side, max_mass=m, worlds=sorted(ws)))
+    c_hit = type(choice) is int and 0 <= choice < 4 and any(on(f, 'choice') for f in own_lanes[choice])
+    for f in FAMILIES:by[f]['choice'] = type(choice) is int and 0 <= choice < 4 and f in own_lanes[choice]
+    if c_hit:reasons.append(dict(source='ability_choice', family=sorted(f for f in own_lanes[choice] if on(f, 'choice')), side='own',
+        max_mass=1., worlds=[]))
+    # the turn-1 switch-in: S = sum_w p_w pi_switcher(lane) sum_x pi_other(x) against(x), credited to the attacking side
+    sums = {(f, s): [] for f in FAMILIES for s in ('own', 'opp')};where = {(f, s): set() for f in FAMILIES for s in ('own', 'opp')}
+    for w, entries in (ability.get('switchin') or {}).items():
+        w = int(w);pp = peer_p.get(w)
+        if w not in peers or pp is None:continue   # a waiting opponent neither switches nor attacks
+        for e in entries:
+            mover, attacker = (own_p, pp) if e['side'] == 'own' else (pp, own_p)
+            hit = math.fsum(attacker[k] for k in range(4) if e['against'][k])
+            weight = pw * mover[int(e['lane'])] * hit
+            if weight > 0:
+                side = 'opp' if e['side'] == 'own' else 'own';sums[(e['family'], side)].append(weight);where[(e['family'], side)].add(w)
+    for (f, side), v in sums.items():by[f]['switchin'][side] = math.fsum(v)
+    b_switchin = False
+    for f in FAMILIES:
+        for side in ('own', 'opp'):
+            m = by[f]['switchin'][side]
+            if m >= threshold and on(f, 'switchin'):
+                b_switchin = True;reasons.append(dict(source='ability_switchin', family=f, side=side, max_mass=m, worlds=sorted(where[(f, side)])))
+    # the reach: M_s over the enabled families' lanes (their union per lane), and each family's own M
+    msum = {s: [] for s in ('own', 'opp')};fsum = {(f, s): [] for f in FAMILIES for s in ('own', 'opp')}
+    rworlds = {s: set() for s in ('own', 'opp')}
+    for e in ability.get('turn2') or ():
+        w = e['world']
+        if w not in peers:continue
+        reply = peer_p[w] if peer_p[w] is not None else [1.] + [0.] * 8   # a waiting world: reply 0 at mass 1 (as reach)
+        a, b = divmod(int(e['cell']), 9);weight = pw * own_p[a] * reply[b]
+        if not weight:continue
+        q = masses(e['logits'], e['legal'])
+        union = [any(e['lanes'][f][k] for f in FAMILIES if on(f, 'reach')) for k in range(4)]
+        u = math.fsum(q[k] for k in range(4) if union[k])
+        if u:msum[e['side']].append(weight * u);rworlds[e['side']].add(w)
+        for f in FAMILIES:
+            v = math.fsum(q[k] for k in range(4) if e['lanes'][f][k])
+            if v:fsum[(f, e['side'])].append(weight * v)
+    m_reach = {s: math.fsum(v) for s, v in msum.items()}
+    for (f, s), v in fsum.items():by[f]['reach'][s] = math.fsum(v)
+    b_reach = max(m_reach.values()) >= threshold
+    for s in ('own', 'opp'):
+        if m_reach[s] >= threshold:
+            reasons.append(dict(source='ability_reach', family=sorted(f for f in FAMILIES if on(f, 'reach') and by[f]['reach'][s] > 0), side=s,
+                max_mass=m_reach[s], worlds=sorted(rworlds[s]), families={f: by[f]['reach'][s] for f in FAMILIES if by[f]['reach'][s] > 0}))
+    b_turn1 = bool(turn1_worlds);b = b_turn1 or b_reach or b_switchin
+    reasons.sort(key=lambda x: (x['source'], x['side'], str(x['family'])))
+    return dict(schema=ABILITY_SCHEMA, threshold=threshold, arms={f: list(arms.get(f, ())) for f in FAMILIES}, pinch_root=pinch_root,
+        tripped=b or c_hit, b=b, b_turn1=b_turn1, b_reach=b_reach, b_switchin=b_switchin, c=c_hit, m_own=m_reach['own'], m_opp=m_reach['opp'],
+        families=by, reasons=reasons, own_guarded_lanes=[sorted(x) or None for x in own_lanes],
+        cells=dict(turn1=len(ability.get('turn1') or ()), switchin=sum(len(v) for v in (ability.get('switchin') or {}).values()),
+                   turn2=len(ability.get('turn2') or ())))
