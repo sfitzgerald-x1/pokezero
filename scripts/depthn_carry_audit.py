@@ -135,13 +135,14 @@ EFFECTS = (
         ('Showdown data/moves.ts:9108-9119: Hyper Beam has flags.recharge and self.volatileStatus mustrecharge',
          'Showdown data/conditions.ts:364-378: mustrecharge cancels the next move (onBeforeMovePriority 11) and is onLockMove recharge; '
          'sim/pokemon.ts:1085-1088: a locked move sets trapped, so the recharge turn has no switch',
-         'in-tree since M1 (8b212312): gpu_engine/state.py:87 recharge_counter; transition.py:764-767 the recharge turn',
-         'live roots: gpu_engine/constructor_worlds.py:467 an opponent that must recharge is refused (OPPONENT_RECHARGE_UNREPRESENTED); '
-         'future_state.py:467 a live mustrecharge is refused (RECHARGE_UNREPRESENTED); the owner\'s recharge turn is single-legal'),
+         'in-tree since M1 (8b212312): gpu_engine/state.py:87 recharge_counter; transition.py:763-768 the recharge turn',
+         'live roots: gpu_engine/constructor_worlds.py:1454 and 1609 an opponent that must recharge is refused '
+         '(OPPONENT_RECHARGE_UNREPRESENTED, constructor_worlds.py:467); the owner\'s recharge turn is single-legal (the phase-D '
+         'mapper refuses a live mustrecharge too: future_state.py:467, RECHARGE_UNREPRESENTED)'),
         'Only Slaking carries it, and Slaking\'s one ability is Truant: a residual clock in Gen 3 (Showdown data/mods/gen3/abilities.ts:'
-        '197-212) the engine models (state.py:80, transition.py:706-707 and 2071-2080). The recharge turn is the loaf turn, so the '
-        'engine\'s free turn after Hyper Beam is spent loafing anyway; what remains is the switch the engine allows on it (reality: '
-        'trapped) and a Transform user copying Slaking (Transform is itself unrepresented).', engine_since='8b212312'),
+        '197-212) the engine models (state.py:84 truant_loaf, transition.py:583-585 and 777-778). In-tree since M1 the recharge turn '
+        'is modelled (trapped, no move); before it the engine\'s free turn after Hyper Beam was spent loafing anyway. A Transform '
+        'user copying Slaking remains (Transform is itself unrepresented).', engine_since='8b212312'),
     Effect('partial_trap', ('wrap',), ('shuckle',), False,
         'request_source_rules.cjs:57-64 the partiallytrapped condition defines onTrapPokemon (missingCondition) -> engine_request_source.py:380',
         'the target is trapped and chipped each turn for several turns',
@@ -167,7 +168,7 @@ EFFECTS = (
     Effect('destiny_bond', ('destinybond',), ('banette', 'gengar', 'qwilfish', 'wobbuffet'), False, '',
         'a KO of the user by a move takes its attacker down, until the user moves again (so into the next turn)',
         ('Showdown data/moves.ts:3479-3520: the destinybond volatile ends only at the user\'s next move (onBeforeMove)',
-         'in-tree since A2 (286a5ffe): gpu_engine/state.py:21 DESTINY_BOND; effects.py:46; transition.py:758-761 its end at the '
+         'in-tree since A2 (286a5ffe): gpu_engine/state.py:21 DESTINY_BOND; effects.py:46; transition.py:756-761 its end at the '
          'holder\'s next move',
          'live roots: gpu_engine/phase_d_live_worlds.py:344-345 a bonded own active is refused (OWN_VOLATILE_OR_LATENT_CLOCK_UNAVAILABLE)'),
         'Gengar, Wobbuffet, Qwilfish, Banette.', engine_since='286a5ffe'),
