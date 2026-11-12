@@ -19,6 +19,15 @@
    "completes_on_hosted": true
   },
   {
+   "module": "test_gpu_engine_fidelity_a2",
+   "reason": "memory",
+   "hosted_median_min": null,
+   "isolated_wall_min": 12.0,
+   "isolated_peak_gib": 11.3,
+   "completes_on_hosted": null,
+   "note": "M2 step-graph growth: R1 4-CPU peak 11.3 GiB against the 11.71 hosted bar (base 9.2 isolated, 9.63 in the pod light race); temporary, re-measure after R2 and move back to the light tier if it fits. Until then every engine PR's heavy diff must include this module: it is the A2 effects' (Destiny Bond, Knock Off) test that r5a's guard retirements rely on."
+  },
+  {
    "module": "test_gpu_engine_fidelity_b",
    "reason": "wall+memory",
    "hosted_median_min": 23.7,
