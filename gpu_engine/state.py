@@ -85,6 +85,11 @@ class BattleState(NamedTuple):
     item_knocked: jax.Array        # [B,2,6] bool, pokemon.itemKnockedOff; never reset (sim/pokemon.ts)
     effect_draws: jax.Array        # [B,2,4], ChanceInputs.effect saved for a suspended turn, else 0 (fidelity patch R)
     recharge_counter: jax.Array    # [B,2,6], volatiles.mustrecharge.duration: 2 after a Hyper Beam hit, 1 after its residual (fidelity M1)
+    # Fidelity M2 (design 2.2): each counter equals Showdown's volatile duration at every step boundary.
+    perish_counter: jax.Array      # [B,2,6], volatiles.perishsong.duration: 4 at Perish Song, -1 per order-12 residual, faint at 0
+    yawn_counter: jax.Array        # [B,2,6], volatiles.yawn.duration: 2 at Yawn, -1 at residual subOrder 19, sleep attempt at 0
+    partial_trap_counter: jax.Array  # [B,2,6], volatiles.partiallytrapped.duration: 3+draws[s][7] at Wrap, -1 at subOrder 9
+    partial_trap_source: jax.Array   # [B,2,6], effectState.source as an opposing party index; -1 none
 
 
 def empty_state(batch_size: int, *, seed: int = 0) -> BattleState:
@@ -127,7 +132,9 @@ def empty_state(batch_size: int, *, seed: int = 0) -> BattleState:
         spikes=side(), wish_counter=side(),wish_amount=side(),weather=battle(), weather_counter=battle(), turn=battle(),
         keys=keys, done=jnp.ones((b,), jnp.bool_), winner=jnp.full((b,), -1, jnp.int32),
         truant_loaf=jnp.zeros((b,2,6),jnp.bool_),item_knocked=jnp.zeros((b,2,6),jnp.bool_),
-        effect_draws=jnp.zeros((b,2,4),jnp.int32),recharge_counter=mon())
+        effect_draws=jnp.zeros((b,2,4),jnp.int32),recharge_counter=mon(),
+        perish_counter=mon(),yawn_counter=mon(),partial_trap_counter=mon(),
+        partial_trap_source=jnp.full((b,2,6),-1,jnp.int32))
 
 
 def bench_indices(active: jax.Array) -> jax.Array:
@@ -177,6 +184,18 @@ def recharging(state: BattleState) -> jax.Array:
     return jnp.take_along_axis(recharge,state.active[...,None],axis=2)[...,0]>0
 
 
+def partially_trapped(state: BattleState) -> jax.Array:
+    """[B,2] the active is held by a partial trap (fidelity M2, Wrap): partiallytrapped's onTrapPokemon
+    (data/conditions.ts) traps only while effectState.source is active, so the source must be the foe's current,
+    living active (a fainted source is inactive). Structs without the leaves (request fixtures) are never trapped."""
+    counter=getattr(state,'partial_trap_counter',None);source=getattr(state,'partial_trap_source',None)
+    if counter is None or source is None:return jnp.zeros(state.active.shape,jnp.bool_)
+    held=jnp.take_along_axis(counter,state.active[...,None],axis=2)[...,0]>0
+    owner=jnp.take_along_axis(source,state.active[...,None],axis=2)[...,0]
+    foe_hp=jnp.take_along_axis(state.hp,state.active[...,None],axis=2)[...,0][:,::-1]
+    return held & (owner>=0) & (owner==state.active[:,::-1]) & (foe_hp>0)
+
+
 def legal_actions(state: BattleState) -> jax.Array:
     """Canonical move constraints plus Struggle, switches, traps and faint gates."""
     active_hp = jnp.take_along_axis(state.hp, state.active[..., None], axis=2)[..., 0]
@@ -192,6 +211,7 @@ def legal_actions(state: BattleState) -> jax.Array:
     # Gen 3 has no later-generation Ghost exemption for these move traps.
     charge=jnp.take_along_axis(state.charge_move,state.active[...,None],axis=2)[...,0]>0
     charge|=recharging(state)
+    charge|=partially_trapped(state)
     switches = (bench_hp > 0) & (~(state.trapped | rooted | linked | charge) | forced)[..., None]
     mask = jnp.concatenate((moves, switches), axis=-1)
     return mask & ~state.done[:, None, None]

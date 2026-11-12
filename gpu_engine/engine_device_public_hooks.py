@@ -28,11 +28,13 @@ MON_KEYS=('turns_active','turns_active_total','sleep_turns','rest_sleep','toxic_
           # ITEM_END from any -enditem, CHOICE_MOVE from the holder's own move line; ARRIVE and FAINT reset):
           # item_swapped (column 41) beside them, choice_public and choice_locked (column 40). B2's per-mon item
           # ledger (public_items: mutated, original), which survives switches: item_mutated, item_original.
-          'choice_public','choice_locked','item_mutated','item_original')
+          'choice_public','choice_locked','item_mutated','item_original',
+          # Fidelity M2 (design 2.5): B2's WRAP_TRAP_TURNS (column 33), public turns elapsed while partiallytrapped is
+          # in the bag: +1 per TURN line, reset by -end (WRAP_END), a faint or an arrival without Baton Pass.
+          'wrap_trap_turns')
 # Per-stint flags: zeroed at every arrival (B2 ARRIVE), a faint and an -enditem (ITEM_END).
 STINT_ITEM_KEYS=('item_swapped','choice_public','choice_locked')
 DEFERRED={
- 'wrap_trap_turns':'No supported numerical wrap-duration handler.',
  'confusion_self_damage':'Ordinary direct-damage fractions are recorded; confusion self-hit damage metric remains deferred.',
 }
 
@@ -256,6 +258,8 @@ def install(c,state,side,use,*,initial=False):
     for name in ('turns_active','confusion_turns','encore_turns','stall_counter','sub_present','meanlook_trap',
                  'sleep_skipped_turns','sleep_cant_pending','sleep_usable_pending','toxic_stage'):
         c=feature(c,side,p,name,j.zeros(b,j.int32),use)
+    # Fidelity M2: ARRIVE resets the partial-trap clock unless Baton Pass carries the bag entry (baton_copy follows).
+    if 'wrap_trap_turns' in c.trackers.mon_features:c=feature(c,side,p,'wrap_trap_turns',j.zeros(b,j.int32),use)
     # Fidelity M1: B2's ARRIVE resets the seat's Trick/Choice flags (the item ledger stays per mon).
     for name in STINT_ITEM_KEYS:
         if name in c.trackers.mon_features:c=feature(c,side,p,name,j.zeros(b,j.int32),use)
@@ -682,9 +686,14 @@ def faint_clear(c,before,after,use):
 def turn_end(c,before,after,ordinary,*,upkeep=None,leftovers=None):
     c=observe(c,after,~before.done)
     c=faint_clear(c,before,after,~before.done)
+    c=derived_volatiles(c,after,~before.done)
     for side in range(2):
         p=_li.take(after.active,_r(after),side);alive=ordinary&(_get(after,'hp',side)>0)
-        for name,active in [('confusion_turns',_get(after,'confusion_counter',side)>0),('encore_turns',_get(after,'encore_counter',side)>0)]:
+        clocks=[('confusion_turns',_get(after,'confusion_counter',side)>0),('encore_turns',_get(after,'encore_counter',side)>0)]
+        # Fidelity M2: WRAP_TRAP_TURNS follows the same TURN rule while partiallytrapped is held.
+        if hasattr(after,'partial_trap_counter') and 'wrap_trap_turns' in c.trackers.mon_features:
+            clocks.append(('wrap_trap_turns',_get(after,'partial_trap_counter',side)>0))
+        for name,active in clocks:
             c=feature(c,side,p,name,j.ones_like(p),alive&active,add=True)
             c=feature(c,side,p,name,j.zeros_like(p),ordinary&~active)
     t=c.trackers;fields=t.field_features
@@ -749,7 +758,41 @@ def public_move_state(c,before,after,side,move,use):
         if hasattr(before,'recharge_counter') and hasattr(after,'recharge_counter'):
             started=use&(_get(before,'recharge_counter',target)==0)&(_get(after,'recharge_counter',target)>0)
             c=volatile(c,after,target,'mustrecharge',j.ones_like(started),started)
+        # Fidelity M2: a partial trap ended by the move (Rapid Spin's removeVolatile, a Substitute's onStart) prints
+        # -end|X|Wrap|[partiallytrapped]: B2's WRAP_END resets the clock at once.
+        if (hasattr(before,'partial_trap_counter') and hasattr(after,'partial_trap_counter')
+                and 'wrap_trap_turns' in c.trackers.mon_features):
+            ended=use&(_li.take(before.active,_r(before),target)==_li.take(after.active,_r(after),target))&(
+                _get(before,'partial_trap_counter',target)>0)&(_get(after,'partial_trap_counter',target)==0)
+            c=feature(c,target,_li.take(after.active,_r(after),target),'wrap_trap_turns',j.zeros_like(ended,j.int32),ended)
+    c=derived_volatiles(c,after,use)
     return observe(c,after,use)
+
+
+PERISH_BAG=('perish0','perish1','perish2','perish3')
+
+
+def derived_volatiles(c,state,use):
+    """Fidelity M2 (design 2.5): the actives' perish, yawn and partiallytrapped bag bits, from the actual state.
+
+    B2 (public_active.project_line) folds -start|X|perishN (PERISH_START: perishN replaces the other perish bits;
+    perish3 [silent] at Perish Song, then perishN each residual), -start|X|move: Yawn / -end|X|move: Yawn|[silent],
+    and -activate|X|move: Wrap / -end|X|Wrap|[partiallytrapped] (silent or not). Each line comes exactly when the
+    engine counter starts, changes or ends, so at every boundary B2's bag is perish{min(counter,3)} (perish0 only
+    precedes the faint, whose FAINT clear empties the bag), yawn = counter>0 and partiallytrapped = counter>0.
+    A switch-out drops them (withdraw), a Baton target carries perish and partiallytrapped (baton_copy). States
+    without the leaves (authored fixtures) are left alone."""
+    if not hasattr(state,'perish_counter') or c.trackers.public_volatiles is None:return c
+    use=_mask(use,len(c.trackers.error));r=_r(state)
+    for side in range(2):
+        p=_li.take(state.active,r,side);slot=j.clip(_li.take(c.trackers.physical_to_public,r,side,p),0,5)
+        bag=_li.take(c.trackers.public_volatiles,r,side,slot)
+        perish=_get(state,'perish_counter',side);shown=j.minimum(perish,3)
+        for k,name in enumerate(PERISH_BAG):bag=bag.at[:,VOLATILE_NAMES.index(name)].set((perish>0)&(shown==k))
+        bag=bag.at[:,VOLATILE_NAMES.index('yawn')].set(_get(state,'yawn_counter',side)>0)
+        bag=bag.at[:,VOLATILE_NAMES.index('partiallytrapped')].set(_get(state,'partial_trap_counter',side)>0)
+        c=c._replace(trackers=_write(c.trackers,'public_volatiles',side,p,bag,use))
+    return c
 
 
 def weather(c,before,after,use,*,permanent=False,side=None):
@@ -829,12 +872,15 @@ def confusion_end(c,state,side,use):
 
 def baton_copy(c,state,side,outgoing,use):
     r=_r(state);p=_li.take(state.active,r,side);src=j.clip(_li.take(c.trackers.physical_to_public,r,side,outgoing),0,5)
-    names={'confusion','leechseed','substitute','solarbeam'}
+    # Fidelity M2: perishN and partiallytrapped are Baton-transferred in B2 (src/pokezero/showdown.py
+    # _BATON_PASS_TRANSFERRED_VOLATILES); yawn is noCopy and is not.
+    names={'confusion','leechseed','substitute','solarbeam','partiallytrapped',*PERISH_BAG}
     allowed=j.asarray([name in names for name in VOLATILE_NAMES])
     bag=_li.take(c.trackers.public_volatiles,r,side,src)&allowed[None,:]
     c=c._replace(trackers=_write(c.trackers,'public_volatiles',side,p,bag,use))
     # Not meanlook_trap: B2 clears it at every arrival, Baton included (see install).
-    for name in ('confusion_turns','sub_present'):
+    for name in ('confusion_turns','sub_present','wrap_trap_turns'):
+        if name not in c.trackers.mon_features:continue
         value=_li.take(c.trackers.mon_features[name],r,side,src)
         c=feature(c,side,p,name,value,use)
     c=c._replace(trackers=_write(c.trackers,'last_moves',side,p,j.full_like(p,-2),use))
@@ -845,8 +891,8 @@ def withdraw(c,state,side,physical,use):
     b=len(c.trackers.error)
     c=c._replace(trackers=_write(c.trackers,'boosts',side,physical,j.zeros((b,7),j.int32),use))
     c=c._replace(trackers=_write(c.trackers,'public_volatiles',side,physical,j.zeros((b,len(VOLATILE_NAMES)),bool),use))
-    for name in ('turns_active','confusion_turns','encore_turns','stall_counter','sub_present','meanlook_trap'):
-        c=feature(c,side,physical,name,j.zeros(b,j.int32),use)
+    for name in ('turns_active','confusion_turns','encore_turns','stall_counter','sub_present','meanlook_trap','wrap_trap_turns'):
+        if name in c.trackers.mon_features:c=feature(c,side,physical,name,j.zeros(b,j.int32),use)
     return c
 
 
