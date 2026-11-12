@@ -175,7 +175,8 @@ class ProxyTests(unittest.TestCase):
 
 
 class StickyTests(unittest.TestCase):
-    """Battle affinity: a battle's decisions stay on one backend (its constructor session); new battles spread in --backend order."""
+    """Battle affinity: a battle's decisions stay on one backend (its constructor session); new battles go to the least-loaded GPU,
+    ties by in-flight requests, then the least recently placed on, then --backend order."""
     def run_sticky(self, scenario, names, **kw):
         async def main():
             served, servers, backends, rows = [], {}, [], []
@@ -191,7 +192,7 @@ class StickyTests(unittest.TestCase):
                 for s in servers.values():s.close()
         return asyncio.run(main())
 
-    def test_a_battle_sticks_to_its_home_and_new_battles_spread_in_backend_order(self):
+    def test_a_battle_sticks_to_its_home_and_new_battles_spread_to_the_least_recently_placed(self):
         async def scenario(port, pool, servers, rows):
             out = []
             for battle in ('x', 'y', 'x', 'z', 'y', 'x', 'w'):
@@ -201,7 +202,7 @@ class StickyTests(unittest.TestCase):
                 await asyncio.sleep(.01)
             return out, rows
         out, rows = self.run_sticky(scenario, ['a', 'b', 'c'])
-        self.assertEqual(out, ['a', 'b', 'a', 'c', 'b', 'a', 'a'])   # w: every backend holds one live battle, none in flight: backend order
+        self.assertEqual(out, ['a', 'b', 'a', 'c', 'b', 'a', 'a'])   # w: one live battle each, none in flight: a was placed on longest ago
         self.assertEqual([(r['battle_id'], r['home']) for r in rows][:6], [('x', False), ('y', False), ('x', True), ('z', False), ('y', True), ('x', True)])
         self.assertTrue(all(r['gpu'] == r['backend'] for r in rows))   # unlabelled backends: each its own group
 
@@ -266,7 +267,7 @@ class StickyTests(unittest.TestCase):
         for k, battle in enumerate('xyzw'):
             pick = pool.order(now=float(k), battle=battle)[0];pool.bind(battle, pick, now=float(k));picks.append(pick)
         self.assertEqual(picks, [h(1), h(3), h(2), h(4)])   # x on g0, y on g1 (fewer there), z on g0's free backend, w on g1's
-        self.assertEqual(pool.order(now=5., battle='v')[0], h(1))   # 2 and 2: the backend order breaks the tie
+        self.assertEqual(pool.order(now=5., battle='v')[0], h(1))   # 2 and 2, none in flight: g0 was placed on less recently (z before w)
         self.assertEqual(pool.order(now=100., battle='v')[0], h(1))   # all idle past 60 s: nothing counts
         self.assertEqual(pool.snapshot()['backends'][0]['gpu'], 'g0')
         with self.assertRaisesRegex(ValueError, 'unknown backend'):P.Pool([h(1)], gpus={h(9): 'g0'})
@@ -283,13 +284,53 @@ class StickyTests(unittest.TestCase):
         for bad in ('127.0.0.1:7001@', 'nohost@1'):
             with self.subTest(bad), self.assertRaises(Exception):P.backend_spec(bad)
 
+    def test_an_ended_battle_stops_counting_at_once_and_ties_go_to_the_quieter_then_least_recently_placed_gpu(self):
+        h = lambda port: ('h', port);gpus = {h(1): 'g0', h(2): 'g0', h(3): 'g1', h(4): 'g1'};pool = P.Pool([h(1), h(2), h(3), h(4)], gpus=gpus)
+        for k, (battle, home) in enumerate((('x', 1), ('y', 3), ('z', 2))):pool.bind(battle, h(home), now=float(k))
+        self.assertEqual(pool.gpu[pool.order(now=3., battle='new')[0]], 'g1')   # g0 runs x and z, g1 runs y
+        self.assertEqual((pool.end('x'), pool.end('z'), pool.end('x')), (True, True, True))   # idempotent
+        self.assertEqual(pool.gpu[pool.order(now=3., battle='new')[0]], 'g0')   # both ended: g0 holds 0 against g1's 1, within 60 s
+        self.assertEqual(pool.order(now=3., battle='x')[0], h(1))   # an ended battle keeps its home: a stray request still goes there
+        self.assertFalse(pool.end('never'));self.assertEqual((pool.ended, pool.ended_unknown), (3, 1))   # unknown: counted, nothing else
+        pool.end('y');pool.active[h(1)] = 1   # all ended: a tie on live battles; g0 has a request in flight
+        self.assertEqual(pool.order(now=3., battle='new')[0], h(3))   # the GPU with fewer in flight
+        pool.active[h(1)] = 0   # in-flight tie too: g1 was given its battle (y, at 1) before g0's latest (z, at 2)
+        self.assertEqual(pool.order(now=3., battle='new')[0], h(3))
+        pool.bind('w', h(4), now=4.);pool.end('w')   # now g1 was placed on last
+        self.assertEqual(pool.order(now=5., battle='new')[0], h(1))
+        self.assertTrue(pool.bind('x', h(1), now=6.))   # a return home is not a placement
+        self.assertEqual(pool.placed_at, {'g0': 2., 'g1': 4.})
+        snap = pool.snapshot();self.assertEqual((snap['battle_ends'], snap['battle_ends_unknown']), (5, 1))
+
+    def test_an_end_frame_is_answered_never_forwarded_and_logged(self):
+        async def scenario(port, pool, servers, rows):
+            first = (await request(port, dict(battle_id='x', owner='p1')))['backend']
+            ended = await request(port, dict(schema=P.BATTLE_END_SCHEMA, battle_id='x', owner='p1'))
+            unknown = await request(port, dict(schema=P.BATTLE_END_SCHEMA, battle_id='nope', owner='p2'))
+            nameless = await request(port, dict(schema=P.BATTLE_END_SCHEMA, owner='p2'))   # no battle_id: unknown, counted, no crash
+            assert nameless['status'] == 'UNKNOWN_BATTLE' and pool.ended_unknown == 2
+            for _ in range(100):
+                if len(rows) >= 4:break
+                await asyncio.sleep(.01)
+            return first, ended, unknown, sum(pool.served.values()), pool.live(__import__('time').monotonic()), rows
+        first, ended, unknown, served, live, rows = self.run_sticky(scenario, ['a', 'b'])
+        self.assertEqual(ended, dict(schema=P.BATTLE_END_SCHEMA, battle_id='x', owner='p1', status='ENDED'))
+        self.assertEqual(unknown['status'], 'UNKNOWN_BATTLE');self.assertEqual(served, 1)   # only the request reached a backend
+        self.assertEqual(sum(live.values()), 0)   # x stopped counting at once, not 60 s after its last decision
+        self.assertEqual(sorted((str(r.get('reason')), r['backend'] is None) for r in rows),
+                         [('None', False), ('battle end', True), ('battle end: unknown battle', True), ('battle end: unknown battle', True)])
+
+    def test_the_end_schema_is_the_clients(self):
+        from pokezero.depthn_live_actor import BATTLE_END_SCHEMA
+        self.assertEqual(P.BATTLE_END_SCHEMA, BATTLE_END_SCHEMA)
+
     def test_the_first_frame_has_one_deadline_and_survives_deep_json(self):
         async def main():
             frame = lambda body: struct.pack('!I', len(body)) + body
             deep = b'['*100000 + b']'*100000
             r = asyncio.StreamReader();r.feed_data(frame(deep));r.feed_eof()
-            first, battle = await P.first_frame(r, 1.)   # RecursionError in json: no battle, bytes intact
-            assert (first, battle) == (frame(deep), None)
+            first, battle, end = await P.first_frame(r, 1.)   # RecursionError in json: no battle, bytes intact
+            assert (first, battle, end) == (frame(deep), None, False)
             r = asyncio.StreamReader();body = json.dumps(dict(battle_id='x', owner='p1')).encode();head = frame(body)[:4]
             loop = asyncio.get_running_loop()
             loop.call_later(.15, r.feed_data, head);loop.call_later(.3, r.feed_data, body)   # each part within .2, the whole not
@@ -302,7 +343,7 @@ class StickyTests(unittest.TestCase):
         pool = P.Pool([('h', 1), ('h', 2)], sticky_idle=10., sticky_cap=2)
         self.assertFalse(pool.bind('x', ('h', 1), now=0.));self.assertTrue(pool.bind('x', ('h', 1), now=1.))
         self.assertEqual(pool.order(now=2., battle='y')[0], ('h', 2))   # x is live on h:1
-        self.assertEqual(pool.order(now=20., battle='y')[0], ('h', 1))   # x idle: both empty, backend order
+        self.assertEqual(pool.order(now=20., battle='y')[0], ('h', 2))   # x idle: both empty, none in flight: h:2 never given a battle
         pool.bind('y', ('h', 2), now=21.);pool.bind('z', ('h', 1), now=22.)
         self.assertEqual(list(pool.homes), ['y', 'z'])   # LRU: x evicted
         self.assertEqual(pool.order(now=23., battle='z')[0], ('h', 1))   # z's home, though h:2 holds as many
