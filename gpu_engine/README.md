@@ -304,13 +304,17 @@ no new state, no new chance):
   unlike Gen 5+); and residual order 29 (that drop with no later trigger in the
   turn). Gen 3 Pursuit on a switch is useMove: no AfterMove. A dragged-in mon's
   runSwitch is queued after the Roar's AfterMove. An equal-Speed pair is inert.
+  Trick: a receiver with a negative stage uses a received herb at the swap.
 - Sacred Fire (the move flag `defrost`): the 20% thaw roll comes first; failing
   it, a frozen user still moves and frz's onModifyMove thaws it in useMove, before
   accuracy, Protect and immunity (a miss or a failure still thaws it).
 - Facade: base power 140 when the user has par, brn, psn or tox at getDamage (not
   slp; frozen users cannot use it); Gen 3 burn halving still applies without Guts.
 - Device: `white_herb` folds B2's `-enditem` consumption (revealed, removed, no
-  ledger mutation, ITEM_END flags) and `-clearnegativeboost` on the holder.
+  ledger mutation, ITEM_END flags) and `-clearnegativeboost` on the holder. A
+  White Herb received by Trick is used inside Trick's onHit (setItem's Start),
+  before the receiver's `-item` line, so the device runs `white_herb` first and
+  `trick` (with the swapped pre-herb state) last, as B2 folds the four lines.
 
 The existing fixed critical roll now resolves ordinary 1/16 and catalog +1
 high-crit 1/8 chances. Battle Armor and Shell Armor veto critical hits in both

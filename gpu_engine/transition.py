@@ -199,6 +199,27 @@ def _white_herb(state,table,side,eligible,*,_device_public=None):
     return state,used
 
 
+def _white_herb_pair(state,table,first,eligible,*,_device_public=None):
+    """Fidelity WH: one White Herb trigger on both actives (`first`'s, then the other's), as _white_herb twice; each use
+    touches only its own holder, so one items.white_herb call over both sides gives the same state. The device sees
+    `first`'s use, then the other's, each with its own before/after pair. Returns (state, used [B,2])."""
+    if table.items is None:
+        return state,jnp.zeros(state.active.shape,bool)
+    rows=jnp.arange(state.hp.shape[0])[:,None];sides=jnp.arange(2)[None,:];active=state.active
+    before=state
+    item,boosts,used=held.white_herb(table.items,state.item[rows,sides,active],state.boosts[rows,sides,active],
+        state.hp[rows,sides,active],eligible=jnp.broadcast_to(jnp.asarray(eligible),(state.hp.shape[0],))[:,None])
+    state=state._replace(item=state.item.at[rows,sides,active].set(item),boosts=state.boosts.at[rows,sides,active].set(boosts))
+    if _device_public is not None:
+        first=jnp.broadcast_to(jnp.asarray(first,jnp.int32),(state.hp.shape[0],));own=sides==first[:,None]
+        mid=before._replace(item=jnp.where(own[:,:,None],state.item,before.item),
+            boosts=jnp.where(own[:,:,None,None],state.boosts,before.boosts))
+        r=rows[:,0]
+        device_public.white_herb(_device_public,before,mid,first,used[r,first])
+        device_public.white_herb(_device_public,mid,state,1-first,used[r,1-first])
+    return state,used
+
+
 def _clear_fainted_boosts(state,before_hp,*,eligible):
     """Gen3 faintMessages -> clearVolatile(false), seven boost stages only.
 
@@ -249,11 +270,9 @@ def initialize(state,table,*,eligible=True,tie_coin=None,_weather_trace=None,_de
         side = jnp.where(order == 0,first,1-first)
         pending = live & state.entry_pending[rows,side]
         # Fidelity WH: this lead's runSwitch. Its SwitchIn event runs the other active's White Herb (onAnySwitchIn) before
-        # this lead's Ability Start (a faster Intimidate lead's drop is restored at the slower holder's own runSwitch).
-        state,_herb=_white_herb(state,table,1-side,pending,_device_public=_device_public)
-        if _weather_trace is not None:
-            from . import engine_status_callbacks as _herb_status
-            _weather_trace=_herb_status.unknown(_weather_trace,_herb)
+        # this lead's Ability Start, and the lead's own after its entry. Only the second lead's own can fire: entry_pending
+        # marks the battle's leads, whose stages start at 0, and a lead's own Ability Start never lowers its own stages,
+        # so the only drop before the second lead's own trigger is the first lead's Intimidate on it.
         if _device_public is not None:_device_entry_before=state
         if _weather_trace is not None:
             state,_,_weather_trace = arrival.enter(state,side,table.entry,eligible=pending,
@@ -261,10 +280,13 @@ def initialize(state,table,*,eligible=True,tie_coin=None,_weather_trace=None,_de
         else:
             state,_ = arrival.enter(state,side,table.entry,eligible=pending,hazards=False,startup=state.turn==0)
         if _device_public is not None:device_public.entry(_device_public,_device_entry_before,state,side,table.entry,pending)
-        # Fidelity WH: the entrant's own White Herb (its onAnySwitchIn, then its item Start); its own Ability Start never
-        # lowers its stages, so after the whole entry is the same state.
-        state,_herb=_white_herb(state,table,side,pending,_device_public=_device_public)
-        if _weather_trace is not None:_weather_trace=_herb_status.unknown(_weather_trace,_herb)
+        if order == 1:
+            # Fidelity WH: the second lead's own White Herb (its onAnySwitchIn, then its item Start), restoring the first
+            # lead's Intimidate drop; its own Ability Start never lowers its stages, so after the whole entry is the same state.
+            state,_herb=_white_herb(state,table,side,pending,_device_public=_device_public)
+            if _weather_trace is not None:
+                from . import engine_status_callbacks as _herb_status
+                _weather_trace=_herb_status.unknown(_weather_trace,_herb)
         state = state._replace(entry_pending=state.entry_pending.at[rows,side].set(
             state.entry_pending[rows,side] & ~pending))
     if _weather_trace is not None:return _lum_update(state,table,pending_battle,_device_public=_device_public),_weather_trace
@@ -729,10 +751,10 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                 work,knocked_out = arrival.enter(work,side,table.entry,eligible=do_switch & ~replacement)
             if _device_public is not None:device_public.entry(_device_public,_device_entry_before,work,side,table.entry,do_switch & ~replacement)
             work=_clear_fainted_boosts(work,_faint_before_hp,eligible=do_switch & ~replacement)
-            # Fidelity WH: the entrant's own White Herb (onAnySwitchIn, then its item Start) restores a Baton-passed drop;
-            # its own Ability Start never lowers its stages, and a Spikes KO leaves it at 0 HP (no useItem).
-            work,_herb=_white_herb(work,table,side,do_switch & ~replacement,_device_public=_device_public)
-            if _lifecycle_trace:_public_trace=status_callbacks.unknown(_public_trace,_herb)
+            # Fidelity WH: no trigger for this entrant's own White Herb: an ordinary switch-in arrives with every stage 0
+            # (every stage write is at an active, and each departure, drag included, zeroes the leaver's: entry.depart;
+            # faints: _clear_fainted_boosts). Baton Pass, the one stage carrier, sets forced_switch at the end of its step,
+            # so its switch is always a replacement (below); its own Ability Start never lowers its own stages.
             switch_faint |= knocked_out
         else:
             work=arrival.restore_sleep(work,side,eligible=do_switch)
@@ -845,24 +867,18 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                 _direct_hit_context if _direct_hit_context is not None and _direct_hit_registered else None,table.sleep_talk,
                 choice_roll=sleep_talk_draws[rows,side],eligible=eligible,sleep_usable=sleep_usable,early_bird=early_bird,loafing=loafing)
         if _device_public is not None:_device_before_move=work
+        # Fidelity WH (C-lite): a defrost move (Sacred Fire). Gen 3's frz onBeforeMove (data/mods/gen4/conditions.ts:
+        # 89-97) consumes the 20% thaw roll first (draws[s][1] < 20 thaws it); failing it, a defrost move still proceeds
+        # frozen (confusion and flinch can then stop it), and frz's onModifyMove thaws it in useMove below. Without the
+        # effects table no move is a defrost move. The lifecycle path refuses a frozen defrost user.
+        _defrost=table.effects.defrost[move] if table.effects is not None else False
         before = m.before_move(_active(work.status, work, side), _active(work.status_counter, work, side),
             _active(work.confusion_counter, work, side), thaw_roll=chance[:, 1],
             paralysis_roll=chance[:, 2], confusion_roll=chance[:, 3],
             flinched=(_active(work.volatile, work, side) & FLINCH) != 0,
-            sleep_usable=sleep_usable,early_bird=early_bird,loafing=loafing)
-        if table.effects is not None:
-            # Fidelity WH (C-lite): a defrost move (Sacred Fire). Gen 3's frz onBeforeMove (data/mods/gen4/conditions.ts:
-            # 89-97) consumes the 20% thaw roll first (draws[s][1] < 20 thaws it, as above); failing it, a defrost move
-            # still proceeds frozen (confusion and flinch can then stop it), and frz's onModifyMove thaws it in useMove
-            # below. For every other move this is the call above (defrost_move=False). The lifecycle observer records
-            # the non-defrost result, so that path refuses a frozen defrost user.
-            _defrost=table.effects.defrost[move]
-            before = m.before_move(_active(work.status, work, side), _active(work.status_counter, work, side),
-                _active(work.confusion_counter, work, side), thaw_roll=chance[:, 1],
-                paralysis_roll=chance[:, 2], confusion_roll=chance[:, 3],
-                flinched=(_active(work.volatile, work, side) & FLINCH) != 0,
-                sleep_usable=sleep_usable,early_bird=early_bird,loafing=loafing,defrost_move=_defrost)
-            if _lifecycle_trace:_public_trace=status_callbacks.unknown(_public_trace,eligible & _defrost & (_active(work.status,work,side)==m.FRZ))
+            sleep_usable=sleep_usable,early_bird=early_bird,loafing=loafing,defrost_move=_defrost)
+        if _lifecycle_trace and table.effects is not None:
+            _public_trace=status_callbacks.unknown(_public_trace,eligible & _defrost & (_active(work.status,work,side)==m.FRZ))
         if _device_public is not None:device_public.before_move(_device_public,work,side,before,eligible,loafing=loafing,sleep_usable=sleep_usable)
         if _lifecycle_trace:
             from . import engine_outcome_diagnostics as _before_move_diagnostics
@@ -1671,8 +1687,16 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                 work=work._replace(item=_set_active(work.item,work,side,jnp.where(_trick,_trick_foe,_trick_own)))
                 work=work._replace(item=_set_active(work.item,work,foe,jnp.where(_trick,_trick_own,_trick_foe)))
                 if _lifecycle_trace:_public_trace=status_callbacks.unknown(_public_trace,_trick)
+                # Fidelity WH: setItem runs the received item's Start inside Trick's onHit (sim/pokemon.ts:1868-1889;
+                # data/moves.ts:19904-19915): the target's first, then the user's, so a receiver with a negative stage
+                # uses a received White Herb there (data/items.ts:7674-7686), before its -item|X|White Herb|[from] move:
+                # Trick line. Its state is the AfterMove trigger's (nothing between reads the holder's item or stages);
+                # the device sees -enditem and -clearnegativeboost first and Trick's -item lines last, as B2 folds them.
+                _trick_swapped=work
+                work,_herb=_white_herb_pair(work,table,foe,_trick,_device_public=_device_public)
+                if _lifecycle_trace:_public_trace=status_callbacks.unknown(_public_trace,jnp.any(_herb,axis=1))
                 if _device_public is not None:
-                    device_public.trick(_device_public,_device_trick_before,work,side,_trick,table.items.choice_band)
+                    device_public.trick(_device_public,_device_trick_before,_trick_swapped,side,_trick,table.items.choice_band)
             # Charm's primary boosts (moveHit after TryHit): Protect is already in `hit`; a
             # Substitute fails it (TryPrimaryHit); status moves ignore type immunity
             # (tryMoveHit sets ignoreImmunity for Status). The drop is capped first, then
@@ -2586,9 +2610,8 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
     # inert (each restore touches only its own holder). Reached in Gen 3 when an Intimidate switch-in's drop met no later
     # AfterMove or SwitchIn this turn (see _white_herb).
     _herb_residual=residual_ready & jnp.all(jnp.any(work.hp>0,axis=2),axis=1)
-    for side in range(2):
-        work,_herb=_white_herb(work,table,side,_herb_residual,_device_public=_device_public)
-        if _lifecycle_trace:_public_trace=status_callbacks.unknown(_public_trace,_herb)
+    work,_herb=_white_herb_pair(work,table,0,_herb_residual,_device_public=_device_public)
+    if _lifecycle_trace:_public_trace=status_callbacks.unknown(_public_trace,jnp.any(_herb,axis=1))
     # Fidelity M1 (design 2.3): mustrecharge has a duration and no residual handler, so the Residual event
     # still decrements it, last (order false sorts after every numbered handler, sim/battle.ts). At 0 it ends
     # silently: a recharge action cancelled by a Gen 3 faint expires here. Fainted holders are cleared below;

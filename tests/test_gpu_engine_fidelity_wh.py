@@ -16,8 +16,8 @@ TYPES = ['_none', 'normal', 'fire', 'water', 'electric', 'grass', 'ice', 'fighti
          'rock', 'ghost', 'dragon', 'dark', 'steel']
 NORMAL, FIRE, FIGHTING, PSYCHIC, GHOST = 1, 2, 7, 11, 14
 MOVES = ['_none', 'struggle', 'splash', 'superpower', 'psychoboost', 'charm', 'tackle', 'explosion', 'sacredfire', 'facade',
-         'strength', 'slam', 'protect', 'batonpass']
-STRUGGLE, SPLASH, SUPERPOWER, PSYCHOBOOST, CHARM, TACKLE, EXPLOSION, SACREDFIRE, FACADE, STRENGTH, SLAM, PROTECT, BATON = range(1, 14)
+         'strength', 'slam', 'protect', 'batonpass', 'trick']
+STRUGGLE, SPLASH, SUPERPOWER, PSYCHOBOOST, CHARM, TACKLE, EXPLOSION, SACREDFIRE, FACADE, STRENGTH, SLAM, PROTECT, BATON, TRICK = range(1, 15)
 ABILITIES = ['_none', 'intimidate', 'guts', 'pressure']
 INTIMIDATE, GUTS = 1, 2
 ITEMS = ['_none', 'leftovers', 'whiteherb', 'lumberry']
@@ -37,7 +37,7 @@ def metadata():
             row('explosion', 250, NORMAL, 'Physical', 100), row('sacredfire', 100, FIRE, 'Special', 95, {'protect': 1, 'defrost': 1}),
             row('facade', 70, NORMAL, 'Physical', 100, hit), row('strength', 140, NORMAL, 'Physical', 100, hit),
             row('slam', 70, NORMAL, 'Physical', 100, hit), row('protect', 0, NORMAL, 'Status', True, {}, priority=3),
-            row('batonpass', 0, NORMAL, 'Status', True, {})]
+            row('batonpass', 0, NORMAL, 'Status', True, {}), row('trick', 0, PSYCHIC, 'Status', 100)]
     chart = np.ones((17, 17));chart[NORMAL - 1, GHOST - 1] = 0
     return {'vocabulary': dict(moves=MOVES, abilities=ABILITIES, items=ITEMS, species=['_none', 'a', 'b', 'c', 'd', 'e', 'f'],
                                types=TYPES), 'moves': rows, 'type_chart': chart.tolist()}
@@ -55,6 +55,11 @@ class TableTests(unittest.TestCase):
         self.assertEqual(np.flatnonzero(np.asarray(items.from_metadata(meta).white_herb)).tolist(), [HERB])
         self.assertEqual(np.flatnonzero(np.asarray(effects.from_metadata(meta).defrost)).tolist(), [SACREDFIRE])   # the move flag
         self.assertEqual(np.flatnonzero(np.asarray(variable_moves.from_metadata(meta).facade)).tolist(), [FACADE])
+
+    def test_regress_status_ids_follow_mechanics(self):
+        """v2e_regress keeps SLP and FRZ as literals (it imports no JAX at load): they are mechanics'."""
+        from gpu_engine import mechanics, v2e_regress
+        self.assertEqual((v2e_regress.SLP, v2e_regress.FRZ), (mechanics.SLP, mechanics.FRZ))
 
     def test_facade_doubles_for_a_set_status_other_than_slp(self):
         """data/moves.ts facade onBasePower: pokemon.status && pokemon.status !== 'slp' (frz included literally; a frozen
@@ -148,6 +153,21 @@ class TransitionTests(unittest.TestCase):
         self.assertEqual(self.at(s, 'item', 0).tolist(), [0, HERB, 0, 0, 0, HERB, LEFTOVERS, 0])
         self.assertEqual((b1[3].tolist(), int(self.at(s, 'item', 1)[3])), ([0] * 7, 0))
         self.assertEqual(int(self.at(s, 'hp', 0)[5]), 0)
+
+    def test_trick_receiver_uses_the_herb_at_the_swap(self):
+        """Trick (review finding 1): setItem runs the received item's Start inside onHit, the target's first, so a receiver
+        with a negative stage uses a received White Herb at the swap (the state is the AfterMove trigger's). Lanes: 0 the
+        user (-2 Atk, Leftovers) receives the foe's herb; 1 the foe (-1 Def) receives the user's; 2 both hold one, both with a
+        negative stage (an identical swap): both used; 3 a receiver without a negative stage keeps it."""
+        lanes = [{'item': [((0, 0), LEFTOVERS), ((1, 0), HERB)], 'boosts': [((0, 0, 0), -2)]},
+                 {'item': [((0, 0), HERB), ((1, 0), LEFTOVERS)], 'boosts': [((1, 0, 1), -1)]},
+                 {'item': [((0, 0), HERB), ((1, 0), HERB)], 'boosts': [((0, 0, 0), -1), ((1, 0, 1), -1)]},
+                 {'item': [((0, 0), LEFTOVERS), ((1, 0), HERB)]}]
+        s = self.play(self.build(lanes, move=TRICK), self.chance())
+        self.assertEqual(self.at(s, 'item', 0).tolist()[:4], [0, LEFTOVERS, 0, HERB])
+        self.assertEqual(self.at(s, 'item', 1).tolist()[:4], [LEFTOVERS, 0, 0, LEFTOVERS])
+        b0 = np.asarray(s.boosts)[:4, 0, 0];b1 = np.asarray(s.boosts)[:4, 1, 0]
+        self.assertEqual((b0[:, :2].tolist(), b1[:, :2].tolist()), ([[0, 0]] * 4, [[0, 0]] * 4))
 
     def test_psycho_boost_and_a_destiny_bond_ko(self):
         """Psycho Boost's -2 SpA is restored at once (lane 0; lane 1 without the herb keeps it). Lane 2: the bonded foe at 1

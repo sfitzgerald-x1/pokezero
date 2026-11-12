@@ -144,14 +144,16 @@ item flags and removal credit (witness_names). The Stepper records this tree's W
 white_herb: a valid use is the side's living active holding White Herb with a negative stage, left with no item and exactly
 max(stage, 0), no other state leaf of any mon changed by the call, and the hook's consumption reveal (shown_item White
 Herb, item_removed) at its slot; any other call with use, or a change without use, is bad (forced unexpected). White
-Herb stays involved only on a lane with a valid use; wh_rule then explains, per mon and per public slot against the
+Herb stays involved only on a lane with a valid use. A Tricked-in White Herb whose living receiver has a negative stage
+must already be used when the device's trick hook runs (setItem's Start inside Trick's onHit precedes the -item lines);
+otherwise the lane is bad too (wh_trick_order). wh_rule then explains, per mon and per public slot against the
 base's arrays, the restored stages (this tree's = the base's + the recorded raise, or a mon whose faint differs), the
 consumed item (White Herb in the base, none here), a holder the base knocked off afterwards (item_knocked, credit),
 and a Trick partner that got the herb only in the base; item-family slot differences must lie at an active of either
 side. Facade stays involved only for a side whose own Facade line ran by its pre-step active under par/brn/psn/tox
 (recorded at the move hook). A frozen user's Sacred Fire stays involved only for a side whose pre-step active was
-frozen at its record_move and thawed at its own Sacred Fire line, or was stopped later in BeforeMove still frozen, and
-never where a Sacred Fire line ran still frozen (sacred_actors; lanes kept by the stop alone: sacredfire_stopped).
+frozen at its record_move and thawed at its own Sacred Fire line, or, at its own BeforeMove (eligible, the executed
+move Sacred Fire), failed frz's roll and did not act (flinch or confusion), and never where a Sacred Fire line ran still frozen (sacred_actors; lanes kept by the stop alone: sacredfire_stopped).
 A pinch berry eaten in exactly one tree on a White Herb or Facade lane (its holder's damage moved across the
 quarter-HP line) is explained per mon by pinch_rule (one stage in its own stat, the item, the device's reveal at its
 slot). Explained lane-steps are counted as wh_leaves (pinch_leaves for berries); malformed calls as wh_bad; lanes that
@@ -499,7 +501,8 @@ def white_herb(p):
     return active | (holders.any(-1) & installs(p)) | (p.side_uses('trick') & active[:, ::-1])
 
 
-# WH (C-lite): status ids (mechanics: PAR 1, BRN 2, PSN 3, TOX 4, SLP 5, FRZ 6).
+# WH (C-lite): status ids, mechanics.SLP and mechanics.FRZ (PAR 1, BRN 2, PSN 3, TOX 4, SLP 5, FRZ 6). Literal here: this
+# module imports no JAX at load; test_gpu_engine_fidelity_wh pins them to mechanics.
 SLP, FRZ = 5, 6
 
 
@@ -1432,8 +1435,9 @@ def sacred_actors(sides, line, stopped, frozen_line):
     """WH: the Sacred Fire involvement a lane keeps: its pre-state frozen-user sides where this tree tied the divergence
     to that mon at its own move: line, the side's pre-step active was frozen at its record_move (BeforeMove let it act:
     it failed frz's 20% roll and the defrost flag let it pass) and is not frozen at its Sacred Fire line (frz's
-    onModifyMove thawed it in useMove between the two: the mon that thaws is the frozen user); or stopped, that frozen
-    user's Sacred Fire did not run (flinch or confusion stopped it after frz let it pass) and it is still frozen. A side
+    onModifyMove thawed it in useMove between the two: the mon that thaws is the frozen user); or stopped, recorded at
+    the side's own BeforeMove: eligible, its pre-step active frozen, the executed move Sacred Fire, frz's roll failed and
+    the user did not act (flinch or confusion stopped it after frz let it pass). A side
     whose Sacred Fire line ran with its user still frozen (frozen_line) never keeps it. The GPU pass at edfcba5d: the
     thaw planted on the foe (mutant S3) passed under the ALL allowance alone."""
     return [s for s in sides if (bool(line[s]) or bool(stopped[s])) and not bool(frozen_line[s])]
@@ -1491,7 +1495,8 @@ class Stepper:
             # record_move (after BeforeMove, before useMove's ModifyMove) and thawed at its own line, a frozen user stopped
             # after frz let it pass, or a line run still frozen (wh_rule, facade_actors, sacred_actors).
             whe = dict(used=j.zeros((lanes, 2, 6), j.bool_), raise_=j.zeros((lanes, 2, 6, 7), j.int32), bad=j.zeros((lanes,), j.bool_),
-                       facade=zero2, sacred_pre=zero2, sacred_line=zero2, sacred_stopped=zero2, sacred_frz=zero2)
+                       facade=zero2, sacred_pre=zero2, sacred_line=zero2, sacred_stopped=zero2, sacred_frz=zero2,
+                       trick_order=j.zeros((lanes,), j.bool_))
             from gpu_engine import action_history as act_history
             record_move_fn = act_history.record_move
             def record_move_recorder(st, side, slot, *, eligible, struggle=False):
@@ -1504,6 +1509,38 @@ class Stepper:
                     frozen = e & (st.moves[r, s, mon, k] == wh_ids['sacredfire']) & (st.status[r, s, mon] == FRZ) & (mon == state.active[r, s])
                     whe['sacred_pre'] = whe['sacred_pre'] | at_side(frozen, s)
                 return record_move_fn(st, side, slot, eligible=eligible, struggle=struggle)
+            from gpu_engine import mechanics as mech
+            before_move_fn, before_move_hook, trick_hook = mech.before_move, hooks.before_move, getattr(hooks, 'trick', None)
+            defrost_seen = {}
+            def before_move_fn_recorder(*a, **kw):
+                # The step's BeforeMove result for the side whose device before_move hook follows; defrost_move is the
+                # executed move's defrost flag (Sacred Fire's).
+                defrost_seen['flag'] = kw.get('defrost_move', False)
+                return before_move_fn(*a, **kw)
+            def before_move_recorder(c, st, side, result, use, **kw):
+                if wh_ids is not None:
+                    # Sacred Fire "stopped" (review): at this side's BeforeMove, eligible, its pre-step active, frozen, the
+                    # executed move Sacred Fire, frz's 20% roll failed (still frozen) and the user did not act (flinch or
+                    # confusion stopped it after frz let it pass).
+                    s = j.broadcast_to(j.asarray(side, j.int32), (lanes,));r = j.arange(lanes);mon = st.active[r, s]
+                    d = j.broadcast_to(j.asarray(defrost_seen.get('flag', False), j.bool_), (lanes,))
+                    u = j.broadcast_to(j.asarray(use, j.bool_), (lanes,))
+                    stopped = (u & d & (mon == state.active[r, s]) & (st.status[r, s, mon] == FRZ) & (result.status == FRZ)
+                               & ~j.broadcast_to(j.asarray(result.can_act, j.bool_), (lanes,)))
+                    whe['sacred_stopped'] = whe['sacred_stopped'] | at_side(stopped, s)
+                return before_move_hook(c, st, side, result, use, **kw)
+            def trick_recorder(c, before, after, side, use, choice_items):
+                if wh_ids is not None:
+                    # White Herb received by Trick (review finding 1): setItem's Start runs inside Trick's onHit, before
+                    # the -item lines, so at this hook a living receiver of White Herb with a negative stage has already
+                    # used it here; one that has not marks the device order wrong (forced unexpected, like a bad use).
+                    u = j.broadcast_to(j.asarray(use, j.bool_), (lanes,));r = j.arange(lanes)
+                    for m_ in (0, 1):
+                        mon = after.active[r, m_]
+                        due = (u & (after.item[r, m_, mon] == wh_ids['herb']) & (after.hp[r, m_, mon] > 0)
+                               & (after.boosts[r, m_, mon] < 0).any(-1))
+                        whe['trick_order'] = whe['trick_order'] | (due & ~whe['used'][r, m_, mon])
+                return trick_hook(c, before, after, side, use, choice_items)
             herb_hook = getattr(hooks, 'white_herb', None)
             def herb_recorder(c, before, after, side, use):
                 out = herb_hook(c, before, after, side, use)
@@ -1546,12 +1583,10 @@ class Stepper:
                     doubled = use & own & (mv == wh_ids['facade']) & (status >= 1) & (status <= 4)
                     whe['facade'] = whe['facade'] | at_side(doubled, s)
                     # Sacred Fire: the pre-step active, frozen at this side's record_move, runs its line thawed (frz's
-                    # onModifyMove, between the two); or a pre-step-frozen user that frz let pass was stopped later in
-                    # BeforeMove (flinch, confusion: no line with use, still frozen); or a line with use still frozen
-                    # (never in a correct tree).
-                    sf = mv == wh_ids['sacredfire'];pre_frozen = state.status[r, s, state.active[r, s]] == FRZ
+                    # onModifyMove, between the two); or a line with use still frozen (never in a correct tree). A
+                    # frozen user stopped after frz let it pass is recorded at BeforeMove (before_move_recorder).
+                    sf = mv == wh_ids['sacredfire']
                     whe['sacred_line'] = whe['sacred_line'] | at_side(use & sf & own & (status == 0) & whe['sacred_pre'][r, s], s)
-                    whe['sacred_stopped'] = whe['sacred_stopped'] | at_side(~use & sf & own & pre_frozen & (status == FRZ), s)
                     whe['sacred_frz'] = whe['sacred_frz'] | at_side(use & sf & (status == FRZ), s)
                 if m2_ids is not None and len(rest) >= 2:
                     # M2: a move line (the caller's, or a called child's) of Perish Song, Yawn or Wrap with use set. Yawn: the
@@ -1611,7 +1646,10 @@ class Stepper:
             hooks.damage, hooks.move = damage_recorder, move_recorder
             hooks.port_protect, hooks.turn_end, hooks.hp_line = protect_recorder, turn_end_recorder, hp_line_recorder
             if wh_ids is not None and herb_hook is not None:hooks.white_herb = herb_recorder
-            if wh_ids is not None:act_history.record_move = record_move_recorder
+            if wh_ids is not None:
+                act_history.record_move = record_move_recorder
+                mech.before_move, hooks.before_move = before_move_fn_recorder, before_move_recorder
+                if trick_hook is not None:hooks.trick = trick_recorder
             try:
                 if record_installs:
                     original = hooks.install
@@ -1631,6 +1669,8 @@ class Stepper:
                 hooks.port_protect, hooks.turn_end, hooks.hp_line = protect_hook, turn_end_hook, hp_line_hook
                 if herb_hook is not None:hooks.white_herb = herb_hook
                 act_history.record_move = record_move_fn
+                mech.before_move, hooks.before_move = before_move_fn, before_move_hook
+                if trick_hook is not None:hooks.trick = trick_hook
             if not wrap_calls:
                 for key in ('tick_seen', 'tick_trapper', 'tick_held', 'tick_hp'):m2e[key] = None   # no handler cutpoint: no evidence
             named_in = name_inputs(state, actions, trackers);named_out = name_outputs(out)
@@ -1890,7 +1930,7 @@ def patched_pass(args, *, step_override=None, prepared=None):
                   changed_involved_unexpected_fields=0, ko_cascade=0, phase_shift=0, terminal=0, terminal_residual=0, waived=0,
                   rule_explained=0, faint_rule_leaves=0, clear_volatile_leaves=0, effect_draws_saved=0,
                   recharge_leaves=0, bag_leaves=0, trick_witness_leaves=0, ledger_leaves=0, m2_leaves=0, m2_wrong_mon=0, m2_forced=0,
-                  wh_leaves=0, wh_bad=0, wh_dropped=0, facade_dropped=0, sacredfire_dropped=0,
+                  wh_leaves=0, wh_bad=0, wh_trick_order=0, wh_dropped=0, facade_dropped=0, sacredfire_dropped=0,
                   sacredfire_stopped=0, pinch_leaves=0)
     clear_volatile = 'B' in plugins
     m1_rules = 'M1' in plugins
@@ -2012,6 +2052,9 @@ def patched_pass(args, *, step_override=None, prepared=None):
                 wh_lane = None
                 if wh_rules and result.get('wh') is not None:
                     wh_lane = {k: np.asarray(v)[lane] for k, v in result['wh'].items()}
+                    if bool(wh_lane.get('trick_order', False)):
+                        # A Tricked-in White Herb the device saw used after Trick's -item lines: bad, like a malformed use.
+                        wh_lane['bad'] = True;counts['wh_trick_order'] += bool(changed)
                     if 'whiteherb' in effects and (bool(wh_lane['bad']) or not wh_lane['used'].any()):
                         effects.pop('whiteherb');counts['wh_dropped'] += bool(changed)
                     if 'facade' in effects:

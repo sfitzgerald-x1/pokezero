@@ -3,6 +3,7 @@ from typing import NamedTuple
 
 import jax
 import jax.numpy as jnp
+from .mechanics import NONE, SLP
 
 
 class VariableMoveTable(NamedTuple):
@@ -59,5 +60,5 @@ def facade_power(table, move, power, status):
     only after the 20% thaw clears it); a Sleep Talk call reads slp. Gen 3 still halves a burned user's physical
     damage unless it has Guts (data/mods/gen3/scripts.ts:41-43, gen3_damage's burned/guts inputs)."""
     status = jnp.asarray(status)
-    doubled = table.facade[move] & (status != 0) & (status != 5)      # mechanics.NONE, mechanics.SLP
+    doubled = table.facade[move] & (status != NONE) & (status != SLP)
     return jnp.where(doubled, power * 2, power)
