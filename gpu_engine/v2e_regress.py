@@ -1339,6 +1339,7 @@ def wh_rule(entries, w):
         if not (mine.any() or partner[side].any()):continue
         for leaf, s_ in sorted(entries, key=str):
             if s_ != side or not have(leaf):continue
+            if leaf not in WH_MON_LEAVES and leaf not in WH_SLOT_LEAVES and not leaf.startswith(WH_VISIBLE):continue
             a, b = np.asarray(wit[leaf])[side], np.asarray(base[leaf])[side];diff = _differ(a, b)
             if not diff.any():continue
             if leaf == 'state.boosts':
