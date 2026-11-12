@@ -1104,14 +1104,14 @@ class M2PlantedBugTests(unittest.TestCase):
         """P2: Perish Song also drops the foe's Attack; Y2: Yawn also takes the target's item; W2: Wrap also drops its Defense."""
         self.assert_flagged(('p2', dict(perish_wide=True)), {0}, ['state.boosts@target'], 'perishsong')
         self.assert_flagged(('y2', dict(yawn_wide=True)), {2}, ['state.item@target'], 'yawn')
-        self.assert_flagged(('w2', dict(wrap_wide=True)), {4}, ['state.boosts@target'], 'wrap')
+        self.assert_flagged(('w2', dict(wrap_wide=True)), {4, 8}, ['state.boosts@target'], 'wrap')
 
     def test_removed_device_producers_are_flagged(self):
         """P3/Y3/W3: the perish, yawn or partiallytrapped bag producer removed; W4: the WRAP_TRAP_TURNS clock removed."""
         self.assert_flagged(('p3', dict(perish_bag=False)), {0}, ['state.perish_counter@user'], 'perishsong')
         self.assert_flagged(('y3', dict(yawn_bag=False)), {2}, ['state.yawn_counter@target'], 'yawn')
-        self.assert_flagged(('w3', dict(wrap_bag=False)), {4}, ['state.partial_trap_counter@target'], 'wrap')
-        self.assert_flagged(('w4', dict(wrap_clock=False)), {4}, ['state.partial_trap_counter@target'], 'wrap')
+        self.assert_flagged(('w3', dict(wrap_bag=False)), {4, 8}, ['state.partial_trap_counter@target'], 'wrap')
+        self.assert_flagged(('w4', dict(wrap_clock=False)), {4, 8}, ['state.partial_trap_counter@target'], 'wrap')
 
     def test_effects_on_a_benched_mon_are_flagged(self):
         """Wrong mon (M1 re-review's benched-mon lesson): P4 Perish Song's foe counter, Y4 Yawn's drowsiness, W5 Wrap's
@@ -1119,9 +1119,9 @@ class M2PlantedBugTests(unittest.TestCase):
         (the counters) or the wrong-mon check (HP, status, which their families would allow) flags each."""
         self.assert_flagged(('p4', dict(perish_bench=True)), {0}, ['state.perish_counter@target'], 'perishsong')
         self.assert_flagged(('y4', dict(yawn_bench=True)), {2}, ['state.yawn_counter@target'], 'yawn')
-        self.assert_flagged(('w6', dict(trap_bench=True)), {4}, ['state.partial_trap_counter@target'], 'wrap')
+        self.assert_flagged(('w6', dict(trap_bench=True)), {4, 8}, ['state.partial_trap_counter@target'], 'wrap')
         code, report, listing = self.patched('w5', wrap_bench=True)
-        self.assertEqual(code, 1);self.assertEqual({lane for _, lane in self.flagged(listing)}, {4})
+        self.assertEqual(code, 1);self.assertEqual({lane for _, lane in self.flagged(listing)}, {4, 8})
         self.assertIn('state.hp@target', report['by_effect']['wrap']['unexpected_fields'])
         self.assertEqual([x['m2_wrong_mon'] for x in listing if x['lane'] == 4], [['state.hp@1']] * 2)
         self.assertEqual([x['m2_forced'] for x in listing if x['lane'] == 4], [['state.hp@1']] * 2)
@@ -1135,8 +1135,8 @@ class M2PlantedBugTests(unittest.TestCase):
         check pass; the HP is a `must` entry, never an allowance); RW8, a trap kept and ticked after its trapper fainted, by
         the trapper-held check (and the unexplained tick)."""
         code, report, listing = self.patched('rw7', tick_div=8)
-        self.assertEqual(code, 1);self.assertEqual({lane for _, lane in self.flagged(listing)}, {4})
-        self.assertEqual(report['by_effect']['wrap']['unexpected_fields'], {'state.hp@target': 2})
+        self.assertEqual(code, 1);self.assertEqual({lane for _, lane in self.flagged(listing)}, {4, 8})
+        self.assertEqual(report['by_effect']['wrap']['unexpected_fields'], {'state.hp@target': 4})   # lanes 4, 8 x 2 shards
         rows = [x for x in listing if x['lane'] == 4]
         self.assertEqual([(x['m2_forced'], x['m2_wrong_mon']) for x in rows], [(['state.hp@1'], [])] * 2)
         self.assertEqual(sorted(rows[0]['m2_rule']), sorted(["state.partial_trap_counter@1", "state.partial_trap_source@1",
