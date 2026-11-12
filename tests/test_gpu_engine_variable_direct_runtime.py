@@ -3,6 +3,7 @@ import unittest
 import numpy as np
 from gpu_engine import engine_kernel_frame_risk as risks
 import test_gpu_engine_secondary_nonproc_runtime as fixture
+import gpu_engine_eager_witness as eager
 
 
 class VariableDirectRuntimeTests(unittest.TestCase):
@@ -38,6 +39,10 @@ class VariableDirectRuntimeTests(unittest.TestCase):
                     self.assertEqual(owner.encoded.observation.admitted.tolist(),[True,True])
                     self.assertFalse(bool(owner.scored.any()))
                     self.assertFalse(bool(owner.B4_qualified.any()))
+
+
+def tearDownModule():
+    eager.clear()   # drop the consume executables this module compiled
 
 
 if __name__=='__main__':unittest.main()

@@ -21,6 +21,7 @@ from gpu_engine import engine_public_events as public,engine_leftovers_callbacks
 from gpu_engine import engine_execution_completeness as accounting,engine_kernel_frame_risk as risks
 from gpu_engine import public_belief,source_provenance,transition,v4_encoder
 import test_gpu_engine_engine_weather_public as fixture
+import gpu_engine_eager_witness as eager
 
 class ToxicRuntimeTests(unittest.TestCase):
     @classmethod
@@ -71,13 +72,14 @@ class ToxicRuntimeTests(unittest.TestCase):
         self.assertEqual(session.state.core.admitted.tolist(),[True,True]);return session
 
     def advance(self,session,roll,foe_action=8):
-        before=session.state;frames=[];actual=self.runtime['frame']
-        def capture(*args):f=actual(*args);frames.append(f);return f
-        draws=j.zeros((2,2,12),j.int32).at[:,:,4].set(1).at[:,0,6].set(roll)
-        chance=transition.ChanceInputs(draws,*[j.zeros((2,2),j.int32) for _ in range(4)],j.zeros(2,j.int32))
-        acts=j.array([[0,foe_action],[0,foe_action]],j.int32);self.runtime['frame']=capture
-        try:result=driver.advance(session,acts,chance_inputs=chance)
-        finally:self.runtime['frame']=actual
+        with eager.eager_source_witness(self.prepared):
+            before=session.state;frames=[];actual=self.runtime['frame']
+            def capture(*args):f=actual(*args);frames.append(f);return f
+            draws=j.zeros((2,2,12),j.int32).at[:,:,4].set(1).at[:,0,6].set(roll)
+            chance=transition.ChanceInputs(draws,*[j.zeros((2,2),j.int32) for _ in range(4)],j.zeros(2,j.int32))
+            acts=j.array([[0,foe_action],[0,foe_action]],j.int32);self.runtime['frame']=capture
+            try:result=driver.advance(session,acts,chance_inputs=chance)
+            finally:self.runtime['frame']=actual
         legacy=transition.step_with_chance(before.core.engine,acts,self.table,chance)
         self.same(result.state.core.engine,legacy.state);self.assertEqual(len(frames),1)
         return before,result,frames[0]
@@ -117,3 +119,7 @@ class ToxicRuntimeTests(unittest.TestCase):
         self.assertEqual(packet[:,7:10].tolist(),[[0,4,0],[0,4,0]])
         self.assertEqual(result.state.core.admitted.tolist(),[False,False])
         self.assertTrue(bool(j.all((frame.callbacks.refusal&512)!=0)))  # residual observer absent
+
+
+def tearDownModule():
+    eager.clear()   # drop the consume executables this module compiled

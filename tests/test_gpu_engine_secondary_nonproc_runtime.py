@@ -20,6 +20,7 @@ from gpu_engine import engine_public_events as public, engine_leftovers_callback
 from gpu_engine import engine_execution_completeness as accounting, engine_kernel_frame_risk as risks
 from gpu_engine import public_belief, source_provenance, transition, v4_encoder, mechanics
 import test_gpu_engine_engine_weather_public as fixture
+import gpu_engine_eager_witness as eager
 
 
 class SecondaryNonprocRuntimeTests(unittest.TestCase):
@@ -93,16 +94,17 @@ class SecondaryNonprocRuntimeTests(unittest.TestCase):
         return session
 
     def advance(self,session,action,secondary):
-        before=session.state;frames=[];actual=self.runtime['frame']
-        def capture(*args):
-            frame=actual(*args);frames.append(frame);return frame
-        draws=j.zeros((2,2,12),j.int32).at[:,:,4].set(1)
-        chance=transition.ChanceInputs(draws,j.zeros((2,2),j.int32),j.asarray(secondary,j.int32),
-            j.zeros((2,2),j.int32),j.zeros((2,2),j.int32),j.zeros(2,j.int32))
-        actions=j.array([[action,8],[action,8]],j.int32)
-        self.runtime['frame']=capture
-        try:result=driver.advance(session,actions,chance_inputs=chance)
-        finally:self.runtime['frame']=actual
+        with eager.eager_source_witness(self.prepared):
+            before=session.state;frames=[];actual=self.runtime['frame']
+            def capture(*args):
+                frame=actual(*args);frames.append(frame);return frame
+            draws=j.zeros((2,2,12),j.int32).at[:,:,4].set(1)
+            chance=transition.ChanceInputs(draws,j.zeros((2,2),j.int32),j.asarray(secondary,j.int32),
+                j.zeros((2,2),j.int32),j.zeros((2,2),j.int32),j.zeros(2,j.int32))
+            actions=j.array([[action,8],[action,8]],j.int32)
+            self.runtime['frame']=capture
+            try:result=driver.advance(session,actions,chance_inputs=chance)
+            finally:self.runtime['frame']=actual
         self.assertEqual(len(frames),1)
         legacy=transition.step_with_chance(before.core.engine,actions,self.table,chance)
         self.same(result.state.core.engine,legacy.state)  # Includes exact RNG carry.
@@ -158,6 +160,10 @@ class SecondaryNonprocRuntimeTests(unittest.TestCase):
                 for owner in result.owners:
                     self.assertEqual(owner.full_line_consumers_complete.tolist(),[False,True])
                     self.assertFalse(bool(owner.scored.any()));self.assertFalse(bool(owner.B4_qualified.any()))
+
+
+def tearDownModule():
+    eager.clear()   # drop the consume executables this module compiled
 
 
 if __name__=='__main__':unittest.main()
