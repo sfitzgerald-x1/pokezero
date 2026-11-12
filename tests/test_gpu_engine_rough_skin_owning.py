@@ -1,10 +1,8 @@
 """Prospective literal component fixture only; no original scientific roots."""
-import ast
 from copy import deepcopy
 from dataclasses import replace
 import json
 from pathlib import Path
-import subprocess
 from tempfile import TemporaryDirectory
 import unittest
 
@@ -21,9 +19,9 @@ from gpu_engine import engine_public_events as public,engine_own_facts as own,en
 from gpu_engine import engine_execution_completeness as ex,engine_kernel_frame_risk as risk
 from gpu_engine import engine_full_v4_event_device as full,engine_lifecycle_callbacks as life,engine_leftovers_callbacks as leftovers
 from gpu_engine import public_belief,v4_encoder,public_wire,source_provenance,transition
-from gpu_engine_default_observer_ast import dump_default_program,assert_hp_rng_mutations_detected
 from _showdown_root import showdown_root
 import test_gpu_engine_no_damage_owning as fixture
+import gpu_engine_eager_witness as eager
 
 
 class RoughSkinTests(unittest.TestCase):
@@ -104,14 +102,8 @@ class RoughSkinTests(unittest.TestCase):
             pool=source_provenance.load_constructor_pool(path)
             return driver.construct(pool,np.array([[0,1],[0,1]],np.int64),prepared=self.prepared,stream_ids=j.array([27101,27102],j.int32),seed=41)
 
-    def test_original_transition_and_other_secondary_programs_unchanged(self):
-        before=ast.parse(subprocess.check_output(['git','show','b8092a85:gpu_engine/transition.py'],text=True))
-        after=ast.parse(Path('gpu_engine/transition.py').read_text());baseline=dump_default_program(before)
-        self.assertEqual(dump_default_program(after),baseline);assert_hp_rng_mutations_detected(self,after,baseline)
-        before=ast.parse(subprocess.check_output(['git','show','b8092a85:gpu_engine/secondary.py'],text=True))
-        after=ast.parse(Path('gpu_engine/secondary.py').read_text())
-        functions=lambda t:{n.name:ast.dump(n,include_attributes=False)for n in t.body if isinstance(n,ast.FunctionDef)and n.name not in ('from_metadata','apply_contact')}
-        self.assertEqual(functions(before),functions(after))
+    # The former test_original_transition_and_other_secondary_programs_unchanged pinned both files to b8092a85.
+    # transition.py is certified against CURRENT_TRANSITION (full AST plus mutations) by terminal_closeout and seismic_toss_components; secondary.py: byte-exact against reviewed SOURCE_PINS in transition_observer_wiring's source-binding subtests.
 
     def test_legacy_physical_contact_damage_and_exclusions(self):
         from gpu_engine import secondary
@@ -211,6 +203,7 @@ class RoughSkinTests(unittest.TestCase):
                 np.testing.assert_array_equal(actual,expected,err_msg=f'owner{owner} row{row}')
 
     def test_actual_kernel_contact_write_both_full_and_legacy_physics(self):
+        self.enterContext(eager.eager_source_witness(self.prepared))
         session=self.construct();self.assertEqual(session.state.core.admitted.tolist(),[True,True])
         before=session.state;frames=[];original=self.runtime['frame']
         def capture(*args):
@@ -260,5 +253,9 @@ class RoughSkinTests(unittest.TestCase):
                 words=np.asarray(report.owner_full_words)[row,owner][np.asarray(report.owner_full_valid)[row,owner]].copy();words[:,1]=0
                 self.assertTrue(any(np.array_equal(words[i:i+len(expected)],expected)for i in range(len(words)-len(expected)+1)),
                     f'owner{owner} row{row} missing literal original Rough Skin controls')
+
+def tearDownModule():
+    eager.clear()   # drop the consume executables this module compiled
+
 
 if __name__=='__main__':unittest.main()

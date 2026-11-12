@@ -21,6 +21,7 @@ from gpu_engine_default_observer_ast import dump_default_program,assert_hp_rng_m
 from test_gpu_engine_gameplay_stream_comparison import state as literal_state
 from _showdown_root import showdown_root
 import test_gpu_engine_no_damage_owning as fixture
+import gpu_engine_eager_witness as eager
 
 class BellyDrumOwningTests(unittest.TestCase):
  def setUp(self):
@@ -67,8 +68,7 @@ class BellyDrumOwningTests(unittest.TestCase):
   old=ast.parse(subprocess.check_output(['git','show','977d524d:gpu_engine/transition.py'],text=True));after=ast.parse(subprocess.check_output(['git','show','0087033e:gpu_engine/transition.py'],text=True));baseline=dump_default_program(old)
   # The immutable Belly Drum delta precedes the later pinch observer.
   self.assertEqual(dump_default_program(after),baseline);assert_hp_rng_mutations_detected(self,after,baseline)
-  current=ast.parse(Path('gpu_engine/transition.py').read_text());integrated=ast.parse(subprocess.check_output(['git','show','b8092a85:gpu_engine/transition.py'],text=True))
-  self.assertEqual(ast.dump(current),ast.dump(integrated));assert_hp_rng_mutations_detected(self,current,dump_default_program(integrated))
+  # transition.py is certified against CURRENT_TRANSITION (full AST plus mutations) by terminal_closeout and seismic_toss_components.
   script=r'''const d=require(process.argv[1]+'/dist/sim/dex.js').Dex.mod('gen3'),B=require(process.argv[1]+'/dist/sim/battle.js').Battle,P=require(process.argv[1]+'/dist/sim/pokemon.js').Pokemon,m=d.moves.get('bellydrum'),out=[];
 for(const [hp,maxhp,atk]of [[201,201,0],[101,201,-6],[100,201,0],[201,201,6],[1,1,0]]){
 const lines=[],p={hp,maxhp,isActive:true,boosts:{atk},battle:{clampIntRange:(v,a,z)=>Math.max(a,Math.min(z,v))},getCappedBoost:P.prototype.getCappedBoost,boostBy:P.prototype.boostBy,
@@ -141,6 +141,7 @@ const result=m.onHit.call(b,p);out.push({lines,hp:p.hp,atk:p.boosts.atk,failed:r
     np.testing.assert_array_equal(actual,expected)
 
  def test_actual_original_frame_both_owners_witness_encoder_and_physics(self):
+  self.enterContext(eager.eager_source_witness(self.prepared))
   arrays=self.f.f.base().arrays('pressure','pressure');arrays['moves'][:]=np.array([self.metadata['vocabulary']['moves'].index(n)for n in self.names]);arrays['pp'][:]=[16,8,8,16];arrays['item'][:]=0
   # Preserve all six distinct original species and canonical constructor types.
   for team in (0,1):
@@ -166,3 +167,7 @@ const result=m.onHit.call(b,p);out.push({lines,hp:p.hp,atk:p.boosts.atk,failed:r
    words=np.asarray(diagnostic['raw'][row]);pair=words[words[:,0]==cb.BELLY_DRUM];self.assertEqual(pair[:,4].tolist(),[0,1]);self.assertEqual(int(pair[1,6]),6)
   ledger=result.state.core.execution;used=ledger.site==int(ex.Site.BELLY_DRUM);self.assertTrue(bool(j.all(j.where(used,ledger.stage==3,True))))
   for owner in result.owners:self.assertEqual(owner.full_line_consumers_complete.tolist(),[True,True]);self.assertEqual(owner.encoded.observation.admitted.tolist(),[True,True]);self.assertFalse(bool(owner.B4_qualified.any()))
+
+
+def tearDownModule():
+    eager.clear()   # drop the consume executables this module compiled
