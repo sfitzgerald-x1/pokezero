@@ -107,7 +107,7 @@ class LethalStatusResidualTests(unittest.TestCase):
    old=env['original'](*args,eligible=True,_defer_own_unknown=True);current=status.record_status_residual_device(*args,eligible=True,_defer_own_unknown=True)
    for a,z in zip(jax.tree.leaves(old),jax.tree.leaves(current)):np.testing.assert_array_equal(a,z)
   # No optional status context alters original direct-only row handling.
-  import test_gpu_engine_terminal_source as old_tests
+  import test_gpu_engine_terminal_closeout as old_tests
   old_tests.TerminalTransportAndCountingTests().test_b8_global_and_original_snapshot_cannot_be_row_selected_or_mutated()
   subprocess.run([__import__('sys').executable,'-c','from gpu_engine import benchmark_capture_gap_census, engine_source_frame_witness, engine_full_v4_event_device'],check=True,capture_output=True,text=True)
 
