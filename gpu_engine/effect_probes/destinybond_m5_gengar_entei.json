@@ -1,0 +1,221 @@
+{
+ "schema": "pokezero.effect_probe.scenario.v1",
+ "move": "destinybond_m5_gengar_entei",
+ "note": "Destiny Bond gate-3 matchup 5 (opp Gengar vs Entei Flamethrower / Hidden Power [Grass] / Calm Mind / Substitute, Pressure), gen3 randbats sets: Gengar bonds while Entei sets a Substitute; Gengar's Thunderbolt leaves the Substitute at 3 HP (bond dropped) while Entei Calm Minds; Gengar re-bonds under a +1 Flamethrower, re-bonds again, and Entei's Flamethrower KO from behind its Substitute (crit and roll axes) faints Entei; both replace.",
+ "teams": [
+  [
+   {
+    "species": "Entei",
+    "moves": [
+     "flamethrower",
+     "hiddenpowergrass",
+     "calmmind",
+     "substitute"
+    ],
+    "ability": "Pressure",
+    "item": "Leftovers",
+    "level": 78,
+    "ivs": {
+     "atk": 2,
+     "spa": 30
+    },
+    "evs": {
+     "atk": 0
+    }
+   },
+   {
+    "species": "Starmie",
+    "moves": [
+     "splash",
+     "surf",
+     "recover",
+     "protect"
+    ],
+    "ability": "Illuminate",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Blissey",
+    "moves": [
+     "splash",
+     "softboiled",
+     "protect",
+     "seismictoss"
+    ],
+    "ability": "Serene Grace",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Skarmory",
+    "moves": [
+     "splash",
+     "protect",
+     "spikes",
+     "peck"
+    ],
+    "ability": "Keen Eye",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Swampert",
+    "moves": [
+     "splash",
+     "protect",
+     "surf",
+     "earthquake"
+    ],
+    "ability": "Torrent",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Metagross",
+    "moves": [
+     "splash",
+     "protect",
+     "meteormash",
+     "earthquake"
+    ],
+    "ability": "Clear Body",
+    "item": "Leftovers"
+   }
+  ],
+  [
+   {
+    "species": "Gengar",
+    "moves": [
+     "destinybond",
+     "thunderbolt",
+     "icepunch",
+     "willowisp"
+    ],
+    "ability": "Levitate",
+    "item": "Leftovers",
+    "level": 74,
+    "ivs": {
+     "atk": 0
+    },
+    "evs": {
+     "atk": 0
+    }
+   },
+   {
+    "species": "Starmie",
+    "moves": [
+     "splash",
+     "surf",
+     "recover",
+     "protect"
+    ],
+    "ability": "Illuminate",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Blissey",
+    "moves": [
+     "splash",
+     "softboiled",
+     "protect",
+     "seismictoss"
+    ],
+    "ability": "Serene Grace",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Skarmory",
+    "moves": [
+     "splash",
+     "protect",
+     "spikes",
+     "peck"
+    ],
+    "ability": "Keen Eye",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Swampert",
+    "moves": [
+     "splash",
+     "protect",
+     "surf",
+     "earthquake"
+    ],
+    "ability": "Torrent",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Metagross",
+    "moves": [
+     "splash",
+     "protect",
+     "meteormash",
+     "earthquake"
+    ],
+    "ability": "Clear Body",
+    "item": "Leftovers"
+   }
+  ]
+ ],
+ "script": [
+  [
+   "move 4",
+   "move 1"
+  ],
+  [
+   "move 3",
+   "move 2"
+  ],
+  [
+   "move 1",
+   "move 1"
+  ],
+  [
+   "move 1",
+   "move 1"
+  ],
+  [
+   "switch 3",
+   "switch 2"
+  ]
+ ],
+ "axes": [
+  {
+   "name": "crit",
+   "field": "draws.0.4",
+   "steps": [
+    3
+   ],
+   "values": [
+    15,
+    0
+   ]
+  },
+  {
+   "name": "roll",
+   "field": "draws.0.5",
+   "steps": [
+    3
+   ],
+   "values": [
+    0,
+    15
+   ]
+  }
+ ],
+ "expect": {
+  "exact": true
+ },
+ "require_fields": [
+  "item_knocked",
+  "destiny_bond"
+ ],
+ "tape": {
+  "draws.0.4": 15,
+  "draws.0.5": 0,
+  "draws.0.6": 0,
+  "draws.1.4": 15,
+  "draws.1.5": 0,
+  "draws.1.6": 0,
+  "secondary.0": 99,
+  "secondary.1": 99
+ }
+}

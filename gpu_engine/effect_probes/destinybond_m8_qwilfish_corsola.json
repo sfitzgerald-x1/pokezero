@@ -1,0 +1,200 @@
+{
+ "schema": "pokezero.effect_probe.scenario.v1",
+ "move": "destinybond_m8_qwilfish_corsola",
+ "note": "Destiny Bond gate-3 matchup 8 (opp Qwilfish KO'd by Corsola's Explosion; Surf / Ice Beam / Recover / Explosion), gen3 randbats sets: the faster Qwilfish bonds under Surf, re-bonds, and Corsola's Explosion (crit and roll axes) KOs it. Corsola's own faint is queued first (data/mods/gen3/scripts.ts useMoveInner, selfdestruct 'always' before tryMoveHit) and processed first, so Qwilfish's onFaint calls source.faint() on a fainted Corsola, which returns without effect (sim/pokemon.ts faint): exactly the two faints; both replace.",
+ "teams": [
+  [
+   {
+    "species": "Corsola",
+    "moves": [
+     "surf",
+     "icebeam",
+     "recover",
+     "explosion"
+    ],
+    "ability": "Natural Cure",
+    "item": "Leftovers",
+    "level": 98
+   },
+   {
+    "species": "Starmie",
+    "moves": [
+     "splash",
+     "surf",
+     "recover",
+     "protect"
+    ],
+    "ability": "Illuminate",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Blissey",
+    "moves": [
+     "splash",
+     "softboiled",
+     "protect",
+     "seismictoss"
+    ],
+    "ability": "Serene Grace",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Skarmory",
+    "moves": [
+     "splash",
+     "protect",
+     "spikes",
+     "peck"
+    ],
+    "ability": "Keen Eye",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Swampert",
+    "moves": [
+     "splash",
+     "protect",
+     "surf",
+     "earthquake"
+    ],
+    "ability": "Torrent",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Metagross",
+    "moves": [
+     "splash",
+     "protect",
+     "meteormash",
+     "earthquake"
+    ],
+    "ability": "Clear Body",
+    "item": "Leftovers"
+   }
+  ],
+  [
+   {
+    "species": "Qwilfish",
+    "moves": [
+     "destinybond",
+     "hydropump",
+     "sludgebomb",
+     "spikes"
+    ],
+    "ability": "Swift Swim",
+    "item": "Leftovers",
+    "level": 82
+   },
+   {
+    "species": "Starmie",
+    "moves": [
+     "splash",
+     "surf",
+     "recover",
+     "protect"
+    ],
+    "ability": "Illuminate",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Blissey",
+    "moves": [
+     "splash",
+     "softboiled",
+     "protect",
+     "seismictoss"
+    ],
+    "ability": "Serene Grace",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Skarmory",
+    "moves": [
+     "splash",
+     "protect",
+     "spikes",
+     "peck"
+    ],
+    "ability": "Keen Eye",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Swampert",
+    "moves": [
+     "splash",
+     "protect",
+     "surf",
+     "earthquake"
+    ],
+    "ability": "Torrent",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Metagross",
+    "moves": [
+     "splash",
+     "protect",
+     "meteormash",
+     "earthquake"
+    ],
+    "ability": "Clear Body",
+    "item": "Leftovers"
+   }
+  ]
+ ],
+ "script": [
+  [
+   "move 1",
+   "move 1"
+  ],
+  [
+   "move 4",
+   "move 1"
+  ],
+  [
+   "switch 3",
+   "switch 2"
+  ]
+ ],
+ "axes": [
+  {
+   "name": "crit",
+   "field": "draws.0.4",
+   "steps": [
+    1
+   ],
+   "values": [
+    15,
+    0
+   ]
+  },
+  {
+   "name": "roll",
+   "field": "draws.0.5",
+   "steps": [
+    1
+   ],
+   "values": [
+    0,
+    15
+   ]
+  }
+ ],
+ "expect": {
+  "exact": true
+ },
+ "require_fields": [
+  "item_knocked",
+  "destiny_bond"
+ ],
+ "tape": {
+  "draws.0.4": 15,
+  "draws.0.5": 0,
+  "draws.0.6": 0,
+  "draws.1.4": 15,
+  "draws.1.5": 0,
+  "draws.1.6": 0,
+  "secondary.0": 99,
+  "secondary.1": 99
+ }
+}

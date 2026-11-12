@@ -1,0 +1,200 @@
+{
+ "schema": "pokezero.effect_probe.scenario.v1",
+ "move": "destinybond_m2_banette_azumarill",
+ "note": "Destiny Bond gate-3 matchup 2 (opp Banette KO'd by a Sleep Talk-called move), gen3 randbats sets: the faster Banette bonds under Hydro Pump, drops the bond with Shadow Ball, re-bonds while Azumarill (Hydro Pump / Double-Edge / Rest / Sleep Talk, Huge Power) Rests, and re-bonds again. The sleeping Azumarill's Sleep Talk (talk axis over its callable moves): Hydro Pump KOs Banette and Azumarill faints too (the called move is the faint effect, a Move); Double-Edge is immune (Ghost) and the bond holds; Rest does nothing. The script ends at that step.",
+ "teams": [
+  [
+   {
+    "species": "Azumarill",
+    "moves": [
+     "hydropump",
+     "doubleedge",
+     "rest",
+     "sleeptalk"
+    ],
+    "ability": "Huge Power",
+    "item": "Leftovers",
+    "level": 87
+   },
+   {
+    "species": "Starmie",
+    "moves": [
+     "splash",
+     "surf",
+     "recover",
+     "protect"
+    ],
+    "ability": "Illuminate",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Blissey",
+    "moves": [
+     "splash",
+     "softboiled",
+     "protect",
+     "seismictoss"
+    ],
+    "ability": "Serene Grace",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Skarmory",
+    "moves": [
+     "splash",
+     "protect",
+     "spikes",
+     "peck"
+    ],
+    "ability": "Keen Eye",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Swampert",
+    "moves": [
+     "splash",
+     "protect",
+     "surf",
+     "earthquake"
+    ],
+    "ability": "Torrent",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Metagross",
+    "moves": [
+     "splash",
+     "protect",
+     "meteormash",
+     "earthquake"
+    ],
+    "ability": "Clear Body",
+    "item": "Leftovers"
+   }
+  ],
+  [
+   {
+    "species": "Banette",
+    "moves": [
+     "destinybond",
+     "endure",
+     "hiddenpowerfighting",
+     "shadowball"
+    ],
+    "ability": "Insomnia",
+    "item": "Salac Berry",
+    "level": 88,
+    "ivs": {
+     "def": 30,
+     "spa": 30,
+     "spd": 30,
+     "spe": 30
+    }
+   },
+   {
+    "species": "Starmie",
+    "moves": [
+     "splash",
+     "surf",
+     "recover",
+     "protect"
+    ],
+    "ability": "Illuminate",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Blissey",
+    "moves": [
+     "splash",
+     "softboiled",
+     "protect",
+     "seismictoss"
+    ],
+    "ability": "Serene Grace",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Skarmory",
+    "moves": [
+     "splash",
+     "protect",
+     "spikes",
+     "peck"
+    ],
+    "ability": "Keen Eye",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Swampert",
+    "moves": [
+     "splash",
+     "protect",
+     "surf",
+     "earthquake"
+    ],
+    "ability": "Torrent",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Metagross",
+    "moves": [
+     "splash",
+     "protect",
+     "meteormash",
+     "earthquake"
+    ],
+    "ability": "Clear Body",
+    "item": "Leftovers"
+   }
+  ]
+ ],
+ "script": [
+  [
+   "move 1",
+   "move 1"
+  ],
+  [
+   "move 1",
+   "move 4"
+  ],
+  [
+   "move 3",
+   "move 1"
+  ],
+  [
+   "move 4",
+   "move 1"
+  ]
+ ],
+ "axes": [
+  {
+   "name": "talk",
+   "field": "sleep_talk.0",
+   "steps": [
+    3
+   ],
+   "values": [
+    0,
+    1,
+    2
+   ]
+  }
+ ],
+ "expect": {
+  "exact": true
+ },
+ "require_fields": [
+  "item_knocked",
+  "destiny_bond"
+ ],
+ "tape": {
+  "draws.0.4": 15,
+  "draws.0.5": 0,
+  "draws.0.6": 0,
+  "draws.1.4": 15,
+  "draws.1.5": 0,
+  "draws.1.6": 0,
+  "secondary.0": 99,
+  "secondary.1": 99
+ }
+}

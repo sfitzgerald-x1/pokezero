@@ -1,0 +1,234 @@
+{
+ "schema": "pokezero.effect_probe.scenario.v1",
+ "move": "destinybond_m7_gengar_volbeat",
+ "note": "Destiny Bond gate-3 matchup 7 (opp Gengar vs Volbeat Thunderbolt / Ice Punch / Baton Pass / Tail Glow), gen3 randbats sets: the faster Volbeat Tail Glows while Gengar bonds, then Baton Passes the +2 to a Bulky Attacker Starmie while Gengar is bonded; Gengar re-bonds after the pass, and the faster Starmie's Psychic OHKO faints Starmie too. After the double replacement the second Gengar bonds, Volbeat passes again, Gengar Thunderbolts the incoming Starmie (bond dropped), and the second Psychic KO takes nobody.",
+ "teams": [
+  [
+   {
+    "species": "Volbeat",
+    "moves": [
+     "thunderbolt",
+     "icepunch",
+     "batonpass",
+     "tailglow"
+    ],
+    "ability": "Swarm",
+    "item": "Leftovers",
+    "level": 94,
+    "ivs": {
+     "atk": 0
+    },
+    "evs": {
+     "atk": 0
+    }
+   },
+   {
+    "species": "Starmie",
+    "moves": [
+     "psychic",
+     "thunderbolt",
+     "icebeam",
+     "recover"
+    ],
+    "ability": "Natural Cure",
+    "item": "Leftovers",
+    "level": 74,
+    "ivs": {
+     "atk": 0
+    },
+    "evs": {
+     "atk": 0
+    }
+   },
+   {
+    "species": "Starmie",
+    "moves": [
+     "psychic",
+     "thunderbolt",
+     "icebeam",
+     "recover"
+    ],
+    "ability": "Natural Cure",
+    "item": "Leftovers",
+    "level": 74,
+    "ivs": {
+     "atk": 0
+    },
+    "evs": {
+     "atk": 0
+    }
+   },
+   {
+    "species": "Blissey",
+    "moves": [
+     "splash",
+     "softboiled",
+     "protect",
+     "seismictoss"
+    ],
+    "ability": "Serene Grace",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Skarmory",
+    "moves": [
+     "splash",
+     "protect",
+     "spikes",
+     "peck"
+    ],
+    "ability": "Keen Eye",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Swampert",
+    "moves": [
+     "splash",
+     "protect",
+     "surf",
+     "earthquake"
+    ],
+    "ability": "Torrent",
+    "item": "Leftovers"
+   }
+  ],
+  [
+   {
+    "species": "Gengar",
+    "moves": [
+     "destinybond",
+     "thunderbolt",
+     "icepunch",
+     "willowisp"
+    ],
+    "ability": "Levitate",
+    "item": "Leftovers",
+    "level": 74,
+    "ivs": {
+     "atk": 0
+    },
+    "evs": {
+     "atk": 0
+    }
+   },
+   {
+    "species": "Gengar",
+    "moves": [
+     "destinybond",
+     "thunderbolt",
+     "icepunch",
+     "willowisp"
+    ],
+    "ability": "Levitate",
+    "item": "Leftovers",
+    "level": 74,
+    "ivs": {
+     "atk": 0
+    },
+    "evs": {
+     "atk": 0
+    }
+   },
+   {
+    "species": "Starmie",
+    "moves": [
+     "splash",
+     "surf",
+     "recover",
+     "protect"
+    ],
+    "ability": "Illuminate",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Blissey",
+    "moves": [
+     "splash",
+     "softboiled",
+     "protect",
+     "seismictoss"
+    ],
+    "ability": "Serene Grace",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Skarmory",
+    "moves": [
+     "splash",
+     "protect",
+     "spikes",
+     "peck"
+    ],
+    "ability": "Keen Eye",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Metagross",
+    "moves": [
+     "splash",
+     "protect",
+     "meteormash",
+     "earthquake"
+    ],
+    "ability": "Clear Body",
+    "item": "Leftovers"
+   }
+  ]
+ ],
+ "script": [
+  [
+   "move 4",
+   "move 1"
+  ],
+  [
+   "move 3",
+   "move 1"
+  ],
+  [
+   "switch 2",
+   ""
+  ],
+  [
+   "move 1",
+   "move 1"
+  ],
+  [
+   "switch 1",
+   "switch 2"
+  ],
+  [
+   "move 4",
+   "move 1"
+  ],
+  [
+   "move 3",
+   "move 2"
+  ],
+  [
+   "switch 3",
+   ""
+  ],
+  [
+   "move 1",
+   "move 1"
+  ]
+ ],
+ "axes": [],
+ "expect": {
+  "exact": true
+ },
+ "require_fields": [
+  "item_knocked",
+  "destiny_bond"
+ ],
+ "tape": {
+  "draws.0.4": 15,
+  "draws.0.5": 0,
+  "draws.0.6": 0,
+  "draws.1.4": 15,
+  "draws.1.5": 0,
+  "draws.1.6": 0,
+  "secondary.0": 99,
+  "secondary.1": 99
+ }
+}
