@@ -101,6 +101,13 @@ def depart(state,side,table,*,eligible):
     if hasattr(state,'recharge_counter'):
         state=state._replace(recharge_counter=state.recharge_counter.at[rows,side,active].set(
             jnp.where(eligible,0,state.recharge_counter[rows,side,active])))
+    # Fidelity M2: and perishsong, yawn and the departing mon's own partiallytrapped (a Baton target got its copies
+    # first). A departing trapper leaves its target's trap to that target's next residual tick, which releases it
+    # silently (data/mods/gen5/conditions.ts:14-20). States without the leaves (fixtures) skip it.
+    if hasattr(state,'perish_counter'):
+        state=state._replace(**{name:getattr(state,name).at[rows,side,active].set(jnp.where(eligible,
+            -1 if name=='partial_trap_source' else 0,getattr(state,name)[rows,side,active]))
+            for name in ('perish_counter','yawn_counter','partial_trap_counter','partial_trap_source')})
     # Remove both ends of linked move traps. A direct Baton remaps/copies its
     # links to the recipient BEFORE departure, so those transferred links stay.
     own=state.trap_source[rows,side,active]

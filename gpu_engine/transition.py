@@ -1353,6 +1353,14 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
             hp -= jnp.where(creates_sub,cost,0)
             work = work._replace(substitute_hp=_set_active(work.substitute_hp,work,side,
                 jnp.where(creates_sub,cost,sub_hp)))
+            # Fidelity M2: the Substitute condition's onStart (data/moves.ts:18343-18346; Gen 3 inherits it) ends the
+            # user's partial trap: -end|X|Wrap|[partiallytrapped]|[silent].
+            _sub_freed=creates_sub & (_active(work.partial_trap_counter,work,side)>0)
+            work=work._replace(partial_trap_counter=_set_active(work.partial_trap_counter,work,side,
+                jnp.where(_sub_freed,0,_active(work.partial_trap_counter,work,side))),
+                partial_trap_source=_set_active(work.partial_trap_source,work,side,
+                    jnp.where(_sub_freed,-1,_active(work.partial_trap_source,work,side))))
+            if _lifecycle_trace:_public_trace=status_callbacks.unknown(_public_trace,_sub_freed)
             restored = jnp.minimum(max_hp,hp + max_hp // 2)
             hp = jnp.where(acts & effects.heal_half[move],restored,hp)
             heal_weather=work.weather
@@ -1607,6 +1615,35 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                 _active(work.volatile,work,side)|jnp.uint32(DESTINY_BOND),_active(work.volatile,work,side))))
             if _lifecycle_trace:_public_trace=status_callbacks.unknown(_public_trace,_bond)
             if _device_public is not None:device_public.destiny_bond(_device_public,work,side,_bond)
+            # Fidelity M2: Perish Song (data/moves.ts:13241-13270 onHitField; data/mods/gen4/moves.ts:993-999 order 12).
+            # Accuracy true and target 'all': no accuracy roll, and neither Protect nor a Substitute blocks it. For each
+            # active: Soundproof's onTryHit returns null (-immune [from] ability: Soundproof; data/mods/gen7/abilities.ts:
+            # 98-106 has no target !== source check, so a Soundproof user is blocked too); otherwise one without the volatile
+            # gets duration 4 (-start|X|perish3|[silent]). Nobody getting it is a -fail (no state).
+            _perish_used=acts & effects.perishsong[move]
+            for _perish_side in range(2):
+                _perish_alive=_perish_used & (_active(work.hp,work,_perish_side)>0)
+                _perish_sound=_perish_alive & effects.soundproof[_active(work.ability,work,_perish_side)]
+                _perish_gets=_perish_alive & ~_perish_sound & (_active(work.perish_counter,work,_perish_side)==0)
+                work=work._replace(perish_counter=_set_active(work.perish_counter,work,_perish_side,
+                    jnp.where(_perish_gets,4,_active(work.perish_counter,work,_perish_side))))
+                if _lifecycle_trace:_public_trace=status_callbacks.unknown(_public_trace,_perish_alive)
+                if _device_public is not None:device_public.reveal_ability(_device_public,work,_perish_side,_perish_sound)
+            # Fidelity M2: Yawn (data/moves.ts:21141-21172; data/mods/gen4/moves.ts:1527-1533 order 10, subOrder 19).
+            # Accuracy true; Protect is in `hit`; a Status move ignores type immunity. Its onTryHit fails a statused target,
+            # a Substitute fails it (TryPrimaryHit), addVolatile fails on an existing yawn (no onRestart), then Insomnia
+            # and Vital Spirit's onTryAddVolatile print -immune [from] ability. Otherwise duration 2 (-start|T|move: Yawn).
+            _yawn_try=(acts & hit & effects.yawn[move] & (_active(work.hp,work,foe)>0)
+                & (_active(work.status,work,foe)==m.NONE)
+                & ((_active(work.substitute_hp,work,foe)==0) | effects.bypass_sub[move])
+                & (_active(work.yawn_counter,work,foe)==0))
+            _yawn_immune=jnp.zeros_like(_yawn_try)
+            if table.secondary is not None:
+                _yawn_immune=_yawn_try & table.secondary.ability_immunity[_active(work.ability,work,foe),m.SLP]
+            work=work._replace(yawn_counter=_set_active(work.yawn_counter,work,foe,
+                jnp.where(_yawn_try & ~_yawn_immune,2,_active(work.yawn_counter,work,foe))))
+            if _lifecycle_trace:_public_trace=status_callbacks.unknown(_public_trace,_yawn_try)
+            if _device_public is not None:device_public.reveal_ability(_device_public,work,foe,_yawn_immune)
             status = effects.status[move]
             target_types = _active(work.types,work,foe)
             status_immune = jnp.any(effects.status_immunity[status[:,None],target_types],axis=1)
@@ -1798,6 +1835,19 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                 _public_trace=kernel_risks.branch_on_tape(_public_trace,kernel_risks.Branch.LINK_TRAP,
                     acts & hit & table.linked_traps.move[move],active=live)
             work=linking.apply(work,side,move,table.linked_traps,eligible=acts & hit)
+        if table.effects is not None:
+            # Fidelity M2: Wrap's volatileStatus partiallytrapped (data/moves.ts:21091-21104, accuracy 85 from
+            # data/mods/gen4/moves.ts:1515-1518), applied by runMoveEffects after the hit: never on a miss, Protect, an
+            # immunity or a Substitute hit, and addVolatile fails on a fainted target and on one already trapped (no
+            # onRestart: no new duration roll). Duration random(3,7) (data/mods/gen4/conditions.ts:110-118) = 3+draws[s][7],
+            # the attacker's column: Wrap never also uses primary sleep, Encore or Signal Beam. -activate|T|move: Wrap.
+            _wrap_set=(acts & hit & ~immune & ~hits_sub & table.effects.wrap[move]
+                & (_active(work.hp,work,foe)>0) & (_active(work.partial_trap_counter,work,foe)==0))
+            work=work._replace(partial_trap_counter=_set_active(work.partial_trap_counter,work,foe,
+                jnp.where(_wrap_set,3+chance[:,7],_active(work.partial_trap_counter,work,foe))),
+                partial_trap_source=_set_active(work.partial_trap_source,work,foe,
+                    jnp.where(_wrap_set,work.active[rows,side],_active(work.partial_trap_source,work,foe))))
+            if _lifecycle_trace:_public_trace=status_callbacks.unknown(_public_trace,_wrap_set)
         if table.encore is not None:
             # Duration uses the existing uniform [0,4) status-duration column:
             # a dispatched Encore cannot also inflict a primary sleep status.
@@ -2105,14 +2155,20 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
     # Selected order10/priority0 handlers snapshot SPEED before suborder.
     # Equal-speed Speed Boost(3), Leftovers(4), seed(5), status(6) use independent ties.
     # Ability boosts do not re-sort the already queued residual handlers.
-    event_sides = jnp.array([0,1,0,1,0,1,0,1,0,1])
-    event_suborder = jnp.array([3,3,4,4,5,5,6,6,14,14])
+    # Fidelity M2 (design 2.3): partiallytrapped (subOrder 9, events 8-9) and Yawn (subOrder 19, events 12-13) join the
+    # list (14 events; Encore moves to 10-11). Showdown's comparePriority sorts by speed, then subOrder (sim/battle.ts:
+    # 404-411); the key multiplier is 64 because 2*19+1 > 31. The old events keep their relative order: their
+    # subOrder*2+tie is at most 29 < 32 < 64, and keys stay distinct. An equal-Speed Wrap pair takes effect[0][3]; the
+    # Yawn pair is inert (each handler touches only its own holder) and takes the fixed tie `sides`.
+    event_sides = jnp.array([0,1,0,1,0,1,0,1,0,1,0,1,0,1])
+    event_suborder = jnp.array([3,3,4,4,5,5,6,6,9,9,14,14,19,19])
     tie = jnp.concatenate((draws[:,1,0,None] ^ sides,
         draws[:,0,9,None] ^ sides,draws[:,0,10,None] ^ sides,draws[:,1,9,None] ^ sides,
-        draws[:,1,11,None] ^ sides),axis=1)
-    event_keys = -end_speed[:,event_sides]*32 + event_suborder[None,:]*2 + tie
+        effect_draws[:,0,3,None] ^ sides,draws[:,1,11,None] ^ sides,
+        jnp.broadcast_to(sides,(draws.shape[0],2))),axis=1)
+    event_keys = -end_speed[:,event_sides]*64 + event_suborder[None,:]*2 + tie
     event_order = jnp.argsort(event_keys,axis=1)
-    for order in range(10):
+    for order in range(14):
         _faint_before_hp=work.hp
         event = event_order[:,order]
         side = event % 2
@@ -2120,6 +2176,9 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
         heal_event = (event >= 2) & (event < 4)
         seed_event = (event >= 4) & (event < 6)
         status_event = (event >= 6) & (event < 8)
+        wrap_event = (event >= 8) & (event < 10)
+        encore_event = (event >= 10) & (event < 12)
+        yawn_event = event >= 12
         battle_continues = jnp.all(jnp.any(work.hp > 0, axis=2), axis=1)
         eligible = residual_ready & battle_continues
         if _device_public is not None:_device_residual_before=work
@@ -2347,20 +2406,87 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                 if table.damage_moves is not None:device_public.reveal_ability(_device_public,work,side,_seed_ooze)
             if _lifecycle_trace:
                 _public_trace,_leech_heal_capture=leech_callbacks.finish_heal(_public_trace,_leech_heal_pending,work)
+        # Fidelity M2: partiallytrapped's residual (data/mods/gen4/conditions.ts:110-118, data/mods/gen5/conditions.ts:
+        # 8-23). fieldEvent lowers the duration first; at 0 its onEnd ends it (-end|X|Wrap|[partiallytrapped], no damage)
+        # (sim/battle.ts:515-523). Otherwise a trapper that is not the foe's active, has fainted or has activeTurns 0
+        # releases it silently; else the holder takes baseMaxhp/16, at least 1 (spreadDamage's clamp). A duration d thus
+        # gives d-1 ticks. A fainted holder's handler is skipped.
+        _wrap_counter=_active(work.partial_trap_counter,work,side);_wrap_source=_active(work.partial_trap_source,work,side)
+        _wrap_holder=eligible & wrap_event & (_active(work.hp,work,side)>0) & (_wrap_counter>0)
+        _wrap_held=((_wrap_source==work.active[rows,1-side]) & (_active(work.hp,work,1-side)>0)
+            & (work.active_turns[rows,1-side]>0))
+        _wrap_tick=_wrap_holder & (_wrap_counter>1) & _wrap_held
+        _wrap_end=_wrap_holder & ~_wrap_tick
+        _wrap_hp=_active(work.hp,work,side)
+        _wrap_damage=jnp.minimum(_wrap_hp,jnp.maximum(1,_active(work.max_hp,work,side)//16))
+        work=work._replace(hp=_set_active(work.hp,work,side,jnp.where(_wrap_tick,_wrap_hp-_wrap_damage,_wrap_hp)),
+            partial_trap_counter=_set_active(work.partial_trap_counter,work,side,
+                jnp.where(_wrap_tick,_wrap_counter-1,jnp.where(_wrap_end,0,_wrap_counter))),
+            partial_trap_source=_set_active(work.partial_trap_source,work,side,jnp.where(_wrap_end,-1,_wrap_source)))
+        if _lifecycle_trace:_public_trace=status_callbacks.unknown(_public_trace,_wrap_holder)
+        if _device_public is not None:
+            device_public.hp_line(_device_public,work,side,_wrap_tick,source_class=device_public.HP_POST_ITEM)
+        # Fidelity M2: Yawn's countdown (data/moves.ts:21156-21167; no onResidual, a duration only). At 0 its onEnd
+        # prints -end|X|move: Yawn|[silent] and calls trySetStatus('slp', source): a statused holder stays as it is
+        # (setStatus of its own status fails silently), Sleep Clause Mod refuses it while another living member sleeps
+        # from a foe (the source is the foe; data/rulesets.ts:1386-1401), Insomnia and Vital Spirit refuse it (onSetStatus),
+        # and Safeguard is not consulted. slp's onStart (data/mods/gen3/conditions.ts) rolls random(2,6) with no active
+        # move: 2+effect[side][2], the drowsy mon's side. A Lum Berry cures it at once (AfterSetStatus).
+        _yawn_counter=_active(work.yawn_counter,work,side)
+        _yawn_holder=eligible & yawn_event & (_active(work.hp,work,side)>0) & (_yawn_counter>0)
+        work=work._replace(yawn_counter=_set_active(work.yawn_counter,work,side,jnp.where(_yawn_holder,_yawn_counter-1,_yawn_counter)))
+        from .effects import sleep_clause_blocked as _yawn_clause
+        _yawn_sleep=(_yawn_holder & (_yawn_counter==1) & (_active(work.status,work,side)==m.NONE)
+            & ~_yawn_clause(work,side))
+        if table.secondary is not None:
+            _yawn_sleep&=~table.secondary.ability_immunity[_active(work.ability,work,side),m.SLP]
+        work=work._replace(status=_set_active(work.status,work,side,jnp.where(_yawn_sleep,m.SLP,_active(work.status,work,side))),
+            status_counter=_set_active(work.status_counter,work,side,
+                jnp.where(_yawn_sleep,2+effect_draws[rows,side,2],_active(work.status_counter,work,side))),
+            sleep_skipped=_set_active(work.sleep_skipped,work,side,jnp.where(_yawn_sleep,0,_active(work.sleep_skipped,work,side))),
+            rest_origin=_set_active(work.rest_origin,work,side,_active(work.rest_origin,work,side) & ~_yawn_sleep))
+        if _lifecycle_trace:_public_trace=status_callbacks.unknown(_public_trace,_yawn_holder)
+        if table.secondary is not None:
+            if _lifecycle_trace:
+                work,_public_trace=secondaries.after_status_event(work,1-side,side,jnp.full_like(side,m.SLP),table.secondary,
+                    applied=_yawn_sleep,item_table=table.items,_status_trace=_public_trace,_device_public=_device_public)
+            else:
+                work=secondaries.after_status_event(work,1-side,side,jnp.full_like(side,m.SLP),table.secondary,
+                    applied=_yawn_sleep,item_table=table.items,_device_public=_device_public)
+        elif _device_public is not None:device_public.observe(_device_public,work,_yawn_sleep)
         if table.encore is not None:
             if _lifecycle_trace:
                 from . import engine_encore_callbacks as encore_callbacks
                 _encore_residual_pending=None;_encore_residual_capture=None
-                _encore_attempt=eligible & (event>=8) & (_active(work.hp,work,side)>0) & (_active(work.encore_counter,work,side)>0)
+                _encore_attempt=eligible & encore_event & (_active(work.hp,work,side)>0) & (_active(work.encore_counter,work,side)>0)
                 if _direct_hit_context is not None and _direct_hit_registered and _direct_hit_context.data.encore is not None:
                     _public_trace,_encore_residual_pending=encore_callbacks.begin(_public_trace,work,side,
                         jnp.zeros_like(side),_direct_hit_context,table.encore,eligible=_encore_attempt,residual=True)
-            work=repeating.residual(work,side,eligible=eligible & (event>=8))
+            work=repeating.residual(work,side,eligible=eligible & encore_event)
             if _lifecycle_trace:
                 _public_trace,_encore_residual_capture=encore_callbacks.finish(_public_trace,_encore_residual_pending,work)
                 _public_trace=kernel_risks.branch_on_tape(_public_trace,kernel_risks.Branch.ENCORE,
                     _encore_attempt,active=live,captured_encore=_encore_residual_capture)
         work=_clear_fainted_boosts(work,_faint_before_hp,eligible=eligible)
+    # Fidelity M2 (design 2.3): Perish Song's residual (data/mods/gen4/moves.ts:993-999, order 12), after the order-10
+    # list. Faster first; an equal-Speed pair takes effect[1][3] (that side first). The duration falls; at 0 its onEnd
+    # prints perish0 and faints the holder (faint() queues it), else -start|X|perishN. A fainted holder is skipped. The end
+    # path runs no faintMessages before the next handler (sim/battle.ts:515-523), so both holders resolve even when the
+    # first faint empties a side (Gen 3 checkWin with both sides empty is a tie): the pass is gated once, at its start.
+    _perish_continues=residual_ready & jnp.all(jnp.any(work.hp>0,axis=2),axis=1)
+    _perish_first=jnp.where(end_speed[:,0]!=end_speed[:,1],(end_speed[:,1]>end_speed[:,0]).astype(jnp.int32),effect_draws[:,1,3])
+    for order in range(2):
+        side=jnp.where(order==0,_perish_first,1-_perish_first)
+        _faint_before_hp=work.hp
+        _perish_counter=_active(work.perish_counter,work,side)
+        _perish_holder=_perish_continues & (_active(work.hp,work,side)>0) & (_perish_counter>0)
+        _perish_faint=_perish_holder & (_perish_counter==1)
+        work=work._replace(perish_counter=_set_active(work.perish_counter,work,side,jnp.where(_perish_holder,_perish_counter-1,_perish_counter)),
+            hp=_set_active(work.hp,work,side,jnp.where(_perish_faint,0,_active(work.hp,work,side))))
+        if _lifecycle_trace:_public_trace=status_callbacks.unknown(_public_trace,_perish_holder)
+        # perish0 then faint: a faint line, no -damage (as Destiny Bond's and Self-Destruct's faints).
+        if _device_public is not None:device_public.observe(_device_public,work,_perish_faint,record_damage=False)
+        work=_clear_fainted_boosts(work,_faint_before_hp,eligible=_perish_continues)
     # Fidelity M1 (design 2.3): mustrecharge has a duration and no residual handler, so the Residual event
     # still decrements it, last (order false sorts after every numbered handler, sim/battle.ts). At 0 it ends
     # silently: a recharge action cancelled by a Gen 3 faint expires here. Fainted holders are cleared below;
@@ -2384,6 +2510,10 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
     work=work._replace(volatile=jnp.where(work.hp>0,work.volatile,work.volatile & jnp.uint32(~DESTINY_BOND&0xffffffff)))
     # Fidelity M1: and mustrecharge (design 2.4).
     work=work._replace(recharge_counter=jnp.where(work.hp>0,work.recharge_counter,0))
+    # Fidelity M2: and perishsong, yawn and partiallytrapped (design 2.4). A trapper's faint leaves its target's trap
+    # until that target's next residual tick releases it silently (data/mods/gen5/conditions.ts:14-20).
+    work=work._replace(**{name:jnp.where(work.hp>0,getattr(work,name),0) for name in ("perish_counter","yawn_counter","partial_trap_counter")},
+        partial_trap_source=jnp.where(work.hp>0,work.partial_trap_source,-1))
     alive = jnp.any(work.hp > 0, axis=2)
     done = ~jnp.all(alive, axis=1)
     winner = jnp.where(alive[:, 0], 0, jnp.where(alive[:, 1], 1, 2))

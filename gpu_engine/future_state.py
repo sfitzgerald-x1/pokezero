@@ -80,6 +80,10 @@ FIELD_POLICY = {
     "item_knocked": "permanent knocked-off flag; native removed item (item none), refused beside a Trick inventory",
     "effect_draws": "future-reused while suspended; otherwise consumed inactive draws (appended effect stream)",
     "recharge_counter": "native MUSTRECHARGE duration; a live recharge refuses until the native No Move action mapping is certified",
+    "perish_counter": "native PERISH volatile count; a live count refuses until the native PERISH4..1 mapping is certified",
+    "yawn_counter": "yawn duration; elapsed vs sampled unresolved, so a live yawn refuses",
+    "partial_trap_counter": "hidden sampled duration plus source; a live partial trap refuses",
+    "partial_trap_source": "partial-trap source party index (-1 none); refuses with its counter",
 }
 NATIVE_PATHS = {
     "species": ("side[].pokemon[].id",), "level": ("side[].pokemon[].level",),
@@ -136,6 +140,10 @@ NATIVE_PATHS = {
     "item_knocked": ("side[].pokemon[].item: none (no native itemKnockedOff; only Trick reads it)",),
     "effect_draws": ("EXTERNAL_CHANCE: future-reused while suspended; otherwise consumed inactive draw",),
     "recharge_counter": ("side[].volatile_statuses.MUSTRECHARGE (refused while nonzero)",),
+    "perish_counter": ("side[].volatile_statuses.PERISH4..PERISH1 (refused while nonzero)",),
+    "yawn_counter": ("UNRESOLVED: side[].volatile_status_durations.yawn (refused while nonzero)",),
+    "partial_trap_counter": ("UNRESOLVED: side[].volatile_statuses.PARTIALLYTRAPPED + hidden duration (refused while nonzero)",),
+    "partial_trap_source": ("UNRESOLVED: opposing side.active_index of the trapper (refused unless -1)",),
 }
 SIDE_NAMES = ("side_one", "side_two")
 BOOST_NAMES = ("attack", "defense", "special_attack", "special_defense", "speed", "accuracy", "evasion")
@@ -158,7 +166,7 @@ SHAPES = {name: (2, 6) for name in ("species", "level", "hidden_power_type", "hi
     "happiness", "gender", "hp", "max_hp", "status", "status_counter", "sleep_skipped", "rest_origin", "choice_move", "last_move",
     "encore_move", "encore_counter", "charge_move", "charge_counter", "item", "ability", "base_ability", "volatile",
     "confusion_counter", "protect_counter", "substitute_hp", "trap_source", "truant_loaf", "item_knocked",
-    "recharge_counter")}
+    "recharge_counter", "perish_counter", "yawn_counter", "partial_trap_counter", "partial_trap_source")}
 SHAPES.update({name: (2,) for name in ("active", "entry_pending", "active_turns", "trapped", "forced_switch",
     "last_action_kind", "last_action_index",
     "baton_pass", "queued_actions", "queued_stall", "phazing_draws", "secondary_draws", "sleep_talk_draws",
@@ -337,7 +345,8 @@ def _prepare(data, metadata, certificate=None, *, boundary="ordinary",
         if set(dict(original_static)) != required or original_genders is None:
             add("source", "INCOMPLETE_ORIGINAL_STATIC", "All12 constructor records and retained genders required")
             return None, gaps, (), False, False
-    expected = set(FIELD_POLICY) - {"truant_loaf", "gender", "item_knocked", "effect_draws", "recharge_counter"}  # legacy fields remain explicitly unknown
+    expected = set(FIELD_POLICY) - {"truant_loaf", "gender", "item_knocked", "effect_draws", "recharge_counter",
+        "perish_counter", "yawn_counter", "partial_trap_counter", "partial_trap_source"}  # legacy fields remain explicitly unknown
     if set(data) - set(FIELD_POLICY) or expected - set(data):
         add("schema", "UNCLASSIFIED_JAX_FIELD", repr(sorted(set(data) ^ expected)))
         return None, gaps, (), False, False
@@ -465,6 +474,14 @@ def _prepare(data, metadata, certificate=None, *, boundary="ordinary",
                 add(path+".item_knocked", "KNOCKED_ITEM_TRICK_UNREPRESENTED", "Native has no itemKnockedOff; Trick fails on a knocked-off Pokemon in Showdown")
             if data.get("recharge_counter", ((0,)*6,)*2)[side][p]:
                 add(path+".recharge_counter", "RECHARGE_UNREPRESENTED", "A live mustrecharge needs the native MUSTRECHARGE volatile and its No Move action mapping, neither certified here")
+            # Fidelity M2: live perish, yawn and partial-trap volatiles refuse (no certified native mapping; the yawn and
+            # partial-trap durations are hidden sampled values, not native elapsed state).
+            if data.get("perish_counter", ((0,)*6,)*2)[side][p]:
+                add(path+".perish_counter", "PERISH_UNREPRESENTED", "A live Perish count needs the native PERISH volatile mapping, not certified here")
+            if data.get("yawn_counter", ((0,)*6,)*2)[side][p]:
+                add(path+".yawn_counter", "YAWN_UNREPRESENTED", "A live Yawn duration is a sampled remaining duration, not native elapsed-hazard state")
+            if data.get("partial_trap_counter", ((0,)*6,)*2)[side][p] or data.get("partial_trap_source", ((-1,)*6,)*2)[side][p] != -1:
+                add(path+".partial_trap_counter", "PARTIAL_TRAP_UNREPRESENTED", "A live partial trap has a hidden sampled duration and a source link, neither certified here")
             if p != active:
                 for name in ("boosts", "volatile", "protect_counter", "substitute_hp", "choice_move", "last_move", "charge_move", "charge_counter", "trap_source"):
                     value = data[name][side][p]

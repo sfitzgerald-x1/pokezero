@@ -1,0 +1,277 @@
+{
+ "schema": "pokezero.effect_probe.scenario.v1",
+ "move": "perishsong_tie",
+ "note": "M2.1: both last mons at count 1 with equal Speed. The order-12 pair sorts by effect[1][3] (the tie coin), but the end path runs no faintMessages before the next handler (sim/battle.ts:515-523), so both faint and Gen 3 checkWin calls a tie whichever goes first: the coin orders only the two perish0 lines. Setup: last_mons.",
+ "teams": [
+  [
+   {
+    "species": "Electrode",
+    "moves": [
+     "explosion",
+     "splash",
+     "protect",
+     "thunderbolt"
+    ],
+    "ability": "Soundproof",
+    "item": "",
+    "level": 1
+   },
+   {
+    "species": "Electrode",
+    "moves": [
+     "explosion",
+     "splash",
+     "protect",
+     "thunderbolt"
+    ],
+    "ability": "Soundproof",
+    "item": "",
+    "level": 1
+   },
+   {
+    "species": "Electrode",
+    "moves": [
+     "explosion",
+     "splash",
+     "protect",
+     "thunderbolt"
+    ],
+    "ability": "Soundproof",
+    "item": "",
+    "level": 1
+   },
+   {
+    "species": "Electrode",
+    "moves": [
+     "explosion",
+     "splash",
+     "protect",
+     "thunderbolt"
+    ],
+    "ability": "Soundproof",
+    "item": "",
+    "level": 1
+   },
+   {
+    "species": "Electrode",
+    "moves": [
+     "explosion",
+     "splash",
+     "protect",
+     "thunderbolt"
+    ],
+    "ability": "Soundproof",
+    "item": "",
+    "level": 1
+   },
+   {
+    "species": "Misdreavus",
+    "moves": [
+     "perishsong",
+     "splash",
+     "protect",
+     "shadowball"
+    ],
+    "ability": "Levitate",
+    "item": ""
+   }
+  ],
+  [
+   {
+    "species": "Misdreavus",
+    "moves": [
+     "perishsong",
+     "splash",
+     "protect",
+     "shadowball"
+    ],
+    "ability": "Levitate",
+    "item": ""
+   },
+   {
+    "species": "Voltorb",
+    "moves": [
+     "explosion",
+     "splash",
+     "protect",
+     "thunderbolt"
+    ],
+    "ability": "Soundproof",
+    "item": "",
+    "level": 1
+   },
+   {
+    "species": "Voltorb",
+    "moves": [
+     "explosion",
+     "splash",
+     "protect",
+     "thunderbolt"
+    ],
+    "ability": "Soundproof",
+    "item": "",
+    "level": 1
+   },
+   {
+    "species": "Voltorb",
+    "moves": [
+     "explosion",
+     "splash",
+     "protect",
+     "thunderbolt"
+    ],
+    "ability": "Soundproof",
+    "item": "",
+    "level": 1
+   },
+   {
+    "species": "Voltorb",
+    "moves": [
+     "explosion",
+     "splash",
+     "protect",
+     "thunderbolt"
+    ],
+    "ability": "Soundproof",
+    "item": "",
+    "level": 1
+   },
+   {
+    "species": "Voltorb",
+    "moves": [
+     "explosion",
+     "splash",
+     "protect",
+     "thunderbolt"
+    ],
+    "ability": "Soundproof",
+    "item": "",
+    "level": 1
+   }
+  ]
+ ],
+ "script": [
+  [
+   "move 1",
+   "move 3"
+  ],
+  [
+   "switch 2",
+   ""
+  ],
+  [
+   "move 1",
+   "move 3"
+  ],
+  [
+   "switch 3",
+   ""
+  ],
+  [
+   "move 1",
+   "move 3"
+  ],
+  [
+   "switch 4",
+   ""
+  ],
+  [
+   "move 1",
+   "move 3"
+  ],
+  [
+   "switch 5",
+   ""
+  ],
+  [
+   "move 1",
+   "move 3"
+  ],
+  [
+   "switch 6",
+   ""
+  ],
+  [
+   "move 3",
+   "switch 2"
+  ],
+  [
+   "move 3",
+   "move 1"
+  ],
+  [
+   "",
+   "switch 3"
+  ],
+  [
+   "move 3",
+   "move 1"
+  ],
+  [
+   "",
+   "switch 4"
+  ],
+  [
+   "move 3",
+   "move 1"
+  ],
+  [
+   "",
+   "switch 5"
+  ],
+  [
+   "move 3",
+   "move 1"
+  ],
+  [
+   "",
+   "switch 6"
+  ],
+  [
+   "move 3",
+   "move 1"
+  ],
+  [
+   "",
+   "switch 1"
+  ],
+  [
+   "move 1",
+   "move 2"
+  ],
+  [
+   "move 2",
+   "move 2"
+  ],
+  [
+   "move 2",
+   "move 2"
+  ],
+  [
+   "move 2",
+   "move 2"
+  ]
+ ],
+ "axes": [
+  {
+   "name": "tie",
+   "field": "effect.1.3",
+   "values": [
+    0,
+    1
+   ]
+  }
+ ],
+ "expect": {
+  "exact": true
+ },
+ "require_fields": [
+  "perish_counter",
+  "yawn_counter",
+  "partial_trap_counter",
+  "partial_trap_source",
+  "item_knocked",
+  "destiny_bond",
+  "effect"
+ ]
+}

@@ -64,8 +64,8 @@ def registry():
     group('meanlook spiderweb block','Stable party-index move-trap links and Baton/ordinary departure cleanup','linked_traps','linked_traps')
     group('pursuit','Gen3 pre-switch interception and ordinary-hit fallback','pursuit','pursuit')
     group('crosschop razorleaf leafblade','Ordinary damage with catalog high-crit stage','critical','critical')
-    group('rapidspin','Gen3 damage and represented Leech Seed/Spikes cleanup','sustain','rapid_spin',
-        partial='Partial-trap damage/clocks are not represented or cleared')
+    group('rapidspin','Gen3 damage and represented Leech Seed/Spikes/partial-trap cleanup (fidelity M2: Wrap released, a '
+        'Substitute hit included)','sustain','rapid_spin fidelity_m2')
     group('brickbreak','Ordinary Fighting damage','mechanics','mechanics',
         partial='Reflect/Light Screen removal is not represented')
     group('sing','Primary sleep status application','effects','effects',
@@ -113,6 +113,17 @@ def registry():
     group('trick','Item swap between the actives (an identical pair included); fails on a miss, Protect, a Substitute, '
         'Sticky Hold, a knocked-off item on either side or no item on both; the Choice Band lock follows the current '
         'item','items','fidelity_m1')
+    # Fidelity patch M2 (the residual scheduler: order-10 list of 14 events, the order-12 Perish pass).
+    group('perishsong','Every active without the volatile and without Soundproof (the user included) counts 4, 3, 2, 1 at '
+        'the order-12 residual and faints at 0; Protect and a Substitute do not block it; both ends resolve before '
+        'faintMessages; Baton Pass carries it, a switch clears it','effects','fidelity_m2')
+    group('yawn','Drowsy for 2 residuals (subOrder 19), then trySetStatus(slp) for 2+effect[s][2]: silent if statused, '
+        'Sleep Clause Mod applies; fails on a status, Protect, a Substitute, an existing yawn and Insomnia/Vital Spirit; a '
+        'switch clears it, Baton Pass does not carry it','effects','fidelity_m2')
+    group('wrap','Ordinary damage plus a partial trap of 3+draws[s][7] (no restart, not on a Substitute hit): '
+        'max(1,maxhp/16) per residual (subOrder 9, after Leftovers), d-1 ticks, a silent release once the trapper is not '
+        'the active; switches illegal while the trapper is the living foe active; Rapid Spin and the holder\'s own '
+        'Substitute end it; Baton Pass carries it with its source','effects','fidelity_m2')
     return result
 
 

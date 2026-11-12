@@ -32,7 +32,7 @@ CONSUMERS = {
         (4, "transition/pursuit: critical<1 or<2"),
         (5, "transition/pursuit: damage85+draw; confusion damage reuses draw"),
         (6, "mechanics.accuracy_hit: pinned binary64/Q12 integer-roll predicates"),
-        (7, "transition primary sleep; encore.apply duration; secondary.apply_chance_effects Signal Beam confusion 2+draw"),
+        (7, "transition primary sleep; encore.apply duration; secondary.apply_chance_effects Signal Beam confusion 2+draw; transition Wrap duration 3+draw"),
         (8, "effects.stall_success: draw<8//denominator"))},
     "draws.0.0": ("transition first move ordering",),
     "draws.1.0": ("transition residual SpeedBoost ordering",),
@@ -52,7 +52,11 @@ CONSUMERS = {
     # stream, so plan_for_state builds no axis for them: re-pinning transition.py must add the coordinates first.
     **{f"effect.{s}.{c}": (use,) for s in range(2) for c, use in (
         (0, "transition Bonemerang second hit: critical<1 or<2 (critical.is_critical)"),
-        (1, "transition Bonemerang second hit: damage 85+draw"))},
+        (1, "transition Bonemerang second hit: damage 85+draw"),
+        # Fidelity M2: the reserved columns. Column 2 is the drowsy mon's own side; column 3 is a pair tie per row.
+        (2, "transition residual Yawn sleep duration 2+draw (the drowsy mon's side)"))},
+    "effect.0.3": ("transition residual partial-trap (Wrap) pair ordering, subOrder 9",),
+    "effect.1.3": ("transition residual Perish pair ordering, order 12 (both ends resolve before faintMessages, so no Gen 3 outcome depends on it)",),
 }
 
 # Changing any source that supplies the consumer/domain proof requires review.
@@ -310,8 +314,9 @@ def plan_for_state(state, index, actions, table, metadata, *, cap, native_input=
                                             hustle=hustle,compound_eyes=bool(compound is not None and compound[ability]),
                                             sand_veil=bool(climate==3 and sand is not None and sand[target]))))
             use(prefix+"6", *(Observation("less_than", value) for value in sorted(accuracy)))
+            # Fidelity M2: Wrap's partial-trap duration is 3+draws[s][7] (the attacker's column).
             if any(_at(t, "effects", "status", move) == 5 or _at(t, "encore", "move", move)
-                    or _at(t, "secondary", "confusion", move) for move in selected[s]):
+                    or _at(t, "secondary", "confusion", move) or _at(t, "effects", "wrap", move) for move in selected[s]):
                 use(prefix+"7", Observation("identity"))
             if any(_at(t, "effects", "protect", move) or _at(t, "effects", "endure", move) for move in selected[s]):
                 # Input mapper admits only denominators0/2/4/8. Haze does not

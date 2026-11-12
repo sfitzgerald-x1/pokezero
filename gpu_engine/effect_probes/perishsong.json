@@ -1,14 +1,14 @@
 {
  "schema": "pokezero.effect_probe.scenario.v1",
  "move": "perishsong",
- "note": "Broken (no perish counter in the engine). Showdown counts both actives 3, 2, 1 over three requests; the engine has no field, so it compares as 0. The PR adding perish_counter sets require_fields and expect exact.",
+ "note": "M2.1: Perish Song on both actives (data/moves.ts:13241-13270): -start perish3 [silent] at the move (duration 4), 3, 2, 1 at the order-12 residual, then perish0 and both faint; both sides replace and play on.",
  "teams": [
   [
    {
     "species": "Misdreavus",
     "moves": [
      "perishsong",
-     "protect",
+     "splash",
      "meanlook",
      "shadowball"
     ],
@@ -18,56 +18,56 @@
    {
     "species": "Starmie",
     "moves": [
+     "splash",
      "surf",
-     "thunderbolt",
-     "icebeam",
-     "recover"
+     "recover",
+     "protect"
     ],
-    "ability": "Natural Cure",
+    "ability": "Illuminate",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Skarmory",
+    "moves": [
+     "splash",
+     "protect",
+     "spikes",
+     "peck"
+    ],
+    "ability": "Keen Eye",
     "item": "Leftovers"
    },
    {
     "species": "Swampert",
     "moves": [
-     "earthquake",
+     "splash",
+     "protect",
      "surf",
-     "icebeam",
-     "protect"
+     "earthquake"
     ],
     "ability": "Torrent",
     "item": "Leftovers"
    },
    {
-    "species": "Gengar",
-    "moves": [
-     "thunderbolt",
-     "icepunch",
-     "firepunch",
-     "explosion"
-    ],
-    "ability": "Levitate",
-    "item": "Leftovers"
-   },
-   {
     "species": "Metagross",
     "moves": [
+     "splash",
+     "protect",
      "meteormash",
-     "earthquake",
-     "rockslide",
-     "explosion"
+     "earthquake"
     ],
     "ability": "Clear Body",
     "item": "Leftovers"
    },
    {
-    "species": "Zapdos",
+    "species": "Celebi",
     "moves": [
-     "thunderbolt",
-     "batonpass",
-     "agility",
-     "drillpeck"
+     "splash",
+     "protect",
+     "psychic",
+     "recover"
     ],
-    "ability": "Pressure",
+    "ability": "Natural Cure",
     "item": "Leftovers"
    }
   ],
@@ -75,67 +75,67 @@
    {
     "species": "Blissey",
     "moves": [
+     "splash",
      "softboiled",
      "protect",
-     "toxic",
      "seismictoss"
     ],
     "ability": "Natural Cure",
     "item": "Leftovers"
    },
    {
-    "species": "Tyranitar",
+    "species": "Starmie",
     "moves": [
-     "rockslide",
-     "earthquake",
-     "fireblast",
-     "icebeam"
+     "splash",
+     "surf",
+     "recover",
+     "protect"
     ],
-    "ability": "Sand Stream",
+    "ability": "Illuminate",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Skarmory",
+    "moves": [
+     "splash",
+     "protect",
+     "spikes",
+     "peck"
+    ],
+    "ability": "Keen Eye",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Swampert",
+    "moves": [
+     "splash",
+     "protect",
+     "surf",
+     "earthquake"
+    ],
+    "ability": "Torrent",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Metagross",
+    "moves": [
+     "splash",
+     "protect",
+     "meteormash",
+     "earthquake"
+    ],
+    "ability": "Clear Body",
     "item": "Leftovers"
    },
    {
     "species": "Celebi",
     "moves": [
+     "splash",
+     "protect",
      "psychic",
-     "gigadrain",
-     "recover",
-     "calmmind"
+     "recover"
     ],
     "ability": "Natural Cure",
-    "item": "Leftovers"
-   },
-   {
-    "species": "Salamence",
-    "moves": [
-     "dragonclaw",
-     "earthquake",
-     "fireblast",
-     "rockslide"
-    ],
-    "ability": "Intimidate",
-    "item": "Leftovers"
-   },
-   {
-    "species": "Suicune",
-    "moves": [
-     "surf",
-     "icebeam",
-     "calmmind",
-     "rest"
-    ],
-    "ability": "Pressure",
-    "item": "Leftovers"
-   },
-   {
-    "species": "Jolteon",
-    "moves": [
-     "thunderbolt",
-     "batonpass",
-     "substitute",
-     "agility"
-    ],
-    "ability": "Volt Absorb",
     "item": "Leftovers"
    }
   ]
@@ -152,12 +152,31 @@
   [
    "move 2",
    "move 1"
+  ],
+  [
+   "move 2",
+   "move 1"
+  ],
+  [
+   "switch 2",
+   "switch 3"
+  ],
+  [
+   "move 2",
+   "move 2"
   ]
  ],
  "axes": [],
  "expect": {
-  "mismatch_fields": [
-   "perish_counter"
-  ]
- }
+  "exact": true
+ },
+ "require_fields": [
+  "perish_counter",
+  "yawn_counter",
+  "partial_trap_counter",
+  "partial_trap_source",
+  "item_knocked",
+  "destiny_bond",
+  "effect"
+ ]
 }

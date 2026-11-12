@@ -23,8 +23,8 @@ from gpu_engine import v2e_census as cz, v2e_phase_profile as pp
 ROOT = Path(__file__).resolve().parents[1]
 # Statements of a stand-in step_with_chance on the real phase lines (A, B, D, E0, two actions E1/E4, F1, two residual events, G).
 CODE = {342: 'def step_with_chance(x, y):', 487: '    a = helper(x) + y', 544: '    b = a * y', 615: '    c = b - x', 719: '    c = c + 1',
-    742: '    for order in range(2):', 744: '        c = c * 2 + order', 1903: '        c = jnp.where(c > 0, c, -c)', 2001: '    d = c - y',
-    2115: '    for event in range(2):', 2116: '        d = d + event', 2212: '        d = d * 3', 2371: '    return d + a'}
+    742: '    for order in range(2):', 744: '        c = c * 2 + order', 1953: '        c = jnp.where(c > 0, c, -c)', 2051: '    d = c - y',
+    2171: '    for event in range(2):', 2172: '        d = d + event', 2268: '        d = d * 3', 2497: '    return d + a'}
 HEADER = ['import jax', 'import jax.numpy as jnp', '', '', '@jax.jit', 'def helper(x):', '    return x * 3 + 1']
 LABELS = ['A', 'B', 'D', 'E0', 'E1.0', 'E4.0', 'E1.1', 'E4.1', 'F1', 'F2.0', 'F2.1', 'G']
 
@@ -81,7 +81,7 @@ class PhaseTableTest(unittest.TestCase):
         for tag, label in cz.BOUNDARIES:self.assertTrue(label == 'END' or cz.base(label) in names, tag)
 
     def test_label_lines(self):
-        lines = [None, 488, 544, 578, 649, 729, 755, 980, 1391, 1903, 755, 980, 1962, 2012, 2109, 2116, 2212, 2122, 2147, 2124, 2391, None]
+        lines = [None, 488, 544, 578, 649, 729, 755, 980, 1391, 1953, 755, 980, 2012, 2062, 2164, 2172, 2268, 2177, 2203, 2180, 2517, None]
         want = ['outside', 'A', 'B', 'C', 'D', 'E0', 'E1.0', 'E2.0', 'E3.0', 'E4.0', 'E1.1', 'E2.1', 'E4.1', 'F1', 'F2.pre', 'F2.0', 'F2.0',
             'F2.1', 'F2.1', 'F2.2', 'G', 'outside']
         self.assertEqual(cz.label_lines(lines), want)
@@ -90,7 +90,7 @@ class PhaseTableTest(unittest.TestCase):
 
     def test_listing_lines(self):
         with tempfile.TemporaryDirectory() as d:
-            path = Path(d, 'listing.txt');path.write_text('  353:   check\n  487:   rows\n  544:   speed\n 2012:   x\n 2451:   return\nnoise\n')
+            path = Path(d, 'listing.txt');path.write_text('  353:   check\n  487:   rows\n  544:   speed\n 2062:   x\n 2581:   return\nnoise\n')
             self.assertEqual(cz.listing_lines(path), {'pre': 1, 'A': 1, 'B': 1, 'F1': 1, 'G': 1})
 
 
