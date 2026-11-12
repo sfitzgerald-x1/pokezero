@@ -925,9 +925,10 @@ class M1PlantedBugTests(unittest.TestCase):
 M2_VOCAB = dict(moves=['_none', 'perishsong', 'yawn', 'wrap', 'tackle'], abilities=['_none', 'soundproof', 'insomnia'],
                 items=['_none', 'leftovers'])
 M2_PERISH, M2_YAWN, M2_WRAP, M2_TACKLE = 1, 2, 3, 4
-M2_LANES = 9           # 0 Perish Song acts, 1 it is selected but the user cannot act; 2 Yawn lands, 3 into Protect; 4 Wrap hits, 5 misses;
+M2_LANES = 10          # 0 Perish Song acts, 1 it is selected but the user cannot act; 2 Yawn lands, 3 into Protect; 4 Wrap hits, 5 misses;
                        # 6 side 1's active is drowsy before the step (its Yawn sleep lands at this residual); 7 Wrap hits, then the
-                       # trapper is KO'd later in the turn (both trees), so the trap releases silently; 8 done
+                       # trapper is KO'd later in the turn (both trees), so the trap releases silently; 8 Wrap hits and ticks, then
+                       # the slower trapper faints at its own residual after the holder's handler (both trees): the trap stands; 9 done
 
 
 class TrackersM2(NamedTuple):
@@ -949,7 +950,7 @@ def m2_state(seed):
     import jax.numpy as j
     s = lanes_state(M2_LANES, seed)
     moves = np.full((M2_LANES, 2, 6, 4), M2_TACKLE, np.int32)
-    moves[:, 0, 0, 0] = [M2_PERISH, M2_PERISH, M2_YAWN, M2_YAWN, M2_WRAP, M2_WRAP, M2_TACKLE, M2_WRAP, M2_TACKLE]
+    moves[:, 0, 0, 0] = [M2_PERISH, M2_PERISH, M2_YAWN, M2_YAWN, M2_WRAP, M2_WRAP, M2_TACKLE, M2_WRAP, M2_WRAP, M2_TACKLE]
     return s._replace(moves=j.asarray(moves), choice_move=s.choice_move.at[:, 1, 0].set(0), item=s.item.at[:, 1, 0].set(1),
                       yawn_counter=s.yawn_counter.at[6, 1, 0].set(1), active_turns=j.ones_like(s.active_turns))
 
@@ -960,7 +961,8 @@ def m2_step(state, actions, t, *, perish_fail=False, perish_wide=False, perish_b
     """A stand-in engine with M2's writes: side 0's move line (the move hook), its hit (the damage hook) and the foe's Protect
     (port_protect) are reported as the engine reports them, then the residual has run (counters after one tick: Perish 3,
     Yawn 1, Wrap 3+draws[0][7]-1 with source 0 and its tick max(1, maxhp//16) on the trapped active; lane 6's drowsy active
-    falls asleep; lane 7's trap released, its trapper fainted) and turn_end is ordinary. The base pass is m2=False. Keyword
+    falls asleep; lane 7's trap released, its trapper fainted; the holder's handler cutpoint, the HP line transition emits
+    after it, reports the trapper there, before lane 8's late trapper faint) and turn_end is ordinary. The base pass is m2=False. Keyword
     flags plant the reviewer-style bugs: an effect on a failure, a wrong extra field, a removed bag or clock producer, the
     effect on a benched mon (side 1's party index 1) instead of the active, a tick of the wrong size (RW7: tick_div=8) and
     a trap kept and ticked for a fainted trapper (RW8: no_release)."""
@@ -973,7 +975,7 @@ def m2_step(state, actions, t, *, perish_fail=False, perish_wide=False, perish_b
     live = ~s.done;z = j.zeros(lanes, j.int32)
     perish = live & (rows < 2);acting = live & (rows != 1)                 # lane 1: Perish Song selected, the user cannot act
     yawn = live & (rows >= 2) & (rows < 4);protected = live & (rows == 3)
-    wrap = live & (((rows >= 4) & (rows < 6)) | (rows == 7));hit = live & ((rows == 4) | (rows == 7))
+    wrap = live & (((rows >= 4) & (rows < 6)) | (rows == 7) | (rows == 8));hit = live & ((rows == 4) | (rows == 7) | (rows == 8))
     move = s.moves[:, 0, 0, 0]
     hooks.port_protect(None, z, acting, j.ones(lanes, j.bool_), protected, protected)
     hooks.move(None, s, z, move, acting)
@@ -1010,7 +1012,11 @@ def m2_step(state, actions, t, *, perish_fail=False, perish_wide=False, perish_b
                        partial_trap_source=s.partial_trap_source.at[:, 1, mon].set(j.where(trapped, 0, -1)))
         if wrap_bag:v = setbag(v, 1, 'partiallytrapped', trapped, mon)
         if wrap_clock:clock = clock.at[:, 1, mon].set(j.where(trapped, 1, clock[:, 1, mon]))
+        # The holder's partiallytrapped handler and the HP-line cutpoint after it (the names transition uses there).
+        _wrap_holder = trapped;_wrap_tick = trapped
+        hooks.hp_line(None, s, j.ones(lanes, j.int32), _wrap_tick, source_class=2)
         if wrap_wide:s = s._replace(boosts=s.boosts.at[:, 1, 0, 1].add(j.where(trapped, -1, 0)))
+    s = s._replace(hp=s.hp.at[:, 0, 0].set(j.where(live & (rows == 8), 0, s.hp[:, 0, 0])))   # lane 8: a late trapper faint
     s = s._replace(turn=s.turn + 1)
     hooks.turn_end(None, state, s, live, upkeep=None, leftovers=None)
     return result(s, t._replace(public_volatiles=v, mon_features={**t.mon_features, 'wrap_trap_turns': clock}))
@@ -1040,7 +1046,8 @@ class M2PlantedBugTests(unittest.TestCase):
         cls.stubs = [mock.patch.object(hooks, 'damage', lambda c, state, side, dealt, taken, use: c),
                      mock.patch.object(hooks, 'move', lambda c, *rest, **kw: c),
                      mock.patch.object(hooks, 'port_protect', lambda c, *rest: c),
-                     mock.patch.object(hooks, 'turn_end', lambda c, *rest, **kw: c)]
+                     mock.patch.object(hooks, 'turn_end', lambda c, *rest, **kw: c),
+                     mock.patch.object(hooks, 'hp_line', lambda c, *rest, **kw: c)]
         for stub in cls.stubs:stub.start()
         from gpu_engine import v2e_regress
         cls.base = cls.tmp / 'base'
@@ -1070,14 +1077,16 @@ class M2PlantedBugTests(unittest.TestCase):
         code, report, listing = self.patched('correct')
         c = report['counts']
         self.assertEqual(code, 0, c);self.assertEqual((c['changed_but_uninvolved'], c['changed_involved_unexpected_fields']), (0, 0))
-        self.assertEqual(c['m2_leaves'], 6)                               # Perish, Yawn, Wrap lanes x 2 shards
+        self.assertEqual(c['m2_leaves'], 8)                               # Perish, Yawn, two Wrap lanes x 2 shards
         self.assertEqual((c['m2_wrong_mon'], c['m2_forced']), (0, 0))
         self.assertEqual({x['lane'] for x in listing if 'drowsy' in x['involved']}, {6})   # the drowsy sleep, allowed per mon
-        self.assertEqual(c['bag_leaves'], 6)
+        self.assertEqual(c["bag_leaves"], 8)
         by_lane = {(x['shard'], x['lane']): x for x in listing}
         self.assertEqual(sorted(by_lane[('shard-000000.npz', 4)]['m2_rule']), sorted(
             ["state.hp@1", "state.partial_trap_counter@1", "state.partial_trap_source@1", "trackers.mon_features['wrap_trap_turns']@1"]))
         self.assertNotIn(('shard-000000.npz', 7), by_lane)                 # the released trap: nothing differs from the base
+        # Lane 8: the trapper fainted after the holder's handler; the cutpoint shows it held there, so the tick stands.
+        self.assertEqual(sorted(by_lane[('shard-000000.npz', 8)]['m2_rule']), sorted(by_lane[('shard-000000.npz', 4)]['m2_rule']))
 
     def assert_flagged(self, kind, lanes, fields, effect):
         code, report, listing = self.patched(kind[0], **kind[1])

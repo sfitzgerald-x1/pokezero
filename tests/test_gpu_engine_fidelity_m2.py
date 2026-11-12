@@ -479,6 +479,23 @@ class RegressRuleTests(unittest.TestCase):
         untick = dict(ok, trap=np.where(trap > 0, 5, 0), post_hp=fainted, ran=False)       # no residual: no tick, no trapper check
         self.assertEqual(self.rule(entries, self.lane(**untick))[0], set())
 
+    def test_the_trapper_is_read_at_the_holders_handler_when_recorded(self):
+        """M2 review (GPU, 40 lanes at 15f2af3d): a slower trapper fainting at its own residual after the holder's tick ends
+        the step fainted; the handler cutpoint (tick_seen/tick_trapper/tick_held at the holder's side) shows it held at the
+        tick, which stands. A trapper not held there, another mon there, or no handler run with a ticked count fail."""
+        trap = np.zeros((2, 6), np.int32);trap[1, 0] = 4;source = np.full((2, 6), -1, np.int32);source[1, 0] = 2
+        bag = np.zeros((2, 6, 6), bool);bag[1, 0, 5] = True;clock = np.zeros((2, 6), np.int32);clock[1, 0] = 1
+        fainted = np.full((2, 6), 100, np.int32);fainted[0, 2] = 0
+        ok = dict(trap=trap, source=source, bag=bag, clock=clock, wrap_by=np.array([True, False]), wrap_user=np.array([2, -1]),
+                  wrap_target=np.array([0, -1]), draws7=np.array([2, 0]), post_active=np.array([2, 0], np.int32), post_hp=fainted,
+                  tick_seen=np.array([False, True]), tick_trapper=np.array([-1, 2]), tick_held=np.array([False, True]))
+        entries = [('state.partial_trap_counter', 1), ('state.partial_trap_source', 1), (r_clock(), 1)]
+        self.assertEqual(self.rule(entries, self.lane(**ok))[0], set())
+        for bad in (dict(tick_held=np.array([False, False])), dict(tick_trapper=np.array([-1, 3])), dict(tick_seen=np.array([False, False]))):
+            self.assertEqual(self.rule(entries, self.lane(**dict(ok, **bad)))[0], set(entries), bad)
+        without = {k: v for k, v in ok.items() if not k.startswith('tick_')}
+        self.assertEqual(self.rule(entries, self.lane(**without))[0], set(entries))         # the step-end stand-in: fainted
+
     def test_mon_digest_is_the_base_pass_side_digest(self):
         from gpu_engine import v2e_regress as r
         hp = np.random.default_rng(5).integers(0, 400, (3, 2, 6)).astype(np.int32)

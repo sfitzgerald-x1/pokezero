@@ -112,8 +112,10 @@ at that line; the damage hook's HP damage after a Wrap line; port_protect's Prot
 - wrap: the other side's Wrap line dealt HP damage (a Substitute hit traps nothing); counter and source nonzero only at
   that same living target, the source the Wrap user's party index, the counter 3+draws[f][7] (the design derivation,
   recomputed from the keys) less one after the tick; partiallytrapped set in the bag; WRAP_TRAP_TURNS 1 at that slot
-  exactly when turn_end was ordinary, 0 elsewhere. A ticked counter (less one) needs the trapper held at the residual:
-  the Wrap user still the other side's living active with activeTurns > 0 at the step end.
+  exactly when turn_end was ordinary, 0 elsewhere. A ticked counter (less one) needs the trapper held at the holder's
+  handler: the Wrap user the other side's living active with activeTurns > 0 there, recorded at the HP-line cutpoint
+  transition emits right after that handler (a slower trapper may faint from its own residual after the tick; the step
+  end stands in only when no cutpoint was recorded).
 - wrap tick (M2 review): on a side the other side's Wrap struck, state.hp is explained only when adding the tick
   max(1, maxhp//16) back at the trapped active reproduces the base's stored per-side digest exactly (mon_digest, a numpy
   copy of lane_digest) after a witnessed tick, or, for a lethal tick that cleared the trap with the trapper held, some
@@ -1100,9 +1102,11 @@ def m2_rule(entries, w):
     counter is nonzero only at that same target, still active and alive, with source the Wrap user's party index and the
     value 3+draws[f][7], less one after the residual tick. The wrap clock (B2's WRAP_TRAP_TURNS) is nonzero only at that
     trapped mon's public slot, 1 when the step's turn_end was ordinary.
-    M2 review: a ticked counter (3+draws[f][7]-1) also needs the trapper held at the residual: the Wrap user still the
-    other side's living active with activeTurns > 0 at the step end (else the handler releases the trap silently,
-    data/mods/gen5/conditions.ts; nothing after the residual moves an active). On a side the other side's Wrap struck,
+    M2 review: a ticked counter (3+draws[f][7]-1) also needs the trapper held at the holder's handler: the Wrap user
+    the other side's living active with activeTurns > 0 there (else the handler releases the trap silently,
+    data/mods/gen5/conditions.ts), read at the step's own HP-line cutpoint after that handler (tick_seen/tick_trapper/
+    tick_held); a slower trapper may faint from its own residual after the tick. Without a recorded cutpoint (a
+    stand-in step) the step end stands in (nothing after the residual moves an active). On a side the other side's Wrap struck,
     state.hp and state.substitute_hp must be explained here (`must`: never an allowance or a KO cascade): state.hp only
     when adding the tick, max(1, maxhp//16), back at the trapped active reproduces the base's per-side digest exactly
     (after a witnessed tick; or, for a lethal tick that cleared the trap with the trapper held, any base HP 1..tick); a
@@ -1147,7 +1151,13 @@ def m2_rule(entries, w):
         mine = {('state.partial_trap_counter', side), ('state.partial_trap_source', side), (WRAP_CLOCK, side)} & entries
         d = 3 + int(w['draws7'][f]);user = int(w['wrap_user'][f])
         struck = bool(w['wrap_by'][f]) and int(w['wrap_target'][f]) == a
-        held = 0 <= user < 6 and int(active[f]) == user and int(hp[f, user]) > 0 and int(turns[f]) > 0
+        if w.get('tick_seen') is not None:
+            # The trapper at the holder's handler (the step's own cutpoint): the Wrap user, alive, activeTurns > 0.
+            held = (bool(w['tick_seen'][side]) and int(w['tick_trapper'][side]) == user and 0 <= user < 6
+                    and bool(w['tick_held'][side]))
+        else:
+            # No handler cutpoint recorded (a stand-in step): the step end, where nothing after the residual moves an active.
+            held = 0 <= user < 6 and int(active[f]) == user and int(hp[f, user]) > 0 and int(turns[f]) > 0
         ticked = False
         if mine and nz.any():
             v = int(counter[a]) if 0 <= a < 6 else 0
@@ -1257,12 +1267,13 @@ class Stepper:
             climate.residual_clock = clock_recorder
             from gpu_engine import engine_device_public_hooks as hooks
             damage_hook, move_hook = hooks.damage, hooks.move;hits = [];opened = {}
-            protect_hook, turn_end_hook = hooks.port_protect, hooks.turn_end
+            protect_hook, turn_end_hook, hp_line_hook = hooks.port_protect, hooks.turn_end, hooks.hp_line
             # M2: this tree's own evidence, recorded around the device hooks (never read from the engine's M2 writes).
             sides2 = j.arange(2)[None, :];zero2 = j.zeros((lanes, 2), j.bool_)
             m2e = dict(perish_used=zero2, yawn_by=zero2, yawn_target=j.full((lanes, 2), -1, j.int32), wrap_line=zero2,
                        wrap_by=zero2, wrap_user=j.full((lanes, 2), -1, j.int32), wrap_target=j.full((lanes, 2), -1, j.int32),
-                       blocked=zero2, ordinary=None)
+                       blocked=zero2, ordinary=None, tick_seen=zero2, tick_trapper=j.full((lanes, 2), -1, j.int32), tick_held=zero2)
+            wrap_calls = []
             def at_side(mask, s):
                 return (s[:, None] == sides2) & mask[:, None]
             def foe_sub(st, s):
@@ -1309,8 +1320,23 @@ class Stepper:
             def turn_end_recorder(c, before, after, ordinary, **kw):
                 m2e['ordinary'] = j.broadcast_to(j.asarray(ordinary, j.bool_), (lanes,))
                 return turn_end_hook(c, before, after, ordinary, **kw)
+            def hp_line_recorder(c, st, side, use, *rest, **kw):
+                # M2 review: the trapper at the holder's own partiallytrapped handler. Transition emits this HP-line cutpoint
+                # once per residual event right after the Wrap handler, its use mask being the handler's tick; the handler
+                # ran for a holder where the caller's _wrap_holder is set. Recorded there from this tree's state (the trapper
+                # is the other side's active then; the holder's tick does not touch it): its index, alive, activeTurns > 0.
+                caller = sys._getframe(1).f_locals
+                if m2_ids is not None and use is caller.get('_wrap_tick') and '_wrap_holder' in caller:
+                    wrap_calls.append(True)
+                    s = j.broadcast_to(j.asarray(side, j.int32), (lanes,));r = j.arange(lanes);f = 1 - s
+                    ran_here = at_side(j.broadcast_to(caller['_wrap_holder'], (lanes,)), s)
+                    trapper = st.active[r, f];held = (st.hp[r, f, trapper] > 0) & (st.active_turns[r, f] > 0)
+                    m2e['tick_seen'] = m2e['tick_seen'] | ran_here
+                    m2e['tick_trapper'] = j.where(ran_here, trapper[:, None], m2e['tick_trapper'])
+                    m2e['tick_held'] = j.where(ran_here, held[:, None], m2e['tick_held'])
+                return hp_line_hook(c, st, side, use, *rest, **kw)
             hooks.damage, hooks.move = damage_recorder, move_recorder
-            hooks.port_protect, hooks.turn_end = protect_recorder, turn_end_recorder
+            hooks.port_protect, hooks.turn_end, hooks.hp_line = protect_recorder, turn_end_recorder, hp_line_recorder
             try:
                 if record_installs:
                     original = hooks.install
@@ -1327,7 +1353,9 @@ class Stepper:
                     out = step_fn(state, actions, trackers)
             finally:
                 climate.residual_clock = clock;hooks.damage, hooks.move = damage_hook, move_hook
-                hooks.port_protect, hooks.turn_end = protect_hook, turn_end_hook
+                hooks.port_protect, hooks.turn_end, hooks.hp_line = protect_hook, turn_end_hook, hp_line_hook
+            if not wrap_calls:
+                for key in ('tick_seen', 'tick_trapper', 'tick_held'):m2e[key] = None      # no handler cutpoint: no evidence
             named_in = name_inputs(state, actions, trackers);named_out = name_outputs(out)
             names['out'], digests = digest_named(named_out, lanes)
             names['side_axis'] = [has_side_axis(n, named_out[n].shape, lanes) for n in names['out']]
