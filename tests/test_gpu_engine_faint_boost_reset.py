@@ -92,7 +92,7 @@ class FaintBoostResetTests(unittest.TestCase):
         current=ast.parse(Path(tr.__file__).read_text());original=ast.parse(subprocess.check_output(['git','show',CURRENT_TRANSITION+':gpu_engine/transition.py'],text=True))
         # Re-certify the complete program at the reviewed CURRENT_TRANSITION before the feature erasure.
         self.assertEqual(ast.dump(current),ast.dump(original))
-        expected_eligibility=['used','do_switch & ~replacement','eligible','live & move_context','ordinary','eligible']
+        expected_eligibility=['used','do_switch & ~replacement','eligible','live & move_context','ordinary','eligible','_perish_continues']
         calls=[x for x in ast.walk(current) if isinstance(x,ast.Call) and isinstance(x.func,ast.Name) and x.func.id=='_clear_fainted_boosts']
         calls.sort(key=lambda x:x.lineno)
         self.assertEqual([ast.unparse(x.keywords[0].value) for x in calls],expected_eligibility)
