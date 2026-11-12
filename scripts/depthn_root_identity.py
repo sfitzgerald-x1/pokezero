@@ -109,6 +109,9 @@ def record(args):
     if args.incremental_roots:
         if 'incremental_roots' not in inspect.signature(ProtocolConstructor).parameters:raise SystemExit('this tree has no incremental roots')
         extra['incremental_roots'] = True
+    if args.eager_peer_fold:
+        if 'eager_peer_fold' not in inspect.signature(ProtocolConstructor).parameters:raise SystemExit('this tree has no eager peer fold')
+        extra['eager_peer_fold'] = True
     constructor = ProtocolConstructor(catalog=catalog, source=source, metadata=metadata, owning_config=config, count=16, seed=args.seed,
                                       rung='DN2W16', saved_root_admission=False, **extra)
     shared = {id(x): n for n, x in (('catalog', catalog), ('source', source), ('metadata', metadata), ('owning_config', config),
@@ -116,10 +119,11 @@ def record(args):
     run = Path(args.run);cells = []
     for path in sorted((run / 'results').glob('*.json'), key=lambda p: int(p.stem)):
         r = json.loads(path.read_text())
-        if (r.get('cell') or {}).get('arm') == args.arm and r.get('status') == 'COMPLETE' and (run / 'owning-wire' / f'{path.stem}.jsonl').exists():
+        arm = r.get('arm') or (r.get('cell') or {}).get('arm')   # a pre-flight's result names its arm; its cell is the RAW calibration cell
+        if arm == args.arm and r.get('status') == 'COMPLETE' and (run / 'owning-wire' / f'{path.stem}.jsonl').exists():
             cells.append(int(path.stem))
     step = max(1, len(cells) // args.battles);chosen = cells[::step][:args.battles]
-    header = dict(event='HEADER', run=str(run), arm=args.arm, battles=chosen, incremental_roots=args.incremental_roots, seed=args.seed,
+    header = dict(event='HEADER', run=str(run), arm=args.arm, battles=chosen, incremental_roots=args.incremental_roots, eager_peer_fold=args.eager_peer_fold, seed=args.seed,
                   tree=os.environ.get('TREE_COMMIT'), code=code_identity(), source=str(Path(__file__).resolve()))
     index = 0
     with open(args.out, 'x') as stream:
@@ -143,8 +147,11 @@ def record(args):
                     try:held = capture_root(config=config, contract=ActorContract.champion(), lines=tuple(req['lines']), battle_id=req['battle_id'],
                                             address=DecisionAddress(req['stream_id'], req['decision_index'], int(req['owner'][1]) - 1), seed=args.seed & 0xffffffff)
                     except Exception as error:held = ['error', type(error).__name__, str(error)[:200]]
+                belief = getattr(getattr(item, 'facts', None), 'peer_belief', None)   # view b's private-reveal belief rows (the peer fold's)
                 out = dict(ordinal=ordinal, decision_index=req['decision_index'], lines=len(req['lines']), kind=type(item).__name__,
                            prepare=digest(item, shared), classify=digest(classified, shared), root=digest(held, shared),
+                           reveal_members=len(((getattr(item, 'private_reveals', None) or {}).get('applicable')) or []),
+                           peer_belief=belief is not None, belief=digest(belief, shared),
                            prepare_wall=round(prepare_wall, 5), classify_wall=round(classify_wall, 5))
                 stream.write(json.dumps(out) + '\n');stream.flush()
             print(json.dumps(dict(event='BATTLE', ordinal=ordinal, decisions=index)), flush=True)
@@ -158,8 +165,9 @@ def compare(args):
     if h0['battles'] != h1['battles'] or h0['run'] != h1['run'] or h0['arm'] != h1['arm'] or h0['seed'] != h1['seed']:
         raise SystemExit('the two records replay different battles, runs, arms or seeds')
     c0, c1 = ((h.get('code') or {}).get('code_sha256') for h in (h0, h1))
-    if not c0 or not c1 or (c0 == c1 and h0['incremental_roots'] == h1['incremental_roots']):
-        raise SystemExit('two records of different code (or of the incremental flag off then on) required: a record compared with itself proves nothing')
+    flags = lambda h: (bool(h.get('incremental_roots')), bool(h.get('eager_peer_fold')))
+    if not c0 or not c1 or (c0 == c1 and flags(h0) == flags(h1)):
+        raise SystemExit('two records of different code (or of different flags) required: a record compared with itself proves nothing')
     head = (h0.get('code') or {}).get('git_head') or ''
     if args.expect_original_head and not head.startswith(args.expect_original_head):
         raise SystemExit(f'the original record ran {head or "no git tree"}, not {args.expect_original_head}')
@@ -167,16 +175,22 @@ def compare(args):
     for key in sorted(set(a) | set(b)):
         x, y = a.get(key), b.get(key)
         if x is None or y is None:mismatches.append(dict(decision=key, missing='original' if x is None else 'candidate'));continue
-        diff = [f for f in ('kind', 'prepare', 'classify', 'root') if x[f] != y[f]]
+        diff = [f for f in ('kind', 'prepare', 'classify', 'root', 'belief') if (f in x or f in y) and x.get(f) != y.get(f)]
         if diff:mismatches.append(dict(decision=key, fields=diff, kind=(x['kind'], y['kind'])))
     def pct(xs):
         xs = sorted(xs);return None if not xs else dict(n=len(xs), p50=round(xs[len(xs) // 2], 4), p95=round(xs[min(len(xs) - 1, int(.95 * len(xs)))], 4))
     bands = {'0-2': (0, 2), '3-9': (3, 9), '10-19': (10, 19), '20+': (20, 10**6)}
     walls = {name: {stage: {band: pct([r[stage] for r in rows.values() if lo <= r['decision_index'] <= hi]) for band, (lo, hi) in bands.items()}
                     for stage in ('prepare_wall', 'classify_wall')} for name, rows in (('original', a), ('candidate', b))}
-    summary = dict(decisions=len(a), candidate_decisions=len(b), mismatches=len(mismatches), first_mismatches=mismatches[:20],
-                   identical=not mismatches and len(a) == len(b), original=h0, candidate=h1, walls=walls)
-    Path(args.out).write_text(json.dumps(summary, indent=1) + '\n');print(json.dumps(dict(identical=summary['identical'], decisions=len(a), mismatches=len(mismatches))))
+    keys = sorted(set(a) & set(b));beliefs = [k for k in keys if a[k].get('peer_belief') and b[k].get('peer_belief')]
+    peer = dict(reveal_decisions=dict(original=sum(bool(a[k].get('reveal_members')) for k in keys), candidate=sum(bool(b[k].get('reveal_members')) for k in keys)),
+                belief_decisions=dict(original=sum(bool(a[k].get('peer_belief')) for k in keys), candidate=sum(bool(b[k].get('peer_belief')) for k in keys),
+                                      both=len(beliefs), matching=sum(a[k].get('belief') == b[k].get('belief') and a[k]['prepare'] == b[k]['prepare'] for k in beliefs)))
+    summary = dict(decisions=len(a), candidate_decisions=len(b), mismatches=len(mismatches), first_mismatches=mismatches[:20], peer_fold=peer,
+                   identical=not mismatches and len(a) == len(b) and len(a) > 0, original=h0, candidate=h1, walls=walls)
+    if summary['identical'] and flags(h0)[1] != flags(h1)[1] and not peer['belief_decisions']['both']:
+        summary.update(identical=False, vacuous='the eager peer fold differs but no decision carries a peer belief: nothing about the fold was compared')
+    Path(args.out).write_text(json.dumps(summary, indent=1) + '\n');print(json.dumps(dict(identical=summary['identical'], decisions=len(a), mismatches=len(mismatches), peer_fold=peer)))
     return 0 if summary['identical'] else 1
 
 
@@ -186,7 +200,7 @@ def main(argv=None):
     for name in ('showdown-root', 'node-binary', 'metadata', 'expected-metadata-sha256', 'vocabulary', 'expected-vocabulary-sha256', 'run', 'out'):
         r.add_argument('--' + name, required=True)
     r.add_argument('--battles', type=int, default=24);r.add_argument('--arm', default='DN2W16');r.add_argument('--seed', type=int, default=20261103)
-    r.add_argument('--incremental-roots', action='store_true')
+    r.add_argument('--incremental-roots', action='store_true');r.add_argument('--eager-peer-fold', action='store_true')
     c = sub.add_parser('compare');c.add_argument('original');c.add_argument('candidate');c.add_argument('--out', required=True)
     c.add_argument('--expect-original-head', help='the original record must have run this commit (a prefix of its git HEAD)')
     args = p.parse_args(argv)
