@@ -100,10 +100,13 @@ class SourceFrameWitnessTests(unittest.TestCase):
         self.assertEqual(step.report.observed_cutpoints[:,risks.Branch.SECONDARY_FLINCH-1].tolist(),[2,2])
         no_dispatch=self.tables._replace(secondary_weather=j.zeros_like(self.tables.secondary_weather))
         self.assertFalse(bool(w._raw_complete(actual.callbacks,no_dispatch).any()))
+        cache_before_replay=self.fast._cache_size()
         replay=fast(step.carry,after,actual,tuple(x.projection.state for x in step.owners),tuple(x.public for x in step.owners))
         self.assertEqual(replay.report.frame_inputs_complete.tolist(),[False,False])
         self.assertTrue(bool((replay.carry.refusal&w.ORDER).all()))
-        self.assertEqual(self.fast._cache_size(),1)
+        # Earlier tests and constructor/step pytrees can specialize this JIT.
+        # Replaying the same frame must reuse its existing specialization.
+        self.assertEqual(self.fast._cache_size(),cache_before_replay)
 
     def test_missing_guard_counts_same_owner_and_second_owner_fault_rollback_both(self):
         built,core,frame,streams,publics=self.actual()

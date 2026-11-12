@@ -18,6 +18,7 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 HEAVY_MANIFEST = ROOT / "tests" / "gpu_component_heavy.json"
 TIERS = ("all", "light", "heavy")
+LOW_OPTIMIZATION_XLA_FLAGS = '--xla_backend_optimization_level=0 --xla_llvm_disable_expensive_passes=true'
 
 
 def partition_suite(suite, index: int, count: int):
@@ -354,6 +355,10 @@ def _child(plan_path, plan_sha256, block_index, receipt_path, case_index=None):
     plan = json.loads(Path(plan_path).read_text())
     if plan.get("schema") != "component-block-plan.v1" or _digest(plan) != plan_sha256:
         raise ValueError("child discovery plan changed")
+    low_opt = set(plan.get('low_optimization_cases', []))
+    if low_opt.intersection(_identities(_unit_manifest(plan, block_index, case_index))):
+        if case_index is None or os.environ.get('XLA_FLAGS') != LOW_OPTIMIZATION_XLA_FLAGS:
+            raise ValueError('low-optimization case requires its exact fresh-process environment')
     discovered, modules = _discover_modules(plan["discovery"])
     blocks = list(discovered)
     _, indices, total = partition_tier(discovered, modules, plan["index"], plan["count"],
@@ -389,7 +394,8 @@ def _child(plan_path, plan_sha256, block_index, receipt_path, case_index=None):
 
 def run_process_blocks(suite, index, count, *, start_dir, pattern="test_gpu_engine*.py",
                        top_level_dir=None, stream=None, resource_interval_seconds=0,
-                       isolate_standard_classes=(), tier="all", heavy=frozenset()):
+                       isolate_standard_classes=(), tier="all", heavy=frozenset(),
+                       low_optimization_cases=()):
     """Optional sequential fresh-exec blocks; default whole-suite API unchanged.
 
     Discovery is repeated and verified in each fresh sys.executable process.
@@ -415,12 +421,26 @@ def run_process_blocks(suite, index, count, *, start_dir, pattern="test_gpu_engi
         if [_manifest(block) for block in rediscovered] != [_manifest(block) for block in blocks]:
             raise ValueError("tiered selection rediscovery differs from the given suite")
         _, indices, _ = partition_tier(suite, modules, index, count, tier, frozenset(heavy))
+    if (type(low_optimization_cases) not in (tuple, list)
+            or any(type(name) is not str or not name for name in low_optimization_cases)):
+        raise ValueError('low optimization requires explicit original case identities')
+    low_opt = sorted(set(low_optimization_cases))
+    classes = sorted(set(classes).union(name.rsplit('.', 1)[0] for name in low_opt))
+    # Preserve the original inspection order for custom discovery blocks.
     units, decisions = _isolation_units(blocks, indices, classes)
+    manifests = [_manifest(block) for block in blocks]
+    identities = Counter(identity for manifest in manifests for identity in _identities(manifest))
+    if any(identities[name] == 0 for name in low_opt):
+        raise ValueError('low-optimization case must exist in original discovery')
     plan = dict(schema="component-block-plan.v1", discovery=spec, index=index, count=count,
-        selected_blocks=indices, manifest=[_manifest(block) for block in blocks],
+        selected_blocks=indices, manifest=manifests, low_optimization_cases=low_opt,
         isolate_standard_classes=classes, execution_units=units, isolation_decisions=decisions)
     if tier != "all":
         plan.update(tier=tier, heavy_modules=sorted(heavy))
+    for unit in units:
+        names = _identities(_unit_manifest(plan, unit['block_index'], unit['case_index']))
+        if set(names).intersection(low_opt) and (unit['case_index'] is None or len(names) != 1):
+            raise ValueError('low-optimization case requires safe standard-case isolation; custom suites remain unchanged')
     print(json.dumps(dict(case_isolation_decisions=decisions)), file=stream, flush=True)
     environment = dict(os.environ)
     # A fresh interpreter must exercise THIS checkout, not another editable
@@ -442,12 +462,19 @@ def run_process_blocks(suite, index, count, *, start_dir, pattern="test_gpu_engi
                 "--_block-index", str(block_index), "--_receipt", str(target)]
             if case_index is not None:
                 command.extend(['--_case-index', str(case_index)])
+            use_low_optimization = bool(set(_identities(
+                _unit_manifest(plan, block_index, case_index))).intersection(low_opt))
             print(json.dumps(dict(process_block=block_index, case_index=case_index,
-                declared_count=_unit_manifest(plan, block_index, case_index)['count'])), file=stream, flush=True)
+                declared_count=_unit_manifest(plan, block_index, case_index)['count'],
+                low_optimization=use_low_optimization)),
+                file=stream, flush=True)
+            child_environment = environment
+            if use_low_optimization:
+                child_environment = dict(environment, XLA_FLAGS=LOW_OPTIMIZATION_XLA_FLAGS)
             # No os.fork, multiprocessing fork context or preexec_fn after JAX.
             # The child starts a fresh interpreter and independently discovers.
             try:
-                returncode = _run_block(command, environment,
+                returncode = _run_block(command, child_environment,
                     resource_interval_seconds=resource_interval_seconds,
                     block_index=block_index, stream=stream)
             except OSError:
@@ -488,6 +515,8 @@ def main() -> int:
         help="all (default) shards every block; light omits the heavy manifest's modules (per pull request); "
              "heavy runs only them (nightly and before main)")
     parser.add_argument("--heavy-manifest", default=str(HEAVY_MANIFEST), help=argparse.SUPPRESS)
+    parser.add_argument('--low-optimization-case', action='append', default=[],
+        help='original case identity to run alone with reduced compiler optimization; never changes test shapes')
     parser.add_argument("--_child-plan", help=argparse.SUPPRESS)
     parser.add_argument("--_plan-sha256", help=argparse.SUPPRESS)
     parser.add_argument("--_block-index", type=int, help=argparse.SUPPRESS)
@@ -501,6 +530,8 @@ def main() -> int:
         return _child(args._child_plan, args._plan_sha256, args._block_index, args._receipt, args._case_index)
     if args.index is None or args.count is None:
         parser.error("--index and --count are required")
+    if args.low_optimization_case and not args.process_blocks:
+        parser.error('--low-optimization-case requires --process-blocks')
     heavy = frozenset() if args.tier == "all" else load_heavy_modules(args.heavy_manifest)
     discovered, modules = _discover_modules(dict(start_dir=str(ROOT / "tests"), pattern="test_gpu_engine*.py"))
     selected, indices, total = partition_tier(discovered, modules, args.index, args.count, args.tier, heavy)
@@ -510,7 +541,8 @@ def main() -> int:
     if args.process_blocks:
         return run_process_blocks(discovered, args.index, args.count, start_dir=ROOT / "tests",
             resource_interval_seconds=args.resource_interval_seconds,
-            isolate_standard_classes=args.isolate_standard_class, tier=args.tier, heavy=heavy)
+            isolate_standard_classes=args.isolate_standard_class, tier=args.tier, heavy=heavy,
+            low_optimization_cases=args.low_optimization_case)
     return run_suite(selected)
 
 

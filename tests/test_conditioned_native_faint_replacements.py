@@ -22,6 +22,7 @@ class FaintReplacementTests(unittest.TestCase):
             max_hp=j.full((1,2,6),1000),stats=j.full((1,2,6,6),200).at[...,0].set(1000),
             species=j.ones((1,2,6),j.int32),level=j.full((1,2,6),100),
             types=j.zeros((1,2,6,2),j.int32).at[...,0].set(1),
+            base_types=j.zeros((1,2,6,2),j.int32).at[...,0].set(1),
             moves=j.full((1,2,6,4),3),pp=j.full((1,2,6,4),10),done=j.array([False]))
         s=s._replace(stats=s.stats.at[:,0,:,5].set(301).at[:,1,:,5].set(101),
             hp=s.hp.at[:,:,1].set(800),item=s.item.at[:,:,1].set(1),

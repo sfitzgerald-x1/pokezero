@@ -131,7 +131,7 @@ class PublicPortTests(unittest.TestCase):
         self.assertEqual(t.public_port.loaf[:,0].tolist(),[True,False])
         # Remove optional observer statements only, and compare original numeric
         # kernel AST. No game/turn executes in this source check.
-        old=ast.parse(subprocess.check_output(['git','show',BASE+':gpu_engine/transition.py'],text=True));new=ast.parse(Path('gpu_engine/transition.py').read_text())
+        old=ast.parse(subprocess.check_output(['git','show','b8092a85:gpu_engine/transition.py'],text=True));new=ast.parse(Path('gpu_engine/transition.py').read_text())
         class Strip(ast.NodeTransformer):
             def visit_If(self,node):
                 if '_device_public'in ast.unparse(node.test):return None

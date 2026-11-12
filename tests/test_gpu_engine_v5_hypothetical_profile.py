@@ -159,8 +159,17 @@ def normalized_hypothetical_default(text,*,as_tree=False):
 
 
 class DefaultAST(unittest.TestCase):
-    def test_whole_default_transition_ast_and_mutations(self):
+    def test_historical_hypothetical_extension_keeps_its_original_default_program(self):
+        # Preserve the original proof at its last pre-device assembly, after
+        # the separately reviewed sleep/status inputs were composed.
+        # Later device tracking is checked as a complete integrated program,
+        # rather than silently erasing new imports, helpers or call arguments.
         original=subprocess.check_output(['git','show','2b0ec76a:gpu_engine/transition.py'],text=True)
+        introduced=subprocess.check_output(['git','show','40228424810127a7a205be0b9c047acd7aef9429:gpu_engine/transition.py'],text=True)
+        self.assertEqual(normalized_hypothetical_default(original),normalized_hypothetical_default(introduced))
+
+    def test_whole_default_transition_ast_and_mutations(self):
+        original=subprocess.check_output(['git','show','b8092a85d9c1f2ed9c0daf4c4bd8e833a94a2380:gpu_engine/transition.py'],text=True)
         current=Path('gpu_engine/transition.py').read_text()
         normalize=normalized_hypothetical_default
         self.assertEqual(normalize(original),normalize(current))

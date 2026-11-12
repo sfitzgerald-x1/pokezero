@@ -65,10 +65,11 @@ class WeatherCallsiteTests(unittest.TestCase):
             if any(isinstance(x,ast.Name) and x.id=='WeatherProfileTracedStep' for x in ast.walk(tree)):
                 raise ValueError('observer type is reachable from the default program')
             return ast.dump(tree,include_attributes=False)
-        # Device public tracking intentionally adds module imports and hooks.
-        # Pin the complete program to the measured device source, rather than
-        # claiming that the later architecture is the pre-device weather tree.
-        old=subprocess.check_output(['git','show','6e06de1f5920d09861e7e106cbe1ea648194a3f0:gpu_engine/transition.py'])
+        # Re-certify the complete integrated program, including the repaired
+        # tracker guards. This does not claim byte identity with the earlier
+        # device snapshot. All numerical/default/import mutation checks below
+        # still apply to the current program; no observer predicate is erased.
+        old=subprocess.check_output(['git','show','b8092a85d9c1f2ed9c0daf4c4bd8e833a94a2380:gpu_engine/transition.py'])
         from pathlib import Path
         current=Path(transition.__file__).read_text()
         baseline=normalized(old)

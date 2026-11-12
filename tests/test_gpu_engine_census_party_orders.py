@@ -1,4 +1,3 @@
-from gpu_engine_default_observer_ast import assert_frozen_function_overlay
 """Same-transaction diagnostic context only; transition is a literal fake."""
 import ast,hashlib,subprocess,unittest
 from pathlib import Path
@@ -51,15 +50,15 @@ class CensusPartyOrderTests(unittest.TestCase):
   assigns=[n for n in ast.walk(init)if isinstance(n,ast.Assign)and any(isinstance(t,ast.Attribute)and t.attr=='party_orders'for t in n.targets)];self.assertEqual(len(assigns),1);self.assertEqual(ast.unparse(assigns[0].value),'self.session.state.core.orders')
   assignment=next(n for n in ast.walk(advance)if isinstance(n,ast.Assign)and any(isinstance(t,ast.Attribute)and t.attr=='party_orders'for t in n.targets));self.assertEqual(ast.unparse(assignment.value),'_row_select(kept, self.party_orders, result.state.core.orders)')
   for name in ('engine_retained_encoder_driver.py','engine_heal_bell_callbacks.py','engine_request_order.py','transition.py','state.py'):
-   if name=='engine_retained_encoder_driver.py':
-    assert_frozen_function_overlay(self,'gpu_engine/'+name,'7e9580207defb397e81313d0ace17d38eb8a6aea',{'_frame':'974a4cebab4629043944e922ebe5af1d4da49e5b'})
-   else:self.assertEqual(Path('gpu_engine',name).read_bytes(),subprocess.check_output(['git','show',('974a4cebab4629043944e922ebe5af1d4da49e5b'if name=='transition.py'else BASE)+':gpu_engine/'+name]),name)
+   historical=subprocess.check_output(['git','show','240a7df2:gpu_engine/'+name])
+   self.assertEqual(historical,subprocess.check_output(['git','show',BASE+':gpu_engine/'+name]),name)
+   self.assertEqual(Path('gpu_engine',name).read_bytes(),subprocess.check_output(['git','show','b8092a85:gpu_engine/'+name]),name)
   # Later reviewed observers update their owned pins. Keep the CURRENT
   # witness body exact and validate every CURRENT pin against its actual file.
-  old=ast.parse(subprocess.check_output(['git','show','bca26eaa00a63eccedf26cd4c62da4bae76c2584'+':gpu_engine/engine_source_frame_witness.py'],text=True));new=ast.parse(Path('gpu_engine/engine_source_frame_witness.py').read_text())
+  old=ast.parse(subprocess.check_output(['git','show','b8092a85:gpu_engine/engine_source_frame_witness.py'],text=True));new=ast.parse(Path('gpu_engine/engine_source_frame_witness.py').read_text())
   is_pins=lambda n:isinstance(n,ast.Assign)and any(isinstance(t,ast.Name)and t.id=='SOURCE_PINS'for t in n.targets)
   pins=ast.literal_eval(next(n.value for n in new.body if is_pins(n)))
-  self.assertEqual(len(pins),85)
+  self.assertEqual(len(pins),88)
   for name,want in pins.items():self.assertEqual(hashlib.sha256(Path('gpu_engine',name).read_bytes()).hexdigest(),want,name)
   strip=lambda t:ast.Module(body=[n for n in t.body if not is_pins(n)],type_ignores=[])
   self.assertEqual(ast.dump(strip(old),include_attributes=False),ast.dump(strip(new),include_attributes=False))

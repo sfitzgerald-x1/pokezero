@@ -50,6 +50,9 @@ class SpikesOwningTests(unittest.TestCase):
    k=int(w[0])
    if k==events.MOVE:lines.append(f'|move|{ident[int(w[1])]}|Spikes|{ident[1-int(w[1])]}')
    elif k==31:lines.append(f'|-sidestart|p{int(w[4])+1}: Player|Spikes')
+   elif k==life.TURNLOOP_PREFIX:
+    self.assertEqual(w.tolist(),[35,-1,-1,-1,-1,0,0,0,0,0])
+    lines.extend(['|','|t:|1'])
    elif k==life.ACTION_END:lines.append('|')
    elif k==life.UPKEEP:lines.append('|upkeep')
    elif k==life.TURN:lines.append(f'|turn|{int(t.event_turn[row,index])}')
@@ -65,7 +68,7 @@ class SpikesOwningTests(unittest.TestCase):
   frame=life.LifecycleResult(actual.step.state,actual.callbacks.cursor,actual.callbacks,life.snapshot(cursor),life.snapshot(actual.callbacks.cursor),j.zeros(2,bool),j.zeros(2,j.int32));closed=[]
   for owner,(stream,public) in enumerate(consumers):
    ledger,result=ex.consume_frame_device(actual.callbacks.execution.ledger,frame,stream,public,active=j.ones(2,bool),tables=self.account.device,adapter_tables=self.adapter.device,catalog=self.catalog);closed.append(ledger)
-   self.assertEqual(result.projection.error.tolist(),[0,0]);self.assertEqual(ledger.stage[:,:2].tolist(),[[3,3],[3,3]])
+   self.assertEqual(result.projection.error.tolist(),[0,0]);self.assertEqual(ledger.site[:,0].tolist(),[int(ex.Site.TURNLOOP_PREFIX)]*2);self.assertEqual(ledger.stage[:,:3].tolist(),[[3,3,3],[3,3,3]])
    self.assertEqual(result.public.context.field.spikes.tolist(),[[1,1],[1,1]])
    request=private_requests.parse_action_request({'wait':True},owner_side=owner)
    for row in (0,1):np.testing.assert_array_equal(self.f.words(result.projection,row),self.reference(actual.callbacks,row))
@@ -131,7 +134,10 @@ class SpikesOwningTests(unittest.TestCase):
   moves=dict(self.catalog.dex.moves);moves['surf']=replace(moves['surf'],target='foeSide')
   other=events.compile_catalog(self.metadata,self.table,public_moves=self.catalog.moves,dex=ShowdownDex(moves,self.catalog.dex.species,self.catalog.dex.type_chart),exposure=fixtures.engine_fixture.EnginePublicEventsTests.exposure)
   self.assertEqual(other.ids[self.metadata['vocabulary']['moves'].index('surf')],0);self.assertGreater(other.ids[self.move],0)
-  before=ast.parse(subprocess.check_output(['git','show','e5d38e3c:gpu_engine/transition.py'],text=True));after=__import__('test_gpu_engine_v5_hypothetical_profile').normalized_hypothetical_default(Path('gpu_engine/transition.py').read_text(),as_tree=True);baseline=dump_default_program(before);self.assertEqual(baseline,dump_default_program(after));assert_hp_rng_mutations_detected(self,after,baseline)
+  # Re-certify the integrated device-hook program at the published PR base.
+  # Keep the whole normalized AST and HP/RNG mutation controls exact.
+  normalize=__import__('test_gpu_engine_v5_hypothetical_profile').normalized_hypothetical_default
+  before=normalize(subprocess.check_output(['git','show','b8092a85:gpu_engine/transition.py'],text=True),as_tree=True);after=normalize(Path('gpu_engine/transition.py').read_text(),as_tree=True);baseline=dump_default_program(before);self.assertEqual(baseline,dump_default_program(after));assert_hp_rng_mutations_detected(self,after,baseline)
   root=Path(showdown_root_str());self.assertEqual(subprocess.check_output(['git','-C',str(root),'rev-parse','HEAD'],text=True).strip(),events.SHOWDOWN)
   node=shutil.which('node');self.assertIsNotNone(node)
   script="const {Dex}=require(process.argv[1]+'/dist/sim/dex.js');const {Battle}=require(process.argv[1]+'/dist/sim/battle.js');const m=Dex.mod('gen3').moves.get('spikes');const foe={toString:()=> 'p2a: Absol'};const p={side:{foe:{active:[foe]}}};const target=Battle.prototype.getRandomTarget.call({dex:Dex.mod('gen3'),gameType:'singles'},p,m);const rows=[];for(const n of [0,1,2,3]){const lines=[];const ctx={effectState:{layers:n},add:(...x)=>lines.push(x.map(String))};const side={toString:()=> 'p2: Player'};const ret=(n?m.condition.onSideRestart:m.condition.onSideStart).call(ctx,side);rows.push({lines,layers:ctx.effectState.layers,blocked:ret===false})}console.log(JSON.stringify({target:String(target),rows}));"

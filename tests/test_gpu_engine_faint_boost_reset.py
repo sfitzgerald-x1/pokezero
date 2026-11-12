@@ -88,7 +88,9 @@ class FaintBoostResetTests(unittest.TestCase):
         np.testing.assert_array_equal(result.boosts,invalid.boosts)
 
     def test_default_delta_is_exact_boundary_calls_only_and_mutants_remain_visible(self):
-        current=ast.parse(Path(tr.__file__).read_text());original=ast.parse(self.old_source)
+        current=ast.parse(Path(tr.__file__).read_text());original=ast.parse(subprocess.check_output(['git','show','b8092a85:gpu_engine/transition.py'],text=True))
+        # Re-certify the complete integrated program before the feature erasure.
+        self.assertEqual(ast.dump(current),ast.dump(original))
         expected_eligibility=['used','do_switch & ~replacement','eligible','live & move_context','ordinary','eligible']
         calls=[x for x in ast.walk(current) if isinstance(x,ast.Call) and isinstance(x.func,ast.Name) and x.func.id=='_clear_fainted_boosts']
         calls.sort(key=lambda x:x.lineno)
@@ -103,7 +105,7 @@ class FaintBoostResetTests(unittest.TestCase):
                     return None
                 if isinstance(node.value,ast.Call) and isinstance(node.value.func,ast.Name) and node.value.func.id=='_clear_fainted_boosts':return None
                 return self.generic_visit(node)
-        normalized=Normalize().visit(current)
+        normalized=Normalize().visit(current);original=Normalize().visit(original)
         self.assertEqual(ast.dump(normalized),ast.dump(original))
         from gpu_engine_default_observer_ast import dump_default_program,assert_hp_rng_mutations_detected
         baseline=dump_default_program(original)
