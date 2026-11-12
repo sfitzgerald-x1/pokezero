@@ -62,8 +62,8 @@
    "module": "test_gpu_engine_source_witness_compiled_anchor",
    "reason": "wall+memory",
    "hosted_median_min": null,
-   "isolated_wall_min": 17.1,
-   "isolated_peak_gib": 19.9,
+   "isolated_wall_min": 17.0,
+   "isolated_peak_gib": 20.1,
    "completes_on_hosted": null
   },
   {
