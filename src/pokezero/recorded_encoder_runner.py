@@ -4,6 +4,7 @@ This module does not attest files, select rows, start games or qualify player
 visibility. Its caller must stream the complete fixed, hash-attested roster.
 Terminal records are validated separately and never become decision inputs.
 """
+from contextlib import contextmanager
 import hashlib
 import json
 import numpy as np
@@ -65,10 +66,19 @@ class JaxRecordedAdapter:
 
     def _check_compiled_functions(self):
         if self.compiled_functions is not None:
-            self.compiled_functions.require_catalog(self.catalog)
+            if not getattr(self,'_catalog_checked',False):self.compiled_functions.require_catalog(self.catalog)
             if (self.step is not self.compiled_functions.step
                     or self.encode_step is not self.compiled_functions.encode_step):
                 raise ValueError('compiled encoder function binding drift')
+
+    @contextmanager
+    def checked_catalog(self):
+        """A block (one live request) in which the compiled catalog's full structure walk runs once, here on entry, instead of on
+        every reset/feed/encode inside it; the function-binding identity check still runs on every call. Outside it, every
+        call checks in full as before."""
+        self._check_compiled_functions();self._catalog_checked=True
+        try:yield self
+        finally:self._catalog_checked=False
 
     def reset(self,*,stream_id,battle_id):
         from gpu_engine import public_wire

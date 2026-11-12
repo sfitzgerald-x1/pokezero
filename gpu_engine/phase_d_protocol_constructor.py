@@ -14,15 +14,21 @@ from pokezero.recorded_encoder_runner import JaxRecordedAdapter
 from pokezero.live_protocol_runtime import CompiledEncoderFunctions
 from pokezero.phase_d_search_server import SCHEMA
 from pokezero.v5_contract import DecisionAddress
-from pokezero.v5_teacher_public_root import capture_root
+from collections import OrderedDict
+from pokezero.v5_teacher_public_root import RootSession,capture_root
 from . import phase_d_live_worlds as worlds,phase_d_protocol_world as protocol
+
+
+HELD_ROOTS=64   # roots kept for classify, most recent first (a batch larger than this recomputes the oldest, same value)
 
 
 class ProtocolConstructor:
     def __init__(self,*,catalog,source,metadata,owning_config,count,seed=20261103,
-                 rung='R1',saved_root_admission=True,functions=None,seen=None,sessions=None):
+                 rung='R1',saved_root_admission=True,functions=None,seen=None,sessions=None,incremental_roots=False):
         if count not in (2,8,16,32,64)or type(seed)is not int or type(saved_root_admission)is not bool:
             raise ValueError('original fixed world budget, seed and saved-root mode required')
+        if type(incremental_roots)is not bool or(incremental_roots and saved_root_admission):
+            raise ValueError('incremental roots need per-battle sessions (saved-root admission off)')
         self.catalog,self.source,self.metadata=catalog,source,metadata
         self.owning_config,self.count,self.seed,self.rung=owning_config,count,seed,rung
         self.saved_root_admission=saved_root_admission
@@ -30,6 +36,9 @@ class ProtocolConstructor:
         if self.functions.catalog is not catalog:raise ValueError('same original compiled B2 catalog required')
         self.seen=set()if seen is None else seen
         self.sessions={}if sessions is None else sessions
+        # Incremental public roots (off by default): one RootSession per session key, and the roots prepare captured, by address,
+        # for classify (public_root). Outputs are capture_root's; only the cost changes.
+        self.incremental_roots=incremental_roots;self.root_sessions={};self.roots=OrderedDict()
 
     def prepare(self,request,index):
         required={'schema','request_id','battle_id','owner','stream_id','decision_index','generation','prefix_sha256','lines','own_request_line'}
@@ -53,19 +62,52 @@ class ProtocolConstructor:
             adapter.reset(stream_id=request['stream_id'],battle_id=request['battle_id']);old=()
         else:adapter,old=prior
         if lines[:len(old)]!=old or len(lines)<=len(old):raise worlds.Refusal('SEARCH_PREFIX_NOT_ORIGINAL_SUCCESSOR')
-        # Original Python public-root capture checks literal owning request and
-        # exact-foe/split contamination before either constructor can consume it.
-        public=capture_root(config=self.owning_config,contract=ActorContract.champion(),lines=lines,
-            address=DecisionAddress(request['stream_id'],request['decision_index'],owner),battle_id=request['battle_id'],seed=self.seed&0xffffffff)
-        packet=_packet(request['own_request_line'],request['owner'])
-        adapter.feed(tuple(x for x in lines[len(old):]if not x.startswith('|request|')))
-        if not self.saved_root_admission:self.sessions[key]=(adapter,lines)
-        facts=protocol.tail.facts(public,packet,lines)
-        detached=worlds.from_b2(adapter,packet,self.source,self.metadata,address=public.address,defer_sleep=True,protocol_facts=facts)
-        made=protocol.sample(public,detached,lines=lines,catalog=self.catalog,source=self.source,metadata=self.metadata,
-            config=self.owning_config,battle_id=request['battle_id'],seed=self.seed,count=self.count)
-        return made.root,made,tuple(map(bool,adapter.encode(packet,owner_side=owner)['legal_action_mask']))
+        with adapter.checked_catalog():   # the compiled catalog's structure walk once per request, not on every feed/encode
+            # Original Python public-root capture checks literal owning request and
+            # exact-foe/split contamination before either constructor can consume it.
+            public=self._capture(key,address,request,lines,owner)
+            packet=_packet(request['own_request_line'],request['owner'])
+            adapter.feed(tuple(x for x in lines[len(old):]if not x.startswith('|request|')))
+            if not self.saved_root_admission:self.sessions[key]=(adapter,lines)
+            facts=protocol.tail.facts(public,packet,lines)
+            detached=worlds.from_b2(adapter,packet,self.source,self.metadata,address=public.address,defer_sleep=True,protocol_facts=facts)
+            made=protocol.sample(public,detached,lines=lines,catalog=self.catalog,source=self.source,metadata=self.metadata,
+                config=self.owning_config,battle_id=request['battle_id'],seed=self.seed,count=self.count)
+            return made.root,made,tuple(map(bool,adapter.encode(packet,owner_side=owner)['legal_action_mask']))
 
+
+    def _capture(self,key,address,request,lines,owner):
+        """capture_root's PublicRoot for this request: from scratch, or with incremental_roots through the key's RootSession (a
+        new one, folding from the start, when there is none or the request does not extend it; any error drops it)."""
+        kwargs=dict(contract=ActorContract.champion(),lines=lines,address=DecisionAddress(request['stream_id'],request['decision_index'],owner),
+            battle_id=request['battle_id'],seed=self.seed&0xffffffff)
+        if not self.incremental_roots:return capture_root(config=self.owning_config,**kwargs)
+        session=self.root_sessions.get(key)
+        if session is None or not session.extends(lines):
+            if session is not None:session.close()
+            session=self.root_sessions[key]=RootSession(config=self.owning_config,contract=kwargs['contract'],battle_id=request['battle_id'],
+                owner=request['owner'],stream_id=request['stream_id'])
+        try:public=session.root(**kwargs)
+        except BaseException:
+            self.root_sessions.pop(key,None);raise
+        self.roots[address]=public;self.roots.move_to_end(address)
+        while len(self.roots)>HELD_ROOTS:self.roots.popitem(last=False)
+        return public
+
+    def public_root(self,request):
+        """The PublicRoot of a protocol request (classify's): the one prepare captured for this very address when it is held
+        (incremental_roots), else capture_root's, recomputed. The same value either way."""
+        lines=tuple(request['lines']);prefix=hashlib.sha256(''.join(x+'\n'for x in lines).encode()).hexdigest()
+        if type(request['stream_id'])is int and type(request['decision_index'])is int:   # True == 1: a bool never matches a held root
+            held=self.roots.get(((self.rung,request['battle_id'],request['owner'],request['stream_id']),request['decision_index'],prefix))
+            if held is not None:return held
+        return capture_root(config=self.owning_config,contract=ActorContract.champion(),lines=lines,battle_id=request['battle_id'],
+            address=DecisionAddress(request['stream_id'],request['decision_index'],int(request['owner'][1])-1),seed=self.seed&0xffffffff)
+
+    def drop_roots(self,battles=None):
+        """Close and forget the incremental root sessions and held roots of these battle ids (every one when None)."""
+        for key in[k for k in self.root_sessions if battles is None or k[1]in battles]:self.root_sessions.pop(key).close()
+        for address in[a for a in self.roots if battles is None or a[0][1]in battles]:del self.roots[address]
 
     def construct(self,request,index=0):
         """Same full-world test as Search's constructor-only path; no evaluator."""
