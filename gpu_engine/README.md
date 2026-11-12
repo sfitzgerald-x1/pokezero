@@ -128,10 +128,9 @@ Fidelity patch A1 (status, boost and cure effects; no new state or chance):
 - Curse (non-Ghost, the only pool form): +1 Atk, +1 Def, -1 Spe on the user,
   silent at the caps. A Ghost-type user's Curse stays an unported placeholder.
 - Superpower: -1 Atk, -1 Def on the user after a successful hit, Substitute
-  hits and KOs included; not on a miss, Protect or type immunity. Not exact
-  for a White Herb holder yet: Showdown restores the drop once and consumes
-  the herb (gen3 randbats gives every Deoxys and Deoxys-Attack a White Herb),
-  which arrives with fidelity PR C. Keep those holders guarded until then.
+  hits and KOs included; not on a miss, Protect or type immunity. A White Herb
+  holder (gen3 randbats gives every Deoxys and Deoxys-Attack one) restores the
+  drop once at the move's AfterMove: fidelity WH, below.
 - Charm: target Attack -2, blocked by Protect and Substitute, never by type
   immunity; Clear Body, White Smoke and Hyper Cutter block it (revealed only
   when the capped drop was nonzero).
@@ -289,6 +288,26 @@ Fidelity patch M2 (Perish Song, Yawn, Wrap and the residual scheduler; new state
   entries from the counters at each move and turn end, and B2's WRAP_TRAP_TURNS
   (column 33, `wrap_trap_turns`) counts TURN lines while trapped, resets on every
   `-end`, an arrival without Baton Pass and a faint, and rides a Baton Pass.
+
+Fidelity WH (White Herb, generally, and C-lite: Sacred Fire's thaw and Facade;
+no new state, no new chance):
+- White Herb (`data/items.ts` whiteherb, the base item in Gen 3): when its holder
+  has a negative stage and lives, `useItem()` consumes it (`-enditem`) and every
+  negative stage goes to 0 (positive stages stay). Gen 3 triggers: every move
+  that passed BeforeMove and PP (onAnyAfterMove, both actives, before runMove's
+  faintMessages, so a Destiny Bond KO of the user comes after its restore); each
+  entrant's runSwitch, whose SwitchIn event runs after hazards and before the
+  entrant's Ability Start (so an entrant's Intimidate drop is not restored there,
+  unlike Gen 5+); and residual order 29 (that drop with no later trigger in the
+  turn). Gen 3 Pursuit on a switch is useMove: no AfterMove. A dragged-in mon's
+  runSwitch is queued after the Roar's AfterMove. An equal-Speed pair is inert.
+- Sacred Fire (the move flag `defrost`): the 20% thaw roll comes first; failing
+  it, a frozen user still moves and frz's onModifyMove thaws it in useMove, before
+  accuracy, Protect and immunity (a miss or a failure still thaws it).
+- Facade: base power 140 when the user has par, brn, psn or tox at getDamage (not
+  slp; frozen users cannot use it); Gen 3 burn halving still applies without Guts.
+- Device: `white_herb` folds B2's `-enditem` consumption (revealed, removed, no
+  ledger mutation, ITEM_END flags) and `-clearnegativeboost` on the holder.
 
 The existing fixed critical roll now resolves ordinary 1/16 and catalog +1
 high-crit 1/8 chances. Battle Armor and Shell Armor veto critical hits in both
