@@ -305,6 +305,7 @@ class DepthNLiveSearch:
         self.ability_guard=bool(ability_guard)   # the effect guard's ability arms (depthn_guard_inputs.effect_record's metadata); off by default
         if self.ability_guard and any(getattr(p,'labels',None)is not guard_inputs.ability_labels for p in pricers.values()):
             raise ValueError('ability_guard needs pricers observing with depthn_guard_inputs.ability_labels')
+        if self.ability_guard:guard_inputs.ability_facts(constructor.metadata)   # a metadata without the move catalog fails here, at startup
         if type(redact_private_reveals)is not bool:raise ValueError('redact_private_reveals must be a bool')
         if type(peer_view_b)is not bool:raise ValueError('peer_view_b must be a bool')
         self.redact_private_reveals=redact_private_reveals or peer_view_b

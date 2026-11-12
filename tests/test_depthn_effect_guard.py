@@ -728,6 +728,9 @@ class AbilityEvaluateTests(unittest.TestCase):
                 fresh = G.ability_evaluate(own, peer, inputs, choice=0, **kw)
                 self.assertEqual(G.ability_trips(record, **kw), {k: fresh[k] for k in ('tripped', 'b_turn1', 'b_reach', 'b_switchin', 'c')})
         self.assertEqual(G.ability_trips(record)['tripped'], record['tripped'])
+        with self.assertRaisesRegex(ValueError, 'threshold'):G.ability_trips(record, threshold=.07)
+        third = G.ability_evaluate(own, peer, inputs, choice=0, pinch_root='third')
+        with self.assertRaisesRegex(ValueError, 'two_thirds'):G.ability_trips(third, pinch_root='two_thirds')
 
     def test_evaluate_folds_the_ability_record_in(self):
         cond = G.conditions(BASE, 0, request(OURS));lanes = ['tackle', 'leechseed', 'substitute', 'protect'];own = prior(1, .9)   # lane 0: 3%

@@ -647,9 +647,13 @@ def ability_evaluate(own_turn1, peer_turn1, ability, *, choice=None, threshold=T
 
 def ability_trips(ab, *, arms=None, pinch_root=None, threshold=None):
     """Whether an ability record trips under another configuration (`arms` per family, `pinch_root`), from the record alone:
-    dict(tripped, b_turn1, b_reach, b_switchin, c). The record's own configuration reproduces its own tripped."""
+    dict(tripped, b_turn1, b_reach, b_switchin, c). The record's own configuration reproduces its own tripped. Exact only at the
+    record's threshold (it also chose the root PINCH masks) and, for 'two_thirds', on a record written under 'two_thirds' (a
+    'third' record keeps no 2/3 masses): ValueError otherwise."""
     arms = ab['arms'] if arms is None else arms;pinch_root = ab['pinch_root'] if pinch_root is None else pinch_root
-    threshold = ab['threshold'] if threshold is None else threshold;fam = ab['families']
+    if threshold is not None and threshold != ab['threshold']:raise ValueError('ability_trips decides only at the record\'s threshold')
+    if pinch_root == 'two_thirds' and ab['pinch_root'] != 'two_thirds':raise ValueError('a \'third\' record cannot decide the two_thirds rule')
+    threshold = ab['threshold'];fam = ab['families']
     on = lambda f, arm: arm in arms.get(f, ())
     def turn1(f):
         m = fam[f]['turn1_third'] if f == 'PINCH' and pinch_root == 'third' else fam[f]['turn1']

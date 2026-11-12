@@ -642,15 +642,18 @@ def guard_choices(choices, greedy, own_moves, record, b=None):
     never guarded; `record` None (a row without the guard) applies the recharge guard alone. `b` replaces the record's root-level
     (b) (the reach scopes: turn-1 (b) or the reach's turn 2); (c) stays the record's. A union record (a br_fp row, depthn_guard_inputs
     reply_logits) adds its reply arm's (b) to either, as the live actor's fallback does (only (b) differs between the arms). The
-    ability guard's (b) (the record's `ability`, and the reply arm's ability_b) guards the root in every scope, as live."""
+    ability guard's (b) (the record's `ability`, and the reply arm's ability_b) guards the root in every scope, as live; its (c) is
+    the record's (trips) or the reply arm's (ability_own_lanes: the ability's (c) can differ between the arms)."""
     played, causes = {}, {}
     reply = ((record or {}).get('union') or {}).get('reply', {})
     reply_b = bool(reply.get('b')) or bool(reply.get('ability_b'));ability_b = bool(((record or {}).get('ability') or {}).get('b'))
+    reply_c = reply.get('ability_own_lanes') or [None] * 4   # the reply arm's ability (c) lanes: its root PINCH rule reads the reply prior
     for name, choice in choices.items():
         if name == 'greedy' or choice is None:played[name], causes[name] = choice, None;continue
         why = []
         if effect_guard.recharge_guarded(own_moves, choice, greedy):why.append(OWN_RECHARGE)
-        if record is not None and ((record['b'] if b is None else b) or reply_b or ability_b or effect_guard.trips(record, choice)['c']):why.append(UNREPRESENTED)
+        if record is not None and ((record['b'] if b is None else b) or reply_b or ability_b or effect_guard.trips(record, choice)['c']
+                                   or (type(choice) is int and 0 <= choice < 4 and bool(reply_c[choice]))):why.append(UNREPRESENTED)
         played[name], causes[name] = (greedy if why else choice), (why or None)
     return played, causes
 
@@ -828,15 +831,17 @@ def guard_facts(record, raw):
     # record's own fields (b_turn1, b_turn2, tiers, m_*) stay the champion's, and union_only marks a root guarded by the reply arm alone
     reply = ((record.get('union') or {}).get('reply')) or {};reply_b = bool(reply.get('b')) or bool(reply.get('ability_b'))
     ability_b = bool((record.get('ability') or {}).get('b'));champion_b = bool(record['b']) or ability_b
+    reply_c = reply.get('ability_own_lanes') or [None] * 4
     return dict(rule=record.get('rule', 'any_cell'), b=champion_b or reply_b, champion_b=champion_b, union_only=reply_b and not champion_b,
-                **({'ability_b': ability_b, 'ability_families': sorted({f for x in record['ability'].get('reasons') or () for f in x.get('family') or ()})}
-                   if isinstance(record.get('ability'), dict) else {}),
+                **({'move_b': bool(record['b']), 'ability_b': ability_b, 'ability_families': sorted({f for x in record['ability'].get('reasons') or ()
+                    if x.get('source') != 'ability_choice' for f in x.get('family') or ()})} if isinstance(record.get('ability'), dict) else {}),
                 b_turn1=bool(record.get('b_turn1')), b_turn2=bool(record.get('b_turn2')),
                 turn2=turn2, tiers_turn1=tiers('turn1'), sides_turn1=sides1, tiers_turn2=tiers2, tier_masses_turn2=masses2, unavailable=unavailable,
                 m_own=record.get('m_own'), m_opp=record.get('m_opp'), arms=record.get('arms'),
                 any_cell=dict(b=any_b, turn2=any_turn2, unavailable=any(r.get('source') in ('turn2_unavailable', 'guard_error') for r in list(any_reasons) + list(reasons))),
                 a=bool(record.get('a')), tier_b_legal=bool(record.get('tier_b_legal')),
-                c={name: effect_guard.trips(record, choice)['c'] for name, choice in raw.items() if choice is not None})
+                c={name: effect_guard.trips(record, choice)['c'] or (type(choice) is int and 0 <= choice < 4 and bool(reply_c[choice]))
+                   for name, choice in raw.items() if choice is not None})
 
 
 # ---- statistics ----
@@ -919,7 +924,10 @@ def reach_report(have, settings):
             v[t] > 0 and (g(r)['reach'][f'm_{side}_{scope}'] or 0.) >= effect_guard.THRESHOLD for side, v in g(r)['reach']['tiers'][scope].items()))
         side = lambda r, s: (s in g(r)['sides_turn1']) or g(r)['reach']['unavailable'] or (
             (g(r)['reach'][f'm_{s}_{scope}'] or 0.) >= effect_guard.THRESHOLD)
-        guarded = [r for r in have if g(r)['scopes'][scope]];clean = [r for r in have if not g(r)['scopes'][scope]]
+        # the scope flags are the move guard's (depthn_guard_equivalence reads them); a root the ability guard's (b) guards plays
+        # greedy in every scope, so it is guarded here too, never in the clean (unguarded) table
+        held = lambda r: g(r)['scopes'][scope] or bool(g(r).get('ability_b'))
+        guarded = [r for r in have if held(r)];clean = [r for r in have if not held(r)]
         t1 = sum(g(r)['b_turn1'] for r in have);added = sum(reach2(r) and not g(r)['b_turn1'] for r in have)
         cross = collections.Counter((('any_cell' if g(r)['any_cell']['b'] else 'any_cell_clear'), ('reach' if g(r)['scopes'][scope] else 'reach_clear'))
                                     for r in have)
@@ -936,7 +944,8 @@ def any_cell_report(have, settings):
     any expanded cell, (c) per operator. Its guarded share (union, turn 1 vs any-cell-turn-2-added, unavailable or error), RR
     on its unguarded roots under its own guards, and a cross-tab against the live scope (the record's rule)."""
     have = [r for r in have if 'any_cell' in (r.get('reach_ops') or {})];n = len(have);share = lambda k: k / n if n else None;g = lambda r: r['guard']
-    guarded = [r for r in have if g(r)['any_cell']['b']];clean = [r for r in have if not g(r)['any_cell']['b']]
+    held = lambda r: g(r)['any_cell']['b'] or bool(g(r).get('ability_b'))   # as the reach scopes: the ability guard holds in every scope
+    guarded = [r for r in have if held(r)];clean = [r for r in have if not held(r)]
     t1 = sum(g(r)['b_turn1'] for r in have);added = sum(g(r)['any_cell']['turn2'] and not g(r)['b_turn1'] for r in have)
     error = sum(g(r)['any_cell']['b'] and not g(r)['b_turn1'] and not g(r)['any_cell']['turn2'] for r in have)
     cross = collections.Counter((('any_cell' if g(r)['any_cell']['b'] else 'any_cell_clear'), ('live' if g(r)['b'] else 'live_clear')) for r in have)
@@ -960,10 +969,14 @@ def guard_report(records, settings, opponent_recharge=0):
     union = part(lambda r: g(r)['b_turn1'], lambda r: g(r).get('turn2', g(r)['b_turn2']))
     # (b) without a turn-1 or a priced turn-2 reason: an unavailable turn-2 capture or an error record (fail closed): its own part;
     # a root guarded by a union record's reply arm alone (br_fp) is its own part too
-    error = sum(g(r)['b'] and not g(r).get('union_only') and not g(r)['b_turn1'] and not g(r).get('turn2', g(r)['b_turn2']) for r in have)
-    reply_only = sum(bool(g(r).get('union_only')) for r in have)
-    total = union['total'] + error + reply_only
+    # a root guarded by the ability guard's (b) alone (the move guard clear): its own part
+    ability_only = lambda r: bool(g(r).get('ability_b')) and not g(r).get('move_b', True)
+    error = sum(g(r)['b'] and not g(r).get('union_only') and not ability_only(r) and not g(r)['b_turn1'] and not g(r).get('turn2', g(r)['b_turn2'])
+                for r in have)
+    reply_only = sum(bool(g(r).get('union_only')) for r in have);ability = sum(ability_only(r) for r in have)
+    total = union['total'] + error + reply_only + ability
     union.update(unavailable_or_error=error, unavailable_or_error_share=share(error), reply_arm_only=reply_only, reply_arm_only_share=share(reply_only),
+                 **({'ability_only': ability, 'ability_only_share': share(ability)} if any('ability_b' in g(r) for r in have) else {}),
                  total=total, share=share(total))
     c = {name: dict(c_only=sum(g(r)['c'].get(name, False) and not g(r)['b'] for r in have),
                     union=sum(g(r)['b'] or g(r)['c'].get(name, False) for r in have)) for name in settings}

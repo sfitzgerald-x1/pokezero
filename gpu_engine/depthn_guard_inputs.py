@@ -163,7 +163,7 @@ class AbilityFacts:
         v = metadata['vocabulary'];self.abilities = [normalize_id(x) for x in v['abilities']];self.types = [normalize_id(x) for x in v['types']]
         self.catalog = {}
         for row in metadata.get('moves') or ():
-            if not row:continue
+            if not row or 'id' not in row:continue
             t = int(row.get('type') or 0)
             self.catalog[normalize_id(row['id'])] = dict(category=row.get('category'), type=self.types[t] if 0 < t < len(self.types) else None,
                 contact=bool((row.get('flags') or {}).get('contact')))
@@ -225,7 +225,8 @@ def effect_record(frame, root, worlds, children, request, owner, vocabulary, cho
     `reply_logits` (a served reply model, br_fp): per world in block order its reply-model logits [9], None for a waiting world.
     The union guard: the guard is evaluated a second time with each requested world's turn-1 peer prior replaced by the reply
     model's (turn-1 peer mass and the reach's per-world reply weights; our prior and the turn-2 priors unchanged). The record
-    stays the champion's evaluation; `union` adds dict(tripped=champion OR reply, champion=..., reply=...) over UNION_FIELDS,
+    stays the champion's evaluation; `union` adds dict(tripped=champion OR reply, champion=..., reply=...) over UNION_FIELDS (with
+    the ability guard also ability_b and ability_own_lanes, its (c) lanes: those can differ between the arms),
     `union_only` whether only the reply arm tripped (then the record's b, c, arms and m_* describe the champion, which did not), and
     the top-level `tripped` becomes union['tripped'] (the live actor plays greedy on it). Without reply_logits: unchanged. Only (b)
     can differ between the arms: (c) reads our own prior and lanes, the same in both.
@@ -254,7 +255,7 @@ def effect_record(frame, root, worlds, children, request, owner, vocabulary, cho
                     legal=[bool(x) for x in frame.root_peer_legal[r, jw]], requested=bool(frame.root_peer_requested[r, jw])))
                 if facts is not None:
                     entry, switchin = ability_root(facts, root_labels, world, owner, own_lanes, lanes)
-                    ab['turn1'].append(entry);ab['unknown_lanes'] += facts.unknown(own_lanes) + facts.unknown(lanes)
+                    ab['turn1'].append(entry);ab['unknown_lanes'] += facts.unknown(lanes) + (facts.unknown(own_lanes) if not ab['turn1'][1:] else 0)
                     if switchin:ab['switchin'][world] = switchin
             status = frame.t1_status[r, jw]
             for a, b in zip(*np.nonzero(status == 2)):
@@ -291,7 +292,12 @@ def effect_record(frame, root, worlds, children, request, owner, vocabulary, cho
             replied.append(dict(w, logits=[float(x) for x in logits]) if w['requested'] else dict(w))
         reply = guard.evaluate(cond, own_turn1=own_turn1, peer_turn1=replied, turn2=[dict(t) for t in turn2], turn2_available=available, choice=choice,
             ability=ability)
-        summary = lambda r: {**{k: r.get(k) for k in UNION_FIELDS}, **({'ability_b': bool(r['ability']['b'])} if 'ability' in r else {})}
+        def summary(r):
+            out = {k: r.get(k) for k in UNION_FIELDS}
+            if 'ability' in r:   # the ability guard's (b) and its (c) lanes (the root PINCH rule reads the reply prior: (c) can differ)
+                ab = r['ability'];choice = lambda lanes: sorted(f for f in lanes or () if 'choice' in ab['arms'].get(f, ())) or None
+                out.update(ability_b=bool(ab['b']), ability_own_lanes=[choice(x) for x in ab['own_guarded_lanes']])
+            return out
         record['union'] = dict(tripped=bool(record['tripped'] or reply['tripped']), champion=summary(record), reply=summary(reply))
         record['union_only'] = bool(record['union']['tripped'] and not record['tripped'])   # only the reply arm tripped: b, c, arms, m_* are the champion's
         record['tripped'] = record['union']['tripped']
