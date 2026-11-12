@@ -69,25 +69,28 @@ a pre-state predicate alone). The base pass stores per-lane arrays of
 WITNESS_LEAVES (wit_XX) so these rules compare per mon and per bag column:
 - recharge_rule: Hyper Beam's mustrecharge. A (state.recharge_counter, side)
   change is explained only on a side whose executed move may be Hyper Beam
-  (involvement) AND whose move connected in this tree (its recorded direct
-  damage: the device damage hook, recorded around the hook; or the foe's
-  Substitute falling while it stayed in) AND whose post counter is nonzero
-  exactly at its living post-step active, with the value the residual leaves
-  (1 when it ran, 2 when it was deferred), AND whose mustrecharge bag bit is
-  set at that active's public slot.
+  (involvement) AND whose move connected in this tree (recorded around the
+  device hooks: HP damage its damage hook records, or the foe's Substitute
+  lower at that hook than when this side's move line opened; or the foe's
+  Substitute falling over the step while it stayed in) AND whose post
+  counter is nonzero exactly at its living post-step active, with the value
+  the residual leaves (1 when it ran, 2 when it was deferred), AND whose
+  mustrecharge bag bit is set at that active's public slot.
 - bag_rule: a (trackers.public_volatiles, side) change is explained only when
   every (slot, column) differing from the base's stored bag is a witnessed
   cell: mustrecharge at that recharging active's slot (or a mon that departed
   after the hit), and on a Trick lane Substitute at a mon whose Substitute
   stood before the step and stands in exactly one tree, or confusion at a mon
   whose Lum Berry cure differs (below), each bit equal to this tree's state.
-- trick_rule (Trick lanes): a Lum Berry among the actives' items that was eaten
-  here, or a holder's own Lum that left it, witnesses per-mon differences of
-  status (state, public status, the sleep features, the clause port) and
-  confusion (counter, feature); a pinch berry among the actives' items
-  witnesses a one-stage difference in its own stat at an active (eaten here:
-  post item 0; eaten only in the base: the holder's own berry), in state and
-  public boosts; a witnessed Substitute the device's sub_present.
+- trick_rule (Trick lanes; the pool is the pre-step items of either side's
+  pre- or post-step active, so a mon switched in before the Trick counts): a
+  Lum Berry in the pool that was eaten here, or a holder's own Lum that left
+  it, witnesses per-mon differences of status (state, public status, the
+  sleep features, the clause port) and confusion (counter, feature); a pinch
+  berry in the pool witnesses a one-stage difference in its own stat at an
+  active (eaten here: post item 0; eaten only in the base: the holder's own
+  berry), in state and public boosts; a witnessed Substitute the device's
+  sub_present.
 - ledger_rule: B2's item ledger on Knock Off. A change of the per-mon
   mon_features item_mutated / item_original on a side is explained only when
   they are nonzero exactly at the mons whose state.item_knocked flipped this
@@ -919,16 +922,17 @@ def bag_rule(entries, bag, base_bag, allowed):
 def item_witnesses(pre_active, post_active, pre_item, post_item, post_status, post_confusion, pre_sub, post_sub, base_sub,
                    lum, pinch):
     """M1 (review): per-mon witnesses on a Trick lane, from this tree's pre/post state and the base's stored Substitutes.
-    acts [2,6]: either side's pre- or post-step active. lum [2,6]: an active whose Lum Berry outcome differs from the base's
-    (a Lum among the actives' pre-step items, eaten here: post item 0 with no status or confusion left; or the holder's
-    own Lum gone to the other side). sub [2,6]: an active whose Substitute stood before the step and stands in exactly
-    one tree. stats: the stats of the pinch berries among the actives' pre-step items (pinch: item id -> stat)."""
+    acts [2,6]: either side's pre- or post-step active (a mon switched in before the Trick is its target). The pool is
+    the pre-step items of those mons. lum [2,6]: an active whose Lum Berry outcome differs from the base's (a Lum in the
+    pool, eaten here: post item 0 with no status or confusion left; or the holder's own Lum gone to the other side).
+    sub [2,6]: an active whose Substitute stood before the step and stands in exactly one tree. stats: the stats of the
+    pinch berries in the pool (pinch: item id -> stat)."""
     pre_item, post_item = np.asarray(pre_item), np.asarray(post_item)
     acts = np.zeros((2, 6), bool)
     for side in (0, 1):
         for active in (int(pre_active[side]), int(post_active[side])):
             if 0 <= active < 6:acts[side, active] = True
-    pool = {int(pre_item[side, int(pre_active[side])]) for side in (0, 1) if 0 <= int(pre_active[side]) < 6}
+    pool = {int(pre_item[side, m]) for side, m in zip(*np.nonzero(acts))}
     lum_mons = np.zeros((2, 6), bool)
     if lum is not None and lum in pool:
         eaten = (post_item == 0) & (np.asarray(post_status) == 0) & (np.asarray(post_confusion) == 0)
@@ -941,7 +945,7 @@ def item_witnesses(pre_active, post_active, pre_item, post_item, post_status, po
 
 def pinch_boosts(boosts, base_boosts, w, pre_item, post_item, pinch, side):
     """M1 (review): ([6] differing mons, ok) for state.boosts on a side: every mon whose stages differ from the base's is an
-    active whose difference is one stage in one stat of a pinch berry the actives held (w['stats']): +1 eaten here (its
+    active whose difference is one stage in one stat of a pinch berry in the pool (w['stats']): +1 eaten here (its
     post item is 0), -1 eaten only in the base (its own berry, the item it held before the step)."""
     d = np.asarray(boosts[side]).astype(np.int64) - np.asarray(base_boosts[side]).astype(np.int64)
     mons = d.reshape(6, -1).any(-1);ok = bool(mons.any())
@@ -1053,14 +1057,26 @@ class Stepper:
                 return clock(weather, counter, eligible=eligible, **extra)
             climate.residual_clock = clock_recorder
             from gpu_engine import engine_device_public_hooks as hooks
-            damage_hook = hooks.damage;hits = []
-            def damage_recorder(c, st, side, dealt, taken, use):
-                # M1 review: this tree's hit record, the device's direct-damage write (recorded around the hook, never
-                # read from the engine's own recharge write): the recharge rule's evidence that the move connected.
+            damage_hook, move_hook = hooks.damage, hooks.move;hits = [];opened = {}
+            def foe_sub(st, s):
+                r = j.arange(lanes);foe = 1 - s
+                return st.substitute_hp[r, foe, st.active[r, foe]]
+            def move_recorder(c, st, side, *rest, **kw):
+                # The foe's active Substitute when this side's move line opens (a Substitute made or remade earlier in
+                # the step included); the damage hook that follows reads it again after the hit.
                 s = j.broadcast_to(j.asarray(side, j.int32), (lanes,))
-                hits.append((s, j.broadcast_to(j.asarray(use, j.bool_), (lanes,)) & (j.broadcast_to(j.asarray(taken), (lanes,)) > 0)))
+                opened.update(side=s, sub=foe_sub(st, s))
+                return move_hook(c, st, side, *rest, **kw)
+            def damage_recorder(c, st, side, dealt, taken, use):
+                # M1 review: this tree's hit record (recorded around the device hooks, never read from the engine's own
+                # recharge write), the recharge rule's evidence that the move connected: HP damage the device records,
+                # or the foe's Substitute lower than when this side's move line opened.
+                s = j.broadcast_to(j.asarray(side, j.int32), (lanes,));use = j.broadcast_to(j.asarray(use, j.bool_), (lanes,))
+                struck = use & (j.broadcast_to(j.asarray(taken), (lanes,)) > 0)
+                if opened:struck = struck | (use & (opened['side'] == s) & (foe_sub(st, s) < opened['sub']))
+                hits.append((s, struck))
                 return damage_hook(c, st, side, dealt, taken, use)
-            hooks.damage = damage_recorder
+            hooks.damage, hooks.move = damage_recorder, move_recorder
             try:
                 if record_installs:
                     original = hooks.install
@@ -1076,7 +1092,7 @@ class Stepper:
                 else:
                     out = step_fn(state, actions, trackers)
             finally:
-                climate.residual_clock = clock;hooks.damage = damage_hook
+                climate.residual_clock = clock;hooks.damage, hooks.move = damage_hook, move_hook
             named_in = name_inputs(state, actions, trackers);named_out = name_outputs(out)
             names['out'], digests = digest_named(named_out, lanes)
             names['side_axis'] = [has_side_axis(n, named_out[n].shape, lanes) for n in names['out']]

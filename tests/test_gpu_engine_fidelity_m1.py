@@ -505,6 +505,10 @@ class RegressPluginTests(unittest.TestCase):
         w2 = item_witnesses(pre_active, post_active, no_berry, post_item, zero, conf, zero, zero, zero, LUM, pinch)
         self.assertEqual(trick_rule(entries, w2, ko, dict(base_ko, **{'state.boosts': stage}), {}, {}, p2p, no_berry, post_item,
                                     pinch)[0], entries)
+        # A foe that switched in before the Trick is its target: its pre-step berry is in the pool (GPU pass, 4 lanes).
+        switched = no_berry.copy();switched[1, 0] = LEFT;switched[1, 3] = LIECHI
+        w3 = item_witnesses(pre_active, np.array([0, 3]), switched, post_item, zero, conf, zero, zero, zero, LUM, pinch)
+        self.assertEqual(w3['stats'], {0});self.assertTrue(w3['acts'][1, 3])
 
     def test_ledger_rule_checks_the_knocked_mons(self):
         from gpu_engine.v2e_regress import LEDGER_LEAVES, ledger_rule

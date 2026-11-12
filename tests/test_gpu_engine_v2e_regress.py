@@ -787,7 +787,8 @@ def m1_actions():
 
 def m1_step(state, actions, t, *, recharge=True, miss_recharge=False, bag=True, trick=True, wide=False):
     """A stand-in engine: side 1's Tackle takes 3 HP from side 0's active; side 0's Hyper Beam (lanes 0-3) hits for 10 on
-    lanes 0-1 (the device damage hook records it) and misses on 2-3; recharge sets the counter (1: the residual ran) and
+    lanes 0-1 (the device move and damage hooks see it; on lane 1 the foe made a Substitute earlier in the step and the
+    hit only lowers it, which the step's pre/post state cannot show) and misses on 2-3; recharge sets the counter and
     the mustrecharge bag bit; trick swaps the actives' items: lane 4's Tricker eats the Liechi (+1 Atk), lane 5's
     confused foe eats the Lum (confusion and its bag bit end). The base pass is recharge=False, trick=False."""
     import jax.numpy as j
@@ -796,9 +797,13 @@ def m1_step(state, actions, t, *, recharge=True, miss_recharge=False, bag=True, 
     lanes = state.hp.shape[0];rows = j.arange(lanes)
     s = state;hp = s.hp.at[:, 0, 0].add(-3)
     beam = (actions[:, 0] == 0) & (s.moves[:, 0, 0, 0] == HB) & ~s.done
-    hit = beam & (rows < 2)
-    hp = hp.at[:, 1, 0].add(j.where(hit, -10, 0))
-    hooks.damage(None, s, j.zeros(lanes, j.int32), j.where(hit, 10, 0), j.where(hit, 10, 0), beam)
+    hit = beam & (rows < 2);behind = hit & (rows == 1)
+    s = s._replace(substitute_hp=s.substitute_hp.at[:, 1, 0].set(j.where(rows == 1, 50, s.substitute_hp[:, 1, 0])))
+    hooks.move(None, s, j.zeros(lanes, j.int32), s.moves[:, 0, 0, 0], beam)
+    hp = hp.at[:, 1, 0].add(j.where(hit & ~behind, -10, 0))
+    s = s._replace(substitute_hp=s.substitute_hp.at[:, 1, 0].add(j.where(behind, -10, 0)))
+    dealt = j.where(hit & ~behind, 10, 0)
+    hooks.damage(None, s, j.zeros(lanes, j.int32), dealt, dealt, beam)
     v = t.public_volatiles;counter = s.recharge_counter
     set_ = hit | (beam & miss_recharge)
     if recharge:
@@ -844,8 +849,9 @@ class M1PlantedBugTests(unittest.TestCase):
         (cls.tmp / 'cap' / 'capture.json').write_text(json.dumps(dict(shards=2, paths=leaf_paths(cls.template))))
         cls.context = dict(prepared=SimpleNamespace(engine_tables=SimpleNamespace(sleep_talk=SimpleNamespace(
             callable=np.array([False, True, True, True, True])))), pool=SimpleNamespace(metadata=lambda: dict(vocabulary=M1_VOCAB)))
-        cls.stub = mock.patch.object(hooks, 'damage', lambda c, state, side, dealt, taken, use: c)
-        cls.stub.start()
+        cls.stubs = [mock.patch.object(hooks, 'damage', lambda c, state, side, dealt, taken, use: c),
+                     mock.patch.object(hooks, 'move', lambda c, *rest, **kw: c)]
+        for stub in cls.stubs:stub.start()
         from gpu_engine import v2e_regress
         cls.base = cls.tmp / 'base'
         code = v2e_regress.base_pass(cls.args(out=cls.base, pad_lanes=M1_LANES),
@@ -854,7 +860,8 @@ class M1PlantedBugTests(unittest.TestCase):
 
     @classmethod
     def tearDownClass(cls):
-        cls.stub.stop();shutil.rmtree(cls.tmp)
+        for stub in cls.stubs:stub.stop()
+        shutil.rmtree(cls.tmp)
 
     @staticmethod
     def ran(state, actions):
@@ -880,7 +887,7 @@ class M1PlantedBugTests(unittest.TestCase):
         code, report, listing = self.patched('correct')
         c = report['counts']
         self.assertEqual(code, 0, c);self.assertEqual((c['changed_but_uninvolved'], c['changed_involved_unexpected_fields']), (0, 0))
-        self.assertEqual(c['recharge_leaves'], 4)                      # 2 hit lanes x 2 shards
+        self.assertEqual(c['recharge_leaves'], 4)                      # 2 hit lanes (one behind a fresh Substitute) x 2 shards
         self.assertEqual(c['trick_witness_leaves'], 4)                 # Liechi and Lum lanes x 2 shards
         self.assertEqual(c['bag_leaves'], 6)                           # the 4 recharge bits and the 2 Lum confusion clears
         by_lane = {(x['shard'], x['lane']): x for x in listing}
