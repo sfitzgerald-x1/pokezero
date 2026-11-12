@@ -175,7 +175,7 @@ FileLocations
 2 {file_name_id=1 function_name_id=2 line=9 end_line=9 column=11 end_column=30}
 3 {file_name_id=1 function_name_id=3 line=750 end_line=750 column=8 end_column=15}
 4 {file_name_id=2 function_name_id=4 line=4 end_line=4 column=11 end_column=23}
-5 {file_name_id=1 function_name_id=3 line=2012 end_line=2012 column=11 end_column=16}
+5 {file_name_id=1 function_name_id=3 line=2062 end_line=2062 column=11 end_column=16}
 
 StackFrames
 1 {file_location_id=1 parent_frame_id=1}
@@ -207,12 +207,12 @@ class JaxAttribTest(unittest.TestCase):
         self.assertEqual(stack.offset, 1)
         self.assertEqual(stack(4), [('lane_index.py', 'leaf', 4), ('transition.py', 'step_with_chance', 750), ('transition.py', 'outer', 9),
             ('transition.py', '<module>', 10)])
-        self.assertEqual([f[2] for f in stack(5)], [2012, 9, 10])
+        self.assertEqual([f[2] for f in stack(5)], [2062, 9, 10])
 
     def test_index_and_attribution(self):
         index = pp.phase_hlo_index(HLO)
         self.assertEqual((index['fusion.1']['line'], index['fusion.1']['module'], index['fusion.1']['scope']), (750, 'lane_index', 'step'))
-        self.assertEqual(index['fusion.2']['line'], 2012);self.assertIsNone(index['fusion.3']['line']);self.assertEqual(index['fusion.4']['scope'], 'forward')
+        self.assertEqual(index['fusion.2']['line'], 2062);self.assertIsNone(index['fusion.3']['line']);self.assertEqual(index['fusion.4']['scope'], 'forward')
         event = lambda op, dur: dict(name=op, dur=dur, start=0, end=dur, line='Stream #1', stats={'hlo_op': op})
         events = [event('fusion.1', 4_000_000), event('fusion.2', 2_000_000), event('fusion.3', 1_000_000), event('fusion.4', 8_000_000),
             event('unknown.9', 5), dict(name='memcpy', dur=9, start=0, end=9, line='Stream #1', stats={})]
@@ -221,7 +221,7 @@ class JaxAttribTest(unittest.TestCase):
         self.assertEqual(got['ms_per_tick_by_phase'], {'E1': 2.0, 'F1': 1.0, 'outside': 0.5})
         self.assertEqual(got['ms_per_tick_by_group_category']['E'], {'tracker': 2.0})
         self.assertAlmostEqual(got['step_ms_per_tick'], 3.5);self.assertIn('forward', got['ms_per_tick_by_scope'])
-        # fusion.2 (root op at 2012, F1) fuses an op from line 750 (E1): charged whole to F1, and counted as spanning two phases.
+        # fusion.2 (root op at 2062, F1) fuses an op from line 750 (E1): charged whole to F1, and counted as spanning two phases.
         self.assertEqual(index['fusion.2']['phases'], ['E1', 'F1']);self.assertEqual(index['fusion.1']['phases'], ['E1'])
         self.assertAlmostEqual(got['multi_phase_fusion_share'], 2 / 7);self.assertAlmostEqual(got['multi_group_fusion_share'], 2 / 7)
         self.assertIn('root op', got['caveat'])
