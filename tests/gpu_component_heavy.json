@@ -30,16 +30,16 @@
    "module": "test_gpu_engine_fidelity_m1",
    "reason": "wall+memory",
    "hosted_median_min": null,
-   "isolated_wall_min": 38.2,
-   "isolated_peak_gib": 58.7,
+   "isolated_wall_min": 58.1,
+   "isolated_peak_gib": 80.1,
    "completes_on_hosted": false
   },
   {
    "module": "test_gpu_engine_fidelity_r",
    "reason": "memory",
    "hosted_median_min": 9.7,
-   "isolated_wall_min": 7.4,
-   "isolated_peak_gib": 17.7,
+   "isolated_wall_min": 10.5,
+   "isolated_peak_gib": 31.8,
    "completes_on_hosted": true
   },
   {
@@ -55,7 +55,7 @@
    "reason": "wall+memory",
    "hosted_median_min": null,
    "isolated_wall_min": 74.0,
-   "isolated_peak_gib": 87.9,
+   "isolated_peak_gib": 141.8,
    "completes_on_hosted": false
   },
   {
