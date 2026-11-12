@@ -1,11 +1,15 @@
 """Actual owning Leftovers write seam through the real frame and driver, always UNKNOWN; no models/games.
 
-Light replacement coverage for leftovers_owning_callers (all of its tests but the AST pin, which follows #1819's
-re-pin). The prepared runtimes, constructor and requests/public/encode/score phases are the real ones; the frame
-runs the prepared frame closure's own body eagerly (tests/gpu_engine_eager_frame.py, which traces it under jit
-once), and every frame-vs-plain-step comparison is eager against eager.
+Light replacement coverage for leftovers_owning_callers (all of its tests; the AST pin certifies transition.py
+at gpu_engine_transition_certification.CURRENT_TRANSITION). The prepared runtimes, constructor and
+requests/public/encode/score phases are the real ones; the frame runs the prepared frame closure's own body
+eagerly (tests/gpu_engine_eager_frame.py, which traces it under jit once), and every frame-vs-plain-step comparison is eager against eager.
 """
+import ast
+from copy import deepcopy
 from dataclasses import replace
+from pathlib import Path
+import subprocess
 import unittest
 from unittest.mock import patch
 
@@ -17,6 +21,8 @@ from gpu_engine import engine_leftovers_callbacks as leftovers
 from gpu_engine import engine_lifecycle_callbacks as life, engine_retained_encoder_driver as driver
 from gpu_engine import transition
 from gpu_engine_eager_frame import eager_call, eager_frame
+from gpu_engine_default_observer_ast import dump_default_program, assert_hp_rng_mutations_detected
+from gpu_engine_transition_certification import CURRENT_TRANSITION
 import test_gpu_engine_leftovers_owning_callers as fixture
 
 
@@ -177,6 +183,20 @@ class LeftoversCallerFrameTests(unittest.TestCase):
         plain=self.trace(core.engine,core.cursor,actions,compiled=False)
         checked=self.trace(core.engine,core.cursor,actions)
         self.same(checked.state,plain.state)
+
+    def test_default_transition_ast_unchanged_outside_explicit_private_observer(self):
+        old=ast.parse(subprocess.check_output(['git','show',CURRENT_TRANSITION+':gpu_engine/transition.py'],text=True))
+        new=ast.parse(Path(transition.__file__).read_text())
+        baseline=dump_default_program(old)
+        self.assertEqual(dump_default_program(new),baseline)
+        assert_hp_rng_mutations_detected(self,new,baseline)
+        changed=deepcopy(new)
+        function=next(node for node in ast.walk(changed) if isinstance(node,ast.FunctionDef)
+            and node.name=='step_with_chance')
+        index=[arg.arg for arg in function.args.kwonlyargs].index('_status_residual_context')
+        function.args.kw_defaults[index]=ast.Constant(True)
+        with self.assertRaisesRegex(ValueError,'changed explicit observer default'):
+            dump_default_program(changed)
 
 
 if __name__=='__main__':unittest.main()

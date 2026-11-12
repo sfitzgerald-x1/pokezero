@@ -3,7 +3,7 @@
 Light replacement coverage for spikes_owning with #1819's current-kernel expectations (the turn-loop
 prefix entry): the same fixtures and assertions, with the full public fold and the full consumer compiled once
 per class (every input an argument) instead of called eagerly, and ChanceInputs built by keyword. Its AST/source-pin
-test (test_default_ast_and_original_pinned_source_callbacks) joins after #1819 re-pins its sources.
+test (test_default_ast_and_original_pinned_source_callbacks) certifies transition.py at gpu_engine_transition_certification.CURRENT_TRANSITION.
 """
 from _showdown_root import showdown_root_str
 import ast,json,os,shutil,subprocess,unittest
@@ -21,6 +21,7 @@ from pokezero.category_vocab import CategoryVocabulary
 from pokezero.dex import ShowdownDex
 import test_gpu_engine_pressure_entry_owning as fixtures
 from gpu_engine_default_observer_ast import dump_default_program,assert_hp_rng_mutations_detected
+from gpu_engine_transition_certification import CURRENT_TRANSITION
 
 def _chance(b):
  draws=j.zeros((b,2,12),j.int32).at[:,:,4].set(1);zeros=j.zeros((b,2),j.int32)
@@ -140,3 +141,19 @@ class SpikesComponentTests(unittest.TestCase):
     refused=risk.spikes_on_tape(changed,j.ones(2,bool),active=j.ones(2,bool),captured=risk.CapturedSpikes(self.context,k,side,physical,move,w))
     self.assertTrue(int(refused.execution.risks.carry.risk[0])&risk.FIELD_VOLATILE)
     self.assertEqual(int(refused.execution.risks.carry.risk[1]),0)
+ def test_default_ast_and_original_pinned_source_callbacks(self):
+  self.assertEqual(int(self.risks.device.selected_risk[self.move]),0)
+  self.assertTrue(int(risk.compile_risks(self.producer,self.account).device.selected_risk[self.move])&risk.FIELD_VOLATILE)
+  with self.assertRaises(ValueError):spike.check_compiled(replace(self.helper))
+  with self.assertRaises(ValueError):jax.jit(lambda unused:spike.check_compiled(self.helper))(j.array(0))
+  moves=dict(self.catalog.dex.moves);moves['surf']=replace(moves['surf'],target='foeSide')
+  other=events.compile_catalog(self.metadata,self.table,public_moves=self.catalog.moves,dex=ShowdownDex(moves,self.catalog.dex.species,self.catalog.dex.type_chart),exposure=fixtures.engine_fixture.EnginePublicEventsTests.exposure)
+  self.assertEqual(other.ids[self.metadata['vocabulary']['moves'].index('surf')],0);self.assertGreater(other.ids[self.move],0)
+  # Re-certify the integrated device-hook program at the current certification.
+  # Keep the whole normalized AST and HP/RNG mutation controls exact.
+  normalize=__import__('test_gpu_engine_v5_hypothetical_profile').normalized_hypothetical_default
+  before=normalize(subprocess.check_output(['git','show',CURRENT_TRANSITION+':gpu_engine/transition.py'],text=True),as_tree=True);after=normalize(Path('gpu_engine/transition.py').read_text(),as_tree=True);baseline=dump_default_program(before);self.assertEqual(baseline,dump_default_program(after));assert_hp_rng_mutations_detected(self,after,baseline)
+  root=Path(showdown_root_str());self.assertEqual(subprocess.check_output(['git','-C',str(root),'rev-parse','HEAD'],text=True).strip(),events.SHOWDOWN)
+  node=shutil.which('node');self.assertIsNotNone(node)
+  script="const {Dex}=require(process.argv[1]+'/dist/sim/dex.js');const {Battle}=require(process.argv[1]+'/dist/sim/battle.js');const m=Dex.mod('gen3').moves.get('spikes');const foe={toString:()=> 'p2a: Absol'};const p={side:{foe:{active:[foe]}}};const target=Battle.prototype.getRandomTarget.call({dex:Dex.mod('gen3'),gameType:'singles'},p,m);const rows=[];for(const n of [0,1,2,3]){const lines=[];const ctx={effectState:{layers:n},add:(...x)=>lines.push(x.map(String))};const side={toString:()=> 'p2: Player'};const ret=(n?m.condition.onSideRestart:m.condition.onSideStart).call(ctx,side);rows.push({lines,layers:ctx.effectState.layers,blocked:ret===false})}console.log(JSON.stringify({target:String(target),rows}));"
+  d=json.loads(subprocess.check_output([node,'-e',script,str(root)],text=True));self.assertEqual(d['target'],'p2a: Absol');self.assertEqual([r['layers'] for r in d['rows']],[1,2,3,3]);self.assertEqual([len(r['lines']) for r in d['rows']],[1,1,1,0]);self.assertTrue(d['rows'][3]['blocked'])
