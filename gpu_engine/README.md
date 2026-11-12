@@ -269,6 +269,9 @@ Fidelity patch M2 (Perish Song, Yawn, Wrap and the residual scheduler; new state
   events keep their relative order. An equal-Speed Wrap pair takes `effect[0][3]`,
   the Yawn pair a fixed (inert) order. Perish Song is a two-event order-12 pass
   after the list (`effect[1][3]` on a tie). A faint clears all four leaves.
+  The keys' constants live in the jax-free `residual_order.py`, which derives the
+  positions each kind can sort to (Wrap 4, 8, 9, 11; Yawn 6, 12, 13); to bound the
+  compiled step, the Wrap and Yawn handlers are traced only at those positions.
 - Perish Song: every active without the volatile and not Soundproof (the user
   included) counts 4, then 3, 2, 1 at the order-12 residual, and faints at 0. Its
   end path runs no faintMessages, so both holders resolve even when the first
