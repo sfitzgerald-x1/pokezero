@@ -311,7 +311,9 @@ class Engine:
         of its first call with those XLA options; eager runs it op by op under jax.disable_jit (the same program, no
         step compile: the light tier's mode)."""
         transition, table = self.transition, self.table
-        public = lambda s, a, tk, c: transition.step_with_public(s, a, table, tk, belief_tables=belief_tables, chance_inputs=c)
+        # The belief tables are an argument, not a closure constant: as constants they multiply the step's CPU compile
+        # memory (every gather from them carries its own copy).
+        public = lambda s, a, tk, c, bt: transition.step_with_public(s, a, table, tk, belief_tables=bt, chance_inputs=c)
         self.pjit = public if eager else self.jax.jit(public)
         self.pstep, self.compiler_options, self.eager, self.belief_tables = None, compiler_options, eager, belief_tables
 
@@ -351,7 +353,7 @@ class Engine:
 
     def advance_public(self, state, trackers, actions, tapes, auxes):
         import jax.numpy as j
-        args = (state, j.asarray(np.asarray(actions), j.int32), trackers, self.chance(tapes, auxes))
+        args = (state, j.asarray(np.asarray(actions), j.int32), trackers, self.chance(tapes, auxes), self.belief_tables)
         if self.eager:
             with self.jax.disable_jit():
                 return self.jax.block_until_ready(self.pjit(*args))
@@ -396,10 +398,11 @@ class Device:
         refused = [self.b2.refused[q] for q in (2 * lane, 2 * lane + 1)]
         if any(refused):
             device.update(status='B2_REFUSED', refusal=[r for r in refused if r][0]);return
-        diffs = dev.compare_views(dev.device_view(trackers, lane, vocab), dev.b2_view(b2, lane, self.catalog))
+        numeric = []
+        diffs = dev.compare_views(dev.device_view(trackers, lane, vocab), dev.b2_view(b2, lane, self.catalog), numeric)
         open_, allowed = dev.apply_allowlist(scenario['move'], record['case_id'], step, diffs, self.used, self.allowlist)
-        device['steps_compared'] += 1
-        if open_ or allowed:device['steps'].append(dict(step=step, diffs=open_, allowlisted=allowed))
+        device['steps_compared'] += 1;device['numeric'] += len(numeric)
+        if open_ or allowed or numeric:device['steps'].append(dict(step=step, diffs=open_, allowlisted=allowed, numeric=numeric))
 
 
 def judge_device(records):
@@ -444,7 +447,7 @@ def run_scenario(scenario, engine, showdown, metadata, device=None):
         if initial_random:records[-1].update(status='UNRESOLVED_INITIAL_CHANCE', live=False)
         elif diffs:records[-1].update(status='INITIAL_MISMATCH', live=False)
         if device is not None:
-            records[-1]['device'] = dict(status=None, state_equal=initial_equal, steps_compared=0, steps=[], refusal=None)
+            records[-1]['device'] = dict(status=None, state_equal=initial_equal, steps_compared=0, steps=[], refusal=None, numeric=0)
             if records[-1]['live']:device.compare(scenario, records[-1], 'initial', host_trackers, host_b2, i, vocab)
     for step, script in enumerate(scenario['script']):
         if not any(r['live'] for r in records):break
@@ -538,8 +541,11 @@ def run_scenario(scenario, engine, showdown, metadata, device=None):
         device_met, device_reason = judge_device(records)
         out['device'] = dict(status_counts=device_counts, met=device_met, detail=device_reason,
             steps_compared=sum(r['device']['steps_compared'] for r in records),
-            steps_exact=sum(r['device']['steps_compared'] - sum(1 for st in r['device']['steps'] if st['diffs']) for r in records),
-            state_equal=all(r['device']['state_equal'] for r in records),
+            steps_exact=sum(r['device']['steps_compared'] - len(r['device']['steps']) for r in records),
+            steps_numeric_only=sum(1 for r in records for st in r['device']['steps'] if st['numeric'] and not st['diffs'] and not st['allowlisted']),
+            steps_allowlisted=sum(1 for r in records for st in r['device']['steps'] if st['allowlisted'] and not st['diffs']),
+            steps_open=sum(1 for r in records for st in r['device']['steps'] if st['diffs']),
+            state_equal=all(r['device']['state_equal'] for r in records), numeric=sum(r['device']['numeric'] for r in records),
             allowlisted=[dict(case_id=r['case_id'], step=st['step'], **x) for r in records for st in r['device']['steps'] for x in st['allowlisted']])
     return out
 
@@ -588,7 +594,8 @@ def main(argv=None):
             if device is not None:
                 d = result['device']
                 summary['scenarios'][scenario['move']]['device'] = dict(status_counts=d['status_counts'], met=d['met'],
-                    steps_compared=d['steps_compared'], steps_exact=d['steps_exact'], state_equal=d['state_equal'],
+                    steps_compared=d['steps_compared'], steps_exact=d['steps_exact'], steps_numeric_only=d['steps_numeric_only'],
+                    steps_allowlisted=d['steps_allowlisted'], steps_open=d['steps_open'], state_equal=d['state_equal'], numeric=d['numeric'],
                     allowlisted=len(d['allowlisted']), diff_fields=sorted({f for r in result['results'] for f in r['device']['diff_fields']}))
             print(json.dumps(dict(move=scenario['move'], **summary['scenarios'][scenario['move']])), flush=True)
     finally:
@@ -598,8 +605,10 @@ def main(argv=None):
         rows = summary['scenarios'].values()
         summary['device'] = dict(scenarios=len(rows), cases=sum(s['cases'] for s in rows),
             cases_exact=sum(s['device']['status_counts'].get('EXACT', 0) for s in rows),
-            steps_compared=sum(s['device']['steps_compared'] for s in rows), steps_exact=sum(s['device']['steps_exact'] for s in rows),
+            **{k: sum(s['device'][k] for s in rows) for k in ('steps_compared', 'steps_exact', 'steps_numeric_only',
+                                                              'steps_allowlisted', 'steps_open')},
             state_equal=all(s['device']['state_equal'] for s in rows), met=all(s['device']['met'] for s in rows),
+            numeric=sum(s['device']['numeric'] for s in rows), numeric_note=device.dev.NUMERIC_NOTE,
             allowlisted=sum(s['device']['allowlisted'] for s in rows),
             stale_allowlist=[list(k) for k in sorted(set(device.allowlist) - device.used, key=str)
                              if k[0] in summary['scenarios']],

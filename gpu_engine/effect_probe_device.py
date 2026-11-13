@@ -74,7 +74,10 @@ FIELDS = (
     ('belief_pin', 'mon', 't.visible_belief.pin / pin_active', 'beliefs.pin / pin_active[observer 1-side]'),
     ('visible_pin', 'mon', 't.visible_belief.visible_pin / visible_pin_active', 'beliefs.pin / pin_active[observer 1-side]'),
     ('belief_conflicts', 'mon', 't.visible_belief.conflicts', 'beliefs.conflicts[observer 1-side]'),
-    ('turns_active', 'mon', "mf['turns_active']", 'ctx.sleep.age'),
+    # Active-only, as the encoder reads it (engine_device_features.MON_FIELDS turns_active: active-only): B2's age is the
+    # current stint's clock (public_sleep: 0 at arrival, +1 per TURN), stale on a benched mon; the device zeroes it at
+    # withdraw (engine_device_public_hooks.withdraw).
+    ('turns_active', 'active', "mf['turns_active']", 'ctx.sleep.age[active]'),
     ('sleep_turns', 'mon', "mf['sleep_turns']", 'ctx.sleep.count'),
     ('rest_sleep', 'mon', "mf['rest_sleep']", 'ctx.sleep.rest'),
     ('sleep_skipped_turns', 'mon', "mf['sleep_skipped_turns']", 'ctx.sleep.skipped'),
@@ -104,8 +107,8 @@ FIELDS = (
     ('last_damage_dealt', 'active', "mf['last_damage_dealt'] (shown)", 'sum(ctx.damage.last_dealt[side]) in the own fold'),
     ('damage_exact_taken', 'active', 't.damage_exact_taken', 'sum(ctx.damage.last_taken[side]) in the own fold'),
     ('damage_exact_dealt', 'active', 't.damage_exact_dealt', 'sum(ctx.damage.last_dealt[side]) in the foe-owned fold'),
-    ('hazard_shown', 'side', 'port.hazards[side, 0]', 'ctx.damage.hazard_suffered[side] in the foe-owned fold'),
-    ('hazard_exact', 'side', 'port.hazards[side, 1]', 'ctx.damage.hazard_suffered[side] in the own fold'),
+    ('hazard_shown', 'side', 'sum(port.hazards[side, 0])', 'sum(ctx.damage.hazard_suffered[side]) in the foe-owned fold'),
+    ('hazard_exact', 'side', 'sum(port.hazards[side, 1])', 'sum(ctx.damage.hazard_suffered[side]) in the own fold'),
     ('moved', 'side', 'td.moved', 'ctx.tendency.moved'),
     ('switches', 'side', 'td.switches', 'ctx.tendency.switches'),
     ('opportunities', 'side', 'td.opportunities', 'ctx.tendency.opportunities'),
@@ -334,7 +337,7 @@ def device_view(t, lane, vocab):
                     belief_pin=[_words(vb.pin[lane, s, k]), bool(vb.pin_active[lane, s, k])],
                     visible_pin=[_words(vb.visible_pin[lane, s, k]), bool(vb.visible_pin_active[lane, s, k])],
                     belief_conflicts=_words(vb.conflicts[lane, s, k]))),
-                **{key: int(mf[key][lane, s, k]) for key in ('turns_active', 'sleep_turns', 'rest_sleep', 'sleep_skipped_turns',
+                **{key: int(mf[key][lane, s, k]) for key in ('sleep_turns', 'rest_sleep', 'sleep_skipped_turns',
                     'sleep_cant_pending', 'switched_before_attack', 'stayed_and_attacked', 'turns_active_total')}))
         slot = int(t.active_slot[lane, s]);active = None
         if 0 <= slot < 6:
@@ -345,7 +348,7 @@ def device_view(t, lane, vocab):
                 last_move='<switch>' if last == -1 else _name(vocab['moves'], last),
                 last_damage_taken=float(mf['last_damage_taken'][lane, s, slot]), last_damage_dealt=float(mf['last_damage_dealt'][lane, s, slot]),
                 damage_exact_taken=float(t.damage_exact_taken[lane, s, slot]), damage_exact_dealt=float(t.damage_exact_dealt[lane, s, slot]),
-                **{key: int(mf[key][lane, s, slot]) for key in ('sub_present', 'stall_counter', 'meanlook_trap', 'item_swapped',
+                **{key: int(mf[key][lane, s, slot]) for key in ('turns_active', 'sub_present', 'stall_counter', 'meanlook_trap', 'item_swapped',
                     'choice_public', 'choice_locked', 'confusion_turns', 'encore_turns', 'wrap_trap_turns', 'toxic_stage')})
         present = [k for k in range(6) if mons[k] is not None]
         foe = [k for k in range(6) if bool(t.present[lane, 1 - s, k])]
@@ -358,7 +361,7 @@ def device_view(t, lane, vocab):
             truant_known=bool(port.known[lane, s]), truant_loaf=bool(port.loaf[lane, s]), traced_truant=bool(port.traced[lane, s]),
             truant_skip_flip=bool(port.skip_flip[lane, s]), items_removed_credit=int(ff['items_removed_credit'][lane, s]),
             wish_set_turn=int(ff['wish_set_turn'][lane, s]),
-            hazard_shown=[float(x) for x in port.hazards[lane, s, 0]], hazard_exact=[float(x) for x in port.hazards[lane, s, 1]])
+            hazard_shown=float(port.hazards[lane, s, 0].sum()), hazard_exact=float(port.hazards[lane, s, 1].sum()))
         view[s] = dict(mons=mons, active=active, side=side)
     view['field'] = dict(turn=int(t.turn[lane]), weather=WEATHER.get(int(t.weather[lane]), f'?{int(t.weather[lane])}'),
         spikes=[int(x) for x in t.spikes[lane]], weather_upkeeps=int(ff['weather_upkeeps'][lane]),
@@ -407,7 +410,7 @@ def b2_side(b2, q, own, s, catalog):
             types=type_names(ctx.types.categories[q, s] if bool(ctx.types.overridden[q, s]) and int(ctx.types.encounter[q, s]) == int(mons.encounter[q, s, k])
                              else static_types[int(mons.species[q, s, k])]),
             **_belief(beliefs.hard[q, 1 - s, k], beliefs.pin[q, 1 - s, k], beliefs.pin_active[q, 1 - s, k], beliefs.conflicts[q, 1 - s, k]),
-            turns_active=int(ctx.sleep.age[q, s, k]), sleep_turns=int(ctx.sleep.count[q, s, k]), rest_sleep=int(ctx.sleep.rest[q, s, k]),
+            sleep_turns=int(ctx.sleep.count[q, s, k]), rest_sleep=int(ctx.sleep.rest[q, s, k]),
             sleep_skipped_turns=int(ctx.sleep.skipped[q, s, k]), sleep_cant_pending=int(ctx.sleep.pending[q, s, k]),
             switched_before_attack=tend[0], stayed_and_attacked=tend[1], turns_active_total=tend[2]))
     slot = int(mons.active[q, s]);active = None;a = ctx.active
@@ -416,6 +419,7 @@ def b2_side(b2, q, own, s, catalog):
         if bool(a.recharge[q, s]):names.add('mustrecharge')
         kind, last = int(ctx.moves.last_kind[q, s]), int(ctx.moves.last_id[q, s])
         active = dict(boosts=[int(x) for x in mons.boosts[q, s]], volatiles=sorted(names), sub_present=int('substitute' in names),
+            turns_active=int(ctx.sleep.age[q, s, slot]),
             stall_counter=int(a.stall[q, s]), meanlook_trap=int(a.meanlook[q, s]), item_swapped=int(a.item_swapped[q, s]),
             choice_public=int(a.choice_public[q, s]), choice_locked=int(a.choice_locked[q, s]),
             confusion_turns=int(a.elapsed[q, s, 0]), encore_turns=int(a.elapsed[q, s, 1]), wrap_trap_turns=int(a.elapsed[q, s, 2]),
@@ -438,7 +442,7 @@ def b2_side(b2, q, own, s, catalog):
         truant_known=bool(a.truant_known[q, s]), truant_loaf=bool(a.truant_loaf[q, s]), traced_truant=bool(a.traced_truant[q, s]),
         truant_skip_flip=bool(a.truant_skip_flip[q, s]), items_removed_credit=int(ctx.damage.items_removed[q, s]),
         wish_set_turn=int(ctx.field.wish_set_turn[q, s]),
-        hazard_shown=[float(x) for x in ctx.damage.hazard_suffered[q, s]], hazard_exact=[float(x) for x in ctx.damage.hazard_suffered[own, s]])
+        hazard_shown=float(ctx.damage.hazard_suffered[q, s].sum()), hazard_exact=float(ctx.damage.hazard_suffered[own, s].sum()))
     return dict(mons=out, active=active, side=side)
 
 
@@ -456,11 +460,33 @@ def b2_view(b2, lane, catalog):
             'field': b2_field(b2, 2 * lane, catalog)}
 
 
-def compare_views(device, b2):
-    """Field-by-field differences, keyed side:slot:field (mon), side:active:field, side:field and field."""
+FLOAT_FIELDS = ('last_damage_taken', 'last_damage_dealt', 'damage_exact_taken', 'damage_exact_dealt', 'hazard_shown',
+                'hazard_exact')
+# OPEN BUG (numeric, reported to the coordinator): the device's shown-percent damage fractions divide a float32 by the
+# literal 100 (engine_device_damage_history.observe `.../100`, engine_device_public_port.spikes), which XLA compiles to a
+# multiply by float32(0.01), one ulp below the correctly rounded quotient for most percents (30 -> 0.29999998, B2
+# 0.30000001); B2 (public_damage.apply) divides by its hp_denominator array (100) and rounds correctly. A float field
+# whose two values differ by at most one float32 ulp is recorded in the step's `numeric` list, not as a diff; anything
+# larger is a diff.
+NUMERIC_NOTE = ('OPEN BUG: device shown-percent damage fraction divides by the literal 100 (XLA: multiply by '
+                'float32(0.01)), one float32 ulp from B2\'s division by hp_denominator')
+
+
+def _within_ulp(a, b):
+    if not isinstance(a, float) or not isinstance(b, float):return False
+    x, y = np.float32(a), np.float32(b)
+    return bool(abs(x - y) <= np.spacing(max(abs(x), abs(y))))
+
+
+def compare_views(device, b2, numeric=None):
+    """Field-by-field differences, keyed side:slot:field (mon), side:active:field, side:field and field. A FLOAT_FIELDS
+    pair within one float32 ulp goes to `numeric` (a list), see NUMERIC_NOTE."""
     diffs = []
     def check(key, want, got):
-        if want != got:diffs.append(dict(field=key, b2=want, device=got))
+        if want == got:return
+        if numeric is not None and key.rsplit(':', 1)[-1] in FLOAT_FIELDS and _within_ulp(want, got):
+            numeric.append(dict(field=key, b2=want, device=got));return
+        diffs.append(dict(field=key, b2=want, device=got))
     for s in range(2):
         d, b = device[s], b2[s]
         for k in range(6):

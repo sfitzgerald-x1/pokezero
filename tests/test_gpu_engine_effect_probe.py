@@ -191,6 +191,19 @@ class DevicePureTests(unittest.TestCase):
         self.assertEqual(fields, ['0:1:present', '0:active:volatiles', '0:matchup:0:0', '1:0:shown_item', 'field:turn'])
         self.assertEqual([device.field_kind(f) for f in fields], ['present', 'volatiles', 'matchup', 'shown_item', 'turn'])
 
+    def test_float_fields_within_one_ulp_are_numeric_notes(self):
+        dev, b2 = self.views(), self.views()
+        for v in (dev, b2):v[1]['active']['last_damage_taken'] = 0.30000001192092896
+        dev[1]['active']['last_damage_taken'] = 0.29999998211860657             # float32 30 * 0.01: one ulp low
+        numeric = []
+        self.assertEqual(device.compare_views(dev, b2, numeric), [])
+        self.assertEqual([n['field'] for n in numeric], ['1:active:last_damage_taken'])
+        dev[1]['active']['last_damage_taken'] = 0.29                             # a real difference stays a diff
+        self.assertEqual([d['field'] for d in device.compare_views(dev, b2, [])], ['1:active:last_damage_taken'])
+        dev[1]['active']['last_damage_taken'] = b2[1]['active']['last_damage_taken']
+        dev[1]['active']['boosts'] = [1] + [0] * 6                               # integers never take the ulp class
+        self.assertEqual([d['field'] for d in device.compare_views(dev, b2, [])], ['1:active:boosts'])
+
     def test_allowlist_is_keyed_by_scenario_case_step_field(self):
         diffs = [dict(field='1:0:hp_percent', b2=50, device=51), dict(field='1:0:status', b2='', device='par')]
         allow = {('wrap', 'base', 3, '1:0:hp_percent'): 'reason'}
@@ -206,7 +219,9 @@ class DevicePureTests(unittest.TestCase):
                 self.assertTrue((ROOT / 'gpu_engine/effect_probes' / f'{key[0]}.json').exists())
 
     def test_wire_lines_percent_and_field_tables(self):
-        self.assertEqual(device.wire_lines(['|tier|[Gen 3] Custom Game', '|debug|x', '|turn|1']), [device.TIER_LINE, '|turn|1'])
+        lines = ['|tier|[Gen 3] Custom Game', '|debug|x', '|raw|<div>1 custom rule</div>', '|move|p1a: A|Splash|p1a: A', '|-nothing',
+                 '|turn|1']
+        self.assertEqual(device.wire_lines(lines), [device.TIER_LINE, '|move|p1a: A|Splash|p1a: A', '|turn|1'])
         self.assertEqual([device._percent(n, d) for n, d in ((0, 0), (253, 253), (252, 253), (1, 253), (37, 100))], [0, 100, 99, 1, 37])
         names = [f[0] for f in device.FIELDS]
         self.assertEqual(len(names), len(set(names)))
