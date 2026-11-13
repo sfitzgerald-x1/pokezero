@@ -606,6 +606,8 @@ class LiveTableTests(unittest.TestCase):
         """ce886344 (Merge commit '2bb1c5a9' into scott/v2s-extended-tier): two parents and contained in HEAD, but a local merge, not a
         GitHub pull request merge; it must not pass as an engine_since."""
         self.assertIn('not a GitHub pull request merge', since.problem('ce886344'))
+        # 2bb1c5a9 (#1951's merge): a GitHub pull request merge HEAD contains, but it changed no gpu_engine/ file: not an engine merge
+        self.assertIn('did not change gpu_engine/', since.problem('2bb1c5a9'))
 
     def test_no_placeholder_merge_sha_remains(self):
         """The placeholder merge SHA is gone from the guard module (its tables and its docstring evidence) once the merge exists."""

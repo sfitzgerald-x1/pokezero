@@ -55,8 +55,9 @@ def problem(sha):
     committer, _, subject = meta.stdout.partition('\n')
     if meta.returncode != 0 or committer.strip() != 'noreply@github.com' or not re.match(r'Merge (pull request )?#\d+', subject):
         return f'{sha} is not a GitHub pull request merge (committer {committer.strip()!r}, subject {subject.strip()[:50]!r})'
-    if git('diff', '--quiet', f'{full}^1', full, '--', 'gpu_engine/').returncode != 1:
-        return f'{sha} did not change gpu_engine/ (not an engine merge)'
+    changed = git('diff', '--quiet', f'{full}^1', full, '--', 'gpu_engine/').returncode
+    if changed == 0:return f'{sha} did not change gpu_engine/ (not an engine merge)'
+    if changed != 1:return f'{sha}: git diff failed ({changed})'
     ancestor = git('merge-base', '--is-ancestor', full, 'HEAD')
     if ancestor.returncode == 1:return f'{sha} is not an ancestor of HEAD'
     if ancestor.returncode != 0:return f'{sha}: git merge-base failed ({ancestor.returncode}): {ancestor.stderr.strip()[:200]}'

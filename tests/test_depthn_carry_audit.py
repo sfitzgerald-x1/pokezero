@@ -165,7 +165,8 @@ class EnumerationTests(unittest.TestCase):
 
     @unittest.skipUnless(since.IN_GIT, since.SKIP_REASON)
     def test_every_engine_since_is_a_merge_head_contains(self):
-        """An effect is in-tree only on an engine at or after its merge: every engine_since is an integration merge HEAD contains."""
+        """An effect is in-tree only on an engine at or after its merge: every engine_since is a GitHub pull request merge that changed
+        gpu_engine/ and that HEAD contains (tests/_engine_since.problem)."""
         self.assertFalse(since.shallow(), 'a shallow clone cannot check ancestry')
         for e in A.EFFECTS:
             if e.engine_since:
