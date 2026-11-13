@@ -368,6 +368,12 @@ def reveal_item(c,state,side,item,use,*,original=True):
 
 
 def entry(c,before,after,side,table,use):
+    # Bug K (and J's drag): every install (switch, replacement, drag) precedes this entry, so the install's HP_ACTION
+    # non-proc snapshot is the entrant's pre-Spikes HP. B2 updates the snapshot from the entry's |-damage|X|...|[from]
+    # Spikes (an action-phase line: belief._hp_snapshot_action UPDATE, "Spikes chip on entry"), so the upkeep's
+    # Leftovers and pinch rules read the post-Spikes HP; the entrant's HP drop here is that line.
+    dropped=_mask(use,len(c.trackers.error))&(_get(after,'hp',side)<_get(before,'hp',side))
+    c=negative_hp_line(c,after,side,dropped,source_class=HP_ACTION)
     c=observe(c,after,use)
     if table is None:return c
     ability=_get(before,'ability',side);starts=use&(_get(after,'hp',side)>0)
@@ -755,16 +761,16 @@ def drag(c,before,after,side,table,use):
     # pre-entry incoming private operands already exist in the actual before
     # state; only public handler results are exposed.
     c=depart(c,before,after,side,table,use)
-    # The dragged-out mon's slot drops its stages, as withdraw does for a switch (entry.depart zeroes the engine's):
-    # no stale bench carry, which the fainted-active carry (engine_device_trackers._observe keeps a slot's stages at
-    # hp 0) would show on a drag back into lethal Spikes, and device_public_world_state would copy into a bench foe.
-    # B2's drag arrival resets the seat (public_mon_state.py:111-112).
+    # The dragged-out mon's slot drops its stages, as withdraw does for a switch (entry.depart zeroes the engine's), so
+    # no stale stages sit on a bench slot: device_public_world_state.py:303 copies every public slot's stages into a
+    # materialized foe, bench included.
     c=c._replace(trackers=_write(c.trackers,'boosts',side,_li.take(before.active,_r(before),side),
         j.zeros((len(c.trackers.error),7),j.int32),use))
     # Bug J: install from the pre-entry state, as a switch's install precedes its entry. dragging.drag has already run
     # entry.enter (Spikes) in `after`, so installing from it put the damage history's arrival baseline below the
     # entrant's Spikes damage, which B2 counts in the round's damage taken (last_damage_taken, damage_exact_taken at
-    # TURN). The entry (or observe) below reads `after` and records the Spikes loss, as for a switch-in.
+    # TURN). The entry below reads `after`: its observe records that loss in the damage history, and it updates the
+    # upkeep's non-proc HP snapshot from it (the install's snapshot is pre-Spikes), as for a switch-in.
     incoming=before._replace(active=_li.put(before.active,_r(before),(side,),_li.take(after.active,_r(after),side)))
     c=install(c,incoming,side,use)
     return entry(c,incoming,after,side,table,use) if table is not None else observe(c,after,use)

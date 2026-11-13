@@ -198,6 +198,52 @@ class DeviceNegativeItemsTests(unittest.TestCase):
         h.turn_end(c, s, low, j.zeros(b, bool), upkeep=j.ones(b, bool), leftovers=None)
         self.assertEqual(c.trackers.belief_mask[:, 1, 0, 0].tolist(), [255 & ~0x30 & ~0xc0, 255])
 
+    @staticmethod
+    def entry_table():
+        flag = j.zeros(10, bool)
+        return NS(weather_ability=j.zeros(10, j.int32), intimidate=flag, attack_drop_immune=flag, trace=None,
+                  own_tempo=None, natural_cure=flag)
+
+    def test_a_drag_into_spikes_updates_the_upkeep_snapshot(self):
+        # Review of J: a drag now installs from the pre-entry state, so the install's HP_ACTION snapshot is pre-Spikes;
+        # B2 updates the snapshot from |-damage|...|[from] Spikes (action phase: belief._hp_snapshot_action UPDATE),
+        # so the entry's Spikes loss must reach it before |upkeep (Leftovers below full, pinch at or below 25%).
+        s, tables, leftovers, source = fixture()
+        c = h.initialize(s, tables);yes = j.ones(2, bool)
+        dragged = s._replace(active=s.active.at[:, 1].set(3), hp=s.hp.at[:, 1, 3].set(175))   # 100% -> 88%
+        h.drag(c, s, dragged, 1, self.entry_table(), yes)
+        h.turn_end(c, s, dragged, j.zeros(2, bool), upkeep=yes, leftovers=leftovers)
+        self.assertEqual(c.trackers.belief_mask[:, 1, 1, 0].tolist(), [3, 3])                    # Leftovers ruled out
+        self.assertIn('leftovers', reference(source, ['|-damage|p2a: Exploud|88/100|[from] Spikes']).ruled_out_items)
+        s, tables, leftovers, source = self.nonproc_fixture()
+        c = h.initialize(s, tables)
+        low = s._replace(hp=s.hp.at[:, 1, 3].set(60))                                            # benched at 30%
+        dragged = low._replace(active=low.active.at[:, 1].set(3), hp=low.hp.at[:, 1, 3].set(35))  # 30% -> 18%
+        h.drag(c, low, dragged, 1, self.entry_table(), yes)
+        h.turn_end(c, low, dragged, j.zeros(2, bool), upkeep=yes, leftovers=leftovers)
+        self.assertEqual(c.trackers.belief_mask[:, 1, 1, 0].tolist(), [255 & ~0xcc] * 2)        # Leftovers, Salac out
+
+    def test_a_switch_into_spikes_updates_the_upkeep_snapshot(self):
+        # Bug K (the review's switch-path claim): a switch's install also precedes its entry's Spikes, and entry only
+        # observed, so the snapshot stayed pre-Spikes. The transition order: install (+ withdraw), then entry.
+        s, tables, leftovers, source = fixture();yes = j.ones(2, bool);no = j.zeros(2, bool);zero = j.zeros(2, j.int32)
+        pre = s._replace(active=s.active.at[:, 1].set(3));post = pre._replace(hp=pre.hp.at[:, 1, 3].set(175))
+        c = h.initialize(s, tables)
+        h.install(c, pre, 1, yes);h.withdraw(c, pre, 1, zero, yes);h.entry(c, pre, post, 1, self.entry_table(), yes)
+        h.turn_end(c, pre, post, no, upkeep=yes, leftovers=leftovers)                              # an ordinary switch
+        self.assertEqual(c.trackers.belief_mask[:, 1, 1, 0].tolist(), [3, 3])
+
+    def test_a_replacement_into_spikes_updates_the_next_upkeep_snapshot(self):
+        # Bug K: a replacement after the upkeep (which expires the turn's evidence), then the next turn's upkeep with no
+        # other HP line; B2's snapshot is the Spikes chip (the replacement's switch line closes the residual phase).
+        s, tables, leftovers, source = fixture();yes = j.ones(2, bool);no = j.zeros(2, bool);zero = j.zeros(2, j.int32)
+        pre = s._replace(active=s.active.at[:, 1].set(3));post = pre._replace(hp=pre.hp.at[:, 1, 3].set(175))
+        c = h.initialize(s, tables);h.turn_end(c, s, s, no, upkeep=yes, leftovers=leftovers)
+        h.install(c, pre, 1, yes);h.withdraw(c, pre, 1, zero, yes);h.entry(c, pre, post, 1, self.entry_table(), yes)
+        h.turn_end(c, pre, post, no, upkeep=no, leftovers=leftovers)                               # the replacement step
+        h.turn_end(c, post, post, no, upkeep=yes, leftovers=leftovers)                             # the next upkeep
+        self.assertEqual(c.trackers.belief_mask[:, 1, 1, 0].tolist(), [3, 3])
+
     def test_unavailable_hp_cannot_become_snapshot_or_current_absence_evidence(self):
         s, tables, leftovers, _ = fixture(batch=3)
         c = h.initialize(s, tables)
