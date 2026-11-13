@@ -20,7 +20,7 @@
   },
   {
    "change": "none",
-   "note": "its VOID rule (|difference| > 5%: VOID_FAIRNESS) and tolerance apply unchanged; its coarse 1-2 / 3-4 / 5-6 alive stratification is replaced, for screen-r4a3, by the declared arm fairness rule RULE_R3 (final_fairness_rule)",
+   "note": "its VOID rule (|difference| > 5%: VOID_FAIRNESS) and tolerance apply unchanged; its coarse 1-2 / 3-4 / 5-6 alive stratification is replaced, for screen-r5a, by the declared arm fairness rule RULE_R3 (final_fairness_rule)",
    "path": "evals/depthn-foulplay-dn2w16-amendment-final-fairness-20261108.json",
    "rule": "final-fairness",
    "sha256": "b2fccc253136b2bce3125cc773973c7186a0dff6a5ff8e6825a5618d6268050e"
@@ -48,7 +48,7 @@
   "strata": "FOULPLAY_BUDGET_STRATUM_X_TURN_BAND_X_ALIVE_BANDS"
  },
  "computed_before": "Nothing of screen-r5a: committed before any screen-r5a cell or run directory exists. No cell, latency, fairness, paired, score or outcome statistic of screen-r5a has been computed. Before it, all outcome-blind and never scored: the worker calibrations (RAW only; 12 lanes calibration-r5a MEASURED 0.931 / 1.046, 8 lanes calibration-r5a-l8 MEASURED 0.921 / 1.022); the gate-12 identity certificates (dry run on 3bbadfc8; binding cert12-r3 on 41faf832 IDENTICAL; the GC-remedy checks gc-r1 and gc-r2, below); the gate-2 ability-guard replay and the PR-d share replays (offline, on r4a3's records); and six pre-flights of 48 games each on fresh seed bands disjoint from the eval cells (battle seeds 2103402300 + 50k for k = 0..5, 50 seeds each, Foul Play seeds 100,000 above): pf1 (3 per GPU, 12 lanes: 9 timeouts of 998, SWITCH_TO_2_PER_GPU), pf2 (2 per GPU, 8 lanes: 22 of 1,063, ESCALATE; both from about 13 s full Python GC stalls over about 66M retained jaxpr objects), pf3 (diagnostic, instrumented, 2 per GPU, 8 lanes: 0 of 996), pf4 (the GC remedy, 3 per GPU, 12 lanes: 14 of 1,024, SWITCH_TO_2_PER_GPU, co-located time-slicing), pf5 (the remedy, 2 per GPU, 8 lanes: 4 of 943, KEEP but gate FAIL on first-1000 0.42% > 0.3%, escalated), pf6 (the remedy, 1 per GPU on 8 GPUs, 8 lanes: 1 of 1,059, PASS, KEEP: the declared pre-flight). Of screen-r4a3: its full 2,000-pair result was known when r5a was decided (BAR_MET; conservative lower bound +0.050; independent recomputation AGREE).",
- "decided_by": "the lead (search, V2, CUDA): screen-r5a runs screen-r4a3's configuration (br_fp on pi_FP red3-full on view b gated by NOISE_GATED_K2, DN2W16, the 3.0 s deadline, reserve 0.15) on the post-fidelity server tree 41faf832 (the integration tip at the tree-fix: #1946's merge of main with #1929, the constructor walls): the engine's A1, A2, R, M1 and M2 + R1; the Knock Off carry (#1935); the effect guard at that tree (RETIRED: destinybond, hyperbeam, curse, aromatherapy, refresh, lovelykiss, charm, spore, sleeppowder, hypnosis, gigadrain, mirrorcoat, counter, bonemerang, trick, knockoff, wrap, yawn, perishsong; still GUARDED: transform and superpower (tier A), sacredfire, psychoboost and facade (tier C): White Herb + C-lite merged after the tree-fix and is not in r5a); the ability guard (--ability-guard: WG every arm, PINCH and CONTACT choice-only, PINCH_ROOT third); the same adopted rules as screen-r4a3 (unknown cells, harm mirror, both bounds, final fairness under RULE_R3) and the pre-registered extension to 2,000; a flag that fails RULE_R3 stops the run and goes to the lead, with no amendment mid-run. Placement: 1 server per GPU on 8 GPUs (4 + 2 + 2 servers on three nodes behind the one proxy), 8 worker lanes. The declared placement rule ended at 2 per GPU; the lead approved 1 per GPU on 8 GPUs (under the 16-GPU limit, the lead's authority) because pf4 and pf5 showed residual timeouts from co-located time-slicing (two servers pricing on one GPU), the GC stall having been removed. The server environment (the GC remedy) is stated in server_environment below: the declaration has no key for it.",
+ "decided_by": "the lead (search, V2, CUDA): screen-r5a runs screen-r4a3's configuration (br_fp on pi_FP red3-full on view b gated by NOISE_GATED_K2, DN2W16, the 3.0 s deadline, reserve 0.15) on the post-fidelity server tree 41faf832 (the integration tip at the tree-fix: #1946's merge of main with #1929, the constructor walls): the engine's A1, A2, R, M1 and M2 + R1; the Knock Off carry (#1935); the effect guard at that tree (RETIRED: destinybond, hyperbeam, curse, aromatherapy, refresh, lovelykiss, charm, spore, sleeppowder, hypnosis, gigadrain, mirrorcoat, counter, bonemerang, trick, knockoff, wrap, yawn, perishsong; still GUARDED: transform and superpower (tier A), sacredfire, psychoboost and facade (tier C): White Herb + C-lite merged after the tree-fix and is not in r5a); the ability guard (--ability-guard: WG every arm, PINCH and CONTACT choice-only, PINCH_ROOT third); the same adopted rules as screen-r4a3 (unknown cells, harm mirror, both bounds, final fairness under RULE_R3) and the pre-registered extension to 2,000; a flag that fails RULE_R3 stops the run and goes to the lead, with no amendment mid-run. Placement: 1 server per GPU on 8 GPUs (4 + 2 + 2 servers on three nodes behind the one proxy), 8 worker lanes. The pre-stated placement rule ended at 2 per GPU; the lead approved 1 per GPU on 8 GPUs (under the 16-GPU limit, the lead's authority) because pf4 and pf5 showed residual timeouts from co-located time-slicing (two servers pricing on one GPU), the GC stall having been removed. The server environment (the GC remedy) is stated in server_environment below: the declaration has no key for it.",
  "declaration": "evals/depthn-foulplay-dn2w16-declaration-r5a-20261113.json",
  "declaration_sha256": "0b995d6e864ec430c9ebe8dc9694dd0b70683a6293024ab0e488eafe928ae96e",
  "extension": {
@@ -57,16 +57,16 @@
   "sha256": "8a708ebbc6a4206dafc38b2d729656e25da6cf914931b5424353f441f6e9ed00"
  },
  "final_fairness_rule": "RULE_R3",
- "made_at_utc": "2026-11-13T09:25:58Z",
+ "made_at_utc": "2026-11-13T09:37:09Z",
  "not_adopted": [
   {
    "path": "evals/depthn-foulplay-dn2w16-amendment-screen-r2-alive-bands-20261109.json",
-   "reason": "screen-r2-specific (bound to screen-r2's declaration, run and flag 2); screen-r4a3 declares RULE_R3 (as screen-r3 did), which already stratifies by exact alive bands",
+   "reason": "screen-r2-specific (bound to screen-r2's declaration, run and flag 2); screen-r5a declares RULE_R3 (as screen-r3 and screen-r4a3 did), which already stratifies by exact alive bands",
    "sha256": "fa7c32a51db058526e436a925ef2156b52ab9debd54881fae6829febcfaced53"
   }
  ],
  "run": {
-  "dispatch_note": "the dispatch tree is the declaration commit 21b0a8f3 (the server tree 41faf832 plus the declaration JSON alone, as depthn_live_panel.server_tree_check requires); this record and the declaration note are pre-registered on the rules branch scott/v2e-r5a-rules in a commit pushed before dispatch; the verdict and the extension run as screen-r4a3's did (the dispatch commit's git checkout first, then the rules commit)",
+  "dispatch_note": "the dispatch tree is the declaration commit 21b0a8f3 (the server tree 41faf832 plus the declaration JSON alone, as depthn_live_panel.server_tree_check requires); this record and the declaration note are pre-registered on the rules branch scott/v2e-r5a-rules in a commit pushed before dispatch; the verdict and the extension run as screen-r4a3's did (the dispatch commit's git checkout first, then the rules commit: the verdict from a rules-commit checkout with --tree-commit 21b0a8f3)",
   "run_directory": "/out/screen-r5a",
   "server_tree_commit": "41faf832fd168841ce73913c5d8831376d635d95",
   "tree_commit": "21b0a8f38eba3d61853c7aba57881a9742e2114c"
@@ -87,13 +87,13 @@
   },
   "identity": {
    "gc_r1": {
-    "compare_sha256": "902e2e4f37bf02f93090d08e052357263d3d31812b37fe0c6bc065ec085e76d4",
-    "note": "ran the earlier sitecustomize 69aa15c5... (logging only: the O(n) freeze count in the callback), which does not affect results; against the binding cert12-r3 (no remedy, its own fresh cache) every priced decision differed by at most |dQ| 1.76e-7 with 0 actions, statuses or refusals changed: separate autotuning on different GPUs, proven by gc_r2",
+    "compare_json_sha256": "902e2e4f37bf02f93090d08e052357263d3d31812b37fe0c6bc065ec085e76d4",
+    "note": "compare.json holds only aggregate counts, so identical outcomes give identical bytes (as cert12-r3, gc-r1 and gc-r2 do); ran the earlier sitecustomize 69aa15c5... (logging only: the O(n) freeze count in the callback), which does not affect results; against the binding cert12-r3 (no remedy, its own fresh cache) every priced decision differed by at most |dQ| 1.76e-7 with 0 actions, statuses or refusals changed: separate autotuning on different GPUs, proven by gc_r2",
     "result": "IDENTICAL",
     "what": "the binding harness and 15 cells, ON vs OFF, the remedy active in both (fresh cache)"
    },
    "gc_r2": {
-    "compare_sha256": "902e2e4f37bf02f93090d08e052357263d3d31812b37fe0c6bc065ec085e76d4",
+    "compare_json_sha256": "902e2e4f37bf02f93090d08e052357263d3d31812b37fe0c6bc065ec085e76d4",
     "result": "IDENTICAL; against cert12-r3 (no remedy): 0 differences ON vs ON and OFF vs OFF on all 495 priced decisions, the same 31 refused",
     "what": "the same, the fixed sitecustomize, its cache a copy of cert12-r3's"
    },

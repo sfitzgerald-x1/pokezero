@@ -1,6 +1,6 @@
 # screen-r5a: screen-r4a3's configuration on the post-fidelity tree (declaration notes)
 
-**Pre-registered panel declaration:** `depthn-foulplay-dn2w16-declaration-r5a-20261113.json`, sha256 `0b995d6e864ec430c9ebe8dc9694dd0b70683a6293024ab0e488eafe928ae96e`. It's built from screen-r4a3's committed declaration (`e2e39feb…`) by `build_declaration_r5a.py`, which replaces only the binding fields. **Adoption record:** `depthn-foulplay-dn2w16-amendment-screen-r5a-adoption-20261113.json`, sha256 `ceffcf858ef6b5b81ba5f48065b32abf6f52e3c6ea773e63fb3752550ec23494`.
+**Pre-registered panel declaration:** `depthn-foulplay-dn2w16-declaration-r5a-20261113.json`, sha256 `0b995d6e864ec430c9ebe8dc9694dd0b70683a6293024ab0e488eafe928ae96e`. It's built from screen-r4a3's committed declaration (`e2e39feb…`) by r5a's bind script (kept with the run's records, outside the repo), which replaces only the binding fields. **Adoption record:** `depthn-foulplay-dn2w16-amendment-screen-r5a-adoption-20261113.json`, sha256 `499dd65a275815d96dc676bd2abac229756b84457b7d1103933330d53d90dd14`.
 
 ## What screen-r5a answers
 
@@ -35,7 +35,7 @@ The decision rules, the harm mirror and RULE_R3 stay exactly as in r4a3.
    - PINCH: choice only, PINCH_ROOT third;
    - CONTACT: choice only.
 
-   It adds about 0.93 pp of guarded decisions on the gate-2 replay; the per-family table is in the declaration draft.
+   It adds about 0.93 pp of guarded decisions on the gate-2 replay (offline, on r4a3's records).
 4. **Re-measured on the new tree and worker:**
    - the pre-flight (`preflight-r5a-pf6`, 1 server per GPU on 8 GPUs, 8 lanes);
    - the worker calibration and move walls;
@@ -43,10 +43,10 @@ The decision rules, the harm mirror and RULE_R3 stay exactly as in r4a3.
    - `bench_p95_wall_seconds`, from the pre-flight's client wall;
    - `provenance.engine_tables.digest` (see the erratum).
 5. **Placement and lanes:** **1 server per GPU on 8 GPUs, 8 worker lanes** (`server_processes_per_gpu` 1, `worker_lanes` 8). How it came to this:
-   - The declared rule started at 3 per GPU on 4 GPUs, 12 lanes, with the 0.5% switch to 2 per GPU.
+   - The pre-stated rule started at 3 per GPU on 4 GPUs, 12 lanes, with the 0.5% switch to 2 per GPU.
    - pf1 and pf2 failed on GC stalls, which the remedy below removed.
    - pf4 (3 per GPU, 12 lanes) and pf5 (2 per GPU, 8 lanes) still timed out on co-located time-slicing: two servers pricing on one GPU.
-   - So the lead approved 1 server per GPU on 8 GPUs (under the 16-GPU limit), beyond the declared rule's 2-per-GPU floor. pf6 passed on it.
+   - So the lead approved 1 server per GPU on 8 GPUs (under the 16-GPU limit), beyond the pre-stated rule's 2-per-GPU floor. pf6 passed on it.
    - Calibration, the move walls, the binding pre-flight and the screen run at the declared lane count and shape.
    - A reduced lane count only lengthens the screen; no rule or statistic changes.
    - Servers may span nodes behind the one proxy (the lead, 2026-11-12, with the cluster nearly full), but never on the worker's node or the Foul Play collection node.
@@ -64,9 +64,16 @@ The declaration has no key for this, so this note and the adoption record's `ser
 **The remedy:** the servers run with `sitecustomize.py` (sha256 `3232ac8d465e294a74463c416841945b0425df54bd573f8e149e39dc541c9d4c`) via `serve-r5a-gc.sh` (sha256 `be65b80c27887cd13d3634743afb55eed827240f237b1c938a12a3b95297b9ca`). The tree is unchanged.
 - **Before any traffic,** each server runs `gc.collect()` and then `gc.freeze()`.
 - **Every 30 s,** it repeats collect-then-freeze, so full collections scan only recent objects.
-- **In pf6,** the longest post-warmup gen-2 collection was 19.6 ms on every server.
+- **In pf6,** the longest post-warmup gen-2 collection was at most 19.6 ms across all 8 servers.
 - The diagnostic instrumentation of pf3 is off.
 - The real fix (the pricer keeping its traced jaxprs) is a tree change for after r5a.
+
+## Declaration checks from the dispatch checkout
+
+From a clean checkout of the dispatch commit `21b0a8f3`, with the declared pre-flight's own `preflight.json`:
+- **`depthn_live_panel.validate`:** passes.
+- **`check_preflight`:** passes against that checkout's `tree_identity`: clean tree, code digest `19af1a04…`. That's the same digest the calibration and move walls record.
+- **`server_tree_check`:** server `41faf832` against eval `21b0a8f3` is ok. Exactly one file differs, this declaration.
 
 ## Identity certificate (gate 12)
 
@@ -75,7 +82,7 @@ The declaration has no key for this, so this note and the adoption record's `ser
   - 526 decisions in each arm, 495 priced in both (31 refused against the dry run's 125, before #1929).
   - Q tables bitwise equal on all 495, 0 mismatches, 0 OFF trips.
   - Per kind: retired_legal 195, WG 142, PINCH 246, CONTACT 259.
-  - The ON guard tripped on 51 decisions (21 ability, 29 with effect reasons); action differences 0.
+  - The ON guard tripped on 51 decisions: 29 with effect reasons and 21 with the ability guard (5 of them both), and 6 by the union reply arm alone. Action differences 0.
 - **With the GC remedy active** (below):
   - **gc-r1**, ON against OFF on a fresh cache: IDENTICAL.
   - **gc-r2**, the same on a copy of the binding run's cache: IDENTICAL. Against the binding run (no remedy) it gave 0 differences on all 495 priced decisions, in both arms, with the same refused set.
@@ -123,11 +130,11 @@ As r4a3. The adoption record adopts the same four rule files (unknown cells, har
 
 ## Erratum: `provenance.engine_tables.digest` in earlier declarations
 
-The digest `e349be50d83625ebd8222cfaa6f6f61d9424647625275211c45e85c0359c4882` first appeared in screen-r1's declaration (server tree 77235041) and was carried unchanged through screen-r2, r3, r4b, r4a2 and r4a3. It does not reproduce on any declared tree.
+The digest `e349be50d83625ebd8222cfaa6f6f61d9424647625275211c45e85c0359c4882` first appeared in screen-r1's declaration (server tree 77235041) and was carried unchanged through screen-r2, r3, r4b, r4a, r4a2 and r4a3. It does not reproduce on any declared tree.
 
 **The field was descriptive only:** `depthn_live_panel.validate` checks its format, and nothing compares it with the tree. So no past verdict depended on it, and the past archived declarations stay as they are.
 
-**From r5a on,** the field is a binding value computed by a stated method. `engine_digest_r5a.py` compiles the live executor's tables exactly as `scripts/depthn_live_server.build` does (its `load_inputs`, then `constructor_worlds.engine_tables(metadata, catalog)`, then `constructor_worlds.engine_tables_digest`), on the constructor metadata `fad2db5a…`. Per tree, by that method:
+**From r5a on,** the field is a binding value computed by a stated method. r5a's digest script (outside the repo, with the run's records) compiles the live executor's tables exactly as `scripts/depthn_live_server.build` does (its `load_inputs`, then `constructor_worlds.engine_tables(metadata, catalog)`, then `constructor_worlds.engine_tables_digest`), on the constructor metadata `fad2db5a…`. Per tree, by that method:
 
 | Tree | Digest |
 |---|---|
@@ -139,6 +146,6 @@ The digest `e349be50d83625ebd8222cfaa6f6f61d9424647625275211c45e85c0359c4882` fi
 
 ## Launch timing and what was known
 
-r4a3's full 2,000-pair result was known when r5a was decided: BAR_MET, conservative +0.050, recomputation AGREE.
+r4a3's full 2,000-pair result was known when r5a was decided: BAR_MET, conservative lower bound +0.050, recomputation AGREE.
 
 Nothing of r5a is computed before this record. The pre-flights, calibrations and identity checks above are outcome-blind and never scored.
