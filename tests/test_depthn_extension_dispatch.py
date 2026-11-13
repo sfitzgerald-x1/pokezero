@@ -149,6 +149,16 @@ class CommittedBindingTests(unittest.TestCase):
         self.assertEqual(json.loads(raw)['run']['tree_commit'], '594a0ee2bd11ddd3a0e14b8a86a96f9a8d24a082')
         self.assertEqual(json.loads(raw)['run']['server_tree_commit'], '92d8af8cb51b6c889fd359193275b3f63b05490b')
 
+    def test_screen_r5a_s_committed_binding_is_pinned_and_binds_its_run(self):
+        path = E.TREE/'evals/depthn-foulplay-dn2w16-amendment-screen-r5a-adoption-20261113.json'
+        raw = path.read_bytes();digest = hashlib.sha256(raw).hexdigest()
+        self.assertEqual(digest, E.EXTENSION_BINDINGS['screen_r5a']);self.assertEqual(digest, V.RUN_BINDINGS['screen_r5a'])
+        self.assertEqual(V.RUN_FINAL_RULES[digest], 'RULE_R3')
+        self.assertEqual(E.bound_run((json.loads(raw), digest), E.committed()),
+                         ('0b995d6e864ec430c9ebe8dc9694dd0b70683a6293024ab0e488eafe928ae96e', '/out/screen-r5a', 'RULE_R3'))
+        self.assertEqual(json.loads(raw)['run']['tree_commit'], '21b0a8f38eba3d61853c7aba57881a9742e2114c')
+        self.assertEqual(json.loads(raw)['run']['server_tree_commit'], '41faf832fd168841ce73913c5d8831376d635d95')
+
 
 class BoundExtensionTests(unittest.TestCase):
     """--run-binding: a run that pre-registered the extension through its adoption record (screen-r4a's route): the committed rule

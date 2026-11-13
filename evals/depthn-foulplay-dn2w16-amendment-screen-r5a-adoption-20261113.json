@@ -1,0 +1,119 @@
+{
+ "adopts": [
+  {
+   "change": "none",
+   "path": "evals/depthn-foulplay-dn2w16-amendment-unknown-cells-20261108.json",
+   "rule": "unknown-cells",
+   "sha256": "c4ff30a25a573f90fdd02957b40fb8307d8b87b56dfbfe60d85ea662b18e8b3b"
+  },
+  {
+   "change": "none",
+   "path": "evals/depthn-foulplay-dn2w16-amendment-harm-mirror-20261108.json",
+   "rule": "harm-mirror",
+   "sha256": "dbce9a54223969a213a3e584fd2e01bbe259ebad7530678fbba7cd38ecd9539f"
+  },
+  {
+   "change": "none",
+   "path": "evals/depthn-foulplay-dn2w16-amendment-both-bounds-20261108.json",
+   "rule": "both-bounds",
+   "sha256": "98e6120f30565c0b40d423504aa0d07a2929b2207551a5c901adb7579d361e13"
+  },
+  {
+   "change": "none",
+   "note": "its VOID rule (|difference| > 5%: VOID_FAIRNESS) and tolerance apply unchanged; its coarse 1-2 / 3-4 / 5-6 alive stratification is replaced, for screen-r4a3, by the declared arm fairness rule RULE_R3 (final_fairness_rule)",
+   "path": "evals/depthn-foulplay-dn2w16-amendment-final-fairness-20261108.json",
+   "rule": "final-fairness",
+   "sha256": "b2fccc253136b2bce3125cc773973c7186a0dff6a5ff8e6825a5618d6268050e"
+  }
+ ],
+ "application": "scripts/depthn_screen_amended_verdict.py --run-binding <this file> <its sha256> applies the four adopted rule files (each pinned by sha256 in the script, their rule text unchanged) to screen-r5a's official readout and result files. This record supplies the run they bind to (run directory, declaration sha256, readout tree commit) in place of the four files' screen-r1 run fields, and declares final_fairness_rule RULE_R3: the final-fairness amendment's VOID rule (|difference| > 5%: VOID_FAIRNESS) applies to the whole-run gate under the declared arm fairness rule RULE_R3 (scripts/depthn_fairness_final.py final --rule r3; pinned in RUN_FINAL_RULES), not to the coarse or exact alive-band gates. No run amendment is adopted or accepted. The verdict refuses to run (no verdict, not VOID) when the RULE_R3 gate counts any COMPLETE cell whose owner capture file is missing. The extension: scripts/depthn_extension_dispatch.py --run-binding <this file> <its sha256> dispatches the 2,000-cell extension when that verdict is exactly CONTINUE_TO_2000 with no amended breakage, gated as for screen-r1 but on this record's run fields and the RULE_R3 final gate (the extension entry below adopts the extension file unchanged; pinned in EXTENSION_BINDINGS).",
+ "arm_fairness": {
+  "alive_bands": [
+   "1",
+   "2",
+   "3-4",
+   "5-6"
+  ],
+  "checkpoint_pairs": 50,
+  "combine": "POOLED_COUNT_WEIGHTED_RATIO_OF_MEANS",
+  "coverage_difference_max": 0.05,
+  "metric": "ITERATIONS_PER_BUDGET_SECOND",
+  "min_cell_moves": 120,
+  "min_moves_per_arm": 1000,
+  "min_pairs": 50,
+  "min_support_moves": 120,
+  "ratio_tolerance": 0.05,
+  "rearm_margin": 0.025,
+  "reference": "RAW",
+  "strata": "FOULPLAY_BUDGET_STRATUM_X_TURN_BAND_X_ALIVE_BANDS"
+ },
+ "computed_before": "Nothing of screen-r5a: committed before any screen-r5a cell or run directory exists. No cell, latency, fairness, paired, score or outcome statistic of screen-r5a has been computed. Before it, all outcome-blind and never scored: the worker calibrations (RAW only; 12 lanes calibration-r5a MEASURED 0.931 / 1.046, 8 lanes calibration-r5a-l8 MEASURED 0.921 / 1.022); the gate-12 identity certificates (dry run on 3bbadfc8; binding cert12-r3 on 41faf832 IDENTICAL; the GC-remedy checks gc-r1 and gc-r2, below); the gate-2 ability-guard replay and the PR-d share replays (offline, on r4a3's records); and six pre-flights of 48 games each on fresh seed bands disjoint from the eval cells (battle seeds 2103402300 + 50k for k = 0..5, 50 seeds each, Foul Play seeds 100,000 above): pf1 (3 per GPU, 12 lanes: 9 timeouts of 998, SWITCH_TO_2_PER_GPU), pf2 (2 per GPU, 8 lanes: 22 of 1,063, ESCALATE; both from about 13 s full Python GC stalls over about 66M retained jaxpr objects), pf3 (diagnostic, instrumented, 2 per GPU, 8 lanes: 0 of 996), pf4 (the GC remedy, 3 per GPU, 12 lanes: 14 of 1,024, SWITCH_TO_2_PER_GPU, co-located time-slicing), pf5 (the remedy, 2 per GPU, 8 lanes: 4 of 943, KEEP but gate FAIL on first-1000 0.42% > 0.3%, escalated), pf6 (the remedy, 1 per GPU on 8 GPUs, 8 lanes: 1 of 1,059, PASS, KEEP: the declared pre-flight). Of screen-r4a3: its full 2,000-pair result was known when r5a was decided (BAR_MET; conservative lower bound +0.050; independent recomputation AGREE).",
+ "decided_by": "the lead (search, V2, CUDA): screen-r5a runs screen-r4a3's configuration (br_fp on pi_FP red3-full on view b gated by NOISE_GATED_K2, DN2W16, the 3.0 s deadline, reserve 0.15) on the post-fidelity server tree 41faf832 (the integration tip at the tree-fix: #1946's merge of main with #1929, the constructor walls): the engine's A1, A2, R, M1 and M2 + R1; the Knock Off carry (#1935); the effect guard at that tree (RETIRED: destinybond, hyperbeam, curse, aromatherapy, refresh, lovelykiss, charm, spore, sleeppowder, hypnosis, gigadrain, mirrorcoat, counter, bonemerang, trick, knockoff, wrap, yawn, perishsong; still GUARDED: transform and superpower (tier A), sacredfire, psychoboost and facade (tier C): White Herb + C-lite merged after the tree-fix and is not in r5a); the ability guard (--ability-guard: WG every arm, PINCH and CONTACT choice-only, PINCH_ROOT third); the same adopted rules as screen-r4a3 (unknown cells, harm mirror, both bounds, final fairness under RULE_R3) and the pre-registered extension to 2,000; a flag that fails RULE_R3 stops the run and goes to the lead, with no amendment mid-run. Placement: 1 server per GPU on 8 GPUs (4 + 2 + 2 servers on three nodes behind the one proxy), 8 worker lanes. The declared placement rule ended at 2 per GPU; the lead approved 1 per GPU on 8 GPUs (under the 16-GPU limit, the lead's authority) because pf4 and pf5 showed residual timeouts from co-located time-slicing (two servers pricing on one GPU), the GC stall having been removed. The server environment (the GC remedy) is stated in server_environment below: the declaration has no key for it.",
+ "declaration": "evals/depthn-foulplay-dn2w16-declaration-r5a-20261113.json",
+ "declaration_sha256": "0b995d6e864ec430c9ebe8dc9694dd0b70683a6293024ab0e488eafe928ae96e",
+ "extension": {
+  "change": "none",
+  "path": "evals/depthn-foulplay-dn2w16-amendment-extension-20261108.json",
+  "sha256": "8a708ebbc6a4206dafc38b2d729656e25da6cf914931b5424353f441f6e9ed00"
+ },
+ "final_fairness_rule": "RULE_R3",
+ "made_at_utc": "2026-11-13T09:25:58Z",
+ "not_adopted": [
+  {
+   "path": "evals/depthn-foulplay-dn2w16-amendment-screen-r2-alive-bands-20261109.json",
+   "reason": "screen-r2-specific (bound to screen-r2's declaration, run and flag 2); screen-r4a3 declares RULE_R3 (as screen-r3 did), which already stratifies by exact alive bands",
+   "sha256": "fa7c32a51db058526e436a925ef2156b52ab9debd54881fae6829febcfaced53"
+  }
+ ],
+ "run": {
+  "dispatch_note": "the dispatch tree is the declaration commit 21b0a8f3 (the server tree 41faf832 plus the declaration JSON alone, as depthn_live_panel.server_tree_check requires); this record and the declaration note are pre-registered on the rules branch scott/v2e-r5a-rules in a commit pushed before dispatch; the verdict and the extension run as screen-r4a3's did (the dispatch commit's git checkout first, then the rules commit)",
+  "run_directory": "/out/screen-r5a",
+  "server_tree_commit": "41faf832fd168841ce73913c5d8831376d635d95",
+  "tree_commit": "21b0a8f38eba3d61853c7aba57881a9742e2114c"
+ },
+ "schema": "depthn-foulplay-panel.amendment-adoption.v1",
+ "server_environment": {
+  "gc_remedy": {
+   "evidence": {
+    "pf4_post_warmup_gen2_max_seconds": 0.0141,
+    "pf5_post_warmup_gen2_max_seconds": 0.0095,
+    "pf6_post_warmup_gen2_max_seconds": 0.0196
+   },
+   "name": "sitecustomize.py",
+   "period_seconds": 30,
+   "sha256": "3232ac8d465e294a74463c416841945b0425df54bd573f8e149e39dc541c9d4c",
+   "what": "on SIGRTMIN+1 (sent by the serve script before any traffic): gc.collect() then gc.freeze() (reason warmup); then every 30 s a background thread repeats collect-then-freeze (reason periodic), so full collections never rescan the about 66M warmup jaxpr objects the server keeps; a light gc.callbacks log of gen-2 collections; gc.get_freeze_count() (O(n)) only once, at the warmup freeze",
+   "why": "pf1/pf2: full Python gen-2 collections over the retained warmup heap took about 13.3 s with the GIL held (the request loop stopped), every ~100-200 requests; each cost 4-5 decisions to timeouts (the r4a3 screen had the same at about 10 s, about every 5,000 requests); the real fix (the pricer keeping traced jaxprs) is a tree change for after r5a"
+  },
+  "identity": {
+   "gc_r1": {
+    "compare_sha256": "902e2e4f37bf02f93090d08e052357263d3d31812b37fe0c6bc065ec085e76d4",
+    "note": "ran the earlier sitecustomize 69aa15c5... (logging only: the O(n) freeze count in the callback), which does not affect results; against the binding cert12-r3 (no remedy, its own fresh cache) every priced decision differed by at most |dQ| 1.76e-7 with 0 actions, statuses or refusals changed: separate autotuning on different GPUs, proven by gc_r2",
+    "result": "IDENTICAL",
+    "what": "the binding harness and 15 cells, ON vs OFF, the remedy active in both (fresh cache)"
+   },
+   "gc_r2": {
+    "compare_sha256": "902e2e4f37bf02f93090d08e052357263d3d31812b37fe0c6bc065ec085e76d4",
+    "result": "IDENTICAL; against cert12-r3 (no remedy): 0 differences ON vs ON and OFF vs OFF on all 495 priced decisions, the same 31 refused",
+    "what": "the same, the fixed sitecustomize, its cache a copy of cert12-r3's"
+   },
+   "scope": "The gate-12 claim is bitwise identity within one cache. ON and OFF share the cache by design. Cross-run differences at autotuning level are outside that claim and do not touch the certificate."
+  },
+  "instrumentation": "off: pf3's diagnostic instrumentation (faulthandler watchdog, compile debug logs, heap census, sampler) is not used in pf6 or the screen",
+  "note": "stated here because the declaration has no key for it; the screen's servers run exactly this",
+  "placement": {
+   "gpus": 8,
+   "mps": "off on every server node (mps_off_r5a.py, MPS_OFF PASS)",
+   "nodes": "4 + 2 + 2 servers on three nodes behind one proxy",
+   "pf6_routing": "every server used (95-186 requests each), at most 1 battle and 1 request in flight on any server; proxy hop p50 8.4 ms local, 9.2 ms cross-node (p99 12.8 / 13.5 ms)",
+   "servers": 8,
+   "servers_per_gpu": 1,
+   "worker_lanes": 8
+  },
+  "serve_script": {
+   "name": "serve-r5a-gc.sh",
+   "sha256": "be65b80c27887cd13d3634743afb55eed827240f237b1c938a12a3b95297b9ca",
+   "what": "serve-r5a.sh plus the GC remedy on PYTHONPATH (R5A_GC), a freeze step after every server's READY check and before the proxy starts (it waits for every server's FROZEN reason=warmup line, or stops), and 1 server per GPU (memory fraction 0.45)"
+  }
+ }
+}
