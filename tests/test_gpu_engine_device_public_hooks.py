@@ -173,6 +173,33 @@ class PublicHooksTests(unittest.TestCase):
   passed=held._replace(active=held.active.at[:,1].set(3))
   c3=h.install(c3,passed,1,yes);c3=h.baton_copy(c3,passed,1,j.zeros(2,j.int32),yes);c3=h.withdraw(c3,passed,1,j.zeros(2,j.int32),yes)
   c3=h.turn_end(c3,held,passed,yes);self.assertEqual(bit(c3,passed,1),[False,False])
+ def test_flashfire_bag_bit_follows_the_engine_bit_while_its_holder_lives(self):
+  # The device harness's OPEN BUG E: no hook wrote B2's flashfire entry (-start|X|ability: Flash Fire). derived_volatiles
+  # (run by public_move_state and turn_end) now writes flashfire = the engine's absorption.FLASH_FIRE bit and hp>0.
+  from gpu_engine import baton
+  from gpu_engine.absorption import FLASH_FIRE
+  F=h.VOLATILE_NAMES.index('flashfire');yes=j.ones(2,bool);zero=j.zeros(2,j.int32)
+  def bit(c,st,side):
+   r=np.arange(2);p=np.asarray(st.active)[:,side];slot=np.clip(np.asarray(c.trackers.physical_to_public)[r,side,p],0,5)
+   return np.asarray(c.trackers.public_volatiles)[r,side,slot,F].tolist()
+  lit=lambda st,lanes:st._replace(volatile=st.volatile.at[:,1,0].set(j.where(j.asarray(lanes),j.uint32(FLASH_FIRE),j.uint32(0))))
+  s=state();c=h.initialize(s,tables())
+  fired=lit(s,[True,False])                                                         # lane 0's Fire move is absorbed
+  c=h.turn_end(c,s,fired,yes);self.assertEqual(bit(c,fired,1),[True,False]);self.assertEqual(bit(c,fired,0),[False,False])
+  again=lit(fired,[True,True])                                                      # lane 0: a second Fire move (-immune)
+  c=h.turn_end(c,fired,again,yes);self.assertEqual(bit(c,again,1),[True,True])
+  # the engine's faint leaves the bit; B2's FAINT clear empties the bag, and a later read of the fainted holder agrees
+  fainted=again._replace(hp=again.hp.at[0,1,0].set(0))
+  c=h.turn_end(c,again,fainted,yes);self.assertEqual(bit(c,fainted,1),[False,True])
+  c=h.turn_end(c,fainted,fainted,yes);self.assertEqual(bit(c,fainted,1),[False,True])
+  # Baton Pass: flashfire is noCopy; baton.copy_to_recipient carries LEECH_SEED only and baton_copy omits the bag entry
+  c2=h.initialize(s,tables());c2=h.turn_end(c2,s,again,yes)
+  passed=baton.copy_to_recipient(again,1,j.full(2,3,j.int32),eligible=yes)
+  self.assertEqual((np.asarray(passed.volatile)[:,1,3]&FLASH_FIRE).tolist(),[0,0])
+  passed=passed._replace(active=passed.active.at[:,1].set(3),volatile=passed.volatile.at[:,1,0].set(0))  # depart
+  c2=h.install(c2,passed,1,yes);c2=h.baton_copy(c2,passed,1,zero,yes);c2=h.withdraw(c2,passed,1,zero,yes)
+  self.assertEqual(bit(c2,passed,1),[False,False])
+  c2=h.turn_end(c2,again,passed,yes);self.assertEqual(bit(c2,passed,1),[False,False])
 
  def test_default_physical_ast_exact_after_only_optin_erasure(self):
   class Erase(ast.NodeTransformer):

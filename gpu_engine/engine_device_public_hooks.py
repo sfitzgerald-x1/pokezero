@@ -9,6 +9,7 @@ import jax
 import jax.numpy as j
 from . import engine_device_trackers as tr
 from . import engine_device_negative_items as negative_items
+from .absorption import FLASH_FIRE
 from .public_active import NAMES as VOLATILE_NAMES
 from . import engine_device_damage_history as damage_history
 from . import engine_device_public_port as port
@@ -799,7 +800,8 @@ PERISH_BAG=('perish0','perish1','perish2','perish3')
 
 
 def derived_volatiles(c,state,use):
-    """Fidelity M2 (design 2.5): the actives' perish, yawn, partiallytrapped and encore bag bits, from the actual state.
+    """Fidelity M2 (design 2.5): the actives' perish, yawn, partiallytrapped, encore and flashfire bag bits, from the actual
+    state.
 
     B2 (public_active.project_line) folds -start|X|perishN (PERISH_START: perishN replaces the other perish bits;
     perish3 [silent] at Perish Song, then perishN each residual), -start|X|move: Yawn / -end|X|move: Yawn|[silent],
@@ -814,7 +816,15 @@ def derived_volatiles(c,state,use):
     subOrder 14), and an Encore's silent ends (switch-out, faint) clear the bag through withdraw and the faint clear.
     The engine's encore_counter starts with the -start and reaches 0 exactly at the -end, so encore = counter>0 is B2's
     bag at every boundary. public_move_state's write at the Encore move stays (it agrees); this is what clears it at
-    the residual, where transition.py's Encore block calls no hook."""
+    the residual, where transition.py's Encore block calls no hook.
+
+    Flash Fire (the device harness's OPEN BUG E): Showdown's Flash Fire onTryHit prints -start|X|ability: Flash Fire
+    when it adds the flashfire volatile, and B2 folds it into the bag's flashfire entry; a Fire move into a holder that
+    already has it adds nothing (-immune, no new -start), and the volatile ends silently: noCopy, so a Baton Pass drops
+    it (B2's carry set has no flashfire, baton_copy's neither), a switch-out (withdraw) and a faint (B2's FAINT clear).
+    The engine bit absorption.FLASH_FIRE in state.volatile is set by absorption.try_hit exactly then, kept through a
+    second activation, cleared by a departure and not copied by baton.copy_to_recipient (LEECH_SEED only); a faint
+    does not clear it, so flashfire = bit & hp>0 is B2's bag at every boundary."""
     if not hasattr(state,'perish_counter') or c.trackers.public_volatiles is None:return c
     use=_mask(use,len(c.trackers.error));r=_r(state)
     for side in range(2):
@@ -825,6 +835,8 @@ def derived_volatiles(c,state,use):
         bag=bag.at[:,VOLATILE_NAMES.index('yawn')].set(_get(state,'yawn_counter',side)>0)
         bag=bag.at[:,VOLATILE_NAMES.index('partiallytrapped')].set(_get(state,'partial_trap_counter',side)>0)
         bag=bag.at[:,VOLATILE_NAMES.index('encore')].set(_get(state,'encore_counter',side)>0)
+        bag=bag.at[:,VOLATILE_NAMES.index('flashfire')].set(
+            ((_get(state,'volatile',side)&j.uint32(FLASH_FIRE))!=0)&(_get(state,'hp',side)>0))
         c=c._replace(trackers=_write(c.trackers,'public_volatiles',side,p,bag,use))
     return c
 
