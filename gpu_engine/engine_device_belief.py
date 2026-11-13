@@ -47,6 +47,10 @@ class Tables(NamedTuple):
     public_foe_targeted: object
     public_pressure: object
     standing_pins_enabled: object  # exact resolved checkpoint provenance bit
+    # [4] engine item IDs of Lum Berry, Salac, Petaya and Liechi Berry for the upkeep non-proc rules
+    # (engine_device_negative_items.upkeep); an ID absent from the vocabulary is 0, and a pinch berry absent there takes
+    # a present one's ID (a repeated name is a no-op in visible_belief.exclude). None: no Lum/pinch rules (fixtures).
+    nonproc_items: object = None
 
 
 def compile_tables(metadata, catalog):
@@ -89,9 +93,17 @@ def compile_tables(metadata, catalog):
         np.asarray([bool(i) and normalize_id(n) != 'struggle' for i, n in enumerate(v['moves'])], bool),
         np.asarray(feature.move_tables.foe_targeted)[engine_moves],
         np.asarray([bool(i) and normalize_id(n) == 'pressure' for i, n in enumerate(v['abilities'])], bool),
-        np.asarray(catalog.masks.investment_belief_narrowing,bool))
+        np.asarray(catalog.masks.investment_belief_narrowing,bool), nonproc_item_ids(v['items']))
     # Preserve primitive dtype (especially uint32 bitmasks and compact spreads).
     return Tables(*(j.asarray(a, j.float32 if n in floating else None) for n, a in zip(Tables._fields, arrays)))
+
+
+def nonproc_item_ids(items):
+    """[Lum, Salac, Petaya, Liechi] engine item IDs (0 when absent); a missing pinch berry repeats a present one."""
+    found = {normalize_id(n): i for i, n in enumerate(items) if i}
+    lum = found.get('lumberry', 0); pinch = [found.get(n, 0) for n in ('salacberry', 'petayaberry', 'liechiberry')]
+    present = [x for x in pinch if x]
+    return np.asarray([lum] + [x or (present[0] if present else 0) for x in pinch], np.int32)
 
 
 def _take(table, ids):return table[j.clip(ids, 0, table.shape[0] - 1)]

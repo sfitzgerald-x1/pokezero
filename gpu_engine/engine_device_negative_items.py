@@ -48,21 +48,30 @@ def hp_line(trackers, state, side, use, *, source_class):
 
 
 def upkeep(trackers, belief_tables, leftovers, use, *, current_state=None):
-    """Apply only the original Leftovers non-proc rule, then expire evidence.
+    """The original upkeep non-proc rules, Leftovers, Lum and the pinch berries, then expire evidence.
 
-    ``leftovers`` is the existing startup item-namespace vector, not a current
-    holder lookup. Positive item reveals and mutations suppress this conclusion.
-    Hard-mask inconsistency/fallback remains the original projector's concern.
+    B2's sweep (gpu_engine/public_item_nonproc.py sweep, its three triggers at :171-172) and the champion's Python
+    belief (src/pokezero/belief.py _sweep_end_of_turn_non_procs: 'Status persisted without an instant Lum cure' and
+    'Action-phase HP at or below 25% with no pinch-berry activation') run, at |upkeep, for each side's living active whose item is unrevealed and
+    unmutated, in this order: Leftovers (a known pre-slot HP snapshot below full and no Leftovers heal), Lum Berry (any
+    status: Showdown data/items.ts lumberry eats at onAfterSetStatus and onUpdate while statused, so a holder cannot
+    keep a status to the upkeep) and Salac/Petaya/Liechi as one rule (the snapshot at or below a quarter and no [eat]:
+    data/mods/gen3/items.ts eats them at the residual 10/4 when hp <= maxhp/4; an [eat] reveals the item, which the
+    eligibility already excludes). Each rule refreshes once when it rules out a new name (visible_belief.exclude).
+
+    ``leftovers`` is the existing startup item-namespace vector, not a current holder lookup; the Lum and pinch IDs
+    come from belief_tables.nonproc_items (engine_device_belief.compile_tables; tables without it skip those rules).
+    Positive item reveals and mutations suppress these conclusions. Hard-mask inconsistency/fallback remains the
+    original projector's concern.
     """
     carry = trackers.negative_items
     if carry is None:
         return trackers
     use = j.broadcast_to(j.asarray(use, bool), trackers.error.shape)
-    if belief_tables is not None and leftovers is not None:
-        if leftovers.shape != (belief_tables.item_mask.shape[1],) or leftovers.dtype != j.bool_:
+    nonproc = None if belief_tables is None else getattr(belief_tables, 'nonproc_items', None)
+    if belief_tables is not None and (leftovers is not None or nonproc is not None):
+        if leftovers is not None and (leftovers.shape != (belief_tables.item_mask.shape[1],) or leftovers.dtype != j.bool_):
             raise ValueError('Leftovers and belief item namespaces must match')
-        # This vector names the one canonical item, not a private holder.
-        item=j.argmax(leftovers).astype(j.int32)
         r = j.arange(len(trackers.error))
         for side in range(2):
             slot = _li.take(trackers.active_slot,r,side); at = j.clip(slot, 0, 5)
@@ -87,11 +96,21 @@ def upkeep(trackers, belief_tables, leftovers, use, *, current_state=None):
                 valid &= (maximum > 0) & (hp >= 0) & (hp <= maximum)
             valid &= (species > 0) & (species < belief_tables.item_mask.shape[0])
             valid &= (_li.take(trackers.hp_percent,r,side,at) > 0) & ~_li.take(trackers.fainted,r,side,at)
-            valid &= _li.take(carry.known,r,side,at) & (_li.take(carry.percent,r,side,at) < 100)
             valid &= (_li.take(trackers.shown_item,r,side,at) == 0) & ~changed
-            valid &= j.sum(leftovers.astype(j.int32))==1
-            trackers=visible_belief.exclude(trackers,belief_tables,side,_li.take(trackers.active_physical,r,side),
-                j.full(len(use),item,j.int32),valid,kind='item')
+            known = _li.take(carry.known,r,side,at); percent = _li.take(carry.percent,r,side,at)
+            physical = _li.take(trackers.active_physical,r,side); b = len(use)
+            if leftovers is not None:
+                # This vector names the one canonical item, not a private holder.
+                item = j.argmax(leftovers).astype(j.int32)
+                trackers = visible_belief.exclude(trackers,belief_tables,side,physical,j.full(b,item,j.int32),
+                    valid & known & (percent < 100) & (j.sum(leftovers.astype(j.int32)) == 1),kind='item')
+            if nonproc is not None:
+                ids = j.asarray(nonproc, j.int32)
+                statused = _li.take(trackers.status,r,side,at) != 0
+                trackers = visible_belief.exclude(trackers,belief_tables,side,physical,j.full(b,ids[0],j.int32),
+                    valid & statused & (ids[0] > 0),kind='item')
+                trackers = visible_belief.exclude(trackers,belief_tables,side,physical,j.broadcast_to(ids[1:],(b,3)),
+                    valid & known & (percent <= 25) & (ids[1] > 0),kind='item')
     # No new HP publication next turn means no new evidence, even if HP stayed low.
     carry = carry._replace(known=j.where(use[:, None, None], False, carry.known))
     return trackers._replace(negative_items=carry)

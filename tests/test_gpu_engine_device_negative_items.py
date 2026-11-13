@@ -135,6 +135,59 @@ class DeviceNegativeItemsTests(unittest.TestCase):
         self.assertEqual(c.trackers.belief_mask[:, 1, 0, 0].tolist(), [255, 255])
         # transition.py is certified against CURRENT_TRANSITION (full AST plus mutations) by terminal_closeout and seismic_toss_components.
 
+    def nonproc_fixture(self, b=2):
+        # Bug I: the device ran only the Leftovers rule; B2's sweep (public_item_nonproc) and the Python belief also rule
+        # out Lum Berry for a status kept to |upkeep and Salac/Petaya/Liechi for a pre-slot snapshot at or below 25%.
+        from gpu_engine import engine_device_belief as belief
+        names = ('Choice Band', 'Leftovers', 'Lum Berry', 'Salac Berry')       # two variants each, bits 0-1, 2-3, 4-5, 6-7
+        variants = tuple(Gen3RandbatVariant(str(i), 'fixture', 'Exploud', 'Fixture', 80,
+            ('Tackle', 'Protect', 'Rest', 'Sleep Talk'), 'Soundproof', names[i // 2]) for i in range(8))
+        source = Gen3RandbatSource(RandbatSourceMetadata('gen3randombattle', 3, None, None, None, 'fixture'),
+            {'exploud': Gen3RandbatSpeciesUniverse('Exploud', 80, variants)})
+        shape = (b, 2, 6)
+        s = empty_state(b)._replace(species=j.ones(shape, j.int32), hp=j.full(shape, 200, j.int32),
+            max_hp=j.full(shape, 200, j.int32), done=j.zeros(b, bool))
+        pool = j.asarray([[0, 0], [255, 0]], j.uint32)
+        item = j.zeros((2, 5, 2), j.uint32).at[:, 0].set(pool)                 # item 0: absent evidence (the pool)
+        for k in range(4):item = item.at[1, k + 1, 0].set(j.uint32(3 << (2 * k)))
+        ids = belief.nonproc_item_ids(['', *names])
+        self.assertEqual(ids.tolist(), [3, 4, 4, 4])                              # Petaya, Liechi absent: Salac repeats
+        self.assertEqual(belief.nonproc_item_ids(['', 'Leftovers']).tolist(), [0, 0, 0, 0])
+        tables = NS(species_initial_mask=pool, item_mask=item, ability_mask=j.broadcast_to(pool[:, None, :], (2, 2, 2)),
+            nonproc_items=j.asarray(ids))
+        return s, tables, j.asarray([False, False, True, False, False]), source
+
+    def test_lum_upkeep_rule_follows_b2_and_the_python_belief(self):
+        s, tables, leftovers, source = self.nonproc_fixture();b = 2
+        # Lane 0's active keeps a burn to the upkeep, lane 1's is healthy; no HP line, so no snapshot rule runs.
+        c = h.initialize(s, tables)
+        burned = s._replace(status=s.status.at[0, 1, 0].set(2))
+        h.observe(c, burned, j.ones(b, bool))
+        h.turn_end(c, s, burned, j.zeros(b, bool), upkeep=j.ones(b, bool), leftovers=leftovers)
+        self.assertEqual(c.trackers.belief_mask[:, 1, 0, 0].tolist(), [255 & ~0x30, 255])
+        self.assertIn('lumberry', reference(source, ['|-status|p2a: Exploud|brn']).ruled_out_items)
+        # ...not for a removed item, a fainted active, or tables without the IDs (the Leftovers-only fixtures above).
+        for setup in ('removed', 'faint', 'no_ids'):
+            c = h.initialize(s, tables if setup != 'no_ids' else NS(**{k: v for k, v in vars(tables).items() if k != 'nonproc_items'}))
+            after = burned._replace(hp=burned.hp.at[0, 1, 0].set(0)) if setup == 'faint' else burned
+            if setup == 'removed':
+                c.trackers = h._write(c.trackers, 'item_removed', 1, burned.active[:, 1], j.ones(b, bool), j.ones(b, bool))
+            h.observe(c, after, j.ones(b, bool))
+            h.turn_end(c, s, after, j.zeros(b, bool), upkeep=j.ones(b, bool), leftovers=leftovers)
+            self.assertEqual(c.trackers.belief_mask[0, 1, 0, 0].tolist() & 0x30, 0x30, setup)
+
+    def test_pinch_berry_upkeep_rule_follows_b2_and_the_python_belief(self):
+        s, tables, leftovers, source = self.nonproc_fixture();b = 2
+        # A pre-slot snapshot at 25% (lane 0) rules out Salac (and Leftovers); at 26% (lane 1) only Leftovers.
+        c = h.initialize(s, tables)
+        low = s._replace(hp=s.hp.at[0, 1, 0].set(50).at[1, 1, 0].set(52))
+        h.negative_hp_line(c, low, 1, j.ones(b, bool), source_class=n.HP_ACTION)
+        h.turn_end(c, s, low, j.zeros(b, bool), upkeep=j.ones(b, bool), leftovers=leftovers)
+        self.assertEqual(c.trackers.belief_mask[:, 1, 0, 0].tolist(), [255 & ~0xcc, 255 & ~0x0c])
+        for percent, salac in ((25, True), (26, False)):
+            ruled = set(reference(source, [f'|-damage|p2a: Exploud|{percent}/100']).ruled_out_items)
+            self.assertIn('leftovers', ruled);self.assertEqual('salacberry' in ruled, salac);self.assertNotIn('lumberry', ruled)
+
     def test_unavailable_hp_cannot_become_snapshot_or_current_absence_evidence(self):
         s, tables, leftovers, _ = fixture(batch=3)
         c = h.initialize(s, tables)
