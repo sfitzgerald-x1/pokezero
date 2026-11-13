@@ -339,7 +339,13 @@ def from_b2(adapter, request, source, metadata, *, address, defer_sleep=False, p
     own_species=normalize_id(v['species'][int(own['species'][own_slot])])
     allowed = {'', 'leechseed', 'ingrain', 'trapped'}
     if fresh.get('p'+str(owner+1))==own_species:
-        allowed.add('substitute');own['substitute_hp'][own_slot]=own['max_hp'][own_slot]//4
+        allowed.add('substitute');hp_slot=own_slot
+        origin=(protocol_facts.get('substitute_origins') or {}).get('p'+str(owner+1))
+        if origin is not None:
+            names=[normalize_id(v['species'][int(x)]) for x in own['species']]
+            if names.count(origin)!=1:raise Refusal('PUBLIC_SUBSTITUTE_ORIGIN_UNAVAILABLE')
+            hp_slot=names.index(origin)
+        own['substitute_hp'][own_slot]=own['max_hp'][hp_slot]//4
     own_vols = tuple(hooks.VOLATILE_NAMES[k] for k in np.flatnonzero(vol[0,owner,pub_slot]))
     if any(name not in allowed for name in own_vols):
         raise Refusal('OWN_VOLATILE_OR_LATENT_CLOCK_UNAVAILABLE', ','.join(own_vols))
