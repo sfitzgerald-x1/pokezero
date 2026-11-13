@@ -539,6 +539,30 @@ def diagnostic_inputs(public,detached,*,lines,metadata):
     return tuple(checks)
 
 
+# Showdown protocol lines that carry no game state: wall clock (|t:| is the turn's unix time; |inactive| / |inactiveoff| the
+# timer) and room transport (chat, join, leave, rename, raw HTML). Two runs of the same game differ only in these; r4a3's
+# owning wire carries |t:| alone (25,823 of its lines), the rest are listed defensively.
+NON_GAME_LINE_TAGS=frozenset(('t:','c','c:','chat','j','J','join','l','L','leave','n','N','name','raw','html','uhtml',
+    'uhtmlchange','inactive','inactiveoff'))
+
+
+def game_lines_sha256(lines):
+    """sha256 of the owner's protocol lines without the non-game ones (NON_GAME_LINE_TAGS), in the owner_lines_sha256 format:
+    the same game state hashes the same in every run, whatever the wall clock said. It seeds the drawn worlds;
+    owner_lines_sha256 stays the exact-bytes record of the root."""
+    keep=(x for x in lines if not (x.startswith('|') and x.split('|',2)[1] in NON_GAME_LINE_TAGS))
+    return hashlib.sha256(''.join(x+'\n'for x in keep).encode()).hexdigest()
+
+
+def world_seeds(root,detached,game_lines,seed,index):
+    """World `index`'s (world_seed, kernel_seed): sha256 over the run's seed, the battle, the game content of the owner's lines
+    (game_lines = game_lines_sha256(lines), never the exact bytes: |t:| would make the same state draw different worlds in
+    each run), the decision address and the index. world_seed drives the start sampler, kernel_seed everything after it."""
+    identity=(SCHEMA,seed,root.context.battle_id,game_lines,detached.address.stream,detached.address.frame,detached.address.owner,index)
+    digest=hashlib.sha256(json.dumps(identity,separators=(',',':')).encode()).digest()
+    return int.from_bytes(digest[:8],'big'),int.from_bytes(digest[8:12],'big')
+
+
 def sample(root,detached,*,lines,catalog,source,metadata,config,battle_id,seed,count):
     """Same public posterior draws and their prefix at all ladder budgets."""
     from . import v5_public_world
@@ -547,11 +571,9 @@ def sample(root,detached,*,lines,catalog,source,metadata,config,battle_id,seed,c
         raise live.Refusal('SAME_PUBLIC_ROOT_SOURCE_BINDING_REQUIRED')
     detached=_carried_root(root,detached,lines,metadata)
     inputs=ProtocolInputs(detached,tuple(lines),catalog,metadata,source)
-    result=[];seeds=[];diagnostics=[]
+    result=[];seeds=[];diagnostics=[];game=game_lines_sha256(lines)
     for index in range(count):
-        identity=(SCHEMA,seed,root.context.battle_id,root.owner_lines_sha256,detached.address.stream,detached.address.frame,detached.address.owner,index)
-        digest=hashlib.sha256(json.dumps(identity,separators=(',',':')).encode()).digest()
-        world_seed=int.from_bytes(digest[:8],'big');kernel_seed=int.from_bytes(digest[8:12],'big');seeds.append(world_seed)
+        world_seed,kernel_seed=world_seeds(root,detached,game,seed,index);seeds.append(world_seed)
         try:
             start,reason=_gen3_randbat_belief_start_override_result(context=root.context,set_source=source.original,
                 rng=random.Random(world_seed),team_size=6,canonicalize_revealed_variants=True)
