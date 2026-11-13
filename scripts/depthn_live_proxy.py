@@ -66,6 +66,7 @@ is forwarded); when no backend accepts, the client's connection is closed, which
 """
 import argparse
 import asyncio
+import errno
 from collections import Counter, OrderedDict
 from fractions import Fraction
 import json
@@ -80,6 +81,8 @@ MAX_PACKET = 16 * 1024 * 1024
 # A worker's end of one battle (pokezero.depthn_live_actor.Client.end, sent after the game's result is recorded): answered here,
 # never forwarded. The battle stops counting toward its GPU's load at once instead of --sticky-idle seconds after its last decision.
 BATTLE_END_SCHEMA = 'depthn-live.battle-end.v1'
+# Connection setup errors on the proxy's own side (out of descriptors, local ports or buffers): no verdict on the backend.
+LOCAL_ERRNOS = frozenset(getattr(errno, name) for name in ('EMFILE', 'ENFILE', 'EADDRNOTAVAIL', 'ENOBUFS', 'ENOMEM') if hasattr(errno, name))
 
 
 def address(text):
@@ -117,7 +120,7 @@ class Pool:
         self.gpu, self.active, self.served, self.refused, self.failed_at = {}, {}, {}, {}, {}
         self.backends = [];self._in = frozenset();self.down = {};self.on_event = on_event   # down: backend -> when it went down
         self.quarantined = set();self.strict = strict
-        self.unserved = 0;self.no_request = 0;self.cooldown = cooldown
+        self.unserved = 0;self.no_request = 0;self.local_errors = 0;self.cooldown = cooldown
         self.homes = OrderedDict();self.sticky_idle = sticky_idle;self.sticky_cap = sticky_cap   # (battle_id, owner) -> [backend, last seen]
         self.placed_at = {};self.ended = 0;self.ended_unknown = 0   # GPU -> its latest new-battle placement; battle end frames
         self._turn = 0
@@ -220,7 +223,7 @@ class Pool:
         live = self.live(time.monotonic())
         return dict(backends=[dict(backend=f'{h}:{p}', active=self.active[(h, p)], served=self.served[(h, p)], refused=self.refused[(h, p)],
             cooling=self.cooling((h, p)), down=(h, p) in self.down, live_battles=live[(h, p)], gpu=self.gpu[(h, p)]) for h, p in self.backends],
-            unserved=self.unserved,
+            unserved=self.unserved, local_errors=self.local_errors,
             no_request=self.no_request, battle_ends=self.ended, battle_ends_unknown=self.ended_unknown,
             battles=len(self.homes), live_battles_per_gpu=dict(sorted(self.per_gpu(live).items())))
 
@@ -287,8 +290,11 @@ async def handle(pool, client_reader, client_writer, *, connect_timeout=.25, fir
         pool.active[backend] += 1   # reserved before connecting, so simultaneous clients spread out
         try:
             upstream = await asyncio.wait_for(asyncio.open_connection(*backend), connect_timeout);chosen = backend;break
-        except (OSError, asyncio.TimeoutError):
-            pool.active[backend] -= 1;pool.fail(backend)
+        except (OSError, asyncio.TimeoutError) as error:
+            pool.active[backend] -= 1
+            # the proxy's own resources (descriptors, local ports, buffers) say nothing about the backend: counted, never marked down
+            if isinstance(error, OSError) and error.errno in LOCAL_ERRNOS:pool.local_errors += 1
+            else:pool.fail(backend)
         except BaseException:
             pool.active[backend] -= 1;raise
     if upstream is None:
@@ -437,7 +443,7 @@ async def run(listen, backends, *, wait_ready_seconds=0., report_seconds=60., lo
         if rises[b] < health_rise:return
         try:ok = await admitted(b)
         except ProbeFailed as error:
-            probe_misses[b] += 1;probe_after[b] = loop.time() + min(60., health_interval * 2 ** probe_misses[b]);rises[b] = 0
+            probe_misses[b] += 1;probe_after[b] = loop.time() + min(60., health_interval * 2 ** min(probe_misses[b], 16));rises[b] = 0
             pool.note('PROBE_FAILED', b, reason=str(error)[:500]);return
         rises[b] = 0;probe_misses[b] = 0;probe_after.pop(b, None)
         if ok and b in pool.down and b in pool._in:pool.restore(b)
@@ -472,6 +478,7 @@ async def run(listen, backends, *, wait_ready_seconds=0., report_seconds=60., lo
                     except ProbeFailed as error:raise ValueError(f'{b[0]}:{b[1]}: {error}') from None
                     if not ok:raise ValueError(f'{b[0]}:{b[1]} failed the identity probe')
                 readmitted = [b for b in joining if b in pool._in];added, removed = pool.set_backends(new, new_gpus)
+                for b in joining + removed:rises.pop(b, None);probe_misses.pop(b, None);probe_after.pop(b, None)   # no stale health state
                 for b in readmitted:pool.quarantined.discard(b);pool.restore(b)
             except (OSError, ValueError, argparse.ArgumentTypeError) as error:
                 log(json.dumps(dict(event='RELOAD_REJECTED', time=time.time(), reason=str(error)[:500])));return False

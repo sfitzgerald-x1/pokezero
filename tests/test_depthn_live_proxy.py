@@ -711,9 +711,10 @@ class HealthTests(unittest.TestCase):
             return [(e['event'], e.get('state')) for e in self.events(lines)]
         boom = {}
         real = P.asyncio.wait_for
-        async def flaky(aw, timeout):   # the first health connection to x raises something no handler expects
-            if boom.pop('port', None) is not None:
-                aw.close();raise RuntimeError('boom')
+        async def flaky(aw, timeout):   # the first connection setup to x after detection (a health check's) raises something unexpected
+            frame = getattr(aw, 'cr_frame', None)
+            if 'port' in boom and frame is not None and frame.f_locals.get('port') == boom['port']:
+                boom.pop('port');aw.close();raise RuntimeError('boom')
             return await real(aw, timeout)
         with mock.patch.object(P.asyncio, 'wait_for', flaky):
             events = self.harness(scenario, ['x', 'a'], hung=['x'], connect_timeout=.1, health_interval=.05)
@@ -727,6 +728,37 @@ class HealthTests(unittest.TestCase):
             return out, setups[ports['d1']], setups[ports['d2']]
         out, d1_setups, d2_setups = self.harness(scenario, ['d1', 'd2', 'a'], hung=['d1', 'd2'], connect_timeout=.2, health_interval=60.)
         self.assertEqual((out, d1_setups, d2_setups), ('a', 1, 0))   # one timeout (d1), not two
+
+    def test_a_strict_pool_with_every_backend_down_makes_no_connection_attempt(self):
+        seen = []
+        async def scenario(port, pool, ports, hanging, lines, rows, setups, path):
+            for n in ('a', 'b'):pool.fail(('127.0.0.1', ports[n]))
+            before = (setups[ports['a']], setups[ports['b']]);out = await request(port, dict(battle_id='x'))
+            return out, before, (setups[ports['a']], setups[ports['b']]), pool.unserved
+        out, before, after, unserved = self.harness(scenario, ['a', 'b'], handlers=dict(a=identity_backend('a', [], seen), b=identity_backend('b', [], seen)),
+            probe_requests=IdentityTests.REQUESTS, expect=IdentityTests.EXPECT, probe_timeout=5., health_interval=60.)
+        self.assertEqual((out, after, unserved), (None, before, 1))   # unserved at once: no backend unprobed since it went down is tried
+
+    def test_a_setup_error_on_the_proxys_own_side_marks_no_backend_down(self):
+        import errno
+        real = asyncio.open_connection
+        async def exhausted(host, port, *a, **k):
+            if port == target['port']:raise OSError(errno.EMFILE, 'Too many open files')
+            return await real(host, port, *a, **k)
+        target = {}
+        async def main():
+            served = [];a = await framed_backend('a', 0., served);b = await framed_backend('b', 0., served);box = {}
+            target['port'] = a.sockets[0].getsockname()[1]
+            backends = [('127.0.0.1', target['port']), ('127.0.0.1', b.sockets[0].getsockname()[1])]
+            task = asyncio.create_task(P.run(('127.0.0.1', 0), backends, log=lambda line: None, report_seconds=0, health_interval=60.,
+                started=lambda server, pool: box.update(port=server.sockets[0].getsockname()[1], pool=pool)))
+            while 'port' not in box:await asyncio.sleep(.01)
+            try:
+                with mock.patch.object(P.asyncio, 'open_connection', exhausted):out = await request(box['port'], dict(battle_id='x'))
+                return out['backend'], dict(box['pool'].down), box['pool'].local_errors, box['pool'].snapshot()['local_errors']
+            finally:task.cancel();a.close();b.close()
+        backend, down, local, snap = asyncio.run(main())
+        self.assertEqual((backend, down, local, snap), ('b', {}, 1, 1))
 
     def test_cli_takes_backend_or_a_backends_file(self):
         with tempfile.TemporaryDirectory() as d:
