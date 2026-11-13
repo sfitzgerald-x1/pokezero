@@ -1,5 +1,14 @@
-"""The per-move probe's pure parts, the committed scenarios, and its Showdown side."""
+"""The per-move probe's pure parts, the committed scenarios, its Showdown side, and its device mode.
+
+DeviceModeTests runs a representative subset of the committed scenarios with --device's comparison: each case through
+step_with_public as well, its engine state equal to step_with_chance's, and the device public carry equal to B2's fold
+of the case's Showdown lines (gpu_engine/effect_probe_device.py). The full set runs as a pod script. Light by design:
+step_with_public's CPU compile peaks far above the light tier at any optimization level, so the subset runs it eagerly
+(Engine.enable_device(eager=True): the same program op by op, no step compile) on one lane; step_with_chance and B2's
+fold stay jitted.
+"""
 import copy
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -11,9 +20,15 @@ import numpy as np
 
 from _showdown_root import requires_showdown, showdown_root
 from gpu_engine import effect_probe as probe
+from gpu_engine import effect_probe_device as device
 
 ROOT = Path(__file__).resolve().parents[1]
 NODE = os.environ.get('NODE') or shutil.which('node')
+HAS_JAX = bool(importlib.util.find_spec('jax'))
+POOL = os.environ.get('POKEZERO_GPU_TEAM_POOL')
+# Device mode's light subset (eager steps are slow): a White Herb received by Trick with a negative stage, the WH10
+# catcher's site (Trick's -item lines after the herb's -enditem / -clearnegativeboost, B2's broken pairing).
+DEVICE_SUBSET = ('wh_trick_receive_negative',)
 SCENARIOS = sorted((ROOT / 'gpu_engine/effect_probes').glob('*.json'))
 VOLATILES = dict(confusion=None, choicelock=None, encore=None, perishsong=None, yawn=None, partiallytrapped=None,
                  mustrecharge=None, destinybond=False, substitute=None, names=[])
@@ -154,6 +169,52 @@ class PureTests(unittest.TestCase):
                 self.assertLessEqual(len(probe.enumerate_cases(data)), 16)
 
 
+def side_view(**mon):
+    base = dict(present=True, species='raichu', level=83, fainted=False, hp_percent=100, status='', moves=[('thunderbolt', 1)])
+    base.update(mon)
+    return dict(mons=[base] + [None] * 5, active=dict(boosts=[0] * 7, volatiles=[]),
+                side=dict(active_slot=0, moved=False, matchup={(0, 0): [0, 0]}))
+
+
+class DevicePureTests(unittest.TestCase):
+    def views(self):
+        return {0: side_view(), 1: side_view(species='snorlax'), 'field': dict(turn=1, weather='')}
+
+    def test_compare_views_keys_and_presence(self):
+        self.assertEqual(device.compare_views(self.views(), self.views()), [])
+        dev, b2 = self.views(), self.views()
+        dev[1]['mons'][0]['shown_item'] = b2[1]['mons'][0]['shown_item'] = 'whiteherb'
+        dev[1]['mons'][0]['shown_item'] = 'leftovers';dev[0]['active']['volatiles'] = ['confusion']
+        dev[0]['side']['matchup'][(0, 0)] = [1, 0];dev['field']['turn'] = 2
+        dev[0]['mons'][1] = dict(dev[0]['mons'][0])                           # a slot only the device shows
+        fields = [d['field'] for d in device.compare_views(dev, b2)]
+        self.assertEqual(fields, ['0:1:present', '0:active:volatiles', '0:matchup:0:0', '1:0:shown_item', 'field:turn'])
+        self.assertEqual([device.field_kind(f) for f in fields], ['present', 'volatiles', 'matchup', 'shown_item', 'turn'])
+
+    def test_allowlist_is_keyed_by_scenario_case_step_field(self):
+        diffs = [dict(field='1:0:hp_percent', b2=50, device=51), dict(field='1:0:status', b2='', device='par')]
+        allow = {('wrap', 'base', 3, '1:0:hp_percent'): 'reason'}
+        used = set()
+        open_, allowed = device.apply_allowlist('wrap', 'base', 3, diffs, used, allow)
+        self.assertEqual([d['field'] for d in open_], ['1:0:status']);self.assertEqual(allowed[0]['reason'], 'reason')
+        self.assertEqual(used, set(allow))
+        for key in (('wrap', 'base', 2), ('wrap', 'other', 3), ('yawn', 'base', 3)):
+            self.assertEqual(len(device.apply_allowlist(*key, diffs, set(), allow)[0]), 2)
+        for key, reason in device.ALLOWLIST.items():
+            with self.subTest(key=key):
+                self.assertEqual(len(key), 4);self.assertTrue(reason.strip())
+                self.assertTrue((ROOT / 'gpu_engine/effect_probes' / f'{key[0]}.json').exists())
+
+    def test_wire_lines_percent_and_field_tables(self):
+        self.assertEqual(device.wire_lines(['|tier|[Gen 3] Custom Game', '|debug|x', '|turn|1']), [device.TIER_LINE, '|turn|1'])
+        self.assertEqual([device._percent(n, d) for n, d in ((0, 0), (253, 253), (252, 253), (1, 253), (37, 100))], [0, 100, 99, 1, 37])
+        names = [f[0] for f in device.FIELDS]
+        self.assertEqual(len(names), len(set(names)))
+        self.assertTrue({'shown_item', 'item_removed', 'item_mutated', 'item_original', 'boosts'} <= set(names))
+        left = {n.strip() for key in device.LEFT_OUT for n in key.split(',')}
+        self.assertFalse(left & set(names))
+
+
 @requires_showdown()
 @unittest.skipUnless(NODE, 'requires node')
 class ShowdownSideTests(unittest.TestCase):
@@ -185,6 +246,55 @@ class ShowdownSideTests(unittest.TestCase):
             self.assertIn('SCRIPT_MISSING_CHOICE', bad['results'][0]['error']);self.assertIsNone(bad['results'][1])
         finally:
             sd.close()
+
+    def test_device_channels_are_each_players_stream_with_shared_percent(self):
+        sd = probe.Showdown(NODE, showdown_root())
+        try:
+            data = probe.load_scenario(ROOT / 'gpu_engine/effect_probes/thunderbolt.json')
+            prepared = sd.ask(cmd='prepare', teams=data['teams'])
+            started = sd.ask(cmd='start', format=data['format'], seed=data['seed'], cases=1, sets=prepared['sets'], device=True)
+            p1, p2 = started['channels'][0]
+            self.assertIn('|turn|1', p1);self.assertIn('|turn|1', p2)
+            self.assertFalse(any(line.startswith('|split|') for line in p1 + p2))
+            mine = [x for x in p1 if x.startswith('|switch|p1a:')];theirs = [x for x in p2 if x.startswith('|switch|p1a:')]
+            self.assertNotEqual(mine[0].rsplit('|', 1)[1], '100/100')            # p1's own exact HP (the split's secret)
+            self.assertTrue(theirs[0].endswith('|100/100'))                     # HP Percentage Mod's shared percent
+            tape, _ = probe.step_inputs(data, dict(assignment=dict(par=0, full_para=99)), 0)
+            reply = sd.ask(cmd='step', tapes=[dict(schema=probe.TAPE_SCHEMA, nonce='t:0', **tape)], choices=[['move 1', 'move 1']],
+                           live=[True])
+            p1, p2 = reply['results'][0]['channels']
+            self.assertIn('|turn|2', p1);self.assertNotIn('|turn|1', p1)          # only the step's new lines
+            self.assertTrue(any(x.startswith('|-damage|p2a:') and x.endswith('/100') for x in p1))
+        finally:
+            sd.close()
+
+
+@requires_showdown()
+@unittest.skipUnless(NODE and HAS_JAX and POOL, 'requires node, JAX and POKEZERO_GPU_TEAM_POOL')
+class DeviceModeTests(unittest.TestCase):
+    """A representative subset in device mode: state results unchanged and every case EXACT on the public path."""
+    @classmethod
+    def setUpClass(cls):
+        cls.metadata, _ = probe.load_pool(POOL, None)
+        cls.scenarios = [probe.load_scenario(ROOT / f'gpu_engine/effect_probes/{name}.json') for name in DEVICE_SUBSET]
+        lanes = max(len(probe.enumerate_cases(s)) for s in cls.scenarios)
+        cls.sd = probe.Showdown(NODE, showdown_root())
+        cls.device = probe.Device.for_scenarios(cls.scenarios, cls.sd, showdown_root(), cls.metadata, lanes)
+        cls.engine = probe.Engine(cls.metadata, lanes);cls.engine.enable_device(cls.device.belief_tables, eager=True)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.sd.close()
+
+    def test_subset_is_exact_on_the_device_public_path(self):
+        for scenario in self.scenarios:
+            with self.subTest(scenario=scenario['move']):
+                result = probe.run_scenario(scenario, self.engine, self.sd, self.metadata, device=self.device)
+                self.assertTrue(result['expectation_met'], result['expectation_detail'])
+                self.assertTrue(result['device']['state_equal'])
+                self.assertTrue(result['device']['met'], result['device']['detail'] + ' ' + json.dumps(
+                    [s for r in result['results'] for s in r['device']['steps'] if s['diffs']][:2], default=str)[:2000])
+                self.assertGreater(result['device']['steps_compared'], result['cases'])
 
 
 if __name__ == '__main__':

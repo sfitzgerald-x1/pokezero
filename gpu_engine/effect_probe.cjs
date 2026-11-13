@@ -12,7 +12,7 @@ const DEFAULT_EVS = {hp:85, atk:85, def:85, spa:85, spd:85, spe:85};   // gen3 r
 const DEFAULT_IVS = {hp:31, atk:31, def:31, spa:31, spd:31, spe:31};
 
 function setup(root) {
-  const {Battle} = require(path.join(root, 'dist/sim/battle.js'));
+  const {Battle, extractChannelMessages} = require(path.join(root, 'dist/sim/battle.js'));
   const {PRNG} = require(path.join(root, 'dist/sim/prng.js'));
   const pool = rows.load(root);
   const levels = JSON.parse(fs.readFileSync(path.join(root, 'dist/data/random-battles/gen3/sets.json'), 'utf8'));
@@ -32,7 +32,7 @@ function setup(root) {
     }
     return randomSwitchable.call(this, side);
   };
-  return {Battle, pool, levels, setTape(value) {tape = value;}, setInitializing(value) {initializing = value;},
+  return {Battle, extractChannelMessages, pool, levels, setTape(value) {tape = value;}, setInitializing(value) {initializing = value;},
     takeAudit() {const a = audit; audit = []; return a;}};
 }
 
@@ -117,11 +117,21 @@ function snapshot(battle) {
   return {turn:battle.turn, ended:!!battle.ended, winner, sides, log_tail:battle.log.slice(-40)};
 }
 
+// Device mode (effect_probe.py --device): each player's own protocol channel since the previous call, as
+// sim/battle-stream.ts getPlayerStreams sends it: sim/battle.ts extractChannelMessages gives a |split|pN block's
+// secret line to channel N and its shared line to every other channel (an empty shared line is skipped).
+function playerChannels(env, battle) {
+  const fresh = battle.log.slice(battle.pzLogCursor || 0);
+  battle.pzLogCursor = battle.log.length;
+  const messages = env.extractChannelMessages(fresh.join('\n'), [1, 2]);
+  return [messages[1], messages[2]];
+}
+
 function main() {
   const root = process.argv[2];
   if (!root) throw new Error('usage: effect_probe.cjs SHOWDOWN_ROOT');
   const env = setup(root);
-  let battles = [];
+  let battles = [], device = false;
   const reply = value => process.stdout.write(JSON.stringify(value) + '\n');
   const handlers = {
     prepare(cmd) {
@@ -138,15 +148,22 @@ function main() {
       const genderSensitive = cmd.sets.some(team => team.some(set =>
         set.moves.includes('attract') || env.pool.toID(set.ability) === 'cutecharm'));
       env.setInitializing({allow_inert_gender: !genderSensitive});
+      device = !!cmd.device;
       try {
         battles = Array.from({length:cmd.cases}, () => {
           const b = new env.Battle({formatid:cmd.format, seed:cmd.seed});
+          // Device mode: the Custom Game format is a debug format, so getHealth shares the exact HP (sim/battle.ts
+          // reportExactHP = !!format.debug; sim/pokemon.ts getHealth). Gen 3 Random Battle shares HP Percentage
+          // Mod's percent, which is what B2 and the device's public HP read. Display only: no state or PRNG change.
+          if (device) b.reportExactHP = false;
           cmd.sets.forEach((team, s) => b.setPlayer(`p${s + 1}`, {name:`p${s + 1}`, team:team.map(x => ({...x}))}));
           for (const side of b.sides) side.pokemon.forEach((p, i) => {p.pzIndex = i;});
           return b;
         });
       } finally {env.setInitializing(null);}
-      return {snapshots:battles.map(snapshot), audit:env.takeAudit()};
+      const out = {snapshots:battles.map(snapshot), audit:env.takeAudit()};
+      if (device) out.channels = battles.map(b => playerChannels(env, b));
+      return out;
     },
     step(cmd) {
       const results = battles.map((b, i) => {
@@ -166,7 +183,9 @@ function main() {
           b.makeChoices(...choices);
         } catch (e) {error = String(e && e.message || e);}
         env.setTape(null);
-        return {snapshot:snapshot(b), audit:env.takeAudit(), error, ignored};
+        const out = {snapshot:snapshot(b), audit:env.takeAudit(), error, ignored};
+        if (device) out.channels = playerChannels(env, b);
+        return out;
       });
       return {results};
     },
@@ -184,5 +203,5 @@ function main() {
   });
 }
 
-module.exports = {fill, requestMask, snapshot, choice};
+module.exports = {fill, requestMask, snapshot, choice, playerChannels};
 if (require.main === module) main();
