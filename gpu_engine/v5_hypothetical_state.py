@@ -14,7 +14,7 @@ from pokezero.dex import normalize_id
 from pokezero.poke_engine_adapter import BattleSpec
 from .state import empty_state, LEECH_SEED, DESTINY_BOND
 
-PERISH=('perish1','perish2','perish3','perish4')
+PERISH=('perish1','perish2','perish3')   # Showdown never shows perish4 (the use prints a silent perish3)
 
 
 @dataclass(frozen=True)

@@ -1,4 +1,6 @@
-"""The protocol world's Yawn projection (phase_d_protocol_world._defer_yawn): pure payload and lines, no engine."""
+"""Engine-held volatiles at the constructor: Yawn's projection and Perish Song's count (phase_d_protocol_world), and our own
+holders' admission by from_b2 per route. The projection and count tests are pure payload and lines; the world and admission tests
+use the engine state and the original B2 adapter (pod or CI runtime)."""
 import json
 from pathlib import Path
 import unittest
@@ -77,6 +79,38 @@ class PerishCountTests(unittest.TestCase):
         self.assertEqual(protocol._perish_counts(self.lines[:self.use]), (None, None))
         nxt = self.lines + ['|', '|-start|p2a: Misdreavus|perish2', '|-start|p1a: Blissey|perish2', '|upkeep', '|turn|7']
         self.assertEqual(protocol._perish_counts(nxt), (2, 2))
+
+
+class OwnHeldVolatileAdmissionTests(unittest.TestCase):
+    def test_own_destiny_bond_on_every_route_perish_and_yawn_only_with_protocol_facts(self):
+        """from_b2 on the original B2 adapter: our active's Destiny Bond rides the own volatile (DESTINY_BOND) on every route;
+        a Perish or Yawn count is admitted only on the protocol route (protocol_facts), the one that writes it, and the older
+        route still refuses OWN_VOLATILE_OR_LATENT_CLOCK_UNAVAILABLE."""
+        from types import SimpleNamespace as NS
+        from test_phase_d_device_worlds import WorldsTests
+        from pokezero.v5_contract import DecisionAddress
+        from gpu_engine import phase_d_live_worlds as live, phase_d_tail as tail
+        from gpu_engine.state import DESTINY_BOND
+        WorldsTests.setUpClass();helper=WorldsTests();owner=0;own,foe='p1','p2'
+        cases={'destinybond':(f'|-singlemove|{own}a: Alpha|Destiny Bond',),'perish3':(f'|-start|{own}a: Alpha|perish3|[silent]',),
+               'yawn':(f'|-start|{own}a: Alpha|move: Yawn|[of] {foe}a: Beta',)}
+        for name,wire in cases.items():
+            with self.subTest(name):
+                adapter=helper.adapter(owner);packet=helper.request(owner);adapter.feed(wire)
+                payload=dict(turn=1,selfPlayer=own,selfRequestKind='move',pendingBatonPassSides=[],wishSetTurns={},
+                    sides={own:dict(pokemon=[dict(species='Alpha',condition='291/291',active=True)],volatiles=[]),
+                           foe:dict(pokemon=[dict(species='Beta',condition='100/100',active=True)],volatiles=[])})
+                lines=('|start',f'|switch|{own}a: Alpha|Alpha, L80|291/291',f'|switch|{foe}a: Beta|Beta, L80|100/100','|turn|1')+wire+('|request|'+json.dumps(packet),)
+                facts=tail.facts(NS(materialization_payload=payload),packet,lines);address=DecisionAddress(1,0,owner)
+                protocol_root=live.from_b2(adapter,packet,helper.source,helper.metadata,address=address,defer_sleep=True,protocol_facts=facts)
+                at=int(protocol_root.own['active'])
+                if name=='destinybond':
+                    older=live.from_b2(adapter,packet,helper.source,helper.metadata,address=address)
+                    for root in (older,protocol_root):self.assertEqual(int(root.own['volatile'][at])&DESTINY_BOND,DESTINY_BOND)
+                else:
+                    self.assertEqual(int(protocol_root.own['volatile'][at])&DESTINY_BOND,0)
+                    with self.assertRaisesRegex(ValueError,'OWN_VOLATILE_OR_LATENT_CLOCK_UNAVAILABLE.*'+name):
+                        live.from_b2(adapter,packet,helper.source,helper.metadata,address=address)
 
 
 if __name__ == '__main__':

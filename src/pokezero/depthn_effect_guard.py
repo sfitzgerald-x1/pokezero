@@ -38,7 +38,7 @@ protocol world (built without approximating partial-trap volatiles)), each exact
 conditions (sleep_clause, user_brn_par_psn, party_statused, item_knocked) stay in `guarded`'s vocabulary and in the recorded
 conditions, unused by any GUARDED move. They stay WATCHED, so their masses are still recorded (turn-2
 entries: guarded False, tier 'R'), and never count toward (a), (b) (its turn-1 arm and the reach) or (c). Roots where a side is
-already bonded stay refused by the world constructor, not here.
+already bonded are built with the DESTINY_BOND bit by the world constructor since #1949, not judged here.
 
 The guard trips on (b) or (c) (RULE 'reach', the lead's live rule from screen-r2):
 - (b) turn 1: in any constructed world, either side's turn-1 prior puts >= THRESHOLD of its mass on a lane whose move is
