@@ -3,6 +3,7 @@ import ast
 import io
 import json
 import os
+import re
 from pathlib import Path
 import subprocess
 import sys
@@ -799,7 +800,7 @@ raise SystemExit(run_process_blocks(suite, 0, 1, start_dir=sys.argv[1], tier=sys
         data = json.loads(EXTENDED_MANIFEST.read_text())
         self.assertEqual([e['module'] for e in data['modules']], sorted(e['module'] for e in data['modules']))
         self.assertEqual(sorted(e['rank'] for e in data['modules']), list(range(1, len(data['modules']) + 1)))
-        for entry in data['modules']:   # light by the heavy manifest's rule: the budget, not the module, keeps it off pull requests
+        for entry in data['modules']:   # under the isolated heavy thresholds: the budget, not the module, keeps it off pull requests
             self.assertEqual(entry['reason'], 'pull-request wall budget', entry['module'])
             self.assertLessEqual(entry['isolated_wall_min'], 10, entry['module'])
             self.assertLessEqual(entry['isolated_peak_gib'], 10.5, entry['module'])
@@ -822,7 +823,7 @@ raise SystemExit(run_process_blocks(suite, 0, 1, start_dir=sys.argv[1], tier=sys
         self.assertIn("  push:\n    branches: ['scott/v2-engine-accel-20261104']\n", triggers)
         self.assertIn('  workflow_dispatch:\n', triggers)
         self.assertNotIn('pull_request', workflow)
-        self.assertIn("- 'tests/gpu_component_extended.json'", triggers)
+        self.assertNotIn('paths', triggers)   # every integration push: no path filter can skip these modules' only coverage
         # no concurrency group: a group would cancel an older pending push run, and each push's run must finish
         self.assertNotIn('\nconcurrency:', workflow);self.assertNotIn('cancel-in-progress', workflow)
         self.assertIn('python scripts/run_component_memory_check.py', workflow)   # the same memory gate as the light tier
@@ -830,6 +831,9 @@ raise SystemExit(run_process_blocks(suite, 0, 1, start_dir=sys.argv[1], tier=sys
         light = (ROOT / '.github' / 'workflows' / 'gpu-engine-components.yml').read_text()
         self.assertIn("- 'tests/gpu_component_extended.json'", light)
         self.assertIn("- '.github/workflows/gpu-engine-components-extended.yml'", light)
+        # the extended command has no low-optimization cases, so no such case may sit in an extended module
+        cases = re.findall(r'--low-optimization-case (test_gpu_engine_\w+)\.', light)
+        self.assertTrue(cases);self.assertFalse(set(cases) & load_extended_modules())
 
     def test_per_pull_request_checks_run_only_the_light_tier(self):
         workflow = (ROOT / '.github' / 'workflows' / 'gpu-engine-components.yml').read_text()

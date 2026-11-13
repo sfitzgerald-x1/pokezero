@@ -1,29 +1,13 @@
 name: GPU engine CPU component checks (extended tier)
 
 on:
-  # Never per pull request: the extended tier's modules are light by the heavy rule but sit outside the pull-request
-  # wall budget (tests/gpu_component_extended.json). Every push to integration that touches component inputs runs
-  # them, and workflow_dispatch runs them on any branch by hand.
+  # Never per pull request: the extended tier's modules sit outside the pull-request wall budget
+  # (tests/gpu_component_extended.json). Every push to integration runs them, with no path filter: they import more than
+  # the component path list names, a path filter sees only a push's first 300 changed files, and these runs are the
+  # modules' only coverage. workflow_dispatch runs them on a chosen branch by hand once this file is on the default
+  # branch (GitHub lists dispatchable workflows from there).
   push:
     branches: ['scott/v2-engine-accel-20261104']
-    paths:
-      - 'gpu_engine/**'
-      - 'tests/test_gpu_engine*.py'
-      - 'tests/**/test_gpu_engine*.py'
-      - 'tests/**/__init__.py'
-      - 'tests/gpu_engine_*.py'
-      - 'tests/gpu_*_oracle.cjs'
-      - 'tests/data/gpu_synchronize_catalog.json'
-      - 'tests/data/gpu_hustle_catalog.json'
-      - 'tests/data/gpu_accuracy_events_catalog.json'
-      - 'tests/data/gpu_ordinary_switch_catalog.json'
-      - 'scripts/run_gpu_component_shard.py'
-      - 'scripts/run_component_memory_check.py'
-      - 'tests/test_gpu_component_shards.py'
-      - 'tests/gpu_component_heavy.json'
-      - 'tests/gpu_component_extended.json'
-      - '.github/workflows/gpu-engine-components-extended.yml'
-      - 'tests/test_component_memory_check.py'
   workflow_dispatch:
 
 permissions:

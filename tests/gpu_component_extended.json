@@ -1,6 +1,6 @@
 {
  "schema": "gpu-component-extended.v1",
- "rule": "extended: modules that are light by the heavy manifest's rule but run on push to integration and on demand (workflow_dispatch), not per pull request. They are the modules that refuse in setUpClass until the pending source-pin refresh with the largest isolated walls (one process per module on 4 CPUs with the CI runtime, pins refreshed), taken in rank order until the per-pull-request light tier's projected mean shard wall after that refresh is within 15 min of 2026-11-12's (36.8 min) at the conservative hosted/isolated ratio 1.43. After the first hosted measurement past the refresh, ranks 19-25 return to the light tier while its measured mean stays within that budget.",
+ "rule": "extended: modules under the isolated heavy thresholds (wall at most 10 min, peak at most 10.5 GiB; one process per module on 4 CPUs with the CI runtime) that run on push to integration and on demand, not per pull request. They are the modules whose setup refuses until the pending source-pin refresh, ranked by isolated wall at refreshed pins and taken in rank order until the per-pull-request light tier's projected mean shard wall after that refresh is within 15 min of 2026-11-12's (36.8 min) at the conservative hosted/isolated ratio 1.43. After the first hosted measurement past the refresh, ranks 19-25 return to the light tier while its measured mean stays within that budget.",
  "modules": [
   {
    "module": "test_gpu_engine_baton_paralysis_input",
@@ -8,7 +8,7 @@
    "rank": 4,
    "isolated_wall_min": 7.8,
    "isolated_peak_gib": 8.36,
-   "isolated_measured_at": "9640bbe1 with every pin refreshed (pod, CI runtime, 4 CPUs)"
+   "isolated_measured_at": "9640bbe1 with every pin refreshed (isolated: one process per module on 4 CPUs with the CI runtime)"
   },
   {
    "module": "test_gpu_engine_baton_pass_transaction",
@@ -16,7 +16,7 @@
    "rank": 13,
    "isolated_wall_min": 4.0,
    "isolated_peak_gib": 6.35,
-   "isolated_measured_at": "9640bbe1 with every pin refreshed (pod, CI runtime, 4 CPUs)"
+   "isolated_measured_at": "9640bbe1 with every pin refreshed (isolated: one process per module on 4 CPUs with the CI runtime)"
   },
   {
    "module": "test_gpu_engine_baton_substitute_input",
@@ -24,7 +24,7 @@
    "rank": 7,
    "isolated_wall_min": 6.3,
    "isolated_peak_gib": 7.46,
-   "isolated_measured_at": "9640bbe1 with every pin refreshed (pod, CI runtime, 4 CPUs)"
+   "isolated_measured_at": "9640bbe1 with every pin refreshed (isolated: one process per module on 4 CPUs with the CI runtime)"
   },
   {
    "module": "test_gpu_engine_baton_toxic_status",
@@ -32,7 +32,7 @@
    "rank": 17,
    "isolated_wall_min": 3.9,
    "isolated_peak_gib": 6.2,
-   "isolated_measured_at": "9640bbe1 with every pin refreshed (pod, CI runtime, 4 CPUs)"
+   "isolated_measured_at": "9640bbe1 with every pin refreshed (isolated: one process per module on 4 CPUs with the CI runtime)"
   },
   {
    "module": "test_gpu_engine_before_move_blocked_input",
@@ -40,7 +40,7 @@
    "rank": 15,
    "isolated_wall_min": 4.0,
    "isolated_peak_gib": 6.15,
-   "isolated_measured_at": "9640bbe1 with every pin refreshed (pod, CI runtime, 4 CPUs)"
+   "isolated_measured_at": "9640bbe1 with every pin refreshed (isolated: one process per module on 4 CPUs with the CI runtime)"
   },
   {
    "module": "test_gpu_engine_earthquake_levitate_input",
@@ -48,7 +48,7 @@
    "rank": 9,
    "isolated_wall_min": 4.6,
    "isolated_peak_gib": 6.23,
-   "isolated_measured_at": "9640bbe1 with every pin refreshed (pod, CI runtime, 4 CPUs)"
+   "isolated_measured_at": "9640bbe1 with every pin refreshed (isolated: one process per module on 4 CPUs with the CI runtime)"
   },
   {
    "module": "test_gpu_engine_encore_owning",
@@ -56,7 +56,7 @@
    "rank": 25,
    "isolated_wall_min": 3.6,
    "isolated_peak_gib": 6.35,
-   "isolated_measured_at": "9640bbe1 with every pin refreshed (pod, CI runtime, 4 CPUs)"
+   "isolated_measured_at": "9640bbe1 with every pin refreshed (isolated: one process per module on 4 CPUs with the CI runtime)"
   },
   {
    "module": "test_gpu_engine_focus_punch_input",
@@ -64,7 +64,7 @@
    "rank": 14,
    "isolated_wall_min": 4.0,
    "isolated_peak_gib": 6.19,
-   "isolated_measured_at": "9640bbe1 with every pin refreshed (pod, CI runtime, 4 CPUs)"
+   "isolated_measured_at": "9640bbe1 with every pin refreshed (isolated: one process per module on 4 CPUs with the CI runtime)"
   },
   {
    "module": "test_gpu_engine_heal_bell_owning",
@@ -72,7 +72,7 @@
    "rank": 1,
    "isolated_wall_min": 8.7,
    "isolated_peak_gib": 8.08,
-   "isolated_measured_at": "9640bbe1 with every pin refreshed (pod, CI runtime, 4 CPUs)"
+   "isolated_measured_at": "9640bbe1 with every pin refreshed (isolated: one process per module on 4 CPUs with the CI runtime)"
   },
   {
    "module": "test_gpu_engine_hidden_power_substitute_input",
@@ -80,7 +80,7 @@
    "rank": 19,
    "isolated_wall_min": 3.7,
    "isolated_peak_gib": 6.28,
-   "isolated_measured_at": "9640bbe1 with every pin refreshed (pod, CI runtime, 4 CPUs)"
+   "isolated_measured_at": "9640bbe1 with every pin refreshed (isolated: one process per module on 4 CPUs with the CI runtime)"
   },
   {
    "module": "test_gpu_engine_levitate_twisted_spoon_input",
@@ -88,7 +88,7 @@
    "rank": 18,
    "isolated_wall_min": 3.8,
    "isolated_peak_gib": 6.08,
-   "isolated_measured_at": "9640bbe1 with every pin refreshed (pod, CI runtime, 4 CPUs)"
+   "isolated_measured_at": "9640bbe1 with every pin refreshed (isolated: one process per module on 4 CPUs with the CI runtime)"
   },
   {
    "module": "test_gpu_engine_natural_cure_departure_input",
@@ -96,7 +96,7 @@
    "rank": 6,
    "isolated_wall_min": 7.4,
    "isolated_peak_gib": 8.27,
-   "isolated_measured_at": "9640bbe1 with every pin refreshed (pod, CI runtime, 4 CPUs)"
+   "isolated_measured_at": "9640bbe1 with every pin refreshed (isolated: one process per module on 4 CPUs with the CI runtime)"
   },
   {
    "module": "test_gpu_engine_primary_sleep_miss",
@@ -104,7 +104,7 @@
    "rank": 12,
    "isolated_wall_min": 4.1,
    "isolated_peak_gib": 5.97,
-   "isolated_measured_at": "9640bbe1 with every pin refreshed (pod, CI runtime, 4 CPUs)"
+   "isolated_measured_at": "9640bbe1 with every pin refreshed (isolated: one process per module on 4 CPUs with the CI runtime)"
   },
   {
    "module": "test_gpu_engine_rest_success_input",
@@ -112,7 +112,7 @@
    "rank": 8,
    "isolated_wall_min": 4.9,
    "isolated_peak_gib": 6.85,
-   "isolated_measured_at": "9640bbe1 with every pin refreshed (pod, CI runtime, 4 CPUs)"
+   "isolated_measured_at": "9640bbe1 with every pin refreshed (isolated: one process per module on 4 CPUs with the CI runtime)"
   },
   {
    "module": "test_gpu_engine_return_substitute_input",
@@ -120,7 +120,7 @@
    "rank": 22,
    "isolated_wall_min": 3.7,
    "isolated_peak_gib": 6.18,
-   "isolated_measured_at": "9640bbe1 with every pin refreshed (pod, CI runtime, 4 CPUs)"
+   "isolated_measured_at": "9640bbe1 with every pin refreshed (isolated: one process per module on 4 CPUs with the CI runtime)"
   },
   {
    "module": "test_gpu_engine_self_destruct_conditional_abilities",
@@ -128,7 +128,7 @@
    "rank": 23,
    "isolated_wall_min": 3.6,
    "isolated_peak_gib": 6.41,
-   "isolated_measured_at": "9640bbe1 with every pin refreshed (pod, CI runtime, 4 CPUs)"
+   "isolated_measured_at": "9640bbe1 with every pin refreshed (isolated: one process per module on 4 CPUs with the CI runtime)"
   },
   {
    "module": "test_gpu_engine_self_destruct_input",
@@ -136,7 +136,7 @@
    "rank": 16,
    "isolated_wall_min": 3.9,
    "isolated_peak_gib": 6.54,
-   "isolated_measured_at": "9640bbe1 with every pin refreshed (pod, CI runtime, 4 CPUs)"
+   "isolated_measured_at": "9640bbe1 with every pin refreshed (isolated: one process per module on 4 CPUs with the CI runtime)"
   },
   {
    "module": "test_gpu_engine_thunder_wave_dormant_water_absorb",
@@ -144,7 +144,7 @@
    "rank": 21,
    "isolated_wall_min": 3.7,
    "isolated_peak_gib": 6.23,
-   "isolated_measured_at": "9640bbe1 with every pin refreshed (pod, CI runtime, 4 CPUs)"
+   "isolated_measured_at": "9640bbe1 with every pin refreshed (isolated: one process per module on 4 CPUs with the CI runtime)"
   },
   {
    "module": "test_gpu_engine_thunder_wave_ground_immunity",
@@ -152,7 +152,7 @@
    "rank": 24,
    "isolated_wall_min": 3.6,
    "isolated_peak_gib": 6.36,
-   "isolated_measured_at": "9640bbe1 with every pin refreshed (pod, CI runtime, 4 CPUs)"
+   "isolated_measured_at": "9640bbe1 with every pin refreshed (isolated: one process per module on 4 CPUs with the CI runtime)"
   },
   {
    "module": "test_gpu_engine_thunder_wave_limber_input",
@@ -160,7 +160,7 @@
    "rank": 11,
    "isolated_wall_min": 4.1,
    "isolated_peak_gib": 6.44,
-   "isolated_measured_at": "9640bbe1 with every pin refreshed (pod, CI runtime, 4 CPUs)"
+   "isolated_measured_at": "9640bbe1 with every pin refreshed (isolated: one process per module on 4 CPUs with the CI runtime)"
   },
   {
    "module": "test_gpu_engine_thunder_wave_substitute_failure",
@@ -168,7 +168,7 @@
    "rank": 20,
    "isolated_wall_min": 3.7,
    "isolated_peak_gib": 6.21,
-   "isolated_measured_at": "9640bbe1 with every pin refreshed (pod, CI runtime, 4 CPUs)"
+   "isolated_measured_at": "9640bbe1 with every pin refreshed (isolated: one process per module on 4 CPUs with the CI runtime)"
   },
   {
    "module": "test_gpu_engine_v5_depth1_provider",
@@ -176,7 +176,7 @@
    "rank": 3,
    "isolated_wall_min": 8.2,
    "isolated_peak_gib": 7.91,
-   "isolated_measured_at": "9640bbe1 with every pin refreshed (pod, CI runtime, 4 CPUs)"
+   "isolated_measured_at": "9640bbe1 with every pin refreshed (isolated: one process per module on 4 CPUs with the CI runtime)"
   },
   {
    "module": "test_gpu_engine_v5_public_world",
@@ -184,7 +184,7 @@
    "rank": 5,
    "isolated_wall_min": 7.7,
    "isolated_peak_gib": 7.59,
-   "isolated_measured_at": "9640bbe1 with every pin refreshed (pod, CI runtime, 4 CPUs)"
+   "isolated_measured_at": "9640bbe1 with every pin refreshed (isolated: one process per module on 4 CPUs with the CI runtime)"
   },
   {
    "module": "test_gpu_engine_will_o_wisp_miss_input",
@@ -192,7 +192,7 @@
    "rank": 10,
    "isolated_wall_min": 4.3,
    "isolated_peak_gib": 6.29,
-   "isolated_measured_at": "9640bbe1 with every pin refreshed (pod, CI runtime, 4 CPUs)"
+   "isolated_measured_at": "9640bbe1 with every pin refreshed (isolated: one process per module on 4 CPUs with the CI runtime)"
   },
   {
    "module": "test_gpu_engine_wonder_guard_immunity",
@@ -200,7 +200,7 @@
    "rank": 2,
    "isolated_wall_min": 8.3,
    "isolated_peak_gib": 8.15,
-   "isolated_measured_at": "9640bbe1 with every pin refreshed (pod, CI runtime, 4 CPUs)"
+   "isolated_measured_at": "9640bbe1 with every pin refreshed (isolated: one process per module on 4 CPUs with the CI runtime)"
   }
  ]
 }

@@ -53,8 +53,8 @@ def load_heavy_modules(path=HEAVY_MANIFEST):
 
 
 def load_extended_modules(path=EXTENDED_MANIFEST):
-    """The extended tier's test modules (tests/gpu_component_extended.json): light by the heavy rule, but run on push to
-    integration and on demand, not per pull request, to keep the per-pull-request light tier within its wall budget."""
+    """The extended tier's test modules (tests/gpu_component_extended.json): under the isolated heavy thresholds, but run on
+    push to integration and on demand, not per pull request, to keep the per-pull-request light tier within its wall budget."""
     return _load_manifest(path, "gpu-component-extended.v1", "extended")
 
 
