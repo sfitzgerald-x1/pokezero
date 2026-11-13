@@ -59,8 +59,9 @@ def _chronology(lines):
 
 def preflight_checks(payload,removed=None):
     """Same predicates used by production and collect-all; missing is UNKNOWN."""
-    checks=[dict(kind='native-probed-hard-trapped-own-request',status='TRIGGERED' if payload.get('selfActiveRequestState',{}).get('trapped') else 'CLEAR',fatal=True),
-        dict(kind='deferred-baton-phase',status='TRIGGERED' if payload.get('pendingBatonPassSides') else 'CLEAR',fatal=True)]
+    # A request `trapped` is not probed here: battle_spec_from_payload requires the sampled world to reproduce it
+    # (engine_world._require_world_reproduces_trap) and the device derives it per request (transition.action_mask).
+    checks=[dict(kind='deferred-baton-phase',status='TRIGGERED' if payload.get('pendingBatonPassSides') else 'CLEAR',fatal=True)]
     for seat,side in payload['sides'].items():
         fail=bool(side.get('meanlookTrap') or set(side['volatiles'])&{'trapped','solarbeam','encore'})
         checks.append(dict(kind='native-probed-or-hidden-volatile-clock',status='TRIGGERED' if fail else 'CLEAR',side=seat,fatal=True))
@@ -200,8 +201,30 @@ def _restore_sleep(physical,detached,metadata,sleepers,origins,rng,base_abilitie
     return restored,tuple(diagnostics)
 
 
-def _carry_public_foe(physical,detached,metadata,world,foe,rng,diagnostics):
-    """Original postmap carries; collect every independently evaluable guard."""
+def _own_pressure(detached,metadata):
+    """Whether a member of our own party has Pressure (own request: base or running ability)."""
+    names=metadata['vocabulary']['abilities']
+    return any(normalize_id(names[int(x)])=='pressure' for key in ('ability','base_ability') for x in np.asarray(detached.own[key]).ravel() if int(x)>0)
+
+
+def _leppa_side(lines,side):
+    """Whether the lines show a Leppa Berry of that side consumed: Showdown's eat line (|-enditem|<mon>|Leppa Berry|[eat]) or
+    its PP restore (|-activate|<mon>|item: Leppa Berry|<move>). A consumed Leppa is always announced and an unconsumed one
+    restored nothing, so only these protocol lines (never a belief that it might hold one) turn the PP floor off."""
+    seat=f'p{side+1}'
+    return any(len(p)>3 and p[2].startswith(seat) and 'leppaberry' in normalize_id(p[3]) and
+        (p[1]=='-activate' or p[1]=='-enditem' and '[eat]' in p[4:]) for p in (str(line).split('|') for line in lines))
+
+
+def _carry_public_foe(physical,detached,metadata,world,foe,rng,diagnostics,*,pressure=False,leppa=True):
+    """Original postmap carries; collect every independently evaluable guard.
+
+    A public opponent PP charge of exactly the move's max PP + 1 is its last point under our Pressure: Showdown's
+    Pokemon.deductPP floors at 0 (`if (ppData.pp < 0) { amount += ppData.pp; ppData.pp = 0; }`), so the extra Pressure
+    point of a use made at 1 PP is counted by B2's charge but not spent, and a move at 0 PP cannot be used again (max + 2
+    is impossible). Accepted only with a Pressure member on our side and no Leppa Berry on theirs (it restores PP); the
+    move's PP is then 0. Any other charge above max PP still refuses.
+    """
     assignment={};pp=np.array(physical.pp,copy=True);hp=np.array(physical.hp,copy=True);failures=[]
     present=np.asarray(detached.view['present'])[0];species=np.asarray(detached.view['species'])[0]
     moves=np.asarray(detached.view['revealed_moves'])[0];used=np.asarray(detached.view['move_pp_used'])[0]
@@ -225,9 +248,10 @@ def _carry_public_foe(physical,detached,metadata,world,foe,rng,diagnostics):
         for index,mid in enumerate(np.asarray(physical.moves)[0,foe,slot]):
             charge=sum(int(n)for known,n in zip(moves[public],used[public])
                 if int(known)>0 and int(mid)>0 and move_identity(known)==move_identity(mid))
-            failed=charge>pp[0,foe,slot,index]
-            record('public-opponent-PP-charge-exceeds-source-max',failed,slot=slot,move=index)
-            if not failed:pp[0,foe,slot,index]-=charge
+            floored=pressure and not leppa and charge==pp[0,foe,slot,index]+1
+            failed=charge>pp[0,foe,slot,index] and not floored
+            record('public-opponent-PP-charge-exceeds-source-max',failed,slot=slot,move=index,**({'pressure_floor':True}if floored else{}))
+            if not failed:pp[0,foe,slot,index]=max(0,int(pp[0,foe,slot,index])-charge)
         if int(physical.status[0,foe,slot])==4:
             try:
                 counter=live._physical_toxic_counter(detached.view['mon_features']['toxic_stage'][0,public])
@@ -301,13 +325,19 @@ def materialize_protocol(root,start,*,inputs,seed):
         mood[owner]=tuple(map(int,detached.own['happiness']))
         mapping_spec,cursors=tail.mapping_spec(world.spec,tail_facts['replacement'])
         mapped=map_spec(mapping_spec,metadata=metadata,dex=catalog.dex,seed=seed,
-            turn=root.materialization_payload['turn'],active_turns=_chronology(inputs.lines),happiness=tuple(mood))
+            turn=root.materialization_payload['turn'],active_turns=_chronology(inputs.lines),happiness=tuple(mood),live_types=True)
         if mapped.state is None:
             _downstream_unknowns(diagnostics,'Typed mapper refused: '+repr(mapped.refusals))
             return ProtocolWorld(None,None,mapped.refusals,mapper_diagnostics=tuple(diagnostics))
         physical=tail.restore(mapped.state,world.spec,cursors,tail_facts,metadata=metadata,checks=diagnostics)
         maximum_pp={live._source_move(metadata['vocabulary']['moves'][int(mid)]):int(metadata['moves'][int(mid)]['pp'])*8//5 for row in detached.own['moves'] for mid in row if mid}
         own=dict(detached.own);own['pp']=np.asarray(own_pp_carry(inputs.lines,state.self_request,maximum_pp),np.int32)
+        # Our active's live public type (Color Change, Forecast): the mapper wrote the observed live type over the original
+        # dex base (map_spec live_types); B2's own packet holds the species types. Keep the live type when the bases agree.
+        at=int(own['active']);live_types=np.asarray(physical.types)[0,owner,at]
+        if (np.array_equal(np.asarray(physical.base_types)[0,owner,at],np.asarray(own['base_types'])[at])
+                and not np.array_equal(live_types,np.asarray(own['types'])[at])):
+            own['types']=np.array(own['types'],copy=True);own['types'][at]=live_types
         # Exact facts were read from the owning packet by B2's detached root.
         # Check all mapper-provided literal own fields before preserving the
         # complete own packet state (including exact private request flags).
@@ -335,7 +365,8 @@ def materialize_protocol(root,start,*,inputs,seed):
         # A known public PP charge subtracts from sampled source max; no
         # unknown peer-private ledger or exact HP history is synthesized.
         hp_rng=random.Random(seed)
-        physical,assignment,active,foe_failures=_carry_public_foe(physical,detached,metadata,world,foe,hp_rng,diagnostics)
+        physical,assignment,active,foe_failures=_carry_public_foe(physical,detached,metadata,world,foe,hp_rng,diagnostics,
+            pressure=_own_pressure(detached,metadata),leppa=_leppa_side(inputs.lines,foe))
         failures.extend(foe_failures)
         diagnostics.append(dict(kind='PUBLIC_FOE_SLOT_CARRIES',status='TRIGGERED' if foe_failures else 'CLEAR',fatal=True))
         base_abilities={(side,normalize_id(mon.species)):normalize_id(mon.ability or '') for side in (0,1) for mon in unpack_team(start.player_teams['p'+str(side+1)])}
@@ -343,6 +374,15 @@ def materialize_protocol(root,start,*,inputs,seed):
         except (ValueError,KeyError,IndexError,TypeError) as error:
             failures.append(str(error));diagnostics.append(dict(kind='PUBLIC_SLEEP_WORLD_POSTERIOR',status='TRIGGERED',fatal=True,reason=str(error)))
         else:diagnostics.append(dict(kind='PUBLIC_SLEEP_WORLD_POSTERIOR',status='CLEAR',fatal=True,applicability='CURRENT_SLEEP' if sleepers else 'NO_CURRENT_SLEEP'))
+        if tail_facts['replacement'] is None and ((state.self_request.get('active')or[{}])[0]).get('trapped'):
+            # A known request trap must be this world's own: the device's root mask (ability traps, Mean Look's link,
+            # Ingrain, a charge) allows no switch. maybeTrapped accepts either outcome (it leaks nothing).
+            from types import SimpleNamespace
+            from . import combat,transition
+            mask=np.asarray(transition.action_mask(physical,SimpleNamespace(combat=combat.from_metadata(metadata))))[0,owner]
+            fail=bool(mask[4:].any())
+            diagnostics.append(dict(kind='OWN_REQUEST_TRAP_REPRODUCED',status='TRIGGERED' if fail else 'CLEAR',fatal=True))
+            if fail:failures.append('OWN_REQUEST_TRAP_NOT_REPRODUCED')
         if failures:raise ValueError(failures[0])
         carry=states._rebase(detached,assignment,active,state=physical)
         diagnostics.append(dict(kind='FINAL_PUBLIC_CARRY',status='CLEAR',fatal=True))

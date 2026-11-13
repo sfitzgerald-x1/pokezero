@@ -149,9 +149,13 @@ def _exact_own(request, state, catalog, source, metadata, owner, *, defer_sleep=
     own['active'][()] = active[0]
     current = {} if replacement else request['active'][0]
     own['forced_switch'][()] = replacement
-    if current.get('maybeTrapped') and 'trapped' not in current:
-        raise Refusal('OWN_TRAP_STATE_UNAVAILABLE')
-    own['trapped'][()] = bool(current.get('trapped', False))
+    # The side-level flag stays False for every request trap. `trapped` (a known trap) and `maybeTrapped` (Showdown's
+    # getMoveRequestData shows it for a hidden ability trap and for a merely possible one alike) are both reproduced by
+    # the world itself: the device derives an ability trap at every request from that world's abilities and types
+    # (transition.action_mask -> combat.switch_trapped) and a Mean Look trap from trap_source (state.legal_actions), and
+    # materialize_protocol refuses a world whose root mask does not reproduce a `trapped` request. state.trapped is
+    # cleared only by phazing (phazing.py), so a request trap sealed into it would outlast the trapper in search.
+    own['trapped'][()] = False
     public_names = [normalize_id(catalog.species.names[int(x)]) for x in _host(state.mons.species)[0, owner]]
     joined = {}
     for slot, mon in enumerate(party):
@@ -277,8 +281,9 @@ def from_b2(adapter, request, source, metadata, *, address, defer_sleep=False, p
     mons,v=state.mons,source.vocabulary
     if np.any(_host(ctx.abilities.transformed)):
         raise Refusal('PUBLIC_TRANSFORM_NOT_MATERIALIZED')
-    if np.any(_host(ctx.types.overridden)):
-        raise Refusal('PUBLIC_LIVE_RETYPE_NOT_MATERIALIZED')
+    # A live public retype (Color Change's typechange, Forecast's forme) is not refused: the CPU materializer applies the
+    # observed live type (engine_world._apply_live_typechange, _apply_forecast_types) and map_spec(live_types=True) keeps
+    # base_types from the original dex row.
     z = np.zeros((1,2,6),np.int32)
     present = _host(mons.encounter) > 0
     species = _remap(mons.species,catalog.species.names,v['species'])
