@@ -35,14 +35,21 @@ def shallow():
 
 
 def problem(sha):
-    """'' when `sha` is an integration merge (a commit with two or more parents) that HEAD contains; else why not."""
+    """'' when `sha` is an integration merge (two or more parents, GitHub's 'Merge pull request #N' subject) that HEAD contains; else why
+    not. A squash of integration onto main would rewrite these commits and fail every entry: main takes integration by merge commit."""
     if not re.fullmatch(r'[0-9a-f]{8,40}', sha or ''):return f'{sha!r} is not a hex commit id'
     if sha == PLACEHOLDER:return f'{sha} is the placeholder, not a merge'
     full = git('rev-parse', '--verify', '--quiet', f'{sha}^{{commit}}')
     if full.returncode != 0 or not full.stdout.strip():return f'{sha} is not a commit here (or is ambiguous)'
     full = full.stdout.strip()
-    parents = git('rev-list', '--parents', '-n', '1', full).stdout.split()[1:]
-    if len(parents) < 2:return f'{sha} is not a merge commit (engine_since names the integration merge)'
+    listing = git('rev-list', '--parents', '-n', '1', full)
+    if listing.returncode != 0:return f'{sha}: git rev-list failed ({listing.returncode})'
+    if len(listing.stdout.split()[1:]) < 2:return f'{sha} is not a merge commit (engine_since names the integration merge)'
+    # a PR's own merge of integration is also a merge HEAD contains (and may predate the engine merge): engine_since must be the
+    # integration merge of the engine PR itself, GitHub's 'Merge pull request #N' (integration lands PRs by merge commit, never squash)
+    subject = git('log', '-1', '--format=%s', full)
+    if subject.returncode != 0 or not subject.stdout.startswith('Merge pull request #'):
+        return f'{sha} is not a pull request merge (its subject: {subject.stdout.strip()[:60]!r})'
     ancestor = git('merge-base', '--is-ancestor', full, 'HEAD')
     if ancestor.returncode == 1:return f'{sha} is not an ancestor of HEAD'
     if ancestor.returncode != 0:return f'{sha}: git merge-base failed ({ancestor.returncode}): {ancestor.stderr.strip()[:200]}'
