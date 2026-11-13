@@ -5,7 +5,7 @@ Design. The panel's dispatch talks to ONE search server address (--server HOST:P
 request (phase_d_search_server framing: one request, one response). A server process answers one decision at a time (max_requests 1;
 the constructor's prepare is serial per root), so several processes per GPU serve the live eval. This proxy forwards each accepted
 connection, byte for byte in both directions, to the backend with the fewest connections in flight (ties: the next in round-robin
-order; a backend whose connection setup failed within the last --cooldown seconds sorts last), and closes both sides when either
+order; a backend whose connection setup failed is down, below), and closes both sides when either
 closes. A backend's slot is reserved before its connection is opened, so connections accepted in the same instant spread out. It never
 rewrites, retries or replays a request: connection setup alone is retried on the next backend (--connect-timeout each, before any byte
 is forwarded); when no backend accepts, the client's connection is closed, which its client records as a transport failure
@@ -39,6 +39,19 @@ is forwarded); when no backend accepts, the client's connection is closed, which
   (--expect-peer-view-b on/off), and all backends must agree on those, on tree_commit and on the whole pricer identity (evaluator, W, K,
   buckets, precision); otherwise the proxy exits non-zero. (The rung is the request's own, echoed; a backend serving another rung
   refuses the probe as a bad request, which fails it. requested_worlds is the W check.)
+- Health (r5a: a preempted pod's two servers, ranked first again after every --cooldown because they held no battles, added two
+  0.25 s connect timeouts to every new battle's first decision for an hour). A backend whose connection setup fails (refused, or no
+  answer within --connect-timeout) is DOWN: out of every ranking, battle homes included, so it costs one connect timeout when it
+  dies and none after. Every --health-interval seconds (default 1) each down backend is reconnected to; it ranks again only once it
+  accepts a connection and, with --probe-requests, answers the identity probe with the identity the pool started with (else it is
+  QUARANTINED: never retried until a reload names it again). Only when every backend is down are they all tried. HEALTH lines
+  (DOWN, UP, QUARANTINED) go to stdout; POOL lines mark each backend down or not.
+- --backends-file PATH (instead of --backend): one HOST:PORT[@GPU] per line, '#' comments. SIGHUP re-reads it and the proxy serves
+  exactly its backends, without a restart (so no battle loses its home): a removed backend takes no new connection (those in flight
+  finish; its battles re-home on their next decision); an added one, or a quarantined one still named, must accept a connection and
+  pass the identity probe (with --probe-requests) before it joins. All or nothing: an unreadable or invalid file (the GPU rule
+  below, the listen address, a joining backend that fails) changes nothing. RELOAD or RELOAD_REJECTED goes to stdout. Without
+  --backends-file a SIGHUP is logged as rejected (it no longer kills the proxy).
 - --wait-ready SECONDS (0 to 3600): before the identity probe, wait until every backend accepts a connection, else exit non-zero.
 - --connection-log PATH (JSONL, appended, flushed): one row per client connection (backend, opened, closed, seconds, bytes each way,
   or 'unserved'), so latency breaks down by backend (the servers' own server_id in each response is the panel readout's breakdown). READY (one JSON line, with each backend's probe
@@ -47,9 +60,9 @@ is forwarded); when no backend accepts, the client's connection is closed, which
 import argparse
 import asyncio
 from collections import Counter, OrderedDict
-import itertools
 import json
 import math
+import signal
 import struct
 import sys
 import time
@@ -83,38 +96,81 @@ def bounded(lo, hi):
 
 
 class Pool:
-    """Backends with their in-flight counts; order() is least busy first, recently failed backends last, ties round-robin."""
+    """Backends with their in-flight counts; order() is least busy first, recently failed backends last, ties round-robin.
 
-    def __init__(self, backends, *, cooldown=5., sticky_idle=60., sticky_cap=4096, gpus=None):
+    A backend whose connection setup fails is DOWN (fail()): out of every ranking until the health check reconnects to it (restore()),
+    so a dead backend costs one connect timeout when it dies, never one per decision after (r5a: two dead backends re-ranked first
+    after every cooldown added 0.5 s to every new battle's first decision). Only when every backend is down are they all tried. The
+    backend set can change while serving (set_backends: a reload)."""
+
+    def __init__(self, backends, *, cooldown=5., sticky_idle=60., sticky_cap=4096, gpus=None, on_event=None):
+        self.gpu, self.active, self.served, self.refused, self.failed_at = {}, {}, {}, {}, {}
+        self.backends = [];self._in = frozenset();self.down = {};self.on_event = on_event   # down: backend -> when it went down
+        self.unserved = 0;self.no_request = 0;self.cooldown = cooldown
+        self.homes = OrderedDict();self.sticky_idle = sticky_idle;self.sticky_cap = sticky_cap   # (battle_id, owner) -> [backend, last seen]
+        self.placed_at = {};self.ended = 0;self.ended_unknown = 0   # GPU -> its latest new-battle placement; battle end frames
+        self._turn = 0
+        self.set_backends(backends, gpus)
+
+    @staticmethod
+    def check(backends, gpus):
+        """The GPU labels of a valid backend set (ValueError otherwise)."""
         if not backends or len(set(backends)) != len(backends):raise ValueError('one or more distinct backends required')
         gpus = {} if gpus is None else dict(gpus)
         if set(gpus) - set(backends):raise ValueError('a GPU label for an unknown backend')
         if gpus and (set(gpus) != set(backends) or len(set(Counter(gpus.values()).values())) != 1):
             # GPU-first ranking spreads battles evenly only over equal GPUs: an unlabelled backend would compete as a whole GPU
             raise ValueError('label every backend with its GPU, the same number of backends on each GPU')
-        self.gpu = {b: gpus.get(b) or f'{b[0]}:{b[1]}' for b in backends}   # unlabelled: its own group
-        self.backends = list(backends);self.active = {b: 0 for b in backends};self.served = {b: 0 for b in backends}
-        self.refused = {b: 0 for b in backends};self.failed_at = {b: None for b in backends};self.unserved = 0;self.no_request = 0;self.cooldown = cooldown
-        self.homes = OrderedDict();self.sticky_idle = sticky_idle;self.sticky_cap = sticky_cap   # (battle_id, owner) -> [backend, last seen]
-        self.placed_at = {};self.ended = 0;self.ended_unknown = 0   # GPU -> its latest new-battle placement; battle end frames
-        self._turn = itertools.cycle(range(len(backends)))
+        return gpus
+
+    def set_backends(self, backends, gpus=None):
+        """Serve exactly `backends` from now on; ValueError, changing nothing, for an invalid set. A removed backend takes no new
+        connection (those in flight finish; its battles re-home on their next decision) and stops counting toward any GPU; an added
+        one (or one added back) starts up, with no failure on record. Returns (added, removed)."""
+        backends = list(backends);gpus = self.check(backends, gpus)
+        added = [b for b in backends if b not in self._in];removed = [b for b in self.backends if b not in set(backends)]
+        for b in backends:
+            self.gpu[b] = gpus.get(b) or f'{b[0]}:{b[1]}'   # unlabelled: its own group
+            for counts in (self.active, self.served, self.refused):counts.setdefault(b, 0)
+        for b in added:self.failed_at[b] = None;self.down.pop(b, None)
+        for b in removed:self.down.pop(b, None)
+        self.backends = backends;self._in = frozenset(backends)
+        return added, removed
+
+    def note(self, state, backend, **extra):
+        if self.on_event is not None:
+            self.on_event(dict(event='HEALTH', state=state, backend=f'{backend[0]}:{backend[1]}', gpu=self.gpu.get(backend), time=time.time(), **extra))
+
+    def fail(self, backend, now=None):
+        """A connection setup to `backend` failed: counted, cooling, and down until the health check reconnects."""
+        now = time.monotonic() if now is None else now
+        self.refused[backend] += 1;self.failed_at[backend] = now
+        if backend in self._in and backend not in self.down:self.down[backend] = now;self.note('DOWN', backend)
+
+    def restore(self, backend):
+        """The health check reconnected to a down backend: it ranks again, with no failure on record."""
+        if self.down.pop(backend, None) is not None:self.failed_at[backend] = None;self.note('UP', backend)
+
+    def candidates(self):
+        """The backends a connection may go to: every backend that is up, or all of them when none is."""
+        return [b for b in self.backends if b not in self.down] or list(self.backends)
 
     def live(self, now):
-        """Battles per backend seen within sticky_idle seconds."""
-        return Counter(b for b, seen in self.homes.values() if now - seen < self.sticky_idle)
+        """Battles per backend seen within sticky_idle seconds (backends still served)."""
+        return Counter(b for b, seen in self.homes.values() if now - seen < self.sticky_idle and b in self._in)
 
     def order(self, now=None, battle=None):
-        now = time.monotonic() if now is None else now
+        now = time.monotonic() if now is None else now;pick = self.candidates()
         if battle is None:   # no battle to keep together: least busy, ties round-robin
-            start = next(self._turn);ring = self.backends[start:] + self.backends[:start]
+            start = self._turn % len(pick);self._turn += 1;ring = pick[start:] + pick[:start]
             return sorted(ring, key=lambda b: (self.cooling(b, now), self.active[b]))
         # A new battle's GPU: fewest live battles, then fewest requests in flight there, then the least recently placed on (never
         # backend order: with stale ties that piled three battles on one GPU); within it, the backend with fewest live, then in flight.
-        live = self.live(now);per_gpu = self.per_gpu(live);inflight = self.per_gpu(Counter(self.active))
-        rank = sorted(self.backends, key=lambda b: (self.cooling(b, now), per_gpu[self.gpu[b]], inflight[self.gpu[b]],
-                                                    self.placed_at.get(self.gpu[b], -math.inf), live[b], self.active[b], self.backends.index(b)))
+        live = self.live(now);per_gpu = self.per_gpu(live);inflight = self.per_gpu(Counter({b: self.active[b] for b in self.backends}))
+        rank = sorted(pick, key=lambda b: (self.cooling(b, now), per_gpu[self.gpu[b]], inflight[self.gpu[b]],
+                                           self.placed_at.get(self.gpu[b], -math.inf), live[b], self.active[b], self.backends.index(b)))
         home = self.homes.get(battle)
-        if home is not None and not self.cooling(home[0], now):rank.remove(home[0]);rank.insert(0, home[0])
+        if home is not None and home[0] in rank and not self.cooling(home[0], now):rank.remove(home[0]);rank.insert(0, home[0])
         return rank
 
     def bind(self, battle, backend, now=None):
@@ -138,7 +194,8 @@ class Pool:
     def snapshot(self):
         live = self.live(time.monotonic())
         return dict(backends=[dict(backend=f'{h}:{p}', active=self.active[(h, p)], served=self.served[(h, p)], refused=self.refused[(h, p)],
-            cooling=self.cooling((h, p)), live_battles=live[(h, p)], gpu=self.gpu[(h, p)]) for h, p in self.backends], unserved=self.unserved,
+            cooling=self.cooling((h, p)), down=(h, p) in self.down, live_battles=live[(h, p)], gpu=self.gpu[(h, p)]) for h, p in self.backends],
+            unserved=self.unserved,
             no_request=self.no_request, battle_ends=self.ended, battle_ends_unknown=self.ended_unknown,
             battles=len(self.homes), live_battles_per_gpu=dict(sorted(self.per_gpu(live).items())))
 
@@ -204,7 +261,7 @@ async def handle(pool, client_reader, client_writer, *, connect_timeout=.25, fir
         try:
             upstream = await asyncio.wait_for(asyncio.open_connection(*backend), connect_timeout);chosen = backend;break
         except (OSError, asyncio.TimeoutError):
-            pool.active[backend] -= 1;pool.refused[backend] += 1;pool.failed_at[backend] = time.monotonic()
+            pool.active[backend] -= 1;pool.fail(backend)
         except BaseException:
             pool.active[backend] -= 1;raise
     if upstream is None:
@@ -289,34 +346,112 @@ async def check_identity(backends, requests, expect, *, timeout=120.):
     return found
 
 
+def read_backends_file(path):
+    """--backends-file: one HOST:PORT or HOST:PORT@GPU per line ('#' comments, blank lines skipped) -> [(backend, gpu or None)]."""
+    with open(path, encoding='utf-8') as f:
+        return [backend_spec(line) for line in (raw.split('#', 1)[0].strip() for raw in f) if line]
+
+
 async def run(listen, backends, *, wait_ready_seconds=0., report_seconds=60., log=print, started=None, connect_timeout=.25, cooldown=5.,
-              first_frame_timeout=2., sticky_idle=60., sticky_cap=4096, gpus=None, probe_requests=None, expect=None, probe_timeout=120., log_row=None):
+              first_frame_timeout=2., sticky_idle=60., sticky_cap=4096, gpus=None, probe_requests=None, expect=None, probe_timeout=120., log_row=None,
+              health_interval=1., backends_file=None):
     if listen in backends:raise SystemExit('--listen must not be one of the backends')
     if type(sticky_cap) is not int or sticky_cap < 1:raise SystemExit('--sticky-cap must be a positive integer')
-    pool = Pool(backends, cooldown=cooldown, sticky_idle=sticky_idle, sticky_cap=sticky_cap, gpus=gpus)
+    if not (math.isfinite(health_interval) and health_interval > 0):raise SystemExit('--health-interval must be a positive number of seconds')
+    def event(row):log(json.dumps(row))
+    pool = Pool(backends, cooldown=cooldown, sticky_idle=sticky_idle, sticky_cap=sticky_cap, gpus=gpus, on_event=event)
     if wait_ready_seconds > 0:
         missing = await wait_ready(backends, wait_ready_seconds)
         if missing:raise SystemExit(f'backends not ready after {wait_ready_seconds} s: ' + ', '.join(f'{h}:{p}' for h, p in missing))
     identities = None if probe_requests is None else await check_identity(backends, probe_requests, expect or {}, timeout=probe_timeout)
+    identity = None if identities is None else next(iter(identities.values()))
+    quarantined = set()   # backends whose identity probe failed: never health-checked again, only a reload may add them back
+
+    async def reachable(b):
+        try:_, w = await asyncio.wait_for(asyncio.open_connection(*b), connect_timeout)
+        except (OSError, asyncio.TimeoutError):return False
+        await _close(w);return True
+
+    async def admitted(b):
+        """With --probe-requests: `b` answers the identity probe with the identity the pool started with (a backend coming back or
+        joining is a backend the pool would otherwise hide); else quarantined. Without: True."""
+        if probe_requests is None:return True
+        try:found = (await check_identity([b], probe_requests, expect or {}, timeout=probe_timeout))[b]
+        except SystemExit as error:found, why = None, str(error)
+        else:why = None if json.dumps(found, sort_keys=True) == json.dumps(identity, sort_keys=True) else 'identity differs from the pool\'s'
+        if why is None:return True
+        quarantined.add(b);pool.note('QUARANTINED', b, reason=why[:500]);return False
+
+    async def revive(b):
+        if await reachable(b) and await admitted(b) and b in pool.down:pool.restore(b)
+
+    async def health():
+        """Every health_interval seconds, each down backend (not quarantined) is reconnected to; it ranks again only once it accepts
+        a connection (and passes the identity probe, with --probe-requests). Requests never retry a down backend."""
+        while True:
+            await asyncio.sleep(health_interval)
+            down = [b for b in pool.down if b in pool._in and b not in quarantined]
+            if down:await asyncio.gather(*(revive(b) for b in down))
+
+    lock = asyncio.Lock()
+    async def reload():
+        """Re-read --backends-file and serve exactly its backends (SIGHUP). All or nothing: an unreadable or invalid file, the listen
+        address among the backends, or an added backend that does not accept a connection (or fails the identity probe) leaves the
+        set unchanged (RELOAD_REJECTED). Removed backends take no new connection; added ones join up."""
+        async with lock:
+            try:
+                if backends_file is None:raise ValueError('no --backends-file')
+                specs = read_backends_file(backends_file);new = [b for b, _ in specs];new_gpus = {b: g for b, g in specs if g is not None}
+                bound = server.sockets[0].getsockname()[1]   # the port listened on (--listen may name port 0)
+                if listen in new or any(p == bound and h in {listen[0], '0.0.0.0', '127.0.0.1', 'localhost', '::', '::1'} for h, p in new):
+                    raise ValueError('--listen must not be one of the backends')
+                Pool.check(new, new_gpus)
+                # a backend joining, or a quarantined one the file still names (the operator re-admits it), must accept a connection
+                # and pass the identity probe first
+                joining = [b for b in new if b not in pool._in or b in quarantined]
+                for b in joining:
+                    if not await reachable(b):raise ValueError(f'{b[0]}:{b[1]} does not accept a connection')
+                    quarantined.discard(b)
+                    if not await admitted(b):raise ValueError(f'{b[0]}:{b[1]} failed the identity probe')
+                readmitted = [b for b in joining if b in pool._in];added, removed = pool.set_backends(new, new_gpus)
+                for b in readmitted:pool.restore(b)
+            except (OSError, ValueError, argparse.ArgumentTypeError) as error:
+                log(json.dumps(dict(event='RELOAD_REJECTED', time=time.time(), reason=str(error)[:500])));return False
+            quarantined.intersection_update(pool._in)
+            log(json.dumps(dict(event='RELOAD', time=time.time(), added=[f'{h}:{p}' for h, p in added], removed=[f'{h}:{p}' for h, p in removed],
+                                backends=[f'{h}:{p}' for h, p in pool.backends])))
+            return True
+    pool.reload = reload   # tests (and anything holding the pool) reload without a signal
+
     server = await asyncio.start_server(lambda r, w: handle(pool, r, w, connect_timeout=connect_timeout, first_frame_timeout=first_frame_timeout, log_row=log_row), *listen)
     log(json.dumps(dict(event='READY', listen=f'{listen[0]}:{server.sockets[0].getsockname()[1]}', backends=[f'{h}:{p}' for h, p in backends],
-        identity=None if identities is None else next(iter(identities.values())), probed=identities is not None)))
+        identity=identity, probed=identities is not None)))
     if started is not None:started(server, pool)
     async def report():
         while True:
             await asyncio.sleep(report_seconds);log(json.dumps(dict(event='POOL', time=time.time(), **pool.snapshot())))
-    reporter = asyncio.create_task(report()) if report_seconds > 0 else None
+    tasks = [asyncio.create_task(health())] + ([asyncio.create_task(report())] if report_seconds > 0 else [])
+    loop = asyncio.get_running_loop();pending = set();hup = False
+    def on_hup():
+        task = asyncio.ensure_future(reload());pending.add(task);task.add_done_callback(pending.discard)
+    try:loop.add_signal_handler(signal.SIGHUP, on_hup);hup = True   # a stray SIGHUP no longer kills the proxy: it reloads (or logs why not)
+    except (NotImplementedError, RuntimeError, ValueError):pass   # no signals here (not the main thread, or not Unix)
     try:
         async with server:await server.serve_forever()
     finally:
-        if reporter is not None:reporter.cancel()
+        if hup:loop.remove_signal_handler(signal.SIGHUP)
+        for task in tasks + list(pending):task.cancel()
 
 
 def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument('--listen', type=address, required=True, help='HOST:PORT to listen on')
-    p.add_argument('--backend', type=backend_spec, action='append', required=True,
+    p.add_argument('--backend', type=backend_spec, action='append',
         help='a depthn_live_server HOST:PORT, or HOST:PORT@GPU naming its GPU (repeat per process)')
+    p.add_argument('--backends-file', help='the backends instead, one HOST:PORT[@GPU] per line; re-read on SIGHUP (add or drop backends '
+        'without a restart)')
+    p.add_argument('--health-interval', type=bounded(.01, 600.), default=1.,
+        help='seconds between reconnection attempts to each down backend (a backend whose connection setup failed)')
     p.add_argument('--wait-ready', type=bounded(0., 3600.), default=0., help='seconds to wait for every backend to accept a connection')
     p.add_argument('--connect-timeout', type=bounded(.01, 5.), default=.25, help='per-backend connection setup timeout (seconds)')
     p.add_argument('--cooldown', type=bounded(0., 600.), default=5., help='seconds a backend whose setup failed sorts last')
@@ -333,6 +468,11 @@ def main(argv=None):
     p.add_argument('--expect-worlds', type=int)
     p.add_argument('--connection-log', help='JSONL, appended: one row per client connection (backend, timings, bytes)')
     args = p.parse_args(argv)
+    if (args.backend is None) == (args.backends_file is None):p.error('one of --backend (repeated) or --backends-file required')
+    if args.backends_file is not None:
+        try:args.backend = read_backends_file(args.backends_file)
+        except (OSError, argparse.ArgumentTypeError) as error:p.error(f'--backends-file: {error}')
+        if not args.backend:p.error('--backends-file: one or more backends required')
     expect = {k: v for k, v in dict(rung=args.expect_rung, archive_sha256=args.expect_archive_sha256, root_operator=args.expect_root_operator,
         matmul_precision=args.expect_matmul_precision, requested_worlds=args.expect_worlds, reply_archive_sha256=args.expect_reply_archive_sha256,
         peer_view_b=args.expect_peer_view_b, reply_views=args.expect_reply_views).items() if v is not None}
@@ -348,7 +488,7 @@ def main(argv=None):
     try:asyncio.run(run(args.listen, backends, gpus=gpus, wait_ready_seconds=args.wait_ready, report_seconds=args.report_seconds, log=log,
         connect_timeout=args.connect_timeout, cooldown=args.cooldown, first_frame_timeout=args.first_frame_timeout, sticky_idle=args.sticky_idle,
         sticky_cap=args.sticky_cap, probe_requests=probe, expect=expect, probe_timeout=args.probe_timeout,
-        log_row=None if stream is None else log_row))
+        log_row=None if stream is None else log_row, health_interval=args.health_interval, backends_file=args.backends_file))
     except KeyboardInterrupt:return 0
     finally:
         if stream is not None:stream.close()

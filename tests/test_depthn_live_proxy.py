@@ -2,8 +2,11 @@ import asyncio
 from collections import Counter
 import hashlib
 import json
+import os
+import signal
 import socket
 import struct
+import tempfile
 import unittest
 from unittest import mock
 
@@ -490,6 +493,172 @@ class IdentityTests(unittest.TestCase):
         with self.assertRaisesRegex(SystemExit, 'identity probe failed'):
             async def main():await P.check_identity([('127.0.0.1', free_port())], self.REQUESTS, {}, timeout=1.)
             asyncio.run(main())
+
+
+class HealthTests(unittest.TestCase):
+    """r5b gate (the lead, 2026-11-13, after r5a's pod C preemption): a dead backend is ejected from placement until a health check
+    reconnects to it, so connect timeouts never sit on a decision's path after detection; backends drop and join without a restart."""
+
+    def harness(self, scenario, names, *, hung=(), delays=None, handlers=None, file_names=None, start=None, **kw):
+        """Backends `names`: framed backends answering after delays[name] (default at once), or handlers[name] (an asyncio server
+        callback); the proxy starts over those in `start` (default: all). Connection setup to a port in the live set `hanging`
+        (initially those in `hung`) hangs: a dead pod's IP, no refusal,
+        only the connect timeout. With file_names, a backends file naming those is written first and given to the proxy (reload).
+        scenario(port, pool, ports, hanging, lines, rows, setups, path)."""
+        real = asyncio.open_connection;hanging = set();setups = Counter()
+        async def fake(host, port, *a, **k):
+            setups[port] += 1
+            if port in hanging:await asyncio.sleep(3600)
+            return await real(host, port, *a, **k)
+        async def main(path):
+            served, servers, ports = [], {}, {}
+            for name in names:
+                if handlers and name in handlers:s = await asyncio.start_server(handlers[name], '127.0.0.1', 0)
+                else:s = await framed_backend(name, (delays or {}).get(name, 0.), served)
+                servers[name] = s;ports[name] = s.sockets[0].getsockname()[1]
+            hanging.update(ports[n] for n in hung);backends = [('127.0.0.1', ports[n]) for n in (names if start is None else start)]
+            if file_names is not None:self.write(path, ports, file_names)
+            box, lines, rows = {}, [], []
+            task = asyncio.create_task(P.run(('127.0.0.1', 0), backends, log=lines.append, report_seconds=0, log_row=rows.append,
+                backends_file=None if file_names is None else path,
+                started=lambda server, pool: box.update(port=server.sockets[0].getsockname()[1], pool=pool), **kw))
+            for _ in range(300):
+                if 'port' in box or task.done():break
+                await asyncio.sleep(.01)
+            if task.done():task.result()
+            try:return await scenario(box['port'], box['pool'], ports, hanging, lines, rows, setups, path)
+            finally:
+                task.cancel()
+                for s in servers.values():s.close()
+        with tempfile.TemporaryDirectory() as d, mock.patch.object(P.asyncio, 'open_connection', fake):
+            return asyncio.run(main(os.path.join(d, 'backends.txt')))
+
+    @staticmethod
+    def write(path, ports, names, gpus=None):
+        with open(path, 'w') as f:
+            f.write('# backends\n\n')
+            for n in names:f.write(f'127.0.0.1:{ports[n]}' + (f'@{gpus[n]}' if gpus else '') + '  # ' + n + '\n')
+
+    @staticmethod
+    def events(lines, kind=None):
+        rows = [json.loads(l) for l in lines[1:]]
+        return [r for r in rows if kind is None or r['event'] == kind]
+
+    def test_a_killed_backend_costs_one_connect_timeout_then_binding_decisions_pay_nothing(self):
+        # r5a: two dead backends with 0 live battles ranked first again after every 5 s cooldown, so every new battle's first
+        # decision paid two 0.25 s connect timeouts. Here each new battle comes after the cooldown: only ejection keeps it off.
+        async def scenario(port, pool, ports, hanging, lines, rows, setups, path):
+            loop = asyncio.get_running_loop();times, homes = [], []
+            for k in range(10):
+                await asyncio.sleep(.06)   # past the cooldown each time
+                t = loop.time();out = await request(port, dict(battle_id=f'b{k}', owner='p1'));times.append(loop.time() - t);homes.append(out['backend'])
+            return times, homes, setups[ports['dead']], pool.snapshot(), self.events(lines)
+        times, homes, dead_setups, snap, events = self.harness(scenario, ['dead', 'a', 'b'], hung=['dead'], connect_timeout=.3, cooldown=.05,
+                                                              health_interval=60.)
+        self.assertGreaterEqual(times[0], .3);self.assertNotIn('dead', homes)   # detection: the first new battle pays one timeout
+        self.assertLess(max(times[1:]), .15, times)   # after detection: no connect timeout on any binding decision
+        self.assertEqual(dead_setups, 1)   # tried once by a request, never again (the health check runs every 60 s here)
+        self.assertEqual([b['down'] for b in snap['backends']], [True, False, False]);self.assertEqual(snap['backends'][0]['refused'], 1)
+        self.assertEqual([(e['event'], e['state']) for e in events], [('HEALTH', 'DOWN')])
+
+    def test_a_down_backend_ranks_again_once_the_health_check_reconnects(self):
+        async def scenario(port, pool, ports, hanging, lines, rows, setups, path):
+            first = (await request(port, dict(battle_id='x', owner='p1')))['backend']   # detects x down
+            await asyncio.sleep(.4);still = setups[ports['x']]   # health checks keep timing out while it hangs
+            hanging.clear()
+            for _ in range(100):
+                if not pool.down:break
+                await asyncio.sleep(.02)
+            back = (await request(port, dict(battle_id='y', owner='p1')))['backend']   # x: no live battle there
+            return first, still, back, [e['state'] for e in self.events(lines)]
+        first, still, back, states = self.harness(scenario, ['x', 'a'], hung=['x'], connect_timeout=.1, health_interval=.05)
+        self.assertEqual(first, 'a');self.assertGreater(still, 1);self.assertEqual(back, 'x');self.assertEqual(states, ['DOWN', 'UP'])
+
+    def test_every_backend_down_still_tries_them_all(self):
+        async def scenario(port, pool, ports, hanging, lines, rows, setups, path):
+            outs = [await request(port, dict(battle_id=f'b{k}')) for k in range(2)]
+            return outs, sorted(setups[ports[n]] for n in ('x', 'y')), pool.unserved
+        outs, setups, unserved = self.harness(scenario, ['x', 'y'], hung=['x', 'y'], connect_timeout=.05, health_interval=60.)
+        self.assertEqual((outs, setups, unserved), ([None, None], [2, 2], 2))   # no backend left to prefer: each request tries both
+
+    def test_a_reload_drops_and_adds_backends_without_a_restart(self):
+        async def scenario(port, pool, ports, hanging, lines, rows, setups, path):
+            homes = {b: (await request(port, dict(battle_id=b, owner='p1')))['backend'] for b in ('x', 'y', 'z')}
+            on_b = next(k for k, v in homes.items() if v == 'b')
+            slow = asyncio.create_task(request(port, dict(battle_id=on_b, owner='p1', k=1)))   # in flight on b during the reload
+            while not pool.active[('127.0.0.1', ports['b'])]:await asyncio.sleep(.005)
+            self.write(path, ports, ['a', 'c']);dropped = await pool.reload()
+            rehomed = (await request(port, dict(battle_id=on_b, owner='p1', k=2)))['backend']
+            fresh = [(await request(port, dict(battle_id=f'n{k}', owner='p1')))['backend'] for k in range(4)]
+            finished = (await slow)['backend'];live = dict(pool.per_gpu(pool.live(__import__('time').monotonic())))
+            self.write(path, ports, ['a', 'b', 'c']);added = await pool.reload()
+            joined = (await request(port, dict(battle_id='w', owner='p1')))['backend']   # b: no live battle there
+            return homes, dropped, rehomed, fresh, finished, live, ports, added, joined, self.events(lines, 'RELOAD')
+        homes, dropped, rehomed, fresh, finished, live, ports, added, joined, reloads = self.harness(
+            scenario, ['a', 'b', 'c'], delays=dict(b=.4), file_names=['a', 'b', 'c'])
+        self.assertEqual(sorted(homes.values()), ['a', 'b', 'c']);self.assertTrue(dropped);self.assertTrue(added)
+        self.assertNotEqual(rehomed, 'b');self.assertNotIn('b', fresh);self.assertEqual(finished, 'b')   # in flight on b: answered
+        self.assertNotIn(f'127.0.0.1:{ports["b"]}', live)   # a removed backend's battles count toward no GPU
+        self.assertEqual(joined, 'b')
+        self.assertEqual([(len(e['added']), len(e['removed']), len(e['backends'])) for e in reloads], [(0, 1, 2), (1, 0, 3)])
+
+    def test_a_reload_that_would_break_the_pool_changes_nothing(self):
+        async def scenario(port, pool, ports, hanging, lines, rows, setups, path):
+            def put(text):
+                with open(path, 'w') as f:f.write(text)
+            before = list(pool.backends);results = [];dead = free_port()
+            os.remove(path);results.append(await pool.reload())   # the file is gone
+            for text in (''.join(f'127.0.0.1:{ports[n]}@{g}\n' for n, g in (('a', 'g0'), ('b', 'g0'), ('c', 'g1'))),   # 2 + 1 per GPU
+                         f'127.0.0.1:{ports["a"]}\n127.0.0.1:{dead}\n',   # a backend that never listens
+                         '# nothing\n', 'nohost\n', f'127.0.0.1:{port}\n'):   # no backend; not HOST:PORT; the listen address
+                put(text);results.append(await pool.reload())
+            return results, before == pool.backends, len(self.events(lines, 'RELOAD_REJECTED'))
+        results, unchanged, rejected = self.harness(scenario, ['a', 'b', 'c'], file_names=['a', 'b', 'c'])
+        self.assertEqual(results, [False] * 6);self.assertTrue(unchanged);self.assertEqual(rejected, 6)
+
+    def test_a_returning_or_joining_backend_must_pass_the_identity_probe(self):
+        seen = [];wrong = {'on': False}
+        good, bad = identity_backend('good', [], seen), identity_backend('bad', [], seen, archive='other')
+        flip_good, flip_bad = identity_backend('flip', [], seen), identity_backend('flip', [], seen, archive='other')
+        async def flip(reader, writer):await (flip_bad if wrong['on'] else flip_good)(reader, writer)
+        async def scenario(port, pool, ports, hanging, lines, rows, setups, path):
+            f = ('127.0.0.1', ports['flip'])
+            pool.fail(f);wrong['on'] = True   # down, and back with another archive: the health check's probe keeps it out
+            for _ in range(100):
+                if any(e['state'] == 'QUARANTINED' for e in self.events(lines, 'HEALTH')):break
+                await asyncio.sleep(.02)
+            probes = sum(n == 'flip' for n, _ in seen);await asyncio.sleep(.3)
+            stays_out = f in pool.down and sum(n == 'flip' for n, _ in seen) == probes   # quarantined: never probed again
+            wrong['on'] = False;readmitted = await pool.reload()   # the file still names flip: the operator's reload re-admits it
+            self.write(path, ports, ['good', 'flip', 'bad']);joined_bad = await pool.reload()   # bad would join: probed, refused
+            return stays_out, readmitted, f in pool.down, joined_bad, len(pool.backends), [e['state'] for e in self.events(lines, 'HEALTH')]
+        stays_out, readmitted, still_down, joined_bad, n, states = self.harness(
+            scenario, ['good', 'flip', 'bad'], start=['good', 'flip'], handlers=dict(good=good, flip=flip, bad=bad), file_names=['good', 'flip'],
+            probe_requests=IdentityTests.REQUESTS, expect=IdentityTests.EXPECT, probe_timeout=5., health_interval=.05)
+        self.assertTrue(stays_out);self.assertTrue(readmitted);self.assertFalse(still_down);self.assertFalse(joined_bad);self.assertEqual(n, 2)
+        self.assertEqual(states, ['DOWN', 'QUARANTINED', 'UP', 'QUARANTINED'])
+
+    def test_sighup_reloads_the_backends_file(self):
+        async def scenario(port, pool, ports, hanging, lines, rows, setups, path):
+            handler = signal.getsignal(signal.SIGHUP)
+            self.assertNotIn(handler, (signal.SIG_DFL, signal.SIG_IGN, None))   # never send SIGHUP to a process that would die of it
+            self.write(path, ports, ['a']);os.kill(os.getpid(), signal.SIGHUP)
+            for _ in range(200):
+                if self.events(lines, 'RELOAD'):break
+                await asyncio.sleep(.01)
+            return [len(e['backends']) for e in self.events(lines, 'RELOAD')], len(pool.backends)
+        self.assertEqual(self.harness(scenario, ['a', 'b'], file_names=['a', 'b']), ([1], 1))
+        self.assertEqual(signal.getsignal(signal.SIGHUP), signal.SIG_DFL)   # the proxy's handler goes with it
+
+    def test_cli_takes_backend_or_a_backends_file(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, 'b.txt')
+            with open(path, 'w') as f:f.write('# none\n')
+            for args in ([], ['--backend', '127.0.0.1:2', '--backends-file', path], ['--backends-file', path],
+                         ['--backends-file', os.path.join(d, 'missing')], ['--backend', '127.0.0.1:2', '--health-interval', '0']):
+                with self.subTest(args=args), mock.patch('sys.stderr'), self.assertRaises(SystemExit):P.main(['--listen', '127.0.0.1:1'] + args)
+            with open(path, 'w') as f:f.write('127.0.0.1:7001@g0  # a\n\n127.0.0.1:7002@g1\n')
+            self.assertEqual(P.read_backends_file(path), [(('127.0.0.1', 7001), 'g0'), (('127.0.0.1', 7002), 'g1')])
 
 
 if __name__ == '__main__':
