@@ -200,6 +200,41 @@ class PublicHooksTests(unittest.TestCase):
   c2=h.install(c2,passed,1,yes);c2=h.baton_copy(c2,passed,1,zero,yes);c2=h.withdraw(c2,passed,1,zero,yes)
   self.assertEqual(bit(c2,passed,1),[False,False])
   c2=h.turn_end(c2,again,passed,yes);self.assertEqual(bit(c2,passed,1),[False,False])
+ def test_fainted_active_keeps_its_public_stages_in_both_views_until_its_replacement_arrives(self):
+  # The device harness's OPEN BUG D, by the lead's ruling (observation inputs follow the champion's B2/Python encoder
+  # convention, engine state follows Showdown): the engine zeroes a fainted active's stages, B2 and the Python encoder
+  # keep them until the replacement arrives. The carry keeps them; the replacement's install and withdraw reset them.
+  s=state();yes=j.ones(2,bool);zero=j.zeros(2,j.int32)
+  up=s._replace(boosts=s.boosts.at[:,1,0,0].set(2).at[:,1,0,4].set(-1))          # side 1's active: +2 Atk, -1 Spe
+  c=h.initialize(s,tables());c=h.observe(c,up,yes)
+  # The KO. Lane 0 reads it before the engine's clear, with a last -1 Spe from the same action; lane 1 only after it.
+  pre=up._replace(hp=up.hp.at[:,1,0].set(0),boosts=up.boosts.at[0,1,0,4].set(-2))
+  c=h.observe(c,pre,j.array([True,False]))
+  cleared=pre._replace(boosts=pre.boosts.at[:,1,0].set(0))                         # transition._clear_fainted_boosts
+  c=h.turn_end(c,up,cleared,yes)
+  kept=[[2,0,0,0,-2,0,0],[2,0,0,0,-1,0,0]]
+  foe=tr.readout(c.trackers,zero);own=tr.readout(c.trackers,j.ones(2,j.int32))
+  self.assertEqual(np.asarray(foe.boosts)[:,0].tolist(),kept)                      # the opponent's view
+  self.assertEqual(np.asarray(own.own_boosts).tolist(),kept)                       # the fainted mon's own view
+  self.assertEqual(np.asarray(foe.own_boosts).tolist(),[[0]*7]*2)                  # side 0's own active is untouched
+  self.assertEqual(np.asarray(c.trackers.fainted)[:,1,0].tolist(),[True,True])
+  # The replacement's arrival resets them: install reads the entrant's engine stages, withdraw zeroes the fainted slot.
+  new=cleared._replace(active=cleared.active.at[:,1].set(3))
+  c=h.install(c,new,1,yes);c=h.withdraw(c,new,1,zero,yes);c=h.turn_end(c,new,new,yes)
+  foe=tr.readout(c.trackers,zero);own=tr.readout(c.trackers,j.ones(2,j.int32))
+  self.assertEqual(np.asarray(foe.boosts)[:,1].tolist(),[[0]*7]*2);self.assertEqual(np.asarray(own.own_boosts).tolist(),[[0]*7]*2)
+  self.assertEqual(np.asarray(c.trackers.boosts)[:,1,0].tolist(),[[0]*7]*2)
+  # Baton Pass, the one stage carrier: the recipient's stages are the engine's copy (baton.copy_to_recipient), read at
+  # install. A fainted passer cannot arise (transition sets baton_pass only at hp>0 and the step ends there), and the
+  # carry's kept stages never reach a recipient: an install reads only engine state.
+  c2=h.initialize(s,tables());c2=h.observe(c2,up,yes)
+  passed=up._replace(active=up.active.at[:,1].set(3),boosts=up.boosts.at[:,1,3].set(up.boosts[:,1,0]).at[:,1,0].set(0))
+  c2=h.install(c2,passed,1,yes);c2=h.baton_copy(c2,passed,1,zero,yes);c2=h.withdraw(c2,passed,1,zero,yes)
+  self.assertEqual(np.asarray(tr.readout(c2.trackers,zero).boosts)[:,1].tolist(),[[2,0,0,0,-1,0,0]]*2)
+  self.assertEqual(np.asarray(c2.trackers.boosts)[:,1,0].tolist(),[[0]*7]*2)
+  c3=h.initialize(s,tables());c3=h.observe(c3,up,yes);c3=h.observe(c3,cleared,yes)  # a kept fainted carry
+  c3=h.install(c3,new,1,yes);c3=h.baton_copy(c3,new,1,zero,yes);c3=h.withdraw(c3,new,1,zero,yes)
+  self.assertEqual(np.asarray(tr.readout(c3.trackers,zero).boosts)[:,1].tolist(),[[0]*7]*2)
 
  def test_default_physical_ast_exact_after_only_optin_erasure(self):
   class Erase(ast.NodeTransformer):
