@@ -223,6 +223,24 @@ for _scenario, _steps in (('destinybond_pursuer', (1, 2)), ('wh_pursuit', (0,)))
 # 990, acts &= ~(counter kind & (taken kind differs | the called move is not the chosen one))) has already cleared.
 _SLEEP_TALK_COUNTER = 'OPEN BUG: Sleep Talk\'s failing called Counter is revealed by B2 ([from] Sleep Talk line), not by the device'
 for _step in (1, 2):ALLOWLIST[('counter_sleeptalk', 'talk=0', _step, '0:0:moves')] = _SLEEP_TALK_COUNTER
+# OPEN BUG (reported): the upkeep's Lum and pinch-berry non-proc rules. B2's sweep (gpu_engine/public_item_nonproc.py,
+# its triggers) and the Python belief (src/pokezero/belief.py _sweep_end_of_turn_non_procs) rule out, for a living
+# active with an unrevealed, unmutated item, Lum Berry when a status is kept to |upkeep, and Salac/Petaya/Liechi when the
+# pre-slot HP is at or below 25% (Showdown agrees: data/items.ts lumberry, data/mods/gen3/items.ts pinch berries at
+# residual). The device's engine_device_negative_items.upkeep runs only the Leftovers rule, so its hard masks keep those
+# variants. It shows wherever the fixed catalog holds such a variant of the species: Snorlax's four and Jolteon's one
+# Lum Berry sets, Ninjask's Salac Berry set.
+_NONPROC_ITEMS = 'OPEN BUG: B2 rules out Lum Berry (status kept to the upkeep) and pinch-berry variants; the device upkeep runs only the Leftovers rule'
+for _scenario, _cases, _field, _steps in (
+        ('aromatherapy', ('base',), '0:2', range(1, 7)),
+        ('confusion_selfhit', ('damage=0', 'damage=15'), '1:1', range(4, 13)),
+        ('sleepclause_faint', ('base',), '1:0', range(2, 7)), ('subfaint', ('base',), '0:0', range(0, 7)),
+        ('toxic', ('accuracy=0',), '1:0', (0,)), ('yawn', ('sleep=0', 'sleep=1', 'sleep=2', 'sleep=3'), '1:0', range(1, 7)),
+        ('yawn_again', ('base',), '1:0', range(1, 4)), ('yawn_sleepclause', ('base',), '1:0', range(0, 5)),
+        ('yawn_statused', ('base',), '1:0', (1,))):
+    for _case in _cases:
+        for _step in _steps:
+            for _mask in ('belief_hard', 'visible_hard'):ALLOWLIST[(_scenario, _case, _step, f'{_field}:{_mask}')] = _NONPROC_ITEMS
 # B2 limit (explained, not a device fact): B2's fold refuses (PAYLOAD) a side's second encounter of one species, at the
 # repeat's arrival line (|switch|p2a: Gengar2|Gengar, L74, M|...: RAW_BEGIN, SWITCH_PRELUDE, MUDSHOT, SWITCH, NONPROC,
 # TENDENCY); Gen 3 Random Battle's Species Clause never sends it, the probes' Custom Game does. The case is compared
