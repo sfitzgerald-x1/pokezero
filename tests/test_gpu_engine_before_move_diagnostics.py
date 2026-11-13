@@ -82,7 +82,24 @@ class BeforeMoveDiagnosticsTests(unittest.TestCase):
         dump=lambda n:ast.dump(n,include_attributes=False)
         self.assertEqual([dump(x)for x in original.args],[dump(x)for x in recorded.args[6:9]])
         kw={k.arg:k.value for k in recorded.keywords}
-        for k in original.keywords:self.assertEqual(dump(k.value),dump(kw[k.arg]),k.arg)
+        # WH + C-lite: defrost_move (Sacred Fire) reaches before_move only. It changes BeforeMove only for a frozen user, and the
+        # lifecycle path refuses a frozen defrost user in the statement right after the call, so the recorder never has to
+        # rebuild that case. The exemption is exactly {'defrost_move'}; every other keyword still has to reach the recorder.
+        # If that refusal is ever removed, defrost_move must be passed to record_before_move_on_tape instead (option B).
+        EXEMPT={'defrost_move'}
+        for k in original.keywords:
+            if k.arg in EXEMPT:continue
+            self.assertIn(k.arg,kw,f'before_move keyword {k.arg!r} does not reach record_before_move_on_tape')
+            self.assertEqual(dump(k.value),dump(kw[k.arg]),k.arg)
+        self.assertEqual([dump(k.value)for k in original.keywords if k.arg=='defrost_move'],[dump(ast.parse('_defrost',mode='eval').body)])
+        owner=next(b for n in ast.walk(new) for b in [getattr(n,f,None) for f in ('body','orelse')] if isinstance(b,list)
+            and any(isinstance(x,ast.Assign) and x.value is original for x in b))
+        at=next(i for i,x in enumerate(owner) if isinstance(x,ast.Assign) and x.value is original)
+        self.assertEqual(ast.unparse(owner[at+1]),
+            'if _lifecycle_trace and table.effects is not None:\n'
+            '    _public_trace = status_callbacks.unknown(_public_trace, eligible & _defrost & (_active(work.status, work, side) == m.FRZ))',
+            'the lifecycle refusal of a frozen defrost user (the same _defrost mask) must be the statement right after the original '
+            'BeforeMove call; if it is removed, pass defrost_move to record_before_move_on_tape instead (option B)')
         self.assertEqual(recorded.args[1].id,'before');self.assertGreater(recorded.lineno,original.lineno)
         # mechanics, engine_execution_completeness, engine_kernel_frame_risk and engine_retained_encoder_driver: byte-exact against reviewed SOURCE_PINS in transition_observer_wiring's source-binding subtests.
         for name in ('benchmark_retained_games.py',):

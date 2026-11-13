@@ -115,8 +115,7 @@ const lines=[],p={hp,isActive:active,hasType:()=>same,setType(t){this.type=t;ret
     return node
   normalized=IntendedTypes().visit(ast.parse(subprocess.check_output(['git','show','1da1c80d:gpu_engine/transition.py'],text=True)));baseline=dump_default_program(old)
   self.assertEqual(dump_default_program(normalized),baseline);assert_hp_rng_mutations_detected(self,normalized,baseline)
-  current=ast.parse(Path('gpu_engine/transition.py').read_text());integrated=ast.parse(subprocess.check_output(['git','show','b8092a85:gpu_engine/transition.py'],text=True))
-  self.assertEqual(ast.dump(current),ast.dump(integrated));assert_hp_rng_mutations_detected(self,current,dump_default_program(integrated))
+  # transition.py is certified against CURRENT_TRANSITION (full AST plus mutations) by terminal_closeout and seismic_toss_components.
   s=states.empty_state(1);base=j.broadcast_to(j.array([self.normal,0]),s.types.shape)
   s=s._replace(types=base,base_types=base,species=j.ones_like(s.species),level=j.ones_like(s.level)*80,hp=j.ones_like(s.hp)*100,max_hp=j.ones_like(s.hp)*100,stats=j.ones_like(s.stats)*100,ability=j.ones_like(s.ability)*self.pressure,base_ability=j.ones_like(s.ability)*self.pressure,moves=j.ones_like(s.moves)*self.surf,pp=j.ones_like(s.pp)*24,entry_pending=j.zeros_like(s.entry_pending))
   cursor=life.register(j.array([59001],j.int32),catalog=self.producer,expected_binding=self.producer.binding,expected_engine_binding=np.asarray(self.producer.engine_binding,np.uint32));tape=life._tape(cursor,self.producer,64)

@@ -23,9 +23,9 @@
    "reason": "memory",
    "hosted_median_min": null,
    "isolated_wall_min": 12.0,
-   "isolated_peak_gib": 11.3,
+   "isolated_peak_gib": 11.8,
    "completes_on_hosted": null,
-   "note": "M2 step-graph growth: R1 4-CPU peak 11.3 GiB against the 11.71 hosted bar (base 9.2 isolated, 9.63 in the pod light race); temporary, re-measure after R2 and move back to the light tier if it fits. Until then every engine PR's heavy diff must include this module: it is the A2 effects' (Destiny Bond, Knock Off) test that r5a's guard retirements rely on."
+   "note": "M2 step-graph growth: R1 4-CPU peak 11.3 GiB against the 11.71 hosted bar (base 9.2 isolated, 9.63 in the pod light race); WH + C-lite head 11.8 GiB (R1 11.3, base 9.2); temporary, re-measure after R2 and move back to the light tier if it fits. Until then every engine PR's heavy diff must include this module: it is the A2 effects' (Destiny Bond, Knock Off) test that r5a's guard retirements rely on."
   },
   {
    "module": "test_gpu_engine_fidelity_b",
@@ -39,9 +39,10 @@
    "module": "test_gpu_engine_fidelity_m1",
    "reason": "wall+memory",
    "hosted_median_min": null,
-   "isolated_wall_min": 58.1,
-   "isolated_peak_gib": 80.1,
-   "completes_on_hosted": false
+   "isolated_wall_min": 49.5,
+   "isolated_peak_gib": 74.4,
+   "completes_on_hosted": false,
+   "note": "WH + C-lite head with the WH10 device-order catcher lanes (DeviceTests): 74.4 GiB / 49.5 min on 4 pinned CPUs, 21 tests (R1 80.1 / 58.1)."
   },
   {
    "module": "test_gpu_engine_fidelity_r",
@@ -63,9 +64,10 @@
    "module": "test_gpu_engine_owning_drain_end_to_end",
    "reason": "wall+memory",
    "hosted_median_min": null,
-   "isolated_wall_min": 74.0,
-   "isolated_peak_gib": 141.8,
-   "completes_on_hosted": false
+   "isolated_wall_min": null,
+   "isolated_peak_gib": 180,
+   "completes_on_hosted": false,
+   "note": "lower bound: K1 at R1 c8521ed9 (4 CPUs) timed out at 14000 s with 1 of 6 tests settled, 173 GiB RSS; base 9640bbe1 88.6 GiB / 68 min. Rerun on 16 CPUs with a 12 h timeout; measured values replace this when it settles."
   },
   {
    "module": "test_gpu_engine_source_witness_compiled_anchor",

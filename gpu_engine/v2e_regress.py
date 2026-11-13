@@ -138,6 +138,27 @@ which the base does not store; within one step only a mon active at its start or
 on a benched mon is so flagged even where the leaf's family is allowed. Flagged lane-steps are counted as
 m2_wrong_mon.
 
+Special rules (WH, with --pr WH; post-state, per mon). The base pass stores per-lane witness arrays of the holder's
+item, item_knocked flag and stages and of the device's item reveal, removal, narrowing, visible basis, ledger, per-stint
+item flags and removal credit (witness_names). The Stepper records this tree's White Herb uses around the device hook
+white_herb: a valid use is the side's living active holding White Herb with a negative stage, left with no item and exactly
+max(stage, 0), no other state leaf of any mon changed by the call, and the hook's consumption reveal (shown_item White
+Herb, item_removed) at its slot; any other call with use, or a change without use, is bad (forced unexpected). White
+Herb stays involved only on a lane with a valid use. A Tricked-in White Herb whose living receiver has a negative stage
+must already be used when the device's trick hook runs (setItem's Start inside Trick's onHit precedes the -item lines),
+and the hook's herb_used must equal those uses; otherwise the lane is bad too (wh_trick_order). wh_rule then explains, per mon and per public slot against the
+base's arrays, the restored stages (this tree's = the base's + the recorded raise, or a mon whose faint differs), the
+consumed item (White Herb in the base, none here), a holder the base knocked off afterwards (item_knocked, credit),
+and a Trick partner that got the herb only in the base; item-family slot differences must lie at an active of either
+side. Facade stays involved only for a side whose own Facade line ran by its pre-step active under par/brn/psn/tox
+(recorded at the move hook). A frozen user's Sacred Fire stays involved only for a side whose pre-step active was
+frozen at its record_move and thawed at its own Sacred Fire line, or, at its own BeforeMove (eligible, the executed
+move Sacred Fire), failed frz's roll and did not act (flinch or confusion), and never where a Sacred Fire line ran still frozen (sacred_actors; lanes kept by the stop alone: sacredfire_stopped).
+A pinch berry eaten in exactly one tree on a White Herb or Facade lane (its holder's damage moved across the
+quarter-HP line) is explained per mon by pinch_rule (one stage in its own stat, the item, the device's reveal at its
+slot). Explained lane-steps are counted as wh_leaves (pinch_leaves for berries); malformed calls as wh_bad; lanes that
+lost the involvement as wh_dropped, facade_dropped and sacredfire_dropped.
+
 KO cascade rule for the saved effect block (fidelity R's state.effect_draws,
 found by the M1 GPU pass): once the base pass has the leaf it is compared
 bitwise, and a KO cascade or phase shift that moves the residual deferral
@@ -471,11 +492,31 @@ def installs(p):
 
 def white_herb(p):
     """An active White Herb holder, or one that may come in this step (switch, Baton
-    Pass, the foe's Roar/Whirlwind, a replacement)."""
+    Pass, the foe's Roar/Whirlwind, a replacement); WH: and a side that may Trick an
+    active holder's herb away (it may restore the Tricker at the Trick's own AfterMove)."""
     items = p.vocab['items']
     if 'whiteherb' not in items:return np.zeros((p.lanes, 2), bool)
     herb = items.index('whiteherb');holders = p.s['item'] == herb                       # [L,2,6]
-    return (p.active('item') == herb) | (holders.any(-1) & installs(p))
+    active = p.active('item') == herb
+    return active | (holders.any(-1) & installs(p)) | (p.side_uses('trick') & active[:, ::-1])
+
+
+# WH (C-lite): status ids, mechanics.SLP and mechanics.FRZ (PAR 1, BRN 2, PSN 3, TOX 4, SLP 5, FRZ 6). Literal here: this
+# module imports no JAX at load; test_gpu_engine_fidelity_wh pins them to mechanics.
+SLP, FRZ = 5, 6
+
+
+def facade_status(p):
+    """WH: a side that may execute Facade while its active is neither asleep nor frozen: only a par/brn/psn/tox user at
+    its getDamage doubles, and an asleep or frozen user reaches Facade only after waking or thawing (no status) or through
+    Sleep Talk (slp). A status gained earlier in the step counts (pre-state superset)."""
+    return p.side_uses('facade') & ~np.isin(p.active('status'), [SLP, FRZ])
+
+
+def frozen_defrost(p):
+    """WH: a frozen active that may execute Sacred Fire (the only defrost move with a pool user: Ho-Oh, which Gen 3 can
+    freeze, the typechart giving frz immunity to Ice alone)."""
+    return p.side_uses('sacredfire') & (p.active('status') == FRZ)
 
 
 def entering_ability(*names):
@@ -721,6 +762,17 @@ ALLOWED = {
 }
 # M2: the leaves m2_rule explains, for the pre-step effects above.
 FAMILIES['m2'] = tuple(f'^{re.escape(n)}$' for n in M2_COUNTER_LEAVES) + (rf'^{re.escape(WRAP_CLOCK)}$', r'^trackers\.public_volatiles$')
+# WH. White Herb's own writes (the holder's item and stages, the device's consumption reveal, ledger and flags) are
+# explained only by wh_rule (post-state, per mon, from this tree's recorded valid uses); the allowances are what follows
+# from a restored stage: damage dealt and taken on both sides (HP, a Substitute and its device presence, a pending Wish
+# landing by HP, the belief refresh of an HP line). wh_rule also drops the effect from a lane with no valid recorded use.
+# Facade: its doubled damage (the target's HP and what follows, the user's HP from a Counter reply); facade_rule keeps the
+# effect only for a side whose own Facade line ran under par/brn/psn/tox in this tree. Sacred Fire: whether a frozen user
+# acts at all, so, like a sleep landing (A1), anything; only a frozen user is involved. pinch_rule (both effects): a pinch
+# berry eaten in exactly one tree because the damage differs, per mon (M1's pinch witness).
+ALLOWED['whiteherb'] = dict(user=('hp', 'visible', 'subtracker', 'wish'), target=('hp', 'visible', 'subtracker', 'wish'), glob=())
+ALLOWED['facade'] = dict(user=('hp', 'visible', 'subtracker', 'wish'), target=('hp', 'visible', 'subtracker', 'wish'), glob=())
+ALLOWED['sacredfire'] = ALL
 
 
 # Allowances an effect earns only on a KO cascade in which the other side (its target's) has a newly (un)fainted
@@ -755,6 +807,8 @@ PLUGINS = {
     'M2': dict(perishsong=move('perishsong'), yawn=move('yawn'), wrap=move('wrap'), perish=counter('perish_counter'),
                drowsy=counter('yawn_counter'), partial_trap=counter('partial_trap_counter')),
     'C': dict(psychoboost=move('psychoboost'), whiteherb=white_herb, sacredfire=move('sacredfire'), facade=move('facade')),
+    # WH (White Herb plus C-lite, which replaces C's draft; Psycho Boost's drop is unchanged, its restore is White Herb's).
+    'WH': dict(whiteherb=white_herb, facade=facade_status, sacredfire=frozen_defrost),
 }
 
 
@@ -1239,6 +1293,165 @@ def m2_wrong_mon(entries, post, ref, pre_active, post_active):
     return bad
 
 
+# WH special rules (post-state, per mon). The base pass stores these as per-lane witness arrays too (wit_XX): the holder's
+# item, item flags and stages, and the device's item reveal, removal, narrowing, visible basis, ledger, flags and credit.
+WH_MON_LEAVES = ('state.item', 'state.item_knocked', 'state.boosts')
+WH_SLOT_LEAVES = ('trackers.shown_item', 'trackers.item_removed', 'trackers.belief_mask', 'trackers.boosts') + tuple(
+    f"trackers.mon_features['{k}']" for k in ('item_swapped', 'choice_public', 'choice_locked', 'item_mutated', 'item_original'))
+WH_VISIBLE = 'trackers.visible_belief.'
+WH_ORIGINAL = "trackers.mon_features['item_original']"
+WH_CREDIT = "trackers.field_features['items_removed_credit']"
+
+
+def witness_names(names):
+    """The per-lane witness arrays both passes return (sorted): M1's, and WH's per-mon/per-slot item and stage leaves."""
+    wanted = set(WITNESS_LEAVES) | set(WH_MON_LEAVES) | set(WH_SLOT_LEAVES) | {WH_CREDIT}
+    return sorted(n for n in names if n in wanted or n.startswith(WH_VISIBLE))
+
+
+def wh_rule(entries, w):
+    """WH: White Herb's own writes, from this tree's post state and its recorded uses (w: this lane's arrays).
+
+    Evidence (Stepper, recorded around the device hook white_herb with this tree's before/after states at each trigger):
+    used [2,6] the mons with a valid use (the side's active held White Herb and lived, had a negative stage, and
+    afterwards had no item and exactly max(stage, 0), no other state leaf of any mon changed in that call, and the hook
+    left the device's shown_item White Herb and item_removed set at its public slot: the producer), raise [2,6,7] the
+    stages each use restored, bad: a call with use set that was not such a use, or one without use that changed a mon's
+    item or stages. A bad lane explains nothing here (the caller forces it unexpected).
+    With wit / base (this tree's and the base pass's per-lane witness arrays), p2p [2,6] (physical -> public slot) and
+    acting [2,6] (each side's pre- or post-step active), an entry of side s is explained when:
+    - state.boosts: every mon whose stages differ is a used mon with this tree's stages = the base's + its raise (the base
+      kept the negatives; later changes in the step are the same in both trees), or one whose faint differs (ko [2,6]).
+    - trackers.boosts: the same per public slot (the device copies an active's stages; ko slots follow the cascade).
+    - item family (state.item, state.item_knocked, shown_item, item_removed, belief_mask, the visible basis, the ledger,
+      the per-stint flags): every differing mon or slot is an active of either side (a used holder, or a Trick partner,
+      the herb having moved in the base only) and the side has a used mon; state.item differs at a used mon only from
+      White Herb (base) to 0, and at another active only from White Herb (the base's Trick handed it the herb) to 0;
+      state.item_knocked differs only at a used mon the base knocked off (base True, here False).
+    - the removal credit (field_features items_removed_credit, per side): the base's exceeds this tree's by exactly the
+      used mons the base knocked off on that side.
+    - credit [2] (recorded at the trick hook from the recorder's own due mask): a side whose Trick partner credit B2
+      loses (a receiver's herb lines end the pairing); with no use or partner of its own there, only its active's ledger
+      original may differ, unrecorded (0) here.
+    Returns (remaining entries, explained entries)."""
+    explained = set();wit, base = w['wit'], w['base'];used = np.asarray(w['used'], bool);herb = w['herb']
+    if w.get('bad') or not used.any():return entries, []
+    credit = np.asarray(w.get('credit', np.zeros(2, bool)), bool)
+    raised = np.asarray(w['raise']);ko = np.asarray(w.get('ko', np.zeros((2, 6), bool)), bool)
+    p2p = np.asarray(w['p2p']);acting = np.asarray(w['acting'], bool)
+    def have(leaf):return leaf in wit and leaf in base
+    def slots(mask, side):return _slots(mask, p2p[side])
+    knocked_base = np.zeros((2, 6), bool)
+    if have('state.item_knocked'):
+        knocked_base = used & np.asarray(base['state.item_knocked'], bool) & ~np.asarray(wit['state.item_knocked'], bool)
+    # A Trick partner: an active that holds nothing here but the herb in the base (the base's Trick handed it over).
+    partner = np.zeros((2, 6), bool)
+    if have('state.item'):
+        partner = acting & (np.asarray(base['state.item']) == herb) & (np.asarray(wit['state.item']) == 0) & ~used
+    for side in (0, 1):
+        mine = used[side]
+        if not (mine.any() or partner[side].any() or credit[side]):continue
+        for leaf, s_ in sorted(entries, key=str):
+            if s_ != side or not have(leaf):continue
+            if leaf not in WH_MON_LEAVES and leaf not in WH_SLOT_LEAVES and not leaf.startswith(WH_VISIBLE):continue
+            a, b = np.asarray(wit[leaf])[side], np.asarray(base[leaf])[side];diff = _differ(a, b)
+            if not diff.any():continue
+            if leaf == 'state.boosts':
+                good = mine & np.all(a == b + raised[side], axis=-1)
+                ok = not (diff & ~(good | ko[side])).any()
+            elif leaf == 'trackers.boosts':
+                good = np.zeros(6, bool)
+                for m in np.flatnonzero(mine):
+                    k = int(p2p[side, m])
+                    if 0 <= k < 6 and np.array_equal(a[k], b[k] + raised[side, m]):good[k] = True
+                ok = not (diff & ~(good | slots(ko[side], side))).any()
+            elif leaf == 'state.item':
+                ok = not (diff & ~((mine | partner[side]) & (b == herb) & (a == 0))).any()
+            elif leaf == 'state.item_knocked':
+                ok = not (diff & ~knocked_base[side]).any()
+            elif credit[side] and not (mine.any() or partner[side].any()):
+                # Only a lost Trick partner credit on this side: its active's ledger original, unrecorded here, and nothing
+                # else (review round 2).
+                ok = leaf == WH_ORIGINAL and not (diff & ~(slots(acting[side], side) & (np.asarray(a) == 0))).any()
+            elif leaf in WH_SLOT_LEAVES or leaf.startswith(WH_VISIBLE):
+                ok = not (diff & ~slots(acting[side], side)).any()
+            else:
+                continue
+            if ok:explained.add((leaf, side))
+    if have(WH_CREDIT):
+        a, b = np.asarray(wit[WH_CREDIT]), np.asarray(base[WH_CREDIT])
+        for side in (0, 1):
+            if (WH_CREDIT, side) in entries and int(b[side]) - int(a[side]) == int(knocked_base[side].sum()) > 0:
+                explained.add((WH_CREDIT, side))
+    return entries - explained, sorted(explained, key=str)
+
+
+def pinch_rule(entries, w):
+    """WH: a pinch berry (Liechi, Petaya, Salac) eaten in exactly one tree on a White Herb or Facade lane, whose changed
+    damage moved its holder across the quarter-HP line (the GPU pass at 5951098e: a doubled Facade's target ate its berry
+    in this tree only). w: wit / base (this tree's and the base's witness arrays for the lane), pre_item [2,6] (this
+    lane's pre-step items), pinch {item id: stat}, p2p, acting [2,6]. Per side, the berry mons are actives whose pre-step
+    item is a pinch berry held at the end in exactly one tree; then state.item differs only there, state.boosts only there
+    by exactly +1 (eaten here) or -1 (eaten only in the base) in the berry's own stat (trackers.boosts likewise per public
+    slot), and the device's item reveal, removal, narrowing, visible basis and flags only at their slots.
+    Returns (remaining entries, explained entries)."""
+    wit, base, pinch = w['wit'], w['base'], w['pinch'];explained = set()
+    if not pinch or 'state.item' not in wit or 'state.item' not in base:return entries, []
+    pre = np.asarray(w['pre_item']);p2p = np.asarray(w['p2p']);acting = np.asarray(w['acting'], bool)
+    stat = np.vectorize(lambda i: pinch.get(int(i), -1))(pre)
+    here, there = np.asarray(wit['state.item']), np.asarray(base['state.item'])
+    sign = np.where(acting & (stat >= 0) & (here == 0) & (there == pre), 1,
+                    np.where(acting & (stat >= 0) & (there == 0) & (here == pre), -1, 0))
+    for side in (0, 1):
+        berry = sign[side] != 0
+        if not berry.any():continue
+        slots = _slots(berry, p2p[side])
+        def staged(a, b, mons_stat, mons_sign):
+            d = np.asarray(a).astype(np.int64) - np.asarray(b).astype(np.int64);ok = True
+            for k in np.flatnonzero(d.reshape(d.shape[0], -1).any(-1)):
+                want = np.zeros(d.shape[1], np.int64)
+                if mons_stat[k] < 0:return False
+                want[mons_stat[k]] = mons_sign[k];ok &= bool(np.array_equal(d[k], want))
+            return ok
+        for leaf, s_ in sorted(entries, key=str):
+            if s_ != side or leaf not in wit or leaf not in base:continue
+            a, b = np.asarray(wit[leaf])[side], np.asarray(base[leaf])[side]
+            if a.ndim == 0:continue
+            diff = _differ(a, b)
+            if not diff.any():continue
+            if leaf == 'state.item':ok = not (diff & ~berry).any()
+            elif leaf == 'state.boosts':ok = not (diff & ~berry).any() and staged(a, b, np.where(berry, stat[side], -1), sign[side])
+            elif leaf == 'trackers.boosts':
+                by_slot_stat = np.full(6, -1);by_slot_sign = np.zeros(6, np.int64)
+                for m in np.flatnonzero(berry):
+                    k = int(p2p[side, m])
+                    if 0 <= k < 6:by_slot_stat[k] = stat[side, m];by_slot_sign[k] = sign[side, m]
+                ok = not (diff & ~slots).any() and staged(a, b, by_slot_stat, by_slot_sign)
+            elif leaf in WH_SLOT_LEAVES or leaf.startswith(WH_VISIBLE):ok = not (diff & ~slots).any()
+            else:continue
+            if ok:explained.add((leaf, side))
+    return entries - explained, sorted(explained, key=str)
+
+
+def facade_actors(sides, doubled):
+    """WH: the Facade involvement a lane keeps: its pre-state actor sides whose own Facade line ran in this tree, by the
+    side's pre-step active (side and slot), while that user had par, brn, psn or tox (recorded at the move hook: the
+    status Facade's onBasePower reads)."""
+    return [s for s in sides if bool(doubled[s])]
+
+
+def sacred_actors(sides, line, stopped, frozen_line):
+    """WH: the Sacred Fire involvement a lane keeps: its pre-state frozen-user sides where this tree tied the divergence
+    to that mon at its own move: line, the side's pre-step active was frozen at its record_move (BeforeMove let it act:
+    it failed frz's 20% roll and the defrost flag let it pass) and is not frozen at its Sacred Fire line (frz's
+    onModifyMove thawed it in useMove between the two: the mon that thaws is the frozen user); or stopped, recorded at
+    the side's own BeforeMove: eligible, its pre-step active frozen, the executed move Sacred Fire, frz's roll failed and
+    the user did not act (flinch or confusion stopped it after frz let it pass). A side
+    whose Sacred Fire line ran with its user still frozen (frozen_line) never keeps it. The GPU pass at edfcba5d: the
+    thaw planted on the foe (mutant S3) passed under the ALL allowance alone."""
+    return [s for s in sides if (bool(line[s]) or bool(stopped[s])) and not bool(frozen_line[s])]
+
+
 # ---------------------------------------------------------------------------
 # Engine plumbing.
 
@@ -1261,7 +1474,7 @@ class Stepper:
     their own pre values are digested too (new leaves must keep their defaults).
     """
     def __init__(self, step_fn, treedef, *, base_names=None, faint_leaves=FAINT_CLEAR_LEAVES, record_installs=False,
-                 effect_rule=False, m2_ids=None):
+                 effect_rule=False, m2_ids=None, wh_ids=None):
         import jax
         import jax.numpy as j
         names = {}
@@ -1286,6 +1499,93 @@ class Stepper:
                        blocked=zero2, ordinary=None, tick_seen=zero2, tick_trapper=j.full((lanes, 2), -1, j.int32), tick_held=zero2,
                        tick_hp=j.full((lanes, 2), -1, j.int32))
             wrap_calls = []
+            # WH: this tree's White Herb uses, read at the device hook from the before/after states it is given; each side's
+            # own Facade line by the pre-step active under par/brn/psn/tox; and Sacred Fire's thaw: frozen at the side's
+            # record_move (after BeforeMove, before useMove's ModifyMove) and thawed at its own line, a frozen user stopped
+            # after frz let it pass, or a line run still frozen (wh_rule, facade_actors, sacred_actors).
+            whe = dict(used=j.zeros((lanes, 2, 6), j.bool_), raise_=j.zeros((lanes, 2, 6, 7), j.int32), bad=j.zeros((lanes,), j.bool_),
+                       facade=zero2, sacred_pre=zero2, sacred_line=zero2, sacred_stopped=zero2, sacred_frz=zero2,
+                       trick_order=j.zeros((lanes,), j.bool_), credit_lost=zero2)
+            from gpu_engine import action_history as act_history
+            record_move_fn = act_history.record_move
+            def record_move_recorder(st, side, slot, *, eligible, struggle=False):
+                if wh_ids is not None:
+                    # The side's chosen move slot, recorded once BeforeMove let it act: a Sacred Fire user still frozen
+                    # here (it failed frz's 20% roll and the defrost flag let it pass) thaws in useMove just after.
+                    s = j.broadcast_to(j.asarray(side, j.int32), (lanes,));r = j.arange(lanes);mon = st.active[r, s]
+                    k = j.clip(j.broadcast_to(j.asarray(slot, j.int32), (lanes,)), 0, st.moves.shape[-1] - 1)
+                    e = j.broadcast_to(j.asarray(eligible, j.bool_), (lanes,)) & ~j.broadcast_to(j.asarray(struggle, j.bool_), (lanes,))
+                    frozen = e & (st.moves[r, s, mon, k] == wh_ids['sacredfire']) & (st.status[r, s, mon] == FRZ) & (mon == state.active[r, s])
+                    whe['sacred_pre'] = whe['sacred_pre'] | at_side(frozen, s)
+                return record_move_fn(st, side, slot, eligible=eligible, struggle=struggle)
+            from gpu_engine import mechanics as mech
+            before_move_fn, before_move_hook, trick_hook = mech.before_move, hooks.before_move, getattr(hooks, 'trick', None)
+            defrost_seen = {}
+            def before_move_fn_recorder(*a, **kw):
+                # The step's BeforeMove result for the side whose device before_move hook follows; defrost_move is the
+                # executed move's defrost flag (Sacred Fire's).
+                defrost_seen['flag'] = kw.get('defrost_move', False)
+                return before_move_fn(*a, **kw)
+            def before_move_recorder(c, st, side, result, use, **kw):
+                if wh_ids is not None:
+                    # Sacred Fire "stopped" (review): at this side's BeforeMove, eligible, its pre-step active, frozen, the
+                    # executed move Sacred Fire, frz's 20% roll failed (still frozen) and the user did not act (flinch or
+                    # confusion stopped it after frz let it pass).
+                    s = j.broadcast_to(j.asarray(side, j.int32), (lanes,));r = j.arange(lanes);mon = st.active[r, s]
+                    d = j.broadcast_to(j.asarray(defrost_seen.get('flag', False), j.bool_), (lanes,))
+                    u = j.broadcast_to(j.asarray(use, j.bool_), (lanes,))
+                    stopped = (u & d & (mon == state.active[r, s]) & (st.status[r, s, mon] == FRZ) & (result.status == FRZ)
+                               & ~j.broadcast_to(j.asarray(result.can_act, j.bool_), (lanes,)))
+                    whe['sacred_stopped'] = whe['sacred_stopped'] | at_side(stopped, s)
+                return before_move_hook(c, st, side, result, use, **kw)
+            def trick_recorder(c, before, after, side, use, choice_items, **kw):
+                if wh_ids is not None:
+                    # White Herb received by Trick (review finding 1): setItem's Start runs inside Trick's onHit, before
+                    # the -item lines, so at this hook a living receiver of White Herb with a negative stage has already
+                    # used it here; one that has not marks the device order wrong (forced unexpected, like a bad use).
+                    # `after` is the swapped state before any herb use (the trick hook's own -item operand).
+                    u = j.broadcast_to(j.asarray(use, j.bool_), (lanes,));r = j.arange(lanes);due = []
+                    for m_ in (0, 1):
+                        mon = after.active[r, m_]
+                        due.append(u & (after.item[r, m_, mon] == wh_ids['herb']) & (after.hp[r, m_, mon] > 0)
+                                   & (after.boosts[r, m_, mon] < 0).any(-1))
+                        whe['trick_order'] = whe['trick_order'] | (due[m_] & ~whe['used'][r, m_, mon])
+                    due = j.stack(due, axis=1)                                                       # [L,2] by side
+                    # The partner credits B2 loses when a receiver's herb lines end its Trick pairing, from this recorder's
+                    # own due mask (never the engine's herb_used): the user's when the target used one, the target's when
+                    # either did. herb_used disagreeing with it (or missing where a use is due) is bad too.
+                    herb = kw.get('herb_used')
+                    told = j.zeros((lanes, 2), j.bool_) if herb is None else j.broadcast_to(j.asarray(herb, j.bool_), (lanes, 2))
+                    whe['trick_order'] = whe['trick_order'] | (u & (told != due).any(-1))
+                    s = j.broadcast_to(j.asarray(side, j.int32), (lanes,));t = 1 - s
+                    got = lambda m_: after.item[r, m_, after.active[r, m_]] > 0
+                    lost_u = u & due[r, t] & got(s);lost_t = u & (due[r, t] | due[r, s]) & got(t)
+                    whe['credit_lost'] = whe['credit_lost'] | at_side(lost_u, s) | at_side(lost_t, t)
+                return trick_hook(c, before, after, side, use, choice_items, **kw)
+            herb_hook = getattr(hooks, 'white_herb', None)
+            def herb_recorder(c, before, after, side, use):
+                out = herb_hook(c, before, after, side, use)
+                s = j.broadcast_to(j.asarray(side, j.int32), (lanes,));u = j.broadcast_to(j.asarray(use, j.bool_), (lanes,))
+                r = j.arange(lanes);holder = before.active[r, s]
+                at = (j.arange(2)[None, :, None] == s[:, None, None]) & (j.arange(6)[None, None, :] == holder[:, None, None])
+                moved = (before.item != after.item) | (before.boosts != after.boosts).any(-1)            # [L,2,6]
+                rest = j.ones((lanes,), j.bool_)
+                for name in before._fields:
+                    if name in ('item', 'boosts'):continue
+                    x, y = getattr(before, name), getattr(after, name)
+                    rest = rest & (x == y).reshape(lanes, -1).all(-1)
+                b_boost, a_boost = before.boosts[r, s, holder], after.boosts[r, s, holder]
+                slot = j.clip(out.trackers.physical_to_public[r, s, holder], 0, 5)
+                t = out.trackers
+                produced = ((t.shown_item[r, s, slot] == wh_ids['herb']) & (t.item_removed[r, s, slot] != 0)
+                            if getattr(t, 'shown_item', None) is not None and getattr(t, 'item_removed', None) is not None
+                            else j.zeros((lanes,), j.bool_))
+                valid = (u & (before.item[r, s, holder] == wh_ids['herb']) & (after.item[r, s, holder] == 0) & (before.hp[r, s, holder] > 0)
+                         & (b_boost < 0).any(-1) & (a_boost == j.maximum(b_boost, 0)).all(-1) & ~(moved & ~at).any((1, 2)) & rest & produced)
+                whe['bad'] = whe['bad'] | (u & ~valid) | (~u & (moved.any((1, 2)) | ~rest))
+                whe['used'] = whe['used'] | (at & valid[:, None, None])
+                whe['raise_'] = whe['raise_'] + j.where((at & valid[:, None, None])[..., None], after.boosts - before.boosts, 0)
+                return out
             def at_side(mask, s):
                 return (s[:, None] == sides2) & mask[:, None]
             def foe_sub(st, s):
@@ -1296,6 +1596,19 @@ class Stepper:
                 # the step included); the damage hook that follows reads it again after the hit.
                 s = j.broadcast_to(j.asarray(side, j.int32), (lanes,))
                 opened.update(side=s, sub=foe_sub(st, s))
+                if wh_ids is not None and wh_ids.get('facade') is not None and len(rest) >= 2:
+                    # WH: this side's own Facade line with use by its pre-step active (side and slot), and that user's
+                    # status at the line (Facade's onBasePower reads it).
+                    mv = j.broadcast_to(j.asarray(rest[0], j.int32), (lanes,));use = j.broadcast_to(j.asarray(rest[1], j.bool_), (lanes,))
+                    r = j.arange(lanes);mon = st.active[r, s];status = st.status[r, s, mon];own = mon == state.active[r, s]
+                    doubled = use & own & (mv == wh_ids['facade']) & (status >= 1) & (status <= 4)
+                    whe['facade'] = whe['facade'] | at_side(doubled, s)
+                    # Sacred Fire: the pre-step active, frozen at this side's record_move, runs its line thawed (frz's
+                    # onModifyMove, between the two); or a line with use still frozen (never in a correct tree). A
+                    # frozen user stopped after frz let it pass is recorded at BeforeMove (before_move_recorder).
+                    sf = mv == wh_ids['sacredfire']
+                    whe['sacred_line'] = whe['sacred_line'] | at_side(use & sf & own & (status == 0) & whe['sacred_pre'][r, s], s)
+                    whe['sacred_frz'] = whe['sacred_frz'] | at_side(use & sf & (status == FRZ), s)
                 if m2_ids is not None and len(rest) >= 2:
                     # M2: a move line (the caller's, or a called child's) of Perish Song, Yawn or Wrap with use set. Yawn: the
                     # target at the line holds no status and no Substitute and lives (its onTryHit and TryPrimaryHit, read
@@ -1353,6 +1666,11 @@ class Stepper:
                 return hp_line_hook(c, st, side, use, *rest, **kw)
             hooks.damage, hooks.move = damage_recorder, move_recorder
             hooks.port_protect, hooks.turn_end, hooks.hp_line = protect_recorder, turn_end_recorder, hp_line_recorder
+            if wh_ids is not None and herb_hook is not None:hooks.white_herb = herb_recorder
+            if wh_ids is not None:
+                act_history.record_move = record_move_recorder
+                mech.before_move, hooks.before_move = before_move_fn_recorder, before_move_recorder
+                if trick_hook is not None:hooks.trick = trick_recorder
             try:
                 if record_installs:
                     original = hooks.install
@@ -1370,6 +1688,10 @@ class Stepper:
             finally:
                 climate.residual_clock = clock;hooks.damage, hooks.move = damage_hook, move_hook
                 hooks.port_protect, hooks.turn_end, hooks.hp_line = protect_hook, turn_end_hook, hp_line_hook
+                if herb_hook is not None:hooks.white_herb = herb_hook
+                act_history.record_move = record_move_fn
+                mech.before_move, hooks.before_move = before_move_fn, before_move_hook
+                if trick_hook is not None:hooks.trick = trick_hook
             if not wrap_calls:
                 for key in ('tick_seen', 'tick_trapper', 'tick_held', 'tick_hp'):m2e[key] = None   # no handler cutpoint: no evidence
             named_in = name_inputs(state, actions, trackers);named_out = name_outputs(out)
@@ -1425,7 +1747,8 @@ class Stepper:
                 post_active=out.step.state.active, post_done=out.step.state.done,
                 physical_to_public=out.trackers.physical_to_public, active_slot=out.trackers.active_slot,
                 public_order=named_out.get(PUBLIC_ORDER), residual_ran=ran[0] if len(ran) == 1 else None,
-                effect_ok=effect_ok, wit={n: named_out[n] for n in WITNESS_LEAVES if n in named_out}, m2=m2)
+                effect_ok=effect_ok, wit={n: named_out[n] for n in witness_names(named_out)}, m2=m2,
+                wh=whe if wh_ids is not None else None)
         self._jit = jax.jit(traced);self._names = names
 
     def __call__(self, leaves):
@@ -1612,8 +1935,13 @@ def patched_pass(args, *, step_override=None, prepared=None):
     effect_rule = EFFECT_DRAWS in new_inputs and EFFECT_DRAWS not in base_names
     m2_rules = 'M2' in plugins
     m2_ids = {n: vocab['moves'].index(n) for n in ('perishsong', 'yawn', 'wrap') if n in vocab['moves']} if m2_rules else None
+    # WH: White Herb's post-state rule and recorded uses, and Facade's recorded line status.
+    wh_rules = 'WH' in plugins
+    wh_ids = dict(herb=vocab['items'].index('whiteherb') if 'whiteherb' in vocab.get('items', ()) else -9,
+                  facade=vocab['moves'].index('facade') if 'facade' in vocab['moves'] else None,
+                  sacredfire=vocab['moves'].index('sacredfire') if 'sacredfire' in vocab['moves'] else -9) if wh_rules else None
     stepper = Stepper(step_override or _engine_step(tables), treedef, base_names=set(base_names), record_installs=public_order_rule,
-        effect_rule=effect_rule, m2_ids=m2_ids)
+        effect_rule=effect_rule, m2_ids=m2_ids, wh_ids=wh_ids)
     shards = [p for p in shard_list(args, capture) if p.name in set(manifest['shards'])]
     if args.limit == 0 and len(shards) != len(manifest['shards']):raise ValueError('shard set differs from the base pass')
     usable = jax.jit(state_module.usable_moves)
@@ -1622,13 +1950,17 @@ def patched_pass(args, *, step_override=None, prepared=None):
     counts = dict(lane_steps=0, done_skipped=0, unchanged=0, changed_and_involved=0, changed_but_uninvolved=0,
                   changed_involved_unexpected_fields=0, ko_cascade=0, phase_shift=0, terminal=0, terminal_residual=0, waived=0,
                   rule_explained=0, faint_rule_leaves=0, clear_volatile_leaves=0, effect_draws_saved=0,
-                  recharge_leaves=0, bag_leaves=0, trick_witness_leaves=0, ledger_leaves=0, m2_leaves=0, m2_wrong_mon=0, m2_forced=0)
+                  recharge_leaves=0, bag_leaves=0, trick_witness_leaves=0, ledger_leaves=0, m2_leaves=0, m2_wrong_mon=0, m2_forced=0,
+                  wh_leaves=0, wh_bad=0, wh_trick_order=0, wh_dropped=0, facade_dropped=0, sacredfire_dropped=0,
+                  sacredfire_stopped=0, pinch_leaves=0)
     clear_volatile = 'B' in plugins
     m1_rules = 'M1' in plugins
     # M1 review: the base's per-lane witness arrays (wit_XX); the M1 rules compare per mon and per bag column.
     witness_leaves = manifest.get('witness_leaves')
-    if (m1_rules or m2_rules) and witness_leaves is None:
+    if (m1_rules or m2_rules or wh_rules) and witness_leaves is None:
         raise SystemExit('base pass predates the M1 witness arrays (wit_XX); re-run the base pass with this harness')
+    if wh_rules and not set(WH_MON_LEAVES) <= set(witness_leaves):
+        raise SystemExit('base pass predates the WH witness arrays (state.item, state.item_knocked, state.boosts); re-run it with this harness')
     ability_names = vocab.get('abilities', [])
     soundproof = {ability_names.index(n) for n in ('soundproof',) if n in ability_names}
     sleep_immune = {ability_names.index(n) for n in ('insomnia', 'vitalspirit') if n in ability_names}
@@ -1736,6 +2068,27 @@ def patched_pass(args, *, step_override=None, prepared=None):
                     else:entries.add((leaf, None))
                 changed = sorted({leaf for leaf, _ in entries})
                 effects = {k: [s for s in (0, 1) if v[lane, s]] for k, v in involved.items() if v[lane].any()}
+                # WH: White Herb stays involved only where this tree recorded a valid use (and no malformed call); Facade only
+                # for a side whose own Facade line ran under par/brn/psn/tox (post-state witnesses, never the predicate alone).
+                wh_lane = None
+                if wh_rules and result.get('wh') is not None:
+                    wh_lane = {k: np.asarray(v)[lane] for k, v in result['wh'].items()}
+                    if bool(wh_lane.get('trick_order', False)):
+                        # A Tricked-in White Herb the device saw used after Trick's -item lines: bad, like a malformed use.
+                        wh_lane['bad'] = True;counts['wh_trick_order'] += bool(changed)
+                    if 'whiteherb' in effects and (bool(wh_lane['bad']) or not wh_lane['used'].any()):
+                        effects.pop('whiteherb');counts['wh_dropped'] += bool(changed)
+                    if 'facade' in effects:
+                        kept = facade_actors(effects['facade'], wh_lane['facade'])
+                        if kept:effects['facade'] = kept
+                        else:effects.pop('facade');counts['facade_dropped'] += bool(changed)
+                    if 'sacredfire' in effects and 'sacred_line' in wh_lane:
+                        kept = sacred_actors(effects['sacredfire'], wh_lane['sacred_line'], wh_lane['sacred_stopped'],
+                                             wh_lane['sacred_frz'])
+                        if kept:
+                            effects['sacredfire'] = kept
+                            counts['sacredfire_stopped'] += bool(changed) and not any(bool(wh_lane['sacred_line'][s]) for s in kept)
+                        else:effects.pop('sacredfire');counts['sacredfire_dropped'] += bool(changed)
                 # The faint-clear rule explains its own leaves; any other changed leaf on the
                 # same lane-step still needs an involved effect (e.g. a revert on a faint lane).
                 faint_explained = []
@@ -1823,6 +2176,21 @@ def patched_pass(args, *, step_override=None, prepared=None):
                 if changed and (m1_rules or m2_rules):
                     entries, bag_explained = bag_rule(entries, bag, lane_base_wit.get(BAG), allowed)
                     counts['bag_leaves'] += bool(bag_explained)
+                wh_explained = []
+                if changed and wh_lane is not None:
+                    # WH: the holder's item and stages and the device's consumption, per mon and per slot (wh_rule).
+                    w = dict(used=wh_lane['used'], bad=bool(wh_lane['bad']), herb=wh_ids['herb'],
+                             p2p=result['physical_to_public'][lane], ko=ko_mons_all[lane],
+                             acting=active_mask(pre_active[lane]) | active_mask(post_active[lane]),
+                             wit={n: v[lane] for n, v in wit.items()}, base={n: v[lane] for n, v in base_wit.items()})
+                    w['raise'] = wh_lane['raise_'];w['credit'] = wh_lane.get('credit_lost', np.zeros(2, bool))
+                    entries, wh_explained = wh_rule(entries, w)
+                    counts['wh_leaves'] += bool(wh_explained)
+                    if 'whiteherb' in effects or 'facade' in effects:
+                        # A pinch berry eaten in one tree only, the changed damage having moved its holder across 25%.
+                        w.update(pre_item=item_pre[lane], pinch=pinch_ids)
+                        entries, pinch_explained = pinch_rule(entries, w)
+                        wh_explained = wh_explained + pinch_explained;counts['pinch_leaves'] += bool(pinch_explained)
                 rule_ok = bool(changed) and not entries
                 changed_rest = sorted({leaf for leaf, _ in entries})
                 phase = bool(phase_lanes[lane]);terminal = bool(terminal_lanes[lane]) and not phase
@@ -1876,6 +2244,9 @@ def patched_pass(args, *, step_override=None, prepared=None):
                 m2_forced = [e for e in sorted(m2_must, key=str) if e in entries]
                 unexpected = unexpected + [e for e in m2_forced if e not in unexpected]
                 counts['m2_forced'] += bool(m2_forced)
+                # WH: a malformed White Herb call (use without a valid restore, or a change without use) is unexpected.
+                if changed and wh_lane is not None and bool(wh_lane['bad']):
+                    unexpected = unexpected + [('wh_evidence', None)];rule_ok = False;counts['wh_bad'] += 1
                 kind = classify(changed, bool(effects), rule_ok, unexpected)
                 if kind == 'unchanged':
                     counts['unchanged'] += 1
@@ -1915,6 +2286,7 @@ def patched_pass(args, *, step_override=None, prepared=None):
                     m2_rule=[f'{l}@{side}' for l, side in m2_explained],
                     m2_wrong_mon=[f'{l}@{side}' for l, side in m2_wrong],
                     m2_forced=[f'{l}@{side}' for l, side in m2_forced],
+                    wh_rule=[f'{l}@{side}' for l, side in wh_explained],
                     unexpected=[f"{l}@{'glob' if s is None else s}" for l, s in unexpected],
                     ko_consequences=[f"{l}@{'glob' if s is None else s}" for l, s in by_ko],
                     waived=[f"{l}@{'glob' if s is None else s}" for l, s in waived])) + '\n')
@@ -1931,7 +2303,7 @@ def patched_pass(args, *, step_override=None, prepared=None):
         capture_sha256=capture_sha, **base_check, shards=len(shards), partial=partial, failures=failures,
         migrated_new_inputs=new_inputs, new_outputs=new_outputs, public_order_rule=public_order_rule, link_rule=link_rule,
         effect_rule=effect_rule, residual_rule=residual_rule,
-        faint_clear_rule=bool(args.faint_clear), clear_volatile_rule=clear_volatile, m1_rules=m1_rules, m2_rules=m2_rules,
+        faint_clear_rule=bool(args.faint_clear), clear_volatile_rule=clear_volatile, m1_rules=m1_rules, m2_rules=m2_rules, wh_rules=wh_rules,
         witness_leaves=witness_leaves, base_source_dirty=manifest.get('source_dirty'), base_dirty_paths=manifest.get('dirty_paths'),
         base_harness_sha256=manifest.get('harness_sha256'), harness_sha256=hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
         waive=list(args.waive or ()), counts=counts, by_effect=by_effect,

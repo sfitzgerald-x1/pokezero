@@ -124,6 +124,17 @@ class PureTests(unittest.TestCase):
         result = probe.run_scenario(dict(loaded, expect=dict(exact=True)), engine, None, None)
         self.assertEqual(result['status_counts'], {'MISSING_ENGINE_FIELDS': 1});self.assertFalse(result['expectation_met'])
 
+    def test_showdown_lines_are_validated_and_matched_as_one_ordered_run(self):
+        steps = len(scenario()['script'])
+        loaded = probe.load_scenario(self.write(scenario(showdown_lines={'0': ['|-item|p2a: X|Choice Band|[from] move: Trick']})))
+        self.assertIn('0', loaded['showdown_lines'])
+        for bad in ({str(steps): ['|x']}, {'0': []}, {'0': ['-item|p2a: X']}):
+            with self.subTest(bad=bad), self.assertRaises(ValueError):probe.load_scenario(self.write(scenario(showdown_lines=bad)))
+        log = ['|move|a', '|-item|b', '|-enditem|c', '|-clearnegativeboost|c|[silent]', '|-item|c', '|upkeep']
+        self.assertTrue(probe.lines_in_order(log, log[1:5]))
+        self.assertFalse(probe.lines_in_order(log, [log[2], log[1], log[3], log[4]]))      # out of order
+        self.assertFalse(probe.lines_in_order(log, [log[1], log[3]]))                       # not adjacent
+
     def test_expectation_judge(self):
         exact = dict(case_id='a', assignment=dict(hit=99), status='EXACT', steps=[dict(diffs=[])])
         wrong = dict(case_id='b', assignment=dict(hit=0), status='MISMATCH', steps=[dict(diffs=[dict(field='1:0:status')])])

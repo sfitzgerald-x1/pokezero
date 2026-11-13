@@ -1,0 +1,172 @@
+{
+ "schema": "pokezero.effect_probe.scenario.v1",
+ "move": "wh_trick_receive_negative",
+ "note": "WH review finding 1 (the observation order): Deoxys-Attack (White Herb) Charms Kecleon (-2 Atk), then Kecleon (Choice Band) Tricks it. setItem runs the received item's Start inside Trick's onHit (sim/pokemon.ts:1868-1889, data/moves.ts:19904-19915), so Kecleon uses the herb before its own -item line: the four lines below, in this order (showdown_lines); the engine's state matches with the herb used at the swap. Next turn Deoxys, now holding the Band, and Kecleon, holding nothing, act unlocked.",
+ "teams": [
+  [
+   {
+    "species": "Kecleon",
+    "moves": [
+     "trick",
+     "splash",
+     "return",
+     "superpower"
+    ],
+    "ability": "Color Change",
+    "item": "Choice Band",
+    "level": 100
+   },
+   {
+    "species": "Starmie",
+    "moves": [
+     "splash",
+     "surf",
+     "recover",
+     "protect"
+    ],
+    "ability": "Illuminate",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Blissey",
+    "moves": [
+     "splash",
+     "softboiled",
+     "protect",
+     "seismictoss"
+    ],
+    "ability": "Serene Grace",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Skarmory",
+    "moves": [
+     "splash",
+     "protect",
+     "spikes",
+     "peck"
+    ],
+    "ability": "Keen Eye",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Swampert",
+    "moves": [
+     "splash",
+     "protect",
+     "surf",
+     "earthquake"
+    ],
+    "ability": "Torrent",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Metagross",
+    "moves": [
+     "splash",
+     "protect",
+     "meteormash",
+     "earthquake"
+    ],
+    "ability": "Clear Body",
+    "item": "Leftovers"
+   }
+  ],
+  [
+   {
+    "species": "Deoxys-Attack",
+    "moves": [
+     "charm",
+     "splash",
+     "superpower",
+     "psychoboost"
+    ],
+    "ability": "Pressure",
+    "item": "White Herb",
+    "level": 100
+   },
+   {
+    "species": "Starmie",
+    "moves": [
+     "splash",
+     "surf",
+     "recover",
+     "protect"
+    ],
+    "ability": "Illuminate",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Blissey",
+    "moves": [
+     "splash",
+     "softboiled",
+     "protect",
+     "seismictoss"
+    ],
+    "ability": "Serene Grace",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Skarmory",
+    "moves": [
+     "splash",
+     "protect",
+     "spikes",
+     "peck"
+    ],
+    "ability": "Keen Eye",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Swampert",
+    "moves": [
+     "splash",
+     "protect",
+     "surf",
+     "earthquake"
+    ],
+    "ability": "Torrent",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Metagross",
+    "moves": [
+     "splash",
+     "protect",
+     "meteormash",
+     "earthquake"
+    ],
+    "ability": "Clear Body",
+    "item": "Leftovers"
+   }
+  ]
+ ],
+ "script": [
+  [
+   "move 1",
+   "move 1"
+  ],
+  [
+   "move 2",
+   "move 2"
+  ]
+ ],
+ "axes": [],
+ "expect": {
+  "exact": true
+ },
+ "require_fields": [
+  "item_knocked",
+  "destiny_bond",
+  "effect"
+ ],
+ "showdown_lines": {
+  "0": [
+   "|-item|p2a: Deoxys|Choice Band|[from] move: Trick",
+   "|-enditem|p1a: Kecleon|White Herb",
+   "|-clearnegativeboost|p1a: Kecleon|[silent]",
+   "|-item|p1a: Kecleon|White Herb|[from] move: Trick"
+  ]
+ }
+}
