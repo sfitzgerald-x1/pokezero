@@ -121,6 +121,18 @@ class EncorePosteriorTests(unittest.TestCase):
         start = max(i for i, l in enumerate(lines) if l.startswith('|-start|') and l.endswith('|Encore'))
         acted = [i for i in range(start) if lines[i].startswith('|move|p1a: Octillery')][-1]
         self.assertEqual(protocol._encore_facts(lines[:acted] + lines[acted + 1:])[0], (1, 0))
+        # A Gen 3 confusion self-hit uses the action and prints only -activate|X|confusion: b = 1 (the replacement rule).
+        hurt = lines[:acted] + ['|-activate|p1a: Octillery|confusion'] + lines[acted + 1:]
+        self.assertEqual(protocol._encore_facts(hurt)[0], (1, 1))
+        # Lines that show the Encore over, or a start naming another mon than the active, give no facts (the write refuses).
+        self.assertIsNone(protocol._encore_facts(lines + ['|-end|p1a: Octillery|Encore'])[0])
+        renamed = lines[:start] + [lines[start].replace('Octillery', 'Qwilfish')] + lines[start + 1:]
+        self.assertIsNone(protocol._encore_facts(renamed)[0])
+
+    @property
+    def j(self):
+        import jax.numpy as j
+        return j
 
     def world(self, *, pp=5, kind=2, slot=1):
         import jax.numpy as j
@@ -140,11 +152,11 @@ class EncorePosteriorTests(unittest.TestCase):
             with self.subTest(facts=facts):
                 counts = {}
                 for seed in range(4000):
-                    out = protocol._write_encores(s, encored, (None, facts), seed, replacement=False)
+                    out = protocol._write_encores(s, encored, (None, facts), seed, replacement=False, owner=0)
                     n = int(out.encore_counter[0, 1, 2]);counts[n] = counts.get(n, 0) + 1
                     self.assertEqual(int(out.encore_move[0, 1, 2]), 12)
                 self.assert_uniform(counts, protocol.encore_support(*facts))
-        once = lambda seed: int(protocol._write_encores(s, encored, (None, (1, 1)), seed, replacement=False).encore_counter[0, 1, 2])
+        once = lambda seed: int(protocol._write_encores(s, encored, (None, (1, 1)), seed, replacement=False, owner=0).encore_counter[0, 1, 2])
         self.assertEqual([once(7)] * 3, [once(7), once(7), once(7)])
 
     def test_refusals(self):
@@ -156,9 +168,25 @@ class EncorePosteriorTests(unittest.TestCase):
                                    ((None, (1, 0)), self.world(kind=1), 'PUBLIC_ENCORE_LOCK_DISAGREEMENT'),
                                    ((None, (1, 0)), self.world(pp=0), 'PUBLIC_ENCORE_ZERO_PP')):
             with self.subTest(kind):
-                with self.assertRaisesRegex(ValueError, kind):protocol._write_encores(world, encored, facts, 3, replacement=False)
-        out = protocol._write_encores(self.world(pp=0), encored, (None, (1, 0)), 3, replacement=True)
+                with self.assertRaisesRegex(ValueError, kind):protocol._write_encores(world, encored, facts, 3, replacement=False, owner=0)
+        out = protocol._write_encores(self.world(pp=0), encored, (None, (1, 0)), 3, replacement=True, owner=0)
         self.assertIn(int(out.encore_counter[0, 1, 2]), protocol.encore_support(1, 0))
+
+    def test_our_own_encored_active_keeps_no_request_disable_flags(self):
+        """Our own request marks every move but the lock disabled (Encore's onDisableMove); with exactly that pattern the
+        flags are cleared, so the engine's own Encore clock (and Choice and PP) decide once the drawn count ends. Another
+        pattern refuses."""
+        s = self.world();s = s._replace(disabled=s.disabled.at[0, 1, 2].set(self.j.asarray([True, False, True, False])))
+        encored = protocol._mapped_encores(s)
+        out = protocol._write_encores(s, encored, (None, (1, 0)), 3, replacement=False, owner=1)
+        self.assertFalse(bool(self.j.any(out.disabled[0, 1, 2])));self.assertIn(int(out.encore_counter[0, 1, 2]), protocol.encore_support(1, 0))
+        foe = protocol._write_encores(s, encored, (None, (1, 0)), 3, replacement=False, owner=0)   # the opponent's: untouched
+        self.assertTrue(bool(self.j.array_equal(foe.disabled, s.disabled)))
+        for flags in ([False, False, True, False], [True, True, True, False]):
+            with self.subTest(flags=flags):
+                bad = s._replace(disabled=s.disabled.at[0, 1, 2].set(self.j.asarray(flags)))
+                with self.assertRaisesRegex(ValueError, 'PUBLIC_ENCORE_REQUEST_DISAGREEMENT'):
+                    protocol._write_encores(bad, encored, (None, (1, 0)), 3, replacement=False, owner=1)
 
 
 class OwnHeldVolatileAdmissionTests(unittest.TestCase):

@@ -224,15 +224,22 @@ def encore_support(k,b):
 
 
 def _encore_facts(lines):
-    """Per side (p1, p2): (k, b) of the side's latest |-start|<side>a: X|Encore line, or None without one. k counts the
-    residuals (|upkeep|) since it; b = 1 when that side's own |move| or |cant| line came earlier in the same turn."""
+    """Per side (p1, p2): (k, b) of the side's latest |-start|<side>a: X|Encore line, or None without one, or when the lines
+    show it over (a later |-end|<side>a: ...|Encore) or name another mon than the side's current active. k counts the
+    residuals (|upkeep|) since it; b = 1 when that side had already acted earlier in the same turn: its own |move| or |cant|
+    line, or a Gen 3 confusion self-hit (|-activate|<side>a: X|confusion, which uses the action and prints neither; the
+    replacement phase's rule, phase_d_tail)."""
     rows=[str(x).split('|') for x in lines];out=[None,None]
     for side in (0,1):
         seat=f'p{side+1}a'
         start=max((i for i,p in enumerate(rows) if len(p)>3 and p[1]=='-start' and p[2].startswith(seat) and p[3]=='Encore'),default=None)
         if start is None:continue
+        if any(len(p)>3 and p[1]=='-end' and p[2].startswith(seat) and p[3]=='Encore' for p in rows[start+1:]):continue
+        active=max((i for i,p in enumerate(rows) if len(p)>2 and p[1] in ('switch','drag','replace') and p[2].startswith(seat)),default=None)
+        if active is None or rows[active][2]!=rows[start][2] or active>start:continue
         turn=max((i for i in range(start) if rows[i][1:2]==['turn']),default=-1)
-        acted=any(len(p)>2 and p[1] in ('move','cant') and p[2].startswith(seat) for p in rows[turn+1:start])
+        acted=any(len(p)>2 and p[2].startswith(seat) and (p[1] in ('move','cant') or p[1]=='-activate' and len(p)>3 and normalize_id(p[3])=='confusion')
+            for p in rows[turn+1:start])
         out[side]=(sum(1 for p in rows[start+1:] if p[1:2]==['upkeep']),int(acted))
     return tuple(out)
 
@@ -247,11 +254,17 @@ def _mapped_encores(physical):
     return tuple(out)
 
 
-def _write_encores(physical,encored,facts,seed,*,replacement):
+def _write_encores(physical,encored,facts,seed,*,replacement,owner):
     """The world with each encored active's lock and a remaining count drawn uniformly from encore_support. The draw uses
     its own RNG per world and side, so no other draw of the world changes. Refuses: no start line, a support the lines
     rule out, a last action that is not the lock, or the locked move at 0 PP at an ordinary decision (Showdown's residual
-    ends an Encore whose move has no PP before any request; a replacement boundary comes before that residual)."""
+    ends an Encore whose move has no PP before any request; a replacement boundary comes before that residual).
+
+    Our own encored active: Showdown's request marks every move but the lock disabled (Encore's onDisableMove), and the own
+    update copied those flags into the world, where nothing clears them, so the mon would stay locked after the drawn count
+    ends. The engine masks the lock itself (encore_move/encore_counter), Choice (choice_move) and empty PP (pp) on its own,
+    so once the request shows exactly that pattern (the lock enabled, every other move disabled or out of PP) the flags are
+    cleared; any other pattern refuses."""
     for side,at,move,slot in encored:
         if facts[side] is None:raise ValueError('PUBLIC_ENCORE_START_UNAVAILABLE')
         support=encore_support(*facts[side])
@@ -259,6 +272,11 @@ def _write_encores(physical,encored,facts,seed,*,replacement):
         if int(physical.last_action_kind[0,side])!=2 or int(physical.last_action_index[0,side])!=slot or int(physical.moves[0,side,at,slot])!=move:
             raise ValueError('PUBLIC_ENCORE_LOCK_DISAGREEMENT')
         if int(physical.pp[0,side,at,slot])==0 and not replacement:raise ValueError('PUBLIC_ENCORE_ZERO_PP')
+        if side==owner:
+            ids=np.asarray(physical.moves)[0,side,at];off=np.asarray(physical.disabled)[0,side,at];pp=np.asarray(physical.pp)[0,side,at]
+            if off[slot] or any(ids[k]>0 and not off[k] and pp[k]>0 for k in range(len(ids)) if k!=slot):
+                raise ValueError('PUBLIC_ENCORE_REQUEST_DISAGREEMENT')
+            physical=physical._replace(disabled=physical.disabled.at[0,side,at].set(False))
         count=random.Random(f'encore:{seed}:{side}').choice(support)
         physical=physical._replace(encore_move=physical.encore_move.at[0,side,at].set(move),
             encore_counter=physical.encore_counter.at[0,side,at].set(count))
@@ -467,7 +485,8 @@ def materialize_protocol(root,start,*,inputs,seed):
         except (ValueError,KeyError,IndexError,TypeError) as error:
             failures.append(str(error));diagnostics.append(dict(kind='PUBLIC_SLEEP_WORLD_POSTERIOR',status='TRIGGERED',fatal=True,reason=str(error)))
         else:diagnostics.append(dict(kind='PUBLIC_SLEEP_WORLD_POSTERIOR',status='CLEAR',fatal=True,applicability='CURRENT_SLEEP' if sleepers else 'NO_CURRENT_SLEEP'))
-        try:physical=_write_encores(physical,encored,_encore_facts(inputs.lines),seed,replacement=tail_facts['replacement'] is not None)
+        try:physical=_write_encores(physical,encored,_once(inputs,root,'encore_facts',lambda:_encore_facts(inputs.lines)) if encored else (None,None),
+            seed,replacement=tail_facts['replacement'] is not None,owner=owner)
         except ValueError as error:failures.append(str(error))
         if failures:raise ValueError(failures[0])
         carry=states._rebase(detached,assignment,active,state=physical)
