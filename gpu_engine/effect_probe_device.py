@@ -117,7 +117,8 @@ FIELDS = (
     ('opportunities', 'side', 'td.opportunities', 'ctx.tendency.opportunities'),
     ('opportunity_turn', 'side', 'td.opportunity_turn', 'ctx.tendency.opportunity_turn'),
     ('matchup', 'side', 'td.matchup[side, a, b] over present slots', 'ctx.tendency.matchup (species-joined)'),
-    ('blocked', 'side', 'port.blocked', 'ctx.tendency.blocked'),
+    ('blocked', 'side', 'port.blocked', 'ctx.tendency.blocked + the open window if blocked (B2\'s own readout, '
+     'public_tendency.py:341-342: finalized windows, the open one added provisionally)'),
     ('pursuit', 'side', 'port.pursuit', 'ctx.tendency.pursuits'),
     ('weather_reveals', 'side', 'port.weather', 'ctx.tendency.weather'),
     ('sleep_clause_holder', 'side', 'port.holder', 'ctx.sleep_clause.holder'),
@@ -173,6 +174,39 @@ for _case in ('selfhit=99,paralysis=0', 'selfhit=99,paralysis=99'):
         ALLOWLIST[('confusion_status', _case, _step, '1:opportunities')] = _SLEEP_TALK_SELF_HIT
     for _step in range(3, 6):
         ALLOWLIST[('confusion_status', _case, _step, '1:opportunity_turn')] = _SLEEP_TALK_SELF_HIT
+# OPEN BUG (reported): Encore ending at the residual. Showdown prints -end|X|Encore from Encore's onResidual
+# (data/moves.ts encore condition) and B2 drops the bag entry (public_active.project_line REMOVE); the device's encore
+# bit is written only by public_move_state around a move (engine_device_public_hooks.public_move_state), the Encore
+# residual (transition.py: work=repeating.residual(...), the encore block of the order-10 list) calls no device hook and
+# derived_volatiles covers only perish, yawn and partiallytrapped, so the bit stays until the mon leaves the field.
+_ENCORE_END = 'OPEN BUG: Encore ends at the residual (-end|X|Encore); the device keeps the encore bag bit (no residual hook)'
+for _case, _first in (('encore_roll=0', 3), ('encore_roll=1', 4), ('encore_roll=2', 5), ('encore_roll=3', 6)):
+    for _step in range(_first, 9):ALLOWLIST[('encore', _case, _step, '1:active:volatiles')] = _ENCORE_END
+for _step in range(3, 7):ALLOWLIST[('trick_encore', 'base', _step, '1:active:volatiles')] = _ENCORE_END
+# OPEN BUG (reported): a fainted active's public stages at its replacement request. B2's faint keeps them (public_mon_state.
+# faint writes HP, status and fainted, not boosts; an arrival resets them, public_mon_state.py:111-112), and B2's encoder
+# writes the active token's stages from them (v4_assembly.project_own_boosts); the device's observe copies the engine's
+# stages, which faintMessages' clearVolatile zeroed (transition._clear_fainted_boosts), so it reads 0 there.
+_FAINTED_STAGES = 'OPEN BUG: a fainted active keeps its public stages in B2 until its replacement; the device reads the cleared engine stages'
+for _key in (('wrap_tie', 'tie=0', 0, '0:active:boosts'), ('wrap_tie', 'tie=1', 0, '0:active:boosts'),
+             ('knockoff_band', 'roll=0', 8, '1:active:boosts'), ('knockoff_band', 'roll=15', 8, '1:active:boosts'),
+             ('superpower_ko', 'base', 5, '0:active:boosts'), ('destinybond_m7_gengar_volbeat', 'base', 3, '0:active:boosts'),
+             ('sleepclause_faint', 'base', 3, '1:active:boosts')):
+    ALLOWLIST[_key] = _FAINTED_STAGES
+# B2 limit (explained, not a device fact): B2's fold refuses (PAYLOAD) a side's second encounter of one species, at the
+# repeat's arrival line (|switch|p2a: Gengar2|Gengar, L74, M|...: RAW_BEGIN, SWITCH_PRELUDE, MUDSHOT, SWITCH, NONPROC,
+# TENDENCY); Gen 3 Random Battle's Species Clause never sends it, the probes' Custom Game does. The case is compared
+# up to that step (B2_LIMIT).
+_REPEATED_SPECIES = 'B2 limit: a side repeats a species (no Species Clause in Custom Game); B2 refuses the repeat\'s arrival'
+for _scenario, _cases, _step in (
+        ('destinybond_expire', ('base',), 2), ('destinybond_ko', ('base',), 2),
+        ('destinybond_m1_banette_machamp', ('crit=15,roll=0', 'crit=15,roll=15', 'crit=0,roll=0', 'crit=0,roll=15'), 2),
+        ('destinybond_m3_qwilfish_dusclops', ('roll=0', 'roll=15'), 4), ('destinybond_m4_gengar_vigoroth', ('base',), 2),
+        ('destinybond_m6_gengar_electrode', ('base',), 3), ('destinybond_m7_gengar_volbeat', ('base',), 4),
+        ('destinybond_m9_wobbuffet_dusclops', ('base',), 3), ('facade_status', ('base',), 1), ('hyperbeam_roar', ('base',), 1),
+        ('perishsong_last_faster', ('base',), 1), ('perishsong_tie', ('tie=0', 'tie=1'), 1), ('wrap_tie', ('tie=0', 'tie=1'), 1),
+        ('wrap_trapper_dragged_back', ('base',), 1)):
+    for _case in _cases:ALLOWLIST[(_scenario, _case, _step, 'b2_refusal')] = _REPEATED_SPECIES
 
 
 def wire_lines(lines):
@@ -453,7 +487,8 @@ def b2_side(b2, q, own, s, catalog):
     clause = ctx.sleep_clause
     side = dict(active_slot=slot, moved=bool(td.moved[q, s]), switches=int(td.switches[q, s]),
         opportunities=int(td.opportunities[q, s]), opportunity_turn=int(td.opportunity_turn[q, s]), matchup=matchup,
-        blocked=int(td.blocked[q, s]), pursuit=int(td.pursuits[q, s]), weather_reveals=[[bool(x) for x in row] for row in td.weather[q, s]],
+        blocked=min(64, int(td.blocked[q, s]) + int(bool(td.window_move[q]) and int(td.window_side[q]) == s and int(td.window_outcome[q]) == 2)),
+        pursuit=int(td.pursuits[q, s]), weather_reveals=[[bool(x) for x in row] for row in td.weather[q, s]],
         sleep_clause_holder=int(clause.holder[q, s]), sleep_clause_victims=[bool(x) for x in clause.victims[q, s]],
         truant_known=bool(a.truant_known[q, s]), truant_loaf=bool(a.truant_loaf[q, s]), traced_truant=bool(a.traced_truant[q, s]),
         truant_skip_flip=bool(a.truant_skip_flip[q, s]), items_removed_credit=int(ctx.damage.items_removed[q, s]),
