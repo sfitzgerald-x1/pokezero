@@ -389,8 +389,13 @@ class Device:
 
     @classmethod
     def for_scenarios(cls, scenarios, showdown, showdown_root, metadata, lanes, allowlist=None):
+        """B2's catalog, and the device belief tables compiled from it, over the authored sets of EVERY committed
+        scenario plus the run's own: one fixed universe, so a belief field never depends on which scenarios share a run
+        or a shard (a per-run catalog let a variant exclusion show or hide with the shard layout)."""
         from gpu_engine import effect_probe_device as dev
-        sets = [showdown.ask(cmd='prepare', teams=s['teams'])['sets'] for s in scenarios]
+        committed = [load_scenario(p) for p in sorted((ROOT / 'gpu_engine/effect_probes').glob('*.json'))]
+        teams = {json.dumps(s['teams'], sort_keys=True): s['teams'] for s in committed + list(scenarios)}
+        sets = [showdown.ask(cmd='prepare', teams=t)['sets'] for _, t in sorted(teams.items())]
         return cls(dev.compile_b2(sets, showdown_root), metadata, lanes, allowlist)
 
     def compare(self, scenario, record, step, trackers, b2, lane, vocab, channels=None):
