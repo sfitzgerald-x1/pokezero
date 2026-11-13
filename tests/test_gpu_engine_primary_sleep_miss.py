@@ -49,7 +49,9 @@ class PrimarySleepMissTests(unittest.TestCase):
         np.testing.assert_array_equal(data.miss_mask,f.runtime['kernel_risk_compiled'].device.primary_sleep_miss_candidates)
         self.assertFalse(bool(f.old.helper.device.miss_mask.any()))
         self.assertTrue(bool(data.primary_sleep))
-        for name in ('transition.py','mechanics.py','secondary.py','state.py','entry.py','engine_retained_encoder_driver.py'):
+        # transition.py is certified against CURRENT_TRANSITION (full AST plus mutations) by terminal_closeout and seismic_toss_components.
+        # secondary.py, state.py and entry.py are byte-certified against the reviewed SOURCE_PINS by transition_observer_wiring.
+        for name in ('mechanics.py','engine_retained_encoder_driver.py'):
             self.assertEqual(Path('gpu_engine',name).read_bytes(),subprocess.check_output(['git','show','b8092a85:gpu_engine/'+name]))
         for name in ('hypnosis','spore','sleeppowder','sing'):
             row=ids.index(name);self.assertTrue(bool(data.miss_mask[row]));self.assertTrue(bool(f.runtime['public'].device.no_damage_miss[row]))

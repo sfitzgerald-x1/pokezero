@@ -69,7 +69,9 @@ class ThunderLimberTests(unittest.TestCase):
    bad=t._replace(**{name:getattr(t,name).at[0].add(j.uint32(1))});self.assertFalse(bool(cb.owned_limber_immunity(bad,index).any()))
   closed=t._replace(execution=t.execution._replace(risks=t.execution.risks._replace(tables=t.execution.risks.tables._replace(thunder_wave_limber_ability=j.array(0,j.int32)))))
   self.assertFalse(bool(cb.owned_limber_immunity(closed,index).any()));self.assertEqual(int(self.legacy.device.limber_ability),0)
-  for f in ('transition.py','entry.py','mechanics.py','effects.py','secondary.py','state.py','engine_retained_encoder_driver.py'):
+  # transition.py is certified against CURRENT_TRANSITION (full AST plus mutations) by terminal_closeout and seismic_toss_components.
+  # entry.py, effects.py, secondary.py and state.py are byte-certified against the reviewed SOURCE_PINS by transition_observer_wiring.
+  for f in ('mechanics.py','engine_retained_encoder_driver.py'):
    self.assertEqual(Path('gpu_engine',f).read_bytes(),subprocess.check_output(['git','show','b8092a85:gpu_engine/'+f]))
   witness._source()
   # Original current setStatus -> Limber callback -> runMoveEffects null

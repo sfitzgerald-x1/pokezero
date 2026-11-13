@@ -1,5 +1,5 @@
 """Source-only original self heal callback and BOTH FULL components."""
-import ast,json,subprocess,unittest
+import json,subprocess,unittest
 from copy import deepcopy
 from pathlib import Path
 import jax
@@ -15,7 +15,6 @@ from gpu_engine import engine_retained_encoder_driver as driver,engine_request_s
 from gpu_engine import engine_full_v4_event_device as full,engine_leftovers_callbacks as leftovers
 from gpu_engine import transition as tr,public_belief,v4_encoder as v4,public_wire,state
 from gpu_engine import engine_source_frame_witness as witness
-from gpu_engine_default_observer_ast import dump_default_program,assert_hp_rng_mutations_detected
 from _showdown_root import showdown_root
 import test_gpu_engine_no_damage_owning as fixtures
 BASE='8cdd966d843e2d9603f4372f593065a7bae8d99d'
@@ -56,8 +55,7 @@ class SelfHealOwningTests(unittest.TestCase):
   self.assertEqual(set(ids[i]for i in np.flatnonzero(mask)),{'recover','synthesis','softboiled'})
   self.assertIsNone(direct.compile_direct_hit_controls(engine_catalog=self.producer).device.self_heal)
   for n in self.names[:3]:self.assertEqual(int(self.runtime['kernel_risk_compiled'].device.selected_risk[ids.index(n)]),0)
-  old=ast.parse(subprocess.check_output(['git','show','b8092a85:gpu_engine/transition.py'],text=True));new=ast.parse(Path('gpu_engine/transition.py').read_text());baseline=dump_default_program(old)
-  self.assertEqual(dump_default_program(new),baseline);assert_hp_rng_mutations_detected(self,new,baseline)
+  # transition.py is certified against CURRENT_TRANSITION (full AST plus mutations) by terminal_closeout and seismic_toss_components.
   self.assertIn('eligible=acts&caller_acts&(caller_move==move)',Path('gpu_engine/transition.py').read_text())
   script=r'''const root=process.argv[1],{Dex}=require(root+'/dist/sim/dex.js'),{Battle}=require(root+'/dist/sim/battle.js'),d=Dex.mod('gen3'),out=[];
 for(const id of ['recover','softboiled','synthesis'])for(const weather of ['','sunnyday','raindance','sandstorm','hail']){

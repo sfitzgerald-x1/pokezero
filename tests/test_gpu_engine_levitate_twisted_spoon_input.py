@@ -63,7 +63,9 @@ class TwistedSpoonLevitateTests(unittest.TestCase):
   sticky=out._replace(refusal=out.refusal|256);got=risk.outcome_on_tape(sticky,o,eligible=p.requested,active=p.requested,captured_no_damage=cap);self.assertTrue(bool(j.all((got.execution.risks.carry.risk[:6]&risk.UPSTREAM)!=0)))
   old=ast.parse(subprocess.check_output(['git','show',BASE+':gpu_engine/engine_no_damage_callbacks.py'],text=True));new=ast.parse(Path(nd.__file__).read_text())
   self.assertEqual(ast.dump(ast.Module(body=[n for n in old.body if not(isinstance(n,ast.FunctionDef)and n.name=='compile_data')],type_ignores=[])),ast.dump(ast.Module(body=[n for n in new.body if not(isinstance(n,ast.FunctionDef)and n.name=='compile_data')],type_ignores=[])))
-  for name in ('transition.py','mechanics.py','state.py','items.py','absorption.py','engine_kernel_frame_risk.py','engine_execution_completeness.py'):
+  # transition.py is certified against CURRENT_TRANSITION (full AST plus mutations) by terminal_closeout and seismic_toss_components.
+  # state.py and items.py are byte-certified against the reviewed SOURCE_PINS by transition_observer_wiring.
+  for name in ('mechanics.py','absorption.py','engine_kernel_frame_risk.py','engine_execution_completeness.py'):
    self.assertEqual(Path('gpu_engine',name).read_bytes(),subprocess.check_output(['git','show','b8092a85:gpu_engine/'+name]))
   witness._source()
  def test_one_existing_full_grammar_packet_no_private_revelation(self):

@@ -1,5 +1,5 @@
 """Prospective literal Normal/Ghost zero-recoil receipts, never an engine turn."""
-import ast,json,subprocess,unittest
+import json,subprocess,unittest
 from copy import deepcopy
 from pathlib import Path
 import jax
@@ -15,7 +15,6 @@ from gpu_engine import engine_retained_encoder_driver as driver,engine_request_s
 from gpu_engine import engine_full_v4_event_device as full,engine_leftovers_callbacks as leftovers
 from gpu_engine import engine_secondary_status_callbacks as secondary,engine_source_frame_witness as witness
 from gpu_engine import transition as tr,public_belief,v4_encoder as v4,public_wire,state
-from gpu_engine_default_observer_ast import dump_default_program,assert_hp_rng_mutations_detected
 from _showdown_root import showdown_root
 import test_gpu_engine_hidden_power_substitute_input as fixture
 BASE='0d51ac06e34af37ad868850456c5209b2b045e29'
@@ -92,7 +91,7 @@ class DoubleEdgeTypeImmunityTests(unittest.TestCase):
   # ability-dependent isGrounded branch, even when that member has Levitate.
   script2=r"""const root=process.argv[1],d=require(root+'/dist/sim/dex.js').Dex.mod('gen3'),P=require(root+'/dist/sim/pokemon.js').Pokemon,out=[];for(const ability of ['keeneye','levitate']){const events=[],mon={battle:{dex:d,runEvent:id=>{events.push(id);return true}},getTypes:()=>['Ghost','Poison'],isGrounded(){throw Error('Ground-only branch reached')}};out.push({ability,result:P.prototype.runImmunity.call(mon,d.moves.get('doubleedge')),events})}console.log(JSON.stringify(out));"""
   self.assertEqual(json.loads(subprocess.check_output(['node','-e',script2,str(showdown_root())],text=True)),[dict(ability=n,result=False,events=['NegateImmunity'])for n in ('keeneye','levitate')])
-  original=ast.parse(subprocess.check_output(['git','show','b8092a85:gpu_engine/transition.py'],text=True));current=ast.parse(Path('gpu_engine/transition.py').read_text());expected=dump_default_program(original);self.assertEqual(expected,dump_default_program(current));assert_hp_rng_mutations_detected(self,current,expected)
+  # transition.py is certified against CURRENT_TRANSITION (full AST plus mutations) by terminal_closeout and seismic_toss_components.
   legacy=recoil.compile_recoil(engine_catalog=self.producer,metadata=self.metadata);self.assertFalse(bool(legacy.device.immune_source));self.assertTrue(bool(self.runtime['kernel_risk_compiled'].device.recoil_immune_source))
   legacy_direct=direct.compile_direct_hit_controls(engine_catalog=self.producer);r=risk.compile_risks(self.producer,self.runtime['execution_compiled'],direct_hit_compiled=legacy_direct,recoil_compiled=self.recoil);self.assertFalse(bool(r.device.recoil_immune_source))
   for modules in(('benchmark_retained_games','engine_lifecycle_event_device','engine_full_v4_event_device'),('engine_full_v4_event_device','engine_lifecycle_event_device','benchmark_retained_games')):subprocess.run([__import__('sys').executable,'-c',';'.join('import gpu_engine.'+x for x in modules)],check=True,capture_output=True)
