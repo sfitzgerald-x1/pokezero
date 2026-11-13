@@ -17,6 +17,8 @@ on:
       - 'scripts/run_component_memory_check.py'
       - 'tests/test_gpu_component_shards.py'
       - 'tests/gpu_component_heavy.json'
+      - 'tests/gpu_component_extended.json'
+      - '.github/workflows/gpu-engine-components-extended.yml'
       - 'tests/test_component_memory_check.py'
       - '.github/workflows/gpu-engine-components.yml'
 
@@ -139,9 +141,10 @@ jobs:
           echo "memory_report_dir=$ci_memory_dir" >> "$GITHUB_OUTPUT"
           # Keep original custom suites intact. The class of each low-optimization case runs one case per
           # process, so every case starts with a fresh process heap and fresh module/class fixtures.
-          # Per pull request: the light tier, every block outside tests/gpu_component_heavy.json. The heavy
-          # tier (--tier heavy) runs on dedicated high-memory infrastructure nightly and before main, with a
-          # command line that differs only in --tier.
+          # Per pull request: the light tier, every block outside tests/gpu_component_heavy.json and
+          # tests/gpu_component_extended.json. The heavy tier (--tier heavy) runs on dedicated high-memory
+          # infrastructure nightly and before main, with a command line that differs only in --tier. The extended
+          # tier runs in gpu-engine-components-extended.yml on push to integration and on demand.
           python scripts/run_component_memory_check.py --output "$ci_memory_dir" \
             --label 'shard-${{ matrix.shard }}' --summary "$GITHUB_STEP_SUMMARY" -- \
             python scripts/run_gpu_component_shard.py --tier light --index '${{ matrix.shard }}' --count 16 --process-blocks \

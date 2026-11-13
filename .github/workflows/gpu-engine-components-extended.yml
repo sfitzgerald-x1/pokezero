@@ -1,0 +1,148 @@
+name: GPU engine CPU component checks (extended tier)
+
+on:
+  # Never per pull request: the extended tier's modules are light by the heavy rule but sit outside the pull-request
+  # wall budget (tests/gpu_component_extended.json). Every push to integration that touches component inputs runs
+  # them, and workflow_dispatch runs them on any branch by hand.
+  push:
+    branches: ['scott/v2-engine-accel-20261104']
+    paths:
+      - 'gpu_engine/**'
+      - 'tests/test_gpu_engine*.py'
+      - 'tests/**/test_gpu_engine*.py'
+      - 'tests/**/__init__.py'
+      - 'tests/gpu_engine_*.py'
+      - 'tests/gpu_*_oracle.cjs'
+      - 'tests/data/gpu_synchronize_catalog.json'
+      - 'tests/data/gpu_hustle_catalog.json'
+      - 'tests/data/gpu_accuracy_events_catalog.json'
+      - 'tests/data/gpu_ordinary_switch_catalog.json'
+      - 'scripts/run_gpu_component_shard.py'
+      - 'scripts/run_component_memory_check.py'
+      - 'tests/test_gpu_component_shards.py'
+      - 'tests/gpu_component_heavy.json'
+      - 'tests/gpu_component_extended.json'
+      - '.github/workflows/gpu-engine-components-extended.yml'
+      - 'tests/test_component_memory_check.py'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# No concurrency group: a group keeps at most one pending run and cancels older pending runs even when it keeps
+# in-progress ones, and each integration push's run must finish (it is these modules' only coverage).
+jobs:
+  cpu-extended-shards:
+    name: CPU extended component shard ${{ matrix.shard }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3]
+    env:
+      JAX_PLATFORMS: cpu
+      PYTHONPATH: src:.
+      OMP_NUM_THREADS: '2'
+      OPENBLAS_NUM_THREADS: '2'
+      # The light tier's default compiler flags; the extended tier has no low-optimization cases.
+      XLA_FLAGS: '--xla_cpu_parallel_codegen_split_count=1 --xla_backend_optimization_level=3'
+      POKEZERO_SHOWDOWN_ROOT: ${{ github.workspace }}/.ci/pokemon-showdown
+      POKEZERO_GPU_TEAM_POOL: ${{ github.workspace }}/.ci/gpu-component-teams.npz
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22.22.2'
+      - uses: actions/checkout@v5
+        with:
+          repository: smogon/pokemon-showdown
+          ref: f76228a1354b5d0f307ca2d16101294ad3a2308b
+          path: .ci/pokemon-showdown
+          persist-credentials: false
+      - name: Verify complete and disjoint shard selection
+        run: python -m unittest tests.test_gpu_component_shards tests.test_component_memory_check -v
+      - name: Install CPU test environment and build pinned source oracle
+        run: |
+          python -m pip install 'jax==0.12.0' 'numpy==2.5.4'
+          python -m pip install --index-url https://download.pytorch.org/whl/cpu 'torch==2.13.0+cpu'
+          python -c 'import jax, numpy, torch; print("CPU dependencies:", jax.__version__, numpy.__version__, torch.__version__); assert torch.version.cuda is None'
+          npm ci --prefix "$POKEZERO_SHOWDOWN_ROOT"
+          npm run build --prefix "$POKEZERO_SHOWDOWN_ROOT"
+      - name: Prepare small fresh real-team test fixture
+        run: |
+          python -m gpu_engine.team_pool --showdown-root "$POKEZERO_SHOWDOWN_ROOT" \
+            --source-commit-label f76228a1354b5d0f307ca2d16101294ad3a2308b \
+            --teams 1024 --seed-start 650200000 --out "$POKEZERO_GPU_TEAM_POOL"
+      - name: Add swap headroom for complete CPU JIT compilation
+        if: ${{ runner.environment == 'github-hosted' }}
+        run: |
+          awk '/^(MemTotal|MemAvailable|SwapTotal|SwapFree):/ {printf "%s %.0f\n", $1, $2 * 1024}' /proc/meminfo
+          swapon --show --bytes
+          available_kib=$(df -Pk "$RUNNER_TEMP" | awk 'NR==2 {print $4}')
+          # Hosted runners vary in free disk after dependency installation.
+          # Keep six GiB for test outputs; never remove preinstalled assets.
+          swap_gib=$((available_kib / 1024 / 1024 - 6))
+          # Complete optimized frames can exceed the former 24-GiB swap cap.
+          # Use available runner disk without changing compiler/test semantics.
+          if (( swap_gib > 64 )); then swap_gib=64; fi
+          printf 'Free disk: %s KiB; additional swap: %s GiB; reserve: 6 GiB\n' "$available_kib" "$swap_gib"
+          if (( swap_gib < 8 )); then
+            echo 'Insufficient disk for eight GiB of swap plus the test-output reserve' >&2
+            exit 1
+          fi
+          swap_file=$(mktemp "$RUNNER_TEMP/pokezero-components-swap.XXXXXX")
+          sudo chown root:root "$swap_file"
+          sudo chmod 600 "$swap_file"
+          sudo fallocate --length "${swap_gib}G" "$swap_file"
+          sudo mkswap "$swap_file"
+          sudo swapon "$swap_file"
+          awk '/^(MemTotal|MemAvailable|SwapTotal|SwapFree):/ {printf "%s %.0f\n", $1, $2 * 1024}' /proc/meminfo
+          swapon --show --bytes
+      - name: Run component shard without optional skips
+        id: components
+        run: |
+          set -o pipefail
+          python -c 'import jax; print("Component test devices:", jax.devices())'
+          # Private runner configuration can retain flushed samples on durable
+          # storage. No storage or cluster location belongs in this workflow.
+          ci_memory_dir="${CPU_COMPONENT_MEMORY_DIR:-$RUNNER_TEMP/component-memory}/${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}/shard-${{ matrix.shard }}"
+          mkdir -p "$ci_memory_dir"
+          echo "memory_report_dir=$ci_memory_dir" >> "$GITHUB_OUTPUT"
+          # The extended tier: exactly the blocks of tests/gpu_component_extended.json, under the same memory
+          # gate as the light tier. The command line differs from the light tier's only in --tier and --count.
+          python scripts/run_component_memory_check.py --output "$ci_memory_dir" \
+            --label 'shard-${{ matrix.shard }}' --summary "$GITHUB_STEP_SUMMARY" -- \
+            python scripts/run_gpu_component_shard.py --tier extended --index '${{ matrix.shard }}' --count 4 --process-blocks \
+            --resource-interval-seconds 30 2>&1 \
+            | tee /tmp/gpu-components.log "$ci_memory_dir/component.log"
+          if grep -Eq 'skipped=[1-9]|\.\.\. skipped' /tmp/gpu-components.log; then
+            echo '::error::component tests skipped required JAX, source oracle or real-team fixture'
+            exit 1
+          fi
+          # These are CPU correctness checks, not GPU timing, full-game fidelity,
+          # move-coverage qualification, strength evidence or a go/no-go result.
+
+      - name: Retain CPU memory report and samples
+        if: ${{ always() && steps.components.outputs.memory_report_dir != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: cpu-extended-memory-shard-${{ matrix.shard }}-attempt-${{ github.run_attempt }}
+          path: ${{ steps.components.outputs.memory_report_dir }}
+          if-no-files-found: error
+
+  cpu-components-extended:
+    if: ${{ always() }}
+    needs: cpu-extended-shards
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require every extended component shard to pass
+        env:
+          SHARD_RESULT: ${{ needs.cpu-extended-shards.result }}
+        run: test "$SHARD_RESULT" = success
