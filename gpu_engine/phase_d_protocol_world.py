@@ -539,10 +539,11 @@ def diagnostic_inputs(public,detached,*,lines,metadata):
     return tuple(checks)
 
 
-# Showdown protocol lines that carry no game state: wall clock (|t:| is the turn's unix time; |inactive| / |inactiveoff| the
-# timer) and room transport (chat, join, leave, rename, raw HTML). Two runs of the same game differ only in these; r4a3's
-# owning wire carries |t:| alone (25,823 of its lines), the rest are listed defensively.
-NON_GAME_LINE_TAGS=frozenset(('t:','c','c:','chat','j','J','join','l','L','leave','n','N','name','raw','html','uhtml',
+# Showdown protocol lines that carry no game state: wall clock (|t:| is the turn's unix time, from sim/battle.ts; |:| a server
+# room log's; |inactive| / |inactiveoff| the timer) and room transport (chat, join, leave, rename, raw HTML). r4a3's owning
+# wire carries |t:| alone (25,823 of its lines); the rest are listed defensively (a server-relayed stream could carry them).
+# Filtering only feeds the seed hash, never a parser.
+NON_GAME_LINE_TAGS=frozenset(('t:',':','c','c:','chat','j','J','join','l','L','leave','n','N','name','raw','html','uhtml',
     'uhtmlchange','inactive','inactiveoff'))
 
 

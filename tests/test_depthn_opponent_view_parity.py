@@ -117,16 +117,16 @@ class TrueStartTests(unittest.TestCase):
         self.assertEqual([w.kernel_seed for w in made.worlds], [P.kernel_seed(root, detached, ('x',), 20261103, i) for i in range(8)])
 
     def test_world_seeds_follow_the_game_not_the_wall_clock(self):
-        """The drawn worlds hash the owner's GAME lines (pw.game_lines_sha256): a real r4a3 prefix (decision 602/13) re-timestamped
-        (every |t:| shifted, as a second run of the same game prints it) keeps every world and kernel seed, while its exact-bytes
-        owner hash changes; one changed game line changes them. Search is then reproducible across runs on the same state."""
+        """The drawn worlds hash the owner's GAME lines (pw.game_lines_sha256): real r4a3 protocol lines (decision 602/13's prefix,
+        without that decision's own request line) re-timestamped (every |t:| shifted, as a second run of the same game prints them)
+        keep every world and kernel seed, while their exact-bytes hash changes; one changed game line changes them. Search is then
+        reproducible across runs on the same state."""
         fixture = Path(__file__).parent / 'fixtures' / 'phase_d_held_volatiles' / 'encore_602_13.json'
         lines = json.loads(fixture.read_text())['lines']
         exact = lambda xs: hashlib.sha256(''.join(x + '\n' for x in xs).encode()).hexdigest()
-        self.assertEqual(exact(lines), json.loads(fixture.read_text())['prefix_sha256'])
         shifted = ['|t:|' + str(int(x[4:]) + 86400) if x.startswith('|t:|') else x for x in lines]
         self.assertEqual(sum(a != b for a, b in zip(lines, shifted)), 15)
-        transport = [*shifted, '|c|~|chat', '|j|watcher', '|inactive|Time left: 150 sec', '|raw|<b>x</b>']
+        transport = [*shifted, '|c|~|chat', '|j|watcher', '|inactive|Time left: 150 sec', '|raw|<b>x</b>', '|:|1794409999']
         clean = [x for x in lines if not x.startswith('|t:|')]
         game = pw.game_lines_sha256(lines)
         self.assertNotEqual(exact(lines), exact(shifted))
