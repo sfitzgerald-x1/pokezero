@@ -77,7 +77,9 @@ def preflight_checks(payload,removed=None):
     checks=[dict(kind='native-probed-hard-trapped-own-request',status='TRIGGERED' if payload.get('selfActiveRequestState',{}).get('trapped') else 'CLEAR',fatal=True),
         dict(kind='deferred-baton-phase',status='TRIGGERED' if payload.get('pendingBatonPassSides') else 'CLEAR',fatal=True)]
     for seat,side in payload['sides'].items():
-        fail=bool(side.get('meanlookTrap') or set(side['volatiles'])&{'trapped','solarbeam','encore'})
+        # encore is not refused: its count is drawn from the public posterior (_encore_facts, _write_encores); trapped,
+        # solarbeam and a Mean Look trap still are.
+        fail=bool(side.get('meanlookTrap') or set(side['volatiles'])&{'trapped','solarbeam'})
         checks.append(dict(kind='native-probed-or-hidden-volatile-clock',status='TRIGGERED' if fail else 'CLEAR',side=seat,fatal=True))
         blockers=side.get('materializationBlockers',())
         failed=[kind for kind in blockers if not (str(kind).startswith('item-state-removed:') and normalize_id(str(kind).split(':',1)[1]) in (removed or {}).get(seat,()))]
@@ -210,6 +212,57 @@ def _perish_counts(lines):
         if len(p)>3 and p[1]=='-start' and p[2][:3] in ('p1a','p2a') and p[3] in ('perish0','perish1','perish2','perish3'):
             n=int(p[3][-1]);counts[int(p[2][1])-1]=4 if n==3 and '[silent]' in p[4:] else n
     return tuple(counts)
+
+
+def encore_support(k,b):
+    """The remaining Encore count Showdown can hold after k residuals since the start, b = 1 when the target had already
+    acted that turn: Gen 3 rolls D = random(3, 7) (data/mods/gen3/moves.ts), onStart adds one when the target no longer
+    has a queued move (data/moves.ts: !this.queue.willMove(target)), and each residual decrements before the end check. Still
+    active after k residuals means D + b > k, so the remaining count r = D + b - k is uniform on this support (empty: the
+    lines contradict an active Encore). Pre-registered against Showdown f76228a1 (tests/fixtures/phase_d_held_volatiles)."""
+    return tuple(range(max(1,3+b-k),7+b-k))
+
+
+def _encore_facts(lines):
+    """Per side (p1, p2): (k, b) of the side's latest |-start|<side>a: X|Encore line, or None without one. k counts the
+    residuals (|upkeep|) since it; b = 1 when that side's own |move| or |cant| line came earlier in the same turn."""
+    rows=[str(x).split('|') for x in lines];out=[None,None]
+    for side in (0,1):
+        seat=f'p{side+1}a'
+        start=max((i for i,p in enumerate(rows) if len(p)>3 and p[1]=='-start' and p[2].startswith(seat) and p[3]=='Encore'),default=None)
+        if start is None:continue
+        turn=max((i for i in range(start) if rows[i][1:2]==['turn']),default=-1)
+        acted=any(len(p)>2 and p[1] in ('move','cant') and p[2].startswith(seat) for p in rows[turn+1:start])
+        out[side]=(sum(1 for p in rows[start+1:] if p[1:2]==['upkeep']),int(acted))
+    return tuple(out)
+
+
+def _mapped_encores(physical):
+    """(side, active, locked move, its slot) for each side whose active map_spec marked encored (held_volatiles)."""
+    out=[]
+    for side in (0,1):
+        at=int(physical.active[0,side])
+        if int(physical.encore_counter[0,side,at])>0:
+            out.append((side,at,int(physical.encore_move[0,side,at]),int(physical.last_action_index[0,side])))
+    return tuple(out)
+
+
+def _write_encores(physical,encored,facts,seed,*,replacement):
+    """The world with each encored active's lock and a remaining count drawn uniformly from encore_support. The draw uses
+    its own RNG per world and side, so no other draw of the world changes. Refuses: no start line, a support the lines
+    rule out, a last action that is not the lock, or the locked move at 0 PP at an ordinary decision (Showdown's residual
+    ends an Encore whose move has no PP before any request; a replacement boundary comes before that residual)."""
+    for side,at,move,slot in encored:
+        if facts[side] is None:raise ValueError('PUBLIC_ENCORE_START_UNAVAILABLE')
+        support=encore_support(*facts[side])
+        if not support:raise ValueError('PUBLIC_ENCORE_COUNT_UNAVAILABLE')
+        if int(physical.last_action_kind[0,side])!=2 or int(physical.last_action_index[0,side])!=slot or int(physical.moves[0,side,at,slot])!=move:
+            raise ValueError('PUBLIC_ENCORE_LOCK_DISAGREEMENT')
+        if int(physical.pp[0,side,at,slot])==0 and not replacement:raise ValueError('PUBLIC_ENCORE_ZERO_PP')
+        count=random.Random(f'encore:{seed}:{side}').choice(support)
+        physical=physical._replace(encore_move=physical.encore_move.at[0,side,at].set(move),
+            encore_counter=physical.encore_counter.at[0,side,at].set(count))
+    return physical
 
 
 def _write_held_counts(physical,yawns,perish):
@@ -376,6 +429,7 @@ def materialize_protocol(root,start,*,inputs,seed):
             return ProtocolWorld(None,None,mapped.refusals,mapper_diagnostics=tuple(diagnostics))
         physical=tail.restore(mapped.state,world.spec,cursors,tail_facts,metadata=metadata,checks=diagnostics)
         physical=_write_held_counts(physical,yawns,_perish_counts(inputs.lines))
+        encored=_mapped_encores(physical)   # read before the own update, which writes our own (zero) clock
         maximum_pp={live._source_move(metadata['vocabulary']['moves'][int(mid)]):int(metadata['moves'][int(mid)]['pp'])*8//5 for row in detached.own['moves'] for mid in row if mid}
         own=dict(detached.own);own['pp']=np.asarray(_once(inputs,root,'own_pp',lambda:own_pp_carry(inputs.lines,state.self_request,maximum_pp)),np.int32)
         # Exact facts were read from the owning packet by B2's detached root.
@@ -413,6 +467,8 @@ def materialize_protocol(root,start,*,inputs,seed):
         except (ValueError,KeyError,IndexError,TypeError) as error:
             failures.append(str(error));diagnostics.append(dict(kind='PUBLIC_SLEEP_WORLD_POSTERIOR',status='TRIGGERED',fatal=True,reason=str(error)))
         else:diagnostics.append(dict(kind='PUBLIC_SLEEP_WORLD_POSTERIOR',status='CLEAR',fatal=True,applicability='CURRENT_SLEEP' if sleepers else 'NO_CURRENT_SLEEP'))
+        try:physical=_write_encores(physical,encored,_encore_facts(inputs.lines),seed,replacement=tail_facts['replacement'] is not None)
+        except ValueError as error:failures.append(str(error))
         if failures:raise ValueError(failures[0])
         carry=states._rebase(detached,assignment,active,state=physical)
         diagnostics.append(dict(kind='FINAL_PUBLIC_CARRY',status='CLEAR',fatal=True))

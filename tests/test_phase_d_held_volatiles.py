@@ -81,6 +81,86 @@ class PerishCountTests(unittest.TestCase):
         self.assertEqual(protocol._perish_counts(nxt), (2, 2))
 
 
+FIXTURES = Path(__file__).parent / 'fixtures' / 'phase_d_held_volatiles'
+TOLERANCE = 0.10   # pre-stated: each value of a uniform support within 10% of its expected count
+
+
+class EncorePosteriorTests(unittest.TestCase):
+    """phase_d_protocol_world.encore_support against Showdown f76228a1's measured Encore counts (a pinned simulation table),
+    _encore_facts on real r4a3 lines and mutants, and _write_encores' per-world draw."""
+    sim = json.loads((FIXTURES / 'encore_showdown_f76228a1.json').read_text())
+
+    def assert_uniform(self, counts, support):
+        self.assertEqual(sorted(counts), sorted(support))
+        expected = sum(counts.values()) / len(support)
+        for value, n in counts.items():self.assertLessEqual(abs(n - expected), TOLERANCE * expected, (value, n, expected))
+
+    def test_the_support_is_showdowns_measured_one(self):
+        """For b = 0 and 1: the start duration (k = 0) and the remaining count after every k the battles reached land exactly on
+        encore_support(k, b), with flat frequencies."""
+        cells = 0
+        for b in (0, 1):
+            table = self.sim[f'b{b}']
+            self.assert_uniform({int(v): n for v, n in table['residuals_held'].items()}, protocol.encore_support(0, b))
+            for k, counts in table['remaining_after_k_residuals'].items():
+                self.assert_uniform({int(v): n for v, n in counts.items()}, protocol.encore_support(int(k), b));cells += 1
+            self.assertEqual(protocol.encore_support(len(table['remaining_after_k_residuals']) + 1, b), ())   # nobody outlasts 6 + b
+        self.assertEqual(cells, 11)
+
+    def test_facts_on_real_lines_and_mutants(self):
+        """r4a3 65/8: Wobbuffet Encores Octillery after Octillery's Thunder Wave that turn (b = 1), one residual since (k = 1);
+        602/13: Pikachu Encores Jirachi before it acts (b = 0), two residuals since. Mutants: the prefix cut at the start line
+        (a boundary in the Encore's own turn, k = 0) and the acted-first line removed (b = 0)."""
+        for name, side, facts in (('encore_65_8', 0, (1, 1)), ('encore_602_13', 1, (2, 0))):
+            with self.subTest(name):
+                lines = json.loads((FIXTURES / (name + '.json')).read_text())['lines']
+                got = protocol._encore_facts(lines);self.assertEqual(got[side], facts);self.assertIsNone(got[1 - side])
+                start = max(i for i, l in enumerate(lines) if l.startswith('|-start|') and l.endswith('|Encore'))
+                self.assertEqual(protocol._encore_facts(lines[:start + 1])[side], (0, facts[1]))
+        lines = json.loads((FIXTURES / 'encore_65_8.json').read_text())['lines']
+        start = max(i for i, l in enumerate(lines) if l.startswith('|-start|') and l.endswith('|Encore'))
+        acted = [i for i in range(start) if lines[i].startswith('|move|p1a: Octillery')][-1]
+        self.assertEqual(protocol._encore_facts(lines[:acted] + lines[acted + 1:])[0], (1, 0))
+
+    def world(self, *, pp=5, kind=2, slot=1):
+        import jax.numpy as j
+        from gpu_engine.state import empty_state
+        s = empty_state(1)._replace(active=j.asarray([[0, 2]], j.int32))
+        s = s._replace(moves=s.moves.at[0, 1, 2].set(j.asarray([11, 12, 13, 0], j.int32)), pp=s.pp.at[0, 1, 2].set(j.asarray([5, pp, 5, 0], j.int32)),
+                       last_action_kind=s.last_action_kind.at[0, 1].set(kind), last_action_index=s.last_action_index.at[0, 1].set(slot),
+                       last_move=s.last_move.at[0, 1, 2].set(12), encore_move=s.encore_move.at[0, 1, 2].set(12),
+                       encore_counter=s.encore_counter.at[0, 1, 2].set(1))
+        return s
+
+    def test_the_world_draw_is_uniform_on_the_support_and_deterministic(self):
+        """Over 4,000 world seeds the drawn encore_counter (side 1's active) hits exactly encore_support(k, b) with flat
+        frequencies; the same seed draws the same count; the lock stays the mapped move."""
+        s = self.world();encored = protocol._mapped_encores(s);self.assertEqual(encored, ((1, 2, 12, 1),))
+        for facts in ((1, 1), (2, 0), (0, 0)):
+            with self.subTest(facts=facts):
+                counts = {}
+                for seed in range(4000):
+                    out = protocol._write_encores(s, encored, (None, facts), seed, replacement=False)
+                    n = int(out.encore_counter[0, 1, 2]);counts[n] = counts.get(n, 0) + 1
+                    self.assertEqual(int(out.encore_move[0, 1, 2]), 12)
+                self.assert_uniform(counts, protocol.encore_support(*facts))
+        once = lambda seed: int(protocol._write_encores(s, encored, (None, (1, 1)), seed, replacement=False).encore_counter[0, 1, 2])
+        self.assertEqual([once(7)] * 3, [once(7), once(7), once(7)])
+
+    def test_refusals(self):
+        """No start line, a support the lines rule out, a last action that is not the lock, and the locked move at 0 PP at an
+        ordinary decision refuse; at a replacement boundary (before that turn's residual) 0 PP is drawn as usual."""
+        s = self.world();encored = protocol._mapped_encores(s)
+        for facts, world, kind in (((None, None), s, 'PUBLIC_ENCORE_START_UNAVAILABLE'), ((None, (6, 0)), s, 'PUBLIC_ENCORE_COUNT_UNAVAILABLE'),
+                                   ((None, (1, 0)), self.world(slot=2), 'PUBLIC_ENCORE_LOCK_DISAGREEMENT'),
+                                   ((None, (1, 0)), self.world(kind=1), 'PUBLIC_ENCORE_LOCK_DISAGREEMENT'),
+                                   ((None, (1, 0)), self.world(pp=0), 'PUBLIC_ENCORE_ZERO_PP')):
+            with self.subTest(kind):
+                with self.assertRaisesRegex(ValueError, kind):protocol._write_encores(world, encored, facts, 3, replacement=False)
+        out = protocol._write_encores(self.world(pp=0), encored, (None, (1, 0)), 3, replacement=True)
+        self.assertIn(int(out.encore_counter[0, 1, 2]), protocol.encore_support(1, 0))
+
+
 class OwnHeldVolatileAdmissionTests(unittest.TestCase):
     def test_own_destiny_bond_on_every_route_perish_and_yawn_only_with_protocol_facts(self):
         """from_b2 on the original B2 adapter: our active's Destiny Bond rides the own volatile (DESTINY_BOND) on every route;
