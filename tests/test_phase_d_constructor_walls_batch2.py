@@ -7,12 +7,12 @@ import numpy as np
 from gpu_engine import phase_d_protocol_world as protocol, state, v5_hypothetical_state as mapping
 from pokezero.dex import load_showdown_dex_cached
 from _showdown_root import showdown_root
-from test_gpu_engine_v5_public_world import TypedMappingTests
+import test_gpu_engine_v5_public_world as mapping_tests
 
 
 class LiveTypesTests(unittest.TestCase):
     def test_opt_in_preserves_original_base_and_default_refusal(self):
-        spec, metadata = TypedMappingTests().fixture()
+        spec, metadata = mapping_tests.TypedMappingTests().fixture()
         dex = load_showdown_dex_cached(showdown_root())
         for base in (None, ('normal',)):
             changed = replace(spec, side_one=replace(spec.side_one,pokemon=(replace(spec.side_one.pokemon[0],types=('ice',),base_types=base),)))
