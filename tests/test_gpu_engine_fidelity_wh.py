@@ -334,6 +334,13 @@ class RegressRuleTests(unittest.TestCase):
         self.assertIn((leaf, 1), self.rule(entries, self.lane(wit={leaf: wrong}, base={leaf: there}, credit=np.array([False, True])))[0])
         bench = np.zeros((2, 6), np.int32);bench[1, 2] = LEFTOVERS                                         # off the actives
         self.assertIn((leaf, 1), self.rule(entries, self.lane(wit={leaf: here}, base={leaf: bench}, credit=np.array([False, True])))[0])
+        # Round-3 review: the credit-only branch explains the ledger original and nothing else. A slot or visible-belief
+        # leaf differing at that side's active (a device bug writing shown_item or item_removed on a Trick-herb lane) stays
+        # unexplained, as round 2's wider generic slot branch would have let it through.
+        for other in ('trackers.shown_item', 'trackers.item_removed'):
+            a = np.zeros((2, 6), np.int32);b = a.copy();b[1, 0] = 1
+            self.assertIn((other, 1), self.rule(set(self.ENTRIES) | {(other, 1)},
+                self.lane(wit={other: a}, base={other: b}, credit=np.array([False, True])))[0], other)
 
     def test_a_pinch_berry_eaten_in_one_tree_only(self):
         """pinch_rule (the GPU pass at 5951098e: a doubled Facade's target ate its Salac Berry here only): the berry mon's
