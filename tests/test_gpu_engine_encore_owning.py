@@ -1,6 +1,6 @@
 """Original Encore helper transactions; no scientific games/models."""
 from _component_evidence import capture_path as component_capture_path
-import ast,json,subprocess,unittest
+import json,subprocess,unittest
 from copy import deepcopy
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -16,7 +16,6 @@ from gpu_engine import engine_lifecycle_callbacks as life,engine_public_events a
 from gpu_engine import engine_retained_encoder_driver as driver,engine_request_source as request,engine_own_facts as own
 from gpu_engine import engine_full_v4_event_device as full,engine_leftovers_callbacks as leftovers
 from gpu_engine import transition as tr,public_belief,v4_encoder as v4,public_wire,source_provenance
-from gpu_engine_default_observer_ast import dump_default_program,assert_hp_rng_mutations_detected
 from test_gpu_engine_gameplay_stream_comparison import state as literal_state
 from _showdown_root import showdown_root
 import test_gpu_engine_no_damage_owning as fixture
@@ -50,9 +49,7 @@ class EncoreOwningTests(unittest.TestCase):
   witness._source();d=self.helper.device.encore;self.assertEqual(int(d.move_id),self.move)
   self.assertEqual(int(self.runtime['kernel_risk_compiled'].device.selected_risk[self.move]),0)
   self.assertIsNone(direct.compile_direct_hit_controls(engine_catalog=self.producer).device.encore)
-  baseline=subprocess.check_output(['git','show','b8092a85:gpu_engine/transition.py'],text=True)
-  self.assertEqual(dump_default_program(ast.parse(baseline)),dump_default_program(ast.parse(Path(tr.__file__).read_text())))
-  assert_hp_rng_mutations_detected(self,ast.parse(Path(tr.__file__).read_text()),dump_default_program(ast.parse(baseline)))
+  # transition.py is certified against CURRENT_TRANSITION (full AST plus mutations) by terminal_closeout and seismic_toss_components.
   from gpu_engine import encore
   self.assertIn('if _direct_hit_context is not None and _direct_hit_registered and _direct_hit_context.data.encore is not None:',Path(tr.__file__).read_text())
   np.testing.assert_array_equal(self.table.encore.move,d.installed.move)

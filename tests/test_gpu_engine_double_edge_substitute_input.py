@@ -11,7 +11,6 @@ from gpu_engine import engine_kernel_frame_risk as risk,engine_execution_complet
 from gpu_engine import engine_lifecycle_callbacks as life,engine_public_events as public
 from gpu_engine import engine_retained_encoder_driver as driver,engine_full_v4_event_device as full
 from gpu_engine import v4_encoder as v4,public_wire,state,engine_source_frame_witness as witness
-from gpu_engine_default_observer_ast import dump_default_program,assert_hp_rng_mutations_detected
 from _showdown_root import showdown_root
 import test_gpu_engine_double_edge_type_immunity as fixture
 BASE='fd3256d2305a0770764e737640fc80157156cb29'
@@ -98,7 +97,8 @@ class DoubleEdgeSubstituteTests(unittest.TestCase):
     wire,_=public_wire.project_lines(public_wire.WireState(),prefix,**v4.wire_kwargs(self.catalog));_,packets=public_wire.project_lines(wire,lines,**v4.wire_kwargs(self.catalog));expected=np.array([v.words()for packet in packets for v in packet.events],np.int32);actual=np.asarray(got.projection.frames.words[:,row])[np.asarray(got.projection.frames.valid[:,row])];np.testing.assert_array_equal(actual,expected);captures.append(dict(owner=owner,row=row,expected=expected.tolist(),actual=actual.tolist()))
   capture_path(self,'double-edge-substitute-original-both-full-compact.json').write_text(json.dumps(captures,sort_keys=True)+'\n')
  def test_source_default_and_actual_transition_operand_binding(self):
-  old=ast.parse(subprocess.check_output(['git','show','b8092a85:gpu_engine/transition.py'],text=True));new=ast.parse(Path('gpu_engine/transition.py').read_text());self.assertEqual(dump_default_program(old),dump_default_program(new));assert_hp_rng_mutations_detected(self,new,dump_default_program(old));witness._source()
+  # transition.py is certified against CURRENT_TRANSITION (full AST plus mutations) by terminal_closeout and seismic_toss_components.
+  new=ast.parse(Path('gpu_engine/transition.py').read_text());witness._source()
   call=next(n for n in ast.walk(new)if isinstance(n,ast.Call)and ast.unparse(n.func)=='recoil_callbacks.prepare_device');extra=next(k.value for k in call.keywords if k.arg=='substitute_damage');self.assertEqual(ast.unparse(extra),'substitute_damage_callbacks.Captured(_sub_damage_pending, _sub_damage_write)')
   self.assertEqual(int(self.helper.device.substitute_damage.double_edge_move),self.metadata['vocabulary']['moves'].index('doubleedge'))
   legacy=direct.compile_direct_hit_controls(engine_catalog=self.producer);self.assertIsNone(legacy.device.substitute_damage)

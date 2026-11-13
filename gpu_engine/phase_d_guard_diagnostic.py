@@ -52,7 +52,7 @@ def payload_checks(request,payload,lines,*,owner,checks=None):
     c.add('deferred-baton-phase',bool(payload.get('pendingBatonPassSides')))
     for side,data in payload.get('sides',{}).items():
         vol=set(data.get('volatiles',()))
-        c.add('native-probed-or-hidden-volatile-clock',bool(data.get('meanlookTrap')or vol&{'trapped','solarbeam','encore'}),side=side,volatiles=sorted(vol))
+        c.add('native-probed-or-hidden-volatile-clock',bool(data.get('meanlookTrap')or vol&{'trapped','solarbeam'}),side=side,volatiles=sorted(vol))   # encore: drawn (phase_d_protocol_world)
         # Discharge requires positive B2 removal evidence; evaluated below by
         # the same protocol input predicates production uses.
     since=[None,None];bad_owner=False

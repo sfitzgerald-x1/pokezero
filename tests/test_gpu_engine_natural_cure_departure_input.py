@@ -1,6 +1,6 @@
 """Actual typed departure helpers, source writer and consumer; no engine turn."""
 from _component_evidence import capture_path
-import ast,json,subprocess,symtable,unittest
+import json,subprocess,symtable,unittest
 from copy import deepcopy
 from pathlib import Path
 import jax
@@ -13,7 +13,6 @@ from gpu_engine import engine_natural_cure_callbacks as nc,engine_baton_pass_cal
 from gpu_engine import engine_lifecycle_callbacks as life,engine_execution_completeness as ex,engine_kernel_frame_risk as risk,engine_public_events as public
 from gpu_engine import engine_retained_encoder_driver as driver,engine_request_source as request,engine_own_facts as own,engine_leftovers_callbacks as leftovers
 from gpu_engine import engine_full_v4_event_device as full,engine_source_frame_witness as witness,public_belief,v4_encoder as v4,state,entry,baton,transition,public_wire,public_inputs as inputs
-from gpu_engine_default_observer_ast import dump_default_program,assert_hp_rng_mutations_detected
 from _showdown_root import showdown_root
 import test_gpu_engine_hidden_power_substitute_input as fixture
 BASE='e481228626c9cfdfe2a2989871672392aa3e5859'
@@ -49,8 +48,9 @@ class NaturalCureTests(unittest.TestCase):
   got=json.loads(subprocess.check_output(['node','-e',script,str(showdown_root())],text=True));self.assertEqual(got,[dict(status='',lines=[f'|-curestatus|p1a: Actor|{c}|[from] ability: Natural Cure'])for c in ('par','brn','psn','tox','slp','frz')])
  def test_default_physics_source_and_wiring(self):
   witness._source();self.assertEqual((self.ability,len(self.metadata['vocabulary']['abilities'])),(38,81));self.assertEqual(int(ex.Site.NATURAL_CURE),45)
-  old=ast.parse(subprocess.check_output(['git','show','b8092a85:gpu_engine/transition.py'],text=True));new=ast.parse(Path('gpu_engine/transition.py').read_text());self.assertEqual(dump_default_program(old),dump_default_program(new));assert_hp_rng_mutations_detected(self,new,dump_default_program(old))
-  for name in ('entry.py','baton.py','state.py','mechanics.py','items.py'):self.assertEqual(Path('gpu_engine',name).read_bytes(),subprocess.check_output(['git','show','b8092a85:gpu_engine/'+name]))
+  # transition.py is certified against CURRENT_TRANSITION (full AST plus mutations) by terminal_closeout and seismic_toss_components.
+  # entry.py, baton.py, state.py and items.py are byte-certified against the reviewed SOURCE_PINS by transition_observer_wiring.
+  for name in ('mechanics.py',):self.assertEqual(Path('gpu_engine',name).read_bytes(),subprocess.check_output(['git','show','b8092a85:gpu_engine/'+name]))
   import builtins
   module=symtable.symtable(Path('gpu_engine/transition.py').read_text(),'transition.py','exec');step=next(c for c in module.get_children()if c.get_name()=='step_with_chance');self.assertEqual([s.get_name()for s in step.get_symbols()if s.is_referenced()and s.is_global()and s.get_name()not in set(module.get_identifiers())|set(dir(builtins))],[])
  def test_ordinary_late_owned_all_statuses_and_receipt_poison(self):

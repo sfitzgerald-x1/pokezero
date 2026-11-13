@@ -67,8 +67,7 @@ class BulkUpOwningTests(unittest.TestCase):
   for name in ('protect','detect','endure'):
    at=self.metadata['vocabulary']['moves'].index(name);self.assertFalse(bool(self.helper.device.bulk_up.candidates[at]))
   old=ast.parse(subprocess.check_output(['git','show','5e2a0376:gpu_engine/transition.py'],text=True));after=ast.parse(subprocess.check_output(['git','show','00307d73:gpu_engine/transition.py'],text=True));baseline=dump_default_program(old);self.assertEqual(baseline,dump_default_program(after));assert_hp_rng_mutations_detected(self,after,baseline)
-  after=ast.parse(Path('gpu_engine/transition.py').read_text());integrated=ast.parse(subprocess.check_output(['git','show','b8092a85:gpu_engine/transition.py'],text=True))
-  self.assertEqual(ast.dump(after),ast.dump(integrated));assert_hp_rng_mutations_detected(self,after,dump_default_program(integrated))
+  # transition.py is certified against CURRENT_TRANSITION (full AST plus mutations) by terminal_closeout and seismic_toss_components.
   script="""const d=require(process.argv[1]+'/dist/sim/dex.js').Dex.mod('gen3'),B=require(process.argv[1]+'/dist/sim/battle.js').Battle,P=require(process.argv[1]+'/dist/sim/pokemon.js').Pokemon,out=[];const m=d.moves.get('bulkup');
 for(const stages of [[0,0],[6,0],[6,6]]){const lines=[],p={hp:100,isActive:true,boosts:{atk:stages[0],def:stages[1]},battle:{clampIntRange:(v,a,z)=>Math.max(a,Math.min(z,v))},getCappedBoost:P.prototype.getCappedBoost,boostBy:P.prototype.boostBy,toString:()=> 'p2a: Actor'};
 B.prototype.boost.call({gen:3,runEvent:(id,t,s,e,b)=>b,add:(...v)=>lines.push(v.map(String).join('|'))},m.boosts,p,p,m);out.push(lines);}process.stdout.write(JSON.stringify(out));"""

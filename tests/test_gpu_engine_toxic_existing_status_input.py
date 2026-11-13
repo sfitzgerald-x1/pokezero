@@ -15,7 +15,6 @@ from gpu_engine import engine_retained_encoder_driver as driver,engine_request_s
 from gpu_engine import engine_full_v4_event_device as full,engine_leftovers_callbacks as leftovers
 from gpu_engine import transition as tr,public_belief,v4_encoder as v4,public_wire,state
 from gpu_engine import engine_source_frame_witness as witness
-from gpu_engine_default_observer_ast import dump_default_program,assert_hp_rng_mutations_detected
 from _showdown_root import showdown_root
 import test_gpu_engine_no_damage_owning as fixtures
 from gpu_engine import engine_direct_ko_callbacks as ko
@@ -76,17 +75,12 @@ class ToxicExistingStatusInputTests(unittest.TestCase):
   for bad in(raw.at[:,8].set(0),raw.at[:,9].add(1),raw.at[:,7:9].set(0)):self.assertFalse(bool(cb.existing_status_raw(bad).any()))
   self.assertTrue(bool(self.toxic.device.existing_status));self.assertFalse(bool(cb.compile_toxic(engine_catalog=self.producer,metadata=self.metadata).device.existing_status))
   with self.assertRaises(ValueError):cb.compile_toxic(engine_catalog=self.producer,metadata=self.metadata,source_rules=deepcopy(self.rules))
-  baseline_tree=ast.parse(subprocess.check_output(['git','show','b8092a85:gpu_engine/transition.py'],text=True));current=ast.parse(Path('gpu_engine/transition.py').read_text())
-  def dump(tree):
-   tree=deepcopy(tree)
-   for node in ast.walk(tree):
-    if isinstance(node,ast.Call)and isinstance(node.func,ast.Attribute)and isinstance(node.func.value,ast.Name)and node.func.value.id=='toxic_callbacks'and node.func.attr=='record_device':
-     extra=[k for k in node.keywords if k.arg=='caller_move']
-     if extra:
-      self.assertEqual(len(extra),1);self.assertEqual(ast.dump(extra[0].value),ast.dump(ast.Name(id='caller_move',ctx=ast.Load())));node.keywords=[k for k in node.keywords if k.arg!='caller_move']
-   return dump_default_program(tree)
-  baseline=dump(baseline_tree)
-  self.assertEqual(dump(current),baseline);assert_hp_rng_mutations_detected(self,current,baseline,dump=dump);witness._source()
+  # transition.py is certified against CURRENT_TRANSITION (full AST plus mutations) by terminal_closeout and seismic_toss_components.
+  # The caller_move binding check stays, on the current program: the one toxic_callbacks.record_device call binds caller_move exactly once, to caller_move.
+  calls=[n for n in ast.walk(ast.parse(Path('gpu_engine/transition.py').read_text()))if isinstance(n,ast.Call)and isinstance(n.func,ast.Attribute)and isinstance(n.func.value,ast.Name)and n.func.value.id=='toxic_callbacks'and n.func.attr=='record_device']
+  self.assertEqual(len(calls),1);extra=[k for k in calls[0].keywords if k.arg=='caller_move']
+  self.assertEqual(len(extra),1);self.assertEqual(ast.dump(extra[0].value),ast.dump(ast.Name(id='caller_move',ctx=ast.Load())))
+  witness._source()
   for order in[('benchmark_retained_games','engine_lifecycle_event_device','engine_full_v4_event_device'),('engine_full_v4_event_device','engine_lifecycle_event_device','benchmark_retained_games')]:subprocess.run([__import__('sys').executable,'-c',';'.join('import gpu_engine.'+n for n in order)],check=True,capture_output=True)
 
  def test_same_call_existing_status_both_full_and_mutations(self):

@@ -22,7 +22,7 @@ class Result(NamedTuple):
 
 
 def resolve(context,state,basis,mons,source_tables,context_tables,tables,*,producer_binding,valid=True):
-    """Apply the source's authoritative original claim and one real checkpoint."""
+    """Apply the source's authoritative original claim and one real checkpoint; a borrowing or Transformed target gets neither."""
     from .public_context import rebuild
     if context.sleep is None or context.refresh is None:
         raise ValueError('Mud Shot resolution requires ordered sleep/source context')

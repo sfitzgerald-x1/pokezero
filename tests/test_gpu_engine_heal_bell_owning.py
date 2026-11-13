@@ -15,7 +15,6 @@ from gpu_engine import engine_retained_encoder_driver as driver,engine_request_s
 from gpu_engine import engine_full_v4_event_device as full,engine_leftovers_callbacks as leftovers
 from gpu_engine import transition as tr,public_belief,v4_encoder as v4,public_wire,state,effects
 from gpu_engine import engine_source_frame_witness as witness
-from gpu_engine_default_observer_ast import dump_default_program,assert_hp_rng_mutations_detected
 from _showdown_root import showdown_root
 import test_gpu_engine_no_damage_owning as fixtures
 BASE='afc80dc70525b7eb8723233015ce6495614bef08'
@@ -97,8 +96,7 @@ class HealBellTests(unittest.TestCase):
   old_fn=get(effect_old);new_fn=get(effect_new);self.assertEqual(new_fn.args.kwonlyargs[-1].arg,'_return_write_mask');new_fn.args.kwonlyargs.pop();new_fn.args.kw_defaults.pop()
   self.assertIsInstance(new_fn.body[-2],ast.Assign);self.assertIsInstance(new_fn.body[-1].value,ast.IfExp);new_fn.body[-2:]=[ast.Return(value=new_fn.body[-2].value)]
   self.assertEqual(ast.dump(old_fn,include_attributes=False),ast.dump(new_fn,include_attributes=False))
-  # Default transition program including original HP/RNG expressions is exact.
-  old=ast.parse(subprocess.check_output(['git','show','b8092a85:gpu_engine/transition.py'],text=True));new=ast.parse(Path('gpu_engine/transition.py').read_text());baseline=dump_default_program(old);self.assertEqual(dump_default_program(new),baseline);assert_hp_rng_mutations_detected(self,new,baseline)
+  # transition.py is certified against CURRENT_TRANSITION (full AST plus mutations) by terminal_closeout and seismic_toss_components.
   s,t,_,actor=self.component(consume_initial=False);b=8;rows=j.arange(b);move=j.full(b,int(self.helper.device.heal_bell.move),j.int32);yes=j.ones(b,bool)
   t=public.move(t,actor,s.active[rows,actor],s.active[rows,1-actor],move,eligible=yes);t,p=cb.begin(t,s,actor,move,self.runtime['direct_hit_context'],self.table,eligible=yes,primary=yes,secondary=yes)
   np.testing.assert_array_equal(p.permutation,np.tile([1,0,2,3,4,5],(b,1)))

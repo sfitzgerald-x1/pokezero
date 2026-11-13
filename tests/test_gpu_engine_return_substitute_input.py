@@ -76,8 +76,7 @@ for(const damage of [20,40]){const lines=[],source={happiness:255,toString:()=> 
   for extras in ({},{'actor_happiness':z+255},{'actor_happiness':z+256,'caller_move':move},{'actor_happiness':z+128,'caller_move':move},{'actor_happiness':z+255,'caller_move':z+self.metadata['vocabulary']['moves'].index('sleeptalk')}):self.assertFalse(bool(cb.route(self.runtime['direct_hit_context'],move,**kwargs,**extras).any()))
   surf=z+self.metadata['vocabulary']['moves'].index('surf');self.assertTrue(bool(cb.route(self.runtime['direct_hit_context'],surf,**kwargs).all()))
   base=ast.parse(subprocess.check_output(['git','show',BASE+':gpu_engine/transition.py'],text=True));current=ast.parse(subprocess.check_output(['git','show','b4e0d717:gpu_engine/transition.py'],text=True));expected=dump_default_program(base);self.assertEqual(dump_default_program(current),expected);assert_hp_rng_mutations_detected(self,current,expected)
-  current=ast.parse(Path('gpu_engine/transition.py').read_text());integrated=ast.parse(subprocess.check_output(['git','show','b8092a85:gpu_engine/transition.py'],text=True))
-  self.assertEqual(ast.dump(current),ast.dump(integrated));assert_hp_rng_mutations_detected(self,current,dump_default_program(integrated))
+  # transition.py is certified against CURRENT_TRANSITION (full AST plus mutations) by terminal_closeout and seismic_toss_components.
 
  def test_typed_creation_return_survive_break_both_full_and_claim_guards(self):
   s,t,consumers,actor,phys=self.component();b=8;rows=j.arange(b);yes=j.ones(b,bool);no=~yes;z=j.zeros(b,j.int32);target=s.active[rows,1-actor];ids=self.metadata['vocabulary']['moves'];submove=z+ids.index('substitute');move=z+ids.index('return');context=self.runtime['direct_hit_context']

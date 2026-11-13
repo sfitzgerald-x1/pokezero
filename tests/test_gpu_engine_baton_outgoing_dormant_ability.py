@@ -108,12 +108,12 @@ console.log(JSON.stringify(rows));
    with self.assertRaisesRegex(ValueError,'dormant outgoing'):cb.compile_data(self.producer,self.metadata,self.rules)
 
  def test_source_defaults_consumers_and_call_scope_unchanged(self):
-  for name in ('transition.py','entry.py','baton.py','state.py','mechanics.py','engine_retained_encoder_driver.py','engine_full_v4_event_device.py','engine_lifecycle_event_device.py'):
+  # transition.py is certified against CURRENT_TRANSITION (full AST plus mutations) by terminal_closeout and seismic_toss_components.
+  # entry.py, baton.py and state.py are byte-certified against the reviewed SOURCE_PINS by transition_observer_wiring.
+  for name in ('mechanics.py','engine_retained_encoder_driver.py','engine_full_v4_event_device.py','engine_lifecycle_event_device.py'):
    self.assertEqual(Path('gpu_engine',name).read_bytes(),subprocess.check_output(['git','show','b8092a85:gpu_engine/'+name]),name)
-  old=ast.parse(subprocess.check_output(['git','show','b8092a85:gpu_engine/engine_baton_pass_callbacks.py'],text=True));new=ast.parse(Path(cb.__file__).read_text())
-  changed={'compile_data','shape','_bound','_data','_ability_quiet','_quiet','_start_diagnostics','begin_start','before_copy'}
-  fns=lambda t:{n.name:ast.dump(n,include_attributes=False)for n in t.body if isinstance(n,ast.FunctionDef)and n.name not in changed}
-  self.assertEqual(fns(old),fns(new))
+  # engine_baton_pass_callbacks.py is byte-certified against the reviewed SOURCE_PINS by transition_observer_wiring.
+  new=ast.parse(Path(cb.__file__).read_text())
   actual=[]
   for fn in (n for n in new.body if isinstance(n,ast.FunctionDef)):
    for call in (n for n in ast.walk(fn)if isinstance(n,ast.Call)and isinstance(n.func,ast.Name)and n.func.id=='_quiet'):

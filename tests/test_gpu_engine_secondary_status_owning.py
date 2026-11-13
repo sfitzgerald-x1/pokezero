@@ -74,10 +74,8 @@ class SecondaryStatusTests(unittest.TestCase):
             after=ast.parse(subprocess.check_output(['git','show','108c6c27:gpu_engine/'+name],text=True))
             self.assertEqual(dump_default_program(before),dump_default_program(after),name)
             if name=='transition.py':assert_hp_rng_mutations_detected(self,after,dump_default_program(before))
-            current=ast.parse(Path(secondary.__file__).with_name(name).read_text())
-            integrated=ast.parse(subprocess.check_output(['git','show','b8092a85:gpu_engine/'+name],text=True))
-            self.assertEqual(ast.dump(current),ast.dump(integrated),name)
-            if name=='transition.py':assert_hp_rng_mutations_detected(self,current,dump_default_program(integrated))
+            # transition.py is certified against CURRENT_TRANSITION (full AST plus mutations) by terminal_closeout and seismic_toss_components.
+            # secondary.py is byte-certified against the reviewed SOURCE_PINS by transition_observer_wiring.
 
     def test_empty_secondary_context_witness_path_remains_defined(self):
         cursor=life.register(j.array([25001],j.int32),**self.kw)

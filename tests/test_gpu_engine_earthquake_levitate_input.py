@@ -13,7 +13,6 @@ from gpu_engine import engine_execution_completeness as ex,engine_lifecycle_call
 from gpu_engine import engine_retained_encoder_driver as driver,engine_request_source as request,engine_own_facts as own
 from gpu_engine import engine_leftovers_callbacks as leftovers,engine_full_v4_event_device as full,engine_source_frame_witness as witness
 from gpu_engine import public_belief,v4_encoder as v4,public_wire,public_inputs as inputs,transition,absorption
-from gpu_engine_default_observer_ast import dump_default_program,assert_hp_rng_mutations_detected
 from _showdown_root import showdown_root
 import test_gpu_engine_hidden_power_substitute_input as fixture
 BASE='5e038e81a779ada0d442b4f723e40c2afbeeb8a5'
@@ -58,12 +57,14 @@ class EarthquakeLevitateTests(unittest.TestCase):
   script=r'''const root=process.argv[1],d=require(root+'/dist/sim/dex.js').Dex.mod('gen3'),P=require(root+'/dist/sim/pokemon.js').Pokemon,out=[];for(const [types,item,vol]of[[['Normal'],'leftovers',{}],[['Flying'],'leftovers',{}],[['Normal'],'ironball',{}],[['Normal'],'leftovers',{ingrain:{}}]]){const logs=[],battle={gen:3,field:{pseudoWeather:{}},runEvent:()=>true,suppressingAbility:()=>false,dex:d,add:(...a)=>logs.push(a.map(x=>typeof x==='object'?'p2a: Target':x).join('|'))},target={battle,volatiles:vol,item,ignoringItem:()=>false,hasType:t=>types.includes(t),hasAbility:a=>a==='levitate',isGrounded:P.prototype.isGrounded};out.push({result:P.prototype.runImmunity.call(target,d.moves.get('earthquake'),true),logs});}console.log(JSON.stringify(out));'''
   got=json.loads(subprocess.check_output(['node','-e',script,str(showdown_root())],text=True));self.assertEqual(got,[dict(result=False,logs=['-immune|p2a: Target|[from] ability: Levitate']),dict(result=False,logs=['-immune|p2a: Target']),dict(result=True,logs=[]),dict(result=False,logs=['-immune|p2a: Target|[from] ability: Levitate'])])
   self.assertTrue(bool(self.helper.device.no_damage.levitate_source));self.assertFalse(bool(self.legacy.levitate_source))
-  new=ast.parse(Path('gpu_engine/transition.py').read_text());old=ast.parse(subprocess.check_output(['git','show','b8092a85:gpu_engine/transition.py'],text=True));baseline=dump_default_program(old);self.assertEqual(dump_default_program(new),baseline);assert_hp_rng_mutations_detected(self,new,baseline)
+  # transition.py is certified against CURRENT_TRANSITION (full AST plus mutations) by terminal_closeout and seismic_toss_components.
+  new=ast.parse(Path('gpu_engine/transition.py').read_text())
   call=next(n for n in ast.walk(new)if isinstance(n,ast.Call)and isinstance(n.func,ast.Attribute)and isinstance(n.func.value,ast.Name)and n.func.value.id=='no_damage_callbacks'and n.func.attr=='Before')
   self.assertEqual([ast.unparse(x)for x in call.args[-2:]],['_active(work.types, work, foe)','_active(work.item, work, foe)'])
   finish=next(n for n in ast.walk(new)if isinstance(n,ast.Call)and isinstance(n.func,ast.Attribute)and isinstance(n.func.value,ast.Name)and n.func.value.id=='no_damage_callbacks'and n.func.attr=='finish')
   self.assertEqual({k.arg:ast.unparse(k.value)for k in finish.keywords},dict(target_types='_active(work.types, work, foe)',item='_active(work.item, work, foe)',ability='_active(work.ability, work, foe)'))
-  for name in ('mechanics.py','state.py','entry.py','secondary.py','engine_retained_encoder_driver.py'):self.assertEqual(Path('gpu_engine',name).read_bytes(),subprocess.check_output(['git','show','b8092a85:gpu_engine/'+name]))
+  # state.py, entry.py and secondary.py are byte-certified against the reviewed SOURCE_PINS by transition_observer_wiring.
+  for name in ('mechanics.py','engine_retained_encoder_driver.py'):self.assertEqual(Path('gpu_engine',name).read_bytes(),subprocess.check_output(['git','show','b8092a85:gpu_engine/'+name]))
   witness._source()
 
  def test_mixed_source_capture_grounding_namespaces_and_outcomes(self):
