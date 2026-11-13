@@ -17,7 +17,8 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 HEAVY_MANIFEST = ROOT / "tests" / "gpu_component_heavy.json"
-TIERS = ("all", "light", "heavy")
+EXTENDED_MANIFEST = ROOT / "tests" / "gpu_component_extended.json"
+TIERS = ("all", "light", "heavy", "extended")
 LOW_OPTIMIZATION_XLA_FLAGS = '--xla_backend_optimization_level=0 --xla_llvm_disable_expensive_passes=true'
 
 
@@ -35,16 +36,26 @@ def partition_suite(suite, index: int, count: int):
     return unittest.TestSuite(blocks[offset] for offset in indices), indices, len(blocks)
 
 
-def load_heavy_modules(path=HEAVY_MANIFEST):
-    """The heavy tier's test modules (tests/gpu_component_heavy.json): run nightly and before main, not per pull request."""
+def _load_manifest(path, schema, label):
     data = json.loads(Path(path).read_text())
     entries = data.get("modules", []) if type(data) is dict else None
     modules = [entry.get("module") for entry in entries] if type(entries) is list and all(type(e) is dict for e in entries) else None
-    if (type(data) is not dict or data.get("schema") != "gpu-component-heavy.v1" or not modules
+    if (type(data) is not dict or data.get("schema") != schema or not modules
             or any(type(name) is not str or not name.startswith("test_gpu_engine") for name in modules)
             or len(set(modules)) != len(modules)):
-        raise ValueError("heavy manifest requires schema gpu-component-heavy.v1 and unique test_gpu_engine module names")
+        raise ValueError(f"{label} manifest requires schema {schema} and unique test_gpu_engine module names")
     return frozenset(modules)
+
+
+def load_heavy_modules(path=HEAVY_MANIFEST):
+    """The heavy tier's test modules (tests/gpu_component_heavy.json): run nightly and before main, not per pull request."""
+    return _load_manifest(path, "gpu-component-heavy.v1", "heavy")
+
+
+def load_extended_modules(path=EXTENDED_MANIFEST):
+    """The extended tier's test modules (tests/gpu_component_extended.json): under the isolated heavy thresholds, but run on
+    push to integration and on demand, not per pull request, to keep the per-pull-request light tier within its wall budget."""
+    return _load_manifest(path, "gpu-component-extended.v1", "extended")
 
 
 class _ModuleRecordingLoader(unittest.TestLoader):
@@ -85,11 +96,12 @@ def _discover_modules(spec):
     return suite, modules
 
 
-def partition_tier(suite, modules, index: int, count: int, tier="all", heavy=frozenset()):
+def partition_tier(suite, modules, index: int, count: int, tier="all", heavy=frozenset(), extended=frozenset()):
     """partition_suite over one tier's blocks, keeping original top-level indices. Tier "all" is partition_suite itself;
-    "light" and "heavy" split every block by its module's membership in `heavy`, so the two tiers are disjoint and together
-    are every block (same tests, same blocks, same order). A block whose module failed to import (or skipped at import) is
-    light whatever the manifest says: it costs nothing to run and a heavy module's import failure must fail per PR."""
+    "light", "heavy" and "extended" split every block by its module's membership in `heavy` or `extended` (disjoint), so
+    the three tiers are disjoint and together are every block (same tests, same blocks, same order). A block whose module
+    failed to import (or skipped at import) is light whatever the manifests say: it costs nothing to run and a heavy or
+    extended module's import failure must fail per PR."""
     if tier == "all":
         return partition_suite(suite, index, count)
     if tier not in TIERS:
@@ -101,11 +113,19 @@ def partition_tier(suite, modules, index: int, count: int, tier="all", heavy=fro
     blocks = list(suite)
     if len(modules) != len(blocks) or any(type(name) is not str for name in modules):
         raise ValueError("every discovery block needs its module for a tiered shard")
-    absent = sorted(set(heavy) - set(modules))
-    if absent:
-        raise ValueError(f"heavy manifest names modules discovery does not have: {absent}")
-    heavy_block = [name in heavy and _import_outcome(block) is None for name, block in zip(modules, blocks)]
-    eligible = [offset for offset, is_heavy in enumerate(heavy_block) if is_heavy == (tier == "heavy")]
+    both = sorted(set(heavy) & set(extended))
+    if both:
+        raise ValueError(f"modules in both the heavy and extended manifests: {both}")
+    for label, names in (("heavy", heavy), ("extended", extended)):
+        absent = sorted(set(names) - set(modules))
+        if absent:
+            raise ValueError(f"{label} manifest names modules discovery does not have: {absent}")
+
+    def block_tier(name, block):
+        if _import_outcome(block) is not None:
+            return "light"
+        return "heavy" if name in heavy else "extended" if name in extended else "light"
+    eligible = [offset for offset, (name, block) in enumerate(zip(modules, blocks)) if block_tier(name, block) == tier]
     indices = eligible[index::count]
     if not indices:
         raise ValueError("empty component shard")
@@ -362,7 +382,7 @@ def _child(plan_path, plan_sha256, block_index, receipt_path, case_index=None):
     discovered, modules = _discover_modules(plan["discovery"])
     blocks = list(discovered)
     _, indices, total = partition_tier(discovered, modules, plan["index"], plan["count"],
-        plan.get("tier", "all"), frozenset(plan.get("heavy_modules", ())))
+        plan.get("tier", "all"), frozenset(plan.get("heavy_modules", ())), frozenset(plan.get("extended_modules", ())))
     if ([_manifest(block) for block in blocks] != plan["manifest"]
             or indices != plan["selected_blocks"] or total != len(plan["manifest"])
             or type(block_index) is not int or block_index not in indices):
@@ -394,7 +414,7 @@ def _child(plan_path, plan_sha256, block_index, receipt_path, case_index=None):
 
 def run_process_blocks(suite, index, count, *, start_dir, pattern="test_gpu_engine*.py",
                        top_level_dir=None, stream=None, resource_interval_seconds=0,
-                       isolate_standard_classes=(), tier="all", heavy=frozenset(),
+                       isolate_standard_classes=(), tier="all", heavy=frozenset(), extended=frozenset(),
                        low_optimization_cases=()):
     """Optional sequential fresh-exec blocks; default whole-suite API unchanged.
 
@@ -420,7 +440,7 @@ def run_process_blocks(suite, index, count, *, start_dir, pattern="test_gpu_engi
         rediscovered, modules = _discover_modules(spec)
         if [_manifest(block) for block in rediscovered] != [_manifest(block) for block in blocks]:
             raise ValueError("tiered selection rediscovery differs from the given suite")
-        _, indices, _ = partition_tier(suite, modules, index, count, tier, frozenset(heavy))
+        _, indices, _ = partition_tier(suite, modules, index, count, tier, frozenset(heavy), frozenset(extended))
     if (type(low_optimization_cases) not in (tuple, list)
             or any(type(name) is not str or not name for name in low_optimization_cases)):
         raise ValueError('low optimization requires explicit original case identities')
@@ -436,7 +456,7 @@ def run_process_blocks(suite, index, count, *, start_dir, pattern="test_gpu_engi
         selected_blocks=indices, manifest=manifests, low_optimization_cases=low_opt,
         isolate_standard_classes=classes, execution_units=units, isolation_decisions=decisions)
     if tier != "all":
-        plan.update(tier=tier, heavy_modules=sorted(heavy))
+        plan.update(tier=tier, heavy_modules=sorted(heavy), extended_modules=sorted(extended))
     for unit in units:
         names = _identities(_unit_manifest(plan, unit['block_index'], unit['case_index']))
         if set(names).intersection(low_opt) and (unit['case_index'] is None or len(names) != 1):
@@ -512,9 +532,11 @@ def main() -> int:
     parser.add_argument('--isolate-standard-class', action='append', default=[],
         help='explicit class whose plain suite cases each get fresh module/class fixtures')
     parser.add_argument("--tier", choices=TIERS, default="all",
-        help="all (default) shards every block; light omits the heavy manifest's modules (per pull request); "
-             "heavy runs only them (nightly and before main)")
+        help="all (default) shards every block; light omits the heavy and extended manifests' modules (per pull "
+             "request); heavy runs only the heavy manifest's (nightly and before main); extended runs only the extended "
+             "manifest's (on push to integration and on demand)")
     parser.add_argument("--heavy-manifest", default=str(HEAVY_MANIFEST), help=argparse.SUPPRESS)
+    parser.add_argument("--extended-manifest", default=str(EXTENDED_MANIFEST), help=argparse.SUPPRESS)
     parser.add_argument('--low-optimization-case', action='append', default=[],
         help='original case identity to run alone with reduced compiler optimization; never changes test shapes')
     parser.add_argument("--_child-plan", help=argparse.SUPPRESS)
@@ -533,15 +555,16 @@ def main() -> int:
     if args.low_optimization_case and not args.process_blocks:
         parser.error('--low-optimization-case requires --process-blocks')
     heavy = frozenset() if args.tier == "all" else load_heavy_modules(args.heavy_manifest)
+    extended = frozenset() if args.tier == "all" else load_extended_modules(args.extended_manifest)
     discovered, modules = _discover_modules(dict(start_dir=str(ROOT / "tests"), pattern="test_gpu_engine*.py"))
-    selected, indices, total = partition_tier(discovered, modules, args.index, args.count, args.tier, heavy)
+    selected, indices, total = partition_tier(discovered, modules, args.index, args.count, args.tier, heavy, extended)
     print(json.dumps({"shard": args.index, "count": args.count, "tier": args.tier,
         "discovery_blocks": total, "selected_blocks": indices,
         "test_cases": selected.countTestCases()}), flush=True)
     if args.process_blocks:
         return run_process_blocks(discovered, args.index, args.count, start_dir=ROOT / "tests",
             resource_interval_seconds=args.resource_interval_seconds,
-            isolate_standard_classes=args.isolate_standard_class, tier=args.tier, heavy=heavy,
+            isolate_standard_classes=args.isolate_standard_class, tier=args.tier, heavy=heavy, extended=extended,
             low_optimization_cases=args.low_optimization_case)
     return run_suite(selected)
 
