@@ -147,6 +147,33 @@ class PublicHooksTests(unittest.TestCase):
    self.assertIs(transition.step_with_public(s,a,None,c.trackers,chance_inputs=chance),sentinel)
    sample.assert_not_called();self.assertIs(step.call_args.args[3],chance)
    self.assertIs(step.call_args.kwargs['_device_public'].trackers,c.trackers)
+ def test_encore_bag_bit_follows_the_engine_counter_and_clears_at_the_residual_end(self):
+  # The device harness's OPEN BUG C: transition.py's Encore residual calls no hook, so before this the bit set at the
+  # Encore move stayed after -end|X|Encore. derived_volatiles (run by turn_end) now writes encore = counter>0.
+  E=h.VOLATILE_NAMES.index('encore')
+  def bit(c,st,side):
+   r=np.arange(2);p=np.asarray(st.active)[:,side];slot=np.clip(np.asarray(c.trackers.physical_to_public)[r,side,p],0,5)
+   return np.asarray(c.trackers.public_volatiles)[r,side,slot,E].tolist()
+  s=state();c=h.initialize(s,tables());yes=j.ones(2,bool)
+  counter=lambda st,side,n:st._replace(encore_counter=st.encore_counter.at[:,side,0].set(j.asarray(n,j.int32)))
+  held=counter(s,1,[2,2]);c=h.volatile(c,held,1,'encore',yes,yes)                 # the Encore move's write
+  self.assertEqual(bit(c,held,1),[True,True])
+  c=h.turn_end(c,held,held,yes);self.assertEqual(bit(c,held,1),[True,True])       # counter still above 0: kept
+  ended=counter(held,1,[0,1])                                                       # lane 0's Encore ends at the residual
+  c=h.turn_end(c,held,ended,yes);self.assertEqual(bit(c,ended,1),[False,True])
+  self.assertEqual(bit(c,ended,0),[False,False])                                    # the other side untouched
+  # a done lane is left alone; a counter that starts sets the bit (it agrees with the move's write)
+  c2=h.initialize(s,tables());started=counter(s,0,[3,3])
+  c2=h.derived_volatiles(c2,started,j.array([True,False]));self.assertEqual(bit(c2,started,0),[True,False])
+  # the faint clear zeroes the engine counter (transition's faintMessages), so a fainted holder reads no Encore
+  fainted=ended._replace(hp=ended.hp.at[:,1,0].set(0),encore_counter=ended.encore_counter.at[:,1,0].set(0))
+  c=h.turn_end(c,ended,fainted,yes);self.assertEqual(bit(c,fainted,1),[False,False])
+  # a Baton Pass recipient: Encore is noCopy (baton.py zeroes the recipient's counter, baton_copy omits the bit)
+  c3=h.initialize(s,tables());c3=h.volatile(c3,held,1,'encore',yes,yes)
+  passed=held._replace(active=held.active.at[:,1].set(3))
+  c3=h.install(c3,passed,1,yes);c3=h.baton_copy(c3,passed,1,j.zeros(2,j.int32),yes);c3=h.withdraw(c3,passed,1,j.zeros(2,j.int32),yes)
+  c3=h.turn_end(c3,held,passed,yes);self.assertEqual(bit(c3,passed,1),[False,False])
+
  def test_default_physical_ast_exact_after_only_optin_erasure(self):
   class Erase(ast.NodeTransformer):
    def visit_If(self,n):

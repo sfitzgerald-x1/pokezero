@@ -799,7 +799,7 @@ PERISH_BAG=('perish0','perish1','perish2','perish3')
 
 
 def derived_volatiles(c,state,use):
-    """Fidelity M2 (design 2.5): the actives' perish, yawn and partiallytrapped bag bits, from the actual state.
+    """Fidelity M2 (design 2.5): the actives' perish, yawn, partiallytrapped and encore bag bits, from the actual state.
 
     B2 (public_active.project_line) folds -start|X|perishN (PERISH_START: perishN replaces the other perish bits;
     perish3 [silent] at Perish Song, then perishN each residual), -start|X|move: Yawn / -end|X|move: Yawn|[silent],
@@ -807,7 +807,14 @@ def derived_volatiles(c,state,use):
     engine counter starts, changes or ends, so at every boundary B2's bag is perish{min(counter,3)} (perish0 only
     precedes the faint, whose FAINT clear empties the bag), yawn = counter>0 and partiallytrapped = counter>0.
     A switch-out drops them (withdraw), a Baton target carries perish and partiallytrapped (baton_copy). States
-    without the leaves (authored fixtures) are left alone."""
+    without the leaves (authored fixtures) are left alone.
+
+    Encore (the device harness's OPEN BUG C): B2 folds -start|X|Encore and -end|X|Encore (Showdown's encore condition
+    onEnd prints it both at the residual expiry and when the encored move's PP runs out; gen3 residual order 10,
+    subOrder 14), and an Encore's silent ends (switch-out, faint) clear the bag through withdraw and the faint clear.
+    The engine's encore_counter starts with the -start and reaches 0 exactly at the -end, so encore = counter>0 is B2's
+    bag at every boundary. public_move_state's write at the Encore move stays (it agrees); this is what clears it at
+    the residual, where transition.py's Encore block calls no hook."""
     if not hasattr(state,'perish_counter') or c.trackers.public_volatiles is None:return c
     use=_mask(use,len(c.trackers.error));r=_r(state)
     for side in range(2):
@@ -817,6 +824,7 @@ def derived_volatiles(c,state,use):
         for k,name in enumerate(PERISH_BAG):bag=bag.at[:,VOLATILE_NAMES.index(name)].set((perish>0)&(shown==k))
         bag=bag.at[:,VOLATILE_NAMES.index('yawn')].set(_get(state,'yawn_counter',side)>0)
         bag=bag.at[:,VOLATILE_NAMES.index('partiallytrapped')].set(_get(state,'partial_trap_counter',side)>0)
+        bag=bag.at[:,VOLATILE_NAMES.index('encore')].set(_get(state,'encore_counter',side)>0)
         c=c._replace(trackers=_write(c.trackers,'public_volatiles',side,p,bag,use))
     return c
 
