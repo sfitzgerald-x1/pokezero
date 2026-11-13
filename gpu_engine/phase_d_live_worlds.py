@@ -337,10 +337,11 @@ def from_b2(adapter, request, source, metadata, *, address, defer_sleep=False, p
     replacement=protocol_facts is not None and protocol_facts['replacement'] is not None
     fresh=protocol_facts.get('fresh_substitutes',{}) if protocol_facts is not None else {}
     own_species=normalize_id(v['species'][int(own['species'][own_slot])])
-    # Engine-held public volatiles (fidelity A2/M2): Destiny Bond's flag, Perish Song's count and Yawn's count are public
-    # and carry no hidden clock; the mapper writes perish_counter and the protocol world yawn_counter (neither is an own
-    # field), and the own volatile below carries Destiny Bond.
-    allowed = {'', 'leechseed', 'ingrain', 'trapped', 'destinybond', 'perish1', 'perish2', 'perish3', 'perish4', 'yawn'}
+    # Engine-held public volatiles (fidelity A2/M2). Destiny Bond's flag rides the own volatile below on every route.
+    # Perish Song's and Yawn's counts are not own fields: only the protocol world writes them (map_spec held_volatiles,
+    # _write_held_counts), so they are admitted only on that route (protocol_facts); elsewhere they still refuse.
+    allowed = {'', 'leechseed', 'ingrain', 'trapped', 'destinybond'}
+    if protocol_facts is not None:allowed |= {'perish1', 'perish2', 'perish3', 'yawn'}
     if fresh.get('p'+str(owner+1))==own_species:
         allowed.add('substitute');hp_slot=own_slot
         origin=(protocol_facts.get('substitute_origins') or {}).get('p'+str(owner+1))

@@ -857,9 +857,9 @@ def fill_recharge(public,facts):
     """The public carry with the mustrecharge volatile set on each side's active that must recharge (facts.recharge). B2 keeps
     that fact in its own flag beside the volatile bag (public_active.ActiveState.recharge, merged into the bag only when it
     encodes: public_active.project, `bag=state.volatiles.at[...,RECHARGE_ID].set(state.recharge)`), so from_b2's copy of the
-    bag (phase_d_live_worlds.py:311) drops it and the encoder showed no volatile:mustrecharge where B2 does. No device hook
-    writes or clears the bit and the engine models no recharge turn, so at every in-search node after the root the bit stays
-    set on that Pokemon while it stays in (the install hook's bag reset clears it on a switch)."""
+    bag (phase_d_live_worlds.py:311) drops it and the encoder showed no volatile:mustrecharge where B2 does. In search the
+    device clears it with M1's counter (the recharge_turn hook, an arrival, a faint); fix_recharge writes that counter on
+    the world state. A silent expiry leaves the bit set with the counter 0, as B2 does."""
     from .public_active import NAMES
     b=_trackers(public)
     if facts is None or not any(facts.recharge):return public

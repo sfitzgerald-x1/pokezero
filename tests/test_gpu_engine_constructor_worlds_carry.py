@@ -492,6 +492,20 @@ class RechargeTests(unittest.TestCase):
         self.assertIs(cw.fix_recharge(out,cw.LineFacts(('beta',),(),recharge=(False,True),recharge_counter=(0,1))),out)
         self.assertIs(cw.fix_recharge(state,cw.LineFacts(('beta',),())),state);self.assertIs(cw.fix_recharge(state,None),state)
 
+    def test_the_completion_writes_the_counter_and_the_bag_bit(self):
+        """complete_world with the root's LineFacts: fix_recharge writes the peer active's recharge_counter (1 after the Hyper
+        Beam turn's residual) on the world state and fill_recharge its public mustrecharge bit; the second pass is a no-op."""
+        from gpu_engine.public_active import NAMES
+        state,t,root=pressure_world()
+        t=t._replace(public_volatiles=j.zeros((1,2,6,len(NAMES)),bool),active_slot=j.asarray([[0,0]],j.int32))
+        lines=[switch('p1','alpha','300/300'),switch('p2','beta'),'|turn|1','|move|p2a: Beta|Hyper Beam|p1a: Alpha',
+            '|-damage|p1a: Alpha|100/300','|-mustrecharge|p2a: Beta','|','|upkeep','|turn|2']
+        facts=cw.line_facts(lines,0);self.assertEqual((facts.recharge,facts.recharge_counter),((False,True),(0,1)))
+        done=cw.complete_world(World(0,state,t,(),1,False),pressure_tables(),0,facts=facts,root=root)
+        self.assertEqual(np.argwhere(np.asarray(done.state.recharge_counter)).tolist(),[[0,1,0]]);self.assertEqual(int(done.state.recharge_counter[0,1,0]),1)
+        self.assertTrue(bool(np.asarray(done.public.public_volatiles)[0,1,0,NAMES.index('mustrecharge')]))
+        self.assertIs(cw.complete_world(done,pressure_tables(),0,facts=facts,root=root),done)
+
     def test_the_fill_sets_the_volatile_on_the_sides_active(self):
         from gpu_engine.public_active import NAMES
         t=carry(SPECIES,MAPPING)._replace(public_volatiles=j.zeros((1,2,6,len(NAMES)),bool),active_slot=j.asarray([[0,1]],j.int32))

@@ -12,8 +12,8 @@ the moves whose missing effect carries over into the price (the lead's decision)
 TIER_B (irontail, signalbeam, steelwing, meteormash: chance secondaries) is never guarded, only reported (tier_b_legal).
 RETIRED (tier 'R') holds the moves the guard no longer trips on because the engine now models their effect, each with the
 integration merge from which it does (a screen declares an engine at or after it): destinybond (A2, 286a5ffe: the DESTINY_BOND
-volatile, Showdown-probed), hyperbeam (M1, 8b212312: the recharge turn; the live roots' recharge refusals and the live actor's
-own-recharge guard, RECHARGE_MOVES, are separate and unchanged); curse, aromatherapy, refresh, lovelykiss (A1, 4ee5d3ee: Curse's
+volatile, Showdown-probed), hyperbeam (M1, 8b212312: the recharge turn; since #1949 the world constructor writes an opponent's
+recharge counter instead of refusing the root, and the live actor's own-recharge guard, RECHARGE_MOVES, is separate and unchanged); curse, aromatherapy, refresh, lovelykiss (A1, 4ee5d3ee: Curse's
 non-Ghost form -- a Ghost user's Curse stays an unported placeholder (gpu_engine/README.md), and no pool Curse user is a Ghost;
 a Transform copy stays guarded by Transform --, the party and self cures, Sleep Clause; effect probes curse, aromatherapy,
 refresh, lovelykiss, lovelykiss_block, sleepclause*), gigadrain (A2, 286a5ffe: Liquid Ooze; probes gigadrain*), mirrorcoat (A2,
@@ -31,10 +31,10 @@ item swap stay refused by the world constructor, PUBLIC_ITEM_SWAP_NOT_SUPPORTED)
 partiallytrapped, yawn and perishsong volatiles in state (partial_trap_counter / partial_trap_source, yawn_counter, perish_counter)
 and the residual scheduler's Wrap tick, Yawn countdown and Perish count; R1 traces the Wrap and Yawn handlers only at the positions
 they can sort to, residual_order.POSITIONS, Wrap 4, 8, 9, 11 and Yawn 6, 12, 13, each failing a named probe when dropped; probes
-wrap* (12), yawn* (11), perishsong* (10); a root already holding one stays refused: an own-held one by phase_d_live_worlds
-(OWN_VOLATILE_OR_LATENT_CLOCK_UNAVAILABLE), an opponent-held partial trap or drowsy by the protocol world (built without
-approximating partial-trap or hidden-duration volatiles) and an opponent-held perish count by its typed mapper,
-v5_hypothetical_state), each exact against Showdown f76228a1 in the engine session's probe runs. The retired tier-C moves'
+wrap* (12), yawn* (11), perishsong* (10); since #1949 a root holding a perish or Yawn count (or a Destiny Bond) is built with
+it (the protocol world writes the public count), and a root holding a partial trap stays refused, its 3-6 turn count being
+hidden: an own-held one by phase_d_live_worlds (OWN_VOLATILE_OR_LATENT_CLOCK_UNAVAILABLE), an opponent-held one by the
+protocol world (built without approximating partial-trap volatiles)), each exact against Showdown f76228a1 in the engine session's probe runs. The retired tier-C moves'
 conditions (sleep_clause, user_brn_par_psn, party_statused, item_knocked) stay in `guarded`'s vocabulary and in the recorded
 conditions, unused by any GUARDED move. They stay WATCHED, so their masses are still recorded (turn-2
 entries: guarded False, tier 'R'), and never count toward (a), (b) (its turn-1 arm and the reach) or (c). Roots where a side is
