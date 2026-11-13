@@ -1,0 +1,60 @@
+{
+ "fix": "unown_forme",
+ "code": "own-request-mapper-disagreement:species",
+ "ordinal": 1013,
+ "decision_index": 0,
+ "battle_id": "battle-gen3randombattle-controlled-2103400168",
+ "owner": "p2",
+ "prefix_sha256": "88f37f0cda5d6e353e60717bdcd9c4b7f91f7ade95efb99675f95ae10070e5ba",
+ "line_count": 24,
+ "base": {
+  "root_refusal": null,
+  "world_refusals": {
+   "own-request-mapper-disagreement:species": 16
+  },
+  "built": 0
+ },
+ "patched": {
+  "root_refusal": null,
+  "world_refusals": {},
+  "built": 16,
+  "digest": "533095c12b1efb6a71d8aa647faefbb89c03d2df66f0765f56aefe8c1609b6b4"
+ },
+ "request": {
+  "schema": "pokezero.phase-d.shared-gpu-search.v1",
+  "request_id": "battle-gen3randombattle-controlled-2103400168:0",
+  "battle_id": "battle-gen3randombattle-controlled-2103400168",
+  "owner": "p2",
+  "stream_id": 1,
+  "decision_index": 0,
+  "generation": 2,
+  "prefix_sha256": "88f37f0cda5d6e353e60717bdcd9c4b7f91f7ade95efb99675f95ae10070e5ba",
+  "lines": [
+   "|t:|1794412494",
+   "|gametype|singles",
+   "|player|p1|FoulPlayBot||",
+   "|player|p2|PokeZeroBot||",
+   "|gen|3",
+   "|tier|[Gen 3] Random Battle",
+   "|rule|HP Percentage Mod: HP is shown in percentages",
+   "|rule|Beat Up Nicknames Mod: Beat Up will not reveal any party members",
+   "|rule|Endless Battle Clause: Forcing endless battles is banned",
+   "|rule|Sleep Clause Mod: Limit one foe put to sleep",
+   "|rule|Switch Priority Clause Mod: Faster Pok\u00e9mon switch first",
+   "|rule|Species Clause: Limit one of each Pok\u00e9mon",
+   "|rule|OHKO Clause: OHKO moves are banned",
+   "|rule|Evasion Items Clause: Evasion items are banned",
+   "|rule|Evasion Moves Clause: Evasion moves are banned",
+   "|",
+   "|t:|1794412495",
+   "|teamsize|p1|6",
+   "|teamsize|p2|6",
+   "|start",
+   "|switch|p1a: Articuno|Articuno, L80|100/100",
+   "|switch|p2a: Unown|Unown-R|258/258",
+   "|turn|1",
+   "|request|{\"active\":[{\"moves\":[{\"move\":\"Hidden Power Psychic 70\",\"id\":\"hiddenpower\",\"pp\":24,\"maxpp\":24,\"target\":\"normal\",\"disabled\":false}]}],\"side\":{\"name\":\"PokeZeroBot\",\"id\":\"p2\",\"pokemon\":[{\"ident\":\"p2: Unown\",\"details\":\"Unown-R\",\"condition\":\"258/258\",\"active\":true,\"stats\":{\"atk\":151,\"def\":153,\"spa\":201,\"spd\":153,\"spe\":152},\"moves\":[\"hiddenpowerpsychic\"],\"baseAbility\":\"levitate\",\"item\":\"twistedspoon\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Girafarig\",\"details\":\"Girafarig, L85, M\",\"condition\":\"258/258\",\"active\":false,\"stats\":{\"atk\":142,\"def\":159,\"spa\":201,\"spd\":159,\"spe\":192},\"moves\":[\"psychic\",\"calmmind\",\"rest\",\"hiddenpowerfire\"],\"baseAbility\":\"earlybird\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Politoed\",\"details\":\"Politoed, L84, F\",\"condition\":\"288/288\",\"active\":false,\"stats\":{\"atk\":131,\"def\":174,\"spa\":199,\"spd\":216,\"spe\":166},\"moves\":[\"rest\",\"sleeptalk\",\"toxic\",\"surf\"],\"baseAbility\":\"waterabsorb\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Venusaur\",\"details\":\"Venusaur, L81, F\",\"condition\":\"262/262\",\"active\":false,\"stats\":{\"atk\":179,\"def\":181,\"spa\":209,\"spd\":209,\"spe\":176},\"moves\":[\"sludgebomb\",\"substitute\",\"leechseed\",\"sleeppowder\"],\"baseAbility\":\"overgrow\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Victreebel\",\"details\":\"Victreebel, L85, F\",\"condition\":\"275/275\",\"active\":false,\"stats\":{\"atk\":227,\"def\":159,\"spa\":218,\"spd\":150,\"spe\":168},\"moves\":[\"sleeppowder\",\"sludgebomb\",\"hiddenpowerground\",\"synthesis\"],\"baseAbility\":\"chlorophyll\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Gorebyss\",\"details\":\"Gorebyss, L85, M\",\"condition\":\"232/232\",\"active\":false,\"stats\":{\"atk\":149,\"def\":227,\"spa\":242,\"spd\":176,\"spe\":137},\"moves\":[\"raindance\",\"hiddenpowergrass\",\"hydropump\",\"icebeam\"],\"baseAbility\":\"swiftswim\",\"item\":\"petayaberry\",\"pokeball\":\"pokeball\"}]}}"
+  ],
+  "own_request_line": "|request|{\"active\":[{\"moves\":[{\"move\":\"Hidden Power Psychic 70\",\"id\":\"hiddenpower\",\"pp\":24,\"maxpp\":24,\"target\":\"normal\",\"disabled\":false}]}],\"side\":{\"name\":\"PokeZeroBot\",\"id\":\"p2\",\"pokemon\":[{\"ident\":\"p2: Unown\",\"details\":\"Unown-R\",\"condition\":\"258/258\",\"active\":true,\"stats\":{\"atk\":151,\"def\":153,\"spa\":201,\"spd\":153,\"spe\":152},\"moves\":[\"hiddenpowerpsychic\"],\"baseAbility\":\"levitate\",\"item\":\"twistedspoon\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Girafarig\",\"details\":\"Girafarig, L85, M\",\"condition\":\"258/258\",\"active\":false,\"stats\":{\"atk\":142,\"def\":159,\"spa\":201,\"spd\":159,\"spe\":192},\"moves\":[\"psychic\",\"calmmind\",\"rest\",\"hiddenpowerfire\"],\"baseAbility\":\"earlybird\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Politoed\",\"details\":\"Politoed, L84, F\",\"condition\":\"288/288\",\"active\":false,\"stats\":{\"atk\":131,\"def\":174,\"spa\":199,\"spd\":216,\"spe\":166},\"moves\":[\"rest\",\"sleeptalk\",\"toxic\",\"surf\"],\"baseAbility\":\"waterabsorb\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Venusaur\",\"details\":\"Venusaur, L81, F\",\"condition\":\"262/262\",\"active\":false,\"stats\":{\"atk\":179,\"def\":181,\"spa\":209,\"spd\":209,\"spe\":176},\"moves\":[\"sludgebomb\",\"substitute\",\"leechseed\",\"sleeppowder\"],\"baseAbility\":\"overgrow\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Victreebel\",\"details\":\"Victreebel, L85, F\",\"condition\":\"275/275\",\"active\":false,\"stats\":{\"atk\":227,\"def\":159,\"spa\":218,\"spd\":150,\"spe\":168},\"moves\":[\"sleeppowder\",\"sludgebomb\",\"hiddenpowerground\",\"synthesis\"],\"baseAbility\":\"chlorophyll\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Gorebyss\",\"details\":\"Gorebyss, L85, M\",\"condition\":\"232/232\",\"active\":false,\"stats\":{\"atk\":149,\"def\":227,\"spa\":242,\"spd\":176,\"spe\":137},\"moves\":[\"raindance\",\"hiddenpowergrass\",\"hydropump\",\"icebeam\"],\"baseAbility\":\"swiftswim\",\"item\":\"petayaberry\",\"pokeball\":\"pokeball\"}]}}"
+ }
+}

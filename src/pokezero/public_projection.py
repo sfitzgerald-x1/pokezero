@@ -1781,11 +1781,14 @@ _BOOST_WRITE_TAGS = ("-boost", "-unboost", "-setboost")
 #: actually removed -- the strictly-more-conservative mutant that report 4
 #: section 4.4 says to write.
 #:
-#: DISCLOSED APPROXIMATION, not a claim: `-clearnegativeboost` zeroes only the
-#: negative stages and `-invertboost` negates them; this branch zeroes everything
-#: for all three. Neither tag exists in gen 3, so the approximation is
-#: unreachable on this census block. Both are pinned lexically; only
-#: `-clearboost`, which IS exact, is also pinned behaviourally.
+#: `-clearnegativeboost` zeroes only the NEGATIVE stages (positive ones stay),
+#: which the branch re-tests by name, as `-setboost` above. It IS reachable in
+#: gen 3: White Herb's onUse prints `-clearnegativeboost|X|[silent]` after its
+#: `-enditem` (data/items.ts whiteherb), so fidelity WH's engine renders it.
+#: DISCLOSED APPROXIMATION, not a claim: `-invertboost` negates the stages; this
+#: branch zeroes them. It does not exist in gen 3, so that approximation is
+#: unreachable on this census block. All three are pinned lexically;
+#: `-clearboost` and `-clearnegativeboost`, which are exact, also behaviourally.
 _BOOST_CLEAR_TAGS = ("-clearboost", "-clearnegativeboost", "-invertboost")
 
 
@@ -1889,7 +1892,12 @@ def fold_lines_onto_summary(
                 delta = amount if tag == "-boost" else -amount
                 out[slot]["boosts"][key] = max(-6, min(6, current + delta))
         elif tag in _BOOST_CLEAR_TAGS:
-            out[slot]["boosts"] = {key: 0 for key in _BOOST_KEYS}
+            if tag == "-clearnegativeboost":
+                out[slot]["boosts"] = {
+                    key: max(0, out[slot]["boosts"][key]) for key in _BOOST_KEYS
+                }
+            else:
+                out[slot]["boosts"] = {key: 0 for key in _BOOST_KEYS}
         elif tag == "-clearallboost":
             for other in out:
                 out[other]["boosts"] = {key: 0 for key in _BOOST_KEYS}

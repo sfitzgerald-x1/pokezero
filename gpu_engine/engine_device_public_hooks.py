@@ -523,6 +523,24 @@ def item_changes(c,before,after,use):
     return observe(c,after,use)
 
 
+def white_herb(c,before,after,side,use):
+    """One White Herb use by `side`'s active (fidelity WH): -enditem|X|White Herb, then -clearnegativeboost|X|[silent]
+    (data/items.ts whiteherb: useItem, then onUse).
+
+    B2 folds them as a consumption, like a berry eaten: public_items CONSUME (the item revealed and removed; not a
+    mutation, so the item ledger stays), public_active ITEM_END (the per-stint item flags end), and CLEAR_NEGATIVE on
+    the holder's public stages. That is item_changes' consumption for this one active, with the holder's stage copy
+    observe makes; the lines carry no HP or status, so neither active's condition is polled here.
+    """
+    b=len(c.trackers.error);use=_mask(use,b);r=_r(after);p=_li.take(after.active,r,side)
+    c=reveal_item(c,before,side,_get(before,'item',side),use)
+    c=c._replace(trackers=_write(c.trackers,'item_removed',side,p,j.ones_like(use),use))
+    for name in STINT_ITEM_KEYS:
+        if c.trackers.mon_features is not None and name in c.trackers.mon_features:
+            c=feature(c,side,p,name,j.zeros_like(p),use)
+    return c._replace(trackers=_write(c.trackers,'boosts',side,p,_get(after,'boosts',side),use))
+
+
 def knock_off(c,before,after,side,use):
     """One actual Knock Off removal: -enditem|Y|Item|[from] move: Knock Off|[of] X.
 
@@ -555,7 +573,7 @@ def knock_off(c,before,after,side,use):
     return c
 
 
-def trick(c,before,after,side,use,choice_items):
+def trick(c,before,after,side,use,choice_items,herb_used=None):
     """One successful Trick by `side` (fidelity M1, design 2.5). Showdown prints -activate|S|move: Trick|[of] T,
     then for T and for S: -item|X|received|[from] move: Trick, or -enditem|X|lost|[silent]|[from] move: Trick
     when nothing comes back (data/moves.ts trick onHit).
@@ -569,9 +587,17 @@ def trick(c,before,after,side,use,choice_items):
     (design 13 item 4: B2's matching key is 0), so both mons' item narrowing is reset.
     B2's identical-swap quirk: a Band <-> Band Trick leaves the state unchanged but prints the same lines,
     so `use` is the transition's success mask, never a before/after item difference.
+    Fidelity WH: herb_used [B,2] (by side) marks a receiver that used a received White Herb inside onHit; its
+    -enditem and -clearnegativeboost precede its own -item line (the target's lines first, then the user's), and B2
+    ends the Trick pairing at any non-item line (public_items.begin_event), so a partner credit read from a -item line
+    after one is lost: the user's from the target's line when the target used it, the target's from the user's line
+    when either did. A mon that received nothing keeps its own removal credit (its -enditem [silent]).
     """
     b=len(c.trackers.error);use=_mask(use,b);r=_r(after)
-    for m in (side,1-side):
+    if herb_used is None:herb_user=herb_target=j.zeros(b,bool)
+    else:
+        herb_used=j.asarray(herb_used,bool);herb_user=herb_used[r,side];herb_target=herb_used[r,1-side]
+    for m,broken in ((side,herb_target),(1-side,herb_target|herb_user)):
         p=_li.take(after.active,r,m)
         received=_get(after,'item',m);lost=_get(before,'item',m);got=received>0
         c=c._replace(trackers=_write(c.trackers,'shown_item',m,p,j.where(got,received,lost),use))
@@ -579,7 +605,7 @@ def trick(c,before,after,side,use,choice_items):
         facts=c.trackers.mon_features
         if facts is not None and 'item_mutated' in facts:
             fresh=(_mon_fact(c,'item_mutated',m,p)==0)&(_mon_fact(c,'item_original',m,p)==0)
-            c=feature(c,m,p,'item_original',lost,use&fresh)
+            c=feature(c,m,p,'item_original',lost,use&fresh&~(broken&got))
             c=feature(c,m,p,'item_mutated',j.ones_like(p),use)
         choice=got&j.asarray(choice_items)[j.clip(received,0,len(choice_items)-1)]
         for name,value in (('item_swapped',got),('choice_public',choice),('choice_locked',j.zeros_like(got))):

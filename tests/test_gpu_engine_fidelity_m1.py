@@ -18,8 +18,8 @@ MOVES = ['_none', 'struggle', 'splash', 'hyperbeam', 'trick', 'tackle', 'protect
 STRUGGLE, SPLASH, HYPERBEAM, TRICK, TACKLE, PROTECT, ROAR, EXPLOSION, RETURN, ENCORE = range(1, 11)
 ABILITIES = ['_none', 'truant', 'stickyhold', 'keeneye']
 TRUANT, STICKYHOLD, KEENEYE = range(1, 4)
-ITEMS = ['_none', 'leftovers', 'lumberry', 'choiceband']
-LEFTOVERS, LUM, BAND = range(1, 4)
+ITEMS = ['_none', 'leftovers', 'lumberry', 'choiceband', 'whiteherb']        # whiteherb: fidelity WH's Trick device-order lanes
+LEFTOVERS, LUM, BAND, HERB = range(1, 5)
 SLP, PSN = 5, 3
 HAS_JAX = bool(importlib.util.find_spec('jax'))
 
@@ -50,7 +50,9 @@ class TableAndMaskTests(unittest.TestCase):
         self.assertEqual(np.flatnonzero(np.asarray(effects.from_metadata(meta).recharge)).tolist(), [HYPERBEAM])
         t = items.from_metadata(meta)
         self.assertEqual(np.flatnonzero(np.asarray(t.trick)).tolist(), [TRICK])
-        self.assertEqual(items.ItemTable._fields[-3:], ('knock_off', 'sticky_hold', 'trick'))
+        # Appended in order after B's fields (later PRs append more after them).
+        fields = items.ItemTable._fields;k = fields.index('knock_off')
+        self.assertEqual(fields[k:k + 3], ('knock_off', 'sticky_hold', 'trick'))
         self.assertIn('recharge', effects.MoveEffects._fields)   # M1 appended it; later tiers append after it (M2: perishsong, yawn, wrap)
 
     def test_recharge_request_is_lane_zero_and_trapped(self):
@@ -319,6 +321,33 @@ class DeviceTests(unittest.TestCase):
         self.assertEqual(np.asarray(tk.mon_features['item_swapped'])[rows, 0, slot].tolist(), [1, 0])
         self.assertEqual(np.asarray(tk.mon_features['item_mutated'])[rows, 0, slot].tolist(), [1, 1])
         self.assertEqual(np.asarray(tk.shown_item)[rows, 0, slot].tolist(), [LEFTOVERS, LUM])
+
+    def test_trick_received_white_herb_device_ledger_follows_b2(self):
+        """Fidelity WH (review round 2: the catcher for planted mutant WH10, the old device order). A White Herb received by
+        Trick is used inside onHit (setItem's Start; sim/pokemon.ts:1868-1889, data/moves.ts:19904-19915), before the
+        receiver's own -item line, and that -clearnegativeboost ends B2's Trick pairing (public_items.begin_event), so a later
+        -item line credits no partner original. Through transition.py's own Trick site (step_with_public), per side:
+        shown_item, item_removed, item_mutated and item_original against B2's fold of Showdown f76228a1's lines (cross-checked
+        with public_items.begin_event and record; the line-level parity is TrickWhiteHerbBoundaryParityTests). Lanes: 0 the
+        user (-2 Atk) receives the herb and uses it; 1 the target (-1 Def) does; 2 both hold one, both with a negative stage;
+        3 no negative stage (an ordinary swap, both credited). The old order (Trick's -item writes before the herb's
+        -enditem) leaves the used herb removed and credits the originals B2 does not."""
+        lanes = [{'item': [((0, 0), LEFTOVERS), ((1, 0), HERB)], 'boosts': [((0, 0, 0), -2)]},
+                 {'item': [((0, 0), HERB), ((1, 0), LEFTOVERS)], 'boosts': [((1, 0, 1), -1)]},
+                 {'item': [((0, 0), HERB), ((1, 0), HERB)], 'boosts': [((0, 0, 0), -1), ((1, 0, 1), -1)]},
+                 {'item': [((0, 0), LEFTOVERS), ((1, 0), HERB)]}]
+        s = self.build(lanes, move=TRICK)
+        st, tk = self.run_public(s, self.chance(4))
+        rows = np.arange(4);f = tk.mon_features
+        def mon(name, side):return np.asarray(getattr(tk, name) if name in ('shown_item', 'item_removed') else f[name])[rows, side, self.slot(tk, side)].tolist()
+        self.assertEqual(np.asarray(st.item)[:, :, 0].tolist(), [[0, LEFTOVERS], [LEFTOVERS, 0], [0, 0], [HERB, LEFTOVERS]])
+        self.assertEqual(np.asarray(st.boosts)[:, :, 0, :2].tolist(), [[[0, 0], [0, 0]]] * 4)
+        got = {side: {k: mon(k, side) for k in ('shown_item', 'item_removed', 'item_mutated', 'item_original')} for side in (0, 1)}
+        want = {0: dict(shown_item=[HERB, LEFTOVERS, HERB, HERB], item_removed=[False] * 4, item_mutated=[1] * 4,
+                        item_original=[LEFTOVERS, 0, 0, LEFTOVERS]),
+                1: dict(shown_item=[LEFTOVERS, HERB, HERB, LEFTOVERS], item_removed=[False] * 4, item_mutated=[1] * 4,
+                        item_original=[0, 0, 0, HERB])}
+        self.assertEqual(got, want)
 
 
 

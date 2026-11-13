@@ -76,8 +76,8 @@ def registry():
         'effects','fidelity_a1')
     group('curse','Non-Ghost user +1 Atk/+1 Def/-1 Spe with +/-6 clamps (no pool Ghost user)','effects','fidelity_a1')
     group('superpower','Ordinary damage plus user -1 Atk/-1 Def after a successful hit, Substitute and KO included; '
-        'exact only for holders without White Herb (Deoxys forms always hold one; its restore lands in fidelity PR C)',
-        'effects','fidelity_a1')
+        'a White Herb holder (Deoxys forms always hold one) restores them once at the move\'s AfterMove (fidelity WH)',
+        'effects','fidelity_a1 fidelity_wh')
     group('charm','Target Attack -2 with Protect/Substitute gates and Clear Body/White Smoke/Hyper Cutter blocks',
         'effects','fidelity_a1')
     group('aromatherapy','Living own-party major-status cure, Soundproof holders included','effects','fidelity_a1')
@@ -124,6 +124,14 @@ def registry():
         'max(1,maxhp/16) per residual (subOrder 9, after Leftovers), d-1 ticks, a silent release once the trapper is not '
         'the active; switches illegal while the trapper is the living foe active; Rapid Spin and the holder\'s own '
         'Substitute end it; Baton Pass carries it with its source','effects','fidelity_m2 residual_order')
+    # Fidelity WH (White Herb, generally, and C-lite: Sacred Fire's thaw and Facade).
+    group('psychoboost overheat','Ordinary damage plus user SpA -2 after a successful hit; a White Herb holder restores every '
+        'negative stage once (its item gone) at any move\'s AfterMove, at a SwitchIn event (after hazards, before the '
+        'entrant\'s Intimidate in Gen 3) or at residual order 29; a holder at 0 HP cannot','effects','fidelity_wh')
+    group('sacredfire','Ordinary Fire damage plus 50% burn; a frozen user (after the 20% thaw roll fails) still moves, '
+        'thawed in useMove even when the move misses or fails','effects','fidelity_wh')
+    group('facade','Ordinary damage at 140 base power when the user has par, brn, psn or tox (not slp; a frozen user '
+        'cannot use it); Gen 3 burn halving still applies without Guts','variable_moves','fidelity_wh')
     return result
 
 
