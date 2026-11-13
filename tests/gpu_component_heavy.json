@@ -64,10 +64,10 @@
    "module": "test_gpu_engine_owning_drain_end_to_end",
    "reason": "wall+memory",
    "hosted_median_min": null,
-   "isolated_wall_min": null,
-   "isolated_peak_gib": 180,
+   "isolated_wall_min": 368.0,
+   "isolated_peak_gib": 232.1,
    "completes_on_hosted": false,
-   "note": "lower bound: K1 at R1 c8521ed9 (4 CPUs) timed out at 14000 s with 1 of 6 tests settled, 173 GiB RSS; base 9640bbe1 88.6 GiB / 68 min. Rerun on 16 CPUs with a 12 h timeout; measured values replace this when it settles."
+   "note": "measured at R1 c8521ed9 on 16 pinned CPUs, not the 4-CPU protocol: 6 of 6 OK, 22077.6 s, 232.1 GiB peak. Protocol deviation: on 4 CPUs it exceeds the 14000 s cap (1 of 6 settled, 173 GiB or more). Base 9640bbe1 on 4 CPUs: 88.6 GiB / 68 min. WH + C-lite (+2.4% HLO) is not re-measured. Run it alone in a dedicated heavy slot, never beside another heavy run, with at least 250 GiB of memory free. R2 targets the 4-CPU protocol again."
   },
   {
    "module": "test_gpu_engine_source_witness_compiled_anchor",

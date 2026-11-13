@@ -1,0 +1,174 @@
+{
+ "schema": "pokezero.effect_probe.scenario.v1",
+ "move": "wrap_leechseed",
+ "note": "Device mode coverage: a faster wrapped mon healed by its own Leech Seed after its Wrap tick. Shuckle (slow, no item) wraps Blissey (fast, no item), which seeds Shuckle. Each residual runs Blissey's handlers first (Speed, then subOrder): the Wrap tick (subOrder 9) drops Blissey, then Shuckle's Leech Seed drain (subOrder 5) heals it (-heal [silent]). B2 folds the -damage line, then the -heal, so the round's damage sum keeps the tick; the device must observe Blissey between the two (its HP-line hooks and the slower side's heal-event observe do).",
+ "teams": [
+  [
+   {
+    "species": "Shuckle",
+    "moves": [
+     "wrap",
+     "splash",
+     "rest",
+     "substitute"
+    ],
+    "ability": "Sturdy",
+    "item": ""
+   },
+   {
+    "species": "Starmie",
+    "moves": [
+     "splash",
+     "surf",
+     "recover",
+     "protect"
+    ],
+    "ability": "Illuminate",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Skarmory",
+    "moves": [
+     "splash",
+     "protect",
+     "spikes",
+     "peck"
+    ],
+    "ability": "Keen Eye",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Swampert",
+    "moves": [
+     "splash",
+     "protect",
+     "surf",
+     "earthquake"
+    ],
+    "ability": "Torrent",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Metagross",
+    "moves": [
+     "splash",
+     "protect",
+     "meteormash",
+     "earthquake"
+    ],
+    "ability": "Clear Body",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Celebi",
+    "moves": [
+     "splash",
+     "protect",
+     "psychic",
+     "recover"
+    ],
+    "ability": "Natural Cure",
+    "item": "Leftovers"
+   }
+  ],
+  [
+   {
+    "species": "Blissey",
+    "moves": [
+     "splash",
+     "leechseed",
+     "protect",
+     "seismictoss"
+    ],
+    "ability": "Natural Cure",
+    "item": ""
+   },
+   {
+    "species": "Starmie",
+    "moves": [
+     "splash",
+     "surf",
+     "recover",
+     "protect"
+    ],
+    "ability": "Illuminate",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Skarmory",
+    "moves": [
+     "splash",
+     "protect",
+     "spikes",
+     "peck"
+    ],
+    "ability": "Keen Eye",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Swampert",
+    "moves": [
+     "splash",
+     "protect",
+     "surf",
+     "earthquake"
+    ],
+    "ability": "Torrent",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Metagross",
+    "moves": [
+     "splash",
+     "protect",
+     "meteormash",
+     "earthquake"
+    ],
+    "ability": "Clear Body",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Celebi",
+    "moves": [
+     "splash",
+     "protect",
+     "psychic",
+     "recover"
+    ],
+    "ability": "Natural Cure",
+    "item": "Leftovers"
+   }
+  ]
+ ],
+ "script": [
+  [
+   "move 1",
+   "move 2"
+  ],
+  [
+   "move 2",
+   "move 1"
+  ],
+  [
+   "move 2",
+   "move 1"
+  ],
+  [
+   "move 2",
+   "move 1"
+  ]
+ ],
+ "axes": [],
+ "expect": {
+  "exact": true
+ },
+ "require_fields": [
+  "perish_counter",
+  "yawn_counter",
+  "partial_trap_counter",
+  "partial_trap_source",
+  "item_knocked",
+  "destiny_bond",
+  "effect"
+ ]
+}

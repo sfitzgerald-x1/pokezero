@@ -16,6 +16,12 @@ reference's observation order: those protocol lines must appear, in order and ad
 log for that step (its snapshot's log tail), else the case is SHOWDOWN_LINES_MISSING. Output:
 OUT/<move>.json per scenario with a per-case diff list, and OUT/summary.json.
 
+--device adds the device-mode comparison (gpu_engine/effect_probe_device.py): every case also runs through
+transition.step_with_public with a fresh public tracker on the same actions and chance tape (its engine state must equal
+the state run's bitwise on every step), and after every request step the device's public carry is compared field by
+field with B2's fold of that case's Showdown protocol lines. The state comparison and its output are unchanged; each case
+gains a `device` record and each scenario a `device` verdict (all cases EXACT, explained mismatches allowlisted).
+
 Pool rows come from gpu_engine/team_rows.cjs (generate_teams.cjs's row builder)
 and the engine tables from the real pool metadata, so vocabulary ids match.
 All paths are command-line arguments.
@@ -52,6 +58,9 @@ DEFAULT_TAPE = dict(draws=[list(DEFAULT_ROW), list(DEFAULT_ROW)], secondary=[99,
 # Engine-only auxiliary inputs (no Showdown role); kept explicit and in-range.
 DEFAULT_AUX = dict(phazing=[0, 0], entry_ties=[0, 0], initial_tie=0)
 BOUNDS = dict(draws=DRAW_BOUNDS, effect=EFFECT_BOUNDS, secondary=100, sleep_talk=60, phazing=60, entry_ties=2, initial_tie=2)
+# Device mode's optional low-optimization compile of step_with_public (XLA's own options for that one executable, as the
+# CI's low-optimization cases set them): the public step's CPU compile at the default level peaks far above the light tier.
+LOW_OPTIMIZATION = {'xla_backend_optimization_level': 0, 'xla_llvm_disable_expensive_passes': True}
 DESTINY_BOND_NAME = 'DESTINY_BOND'
 # Design 5.1 fields an engine may not have yet: Showdown accessor and the engine's
 # neutral value used while the leaf is absent.
@@ -294,8 +303,21 @@ class Engine:
         self.fields |= ({'destiny_bond'} if self.destiny_bond is not None else set())
         self.fields |= ({'effect'} if 'effect' in transition.ChanceInputs._fields else set())
         self.has_effect = 'effect' in transition.ChanceInputs._fields
+        self.pstep = None
 
-    def start(self, rows):
+    def enable_device(self, belief_tables, compiler_options=None, *, eager=False):
+        """Device mode: the public path, initialize_with_public / step_with_public with a fresh tracker and the given
+        belief tables (Device.belief_tables). compiler_options (e.g. LOW_OPTIMIZATION) compile that one executable ahead
+        of its first call with those XLA options; eager runs it op by op under jax.disable_jit (the same program, no
+        step compile: the light tier's mode)."""
+        transition, table = self.transition, self.table
+        # The belief tables are an argument, not a closure constant: as constants they multiply the step's CPU compile
+        # memory (every gather from them carries its own copy).
+        public = lambda s, a, tk, c, bt: transition.step_with_public(s, a, table, tk, belief_tables=bt, chance_inputs=c)
+        self.pjit = public if eager else self.jax.jit(public)
+        self.pstep, self.compiler_options, self.eager, self.belief_tables = None, compiler_options, eager, belief_tables
+
+    def _raw(self, rows):
         from gpu_engine.team_pool import FIELDS
         pool = {}
         for name in FIELDS:
@@ -304,10 +326,17 @@ class Engine:
                 if len(team) != 6:raise ValueError('the engine needs six-member teams')
                 teams.append([m[name] for m in team])
             pool[name] = np.asarray(teams)
-        state = self.transition.state_from_pool(pool, np.tile([[0, 1]], (self.lanes, 1)), seed=0)
-        return self.jax.block_until_ready(self.transition.initialize(state, self.table))
+        return self.transition.state_from_pool(pool, np.tile([[0, 1]], (self.lanes, 1)), seed=0)
 
-    def advance(self, state, actions, tapes, auxes):
+    def start(self, rows):
+        return self.jax.block_until_ready(self.transition.initialize(self._raw(rows), self.table))
+
+    def start_public(self, rows):
+        """(state, trackers): the same lanes through initialize_with_public."""
+        init = self.transition.initialize_with_public(self._raw(rows), self.table, belief_tables=self.belief_tables)
+        return self.jax.block_until_ready((init.state, init.trackers))
+
+    def chance(self, tapes, auxes):
         import jax.numpy as j
         stack = lambda key, dtype=j.int32: j.asarray(np.asarray([t[key] for t in tapes]), dtype)
         fields = dict(draws=stack('draws'), secondary=stack('secondary'), sleep_talk=stack('sleep_talk'),
@@ -315,9 +344,23 @@ class Engine:
             entry_ties=j.asarray(np.asarray([a['entry_ties'] for a in auxes]), j.int32),
             initial_tie=j.asarray(np.asarray([a['initial_tie'] for a in auxes]), j.int32))
         if self.has_effect:fields['effect'] = stack('effect')
-        chance = self.transition.ChanceInputs(**fields)
-        result = self.step(state, j.asarray(np.asarray(actions), j.int32), chance)
+        return self.transition.ChanceInputs(**fields)
+
+    def advance(self, state, actions, tapes, auxes):
+        import jax.numpy as j
+        result = self.step(state, j.asarray(np.asarray(actions), j.int32), self.chance(tapes, auxes))
         return self.jax.block_until_ready(result)
+
+    def advance_public(self, state, trackers, actions, tapes, auxes):
+        import jax.numpy as j
+        args = (state, j.asarray(np.asarray(actions), j.int32), trackers, self.chance(tapes, auxes), self.belief_tables)
+        if self.eager:
+            with self.jax.disable_jit():
+                return self.jax.block_until_ready(self.pjit(*args))
+        if self.pstep is None:
+            self.pstep = (self.pjit if self.compiler_options is None
+                          else self.pjit.lower(*args).compile(compiler_options=self.compiler_options))
+        return self.jax.block_until_ready(self.pstep(*args))
 
     def views(self, state):
         arrays = {name: np.asarray(getattr(state, name)) for name in state._fields if name != 'keys'}
@@ -331,7 +374,76 @@ def lane_view(arrays, lane):
 
 # ---------------------------------------------------------------------------
 
-def run_scenario(scenario, engine, showdown, metadata):
+class Device:
+    """Device mode's run-wide pieces: the B2 catalog and batched folds (effect_probe_device), the device's belief tables
+    compiled from the same catalog (engine_device_observation.compile_tables, as the production collector builds them),
+    and the allowlist."""
+    def __init__(self, catalog, metadata, lanes, allowlist=None, pins=None):
+        from gpu_engine import effect_probe_device as dev
+        self.allowlist = dev.ALLOWLIST if allowlist is None else allowlist
+        if pins is None and self.allowlist and not dev.PINS_PATH.exists():
+            # an absent pins file would leave every allowlisted diff open; to record pins from scratch, commit an
+            # empty one (its schema and "pins": []) and run scripts/record_effect_probe_device_pins.py on the run
+            raise FileNotFoundError(f'{dev.PINS_PATH.name} is missing: every ALLOWLIST entry is pinned to its values')
+        self.pins = dev.PINS if pins is None else pins
+        self.used = set()
+        from gpu_engine import engine_device_observation
+        self.dev, self.catalog = dev, catalog
+        self.belief_tables = engine_device_observation.compile_tables(metadata, catalog=catalog).belief
+        self.b2 = dev.B2Batch(catalog, 2 * lanes)
+
+    @classmethod
+    def for_scenarios(cls, scenarios, showdown, showdown_root, metadata, lanes, allowlist=None):
+        """B2's catalog, and the device belief tables compiled from it, over the authored sets of EVERY scenario file in
+        gpu_engine/effect_probes (the directory's contents, tracked or not) plus the run's own: one fixed universe, so a
+        belief field never depends on which scenarios share a run or a shard (a per-run catalog let a variant exclusion
+        show or hide with the shard layout). A belief mask pin is a bit word over this catalog, so adding or changing a
+        set of a pinned species means recording the pins again."""
+        from gpu_engine import effect_probe_device as dev
+        committed = [load_scenario(p) for p in sorted((ROOT / 'gpu_engine/effect_probes').glob('*.json'))]
+        teams = {json.dumps(s['teams'], sort_keys=True): s['teams'] for s in committed + list(scenarios)}
+        sets = [showdown.ask(cmd='prepare', teams=t)['sets'] for _, t in sorted(teams.items())]
+        return cls(dev.compile_b2(sets, showdown_root), metadata, lanes, allowlist)
+
+    def compare(self, scenario, record, step, trackers, b2, lane, vocab, channels=None):
+        """One case's device-vs-B2 comparison after `step` ('initial' before the first request); a step with open diffs
+        keeps that step's two player channels."""
+        dev = self.dev;device = record['device']
+        refused = [self.b2.refused[q] for q in (2 * lane, 2 * lane + 1)]
+        if any(refused):
+            # B2 stops at this step; an allowlisted refusal (field 'b2_refusal') is a known B2 limit, explained.
+            key = (scenario['move'], record['case_id'], step, 'b2_refusal')
+            refusals = [dict(r, step=step) for r in refused if r]
+            refusal = refusals[0]
+            if len(refusals) > 1:refusal['other_streams'] = refusals[1:]
+            if key in self.allowlist:
+                # explained only if every refusing stream (either owner) is the pinned refusal (kind and error code);
+                # any other refusal stays B2_REFUSED
+                self.used.add(key)
+                pin = self.pins.get(key)
+                if all(dev.refusal_matches(r, pin) for r in refusals):refusal['reason'] = self.allowlist[key]
+                else:refusal.update(unpinned_reason=self.allowlist[key], pin=pin)
+            device.update(status='B2_LIMIT' if 'reason' in refusal else 'B2_REFUSED', refusal=refusal);return
+        numeric = []
+        diffs = dev.compare_views(dev.device_view(trackers, lane, vocab), dev.b2_view(b2, lane, self.catalog), numeric)
+        open_, allowed = dev.apply_allowlist(scenario['move'], record['case_id'], step, diffs, self.used, self.allowlist,
+                                             self.pins)
+        device['steps_compared'] += 1;device['numeric'] += len(numeric)
+        if open_ or allowed or numeric:
+            device['steps'].append(dict(step=step, diffs=open_, allowlisted=allowed, numeric=numeric))
+            if open_ and channels is not None:device['steps'][-1]['channels'] = channels
+
+
+def judge_device(records):
+    """Device mode's verdict: every case EXACT (allowlisted mismatches only) or B2_LIMIT (exact until an allowlisted B2
+    refusal), with equal public and chance states."""
+    reasons = [f"{r['case_id']}: device {r['device']['status']}" for r in records
+               if r['device']['status'] not in ('EXACT', 'B2_LIMIT') or not r['device']['state_equal']
+               or any(st['diffs'] for st in r['device']['steps'])]
+    return not reasons, '; '.join(reasons) or 'every case exact on the device public path'
+
+
+def run_scenario(scenario, engine, showdown, metadata, device=None):
     missing = sorted(set(scenario.get('require_fields', ())) - engine.fields)
     if missing:
         return dict(schema=RESULT_SCHEMA, move=scenario['move'], format=scenario['format'], cases=0,
@@ -342,9 +454,18 @@ def run_scenario(scenario, engine, showdown, metadata):
     cases = enumerate_cases(scenario)
     if len(cases) > engine.lanes:raise ValueError(f"{scenario['move']}: {len(cases)} cases exceed {engine.lanes} lanes")
     vocab = metadata['vocabulary']
-    started = showdown.ask(cmd='start', format=scenario['format'], seed=scenario['seed'], cases=len(cases), sets=prepared['sets'])
+    start = dict(cmd='start', format=scenario['format'], seed=scenario['seed'], cases=len(cases), sets=prepared['sets'])
+    if device is not None:start['device'] = True
+    started = showdown.ask(**start)
     state = engine.start(prepared['rows'])
     arrays, mask = engine.views(state)
+    if device is not None:
+        dev = device.dev
+        pstate, trackers = engine.start_public(prepared['rows'])
+        initial_equal = dev.trees_equal(state, pstate)
+        device.b2.reset([0, 1] * engine.lanes)
+        device.b2.feed([lines for i in range(len(cases)) for lines in started['channels'][i]] + [None] * (2 * (engine.lanes - len(cases))))
+        host_trackers, host_b2 = engine.jax.device_get(trackers), device.b2.host()
     records = []
     # Start-of-battle randomness runs on the seeded PRNG but is audited: anything
     # beyond inert gender and the no-Quick-Claw roll (a lead Speed tie, a real
@@ -357,6 +478,10 @@ def run_scenario(scenario, engine, showdown, metadata):
             initial_audit=started['audit'], steps=[], last_tape=None, last_aux=None, live=True))
         if initial_random:records[-1].update(status='UNRESOLVED_INITIAL_CHANCE', live=False)
         elif diffs:records[-1].update(status='INITIAL_MISMATCH', live=False)
+        if device is not None:
+            records[-1]['device'] = dict(status=None, state_equal=initial_equal, steps_compared=0, steps=[], refusal=None, numeric=0)
+            if records[-1]['live']:
+                device.compare(scenario, records[-1], 'initial', host_trackers, host_b2, i, vocab, started['channels'][i])
     for step, script in enumerate(scenario['script']):
         if not any(r['live'] for r in records):break
         pending = np.asarray(state.pending_residual)
@@ -381,6 +506,15 @@ def run_scenario(scenario, engine, showdown, metadata):
         reply = showdown.ask(cmd='step', tapes=tapes[:len(cases)], choices=choices[:len(cases)], live=live)
         result = engine.advance(state, actions, tapes, auxes);state = result.state
         arrays, mask = engine.views(state);invalid = np.asarray(result.invalid_actions)
+        compared = []
+        if device is not None:
+            public = engine.advance_public(pstate, trackers, actions, tapes, auxes)
+            pstate, trackers = public.step.state, public.trackers
+            step_equal = (dev.trees_equal(result.state, pstate) and dev.trees_equal(result.invalid_actions, public.step.invalid_actions)
+                          and dev.trees_equal(result.placeholder_moves, public.step.placeholder_moves))
+            device.b2.feed([lines for i in range(len(cases)) for lines in (reply['results'][i]['channels'] if live[i] else [None, None])]
+                           + [None] * (2 * (engine.lanes - len(cases))))
+            host_trackers, host_b2 = engine.jax.device_get(trackers), device.b2.host()
         for i, record in enumerate(records):
             if not live[i]:continue
             sd = reply['results'][i]
@@ -398,12 +532,19 @@ def run_scenario(scenario, engine, showdown, metadata):
                 record.update(status='ENGINE_INVALID_ACTION', live=False);continue
             entry['diffs'] = compare_lane(lane_view(arrays, i), sd['snapshot'], vocab, mask=mask[i],
                 destiny_bond=engine.destiny_bond)
+            compared.append(i)
             if entry['diffs']:entry['showdown_log_tail'] = sd['snapshot']['log_tail']
             expected_lines = scenario.get('showdown_lines', {}).get(str(step))
             if expected_lines and not lines_in_order(sd['snapshot']['log_tail'], expected_lines):
                 entry.update(showdown_lines_missing=expected_lines, showdown_log_tail=sd['snapshot']['log_tail'])
                 record.update(status='SHOWDOWN_LINES_MISSING', live=False);continue
             if sd['snapshot']['ended'] or bool(arrays['done'][i]):record['live'] = False
+        if device is not None:
+            for i, record in enumerate(records):
+                if not live[i]:continue
+                record['device']['state_equal'] &= step_equal
+                if i in compared and record['device']['status'] is None:
+                    device.compare(scenario, record, step, host_trackers, host_b2, i, vocab, reply['results'][i]['channels'])
     for record in records:
         if record['status'] is None:
             record['status'] = 'MISMATCH' if any(s['diffs'] for s in record['steps']) else 'EXACT'
@@ -411,15 +552,37 @@ def run_scenario(scenario, engine, showdown, metadata):
         record['first_mismatch_step'] = mismatched[0] if mismatched else None
         record['diff_fields'] = sorted({field_kind(d['field']) for s in record['steps'] for d in s['diffs']})
         for key in ('live', 'last_tape', 'last_aux'):record.pop(key)
+        if device is not None:
+            d = record['device']
+            if not d['state_equal']:d['status'] = 'STATE_DIVERGED'
+            elif d['status'] is None:
+                d['status'] = ('NOT_COMPARED' if not d['steps_compared']
+                    else 'MISMATCH' if any(x['diffs'] for x in d['steps']) else 'EXACT')
+            elif d['status'] == 'B2_LIMIT' and any(x['diffs'] for x in d['steps']):d['status'] = 'MISMATCH'
+            d['diff_fields'] = sorted({device.dev.field_kind(x['field']) for st in d['steps'] for x in st['diffs']})
+            d['allowlisted_fields'] = sorted({device.dev.field_kind(x['field']) for st in d['steps'] for x in st['allowlisted']})
     met, reason = judge(scenario, records)
     counts = {}
     for record in records:counts[record['status']] = counts.get(record['status'], 0) + 1
-    return dict(schema=RESULT_SCHEMA, move=scenario['move'], format=scenario['format'], cases=len(records),
+    out = dict(schema=RESULT_SCHEMA, move=scenario['move'], format=scenario['format'], cases=len(records),
         status_counts=counts, expectation=scenario.get('expect'), expectation_met=met, expectation_detail=reason,
         engine_fields=sorted(engine.fields), neutral_engine_fields=sorted(set(REQUIRABLE) - engine.fields - {'effect'}),
         require_fields=scenario.get('require_fields', []),
         effect_stream_in_engine=engine.has_effect, sets=prepared['sets'], script=scenario['script'],
         axes=scenario.get('axes', []), results=records)
+    if device is not None:
+        device_counts = {}
+        for record in records:device_counts[record['device']['status']] = device_counts.get(record['device']['status'], 0) + 1
+        device_met, device_reason = judge_device(records)
+        out['device'] = dict(status_counts=device_counts, met=device_met, detail=device_reason,
+            steps_compared=sum(r['device']['steps_compared'] for r in records),
+            steps_exact=sum(r['device']['steps_compared'] - len(r['device']['steps']) for r in records),
+            steps_numeric_only=sum(1 for r in records for st in r['device']['steps'] if st['numeric'] and not st['diffs'] and not st['allowlisted']),
+            steps_allowlisted=sum(1 for r in records for st in r['device']['steps'] if st['allowlisted'] and not st['diffs']),
+            steps_open=sum(1 for r in records for st in r['device']['steps'] if st['diffs']),
+            state_equal=all(r['device']['state_equal'] for r in records), numeric=sum(r['device']['numeric'] for r in records),
+            allowlisted=[dict(case_id=r['case_id'], step=st['step'], **x) for r in records for st in r['device']['steps'] for x in st['allowlisted']])
+    return out
 
 
 def main(argv=None):
@@ -431,6 +594,12 @@ def main(argv=None):
     parser.add_argument('--node', default='node')
     parser.add_argument('--out', required=True, help='output directory (must not exist)')
     parser.add_argument('--lanes', type=int, default=16, help='engine batch (one lane per case; padded)')
+    parser.add_argument('--device', action='store_true', help='also compare the device public path (step_with_public) '
+                        'with B2\'s fold of the Showdown lines (gpu_engine/effect_probe_device.py)')
+    parser.add_argument('--device-low-optimization', action='store_true',
+                        help='compile step_with_public with LOW_OPTIMIZATION')
+    parser.add_argument('--device-eager', action='store_true',
+                        help='run step_with_public op by op (jax.disable_jit): no step compile, slow steps')
     args = parser.parse_args(argv)
     out = Path(args.out)
     if out.exists():raise FileExistsError(f'{out} exists')
@@ -439,6 +608,11 @@ def main(argv=None):
     if len(set(moves)) != len(moves):raise ValueError('one scenario per move')
     metadata, pool_sha = load_pool(args.team_pool, args.expected_pool_sha)
     engine = Engine(metadata, args.lanes);showdown = Showdown(args.node, args.showdown_root)
+    device = None
+    if args.device:
+        device = Device.for_scenarios(scenarios, showdown, args.showdown_root, metadata, args.lanes)
+        engine.enable_device(device.belief_tables, LOW_OPTIMIZATION if args.device_low_optimization else None,
+                             eager=args.device_eager)
     out.mkdir(parents=True)
     source = subprocess.run(['git', '-C', str(ROOT), 'rev-parse', 'HEAD'], capture_output=True, text=True).stdout.strip()
     dirty = subprocess.run(['git', '-C', str(ROOT), 'status', '--porcelain', '--', 'gpu_engine', 'src'], capture_output=True, text=True).stdout
@@ -446,17 +620,38 @@ def main(argv=None):
         showdown_root=str(args.showdown_root), scenarios={})
     try:
         for path, scenario in zip(args.scenarios, scenarios):
-            result = run_scenario(scenario, engine, showdown, metadata)
+            result = run_scenario(scenario, engine, showdown, metadata, device=device)
             result.update(scenario_path=str(path), source_commit=source, pool_sha256=pool_sha)
             (out / f"{scenario['move']}.json").write_text(json.dumps(result, indent=1, default=str) + '\n')
             summary['scenarios'][scenario['move']] = dict(cases=result['cases'], status_counts=result['status_counts'],
                 expectation_met=result['expectation_met'], detail=result['expectation_detail'],
                 diff_fields=sorted({f for r in result['results'] for f in r['diff_fields']}))
+            if device is not None:
+                d = result['device']
+                summary['scenarios'][scenario['move']]['device'] = dict(status_counts=d['status_counts'], met=d['met'],
+                    steps_compared=d['steps_compared'], steps_exact=d['steps_exact'], steps_numeric_only=d['steps_numeric_only'],
+                    steps_allowlisted=d['steps_allowlisted'], steps_open=d['steps_open'], state_equal=d['state_equal'], numeric=d['numeric'],
+                    allowlisted=len(d['allowlisted']), diff_fields=sorted({f for r in result['results'] for f in r['device']['diff_fields']}))
             print(json.dumps(dict(move=scenario['move'], **summary['scenarios'][scenario['move']])), flush=True)
     finally:
         showdown.close()
+    ok = all(s['expectation_met'] for s in summary['scenarios'].values())
+    if device is not None:
+        rows = summary['scenarios'].values()
+        summary['device'] = dict(scenarios=len(rows), cases=sum(s['cases'] for s in rows),
+            cases_exact=sum(s['device']['status_counts'].get('EXACT', 0) for s in rows),
+            cases_b2_limit=sum(s['device']['status_counts'].get('B2_LIMIT', 0) for s in rows),
+            **{k: sum(s['device'][k] for s in rows) for k in ('steps_compared', 'steps_exact', 'steps_numeric_only',
+                                                              'steps_allowlisted', 'steps_open')},
+            state_equal=all(s['device']['state_equal'] for s in rows), met=all(s['device']['met'] for s in rows),
+            numeric=sum(s['device']['numeric'] for s in rows), numeric_note=device.dev.NUMERIC_NOTE,
+            allowlisted=sum(s['device']['allowlisted'] for s in rows),
+            stale_allowlist=[list(k) for k in sorted(set(device.allowlist) - device.used, key=str)
+                             if k[0] in summary['scenarios']],
+            compared_fields=[f[0] for f in device.dev.FIELDS], left_out=device.dev.LEFT_OUT)
+        ok = ok and summary['device']['met'] and not summary['device']['stale_allowlist']
     (out / 'summary.json').write_text(json.dumps(summary, indent=1) + '\n')
-    return 0 if all(s['expectation_met'] for s in summary['scenarios'].values()) else 1
+    return 0 if ok else 1
 
 
 if __name__ == '__main__':

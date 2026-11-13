@@ -1,0 +1,3427 @@
+{
+ "schema": "effect-probe-device-pins.v1",
+ "note": "The exact (B2, device) pair each ALLOWLIST entry explains, or a B2 refusal's kind and error, recorded from a full device-mode run (gpu_engine/effect_probe_device.py ALLOWLIST; scripts/record_effect_probe_device_pins.py). Record them again when an allowlist entry is added or retired, or when a pinned species' scenario sets change (a belief mask pin is a bit word over the catalog of every scenario's sets).",
+ "pins": [
+  {
+   "scenario": "aromatherapy",
+   "case": "base",
+   "step": 1,
+   "field": "0:2:belief_hard",
+   "value": [
+    [
+     2076147711,
+     1
+    ],
+    [
+     4294967295,
+     1
+    ]
+   ]
+  },
+  {
+   "scenario": "aromatherapy",
+   "case": "base",
+   "step": 1,
+   "field": "0:2:visible_hard",
+   "value": [
+    [
+     2076147711,
+     1
+    ],
+    [
+     4294967295,
+     1
+    ]
+   ]
+  },
+  {
+   "scenario": "aromatherapy",
+   "case": "base",
+   "step": 2,
+   "field": "0:2:belief_hard",
+   "value": [
+    [
+     2076147711,
+     1
+    ],
+    [
+     4294967295,
+     1
+    ]
+   ]
+  },
+  {
+   "scenario": "aromatherapy",
+   "case": "base",
+   "step": 2,
+   "field": "0:2:visible_hard",
+   "value": [
+    [
+     2076147711,
+     1
+    ],
+    [
+     4294967295,
+     1
+    ]
+   ]
+  },
+  {
+   "scenario": "aromatherapy",
+   "case": "base",
+   "step": 3,
+   "field": "0:2:belief_hard",
+   "value": [
+    [
+     2076147711,
+     1
+    ],
+    [
+     4294967295,
+     1
+    ]
+   ]
+  },
+  {
+   "scenario": "aromatherapy",
+   "case": "base",
+   "step": 3,
+   "field": "0:2:visible_hard",
+   "value": [
+    [
+     2076147711,
+     1
+    ],
+    [
+     4294967295,
+     1
+    ]
+   ]
+  },
+  {
+   "scenario": "aromatherapy",
+   "case": "base",
+   "step": 4,
+   "field": "0:2:belief_hard",
+   "value": [
+    [
+     2076147711,
+     1
+    ],
+    [
+     4294967295,
+     1
+    ]
+   ]
+  },
+  {
+   "scenario": "aromatherapy",
+   "case": "base",
+   "step": 4,
+   "field": "0:2:visible_hard",
+   "value": [
+    [
+     2076147711,
+     1
+    ],
+    [
+     4294967295,
+     1
+    ]
+   ]
+  },
+  {
+   "scenario": "aromatherapy",
+   "case": "base",
+   "step": 5,
+   "field": "0:2:belief_hard",
+   "value": [
+    [
+     2076147711,
+     1
+    ],
+    [
+     4294967295,
+     1
+    ]
+   ]
+  },
+  {
+   "scenario": "aromatherapy",
+   "case": "base",
+   "step": 5,
+   "field": "0:2:visible_hard",
+   "value": [
+    [
+     2076147711,
+     1
+    ],
+    [
+     4294967295,
+     1
+    ]
+   ]
+  },
+  {
+   "scenario": "aromatherapy",
+   "case": "base",
+   "step": 6,
+   "field": "0:2:belief_hard",
+   "value": [
+    [
+     2076147711,
+     1
+    ],
+    [
+     4294967295,
+     1
+    ]
+   ]
+  },
+  {
+   "scenario": "aromatherapy",
+   "case": "base",
+   "step": 6,
+   "field": "0:2:visible_hard",
+   "value": [
+    [
+     2076147711,
+     1
+    ],
+    [
+     4294967295,
+     1
+    ]
+   ]
+  },
+  {
+   "scenario": "confusion_selfhit",
+   "case": "damage=0",
+   "step": 4,
+   "field": "1:1:belief_hard",
+   "value": [
+    [
+     2076147517,
+     1
+    ],
+    [
+     4294967101,
+     1
+    ]
+   ]
+  },
+  {
+   "scenario": "confusion_selfhit",
+   "case": "damage=0",
+   "step": 4,
+   "field": "1:1:visible_hard",
+   "value": [
+    [
+     2076147517,
+     1
+    ],
+    [
+     4294967101,
+     1
+    ]
+   ]
+  },
+  {
+   "scenario": "confusion_selfhit",
+   "case": "damage=0",
+   "step": 5,
+   "field": "1:1:belief_hard",
+   "value": [
+    [
+     1099436072,
+     0
+    ],
+    [
+     3318255656,
+     0
+    ]
+   ]
+  },
+  {
+   "scenario": "confusion_selfhit",
+   "case": "damage=0",
+   "step": 5,
+   "field": "1:1:visible_hard",
+   "value": [
+    [
+     1099436072,
+     0
+    ],
+    [
+     3318255656,
+     0
+    ]
+   ]
+  },
+  {
+   "scenario": "confusion_selfhit",
+   "case": "damage=0",
+   "step": 6,
+   "field": "1:1:belief_hard",
+   "value": [
+    [
+     1099436072,
+     0
+    ],
+    [
+     3318255656,
+     0
+    ]
+   ]
+  },
+  {
+   "scenario": "confusion_selfhit",
+   "case": "damage=0",
+   "step": 6,
+   "field": "1:1:visible_hard",
+   "value": [
+    [
+     1099436072,
+     0
+    ],
+    [
+     3318255656,
+     0
+    ]
+   ]
+  },
+  {
+   "scenario": "confusion_selfhit",
+   "case": "damage=0",
+   "step": 7,
+   "field": "1:1:belief_hard",
+   "value": [
+    [
+     1099436072,
+     0
+    ],
+    [
+     3318255656,
+     0
+    ]
+   ]
+  },
+  {
+   "scenario": "confusion_selfhit",
+   "case": "damage=0",
+   "step": 7,
+   "field": "1:1:visible_hard",
+   "value": [
+    [
+     1099436072,
+     0
+    ],
+    [
+     3318255656,
+     0
+    ]
+   ]
+  },
+  {
+   "scenario": "confusion_selfhit",
+   "case": "damage=0",
+   "step": 8,
+   "field": "1:1:belief_hard",
+   "value": [
+    [
+     1099436072,
+     0
+    ],
+    [
+     3318255656,
+     0
+    ]
+   ]
+  },
+  {
+   "scenario": "confusion_selfhit",
+   "case": "damage=0",
+   "step": 8,
+   "field": "1:1:visible_hard",
+   "value": [
+    [
+     1099436072,
+     0
+    ],
+    [
+     3318255656,
+     0
+    ]
+   ]
+  },
+  {
+   "scenario": "confusion_selfhit",
+   "case": "damage=0",
+   "step": 9,
+   "field": "1:1:belief_hard",
+   "value": [
+    [
+     1099436072,
+     0
+    ],
+    [
+     3318255656,
+     0
+    ]
+   ]
+  },
+  {
+   "scenario": "confusion_selfhit",
+   "case": "damage=0",
+   "step": 9,
+   "field": "1:1:visible_hard",
+   "value": [
+    [
+     1099436072,
+     0
+    ],
+    [
+     3318255656,
+     0
+    ]
+   ]
+  },
+  {
+   "scenario": "confusion_selfhit",
+   "case": "damage=0",
+   "step": 10,
+   "field": "1:1:belief_hard",
+   "value": [
+    [
+     1099436072,
+     0
+    ],
+    [
+     3318255656,
+     0
+    ]
+   ]
+  },
+  {
+   "scenario": "confusion_selfhit",
+   "case": "damage=0",
+   "step": 10,
+   "field": "1:1:visible_hard",
+   "value": [
+    [
+     1099436072,
+     0
+    ],
+    [
+     3318255656,
+     0
+    ]
+   ]
+  },
+  {
+   "scenario": "confusion_selfhit",
+   "case": "damage=0",
+   "step": 11,
+   "field": "1:1:belief_hard",
+   "value": [
+    [
+     1099436072,
+     0
+    ],
+    [
+     3318255656,
+     0
+    ]
+   ]
+  },
+  {
+   "scenario": "confusion_selfhit",
+   "case": "damage=0",
+   "step": 11,
+   "field": "1:1:visible_hard",
+   "value": [
+    [
+     1099436072,
+     0
+    ],
+    [
+     3318255656,
+     0
+    ]
+   ]
+  },
+  {
+   "scenario": "confusion_selfhit",
+   "case": "damage=0",
+   "step": 12,
+   "field": "1:1:belief_hard",
+   "value": [
+    [
+     1099436072,
+     0
+    ],
+    [
+     3318255656,
+     0
+    ]
+   ]
+  },
+  {
+   "scenario": "confusion_selfhit",
+   "case": "damage=0",
+   "step": 12,
+   "field": "1:1:visible_hard",
+   "value": [
+    [
+     1099436072,
+     0
+    ],
+    [
+     3318255656,
+     0
+    ]
+   ]
+  },
+  {
+   "scenario": "confusion_selfhit",
+   "case": "damage=15",
+   "step": 4,
+   "field": "1:1:belief_hard",
+   "value": [
+    [
+     2076147517,
+     1
+    ],
+    [
+     4294967101,
+     1
+    ]
+   ]
+  },
+  {
+   "scenario": "confusion_selfhit",
+   "case": "damage=15",
+   "step": 4,
+   "field": "1:1:visible_hard",
+   "value": [
+    [
+     2076147517,
+     1
+    ],
+    [
+     4294967101,
+     1
+    ]
+   ]
+  },
+  {
+   "scenario": "confusion_selfhit",
+   "case": "damage=15",
+   "step": 5,
+   "field": "1:1:belief_hard",
+   "value": [
+    [
+     1099436072,
+     0
+    ],
+    [
+     3318255656,
+     0
+    ]
+   ]
+  },
+  {
+   "scenario": "confusion_selfhit",
+   "case": "damage=15",
+   "step": 5,
+   "field": "1:1:visible_hard",
+   "value": [
+    [
+     1099436072,
+     0
+    ],
+    [
+     3318255656,
+     0
+    ]
+   ]
+  },
+  {
+   "scenario": "confusion_selfhit",
+   "case": "damage=15",
+   "step": 6,
+   "field": "1:1:belief_hard",
+   "value": [
+    [
+     1099436072,
+     0
+    ],
+    [
+     3318255656,
+     0
+    ]
+   ]
+  },
+  {
+   "scenario": "confusion_selfhit",
+   "case": "damage=15",
+   "step": 6,
+   "field": "1:1:visible_hard",
+   "value": [
+    [
+     1099436072,
+     0
+    ],
+    [
+     3318255656,
+     0
+    ]
+   ]
+  },
+  {
+   "scenario": "confusion_selfhit",
+   "case": "damage=15",
+   "step": 7,
+   "field": "1:1:belief_hard",
+   "value": [
+    [
+     1099436072,
+     0
+    ],
+    [
+     3318255656,
+     0
+    ]
+   ]
+  },
+  {
+   "scenario": "confusion_selfhit",
+   "case": "damage=15",
+   "step": 7,
+   "field": "1:1:visible_hard",
+   "value": [
+    [
+     1099436072,
+     0
+    ],
+    [
+     3318255656,
+     0
+    ]
+   ]
+  },
+  {
+   "scenario": "confusion_selfhit",
+   "case": "damage=15",
+   "step": 8,
+   "field": "1:1:belief_hard",
+   "value": [
+    [
+     1099436072,
+     0
+    ],
+    [
+     3318255656,
+     0
+    ]
+   ]
+  },
+  {
+   "scenario": "confusion_selfhit",
+   "case": "damage=15",
+   "step": 8,
+   "field": "1:1:visible_hard",
+   "value": [
+    [
+     1099436072,
+     0
+    ],
+    [
+     3318255656,
+     0
+    ]
+   ]
+  },
+  {
+   "scenario": "confusion_selfhit",
+   "case": "damage=15",
+   "step": 9,
+   "field": "1:1:belief_hard",
+   "value": [
+    [
+     1099436072,
+     0
+    ],
+    [
+     3318255656,
+     0
+    ]
+   ]
+  },
+  {
+   "scenario": "confusion_selfhit",
+   "case": "damage=15",
+   "step": 9,
+   "field": "1:1:visible_hard",
+   "value": [
+    [
+     1099436072,
+     0
+    ],
+    [
+     3318255656,
+     0
+    ]
+   ]
+  },
+  {
+   "scenario": "confusion_selfhit",
+   "case": "damage=15",
+   "step": 10,
+   "field": "1:1:belief_hard",
+   "value": [
+    [
+     1099436072,
+     0
+    ],
+    [
+     3318255656,
+     0
+    ]
+   ]
+  },
+  {
+   "scenario": "confusion_selfhit",
+   "case": "damage=15",
+   "step": 10,
+   "field": "1:1:visible_hard",
+   "value": [
+    [
+     1099436072,
+     0
+    ],
+    [
+     3318255656,
+     0
+    ]
+   ]
+  },
+  {
+   "scenario": "confusion_selfhit",
+   "case": "damage=15",
+   "step": 11,
+   "field": "1:1:belief_hard",
+   "value": [
+    [
+     1099436072,
+     0
+    ],
+    [
+     3318255656,
+     0
+    ]
+   ]
+  },
+  {
+   "scenario": "confusion_selfhit",
+   "case": "damage=15",
+   "step": 11,
+   "field": "1:1:visible_hard",
+   "value": [
+    [
+     1099436072,
+     0
+    ],
+    [
+     3318255656,
+     0
+    ]
+   ]
+  },
+  {
+   "scenario": "confusion_selfhit",
+   "case": "damage=15",
+   "step": 12,
+   "field": "1:1:belief_hard",
+   "value": [
+    [
+     1099436072,
+     0
+    ],
+    [
+     3318255656,
+     0
+    ]
+   ]
+  },
+  {
+   "scenario": "confusion_selfhit",
+   "case": "damage=15",
+   "step": 12,
+   "field": "1:1:visible_hard",
+   "value": [
+    [
+     1099436072,
+     0
+    ],
+    [
+     3318255656,
+     0
+    ]
+   ]
+  },
+  {
+   "scenario": "confusion_status",
+   "case": "selfhit=99,paralysis=0",
+   "step": 3,
+   "field": "1:opportunities",
+   "value": [
+    4,
+    3
+   ]
+  },
+  {
+   "scenario": "confusion_status",
+   "case": "selfhit=99,paralysis=0",
+   "step": 3,
+   "field": "1:opportunity_turn",
+   "value": [
+    4,
+    3
+   ]
+  },
+  {
+   "scenario": "confusion_status",
+   "case": "selfhit=99,paralysis=0",
+   "step": 4,
+   "field": "1:opportunities",
+   "value": [
+    4,
+    3
+   ]
+  },
+  {
+   "scenario": "confusion_status",
+   "case": "selfhit=99,paralysis=0",
+   "step": 4,
+   "field": "1:opportunity_turn",
+   "value": [
+    4,
+    3
+   ]
+  },
+  {
+   "scenario": "confusion_status",
+   "case": "selfhit=99,paralysis=0",
+   "step": 5,
+   "field": "1:opportunities",
+   "value": [
+    4,
+    3
+   ]
+  },
+  {
+   "scenario": "confusion_status",
+   "case": "selfhit=99,paralysis=0",
+   "step": 5,
+   "field": "1:opportunity_turn",
+   "value": [
+    4,
+    3
+   ]
+  },
+  {
+   "scenario": "confusion_status",
+   "case": "selfhit=99,paralysis=0",
+   "step": 6,
+   "field": "1:opportunities",
+   "value": [
+    5,
+    4
+   ]
+  },
+  {
+   "scenario": "confusion_status",
+   "case": "selfhit=99,paralysis=0",
+   "step": 7,
+   "field": "1:opportunities",
+   "value": [
+    6,
+    5
+   ]
+  },
+  {
+   "scenario": "confusion_status",
+   "case": "selfhit=99,paralysis=0",
+   "step": 8,
+   "field": "1:opportunities",
+   "value": [
+    7,
+    6
+   ]
+  },
+  {
+   "scenario": "confusion_status",
+   "case": "selfhit=99,paralysis=99",
+   "step": 3,
+   "field": "1:opportunities",
+   "value": [
+    4,
+    3
+   ]
+  },
+  {
+   "scenario": "confusion_status",
+   "case": "selfhit=99,paralysis=99",
+   "step": 3,
+   "field": "1:opportunity_turn",
+   "value": [
+    4,
+    3
+   ]
+  },
+  {
+   "scenario": "confusion_status",
+   "case": "selfhit=99,paralysis=99",
+   "step": 4,
+   "field": "1:opportunities",
+   "value": [
+    4,
+    3
+   ]
+  },
+  {
+   "scenario": "confusion_status",
+   "case": "selfhit=99,paralysis=99",
+   "step": 4,
+   "field": "1:opportunity_turn",
+   "value": [
+    4,
+    3
+   ]
+  },
+  {
+   "scenario": "confusion_status",
+   "case": "selfhit=99,paralysis=99",
+   "step": 5,
+   "field": "1:opportunities",
+   "value": [
+    4,
+    3
+   ]
+  },
+  {
+   "scenario": "confusion_status",
+   "case": "selfhit=99,paralysis=99",
+   "step": 5,
+   "field": "1:opportunity_turn",
+   "value": [
+    4,
+    3
+   ]
+  },
+  {
+   "scenario": "confusion_status",
+   "case": "selfhit=99,paralysis=99",
+   "step": 6,
+   "field": "1:opportunities",
+   "value": [
+    5,
+    4
+   ]
+  },
+  {
+   "scenario": "confusion_status",
+   "case": "selfhit=99,paralysis=99",
+   "step": 7,
+   "field": "1:opportunities",
+   "value": [
+    6,
+    5
+   ]
+  },
+  {
+   "scenario": "confusion_status",
+   "case": "selfhit=99,paralysis=99",
+   "step": 8,
+   "field": "1:opportunities",
+   "value": [
+    7,
+    6
+   ]
+  },
+  {
+   "scenario": "counter_sleeptalk",
+   "case": "talk=0",
+   "step": 1,
+   "field": "0:0:moves",
+   "value": [
+    [
+     [
+      "sleeptalk",
+      1
+     ],
+     [
+      "counter",
+      0
+     ]
+    ],
+    [
+     [
+      "sleeptalk",
+      1
+     ]
+    ]
+   ]
+  },
+  {
+   "scenario": "counter_sleeptalk",
+   "case": "talk=0",
+   "step": 2,
+   "field": "0:0:moves",
+   "value": [
+    [
+     [
+      "sleeptalk",
+      2
+     ],
+     [
+      "counter",
+      0
+     ]
+    ],
+    [
+     [
+      "sleeptalk",
+      2
+     ]
+    ]
+   ]
+  },
+  {
+   "scenario": "destinybond_expire",
+   "case": "base",
+   "step": 2,
+   "field": "b2_refusal",
+   "value": {
+    "kind": "FOLD_ERROR",
+    "error": 6
+   }
+  },
+  {
+   "scenario": "destinybond_ko",
+   "case": "base",
+   "step": 2,
+   "field": "b2_refusal",
+   "value": {
+    "kind": "FOLD_ERROR",
+    "error": 6
+   }
+  },
+  {
+   "scenario": "destinybond_m1_banette_machamp",
+   "case": "crit=0,roll=0",
+   "step": 2,
+   "field": "b2_refusal",
+   "value": {
+    "kind": "FOLD_ERROR",
+    "error": 6
+   }
+  },
+  {
+   "scenario": "destinybond_m1_banette_machamp",
+   "case": "crit=0,roll=15",
+   "step": 2,
+   "field": "b2_refusal",
+   "value": {
+    "kind": "FOLD_ERROR",
+    "error": 6
+   }
+  },
+  {
+   "scenario": "destinybond_m1_banette_machamp",
+   "case": "crit=15,roll=0",
+   "step": 2,
+   "field": "b2_refusal",
+   "value": {
+    "kind": "FOLD_ERROR",
+    "error": 6
+   }
+  },
+  {
+   "scenario": "destinybond_m1_banette_machamp",
+   "case": "crit=15,roll=15",
+   "step": 2,
+   "field": "b2_refusal",
+   "value": {
+    "kind": "FOLD_ERROR",
+    "error": 6
+   }
+  },
+  {
+   "scenario": "destinybond_m3_qwilfish_dusclops",
+   "case": "roll=0",
+   "step": 4,
+   "field": "b2_refusal",
+   "value": {
+    "kind": "FOLD_ERROR",
+    "error": 6
+   }
+  },
+  {
+   "scenario": "destinybond_m3_qwilfish_dusclops",
+   "case": "roll=15",
+   "step": 4,
+   "field": "b2_refusal",
+   "value": {
+    "kind": "FOLD_ERROR",
+    "error": 6
+   }
+  },
+  {
+   "scenario": "destinybond_m4_gengar_vigoroth",
+   "case": "base",
+   "step": 2,
+   "field": "b2_refusal",
+   "value": {
+    "kind": "FOLD_ERROR",
+    "error": 6
+   }
+  },
+  {
+   "scenario": "destinybond_m5_gengar_entei",
+   "case": "crit=0,roll=0",
+   "step": 3,
+   "field": "0:active:boosts",
+   "value": [
+    [
+     0,
+     0,
+     1,
+     1,
+     0,
+     0,
+     0
+    ],
+    [
+     0,
+     0,
+     0,
+     0,
+     0,
+     0,
+     0
+    ]
+   ]
+  },
+  {
+   "scenario": "destinybond_m5_gengar_entei",
+   "case": "crit=0,roll=15",
+   "step": 3,
+   "field": "0:active:boosts",
+   "value": [
+    [
+     0,
+     0,
+     1,
+     1,
+     0,
+     0,
+     0
+    ],
+    [
+     0,
+     0,
+     0,
+     0,
+     0,
+     0,
+     0
+    ]
+   ]
+  },
+  {
+   "scenario": "destinybond_m5_gengar_entei",
+   "case": "crit=15,roll=0",
+   "step": 3,
+   "field": "0:active:boosts",
+   "value": [
+    [
+     0,
+     0,
+     1,
+     1,
+     0,
+     0,
+     0
+    ],
+    [
+     0,
+     0,
+     0,
+     0,
+     0,
+     0,
+     0
+    ]
+   ]
+  },
+  {
+   "scenario": "destinybond_m5_gengar_entei",
+   "case": "crit=15,roll=15",
+   "step": 3,
+   "field": "0:active:boosts",
+   "value": [
+    [
+     0,
+     0,
+     1,
+     1,
+     0,
+     0,
+     0
+    ],
+    [
+     0,
+     0,
+     0,
+     0,
+     0,
+     0,
+     0
+    ]
+   ]
+  },
+  {
+   "scenario": "destinybond_m6_gengar_electrode",
+   "case": "base",
+   "step": 3,
+   "field": "b2_refusal",
+   "value": {
+    "kind": "FOLD_ERROR",
+    "error": 6
+   }
+  },
+  {
+   "scenario": "destinybond_m7_gengar_volbeat",
+   "case": "base",
+   "step": 3,
+   "field": "0:active:boosts",
+   "value": [
+    [
+     0,
+     0,
+     2,
+     0,
+     0,
+     0,
+     0
+    ],
+    [
+     0,
+     0,
+     0,
+     0,
+     0,
+     0,
+     0
+    ]
+   ]
+  },
+  {
+   "scenario": "destinybond_m7_gengar_volbeat",
+   "case": "base",
+   "step": 4,
+   "field": "b2_refusal",
+   "value": {
+    "kind": "FOLD_ERROR",
+    "error": 6
+   }
+  },
+  {
+   "scenario": "destinybond_m9_wobbuffet_dusclops",
+   "case": "base",
+   "step": 3,
+   "field": "b2_refusal",
+   "value": {
+    "kind": "FOLD_ERROR",
+    "error": 6
+   }
+  },
+  {
+   "scenario": "destinybond_pursuer",
+   "case": "base",
+   "step": 1,
+   "field": "1:active:damage_exact_dealt",
+   "value": [
+    0.08056872338056564,
+    0.0
+   ]
+  },
+  {
+   "scenario": "destinybond_pursuer",
+   "case": "base",
+   "step": 1,
+   "field": "1:active:last_damage_dealt",
+   "value": [
+    0.07999999821186066,
+    0.0
+   ]
+  },
+  {
+   "scenario": "destinybond_pursuer",
+   "case": "base",
+   "step": 1,
+   "field": "1:active:last_move",
+   "value": [
+    "destinybond",
+    "pursuit"
+   ]
+  },
+  {
+   "scenario": "destinybond_pursuer",
+   "case": "base",
+   "step": 2,
+   "field": "1:active:damage_exact_dealt",
+   "value": [
+    0.08056872338056564,
+    0.0
+   ]
+  },
+  {
+   "scenario": "destinybond_pursuer",
+   "case": "base",
+   "step": 2,
+   "field": "1:active:last_damage_dealt",
+   "value": [
+    0.07999999821186066,
+    0.0
+   ]
+  },
+  {
+   "scenario": "destinybond_pursuer",
+   "case": "base",
+   "step": 2,
+   "field": "1:active:last_move",
+   "value": [
+    "destinybond",
+    "pursuit"
+   ]
+  },
+  {
+   "scenario": "destinybond_pursuit",
+   "case": "base",
+   "step": 1,
+   "field": "1:active:last_move",
+   "value": [
+    "splash",
+    "pursuit"
+   ]
+  },
+  {
+   "scenario": "encore",
+   "case": "encore_roll=0",
+   "step": 3,
+   "field": "1:active:volatiles",
+   "value": [
+    [],
+    [
+     "encore"
+    ]
+   ]
+  },
+  {
+   "scenario": "encore",
+   "case": "encore_roll=0",
+   "step": 4,
+   "field": "1:active:volatiles",
+   "value": [
+    [],
+    [
+     "encore"
+    ]
+   ]
+  },
+  {
+   "scenario": "encore",
+   "case": "encore_roll=0",
+   "step": 5,
+   "field": "1:active:volatiles",
+   "value": [
+    [],
+    [
+     "encore"
+    ]
+   ]
+  },
+  {
+   "scenario": "encore",
+   "case": "encore_roll=0",
+   "step": 6,
+   "field": "1:active:volatiles",
+   "value": [
+    [],
+    [
+     "encore"
+    ]
+   ]
+  },
+  {
+   "scenario": "encore",
+   "case": "encore_roll=0",
+   "step": 7,
+   "field": "1:active:volatiles",
+   "value": [
+    [],
+    [
+     "encore"
+    ]
+   ]
+  },
+  {
+   "scenario": "encore",
+   "case": "encore_roll=0",
+   "step": 8,
+   "field": "1:active:volatiles",
+   "value": [
+    [],
+    [
+     "encore"
+    ]
+   ]
+  },
+  {
+   "scenario": "encore",
+   "case": "encore_roll=1",
+   "step": 4,
+   "field": "1:active:volatiles",
+   "value": [
+    [],
+    [
+     "encore"
+    ]
+   ]
+  },
+  {
+   "scenario": "encore",
+   "case": "encore_roll=1",
+   "step": 5,
+   "field": "1:active:volatiles",
+   "value": [
+    [],
+    [
+     "encore"
+    ]
+   ]
+  },
+  {
+   "scenario": "encore",
+   "case": "encore_roll=1",
+   "step": 6,
+   "field": "1:active:volatiles",
+   "value": [
+    [],
+    [
+     "encore"
+    ]
+   ]
+  },
+  {
+   "scenario": "encore",
+   "case": "encore_roll=1",
+   "step": 7,
+   "field": "1:active:volatiles",
+   "value": [
+    [],
+    [
+     "encore"
+    ]
+   ]
+  },
+  {
+   "scenario": "encore",
+   "case": "encore_roll=1",
+   "step": 8,
+   "field": "1:active:volatiles",
+   "value": [
+    [],
+    [
+     "encore"
+    ]
+   ]
+  },
+  {
+   "scenario": "encore",
+   "case": "encore_roll=2",
+   "step": 5,
+   "field": "1:active:volatiles",
+   "value": [
+    [],
+    [
+     "encore"
+    ]
+   ]
+  },
+  {
+   "scenario": "encore",
+   "case": "encore_roll=2",
+   "step": 6,
+   "field": "1:active:volatiles",
+   "value": [
+    [],
+    [
+     "encore"
+    ]
+   ]
+  },
+  {
+   "scenario": "encore",
+   "case": "encore_roll=2",
+   "step": 7,
+   "field": "1:active:volatiles",
+   "value": [
+    [],
+    [
+     "encore"
+    ]
+   ]
+  },
+  {
+   "scenario": "encore",
+   "case": "encore_roll=2",
+   "step": 8,
+   "field": "1:active:volatiles",
+   "value": [
+    [],
+    [
+     "encore"
+    ]
+   ]
+  },
+  {
+   "scenario": "encore",
+   "case": "encore_roll=3",
+   "step": 6,
+   "field": "1:active:volatiles",
+   "value": [
+    [],
+    [
+     "encore"
+    ]
+   ]
+  },
+  {
+   "scenario": "encore",
+   "case": "encore_roll=3",
+   "step": 7,
+   "field": "1:active:volatiles",
+   "value": [
+    [],
+    [
+     "encore"
+    ]
+   ]
+  },
+  {
+   "scenario": "encore",
+   "case": "encore_roll=3",
+   "step": 8,
+   "field": "1:active:volatiles",
+   "value": [
+    [],
+    [
+     "encore"
+    ]
+   ]
+  },
+  {
+   "scenario": "facade_status",
+   "case": "base",
+   "step": 1,
+   "field": "b2_refusal",
+   "value": {
+    "kind": "FOLD_ERROR",
+    "error": 6
+   }
+  },
+  {
+   "scenario": "hyperbeam_order_fast",
+   "case": "base",
+   "step": 3,
+   "field": "0:active:volatiles",
+   "value": [
+    [],
+    [
+     "encore"
+    ]
+   ]
+  },
+  {
+   "scenario": "hyperbeam_order_fast",
+   "case": "base",
+   "step": 4,
+   "field": "0:active:volatiles",
+   "value": [
+    [
+     "mustrecharge"
+    ],
+    [
+     "encore",
+     "mustrecharge"
+    ]
+   ]
+  },
+  {
+   "scenario": "hyperbeam_roar",
+   "case": "base",
+   "step": 1,
+   "field": "b2_refusal",
+   "value": {
+    "kind": "FOLD_ERROR",
+    "error": 6
+   }
+  },
+  {
+   "scenario": "knockoff_band",
+   "case": "roll=0",
+   "step": 8,
+   "field": "1:active:boosts",
+   "value": [
+    [
+     0,
+     0,
+     0,
+     0,
+     2,
+     0,
+     0
+    ],
+    [
+     0,
+     0,
+     0,
+     0,
+     0,
+     0,
+     0
+    ]
+   ]
+  },
+  {
+   "scenario": "knockoff_band",
+   "case": "roll=15",
+   "step": 8,
+   "field": "1:active:boosts",
+   "value": [
+    [
+     0,
+     0,
+     0,
+     0,
+     2,
+     0,
+     0
+    ],
+    [
+     0,
+     0,
+     0,
+     0,
+     0,
+     0,
+     0
+    ]
+   ]
+  },
+  {
+   "scenario": "knockoff_midturn_lock",
+   "case": "base",
+   "step": 1,
+   "field": "0:active:boosts",
+   "value": [
+    [
+     0,
+     0,
+     0,
+     0,
+     1,
+     0,
+     0
+    ],
+    [
+     0,
+     0,
+     0,
+     0,
+     0,
+     0,
+     0
+    ]
+   ]
+  },
+  {
+   "scenario": "perishsong_last_faster",
+   "case": "base",
+   "step": 1,
+   "field": "b2_refusal",
+   "value": {
+    "kind": "FOLD_ERROR",
+    "error": 6
+   }
+  },
+  {
+   "scenario": "perishsong_tie",
+   "case": "tie=0",
+   "step": 1,
+   "field": "b2_refusal",
+   "value": {
+    "kind": "FOLD_ERROR",
+    "error": 6
+   }
+  },
+  {
+   "scenario": "perishsong_tie",
+   "case": "tie=1",
+   "step": 1,
+   "field": "b2_refusal",
+   "value": {
+    "kind": "FOLD_ERROR",
+    "error": 6
+   }
+  },
+  {
+   "scenario": "sacredfire_fail",
+   "case": "base",
+   "step": 3,
+   "field": "1:active:volatiles",
+   "value": [
+    [
+     "flashfire"
+    ],
+    []
+   ]
+  },
+  {
+   "scenario": "sacredfire_fail",
+   "case": "base",
+   "step": 4,
+   "field": "1:active:volatiles",
+   "value": [
+    [
+     "flashfire"
+    ],
+    []
+   ]
+  },
+  {
+   "scenario": "sleepclause_faint",
+   "case": "base",
+   "step": 2,
+   "field": "1:0:belief_hard",
+   "value": [
+    [
+     7,
+     0
+    ],
+    [
+     15,
+     0
+    ]
+   ]
+  },
+  {
+   "scenario": "sleepclause_faint",
+   "case": "base",
+   "step": 2,
+   "field": "1:0:visible_hard",
+   "value": [
+    [
+     7,
+     0
+    ],
+    [
+     15,
+     0
+    ]
+   ]
+  },
+  {
+   "scenario": "sleepclause_faint",
+   "case": "base",
+   "step": 3,
+   "field": "1:0:belief_hard",
+   "value": [
+    [
+     7,
+     0
+    ],
+    [
+     15,
+     0
+    ]
+   ]
+  },
+  {
+   "scenario": "sleepclause_faint",
+   "case": "base",
+   "step": 3,
+   "field": "1:0:visible_hard",
+   "value": [
+    [
+     7,
+     0
+    ],
+    [
+     15,
+     0
+    ]
+   ]
+  },
+  {
+   "scenario": "sleepclause_faint",
+   "case": "base",
+   "step": 3,
+   "field": "1:active:boosts",
+   "value": [
+    [
+     0,
+     0,
+     0,
+     0,
+     3,
+     0,
+     0
+    ],
+    [
+     0,
+     0,
+     0,
+     0,
+     0,
+     0,
+     0
+    ]
+   ]
+  },
+  {
+   "scenario": "sleepclause_faint",
+   "case": "base",
+   "step": 4,
+   "field": "1:0:belief_hard",
+   "value": [
+    [
+     7,
+     0
+    ],
+    [
+     15,
+     0
+    ]
+   ]
+  },
+  {
+   "scenario": "sleepclause_faint",
+   "case": "base",
+   "step": 4,
+   "field": "1:0:visible_hard",
+   "value": [
+    [
+     7,
+     0
+    ],
+    [
+     15,
+     0
+    ]
+   ]
+  },
+  {
+   "scenario": "sleepclause_faint",
+   "case": "base",
+   "step": 5,
+   "field": "1:0:belief_hard",
+   "value": [
+    [
+     7,
+     0
+    ],
+    [
+     15,
+     0
+    ]
+   ]
+  },
+  {
+   "scenario": "sleepclause_faint",
+   "case": "base",
+   "step": 5,
+   "field": "1:0:visible_hard",
+   "value": [
+    [
+     7,
+     0
+    ],
+    [
+     15,
+     0
+    ]
+   ]
+  },
+  {
+   "scenario": "sleepclause_faint",
+   "case": "base",
+   "step": 6,
+   "field": "1:0:belief_hard",
+   "value": [
+    [
+     7,
+     0
+    ],
+    [
+     15,
+     0
+    ]
+   ]
+  },
+  {
+   "scenario": "sleepclause_faint",
+   "case": "base",
+   "step": 6,
+   "field": "1:0:visible_hard",
+   "value": [
+    [
+     7,
+     0
+    ],
+    [
+     15,
+     0
+    ]
+   ]
+  },
+  {
+   "scenario": "subfaint",
+   "case": "base",
+   "step": 0,
+   "field": "0:0:belief_hard",
+   "value": [
+    [
+     1407,
+     0
+    ],
+    [
+     1535,
+     0
+    ]
+   ]
+  },
+  {
+   "scenario": "subfaint",
+   "case": "base",
+   "step": 0,
+   "field": "0:0:visible_hard",
+   "value": [
+    [
+     1407,
+     0
+    ],
+    [
+     1535,
+     0
+    ]
+   ]
+  },
+  {
+   "scenario": "subfaint",
+   "case": "base",
+   "step": 1,
+   "field": "0:0:belief_hard",
+   "value": [
+    [
+     8,
+     0
+    ],
+    [
+     136,
+     0
+    ]
+   ]
+  },
+  {
+   "scenario": "subfaint",
+   "case": "base",
+   "step": 1,
+   "field": "0:0:visible_hard",
+   "value": [
+    [
+     8,
+     0
+    ],
+    [
+     136,
+     0
+    ]
+   ]
+  },
+  {
+   "scenario": "subfaint",
+   "case": "base",
+   "step": 2,
+   "field": "0:0:belief_hard",
+   "value": [
+    [
+     8,
+     0
+    ],
+    [
+     136,
+     0
+    ]
+   ]
+  },
+  {
+   "scenario": "subfaint",
+   "case": "base",
+   "step": 2,
+   "field": "0:0:visible_hard",
+   "value": [
+    [
+     8,
+     0
+    ],
+    [
+     136,
+     0
+    ]
+   ]
+  },
+  {
+   "scenario": "subfaint",
+   "case": "base",
+   "step": 3,
+   "field": "0:0:belief_hard",
+   "value": [
+    [
+     8,
+     0
+    ],
+    [
+     136,
+     0
+    ]
+   ]
+  },
+  {
+   "scenario": "subfaint",
+   "case": "base",
+   "step": 3,
+   "field": "0:0:visible_hard",
+   "value": [
+    [
+     8,
+     0
+    ],
+    [
+     136,
+     0
+    ]
+   ]
+  },
+  {
+   "scenario": "subfaint",
+   "case": "base",
+   "step": 4,
+   "field": "0:0:belief_hard",
+   "value": [
+    [
+     8,
+     0
+    ],
+    [
+     136,
+     0
+    ]
+   ]
+  },
+  {
+   "scenario": "subfaint",
+   "case": "base",
+   "step": 4,
+   "field": "0:0:visible_hard",
+   "value": [
+    [
+     8,
+     0
+    ],
+    [
+     136,
+     0
+    ]
+   ]
+  },
+  {
+   "scenario": "subfaint",
+   "case": "base",
+   "step": 5,
+   "field": "0:0:belief_hard",
+   "value": [
+    [
+     8,
+     0
+    ],
+    [
+     136,
+     0
+    ]
+   ]
+  },
+  {
+   "scenario": "subfaint",
+   "case": "base",
+   "step": 5,
+   "field": "0:0:visible_hard",
+   "value": [
+    [
+     8,
+     0
+    ],
+    [
+     136,
+     0
+    ]
+   ]
+  },
+  {
+   "scenario": "subfaint",
+   "case": "base",
+   "step": 6,
+   "field": "0:0:belief_hard",
+   "value": [
+    [
+     8,
+     0
+    ],
+    [
+     136,
+     0
+    ]
+   ]
+  },
+  {
+   "scenario": "subfaint",
+   "case": "base",
+   "step": 6,
+   "field": "0:0:visible_hard",
+   "value": [
+    [
+     8,
+     0
+    ],
+    [
+     136,
+     0
+    ]
+   ]
+  },
+  {
+   "scenario": "superpower_ko",
+   "case": "base",
+   "step": 5,
+   "field": "0:active:boosts",
+   "value": [
+    [
+     -3,
+     -3,
+     0,
+     0,
+     0,
+     0,
+     0
+    ],
+    [
+     0,
+     0,
+     0,
+     0,
+     0,
+     0,
+     0
+    ]
+   ]
+  },
+  {
+   "scenario": "toxic",
+   "case": "accuracy=0",
+   "step": 0,
+   "field": "1:0:belief_hard",
+   "value": [
+    [
+     2076145406,
+     1
+    ],
+    [
+     4294964990,
+     1
+    ]
+   ]
+  },
+  {
+   "scenario": "toxic",
+   "case": "accuracy=0",
+   "step": 0,
+   "field": "1:0:visible_hard",
+   "value": [
+    [
+     2076145406,
+     1
+    ],
+    [
+     4294964990,
+     1
+    ]
+   ]
+  },
+  {
+   "scenario": "trick_encore",
+   "case": "base",
+   "step": 3,
+   "field": "1:active:volatiles",
+   "value": [
+    [],
+    [
+     "encore"
+    ]
+   ]
+  },
+  {
+   "scenario": "trick_encore",
+   "case": "base",
+   "step": 4,
+   "field": "1:active:volatiles",
+   "value": [
+    [],
+    [
+     "encore"
+    ]
+   ]
+  },
+  {
+   "scenario": "trick_encore",
+   "case": "base",
+   "step": 5,
+   "field": "1:active:volatiles",
+   "value": [
+    [],
+    [
+     "encore"
+    ]
+   ]
+  },
+  {
+   "scenario": "trick_encore",
+   "case": "base",
+   "step": 6,
+   "field": "1:active:volatiles",
+   "value": [
+    [],
+    [
+     "encore"
+    ]
+   ]
+  },
+  {
+   "scenario": "wh_intimidate_explosion",
+   "case": "base",
+   "step": 0,
+   "field": "0:active:boosts",
+   "value": [
+    [
+     -1,
+     0,
+     0,
+     0,
+     0,
+     0,
+     0
+    ],
+    [
+     0,
+     0,
+     0,
+     0,
+     0,
+     0,
+     0
+    ]
+   ]
+  },
+  {
+   "scenario": "wh_pursuit",
+   "case": "base",
+   "step": 0,
+   "field": "1:active:damage_exact_dealt",
+   "value": [
+    0.40860214829444885,
+    0.0
+   ]
+  },
+  {
+   "scenario": "wh_pursuit",
+   "case": "base",
+   "step": 0,
+   "field": "1:active:last_damage_dealt",
+   "value": [
+    0.4000000059604645,
+    0.0
+   ]
+  },
+  {
+   "scenario": "wh_pursuit",
+   "case": "base",
+   "step": 0,
+   "field": "1:active:last_move",
+   "value": [
+    "<switch>",
+    "pursuit"
+   ]
+  },
+  {
+   "scenario": "wrap_tie",
+   "case": "tie=0",
+   "step": 0,
+   "field": "0:active:boosts",
+   "value": [
+    [
+     -1,
+     0,
+     0,
+     0,
+     0,
+     0,
+     0
+    ],
+    [
+     0,
+     0,
+     0,
+     0,
+     0,
+     0,
+     0
+    ]
+   ]
+  },
+  {
+   "scenario": "wrap_tie",
+   "case": "tie=0",
+   "step": 1,
+   "field": "b2_refusal",
+   "value": {
+    "kind": "FOLD_ERROR",
+    "error": 6
+   }
+  },
+  {
+   "scenario": "wrap_tie",
+   "case": "tie=1",
+   "step": 0,
+   "field": "0:active:boosts",
+   "value": [
+    [
+     -1,
+     0,
+     0,
+     0,
+     0,
+     0,
+     0
+    ],
+    [
+     0,
+     0,
+     0,
+     0,
+     0,
+     0,
+     0
+    ]
+   ]
+  },
+  {
+   "scenario": "wrap_tie",
+   "case": "tie=1",
+   "step": 1,
+   "field": "b2_refusal",
+   "value": {
+    "kind": "FOLD_ERROR",
+    "error": 6
+   }
+  },
+  {
+   "scenario": "wrap_trapper_dragged_back",
+   "case": "base",
+   "step": 1,
+   "field": "b2_refusal",
+   "value": {
+    "kind": "FOLD_ERROR",
+    "error": 6
+   }
+  },
+  {
+   "scenario": "yawn",
+   "case": "sleep=0",
+   "step": 1,
+   "field": "1:0:belief_hard",
+   "value": [
+    [
+     2076147517,
+     1
+    ],
+    [
+     4294967101,
+     1
+    ]
+   ]
+  },
+  {
+   "scenario": "yawn",
+   "case": "sleep=0",
+   "step": 1,
+   "field": "1:0:visible_hard",
+   "value": [
+    [
+     2076147517,
+     1
+    ],
+    [
+     4294967101,
+     1
+    ]
+   ]
+  },
+  {
+   "scenario": "yawn",
+   "case": "sleep=0",
+   "step": 2,
+   "field": "1:0:belief_hard",
+   "value": [
+    [
+     2076147517,
+     1
+    ],
+    [
+     4294967101,
+     1
+    ]
+   ]
+  },
+  {
+   "scenario": "yawn",
+   "case": "sleep=0",
+   "step": 2,
+   "field": "1:0:visible_hard",
+   "value": [
+    [
+     2076147517,
+     1
+    ],
+    [
+     4294967101,
+     1
+    ]
+   ]
+  },
+  {
+   "scenario": "yawn",
+   "case": "sleep=0",
+   "step": 3,
+   "field": "1:0:belief_hard",
+   "value": [
+    [
+     2076147517,
+     1
+    ],
+    [
+     4294967101,
+     1
+    ]
+   ]
+  },
+  {
+   "scenario": "yawn",
+   "case": "sleep=0",
+   "step": 3,
+   "field": "1:0:visible_hard",
+   "value": [
+    [
+     2076147517,
+     1
+    ],
+    [
+     4294967101,
+     1
+    ]
+   ]
+  },
+  {
+   "scenario": "yawn",
+   "case": "sleep=0",
+   "step": 4,
+   "field": "1:0:belief_hard",
+   "value": [
+    [
+     2076147517,
+     1
+    ],
+    [
+     4294967101,
+     1
+    ]
+   ]
+  },
+  {
+   "scenario": "yawn",
+   "case": "sleep=0",
+   "step": 4,
+   "field": "1:0:visible_hard",
+   "value": [
+    [
+     2076147517,
+     1
+    ],
+    [
+     4294967101,
+     1
+    ]
+   ]
+  },
+  {
+   "scenario": "yawn",
+   "case": "sleep=0",
+   "step": 5,
+   "field": "1:0:belief_hard",
+   "value": [
+    [
+     2076147517,
+     1
+    ],
+    [
+     4294967101,
+     1
+    ]
+   ]
+  },
+  {
+   "scenario": "yawn",
+   "case": "sleep=0",
+   "step": 5,
+   "field": "1:0:visible_hard",
+   "value": [
+    [
+     2076147517,
+     1
+    ],
+    [
+     4294967101,
+     1
+    ]
+   ]
+  },
+  {
+   "scenario": "yawn",
+   "case": "sleep=0",
+   "step": 6,
+   "field": "1:0:belief_hard",
+   "value": [
+    [
+     2076147517,
+     1
+    ],
+    [
+     4294967101,
+     1
+    ]
+   ]
+  },
+  {
+   "scenario": "yawn",
+   "case": "sleep=0",
+   "step": 6,
+   "field": "1:0:visible_hard",
+   "value": [
+    [
+     2076147517,
+     1
+    ],
+    [
+     4294967101,
+     1
+    ]
+   ]
+  },
+  {
+   "scenario": "yawn",
+   "case": "sleep=1",
+   "step": 1,
+   "field": "1:0:belief_hard",
+   "value": [
+    [
+     2076147517,
+     1
+    ],
+    [
+     4294967101,
+     1
+    ]
+   ]
+  },
+  {
+   "scenario": "yawn",
+   "case": "sleep=1",
+   "step": 1,
+   "field": "1:0:visible_hard",
+   "value": [
+    [
+     2076147517,
+     1
+    ],
+    [
+     4294967101,
+     1
+    ]
+   ]
+  },
+  {
+   "scenario": "yawn",
+   "case": "sleep=1",
+   "step": 2,
+   "field": "1:0:belief_hard",
+   "value": [
+    [
+     2076147517,
+     1
+    ],
+    [
+     4294967101,
+     1
+    ]
+   ]
+  },
+  {
+   "scenario": "yawn",
+   "case": "sleep=1",
+   "step": 2,
+   "field": "1:0:visible_hard",
+   "value": [
+    [
+     2076147517,
+     1
+    ],
+    [
+     4294967101,
+     1
+    ]
+   ]
+  },
+  {
+   "scenario": "yawn",
+   "case": "sleep=1",
+   "step": 3,
+   "field": "1:0:belief_hard",
+   "value": [
+    [
+     2076147517,
+     1
+    ],
+    [
+     4294967101,
+     1
+    ]
+   ]
+  },
+  {
+   "scenario": "yawn",
+   "case": "sleep=1",
+   "step": 3,
+   "field": "1:0:visible_hard",
+   "value": [
+    [
+     2076147517,
+     1
+    ],
+    [
+     4294967101,
+     1
+    ]
+   ]
+  },
+  {
+   "scenario": "yawn",
+   "case": "sleep=1",
+   "step": 4,
+   "field": "1:0:belief_hard",
+   "value": [
+    [
+     2076147517,
+     1
+    ],
+    [
+     4294967101,
+     1
+    ]
+   ]
+  },
+  {
+   "scenario": "yawn",
+   "case": "sleep=1",
+   "step": 4,
+   "field": "1:0:visible_hard",
+   "value": [
+    [
+     2076147517,
+     1
+    ],
+    [
+     4294967101,
+     1
+    ]
+   ]
+  },
+  {
+   "scenario": "yawn",
+   "case": "sleep=1",
+   "step": 5,
+   "field": "1:0:belief_hard",
+   "value": [
+    [
+     2076147517,
+     1
+    ],
+    [
+     4294967101,
+     1
+    ]
+   ]
+  },
+  {
+   "scenario": "yawn",
+   "case": "sleep=1",
+   "step": 5,
+   "field": "1:0:visible_hard",
+   "value": [
+    [
+     2076147517,
+     1
+    ],
+    [
+     4294967101,
+     1
+    ]
+   ]
+  },
+  {
+   "scenario": "yawn",
+   "case": "sleep=1",
+   "step": 6,
+   "field": "1:0:belief_hard",
+   "value": [
+    [
+     2076147517,
+     1
+    ],
+    [
+     4294967101,
+     1
+    ]
+   ]
+  },
+  {
+   "scenario": "yawn",
+   "case": "sleep=1",
+   "step": 6,
+   "field": "1:0:visible_hard",
+   "value": [
+    [
+     2076147517,
+     1
+    ],
+    [
+     4294967101,
+     1
+    ]
+   ]
+  },
+  {
+   "scenario": "yawn",
+   "case": "sleep=2",
+   "step": 1,
+   "field": "1:0:belief_hard",
+   "value": [
+    [
+     2076147517,
+     1
+    ],
+    [
+     4294967101,
+     1
+    ]
+   ]
+  },
+  {
+   "scenario": "yawn",
+   "case": "sleep=2",
+   "step": 1,
+   "field": "1:0:visible_hard",
+   "value": [
+    [
+     2076147517,
+     1
+    ],
+    [
+     4294967101,
+     1
+    ]
+   ]
+  },
+  {
+   "scenario": "yawn",
+   "case": "sleep=2",
+   "step": 2,
+   "field": "1:0:belief_hard",
+   "value": [
+    [
+     2076147517,
+     1
+    ],
+    [
+     4294967101,
+     1
+    ]
+   ]
+  },
+  {
+   "scenario": "yawn",
+   "case": "sleep=2",
+   "step": 2,
+   "field": "1:0:visible_hard",
+   "value": [
+    [
+     2076147517,
+     1
+    ],
+    [
+     4294967101,
+     1
+    ]
+   ]
+  },
+  {
+   "scenario": "yawn",
+   "case": "sleep=2",
+   "step": 3,
+   "field": "1:0:belief_hard",
+   "value": [
+    [
+     2076147517,
+     1
+    ],
+    [
+     4294967101,
+     1
+    ]
+   ]
+  },
+  {
+   "scenario": "yawn",
+   "case": "sleep=2",
+   "step": 3,
+   "field": "1:0:visible_hard",
+   "value": [
+    [
+     2076147517,
+     1
+    ],
+    [
+     4294967101,
+     1
+    ]
+   ]
+  },
+  {
+   "scenario": "yawn",
+   "case": "sleep=2",
+   "step": 4,
+   "field": "1:0:belief_hard",
+   "value": [
+    [
+     2076147517,
+     1
+    ],
+    [
+     4294967101,
+     1
+    ]
+   ]
+  },
+  {
+   "scenario": "yawn",
+   "case": "sleep=2",
+   "step": 4,
+   "field": "1:0:visible_hard",
+   "value": [
+    [
+     2076147517,
+     1
+    ],
+    [
+     4294967101,
+     1
+    ]
+   ]
+  },
+  {
+   "scenario": "yawn",
+   "case": "sleep=2",
+   "step": 5,
+   "field": "1:0:belief_hard",
+   "value": [
+    [
+     2076147517,
+     1
+    ],
+    [
+     4294967101,
+     1
+    ]
+   ]
+  },
+  {
+   "scenario": "yawn",
+   "case": "sleep=2",
+   "step": 5,
+   "field": "1:0:visible_hard",
+   "value": [
+    [
+     2076147517,
+     1
+    ],
+    [
+     4294967101,
+     1
+    ]
+   ]
+  },
+  {
+   "scenario": "yawn",
+   "case": "sleep=2",
+   "step": 6,
+   "field": "1:0:belief_hard",
+   "value": [
+    [
+     2076147517,
+     1
+    ],
+    [
+     4294967101,
+     1
+    ]
+   ]
+  },
+  {
+   "scenario": "yawn",
+   "case": "sleep=2",
+   "step": 6,
+   "field": "1:0:visible_hard",
+   "value": [
+    [
+     2076147517,
+     1
+    ],
+    [
+     4294967101,
+     1
+    ]
+   ]
+  },
+  {
+   "scenario": "yawn",
+   "case": "sleep=3",
+   "step": 1,
+   "field": "1:0:belief_hard",
+   "value": [
+    [
+     2076147517,
+     1
+    ],
+    [
+     4294967101,
+     1
+    ]
+   ]
+  },
+  {
+   "scenario": "yawn",
+   "case": "sleep=3",
+   "step": 1,
+   "field": "1:0:visible_hard",
+   "value": [
+    [
+     2076147517,
+     1
+    ],
+    [
+     4294967101,
+     1
+    ]
+   ]
+  },
+  {
+   "scenario": "yawn",
+   "case": "sleep=3",
+   "step": 2,
+   "field": "1:0:belief_hard",
+   "value": [
+    [
+     2076147517,
+     1
+    ],
+    [
+     4294967101,
+     1
+    ]
+   ]
+  },
+  {
+   "scenario": "yawn",
+   "case": "sleep=3",
+   "step": 2,
+   "field": "1:0:visible_hard",
+   "value": [
+    [
+     2076147517,
+     1
+    ],
+    [
+     4294967101,
+     1
+    ]
+   ]
+  },
+  {
+   "scenario": "yawn",
+   "case": "sleep=3",
+   "step": 3,
+   "field": "1:0:belief_hard",
+   "value": [
+    [
+     2076147517,
+     1
+    ],
+    [
+     4294967101,
+     1
+    ]
+   ]
+  },
+  {
+   "scenario": "yawn",
+   "case": "sleep=3",
+   "step": 3,
+   "field": "1:0:visible_hard",
+   "value": [
+    [
+     2076147517,
+     1
+    ],
+    [
+     4294967101,
+     1
+    ]
+   ]
+  },
+  {
+   "scenario": "yawn",
+   "case": "sleep=3",
+   "step": 4,
+   "field": "1:0:belief_hard",
+   "value": [
+    [
+     2076147517,
+     1
+    ],
+    [
+     4294967101,
+     1
+    ]
+   ]
+  },
+  {
+   "scenario": "yawn",
+   "case": "sleep=3",
+   "step": 4,
+   "field": "1:0:visible_hard",
+   "value": [
+    [
+     2076147517,
+     1
+    ],
+    [
+     4294967101,
+     1
+    ]
+   ]
+  },
+  {
+   "scenario": "yawn",
+   "case": "sleep=3",
+   "step": 5,
+   "field": "1:0:belief_hard",
+   "value": [
+    [
+     2076147517,
+     1
+    ],
+    [
+     4294967101,
+     1
+    ]
+   ]
+  },
+  {
+   "scenario": "yawn",
+   "case": "sleep=3",
+   "step": 5,
+   "field": "1:0:visible_hard",
+   "value": [
+    [
+     2076147517,
+     1
+    ],
+    [
+     4294967101,
+     1
+    ]
+   ]
+  },
+  {
+   "scenario": "yawn",
+   "case": "sleep=3",
+   "step": 6,
+   "field": "1:0:belief_hard",
+   "value": [
+    [
+     2076147517,
+     1
+    ],
+    [
+     4294967101,
+     1
+    ]
+   ]
+  },
+  {
+   "scenario": "yawn",
+   "case": "sleep=3",
+   "step": 6,
+   "field": "1:0:visible_hard",
+   "value": [
+    [
+     2076147517,
+     1
+    ],
+    [
+     4294967101,
+     1
+    ]
+   ]
+  },
+  {
+   "scenario": "yawn_again",
+   "case": "base",
+   "step": 1,
+   "field": "1:0:belief_hard",
+   "value": [
+    [
+     2076147517,
+     1
+    ],
+    [
+     4294967101,
+     1
+    ]
+   ]
+  },
+  {
+   "scenario": "yawn_again",
+   "case": "base",
+   "step": 1,
+   "field": "1:0:visible_hard",
+   "value": [
+    [
+     2076147517,
+     1
+    ],
+    [
+     4294967101,
+     1
+    ]
+   ]
+  },
+  {
+   "scenario": "yawn_again",
+   "case": "base",
+   "step": 2,
+   "field": "1:0:belief_hard",
+   "value": [
+    [
+     2076147517,
+     1
+    ],
+    [
+     4294967101,
+     1
+    ]
+   ]
+  },
+  {
+   "scenario": "yawn_again",
+   "case": "base",
+   "step": 2,
+   "field": "1:0:visible_hard",
+   "value": [
+    [
+     2076147517,
+     1
+    ],
+    [
+     4294967101,
+     1
+    ]
+   ]
+  },
+  {
+   "scenario": "yawn_again",
+   "case": "base",
+   "step": 3,
+   "field": "1:0:belief_hard",
+   "value": [
+    [
+     2076147517,
+     1
+    ],
+    [
+     4294967101,
+     1
+    ]
+   ]
+  },
+  {
+   "scenario": "yawn_again",
+   "case": "base",
+   "step": 3,
+   "field": "1:0:visible_hard",
+   "value": [
+    [
+     2076147517,
+     1
+    ],
+    [
+     4294967101,
+     1
+    ]
+   ]
+  },
+  {
+   "scenario": "yawn_sleepclause",
+   "case": "base",
+   "step": 0,
+   "field": "1:0:belief_hard",
+   "value": [
+    [
+     2076147711,
+     1
+    ],
+    [
+     4294967295,
+     1
+    ]
+   ]
+  },
+  {
+   "scenario": "yawn_sleepclause",
+   "case": "base",
+   "step": 0,
+   "field": "1:0:visible_hard",
+   "value": [
+    [
+     2076147711,
+     1
+    ],
+    [
+     4294967295,
+     1
+    ]
+   ]
+  },
+  {
+   "scenario": "yawn_sleepclause",
+   "case": "base",
+   "step": 1,
+   "field": "1:0:belief_hard",
+   "value": [
+    [
+     2076147711,
+     1
+    ],
+    [
+     4294967295,
+     1
+    ]
+   ]
+  },
+  {
+   "scenario": "yawn_sleepclause",
+   "case": "base",
+   "step": 1,
+   "field": "1:0:visible_hard",
+   "value": [
+    [
+     2076147711,
+     1
+    ],
+    [
+     4294967295,
+     1
+    ]
+   ]
+  },
+  {
+   "scenario": "yawn_sleepclause",
+   "case": "base",
+   "step": 2,
+   "field": "1:0:belief_hard",
+   "value": [
+    [
+     2076147711,
+     1
+    ],
+    [
+     4294967295,
+     1
+    ]
+   ]
+  },
+  {
+   "scenario": "yawn_sleepclause",
+   "case": "base",
+   "step": 2,
+   "field": "1:0:visible_hard",
+   "value": [
+    [
+     2076147711,
+     1
+    ],
+    [
+     4294967295,
+     1
+    ]
+   ]
+  },
+  {
+   "scenario": "yawn_sleepclause",
+   "case": "base",
+   "step": 3,
+   "field": "1:0:belief_hard",
+   "value": [
+    [
+     2076147711,
+     1
+    ],
+    [
+     4294967295,
+     1
+    ]
+   ]
+  },
+  {
+   "scenario": "yawn_sleepclause",
+   "case": "base",
+   "step": 3,
+   "field": "1:0:visible_hard",
+   "value": [
+    [
+     2076147711,
+     1
+    ],
+    [
+     4294967295,
+     1
+    ]
+   ]
+  },
+  {
+   "scenario": "yawn_sleepclause",
+   "case": "base",
+   "step": 4,
+   "field": "1:0:belief_hard",
+   "value": [
+    [
+     2076147711,
+     1
+    ],
+    [
+     4294967295,
+     1
+    ]
+   ]
+  },
+  {
+   "scenario": "yawn_sleepclause",
+   "case": "base",
+   "step": 4,
+   "field": "1:0:visible_hard",
+   "value": [
+    [
+     2076147711,
+     1
+    ],
+    [
+     4294967295,
+     1
+    ]
+   ]
+  },
+  {
+   "scenario": "yawn_statused",
+   "case": "base",
+   "step": 1,
+   "field": "1:0:belief_hard",
+   "value": [
+    [
+     2076147517,
+     1
+    ],
+    [
+     4294967101,
+     1
+    ]
+   ]
+  },
+  {
+   "scenario": "yawn_statused",
+   "case": "base",
+   "step": 1,
+   "field": "1:0:visible_hard",
+   "value": [
+    [
+     2076147517,
+     1
+    ],
+    [
+     4294967101,
+     1
+    ]
+   ]
+  }
+ ]
+}

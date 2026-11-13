@@ -1,4 +1,8 @@
-"""The per-move probe's pure parts, the committed scenarios, and its Showdown side."""
+"""The per-move probe's pure parts, the committed scenarios, its Showdown side, and its device mode's pure parts.
+
+The device mode's end-to-end subset (step_with_public run eagerly, so minutes per step) is DeviceModeTests in
+tests/test_gpu_engine_effect_probe_device.py, in the extended tier; the full set runs as a pod script.
+"""
 import copy
 import json
 import os
@@ -11,6 +15,7 @@ import numpy as np
 
 from _showdown_root import requires_showdown, showdown_root
 from gpu_engine import effect_probe as probe
+from gpu_engine import effect_probe_device as device
 
 ROOT = Path(__file__).resolve().parents[1]
 NODE = os.environ.get('NODE') or shutil.which('node')
@@ -154,6 +159,179 @@ class PureTests(unittest.TestCase):
                 self.assertLessEqual(len(probe.enumerate_cases(data)), 16)
 
 
+def side_view(**mon):
+    base = dict(present=True, species='raichu', level=83, fainted=False, hp_percent=100, status='', moves=[('thunderbolt', 1)])
+    base.update(mon)
+    return dict(mons=[base] + [None] * 5, active=dict(boosts=[0] * 7, volatiles=[]),
+                side=dict(active_slot=0, moved=False, matchup={(0, 0): [0, 0]}))
+
+
+class DevicePureTests(unittest.TestCase):
+    def views(self):
+        return {0: side_view(), 1: side_view(species='snorlax'), 'field': dict(turn=1, weather='')}
+
+    def test_compare_views_keys_and_presence(self):
+        self.assertEqual(device.compare_views(self.views(), self.views()), [])
+        dev, b2 = self.views(), self.views()
+        dev[1]['mons'][0]['shown_item'] = b2[1]['mons'][0]['shown_item'] = 'whiteherb'
+        dev[1]['mons'][0]['shown_item'] = 'leftovers';dev[0]['active']['volatiles'] = ['confusion']
+        dev[0]['side']['matchup'][(0, 0)] = [1, 0];dev['field']['turn'] = 2
+        dev[0]['mons'][1] = dict(dev[0]['mons'][0])                           # a slot only the device shows
+        fields = [d['field'] for d in device.compare_views(dev, b2)]
+        self.assertEqual(fields, ['0:1:present', '0:active:volatiles', '0:matchup:0:0', '1:0:shown_item', 'field:turn'])
+        self.assertEqual([device.field_kind(f) for f in fields], ['present', 'volatiles', 'matchup', 'shown_item', 'turn'])
+
+    def test_compare_views_refuses_views_with_different_keys(self):
+        for part in ('active', 'side'):
+            dev, b2 = self.views(), self.views()
+            dev[0][part]['only_on_device'] = 1
+            with self.subTest(part=part), self.assertRaisesRegex(ValueError, 'differ in keys'):device.compare_views(dev, b2)
+        dev, b2 = self.views(), self.views();b2[1]['mons'][0]['only_in_b2'] = 1
+        with self.assertRaisesRegex(ValueError, 'differ in keys'):device.compare_views(dev, b2)
+        dev, b2 = self.views(), self.views();dev['field']['only_on_device'] = 0
+        with self.assertRaisesRegex(ValueError, 'differ in keys'):device.compare_views(dev, b2)
+
+    def test_float_fields_within_tolerance_are_numeric_notes(self):
+        dev, b2 = self.views(), self.views()
+        for v in (dev, b2):v[1]['active']['last_damage_taken'] = 0.30000001192092896
+        dev[1]['active']['last_damage_taken'] = 0.29999998211860657             # float32 30 * 0.01: one ulp low
+        numeric = []
+        self.assertEqual(device.compare_views(dev, b2, numeric), [])
+        self.assertEqual([n['field'] for n in numeric], ['1:active:last_damage_taken'])
+        dev[1]['active']['last_damage_taken'] = 0.29                             # a real difference stays a diff
+        self.assertEqual([d['field'] for d in device.compare_views(dev, b2, [])], ['1:active:last_damage_taken'])
+        dev[1]['active']['last_damage_taken'] = b2[1]['active']['last_damage_taken']
+        dev[1]['active']['boosts'] = [1] + [0] * 6                               # integers never take the ulp class
+        self.assertEqual([d['field'] for d in device.compare_views(dev, b2, [])], ['1:active:boosts'])
+
+    def test_allowlist_is_keyed_by_scenario_case_step_field_and_pinned_to_its_values(self):
+        diffs = [dict(field='1:0:hp_percent', b2=50, device=51), dict(field='1:0:status', b2='', device='par')]
+        allow = {('wrap', 'base', 3, '1:0:hp_percent'): 'reason'}
+        pins = {('wrap', 'base', 3, '1:0:hp_percent'): [50, 51]}
+        used = set()
+        open_, allowed = device.apply_allowlist('wrap', 'base', 3, diffs, used, allow, pins)
+        self.assertEqual([d['field'] for d in open_], ['1:0:status']);self.assertEqual(allowed[0]['reason'], 'reason')
+        self.assertEqual(used, set(allow))
+        for key in (('wrap', 'base', 2), ('wrap', 'other', 3), ('yawn', 'base', 3)):
+            self.assertEqual(len(device.apply_allowlist(*key, diffs, set(), allow, pins)[0]), 2)
+        # a further change at an allowlisted key, on either side, or a missing pin, stays open
+        for moved, pin in (([50, 52], pins), ([49, 51], pins), ([50, 51], {})):
+            with self.subTest(moved=moved, pinned=bool(pin)):
+                d = [dict(field='1:0:hp_percent', b2=moved[0], device=moved[1])]
+                open_, allowed = device.apply_allowlist('wrap', 'base', 3, d, set(), allow, pin)
+                self.assertEqual((len(open_), allowed), (1, []));self.assertEqual(open_[0]['reason'], 'reason')
+        # tuples and lists pin alike (the run output's JSON form)
+        moves = [dict(field='0:0:moves', b2=[('sleeptalk', 1), ('counter', 0)], device=[('sleeptalk', 1)])]
+        self.assertEqual(len(device.apply_allowlist('c', 'b', 1, moves, set(), {('c', 'b', 1, '0:0:moves'): 'r'},
+            {('c', 'b', 1, '0:0:moves'): [[['sleeptalk', 1], ['counter', 0]], [['sleeptalk', 1]]]})[1]), 1)
+        for key, reason in device.ALLOWLIST.items():
+            with self.subTest(key=key):
+                self.assertEqual(len(key), 4);self.assertTrue(reason.strip())
+                self.assertTrue((ROOT / 'gpu_engine/effect_probes' / f'{key[0]}.json').exists())
+                self.assertIn(key, device.PINS)                          # every explained mismatch carries its values
+        self.assertEqual(set(device.PINS), set(device.ALLOWLIST))       # and no pin outlives its entry
+
+    def test_b2_refusal_is_explained_only_by_its_pinned_kind_and_error(self):
+        pin = dict(kind='FOLD_ERROR', error=6)
+        self.assertTrue(device.refusal_matches(dict(kind='FOLD_ERROR', error=6, step=2), pin))
+        for other in (dict(kind='FOLD_ERROR', error=5), dict(kind='WIRE_REFUSED', line='|x', error='6'), {}):
+            self.assertFalse(device.refusal_matches(other, pin))
+        self.assertFalse(device.refusal_matches(dict(kind='FOLD_ERROR', error=6), None))
+        for key, value in device.PINS.items():
+            if key[3] == 'b2_refusal':
+                with self.subTest(key=key):self.assertEqual(set(value), {'kind', 'error'})
+
+    def test_device_compare_explains_a_refusal_only_when_every_refusing_stream_is_the_pinned_one(self):
+        key, pin = ('s', 'base', 2, 'b2_refusal'), dict(kind='FOLD_ERROR', error=6)
+        def compare(refused, allowlist={key: 'limit'}):
+            d = object.__new__(probe.Device)
+            d.dev, d.b2, d.allowlist, d.pins, d.used = device, type('B2', (), dict(refused=refused))(), allowlist, {key: pin}, set()
+            record = dict(case_id='base', device=dict(steps_compared=0, numeric=0, steps=[]))
+            d.compare({'move': 's'}, record, 2, None, None, 0, None)
+            return record['device'], d.used
+        pinned, other = dict(kind='FOLD_ERROR', error=6), dict(kind='FOLD_ERROR', error=5)
+        for refused, status in (([pinned, None], 'B2_LIMIT'), ([None, pinned], 'B2_LIMIT'), ([pinned, pinned], 'B2_LIMIT'),
+                                ([pinned, other], 'B2_REFUSED'), ([other, pinned], 'B2_REFUSED'), ([other, None], 'B2_REFUSED')):
+            with self.subTest(refused=refused):
+                result, used = compare(refused)
+                self.assertEqual((result['status'], used), (status, {key}))
+                self.assertEqual('reason' in result['refusal'], status == 'B2_LIMIT')
+        result, used = compare([pinned, None], allowlist={})
+        self.assertEqual((result['status'], used, 'reason' in result['refusal']), ('B2_REFUSED', set(), False))
+
+    def test_device_refuses_to_judge_without_its_pins_file(self):
+        original = device.PINS_PATH
+        try:
+            device.PINS_PATH = Path('/nonexistent/effect_probe_device_pins.json')
+            with self.assertRaises(FileNotFoundError):probe.Device.__init__(object.__new__(probe.Device), None, None, 1)
+        finally:device.PINS_PATH = original
+
+    def test_pins_file_refuses_another_schema_and_a_repeated_key(self):
+        import tempfile
+        row = dict(scenario='s', case='base', step=1, field='0:0:hp', value=[1, 2])
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp, 'pins.json')
+            for data, message in ((dict(schema='other', pins=[row]), 'schema'),
+                                  (dict(schema=device.PINS_SCHEMA, pins=[row, row]), 'two pins')):
+                path.write_text(json.dumps(data))
+                with self.subTest(message=message), self.assertRaisesRegex(ValueError, message):device.load_pins(path)
+            device.write_pins({('s', 'base', 1, '0:0:hp'): [1, 2]}, path)
+            self.assertEqual(device.load_pins(path), {('s', 'base', 1, '0:0:hp'): [1, 2]})
+        # the committed file round-trips through the writer byte for byte
+        with tempfile.TemporaryDirectory() as tmp:
+            device.write_pins(device.PINS, Path(tmp, 'pins.json'))
+            self.assertEqual(Path(tmp, 'pins.json').read_text(), device.PINS_PATH.read_text())
+
+    def test_recording_pins_takes_each_allowlisted_value_and_refuses_anything_else(self):
+        import importlib.util, tempfile
+        spec = importlib.util.spec_from_file_location('record_pins', ROOT / 'scripts/record_effect_probe_device_pins.py')
+        record = importlib.util.module_from_spec(spec);spec.loader.exec_module(record)
+        allow = {('s', 'base', 1, 'f'): 'bug', ('s', 'base', 2, 'f'): 'bug', ('s', 'r', 3, 'b2_refusal'): 'limit',
+                 ('t', 'base', 0, 'f'): 'bug'}
+        diff = lambda b2, dv: dict(field='f', b2=b2, device=dv)
+        run = dict(move='s', results=[
+            dict(case_id='base', device=dict(steps=[dict(step=1, diffs=[diff((1, 2), [1, 3])], allowlisted=[]),
+                                                    dict(step=2, diffs=[], allowlisted=[diff(4, 5)])])),
+            dict(case_id='r', device=dict(steps=[], refusal=dict(kind='FOLD_ERROR', error=6, step=3)))])
+        existing = {('t', 'base', 0, 'f'): [0, 1], ('gone', 'base', 0, 'f'): [0, 1]}
+        with tempfile.TemporaryDirectory() as tmp:
+            def run_with(data):
+                Path(tmp, 's.json').write_text(json.dumps(data))
+                return record.record([str(Path(tmp, 's.json'))], allowlist=allow, existing=existing)
+            pins, problems = run_with(run)
+            self.assertEqual(problems, [])
+            self.assertEqual(pins, {('s', 'base', 1, 'f'): [[1, 2], [1, 3]], ('s', 'base', 2, 'f'): [4, 5],
+                                    ('s', 'r', 3, 'b2_refusal'): dict(kind='FOLD_ERROR', error=6), ('t', 'base', 0, 'f'): [0, 1]})
+            bad = copy.deepcopy(run);bad['results'][0]['device']['steps'][0]['diffs'].append(dict(field='g', b2=0, device=1))
+            self.assertIn("open diff outside the allowlist at ('s', 'base', 1, 'g')", run_with(bad)[1])
+            bad = copy.deepcopy(run);bad['results'][1]['device']['refusal']['other_streams'] = [dict(kind='FOLD_ERROR', error=5, step=3)]
+            self.assertTrue(any('streams refuse differently' in p for p in run_with(bad)[1]))
+            bad = copy.deepcopy(run);del bad['results'][0]['device']['steps'][1]
+            self.assertIn("allowlist entry with no pin: ('s', 'base', 2, 'f')", run_with(bad)[1])
+
+    def test_name_keeps_an_out_of_range_id_visible(self):
+        self.assertEqual([device._name(['_none', 'Leftovers'], i) for i in (0, -1, 1, 2, 7)], ['', '', 'leftovers', '?2', '?7'])
+
+    def test_device_judge_accepts_exact_and_explained_b2_limits_only(self):
+        rec = lambda status, diffs=(), equal=True: dict(case_id='c', device=dict(status=status, state_equal=equal,
+            steps=[dict(diffs=list(diffs), allowlisted=[], numeric=[])]))
+        self.assertTrue(probe.judge_device([rec('EXACT'), rec('B2_LIMIT')])[0])
+        for bad in (rec('MISMATCH', [dict(field='0:0:hp_percent')]), rec('B2_REFUSED'), rec('EXACT', equal=False),
+                    rec('NOT_COMPARED')):
+            with self.subTest(bad=bad['device']['status']):self.assertFalse(probe.judge_device([rec('EXACT'), bad])[0])
+
+    def test_wire_lines_percent_and_field_tables(self):
+        lines = ['|tier|[Gen 3] Custom Game', '|debug|x', '|raw|<div>1 custom rule</div>', '|move|p1a: A|Splash|p1a: A', '|-nothing',
+                 '|turn|1']
+        self.assertEqual(device.wire_lines(lines), [device.TIER_LINE, '|move|p1a: A|Splash|p1a: A', '|turn|1'])
+        self.assertEqual([device._percent(n, d) for n, d in ((0, 0), (253, 253), (252, 253), (1, 253), (37, 100))], [0, 100, 99, 1, 37])
+        names = [f[0] for f in device.FIELDS]
+        self.assertEqual(len(names), len(set(names)))
+        self.assertTrue({'shown_item', 'item_removed', 'item_mutated', 'item_original', 'boosts'} <= set(names))
+        left = {n.strip() for key in device.LEFT_OUT for n in key.split(',')}
+        self.assertFalse(left & set(names))
+
+
 @requires_showdown()
 @unittest.skipUnless(NODE, 'requires node')
 class ShowdownSideTests(unittest.TestCase):
@@ -183,6 +361,27 @@ class ShowdownSideTests(unittest.TestCase):
             self.assertIn('secondary', [e['role'] for e in first['audit'] if e['kind'] == 'COUPLED'])
             bad = sd.ask(cmd='step', tapes=tapes, choices=[['move 1', None]] * 2, live=[True, False])
             self.assertIn('SCRIPT_MISSING_CHOICE', bad['results'][0]['error']);self.assertIsNone(bad['results'][1])
+        finally:
+            sd.close()
+
+    def test_device_channels_are_each_players_stream_with_shared_percent(self):
+        sd = probe.Showdown(NODE, showdown_root())
+        try:
+            data = probe.load_scenario(ROOT / 'gpu_engine/effect_probes/thunderbolt.json')
+            prepared = sd.ask(cmd='prepare', teams=data['teams'])
+            started = sd.ask(cmd='start', format=data['format'], seed=data['seed'], cases=1, sets=prepared['sets'], device=True)
+            p1, p2 = started['channels'][0]
+            self.assertIn('|turn|1', p1);self.assertIn('|turn|1', p2)
+            self.assertFalse(any(line.startswith('|split|') for line in p1 + p2))
+            mine = [x for x in p1 if x.startswith('|switch|p1a:')];theirs = [x for x in p2 if x.startswith('|switch|p1a:')]
+            self.assertNotEqual(mine[0].rsplit('|', 1)[1], '100/100')            # p1's own exact HP (the split's secret)
+            self.assertTrue(theirs[0].endswith('|100/100'))                     # HP Percentage Mod's shared percent
+            tape, _ = probe.step_inputs(data, dict(assignment=dict(par=0, full_para=99)), 0)
+            reply = sd.ask(cmd='step', tapes=[dict(schema=probe.TAPE_SCHEMA, nonce='t:0', **tape)], choices=[['move 1', 'move 1']],
+                           live=[True])
+            p1, p2 = reply['results'][0]['channels']
+            self.assertIn('|turn|2', p1);self.assertNotIn('|turn|1', p1)          # only the step's new lines
+            self.assertTrue(any(x.startswith('|-damage|p2a:') and x.endswith('/100') for x in p1))
         finally:
             sd.close()
 
