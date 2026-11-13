@@ -69,22 +69,19 @@ dict keys and leaves two members None). This module turns prepared roots into De
     That rule is the env's pending flag: a passer that faints to Pursuit before its recipient arrives leaves the flag
     set, so the env and the fill mark the next switch a Baton Pass arrival where the device (no baton_copy) may not;
     very rare.
-  - roots whose opponent must recharge are REFUSED, OPPONENT_RECHARGE_UNREPRESENTED (the lead's decision): the GPU engine has
-    no recharge or locked-move state, so a world would let the recharging opponent act on its recharge turn. The facts are
-    line_facts' recharge for the peer side (B2's rule, below); prepare_roots refuses such a root before completing or
-    pricing it (a RootRefusal, constructor-root:OPPONENT_RECHARGE_UNREPRESENTED:..., counted constructor_refused) and
-    build refuses one it is handed with the same reason. The live actor then plays greedy. The owner's own recharge turn
-    is single-legal (the request offers only the recharge pseudo-move) and is never sent.
+  - a recharging active's counter (fix_recharge, on the world STATE, both sides): since fidelity M1 the engine models the
+    recharge turn (recharge_counter = Showdown's volatiles.mustrecharge.duration: 2 after the Hyper Beam hit, 1 after that
+    turn's residual; a recharging side's only action is the Recharge row and it cannot switch). The lines carry B2's rule
+    (-mustrecharge sets it; the side's |cant| recharge, arrival or faint clears it) and the |upkeep| lines count the
+    residuals since (line_facts' recharge_counter), so the counter is written on that side's active: no root is refused
+    for an opponent's recharge any more (OPPONENT_RECHARGE_UNREPRESENTED, the pre-M1 refusal, is kept as a name for old
+    rows only). The owner's own recharge turn is single-legal (the request offers only the recharge pseudo-move) and is
+    never sent.
   - a recharging active (fill_recharge): B2 holds "must recharge" beside its volatile bag and merges it in only when it
     encodes, so from_b2's copy of the bag lacked it and the encoder showed no volatile:mustrecharge (15 owner-view roots of
     the 160-battle replay: a Hyper Beam user's next decision). The lines carry B2's rule (-mustrecharge sets it; the side's
-    |cant| recharge, arrival or faint clears it), so the bit is set on that side's active, both sides. In search: no
-    device hook writes or clears the bit and the engine has no recharge turn, so at every node after the root it stays set
-    on that Pokemon while it stays in (the install hook's bag reset clears it on a switch), whether or not it would still
-    have to recharge there. With the refusal above the fill is inert for every priced root: the opponent's recharge refuses
-    the root before completion, and the owner's recharge turn is never searched. It is kept (not removed) for the
-    opponent-view parity harness (scripts/depthn_opponent_view_parity.py), which runs complete_carry on the worlds of every
-    captured position, refused roots included, and compares their views with B2's and the env's.
+    |cant| recharge, arrival or faint clears it), so the bit is set on that side's active, both sides. In search the device
+    clears it with the counter (M1's recharge_turn hook, an arrival or a faint).
   - the peer's count of the owner's PP (fill_peer_pressure): from_b2 copies B2's uses, which charge an owner move twice only
     against a PUBLIC Pressure (public_abilities.move_context); Gen 3 Pressure is silent, and the peer knows its own
     ability, so the device move hook (the receiving observer's own active ability) and the env charge twice whenever the
@@ -556,6 +553,7 @@ class LineFacts:
     peer_damage:object=None        # PeerDamage (line_facts(..., peer_damage=True)); None: not read (the flag off)
     peer_belief:object=None        # PeerBelief (prepare_roots, the redaction on, a private reveal applicable); None otherwise
     knocked:tuple=((),())          # per side (p1, p2): (species, item) of each member whose item Knock Off removed (line_facts)
+    recharge_counter:tuple=(0,0)   # per side (p1, p2): its active's remaining recharge count, 2 or 1 (0: none; line_facts)
 
 
 def _seat_name(field):
@@ -582,16 +580,18 @@ def line_facts(lines,owner,*,peer_damage=False):
     tracers={'p1':set(),'p2':set()};private=set();public=set()   # (seat, species, ability): side-private / public ability lines
     knocked={'p1':{},'p2':{}}   # species -> the item Knock Off removed (the first: a knocked-off item is gone for good)
     member=lambda seat,name:species.get((seat,name))or normalize_id(name)
+    count={'p1':0,'p2':0}   # recharge_counter: 2 at -mustrecharge, -1 at each residual's |upkeep|, 0 when cleared
     for line in lines:
         parts=str(line).split('|')
+        if parts[1:2]==['upkeep']:count={seat:max(0,n-1)for seat,n in count.items()}
         if len(parts)<3 or parts[0]!='':continue
         kind=parts[1];seat,name=_seat_name(parts[2]);tags=[x.strip().lower()for x in parts[4:]]
         if len(parts)>=4 and seat in active:
             for found in _ability_attributions(kind,seat,member(seat,name),parts,tags,member):
                 (private if found[0]=='private'else public).add(found[1:])
-        if kind=='faint'and seat in alive:alive[seat]=recharge[seat]=False   # |faint|IDENT: three fields
-        if kind=='-mustrecharge'and seat in recharge:recharge[seat]=True   # |-mustrecharge|IDENT
-        if kind=='cant'and seat in recharge and len(parts)>3 and normalize_id(parts[3])=='recharge':recharge[seat]=False
+        if kind=='faint'and seat in alive:alive[seat]=recharge[seat]=False;count[seat]=0   # |faint|IDENT: three fields
+        if kind=='-mustrecharge'and seat in recharge:recharge[seat]=True;count[seat]=2   # |-mustrecharge|IDENT
+        if kind=='cant'and seat in recharge and len(parts)>3 and normalize_id(parts[3])=='recharge':recharge[seat]=False;count[seat]=0
         if len(parts)<4:continue
         if kind=='-enditem'and seat in knocked and '[from] move: knock off'in tags:   # |-enditem|X|Item|[from] move: Knock Off|[of] Y
             knocked[seat].setdefault(member(seat,name),normalize_id(parts[3]))
@@ -610,7 +610,7 @@ def line_facts(lines,owner,*,peer_damage=False):
             (running_pressure if any(t.startswith('[from] ability: trace')for t in tags)else original_pressure).add(target)
         if kind in SWITCH_KINDS and seat in active:
             arrived=normalize_id(parts[3].split(',')[0]);species[(seat,name)]=arrived;active[seat]=arrived;alive[seat]=True
-            transformed.discard(seat);running_pressure.discard(arrived);recharge[seat]=False
+            transformed.discard(seat);running_pressure.discard(arrived);recharge[seat]=False;count[seat]=0
             baton[seat]=kind=='switch'and(seat in pending or any('baton pass'in t for t in tags));pending.discard(seat)
         if kind in SWITCH_KINDS:
             if seat==peer:switches.append(normalize_id(parts[3].split(',')[0]))
@@ -628,7 +628,8 @@ def line_facts(lines,owner,*,peer_damage=False):
     hidden=tuple(sorted((who,ability)for side,who,ability in private if side==own and(side,who,ability)not in public))
     return LineFacts(tuple(switches),tuple(spikes)if complete else None,(baton['p1'],baton['p2']),tuple(moves),(recharge['p1'],recharge['p2']),
         (tuple(sorted(tracers['p1'])),tuple(sorted(tracers['p2']))),(hidden,())if own=='p1'else((),hidden),
-        knocked=tuple(tuple(sorted(knocked[seat].items()))for seat in('p1','p2')))
+        knocked=tuple(tuple(sorted(knocked[seat].items()))for seat in('p1','p2')),
+        recharge_counter=tuple(count[seat]if recharge[seat]else 0 for seat in('p1','p2')))
 
 
 def _ability_attributions(kind,seat,subject,parts,tags,member):
@@ -839,13 +840,26 @@ def fill_baton(public,facts):
     return public if np.array_equal(new,last)else public._replace(last_moves=jnp.asarray(new))
 
 
+def fix_recharge(state,facts):
+    """The world STATE with each recharging side's active recharge_counter written (facts.recharge_counter, both sides): the
+    engine's M1 counter is Showdown's volatiles.mustrecharge.duration (2 after the Hyper Beam hit, -1 at each residual), so 2
+    before that turn's residual (a replacement boundary) and 1 after it. A state without the counter (pre-M1 layout) is
+    returned as is; nothing to write is the same state."""
+    if facts is None or not any(facts.recharge_counter)or not hasattr(state,'recharge_counter'):return state
+    counter=_host(state.recharge_counter);active=_host(state.active);new=counter.copy()
+    for side,n in enumerate(facts.recharge_counter):
+        at=int(active[0,side])
+        if n and 0<=at<6:new[0,side,at]=n
+    return state if np.array_equal(new,counter)else state._replace(recharge_counter=jnp.asarray(new,state.recharge_counter.dtype))
+
+
 def fill_recharge(public,facts):
     """The public carry with the mustrecharge volatile set on each side's active that must recharge (facts.recharge). B2 keeps
     that fact in its own flag beside the volatile bag (public_active.ActiveState.recharge, merged into the bag only when it
     encodes: public_active.project, `bag=state.volatiles.at[...,RECHARGE_ID].set(state.recharge)`), so from_b2's copy of the
-    bag (phase_d_live_worlds.py:311) drops it and the encoder showed no volatile:mustrecharge where B2 does. No device hook
-    writes or clears the bit and the engine models no recharge turn, so at every in-search node after the root the bit stays
-    set on that Pokemon while it stays in (the install hook's bag reset clears it on a switch)."""
+    bag (phase_d_live_worlds.py:311) drops it and the encoder showed no volatile:mustrecharge where B2 does. In search the
+    device clears it with M1's counter (the recharge_turn hook, an arrival, a faint); fix_recharge writes that counter on
+    the world state. A silent expiry leaves the bit set with the counter 0, as B2 does."""
     from .public_active import NAMES
     b=_trackers(public)
     if facts is None or not any(facts.recharge):return public
@@ -865,7 +879,7 @@ def fill_item_ledger(public,facts,tables):
     sides), as the device path and B2 hold it after the same -enditem line: mon_features['item_mutated'][side, slot] = 1 and,
     when that member's ledger is fresh (item_mutated and item_original both 0), item_original[side, slot] = the engine item id of
     the removed item (tables.item_names). `slot` is the member's public slot (the carry's species, joined as fix_knocked_items
-    joins). The rule is the device knock_off hook's (engine_device_public_hooks.py:538-544: fresh = item_mutated == 0 and
+    joins). The rule is the device knock_off hook's (engine_device_public_hooks.py:562-566: fresh = item_mutated == 0 and
     item_original == 0; item_original = the item held before the hit when fresh; item_mutated = 1) and B2's REMOVE
     (public_items.py:185, a -enditem line tagged [from] move: Knock Off is REMOVE; public_items.py:130-138: REMOVE sets mutated,
     and own_removal = REMOVE, not yet mutated and no recorded original, records the removed item as the original). Both ledgers
@@ -997,7 +1011,7 @@ def fix_knocked_items(state,owner,facts,tables):
     """The world state with item_knocked[0, side, p] set for each member the lines show knocked off (facts.knocked, both sides):
     A2's engine leaf (gpu_engine/state.py: pokemon.itemKnockedOff, never reset), which Showdown's Gen 3 Knock Off sets on the
     target whose item it removes (data/mods/gen4/moves.ts:700-701 at f76228a13) and the engine's own Knock Off sets on the same
-    hit (transition.py:1844-1847). Its only engine reader is Trick's Gen 3-4 failure check (transition.py:1579; Showdown's
+    hit (transition.py:2000-2003). Its only engine reader is Trick's Gen 3-4 failure check (transition.py:1683; Showdown's
     sim/pokemon.ts:1853 takeItem: gen <= 4 and either mon's itemKnockedOff): without it an in-tree Trick on that member succeeds
     where Showdown fails. from_b2 and the materializer predate the leaf and leave it False. Members join by normalized species,
     as fix_trace_base_ability joins (the owner's side: the request's party; the peer's: this world's party, whose revealed
@@ -1355,7 +1369,7 @@ def complete_carry(state,public,tables,owner,*,facts=None,root=None,redact_priva
     the carry against the CORRECTED state (fill_peer_pressure reads the peer's base abilities: a Trace holder running a
     copied Pressure has Trace as its own ability, so earlier moves against it are not recharged, and a second pass, which
     sees the corrected state, gives the same carry)."""
-    fixed=fix_knocked_items(fix_trace_base_ability(fix_peer_base_ability(state,public,owner),owner,facts,tables),owner,facts,tables)
+    fixed=fix_recharge(fix_knocked_items(fix_trace_base_ability(fix_peer_base_ability(state,public,owner),owner,facts,tables),owner,facts,tables),facts)
     view_b={'peer_view_b':True}if peer_view_b else{}
     return fixed,complete_public(fixed,public,tables,owner,facts=facts,root=root,redact_private_reveals=redact_private_reveals,**view_b)
 
@@ -1570,8 +1584,6 @@ def prepare_roots(constructor,protocol_requests,*,start_index=0,device='cpu',red
             if complete is None:complete=world_completer(constructor)
             lines=request.get('lines')if isinstance(request,dict)else None
             facts=None if lines is None else line_facts(lines,detached.address.owner,**({'peer_damage':True}if peer_view_b else{}))
-            if facts is not None and facts.recharge[1-detached.address.owner]:   # module docstring: never priced
-                out.append(RootRefusal(rid,OPPONENT_RECHARGE,OPPONENT_RECHARGE_DETAIL,time.perf_counter()-clock,stamp));continue
             view_b=None
             if peer_view_b:   # read from the root's own carry, inside the refusal net: view b on is never priced without it
                 try:
@@ -1725,9 +1737,6 @@ def build(constructor,prepared,pricer,params,*,binding,recipe,learner_actor=0,op
                 or tuple(w.index for w in made.worlds)!=tuple(range(W))):
             raise ValueError('a world set of the declared budget, worlds 0..W-1, for its own root required')
         if detached.source_binding_sha256!=binding.source_binding_sha256:raise ValueError('root source binding differs from the pricer\'s')
-        if item.facts is not None and item.facts.recharge[1-detached.address.owner]:   # a Prepared made elsewhere: module docstring
-            roots.append(dict(base,status='REFUSED',reason=_constructor_reason(OPPONENT_RECHARGE,OPPONENT_RECHARGE_DETAIL),constructed=0,
-                refused_worlds=None,refused_world_share=None));continue
         if complete is None:complete=world_completer(constructor)
         # A world without a state always names its refusal, so it stays this root's refusal (the pricer refuses the frame otherwise).
         try:worlds=tuple(_complete(complete,w,detached.address.owner,item.facts,getattr(detached,'public',None),_redacting(item),_projecting(item))

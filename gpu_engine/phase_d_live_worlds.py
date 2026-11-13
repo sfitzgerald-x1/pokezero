@@ -27,7 +27,7 @@ from pokezero.v5_gumbel import Recipe
 from . import device_public_worlds as original, device_public_world_state as materializer
 from . import engine_device_trackers as trackers, engine_device_public_hooks as hooks
 from . import engine_device_public_port as port, engine_device_damage_history as damage
-from .state import empty_state, LEECH_SEED, ROOTED
+from .state import empty_state, LEECH_SEED, ROOTED, DESTINY_BOND
 
 SCHEMA = 'pokezero.phase-d.live-public-worlds.v1'
 STATUS = (0, 5, 1, 2, 6, 3, 4)
@@ -337,7 +337,11 @@ def from_b2(adapter, request, source, metadata, *, address, defer_sleep=False, p
     replacement=protocol_facts is not None and protocol_facts['replacement'] is not None
     fresh=protocol_facts.get('fresh_substitutes',{}) if protocol_facts is not None else {}
     own_species=normalize_id(v['species'][int(own['species'][own_slot])])
-    allowed = {'', 'leechseed', 'ingrain', 'trapped'}
+    # Engine-held public volatiles (fidelity A2/M2). Destiny Bond's flag rides the own volatile below on every route.
+    # Perish Song's and Yawn's counts are not own fields: only the protocol world writes them (map_spec held_volatiles,
+    # _write_held_counts), so they are admitted only on that route (protocol_facts); elsewhere they still refuse.
+    allowed = {'', 'leechseed', 'ingrain', 'trapped', 'destinybond'}
+    if protocol_facts is not None:allowed |= {'perish1', 'perish2', 'perish3', 'yawn'}
     if fresh.get('p'+str(owner+1))==own_species:
         allowed.add('substitute');hp_slot=own_slot
         origin=(protocol_facts.get('substitute_origins') or {}).get('p'+str(owner+1))
@@ -354,7 +358,7 @@ def from_b2(adapter, request, source, metadata, *, address, defer_sleep=False, p
     own['protect_counter'][own_slot] = _physical_protect_counter(mon_features['stall_counter'][0,owner,pub_slot])
     own['status_counter'][own_slot] = _physical_toxic_counter(mon_features['toxic_stage'][0,owner,pub_slot]) if own['status'][own_slot] == 4 else 0
     own['ability'][own_slot] = running[0,owner,pub_slot] or own['ability'][own_slot]
-    for name, bit in (('leechseed',LEECH_SEED),('ingrain',ROOTED)):
+    for name, bit in (('leechseed',LEECH_SEED),('ingrain',ROOTED),('destinybond',DESTINY_BOND)):
         if name in own_vols:own['volatile'][own_slot] |= bit
     # Trap link names the current opposing active in the sampled physical map;
     # the existing materializer rebases this link using the retained public fact.

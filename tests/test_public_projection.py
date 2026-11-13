@@ -2498,11 +2498,15 @@ class SetClosureTests(unittest.TestCase):
         `-setboost` were not, and both survived deletion: an unpinned `-setboost`
         folds Belly Drum's `atk 6` to 0.
 
+        `-clearnegativeboost` IS reachable in gen 3 (White Herb's onUse prints it
+        after its `-enditem`; fidelity WH renders it) and is pinned behaviourally
+        below: only the negative stages go to 0.
+
         NOT pinned behaviourally, and disclosed rather than faked:
-        `-clearnegativeboost` and `-invertboost` do not exist in gen 3, and the
-        fold's treatment of them (zero everything) is an approximation of what
-        they mean. Asserting today's output for them would cement the
-        approximation as a claim. They are held by the lexical pin above.
+        `-invertboost` does not exist in gen 3, and the fold's treatment of it
+        (zero everything) is an approximation of what it means. Asserting today's
+        output for it would cement the approximation as a claim. It is held by
+        the lexical pin above.
         """
 
         from pokezero.public_projection import fold_lines_onto_summary
@@ -2540,6 +2544,16 @@ class SetClosureTests(unittest.TestCase):
             )
             self.assertEqual(0, folded["p2"]["boosts"]["atk"])
             self.assertEqual(2, folded["p1"]["boosts"]["atk"])
+
+        with self.subTest(tag="-clearnegativeboost", pins="only the negative stages"):
+            # The effect probe wh_sd_superpower: +1 Atk / -1 Def after Swords Dance
+            # and Superpower, then White Herb: +1 Atk / 0 Def, the other side untouched.
+            folded = fold_lines_onto_summary(
+                _summary(atk=1, **{"def": -1}),
+                ["|-enditem|p2a: Zigzagoon|White Herb", "|-clearnegativeboost|p2a: Zigzagoon|[silent]"],
+            )
+            self.assertEqual((1, 0), (folded["p2"]["boosts"]["atk"], folded["p2"]["boosts"]["def"]))
+            self.assertEqual((1, -1), (folded["p1"]["boosts"]["atk"], folded["p1"]["boosts"]["def"]))
 
         with self.subTest(tag="-clearallboost", pins="BOTH sides -- the Haze pin"):
             folded = fold_lines_onto_summary(

@@ -449,15 +449,13 @@ class LiveSearchTests(unittest.TestCase):
             self.assertEqual(after[0]['status'],'COMPLETE')
         self.assertEqual(calls,['x','g','y','h'])
 
-    def test_a_root_whose_opponent_must_recharge_is_constructor_refused(self):
-        """The lead's decision: the peer's -mustrecharge on the owner's lines refuses the root in prepare_roots (cause
-        constructor_refused, refusal constructor-root:OPPONENT_RECHARGE_UNREPRESENTED:...); the owner's own does not."""
+    def test_a_root_whose_opponent_must_recharge_is_searched(self):
+        """Since fidelity M1 the engine models the recharge turn: the peer's -mustrecharge on the owner's lines no longer refuses
+        the root (the pre-M1 OPPONENT_RECHARGE_UNREPRESENTED); it is searched like the owner's own."""
         s=self.search();beam=lambda seat:(f'|move|{seat}a: Snorlax|Hyper Beam|{"p2"if seat=="p1"else"p1"}a: Snorlax',f'|-mustrecharge|{seat}a: Snorlax')
         outcomes={('peer',0):self.outcome(0),('own',0):self.outcome(1)}
         rows,_=self.run_batch(s,[request('peer',0,before=beam('p2')),request('own',0,before=beam('p1'))],outcomes)
-        self.assertEqual([(r['status'],r['cause'])for r in rows],[('REFUSED','constructor_refused'),('COMPLETE',None)])
-        self.assertEqual(rows[0]['refusal'],'constructor-root:OPPONENT_RECHARGE_UNREPRESENTED:'+cw.OPPONENT_RECHARGE_DETAIL)
-        self.assertEqual((rows[0]['constructed_worlds'],rows[0]['world_refusals']),(0,[]))
+        self.assertEqual([(r['status'],r['cause'])for r in rows],[('COMPLETE',None),('COMPLETE',None)])
 
     def test_depthn_refusals(self):
         s=self.search();empty=self.outcome(1);empty=empty[:2]+((False,)*9,)
