@@ -60,9 +60,10 @@ whose replay.status is COMPLETE (root logits and legal mask and every world's gr
   (carried_effects' marker rules: -mustrecharge, -activate ... move: Wrap, -start ... perishN, -start ... move: Yawn, -singlemove
   ... Destiny Bond, -transform, -item ... Choice Band [from] move: Trick; a switch, drag or faint of that side clears it, as do the
   end markers). The constructor refuses roots after a Transform (phase_d_live_worlds.py:278-279) or a public item swap
-  (phase_d_protocol_world.py:105-107), and roots holding a partial trap, a drowsy or a perish count (the rows' live-root evidence),
-  so their (d) among priced roots should be zero; the others (a recharge turn, a held Destiny Bond) are refused or single-legal as
-  their rows say.
+  (phase_d_protocol_world.py:105-107), and roots holding a partial trap (the row's live-root evidence), so their (d) among priced
+  roots should be zero. Since #1949 roots holding an opponent's recharge, a Destiny Bond, a drowsy or a perish count are built
+  with that state (their rows' live-root evidence), so their (d) among priced roots can be nonzero; the owner's own recharge turn
+  stays single-legal.
 - Coverage: |(b) or (c)| over priced roots; <= --decision-share (2%) is NAMED_RESIDUAL, else ESCALATE. The `extended` line also
   counts (b1) under (b) (the opponent using E at turn 1, which neither (b) nor (c) sees), informational.
 
@@ -140,8 +141,8 @@ EFFECTS = (
          'Showdown data/conditions.ts:364-378: mustrecharge cancels the next move (onBeforeMovePriority 11) and is onLockMove recharge; '
          'sim/pokemon.ts:1085-1088: a locked move sets trapped, so the recharge turn has no switch',
          'in-tree since M1 (8b212312): gpu_engine/state.py:87 recharge_counter; transition.py:840-845 the recharge turn',
-         'live roots: gpu_engine/constructor_worlds.py:1573-1574 (prepare_roots) and 1728-1729 (build) an opponent that must '
-         'recharge is refused (OPPONENT_RECHARGE_UNREPRESENTED, constructor_worlds.py:485); the owner\'s recharge turn is single-legal (the phase-D '
+         'live roots: since #1949 an opponent that must recharge is built with its counter (gpu_engine/constructor_worlds.py:843 '
+         'fix_recharge; the pre-M1 OPPONENT_RECHARGE_UNREPRESENTED name, constructor_worlds.py:482, is kept for old rows); the owner\'s recharge turn is single-legal (the phase-D '
          'mapper refuses a live mustrecharge too: future_state.py:476, RECHARGE_UNREPRESENTED)'),
         'Only Slaking carries it, and Slaking\'s one ability is Truant: a residual clock in Gen 3 (Showdown data/mods/gen3/abilities.ts:'
         '197-212) the engine models (state.py:84 truant_loaf, transition.py:641-643 and 851-852). In-tree since M1 the recharge turn '
@@ -159,9 +160,9 @@ EFFECTS = (
          'probes: 12 wrap* scenarios (20 cases), EXACT against Showdown f76228a1 at M2 + R1 (3e0878e4); each gated position fails a '
          'named probe when dropped (#1930 (M2 + R1) PR body, R1 section, position -> probe table: 4 wrap and seven more, 8 and 9 '
          'wrap_tie, 11 wrap_trapper_faint and wrap_trapper_switch)',
-         'live roots: a held partial trap is refused: an own-held one is refused first (gpu_engine/phase_d_live_worlds.py:350-351, OWN_VOLATILE_OR_LATENT_CLOCK_UNAVAILABLE); '
+         'live roots: a held partial trap is refused (its 3-6 turn count is hidden): an own-held one is refused first (gpu_engine/phase_d_live_worlds.py:354-355, OWN_VOLATILE_OR_LATENT_CLOCK_UNAVAILABLE); '
          'an opponent-held one because the protocol world is built with '
-         'approximate_partial_trap_turns=False (gpu_engine/phase_d_protocol_world.py:306-307), so pokezero.engine_world raises '
+         'approximate_partial_trap_turns=False (gpu_engine/phase_d_protocol_world.py:359-360), so pokezero.engine_world raises '
          'volatile_unsupported'),
         'Shuckle (Staller) only. In-tree since M2 the trap and its residual chip are modelled; a root already holding a partial trap '
         'is refused.', engine_since='f3e71663'),
@@ -173,10 +174,10 @@ EFFECTS = (
          'order-10 list, faster side first, an equal-Speed pair on a drawn effect bit, the count and the faint at 0 (not gated by R1)',
          'probes: 10 perishsong* scenarios (perishsong, _tie, _last_faster, _baton, _switch, _meanlook, _soundproof, _soundproof_user, '
          '_protect_sub, _reuse), EXACT against Showdown f76228a1 at M2 + R1 (3e0878e4)',
-         'live roots: a held perish count is refused: an own-held one is refused first (gpu_engine/phase_d_live_worlds.py:350-351, OWN_VOLATILE_OR_LATENT_CLOCK_UNAVAILABLE); '
-         'an opponent-held one passes pokezero.engine_world and is refused '
-         'by the protocol world\'s typed mapper (gpu_engine/phase_d_protocol_world.py:319-323 -> v5_hypothetical_state.py:46: any '
-         'volatile but leechseed, substitute and truant, volatile:<seat>); '
+         'live roots: since #1949 a held perish count is built (both sides): the protocol world\'s typed mapper writes the shown count '
+         '(gpu_engine/phase_d_protocol_world.py:372 -> v5_hypothetical_state.py:108, held_volatiles) and the protocol world writes '
+         'Showdown\'s duration, 4 for the silent perish3 of the Song\'s own turn, carried across a Baton Pass '
+         '(gpu_engine/phase_d_protocol_world.py:197-226); an own-held one only on the protocol route (gpu_engine/phase_d_live_worlds.py:343-344); '
          'gpu_engine/public_active.py:46, 217-233 keeps the public counts for the encoder'),
         'Misdreavus (Staller), the set that also carries Mean Look (a represented trap).', engine_since='f3e71663'),
     Effect('drowsy', ('yawn',), ('swalot',), False, '',
@@ -189,17 +190,17 @@ EFFECTS = (
          'probes: 11 yawn* scenarios, EXACT against Showdown f76228a1 at M2 + R1 (3e0878e4); each gated position fails a named probe '
          'when dropped (#1930 (M2 + R1) PR body, R1 section, position -> probe table: 6 yawn_faster, added because no earlier probe '
          'reached it; 12 yawn_tie; 13 yawn and six more)',
-         'live roots: a held drowsy is refused: an own-held one is refused first (gpu_engine/phase_d_live_worlds.py:350-351, OWN_VOLATILE_OR_LATENT_CLOCK_UNAVAILABLE); '
-         'an opponent-held one because the protocol world is built with '
-         'approximate_hidden_duration_volatiles=False (gpu_engine/phase_d_protocol_world.py:306-307), so pokezero.engine_world '
-         'raises volatile_unsupported'),
+         'live roots: since #1949 a held drowsy is built (both sides): the protocol world takes yawn out of the payload the CPU '
+         'materializer sees and writes yawn_counter, 2 before the Yawn turn\'s residual and 1 after it '
+         '(gpu_engine/phase_d_protocol_world.py:176-194, 215-226); an own-held one only on the protocol route (gpu_engine/phase_d_live_worlds.py:343-344)'),
         'Swalot (Bulky Attacker) only.', engine_since='f3e71663'),
     Effect('destiny_bond', ('destinybond',), ('banette', 'gengar', 'qwilfish', 'wobbuffet'), False, '',
         'a KO of the user by a move takes its attacker down, until the user moves again (so into the next turn)',
         ('Showdown data/moves.ts:3479-3520: the destinybond volatile ends only at the user\'s next move (onBeforeMove)',
          'in-tree since A2 (286a5ffe): gpu_engine/state.py:21 DESTINY_BOND; effects.py:46; transition.py:832-836 its end at the '
          'holder\'s next move',
-         'live roots: gpu_engine/phase_d_live_worlds.py:350-351 a bonded own active is refused (OWN_VOLATILE_OR_LATENT_CLOCK_UNAVAILABLE)'),
+         'live roots: since #1949 a bonded active is built with the DESTINY_BOND bit: our own by gpu_engine/phase_d_live_worlds.py:361, '
+         'the opponent\'s by the protocol world\'s typed mapper (gpu_engine/v5_hypothetical_state.py:106, held_volatiles)'),
         'Gengar, Wobbuffet, Qwilfish, Banette.', engine_since='286a5ffe'),
     Effect('transform', ('transform',), ('ditto', 'mew'), False,
         'request_source_rules.cjs:65-66 transform is a missing origin -> engine_request_source.py:380',

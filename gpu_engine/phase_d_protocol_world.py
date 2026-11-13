@@ -173,6 +173,58 @@ def _defer_sleep(payload):
     return projected,tuple(sleepers)
 
 
+def _defer_yawn(payload,lines):
+    """The payload without its public Yawn volatiles, and (side, count) for each side whose active holds one.
+
+    Showdown's Yawn (data/moves.ts: volatileStatus yawn, duration 2) starts at |-start|<target>|move: Yawn in a move phase;
+    each residual decrements the duration (sim/battle.ts residualEvent, the |upkeep| that ends it) and at 0 the holder
+    falls asleep. The count is therefore 2 before that turn's residual (a replacement boundary) and 1 after it: public,
+    with no hidden roll. The engine holds it as yawn_counter (fidelity M2, the same duration), so the protocol world
+    writes it there instead of passing a clock the CPU materializer cannot express exactly.
+    """
+    projected=json.loads(json.dumps(payload));yawns=[]
+    for seat,side in projected['sides'].items():
+        if 'yawn' not in side.get('volatiles',()):continue
+        rows=[str(x).split('|') for x in lines]
+        start=max((i for i,p in enumerate(rows) if len(p)>3 and p[1]=='-start' and p[2].startswith(seat+'a') and p[3]=='move: Yawn'),default=None)
+        if start is None:raise ValueError('PUBLIC_YAWN_START_UNAVAILABLE')
+        count=2-sum(1 for p in rows[start+1:] if len(p)>1 and p[1]=='upkeep')
+        if not 1<=count<=2:raise ValueError('PUBLIC_YAWN_COUNT_UNAVAILABLE')
+        side['volatiles']=[v for v in side['volatiles'] if v!='yawn'];yawns.append((int(seat[1])-1,count))
+    return projected,tuple(yawns)
+
+
+def _perish_counts(lines):
+    """Per side (p1, p2): the Perish Song duration Showdown holds on that side's active, from the side's latest
+    |-start|<side>a: X|perishN line, or None without one.
+
+    Showdown's Perish Song (data/moves.ts) adds volatiles.perishsong with duration 4 and prints a SILENT
+    |-start|X|perish3|[silent] at the use; each residual decrements the duration, then prints |-start|X|perishN (not
+    silent) before that turn's |upkeep|. So a side whose latest line is the silent use line has had no residual since:
+    4 (a replacement boundary in the Song's own turn); otherwise N. A Baton Pass copies the duration to the recipient
+    (copyVolatileFrom) with no new line, so the side's latest line still gives the recipient's count.
+    """
+    counts=[None,None]
+    for line in lines:
+        p=str(line).split('|')
+        if len(p)>3 and p[1]=='-start' and p[2][:3] in ('p1a','p2a') and p[3] in ('perish0','perish1','perish2','perish3'):
+            n=int(p[3][-1]);counts[int(p[2][1])-1]=4 if n==3 and '[silent]' in p[4:] else n
+    return tuple(counts)
+
+
+def _write_held_counts(physical,yawns,perish):
+    """The mapped world with Yawn's public count (_defer_yawn) and Perish Song's duration (_perish_counts) on each side's
+    active; neither is an own field. map_spec wrote the shown perishN; a count the lines do not explain refuses."""
+    for side,count in yawns:
+        physical=physical._replace(yawn_counter=physical.yawn_counter.at[0,side,physical.active[0,side]].set(count))
+    for side in (0,1):
+        at=int(physical.active[0,side]);shown=int(physical.perish_counter[0,side,at])
+        if not shown:continue
+        if perish[side] is None or min(perish[side],3)!=shown:raise ValueError('PUBLIC_PERISH_COUNT_UNAVAILABLE')
+        physical=physical._replace(perish_counter=physical.perish_counter.at[0,side,at].set(perish[side]))
+    return physical
+
+
 def _restore_sleep(physical,detached,metadata,sleepers,origins,rng,base_abilities,*,diagnostics=None):
     """Restore known status and draw hidden clock; no partial world escapes."""
     carry=detached.public;public_species=np.asarray(carry.species);present=np.asarray(carry.present)
@@ -285,6 +337,7 @@ def materialize_protocol(root,start,*,inputs,seed):
         _preflight(root.materialization_payload,removed)
         projected,sleepers=_defer_sleep(root.materialization_payload)
         projected=tail.defer_substitutes(projected,tail_facts['fresh_substitutes'])
+        projected,yawns=_defer_yawn(projected,inputs.lines)
         origins=_once(inputs,root,'origins',lambda:_sleep_origins(inputs.lines))
         revealed={normalize_id(name):candidates for slot,universe,candidates,gender,name in
                   _once(inputs,root,'revealed',lambda:tuple(public_worlds._revealed(detached,inputs.source)),shared=True)}
@@ -317,11 +370,12 @@ def materialize_protocol(root,start,*,inputs,seed):
         mood[owner]=tuple(map(int,detached.own['happiness']))
         mapping_spec,cursors=tail.mapping_spec(world.spec,tail_facts['replacement'])
         mapped=map_spec(mapping_spec,metadata=metadata,dex=catalog.dex,seed=seed,
-            turn=root.materialization_payload['turn'],active_turns=_once(inputs,root,'chronology',lambda:_chronology(inputs.lines)),happiness=tuple(mood))
+            turn=root.materialization_payload['turn'],active_turns=_once(inputs,root,'chronology',lambda:_chronology(inputs.lines)),happiness=tuple(mood),held_volatiles=True)
         if mapped.state is None:
             _downstream_unknowns(diagnostics,'Typed mapper refused: '+repr(mapped.refusals))
             return ProtocolWorld(None,None,mapped.refusals,mapper_diagnostics=tuple(diagnostics))
         physical=tail.restore(mapped.state,world.spec,cursors,tail_facts,metadata=metadata,checks=diagnostics)
+        physical=_write_held_counts(physical,yawns,_perish_counts(inputs.lines))
         maximum_pp={live._source_move(metadata['vocabulary']['moves'][int(mid)]):int(metadata['moves'][int(mid)]['pp'])*8//5 for row in detached.own['moves'] for mid in row if mid}
         own=dict(detached.own);own['pp']=np.asarray(_once(inputs,root,'own_pp',lambda:own_pp_carry(inputs.lines,state.self_request,maximum_pp)),np.int32)
         # Exact facts were read from the owning packet by B2's detached root.

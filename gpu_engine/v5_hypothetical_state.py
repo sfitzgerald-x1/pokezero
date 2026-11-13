@@ -12,7 +12,9 @@ import numpy as np
 
 from pokezero.dex import normalize_id
 from pokezero.poke_engine_adapter import BattleSpec
-from .state import empty_state, LEECH_SEED
+from .state import empty_state, LEECH_SEED, DESTINY_BOND
+
+PERISH=('perish1','perish2','perish3')   # Showdown never shows perish4 (the use prints a silent perish3)
 
 
 @dataclass(frozen=True)
@@ -21,8 +23,14 @@ class Mapping:
     refusals: tuple[str, ...]
 
 
-def map_spec(spec, *, metadata, seed, turn, active_turns, happiness, dex=None):
+def map_spec(spec, *, metadata, seed, turn, active_turns, happiness, dex=None, held_volatiles=False):
     """Trusted lower mapping; the public-root factory supplies source inputs.
+
+    ``held_volatiles`` maps the public volatiles the engine holds since fidelity A2/M2 instead of refusing them:
+    destinybond to the DESTINY_BOND bit (Showdown volatiles.destinybond: presence only, cleared at the holder's next
+    move attempt, a switch-out or a faint) and perishN to perish_counter N (volatiles.perishsong.duration: Showdown's
+    residual decrements it before printing |-start|X|perishN, so the shown N is the remaining count after a residual;
+    the protocol world writes 4 for the silent perish3 of the Song's own turn, phase_d_protocol_world._perish_counts).
 
     ``turn`` is the displayed public request turn. ORIGINAL BattleState.turn
     counts completed ordinary turns, so its exact value here is turn-1.
@@ -43,7 +51,9 @@ def map_spec(spec, *, metadata, seed, turn, active_turns, happiness, dex=None):
         if side.force_switch or side.baton_passing or side.slow_uturn_move or side.switch_out_move_second_saved_move:
             reasons.append(f'deferred-or-replacement-phase:{seat}')
         if set(side.side_conditions)-{'spikes','protect','toxic_count'}:reasons.append(f'side-condition:{seat}')
-        if set(side.volatile_statuses)-{'leechseed','substitute','truant'}:reasons.append(f'volatile:{seat}')
+        held={'destinybond',*PERISH} if held_volatiles else set()
+        if set(side.volatile_statuses)-{'leechseed','substitute','truant'}-held:reasons.append(f'volatile:{seat}')
+        if sum(v in PERISH for v in side.volatile_statuses)>1:reasons.append(f'perish-count:{seat}')
         if side.volatile_status_durations:reasons.append(f'volatile-clock:{seat}')
         for slot,mon in enumerate(side.pokemon):
             if mon.pre_transform is not None or mon.base_types not in (None,mon.types):reasons.append(f'transformed-types:{seat}:{slot}')
@@ -93,6 +103,9 @@ def map_spec(spec, *, metadata, seed, turn, active_turns, happiness, dex=None):
             arrays['status_counter'][0,seat,active]=toxic
             arrays['substitute_hp'][0,seat,active]=side.substitute_health
             if 'leechseed' in side.volatile_statuses:arrays['volatile'][0,seat,active]|=LEECH_SEED
+            if held_volatiles and 'destinybond' in side.volatile_statuses:arrays['volatile'][0,seat,active]|=DESTINY_BOND
+            for name in PERISH:
+                if held_volatiles and name in side.volatile_statuses:arrays['perish_counter'][0,seat,active]=int(name[-1])
             arrays['truant_loaf'][0,seat,active]='truant' in side.volatile_statuses
             arrays['wish_counter'][0,seat],arrays['wish_amount'][0,seat]=side.wish
             for slot,mon in enumerate(side.pokemon):

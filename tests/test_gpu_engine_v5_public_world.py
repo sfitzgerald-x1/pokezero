@@ -62,6 +62,21 @@ class TypedMappingTests(unittest.TestCase):
             result=mapping.map_spec(changed,metadata=metadata,seed=1,turn=7,active_turns=(2,4),happiness=((7,),(255,)))
             self.assertIsNone(result.state);self.assertTrue(result.refusals)
 
+    def test_held_volatiles_map_destiny_bond_and_the_perish_count(self):
+        """held_volatiles (the protocol world's): destinybond sets the engine's DESTINY_BOND bit and perishN writes perish_counter N
+        on that side's active; off (the default) both still refuse, and two perish counts on one side refuse."""
+        from gpu_engine.state import DESTINY_BOND
+        spec,metadata=self.fixture();held=replace(spec,side_one=replace(spec.side_one,volatile_statuses=('destinybond','perish3')))
+        result=mapping.map_spec(held,metadata=metadata,seed=1,turn=7,active_turns=(2,4),happiness=((7,),(255,)),held_volatiles=True)
+        self.assertFalse(result.refusals)
+        self.assertEqual(int(result.state.volatile[0,0,0])&DESTINY_BOND,DESTINY_BOND);self.assertEqual(int(result.state.volatile[0,1,0])&DESTINY_BOND,0)
+        self.assertEqual(result.state.perish_counter[0,:,0].tolist(),[3,0])
+        off=mapping.map_spec(held,metadata=metadata,seed=1,turn=7,active_turns=(2,4),happiness=((7,),(255,)))
+        self.assertIsNone(off.state);self.assertIn('volatile:0',off.refusals)
+        both=replace(spec,side_one=replace(spec.side_one,volatile_statuses=('perish3','perish2')))
+        twice=mapping.map_spec(both,metadata=metadata,seed=1,turn=7,active_turns=(2,4),happiness=((7,),(255,)),held_volatiles=True)
+        self.assertIsNone(twice.state);self.assertIn('perish-count:0',twice.refusals)
+
 
 class PublicWorldTests(unittest.TestCase):
     @classmethod
