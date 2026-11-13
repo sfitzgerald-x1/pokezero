@@ -1,7 +1,6 @@
 """Pinned pure primary-SLP input and diagnostic components, no scientific roots."""
 from copy import deepcopy
 from dataclasses import replace
-import ast
 import json
 from pathlib import Path
 import subprocess
@@ -21,7 +20,7 @@ from gpu_engine import engine_public_events as public,engine_leftovers_callbacks
 from gpu_engine import engine_execution_completeness as ex,engine_kernel_frame_risk as risk
 from gpu_engine import public_belief,source_provenance,transition,v4_encoder,mechanics as m
 from gpu_engine import public_wire,engine_full_v4_event_device as full
-from gpu_engine_default_observer_ast import dump_default_program,assert_hp_rng_mutations_detected
+import gpu_engine_eager_witness as eager
 import test_gpu_engine_sleep_powder_runtime as legacy
 from _showdown_root import showdown_root
 
@@ -85,13 +84,7 @@ class PrimarySleepRuntimeTests(unittest.TestCase):
         with self.assertRaises(ValueError):jax.jit(lambda:sleep.check_compiled(self.helper).binding)()
         fake=request.SourceRules(self.rules.device)
         with self.assertRaises(ValueError):sleep.compile_primary_sleep(engine_catalog=self.producer,metadata=self.metadata,source_rules=fake)
-        before=ast.parse(subprocess.check_output(['git','show','b8092a85:gpu_engine/transition.py'],text=True));after_text=Path('gpu_engine/transition.py').read_text()
-        if '_hypothetical_profile' in after_text:
-            from test_gpu_engine_v5_hypothetical_profile import normalized_hypothetical_default
-            before=normalized_hypothetical_default(subprocess.check_output(['git','show','b8092a85:gpu_engine/transition.py'],text=True),as_tree=True)
-            after=normalized_hypothetical_default(after_text,as_tree=True)
-        else:after=ast.parse(after_text)
-        baseline=dump_default_program(before);self.assertEqual(dump_default_program(after),baseline);assert_hp_rng_mutations_detected(self,after,baseline)
+        # transition.py is certified against CURRENT_TRANSITION (full AST plus mutations) by terminal_closeout and seismic_toss_components.
         np.testing.assert_array_equal(self.runtime['kernel_risk_compiled'].device.sleep_powder_candidates,self.helper.device.move_mask)
         sleep.check_lexical_catalog(self.helper,self.catalog)
         bad=replace(self.catalog,dex=replace(self.catalog.dex,moves=dict(self.catalog.dex.moves)))
@@ -143,6 +136,7 @@ out.push({lines,ranges,effectState});}process.stdout.write(JSON.stringify(out));
     test_all_tape_global_namespaces_require_exact_words_before_comparison=legacy.SleepPowderRuntimeTests.test_all_tape_global_namespaces_require_exact_words_before_comparison
 
     def test_actual_spore_and_hypnosis_dark_both_owner_frame_and_diagnostics(self):
+        self.enterContext(eager.eager_source_witness(self.prepared))
         arrays=self.old.base().arrays('pressure','pressure');ids=self.metadata['vocabulary']['moves'];types=self.metadata['vocabulary']['types']
         arrays['moves'][:]=np.array([ids.index(n)for n in self.names],np.int32);arrays['pp'][:]=np.array([24,32,8,16],np.int32)
         arrays['species'][1,4]=self.metadata['vocabulary']['species'].index('absol');arrays['types'][1,4]=[types.index('dark'),0]
@@ -177,3 +171,7 @@ out.push({lines,ranges,effectState});}process.stdout.write(JSON.stringify(out));
         actual=[v for v in row['records']if v['eligible']]
         self.assertEqual(len(actual),1);self.assertEqual(actual[0]['move'],ids.index('hypnosis'));self.assertEqual(actual[0]['immune'],1)
         self.assertEqual(actual[0]['actor_side'],0);self.assertEqual(actual[0]['target_physical'],4)
+
+
+def tearDownModule():
+    eager.clear()   # drop the consume executables this module compiled

@@ -3,6 +3,7 @@ import ast
 import io
 import json
 import os
+import re
 from pathlib import Path
 import subprocess
 import sys
@@ -15,7 +16,7 @@ from unittest import mock
 from scripts.run_gpu_component_shard import (
     partition_suite, run_suite, run_process_blocks, _valid_receipt, _digest, _resource_snapshot,
     _manifest, _isolation_units, _one_case_suite, _discover_modules, partition_tier, load_heavy_modules,
-    HEAVY_MANIFEST,
+    load_extended_modules, HEAVY_MANIFEST, EXTENDED_MANIFEST,
 )
 
 
@@ -696,6 +697,63 @@ class Case(unittest.TestCase):
             with self.assertRaises(ValueError):partition_tier(suite, modules[:-1] + [None], 0, 1, 'light', heavy)
             with self.assertRaises(ValueError):partition_tier(suite, modules, 0, 1, 'medium', heavy)
 
+    def test_light_heavy_and_extended_tiers_are_disjoint_and_complete(self):
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.dict(sys.modules):   # the fixture modules leave with the directory
+            root = Path(tmp); self.fixture(root)
+            (root / 'test_gpu_engine_gamma.py').write_text('import unittest\nclass Case(unittest.TestCase):\n def test_g(self):pass\n')
+            (root / 'test_gpu_engine_broken.py').write_text('raise ImportError("fixture import failure")\n')
+            (root / 'test_gpu_engine_skipped.py').write_text('import unittest\nraise unittest.SkipTest("fixture import-time skip")\n')
+            sys.path.insert(0, str(root))
+            try:
+                suite, modules = _discover_modules(dict(start_dir=str(root), pattern='test_gpu_engine*.py'))
+            finally:
+                sys.path.remove(str(root))
+            heavy = frozenset({'test_gpu_engine_beta', 'zz_shard_package'})
+            # an extended module that fails to import is light too: its import failure must fail per pull request
+            extended = frozenset({'test_gpu_engine_gamma', 'test_gpu_engine_broken'})
+            def tier(name, count):
+                out = []
+                for k in range(count):
+                    try:out += partition_tier(suite, modules, k, count, name, heavy, extended)[1]
+                    except ValueError as error:self.assertIn('empty component shard', str(error))
+                return out
+            for count in (1, 2, 3):
+                with self.subTest(count=count):
+                    got = {name: tier(name, count) for name in ('light', 'heavy', 'extended')}
+                    self.assertEqual({name: sorted(ix) for name, ix in got.items()},
+                                     dict(light=[0, 2, 4], heavy=[1, 5], extended=[3]))
+                    every = [i for ix in got.values() for i in ix]   # each block in exactly one tier, none dropped
+                    self.assertEqual(sorted(every), list(range(len(modules))))
+            # without an extended manifest the light tier is unchanged
+            self.assertEqual(partition_tier(suite, modules, 0, 1, 'light', heavy)[1], [0, 2, 3, 4])
+            with self.assertRaisesRegex(ValueError, 'both the heavy and extended'):
+                partition_tier(suite, modules, 0, 1, 'light', heavy, extended | {'test_gpu_engine_beta'})
+            with self.assertRaisesRegex(ValueError, 'extended manifest names modules discovery does not have'):
+                partition_tier(suite, modules, 0, 1, 'extended', heavy, extended | {'test_gpu_engine_gone'})
+
+    def test_real_extended_process_blocks_run_only_their_tier(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp); log = self.fixture(root)
+            code = """
+import json, sys, unittest
+from scripts.run_gpu_component_shard import run_process_blocks
+suite = unittest.TestLoader().discover(sys.argv[1], 'test_gpu_engine*.py')
+raise SystemExit(run_process_blocks(suite, 0, 1, start_dir=sys.argv[1], tier=sys.argv[2],
+    heavy=frozenset({'test_gpu_engine_beta'}), extended=frozenset({'test_gpu_engine_alpha'})))
+"""
+            environment = dict(os.environ)
+            environment['PYTHONPATH'] = os.pathsep.join([str(ROOT / 'src'), str(ROOT), environment.get('PYTHONPATH', '')])
+            seen = {}
+            for tier in ('light', 'heavy', 'extended'):
+                result = subprocess.run([sys.executable, '-c', code, str(root), tier], cwd=ROOT, env=environment, text=True,
+                                        capture_output=True, timeout=30)
+                terminal = [json.loads(l) for l in result.stdout.splitlines() if l.startswith('{') and 'process_blocks_terminal' in l]
+                self.assertEqual(result.returncode, 0, result.stderr);self.assertTrue(terminal[0]['passed'])
+                seen[tier] = terminal[0]['selected_blocks']
+            self.assertEqual(seen, dict(light=[2], heavy=[1], extended=[0]))
+            labels = [json.loads(line)['label'] for line in log.read_text().splitlines()]
+            self.assertEqual(labels.count('alpha_a'), 1);self.assertEqual(labels.count('beta'), 1);self.assertEqual(labels.count('nested'), 1)
+
     def test_real_tiered_process_blocks_run_only_their_tier(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp); log = self.fixture(root)
@@ -733,6 +791,49 @@ raise SystemExit(run_process_blocks(suite, 0, 1, start_dir=sys.argv[1], tier=sys
             with tempfile.TemporaryDirectory() as tmp:
                 path = Path(tmp) / 'heavy.json';path.write_text(json.dumps(bad))
                 with self.assertRaises(ValueError):load_heavy_modules(path)
+
+    def test_extended_manifest_names_existing_light_modules_disjoint_from_heavy(self):
+        extended, heavy = load_extended_modules(), load_heavy_modules()
+        self.assertTrue(extended);self.assertFalse(extended & heavy)
+        for name in extended:   # discovery has every listed module (checked by file, without importing the engine)
+            self.assertTrue((ROOT / 'tests' / f'{name}.py').is_file(), name)
+        data = json.loads(EXTENDED_MANIFEST.read_text())
+        self.assertEqual([e['module'] for e in data['modules']], sorted(e['module'] for e in data['modules']))
+        self.assertEqual(sorted(e['rank'] for e in data['modules']), list(range(1, len(data['modules']) + 1)))
+        for entry in data['modules']:   # under the isolated heavy thresholds: the budget, not the module, keeps it off pull requests
+            self.assertEqual(entry['reason'], 'pull-request wall budget', entry['module'])
+            self.assertLessEqual(entry['isolated_wall_min'], 10, entry['module'])
+            self.assertLessEqual(entry['isolated_peak_gib'], 10.5, entry['module'])
+        for bad in ({'schema': 'gpu-component-heavy.v1', 'modules': [{'module': 'test_gpu_engine_a'}]},
+                    {'schema': 'gpu-component-extended.v1', 'modules': []},
+                    {'schema': 'gpu-component-extended.v1', 'modules': [{'module': 'test_gpu_engine_a'}, {'module': 'test_gpu_engine_a'}]},
+                    {'schema': 'gpu-component-extended.v1', 'modules': [{'module': 'other_a'}]},
+                    {'schema': 'gpu-component-extended.v1', 'modules': ['test_gpu_engine_a']}):
+            with tempfile.TemporaryDirectory() as tmp:
+                path = Path(tmp) / 'extended.json';path.write_text(json.dumps(bad))
+                with self.assertRaises(ValueError):load_extended_modules(path)
+
+    def test_extended_tier_runs_on_integration_push_and_by_hand_never_per_pull_request(self):
+        workflow = (ROOT / '.github' / 'workflows' / 'gpu-engine-components-extended.yml').read_text()
+        self.assertEqual(workflow.count('python scripts/run_gpu_component_shard.py'), 1)
+        self.assertIn("python scripts/run_gpu_component_shard.py --tier extended --index '${{ matrix.shard }}' --count 4"
+                      " --process-blocks", workflow)
+        self.assertIn('        shard: [0, 1, 2, 3]\n', workflow)
+        triggers = workflow[workflow.index('\non:\n'):workflow.index('\npermissions:')]
+        self.assertIn("  push:\n    branches: ['scott/v2-engine-accel-20261104']\n", triggers)
+        self.assertIn('  workflow_dispatch:\n', triggers)
+        self.assertNotIn('pull_request', workflow)
+        self.assertNotIn('paths', triggers)   # every integration push: no path filter can skip these modules' only coverage
+        # no concurrency group: a group would cancel an older pending push run, and each push's run must finish
+        self.assertNotIn('\nconcurrency:', workflow);self.assertNotIn('cancel-in-progress', workflow)
+        self.assertIn('python scripts/run_component_memory_check.py', workflow)   # the same memory gate as the light tier
+        self.assertEqual(workflow.count('runs-on: ubuntu-latest'), 2)
+        light = (ROOT / '.github' / 'workflows' / 'gpu-engine-components.yml').read_text()
+        self.assertIn("- 'tests/gpu_component_extended.json'", light)
+        self.assertIn("- '.github/workflows/gpu-engine-components-extended.yml'", light)
+        # the extended command has no low-optimization cases, so no such case may sit in an extended module
+        cases = re.findall(r'--low-optimization-case (test_gpu_engine_\w+)\.', light)
+        self.assertTrue(cases);self.assertFalse(set(cases) & load_extended_modules())
 
     def test_per_pull_request_checks_run_only_the_light_tier(self):
         workflow = (ROOT / '.github' / 'workflows' / 'gpu-engine-components.yml').read_text()
