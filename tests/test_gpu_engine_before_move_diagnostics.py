@@ -82,7 +82,17 @@ class BeforeMoveDiagnosticsTests(unittest.TestCase):
         dump=lambda n:ast.dump(n,include_attributes=False)
         self.assertEqual([dump(x)for x in original.args],[dump(x)for x in recorded.args[6:9]])
         kw={k.arg:k.value for k in recorded.keywords}
-        for k in original.keywords:self.assertEqual(dump(k.value),dump(kw[k.arg]),k.arg)
+        # WH + C-lite: defrost_move (Sacred Fire) reaches before_move only. It changes BeforeMove only for a frozen user, and the
+        # lifecycle path refuses a frozen defrost user right after the call (status_callbacks.unknown(... _defrost ... FRZ)),
+        # so the recorder never has to rebuild that case. Bound here: the original passes defrost_move=_defrost, and that
+        # refusal sits between the original call and the recorder; every other keyword still matches exactly.
+        for k in original.keywords:
+            if k.arg=='defrost_move':continue
+            self.assertEqual(dump(k.value),dump(kw[k.arg]),k.arg)
+        self.assertEqual([dump(k.value)for k in original.keywords if k.arg=='defrost_move'],[dump(ast.parse('_defrost',mode='eval').body)])
+        refusal=[n for n in calls if n.func.attr=='unknown' and isinstance(n.func.value,ast.Name) and n.func.value.id=='status_callbacks'
+            and original.lineno<n.lineno<recorded.lineno and '_defrost' in ast.unparse(n) and 'FRZ' in ast.unparse(n)]
+        self.assertEqual(len(refusal),1,'the lifecycle refusal of a frozen defrost user must follow the original BeforeMove call')
         self.assertEqual(recorded.args[1].id,'before');self.assertGreater(recorded.lineno,original.lineno)
         # mechanics, engine_execution_completeness, engine_kernel_frame_risk and engine_retained_encoder_driver: byte-exact against reviewed SOURCE_PINS in transition_observer_wiring's source-binding subtests.
         for name in ('benchmark_retained_games.py',):
