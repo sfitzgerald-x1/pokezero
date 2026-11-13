@@ -1,0 +1,210 @@
+{
+ "schema": "pokezero.effect_probe.scenario.v1",
+ "move": "spikes_drag_back_faint",
+ "note": "Review of the device tracker's fainted-active stages (D): a boosted mon dragged out, then dragged back into lethal Spikes. Four distinct level-5 mons are KOd (B2 refuses a repeated species) so Shedinja's side has one bench mon (each Whirlwind's target is forced). Shedinja Swords Dances to +2 while Skarmory lays Spikes; Whirlwind drags Shedinja out (its stages clear) and Blissey in; the next Whirlwind drags Blissey out and Shedinja back in, where Spikes KOs it (1 HP). B2's drag arrival resets the seat's stages and its faint keeps them, so the fainted Shedinja reads 0 at its replacement request, never its old +2.",
+ "teams": [
+  [
+   {
+    "species": "Shedinja",
+    "moves": [
+     "swordsdance",
+     "splash",
+     "shadowball",
+     "protect"
+    ],
+    "ability": "Wonder Guard",
+    "item": ""
+   },
+   {
+    "species": "Magikarp",
+    "moves": [
+     "splash",
+     "tackle",
+     "flail",
+     "protect"
+    ],
+    "ability": "Swift Swim",
+    "item": "",
+    "level": 5
+   },
+   {
+    "species": "Tentacruel",
+    "moves": [
+     "splash",
+     "protect",
+     "surf",
+     "sonicboom"
+    ],
+    "ability": "Liquid Ooze",
+    "item": "",
+    "level": 5
+   },
+   {
+    "species": "Smeargle",
+    "moves": [
+     "splash",
+     "spore",
+     "spikes",
+     "encore"
+    ],
+    "ability": "Own Tempo",
+    "item": "",
+    "level": 5
+   },
+   {
+    "species": "Dunsparce",
+    "moves": [
+     "splash",
+     "tackle",
+     "protect",
+     "rest"
+    ],
+    "ability": "Serene Grace",
+    "item": "",
+    "level": 5
+   },
+   {
+    "species": "Blissey",
+    "moves": [
+     "splash",
+     "softboiled",
+     "protect",
+     "seismictoss"
+    ],
+    "ability": "Serene Grace",
+    "item": "Leftovers"
+   }
+  ],
+  [
+   {
+    "species": "Skarmory",
+    "moves": [
+     "spikes",
+     "whirlwind",
+     "drillpeck",
+     "protect"
+    ],
+    "ability": "Keen Eye",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Starmie",
+    "moves": [
+     "splash",
+     "surf",
+     "recover",
+     "protect"
+    ],
+    "ability": "Illuminate",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Blissey",
+    "moves": [
+     "splash",
+     "softboiled",
+     "protect",
+     "seismictoss"
+    ],
+    "ability": "Serene Grace",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Swampert",
+    "moves": [
+     "splash",
+     "protect",
+     "surf",
+     "earthquake"
+    ],
+    "ability": "Torrent",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Metagross",
+    "moves": [
+     "splash",
+     "protect",
+     "meteormash",
+     "earthquake"
+    ],
+    "ability": "Clear Body",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Celebi",
+    "moves": [
+     "splash",
+     "protect",
+     "psychic",
+     "recover"
+    ],
+    "ability": "Natural Cure",
+    "item": "Leftovers"
+   }
+  ]
+ ],
+ "script": [
+  [
+   "switch 2",
+   "move 3"
+  ],
+  [
+   "switch 3",
+   ""
+  ],
+  [
+   "move 1",
+   "move 3"
+  ],
+  [
+   "switch 4",
+   ""
+  ],
+  [
+   "move 1",
+   "move 3"
+  ],
+  [
+   "switch 5",
+   ""
+  ],
+  [
+   "move 1",
+   "move 3"
+  ],
+  [
+   "switch 1",
+   ""
+  ],
+  [
+   "move 1",
+   "move 1"
+  ],
+  [
+   "move 2",
+   "move 2"
+  ],
+  [
+   "move 1",
+   "move 2"
+  ],
+  [
+   "switch 6",
+   ""
+  ],
+  [
+   "move 1",
+   "move 4"
+  ]
+ ],
+ "axes": [],
+ "expect": {
+  "exact": true
+ },
+ "require_fields": [
+  "recharge_counter",
+  "item_knocked",
+  "destiny_bond"
+ ]
+}
