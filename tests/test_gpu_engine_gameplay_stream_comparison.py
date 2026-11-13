@@ -27,9 +27,10 @@ def chance(batch=1):
 
 
 def state(batch=1, *, hp=100, done=False):
-    # Authored storage, not an engine constructor/initialize/step invocation. A field this fixture does not author takes
-    # empty_state's shape, dtype and fill, so a leaf a later tier adds arrives shaped. (Every unauthored field used to be
-    # zeros of shape (batch,): fidelity M1/M2's per-mon counters were, and M1's entry.depart indexes them per mon.)
+    # Authored storage: engine storage defaults (empty_state), no initialize/step. A field this fixture does not author
+    # takes empty_state's shape, dtype and fill, so a leaf a later tier adds arrives shaped. (Every unauthored field used
+    # to be zeros of shape (batch,), the fidelity M1/M2 per-mon leaves too, and entry.depart indexes those per mon:
+    # recharge_counter in its M1 block, the perish, yawn and partial-trap fields in its M2 block.)
     fields = {name:np.array(value) for name,value in empty_state(batch)._asdict().items()}
     for name in ('species','level','hidden_power_type','hidden_power_power','happiness','gender','hp','max_hp',
                  'status','status_counter','sleep_skipped','rest_origin','choice_move','last_move','encore_move','encore_counter',
