@@ -392,8 +392,9 @@ class Device:
         sets = [showdown.ask(cmd='prepare', teams=s['teams'])['sets'] for s in scenarios]
         return cls(dev.compile_b2(sets, showdown_root), metadata, lanes, allowlist)
 
-    def compare(self, scenario, record, step, trackers, b2, lane, vocab):
-        """One case's device-vs-B2 comparison after `step` ('initial' before the first request)."""
+    def compare(self, scenario, record, step, trackers, b2, lane, vocab, channels=None):
+        """One case's device-vs-B2 comparison after `step` ('initial' before the first request); a step with open diffs
+        keeps that step's two player channels."""
         dev = self.dev;device = record['device']
         refused = [self.b2.refused[q] for q in (2 * lane, 2 * lane + 1)]
         if any(refused):
@@ -402,7 +403,9 @@ class Device:
         diffs = dev.compare_views(dev.device_view(trackers, lane, vocab), dev.b2_view(b2, lane, self.catalog), numeric)
         open_, allowed = dev.apply_allowlist(scenario['move'], record['case_id'], step, diffs, self.used, self.allowlist)
         device['steps_compared'] += 1;device['numeric'] += len(numeric)
-        if open_ or allowed or numeric:device['steps'].append(dict(step=step, diffs=open_, allowlisted=allowed, numeric=numeric))
+        if open_ or allowed or numeric:
+            device['steps'].append(dict(step=step, diffs=open_, allowlisted=allowed, numeric=numeric))
+            if open_ and channels is not None:device['steps'][-1]['channels'] = channels
 
 
 def judge_device(records):
@@ -448,7 +451,8 @@ def run_scenario(scenario, engine, showdown, metadata, device=None):
         elif diffs:records[-1].update(status='INITIAL_MISMATCH', live=False)
         if device is not None:
             records[-1]['device'] = dict(status=None, state_equal=initial_equal, steps_compared=0, steps=[], refusal=None, numeric=0)
-            if records[-1]['live']:device.compare(scenario, records[-1], 'initial', host_trackers, host_b2, i, vocab)
+            if records[-1]['live']:
+                device.compare(scenario, records[-1], 'initial', host_trackers, host_b2, i, vocab, started['channels'][i])
     for step, script in enumerate(scenario['script']):
         if not any(r['live'] for r in records):break
         pending = np.asarray(state.pending_residual)
@@ -511,7 +515,7 @@ def run_scenario(scenario, engine, showdown, metadata, device=None):
                 if not live[i]:continue
                 record['device']['state_equal'] &= step_equal
                 if i in compared and record['device']['status'] is None:
-                    device.compare(scenario, record, step, host_trackers, host_b2, i, vocab)
+                    device.compare(scenario, record, step, host_trackers, host_b2, i, vocab, reply['results'][i]['channels'])
     for record in records:
         if record['status'] is None:
             record['status'] = 'MISMATCH' if any(s['diffs'] for s in record['steps']) else 'EXACT'

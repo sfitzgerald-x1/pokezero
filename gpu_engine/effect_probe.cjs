@@ -127,6 +127,17 @@ function playerChannels(env, battle) {
   return [messages[1], messages[2]];
 }
 
+// Device mode: Custom Game has no Species Clause, so a side may repeat a species, and two mons with one public ident
+// (p2a: Gengar) are one identity on the protocol (B2's wire joins an arrival to an encounter by its ident). A repeated
+// species' later members get a nickname (Gengar2): display only; Gen 3 Random Battle never repeats a species.
+function nicknamed(team) {
+  const seen = {};
+  return team.map(set => {
+    seen[set.species] = (seen[set.species] || 0) + 1;
+    return seen[set.species] > 1 ? {...set, name:`${set.species}${seen[set.species]}`} : {...set};
+  });
+}
+
 function main() {
   const root = process.argv[2];
   if (!root) throw new Error('usage: effect_probe.cjs SHOWDOWN_ROOT');
@@ -156,7 +167,7 @@ function main() {
           // reportExactHP = !!format.debug; sim/pokemon.ts getHealth). Gen 3 Random Battle shares HP Percentage
           // Mod's percent, which is what B2 and the device's public HP read. Display only: no state or PRNG change.
           if (device) b.reportExactHP = false;
-          cmd.sets.forEach((team, s) => b.setPlayer(`p${s + 1}`, {name:`p${s + 1}`, team:team.map(x => ({...x}))}));
+          cmd.sets.forEach((team, s) => b.setPlayer(`p${s + 1}`, {name:`p${s + 1}`, team:device ? nicknamed(team) : team.map(x => ({...x}))}));
           for (const side of b.sides) side.pokemon.forEach((p, i) => {p.pzIndex = i;});
           return b;
         });
@@ -203,5 +214,5 @@ function main() {
   });
 }
 
-module.exports = {fill, requestMask, snapshot, choice, playerChannels};
+module.exports = {fill, requestMask, snapshot, choice, playerChannels, nicknamed};
 if (require.main === module) main();

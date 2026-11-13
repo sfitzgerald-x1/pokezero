@@ -158,6 +158,18 @@ LEFT_OUT = {
 # Explained mismatches: (scenario move, case_id, step, field) -> one-line reason. step is the request step index or
 # 'initial'. field is the full diff key (e.g. '1:0:hp_percent'). An entry that matches no diff is reported as stale.
 ALLOWLIST = {}
+# OPEN BUG (reported to the coordinator): a sleeping Sleep Talk user that then hits itself in confusion. Gen 3 prints
+# |cant|X|slp even for a sleep-usable move (data/mods/gen3/conditions.ts slp onBeforeMove), then confusion's
+# onBeforeMove self-hit stops the move. B2 counts the cant line as a decision opportunity (public_tendency.apply:
+# decision = ... | (cant & ~recharge), gpu_engine/public_tendency.py:199-202); the device's before_move counts one only
+# when ~result.can_act & ~result.confusion_self_hit (gpu_engine/engine_device_public_hooks.py before_move, `opportunity(c,
+# side,use&~result.can_act&~result.confusion_self_hit)`), so the self-hit suppresses the cant's opportunity.
+_SLEEP_TALK_SELF_HIT = 'OPEN BUG: cant(slp) then a confusion self-hit; B2 counts the cant as an opportunity, the device does not'
+for _case in ('selfhit=99,paralysis=0', 'selfhit=99,paralysis=99'):
+    for _step in range(3, 9):
+        ALLOWLIST[('confusion_status', _case, _step, '1:opportunities')] = _SLEEP_TALK_SELF_HIT
+    for _step in range(3, 6):
+        ALLOWLIST[('confusion_status', _case, _step, '1:opportunity_turn')] = _SLEEP_TALK_SELF_HIT
 
 
 def wire_lines(lines):
@@ -465,22 +477,23 @@ FLOAT_FIELDS = ('last_damage_taken', 'last_damage_dealt', 'damage_exact_taken', 
 # OPEN BUG (numeric, reported to the coordinator): the device's shown-percent damage fractions divide a float32 by the
 # literal 100 (engine_device_damage_history.observe `.../100`, engine_device_public_port.spikes), which XLA compiles to a
 # multiply by float32(0.01), one ulp below the correctly rounded quotient for most percents (30 -> 0.29999998, B2
-# 0.30000001); B2 (public_damage.apply) divides by its hp_denominator array (100) and rounds correctly. A float field
-# whose two values differ by at most one float32 ulp is recorded in the step's `numeric` list, not as a diff; anything
-# larger is a diff.
+# 0.30000001); B2 (public_damage.apply) divides by its hp_denominator array (100) and rounds correctly, and a round's sum
+# of several such fractions drifts by one ulp per line. A float field whose two values differ by less than
+# FLOAT_TOLERANCE is recorded in the step's `numeric` list, not as a diff: any real difference is at least one HP point
+# of the largest Gen 3 max HP (1/714, ~1.4e-3) or one shown percent (0.01), so the tolerance hides only rounding.
+FLOAT_TOLERANCE = 1e-6
 NUMERIC_NOTE = ('OPEN BUG: device shown-percent damage fraction divides by the literal 100 (XLA: multiply by '
-                'float32(0.01)), one float32 ulp from B2\'s division by hp_denominator')
+                'float32(0.01)), float32 ulps from B2\'s division by hp_denominator')
 
 
 def _within_ulp(a, b):
     if not isinstance(a, float) or not isinstance(b, float):return False
-    x, y = np.float32(a), np.float32(b)
-    return bool(abs(x - y) <= np.spacing(max(abs(x), abs(y))))
+    return abs(a - b) < FLOAT_TOLERANCE
 
 
 def compare_views(device, b2, numeric=None):
     """Field-by-field differences, keyed side:slot:field (mon), side:active:field, side:field and field. A FLOAT_FIELDS
-    pair within one float32 ulp goes to `numeric` (a list), see NUMERIC_NOTE."""
+    pair closer than FLOAT_TOLERANCE goes to `numeric` (a list), see NUMERIC_NOTE."""
     diffs = []
     def check(key, want, got):
         if want == got:return
