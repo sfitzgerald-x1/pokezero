@@ -136,8 +136,8 @@ class SwitchEvidenceTests(unittest.TestCase):
             self.assertEqual(result.exclude.tolist(),[boundary])
 
     def test_a_borrowing_or_transformed_arrivals_intimidate_clears_but_claims_and_refreshes_nothing(self):
-        # B4b: a Traced (e.g. a Porygon2 that copied Intimidate on entry) or Transformed arrival's Intimidate is its running
-        # copy. Python consumes the pending switch but pins nothing and re-summarizes nothing
+        # B4b (defensive parity; no Gen 3 random-battle holder reaches it): a Traced or Transformed pending arrival's
+        # Intimidate is its running copy. Python consumes the pending switch but pins nothing and re-summarizes nothing
         # (_resolve_pending_switches_for_event); the reducer clears the record and claims and checkpoints nothing.
         from pokezero.showdown import _public_event_from_line
         iid=self.abilities.ability_id('Intimidate')

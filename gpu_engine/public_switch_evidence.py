@@ -189,8 +189,10 @@ def resolve(state,tables,mons,abilities,source_tables,effective,live,*,arrival,b
     ruled=state.ruled_out.at[rows,side,slot].set(state.ruled_out[rows,side,slot]|(exclude&use))
     result=state._replace(side=jnp.where(clear,-1,state.side),slot=jnp.where(clear,-1,state.slot),
         encounter=jnp.where(clear,0,state.encounter),has_ident=jnp.where(clear,False,state.has_ident),ruled_out=ruled)
-    # A borrowing (e.g. a Porygon2 that Traced Intimidate on entry) or Transformed arrival's Intimidate is its RUNNING copy:
-    # Python (_resolve_pending_switches_for_event) consumes the pending switch but pins nothing and re-summarizes nothing (B4b).
+    # A borrowing (Trace copy) or Transformed pending arrival's Intimidate would be its RUNNING copy: Python
+    # (_resolve_pending_switches_for_event) consumes the pending switch but pins nothing and re-summarizes nothing (B4b).
+    # Defensive parity: only Intimidate-plus-another-ability holders queue (Trace holders never do), and those cannot be
+    # Traced or Transformed while pending; a tracer's later Intimidate line takes public_context's ability-line path.
     claimed=reveal&~((abilities.running[rows,side,slot]>0)|abilities.transformed[rows,side,slot])
     return Resolution(result,state.side,state.slot,state.encounter,exclude&use,claimed&use,(exclude|claimed)&use,ok|~valid)
 

@@ -153,6 +153,10 @@ class PublicLifecycleStreamTests(unittest.TestCase):
         rest=[*self.prefix,'|-status|p1a: Snorlax|slp|[from] move: Rest','|cant|p1a: Snorlax|slp']
         self.checked([*rest,'|-ability|p1a: Snorlax|Pressure|[from] ability: Trace|[of] p2a: Absol',
             '|-activate|p1a: Snorlax|ability: Shed Skin','|-curestatus|p1a: Snorlax|slp'])
+        # B4b: a Traced or Transformed sleeper's 1-turn wake pins no Early Bird, so no cure checkpoint (checked compares B2's
+        # per-mon refresh generation with Python's summary calls after every line).
+        for borrow in ('|-ability|p1a: Snorlax|Pressure|[from] ability: Trace|[of] p2a: Absol','|-transform|p1a: Snorlax|p2a: Absol'):
+            self.checked([*rest,borrow,'|-curestatus|p1a: Snorlax|slp'])
         for prefix,raw,expected in ((rest,'|-curestatus|p1a: Snorlax|slp',2),
                 ([*self.prefix,'|-status|p1a: Snorlax|par','|switch|p1a: Gardevoir|Gardevoir, L80|100/100'],
                  '|switch|p1a: Snorlax|Snorlax, L80|100/100',1)):

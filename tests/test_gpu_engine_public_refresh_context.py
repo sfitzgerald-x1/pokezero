@@ -83,7 +83,7 @@ class PublicRefreshContextTests(unittest.TestCase):
         self.reference_module=showdown
         for borrow in ('|-ability|p1a: Gardevoir|Pressure|[from] ability: Trace|[of] p2a: Absol','|-transform|p1a: Gardevoir|p2a: Absol'):
             lines=[*self.prefix,'|turn|1','|-ability|p2a: Absol|Pressure','|switch|p1a: Gardevoir|Gardevoir, L80|100/100',
-                borrow,'|-ability|p1a: Gardevoir|Pressure','|turn|2']
+                borrow,'|-ability|p1a: Gardevoir|Pressure','|-activate|p1a: Gardevoir|ability: Pressure','|turn|2']
             for narrow in (False,True):
                 result,_=self.run_lines(lines,narrow);engine,calls=self.reference_engine(lines,narrow);self.compare(result,engine,calls)
 
