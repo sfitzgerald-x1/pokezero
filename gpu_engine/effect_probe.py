@@ -398,7 +398,12 @@ class Device:
         dev = self.dev;device = record['device']
         refused = [self.b2.refused[q] for q in (2 * lane, 2 * lane + 1)]
         if any(refused):
-            device.update(status='B2_REFUSED', refusal=[r for r in refused if r][0]);return
+            # B2 stops at this step; an allowlisted refusal (field 'b2_refusal') is a known B2 limit, explained.
+            key = (scenario['move'], record['case_id'], step, 'b2_refusal')
+            refusal = dict([r for r in refused if r][0], step=step)
+            if key in self.allowlist:
+                self.used.add(key);refusal['reason'] = self.allowlist[key]
+            device.update(status='B2_LIMIT' if 'reason' in refusal else 'B2_REFUSED', refusal=refusal);return
         numeric = []
         diffs = dev.compare_views(dev.device_view(trackers, lane, vocab), dev.b2_view(b2, lane, self.catalog), numeric)
         open_, allowed = dev.apply_allowlist(scenario['move'], record['case_id'], step, diffs, self.used, self.allowlist)
@@ -409,8 +414,11 @@ class Device:
 
 
 def judge_device(records):
-    """Device mode's verdict: every case EXACT (allowlisted mismatches only) with equal public and chance states."""
-    reasons = [f"{r['case_id']}: device {r['device']['status']}" for r in records if r['device']['status'] != 'EXACT']
+    """Device mode's verdict: every case EXACT (allowlisted mismatches only) or B2_LIMIT (exact until an allowlisted B2
+    refusal), with equal public and chance states."""
+    reasons = [f"{r['case_id']}: device {r['device']['status']}" for r in records
+               if r['device']['status'] not in ('EXACT', 'B2_LIMIT') or not r['device']['state_equal']
+               or any(st['diffs'] for st in r['device']['steps'])]
     return not reasons, '; '.join(reasons) or 'every case exact on the device public path'
 
 
@@ -525,9 +533,12 @@ def run_scenario(scenario, engine, showdown, metadata, device=None):
         for key in ('live', 'last_tape', 'last_aux'):record.pop(key)
         if device is not None:
             d = record['device']
-            if d['status'] is None:
-                d['status'] = ('STATE_DIVERGED' if not d['state_equal'] else 'NOT_COMPARED' if not d['steps_compared']
+            if not d['state_equal']:d['status'] = 'STATE_DIVERGED'
+            elif d['status'] is None:
+                d['status'] = ('NOT_COMPARED' if not d['steps_compared']
                     else 'MISMATCH' if any(x['diffs'] for x in d['steps']) else 'EXACT')
+            elif d['status'] == 'B2_LIMIT' and any(x['diffs'] for x in d['steps']):d['status'] = 'MISMATCH'
+
             d['diff_fields'] = sorted({device.dev.field_kind(x['field']) for st in d['steps'] for x in st['diffs']})
             d['allowlisted_fields'] = sorted({device.dev.field_kind(x['field']) for st in d['steps'] for x in st['allowlisted']})
     met, reason = judge(scenario, records)
@@ -609,6 +620,7 @@ def main(argv=None):
         rows = summary['scenarios'].values()
         summary['device'] = dict(scenarios=len(rows), cases=sum(s['cases'] for s in rows),
             cases_exact=sum(s['device']['status_counts'].get('EXACT', 0) for s in rows),
+            cases_b2_limit=sum(s['device']['status_counts'].get('B2_LIMIT', 0) for s in rows),
             **{k: sum(s['device'][k] for s in rows) for k in ('steps_compared', 'steps_exact', 'steps_numeric_only',
                                                               'steps_allowlisted', 'steps_open')},
             state_equal=all(s['device']['state_equal'] for s in rows), met=all(s['device']['met'] for s in rows),

@@ -218,6 +218,14 @@ class DevicePureTests(unittest.TestCase):
                 self.assertEqual(len(key), 4);self.assertTrue(reason.strip())
                 self.assertTrue((ROOT / 'gpu_engine/effect_probes' / f'{key[0]}.json').exists())
 
+    def test_device_judge_accepts_exact_and_explained_b2_limits_only(self):
+        rec = lambda status, diffs=(), equal=True: dict(case_id='c', device=dict(status=status, state_equal=equal,
+            steps=[dict(diffs=list(diffs), allowlisted=[], numeric=[])]))
+        self.assertTrue(probe.judge_device([rec('EXACT'), rec('B2_LIMIT')])[0])
+        for bad in (rec('MISMATCH', [dict(field='0:0:hp_percent')]), rec('B2_REFUSED'), rec('EXACT', equal=False),
+                    rec('NOT_COMPARED')):
+            with self.subTest(bad=bad['device']['status']):self.assertFalse(probe.judge_device([rec('EXACT'), bad])[0])
+
     def test_wire_lines_percent_and_field_tables(self):
         lines = ['|tier|[Gen 3] Custom Game', '|debug|x', '|raw|<div>1 custom rule</div>', '|move|p1a: A|Splash|p1a: A', '|-nothing',
                  '|turn|1']

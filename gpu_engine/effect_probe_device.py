@@ -22,8 +22,9 @@ Format adaptation (B2 admits the Gen 3 Random Battle wire only; the probe battle
 teams): the .cjs turns off Custom Game's debug exact-HP display so shared HP lines carry HP Percentage Mod's percent;
 wire_lines below drops |debug| lines (debug-format only, never on a randbats wire), the |raw| custom-rule infobox
 (the format's @@@sleepclausemod suffix; Gen 3 Random Battle has Sleep Clause Mod built in, announced by its |rule|
-line) and Splash's |-nothing| message (the probes' filler move, in no Gen 3 random set: B2's wire has no consumer for
-it, and the line carries no public fact), and replaces the |tier| header.
+line), Splash's |-nothing| message (the probes' filler move, in no Gen 3 random set: B2's wire has no consumer for
+it, and the line carries no public fact) and the start-of-battle EV-limit |bigerror| warning (authored EVs; random
+sets keep the limit), and replaces the |tier| header.
 
 The device runs with the production belief tables (engine_device_observation.compile_tables over the B2 catalog, as
 gpu_engine/device_observation_collector.py builds them), so its Pressure PP charge, its hard belief masks and its shown
@@ -45,6 +46,8 @@ STATUS = ('', 'par', 'brn', 'psn', 'tox', 'slp', 'frz')                    # eng
 B2_STATUS = ('', 'slp', 'par', 'brn', 'frz', 'psn', 'tox')                 # public_mon_state NONE..TOXIC
 WEATHER = {0: '', 1: 'raindance', 2: 'sunnyday', 3: 'sandstorm', 4: 'hail'}  # engine weather codes (phase_d_live_worlds)
 TIER_LINE = '|tier|[Gen 3] Random Battle'
+EV_LIMIT_WARNING = "|bigerror|Warning: One player isn't adhering to a 510 EV limit, and the other player is."
+
 SOURCE_HASH_PREFIX = 'effect-probe-'
 
 # (field, scope, device accessor, B2 accessor). Scope: mon = every present public slot of the side; active = the side's
@@ -99,8 +102,8 @@ FIELDS = (
     ('encore_turns', 'active', "mf['encore_turns']", 'ctx.active.elapsed[1]'),
     ('wrap_trap_turns', 'active', "mf['wrap_trap_turns']", 'ctx.active.elapsed[2]'),
     ('toxic_stage', 'active', "mf['toxic_stage']", 'ctx.toxic.stage'),
-    ('last_move', 'active', 't.last_moves[active] (move, -1 switch, 0 none)',
-     'ctx.moves.last_kind / last_id (2 move, 1 switch, 0 none)'),
+    ('last_move', 'active', 't.last_moves[active] (move, -1 switch, -2 Baton Pass arrival, 0 none)',
+     'ctx.moves.last_kind / last_id (LAST_MOVE, LAST_SWITCH: Baton Pass when mons.arrived_by_baton, LAST_UNKNOWN)'),
     # Previous-round damage sums (settled at TURN): the shown halves from the opposing owner's fold, the exact halves
     # from the side's own owner's fold (B2's owner sees its own HP exactly), as phase_d_live_worlds.from_b2 maps them.
     ('last_damage_taken', 'active', "mf['last_damage_taken'] (shown)", 'sum(ctx.damage.last_taken[side]) in the foe-owned fold'),
@@ -176,7 +179,7 @@ def wire_lines(lines):
     """One channel's lines as B2's wire admits them (see the module docstring)."""
     out = []
     for line in lines:
-        if line.startswith('|debug|') or line.startswith('|raw|') or line == '|-nothing':continue
+        if line.startswith('|debug|') or line.startswith('|raw|') or line in ('|-nothing', EV_LIMIT_WARNING):continue
         out.append(TIER_LINE if line.startswith('|tier|') else line)
     return out
 
@@ -357,7 +360,7 @@ def device_view(t, lane, vocab):
             last = int(t.last_moves[lane, s, slot])
             active = dict(boosts=[int(x) for x in t.boosts[lane, s, slot]],
                 volatiles=sorted(NAMES[v] for v in np.flatnonzero(bits) if NAMES[v]),
-                last_move='<switch>' if last == -1 else _name(vocab['moves'], last),
+                last_move='<switch>' if last == -1 else '<baton>' if last == -2 else _name(vocab['moves'], last),
                 last_damage_taken=float(mf['last_damage_taken'][lane, s, slot]), last_damage_dealt=float(mf['last_damage_dealt'][lane, s, slot]),
                 damage_exact_taken=float(t.damage_exact_taken[lane, s, slot]), damage_exact_dealt=float(t.damage_exact_dealt[lane, s, slot]),
                 **{key: int(mf[key][lane, s, slot]) for key in ('turns_active', 'sub_present', 'stall_counter', 'meanlook_trap', 'item_swapped',
@@ -436,7 +439,8 @@ def b2_side(b2, q, own, s, catalog):
             choice_public=int(a.choice_public[q, s]), choice_locked=int(a.choice_locked[q, s]),
             confusion_turns=int(a.elapsed[q, s, 0]), encore_turns=int(a.elapsed[q, s, 1]), wrap_trap_turns=int(a.elapsed[q, s, 2]),
             toxic_stage=int(ctx.toxic.stage[q, s]),
-            last_move=_name(catalog.moves.names, last) if kind == 2 else '<switch>' if kind == 1 else '',
+            last_move=(_name(catalog.moves.names, last) if kind == 2 else
+                       ('<baton>' if bool(mons.arrived_by_baton[q, s]) else '<switch>') if kind == 1 else ''),
             last_damage_taken=float(ctx.damage.last_taken[q, s].sum()), last_damage_dealt=float(ctx.damage.last_dealt[own, s].sum()),
             damage_exact_taken=float(ctx.damage.last_taken[own, s].sum()), damage_exact_dealt=float(ctx.damage.last_dealt[q, s].sum()))
     present = [k for k in range(6) if out[k] is not None]
