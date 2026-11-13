@@ -178,34 +178,9 @@ for _case in ('selfhit=99,paralysis=0', 'selfhit=99,paralysis=99'):
         ALLOWLIST[('confusion_status', _case, _step, '1:opportunities')] = _SLEEP_TALK_SELF_HIT
     for _step in range(3, 6):
         ALLOWLIST[('confusion_status', _case, _step, '1:opportunity_turn')] = _SLEEP_TALK_SELF_HIT
-# OPEN BUG (reported): Encore ending at the residual. Showdown prints -end|X|Encore from Encore's onResidual
-# (data/moves.ts encore condition) and B2 drops the bag entry (public_active.project_line REMOVE); the device's encore
-# bit is written only by public_move_state around a move (engine_device_public_hooks.public_move_state), the Encore
-# residual (transition.py: work=repeating.residual(...), the encore block of the order-10 list) calls no device hook and
-# derived_volatiles covers only perish, yawn and partiallytrapped, so the bit stays until the mon leaves the field.
-_ENCORE_END = 'OPEN BUG: Encore ends at the residual (-end|X|Encore); the device keeps the encore bag bit (no residual hook)'
-for _case, _first in (('encore_roll=0', 3), ('encore_roll=1', 4), ('encore_roll=2', 5), ('encore_roll=3', 6)):
-    for _step in range(_first, 9):ALLOWLIST[('encore', _case, _step, '1:active:volatiles')] = _ENCORE_END
-for _step in range(3, 7):ALLOWLIST[('trick_encore', 'base', _step, '1:active:volatiles')] = _ENCORE_END
-for _step in (3, 4):ALLOWLIST[('hyperbeam_order_fast', 'base', _step, '0:active:volatiles')] = _ENCORE_END
-# OPEN BUG (reported): a fainted active's public stages at its replacement request. B2's faint keeps them (public_mon_state.
-# faint writes HP, status and fainted, not boosts; an arrival resets them, public_mon_state.py:111-112), and B2's encoder
-# writes the active token's stages from them (v4_assembly.project_own_boosts); the device's observe copies the engine's
-# stages, which faintMessages' clearVolatile zeroed (transition._clear_fainted_boosts), so it reads 0 there.
-_FAINTED_STAGES = 'OPEN BUG: a fainted active keeps its public stages in B2 until its replacement; the device reads the cleared engine stages'
-for _key in (('wrap_tie', 'tie=0', 0, '0:active:boosts'), ('wrap_tie', 'tie=1', 0, '0:active:boosts'),
-             ('knockoff_band', 'roll=0', 8, '1:active:boosts'), ('knockoff_band', 'roll=15', 8, '1:active:boosts'),
-             ('superpower_ko', 'base', 5, '0:active:boosts'), ('destinybond_m7_gengar_volbeat', 'base', 3, '0:active:boosts'),
-             ('sleepclause_faint', 'base', 3, '1:active:boosts'), ('knockoff_midturn_lock', 'base', 1, '0:active:boosts'),
-             ('wh_intimidate_explosion', 'base', 0, '0:active:boosts'),
-             *(('destinybond_m5_gengar_entei', _case, 3, '0:active:boosts')
-               for _case in ('crit=15,roll=0', 'crit=15,roll=15', 'crit=0,roll=0', 'crit=0,roll=15'))):
-    ALLOWLIST[_key] = _FAINTED_STAGES
-# OPEN BUG (reported): Flash Fire's activation. A Fire move into a Flash Fire holder prints -start|X|ability: Flash Fire,
-# which B2 folds into the flashfire bag entry (public_active.NAMES 'flashfire'); no device hook writes that bit
-# (engine_device_public_hooks has no flashfire writer), so the device bag stays without it while the holder is active.
-_FLASH_FIRE = 'OPEN BUG: -start|X|ability: Flash Fire sets B2\'s flashfire volatile; no device hook writes it'
-for _step in (3, 4):ALLOWLIST[('sacredfire_fail', 'base', _step, '1:active:volatiles')] = _FLASH_FIRE
+# Fixed (history): OPEN BUG C, Encore's residual -end (engine_device_public_hooks.derived_volatiles), 24 entries retired.
+# Fixed (history): OPEN BUG D, a fainted active's kept stages (engine_device_trackers._observe), 13 entries retired.
+# Fixed (history): OPEN BUG E, Flash Fire's -start (engine_device_public_hooks.derived_volatiles), 2 entries retired.
 # OPEN BUG (reported; the last-move half is possibly B2's quirk, for the lead to rule): Pursuit's switch intercept prints
 # |move|p2a: X|Pursuit|p1a: Y|[from] Pursuit. B2 records a move line's last-used move only without [from]
 # (public_moves.record_move: last_kind/last_id gated by ~has_from, gpu_engine/public_moves.py:210-211) and credits the
@@ -223,24 +198,7 @@ for _scenario, _steps in (('destinybond_pursuer', (1, 2)), ('wh_pursuit', (0,)))
 # 990, acts &= ~(counter kind & (taken kind differs | the called move is not the chosen one))) has already cleared.
 _SLEEP_TALK_COUNTER = 'OPEN BUG: Sleep Talk\'s failing called Counter is revealed by B2 ([from] Sleep Talk line), not by the device'
 for _step in (1, 2):ALLOWLIST[('counter_sleeptalk', 'talk=0', _step, '0:0:moves')] = _SLEEP_TALK_COUNTER
-# OPEN BUG (reported): the upkeep's Lum and pinch-berry non-proc rules. B2's sweep (gpu_engine/public_item_nonproc.py,
-# its triggers) and the Python belief (src/pokezero/belief.py _sweep_end_of_turn_non_procs) rule out, for a living
-# active with an unrevealed, unmutated item, Lum Berry when a status is kept to |upkeep, and Salac/Petaya/Liechi when the
-# pre-slot HP is at or below 25% (Showdown agrees: data/items.ts lumberry, data/mods/gen3/items.ts pinch berries at
-# residual). The device's engine_device_negative_items.upkeep runs only the Leftovers rule, so its hard masks keep those
-# variants. It shows wherever the fixed catalog holds such a variant of the species: Snorlax's four and Jolteon's one
-# Lum Berry sets, Ninjask's Salac Berry set.
-_NONPROC_ITEMS = 'OPEN BUG: B2 rules out Lum Berry (status kept to the upkeep) and pinch-berry variants; the device upkeep runs only the Leftovers rule'
-for _scenario, _cases, _field, _steps in (
-        ('aromatherapy', ('base',), '0:2', range(1, 7)),
-        ('confusion_selfhit', ('damage=0', 'damage=15'), '1:1', range(4, 13)),
-        ('sleepclause_faint', ('base',), '1:0', range(2, 7)), ('subfaint', ('base',), '0:0', range(0, 7)),
-        ('toxic', ('accuracy=0',), '1:0', (0,)), ('yawn', ('sleep=0', 'sleep=1', 'sleep=2', 'sleep=3'), '1:0', range(1, 7)),
-        ('yawn_again', ('base',), '1:0', range(1, 4)), ('yawn_sleepclause', ('base',), '1:0', range(0, 5)),
-        ('yawn_statused', ('base',), '1:0', (1,))):
-    for _case in _cases:
-        for _step in _steps:
-            for _mask in ('belief_hard', 'visible_hard'):ALLOWLIST[(_scenario, _case, _step, f'{_field}:{_mask}')] = _NONPROC_ITEMS
+# Fixed (history): OPEN BUG I, the upkeep's Lum and pinch-berry rules (engine_device_negative_items.upkeep), 140 entries retired.
 # B2 limit (explained, not a device fact): B2's fold refuses (PAYLOAD) a side's second encounter of one species, at the
 # repeat's arrival line (|switch|p2a: Gengar2|Gengar, L74, M|...: RAW_BEGIN, SWITCH_PRELUDE, MUDSHOT, SWITCH, NONPROC,
 # TENDENCY); Gen 3 Random Battle's Species Clause never sends it, the probes' Custom Game does. The case is compared
