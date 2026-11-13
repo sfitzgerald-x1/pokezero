@@ -1,7 +1,7 @@
 """Prospective literal no-damage target input components, no scientific roots."""
 from copy import deepcopy
 from dataclasses import replace
-import ast,json,os,subprocess,unittest
+import json,os,subprocess,unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import jax
@@ -15,9 +15,9 @@ from gpu_engine import engine_execution_completeness as ex,engine_lifecycle_call
 from gpu_engine import engine_retained_encoder_driver as driver,engine_request_source as request,engine_own_facts as own
 from gpu_engine import engine_leftovers_callbacks as leftovers,engine_full_v4_event_device as full
 from gpu_engine import public_belief,v4_encoder as v4,public_wire,transition as tr,source_provenance,mechanics as m,absorption
-from gpu_engine_default_observer_ast import dump_default_program,assert_hp_rng_mutations_detected
 from _showdown_root import showdown_root
 import test_gpu_engine_sleep_powder_runtime as fixtures
+import gpu_engine_eager_witness as eager
 
 class NoDamageOwningTests(unittest.TestCase):
  @classmethod
@@ -70,8 +70,7 @@ class NoDamageOwningTests(unittest.TestCase):
  def same(self,a,b):
   for x,y in zip(jax.tree.leaves(a),jax.tree.leaves(b),strict=True):np.testing.assert_array_equal(x,y)
  def test_source_default_and_original_callback_grammar(self):
-  before=ast.parse(subprocess.check_output(['git','show','b8092a85:gpu_engine/transition.py'],text=True));after=ast.parse(Path('gpu_engine/transition.py').read_text());baseline=dump_default_program(before)
-  self.assertEqual(dump_default_program(after),baseline);assert_hp_rng_mutations_detected(self,after,baseline)
+  # transition.py is certified against CURRENT_TRANSITION (full AST plus mutations) by terminal_closeout and seismic_toss_components.
   with self.assertRaises(ValueError):hit.check_compiled(hit.Compiled(self.helper.device))
   with self.assertRaises(ValueError):jax.jit(lambda:hit.check_compiled(self.helper).binding)()
   script=r'''
@@ -129,6 +128,7 @@ process.stdout.write(JSON.stringify(out));'''
     observed=risk.outcome_on_tape(out,o,eligible=j.ones(8,bool),active=j.ones(8,bool),captured_no_damage=nd.Captured(p,w,hp,vol,sub,hpt,hpp))
     self.assertEqual(observed.execution.risks.carry.risk.tolist(),[0]*8)
  def test_actual_miss_pure_type_and_named_absorbs_both_full_owners(self):
+  self.enterContext(eager.eager_source_witness(self.prepared))
   arrays=self.f.base().arrays('pressure','pressure');b=5;pair=[]
   for row,(species,abi)in enumerate((('pidgeot','pressure'),('vaporeon','waterabsorb'),('houndoom','flashfire'),('jolteon','voltabsorb'),('pikachu','pressure'))):
    own_arrays={k:np.array(v[:1],copy=True)for k,v in arrays.items()};foe_arrays={k:np.array(v[1:2],copy=True)for k,v in arrays.items()}
@@ -214,3 +214,7 @@ process.stdout.write(JSON.stringify(out));'''
    else:self.fail('unrepresented literal raw '+str(kind))
   _,packets=public_wire.project_lines(wire,lines,**v4.wire_kwargs(self.catalog))
   return np.asarray([e.words()for packet in packets for e in packet.events],np.int32)
+
+
+def tearDownModule():
+    eager.clear()   # drop the consume executables this module compiled
