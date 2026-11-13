@@ -260,6 +260,18 @@ class PublicHooksTests(unittest.TestCase):
   c=h.entry(c,passed,spiked,1,None,yes)
   cleared=spiked._replace(boosts=spiked.boosts.at[:,1,3].set(0));c=h.turn_end(c,spiked,cleared,yes)
   self.assertEqual(np.asarray(tr.readout(c.trackers,zero).boosts)[:,1].tolist(),[[2,0,0,0,0,0,0]]*2)
+ def test_a_drag_into_spikes_counts_the_entrants_spikes_damage_taken(self):
+  # Bug J: dragging.drag applies the entrant's Spikes before the hook runs; the drag installed from that after state, so
+  # the damage history's arrival baseline already held the Spikes loss and the round credited no damage taken. B2 (and
+  # the device's own switch-in path) count it: last_damage_taken (shown) and damage_exact_taken (exact) at TURN.
+  s=state();yes=j.ones(2,bool)
+  c=h.initialize(s,tables())
+  dragged=s._replace(active=s.active.at[:,1].set(3),hp=s.hp.at[:,1,3].set(175))     # Spikes: 25 of 200 on entry
+  c=h.drag(c,s,dragged,1,None,yes);c=h.public_turn(c,dragged,yes,c.trackers.turn+1)
+  foe=tr.readout(c.trackers,j.zeros(2,j.int32));own=tr.readout(c.trackers,j.ones(2,j.int32))
+  np.testing.assert_allclose(np.asarray(foe.mon_features['last_damage_taken'])[:,1],[.12,.12])   # 100% -> 88% shown
+  np.testing.assert_allclose(np.asarray(c.trackers.damage_exact_taken)[:,1,1],[.125,.125])       # 25/200 exact
+  np.testing.assert_allclose(np.asarray(own.own_mon_features['last_damage_taken'])[:,0],[.125,.125])
  def test_encore_bag_bit_is_gated_on_a_living_holder(self):
   # The engine zeroes a fainted holder's encore_counter only at the step's end; a derived read before that sees a live
   # counter on a fainted holder, which B2's FAINT clear has already emptied.

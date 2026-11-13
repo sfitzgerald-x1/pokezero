@@ -755,14 +755,18 @@ def drag(c,before,after,side,table,use):
     # pre-entry incoming private operands already exist in the actual before
     # state; only public handler results are exposed.
     c=depart(c,before,after,side,table,use)
-    # The dragged-out mon's slot drops its stages, as withdraw does for a switch (entry.depart zeroes the engine's).
-    # The fainted-active carry (engine_device_trackers._observe) keeps a slot's stages at hp 0, so a stale bench carry
-    # would show again if a later drag returned this mon into lethal Spikes, where B2's drag arrival reads 0
-    # (public_mon_state.py:111-112).
+    # The dragged-out mon's slot drops its stages, as withdraw does for a switch (entry.depart zeroes the engine's):
+    # no stale bench carry, which the fainted-active carry (engine_device_trackers._observe keeps a slot's stages at
+    # hp 0) would show on a drag back into lethal Spikes, and device_public_world_state would copy into a bench foe.
+    # B2's drag arrival resets the seat (public_mon_state.py:111-112).
     c=c._replace(trackers=_write(c.trackers,'boosts',side,_li.take(before.active,_r(before),side),
         j.zeros((len(c.trackers.error),7),j.int32),use))
-    c=install(c,after,side,use)
+    # Bug J: install from the pre-entry state, as a switch's install precedes its entry. dragging.drag has already run
+    # entry.enter (Spikes) in `after`, so installing from it put the damage history's arrival baseline below the
+    # entrant's Spikes damage, which B2 counts in the round's damage taken (last_damage_taken, damage_exact_taken at
+    # TURN). The entry (or observe) below reads `after` and records the Spikes loss, as for a switch-in.
     incoming=before._replace(active=_li.put(before.active,_r(before),(side,),_li.take(after.active,_r(after),side)))
+    c=install(c,incoming,side,use)
     return entry(c,incoming,after,side,table,use) if table is not None else observe(c,after,use)
 
 
