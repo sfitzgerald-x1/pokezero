@@ -11,8 +11,10 @@ always compared, against the engine's neutral value (0, -1 or False), so a
 scenario reports MISMATCH until the PR that adds the state; a scenario's
 `require_fields` names engine fields that must exist. Unresolved chance roles,
 and any unaudited start-of-battle randomness (lead speed ties, gender, Quick
-Claw), count as failures. Output: OUT/<move>.json per scenario with a per-case diff list, and
-OUT/summary.json.
+Claw), count as failures. A scenario's optional `showdown_lines` ({step: [line, ...]}) pins the
+reference's observation order: those protocol lines must appear, in order and adjacent, in Showdown's
+log for that step (its snapshot's log tail), else the case is SHOWDOWN_LINES_MISSING. Output:
+OUT/<move>.json per scenario with a per-case diff list, and OUT/summary.json.
 
 Pool rows come from gpu_engine/team_rows.cjs (generate_teams.cjs's row builder)
 and the engine tables from the real pool metadata, so vocabulary ids match.
@@ -86,6 +88,10 @@ def load_scenario(path):
     for step, fields in scenario.get('tape_steps', {}).items():
         int(step)
         for field, value in fields.items():_check_value(field, value)
+    for step, lines in scenario.get('showdown_lines', {}).items():
+        if not 0 <= int(step) < len(scenario['script']):raise ValueError(f'{path}: showdown_lines step {step} outside the script')
+        if not lines or not all(isinstance(x, str) and x.startswith('|') for x in lines):
+            raise ValueError(f'{path}: showdown_lines[{step}] must be protocol lines starting with |')
     unknown = sorted(set(scenario.get('require_fields', ())) - set(REQUIRABLE))
     if unknown:raise ValueError(f'{path}: unknown require_fields {unknown}; choose from {REQUIRABLE}')
     scenario.setdefault('format', SLEEP_CLAUSE_FORMAT)
@@ -216,6 +222,12 @@ def compare_lane(view, snapshot, vocab, *, mask, destiny_bond=None):
     done = bool(view['done'])
     check('winner', snapshot['winner'] if snapshot['ended'] else None, int(view['winner']) if done else None)
     return diffs
+
+
+def lines_in_order(log, expected):
+    """Whether `expected` appears in `log` as one adjacent run, in order (exact protocol lines)."""
+    log, expected = list(log), list(expected)
+    return any(log[i:i + len(expected)] == expected for i in range(len(log) - len(expected) + 1))
 
 
 def field_kind(field):
@@ -387,6 +399,10 @@ def run_scenario(scenario, engine, showdown, metadata):
             entry['diffs'] = compare_lane(lane_view(arrays, i), sd['snapshot'], vocab, mask=mask[i],
                 destiny_bond=engine.destiny_bond)
             if entry['diffs']:entry['showdown_log_tail'] = sd['snapshot']['log_tail']
+            expected_lines = scenario.get('showdown_lines', {}).get(str(step))
+            if expected_lines and not lines_in_order(sd['snapshot']['log_tail'], expected_lines):
+                entry.update(showdown_lines_missing=expected_lines, showdown_log_tail=sd['snapshot']['log_tail'])
+                record.update(status='SHOWDOWN_LINES_MISSING', live=False);continue
             if sd['snapshot']['ended'] or bool(arrays['done'][i]):record['live'] = False
     for record in records:
         if record['status'] is None:

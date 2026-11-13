@@ -50,7 +50,8 @@ class TableTests(unittest.TestCase):
     def test_move_flags(self):
         from gpu_engine import effects
         t = effects.from_metadata(metadata())
-        self.assertEqual(effects.MoveEffects._fields[-3:], ('perishsong', 'yawn', 'wrap'))
+        fields = effects.MoveEffects._fields;k = fields.index('perishsong')        # appended after M1's (WH appends defrost)
+        self.assertEqual(fields[k:k + 3], ('perishsong', 'yawn', 'wrap'))
         for name, move in (('perishsong', PERISH), ('yawn', YAWN), ('wrap', WRAP)):
             self.assertEqual(np.flatnonzero(np.asarray(getattr(t, name))).tolist(), [move])
 

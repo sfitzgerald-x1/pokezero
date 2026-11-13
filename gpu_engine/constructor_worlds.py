@@ -865,7 +865,7 @@ def fill_item_ledger(public,facts,tables):
     sides), as the device path and B2 hold it after the same -enditem line: mon_features['item_mutated'][side, slot] = 1 and,
     when that member's ledger is fresh (item_mutated and item_original both 0), item_original[side, slot] = the engine item id of
     the removed item (tables.item_names). `slot` is the member's public slot (the carry's species, joined as fix_knocked_items
-    joins). The rule is the device knock_off hook's (engine_device_public_hooks.py:538-544: fresh = item_mutated == 0 and
+    joins). The rule is the device knock_off hook's (engine_device_public_hooks.py:562-566: fresh = item_mutated == 0 and
     item_original == 0; item_original = the item held before the hit when fresh; item_mutated = 1) and B2's REMOVE
     (public_items.py:185, a -enditem line tagged [from] move: Knock Off is REMOVE; public_items.py:130-138: REMOVE sets mutated,
     and own_removal = REMOVE, not yet mutated and no recorded original, records the removed item as the original). Both ledgers
@@ -997,7 +997,7 @@ def fix_knocked_items(state,owner,facts,tables):
     """The world state with item_knocked[0, side, p] set for each member the lines show knocked off (facts.knocked, both sides):
     A2's engine leaf (gpu_engine/state.py: pokemon.itemKnockedOff, never reset), which Showdown's Gen 3 Knock Off sets on the
     target whose item it removes (data/mods/gen4/moves.ts:700-701 at f76228a13) and the engine's own Knock Off sets on the same
-    hit (transition.py:1844-1847). Its only engine reader is Trick's Gen 3-4 failure check (transition.py:1579; Showdown's
+    hit (transition.py:2000-2003). Its only engine reader is Trick's Gen 3-4 failure check (transition.py:1683; Showdown's
     sim/pokemon.ts:1853 takeItem: gen <= 4 and either mon's itemKnockedOff): without it an in-tree Trick on that member succeeds
     where Showdown fails. from_b2 and the materializer predate the leaf and leave it False. Members join by normalized species,
     as fix_trace_base_ability joins (the owner's side: the request's party; the peer's: this world's party, whose revealed

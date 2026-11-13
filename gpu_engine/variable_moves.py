@@ -3,6 +3,7 @@ from typing import NamedTuple
 
 import jax
 import jax.numpy as jnp
+from .mechanics import NONE, SLP
 
 
 class VariableMoveTable(NamedTuple):
@@ -12,6 +13,8 @@ class VariableMoveTable(NamedTuple):
     hp_dependent: jax.Array
     special_type: jax.Array
     dark_type: jax.Array
+    # Fidelity WH (C-lite, appended): Facade's doubled base power.
+    facade: jax.Array
 
 
 def from_metadata(metadata):
@@ -24,7 +27,8 @@ def from_metadata(metadata):
         jnp.asarray([name == "frustration" for name in names]),
         jnp.asarray([name in {"reversal", "flail"} for name in names]),
         jnp.asarray([name in special for name in vocab["types"]]),
-        jnp.asarray(vocab["types"].index("dark"), jnp.int32))
+        jnp.asarray(vocab["types"].index("dark"), jnp.int32),
+        jnp.asarray([name == "facade" for name in names]))
 
 
 def resolve(table, move, power, move_type, physical, hp_type, hp_power, happiness, hp, max_hp):
@@ -47,3 +51,14 @@ def resolve(table, move, power, move_type, physical, hp_type, hp_power, happines
         jnp.where(ratio < 10, 100, jnp.where(ratio < 17, 80, jnp.where(ratio < 33, 40, 20)))))
     power = jnp.where(table.hp_dependent[move], hp_power, power)
     return power, move_type, physical
+
+
+def facade_power(table, move, power, status):
+    """Facade (data/moves.ts:5029-5046; no gen3/gen4 override): onBasePower doubles it when the user's status is set
+    and is not slp (pokemon.status && pokemon.status !== 'slp'), read at getDamage: 70 -> 140 under par, brn, psn or
+    tox (chainModify(2) on 70 is exact). A frozen user never gets here frozen (Facade has no defrost flag, so it acts
+    only after the 20% thaw clears it); a Sleep Talk call reads slp. Gen 3 still halves a burned user's physical
+    damage unless it has Guts (data/mods/gen3/scripts.ts:41-43, gen3_damage's burned/guts inputs)."""
+    status = jnp.asarray(status)
+    doubled = table.facade[move] & (status != NONE) & (status != SLP)
+    return jnp.where(doubled, power * 2, power)
