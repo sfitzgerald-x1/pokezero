@@ -160,7 +160,7 @@ EFFECTS = (
          'probes: 12 wrap* scenarios (20 cases), EXACT against Showdown f76228a1 at M2 + R1 (3e0878e4); each gated position fails a '
          'named probe when dropped (#1930 (M2 + R1) PR body, R1 section, position -> probe table: 4 wrap and seven more, 8 and 9 '
          'wrap_tie, 11 wrap_trapper_faint and wrap_trapper_switch)',
-         'live roots: a held partial trap is refused (its 3-6 turn count is hidden): an own-held one is refused first (gpu_engine/phase_d_live_worlds.py:343-355, OWN_VOLATILE_OR_LATENT_CLOCK_UNAVAILABLE); '
+         'live roots: a held partial trap is refused (its 3-6 turn count is hidden): an own-held one is refused first (gpu_engine/phase_d_live_worlds.py:354-355, OWN_VOLATILE_OR_LATENT_CLOCK_UNAVAILABLE); '
          'an opponent-held one because the protocol world is built with '
          'approximate_partial_trap_turns=False (gpu_engine/phase_d_protocol_world.py:359-360), so pokezero.engine_world raises '
          'volatile_unsupported'),
