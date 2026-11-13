@@ -1,6 +1,6 @@
 # screen-r5a: screen-r4a3's configuration on the post-fidelity tree (declaration notes)
 
-**Pre-registered panel declaration:** `depthn-foulplay-dn2w16-declaration-r5a-20261113.json`, sha256 `0b995d6e864ec430c9ebe8dc9694dd0b70683a6293024ab0e488eafe928ae96e`. It's built from screen-r4a3's committed declaration (`e2e39feb…`) by r5a's bind script (kept with the run's records, outside the repo), which replaces only the binding fields. **Adoption record:** `depthn-foulplay-dn2w16-amendment-screen-r5a-adoption-20261113.json`, sha256 `499dd65a275815d96dc676bd2abac229756b84457b7d1103933330d53d90dd14`.
+**Pre-registered panel declaration:** `depthn-foulplay-dn2w16-declaration-r5a-20261113.json`, sha256 `0b995d6e864ec430c9ebe8dc9694dd0b70683a6293024ab0e488eafe928ae96e`. It's built from screen-r4a3's committed declaration (`e2e39feb…`) by r5a's bind script (kept with the run's records, outside the repo), which replaces only the binding fields. **Adoption record:** `depthn-foulplay-dn2w16-amendment-screen-r5a-adoption-20261113.json`, sha256 `1a29c8fd16a4a72efc15ca7039484672047a2ce95eded1b2947c21ae5bfe6984`.
 
 ## What screen-r5a answers
 
@@ -112,7 +112,7 @@ Re-check if any XLA stream, async or overlap flag changes, or if jax is upgraded
 
 The manifest also lists the run and pricing scripts (`q1-run.sh`, `q1_price.py`), `q1.status` and the two run logs.
 
-**MPS check at this pre-flight:** every server node (three nodes for pf6) shows mps.capable=false, gpu.sharing-strategy=none and gpu.replicas=1 (`mps_off_r5a.py`, MPS_OFF PASS).
+**MPS check at this pre-flight:** every server node (three nodes for pf6) shows mps.capable=false, gpu.sharing-strategy=none and gpu.replicas=1 (`mps_off_r5a.py`, outside the repo, sha256 `e32e8eeec279049acd64a2731780fb7bfd1e82cdfad61212a5ae26805ecea5df`: MPS_OFF PASS).
 
 ## Pre-flight history (all runs, failures included)
 

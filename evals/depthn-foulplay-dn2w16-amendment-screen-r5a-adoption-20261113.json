@@ -57,7 +57,7 @@
   "sha256": "8a708ebbc6a4206dafc38b2d729656e25da6cf914931b5424353f441f6e9ed00"
  },
  "final_fairness_rule": "RULE_R3",
- "made_at_utc": "2026-11-13T09:37:09Z",
+ "made_at_utc": "2026-11-13T09:40:11Z",
  "not_adopted": [
   {
    "path": "evals/depthn-foulplay-dn2w16-amendment-screen-r2-alive-bands-20261109.json",
@@ -66,7 +66,7 @@
   }
  ],
  "run": {
-  "dispatch_note": "the dispatch tree is the declaration commit 21b0a8f3 (the server tree 41faf832 plus the declaration JSON alone, as depthn_live_panel.server_tree_check requires); this record and the declaration note are pre-registered on the rules branch scott/v2e-r5a-rules in a commit pushed before dispatch; the verdict and the extension run as screen-r4a3's did (the dispatch commit's git checkout first, then the rules commit: the verdict from a rules-commit checkout with --tree-commit 21b0a8f3)",
+  "dispatch_note": "the dispatch tree is the declaration commit 21b0a8f3 (the server tree 41faf832 plus the declaration JSON alone, as depthn_live_panel.server_tree_check requires); this record and the declaration note are pre-registered on the rules branch scott/v2e-r5a-rules in a commit pushed before dispatch; the verdict and the extension run as screen-r4a3's did (the dispatch commit's git checkout first, then the rules commit; the verdict runs from a rules-commit checkout, the readout tree being this record's run.tree_commit, 21b0a8f3)",
   "run_directory": "/out/screen-r5a",
   "server_tree_commit": "41faf832fd168841ce73913c5d8831376d635d95",
   "tree_commit": "21b0a8f38eba3d61853c7aba57881a9742e2114c"
@@ -103,7 +103,7 @@
   "note": "stated here because the declaration has no key for it; the screen's servers run exactly this",
   "placement": {
    "gpus": 8,
-   "mps": "off on every server node (mps_off_r5a.py, MPS_OFF PASS)",
+   "mps": "off on every server node (mps_off_r5a.py, outside the repo, sha256 e32e8eeec279049acd64a2731780fb7bfd1e82cdfad61212a5ae26805ecea5df: MPS_OFF PASS)",
    "nodes": "4 + 2 + 2 servers on three nodes behind one proxy",
    "pf6_routing": "every server used (95-186 requests each), at most 1 battle and 1 request in flight on any server; proxy hop p50 8.4 ms local, 9.2 ms cross-node (p99 12.8 / 13.5 ms)",
    "servers": 8,

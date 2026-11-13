@@ -46,7 +46,7 @@ PINNED = dict(amendment='c4ff30a25a573f90fdd02957b40fb8307d8b87b56dfbfe60d85ea66
 EXTENSION_BINDINGS = dict(screen_r4a='8a7ef53684f732f86cc7522abebb9a40a416d51f86786b77b0a9840fed9ccb7d',
                           screen_r4a2='b8cc7ee97a795b7eb6c7df069b4c0652acc77267a88bf50fb925003d8317a167',
                           screen_r4a3='d067af7781b204978431c4b27cf059c93ea260e71d3026e7e5b1f6a8f5a10137',
-                          screen_r5a='499dd65a275815d96dc676bd2abac229756b84457b7d1103933330d53d90dd14')   # {run name: committed adoption-record sha256} of runs that pre-registered the extension (also in V.RUN_BINDINGS)
+                          screen_r5a='1a29c8fd16a4a72efc15ca7039484672047a2ce95eded1b2947c21ae5bfe6984')   # {run name: committed adoption-record sha256} of runs that pre-registered the extension (also in V.RUN_BINDINGS)
 
 
 def committed(pinned=PINNED):
