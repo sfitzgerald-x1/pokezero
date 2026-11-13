@@ -564,8 +564,8 @@ class LiveTableTests(unittest.TestCase):
             'mirrorcoat': ('retaliation', '286a5ffe'), 'counter': ('retaliation', '0d661773'), 'bonemerang': ('other', '0d661773'),
             'trick': ('item_removal', '3f48093b'), 'knockoff': ('item_removal', '3f48093b'),
             'wrap': ('volatile', 'f3e71663'), 'yawn': ('volatile', 'f3e71663'), 'perishsong': ('volatile', 'f3e71663'),
-            'superpower': ('self_stat_drop', 'f00dfeed'), 'psychoboost': ('self_stat_drop', 'f00dfeed'),
-            'sacredfire': ('status', 'f00dfeed'), 'facade': ('other', 'f00dfeed')})
+            'superpower': ('self_stat_drop', '8823d7c5'), 'psychoboost': ('self_stat_drop', '8823d7c5'),
+            'sacredfire': ('status', '8823d7c5'), 'facade': ('other', '8823d7c5')})
         self.assertEqual(sorted(m for m, v in LIVE_GUARDED.items() if v[0] == 'A'), ['transform'])
         self.assertEqual(sorted(m for m, v in LIVE_GUARDED.items() if v[0] == 'C'), [])
         self.assertEqual({m: v for m, v in LIVE_GUARDED.items()}, {m: v for m, v in FIXTURE_GUARDED.items() if m not in LIVE_RETIRED})

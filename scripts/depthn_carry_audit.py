@@ -214,7 +214,7 @@ EFFECTS = (
         ('Showdown data/random-battles/gen3/teams.ts:473: a set with Trick always holds Choice Band',
          'Showdown data/moves.ts:19875: Trick swaps the two items',
          'in-tree since M1 (8b212312): gpu_engine/items.py:27-28 the Trick table; transition.py:1680-1689 the swap; state.py:85 '
-         'item_knocked (live roots carry it since #1935, 3f48093b); since WH + C-lite (f00dfeed) transition.py:1690-1701 a received '
+         'item_knocked (live roots carry it since #1935, 3f48093b); since WH + C-lite (8823d7c5) transition.py:1690-1701 a received '
          'White Herb is used inside Trick\'s onHit, before the device\'s trick hook (probes wh_trick, wh_trick_receive_negative)',
          'live roots: gpu_engine/phase_d_protocol_world.py:105-107 a root after a public item swap is refused (PUBLIC_ITEM_SWAP_NOT_SUPPORTED)'),
         'Furret and Kecleon. Not LOCK-class at the request source (choice_move and item are read from the state).', engine_since='8b212312'),

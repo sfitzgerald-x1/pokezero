@@ -25,7 +25,7 @@ trick_empty, trick_encore, trick_faster, trick_knocked_target, trick_knocked_use
 trick_sub, trick_takeband; Knock Off since A2, 286a5ffe, probes knockoff, knockoff_band, knockoff_midturn_lock; Sticky Hold's
 block is in-engine, gpu_engine/items.py sticky_hold, and a blocked Knock Off marks nothing at the root; roots after a public
 item swap stay refused by the world constructor, PUBLIC_ITEM_SWAP_NOT_SUPPORTED), superpower, psychoboost, sacredfire and facade
-(WH + C-lite, f00dfeed: White Herb, gpu_engine/items.py white_herb, used by transition's _white_herb at every move's AfterMove
+(WH + C-lite, 8823d7c5: White Herb, gpu_engine/items.py white_herb, used by transition's _white_herb at every move's AfterMove
 (both actives), each entrant's SwitchIn, residual order 29 and inside Trick's onHit, restores the self drops of Superpower (tier A
 until WH; its drop itself is modelled since A1) and Psycho Boost (tier C while the user's White Herb was unconsumed: ours the
 request's item, the opponent's every pool Deoxys and Deoxys-Attack, which hold one, until an -enditem or an -item was seen;
@@ -99,8 +99,8 @@ RETIRED = {'destinybond': ('volatile', '286a5ffe'), 'hyperbeam': ('multi_turn', 
            'sleeppowder': ('status', '4ee5d3ee'), 'hypnosis': ('status', '4ee5d3ee'), 'bonemerang': ('other', '0d661773'),
            'trick': ('item_removal', '3f48093b'), 'knockoff': ('item_removal', '3f48093b'),
            'wrap': ('volatile', 'f3e71663'), 'yawn': ('volatile', 'f3e71663'), 'perishsong': ('volatile', 'f3e71663'),
-           'superpower': ('self_stat_drop', 'f00dfeed'), 'psychoboost': ('self_stat_drop', 'f00dfeed'),
-           'sacredfire': ('status', 'f00dfeed'), 'facade': ('other', 'f00dfeed')}
+           'superpower': ('self_stat_drop', '8823d7c5'), 'psychoboost': ('self_stat_drop', '8823d7c5'),
+           'sacredfire': ('status', '8823d7c5'), 'facade': ('other', '8823d7c5')}
 WATCHED = frozenset(GUARDED) | frozenset(TIER_B) | frozenset(RETIRED)
 # The guarded tiers in force while records carried no per-entry `guarded` (before 49530d2a; GUARDED unchanged from 2c5c7b80 until
 # RETIRED): reach's bounds for those records use these, so a later guard set does not move them.
