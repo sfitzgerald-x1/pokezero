@@ -82,7 +82,8 @@ def apply(state,mons,abilities,source_tables,tables,effective,live,*,operation,s
     Any unboost of the pending target cancels, regardless of stat. Only plain
     damage marks a hit; faint clears it. Switches and other lines leave it live.
     A missing target on QUEUE leaves no pending record; RESOLVE clears it even
-    when the original reveal or cached candidate-ability guard suppresses a claim.
+    when the original reveal, a borrowing or Transformed target, or the cached
+    candidate-ability guard suppresses a claim.
     """
     if state.side.ndim!=1 or not state.side.shape[0]:raise ValueError('nonempty Mud Shot batch required')
     b=state.side.shape[0]
@@ -132,7 +133,10 @@ def apply(state,mons,abilities,source_tables,tables,effective,live,*,operation,s
     mask=effective[rows,1-ps,pt]
     dust=jnp.any((mask&tables.shield_dust[species])!=0,axis=-1)
     known=jnp.any((mask&tables.known_ability[species])!=0,axis=-1)
-    reveal=(op==RESOLVE)&pending&state.saw_damage&~state.cancelled&(abilities.original[rows,ps,pt]==0)&(~known|dust)
+    # A borrowing (Trace copy) or Transformed target's RUNNING ability blocked the drop, never its set (B4). The Python
+    # belief's _resolve_pending_mudshot returns before any claim or re-summary for it, so no claim and no refresh here.
+    borrowing=(abilities.running[rows,ps,pt]>0)|abilities.transformed[rows,ps,pt]
+    reveal=(op==RESOLVE)&pending&state.saw_damage&~state.cancelled&(abilities.original[rows,ps,pt]==0)&~borrowing&(~known|dust)
     clear=(op==RESOLVE)|((op==FAINT)&match)
     queued=(op==QUEUE)&~none
     candidate=state._replace(side=jnp.where(clear,-1,jnp.where(queued,side,state.side)),

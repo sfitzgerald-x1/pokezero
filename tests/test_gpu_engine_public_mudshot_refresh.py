@@ -32,22 +32,23 @@ class MudShotRefreshTests(unittest.TestCase):
         return state,pending
 
     def test_authoritative_claim_and_checkpoint_match_source_pinned_or_not_and_never_pin_a_borrowing_or_transformed_mon(self):
-        # Mud Shot's drop is blocked by the RUNNING ability. While the target borrows one (a Trace copy) or is
-        # Transformed, that is the copy, so neither the Python belief nor B2 pins Shield Dust on its set (B4).
+        # Mud Shot's drop is blocked by the RUNNING ability. While the target borrows one (here a Traced Shield Dust) or
+        # is Transformed, that is the copy, not its set (B4): the Python belief returns before any claim or re-summary,
+        # and B2 makes no claim and runs no refresh, so neither side's set, candidates, cache or conflicts move.
         import numpy as np
         from gpu_engine.public_context import basis
         from pokezero.belief import PublicBattleBeliefEngine
         from pokezero.showdown import _public_event_from_line
-        for borrowed,transformed,pin in ((False,False,False),(True,False,False),(False,True,False),(False,False,True)):
+        for borrowed,transformed,pin in ((False,False,False),(False,False,True),(True,False,False),(False,True,False),(True,False,True)):
             state,pending=self.initial()
             engine=PublicBattleBeliefEngine.from_events([_public_event_from_line(line) for line in (
                 *self.prefix,'|move|p1a: Snorlax|Mud Shot|p2a: Absol','|-damage|p2a: Absol|80/100')],
                 format_id='gen3randombattle',set_source=self.f.public.source)
             if borrowed:
                 pokemon=engine.snapshot().side('p2')[0]
-                engine._running_ability[pokemon.key]='Pressure'
+                engine._running_ability[pokemon.key]='Shield Dust'
                 abilities=state.context.abilities._replace(running=state.context.abilities.running.at[0,1,0].set(
-                    self.f.catalog.abilities.ability_id('Pressure')))
+                    self.tables.shield_dust_id))
                 state=state._replace(context=state.context._replace(abilities=abilities))
             if transformed:
                 engine._replace_belief(engine.snapshot().side('p2')[0],transformed=True)
@@ -59,23 +60,29 @@ class MudShotRefreshTests(unittest.TestCase):
                 beliefs,_=self.b.narrow_pin(state.beliefs,self.f.source.pin_mask('Absol',[survivor]),
                     valid=self.j.zeros_like(state.beliefs.species,bool).at[0,0,0].set(True))
                 state=state._replace(beliefs=beliefs)
+            borrowing=borrowed or transformed
+            before=engine.snapshot().side('p2')[0];conflicts=engine.variant_pin_conflicts.get('p2:absol',0)
             result=self.jax.jit(lambda c,n,b:self.x.resolve(c,n,b,state.mons,self.f.catalog.source.device,
                 self.f.catalog.context,self.tables,producer_binding=self.tables.binding))(state.context,pending,basis(state.context,state.beliefs))
-            self.assertEqual(result.admitted.tolist(),[True]);self.assertEqual(result.revealed.tolist(),[True])
+            self.assertEqual(result.admitted.tolist(),[True]);self.assertEqual(result.revealed.tolist(),[not borrowing])
             engine._resolve_pending_mudshot();pokemon=engine.snapshot().side('p2')[0]
-            borrowing=borrowed or transformed
-            self.assertEqual(pokemon.revealed_ability,None if borrowing else 'Shield Dust')
-            self.assertEqual(int(result.context.abilities.original[0,1,0]),
-                int(state.context.abilities.original[0,1,0]) if borrowing else int(self.tables.shield_dust_id))
-            if borrowing:self.assertEqual(int(state.context.abilities.original[0,1,0]),0)
+            self.assertEqual(result.state.side.tolist(),[-1])
+            self.assertEqual(int(result.beliefs.conflicts[0,0,0]),engine.variant_pin_conflicts.get('p2:absol',0))
+            if borrowing:
+                self.assertIsNone(pokemon.revealed_ability);self.assertEqual(int(state.context.abilities.original[0,1,0]),0)
+                self.assertEqual(pokemon.candidate_variants,before.candidate_variants)
+                self.assertEqual(engine.variant_pin_conflicts.get('p2:absol',0),conflicts)
+                for new,old in zip(self.jax.tree.leaves(result.context),self.jax.tree.leaves(state.context)):
+                    np.testing.assert_array_equal(new,old)
+                continue
+            self.assertEqual(pokemon.revealed_ability,'Shield Dust')
+            self.assertEqual(int(result.context.abilities.original[0,1,0]),int(self.tables.shield_dust_id))
             self.assertEqual(int(result.context.abilities.running[0,1,0]),int(state.context.abilities.running[0,1,0]))
-            self.assertEqual(bool(result.context.abilities.transformed[0,1,0]),transformed)
+            self.assertFalse(bool(result.context.abilities.transformed[0,1,0]))
             cache=result.context.refresh.controller.visible
             self.assertEqual(int(cache.generation[0,0,0]),int(state.context.refresh.controller.visible.generation[0,0,0])+1)
             self.assertEqual(int(cache.summary.count[0,0,0]),pokemon.candidate_set_count)
             np.testing.assert_array_equal(cache.summary.effective[0,0,0],self.f.source.pin_mask('Absol',pokemon.candidate_variants))
-            self.assertEqual(int(result.beliefs.conflicts[0,0,0]),engine.variant_pin_conflicts.get('p2:absol',0))
-            self.assertEqual(result.state.side.tolist(),[-1])
 
     def test_cached_guard_and_species_or_binding_refusals_preserve_state(self):
         import numpy as np
