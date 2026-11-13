@@ -114,7 +114,38 @@ class TrueStartTests(unittest.TestCase):
         with patch.object(pw, '_carried_root', lambda root, detached, lines, metadata: detached), \
                 patch.object(pw, '_gen3_randbat_belief_start_override_result', return_value=(None, 'test')):
             made = pw.sample(root, detached, lines=('x',), catalog=None, source=source, metadata={}, config=None, battle_id='b', seed=20261103, count=8)
-        self.assertEqual([w.kernel_seed for w in made.worlds], [P.kernel_seed(root, detached, 20261103, i) for i in range(8)])
+        self.assertEqual([w.kernel_seed for w in made.worlds], [P.kernel_seed(root, detached, ('x',), 20261103, i) for i in range(8)])
+
+    def test_world_seeds_follow_the_game_not_the_wall_clock(self):
+        """The drawn worlds hash the owner's GAME lines (pw.game_lines_sha256): real r4a3 protocol lines (decision 602/13's prefix,
+        without that decision's own request line) re-timestamped (every |t:| shifted, as a second run of the same game prints them)
+        keep every world and kernel seed, while their exact-bytes hash changes; one changed game line changes them. Search is then
+        reproducible across runs on the same state."""
+        fixture = Path(__file__).parent / 'fixtures' / 'phase_d_held_volatiles' / 'encore_602_13.json'
+        lines = json.loads(fixture.read_text())['lines']
+        exact = lambda xs: hashlib.sha256(''.join(x + '\n' for x in xs).encode()).hexdigest()
+        shifted = ['|t:|' + str(int(x[4:]) + 86400) if x.startswith('|t:|') else x for x in lines]
+        self.assertEqual(sum(a != b for a, b in zip(lines, shifted)), 15)
+        transport = [*shifted, '|c|~|chat', '|j|watcher', '|inactive|Time left: 150 sec', '|raw|<b>x</b>', '|:|1794409999']
+        clean = [x for x in lines if not x.startswith('|t:|')]
+        game = pw.game_lines_sha256(lines)
+        self.assertNotEqual(exact(lines), exact(shifted))
+        self.assertEqual({pw.game_lines_sha256(x) for x in (shifted, transport, clean)}, {game})
+        self.assertEqual(game, exact(clean))
+        moved = list(lines);at = next(i for i, x in enumerate(moved) if x.startswith('|move|'))
+        moved[at] = moved[at] + '|[miss]'
+        self.assertNotEqual(pw.game_lines_sha256(moved), game)
+        root = public_root(());detached = SimpleNamespace(source_binding_sha256='b', address=SimpleNamespace(stream=5, frame=3, owner=0))
+        source = SimpleNamespace(binding_sha256='b', original=None)
+        def seeds(xs):
+            with patch.object(pw, '_carried_root', lambda root, detached, lines, metadata: detached), \
+                    patch.object(pw, '_gen3_randbat_belief_start_override_result', return_value=(None, 'test')):
+                made = pw.sample(root, detached, lines=tuple(xs), catalog=None, source=source, metadata={}, config=None,
+                    battle_id='b', seed=20261103, count=16)
+            return [w.kernel_seed for w in made.worlds], list(made.seeds)
+        self.assertEqual(seeds(lines), seeds(shifted));self.assertEqual(seeds(lines), seeds(transport))
+        self.assertNotEqual(seeds(lines)[0], seeds(moved)[0])
+        self.assertEqual(seeds(lines)[0], [P.kernel_seed(root, detached, shifted, 20261103, i) for i in range(16)])
 
     def test_the_true_world_is_materialized_as_the_sampler_materializes(self):
         root = public_root(());detached = SimpleNamespace(address=SimpleNamespace(stream=5, frame=3, owner=1))
@@ -134,8 +165,8 @@ class TrueStartTests(unittest.TestCase):
         self.assertEqual(seen['start_arguments'], (root, 'team', 'request0', 'original-source', 1))
         self.assertEqual(seen['arguments'], (root, start))
         self.assertEqual(seen['keywords'], dict(prepared=pw.ProtocolInputs(('carried', root, detached, ('a', 'b'), 'metadata'), ('a', 'b'), 'catalog', 'metadata',
-            source), history=None, own_static=None, seed=P.kernel_seed(root, detached, 11, 0)))
-        self.assertEqual((info['constructed'], info['refusals'], info['triggered'], info['kernel_seed']), (False, ['refused'], ['K'], P.kernel_seed(root, detached, 11, 0)))
+            source), history=None, own_static=None, seed=P.kernel_seed(root, detached, ['a', 'b'], 11, 0)))
+        self.assertEqual((info['constructed'], info['refusals'], info['triggered'], info['kernel_seed']), (False, ['refused'], ['K'], P.kernel_seed(root, detached, ['a', 'b'], 11, 0)))
 
 
 # Overlay and views ---------------------------------------------------------------------------------------------------------------
