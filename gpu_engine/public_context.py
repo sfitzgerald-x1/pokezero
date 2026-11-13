@@ -681,9 +681,12 @@ def consume(context, base, mons, source_tables, tables, row, valid, *,
     if summary is not None:
         # Direct declarations refresh even when equal. A proc on a borrowed
         # ability, or an already known equal claim, performs no replacement.
+        # Any line, direct or proc, about a mon running a borrowed ability (Trace copy) or Transformed names the copy:
+        # the Python belief returns before any replacement, so no checkpoint either (B4b).
         target=(rows,jnp.clip(side,0,1),jnp.clip(slot,0,5))
-        proc_call=(before_ability.running[target]==0)&(before_ability.original[target]!=data[:,1])
-        ability_call=valid&is_ability&((data[:,2]==1)|proc_call)
+        borrowing=(before_ability.running[target]>0)|before_ability.transformed[target]
+        proc_call=(before_ability.original[target]!=data[:,1])
+        ability_call=valid&is_ability&~borrowing&((data[:,2]==1)|proc_call)
         summary,base,ok=checkpoint(summary,base,a,slots(side,slot,ability_call));summary_ok &= ok
         same=(actor_side==side)&(actor_slot==slot)
         donor_call=valid&is_trace&(side>=0)&~same&~before_ability.transformed[target]&(before_ability.running[target]==0)

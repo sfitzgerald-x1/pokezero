@@ -76,6 +76,17 @@ class PublicRefreshContextTests(unittest.TestCase):
         for narrow in (False,True):
             result,_=self.run_lines(lines,narrow);engine,calls=self.reference_engine(lines,narrow);self.compare(result,engine,calls)
 
+    def test_ability_lines_of_a_borrowing_or_transformed_mon_refresh_nothing(self):
+        # B4b: a Traced or Transformed mon's later ability lines name its copy. Python returns before any replacement, so no
+        # summary call; B2's refresh generation (compared per mon against Python's calls) must not move either.
+        from pokezero import showdown
+        self.reference_module=showdown
+        for borrow in ('|-ability|p1a: Gardevoir|Pressure|[from] ability: Trace|[of] p2a: Absol','|-transform|p1a: Gardevoir|p2a: Absol'):
+            lines=[*self.prefix,'|turn|1','|-ability|p2a: Absol|Pressure','|switch|p1a: Gardevoir|Gardevoir, L80|100/100',
+                borrow,'|-ability|p1a: Gardevoir|Pressure','|turn|2']
+            for narrow in (False,True):
+                result,_=self.run_lines(lines,narrow);engine,calls=self.reference_engine(lines,narrow);self.compare(result,engine,calls)
+
     def test_pin_registered_between_raw_chunks_retains_exact_callback_order(self):
         from pokezero import showdown
         self.reference_module=showdown
