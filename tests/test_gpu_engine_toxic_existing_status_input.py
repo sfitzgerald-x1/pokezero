@@ -76,11 +76,10 @@ class ToxicExistingStatusInputTests(unittest.TestCase):
   self.assertTrue(bool(self.toxic.device.existing_status));self.assertFalse(bool(cb.compile_toxic(engine_catalog=self.producer,metadata=self.metadata).device.existing_status))
   with self.assertRaises(ValueError):cb.compile_toxic(engine_catalog=self.producer,metadata=self.metadata,source_rules=deepcopy(self.rules))
   # transition.py is certified against CURRENT_TRANSITION (full AST plus mutations) by terminal_closeout and seismic_toss_components.
-  # The caller_move binding check stays, on the current program: any caller_move keyword on toxic_callbacks.record_device is single and bound to caller_move.
-  for node in ast.walk(ast.parse(Path('gpu_engine/transition.py').read_text())):
-   if isinstance(node,ast.Call)and isinstance(node.func,ast.Attribute)and isinstance(node.func.value,ast.Name)and node.func.value.id=='toxic_callbacks'and node.func.attr=='record_device':
-    extra=[k for k in node.keywords if k.arg=='caller_move']
-    if extra:self.assertEqual(len(extra),1);self.assertEqual(ast.dump(extra[0].value),ast.dump(ast.Name(id='caller_move',ctx=ast.Load())))
+  # The caller_move binding check stays, on the current program: the one toxic_callbacks.record_device call binds caller_move exactly once, to caller_move.
+  calls=[n for n in ast.walk(ast.parse(Path('gpu_engine/transition.py').read_text()))if isinstance(n,ast.Call)and isinstance(n.func,ast.Attribute)and isinstance(n.func.value,ast.Name)and n.func.value.id=='toxic_callbacks'and n.func.attr=='record_device']
+  self.assertEqual(len(calls),1);extra=[k for k in calls[0].keywords if k.arg=='caller_move']
+  self.assertEqual(len(extra),1);self.assertEqual(ast.dump(extra[0].value),ast.dump(ast.Name(id='caller_move',ctx=ast.Load())))
   witness._source()
   for order in[('benchmark_retained_games','engine_lifecycle_event_device','engine_full_v4_event_device'),('engine_full_v4_event_device','engine_lifecycle_event_device','benchmark_retained_games')]:subprocess.run([__import__('sys').executable,'-c',';'.join('import gpu_engine.'+n for n in order)],check=True,capture_output=True)
 
