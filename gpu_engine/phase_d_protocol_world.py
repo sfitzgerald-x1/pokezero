@@ -173,6 +173,27 @@ def _defer_sleep(payload):
     return projected,tuple(sleepers)
 
 
+def _defer_yawn(payload,lines):
+    """The payload without its public Yawn volatiles, and (side, count) for each side whose active holds one.
+
+    Showdown's Yawn (data/moves.ts: volatileStatus yawn, duration 2) starts at |-start|<target>|move: Yawn in a move phase;
+    each residual decrements the duration (sim/battle.ts residualEvent, the |upkeep| that ends it) and at 0 the holder
+    falls asleep. The count is therefore 2 before that turn's residual (a replacement boundary) and 1 after it: public,
+    with no hidden roll. The engine holds it as yawn_counter (fidelity M2, the same duration), so the protocol world
+    writes it there instead of passing a clock the CPU materializer cannot express exactly.
+    """
+    projected=json.loads(json.dumps(payload));yawns=[]
+    for seat,side in projected['sides'].items():
+        if 'yawn' not in side.get('volatiles',()):continue
+        rows=[str(x).split('|') for x in lines]
+        start=max((i for i,p in enumerate(rows) if len(p)>3 and p[1]=='-start' and p[2].startswith(seat+'a') and p[3]=='move: Yawn'),default=None)
+        if start is None:raise ValueError('PUBLIC_YAWN_START_UNAVAILABLE')
+        count=2-sum(1 for p in rows[start+1:] if len(p)>1 and p[1]=='upkeep')
+        if not 1<=count<=2:raise ValueError('PUBLIC_YAWN_COUNT_UNAVAILABLE')
+        side['volatiles']=[v for v in side['volatiles'] if v!='yawn'];yawns.append((int(seat[1])-1,count))
+    return projected,tuple(yawns)
+
+
 def _restore_sleep(physical,detached,metadata,sleepers,origins,rng,base_abilities,*,diagnostics=None):
     """Restore known status and draw hidden clock; no partial world escapes."""
     carry=detached.public;public_species=np.asarray(carry.species);present=np.asarray(carry.present)
@@ -285,6 +306,7 @@ def materialize_protocol(root,start,*,inputs,seed):
         _preflight(root.materialization_payload,removed)
         projected,sleepers=_defer_sleep(root.materialization_payload)
         projected=tail.defer_substitutes(projected,tail_facts['fresh_substitutes'])
+        projected,yawns=_defer_yawn(projected,inputs.lines)
         origins=_once(inputs,root,'origins',lambda:_sleep_origins(inputs.lines))
         revealed={normalize_id(name):candidates for slot,universe,candidates,gender,name in
                   _once(inputs,root,'revealed',lambda:tuple(public_worlds._revealed(detached,inputs.source)),shared=True)}
@@ -317,11 +339,13 @@ def materialize_protocol(root,start,*,inputs,seed):
         mood[owner]=tuple(map(int,detached.own['happiness']))
         mapping_spec,cursors=tail.mapping_spec(world.spec,tail_facts['replacement'])
         mapped=map_spec(mapping_spec,metadata=metadata,dex=catalog.dex,seed=seed,
-            turn=root.materialization_payload['turn'],active_turns=_once(inputs,root,'chronology',lambda:_chronology(inputs.lines)),happiness=tuple(mood))
+            turn=root.materialization_payload['turn'],active_turns=_once(inputs,root,'chronology',lambda:_chronology(inputs.lines)),happiness=tuple(mood),held_volatiles=True)
         if mapped.state is None:
             _downstream_unknowns(diagnostics,'Typed mapper refused: '+repr(mapped.refusals))
             return ProtocolWorld(None,None,mapped.refusals,mapper_diagnostics=tuple(diagnostics))
         physical=tail.restore(mapped.state,world.spec,cursors,tail_facts,metadata=metadata,checks=diagnostics)
+        for side,count in yawns:   # Yawn's public count (_defer_yawn) on that side's active; not an own field
+            physical=physical._replace(yawn_counter=physical.yawn_counter.at[0,side,physical.active[0,side]].set(count))
         maximum_pp={live._source_move(metadata['vocabulary']['moves'][int(mid)]):int(metadata['moves'][int(mid)]['pp'])*8//5 for row in detached.own['moves'] for mid in row if mid}
         own=dict(detached.own);own['pp']=np.asarray(_once(inputs,root,'own_pp',lambda:own_pp_carry(inputs.lines,state.self_request,maximum_pp)),np.int32)
         # Exact facts were read from the owning packet by B2's detached root.
