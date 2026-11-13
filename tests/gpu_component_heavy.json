@@ -39,9 +39,10 @@
    "module": "test_gpu_engine_fidelity_m1",
    "reason": "wall+memory",
    "hosted_median_min": null,
-   "isolated_wall_min": 58.1,
-   "isolated_peak_gib": 80.1,
-   "completes_on_hosted": false
+   "isolated_wall_min": 49.5,
+   "isolated_peak_gib": 74.4,
+   "completes_on_hosted": false,
+   "note": "WH + C-lite head with the WH10 device-order catcher lanes (DeviceTests): 74.4 GiB / 49.5 min on 4 pinned CPUs, 21 tests (R1 80.1 / 58.1)."
   },
   {
    "module": "test_gpu_engine_fidelity_r",
