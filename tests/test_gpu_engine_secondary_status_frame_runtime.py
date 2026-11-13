@@ -16,6 +16,7 @@ from gpu_engine import engine_source_frame_witness as witness
 from gpu_engine import engine_request_source as request
 from gpu_engine import source_provenance, transition, mechanics as m
 import test_gpu_engine_no_damage_owning as fixtures
+import gpu_engine_eager_witness as eager
 
 
 class SecondaryStatusFrameRuntimeTests(unittest.TestCase):
@@ -33,6 +34,7 @@ class SecondaryStatusFrameRuntimeTests(unittest.TestCase):
         cls.runtime=driver._checked(cls.prepared)
 
     def test_actual_secondary_receipt_survives_end_turn_and_both_full_consumers(self):
+        self.enterContext(eager.eager_source_witness(self.prepared))
         f=self.f; arrays=f.f.base().arrays('pressure','pressure')
         arrays['moves'][:]=np.array([f.metadata['vocabulary']['moves'].index(n) for n in f.names])
         arrays['pp'][:]=np.array([16,8,24,24]); arrays['item'][:]=0
@@ -88,6 +90,10 @@ class SecondaryStatusFrameRuntimeTests(unittest.TestCase):
         self.assertFalse(bool(secondary.owned_pair(missing,index).any()))
         tables=witness.check_compiled(self.runtime['frame_witness_compiled'])
         self.assertEqual(witness._raw_complete(missing,tables).tolist(),[False,True])
+
+
+def tearDownModule():
+    eager.clear()   # drop the consume executables this module compiled
 
 
 if __name__=='__main__':unittest.main()

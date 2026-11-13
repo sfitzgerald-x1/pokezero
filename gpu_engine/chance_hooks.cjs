@@ -20,6 +20,9 @@
 // Update) Pokemon-order tie between equal-Speed actives is inert when neither Pokemon has a
 // handler for that event (findEventHandlers is empty, so both runEvent calls do nothing);
 // with a handler it stays unresolved (TIE_ORDER).
+// Fidelity WH: White Herb handlers of two holders at equal Speed (onAnyAfterMove, onResidual order 29; SwitchIn ties
+// are broken by effectOrder), with a Choice Band user's own onAfterMove (addVolatile choicelock) beside them, are an
+// inert tie: each Item handler touches only its own holder and draws nothing, so the order cannot change the battle.
 const TAPE_V1='pokezero.gpu_chance_tape.v1',TAPE_V2='pokezero.gpu_chance_tape.v2';
 const DRAW_BOUNDS=[2,100,100,100,16,16,100,4,8,2,2,2],EFFECT_BOUNDS=[16,16,4,2];
 function validTape(c){
@@ -214,6 +217,12 @@ function install(Battle,PRNG,load,audit,initializing=()=>null,pokemonPath='') {
       if(group.length===2&&group.every(x=>x.effect?.id==='yawn'&&(x.effectHolder?.side?.n===0||x.effectHolder?.side?.n===1))
         &&new Set(group.map(x=>x.effectHolder.side.n)).size===2){
         audit({kind:'INERT_RESIDUAL_TIE',nonce:c.nonce,effects:['yawn','yawn']});return;
+      }
+      // Fidelity WH: White Herb (and Choice Band's onAfterMove) Item handlers on distinct holders commute.
+      if(group.every(x=>x&&x.effect?.effectType==='Item'&&(x.effect.id==='whiteherb'||x.effect.id==='choiceband')
+        &&x.effectHolder&&Array.isArray(x.effectHolder.moveSlots))&&group.some(x=>x.effect.id==='whiteherb')
+        &&new Set(group.map(x=>x.effectHolder)).size===group.length){
+        audit({kind:'INERT_ITEM_TIE',nonce:c.nonce,effects:group.map(x=>x.effect.id),sides:group.map(x=>x.effectHolder.side?.n)});return;
       }
       // Residual handler pairs on both actives: partiallytrapped (subOrder 9) and Perish.
       const residual={partiallytrapped:['partial_trap_tie',0],perishsong:['perish_tie',1]}[group[0]?.effect?.id];

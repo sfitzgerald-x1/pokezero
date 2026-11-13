@@ -1,0 +1,205 @@
+{
+ "schema": "pokezero.effect_probe.scenario.v1",
+ "move": "sacredfire_thaw",
+ "note": "C-lite: Starmie's Ice Beam freezes Snorlax (secondary 1 = 0). Next turn Snorlax's Sacred Fire (flag defrost): the 20% thaw roll is drawn first (thaw axis: 0 thaws by cureStatus, 99 does not); a failed roll still lets the defrost move go on and frz's onModifyMove thaws it in useMove, even when the move then misses (accuracy axis 99 > 95). Its 50% burn lands on a hit with secondary 0 < 50.",
+ "teams": [
+  [
+   {
+    "species": "Snorlax",
+    "moves": [
+     "sacredfire",
+     "splash",
+     "thunderwave",
+     "rest"
+    ],
+    "ability": "Thick Fat",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Starmie",
+    "moves": [
+     "splash",
+     "surf",
+     "recover",
+     "protect"
+    ],
+    "ability": "Illuminate",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Blissey",
+    "moves": [
+     "splash",
+     "softboiled",
+     "protect",
+     "seismictoss"
+    ],
+    "ability": "Serene Grace",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Skarmory",
+    "moves": [
+     "splash",
+     "protect",
+     "spikes",
+     "peck"
+    ],
+    "ability": "Keen Eye",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Swampert",
+    "moves": [
+     "splash",
+     "protect",
+     "surf",
+     "earthquake"
+    ],
+    "ability": "Torrent",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Metagross",
+    "moves": [
+     "splash",
+     "protect",
+     "meteormash",
+     "earthquake"
+    ],
+    "ability": "Clear Body",
+    "item": "Leftovers"
+   }
+  ],
+  [
+   {
+    "species": "Starmie",
+    "moves": [
+     "icebeam",
+     "splash",
+     "protect",
+     "recover"
+    ],
+    "ability": "Illuminate",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Blissey",
+    "moves": [
+     "splash",
+     "softboiled",
+     "protect",
+     "seismictoss"
+    ],
+    "ability": "Serene Grace",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Skarmory",
+    "moves": [
+     "splash",
+     "protect",
+     "spikes",
+     "peck"
+    ],
+    "ability": "Keen Eye",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Swampert",
+    "moves": [
+     "splash",
+     "protect",
+     "surf",
+     "earthquake"
+    ],
+    "ability": "Torrent",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Metagross",
+    "moves": [
+     "splash",
+     "protect",
+     "meteormash",
+     "earthquake"
+    ],
+    "ability": "Clear Body",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Celebi",
+    "moves": [
+     "splash",
+     "protect",
+     "psychic",
+     "recover"
+    ],
+    "ability": "Natural Cure",
+    "item": "Leftovers"
+   }
+  ]
+ ],
+ "script": [
+  [
+   "move 2",
+   "move 1"
+  ],
+  [
+   "move 1",
+   "move 2"
+  ],
+  [
+   "move 2",
+   "move 2"
+  ]
+ ],
+ "tape_steps": {
+  "0": {
+   "secondary.1": 0
+  }
+ },
+ "axes": [
+  {
+   "name": "thaw",
+   "field": "draws.0.1",
+   "values": [
+    0,
+    99
+   ],
+   "steps": [
+    1
+   ]
+  },
+  {
+   "name": "accuracy",
+   "field": "draws.0.6",
+   "values": [
+    0,
+    99
+   ],
+   "steps": [
+    1
+   ]
+  },
+  {
+   "name": "burn",
+   "field": "secondary.0",
+   "values": [
+    0,
+    60
+   ],
+   "steps": [
+    1
+   ]
+  }
+ ],
+ "expect": {
+  "exact": true
+ },
+ "require_fields": [
+  "item_knocked",
+  "destiny_bond",
+  "effect"
+ ]
+}

@@ -1,5 +1,4 @@
 """Prospective literal component fixture only; no original scientific roots."""
-import ast
 from copy import deepcopy
 import json
 from pathlib import Path
@@ -21,9 +20,9 @@ from gpu_engine import engine_public_events as public,engine_own_facts as own,en
 from gpu_engine import engine_execution_completeness as ex,engine_kernel_frame_risk as risk
 from gpu_engine import engine_full_v4_event_device as full,engine_lifecycle_callbacks as life,engine_leftovers_callbacks as leftovers
 from gpu_engine import public_belief,v4_encoder,public_wire,source_provenance,transition
-from gpu_engine_default_observer_ast import dump_default_program,assert_hp_rng_mutations_detected
 from _showdown_root import showdown_root
 import test_gpu_engine_no_damage_owning as fixture
+import gpu_engine_eager_witness as eager
 
 
 class SubstituteDamageTests(unittest.TestCase):
@@ -127,10 +126,7 @@ class SubstituteDamageTests(unittest.TestCase):
             self.assertFalse(bool(data.candidates[self.metadata['vocabulary']['moves'].index(name)]),name)
         self.assertIsNone(direct.compile_direct_hit_controls(engine_catalog=self.producer).device.substitute_damage)
         with self.assertRaises(ValueError):sd.compile_data(self.producer,self.metadata,request.SourceRules(self.rules.device))
-        # Re-certify the full integrated program; keep HP/RNG mutation controls.
-        before=ast.parse(subprocess.check_output(['git','show','b8092a85:gpu_engine/transition.py'],text=True))
-        after=ast.parse(Path('gpu_engine/transition.py').read_text());baseline=dump_default_program(before)
-        self.assertEqual(dump_default_program(after),baseline);assert_hp_rng_mutations_detected(self,after,baseline)
+        # transition.py is certified against CURRENT_TRANSITION (full AST plus mutations) by terminal_closeout and seismic_toss_components.
 
     def test_b8_templates_use_actual_nonzero_target_encounter(self):
         b=8;rows=j.arange(b);actor=rows%2;target=1-actor;physical=j.full(b,3,j.int32);victim=j.full(b,5,j.int32)
@@ -212,6 +208,7 @@ class SubstituteDamageTests(unittest.TestCase):
             np.testing.assert_array_equal(*words)
 
     def test_actual_create_then_hit_survive_and_break_both_consumers(self):
+        self.enterContext(eager.eager_source_witness(self.prepared))
         session=self.construct();self.assertEqual(session.state.core.admitted.tolist(),[True,True])
         for observer in session.result.owners:self.assertEqual(observer.encoded.observation.admitted.tolist(),[True,True],str(observer.reason.tolist()))
         before=session.state;frames=[];actual=self.runtime['frame']
@@ -243,6 +240,10 @@ class SubstituteDamageTests(unittest.TestCase):
             self.assertEqual(observer.full_line_consumers_complete.tolist(),[True,True])
             self.assertEqual(observer.encoded.observation.admitted.tolist(),[True,True],str(observer.reason.tolist()))
             self.assertFalse(bool(observer.B4_qualified.any()))
+
+
+def tearDownModule():
+    eager.clear()   # drop the consume executables this module compiled
 
 
 if __name__=='__main__':unittest.main()

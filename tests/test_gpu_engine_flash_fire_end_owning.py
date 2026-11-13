@@ -13,10 +13,10 @@ from gpu_engine import engine_flash_fire_end_callbacks as cb,engine_execution_co
 from gpu_engine import engine_lifecycle_callbacks as life,engine_direct_hit_controls as hit
 from gpu_engine import engine_retained_encoder_driver as driver,engine_source_frame_witness as witness
 from gpu_engine import entry,transition,source_provenance,public_wire,v4_encoder,absorption
-from gpu_engine_default_observer_ast import dump_default_program,assert_hp_rng_mutations_detected
 from test_gpu_engine_gameplay_stream_comparison import state as literal_state
 from _showdown_root import showdown_root
 import test_gpu_engine_no_damage_owning as fixtures
+import gpu_engine_eager_witness as eager
 
 
 class FlashFireEndTests(unittest.TestCase):
@@ -31,11 +31,7 @@ removeVolatile(id){if(id!=='flashfire')throw Error(id);a.condition.onEnd.call({a
 a.onEnd.call({},target);process.stdout.write(JSON.stringify(lines));"""
         lines=json.loads(subprocess.check_output(['node','-e',script,str(showdown_root())],text=True))
         self.assertEqual(lines,['-end|p1a: Actor|ability: Flash Fire|[silent]'])
-        old=subprocess.check_output(['git','show','b8092a85:gpu_engine/transition.py'],text=True)
-        current=Path('gpu_engine/transition.py').read_text()
-        self.assertEqual(dump_default_program(ast.parse(current)),dump_default_program(ast.parse(old)))
-        assert_hp_rng_mutations_detected(self,ast.parse(current),dump_default_program(ast.parse(old)))
-        self.assertEqual(Path(entry.__file__).read_bytes(),subprocess.check_output(['git','show','b8092a85:gpu_engine/entry.py']))
+        # transition.py is certified against CURRENT_TRANSITION (full AST plus mutations) by terminal_closeout and seismic_toss_components; entry.py: byte-exact against reviewed SOURCE_PINS in transition_observer_wiring's source-binding subtests.
         tables=self.f.runtime['public'].device;key=int(tables.flash_fire_end)
         self.assertGreater(key,0);self.assertEqual(int(tables.length[key]),7)
 
@@ -90,6 +86,7 @@ a.onEnd.call({},target);process.stdout.write(JSON.stringify(lines));"""
             self.assertFalse(bool(cb.owned(bad,0,data).any()))
 
     def test_actual_absorb_then_switch_both_full_witness_encoder_and_physics(self):
+        self.enterContext(eager.eager_source_witness(self.f.prepared))
         f=self.f;arrays=f.f.base().arrays('pressure','pressure')
         arrays['moves'][:]=np.array([f.metadata['vocabulary']['moves'].index(n)for n in f.names]);arrays['pp'][:]=[16,8,24,24];arrays['item'][:]=0
         arrays['stats'][:,:,0]=300;arrays['stats'][:,:,3]=50;arrays['stats'][:,:,4]=200
@@ -147,6 +144,10 @@ a.onEnd.call({},target);process.stdout.write(JSON.stringify(lines));"""
             wanted=np.asarray([e.words()for packet in packets for e in packet.events],np.int32)
             report=result.state.core.frame_input_report;actual=np.asarray(report.owner_full_words[0,owner])[np.asarray(report.owner_full_valid[0,owner])]
             np.testing.assert_array_equal(actual[:len(wanted)],wanted)
+
+
+def tearDownModule():
+    eager.clear()   # drop the consume executables this module compiled
 
 
 if __name__=='__main__':unittest.main()

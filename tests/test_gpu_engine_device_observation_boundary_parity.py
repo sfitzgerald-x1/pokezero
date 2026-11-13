@@ -531,6 +531,43 @@ console.log(JSON.stringify(orders));"""
         cleared=project();self.compare_active(c.trackers,cleared,a)
         self.assertFalse(bool(cleared.numeric[0,1,cols].any()))
 
+    def test_white_herb_ends_the_item_flags_like_b2_item_end(self):
+        """WH's white_herb producer against B2's ITEM_END (public_active.py): a Tricked Choice Band's flags, then a bare
+        -enditem (White Herb's useItem; the item name does not enter public_active) clears item_swapped, choice_public and
+        choice_locked; the bag is untouched."""
+        a,catalog,fact,project=self.b2_active()
+        state=self.state();c=h.initialize(state,self.tables.belief);yes=j.ones(2,bool)
+        fact(a.ARRIVE,0);fact(a.ARRIVE,1)
+        self.b2_lines(a,catalog,fact,'|-item|p2a: Absol|Choice Band|[from] move: Trick','|move|p2a: Absol|Tackle|p1a: Snorlax')
+        for name in ('item_swapped','choice_public','choice_locked'):
+            h.feature(c,1,state.active[:,1],name,j.ones(2,j.int32),yes)
+        self.compare_active(c.trackers,project(),a)
+        before=state._replace(item=state.item.at[:,1,0].set(2),boosts=state.boosts.at[:,1,0,0].set(-1))
+        after=before._replace(item=before.item.at[:,1,0].set(0),boosts=before.boosts.at[:,1,0,0].set(0))
+        h.white_herb(c,before,after,1,yes)
+        self.b2_lines(a,catalog,fact,'|-enditem|p2a: Absol|White Herb','|-clearnegativeboost|p2a: Absol|[silent]')
+        cleared=project();self.compare_active(c.trackers,cleared,a)
+        self.assertFalse(bool(cleared.numeric[0,1,j.asarray(a.NUMERIC_COLUMNS)].any()))
+
+    def test_trick_received_white_herb_flags_follow_b2(self):
+        """WH review finding 1 (TrickWhiteHerbBoundaryParityTests has the ledger): B2's public_active fold of the four lines
+        Showdown prints when a Trick hands a White Herb to a receiver with a negative stage, here Snorlax (Band, -2 Atk)
+        Tricking Absol: the target's -item (ITEM_SET, choice_public for the Band), the receiver's -enditem (ITEM_END) and
+        -clearnegativeboost, then the receiver's own -item (ITEM_SET). The device's white_herb then trick, in that order."""
+        a,catalog,fact,project=self.b2_active()
+        state=self.state();yes=j.ones(2,bool);band=j.asarray([False,False,True])
+        state=state._replace(item=state.item.at[:,0,0].set(2).at[:,1,0].set(1))
+        c=h.initialize(state,self.tables.belief);fact(a.ARRIVE,0);fact(a.ARRIVE,1)
+        dropped=state._replace(boosts=state.boosts.at[:,0,0,0].set(-2))
+        swapped=dropped._replace(item=dropped.item.at[:,0,0].set(1).at[:,1,0].set(2))
+        used=swapped._replace(item=swapped.item.at[:,0,0].set(0),boosts=swapped.boosts.at[:,0,0,0].set(0))
+        h.white_herb(c,swapped,used,0,yes);h.trick(c,dropped,swapped,0,yes,band,herb_used=j.asarray([[True,False]]*2))
+        self.b2_lines(a,catalog,fact,'|-activate|p1a: Snorlax|move: Trick|[of] p2a: Absol','|-item|p2a: Absol|Choice Band|[from] move: Trick',
+            '|-enditem|p1a: Snorlax|Leftovers','|-clearnegativeboost|p1a: Snorlax|[silent]','|-item|p1a: Snorlax|Leftovers|[from] move: Trick')
+        got=project();self.compare_active(c.trackers,got,a)
+        swapped_col=a.NUMERIC_COLUMNS[a.CORE.index('ITEM_SWAPPED')]
+        self.assertEqual((bool(got.numeric[0,0,swapped_col]),bool(got.numeric[0,1,swapped_col])),(True,True))
+
     def test_trick_flags_follow_b2_item_set_item_end_and_choice_move(self):
         """M1's trick hook and the move hook's CHOICE_MOVE against B2's public_active fold of the same lines: -item is
         ITEM_SET (item_swapped; choice_public for a Choice item; choice_locked reset), -enditem [silent] is ITEM_END, and
@@ -715,6 +752,31 @@ class KnockOffLedgerBoundaryParityTests(unittest.TestCase):
             np.testing.assert_allclose(quiet['credits'][observer],plain['credits'][observer],atol=1e-7)
         np.testing.assert_allclose(knocked['credits'][1],[1/6,0.],atol=1e-7);np.testing.assert_allclose(knocked['credits'][0],[0.,1/6],atol=1e-7)
 
+    def test_white_herb_consumption_matches_b2_consume_and_clear_negative(self):
+        """WH's white_herb producer against B2's own fold of -enditem|X|White Herb and -clearnegativeboost|X|[silent]:
+        public_items CONSUME (the item revealed and removed, no mutation, no original: the ledger stays) and public_mon_state
+        CLEAR_NEGATIVE on the active's stages (only the negative ones). B2's projection of a bare -enditem does not depend
+        on the item's name (public_items.project_line: CONSUME), so the fixture's catalog item stands in for White Herb."""
+        prefix=[*self.f.prefix,'|turn|1','|-boost|p2a: Absol|spa|1','|-unboost|p2a: Absol|atk|1','|-unboost|p2a: Absol|def|2']
+        result,_=self.f.run_lines(prefix+['|-enditem|p2a: Absol|Leftovers','|-clearnegativeboost|p2a: Absol|[silent]'])
+        items=result.context.items
+        b2=dict(shown=self.f.item_catalog.names[int(items.revealed[0,1,0])],removed=bool(items.removed[0,1,0]),
+            mutated=bool(items.mutated[0,1,0]),original=int(items.original[0,1,0]),boosts=np.asarray(result.mon_state.boosts[0,1]).tolist())
+        self.assertEqual(b2,dict(shown='leftovers',removed=True,mutated=False,original=0,boosts=[0,0,1,0,0,0,0]))
+        s=empty_state(1)
+        s=s._replace(species=s.species.at[0,0,0].set(1).at[0,1,0].set(2),level=j.full_like(s.level,80),hp=j.full_like(s.hp,100),
+            max_hp=j.full_like(s.max_hp,100),item=s.item.at[0,1,0].set(7),done=j.zeros(1,bool))
+        c=h.initialize(s,None);yes=j.ones(1,bool)
+        dropped=s._replace(boosts=s.boosts.at[0,1,0].set(j.asarray([-1,-2,1,0,0,0,0])))
+        h.observe(c,dropped,yes)
+        used=dropped._replace(item=dropped.item.at[0,1,0].set(0),boosts=dropped.boosts.at[0,1,0].set(j.asarray([0,0,1,0,0,0,0])))
+        h.white_herb(c,dropped,used,1,yes)
+        slot=int(c.trackers.physical_to_public[0,1,0])
+        device=dict(shown=int(c.trackers.shown_item[0,1,slot]),removed=bool(c.trackers.item_removed[0,1,slot]),
+            mutated=bool(c.trackers.mon_features['item_mutated'][0,1,slot]),original=int(c.trackers.mon_features['item_original'][0,1,slot]),
+            boosts=np.asarray(c.trackers.boosts[0,1,slot]).tolist())
+        self.assertEqual(device,dict(shown=7,removed=b2['removed'],mutated=b2['mutated'],original=b2['original'],boosts=b2['boosts']))
+
     def test_knock_off_item_ledger_matches_b2_mutated_and_original(self):
         """M1 review: the device's per-mon ledger written by knock_off (item_mutated, item_original) against B2's
         public_items fold of the same -enditem line (items.mutated, items.original: REMOVE's own removal credits the
@@ -729,5 +791,68 @@ class KnockOffLedgerBoundaryParityTests(unittest.TestCase):
         self.assertEqual((plain['mutated'],plain['original_id']),(False,0))
         self.assertEqual((quiet['mutated'],quiet['original']),(False,0))
 
+
+
+class TrickWhiteHerbBoundaryParityTests(unittest.TestCase):
+    """WH review finding 1: a White Herb received by Trick is used inside Trick's onHit (setItem's Start, sim/pokemon.ts:
+    1868-1889; data/moves.ts:19904-19915; data/items.ts:7674-7686), before the receiver's own -item line. Showdown f76228a1,
+    Deoxys-Attack (White Herb) Charming Kecleon, then Kecleon (Choice Band) Tricking it, prints these four lines:
+        -item|p2a: Deoxys|Choice Band|[from] move: Trick
+        -enditem|p1a: Kecleon|White Herb
+        -clearnegativeboost|p1a: Kecleon|[silent]
+        -item|p1a: Kecleon|White Herb|[from] move: Trick
+    The transition's device order (white_herb on the swapped state, then trick with that pre-herb state, so its -item writes
+    land last) against B2's fold of the same four lines, here as Snorlax (Choice Band, -2 Atk) Tricking Absol: the item
+    ledger (revealed, removed, mutated, original) and the receiver's stages. B2 reads a bare -enditem alike for any item
+    (public_items CONSUME), so the fixture's Leftovers stands in for White Herb. The -clearnegativeboost line ends B2's
+    Trick pairing (public_items.begin_event), so the target's original, credited from the receiver's later -item line, stays
+    unknown: the hook's herb_used. The old order (trick, then white_herb at AfterMove) leaves the herb removed where B2
+    does not, and credits the target's original."""
+    @classmethod
+    def setUpClass(cls):
+        import test_gpu_engine_fidelity_a2 as a2
+        a2.KnockOffNarrowingB2Tests.setUpClass()
+        cls.helper=a2.KnockOffNarrowingB2Tests();cls.f=cls.helper.f
+        # The fixture's frozen public move namespace has neither Charm nor Trick: their effect lines stand alone (as M1's
+        # Trick ledger test does).
+        cls.lines=[*cls.f.prefix,'|turn|1','|-unboost|p1a: Snorlax|atk|2','|-activate|p1a: Snorlax|move: Trick|[of] p2a: Absol',
+            '|-item|p2a: Absol|Choice Band|[from] move: Trick','|-enditem|p1a: Snorlax|Leftovers',
+            '|-clearnegativeboost|p1a: Snorlax|[silent]','|-item|p1a: Snorlax|Leftovers|[from] move: Trick']
+
+    def b2(self):
+        result,_=self.f.run_lines(self.lines)
+        names=self.f.item_catalog.names;items=result.context.items
+        return {side:dict(revealed=names[int(items.revealed[0,side,0])],original=names[int(items.original[0,side,0])],
+            removed=bool(items.removed[0,side,0]),mutated=bool(items.mutated[0,side,0]),
+            boosts=np.asarray(result.mon_state.boosts[0,side]).tolist()) for side in (0,1)}
+
+    def device(self,herb_first):
+        names={0:'',1:'leftovers',2:'choiceband'}
+        s0=empty_state(1)
+        s0=s0._replace(species=s0.species.at[0,0,0].set(1).at[0,1,0].set(2),level=j.full_like(s0.level,80),
+            hp=j.full_like(s0.hp,100),max_hp=j.full_like(s0.max_hp,100),item=s0.item.at[0,0,0].set(2).at[0,1,0].set(1),
+            done=j.zeros(1,bool))
+        c=h.initialize(s0,self.helper.tables());yes=j.ones(1,bool);band=j.asarray([False,False,True])
+        dropped=s0._replace(boosts=s0.boosts.at[0,0,0,0].set(-2));h.observe(c,dropped,yes)
+        swapped=dropped._replace(item=dropped.item.at[0,0,0].set(1).at[0,1,0].set(2))
+        used=swapped._replace(item=swapped.item.at[0,0,0].set(0),boosts=swapped.boosts.at[0,0,0,0].set(0))
+        if herb_first:h.white_herb(c,swapped,used,0,yes);h.trick(c,dropped,swapped,0,yes,band,herb_used=j.asarray([[True,False]]))
+        else:h.trick(c,dropped,swapped,0,yes,band);h.white_herb(c,swapped,used,0,yes)
+        out={};f_=c.trackers.mon_features
+        for side in (0,1):
+            slot=int(c.trackers.physical_to_public[0,side,0])
+            out[side]=dict(revealed=names[int(c.trackers.shown_item[0,side,slot])],original=names[int(f_['item_original'][0,side,slot])],
+                removed=bool(c.trackers.item_removed[0,side,slot]),mutated=bool(f_['item_mutated'][0,side,slot]),
+                boosts=np.asarray(c.trackers.boosts[0,side,slot]).tolist())
+        return out
+
+    def test_trick_received_white_herb_four_lines_match_b2(self):
+        b2=self.b2()
+        self.assertEqual(b2[0],dict(revealed='leftovers',original='choiceband',removed=False,mutated=True,boosts=[0]*7))
+        self.assertEqual(b2[1],dict(revealed='choiceband',original='',removed=False,mutated=True,boosts=[0]*7))
+        self.assertEqual(self.device(True),b2)
+        old=self.device(False)
+        self.assertNotEqual(old[0]['removed'],b2[0]['removed'])        # the old order: the herb shown removed after the -item
+        self.assertNotEqual(old[1]['original'],b2[1]['original'])      # and the target's original credited
 
 if __name__=='__main__':unittest.main()

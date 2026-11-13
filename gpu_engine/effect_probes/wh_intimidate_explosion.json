@@ -1,0 +1,162 @@
+{
+ "schema": "pokezero.effect_probe.scenario.v1",
+ "move": "wh_intimidate_explosion",
+ "note": "WH: a fainted holder does not restore. Deoxys-Attack, at -1 Atk from Arcanine's switch-in Intimidate (not restored at that switch-in in Gen 3), explodes: at AfterMove it is at 0 HP and useItem refuses (sim/pokemon.ts:1812), so the fainted Deoxys keeps its White Herb; Arcanine takes the Explosion at -1 Atk.",
+ "teams": [
+  [
+   {
+    "species": "Deoxys-Attack",
+    "moves": [
+     "explosion",
+     "splash",
+     "superpower",
+     "psychoboost"
+    ],
+    "ability": "Pressure",
+    "item": "White Herb"
+   },
+   {
+    "species": "Starmie",
+    "moves": [
+     "splash",
+     "surf",
+     "recover",
+     "protect"
+    ],
+    "ability": "Illuminate",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Blissey",
+    "moves": [
+     "splash",
+     "softboiled",
+     "protect",
+     "seismictoss"
+    ],
+    "ability": "Serene Grace",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Skarmory",
+    "moves": [
+     "splash",
+     "protect",
+     "spikes",
+     "peck"
+    ],
+    "ability": "Keen Eye",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Swampert",
+    "moves": [
+     "splash",
+     "protect",
+     "surf",
+     "earthquake"
+    ],
+    "ability": "Torrent",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Metagross",
+    "moves": [
+     "splash",
+     "protect",
+     "meteormash",
+     "earthquake"
+    ],
+    "ability": "Clear Body",
+    "item": "Leftovers"
+   }
+  ],
+  [
+   {
+    "species": "Lugia",
+    "moves": [
+     "splash",
+     "recover",
+     "aeroblast",
+     "protect"
+    ],
+    "ability": "Pressure",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Arcanine",
+    "moves": [
+     "splash",
+     "extremespeed",
+     "protect",
+     "roar"
+    ],
+    "ability": "Intimidate",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Starmie",
+    "moves": [
+     "splash",
+     "surf",
+     "recover",
+     "protect"
+    ],
+    "ability": "Illuminate",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Blissey",
+    "moves": [
+     "splash",
+     "softboiled",
+     "protect",
+     "seismictoss"
+    ],
+    "ability": "Serene Grace",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Skarmory",
+    "moves": [
+     "splash",
+     "protect",
+     "spikes",
+     "peck"
+    ],
+    "ability": "Keen Eye",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Swampert",
+    "moves": [
+     "splash",
+     "protect",
+     "surf",
+     "earthquake"
+    ],
+    "ability": "Torrent",
+    "item": "Leftovers"
+   }
+  ]
+ ],
+ "script": [
+  [
+   "move 1",
+   "switch 2"
+  ],
+  [
+   "switch 2",
+   "switch 5"
+  ]
+ ],
+ "axes": [],
+ "expect": {
+  "exact": true
+ },
+ "require_fields": [
+  "item_knocked",
+  "destiny_bond",
+  "effect"
+ ]
+}

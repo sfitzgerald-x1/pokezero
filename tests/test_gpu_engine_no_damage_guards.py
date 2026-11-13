@@ -6,6 +6,7 @@ import numpy as np
 from gpu_engine import engine_no_damage_callbacks as nd,engine_kernel_frame_risk as risk,engine_execution_completeness as ex
 from gpu_engine import absorption,variable_moves,public_wire,v4_encoder
 import test_gpu_engine_no_damage_owning as fixture
+import gpu_engine_shared_public_jits as shared
 
 class NoDamageGuards(unittest.TestCase):
  @classmethod
@@ -116,6 +117,7 @@ class NoDamageGuards(unittest.TestCase):
   from gpu_engine import engine_full_v4_event_device as full,engine_lifecycle_callbacks as life,public_inputs as inputs
   f=self.f;b=2;kw=v4_encoder.wire_kwargs(f.catalog)
   fold=jax.jit(lambda stream,frame,public:full.project_and_fold(stream,frame,f.runtime['public'].device,public,f.catalog))
+  fold_chunk=shared.fold(f.catalog)   # one compile; eagerly each call compiled its scan again (16 x ~46 s)
   namespaces={k:np.asarray(getattr(f.runtime['public'].device.namespaces,k))for k in full._NAMES}
   for reason in range(1,9):
    t,p,w,o,hp,vol,sub,hpt,hpp=f.component(b,reason=reason);out=nd.finish(t,p,w,o,hp,vol,sub,hpt,hpp)
@@ -139,7 +141,7 @@ class NoDamageGuards(unittest.TestCase):
     with self.subTest(reason=reason,owner=owner):
      public=v4_encoder.initialize(f.catalog,stream_ids=t.stream_id,owner_sides=j.full(b,owner,j.int32))
      for chunk in inputs.pack_chunks(np.asarray(t.stream_id),[initial]*b,**namespaces):
-      public,error=v4_encoder.fold_chunk(public,chunk,f.catalog);self.assertFalse(bool(error.any()))
+      public,error=fold_chunk(public,chunk);self.assertFalse(bool(error.any()))
      stream=full.register(t.stream_id,j.full(b,owner,j.int32),compiled=f.runtime['public'])
      stream=stream._replace(causal=stream.causal._replace(cursor=cursor,sequence=j.full(b,3,j.int32)),sequence=public.cursor.sequence,
        live=j.ones((b,2),bool),species=public.mons.species,status=public.mons.status,hp=public.mons.hp_numerator,maximum=public.mons.hp_denominator)
