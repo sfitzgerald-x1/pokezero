@@ -93,6 +93,7 @@ def apply(state,mons,abilities,source_tables,tables,effective,live,*,operation,s
             (mons.source_species,(b,2,6),jnp.int32),(mons.active,(b,2),jnp.int32),
             (mons.species_binding,(b,8),jnp.uint32),(abilities.binding,(b,8),jnp.uint32),
             (abilities.species_binding,(b,8),jnp.uint32),(abilities.original,(b,2,6),jnp.int32),
+            (abilities.running,(b,2,6),jnp.int32),(abilities.transformed,(b,2,6),jnp.bool_),
             (effective,(b,2,6,2),jnp.uint32),(live,(b,2),jnp.bool_)):
         if getattr(value,'shape',None)!=shape or getattr(value,'dtype',None)!=jnp.dtype(dtype):raise ValueError('Mud Shot state/snapshot shape/dtype')
     for value in (*tables[4:],producer_binding,source_tables.binding):
