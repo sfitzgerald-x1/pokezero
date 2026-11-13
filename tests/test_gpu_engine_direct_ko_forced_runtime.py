@@ -8,6 +8,7 @@ import numpy as np
 from gpu_engine import engine_retained_encoder_driver as driver,engine_direct_hit_controls as hit
 from gpu_engine import source_provenance,transition,engine_execution_completeness as ex
 import gpu_engine_owning_runtime_fixture as fixture
+import gpu_engine_eager_witness as eager
 
 class DirectKOForcedRuntimeTests(unittest.TestCase):
  @classmethod
@@ -18,6 +19,7 @@ class DirectKOForcedRuntimeTests(unittest.TestCase):
  def same(self,a,b):
   for x,y in zip(jax.tree.leaves(a),jax.tree.leaves(b)):np.testing.assert_array_equal(x,y)
  def test_actual_guarded_ko_drains_both_then_original_force_wait_private_encoder(self):
+  self.enterContext(eager.eager_source_witness(self.prepared))
   arrays=self.f().arrays('pressure','pressure');arrays['moves'][0,0,:2]=[self.f.ids['hail'],1]
   arrays['stats'][0,:,1]=600;arrays['stats'][1,:,2]=10
   with TemporaryDirectory() as directory:
@@ -37,3 +39,7 @@ class DirectKOForcedRuntimeTests(unittest.TestCase):
   self.assertEqual(result.owners[1].encoded.observation.admitted.tolist(),[True,True],msg=str(dict(reason=result.owners[1].reason.tolist(),own=result.owners[1].own.reason.tolist())))
   self.assertTrue(bool(j.isfinite(result.owners[1].encoded.observation.numeric_features).all()))
   self.assertEqual(result.owners[1].encoded.observation.legal_action_mask[:,:4].tolist(),[[False]*4]*2);self.assertTrue(bool(result.owners[1].encoded.observation.legal_action_mask[:,4:].all()))
+
+
+def tearDownModule():
+ eager.clear()   # drop the consume executables this module compiled
