@@ -315,7 +315,7 @@ class BorrowedAbilityProcTest(unittest.TestCase):
         ditto = _belief(engine, "p2", "Ditto")
         self.assertTrue(ditto.transformed, "fixture must actually transform, or this proves nothing")
         self.assertIsNone(ditto.revealed_ability)
-        self.assertEqual(engine._running_ability[ditto.key].lower().replace(" ", ""), "flashfire")
+        self.assertNotIn(ditto.key, engine._running_ability)   # the copy was unknown at the Transform: none recorded
 
     def test_an_untransformed_mons_own_procs_are_still_its_set(self) -> None:
         lines = [

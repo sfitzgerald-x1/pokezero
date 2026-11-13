@@ -985,9 +985,8 @@ class PublicBattleBeliefEngine:
                 # now, not its set: a Trace holder's later procs (Gen 3 Trace setAbility()s the copy,
                 # so Showdown prints e.g. ``|-ability|p2a: Porygon2|Speed Boost|boost`` for the
                 # traced Speed Boost) and a transformed mon's (transformInto copies the ability). Pin
-                # the running ability, never the set: every Porygon2 set has Trace and every Ditto
-                # set Limber, so a pinned copy leaves no candidate variant at all.
-                self._running_ability[belief.key] = str(primary)
+                # nothing on the set: every Porygon2 set has Trace and every Ditto set Limber, so a pinned
+                # copy leaves no candidate variant at all (B2's public_abilities.reveal: the same rule).
                 return
             if belief is not None:
                 self._replace_belief(
@@ -1962,9 +1961,8 @@ class PublicBattleBeliefEngine:
             # and proc bookkeeping above, but never poison variant matching or flag a
             # false original-set conflict. A transformed mon runs its target's ability
             # (sim/pokemon.ts transformInto: setAbility(pokemon.ability) for gen > 2)
-            # even when that ability was unknown at the Transform, so its first proc
-            # names the copy: record it as running, never as the set.
-            if belief.transformed:self._running_ability.setdefault(belief.key, str(ability_name))
+            # even when that ability was unknown at the Transform, so its procs name
+            # the copy, never the set (B2's public_abilities.reveal: the same rule).
             return
         if _normalize_identifier(belief.revealed_ability or "") == _normalize_identifier(ability_name):
             return
