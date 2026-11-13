@@ -21,6 +21,11 @@ class Batch2Replay(unittest.TestCase):
     outcomes = []
     fixtures = Path(__file__).parent / 'fixtures' / 'phase_d_constructor_walls_batch2'
 
+    def setUp(self):
+        shared = type(self).constructor
+        self.constructor = ProtocolConstructor(catalog=shared.catalog,source=shared.source,metadata=shared.metadata,
+            owning_config=shared.owning_config,count=16,seed=20261103,functions=shared.functions)
+
     def replay(self, name):
         data = json.loads((self.fixtures / (name + '.json')).read_text())
         request = data['request']
