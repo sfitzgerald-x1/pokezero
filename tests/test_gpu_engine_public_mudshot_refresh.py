@@ -31,12 +31,14 @@ class MudShotRefreshTests(unittest.TestCase):
             slot=self.j.array([0],self.j.int32),encounter=self.j.array([1],self.j.int32),saw_damage=self.j.array([True]))
         return state,pending
 
-    def test_authoritative_claim_and_checkpoint_match_source_even_when_borrowing_or_pinned(self):
+    def test_authoritative_claim_and_checkpoint_match_source_pinned_or_not_and_never_pin_a_borrowing_or_transformed_mon(self):
+        # Mud Shot's drop is blocked by the RUNNING ability. While the target borrows one (a Trace copy) or is
+        # Transformed, that is the copy, so neither the Python belief nor B2 pins Shield Dust on its set (B4).
         import numpy as np
         from gpu_engine.public_context import basis
         from pokezero.belief import PublicBattleBeliefEngine
         from pokezero.showdown import _public_event_from_line
-        for borrowed,pin in ((False,False),(True,False),(False,True)):
+        for borrowed,transformed,pin in ((False,False,False),(True,False,False),(False,True,False),(False,False,True)):
             state,pending=self.initial()
             engine=PublicBattleBeliefEngine.from_events([_public_event_from_line(line) for line in (
                 *self.prefix,'|move|p1a: Snorlax|Mud Shot|p2a: Absol','|-damage|p2a: Absol|80/100')],
@@ -46,6 +48,10 @@ class MudShotRefreshTests(unittest.TestCase):
                 engine._running_ability[pokemon.key]='Pressure'
                 abilities=state.context.abilities._replace(running=state.context.abilities.running.at[0,1,0].set(
                     self.f.catalog.abilities.ability_id('Pressure')))
+                state=state._replace(context=state.context._replace(abilities=abilities))
+            if transformed:
+                engine._replace_belief(engine.snapshot().side('p2')[0],transformed=True)
+                abilities=state.context.abilities._replace(transformed=state.context.abilities.transformed.at[0,1,0].set(True))
                 state=state._replace(context=state.context._replace(abilities=abilities))
             if pin:
                 survivor=next(v for v in self.f.source.variants[self.f.source.species_id('Absol')] if v.ability=='Pressure').to_summary()
@@ -57,9 +63,13 @@ class MudShotRefreshTests(unittest.TestCase):
                 self.f.catalog.context,self.tables,producer_binding=self.tables.binding))(state.context,pending,basis(state.context,state.beliefs))
             self.assertEqual(result.admitted.tolist(),[True]);self.assertEqual(result.revealed.tolist(),[True])
             engine._resolve_pending_mudshot();pokemon=engine.snapshot().side('p2')[0]
-            self.assertEqual(pokemon.revealed_ability,'Shield Dust')
-            self.assertEqual(int(result.context.abilities.original[0,1,0]),int(self.tables.shield_dust_id))
+            borrowing=borrowed or transformed
+            self.assertEqual(pokemon.revealed_ability,None if borrowing else 'Shield Dust')
+            self.assertEqual(int(result.context.abilities.original[0,1,0]),
+                int(state.context.abilities.original[0,1,0]) if borrowing else int(self.tables.shield_dust_id))
+            if borrowing:self.assertEqual(int(state.context.abilities.original[0,1,0]),0)
             self.assertEqual(int(result.context.abilities.running[0,1,0]),int(state.context.abilities.running[0,1,0]))
+            self.assertEqual(bool(result.context.abilities.transformed[0,1,0]),transformed)
             cache=result.context.refresh.controller.visible
             self.assertEqual(int(cache.generation[0,0,0]),int(state.context.refresh.controller.visible.generation[0,0,0])+1)
             self.assertEqual(int(cache.summary.count[0,0,0]),pokemon.candidate_set_count)
