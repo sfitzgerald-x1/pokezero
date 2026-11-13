@@ -183,6 +183,7 @@ _ENCORE_END = 'OPEN BUG: Encore ends at the residual (-end|X|Encore); the device
 for _case, _first in (('encore_roll=0', 3), ('encore_roll=1', 4), ('encore_roll=2', 5), ('encore_roll=3', 6)):
     for _step in range(_first, 9):ALLOWLIST[('encore', _case, _step, '1:active:volatiles')] = _ENCORE_END
 for _step in range(3, 7):ALLOWLIST[('trick_encore', 'base', _step, '1:active:volatiles')] = _ENCORE_END
+for _step in (3, 4):ALLOWLIST[('hyperbeam_order_fast', 'base', _step, '0:active:volatiles')] = _ENCORE_END
 # OPEN BUG (reported): a fainted active's public stages at its replacement request. B2's faint keeps them (public_mon_state.
 # faint writes HP, status and fainted, not boosts; an arrival resets them, public_mon_state.py:111-112), and B2's encoder
 # writes the active token's stages from them (v4_assembly.project_own_boosts); the device's observe copies the engine's
@@ -191,8 +192,20 @@ _FAINTED_STAGES = 'OPEN BUG: a fainted active keeps its public stages in B2 unti
 for _key in (('wrap_tie', 'tie=0', 0, '0:active:boosts'), ('wrap_tie', 'tie=1', 0, '0:active:boosts'),
              ('knockoff_band', 'roll=0', 8, '1:active:boosts'), ('knockoff_band', 'roll=15', 8, '1:active:boosts'),
              ('superpower_ko', 'base', 5, '0:active:boosts'), ('destinybond_m7_gengar_volbeat', 'base', 3, '0:active:boosts'),
-             ('sleepclause_faint', 'base', 3, '1:active:boosts')):
+             ('sleepclause_faint', 'base', 3, '1:active:boosts'), ('knockoff_midturn_lock', 'base', 1, '0:active:boosts'),
+             *(('destinybond_m5_gengar_entei', _case, 3, '0:active:boosts')
+               for _case in ('crit=15,roll=0', 'crit=15,roll=15', 'crit=0,roll=0', 'crit=0,roll=15'))):
     ALLOWLIST[_key] = _FAINTED_STAGES
+# OPEN BUG (reported): Flash Fire's activation. A Fire move into a Flash Fire holder prints -start|X|ability: Flash Fire,
+# which B2 folds into the flashfire bag entry (public_active.NAMES 'flashfire'); no device hook writes that bit
+# (engine_device_public_hooks has no flashfire writer), so the device bag stays without it while the holder is active.
+_FLASH_FIRE = 'OPEN BUG: -start|X|ability: Flash Fire sets B2\'s flashfire volatile; no device hook writes it'
+for _step in (3, 4):ALLOWLIST[('sacredfire_fail', 'base', _step, '1:active:volatiles')] = _FLASH_FIRE
+# OPEN BUG (reported; possibly B2's quirk, for the lead to rule): Pursuit's switch intercept prints
+# |move|p2a: X|Pursuit|p1a: Y|[from] Pursuit. B2 records a move line's last-used move only without [from]
+# (public_moves.record_move: last_kind LAST_MOVE when ~has_from); the device's move hook records Pursuit as the last move.
+_PURSUIT_FROM = 'OPEN BUG: the [from] Pursuit intercept line is not B2\'s last move; the device records Pursuit'
+ALLOWLIST[('destinybond_pursuit', 'base', 1, '1:active:last_move')] = _PURSUIT_FROM
 # B2 limit (explained, not a device fact): B2's fold refuses (PAYLOAD) a side's second encounter of one species, at the
 # repeat's arrival line (|switch|p2a: Gengar2|Gengar, L74, M|...: RAW_BEGIN, SWITCH_PRELUDE, MUDSHOT, SWITCH, NONPROC,
 # TENDENCY); Gen 3 Random Battle's Species Clause never sends it, the probes' Custom Game does. The case is compared

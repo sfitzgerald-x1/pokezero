@@ -538,7 +538,6 @@ def run_scenario(scenario, engine, showdown, metadata, device=None):
                 d['status'] = ('NOT_COMPARED' if not d['steps_compared']
                     else 'MISMATCH' if any(x['diffs'] for x in d['steps']) else 'EXACT')
             elif d['status'] == 'B2_LIMIT' and any(x['diffs'] for x in d['steps']):d['status'] = 'MISMATCH'
-
             d['diff_fields'] = sorted({device.dev.field_kind(x['field']) for st in d['steps'] for x in st['diffs']})
             d['allowlisted_fields'] = sorted({device.dev.field_kind(x['field']) for st in d['steps'] for x in st['allowlisted']})
     met, reason = judge(scenario, records)
