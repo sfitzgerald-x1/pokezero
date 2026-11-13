@@ -135,6 +135,27 @@ class SwitchEvidenceTests(unittest.TestCase):
             result=type(self).resolve(pending,m,a,e,l,arrival,boundary,0,-1,-1,0,False,0)
             self.assertEqual(result.exclude.tolist(),[boundary])
 
+    def test_a_borrowing_or_transformed_arrivals_intimidate_clears_but_claims_and_refreshes_nothing(self):
+        # B4b (defensive parity; no Gen 3 random-battle holder reaches it): a Traced or Transformed pending arrival's
+        # Intimidate is its running copy. Python consumes the pending switch but pins nothing and re-summarizes nothing
+        # (_resolve_pending_switches_for_event); the reducer clears the record and claims and checkpoints nothing.
+        from pokezero.showdown import _public_event_from_line
+        iid=self.abilities.ability_id('Intimidate')
+        for mode in ('plain','traced','transformed'):
+            engine=self.engine(['|switch|p2a: Absol|Absol, L80|100/100','|switch|p1a: Nick|Snorlax, L80|100/100'])
+            nick=engine.snapshot().side('p1')[0];self.assertEqual(len(engine._pending_switches),1)
+            if mode=='traced':engine._running_ability[nick.key]='Intimidate'
+            if mode=='transformed':engine._replace_belief(nick,transformed=True)
+            m,a,e,l=self.snapshot(engine);pending,_=type(self).queue(self.x.initialize(1,self.tables),m,a,e,l)
+            result=type(self).resolve(pending,m,a,e,l,False,True,iid,0,0,1,True,0)
+            engine.ingest_event(_public_event_from_line('|-ability|p1a: Nick|Intimidate|boost'))
+            claimed=mode=='plain'
+            self.assertTrue(bool(result.admitted.all()),mode)
+            self.assertEqual(result.state.side.tolist(),[-1],mode);self.assertEqual(engine._pending_switches,[],mode)
+            self.assertEqual(result.reveal.tolist(),[claimed],mode);self.assertEqual(result.checkpoint.tolist(),[claimed],mode)
+            self.assertEqual(result.exclude.tolist(),[False],mode)
+            self.assertEqual(engine.snapshot().side('p1')[0].revealed_ability,'Intimidate' if claimed else None,mode)
+
     def test_missing_ident_uses_full_public_forme_not_source_pool(self):
         from pokezero.belief import _PendingSwitch,_ident_matches_pending
         engine=self.engine(['|switch|p1a: Snorlax|Snorlax, L80|100/100','|switch|p2a: Absol|Absol, L80|100/100'])
