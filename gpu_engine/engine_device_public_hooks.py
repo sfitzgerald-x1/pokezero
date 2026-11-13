@@ -755,6 +755,12 @@ def drag(c,before,after,side,table,use):
     # pre-entry incoming private operands already exist in the actual before
     # state; only public handler results are exposed.
     c=depart(c,before,after,side,table,use)
+    # The dragged-out mon's slot drops its stages, as withdraw does for a switch (entry.depart zeroes the engine's).
+    # The fainted-active carry (engine_device_trackers._observe) keeps a slot's stages at hp 0, so a stale bench carry
+    # would show again if a later drag returned this mon into lethal Spikes, where B2's drag arrival reads 0
+    # (public_mon_state.py:111-112).
+    c=c._replace(trackers=_write(c.trackers,'boosts',side,_li.take(before.active,_r(before),side),
+        j.zeros((len(c.trackers.error),7),j.int32),use))
     c=install(c,after,side,use)
     incoming=before._replace(active=_li.put(before.active,_r(before),(side,),_li.take(after.active,_r(after),side)))
     return entry(c,incoming,after,side,table,use) if table is not None else observe(c,after,use)
@@ -816,9 +822,10 @@ def derived_volatiles(c,state,use):
     subOrder 14), and an Encore's silent ends (switch-out, faint) clear the bag through withdraw and the faint clear.
     The engine's encore_counter starts with the -start and reaches 0 exactly at the -end, so encore = counter>0 is B2's
     bag at every boundary. public_move_state's write at the Encore move stays (it agrees); this is what clears it at
-    the residual, where transition.py's Encore block calls no hook. A fainted holder's counter is zeroed only at the
-    step's end (transition.py's faint clear), so the bit is gated on a living holder, as flashfire's is: B2's FAINT
-    clear empties the bag at the faint, a public_move_state call later in that step included.
+    the residual, where transition.py's Encore block calls no hook. The engine zeroes a fainted holder's encore_counter
+    only at the step's end (transition.py's faint clear, after the residuals), so a read between the faint and that
+    clear (a public_move_state later in the step, a fixture) sees a live counter on a fainted holder: hence the hp gate,
+    as flashfire's. B2's FAINT clear has emptied the bag at the faint.
 
     Flash Fire (the device harness's OPEN BUG E): Showdown's Flash Fire onTryHit prints -start|X|ability: Flash Fire
     when it adds the flashfire volatile, and B2 folds it into the bag's flashfire entry; a Fire move into a holder that

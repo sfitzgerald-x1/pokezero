@@ -52,17 +52,18 @@ def upkeep(trackers, belief_tables, leftovers, use, *, current_state=None):
 
     B2's sweep (gpu_engine/public_item_nonproc.py sweep, its three triggers at :171-172) and the champion's Python
     belief (src/pokezero/belief.py _sweep_end_of_turn_non_procs: 'Status persisted without an instant Lum cure' and
-    'Action-phase HP at or below 25% with no pinch-berry activation') run, at |upkeep, for each side's living active whose item is unrevealed and
-    unmutated, in this order: Leftovers (a known pre-slot HP snapshot below full and no Leftovers heal), Lum Berry (any
-    status: Showdown data/items.ts lumberry eats at onAfterSetStatus and onUpdate while statused, so a holder cannot
-    keep a status to the upkeep) and Salac/Petaya/Liechi as one rule (the snapshot at or below a quarter and no [eat]:
-    data/mods/gen3/items.ts eats them at the residual 10/4 when hp <= maxhp/4; an [eat] reveals the item, which the
-    eligibility already excludes). Each rule refreshes once when it rules out a new name (visible_belief.exclude).
+    'Action-phase HP at or below 25% with no pinch-berry activation') run, at |upkeep, for each side's living active
+    whose item is unrevealed and unmutated, in this order: Leftovers (a known pre-slot HP snapshot below full and no
+    Leftovers heal), Lum Berry (any status: Showdown data/items.ts lumberry eats at onAfterSetStatus and onUpdate while
+    statused, so a holder cannot keep a status to the upkeep) and Salac/Petaya/Liechi as one rule (the snapshot at or
+    below a quarter and no [eat]: data/mods/gen3/items.ts eats them at the residual 10/4 when hp <= maxhp/4; an [eat]
+    reveals the item, which the eligibility already excludes). Each rule refreshes once when it rules out a new name
+    (visible_belief.exclude).
 
-    ``leftovers`` is the existing startup item-namespace vector, not a current holder lookup; the Lum and pinch IDs
-    come from belief_tables.nonproc_items (engine_device_belief.compile_tables; tables without it skip those rules).
-    Positive item reveals and mutations suppress these conclusions. Hard-mask inconsistency/fallback remains the
-    original projector's concern.
+    ``leftovers`` is the existing startup item-namespace vector, not a current holder lookup; None skips only the
+    Leftovers rule. The Lum and pinch IDs come from belief_tables.nonproc_items (engine_device_belief.compile_tables;
+    tables without it skip those rules). Positive item reveals and mutations suppress these conclusions. Hard-mask
+    inconsistency/fallback remains the original projector's concern.
     """
     carry = trackers.negative_items
     if carry is None:

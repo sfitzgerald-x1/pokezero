@@ -188,6 +188,16 @@ class DeviceNegativeItemsTests(unittest.TestCase):
             ruled = set(reference(source, [f'|-damage|p2a: Exploud|{percent}/100']).ruled_out_items)
             self.assertIn('leftovers', ruled);self.assertEqual('salacberry' in ruled, salac);self.assertNotIn('lumberry', ruled)
 
+    def test_lum_and_pinch_rules_run_without_the_leftovers_vector(self):
+        # A transition table without items passes leftovers=None: that skips only the Leftovers rule.
+        s, tables, _, _ = self.nonproc_fixture();b = 2
+        c = h.initialize(s, tables)
+        low = s._replace(hp=s.hp.at[0, 1, 0].set(50).at[1, 1, 0].set(52), status=s.status.at[0, 1, 0].set(2))
+        h.observe(c, low, j.ones(b, bool))
+        h.negative_hp_line(c, low, 1, j.ones(b, bool), source_class=n.HP_ACTION)
+        h.turn_end(c, s, low, j.zeros(b, bool), upkeep=j.ones(b, bool), leftovers=None)
+        self.assertEqual(c.trackers.belief_mask[:, 1, 0, 0].tolist(), [255 & ~0x30 & ~0xc0, 255])
+
     def test_unavailable_hp_cannot_become_snapshot_or_current_absence_evidence(self):
         s, tables, leftovers, _ = fixture(batch=3)
         c = h.initialize(s, tables)

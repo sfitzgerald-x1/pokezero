@@ -167,7 +167,11 @@ def _observe(t,state,side,physical,rows_active,*,identity):
     # engine state) follow Showdown. Nobody should "fix" this toward Showdown without retraining the network; V2's flip
     # list records it. So the carry keeps its stages for the side's still-active mon at hp 0, unless the read precedes the
     # engine's clear (a nonzero stage), which is the faint-time stages; withdraw zeroes the slot at the replacement's
-    # install. The observer's own fainted active reads them from here too (readout own_boosts).
+    # install (and the hooks' drag at a drag-out). The observer's own fainted active reads them from here too (readout
+    # own_boosts). They also reach engine state: device_public_world_state.py:303 copies view['boosts'] into a
+    # materialized foe, so at a double-KO replacement root the foe's fainted active holds them at hp 0, as B2-root
+    # worlds do (phase_d_live_worlds.py:298); entry.depart zeroes them at the replacement, so they are mechanically
+    # inert.
     stages=_li.take(state.boosts,r,side,p)
     kept=(hp==0)&(physical==_li.take(state.active,r,side))&~stages.any(axis=-1)
     values['boosts']=_li.update(t.boosts,r,(side,at),_gated,(use&~kept)[:,None],stages)
