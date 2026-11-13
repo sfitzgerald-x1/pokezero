@@ -84,6 +84,39 @@ class PublicAbilityTests(unittest.TestCase):
         later = self.reveal(s, mons, "Pressure", authoritative=False)
         self.same(s, later.state); self.assertFalse(bool(later.conflict[0]))
 
+    def test_a_tracers_later_lines_of_the_copy_never_reveal_its_original(self):
+        """screen-r4a3's Porygon2: after its Trace, the copy's own lines (|-ability|p2a: Porygon2|Speed Boost|boost) name
+        the borrowed ability. Direct or proc, B2 keeps no original (every Porygon2 set has Trace) and so does the
+        Python belief; both keep the running copy."""
+        s, mons = self.initial(left="Absol", right="Porygon2")
+        s, ok = self.a.trace_copy(s, mons, self.tables, side=1, slot=0, encounter=1,
+            donor_side=0, donor_slot=0, donor_encounter=1, ability_id=self.catalog.ability_id("Pressure"))
+        self.assertTrue(bool(ok[0]))
+        for authoritative in (True, False):
+            update = self.reveal(s, mons, "Pressure", authoritative=authoritative)
+            self.same(s, update.state); self.assertFalse(bool(update.conflict[0]))
+        engine = self.reference(["|-ability|p2a: Porygon2|Pressure|Trace|[from] ability: Trace|[of] p1a: Absol",
+                                 "|-ability|p2a: Porygon2|Pressure"], left="Absol", right="Porygon2")
+        belief = next(x for x in engine.snapshot().side("p2") if x.active)
+        self.assertEqual(int(s.original[0, 1, 0]), 0); self.assertIsNone(belief.revealed_ability)
+        self.assertEqual(int(s.running[0, 1, 0]), self.catalog.ability_id("Pressure"))
+        self.assertEqual(engine._running_ability.get(belief.key), "Pressure")
+
+    def test_a_transformed_mons_ability_lines_never_reveal_its_original(self):
+        """screen-r4a3's Ditto: Transformed before its target's ability was public (no running copy), then a line names the
+        copied ability. Direct or proc, B2 keeps no original (every Ditto set has Limber) and so does the Python belief."""
+        s, mons = self.initial()
+        s, ok = self.a.transform(s, mons, self.tables, side=0, slot=0, encounter=1,
+            donor_side=1, donor_slot=0, donor_encounter=1)
+        self.assertTrue(bool(ok[0])); self.assertEqual(int(s.running[0, 0, 0]), 0); self.assertTrue(bool(s.transformed[0, 0, 0]))
+        for authoritative in (False, True):
+            update = self.reveal(s, mons, "Pressure", side=0, authoritative=authoritative)
+            self.same(s, update.state); self.assertFalse(bool(update.conflict[0]))
+        engine = self.reference(["|-transform|p1a: Ditto|p2a: Absol", "|-ability|p1a: Ditto|Pressure"])
+        ditto = next(x for x in engine.snapshot().side("p1") if x.active)
+        self.assertTrue(ditto.transformed); self.assertIsNone(ditto.revealed_ability)
+        self.assertEqual(int(s.original[0, 0, 0]), 0)
+
     def test_missing_trace_of_changes_only_the_separate_parser_feature(self):
         from pokezero.showdown import parse_showdown_replay
         s, mons = self.initial(left="Gardevoir")
