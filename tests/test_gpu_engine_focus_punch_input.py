@@ -16,7 +16,6 @@ from gpu_engine import engine_retained_encoder_driver as driver,engine_request_s
 from gpu_engine import engine_full_v4_event_device as full,engine_leftovers_callbacks as leftovers
 from gpu_engine import transition as tr,public_belief,v4_encoder as v4,public_wire,state,focus_punch
 from gpu_engine import engine_source_frame_witness as witness
-from gpu_engine_default_observer_ast import dump_default_program,assert_hp_rng_mutations_detected
 from _showdown_root import showdown_root
 import test_gpu_engine_hidden_power_substitute_input as fixtures
 import test_gpu_engine_transition_observer_wiring as static
@@ -65,7 +64,7 @@ class FocusPunchInputTests(unittest.TestCase):
   return public.move(x.tape,x.actor,x.state.active[j.arange(8),x.actor],x.state.active[j.arange(8),1-x.actor],x.move,eligible=j.ones(8,bool))
  def test_source_default_original_callback_and_current_operands(self):
   witness._source();self.assertEqual(len(witness.SOURCE_PINS),88)
-  old=ast.parse(subprocess.check_output(['git','show','b8092a85:gpu_engine/transition.py'],text=True));after=ast.parse(Path('gpu_engine/transition.py').read_text());base=dump_default_program(old);self.assertEqual(dump_default_program(after),base);assert_hp_rng_mutations_detected(self,after,base)
+  # transition.py is certified against CURRENT_TRANSITION (full AST plus mutations) by terminal_closeout and seismic_toss_components.
   self.assertEqual(static._undefined_step_globals(Path('gpu_engine/transition.py').read_text()),set())
   step=static._step(Path('gpu_engine/transition.py').read_text());calls={n.func.attr:n for n in ast.walk(step)if isinstance(n,ast.Call)and isinstance(n.func,ast.Attribute)and isinstance(n.func.value,ast.Name)and n.func.value.id=='focus_callbacks'}
   self.assertEqual(ast.unparse(calls['begin']),'focus_callbacks.begin(_public_trace, work, moves, slot, _direct_hit_context if _direct_hit_registered else None, table.focus_punch, ordinary=live & ~replacement, move_requests=(actions < 4) & ~struggle)')

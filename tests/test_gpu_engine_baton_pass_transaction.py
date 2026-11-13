@@ -117,11 +117,10 @@ class BatonTransactionTests(unittest.TestCase):
  def test_static_original_source_default_legacy_and_imports(self):
   self.assertEqual(int(self.helper.device.baton_pass.move_id),self.move);self.assertTrue(bool(self.helper.device.baton_pass.quiet_abilities[self.ability]));self.assertIsNone(direct.compile_direct_hit_controls(engine_catalog=self.producer).device.baton_pass)
   old=ast.parse(subprocess.check_output(['git','show',BASE+':gpu_engine/transition.py'],text=True));new=ast.parse(subprocess.check_output(['git','show','567eb6c0:gpu_engine/transition.py'],text=True));baseline=dump_default_program(old);self.assertEqual(dump_default_program(new),baseline);assert_hp_rng_mutations_detected(self,new,baseline);self.assertEqual(static._undefined_step_globals(Path('gpu_engine/transition.py').read_text()),set())
-  current=ast.parse(Path('gpu_engine/transition.py').read_text());integrated=ast.parse(subprocess.check_output(['git','show','b8092a85:gpu_engine/transition.py'],text=True))
-  self.assertEqual(ast.dump(current),ast.dump(integrated));assert_hp_rng_mutations_detected(self,current,dump_default_program(integrated))
+  # transition.py is certified against CURRENT_TRANSITION (full AST plus mutations) by terminal_closeout and seismic_toss_components.
+  # baton.py, entry.py and state.py are byte-certified against the reviewed SOURCE_PINS by transition_observer_wiring.
   for file in('baton.py','entry.py','state.py'):
    self.assertEqual(subprocess.check_output(['git','show','567eb6c0:gpu_engine/'+file]),subprocess.check_output(['git','show',BASE+':gpu_engine/'+file]))
-   self.assertEqual(Path('gpu_engine',file).read_bytes(),subprocess.check_output(['git','show','b8092a85:gpu_engine/'+file]))
   script="""const root=process.argv[1],d=require(root+'/dist/sim/dex.js').Dex.mod('gen3'),P=require(root+'/dist/sim/pokemon.js').Pokemon,m=d.moves.get('batonpass'),s={side:{},volatiles:{},boosts:{atk:1,def:0,spa:2,spd:0,spe:3,accuracy:0,evasion:0},clearVolatile(){this.boosts={atk:0,def:0,spa:0,spd:0,spe:0,accuracy:0,evasion:0}}},t={volatiles:{},clearVolatile(){this.volatiles={}},battle:{}};m.onHit.call({canSwitch:()=>true},s);m.self.onHit.call({},s);P.prototype.copyVolatileFrom.call(t,s,'copyvolatile');console.log(JSON.stringify({skip:s.skipBeforeSwitchOutEventFlag,old:s.boosts,new:t.boosts}));"""
   v=json.loads(subprocess.check_output(['node','-e',script,str(showdown_root())],text=True));self.assertTrue(v['skip']);self.assertEqual(v['new']['spa'],2);self.assertTrue(all(n==0 for n in v['old'].values()))
   import os,sys

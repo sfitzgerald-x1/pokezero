@@ -73,8 +73,7 @@ class WhirlwindOwningTests(unittest.TestCase):
    def visit_Assign(self,node):
     return []if any(isinstance(x,ast.Name)and x.id=='_whirlwind_pending'for x in node.targets)else self.generic_visit(node)
   stripped=Strip().visit(new);self.assertEqual(dump_default_program(stripped),baseline);assert_hp_rng_mutations_detected(self,stripped,baseline)
-  current=ast.parse(text);integrated=ast.parse(subprocess.check_output(['git','show','b8092a85:gpu_engine/transition.py'],text=True))
-  self.assertEqual(ast.dump(current),ast.dump(integrated));assert_hp_rng_mutations_detected(self,current,dump_default_program(integrated))
+  # transition.py is certified against CURRENT_TRANSITION (full AST plus mutations) by terminal_closeout and seismic_toss_components.
 
  def test_original_source_drag_writer_and_closed_paths(self):
   script=r"""

@@ -1,5 +1,5 @@
 """Original sleep/selection helpers and typed owning packets; no engine turn."""
-import ast,json,subprocess,unittest
+import json,subprocess,unittest
 from copy import deepcopy
 from pathlib import Path
 import jax
@@ -9,7 +9,6 @@ from gpu_engine import engine_sleep_talk_callbacks as cb,engine_execution_comple
 from gpu_engine import engine_kernel_frame_risk as risk,engine_lifecycle_callbacks as life
 from gpu_engine import engine_full_v4_event_device as full,mechanics as m,sleep_talk as talking,state,public_wire,v4_encoder as v4
 from gpu_engine import engine_source_frame_witness as witness
-from gpu_engine_default_observer_ast import dump_default_program,assert_hp_rng_mutations_detected
 from _showdown_root import showdown_root
 import test_gpu_engine_hidden_power_substitute_input as fixtures
 BASE='e7b736c6b2a13900dd17f68413e0f408b3b0f87e'
@@ -92,7 +91,7 @@ class SleepTalkOwningTests(unittest.TestCase):
 
  def test_original_source_default_numerics_and_called_writer_chronology(self):
   witness._source();self.assertEqual(len(witness.SOURCE_PINS),88)
-  old=ast.parse(subprocess.check_output(['git','show','b8092a85:gpu_engine/transition.py'],text=True));new=ast.parse(Path('gpu_engine/transition.py').read_text());baseline=dump_default_program(old);self.assertEqual(dump_default_program(new),baseline);assert_hp_rng_mutations_detected(self,new,baseline)
+  # transition.py is certified against CURRENT_TRANSITION (full AST plus mutations) by terminal_closeout and seismic_toss_components.
   script=r'''const d=require(process.argv[1]+'/dist/sim/dex.js').Dex.mod('gen3'),lines=[],p={statusState:{time:3},hasAbility:()=>false,toString:()=> 'p2a: Actor',moveSlots:[{id:'sleeptalk',pp:8},{id:'surf',pp:7},{id:'rest',pp:8}]};const b={effectState:{skippedTime:0},add:(...a)=>lines.push('|'+a.map(String).join('|')),sample:xs=>xs[0],dex:d,actions:{useMove:id=>lines.push('|move|p2a: Actor|'+d.moves.get(id).name+'|p1a: Target|[from] '+d.conditions.get('sleeptalk').name)}};d.conditions.get('slp').onBeforeMove.call(b,p,null,d.moves.get('sleeptalk'));lines.push('|move|p2a: Actor|Sleep Talk|p2a: Actor');d.moves.get('sleeptalk').onHit.call(b,p);console.log(JSON.stringify({time:p.statusState.time,skipped:b.effectState.skippedTime,lines}));'''
   got=json.loads(subprocess.check_output(['node','-e',script,str(showdown_root())],text=True));self.assertEqual(got,dict(time=2,skipped=1,lines=['|cant|p2a: Actor|slp','|move|p2a: Actor|Sleep Talk|p2a: Actor','|move|p2a: Actor|Surf|p1a: Target|[from] sleeptalk']))
   # Source-only import-order smoke; no constructor, sampler or model call.

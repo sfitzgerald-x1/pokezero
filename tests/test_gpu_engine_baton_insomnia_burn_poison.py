@@ -110,11 +110,12 @@ console.log(JSON.stringify({abilities,rows}));
    else:self.assertEqual(row['after'],'');self.assertEqual(len(row['words']),1)
   with patch.object(cb,'INSOMNIA_UPDATE_SHA256','0'*64):
    with self.assertRaisesRegex(ValueError,'dormant outgoing'):cb.compile_data(self.producer,self.metadata,self.rules)
-  for name in('transition.py','entry.py','baton.py','state.py','mechanics.py','engine_retained_encoder_driver.py','engine_full_v4_event_device.py','engine_lifecycle_event_device.py'):
+  # transition.py is certified against CURRENT_TRANSITION (full AST plus mutations) by terminal_closeout and seismic_toss_components.
+  # entry.py, baton.py and state.py are byte-certified against the reviewed SOURCE_PINS by transition_observer_wiring.
+  for name in('mechanics.py','engine_retained_encoder_driver.py','engine_full_v4_event_device.py','engine_lifecycle_event_device.py'):
    self.assertEqual(Path('gpu_engine',name).read_bytes(),subprocess.check_output(['git','show','b8092a85:gpu_engine/'+name]),name)
-  before=ast.parse(subprocess.check_output(['git','show','b8092a85:gpu_engine/engine_baton_pass_callbacks.py'],text=True));after=ast.parse(Path(cb.__file__).read_text());changed={'compile_data','shape','_bound','_data','_ability_quiet','_quiet','_start_diagnostics'}
-  functions=lambda tree:{n.name:ast.dump(n,include_attributes=False)for n in tree.body if isinstance(n,ast.FunctionDef)and n.name not in changed|{'_insomnia_status'}}
-  self.assertEqual(functions(before),functions(after))
+  # engine_baton_pass_callbacks.py is byte-certified against the reviewed SOURCE_PINS by transition_observer_wiring.
+  after=ast.parse(Path(cb.__file__).read_text())
   self.assertEqual([n.name for n in ast.walk(after)if isinstance(n,ast.FunctionDef)and n.name in('begin_start','before_copy')],['begin_start','before_copy'])
 
 if __name__=='__main__':unittest.main()

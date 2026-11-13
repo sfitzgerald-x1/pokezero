@@ -95,7 +95,6 @@ for(const passes of [false,true]){let calls=0,lines=[],m={...d.moves.get('hydrop
     names={seat:self.catalog.species.names[seat+1]for seat in(0,1)};ids={seat:f'p{seat+1}a: '+names[seat]for seat in(0,1)};who=int(actor[row]);foe=1-who
     wire,_=public_wire.project_lines(public_wire.WireState(),[f'|switch|{ids[seat]}|{names[seat]}, L80, M|100/100'for seat in(0,1)]+['|turn|1'],**v4.wire_kwargs(self.catalog));_,packets=public_wire.project_lines(wire,[f'|move|{ids[who]}|Return|{ids[foe]}',f'|-damage|{ids[foe]}|0 fnt',f'|faint|{ids[foe]}'],**v4.wire_kwargs(self.catalog));expected=np.asarray([e.words()for packet in packets for e in packet.events],np.int32);actual=np.asarray(got.projection.frames.words[:,row])[np.asarray(got.projection.frames.valid[:,row])];np.testing.assert_array_equal(actual,expected)
   old=ast.parse(subprocess.check_output(['git','show',BASE+':gpu_engine/transition.py'],text=True));new=ast.parse(subprocess.check_output(['git','show','0961c0e5:gpu_engine/transition.py'],text=True));baseline=dump_default_program(old);self.assertEqual(dump_default_program(new),baseline);assert_hp_rng_mutations_detected(self,new,baseline)
-  current=ast.parse(Path('gpu_engine/transition.py').read_text());integrated=ast.parse(subprocess.check_output(['git','show','b8092a85:gpu_engine/transition.py'],text=True))
-  self.assertEqual(ast.dump(current),ast.dump(integrated));assert_hp_rng_mutations_detected(self,current,dump_default_program(integrated))
+  # transition.py is certified against CURRENT_TRANSITION (full AST plus mutations) by terminal_closeout and seismic_toss_components.
 
 if __name__=='__main__':unittest.main()
