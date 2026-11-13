@@ -79,9 +79,9 @@ class ReplacementFacts(unittest.TestCase):
         self.assertFalse(np.asarray(legal_actions(state))[0,0,:4].any());self.assertTrue(np.asarray(legal_actions(state))[0,0,4:].all())
         self.assertIn('SAMPLED_HYPOTHETICAL_FUTURE',checks[0]['randomness'])
         self.assertFalse(np.asarray(state.queued_actions).any());self.assertFalse(np.asarray(state.queued_stall).any())
-        # No unrelated active effects are erased by storage projection.
+        # The fainted cursor's effects were cleared by Showdown's faintMessages: cleared, never moved to storage.
         bad=replace(spec,side_one=replace(spec.side_one,boosts={'attack':1}))
-        with self.assertRaisesRegex(ValueError,'FAINTED_EFFECT'):tail.mapping_spec(bad,phase)
+        self.assertEqual(tail.mapping_spec(bad,phase)[0].side_one.boosts,{'attack':0})
         bad=replace(spec,side_two=replace(spec.side_two,slow_uturn_move=True))
         with self.assertRaisesRegex(ValueError,'QUEUE_UNAVAILABLE'):tail.mapping_spec(bad,phase)
 

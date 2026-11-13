@@ -4,6 +4,7 @@ import jax.numpy as j
 from gpu_engine import engine_retained_encoder_driver as driver,engine_status_residual_callbacks as residual
 from gpu_engine import engine_execution_completeness as accounting,engine_toxic_callbacks as toxic
 import test_gpu_engine_toxic_runtime as original
+import gpu_engine_eager_witness as eager
 
 class ToxicSuccessRuntimeTests(unittest.TestCase):
     same=original.ToxicRuntimeTests.same
@@ -47,3 +48,7 @@ class ToxicSuccessRuntimeTests(unittest.TestCase):
             self.assertEqual(owner.full_line_consumers_complete.tolist(),[True,True])
             self.assertEqual(owner.encoded.observation.admitted.tolist(),[True,True])
             self.assertFalse(bool(owner.B4_qualified.any()))
+
+
+def tearDownModule():
+    eager.clear()   # drop the consume executables this module compiled

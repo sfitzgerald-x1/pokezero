@@ -1,11 +1,9 @@
 """Literal Thunder Wave source components, fake scores; no scientific roots."""
 from copy import deepcopy
 from dataclasses import replace
-import ast
 import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
-import subprocess
 import unittest
 from types import SimpleNamespace as NS
 from unittest.mock import patch
@@ -20,8 +18,8 @@ from gpu_engine import engine_public_events as public,engine_leftovers_callbacks
 from gpu_engine import engine_execution_completeness as accounting,engine_kernel_frame_risk as risks,engine_toxic_callbacks as primary
 from gpu_engine import engine_lifecycle_callbacks as life,engine_status_callbacks as status
 from gpu_engine import public_belief,source_provenance,transition,v4_encoder,mechanics as m
-from gpu_engine_default_observer_ast import dump_default_program,assert_hp_rng_mutations_detected
 import test_gpu_engine_engine_weather_public as fixture
+import gpu_engine_eager_witness as eager
 
 
 class ThunderWaveRuntimeTests(unittest.TestCase):
@@ -80,11 +78,7 @@ class ThunderWaveRuntimeTests(unittest.TestCase):
         self.assertEqual(int(self.runtime['kernel_risk_compiled'].device.selected_risk[self.move_id]),0)
         plain=risks.compile_risks(self.producer,self.runtime['execution_compiled'])
         self.assertEqual(int(plain.device.selected_risk[self.move_id])&(risks.NON_WEATHER|risks.FIELD_VOLATILE),9)
-        before=ast.parse(subprocess.check_output(['git','show','b8092a85:gpu_engine/transition.py'],text=True))
-        after=ast.parse(Path('gpu_engine/transition.py').read_text());baseline=dump_default_program(before)
-        self.assertEqual(dump_default_program(after),baseline);assert_hp_rng_mutations_detected(self,after,baseline)
-        self.assertEqual(Path('gpu_engine/engine_toxic_callbacks.py').read_bytes(),subprocess.check_output(['git','show','b8092a85:gpu_engine/engine_toxic_callbacks.py']))
-        self.assertEqual(Path('gpu_engine/engine_full_v4_event_device.py').read_bytes(),subprocess.check_output(['git','show','b8092a85:gpu_engine/engine_full_v4_event_device.py']))
+        # transition.py is certified against CURRENT_TRANSITION (full AST plus mutations) by terminal_closeout and seismic_toss_components; engine_toxic_callbacks.py and engine_full_v4_event_device.py: byte-exact against reviewed SOURCE_PINS in transition_observer_wiring's source-binding subtests.
         side=j.zeros(1,j.int32);zero=j.zeros(1,j.int32);yes=j.ones(1,bool);no=j.zeros(1,bool)
         attempt=thunder.Attempt(yes,yes,no,no,no,yes,yes,no,no,no,yes,zero,j.full(1,m.PAR,j.int32),zero,zero)
         raw=primary.words_device(side,side,side,j.full(1,self.move_id,j.int32),attempt)
@@ -152,6 +146,7 @@ class ThunderWaveRuntimeTests(unittest.TestCase):
                     with self.assertRaises(ValueError):thunder._bound(tape._replace(**{name:bad}),context)
 
     def test_actual_success_both_full_source_drains_and_single_primary_count(self):
+        self.enterContext(eager.eager_source_witness(self.prepared))
         session=self.construct();before=session.state;frames=[];actual=self.runtime['frame']
         def capture(*args):value=actual(*args);frames.append(value);return value
         draws=j.zeros((2,2,12),j.int32).at[:,:,4].set(1)
@@ -173,3 +168,7 @@ class ThunderWaveRuntimeTests(unittest.TestCase):
         self.assertEqual(result.state.core.risks.risk.tolist(),[0,0])
         for owner in result.owners:
             self.assertEqual(owner.full_line_consumers_complete.tolist(),[True,True]);self.assertEqual(owner.encoded.observation.admitted.tolist(),[True,True]);self.assertFalse(bool(owner.B4_qualified.any()))
+
+
+def tearDownModule():
+    eager.clear()   # drop the consume executables this module compiled

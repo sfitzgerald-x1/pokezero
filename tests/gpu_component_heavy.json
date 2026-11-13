@@ -70,6 +70,14 @@
    "note": "lower bound: K1 at R1 c8521ed9 (4 CPUs) timed out at 14000 s with 1 of 6 tests settled, 173 GiB RSS; base 9640bbe1 88.6 GiB / 68 min. Rerun on 16 CPUs with a 12 h timeout; measured values replace this when it settles."
   },
   {
+   "module": "test_gpu_engine_source_witness_compiled_anchor",
+   "reason": "wall+memory",
+   "hosted_median_min": null,
+   "isolated_wall_min": 19.6,
+   "isolated_peak_gib": 30.3,
+   "completes_on_hosted": null
+  },
+  {
    "module": "test_gpu_engine_status_callbacks_hot_jit",
    "reason": "memory",
    "hosted_median_min": 3.3,
