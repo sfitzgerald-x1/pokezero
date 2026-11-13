@@ -39,9 +39,9 @@ trick, trick_receive_negative), sacredfire_* (fail, hooh, statused, thaw) and re
 ghost, sleep, status, sub); the full probe set, 168 scenarios / 448 cases / 2,078 compared steps, all EXACT against Showdown
 f76228a1, 0 unresolved (WH round 2, 92503ddf, the CPU probe harness); v2e_regress, WH's GPU round 2 (f33e718c against M2's
 3e0878e4, 964 shards): 82 changed and involved, 0 uninvolved, 0 unexpected, 0 wrong-mon (round 1's split: whiteherb 40, facade 32,
-sacredfire 10); the B2 producer parity for white_herb), wrap, yawn and
-perishsong (M2 + R1, f3e71663: the partiallytrapped, yawn and perishsong volatiles in state (partial_trap_counter / partial_trap_source, yawn_counter, perish_counter)
-and the residual scheduler's Wrap tick, Yawn countdown and Perish count; R1 traces the Wrap and Yawn handlers only at the positions
+sacredfire 10); the B2 producer parity for white_herb), wrap, yawn and perishsong (M2 + R1, f3e71663: the partiallytrapped, yawn
+and perishsong volatiles in state (partial_trap_counter / partial_trap_source, yawn_counter, perish_counter) and the residual
+scheduler's Wrap tick, Yawn countdown and Perish count; R1 traces the Wrap and Yawn handlers only at the positions
 they can sort to, residual_order.POSITIONS, Wrap 4, 8, 9, 11 and Yawn 6, 12, 13, each failing a named probe when dropped; probes
 wrap* (12), yawn* (11), perishsong* (10); a root already holding one stays refused: an own-held one by phase_d_live_worlds
 (OWN_VOLATILE_OR_LATENT_CLOCK_UNAVAILABLE), an opponent-held partial trap or drowsy by the protocol world (built without

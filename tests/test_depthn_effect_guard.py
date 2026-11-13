@@ -2,28 +2,18 @@
 import json
 import math
 from pathlib import Path
-import subprocess
 import unittest
 from unittest import mock
 
 from pokezero import depthn_effect_guard as G
 from pokezero import depthn_live_actor as actor
+from tests import _engine_since as since
 
 # The guard's live tables, as this module defines them (pinned by LiveTableTests). Every other test here exercises the guard's
 # mechanics -- conditions, masses, the arms, the reach, the record -- against FIXTURE, a fixed table (the guard of #1932 / #1933,
 # before the A1 / A2 / R, #1935, M2 and WH + C-lite retirements; its RETIRED holds only Destiny Bond and Hyper Beam), so that retiring a move
 # changes the pins and nothing else.
 LIVE_GUARDED, LIVE_RETIRED = dict(G.GUARDED), dict(G.RETIRED)
-ROOT = Path(__file__).resolve().parents[1]
-
-
-def git(*args):
-    """git in this checkout: the CompletedProcess (returncode 127 when git itself is missing)."""
-    try:return subprocess.run(['git', '-C', str(ROOT), *args], capture_output=True, text=True, timeout=60)
-    except FileNotFoundError:return subprocess.CompletedProcess(args, 127, '', 'git not found')
-
-
-IN_GIT = git('rev-parse', '--verify', '--quiet', 'HEAD^{commit}').returncode == 0
 FIXTURE_GUARDED = {
     'transform': ('A', 'other', None), 'yawn': ('A', 'volatile', None), 'wrap': ('A', 'volatile', None), 'perishsong': ('A', 'volatile', None),
     'counter': ('A', 'retaliation', None), 'mirrorcoat': ('A', 'retaliation', None), 'curse': ('A', 'self_boost', None),
@@ -602,16 +592,17 @@ class LiveTableTests(unittest.TestCase):
         r = run();self.assertEqual((r['tripped'], r['b'], r['c'], r['reasons']), (False, False, False, []))
         self.assertEqual((r['conditions']['opp']['item_knocked'], sorted(m['move'] for m in r['masses']['turn1'])), (True, ['knockoff', 'trick']))
 
-    @unittest.skipUnless(IN_GIT, 'needs a git checkout (depthn-light runs one with full history and fails on any skip)')
-    def test_every_engine_since_is_a_commit_and_an_ancestor_of_head(self):
-        """A move retires only on an engine at or after its merge: every RETIRED engine_since resolves to a commit that HEAD
-        contains. A guard change that lands before its engine merge, or still carries a placeholder SHA, fails here."""
-        self.assertNotEqual(git('rev-parse', '--is-shallow-repository').stdout.strip(), 'true', 'a shallow clone cannot check ancestry')
+    @unittest.skipUnless(since.IN_GIT, since.SKIP_REASON)
+    def test_every_engine_since_is_a_merge_head_contains(self):
+        """A move retires only on an engine at or after its merge: every RETIRED engine_since is an integration merge (two or more
+        parents) that HEAD contains. A guard change that lands before its engine merge, or with the placeholder, fails here."""
+        self.assertFalse(since.shallow(), 'a shallow clone cannot check ancestry')
         for move, (_, sha) in sorted(LIVE_RETIRED.items()):
-            with self.subTest(move=move, engine_since=sha):
-                self.assertRegex(sha, r'^[0-9a-f]{8,40}$')
-                self.assertEqual(git('cat-file', '-e', f'{sha}^{{commit}}').returncode, 0, f'{move}: engine_since {sha} is not a commit here')
-                self.assertEqual(git('merge-base', '--is-ancestor', sha, 'HEAD').returncode, 0, f'{move}: engine_since {sha} is not an ancestor of HEAD')
+            with self.subTest(move=move, engine_since=sha):self.assertEqual(since.problem(sha), '', move)
+
+    def test_no_placeholder_merge_sha_remains(self):
+        """The placeholder merge SHA is gone from the guard module (its tables and its docstring evidence) once the merge exists."""
+        self.assertNotIn(since.PLACEHOLDER, Path(G.__file__).read_text())
 
     def test_a_held_herb_freeze_or_guts_status_no_longer_guards(self):
         """Our Deoxys holding White Herb, our frozen Ho-Oh, our burned Guts Ursaring and their unrevealed Deoxys-Attack (the pool's
