@@ -17,6 +17,7 @@ from unittest.mock import patch
 import numpy as np
 
 from scripts import depthn_carry_audit as A
+from tests import _engine_since as since
 
 ROOT = Path(__file__).resolve().parents[1]
 VOCAB = ['_none', 'hyperbeam', 'earthquake', 'rest', 'sleeptalk', 'wrap', 'toxic', 'protect', 'solarbeam']
@@ -52,6 +53,18 @@ class EnumerationTests(unittest.TestCase):
         moves = {m for e in A.NOT_IN_POOL for m in e.moves}
         self.assertTrue({'outrage', 'thrash', 'petaldance', 'uproar', 'rollout', 'iceball', 'bide', 'rage', 'fly', 'dig', 'dive', 'bounce',
             'skullbash', 'razorwind', 'skyattack'} <= moves)
+
+    @unittest.skipUnless(since.IN_GIT, since.SKIP_REASON)
+    def test_every_engine_since_is_a_merge_head_contains(self):
+        """An effect is in-tree only on an engine at or after its merge: every engine_since is an integration merge HEAD contains."""
+        self.assertFalse(since.shallow(), 'a shallow clone cannot check ancestry')
+        for e in A.EFFECTS:
+            if e.engine_since:
+                with self.subTest(effect=e.id, engine_since=e.engine_since):self.assertEqual(since.problem(e.engine_since), '', e.id)
+
+    def test_no_placeholder_merge_sha_remains(self):
+        """The placeholder merge SHA is gone from the audit (its engine_since fields and its evidence text) once the merge exists."""
+        self.assertNotIn(since.PLACEHOLDER, Path(A.__file__).read_text())
 
     def test_every_engine_citation_names_an_existing_line(self):
         rows = A.enumeration()['rows'];found = 0

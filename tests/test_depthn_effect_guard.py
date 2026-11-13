@@ -1,15 +1,17 @@
 """pokezero.depthn_effect_guard on exact Gen 3 protocol lines: the tier-C conditions, (b) at turn 1 and turn 2, (c) per choice."""
 import json
 import math
+from pathlib import Path
 import unittest
 from unittest import mock
 
 from pokezero import depthn_effect_guard as G
 from pokezero import depthn_live_actor as actor
+from tests import _engine_since as since
 
 # The guard's live tables, as this module defines them (pinned by LiveTableTests). Every other test here exercises the guard's
 # mechanics -- conditions, masses, the arms, the reach, the record -- against FIXTURE, a fixed table (the guard of #1932 / #1933,
-# before the A1 / A2 / R, #1935 and M2 retirements; its RETIRED holds only Destiny Bond and Hyper Beam), so that retiring a move
+# before the A1 / A2 / R, #1935, M2 and WH + C-lite retirements; its RETIRED holds only Destiny Bond and Hyper Beam), so that retiring a move
 # changes the pins and nothing else.
 LIVE_GUARDED, LIVE_RETIRED = dict(G.GUARDED), dict(G.RETIRED)
 FIXTURE_GUARDED = {
@@ -547,7 +549,7 @@ class RetiredTests(unittest.TestCase):
 
 
 class LiveTableTests(unittest.TestCase):
-    """The guard's live tables: GUARDED after the A1 / A2 / R / M1, #1935 and M2 retirements, RETIRED with each move's engine merge (a screen declares
+    """The guard's live tables: GUARDED after the A1 / A2 / R / M1, #1935, M2 and WH + C-lite retirements, RETIRED with each move's engine merge (a screen declares
     a move retired only on an engine at or after it), and every retired move recorded and never tripping, through evaluate."""
     def live(self):
         stack = tables(LIVE_GUARDED, LIVE_RETIRED)
@@ -561,9 +563,11 @@ class LiveTableTests(unittest.TestCase):
             'sleeppowder': ('status', '4ee5d3ee'), 'hypnosis': ('status', '4ee5d3ee'), 'gigadrain': ('other', '286a5ffe'),
             'mirrorcoat': ('retaliation', '286a5ffe'), 'counter': ('retaliation', '0d661773'), 'bonemerang': ('other', '0d661773'),
             'trick': ('item_removal', '3f48093b'), 'knockoff': ('item_removal', '3f48093b'),
-            'wrap': ('volatile', 'f3e71663'), 'yawn': ('volatile', 'f3e71663'), 'perishsong': ('volatile', 'f3e71663')})
-        self.assertEqual(sorted(m for m, v in LIVE_GUARDED.items() if v[0] == 'A'), ['superpower', 'transform'])
-        self.assertEqual(sorted(m for m, v in LIVE_GUARDED.items() if v[0] == 'C'), ['facade', 'psychoboost', 'sacredfire'])
+            'wrap': ('volatile', 'f3e71663'), 'yawn': ('volatile', 'f3e71663'), 'perishsong': ('volatile', 'f3e71663'),
+            'superpower': ('self_stat_drop', '8823d7c5'), 'psychoboost': ('self_stat_drop', '8823d7c5'),
+            'sacredfire': ('status', '8823d7c5'), 'facade': ('other', '8823d7c5')})
+        self.assertEqual(sorted(m for m, v in LIVE_GUARDED.items() if v[0] == 'A'), ['transform'])
+        self.assertEqual(sorted(m for m, v in LIVE_GUARDED.items() if v[0] == 'C'), [])
         self.assertEqual({m: v for m, v in LIVE_GUARDED.items()}, {m: v for m, v in FIXTURE_GUARDED.items() if m not in LIVE_RETIRED})
         self.assertEqual({m: FIXTURE_GUARDED[m][1] for m in LIVE_RETIRED if m in FIXTURE_GUARDED},
                          {m: c for m, (c, _) in LIVE_RETIRED.items() if m in FIXTURE_GUARDED})   # each keeps its effect class
@@ -587,6 +591,42 @@ class LiveTableTests(unittest.TestCase):
                           G.guarded('knockoff', c['own'], 'breloom')), (None, None, None))
         r = run();self.assertEqual((r['tripped'], r['b'], r['c'], r['reasons']), (False, False, False, []))
         self.assertEqual((r['conditions']['opp']['item_knocked'], sorted(m['move'] for m in r['masses']['turn1'])), (True, ['knockoff', 'trick']))
+
+    @unittest.skipUnless(since.IN_GIT, since.SKIP_REASON)
+    def test_every_engine_since_is_a_merge_head_contains(self):
+        """A move retires only on an engine at or after its merge: every RETIRED engine_since is an integration merge (two or more
+        parents) that HEAD contains. A guard change that lands before its engine merge, or with the placeholder, fails here."""
+        self.assertFalse(since.shallow(), 'a shallow clone cannot check ancestry')
+        for move, (_, sha) in sorted(LIVE_RETIRED.items()):
+            with self.subTest(move=move, engine_since=sha):self.assertEqual(since.problem(sha), '', move)
+
+    def test_no_placeholder_merge_sha_remains(self):
+        """The placeholder merge SHA is gone from the guard module (its tables and its docstring evidence) once the merge exists."""
+        self.assertNotIn(since.PLACEHOLDER, Path(G.__file__).read_text())
+
+    def test_a_held_herb_freeze_or_guts_status_no_longer_guards(self):
+        """Our Deoxys holding White Herb, our frozen Ho-Oh, our burned Guts Ursaring and their unrevealed Deoxys-Attack (the pool's
+        White Herb) at a child: FIXTURE guards Psycho Boost, Sacred Fire and Facade (tier C, each condition holding) and Superpower
+        (tier A), and our turn-1 Psycho Boost trips; the live tables retire all four (WH + C-lite), so the conditions are still
+        recorded and nothing trips."""
+        ours = [('Deoxys', '200/200', 'whiteherb', 'pressure'), ('Ho-Oh', '300/300 frz', 'leftovers', 'pressure'),
+                ('Ursaring', '200/200 brn', 'flameorb', 'guts')]
+        lanes = ['psychoboost', 'superpower', 'shadowball', 'recover'];own = prior(0, .97)
+        c = G.conditions([switch('p1', 'Deoxys'), switch('p2', 'Snorlax'), '|turn|1'], 0, request(ours, moves=tuple(lanes)))
+        herb = G.child_side(c['opp'], [('deoxysattack', 0, True, False)], opponent=True)
+        checks = lambda: (G.guarded('psychoboost', c['own'], 'deoxys'), G.guarded('superpower', c['own'], 'deoxys'),
+                          G.guarded('sacredfire', c['own'], 'hooh'), G.guarded('facade', c['own'], 'ursaring'),
+                          G.guarded('psychoboost', herb, 'deoxysattack'))
+        run = lambda: G.evaluate(c, own_turn1=dict(lanes=lanes, logits=own[0], legal=own[1]), peer_turn1=[], turn2=[], choice=0)
+        self.assertEqual(checks(), (('C', 'self_stat_drop'), ('A', 'self_stat_drop'), ('C', 'status'), ('C', 'other'), ('C', 'self_stat_drop')))
+        r = run();self.assertEqual((r['tripped'], r['c'], sorted(x['move'] for x in r['reasons'])), (True, True, ['psychoboost', 'psychoboost']))
+        self.live()
+        self.assertEqual(checks(), (None,) * 5)
+        r = run();self.assertEqual((r['tripped'], r['b'], r['c'], r['reasons']), (False, False, False, []))
+        members = r['conditions']['own']['members']
+        self.assertEqual((members['deoxys']['white_herb'], members['hooh']['status'], members['ursaring']['guts'], members['ursaring']['status']),
+                         (True, 'frz', True, 'brn'))
+        self.assertEqual(sorted(m['move'] for m in r['masses']['turn1']), ['psychoboost', 'superpower'])
 
     def test_a_binding_sleep_clause_no_longer_guards_the_sleep_moves(self):
         """Our Breloom asleep from a non-allied source binds Sleep Clause for the opponent: FIXTURE guards its Spore, Sleep Powder

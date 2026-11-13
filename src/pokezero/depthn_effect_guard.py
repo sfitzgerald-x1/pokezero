@@ -3,12 +3,9 @@
 The GPU device engine keys every move effect by name and reads no effect fields (generate_teams.cjs:75-81); the static
 table of its handling of the Gen 3 random-battle pool is reports/gpu-engine-move-effect-table-20261109.md. GUARDED holds
 the moves whose missing effect carries over into the price (the lead's decision):
-- tier A, unconditional: transform, superpower;
-- tier C, guarded for a side only while its condition holds (`conditions`): sacredfire while the user is frozen,
-  psychoboost while the user's White Herb is unconsumed
-  (ours: the request's item; the opponent's: Deoxys and Deoxys-Attack always hold it in the pool, until an -enditem or an
-  -item for that Pokemon is seen), facade while the user has Guts and a burn, paralysis or poison (every pool Facade user
-  has Guts; ours: the request's ability).
+- tier A, unconditional: transform;
+- tier C, guarded for a side only while its condition holds (`conditions`): none since WH + C-lite retired the last three
+  (below); `guarded` keeps the tier and every condition.
 TIER_B (irontail, signalbeam, steelwing, meteormash: chance secondaries) is never guarded, only reported (tier_b_legal).
 RETIRED (tier 'R') holds the moves the guard no longer trips on because the engine now models their effect, each with the
 integration merge from which it does (a screen declares an engine at or after it): destinybond (A2, 286a5ffe: the DESTINY_BOND
@@ -27,16 +24,31 @@ and M1's item ledger, gpu_engine/constructor_worlds.py; in-tree Trick since M1, 
 trick_empty, trick_encore, trick_faster, trick_knocked_target, trick_knocked_user, trick_lum, trick_protect, trick_stickyhold,
 trick_sub, trick_takeband; Knock Off since A2, 286a5ffe, probes knockoff, knockoff_band, knockoff_midturn_lock; Sticky Hold's
 block is in-engine, gpu_engine/items.py sticky_hold, and a blocked Knock Off marks nothing at the root; roots after a public
-item swap stay refused by the world constructor, PUBLIC_ITEM_SWAP_NOT_SUPPORTED), wrap, yawn and perishsong (M2 + R1, f3e71663: the
-partiallytrapped, yawn and perishsong volatiles in state (partial_trap_counter / partial_trap_source, yawn_counter, perish_counter)
-and the residual scheduler's Wrap tick, Yawn countdown and Perish count; R1 traces the Wrap and Yawn handlers only at the positions
+item swap stay refused by the world constructor, PUBLIC_ITEM_SWAP_NOT_SUPPORTED), superpower, psychoboost, sacredfire and facade
+(WH + C-lite, 8823d7c5: White Herb, gpu_engine/items.py white_herb, used by transition's _white_herb at every move's AfterMove
+(both actives), each entrant's SwitchIn, residual order 29 and inside Trick's onHit, restores the self drops of Superpower (tier A
+until WH; its drop itself is modelled since A1) and Psycho Boost (tier C while the user's White Herb was unconsumed: ours the
+request's item, the opponent's every pool Deoxys and Deoxys-Attack, which hold one, until an -enditem or an -item was seen;
+a live root after a used herb carries it as gone: its plain -enditem is B2's CONSUME, gpu_engine/public_items.py, which sets
+removed, and the protocol world clears the sampled item, removed_item_species);
+Sacred Fire's defrost flag, effects.defrost: a frozen user still moves and thaws, even on a miss or a failure (tier C while the
+user was frozen); Facade's doubled base power under par, brn, psn or tox, variable_moves.facade_power, with Gen 3's burn halving
+kept without Guts (tier C while the user had Guts and one of those statuses); probes wh_* (16: baton, charm, destinybond,
+intimidate, intimidate_explosion, knockoff, lead_fast, lead_slow, psychoboost, pursuit, residual, sd_superpower, superpower, tie,
+trick, trick_receive_negative), sacredfire_* (fail, hooh, statused, thaw) and rev_sacredfire_confused, facade_* (burn_noguts, frz,
+ghost, sleep, status, sub); the full probe set, 168 scenarios / 448 cases / 2,078 compared steps, all EXACT against Showdown
+f76228a1, 0 unresolved (WH round 2, 92503ddf, the CPU probe harness); v2e_regress, WH's GPU round 2 (f33e718c against M2's
+3e0878e4, 964 shards): 82 changed and involved, 0 uninvolved, 0 unexpected, 0 wrong-mon (round 1's split: whiteherb 40, facade 32,
+sacredfire 10); the B2 producer parity for white_herb), wrap, yawn and perishsong (M2 + R1, f3e71663: the partiallytrapped, yawn
+and perishsong volatiles in state (partial_trap_counter / partial_trap_source, yawn_counter, perish_counter) and the residual
+scheduler's Wrap tick, Yawn countdown and Perish count; R1 traces the Wrap and Yawn handlers only at the positions
 they can sort to, residual_order.POSITIONS, Wrap 4, 8, 9, 11 and Yawn 6, 12, 13, each failing a named probe when dropped; probes
 wrap* (12), yawn* (11), perishsong* (10); a root already holding one stays refused: an own-held one by phase_d_live_worlds
 (OWN_VOLATILE_OR_LATENT_CLOCK_UNAVAILABLE), an opponent-held partial trap or drowsy by the protocol world (built without
 approximating partial-trap or hidden-duration volatiles) and an opponent-held perish count by its typed mapper,
 v5_hypothetical_state), each exact against Showdown f76228a1 in the engine session's probe runs. The retired tier-C moves'
-conditions (sleep_clause, user_brn_par_psn, party_statused, item_knocked) stay in `guarded`'s vocabulary and in the recorded
-conditions, unused by any GUARDED move. They stay WATCHED, so their masses are still recorded (turn-2
+conditions (sleep_clause, user_brn_par_psn, party_statused, item_knocked, user_frozen, white_herb, guts_status) stay in `guarded`'s
+vocabulary and in the recorded conditions, unused by any GUARDED move. They stay WATCHED, so their masses are still recorded (turn-2
 entries: guarded False, tier 'R'), and never count toward (a), (b) (its turn-1 arm and the reach) or (c). Roots where a side is
 already bonded stay refused by the world constructor, not here.
 
@@ -77,9 +89,6 @@ RULE = 'reach'   # the live turn-2 arm: the reach M_s (screen-r2); records befor
 # move id -> (tier, effect class, condition) ; tier A conditions are None.
 GUARDED = {
     'transform': ('A', 'other', None),
-    'superpower': ('A', 'self_stat_drop', None),
-    'sacredfire': ('C', 'status', 'user_frozen'),
-    'psychoboost': ('C', 'self_stat_drop', 'white_herb'), 'facade': ('C', 'other', 'guts_status'),
 }
 TIER_B = {'irontail': 'target_stat_change', 'signalbeam': 'volatile', 'steelwing': 'self_boost', 'meteormash': 'self_boost'}
 # move id -> (effect class, the integration merge from which the engine models it): watched and recorded, never guarded.
@@ -89,7 +98,9 @@ RETIRED = {'destinybond': ('volatile', '286a5ffe'), 'hyperbeam': ('multi_turn', 
            'counter': ('retaliation', '0d661773'), 'charm': ('target_stat_change', '4ee5d3ee'), 'spore': ('status', '4ee5d3ee'),
            'sleeppowder': ('status', '4ee5d3ee'), 'hypnosis': ('status', '4ee5d3ee'), 'bonemerang': ('other', '0d661773'),
            'trick': ('item_removal', '3f48093b'), 'knockoff': ('item_removal', '3f48093b'),
-           'wrap': ('volatile', 'f3e71663'), 'yawn': ('volatile', 'f3e71663'), 'perishsong': ('volatile', 'f3e71663')}
+           'wrap': ('volatile', 'f3e71663'), 'yawn': ('volatile', 'f3e71663'), 'perishsong': ('volatile', 'f3e71663'),
+           'superpower': ('self_stat_drop', '8823d7c5'), 'psychoboost': ('self_stat_drop', '8823d7c5'),
+           'sacredfire': ('status', '8823d7c5'), 'facade': ('other', '8823d7c5')}
 WATCHED = frozenset(GUARDED) | frozenset(TIER_B) | frozenset(RETIRED)
 # The guarded tiers in force while records carried no per-entry `guarded` (before 49530d2a; GUARDED unchanged from 2c5c7b80 until
 # RETIRED): reach's bounds for those records use these, so a later guard set does not move them.
@@ -487,7 +498,7 @@ def trips(record, choice):
 # super-effective, except a Status move or a typeless one (Struggle, gen4/moves.ts:1273-1281; Beat Up, gen4/moves.ts:81; the Future
 # Sight / Doom Desire hit, gen3/moves.ts:228, 244); WG guards the resisted and neutral ones (0 < effectiveness < 2), power-0
 # fixed-damage and OHKO moves included: an immune move does nothing in the engine either (fixed and Counter damage too,
-# damage_moves.resolve_fixed, transition.py:1015-1016), so it is priced exactly; Blaze / Torrent / Overgrow / Swarm (gen4 :25-35 and
+# damage_moves.resolve_fixed, transition.py:1111-1112), so it is priced exactly; Blaze / Torrent / Overgrow / Swarm (gen4 :25-35 and
 # alike) give their type 1.5x base power while hp <= maxhp / 3; Poison Point, Flame Body, Effect Spore (gen3 abilities.ts:12-30,
 # 135-144) may status a contact attacker that dealt damage. The engine models none of them (Static and Rough Skin it does). A lane
 # is guarded at a node for a family when its move's outcome there depends on that family's ability (ability_lanes); the families'
