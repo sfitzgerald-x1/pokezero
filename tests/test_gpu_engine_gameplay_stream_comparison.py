@@ -12,7 +12,7 @@ from unittest.mock import patch
 import numpy as np
 
 from gpu_engine import engine_gameplay_trace as trace, finite_gameplay_comparison as comparison
-from gpu_engine.state import BattleState
+from gpu_engine.state import BattleState, empty_state
 from gpu_engine import benchmark_retained_games as bench
 from gpu_engine.transition import ChanceInputs
 import test_gpu_engine_benchmark_retained_games as benchmark_fixture
@@ -27,12 +27,14 @@ def chance(batch=1):
 
 
 def state(batch=1, *, hp=100, done=False):
-    # Authored storage, not an engine constructor/initialize/step invocation.
-    fields = {name:np.zeros((batch,),np.int32) for name in BattleState._fields}
+    # Authored storage, not an engine constructor/initialize/step invocation. A field this fixture does not author takes
+    # empty_state's shape, dtype and fill, so a leaf a later tier adds arrives shaped. (Every unauthored field used to be
+    # zeros of shape (batch,): fidelity M1/M2's per-mon counters were, and M1's entry.depart indexes them per mon.)
+    fields = {name:np.array(value) for name,value in empty_state(batch)._asdict().items()}
     for name in ('species','level','hidden_power_type','hidden_power_power','happiness','gender','hp','max_hp',
                  'status','status_counter','sleep_skipped','rest_origin','choice_move','last_move','encore_move','encore_counter',
                  'charge_move','charge_counter','item','ability','base_ability','volatile','confusion_counter','protect_counter',
-                 'substitute_hp','active_turns','trap_source','truant_loaf'):
+                 'substitute_hp','trap_source','truant_loaf'):
         fields[name]=np.zeros((batch,2,6),np.int32)
     fields.update(species=np.broadcast_to(np.arange(1,13).reshape(1,2,6),(batch,2,6)).copy(),
         level=np.full((batch,2,6),80,np.int32),hp=np.full((batch,2,6),hp,np.int32),max_hp=np.full((batch,2,6),100,np.int32),
@@ -80,6 +82,17 @@ def write_trace(path, *, frames=2, max_bytes=10**6, batch=1):
     measured={k:header[k]for k in ('runtime_binding','source','pool_receipt','max_requests','constructor_seed','sampling_seed')}
     measured.update(cohort=cohort,original_denominator=batch,gameplay_trace=descriptor)
     return measured
+
+
+class LiteralStateShapeTests(unittest.TestCase):
+    def test_every_field_has_the_engine_shape(self):
+        # The fixture authors values, not layout: every BattleState leaf has empty_state's shape, a leaf a later tier adds
+        # included. A per-mon leaf left at (batch,) failed only where entry.depart indexed it per mon, behind a refusal.
+        for batch in (1, 3):
+            literal, engine = state(batch), empty_state(batch)
+            for name in BattleState._fields:
+                with self.subTest(batch=batch, field=name):
+                    self.assertEqual(np.shape(getattr(literal, name)), np.shape(getattr(engine, name)))
 
 
 class GameplayCaptureTests(unittest.TestCase):
