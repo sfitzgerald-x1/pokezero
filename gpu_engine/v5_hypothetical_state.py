@@ -29,7 +29,8 @@ def map_spec(spec, *, metadata, seed, turn, active_turns, happiness, dex=None, h
     ``held_volatiles`` maps the public volatiles the engine holds since fidelity A2/M2 instead of refusing them:
     destinybond to the DESTINY_BOND bit (Showdown volatiles.destinybond: presence only, cleared at the holder's next
     move attempt, a switch-out or a faint) and perishN to perish_counter N (volatiles.perishsong.duration: Showdown's
-    residual decrements it before printing |-start|X|perishN, so the shown N is the remaining count).
+    residual decrements it before printing |-start|X|perishN, so the shown N is the remaining count after a residual;
+    the protocol world writes 4 for the silent perish3 of the Song's own turn, phase_d_protocol_world._perish_counts).
 
     ``turn`` is the displayed public request turn. ORIGINAL BattleState.turn
     counts completed ordinary turns, so its exact value here is turn-1.
