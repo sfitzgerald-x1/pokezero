@@ -443,9 +443,24 @@ class FinalRuleR3Tests(unittest.TestCase):
             stack.enter_context(mock.patch('sys.stdout'))
             return V.main(argv)
 
-    def test_the_pinned_rule_is_rule_r3_and_only_screen_r3_is_pinned(self):
+    def test_the_pinned_rule_is_rule_r3_and_only_screen_r3_r4a_r4a2_and_r4a3_are_pinned(self):
         self.assertEqual(V.FINAL_RULES, dict(RULE_R3=fairness.RULE_R3))
-        self.assertEqual(V.RUN_FINAL_RULES, {V.RUN_BINDINGS['screen_r3']: 'RULE_R3'})
+        self.assertEqual(V.RUN_FINAL_RULES, {V.RUN_BINDINGS['screen_r3']: 'RULE_R3', V.RUN_BINDINGS['screen_r4a']: 'RULE_R3',
+                                             V.RUN_BINDINGS['screen_r4a2']: 'RULE_R3', V.RUN_BINDINGS['screen_r4a3']: 'RULE_R3'})
+        r4a2 = EVALS/'depthn-foulplay-dn2w16-amendment-screen-r4a2-adoption-20261111.json';raw42 = r4a2.read_bytes();record42 = json.loads(raw42)
+        self.assertEqual(hashlib.sha256(raw42).hexdigest(), V.RUN_BINDINGS['screen_r4a2'])
+        self.assertEqual(V.final_rule(record42, V.RUN_BINDINGS['screen_r4a2']), 'RULE_R3')
+        self.assertEqual(record42['declaration_sha256'], hashlib.sha256((EVALS.parent/record42['declaration']).read_bytes()).hexdigest())
+        r4a3 = EVALS/'depthn-foulplay-dn2w16-amendment-screen-r4a3-adoption-20261111.json';raw43 = r4a3.read_bytes();record43 = json.loads(raw43)
+        self.assertEqual(hashlib.sha256(raw43).hexdigest(), V.RUN_BINDINGS['screen_r4a3'])
+        self.assertEqual(V.final_rule(record43, V.RUN_BINDINGS['screen_r4a3']), 'RULE_R3')
+        self.assertEqual(record43['declaration_sha256'], hashlib.sha256((EVALS.parent/record43['declaration']).read_bytes()).hexdigest())
+        self.assertEqual([a['sha256'] for a in record43['adopts']], [a['sha256'] for a in record42['adopts']])   # screen-r4a2's rule files, unchanged
+        self.assertEqual((record43['extension'], record43['arm_fairness']), (record42['extension'], record42['arm_fairness']))
+        r4a = EVALS/'depthn-foulplay-dn2w16-amendment-screen-r4a-adoption-20261111.json';raw4 = r4a.read_bytes();record4 = json.loads(raw4)
+        self.assertEqual(hashlib.sha256(raw4).hexdigest(), V.RUN_BINDINGS['screen_r4a'])
+        self.assertEqual(V.final_rule(record4, V.RUN_BINDINGS['screen_r4a']), 'RULE_R3')
+        self.assertEqual(record4['declaration_sha256'], hashlib.sha256((EVALS.parent/record4['declaration']).read_bytes()).hexdigest())
         r3 = EVALS/'depthn-foulplay-dn2w16-amendment-screen-r3-adoption-20261109.json';raw = r3.read_bytes();record = json.loads(raw)
         self.assertEqual(hashlib.sha256(raw).hexdigest(), V.RUN_BINDINGS['screen_r3'])   # the committed record is the pinned one
         self.assertEqual(V.final_rule(record, V.RUN_BINDINGS['screen_r3']), 'RULE_R3')

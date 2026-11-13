@@ -1,0 +1,75 @@
+{
+ "adopts": [
+  {
+   "change": "none",
+   "path": "evals/depthn-foulplay-dn2w16-amendment-unknown-cells-20261108.json",
+   "rule": "unknown-cells",
+   "sha256": "c4ff30a25a573f90fdd02957b40fb8307d8b87b56dfbfe60d85ea662b18e8b3b"
+  },
+  {
+   "change": "none",
+   "path": "evals/depthn-foulplay-dn2w16-amendment-harm-mirror-20261108.json",
+   "rule": "harm-mirror",
+   "sha256": "dbce9a54223969a213a3e584fd2e01bbe259ebad7530678fbba7cd38ecd9539f"
+  },
+  {
+   "change": "none",
+   "path": "evals/depthn-foulplay-dn2w16-amendment-both-bounds-20261108.json",
+   "rule": "both-bounds",
+   "sha256": "98e6120f30565c0b40d423504aa0d07a2929b2207551a5c901adb7579d361e13"
+  },
+  {
+   "change": "none",
+   "note": "its VOID rule (|difference| > 5%: VOID_FAIRNESS) and tolerance apply unchanged; its coarse 1-2 / 3-4 / 5-6 alive stratification is replaced, for screen-r4a3, by the declared arm fairness rule RULE_R3 (final_fairness_rule)",
+   "path": "evals/depthn-foulplay-dn2w16-amendment-final-fairness-20261108.json",
+   "rule": "final-fairness",
+   "sha256": "b2fccc253136b2bce3125cc773973c7186a0dff6a5ff8e6825a5618d6268050e"
+  }
+ ],
+ "application": "scripts/depthn_screen_amended_verdict.py --run-binding <this file> <its sha256> applies the four adopted rule files (each pinned by sha256 in the script, their rule text unchanged) to screen-r4a3's official readout and result files. This record supplies the run they bind to (run directory, declaration sha256, readout tree commit) in place of the four files' screen-r1 run fields, and declares final_fairness_rule RULE_R3: the final-fairness amendment's VOID rule (|difference| > 5%: VOID_FAIRNESS) applies to the whole-run gate under the declared arm fairness rule RULE_R3 (scripts/depthn_fairness_final.py final --rule r3; pinned in RUN_FINAL_RULES), not to the coarse or exact alive-band gates. No run amendment is adopted or accepted. The verdict refuses to run (no verdict, not VOID) when the RULE_R3 gate counts any COMPLETE cell whose owner capture file is missing. The extension: scripts/depthn_extension_dispatch.py --run-binding <this file> <its sha256> dispatches the 2,000-cell extension when that verdict is exactly CONTINUE_TO_2000 with no amended breakage, gated as for screen-r1 but on this record's run fields and the RULE_R3 final gate (the extension entry below adopts the extension file unchanged; pinned in EXTENSION_BINDINGS).",
+ "arm_fairness": {
+  "alive_bands": [
+   "1",
+   "2",
+   "3-4",
+   "5-6"
+  ],
+  "checkpoint_pairs": 50,
+  "combine": "POOLED_COUNT_WEIGHTED_RATIO_OF_MEANS",
+  "coverage_difference_max": 0.05,
+  "metric": "ITERATIONS_PER_BUDGET_SECOND",
+  "min_cell_moves": 120,
+  "min_moves_per_arm": 1000,
+  "min_pairs": 50,
+  "min_support_moves": 120,
+  "ratio_tolerance": 0.05,
+  "rearm_margin": 0.025,
+  "reference": "RAW",
+  "strata": "FOULPLAY_BUDGET_STRATUM_X_TURN_BAND_X_ALIVE_BANDS"
+ },
+ "computed_before": "Nothing of screen-r4a3: this record is committed before any screen-r4a3 cell or run directory exists. No cell, latency, fairness, paired, score or outcome statistic of screen-r4a3 has been computed; its dispatch does not depend on this record. Before it: four outcome-blind pre-flights (48 games each, never scored, on seed bands disjoint from the eval cells: run 1 on the calibration band, runs 2-4 on fresh bands from battle seeds 2103402100, 2103402150 and 2103402200, a fresh first-1,000 window each; runs 1-3 failed the latency or placement gate and each failure was fixed by its identified cause, run 4 is the declared pre-flight), the r4a3 worker calibration (RAW only), the identity certificates (prepare, classify, root and peer-belief digests on 1,043 decisions; the B2 fold check; the error paths) and the priced-output identity (325 decisions on GPU; recorded requests, no live outcome). Of screen-r4a2 (still running its pre-registered extension to 2,000 pairs): its 500-pair screen readout and amended verdict were read before screen-r4a3 was decided (CONTINUE_TO_2000; known pairs +0.043 [-0.002, +0.088], conservative +0.038, harm mirror +0.046 [+0.001, +0.091], RULE_R3 ratio 1.009; recorded in screen-r4a2's note). Of its extension beyond 500 pairs only operational telemetry was read (result counts by status and arm, the UNKNOWN causes, decision-latency and server timings for the interference guard); no paired, score or outcome statistic beyond its 500-pair screen. screen-r4a3 launches before screen-r4a2's final 2,000-pair outcome is known.",
+ "decided_by": "the lead (search, V2, CUDA): screen-r4a3 runs screen-r4a2's configuration (variant B: br_fp on pi_FP red3-full on view b gated by NOISE_GATED_K2, r4a2's pre-A2 engine and guard) at the 3.0 s deadline the ladder's bar uses, with identity-tested latency changes only (incremental public roots, once-per-root scans, once-per-request catalog check, the eager peer fold; byte-identical prepared and priced outputs) and routing-only proxy changes (true-load placement with battle end frames, --sticky-idle 20; no output effect); the same adopted rules as screen-r4a2 (unknown cells, harm mirror, both bounds, final fairness under RULE_R3) and the pre-registered extension to 2,000; a flag that fails RULE_R3 stops the run and goes to the lead, with no amendment mid-run; launched as soon as the pre-flight passes and the built declaration is approved, before screen-r4a2's final 2,000-pair outcome is known (its 500-pair screen result, CONTINUE_TO_2000, was known when screen-r4a3 was decided)",
+ "declaration": "evals/depthn-foulplay-dn2w16-declaration-r4a3-20261111.json",
+ "declaration_sha256": "e2e39feb7e6c1000b4ea0f090bebc2303d75788d8fea9ea5014ed803c96ce422",
+ "extension": {
+  "change": "none",
+  "path": "evals/depthn-foulplay-dn2w16-amendment-extension-20261108.json",
+  "sha256": "8a708ebbc6a4206dafc38b2d729656e25da6cf914931b5424353f441f6e9ed00"
+ },
+ "final_fairness_rule": "RULE_R3",
+ "made_at_utc": "2026-11-11T13:33:59Z",
+ "not_adopted": [
+  {
+   "path": "evals/depthn-foulplay-dn2w16-amendment-screen-r2-alive-bands-20261109.json",
+   "reason": "screen-r2-specific (bound to screen-r2's declaration, run and flag 2); screen-r4a3 declares RULE_R3 (as screen-r3 did), which already stratifies by exact alive bands",
+   "sha256": "fa7c32a51db058526e436a925ef2156b52ab9debd54881fae6829febcfaced53"
+  }
+ ],
+ "run": {
+  "dispatch_note": "the dispatch tree is the declaration commit 594a0ee2 (the server tree 92d8af8c plus the declaration JSON alone, as depthn_live_panel.server_tree_check requires); this record and the declaration note are pre-registered on the rules branch scott/v2e-r4a3-rules in a commit pushed before dispatch. The amended verdict runs from a git checkout of that rules commit with --tree-commit 594a0ee2 (it checks the readout's tree commit against this record, not git HEAD). The extension runs as screen-r4a2's did after its correction: the Python path puts a clean git checkout of the dispatch commit 594a0ee2 first (the panel and its workers load from it, so the recomputed official readout carries the run's own tree identity, commit_source git), then a checkout of the rules commit (the extension dispatcher, the verdict and fairness scripts, the rule files and this record); the two commits differ only in evals/, scripts/*.py and tests/, none of which is in the panel's code digest",
+  "run_directory": "/out/screen-r4a3",
+  "server_tree_commit": "92d8af8cb51b6c889fd359193275b3f63b05490b",
+  "tree_commit": "594a0ee2bd11ddd3a0e14b8a86a96f9a8d24a082"
+ },
+ "schema": "depthn-foulplay-panel.amendment-adoption.v1"
+}

@@ -253,6 +253,21 @@ class PreflightBindingTests(unittest.TestCase):
             panel.preflight_packets(calibration, arm='DN2W8', games=2, deadline_seconds=3., reserve_seconds=.15)
 
 
+
+class CommittedDeclarationTests(unittest.TestCase):
+    """screen-r4a's (3.0 s), screen-r4a2's (re-declared 5.0 s) and screen-r4a3's (3.0 s) committed declarations validate, each pre-flight
+    wall within its own deadline's bound."""
+    def test_the_committed_r4a_r4a2_and_r4a3_declarations_validate(self):
+        evals = Path(__file__).resolve().parents[1]/'evals'
+        for name, deadline, bound in (('depthn-foulplay-dn2w16-declaration-r4a-20261111.json', 3., 2.6),
+                                      ('depthn-foulplay-dn2w16-declaration-r4a2-20261111.json', 5., 4.6),
+                                      ('depthn-foulplay-dn2w16-declaration-r4a3-20261111.json', 3., 2.6)):
+            with self.subTest(name):
+                d = json.loads((evals/name).read_bytes()); panel.validate(d)
+                self.assertEqual((d['deadline_seconds'], panel.preflight_wall_p95_max(d['deadline_seconds'], d['reserve_seconds'])), (deadline, bound))
+                self.assertLessEqual(d['actor']['preflight_search_wall_p95_seconds'], bound)
+
+
 class ServerTreeTests(unittest.TestCase):
     """The lead's rule: servers on the eval tree's parent are fine only if the two commits differ in exactly the declaration."""
     def check(self, ls, diff, server='a'*40, eval_='b'*40):

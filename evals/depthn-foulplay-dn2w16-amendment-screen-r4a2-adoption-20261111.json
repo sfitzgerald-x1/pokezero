@@ -1,0 +1,75 @@
+{
+ "adopts": [
+  {
+   "change": "none",
+   "path": "evals/depthn-foulplay-dn2w16-amendment-unknown-cells-20261108.json",
+   "rule": "unknown-cells",
+   "sha256": "c4ff30a25a573f90fdd02957b40fb8307d8b87b56dfbfe60d85ea662b18e8b3b"
+  },
+  {
+   "change": "none",
+   "path": "evals/depthn-foulplay-dn2w16-amendment-harm-mirror-20261108.json",
+   "rule": "harm-mirror",
+   "sha256": "dbce9a54223969a213a3e584fd2e01bbe259ebad7530678fbba7cd38ecd9539f"
+  },
+  {
+   "change": "none",
+   "path": "evals/depthn-foulplay-dn2w16-amendment-both-bounds-20261108.json",
+   "rule": "both-bounds",
+   "sha256": "98e6120f30565c0b40d423504aa0d07a2929b2207551a5c901adb7579d361e13"
+  },
+  {
+   "change": "none",
+   "note": "its VOID rule (|difference| > 5%: VOID_FAIRNESS) and tolerance apply unchanged; its coarse 1-2 / 3-4 / 5-6 alive stratification is replaced, for screen-r4a2, by the declared arm fairness rule RULE_R3 (final_fairness_rule)",
+   "path": "evals/depthn-foulplay-dn2w16-amendment-final-fairness-20261108.json",
+   "rule": "final-fairness",
+   "sha256": "b2fccc253136b2bce3125cc773973c7186a0dff6a5ff8e6825a5618d6268050e"
+  }
+ ],
+ "application": "scripts/depthn_screen_amended_verdict.py --run-binding <this file> <its sha256> applies the four adopted rule files (each pinned by sha256 in the script, their rule text unchanged) to screen-r4a2's official readout and result files. This record supplies the run they bind to (run directory, declaration sha256, readout tree commit) in place of the four files' screen-r1 run fields, and declares final_fairness_rule RULE_R3: the final-fairness amendment's VOID rule (|difference| > 5%: VOID_FAIRNESS) applies to the whole-run gate under the declared arm fairness rule RULE_R3 (scripts/depthn_fairness_final.py final --rule r3; pinned in RUN_FINAL_RULES), not to the coarse or exact alive-band gates. No run amendment is adopted or accepted. The verdict refuses to run (no verdict, not VOID) when the RULE_R3 gate counts any COMPLETE cell whose owner capture file is missing. The extension: scripts/depthn_extension_dispatch.py --run-binding <this file> <its sha256> dispatches the 2,000-cell extension when that verdict is exactly CONTINUE_TO_2000 with no amended breakage, gated as for screen-r1 but on this record's run fields and the RULE_R3 final gate (the extension entry below adopts the extension file unchanged; pinned in EXTENSION_BINDINGS).",
+ "arm_fairness": {
+  "alive_bands": [
+   "1",
+   "2",
+   "3-4",
+   "5-6"
+  ],
+  "checkpoint_pairs": 50,
+  "combine": "POOLED_COUNT_WEIGHTED_RATIO_OF_MEANS",
+  "coverage_difference_max": 0.05,
+  "metric": "ITERATIONS_PER_BUDGET_SECOND",
+  "min_cell_moves": 120,
+  "min_moves_per_arm": 1000,
+  "min_pairs": 50,
+  "min_support_moves": 120,
+  "ratio_tolerance": 0.05,
+  "rearm_margin": 0.025,
+  "reference": "RAW",
+  "strata": "FOULPLAY_BUDGET_STRATUM_X_TURN_BAND_X_ALIVE_BANDS"
+ },
+ "computed_before": "Nothing of screen-r4a2: this record is committed before any screen-r4a2 cell or run directory exists. No cell, latency, fairness, paired, score or outcome statistic of screen-r4a2 has been computed; its dispatch does not depend on this record. Of the voided screen-r4a (VOID_LATENCY after 59 cells) only the void readout's latency and coverage table and screen-r4a's server telemetry (load, refusals, stage timings) were read; no paired, score or outcome field was read; its 59 cells are not scored and do not enter screen-r4a2. The declared pre-flight (48 outcome-blind games on fresh servers on server tree 982909e1, the only pre-flight run on that tree) and the final-tree replay of the 160 definitive RR battles (no live outcome) precede it.",
+ "decided_by": "the lead (search, V2, CUDA): screen-r4a tests the reply-model hypothesis with variant B (the MC ladder run D call): br_fp on pi_FP red3-full (view b) gated by NOISE_GATED_K2, on r3/r4b's engine (server tree 5af1a78d, deliberately before A2 #1890); same rules as screen-r4b; the screen-r1 extension amendment is pre-registered (a CONTINUE_TO_2000 continues to 2,000 pairs under its own rules, no mid-run call; one 4-GPU node for the extended run); a flag that fails RULE_R3 stops the run and goes to the lead, with no amendment mid-run; screen-r4a2 restarts screen-r4a after its VOID_LATENCY (46 timeouts in the first 1,000 searched decisions) under the panel's pre-registered latency rule: the deadline re-declared from the void readout's coverage table (5.0 s: coverage 1.0 >= 0.995), as a fresh run; its server tree is 982909e1 = 5af1a78d plus one panel change (the lead's call): the pre-flight search-wall bound derives from the declared deadline (deadline - reserve - 0.25: 2.6 s at 3.0 s as for every earlier screen, 4.6 s at 5.0 s), since the re-declaration rule moved the deadline but not the bound; with a pre-flight re-measured on that tree, everything else (search and engine code, reply model, operator, arms, cells, rules) is screen-r4a's",
+ "declaration": "evals/depthn-foulplay-dn2w16-declaration-r4a2-20261111.json",
+ "declaration_sha256": "77e9c133d4641e12559a14c29618a0ade7f1929455c515165d66325faf53973b",
+ "extension": {
+  "change": "none",
+  "path": "evals/depthn-foulplay-dn2w16-amendment-extension-20261108.json",
+  "sha256": "8a708ebbc6a4206dafc38b2d729656e25da6cf914931b5424353f441f6e9ed00"
+ },
+ "final_fairness_rule": "RULE_R3",
+ "made_at_utc": "2026-11-11T02:03:58Z",
+ "not_adopted": [
+  {
+   "path": "evals/depthn-foulplay-dn2w16-amendment-screen-r2-alive-bands-20261109.json",
+   "reason": "screen-r2-specific (bound to screen-r2's declaration, run and flag 2); screen-r4a2 declares RULE_R3 (as screen-r3 did), which already stratifies by exact alive bands",
+   "sha256": "fa7c32a51db058526e436a925ef2156b52ab9debd54881fae6829febcfaced53"
+  }
+ ],
+ "run": {
+  "dispatch_note": "the dispatch tree is the declaration commit 0a157c8c (the server tree 982909e1 plus the declaration JSON alone, as depthn_live_panel.server_tree_check requires); this record, the declaration note and the verdict and extension pins are pre-registered in later commits pushed before dispatch; the verdict and the extension run from an archive of that later commit with --tree-commit 0a157c8c (its src/pokezero and gpu_engine are the dispatch tree's)",
+  "run_directory": "/out/screen-r4a2",
+  "server_tree_commit": "982909e10c141055164daa875860ec078e0817cd",
+  "tree_commit": "0a157c8cacaeb48a7ea850aed9dc15b506742c61"
+ },
+ "schema": "depthn-foulplay-panel.amendment-adoption.v1"
+}

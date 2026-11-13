@@ -119,6 +119,37 @@ class ExtensionTests(unittest.TestCase):
 
 
 
+class CommittedBindingTests(unittest.TestCase):
+    def test_screen_r4a_s_committed_binding_is_pinned_and_binds_its_run(self):
+        path = E.TREE/'evals/depthn-foulplay-dn2w16-amendment-screen-r4a-adoption-20261111.json'
+        raw = path.read_bytes();digest = hashlib.sha256(raw).hexdigest()
+        self.assertEqual(digest, E.EXTENSION_BINDINGS['screen_r4a']);self.assertEqual(digest, V.RUN_BINDINGS['screen_r4a'])
+        self.assertEqual(V.RUN_FINAL_RULES[digest], 'RULE_R3')
+        self.assertEqual(E.bound_run((json.loads(raw), digest), E.committed()),
+                         ('1697ae7ab209a3e0000351817112916998a63ad2485bffacbffd5131156801fa', '/out/screen-r4a', 'RULE_R3'))
+        self.assertEqual(json.loads(raw)['run']['tree_commit'], '44494b01228a72e03c90b254ebd743b2ac993af0')
+
+    def test_screen_r4a2_s_committed_binding_is_pinned_and_binds_its_run(self):
+        path = E.TREE/'evals/depthn-foulplay-dn2w16-amendment-screen-r4a2-adoption-20261111.json'
+        raw = path.read_bytes();digest = hashlib.sha256(raw).hexdigest()
+        self.assertEqual(digest, E.EXTENSION_BINDINGS['screen_r4a2']);self.assertEqual(digest, V.RUN_BINDINGS['screen_r4a2'])
+        self.assertEqual(V.RUN_FINAL_RULES[digest], 'RULE_R3')
+        self.assertEqual(E.bound_run((json.loads(raw), digest), E.committed()),
+                         ('77e9c133d4641e12559a14c29618a0ade7f1929455c515165d66325faf53973b', '/out/screen-r4a2', 'RULE_R3'))
+        self.assertEqual(json.loads(raw)['run']['tree_commit'], '0a157c8cacaeb48a7ea850aed9dc15b506742c61')
+        self.assertEqual(json.loads(raw)['run']['server_tree_commit'], '982909e10c141055164daa875860ec078e0817cd')
+
+    def test_screen_r4a3_s_committed_binding_is_pinned_and_binds_its_run(self):
+        path = E.TREE/'evals/depthn-foulplay-dn2w16-amendment-screen-r4a3-adoption-20261111.json'
+        raw = path.read_bytes();digest = hashlib.sha256(raw).hexdigest()
+        self.assertEqual(digest, E.EXTENSION_BINDINGS['screen_r4a3']);self.assertEqual(digest, V.RUN_BINDINGS['screen_r4a3'])
+        self.assertEqual(V.RUN_FINAL_RULES[digest], 'RULE_R3')
+        self.assertEqual(E.bound_run((json.loads(raw), digest), E.committed()),
+                         ('e2e39feb7e6c1000b4ea0f090bebc2303d75788d8fea9ea5014ed803c96ce422', '/out/screen-r4a3', 'RULE_R3'))
+        self.assertEqual(json.loads(raw)['run']['tree_commit'], '594a0ee2bd11ddd3a0e14b8a86a96f9a8d24a082')
+        self.assertEqual(json.loads(raw)['run']['server_tree_commit'], '92d8af8cb51b6c889fd359193275b3f63b05490b')
+
+
 class BoundExtensionTests(unittest.TestCase):
     """--run-binding: a run that pre-registered the extension through its adoption record (screen-r4a's route): the committed rule
     files unchanged, the run fields and the RULE_R3 final gate from the binding."""
