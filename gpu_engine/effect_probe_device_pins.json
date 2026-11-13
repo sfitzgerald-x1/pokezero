@@ -1,6 +1,6 @@
 {
  "schema": "effect-probe-device-pins.v1",
- "note": "The exact (B2, device) pair each ALLOWLIST entry explains, or a B2 refusal's kind and error; recorded from a full device-mode run with no pins (gpu_engine/effect_probe_device.py ALLOWLIST). Regenerate only when an allowlist entry is added or retired.",
+ "note": "The exact (B2, device) pair each ALLOWLIST entry explains, or a B2 refusal's kind and error, recorded from a full device-mode run (gpu_engine/effect_probe_device.py ALLOWLIST; scripts/record_effect_probe_device_pins.py). Record them again when an allowlist entry is added or retired, or when a pinned species' scenario sets change (a belief mask pin is a bit word over the catalog of every scenario's sets).",
  "pins": [
   {
    "scenario": "aromatherapy",

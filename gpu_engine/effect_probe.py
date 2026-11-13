@@ -379,19 +379,26 @@ class Device:
     compiled from the same catalog (engine_device_observation.compile_tables, as the production collector builds them),
     and the allowlist."""
     def __init__(self, catalog, metadata, lanes, allowlist=None, pins=None):
-        from gpu_engine import effect_probe_device as dev, engine_device_observation
+        from gpu_engine import effect_probe_device as dev
+        self.allowlist = dev.ALLOWLIST if allowlist is None else allowlist
+        if pins is None and self.allowlist and not dev.PINS_PATH.exists():
+            # an absent pins file would leave every allowlisted diff open; to record pins from scratch, commit an
+            # empty one (its schema and "pins": []) and run scripts/record_effect_probe_device_pins.py on the run
+            raise FileNotFoundError(f'{dev.PINS_PATH.name} is missing: every ALLOWLIST entry is pinned to its values')
+        self.pins = dev.PINS if pins is None else pins
+        self.used = set()
+        from gpu_engine import engine_device_observation
         self.dev, self.catalog = dev, catalog
         self.belief_tables = engine_device_observation.compile_tables(metadata, catalog=catalog).belief
         self.b2 = dev.B2Batch(catalog, 2 * lanes)
-        self.allowlist = dev.ALLOWLIST if allowlist is None else allowlist
-        self.pins = dev.PINS if pins is None else pins
-        self.used = set()
 
     @classmethod
     def for_scenarios(cls, scenarios, showdown, showdown_root, metadata, lanes, allowlist=None):
-        """B2's catalog, and the device belief tables compiled from it, over the authored sets of EVERY committed
-        scenario plus the run's own: one fixed universe, so a belief field never depends on which scenarios share a run
-        or a shard (a per-run catalog let a variant exclusion show or hide with the shard layout)."""
+        """B2's catalog, and the device belief tables compiled from it, over the authored sets of EVERY scenario file in
+        gpu_engine/effect_probes (the directory's contents, tracked or not) plus the run's own: one fixed universe, so a
+        belief field never depends on which scenarios share a run or a shard (a per-run catalog let a variant exclusion
+        show or hide with the shard layout). A belief mask pin is a bit word over this catalog, so adding or changing a
+        set of a pinned species means recording the pins again."""
         from gpu_engine import effect_probe_device as dev
         committed = [load_scenario(p) for p in sorted((ROOT / 'gpu_engine/effect_probes').glob('*.json'))]
         teams = {json.dumps(s['teams'], sort_keys=True): s['teams'] for s in committed + list(scenarios)}
@@ -406,12 +413,16 @@ class Device:
         if any(refused):
             # B2 stops at this step; an allowlisted refusal (field 'b2_refusal') is a known B2 limit, explained.
             key = (scenario['move'], record['case_id'], step, 'b2_refusal')
-            refusal = dict([r for r in refused if r][0], step=step)
+            refusals = [dict(r, step=step) for r in refused if r]
+            refusal = refusals[0]
+            if len(refusals) > 1:refusal['other_streams'] = refusals[1:]
             if key in self.allowlist:
-                # explained only if it is the pinned refusal (kind and error code); any other refusal stays B2_REFUSED
+                # explained only if every refusing stream (either owner) is the pinned refusal (kind and error code);
+                # any other refusal stays B2_REFUSED
                 self.used.add(key)
-                if dev.refusal_matches(refusal, self.pins.get(key)):refusal['reason'] = self.allowlist[key]
-                else:refusal.update(unpinned_reason=self.allowlist[key], pin=self.pins.get(key))
+                pin = self.pins.get(key)
+                if all(dev.refusal_matches(r, pin) for r in refusals):refusal['reason'] = self.allowlist[key]
+                else:refusal.update(unpinned_reason=self.allowlist[key], pin=pin)
             device.update(status='B2_LIMIT' if 'reason' in refusal else 'B2_REFUSED', refusal=refusal);return
         numeric = []
         diffs = dev.compare_views(dev.device_view(trackers, lane, vocab), dev.b2_view(b2, lane, self.catalog), numeric)

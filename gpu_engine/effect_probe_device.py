@@ -258,6 +258,11 @@ for _scenario, _cases, _step in (
 
 
 PINS_PATH = Path(__file__).with_name('effect_probe_device_pins.json')
+PINS_SCHEMA = 'effect-probe-device-pins.v1'
+PINS_NOTE = ('The exact (B2, device) pair each ALLOWLIST entry explains, or a B2 refusal\'s kind and error, recorded from a '
+             'full device-mode run (gpu_engine/effect_probe_device.py ALLOWLIST; scripts/record_effect_probe_device_pins.py). '
+             'Record them again when an allowlist entry is added or retired, or when a pinned species\' scenario sets change '
+             '(a belief mask pin is a bit word over the catalog of every scenario\'s sets).')
 
 
 def _canon(value):
@@ -266,10 +271,24 @@ def _canon(value):
 
 
 def load_pins(path=PINS_PATH):
-    """{(scenario, case, step, field): [b2, device]} or, for 'b2_refusal', {'kind': ..., 'error': ...}."""
+    """{(scenario, case, step, field): [b2, device]} or, for 'b2_refusal', {'kind': ..., 'error': ...}. An absent file
+    is empty here; effect_probe.Device refuses to judge with it absent while the allowlist is not empty."""
     if not Path(path).exists():return {}
-    rows = json.loads(Path(path).read_text())['pins']
-    return {(r['scenario'], r['case'], r['step'], r['field']): r['value'] for r in rows}
+    data = json.loads(Path(path).read_text())
+    if data.get('schema') != PINS_SCHEMA:raise ValueError(f"{Path(path).name}: schema {data.get('schema')!r}, not {PINS_SCHEMA!r}")
+    pins = {}
+    for r in data['pins']:
+        key = (r['scenario'], r['case'], r['step'], r['field'])
+        if key in pins:raise ValueError(f'{Path(path).name}: two pins at {key}')
+        pins[key] = r['value']
+    return pins
+
+
+def write_pins(pins, path=PINS_PATH):
+    """The pins file, rows sorted by (scenario, case, step, field)."""
+    rows = [dict(scenario=k[0], case=k[1], step=k[2], field=k[3], value=v) for k, v in
+            sorted(pins.items(), key=lambda kv: (kv[0][0], kv[0][1], str(kv[0][2]).zfill(8), kv[0][3]))]
+    Path(path).write_text(json.dumps(dict(schema=PINS_SCHEMA, note=PINS_NOTE, pins=rows), indent=1) + '\n')
 
 
 PINS = load_pins()
