@@ -260,14 +260,6 @@ class TraceOfATracerTest(unittest.TestCase):
         )
 
 
-if __name__ == "__main__":  # pragma: no cover
-    # At the END. It sat above TraceOnTransformedTargetTest and TraceOfATracerTest, so direct
-    # execution ran 5 of 9 tests and never even DEFINED the two classes carrying this change's
-    # kill-confirmation. Round 3 fixed exactly this defect in test_pressure_pp_charge.py, and I
-    # then added new tests below the same defect in this file.
-    unittest.main()
-
-
 class BorrowedAbilityProcTest(unittest.TestCase):
     """A mon running a borrowed ability shows it again on its own later lines: Gen 3 Trace setAbility()s the copy, and
     Transform copies the target's ability (sim/pokemon.ts transformInto, gen > 2). Those lines name the copy, not the
@@ -331,3 +323,11 @@ class BorrowedAbilityProcTest(unittest.TestCase):
             "|turn|2",
         ]
         self.assertEqual(_ability(_belief(_engine(lines), "p2", "Ninjask")), "speedboost")
+
+
+if __name__ == "__main__":  # pragma: no cover
+    # At the END. It sat above TraceOnTransformedTargetTest and TraceOfATracerTest, so direct
+    # execution ran 5 of 9 tests and never even DEFINED the two classes carrying this change's
+    # kill-confirmation. Round 3 fixed exactly this defect in test_pressure_pp_charge.py, and I
+    # then added new tests below the same defect in this file.
+    unittest.main()
