@@ -816,7 +816,9 @@ def derived_volatiles(c,state,use):
     subOrder 14), and an Encore's silent ends (switch-out, faint) clear the bag through withdraw and the faint clear.
     The engine's encore_counter starts with the -start and reaches 0 exactly at the -end, so encore = counter>0 is B2's
     bag at every boundary. public_move_state's write at the Encore move stays (it agrees); this is what clears it at
-    the residual, where transition.py's Encore block calls no hook.
+    the residual, where transition.py's Encore block calls no hook. A fainted holder's counter is zeroed only at the
+    step's end (transition.py's faint clear), so the bit is gated on a living holder, as flashfire's is: B2's FAINT
+    clear empties the bag at the faint, a public_move_state call later in that step included.
 
     Flash Fire (the device harness's OPEN BUG E): Showdown's Flash Fire onTryHit prints -start|X|ability: Flash Fire
     when it adds the flashfire volatile, and B2 folds it into the bag's flashfire entry; a Fire move into a holder that
@@ -834,7 +836,7 @@ def derived_volatiles(c,state,use):
         for k,name in enumerate(PERISH_BAG):bag=bag.at[:,VOLATILE_NAMES.index(name)].set((perish>0)&(shown==k))
         bag=bag.at[:,VOLATILE_NAMES.index('yawn')].set(_get(state,'yawn_counter',side)>0)
         bag=bag.at[:,VOLATILE_NAMES.index('partiallytrapped')].set(_get(state,'partial_trap_counter',side)>0)
-        bag=bag.at[:,VOLATILE_NAMES.index('encore')].set(_get(state,'encore_counter',side)>0)
+        bag=bag.at[:,VOLATILE_NAMES.index('encore')].set((_get(state,'encore_counter',side)>0)&(_get(state,'hp',side)>0))
         bag=bag.at[:,VOLATILE_NAMES.index('flashfire')].set(
             ((_get(state,'volatile',side)&j.uint32(FLASH_FIRE))!=0)&(_get(state,'hp',side)>0))
         c=c._replace(trackers=_write(c.trackers,'public_volatiles',side,p,bag,use))
