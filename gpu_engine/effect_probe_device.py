@@ -193,6 +193,7 @@ for _key in (('wrap_tie', 'tie=0', 0, '0:active:boosts'), ('wrap_tie', 'tie=1', 
              ('knockoff_band', 'roll=0', 8, '1:active:boosts'), ('knockoff_band', 'roll=15', 8, '1:active:boosts'),
              ('superpower_ko', 'base', 5, '0:active:boosts'), ('destinybond_m7_gengar_volbeat', 'base', 3, '0:active:boosts'),
              ('sleepclause_faint', 'base', 3, '1:active:boosts'), ('knockoff_midturn_lock', 'base', 1, '0:active:boosts'),
+             ('wh_intimidate_explosion', 'base', 0, '0:active:boosts'),
              *(('destinybond_m5_gengar_entei', _case, 3, '0:active:boosts')
                for _case in ('crit=15,roll=0', 'crit=15,roll=15', 'crit=0,roll=0', 'crit=0,roll=15'))):
     ALLOWLIST[_key] = _FAINTED_STAGES
@@ -201,11 +202,23 @@ for _key in (('wrap_tie', 'tie=0', 0, '0:active:boosts'), ('wrap_tie', 'tie=1', 
 # (engine_device_public_hooks has no flashfire writer), so the device bag stays without it while the holder is active.
 _FLASH_FIRE = 'OPEN BUG: -start|X|ability: Flash Fire sets B2\'s flashfire volatile; no device hook writes it'
 for _step in (3, 4):ALLOWLIST[('sacredfire_fail', 'base', _step, '1:active:volatiles')] = _FLASH_FIRE
-# OPEN BUG (reported; possibly B2's quirk, for the lead to rule): Pursuit's switch intercept prints
+# OPEN BUG (reported; the last-move half is possibly B2's quirk, for the lead to rule): Pursuit's switch intercept prints
 # |move|p2a: X|Pursuit|p1a: Y|[from] Pursuit. B2 records a move line's last-used move only without [from]
-# (public_moves.record_move: last_kind LAST_MOVE when ~has_from); the device's move hook records Pursuit as the last move.
-_PURSUIT_FROM = 'OPEN BUG: the [from] Pursuit intercept line is not B2\'s last move; the device records Pursuit'
+# (public_moves.record_move: last_kind/last_id gated by ~has_from, gpu_engine/public_moves.py:210-211) and credits the
+# line's -damage to the user's dealt sums (public_damage's move window); the device's move hook records Pursuit as the
+# last move and its damage history credits the intercept no dealt damage.
+_PURSUIT_FROM = 'OPEN BUG: the [from] Pursuit intercept: B2 keeps the prior last move and credits its damage dealt; the device does neither'
 ALLOWLIST[('destinybond_pursuit', 'base', 1, '1:active:last_move')] = _PURSUIT_FROM
+for _scenario, _steps in (('destinybond_pursuer', (1, 2)), ('wh_pursuit', (0,))):
+    for _step in _steps:
+        for _field in ('1:active:last_move', '1:active:last_damage_dealt', '1:active:damage_exact_dealt'):
+            ALLOWLIST[(_scenario, 'base', _step, _field)] = _PURSUIT_FROM
+# OPEN BUG (reported): a failing Counter called by Sleep Talk. Showdown prints |move|p1a: X|Counter|p2a: Y|[from] Sleep
+# Talk and B2 reveals Counter (0 PP charged); the device's called-move reveal (transition.py:1008, device_public.move(...,
+# acts & (move!=caller_move), pp_use=False, count_turn=False)) is gated by acts, which Counter's failure gate (transition.py:
+# 990, acts &= ~(counter kind & (taken kind differs | the called move is not the chosen one))) has already cleared.
+_SLEEP_TALK_COUNTER = 'OPEN BUG: Sleep Talk\'s failing called Counter is revealed by B2 ([from] Sleep Talk line), not by the device'
+for _step in (1, 2):ALLOWLIST[('counter_sleeptalk', 'talk=0', _step, '0:0:moves')] = _SLEEP_TALK_COUNTER
 # B2 limit (explained, not a device fact): B2's fold refuses (PAYLOAD) a side's second encounter of one species, at the
 # repeat's arrival line (|switch|p2a: Gengar2|Gengar, L74, M|...: RAW_BEGIN, SWITCH_PRELUDE, MUDSHOT, SWITCH, NONPROC,
 # TENDENCY); Gen 3 Random Battle's Species Clause never sends it, the probes' Custom Game does. The case is compared
