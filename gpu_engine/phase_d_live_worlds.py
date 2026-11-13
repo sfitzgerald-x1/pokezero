@@ -338,10 +338,11 @@ def from_b2(adapter, request, source, metadata, *, address, defer_sleep=False, p
     fresh=protocol_facts.get('fresh_substitutes',{}) if protocol_facts is not None else {}
     own_species=normalize_id(v['species'][int(own['species'][own_slot])])
     # Engine-held public volatiles (fidelity A2/M2). Destiny Bond's flag rides the own volatile below on every route.
-    # Perish Song's and Yawn's counts are not own fields: only the protocol world writes them (map_spec held_volatiles,
-    # _write_held_counts), so they are admitted only on that route (protocol_facts); elsewhere they still refuse.
+    # Perish Song's and Yawn's counts (not own fields) and Encore's lock and drawn count (written after the own update)
+    # come only from the protocol world (map_spec held_volatiles, _write_held_counts, _write_encores), so they are
+    # admitted only on that route (protocol_facts); elsewhere they still refuse.
     allowed = {'', 'leechseed', 'ingrain', 'trapped', 'destinybond'}
-    if protocol_facts is not None:allowed |= {'perish1', 'perish2', 'perish3', 'yawn'}
+    if protocol_facts is not None:allowed |= {'perish1', 'perish2', 'perish3', 'yawn', 'encore'}   # encore: a drawn count
     if fresh.get('p'+str(owner+1))==own_species:
         allowed.add('substitute');hp_slot=own_slot
         origin=(protocol_facts.get('substitute_origins') or {}).get('p'+str(owner+1))

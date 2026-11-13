@@ -16,6 +16,8 @@ class Abilities(NamedTuple):
     original: object
     binding: object
     species_binding: object
+    running: object       # a Trace copy's running ability (Python _running_ability), 0 when none
+    transformed: object
 
 
 @unittest.skipUnless(importlib.util.find_spec('jax'),'requires isolated JAX')
@@ -54,6 +56,7 @@ class SwitchEvidenceTests(unittest.TestCase):
     def snapshot(self,engine):
         import numpy as np
         enc=np.zeros((1,2,6),np.int32);species=np.zeros_like(enc);original=np.zeros_like(enc)
+        running=np.zeros_like(enc);transformed=np.zeros((1,2,6),bool)
         public_species=np.zeros_like(enc)
         active=np.full((1,2),-1,np.int32);live=np.zeros((1,2),bool);effective=np.zeros((1,2,6,2),np.uint32)
         for side in (0,1):
@@ -61,11 +64,14 @@ class SwitchEvidenceTests(unittest.TestCase):
                 enc[0,side,slot]=slot+1;species[0,side,slot]=self.source.species_id(pokemon.species)
                 public_species[0,side,slot]=self.species.species_id(pokemon.species)
                 if pokemon.revealed_ability:original[0,side,slot]=self.abilities.ability_id(pokemon.revealed_ability)
+                if pokemon.key in engine._running_ability:running[0,side,slot]=self.abilities.ability_id(engine._running_ability[pokemon.key])
+                transformed[0,side,slot]=pokemon.transformed
                 if pokemon.active:active[0,side]=slot;live[0,side]=True
                 effective[0,1-side,slot]=self.source.pin_mask(pokemon.species,pokemon.candidate_variants)
         binding=self.j.broadcast_to(self.species.device.binding,(1,8))
         return Mons(*(self.j.asarray(v) for v in (enc,species,public_species,active)),binding),Abilities(self.j.asarray(original),
-            self.j.broadcast_to(self.abilities.device.binding,(1,8)),binding),self.j.asarray(effective),self.j.asarray(live)
+            self.j.broadcast_to(self.abilities.device.binding,(1,8)),binding,self.j.asarray(running),self.j.asarray(transformed)),\
+            self.j.asarray(effective),self.j.asarray(live)
 
     def engine(self,lines):
         from pokezero.belief import PublicBattleBeliefEngine

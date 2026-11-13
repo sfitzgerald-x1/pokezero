@@ -496,6 +496,29 @@ class ExactStateLedgerTest(unittest.TestCase):
         self.assertIsNone(dodrio.status)
         self.assertEqual(dodrio.revealed_ability, "Early Bird")
 
+    def test_a_transformed_rest_wake_does_not_pin_early_bird(self) -> None:
+        # A Transformed mon runs its target's ability (transformInto), so an Early Bird Rest wake is the copy's, not
+        # its set's: a Ditto (Limber) pinned Early Bird has no candidate set. B2's public_abilities.reveal ignores the
+        # same inferred claim while the mon is Transformed or borrowing.
+        engine = self.engine_from([
+            "|switch|p1a: Xatu|Xatu, L80|300/300",
+            "|switch|p2a: Ditto|Ditto, L88|250/250",
+            "|turn|1",
+            "|move|p2a: Ditto|Transform|p1a: Xatu",
+            "|-transform|p2a: Ditto|p1a: Xatu",
+            "|turn|2",
+            "|move|p2a: Ditto|Rest|p2a: Ditto",
+            "|-status|p2a: Ditto|slp|[from] move: Rest",
+            "|turn|3",
+            "|cant|p2a: Ditto|slp",
+            "|turn|4",
+            "|-curestatus|p2a: Ditto|slp|[msg]",
+        ])
+        ditto = self.opponent(engine, "Ditto")
+        self.assertTrue(ditto.transformed)
+        self.assertIsNone(ditto.status)
+        self.assertIsNone(ditto.revealed_ability)
+
     def test_heal_bell_cures_benched_ally_not_active_mon(self) -> None:
         # Heal Bell / Aromatherapy cure every team member; a benched ally serializes WITHOUT a
         # position letter (``|-curestatus|p2: Snorlax|par``). The cure must land on the benched
