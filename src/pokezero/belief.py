@@ -980,6 +980,15 @@ class PublicBattleBeliefEngine:
                 ):
                     return
             belief = self._target_belief(target_slot, target_ident)
+            if belief is not None and not is_trace and (belief.key in self._running_ability or belief.transformed):
+                # A plain -ability line for a mon running a borrowed ability names the copy it runs
+                # now, not its set: a Trace holder's later procs (Gen 3 Trace setAbility()s the copy,
+                # so Showdown prints e.g. ``|-ability|p2a: Porygon2|Speed Boost|boost`` for the
+                # traced Speed Boost) and a transformed mon's (transformInto copies the ability). Pin
+                # the running ability, never the set: every Porygon2 set has Trace and every Ditto
+                # set Limber, so a pinned copy leaves no candidate variant at all.
+                self._running_ability[belief.key] = str(primary)
+                return
             if belief is not None:
                 self._replace_belief(
                     belief,
@@ -1947,11 +1956,15 @@ class PublicBattleBeliefEngine:
             # Record the proc for the Early Bird Rest-wake guard (Fix C), before
             # the already-confirmed early return below so it fires on every proc.
             self._shed_skin_activated_this_turn.add(belief.key)
-        if belief.key in self._running_ability:
-            # A proc of an already-known borrowed ability (Trace/Transform)
-            # confirms CURRENT mechanics, not the generator's original set.
-            # Keep the running ability and proc bookkeeping above, but never
-            # poison variant matching or flag a false original-set conflict.
+        if belief.key in self._running_ability or belief.transformed:
+            # A proc of a borrowed ability (Trace/Transform) confirms CURRENT
+            # mechanics, not the generator's original set. Keep the running ability
+            # and proc bookkeeping above, but never poison variant matching or flag a
+            # false original-set conflict. A transformed mon runs its target's ability
+            # (sim/pokemon.ts transformInto: setAbility(pokemon.ability) for gen > 2)
+            # even when that ability was unknown at the Transform, so its first proc
+            # names the copy: record it as running, never as the set.
+            if belief.transformed:self._running_ability.setdefault(belief.key, str(ability_name))
             return
         if _normalize_identifier(belief.revealed_ability or "") == _normalize_identifier(ability_name):
             return
