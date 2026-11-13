@@ -241,6 +241,77 @@ class DevicePureTests(unittest.TestCase):
             if key[3] == 'b2_refusal':
                 with self.subTest(key=key):self.assertEqual(set(value), {'kind', 'error'})
 
+    def test_device_compare_explains_a_refusal_only_when_every_refusing_stream_is_the_pinned_one(self):
+        key, pin = ('s', 'base', 2, 'b2_refusal'), dict(kind='FOLD_ERROR', error=6)
+        def compare(refused, allowlist={key: 'limit'}):
+            d = object.__new__(probe.Device)
+            d.dev, d.b2, d.allowlist, d.pins, d.used = device, type('B2', (), dict(refused=refused))(), allowlist, {key: pin}, set()
+            record = dict(case_id='base', device=dict(steps_compared=0, numeric=0, steps=[]))
+            d.compare({'move': 's'}, record, 2, None, None, 0, None)
+            return record['device'], d.used
+        pinned, other = dict(kind='FOLD_ERROR', error=6), dict(kind='FOLD_ERROR', error=5)
+        for refused, status in (([pinned, None], 'B2_LIMIT'), ([None, pinned], 'B2_LIMIT'), ([pinned, pinned], 'B2_LIMIT'),
+                                ([pinned, other], 'B2_REFUSED'), ([other, pinned], 'B2_REFUSED'), ([other, None], 'B2_REFUSED')):
+            with self.subTest(refused=refused):
+                result, used = compare(refused)
+                self.assertEqual((result['status'], used), (status, {key}))
+                self.assertEqual('reason' in result['refusal'], status == 'B2_LIMIT')
+        result, used = compare([pinned, None], allowlist={})
+        self.assertEqual((result['status'], used, 'reason' in result['refusal']), ('B2_REFUSED', set(), False))
+
+    def test_device_refuses_to_judge_without_its_pins_file(self):
+        original = device.PINS_PATH
+        try:
+            device.PINS_PATH = Path('/nonexistent/effect_probe_device_pins.json')
+            with self.assertRaises(FileNotFoundError):probe.Device.__init__(object.__new__(probe.Device), None, None, 1)
+        finally:device.PINS_PATH = original
+
+    def test_pins_file_refuses_another_schema_and_a_repeated_key(self):
+        import tempfile
+        row = dict(scenario='s', case='base', step=1, field='0:0:hp', value=[1, 2])
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp, 'pins.json')
+            for data, message in ((dict(schema='other', pins=[row]), 'schema'),
+                                  (dict(schema=device.PINS_SCHEMA, pins=[row, row]), 'two pins')):
+                path.write_text(json.dumps(data))
+                with self.subTest(message=message), self.assertRaisesRegex(ValueError, message):device.load_pins(path)
+            device.write_pins({('s', 'base', 1, '0:0:hp'): [1, 2]}, path)
+            self.assertEqual(device.load_pins(path), {('s', 'base', 1, '0:0:hp'): [1, 2]})
+        # the committed file round-trips through the writer byte for byte
+        with tempfile.TemporaryDirectory() as tmp:
+            device.write_pins(device.PINS, Path(tmp, 'pins.json'))
+            self.assertEqual(Path(tmp, 'pins.json').read_text(), device.PINS_PATH.read_text())
+
+    def test_recording_pins_takes_each_allowlisted_value_and_refuses_anything_else(self):
+        import importlib.util, tempfile
+        spec = importlib.util.spec_from_file_location('record_pins', ROOT / 'scripts/record_effect_probe_device_pins.py')
+        record = importlib.util.module_from_spec(spec);spec.loader.exec_module(record)
+        allow = {('s', 'base', 1, 'f'): 'bug', ('s', 'base', 2, 'f'): 'bug', ('s', 'r', 3, 'b2_refusal'): 'limit',
+                 ('t', 'base', 0, 'f'): 'bug'}
+        diff = lambda b2, dv: dict(field='f', b2=b2, device=dv)
+        run = dict(move='s', results=[
+            dict(case_id='base', device=dict(steps=[dict(step=1, diffs=[diff((1, 2), [1, 3])], allowlisted=[]),
+                                                    dict(step=2, diffs=[], allowlisted=[diff(4, 5)])])),
+            dict(case_id='r', device=dict(steps=[], refusal=dict(kind='FOLD_ERROR', error=6, step=3)))])
+        existing = {('t', 'base', 0, 'f'): [0, 1], ('gone', 'base', 0, 'f'): [0, 1]}
+        with tempfile.TemporaryDirectory() as tmp:
+            def run_with(data):
+                Path(tmp, 's.json').write_text(json.dumps(data))
+                return record.record([str(Path(tmp, 's.json'))], allowlist=allow, existing=existing)
+            pins, problems = run_with(run)
+            self.assertEqual(problems, [])
+            self.assertEqual(pins, {('s', 'base', 1, 'f'): [[1, 2], [1, 3]], ('s', 'base', 2, 'f'): [4, 5],
+                                    ('s', 'r', 3, 'b2_refusal'): dict(kind='FOLD_ERROR', error=6), ('t', 'base', 0, 'f'): [0, 1]})
+            bad = copy.deepcopy(run);bad['results'][0]['device']['steps'][0]['diffs'].append(dict(field='g', b2=0, device=1))
+            self.assertIn("open diff outside the allowlist at ('s', 'base', 1, 'g')", run_with(bad)[1])
+            bad = copy.deepcopy(run);bad['results'][1]['device']['refusal']['other_streams'] = [dict(kind='FOLD_ERROR', error=5, step=3)]
+            self.assertTrue(any('streams refuse differently' in p for p in run_with(bad)[1]))
+            bad = copy.deepcopy(run);del bad['results'][0]['device']['steps'][1]
+            self.assertIn("allowlist entry with no pin: ('s', 'base', 2, 'f')", run_with(bad)[1])
+
+    def test_name_keeps_an_out_of_range_id_visible(self):
+        self.assertEqual([device._name(['_none', 'Leftovers'], i) for i in (0, -1, 1, 2, 7)], ['', '', 'leftovers', '?2', '?7'])
+
     def test_device_judge_accepts_exact_and_explained_b2_limits_only(self):
         rec = lambda status, diffs=(), equal=True: dict(case_id='c', device=dict(status=status, state_equal=equal,
             steps=[dict(diffs=list(diffs), allowlisted=[], numeric=[])]))
