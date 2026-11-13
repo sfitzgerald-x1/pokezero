@@ -1,0 +1,205 @@
+{
+ "fix": "pp_arrival",
+ "code": "ValueError:OWN_PP_LAST_ACTIVE_REQUEST_UNAVAILABLE",
+ "ordinal": 845,
+ "decision_index": 2,
+ "battle_id": "battle-gen3randombattle-controlled-2103400140",
+ "owner": "p2",
+ "prefix_sha256": "de4300d0873dfa40f4df6e95dc9d757da1024dc4a467583c3b45f39524caceb0",
+ "line_count": 45,
+ "base": {
+  "root_refusal": "ValueError:OWN_PP_LAST_ACTIVE_REQUEST_UNAVAILABLE",
+  "world_refusals": {},
+  "built": 0
+ },
+ "patched": {
+  "root_refusal": null,
+  "world_refusals": {},
+  "built": 16,
+  "digest": "e31808f6a1a9b86901d1e111573961033fa12c15ed77d5aa20dfcd67a883a6be"
+ },
+ "request": {
+  "schema": "pokezero.phase-d.shared-gpu-search.v1",
+  "request_id": "battle-gen3randombattle-controlled-2103400140:2",
+  "battle_id": "battle-gen3randombattle-controlled-2103400140",
+  "owner": "p2",
+  "stream_id": 1,
+  "decision_index": 2,
+  "generation": 6,
+  "prefix_sha256": "de4300d0873dfa40f4df6e95dc9d757da1024dc4a467583c3b45f39524caceb0",
+  "lines": [
+   "|t:|1794411273",
+   "|gametype|singles",
+   "|player|p1|FoulPlayBot||",
+   "|player|p2|PokeZeroBot||",
+   "|gen|3",
+   "|tier|[Gen 3] Random Battle",
+   "|rule|HP Percentage Mod: HP is shown in percentages",
+   "|rule|Beat Up Nicknames Mod: Beat Up will not reveal any party members",
+   "|rule|Endless Battle Clause: Forcing endless battles is banned",
+   "|rule|Sleep Clause Mod: Limit one foe put to sleep",
+   "|rule|Switch Priority Clause Mod: Faster Pok\u00e9mon switch first",
+   "|rule|Species Clause: Limit one of each Pok\u00e9mon",
+   "|rule|OHKO Clause: OHKO moves are banned",
+   "|rule|Evasion Items Clause: Evasion items are banned",
+   "|rule|Evasion Moves Clause: Evasion moves are banned",
+   "|",
+   "|t:|1794411274",
+   "|teamsize|p1|6",
+   "|teamsize|p2|6",
+   "|start",
+   "|switch|p1a: Nosepass|Nosepass, F|100/100",
+   "|switch|p2a: Sudowoodo|Sudowoodo, L92, F|278/278",
+   "|turn|1",
+   "|request|{\"active\":[{\"moves\":[{\"move\":\"Explosion\",\"id\":\"explosion\",\"pp\":8,\"maxpp\":8,\"target\":\"allAdjacent\",\"disabled\":false},{\"move\":\"Earthquake\",\"id\":\"earthquake\",\"pp\":16,\"maxpp\":16,\"target\":\"allAdjacent\",\"disabled\":false},{\"move\":\"Rock Slide\",\"id\":\"rockslide\",\"pp\":16,\"maxpp\":16,\"target\":\"allAdjacentFoes\",\"disabled\":false},{\"move\":\"Double-Edge\",\"id\":\"doubleedge\",\"pp\":24,\"maxpp\":24,\"target\":\"normal\",\"disabled\":false}]}],\"side\":{\"name\":\"PokeZeroBot\",\"id\":\"p2\",\"pokemon\":[{\"ident\":\"p2: Sudowoodo\",\"details\":\"Sudowoodo, L92, F\",\"condition\":\"278/278\",\"active\":true,\"stats\":{\"atk\":236,\"def\":264,\"spa\":108,\"spd\":172,\"spe\":108},\"moves\":[\"explosion\",\"earthquake\",\"rockslide\",\"doubleedge\"],\"baseAbility\":\"rockhead\",\"item\":\"choiceband\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Celebi\",\"details\":\"Celebi, L74\",\"condition\":\"270/270\",\"active\":false,\"stats\":{\"atk\":154,\"def\":191,\"spa\":190,\"spd\":191,\"spe\":190},\"moves\":[\"psychic\",\"toxic\",\"hiddenpowerfire\",\"recover\"],\"baseAbility\":\"naturalcure\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Pelipper\",\"details\":\"Pelipper, L88, F\",\"condition\":\"249/249\",\"active\":false,\"stats\":{\"atk\":93,\"def\":226,\"spa\":200,\"spd\":173,\"spe\":165},\"moves\":[\"icebeam\",\"surf\",\"protect\",\"toxic\"],\"baseAbility\":\"keeneye\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Venusaur\",\"details\":\"Venusaur, L81, F\",\"condition\":\"262/262\",\"active\":false,\"stats\":{\"atk\":179,\"def\":181,\"spa\":209,\"spd\":209,\"spe\":176},\"moves\":[\"leechseed\",\"substitute\",\"sludgebomb\",\"sleeppowder\"],\"baseAbility\":\"overgrow\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Aipom\",\"details\":\"Aipom, L93, F\",\"condition\":\"253/253\",\"active\":false,\"stats\":{\"atk\":183,\"def\":155,\"spa\":127,\"spd\":155,\"spe\":211},\"moves\":[\"batonpass\",\"return102\",\"brickbreak\",\"shadowball\"],\"baseAbility\":\"pickup\",\"item\":\"choiceband\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Blissey\",\"details\":\"Blissey, L76, F\",\"condition\":\"513/513\",\"active\":false,\"stats\":{\"atk\":20,\"def\":59,\"spa\":158,\"spd\":249,\"spe\":128},\"moves\":[\"softboiled\",\"aromatherapy\",\"seismictoss\",\"toxic\"],\"baseAbility\":\"naturalcure\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"}]}}",
+   "|",
+   "|t:|1794411276",
+   "|move|p1a: Nosepass|Earthquake|p2a: Sudowoodo",
+   "|-supereffective|p2a: Sudowoodo",
+   "|-damage|p2a: Sudowoodo|185/278",
+   "|move|p2a: Sudowoodo|Earthquake|p1a: Nosepass",
+   "|-supereffective|p1a: Nosepass",
+   "|-damage|p1a: Nosepass|35/100",
+   "|",
+   "|-heal|p1a: Nosepass|41/100|[from] item: Leftovers",
+   "|upkeep",
+   "|turn|2",
+   "|request|{\"active\":[{\"moves\":[{\"move\":\"Explosion\",\"id\":\"explosion\",\"pp\":8,\"maxpp\":8,\"target\":\"allAdjacent\",\"disabled\":true},{\"move\":\"Earthquake\",\"id\":\"earthquake\",\"pp\":15,\"maxpp\":16,\"target\":\"allAdjacent\",\"disabled\":false},{\"move\":\"Rock Slide\",\"id\":\"rockslide\",\"pp\":16,\"maxpp\":16,\"target\":\"allAdjacentFoes\",\"disabled\":true},{\"move\":\"Double-Edge\",\"id\":\"doubleedge\",\"pp\":24,\"maxpp\":24,\"target\":\"normal\",\"disabled\":true}]}],\"side\":{\"name\":\"PokeZeroBot\",\"id\":\"p2\",\"pokemon\":[{\"ident\":\"p2: Sudowoodo\",\"details\":\"Sudowoodo, L92, F\",\"condition\":\"185/278\",\"active\":true,\"stats\":{\"atk\":236,\"def\":264,\"spa\":108,\"spd\":172,\"spe\":108},\"moves\":[\"explosion\",\"earthquake\",\"rockslide\",\"doubleedge\"],\"baseAbility\":\"rockhead\",\"item\":\"choiceband\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Celebi\",\"details\":\"Celebi, L74\",\"condition\":\"270/270\",\"active\":false,\"stats\":{\"atk\":154,\"def\":191,\"spa\":190,\"spd\":191,\"spe\":190},\"moves\":[\"psychic\",\"toxic\",\"hiddenpowerfire\",\"recover\"],\"baseAbility\":\"naturalcure\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Pelipper\",\"details\":\"Pelipper, L88, F\",\"condition\":\"249/249\",\"active\":false,\"stats\":{\"atk\":93,\"def\":226,\"spa\":200,\"spd\":173,\"spe\":165},\"moves\":[\"icebeam\",\"surf\",\"protect\",\"toxic\"],\"baseAbility\":\"keeneye\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Venusaur\",\"details\":\"Venusaur, L81, F\",\"condition\":\"262/262\",\"active\":false,\"stats\":{\"atk\":179,\"def\":181,\"spa\":209,\"spd\":209,\"spe\":176},\"moves\":[\"leechseed\",\"substitute\",\"sludgebomb\",\"sleeppowder\"],\"baseAbility\":\"overgrow\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Aipom\",\"details\":\"Aipom, L93, F\",\"condition\":\"253/253\",\"active\":false,\"stats\":{\"atk\":183,\"def\":155,\"spa\":127,\"spd\":155,\"spe\":211},\"moves\":[\"batonpass\",\"return102\",\"brickbreak\",\"shadowball\"],\"baseAbility\":\"pickup\",\"item\":\"choiceband\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Blissey\",\"details\":\"Blissey, L76, F\",\"condition\":\"513/513\",\"active\":false,\"stats\":{\"atk\":20,\"def\":59,\"spa\":158,\"spd\":249,\"spe\":128},\"moves\":[\"softboiled\",\"aromatherapy\",\"seismictoss\",\"toxic\"],\"baseAbility\":\"naturalcure\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"}]}}",
+   "|",
+   "|t:|1794411279",
+   "|switch|p2a: Pelipper|Pelipper, L88, F|249/249",
+   "|move|p1a: Nosepass|Explosion|p2a: Pelipper",
+   "|-damage|p2a: Pelipper|0 fnt",
+   "|faint|p1a: Nosepass",
+   "|faint|p2a: Pelipper",
+   "|request|{\"forceSwitch\":[true],\"side\":{\"name\":\"PokeZeroBot\",\"id\":\"p2\",\"pokemon\":[{\"ident\":\"p2: Pelipper\",\"details\":\"Pelipper, L88, F\",\"condition\":\"0 fnt\",\"active\":true,\"stats\":{\"atk\":93,\"def\":226,\"spa\":200,\"spd\":173,\"spe\":165},\"moves\":[\"icebeam\",\"surf\",\"protect\",\"toxic\"],\"baseAbility\":\"keeneye\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Celebi\",\"details\":\"Celebi, L74\",\"condition\":\"270/270\",\"active\":false,\"stats\":{\"atk\":154,\"def\":191,\"spa\":190,\"spd\":191,\"spe\":190},\"moves\":[\"psychic\",\"toxic\",\"hiddenpowerfire\",\"recover\"],\"baseAbility\":\"naturalcure\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Sudowoodo\",\"details\":\"Sudowoodo, L92, F\",\"condition\":\"185/278\",\"active\":false,\"stats\":{\"atk\":236,\"def\":264,\"spa\":108,\"spd\":172,\"spe\":108},\"moves\":[\"explosion\",\"earthquake\",\"rockslide\",\"doubleedge\"],\"baseAbility\":\"rockhead\",\"item\":\"choiceband\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Venusaur\",\"details\":\"Venusaur, L81, F\",\"condition\":\"262/262\",\"active\":false,\"stats\":{\"atk\":179,\"def\":181,\"spa\":209,\"spd\":209,\"spe\":176},\"moves\":[\"leechseed\",\"substitute\",\"sludgebomb\",\"sleeppowder\"],\"baseAbility\":\"overgrow\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Aipom\",\"details\":\"Aipom, L93, F\",\"condition\":\"253/253\",\"active\":false,\"stats\":{\"atk\":183,\"def\":155,\"spa\":127,\"spd\":155,\"spe\":211},\"moves\":[\"batonpass\",\"return102\",\"brickbreak\",\"shadowball\"],\"baseAbility\":\"pickup\",\"item\":\"choiceband\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Blissey\",\"details\":\"Blissey, L76, F\",\"condition\":\"513/513\",\"active\":false,\"stats\":{\"atk\":20,\"def\":59,\"spa\":158,\"spd\":249,\"spe\":128},\"moves\":[\"softboiled\",\"aromatherapy\",\"seismictoss\",\"toxic\"],\"baseAbility\":\"naturalcure\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"}]}}"
+  ],
+  "own_request_line": "|request|{\"forceSwitch\":[true],\"side\":{\"name\":\"PokeZeroBot\",\"id\":\"p2\",\"pokemon\":[{\"ident\":\"p2: Pelipper\",\"details\":\"Pelipper, L88, F\",\"condition\":\"0 fnt\",\"active\":true,\"stats\":{\"atk\":93,\"def\":226,\"spa\":200,\"spd\":173,\"spe\":165},\"moves\":[\"icebeam\",\"surf\",\"protect\",\"toxic\"],\"baseAbility\":\"keeneye\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Celebi\",\"details\":\"Celebi, L74\",\"condition\":\"270/270\",\"active\":false,\"stats\":{\"atk\":154,\"def\":191,\"spa\":190,\"spd\":191,\"spe\":190},\"moves\":[\"psychic\",\"toxic\",\"hiddenpowerfire\",\"recover\"],\"baseAbility\":\"naturalcure\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Sudowoodo\",\"details\":\"Sudowoodo, L92, F\",\"condition\":\"185/278\",\"active\":false,\"stats\":{\"atk\":236,\"def\":264,\"spa\":108,\"spd\":172,\"spe\":108},\"moves\":[\"explosion\",\"earthquake\",\"rockslide\",\"doubleedge\"],\"baseAbility\":\"rockhead\",\"item\":\"choiceband\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Venusaur\",\"details\":\"Venusaur, L81, F\",\"condition\":\"262/262\",\"active\":false,\"stats\":{\"atk\":179,\"def\":181,\"spa\":209,\"spd\":209,\"spe\":176},\"moves\":[\"leechseed\",\"substitute\",\"sludgebomb\",\"sleeppowder\"],\"baseAbility\":\"overgrow\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Aipom\",\"details\":\"Aipom, L93, F\",\"condition\":\"253/253\",\"active\":false,\"stats\":{\"atk\":183,\"def\":155,\"spa\":127,\"spd\":155,\"spe\":211},\"moves\":[\"batonpass\",\"return102\",\"brickbreak\",\"shadowball\"],\"baseAbility\":\"pickup\",\"item\":\"choiceband\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Blissey\",\"details\":\"Blissey, L76, F\",\"condition\":\"513/513\",\"active\":false,\"stats\":{\"atk\":20,\"def\":59,\"spa\":158,\"spd\":249,\"spe\":128},\"moves\":[\"softboiled\",\"aromatherapy\",\"seismictoss\",\"toxic\"],\"baseAbility\":\"naturalcure\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"}]}}"
+ },
+ "own_pp_carry": {
+  "maximum_pp": {
+   "icebeam": 16,
+   "surf": 24,
+   "protect": 16,
+   "toxic": 16,
+   "psychic": 16,
+   "hiddenpower": 24,
+   "recover": 32,
+   "explosion": 8,
+   "earthquake": 16,
+   "rockslide": 16,
+   "doubleedge": 24,
+   "leechseed": 16,
+   "substitute": 16,
+   "sludgebomb": 16,
+   "sleeppowder": 24,
+   "batonpass": 64,
+   "return": 32,
+   "brickbreak": 24,
+   "shadowball": 24,
+   "softboiled": 16,
+   "aromatherapy": 8,
+   "seismictoss": 32
+  },
+  "rows": [
+   [
+    16,
+    24,
+    16,
+    16
+   ],
+   [
+    16,
+    16,
+    24,
+    32
+   ],
+   [
+    8,
+    15,
+    16,
+    24
+   ],
+   [
+    16,
+    16,
+    16,
+    24
+   ],
+   [
+    64,
+    32,
+    24,
+    24
+   ],
+   [
+    16,
+    8,
+    32,
+    16
+   ]
+  ],
+  "members": [
+   [
+    "p2: Pelipper",
+    "0 fnt",
+    [
+     "icebeam",
+     "surf",
+     "protect",
+     "toxic"
+    ]
+   ],
+   [
+    "p2: Celebi",
+    "270/270",
+    [
+     "psychic",
+     "toxic",
+     "hiddenpowerfire",
+     "recover"
+    ]
+   ],
+   [
+    "p2: Sudowoodo",
+    "185/278",
+    [
+     "explosion",
+     "earthquake",
+     "rockslide",
+     "doubleedge"
+    ]
+   ],
+   [
+    "p2: Venusaur",
+    "262/262",
+    [
+     "leechseed",
+     "substitute",
+     "sludgebomb",
+     "sleeppowder"
+    ]
+   ],
+   [
+    "p2: Aipom",
+    "253/253",
+    [
+     "batonpass",
+     "return102",
+     "brickbreak",
+     "shadowball"
+    ]
+   ],
+   [
+    "p2: Blissey",
+    "513/513",
+    [
+     "softboiled",
+     "aromatherapy",
+     "seismictoss",
+     "toxic"
+    ]
+   ]
+  ]
+ }
+}

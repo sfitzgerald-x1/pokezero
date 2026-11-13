@@ -1,0 +1,233 @@
+{
+ "fix": "ditto_transform",
+ "code": "ValueError:OWN_PP_REQUEST_MOVESET_DIFFERS",
+ "ordinal": 650,
+ "decision_index": 5,
+ "battle_id": "battle-gen3randombattle-controlled-2103400108",
+ "owner": "p1",
+ "prefix_sha256": "c87110c8fe5228fddb081a3e870a7052d1affeb1c2b5e2dd0f7be58fdd72de85",
+ "line_count": 81,
+ "base": {
+  "root_refusal": "ValueError:OWN_PP_REQUEST_MOVESET_DIFFERS",
+  "world_refusals": {},
+  "built": 0
+ },
+ "patched": {
+  "root_refusal": null,
+  "world_refusals": {},
+  "built": 16,
+  "digest": "732e97b8c6a65d7df5c0b793c6fac9f697cad713d7a00c56a526bf6aa36009aa"
+ },
+ "request": {
+  "schema": "pokezero.phase-d.shared-gpu-search.v1",
+  "request_id": "battle-gen3randombattle-controlled-2103400108:5",
+  "battle_id": "battle-gen3randombattle-controlled-2103400108",
+  "owner": "p1",
+  "stream_id": 1,
+  "decision_index": 5,
+  "generation": 12,
+  "prefix_sha256": "c87110c8fe5228fddb081a3e870a7052d1affeb1c2b5e2dd0f7be58fdd72de85",
+  "lines": [
+   "|t:|1794409906",
+   "|gametype|singles",
+   "|player|p1|PokeZeroBot||",
+   "|player|p2|FoulPlayBot||",
+   "|gen|3",
+   "|tier|[Gen 3] Random Battle",
+   "|rule|HP Percentage Mod: HP is shown in percentages",
+   "|rule|Beat Up Nicknames Mod: Beat Up will not reveal any party members",
+   "|rule|Endless Battle Clause: Forcing endless battles is banned",
+   "|rule|Sleep Clause Mod: Limit one foe put to sleep",
+   "|rule|Switch Priority Clause Mod: Faster Pok\u00e9mon switch first",
+   "|rule|Species Clause: Limit one of each Pok\u00e9mon",
+   "|rule|OHKO Clause: OHKO moves are banned",
+   "|rule|Evasion Items Clause: Evasion items are banned",
+   "|rule|Evasion Moves Clause: Evasion moves are banned",
+   "|",
+   "|t:|1794409906",
+   "|teamsize|p1|6",
+   "|teamsize|p2|6",
+   "|start",
+   "|switch|p1a: Ditto|Ditto|258/258",
+   "|switch|p2a: Torkoal|Torkoal, L90, F|100/100",
+   "|turn|1",
+   "|request|{\"active\":[{\"moves\":[{\"move\":\"Transform\",\"id\":\"transform\",\"pp\":16,\"maxpp\":16,\"target\":\"normal\",\"disabled\":false}]}],\"side\":{\"name\":\"PokeZeroBot\",\"id\":\"p1\",\"pokemon\":[{\"ident\":\"p1: Ditto\",\"details\":\"Ditto\",\"condition\":\"258/258\",\"active\":true,\"stats\":{\"atk\":153,\"def\":153,\"spa\":153,\"spd\":153,\"spe\":153},\"moves\":[\"transform\"],\"baseAbility\":\"limber\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p1: Cradily\",\"details\":\"Cradily, L84, M\",\"condition\":\"282/282\",\"active\":false,\"stats\":{\"atk\":184,\"def\":211,\"spa\":184,\"spd\":228,\"spe\":120},\"moves\":[\"earthquake\",\"recover\",\"toxic\",\"rockslide\"],\"baseAbility\":\"suctioncups\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p1: Qwilfish\",\"details\":\"Qwilfish, L82, M\",\"condition\":\"241/241\",\"active\":false,\"stats\":{\"atk\":203,\"def\":170,\"spa\":137,\"spd\":137,\"spe\":187},\"moves\":[\"destinybond\",\"spikes\",\"sludgebomb\",\"hydropump\"],\"baseAbility\":\"poisonpoint\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p1: Flareon\",\"details\":\"Flareon, L89, M\",\"condition\":\"260/260\",\"active\":false,\"stats\":{\"atk\":238,\"def\":158,\"spa\":219,\"spd\":247,\"spe\":166},\"moves\":[\"wish\",\"flamethrower\",\"protect\",\"hiddenpowergrass\"],\"baseAbility\":\"flashfire\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p1: Sudowoodo\",\"details\":\"Sudowoodo, L92, M\",\"condition\":\"278/278\",\"active\":false,\"stats\":{\"atk\":236,\"def\":264,\"spa\":108,\"spd\":172,\"spe\":108},\"moves\":[\"toxic\",\"rockslide\",\"substitute\",\"focuspunch\"],\"baseAbility\":\"rockhead\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p1: Kingdra\",\"details\":\"Kingdra, L81, F\",\"condition\":\"254/254\",\"active\":false,\"stats\":{\"atk\":158,\"def\":201,\"spa\":201,\"spd\":201,\"spe\":184},\"moves\":[\"hydropump\",\"substitute\",\"icebeam\",\"raindance\"],\"baseAbility\":\"swiftswim\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"}]}}",
+   "|",
+   "|t:|1794409909",
+   "|move|p1a: Ditto|Transform|p2a: Torkoal",
+   "|-transform|p1a: Ditto|p2a: Torkoal",
+   "|move|p2a: Torkoal|Fire Blast|p1a: Ditto",
+   "|-resisted|p1a: Ditto",
+   "|-damage|p1a: Ditto|186/258",
+   "|",
+   "|-heal|p1a: Ditto|202/258|[from] item: Leftovers",
+   "|upkeep",
+   "|turn|2",
+   "|request|{\"active\":[{\"moves\":[{\"move\":\"Hidden Power Grass 70\",\"id\":\"hiddenpower\",\"pp\":5,\"maxpp\":24,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Fire Blast\",\"id\":\"fireblast\",\"pp\":5,\"maxpp\":5,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Toxic\",\"id\":\"toxic\",\"pp\":5,\"maxpp\":10,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Explosion\",\"id\":\"explosion\",\"pp\":5,\"maxpp\":5,\"target\":\"allAdjacent\",\"disabled\":false}]}],\"side\":{\"name\":\"PokeZeroBot\",\"id\":\"p1\",\"pokemon\":[{\"ident\":\"p1: Ditto\",\"details\":\"Ditto\",\"condition\":\"202/258\",\"active\":true,\"stats\":{\"atk\":153,\"def\":153,\"spa\":153,\"spd\":153,\"spe\":153},\"moves\":[\"hiddenpowergrass\",\"fireblast\",\"toxic\",\"explosion\"],\"baseAbility\":\"limber\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p1: Cradily\",\"details\":\"Cradily, L84, M\",\"condition\":\"282/282\",\"active\":false,\"stats\":{\"atk\":184,\"def\":211,\"spa\":184,\"spd\":228,\"spe\":120},\"moves\":[\"earthquake\",\"recover\",\"toxic\",\"rockslide\"],\"baseAbility\":\"suctioncups\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p1: Qwilfish\",\"details\":\"Qwilfish, L82, M\",\"condition\":\"241/241\",\"active\":false,\"stats\":{\"atk\":203,\"def\":170,\"spa\":137,\"spd\":137,\"spe\":187},\"moves\":[\"destinybond\",\"spikes\",\"sludgebomb\",\"hydropump\"],\"baseAbility\":\"poisonpoint\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p1: Flareon\",\"details\":\"Flareon, L89, M\",\"condition\":\"260/260\",\"active\":false,\"stats\":{\"atk\":238,\"def\":158,\"spa\":219,\"spd\":247,\"spe\":166},\"moves\":[\"wish\",\"flamethrower\",\"protect\",\"hiddenpowergrass\"],\"baseAbility\":\"flashfire\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p1: Sudowoodo\",\"details\":\"Sudowoodo, L92, M\",\"condition\":\"278/278\",\"active\":false,\"stats\":{\"atk\":236,\"def\":264,\"spa\":108,\"spd\":172,\"spe\":108},\"moves\":[\"toxic\",\"rockslide\",\"substitute\",\"focuspunch\"],\"baseAbility\":\"rockhead\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p1: Kingdra\",\"details\":\"Kingdra, L81, F\",\"condition\":\"254/254\",\"active\":false,\"stats\":{\"atk\":158,\"def\":201,\"spa\":201,\"spd\":201,\"spe\":184},\"moves\":[\"hydropump\",\"substitute\",\"icebeam\",\"raindance\"],\"baseAbility\":\"swiftswim\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"}]}}",
+   "|",
+   "|t:|1794409912",
+   "|move|p1a: Ditto|Toxic|p2a: Torkoal",
+   "|-status|p2a: Torkoal|tox",
+   "|move|p2a: Torkoal|Fire Blast|p1a: Ditto",
+   "|-resisted|p1a: Ditto",
+   "|-damage|p1a: Ditto|127/258",
+   "|",
+   "|-heal|p1a: Ditto|143/258|[from] item: Leftovers",
+   "|-damage|p2a: Torkoal|94/100 tox|[from] psn",
+   "|upkeep",
+   "|turn|3",
+   "|request|{\"active\":[{\"moves\":[{\"move\":\"Hidden Power Grass 70\",\"id\":\"hiddenpower\",\"pp\":5,\"maxpp\":24,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Fire Blast\",\"id\":\"fireblast\",\"pp\":5,\"maxpp\":5,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Toxic\",\"id\":\"toxic\",\"pp\":4,\"maxpp\":10,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Explosion\",\"id\":\"explosion\",\"pp\":5,\"maxpp\":5,\"target\":\"allAdjacent\",\"disabled\":false}]}],\"side\":{\"name\":\"PokeZeroBot\",\"id\":\"p1\",\"pokemon\":[{\"ident\":\"p1: Ditto\",\"details\":\"Ditto\",\"condition\":\"143/258\",\"active\":true,\"stats\":{\"atk\":153,\"def\":153,\"spa\":153,\"spd\":153,\"spe\":153},\"moves\":[\"hiddenpowergrass\",\"fireblast\",\"toxic\",\"explosion\"],\"baseAbility\":\"limber\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p1: Cradily\",\"details\":\"Cradily, L84, M\",\"condition\":\"282/282\",\"active\":false,\"stats\":{\"atk\":184,\"def\":211,\"spa\":184,\"spd\":228,\"spe\":120},\"moves\":[\"earthquake\",\"recover\",\"toxic\",\"rockslide\"],\"baseAbility\":\"suctioncups\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p1: Qwilfish\",\"details\":\"Qwilfish, L82, M\",\"condition\":\"241/241\",\"active\":false,\"stats\":{\"atk\":203,\"def\":170,\"spa\":137,\"spd\":137,\"spe\":187},\"moves\":[\"destinybond\",\"spikes\",\"sludgebomb\",\"hydropump\"],\"baseAbility\":\"poisonpoint\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p1: Flareon\",\"details\":\"Flareon, L89, M\",\"condition\":\"260/260\",\"active\":false,\"stats\":{\"atk\":238,\"def\":158,\"spa\":219,\"spd\":247,\"spe\":166},\"moves\":[\"wish\",\"flamethrower\",\"protect\",\"hiddenpowergrass\"],\"baseAbility\":\"flashfire\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p1: Sudowoodo\",\"details\":\"Sudowoodo, L92, M\",\"condition\":\"278/278\",\"active\":false,\"stats\":{\"atk\":236,\"def\":264,\"spa\":108,\"spd\":172,\"spe\":108},\"moves\":[\"toxic\",\"rockslide\",\"substitute\",\"focuspunch\"],\"baseAbility\":\"rockhead\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p1: Kingdra\",\"details\":\"Kingdra, L81, F\",\"condition\":\"254/254\",\"active\":false,\"stats\":{\"atk\":158,\"def\":201,\"spa\":201,\"spd\":201,\"spe\":184},\"moves\":[\"hydropump\",\"substitute\",\"icebeam\",\"raindance\"],\"baseAbility\":\"swiftswim\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"}]}}",
+   "|",
+   "|t:|1794409914",
+   "|move|p2a: Torkoal|Fire Blast|p1a: Ditto|[miss]",
+   "|-miss|p2a: Torkoal|p1a: Ditto",
+   "|move|p1a: Ditto|Fire Blast|p2a: Torkoal",
+   "|-resisted|p2a: Torkoal",
+   "|-damage|p2a: Torkoal|64/100 tox",
+   "|",
+   "|-heal|p1a: Ditto|159/258|[from] item: Leftovers",
+   "|-heal|p2a: Torkoal|70/100 tox|[from] item: Leftovers",
+   "|-damage|p2a: Torkoal|58/100 tox|[from] psn",
+   "|upkeep",
+   "|turn|4",
+   "|request|{\"active\":[{\"moves\":[{\"move\":\"Hidden Power Grass 70\",\"id\":\"hiddenpower\",\"pp\":5,\"maxpp\":24,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Fire Blast\",\"id\":\"fireblast\",\"pp\":4,\"maxpp\":5,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Toxic\",\"id\":\"toxic\",\"pp\":4,\"maxpp\":10,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Explosion\",\"id\":\"explosion\",\"pp\":5,\"maxpp\":5,\"target\":\"allAdjacent\",\"disabled\":false}]}],\"side\":{\"name\":\"PokeZeroBot\",\"id\":\"p1\",\"pokemon\":[{\"ident\":\"p1: Ditto\",\"details\":\"Ditto\",\"condition\":\"159/258\",\"active\":true,\"stats\":{\"atk\":153,\"def\":153,\"spa\":153,\"spd\":153,\"spe\":153},\"moves\":[\"hiddenpowergrass\",\"fireblast\",\"toxic\",\"explosion\"],\"baseAbility\":\"limber\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p1: Cradily\",\"details\":\"Cradily, L84, M\",\"condition\":\"282/282\",\"active\":false,\"stats\":{\"atk\":184,\"def\":211,\"spa\":184,\"spd\":228,\"spe\":120},\"moves\":[\"earthquake\",\"recover\",\"toxic\",\"rockslide\"],\"baseAbility\":\"suctioncups\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p1: Qwilfish\",\"details\":\"Qwilfish, L82, M\",\"condition\":\"241/241\",\"active\":false,\"stats\":{\"atk\":203,\"def\":170,\"spa\":137,\"spd\":137,\"spe\":187},\"moves\":[\"destinybond\",\"spikes\",\"sludgebomb\",\"hydropump\"],\"baseAbility\":\"poisonpoint\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p1: Flareon\",\"details\":\"Flareon, L89, M\",\"condition\":\"260/260\",\"active\":false,\"stats\":{\"atk\":238,\"def\":158,\"spa\":219,\"spd\":247,\"spe\":166},\"moves\":[\"wish\",\"flamethrower\",\"protect\",\"hiddenpowergrass\"],\"baseAbility\":\"flashfire\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p1: Sudowoodo\",\"details\":\"Sudowoodo, L92, M\",\"condition\":\"278/278\",\"active\":false,\"stats\":{\"atk\":236,\"def\":264,\"spa\":108,\"spd\":172,\"spe\":108},\"moves\":[\"toxic\",\"rockslide\",\"substitute\",\"focuspunch\"],\"baseAbility\":\"rockhead\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p1: Kingdra\",\"details\":\"Kingdra, L81, F\",\"condition\":\"254/254\",\"active\":false,\"stats\":{\"atk\":158,\"def\":201,\"spa\":201,\"spd\":201,\"spe\":184},\"moves\":[\"hydropump\",\"substitute\",\"icebeam\",\"raindance\"],\"baseAbility\":\"swiftswim\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"}]}}",
+   "|",
+   "|t:|1794409917",
+   "|move|p1a: Ditto|Fire Blast|p2a: Torkoal",
+   "|-resisted|p2a: Torkoal",
+   "|-damage|p2a: Torkoal|30/100 tox",
+   "|move|p2a: Torkoal|Explosion|p1a: Ditto",
+   "|-damage|p1a: Ditto|0 fnt",
+   "|faint|p2a: Torkoal",
+   "|faint|p1a: Ditto",
+   "|request|{\"forceSwitch\":[true],\"side\":{\"name\":\"PokeZeroBot\",\"id\":\"p1\",\"pokemon\":[{\"ident\":\"p1: Ditto\",\"details\":\"Ditto\",\"condition\":\"0 fnt\",\"active\":true,\"stats\":{\"atk\":153,\"def\":153,\"spa\":153,\"spd\":153,\"spe\":153},\"moves\":[\"transform\"],\"baseAbility\":\"limber\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p1: Cradily\",\"details\":\"Cradily, L84, M\",\"condition\":\"282/282\",\"active\":false,\"stats\":{\"atk\":184,\"def\":211,\"spa\":184,\"spd\":228,\"spe\":120},\"moves\":[\"earthquake\",\"recover\",\"toxic\",\"rockslide\"],\"baseAbility\":\"suctioncups\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p1: Qwilfish\",\"details\":\"Qwilfish, L82, M\",\"condition\":\"241/241\",\"active\":false,\"stats\":{\"atk\":203,\"def\":170,\"spa\":137,\"spd\":137,\"spe\":187},\"moves\":[\"destinybond\",\"spikes\",\"sludgebomb\",\"hydropump\"],\"baseAbility\":\"poisonpoint\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p1: Flareon\",\"details\":\"Flareon, L89, M\",\"condition\":\"260/260\",\"active\":false,\"stats\":{\"atk\":238,\"def\":158,\"spa\":219,\"spd\":247,\"spe\":166},\"moves\":[\"wish\",\"flamethrower\",\"protect\",\"hiddenpowergrass\"],\"baseAbility\":\"flashfire\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p1: Sudowoodo\",\"details\":\"Sudowoodo, L92, M\",\"condition\":\"278/278\",\"active\":false,\"stats\":{\"atk\":236,\"def\":264,\"spa\":108,\"spd\":172,\"spe\":108},\"moves\":[\"toxic\",\"rockslide\",\"substitute\",\"focuspunch\"],\"baseAbility\":\"rockhead\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p1: Kingdra\",\"details\":\"Kingdra, L81, F\",\"condition\":\"254/254\",\"active\":false,\"stats\":{\"atk\":158,\"def\":201,\"spa\":201,\"spd\":201,\"spe\":184},\"moves\":[\"hydropump\",\"substitute\",\"icebeam\",\"raindance\"],\"baseAbility\":\"swiftswim\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"}]}}",
+   "|",
+   "|t:|1794409920",
+   "|switch|p1a: Kingdra|Kingdra, L81, F|254/254",
+   "|switch|p2a: Pidgeot|Pidgeot, L87, F|100/100",
+   "|",
+   "|upkeep",
+   "|turn|5",
+   "|request|{\"active\":[{\"moves\":[{\"move\":\"Hydro Pump\",\"id\":\"hydropump\",\"pp\":8,\"maxpp\":8,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Substitute\",\"id\":\"substitute\",\"pp\":16,\"maxpp\":16,\"target\":\"self\",\"disabled\":false},{\"move\":\"Ice Beam\",\"id\":\"icebeam\",\"pp\":16,\"maxpp\":16,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Rain Dance\",\"id\":\"raindance\",\"pp\":8,\"maxpp\":8,\"target\":\"all\",\"disabled\":false}]}],\"side\":{\"name\":\"PokeZeroBot\",\"id\":\"p1\",\"pokemon\":[{\"ident\":\"p1: Kingdra\",\"details\":\"Kingdra, L81, F\",\"condition\":\"254/254\",\"active\":true,\"stats\":{\"atk\":158,\"def\":201,\"spa\":201,\"spd\":201,\"spe\":184},\"moves\":[\"hydropump\",\"substitute\",\"icebeam\",\"raindance\"],\"baseAbility\":\"swiftswim\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p1: Cradily\",\"details\":\"Cradily, L84, M\",\"condition\":\"282/282\",\"active\":false,\"stats\":{\"atk\":184,\"def\":211,\"spa\":184,\"spd\":228,\"spe\":120},\"moves\":[\"earthquake\",\"recover\",\"toxic\",\"rockslide\"],\"baseAbility\":\"suctioncups\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p1: Qwilfish\",\"details\":\"Qwilfish, L82, M\",\"condition\":\"241/241\",\"active\":false,\"stats\":{\"atk\":203,\"def\":170,\"spa\":137,\"spd\":137,\"spe\":187},\"moves\":[\"destinybond\",\"spikes\",\"sludgebomb\",\"hydropump\"],\"baseAbility\":\"poisonpoint\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p1: Flareon\",\"details\":\"Flareon, L89, M\",\"condition\":\"260/260\",\"active\":false,\"stats\":{\"atk\":238,\"def\":158,\"spa\":219,\"spd\":247,\"spe\":166},\"moves\":[\"wish\",\"flamethrower\",\"protect\",\"hiddenpowergrass\"],\"baseAbility\":\"flashfire\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p1: Sudowoodo\",\"details\":\"Sudowoodo, L92, M\",\"condition\":\"278/278\",\"active\":false,\"stats\":{\"atk\":236,\"def\":264,\"spa\":108,\"spd\":172,\"spe\":108},\"moves\":[\"toxic\",\"rockslide\",\"substitute\",\"focuspunch\"],\"baseAbility\":\"rockhead\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p1: Ditto\",\"details\":\"Ditto\",\"condition\":\"0 fnt\",\"active\":false,\"stats\":{\"atk\":153,\"def\":153,\"spa\":153,\"spd\":153,\"spe\":153},\"moves\":[\"transform\"],\"baseAbility\":\"limber\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"}]}}"
+  ],
+  "own_request_line": "|request|{\"active\":[{\"moves\":[{\"move\":\"Hydro Pump\",\"id\":\"hydropump\",\"pp\":8,\"maxpp\":8,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Substitute\",\"id\":\"substitute\",\"pp\":16,\"maxpp\":16,\"target\":\"self\",\"disabled\":false},{\"move\":\"Ice Beam\",\"id\":\"icebeam\",\"pp\":16,\"maxpp\":16,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Rain Dance\",\"id\":\"raindance\",\"pp\":8,\"maxpp\":8,\"target\":\"all\",\"disabled\":false}]}],\"side\":{\"name\":\"PokeZeroBot\",\"id\":\"p1\",\"pokemon\":[{\"ident\":\"p1: Kingdra\",\"details\":\"Kingdra, L81, F\",\"condition\":\"254/254\",\"active\":true,\"stats\":{\"atk\":158,\"def\":201,\"spa\":201,\"spd\":201,\"spe\":184},\"moves\":[\"hydropump\",\"substitute\",\"icebeam\",\"raindance\"],\"baseAbility\":\"swiftswim\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p1: Cradily\",\"details\":\"Cradily, L84, M\",\"condition\":\"282/282\",\"active\":false,\"stats\":{\"atk\":184,\"def\":211,\"spa\":184,\"spd\":228,\"spe\":120},\"moves\":[\"earthquake\",\"recover\",\"toxic\",\"rockslide\"],\"baseAbility\":\"suctioncups\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p1: Qwilfish\",\"details\":\"Qwilfish, L82, M\",\"condition\":\"241/241\",\"active\":false,\"stats\":{\"atk\":203,\"def\":170,\"spa\":137,\"spd\":137,\"spe\":187},\"moves\":[\"destinybond\",\"spikes\",\"sludgebomb\",\"hydropump\"],\"baseAbility\":\"poisonpoint\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p1: Flareon\",\"details\":\"Flareon, L89, M\",\"condition\":\"260/260\",\"active\":false,\"stats\":{\"atk\":238,\"def\":158,\"spa\":219,\"spd\":247,\"spe\":166},\"moves\":[\"wish\",\"flamethrower\",\"protect\",\"hiddenpowergrass\"],\"baseAbility\":\"flashfire\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p1: Sudowoodo\",\"details\":\"Sudowoodo, L92, M\",\"condition\":\"278/278\",\"active\":false,\"stats\":{\"atk\":236,\"def\":264,\"spa\":108,\"spd\":172,\"spe\":108},\"moves\":[\"toxic\",\"rockslide\",\"substitute\",\"focuspunch\"],\"baseAbility\":\"rockhead\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p1: Ditto\",\"details\":\"Ditto\",\"condition\":\"0 fnt\",\"active\":false,\"stats\":{\"atk\":153,\"def\":153,\"spa\":153,\"spd\":153,\"spe\":153},\"moves\":[\"transform\"],\"baseAbility\":\"limber\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"}]}}"
+ },
+ "own_pp_carry": {
+  "maximum_pp": {
+   "hydropump": 8,
+   "substitute": 16,
+   "icebeam": 16,
+   "raindance": 8,
+   "earthquake": 16,
+   "recover": 32,
+   "toxic": 16,
+   "rockslide": 16,
+   "destinybond": 8,
+   "spikes": 32,
+   "sludgebomb": 16,
+   "wish": 16,
+   "flamethrower": 24,
+   "protect": 16,
+   "hiddenpower": 24,
+   "focuspunch": 32,
+   "transform": 16
+  },
+  "rows": [
+   [
+    8,
+    16,
+    16,
+    8
+   ],
+   [
+    16,
+    32,
+    16,
+    16
+   ],
+   [
+    8,
+    32,
+    16,
+    8
+   ],
+   [
+    16,
+    24,
+    16,
+    24
+   ],
+   [
+    16,
+    16,
+    16,
+    32
+   ],
+   [
+    15,
+    0,
+    0,
+    0
+   ]
+  ],
+  "members": [
+   [
+    "p1: Kingdra",
+    "254/254",
+    [
+     "hydropump",
+     "substitute",
+     "icebeam",
+     "raindance"
+    ]
+   ],
+   [
+    "p1: Cradily",
+    "282/282",
+    [
+     "earthquake",
+     "recover",
+     "toxic",
+     "rockslide"
+    ]
+   ],
+   [
+    "p1: Qwilfish",
+    "241/241",
+    [
+     "destinybond",
+     "spikes",
+     "sludgebomb",
+     "hydropump"
+    ]
+   ],
+   [
+    "p1: Flareon",
+    "260/260",
+    [
+     "wish",
+     "flamethrower",
+     "protect",
+     "hiddenpowergrass"
+    ]
+   ],
+   [
+    "p1: Sudowoodo",
+    "278/278",
+    [
+     "toxic",
+     "rockslide",
+     "substitute",
+     "focuspunch"
+    ]
+   ],
+   [
+    "p1: Ditto",
+    "0 fnt",
+    [
+     "transform"
+    ]
+   ]
+  ]
+ }
+}
