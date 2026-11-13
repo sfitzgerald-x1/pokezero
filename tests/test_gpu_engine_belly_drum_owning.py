@@ -21,7 +21,6 @@ from gpu_engine_default_observer_ast import dump_default_program,assert_hp_rng_m
 from test_gpu_engine_gameplay_stream_comparison import state as literal_state
 from _showdown_root import showdown_root
 import test_gpu_engine_no_damage_owning as fixture
-import gpu_engine_eager_witness as eager
 
 class BellyDrumOwningTests(unittest.TestCase):
  def setUp(self):
@@ -141,7 +140,6 @@ const result=m.onHit.call(b,p);out.push({lines,hp:p.hp,atk:p.boosts.atk,failed:r
     np.testing.assert_array_equal(actual,expected)
 
  def test_actual_original_frame_both_owners_witness_encoder_and_physics(self):
-  self.enterContext(eager.eager_source_witness(self.prepared))
   arrays=self.f.f.base().arrays('pressure','pressure');arrays['moves'][:]=np.array([self.metadata['vocabulary']['moves'].index(n)for n in self.names]);arrays['pp'][:]=[16,8,8,16];arrays['item'][:]=0
   # Preserve all six distinct original species and canonical constructor types.
   for team in (0,1):
@@ -167,7 +165,3 @@ const result=m.onHit.call(b,p);out.push({lines,hp:p.hp,atk:p.boosts.atk,failed:r
    words=np.asarray(diagnostic['raw'][row]);pair=words[words[:,0]==cb.BELLY_DRUM];self.assertEqual(pair[:,4].tolist(),[0,1]);self.assertEqual(int(pair[1,6]),6)
   ledger=result.state.core.execution;used=ledger.site==int(ex.Site.BELLY_DRUM);self.assertTrue(bool(j.all(j.where(used,ledger.stage==3,True))))
   for owner in result.owners:self.assertEqual(owner.full_line_consumers_complete.tolist(),[True,True]);self.assertEqual(owner.encoded.observation.admitted.tolist(),[True,True]);self.assertFalse(bool(owner.B4_qualified.any()))
-
-
-def tearDownModule():
-    eager.clear()   # drop the consume executables this module compiled

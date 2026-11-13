@@ -20,7 +20,6 @@ from gpu_engine import engine_retained_encoder_driver as driver,engine_request_s
 from gpu_engine import engine_full_v4_event_device as full,engine_leftovers_callbacks as leftovers
 from _showdown_root import showdown_root
 import test_gpu_engine_no_damage_owning as fixtures
-import gpu_engine_eager_witness as eager
 
 class ColorChangeOwningTests(unittest.TestCase):
  def setUp(self):
@@ -194,7 +193,6 @@ const lines=[],p={hp,isActive:active,hasType:()=>same,setType(t){this.type=t;ret
   arrays=self.literal_pool_arrays()
   self.assertEqual(arrays['species'].shape,(2,6));self.assertEqual(arrays['types'].shape,(2,6,2))
  def test_actual_original_frame_both_views_public_types_requests_and_physics(self):
-  self.enterContext(eager.eager_source_witness(self.prepared))
   arrays=self.literal_pool_arrays();captured={'frames':[]};capture_path=os.environ.get('POKEZERO_COLOR_CHANGE_CAPTURE')
   def snapshot(result,frame=None,physical=None):
    core=result.state.core;engine=core.engine;report=core.frame_input_report
@@ -246,10 +244,6 @@ const lines=[],p={hp,isActive:active,hasType:()=>same,setType(t){this.type=t;ret
    self.assertEqual(result.state.core.engine.types[0,0,0].tolist(),[self.normal,0])
    self.assertEqual(result.state.core.engine.types[1,1,0].tolist(),[self.normal,0])
    for owner in result.owners:self.assertEqual(owner.encoded.observation.admitted.tolist(),[True,True])
-
-
-def tearDownModule():
-    eager.clear()   # drop the consume executables this module compiled
 
 
 if __name__=='__main__':unittest.main()

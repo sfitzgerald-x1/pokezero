@@ -16,8 +16,8 @@ scalars) are closed over, with one compile per distinct set of them.
 Only the execution route changes; every value is computed by the same code. The heavy anchor
 (test_gpu_engine_source_witness_compiled_anchor) checks compiled == eager on the frame and witness outputs.
 
-A jax.clear_caches() inside the scope (some tests release executables between phases) runs that check first, then counts
-again, so a compile followed by a clear can't hide.
+A jax.clear_caches() inside the scope (a test that releases executables between phases) runs that check first, then
+counts again, so a compile followed by a clear can't hide.
 
 Enter it around a construct or an advance, inside a test or a test's own helper. Never enter it in a setUpClass that
 other modules borrow: the swap must not outlive the test that asked for it. Call clear() from the module's tearDownModule,
