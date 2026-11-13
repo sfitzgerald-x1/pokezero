@@ -15,7 +15,7 @@ import jax.numpy as j
 import numpy as np
 
 from pokezero.dex import normalize_id
-from pokezero.engine_world import battle_spec_from_payload,EngineWorldUnsupported,unpack_team
+from pokezero.engine_world import battle_spec_from_payload,EngineWorldUnsupported,unpack_team,_engine_species_id
 from pokezero.env import BattleStartOverride
 from pokezero.v5_teacher_public_root import PublicRoot,capture_root
 from pokezero.determinization import _gen3_randbat_belief_start_override_result
@@ -331,6 +331,11 @@ def materialize_protocol(root,start,*,inputs,seed):
         for name in ('species','level','hp','max_hp','stats','moves','item','ability'):
             actual=np.asarray(getattr(physical,name))[0,owner];expected=own[name]
             fail=not np.array_equal(actual,expected)
+            if fail and name=='species':
+                # The mapper writes the engine id (engine_world._engine_species_id collapses Unown letters); B2 keeps the
+                # request's forme. Equal after the same collapse: the own update below writes B2's literal forme.
+                engine=lambda xs:[_engine_species_id(normalize_id(metadata['vocabulary']['species'][int(x)]))for x in xs]
+                fail=engine(actual)!=engine(expected)
             kind='own-request-mapper-disagreement:'+name
             diagnostics.append(dict(kind=kind,status='TRIGGERED' if fail else 'CLEAR',fatal=True))
             if fail:failures.append(kind)

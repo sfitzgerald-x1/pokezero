@@ -42,12 +42,23 @@ def _identity(value):
     return str(value).split(':',1)[-1].strip().casefold()
 
 
+def _end_transform(ledger,base,identity):
+    """The member's ledger from its -transform line (its base slots after paying for Transform) replaces the transformed one."""
+    value=base.pop(identity)
+    if value is None:ledger.pop(identity,None)
+    else:ledger[identity]=value
+
+
 def own_pp_carry(lines,request,maximum_pp):
     """Latest owning active PP, plus only public costs after that snapshot.
 
     Costs before a later owning request are overwritten by that exact packet.
-    The only full-max case is a provably never-active member of the complete
-    battle-start prefix. No peer request, sampled ability, or hidden PP is used.
+    The full-max case is a member that never chose a move: no own move request
+    showed it active and no own move line names it (never active, or switched
+    in and fainted before its first request). A Transform's own ledger is kept
+    from the -transform line and restored when the member leaves the field
+    (switch, drag or faint), as Showdown restores its base move slots.
+    No peer request, sampled ability, or hidden PP is used.
     """
     from pokezero.live_protocol_actor import _packet
     from pokezero.belief import _called_move_source,_CALLER_MOVES,_NEVER_PRESSURED_POOL_MOVES
@@ -56,7 +67,7 @@ def own_pp_carry(lines,request,maximum_pp):
     identities=[_identity(p.get('ident','')) for p in party]
     if len(identities)!=6 or not all(identities) or len(set(identities))!=6 or '|start' not in lines:
         raise ValueError('OWN_PP_COMPLETE_UNIQUE_START_HISTORY_REQUIRED')
-    ledger={};seen=set();active={};ability={};last=None
+    ledger={};seen=set();active={};ability={};last=None;moved=set();base={}
     for line in lines:
         p=line.split('|');kind=p[1] if len(p)>1 else ''
         if kind=='request':
@@ -83,15 +94,21 @@ def own_pp_carry(lines,request,maximum_pp):
             # retain the previous exact PP; public primary/locked move tags
             # below distinguish the one paid declaration from free continuations.
         elif kind in ('switch','drag','replace') and len(p)>3:
-            side=p[2][:2];identity=_identity(p[2]);active[side]=identity;ability[side]=''
+            side=p[2][:2];identity=_identity(p[2])
+            if side==owner and active.get(side) in base and active[side]!=identity:_end_transform(ledger,base,active[side])
+            active[side]=identity;ability[side]=''
             if side==owner:
                 if identity not in identities:raise ValueError('OWN_PP_PUBLIC_IDENTITY_UNAVAILABLE')
                 seen.add(identity)
         elif kind in ('-ability','-endability') and len(p)>3:
             side=p[2][:2]
             if active.get(side)==_identity(p[2]):ability[side]=normalize_id(p[3]) if kind=='-ability' else ''
+        elif kind=='-transform' and len(p)>3 and p[2][:2]==owner:
+            identity=_identity(p[2]);value=ledger.get(identity);base[identity]=dict(value) if isinstance(value,dict) else value
+        elif kind=='faint' and len(p)>2 and p[2][:2]==owner and _identity(p[2]) in base:
+            _end_transform(ledger,base,_identity(p[2]))
         elif kind=='move' and len(p)>3 and p[2][:2]==owner:
-            identity=_identity(p[2]);seen.add(identity);value=ledger.get(identity)
+            identity=_identity(p[2]);seen.add(identity);moved.add(identity);value=ledger.get(identity)
             if not isinstance(value,dict):continue
             move=_move_key(p[3]);caller=_called_move_source(line)
             if move=='struggle' or caller in _CALLER_MOVES|{'sleeptalk','lockedmove'}:continue
@@ -108,7 +125,7 @@ def own_pp_carry(lines,request,maximum_pp):
     result=[]
     for row,identity in zip(party,identities):
         moves=list(map(_move_key,row['moves']));value=ledger.get(identity)
-        if identity not in seen:value={move:maximum_pp[move] for move in moves}
+        if identity not in ledger and identity not in moved:value={move:maximum_pp[move] for move in moves}
         if not isinstance(value,dict):raise ValueError(value or 'OWN_PP_LAST_ACTIVE_REQUEST_UNAVAILABLE')
         if set(value)!=set(moves):raise ValueError('OWN_PP_REQUEST_MOVESET_DIFFERS')
         result.append([value[move] for move in moves]+[0]*(4-len(moves)))
