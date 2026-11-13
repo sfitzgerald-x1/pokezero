@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from pathlib import Path
 import re
 
 import numpy as np
@@ -161,6 +162,9 @@ LEFT_OUT = {
 
 # Explained mismatches: (scenario move, case_id, step, field) -> one-line reason. step is the request step index or
 # 'initial'. field is the full diff key (e.g. '1:0:hp_percent'). An entry that matches no diff is reported as stale.
+# Every entry is also PINNED to the exact (B2, device) pair it explains (PINS, effect_probe_device_pins.json, recorded
+# from a full run): any other value at that key, on either side, stays an open diff, so an entry never hides a further
+# change of the same field. A 'b2_refusal' entry is pinned to the refusal's kind and error code instead.
 ALLOWLIST = {}
 # OPEN BUG (reported to the coordinator): a sleeping Sleep Talk user that then hits itself in confusion. Gen 3 prints
 # |cant|X|slp even for a sleep-usable move (data/mods/gen3/conditions.ts slp onBeforeMove), then confusion's
@@ -233,6 +237,29 @@ for _scenario, _cases, _step in (
         ('perishsong_last_faster', ('base',), 1), ('perishsong_tie', ('tie=0', 'tie=1'), 1), ('wrap_tie', ('tie=0', 'tie=1'), 1),
         ('wrap_trapper_dragged_back', ('base',), 1)):
     for _case in _cases:ALLOWLIST[(_scenario, _case, _step, 'b2_refusal')] = _REPEATED_SPECIES
+
+
+PINS_PATH = Path(__file__).with_name('effect_probe_device_pins.json')
+
+
+def _canon(value):
+    """The JSON form of a diff value (tuples as lists, numpy scalars as the run output writes them)."""
+    return json.loads(json.dumps(value, default=str))
+
+
+def load_pins(path=PINS_PATH):
+    """{(scenario, case, step, field): [b2, device]} or, for 'b2_refusal', {'kind': ..., 'error': ...}."""
+    if not Path(path).exists():return {}
+    rows = json.loads(Path(path).read_text())['pins']
+    return {(r['scenario'], r['case'], r['step'], r['field']): r['value'] for r in rows}
+
+
+PINS = load_pins()
+
+
+def refusal_matches(refusal, pin):
+    """A B2 refusal explained by its pin: the same kind and error code, nothing broader."""
+    return pin is not None and refusal.get('kind') == pin.get('kind') and refusal.get('error') == pin.get('error')
 
 
 def wire_lines(lines):
@@ -377,7 +404,7 @@ class B2Batch:
 
 def _name(names, index):
     index = int(index)
-    return '' if index <= 0 or index >= len(names) else _norm(names[index])
+    return '' if index <= 0 else f'?{index}' if index >= len(names) else _norm(names[index])   # a garbage id stays visible
 
 
 def _words(x):
@@ -551,7 +578,7 @@ NUMERIC_NOTE = ('OPEN BUG: device shown-percent damage fraction divides by the l
                 'float32(0.01)), float32 ulps from B2\'s division by hp_denominator')
 
 
-def _within_ulp(a, b):
+def _within_tolerance(a, b):
     if not isinstance(a, float) or not isinstance(b, float):return False
     return abs(a - b) < FLOAT_TOLERANCE
 
@@ -560,9 +587,18 @@ def compare_views(device, b2, numeric=None):
     """Field-by-field differences, keyed side:slot:field (mon), side:active:field, side:field and field. A FLOAT_FIELDS
     pair closer than FLOAT_TOLERANCE goes to `numeric` (a list), see NUMERIC_NOTE."""
     diffs = []
+    for s in range(2):
+        for part in ('active', 'side'):
+            if device[s][part] is not None and b2[s][part] is not None and set(device[s][part]) != set(b2[s][part]):
+                raise ValueError(f'device and B2 {part} views differ in keys: {sorted(set(device[s][part]) ^ set(b2[s][part]))}')
+        for k in range(6):
+            if device[s]['mons'][k] is not None and b2[s]['mons'][k] is not None and set(device[s]['mons'][k]) != set(b2[s]['mons'][k]):
+                raise ValueError(f'device and B2 mon views differ in keys: {sorted(set(device[s]["mons"][k]) ^ set(b2[s]["mons"][k]))}')
+    if set(device['field']) != set(b2['field']):
+        raise ValueError(f'device and B2 field views differ in keys: {sorted(set(device["field"]) ^ set(b2["field"]))}')
     def check(key, want, got):
         if want == got:return
-        if numeric is not None and key.rsplit(':', 1)[-1] in FLOAT_FIELDS and _within_ulp(want, got):
+        if numeric is not None and key.rsplit(':', 1)[-1] in FLOAT_FIELDS and _within_tolerance(want, got):
             numeric.append(dict(field=key, b2=want, device=got));return
         diffs.append(dict(field=key, b2=want, device=got))
     for s in range(2):
@@ -591,14 +627,19 @@ def field_kind(key):
     return 'matchup' if len(parts) > 1 and parts[1] == 'matchup' else parts[-1]
 
 
-def apply_allowlist(move, case_id, step, diffs, used, allowlist=None):
-    """Split diffs into (open, allowlisted); allowlisted entries carry their reason. `used` collects matched keys."""
+def apply_allowlist(move, case_id, step, diffs, used, allowlist=None, pins=None):
+    """Split diffs into (open, allowlisted); allowlisted entries carry their reason. `used` collects matched keys. A diff
+    at an allowlisted key is explained only if its (b2, device) pair equals the key's pin; otherwise it stays open,
+    carrying the reason and the pin it moved from."""
     allowlist = ALLOWLIST if allowlist is None else allowlist
+    pins = PINS if pins is None else pins
     open_, allowed = [], []
     for d in diffs:
         key = (move, case_id, step, d['field'])
         if key in allowlist:
-            allowed.append(dict(d, reason=allowlist[key]));used.add(key)
+            used.add(key)
+            if _canon([d['b2'], d['device']]) == pins.get(key):allowed.append(dict(d, reason=allowlist[key]))
+            else:open_.append(dict(d, reason=allowlist[key], pin=pins.get(key)))
         else:open_.append(d)
     return open_, allowed
 
@@ -606,11 +647,11 @@ def apply_allowlist(move, case_id, step, diffs, used, allowlist=None):
 def trees_equal(a, b):
     """Leaf-by-leaf bitwise equality of two engine pytrees (PRNG key arrays by their key data)."""
     import jax
-    left, right = jax.tree.leaves(a), jax.tree.leaves(b)
-    if len(left) != len(right):return False
+    (left, left_def), (right, right_def) = jax.tree.flatten(a), jax.tree.flatten(b)
+    if left_def != right_def or len(left) != len(right):return False
     for x, y in zip(left, right):
         if jax.dtypes.issubdtype(getattr(x, 'dtype', np.int32), jax.dtypes.prng_key):
             x, y = jax.random.key_data(x), jax.random.key_data(y)
         x, y = np.asarray(x), np.asarray(y)
-        if x.shape != y.shape or x.dtype != y.dtype or not np.array_equal(x, y, equal_nan=True):return False
+        if x.shape != y.shape or x.dtype != y.dtype or x.tobytes() != y.tobytes():return False   # -0.0 and NaN payloads too
     return True

@@ -181,7 +181,17 @@ class DevicePureTests(unittest.TestCase):
         self.assertEqual(fields, ['0:1:present', '0:active:volatiles', '0:matchup:0:0', '1:0:shown_item', 'field:turn'])
         self.assertEqual([device.field_kind(f) for f in fields], ['present', 'volatiles', 'matchup', 'shown_item', 'turn'])
 
-    def test_float_fields_within_one_ulp_are_numeric_notes(self):
+    def test_compare_views_refuses_views_with_different_keys(self):
+        for part in ('active', 'side'):
+            dev, b2 = self.views(), self.views()
+            dev[0][part]['only_on_device'] = 1
+            with self.subTest(part=part), self.assertRaisesRegex(ValueError, 'differ in keys'):device.compare_views(dev, b2)
+        dev, b2 = self.views(), self.views();b2[1]['mons'][0]['only_in_b2'] = 1
+        with self.assertRaisesRegex(ValueError, 'differ in keys'):device.compare_views(dev, b2)
+        dev, b2 = self.views(), self.views();dev['field']['only_on_device'] = 0
+        with self.assertRaisesRegex(ValueError, 'differ in keys'):device.compare_views(dev, b2)
+
+    def test_float_fields_within_tolerance_are_numeric_notes(self):
         dev, b2 = self.views(), self.views()
         for v in (dev, b2):v[1]['active']['last_damage_taken'] = 0.30000001192092896
         dev[1]['active']['last_damage_taken'] = 0.29999998211860657             # float32 30 * 0.01: one ulp low
@@ -194,19 +204,42 @@ class DevicePureTests(unittest.TestCase):
         dev[1]['active']['boosts'] = [1] + [0] * 6                               # integers never take the ulp class
         self.assertEqual([d['field'] for d in device.compare_views(dev, b2, [])], ['1:active:boosts'])
 
-    def test_allowlist_is_keyed_by_scenario_case_step_field(self):
+    def test_allowlist_is_keyed_by_scenario_case_step_field_and_pinned_to_its_values(self):
         diffs = [dict(field='1:0:hp_percent', b2=50, device=51), dict(field='1:0:status', b2='', device='par')]
         allow = {('wrap', 'base', 3, '1:0:hp_percent'): 'reason'}
+        pins = {('wrap', 'base', 3, '1:0:hp_percent'): [50, 51]}
         used = set()
-        open_, allowed = device.apply_allowlist('wrap', 'base', 3, diffs, used, allow)
+        open_, allowed = device.apply_allowlist('wrap', 'base', 3, diffs, used, allow, pins)
         self.assertEqual([d['field'] for d in open_], ['1:0:status']);self.assertEqual(allowed[0]['reason'], 'reason')
         self.assertEqual(used, set(allow))
         for key in (('wrap', 'base', 2), ('wrap', 'other', 3), ('yawn', 'base', 3)):
-            self.assertEqual(len(device.apply_allowlist(*key, diffs, set(), allow)[0]), 2)
+            self.assertEqual(len(device.apply_allowlist(*key, diffs, set(), allow, pins)[0]), 2)
+        # a further change at an allowlisted key, on either side, or a missing pin, stays open
+        for moved, pin in (([50, 52], pins), ([49, 51], pins), ([50, 51], {})):
+            with self.subTest(moved=moved, pinned=bool(pin)):
+                d = [dict(field='1:0:hp_percent', b2=moved[0], device=moved[1])]
+                open_, allowed = device.apply_allowlist('wrap', 'base', 3, d, set(), allow, pin)
+                self.assertEqual((len(open_), allowed), (1, []));self.assertEqual(open_[0]['reason'], 'reason')
+        # tuples and lists pin alike (the run output's JSON form)
+        moves = [dict(field='0:0:moves', b2=[('sleeptalk', 1), ('counter', 0)], device=[('sleeptalk', 1)])]
+        self.assertEqual(len(device.apply_allowlist('c', 'b', 1, moves, set(), {('c', 'b', 1, '0:0:moves'): 'r'},
+            {('c', 'b', 1, '0:0:moves'): [[['sleeptalk', 1], ['counter', 0]], [['sleeptalk', 1]]]})[1]), 1)
         for key, reason in device.ALLOWLIST.items():
             with self.subTest(key=key):
                 self.assertEqual(len(key), 4);self.assertTrue(reason.strip())
                 self.assertTrue((ROOT / 'gpu_engine/effect_probes' / f'{key[0]}.json').exists())
+                self.assertIn(key, device.PINS)                          # every explained mismatch carries its values
+        self.assertEqual(set(device.PINS), set(device.ALLOWLIST))       # and no pin outlives its entry
+
+    def test_b2_refusal_is_explained_only_by_its_pinned_kind_and_error(self):
+        pin = dict(kind='FOLD_ERROR', error=6)
+        self.assertTrue(device.refusal_matches(dict(kind='FOLD_ERROR', error=6, step=2), pin))
+        for other in (dict(kind='FOLD_ERROR', error=5), dict(kind='WIRE_REFUSED', line='|x', error='6'), {}):
+            self.assertFalse(device.refusal_matches(other, pin))
+        self.assertFalse(device.refusal_matches(dict(kind='FOLD_ERROR', error=6), None))
+        for key, value in device.PINS.items():
+            if key[3] == 'b2_refusal':
+                with self.subTest(key=key):self.assertEqual(set(value), {'kind', 'error'})
 
     def test_device_judge_accepts_exact_and_explained_b2_limits_only(self):
         rec = lambda status, diffs=(), equal=True: dict(case_id='c', device=dict(status=status, state_equal=equal,

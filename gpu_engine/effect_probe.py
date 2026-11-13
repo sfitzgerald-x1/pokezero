@@ -378,12 +378,13 @@ class Device:
     """Device mode's run-wide pieces: the B2 catalog and batched folds (effect_probe_device), the device's belief tables
     compiled from the same catalog (engine_device_observation.compile_tables, as the production collector builds them),
     and the allowlist."""
-    def __init__(self, catalog, metadata, lanes, allowlist=None):
+    def __init__(self, catalog, metadata, lanes, allowlist=None, pins=None):
         from gpu_engine import effect_probe_device as dev, engine_device_observation
         self.dev, self.catalog = dev, catalog
         self.belief_tables = engine_device_observation.compile_tables(metadata, catalog=catalog).belief
         self.b2 = dev.B2Batch(catalog, 2 * lanes)
         self.allowlist = dev.ALLOWLIST if allowlist is None else allowlist
+        self.pins = dev.PINS if pins is None else pins
         self.used = set()
 
     @classmethod
@@ -402,11 +403,15 @@ class Device:
             key = (scenario['move'], record['case_id'], step, 'b2_refusal')
             refusal = dict([r for r in refused if r][0], step=step)
             if key in self.allowlist:
-                self.used.add(key);refusal['reason'] = self.allowlist[key]
+                # explained only if it is the pinned refusal (kind and error code); any other refusal stays B2_REFUSED
+                self.used.add(key)
+                if dev.refusal_matches(refusal, self.pins.get(key)):refusal['reason'] = self.allowlist[key]
+                else:refusal.update(unpinned_reason=self.allowlist[key], pin=self.pins.get(key))
             device.update(status='B2_LIMIT' if 'reason' in refusal else 'B2_REFUSED', refusal=refusal);return
         numeric = []
         diffs = dev.compare_views(dev.device_view(trackers, lane, vocab), dev.b2_view(b2, lane, self.catalog), numeric)
-        open_, allowed = dev.apply_allowlist(scenario['move'], record['case_id'], step, diffs, self.used, self.allowlist)
+        open_, allowed = dev.apply_allowlist(scenario['move'], record['case_id'], step, diffs, self.used, self.allowlist,
+                                             self.pins)
         device['steps_compared'] += 1;device['numeric'] += len(numeric)
         if open_ or allowed or numeric:
             device['steps'].append(dict(step=step, diffs=open_, allowlisted=allowed, numeric=numeric))
