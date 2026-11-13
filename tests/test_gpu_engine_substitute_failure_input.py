@@ -1,5 +1,5 @@
 """Source-bound no-write Substitute failures with both original FULL views."""
-import ast,json,subprocess,unittest
+import json,subprocess,unittest
 from copy import deepcopy
 from pathlib import Path
 import jax
@@ -15,7 +15,6 @@ from gpu_engine import engine_retained_encoder_driver as driver,engine_request_s
 from gpu_engine import engine_full_v4_event_device as full,engine_leftovers_callbacks as leftovers
 from gpu_engine import transition as tr,public_belief,v4_encoder as v4,public_wire,state
 from gpu_engine import engine_source_frame_witness as witness
-from gpu_engine_default_observer_ast import dump_default_program,assert_hp_rng_mutations_detected
 from _showdown_root import showdown_root
 import test_gpu_engine_no_damage_owning as fixtures
 from gpu_engine import engine_direct_ko_callbacks as ko
@@ -75,7 +74,7 @@ class SubstituteFailureInputTests(unittest.TestCase):
   self.assertEqual([v['lines']for v in r],[['-fail|p1a: Actor|move: Substitute'],['-fail|p1a: Actor|move: Substitute'],['-fail|p1a: Actor|move: Substitute|[weak]'],['-fail|p1a: Actor|move: Substitute|[weak]'],[]]);self.assertEqual([v['result']for v in r],['nf']*4+[None]);self.assertEqual([v['hp']for v in r],[75,25,25,1,26]);self.assertEqual([v['sub']for v in r],[25,25,0,0,0])
   self.assertFalse(bool(sub.compile_substitute(engine_catalog=self.producer,metadata=self.metadata).device.failure));self.assertTrue(bool(self.sub.device.failure))
   with self.assertRaises(ValueError):sub.compile_substitute(engine_catalog=self.producer,metadata=self.metadata,source_rules=deepcopy(self.rules))
-  old=ast.parse(subprocess.check_output(['git','show','b8092a85:gpu_engine/transition.py'],text=True));new=ast.parse(Path('gpu_engine/transition.py').read_text());baseline=dump_default_program(old);self.assertEqual(dump_default_program(new),baseline);assert_hp_rng_mutations_detected(self,new,baseline)
+  # transition.py is certified against CURRENT_TRANSITION (full AST plus mutations) by terminal_closeout and seismic_toss_components.
   witness._source()
   for order in [('benchmark_retained_games','engine_lifecycle_event_device','engine_full_v4_event_device'),('engine_full_v4_event_device','engine_lifecycle_event_device','benchmark_retained_games')]:subprocess.run([__import__('sys').executable,'-c',';'.join('import gpu_engine.'+n for n in order)],check=True,capture_output=True)
 

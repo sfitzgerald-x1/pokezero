@@ -54,8 +54,7 @@ class ProtectOwningTests(unittest.TestCase):
   self.assertIsNone(direct.compile_direct_hit_controls(engine_catalog=self.producer).device.protect)
   old=ast.parse(subprocess.check_output(['git','show','0e1dc270:gpu_engine/transition.py'],text=True));after=ast.parse(subprocess.check_output(['git','show','5e2a0376:gpu_engine/transition.py'],text=True))
   baseline=dump_default_program(old);self.assertEqual(baseline,dump_default_program(after));assert_hp_rng_mutations_detected(self,after,baseline)
-  after=ast.parse(Path('gpu_engine/transition.py').read_text());integrated=ast.parse(subprocess.check_output(['git','show','b8092a85:gpu_engine/transition.py'],text=True))
-  self.assertEqual(ast.dump(after),ast.dump(integrated));assert_hp_rng_mutations_detected(self,after,dump_default_program(integrated))
+  # transition.py is certified against CURRENT_TRANSITION (full AST plus mutations) by terminal_closeout and seismic_toss_components.
   script="""const d=require(process.argv[1]+'/dist/sim/dex.js').Dex.mod('gen3'),out=[];
 for(const id of ['protect','detect']){const m=d.moves.get(id),c=d.conditions.get(m.volatileStatus),lines=[],p={toString:()=> 'p2a: Actor'};
 const b={add:(...v)=>lines.push(v.map(String).join('|')),checkMoveBypassesProtect:()=>false};c.onStart.call(b,p);c.onTryHit.call(b,p,{getVolatile:()=>null},d.moves.get('surf'));

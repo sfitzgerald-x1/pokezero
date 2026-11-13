@@ -106,15 +106,18 @@ def _address(state, mons, tables, side, slot, encounter, valid):
 def reveal(state, mons, tables, *, side, slot, encounter, ability_id, authoritative=False, valid=True):
     """Direct ability lines overwrite; proc claims preserve an earlier original.
 
-    Proc claims while borrowing confirm current mechanics and do not reveal an
-    original ability. Return conflict bits for the caller's evidence receipt.
+    Any claim, direct or proc, while the mon borrows an ability (a Trace copy's running override) or is Transformed
+    confirms current mechanics and reveals no original ability: Gen 3 Trace setAbility()s the copy and transformInto
+    copies the target's ability, so Showdown's later lines for the holder (e.g. |-ability|p2a: Porygon2|Speed Boost|boost)
+    name the copy, never its set. The Python belief (pokezero.belief) applies the same rule. Return conflict bits for
+    the caller's evidence receipt.
     """
     address, ok = _address(state, mons, tables, side, slot, encounter, valid)
     ability_id = mon._int32(ability_id)
     authoritative = _bool(authoritative)
     ok &= (ability_id > 0) & (ability_id < tables.predicate.shape[0])
     old = state.original[address]
-    ignored = ~authoritative & (state.running[address] > 0)
+    ignored = (state.running[address] > 0) | state.transformed[address]
     conflict = ok & ~authoritative & ~ignored & (old > 0) & (old != ability_id)
     write = ok & ~ignored & (authoritative | (old == 0))
     result = state._replace(original=mon._write(state.original, address, ability_id, write))

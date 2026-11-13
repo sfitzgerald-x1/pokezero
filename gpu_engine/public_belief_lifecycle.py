@@ -110,7 +110,8 @@ def apply(state,sleep,abilities,mons,tables,*,operation,side=-1,slot=-1,encounte
             (sleep,'status',jnp.int32,(2,6)),(sleep,'condition_status',jnp.int32,(2,6)),
             (sleep,'literal_faint',jnp.bool_,(2,6)),(sleep,'rest',jnp.bool_,(2,6)),
             (sleep,'count',jnp.int32,(2,6)),(sleep,'encounter',jnp.int32,(2,6)),
-            (abilities,'original',jnp.int32,(2,6)),(mons,'encounter',jnp.int32,(2,6)),
+            (abilities,'original',jnp.int32,(2,6)),(abilities,'running',jnp.int32,(2,6)),
+            (abilities,'transformed',jnp.bool_,(2,6)),(mons,'encounter',jnp.int32,(2,6)),
             (mons,'active',jnp.int32,(2,)),(mons,'status',jnp.int32,(2,6))):
         value=getattr(owner,name)
         if value.shape!=(batch,*tail) or value.dtype!=dtype:raise ValueError('lifecycle public ledger shape/dtype: '+name)
@@ -159,6 +160,9 @@ def apply(state,sleep,abilities,mons,tables,*,operation,side=-1,slot=-1,encounte
     natural &= (exit_count[address]==state.cure_count[rows,seat])&(abilities.original[address]==0)
     early=(op==CURE)&~benched&(sleep.status[address]==mon.SLEEP)&sleep.rest[address]&(sleep.count[address]==1)
     early &= ~state.shed_skin[address]&(abilities.original[address]==0)
+    # A borrowing (Trace copy) or Transformed mon wakes on its RUNNING ability, never a fact about its set: the Python
+    # belief pins no Early Bird and re-summarizes nothing (B4b), so no claim and hence no cure checkpoint here.
+    early &= (abilities.running[address]==0)&~abilities.transformed[address]
     claim=jnp.where(natural,tables.natural_cure,jnp.where(early,tables.early_bird,0))
     retire=(op==ARRIVE)|(op==FAINT)|((op==CURE)&benched)
     exit_status=exit_status.at[address].set(jnp.where(retire,False,exit_status[address]))

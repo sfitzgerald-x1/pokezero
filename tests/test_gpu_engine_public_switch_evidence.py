@@ -16,6 +16,8 @@ class Abilities(NamedTuple):
     original: object
     binding: object
     species_binding: object
+    running: object       # a Trace copy's running ability (Python _running_ability), 0 when none
+    transformed: object
 
 
 @unittest.skipUnless(importlib.util.find_spec('jax'),'requires isolated JAX')
@@ -54,6 +56,7 @@ class SwitchEvidenceTests(unittest.TestCase):
     def snapshot(self,engine):
         import numpy as np
         enc=np.zeros((1,2,6),np.int32);species=np.zeros_like(enc);original=np.zeros_like(enc)
+        running=np.zeros_like(enc);transformed=np.zeros((1,2,6),bool)
         public_species=np.zeros_like(enc)
         active=np.full((1,2),-1,np.int32);live=np.zeros((1,2),bool);effective=np.zeros((1,2,6,2),np.uint32)
         for side in (0,1):
@@ -61,11 +64,14 @@ class SwitchEvidenceTests(unittest.TestCase):
                 enc[0,side,slot]=slot+1;species[0,side,slot]=self.source.species_id(pokemon.species)
                 public_species[0,side,slot]=self.species.species_id(pokemon.species)
                 if pokemon.revealed_ability:original[0,side,slot]=self.abilities.ability_id(pokemon.revealed_ability)
+                if pokemon.key in engine._running_ability:running[0,side,slot]=self.abilities.ability_id(engine._running_ability[pokemon.key])
+                transformed[0,side,slot]=pokemon.transformed
                 if pokemon.active:active[0,side]=slot;live[0,side]=True
                 effective[0,1-side,slot]=self.source.pin_mask(pokemon.species,pokemon.candidate_variants)
         binding=self.j.broadcast_to(self.species.device.binding,(1,8))
         return Mons(*(self.j.asarray(v) for v in (enc,species,public_species,active)),binding),Abilities(self.j.asarray(original),
-            self.j.broadcast_to(self.abilities.device.binding,(1,8)),binding),self.j.asarray(effective),self.j.asarray(live)
+            self.j.broadcast_to(self.abilities.device.binding,(1,8)),binding,self.j.asarray(running),self.j.asarray(transformed)),\
+            self.j.asarray(effective),self.j.asarray(live)
 
     def engine(self,lines):
         from pokezero.belief import PublicBattleBeliefEngine
@@ -128,6 +134,27 @@ class SwitchEvidenceTests(unittest.TestCase):
             self.assertEqual(boundary,_is_pending_switch_boundary(_public_event_from_line(raw)))
             result=type(self).resolve(pending,m,a,e,l,arrival,boundary,0,-1,-1,0,False,0)
             self.assertEqual(result.exclude.tolist(),[boundary])
+
+    def test_a_borrowing_or_transformed_arrivals_intimidate_clears_but_claims_and_refreshes_nothing(self):
+        # B4b (defensive parity; no Gen 3 random-battle holder reaches it): a Traced or Transformed pending arrival's
+        # Intimidate is its running copy. Python consumes the pending switch but pins nothing and re-summarizes nothing
+        # (_resolve_pending_switches_for_event); the reducer clears the record and claims and checkpoints nothing.
+        from pokezero.showdown import _public_event_from_line
+        iid=self.abilities.ability_id('Intimidate')
+        for mode in ('plain','traced','transformed'):
+            engine=self.engine(['|switch|p2a: Absol|Absol, L80|100/100','|switch|p1a: Nick|Snorlax, L80|100/100'])
+            nick=engine.snapshot().side('p1')[0];self.assertEqual(len(engine._pending_switches),1)
+            if mode=='traced':engine._running_ability[nick.key]='Intimidate'
+            if mode=='transformed':engine._replace_belief(nick,transformed=True)
+            m,a,e,l=self.snapshot(engine);pending,_=type(self).queue(self.x.initialize(1,self.tables),m,a,e,l)
+            result=type(self).resolve(pending,m,a,e,l,False,True,iid,0,0,1,True,0)
+            engine.ingest_event(_public_event_from_line('|-ability|p1a: Nick|Intimidate|boost'))
+            claimed=mode=='plain'
+            self.assertTrue(bool(result.admitted.all()),mode)
+            self.assertEqual(result.state.side.tolist(),[-1],mode);self.assertEqual(engine._pending_switches,[],mode)
+            self.assertEqual(result.reveal.tolist(),[claimed],mode);self.assertEqual(result.checkpoint.tolist(),[claimed],mode)
+            self.assertEqual(result.exclude.tolist(),[False],mode)
+            self.assertEqual(engine.snapshot().side('p1')[0].revealed_ability,'Intimidate' if claimed else None,mode)
 
     def test_missing_ident_uses_full_public_forme_not_source_pool(self):
         from pokezero.belief import _PendingSwitch,_ident_matches_pending

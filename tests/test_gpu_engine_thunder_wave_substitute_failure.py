@@ -58,7 +58,7 @@ class ThunderWaveSubstituteTests(unittest.TestCase):
   script=r'''const root=process.argv[1],d=require(root+'/dist/sim/dex.js').Dex.mod('gen3'),get=require(root+'/dist/sim/battle-actions.js').BattleActions.prototype.getDamage,lines=[],source={hp:100,status:'',toString:()=> 'p1a: Actor'},target={hp:75,status:'',volatiles:{substitute:{hp:25}},runImmunity:()=>true,toString:()=> 'p2a: Target'},move=d.moves.get('thunderwave'),battle={gen:3,getCategory:m=>m.category};const b={actions:{getDamage:(s,t,m)=>get.call({battle,dex:d},s,t,m)},add:(...xs)=>lines.push(xs.map(String).join('|')),attrLastMove:(...xs)=>lines.push(xs.join('|'))};const result=d.moves.get('substitute').condition.onTryPrimaryHit.call(b,target,source,move);console.log(JSON.stringify({result,lines,hp:target.hp,subhp:target.volatiles.substitute.hp,status:target.status,sourceHP:source.hp}));'''
   got=json.loads(subprocess.check_output(['node','-e',script,str(showdown_root())],text=True));self.assertEqual(got,dict(result=None,lines=['-fail|p1a: Actor','[still]'],hp=75,subhp=25,status='',sourceHP=100))
   self.assertTrue(bool(self.thunder.device.substitute_failure));self.assertFalse(bool(self.legacy.device.substitute_failure))
-  self.assertEqual(Path('gpu_engine/transition.py').read_bytes(),subprocess.check_output(['git','show','b8092a85:gpu_engine/transition.py']))
+  # transition.py is certified against CURRENT_TRANSITION (full AST plus mutations) by terminal_closeout and seismic_toss_components.
   s=Path('src/pokezero/v5_worker.py').read_text();self.assertIn("if name in ('recoil','thunder_wave') else {}",s)
   witness._source()
 

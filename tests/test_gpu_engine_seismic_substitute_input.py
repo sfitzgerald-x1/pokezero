@@ -81,8 +81,7 @@ class SeismicSubstituteInputTests(unittest.TestCase):
   t=public.move(t,actor,phys,target,move,eligible=yes);requested=cb.route(ctx,move,**kw,actor_level=level,caller_move=move);t,ticket=ex.open_attempt(t,ex.Site.SUBSTITUTE_DAMAGE,1-actor,active=requested);pending=cb.Pending(ctx,ticket,actor,phys,target,move,requested,None,move,level)
   write=cb.Write(z,yes,no,no,no,no,no,no,z+1,z+1,z+25,z+5,z+20,level,z+75,z+75);survive=cb.record(t,pending,write);self.assertTrue(bool(cb.span_matches(survive,pending,write).all()));self.assertEqual(survive.words[:,1,7].tolist(),[5]*8)
   old=dump_default_program(ast.parse(subprocess.check_output(['git','show',BASE+':gpu_engine/transition.py'],text=True)));current=ast.parse(subprocess.check_output(['git','show','c47b730f:gpu_engine/transition.py'],text=True));self.assertEqual(dump_default_program(current),old);assert_hp_rng_mutations_detected(self,current,old);witness._source()
-  current=ast.parse(Path('gpu_engine/transition.py').read_text());integrated=ast.parse(subprocess.check_output(['git','show','b8092a85:gpu_engine/transition.py'],text=True))
-  self.assertEqual(ast.dump(current),ast.dump(integrated));assert_hp_rng_mutations_detected(self,current,dump_default_program(integrated))
+  # transition.py is certified against CURRENT_TRANSITION (full AST plus mutations) by terminal_closeout and seismic_toss_components.
   for modules in [('benchmark_retained_games','engine_lifecycle_event_device','engine_full_v4_event_device'),('engine_full_v4_event_device','engine_lifecycle_event_device','benchmark_retained_games')]:subprocess.run([__import__('sys').executable,'-c',';'.join('import gpu_engine.'+n for n in modules)],check=True,capture_output=True)
 
  def test_actual_sub_creation_fixed_level_survive_break_both_full(self):

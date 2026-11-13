@@ -108,6 +108,11 @@ class PublicBeliefLifecycleTests(unittest.TestCase):
             '|-ability|p1a: Snorlax|Pressure|[from] ability: Trace|[of] p2a: Absol',
             '|-activate|p1a: Snorlax|ability: Shed Skin','|-curestatus|p1a: Snorlax|slp'])
         self.assertEqual(claims[-1][1],0)
+        # B4b: a borrowing (Trace copy) or Transformed sleeper wakes on its running ability; Python pins no Early Bird, so the
+        # lifecycle claims nothing (run_source checks each claim against Python) and no cure checkpoint runs.
+        for borrow in ('|-ability|p1a: Snorlax|Pressure|[from] ability: Trace|[of] p2a: Absol','|-transform|p1a: Snorlax|p2a: Absol'):
+            _,_,claims=self.run_source([*rest,borrow,'|-curestatus|p1a: Snorlax|slp'])
+            self.assertEqual(claims[-1],('|-curestatus|p1a: Snorlax|slp',0),borrow)
 
     def test_counter_overflow_and_namespace_controls_are_per_row_atomic(self):
         life,current,_=self.run_source(self.prefix)
