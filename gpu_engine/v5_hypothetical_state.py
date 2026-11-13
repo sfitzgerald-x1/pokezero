@@ -30,7 +30,8 @@ def map_spec(spec, *, metadata, seed, turn, active_turns, happiness, dex=None, h
     destinybond to the DESTINY_BOND bit (Showdown volatiles.destinybond: presence only, cleared at the holder's next
     move attempt, a switch-out or a faint) and perishN to perish_counter N (volatiles.perishsong.duration: Showdown's
     residual decrements it before printing |-start|X|perishN, so the shown N is the remaining count after a residual;
-    the protocol world writes 4 for the silent perish3 of the Song's own turn, phase_d_protocol_world._perish_counts).
+    the protocol world writes 4 for the silent perish3 of the Song's own turn, phase_d_protocol_world._perish_counts) and
+    encore to encore_move = the resolved lock with a placeholder count the protocol world replaces by its posterior draw.
 
     ``turn`` is the displayed public request turn. ORIGINAL BattleState.turn
     counts completed ordinary turns, so its exact value here is turn-1.
@@ -51,10 +52,14 @@ def map_spec(spec, *, metadata, seed, turn, active_turns, happiness, dex=None, h
         if side.force_switch or side.baton_passing or side.slow_uturn_move or side.switch_out_move_second_saved_move:
             reasons.append(f'deferred-or-replacement-phase:{seat}')
         if set(side.side_conditions)-{'spikes','protect','toxic_count'}:reasons.append(f'side-condition:{seat}')
-        held={'destinybond',*PERISH} if held_volatiles else set()
+        held={'destinybond','encore',*PERISH} if held_volatiles else set()
         if set(side.volatile_statuses)-{'leechseed','substitute','truant'}-held:reasons.append(f'volatile:{seat}')
         if sum(v in PERISH for v in side.volatile_statuses)>1:reasons.append(f'perish-count:{seat}')
-        if side.volatile_status_durations:reasons.append(f'volatile-clock:{seat}')
+        # The CPU materializer seeds an encored side's clock at its floor of 1 (engine_world); the count is hidden, and the
+        # protocol world draws it from the public posterior (phase_d_protocol_world._encore_facts), so only that seed passes.
+        clock=dict(side.volatile_status_durations)
+        if held_volatiles and 'encore' in side.volatile_statuses and clock.get('encore')==1:clock.pop('encore')
+        if clock:reasons.append(f'volatile-clock:{seat}')
         for slot,mon in enumerate(side.pokemon):
             if mon.pre_transform is not None or mon.base_types not in (None,mon.types):reasons.append(f'transformed-types:{seat}:{slot}')
             if mon.base_ability not in (None,mon.ability):reasons.append(f'copied-ability:{seat}:{slot}')
@@ -188,6 +193,11 @@ def map_spec(spec, *, metadata, seed, turn, active_turns, happiness, dex=None, h
                 elif last.startswith('switch:'):
                     arrays['last_action_kind'][0,seat]=1;arrays['last_action_index'][0,seat]=active
                 else:raise ValueError('last-action')
+            if held_volatiles and 'encore' in side.volatile_statuses:
+                # The lock the CPU materializer resolved is the side's last move (Showdown's effectState.move); the count
+                # here is a placeholder the protocol world replaces with its draw.
+                if arrays['last_action_kind'][0,seat]!=2:raise ValueError('encore-lock-unavailable')
+                arrays['encore_move'][0,seat,active]=arrays['last_move'][0,seat,active];arrays['encore_counter'][0,seat,active]=1
         weather={'none':0,'rain':1,'sun':2,'sand':3,'hail':4}
         if spec.weather not in weather:raise ValueError('weather')
         arrays['weather'][0]=weather[spec.weather]

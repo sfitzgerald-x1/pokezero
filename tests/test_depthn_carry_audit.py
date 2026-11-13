@@ -38,6 +38,115 @@ def citations(text):
     return out
 
 
+# Every gpu_engine file:line(-line) citation in scripts/depthn_carry_audit.py (the module text: rows, notes and docstring), including the
+# continuation ranges after it ("x.py:611-612, 825", "x.py:641-643 and 851-852"), keyed with its path under gpu_engine/, and a token its
+# cited lines must contain (an identifier, refusal code or function name there); a token starting with '^' must be on the range's first
+# line. A shift of the cited code then fails here instead of drifting silently (the lead, 2026-11-13); a new citation needs its anchor,
+# a removed one loses it.
+CITATION_ANCHORS = {
+    'gpu_engine/baton.py:16': 'batonpass',
+    'gpu_engine/constructor_worlds.py:482': 'OPPONENT_RECHARGE_UNREPRESENTED',
+    'gpu_engine/constructor_worlds.py:843': 'def fix_recharge',
+    'gpu_engine/effects.py:175': 'def stall_success',
+    'gpu_engine/effects.py:46': 'destinybond',
+    'gpu_engine/encore.py:14-20': '^def from_metadata',
+    'gpu_engine/encore.py:33-52': '^def apply',
+    'gpu_engine/engine_device_observation.py:290-302': "own['moves']",
+    'gpu_engine/engine_request_source.py:261-265': '^_unsafe_history',
+    'gpu_engine/engine_request_source.py:341': 'charge_move',
+    'gpu_engine/engine_request_source.py:341-342': '^encore',
+    'gpu_engine/engine_request_source.py:380': 'LOCK',
+    'gpu_engine/entry.py:50': 'spikes',
+    'gpu_engine/focus_punch.py:15-19': 'focuspunch',
+    'gpu_engine/future_state.py:155': 'lockedmove',
+    'gpu_engine/future_state.py:476': 'RECHARGE_UNREPRESENTED',
+    'gpu_engine/items.py:27-28': 'trick: jax.Array',
+    'gpu_engine/linked_traps.py:12-14': 'meanlook',
+    'gpu_engine/linked_traps.py:12-25': 'meanlook',
+    'gpu_engine/phase_d_live_worlds.py:278-279': 'PUBLIC_TRANSFORM_NOT_MATERIALIZED',
+    'gpu_engine/phase_d_live_worlds.py:344-345': "'perish1'",
+    'gpu_engine/phase_d_live_worlds.py:355-356': 'OWN_VOLATILE_OR_LATENT_CLOCK_UNAVAILABLE',
+    'gpu_engine/phase_d_live_worlds.py:362': 'DESTINY_BOND',
+    'gpu_engine/phase_d_protocol_constructor.py:175': 'load_gen3_randbat_source_cached',
+    'gpu_engine/phase_d_protocol_world.py:107-109': '^PUBLIC_ITEM_SWAP_NOT_SUPPORTED',
+    'gpu_engine/phase_d_protocol_world.py:178-196': '^_defer_yawn',
+    'gpu_engine/phase_d_protocol_world.py:199-214': '^_perish_counts',
+    'gpu_engine/phase_d_protocol_world.py:286-297': '^def _write_held_counts',
+    'gpu_engine/phase_d_protocol_world.py:430-431': 'approximate_partial_trap_turns=False',
+    'gpu_engine/phase_d_protocol_world.py:443': 'map_spec',
+    'gpu_engine/public_active.py:217-233': '^PERISH_START',
+    'gpu_engine/public_active.py:46': 'perish',
+    'gpu_engine/public_refresh_stream.py:17': 'TRANSFORM',
+    'gpu_engine/request_source_rules.cjs:57-64': 'altersRequest',
+    'gpu_engine/request_source_rules.cjs:59-64': 'TrapPokemon',
+    'gpu_engine/request_source_rules.cjs:64': "'encore'",
+    'gpu_engine/request_source_rules.cjs:65-66': "^'transform'",
+    'gpu_engine/request_source_rules.cjs:67': 'recharge',
+    'gpu_engine/residual_order.py:95': 'POSITIONS',
+    'gpu_engine/sleep_talk.py:16-22': 'sleeptalk',
+    'gpu_engine/solar_beam.py:1': 'Solar Beam',
+    'gpu_engine/solar_beam.py:14-15': 'solarbeam',
+    'gpu_engine/state.py:14': 'LEECH_SEED',
+    'gpu_engine/state.py:146-148': '^def usable_moves',
+    'gpu_engine/state.py:16-17': '^FOCUS_PUNCH',
+    'gpu_engine/state.py:21': 'DESTINY_BOND',
+    'gpu_engine/state.py:24-92': '^class BattleState',
+    'gpu_engine/state.py:36-39': 'status_counter',
+    'gpu_engine/state.py:38': 'sleep_skipped',
+    'gpu_engine/state.py:43': 'choice_move',
+    'gpu_engine/state.py:47-48': 'encore_counter',
+    'gpu_engine/state.py:49-50': '^charge_move',
+    'gpu_engine/state.py:57': 'protect_counter',
+    'gpu_engine/state.py:58': 'substitute_hp',
+    'gpu_engine/state.py:63': 'trap_source',
+    'gpu_engine/state.py:75': 'spikes',
+    'gpu_engine/state.py:76-77': '^wish_counter',
+    'gpu_engine/state.py:78-79': 'weather_counter',
+    'gpu_engine/state.py:84': 'truant_loaf',
+    'gpu_engine/state.py:85': 'item_knocked',
+    'gpu_engine/state.py:87': 'recharge_counter',
+    'gpu_engine/state.py:89': 'perish_counter',
+    'gpu_engine/state.py:90': 'yawn_counter',
+    'gpu_engine/state.py:91-92': '^partial_trap_counter',
+    'gpu_engine/sustain.py:22-27': 'leechseed',
+    'gpu_engine/transition.py:1680-1689': '^_trick=',
+    'gpu_engine/transition.py:1690-1701': '_white_herb_pair',
+    'gpu_engine/transition.py:1729-1737': '^_perish_used',
+    'gpu_engine/transition.py:1742-1750': '^_yawn_try',
+    'gpu_engine/transition.py:1913-1922': '^seed_target',
+    'gpu_engine/transition.py:1950-1955': '^_wrap_set',
+    'gpu_engine/transition.py:2527-2547': "^POSITIONS['wrap']",
+    'gpu_engine/transition.py:2548-2576': "^POSITIONS['yawn']",
+    'gpu_engine/transition.py:2558-2562': '^_yawn_clause',
+    'gpu_engine/transition.py:2596-2609': '^_perish_continues',
+    'gpu_engine/transition.py:2676-2680': 'truant_loaf=work.truant_loaf',
+    'gpu_engine/transition.py:611-612': '^charge_moves',
+    'gpu_engine/transition.py:641-643': 'initial_loaf = (table.entry.truant',
+    'gpu_engine/transition.py:82-114': '^def tables_from_metadata',
+    'gpu_engine/transition.py:825': 'charge_locked',
+    'gpu_engine/transition.py:832-836': '~DESTINY_BOND&0xffffffff',
+    'gpu_engine/transition.py:840-845': '^_recharge_turn',
+    'gpu_engine/transition.py:851-852': 'loafing=table.entry.truant',
+    'gpu_engine/transition.py:852': 'loafing=table.entry.truant',
+    'gpu_engine/v5_hypothetical_state.py:111': 'DESTINY_BOND',
+    'gpu_engine/v5_hypothetical_state.py:113': 'perish_counter',
+}
+CITATION = re.compile(r'((?:gpu_engine/)?[\w-]+\.(?:py|cjs)):(\d+)(?:-(\d+))?')
+CITATION_TAIL = re.compile(r'(?:,\s*|\s+and\s+)(\d+)(?:-(\d+))?(?![\w.-])')
+
+
+def cited_ranges(text):
+    """{key: (path, first, last)} of every citation in `text` and of its continuation ranges (key: path under gpu_engine/ plus
+    first[-last], as CITATION_ANCHORS)."""
+    out = {}
+    for match in CITATION.finditer(text):
+        name = match.group(1);path = name if '/' in name else 'gpu_engine/' + name
+        ranges = [(int(match.group(2)), int(match.group(3) or match.group(2)))];pos = match.end()
+        while (tail := CITATION_TAIL.match(text, pos)):ranges.append((int(tail.group(1)), int(tail.group(2) or tail.group(1))));pos = tail.end()
+        for a, b in ranges:out[f'{path}:{a}' + (f'-{b}' if b != a else '')] = (ROOT / path, a, b)
+    return out
+
+
 class EnumerationTests(unittest.TestCase):
     def test_audited_effects_are_unrepresented_pool_moves_with_evidence(self):
         self.assertEqual([e.id for e in A.EFFECTS], ['recharge', 'partial_trap', 'perish_count', 'drowsy', 'destiny_bond', 'transform', 'trick_lock'])
@@ -56,7 +165,8 @@ class EnumerationTests(unittest.TestCase):
 
     @unittest.skipUnless(since.IN_GIT, since.SKIP_REASON)
     def test_every_engine_since_is_a_merge_head_contains(self):
-        """An effect is in-tree only on an engine at or after its merge: every engine_since is an integration merge HEAD contains."""
+        """An effect is in-tree only on an engine at or after its merge: every engine_since is a GitHub pull request merge that changed
+        gpu_engine/ and that HEAD contains (tests/_engine_since.problem)."""
         self.assertFalse(since.shallow(), 'a shallow clone cannot check ancestry')
         for e in A.EFFECTS:
             if e.engine_since:
@@ -65,6 +175,16 @@ class EnumerationTests(unittest.TestCase):
     def test_no_placeholder_merge_sha_remains(self):
         """The placeholder merge SHA is gone from the audit (its engine_since fields and its evidence text) once the merge exists."""
         self.assertNotIn(since.PLACEHOLDER, Path(A.__file__).read_text())
+
+    def test_every_citation_is_anchored_and_its_anchor_is_in_the_cited_lines(self):
+        cited = cited_ranges(Path(A.__file__).read_text())
+        self.assertEqual(sorted(set(cited) - set(CITATION_ANCHORS)), [], 'a citation without an anchor in CITATION_ANCHORS')
+        self.assertEqual(sorted(set(CITATION_ANCHORS) - set(cited)), [], 'an anchor whose citation is gone')
+        for key, (path, first, last) in sorted(cited.items()):
+            with self.subTest(citation=key):
+                lines = path.read_text().splitlines();self.assertLessEqual(last, len(lines))
+                token = CITATION_ANCHORS[key];where = lines[first - 1] if token.startswith('^') else '\n'.join(lines[first - 1:last])
+                self.assertIn(token.lstrip('^'), where, f'{key} no longer names {token!r}')
 
     def test_every_engine_citation_names_an_existing_line(self):
         rows = A.enumeration()['rows'];found = 0

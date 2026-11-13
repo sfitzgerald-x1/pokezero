@@ -37,8 +37,13 @@ class MudShotTests(unittest.TestCase):
             ['|-damage|p2a: Absol|0 fnt','|faint|p2a: Absol'],
             ['|-damage|p2a: Absol|80/100','|-ability|p2a: Absol|Pressure'],
             ['|-damage|p2a: Absol|80/100','|-ability|p2a: Absol|Shield Dust'])
-        for suffix in cases:
+        # B4: a borrowing (Traced Shield Dust) or Transformed target's running ability blocks the drop, so neither side
+        # claims its set; the reducer's reveal must match Python's early return in every case.
+        for mode,suffix in ((mode,suffix) for mode in ('plain','traced','transformed') for suffix in cases):
             engine=self.f.engine(self.prefix+['|move|p1a: Nick|Mud Shot|p2a: Absol'])
+            target=engine.snapshot().side('p2')[0]
+            if mode=='traced':engine._running_ability[target.key]='Shield Dust'
+            if mode=='transformed':engine._replace_belief(target,transformed=True)
             result=self.apply(self.x.initialize(1,self.tables),engine,self.x.QUEUE,side=1,slot=0,encounter=1)
             self.assertTrue(bool(result.admitted.all()));state=result.state
             for line in suffix:
@@ -56,7 +61,8 @@ class MudShotTests(unittest.TestCase):
             result=self.apply(state,engine,self.x.RESOLVE)
             before=engine.snapshot().side('p2')[0].revealed_ability
             engine._resolve_pending_mudshot();after=engine.snapshot().side('p2')[0].revealed_ability
-            self.assertEqual(result.reveal.tolist(),[not bool(before) and after=='Shield Dust'],suffix)
+            self.assertEqual(result.reveal.tolist(),[not bool(before) and after=='Shield Dust'],(mode,suffix))
+            if mode!='plain':self.assertFalse(bool(result.reveal.any()),(mode,suffix))
             self.assertEqual(result.state.side.tolist(),[-1]);self.assertIsNone(engine._pending_mudshot)
 
     def test_cached_candidate_guard_empty_fallback_and_no_live_target(self):

@@ -260,6 +260,71 @@ class TraceOfATracerTest(unittest.TestCase):
         )
 
 
+class BorrowedAbilityProcTest(unittest.TestCase):
+    """A mon running a borrowed ability shows it again on its own later lines: Gen 3 Trace setAbility()s the copy, and
+    Transform copies the target's ability (sim/pokemon.ts transformInto, gen > 2). Those lines name the copy, not the
+    set, so they must never be pinned as the mon's revealed ability: every Porygon2 set has Trace and every Ditto set
+    Limber, and a pinned copy leaves no candidate variant (screen-r4a3: 19 roots after a Porygon2's traced Speed Boost
+    procs, 6 after a transformed Ditto's Flash Fire activation)."""
+
+    def test_a_tracers_later_procs_of_the_copy_stay_off_its_set(self) -> None:
+        lines = [
+            "|start",
+            "|switch|p1a: Ninjask|Ninjask, L84, M|100/100",
+            "|switch|p2a: Porygon2|Porygon2, L80|100/100",
+            "|-ability|p2a: Porygon2|Speed Boost|Trace|[from] ability: Trace|[of] p1a: Ninjask",
+            "|turn|1",
+            "|move|p2a: Porygon2|Return|p1a: Ninjask",
+            "|-damage|p1a: Ninjask|40/100",
+            "|",
+            "|-ability|p2a: Porygon2|Speed Boost|boost",
+            "|-boost|p2a: Porygon2|spe|1",
+            "|upkeep",
+            "|turn|2",
+        ]
+        engine = _engine(lines)
+        porygon = _belief(engine, "p2", "Porygon2")
+        self.assertIsNone(porygon.revealed_ability)
+        self.assertEqual(engine._running_ability[porygon.key].lower().replace(" ", ""), "speedboost")
+        self.assertEqual(_ability(_belief(engine, "p1", "Ninjask")), "speedboost")
+
+    def test_a_transformed_mons_ability_activation_stays_off_its_set(self) -> None:
+        lines = [
+            "|start",
+            "|switch|p1a: Ninetales|Ninetales, L84, F|100/100",
+            "|switch|p2a: Ditto|Ditto, L88|100/100",
+            "|turn|1",
+            "|move|p2a: Ditto|Transform|p1a: Ninetales",
+            "|-transform|p2a: Ditto|p1a: Ninetales",
+            "|upkeep",
+            "|turn|2",
+            "|move|p1a: Ninetales|Flamethrower|p2a: Ditto",
+            "|-start|p2a: Ditto|ability: Flash Fire",
+            "|upkeep",
+            "|turn|3",
+        ]
+        engine = _engine(lines)
+        ditto = _belief(engine, "p2", "Ditto")
+        self.assertTrue(ditto.transformed, "fixture must actually transform, or this proves nothing")
+        self.assertIsNone(ditto.revealed_ability)
+        self.assertNotIn(ditto.key, engine._running_ability)   # the copy was unknown at the Transform: none recorded
+
+    def test_an_untransformed_mons_own_procs_are_still_its_set(self) -> None:
+        lines = [
+            "|start",
+            "|switch|p1a: Ninetales|Ninetales, L84, F|100/100",
+            "|switch|p2a: Ninjask|Ninjask, L84, M|100/100",
+            "|turn|1",
+            "|move|p1a: Ninetales|Flamethrower|p2a: Ninjask",
+            "|-damage|p2a: Ninjask|40/100",
+            "|",
+            "|-ability|p2a: Ninjask|Speed Boost|boost",
+            "|upkeep",
+            "|turn|2",
+        ]
+        self.assertEqual(_ability(_belief(_engine(lines), "p2", "Ninjask")), "speedboost")
+
+
 if __name__ == "__main__":  # pragma: no cover
     # At the END. It sat above TraceOnTransformedTargetTest and TraceOfATracerTest, so direct
     # execution ran 5 of 9 tests and never even DEFINED the two classes carrying this change's
