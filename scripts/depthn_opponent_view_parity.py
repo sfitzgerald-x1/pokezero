@@ -52,7 +52,7 @@ Capture (one GPU; the live server's build, as scripts/depthn_rr_reprice.py repla
     _self_team_from_metadata_result -> pack_team); Foul Play's true team through the very same function on Foul Play's own
     round-0 self_team rows, so level, gender, item, ability, move order and an EV/IV spread verified against the request's
     stats are exact; observation_format_id the root's format, determinization.py:414-422), materialized the same way with
-    world 0's kernel seed (phase_d_protocol_world.py:402-404). One fact the sampler's format never writes: happiness (packed
+    world 0's kernel seed (phase_d_protocol_world.world_seeds). One fact the sampler's format never writes: happiness (packed
     field 11, '' = 255). Where the literal round-0 request's Return/Frustration power proves a unique value other than 255
     (phase_d_live_worlds._own_happiness, the constructor's own inversion), it is written; an ambiguous power leaves 255 and
     is noted. Nature is never written (neutral), as the sampler's: the stats check proves the spread under it.
@@ -563,12 +563,10 @@ def true_start(root, team_rows, round0_request, set_source, owner):
         packed_sha256=hashlib.sha256(packed.encode()).hexdigest())
 
 
-def kernel_seed(root, detached, seed, index):
-    """World `index`'s kernel seed, as phase_d_protocol_world.sample derives it (phase_d_protocol_world.py:402-404)."""
-    from gpu_engine.phase_d_protocol_world import SCHEMA
-    identity = (SCHEMA, seed, root.context.battle_id, root.owner_lines_sha256, detached.address.stream, detached.address.frame,
-        detached.address.owner, index)
-    return int.from_bytes(hashlib.sha256(json.dumps(identity, separators=(',', ':')).encode()).digest()[8:12], 'big')
+def kernel_seed(root, detached, lines, seed, index):
+    """World `index`'s kernel seed, by phase_d_protocol_world.sample's own derivation (world_seeds over game_lines_sha256)."""
+    from gpu_engine import phase_d_protocol_world as pw
+    return pw.world_seeds(root, detached, pw.game_lines_sha256(lines), seed, index)[1]
 
 
 @contextmanager
@@ -585,7 +583,7 @@ def build_true_world(call, team_rows, round0_request, *, index=0):
     named = call.named;root, detached = named['root'], named['detached'];owner = int(detached.address.owner)
     start, info = true_start(root, team_rows, round0_request, named['source'].original, owner)
     if start is None:return None, info
-    info['kernel_seed'] = seed = kernel_seed(root, detached, named['seed'], index)
+    info['kernel_seed'] = seed = kernel_seed(root, detached, named['lines'], named['seed'], index)
     with cpu_device():
         carried = pw._carried_root(root, detached, named['lines'], named['metadata'])
         inputs = pw.ProtocolInputs(carried, tuple(named['lines']), named['catalog'], named['metadata'], named['source'])
