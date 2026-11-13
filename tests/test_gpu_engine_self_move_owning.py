@@ -1,5 +1,5 @@
 """Source-only original self heal callback and BOTH FULL components."""
-import ast,json,subprocess,unittest
+import json,subprocess,unittest
 from copy import deepcopy
 from pathlib import Path
 import jax
@@ -15,7 +15,6 @@ from gpu_engine import engine_retained_encoder_driver as driver,engine_request_s
 from gpu_engine import engine_full_v4_event_device as full,engine_leftovers_callbacks as leftovers
 from gpu_engine import transition as tr,public_belief,v4_encoder as v4,public_wire,state
 from gpu_engine import engine_source_frame_witness as witness
-from gpu_engine_default_observer_ast import dump_default_program,assert_hp_rng_mutations_detected
 from _showdown_root import showdown_root
 import test_gpu_engine_no_damage_owning as fixtures
 BASE='5b702e55a9a68f2ef7141b7a0bad35190861a60b'
@@ -56,8 +55,7 @@ class SelfMoveOwningTests(unittest.TestCase):
  def test_source_default_and_cold_imports(self):
   witness._source();self.assertEqual(len(witness.SOURCE_PINS),88)
   self.assertIsNone(direct.compile_direct_hit_controls(engine_catalog=self.producer).device.self_move)
-  old=ast.parse(subprocess.check_output(['git','show','b8092a85:gpu_engine/transition.py'],text=True));new=ast.parse(Path('gpu_engine/transition.py').read_text());baseline=dump_default_program(old)
-  self.assertEqual(dump_default_program(new),baseline);assert_hp_rng_mutations_detected(self,new,baseline)
+  # transition.py is certified against CURRENT_TRANSITION (full AST plus mutations) by terminal_closeout and seismic_toss_components.
   for modules in [('benchmark_retained_games','engine_lifecycle_event_device','engine_full_v4_event_device'),('engine_full_v4_event_device','engine_lifecycle_event_device','benchmark_retained_games')]:
    subprocess.run([__import__('sys').executable,'-c',';'.join('import gpu_engine.'+n for n in modules)],check=True,capture_output=True)
   # Actual effective original callbacks, no Battle/Native/game construction.

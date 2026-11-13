@@ -1,5 +1,5 @@
 """Canonical Hidden Power current-member Substitute input."""
-import ast,json,subprocess,unittest
+import json,subprocess,unittest
 from copy import deepcopy
 from pathlib import Path
 import jax
@@ -15,7 +15,6 @@ from gpu_engine import engine_retained_encoder_driver as driver,engine_request_s
 from gpu_engine import engine_full_v4_event_device as full,engine_leftovers_callbacks as leftovers
 from gpu_engine import transition as tr,public_belief,v4_encoder as v4,public_wire,state
 from gpu_engine import engine_source_frame_witness as witness
-from gpu_engine_default_observer_ast import dump_default_program,assert_hp_rng_mutations_detected
 from _showdown_root import showdown_root
 import test_gpu_engine_no_damage_owning as fixtures
 from gpu_engine import engine_direct_ko_callbacks as ko
@@ -98,7 +97,8 @@ class HiddenPowerSubstituteInputTests(unittest.TestCase):
   # Unused crit/type values still belong to this SAME final Outcome.
   c=cb.Captured(p,w);o=risk.Outcome(w.power,w.critical,w.hit,w.immune,w.numerator,w.denominator,j.zeros(8,bool),j.ones(8,bool),w.protected,w.enduring,j.zeros(8,j.int32),j.zeros(8,bool));good=risk.outcome_on_tape(out,o,eligible=p.requested,active=p.requested,captured_substitute_damage=c);self.assertEqual(good.execution.risks.carry.risk.tolist(),[0]*8)
   bad=risk.outcome_on_tape(out,o._replace(power=o.power+1),eligible=p.requested,active=p.requested,captured_substitute_damage=c);self.assertTrue(bool((bad.execution.risks.carry.risk!=0).all()))
-  old=dump_default_program(ast.parse(subprocess.check_output(['git','show','b8092a85:gpu_engine/transition.py'],text=True)));current=ast.parse(Path('gpu_engine/transition.py').read_text());self.assertEqual(dump_default_program(current),old);assert_hp_rng_mutations_detected(self,current,old);witness._source()
+  # transition.py is certified against CURRENT_TRANSITION (full AST plus mutations) by terminal_closeout and seismic_toss_components.
+  witness._source()
   for modules in(('benchmark_retained_games','engine_lifecycle_event_device','engine_full_v4_event_device'),('engine_full_v4_event_device','engine_lifecycle_event_device','benchmark_retained_games')):subprocess.run([__import__('sys').executable,'-c',';'.join('import gpu_engine.'+n for n in modules)],check=True,capture_output=True)
 
  def test_actual_alias_current_write_both_full_survive_and_break(self):
