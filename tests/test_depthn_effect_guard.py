@@ -594,11 +594,18 @@ class LiveTableTests(unittest.TestCase):
 
     @unittest.skipUnless(since.IN_GIT, since.SKIP_REASON)
     def test_every_engine_since_is_a_merge_head_contains(self):
-        """A move retires only on an engine at or after its merge: every RETIRED engine_since is an integration merge (two or more
-        parents) that HEAD contains. A guard change that lands before its engine merge, or with the placeholder, fails here."""
+        """A move retires only on an engine at or after its merge: every RETIRED engine_since is a GitHub pull request merge that changed
+        gpu_engine/ and that HEAD contains (tests/_engine_since.problem). A guard change that lands before its engine merge, names some
+        other merge, or keeps the placeholder fails here."""
         self.assertFalse(since.shallow(), 'a shallow clone cannot check ancestry')
         for move, (_, sha) in sorted(LIVE_RETIRED.items()):
             with self.subTest(move=move, engine_since=sha):self.assertEqual(since.problem(sha), '', move)
+
+    @unittest.skipUnless(since.IN_GIT, since.SKIP_REASON)
+    def test_a_branch_s_own_merge_of_integration_is_not_an_engine_merge(self):
+        """ce886344 (Merge commit '2bb1c5a9' into scott/v2s-extended-tier): two parents and contained in HEAD, but a local merge, not a
+        GitHub pull request merge; it must not pass as an engine_since."""
+        self.assertIn('not a GitHub pull request merge', since.problem('ce886344'))
 
     def test_no_placeholder_merge_sha_remains(self):
         """The placeholder merge SHA is gone from the guard module (its tables and its docstring evidence) once the merge exists."""
