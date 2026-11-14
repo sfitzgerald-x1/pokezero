@@ -92,10 +92,14 @@ class ProtocolRoute(unittest.TestCase):
 
     def test_explicit_protocol_route_rejects_driver_evidence_and_native_probe(self):
         root,inputs,source=self.root();start=BattleStartOverride(player_teams={'p1':'own','p2':'sample'})
+        # The payload keeps its request trap, which is no longer a native probe (each sampled world must reproduce it), and
+        # adds Mean Look's hidden clock, which still is: only the clock refuses.
+        self.assertTrue(root.materialization_payload['selfActiveRequestState']['trapped'])
+        root=replace(root,materialization_payload=dict(root.materialization_payload,sides={'p1':{'meanlookTrap':True,'volatiles':[]}}))
         with patch.object(protocol,'battle_spec_from_payload',side_effect=AssertionError('must refuse before typed bridge')), \
                 patch.object(protocol,'_removed_items',return_value={}):
             result=v5_public_world.materialize(root,start,prepared=inputs,history=None,own_static=None,seed=7)
-        self.assertIsNone(result.state);self.assertEqual(result.refusals,('native-probed-hard-trapped-own-request',))
+        self.assertIsNone(result.state);self.assertEqual(result.refusals,('native-probed-or-hidden-volatile-clock',))
         with self.assertRaisesRegex(ValueError,'retained-driver'):
             v5_public_world.materialize(root,start,prepared=inputs,history=object(),own_static=None,seed=7)
 
