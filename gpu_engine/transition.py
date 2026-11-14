@@ -2274,10 +2274,10 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
     # Equal-speed Speed Boost(3), Leftovers(4), seed(5), status(6) use independent ties. Fidelity M2 (design 2.3):
     # partiallytrapped (subOrder 9, events 8-9) and Yawn (19, events 12-13) join the list (14 events; Encore moves to 10-11).
     # Showdown's comparePriority sorts by speed, then subOrder (sim/battle.ts:404-411); the multiplier is 64 as 2*19+1 > 31,
-    # and the old events keep their relative order (their subOrder*2+tie <= 29 < 32). An equal-Speed Wrap pair takes
-    # effect[0][3]; the inert Yawn pair (each handler touches only its holder) the fixed tie `sides`. The key constants live
-    # in residual_order. Every position is a rank of all 14 keys and nothing in the loop reorders (its invariants a and b),
-    # so the kinds a position can hold are static: residual_order.POSITIONS, which gates the Wrap and Yawn blocks (R1).
+    # and the old events keep their relative order (subOrder*2+tie <= 29 < 32). An equal-Speed Wrap pair takes effect[0][3];
+    # the inert Yawn pair (each handler touches only its holder) the fixed tie `sides`. The constants live in residual_order:
+    # a position is a rank of all 14 keys and the loop never reorders (its invariants a, b), so POSITIONS gates each handler.
+    _all_positions = _lifecycle_trace and table.entry is None   # R2: lifecycle mode without Speed Boost's accounting call
     event_sides = jnp.array(residual_order.EVENT_SIDES)
     event_suborder = jnp.array(residual_order.EVENT_SUBORDER)
     tie = jnp.concatenate((draws[:,1,0,None] ^ sides,
@@ -2305,19 +2305,24 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
             if _status_registered:
                 _weather_hp_record=status_residual_callbacks.retain_profile_device(_weather_hp_record,
                     work,_public_trace.stream_id,_status_residual_context.weather_profile_data,hypothetical=_hypothetical,eligible=eligible)
-        if table.entry is not None:
-            boosts = _active(work.boosts,work,side)
-            speed_boost = (eligible & ability_event & (hp > 0)
-                & (work.active_turns[rows,side] > 0)
-                & table.entry.speed_boost[_active(work.ability,work,side)])
-            if _lifecycle_trace:
-                # The attempt exists at stage+6 too, even if min leaves no write.
-                _public_trace=execution_accounting.unhandled_attempt(_public_trace,
-                    execution_accounting.Site.SPEED_BOOST,side,active=speed_boost)
-            boosts = boosts.at[:,4].set(jnp.where(speed_boost,jnp.minimum(6,boosts[:,4]+1),boosts[:,4]))
-            work = work._replace(boosts=_set_active(work.boosts,work,side,boosts))
-        if _device_public is not None and table.entry is not None:
-            device_public.reveal_ability(_device_public,work,side,speed_boost & (_active(work.boosts,work,side)[:,4]!=_active(_device_residual_before.boosts,_device_residual_before,side)[:,4]))
+        # R2: like Wrap and Yawn (R1), the older handlers run only at the positions their events can sort to. Elsewhere the
+        # kind mask is all false: a handler writes back what it read and enters, appends and refuses nothing. Lifecycle mode
+        # skips those accounting calls too; one with a false mask only re-ORs the ledger's sticky refusal into the tape, which
+        # Speed Boost's call at position 0 (the loop's first) has done. Without the entry table _all_positions keeps them all.
+        if order in residual_order.POSITIONS['ability'] or _all_positions:
+            if table.entry is not None:
+                boosts = _active(work.boosts,work,side)
+                speed_boost = (eligible & ability_event & (hp > 0)
+                    & (work.active_turns[rows,side] > 0)
+                    & table.entry.speed_boost[_active(work.ability,work,side)])
+                if _lifecycle_trace:
+                    # The attempt exists at stage+6 too, even if min leaves no write.
+                    _public_trace=execution_accounting.unhandled_attempt(_public_trace,
+                        execution_accounting.Site.SPEED_BOOST,side,active=speed_boost)
+                boosts = boosts.at[:,4].set(jnp.where(speed_boost,jnp.minimum(6,boosts[:,4]+1),boosts[:,4]))
+                work = work._replace(boosts=_set_active(work.boosts,work,side,boosts))
+            if _device_public is not None and table.entry is not None:
+                device_public.reveal_ability(_device_public,work,side,speed_boost & (_active(work.boosts,work,side)[:,4]!=_active(_device_residual_before.boosts,_device_residual_before,side)[:,4]))
         healed = hp
         if _leftovers_context is not None:
             # Literal BEFORE values precede both the numerical heal and item
@@ -2330,200 +2335,211 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
             if _leftovers_registered:
                 _weather_hp_record=leftovers_callbacks.retain_profile_device(_weather_hp_record,
                     work,_public_trace.stream_id,_leftovers_context.weather_profile_data,hypothetical=_hypothetical,eligible=eligible)
-        if table.items is not None:
+        if order in residual_order.POSITIONS['heal'] or _all_positions:   # R2: elsewhere heal_event is all false (healed stays hp)
+            if table.items is not None:
+                if _lifecycle_trace:
+                    _execution_item=_active(work.item,work,side)
+                    _execution_leftovers_requested=(eligible & heal_event & (hp>0)
+                        & table.items.leftovers[_execution_item])
+                    _execution_old_heal_hp=hp
+                    _public_trace,_execution_leftovers_ticket=execution_accounting.open_attempt(
+                        _public_trace,execution_accounting.Site.LEFTOVERS,side,
+                        active=_execution_leftovers_requested)
+                    _pinch_pending=None
+                    if _direct_hit_context is not None and _direct_hit_registered and _direct_hit_context.data.pinch_item is not None:
+                        _public_trace,_pinch_pending=pinch_callbacks.begin(_public_trace,work,side,
+                            _execution_item,_active(work.boosts,work,side),hp,_active(work.max_hp,work,side),
+                            table.items,_direct_hit_context,eligible=eligible & heal_event)
+                    else:
+                        _public_trace=execution_accounting.unhandled_attempt(_public_trace,
+                            execution_accounting.Site.PINCH_ITEM,side,
+                            active=eligible & heal_event & (hp>0)
+                            & (hp*4<=_active(work.max_hp,work,side)) & (table.items.pinch_stat[_execution_item]>=0))
+                    if _leftovers_context is not None:
+                        if _leftovers_registered and _leftovers_context.no_output_tables is not None:
+                            _execution_full_hp_before=_leftovers_no_output.capture_before_device(
+                                _public_trace,_execution_leftovers_ticket,work,event,_weather_hp_record,
+                                _leftovers_context.no_output_tables,
+                                requested=_execution_leftovers_requested&(hp==_active(work.max_hp,work,side)),hypothetical=_hypothetical)
+                healed = held.leftovers_heal(table.items,_active(work.item,work,side),hp,
+                    _active(work.max_hp,work,side),eligible=eligible & heal_event)
+                if _device_public is not None:
+                    device_public.reveal_item(_device_public,work,side,_active(work.item,work,side),eligible & heal_event & (healed>hp))
+                item,boosts=held.consume_pinch(table.items,_active(work.item,work,side),
+                    _active(work.boosts,work,side),hp,_active(work.max_hp,work,side),
+                    eligible=eligible & heal_event)
+                work=work._replace(item=_set_active(work.item,work,side,item),
+                    boosts=_set_active(work.boosts,work,side,boosts))
+                if _device_public is not None:device_public.item_changes(_device_public,_device_residual_before,work,eligible & heal_event)
+                if _lifecycle_trace:
+                    _public_trace=pinch_callbacks.finish(_public_trace,_pinch_pending,item,boosts)
+                if _leftovers_context is not None:
+                    if _leftovers_registered:
+                        _weather_hp_record=leftovers_callbacks.retain_profile_device(_weather_hp_record,
+                            work,_public_trace.stream_id,_leftovers_context.weather_profile_data,hypothetical=_hypothetical,
+                            eligible=eligible & heal_event)
+        if order in residual_order.POSITIONS['status'] or _all_positions:   # R2: elsewhere status_event is all false
             if _lifecycle_trace:
-                _execution_item=_active(work.item,work,side)
-                _execution_leftovers_requested=(eligible & heal_event & (hp>0)
-                    & table.items.leftovers[_execution_item])
-                _execution_old_heal_hp=hp
-                _public_trace,_execution_leftovers_ticket=execution_accounting.open_attempt(
-                    _public_trace,execution_accounting.Site.LEFTOVERS,side,
-                    active=_execution_leftovers_requested)
-                _pinch_pending=None
-                if _direct_hit_context is not None and _direct_hit_registered and _direct_hit_context.data.pinch_item is not None:
-                    _public_trace,_pinch_pending=pinch_callbacks.begin(_public_trace,work,side,
-                        _execution_item,_active(work.boosts,work,side),hp,_active(work.max_hp,work,side),
-                        table.items,_direct_hit_context,eligible=eligible & heal_event)
+                _execution_status=_active(work.status,work,side)
+                _execution_status_requested=(eligible & status_event & (hp>0)
+                    & ((_execution_status==m.BRN)|(_execution_status==m.PSN)|(_execution_status==m.TOX)))
+                if _status_residual_context is not None and _status_registered:
+                    _public_trace,_execution_status_ticket=execution_accounting.open_attempt(_public_trace,
+                        execution_accounting.Site.STATUS_RESIDUAL,side,active=_execution_status_requested)
                 else:
                     _public_trace=execution_accounting.unhandled_attempt(_public_trace,
-                        execution_accounting.Site.PINCH_ITEM,side,
-                        active=eligible & heal_event & (hp>0)
-                        & (hp*4<=_active(work.max_hp,work,side)) & (table.items.pinch_stat[_execution_item]>=0))
-                if _leftovers_context is not None:
-                    if _leftovers_registered and _leftovers_context.no_output_tables is not None:
-                        _execution_full_hp_before=_leftovers_no_output.capture_before_device(
-                            _public_trace,_execution_leftovers_ticket,work,event,_weather_hp_record,
-                            _leftovers_context.no_output_tables,
-                            requested=_execution_leftovers_requested&(hp==_active(work.max_hp,work,side)),hypothetical=_hypothetical)
-            healed = held.leftovers_heal(table.items,_active(work.item,work,side),hp,
-                _active(work.max_hp,work,side),eligible=eligible & heal_event)
-            if _device_public is not None:
-                device_public.reveal_item(_device_public,work,side,_active(work.item,work,side),eligible & heal_event & (healed>hp))
-            item,boosts=held.consume_pinch(table.items,_active(work.item,work,side),
-                _active(work.boosts,work,side),hp,_active(work.max_hp,work,side),
-                eligible=eligible & heal_event)
-            work=work._replace(item=_set_active(work.item,work,side,item),
-                boosts=_set_active(work.boosts,work,side,boosts))
-            if _device_public is not None:device_public.item_changes(_device_public,_device_residual_before,work,eligible & heal_event)
-            if _lifecycle_trace:
-                _public_trace=pinch_callbacks.finish(_public_trace,_pinch_pending,item,boosts)
+                        execution_accounting.Site.STATUS_RESIDUAL,side,active=_execution_status_requested)
+            if _status_residual_context is not None:
+                # Literal BEFORE values at this exact numerical assignment. The
+                # kernel-site ticket may capture its exact appended span later;
+                # no ticket is consumed or physically qualified by this write.
+                _status_physical=work.active[rows,side]
+                _status_old_hp=_active(work.hp,work,side)
+                _status_maximum=_active(work.max_hp,work,side)
+                _status_old_status=_active(work.status,work,side)
+                _status_old_counter=_active(work.status_counter,work,side)
+                if _status_registered:
+                    _status_lethal_pending=status_residual_callbacks.begin_lethal_device(_public_trace,work,
+                        _execution_status_ticket,side,_status_residual_context.data,requested=_execution_status_requested)
+                if _status_registered:
+                    _weather_hp_record=status_residual_callbacks.retain_profile_device(_weather_hp_record,
+                        work,_public_trace.stream_id,_status_residual_context.weather_profile_data,hypothetical=_hypothetical,
+                        eligible=_execution_status_requested)
+            residual = m.major_status_residual(hp,
+                _active(work.max_hp, work, side), _active(work.status, work, side),
+                _active(work.status_counter, work, side), active=eligible & status_event)
+            work = work._replace(hp=_set_active(work.hp, work, side,jnp.where(heal_event,healed,residual.hp)),
+                status_counter=_set_active(work.status_counter, work, side, residual.counter))
+        elif order in residual_order.POSITIONS['heal']:
+            # R2: no status event sorts here. major_status_residual with active all false deals 0 and returns the counter,
+            # so the shared write above reduces to the heal's HP (the counter write is the identity).
+            work = work._replace(hp=_set_active(work.hp,work,side,jnp.where(heal_event,healed,hp)))
+        if _device_public is not None:
+            # Leftovers has its own source-local notification. This baseline
+            # update prevents a later status loss being netted against healing.
+            if order in residual_order.POSITIONS['heal'] or _all_positions:device_public.observe(_device_public,work,eligible & heal_event)
+            if order in residual_order.POSITIONS['status'] or _all_positions:
+                device_public.hp_line(_device_public,work,side,
+                    eligible & status_event & (residual.hp<hp),source_class=device_public.HP_POST_ITEM)
+        if order in residual_order.POSITIONS['heal'] or _all_positions:
             if _leftovers_context is not None:
+                if _leftovers_registered and _leftovers_context.no_output_tables is not None:
+                    if table.items is not None:
+                        _execution_full_hp_after=_leftovers_no_output.finish_device(_execution_full_hp_before,
+                            _public_trace,work,_weather_hp_record,_leftovers_context.no_output_tables,hypothetical=_hypothetical)
+                        _public_trace=execution_accounting.capture_leftovers_full_hp(_public_trace,
+                            _execution_full_hp_after,no_output_tables=_leftovers_context.no_output_tables)
+                        # Only this exact entered full-HP branch uses its typed
+                        # no-output receipt; failed proofs remain sticky/unhandled.
+                        _execution_leftovers_requested &= ~_execution_full_hp_before.requested
+        if order in residual_order.POSITIONS['status'] or _all_positions:
+            if _status_residual_context is not None:
+                # Read AFTER the SAME HP/counter write, before later handlers. No
+                # damage/stage formula, final-state reconstruction or faint event.
+                _status_new_hp=_active(work.hp,work,side)
+                _status_defer=False
+                if _status_registered:
+                    _weather_hp_record=status_residual_callbacks.retain_profile_device(_weather_hp_record,
+                        work,_public_trace.stream_id,_status_residual_context.weather_profile_data,hypothetical=_hypothetical,
+                        eligible=_execution_status_requested)
+                    # Selected kernel-event coverage only. Original-hook/history
+                    # equivalence is deliberately not inferred from speed membership.
+                    _status_singleton_ok=status_residual_callbacks.singleton_queue_matches(_public_trace,
+                        _status_residual_context.data,_status_queue,side,_status_physical,_status_old_hp,_active(work.status,work,side))
+                    _status_guard_valid=(_profile_qualified(_weather_hp_record) & (_status_cached_speed_ok|_status_singleton_ok)
+                        & ((_public_trace.refusal&~public_callbacks.UNINSTRUMENTED)==0))
+                    from . import engine_outcome_diagnostics as _residual_diagnostics
+                    _public_trace=_residual_diagnostics.record_residual_on_tape(_public_trace,
+                        side,_status_physical,_profile_qualified(_weather_hp_record),_status_cached_speed_ok,
+                        end_speed,_status_guard_valid,active=_execution_status_requested)
+                    _status_defer=_status_guard_valid
+                    _status_lethal_write=status_residual_callbacks.LethalWrite(_status_lethal_pending,work,_status_guard_valid)
+                _public_trace=status_residual_callbacks.record_status_residual_device(_public_trace,
+                    side,_status_physical,_status_old_hp,_active(work.hp,work,side),_status_maximum,
+                    _status_old_status,_status_old_counter,_active(work.status_counter,work,side),
+                    _status_residual_context.data,eligible=eligible & status_event & (_status_old_hp>0)
+                    & ((_status_old_status==m.BRN)|(_status_old_status==m.PSN)|(_status_old_status==m.TOX)),
+                    _defer_own_unknown=_status_defer,_lethal_write=_status_lethal_write if _status_registered else None)
+                if _status_registered:
+                    _status_lethal_requested=_status_lethal_pending.requested&(_status_new_hp==0)
+                    _public_trace=status_residual_callbacks.finish_lethal_device(_public_trace,_status_lethal_write)
+                    _status_execution=getattr(_public_trace,'execution',None)
+                    if _status_execution is not None:
+                        _status_ledger=execution_accounting.unhandled(_status_execution.ledger,
+                            _execution_status_ticket,active=_execution_status_requested & ~_status_guard_valid,
+                            tables=_status_execution.tables)
+                        _public_trace=execution_accounting._put_context(_public_trace,_status_ledger,_status_execution)
+                    _public_trace=execution_accounting.capture_status_residual_write(_public_trace,
+                        _execution_status_ticket,requested=_execution_status_requested & _status_guard_valid & ~_status_lethal_requested,
+                        positive_write=(_status_new_hp<_status_old_hp)&(_status_new_hp>0))
+        if order in residual_order.POSITIONS['heal'] or _all_positions:
+            if _leftovers_context is not None:
+                # Record immediately AFTER this exact HP assignment. The immutable
+                # Diagnostic mode retains UNKNOWN. The registered actual context
+                # defers ONLY this new emitter latch; all prior refusals survive.
+                _leftovers_new_hp=_active(work.hp,work,side)
+                _leftovers_defer=False
                 if _leftovers_registered:
                     _weather_hp_record=leftovers_callbacks.retain_profile_device(_weather_hp_record,
                         work,_public_trace.stream_id,_leftovers_context.weather_profile_data,hypothetical=_hypothetical,
                         eligible=eligible & heal_event)
-        if _lifecycle_trace:
-            _execution_status=_active(work.status,work,side)
-            _execution_status_requested=(eligible & status_event & (hp>0)
-                & ((_execution_status==m.BRN)|(_execution_status==m.PSN)|(_execution_status==m.TOX)))
-            if _status_residual_context is not None and _status_registered:
-                _public_trace,_execution_status_ticket=execution_accounting.open_attempt(_public_trace,
-                    execution_accounting.Site.STATUS_RESIDUAL,side,active=_execution_status_requested)
-            else:
-                _public_trace=execution_accounting.unhandled_attempt(_public_trace,
-                    execution_accounting.Site.STATUS_RESIDUAL,side,active=_execution_status_requested)
-        if _status_residual_context is not None:
-            # Literal BEFORE values at this exact numerical assignment. The
-            # kernel-site ticket may capture its exact appended span later;
-            # no ticket is consumed or physically qualified by this write.
-            _status_physical=work.active[rows,side]
-            _status_old_hp=_active(work.hp,work,side)
-            _status_maximum=_active(work.max_hp,work,side)
-            _status_old_status=_active(work.status,work,side)
-            _status_old_counter=_active(work.status_counter,work,side)
-            if _status_registered:
-                _status_lethal_pending=status_residual_callbacks.begin_lethal_device(_public_trace,work,
-                    _execution_status_ticket,side,_status_residual_context.data,requested=_execution_status_requested)
-            if _status_registered:
-                _weather_hp_record=status_residual_callbacks.retain_profile_device(_weather_hp_record,
-                    work,_public_trace.stream_id,_status_residual_context.weather_profile_data,hypothetical=_hypothetical,
-                    eligible=_execution_status_requested)
-        residual = m.major_status_residual(hp,
-            _active(work.max_hp, work, side), _active(work.status, work, side),
-            _active(work.status_counter, work, side), active=eligible & status_event)
-        work = work._replace(hp=_set_active(work.hp, work, side,jnp.where(heal_event,healed,residual.hp)),
-            status_counter=_set_active(work.status_counter, work, side, residual.counter))
-        if _device_public is not None:
-            # Leftovers has its own source-local notification. This baseline
-            # update prevents a later status loss being netted against healing.
-            device_public.observe(_device_public,work,eligible & heal_event)
-            device_public.hp_line(_device_public,work,side,
-                eligible & status_event & (residual.hp<hp),source_class=device_public.HP_POST_ITEM)
-        if _leftovers_context is not None:
-            if _leftovers_registered and _leftovers_context.no_output_tables is not None:
+                    _leftovers_defer=_profile_qualified(_weather_hp_record) & _leftovers_cached_speed_ok
+                _public_trace=leftovers_callbacks.record_leftovers_heal_device(_public_trace,
+                    side,_leftovers_physical,_leftovers_item,_leftovers_old_hp,_leftovers_new_hp,
+                    _leftovers_maximum,_leftovers_status,_leftovers_context.data,
+                    eligible=eligible & heal_event & (_leftovers_new_hp>_leftovers_old_hp),
+                    _defer_own_unknown=_leftovers_defer)
+            if _lifecycle_trace:
                 if table.items is not None:
-                    _execution_full_hp_after=_leftovers_no_output.finish_device(_execution_full_hp_before,
-                        _public_trace,work,_weather_hp_record,_leftovers_context.no_output_tables,hypothetical=_hypothetical)
-                    _public_trace=execution_accounting.capture_leftovers_full_hp(_public_trace,
-                        _execution_full_hp_after,no_output_tables=_leftovers_context.no_output_tables)
-                    # Only this exact entered full-HP branch uses its typed
-                    # no-output receipt; failed proofs remain sticky/unhandled.
-                    _execution_leftovers_requested &= ~_execution_full_hp_before.requested
-        if _status_residual_context is not None:
-            # Read AFTER the SAME HP/counter write, before later handlers. No
-            # damage/stage formula, final-state reconstruction or faint event.
-            _status_new_hp=_active(work.hp,work,side)
-            _status_defer=False
-            if _status_registered:
-                _weather_hp_record=status_residual_callbacks.retain_profile_device(_weather_hp_record,
-                    work,_public_trace.stream_id,_status_residual_context.weather_profile_data,hypothetical=_hypothetical,
-                    eligible=_execution_status_requested)
-                # Selected kernel-event coverage only. Original-hook/history
-                # equivalence is deliberately not inferred from speed membership.
-                _status_singleton_ok=status_residual_callbacks.singleton_queue_matches(_public_trace,
-                    _status_residual_context.data,_status_queue,side,_status_physical,_status_old_hp,_active(work.status,work,side))
-                _status_guard_valid=(_profile_qualified(_weather_hp_record) & (_status_cached_speed_ok|_status_singleton_ok)
-                    & ((_public_trace.refusal&~public_callbacks.UNINSTRUMENTED)==0))
-                from . import engine_outcome_diagnostics as _residual_diagnostics
-                _public_trace=_residual_diagnostics.record_residual_on_tape(_public_trace,
-                    side,_status_physical,_profile_qualified(_weather_hp_record),_status_cached_speed_ok,
-                    end_speed,_status_guard_valid,active=_execution_status_requested)
-                _status_defer=_status_guard_valid
-                _status_lethal_write=status_residual_callbacks.LethalWrite(_status_lethal_pending,work,_status_guard_valid)
-            _public_trace=status_residual_callbacks.record_status_residual_device(_public_trace,
-                side,_status_physical,_status_old_hp,_active(work.hp,work,side),_status_maximum,
-                _status_old_status,_status_old_counter,_active(work.status_counter,work,side),
-                _status_residual_context.data,eligible=eligible & status_event & (_status_old_hp>0)
-                & ((_status_old_status==m.BRN)|(_status_old_status==m.PSN)|(_status_old_status==m.TOX)),
-                _defer_own_unknown=_status_defer,_lethal_write=_status_lethal_write if _status_registered else None)
-            if _status_registered:
-                _status_lethal_requested=_status_lethal_pending.requested&(_status_new_hp==0)
-                _public_trace=status_residual_callbacks.finish_lethal_device(_public_trace,_status_lethal_write)
-                _status_execution=getattr(_public_trace,'execution',None)
-                if _status_execution is not None:
-                    _status_ledger=execution_accounting.unhandled(_status_execution.ledger,
-                        _execution_status_ticket,active=_execution_status_requested & ~_status_guard_valid,
-                        tables=_status_execution.tables)
-                    _public_trace=execution_accounting._put_context(_public_trace,_status_ledger,_status_execution)
-                _public_trace=execution_accounting.capture_status_residual_write(_public_trace,
-                    _execution_status_ticket,requested=_execution_status_requested & _status_guard_valid & ~_status_lethal_requested,
-                    positive_write=(_status_new_hp<_status_old_hp)&(_status_new_hp>0))
-        if _leftovers_context is not None:
-            # Record immediately AFTER this exact HP assignment. The immutable
-            # Diagnostic mode retains UNKNOWN. The registered actual context
-            # defers ONLY this new emitter latch; all prior refusals survive.
-            _leftovers_new_hp=_active(work.hp,work,side)
-            _leftovers_defer=False
-            if _leftovers_registered:
-                _weather_hp_record=leftovers_callbacks.retain_profile_device(_weather_hp_record,
-                    work,_public_trace.stream_id,_leftovers_context.weather_profile_data,hypothetical=_hypothetical,
-                    eligible=eligible & heal_event)
-                _leftovers_defer=_profile_qualified(_weather_hp_record) & _leftovers_cached_speed_ok
-            _public_trace=leftovers_callbacks.record_leftovers_heal_device(_public_trace,
-                side,_leftovers_physical,_leftovers_item,_leftovers_old_hp,_leftovers_new_hp,
-                _leftovers_maximum,_leftovers_status,_leftovers_context.data,
-                eligible=eligible & heal_event & (_leftovers_new_hp>_leftovers_old_hp),
-                _defer_own_unknown=_leftovers_defer)
-        if _lifecycle_trace:
-            if table.items is not None:
-                _public_trace=execution_accounting.capture_leftovers_write(_public_trace,
-                    _execution_leftovers_ticket,requested=_execution_leftovers_requested,
-                    positive_write=_active(work.hp,work,side)>_execution_old_heal_hp)
-        if table.sustain is not None:
-            foe = 1-side
-            if _lifecycle_trace:
-                from . import engine_leech_seed_callbacks as leech_callbacks
-                _leech_pending=None;_leech_capture=None;_leech_heal_pending=None
-                _leech_registered=(_direct_hit_context is not None and _direct_hit_registered and _direct_hit_context.data.leech_seed is not None)
-                if _leech_registered:
-                    _public_trace,_leech_pending=leech_callbacks.begin_drain(_public_trace,work,side,
-                        _direct_hit_context,eligible=eligible & seed_event)
-                else:
-                    _execution_seed_attempt=(eligible & seed_event & (_active(work.hp,work,side)>0)
-                        & ((_active(work.volatile,work,side)&_execution_leech_seed)!=0))
-                    _public_trace=execution_accounting.unhandled_attempt(_public_trace,
-                        execution_accounting.Site.LEECH_DRAIN,side,active=_execution_seed_attempt)
-                    _public_trace=execution_accounting.unhandled_attempt(_public_trace,
-                        execution_accounting.Site.LEECH_HEAL,foe,
-                        active=_execution_seed_attempt & (_active(work.hp,work,foe)>0))
-            drained = recovery.leech(_active(work.hp,work,side),_active(work.max_hp,work,side),
-                _active(work.volatile,work,side),_active(work.hp,work,foe),_active(work.max_hp,work,foe),
-                eligible=eligible & seed_event)
-            if table.damage_moves is not None:
-                # Liquid Ooze on Leech Seed (gen4 abilities.ts liquidooze onSourceTryHeal, inherited by Gen 3:
-                # 'leechseed' is in canOoze): the seeder takes the drained amount instead of healing it, also at full
-                # HP (TryHeal runs before heal's full-HP check), and the seeded Ooze holder is revealed.
-                _seed_amount=_active(work.hp,work,side)-drained.hp
-                _seed_ooze=(_seed_amount>0) & table.damage_moves.liquid_ooze[_active(work.ability,work,side)]
-                drained=drained._replace(recipient_hp=jnp.where(_seed_ooze,
-                    jnp.maximum(0,_active(work.hp,work,foe)-_seed_amount),drained.recipient_hp))
-                if _lifecycle_trace:_public_trace=status_callbacks.unknown(_public_trace,_seed_ooze)
-            work = work._replace(hp=_set_active(work.hp,work,side,drained.hp))
-            if _lifecycle_trace:
-                _public_trace,_leech_capture=leech_callbacks.finish_drain(_public_trace,_leech_pending,work,drained)
-                _public_trace,_leech_heal_pending=leech_callbacks.begin_heal(_public_trace,work,_leech_capture)
-            work = work._replace(hp=_set_active(work.hp,work,foe,drained.recipient_hp))
-            if _device_public is not None:
-                device_public.hp_line(_device_public,work,side,
-                    eligible & seed_event & (drained.hp<_active(_device_residual_before.hp,_device_residual_before,side)),
-                    source_class=device_public.HP_UNKNOWN)
-                device_public.hp_line(_device_public,work,foe,
-                    eligible & seed_event & (drained.recipient_hp!=_active(_device_residual_before.hp,_device_residual_before,foe)),
-                    source_class=device_public.HP_UNKNOWN)
-                # -damage|seeder|..|[from] ability: Liquid Ooze|[of] holder (B2 attributes the ability to the holder).
-                if table.damage_moves is not None:device_public.reveal_ability(_device_public,work,side,_seed_ooze)
-            if _lifecycle_trace:
-                _public_trace,_leech_heal_capture=leech_callbacks.finish_heal(_public_trace,_leech_heal_pending,work)
+                    _public_trace=execution_accounting.capture_leftovers_write(_public_trace,
+                        _execution_leftovers_ticket,requested=_execution_leftovers_requested,
+                        positive_write=_active(work.hp,work,side)>_execution_old_heal_hp)
+        if order in residual_order.POSITIONS['seed'] or _all_positions:   # R2: elsewhere seed_event is all false
+            if table.sustain is not None:
+                foe = 1-side
+                if _lifecycle_trace:
+                    from . import engine_leech_seed_callbacks as leech_callbacks
+                    _leech_pending=None;_leech_capture=None;_leech_heal_pending=None
+                    _leech_registered=(_direct_hit_context is not None and _direct_hit_registered and _direct_hit_context.data.leech_seed is not None)
+                    if _leech_registered:
+                        _public_trace,_leech_pending=leech_callbacks.begin_drain(_public_trace,work,side,
+                            _direct_hit_context,eligible=eligible & seed_event)
+                    else:
+                        _execution_seed_attempt=(eligible & seed_event & (_active(work.hp,work,side)>0)
+                            & ((_active(work.volatile,work,side)&_execution_leech_seed)!=0))
+                        _public_trace=execution_accounting.unhandled_attempt(_public_trace,
+                            execution_accounting.Site.LEECH_DRAIN,side,active=_execution_seed_attempt)
+                        _public_trace=execution_accounting.unhandled_attempt(_public_trace,
+                            execution_accounting.Site.LEECH_HEAL,foe,
+                            active=_execution_seed_attempt & (_active(work.hp,work,foe)>0))
+                drained = recovery.leech(_active(work.hp,work,side),_active(work.max_hp,work,side),
+                    _active(work.volatile,work,side),_active(work.hp,work,foe),_active(work.max_hp,work,foe),
+                    eligible=eligible & seed_event)
+                if table.damage_moves is not None:
+                    # Liquid Ooze on Leech Seed (gen4 abilities.ts liquidooze onSourceTryHeal, inherited by Gen 3:
+                    # 'leechseed' is in canOoze): the seeder takes the drained amount instead of healing it, also at full
+                    # HP (TryHeal runs before heal's full-HP check), and the seeded Ooze holder is revealed.
+                    _seed_amount=_active(work.hp,work,side)-drained.hp
+                    _seed_ooze=(_seed_amount>0) & table.damage_moves.liquid_ooze[_active(work.ability,work,side)]
+                    drained=drained._replace(recipient_hp=jnp.where(_seed_ooze,
+                        jnp.maximum(0,_active(work.hp,work,foe)-_seed_amount),drained.recipient_hp))
+                    if _lifecycle_trace:_public_trace=status_callbacks.unknown(_public_trace,_seed_ooze)
+                work = work._replace(hp=_set_active(work.hp,work,side,drained.hp))
+                if _lifecycle_trace:
+                    _public_trace,_leech_capture=leech_callbacks.finish_drain(_public_trace,_leech_pending,work,drained)
+                    _public_trace,_leech_heal_pending=leech_callbacks.begin_heal(_public_trace,work,_leech_capture)
+                work = work._replace(hp=_set_active(work.hp,work,foe,drained.recipient_hp))
+                if _device_public is not None:
+                    device_public.hp_line(_device_public,work,side,
+                        eligible & seed_event & (drained.hp<_active(_device_residual_before.hp,_device_residual_before,side)),
+                        source_class=device_public.HP_UNKNOWN)
+                    device_public.hp_line(_device_public,work,foe,
+                        eligible & seed_event & (drained.recipient_hp!=_active(_device_residual_before.hp,_device_residual_before,foe)),
+                        source_class=device_public.HP_UNKNOWN)
+                    # -damage|seeder|..|[from] ability: Liquid Ooze|[of] holder (B2 attributes the ability to the holder).
+                    if table.damage_moves is not None:device_public.reveal_ability(_device_public,work,side,_seed_ooze)
+                if _lifecycle_trace:
+                    _public_trace,_leech_heal_capture=leech_callbacks.finish_heal(_public_trace,_leech_heal_pending,work)
         if order in residual_order.POSITIONS['wrap']:   # R1: elsewhere no wrap event sorts here (wrap_event is all false)
             # Fidelity M2: partiallytrapped's residual (data/mods/gen4/conditions.ts:110-118, data/mods/gen5/conditions.ts:
             # 8-23). fieldEvent lowers the duration first; at 0 its onEnd ends it (-end|X|Wrap|[partiallytrapped], no damage)
@@ -2574,19 +2590,23 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                     work=secondaries.after_status_event(work,1-side,side,jnp.full_like(side,m.SLP),table.secondary,
                         applied=_yawn_sleep,item_table=table.items,_device_public=_device_public)
             elif _device_public is not None:device_public.observe(_device_public,work,_yawn_sleep)
-        if table.encore is not None:
-            if _lifecycle_trace:
-                from . import engine_encore_callbacks as encore_callbacks
-                _encore_residual_pending=None;_encore_residual_capture=None
-                _encore_attempt=eligible & encore_event & (_active(work.hp,work,side)>0) & (_active(work.encore_counter,work,side)>0)
-                if _direct_hit_context is not None and _direct_hit_registered and _direct_hit_context.data.encore is not None:
-                    _public_trace,_encore_residual_pending=encore_callbacks.begin(_public_trace,work,side,
-                        jnp.zeros_like(side),_direct_hit_context,table.encore,eligible=_encore_attempt,residual=True)
-            work=repeating.residual(work,side,eligible=eligible & encore_event)
-            if _lifecycle_trace:
-                _public_trace,_encore_residual_capture=encore_callbacks.finish(_public_trace,_encore_residual_pending,work)
-                _public_trace=kernel_risks.branch_on_tape(_public_trace,kernel_risks.Branch.ENCORE,
-                    _encore_attempt,active=live,captured_encore=_encore_residual_capture)
+        # R2: in lifecycle mode Encore runs at every position (its kernel-risk branch counts each visit). Elsewhere, with
+        # encore_event all false, residual() at most clears an encore_move whose counter is 0; that side's own Encore event
+        # (always at an encore position) applies the same clear, and nothing in the loop reads encore_move before it.
+        if order in residual_order.POSITIONS['encore'] or _lifecycle_trace:
+            if table.encore is not None:
+                if _lifecycle_trace:
+                    from . import engine_encore_callbacks as encore_callbacks
+                    _encore_residual_pending=None;_encore_residual_capture=None
+                    _encore_attempt=eligible & encore_event & (_active(work.hp,work,side)>0) & (_active(work.encore_counter,work,side)>0)
+                    if _direct_hit_context is not None and _direct_hit_registered and _direct_hit_context.data.encore is not None:
+                        _public_trace,_encore_residual_pending=encore_callbacks.begin(_public_trace,work,side,
+                            jnp.zeros_like(side),_direct_hit_context,table.encore,eligible=_encore_attempt,residual=True)
+                work=repeating.residual(work,side,eligible=eligible & encore_event)
+                if _lifecycle_trace:
+                    _public_trace,_encore_residual_capture=encore_callbacks.finish(_public_trace,_encore_residual_pending,work)
+                    _public_trace=kernel_risks.branch_on_tape(_public_trace,kernel_risks.Branch.ENCORE,
+                        _encore_attempt,active=live,captured_encore=_encore_residual_capture)
         work=_clear_fainted_boosts(work,_faint_before_hp,eligible=eligible)
     # Fidelity M2 (design 2.3): Perish Song's residual (data/mods/gen4/moves.ts:993-999, order 12), after the order-10
     # list. Faster first; an equal-Speed pair takes effect[1][3] (that side first). The duration falls; at 0 its onEnd

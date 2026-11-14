@@ -1,14 +1,17 @@
-"""R1 (Fidelity M2's compile-size restructure): the residual event positions that gate the Wrap and Yawn blocks.
+"""R1 and R2 (Fidelity M2's compile-size restructures): the residual event positions that gate every residual handler.
 
-transition.step_with_chance emits M2's partiallytrapped and Yawn handler blocks only where those events can sort,
-residual_order.POSITIONS (Wrap 4, 8, 9, 11; Yawn 6, 12, 13). That is exact only under two invariants, checked here on
+transition.step_with_chance emits each order-10 residual handler only where its events can sort, residual_order.POSITIONS:
+Speed Boost 0, 1, 7; Leftovers and the pinch berries 1, 2, 3, 8; Leech Seed 2, 4, 5, 9; brn/psn/tox 3, 6, 7, 10; Wrap 4, 8,
+9, 11 (R1); Encore 5, 10, 11, 12; Yawn 6, 12, 13 (R1). That is exact only under two invariants, checked here on
 transition.py's own source:
 (a) a position is a rank among all 14 keys whether or not its event is active: no sentinel key for an inactive event, and
     the loop visits every position (no compaction);
 (b) Speed and the tie are fixed before the loop, and nothing inside the loop reorders.
 The reachable position x kind table is recomputed by brute force from the step's own constants and key function (imported,
 never copied) over faster, slower and equal Speeds and every tie bit, and the gating sets must equal it. A changed key
-formula, multiplier, subOrder or event list fails here instead of silently dropping events. Pure Python: no JAX import.
+formula, multiplier, subOrder or event list fails here instead of silently dropping events. R2's shared Leftovers/status
+HP write, its lifecycle-mode rules (Encore at every position; every handler without the entry table) and the untouched
+per-position common code are checked on the AST too. Pure Python: no JAX import.
 """
 import ast
 import itertools
@@ -22,6 +25,10 @@ from gpu_engine import residual_order as ro
 
 ROOT = Path(__file__).resolve().parents[1]
 WRAP, YAWN = {4, 8, 9, 11}, {6, 12, 13}
+# Every kind's positions (R2 gates the five older handlers on these too).
+EXPECTED = {'ability': {0, 1, 7}, 'heal': {1, 2, 3, 8}, 'seed': {2, 4, 5, 9}, 'status': {3, 6, 7, 10}, 'wrap': WRAP,
+            'encore': {5, 10, 11, 12}, 'yawn': YAWN}
+OLD = ('ability', 'heal', 'seed', 'status', 'encore')
 # Faster, slower and equal: every ordered pair of these end_speed values, small and large gaps included.
 SPEEDS = (0, 1, 2, 31, 63, 64, 65, 200, 201, 2000)
 
@@ -98,8 +105,12 @@ class ConstantsTests(unittest.TestCase):
     def test_gating_sets_equal_the_brute_force_table(self):
         table, _, _ = brute_force()
         self.assertEqual(table['wrap'], WRAP);self.assertEqual(table['yawn'], YAWN)
+        self.assertEqual(table, EXPECTED)   # all seven kinds (R2)
         self.assertEqual({kind: set(positions) for kind, positions in ro.POSITIONS.items()}, table)
         self.assertEqual(sum(len(positions) for positions in table.values()), 26)   # of 7 x 14
+        self.assertEqual(sum(len(table[kind]) for kind in OLD), 19)                 # R2: of the older handlers' 5 x 14
+        for position in range(ro.EVENTS):                                            # each position holds at most 2 kinds
+            self.assertIn(len([kind for kind in ro.KINDS if position in table[kind]]), (1, 2), position)
         self.assertEqual(set(ro.POSITIONS['wrap']), WRAP);self.assertEqual(set(ro.POSITIONS['yawn']), YAWN)
         with self.assertRaises(TypeError):ro.POSITIONS['wrap'] = frozenset()     # read-only (R1 review)
         self.assertTrue(all(isinstance(positions, frozenset) for positions in ro.POSITIONS.values()))
@@ -177,25 +188,116 @@ class StepSourceTests(unittest.TestCase):
         for kind in ro.KINDS:self.assertTrue(same(found[f'{kind}_event'], f"{kind}_event = residual_order.is_kind(event,'{kind}')"))
         self.assertTrue(same(self.loop.body[2], 'side = event % 2'))
 
-    def test_only_wrap_and_yawn_are_gated_on_their_derived_positions(self):
-        """R1 gates exactly two blocks, on residual_order.POSITIONS (never a hand-written tuple), with no else; the other
-        handlers run at every position. Each gated block reads only its own kind's mask, and that mask is read nowhere else."""
-        gated = [n for n in self.loop.body if isinstance(n, ast.If) and 'order' in loaded([n.test])]
-        self.assertEqual([ast.unparse(n.test) for n in gated],
-                         ["order in residual_order.POSITIONS['wrap']", "order in residual_order.POSITIONS['yawn']"])
-        self.assertFalse([n for n in ast.walk(ast.Module(body=self.loop.body, type_ignores=[])) if isinstance(n, ast.If)
-                          and n not in gated and 'order' in loaded([n.test])])
-        rest = [n for n in self.loop.body if n not in gated]
-        for block, kind in zip(gated, ('wrap', 'yawn')):
-            self.assertEqual(block.orelse, [])
-            self.assertEqual({name for name in loaded(block.body) if name.endswith('_event')}, {f'{kind}_event'})
-            self.assertNotIn(f'{kind}_event', loaded(rest))
+    def gates(self):
+        """Every If in the loop whose test reads the position, in program order, with the kind it gates."""
+        found = [n for n in ast.walk(ast.Module(body=self.loop.body, type_ignores=[])) if isinstance(n, ast.If)
+                 and 'order' in loaded([n.test])]
+        found.sort(key=lambda n: (n.lineno, n.col_offset))
+        kinds = [ast.literal_eval(next(c for c in ast.walk(n.test) if isinstance(c, ast.Subscript)).slice) for n in found]
+        return found, kinds
+
+    def test_every_handler_is_gated_on_its_derived_positions(self):
+        """R1 and R2 gate each handler's blocks on residual_order.POSITIONS, never a hand-written tuple. In lifecycle mode
+        Encore runs at every position (its kernel-risk branch counts each visit) and, without the entry table, so does every
+        older handler (_all_positions); Wrap and Yawn (R1) have neither clause and no else."""
+        found, kinds = self.gates()
+        form = lambda kind, extra=None: f"order in residual_order.POSITIONS['{kind}']" + (f' or {extra}' if extra else '')
+        every = '_all_positions'
+        self.assertEqual([ast.unparse(n.test) for n in found], [
+            form('ability', every), form('heal', every), form('status', every),
+            form('heal'),                                   # the status gate's elif: the heal-only HP write
+            form('heal', every), form('status', every),     # the device observe (heal) and hp_line (status)
+            form('heal', every), form('status', every), form('heal', every), form('seed', every),
+            form('wrap'), form('yawn'), form('encore', '_lifecycle_trace')])
+        self.assertTrue(same(self.assignment('_all_positions'), '_all_positions = _lifecycle_trace and table.entry is None'))
+        self.assertIn(self.assignment('_all_positions'), self.before)
+        for block, kind in zip(found, kinds):
+            if kind in ('wrap', 'yawn'):self.assertEqual(block.orelse, [], kind)
         # The v2e_regress M2 recorder keys on the Wrap block's locals: its one HP-line call with use=_wrap_tick sits there.
+        wrap, yawn = found[kinds.index('wrap')], found[kinds.index('yawn')]
         wrap_lines = [n for n in ast.walk(ast.Module(body=self.loop.body, type_ignores=[])) if isinstance(n, ast.Call)
                       and ast.unparse(n.func) == 'device_public.hp_line' and '_wrap_tick' in loaded(n.args)]
         self.assertEqual(len(wrap_lines), 1)
-        self.assertIn(wrap_lines[0], list(ast.walk(gated[0])))
-        self.assertIn('_wrap_holder', stored(gated[0].body));self.assertIn('_yawn_sleep', stored(gated[1].body))
+        self.assertIn(wrap_lines[0], list(ast.walk(wrap)))
+        self.assertIn('_wrap_holder', stored(wrap.body));self.assertIn('_yawn_sleep', stored(yawn.body))
+
+    def test_each_mask_is_read_only_under_its_own_gates(self):
+        """A kind's mask is read only inside that kind's gates, and the gated code reads no other kind's mask, except the
+        shared Leftovers/status HP write's heal_event, under the status gate."""
+        found, kinds = self.gates()
+        shared = found[kinds.index('status')].body[-1]
+        for block, kind in zip(found, kinds):
+            body = [n for n in block.body if n is not shared]
+            self.assertLessEqual({name for name in loaded(body) if name.endswith('_event')}, {f'{kind}_event'}, kind)
+        self.assertEqual({name for name in loaded([shared]) if name.endswith('_event')}, {'heal_event'})
+        inner = {id(n) for g in found for n in ast.walk(ast.Module(body=g.body, type_ignores=[]))}
+        outside = [n for n in ast.walk(ast.Module(body=self.loop.body, type_ignores=[])) if isinstance(n, ast.Name)
+                   and isinstance(n.ctx, ast.Load) and n.id.endswith('_event') and id(n) not in inner]
+        self.assertEqual(outside, [])
+
+    def test_the_shared_heal_and_status_write_reduces_exactly(self):
+        """The Leftovers/status HP write sits last under the first status gate. Where no status event sorts (the heal-only
+        positions) its elif writes where(heal_event, healed, hp): major_status_residual(active all false) deals 0 and returns
+        the counter unchanged, so residual.hp is hp and the counter write is the identity. Where no heal event sorts, healed
+        stays the common `healed = hp`, assigned before the first heal gate and elsewhere only under heal gates."""
+        found, kinds = self.gates()
+        status = found[kinds.index('status')]
+        self.assertTrue(same(status.body[-1], 'work = work._replace(hp=_set_active(work.hp, work, side,jnp.where(heal_event,'
+            'healed,residual.hp)), status_counter=_set_active(work.status_counter, work, side, residual.counter))'))
+        self.assertTrue(same(status.body[-2], 'residual = m.major_status_residual(hp, _active(work.max_hp, work, side), '
+            '_active(work.status, work, side), _active(work.status_counter, work, side), active=eligible & status_event)'))
+        self.assertEqual(len(status.orelse), 1);elif_ = status.orelse[0]
+        self.assertIs(elif_, found[3]);self.assertEqual(elif_.orelse, [])
+        self.assertEqual(len(elif_.body), 1)
+        self.assertTrue(same(elif_.body[0], 'work = work._replace(hp=_set_active(work.hp,work,side,jnp.where(heal_event,healed,hp)))'))
+        top = self.loop.body
+        healed = [n for n in top if same(n, 'healed = hp')]
+        self.assertEqual(len(healed), 1)
+        self.assertLess(top.index(healed[0]), top.index(found[kinds.index('heal')]))
+        heal_blocks = [g for g, k in zip(found, kinds) if k == 'heal']
+        writes = [n for n in ast.walk(ast.Module(body=top, type_ignores=[])) if isinstance(n, ast.Name)
+                  and isinstance(n.ctx, ast.Store) and n.id == 'healed']
+        in_heal = {id(n) for g in heal_blocks for n in ast.walk(g)}
+        self.assertEqual([n for n in writes if id(n) not in in_heal], [healed[0].targets[0]])
+
+    def test_gated_names_are_not_read_stale(self):
+        """A name stored only under a kind's gates is read only under that kind's gates (else a skipped position would read
+        the previous position's value), or is a carry assigned before the loop (the lifecycle tape)."""
+        found, kinds = self.gates()
+        def kind_of(node):   # the innermost gate wins (the elif and the device gates nest)
+            best = None
+            for block, kind in zip(found, kinds):
+                if any(x is node for x in ast.walk(ast.Module(body=block.body, type_ignores=[]))):
+                    if best is None or block.lineno > best[0]:best = (block.lineno, kind)
+            return 'common' if best is None else best[1]
+        names = [n for n in ast.walk(ast.Module(body=self.loop.body, type_ignores=[])) if isinstance(n, ast.Name)]
+        where = {}
+        for n in names:
+            if isinstance(n.ctx, ast.Store):where.setdefault(n.id, set()).add(kind_of(n))
+        carried = set(stored(self.before))
+        stale = sorted({(n.id, kind_of(n)) for n in names if isinstance(n.ctx, ast.Load) and n.id in where
+                        and 'common' not in where[n.id] and kind_of(n) not in where[n.id] and n.id not in carried})
+        self.assertEqual(stale, [])
+        self.assertIn('_public_trace', carried)
+
+    def test_the_per_position_common_code_is_not_gated(self):
+        """eligible, battle_continues, the faint snapshot, the device baseline, the fainted-boost clear and the two observer
+        retains with eligible (the status residual and Leftovers contexts' per-position profile carry) run at every position."""
+        top = self.loop.body
+        found, _ = self.gates()
+        self.assertTrue(same(top[0], '_faint_before_hp=work.hp'))
+        self.assertTrue(same(top[-1], 'work=_clear_fainted_boosts(work,_faint_before_hp,eligible=eligible)'))
+        for source in ('battle_continues = jnp.all(jnp.any(work.hp > 0, axis=2), axis=1)',
+                       'eligible = residual_ready & battle_continues', 'hp = _active(work.hp,work,side)',
+                       'if _device_public is not None:_device_residual_before=work'):
+            self.assertEqual(len([n for n in top if same(n, source)]), 1, source)
+        inner = {id(n) for g in found for n in ast.walk(g)}
+        retains = [n for n in ast.walk(ast.Module(body=top, type_ignores=[])) if isinstance(n, ast.Call)
+                   and ast.unparse(n.func).endswith('.retain_profile_device')
+                   and any(k.arg == 'eligible' and ast.unparse(k.value) == 'eligible' for k in n.keywords)]
+        self.assertEqual(sorted(ast.unparse(n.func) for n in retains),
+                         ['leftovers_callbacks.retain_profile_device', 'status_residual_callbacks.retain_profile_device'])
+        self.assertFalse([n for n in retains if id(n) in inner])
 
 
 if __name__ == '__main__':

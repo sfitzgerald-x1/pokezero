@@ -375,7 +375,7 @@ def plan_for_state(state, index, actions, table, metadata, *, cap, native_input=
                 use(f"effect.{s}.0", *(Observation("less_than", 2 if critical is not None and critical[move] else 1)
                                        for move in sorted(second_hit)))
                 use(f"effect.{s}.1", Observation("identity"))
-            # Yawn's residual sleep (transition.py:2555-2565): a holder whose count is 1 when this residual runs sleeps
+            # Yawn's residual sleep (transition.py:2571-2581): a holder whose count is 1 when this residual runs sleeps
             # for 2+effect[s][2], s the drowsy mon's own side. A Yawn landing this turn sets 2 (:1742-1750), which ends
             # at the next turn's residual, and only a holder that stays in keeps a count (entry.py, baton.py drop it).
             if not replacement and any(_counter(data, "yawn_counter", s, p) == 1 for p in participants[s]):
@@ -386,7 +386,7 @@ def plan_for_state(state, index, actions, table, metadata, *, cap, native_input=
                    or any(_at(t, "effects", "wrap", move) for move in selected[1-s]) for s in range(2)]
         if not replacement and all(trapped):
             use("effect.0.3", Observation("identity"))
-        # Perish Song's order-12 pair (transition.py:2592-2609): effect[1][3] orders the two holders at equal Speed.
+        # Perish Song's order-12 pair (transition.py:2612-2629): effect[1][3] orders the two holders at equal Speed.
         # Perish Song gives every active without a count one (:1728-1735), so either seat's use reaches both.
         perish_song = any(_at(t, "effects", "perishsong", move) for choices in selected for move in choices)
         if not replacement and all(perish_song or any(_counter(data, "perish_counter", s, p) > 0 for p in participants[s])

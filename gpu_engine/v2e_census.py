@@ -32,8 +32,8 @@ import time
 import numpy as np
 
 SCHEMA = 'pokezero.v2e-census.v1'
-# transition.step_with_chance: def line and last line (design note section 1.1; tree 5bc2fe8c, shifted by fidelity A1, A2, R, B, M1, M2, R1 and WH).
-SPAN = (400, 2708)
+# transition.step_with_chance: def line and last line (design note section 1.1; tree 5bc2fe8c, shifted by fidelity A1, A2, R, B, M1, M2, R1, WH and R2).
+SPAN = (400, 2728)
 # (phase, first line, last line, group). 'pre' is the host-side argument checks; boundary statements open the next phase.
 PHASES = (
     ('pre', 400, 544, 'pre'),
@@ -47,8 +47,8 @@ PHASES = (
     ('E3', 1411, 2040, 'E'),   # effects (Perish Song, Yawn, the Substitute's trap release and Wrap's trap included)
     ('E4', 2041, 2168, 'E'),   # post (recoil, move weather, Spikes, drag, Baton, fainted boosts)
     ('F1', 2169, 2280, 'F'),   # defer/ready, end speeds, Wish, weather
-    ('F2', 2281, 2623, 'F'),   # residual events (argsort at 2288, the 14-event loop at 2289), the Perish pass, White Herb's order 29 and the recharge tick
-    ('G', 2624, 2708, 'G'),    # end of turn
+    ('F2', 2281, 2643, 'F'),   # residual events (argsort at 2288, the 14-event loop at 2289), the Perish pass, White Herb's order 29 and the recharge tick
+    ('G', 2644, 2728, 'G'),    # end of turn
 )
 GROUPS = ('A', 'B', 'C', 'D', 'E', 'F', 'G')
 GROUP = {name: group for name, _, _, group in PHASES}
@@ -73,9 +73,9 @@ ANCHORS = {
     2288: 'event_order = jnp.argsort(event_keys,axis=1)',
     2289: 'for order in range(residual_order.EVENTS):',
     2304: 'if _status_residual_context is not None:',
-    2624: 'work=linking.prune(work)',
-    2699: 'work = jax.tree.map(lambda old, new: jnp.where(live.reshape(',
-    2708: 'return result if _public_trace is None else public_callbacks.TracedStep(result,_public_trace)',
+    2644: 'work=linking.prune(work)',
+    2719: 'work = jax.tree.map(lambda old, new: jnp.where(live.reshape(',
+    2728: 'return result if _public_trace is None else public_callbacks.TracedStep(result,_public_trace)',
 }
 # Iteration rules over lines in program order (the scratch census's): an E1..E4 line <= E_RESTART after one >= E_LATE
 # starts the second action; in F2 a line <= F2_HEAD after one > F2_BODY starts the next of the 14 residual events.
