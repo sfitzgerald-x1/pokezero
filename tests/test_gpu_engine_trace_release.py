@@ -50,7 +50,12 @@ class WarmupReleaseTests(unittest.TestCase):
             during.append(gc.get_threshold());out = warm_buckets(search, pool);gc.collect()
             traced.extend(weakref.ref(o) for o in gc.get_objects() if type(o).__name__ == 'Jaxpr' and id(o) not in before)
             return out
-        with L.Codex(outcomes), patch.object(live.DepthNLiveSearch, '_warm_buckets', spy):report = s.warmup([L.request('w0', 0)])
+        release = live.trace_release.release
+
+        def releasing():   # the thresholds at the release (its collection follows): still deferred
+            during.append(gc.get_threshold());return release()
+        with L.Codex(outcomes), patch.object(live.DepthNLiveSearch, '_warm_buckets', spy), patch.object(live.trace_release, 'release', releasing):
+            report = s.warmup([L.request('w0', 0)])
         gc.collect();alive = [r() for r in traced if r() is not None];equations = sum(len(x.eqns) for x in alive)
         self.assertGreater(len(traced), 100)
         # Today's failure: jit's tracing caches keep them all (the executor's jitted functions are alive, so their entries are).
@@ -58,8 +63,9 @@ class WarmupReleaseTests(unittest.TestCase):
         self.assertLessEqual(equations, 4, f'{len(alive)} of the {len(traced)} jaxprs traced while warming the buckets outlive warmup '
             f'({equations} equations)')
         del alive
-        # Full collections were deferred while the programs traced (young ones kept running), and the thresholds are back.
-        self.assertEqual(during, [thresholds[:2] + (1 << 30,)]);self.assertEqual(gc.get_threshold(), thresholds)
+        # Full collections were deferred while the programs traced and through the release's collection (young ones kept
+        # running), and the thresholds are back.
+        self.assertEqual(during, [thresholds[:2] + (1 << 30,)] * 2);self.assertEqual(gc.get_threshold(), thresholds)
         self.assertGreater(report['trace_release']['entries'], 0)
         # After READY, serving a new root traces and compiles nothing: the re-warm pass recompiled what the release unkeyed.
         with CompileEvents() as events:

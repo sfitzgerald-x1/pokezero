@@ -589,23 +589,26 @@ class DepthNLiveSearch:
         if not pool:raise ValueError('at least one saved request required')
         started=time.perf_counter();self.carry=None;self.warming=True;self.reply_completed=0;self.reply_warm=None
         # No full (gen-2) collection while the programs trace: each would rescan the trace's own growing live state (tens of
-        # millions of objects) and find little garbage. Young collections go on; _release_traces collects once at the end.
+        # millions of objects) and find little garbage. Young collections go on; the thresholds come back only after
+        # _release_traces' one collection, so no full pass ever runs over the still-retained traces.
         thresholds=gc.get_threshold();gc.set_threshold(thresholds[0],thresholds[1],1<<30)
-        try:report,batches=self._warm_buckets(pool);labels=self._hold_to_reference(pool)
-        finally:gc.set_threshold(*thresholds);self.warming=False;self.reset_sessions()
-        missing=[b for b in self.buckets if isinstance(self.pricers[b],guard_inputs.ObservedDepthNPricer)
-            and 2*b*self.K*dn.LANES not in self.pricers[b].label_rows]
-        if missing or labels is None:
-            raise RuntimeError(f'warmup: the effect guard\'s label gather did not compile for buckets {missing} (P1 children) or the root worlds '
-                f'({"missing" if labels is None else "ok"})')
-        if getattr(self,'reply',None)is not None and not self.reply_completed:   # a reply archive that fails on every root never reaches READY
-            raise RuntimeError('warmup: the reply prior completed no warmup root (every one refused REPLY_PRIOR_ERROR or refused before it)')
-        if getattr(self,'reply',None)is not None and set(self.reply_warm or ())!={0,1}:
-            raise RuntimeError('warmup: the reply prior did not compile both owner seats (no fully constructed warmup root)')
-        signatures={k[-1][2]for k in self.programs if type(k[-1])is tuple and k[-1][:2]==('worlds',cw.SOURCE)}
-        if self.carry is None or signatures!={self.carry['signature']}:
-            raise RuntimeError(f'warmup: the recorded carry signature {None if self.carry is None else self.carry["signature"]} is not the warmed programs\' {sorted(signatures)}')
-        released=self._release_traces(batches)
+        try:
+            try:report,batches=self._warm_buckets(pool);labels=self._hold_to_reference(pool)
+            finally:self.warming=False;self.reset_sessions()
+            missing=[b for b in self.buckets if isinstance(self.pricers[b],guard_inputs.ObservedDepthNPricer)
+                and 2*b*self.K*dn.LANES not in self.pricers[b].label_rows]
+            if missing or labels is None:
+                raise RuntimeError(f'warmup: the effect guard\'s label gather did not compile for buckets {missing} (P1 children) or the root worlds '
+                    f'({"missing" if labels is None else "ok"})')
+            if getattr(self,'reply',None)is not None and not self.reply_completed:   # a reply archive that fails on every root never reaches READY
+                raise RuntimeError('warmup: the reply prior completed no warmup root (every one refused REPLY_PRIOR_ERROR or refused before it)')
+            if getattr(self,'reply',None)is not None and set(self.reply_warm or ())!={0,1}:
+                raise RuntimeError('warmup: the reply prior did not compile both owner seats (no fully constructed warmup root)')
+            signatures={k[-1][2]for k in self.programs if type(k[-1])is tuple and k[-1][:2]==('worlds',cw.SOURCE)}
+            if self.carry is None or signatures!={self.carry['signature']}:
+                raise RuntimeError(f'warmup: the recorded carry signature {None if self.carry is None else self.carry["signature"]} is not the warmed programs\' {sorted(signatures)}')
+            released=self._release_traces(batches)
+        finally:gc.set_threshold(*thresholds)
         self.warm=dict(buckets=report,programs=len(self.programs),seconds=time.perf_counter()-started,carry_signature=self.carry['signature'],
             trace_release=released,
             carry_reference=self.carry['root'],labels=dict(p1_rows={b:2*b*self.K*dn.LANES for b in self.buckets},root_rows=labels),
