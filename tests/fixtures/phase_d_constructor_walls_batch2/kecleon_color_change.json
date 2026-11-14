@@ -1,0 +1,409 @@
+{
+ "fix": "kecleon_color_change",
+ "code": "PUBLIC_LIVE_RETYPE_NOT_MATERIALIZED",
+ "ordinal": 659,
+ "decision_index": 13,
+ "battle_id": "battle-gen3randombattle-controlled-2103400109",
+ "owner": "p2",
+ "prefix_sha256": "181ffacd85a005018bb69fadb2e55d47cef71e14cf14e2a537e7dd70d504f2a2",
+ "line_count": 180,
+ "main": {
+  "built": 0,
+  "error": "Refusal:PUBLIC_LIVE_RETYPE_NOT_MATERIALIZED",
+  "refusals": {}
+ },
+ "patched": {
+  "built": 16,
+  "error": null,
+  "refusals": {}
+ },
+ "checks": {
+  "per_world": [
+   {
+    "world": 0,
+    "species": "kecleon",
+    "types": [
+     "electric",
+     null
+    ],
+    "base_types": [
+     "normal",
+     null
+    ]
+   },
+   {
+    "world": 1,
+    "species": "kecleon",
+    "types": [
+     "electric",
+     null
+    ],
+    "base_types": [
+     "normal",
+     null
+    ]
+   },
+   {
+    "world": 2,
+    "species": "kecleon",
+    "types": [
+     "electric",
+     null
+    ],
+    "base_types": [
+     "normal",
+     null
+    ]
+   },
+   {
+    "world": 3,
+    "species": "kecleon",
+    "types": [
+     "electric",
+     null
+    ],
+    "base_types": [
+     "normal",
+     null
+    ]
+   },
+   {
+    "world": 4,
+    "species": "kecleon",
+    "types": [
+     "electric",
+     null
+    ],
+    "base_types": [
+     "normal",
+     null
+    ]
+   },
+   {
+    "world": 5,
+    "species": "kecleon",
+    "types": [
+     "electric",
+     null
+    ],
+    "base_types": [
+     "normal",
+     null
+    ]
+   },
+   {
+    "world": 6,
+    "species": "kecleon",
+    "types": [
+     "electric",
+     null
+    ],
+    "base_types": [
+     "normal",
+     null
+    ]
+   },
+   {
+    "world": 7,
+    "species": "kecleon",
+    "types": [
+     "electric",
+     null
+    ],
+    "base_types": [
+     "normal",
+     null
+    ]
+   },
+   {
+    "world": 8,
+    "species": "kecleon",
+    "types": [
+     "electric",
+     null
+    ],
+    "base_types": [
+     "normal",
+     null
+    ]
+   },
+   {
+    "world": 9,
+    "species": "kecleon",
+    "types": [
+     "electric",
+     null
+    ],
+    "base_types": [
+     "normal",
+     null
+    ]
+   },
+   {
+    "world": 10,
+    "species": "kecleon",
+    "types": [
+     "electric",
+     null
+    ],
+    "base_types": [
+     "normal",
+     null
+    ]
+   },
+   {
+    "world": 11,
+    "species": "kecleon",
+    "types": [
+     "electric",
+     null
+    ],
+    "base_types": [
+     "normal",
+     null
+    ]
+   },
+   {
+    "world": 12,
+    "species": "kecleon",
+    "types": [
+     "electric",
+     null
+    ],
+    "base_types": [
+     "normal",
+     null
+    ]
+   },
+   {
+    "world": 13,
+    "species": "kecleon",
+    "types": [
+     "electric",
+     null
+    ],
+    "base_types": [
+     "normal",
+     null
+    ]
+   },
+   {
+    "world": 14,
+    "species": "kecleon",
+    "types": [
+     "electric",
+     null
+    ],
+    "base_types": [
+     "normal",
+     null
+    ]
+   },
+   {
+    "world": 15,
+    "species": "kecleon",
+    "types": [
+     "electric",
+     null
+    ],
+    "base_types": [
+     "normal",
+     null
+    ]
+   }
+  ]
+ },
+ "request": {
+  "schema": "pokezero.phase-d.shared-gpu-search.v1",
+  "request_id": "battle-gen3randombattle-controlled-2103400109:13",
+  "battle_id": "battle-gen3randombattle-controlled-2103400109",
+  "owner": "p2",
+  "stream_id": 1,
+  "decision_index": 13,
+  "generation": 28,
+  "prefix_sha256": "181ffacd85a005018bb69fadb2e55d47cef71e14cf14e2a537e7dd70d504f2a2",
+  "lines": [
+   "|t:|1794409952",
+   "|gametype|singles",
+   "|player|p1|FoulPlayBot||",
+   "|player|p2|PokeZeroBot||",
+   "|gen|3",
+   "|tier|[Gen 3] Random Battle",
+   "|rule|HP Percentage Mod: HP is shown in percentages",
+   "|rule|Beat Up Nicknames Mod: Beat Up will not reveal any party members",
+   "|rule|Endless Battle Clause: Forcing endless battles is banned",
+   "|rule|Sleep Clause Mod: Limit one foe put to sleep",
+   "|rule|Switch Priority Clause Mod: Faster Pok\u00e9mon switch first",
+   "|rule|Species Clause: Limit one of each Pok\u00e9mon",
+   "|rule|OHKO Clause: OHKO moves are banned",
+   "|rule|Evasion Items Clause: Evasion items are banned",
+   "|rule|Evasion Moves Clause: Evasion moves are banned",
+   "|",
+   "|t:|1794409952",
+   "|teamsize|p1|6",
+   "|teamsize|p2|6",
+   "|start",
+   "|switch|p1a: Mawile|Mawile, L96, F|100/100",
+   "|switch|p2a: Hypno|Hypno, L88, M|293/293",
+   "|-ability|p1a: Mawile|Intimidate|boost",
+   "|-unboost|p2a: Hypno|atk|1",
+   "|turn|1",
+   "|request|{\"active\":[{\"moves\":[{\"move\":\"Wish\",\"id\":\"wish\",\"pp\":16,\"maxpp\":16,\"target\":\"self\",\"disabled\":false},{\"move\":\"Psychic\",\"id\":\"psychic\",\"pp\":16,\"maxpp\":16,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Protect\",\"id\":\"protect\",\"pp\":16,\"maxpp\":16,\"target\":\"self\",\"disabled\":false},{\"move\":\"Toxic\",\"id\":\"toxic\",\"pp\":16,\"maxpp\":16,\"target\":\"normal\",\"disabled\":false}]}],\"side\":{\"name\":\"PokeZeroBot\",\"id\":\"p2\",\"pokemon\":[{\"ident\":\"p2: Hypno\",\"details\":\"Hypno, L88, M\",\"condition\":\"293/293\",\"active\":true,\"stats\":{\"atk\":133,\"def\":173,\"spa\":179,\"spd\":253,\"spe\":168},\"moves\":[\"wish\",\"psychic\",\"protect\",\"toxic\"],\"baseAbility\":\"insomnia\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Mawile\",\"details\":\"Mawile, L96, F\",\"condition\":\"251/251\",\"active\":false,\"stats\":{\"atk\":218,\"def\":218,\"spa\":160,\"spd\":159,\"spe\":150},\"moves\":[\"hiddenpowersteel\",\"focuspunch\",\"rockslide\",\"substitute\"],\"baseAbility\":\"intimidate\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Dragonite\",\"details\":\"Dragonite, L75, M\",\"condition\":\"259/259\",\"active\":false,\"stats\":{\"atk\":244,\"def\":185,\"spa\":193,\"spd\":193,\"spe\":164},\"moves\":[\"hiddenpowerflying\",\"earthquake\",\"doubleedge\",\"brickbreak\"],\"baseAbility\":\"innerfocus\",\"item\":\"choiceband\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Misdreavus\",\"details\":\"Misdreavus, L85, F\",\"condition\":\"241/241\",\"active\":false,\"stats\":{\"atk\":150,\"def\":150,\"spa\":193,\"spd\":193,\"spe\":193},\"moves\":[\"toxic\",\"thunderbolt\",\"shadowball\",\"hiddenpowerice\"],\"baseAbility\":\"levitate\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Murkrow\",\"details\":\"Murkrow, L90, F\",\"condition\":\"254/254\",\"active\":false,\"stats\":{\"atk\":204,\"def\":127,\"spa\":203,\"spd\":126,\"spe\":215},\"moves\":[\"hiddenpowerground\",\"doubleedge\",\"shadowball\",\"drillpeck\"],\"baseAbility\":\"insomnia\",\"item\":\"choiceband\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Kangaskhan\",\"details\":\"Kangaskhan, L79, F\",\"condition\":\"295/295\",\"active\":false,\"stats\":{\"atk\":196,\"def\":172,\"spa\":109,\"spd\":172,\"spe\":188},\"moves\":[\"earthquake\",\"return102\",\"protect\",\"wish\"],\"baseAbility\":\"earlybird\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"}]}}",
+   "|",
+   "|t:|1794409955",
+   "|switch|p2a: Mawile|Mawile, L96, F|251/251",
+   "|-ability|p2a: Mawile|Intimidate|boost",
+   "|-unboost|p1a: Mawile|atk|1",
+   "|move|p1a: Mawile|Toxic|p2a: Mawile",
+   "|-immune|p2a: Mawile",
+   "|",
+   "|upkeep",
+   "|turn|2",
+   "|request|{\"active\":[{\"moves\":[{\"move\":\"Hidden Power Steel 70\",\"id\":\"hiddenpower\",\"pp\":24,\"maxpp\":24,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Focus Punch\",\"id\":\"focuspunch\",\"pp\":32,\"maxpp\":32,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Rock Slide\",\"id\":\"rockslide\",\"pp\":16,\"maxpp\":16,\"target\":\"allAdjacentFoes\",\"disabled\":false},{\"move\":\"Substitute\",\"id\":\"substitute\",\"pp\":16,\"maxpp\":16,\"target\":\"self\",\"disabled\":false}]}],\"side\":{\"name\":\"PokeZeroBot\",\"id\":\"p2\",\"pokemon\":[{\"ident\":\"p2: Mawile\",\"details\":\"Mawile, L96, F\",\"condition\":\"251/251\",\"active\":true,\"stats\":{\"atk\":218,\"def\":218,\"spa\":160,\"spd\":159,\"spe\":150},\"moves\":[\"hiddenpowersteel\",\"focuspunch\",\"rockslide\",\"substitute\"],\"baseAbility\":\"intimidate\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Hypno\",\"details\":\"Hypno, L88, M\",\"condition\":\"293/293\",\"active\":false,\"stats\":{\"atk\":133,\"def\":173,\"spa\":179,\"spd\":253,\"spe\":168},\"moves\":[\"wish\",\"psychic\",\"protect\",\"toxic\"],\"baseAbility\":\"insomnia\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Dragonite\",\"details\":\"Dragonite, L75, M\",\"condition\":\"259/259\",\"active\":false,\"stats\":{\"atk\":244,\"def\":185,\"spa\":193,\"spd\":193,\"spe\":164},\"moves\":[\"hiddenpowerflying\",\"earthquake\",\"doubleedge\",\"brickbreak\"],\"baseAbility\":\"innerfocus\",\"item\":\"choiceband\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Misdreavus\",\"details\":\"Misdreavus, L85, F\",\"condition\":\"241/241\",\"active\":false,\"stats\":{\"atk\":150,\"def\":150,\"spa\":193,\"spd\":193,\"spe\":193},\"moves\":[\"toxic\",\"thunderbolt\",\"shadowball\",\"hiddenpowerice\"],\"baseAbility\":\"levitate\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Murkrow\",\"details\":\"Murkrow, L90, F\",\"condition\":\"254/254\",\"active\":false,\"stats\":{\"atk\":204,\"def\":127,\"spa\":203,\"spd\":126,\"spe\":215},\"moves\":[\"hiddenpowerground\",\"doubleedge\",\"shadowball\",\"drillpeck\"],\"baseAbility\":\"insomnia\",\"item\":\"choiceband\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Kangaskhan\",\"details\":\"Kangaskhan, L79, F\",\"condition\":\"295/295\",\"active\":false,\"stats\":{\"atk\":196,\"def\":172,\"spa\":109,\"spd\":172,\"spe\":188},\"moves\":[\"earthquake\",\"return102\",\"protect\",\"wish\"],\"baseAbility\":\"earlybird\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"}]}}",
+   "|",
+   "|t:|1794409957",
+   "|-singleturn|p2a: Mawile|move: Focus Punch",
+   "|switch|p1a: Gligar|Gligar, L83, F|100/100",
+   "|move|p2a: Mawile|Focus Punch|p1a: Gligar",
+   "|-resisted|p1a: Gligar",
+   "|-damage|p1a: Gligar|79/100",
+   "|",
+   "|-heal|p1a: Gligar|85/100|[from] item: Leftovers",
+   "|upkeep",
+   "|turn|3",
+   "|request|{\"active\":[{\"moves\":[{\"move\":\"Hidden Power Steel 70\",\"id\":\"hiddenpower\",\"pp\":24,\"maxpp\":24,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Focus Punch\",\"id\":\"focuspunch\",\"pp\":31,\"maxpp\":32,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Rock Slide\",\"id\":\"rockslide\",\"pp\":16,\"maxpp\":16,\"target\":\"allAdjacentFoes\",\"disabled\":false},{\"move\":\"Substitute\",\"id\":\"substitute\",\"pp\":16,\"maxpp\":16,\"target\":\"self\",\"disabled\":false}]}],\"side\":{\"name\":\"PokeZeroBot\",\"id\":\"p2\",\"pokemon\":[{\"ident\":\"p2: Mawile\",\"details\":\"Mawile, L96, F\",\"condition\":\"251/251\",\"active\":true,\"stats\":{\"atk\":218,\"def\":218,\"spa\":160,\"spd\":159,\"spe\":150},\"moves\":[\"hiddenpowersteel\",\"focuspunch\",\"rockslide\",\"substitute\"],\"baseAbility\":\"intimidate\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Hypno\",\"details\":\"Hypno, L88, M\",\"condition\":\"293/293\",\"active\":false,\"stats\":{\"atk\":133,\"def\":173,\"spa\":179,\"spd\":253,\"spe\":168},\"moves\":[\"wish\",\"psychic\",\"protect\",\"toxic\"],\"baseAbility\":\"insomnia\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Dragonite\",\"details\":\"Dragonite, L75, M\",\"condition\":\"259/259\",\"active\":false,\"stats\":{\"atk\":244,\"def\":185,\"spa\":193,\"spd\":193,\"spe\":164},\"moves\":[\"hiddenpowerflying\",\"earthquake\",\"doubleedge\",\"brickbreak\"],\"baseAbility\":\"innerfocus\",\"item\":\"choiceband\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Misdreavus\",\"details\":\"Misdreavus, L85, F\",\"condition\":\"241/241\",\"active\":false,\"stats\":{\"atk\":150,\"def\":150,\"spa\":193,\"spd\":193,\"spe\":193},\"moves\":[\"toxic\",\"thunderbolt\",\"shadowball\",\"hiddenpowerice\"],\"baseAbility\":\"levitate\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Murkrow\",\"details\":\"Murkrow, L90, F\",\"condition\":\"254/254\",\"active\":false,\"stats\":{\"atk\":204,\"def\":127,\"spa\":203,\"spd\":126,\"spe\":215},\"moves\":[\"hiddenpowerground\",\"doubleedge\",\"shadowball\",\"drillpeck\"],\"baseAbility\":\"insomnia\",\"item\":\"choiceband\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Kangaskhan\",\"details\":\"Kangaskhan, L79, F\",\"condition\":\"295/295\",\"active\":false,\"stats\":{\"atk\":196,\"def\":172,\"spa\":109,\"spd\":172,\"spe\":188},\"moves\":[\"earthquake\",\"return102\",\"protect\",\"wish\"],\"baseAbility\":\"earlybird\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"}]}}",
+   "|",
+   "|t:|1794409960",
+   "|switch|p2a: Misdreavus|Misdreavus, L85, F|241/241",
+   "|move|p1a: Gligar|Earthquake|p2a: Misdreavus",
+   "|-immune|p2a: Misdreavus",
+   "|",
+   "|-heal|p1a: Gligar|91/100|[from] item: Leftovers",
+   "|upkeep",
+   "|turn|4",
+   "|request|{\"active\":[{\"moves\":[{\"move\":\"Toxic\",\"id\":\"toxic\",\"pp\":16,\"maxpp\":16,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Thunderbolt\",\"id\":\"thunderbolt\",\"pp\":24,\"maxpp\":24,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Shadow Ball\",\"id\":\"shadowball\",\"pp\":24,\"maxpp\":24,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Hidden Power Ice 70\",\"id\":\"hiddenpower\",\"pp\":24,\"maxpp\":24,\"target\":\"normal\",\"disabled\":false}]}],\"side\":{\"name\":\"PokeZeroBot\",\"id\":\"p2\",\"pokemon\":[{\"ident\":\"p2: Misdreavus\",\"details\":\"Misdreavus, L85, F\",\"condition\":\"241/241\",\"active\":true,\"stats\":{\"atk\":150,\"def\":150,\"spa\":193,\"spd\":193,\"spe\":193},\"moves\":[\"toxic\",\"thunderbolt\",\"shadowball\",\"hiddenpowerice\"],\"baseAbility\":\"levitate\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Hypno\",\"details\":\"Hypno, L88, M\",\"condition\":\"293/293\",\"active\":false,\"stats\":{\"atk\":133,\"def\":173,\"spa\":179,\"spd\":253,\"spe\":168},\"moves\":[\"wish\",\"psychic\",\"protect\",\"toxic\"],\"baseAbility\":\"insomnia\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Dragonite\",\"details\":\"Dragonite, L75, M\",\"condition\":\"259/259\",\"active\":false,\"stats\":{\"atk\":244,\"def\":185,\"spa\":193,\"spd\":193,\"spe\":164},\"moves\":[\"hiddenpowerflying\",\"earthquake\",\"doubleedge\",\"brickbreak\"],\"baseAbility\":\"innerfocus\",\"item\":\"choiceband\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Mawile\",\"details\":\"Mawile, L96, F\",\"condition\":\"251/251\",\"active\":false,\"stats\":{\"atk\":218,\"def\":218,\"spa\":160,\"spd\":159,\"spe\":150},\"moves\":[\"hiddenpowersteel\",\"focuspunch\",\"rockslide\",\"substitute\"],\"baseAbility\":\"intimidate\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Murkrow\",\"details\":\"Murkrow, L90, F\",\"condition\":\"254/254\",\"active\":false,\"stats\":{\"atk\":204,\"def\":127,\"spa\":203,\"spd\":126,\"spe\":215},\"moves\":[\"hiddenpowerground\",\"doubleedge\",\"shadowball\",\"drillpeck\"],\"baseAbility\":\"insomnia\",\"item\":\"choiceband\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Kangaskhan\",\"details\":\"Kangaskhan, L79, F\",\"condition\":\"295/295\",\"active\":false,\"stats\":{\"atk\":196,\"def\":172,\"spa\":109,\"spd\":172,\"spe\":188},\"moves\":[\"earthquake\",\"return102\",\"protect\",\"wish\"],\"baseAbility\":\"earlybird\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"}]}}",
+   "|",
+   "|t:|1794409963",
+   "|move|p2a: Misdreavus|Thunderbolt|p1a: Gligar",
+   "|-immune|p1a: Gligar",
+   "|move|p1a: Gligar|Swords Dance|p1a: Gligar",
+   "|-boost|p1a: Gligar|atk|2",
+   "|",
+   "|-heal|p1a: Gligar|97/100|[from] item: Leftovers",
+   "|upkeep",
+   "|turn|5",
+   "|request|{\"active\":[{\"moves\":[{\"move\":\"Toxic\",\"id\":\"toxic\",\"pp\":16,\"maxpp\":16,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Thunderbolt\",\"id\":\"thunderbolt\",\"pp\":23,\"maxpp\":24,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Shadow Ball\",\"id\":\"shadowball\",\"pp\":24,\"maxpp\":24,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Hidden Power Ice 70\",\"id\":\"hiddenpower\",\"pp\":24,\"maxpp\":24,\"target\":\"normal\",\"disabled\":false}]}],\"side\":{\"name\":\"PokeZeroBot\",\"id\":\"p2\",\"pokemon\":[{\"ident\":\"p2: Misdreavus\",\"details\":\"Misdreavus, L85, F\",\"condition\":\"241/241\",\"active\":true,\"stats\":{\"atk\":150,\"def\":150,\"spa\":193,\"spd\":193,\"spe\":193},\"moves\":[\"toxic\",\"thunderbolt\",\"shadowball\",\"hiddenpowerice\"],\"baseAbility\":\"levitate\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Hypno\",\"details\":\"Hypno, L88, M\",\"condition\":\"293/293\",\"active\":false,\"stats\":{\"atk\":133,\"def\":173,\"spa\":179,\"spd\":253,\"spe\":168},\"moves\":[\"wish\",\"psychic\",\"protect\",\"toxic\"],\"baseAbility\":\"insomnia\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Dragonite\",\"details\":\"Dragonite, L75, M\",\"condition\":\"259/259\",\"active\":false,\"stats\":{\"atk\":244,\"def\":185,\"spa\":193,\"spd\":193,\"spe\":164},\"moves\":[\"hiddenpowerflying\",\"earthquake\",\"doubleedge\",\"brickbreak\"],\"baseAbility\":\"innerfocus\",\"item\":\"choiceband\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Mawile\",\"details\":\"Mawile, L96, F\",\"condition\":\"251/251\",\"active\":false,\"stats\":{\"atk\":218,\"def\":218,\"spa\":160,\"spd\":159,\"spe\":150},\"moves\":[\"hiddenpowersteel\",\"focuspunch\",\"rockslide\",\"substitute\"],\"baseAbility\":\"intimidate\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Murkrow\",\"details\":\"Murkrow, L90, F\",\"condition\":\"254/254\",\"active\":false,\"stats\":{\"atk\":204,\"def\":127,\"spa\":203,\"spd\":126,\"spe\":215},\"moves\":[\"hiddenpowerground\",\"doubleedge\",\"shadowball\",\"drillpeck\"],\"baseAbility\":\"insomnia\",\"item\":\"choiceband\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Kangaskhan\",\"details\":\"Kangaskhan, L79, F\",\"condition\":\"295/295\",\"active\":false,\"stats\":{\"atk\":196,\"def\":172,\"spa\":109,\"spd\":172,\"spe\":188},\"moves\":[\"earthquake\",\"return102\",\"protect\",\"wish\"],\"baseAbility\":\"earlybird\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"}]}}",
+   "|",
+   "|t:|1794409965",
+   "|switch|p1a: Kecleon|Kecleon, L92, F|100/100",
+   "|move|p2a: Misdreavus|Hidden Power|p1a: Kecleon",
+   "|-damage|p1a: Kecleon|88/100",
+   "|-start|p1a: Kecleon|typechange|Ice|[from] ability: Color Change",
+   "|",
+   "|upkeep",
+   "|turn|6",
+   "|request|{\"active\":[{\"moves\":[{\"move\":\"Toxic\",\"id\":\"toxic\",\"pp\":16,\"maxpp\":16,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Thunderbolt\",\"id\":\"thunderbolt\",\"pp\":23,\"maxpp\":24,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Shadow Ball\",\"id\":\"shadowball\",\"pp\":24,\"maxpp\":24,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Hidden Power Ice 70\",\"id\":\"hiddenpower\",\"pp\":23,\"maxpp\":24,\"target\":\"normal\",\"disabled\":false}]}],\"side\":{\"name\":\"PokeZeroBot\",\"id\":\"p2\",\"pokemon\":[{\"ident\":\"p2: Misdreavus\",\"details\":\"Misdreavus, L85, F\",\"condition\":\"241/241\",\"active\":true,\"stats\":{\"atk\":150,\"def\":150,\"spa\":193,\"spd\":193,\"spe\":193},\"moves\":[\"toxic\",\"thunderbolt\",\"shadowball\",\"hiddenpowerice\"],\"baseAbility\":\"levitate\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Hypno\",\"details\":\"Hypno, L88, M\",\"condition\":\"293/293\",\"active\":false,\"stats\":{\"atk\":133,\"def\":173,\"spa\":179,\"spd\":253,\"spe\":168},\"moves\":[\"wish\",\"psychic\",\"protect\",\"toxic\"],\"baseAbility\":\"insomnia\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Dragonite\",\"details\":\"Dragonite, L75, M\",\"condition\":\"259/259\",\"active\":false,\"stats\":{\"atk\":244,\"def\":185,\"spa\":193,\"spd\":193,\"spe\":164},\"moves\":[\"hiddenpowerflying\",\"earthquake\",\"doubleedge\",\"brickbreak\"],\"baseAbility\":\"innerfocus\",\"item\":\"choiceband\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Mawile\",\"details\":\"Mawile, L96, F\",\"condition\":\"251/251\",\"active\":false,\"stats\":{\"atk\":218,\"def\":218,\"spa\":160,\"spd\":159,\"spe\":150},\"moves\":[\"hiddenpowersteel\",\"focuspunch\",\"rockslide\",\"substitute\"],\"baseAbility\":\"intimidate\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Murkrow\",\"details\":\"Murkrow, L90, F\",\"condition\":\"254/254\",\"active\":false,\"stats\":{\"atk\":204,\"def\":127,\"spa\":203,\"spd\":126,\"spe\":215},\"moves\":[\"hiddenpowerground\",\"doubleedge\",\"shadowball\",\"drillpeck\"],\"baseAbility\":\"insomnia\",\"item\":\"choiceband\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Kangaskhan\",\"details\":\"Kangaskhan, L79, F\",\"condition\":\"295/295\",\"active\":false,\"stats\":{\"atk\":196,\"def\":172,\"spa\":109,\"spd\":172,\"spe\":188},\"moves\":[\"earthquake\",\"return102\",\"protect\",\"wish\"],\"baseAbility\":\"earlybird\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"}]}}",
+   "|",
+   "|t:|1794409968",
+   "|switch|p2a: Mawile|Mawile, L96, F|251/251",
+   "|-ability|p2a: Mawile|Intimidate|boost",
+   "|-unboost|p1a: Kecleon|atk|1",
+   "|move|p1a: Kecleon|Shadow Ball|p2a: Mawile",
+   "|-resisted|p2a: Mawile",
+   "|-damage|p2a: Mawile|221/251",
+   "|-unboost|p2a: Mawile|spd|1",
+   "|",
+   "|-heal|p2a: Mawile|236/251|[from] item: Leftovers",
+   "|upkeep",
+   "|turn|7",
+   "|request|{\"active\":[{\"moves\":[{\"move\":\"Hidden Power Steel 70\",\"id\":\"hiddenpower\",\"pp\":24,\"maxpp\":24,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Focus Punch\",\"id\":\"focuspunch\",\"pp\":31,\"maxpp\":32,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Rock Slide\",\"id\":\"rockslide\",\"pp\":16,\"maxpp\":16,\"target\":\"allAdjacentFoes\",\"disabled\":false},{\"move\":\"Substitute\",\"id\":\"substitute\",\"pp\":16,\"maxpp\":16,\"target\":\"self\",\"disabled\":false}]}],\"side\":{\"name\":\"PokeZeroBot\",\"id\":\"p2\",\"pokemon\":[{\"ident\":\"p2: Mawile\",\"details\":\"Mawile, L96, F\",\"condition\":\"236/251\",\"active\":true,\"stats\":{\"atk\":218,\"def\":218,\"spa\":160,\"spd\":159,\"spe\":150},\"moves\":[\"hiddenpowersteel\",\"focuspunch\",\"rockslide\",\"substitute\"],\"baseAbility\":\"intimidate\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Hypno\",\"details\":\"Hypno, L88, M\",\"condition\":\"293/293\",\"active\":false,\"stats\":{\"atk\":133,\"def\":173,\"spa\":179,\"spd\":253,\"spe\":168},\"moves\":[\"wish\",\"psychic\",\"protect\",\"toxic\"],\"baseAbility\":\"insomnia\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Dragonite\",\"details\":\"Dragonite, L75, M\",\"condition\":\"259/259\",\"active\":false,\"stats\":{\"atk\":244,\"def\":185,\"spa\":193,\"spd\":193,\"spe\":164},\"moves\":[\"hiddenpowerflying\",\"earthquake\",\"doubleedge\",\"brickbreak\"],\"baseAbility\":\"innerfocus\",\"item\":\"choiceband\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Misdreavus\",\"details\":\"Misdreavus, L85, F\",\"condition\":\"241/241\",\"active\":false,\"stats\":{\"atk\":150,\"def\":150,\"spa\":193,\"spd\":193,\"spe\":193},\"moves\":[\"toxic\",\"thunderbolt\",\"shadowball\",\"hiddenpowerice\"],\"baseAbility\":\"levitate\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Murkrow\",\"details\":\"Murkrow, L90, F\",\"condition\":\"254/254\",\"active\":false,\"stats\":{\"atk\":204,\"def\":127,\"spa\":203,\"spd\":126,\"spe\":215},\"moves\":[\"hiddenpowerground\",\"doubleedge\",\"shadowball\",\"drillpeck\"],\"baseAbility\":\"insomnia\",\"item\":\"choiceband\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Kangaskhan\",\"details\":\"Kangaskhan, L79, F\",\"condition\":\"295/295\",\"active\":false,\"stats\":{\"atk\":196,\"def\":172,\"spa\":109,\"spd\":172,\"spe\":188},\"moves\":[\"earthquake\",\"return102\",\"protect\",\"wish\"],\"baseAbility\":\"earlybird\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"}]}}",
+   "|",
+   "|t:|1794409971",
+   "|-singleturn|p2a: Mawile|move: Focus Punch",
+   "|switch|p1a: Suicune|Suicune, L74|100/100",
+   "|move|p2a: Mawile|Focus Punch|p1a: Suicune",
+   "|-damage|p1a: Suicune|56/100",
+   "|",
+   "|-heal|p1a: Suicune|62/100|[from] item: Leftovers",
+   "|-heal|p2a: Mawile|251/251|[from] item: Leftovers",
+   "|upkeep",
+   "|turn|8",
+   "|request|{\"active\":[{\"moves\":[{\"move\":\"Hidden Power Steel 70\",\"id\":\"hiddenpower\",\"pp\":24,\"maxpp\":24,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Focus Punch\",\"id\":\"focuspunch\",\"pp\":29,\"maxpp\":32,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Rock Slide\",\"id\":\"rockslide\",\"pp\":16,\"maxpp\":16,\"target\":\"allAdjacentFoes\",\"disabled\":false},{\"move\":\"Substitute\",\"id\":\"substitute\",\"pp\":16,\"maxpp\":16,\"target\":\"self\",\"disabled\":false}]}],\"side\":{\"name\":\"PokeZeroBot\",\"id\":\"p2\",\"pokemon\":[{\"ident\":\"p2: Mawile\",\"details\":\"Mawile, L96, F\",\"condition\":\"251/251\",\"active\":true,\"stats\":{\"atk\":218,\"def\":218,\"spa\":160,\"spd\":159,\"spe\":150},\"moves\":[\"hiddenpowersteel\",\"focuspunch\",\"rockslide\",\"substitute\"],\"baseAbility\":\"intimidate\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Hypno\",\"details\":\"Hypno, L88, M\",\"condition\":\"293/293\",\"active\":false,\"stats\":{\"atk\":133,\"def\":173,\"spa\":179,\"spd\":253,\"spe\":168},\"moves\":[\"wish\",\"psychic\",\"protect\",\"toxic\"],\"baseAbility\":\"insomnia\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Dragonite\",\"details\":\"Dragonite, L75, M\",\"condition\":\"259/259\",\"active\":false,\"stats\":{\"atk\":244,\"def\":185,\"spa\":193,\"spd\":193,\"spe\":164},\"moves\":[\"hiddenpowerflying\",\"earthquake\",\"doubleedge\",\"brickbreak\"],\"baseAbility\":\"innerfocus\",\"item\":\"choiceband\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Misdreavus\",\"details\":\"Misdreavus, L85, F\",\"condition\":\"241/241\",\"active\":false,\"stats\":{\"atk\":150,\"def\":150,\"spa\":193,\"spd\":193,\"spe\":193},\"moves\":[\"toxic\",\"thunderbolt\",\"shadowball\",\"hiddenpowerice\"],\"baseAbility\":\"levitate\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Murkrow\",\"details\":\"Murkrow, L90, F\",\"condition\":\"254/254\",\"active\":false,\"stats\":{\"atk\":204,\"def\":127,\"spa\":203,\"spd\":126,\"spe\":215},\"moves\":[\"hiddenpowerground\",\"doubleedge\",\"shadowball\",\"drillpeck\"],\"baseAbility\":\"insomnia\",\"item\":\"choiceband\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Kangaskhan\",\"details\":\"Kangaskhan, L79, F\",\"condition\":\"295/295\",\"active\":false,\"stats\":{\"atk\":196,\"def\":172,\"spa\":109,\"spd\":172,\"spe\":188},\"moves\":[\"earthquake\",\"return102\",\"protect\",\"wish\"],\"baseAbility\":\"earlybird\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"}]}}",
+   "|",
+   "|t:|1794409973",
+   "|switch|p2a: Misdreavus|Misdreavus, L85, F|241/241",
+   "|move|p1a: Suicune|Surf|p2a: Misdreavus",
+   "|-damage|p2a: Misdreavus|169/241",
+   "|",
+   "|-heal|p2a: Misdreavus|184/241|[from] item: Leftovers",
+   "|-heal|p1a: Suicune|68/100|[from] item: Leftovers",
+   "|upkeep",
+   "|turn|9",
+   "|request|{\"active\":[{\"moves\":[{\"move\":\"Toxic\",\"id\":\"toxic\",\"pp\":16,\"maxpp\":16,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Thunderbolt\",\"id\":\"thunderbolt\",\"pp\":23,\"maxpp\":24,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Shadow Ball\",\"id\":\"shadowball\",\"pp\":24,\"maxpp\":24,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Hidden Power Ice 70\",\"id\":\"hiddenpower\",\"pp\":23,\"maxpp\":24,\"target\":\"normal\",\"disabled\":false}]}],\"side\":{\"name\":\"PokeZeroBot\",\"id\":\"p2\",\"pokemon\":[{\"ident\":\"p2: Misdreavus\",\"details\":\"Misdreavus, L85, F\",\"condition\":\"184/241\",\"active\":true,\"stats\":{\"atk\":150,\"def\":150,\"spa\":193,\"spd\":193,\"spe\":193},\"moves\":[\"toxic\",\"thunderbolt\",\"shadowball\",\"hiddenpowerice\"],\"baseAbility\":\"levitate\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Hypno\",\"details\":\"Hypno, L88, M\",\"condition\":\"293/293\",\"active\":false,\"stats\":{\"atk\":133,\"def\":173,\"spa\":179,\"spd\":253,\"spe\":168},\"moves\":[\"wish\",\"psychic\",\"protect\",\"toxic\"],\"baseAbility\":\"insomnia\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Dragonite\",\"details\":\"Dragonite, L75, M\",\"condition\":\"259/259\",\"active\":false,\"stats\":{\"atk\":244,\"def\":185,\"spa\":193,\"spd\":193,\"spe\":164},\"moves\":[\"hiddenpowerflying\",\"earthquake\",\"doubleedge\",\"brickbreak\"],\"baseAbility\":\"innerfocus\",\"item\":\"choiceband\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Mawile\",\"details\":\"Mawile, L96, F\",\"condition\":\"251/251\",\"active\":false,\"stats\":{\"atk\":218,\"def\":218,\"spa\":160,\"spd\":159,\"spe\":150},\"moves\":[\"hiddenpowersteel\",\"focuspunch\",\"rockslide\",\"substitute\"],\"baseAbility\":\"intimidate\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Murkrow\",\"details\":\"Murkrow, L90, F\",\"condition\":\"254/254\",\"active\":false,\"stats\":{\"atk\":204,\"def\":127,\"spa\":203,\"spd\":126,\"spe\":215},\"moves\":[\"hiddenpowerground\",\"doubleedge\",\"shadowball\",\"drillpeck\"],\"baseAbility\":\"insomnia\",\"item\":\"choiceband\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Kangaskhan\",\"details\":\"Kangaskhan, L79, F\",\"condition\":\"295/295\",\"active\":false,\"stats\":{\"atk\":196,\"def\":172,\"spa\":109,\"spd\":172,\"spe\":188},\"moves\":[\"earthquake\",\"return102\",\"protect\",\"wish\"],\"baseAbility\":\"earlybird\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"}]}}",
+   "|",
+   "|t:|1794409976",
+   "|switch|p1a: Kecleon|Kecleon, L92, F|88/100",
+   "|move|p2a: Misdreavus|Thunderbolt|p1a: Kecleon",
+   "|-damage|p1a: Kecleon|71/100",
+   "|-start|p1a: Kecleon|typechange|Electric|[from] ability: Color Change",
+   "|",
+   "|-heal|p2a: Misdreavus|199/241|[from] item: Leftovers",
+   "|upkeep",
+   "|turn|10",
+   "|request|{\"active\":[{\"moves\":[{\"move\":\"Toxic\",\"id\":\"toxic\",\"pp\":16,\"maxpp\":16,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Thunderbolt\",\"id\":\"thunderbolt\",\"pp\":22,\"maxpp\":24,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Shadow Ball\",\"id\":\"shadowball\",\"pp\":24,\"maxpp\":24,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Hidden Power Ice 70\",\"id\":\"hiddenpower\",\"pp\":23,\"maxpp\":24,\"target\":\"normal\",\"disabled\":false}]}],\"side\":{\"name\":\"PokeZeroBot\",\"id\":\"p2\",\"pokemon\":[{\"ident\":\"p2: Misdreavus\",\"details\":\"Misdreavus, L85, F\",\"condition\":\"199/241\",\"active\":true,\"stats\":{\"atk\":150,\"def\":150,\"spa\":193,\"spd\":193,\"spe\":193},\"moves\":[\"toxic\",\"thunderbolt\",\"shadowball\",\"hiddenpowerice\"],\"baseAbility\":\"levitate\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Hypno\",\"details\":\"Hypno, L88, M\",\"condition\":\"293/293\",\"active\":false,\"stats\":{\"atk\":133,\"def\":173,\"spa\":179,\"spd\":253,\"spe\":168},\"moves\":[\"wish\",\"psychic\",\"protect\",\"toxic\"],\"baseAbility\":\"insomnia\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Dragonite\",\"details\":\"Dragonite, L75, M\",\"condition\":\"259/259\",\"active\":false,\"stats\":{\"atk\":244,\"def\":185,\"spa\":193,\"spd\":193,\"spe\":164},\"moves\":[\"hiddenpowerflying\",\"earthquake\",\"doubleedge\",\"brickbreak\"],\"baseAbility\":\"innerfocus\",\"item\":\"choiceband\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Mawile\",\"details\":\"Mawile, L96, F\",\"condition\":\"251/251\",\"active\":false,\"stats\":{\"atk\":218,\"def\":218,\"spa\":160,\"spd\":159,\"spe\":150},\"moves\":[\"hiddenpowersteel\",\"focuspunch\",\"rockslide\",\"substitute\"],\"baseAbility\":\"intimidate\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Murkrow\",\"details\":\"Murkrow, L90, F\",\"condition\":\"254/254\",\"active\":false,\"stats\":{\"atk\":204,\"def\":127,\"spa\":203,\"spd\":126,\"spe\":215},\"moves\":[\"hiddenpowerground\",\"doubleedge\",\"shadowball\",\"drillpeck\"],\"baseAbility\":\"insomnia\",\"item\":\"choiceband\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Kangaskhan\",\"details\":\"Kangaskhan, L79, F\",\"condition\":\"295/295\",\"active\":false,\"stats\":{\"atk\":196,\"def\":172,\"spa\":109,\"spd\":172,\"spe\":188},\"moves\":[\"earthquake\",\"return102\",\"protect\",\"wish\"],\"baseAbility\":\"earlybird\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"}]}}",
+   "|",
+   "|t:|1794409979",
+   "|switch|p2a: Mawile|Mawile, L96, F|251/251",
+   "|-ability|p2a: Mawile|Intimidate|boost",
+   "|-unboost|p1a: Kecleon|atk|1",
+   "|move|p1a: Kecleon|Shadow Ball|p2a: Mawile",
+   "|-resisted|p2a: Mawile",
+   "|-damage|p2a: Mawile|224/251",
+   "|",
+   "|-heal|p2a: Mawile|239/251|[from] item: Leftovers",
+   "|upkeep",
+   "|turn|11",
+   "|request|{\"active\":[{\"moves\":[{\"move\":\"Hidden Power Steel 70\",\"id\":\"hiddenpower\",\"pp\":24,\"maxpp\":24,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Focus Punch\",\"id\":\"focuspunch\",\"pp\":29,\"maxpp\":32,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Rock Slide\",\"id\":\"rockslide\",\"pp\":16,\"maxpp\":16,\"target\":\"allAdjacentFoes\",\"disabled\":false},{\"move\":\"Substitute\",\"id\":\"substitute\",\"pp\":16,\"maxpp\":16,\"target\":\"self\",\"disabled\":false}]}],\"side\":{\"name\":\"PokeZeroBot\",\"id\":\"p2\",\"pokemon\":[{\"ident\":\"p2: Mawile\",\"details\":\"Mawile, L96, F\",\"condition\":\"239/251\",\"active\":true,\"stats\":{\"atk\":218,\"def\":218,\"spa\":160,\"spd\":159,\"spe\":150},\"moves\":[\"hiddenpowersteel\",\"focuspunch\",\"rockslide\",\"substitute\"],\"baseAbility\":\"intimidate\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Hypno\",\"details\":\"Hypno, L88, M\",\"condition\":\"293/293\",\"active\":false,\"stats\":{\"atk\":133,\"def\":173,\"spa\":179,\"spd\":253,\"spe\":168},\"moves\":[\"wish\",\"psychic\",\"protect\",\"toxic\"],\"baseAbility\":\"insomnia\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Dragonite\",\"details\":\"Dragonite, L75, M\",\"condition\":\"259/259\",\"active\":false,\"stats\":{\"atk\":244,\"def\":185,\"spa\":193,\"spd\":193,\"spe\":164},\"moves\":[\"hiddenpowerflying\",\"earthquake\",\"doubleedge\",\"brickbreak\"],\"baseAbility\":\"innerfocus\",\"item\":\"choiceband\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Misdreavus\",\"details\":\"Misdreavus, L85, F\",\"condition\":\"199/241\",\"active\":false,\"stats\":{\"atk\":150,\"def\":150,\"spa\":193,\"spd\":193,\"spe\":193},\"moves\":[\"toxic\",\"thunderbolt\",\"shadowball\",\"hiddenpowerice\"],\"baseAbility\":\"levitate\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Murkrow\",\"details\":\"Murkrow, L90, F\",\"condition\":\"254/254\",\"active\":false,\"stats\":{\"atk\":204,\"def\":127,\"spa\":203,\"spd\":126,\"spe\":215},\"moves\":[\"hiddenpowerground\",\"doubleedge\",\"shadowball\",\"drillpeck\"],\"baseAbility\":\"insomnia\",\"item\":\"choiceband\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Kangaskhan\",\"details\":\"Kangaskhan, L79, F\",\"condition\":\"295/295\",\"active\":false,\"stats\":{\"atk\":196,\"def\":172,\"spa\":109,\"spd\":172,\"spe\":188},\"moves\":[\"earthquake\",\"return102\",\"protect\",\"wish\"],\"baseAbility\":\"earlybird\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"}]}}",
+   "|",
+   "|t:|1794409981",
+   "|-singleturn|p2a: Mawile|move: Focus Punch",
+   "|move|p1a: Kecleon|Shadow Ball|p2a: Mawile",
+   "|-resisted|p2a: Mawile",
+   "|-damage|p2a: Mawile|213/251",
+   "|move|p2a: Mawile|Focus Punch||[still]",
+   "|cant|p2a: Mawile|Focus Punch|Focus Punch",
+   "|",
+   "|-heal|p2a: Mawile|228/251|[from] item: Leftovers",
+   "|upkeep",
+   "|turn|12",
+   "|request|{\"active\":[{\"moves\":[{\"move\":\"Hidden Power Steel 70\",\"id\":\"hiddenpower\",\"pp\":24,\"maxpp\":24,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Focus Punch\",\"id\":\"focuspunch\",\"pp\":28,\"maxpp\":32,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Rock Slide\",\"id\":\"rockslide\",\"pp\":16,\"maxpp\":16,\"target\":\"allAdjacentFoes\",\"disabled\":false},{\"move\":\"Substitute\",\"id\":\"substitute\",\"pp\":16,\"maxpp\":16,\"target\":\"self\",\"disabled\":false}]}],\"side\":{\"name\":\"PokeZeroBot\",\"id\":\"p2\",\"pokemon\":[{\"ident\":\"p2: Mawile\",\"details\":\"Mawile, L96, F\",\"condition\":\"228/251\",\"active\":true,\"stats\":{\"atk\":218,\"def\":218,\"spa\":160,\"spd\":159,\"spe\":150},\"moves\":[\"hiddenpowersteel\",\"focuspunch\",\"rockslide\",\"substitute\"],\"baseAbility\":\"intimidate\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Hypno\",\"details\":\"Hypno, L88, M\",\"condition\":\"293/293\",\"active\":false,\"stats\":{\"atk\":133,\"def\":173,\"spa\":179,\"spd\":253,\"spe\":168},\"moves\":[\"wish\",\"psychic\",\"protect\",\"toxic\"],\"baseAbility\":\"insomnia\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Dragonite\",\"details\":\"Dragonite, L75, M\",\"condition\":\"259/259\",\"active\":false,\"stats\":{\"atk\":244,\"def\":185,\"spa\":193,\"spd\":193,\"spe\":164},\"moves\":[\"hiddenpowerflying\",\"earthquake\",\"doubleedge\",\"brickbreak\"],\"baseAbility\":\"innerfocus\",\"item\":\"choiceband\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Misdreavus\",\"details\":\"Misdreavus, L85, F\",\"condition\":\"199/241\",\"active\":false,\"stats\":{\"atk\":150,\"def\":150,\"spa\":193,\"spd\":193,\"spe\":193},\"moves\":[\"toxic\",\"thunderbolt\",\"shadowball\",\"hiddenpowerice\"],\"baseAbility\":\"levitate\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Murkrow\",\"details\":\"Murkrow, L90, F\",\"condition\":\"254/254\",\"active\":false,\"stats\":{\"atk\":204,\"def\":127,\"spa\":203,\"spd\":126,\"spe\":215},\"moves\":[\"hiddenpowerground\",\"doubleedge\",\"shadowball\",\"drillpeck\"],\"baseAbility\":\"insomnia\",\"item\":\"choiceband\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Kangaskhan\",\"details\":\"Kangaskhan, L79, F\",\"condition\":\"295/295\",\"active\":false,\"stats\":{\"atk\":196,\"def\":172,\"spa\":109,\"spd\":172,\"spe\":188},\"moves\":[\"earthquake\",\"return102\",\"protect\",\"wish\"],\"baseAbility\":\"earlybird\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"}]}}",
+   "|",
+   "|t:|1794409984",
+   "|-singleturn|p2a: Mawile|move: Focus Punch",
+   "|move|p1a: Kecleon|Shadow Ball|p2a: Mawile",
+   "|-resisted|p2a: Mawile",
+   "|-damage|p2a: Mawile|202/251",
+   "|move|p2a: Mawile|Focus Punch||[still]",
+   "|cant|p2a: Mawile|Focus Punch|Focus Punch",
+   "|",
+   "|-heal|p2a: Mawile|217/251|[from] item: Leftovers",
+   "|upkeep",
+   "|turn|13",
+   "|request|{\"active\":[{\"moves\":[{\"move\":\"Hidden Power Steel 70\",\"id\":\"hiddenpower\",\"pp\":24,\"maxpp\":24,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Focus Punch\",\"id\":\"focuspunch\",\"pp\":27,\"maxpp\":32,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Rock Slide\",\"id\":\"rockslide\",\"pp\":16,\"maxpp\":16,\"target\":\"allAdjacentFoes\",\"disabled\":false},{\"move\":\"Substitute\",\"id\":\"substitute\",\"pp\":16,\"maxpp\":16,\"target\":\"self\",\"disabled\":false}]}],\"side\":{\"name\":\"PokeZeroBot\",\"id\":\"p2\",\"pokemon\":[{\"ident\":\"p2: Mawile\",\"details\":\"Mawile, L96, F\",\"condition\":\"217/251\",\"active\":true,\"stats\":{\"atk\":218,\"def\":218,\"spa\":160,\"spd\":159,\"spe\":150},\"moves\":[\"hiddenpowersteel\",\"focuspunch\",\"rockslide\",\"substitute\"],\"baseAbility\":\"intimidate\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Hypno\",\"details\":\"Hypno, L88, M\",\"condition\":\"293/293\",\"active\":false,\"stats\":{\"atk\":133,\"def\":173,\"spa\":179,\"spd\":253,\"spe\":168},\"moves\":[\"wish\",\"psychic\",\"protect\",\"toxic\"],\"baseAbility\":\"insomnia\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Dragonite\",\"details\":\"Dragonite, L75, M\",\"condition\":\"259/259\",\"active\":false,\"stats\":{\"atk\":244,\"def\":185,\"spa\":193,\"spd\":193,\"spe\":164},\"moves\":[\"hiddenpowerflying\",\"earthquake\",\"doubleedge\",\"brickbreak\"],\"baseAbility\":\"innerfocus\",\"item\":\"choiceband\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Misdreavus\",\"details\":\"Misdreavus, L85, F\",\"condition\":\"199/241\",\"active\":false,\"stats\":{\"atk\":150,\"def\":150,\"spa\":193,\"spd\":193,\"spe\":193},\"moves\":[\"toxic\",\"thunderbolt\",\"shadowball\",\"hiddenpowerice\"],\"baseAbility\":\"levitate\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Murkrow\",\"details\":\"Murkrow, L90, F\",\"condition\":\"254/254\",\"active\":false,\"stats\":{\"atk\":204,\"def\":127,\"spa\":203,\"spd\":126,\"spe\":215},\"moves\":[\"hiddenpowerground\",\"doubleedge\",\"shadowball\",\"drillpeck\"],\"baseAbility\":\"insomnia\",\"item\":\"choiceband\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Kangaskhan\",\"details\":\"Kangaskhan, L79, F\",\"condition\":\"295/295\",\"active\":false,\"stats\":{\"atk\":196,\"def\":172,\"spa\":109,\"spd\":172,\"spe\":188},\"moves\":[\"earthquake\",\"return102\",\"protect\",\"wish\"],\"baseAbility\":\"earlybird\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"}]}}",
+   "|",
+   "|t:|1794409987",
+   "|-singleturn|p2a: Mawile|move: Focus Punch",
+   "|move|p1a: Kecleon|Shadow Ball|p2a: Mawile",
+   "|-resisted|p2a: Mawile",
+   "|-damage|p2a: Mawile|188/251",
+   "|move|p2a: Mawile|Focus Punch||[still]",
+   "|cant|p2a: Mawile|Focus Punch|Focus Punch",
+   "|",
+   "|-heal|p2a: Mawile|203/251|[from] item: Leftovers",
+   "|upkeep",
+   "|turn|14",
+   "|request|{\"active\":[{\"moves\":[{\"move\":\"Hidden Power Steel 70\",\"id\":\"hiddenpower\",\"pp\":24,\"maxpp\":24,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Focus Punch\",\"id\":\"focuspunch\",\"pp\":26,\"maxpp\":32,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Rock Slide\",\"id\":\"rockslide\",\"pp\":16,\"maxpp\":16,\"target\":\"allAdjacentFoes\",\"disabled\":false},{\"move\":\"Substitute\",\"id\":\"substitute\",\"pp\":16,\"maxpp\":16,\"target\":\"self\",\"disabled\":false}]}],\"side\":{\"name\":\"PokeZeroBot\",\"id\":\"p2\",\"pokemon\":[{\"ident\":\"p2: Mawile\",\"details\":\"Mawile, L96, F\",\"condition\":\"203/251\",\"active\":true,\"stats\":{\"atk\":218,\"def\":218,\"spa\":160,\"spd\":159,\"spe\":150},\"moves\":[\"hiddenpowersteel\",\"focuspunch\",\"rockslide\",\"substitute\"],\"baseAbility\":\"intimidate\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Hypno\",\"details\":\"Hypno, L88, M\",\"condition\":\"293/293\",\"active\":false,\"stats\":{\"atk\":133,\"def\":173,\"spa\":179,\"spd\":253,\"spe\":168},\"moves\":[\"wish\",\"psychic\",\"protect\",\"toxic\"],\"baseAbility\":\"insomnia\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Dragonite\",\"details\":\"Dragonite, L75, M\",\"condition\":\"259/259\",\"active\":false,\"stats\":{\"atk\":244,\"def\":185,\"spa\":193,\"spd\":193,\"spe\":164},\"moves\":[\"hiddenpowerflying\",\"earthquake\",\"doubleedge\",\"brickbreak\"],\"baseAbility\":\"innerfocus\",\"item\":\"choiceband\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Misdreavus\",\"details\":\"Misdreavus, L85, F\",\"condition\":\"199/241\",\"active\":false,\"stats\":{\"atk\":150,\"def\":150,\"spa\":193,\"spd\":193,\"spe\":193},\"moves\":[\"toxic\",\"thunderbolt\",\"shadowball\",\"hiddenpowerice\"],\"baseAbility\":\"levitate\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Murkrow\",\"details\":\"Murkrow, L90, F\",\"condition\":\"254/254\",\"active\":false,\"stats\":{\"atk\":204,\"def\":127,\"spa\":203,\"spd\":126,\"spe\":215},\"moves\":[\"hiddenpowerground\",\"doubleedge\",\"shadowball\",\"drillpeck\"],\"baseAbility\":\"insomnia\",\"item\":\"choiceband\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Kangaskhan\",\"details\":\"Kangaskhan, L79, F\",\"condition\":\"295/295\",\"active\":false,\"stats\":{\"atk\":196,\"def\":172,\"spa\":109,\"spd\":172,\"spe\":188},\"moves\":[\"earthquake\",\"return102\",\"protect\",\"wish\"],\"baseAbility\":\"earlybird\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"}]}}"
+  ],
+  "own_request_line": "|request|{\"active\":[{\"moves\":[{\"move\":\"Hidden Power Steel 70\",\"id\":\"hiddenpower\",\"pp\":24,\"maxpp\":24,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Focus Punch\",\"id\":\"focuspunch\",\"pp\":26,\"maxpp\":32,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Rock Slide\",\"id\":\"rockslide\",\"pp\":16,\"maxpp\":16,\"target\":\"allAdjacentFoes\",\"disabled\":false},{\"move\":\"Substitute\",\"id\":\"substitute\",\"pp\":16,\"maxpp\":16,\"target\":\"self\",\"disabled\":false}]}],\"side\":{\"name\":\"PokeZeroBot\",\"id\":\"p2\",\"pokemon\":[{\"ident\":\"p2: Mawile\",\"details\":\"Mawile, L96, F\",\"condition\":\"203/251\",\"active\":true,\"stats\":{\"atk\":218,\"def\":218,\"spa\":160,\"spd\":159,\"spe\":150},\"moves\":[\"hiddenpowersteel\",\"focuspunch\",\"rockslide\",\"substitute\"],\"baseAbility\":\"intimidate\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Hypno\",\"details\":\"Hypno, L88, M\",\"condition\":\"293/293\",\"active\":false,\"stats\":{\"atk\":133,\"def\":173,\"spa\":179,\"spd\":253,\"spe\":168},\"moves\":[\"wish\",\"psychic\",\"protect\",\"toxic\"],\"baseAbility\":\"insomnia\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Dragonite\",\"details\":\"Dragonite, L75, M\",\"condition\":\"259/259\",\"active\":false,\"stats\":{\"atk\":244,\"def\":185,\"spa\":193,\"spd\":193,\"spe\":164},\"moves\":[\"hiddenpowerflying\",\"earthquake\",\"doubleedge\",\"brickbreak\"],\"baseAbility\":\"innerfocus\",\"item\":\"choiceband\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Misdreavus\",\"details\":\"Misdreavus, L85, F\",\"condition\":\"199/241\",\"active\":false,\"stats\":{\"atk\":150,\"def\":150,\"spa\":193,\"spd\":193,\"spe\":193},\"moves\":[\"toxic\",\"thunderbolt\",\"shadowball\",\"hiddenpowerice\"],\"baseAbility\":\"levitate\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Murkrow\",\"details\":\"Murkrow, L90, F\",\"condition\":\"254/254\",\"active\":false,\"stats\":{\"atk\":204,\"def\":127,\"spa\":203,\"spd\":126,\"spe\":215},\"moves\":[\"hiddenpowerground\",\"doubleedge\",\"shadowball\",\"drillpeck\"],\"baseAbility\":\"insomnia\",\"item\":\"choiceband\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Kangaskhan\",\"details\":\"Kangaskhan, L79, F\",\"condition\":\"295/295\",\"active\":false,\"stats\":{\"atk\":196,\"def\":172,\"spa\":109,\"spd\":172,\"spe\":188},\"moves\":[\"earthquake\",\"return102\",\"protect\",\"wish\"],\"baseAbility\":\"earlybird\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"}]}}"
+ }
+}
