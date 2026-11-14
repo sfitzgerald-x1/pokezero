@@ -17,9 +17,9 @@ from .fidelity_panel import WholeSlotUnknown, table_snapshot
 from .finite_law import Axis, Case, COORDINATES, Observation, Plan
 
 
-KERNEL_MODULES = tuple("action_history absorption baton combat critical damage_moves effects encore entry focus_punch items linked_traps mechanics phazing pressure pursuit secondary self_destruct sleep_talk solar_beam state sustain transition variable_moves weather".split())
-KERNEL_SHA256 = '2db42aa9d534f5fda76b8c192079f84b272ca58c79c280bb87eb48dd68428970'
-MAPPING_PINS = {'conditioned_future.py': '95e86f5a019850cea2507305221754fde2fb9456e15a2c6f5cf21d9ea624ffbd', 'fidelity_panel.py': 'ce67f0d036d0daf8b6d72e1727a7fc5aa22e73dacb2e4dbd4d496a94a8c1973e', 'finite_law.py': '34317244b8430387ab46c148c578828f4d94da6ebb80d3556b197613f92703f0', 'future_state.py': '57d76476704b138bc8463123ed2cf2d52feb70f7ed38098c5e1ba592c259d940'}
+KERNEL_MODULES = tuple("action_history absorption baton combat critical damage_moves effects encore entry focus_punch items linked_traps mechanics phazing pressure pursuit residual_order secondary self_destruct sleep_talk solar_beam state sustain transition variable_moves weather".split())
+KERNEL_SHA256 = 'db5ec4884ce41fff9ef39a26410cf495d64ecac3fe129eadf35c68ce7dd1c063'
+MAPPING_PINS = {'conditioned_future.py': '95e86f5a019850cea2507305221754fde2fb9456e15a2c6f5cf21d9ea624ffbd', 'fidelity_panel.py': '728c1d14c3cc5e95de63d6d3770d143263d58c0d5d7dec8a444b64c5b829099f', 'finite_law.py': '49c5f0060683814ba182028e4ab54669314aa40e032b2dabee7d71338062e141', 'future_state.py': '57d76476704b138bc8463123ed2cf2d52feb70f7ed38098c5e1ba592c259d940'}
 
 
 def _source_certificate():
@@ -48,6 +48,12 @@ def _law():
         if name.startswith("entry_ties."):
             axes.append(Axis(name, (Observation("identity"),),
                 ("transition.step_with_chance: resumed switch installation/runSwitch ordering",)))
+        elif name.startswith("effect."):
+            # §6: the resumed step reads the saved block, never this fresh coordinate (transition.py:580-582,
+            # effect_draws=jnp.where(resuming,state.effect_draws,..)). The block is bound with the root's raw input
+            # and joins every suspended successor's key (conditioned_future.SAVED_BLOCK).
+            axes.append(Axis(name, (), inactive_reason="A legal live pending-residual request replays its saved "
+                "effect block (state.effect_draws), overriding this fresh coordinate"))
         else:
             reason = ("No unresolved initial entry; initial_tie is not consumed" if name == "initial_tie"
                 else "A legal live pending-residual request uses its saved capsule, overriding this fresh coordinate")

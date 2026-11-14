@@ -83,7 +83,7 @@ class PinchItemOwningTests(unittest.TestCase):
   observers=[n for n in after.body if isinstance(n,ast.ImportFrom) and n.level==1 and n.module is None and len(n.names)==1 and n.names[0].name=='engine_pinch_item_callbacks' and n.names[0].asname=='pinch_callbacks']
   self.assertEqual(len(observers),1)
   from gpu_engine import engine_source_frame_witness as witness
-  witness._source();self.assertEqual(len(witness.SOURCE_PINS),88)
+  witness._source();self.assertEqual(len(witness.SOURCE_PINS),89)
   # items.py is byte-certified against the reviewed SOURCE_PINS by transition_observer_wiring.
 
 if __name__=='__main__':unittest.main()

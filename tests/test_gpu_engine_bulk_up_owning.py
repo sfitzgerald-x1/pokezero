@@ -62,7 +62,7 @@ class BulkUpOwningTests(unittest.TestCase):
   cls.runtime=driver._checked(cls.prepared);cls.kw=dict(catalog=cls.producer,expected_binding=cls.producer.binding,expected_engine_binding=np.asarray(cls.producer.engine_binding,np.uint32));cls.fold=staticmethod(jax.jit(lambda s,f,p:full.project_and_fold(s,f,cls.runtime['public'].device,p,cls.catalog)))
  def test_original_source_order_caps_default_program_and_closed_compiler(self):
   from gpu_engine import engine_source_frame_witness as witness
-  witness._source();self.assertEqual(len(witness.SOURCE_PINS),88);self.assertTrue(bool(self.helper.device.bulk_up.candidates[self.move]));self.assertEqual(int(self.runtime['kernel_risk_compiled'].device.selected_risk[self.move]),0)
+  witness._source();self.assertEqual(len(witness.SOURCE_PINS),89);self.assertTrue(bool(self.helper.device.bulk_up.candidates[self.move]));self.assertEqual(int(self.runtime['kernel_risk_compiled'].device.selected_risk[self.move]),0)
   self.assertIsNone(direct.compile_direct_hit_controls(engine_catalog=self.producer).device.bulk_up)
   for name in ('protect','detect','endure'):
    at=self.metadata['vocabulary']['moves'].index(name);self.assertFalse(bool(self.helper.device.bulk_up.candidates[at]))

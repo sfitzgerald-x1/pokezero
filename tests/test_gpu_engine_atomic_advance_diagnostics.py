@@ -162,7 +162,7 @@ class AtomicDiagnosticsTests(unittest.TestCase):
   for name in('transition.py','engine_kernel_frame_risk.py','engine_full_v4_event_device.py','engine_lifecycle_event_device.py','engine_execution_completeness.py','state.py'):
    self.assertEqual(subprocess.check_output(['git','show',ATOMIC_SOURCE+':gpu_engine/'+name]),subprocess.check_output(['git','show',BASE+':gpu_engine/'+name]),name)
   tree=ast.parse(Path('gpu_engine/engine_source_frame_witness.py').read_text());pins=ast.literal_eval(next(n.value for n in tree.body if isinstance(n,ast.Assign)and any(isinstance(x,ast.Name)and x.id=='SOURCE_PINS'for x in n.targets)))
-  self.assertEqual(len(pins),88)
+  self.assertEqual(len(pins),89)   # 88, and residual_order.py since §6
   for name,want in pins.items():self.assertEqual(hashlib.sha256(Path('gpu_engine',name).read_bytes()).hexdigest(),want,name)
 
 if __name__=='__main__':unittest.main()

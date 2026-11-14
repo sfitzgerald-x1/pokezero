@@ -90,7 +90,7 @@ class SleepTalkOwningTests(unittest.TestCase):
   return s,after,before,side,t,c,consumers,initial.cursor
 
  def test_original_source_default_numerics_and_called_writer_chronology(self):
-  witness._source();self.assertEqual(len(witness.SOURCE_PINS),88)
+  witness._source();self.assertEqual(len(witness.SOURCE_PINS),89)
   # transition.py is certified against CURRENT_TRANSITION (full AST plus mutations) by terminal_closeout and seismic_toss_components.
   script=r'''const d=require(process.argv[1]+'/dist/sim/dex.js').Dex.mod('gen3'),lines=[],p={statusState:{time:3},hasAbility:()=>false,toString:()=> 'p2a: Actor',moveSlots:[{id:'sleeptalk',pp:8},{id:'surf',pp:7},{id:'rest',pp:8}]};const b={effectState:{skippedTime:0},add:(...a)=>lines.push('|'+a.map(String).join('|')),sample:xs=>xs[0],dex:d,actions:{useMove:id=>lines.push('|move|p2a: Actor|'+d.moves.get(id).name+'|p1a: Target|[from] '+d.conditions.get('sleeptalk').name)}};d.conditions.get('slp').onBeforeMove.call(b,p,null,d.moves.get('sleeptalk'));lines.push('|move|p2a: Actor|Sleep Talk|p2a: Actor');d.moves.get('sleeptalk').onHit.call(b,p);console.log(JSON.stringify({time:p.statusState.time,skipped:b.effectState.skippedTime,lines}));'''
   got=json.loads(subprocess.check_output(['node','-e',script,str(showdown_root())],text=True));self.assertEqual(got,dict(time=2,skipped=1,lines=['|cant|p2a: Actor|slp','|move|p2a: Actor|Sleep Talk|p2a: Actor','|move|p2a: Actor|Surf|p1a: Target|[from] sleeptalk']))

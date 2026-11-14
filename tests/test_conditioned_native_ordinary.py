@@ -98,7 +98,7 @@ class OrdinaryCarryTests(unittest.TestCase):
                     for field in ('phazing','secondary','sleep_talk','entry_ties')},'initial_tie':v['initial_tie']}
             request=dict(version=1,schema='pokezero.ordinary-step',actions=a,chance=chance,address=dict(plan.address))
             raw=json.loads(pokezero_search.conditioned_step(native_input.raw_native,json.dumps(request)))['branches'][0]
-            native=law._native_output(raw,native_input.certificate)
+            native=law._native_output(raw,native_input.certificate,v)
             self.assertEqual(reference.capsule,native.capsule)
             self.assertEqual(self.f.field_differences(reference.physical,native.physical),
                 (('side_one.side_conditions.protect',0,2),('side_two.side_conditions.protect',0,1)))

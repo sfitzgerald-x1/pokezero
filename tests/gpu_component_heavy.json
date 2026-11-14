@@ -3,6 +3,42 @@
  "rule": "heavy: hosted median wall over 10 min, or a module that never completes on a hosted runner, or a peak RSS over 11 GiB, isolated or hosted (the CI memory check fails a shard above 75% of runner memory: 11.7 GiB on hosted; isolated: one process per module on 4 CPUs with the CI runtime)",
  "modules": [
   {
+   "module": "test_gpu_engine_belly_drum_owning",
+   "reason": "wall+memory",
+   "hosted_median_min": null,
+   "isolated_wall_min": null,
+   "isolated_peak_gib": 94.83,
+   "completes_on_hosted": false,
+   "isolated_measured_at": "0c2d2e5a with every pin refreshed (CI process-block path with the workflow low-optimization cases, 4 CPUs, CI runtime; peak includes the parent)",
+   "hosted_estimate_peak_gib": null,
+   "isolated_killed_at_cap": false,
+   "note": "does not complete on any machine as-is: uncapped (170 GiB cap) its low-optimization full-frame case dies with SIGSEGV during its second slow XLA compile (the first took 15m33s), at a 94.83 GiB peak, 40.9 min for the module; the other 3 cases pass (1 test each). The peak is a lower bound. Killed at the 64 GiB cap at 23.6 min in the capped run."
+  },
+  {
+   "module": "test_gpu_engine_bulk_up_owning",
+   "reason": "wall+memory",
+   "hosted_median_min": null,
+   "isolated_wall_min": null,
+   "isolated_peak_gib": 95.04,
+   "completes_on_hosted": false,
+   "isolated_measured_at": "0c2d2e5a with every pin refreshed (CI process-block path with the workflow low-optimization cases, 4 CPUs, CI runtime; peak includes the parent)",
+   "hosted_estimate_peak_gib": null,
+   "isolated_killed_at_cap": false,
+   "note": "does not complete on any machine as-is: uncapped (170 GiB cap) its low-optimization full-frame case dies with SIGSEGV during its second slow XLA compile (the first took 15m55s), at a 95.04 GiB peak, 41.6 min for the module; the other 2 cases pass (1 test each). The peak is a lower bound. Killed at the 64 GiB cap at 24.8 min in the capped run. Family-A PR 4 (remove the 292- and 402-argument closure compiles) is the only route to light."
+  },
+  {
+   "module": "test_gpu_engine_color_change_owning",
+   "reason": "wall+memory",
+   "hosted_median_min": null,
+   "isolated_wall_min": null,
+   "isolated_peak_gib": 94.94,
+   "completes_on_hosted": false,
+   "isolated_measured_at": "0c2d2e5a with every pin refreshed (CI process-block path with the workflow low-optimization cases, 4 CPUs, CI runtime; peak includes the parent)",
+   "hosted_estimate_peak_gib": null,
+   "isolated_killed_at_cap": false,
+   "note": "does not complete on any machine as-is: uncapped (170 GiB cap) its low-optimization full-frame case dies with SIGSEGV during its second slow XLA compile (the first took 15m23s), at a 94.94 GiB peak, 41.1 min for the module; the other 4 cases pass (1 test each). The peak is a lower bound. Killed at the 64 GiB cap at 23.4 min in the capped run."
+  },
+  {
    "module": "test_gpu_engine_constructor_worlds_peer_view_b",
    "reason": "wall+memory",
    "hosted_median_min": 41.5,
@@ -70,6 +106,41 @@
    "note": "measured at R1 c8521ed9 on 16 pinned CPUs, not the 4-CPU protocol: 6 of 6 OK, 22077.6 s, 232.1 GiB peak. Protocol deviation: on 4 CPUs it exceeds the 14000 s cap (1 of 6 settled, 173 GiB or more). Base 9640bbe1 on 4 CPUs: 88.6 GiB / 68 min. WH + C-lite (+2.4% HLO) is not re-measured. Run it alone in a dedicated heavy slot, never beside another heavy run, with at least 250 GiB of memory free. R2 targets the 4-CPU protocol again."
   },
   {
+   "module": "test_gpu_engine_primary_plain_status_owning",
+   "reason": "wall+memory",
+   "hosted_median_min": null,
+   "isolated_wall_min": null,
+   "isolated_peak_gib": 170,
+   "completes_on_hosted": false,
+   "isolated_measured_at": "0c2d2e5a with every pin refreshed (CI process-block path with the workflow low-optimization cases, 4 CPUs, CI runtime; peak includes the parent)",
+   "hosted_estimate_peak_gib": null,
+   "isolated_killed_at_cap": true,
+   "note": "lower bound: killed above the 170 GiB cap at 50.8 min, during the first slow XLA compile of its low-optimization full-frame case (uncapped run); 64 GiB cap at 38.4 min in the capped run. Does not fit any normal machine (a dedicated big-memory slot, as K1). Family-A PR 4 (remove the 292- and 402-argument closure compiles) is the only route to light."
+  },
+  {
+   "module": "test_gpu_engine_protect_owning",
+   "reason": "wall+memory",
+   "hosted_median_min": null,
+   "isolated_wall_min": null,
+   "isolated_peak_gib": 65.74,
+   "completes_on_hosted": false,
+   "isolated_measured_at": "0c2d2e5a with every pin refreshed (CI process-block path with the workflow low-optimization cases, 4 CPUs, CI runtime; peak includes the parent)",
+   "hosted_estimate_peak_gib": null,
+   "isolated_killed_at_cap": false,
+   "note": "does not complete on any machine as-is: uncapped (170 GiB cap) its low-optimization full-frame case dies with SIGSEGV after about 30 min, during its second slow XLA compile (the first took 12m40s), at a 65.74 GiB peak; the other 4 cases pass (1 test each, 4.3 min). The peak is a lower bound. Killed at the 64 GiB cap at 29.0 min in the capped run. Family-A PR 4 (remove the 292- and 402-argument closure compiles) is the only route to light."
+  },
+  {
+   "module": "test_gpu_engine_source_frame_witness",
+   "reason": "wall+memory",
+   "hosted_median_min": null,
+   "isolated_wall_min": 16.5,
+   "isolated_peak_gib": 34.23,
+   "completes_on_hosted": false,
+   "isolated_measured_at": "0c2d2e5a with every pin refreshed (CI process-block path with the workflow low-optimization cases, 4 CPUs, CI runtime; peak includes the parent)",
+   "hosted_estimate_peak_gib": 34.8,
+   "isolated_killed_at_cap": false
+  },
+  {
    "module": "test_gpu_engine_source_witness_compiled_anchor",
    "reason": "wall+memory",
    "hosted_median_min": null,
@@ -78,12 +149,68 @@
    "completes_on_hosted": null
   },
   {
+   "module": "test_gpu_engine_source_witness_driver",
+   "reason": "wall+memory",
+   "hosted_median_min": null,
+   "isolated_wall_min": 16.9,
+   "isolated_peak_gib": 35.81,
+   "completes_on_hosted": false,
+   "isolated_measured_at": "0c2d2e5a with every pin refreshed (CI process-block path with the workflow low-optimization cases, 4 CPUs, CI runtime; peak includes the parent)",
+   "hosted_estimate_peak_gib": 36.4,
+   "isolated_killed_at_cap": false
+  },
+  {
    "module": "test_gpu_engine_status_callbacks_hot_jit",
    "reason": "memory",
    "hosted_median_min": 3.3,
    "isolated_wall_min": 3.4,
    "isolated_peak_gib": 11.1,
    "completes_on_hosted": true
+  },
+  {
+   "module": "test_gpu_engine_turnloop_prefix_owning",
+   "reason": "wall+memory",
+   "hosted_median_min": null,
+   "isolated_wall_min": 16.3,
+   "isolated_peak_gib": 34.44,
+   "completes_on_hosted": false,
+   "isolated_measured_at": "0c2d2e5a with every pin refreshed (CI process-block path with the workflow low-optimization cases, 4 CPUs, CI runtime; peak includes the parent)",
+   "hosted_estimate_peak_gib": 35.0,
+   "isolated_killed_at_cap": false
+  },
+  {
+   "module": "test_gpu_engine_v5_complete_grid",
+   "reason": "wall+memory",
+   "hosted_median_min": null,
+   "isolated_wall_min": 56.9,
+   "isolated_peak_gib": 69.0,
+   "completes_on_hosted": false,
+   "isolated_measured_at": "0c2d2e5a with every pin refreshed (CI process-block path with the workflow low-optimization cases, 4 CPUs, CI runtime; peak includes the parent)",
+   "hosted_estimate_peak_gib": 69.6,
+   "isolated_killed_at_cap": false,
+   "note": "completes uncapped (170 GiB cap): 2/2 OK at 69.0 GiB / 56.9 min; needs a runner with more than 64 GiB (about 96-128 GiB). Killed at the 64 GiB cap at 30.9 min in the capped run."
+  },
+  {
+   "module": "test_gpu_engine_v5_hypothetical_batch",
+   "reason": "wall+memory",
+   "hosted_median_min": null,
+   "isolated_wall_min": 32.1,
+   "isolated_peak_gib": 48.97,
+   "completes_on_hosted": false,
+   "isolated_measured_at": "0c2d2e5a with every pin refreshed (CI process-block path with the workflow low-optimization cases, 4 CPUs, CI runtime; peak includes the parent)",
+   "hosted_estimate_peak_gib": 49.6,
+   "isolated_killed_at_cap": false
+  },
+  {
+   "module": "test_gpu_engine_v5_hypothetical_profile",
+   "reason": "wall+memory",
+   "hosted_median_min": null,
+   "isolated_wall_min": 15.0,
+   "isolated_peak_gib": 10.98,
+   "completes_on_hosted": null,
+   "isolated_measured_at": "0c2d2e5a with every pin refreshed (CI process-block path with the workflow low-optimization cases, 4 CPUs, CI runtime; peak includes the parent)",
+   "hosted_estimate_peak_gib": 11.6,
+   "isolated_killed_at_cap": false
   }
  ]
 }

@@ -72,8 +72,10 @@ def jax_distribution(spec,draws,weights):
     table=t.MoveTable(j.array([0,spec['power'],50]),j.array([0,1 if spec['move']=='tackle' else 2,0]),j.array([False,True,True]),
         j.array([100,spec['accuracy'],100]),j.array([True,False,True]),j.zeros(3,j.int32),
         j.ones((18,18),j.int32),j.ones((18,18),j.int32),j.array(2))
+    # §6: the enumerated rows pass the effect stream explicitly. This table has no damage_moves or effects family, so
+    # no effect consumer (Bonemerang's second hit, Yawn, the Wrap and Perish pairs) is reachable: a fixed 0 block.
     chance=t.ChanceInputs(j.asarray(draws),*(j.zeros((n,2),j.int32) for _ in range(4)),
-        j.zeros(n,j.int32))
+        j.zeros(n,j.int32),effect=j.zeros((n,2,4),j.int32))
     result=jax.jit(t.step_with_chance)(state,j.zeros((n,2),j.int32),table,chance)
     hp,pp=np.asarray(result.state.hp)[:,:,0],np.asarray(result.state.pp)[:,:,0,0]
     if np.any(hp<=0) or np.asarray(result.invalid_actions).any():

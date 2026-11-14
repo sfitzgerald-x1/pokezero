@@ -71,6 +71,24 @@ class OrdinarySwitchTests(unittest.TestCase):
 
     def emissions(self,result):return result['ordinary_output_laws']['emissions']
 
+    def compare_fainted_choice_lock_gap(self,s,a,holder):
+        """An exposed native gap at a battle-ending step, not permission for a false AGREE.
+
+        The Choice Band holder on side `holder` (party slot 5) faints and the battle ends. Showdown's faintMessages
+        clears the fainted mon's volatiles, the choice lock included (sim/battle.ts:2576 at f76228a,
+        clearVolatile(false)), and JAX does the same. The native engine keeps the lock's disables on the holder's other
+        three moves. The stale chance-consumer pins hid it until §6's refresh; it is the same at the base with only
+        the pins refreshed. Every emission differs in exactly those three flags, with equal capsules.
+        """
+        r,n=self.compare(s,a,expected='DIVERGE')
+        mon=('side_one','side_two')[holder]+'.pokemon[5]'
+        for e in self.emissions(r):
+            jax,native=dict(e['jax']['physical']),dict(e['native']['physical'])
+            self.assertEqual(sorted((k,jax.get(k),native.get(k)) for k in set(jax)|set(native) if jax.get(k)!=native.get(k)),
+                [(f'{mon}.moves[{i}].disabled',False,True) for i in range(3)])
+            self.assertEqual(e['jax']['capsule'],e['native']['capsule'])
+        return r,n
+
     def assert_carry(self,result,*,pending,forced=None):
         for emission in self.emissions(result):
             for engine in ('jax','native'):
@@ -82,7 +100,9 @@ class OrdinarySwitchTests(unittest.TestCase):
                 self.assertEqual(c['replacement_count'],0)
                 if forced is not None:self.assertEqual(tuple(c['forced_switch']),forced)
                 self.assertEqual(c['turn'],18)
-                self.assertEqual(len(out['expressions']),30)
+                # 30 native bank rows plus §6's 8 saved effect rows (ordinary_law.EFFECT_BANK, JAX-only; the native output
+                # takes them by the engine's save rule)
+                self.assertEqual(len(out['expressions']),38)
                 for expression in out['expressions']:
                     self.assertIn('copy' if pending else 'constant',expression)
                     if not pending:self.assertEqual(expression['constant'],0)
@@ -116,7 +136,8 @@ class OrdinarySwitchTests(unittest.TestCase):
                 with self.subTest(side=side,move=move):
                     s,a=self.fixture(side,move=move,incoming_hp=30)
                     if move=='explosion':s=s._replace(hp=s.hp.at[:,1-side,:5].set(0))
-                    r,_=self.compare(s,a)
+                    # The Choice Band exploder faints and the battle ends: the fainted-choice-lock native gap.
+                    r,_=self.compare(s,a) if move=='batonpass' else self.compare_fainted_choice_lock_gap(s,a,1-side)
                     self.assert_carry(r,pending=move=='batonpass')
 
     def test_residual_poison_faint_is_closed_and_entrant_tie_uses_residual_coin(self):
@@ -130,7 +151,8 @@ class OrdinarySwitchTests(unittest.TestCase):
             s=s._replace(stats=s.stats.at[:,side,3,5].set(151),
                 status=s.status.at[:,side,3].set(3).at[:,1-side,5].set(3),
                 hp=s.hp.at[:,1-side,:5].set(0).at[:,1-side,5].set(37))
-            r,n=self.compare(s,a);self.assert_carry(r,pending=False)
+            # The poisoned Choice Band foe faints and the battle ends: the fainted-choice-lock native gap.
+            r,n=self.compare_fainted_choice_lock_gap(s,a,1-side);self.assert_carry(r,pending=False)
             import pokezero_search
             cuts=json.loads(pokezero_search.conditioned_step_requirements(n.raw_native,json.dumps(a)))['requirements']
             self.assertIn(dict(coordinate='draws.1.9',kind='identity',argument=0),cuts)

@@ -18,7 +18,7 @@ class SleepBlockedOwningTests(unittest.TestCase):
   cls.fold=staticmethod(jax.jit(lambda st,fr,p:full.project_and_fold(st,fr,cls.runtime['public'].device,p,cls.catalog)))
  def test_original_source_default_program_and_legacy_scope(self):
   from gpu_engine import engine_source_frame_witness as witness,engine_direct_hit_controls as direct
-  witness._source();self.assertEqual(len(witness.SOURCE_PINS),88);self.assertIsNone(direct.compile_direct_hit_controls(engine_catalog=self.producer).device.sleep_blocked)
+  witness._source();self.assertEqual(len(witness.SOURCE_PINS),89);self.assertIsNone(direct.compile_direct_hit_controls(engine_catalog=self.producer).device.sleep_blocked)
   old=ast.parse(subprocess.check_output(['git','show',BASE+':gpu_engine/transition.py'],text=True));new=ast.parse(subprocess.check_output(['git','show','6bd337da:gpu_engine/transition.py'],text=True));baseline=dump_default_program(old);self.assertEqual(dump_default_program(new),baseline);assert_hp_rng_mutations_detected(self,new,baseline)
   # transition.py is certified against CURRENT_TRANSITION (full AST plus mutations) by terminal_closeout and seismic_toss_components.
   script=r'''const d=require(process.argv[1]+'/dist/sim/dex.js').Dex.mod('gen3'),f=d.conditions.get('slp').onBeforeMove,out=[];

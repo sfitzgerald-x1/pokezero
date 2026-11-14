@@ -161,7 +161,9 @@ class ConsumerDiagnosticTests(unittest.TestCase):
     if isinstance(node,ast.Assign)and any(isinstance(t,ast.Name)and t.id==target for t in node.targets):node.value=ast.Constant(True);changed+=1
    self.assertGreater(changed,0);self.assertNotEqual(ast.dump(reference,include_attributes=False),ast.dump(mutant,include_attributes=False))
   # Physical assignments, chance, driver, sampler and generic join unchanged.
-  for name in('transition.py','state.py','engine_retained_encoder_driver.py','engine_kernel_frame_risk.py'):
+  # transition.py is certified against CURRENT_TRANSITION (full AST plus mutations) by terminal_closeout and seismic_toss_components.
+  # state.py is byte-certified against the reviewed SOURCE_PINS below and by transition_observer_wiring.
+  for name in('engine_retained_encoder_driver.py','engine_kernel_frame_risk.py'):
    self.assertEqual(Path('gpu_engine',name).read_bytes(),subprocess.check_output(['git','show','b8092a85:gpu_engine/'+name]))
   text=Path(witness.__file__).read_text();pins=ast.literal_eval(next(n for n in ast.parse(text).body if isinstance(n,ast.Assign)and any(isinstance(t,ast.Name)and t.id=='SOURCE_PINS'for t in n.targets)).value)
   import hashlib

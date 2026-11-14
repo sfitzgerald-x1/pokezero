@@ -36,7 +36,7 @@ class PrimaryPlainStatusTests(unittest.TestCase):
   cls.runtime=driver._checked(cls.prepared);cls.kw=dict(catalog=cls.producer,expected_binding=cls.producer.binding,expected_engine_binding=np.asarray(cls.producer.engine_binding,np.uint32));cls.fold=staticmethod(jax.jit(lambda s,f,p:full.project_and_fold(s,f,cls.runtime['public'].device,p,cls.catalog)))
  def test_original_lexical_scope_default_and_legacy_disjoint(self):
   from gpu_engine import engine_source_frame_witness as witness
-  witness._source();self.assertEqual(len(witness.SOURCE_PINS),88);d=self.helper.device.primary_plain_status
+  witness._source();self.assertEqual(len(witness.SOURCE_PINS),89);d=self.helper.device.primary_plain_status
   for name,code in (('willowisp',m.BRN),('stunspore',m.PAR)):
    at=self.metadata['vocabulary']['moves'].index(name);self.assertTrue(bool(d.candidates[at]));self.assertEqual(int(d.status[at]),code);self.assertEqual(int(self.runtime['kernel_risk_compiled'].device.selected_risk[at]),0)
   for name in ('thunderwave','sleeppowder','bulkup'):self.assertFalse(bool(d.candidates[self.metadata['vocabulary']['moves'].index(name)]))
