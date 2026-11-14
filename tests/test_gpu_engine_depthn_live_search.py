@@ -533,31 +533,65 @@ class LiveSearchTests(unittest.TestCase):
 
     # warmup --------------------------------------------------------------------------------------------------------------------
     def test_warmup_warms_prepare_in_on_its_list_twice_then_forgets_it(self):
-        outcomes={('w0',0):self.outcome(0),('x',0):self.outcome(1),('x',1):self.outcome(2),('y',3):Refusal('PUBLIC_ROOT_REFUSED')}
+        outcomes={('w0',0):self.outcome(0),('x',0):self.outcome(1),('x',1):self.outcome(2),('y',3):Refusal('PUBLIC_ROOT_REFUSED'),
+            ('l',0):self.outcome(3),('l',1):self.outcome(4)}
         prepared=[];prepare=live.cw.prepare_roots;released=[];release=live.trace_release.release
         def spy(constructor,requests,**kw):
             prepared.extend((r['battle_id'],r['decision_index'])for r in requests);return prepare(constructor,requests,**kw)
         def releasing():released.append(len(prepared));return release()
         s=self.search(pricers=self.make_pricers(8,(1,)));listed=[('x',0),('x',1),('y',3)]
+        other=object();live.cw._PEER_FOLDS[(id(other),'o',0,1)]=(other,None,());self.addCleanup(live.cw._PEER_FOLDS.pop,(id(other),'o',0,1),None)
+        live.cw._PEER_FOLDS[(id(s.constructor),'x',0,7)]=(s.constructor,None,())   # a fold of this constructor's (as the eager peer fold leaves one)
         with Codex(outcomes),patch.object(live.cw,'prepare_roots',side_effect=spy),patch.object(live.trace_release,'release',side_effect=releasing):
             report=s.warmup([request('w0',0)],warm_in=[request(b,d)for b,d in listed])
-        self.assertEqual({k:report['warm_in'][k]for k in('requests','kinds')},dict(requests=3,kinds={'Prepared':2,'RootRefusal':1}))
-        self.assertGreater(report['warm_in']['rewarm_seconds'],0);self.assertNotIn('warm_in_seconds',report['trace_release'])
+        warm=report['warm_in']
+        self.assertEqual({k:warm[k]for k in('requests','kinds','outcomes')},
+            dict(requests=3,kinds={'Prepared':2,'PUBLIC_ROOT_REFUSED':1},outcomes=['Prepared','Prepared','PUBLIC_ROOT_REFUSED']))
+        self.assertGreater(warm['rewarm_seconds'],0);self.assertNotIn('warm_in_seconds',report['trace_release'])
+        self.assertEqual(type(warm['trace_cache_entries']),int)   # jit's tracing caches after the second pass: the heap's regrowth
         # the list once after every warm pass, before the trace release, and once more after the re-warm: then forgotten
         before,after=prepared[:released[0]],prepared[released[0]:]
         self.assertEqual((before[-3:],after[-3:]),(listed,listed));self.assertNotIn(('x',0),before[:-3])
         self.assertEqual((s.constructor.seen,s.constructor.sessions,s.battles),(set(),{},{}))
+        self.assertEqual([k for k in live.cw._PEER_FOLDS if k[0]==id(s.constructor)],[])   # this constructor's peer folds forgotten
+        self.assertIn((id(other),'o',0,1),live.cw._PEER_FOLDS)                              # nobody else's
         rows,_=self.run_batch(s,[request('x',0)],outcomes);self.assertEqual(rows[0]['status'],'COMPLETE')   # not an attempted address
-        # without a list nothing changes: no warm_in in the report, prepare never sees another root
-        prepared.clear()
-        with Codex(outcomes),patch.object(live.cw,'prepare_roots',side_effect=spy):report=self.search(pricers=self.make_pricers(8,(1,))).warmup([request('w0',0)])
-        self.assertNotIn('warm_in',report);self.assertEqual({b for b,_ in prepared},{'w0'})
-        # a warm-in request that breaks prepare (an exception, not a refusal) stops warmup
-        def broken(constructor,requests,**kw):
+        # without a list nothing changes: no warm_in in the report, prepare never sees another root, the peer folds untouched
+        prepared.clear();live.cw._PEER_FOLDS[(id(other),'o',0,2)]=(other,None,());self.addCleanup(live.cw._PEER_FOLDS.pop,(id(other),'o',0,2),None)
+        plain=self.search(pricers=self.make_pricers(8,(1,)))
+        with Codex(outcomes),patch.object(live.cw,'prepare_roots',side_effect=spy):report=plain.warmup([request('w0',0)])
+        self.assertNotIn('warm_in',report);self.assertEqual({b for b,_ in prepared},{'w0'});self.assertIn((id(other),'o',0,2),live.cw._PEER_FOLDS)
+        # served rows are the same with and without the warm-in (timings aside)
+        strip=lambda row:{k:v for k,v in row.items()if k not in('timings','decision_seconds')}
+        for b,d in(('l',0),('l',1)):
+            with_list,_=self.run_batch(s,[request(b,d)],outcomes);without,_=self.run_batch(plain,[request(b,d)],outcomes)
+            self.assertEqual(strip(with_list[0]),strip(without[0]))
+
+    def test_a_warm_in_entry_that_warms_nothing_stops_warmup(self):
+        outcomes={('w0',0):self.outcome(0),('x',0):self.outcome(1)}
+        prepare=live.cw.prepare_roots
+        bad=dict(request('x',0),prefix_sha256='0'*64)   # SEARCH_PREFIX_OR_REQUEST_MISMATCH: never reaches the root
+        with Codex(outcomes),self.assertRaisesRegex(RuntimeError,'warm-in request warm-in-0: refused SEARCH_PREFIX_OR_REQUEST_MISMATCH'):
+            self.search(pricers=self.make_pricers(8,(1,))).warmup([request('w0',0)],warm_in=[bad])
+        twice=[request('x',0),request('x',0)]   # the second: SEARCH_REQUEST_ALREADY_ATTEMPTED
+        with Codex(outcomes),self.assertRaisesRegex(RuntimeError,'warm-in request warm-in-1: refused SEARCH_REQUEST_ALREADY_ATTEMPTED'):
+            self.search(pricers=self.make_pricers(8,(1,))).warmup([request('w0',0)],warm_in=twice)
+        with Codex({**outcomes,('x',0):KeyError('k')}),self.assertRaisesRegex(RuntimeError,'warm-in request warm-in-0: refused KeyError'):
+            self.search(pricers=self.make_pricers(8,(1,))).warmup([request('w0',0)],warm_in=[request('x',0)])   # a bare exception kind
+        def broken(constructor,requests,**kw):   # an exception prepare_roots raises (not a refusal)
             if requests[0]['battle_id']=='x':raise RuntimeError('broken')
             return prepare(constructor,requests,**kw)
         with Codex(outcomes),patch.object(live.cw,'prepare_roots',side_effect=broken),self.assertRaisesRegex(RuntimeError,'warm-in request warm-in-0: RuntimeError: broken'):
             self.search(pricers=self.make_pricers(8,(1,))).warmup([request('w0',0)],warm_in=[request('x',0)])
+        # the second pass (after the release) must repeat the first: here x's root refuses once the release has run
+        released=[];release=live.trace_release.release
+        def releasing():released.append(True);return release()
+        def flipping(constructor,requests,**kw):
+            if released and requests[0]['battle_id']=='x':return(live.cw.RootRefusal(requests[0]['request_id'],'PUBLIC_ROOT_REFUSED','',0.,live.cw.constructor_binding(constructor)),)
+            return prepare(constructor,requests,**kw)
+        with Codex(outcomes),patch.object(live.cw,'prepare_roots',side_effect=flipping),patch.object(live.trace_release,'release',side_effect=releasing):
+            with self.assertRaisesRegex(RuntimeError,'warm-in request warm-in-0: the second pass \\(after the trace release\\) gave PUBLIC_ROOT_REFUSED, the first Prepared'):
+                self.search(pricers=self.make_pricers(8,(1,))).warmup([request('w0',0)],warm_in=[request('x',0)])
 
     def test_warmup_compiles_every_bucket_before_live_requests(self):
         pricers=self.make_pricers(8,(1,2,4));s=self.search(pricers=pricers)

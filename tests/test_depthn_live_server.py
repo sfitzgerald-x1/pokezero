@@ -315,6 +315,14 @@ class ServerTests(unittest.TestCase):
                 with self.subTest(bad=bad),redirect_stderr(io.StringIO()),self.assertRaises(SystemExit):S.options(base+champion+bad)
             with self.assertRaisesRegex(ValueError,'differs from --prepare-warm-in-sha256'):
                 S.read_warm_in(S.options(base+champion+['--prepare-warm-in',str(path),'--prepare-warm-in-sha256','0'*64]))
+            empty=Path(tmp)/'empty.jsonl';empty.write_text('\n')   # an empty list (its own sha256 matches): refused
+            with self.assertRaisesRegex(ValueError,'one JSON object per line, at least one'):
+                S.read_warm_in(S.options(base+champion+['--prepare-warm-in',str(empty),'--prepare-warm-in-sha256',hashlib.sha256(b'\n').hexdigest()]))
+            with self.assertRaises(FileNotFoundError):   # a missing list
+                S.read_warm_in(S.options(base+champion+['--prepare-warm-in',str(Path(tmp)/'none.jsonl'),'--prepare-warm-in-sha256',sha]))
+            # parsed from the bytes the sha256 checked: a file that changes after the check is never read again
+            with patch.object(S,'read_requests',side_effect=AssertionError('the list file was read twice')):
+                self.assertEqual(S.read_warm_in(listed),(dict(battle_id='a'),dict(battle_id='b')))
             path.write_text('[1]\n')
             with self.assertRaisesRegex(ValueError,'one JSON object per line'):S.read_requests(path)
 
