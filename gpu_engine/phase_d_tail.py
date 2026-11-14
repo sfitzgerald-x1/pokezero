@@ -1,5 +1,7 @@
 """Final bounded Phase D tail: positive public facts, no truth donor."""
 from dataclasses import replace
+
+import numpy as np
 from pokezero.dex import normalize_id
 
 
@@ -147,25 +149,34 @@ def mapping_spec(spec,phase):
     return replace(spec,side_one=sides[0],side_two=sides[1]),tuple(cursors)
 
 
+def _put(array,index,value):
+    """array.at[index].set(value): a host (NumPy) array is copied and set, with NumPy's cast to the array's dtype; a device
+    array uses its own scatter. A host-built world (phase_d_protocol_world) stays on the host until its one transfer."""
+    if isinstance(array,np.ndarray):
+        out=np.array(array,copy=True);out[index]=value;return out
+    return array.at[index].set(value)
+
+
 def restore(state,original_spec,cursors,tail,*,metadata,checks):
-    import jax.numpy as j
+    import jax.numpy as jnp
+    j=np if isinstance(state.hp,np.ndarray) else jnp   # the host build keeps NumPy (same values and dtypes)
     phase=tail['replacement']
     if phase is not None:
         for seat,(side,cursor) in enumerate(zip((original_spec.side_one,original_spec.side_two),cursors)):
-            state=state._replace(active=state.active.at[0,seat].set(cursor))
+            state=state._replace(active=_put(state.active,(0,seat),cursor))
             if side.pokemon[cursor].hp<=0 and side.last_used_move:
                 last=side.last_used_move
                 if last=='move:struggle':
                     try:mid=metadata['vocabulary']['moves'].index('struggle')
                     except ValueError:raise ValueError('PUBLIC_REPLACEMENT_LAST_MOVE_UNAVAILABLE')
-                    state=state._replace(last_action_kind=state.last_action_kind.at[0,seat].set(3),last_move=state.last_move.at[0,seat,cursor].set(mid))
+                    state=state._replace(last_action_kind=_put(state.last_action_kind,(0,seat),3),last_move=_put(state.last_move,(0,seat,cursor),mid))
                 elif last.startswith('move:'):
                     index=int(last.split(':')[1])
                     if not 0<=index<4 or int(state.moves[0,seat,cursor,index])<=0:raise ValueError('PUBLIC_REPLACEMENT_LAST_MOVE_UNAVAILABLE')
                     mid=state.moves[0,seat,cursor,index]
-                    state=state._replace(last_action_kind=state.last_action_kind.at[0,seat].set(2),last_action_index=state.last_action_index.at[0,seat].set(index),last_move=state.last_move.at[0,seat,cursor].set(mid))
-                    if normalize_id(side.pokemon[cursor].item or '')=='choiceband':state=state._replace(choice_move=state.choice_move.at[0,seat,cursor].set(mid))
-                elif last.startswith('switch:'):state=state._replace(last_action_kind=state.last_action_kind.at[0,seat].set(1),last_action_index=state.last_action_index.at[0,seat].set(cursor))
+                    state=state._replace(last_action_kind=_put(state.last_action_kind,(0,seat),2),last_action_index=_put(state.last_action_index,(0,seat),index),last_move=_put(state.last_move,(0,seat,cursor),mid))
+                    if normalize_id(side.pokemon[cursor].item or '')=='choiceband':state=state._replace(choice_move=_put(state.choice_move,(0,seat,cursor),mid))
+                elif last.startswith('switch:'):state=state._replace(last_action_kind=_put(state.last_action_kind,(0,seat),1),last_action_index=_put(state.last_action_index,(0,seat),cursor))
                 else:raise ValueError('PUBLIC_REPLACEMENT_LAST_MOVE_UNAVAILABLE')
         alive=j.any(state.hp>0,axis=2);hp=j.take_along_axis(state.hp,state.active[...,None],axis=2)[...,0]
         state=state._replace(forced_switch=(hp<=0)&alive,pending_residual=j.array([phase['pending_residual']]),
@@ -189,12 +200,12 @@ def restore(state,original_spec,cursors,tail,*,metadata,checks):
             names=[normalize_id(metadata['vocabulary']['species'][int(x)]) for x in state.species[0,seat]]
             if names.count(origin)!=1:raise ValueError('PUBLIC_SUBSTITUTE_ORIGIN_UNAVAILABLE')
             hp_slot=names.index(origin)
-        state=state._replace(substitute_hp=state.substitute_hp.at[0,seat,slot].set(state.max_hp[0,seat,hp_slot]//4))
+        state=state._replace(substitute_hp=_put(state.substitute_hp,(0,seat,slot),state.max_hp[0,seat,hp_slot]//4))
         checks.append(dict(kind='PUBLIC_FRESH_SUBSTITUTE',status='CLEAR',fatal=True,side=seat,slot=slot))
     for side,start in tail['wish_set_turns'].items():
         seat=int(side[1])-1;slot=int(state.active[0,seat]);remaining=2-(tail['turn']-start)
-        state=state._replace(wish_counter=state.wish_counter.at[0,seat].set(remaining),
-            wish_amount=state.wish_amount.at[0,seat].set(j.maximum(1,state.max_hp[0,seat,slot]//2)))
+        state=state._replace(wish_counter=_put(state.wish_counter,(0,seat),remaining),
+            wish_amount=_put(state.wish_amount,(0,seat),j.maximum(1,state.max_hp[0,seat,slot]//2)))
         checks.append(dict(kind='PUBLIC_WISH_RECIPIENT_STATE',status='CLEAR',fatal=True,side=seat,remaining=remaining,
             amount_semantics='CURRENT_RECIPIENT_COMPATIBILITY_FIELD;FROZEN_RESIDUAL_USES_RESOLVING_RECIPIENT'))
     return state

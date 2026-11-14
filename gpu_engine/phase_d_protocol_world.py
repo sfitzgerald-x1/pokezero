@@ -11,6 +11,7 @@ import hashlib
 import json
 import random
 
+import jax
 import jax.numpy as j
 import numpy as np
 
@@ -25,6 +26,17 @@ from .v5_hypothetical_state import map_spec
 from .phase_d_constructor_rules import public_hp_bin,request_ordered_packed,own_pp_carry,sleep_support
 
 SCHEMA='pokezero.phase-d.protocol-materialization.v1'
+
+
+# Each world is built on the host (NumPy, from a host empty-state template and its batched world key) and transferred once
+# (_device), instead of ~800 eager device ops per world. False keeps the eager device build, the byte-for-byte reference
+# the parity tests compare against.
+HOST_WORLDS=True
+
+
+def _device(tree):
+    """A host-built world's NumPy leaves as device arrays, made as map_spec's own j.asarray made them: same values, dtypes."""
+    return jax.tree_util.tree_map(lambda x:j.asarray(x) if isinstance(x,np.ndarray) else x,tree)
 
 
 @dataclass(frozen=True)
@@ -276,10 +288,10 @@ def _write_encores(physical,encored,facts,seed,*,replacement,owner):
             ids=np.asarray(physical.moves)[0,side,at];off=np.asarray(physical.disabled)[0,side,at];pp=np.asarray(physical.pp)[0,side,at]
             if off[slot] or any(ids[k]>0 and not off[k] and pp[k]>0 for k in range(len(ids)) if k!=slot):
                 raise ValueError('PUBLIC_ENCORE_REQUEST_DISAGREEMENT')
-            physical=physical._replace(disabled=physical.disabled.at[0,side,at].set(False))
+            physical=physical._replace(disabled=tail._put(physical.disabled,(0,side,at),False))
         count=random.Random(f'encore:{seed}:{side}').choice(support)
-        physical=physical._replace(encore_move=physical.encore_move.at[0,side,at].set(move),
-            encore_counter=physical.encore_counter.at[0,side,at].set(count))
+        physical=physical._replace(encore_move=tail._put(physical.encore_move,(0,side,at),move),
+            encore_counter=tail._put(physical.encore_counter,(0,side,at),count))
     return physical
 
 
@@ -287,12 +299,12 @@ def _write_held_counts(physical,yawns,perish):
     """The mapped world with Yawn's public count (_defer_yawn) and Perish Song's duration (_perish_counts) on each side's
     active; neither is an own field. map_spec wrote the shown perishN; a count the lines do not explain refuses."""
     for side,count in yawns:
-        physical=physical._replace(yawn_counter=physical.yawn_counter.at[0,side,physical.active[0,side]].set(count))
+        physical=physical._replace(yawn_counter=tail._put(physical.yawn_counter,(0,side,int(physical.active[0,side])),count))
     for side in (0,1):
         at=int(physical.active[0,side]);shown=int(physical.perish_counter[0,side,at])
         if not shown:continue
         if perish[side] is None or min(perish[side],3)!=shown:raise ValueError('PUBLIC_PERISH_COUNT_UNAVAILABLE')
-        physical=physical._replace(perish_counter=physical.perish_counter.at[0,side,at].set(perish[side]))
+        physical=physical._replace(perish_counter=tail._put(physical.perish_counter,(0,side,at),perish[side]))
     return physical
 
 
@@ -325,8 +337,8 @@ def _restore_sleep(physical,detached,metadata,sleepers,origins,rng,base_abilitie
             rates=tuple(2 if (ability if ability is not None else base)=='earlybird' else 1 for ability in attempts)
             support=sleep_support(count,rest,early_bird=early,skipped=skipped,pending=evidence['pending'],refunded=refunded,attempt_rates=rates,attempt_refunds=evidence['attempt_refunds'])
             counter=support[0] if len(support)==1 else rng.choice(support)
-            restored=restored._replace(status=restored.status.at[0,side,at].set(5),status_counter=restored.status_counter.at[0,side,at].set(counter),
-                rest_origin=restored.rest_origin.at[0,side,at].set(rest),sleep_skipped=restored.sleep_skipped.at[0,side,at].set(skipped))
+            restored=restored._replace(status=tail._put(restored.status,(0,side,at),5),status_counter=tail._put(restored.status_counter,(0,side,at),counter),
+                rest_origin=tail._put(restored.rest_origin,(0,side,at),rest),sleep_skipped=tail._put(restored.sleep_skipped,(0,side,at),skipped))
             restored_slots.add((side,at))
             diagnostics.append(dict(kind='public-sleep-posterior',status='CLEAR',fatal=False,side=side,slot=at,support=list(support),sampled_counter=counter,rest=rest,skipped=skipped,
                 validation='HIDDEN_CLOCK_SUPPORT_NOT_EXACT_OWN_EQUALITY'))
@@ -369,7 +381,7 @@ def _carry_public_foe(physical,detached,metadata,world,foe,rng,diagnostics):
         if int(physical.status[0,foe,slot])==4:
             try:
                 counter=live._physical_toxic_counter(detached.view['mon_features']['toxic_stage'][0,public])
-                physical=physical._replace(status_counter=physical.status_counter.at[0,foe,slot].set(counter))
+                physical=physical._replace(status_counter=tail._put(physical.status_counter,(0,foe,slot),counter))
                 record('PUBLIC_TOXIC_STAGE_INVALID',False,slot=slot)
             except ValueError as error:record(getattr(error,'kind',str(error)),True,slot=slot)
     active=int(physical.active[0,foe]);active_public=[p for p,v in assignment.items()if v==active]
@@ -377,11 +389,12 @@ def _carry_public_foe(physical,detached,metadata,world,foe,rng,diagnostics):
     if len(active_public)==1:
         try:
             counter=live._physical_protect_counter(detached.view['mon_features']['stall_counter'][0,active_public[0]])
-            physical=physical._replace(protect_counter=physical.protect_counter.at[0,foe,active].set(counter))
+            physical=physical._replace(protect_counter=tail._put(physical.protect_counter,(0,foe,active),counter))
             record('PUBLIC_PROTECT_STREAK_INVALID',False)
         except ValueError as error:record(getattr(error,'kind',str(error)),True)
     else:diagnostics.append(dict(kind='PUBLIC_PROTECT_STREAK_INVALID',status='NOT_EVALUABLE',fatal=True,reason='Actual active public join unavailable'))
-    return physical._replace(pp=j.asarray(pp),hp=j.asarray(hp)),assignment,active,failures
+    host=isinstance(physical.hp,np.ndarray)   # a host-built world keeps NumPy until its one transfer
+    return physical._replace(pp=pp if host else j.asarray(pp),hp=hp if host else j.asarray(hp)),assignment,active,failures
 
 
 def _downstream_unknowns(diagnostics,reason):
@@ -390,7 +403,16 @@ def _downstream_unknowns(diagnostics,reason):
             diagnostics.append(dict(kind=kind,status='NOT_EVALUABLE',fatal=True,reason=reason))
 
 
-def materialize_protocol(root,start,*,inputs,seed):
+def _host_arrays(seed,key):
+    """empty_state(1, seed=seed) on the host: the cached constant template and this seed's key (world_keys, computed for all of
+    a root's worlds in one call by sample())."""
+    arrays=states._empty_arrays()
+    if key is None:key=states.world_keys([seed])[0]
+    arrays['keys']=np.array(key,np.uint32).reshape(arrays['keys'].shape)
+    return arrays
+
+
+def materialize_protocol(root,start,*,inputs,seed,key=None):
     """Pure typed mapping with exact own request and no true-opponent donor."""
     if type(root)is not PublicRoot or type(start)is not BattleStartOverride or type(inputs)is not ProtocolInputs:
         raise ValueError('typed genuine public root/start/protocol inputs required')
@@ -441,7 +463,8 @@ def materialize_protocol(root,start,*,inputs,seed):
         mood[owner]=tuple(map(int,detached.own['happiness']))
         mapping_spec,cursors=tail.mapping_spec(world.spec,tail_facts['replacement'])
         mapped=map_spec(mapping_spec,metadata=metadata,dex=catalog.dex,seed=seed,
-            turn=root.materialization_payload['turn'],active_turns=_once(inputs,root,'chronology',lambda:_chronology(inputs.lines)),happiness=tuple(mood),held_volatiles=True)
+            turn=root.materialization_payload['turn'],active_turns=_once(inputs,root,'chronology',lambda:_chronology(inputs.lines)),happiness=tuple(mood),held_volatiles=True,
+            arrays=_host_arrays(seed,key) if HOST_WORLDS else None)
         if mapped.state is None:
             _downstream_unknowns(diagnostics,'Typed mapper refused: '+repr(mapped.refusals))
             return ProtocolWorld(None,None,mapped.refusals,mapper_diagnostics=tuple(diagnostics))
@@ -471,7 +494,7 @@ def materialize_protocol(root,start,*,inputs,seed):
             source='LATEST_OWN_ACTIVE_REQUEST_PLUS_PUBLIC_POST_SNAPSHOT_COSTS',
             entries=[dict(slot=int(a),move=int(b),mapped=int(physical.pp[0,owner,a,b]),carried=int(own['pp'][a,b])) for a,b in zip(*np.where(np.asarray(physical.pp)[0,owner]!=own['pp']))]))
         if not failures:
-            updates={name:getattr(physical,name).at[0,owner].set(j.asarray(own[name]))
+            updates={name:tail._put(getattr(physical,name),(0,owner),np.asarray(own[name]))
                 for name in public_worlds.OWN_MON_FIELDS+public_worlds.OWN_SIDE_FIELDS}
             physical=physical._replace(**updates)
         # A known public PP charge subtracts from sampled source max; no
@@ -489,12 +512,13 @@ def materialize_protocol(root,start,*,inputs,seed):
             seed,replacement=tail_facts['replacement'] is not None,owner=owner)
         except ValueError as error:failures.append(str(error))
         if failures:raise ValueError(failures[0])
-        carry=states._rebase(detached,assignment,active,state=physical)
+        host=isinstance(physical.hp,np.ndarray)
+        carry=(states._rebase_host if host else states._rebase)(detached,assignment,active,state=physical)
         diagnostics.append(dict(kind='FINAL_PUBLIC_CARRY',status='CLEAR',fatal=True))
         body=dict(schema=SCHEMA,prefix=root.owner_lines_sha256,address=vars(root.address),seed=seed,
             public_source=catalog.source.source_hash,sampled_teams=dict(start.player_teams))
         digest=hashlib.sha256(json.dumps(body,sort_keys=True,separators=(',',':')).encode()).hexdigest()
-        return ProtocolWorld(physical,carry,(),world,digest,tuple(diagnostics))
+        return ProtocolWorld(_device(physical) if host else physical,_device(carry) if host else carry,(),world,digest,tuple(diagnostics))
     except EngineWorldUnsupported as error:
         _downstream_unknowns(diagnostics,'Original public mapper refused: '+error.reason)
         return ProtocolWorld(None,None,('original-public-mapper:'+error.reason,),mapper_diagnostics=tuple(diagnostics))
@@ -573,15 +597,17 @@ def sample(root,detached,*,lines,catalog,source,metadata,config,battle_id,seed,c
     detached=_carried_root(root,detached,lines,metadata)
     inputs=ProtocolInputs(detached,tuple(lines),catalog,metadata,source)
     result=[];seeds=[];diagnostics=[];game=game_lines_sha256(lines)
-    for index in range(count):
-        world_seed,kernel_seed=world_seeds(root,detached,game,seed,index);seeds.append(world_seed)
+    pairs=[world_seeds(root,detached,game,seed,index) for index in range(count)]
+    keys=states.world_keys([kernel for _,kernel in pairs]) if HOST_WORLDS else [None]*count   # every world's key in one call
+    for index,(world_seed,kernel_seed) in enumerate(pairs):
+        seeds.append(world_seed)
         try:
             start,reason=_gen3_randbat_belief_start_override_result(context=root.context,set_source=source.original,
                 rng=random.Random(world_seed),team_size=6,canonicalize_revealed_variants=True)
             if start is None:
                 unknown=[];_downstream_unknowns(unknown,'Original public sampler unavailable: '+str(reason))
                 made=ProtocolWorld(None,None,(reason or 'public-sampler-unavailable',),mapper_diagnostics=tuple(unknown))
-            else:made=v5_public_world.materialize(root,start,prepared=inputs,history=None,own_static=None,seed=kernel_seed)
+            else:made=v5_public_world.materialize(root,start,prepared=inputs,history=None,own_static=None,seed=kernel_seed,host_key=keys[index])
             diagnostics.append(dict(world=index,checks=list(made.mapper_diagnostics)))
             result.append(states.World(index,made.state,made.public,made.refusals,kernel_seed,False))
         except (ValueError,KeyError,TypeError,IndexError)as error:

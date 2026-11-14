@@ -9,6 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field, replace
 import hashlib
 import json
+import functools
 import re
 import warnings
 from typing import TYPE_CHECKING, Any, Mapping, Optional, Sequence
@@ -8282,7 +8283,16 @@ def _normalize_name(value: str | None) -> str:
     return re.sub(r"[^a-z0-9]+", "", str(value or "").lower())
 
 
+@functools.lru_cache(maxsize=65536)
+def _normalize_identifier_str(value: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "", value.lower())
+
+
 def _normalize_identifier(value: str) -> str:
+    # Pure on a str argument: a bounded memo (the live constructor's fold calls this millions of times per profile run).
+    # Any other type takes the unmemoized expression unchanged.
+    if type(value) is str:
+        return _normalize_identifier_str(value)
     return re.sub(r"[^a-z0-9]+", "", str(value or "").lower())
 
 
