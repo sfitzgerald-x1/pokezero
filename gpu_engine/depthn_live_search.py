@@ -605,7 +605,9 @@ class DepthNLiveSearch:
         # _release_traces' one collection, so no full pass ever runs over the still-retained traces.
         thresholds=gc.get_threshold();gc.set_threshold(thresholds[0],thresholds[1],1<<30)
         try:
-            try:report,batches=self._warm_buckets(pool);labels=self._hold_to_reference(pool);warmed=self.prepare_warm_in(listed)
+            try:
+                report,batches=self._warm_buckets(pool);labels=self._hold_to_reference(pool)
+                warmed=self.prepare_warm_in(listed)if listed else None
             finally:self.warming=False;self.reset_sessions()
             missing=[b for b in self.buckets if isinstance(self.pricers[b],guard_inputs.ObservedDepthNPricer)
                 and 2*b*self.K*dn.LANES not in self.pricers[b].label_rows]
@@ -629,7 +631,7 @@ class DepthNLiveSearch:
 
     def prepare_warm_in(self,requests):
         """Prepare's warm-in (warmup's `warm_in`): each protocol request through prepare_roots and the classification, in order,
-        sessions kept through the list, then every session and peer fold forgotten. A root refusal is fine (that path compiles
+        sessions kept through the list, then every session and this constructor's peer folds forgotten. A root refusal is fine (that path compiles
         too, e.g. PUBLIC_ROOT_REFUSED); a request that warms nothing fails it (RuntimeError naming the request): an exception
         other than a refusal, an address or format refusal (WARM_IN_UNUSABLE: the entry never reached the root) or a bare
         exception kind (a ValueError, KeyError, ... that prepare_roots caught). dict(requests, seconds, kinds: count per outcome,
@@ -645,7 +647,9 @@ class DepthNLiveSearch:
                 if kind in WARM_IN_UNUSABLE or kind in{e.__name__ for e in cw.ROOT_ERRORS}:
                     raise RuntimeError(f'warm-in request {rid}: refused {kind} ({getattr(item,"detail","")}): it warms nothing; fix the list')
                 outcomes.append(kind)
-        finally:self.reset_sessions();cw._PEER_FOLDS.clear()
+        finally:
+            self.reset_sessions()
+            for key in[k for k in list(cw._PEER_FOLDS)if k[0]==id(self.constructor)]:cw._PEER_FOLDS.pop(key,None)   # this constructor's only
         kinds={}
         for kind in outcomes:kinds[kind]=kinds.get(kind,0)+1
         return dict(requests=len(requests),seconds=time.perf_counter()-started,kinds=kinds,outcomes=outcomes)
