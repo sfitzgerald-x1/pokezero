@@ -40,17 +40,17 @@ class EntrySpikesImportOrderTests(unittest.TestCase):
             isinstance(x,ast.ImportFrom)and any(a.asname=='ex'for a in x.names)for x in n.body)]
         self.assertEqual(local,['namespaces','claimed','begin','finish'])
 
-    def test_single_owned_pin_and_unchanged_twenty_five_module_domain(self):
+    def test_single_owned_pin_and_unchanged_twenty_six_module_domain(self):
         gpu=ROOT/'gpu_engine'
         def assignment(path,name):
             return next(n.value for n in ast.parse(path.read_text()).body if isinstance(n,ast.Assign)
                 and any(isinstance(t,ast.Name)and t.id==name for t in n.targets))
         pins=ast.literal_eval(assignment(gpu/'engine_source_frame_witness.py','SOURCE_PINS'))
-        self.assertEqual(len(pins),88)
+        self.assertEqual(len(pins),89)   # 88, and residual_order.py since §6
         for name,digest in pins.items():self.assertEqual(hashlib.sha256((gpu/name).read_bytes()).hexdigest(),digest,name)
         value=assignment(gpu/'chance_consumers.py','DOMAIN_MODULES')
         modules=value.args[0].func.value.value.split()
-        self.assertEqual(len(modules),25);self.assertNotIn('engine_entry_spikes_callbacks',modules)
+        self.assertEqual(len(modules),26);self.assertIn('residual_order',modules);self.assertNotIn('engine_entry_spikes_callbacks',modules)
         actual=hashlib.sha256(b''.join(n.encode()+b'\0'+(gpu/(n+'.py')).read_bytes()+b'\0'for n in modules)).hexdigest()
         for file,name in (('chance_consumers.py','DOMAIN_SHA256'),('ordinary_law.py','DOMAIN_SHA256'),('conditional_law.py','KERNEL_SHA256')):
             self.assertEqual(ast.literal_eval(assignment(gpu/file,name)),actual)

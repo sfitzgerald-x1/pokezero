@@ -53,7 +53,7 @@ class SelfMoveOwningTests(unittest.TestCase):
   cls.runtime=driver._checked(cls.prepared);cls.fold=staticmethod(jax.jit(lambda s,f,p:full.project_and_fold(s,f,cls.runtime['public'].device,p,cls.catalog)))
 
  def test_source_default_and_cold_imports(self):
-  witness._source();self.assertEqual(len(witness.SOURCE_PINS),88)
+  witness._source();self.assertEqual(len(witness.SOURCE_PINS),89)
   self.assertIsNone(direct.compile_direct_hit_controls(engine_catalog=self.producer).device.self_move)
   # transition.py is certified against CURRENT_TRANSITION (full AST plus mutations) by terminal_closeout and seismic_toss_components.
   for modules in [('benchmark_retained_games','engine_lifecycle_event_device','engine_full_v4_event_device'),('engine_full_v4_event_device','engine_lifecycle_event_device','benchmark_retained_games')]:

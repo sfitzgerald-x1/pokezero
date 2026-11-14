@@ -63,7 +63,7 @@ class FocusPunchInputTests(unittest.TestCase):
  def declare(self,x):
   return public.move(x.tape,x.actor,x.state.active[j.arange(8),x.actor],x.state.active[j.arange(8),1-x.actor],x.move,eligible=j.ones(8,bool))
  def test_source_default_original_callback_and_current_operands(self):
-  witness._source();self.assertEqual(len(witness.SOURCE_PINS),88)
+  witness._source();self.assertEqual(len(witness.SOURCE_PINS),89)
   # transition.py is certified against CURRENT_TRANSITION (full AST plus mutations) by terminal_closeout and seismic_toss_components.
   self.assertEqual(static._undefined_step_globals(Path('gpu_engine/transition.py').read_text()),set())
   step=static._step(Path('gpu_engine/transition.py').read_text());calls={n.func.attr:n for n in ast.walk(step)if isinstance(n,ast.Call)and isinstance(n.func,ast.Attribute)and isinstance(n.func.value,ast.Name)and n.func.value.id=='focus_callbacks'}
