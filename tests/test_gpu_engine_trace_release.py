@@ -6,6 +6,7 @@ on its own tracers, and jit's tracing caches then keep their jaxprs for as long 
 program is compiled. CPU only: a few small programs and well under 1 GiB."""
 import gc
 import unittest
+from unittest.mock import patch
 
 import jax
 import jax.numpy as j
@@ -70,13 +71,22 @@ class TraceReleaseTests(unittest.TestCase):
 
     def test_release_empties_both_tracing_caches_of_this_jax(self):
         from gpu_engine import trace_release
-        caches = trace_release._caches()
-        self.assertEqual(len(caches), 2, 'jit\'s tracing caches moved: trace_release no longer finds both')
+        caches = trace_release.caches()   # raises when this JAX moved either cache (verified on trace_release.VERIFIED_JAX)
+        self.assertEqual(len(caches), 2)
+        self.assertEqual([type(c).__name__ for c in caches], ['WeakrefLRUCache'] * 2)
         held = jax.jit(lambda x: j.sin(x) * 2)   # a long-lived jitted function, traced inside another program
         jax.jit(lambda x: held(x) + 1).lower(j.ones(3, j.float32)).compile()
         self.assertGreater(sum(c.cache_info().currsize for c in caches), 0)
         self.assertGreater(trace_release.release(), 0)
         self.assertEqual(sum(c.cache_info().currsize for c in caches), 0)
+
+    def test_a_moved_cache_fails_loudly(self):
+        from gpu_engine import trace_release
+        with patch.object(trace_release, 'CACHES', (('jax._src.pjit', 'no_such_cache'),)), patch.object(trace_release, '_found', None):
+            with self.assertRaisesRegex(RuntimeError, r'jax\._src\.pjit\.no_such_cache not found in jax .* \(verified on 0\.12\.0\)'):
+                trace_release.release()
+        with patch.object(trace_release, 'CACHES', (('jax._src.pjit', 'jit_lower'),)), patch.object(trace_release, '_found', None):
+            with self.assertRaisesRegex(RuntimeError, 'has no cache_clear'):trace_release.release()
 
 
 if __name__ == '__main__':

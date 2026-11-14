@@ -17,33 +17,40 @@ Why releasing is safe. A compiled program never needs its trace again:
   C++ fast path), which release() leaves alone.
 Clearing changes no program. A function traced again later re-traces to the same jaxpr, and nothing already compiled is
 dropped or recompiled.
+
+Both caches are JAX internals, verified on jax 0.12.0. release() raises RuntimeError when either is missing or cannot be
+cleared (a JAX upgrade that moved them), rather than silently leaving the traces alive.
 """
+VERIFIED_JAX = '0.12.0'
+CACHES = (('jax._src.interpreters.partial_eval', 'trace_to_jaxpr'), ('jax._src.pjit', '_infer_params_cached'))
+_found = None
 
 
-def _caches():
-    """jit's two tracing caches under the names this JAX gives them. A JAX that renames them yields fewer, and then
-    release() frees less; tests/test_gpu_engine_trace_release.py fails when a compiled program's trace survives."""
-    found = []
-    try:
-        from jax._src.interpreters import partial_eval
-        found.append(partial_eval.trace_to_jaxpr)
-    except (ImportError, AttributeError):
-        pass
-    try:
-        from jax._src import pjit
-        found.append(pjit._infer_params_cached)
-    except (ImportError, AttributeError):
-        pass
-    return tuple(c for c in found if callable(getattr(c, 'cache_clear', None)))
+def caches():
+    """jit's two tracing caches (CACHES). RuntimeError when either is missing or has no cache_clear / cache_info."""
+    global _found
+    if _found is None:
+        import importlib
+        import jax
+        out = []
+        for module, name in CACHES:
+            try:
+                cache = getattr(importlib.import_module(module), name)
+            except (ImportError, AttributeError) as error:
+                raise RuntimeError(f'trace_release: {module}.{name} not found in jax {jax.__version__} (verified on {VERIFIED_JAX}): '
+                    f'{type(error).__name__}: {error}') from error
+            if not (callable(getattr(cache, 'cache_clear', None)) and callable(getattr(cache, 'cache_info', None))):
+                raise RuntimeError(f'trace_release: {module}.{name} in jax {jax.__version__} has no cache_clear/cache_info '
+                    f'(verified on {VERIFIED_JAX})')
+            out.append(cache)
+        _found = tuple(out)
+    return _found
 
 
 def release():
     """Empty jit's tracing caches (see the module docstring). Returns the number of cache entries dropped."""
     dropped = 0
-    for cache in _caches():
-        try:
-            dropped += int(cache.cache_info().currsize)
-        except Exception:
-            pass
+    for cache in caches():
+        dropped += int(cache.cache_info().currsize)
         cache.cache_clear()
     return dropped
