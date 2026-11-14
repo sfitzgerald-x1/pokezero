@@ -532,6 +532,33 @@ class LiveSearchTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError,'session cap'):self.search(max_requests=4,session_cap=2)
 
     # warmup --------------------------------------------------------------------------------------------------------------------
+    def test_warmup_warms_prepare_in_on_its_list_twice_then_forgets_it(self):
+        outcomes={('w0',0):self.outcome(0),('x',0):self.outcome(1),('x',1):self.outcome(2),('y',3):Refusal('PUBLIC_ROOT_REFUSED')}
+        prepared=[];prepare=live.cw.prepare_roots;released=[];release=live.trace_release.release
+        def spy(constructor,requests,**kw):
+            prepared.extend((r['battle_id'],r['decision_index'])for r in requests);return prepare(constructor,requests,**kw)
+        def releasing():released.append(len(prepared));return release()
+        s=self.search(pricers=self.make_pricers(8,(1,)));listed=[('x',0),('x',1),('y',3)]
+        with Codex(outcomes),patch.object(live.cw,'prepare_roots',side_effect=spy),patch.object(live.trace_release,'release',side_effect=releasing):
+            report=s.warmup([request('w0',0)],warm_in=[request(b,d)for b,d in listed])
+        self.assertEqual({k:report['warm_in'][k]for k in('requests','kinds')},dict(requests=3,kinds={'Prepared':2,'RootRefusal':1}))
+        self.assertGreater(report['warm_in']['rewarm_seconds'],0);self.assertNotIn('warm_in_seconds',report['trace_release'])
+        # the list once after every warm pass, before the trace release, and once more after the re-warm: then forgotten
+        before,after=prepared[:released[0]],prepared[released[0]:]
+        self.assertEqual((before[-3:],after[-3:]),(listed,listed));self.assertNotIn(('x',0),before[:-3])
+        self.assertEqual((s.constructor.seen,s.constructor.sessions,s.battles),(set(),{},{}))
+        rows,_=self.run_batch(s,[request('x',0)],outcomes);self.assertEqual(rows[0]['status'],'COMPLETE')   # not an attempted address
+        # without a list nothing changes: no warm_in in the report, prepare never sees another root
+        prepared.clear()
+        with Codex(outcomes),patch.object(live.cw,'prepare_roots',side_effect=spy):report=self.search(pricers=self.make_pricers(8,(1,))).warmup([request('w0',0)])
+        self.assertNotIn('warm_in',report);self.assertEqual({b for b,_ in prepared},{'w0'})
+        # a warm-in request that breaks prepare (an exception, not a refusal) stops warmup
+        def broken(constructor,requests,**kw):
+            if requests[0]['battle_id']=='x':raise RuntimeError('broken')
+            return prepare(constructor,requests,**kw)
+        with Codex(outcomes),patch.object(live.cw,'prepare_roots',side_effect=broken),self.assertRaisesRegex(RuntimeError,'warm-in request warm-in-0: RuntimeError: broken'):
+            self.search(pricers=self.make_pricers(8,(1,))).warmup([request('w0',0)],warm_in=[request('x',0)])
+
     def test_warmup_compiles_every_bucket_before_live_requests(self):
         pricers=self.make_pricers(8,(1,2,4));s=self.search(pricers=pricers)
         outcomes={('w0',0):self.outcome(0),('w1',0):self.outcome(1),**{(f'l{i}',0):self.outcome(2+i)for i in range(3)}}

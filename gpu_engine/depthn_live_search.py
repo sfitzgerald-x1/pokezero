@@ -573,7 +573,7 @@ class DepthNLiveSearch:
             gather=lambda k:k[0]=='gather'and k[1]==2*cap*dn.LANES,leaf=lambda k:k[0]=='leaf')
         return[name for name,test in want.items()if not any(test(k)for k in keys)]
 
-    def warmup(self,requests):
+    def warmup(self,requests,warm_in=()):
         """The full path on saved requests (their eight address keys) once cold and once warm per bucket, each forced to that
         bucket, so every program compiles before READY. Windows of the saved requests are tried until one prices at the bucket
         with every program of a live call compiled (missing_programs; RuntimeError if none does, e.g. saved roots whose every
@@ -581,20 +581,29 @@ class DepthNLiveSearch:
         programs, seconds, carry_signature, carry_reference: the reference root's address and classes). It also records the
         carry reference of the structure check: every warmup root must share it (RuntimeError on any WORLD_STRUCTURE_MISMATCH:
         in the priced windows, and over every warmup root prepared once more afterwards), and it must be the only
-        constructor-world carry signature in the warmed program keys."""
+        constructor-world carry signature in the warmed program keys.
+        `warm_in` (saved requests, the same eight keys; the server's --prepare-warm-in list): prepare's own warm-in. Prepare runs
+        eager JAX on the CPU, whose small programs compile on their first use of each shape, and the warmup roots reach only some
+        of them (r5a's servers compiled 22-44 of them over their first 25-200 live roots). Each is prepared and classified once,
+        in order, sessions kept through the list (a battle's later decision folds incrementally, an unseen battle's late
+        decision from scratch, as live), after the warm passes and once more after the trace release's re-warm (whatever the
+        release unkeys compiles again before READY); then every session is forgotten. The report's warm_in records it."""
         trace_release.caches()   # a JAX that moved jit's tracing caches fails here, not after the lowering
-        keys=PROTOCOL_KEYS[2:];pool=[]
+        keys=PROTOCOL_KEYS[2:];pool=[];listed=[]
         for r in requests:
             if not isinstance(r,dict)or any(k not in r for k in keys):raise ValueError('saved requests with '+', '.join(keys)+' required')
             pool.append({k:r[k]for k in keys})
         if not pool:raise ValueError('at least one saved request required')
+        for j,r in enumerate(warm_in):
+            if not isinstance(r,dict)or any(k not in r for k in keys):raise ValueError('warm-in requests with '+', '.join(keys)+' required')
+            listed.append(dict({k:r[k]for k in keys},schema=SCHEMA,request_id=f'warm-in-{j}'))
         started=time.perf_counter();self.carry=None;self.warming=True;self.reply_completed=0;self.reply_warm=None
         # No full (gen-2) collection while the programs trace: each would rescan the trace's own growing live state (tens of
         # millions of objects) and find little garbage. Young collections go on; the thresholds come back only after
         # _release_traces' one collection, so no full pass ever runs over the still-retained traces.
         thresholds=gc.get_threshold();gc.set_threshold(thresholds[0],thresholds[1],1<<30)
         try:
-            try:report,batches=self._warm_buckets(pool);labels=self._hold_to_reference(pool)
+            try:report,batches=self._warm_buckets(pool);labels=self._hold_to_reference(pool);warmed=self.prepare_warm_in(listed)
             finally:self.warming=False;self.reset_sessions()
             missing=[b for b in self.buckets if isinstance(self.pricers[b],guard_inputs.ObservedDepthNPricer)
                 and 2*b*self.K*dn.LANES not in self.pricers[b].label_rows]
@@ -608,15 +617,30 @@ class DepthNLiveSearch:
             signatures={k[-1][2]for k in self.programs if type(k[-1])is tuple and k[-1][:2]==('worlds',cw.SOURCE)}
             if self.carry is None or signatures!={self.carry['signature']}:
                 raise RuntimeError(f'warmup: the recorded carry signature {None if self.carry is None else self.carry["signature"]} is not the warmed programs\' {sorted(signatures)}')
-            released=self._release_traces(batches)
+            released=self._release_traces(batches,listed)
         finally:gc.set_threshold(*thresholds)
         self.warm=dict(buckets=report,programs=len(self.programs),seconds=time.perf_counter()-started,carry_signature=self.carry['signature'],
-            trace_release=released,
+            trace_release=released,**({}if not listed else dict(warm_in=dict(warmed,rewarm_seconds=released.pop('warm_in_seconds')))),
             carry_reference=self.carry['root'],labels=dict(p1_rows={b:2*b*self.K*dn.LANES for b in self.buckets},root_rows=labels),
             **({}if getattr(self,'reply',None)is None else dict(reply=dict(views=self.reply.mode,seats_seconds=self.reply_warm))))
         return self.warm
 
-    def _release_traces(self,batches):
+    def prepare_warm_in(self,requests):
+        """Prepare's warm-in (warmup's `warm_in`): each protocol request through prepare_roots and the classification, in order,
+        sessions kept through the list, then every session and peer fold forgotten. A request prepare refuses is fine (its
+        refusal path compiles too); an exception other than a refusal fails it (RuntimeError naming the request), so a broken
+        list never reaches READY. dict(requests, seconds, kinds: count per prepare result)."""
+        started=time.perf_counter();kinds={}
+        try:
+            for request in requests:
+                try:item=cw.prepare_roots(self.constructor,[request],device=self.device,**self._redaction())[0];classify(self.constructor,request)
+                except FATAL:raise
+                except Exception as error:raise RuntimeError(f'warm-in request {request.get("request_id")}: {type(error).__name__}: {error}')from error
+                kinds[type(item).__name__]=kinds.get(type(item).__name__,0)+1
+        finally:self.reset_sessions();cw._PEER_FOLDS.clear()
+        return dict(requests=len(requests),seconds=time.perf_counter()-started,kinds=kinds)
+
+    def _release_traces(self,batches,warm_in=()):
         """The end of warmup, once every program has compiled: empty jit's tracing caches (gpu_engine.trace_release: the
         warmed programs' traces, kept alive there by the executor's long-lived jitted functions, are about 66M objects after
         a DN2W16 warmup, and every full collection while serving would rescan them), collect once, then run each bucket's warm
@@ -624,7 +648,8 @@ class DepthNLiveSearch:
         released trace (eagerly evaluated jaxprs, e.g. vmapped jax.random.fold_in) instead of on their function, so serving
         compiles nothing. Each re-warm must answer as that bucket's warm pass did, (status, cause, bucket, action_index) per
         row (`batches[b]` = (batch, the warm pass's rows)); RuntimeError otherwise, so a broken re-warm never reaches READY.
-        Returns dict(entries dropped, gc_seconds, rewarm_seconds, jax: the JAX version released under)."""
+        Then prepare's warm-in list (`warm_in`) once more. Returns dict(entries dropped, gc_seconds, rewarm_seconds, jax: the JAX
+        version released under, warm_in_seconds when there is a list)."""
         released=trace_release.release();clock=time.perf_counter();gc.collect();collected=time.perf_counter()-clock
         clock=time.perf_counter();outcome=lambda rows:[(r['status'],r['cause'],r['bucket'],r['action_index'])for r in rows]
         for b,(batch,warm) in batches.items():
@@ -632,8 +657,10 @@ class DepthNLiveSearch:
             if outcome(again)!=outcome(warm):
                 self.reset_sessions()
                 raise RuntimeError(f'warmup: the re-warm of bucket {b} answered {outcome(again)}, its warm pass {outcome(warm)}')
-        self.reset_sessions()
-        return dict(entries=released,gc_seconds=collected,rewarm_seconds=time.perf_counter()-clock,jax=jax.__version__)
+        self.reset_sessions();rewarm=time.perf_counter()-clock
+        out=dict(entries=released,gc_seconds=collected,rewarm_seconds=rewarm,jax=jax.__version__)
+        if warm_in:out['warm_in_seconds']=self.prepare_warm_in(warm_in)['seconds']
+        return out
 
     def _hold_to_reference(self,pool):
         """Every warmup root, not only those of the windows that priced: prepared once more (fresh sessions and attempts), each
