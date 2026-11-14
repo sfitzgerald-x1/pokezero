@@ -125,6 +125,8 @@ NOISE_GATED_K2='NOISE_GATED_K2'   # screen-r4a variant B: averaging's (br_fp's, 
 ROOT_OPERATORS=(ROOT_OPERATOR,NOISE_GATED_K2)   # the declarable live root operators; the first is the default
 NOISE_GATE_K=2
 CAUSES=('constructor_refused','depthn_refused','expired_in_queue','server_error','bad_request','class_refused')
+WARM_IN_UNUSABLE=('MALFORMED_SEARCH_REQUEST','MALFORMED_SEARCH_ADDRESS','SEARCH_PREFIX_OR_REQUEST_MISMATCH','SEARCH_REQUEST_ALREADY_ATTEMPTED',
+    'SEARCH_PREFIX_NOT_ORIGINAL_SUCCESSOR')   # ProtocolConstructor.prepare's address and format refusals: a warm-in entry that warms nothing
 CLASSES=('forced_switch','fresh_substitute','wish','sleep')   # root_class priority order
 PROTOCOL_KEYS=('schema','request_id','battle_id','owner','stream_id','decision_index','generation','prefix_sha256','lines','own_request_line')
 OURS=('rung','budget_seconds')
@@ -627,18 +629,26 @@ class DepthNLiveSearch:
 
     def prepare_warm_in(self,requests):
         """Prepare's warm-in (warmup's `warm_in`): each protocol request through prepare_roots and the classification, in order,
-        sessions kept through the list, then every session and peer fold forgotten. A request prepare refuses is fine (its
-        refusal path compiles too); an exception other than a refusal fails it (RuntimeError naming the request), so a broken
-        list never reaches READY. dict(requests, seconds, kinds: count per prepare result)."""
-        started=time.perf_counter();kinds={}
+        sessions kept through the list, then every session and peer fold forgotten. A root refusal is fine (that path compiles
+        too, e.g. PUBLIC_ROOT_REFUSED); a request that warms nothing fails it (RuntimeError naming the request): an exception
+        other than a refusal, an address or format refusal (WARM_IN_UNUSABLE: the entry never reached the root) or a bare
+        exception kind (a ValueError, KeyError, ... that prepare_roots caught). dict(requests, seconds, kinds: count per outcome,
+        outcomes: per request, 'Prepared' or the refusal kind)."""
+        started=time.perf_counter();outcomes=[]
         try:
-            for request in requests:
+            for j,request in enumerate(requests):
+                rid=request.get('request_id')
                 try:item=cw.prepare_roots(self.constructor,[request],device=self.device,**self._redaction())[0];classify(self.constructor,request)
                 except FATAL:raise
-                except Exception as error:raise RuntimeError(f'warm-in request {request.get("request_id")}: {type(error).__name__}: {error}')from error
-                kinds[type(item).__name__]=kinds.get(type(item).__name__,0)+1
+                except Exception as error:raise RuntimeError(f'warm-in request {rid}: {type(error).__name__}: {error}')from error
+                kind='Prepared'if type(item)is cw.Prepared else str(getattr(item,'kind',type(item).__name__))
+                if kind in WARM_IN_UNUSABLE or kind in{e.__name__ for e in cw.ROOT_ERRORS}:
+                    raise RuntimeError(f'warm-in request {rid}: refused {kind} ({getattr(item,"detail","")}): it warms nothing; fix the list')
+                outcomes.append(kind)
         finally:self.reset_sessions();cw._PEER_FOLDS.clear()
-        return dict(requests=len(requests),seconds=time.perf_counter()-started,kinds=kinds)
+        kinds={}
+        for kind in outcomes:kinds[kind]=kinds.get(kind,0)+1
+        return dict(requests=len(requests),seconds=time.perf_counter()-started,kinds=kinds,outcomes=outcomes)
 
     def _release_traces(self,batches,warm_in=()):
         """The end of warmup, once every program has compiled: empty jit's tracing caches (gpu_engine.trace_release: the
