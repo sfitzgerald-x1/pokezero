@@ -69,7 +69,8 @@ class NamespaceEqualityTests(unittest.TestCase):
   current.body=[n for n in current.body if not(isinstance(n,ast.FunctionDef)and n.name in helpers)and not(isinstance(n,ast.Assign)and any(isinstance(t,ast.Name)and t.id in bindings for t in n.targets))]
   current.body=[oldf if isinstance(n,ast.FunctionDef)and n.name=='_host_inputs'else n for n in current.body]
   self.assertEqual(ast.dump(current),ast.dump(old))
-  for name in ('transition.py','engine_retained_encoder_driver.py','engine_kernel_frame_risk.py','engine_execution_completeness.py','engine_full_v4_event_device.py'):
+  # transition.py is certified against CURRENT_TRANSITION (full AST plus mutations) by terminal_closeout and seismic_toss_components.
+  for name in ('engine_retained_encoder_driver.py','engine_kernel_frame_risk.py','engine_execution_completeness.py','engine_full_v4_event_device.py'):
    self.assertEqual(Path('gpu_engine',name).read_bytes(),subprocess.check_output(['git','show','b8092a85:gpu_engine/'+name]))
   witness._source()
 

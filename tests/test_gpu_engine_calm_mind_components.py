@@ -132,11 +132,8 @@ class CalmMindComponentTests(unittest.TestCase):
   _,packets=public_wire.project_lines(wire,lines,**v4.wire_kwargs(self.catalog));return np.array([e.words() for p in packets for e in p.events],np.int32)
  def test_canonical_static_capability_default_ast_and_original_source_order(self):
   from gpu_engine import engine_source_frame_witness as witness
-  # witness._source() checks the pin inventory and every pinned file's bytes. While the chance proof does not cover
-  # R's effect draws, the secondary.py and transition.py pins stay stale on purpose and it refuses; this test checks
-  # this callback's own pin (every pin's bytes: transition_observer_wiring's owned-source-bindings test). Tripwire:
-  # the pin bump that ends the refusal fails the assertRaises below and must restore witness._source() here.
-  with self.assertRaisesRegex(ValueError,'ACTUAL_KERNEL_SOURCE_DRIFT: (secondary|transition)[.]py'):witness._source()
+  # witness._source() checks the pin inventory and every pinned file's bytes (§6 refreshed them with the chance proof).
+  witness._source()
   self.assertIn('engine_calm_mind_callbacks.py',witness.SOURCE_PINS)
   self.assertEqual(hashlib.sha256(Path(witness.__file__).with_name('engine_calm_mind_callbacks.py').read_bytes()).hexdigest(),witness.SOURCE_PINS['engine_calm_mind_callbacks.py'])
   move=self.ids['calmmind'];self.assertEqual(int(self.risks.device.selected_risk[move]),0)
