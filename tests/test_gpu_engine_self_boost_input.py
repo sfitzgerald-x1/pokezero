@@ -62,7 +62,7 @@ class SelfBoostInputTests(unittest.TestCase):
   new=j.clip(old+self.table.effects.self_boosts[move],-6,6);tape,c=cb.finish(tape,p,new,yes)
   return SimpleNamespace(state=s,cursor=cursor,initial=initial,before=before,tape=tape,capture=c,actor=actor,move=move,old=old,new=new)
  def test_original_source_default_actual_call_operands_and_legacy(self):
-  witness._source();self.assertEqual(len(witness.SOURCE_PINS),88)
+  witness._source();self.assertEqual(len(witness.SOURCE_PINS),89)
   d=self.helper.device.self_boost
   for name,stats,deltas in [('tailglow',[2,-1],[2,0]),('agility',[4,-1],[2,0]),('dragondance',[0,4],[1,1])]:
    i=self.metadata['vocabulary']['moves'].index(name);self.assertEqual(d.stats[i].tolist(),stats);self.assertEqual(d.deltas[i].tolist(),deltas);self.assertEqual(int(self.runtime['kernel_risk_compiled'].device.selected_risk[i]),0)

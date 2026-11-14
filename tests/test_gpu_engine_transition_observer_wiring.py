@@ -149,8 +149,9 @@ class TransitionObserverWiringTests(unittest.TestCase):
                     isinstance(t, ast.Name) and t.id == name for t in n.targets)))
 
         for file, name, count in (
-                ("engine_source_frame_witness.py", "SOURCE_PINS", 88),
-                ("chance_consumers.py", "SOURCE_PINS", 13),
+                # §6 pins residual_order.py (R1) beside transition.py: 89 and 14.
+                ("engine_source_frame_witness.py", "SOURCE_PINS", 89),
+                ("chance_consumers.py", "SOURCE_PINS", 14),
                 ("ordinary_law.py", "MAPPING_PINS", 6),
                 ("conditional_law.py", "MAPPING_PINS", 4)):
             pins = literal(file, name)
@@ -160,7 +161,7 @@ class TransitionObserverWiringTests(unittest.TestCase):
                     actual = hashlib.sha256((ROOT / "gpu_engine" / target).read_bytes()).hexdigest()
                     self.assertEqual(actual, expected)
         modules = ("action_history absorption baton combat critical damage_moves effects encore "
-                   "entry focus_punch items linked_traps mechanics phazing pressure pursuit secondary "
+                   "entry focus_punch items linked_traps mechanics phazing pressure pursuit residual_order secondary "
                    "self_destruct sleep_talk solar_beam state sustain transition variable_moves weather").split()
         domain = hashlib.sha256(b"".join(name.encode() + b"\0" +
             (ROOT / "gpu_engine" / (name + ".py")).read_bytes() + b"\0"

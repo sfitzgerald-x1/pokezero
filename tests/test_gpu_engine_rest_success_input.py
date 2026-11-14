@@ -76,7 +76,7 @@ class RestSuccessTests(unittest.TestCase):
   self.assertFalse(bool(cb.captured_matches(got._replace(words=got.words.at[:,2,8].set(0)),c).any()))
 
  def test_source_default_and_original_handlers(self):
-  witness._source();self.assertEqual(len(witness.SOURCE_PINS),88)
+  witness._source();self.assertEqual(len(witness.SOURCE_PINS),89)
   oldtree=ast.parse(subprocess.check_output(['git','show',BASE+':gpu_engine/transition.py'],text=True));new=ast.parse(subprocess.check_output(['git','show','da41da40:gpu_engine/transition.py'],text=True));baseline=dump_default_program(oldtree)
   self.assertEqual(dump_default_program(new),baseline);assert_hp_rng_mutations_detected(self,new,baseline)
   # transition.py is certified against CURRENT_TRANSITION (full AST plus mutations) by terminal_closeout and seismic_toss_components.

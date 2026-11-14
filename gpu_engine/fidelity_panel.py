@@ -15,7 +15,7 @@ import math
 import os
 
 from . import future_state as mapping
-from .finite_law import CardinalityRefusal, compare_laws
+from .finite_law import CardinalityRefusal, chance_fields, compare_laws
 
 
 class WholeSlotUnknown(Exception):
@@ -192,17 +192,15 @@ class JaxCaseExecutor:
         from .transition import ChanceInputs
         if not cases or len(cases) > self.size:
             raise ValueError("nonempty case batch within declared size required")
-        values = [dict(case.values) for case in cases]
+        # Every ChanceInputs field, effect included (§6), comes from the case: a case without a declared coordinate
+        # refuses, and no enumerated case falls back to effect=None (a key-sampled stream).
+        values = [chance_fields(dict(case.values)) for case in cases]
+        if set(values[0]) != set(ChanceInputs._fields):
+            raise ValueError("CHANCE_INPUT_FIELDS_DIFFER")
         values += [values[0]] * (self.size - len(values))
-        fields = {}
-        fields["draws"] = self.jnp.asarray([[[v[f"draws.{s}.{c}"] for c in range(12)]
-            for s in range(2)] for v in values], self.jnp.int32)
-        for field in ("phazing", "secondary", "sleep_talk", "entry_ties"):
-            fields[field] = self.jnp.asarray([[v[f"{field}.{s}"] for s in range(2)]
-                for v in values], self.jnp.int32)
-        fields["initial_tie"] = self.jnp.asarray([v["initial_tie"] for v in values], self.jnp.int32)
-        result = self.jax.block_until_ready(self.compiled(
-            self.state, self.actions, self.table, ChanceInputs(**fields)))
+        chance = ChanceInputs(**{name: self.jnp.asarray([v[name] for v in values], self.jnp.int32)
+                                 for name in ChanceInputs._fields})
+        result = self.jax.block_until_ready(self.compiled(self.state, self.actions, self.table, chance))
         if np.asarray(result.invalid_actions)[:len(cases)].any():
             raise WholeSlotUnknown("INVALID_JAX_ACTION", "bound requested action refused")
         host = self.jax.device_get(result.state)

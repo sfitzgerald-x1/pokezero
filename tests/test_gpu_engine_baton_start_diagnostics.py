@@ -71,8 +71,8 @@ class BatonStartDiagnosticsTests(unittest.TestCase):
   dump=lambda n:ast.dump(n,include_attributes=False)
   old=ast.parse(subprocess.check_output(['git','show',BASE+':gpu_engine/engine_baton_pass_callbacks.py'],text=True));new=ast.parse(subprocess.check_output(['git','show','47f8dd99dd600388ecd72932068c7308f1f8136f:gpu_engine/engine_baton_pass_callbacks.py'],text=True))
   # The historical observer-only delta predates later ability families.
-  # Bind the complete current helper separately to the integrated source.
-  self.assertEqual(Path('gpu_engine/engine_baton_pass_callbacks.py').read_bytes(),subprocess.check_output(['git','show','b8092a85:gpu_engine/engine_baton_pass_callbacks.py']))
+  # Bind the complete current helper separately to the reviewed source: engine_baton_pass_callbacks.py is
+  # byte-certified against the witness SOURCE_PINS at the end of this test (and by transition_observer_wiring).
   class Remove(ast.NodeTransformer):
    def visit_FunctionDef(self,n):return None if n.name=='_start_diagnostics'else self.generic_visit(n)
    def visit_Assign(self,n):
@@ -89,7 +89,9 @@ class BatonStartDiagnosticsTests(unittest.TestCase):
    def visit_For(self,n):return None if any(isinstance(x,ast.Call)and isinstance(x.func,ast.Name)and x.func.id=='_baton_start_predicates'for x in ast.walk(n.iter))else self.generic_visit(n)
    def visit_Call(self,n):n.keywords=[k for k in n.keywords if k.arg!='baton_start_predicate_scope'];return self.generic_visit(n)
   self.assertEqual(dump(old),dump(RemoveCensus().visit(new)))
-  for name in('transition.py','state.py','baton.py','engine_execution_completeness.py','engine_kernel_frame_risk.py','engine_retained_encoder_driver.py','engine_full_v4_event_device.py'):
+  # transition.py is certified against CURRENT_TRANSITION (full AST plus mutations) by terminal_closeout and seismic_toss_components.
+  # state.py and baton.py are byte-certified against the reviewed SOURCE_PINS below and by transition_observer_wiring.
+  for name in('engine_execution_completeness.py','engine_kernel_frame_risk.py','engine_retained_encoder_driver.py','engine_full_v4_event_device.py'):
    self.assertEqual(Path('gpu_engine',name).read_bytes(),subprocess.check_output(['git','show','b8092a85:gpu_engine/'+name]),name)
   for f,key in [('engine_source_frame_witness.py','SOURCE_PINS'),('chance_consumers.py','SOURCE_PINS'),('ordinary_law.py','MAPPING_PINS'),('conditional_law.py','MAPPING_PINS')]:
    t=ast.parse(Path('gpu_engine',f).read_text());pins=ast.literal_eval(next(n.value for n in t.body if isinstance(n,ast.Assign)and any(isinstance(x,ast.Name)and x.id==key for x in n.targets)))

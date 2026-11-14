@@ -48,8 +48,7 @@ CONSUMERS = {
         ("sleep_talk", "sleep_talk.choose: draw modulo callable count before PP test"),
         ("entry_ties", "transition resumed switch/callback ordering"))},
     "initial_tie": ("transition.initialize unresolved initial entry ordering",),
-    # Fidelity R (design 2.1): the appended effect stream's consumers. finite_law.COORDINATES does not carry the
-    # stream, so plan_for_state builds no axis for them: re-pinning transition.py must add the coordinates first.
+    # Fidelity R (design 2.1): the appended effect stream's consumers, finite_law.COORDINATES' effect.{s}.{c} axes (§6).
     **{f"effect.{s}.{c}": (use,) for s in range(2) for c, use in (
         (0, "transition Bonemerang second hit: critical<1 or<2 (critical.is_critical)"),
         (1, "transition Bonemerang second hit: damage 85+draw"),
@@ -60,9 +59,9 @@ CONSUMERS = {
 }
 
 # Changing any source that supplies the consumer/domain proof requires review.
-SOURCE_PINS = {'action_history.py': 'a47bdb2712f7eadaed12d91ede70be2ebe9f1c1ae3f70fe56495437997212407', 'critical.py': 'b66e6cf10c0d4df625b1c4f5e5db238af42052e556d7649a10f911745181401e', 'effects.py': '47f549d608b60d46e8cc4db7bad5be249ae728a4aab2a0ef28f105f3614e40e2', 'encore.py': '63da39bbd181a8c6371b3bca853322291a03674c60f535ad0eacdbe1a440e0dd', 'entry.py': 'eabf2713a100256ba86fd0b5ac4155042e2a0c6dfe0bc37c7f0c6219dbdd22c1', 'mechanics.py': 'e8476cc3e0029f3ed0bf82276312440e6dd8b340ffeb0c68cdd5611754eef661', 'phazing.py': 'c27039f267bd18660adb3c2bd826e58a7da953eea0e79677de5428f042447969', 'pursuit.py': '2b01102bb3819791fc1edea0ba0fe0a0b913e8dfa5a8f6501f48f3fe260a8309', 'secondary.py': 'ada20a946cc106dcf798fa053392ed895fe778c977af13774ab58e0c8c657fe6', 'sleep_talk.py': '968a78ddde87158b13f68dfcacc2158f07336d82c1be472d2283421e8583c154', 'state.py': '67ca721ce1f6b1a5c3e9c6fd42fe33d65f62ffcec006f5c5efd188225111a59c', 'transition.py': '97086e6a630d602e5179b608a5d8d93d4d191c0b4559fb6dd546cfb0e267431e', 'weather.py': '3c861027e16d27917fa47fa5cf5d6dc0c68d3a74af282108dfb94369d4db57e5'}
-DOMAIN_MODULES = tuple("action_history absorption baton combat critical damage_moves effects encore entry focus_punch items linked_traps mechanics phazing pressure pursuit secondary self_destruct sleep_talk solar_beam state sustain transition variable_moves weather".split())
-DOMAIN_SHA256 = 'de58aa3ce6bc8df33be4894007f9a04bd714365289b5d5363a26700ff6223087'
+SOURCE_PINS = {'action_history.py': 'a47bdb2712f7eadaed12d91ede70be2ebe9f1c1ae3f70fe56495437997212407', 'critical.py': 'b66e6cf10c0d4df625b1c4f5e5db238af42052e556d7649a10f911745181401e', 'effects.py': '47f549d608b60d46e8cc4db7bad5be249ae728a4aab2a0ef28f105f3614e40e2', 'encore.py': '63da39bbd181a8c6371b3bca853322291a03674c60f535ad0eacdbe1a440e0dd', 'entry.py': 'eabf2713a100256ba86fd0b5ac4155042e2a0c6dfe0bc37c7f0c6219dbdd22c1', 'mechanics.py': 'e8476cc3e0029f3ed0bf82276312440e6dd8b340ffeb0c68cdd5611754eef661', 'phazing.py': 'c27039f267bd18660adb3c2bd826e58a7da953eea0e79677de5428f042447969', 'pursuit.py': '2b01102bb3819791fc1edea0ba0fe0a0b913e8dfa5a8f6501f48f3fe260a8309', 'residual_order.py': '674b5f19b53b2c9098fcff8f35c4cdce835874983a36fc90176923daa7463bf1', 'secondary.py': 'ada20a946cc106dcf798fa053392ed895fe778c977af13774ab58e0c8c657fe6', 'sleep_talk.py': '968a78ddde87158b13f68dfcacc2158f07336d82c1be472d2283421e8583c154', 'state.py': '67ca721ce1f6b1a5c3e9c6fd42fe33d65f62ffcec006f5c5efd188225111a59c', 'transition.py': 'a68f1578d4e5246fce8ecc4ef7280a05bb3ecf3381479fb4fc6c67f36a03f6d8', 'weather.py': '3c861027e16d27917fa47fa5cf5d6dc0c68d3a74af282108dfb94369d4db57e5'}
+DOMAIN_MODULES = tuple("action_history absorption baton combat critical damage_moves effects encore entry focus_punch items linked_traps mechanics phazing pressure pursuit residual_order secondary self_destruct sleep_talk solar_beam state sustain transition variable_moves weather".split())
+DOMAIN_SHA256 = 'db5ec4884ce41fff9ef39a26410cf495d64ecac3fe129eadf35c68ce7dd1c063'
 
 
 def _host(value):
@@ -78,6 +77,11 @@ def _host(value):
 def _at(table, family, field, index, default=0):
     group = table.get(family)
     return default if group is None else group[field][index]
+
+
+def _counter(data, name, side, slot):
+    """A party volatile count (fidelity M2's perish, yawn and partial-trap leaves); 0 for a state without the leaf."""
+    return data.get(name, ((0,)*6,)*2)[side][slot]
 
 
 @dataclass(frozen=True)
@@ -155,6 +159,10 @@ def plan_for_state(state, index, actions, table, metadata, *, cap, native_input=
         if isinstance(bound_actions, mapping.Refused):
             return bound_actions
         data = mapping._sample(state, index)
+        if data["pending_residual"]:
+            # A resumed suspended turn replays its saved blocks (residual_draws.., and effect_draws at transition.py:
+            # 580-582), never fresh coordinates: conditional_law plans those roots. The input mapper refuses them first.
+            return refuse("SUSPENDED_ROOT_SAVED_BLOCKS", "A pending-residual root reads its saved draws and effect blocks")
         t = _host(table._asdict() if hasattr(table, "_asdict") else table)
         if not isinstance(t, dict):
             return refuse("UNRECOGNIZED_KERNEL_TABLE", "MoveTable or an exact host dictionary required")
@@ -355,6 +363,35 @@ def plan_for_state(state, index, actions, table, metadata, *, cap, native_input=
             use("draws.0.10", Observation("identity"))
         if not replacement and all(statuses[s] & {2, 3, 4} for s in range(2)):
             use("draws.1.9", Observation("identity"))
+        # §6: the appended effect stream (fidelity R, design 2.1; M2's residual consumers). transition.py:580-582 reads
+        # ChanceInputs.effect; a resumed suspended turn reads the saved block instead (refused above).
+        for s in range(2):
+            # Bonemerang's second hit (transition.py:1113-1153, run when damage_moves.hits>1 at :1335): its own critical
+            # roll effect[s][0] (critical.is_critical: below 2 for a high-crit move, else below 1; below 1 without the
+            # table) and damage roll 85+effect[s][1]. Callers and Encore are already in the selected closure.
+            critical = (t.get("critical") or {}).get("high")
+            second_hit = [move for move in selected[s] if _at(t, "damage_moves", "hits", move) > 1]
+            if second_hit:
+                use(f"effect.{s}.0", *(Observation("less_than", 2 if critical is not None and critical[move] else 1)
+                                       for move in sorted(second_hit)))
+                use(f"effect.{s}.1", Observation("identity"))
+            # Yawn's residual sleep (transition.py:2555-2565): a holder whose count is 1 when this residual runs sleeps
+            # for 2+effect[s][2], s the drowsy mon's own side. A Yawn landing this turn sets 2 (:1742-1750), which ends
+            # at the next turn's residual, and only a holder that stays in keeps a count (entry.py, baton.py drop it).
+            if not replacement and any(_counter(data, "yawn_counter", s, p) == 1 for p in participants[s]):
+                use(f"effect.{s}.2", Observation("identity"))
+        # The order-10 partial-trap pair (transition.py:2278-2285 with residual_order): effect[0][3] orders the two
+        # Wrap holders' events at equal Speed. A seat holds a trap already or gets one from the other's Wrap (:1945-1955).
+        trapped = [any(_counter(data, "partial_trap_counter", s, p) > 0 for p in participants[s])
+                   or any(_at(t, "effects", "wrap", move) for move in selected[1-s]) for s in range(2)]
+        if not replacement and all(trapped):
+            use("effect.0.3", Observation("identity"))
+        # Perish Song's order-12 pair (transition.py:2592-2609): effect[1][3] orders the two holders at equal Speed.
+        # Perish Song gives every active without a count one (:1728-1735), so either seat's use reaches both.
+        perish_song = any(_at(t, "effects", "perishsong", move) for choices in selected for move in choices)
+        if not replacement and all(perish_song or any(_counter(data, "perish_counter", s, p) > 0 for p in participants[s])
+                                   for s in range(2)):
+            use("effect.1.3", Observation("identity"))
         inactive("draws.1.0", "SpeedBoost paired callbacks change only own stage; neither can KO or alter the frozen residual ordering")
         inactive("draws.0.9", "Selected item callbacks heal or boost only their own live holder; neither can KO, resurrect, or alter the frozen residual ordering or the other's callback")
         inactive("draws.1.11", "Encore residual callbacks change only own counter/lock and cannot KO or alter the other's callback")
