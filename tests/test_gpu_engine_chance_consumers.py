@@ -445,10 +445,9 @@ class ChanceConsumerTests(unittest.TestCase):
         def strip(state):
             copy = deepcopy(state);copy.update(deepcopy(fields))
             return copy
-        bind = mapping.native_actions_from_jax
+        build, bind = mapping.native_input_from_jax, mapping.native_actions_from_jax   # the real ones, before patching
         with patch.object(c.mapping, "native_input_from_jax",
-                          side_effect=lambda state, index, metadata: mapping.native_input_from_jax(
-                              strip(state), index, metadata, module=FAKE)), \
+                          side_effect=lambda state, index, metadata: build(strip(state), index, metadata, module=FAKE)), \
              patch.object(c.mapping, "native_actions_from_jax",
                           side_effect=lambda state, index, acts, native, **kw: bind(strip(state), index, acts, native, **kw)):
             return c.plan_for_state(data, None, actions, table(meta) if kernel_table is None else kernel_table,
@@ -498,7 +497,7 @@ class ChanceConsumerTests(unittest.TestCase):
         self.assertEqual(sum(case.mass for case in plan.bounded_cases()), 1)
         data['yawn_counter'][1][0] = 2                                    # a fresh Yawn ends at the NEXT residual
         self.assertEqual(self.effect_axes(self.plan_live(data, meta, actions=(0, 1))), {})
-        data['yawn_counter'][1][0] = 1;data['hp'][0][0] = 0               # a replacement request runs no residual
+        data['yawn_counter'][1][0] = 1;data['hp'][0][0] = 0;data['forced_switch'][0] = True   # a replacement runs no residual
         out = self.plan_live(data, meta, actions=(4, 1))
         self.assertIsInstance(out, c.ConsumerPlan, out)
         self.assertEqual(self.effect_axes(out), {})

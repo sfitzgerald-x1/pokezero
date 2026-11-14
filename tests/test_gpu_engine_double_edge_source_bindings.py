@@ -20,9 +20,14 @@ class DoubleEdgeSourceBindingTests(unittest.TestCase):
   # duration on draws.{s}.7, Yawn's sleep on effect column 2, the Wrap and Perish pair ties on effect column 3) and
   # plan_for_state's draws[s][7] for a selected Wrap. 7476bce7 changed engine_source_frame_witness.py's Encore cutpoint
   # geometry (12 to 16, one per residual event). No later commit (M2's R1 included) changes these bodies.
-  certified={'chance_consumers.py':'7cc1d9f68e370f6e1676f4ae4898ec453cdce923',
-             'phase_d_chance.py':'7cc1d9f68e370f6e1676f4ae4898ec453cdce923',
-             'engine_source_frame_witness.py':'7476bce75526840de2b8d8c5e68fac31b1aa6cc6'}
+  # §6 (the effect-coordinate chance proof) re-certifies four bodies and the pinned-file inventories at its own commits:
+  # 72670171 and 3b0cc40e (plan_for_state's effect axes and SUSPENDED_ROOT_SAVED_BLOCKS, conditional_law's saved
+  # effect block, residual_order.py in SOURCE_PINS and the domain lists) and 53dc3add (ordinary_law's effect bank).
+  certified={'chance_consumers.py':'3b0cc40e6709bd19fe70a6295580a51590dd4f57',
+             'phase_d_chance.py':'3b0cc40e6709bd19fe70a6295580a51590dd4f57',
+             'conditional_law.py':'3b0cc40e6709bd19fe70a6295580a51590dd4f57',
+             'engine_source_frame_witness.py':'3b0cc40e6709bd19fe70a6295580a51590dd4f57',
+             'ordinary_law.py':'53dc3add38e37c36b7609edabe4f96e313022b16'}
   constants={'SOURCE_PINS','MAPPING_PINS','DOMAIN_SHA256','KERNEL_SHA256'}
   for file in ('chance_consumers.py','ordinary_law.py','conditional_law.py',
                'engine_source_frame_witness.py','phase_d_chance.py'):
