@@ -1,0 +1,214 @@
+{
+ "schema": "pokezero.effect_probe.scenario.v1",
+ "move": "wrap_trapper_dragged_back_distinct",
+ "note": "Distinct-species twin of wrap_trapper_dragged_back (B2 folds no repeated species, so device mode compares every step; wrap_trapper_dragged_back keeps the exact Showdown setup). Reviewer probe (PR #1930): the trapper switches out and the trapped foe Roars it back in the same turn (its bench has one candidate): at the residual the source is active and alive with activeTurns 0, so partiallytrapped releases silently (data/mods/gen5/conditions.ts onResidual: !trapper.activeTurns); the foe may switch next turn. Substitutions: Tentacruel, Smeargle and Dunsparce for the second to fourth level-5 Magikarp: the distinct level-5 sets of spikes_drag_back_faint, each KOd by one Drill Peck before it moves; no contact-triggered ability.",
+ "teams": [
+  [
+   {
+    "species": "Shuckle",
+    "moves": [
+     "wrap",
+     "splash",
+     "rest",
+     "substitute"
+    ],
+    "ability": "Sturdy",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Magikarp",
+    "moves": [
+     "splash",
+     "tackle",
+     "flail",
+     "protect"
+    ],
+    "ability": "Swift Swim",
+    "item": "",
+    "level": 5
+   },
+   {
+    "species": "Tentacruel",
+    "moves": [
+     "splash",
+     "protect",
+     "surf",
+     "sonicboom"
+    ],
+    "ability": "Liquid Ooze",
+    "item": "",
+    "level": 5
+   },
+   {
+    "species": "Smeargle",
+    "moves": [
+     "splash",
+     "spore",
+     "spikes",
+     "encore"
+    ],
+    "ability": "Own Tempo",
+    "item": "",
+    "level": 5
+   },
+   {
+    "species": "Dunsparce",
+    "moves": [
+     "splash",
+     "tackle",
+     "protect",
+     "rest"
+    ],
+    "ability": "Serene Grace",
+    "item": "",
+    "level": 5
+   },
+   {
+    "species": "Blissey",
+    "moves": [
+     "splash",
+     "softboiled",
+     "protect",
+     "seismictoss"
+    ],
+    "ability": "Serene Grace",
+    "item": "Leftovers"
+   }
+  ],
+  [
+   {
+    "species": "Skarmory",
+    "moves": [
+     "roar",
+     "splash",
+     "drillpeck",
+     "protect"
+    ],
+    "ability": "Keen Eye",
+    "item": "Leftovers",
+    "level": 100
+   },
+   {
+    "species": "Starmie",
+    "moves": [
+     "splash",
+     "surf",
+     "recover",
+     "protect"
+    ],
+    "ability": "Illuminate",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Blissey",
+    "moves": [
+     "splash",
+     "softboiled",
+     "protect",
+     "seismictoss"
+    ],
+    "ability": "Serene Grace",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Swampert",
+    "moves": [
+     "splash",
+     "protect",
+     "surf",
+     "earthquake"
+    ],
+    "ability": "Torrent",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Metagross",
+    "moves": [
+     "splash",
+     "protect",
+     "meteormash",
+     "earthquake"
+    ],
+    "ability": "Clear Body",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Celebi",
+    "moves": [
+     "splash",
+     "protect",
+     "psychic",
+     "recover"
+    ],
+    "ability": "Natural Cure",
+    "item": "Leftovers"
+   }
+  ]
+ ],
+ "script": [
+  [
+   "switch 2",
+   "move 3"
+  ],
+  [
+   "switch 3",
+   ""
+  ],
+  [
+   "move 1",
+   "move 3"
+  ],
+  [
+   "switch 4",
+   ""
+  ],
+  [
+   "move 1",
+   "move 3"
+  ],
+  [
+   "switch 5",
+   ""
+  ],
+  [
+   "move 1",
+   "move 3"
+  ],
+  [
+   "switch 1",
+   ""
+  ],
+  [
+   "move 1",
+   "move 2"
+  ],
+  [
+   "switch 6",
+   "move 1"
+  ],
+  [
+   "move 2",
+   "switch 2"
+  ],
+  [
+   "move 2",
+   "move 1"
+  ]
+ ],
+ "axes": [],
+ "expect": {
+  "exact": true
+ },
+ "require_fields": [
+  "perish_counter",
+  "yawn_counter",
+  "partial_trap_counter",
+  "partial_trap_source",
+  "item_knocked",
+  "destiny_bond",
+  "effect"
+ ],
+ "tape": {
+  "draws.0.7": 3
+ }
+}

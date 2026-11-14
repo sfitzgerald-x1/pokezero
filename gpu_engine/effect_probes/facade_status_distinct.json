@@ -1,0 +1,187 @@
+{
+ "schema": "pokezero.effect_probe.scenario.v1",
+ "move": "facade_status_distinct",
+ "note": "Distinct-species twin of facade_status (B2 folds no repeated species, so device mode compares every step; facade_status keeps the exact Showdown setup). C-lite: Facade (data/moves.ts:5029-5046) doubles to 140 under each of par, brn, tox and psn (four Guts users statused in turn by the faster Skarmory: Thunder Wave, Will-O-Wisp, Toxic, Poison Powder); a burned Guts user is not halved (data/mods/gen3/scripts.ts:41-43). Substitution: Machamp (L60, Guts; Ursaring's set) for the second Ursaring, the burned one: Guts, with level-60 Ursaring's HP (209), Atk (192) and Speed (102), slower than Skarmory; Fighting keeps every interaction that acts (Will-O-Wisp lands on a non-Fire mon, and Poison Powder fails on the burned mon by status, not type; no Ghost move is used, so Normal's immunity never acted); only Facade's STAB is lost, which lowers the damage the probe compares exactly and leaves the 140 power and the unhalved burn.",
+ "teams": [
+  [
+   {
+    "species": "Ursaring",
+    "moves": [
+     "facade",
+     "splash",
+     "sleeptalk",
+     "protect"
+    ],
+    "ability": "Guts",
+    "item": "Leftovers",
+    "level": 60
+   },
+   {
+    "species": "Machamp",
+    "moves": [
+     "facade",
+     "splash",
+     "sleeptalk",
+     "protect"
+    ],
+    "ability": "Guts",
+    "item": "Leftovers",
+    "level": 60
+   },
+   {
+    "species": "Raticate",
+    "moves": [
+     "facade",
+     "splash",
+     "protect",
+     "quickattack"
+    ],
+    "ability": "Guts",
+    "item": "Leftovers",
+    "level": 60
+   },
+   {
+    "species": "Swellow",
+    "moves": [
+     "facade",
+     "splash",
+     "protect",
+     "aerialace"
+    ],
+    "ability": "Guts",
+    "item": "Leftovers",
+    "level": 60
+   },
+   {
+    "species": "Starmie",
+    "moves": [
+     "splash",
+     "surf",
+     "recover",
+     "protect"
+    ],
+    "ability": "Illuminate",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Blissey",
+    "moves": [
+     "splash",
+     "softboiled",
+     "protect",
+     "seismictoss"
+    ],
+    "ability": "Serene Grace",
+    "item": "Leftovers"
+   }
+  ],
+  [
+   {
+    "species": "Skarmory",
+    "moves": [
+     "thunderwave",
+     "willowisp",
+     "toxic",
+     "poisonpowder"
+    ],
+    "ability": "Keen Eye",
+    "item": "",
+    "level": 80
+   },
+   {
+    "species": "Starmie",
+    "moves": [
+     "splash",
+     "surf",
+     "recover",
+     "protect"
+    ],
+    "ability": "Illuminate",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Blissey",
+    "moves": [
+     "splash",
+     "softboiled",
+     "protect",
+     "seismictoss"
+    ],
+    "ability": "Serene Grace",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Swampert",
+    "moves": [
+     "splash",
+     "protect",
+     "surf",
+     "earthquake"
+    ],
+    "ability": "Torrent",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Metagross",
+    "moves": [
+     "splash",
+     "protect",
+     "meteormash",
+     "earthquake"
+    ],
+    "ability": "Clear Body",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Celebi",
+    "moves": [
+     "splash",
+     "protect",
+     "psychic",
+     "recover"
+    ],
+    "ability": "Natural Cure",
+    "item": "Leftovers"
+   }
+  ]
+ ],
+ "script": [
+  [
+   "move 1",
+   "move 1"
+  ],
+  [
+   "switch 2",
+   "move 2"
+  ],
+  [
+   "move 1",
+   "move 4"
+  ],
+  [
+   "switch 3",
+   "move 3"
+  ],
+  [
+   "move 1",
+   "move 1"
+  ],
+  [
+   "switch 4",
+   "move 4"
+  ],
+  [
+   "move 1",
+   "move 1"
+  ]
+ ],
+ "axes": [],
+ "expect": {
+  "exact": true
+ },
+ "require_fields": [
+  "item_knocked",
+  "destiny_bond",
+  "effect"
+ ]
+}

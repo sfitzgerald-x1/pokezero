@@ -1,0 +1,226 @@
+{
+ "schema": "pokezero.effect_probe.scenario.v1",
+ "move": "destinybond_m9_wobbuffet_dusclops_distinct",
+ "note": "Distinct-species twin of destinybond_m9_wobbuffet_dusclops (B2 folds no repeated species, so device mode compares every step; destinybond_m9_wobbuffet_dusclops keeps the exact Showdown setup). Destiny Bond gate-3 matchup 9 (own Wobbuffet KO'd by Dusclops Rest / Seismic Toss / Shadow Ball / Sleep Talk; Shadow Tag traps it), gen3 randbats sets: the faster Wobbuffet bonds twice under Shadow Ball. Expire: Wobbuffet Encores (the bond is removed before the move; Encore duration pinned to 3) and the Shadow Ball KO takes nobody. Trigger: Wynaut bonds through two max-roll Shadow Balls (394 HP to 230, then 66, after Leftovers) while the Encore runs out; it then chooses Counter (-5), so Dusclops' Seismic Toss KOs it before it moves, and the previous turn's bond faints Dusclops; both replace. Substitution: Wynaut (L100, Shadow Tag; Wobbuffet's moves) for the second Wobbuffet: Psychic with Shadow Tag, so Shadow Ball is super effective and Dusclops stays trapped; EVs 252 HP / 112 Def / 60 Spe give Speed 97 above Dusclops' 92 and an HP path that survives both Shadow Balls and ends under the Toss's 86.",
+ "teams": [
+  [
+   {
+    "species": "Wobbuffet",
+    "moves": [
+     "counter",
+     "destinybond",
+     "encore",
+     "mirrorcoat"
+    ],
+    "ability": "Shadow Tag",
+    "item": "Leftovers",
+    "level": 82,
+    "ivs": {
+     "atk": 0
+    },
+    "evs": {
+     "atk": 0
+    }
+   },
+   {
+    "species": "Wynaut",
+    "moves": [
+     "counter",
+     "destinybond",
+     "encore",
+     "mirrorcoat"
+    ],
+    "ability": "Shadow Tag",
+    "item": "Leftovers",
+    "level": 100,
+    "ivs": {
+     "atk": 0
+    },
+    "evs": {
+     "hp": 252,
+     "atk": 0,
+     "def": 112,
+     "spa": 0,
+     "spd": 84,
+     "spe": 60
+    }
+   },
+   {
+    "species": "Starmie",
+    "moves": [
+     "splash",
+     "surf",
+     "recover",
+     "protect"
+    ],
+    "ability": "Illuminate",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Blissey",
+    "moves": [
+     "splash",
+     "softboiled",
+     "protect",
+     "seismictoss"
+    ],
+    "ability": "Serene Grace",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Skarmory",
+    "moves": [
+     "splash",
+     "protect",
+     "spikes",
+     "peck"
+    ],
+    "ability": "Keen Eye",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Swampert",
+    "moves": [
+     "splash",
+     "protect",
+     "surf",
+     "earthquake"
+    ],
+    "ability": "Torrent",
+    "item": "Leftovers"
+   }
+  ],
+  [
+   {
+    "species": "Dusclops",
+    "moves": [
+     "rest",
+     "seismictoss",
+     "shadowball",
+     "sleeptalk"
+    ],
+    "ability": "Pressure",
+    "item": "Leftovers",
+    "level": 86
+   },
+   {
+    "species": "Starmie",
+    "moves": [
+     "splash",
+     "surf",
+     "recover",
+     "protect"
+    ],
+    "ability": "Illuminate",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Blissey",
+    "moves": [
+     "splash",
+     "softboiled",
+     "protect",
+     "seismictoss"
+    ],
+    "ability": "Serene Grace",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Skarmory",
+    "moves": [
+     "splash",
+     "protect",
+     "spikes",
+     "peck"
+    ],
+    "ability": "Keen Eye",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Swampert",
+    "moves": [
+     "splash",
+     "protect",
+     "surf",
+     "earthquake"
+    ],
+    "ability": "Torrent",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Metagross",
+    "moves": [
+     "splash",
+     "protect",
+     "meteormash",
+     "earthquake"
+    ],
+    "ability": "Clear Body",
+    "item": "Leftovers"
+   }
+  ]
+ ],
+ "script": [
+  [
+   "move 2",
+   "move 3"
+  ],
+  [
+   "move 2",
+   "move 3"
+  ],
+  [
+   "move 3",
+   "move 3"
+  ],
+  [
+   "switch 2",
+   ""
+  ],
+  [
+   "move 2",
+   "move 3"
+  ],
+  [
+   "move 2",
+   "move 3"
+  ],
+  [
+   "move 1",
+   "move 2"
+  ],
+  [
+   "switch 4",
+   "switch 2"
+  ]
+ ],
+ "axes": [],
+ "expect": {
+  "exact": true
+ },
+ "require_fields": [
+  "item_knocked",
+  "destiny_bond"
+ ],
+ "tape": {
+  "draws.0.4": 15,
+  "draws.0.5": 0,
+  "draws.0.6": 0,
+  "draws.1.4": 15,
+  "draws.1.5": 0,
+  "draws.1.6": 0,
+  "secondary.0": 99,
+  "secondary.1": 99
+ },
+ "tape_steps": {
+  "2": {
+   "draws.0.7": 0
+  },
+  "4": {
+   "draws.1.5": 15
+  },
+  "5": {
+   "draws.1.5": 15
+  }
+ }
+}

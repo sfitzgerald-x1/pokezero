@@ -1,0 +1,224 @@
+{
+ "schema": "pokezero.effect_probe.scenario.v1",
+ "move": "destinybond_m3_qwilfish_dusclops_distinct",
+ "note": "Distinct-species twin of destinybond_m3_qwilfish_dusclops (B2 folds no repeated species, so device mode compares every step; destinybond_m3_qwilfish_dusclops keeps the exact Showdown setup). Destiny Bond gate-3 matchup 3 (opp Qwilfish vs Dusclops Will-O-Wisp / Focus Punch / Shadow Ball / Substitute), gen3 randbats sets (Swift Swim Qwilfish, so the contact Focus Punch draws no Poison Point roll): the faster Qwilfish bonds every turn while Dusclops burns it, chips with Shadow Ball and KOs it with Focus Punch (-3; focus kept, Qwilfish never hits), and Dusclops faints. Ho-Oh (Pressure) sets a Substitute while Tentacruel bonds; Tentacruel's Spikes drops the bond (re-bonded the next turn); a critical (to 41%) and a plain (to 17%) Shadow Ball chip; the KO from behind the intact Substitute (roll axis) faints Ho-Oh too; both replace and Blissey takes Spikes. Substitutions: Ho-Oh (L82, Leftovers; Dusclops' moves) for the second Dusclops: Pressure as Dusclops, so the switch-in Pressure line and the doubled PP charge on the foe's Destiny Bond and Spikes stay (Dusclops is the only Gen 3 Ghost with Pressure); no step depends on its Ghost type: the foe only bonds and lays Spikes, so no Normal or Fighting move, Explosion or Foresight meets it and no Ghost resistance sets a threshold, and Flying's Spikes immunity never acts (it enters before Spikes and leaves only by fainting); Speed 195 below Tentacruel's 211; its Shadow Ball without Ghost STAB keeps two chips and a KO at both rolls (level 82 retuned for it); Tentacruel (L82, Leftovers; Qwilfish's moves) for the second Qwilfish: Water/Poison as Qwilfish, faster than Ho-Oh, never hit by contact, and Liquid Ooze is inert (no draining move).",
+ "teams": [
+  [
+   {
+    "species": "Dusclops",
+    "moves": [
+     "willowisp",
+     "focuspunch",
+     "shadowball",
+     "substitute"
+    ],
+    "ability": "Pressure",
+    "item": "Leftovers",
+    "level": 86
+   },
+   {
+    "species": "Ho-Oh",
+    "moves": [
+     "willowisp",
+     "focuspunch",
+     "shadowball",
+     "substitute"
+    ],
+    "ability": "Pressure",
+    "item": "Leftovers",
+    "level": 82
+   },
+   {
+    "species": "Starmie",
+    "moves": [
+     "splash",
+     "surf",
+     "recover",
+     "protect"
+    ],
+    "ability": "Illuminate",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Blissey",
+    "moves": [
+     "splash",
+     "softboiled",
+     "protect",
+     "seismictoss"
+    ],
+    "ability": "Serene Grace",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Skarmory",
+    "moves": [
+     "splash",
+     "protect",
+     "spikes",
+     "peck"
+    ],
+    "ability": "Keen Eye",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Swampert",
+    "moves": [
+     "splash",
+     "protect",
+     "surf",
+     "earthquake"
+    ],
+    "ability": "Torrent",
+    "item": "Leftovers"
+   }
+  ],
+  [
+   {
+    "species": "Qwilfish",
+    "moves": [
+     "destinybond",
+     "hydropump",
+     "sludgebomb",
+     "spikes"
+    ],
+    "ability": "Swift Swim",
+    "item": "Leftovers",
+    "level": 82
+   },
+   {
+    "species": "Tentacruel",
+    "moves": [
+     "destinybond",
+     "hydropump",
+     "sludgebomb",
+     "spikes"
+    ],
+    "ability": "Liquid Ooze",
+    "item": "Leftovers",
+    "level": 82
+   },
+   {
+    "species": "Starmie",
+    "moves": [
+     "splash",
+     "surf",
+     "recover",
+     "protect"
+    ],
+    "ability": "Illuminate",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Blissey",
+    "moves": [
+     "splash",
+     "softboiled",
+     "protect",
+     "seismictoss"
+    ],
+    "ability": "Serene Grace",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Skarmory",
+    "moves": [
+     "splash",
+     "protect",
+     "spikes",
+     "peck"
+    ],
+    "ability": "Keen Eye",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Metagross",
+    "moves": [
+     "splash",
+     "protect",
+     "meteormash",
+     "earthquake"
+    ],
+    "ability": "Clear Body",
+    "item": "Leftovers"
+   }
+  ]
+ ],
+ "script": [
+  [
+   "move 1",
+   "move 1"
+  ],
+  [
+   "move 3",
+   "move 1"
+  ],
+  [
+   "move 3",
+   "move 1"
+  ],
+  [
+   "move 2",
+   "move 1"
+  ],
+  [
+   "switch 2",
+   "switch 2"
+  ],
+  [
+   "move 4",
+   "move 1"
+  ],
+  [
+   "move 3",
+   "move 4"
+  ],
+  [
+   "move 3",
+   "move 1"
+  ],
+  [
+   "move 3",
+   "move 1"
+  ],
+  [
+   "switch 4",
+   "switch 3"
+  ]
+ ],
+ "axes": [
+  {
+   "name": "roll",
+   "field": "draws.0.5",
+   "steps": [
+    8
+   ],
+   "values": [
+    0,
+    15
+   ]
+  }
+ ],
+ "expect": {
+  "exact": true
+ },
+ "require_fields": [
+  "item_knocked",
+  "destiny_bond"
+ ],
+ "tape": {
+  "draws.0.4": 15,
+  "draws.0.5": 0,
+  "draws.0.6": 0,
+  "draws.1.4": 15,
+  "draws.1.5": 0,
+  "draws.1.6": 0,
+  "secondary.0": 99,
+  "secondary.1": 99
+ },
+ "tape_steps": {
+  "6": {
+   "draws.0.4": 0
+  }
+ }
+}

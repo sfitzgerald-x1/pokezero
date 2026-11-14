@@ -1,0 +1,207 @@
+{
+ "schema": "pokezero.effect_probe.scenario.v1",
+ "move": "destinybond_m4_gengar_vigoroth_distinct",
+ "note": "Distinct-species twin of destinybond_m4_gengar_vigoroth (B2 folds no repeated species, so device mode compares every step; destinybond_m4_gengar_vigoroth keeps the exact Showdown setup). Destiny Bond gate-3 matchup 4 (own Gengar KO'd by Vigoroth), gen3 randbats sets: the L74 Gengar (Destiny Bond / Thunderbolt / Ice Punch / Will-O-Wisp, Leftovers) outspeeds the Bulky Setup Vigoroth. Expire: Gengar bonds under Shadow Ball, then Thunderbolts (the bond is removed before the move) and Vigoroth's Shadow Ball KO takes nobody. Trigger: Haunter bonds while Vigoroth Bulk Ups, re-bonds, and the +1 max-roll Shadow Ball OHKO faints Vigoroth too; both replace. Substitution: Haunter (L82, Levitate; Gengar's set) for the second Gengar: Ghost/Poison as Gengar, so Shadow Ball is super effective; Speed 203 above Vigoroth's 199; the +1 max-roll Shadow Ball OHKOs its 208 HP.",
+ "teams": [
+  [
+   {
+    "species": "Gengar",
+    "moves": [
+     "destinybond",
+     "thunderbolt",
+     "icepunch",
+     "willowisp"
+    ],
+    "ability": "Levitate",
+    "item": "Leftovers",
+    "level": 74,
+    "ivs": {
+     "atk": 0
+    },
+    "evs": {
+     "atk": 0
+    }
+   },
+   {
+    "species": "Haunter",
+    "moves": [
+     "destinybond",
+     "thunderbolt",
+     "icepunch",
+     "willowisp"
+    ],
+    "ability": "Levitate",
+    "item": "Leftovers",
+    "level": 82,
+    "ivs": {
+     "atk": 0
+    },
+    "evs": {
+     "atk": 0
+    }
+   },
+   {
+    "species": "Starmie",
+    "moves": [
+     "splash",
+     "surf",
+     "recover",
+     "protect"
+    ],
+    "ability": "Illuminate",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Blissey",
+    "moves": [
+     "splash",
+     "softboiled",
+     "protect",
+     "seismictoss"
+    ],
+    "ability": "Serene Grace",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Skarmory",
+    "moves": [
+     "splash",
+     "protect",
+     "spikes",
+     "peck"
+    ],
+    "ability": "Keen Eye",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Swampert",
+    "moves": [
+     "splash",
+     "protect",
+     "surf",
+     "earthquake"
+    ],
+    "ability": "Torrent",
+    "item": "Leftovers"
+   }
+  ],
+  [
+   {
+    "species": "Vigoroth",
+    "moves": [
+     "bulkup",
+     "return",
+     "shadowball",
+     "slackoff"
+    ],
+    "ability": "Vital Spirit",
+    "item": "Leftovers",
+    "level": 84
+   },
+   {
+    "species": "Starmie",
+    "moves": [
+     "splash",
+     "surf",
+     "recover",
+     "protect"
+    ],
+    "ability": "Illuminate",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Blissey",
+    "moves": [
+     "splash",
+     "softboiled",
+     "protect",
+     "seismictoss"
+    ],
+    "ability": "Serene Grace",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Skarmory",
+    "moves": [
+     "splash",
+     "protect",
+     "spikes",
+     "peck"
+    ],
+    "ability": "Keen Eye",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Swampert",
+    "moves": [
+     "splash",
+     "protect",
+     "surf",
+     "earthquake"
+    ],
+    "ability": "Torrent",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Metagross",
+    "moves": [
+     "splash",
+     "protect",
+     "meteormash",
+     "earthquake"
+    ],
+    "ability": "Clear Body",
+    "item": "Leftovers"
+   }
+  ]
+ ],
+ "script": [
+  [
+   "move 1",
+   "move 3"
+  ],
+  [
+   "move 2",
+   "move 3"
+  ],
+  [
+   "switch 2",
+   ""
+  ],
+  [
+   "move 1",
+   "move 1"
+  ],
+  [
+   "move 1",
+   "move 3"
+  ],
+  [
+   "switch 4",
+   "switch 2"
+  ]
+ ],
+ "axes": [],
+ "expect": {
+  "exact": true
+ },
+ "require_fields": [
+  "item_knocked",
+  "destiny_bond"
+ ],
+ "tape": {
+  "draws.0.4": 15,
+  "draws.0.5": 0,
+  "draws.0.6": 0,
+  "draws.1.4": 15,
+  "draws.1.5": 0,
+  "draws.1.6": 0,
+  "secondary.0": 99,
+  "secondary.1": 99
+ },
+ "tape_steps": {
+  "4": {
+   "draws.1.5": 15
+  }
+ }
+}
