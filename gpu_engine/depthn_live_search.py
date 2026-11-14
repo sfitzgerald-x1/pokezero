@@ -582,6 +582,7 @@ class DepthNLiveSearch:
         carry reference of the structure check: every warmup root must share it (RuntimeError on any WORLD_STRUCTURE_MISMATCH:
         in the priced windows, and over every warmup root prepared once more afterwards), and it must be the only
         constructor-world carry signature in the warmed program keys."""
+        trace_release.caches()   # a JAX that moved jit's tracing caches fails here, not after the lowering
         keys=PROTOCOL_KEYS[2:];pool=[]
         for r in requests:
             if not isinstance(r,dict)or any(k not in r for k in keys):raise ValueError('saved requests with '+', '.join(keys)+' required')
@@ -623,7 +624,7 @@ class DepthNLiveSearch:
         released trace (eagerly evaluated jaxprs, e.g. vmapped jax.random.fold_in) instead of on their function, so serving
         compiles nothing. Each re-warm must answer as that bucket's warm pass did, (status, cause, bucket, action_index) per
         row (`batches[b]` = (batch, the warm pass's rows)); RuntimeError otherwise, so a broken re-warm never reaches READY.
-        Returns dict(entries dropped, gc_seconds, rewarm_seconds)."""
+        Returns dict(entries dropped, gc_seconds, rewarm_seconds, jax: the JAX version released under)."""
         released=trace_release.release();clock=time.perf_counter();gc.collect();collected=time.perf_counter()-clock
         clock=time.perf_counter();outcome=lambda rows:[(r['status'],r['cause'],r['bucket'],r['action_index'])for r in rows]
         for b,(batch,warm) in batches.items():
@@ -632,7 +633,7 @@ class DepthNLiveSearch:
                 self.reset_sessions()
                 raise RuntimeError(f'warmup: the re-warm of bucket {b} answered {outcome(again)}, its warm pass {outcome(warm)}')
         self.reset_sessions()
-        return dict(entries=released,gc_seconds=collected,rewarm_seconds=time.perf_counter()-clock)
+        return dict(entries=released,gc_seconds=collected,rewarm_seconds=time.perf_counter()-clock,jax=jax.__version__)
 
     def _hold_to_reference(self,pool):
         """Every warmup root, not only those of the windows that priced: prepared once more (fresh sessions and attempts), each

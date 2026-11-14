@@ -66,7 +66,7 @@ class WarmupReleaseTests(unittest.TestCase):
         # Full collections were deferred while the programs traced and through the release's collection (young ones kept
         # running), and the thresholds are back.
         self.assertEqual(during, [thresholds[:2] + (1 << 30,)] * 2);self.assertEqual(gc.get_threshold(), thresholds)
-        self.assertGreater(report['trace_release']['entries'], 0)
+        self.assertGreater(report['trace_release']['entries'], 0);self.assertEqual(report['trace_release']['jax'], jax.__version__)
         # After READY, serving a new root traces and compiles nothing: the re-warm pass recompiled what the release unkeyed.
         with CompileEvents() as events:
             rows, _ = self.run_batch(s, [L.request('l0', 0)], outcomes)
@@ -143,6 +143,9 @@ class TraceReleaseTests(unittest.TestCase):
         with patch.object(trace_release, 'CACHES', (('jax._src.pjit', 'no_such_cache'),)), patch.object(trace_release, '_found', None):
             with self.assertRaisesRegex(RuntimeError, r'jax\._src\.pjit\.no_such_cache not found in jax .* \(verified on 0\.12\.0\)'):
                 trace_release.release()
+            # The live search checks first thing in warmup, before any saved request is read or anything lowers.
+            search = live.DepthNLiveSearch.__new__(live.DepthNLiveSearch)
+            with self.assertRaisesRegex(RuntimeError, 'no_such_cache not found'):search.warmup(None)
         with patch.object(trace_release, 'CACHES', (('jax._src.pjit', 'jit_lower'),)), patch.object(trace_release, '_found', None):
             with self.assertRaisesRegex(RuntimeError, 'has no cache_clear'):trace_release.release()
 

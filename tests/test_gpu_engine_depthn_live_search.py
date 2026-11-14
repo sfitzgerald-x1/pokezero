@@ -538,7 +538,7 @@ class LiveSearchTests(unittest.TestCase):
         with Codex(outcomes):report=s.warmup([request('w0',0),request('w1',0)])   # two saved roots: bucket 4 cycles them (repeats refused, still priced at 4)
         self.assertEqual(set(report['buckets']),{1,2,4});json.dumps(report)
         # warmup ends by releasing jit's tracing caches, collecting once and re-running each bucket's warm batch (trace_release)
-        self.assertEqual(set(report['trace_release']),{'entries','gc_seconds','rewarm_seconds'});self.assertGreater(report['trace_release']['entries'],0)
+        self.assertEqual(set(report['trace_release']),{'entries','gc_seconds','rewarm_seconds','jax'});self.assertGreater(report['trace_release']['entries'],0)
         for b,entry in report['buckets'].items():
             self.assertGreater(entry['cold_seconds'],0);self.assertGreater(entry['warm_seconds'],0);self.assertEqual(entry['warm_compiled'],0)
             self.assertEqual(entry['complete'],min(b,2))
