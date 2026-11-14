@@ -82,10 +82,15 @@ class ChanceFieldsTests(unittest.TestCase):
                 self.assertIn('chance_fields', names)
                 for call in calls:
                     if getattr(call.func, 'id', getattr(call.func, 'attr', None)) == 'ChanceInputs':
-                        # Every field by name, from ChanceInputs._fields (so effect is always among them).
+                        # Every field by name, one comprehension over all of ChanceInputs._fields with no filter, so
+                        # effect is always among them (no positional six-field form, no effect=None, no `if`).
                         self.assertEqual(call.args, [])
                         self.assertEqual([k.arg for k in call.keywords], [None])
-                        self.assertIn('_fields', ast.dump(call.keywords[0].value))
+                        fields = call.keywords[0].value
+                        self.assertIsInstance(fields, ast.DictComp)
+                        self.assertEqual(len(fields.generators), 1)
+                        self.assertEqual(fields.generators[0].ifs, [])
+                        self.assertTrue(ast.unparse(fields.generators[0].iter).endswith('ChanceInputs._fields'))
 
 
 class SuspendedLawTests(unittest.TestCase):
