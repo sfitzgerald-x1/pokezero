@@ -6,7 +6,7 @@ one of the consumers those plans observe, reading the column and with the arithm
 rewritten reader would misprice an exact root without any error. transition.py's SOURCE_PINS refuse any edit until the pins
 are refreshed, but a refresh is mechanical (scripts/refresh_source_pins.py). This test makes it insufficient: every use of
 the stream, and of the whole ChanceInputs, is keyed by its enclosing function, the expression around it and a digest of its
-whole enclosing statement. So a new reader, a column swap, or a changed threshold or offset changes the snapshot, and its
+whole enclosing statement, and so is every assignment to the gates that switch a consumer on (GATES). So a new reader, a column swap, or a changed threshold or offset changes the snapshot, and its
 author has to re-review the plans' effect gating (chance_consumers.plan_for_state, phase_d_chance.plan_for_state,
 ordinary_law.plan_for_state) before updating REVIEWED. `python3 tests/test_gpu_engine_effect_stream_readers.py --print`
 prints the current snapshot with each statement.
@@ -23,6 +23,10 @@ STREAM_NAMES = frozenset({'effect_draws', '_effect'})   # loads and stores (an A
 STREAM_ATTRS = frozenset({'effect_draws', 'effect'})    # attribute loads, e.g. chance_inputs.effect, state.effect_draws
 WHOLE = frozenset({'chance_inputs'})                    # any use of the whole object: indexing, unpacking, _asdict(), zip
 FIELD_STRINGS = frozenset({'effect', 'effect_draws'})   # a string naming the field, e.g. getattr(x, 'effect')
+# The conditions that switch an effect consumer on, which the plans' gating copies: every assignment to these names is
+# keyed too, so a changed gate (say hits>1 becoming hits>0) needs the same re-review as a changed read.
+GATES = frozenset({'_second', '_yawn_counter', '_yawn_holder', '_yawn_sleep', '_wrap_holder', '_wrap_held', '_wrap_tick',
+                   '_perish_continues', '_perish_holder', '_perish_first', 'tie', 'event_keys'})
 
 # (enclosing function, the expression around the use, digest of the enclosing statement) -> count
 REVIEWED = {
@@ -62,6 +66,21 @@ REVIEWED = {
     ('step_with_chance', 'effect_draws[:, 1, 3]', '6ce6f3f90b0dd01e'): 1,
     # the save of the block into state.effect_draws when the residual is deferred (a suspended turn)
     ('step_with_chance', 'jnp.where(defer_residual[:, None, None], effect_draws, 0)', 'fe528e3dd29798d3'): 1,
+    # the gates: Bonemerang's second hit (hits > 1, so Bonemerang alone), the Yawn sleep (count 1 before the decrement), the
+    # Wrap and Perish holders and the residual order's tie and event keys
+    ('step_with_chance', 'gate _second', 'c9e42262b234db09'): 1,
+    ('step_with_chance', 'gate _yawn_counter', 'e8e7928c1fd8ab6e'): 1,
+    ('step_with_chance', 'gate _yawn_holder', 'f39efe625b1ee9be'): 1,
+    ('step_with_chance', 'gate _yawn_sleep', '0088b5859e70205d'): 1,
+    ('step_with_chance', 'gate _yawn_sleep', 'c57fe97b2ab6eeec'): 1,
+    ('step_with_chance', 'gate _wrap_holder', '7a99fb53264f7804'): 1,
+    ('step_with_chance', 'gate _wrap_held', '22569d4bbf65f598'): 1,
+    ('step_with_chance', 'gate _wrap_tick', 'd01dc288c92376e7'): 1,
+    ('step_with_chance', 'gate _perish_continues', 'c56f7684931b73f4'): 1,
+    ('step_with_chance', 'gate _perish_holder', 'c3217ad029f1bd93'): 1,
+    ('step_with_chance', 'gate _perish_first', '6ce6f3f90b0dd01e'): 1,
+    ('step_with_chance', 'gate tie', '3d5baa07a30ba9d5'): 1,
+    ('step_with_chance', 'gate event_keys', '06962d48c87c7b2f'): 1,
 }
 
 
@@ -117,6 +136,14 @@ def readers(source):
             key = (enclosing(node), around(node), hashlib.sha256(text.encode()).hexdigest()[:16])
             found[key] += 1
             statements[key] = text
+        if isinstance(node, (ast.Assign, ast.AugAssign, ast.AnnAssign)):
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            gates = sorted({n.id for t in targets for n in ast.walk(t) if isinstance(n, ast.Name) and n.id in GATES})
+            for gate in gates:
+                text = ast.unparse(node)
+                key = (enclosing(node), 'gate ' + gate, hashlib.sha256(text.encode()).hexdigest()[:16])
+                found[key] += 1
+                statements[key] = text
     return found, statements, strings
 
 
@@ -160,6 +187,8 @@ class EffectStreamReaderTests(unittest.TestCase):
             'column swap': base.replace(crit, 'critical2=_effect[:,1]==0').replace(roll, 'roll=85 + _effect[:, 0])'),
             'threshold': base.replace(crit, 'critical2=_effect[:,0]<2'),
             'offset': base.replace(roll, 'roll=84 + _effect[:, 1])', 1),
+            'second-hit gate': base.replace('(table.damage_moves.hits[move]>1)', '(table.damage_moves.hits[move]>0)'),
+            'yawn gate': base.replace('(_yawn_counter==1)', '(_yawn_counter==2)'),
         }
         for label, text in rewrites.items():
             with self.subTest(label):
