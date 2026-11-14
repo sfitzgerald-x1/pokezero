@@ -1,0 +1,33 @@
+{
+ "schema": "pokezero.v2e-phases-spec.v1",
+ "oracle_digest": "mini-hand-written-spec",
+ "lanes_traced": 37,
+ "boundaries": [
+  {"name": "b0", "line": null, "occurrence": 0, "statement": "entry of step_with_chance",
+   "carry": [
+    {"name": "state.hp", "source": "state", "path": ".hp", "dtype": "int32", "shape": [2, 6]},
+    {"name": "state.done", "source": "state", "path": ".done", "dtype": "bool", "shape": []},
+    {"name": "trackers.public_volatiles", "source": "trackers", "path": ".public_volatiles", "dtype": "bool", "shape": [2, 6, 40]},
+    {"name": "trackers.mon_features['toxic_stage']", "source": "trackers", "path": ".mon_features['toxic_stage']", "dtype": "int32", "shape": [2, 6]},
+    {"name": "chance.draws", "source": "chance", "path": ".draws", "dtype": "int32", "shape": [2, 12]}
+   ]},
+  {"name": "b1", "line": 511, "occurrence": 0, "statement": "speed = _speeds(work, table)",
+   "carry": [
+    {"name": "state.hp", "source": "state", "path": ".hp", "dtype": "int32", "shape": [2, 6]},
+    {"name": "trackers.public_volatiles", "source": "trackers", "path": ".public_volatiles", "dtype": "bool", "shape": [2, 6, 40]},
+    {"name": "speed", "source": "local", "path": "", "dtype": "int32", "shape": [2]},
+    {"name": "live", "source": "local", "path": "", "dtype": "bool", "shape": []},
+    {"name": "damage_exact", "source": "local", "path": "", "dtype": "float32", "shape": [2, 2, 2]}
+   ]},
+  {"name": "b2", "line": 566, "occurrence": 0, "statement": "bench = bench_indices(...)",
+   "carry": [
+    {"name": "state.hp", "source": "state", "path": ".hp", "dtype": "int32", "shape": [2, 6]},
+    {"name": "trackers.tendency.matchup", "source": "trackers", "path": ".tendency.matchup", "dtype": "int32", "shape": [2, 6, 6, 2]},
+    {"name": "keys", "source": "local", "path": "", "dtype": "uint32", "shape": [2]}
+   ]}
+ ],
+ "phases": [
+  {"name": "A", "from": "b0", "to": "b1"},
+  {"name": "BC", "from": "b1", "to": "b2"}
+ ]
+}
