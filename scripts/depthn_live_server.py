@@ -285,18 +285,24 @@ def options(argv=None):
 
 def read_requests(path):
     """The saved requests of a JSONL file: one JSON object per non-empty line, at least one."""
-    with open(path,encoding='utf-8')as f:rows=[json.loads(line)for line in f if line.strip()]
-    if not rows or not all(isinstance(r,dict)for r in rows):raise ValueError(f'{path}: one JSON object per line, at least one, required')
+    with open(path,encoding='utf-8')as f:return parse_requests(f.read(),path)
+
+
+def parse_requests(text,name):
+    """Saved requests from JSONL text: one JSON object per non-empty line, at least one (ValueError naming `name` otherwise)."""
+    rows=[json.loads(line)for line in text.splitlines()if line.strip()]
+    if not rows or not all(isinstance(r,dict)for r in rows):raise ValueError(f'{name}: one JSON object per line, at least one, required')
     return rows
 
 
 def read_warm_in(args):
-    """--prepare-warm-in's saved requests, its bytes held to --prepare-warm-in-sha256 (ValueError otherwise); () without it."""
+    """--prepare-warm-in's saved requests, its bytes held to --prepare-warm-in-sha256 (ValueError otherwise); () without it. The
+    requests are parsed from the very bytes the sha256 checked (the file is read once), as phase_d_protocol_constructor.read_bound."""
     if not getattr(args,'prepare_warm_in',None):return()
     import hashlib
     blob=Path(args.prepare_warm_in).read_bytes()
     if hashlib.sha256(blob).hexdigest()!=args.prepare_warm_in_sha256:raise ValueError('--prepare-warm-in differs from --prepare-warm-in-sha256')
-    return tuple(read_requests(args.prepare_warm_in))
+    return tuple(parse_requests(blob.decode('utf-8'),args.prepare_warm_in))
 
 
 def tree_commit():
