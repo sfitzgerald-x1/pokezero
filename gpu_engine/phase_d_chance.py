@@ -48,8 +48,7 @@ CONSUMERS = {
         ("sleep_talk", "sleep_talk.choose: draw modulo callable count before PP test"),
         ("entry_ties", "transition resumed switch/callback ordering"))},
     "initial_tie": ("transition.initialize unresolved initial entry ordering",),
-    # Fidelity R (design 2.1): the appended effect stream's consumers. finite_law.COORDINATES does not carry the
-    # stream, so plan_for_state builds no axis for them: re-pinning transition.py must add the coordinates first.
+    # Fidelity R (design 2.1): the appended effect stream's consumers, finite_law.COORDINATES' effect.{s}.{c} axes (§6).
     **{f"effect.{s}.{c}": (use,) for s in range(2) for c, use in (
         (0, "transition Bonemerang second hit: critical<1 or<2 (critical.is_critical)"),
         (1, "transition Bonemerang second hit: damage 85+draw"),
@@ -78,6 +77,11 @@ def _host(value):
 def _at(table, family, field, index, default=0):
     group = table.get(family)
     return default if group is None else group[field][index]
+
+
+def _counter(data, name, side, slot):
+    """A party volatile count (fidelity M2's perish, yawn and partial-trap leaves); 0 for a state without the leaf."""
+    return data.get(name, ((0,)*6,)*2)[side][slot]
 
 
 @dataclass(frozen=True)
@@ -155,6 +159,10 @@ def plan_for_state(state, index, actions, table, metadata, *, cap, native_input=
         if isinstance(bound_actions, mapping.Refused):
             return bound_actions
         data = mapping._sample(state, index)
+        if data["pending_residual"]:
+            # A resumed suspended turn replays its saved blocks (residual_draws.., and effect_draws at transition.py:
+            # 580-582), never fresh coordinates: conditional_law plans those roots. The input mapper refuses them first.
+            return refuse("SUSPENDED_ROOT_SAVED_BLOCKS", "A pending-residual root reads its saved draws and effect blocks")
         t = _host(table._asdict() if hasattr(table, "_asdict") else table)
         if not isinstance(t, dict):
             return refuse("UNRECOGNIZED_KERNEL_TABLE", "MoveTable or an exact host dictionary required")
@@ -355,6 +363,35 @@ def plan_for_state(state, index, actions, table, metadata, *, cap, native_input=
             use("draws.0.10", Observation("identity"))
         if not replacement and all(statuses[s] & {2, 3, 4} for s in range(2)):
             use("draws.1.9", Observation("identity"))
+        # §6: the appended effect stream (fidelity R, design 2.1; M2's residual consumers). transition.py:580-582 reads
+        # ChanceInputs.effect; a resumed suspended turn reads the saved block instead (refused above).
+        for s in range(2):
+            # Bonemerang's second hit (transition.py:1113-1153, run when damage_moves.hits>1 at :1335): its own critical
+            # roll effect[s][0] (critical.is_critical: below 2 for a high-crit move, else below 1; below 1 without the
+            # table) and damage roll 85+effect[s][1]. Callers and Encore are already in the selected closure.
+            critical = (t.get("critical") or {}).get("high")
+            second_hit = [move for move in selected[s] if _at(t, "damage_moves", "hits", move) > 1]
+            if second_hit:
+                use(f"effect.{s}.0", *(Observation("less_than", 2 if critical is not None and critical[move] else 1)
+                                       for move in sorted(second_hit)))
+                use(f"effect.{s}.1", Observation("identity"))
+            # Yawn's residual sleep (transition.py:2555-2565): a holder whose count is 1 when this residual runs sleeps
+            # for 2+effect[s][2], s the drowsy mon's own side. A Yawn landing this turn sets 2 (:1742-1750), which ends
+            # at the next turn's residual, and only a holder that stays in keeps a count (entry.py, baton.py drop it).
+            if not replacement and any(_counter(data, "yawn_counter", s, p) == 1 for p in participants[s]):
+                use(f"effect.{s}.2", Observation("identity"))
+        # The order-10 partial-trap pair (transition.py:2278-2285 with residual_order): effect[0][3] orders the two
+        # Wrap holders' events at equal Speed. A seat holds a trap already or gets one from the other's Wrap (:1945-1955).
+        trapped = [any(_counter(data, "partial_trap_counter", s, p) > 0 for p in participants[s])
+                   or any(_at(t, "effects", "wrap", move) for move in selected[1-s]) for s in range(2)]
+        if not replacement and all(trapped):
+            use("effect.0.3", Observation("identity"))
+        # Perish Song's order-12 pair (transition.py:2592-2609): effect[1][3] orders the two holders at equal Speed.
+        # Perish Song gives every active without a count one (:1728-1735), so either seat's use reaches both.
+        perish_song = any(_at(t, "effects", "perishsong", move) for choices in selected for move in choices)
+        if not replacement and all(perish_song or any(_counter(data, "perish_counter", s, p) > 0 for p in participants[s])
+                                   for s in range(2)):
+            use("effect.1.3", Observation("identity"))
         inactive("draws.1.0", "SpeedBoost paired callbacks change only own stage; neither can KO or alter the frozen residual ordering")
         inactive("draws.0.9", "Selected item callbacks heal or boost only their own live holder; neither can KO, resurrect, or alter the frozen residual ordering or the other's callback")
         inactive("draws.1.11", "Encore residual callbacks change only own counter/lock and cannot KO or alter the other's callback")

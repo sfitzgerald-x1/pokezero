@@ -1,4 +1,5 @@
 """Authored source-domain guards; no transitions, panel, or coverage credit."""
+from copy import deepcopy
 from fractions import Fraction
 from functools import partial
 import unittest
@@ -7,7 +8,7 @@ from unittest.mock import patch
 from gpu_engine import chance_consumers as c
 from gpu_engine import future_state as mapping
 from gpu_engine.finite_law import COORDINATES, partition
-from test_gpu_engine_future_state import action_fixture, FAKE
+from test_gpu_engine_future_state import action_fixture, FAKE, nested
 
 
 def fixture():
@@ -27,8 +28,12 @@ def table(meta):
         effects=dict(status=field({"spore": 5}),
             self_boosts=field({"doubleteam": [0, 0, 0, 0, 0, 0, 1], "tailglow": [0,0,2,0,0,0,0]}, [0]*7),
             haze=field({"haze": True}, False), protect=field({"protect": True}, False), endure=field({}),
+            # The actual EffectsTable's M2 flags (effects.py:50-52); a real kernel table always carries them.
+            perishsong=field({}, False), yawn=field({}, False), wrap=field({}, False),
         ), secondary=dict(chance=field({"icebeam": 10, "thunderbolt": 10, "thunder": 30}),
             status=field({"icebeam": 6, "thunderbolt": 1, "thunder": 1}),
+            # SecondaryTable.confusion (fidelity B, Signal Beam): the proof reads it, so the host table supplies it.
+            confusion=field({}, False),
             contact=field({}, False), static=[False]*len(meta['vocabulary']['abilities']),
             synchronize=[False]*len(meta['vocabulary']['abilities'])),
         weather=dict(move_weather=field({"raindance": 1, "sunnyday": 2}), thunder=field({"thunder": True}, False)),
@@ -429,6 +434,116 @@ class ChanceConsumerTests(unittest.TestCase):
         self.assertIsInstance(out, mapping.Refused)
         self.assertIn("LIVE_SUSPENSION_INTERFACE", {g.code for g in out.gaps})
         self.assertTrue(out.raw_jax)
+
+    # §6: the appended effect stream's consumers (transition.py:1113-1153, 2278-2285, 2555-2565, 2592-2609).
+    def plan_live(self, data, meta, actions=(0, 0), *, kernel_table=None, cap=100_000_000, clean=()):
+        """The input mapper refuses a live Yawn, Perish or partial-trap count (future_state.py:477-484). Bind the native
+        input and actions on a copy without those counts, so the plan's own consumer closure, which reads the actual
+        root, is what the test sees."""
+        fields = dict(yawn_counter=nested((2, 6), 0), perish_counter=nested((2, 6), 0),
+                      partial_trap_counter=nested((2, 6), 0), partial_trap_source=nested((2, 6), -1), **dict(clean))
+        def strip(state):
+            copy = deepcopy(state);copy.update(deepcopy(fields))
+            return copy
+        bind = mapping.native_actions_from_jax
+        with patch.object(c.mapping, "native_input_from_jax",
+                          side_effect=lambda state, index, metadata: mapping.native_input_from_jax(
+                              strip(state), index, metadata, module=FAKE)), \
+             patch.object(c.mapping, "native_actions_from_jax",
+                          side_effect=lambda state, index, acts, native, **kw: bind(strip(state), index, acts, native, **kw)):
+            return c.plan_for_state(data, None, actions, table(meta) if kernel_table is None else kernel_table,
+                meta, cap=cap)
+
+    def effect_fixture(self, *moves):
+        data, meta = fixture()
+        meta['vocabulary']['moves'] += list(moves)
+        return data, meta
+
+    def effect_axes(self, plan):
+        return {a.coordinate: len(self.cells(plan, a.coordinate)) for a in plan.axes
+                if a.coordinate.startswith('effect.') and a.observations}
+
+    def test_bonemerang_second_hit_enumerates_its_own_critical_and_damage_roll(self):
+        data, meta = self.effect_fixture('bonemerang', 'slash')
+        names = meta['vocabulary']['moves'];bone = names.index('bonemerang')
+        self.choose(data, meta, 0, 'bonemerang')
+        t = table(meta);t['power'][bone] = 50;t['accuracy'][bone] = 90
+        single = self.plan(data, meta, actions=(0, 1), kernel_table=t)   # foe's unique Splash slot
+        self.assertIsInstance(single, c.ConsumerPlan, single)
+        self.assertEqual(self.effect_axes(single), {})                    # no multihit table: hit 2 never runs
+        t['damage_moves'] = {'hits': [2 if n == 'bonemerang' else 1 for n in names]}
+        plan = self.plan(data, meta, actions=(0, 1), kernel_table=t)
+        self.assertIsInstance(plan, c.ConsumerPlan, plan)
+        self.assertEqual(self.effect_axes(plan), {'effect.0.0': 2, 'effect.0.1': 16})
+        self.assertEqual([x.mass for x in self.cells(plan, 'effect.0.0')], [Fraction(1, 16), Fraction(15, 16)])
+        self.assertEqual({x.mass for x in self.cells(plan, 'effect.0.1')}, {Fraction(1, 16)})
+        self.assertEqual(plan.cardinality, single.cardinality * 32)
+        self.assertEqual(sum(case.mass for case in plan.bounded_cases()), 1)
+        # A high-crit multihit move cuts its own critical roll below 2 (critical.is_critical); the table decides.
+        t['damage_moves']['hits'][names.index('slash')] = 2
+        t['critical'] = {'high': [n == 'slash' for n in names], 'armor': [False] * len(meta['vocabulary']['abilities'])}
+        self.choose(data, meta, 0, 'slash')
+        high = self.plan(data, meta, actions=(0, 1), kernel_table=t)
+        self.assertEqual([x.members for x in self.cells(high, 'effect.0.0')], [(0, 1), tuple(range(2, 16))])
+        # Only the attacker's own side: the foe's Splash reads no effect column.
+        self.assertFalse(any(a.observations for a in high.axes if a.coordinate.startswith('effect.1.')))
+
+    def test_yawn_holder_at_one_enumerates_its_own_sides_duration(self):
+        data, meta = self.effect_fixture()
+        data['yawn_counter'][1][0] = 1
+        plan = self.plan_live(data, meta, actions=(0, 1))
+        self.assertIsInstance(plan, c.ConsumerPlan, plan)
+        self.assertEqual(self.effect_axes(plan), {'effect.1.2': 4})       # the drowsy mon's side only
+        self.assertEqual({x.mass for x in self.cells(plan, 'effect.1.2')}, {Fraction(1, 4)})
+        self.assertEqual(sum(case.mass for case in plan.bounded_cases()), 1)
+        data['yawn_counter'][1][0] = 2                                    # a fresh Yawn ends at the NEXT residual
+        self.assertEqual(self.effect_axes(self.plan_live(data, meta, actions=(0, 1))), {})
+        data['yawn_counter'][1][0] = 1;data['hp'][0][0] = 0               # a replacement request runs no residual
+        out = self.plan_live(data, meta, actions=(4, 1))
+        self.assertIsInstance(out, c.ConsumerPlan, out)
+        self.assertEqual(self.effect_axes(out), {})
+
+    def test_wrap_pair_tie_needs_both_seats_trapped(self):
+        data, meta = self.effect_fixture('wrap')
+        wrap = meta['vocabulary']['moves'].index('wrap')
+        t = table(meta);t['power'][wrap] = 15;t['accuracy'][wrap] = 85;t['effects']['wrap'][wrap] = True
+        for side in (0, 1):self.choose(data, meta, side, 'wrap')
+        plan = self.plan(data, meta, kernel_table=t)
+        self.assertIsInstance(plan, c.ConsumerPlan, plan)
+        self.assertEqual(self.effect_axes(plan), {'effect.0.3': 2})
+        self.assertEqual({x.mass for x in self.cells(plan, 'effect.0.3')}, {Fraction(1, 2)})
+        self.assertEqual(sum(case.mass for case in plan.bounded_cases()), 1)
+        single = self.plan(data, meta, actions=(0, 1), kernel_table=t)    # only side 1 is trapped
+        self.assertEqual(self.effect_axes(single), {})
+        data['partial_trap_counter'][0][0] = 2;data['partial_trap_source'][0][0] = 0   # side 0 already held
+        held = self.plan_live(data, meta, actions=(0, 1), kernel_table=t)
+        self.assertIsInstance(held, c.ConsumerPlan, held)
+        self.assertEqual(self.effect_axes(held), {'effect.0.3': 2})
+
+    def test_perish_pair_tie_after_perish_song_or_two_counts(self):
+        data, meta = self.effect_fixture('perishsong')
+        song = meta['vocabulary']['moves'].index('perishsong')
+        t = table(meta);t['effects']['perishsong'][song] = True;t['always_hit'][song] = True
+        self.choose(data, meta, 0, 'perishsong')
+        plan = self.plan(data, meta, actions=(0, 1), kernel_table=t)
+        self.assertIsInstance(plan, c.ConsumerPlan, plan)
+        self.assertEqual(self.effect_axes(plan), {'effect.1.3': 2})
+        self.assertEqual(sum(case.mass for case in plan.bounded_cases()), 1)
+        data, meta = self.effect_fixture('perishsong')
+        data['perish_counter'][0][0] = 3
+        self.assertEqual(self.effect_axes(self.plan_live(data, meta, actions=(1, 1), kernel_table=t)), {})
+        data['perish_counter'][1][0] = 2
+        both = self.plan_live(data, meta, actions=(1, 1), kernel_table=t)
+        self.assertIsInstance(both, c.ConsumerPlan, both)
+        self.assertEqual(self.effect_axes(both), {'effect.1.3': 2})
+
+    def test_a_suspended_root_never_enumerates_fresh_effect_coordinates(self):
+        data, meta = fixture()
+        data['pending_residual'] = True
+        self.assertIn('LIVE_SUSPENSION_INTERFACE', {g.code for g in self.plan(data, meta).gaps})   # the mapper, first
+        out = self.plan_live(data, meta, clean={'pending_residual': False})
+        self.assertIsInstance(out, mapping.Refused)
+        self.assertEqual(out.gaps[0].code, 'SUSPENDED_ROOT_SAVED_BLOCKS')
 
     def test_source_changes_are_not_grandfathered_by_prior_review(self):
         with patch.dict(c.SOURCE_PINS, {"transition.py": "not-the-reviewed-source"}):
