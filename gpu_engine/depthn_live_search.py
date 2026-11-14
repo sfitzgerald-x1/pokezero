@@ -99,9 +99,10 @@ of the current batch is never evicted (session_cap >= max_requests), so a live b
 rule; an evicted battle that returns folds its full prefix again from a fresh adapter (the same state, more host time).
 warmup(requests): per bucket, the full path on saved Showdown requests forced to that bucket (cold: compiles P1 and the
 selection per capacity, the gather per pool, the shared leaf block program, the root forward), then once more (warm).
-Session state is cleared around every pass. At the end jit's tracing caches are emptied, the heap is collected once and each
-bucket's warm batch runs again (gpu_engine.trace_release: the executables stay, the traces go; the warm report's
-trace_release records it). The server is READY only after it.
+Session state is cleared around every pass, and full (gen-2) collections are deferred while the programs trace. At the end
+jit's tracing caches are emptied, the heap is collected once and each bucket's warm batch runs again
+(gpu_engine.trace_release: the executables stay, the traces go; the warm report's trace_release records it). The server is
+READY only after it.
 """
 from collections import OrderedDict
 import gc
@@ -587,8 +588,11 @@ class DepthNLiveSearch:
             pool.append({k:r[k]for k in keys})
         if not pool:raise ValueError('at least one saved request required')
         started=time.perf_counter();self.carry=None;self.warming=True;self.reply_completed=0;self.reply_warm=None
+        # No full (gen-2) collection while the programs trace: each would rescan the trace's own growing live state (tens of
+        # millions of objects) and find little garbage. Young collections go on; _release_traces collects once at the end.
+        thresholds=gc.get_threshold();gc.set_threshold(thresholds[0],thresholds[1],1<<30)
         try:report,batches=self._warm_buckets(pool);labels=self._hold_to_reference(pool)
-        finally:self.warming=False;self.reset_sessions()
+        finally:gc.set_threshold(*thresholds);self.warming=False;self.reset_sessions()
         missing=[b for b in self.buckets if isinstance(self.pricers[b],guard_inputs.ObservedDepthNPricer)
             and 2*b*self.K*dn.LANES not in self.pricers[b].label_rows]
         if missing or labels is None:

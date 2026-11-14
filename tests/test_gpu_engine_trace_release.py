@@ -43,14 +43,16 @@ class WarmupReleaseTests(unittest.TestCase):
 
     def test_no_trace_of_a_warmed_program_outlives_warmup(self):
         s = self.search(pricers=self.make_pricers(8, (1,)));outcomes = {('w0', 0):self.outcome(0), ('l0', 0):self.outcome(1)}
-        gc.collect();before = {id(o) for o in gc.get_objects() if type(o).__name__ == 'Jaxpr'};traced = []
+        gc.collect();before = {id(o) for o in gc.get_objects() if type(o).__name__ == 'Jaxpr'};traced = [];thresholds = gc.get_threshold();during = []
         warm_buckets = live.DepthNLiveSearch._warm_buckets
 
         def spy(search, pool):   # every jaxpr the bucket passes traced (P1, the selection, the gather, the leaf program) and still alive after them
-            out = warm_buckets(search, pool);gc.collect()
+            during.append(gc.get_threshold());out = warm_buckets(search, pool);gc.collect()
             traced.extend(weakref.ref(o) for o in gc.get_objects() if type(o).__name__ == 'Jaxpr' and id(o) not in before)
             return out
         with L.Codex(outcomes), patch.object(live.DepthNLiveSearch, '_warm_buckets', spy):report = s.warmup([L.request('w0', 0)])
+        # Full collections were deferred while the programs traced (young ones kept running), and the thresholds are back.
+        self.assertEqual(during, [thresholds[:2] + (1 << 30,)]);self.assertEqual(gc.get_threshold(), thresholds)
         gc.collect();alive = [r() for r in traced if r() is not None];equations = sum(len(x.eqns) for x in alive)
         self.assertGreater(len(traced), 100)
         # Today's failure: jit's tracing caches keep them all (the executor's jitted functions are alive, so their entries are).
@@ -63,6 +65,11 @@ class WarmupReleaseTests(unittest.TestCase):
         with CompileEvents() as events:
             rows, _ = self.run_batch(s, [L.request('l0', 0)], outcomes)
         self.assertEqual([r['status'] for r in rows], ['COMPLETE']);self.assertEqual(events.seen, [])
+        # A warmup that fails restores the thresholds too.
+        with L.Codex(outcomes), patch.object(live.DepthNLiveSearch, '_warm_buckets', side_effect=RuntimeError('no compile')), \
+                self.assertRaisesRegex(RuntimeError, 'no compile'):
+            self.search(pricers=self.make_pricers(8, (1,))).warmup([L.request('w0', 0)])
+        self.assertEqual(gc.get_threshold(), thresholds)
 
 
 def block_inputs(nodes, k_own, k_opp, blocks=1):
