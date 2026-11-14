@@ -1,0 +1,229 @@
+{
+ "schema": "pokezero.effect_probe.scenario.v1",
+ "move": "destinybond_m1_banette_machamp_distinct",
+ "note": "Distinct-species twin of destinybond_m1_banette_machamp (B2 folds no repeated species, so device mode compares every step; destinybond_m1_banette_machamp keeps the exact Showdown setup). Destiny Bond gate-3 matchup 1 (own Banette KO'd by Machamp), gen3 randbats sets: Berry Sweeper Banette (L88, Salac Berry, Hidden Power Fighting IVs) outspeeds the L82 Fast Attacker Machamp. Expire: Banette bonds and takes Hidden Power [Ghost] to 126, then uses Shadow Ball (the bond is removed before the move, data/moves.ts destinybond onBeforeMove), and Machamp's KO takes nobody. Trigger: Misdreavus bonds (Hidden Power [Ghost] to 112/249), re-bonds (gen6 onPrepareHit, reuse succeeds), and Machamp's Hidden Power KO (crit and roll axes) faints Machamp too (onFaint, a Move effect); both replace. Substitution: Misdreavus (L88, Levitate; Banette's moves, Salac Berry and Hidden Power Fighting IVs) for the second Banette: a Ghost, so Hidden Power [Ghost] is super effective; Speed 199 above Machamp's 137; the first hit leaves 45%, above Salac's 25%, and the second KOs in all four crit and roll cases.",
+ "teams": [
+  [
+   {
+    "species": "Banette",
+    "moves": [
+     "destinybond",
+     "endure",
+     "hiddenpowerfighting",
+     "shadowball"
+    ],
+    "ability": "Insomnia",
+    "item": "Salac Berry",
+    "level": 88,
+    "ivs": {
+     "def": 30,
+     "spa": 30,
+     "spd": 30,
+     "spe": 30
+    }
+   },
+   {
+    "species": "Misdreavus",
+    "moves": [
+     "destinybond",
+     "endure",
+     "hiddenpowerfighting",
+     "shadowball"
+    ],
+    "ability": "Levitate",
+    "item": "Salac Berry",
+    "level": 88,
+    "ivs": {
+     "def": 30,
+     "spa": 30,
+     "spd": 30,
+     "spe": 30
+    }
+   },
+   {
+    "species": "Starmie",
+    "moves": [
+     "splash",
+     "surf",
+     "recover",
+     "protect"
+    ],
+    "ability": "Illuminate",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Blissey",
+    "moves": [
+     "splash",
+     "softboiled",
+     "protect",
+     "seismictoss"
+    ],
+    "ability": "Serene Grace",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Skarmory",
+    "moves": [
+     "splash",
+     "protect",
+     "spikes",
+     "peck"
+    ],
+    "ability": "Keen Eye",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Swampert",
+    "moves": [
+     "splash",
+     "protect",
+     "surf",
+     "earthquake"
+    ],
+    "ability": "Torrent",
+    "item": "Leftovers"
+   }
+  ],
+  [
+   {
+    "species": "Machamp",
+    "moves": [
+     "bulkup",
+     "crosschop",
+     "hiddenpowerghost",
+     "rockslide"
+    ],
+    "ability": "Guts",
+    "item": "Leftovers",
+    "level": 82,
+    "ivs": {
+     "def": 30,
+     "spd": 30
+    }
+   },
+   {
+    "species": "Starmie",
+    "moves": [
+     "splash",
+     "surf",
+     "recover",
+     "protect"
+    ],
+    "ability": "Illuminate",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Blissey",
+    "moves": [
+     "splash",
+     "softboiled",
+     "protect",
+     "seismictoss"
+    ],
+    "ability": "Serene Grace",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Skarmory",
+    "moves": [
+     "splash",
+     "protect",
+     "spikes",
+     "peck"
+    ],
+    "ability": "Keen Eye",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Swampert",
+    "moves": [
+     "splash",
+     "protect",
+     "surf",
+     "earthquake"
+    ],
+    "ability": "Torrent",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Metagross",
+    "moves": [
+     "splash",
+     "protect",
+     "meteormash",
+     "earthquake"
+    ],
+    "ability": "Clear Body",
+    "item": "Leftovers"
+   }
+  ]
+ ],
+ "script": [
+  [
+   "move 1",
+   "move 3"
+  ],
+  [
+   "move 4",
+   "move 3"
+  ],
+  [
+   "switch 2",
+   ""
+  ],
+  [
+   "move 1",
+   "move 3"
+  ],
+  [
+   "move 1",
+   "move 3"
+  ],
+  [
+   "switch 4",
+   "switch 2"
+  ]
+ ],
+ "axes": [
+  {
+   "name": "crit",
+   "field": "draws.1.4",
+   "steps": [
+    4
+   ],
+   "values": [
+    15,
+    0
+   ]
+  },
+  {
+   "name": "roll",
+   "field": "draws.1.5",
+   "steps": [
+    4
+   ],
+   "values": [
+    0,
+    15
+   ]
+  }
+ ],
+ "expect": {
+  "exact": true
+ },
+ "require_fields": [
+  "item_knocked",
+  "destiny_bond"
+ ],
+ "tape": {
+  "draws.0.4": 15,
+  "draws.0.5": 0,
+  "draws.0.6": 0,
+  "draws.1.4": 15,
+  "draws.1.5": 0,
+  "draws.1.6": 0,
+  "secondary.0": 99,
+  "secondary.1": 99
+ }
+}

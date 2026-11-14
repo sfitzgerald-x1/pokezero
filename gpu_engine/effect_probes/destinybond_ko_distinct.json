@@ -1,0 +1,176 @@
+{
+ "schema": "pokezero.effect_probe.scenario.v1",
+ "move": "destinybond_ko_distinct",
+ "note": "Distinct-species twin of destinybond_ko (B2 folds no repeated species, so device mode compares every step; destinybond_ko keeps the exact Showdown setup). A2.4 Destiny Bond (data/moves.ts; gen6 onPrepareHit inherited by Gen 3): a level-50 Gengar bonds, then the slower Snorlax's Shadow Ball KOs it and Snorlax faints too (both replace); Misdreavus bonds twice in a row (reuse succeeds) and its KO by Hariyama again takes the attacker. Substitutions: Misdreavus for the second level-50 Gengar: a Ghost with Gengar's level-50 HP and Def, OHKOd by the super-effective Shadow Ball, the only move that hits it, so dropping Poison changes no interaction; Hariyama (L71, Thick Fat as Snorlax) for the second Snorlax: Speed 112, below Misdreavus's 116 so both bonds come first, and its Shadow Ball OHKOs Misdreavus; nothing hits it (Misdreavus only bonds), so Normal's Ghost immunity never acted, and Shadow Ball has no STAB from either type.",
+ "teams": [
+  [
+   {
+    "species": "Gengar",
+    "moves": [
+     "destinybond",
+     "splash",
+     "protect",
+     "thunderbolt"
+    ],
+    "ability": "Levitate",
+    "item": "",
+    "level": 50
+   },
+   {
+    "species": "Misdreavus",
+    "moves": [
+     "destinybond",
+     "splash",
+     "protect",
+     "thunderbolt"
+    ],
+    "ability": "Levitate",
+    "item": "",
+    "level": 50
+   },
+   {
+    "species": "Starmie",
+    "moves": [
+     "splash",
+     "surf",
+     "recover",
+     "protect"
+    ],
+    "ability": "Illuminate",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Blissey",
+    "moves": [
+     "splash",
+     "softboiled",
+     "protect",
+     "seismictoss"
+    ],
+    "ability": "Serene Grace",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Skarmory",
+    "moves": [
+     "splash",
+     "protect",
+     "spikes",
+     "peck"
+    ],
+    "ability": "Keen Eye",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Swampert",
+    "moves": [
+     "splash",
+     "protect",
+     "surf",
+     "earthquake"
+    ],
+    "ability": "Torrent",
+    "item": "Leftovers"
+   }
+  ],
+  [
+   {
+    "species": "Snorlax",
+    "moves": [
+     "shadowball",
+     "splash",
+     "protect",
+     "bodyslam"
+    ],
+    "ability": "Thick Fat",
+    "item": ""
+   },
+   {
+    "species": "Hariyama",
+    "moves": [
+     "shadowball",
+     "splash",
+     "protect",
+     "bodyslam"
+    ],
+    "ability": "Thick Fat",
+    "item": "",
+    "level": 71
+   },
+   {
+    "species": "Starmie",
+    "moves": [
+     "splash",
+     "surf",
+     "recover",
+     "protect"
+    ],
+    "ability": "Illuminate",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Blissey",
+    "moves": [
+     "splash",
+     "softboiled",
+     "protect",
+     "seismictoss"
+    ],
+    "ability": "Serene Grace",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Skarmory",
+    "moves": [
+     "splash",
+     "protect",
+     "spikes",
+     "peck"
+    ],
+    "ability": "Keen Eye",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Swampert",
+    "moves": [
+     "splash",
+     "protect",
+     "surf",
+     "earthquake"
+    ],
+    "ability": "Torrent",
+    "item": "Leftovers"
+   }
+  ]
+ ],
+ "script": [
+  [
+   "move 1",
+   "move 2"
+  ],
+  [
+   "move 1",
+   "move 1"
+  ],
+  [
+   "switch 2",
+   "switch 2"
+  ],
+  [
+   "move 1",
+   "move 2"
+  ],
+  [
+   "move 1",
+   "move 1"
+  ]
+ ],
+ "axes": [],
+ "expect": {
+  "exact": true
+ },
+ "require_fields": [
+  "item_knocked",
+  "destiny_bond"
+ ]
+}
