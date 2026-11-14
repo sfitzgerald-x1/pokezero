@@ -125,7 +125,7 @@ console.log(JSON.stringify(out));"""
   poisoned=ast.parse(ast.unparse(stripped).replace('eligible & table.move[move]','eligible & False & table.move[move]'));self.assertNotEqual(ast.dump(poisoned,include_attributes=False),ast.dump(old,include_attributes=False))
   witness._source()
   import hashlib
-  for file,key,count in(('chance_consumers.py','SOURCE_PINS',13),('ordinary_law.py','MAPPING_PINS',6),('conditional_law.py','MAPPING_PINS',4)):
+  for file,key,count in(('chance_consumers.py','SOURCE_PINS',14),('ordinary_law.py','MAPPING_PINS',6),('conditional_law.py','MAPPING_PINS',4)):
    tree=ast.parse(Path('gpu_engine',file).read_text());mapping=ast.literal_eval(next(n.value for n in tree.body if isinstance(n,ast.Assign)and any(isinstance(x,ast.Name)and x.id==key for x in n.targets)));self.assertEqual(len(mapping),count)
    for name,value in mapping.items():self.assertEqual(hashlib.sha256(Path('gpu_engine',name).read_bytes()).hexdigest(),value)
   self.assertEqual(len(witness.SOURCE_PINS),89)
