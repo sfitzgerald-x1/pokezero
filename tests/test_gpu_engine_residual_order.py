@@ -289,11 +289,37 @@ class StepSourceTests(unittest.TestCase):
         where = {}
         for n in names:
             if isinstance(n.ctx, ast.Store):where.setdefault(n.id, set()).add(kind_of(n))
-        carried = set(stored(self.before))
+        # The one deliberate carry: the lifecycle tape, assigned before the loop and threaded through every gate. Any other
+        # name assigned before the loop (e.g. `foe`, `boosts` from the move loop) is NOT exempt: reading it in a gate that
+        # did not store it would read a value left by an earlier position's gate or by the move loop (review F1).
+        carried = {'_public_trace'}
+        self.assertTrue(carried <= set(stored(self.before)))
         stale = sorted({(n.id, kind_of(n)) for n in names if isinstance(n.ctx, ast.Load) and n.id in where
                         and 'common' not in where[n.id] and kind_of(n) not in where[n.id] and n.id not in carried})
         self.assertEqual(stale, [])
-        self.assertIn('_public_trace', carried)
+
+    def test_the_sticky_refusal_or_is_anchored_at_position_zero(self):
+        """R2 skips accounting calls whose only effect under an all-false mask is _put_context's sticky refusal OR, because
+        Speed Boost's call at position 0 (the loop's first) always runs that OR first (review F2). Pin that anchor: exactly
+        one SPEED_BOOST unhandled_attempt in the loop, nested under exactly `if _lifecycle_trace:` inside `if table.entry is
+        not None:` inside the ability gate, with position 0 in the ability set and _all_positions the complement of the entry
+        condition (so whenever the anchor does not exist, nothing is skipped)."""
+        parents = {}
+        for node in ast.walk(ast.Module(body=self.loop.body, type_ignores=[])):
+            for child in ast.iter_child_nodes(node):parents[child] = node
+        calls = [n for n in ast.walk(ast.Module(body=self.loop.body, type_ignores=[])) if isinstance(n, ast.Call)
+                 and ast.unparse(n.func) == 'execution_accounting.unhandled_attempt'
+                 and any(ast.unparse(a) == 'execution_accounting.Site.SPEED_BOOST' for a in n.args)]
+        self.assertEqual(len(calls), 1)
+        tests, node = [], calls[0]
+        while node in parents:
+            node = parents[node]
+            if isinstance(node, ast.If):tests.append(ast.unparse(node.test))
+        self.assertEqual(tests, ['_lifecycle_trace', 'table.entry is not None',
+                                 "order in residual_order.POSITIONS['ability'] or _all_positions"])
+        self.assertIn(0, ro.POSITIONS['ability'])
+        self.assertEqual(min(min(v) for v in ro.POSITIONS.values()), 0)
+        self.assertTrue(same(self.assignment('_all_positions'), '_all_positions = _lifecycle_trace and table.entry is None'))
 
     def test_the_per_position_common_code_is_not_gated(self):
         """eligible, battle_continues, the faint snapshot, the device baseline, the fainted-boost clear and the two observer
