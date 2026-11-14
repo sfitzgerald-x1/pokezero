@@ -1,0 +1,215 @@
+{
+ "schema": "pokezero.effect_probe.scenario.v1",
+ "move": "hyperbeam_roar_distinct",
+ "note": "Distinct-species twin of hyperbeam_roar (B2 folds no repeated species, so device mode compares every step; hyperbeam_roar keeps the exact Showdown setup). M1.1: four distinct level-5 mons are KOd so Slaking's side has one bench mon (Roar's target is then forced; the probe resolves a one-candidate sample as inert). Slaking Hyper Beams and is Roared out after the hit (mustrecharge 2 cleared by the switch-out); later it Hyper Beams again and is Roared out after its recharge turn. Substitutions: Tentacruel, Smeargle and Dunsparce for the second to fourth level-5 Magikarp: the distinct level-5 sets of spikes_drag_back_faint, each KOd by one Drill Peck before it moves; no contact-triggered ability.",
+ "teams": [
+  [
+   {
+    "species": "Slaking",
+    "moves": [
+     "hyperbeam",
+     "return",
+     "earthquake",
+     "shadowball"
+    ],
+    "ability": "Truant",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Magikarp",
+    "moves": [
+     "splash",
+     "tackle",
+     "flail",
+     "protect"
+    ],
+    "ability": "Swift Swim",
+    "item": "",
+    "level": 5
+   },
+   {
+    "species": "Tentacruel",
+    "moves": [
+     "splash",
+     "protect",
+     "surf",
+     "sonicboom"
+    ],
+    "ability": "Liquid Ooze",
+    "item": "",
+    "level": 5
+   },
+   {
+    "species": "Smeargle",
+    "moves": [
+     "splash",
+     "spore",
+     "spikes",
+     "encore"
+    ],
+    "ability": "Own Tempo",
+    "item": "",
+    "level": 5
+   },
+   {
+    "species": "Dunsparce",
+    "moves": [
+     "splash",
+     "tackle",
+     "protect",
+     "rest"
+    ],
+    "ability": "Serene Grace",
+    "item": "",
+    "level": 5
+   },
+   {
+    "species": "Blissey",
+    "moves": [
+     "splash",
+     "softboiled",
+     "protect",
+     "seismictoss"
+    ],
+    "ability": "Serene Grace",
+    "item": "Leftovers"
+   }
+  ],
+  [
+   {
+    "species": "Skarmory",
+    "moves": [
+     "roar",
+     "splash",
+     "drillpeck",
+     "protect"
+    ],
+    "ability": "Keen Eye",
+    "item": "Leftovers",
+    "level": 100
+   },
+   {
+    "species": "Starmie",
+    "moves": [
+     "splash",
+     "surf",
+     "recover",
+     "protect"
+    ],
+    "ability": "Illuminate",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Blissey",
+    "moves": [
+     "splash",
+     "softboiled",
+     "protect",
+     "seismictoss"
+    ],
+    "ability": "Serene Grace",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Swampert",
+    "moves": [
+     "splash",
+     "protect",
+     "surf",
+     "earthquake"
+    ],
+    "ability": "Torrent",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Metagross",
+    "moves": [
+     "splash",
+     "protect",
+     "meteormash",
+     "earthquake"
+    ],
+    "ability": "Clear Body",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Celebi",
+    "moves": [
+     "splash",
+     "protect",
+     "psychic",
+     "recover"
+    ],
+    "ability": "Natural Cure",
+    "item": "Leftovers"
+   }
+  ]
+ ],
+ "script": [
+  [
+   "switch 2",
+   "move 3"
+  ],
+  [
+   "switch 3",
+   ""
+  ],
+  [
+   "move 1",
+   "move 3"
+  ],
+  [
+   "switch 4",
+   ""
+  ],
+  [
+   "move 1",
+   "move 3"
+  ],
+  [
+   "switch 5",
+   ""
+  ],
+  [
+   "move 1",
+   "move 3"
+  ],
+  [
+   "switch 1",
+   ""
+  ],
+  [
+   "move 1",
+   "move 1"
+  ],
+  [
+   "move 1",
+   "move 2"
+  ],
+  [
+   "switch 1",
+   "move 2"
+  ],
+  [
+   "move 1",
+   "move 2"
+  ],
+  [
+   "move 1",
+   "move 1"
+  ],
+  [
+   "move 1",
+   "move 2"
+  ]
+ ],
+ "axes": [],
+ "expect": {
+  "exact": true
+ },
+ "require_fields": [
+  "recharge_counter",
+  "item_knocked",
+  "destiny_bond"
+ ]
+}

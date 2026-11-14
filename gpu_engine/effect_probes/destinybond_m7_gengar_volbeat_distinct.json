@@ -1,0 +1,234 @@
+{
+ "schema": "pokezero.effect_probe.scenario.v1",
+ "move": "destinybond_m7_gengar_volbeat_distinct",
+ "note": "Distinct-species twin of destinybond_m7_gengar_volbeat (B2 folds no repeated species, so device mode compares every step; destinybond_m7_gengar_volbeat keeps the exact Showdown setup). Destiny Bond gate-3 matchup 7 (opp Gengar vs Volbeat Thunderbolt / Ice Punch / Baton Pass / Tail Glow), gen3 randbats sets: the faster Volbeat Tail Glows while Gengar bonds, then Baton Passes the +2 to a Bulky Attacker Starmie while Gengar is bonded; Gengar re-bonds after the pass, and the faster Starmie's Psychic OHKO faints Starmie too. After the double replacement Haunter bonds, Volbeat passes again, Haunter Thunderbolts the incoming Celebi (bond dropped), and Celebi's Psychic KO takes nobody. Substitutions: Celebi (L74, Natural Cure as Starmie; Starmie's moves) for the second Starmie: a Psychic with Starmie's SpA (191), so the +2 STAB Psychic stays super effective on Haunter's Poison and OHKOs it; Speed 191 above Haunter's 184; the one type change that acts is Haunter's Thunderbolt, super effective on Water before and resisted by Grass here (141 HP of chip before, 28 now): Starmie survived it too, and no KO or threshold depends on it, while the move that drops the bond is still a non-Destiny Bond move (the only Water/Psychic faster than Haunter is Starmie itself); Haunter (L74, Levitate; Gengar's set) for the second Gengar: Ghost/Poison, so Psychic is super effective; Speed 184 below Volbeat's 213, so Tail Glow and the pass come first.",
+ "teams": [
+  [
+   {
+    "species": "Volbeat",
+    "moves": [
+     "thunderbolt",
+     "icepunch",
+     "batonpass",
+     "tailglow"
+    ],
+    "ability": "Swarm",
+    "item": "Leftovers",
+    "level": 94,
+    "ivs": {
+     "atk": 0
+    },
+    "evs": {
+     "atk": 0
+    }
+   },
+   {
+    "species": "Starmie",
+    "moves": [
+     "psychic",
+     "thunderbolt",
+     "surf",
+     "recover"
+    ],
+    "ability": "Natural Cure",
+    "item": "Leftovers",
+    "level": 74,
+    "ivs": {
+     "atk": 0
+    },
+    "evs": {
+     "atk": 0
+    }
+   },
+   {
+    "species": "Celebi",
+    "moves": [
+     "psychic",
+     "thunderbolt",
+     "surf",
+     "recover"
+    ],
+    "ability": "Natural Cure",
+    "item": "Leftovers",
+    "level": 74,
+    "ivs": {
+     "atk": 0
+    },
+    "evs": {
+     "atk": 0
+    }
+   },
+   {
+    "species": "Blissey",
+    "moves": [
+     "splash",
+     "softboiled",
+     "protect",
+     "seismictoss"
+    ],
+    "ability": "Serene Grace",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Skarmory",
+    "moves": [
+     "splash",
+     "protect",
+     "spikes",
+     "peck"
+    ],
+    "ability": "Keen Eye",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Swampert",
+    "moves": [
+     "splash",
+     "protect",
+     "surf",
+     "earthquake"
+    ],
+    "ability": "Torrent",
+    "item": "Leftovers"
+   }
+  ],
+  [
+   {
+    "species": "Gengar",
+    "moves": [
+     "destinybond",
+     "thunderbolt",
+     "icepunch",
+     "willowisp"
+    ],
+    "ability": "Levitate",
+    "item": "Leftovers",
+    "level": 74,
+    "ivs": {
+     "atk": 0
+    },
+    "evs": {
+     "atk": 0
+    }
+   },
+   {
+    "species": "Haunter",
+    "moves": [
+     "destinybond",
+     "thunderbolt",
+     "icepunch",
+     "willowisp"
+    ],
+    "ability": "Levitate",
+    "item": "Leftovers",
+    "level": 74,
+    "ivs": {
+     "atk": 0
+    },
+    "evs": {
+     "atk": 0
+    }
+   },
+   {
+    "species": "Starmie",
+    "moves": [
+     "splash",
+     "surf",
+     "recover",
+     "protect"
+    ],
+    "ability": "Illuminate",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Blissey",
+    "moves": [
+     "splash",
+     "softboiled",
+     "protect",
+     "seismictoss"
+    ],
+    "ability": "Serene Grace",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Skarmory",
+    "moves": [
+     "splash",
+     "protect",
+     "spikes",
+     "peck"
+    ],
+    "ability": "Keen Eye",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Metagross",
+    "moves": [
+     "splash",
+     "protect",
+     "meteormash",
+     "earthquake"
+    ],
+    "ability": "Clear Body",
+    "item": "Leftovers"
+   }
+  ]
+ ],
+ "script": [
+  [
+   "move 4",
+   "move 1"
+  ],
+  [
+   "move 3",
+   "move 1"
+  ],
+  [
+   "switch 2",
+   ""
+  ],
+  [
+   "move 1",
+   "move 1"
+  ],
+  [
+   "switch 1",
+   "switch 2"
+  ],
+  [
+   "move 4",
+   "move 1"
+  ],
+  [
+   "move 3",
+   "move 2"
+  ],
+  [
+   "switch 3",
+   ""
+  ],
+  [
+   "move 1",
+   "move 1"
+  ]
+ ],
+ "axes": [],
+ "expect": {
+  "exact": true
+ },
+ "require_fields": [
+  "item_knocked",
+  "destiny_bond"
+ ],
+ "tape": {
+  "draws.0.4": 15,
+  "draws.0.5": 0,
+  "draws.0.6": 0,
+  "draws.1.4": 15,
+  "draws.1.5": 0,
+  "draws.1.6": 0,
+  "secondary.0": 99,
+  "secondary.1": 99
+ }
+}
