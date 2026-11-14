@@ -34,9 +34,18 @@ SCHEMA='pokezero.phase-d.protocol-materialization.v1'
 HOST_WORLDS=True
 
 
-def _device(tree):
-    """A host-built world's NumPy leaves as device arrays, made as map_spec's own j.asarray made them: same values, dtypes."""
-    return jax.tree_util.tree_map(lambda x:j.asarray(x) if isinstance(x,np.ndarray) else x,tree)
+def _device(state):
+    """A host-built world state's NumPy leaves as device arrays, as map_spec's own j.asarray made them: same values, dtypes."""
+    return jax.tree_util.tree_map(lambda x:j.asarray(x) if isinstance(x,np.ndarray) else x,state)
+
+
+def _device_carry(carry):
+    """_rebase_host's carry with exactly the leaves _rebase writes made device arrays, as _rebase's scatters made them; every
+    other leaf is the root's own, unchanged."""
+    history=carry.damage_history
+    if history is not None:history=history._replace(hp=j.asarray(history.hp),maximum=j.asarray(history.maximum))
+    return carry._replace(damage_history=history,physical_to_public=j.asarray(carry.physical_to_public),
+        active_physical=j.asarray(carry.active_physical),own_order=j.asarray(carry.own_order))
 
 
 @dataclass(frozen=True)
@@ -518,7 +527,7 @@ def materialize_protocol(root,start,*,inputs,seed,key=None):
         body=dict(schema=SCHEMA,prefix=root.owner_lines_sha256,address=vars(root.address),seed=seed,
             public_source=catalog.source.source_hash,sampled_teams=dict(start.player_teams))
         digest=hashlib.sha256(json.dumps(body,sort_keys=True,separators=(',',':')).encode()).hexdigest()
-        return ProtocolWorld(_device(physical) if host else physical,_device(carry) if host else carry,(),world,digest,tuple(diagnostics))
+        return ProtocolWorld(_device(physical) if host else physical,_device_carry(carry) if host else carry,(),world,digest,tuple(diagnostics))
     except EngineWorldUnsupported as error:
         _downstream_unknowns(diagnostics,'Original public mapper refused: '+error.reason)
         return ProtocolWorld(None,None,('original-public-mapper:'+error.reason,),mapper_diagnostics=tuple(diagnostics))
