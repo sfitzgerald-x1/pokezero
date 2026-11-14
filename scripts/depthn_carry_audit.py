@@ -156,7 +156,7 @@ EFFECTS = (
          'gpu_engine/linked_traps.py:12-14: the represented move traps are Mean Look, Spider Web and Block only (Wrap is its own volatile)',
          'in-tree since M2 + R1 (f3e71663): gpu_engine/state.py:91-92 partial_trap_counter (3 + draws[s][7] at Wrap) and '
          'partial_trap_source; transition.py:1950-1955 the Wrap set (the counter and partial_trap_source); transition.py:2543-2563 its residual tick (the trapper read at '
-         'the holder\'s own handler), traced by R1 only at residual_order.POSITIONS wrap 4, 8, 9, 11 (gpu_engine/residual_order.py:95)',
+         'the holder\'s own handler), traced by R1 only at residual_order.POSITIONS wrap 4, 8, 9, 11 (gpu_engine/residual_order.py:99)',
          'probes: 12 wrap* scenarios (20 cases), EXACT against Showdown f76228a1 at M2 + R1 (3e0878e4); each gated position fails a '
          'named probe when dropped (#1930 (M2 + R1) PR body, R1 section, position -> probe table: 4 wrap and seven more, 8 and 9 '
          'wrap_tie, 11 wrap_trapper_faint and wrap_trapper_switch)',
@@ -186,7 +186,7 @@ EFFECTS = (
          'in-tree since M2 + R1 (f3e71663): gpu_engine/state.py:90 yawn_counter (2 at Yawn, -1 at residual subOrder 19, a sleep attempt '
          'at 0); transition.py:1742-1750 the Yawn set; transition.py:2564-2592 its countdown (transition.py:2574-2578 Sleep Clause and the '
          'immunities) and the after-status step, '
-         'traced by R1 only at residual_order.POSITIONS yawn 6, 12, 13 (gpu_engine/residual_order.py:95)',
+         'traced by R1 only at residual_order.POSITIONS yawn 6, 12, 13 (gpu_engine/residual_order.py:99)',
          'probes: 11 yawn* scenarios, EXACT against Showdown f76228a1 at M2 + R1 (3e0878e4); each gated position fails a named probe '
          'when dropped (#1930 (M2 + R1) PR body, R1 section, position -> probe table: 6 yawn_faster, added because no earlier probe '
          'reached it; 12 yawn_tie; 13 yawn and six more)',

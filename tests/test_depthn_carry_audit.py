@@ -82,7 +82,7 @@ CITATION_ANCHORS = {
     'gpu_engine/request_source_rules.cjs:64': "'encore'",
     'gpu_engine/request_source_rules.cjs:65-66': "^'transform'",
     'gpu_engine/request_source_rules.cjs:67': 'recharge',
-    'gpu_engine/residual_order.py:95': 'POSITIONS',
+    'gpu_engine/residual_order.py:99': 'POSITIONS',
     'gpu_engine/sleep_talk.py:16-22': 'sleeptalk',
     'gpu_engine/solar_beam.py:1': 'Solar Beam',
     'gpu_engine/solar_beam.py:14-15': 'solarbeam',
