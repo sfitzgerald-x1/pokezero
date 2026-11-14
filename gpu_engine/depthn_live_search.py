@@ -618,10 +618,16 @@ class DepthNLiveSearch:
         a DN2W16 warmup, and every full collection while serving would rescan them), collect once, then run each bucket's warm
         batch again. That last pass recompiles, before READY, the few small programs whose executable cache is keyed on a
         released trace (eagerly evaluated jaxprs, e.g. vmapped jax.random.fold_in) instead of on their function, so serving
-        compiles nothing. Returns dict(entries dropped, gc_seconds, rewarm_seconds)."""
+        compiles nothing. Each re-warm must answer as that bucket's warm pass did, (status, cause, bucket, action_index) per
+        row (`batches[b]` = (batch, the warm pass's rows)); RuntimeError otherwise, so a broken re-warm never reaches READY.
+        Returns dict(entries dropped, gc_seconds, rewarm_seconds)."""
         released=trace_release.release();clock=time.perf_counter();gc.collect();collected=time.perf_counter()-clock
-        clock=time.perf_counter()
-        for b,batch in batches.items():self.reset_sessions();self._batch(batch,bucket=b)
+        clock=time.perf_counter();outcome=lambda rows:[(r['status'],r['cause'],r['bucket'],r['action_index'])for r in rows]
+        for b,(batch,warm) in batches.items():
+            self.reset_sessions();again=self._batch(batch,bucket=b)
+            if outcome(again)!=outcome(warm):
+                self.reset_sessions()
+                raise RuntimeError(f'warmup: the re-warm of bucket {b} answered {outcome(again)}, its warm pass {outcome(warm)}')
         self.reset_sessions()
         return dict(entries=released,gc_seconds=collected,rewarm_seconds=time.perf_counter()-clock)
 
@@ -669,5 +675,5 @@ class DepthNLiveSearch:
             report[b]=dict(cold_seconds=cold,warm_seconds=warm,attempts=attempt+1,roots=b,complete=sum(r['status']=='COMPLETE'for r in rows),
                 causes=sorted({r['cause']for r in rows if r['cause']}),compiled=len(compiles),lower_seconds=sum(c[1]for c in compiles),
                 compile_seconds=sum(c[2]for c in compiles),warm_compiled=len(self.pricers[b].compiles)if any(r['bucket']==b for r in again)else None)
-            batches[b]=batch
+            batches[b]=(batch,again)
         return report,batches

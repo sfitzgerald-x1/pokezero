@@ -71,6 +71,20 @@ class WarmupReleaseTests(unittest.TestCase):
             self.search(pricers=self.make_pricers(8, (1,))).warmup([L.request('w0', 0)])
         self.assertEqual(gc.get_threshold(), thresholds)
 
+    def test_a_rewarm_that_answers_otherwise_stops_warmup(self):
+        s = self.search(pricers=self.make_pricers(8, (1,)));outcomes = {('w0', 0):self.outcome(0)};held = []
+        batch, hold = live.DepthNLiveSearch._batch, live.DepthNLiveSearch._hold_to_reference
+
+        def broken(search, requests, **kw):   # every batch after _hold_to_reference (the re-warm) answers server_error
+            rows = batch(search, requests, **kw)
+            return [dict(r, status='REFUSED', cause='server_error', action_index=None) for r in rows] if held else rows
+
+        def spy(search, pool):
+            out = hold(search, pool);held.append(True);return out
+        with L.Codex(outcomes), patch.object(live.DepthNLiveSearch, '_batch', broken), patch.object(live.DepthNLiveSearch, '_hold_to_reference', spy), \
+                self.assertRaisesRegex(RuntimeError, r"re-warm of bucket 1 answered \[\('REFUSED', 'server_error', 1, None\)\], its warm pass \[\('COMPLETE', None, 1, \d\)\]"):
+            s.warmup([L.request('w0', 0)])
+
 
 def block_inputs(nodes, k_own, k_opp, blocks=1):
     """One call's gathered batch for the depth-2 fake's worlds: [blocks*nodes] node states, both seats requested."""
