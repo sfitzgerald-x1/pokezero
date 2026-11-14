@@ -51,10 +51,13 @@ class WarmupReleaseTests(unittest.TestCase):
             traced.extend(weakref.ref(o) for o in gc.get_objects() if type(o).__name__ == 'Jaxpr' and id(o) not in before)
             return out
         with L.Codex(outcomes), patch.object(live.DepthNLiveSearch, '_warm_buckets', spy):report = s.warmup([L.request('w0', 0)])
-        gc.collect();alive = sum(r() is not None for r in traced)
+        gc.collect();alive = [r() for r in traced if r() is not None];equations = sum(len(x.eqns) for x in alive)
         self.assertGreater(len(traced), 100)
         # Today's failure: jit's tracing caches keep them all (the executor's jitted functions are alive, so their entries are).
-        self.assertEqual(alive, 0, f'{alive} of the {len(traced)} jaxprs traced while warming the buckets outlive warmup')
+        # What may stay is JAX's own strong caches of tiny fixed computations (a reduction's `add a b`), never a trace.
+        self.assertLessEqual(equations, 4, f'{len(alive)} of the {len(traced)} jaxprs traced while warming the buckets outlive warmup '
+            f'({equations} equations)')
+        del alive
         self.assertGreater(report['trace_release']['entries'], 0)
         # After READY, serving a new root traces and compiles nothing: the re-warm pass recompiled what the release unkeyed.
         with CompileEvents() as events:
