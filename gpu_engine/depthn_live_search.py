@@ -99,9 +99,13 @@ of the current batch is never evicted (session_cap >= max_requests), so a live b
 rule; an evicted battle that returns folds its full prefix again from a fresh adapter (the same state, more host time).
 warmup(requests): per bucket, the full path on saved Showdown requests forced to that bucket (cold: compiles P1 and the
 selection per capacity, the gather per pool, the shared leaf block program, the root forward), then once more (warm).
-Session state is cleared around every pass. The server is READY only after it.
+Session state is cleared around every pass, and full (gen-2) collections are deferred while the programs trace. At the end
+jit's tracing caches are emptied, the heap is collected once and each bucket's warm batch runs again
+(gpu_engine.trace_release: the executables stay, the traces go; the warm report's trace_release records it). The server is
+READY only after it.
 """
 from collections import OrderedDict
+import gc
 import math
 import time
 
@@ -112,7 +116,7 @@ from pokezero import v5_gumbel as original
 from pokezero.phase_d_search_server import SCHEMA,encode
 from pokezero import depthn_effect_guard as effect_guard
 from . import champion_evaluator as evaluators,constructor_worlds as cw,depthn_backups as backups,device_depthn_pricer as dn,search_hedge as hedge
-from . import depthn_guard_inputs as guard_inputs
+from . import depthn_guard_inputs as guard_inputs,trace_release
 
 RUNGS={'DN2W8':8,'DN2W16':16,'DN2W32':32,'DN2W64':64}   # W32 and W64: the MC ladder's world-count rungs (offline replays)
 ROOT_OPERATOR='ARGMAX_MEAN_COMPLETED_Q'
@@ -578,30 +582,58 @@ class DepthNLiveSearch:
         carry reference of the structure check: every warmup root must share it (RuntimeError on any WORLD_STRUCTURE_MISMATCH:
         in the priced windows, and over every warmup root prepared once more afterwards), and it must be the only
         constructor-world carry signature in the warmed program keys."""
+        trace_release.caches()   # a JAX that moved jit's tracing caches fails here, not after the lowering
         keys=PROTOCOL_KEYS[2:];pool=[]
         for r in requests:
             if not isinstance(r,dict)or any(k not in r for k in keys):raise ValueError('saved requests with '+', '.join(keys)+' required')
             pool.append({k:r[k]for k in keys})
         if not pool:raise ValueError('at least one saved request required')
         started=time.perf_counter();self.carry=None;self.warming=True;self.reply_completed=0;self.reply_warm=None
-        try:report=self._warm_buckets(pool);labels=self._hold_to_reference(pool)
-        finally:self.warming=False;self.reset_sessions()
-        missing=[b for b in self.buckets if isinstance(self.pricers[b],guard_inputs.ObservedDepthNPricer)
-            and 2*b*self.K*dn.LANES not in self.pricers[b].label_rows]
-        if missing or labels is None:
-            raise RuntimeError(f'warmup: the effect guard\'s label gather did not compile for buckets {missing} (P1 children) or the root worlds '
-                f'({"missing" if labels is None else "ok"})')
-        if getattr(self,'reply',None)is not None and not self.reply_completed:   # a reply archive that fails on every root never reaches READY
-            raise RuntimeError('warmup: the reply prior completed no warmup root (every one refused REPLY_PRIOR_ERROR or refused before it)')
-        if getattr(self,'reply',None)is not None and set(self.reply_warm or ())!={0,1}:
-            raise RuntimeError('warmup: the reply prior did not compile both owner seats (no fully constructed warmup root)')
-        signatures={k[-1][2]for k in self.programs if type(k[-1])is tuple and k[-1][:2]==('worlds',cw.SOURCE)}
-        if self.carry is None or signatures!={self.carry['signature']}:
-            raise RuntimeError(f'warmup: the recorded carry signature {None if self.carry is None else self.carry["signature"]} is not the warmed programs\' {sorted(signatures)}')
+        # No full (gen-2) collection while the programs trace: each would rescan the trace's own growing live state (tens of
+        # millions of objects) and find little garbage. Young collections go on; the thresholds come back only after
+        # _release_traces' one collection, so no full pass ever runs over the still-retained traces.
+        thresholds=gc.get_threshold();gc.set_threshold(thresholds[0],thresholds[1],1<<30)
+        try:
+            try:report,batches=self._warm_buckets(pool);labels=self._hold_to_reference(pool)
+            finally:self.warming=False;self.reset_sessions()
+            missing=[b for b in self.buckets if isinstance(self.pricers[b],guard_inputs.ObservedDepthNPricer)
+                and 2*b*self.K*dn.LANES not in self.pricers[b].label_rows]
+            if missing or labels is None:
+                raise RuntimeError(f'warmup: the effect guard\'s label gather did not compile for buckets {missing} (P1 children) or the root worlds '
+                    f'({"missing" if labels is None else "ok"})')
+            if getattr(self,'reply',None)is not None and not self.reply_completed:   # a reply archive that fails on every root never reaches READY
+                raise RuntimeError('warmup: the reply prior completed no warmup root (every one refused REPLY_PRIOR_ERROR or refused before it)')
+            if getattr(self,'reply',None)is not None and set(self.reply_warm or ())!={0,1}:
+                raise RuntimeError('warmup: the reply prior did not compile both owner seats (no fully constructed warmup root)')
+            signatures={k[-1][2]for k in self.programs if type(k[-1])is tuple and k[-1][:2]==('worlds',cw.SOURCE)}
+            if self.carry is None or signatures!={self.carry['signature']}:
+                raise RuntimeError(f'warmup: the recorded carry signature {None if self.carry is None else self.carry["signature"]} is not the warmed programs\' {sorted(signatures)}')
+            released=self._release_traces(batches)
+        finally:gc.set_threshold(*thresholds)
         self.warm=dict(buckets=report,programs=len(self.programs),seconds=time.perf_counter()-started,carry_signature=self.carry['signature'],
+            trace_release=released,
             carry_reference=self.carry['root'],labels=dict(p1_rows={b:2*b*self.K*dn.LANES for b in self.buckets},root_rows=labels),
             **({}if getattr(self,'reply',None)is None else dict(reply=dict(views=self.reply.mode,seats_seconds=self.reply_warm))))
         return self.warm
+
+    def _release_traces(self,batches):
+        """The end of warmup, once every program has compiled: empty jit's tracing caches (gpu_engine.trace_release: the
+        warmed programs' traces, kept alive there by the executor's long-lived jitted functions, are about 66M objects after
+        a DN2W16 warmup, and every full collection while serving would rescan them), collect once, then run each bucket's warm
+        batch again. That last pass recompiles, before READY, the few small programs whose executable cache is keyed on a
+        released trace (eagerly evaluated jaxprs, e.g. vmapped jax.random.fold_in) instead of on their function, so serving
+        compiles nothing. Each re-warm must answer as that bucket's warm pass did, (status, cause, bucket, action_index) per
+        row (`batches[b]` = (batch, the warm pass's rows)); RuntimeError otherwise, so a broken re-warm never reaches READY.
+        Returns dict(entries dropped, gc_seconds, rewarm_seconds, jax: the JAX version released under)."""
+        released=trace_release.release();clock=time.perf_counter();gc.collect();collected=time.perf_counter()-clock
+        clock=time.perf_counter();outcome=lambda rows:[(r['status'],r['cause'],r['bucket'],r['action_index'])for r in rows]
+        for b,(batch,warm) in batches.items():
+            self.reset_sessions();again=self._batch(batch,bucket=b)
+            if outcome(again)!=outcome(warm):
+                self.reset_sessions()
+                raise RuntimeError(f'warmup: the re-warm of bucket {b} answered {outcome(again)}, its warm pass {outcome(warm)}')
+        self.reset_sessions()
+        return dict(entries=released,gc_seconds=collected,rewarm_seconds=time.perf_counter()-clock,jax=jax.__version__)
 
     def _hold_to_reference(self,pool):
         """Every warmup root, not only those of the windows that priced: prepared once more (fresh sessions and attempts), each
@@ -629,7 +661,7 @@ class DepthNLiveSearch:
         return labels
 
     def _warm_buckets(self,pool):
-        report={}
+        report={};batches={}
         for b in self.buckets:
             for attempt in range(-(-len(pool)//b)):
                 batch=[dict(pool[(attempt*b+j)%len(pool)],schema=SCHEMA,request_id=f'warmup-b{b}-{attempt}-{j}',rung=self.rung,budget_seconds=WARMUP_BUDGET)
@@ -647,4 +679,5 @@ class DepthNLiveSearch:
             report[b]=dict(cold_seconds=cold,warm_seconds=warm,attempts=attempt+1,roots=b,complete=sum(r['status']=='COMPLETE'for r in rows),
                 causes=sorted({r['cause']for r in rows if r['cause']}),compiled=len(compiles),lower_seconds=sum(c[1]for c in compiles),
                 compile_seconds=sum(c[2]for c in compiles),warm_compiled=len(self.pricers[b].compiles)if any(r['bucket']==b for r in again)else None)
-        return report
+            batches[b]=(batch,again)
+        return report,batches
