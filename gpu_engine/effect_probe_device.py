@@ -23,8 +23,9 @@ teams): the .cjs turns off Custom Game's debug exact-HP display so shared HP lin
 wire_lines below drops |debug| lines (debug-format only, never on a randbats wire), the |raw| custom-rule infobox
 (the format's @@@sleepclausemod suffix; Gen 3 Random Battle has Sleep Clause Mod built in, announced by its |rule|
 line), Splash's |-nothing| message (the probes' filler move, in no Gen 3 random set: B2's wire has no consumer for
-it, and the line carries no public fact) and the start-of-battle EV-limit |bigerror| warning (authored EVs; random
-sets keep the limit), and replaces the |tier| header.
+it, and the line carries no public fact), the start-of-battle EV-limit |bigerror| warning (authored EVs; random
+sets keep the limit) and the battle-end |win| and |tie| lines (BATTLE_END: B2 folds per decision and never sees one), and
+replaces the |tier| header.
 
 The device runs with the production belief tables (engine_device_observation.compile_tables over the B2 catalog, as
 gpu_engine/device_observation_collector.py builds them), so its Pressure PP charge, its hard belief masks and its shown
@@ -48,6 +49,11 @@ B2_STATUS = ('', 'slp', 'par', 'brn', 'frz', 'psn', 'tox')                 # pub
 WEATHER = {0: '', 1: 'raindance', 2: 'sunnyday', 3: 'sandstorm', 4: 'hail'}  # engine weather codes (phase_d_live_worlds)
 TIER_LINE = '|tier|[Gen 3] Random Battle'
 EV_LIMIT_WARNING = "|bigerror|Warning: One player isn't adhering to a 510 EV limit, and the other player is."
+# The battle-end line kinds, |win|<player> and |tie. B2 folds per decision, and no decision follows a battle end, so
+# production never feeds B2 either line (public_refresh_stream.family has no consumer for them and refuses them); a probe
+# battle that ends feeds B2 its production input domain without them. The outcome itself (done, winner, tie) is engine
+# state, which state mode compares.
+BATTLE_END = ('win', 'tie')
 
 SOURCE_HASH_PREFIX = 'effect-probe-'
 
@@ -262,6 +268,7 @@ def wire_lines(lines):
     out = []
     for line in lines:
         if line.startswith('|debug|') or line.startswith('|raw|') or line in ('|-nothing', EV_LIMIT_WARNING):continue
+        if line.startswith('|') and line.split('|')[1] in BATTLE_END:continue   # exactly the |win| and |tie| kinds
         out.append(TIER_LINE if line.startswith('|tier|') else line)
     return out
 
