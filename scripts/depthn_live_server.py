@@ -290,7 +290,9 @@ def read_requests(path):
 
 def parse_requests(text,name):
     """Saved requests from JSONL text: one JSON object per non-empty line, at least one (ValueError naming `name` otherwise)."""
-    rows=[json.loads(line)for line in text.splitlines()if line.strip()]
+    # split on '\n' only (as line-by-line file reading did): str.splitlines() also splits on U+2028/U+2029/U+0085,
+    # which a JSON string may hold unescaped (ensure_ascii=False)
+    rows=[json.loads(line)for line in text.split('\n')if line.strip()]
     if not rows or not all(isinstance(r,dict)for r in rows):raise ValueError(f'{name}: one JSON object per line, at least one, required')
     return rows
 
