@@ -13,7 +13,7 @@ import jax.numpy as j
 import numpy as np
 
 from pokezero import v5_gumbel as original
-from . import champion_evaluator as evaluators,device_public_teacher as serial,device_public_world_state as mapping,trace_release,v5_model
+from . import champion_evaluator as evaluators,device_public_teacher as serial,device_public_world_state as mapping,v5_model
 
 SERIAL_INPUT_ORDER=('numeric_features','categorical_ids','token_type_ids','attention_mask','history_mask')
 FRAME_WORK_KEYS=('evaluated_root_slots','evaluated_world_slots','evaluated_joint_slots',
@@ -270,7 +270,6 @@ class FramePricer:
                     **({}if self.forward is None else dict(forward=self.forward)))
                 clock=time.perf_counter();lowered=fn.lower(device_data);lower_seconds=time.perf_counter()-clock
                 clock=time.perf_counter();self.kernels[key]=lowered.compile();compile_seconds=time.perf_counter()-clock
-                fn=lowered=None;trace_release.release()   # keep only the executable (gpu_engine.trace_release)
             # Exactly one device invocation for the entire selected frame.
             clock=time.perf_counter();output=jax.device_get(jax.block_until_ready(self.kernels[key](device_data)))
             device_seconds=time.perf_counter()-clock

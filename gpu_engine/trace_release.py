@@ -6,17 +6,20 @@ A cache entry lives as long as its function does. These functions live as long a
 - the live executor's jax.jit-wrapped legal, observe, dispatch, sample and advance (device_public_teacher.make_executor);
 - module-level jitted helpers;
 - a search's reply, label and root-forward programs.
-A pricer program's trace calls the executor's jitted functions on its own tracers. So every engine-sized program that a
-warmup lowers stays alive in these caches after it is compiled, together with every jaxpr derived from it and cached by
-weak reference to it. Compiled objects hold none of it. After a DN2W16 server warmup that is about 66M Python objects, and
+A pricer program's trace calls the executor's jitted functions on its own tracers. So the traces of every engine-sized
+program that a warmup lowers stay alive in these caches after it is compiled, together with every jaxpr derived from them
+and cached by weak reference to them. Compiled objects hold none of it. After a DN2W16 server warmup that is about 66M Python objects, and
 every full (gen-2) collection rescans them for about 13.5 s with the GIL held.
 
 Why releasing is safe. A compiled program never needs its trace again:
 - a Compiled (the pricers' program tables) runs without tracing;
 - a jitted function called with concrete arguments at a signature it has already run uses its own executable cache (the
   C++ fast path), which release() leaves alone.
-Clearing changes no program. A function traced again later re-traces to the same jaxpr, and nothing already compiled is
-dropped or recompiled.
+Clearing changes no program. A function traced again later re-traces to the same jaxpr. One kind of executable is keyed on
+a trace rather than on a function: an eagerly evaluated jaxpr, such as a jitted function vmapped outside jit (vmapped
+jax.random.fold_in in device_public_world_state.world_keys). That kind compiles once more on its next call after a
+release, from the persistent cache when one is configured. So release once, after the last compile, then run the serving
+path once more before serving (DepthNLiveSearch.warmup does both).
 
 Both caches are JAX internals, verified on jax 0.12.0. release() raises RuntimeError when either is missing or cannot be
 cleared (a JAX upgrade that moved them), rather than silently leaving the traces alive.

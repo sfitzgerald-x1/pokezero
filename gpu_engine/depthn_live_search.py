@@ -99,9 +99,9 @@ of the current batch is never evicted (session_cap >= max_requests), so a live b
 rule; an evicted battle that returns folds its full prefix again from a fresh adapter (the same state, more host time).
 warmup(requests): per bucket, the full path on saved Showdown requests forced to that bucket (cold: compiles P1 and the
 selection per capacity, the gather per pool, the shared leaf block program, the root forward), then once more (warm).
-Session state is cleared around every pass. At the end jit's tracing caches are emptied and the heap collected once
-(gpu_engine.trace_release: the executables stay, the traces go; the warm report's trace_release records it). The server is
-READY only after it.
+Session state is cleared around every pass. At the end jit's tracing caches are emptied, the heap is collected once and each
+bucket's warm batch runs again (gpu_engine.trace_release: the executables stay, the traces go; the warm report's
+trace_release records it). The server is READY only after it.
 """
 from collections import OrderedDict
 import gc
@@ -587,7 +587,7 @@ class DepthNLiveSearch:
             pool.append({k:r[k]for k in keys})
         if not pool:raise ValueError('at least one saved request required')
         started=time.perf_counter();self.carry=None;self.warming=True;self.reply_completed=0;self.reply_warm=None
-        try:report=self._warm_buckets(pool);labels=self._hold_to_reference(pool)
+        try:report,batches=self._warm_buckets(pool);labels=self._hold_to_reference(pool)
         finally:self.warming=False;self.reset_sessions()
         missing=[b for b in self.buckets if isinstance(self.pricers[b],guard_inputs.ObservedDepthNPricer)
             and 2*b*self.K*dn.LANES not in self.pricers[b].label_rows]
@@ -601,14 +601,25 @@ class DepthNLiveSearch:
         signatures={k[-1][2]for k in self.programs if type(k[-1])is tuple and k[-1][:2]==('worlds',cw.SOURCE)}
         if self.carry is None or signatures!={self.carry['signature']}:
             raise RuntimeError(f'warmup: the recorded carry signature {None if self.carry is None else self.carry["signature"]} is not the warmed programs\' {sorted(signatures)}')
-        # Every program is compiled: drop the traces jit's caches still hold (the reply, label and root-forward programs';
-        # the pricers release theirs per compile) and collect once now, so no full collection while serving rescans them.
-        released=trace_release.release();clock=time.perf_counter();gc.collect()
+        released=self._release_traces(batches)
         self.warm=dict(buckets=report,programs=len(self.programs),seconds=time.perf_counter()-started,carry_signature=self.carry['signature'],
-            trace_release=dict(entries=released,gc_seconds=time.perf_counter()-clock),
+            trace_release=released,
             carry_reference=self.carry['root'],labels=dict(p1_rows={b:2*b*self.K*dn.LANES for b in self.buckets},root_rows=labels),
             **({}if getattr(self,'reply',None)is None else dict(reply=dict(views=self.reply.mode,seats_seconds=self.reply_warm))))
         return self.warm
+
+    def _release_traces(self,batches):
+        """The end of warmup, once every program has compiled: empty jit's tracing caches (gpu_engine.trace_release: the
+        warmed programs' traces, kept alive there by the executor's long-lived jitted functions, are about 66M objects after
+        a DN2W16 warmup, and every full collection while serving would rescan them), collect once, then run each bucket's warm
+        batch again. That last pass recompiles, before READY, the few small programs whose executable cache is keyed on a
+        released trace (eagerly evaluated jaxprs, e.g. vmapped jax.random.fold_in) instead of on their function, so serving
+        compiles nothing. Returns dict(entries dropped, gc_seconds, rewarm_seconds)."""
+        released=trace_release.release();clock=time.perf_counter();gc.collect();collected=time.perf_counter()-clock
+        clock=time.perf_counter()
+        for b,batch in batches.items():self.reset_sessions();self._batch(batch,bucket=b)
+        self.reset_sessions()
+        return dict(entries=released,gc_seconds=collected,rewarm_seconds=time.perf_counter()-clock)
 
     def _hold_to_reference(self,pool):
         """Every warmup root, not only those of the windows that priced: prepared once more (fresh sessions and attempts), each
@@ -636,7 +647,7 @@ class DepthNLiveSearch:
         return labels
 
     def _warm_buckets(self,pool):
-        report={}
+        report={};batches={}
         for b in self.buckets:
             for attempt in range(-(-len(pool)//b)):
                 batch=[dict(pool[(attempt*b+j)%len(pool)],schema=SCHEMA,request_id=f'warmup-b{b}-{attempt}-{j}',rung=self.rung,budget_seconds=WARMUP_BUDGET)
@@ -654,4 +665,5 @@ class DepthNLiveSearch:
             report[b]=dict(cold_seconds=cold,warm_seconds=warm,attempts=attempt+1,roots=b,complete=sum(r['status']=='COMPLETE'for r in rows),
                 causes=sorted({r['cause']for r in rows if r['cause']}),compiled=len(compiles),lower_seconds=sum(c[1]for c in compiles),
                 compile_seconds=sum(c[2]for c in compiles),warm_compiled=len(self.pricers[b].compiles)if any(r['bucket']==b for r in again)else None)
-        return report
+            batches[b]=batch
+        return report,batches

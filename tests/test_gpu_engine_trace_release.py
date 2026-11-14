@@ -1,18 +1,20 @@
-"""A compiled DepthN program keeps no trace alive (gpu_engine.trace_release).
+"""No warmed program's trace outlives the live search's warmup (gpu_engine.trace_release).
 
-This is the retained-jaxpr GC stall in miniature. The depth-2 tests' fake executor holds jax.jit-wrapped legal, observe,
-sample and advance on a long-lived Executor, as the live executor does. A block program's trace calls those jitted functions
-on its own tracers, and jit's tracing caches then keep their jaxprs for as long as the functions live, long after the
-program is compiled. CPU only: a few small programs and well under 1 GiB."""
+This is the retained-jaxpr GC stall in miniature. The fake executors (as the live one) hold jax.jit-wrapped legal,
+observe, sample and advance for as long as the process lives. A pricer program's trace calls those jitted functions on its
+own tracers, and jit's tracing caches then keep their jaxprs for as long as the functions live, long after the program is
+compiled. A DN2W16 server warmup kept about 66M objects that way. CPU only: small programs, well under 2 GiB."""
 import gc
 import unittest
 from unittest.mock import patch
+import weakref
 
 import jax
 import jax.numpy as j
 
-from gpu_engine import device_depthn_pricer as dn
+from gpu_engine import depthn_live_search as live,device_depthn_pricer as dn
 from tests import test_gpu_engine_depth2_pricer as T
+from tests import test_gpu_engine_depthn_live_search as L
 
 
 def live_equations():
@@ -34,8 +36,34 @@ class CompileEvents:
         monitoring.unregister_event_duration_listener(self.listener)
 
 
+class WarmupReleaseTests(unittest.TestCase):
+    """DepthNLiveSearch.warmup on LiveSearchTests' fake engine and harness."""
+    setUpClass = classmethod(L.LiveSearchTests.setUpClass.__func__);make_pricers = classmethod(L.LiveSearchTests.make_pricers.__func__)
+    setUp, search, outcome, run_batch = L.LiveSearchTests.setUp, L.LiveSearchTests.search, L.LiveSearchTests.outcome, L.LiveSearchTests.run_batch
+
+    def test_no_trace_of_a_warmed_program_outlives_warmup(self):
+        s = self.search(pricers=self.make_pricers(8, (1,)));outcomes = {('w0', 0):self.outcome(0), ('l0', 0):self.outcome(1)}
+        gc.collect();before = {id(o) for o in gc.get_objects() if type(o).__name__ == 'Jaxpr'};traced = []
+        warm_buckets = live.DepthNLiveSearch._warm_buckets
+
+        def spy(search, pool):   # every jaxpr the bucket passes traced (P1, the selection, the gather, the leaf program) and still alive after them
+            out = warm_buckets(search, pool);gc.collect()
+            traced.extend(weakref.ref(o) for o in gc.get_objects() if type(o).__name__ == 'Jaxpr' and id(o) not in before)
+            return out
+        with L.Codex(outcomes), patch.object(live.DepthNLiveSearch, '_warm_buckets', spy):report = s.warmup([L.request('w0', 0)])
+        gc.collect();alive = sum(r() is not None for r in traced)
+        self.assertGreater(len(traced), 100)
+        # Today's failure: jit's tracing caches keep them all (the executor's jitted functions are alive, so their entries are).
+        self.assertEqual(alive, 0, f'{alive} of the {len(traced)} jaxprs traced while warming the buckets outlive warmup')
+        self.assertGreater(report['trace_release']['entries'], 0)
+        # After READY, serving a new root traces and compiles nothing: the re-warm pass recompiled what the release unkeyed.
+        with CompileEvents() as events:
+            rows, _ = self.run_batch(s, [L.request('l0', 0)], outcomes)
+        self.assertEqual([r['status'] for r in rows], ['COMPLETE']);self.assertEqual(events.seen, [])
+
+
 def block_inputs(nodes, k_own, k_opp, blocks=1):
-    """One call's gathered batch for the fake executor's worlds: [blocks*nodes] node states, both seats requested."""
+    """One call's gathered batch for the depth-2 fake's worlds: [blocks*nodes] node states, both seats requested."""
     n = blocks * nodes
     state = T.State(j.full((n, 1), .25, j.float32), j.zeros((n, 1), bool), j.zeros((n, 1), j.int32), j.zeros((n, 1), j.int32),
         j.arange(n, dtype=j.uint32)[:, None], j.zeros((n, 1), j.int32), j.ones((n, 1), j.int32), j.full((n, 1), -1, j.int32))
@@ -45,7 +73,8 @@ def block_inputs(nodes, k_own, k_opp, blocks=1):
 
 
 class TraceReleaseTests(unittest.TestCase):
-    def test_a_compiled_block_program_keeps_no_traced_equation(self):
+    def test_release_drops_a_compiled_programs_trace_and_nothing_recompiles(self):
+        from gpu_engine import trace_release
         ex, _ = T.executor();nodes, k_own, k_opp = 2, 2, 2
         pricer = dn.DepthNPricer(ex, object(), capacity=1, depth=2, k_own=k_own, k_opp=k_opp, blocks_per_call=1,
             block_lanes=nodes * k_own * k_opp, forward=T.forward, actor_capacity=3)
@@ -55,10 +84,9 @@ class TraceReleaseTests(unittest.TestCase):
         before = live_equations()
         key, build = pricer._block_program(2, nodes)
         compiled = pricer._program(key, build, *args);first = jax.device_get(compiled(*args))
-        retained = live_equations() - before
-        # Today's failure: the trace of every executor function the program called stays in jit's caches (about a thousand
-        # equations here; about 66M objects after a DN2W16 server warmup).
-        self.assertLessEqual(retained, 0, f'{retained} traced equations outlive the compiled program')
+        self.assertGreater(live_equations() - before, 100)   # the executor functions' traces, held by jit's caches
+        trace_release.release()
+        self.assertLessEqual(live_equations() - before, 0)
         # The executable alone runs the program again, and nothing traces or compiles again: neither the program (its table
         # entry is reused) nor the eager executor call at the signature it already ran.
         with CompileEvents() as events:
