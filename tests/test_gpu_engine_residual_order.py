@@ -260,6 +260,21 @@ class StepSourceTests(unittest.TestCase):
         in_heal = {id(n) for g in heal_blocks for n in ast.walk(g)}
         self.assertEqual([n for n in writes if id(n) not in in_heal], [healed[0].targets[0]])
 
+    def test_encore_keeps_its_stale_move_clear_elsewhere(self):
+        """Encore's residual() with eligible all false keeps the counter but still sets encore_move to where(counter > 0,
+        encore_move, 0). So where no Encore event sorts (outside lifecycle mode) the gate's else keeps exactly that clear for
+        the position's side, and the state matches base at every position, even for a stale move with counter 0."""
+        found, kinds = self.gates()
+        encore = found[kinds.index('encore')]
+        self.assertEqual(len(encore.orelse), 1);clear = encore.orelse[0]
+        self.assertTrue(isinstance(clear, ast.If) and same(ast.Expr(clear.test), 'table.encore is not None'))
+        self.assertEqual(clear.orelse, []);self.assertEqual(len(clear.body), 1)
+        self.assertTrue(same(clear.body[0], 'work=work._replace(encore_move=_set_active(work.encore_move,work,side,'
+            'jnp.where(_active(work.encore_counter,work,side)>0,_active(work.encore_move,work,side),0)))'))
+        self.assertTrue(same(ast.Expr(encore.body[0].test), 'table.encore is not None'))
+        want = ast.dump(ast.parse('repeating.residual(work,side,eligible=eligible & encore_event)', mode='eval').body)
+        self.assertEqual(len([n for n in ast.walk(encore.body[0]) if isinstance(n, ast.Call) and ast.dump(n) == want]), 1)
+
     def test_gated_names_are_not_read_stale(self):
         """A name stored only under a kind's gates is read only under that kind's gates (else a skipped position would read
         the previous position's value), or is a carry assigned before the loop (the lifecycle tape)."""

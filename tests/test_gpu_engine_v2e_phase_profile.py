@@ -24,7 +24,7 @@ ROOT = Path(__file__).resolve().parents[1]
 # Statements of a stand-in step_with_chance on the real phase lines (A, B, D, E0, two actions E1/E4, F1, two residual events, G).
 CODE = {400: 'def step_with_chance(x, y):', 545: '    a = helper(x) + y', 602: '    b = a * y', 673: '    c = b - x', 793: '    c = c + 1',
     816: '    for order in range(2):', 818: '        c = c * 2 + order', 2059: '        c = jnp.where(c > 0, c, -c)', 2169: '    d = c - y',
-    2289: '    for event in range(2):', 2290: '        d = d + event', 2386: '        d = d * 3', 2644: '    return d + a'}
+    2289: '    for event in range(2):', 2290: '        d = d + event', 2386: '        d = d * 3', 2648: '    return d + a'}
 HEADER = ['import jax', 'import jax.numpy as jnp', '', '', '@jax.jit', 'def helper(x):', '    return x * 3 + 1']
 LABELS = ['A', 'B', 'D', 'E0', 'E1.0', 'E4.0', 'E1.1', 'E4.1', 'F1', 'F2.0', 'F2.1', 'G']
 
@@ -81,7 +81,7 @@ class PhaseTableTest(unittest.TestCase):
         for tag, label in cz.BOUNDARIES:self.assertTrue(label == 'END' or cz.base(label) in names, tag)
 
     def test_label_lines(self):
-        lines = [None, 546, 602, 636, 707, 803, 829, 1076, 1487, 2059, 829, 1076, 2125, 2180, 2282, 2290, 2386, 2295, 2321, 2298, 2662, None]
+        lines = [None, 546, 602, 636, 707, 803, 829, 1076, 1487, 2059, 829, 1076, 2125, 2180, 2282, 2290, 2386, 2295, 2321, 2298, 2666, None]
         want = ['outside', 'A', 'B', 'C', 'D', 'E0', 'E1.0', 'E2.0', 'E3.0', 'E4.0', 'E1.1', 'E2.1', 'E4.1', 'F1', 'F2.pre', 'F2.0', 'F2.0',
             'F2.1', 'F2.1', 'F2.2', 'G', 'outside']
         self.assertEqual(cz.label_lines(lines), want)

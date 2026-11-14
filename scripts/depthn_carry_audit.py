@@ -170,7 +170,7 @@ EFFECTS = (
         'both actives faint at the end of the third following turn unless they switch',
         ('Showdown data/moves.ts:13232 (gen4 mod data/mods/gen4/moves.ts:993): Perish Song starts a 3-turn count on both actives',
          'in-tree since M2 + R1 (f3e71663): gpu_engine/state.py:89 perish_counter (4 at Perish Song, -1 per residual, faint at 0); '
-         'transition.py:1729-1737 the count set (Soundproof exempt); transition.py:2616-2629 its residual, a two-holder pass after the '
+         'transition.py:1729-1737 the count set (Soundproof exempt); transition.py:2620-2633 its residual, a two-holder pass after the '
          'order-10 list, faster side first, an equal-Speed pair on a drawn effect bit, the count and the faint at 0 (not gated by R1)',
          'probes: 10 perishsong* scenarios (perishsong, _tie, _last_faster, _baton, _switch, _meanlook, _soundproof, _soundproof_user, '
          '_protect_sub, _reuse), EXACT against Showdown f76228a1 at M2 + R1 (3e0878e4)',
@@ -249,7 +249,7 @@ REPRESENTED = (
     Effect('substitute', ('substitute',), (), True, '', 'HP decoy', ('gpu_engine/state.py:58 substitute_hp',)),
     Effect('baton_pass', ('batonpass',), (), True, '', 'switch keeping boosts and volatiles', ('gpu_engine/baton.py:16',)),
     Effect('truant', (), (), True, '', 'ability: loaf every other turn (Gen 3 residual clock)',
-        ('gpu_engine/state.py:84 truant_loaf', 'gpu_engine/transition.py:852, 2696-2700')),
+        ('gpu_engine/state.py:84 truant_loaf', 'gpu_engine/transition.py:852, 2700-2704')),
 )
 
 NOT_IN_POOL = (

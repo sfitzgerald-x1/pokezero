@@ -2590,9 +2590,7 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                     work=secondaries.after_status_event(work,1-side,side,jnp.full_like(side,m.SLP),table.secondary,
                         applied=_yawn_sleep,item_table=table.items,_device_public=_device_public)
             elif _device_public is not None:device_public.observe(_device_public,work,_yawn_sleep)
-        # R2: in lifecycle mode Encore runs at every position (its kernel-risk branch counts each visit). Elsewhere, with
-        # encore_event all false, residual() at most clears an encore_move whose counter is 0; that side's own Encore event
-        # (always at an encore position) applies the same clear, and nothing in the loop reads encore_move before it.
+        # R2: in lifecycle mode Encore runs at every position (its kernel-risk branch counts each visit).
         if order in residual_order.POSITIONS['encore'] or _lifecycle_trace:
             if table.encore is not None:
                 if _lifecycle_trace:
@@ -2607,6 +2605,12 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                     _public_trace,_encore_residual_capture=encore_callbacks.finish(_public_trace,_encore_residual_pending,work)
                     _public_trace=kernel_risks.branch_on_tape(_public_trace,kernel_risks.Branch.ENCORE,
                         _encore_attempt,active=live,captured_encore=_encore_residual_capture)
+        else:
+            # R2: no Encore event sorts here. residual() with eligible all false keeps the counter and sets encore_move to
+            # where(counter > 0, encore_move, 0), which clears only a stale move; that clear stays, as at every position.
+            if table.encore is not None:
+                work=work._replace(encore_move=_set_active(work.encore_move,work,side,
+                    jnp.where(_active(work.encore_counter,work,side)>0,_active(work.encore_move,work,side),0)))
         work=_clear_fainted_boosts(work,_faint_before_hp,eligible=eligible)
     # Fidelity M2 (design 2.3): Perish Song's residual (data/mods/gen4/moves.ts:993-999, order 12), after the order-10
     # list. Faster first; an equal-Speed pair takes effect[1][3] (that side first). The duration falls; at 0 its onEnd
