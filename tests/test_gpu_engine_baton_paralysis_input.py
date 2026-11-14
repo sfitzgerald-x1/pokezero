@@ -64,14 +64,17 @@ console.log(JSON.stringify({clear:H(clear),copy:H(copy),par:H(par.onBeforeMove),
         self.assertEqual(v['outgoing'],['par',dict(id='par',turn=7),65])
         self.assertEqual(v['incoming'],['',dict(id='',turn=7),100])
         self.assertEqual(v['boost'],2)
-        for n in ('transition.py','entry.py','baton.py','state.py','mechanics.py','engine_retained_encoder_driver.py','engine_kernel_frame_risk.py','engine_full_v4_event_device.py','engine_lifecycle_event_device.py'):
+        # transition.py is certified against CURRENT_TRANSITION (full AST plus mutations) by terminal_closeout and seismic_toss_components.
+        # entry.py, baton.py and state.py are byte-certified against the reviewed SOURCE_PINS by transition_observer_wiring.
+        for n in ('mechanics.py','engine_retained_encoder_driver.py','engine_kernel_frame_risk.py','engine_full_v4_event_device.py','engine_lifecycle_event_device.py'):
             self.assertEqual(Path('gpu_engine',n).read_bytes(),subprocess.check_output(['git','show','b8092a85:gpu_engine/'+n]),n)
         from gpu_engine import engine_source_frame_witness as witness
         witness._source()
-        self.assertEqual(len(witness.SOURCE_PINS),88)
-        # Rollback/claimed snapshot consumers remain exactly their original AST.
+        self.assertEqual(len(witness.SOURCE_PINS),89)   # 88, and residual_order.py since §6
+        # Rollback/claimed snapshot consumers remain exactly their original AST. suspension_shape gained fidelity R's
+        # saved effect block (reviewed; the file is byte-certified against SOURCE_PINS above).
         old=ast.parse(subprocess.check_output(['git','show','b8092a85:gpu_engine/engine_baton_pass_callbacks.py'],text=True));new=ast.parse(Path(cb.__file__).read_text())
-        changed={'compile_data','_quiet','begin_start','before_copy'}
+        changed={'compile_data','_quiet','begin_start','before_copy','suspension_shape'}
         dump=lambda tree:{n.name:ast.dump(n,include_attributes=False)for n in tree.body if isinstance(n,ast.FunctionDef)and n.name not in changed}
         self.assertEqual(dump(old),dump(new))
 

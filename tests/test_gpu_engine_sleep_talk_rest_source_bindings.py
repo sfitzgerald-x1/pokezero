@@ -9,7 +9,7 @@ class SleepTalkRestSourceTests(unittest.TestCase):
  def test_all_actual_pins_and_domains(self):
   for file,key in [('engine_source_frame_witness.py','SOURCE_PINS'),('chance_consumers.py','SOURCE_PINS'),('ordinary_law.py','MAPPING_PINS'),('conditional_law.py','MAPPING_PINS')]:
    for name,digest in val(file,key).items():self.assertEqual(hashlib.sha256((ROOT/name).read_bytes()).hexdigest(),digest,(file,name))
-  modules=tuple('action_history absorption baton combat critical damage_moves effects encore entry focus_punch items linked_traps mechanics phazing pressure pursuit secondary self_destruct sleep_talk solar_beam state sustain transition variable_moves weather'.split())
+  modules=tuple('action_history absorption baton combat critical damage_moves effects encore entry focus_punch items linked_traps mechanics phazing pressure pursuit residual_order secondary self_destruct sleep_talk solar_beam state sustain transition variable_moves weather'.split())
   domain=hashlib.sha256(b''.join(n.encode()+b'\0'+(ROOT/(n+'.py')).read_bytes()+b'\0'for n in modules)).hexdigest()
   for file,key in [('conditional_law.py','KERNEL_SHA256'),('chance_consumers.py','DOMAIN_SHA256'),('ordinary_law.py','DOMAIN_SHA256')]:self.assertEqual(val(file,key),domain)
  def test_default_numerics_and_detect_real_mutations(self):

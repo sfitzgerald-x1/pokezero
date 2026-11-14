@@ -20,7 +20,10 @@ from typing import Callable, Hashable, Iterator, Mapping
 
 
 DRAW_BOUNDS = (2, 100, 100, 100, 16, 16, 100, 4, 8, 2, 2, 2)
-# Names follow ChanceInputs, without importing JAX or mutating a native flag.
+# transition.EFFECT_BOUNDS (fidelity patch R, design 2.1), restated without importing JAX: ChanceInputs.effect[s][c].
+EFFECT_BOUNDS = (16, 16, 4, 2)
+# Names follow ChanceInputs, without importing JAX or mutating a native flag. The effect stream is appended last
+# (§6), so every earlier coordinate keeps its position.
 COORDINATES = tuple(
     [(f"draws.{side}.{column}", bound)
      for side in range(2) for column, bound in enumerate(DRAW_BOUNDS)]
@@ -29,7 +32,28 @@ COORDINATES = tuple(
                             ("sleep_talk", 60), ("entry_ties", 2))
        for side in range(2)]
     + [("initial_tie", 2)]
+    + [(f"effect.{side}.{column}", bound)
+       for side in range(2) for column, bound in enumerate(EFFECT_BOUNDS)]
 )
+EFFECT_COORDINATES = tuple(name for name, _ in COORDINATES if name.startswith("effect."))
+
+
+def chance_fields(values: Mapping[str, int]) -> dict:
+    """One case's ChanceInputs fields, as nested ints, from its coordinate values.
+
+    Every enumerated caller builds its ChanceInputs here, so `effect` is always passed explicitly: a case that
+    lacks a declared coordinate (an effect key included) refuses, and nothing falls back to effect=None, which
+    would sample the stream from the state's keys (one draw per world, not the enumerated law).
+    """
+    missing = [name for name, _ in COORDINATES if name not in values]
+    if missing:
+        raise ValueError("CASE_COORDINATE_MISSING: " + ",".join(missing))
+    return dict(
+        draws=[[values[f"draws.{s}.{c}"] for c in range(len(DRAW_BOUNDS))] for s in range(2)],
+        **{field: [values[f"{field}.{s}"] for s in range(2)]
+           for field in ("phazing", "secondary", "sleep_talk", "entry_ties")},
+        initial_tie=values["initial_tie"],
+        effect=[[values[f"effect.{s}.{c}"] for c in range(len(EFFECT_BOUNDS))] for s in range(2)])
 
 
 def _positive_integer(value, name):

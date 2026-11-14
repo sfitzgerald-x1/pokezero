@@ -23,6 +23,7 @@ from . import champion, transition, device_public_leaf as leaf
 from . import phase_d_live_worlds as worlds, phase_d_chance as chance
 from . import device_public_world_state as states
 from .benchmark_device_selfplay import request_seats
+from .finite_law import chance_fields
 
 SCHEMA = 'pokezero.phase-d.shared-gpu-search.v1'
 
@@ -250,10 +251,10 @@ class Search:
             try:
                 values=[]
                 for _,_,_,_,case,_ in chunk:
-                    v=dict(case.values)
-                    values.append(transition.ChanceInputs(j.asarray([[[v[f'draws.{s}.{k}'] for k in range(12)] for s in range(2)]],j.int32),
-                        **{name:j.asarray([[v[f'{name}.{s}'] for s in range(2)]],j.int32) for name in ('phazing','secondary','sleep_talk','entry_ties')},
-                        initial_tie=j.asarray([v['initial_tie']],j.int32)))
+                    # §6: every field from the enumerated case, effect included; a case lacking one refuses (never
+                    # effect=None, which samples the effect stream from the world's keys).
+                    fields=chance_fields(dict(case.values))
+                    values.append(transition.ChanceInputs(**{name:j.asarray([fields[name]],j.int32) for name in transition.ChanceInputs._fields}))
                 padded=chunk+[chunk[0]]*(self.lanes-len(chunk));values+= [values[0]]*(self.lanes-len(values))
                 stack=lambda rows:jax.tree.map(lambda *x:j.stack(x),*rows)
                 result=jax.block_until_ready(self.advance(stack([r[1].state for r in padded]),stack([r[1].public for r in padded]),
