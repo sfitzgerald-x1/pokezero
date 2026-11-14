@@ -28,6 +28,34 @@ class LiveTypesTests(unittest.TestCase):
             self.assertIn('base-types-differ-original-species',mapping.map_spec(forged,**args,live_types=True).refusals)
 
 
+class OriginalRouteRetypeTests(unittest.TestCase):
+    """The live-type opt-in belongs to the protocol route. phase_d_search.Search calls from_b2 without protocol_facts and
+    its materializer writes species types, so that route keeps main's refusal of a live public retype.
+
+    Guard-level only: the forced overridden flag has no type categories behind it, so this shows which route from_b2
+    refuses, not a materialized world (the retained Kecleon and Castform fixtures cover that)."""
+    def test_from_b2_refuses_live_retype_only_without_protocol_facts(self):
+        from unittest.mock import patch
+        from gpu_engine import phase_d_live_worlds as live, public_context
+        from pokezero.v5_contract import DecisionAddress
+        from test_phase_d_device_worlds import WorldsTests
+        WorldsTests.setUpClass();helper=WorldsTests()
+        copy=public_context.observation_boundary_copy
+        facts=dict(replacement=None,fresh_substitutes={},substitute_origins={},wish_set_turns={},turn=1)
+        for owner in (0,1):
+            adapter=helper.adapter(owner);packet=helper.request(owner)
+            def call(**kw):
+                return live.from_b2(adapter,packet,helper.source,helper.metadata,address=DecisionAddress(1,0,owner),**kw)
+            self.assertIsNotNone(call());self.assertIsNotNone(call(defer_sleep=True,protocol_facts=facts))
+            for side in (owner,1-owner):  # our retyped active (Forecast) and theirs (Color Change)
+                def retyped(*args,**kwargs):
+                    ctx,beliefs,ok=copy(*args,**kwargs)
+                    return ctx._replace(types=ctx.types._replace(overridden=ctx.types.overridden.at[0,side].set(True))),beliefs,ok
+                with self.subTest(owner=owner,side=side),patch.object(public_context,'observation_boundary_copy',side_effect=retyped):
+                    with self.assertRaisesRegex(live.Refusal,'PUBLIC_LIVE_RETYPE_NOT_MATERIALIZED'):call()
+                    self.assertIsNotNone(call(defer_sleep=True,protocol_facts=facts))
+
+
 class PressureTests(unittest.TestCase):
     def carry(self,charge,pressure,lines=()):
         physical=state.empty_state(1)

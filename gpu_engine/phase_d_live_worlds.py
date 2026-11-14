@@ -281,9 +281,12 @@ def from_b2(adapter, request, source, metadata, *, address, defer_sleep=False, p
     mons,v=state.mons,source.vocabulary
     if np.any(_host(ctx.abilities.transformed)):
         raise Refusal('PUBLIC_TRANSFORM_NOT_MATERIALIZED')
-    # A live public retype (Color Change's typechange, Forecast's forme) is not refused: the CPU materializer applies the
-    # observed live type (engine_world._apply_live_typechange, _apply_forecast_types) and map_spec(live_types=True) keeps
-    # base_types from the original dex row.
+    # A live public retype (Color Change's typechange, Forecast's forme) is not refused on the protocol route: the CPU
+    # materializer applies the observed live type (engine_world._apply_live_typechange, _apply_forecast_types) and
+    # map_spec(live_types=True) keeps base_types from the original dex row. The original phase_d_search route passes no
+    # protocol_facts and its materializer writes species types, so it keeps the refusal.
+    if np.any(_host(ctx.types.overridden)) and protocol_facts is None:
+        raise Refusal('PUBLIC_LIVE_RETYPE_NOT_MATERIALIZED')
     z = np.zeros((1,2,6),np.int32)
     present = _host(mons.encounter) > 0
     species = _remap(mons.species,catalog.species.names,v['species'])
