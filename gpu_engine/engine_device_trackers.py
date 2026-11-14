@@ -64,6 +64,7 @@ class PublicView(NamedTuple):
     stats_features:object=None
     belief_pin:object=None
     belief_pin_active:object=None
+    own_boosts:object=None    # [B,7] the observer's own active's public stages (a fainted one keeps them: _observe)
 
 class Trackers(NamedTuple):
     physical_to_public:object # [B,2,6], private identity cursor only; never an encoder feature
@@ -157,7 +158,23 @@ def _observe(t,state,side,physical,rows_active,*,identity):
     values={}
     for name,value in [('hp_percent',_percent(hp,maximum)),('status',_li.take(state.status,r,side,p)),('fainted',hp==0)]:
         values[name]=_li.update(getattr(t,name),r,(side,at),_gated,use,value)
-    values['boosts']=_li.update(t.boosts,r,(side,at),_gated,use[:,None],_li.take(state.boosts,r,side,p))
+    # A FAINTED ACTIVE KEEPS ITS PUBLIC STAGES until its replacement arrives: an observation convention, not mechanics.
+    # Showdown clears them at the faint (sim/pokemon.ts:1509-1518, faintMessages' clearVolatile), and so does the engine
+    # (transition._clear_fainted_boosts); B2 keeps them (gpu_engine/public_mon_state.py:164-173: faint writes no boosts;
+    # the arrival resets them, :111-112), and so does the Python encoder the champion was trained on
+    # (src/pokezero/showdown.py:2607-2617: cleared only at switch-in). The principle: observation inputs follow the
+    # convention the champion was trained on (B2 + the Python encoder) until V2 retrains; mechanics (legality, dynamics,
+    # engine state) follow Showdown. Nobody should "fix" this toward Showdown without retraining the network; V2's flip
+    # list records it. So the carry keeps its stages for the side's still-active mon at hp 0, unless the read precedes the
+    # engine's clear (a nonzero stage), which is the faint-time stages; withdraw zeroes the slot at the replacement's
+    # install (and the hooks' drag at a drag-out). The observer's own fainted active reads them from here too (readout
+    # own_boosts). They also reach engine state: device_public_world_state.py:303 copies view['boosts'] into a
+    # materialized foe, so at a double-KO replacement root the foe's fainted active holds them at hp 0, as B2-root
+    # worlds do (phase_d_live_worlds.py:298); entry.depart zeroes them at the replacement, so they are mechanically
+    # inert.
+    stages=_li.take(state.boosts,r,side,p)
+    kept=(hp==0)&(physical==_li.take(state.active,r,side))&~stages.any(axis=-1)
+    values['boosts']=_li.update(t.boosts,r,(side,at),_gated,(use&~kept)[:,None],stages)
     if identity:
         for name in ('species','level','gender'):
             values[name]=_li.update(getattr(t,name),r,(side,at),_gated,use,_li.take(getattr(state,name),r,side,p))
@@ -247,7 +264,7 @@ def update(trackers,before,after,actions,*,active_rows=None):
 def readout(trackers,observer_sides):
     """No engine/world argument: opposing private data cannot enter this view."""
     b=len(trackers.error);_shape(observer_sides,(b,),j.int32,'observer_sides')
-    r=j.arange(b);owner=j.clip(observer_sides,0,1);foe=1-owner
+    r=j.arange(b);owner=j.clip(observer_sides,0,1);foe=1-owner;own_slot=_li.take(trackers.active_slot,r,owner)
     take=lambda name:_li.take(getattr(trackers,name),r,foe)
     present=take('present');active=(j.arange(6)[None,:]==trackers.active_slot[r,foe,None])&present
     z=j.zeros((b,6),j.int32)
@@ -328,7 +345,8 @@ def readout(trackers,observer_sides):
         trackers.error|j.where((observer_sides<0)|(observer_sides>1),BAD_OBSERVER,0),None,
         trackers.turn,trackers.weather,trackers.spikes,belief_mask,optional('observed_moves'),
         optional('pp_used'),optional('last_moves'),optional('borrowed_ability'),own_last,mon,own_mon,fields,own_borrowed,optional('public_volatiles'),own_vol,optional('item_removed'),own_removed,stats,
-        None if visible is None else _li.take(visible.visible_pin,r,foe),None if visible is None else _li.take(visible.visible_pin_active,r,foe))
+        None if visible is None else _li.take(visible.visible_pin,r,foe),None if visible is None else _li.take(visible.visible_pin_active,r,foe),
+        own_boosts=j.where((own_slot>=0)[:,None],_li.take(trackers.boosts,r,owner,j.clip(own_slot,0,5)),0))
 
 
 def clone_for_worlds(trackers,root_rows):

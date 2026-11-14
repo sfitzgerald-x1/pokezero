@@ -124,6 +124,27 @@ class DeviceObservationTests(unittest.TestCase):
         self.assertEqual(got.numeric_features.shape, out.numeric_features.shape)
         self.assertTrue(np.isfinite(got.numeric_features).all())
 
+    def test_own_fainted_active_stages_come_from_the_public_carry(self):
+        # OPEN BUG D: the engine zeroed the fainted active's stages (Showdown's clearVolatile); the champion's B2/Python
+        # inputs keep them until the replacement arrives, so the own active token reads the carry's (readout own_boosts).
+        state, public, owners, legal = self.facts(b=1)
+        columns = [e._index('BOOST_' + n) for n in ('ATK', 'DEF', 'SPA', 'SPD', 'SPE')]
+        kept = j.asarray([[2, 0, 0, 0, -1, 0, 0]], j.int32)
+        fainted = state._replace(hp=state.hp.at[:, 0, 1].set(0))          # owner 0's active is physical 1 (token 1)
+        out = e.encode(fainted, public._replace(own_boosts=kept), self.tables, observer_sides=owners,
+            legal_action_mask=legal)
+        np.testing.assert_allclose(out.numeric_features[0, 1, columns], [2 / 6, 0, 0, 0, -1 / 6], rtol=0, atol=1e-7)
+        np.testing.assert_array_equal(out.numeric_features[0, 2:7][:, columns], 0)  # benched tokens: no stages
+        # The carry is read only at hp 0: a living active reads the engine's stages; without the field, the engine's.
+        alive = e.encode(state, public._replace(own_boosts=kept), self.tables, observer_sides=owners,
+            legal_action_mask=legal)
+        np.testing.assert_array_equal(alive.numeric_features[0, 1, columns], 0)
+        bare = e.encode(fainted, public, self.tables, observer_sides=owners, legal_action_mask=legal)
+        np.testing.assert_array_equal(bare.numeric_features[0, 1, columns], 0)
+        same = lambda x, y: [np.testing.assert_array_equal(a, b) for a, b in zip(x, y)]
+        same(bare[:1], e.encode(fainted, public._replace(own_boosts=j.zeros_like(kept)), self.tables,
+            observer_sides=owners, legal_action_mask=legal)[:1])
+
     def test_manifest_covers_every_column_and_source_alias_mapping(self):
         state, public, owners, legal = self.facts(b=1)
         manifest = e.column_manifest(public=public)

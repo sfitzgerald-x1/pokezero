@@ -9,6 +9,7 @@ import jax
 import jax.numpy as j
 from . import engine_device_trackers as tr
 from . import engine_device_negative_items as negative_items
+from .absorption import FLASH_FIRE
 from .public_active import NAMES as VOLATILE_NAMES
 from . import engine_device_damage_history as damage_history
 from . import engine_device_public_port as port
@@ -367,6 +368,12 @@ def reveal_item(c,state,side,item,use,*,original=True):
 
 
 def entry(c,before,after,side,table,use):
+    # Bug K (and J's drag): every install (switch, replacement, drag) precedes this entry, so the install's HP_ACTION
+    # non-proc snapshot is the entrant's pre-Spikes HP. B2 updates the snapshot from the entry's |-damage|X|...|[from]
+    # Spikes (an action-phase line: belief._hp_snapshot_action UPDATE, "Spikes chip on entry"), so the upkeep's
+    # Leftovers and pinch rules read the post-Spikes HP; the entrant's HP drop here is that line.
+    dropped=_mask(use,len(c.trackers.error))&(_get(after,'hp',side)<_get(before,'hp',side))
+    c=negative_hp_line(c,after,side,dropped,source_class=HP_ACTION)
     c=observe(c,after,use)
     if table is None:return c
     ability=_get(before,'ability',side);starts=use&(_get(after,'hp',side)>0)
@@ -754,8 +761,18 @@ def drag(c,before,after,side,table,use):
     # pre-entry incoming private operands already exist in the actual before
     # state; only public handler results are exposed.
     c=depart(c,before,after,side,table,use)
-    c=install(c,after,side,use)
+    # The dragged-out mon's slot drops its stages, as withdraw does for a switch (entry.depart zeroes the engine's), so
+    # no stale stages sit on a bench slot: device_public_world_state.py:303 copies every public slot's stages into a
+    # materialized foe, bench included.
+    c=c._replace(trackers=_write(c.trackers,'boosts',side,_li.take(before.active,_r(before),side),
+        j.zeros((len(c.trackers.error),7),j.int32),use))
+    # Bug J: install from the pre-entry state, as a switch's install precedes its entry. dragging.drag has already run
+    # entry.enter (Spikes) in `after`, so installing from it put the damage history's arrival baseline below the
+    # entrant's Spikes damage, which B2 counts in the round's damage taken (last_damage_taken, damage_exact_taken at
+    # TURN). The entry below reads `after`: its observe records that loss in the damage history, and it updates the
+    # upkeep's non-proc HP snapshot from it (the install's snapshot is pre-Spikes), as for a switch-in.
     incoming=before._replace(active=_li.put(before.active,_r(before),(side,),_li.take(after.active,_r(after),side)))
+    c=install(c,incoming,side,use)
     return entry(c,incoming,after,side,table,use) if table is not None else observe(c,after,use)
 
 
@@ -799,7 +816,8 @@ PERISH_BAG=('perish0','perish1','perish2','perish3')
 
 
 def derived_volatiles(c,state,use):
-    """Fidelity M2 (design 2.5): the actives' perish, yawn and partiallytrapped bag bits, from the actual state.
+    """Fidelity M2 (design 2.5): the actives' perish, yawn, partiallytrapped, encore and flashfire bag bits, from the actual
+    state.
 
     B2 (public_active.project_line) folds -start|X|perishN (PERISH_START: perishN replaces the other perish bits;
     perish3 [silent] at Perish Song, then perishN each residual), -start|X|move: Yawn / -end|X|move: Yawn|[silent],
@@ -807,7 +825,25 @@ def derived_volatiles(c,state,use):
     engine counter starts, changes or ends, so at every boundary B2's bag is perish{min(counter,3)} (perish0 only
     precedes the faint, whose FAINT clear empties the bag), yawn = counter>0 and partiallytrapped = counter>0.
     A switch-out drops them (withdraw), a Baton target carries perish and partiallytrapped (baton_copy). States
-    without the leaves (authored fixtures) are left alone."""
+    without the leaves (authored fixtures) are left alone.
+
+    Encore (the device harness's OPEN BUG C): B2 folds -start|X|Encore and -end|X|Encore (Showdown's encore condition
+    onEnd prints it both at the residual expiry and when the encored move's PP runs out; gen3 residual order 10,
+    subOrder 14), and an Encore's silent ends (switch-out, faint) clear the bag through withdraw and the faint clear.
+    The engine's encore_counter starts with the -start and reaches 0 exactly at the -end, so encore = counter>0 is B2's
+    bag at every boundary. public_move_state's write at the Encore move stays (it agrees); this is what clears it at
+    the residual, where transition.py's Encore block calls no hook. The engine zeroes a fainted holder's encore_counter
+    only at the step's end (transition.py's faint clear, after the residuals), so a read between the faint and that
+    clear (a public_move_state later in the step, a fixture) sees a live counter on a fainted holder: hence the hp gate,
+    as flashfire's. B2's FAINT clear has emptied the bag at the faint.
+
+    Flash Fire (the device harness's OPEN BUG E): Showdown's Flash Fire onTryHit prints -start|X|ability: Flash Fire
+    when it adds the flashfire volatile, and B2 folds it into the bag's flashfire entry; a Fire move into a holder that
+    already has it adds nothing (-immune, no new -start), and the volatile ends silently: noCopy, so a Baton Pass drops
+    it (B2's carry set has no flashfire, baton_copy's neither), a switch-out (withdraw) and a faint (B2's FAINT clear).
+    The engine bit absorption.FLASH_FIRE in state.volatile is set by absorption.try_hit exactly then, kept through a
+    second activation, cleared by a departure and not copied by baton.copy_to_recipient (LEECH_SEED only); a faint
+    does not clear it, so flashfire = bit & hp>0 is B2's bag at every boundary."""
     if not hasattr(state,'perish_counter') or c.trackers.public_volatiles is None:return c
     use=_mask(use,len(c.trackers.error));r=_r(state)
     for side in range(2):
@@ -817,6 +853,9 @@ def derived_volatiles(c,state,use):
         for k,name in enumerate(PERISH_BAG):bag=bag.at[:,VOLATILE_NAMES.index(name)].set((perish>0)&(shown==k))
         bag=bag.at[:,VOLATILE_NAMES.index('yawn')].set(_get(state,'yawn_counter',side)>0)
         bag=bag.at[:,VOLATILE_NAMES.index('partiallytrapped')].set(_get(state,'partial_trap_counter',side)>0)
+        bag=bag.at[:,VOLATILE_NAMES.index('encore')].set((_get(state,'encore_counter',side)>0)&(_get(state,'hp',side)>0))
+        bag=bag.at[:,VOLATILE_NAMES.index('flashfire')].set(
+            ((_get(state,'volatile',side)&j.uint32(FLASH_FIRE))!=0)&(_get(state,'hp',side)>0))
         c=c._replace(trackers=_write(c.trackers,'public_volatiles',side,p,bag,use))
     return c
 

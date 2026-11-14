@@ -58,6 +58,22 @@ class DeviceTrackersTests(unittest.TestCase):
    if getattr(t,name)is not None:np.testing.assert_array_equal(getattr(worlds,name),np.asarray(getattr(t,name))[np.array(rows)],err_msg=name)
   self.assertEqual(READ(worlds,j.array([0,1,0,1],j.int32)).species[:,0].tolist(),[7,1,7,1])
   bad=READ(CLONE(t,j.array([-1,2],j.int32)),j.zeros(2,j.int32));self.assertFalse(bool(bad.present.any()));self.assertEqual(bad.error.tolist(),[tracker.BAD_ROOT]*2)
+ def test_fainted_active_keeps_public_stages_until_its_replacement(self):
+  # OPEN BUG D (observation convention: B2 and the champion's Python encoder keep a fainted active's stages until the
+  # replacement arrives; Showdown and the engine zero them at the faint). Legacy endpoint API path.
+  s=self.state(2);up=s._replace(boosts=s.boosts.at[:,1,0,0].set(2).at[:,1,0,4].set(-1));a=j.zeros((2,2),j.int32)
+  t=INIT(up);ko=up._replace(hp=up.hp.at[:,1,0].set(0),boosts=up.boosts.at[:,1,0].set(0))
+  t=UPDATE(t,up,ko,a)
+  self.assertEqual(READ(t,j.zeros(2,j.int32)).boosts[:,0].tolist(),[[2,0,0,0,-1,0,0]]*2)    # the opponent's view
+  self.assertEqual(READ(t,j.ones(2,j.int32)).own_boosts.tolist(),[[2,0,0,0,-1,0,0]]*2)       # the fainted mon's own
+  self.assertEqual(READ(t,j.zeros(2,j.int32)).own_boosts.tolist(),[[0]*7]*2)
+  # A read before the engine's clear (a stage nonzero at hp 0) holds the faint-time stages.
+  late=ko._replace(boosts=up.boosts.at[0,1,0,4].set(-2));t2=UPDATE(t,ko,late,a)
+  self.assertEqual(t2.boosts[:,1,0].tolist(),[[2,0,0,0,-2,0,0],[2,0,0,0,-1,0,0]])
+  # The replacement: the outgoing slot takes the departed (zero) stages, the entrant its own.
+  new=ko._replace(active=ko.active.at[:,1].set(3),boosts=ko.boosts.at[:,1,3,1].set(1));t=UPDATE(t,ko,new,a)
+  self.assertEqual(t.boosts[:,1,0].tolist(),[[0]*7]*2);self.assertEqual(READ(t,j.zeros(2,j.int32)).boosts[:,1].tolist(),[[0,1,0,0,0,0,0]]*2)
+  self.assertEqual(READ(t,j.ones(2,j.int32)).own_boosts.tolist(),[[0,1,0,0,0,0,0]]*2)
  def test_no_reveal_from_replaced_before_active_or_invalid_observer(self):
   s=self.state();t=INIT(s);sample=s._replace(active=s.active.at[:,1].set(4));out=UPDATE(t,sample,sample,j.zeros((3,2),j.int32));self.same(t,out,skip=('error',));self.assertEqual(out.error.tolist(),[tracker.BEFORE_ACTIVE_MISMATCH]*3)
   self.assertEqual(READ(t,j.full(3,2,j.int32)).error.tolist(),[tracker.BAD_OBSERVER]*3)

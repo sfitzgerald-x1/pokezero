@@ -147,6 +147,142 @@ class PublicHooksTests(unittest.TestCase):
    self.assertIs(transition.step_with_public(s,a,None,c.trackers,chance_inputs=chance),sentinel)
    sample.assert_not_called();self.assertIs(step.call_args.args[3],chance)
    self.assertIs(step.call_args.kwargs['_device_public'].trackers,c.trackers)
+ def test_encore_bag_bit_follows_the_engine_counter_and_clears_at_the_residual_end(self):
+  # The device harness's OPEN BUG C: transition.py's Encore residual calls no hook, so before this the bit set at the
+  # Encore move stayed after -end|X|Encore. derived_volatiles (run by turn_end) now writes encore = counter>0.
+  E=h.VOLATILE_NAMES.index('encore')
+  def bit(c,st,side):
+   r=np.arange(2);p=np.asarray(st.active)[:,side];slot=np.clip(np.asarray(c.trackers.physical_to_public)[r,side,p],0,5)
+   return np.asarray(c.trackers.public_volatiles)[r,side,slot,E].tolist()
+  s=state();c=h.initialize(s,tables());yes=j.ones(2,bool)
+  counter=lambda st,side,n:st._replace(encore_counter=st.encore_counter.at[:,side,0].set(j.asarray(n,j.int32)))
+  held=counter(s,1,[2,2]);c=h.volatile(c,held,1,'encore',yes,yes)                 # the Encore move's write
+  self.assertEqual(bit(c,held,1),[True,True])
+  c=h.turn_end(c,held,held,yes);self.assertEqual(bit(c,held,1),[True,True])       # counter still above 0: kept
+  ended=counter(held,1,[0,1])                                                       # lane 0's Encore ends at the residual
+  c=h.turn_end(c,held,ended,yes);self.assertEqual(bit(c,ended,1),[False,True])
+  self.assertEqual(bit(c,ended,0),[False,False])                                    # the other side untouched
+  # a done lane is left alone; a counter that starts sets the bit (it agrees with the move's write)
+  c2=h.initialize(s,tables());started=counter(s,0,[3,3])
+  c2=h.derived_volatiles(c2,started,j.array([True,False]));self.assertEqual(bit(c2,started,0),[True,False])
+  # the faint clear zeroes the engine counter (transition's faintMessages), so a fainted holder reads no Encore
+  fainted=ended._replace(hp=ended.hp.at[:,1,0].set(0),encore_counter=ended.encore_counter.at[:,1,0].set(0))
+  c=h.turn_end(c,ended,fainted,yes);self.assertEqual(bit(c,fainted,1),[False,False])
+  # a Baton Pass recipient: Encore is noCopy (baton.py zeroes the recipient's counter, baton_copy omits the bit)
+  c3=h.initialize(s,tables());c3=h.volatile(c3,held,1,'encore',yes,yes)
+  passed=held._replace(active=held.active.at[:,1].set(3))
+  c3=h.install(c3,passed,1,yes);c3=h.baton_copy(c3,passed,1,j.zeros(2,j.int32),yes);c3=h.withdraw(c3,passed,1,j.zeros(2,j.int32),yes)
+  c3=h.turn_end(c3,held,passed,yes);self.assertEqual(bit(c3,passed,1),[False,False])
+ def test_flashfire_bag_bit_follows_the_engine_bit_while_its_holder_lives(self):
+  # The device harness's OPEN BUG E: no hook wrote B2's flashfire entry (-start|X|ability: Flash Fire). derived_volatiles
+  # (run by public_move_state and turn_end) now writes flashfire = the engine's absorption.FLASH_FIRE bit and hp>0.
+  from gpu_engine import baton
+  from gpu_engine.absorption import FLASH_FIRE
+  F=h.VOLATILE_NAMES.index('flashfire');yes=j.ones(2,bool);zero=j.zeros(2,j.int32)
+  def bit(c,st,side):
+   r=np.arange(2);p=np.asarray(st.active)[:,side];slot=np.clip(np.asarray(c.trackers.physical_to_public)[r,side,p],0,5)
+   return np.asarray(c.trackers.public_volatiles)[r,side,slot,F].tolist()
+  lit=lambda st,lanes:st._replace(volatile=st.volatile.at[:,1,0].set(j.where(j.asarray(lanes),j.uint32(FLASH_FIRE),j.uint32(0))))
+  s=state();c=h.initialize(s,tables())
+  fired=lit(s,[True,False])                                                         # lane 0's Fire move is absorbed
+  c=h.turn_end(c,s,fired,yes);self.assertEqual(bit(c,fired,1),[True,False]);self.assertEqual(bit(c,fired,0),[False,False])
+  again=lit(fired,[True,True])                                                      # lane 0: a second Fire move (-immune)
+  c=h.turn_end(c,fired,again,yes);self.assertEqual(bit(c,again,1),[True,True])
+  # the engine's faint leaves the bit; B2's FAINT clear empties the bag, and a later read of the fainted holder agrees
+  fainted=again._replace(hp=again.hp.at[0,1,0].set(0))
+  c=h.turn_end(c,again,fainted,yes);self.assertEqual(bit(c,fainted,1),[False,True])
+  c=h.turn_end(c,fainted,fainted,yes);self.assertEqual(bit(c,fainted,1),[False,True])
+  # Baton Pass: flashfire is noCopy; baton.copy_to_recipient carries LEECH_SEED only and baton_copy omits the bag entry
+  c2=h.initialize(s,tables());c2=h.turn_end(c2,s,again,yes)
+  passed=baton.copy_to_recipient(again,1,j.full(2,3,j.int32),eligible=yes)
+  self.assertEqual((np.asarray(passed.volatile)[:,1,3]&FLASH_FIRE).tolist(),[0,0])
+  passed=passed._replace(active=passed.active.at[:,1].set(3),volatile=passed.volatile.at[:,1,0].set(0))  # depart
+  c2=h.install(c2,passed,1,yes);c2=h.baton_copy(c2,passed,1,zero,yes);c2=h.withdraw(c2,passed,1,zero,yes)
+  self.assertEqual(bit(c2,passed,1),[False,False])
+  c2=h.turn_end(c2,again,passed,yes);self.assertEqual(bit(c2,passed,1),[False,False])
+ def test_fainted_active_keeps_its_public_stages_in_both_views_until_its_replacement_arrives(self):
+  # The device harness's OPEN BUG D, by the lead's ruling (observation inputs follow the champion's B2/Python encoder
+  # convention, engine state follows Showdown): the engine zeroes a fainted active's stages, B2 and the Python encoder
+  # keep them until the replacement arrives. The carry keeps them; the replacement's install and withdraw reset them.
+  s=state();yes=j.ones(2,bool);zero=j.zeros(2,j.int32)
+  up=s._replace(boosts=s.boosts.at[:,1,0,0].set(2).at[:,1,0,4].set(-1))          # side 1's active: +2 Atk, -1 Spe
+  c=h.initialize(s,tables());c=h.observe(c,up,yes)
+  # The KO. Lane 0 reads it before the engine's clear, with a last -1 Spe from the same action; lane 1 only after it.
+  pre=up._replace(hp=up.hp.at[:,1,0].set(0),boosts=up.boosts.at[0,1,0,4].set(-2))
+  c=h.observe(c,pre,j.array([True,False]))
+  cleared=pre._replace(boosts=pre.boosts.at[:,1,0].set(0))                         # transition._clear_fainted_boosts
+  c=h.turn_end(c,up,cleared,yes)
+  kept=[[2,0,0,0,-2,0,0],[2,0,0,0,-1,0,0]]
+  foe=tr.readout(c.trackers,zero);own=tr.readout(c.trackers,j.ones(2,j.int32))
+  self.assertEqual(np.asarray(foe.boosts)[:,0].tolist(),kept)                      # the opponent's view
+  self.assertEqual(np.asarray(own.own_boosts).tolist(),kept)                       # the fainted mon's own view
+  self.assertEqual(np.asarray(foe.own_boosts).tolist(),[[0]*7]*2)                  # side 0's own active is untouched
+  self.assertEqual(np.asarray(c.trackers.fainted)[:,1,0].tolist(),[True,True])
+  # The replacement's arrival resets them: install reads the entrant's engine stages, withdraw zeroes the fainted slot.
+  new=cleared._replace(active=cleared.active.at[:,1].set(3))
+  c=h.install(c,new,1,yes);c=h.withdraw(c,new,1,zero,yes);c=h.turn_end(c,new,new,yes)
+  foe=tr.readout(c.trackers,zero);own=tr.readout(c.trackers,j.ones(2,j.int32))
+  self.assertEqual(np.asarray(foe.boosts)[:,1].tolist(),[[0]*7]*2);self.assertEqual(np.asarray(own.own_boosts).tolist(),[[0]*7]*2)
+  self.assertEqual(np.asarray(c.trackers.boosts)[:,1,0].tolist(),[[0]*7]*2)
+  # Baton Pass, the one stage carrier: the recipient's stages are the engine's copy (baton.copy_to_recipient), read at
+  # install. A fainted passer cannot arise (transition sets baton_pass only at hp>0 and the step ends there), and the
+  # carry's kept stages never reach a recipient: an install reads only engine state.
+  c2=h.initialize(s,tables());c2=h.observe(c2,up,yes)
+  passed=up._replace(active=up.active.at[:,1].set(3),boosts=up.boosts.at[:,1,3].set(up.boosts[:,1,0]).at[:,1,0].set(0))
+  c2=h.install(c2,passed,1,yes);c2=h.baton_copy(c2,passed,1,zero,yes);c2=h.withdraw(c2,passed,1,zero,yes)
+  self.assertEqual(np.asarray(tr.readout(c2.trackers,zero).boosts)[:,1].tolist(),[[2,0,0,0,-1,0,0]]*2)
+  self.assertEqual(np.asarray(c2.trackers.boosts)[:,1,0].tolist(),[[0]*7]*2)
+  c3=h.initialize(s,tables());c3=h.observe(c3,up,yes);c3=h.observe(c3,cleared,yes)  # a kept fainted carry
+  c3=h.install(c3,new,1,yes);c3=h.baton_copy(c3,new,1,zero,yes);c3=h.withdraw(c3,new,1,zero,yes)
+  self.assertEqual(np.asarray(tr.readout(c3.trackers,zero).boosts)[:,1].tolist(),[[0]*7]*2)
+
+ def test_a_drag_out_drops_the_slot_stages_so_a_drag_back_into_lethal_spikes_reads_zero(self):
+  # Review of D: the hooks' drag never ran withdraw, so a phazed-out mon kept its stages in the slot carry; with the
+  # fainted-active carry (_observe keeps a slot's stages at hp 0) a later drag back into lethal Spikes showed them.
+  # B2's drag arrival resets the seat's stages (public_mon_state.py:111-112), and so does the Python encoder.
+  s=state();yes=j.ones(2,bool);zero=j.zeros(2,j.int32);one=j.ones(2,j.int32)
+  up=s._replace(boosts=s.boosts.at[:,1,0,0].set(2))                                 # side 1's lead at +2 Atk
+  c=h.initialize(s,tables());c=h.observe(c,up,yes)
+  out=up._replace(active=up.active.at[:,1].set(3),boosts=up.boosts.at[:,1,0].set(0))  # Whirlwind: entry.depart zeroes
+  c=h.drag(c,up,out,1,None,yes)
+  self.assertEqual(np.asarray(c.trackers.boosts)[:,1,0].tolist(),[[0]*7]*2)          # the dragged-out slot
+  back=out._replace(active=out.active.at[:,1].set(0),hp=out.hp.at[:,1,0].set(0))     # dragged back, KO'd by Spikes
+  c=h.drag(c,out,back,1,None,yes);c=h.turn_end(c,back,back,yes)
+  self.assertEqual(np.asarray(tr.readout(c.trackers,zero).boosts)[:,0].tolist(),[[0]*7]*2)   # the opponent's view
+  self.assertEqual(np.asarray(tr.readout(c.trackers,one).own_boosts).tolist(),[[0]*7]*2)     # the mon's own view
+  self.assertEqual(np.asarray(c.trackers.fainted)[:,1,0].tolist(),[True,True])
+  # Baton Pass into lethal Spikes keeps the passed stages, as B2 does (its Baton arrival copies them, its faint keeps
+  # them): install reads the alive recipient's engine copy, and the entry's read precedes the engine's clear.
+  c=h.initialize(s,tables());c=h.observe(c,up,yes)
+  passed=up._replace(active=up.active.at[:,1].set(3),boosts=up.boosts.at[:,1,3].set(up.boosts[:,1,0]).at[:,1,0].set(0))
+  c=h.install(c,passed,1,yes);c=h.baton_copy(c,passed,1,zero,yes);c=h.withdraw(c,passed,1,zero,yes)
+  spiked=passed._replace(hp=passed.hp.at[:,1,3].set(0))
+  c=h.entry(c,passed,spiked,1,None,yes)
+  cleared=spiked._replace(boosts=spiked.boosts.at[:,1,3].set(0));c=h.turn_end(c,spiked,cleared,yes)
+  self.assertEqual(np.asarray(tr.readout(c.trackers,zero).boosts)[:,1].tolist(),[[2,0,0,0,0,0,0]]*2)
+ def test_a_drag_into_spikes_counts_the_entrants_spikes_damage_taken(self):
+  # Bug J: dragging.drag applies the entrant's Spikes before the hook runs; the drag installed from that after state, so
+  # the damage history's arrival baseline already held the Spikes loss and the round credited no damage taken. B2 (and
+  # the device's own switch-in path) count it: last_damage_taken (shown) and damage_exact_taken (exact) at TURN.
+  s=state();yes=j.ones(2,bool)
+  c=h.initialize(s,tables())
+  dragged=s._replace(active=s.active.at[:,1].set(3),hp=s.hp.at[:,1,3].set(175))     # Spikes: 25 of 200 on entry
+  c=h.drag(c,s,dragged,1,None,yes);c=h.public_turn(c,dragged,yes,c.trackers.turn+1)
+  foe=tr.readout(c.trackers,j.zeros(2,j.int32));own=tr.readout(c.trackers,j.ones(2,j.int32))
+  np.testing.assert_allclose(np.asarray(foe.mon_features['last_damage_taken'])[:,1],[.12,.12])   # 100% -> 88% shown
+  np.testing.assert_allclose(np.asarray(c.trackers.damage_exact_taken)[:,1,1],[.125,.125])       # 25/200 exact
+  np.testing.assert_allclose(np.asarray(own.own_mon_features['last_damage_taken'])[:,0],[.125,.125])
+ def test_encore_bag_bit_is_gated_on_a_living_holder(self):
+  # The engine zeroes a fainted holder's encore_counter only at the step's end; a derived read before that sees a live
+  # counter on a fainted holder, which B2's FAINT clear has already emptied.
+  E=h.VOLATILE_NAMES.index('encore');yes=j.ones(2,bool)
+  s=state();held=s._replace(encore_counter=s.encore_counter.at[:,1,0].set(2))
+  c=h.initialize(s,tables());c=h.derived_volatiles(c,held,yes)
+  self.assertEqual(np.asarray(c.trackers.public_volatiles)[:,1,0,E].tolist(),[True,True])
+  fainted=held._replace(hp=held.hp.at[0,1,0].set(0))                                  # lane 0: KO'd, counter not yet 0
+  c=h.derived_volatiles(c,fainted,yes)
+  self.assertEqual(np.asarray(c.trackers.public_volatiles)[:,1,0,E].tolist(),[False,True])
+
  def test_default_physical_ast_exact_after_only_optin_erasure(self):
   class Erase(ast.NodeTransformer):
    def visit_If(self,n):

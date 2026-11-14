@@ -65,6 +65,7 @@ class PublicView(NamedTuple):
     belief_pin_active: object = None
     transformed: object = None
     transform_species: object = None
+    own_boosts: object = None
 
 
 class Tables(NamedTuple):
@@ -252,6 +253,12 @@ def encode(state, public, tables, *, observer_sides, legal_action_mask):
     own_num = _put(own_num, tuple('ACTUAL_' + n for n in stats),
         (j.where(alive, j.minimum(1, own['max_hp'] / 714), 0),) +
         tuple(j.minimum(1, own['stats'][..., i] / 714) for i in range(1, 6)))
+    # The own fainted active's stages come from the public carry, as the opponent's do: the engine zeroed them at the
+    # faint (Showdown's clearVolatile), the champion's B2/Python inputs keep them until the replacement arrives. See the
+    # convention note at engine_device_trackers._observe; do not "fix" it toward Showdown without retraining.
+    kept = getattr(public, 'own_boosts', None)
+    if kept is not None:
+        own['boosts'] = j.where((active & ~alive)[..., None], j.asarray(kept, j.int32)[:, None, :], own['boosts'])
     own_num = _put(own_num, tuple('BOOST_' + n for n in stats[1:]),
         tuple(j.where(active, j.clip(own['boosts'][..., i] / 6, -1, 1), 0) for i in range(5)))
     own_num = _put(own_num, ('GENDER_MALE', 'GENDER_FEMALE', 'POSSIBLE_ABILITY_COUNT',
