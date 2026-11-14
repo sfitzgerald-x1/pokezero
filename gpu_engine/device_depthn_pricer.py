@@ -63,7 +63,7 @@ import numpy as np
 
 from pokezero import v5_gumbel as original
 from . import device_public_teacher as serial,device_public_teacher_batch as batch,device_public_world_state as mapping
-from . import champion_evaluator as evaluators,device_depth2_pricer as depth2,depth2_backups,depth2_digest as digests
+from . import champion_evaluator as evaluators,device_depth2_pricer as depth2,depth2_backups,depth2_digest as digests,trace_release
 
 LANES=depth2.LANES;UNAVAILABLE=depth2.UNAVAILABLE;INPUT_KEYS=depth2.INPUT_KEYS
 PEER_VIEW_ERROR=depth2.PEER_VIEW_ERROR;PEER_PRIOR_REFUSED=depth2.PEER_PRIOR_REFUSED
@@ -540,11 +540,14 @@ class DepthNPricer:
 
     def _program(self,key,build,*args):
         """Lower and compile once per shape key, evaluator and world source (the key gains `evaluator_suffix`, then the call's
-        world suffix: nothing for D3's own worlds); later calls reuse the executable (args must keep their shapes and dtypes)."""
+        world suffix: nothing for D3's own worlds); later calls reuse the executable (args must keep their shapes and dtypes).
+        Only the executable is kept: once it compiles, jit's tracing caches are emptied (trace_release), so the trace does
+        not stay alive in them through the executor's long-lived jitted functions."""
         key=key+self.evaluator_suffix+self._world_suffix
         if key not in self.programs:
             fn=build();clock=time.perf_counter();lowered=fn.lower(*args);lower=time.perf_counter()-clock
             clock=time.perf_counter();self.programs[key]=lowered.compile();self.compiles+=((key,lower,time.perf_counter()-clock),)
+            fn=lowered=None;trace_release.release()
         return self.programs[key]
 
     def _block_program(self,p,b):

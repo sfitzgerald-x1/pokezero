@@ -99,9 +99,12 @@ of the current batch is never evicted (session_cap >= max_requests), so a live b
 rule; an evicted battle that returns folds its full prefix again from a fresh adapter (the same state, more host time).
 warmup(requests): per bucket, the full path on saved Showdown requests forced to that bucket (cold: compiles P1 and the
 selection per capacity, the gather per pool, the shared leaf block program, the root forward), then once more (warm).
-Session state is cleared around every pass. The server is READY only after it.
+Session state is cleared around every pass. At the end jit's tracing caches are emptied and the heap collected once
+(gpu_engine.trace_release: the executables stay, the traces go; the warm report's trace_release records it). The server is
+READY only after it.
 """
 from collections import OrderedDict
+import gc
 import math
 import time
 
@@ -112,7 +115,7 @@ from pokezero import v5_gumbel as original
 from pokezero.phase_d_search_server import SCHEMA,encode
 from pokezero import depthn_effect_guard as effect_guard
 from . import champion_evaluator as evaluators,constructor_worlds as cw,depthn_backups as backups,device_depthn_pricer as dn,search_hedge as hedge
-from . import depthn_guard_inputs as guard_inputs
+from . import depthn_guard_inputs as guard_inputs,trace_release
 
 RUNGS={'DN2W8':8,'DN2W16':16,'DN2W32':32,'DN2W64':64}   # W32 and W64: the MC ladder's world-count rungs (offline replays)
 ROOT_OPERATOR='ARGMAX_MEAN_COMPLETED_Q'
@@ -598,7 +601,11 @@ class DepthNLiveSearch:
         signatures={k[-1][2]for k in self.programs if type(k[-1])is tuple and k[-1][:2]==('worlds',cw.SOURCE)}
         if self.carry is None or signatures!={self.carry['signature']}:
             raise RuntimeError(f'warmup: the recorded carry signature {None if self.carry is None else self.carry["signature"]} is not the warmed programs\' {sorted(signatures)}')
+        # Every program is compiled: drop the traces jit's caches still hold (the reply, label and root-forward programs';
+        # the pricers release theirs per compile) and collect once now, so no full collection while serving rescans them.
+        released=trace_release.release();clock=time.perf_counter();gc.collect()
         self.warm=dict(buckets=report,programs=len(self.programs),seconds=time.perf_counter()-started,carry_signature=self.carry['signature'],
+            trace_release=dict(entries=released,gc_seconds=time.perf_counter()-clock),
             carry_reference=self.carry['root'],labels=dict(p1_rows={b:2*b*self.K*dn.LANES for b in self.buckets},root_rows=labels),
             **({}if getattr(self,'reply',None)is None else dict(reply=dict(views=self.reply.mode,seats_seconds=self.reply_warm))))
         return self.warm

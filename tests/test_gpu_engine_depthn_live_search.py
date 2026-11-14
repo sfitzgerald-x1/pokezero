@@ -537,6 +537,8 @@ class LiveSearchTests(unittest.TestCase):
         outcomes={('w0',0):self.outcome(0),('w1',0):self.outcome(1),**{(f'l{i}',0):self.outcome(2+i)for i in range(3)}}
         with Codex(outcomes):report=s.warmup([request('w0',0),request('w1',0)])   # two saved roots: bucket 4 cycles them (repeats refused, still priced at 4)
         self.assertEqual(set(report['buckets']),{1,2,4});json.dumps(report)
+        from gpu_engine import trace_release   # warmup ends with jit's tracing caches empty: no warmed trace outlives READY
+        self.assertEqual(sum(c.cache_info().currsize for c in trace_release._caches()),0);self.assertGreaterEqual(report['trace_release']['entries'],0)
         for b,entry in report['buckets'].items():
             self.assertGreater(entry['cold_seconds'],0);self.assertGreater(entry['warm_seconds'],0);self.assertEqual(entry['warm_compiled'],0)
             self.assertEqual(entry['complete'],min(b,2))

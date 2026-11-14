@@ -34,7 +34,7 @@ import numpy as np
 
 from pokezero import v5_gumbel as original
 from . import device_public_teacher as serial,device_public_teacher_batch as batch,device_public_world_state as mapping
-from . import champion_evaluator as evaluators,depth2_digest as digests,v5_model
+from . import champion_evaluator as evaluators,depth2_digest as digests,trace_release,v5_model
 
 INPUT_KEYS=batch.SERIAL_INPUT_ORDER
 LANES=serial.JOINT_LANES
@@ -491,6 +491,7 @@ class Depth2Pricer:
                     k1_own=self.k1_own,k1_opp=self.k1_opp,child_block=self.child_block,digest=self.digest,forward=self.forward)
                 clock=time.perf_counter();lowered=fn.lower(device_data);lower_seconds=time.perf_counter()-clock
                 clock=time.perf_counter();self.kernels[key]=lowered.compile();compile_seconds=time.perf_counter()-clock
+                fn=lowered=None;trace_release.release()   # keep only the executable (gpu_engine.trace_release)
             clock=time.perf_counter();output=jax.device_get(jax.block_until_ready(self.kernels[key](device_data)))
             device_seconds=time.perf_counter()-clock
         frame=self._frame(output,count)

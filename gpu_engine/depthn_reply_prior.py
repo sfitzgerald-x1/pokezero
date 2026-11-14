@@ -74,14 +74,17 @@ class ReplyPrior:
     def warm(self, worlds):
         """Compile what a live root of these worlds' shapes runs, for both owner seats, before READY (a seat first compiled on
         its first live root cost a ~7 s outlier): eager and check build both seats' eager views and run the reply program;
-        jit and check also compile each seat's jitted program. Returns {owner: seconds}."""
+        jit and check also compile each seat's jitted program. Returns {owner: seconds}. The executables stay; the traces
+        jit's caches kept of them are released (gpu_engine.trace_release)."""
         import jax
+        from . import trace_release
         seconds = {}
         for owner in (0, 1):
             started = time.perf_counter()
             if self.mode in ('eager', 'check'):self.logits(worlds, owner)
             if self.mode in ('jit', 'check'):jax.block_until_ready(self.jit_logits(worlds, owner))
             seconds[owner] = time.perf_counter() - started
+        trace_release.release()
         return seconds
 
     @staticmethod
