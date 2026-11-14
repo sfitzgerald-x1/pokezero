@@ -15,6 +15,7 @@ on:
       - 'tests/data/gpu_ordinary_switch_catalog.json'
       - 'scripts/run_gpu_component_shard.py'
       - 'scripts/run_component_memory_check.py'
+      - 'scripts/refresh_source_pins.py'
       - 'tests/test_gpu_component_shards.py'
       - 'tests/gpu_component_heavy.json'
       - 'tests/gpu_component_extended.json'
