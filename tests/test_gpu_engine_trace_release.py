@@ -4,6 +4,7 @@ This is the retained-jaxpr GC stall in miniature. The fake executors (as the liv
 observe, sample and advance for as long as the process lives. A pricer program's trace calls those jitted functions on its
 own tracers, and jit's tracing caches then keep their jaxprs for as long as the functions live, long after the program is
 compiled. A DN2W16 server warmup kept about 66M objects that way. CPU only: small programs, well under 2 GiB."""
+from contextlib import ExitStack
 import gc
 import unittest
 from unittest.mock import patch
@@ -11,8 +12,9 @@ import weakref
 
 import jax
 import jax.numpy as j
+import numpy as np
 
-from gpu_engine import depthn_live_search as live,device_depthn_pricer as dn
+from gpu_engine import depthn_live_search as live,device_depthn_pricer as dn,device_public_world_state as mapping
 from tests import test_gpu_engine_depth2_pricer as T
 from tests import test_gpu_engine_depthn_live_search as L
 
@@ -43,18 +45,32 @@ class WarmupReleaseTests(unittest.TestCase):
 
     def test_no_trace_of_a_warmed_program_outlives_warmup(self):
         s = self.search(pricers=self.make_pricers(8, (1,)));outcomes = {('w0', 0):self.outcome(0), ('l0', 0):self.outcome(1)}
-        gc.collect();before = {id(o) for o in gc.get_objects() if type(o).__name__ == 'Jaxpr'};traced = [];thresholds = gc.get_threshold();during = []
+        # Every prepare also runs the live path's eager vmapped jit (device_public_world_state.world_keys: vmapped
+        # jax.random.fold_in), whose executable cache is keyed on a trace: the release unkeys it, and only the re-warm
+        # recompiles it before READY. (The fake engine's own path has none.)
+        prepare = live.cw.prepare_roots
+
+        def prepare_roots(*a, **kw):
+            mapping.world_keys(np.arange(3, dtype=np.uint32));return prepare(*a, **kw)
+        jax.clear_caches()   # from empty JAX caches, whatever earlier tests traced: this warmup traces its programs itself
+        gc.collect();held = {id(o): weakref.ref(o) for o in gc.get_objects() if type(o).__name__ == 'Jaxpr'}   # alias-safe: an id reused
+        is_new = lambda o: (lambda r: r is None or r() is not o)(held.get(id(o)))                              # by a new object is new
+        total = live_equations();traced = [];thresholds = gc.get_threshold();during = []
         warm_buckets = live.DepthNLiveSearch._warm_buckets
 
         def spy(search, pool):   # every jaxpr the bucket passes traced (P1, the selection, the gather, the leaf program) and still alive after them
             during.append(gc.get_threshold());out = warm_buckets(search, pool);gc.collect()
-            traced.extend(weakref.ref(o) for o in gc.get_objects() if type(o).__name__ == 'Jaxpr' and id(o) not in before)
+            traced.extend(weakref.ref(o) for o in gc.get_objects() if type(o).__name__ == 'Jaxpr' and is_new(o))
             return out
-        release = live.trace_release.release
+        release = getattr(getattr(live, 'trace_release', None), 'release', None)
 
         def releasing():   # the thresholds at the release (its collection follows): still deferred
             during.append(gc.get_threshold());return release()
-        with L.Codex(outcomes), patch.object(live.DepthNLiveSearch, '_warm_buckets', spy), patch.object(live.trace_release, 'release', releasing):
+        with ExitStack() as stack:
+            for context in (L.Codex(outcomes), patch.object(live.DepthNLiveSearch, '_warm_buckets', spy), patch.object(live.cw, 'prepare_roots', prepare_roots)):
+                stack.enter_context(context)
+            if hasattr(live, 'trace_release'):   # (a tree without the release still runs this far, and fails on what it retains)
+                stack.enter_context(patch.object(live.trace_release, 'release', releasing))
             report = s.warmup([L.request('w0', 0)])
         gc.collect();alive = [r() for r in traced if r() is not None];equations = sum(len(x.eqns) for x in alive)
         self.assertGreater(len(traced), 100)
@@ -63,12 +79,16 @@ class WarmupReleaseTests(unittest.TestCase):
         self.assertLessEqual(equations, 4, f'{len(alive)} of the {len(traced)} jaxprs traced while warming the buckets outlive warmup '
             f'({equations} equations)')
         del alive
+        # Nor does anything else: every live equation after warmup, against those alive before it (the re-warm's few small
+        # eager traces aside).
+        grown = live_equations() - total
+        self.assertLessEqual(grown, 200, f'{grown} more traced equations alive after warmup than before it')
         # Full collections were deferred while the programs traced and through the release's collection (young ones kept
         # running), and the thresholds are back.
         self.assertEqual(during, [thresholds[:2] + (1 << 30,)] * 2);self.assertEqual(gc.get_threshold(), thresholds)
         self.assertGreater(report['trace_release']['entries'], 0);self.assertEqual(report['trace_release']['jax'], jax.__version__)
         # After READY, serving a new root traces and compiles nothing: the re-warm pass recompiled what the release unkeyed.
-        with CompileEvents() as events:
+        with CompileEvents() as events, patch.object(live.cw, 'prepare_roots', prepare_roots):
             rows, _ = self.run_batch(s, [L.request('l0', 0)], outcomes)
         self.assertEqual([r['status'] for r in rows], ['COMPLETE']);self.assertEqual(events.seen, [])
         # A warmup that fails restores the thresholds too.
@@ -126,6 +146,22 @@ class TraceReleaseTests(unittest.TestCase):
         for name in first:
             self.assertTrue((first[name] == again[name]).all(), name)
         self.assertEqual(len(pricer.compiles), 1)
+
+    def test_an_eagerly_vmapped_jit_compiles_once_after_a_release(self):
+        """Why warmup re-runs its warm batches after the release: a jitted function vmapped outside jit runs as an eagerly
+        evaluated jaxpr, whose executable cache is keyed on that trace, so the first call after a release compiles again
+        (world_keys' vmapped fold_in, in miniature). One such call before serving (the re-warm) leaves serving none."""
+        from gpu_engine import trace_release
+        held = jax.jit(lambda x: x * 2 + 1)   # long-lived, like jax.random.fold_in's own jit
+        call = lambda: jax.block_until_ready(jax.vmap(held)(j.arange(4, dtype=j.float32)))
+        call()
+        with CompileEvents() as events:call()
+        self.assertEqual(events.seen, [])
+        trace_release.release()
+        with CompileEvents() as events:call()   # the re-warm's call
+        self.assertIn('/jax/core/compile/backend_compile_duration', events.seen)
+        with CompileEvents() as events:call()   # then serving's
+        self.assertEqual(events.seen, [])
 
     def test_release_empties_both_tracing_caches_of_this_jax(self):
         from gpu_engine import trace_release
