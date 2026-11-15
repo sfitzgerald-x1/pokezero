@@ -435,7 +435,7 @@ class ChanceConsumerTests(unittest.TestCase):
         self.assertIn("LIVE_SUSPENSION_INTERFACE", {g.code for g in out.gaps})
         self.assertTrue(out.raw_jax)
 
-    # §6: the appended effect stream's consumers (transition.py:1133-1173, 2278-2285, 2555-2565, 2592-2609).
+    # §6: the appended effect stream's consumers (transition.py:1133-1173, 2298-2305, 2575-2585, 2612-2629).
     def plan_live(self, data, meta, actions=(0, 0), *, kernel_table=None, cap=100_000_000, clean=()):
         """The input mapper refuses a live Yawn, Perish or partial-trap count (future_state.py:477-484). Bind the native
         input and actions on a copy without those counts, so the plan's own consumer closure, which reads the actual
