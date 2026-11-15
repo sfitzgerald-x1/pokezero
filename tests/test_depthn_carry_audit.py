@@ -514,6 +514,23 @@ class CaptureHookTests(unittest.TestCase):
             return price(None, None)
         with self.assertRaises(RuntimeError):A.check_turn2_call_sites(search=bound)
 
+    def test_price_stage_must_keep_the_live_module_lookup(self):
+        from gpu_engine import depthn_live_search as live
+        from scripts import depthn_rr_reprice as rr
+        stages = rr.search_stages()
+        self.assertIn(live.DepthNLiveSearch._price, stages)
+        self.assertTrue(A.check_turn2_call_sites(search=stages))
+        with self.assertRaises(RuntimeError):
+            A.check_turn2_call_sites(search=tuple(s for s in stages if s is not live.DepthNLiveSearch._price))
+
+        # Keep the live globals so this fails specifically because the module lookup disappeared.
+        from types import FunctionType
+        def cached(self, prepared, bucket=None):
+            return self.cached_price(prepared, bucket)
+        cached = FunctionType(cached.__code__, vars(live))
+        with patch.object(live.DepthNLiveSearch, '_price', cached):
+            with self.assertRaises(RuntimeError):A.check_turn2_call_sites()
+
     def test_price_wrapper_under_the_live_search(self):
         from tests import test_depthn_rr_reprice as RT
         from gpu_engine import constructor_worlds as cw, device_depthn_pricer as dn

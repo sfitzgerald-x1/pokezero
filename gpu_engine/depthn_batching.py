@@ -524,6 +524,8 @@ def reply_dispatch(search, priced, items):
         item = items[root['request_id']]
         try:
             out[root['request_id']] = reply.jit_dispatch(tuple(item.made.worlds), int(item.detached.address.owner))
+        except live.FATAL:
+            raise
         except Exception:   # noqa: BLE001 -- reduce's own forward raises it again, for this root only
             continue
     return out
@@ -531,13 +533,21 @@ def reply_dispatch(search, priced, items):
 
 def fetch_replies(priced):
     """reply_forward='root', in reduce: the dispatched programs' logits fetched (float32, as jit_logits returns them) into
-    priced['reply_logits'], which the search's reduce uses instead of running each root's forward."""
+    priced['reply_logits'], which the search's reduce uses instead of running each root's forward. A delayed failure stays
+    with its root and reaches the search's REPLY_PRIOR_ERROR handler; healthy siblings keep their fetched logits."""
     import jax
     import numpy as np
     pending = priced.pop('reply_pending', None)
     if pending:
-        fetched = jax.device_get(pending)
-        priced['reply_logits'] = {k: np.asarray(v, np.float32) for k, v in fetched.items()}
+        fetched, errors = {}, {}
+        for key, value in pending.items():
+            try:
+                fetched[key] = np.asarray(jax.device_get(value), np.float32)
+            except live.FATAL:
+                raise
+            except Exception as error:   # noqa: BLE001 -- the same per-root refusal as ReplyPrior.apply
+                errors[key] = error
+        priced['reply_logits'], priced['reply_errors'] = fetched, errors
     return priced
 
 

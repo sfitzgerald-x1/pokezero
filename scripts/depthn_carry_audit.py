@@ -807,23 +807,26 @@ def turn2_record(capture, owner, vocabulary, watch, *, name=None):
 
 
 def check_turn2_call_sites(search=None, price=None):
-    """True when DepthNLiveSearch._search calls cw.price through the module attribute and DepthNPricer.price calls self._program
-    through the attribute (so the class-level wrapper applies); RuntimeError otherwise."""
+    """True when the live search's stages read cw.price through the module attribute and DepthNPricer.price calls self._program
+    through the attribute (so the wrappers apply); RuntimeError otherwise. `search` can override one stage or all stages."""
     from gpu_engine import constructor_worlds as cw, depthn_live_search as live, device_depthn_pricer as dn
-    search = live.DepthNLiveSearch._search if search is None else search
+    from scripts import depthn_rr_reprice as rr
+    stages = rr.search_stages() if search is None else search if isinstance(search, tuple) else (search,)
     price = dn.DepthNPricer.price if price is None else price
-    found = dict(price=False, program=False);previous = None
-    for i in dis.get_instructions(search):
-        if (i.opname in ('LOAD_ATTR', 'LOAD_METHOD') and i.argval == 'price' and previous is not None and previous.opname == 'LOAD_GLOBAL'
-                and previous.argval == 'cw'):found['price'] = True
-        previous = i
+    found = dict(price=False, program=False)
+    for stage in stages:
+        previous = None
+        for i in dis.get_instructions(stage):
+            if (i.opname in ('LOAD_ATTR', 'LOAD_METHOD') and i.argval == 'price' and previous is not None and previous.opname == 'LOAD_GLOBAL'
+                    and previous.argval == 'cw'):found['price'] = True
+            previous = i
     previous = None
     for i in dis.get_instructions(price):   # self is a local or, captured by price's lambdas, a cell
         if (i.opname in ('LOAD_ATTR', 'LOAD_METHOD') and i.argval == '_program' and previous is not None
                 and (previous.opname.startswith('LOAD_FAST') or previous.opname == 'LOAD_DEREF')
                 and (previous.argval == 'self' or isinstance(previous.argval, tuple) and previous.argval[-1] == 'self')):found['program'] = True
         previous = i
-    if not all(found.values()) or search.__globals__ is not vars(live) or live.cw is not cw:
+    if not all(found.values()) or any(stage.__globals__ is not vars(live) for stage in stages) or live.cw is not cw:
         raise RuntimeError(f'the search does not reach cw.price / self._program at call time: {found}')
     return True
 
