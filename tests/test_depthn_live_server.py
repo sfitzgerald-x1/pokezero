@@ -199,6 +199,59 @@ class ServerTests(unittest.TestCase):
             S.build(args)
         self.assertEqual((made['root_operator'],made['reply'][0]),('NOISE_GATED_K2','reply-prior'))
 
+    def test_r3pa_flag_and_build(self):
+        """--r3pa: parsed (default off; gated needs NOISE_GATED_K2), the header records it only when on, and build() passes it with the
+        engine's lane labels behind _R3paLabels; flag off builds the search exactly as before and never imports depthn_r3pa_labels."""
+        import sys,types
+        import jax
+        from gpu_engine import constructor_worlds as cw,depthn_r3pa,device_public_teacher as teacher,engine_device_observation,phase_d_protocol_constructor as pc,transition
+        self.assertEqual(S.R3PA_MODES,depthn_r3pa.MODES)
+        base=['--showdown-root','s','--node-binary','n','--metadata','m','--expected-metadata-sha256','a'*64,'--vocabulary','v',
+            '--expected-vocabulary-sha256','b'*64,'--port','9000','--warmup-requests','w.jsonl','--champion-archive','c.npz','--champion-archive-sha256','c'*64,
+            '--champion-checkpoint-sha256','d'*64,'--tree-commit','t'*40]
+        gate=['--root-operator','NOISE_GATED_K2']
+        environment=patch.dict(os.environ,PINNED);environment.start();self.addCleanup(environment.stop)
+        self.assertEqual(S.options(base).r3pa,'off')
+        self.assertEqual((S.options(base+['--r3pa','replace_gate']).r3pa,S.options(base+gate+['--r3pa','gated']).r3pa),('replace_gate','gated'))
+        for bad in(['--r3pa','gated'],['--r3pa','R3pa']):
+            with self.subTest(bad=bad),redirect_stderr(io.StringIO()),self.assertRaises(SystemExit):S.options(base+bad)
+        search=NS(tree_commit='t',rung='DN2W8',max_requests=4,min_price_seconds=1.,session_cap=256,refuse_classes=(),pricer_identity={})
+        args=S.options(base)
+        self.assertNotIn('r3pa',S.header(args,search));self.assertNotIn('r3pa',S.header(args,NS(vars(search),r3pa='off')))
+        self.assertEqual(S.header(S.options(base+['--r3pa','replace_gate']),NS(vars(search),r3pa='replace_gate'))['r3pa'],'replace_gate')
+        made={};executors=[]
+        stand_ins=((S,'matmul_precision',lambda:'highest'),(jax,'devices',lambda:[NS(platform='gpu')]),
+            (pc,'load_inputs',lambda a:('catalog','source',dict(vocabulary='vocab'),'config')),
+            (S.evaluators,'load_from_arguments',lambda a:NS(params='champion')),(pc,'ProtocolConstructor',lambda **kw:NS(**kw)),
+            (teacher,'make_executor',lambda *a,**k:'executor'),(transition,'tables_from_metadata',lambda m:'tables'),
+            (engine_device_observation,'compile_tables',lambda m,catalog:'observation'),(S.live,'make_pricers',lambda *a,**k:executors.append(a[0])or'pricers'),
+            (cw,'binding',lambda *a:'binding'),(S.live,'DepthNLiveSearch',lambda **kw:made.update(kw)or'search'))
+        def build(argv):
+            made.clear();executors.clear()
+            with ExitStack()as stack:
+                for target,name,value in stand_ins:stack.enter_context(patch.object(target,name,side_effect=value))
+                return S.build(S.options(argv))
+        name='gpu_engine.depthn_r3pa_labels';real=sys.modules.pop(name,None)
+        if real is not None:self.addCleanup(sys.modules.__setitem__,name,real)
+        self.assertEqual(build(base),'search')
+        self.assertNotIn(name,sys.modules);self.assertFalse({'r3pa','r3pa_labels'}&set(made))   # off: built exactly as before the flag
+        class LaneLabels:
+            names=('n0','n1')
+            def __init__(self,executor,vocabulary):self.args=(executor,vocabulary);self.warmed=[]
+            def views(self,worlds,owner):return ('views',tuple(worlds),owner)
+            def warm(self,worlds):self.warmed.append(worlds);return 'warm'
+        fake=types.ModuleType(name);fake.LaneLabels=LaneLabels;fake.mismatch=[]
+        fake.peer_legal_mismatch=lambda flat,views:list(fake.mismatch)
+        fake.lane_labels_live=lambda views,names:[['move:a']+[None]*8 for _ in views[1]]
+        with patch.dict(sys.modules,{name:fake}):
+            self.assertEqual(build(base+gate+['--r3pa','gated']),'search')
+        labels=made['r3pa_labels'];self.assertEqual(made['r3pa'],'gated');self.assertIsInstance(labels,S._R3paLabels)
+        self.assertEqual(labels.lanes.args,(executors[0],'vocab'))   # the pricers' executor and the constructor's vocabulary
+        self.assertEqual(labels(['w0','w1'],1,['p0','p1']),[['move:a']+[None]*8]*2)
+        fake.mismatch=[(1,'kept',(0,1),'legal',(0,))]
+        with self.assertRaises(depthn_r3pa.LaneUnlabelled):labels(['w0','w1'],0,['p0','p1'])
+        self.assertEqual(labels.warm(['w0']),'warm');self.assertEqual(labels.lanes.warmed,[['w0']])
+
     def test_a_view_b_reply_archive_needs_peer_view_b(self):
         self.assertEqual((S.reply_view(None),S.reply_view({}),S.reply_view(dict(extra=dict(view='env')))),('env','env','env'))
         self.assertEqual(S.reply_view(dict(extra=dict(view='b',redaction='peer-view-v2'))),'b')

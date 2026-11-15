@@ -289,7 +289,7 @@ def _real(x):
 class DepthNLiveSearch:
     def __init__(self,*,constructor,pricers,params,binding,recipe,tree_commit,min_price_seconds=1.,max_requests=None,session_cap=256,
             archive_sha256=None,device='cpu',clock=time.monotonic,refuse_classes=(),redact_private_reveals=False,peer_view_b=False,reply=None,
-            root_operator=ROOT_OPERATOR,ability_guard=False):
+            root_operator=ROOT_OPERATOR,ability_guard=False,r3pa='off',r3pa_labels=None):
         """`pricers`: make_pricers' {bucket: DepthNPricer}; `binding`: the pricer side's WorldBinding (constructor_worlds.binding of
         the executor's source, engine metadata and catalog); `recipe`: the lane-order Recipe; `clock` must be the server's
         arrival clock (time.monotonic); `redact_private_reveals`: constructor_worlds' private-reveal redaction in every
@@ -303,8 +303,23 @@ class DepthNLiveSearch:
         ROOT_OPERATORS: NOISE_GATED_K2 plays search_hedge.noise_gated(per_world_q of the 2K priced worlds, averaging's choice on
         them, the root logits' argmax over the legal actions, 2): with a reply model the worlds are its (br_fp, the MC ladder's
         R5fp_ng); every response then names it and carries noise_gate (candidate, greedy, passed, mean_gap, stderr), and the
-        effect guard's (c) reads the played action. The default's decisions and responses are unchanged."""
+        effect guard's (c) reads the played action. The default's decisions and responses are unchanged. `r3pa` in
+        depthn_r3pa.MODES (default 'off': nothing below runs, imports or answers differently): every priced root's decision
+        is made on its blocks with each requested world's root prior replaced by R3pa's label-mapped cross-world average
+        (depthn_r3pa.root_priors / substitute_blocks; after the reply model's logits under `reply`); 'gated' keeps
+        NOISE_GATED_K2 on those blocks (it needs that root operator), 'replace_gate' plays their averaging choice without the
+        gate. `r3pa_labels(worlds, owner, flat_world_prices)`, required with it, labels the flat block-order worlds' nine
+        reply lanes and raises on any labelling problem (kept lanes other than the peer-legal ones too); its `warm(worlds)`,
+        when it has one, runs in warmup. A labelling or substitution error plays the unsubstituted decision. Every COMPLETE
+        response then carries r3pa (mode, unsubstituted_action: today's played action on the same blocks,
+        substituted_action, gate_passed, error); the effect guard keeps the pre-R3pa logits."""
         if root_operator not in ROOT_OPERATORS:raise ValueError(f'root_operator in {ROOT_OPERATORS} required')
+        if r3pa!='off':   # flag off: depthn_r3pa is never imported
+            from . import depthn_r3pa
+            if r3pa not in depthn_r3pa.MODES:raise ValueError(f'r3pa in {depthn_r3pa.MODES} required')
+            if not callable(r3pa_labels):raise ValueError('r3pa needs an r3pa_labels(worlds, owner, flat_world_prices) callable')
+            if r3pa=='gated'and root_operator!=NOISE_GATED_K2:raise ValueError(f'r3pa gated keeps the noise gate: root_operator {NOISE_GATED_K2} required')
+        self.r3pa,self.r3pa_labels=r3pa,r3pa_labels
         self.root_operator=root_operator
         self.ability_guard=bool(ability_guard)   # the effect guard's ability arms (depthn_guard_inputs.effect_record's metadata); off by default
         if self.ability_guard and any(getattr(p,'labels',None)is not guard_inputs.ability_labels for p in pricers.values()):
@@ -363,6 +378,10 @@ class DepthNLiveSearch:
 
     def _gated(self):return self._operator()==NOISE_GATED_K2
 
+    def _r3pa(self):
+        """The R3pa mode ('off' for a search built before the option, or without __init__)."""
+        return getattr(self,'r3pa','off')
+
     def _view_b(self):
         """Whether this search builds view b (peer_view_b; False for one built before the flag or without __init__)."""
         return getattr(self,'peer_view_b',False)is True
@@ -382,7 +401,8 @@ class DepthNLiveSearch:
             batch_size=n,bucket=None,
             root_classes=None,root_class=None,root_class_source=None,root_class_crosscheck=None,
             tree_commit=self.tree_commit,pricer=dict(self.pricer_identity),**({'peer_view_b':None}if self._view_b()else{}),
-            **({}if getattr(self,'reply',None)is None else dict(reply_prior=None)),**({'noise_gate':None}if self._gated()else{}))
+            **({}if getattr(self,'reply',None)is None else dict(reply_prior=None)),**({'noise_gate':None}if self._gated()else{}),
+            **({'r3pa':None}if self._r3pa()!='off'else{}))
 
     @staticmethod
     def _problem(request):
@@ -493,13 +513,20 @@ class DepthNLiveSearch:
                         alt=decide(check['blocks'],root['root_logits'],root['root_legal'])
                         reply.update(jit_action_index=alt['action_index'],jit_q_values=alt['q_values'],jit_max_abs_logit_diff=check['max_abs_logit_diff'])
                 blocks=replied
+            guard_blocks=blocks;r3pa=None   # the effect guard reads the pre-R3pa logits
+            if self._r3pa()!='off':r3pa,blocks=self._r3pa_blocks(blocks,root,items[root['request_id']])
             decision=decide(blocks,root['root_logits'],root['root_legal'])
-            if self._gated()and decision['status']=='COMPLETE':decision=noise_gate(decision,blocks,root['root_logits'],root['root_legal'])
+            if self._gated()and decision['status']=='COMPLETE'and not(r3pa is not None and r3pa['mode']=='replace_gate'and r3pa['error']is None):
+                decision=noise_gate(decision,blocks,root['root_logits'],root['root_legal'])
+            if r3pa is not None:
+                gate=decision.get('noise_gate')
+                decision['r3pa']=dict(r3pa,substituted_action=None if r3pa['error']is not None else decision['action_index'],
+                    gate_passed=None if gate is None else gate['passed'])
             if reply is not None:
                 decision['reply_prior']=reply;self.reply_completed+=decision['status']=='COMPLETE'
             if decision['status']=='COMPLETE':decision['effect_guard']=self._effect_guard(frame,root,made,by_id[root['request_id']],children,seam_notes,
                 decision['action_index'],labels,reply_logits=None if reply is None else[None if w is None or not w.opponent_requested else
-                    w.opponent_logits for pair in blocks for w in pair])   # br_fp: the union guard on the reply model's logits
+                    w.opponent_logits for pair in guard_blocks for w in pair])   # br_fp: the union guard on the reply model's logits
             results.append(dict(base,**decision))
         t_reduce=time.perf_counter();decided=self.clock()-started
         if len(prepared)!=len(todo)or len(results)!=len(todo)or any(r['request_id']!=p['request_id']for r,(_,p,_)in zip(results,todo)):
@@ -519,9 +546,23 @@ class DepthNLiveSearch:
                 out[i]=dict(base,**{k:result[k]for k in('status','action_index','q_values','completed_q','policy_target','root_value','action_mean_q',
                     'action_policy_target','mean_q_agrees','reduction_note','effect_guard')},decision_seconds=decided,
                     **({}if getattr(self,'reply',None)is None else dict(reply_prior=result.get('reply_prior'))),
-                    **({'noise_gate':result.get('noise_gate')}if self._gated()else{}))
+                    **({'noise_gate':result.get('noise_gate')}if self._gated()else{}),**({'r3pa':result.get('r3pa')}if self._r3pa()!='off'else{}))
             else:out[i]=dict(base,cause=refusal_cause(result['refusal']),refusal=result['refusal'])
         return out
+
+    def _r3pa_blocks(self,blocks,root,item):
+        """(the r3pa record, the blocks to decide on) with R3pa on: today's decision on `blocks` (decide, then noise_gate under
+        NOISE_GATED_K2 when COMPLETE) gives unsubstituted_action; the blocks come back with depthn_r3pa's substituted root priors,
+        or unchanged with the record's error when labelling or substitution fails."""
+        from . import depthn_r3pa
+        plain=decide(blocks,root['root_logits'],root['root_legal'])
+        if self._gated()and plain['status']=='COMPLETE':plain=noise_gate(plain,blocks,root['root_logits'],root['root_legal'])
+        record=dict(mode=self.r3pa,unsubstituted_action=plain['action_index'],substituted_action=None,gate_passed=None,error=None)
+        try:
+            flat=[w for pair in blocks for w in pair];labs=self.r3pa_labels(item.made.worlds,int(item.detached.address.owner),flat)
+            return record,depthn_r3pa.substitute_blocks(blocks,depthn_r3pa.root_priors(flat,labs))
+        except FATAL:raise
+        except Exception as error:return dict(record,error=f'{type(error).__name__}: {error}'[:300]),blocks
 
     def _effect_guard(self,frame,root,made,request,children,notes,choice,labels,reply_logits=None):
         """The root's effect guard record (depthn_guard_inputs.effect_record over this frame's observed P1 children); the
@@ -655,6 +696,10 @@ class DepthNLiveSearch:
                     try:self.reply_warm=self.reply.warm(item.made.worlds)
                     except FATAL:raise
                     except Exception as error:raise RuntimeError(f'warmup: the reply prior did not compile both seats: {type(error).__name__}: {error}')from error
+                if self._r3pa()!='off'and callable(getattr(self.r3pa_labels,'warm',None)):   # R3pa's lane labels, before READY
+                    try:self.r3pa_labels.warm(item.made.worlds)
+                    except FATAL:raise
+                    except Exception as error:raise RuntimeError(f'warmup: the R3pa lane labels did not warm: {type(error).__name__}: {error}')from error
             diff=self._structure(item,request,None)
             if diff:odd.append(f'{request["battle_id"]}/{request["decision_index"]}: {diff}')
         if odd:raise RuntimeError(f'warmup: every warmup root must share one carry structure; against the reference root {self.carry["root"]}: '+'; '.join(odd))
