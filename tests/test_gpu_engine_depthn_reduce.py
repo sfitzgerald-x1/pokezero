@@ -28,6 +28,10 @@ def frame(blocks, seed, *, expanded=.85, terminal=.05, error=.01, leaf_terminal=
                         own_actions[r, w, a, b, :ko] = g.permutation(9)[:ko];opp_actions[r, w, a, b, :kp] = g.permutation(9)[:kp]
                         if g.random() < .2:   # a gap in the slots (an action pruned): slots need not be a prefix
                             own_actions[r, w, a, b, g.integers(0, 9)] = -1
+    for r in range(R):   # a requested opponent has an enumerated reply (WorldPrices' rule); a waiting one may have none
+        for w in range(2):
+            if requested[r, w] and not t1_status[r, w].any():
+                t1_status[r, w, 0, 0] = 1
     leaf_status = np.where(g.random((R, 2, 81, 9, 9)) < leaf_terminal, 1, 4).astype(np.int8)
     leaf_status[g.random((R, 2, 81, 9, 9)) < leaf_error] = 3
     leaf_value = g.uniform(-1, 1, (R, 2, 81, 9, 9)).astype(np.float32)
@@ -55,7 +59,16 @@ def same(a, b):
 class FastBackupTests(unittest.TestCase):
     def check(self, f):
         for r in range(f.pre.shape[0]):
-            want, got = backups.backup_learner_max(f, r), backups.backup_learner_max_fast(f, r)
+            outcome = []
+            for fn in (backups.backup_learner_max, backups.backup_learner_max_fast):   # an exception is part of the outcome
+                try:
+                    outcome.append(('ok', fn(f, r)))
+                except ValueError as error:
+                    outcome.append(('error', str(error)))
+            (kind, want), (kind2, got) = outcome
+            self.assertEqual(kind, kind2, f'root {r}')
+            if kind == 'error':
+                self.assertEqual(want, got);continue
             self.assertEqual(len(want), len(got))
             for w, g in zip(want, got):
                 self.assertTrue(same(w, g), f'root {r}')
@@ -69,6 +82,12 @@ class FastBackupTests(unittest.TestCase):
         for seed, kw in enumerate((dict(expanded=1., terminal=0., error=0.), dict(expanded=0., terminal=.5, error=.5), dict(leaf_error=.3),
                                    dict(leaf_terminal=1.), dict(zeros=True), dict(ties=True), dict(expanded=.5, leaf_error=0.))):
             self.check(frame(4, 100 + seed, **kw))
+
+    def test_an_invalid_surface_raises_as_the_reference(self):
+        f = frame(2, 11);f.root_peer_requested[0, 0] = True;f.t1_status[0, 0] = 0   # requested, nothing enumerated: WorldPrices refuses
+        self.check(f)
+        with self.assertRaises(ValueError):
+            backups.backup_learner_max_fast(f, 0)
 
     def test_a_refusal_anywhere_is_the_references(self):
         f = frame(2, 7, expanded=1., terminal=0., error=0., leaf_error=0.)
