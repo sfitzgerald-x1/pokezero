@@ -51,11 +51,13 @@ REVIEWED = {
      'b46e3faddf766b3e'): 1,
     ('step_with_chance', 'jnp.where(resuming[:, None, None], state.effect_draws, effect_draws)', 'b46e3faddf766b3e'): 2,
     # effect.s.0 / effect.s.1: Bonemerang's second hit, read only under _second. Column 0 is the crit check (== 0, or
-    # crits.is_critical's high-crit threshold); column 1 is the damage roll 85+d in both damage calls.
+    # crits.is_critical's high-crit threshold); column 1 is the damage roll 85+d in both damage calls. Stick: the crit
+    # check reads the attacker's item and species too (critical.ratio 3, below 4); chance_consumers' and phase_d_chance's
+    # plan_for_state observe effect.s.0 < 4 for a Farfetch'd holding Stick (_stick) and refuse ratio 4.
     ('step_with_chance', '_effect = effect_draws[rows, side]', '7f5df1dc7c8e6bf2'): 1,
     ('step_with_chance', 'effect_draws[rows, side]', '7f5df1dc7c8e6bf2'): 1,
     ('step_with_chance', '_effect[:, 0]', '5a8ffe9b41bf21f8'): 1,
-    ('step_with_chance', '_effect[:, 0]', '03f7a7675074d496'): 1,
+    ('step_with_chance', '_effect[:, 0]', 'd3837b047324fe45'): 1,
     ('step_with_chance', '_effect[:, 1]', 'd8920e3f51f499bc'): 1,
     ('step_with_chance', '_effect[:, 1]', 'f743e714554dfea8'): 1,
     # effect.0.3: the Wrap pair tie bit
