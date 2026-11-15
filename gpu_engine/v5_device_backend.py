@@ -95,7 +95,7 @@ class RuntimeBackend:
         elif self.teacher is not None:raise ValueError('D teacher cannot label A/B treatment')
         if self.prepared.pool_sha256!=plan.pool_sha256:raise ValueError('original declared constructor pool differs')
         # V2 self_moves: the plan's declaration is the prepared catalog's (prepare_device_runtime compiles it from the plan).
-        if bool(getattr(self.prepared.catalog.masks,'self_moves',False))!=bool(getattr(plan,'self_moves',False)):
+        if bool(getattr(getattr(self.prepared.catalog,'masks',None),'self_moves',False))!=bool(getattr(plan,'self_moves',False)):
             raise ValueError('prepared encoder self_moves differs from the plan declaration')
         if self._plan is not None and plan is not self._plan and plan!=self._plan:
             raise ValueError('one original worker plan required')
