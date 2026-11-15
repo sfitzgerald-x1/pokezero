@@ -567,6 +567,33 @@ class LiveSearchTests(unittest.TestCase):
             with_list,_=self.run_batch(s,[request(b,d)],outcomes);without,_=self.run_batch(plain,[request(b,d)],outcomes)
             self.assertEqual(strip(with_list[0]),strip(without[0]))
 
+    def test_warm_in_passes_forget_every_session_between_them(self):
+        """The server's in-process slot warms in as a worker does: passes (its warmup requests, then the list), every session
+        forgotten between them, so a later pass may repeat an address or go back in a battle; both passes once before the trace
+        release and once after, each request held to its first-pass outcome."""
+        outcomes={('w0',0):self.outcome(0),('x',0):self.outcome(1),('x',1):self.outcome(2),('y',3):Refusal('PUBLIC_ROOT_REFUSED')}
+        prepared=[];prepare=live.cw.prepare_roots;released=[];release=live.trace_release.release
+        def spy(constructor,requests,**kw):
+            prepared.extend((r['battle_id'],r['decision_index'],r['request_id'])for r in requests);return prepare(constructor,requests,**kw)
+        def releasing():released.append(len(prepared));return release()
+        s=self.search(pricers=self.make_pricers(8,(1,)));first,second=[('x',0),('x',1)],[('x',0),('y',3)]   # x's 0 again, after its 1
+        with Codex(outcomes),patch.object(live.cw,'prepare_roots',side_effect=spy),patch.object(live.trace_release,'release',side_effect=releasing):
+            report=s.warmup([request('w0',0)],warm_in=([request(b,d)for b,d in first],[request(b,d)for b,d in second]))
+        warm=report['warm_in']
+        self.assertEqual({k:warm[k]for k in('requests','passes','kinds','outcomes')},dict(requests=4,passes=2,kinds={'Prepared':3,'PUBLIC_ROOT_REFUSED':1},
+            outcomes=['Prepared','Prepared','Prepared','PUBLIC_ROOT_REFUSED']))
+        ids=[(b,d,f'warm-in-{j}')for j,(b,d)in enumerate(first+second)]
+        before,after=prepared[:released[0]],prepared[released[0]:]
+        self.assertEqual((before[-4:],after[-4:]),(ids,ids))   # request ids run on across the passes; both passes again after the release
+        self.assertEqual((s.constructor.seen,s.constructor.sessions,s.battles),(set(),{},{}))
+        self.assertEqual([k for k in live.cw._PEER_FOLDS if k[0]==id(s.constructor)],[])
+        # the same requests as one pass refuse x's 0 the second time: the passes are what forget it
+        with Codex(outcomes),self.assertRaisesRegex(RuntimeError,'warm-in request warm-in-2: refused SEARCH_REQUEST_ALREADY_ATTEMPTED'):
+            self.search(pricers=self.make_pricers(8,(1,))).warmup([request('w0',0)],warm_in=[request(b,d)for b,d in first+second])
+        # empty passes are dropped; a flat list is one pass
+        with Codex(outcomes):report=self.search(pricers=self.make_pricers(8,(1,))).warmup([request('w0',0)],warm_in=((),[request('x',0)]))
+        self.assertEqual({k:report['warm_in'][k]for k in('requests','passes')},dict(requests=1,passes=1))
+
     def test_a_warm_in_entry_that_warms_nothing_stops_warmup(self):
         outcomes={('w0',0):self.outcome(0),('x',0):self.outcome(1)}
         prepare=live.cw.prepare_roots

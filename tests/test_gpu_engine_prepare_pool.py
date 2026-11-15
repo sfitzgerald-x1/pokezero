@@ -194,6 +194,14 @@ class PoolTests(Fixture, unittest.TestCase):
         self.assertEqual([r.kind for r in results], ['died', 'died']);self.assertIn('no live prepare worker', results[1].text)
         self.assertEqual(pool.workers[0].state, 'failed');self.assertTrue(pool.workers[0].ident.startswith('restart failed: OSError'))
 
+    def test_a_spawn_that_starts_no_process_closes_both_socket_ends(self):
+        pool = pp.PreparePool(FACTORY, dict(W=8, outcomes=[]), workers=1, python='/nonexistent/python');made = [];real = pp.socket.socketpair
+        def pair(*a):
+            ends = real(*a);made.extend(ends);return ends
+        with patch.object(pp.socket, 'socketpair', pair), self.assertRaises(OSError):
+            pool._spawn(pool.workers[0])
+        self.assertEqual([end.fileno() for end in made], [-1, -1])   # closed: no descriptor leaks per failed restart
+
     def test_a_dead_process_is_reported_once_even_without_its_readers_word(self):
         payload = dict(W=8, outcomes=[(('ok', 0), ('outcome', 0, ()))])
         pool = self.pool(2, payload);w = pool.workers[0];generation = w.generation

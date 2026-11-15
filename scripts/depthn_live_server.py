@@ -262,7 +262,8 @@ def run(search,*,host,port,warmup_requests,max_requests,batch_wait_seconds=.005,
         local=pool is not None and(pipeline_options or{}).get('local_battles',0)>0
         if local:
             pool.attach_local(search.constructor)   # batch 1 in process: this search's own prepare, warmed below as the serial server's
-            warm_in=tuple(warm_in)   # the pinned list alone: warmup prepares the warmup requests itself (its own passes, sessions reset)
+            warm_in=tuple(p for p in(tuple(warmup_requests),tuple(warm_in))if p)   # two passes, as a worker's: warmup's own prepares
+            # go to the workers once the pool is attached, so this slot's prepare warms the warmup requests here, then the list
         elif pool is not None:warm_in=()   # nothing prepares in this process: only the workers warm in (at their start)
         if pool is not None:
             started=time.perf_counter();pool.wait_ready();search.attach_pool(pool)
@@ -582,7 +583,11 @@ def header(args,search):
 
 
 def main(argv=None):
-    args=options(argv);saved=read_requests(args.warmup_requests);warm_in=read_warm_in(args);pool=make_pool(args);search=build(args)
+    args=options(argv);saved=read_requests(args.warmup_requests);warm_in=read_warm_in(args);pool=make_pool(args)
+    try:search=build(args)
+    except BaseException:   # the workers started before build(): never orphaned through their warm-in
+        if pool is not None:pool.close()
+        raise
     run(search,host=args.host,port=args.port,warmup_requests=saved,max_requests=args.max_requests,batch_wait_seconds=args.batch_wait_seconds,
         queue_limit=args.queue_limit,telemetry=args.telemetry,header=header(args,search),server_id=args.server_id or f'{socket.gethostname()}:{args.port}',
         pool=pool,pipeline_options=None if pool is None else dict(window_seconds=args.batch_window_seconds,guard_seconds=args.flush_guard_seconds,

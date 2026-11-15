@@ -736,9 +736,13 @@ class DepthNLiveSearch:
             if not isinstance(r,dict)or any(k not in r for k in keys):raise ValueError('saved requests with '+', '.join(keys)+' required')
             pool.append({k:r[k]for k in keys})
         if not pool:raise ValueError('at least one saved request required')
-        for j,r in enumerate(warm_in):
-            if not isinstance(r,dict)or any(k not in r for k in keys):raise ValueError('warm-in requests with '+', '.join(keys)+' required')
-            listed.append(dict({k:r[k]for k in keys},schema=SCHEMA,request_id=f'warm-in-{j}'))
+        passes=[list(p)for p in warm_in]if warm_in and isinstance(warm_in[0],(list,tuple))else[list(warm_in)]if warm_in else[];j=0
+        for one in passes:   # one pass (a list), or passes (lists of them) with every session forgotten between (prepare_warm_in)
+            listed.append([])
+            for r in one:
+                if not isinstance(r,dict)or any(k not in r for k in keys):raise ValueError('warm-in requests with '+', '.join(keys)+' required')
+                listed[-1].append(dict({k:r[k]for k in keys},schema=SCHEMA,request_id=f'warm-in-{j}'));j+=1
+        listed=[p for p in listed if p]
         started=time.perf_counter();self.carry=None;self.warming=True;self.reply_completed=0;self.reply_warm=None
         # No full (gen-2) collection while the programs trace: each would rescan the trace's own growing live state (tens of
         # millions of objects) and find little garbage. Young collections go on; the thresholds come back only after
@@ -772,31 +776,35 @@ class DepthNLiveSearch:
 
     def prepare_warm_in(self,requests,expected=None):
         """Prepare's warm-in (warmup's `warm_in`): each protocol request through prepare_roots and the classification, in order,
-        sessions kept through the list, then every session and this constructor's peer folds forgotten. A root refusal is fine
+        sessions kept through a pass, then every session and this constructor's peer folds forgotten. `requests`: one pass (a
+        list of protocol requests) or passes (lists of them), each forgotten before the next (the server's in-process slot: its
+        warmup requests, then the pinned list, which may share an address or go back in a battle). A root refusal is fine
         (that path compiles too, e.g. PUBLIC_ROOT_REFUSED); a request that warms nothing fails it (RuntimeError naming the
         request): an exception other than a refusal, an address or format refusal (WARM_IN_UNUSABLE: the entry never reached
         the root) or a bare exception kind (a ValueError, KeyError, ... that prepare_roots caught). `expected`: the first pass's
-        outcomes, which this pass (after the trace release) must repeat, request by request. dict(requests, seconds, kinds: count
-        per outcome, outcomes: per request, 'Prepared' or the refusal kind)."""
-        started=time.perf_counter();outcomes=[]
-        try:
-            for j,request in enumerate(requests):
-                rid=request.get('request_id')
-                try:item=cw.prepare_roots(self.constructor,[request],device=self.device,**self._redaction())[0];classify(self.constructor,request)
-                except FATAL:raise
-                except Exception as error:raise RuntimeError(f'warm-in request {rid}: {type(error).__name__}: {error}')from error
-                kind='Prepared'if type(item)is cw.Prepared else str(getattr(item,'kind',type(item).__name__))
-                if kind in WARM_IN_UNUSABLE or kind in{e.__name__ for e in cw.ROOT_ERRORS}:
-                    raise RuntimeError(f'warm-in request {rid}: refused {kind} ({getattr(item,"detail","")}): it warms nothing; fix the list')
-                if expected is not None and kind!=expected[j]:
-                    raise RuntimeError(f'warm-in request {rid}: the second pass (after the trace release) gave {kind}, the first {expected[j]}')
-                outcomes.append(kind)
-        finally:
-            self.reset_sessions()
-            for key in[k for k in list(cw._PEER_FOLDS)if k[0]==id(self.constructor)]:cw._PEER_FOLDS.pop(key,None)   # this constructor's only
+        outcomes, which this pass (after the trace release) must repeat, request by request. dict(requests, passes, seconds,
+        kinds: count per outcome, outcomes: per request in pass order, 'Prepared' or the refusal kind)."""
+        passes=[list(p)for p in requests]if requests and isinstance(requests[0],(list,tuple))else[list(requests)]
+        started=time.perf_counter();outcomes=[];j=0
+        for one in passes:
+            try:
+                for request in one:
+                    rid=request.get('request_id')
+                    try:item=cw.prepare_roots(self.constructor,[request],device=self.device,**self._redaction())[0];classify(self.constructor,request)
+                    except FATAL:raise
+                    except Exception as error:raise RuntimeError(f'warm-in request {rid}: {type(error).__name__}: {error}')from error
+                    kind='Prepared'if type(item)is cw.Prepared else str(getattr(item,'kind',type(item).__name__))
+                    if kind in WARM_IN_UNUSABLE or kind in{e.__name__ for e in cw.ROOT_ERRORS}:
+                        raise RuntimeError(f'warm-in request {rid}: refused {kind} ({getattr(item,"detail","")}): it warms nothing; fix the list')
+                    if expected is not None and kind!=expected[j]:
+                        raise RuntimeError(f'warm-in request {rid}: the second pass (after the trace release) gave {kind}, the first {expected[j]}')
+                    outcomes.append(kind);j+=1
+            finally:
+                self.reset_sessions()
+                for key in[k for k in list(cw._PEER_FOLDS)if k[0]==id(self.constructor)]:cw._PEER_FOLDS.pop(key,None)   # this constructor's only
         kinds={}
         for kind in outcomes:kinds[kind]=kinds.get(kind,0)+1
-        return dict(requests=len(requests),seconds=time.perf_counter()-started,kinds=kinds,outcomes=outcomes)
+        return dict(requests=j,passes=len(passes),seconds=time.perf_counter()-started,kinds=kinds,outcomes=outcomes)
 
     def _release_traces(self,batches,warm_in=(),outcomes=None):
         """The end of warmup, once every program has compiled: empty jit's tracing caches (gpu_engine.trace_release: the

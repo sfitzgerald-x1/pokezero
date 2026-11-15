@@ -225,6 +225,46 @@ class ServerTests(unittest.TestCase):
             S.run(FakeSearch(),host='127.0.0.1',port=free_port(),warmup_requests=[dict(battle_id='w')],max_requests=4,log=lambda row:None)   # no list: warmup(requests)
         self.assertEqual(seen,[([dict(battle_id='w')],[dict(battle_id='x')])])
 
+    def test_the_in_process_slot_warms_in_as_a_worker_does(self):
+        """With a pool and an in-process slot (local_battles), warmup's prepares run in this process: its warm-in is the
+        workers' two passes (the warmup requests, then the list), or the warmup requests alone without a list (R1: the slot
+        warm at READY without --prepare-warm-in). Without the slot nothing prepares here, so there is no warm-in."""
+        seen=[]
+        class Warming(FakeSearch):
+            constructor=object()
+            def warmup(self,requests,warm_in=()):seen.append(tuple(tuple(p)for p in warm_in));return super().warmup(requests)
+            def attach_pool(self,pool):self.pool=pool
+        class Pool:
+            size=1;workers=();closed=False
+            def attach_local(self,constructor):self.local=constructor
+            def wait_ready(self):pass
+            def rss(self):return 0
+            def close(self):self.closed=True
+        class Pipeline:
+            def __init__(self,*a,**kw):pass
+            def start(self):return self
+        import gpu_engine.depthn_batching as batching
+        warmup,listed=[dict(battle_id='w')],(dict(battle_id='x'),dict(battle_id='y'))
+        with patch.object(S.asyncio,'run',lambda coroutine:coroutine.close()),patch.object(batching,'Pipeline',Pipeline):
+            for kw in(dict(warm_in=listed),dict()):
+                pool=Pool();S.run(Warming(),host='127.0.0.1',port=free_port(),warmup_requests=warmup,max_requests=4,log=lambda row:None,
+                    pool=pool,pipeline_options=dict(local_battles=2),**kw)
+                self.assertTrue(pool.closed)
+            S.run(Warming(),host='127.0.0.1',port=free_port(),warmup_requests=warmup,max_requests=4,log=lambda row:None,pool=Pool(),
+                pipeline_options=dict(local_battles=0),warm_in=listed)   # workers only: they warm in at their start
+        self.assertEqual(seen,[((dict(battle_id='w'),),listed),((dict(battle_id='w'),),),()])
+
+    def test_main_closes_the_pool_when_build_fails(self):
+        """The prepare workers start before build(): a build that raises closes them (no orphaned workers warming in)."""
+        closed=[]
+        class Pool:
+            def close(self):closed.append(True)
+        args=NS(warmup_requests='w.jsonl')
+        with patch.object(S,'options',return_value=args),patch.object(S,'read_requests',return_value=[]),patch.object(S,'read_warm_in',return_value=()),\
+                patch.object(S,'make_pool',return_value=Pool()),patch.object(S,'build',side_effect=RuntimeError('no device')):
+            with self.assertRaisesRegex(RuntimeError,'no device'):S.main([])
+        self.assertEqual(closed,[True])
+
     def test_server_id_stamps_responses_only_when_given(self):
         plain=S.Recorder(FakeSearch()).process_many([request(1)]);self.assertNotIn('server_id',plain[0])   # no id: the search's responses, unchanged
         named=S.Recorder(FakeSearch(),server_id='h:1').process_many([request(1),request(2)])

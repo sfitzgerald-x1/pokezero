@@ -57,6 +57,26 @@ class AtomicCacheTests(unittest.TestCase):
             self.assertEqual(atomic_compilation_cache.STATUS['installed'], False);self.assertIn('patched shape', atomic_compilation_cache.STATUS['reason'])
         self.assertTrue(atomic_compilation_cache.install());self.assertTrue(atomic_compilation_cache.STATUS['installed'])
 
+    def test_an_entry_gets_the_mode_jaxs_own_write_gives(self):   # mkstemp's 0600 would hide entries from another user's reader
+        cache = self.lru.LRUCache(self.dir.name, max_size=-1);before = dict(atomic_compilation_cache.STATUS)
+        cache.put('k', b'v');reference = os.path.join(self.dir.name, 'reference')
+        with open(reference, 'wb') as f:   # Path.write_bytes' open: 0666 under the process umask
+            f.write(b'v')
+        mode = lambda path: os.stat(path).st_mode & 0o777
+        self.assertEqual(mode(os.path.join(self.dir.name, 'k' + self.lru._CACHE_SUFFIX)), mode(reference))
+        self.assertEqual(atomic_compilation_cache.STATUS['atomic_writes'], before['atomic_writes'] + 1)
+        self.assertEqual(atomic_compilation_cache.STATUS['jax_writes'], before['jax_writes'])
+
+    def test_a_cache_this_patch_does_not_know_keeps_jaxs_own_put(self):   # neither attribute's value is assumed
+        for attribute in ('_is_local', 'eviction_enabled'):
+            with self.subTest(attribute=attribute):
+                cache = self.lru.LRUCache(self.dir.name, max_size=-1);setattr(cache, attribute, None);before = dict(atomic_compilation_cache.STATUS)
+                with mock.patch.object(os, 'replace', side_effect=AssertionError('not JAX\'s put')):
+                    cache.put(attribute, b'v')
+                self.assertEqual(cache.get(attribute), b'v')
+                self.assertEqual(atomic_compilation_cache.STATUS['jax_writes'], before['jax_writes'] + 1)
+                self.assertEqual(atomic_compilation_cache.STATUS['atomic_writes'], before['atomic_writes'])
+
     def test_a_size_limited_cache_keeps_jaxs_own_put(self):
         if self.lru.filelock is None:
             self.skipTest('filelock is not installed')

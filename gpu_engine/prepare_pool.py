@@ -554,8 +554,11 @@ class PreparePool:
         parent, child = socket.socketpair()
         from multiprocessing.connection import Connection
         w.generation += 1;w.state = 'starting';w.busy = None;w.started = time.monotonic();w.ident = None
-        w.process = subprocess.Popen([self.python, '-u', '-m', 'gpu_engine.prepare_pool', '--worker', str(child.fileno())],
-            pass_fds=(child.fileno(),), env=self._environment(), stdin=subprocess.DEVNULL)
+        try:
+            w.process = subprocess.Popen([self.python, '-u', '-m', 'gpu_engine.prepare_pool', '--worker', str(child.fileno())],
+                pass_fds=(child.fileno(), ), env=self._environment(), stdin=subprocess.DEVNULL)
+        except BaseException:   # no process: neither end of the pair is left open
+            parent.close();child.close();raise
         child.close()
         if self.cpus is not None:   # set from here (no preexec_fn in a threaded parent); it applies before the worker's JAX starts its pools
             try:
