@@ -320,7 +320,7 @@ class DigestAndRuleTests(unittest.TestCase):
                 row('magiccoat', 14, 'Status'), row('batonpass', 1, 'Status'), row('extremespeed', 1, 'Physical'),
                 row('shadowball', 8, 'Physical'), row('psychic', 14, 'Special'), row('thunderbolt', 13, 'Special'),
                 row('hiddenpowerghost', 8, 'Physical'), row('signalbeam', 7, 'Physical'), row('trick', 14, 'Status')]
-        L = 15;s = pre_arrays(L);actions = np.zeros((L, 2), np.int32);s['hidden_power_type'] = np.zeros((L, 2, 6), np.int32)
+        L = 16;s = pre_arrays(L);actions = np.zeros((L, 2), np.int32);s['hidden_power_type'] = np.zeros((L, 2, 6), np.int32)
         struggle = np.zeros((L, 2), bool)
         s['item'][0, 0, 0] = SCARF                                                         # 0: Tackle (Normal)
         s['item'][1, 0, 0] = SCARF;s['moves'][1, 0, 0] = SB                                 # 1: Shadow Ball only
@@ -337,13 +337,14 @@ class DigestAndRuleTests(unittest.TestCase):
         s['ability'][12, 0, 0] = PLUS;s['ability'][12, 1, 0] = PLUS;s['moves'][12, 0, 0] = TB    # 12: Plus vs Plus
         s['ability'][13, 0, 0] = PLUS;s['ability'][13, 1, 3] = MINUS;s['moves'][13, 0, 0] = TB;actions[13, 1] = 6  # 13: Minus enters
         s['ability'][14, 0, 0] = PLUS;s['ability'][14, 1, 0] = MINUS                       # 14: Tackle only
+        s['ability'][15, 1, 0] = MARVEL;s['moves'][15, 0, 0] = CURSE;struggle[15, 0] = True     # 15: Struggle (physical) into it
         named = {f'state.{k}': v for k, v in s.items()};named['actions'] = actions
         p = Pre(named, vocab, np.append(CALLABLE, [False] * len(extra)), struggle, moves=rows)
         dm = PLUGINS['DM'];no = [False, False];t0 = [True, False]
-        self.assertEqual(dm['silkscarf'](p).tolist(), [t0, no, no, t0] + [no] * 11)
-        self.assertEqual(dm['twistedspoon'](p).tolist(), [no] * 4 + [t0, no, t0] + [no] * 8)
-        self.assertEqual(dm['marvelscale'](p).tolist(), [no] * 7 + [t0, no, t0, [True, True]] + [no] * 4)
-        self.assertEqual(dm['plusminus'](p).tolist(), [no] * 11 + [t0, no, t0, no])
+        self.assertEqual(dm['silkscarf'](p).tolist(), [t0, no, no, t0] + [no] * 12)
+        self.assertEqual(dm['twistedspoon'](p).tolist(), [no] * 4 + [t0, no, t0] + [no] * 9)
+        self.assertEqual(dm['marvelscale'](p).tolist(), [no] * 7 + [t0, no, t0, [True, True]] + [no] * 4 + [t0])
+        self.assertEqual(dm['plusminus'](p).tolist(), [no] * 11 + [t0, no, t0, no, no])
         # Without move rows every move counts (a superset): lane 1's Shadow Ball and lane 14's Tackle count.
         q = Pre(named, vocab, np.append(CALLABLE, [False] * len(extra)), struggle)
         self.assertTrue(dm['silkscarf'](q)[1, 0] and dm['plusminus'](q)[14, 0])
@@ -353,6 +354,23 @@ class DigestAndRuleTests(unittest.TestCase):
         self.assertEqual(lane_verdict({('state.status', 1)}, {'silkscarf': [0]}, None)[0], [('state.status', 1)])
         cascade = dict(ko_sides=[False, False], mon_ok=lambda leaf, side: False, families=())
         self.assertEqual(lane_verdict({('state.status', 1)}, {'silkscarf': [0]}, None, cascade=cascade)[0], [])
+
+    def test_ko_timing_lane_applies_cascade_allowed_only(self):
+        """DM (GPU pass, shard-000294 lane 741): with the faint set unchanged, a damage change moved a faint within the step
+        (a Double-Edge user's recoil KO before the target's move in one tree, the target's own KO of it after its move in
+        the other), so the target's move bookkeeping differs. A KO-timing lane accepts that for the CASCADE_ALLOWED
+        effects (pinch, the DM effects) and gives nothing else, nor any KO-consequence rule."""
+        from gpu_engine.v2e_regress import lane_verdict
+        moved = {('state.pp', 0), ('step.placeholder_moves', None), ("trackers.mon_features['moves_shown']", 0),
+                 ('trackers.pp_used', 0), ('trackers.tendency.opportunities', 0)}
+        for effect in ('marvelscale', 'pinch', 'silkscarf', 'plusminus', 'twistedspoon'):
+            self.assertEqual(lane_verdict(moved, {effect: [1]}, None)[0], sorted(moved, key=lambda x: (x[0], -1 if x[1] is None else x[1])))
+            self.assertEqual(lane_verdict(moved, {effect: [1]}, None, timing=True)[0], [], effect)
+            accepted = [];lane_verdict(moved, {effect: [1]}, None, timing=True, cascade_accepted=accepted)
+            self.assertEqual(sorted(accepted, key=str), sorted(moved, key=str))
+        self.assertEqual(len(lane_verdict(moved, {'irontail': [1]}, None, timing=True)[0]), len(moved))
+        # No KO-consequence rule on a timing lane: a fainted-mon leaf with a non-cascade effect stays unexpected.
+        self.assertEqual(lane_verdict({('state.forced_switch', 0)}, {'irontail': [1]}, None, timing=True)[0], [('state.forced_switch', 0)])
 
     def test_tier_d_pinch_accepts_anything_only_on_a_ko_cascade(self):
         """D: a pinch-boosted KO that moved within the step decides whether the target's action ran (the GPU pass's 13

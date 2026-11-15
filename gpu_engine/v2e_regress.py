@@ -622,9 +622,11 @@ CONFUSING_MOVES = ('signalbeam', 'confuseray', 'swagger', 'supersonic', 'dynamic
                    'waterpulse', 'flatter', 'teeterdance', 'dizzypunch', 'sweetkiss', 'rockclimb')
 
 
-def dm_candidate_moves(p):
+def dm_candidate_moves(p, *, typed=True):
     """DM: [L,2,K] each candidate's resolved type (Hidden Power by the active's own type, as pinch_active resolves it; -1:
-    unknown, any), and [L,2,K] whether it is a damaging hit (a candidate that is not a Status move or Struggle's ???)."""
+    unknown, any), and [L,2,K] whether it is a damaging hit: a candidate that is not a Status move; typed=True also drops
+    Struggle, whose ??? type no type item matches (it stays a physical hit for Marvel Scale: GPU pass shard-000434 lane
+    2047, a no-PP Politoed's Struggle into a sleeping Milotic)."""
     _, status, mtype, hidden = p.move_facts()
     types = p.vocab['types']
     dark = types.index('dark') if 'dark' in types else -1
@@ -633,7 +635,8 @@ def dm_candidate_moves(p):
     else:hp_type = np.full((p.lanes, 2), -1)
     c = p.candidates;cc = np.clip(c, 0, len(mtype) - 1)
     resolved = np.where(hidden[cc], hp_type[..., None], mtype[cc])
-    damaging = (c > 0) & ~status[cc] & (c != p.ids.get('struggle', -1))
+    damaging = (c > 0) & ~status[cc]
+    if typed:damaging &= c != p.ids.get('struggle', -1)
     return resolved, damaging
 
 
@@ -663,7 +666,7 @@ def marvel_scale_target(p):
     whose active may hold Marvel Scale (holder_target: the active, a switch target or an entrant holder, a Trace copy), and
     a holder's own side when its active may hit itself in confusion (confused, or a foe may confuse it this step).
     Status is not predicted (it may land earlier in the step)."""
-    resolved, damaging = dm_candidate_moves(p)
+    resolved, damaging = dm_candidate_moves(p, typed=False)
     physical, _ = dm_physical(p, resolved)
     attacker = holder_target(p, 'marvelscale')[:, ::-1] & (damaging & physical).any(-1)
     confusable = (p.active('confusion_counter') > 0) | p.side_uses(*CONFUSING_MOVES)[:, ::-1]
@@ -960,7 +963,9 @@ KO_ALLOWED = {'bonemerang': dict(user=('status', 'clause'))}
 # action runs at all: its PP, action history and move lines, and whatever that move does to either side (a status on the
 # pinch user, Spikes on its side, its own Baton Pass flag or recharge). So on a KO-cascade lane (the faint set, the
 # residual phase or the battle end moved) a pinch lane accepts any leaf, as a sleep landing does (A1); every other pinch
-# lane keeps the damage allowance (ALLOWED['pinch']).
+# lane keeps the damage allowance (ALLOWED['pinch']). DM: the same holds on a KO-timing lane (a mon faints this step in
+# either tree with the faint set unchanged, the faint moved before or after the other side's queued action; the patched
+# pass's timing_lanes): lane_verdict's timing applies CASCADE_ALLOWED there, and nothing else of the KO rules.
 CASCADE_ALLOWED = {'pinch': ALL}
 # DM: like the pinch boost, a stat modifier changes a hit's damage: the target's HP and what follows from it, and the
 # attacker's from the reply (Counter/Mirror Coat), recoil, drain and its HP items; a Marvel Scale self-hit is its holder's
@@ -1016,7 +1021,7 @@ def predicates(prs):
     return table
 
 
-def lane_verdict(changed, effects, side_axis, *, cascade=None, waive=(), cascade_accepted=None):
+def lane_verdict(changed, effects, side_axis, *, cascade=None, waive=(), cascade_accepted=None, timing=False):
     """changed: {(leaf, side)} for side-axis leaves, {(leaf, None)} for side-less ones;
     effects: {effect: [actor sides]}; cascade: None, or dict(ko_sides=[2] bool (sides whose every tracker
     may follow a KO), mon_ok=callable(leaf, side) -> a KO_MON_LEAVES leaf differs only on that side's
@@ -1026,6 +1031,8 @@ def lane_verdict(changed, effects, side_axis, *, cascade=None, waive=(), cascade
     optional retype_ok=callable(leaf, side) -> bool: that side's RETYPE_LEAVES differ from the base only at a Color Change
     holder that fainted this step here or (un)fainted relative to the base).
     cascade_accepted: an optional list that collects the entries only CASCADE_ALLOWED accepted (listed, so they stay visible).
+    timing: a KO-timing lane (a mon faints this step in either tree): CASCADE_ALLOWED applies there too, but none of the
+    KO-consequence rules (the faint set is the same).
     Returns (unexpected entries, waived entries, entries accepted only as KO consequences)."""
     unexpected, waived, by_ko = [], [], []
     for leaf, side in sorted(changed, key=lambda x: (x[0], -1 if x[1] is None else x[1])):
@@ -1035,8 +1042,8 @@ def lane_verdict(changed, effects, side_axis, *, cascade=None, waive=(), cascade
             if side is None:ok |= allowed_leaf(leaf, rule['glob'])
             else:ok |= any(allowed_leaf(leaf, rule['user' if side == a else 'target']) for a in actors)
             if ok:break
-        if not ok and cascade is not None:
-            # D: an effect's allowance on a KO-cascade lane only (CASCADE_ALLOWED).
+        if not ok and (cascade is not None or timing):
+            # D: an effect's allowance on a KO-cascade lane only (CASCADE_ALLOWED); DM: or a KO-timing lane.
             ok = any(allowed_leaf(leaf, CASCADE_ALLOWED[effect]['glob' if side is None else
                                   ('user' if side in actors else 'target')])
                      for effect, actors in effects.items() if effect in CASCADE_ALLOWED)
@@ -2151,7 +2158,7 @@ def patched_pass(args, *, step_override=None, prepared=None):
     callable_moves = np.asarray(tables.engine_tables.sleep_talk.callable)
     destiny_bond = getattr(state_module, 'DESTINY_BOND', DEFAULT_DESTINY_BOND)
     counts = dict(lane_steps=0, done_skipped=0, unchanged=0, changed_and_involved=0, changed_but_uninvolved=0,
-                  changed_involved_unexpected_fields=0, ko_cascade=0, phase_shift=0, terminal=0, terminal_residual=0, waived=0,
+                  changed_involved_unexpected_fields=0, ko_cascade=0, ko_timing=0, phase_shift=0, terminal=0, terminal_residual=0, waived=0,
                   rule_explained=0, faint_rule_leaves=0, clear_volatile_leaves=0, effect_draws_saved=0,
                   recharge_leaves=0, bag_leaves=0, trick_witness_leaves=0, ledger_leaves=0, m2_leaves=0, m2_wrong_mon=0, m2_forced=0,
                   wh_leaves=0, wh_bad=0, wh_trick_order=0, wh_dropped=0, facade_dropped=0, sacredfire_dropped=0,
@@ -2235,6 +2242,12 @@ def patched_pass(args, *, step_override=None, prepared=None):
             done = np.asarray(named['state.done'])[:real]
             ko_mons_all = result['fainted'][:real] != base['fainted']                       # [L,2,6] (un)fainted mons
             cascade_lanes = ko_mons_all.reshape(real, -1).any(-1)
+            # DM (GPU pass, shard-000294 lane 741): a damage change can move a faint within the step while the same mon
+            # faints in both trees (a Double-Edge's recoil KO before the target's move here, the target's own move after
+            # it there), which decides whether the other side's queued action runs: its PP, action history and lines.
+            # The faint set is unchanged, so cascade_lanes misses it; a faint this step in either tree is a KO-timing
+            # lane, where CASCADE_ALLOWED (the damage effects: pinch, the DM effects, Stick) applies as on a cascade.
+            timing_lanes = (np.asarray(result['fainted'][:real], bool) | np.asarray(base['fainted'], bool)).reshape(real, -1).any(-1)
             # A phase shift: the residual was deferred in exactly one tree (see FAMILIES['residual']).
             phase_lanes = diff[:, position['state.pending_residual']].any(-1) if 'state.pending_residual' in position \
                 else np.zeros(real, bool)
@@ -2429,8 +2442,9 @@ def patched_pass(args, *, step_override=None, prepared=None):
                     cascade_info = dict(ko_sides=ko_mons.any(-1), mon_ok=mon_ok, families=families, effect_ok=effect_ok,
                                         retype_ok=retype_ok)
                 by_cascade = []
+                timing = bool(timing_lanes[lane]) and not cascade
                 unexpected, waived, by_ko = lane_verdict(entries, effects, side_axis, cascade=cascade_info, waive=args.waive or (),
-                    cascade_accepted=by_cascade) if changed_rest and effects else ([], [], [])
+                    cascade_accepted=by_cascade, timing=timing) if changed_rest and effects else ([], [], [])
                 m2_wrong = []
                 if changed_rest and m2_rules and any(e in effects for e in M2_EFFECTS):
                     # M2: an M2 effect's per-mon leaves may differ only at that side's pre- or post-step active.
@@ -2460,7 +2474,7 @@ def patched_pass(args, *, step_override=None, prepared=None):
                 if kind == 'rule':counts['rule_explained'] += 1
                 elif kind in ('involved', 'unexpected'):
                     counts['changed_and_involved' if kind == 'involved' else 'changed_involved_unexpected_fields'] += 1
-                    counts['ko_cascade'] += cascade;counts['phase_shift'] += phase;counts['terminal'] += terminal
+                    counts['ko_cascade'] += cascade;counts['ko_timing'] += timing;counts['phase_shift'] += phase;counts['terminal'] += terminal
                     counts['terminal_residual'] += terminal_residual
                     counts['waived'] += bool(waived)
                     for e, actors in effects.items():
@@ -2479,7 +2493,7 @@ def patched_pass(args, *, step_override=None, prepared=None):
                 else:
                     counts['changed_but_uninvolved'] += 1
                     for n in changed_rest:uninvolved_leaves[n] = uninvolved_leaves.get(n, 0) + 1
-                listing.write(json.dumps(dict(shard=path.name, lane=lane, tick=tick, kind=kind, ko_cascade=cascade, phase_shift=phase,
+                listing.write(json.dumps(dict(shard=path.name, lane=lane, tick=tick, kind=kind, ko_cascade=cascade, ko_timing=timing, phase_shift=phase,
                     terminal=terminal, terminal_residual=terminal_residual,
                     involved={k: v for k, v in effects.items()}, leaves=changed, entries=labels, faint_rule=faint_explained,
                     clear_volatile_rule=[f'{l}@{side}' for l, side in clear_explained],
