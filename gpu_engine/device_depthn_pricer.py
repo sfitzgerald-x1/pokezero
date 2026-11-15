@@ -21,12 +21,15 @@ Programs (compile is flat in depth and, past turn 1, independent of capacity):
   with each node's gather, views and one draw as above, the step, masks and
   observe once over every lane, and the forward in blocks_per_call chunks of
   exactly B*K rows. place_wide_leaf writes P_leaf's dense positions (dropped
-  lanes stay zero), so placement, leaf status, error and digest are P_leaf's
-  by construction (per-lane programs, the same inputs per lane). leaf_value
-  equals P_leaf's only while the forward is row-position invariant (a lane
-  sits at another row of its 2,187-row chunk): that held on the GB300 frame
-  gate under the pinned stack and autotune cache, NOT on CPU (one leaf value
-  of ~430k differed there, its digest equal). Re-gate
+  lanes stay zero), so placement and digest are P_leaf's by construction
+  (per-lane programs, the same inputs per lane), and so are leaf status and
+  error except the forward-usability code (error 4 and the status 3 it sets:
+  the forward's valid flag, finite outputs and |v| <= 1 on the lane's own
+  row). That code and leaf_value equal P_leaf's only while the forward is
+  row-position invariant (a lane sits at another row of its 2,187-row
+  chunk): that held on the GB300 frame gate under the pinned stack and
+  autotune cache, NOT on CPU (1 of 429,928 leaf values over 7 CPU-gated roots
+  differed, in a root of 102,577 leaves, its digest equal). Re-gate
   (scripts/depthn_wide_leaf_frame_gate.py) after any jax/XLA, cuBLAS or
   autotune-cache change.
 Selection is an input to the block programs: per node, each seat's slot ->
@@ -670,11 +673,13 @@ class DepthNPricer:
         blocks_per_call*B*K packed leaf lanes, only enumerated lanes packed
         (pack_wide_leaf), the forward in blocks_per_call chunks of B*K rows;
         `wide_nodes` node slots per call (default lanes//16). Expand plies keep
-        the blocks programs. Placement, status, error and digest are the
-        blocks layout's by construction; leaf_value matches only while the
-        forward is row-position invariant (gated on GB300 under the pinned
-        stack, not on CPU; module docstring). Its program key starts
-        ('leaf','wide',...), so the two layouts never share a program.
+        the blocks programs. Placement and digest are the blocks layout's by
+        construction, and so are status and error except the
+        forward-usability code (error 4 / status 3); that code and leaf_value
+        match only while the forward is row-position invariant (gated on
+        GB300 under the pinned stack, not on CPU; module docstring). Its
+        program key starts ('leaf','wide',...), so the two layouts never
+        share a program.
         """
         if type(capacity)is not int or capacity<=0 or type(actor_capacity)is not int or actor_capacity<=0:
             raise ValueError('finite explicit root/actor capacities required')

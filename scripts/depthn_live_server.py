@@ -220,9 +220,10 @@ def parser():
     p.add_argument('--block-lanes',type=int,default=2187);p.add_argument('--blocks-per-call',type=int,default=16)
     p.add_argument('--leaf-layout',choices=('blocks','wide'),default='blocks',help='the DepthN leaf program (device_depthn_pricer.LEAF_LAYOUTS): '
         'blocks (default, the programs as before) or wide (one iteration of --blocks-per-call forward chunks of the blocks\' B*K rows per call, '
-        'only enumerated lanes packed). Placement, status, error and digest are the blocks layout\'s by construction; leaf values match only '
-        'while the forward is row-position invariant: gated on GB300 under the pinned stack, not on CPU, so a run serving wide passes '
-        'scripts/depthn_wide_leaf_frame_gate.py at bind time. The pricer identity records the layout when not blocks')
+        'only enumerated lanes packed). Placement and digest are the blocks layout\'s by construction, and so are leaf status and error '
+        'except the forward-usability code (error 4); that code and the leaf values match only while the forward is row-position invariant: '
+        'gated on GB300 under the pinned stack, not on CPU, so a run serving wide passes scripts/depthn_wide_leaf_frame_gate.py at bind time. '
+        'The pricer identity records the layout when not blocks')
     p.add_argument('--wide-nodes',type=int,help='node slots per wide leaf call (default its lanes // 16; only with --leaf-layout wide)')
     p.add_argument('--warmup-requests',required=True,help='JSONL of saved Showdown requests, one object per line with the eight address keys of '
         'Codex\'s ladder request (battle_id, owner, stream_id, decision_index, generation, prefix_sha256, lines, own_request_line)')

@@ -9,9 +9,10 @@ chance draw, a dropped lane) must break the equality.
 
 What these tests do NOT cover: the fakes' forward is row-local arithmetic (each row's output depends on its own row only, in
 any batch), so they check packing, placement and the per-lane plumbing, not numeric invariance. Whether the real champion
-forward gives a lane the same bits at another row of its chunk is a property of the compiled GEMMs: it held on the GB300
-frame gate under the pinned stack and not on CPU, and scripts/depthn_wide_leaf_frame_gate.py re-checks it per stack (its CLI
-and gate are exercised here on the fake engine)."""
+forward gives a lane the same bits at another row of its chunk (its value and its usability code, error 4) is a property of
+the compiled GEMMs: it held on the GB300 frame gate under the pinned stack and not on CPU, and
+scripts/depthn_wide_leaf_frame_gate.py re-checks it per stack (its CLI and gate are exercised here on the fake engine, a
+leafless batch included)."""
 import inspect
 import textwrap
 import unittest
@@ -252,13 +253,26 @@ class LiveLayoutTests(unittest.TestCase):
         outcomes={(f'l{i}',0):self.outcome(2+i)for i in range(3)};requests=[dict(LS.request(f'l{i}',0),request_id=f'l{i}')for i in range(3)]
         blocks,wide=G.gate_pricers(s,chunks=2);self.assertEqual((blocks.leaf_layout,wide.leaf_layout,wide.blocks_per_call),('blocks','wide',2))
         quiet=lambda line:None
-        with LS.Codex(outcomes):report=G.gate(s,blocks,wide,requests,log=quiet)
-        self.assertEqual((report['verdict'],report['tally']['priced'],report['tally']['equal']),('PASS',3,3));json.dumps(report,default=repr)
+        with LS.Codex(outcomes):report=G.gate(s,blocks,wide,requests,min_priced=3,log=quiet)
+        self.assertEqual((report['verdict'],report['tally']['priced'],report['tally']['equal'],report['reasons']),('PASS',3,3,[]));json.dumps(report,default=repr)
+        self.assertGreater(report['tally']['leaves'],0)
+        with LS.Codex(outcomes):short=G.gate(s,blocks,wide,requests,min_priced=4,log=quiet)   # every root equal, but under --min-priced
+        self.assertEqual(short['verdict'],'FAIL');self.assertIn('under --min-priced 4',short['reasons'][0])
+        # G1: roots that price without a single leaf (every turn-1 cell terminal: mode 1) run no wide call and prove nothing
+        leafless={(f'z{i}',0):self.cw.made(20+i,0,(1,)*8)for i in range(3)};flat=[dict(LS.request(f'z{i}',0),request_id=f'z{i}')for i in range(3)]
+        with LS.Codex(leafless):vacuous=G.gate(s,blocks,wide,flat,min_priced=1,log=quiet)
+        self.assertEqual((vacuous['verdict'],vacuous['tally']['priced'],vacuous['tally']['leafless'],vacuous['tally']['leaves']),('FAIL',0,3,0))
+        self.assertEqual({r['status']for r in vacuous['roots']},{'NO_LEAVES'});self.assertIn('no enumerated leaves',vacuous['reasons'])
+        with LS.Codex(leafless):control=G.gate(s,blocks,wide,flat,min_priced=1,negative_control=True,log=quiet)
+        self.assertEqual(control['verdict'],'FAIL')   # a negative control over leafless roots has no power either
+        fresh_wide=G.gate_pricers(s,chunks=2)
+        with LS.Codex(leafless):nowide=G.gate(s,*fresh_wide,flat,min_priced=0,log=quiet)   # even with no minimum: no wide program ran
+        self.assertIn('no wide leaf program in the table',nowide['reasons']);self.assertEqual(nowide['verdict'],'FAIL')
         self.assertTrue(any(k.startswith("('leaf', 'wide'")and h for k,h in report['programs'].items()))   # the compiled leaf programs' HLO hashes
-        with LS.Codex(outcomes):neg=G.gate(s,blocks,wide,requests,negative_control=True,log=quiet)
+        with LS.Codex(outcomes):neg=G.gate(s,blocks,wide,requests,min_priced=3,negative_control=True,log=quiet)
         self.assertEqual((neg['verdict'],neg['tally']['differ']),('PASS',3));self.assertTrue(all('leaf_value'in r['differ']or'leaf_status'in r['differ']for r in neg['roots']))
         shifted=G._off_by_one(dn.place_wide_leaf)   # the same shift as a real placement bug (no control flag): the gate FAILS
-        with LS.Codex(outcomes),patch.object(dn,'place_wide_leaf',shifted):bad=G.gate(s,blocks,wide,requests,log=quiet)
+        with LS.Codex(outcomes),patch.object(dn,'place_wide_leaf',shifted):bad=G.gate(s,blocks,wide,requests,min_priced=3,log=quiet)
         self.assertEqual((bad['verdict'],bad['tally']['differ']),('FAIL',3))
         # the CLI: server flags after --, exit 0 PASS / 1 FAIL / 2 bad arguments, one summary line, the JSON report
         server=['--showdown-root','s','--node-binary','n','--metadata','m','--expected-metadata-sha256','a'*64,'--vocabulary','v',
@@ -270,7 +284,7 @@ class LiveLayoutTests(unittest.TestCase):
             with open(roots,'w')as f:
                 for r in requests:f.write(json.dumps({k:r[k]for k in keys})+'\n')
             def cli(name,*extra,bug=None):
-                out=io.StringIO();argv=['--roots',roots,'--rung','DN2W8','--out',os.path.join(tmp,name),'--max-roots','2',*extra,'--']+server
+                out=io.StringIO();argv=['--roots',roots,'--rung','DN2W8','--out',os.path.join(tmp,name),'--max-roots','2','--min-priced','2',*extra,'--']+server
                 with patch.dict(os.environ,TS.PINNED),patch.object(TS.S,'build',return_value=s),LS.Codex(outcomes),redirect_stdout(out):
                     if bug is None:rc=G.main(argv)
                     else:
@@ -279,9 +293,15 @@ class LiveLayoutTests(unittest.TestCase):
             rc,line,rep=cli('pass.json')
             self.assertEqual(rc,0);self.assertTrue(line.startswith('WIDE_LEAF_FRAME_GATE PASS rung=DN2W8 chunks=4 roots=2 priced=2'),line)
             self.assertEqual((rep['tally']['roots'],rep['chunks'],rep['stack']['platform']),(2,4,'cpu'));self.assertIn('jax',rep['stack'])
+            self.assertTrue({'xla_flags','compilation_cache_dir','autotune_cache_dir','tree_head'}<=set(rep['stack']));self.assertEqual(rep['tree_commit_label'],s.tree_commit)
             rc,line,rep=cli('neg.json','--negative-control');self.assertEqual(rc,0);self.assertIn('PASS (negative control)',line)
             rc,line,rep=cli('fail.json',bug=shifted);self.assertEqual(rc,1);self.assertIn('FAIL',line)
-            for bad in(['--chunks','0'],['--max-roots','0']):
+            # N4: a setup error (the search cannot be built) is exit 3, not a FAIL
+            out=io.StringIO()
+            with patch.dict(os.environ,TS.PINNED),patch.object(TS.S,'build',side_effect=RuntimeError('no GPU')),redirect_stdout(out):
+                rc=G.main(['--roots',roots,'--rung','DN2W8','--out',os.path.join(tmp,'setup.json'),'--']+server)
+            self.assertEqual(rc,3);self.assertIn('SETUP_ERROR build: RuntimeError: no GPU',out.getvalue());self.assertFalse(os.path.exists(os.path.join(tmp,'setup.json')))
+            for bad in(['--chunks','0'],['--max-roots','0'],['--min-priced','0'],['--out',os.path.join(tmp,'missing','x.json')]):
                 with self.subTest(bad=bad),redirect_stdout(io.StringIO()),__import__('contextlib').redirect_stderr(io.StringIO()),self.assertRaises(SystemExit)as e:
                     G.main(['--roots',roots,'--rung','DN2W8','--out',os.path.join(tmp,'x.json'),*bad,'--']+server)
                 self.assertEqual(e.exception.code,2)
