@@ -220,7 +220,9 @@ def parser():
     p.add_argument('--block-lanes',type=int,default=2187);p.add_argument('--blocks-per-call',type=int,default=16)
     p.add_argument('--leaf-layout',choices=('blocks','wide'),default='blocks',help='the DepthN leaf program (device_depthn_pricer.LEAF_LAYOUTS): '
         'blocks (default, the programs as before) or wide (one iteration of --blocks-per-call forward chunks of the blocks\' B*K rows per call, '
-        'only enumerated lanes packed; the same frames); the pricer identity records it when not blocks')
+        'only enumerated lanes packed). Placement, status, error and digest are the blocks layout\'s by construction; leaf values match only '
+        'while the forward is row-position invariant: gated on GB300 under the pinned stack, not on CPU, so a run serving wide passes '
+        'scripts/depthn_wide_leaf_frame_gate.py at bind time. The pricer identity records the layout when not blocks')
     p.add_argument('--wide-nodes',type=int,help='node slots per wide leaf call (default its lanes // 16; only with --leaf-layout wide)')
     p.add_argument('--warmup-requests',required=True,help='JSONL of saved Showdown requests, one object per line with the eight address keys of '
         'Codex\'s ladder request (battle_id, owner, stream_id, decision_index, generation, prefix_sha256, lines, own_request_line)')
@@ -278,6 +280,8 @@ def options(argv=None):
         p.error('--eager-peer-fold folds the peer wire for the redaction: it needs --redact-private-reveals or --peer-view-b')
     if bool(getattr(args,'prepare_warm_in',None))!=bool(getattr(args,'prepare_warm_in_sha256',None)):
         p.error('--prepare-warm-in and --prepare-warm-in-sha256 go together')
+    if args.wide_nodes is not None and(args.leaf_layout!='wide'or args.wide_nodes<=0):
+        p.error('--wide-nodes is a positive node capacity of --leaf-layout wide')
     if args.max_requests is None:args.max_requests=args.buckets[-1]
     if not 1<=args.max_requests<=args.buckets[-1]:p.error('--max-requests must be in 1..the largest bucket')
     try:   # Codex's own queue/batch checks (phase_d_search_server.Server._initialize), before anything loads or compiles

@@ -1131,7 +1131,7 @@ def report(entries, torch_rows, *, manifest=None, selection=None, coverage=None,
     return out
 
 
-TURN1_INPUT_CHECK = ('device_depth2_pricer.make_turn1_stage.turn1 (the depth-N pricer\'s program P1, device_depthn_pricer.py:246): for every world slot '
+TURN1_INPUT_CHECK = ('device_depth2_pricer.make_turn1_stage.turn1 (the depth-N pricer\'s program P1, device_depthn_pricer.make_p1): for every world slot '
     'of every block (both worlds of each pair, so all W worlds of a root) it recomputes OUR view jax.vmap(views)(states, publics, owners) with '
     'views = _make_views(executor) and compares each key of INPUT_KEYS present in request.root_inputs (all five: the full 29 tokens, every column, '
     'and history_mask) elementwise with == against request.root_inputs, which build set to world 0\'s view; the first differing key k sets pre = 3 + '

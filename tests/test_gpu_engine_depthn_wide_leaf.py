@@ -5,7 +5,13 @@ blocks program's B*K rows) and writes them back to the blocks layout's dense pos
 frame array must equal the blocks layout's (and the oracle's), at any geometry: lane- or node-bound calls, partial calls
 with dead forward chunks, several learner actors, waiting seats, terminal and error lanes, digests on and off, depth 3
 (the expand ply stays blocks). Planted bugs in the wide path (lane placement off by one, swapped slots, a neighbour's
-chance draw, a dropped lane) must break the equality."""
+chance draw, a dropped lane) must break the equality.
+
+What these tests do NOT cover: the fakes' forward is row-local arithmetic (each row's output depends on its own row only, in
+any batch), so they check packing, placement and the per-lane plumbing, not numeric invariance. Whether the real champion
+forward gives a lane the same bits at another row of its chunk is a property of the compiled GEMMs: it held on the GB300
+frame gate under the pinned stack and not on CPU, and scripts/depthn_wide_leaf_frame_gate.py re-checks it per stack (its CLI
+and gate are exercised here on the fake engine)."""
 import inspect
 import textwrap
 import unittest
@@ -205,7 +211,7 @@ class LiveLayoutTests(unittest.TestCase):
                 got,_=self.run_batch(s,[dict(LS.request(f'l{i}',0),request_id=f'l{i}:{n}:{b}')for i in range(n)],outcomes)
                 self.assertEqual(pricers[b].compiles,());self.assertEqual({r['bucket']for r in got},{b});rows+=got;s.reset_sessions()
             answers[layout]=rows
-            self.assertEqual({k:s.pricer_identity[k]for k in('leaf_layout','wide_nodes')if k in s.pricer_identity},{}if layout=='blocks'else dict(leaf_layout='wide',wide_nodes=None))
+            self.assertEqual({k:s.pricer_identity[k]for k in('leaf_layout','wide_nodes')if k in s.pricer_identity},{}if layout=='blocks'else dict(leaf_layout='wide',wide_nodes=20))   # the resolved capacity: 4 chunks x 81 lanes // 16
         def canon(r):
             r={k:v for k,v in r.items()if k not in('timings','decision_seconds')};r['pricer']={k:v for k,v in r['pricer'].items()if k not in('leaf_layout','wide_nodes')}
             return r
@@ -233,7 +239,52 @@ class LiveLayoutTests(unittest.TestCase):
                 for target,name,value in stand_ins:stack.enter_context(patch.object(target,name,side_effect=value))
                 self.assertEqual(S.build(args),'search')
             self.assertEqual((made['leaf_layout'],made['wide_nodes']),want)
-        with patch.dict(os.environ,TS.PINNED),redirect_stderr(io.StringIO()),self.assertRaises(SystemExit):S.options(base+['--leaf-layout','rows'])
+        for bad in(['--leaf-layout','rows'],['--wide-nodes','512'],['--leaf-layout','blocks','--wide-nodes','8'],['--leaf-layout','wide','--wide-nodes','0'],
+                ['--leaf-layout','wide','--wide-nodes','-3']):   # --wide-nodes belongs to --leaf-layout wide and is positive
+            with self.subTest(bad=bad),patch.dict(os.environ,TS.PINNED),redirect_stderr(io.StringIO()),self.assertRaises(SystemExit):S.options(base+bad)
+
+    def test_frame_gate_passes_its_negative_control_and_fails_a_planted_bug(self):
+        import io,json,os,tempfile
+        from contextlib import redirect_stdout
+        from tests import test_depthn_live_server as TS
+        from scripts import depthn_wide_leaf_frame_gate as G
+        LS=self.LS;s=self.search(pricers=self.layout_pricers((1,)))
+        outcomes={(f'l{i}',0):self.outcome(2+i)for i in range(3)};requests=[dict(LS.request(f'l{i}',0),request_id=f'l{i}')for i in range(3)]
+        blocks,wide=G.gate_pricers(s,chunks=2);self.assertEqual((blocks.leaf_layout,wide.leaf_layout,wide.blocks_per_call),('blocks','wide',2))
+        quiet=lambda line:None
+        with LS.Codex(outcomes):report=G.gate(s,blocks,wide,requests,log=quiet)
+        self.assertEqual((report['verdict'],report['tally']['priced'],report['tally']['equal']),('PASS',3,3));json.dumps(report,default=repr)
+        self.assertTrue(any(k.startswith("('leaf', 'wide'")and h for k,h in report['programs'].items()))   # the compiled leaf programs' HLO hashes
+        with LS.Codex(outcomes):neg=G.gate(s,blocks,wide,requests,negative_control=True,log=quiet)
+        self.assertEqual((neg['verdict'],neg['tally']['differ']),('PASS',3));self.assertTrue(all('leaf_value'in r['differ']or'leaf_status'in r['differ']for r in neg['roots']))
+        shifted=G._off_by_one(dn.place_wide_leaf)   # the same shift as a real placement bug (no control flag): the gate FAILS
+        with LS.Codex(outcomes),patch.object(dn,'place_wide_leaf',shifted):bad=G.gate(s,blocks,wide,requests,log=quiet)
+        self.assertEqual((bad['verdict'],bad['tally']['differ']),('FAIL',3))
+        # the CLI: server flags after --, exit 0 PASS / 1 FAIL / 2 bad arguments, one summary line, the JSON report
+        server=['--showdown-root','s','--node-binary','n','--metadata','m','--expected-metadata-sha256','a'*64,'--vocabulary','v',
+            '--expected-vocabulary-sha256','b'*64,'--port','9000','--warmup-requests','w.jsonl','--champion-archive','c.npz','--champion-archive-sha256','c'*64,
+            '--champion-checkpoint-sha256','d'*64,'--block-lanes','81','--blocks-per-call','4']
+        keys=('battle_id','owner','stream_id','decision_index','generation','prefix_sha256','lines','own_request_line')
+        with tempfile.TemporaryDirectory()as tmp:
+            roots=os.path.join(tmp,'roots.jsonl')
+            with open(roots,'w')as f:
+                for r in requests:f.write(json.dumps({k:r[k]for k in keys})+'\n')
+            def cli(name,*extra,bug=None):
+                out=io.StringIO();argv=['--roots',roots,'--rung','DN2W8','--out',os.path.join(tmp,name),'--max-roots','2',*extra,'--']+server
+                with patch.dict(os.environ,TS.PINNED),patch.object(TS.S,'build',return_value=s),LS.Codex(outcomes),redirect_stdout(out):
+                    if bug is None:rc=G.main(argv)
+                    else:
+                        with patch.object(dn,'place_wide_leaf',bug):rc=G.main(argv)
+                return rc,out.getvalue().strip().splitlines()[-1],json.load(open(os.path.join(tmp,name)))
+            rc,line,rep=cli('pass.json')
+            self.assertEqual(rc,0);self.assertTrue(line.startswith('WIDE_LEAF_FRAME_GATE PASS rung=DN2W8 chunks=4 roots=2 priced=2'),line)
+            self.assertEqual((rep['tally']['roots'],rep['chunks'],rep['stack']['platform']),(2,4,'cpu'));self.assertIn('jax',rep['stack'])
+            rc,line,rep=cli('neg.json','--negative-control');self.assertEqual(rc,0);self.assertIn('PASS (negative control)',line)
+            rc,line,rep=cli('fail.json',bug=shifted);self.assertEqual(rc,1);self.assertIn('FAIL',line)
+            for bad in(['--chunks','0'],['--max-roots','0']):
+                with self.subTest(bad=bad),redirect_stdout(io.StringIO()),__import__('contextlib').redirect_stderr(io.StringIO()),self.assertRaises(SystemExit)as e:
+                    G.main(['--roots',roots,'--rung','DN2W8','--out',os.path.join(tmp,'x.json'),*bad,'--']+server)
+                self.assertEqual(e.exception.code,2)
 
 
 if __name__=='__main__':unittest.main()

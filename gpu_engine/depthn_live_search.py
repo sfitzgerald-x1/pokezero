@@ -355,7 +355,7 @@ class DepthNLiveSearch:
             blocks_per_call=first.blocks_per_call,precision=getattr(self.forward,'precision',None)or(ident[2]if len(ident)>2 else None),
             evaluator=evaluators.describe(self.forward)['identity'],world_source=cw.SOURCE,backup='learner_max',root_operator=self._operator(),
             root_operator_impl=ROOT_OPERATOR_IMPL,matmul_precision=str(jax.config.jax_default_matmul_precision or'default'),
-            **({}if getattr(first,'leaf_layout','blocks')=='blocks'else dict(leaf_layout=first.leaf_layout,wide_nodes=first.wide_nodes)))   # default: unchanged
+            **({}if getattr(first,'leaf_layout','blocks')=='blocks'else dict(leaf_layout=first.leaf_layout,wide_nodes=first._wide_geometry(DEPTH)[0])))   # wide: the resolved node capacity; blocks: unchanged
 
     def _redaction(self):
         """prepare_roots' keywords for the private-reveal redaction and view b: each given only when it is on (a search built

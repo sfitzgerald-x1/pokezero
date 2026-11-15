@@ -20,8 +20,15 @@ Programs (compile is flat in depth and, past turn 1, independent of capacity):
   holding only enumerated (node, own slot, opp slot) lanes (pack_wide_leaf),
   with each node's gather, views and one draw as above, the step, masks and
   observe once over every lane, and the forward in blocks_per_call chunks of
-  exactly B*K rows. Its frame is P_leaf's, array for array (place_wide_leaf
-  writes the same dense positions; dropped lanes stay zero).
+  exactly B*K rows. place_wide_leaf writes P_leaf's dense positions (dropped
+  lanes stay zero), so placement, leaf status, error and digest are P_leaf's
+  by construction (per-lane programs, the same inputs per lane). leaf_value
+  equals P_leaf's only while the forward is row-position invariant (a lane
+  sits at another row of its 2,187-row chunk): that held on the GB300 frame
+  gate under the pinned stack and autotune cache, NOT on CPU (one leaf value
+  of ~430k differed there, its digest equal). Re-gate
+  (scripts/depthn_wide_leaf_frame_gate.py) after any jax/XLA, cuBLAS or
+  autotune-cache change.
 Selection is an input to the block programs: per node, each seat's slot ->
 action map ([k], -1 padded; a waiting seat [0, -1, ...] with engine action
 -1). `prior` ranks each seat's encoder-legal actions by its own logits (the
@@ -663,9 +670,11 @@ class DepthNPricer:
         blocks_per_call*B*K packed leaf lanes, only enumerated lanes packed
         (pack_wide_leaf), the forward in blocks_per_call chunks of B*K rows;
         `wide_nodes` node slots per call (default lanes//16). Expand plies keep
-        the blocks programs. The frame is the blocks layout's, array for
-        array; its program key starts ('leaf','wide',...), so the two layouts
-        never share a program.
+        the blocks programs. Placement, status, error and digest are the
+        blocks layout's by construction; leaf_value matches only while the
+        forward is row-position invariant (gated on GB300 under the pinned
+        stack, not on CPU; module docstring). Its program key starts
+        ('leaf','wide',...), so the two layouts never share a program.
         """
         if type(capacity)is not int or capacity<=0 or type(actor_capacity)is not int or actor_capacity<=0:
             raise ValueError('finite explicit root/actor capacities required')
