@@ -16,15 +16,20 @@ device price of the current batch:
 - reduce: per root backups, the reply prior (its forward too, with reply_forward='reduce', the default: per root, exactly as
   the serial search), decide, the noise gate, the effect guard; the responses (DepthNLiveSearch._decide/_assemble), each
   checked by phase_d_search_server.encode, go to their requests' `done` callbacks.
-So prepare(N+2) || build+price(N+1) || reduce(N).
+So prepare(N+2) || build+price(N+1) || reduce(N), and never further ahead: a batch is handed to the device only while at most
+one earlier batch is unreduced (backpressure). Without it the device prices batch after batch into the reduce thread's queue
+whenever reduce is the slower stage (on the GPU it is: about 1 root/s per server under load), and requests are answered long
+after their clients gave up. With it, ready roots wait in `ready`, where the deadline rule below still applies to them.
 
 Batch 1 pays nothing for batching (local_battles > 0, the server's default): a new battle that arrives with nothing else in
 flight while the server runs about one decision at a time (the in-flight count arriving requests see, EWMA, under LOCAL_LOAD) is
 homed in this process (the pool's in-process slot: this search's own constructor, the serial server's prepare, nothing shipped),
 at most local_battles live there (a request within local_idle_seconds); any other new battle goes to a worker. A
-battle never moves (its sessions, attempts, held roots and peer folds live where it is homed), except by the evicted battle's
-path (session_cap, a dead worker), which folds it from scratch to the same state. So a single stream is served entirely in
-process, by the serial server's own stage functions, and a loaded server prepares in the workers.
+battle homed here moves to a worker when one of its requests arrives while another request is in flight (load: an in-process
+prepare would hold this process's interpreter against the device and reduce threads); it moves by the evicted battle's path
+(as session_cap and a dead worker evict), so the worker folds it from scratch to the same state. Otherwise a battle never moves
+(its sessions, attempts, held roots and peer folds live where it is homed). So a single stream is served entirely in process,
+by the serial server's own stage functions, and a loaded server prepares in the workers.
 
 Flush rule (the device idle, R ready roots, each with deadline = arrival + budget_seconds): the batch is the up to max_batch
 ready roots with the earliest deadlines; it goes when
@@ -36,6 +41,9 @@ ready roots with the earliest deadlines; it goes when
       waiting would add no root.
 est(b) = EWMA (alpha 0.2) of the measured build + price and reduce seconds of batches at bucket b, seeded from warmup's warm
 pass at b (a bucket never seen: the nearest seen bucket's, scaled by b / that bucket); the prepare EWMA starts at 1 s.
+Before a batch is formed, a ready root whose deadline leaves less than min_price_seconds (the live search's own minimum to
+price, as at its prepare start) is refused unpriced: cause expired_in_queue, refusal EXPIRED_BEFORE_PRICE (it was prepared,
+so its address is attempted; it waited for the device, not for a prepare).
 
 Responses are the serial search's (the same stage functions); per response: queue_seconds = arrival -> prepare start,
 prepare/classify/structure_seconds the root's own, build/price/reduce_seconds its batch's, decision_seconds = prepare start ->
@@ -131,7 +139,8 @@ class Pipeline:
         self.inbox = pool.events = queue.SimpleQueue()   # one queue: requests, the pool's events (redirected here), the device's and reduce's ends
         self.device_q, self.reduce_q = queue.SimpleQueue(), queue.SimpleQueue()
         self.tasks = {};self.ready = [];self.device_busy = False;self.closing = False;self.ids = itertools.count()
-        self.threads = [];self.batches = 0;self.stats = dict(batches={}, flush={});self.resets = [];self.deferred = []
+        self.threads = [];self.batches = 0;self.stats = dict(batches={}, flush={}, expired_before_price=0, migrated=0);self.resets = [];self.deferred = []
+        self.unreduced = 0   # batches handed to the device and not yet through reduce (backpressure: a flush needs < 2)
 
     # lifecycle ------------------------------------------------------------------------------------------------------------------
     def start(self):
@@ -213,6 +222,8 @@ class Pipeline:
             _, bucket, seconds = event
             if bucket is not None:
                 self.estimates.observe(bucket, reduce=seconds)
+        elif kind == 'batch_done':
+            self.unreduced -= 1
         elif kind == 'finished':
             self.tasks.pop(event[1], None)
         elif kind == 'close':
@@ -238,6 +249,10 @@ class Pipeline:
         budget = float(request['budget_seconds']);arrival = task.arrival if live._real(task.arrival) else self.clock()
         task.deadline = arrival + budget;self.tasks[task.id] = task
         battle = p['battle_id'] if type(p['battle_id']) is str else None
+        local = getattr(self.pool, 'local', None)
+        if (battle is not None and local is not None and self.pool.affinity.get(battle) == local.index
+                and any(t != task.id for t in self.tasks)):   # load: this battle leaves the in-process slot (module docstring)
+            self.pool.evict([battle]);self.stats['migrated'] += 1
         try:
             task.worker = self.pool.submit(task.id, p, battle, on_start=self._on_start, prefer_local=self._local_first(battle, task.id))
         except Exception as error:   # noqa: BLE001
@@ -336,9 +351,15 @@ class Pipeline:
 
     def _maybe_flush(self):
         """Hand the device a batch when the flush rule says so (module docstring); else the time to look again, or None."""
-        if self.device_busy or not self.ready:
+        if self.device_busy or self.unreduced >= 2 or not self.ready:
             return None
-        now = self.clock();ready = sorted(self.ready, key=lambda t: (t.deadline, t.id))
+        now = self.clock();floor = getattr(self.search, 'min_price_seconds', 0.)
+        for t in [t for t in self.ready if t.deadline - now < floor]:   # it cannot be priced in time: refused before the device
+            self.ready.remove(t);self.stats['expired_before_price'] += 1
+            self._respond(t, self.search._encodable(self._expired_before_price(t, now, floor), 1))
+        if not self.ready:
+            return None
+        ready = sorted(self.ready, key=lambda t: (t.deadline, t.id))
         reason = None
         if len(ready) >= self.max_batch:
             reason = 'full'
@@ -362,9 +383,15 @@ class Pipeline:
                 batch.append(t);seen.add(t.p['request_id'])
         for t in batch:
             self.ready.remove(t)
-        self.device_busy = True;self.stats['flush'][reason] = self.stats['flush'].get(reason, 0) + 1
+        self.device_busy = True;self.unreduced += 1;self.stats['flush'][reason] = self.stats['flush'].get(reason, 0) + 1
         self.device_q.put(batch)
         return None
+
+    def _expired_before_price(self, task, now, floor):
+        labels = dict(task.labels or {});seconds = {k: labels.pop(k, None) for k in ('classify_seconds', 'structure_seconds')}
+        left = task.deadline - now
+        return dict(task.row, **labels, timings=dict(task.row['timings'], **seconds), cause='expired_in_queue',
+                    refusal=f'EXPIRED_BEFORE_PRICE: {max(0., left):.3f}s of the budget left at the device start, under the {floor:.3f}s minimum to price')
 
     # device ---------------------------------------------------------------------------------------------------------------------
     def _device(self):
@@ -421,6 +448,7 @@ class Pipeline:
                     self._respond(t, caught)
             if job[0] == 'batch':
                 self.batches += 1;self.stats['batches'][n] = self.stats['batches'].get(n, 0) + 1
+                self.inbox.put(('batch_done',))
 
     # responses ------------------------------------------------------------------------------------------------------------------
     def _respond(self, task, response):

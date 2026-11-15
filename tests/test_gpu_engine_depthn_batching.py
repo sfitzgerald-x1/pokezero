@@ -1,7 +1,9 @@
 """gpu_engine.depthn_batching on the fake engine: the pipelined server answers as the serial search (prepare in real worker
 processes, gpu_engine.prepare_pool, with Codex's real ProtocolConstructor.prepare under the fake harness), the flush rule,
-request_id and order, a worker crash failing closed, a drain on close, and serving after warmup compiling nothing at any
-batch size. CPU only."""
+request_id and order, a worker crash failing closed, a drain on close, serving after warmup compiling nothing at any batch
+size, batches forming under concurrent load with the device never more than one batch ahead of reduce (backpressure), a root
+that cannot be priced in time refused before the device, and a battle homed in process moving to a worker under load. CPU
+only."""
 import threading
 import time
 from types import SimpleNamespace as NS
@@ -122,6 +124,51 @@ class PipelineTests(unittest.TestCase):
             want = expected[row['request_id']]
             self.assertEqual(strip(row, BATCH + ('pricer',)), strip(want, BATCH + ('pricer',)), row['request_id'])
 
+    def test_batches_form_under_load_and_the_device_never_runs_ahead_of_reduce(self):
+        # The GPU's shape (pod 1): device time linear in the batch's roots, reduce the slower stage. Twelve battles at once; the
+        # device starts a batch only while at most one earlier batch is unreduced (itself included: <= 2), so ready roots
+        # gather into batches > 1 instead of queueing behind reduce; every decision is the serial search's.
+        outcomes = PP.outcomes_of(self.cw, PAYLOAD)
+        keys = [('a', 0), ('b', 0), ('c', 0), ('f', 0), ('g', 0), ('h', 0)] + [(f'l{i}', 0) for i in range(4)] + [('w0', 0), ('w1', 0)]
+        serial = self.search(pricers=self.make_pricers(8, (1,)), max_requests=1);expected = {}
+        for b, d in keys:
+            rows, _ = self.run_batch(serial, [L.request(b, d)], outcomes);expected[f'{b}:{d}'] = rows[0]
+        s = self.pooled((1, 2, 4));p = self.pipeline(s, window_seconds=0.);price, decide = s._price, s._decide;seen = []
+        def slow_price(gated, bucket):
+            seen.append((len(gated), p.unreduced));time.sleep(.02 * len(gated))
+            return price(gated, bucket)
+        def slow_decide(todo, prepared, priced):
+            time.sleep(.15 * len(todo))
+            return decide(todo, prepared, priced)
+        s._price, s._decide = slow_price, slow_decide
+        rows, _ = self.serve(p, [L.request(b, d, budget=1000.) for b, d in keys])
+        self.assertGreater(max(n for n, _ in seen), 1);self.assertLessEqual(max(u for _, u in seen), 2)
+        settle = time.monotonic() + 30   # the last batch's 'batch_done' reaches the scheduler just after its responses
+        while (p.unreduced or p.batches < sum(p.stats['batches'].values())) and time.monotonic() < settle:
+            time.sleep(.01)
+        self.assertEqual(sum(p.stats['batches'].values()), p.batches);self.assertEqual(p.unreduced, 0)
+        self.assertGreater(max(r['batch_size'] for r in rows), 1)
+        for row in rows:
+            want = expected[row['request_id']]
+            self.assertEqual(strip(row, BATCH + ('pricer',)), strip(want, BATCH + ('pricer',)), row['request_id'])
+
+    def test_a_battle_homed_here_moves_to_a_worker_under_load(self):
+        outcomes = PP.outcomes_of(self.cw, PAYLOAD);serial = self.search(pricers=self.make_pricers(8, (1, 2, 4)));expected = {}
+        for b, d in [('a', 0), ('a', 1), ('b', 0), ('a', 2)]:   # the serial server, one request at a time
+            rows, _ = self.run_batch(serial, [L.request(b, d)], outcomes);expected[f'{b}:{d}'] = rows[0]
+        s = self.pooled((1, 2, 4));local = self.pool.attach_local(s.constructor).index;p = self.pipeline(s, window_seconds=0., local_battles=1)
+        with L.Codex(outcomes):
+            alone = [self.serve(p, [L.request('a', d)])[0][0] for d in (0, 1)]   # nothing else in flight: homed here
+            # b first (a new battle; the one in-process home is a's: a worker), then a while b is in flight: a moves, and the
+            # worker folds it from scratch to the state the in-process slot had
+            together, _ = self.serve(p, [L.request('b', 0), L.request('a', 2)])
+        self.assertEqual([r['pipeline']['worker'] for r in alone], [local, local]);self.assertEqual(p.stats['migrated'], 1)
+        self.assertLess(self.pool.affinity['a'], self.pool.size);self.assertEqual(together[1]['pipeline']['worker'], self.pool.affinity['a'])
+        self.assertGreater(together[1]['pipeline']['shipped_bytes'], 0)
+        for row in alone + together:
+            want = expected[row['request_id']]
+            self.assertEqual(strip(row, BATCH + ('pricer',)), strip(want, BATCH + ('pricer',)), row['request_id'])
+
     def test_a_worker_crash_fails_only_its_request_and_close_drains(self):
         p = self.pipeline(self.pooled((1, 2)), window_seconds=0.)
         requests = [L.request('x', 0)] + [L.request(f'l{i}', 0) for i in range(3)]
@@ -181,14 +228,15 @@ class FlushRuleTests(unittest.TestCase):
     """Pipeline._maybe_flush alone: a pipeline's scheduler state, a fixed clock."""
     def pipeline(self, now, *, max_batch=4, window=.05, guard=.15, device=1., prepare=1.):
         p = batching.Pipeline.__new__(batching.Pipeline)
-        p.search = NS(buckets=(1, 2, 4));p.max_batch = max_batch;p.window = window;p.guard = guard;p.clock = lambda: now
+        p.search = NS(buckets=(1, 2, 4), min_price_seconds=1., _encodable=lambda row, n: row);p.max_batch = max_batch;p.window = window
+        p.guard = guard;p.clock = lambda: now;p.unreduced = 0;p.responded = [];p._respond = lambda t, r: p.responded.append((t.id, r))
         p.estimates = batching.Estimates((1, 2, 4), seed={b: (device * b ** .5, 0.) for b in (1, 2, 4)}, prepare=prepare)
-        p.ready = [];p.tasks = {};p.device_busy = False;p.closing = False;p.stats = dict(flush={});p.device_q = []
+        p.ready = [];p.tasks = {};p.device_busy = False;p.closing = False;p.stats = dict(flush={}, expired_before_price=0);p.device_q = []
         p.device_q = NS(put=lambda batch: p.flushed.append(batch));p.flushed = []
         return p
 
     def task(self, p, i, *, deadline, ready_at=None, started=None, item=True, rid=None):
-        t = batching.Task(i, {}, dict(request_id=rid or f'r{i}'), {}, None);t.deadline = deadline;t.ready_at = ready_at;t.started = started
+        t = batching.Task(i, {}, dict(request_id=rid or f'r{i}'), dict(timings=dict(queue_seconds=.1)), None);t.deadline = deadline;t.ready_at = ready_at;t.started = started
         t.item = object() if item else None;p.tasks[i] = t
         if item:
             p.ready.append(t)
@@ -216,6 +264,20 @@ class FlushRuleTests(unittest.TestCase):
         p = self.pipeline(10., window=5.);self.task(p, 0, deadline=11.6, ready_at=9.9);self.task(p, 1, deadline=15., started=9.03, item=False)
         self.assertIsNotNone(p._maybe_flush());self.assertEqual(p.flushed, [])   # a root lands at 10.03, before the latest start (10.036)
         p.clock = lambda: 10.05;p._maybe_flush();self.assertEqual(p.stats['flush'], {'deadline': 1})
+
+    def test_backpressure_one_batch_in_reduce_one_on_the_device(self):
+        p = self.pipeline(10.);self.task(p, 0, deadline=13., ready_at=10.)
+        p.unreduced = 2;self.assertIsNone(p._maybe_flush());self.assertEqual(p.flushed, [])   # one reducing, one priced and waiting
+        p.unreduced = 1;p._maybe_flush();self.assertEqual(len(p.flushed), 1);self.assertEqual(p.unreduced, 2)
+
+    def test_a_root_that_cannot_be_priced_in_time_is_refused_before_the_device(self):
+        p = self.pipeline(10.);self.task(p, 0, deadline=10.6, ready_at=9.9, rid='late');self.task(p, 1, deadline=13., ready_at=10.)
+        p._maybe_flush();self.assertEqual([[t.id for t in b] for b in p.flushed], [[1]]);self.assertEqual(p.stats['expired_before_price'], 1)
+        (tid, row), = p.responded
+        self.assertEqual((tid, row['cause']), (0, 'expired_in_queue'))
+        self.assertEqual(row['refusal'], 'EXPIRED_BEFORE_PRICE: 0.600s of the budget left at the device start, under the 1.000s minimum to price')
+        p = self.pipeline(10.);self.task(p, 0, deadline=10.2, ready_at=9.9)
+        self.assertIsNone(p._maybe_flush());self.assertEqual((p.flushed, p.device_busy, len(p.responded)), ([], False, 1))   # nothing left to price
 
     def test_one_request_id_once_per_batch(self):
         p = self.pipeline(10.)
