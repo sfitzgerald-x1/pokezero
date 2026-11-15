@@ -65,6 +65,14 @@ class PublicView(NamedTuple):
     belief_pin:object=None
     belief_pin_active:object=None
     own_boosts:object=None    # [B,7] the observer's own active's public stages (a fainted one keeps them: _observe)
+    # Transform (B2's ctx.abilities.transformed / transform_species, public encounter slots): the foe's six and the
+    # observer's own six (request order), and the own six's shown types (the transform hook writes the donor's species
+    # types, Color Change the live ones). None when the carry has no Transform fields.
+    transformed:object=None
+    transform_species:object=None
+    own_transformed:object=None
+    own_transform_species:object=None
+    own_shown_types:object=None
 
 class Trackers(NamedTuple):
     physical_to_public:object # [B,2,6], private identity cursor only; never an encoder feature
@@ -110,6 +118,13 @@ class Trackers(NamedTuple):
     # from public installs only. Reset only by initialize (identity: the lead
     # holds public slot 0); never encoded, read out or redacted.
     public_order:object=None
+    # Transform (engine_device_public_hooks.transform): B2's per-encounter Transform mark and the donor's public species
+    # ([B,2,6], cleared at the transformer's departure or faint), and the side's active's copied-slot PP uses since its
+    # Transform ([B,2,4], per side: B2 charges no PP while transformed; device worlds rebuild the copied PP from it).
+    # None on carries built without them (the hooks then track no Transform).
+    transformed:object=None
+    transform_species:object=None
+    copied_pp_used:object=None
 
 
 class Tendency(NamedTuple):
@@ -337,6 +352,15 @@ def readout(trackers,observer_sides):
         stats={**({}if stats is None else stats),'blocked_on_our_attack':_li.take(h.blocked,r,owner),'pursuit_intercept_predict':_li.take(h.pursuit,r,foe)}
         reveals=_li.take(h.weather,r,foe).reshape(b,6)
         stats.update({'weather_reveal_'+str(i):reveals[:,i]for i in range(6)})
+    transform={}
+    if trackers.transformed is not None and trackers.transform_species is not None:
+        own_slots=trackers.physical_to_public[r[:,None],owner[:,None],_li.take(trackers.own_order,r,owner)]
+        def own_cell(value):
+            got=value[r[:,None],owner[:,None],j.clip(own_slots,0,5)]
+            return j.where((own_slots>=0).reshape(own_slots.shape+(1,)*(got.ndim-2)),got,j.zeros_like(got))
+        transform=dict(transformed=take('transformed'),transform_species=take('transform_species'),
+            own_transformed=own_cell(trackers.transformed),own_transform_species=own_cell(trackers.transform_species),
+            own_shown_types=None if trackers.shown_types is None else own_cell(trackers.shown_types))
     return PublicView(_li.take(trackers.own_order,r,owner),take('species'),take('level'),take('gender'),
         take('hp_percent').astype(j.float32)/100.0,take('status'),active,present,take('fainted'),
         j.zeros((b,6,2),j.int32) if trackers.shown_types is None else take('shown_types'),take('boosts'),
@@ -346,7 +370,7 @@ def readout(trackers,observer_sides):
         trackers.turn,trackers.weather,trackers.spikes,belief_mask,optional('observed_moves'),
         optional('pp_used'),optional('last_moves'),optional('borrowed_ability'),own_last,mon,own_mon,fields,own_borrowed,optional('public_volatiles'),own_vol,optional('item_removed'),own_removed,stats,
         None if visible is None else _li.take(visible.visible_pin,r,foe),None if visible is None else _li.take(visible.visible_pin_active,r,foe),
-        own_boosts=j.where((own_slot>=0)[:,None],_li.take(trackers.boosts,r,owner,j.clip(own_slot,0,5)),0))
+        own_boosts=j.where((own_slot>=0)[:,None],_li.take(trackers.boosts,r,owner,j.clip(own_slot,0,5)),0),**transform)
 
 
 def clone_for_worlds(trackers,root_rows):

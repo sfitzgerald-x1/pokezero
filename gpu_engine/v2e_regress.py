@@ -224,6 +224,7 @@ DEFAULT_DESTINY_BOND = 64
 SLEEP_MOVES = ('spore', 'hypnosis', 'sleeppowder', 'sing', 'lovelykiss', 'grasswhistle')
 # M2: the new leaves (the captures predate them) and the bag columns m2_rule reads.
 WRAP_CLOCK = "trackers.mon_features['wrap_trap_turns']"
+TRANSFORM_TRACKERS = ('trackers.transformed', 'trackers.transform_species', 'trackers.copied_pp_used')
 M2_BAG = ('perish0', 'perish1', 'perish2', 'perish3', 'yawn', 'partiallytrapped')
 M2_COUNTER_LEAVES = ('state.perish_counter', 'state.yawn_counter', 'state.partial_trap_counter', 'state.partial_trap_source')
 
@@ -322,6 +323,8 @@ def tracker_default(name, template):
         if template.shape[1:] != (2, 6):raise MigrationError(f'{name}: expected [B,2,6], tree has {template.shape}')
         return lambda lanes: np.broadcast_to(np.arange(6, dtype=template.dtype), (lanes, 2, 6))
     if re.match(r"^trackers\.(mon_features|field_features)\[", name):
+        return lambda lanes: np.zeros((lanes,) + template.shape[1:], template.dtype)
+    if name in TRANSFORM_TRACKERS:   # Transform: no captured lane is transformed (no mark, no donor, no copied uses)
         return lambda lanes: np.zeros((lanes,) + template.shape[1:], template.dtype)
     raise MigrationError(f'new tracker leaf {name} has no declared neutral value; add it to tracker_default()')
 

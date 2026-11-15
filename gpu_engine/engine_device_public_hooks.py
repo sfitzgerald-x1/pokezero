@@ -153,6 +153,8 @@ def initialize(state,belief_tables=None,*,port_tables=None):
             'weather_permanent':j.zeros(b,bool),'wish_turns':j.zeros((b,2),j.int32),'wish_pending':j.zeros((b,2),bool),
             'wish_set_turn':j.full((b,2),-1,j.int32),'items_removed_credit':j.zeros((b,2),j.int32)})
     t=t._replace(damage_history=damage_history.initialize(state),public_port=port.initialize(b))
+    # Transform (B2's ctx.abilities transformed/transform_species; the copied-slot uses for device worlds).
+    t=t._replace(transformed=j.zeros((b,2,6),bool),transform_species=z,copied_pp_used=j.zeros((b,2,4),j.int32))
     c=Context(t,belief_tables,port_tables)
     for side in range(2):c=install(c,state,side,j.ones(b,bool),initial=True)
     # Original startup emits switches, then TURN1 before the first request.
@@ -231,6 +233,13 @@ def install(c,state,side,use,*,initial=False):
     # install (switch, replacement, drag, Baton target) moves it to the front.
     if not initial:t=tr.public_order_install(t,side,use)
     t=port.arrival(t,c.port_tables,state,side,use)
+    if t.transformed is not None:
+        # Transform: B2's arrival clears the incoming encounter's running override (public_abilities.arrive), which a
+        # transformed departure kept (depart); the shown ability returns to the known original. Every other carry has no
+        # running override on an arriving mon (depart cleared it), so this is a no-op there.
+        kept=use&(_li.take(t.borrowed_ability,r,side,at)!=0)
+        t=_write(t,'shown_ability',side,p,_li.take(t.original_ability,r,side,at),kept)
+        t=_write(t,'borrowed_ability',side,p,j.zeros_like(p),kept)
     t=negative_items.hp_line(t,state,side,use,source_class=negative_items.HP_ACTION)
     c=c._replace(trackers=t)
     if c.trackers.damage_history is not None:
@@ -338,6 +347,10 @@ def hp_line(c,state,side,use,*,source_class,record_damage=True):
 def reveal_ability(c,state,side,use,*,ability=None,original=True):
     p=_li.take(state.active,_r(state),side);ability=_get(state,'ability',side) if ability is None else ability
     use=_mask(use,len(c.trackers.error));r=_r(state);slot=j.clip(_li.take(c.trackers.physical_to_public,r,side,p),0,5)
+    if c.trackers.transformed is not None:
+        # Transform: any ability line about a transformed mon names the copy, so B2 records nothing (public_abilities.reveal
+        # ignores the claim; a Trace of a transformed donor reveals no original either: trace_copy).
+        use=use&~_li.take(c.trackers.transformed,r,side,slot)
     borrowed=_li.take(c.trackers.borrowed_ability,r,side,slot)
     c=c._replace(trackers=_write(c.trackers,'shown_ability',side,p,ability,use))
     if original:
@@ -416,9 +429,15 @@ def depart(c,before,after,side,table,use):
         c=reveal_ability(c,before,side,cure)
         c=observe(c,after,cure)
     # A borrowed ability ends silently; known original identity is not guessed.
-    c=c._replace(trackers=_write(c.trackers,'shown_ability',side,p,_li.take(c.trackers.original_ability,_r(before),side,j.clip(_li.take(c.trackers.active_slot,_r(before),side),0,5)),use&(_li.take(c.trackers.borrowed_ability,_r(before),side,j.clip(_li.take(c.trackers.active_slot,_r(before),side),0,5))!=0)))
-    c=c._replace(trackers=_write(c.trackers,'borrowed_ability',side,p,j.zeros_like(use,j.int32),use))
+    # Transform: B2's arrival clears the side's Transform mark but keeps the departing encounter's running (copied)
+    # ability until that encounter returns (public_abilities.arrive; install clears it then). The shown types return to
+    # the species' own (B2's team writer reads the original species once the mark is gone).
+    gone=_mask(use,len(c.trackers.error))&_transformed(c,before,side)
+    use_borrowed=_mask(use,len(c.trackers.error))&~gone
+    c=c._replace(trackers=_write(c.trackers,'shown_ability',side,p,_li.take(c.trackers.original_ability,_r(before),side,j.clip(_li.take(c.trackers.active_slot,_r(before),side),0,5)),use_borrowed&(_li.take(c.trackers.borrowed_ability,_r(before),side,j.clip(_li.take(c.trackers.active_slot,_r(before),side),0,5))!=0)))
+    c=c._replace(trackers=_write(c.trackers,'borrowed_ability',side,p,j.zeros_like(use,j.int32),use_borrowed))
     c=type_revert(c,before,after,side,p,use)
+    c=_transform_clear(c,before,side,p,gone)
     return _refresh(c,side,p,use&~_li.take(c.trackers.fainted,_r(before),side,j.clip(_li.take(c.trackers.active_slot,_r(before),side),0,5)))
 
 
@@ -439,6 +458,63 @@ def type_revert(c,before,after,side,physical,use):
         known=(species>0)&(species<tab.shape[0])
         base=j.where(known[:,None],c.belief_tables.species_types[j.clip(species,0,tab.shape[0]-1)],0)
     return c._replace(trackers=_write(c.trackers,'shown_types',side,physical,base,reverted))
+
+
+def _transformed(c,state,side):
+    """[B] the side's active carries B2's Transform mark (False on a carry without the field)."""
+    t=c.trackers;r=_r(state)
+    if t.transformed is None:return j.zeros(len(r),bool)
+    slot=j.clip(_li.take(t.active_slot,r,side),0,5)
+    return _li.take(t.transformed,r,side,slot)
+
+
+def _transform_clear(c,state,side,physical,use):
+    """Clear the Transform mark and donor of `physical` and show its own species types again."""
+    t=c.trackers
+    if t.transformed is None:return c
+    b=len(t.error);use=_mask(use,b)
+    t=_write(t,'transformed',side,physical,j.zeros(b,bool),use)
+    t=_write(t,'transform_species',side,physical,j.zeros(b,j.int32),use)
+    c=c._replace(trackers=t)
+    if c.belief_tables is not None and hasattr(c.belief_tables,'species_types'):
+        r=_r(state);species=_li.take(state.species,r,side,j.clip(physical,0,5));tab=c.belief_tables.species_initial_mask
+        known=(species>0)&(species<tab.shape[0])
+        types=j.where(known[:,None],c.belief_tables.species_types[j.clip(species,0,tab.shape[0]-1)],0)
+        c=c._replace(trackers=_write(c.trackers,'shown_types',side,physical,types,use))
+    return c
+
+
+def transform(c,before,after,side,use):
+    """B2's -transform|X|DONOR on the actual successful copy (transform.apply's `copied`).
+
+    public_abilities.transform marks the transformer, records the donor's public species and sets its running ability to
+    the donor's public running-else-original one (an unknown one keeps the current running); public_context upserts the
+    transformer's belief record (checkpoint), and public_mon_state copies the donor's public stages (the observe below
+    reads them from the state, where transform.apply copied them). The shown types become the donor's species types
+    (B2's team writer reads the donor species for a transformed mon). The side's copied-slot ledger restarts.
+    """
+    t=c.trackers
+    if t.transformed is None or t.transform_species is None:return observe(c,after,use)
+    r=_r(after);b=len(r);use=_mask(use,b);side=j.broadcast_to(j.asarray(side,j.int32),(b,));foe=1-side
+    p=_li.take(after.active,r,side);fp=_li.take(after.active,r,foe)
+    fslot=j.clip(_li.take(t.physical_to_public,r,foe,j.clip(fp,0,5)),0,5)
+    donor=_li.take(t.species,r,foe,fslot)
+    copied=_li.take(t.borrowed_ability,r,foe,fslot)
+    copied=j.where(copied>0,copied,_li.take(t.original_ability,r,foe,fslot))
+    t=_write(t,'transformed',side,p,j.ones(b,bool),use)
+    t=_write(t,'transform_species',side,p,donor,use)
+    t=_write(t,'borrowed_ability',side,p,copied,use&(copied>0))
+    t=_write(t,'shown_ability',side,p,copied,use&(copied>0))
+    if t.copied_pp_used is not None:
+        old=_li.take(t.copied_pp_used,r,side)
+        t=t._replace(copied_pp_used=_li.put(t.copied_pp_used,r,(side,),j.where(use[:,None],0,old)))
+    c=c._replace(trackers=t)
+    if c.belief_tables is not None and hasattr(c.belief_tables,'species_types'):
+        tab=c.belief_tables.species_initial_mask;known=(donor>0)&(donor<tab.shape[0])
+        types=j.where(known[:,None],c.belief_tables.species_types[j.clip(donor,0,tab.shape[0]-1)],0)
+        c=c._replace(trackers=_write(c.trackers,'shown_types',side,p,types,use))
+    c=observe(c,after,use)
+    return _refresh(c,side,p,use)
 
 
 def move(c,state,side,move,use,*,pp_use=False,original=True,count_turn=True,preparation=False):
@@ -713,6 +789,9 @@ def faint_clear(c,before,after,use):
         for name in FAINT_CLEAR_KEYS:
             if name in c.trackers.mon_features:c=feature(c,side,p,name,j.zeros_like(p),hit[side])
         c=feature(c,side,p,'meanlook_trap',j.zeros_like(p),hit[0]|hit[1])
+        # Transform: B2's FAINT clears the mark (public_abilities.faint keeps the running ability); the engine reverted
+        # the fainted active (transform.faint_revert), so read the mark from the carry, not the state.
+        c=_transform_clear(c,after,side,p,hit[side]&_transformed(c,after,side))
     return c
 
 

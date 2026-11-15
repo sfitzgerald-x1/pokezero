@@ -66,6 +66,9 @@ class PublicView(NamedTuple):
     transformed: object = None
     transform_species: object = None
     own_boosts: object = None
+    own_transformed: object = None          # Transform: the observer's own six (request order); encode reads state
+    own_transform_species: object = None
+    own_shown_types: object = None          # the own six's carried shown types (the own transformed active's TYPE_1/2)
 
 
 class Tables(NamedTuple):
@@ -101,6 +104,11 @@ class Tables(NamedTuple):
     # Fidelity M1: the recharge request's one move row, {move: 'Recharge', id: 'recharge'}: the action
     # writer's primary category is move:recharge; 'recharge' is no dex move, so no mechanics or PP.
     recharge_primary: object = None
+    # Transform: each move's dex PP (a transformed active's copied slot past the transformer's own moves has ppUps 0, so
+    # the request's maxpp is this, sim/pokemon.ts:1321) and the species' exact dex base HP (B2's original_hp: a
+    # transformed mon keeps its own base HP in the team writer, gpu_engine/public_team.py project_opponent).
+    base_pp: object = None
+    original_hp: object = None
 
 
 def compile_tables(metadata, *, catalog):
@@ -169,7 +177,9 @@ def compile_tables(metadata, *, catalog):
     from . import engine_device_belief, engine_device_features
     return Tables(*(j.asarray(value, j.float32 if name in floats else j.int32)
         for name, value in zip(Tables._fields, arrays)), engine_device_belief.compile_tables(metadata, catalog),
-        engine_device_features.compile_tables(metadata, catalog), j.asarray(category('move:recharge'), j.int32))
+        engine_device_features.compile_tables(metadata, catalog), j.asarray(category('move:recharge'), j.int32),
+        base_pp=j.asarray([int((row or {}).get('pp', 0)) if i else 0 for i, row in enumerate(metadata['moves'])], j.int32),
+        original_hp=j.asarray(np.asarray(sd.original_hp)[species_ids], j.float32))
 
 
 class Observation(NamedTuple):
@@ -243,6 +253,13 @@ def encode(state, public, tables, *, observer_sides, legal_action_mask):
     active = j.arange(6)[None] == own['active'][:, None]
     hp = j.clip(own['hp'] / j.maximum(1, own['max_hp']), 0, 1)
     alive = own['hp'] > 0
+    # Transform (flag-off path): the request shows a transformed active's baseStoredStats (sim/pokemon.ts
+    # getSwitchRequestData), while state.stats holds the copy; ACTUAL_* and the expected-stats join read the original.
+    own_transformed = getattr(state, 'transformed', None)
+    if own_transformed is not None:
+        own_transformed = own_transformed[rows, owner]
+        original_stats = own['stats'].at[..., 1:].set(state.transform_stats[rows, owner][:, None, :])
+        own['stats'] = j.where((active & own_transformed[:, None])[..., None], original_stats, own['stats'])
     own_num = j.zeros((b, 6, NUMERIC), j.float32)
     own_num = _put(own_num, ('HP_FRACTION', 'ACTIVE', 'LEGAL', 'PRESENT', 'LEVEL'),
         (hp, active, alive, present, j.minimum(1, own['level'] / 100)))
@@ -274,6 +291,29 @@ def encode(state, public, tables, *, observer_sides, legal_action_mask):
     own_cat = own_cat.at[..., 4:6].set(_lookup(tables.types, own['types']))
     own_num = j.where(present[..., None], own_num, 0); own_cat = j.where(present[..., None], own_cat, 0)
     num = num.at[:, 1:7].set(gather(own_num)); cat = cat.at[:, 1:7].set(gather(own_cat))
+    base_columns = j.asarray([_index('BASE_' + n) for n in stats])
+    def transformed_base(donor, original):
+        # B2's team writer for a transformed mon (public_team.project_opponent): the donor's base stats with the mon's own
+        # exact base HP.
+        base = _lookup(tables.base_stats, donor)
+        if tables.original_hp is not None:
+            own_hp = _lookup(tables.original_hp, original)
+            base = base.at[..., 0].set(j.where(own_hp != 0, own_hp, base[..., 0]))
+        return j.minimum(1, base / 200)
+    if own_transformed is not None:
+        # Our transformed active (v4_encoder's own overlay: species, base stats and types of the donor; request HP, level,
+        # gender, actual stats, item and ability stay). Its types are the carry's shown types (the donor's species types,
+        # then a live Color Change), as B2's public types overlay.
+        tf = gather(active & own_transformed[:, None])
+        donor = j.broadcast_to(state.transform_species[rows, owner][:, None], (b, 6))
+        num = num.at[:, 1:7, base_columns].set(j.where(tf[..., None], transformed_base(donor, gather(own['species'])),
+            num[:, 1:7][..., base_columns]))
+        cat = cat.at[:, 1:7, 0].set(j.where(tf, _lookup(tables.species, donor), cat[:, 1:7, 0]))
+        type_cat = _lookup(tables.base_types, donor)
+        shown = getattr(public, 'own_shown_types', None)
+        if shown is not None:
+            type_cat = j.where(j.any(shown > 0, axis=-1)[..., None], _lookup(tables.types, shown), type_cat)
+        cat = cat.at[:, 1:7, 4:6].set(j.where(tf[..., None], type_cat, cat[:, 1:7, 4:6]))
     # Public encounter slots, never physical opponent party slots.
     foe_num = j.zeros((b, 6, NUMERIC), j.float32)
     foe_num = _put(foe_num, ('HP_FRACTION', 'ACTIVE', 'LEGAL', 'PRESENT', 'LEVEL', 'GENDER_MALE', 'GENDER_FEMALE'),
@@ -293,6 +333,14 @@ def encode(state, public, tables, *, observer_sides, legal_action_mask):
     foe_cat = foe_cat.at[..., 4:6].set(_lookup(tables.types, public.types))
     foe_num = j.where(public.present[..., None], foe_num, 0)
     foe_cat = j.where(public.present[..., None], foe_cat, 0)
+    foe_transformed = getattr(public, 'transformed', None)
+    if foe_transformed is not None and getattr(public, 'transform_species', None) is not None:
+        # A transformed opponent (B2 public_team.project_opponent): PRIMARY and BASE_* from the donor's public species,
+        # BASE_HP its own; TYPE_1/2 are already the donor's (the transform hook writes the shown types).
+        tf = foe_transformed & public.present & (public.transform_species > 0)
+        foe_num = foe_num.at[..., base_columns].set(j.where(tf[..., None], transformed_base(public.transform_species,
+            public.species), foe_num[..., base_columns]))
+        foe_cat = foe_cat.at[..., 0].set(j.where(tf, _lookup(tables.species, public.transform_species), foe_cat[..., 0]))
     num = num.at[:, 7:13].set(foe_num); cat = cat.at[:, 7:13].set(foe_cat)
     # Actual owning move slots; static mechanics share the original v4 algebra.
     actor = j.clip(own['active'], 0, 5)
@@ -339,8 +387,14 @@ def encode(state, public, tables, *, observer_sides, legal_action_mask):
     values = values.at[..., 0].set(j.minimum(1, power / 200))
     action_num = j.zeros((b, 9, NUMERIC), j.float32)
     action_num = action_num.at[:, :4, j.asarray([_index(n) for n in ('BASE_POWER', 'PRIORITY', 'ACCURACY', 'EFFECT_CHANCE', 'SELF_HP_COST')])].set(values)
+    max_pp = tables.max_pp[safe_move]
+    if own_transformed is not None and tables.base_pp is not None:
+        # Transform: a copied slot's request maxpp is calculatePP(move, ppUps[i]): 3 PP Ups where the transformer had its
+        # own move i (the boosted max), none past its own moves (the dex PP; sim/pokemon.ts:1321, 361-373).
+        boosted = state.transform_moves[rows, owner] > 0
+        max_pp = j.where(own_transformed[:, None] & ~boosted, tables.base_pp[safe_move], max_pp)
     action_num = action_num.at[:, :4, _index('MOVE_PP_FRACTION')].set(j.where(moves_present,
-        j.where((struggle | charged | recharging)[:, None], 1., j.clip(pp / j.maximum(1, tables.max_pp[safe_move]), 0, 1)), 0))
+        j.where((struggle | charged | recharging)[:, None], 1., j.clip(pp / j.maximum(1, max_pp), 0, 1)), 0))
     action_num = action_num.at[:, :4, _index('PRESENT')].set(moves_present)
     action_num = action_num.at[:, :4, _index('ACTIVE')].set(moves_present & (usable | struggle[:, None]))
     request_active = j.argmax(gather(active), axis=-1)

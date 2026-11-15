@@ -1712,8 +1712,11 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                 # is the post-Sleep-Talk move, so a called Transform is covered. PP (Pressure included) was paid above, before
                 # the saves; the Choice lock site below locks on `transform`, as Showdown does.
                 _transform_used=acts & hit & table.transform.move[move]
+                if _device_public is not None:_device_transform_before=work
                 work,_transform_copied=shift.apply(work,side,_transform_used,table.transform)
                 if _lifecycle_trace:_public_trace=status_callbacks.unknown(_public_trace,_transform_used)
+                if _device_public is not None:
+                    device_public.transform(_device_public,_device_transform_before,work,side,_transform_copied)
             # Charm's primary boosts (moveHit after TryHit): Protect is already in `hit`; a
             # Substitute fails it (TryPrimaryHit); status moves ignore type immunity
             # (tryMoveHit sets ignoreImmunity for Status). The drop is capped first, then
@@ -2181,6 +2184,10 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
             # Gen < 5 eachEvent('Update') after the action (sim/battle.ts:2938): a copied curing ability or Own Tempo acts now.
             work,_transform_cured,_transform_unconfused=shift.update_cure(work,side,_transform_copied,table.entry)
             if _lifecycle_trace:_public_trace=status_callbacks.unknown(_public_trace,_transform_cured|_transform_unconfused)
+            if _device_public is not None:
+                # -activate|X|ability: ... (B2 ignores a transformed mon's ability claim), then -curestatus or -end confusion.
+                device_public.observe(_device_public,work,_transform_cured)
+                device_public.confusion_end(_device_public,work,side,_transform_unconfused)
     # Gen 3 action-phase faints request replacement BEFORE the residual action.
     # A KO cancels queued moves; direct Baton retains at most one selected foe
     # move. Both pause residuals, including hazard-KO recovery chains.
