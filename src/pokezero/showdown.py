@@ -6609,6 +6609,16 @@ def _encode_pokemon_tokens(
             possible_abilities = (revealed_ability,) if revealed_ability else ()
             possible_items = (revealed_item,) if revealed_item else ()
             item_removed = False
+        # V2 self_moves (ObservationFeatureMasks.self_moves, default off = byte-identical): our
+        # own moves are request-known, so they are written exactly as a FULLY revealed opponent
+        # mon's are: the request's moves are both the revealed and the possible set (sorted,
+        # deduplicated labels in the move buckets; both counts = the number of own moves), and
+        # the PP block below writes every one of them as certain. Every own mon, bench and
+        # active, fainted included (the request lists them all).
+        self_moves = role == "self" and bool(getattr(masks, "self_moves", False))
+        if self_moves:
+            revealed_moves = _compact_belief_values(tuple(_self_move_id(move) for move in candidate.moves))
+            possible_moves = revealed_moves
         ability_feature_values = _known_or_possible_values(revealed_ability, possible_abilities)
         item_feature_values = _known_or_possible_values(revealed_item, possible_items)
         candidate_set_count = belief.candidate_set_count if belief is not None else None
@@ -6794,6 +6804,14 @@ def _encode_pokemon_tokens(
                     NUMERIC_SUB_HP_FRACTION,
                     _substitute_hp_fraction(candidate),
                 )
+            if self_moves:
+                _encode_self_move_pp_fractions(
+                    numeric_features[token_index],
+                    exact,
+                    bucket_moves,
+                    dex=dex,
+                    write_validity=schema_v2_1,
+                )
             if role == "opponent":
                 _encode_opponent_move_pp_fractions(
                     numeric_features[token_index],
@@ -6942,6 +6960,67 @@ def _opponent_rest_wake_known(exact: RevealedPokemonBelief) -> bool:
         # absent, so the wake stays ambiguous.
         return False
     return "earlybird" not in candidates
+
+
+def _self_move_id(move: str) -> str:
+    """One of our own request moves as the move it names (its belief:possible_move label).
+
+    Showdown's getSwitchRequestData spells Return and Frustration with their resolved power
+    (``return102``) and, from gen 6, Hidden Power with its power; the trailing digits are stripped
+    for exactly those three prefixes (``tier2.canonical_move_id``'s rule, so ``conversion2`` keeps
+    its digit). Hidden Power keeps its type (``hiddenpowerfire``), the typed id the set source's
+    possible-move labels use.
+    """
+    key = _normalize_identifier(move)
+    for prefix in ("return", "frustration", "hiddenpower"):
+        if key.startswith(prefix):
+            return key.rstrip("0123456789") or key
+    return key
+
+
+def _self_move_ledger_key(move: str) -> str:
+    """The PP-ledger key of one of our own request moves.
+
+    The request names Hidden Power by its type (``hiddenpowerfire``: Showdown's
+    getSwitchRequestData, gen < 6 without the power suffix), while the ledger counts the
+    protocol's ``|move|...|Hidden Power|`` line under the generic ``hiddenpower`` id.
+    """
+    key = _normalize_identifier(move)
+    return "hiddenpower" if key.startswith("hiddenpower") else key
+
+
+def _encode_self_move_pp_fractions(
+    num_row: list[float],
+    exact: RevealedPokemonBelief | None,
+    bucket_moves: Sequence[str],
+    *,
+    dex: "ShowdownDex | None",
+    write_validity: bool = False,
+) -> None:
+    """V2 self_moves: remaining-PP fraction and validity for EVERY one of our own moves.
+
+    The opponent writer's twin (``_encode_opponent_move_pp_fractions``) with our own moves as
+    the revealed set: every bucket move is certain, so its validity bit is 1.0 (v2.1+ specs),
+    and its fraction is (catalog max PP - ledger uses) / max PP. ``exact.move_uses`` is the
+    belief engine's PP ledger for our mon: the opponent ledger's charging rules (Pressure
+    doubles only against a foe whose Pressure is public to us, Sleep Talk's callee and
+    Struggle uncharged, transformed use not charged to the real set). A mon with no ledger
+    entry (never sent out) has used nothing. The request's own PP is not read: it covers the
+    active mon only, and active and bench follow one rule.
+    """
+    uses_by_move = {key: uses for key, uses in exact.move_uses} if exact is not None else {}
+    for index, move in enumerate(bucket_moves[:BELIEF_MOVE_BUCKET_COUNT]):
+        key = _normalize_identifier(move)
+        if not key:
+            continue
+        if write_validity:
+            _set_numeric(num_row, NUMERIC_OPP_MOVE_PP_VALID_OFFSET + index, 1.0)
+        info = dex.move_info(key) if dex is not None else None
+        max_pp = info.max_pp if info is not None else 0
+        if max_pp <= 0:
+            continue
+        remaining = max(0, max_pp - int(uses_by_move.get(_self_move_ledger_key(key), 0)))
+        _set_numeric(num_row, NUMERIC_OPP_MOVE_PP_OFFSET + index, remaining / float(max_pp))
 
 
 def _encode_opponent_move_pp_fractions(

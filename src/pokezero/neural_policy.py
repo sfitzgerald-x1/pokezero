@@ -347,6 +347,12 @@ class TransformerPolicyConfig:
     # candidate-set count and uncertainty columns, which exist in every schema — but a
     # SEPARATE field, because the evidence class and the arm attribution both differ.
     item_belief_narrowing: bool = False
+    # V2 self_moves observation switch (ObservationFeatureMasks.self_moves): our own Pokemon
+    # tokens carry their movesets and PP. Same strict False latch as the two lines above (a
+    # missing field resolves OFF: every existing checkpoint trained with those self-token
+    # columns zero). to_dict emits the key ONLY when True, so every existing config's
+    # serialization, and every model_config_sha256 pinned on it, is unchanged.
+    self_moves: bool = False
     # Dense potential-based reward-shaping provenance (canonical JSON of the
     # pokezero.shaping ShapingConfig the value targets were trained under, or None for an
     # unshaped head). Same latch pattern as tier2_residuals: from_dict resolves payloads
@@ -589,7 +595,12 @@ class TransformerPolicyConfig:
             )
 
     def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        payload = asdict(self)
+        # Emitted only when on: configs (and their pinned sha256s) predating the switch are
+        # byte-identical, and from_dict resolves the absent key to False.
+        if not payload["self_moves"]:
+            del payload["self_moves"]
+        return payload
 
     @property
     def value_head_layer_widths(self) -> tuple[int, ...]:
@@ -680,6 +691,9 @@ class TransformerPolicyConfig:
             # Item-certainty latch: absent means a checkpoint trained on candidate sets that
             # discarded the original item after a mutation and never ruled out Choice Band.
             item_belief_narrowing=bool(payload.get("item_belief_narrowing", False)),
+            # Self-moves latch: absent means a checkpoint trained with zero self-token move/PP
+            # columns (every checkpoint predating the switch).
+            self_moves=bool(payload.get("self_moves", False)),
             # Shaping latch: payloads lacking the field are pre-shaping checkpoints trained
             # on terminal-only value targets -> always resolve to unshaped.
             reward_shaping=(str(payload["reward_shaping"]) if payload.get("reward_shaping") else None),
@@ -3009,6 +3023,8 @@ def feature_masks_from_model_config(config: TransformerPolicyConfig) -> Observat
             getattr(config, "investment_belief_narrowing", False)
         ),
         item_belief_narrowing=bool(getattr(config, "item_belief_narrowing", False)),
+        # OBS_SELF_MOVES (observation.SELF_MOVES_ENV) overrides this in the masks' __post_init__.
+        self_moves=bool(getattr(config, "self_moves", False)),
     )
 
 

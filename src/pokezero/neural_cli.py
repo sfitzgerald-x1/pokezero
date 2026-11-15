@@ -2964,6 +2964,9 @@ def _require_cache_masks_match_model_config(paths, model_config) -> None:
         # getattr: a config without the item-certainty switch trained on candidate sets that
         # discarded the original item after a mutation (same strict latch as the pair above).
         "item_belief_narrowing": getattr(model_config, "item_belief_narrowing", False),
+        # getattr: a config without the V2 self_moves switch trained with zero self-token
+        # move/PP columns (same strict latch).
+        "self_moves": getattr(model_config, "self_moves", False),
     }
     for cache_path, masks in cache_feature_masks_by_path(paths):
         if masks is None:
@@ -2975,6 +2978,7 @@ def _require_cache_masks_match_model_config(paths, model_config) -> None:
             "feature_pack_last_move": True,
             "investment_belief_narrowing": False,
             "item_belief_narrowing": False,
+            "self_moves": False,
             **masks,
         }
         if masks != expected:

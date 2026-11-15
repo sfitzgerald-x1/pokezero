@@ -29,6 +29,7 @@ from . import public_item_nonproc
 from . import public_mudshot
 from . import public_refresh_stream, public_sleep_clause, public_substitute, public_exact, public_switch_evidence
 from . import public_expected_stats,public_hazard_exposure,v4_assembly
+from . import private_self_moves
 
 SCHEMA='pokezero.protocol_v4_encoder.v1'
 PENDING_NUMERIC_COLUMNS=()
@@ -44,10 +45,16 @@ class Masks:
     tier2_investment: bool
     tier2_residuals: bool
     transition_token_budget: int
+    # V2 (private_self_moves): own moves and PP on the self tokens. The one optional key: absent
+    # resolves False (every checkpoint predating it), and OBS_SELF_MOVES=on|off overrides it
+    # (pokezero.observation.resolve_self_moves, as for the Python encoder's masks).
+    self_moves: bool = False
 
     @classmethod
     def from_checkpoint(cls,values):
-        if not isinstance(values,dict) or set(values)!=set(cls.__dataclass_fields__):
+        from pokezero.observation import resolve_self_moves
+        required=set(cls.__dataclass_fields__)-{'self_moves'}
+        if not isinstance(values,dict) or not required<=set(values)<=set(cls.__dataclass_fields__):
             raise ValueError('all resolved champion mask fields required, without defaults')
         for key,value in values.items():
             if key=='transition_token_budget':
@@ -55,7 +62,7 @@ class Masks:
             elif type(value) is not bool:raise ValueError('resolved checkpoint masks must be booleans')
         if values['investment_belief_narrowing']:
             raise ValueError('investment evidence producer is not installed in this encoder')
-        return cls(**values)
+        return cls(**{**values,'self_moves':resolve_self_moves(values.get('self_moves',False))})
 
 
 @dataclass(frozen=True, eq=False)
@@ -87,6 +94,7 @@ class Catalog:
     masks: Masks
     binding: object
     checkpoint_sha256: str
+    self_moves: object = None   # private_self_moves.Catalog when masks.self_moves, else None
 
 
 _CATALOGS = weakref.WeakKeyDictionary()
@@ -348,7 +356,10 @@ def compile_encoder(source,dex,vocabulary,*,checkpoint_sha256,feature_masks):
     hazard=public_hazard_exposure.compile_hazard(species,dex,vocabulary,feature_tables=features,
         field_tables=field.device,abilities=abilities)
     actions=private_actions.compile_actions(dex,vocabulary)
-    bindings=dict(checkpoint=checkpoint_sha256,masks=feature_masks,schema=SCHEMA,
+    self_moves=private_self_moves.compile_self_moves(moves,features,vocabulary) if masks.self_moves else None
+    # self_moves changes encode() only, never the fold: it stays out of the fold-state binding,
+    # so one fold serves both settings and the off binding is the one every caller has today.
+    bindings=dict(checkpoint=checkpoint_sha256,masks={k:v for k,v in feature_masks.items() if k!='self_moves'},schema=SCHEMA,
         context=np.asarray(context.binding).tolist(),features=np.asarray(features.binding).tolist(),
         expected=np.asarray(expected.device.binding).tolist(),hazard=np.asarray(hazard.device.binding).tolist(),
         actions=np.asarray(actions.device.binding).tolist(),substitute=np.asarray(substitute.binding).tolist(),
@@ -356,7 +367,8 @@ def compile_encoder(source,dex,vocabulary,*,checkpoint_sha256,feature_masks):
     digest=hashlib.sha256(json.dumps(bindings,sort_keys=True,separators=(',',':')).encode()).digest()
     binding=jnp.asarray(np.frombuffer(digest,dtype='>u4').astype(np.uint32))
     catalog = Catalog(source,vocabulary,dex,species,moves,abilities,items,field,active,substitute,exact,damage,types,
-        sleep,toxic,tendency,refresh,lifecycle,clause,context,features,expected,hazard,actions,masks,binding,checkpoint_sha256)
+        sleep,toxic,tendency,refresh,lifecycle,clause,context,features,expected,hazard,actions,masks,binding,checkpoint_sha256,
+        self_moves=self_moves)
     seen = set()
     _CATALOGS[catalog] = tuple((f.name, _static_snapshot(getattr(catalog, f.name), seen)) for f in fields(catalog))
     _STATIC_PLANS[catalog] = _compile_static_plan(_CATALOGS[catalog])
@@ -379,6 +391,7 @@ class OwnFacts(NamedTuple):
     hazard: object
     exact_abilities: object
     binding: object
+    self_moves: object = None   # private_self_moves.OwnMoves under masks.self_moves, else None (no pytree leaves)
 
 
 class Encoded(NamedTuple):
@@ -424,7 +437,9 @@ def parse_own_requests(catalog,requests,*,owner_sides):
             public_expected_stats.parse_own_targets(request,owner_side=owner,catalog=catalog.expected),
             public_hazard_exposure.parse_own_hazard(request,owner_side=owner,catalog=catalog.hazard,vocabulary=catalog.vocabulary),
             public_exact.parse_own_abilities(request,owner_side=owner,catalog=catalog.exact,vocabulary=catalog.vocabulary),
-            catalog.binding))
+            catalog.binding,
+            None if catalog.self_moves is None else
+                private_self_moves.parse_own_moves(request,owner_side=owner,catalog=catalog.self_moves)))
     return jax.tree.map(lambda *values:jnp.stack(values),*rows)
 
 
@@ -563,6 +578,13 @@ def encode(state,own,catalog,*,observer_sides):
         expected_binding=catalog.exact.device.binding,ruled_out_abilities=ruled_out,exact_state=catalog.masks.exact_state)
     result=v4_assembly.overlay(result,exact.own,section='own')
     result=v4_assembly.overlay(result,exact.opponent,section='opponent')
+    if catalog.masks.self_moves:
+        # V2 self_moves (static: the off trace is unchanged). Own moves from the request, PP from
+        # the owner's own public ledger in the fold (private_self_moves).
+        if catalog.self_moves is None or own.self_moves is None:
+            raise ValueError('self_moves requires the self-move catalog and own request move facts')
+        result=v4_assembly.overlay(result,private_self_moves.project(own.self_moves,context.moves,mons,own.status,
+            catalog.self_moves.device,observer_side=observer,exact_state=catalog.masks.exact_state),section='own')
     result=v4_assembly.overlay(result,public_damage.project_credits(context.damage,tables.damage,mons,
         observer_side=observer,expected_vocabulary=catalog.species.device.vocabulary_binding),section='field')
     hazard=public_hazard_exposure.project(own.hazard,mons,context,state.beliefs,visible,catalog.source.device,

@@ -370,6 +370,27 @@ class ObservationFeatureMasks:
       frozen legacy positions present in EVERY schema, plus the possible-items/moves/abilities
       counts and every sampled search world. Turning this on is not an ablation of something
       already written — it perturbs encodes that every existing checkpoint trained against.
+    - ``self_moves`` (V2): whether OUR OWN Pokemon tokens (self tokens 1-6, every own mon, bench
+      and active, fainted included) carry their movesets and PP in the move-belief columns that
+      are otherwise structurally zero on self tokens. Default False: every existing checkpoint
+      (the champion included) trained with those columns zero, and False encodes
+      byte-identically. No shape or vocabulary change. Representation, mirroring how a FULLY
+      revealed opponent mon is written (our own moves are known exactly, so they are certain):
+
+      * the request's moves (``ShowdownPokemon.moves``; typed Hidden Power ids such as
+        ``hiddenpowerfire``, as the request names them) are both the "revealed" and the
+        "possible" moves: ``belief:possible_move:<id>`` labels in the 16
+        ``CATEGORY_BELIEF_MOVE_OFFSET`` buckets (sorted, as every bucket list is), and
+        ``NUMERIC_REVEALED_MOVE_COUNT`` = ``NUMERIC_POSSIBLE_MOVE_COUNT`` = the number of own moves;
+      * under ``exact_state`` (as for the opponent): per bucket, the PP validity bit 1.0
+        (``NUMERIC_OPP_MOVE_PP_VALID_OFFSET``, v2.1+ schemas) and the remaining-PP fraction
+        (``NUMERIC_OPP_MOVE_PP_OFFSET``) = (catalog max PP - uses) / max PP, where ``uses`` is the
+        owner's own public PP ledger (the belief engine's ``move_uses`` for our mon: the same
+        charging rules as the opponent PP columns, i.e. Pressure doubles only when the foe's
+        Pressure is public to us, Sleep Talk's callee and Struggle are uncharged, moves used
+        while transformed are not charged to the real set). Typed Hidden Power reads the
+        ledger's generic ``hiddenpower`` count. The request's own PP is deliberately NOT used:
+        it covers the active mon only, and the bench must follow the same rule as the active.
     """
 
     opponent_tendency_stats_block: bool = True
@@ -380,8 +401,15 @@ class ObservationFeatureMasks:
     feature_pack_last_move: bool = True
     investment_belief_narrowing: bool = False
     item_belief_narrowing: bool = False
+    self_moves: bool = False
 
     def __post_init__(self) -> None:
+        # OBS_SELF_MOVES=on|off (unset/empty: no override) forces ``self_moves`` for every
+        # mask built in this process: the measurement switch for encoding an existing
+        # checkpoint with our own moves visible. See resolve_self_moves.
+        resolved = resolve_self_moves(self.self_moves)
+        if resolved is not self.self_moves:
+            object.__setattr__(self, "self_moves", resolved)
         # 0 is a valid budget: the transition region exists but is fully masked
         # (Markov-state-only ablations). The encoder fill/mask paths handle it. Under v4 there
         # is no region at all, so the budget is inert rather than meaningful — the encoder
@@ -391,6 +419,28 @@ class ObservationFeatureMasks:
                 f"transition_token_budget must be in 0..{TRANSITION_TOKEN_COUNT}, "
                 f"got {self.transition_token_budget}."
             )
+
+
+SELF_MOVES_ENV = "OBS_SELF_MOVES"
+
+
+def resolve_self_moves(declared: bool) -> bool:
+    """The ``self_moves`` mask for a declared value under the ``OBS_SELF_MOVES`` override.
+
+    Unset or empty: the declared value. ``on`` / ``off``: forced on / off, for measurement runs
+    that encode an existing checkpoint (e.g. the champion) with our own moves and PP visible.
+    Any other value raises: a typo must never silently encode with the default. Read by both
+    mask types, ``ObservationFeatureMasks`` (the Python encoder) and
+    ``gpu_engine.v4_encoder.Masks`` (B2), so one process encodes both paths the same way.
+    """
+    import os
+
+    value = os.environ.get(SELF_MOVES_ENV, "")
+    if value == "":
+        return bool(declared)
+    if value not in ("on", "off"):
+        raise ValueError(f"{SELF_MOVES_ENV} must be 'on' or 'off', got {value!r}")
+    return value == "on"
 
 
 DEFAULT_OBSERVATION_FEATURE_MASKS = ObservationFeatureMasks()
