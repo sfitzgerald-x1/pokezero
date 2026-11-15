@@ -52,12 +52,14 @@ def registry():
     group('sleeptalk','Selected caller eligibility, PP/Choice/Encore and deferred move scheduling','sleep_talk','sleep_talk')
     group('batonpass','Direct Baton transfers represented boosts/volatiles, suspends and resumes original turn',
         'baton','baton ko_residual')
-    group('wish leechseed','Side-slot Wish and singles Leech Seed residuals; Liquid Ooze outside selected scope',
+    group('wish','Side-slot Wish and singles Leech Seed residuals; Liquid Ooze outside selected scope',
         'sustain','sustain')
+    group('leechseed','Side-slot Wish and singles Leech Seed residuals; Liquid Ooze outside selected scope',
+        'sustain','sustain residual_order')
     group('spikes','Layer placement, grounded entry damage and hazard-KO replacement scheduling','entry','entry ko_residual')
     group('synthesis morningsun moonlight','Gen3 fractional healing under live effective weather','effects','weather_healing')
     group('raindance sunnyday sandstorm','Five ordinary-turn weather clocks and represented weather interactions','weather','weather')
-    group('encore','Gen3 last caller, duration/PP and ordinary-turn scheduling','encore','encore')
+    group('encore','Gen3 last caller, duration/PP and ordinary-turn scheduling','encore','encore residual_order')
     group('focuspunch','Queued preparation, hit/PP/Choice veto and deferred-turn state','focus_punch','focus_punch')
     group('healbell','Living own-party major-status cure, including per-holder Soundproof','effects','heal_bell')
     group('roar whirlwind','Selected phazing, grounded entry hazards and represented blockers','phazing','phazing')

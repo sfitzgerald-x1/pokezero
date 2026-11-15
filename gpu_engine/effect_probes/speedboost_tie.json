@@ -1,0 +1,187 @@
+{
+ "schema": "pokezero.effect_probe.scenario.v1",
+ "move": "speedboost_tie",
+ "note": "R2: Speed Boost at equal Speed (identical Ninjask, side 0's with Keen Eye), so Showdown has one subOrder-3 handler and no tie; the engine's subOrder-3 pair still sorts by draws[1][0] (axis), so side 1's first boost runs at residual position 0 or 1 (later ones at 0: it is faster then). Both switch in at the first step from leads of different Speed (Starmie, Skarmory), so the start has no Speed tie.",
+ "teams": [
+  [
+   {
+    "species": "Starmie",
+    "moves": [
+     "splash",
+     "surf",
+     "recover",
+     "protect"
+    ],
+    "ability": "Illuminate",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Ninjask",
+    "moves": [
+     "splash",
+     "protect",
+     "swordsdance",
+     "aerialace"
+    ],
+    "ability": "Keen Eye",
+    "item": ""
+   },
+   {
+    "species": "Skarmory",
+    "moves": [
+     "splash",
+     "protect",
+     "spikes",
+     "peck"
+    ],
+    "ability": "Keen Eye",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Swampert",
+    "moves": [
+     "splash",
+     "protect",
+     "surf",
+     "earthquake"
+    ],
+    "ability": "Torrent",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Metagross",
+    "moves": [
+     "splash",
+     "protect",
+     "meteormash",
+     "earthquake"
+    ],
+    "ability": "Clear Body",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Celebi",
+    "moves": [
+     "splash",
+     "protect",
+     "psychic",
+     "recover"
+    ],
+    "ability": "Natural Cure",
+    "item": "Leftovers"
+   }
+  ],
+  [
+   {
+    "species": "Skarmory",
+    "moves": [
+     "splash",
+     "protect",
+     "spikes",
+     "peck"
+    ],
+    "ability": "Keen Eye",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Ninjask",
+    "moves": [
+     "splash",
+     "protect",
+     "swordsdance",
+     "aerialace"
+    ],
+    "ability": "Speed Boost",
+    "item": ""
+   },
+   {
+    "species": "Starmie",
+    "moves": [
+     "splash",
+     "surf",
+     "recover",
+     "protect"
+    ],
+    "ability": "Illuminate",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Swampert",
+    "moves": [
+     "splash",
+     "protect",
+     "surf",
+     "earthquake"
+    ],
+    "ability": "Torrent",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Metagross",
+    "moves": [
+     "splash",
+     "protect",
+     "meteormash",
+     "earthquake"
+    ],
+    "ability": "Clear Body",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Celebi",
+    "moves": [
+     "splash",
+     "protect",
+     "psychic",
+     "recover"
+    ],
+    "ability": "Natural Cure",
+    "item": "Leftovers"
+   }
+  ]
+ ],
+ "script": [
+  [
+   "switch 2",
+   "switch 2"
+  ],
+  [
+   "move 1",
+   "move 1"
+  ],
+  [
+   "move 1",
+   "move 1"
+  ],
+  [
+   "move 1",
+   "move 1"
+  ],
+  [
+   "move 1",
+   "move 1"
+  ]
+ ],
+ "axes": [
+  {
+   "name": "tie",
+   "field": "draws.1.0",
+   "values": [
+    0,
+    1
+   ]
+  }
+ ],
+ "expect": {
+  "exact": true
+ },
+ "require_fields": [
+  "perish_counter",
+  "yawn_counter",
+  "partial_trap_counter",
+  "partial_trap_source",
+  "item_knocked",
+  "destiny_bond",
+  "effect"
+ ]
+}

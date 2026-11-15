@@ -196,7 +196,7 @@ console.log(JSON.stringify({base,cached,mod:format.mod,formatOverride:!!format.p
         _, core = self.construct()
         r = driver._checked(self.prepared)
         context = r['leftovers_context']
-        calls = [0]
+        calls = [0];fault = [None]
         original = items.consume_pinch
         def transient(table, item, boosts, hp, maximum, *, eligible):
             calls[0] += 1
@@ -204,10 +204,14 @@ console.log(JSON.stringify({base,cached,mod:format.mod,formatOverride:!!format.p
             # Fault two literal numerical item-write results. The first is an
             # unsupported item, the second consumes it back to0. No source
             # history assertion can be recovered from the safe final item.
-            if calls[0] == 2:
+            # The fault is the first call with an eligible row (the first heal
+            # event) and the zero write the next call: R2 traces this handler
+            # only where a heal event can sort, so a call count names no position.
+            if fault[0] is None and bool(j.any(eligible)):
+                fault[0] = calls[0]
                 current = j.where(eligible,
                     len(self.f.metadata['vocabulary']['items']) + 9, current)
-            elif calls[0] == 3:
+            elif fault[0] is not None and calls[0] == fault[0] + 1:
                 current = j.zeros_like(current)
             return current, after
         tape = life._tape(core.cursor, self.f.f.producer, 64)
@@ -216,7 +220,7 @@ console.log(JSON.stringify({base,cached,mod:format.mod,formatOverride:!!format.p
                 self.f.f.table, self.chance(), _public_trace=tape, _lifecycle_trace=True,
                 _weather_hp_context=(core.weather_profile, context.weather_profile_data),
                 _leftovers_context=context)
-        self.assertGreaterEqual(calls[0], 3)
+        self.assertIsNotNone(fault[0]);self.assertGreater(calls[0], fault[0])
         self.assertTrue(bool(j.all((result.step.state.item >= 0) &
             (result.step.state.item < len(self.f.metadata['vocabulary']['items'])))))
         self.assertEqual(result.weather_profile.qualified_birth.tolist(), [False, False])

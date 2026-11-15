@@ -18,8 +18,11 @@ transition.py's source):
 Then the event at position p depends only on the two actives' Speed relation and the tie draws. POSITIONS[kind] is every
 position a kind's events take, over every Speed gap that can give its own order and every tie draw: an exhaustive
 enumeration of the step's own keys (the fixed Yawn draw is enumerated too, which can only widen its set). At any other
-position the kind's event mask is all false. Fidelity M2's R1 emits the Wrap and Yawn handler blocks only at
-POSITIONS['wrap'] and POSITIONS['yawn'], which cuts the traced step's size; every other handler runs at every position.
+position the kind's event mask is all false. To cut the traced step's size, Fidelity M2's R1 emits the Wrap and Yawn
+handler blocks only at POSITIONS['wrap'] and POSITIONS['yawn'], and R2 does the same for the five older handlers (Speed
+Boost, Leftovers and the pinch berries, Leech Seed, brn/psn/tox, Encore): 19 of their 70 position slots. In lifecycle mode
+Encore still runs at every position (its kernel-risk branch counts each visit), and without the entry table so does every
+older handler (transition.py's _all_positions).
 """
 import itertools
 import types
@@ -90,6 +93,7 @@ def reachable_positions():
     return {kind: frozenset(found[kind]) for kind in KINDS}
 
 
-# R1's gating sets, derived from the constants above (wrap: 4, 8, 9, 11; yawn: 6, 12, 13). Read-only (a mapping proxy of
+# The gating sets, derived from the constants above: ability 0, 1, 7; heal 1, 2, 3, 8; seed 2, 4, 5, 9; status 3, 6, 7, 10;
+# wrap 4, 8, 9, 11; encore 5, 10, 11, 12; yawn 6, 12, 13 (26 of the 98 position x kind slots). Read-only (a mapping proxy of
 # frozensets), so nothing can change the gating sets at runtime.
 POSITIONS = types.MappingProxyType(reachable_positions())
