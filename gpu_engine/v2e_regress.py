@@ -519,6 +519,33 @@ def frozen_defrost(p):
     return p.side_uses('sacredfire') & (p.active('status') == FRZ)
 
 
+# Fidelity tier D abilities (data/mods/gen4/abilities.ts, data/mods/gen3/abilities.ts at f76228a1).
+PINCH_ABILITIES = ('blaze', 'torrent', 'overgrow', 'swarm')
+CONTACT_ABILITIES = ('poisonpoint', 'flamebody', 'effectspore')
+
+
+def ability_target(*names):
+    """D: [L,2] the side whose active may hold one of these abilities when the other side's move hits it this step: its
+    active holds it (the current ability: a Trace copy included), or a holder in its party may come in (installs: a
+    switch, Baton Pass, the foe's Roar/Whirlwind, a replacement), or a Trace holder that may come in faces a holder
+    (Trace copies the foe active's ability at its entry). The actor is the other side (the attacker)."""
+    def predicate(p):
+        ids = p.ability_ids(*names)
+        holders = np.isin(p.s['ability'], ids)                                          # [L,2,6]
+        trace = np.isin(p.s['ability'], p.ability_ids('trace')).any(-1)
+        active = p.active_ability(*names)
+        target = active | ((holders.any(-1) | (trace & active[:, ::-1])) & installs(p))
+        return target[:, ::-1]
+    return predicate
+
+
+def pinch_active(p):
+    """D: [L,2] a side whose active holds Blaze, Torrent, Overgrow or Swarm (the current ability, a Trace copy included):
+    its own matching-type move may be boosted (HP <= max/3 at its getDamage, which earlier hits in the step may reach,
+    so HP is not predicted). An entrant does not move in its entry step."""
+    return p.active_ability(*PINCH_ABILITIES)
+
+
 def entering_ability(*names):
     """PR0 reveal gates: a side may install a holder of one of these abilities this step (the
     reveal happens at its switch-in; the foe's HP/Substitute or the weather is not predicted).
@@ -773,6 +800,16 @@ FAMILIES['m2'] = tuple(f'^{re.escape(n)}$' for n in M2_COUNTER_LEAVES) + (rf'^{r
 ALLOWED['whiteherb'] = dict(user=('hp', 'visible', 'subtracker', 'wish'), target=('hp', 'visible', 'subtracker', 'wish'), glob=())
 ALLOWED['facade'] = dict(user=('hp', 'visible', 'subtracker', 'wish'), target=('hp', 'visible', 'subtracker', 'wish'), glob=())
 ALLOWED['sacredfire'] = ALL
+# D. Wonder Guard: a hit that is now blocked or not decides whether the holder (Shedinja: 1 HP) survives and whether the
+# move's effects, contact abilities, drain and recoil happen at all, so, like a sleep landing (A1), anything. The contact
+# abilities: a status landing on the attacker decides whether it acts later (sleep, full paralysis), so anything too.
+# Pinch: the boosted damage (Bonemerang's second-hit set): the target's HP, Substitute and what follows from its HP (its
+# HP-gated items and stages, a pending Wish, Color Change and its reveal, the belief refresh, a lost Focus Punch), and the
+# user's HP from the reply (Counter/Mirror Coat), its drain (Giga Drain under Overgrow) or Liquid Ooze, and its HP items.
+ALLOWED['wonderguard'] = ALL
+ALLOWED['contact_status'] = ALL
+ALLOWED['pinch'] = dict(user=('hp', 'item', 'boosts', 'visible', 'reveal'),
+                        target=('hp', 'item', 'boosts', 'typechange', 'reveal', 'visible', 'subtracker', 'wish', 'focus'), glob=())
 
 
 # Allowances an effect earns only on a KO cascade in which the other side (its target's) has a newly (un)fainted
@@ -809,6 +846,9 @@ PLUGINS = {
     'C': dict(psychoboost=move('psychoboost'), whiteherb=white_herb, sacredfire=move('sacredfire'), facade=move('facade')),
     # WH (White Herb plus C-lite, which replaces C's draft; Psycho Boost's drop is unchanged, its restore is White Herb's).
     'WH': dict(whiteherb=white_herb, facade=facade_status, sacredfire=frozen_defrost),
+    # D (fidelity tier D): Wonder Guard, the pinch abilities, Poison Point / Flame Body / Effect Spore.
+    'D': dict(wonderguard=ability_target('wonderguard'), pinch=pinch_active,
+              contact_status=ability_target(*CONTACT_ABILITIES)),
 }
 
 

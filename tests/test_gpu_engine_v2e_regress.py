@@ -252,6 +252,29 @@ class DigestAndRuleTests(unittest.TestCase):
         wrong = post.copy();wrong[0, 2, 0] = True
         self.assertEqual(faint_rule(entries, {vol: wrong}, {vol: base}, fainted, p2p, slots), (entries, []))
 
+    def test_tier_d_plug_in_predicates(self):
+        """D: Wonder Guard / contact holders as targets (active, a switch-in, a Trace entrant facing one), the attacker the
+        actor; a pinch active is its own actor. Every D effect has an allowance."""
+        from gpu_engine.v2e_regress import Pre, PLUGINS, ALLOWED
+        WG, BLAZE, TRACE, ROAR = 4, 5, 6, len(VOCAB['moves'])
+        vocab = dict(VOCAB, moves=VOCAB['moves'] + ['roar'], abilities=VOCAB['abilities'] + ['wonderguard', 'blaze', 'trace'])
+        L = 8;s = pre_arrays(L);actions = np.zeros((L, 2), np.int32)
+        s['ability'][0, 1, 0] = WG                                         # lane 0: side 1's active holds Wonder Guard
+        s['ability'][1, 1, 3] = WG                                         # lane 1: a benched holder, no switch
+        s['ability'][2, 1, 3] = WG;actions[2, 1] = 6                       # lane 2: side 1 switches (any holder may come)
+        s['ability'][3, 0, 0] = WG;s['ability'][3, 1, 2] = TRACE;s['moves'][3, 0, 0, 0] = ROAR   # lane 3: dragged Tracer
+        # (lane 3: side 0's own Wonder Guard active makes side 1 an actor too)
+        s['ability'][4, 0, 0] = 3                                          # lane 4: side 0's active holds Effect Spore
+        s['ability'][5, 1, 0] = BLAZE                                      # lane 5: side 1's active holds Blaze
+        s['ability'][6, 1, 2] = BLAZE;actions[6, 1] = 5                    # lane 6: a Blaze entrant does not move
+        named = {f'state.{k}': v for k, v in s.items()};named['actions'] = actions
+        p = Pre(named, vocab, np.append(CALLABLE, False), np.zeros((L, 2), bool))
+        d = PLUGINS['D'];no = [False, False]
+        self.assertEqual(d['wonderguard'](p).tolist(), [[True, False], no, [True, False], [True, True], no, no, no, no])
+        self.assertEqual(d['contact_status'](p).tolist(), [no, no, no, no, [False, True], no, no, no])
+        self.assertEqual(d['pinch'](p).tolist(), [no, no, no, no, no, [False, True], no, no])
+        self.assertTrue(all(e in ALLOWED for e in d))
+
     def test_pr0_meanlook_arrival_predicate_reads_the_tracker_pre_value(self):
         from gpu_engine.v2e_regress import Pre, PLUGINS, lane_verdict, MEANLOOK
         L = 6;s = pre_arrays(L);actions = np.zeros((L, 2), np.int32);MEAN = len(VOCAB['moves'])
