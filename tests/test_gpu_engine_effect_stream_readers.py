@@ -65,7 +65,7 @@ REVIEWED = {
     # effect.s.2, fidelity tier D: an Effect Spore sleep's duration 2+d on the attacker's side, passed as sleep_roll to the
     # two secondary.apply_contact calls and to the Pursuit intercept's (secondary.apply_contact reads it only for a
     # contact hit on an Effect Spore holder whose draw put the attacker to sleep; the plans observe effect.s.2 then).
-    ('step_with_chance', 'effect_draws[:, side, 2]', 'bcdea411b7efe931'): 1,
+    ('step_with_chance', 'effect_draws[:, side, 2]', '817f323b84511227'): 1,
     ('step_with_chance', 'effect_draws[rows, side, 2]', '453f2ff1f5dc7438'): 1,
     ('step_with_chance', 'effect_draws[rows, side, 2]', '83200148dadb1808'): 1,
     # effect.1.3: the Perish pair tie, used only when the end speeds are equal
@@ -110,7 +110,8 @@ def sleep_roll_readers():
     return found, statements
 SLEEP_ROLL_REVIEWED = {
     # transition passes effect[s][2] on; pursuit.intercept passes it to its contact call
-    ('pursuit.py', 'intercept', 'secondaries.apply_contact(state, side, move, contact_roll, table.secondary, eligible=used & (dealt > 0) & (sub == 0), sleep_roll=sleep_roll)', 'fc60174c79b77819'): 1,
+    ('pursuit.py', 'intercept', 'jnp.zeros_like(contact_roll) if sleep_roll is None else sleep_roll', 'bfc3b378824dcab0'): 1,
+    ('pursuit.py', 'intercept', 'sleep_roll is None', 'bfc3b378824dcab0'): 1,
     ('secondary.py', 'apply_contact', 'gate proc', '4223e413f02161c2'): 1,
     ('secondary.py', 'apply_contact', 'gate rolled', '3becf7407f15669f'): 1,
     ('secondary.py', 'apply_contact', 'gate slept', '4ea0471ca753fbc2'): 1,

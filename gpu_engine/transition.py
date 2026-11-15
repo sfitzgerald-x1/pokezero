@@ -646,13 +646,16 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                 & ~initial_loaf)
             _faint_before_hp=work.hp
             if _device_public is not None:_device_pursuit_before=work
-            work,used,fainted = intercepts.intercept(work,side,slot[:,side],moves[:,side],
+            work,used,fainted,_contact_reveals = intercepts.intercept(work,side,slot[:,side],moves[:,side],
                 draws[:,side],table,eligible=eligible,contact_roll=phazing_draws[:,side],
-                sleep_roll=effect_draws[:,side,2])   # tier D: an Effect Spore sleep's 2+effect[s][2]
-            # Tier D: a Wonder Guard holder's TryHit line on a blocked Pursuit reveals its ability (a Traced one: Pursuit is
-            # Dark, super-effective on Shedinja). The target has not switched yet.
+                sleep_roll=effect_draws[:,side,2],_reveal_masks=True)   # tier D: an Effect Spore sleep's 2+effect[s][2]
+            # Tier D: the intercept's public ability reveals (it runs no device hooks): a Wonder Guard holder's TryHit line
+            # on a blocked Pursuit (a Traced one: Pursuit is Dark, super-effective on Shedinja), the target's contact
+            # ability's -status/-damage [from] ability line, and the pursuer's Synchronize. The target has not switched yet.
             if _device_public is not None:
-                device_public.reveal_ability(_device_public,work,1-side,used & intercepts.wonder_guard_blocked(work,side,moves[:,side],table))
+                device_public.reveal_ability(_device_public,work,1-side,(used & intercepts.wonder_guard_blocked(work,side,moves[:,side],table))
+                    | _contact_reveals[0])
+                device_public.reveal_ability(_device_public,work,side,_contact_reveals[1])
             if _lifecycle_trace:
                 _public_trace=status_callbacks.unknown(_public_trace,used)
             if _lifecycle_trace:work,_public_trace=_lum_update(work,table,used,_public_trace,_device_public=_device_public)

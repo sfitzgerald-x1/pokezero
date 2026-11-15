@@ -145,6 +145,19 @@ def apply_color_change(state,side,move_type,table,*,eligible,_status_trace=None,
     return state
 
 
+def synchronize_reflects(state, source, afflicted, status, table, *, applied):
+    """(reflected status, [B] mask): after_status_event's Synchronize reflection of a fresh status onto its source."""
+    rows=jnp.arange(state.hp.shape[0])
+    own,target=state.active[rows,source],state.active[rows,afflicted]
+    reflected=jnp.where(status==m.TOX,m.PSN,status)
+    reflects=(jnp.asarray(applied) & (source!=afflicted)
+        & table.synchronize[state.ability[rows,afflicted,target]]
+        & ((status==m.PAR)|(status==m.BRN)|(status==m.PSN)|(status==m.TOX))
+        & (state.hp[rows,source,own]>0) & (state.status[rows,source,own]==m.NONE)
+        & status_allowed(table,reflected,state.types[rows,source,own],state.ability[rows,source,own]))
+    return reflected,reflects
+
+
 def after_status_event(state, source, afflicted, status, table, *, applied, item_table=None, _status_trace=None, _device_public=None):
     """Gen3 AfterSetStatus: reflect first, then consume each event's Lum.
 
@@ -154,13 +167,8 @@ def after_status_event(state, source, afflicted, status, table, *, applied, item
     Existing type/ability immunity and a living, unstatused source still apply.
     """
     rows=jnp.arange(state.hp.shape[0])
-    own,target=state.active[rows,source],state.active[rows,afflicted]
-    reflected=jnp.where(status==m.TOX,m.PSN,status)
-    reflects=(jnp.asarray(applied) & (source!=afflicted)
-        & table.synchronize[state.ability[rows,afflicted,target]]
-        & ((status==m.PAR)|(status==m.BRN)|(status==m.PSN)|(status==m.TOX))
-        & (state.hp[rows,source,own]>0) & (state.status[rows,source,own]==m.NONE)
-        & status_allowed(table,reflected,state.types[rows,source,own],state.ability[rows,source,own]))
+    own=state.active[rows,source]
+    reflected,reflects=synchronize_reflects(state,source,afflicted,status,table,applied=applied)
     if _status_trace is not None:
         from . import engine_status_callbacks as callbacks
         _status_trace=callbacks.unknown(_status_trace,reflects)
@@ -201,7 +209,8 @@ def after_status_event(state, source, afflicted, status, table, *, applied, item
 
 
 def apply_contact(state, side, move, roll, table, *, eligible, item_table=None, _status_trace=None,
-                  _rough_skin_context=None, _rough_skin_capture=None, _device_public=None, sleep_roll=None):
+                  _rough_skin_context=None, _rough_skin_capture=None, _device_public=None, sleep_roll=None,
+                  _reveal_masks=False):
     """Gen3 contact onDamagingHit abilities (Static, Poison Point, Flame Body, Effect Spore, Rough Skin), before Lum/recoil.
 
     The existing uniform [0,60) auxiliary draw (the attacker's phazing[s]) gives Static's, Poison Point's and Flame
@@ -229,6 +238,10 @@ def apply_contact(state, side, move, roll, table, *, eligible, item_table=None, 
     immunity, Protect and zero damage. A KO of the ability holder still triggers;
     a fainted attacking source cannot receive status. Shield Dust and Serene
     Grace do not affect this ability event; the attacker's own Substitute does not either.
+
+    _reveal_masks (Pursuit's intercept, which runs without device hooks): also return the [B] masks of the public
+    ability reveals this event's lines make, (the holder's: a -status [from] ability [of] HOLDER or a Rough Skin -damage
+    line; the attacker's: Synchronize reflecting it), for the caller's device pass.
     """
     if sleep_roll is None:
         raise ValueError('sleep_roll required: the attacker\'s effect[s][2] (an Effect Spore sleep\'s 2+draw)')
@@ -262,6 +275,9 @@ def apply_contact(state, side, move, roll, table, *, eligible, item_table=None, 
     if _device_public is not None:
         device_public.reveal_ability(_device_public,state,foe,proc & ~slept)
         device_public.observe(_device_public,state,proc)
+    if _reveal_masks:
+        holder_reveal=proc & ~slept
+        _,attacker_reveal=synchronize_reflects(state,foe,side,status,table,applied=proc)
     if _status_trace is not None:
         state,_status_trace=after_status_event(state,foe,side,status,table,
             applied=proc,item_table=item_table,_status_trace=_status_trace,_device_public=_device_public)
@@ -283,6 +299,8 @@ def apply_contact(state, side, move, roll, table, *, eligible, item_table=None, 
     if _status_trace is not None:
         _status_trace=rough_callbacks.record(_status_trace,pending,state)
         return state,_status_trace
+    if _reveal_masks:
+        return state,holder_reveal | rough,attacker_reveal
     return state
 
 

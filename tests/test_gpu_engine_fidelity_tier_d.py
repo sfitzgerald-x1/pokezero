@@ -16,9 +16,9 @@ NORMAL, FIGHTING, POISON, BUG, GHOST, STEEL, FIRE, WATER, GRASS = 1, 2, 4, 7, 8,
 MOVES = ['_none', 'struggle', 'splash', 'tackle', 'flamethrower', 'toxic', 'seismictoss', 'surf', 'megahorn', 'earthquake']
 STRUGGLE, SPLASH, TACKLE, FLAMETHROWER, TOXIC, SEISMICTOSS, SURF, MEGAHORN, EARTHQUAKE = range(1, 10)
 ABILITIES = ['_none', 'wonderguard', 'blaze', 'torrent', 'overgrow', 'swarm', 'thickfat', 'poisonpoint', 'flamebody',
-             'effectspore', 'static', 'limber', 'insomnia', 'immunity', 'waterveil', 'vitalspirit', 'roughskin']
+             'effectspore', 'static', 'limber', 'insomnia', 'immunity', 'waterveil', 'vitalspirit', 'roughskin', 'synchronize']
 (WONDERGUARD, BLAZE, TORRENT, OVERGROW, SWARM, THICKFAT, POISONPOINT, FLAMEBODY, EFFECTSPORE, STATIC, LIMBER, INSOMNIA,
- IMMUNITY, WATERVEIL, VITALSPIRIT, ROUGHSKIN) = range(1, 17)
+ IMMUNITY, WATERVEIL, VITALSPIRIT, ROUGHSKIN, SYNCHRONIZE) = range(1, 18)
 HAS_JAX = bool(importlib.util.find_spec('jax'))
 
 
@@ -201,6 +201,31 @@ class ContactTests(unittest.TestCase):
         self.assertEqual(hp[31, 0, 0], 150);self.assertTrue((np.delete(hp[:, 0, 0], [9, 31]) == 160).all())
         self.assertTrue((hp[:, 1] == np.asarray(s.hp)[:, 1]).all())
         self.assertTrue((np.asarray(out.status)[:, 1] == np.asarray(s.status)[:, 1]).all())
+
+    def test_reveal_masks_for_the_pursuit_intercept(self):
+        """_reveal_masks: the holder's reveal on a -status [from] ability line (not Gen 3's plain slp line) or a Rough Skin
+        line, the attacker's on its Synchronize reflection; the state is the plain call's."""
+        from gpu_engine import mechanics as m, secondary
+        j = self.j
+        # (holder, attacker ability, roll): Poison Point psn, Effect Spore slp, Effect Spore par, Rough Skin, Static
+        # into a Synchronize attacker (reflected onto the holder), no proc.
+        cases = [(POISONPOINT, 0, 0), (EFFECTSPORE, 0, 0), (EFFECTSPORE, 0, 2), (ROUGHSKIN, 0, 59), (STATIC, SYNCHRONIZE, 0),
+                 (POISONPOINT, 0, 20)]
+        s = self.empty(len(cases), seed=5)
+        arrays = {k: np.array(v) for k, v in s._asdict().items()}
+        arrays['hp'][:] = 160;arrays['max_hp'][:] = 160;arrays['done'][:] = False;arrays['types'][:, :, :, 0] = NORMAL
+        for lane, (holder, attacker, _) in enumerate(cases):
+            arrays['ability'][lane, 1, 0] = holder;arrays['ability'][lane, 0, 0] = attacker
+        s = type(s)(**{k: j.asarray(v) for k, v in arrays.items()})
+        args = (s, 0, j.full(len(cases), TACKLE), j.asarray([c[2] for c in cases]), self.table)
+        kw = dict(eligible=True, sleep_roll=j.zeros(len(cases), j.int32))
+        plain = secondary.apply_contact(*args, **kw)
+        out, holder, attacker = secondary.apply_contact(*args, **kw, _reveal_masks=True)
+        self.assertEqual(np.asarray(holder).tolist(), [True, False, True, True, True, False])
+        self.assertEqual(np.asarray(attacker).tolist(), [False, False, False, False, True, False])
+        self.assertEqual(np.asarray(out.status)[4].tolist()[0][0], m.PAR);self.assertEqual(np.asarray(out.status)[4, 1, 0], m.PAR)
+        for name in out._fields:
+            self.assertTrue(np.array_equal(np.asarray(getattr(out, name)), np.asarray(getattr(plain, name))), name)
 
     def test_sleep_roll_is_required(self):
         j = self.j
