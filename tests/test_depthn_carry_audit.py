@@ -45,8 +45,8 @@ def citations(text):
 # a removed one loses it.
 CITATION_ANCHORS = {
     'gpu_engine/baton.py:16': 'batonpass',
-    'gpu_engine/constructor_worlds.py:482': 'OPPONENT_RECHARGE_UNREPRESENTED',
-    'gpu_engine/constructor_worlds.py:843': 'def fix_recharge',
+    'gpu_engine/constructor_worlds.py:487': 'OPPONENT_RECHARGE_UNREPRESENTED',
+    'gpu_engine/constructor_worlds.py:887': 'def fix_recharge',
     'gpu_engine/effects.py:175': 'def stall_success',
     'gpu_engine/effects.py:46': 'destinybond',
     'gpu_engine/encore.py:14-20': '^def from_metadata',
