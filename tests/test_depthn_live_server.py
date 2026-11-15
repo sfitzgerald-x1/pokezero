@@ -1,6 +1,7 @@
 """The live server on CPU: fake (and one real fake-engine) search objects through Codex's real Server queue over localhost."""
 import asyncio
 from contextlib import ExitStack,redirect_stderr
+import hashlib
 import io
 import json
 import os
@@ -107,6 +108,16 @@ class ServerTests(unittest.TestCase):
         self.assertEqual((rows[1]['response']['request_id'],rows[1]['address']['battle_id'],rows[1]['lines'],rows[1]['budget_seconds']),('r1','b1',1,2.5))
         self.assertEqual(rows[1]['arrival_monotonic'],rows[1]['response']['arrival']);self.assertGreaterEqual(rows[1]['server_seconds'],0)
         self.assertEqual(rows[1]['response']['server_id'],'gpu0:7001')
+
+    def test_run_hands_prepare_its_warm_in_list(self):
+        seen=[]
+        class Warming(FakeSearch):
+            def warmup(self,requests,warm_in=()):seen.append((list(requests),list(warm_in)));return super().warmup(requests)
+        with patch.object(S.asyncio,'run',lambda coroutine:coroutine.close()):   # no serving: warmup, READY's setup, done
+            S.run(Warming(),host='127.0.0.1',port=free_port(),warmup_requests=[dict(battle_id='w')],max_requests=4,log=lambda row:None,
+                warm_in=(dict(battle_id='x'),))
+            S.run(FakeSearch(),host='127.0.0.1',port=free_port(),warmup_requests=[dict(battle_id='w')],max_requests=4,log=lambda row:None)   # no list: warmup(requests)
+        self.assertEqual(seen,[([dict(battle_id='w')],[dict(battle_id='x')])])
 
     def test_server_id_stamps_responses_only_when_given(self):
         plain=S.Recorder(FakeSearch()).process_many([request(1)]);self.assertNotIn('server_id',plain[0])   # no id: the search's responses, unchanged
@@ -349,6 +360,22 @@ class ServerTests(unittest.TestCase):
         with tempfile.TemporaryDirectory()as tmp:
             path=Path(tmp)/'w.jsonl';path.write_text('{"battle_id":"a"}\n\n{"battle_id":"b"}\n')
             self.assertEqual(S.read_requests(path),[dict(battle_id='a'),dict(battle_id='b')])
+            # prepare's warm-in list: with its sha256 only, held to it, recorded in the header
+            sha=hashlib.sha256(path.read_bytes()).hexdigest();listed=S.options(base+champion+['--prepare-warm-in',str(path),'--prepare-warm-in-sha256',sha])
+            self.assertEqual(S.read_warm_in(listed),(dict(battle_id='a'),dict(battle_id='b')));self.assertEqual(S.read_warm_in(args),())
+            self.assertEqual(S.header(listed,search)['prepare_warm_in_sha256'],sha);self.assertNotIn('prepare_warm_in_sha256',S.header(args,search))
+            for bad in(['--prepare-warm-in',str(path)],['--prepare-warm-in-sha256',sha]):
+                with self.subTest(bad=bad),redirect_stderr(io.StringIO()),self.assertRaises(SystemExit):S.options(base+champion+bad)
+            with self.assertRaisesRegex(ValueError,'differs from --prepare-warm-in-sha256'):
+                S.read_warm_in(S.options(base+champion+['--prepare-warm-in',str(path),'--prepare-warm-in-sha256','0'*64]))
+            empty=Path(tmp)/'empty.jsonl';empty.write_text('\n')   # an empty list (its own sha256 matches): refused
+            with self.assertRaisesRegex(ValueError,'one JSON object per line, at least one'):
+                S.read_warm_in(S.options(base+champion+['--prepare-warm-in',str(empty),'--prepare-warm-in-sha256',hashlib.sha256(b'\n').hexdigest()]))
+            with self.assertRaises(FileNotFoundError):   # a missing list
+                S.read_warm_in(S.options(base+champion+['--prepare-warm-in',str(Path(tmp)/'none.jsonl'),'--prepare-warm-in-sha256',sha]))
+            # parsed from the bytes the sha256 checked: a file that changes after the check is never read again
+            with patch.object(S,'read_requests',side_effect=AssertionError('the list file was read twice')):
+                self.assertEqual(S.read_warm_in(listed),(dict(battle_id='a'),dict(battle_id='b')))
             path.write_text('[1]\n')
             with self.assertRaisesRegex(ValueError,'one JSON object per line'):S.read_requests(path)
 

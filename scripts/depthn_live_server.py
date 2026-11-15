@@ -177,15 +177,15 @@ def matmul_precision():
 
 
 def run(search,*,host,port,warmup_requests,max_requests,batch_wait_seconds=.005,queue_limit=256,telemetry=None,header=None,log=_print,on_server=None,
-        server_id=None):
+        server_id=None,warm_in=()):
     """Build the Server (Codex's queue checks), warm `search` up, then serve until stopped; READY is logged (and recorded)
     once it is warm AND its own listener accepts connections. `on_server(server)` sees the Server before the warmup (its
-    stop() ends run once serving)."""
+    stop() ends run once serving). `warm_in`: prepare's warm-in list (DepthNLiveSearch.warmup's), when there is one."""
     recorder=Recorder(search,telemetry,server_id=server_id)
     try:
         server=Server(recorder,max_requests=max_requests,batch_wait_seconds=batch_wait_seconds,queue_limit=queue_limit)
         if on_server is not None:on_server(server)
-        warm=search.warmup(warmup_requests);buckets=warm.get('buckets',{})
+        warm=search.warmup(warmup_requests,**({'warm_in':warm_in}if warm_in else{}));buckets=warm.get('buckets',{})
         ready=dict(event='READY',host=host,port=port,server_id=server_id,**(header or{}),cold_seconds={b:x.get('cold_seconds')for b,x in buckets.items()},
             warm_seconds={b:x.get('warm_seconds')for b,x in buckets.items()},programs=warm.get('programs'),carry_reference=warm.get('carry_reference'),warmup=warm)
         def announce():log(ready);recorder.record(dict(ready,kind='ready'))
@@ -240,6 +240,11 @@ def parser():
     p.add_argument('--block-lanes',type=int,default=2187);p.add_argument('--blocks-per-call',type=int,default=16)
     p.add_argument('--warmup-requests',required=True,help='JSONL of saved Showdown requests, one object per line with the eight address keys of '
         'Codex\'s ladder request (battle_id, owner, stream_id, decision_index, generation, prefix_sha256, lines, own_request_line)')
+    p.add_argument('--prepare-warm-in',help='JSONL of saved requests (the eight address keys, as --warmup-requests) that prepare runs once '
+        'each, in order, during warmup (DepthNLiveSearch.warmup\'s warm_in): their first-use CPU compiles happen before READY instead of on '
+        'live roots; with --prepare-warm-in-sha256')
+    p.add_argument('--prepare-warm-in-sha256',help='sha256 of --prepare-warm-in\'s bytes: the same list on every startup (the server refuses '
+        'another)')
     p.add_argument('--telemetry',help='server-side JSONL, appended, fsynced per batch')
     p.add_argument('--server-id',help='this process\'s name in READY and every response (default HOSTNAME:PORT)')
     p.add_argument('--tree-commit',help='the code commit served (default: this checkout\'s HEAD, +dirty when tracked files differ)')
@@ -291,6 +296,8 @@ def options(argv=None):
     if getattr(args,'r3pa','off')=='gated'and args.root_operator!=live.NOISE_GATED_K2:p.error(f'--r3pa gated needs --root-operator {live.NOISE_GATED_K2}')
     if getattr(args,'eager_peer_fold',False)and not(args.redact_private_reveals or args.peer_view_b):
         p.error('--eager-peer-fold folds the peer wire for the redaction: it needs --redact-private-reveals or --peer-view-b')
+    if bool(getattr(args,'prepare_warm_in',None))!=bool(getattr(args,'prepare_warm_in_sha256',None)):
+        p.error('--prepare-warm-in and --prepare-warm-in-sha256 go together')
     if args.max_requests is None:args.max_requests=args.buckets[-1]
     if not 1<=args.max_requests<=args.buckets[-1]:p.error('--max-requests must be in 1..the largest bucket')
     try:   # Codex's own queue/batch checks (phase_d_search_server.Server._initialize), before anything loads or compiles
@@ -302,9 +309,26 @@ def options(argv=None):
 
 def read_requests(path):
     """The saved requests of a JSONL file: one JSON object per non-empty line, at least one."""
-    with open(path,encoding='utf-8')as f:rows=[json.loads(line)for line in f if line.strip()]
-    if not rows or not all(isinstance(r,dict)for r in rows):raise ValueError(f'{path}: one JSON object per line, at least one, required')
+    with open(path,encoding='utf-8')as f:return parse_requests(f.read(),path)
+
+
+def parse_requests(text,name):
+    """Saved requests from JSONL text: one JSON object per non-empty line, at least one (ValueError naming `name` otherwise)."""
+    # split on '\n' only (as line-by-line file reading did): str.splitlines() also splits on U+2028/U+2029/U+0085,
+    # which a JSON string may hold unescaped (ensure_ascii=False)
+    rows=[json.loads(line)for line in text.split('\n')if line.strip()]
+    if not rows or not all(isinstance(r,dict)for r in rows):raise ValueError(f'{name}: one JSON object per line, at least one, required')
     return rows
+
+
+def read_warm_in(args):
+    """--prepare-warm-in's saved requests, its bytes held to --prepare-warm-in-sha256 (ValueError otherwise); () without it. The
+    requests are parsed from the very bytes the sha256 checked (the file is read once), as phase_d_protocol_constructor.read_bound."""
+    if not getattr(args,'prepare_warm_in',None):return()
+    import hashlib
+    blob=Path(args.prepare_warm_in).read_bytes()
+    if hashlib.sha256(blob).hexdigest()!=args.prepare_warm_in_sha256:raise ValueError('--prepare-warm-in differs from --prepare-warm-in-sha256')
+    return tuple(parse_requests(blob.decode('utf-8'),args.prepare_warm_in))
 
 
 def tree_commit():
@@ -375,13 +399,15 @@ def header(args,search):
             reply_checkpoint_sha256=args.reply_checkpoint_sha256,reply_views=args.reply_views,reply_archive_view=reply_view(getattr(getattr(getattr(search,'reply',None),'evaluator',None),'meta',None)))),
         jax_enable_x64=bool(jax.config.jax_enable_x64),matmul_precision=matmul_precision(),matmul_precision_pin=args.matmul_precision,
         **({}if getattr(args,'root_operator',live.ROOT_OPERATOR)==live.ROOT_OPERATOR else dict(live_root_operator=args.root_operator)),
+        **({}if not getattr(args,'prepare_warm_in_sha256',None)else dict(prepare_warm_in_sha256=args.prepare_warm_in_sha256)),
         **({}if getattr(search,'r3pa','off')=='off'else dict(r3pa=search.r3pa)))
 
 
 def main(argv=None):
-    args=options(argv);saved=read_requests(args.warmup_requests);search=build(args)
+    args=options(argv);saved=read_requests(args.warmup_requests);warm_in=read_warm_in(args);search=build(args)
     run(search,host=args.host,port=args.port,warmup_requests=saved,max_requests=args.max_requests,batch_wait_seconds=args.batch_wait_seconds,
-        queue_limit=args.queue_limit,telemetry=args.telemetry,header=header(args,search),server_id=args.server_id or f'{socket.gethostname()}:{args.port}')
+        queue_limit=args.queue_limit,telemetry=args.telemetry,header=header(args,search),server_id=args.server_id or f'{socket.gethostname()}:{args.port}',
+        warm_in=warm_in)
 
 
 if __name__=='__main__':main()

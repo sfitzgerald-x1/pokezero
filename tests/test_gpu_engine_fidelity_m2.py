@@ -330,6 +330,38 @@ class TransitionTests(unittest.TestCase):
         self.assertEqual(np.asarray(s.encore_move)[:, :, 0].tolist(), [[0, 0]] * N)
         for name in s._fields:np.testing.assert_array_equal(np.asarray(getattr(s, name)), np.asarray(getattr(clean, name)), err_msg=name)
 
+    def test_a_wider_tie_draw_still_runs_every_residual_event(self):
+        """R2 ext fix: the residual pair ties read draws (1,0), (0,9), (0,10), (1,9), (1,11) and effect (0,3) as draw ^ side.
+        Those columns are bound 2 when sampled, but an explicit caller can pass more (the v5 fixtures pass 99). A raw 99/98
+        tie outweighed subOrder*2 and Speed*64, so events sorted to positions where R2 traces no handler and silently never
+        ran (at equal Speed both Leftovers heals sat at 6 and 7). event_key reads the tie's low bit, so each wider draw gives
+        exactly its low bit's step and every handler runs (2 and 3 shift every pair's key alike, so they kept the bit order
+        even before; 98 and 99 did not). Both actives at 200/320, equal Speed: 0 Leftovers, 1 poison, 2 both, 3 trapped by
+        each other, 4 side 0 seeded (drained 40, side 1 healed 40), 5 both encored on their recorded Splash (3 -> 2), 6 drowsy;
+        7 Leftovers and poison, side 1 faster."""
+        from gpu_engine.state import LEECH_SEED
+        from gpu_engine.action_history import MOVE
+        both = lambda value: [((0, 0), value), ((1, 0), value)]
+        tie = {'hp': both(200), 'stats': [((0, 0, 5), 200)]}
+        lanes = [{**tie, 'item': both(LEFTOVERS)}, {**tie, 'status': both(PSN)}, {**tie, 'item': both(LEFTOVERS), 'status': both(PSN)},
+                 {**tie, 'partial_trap_counter': both(3), 'partial_trap_source': both(0)}, {**tie, 'volatile': [((0, 0), LEECH_SEED)]},
+                 {**tie, 'encore_counter': both(3), 'encore_move': both(SPLASH), 'last_action_kind': [((0,), MOVE), ((1,), MOVE)],
+                  'last_action_index': [((0,), 0), ((1,), 0)]}, {**tie, 'yawn_counter': both(1)},
+                 {'hp': both(200), 'stats': [((0, 0, 5), 150)], 'item': both(LEFTOVERS), 'status': both(PSN)}]
+        s = self.build(lanes)
+        columns = ((1, 0), (0, 9), (0, 10), (1, 9), (1, 11))
+        play = lambda value: self.play(s, self.chance(draws=[{c: value for c in columns}] * N, effect=[{(0, 3): value}] * N))
+        bits = {bit: play(bit) for bit in (0, 1)}
+        for wide in (99, 98, 3, 2):
+            out = play(wide)
+            for name in out._fields:
+                np.testing.assert_array_equal(np.asarray(getattr(out, name)), np.asarray(getattr(bits[wide & 1], name)), err_msg=f'{wide} {name}')
+            self.assertEqual(np.asarray(out.hp)[:, :, 0].tolist(),
+                             [[220, 220], [160, 160], [180, 180], [180, 180], [160, 240], [200, 200], [200, 200], [180, 180]], wide)
+            self.assertEqual(np.asarray(out.partial_trap_counter)[3, :, 0].tolist(), [2, 2])
+            self.assertEqual(np.asarray(out.encore_counter)[5, :, 0].tolist(), [2, 2])
+            self.assertEqual(np.asarray(out.status)[6, :, 0].tolist(), [SLP, SLP])
+
     def test_zz_one_compile(self):
         """Every transition test used the one compiled step (no recompile)."""
         self.assertEqual(self.jitted['step']._cache_size(), 1)

@@ -115,6 +115,30 @@ class ConstantsTests(unittest.TestCase):
         with self.assertRaises(TypeError):ro.POSITIONS['wrap'] = frozenset()     # read-only (R1 review)
         self.assertTrue(all(isinstance(positions, frozenset) for positions in ro.POSITIONS.values()))
 
+    def test_a_wider_tie_draw_still_sorts_inside_the_gating_sets(self):
+        """The step reads each tie as draw ^ side straight from its ChanceInputs. Columns 0, 9, 10, 11 (and effect column
+        3) are bound 2 when sampled, but an explicit caller can pass more: the v5 public-world and hypothetical-profile
+        fixtures step with every draw 99. A raw 99/98 tie outweighs subOrder*2 (and Speed*64), which put both Leftovers
+        events at 6 and 7 at equal Speed, where R2 traces no heal handler: the heal ran nowhere and nothing refused. The
+        key reads only the tie's low bit, so any integer draw gives one of the bit orders POSITIONS was derived from."""
+        # Unchanged for every in-bound draw: R1/R2's literal key for draw 0/1 on either side, at every Speed and subOrder.
+        for speed, suborder, draw, side in itertools.product(SPEEDS, ro.EVENT_SUBORDER, (0, 1), (0, 1)):
+            self.assertEqual(ro.event_key(speed, suborder, draw ^ side), -speed * 64 + suborder * 2 + (draw ^ side))
+        for tie in range(-4, 260):
+            for speed, suborder in ((0, 3), (7, 19), (2000, 14)):
+                self.assertEqual(ro.event_key(speed, suborder, tie), ro.event_key(speed, suborder, tie & 1))
+        pairs = sorted(set(ro.TIE_PAIR))
+        for speed in itertools.product(SPEEDS, repeat=2):
+            for value in (-1, 2, 3, 15, 98, 99, 100):
+                # Every pair wide, and the v5 fixtures' mix: wide draws, a sampled Wrap bit and the fixed Yawn draw.
+                for bits in ((value,) * len(pairs), (value, value, value, value, 0, value, 0)):
+                    draw = dict(zip(pairs, bits))
+                    keys = [ro.event_key(speed[ro.EVENT_SIDES[e]], ro.EVENT_SUBORDER[e], draw[ro.TIE_PAIR[e]] ^ ro.EVENT_SIDES[e])
+                            for e in range(ro.EVENTS)]
+                    self.assertEqual(len(set(keys)), ro.EVENTS)
+                    for e in range(ro.EVENTS):
+                        self.assertIn(sum(k < keys[e] for k in keys), ro.POSITIONS[ro.EVENT_KIND[e]], (speed, bits, e))
+
     def test_module_is_jax_free(self):
         code = 'import sys\nimport gpu_engine.residual_order\nsys.exit(int(any(m == "jax" or m.startswith("jax.") for m in sys.modules)))'
         result = subprocess.run([sys.executable, '-c', code], cwd=ROOT, env=dict(os.environ, PYTHONPATH=str(ROOT)),
