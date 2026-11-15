@@ -6,10 +6,8 @@ The original V4 observation remains authoritative for routing. The SAME actual
 encode_step result supplies the reviewed six public belief rows exactly once.
 """
 from dataclasses import dataclass
-import functools
 import json
 import math
-from pathlib import Path
 from types import MappingProxyType
 import time
 import weakref
@@ -72,30 +70,15 @@ def _host():
     if isinstance(j.zeros((),j.int32),jax.core.Tracer):raise ValueError('v5 protocol host boundary cannot be traced')
 
 
-@functools.lru_cache(maxsize=64)
-def _archive_self_moves(path,expected_archive_sha256):
-    import hashlib,io
-    blob=Path(path).read_bytes()
-    if hashlib.sha256(blob).hexdigest()!=expected_archive_sha256:raise ValueError('original v5 archive bytes differ')
-    with np.load(io.BytesIO(blob),allow_pickle=False) as data:value=json.loads(data['metadata_json'].tobytes()).get('self_moves',False)
-    if type(value) is not bool:raise ValueError('v5 archive self_moves must be a bool')
-    return value
-
-
-def archive_self_moves(archive,*,expected_archive_sha256):
-    """V2 self_moves: the archive's own declaration (v5_model.export writes metadata['self_moves'] only when on; absent =
-    off), read from the digest-bound archive bytes so a serving contract and catalog can be built FROM it. Archives are
-    immutable and digest-bound, so the answer is cached per (path, digest)."""
-    return _archive_self_moves(str(Path(archive).resolve()),expected_archive_sha256)
-
-
-def declared_contract(archive,*,contract,catalog,expected_archive_sha256):
-    """The serving contract and B2 catalog for THIS archive: its declared self_moves is taken, never refused, so an on
-    archive is served on and an off archive off. The catalog is recompiled from its own source, dex and vocabulary only
-    when the declaration differs; load_factory re-checks archive == contract == catalog after its digest-bound load."""
+def take_declaration(metadata,*,contract,catalog):
+    """V2 self_moves: the serving contract and B2 catalog for an archive with this metadata. Its declared self_moves
+    (v5_model.export writes metadata['self_moves'] only when on; absent = off) is TAKEN, never refused: an on archive is
+    served and evaluated on, an off archive off. The catalog is recompiled from its own source, dex and vocabulary only
+    when the declaration differs (self_moves is encode-only, so the fold binding is unchanged)."""
     from dataclasses import replace
     from . import v4_encoder
-    declared=archive_self_moves(archive,expected_archive_sha256=expected_archive_sha256)
+    declared=metadata.get('self_moves',False)
+    if type(declared) is not bool:raise ValueError('v5 archive self_moves must be a bool')
     if contract.self_moves==declared and bool(getattr(catalog.masks,'self_moves',False))==declared:return contract,catalog
     contract=replace(contract,self_moves=declared)
     catalog=v4_encoder.compile_encoder(catalog.source,catalog.dex,catalog.vocabulary,checkpoint_sha256=catalog.checkpoint_sha256,
@@ -113,17 +96,15 @@ def load_factory(archive,*,catalog,contract,expected_archive_sha256,expected_che
             or isinstance(learner_seconds,bool) or not isinstance(learner_seconds,(int,float))
             or not math.isfinite(learner_seconds) or not 0<learner_seconds<=60):
         raise ValueError('original owning contract and learner budget<=60s required')
-    encoder=CompiledEncoderFunctions(catalog)
     params,config,metadata=model.load(archive,enable_v5=True,
         expected_archive_sha256=expected_archive_sha256,expected_checkpoint_sha256=expected_checkpoint_sha256,
         expected_category_vocabulary_sha256=expected_category_vocabulary_sha256,
         expected_label_vocabulary_sha256=expected_label_vocabulary_sha256)
-    # V2 self_moves: the archive declares it (v5_model.export writes metadata['self_moves'] only when on; absent = off). The
-    # serving contract and the encoder catalog must say the same, so an on archive is never served off-encoded (or the
-    # reverse). The serving builders take the archive's declaration first (declared_contract / archive_self_moves:
-    # v5_foulplay.load_and_run, v5_evaluation, v5_endpoint); the Python worker route (v5_python_backend) stays off.
-    if not bool(metadata.get('self_moves',False))==contract.self_moves==bool(getattr(catalog.masks,'self_moves',False)):
-        raise ValueError('v5 archive self_moves declaration differs from the serving contract/encoder catalog')
+    # V2 self_moves: the digest-bound archive's declaration is taken (take_declaration), so every V5 serving and evaluation
+    # builder (v5_evaluation, v5_endpoint, v5_foulplay.load_and_run) serves an on archive on and an off archive off; the
+    # factory's contract and catalog are the taken ones. The encoder functions are compiled for that catalog.
+    contract,catalog=take_declaration(metadata,contract=contract,catalog=catalog)
+    encoder=CompiledEncoderFunctions(catalog)
     if (contract.checkpoint_sha256!=expected_checkpoint_sha256
             or contract.model_config_sha256!=c._sha(config.metadata())
             # The original routing contract hashes literal tokens. V5's model

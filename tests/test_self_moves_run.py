@@ -132,95 +132,104 @@ class RunChecksTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'not threaded through this tool'):refuse_unthreaded({'self_moves': True}, context='t')
 
 
-def write_archive(directory, name, meta):
-    """A minimal npz carrying only metadata_json (what archive_self_moves reads); returns (path, sha256)."""
-    import hashlib, io, json
-    import numpy as np
-    buffer = io.BytesIO()
-    np.savez_compressed(buffer, metadata_json=np.frombuffer(json.dumps(meta, sort_keys=True).encode(), np.uint8))
-    path = Path(directory) / name;path.write_bytes(buffer.getvalue())
-    return str(path), hashlib.sha256(buffer.getvalue()).hexdigest()
-
-
 @requires_showdown('the synthetic fixture compiles its catalog from a pokemon-showdown checkout')
 @unittest.skipUnless(importlib.util.find_spec('jax'), 'requires isolated JAX')
 class ServingEndpointTests(unittest.TestCase):
-    """The V5 Foul Play endpoints take the archive's declaration: an on archive is served (and evaluated) on, an off
-    archive off. load_factory is patched to capture what it is handed (it re-checks archive == contract == catalog)."""
+    """V5 serving and evaluation take the archive's declaration (load_factory -> take_declaration): an on archive is served
+    and evaluated on, an off archive off. The archive load, the encoder functions and the V5 observation adapter are
+    patched; the catalog is the synthetic fixture's (real compile_encoder)."""
 
     @classmethod
     def setUpClass(cls):
         import test_v2_offline_view_parity as fx
         cls.f = fx.fixture()
 
-    def contract(self):
+    def contract(self, **changes):
         from pokezero.live_protocol_actor import ActorContract, _vocab_sha
         return replace(ActorContract.champion(), belief_set_source_hash=self.f.source.metadata.source_hash,
-                       category_vocab_sha256=_vocab_sha(self.f.catalog.vocabulary))
+                       category_vocab_sha256=_vocab_sha(self.f.catalog.vocabulary), **changes)
 
-    def test_archive_self_moves_reads_the_digest_bound_declaration(self):
-        from gpu_engine.v5_live_protocol import archive_self_moves
-        with tempfile.TemporaryDirectory() as tmp:
-            for meta, want in (({}, False), ({'self_moves': True}, True), ({'self_moves': False}, False)):
-                path, digest = write_archive(tmp, f'a-{want}-{len(meta)}.npz', dict(meta, model='x'))
-                self.assertIs(archive_self_moves(path, expected_archive_sha256=digest), want)
-            path, digest = write_archive(tmp, 'bad.npz', {'self_moves': 1})
-            with self.assertRaisesRegex(ValueError, 'must be a bool'):archive_self_moves(path, expected_archive_sha256=digest)
-            with self.assertRaisesRegex(ValueError, 'bytes differ'):archive_self_moves(path, expected_archive_sha256='0' * 64)
-
-    def test_foulplay_load_and_run_serves_the_archive_as_declared(self):
-        import asyncio
-        from pokezero import v5_foulplay as fp
+    def catalog(self, contract):
         from gpu_engine import v4_encoder
-        f = self.f;contract = self.contract()
-        catalog = v4_encoder.compile_encoder(f.catalog.source, f.catalog.dex, f.catalog.vocabulary,
-            checkpoint_sha256=f.catalog.checkpoint_sha256, feature_masks=contract.encoder_masks())
-        with tempfile.TemporaryDirectory() as tmp:
-            for meta, want in (({'self_moves': True}, True), ({}, False)):
-                path, digest = write_archive(tmp, f'a-{want}.npz', meta)
-                with (mock.patch('gpu_engine.v5_live_protocol.load_factory', return_value='factory') as load,
-                      mock.patch.object(fp, 'run_panel', new=mock.AsyncMock(return_value='report'))):
-                    self.assertEqual(asyncio.run(fp.load_and_run('config', path, catalog=catalog, contract=contract,
-                        expected_archive_sha256=digest, expected_checkpoint_sha256='b' * 64, expected_category_vocabulary_sha256='c' * 64,
-                        expected_label_vocabulary_sha256='d' * 64, enable_v5=True)), 'report')
-                served = load.call_args.kwargs
-                self.assertIs(served['contract'].self_moves, want)
-                self.assertIs(served['catalog'].masks.self_moves, want)
-                self.assertEqual(served['catalog'].self_moves is not None, want)
-                # encode-only: the fold binding is the off catalog's either way
-                self.assertTrue(bool((served['catalog'].binding == catalog.binding).all()))
+        f = self.f
+        return v4_encoder.compile_encoder(f.catalog.source, f.catalog.dex, f.catalog.vocabulary,
+            checkpoint_sha256=contract.checkpoint_sha256, feature_masks=contract.encoder_masks())
+
+    def loading(self, meta, *, model_sha256, category_sha256, archive_sha256, size):
+        """Patches under which load_factory reaches a real Factory: the archive load returns `meta` and a config whose
+        bindings the caller's contract and expectations match."""
+        from contextlib import ExitStack
+        from gpu_engine import v5_live_protocol as v5
+        config = SimpleNamespace(metadata=lambda: {'model': model_sha256}, category_vocabulary_sha256=category_sha256,
+                                 category_vocab_size=size)
+        stack = ExitStack()
+        stack.enter_context(mock.patch.object(v5, 'CompiledEncoderFunctions'))
+        stack.enter_context(mock.patch.object(v5.model, 'load', return_value=({}, config, dict(meta, weights_archive_sha256=archive_sha256))))
+        stack.enter_context(mock.patch.object(v5.observation, 'compile_adapter', side_effect=lambda catalog, model_config: SimpleNamespace(catalog=catalog)))
+        stack.enter_context(mock.patch.object(v5.observation, 'check_adapter', side_effect=lambda adapter: adapter.catalog))
+        return stack, config
+
+    def test_take_declaration(self):
+        from gpu_engine.v5_live_protocol import take_declaration
+        contract = self.contract(checkpoint_sha256='a' * 64);catalog = self.catalog(contract)
+        self.assertEqual(take_declaration({}, contract=contract, catalog=catalog), (contract, catalog))
+        taken, on = take_declaration({'self_moves': True}, contract=contract, catalog=catalog)
+        self.assertIs(taken.self_moves, True);self.assertIs(on.masks.self_moves, True);self.assertIsNotNone(on.self_moves)
+        self.assertTrue(bool((on.binding == catalog.binding).all()))      # encode-only: the fold binding is unchanged
+        self.assertEqual(take_declaration({'self_moves': True}, contract=taken, catalog=on), (taken, on))
+        back, off = take_declaration({}, contract=taken, catalog=on)
+        self.assertIs(back.self_moves, False);self.assertIs(off.masks.self_moves, False)
+        with self.assertRaisesRegex(ValueError, 'must be a bool'):take_declaration({'self_moves': 'on'}, contract=contract, catalog=catalog)
+
+    def test_load_factory_serves_the_archive_as_declared(self):
+        from gpu_engine import v5_live_protocol as v5
+        from pokezero import v5_contract
+        model_sha = 'm' * 8
+        contract = self.contract(checkpoint_sha256='a' * 64, model_config_sha256=v5_contract._sha({'model': model_sha}))
+        catalog = self.catalog(contract)
+        for meta, want in (({'self_moves': True}, True), ({}, False)):
+            stack, _ = self.loading(meta, model_sha256=model_sha, category_sha256='c' * 64, archive_sha256='w' * 64,
+                                    size=contract.categorical_vocab_size)
+            with stack:
+                factory = v5.load_factory('archive.npz', catalog=catalog, contract=contract, expected_archive_sha256='w' * 64,
+                    expected_checkpoint_sha256='a' * 64, expected_category_vocabulary_sha256='c' * 64,
+                    expected_label_vocabulary_sha256='d' * 64, enable_v5=True)
+            self.assertIs(factory.contract.self_moves, want)
+            self.assertIs(factory.catalog.masks.self_moves, want)
+            self.assertEqual(factory.contract.namespace == contract.namespace, not want)
 
     def test_evaluation_factory_evaluates_the_archive_as_declared(self):
-        import json
-        from pokezero import v5_evaluation as evaluation, v5_run as run
+        """v5_evaluation._factory (the owned and the detached evaluator child) through the real load_factory."""
+        import hashlib, json
+        from pokezero import v5_evaluation as evaluation, v5_run as run, v5_contract
         from pokezero.live_protocol_actor import ActorContract
-        f = self.f;vocabulary = f.catalog.vocabulary
+        from pokezero.v5_phasec import category_binding
+        f = self.f;vocabulary = f.catalog.vocabulary;model_sha = 'e' * 8
+        champion = self.contract()
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             def artifact(name, value):
-                import hashlib
                 blob = json.dumps(value).encode();(root / name).write_bytes(blob)
                 return dict(path=str(root / name), sha256=hashlib.sha256(blob).hexdigest())
             category = artifact('vocabulary.json', dict(tokens=list(vocabulary.tokens), oov_buckets=vocabulary.oov_buckets,
                                                         aliases=dict(vocabulary.aliases)))
             runtime = artifact('runtime.json', dict(showdown=dict(root='/unit/showdown', node=dict(path='/unit/node'),
                 compiled_tree_sha256='d' * 64), category_vocabulary=category))
-            config = SimpleNamespace(metadata=lambda: {'model': 'unit'})
-            protocol = dict(runtime=runtime, label_vocabulary_sha256='e' * 64, deterministic=True, model_sha256=run._sha({'model': 'unit'}))
+            protocol = dict(runtime=runtime, label_vocabulary_sha256='e' * 64, deterministic=True,
+                            model_sha256=run._sha({'model': model_sha}))
+            request = SimpleNamespace(archive_path=str(root / 'actor.npz'), snapshot=SimpleNamespace(archive_sha256='w' * 64,
+                checkpoint_sha256='b' * 64, model_sha256=v5_contract._sha({'model': model_sha})))
             for meta, want in (({'self_moves': True}, True), ({}, False)):
-                path, digest = write_archive(tmp, f'a-{want}.npz', meta)
-                request = SimpleNamespace(archive_path=path, snapshot=SimpleNamespace(archive_sha256=digest,
-                    checkpoint_sha256='b' * 64, model_sha256='c' * 64))
-                with (mock.patch.object(ActorContract, 'champion', return_value=self.contract()),
+                stack, _ = self.loading(meta, model_sha256=model_sha, category_sha256=category_binding(vocabulary),
+                                        archive_sha256='w' * 64, size=champion.categorical_vocab_size)
+                with (stack, mock.patch.object(ActorContract, 'champion', return_value=champion),
                       mock.patch('pokezero.v5_worker._source'), mock.patch('pokezero.v5_worker._probe'),
                       mock.patch.object(evaluation.subprocess, 'check_output', return_value=json.dumps({'sha256': 'd' * 64})),
                       mock.patch('pokezero.randbat.load_gen3_randbat_source_cached', return_value=f.source),
-                      mock.patch('pokezero.dex.load_showdown_dex_cached', return_value=f.catalog.dex),
-                      mock.patch('gpu_engine.v5_live_protocol.load_factory', return_value=SimpleNamespace(config=config)) as load):
-                    evaluation._factory(protocol, request)
-                served = load.call_args.kwargs
-                self.assertIs(served['contract'].self_moves, want)
-                self.assertIs(served['catalog'].masks.self_moves, want)
+                      mock.patch('pokezero.dex.load_showdown_dex_cached', return_value=f.catalog.dex)):
+                    factory = evaluation._factory(protocol, request)
+                self.assertIs(factory.contract.self_moves, want)
+                self.assertIs(factory.catalog.masks.self_moves, want)
 
 
 if __name__ == '__main__':

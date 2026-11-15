@@ -225,9 +225,12 @@ def _checked_result(row,result,configs,protocol):
     expected=json.loads(json.dumps(asdict(config),default=fp._json_default,allow_nan=False)) if not isinstance(config,SimpleNamespace) else dict(vars(config))
     expected['foulplay_cpu_affinity']=row['fp_core']
     from .live_protocol_actor import ActorContract
-    from gpu_engine.v5_live_protocol import archive_self_moves   # V2 self_moves: the served archive's declaration
+    # V2 self_moves: the served archive's declaration, recorded in the recipe only when on (v5_foulplay._recipe) and bound
+    # by the namespace check below.
+    declared=recipe.get('self_moves',False)
+    if type(declared) is not bool:raise ValueError('endpoint recipe self_moves must be a bool')
     contract=replace(ActorContract.champion(),checkpoint_sha256=snapshot['checkpoint_sha256'],model_config_sha256=snapshot['model_sha256'],
-        self_moves=archive_self_moves(Path(original['run_directory'])/snapshot['archive'],expected_archive_sha256=snapshot['archive_sha256']))
+        self_moves=declared)
     model=configs.models[row['arm']]
     if (recipe.get('schema')!=fp.SCHEMA or recipe.get('actor_version')!='v5' or recipe.get('config')!=expected
             or recipe.get('game_offsets')!=[row['offset']] or recipe.get('archive_sha256')!=snapshot['archive_sha256']
