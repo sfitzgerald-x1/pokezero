@@ -23,10 +23,13 @@ class DoubleEdgeSourceBindingTests(unittest.TestCase):
   # §6 (the effect-coordinate chance proof) re-certifies four bodies and the pinned-file inventories at its own commits:
   # 72670171 and 3b0cc40e (plan_for_state's effect axes and SUSPENDED_ROOT_SAVED_BLOCKS, conditional_law's saved
   # effect block, residual_order.py in SOURCE_PINS and the domain lists) and 53dc3add (ordinary_law's effect bank).
-  certified={'chance_consumers.py':'3b0cc40e6709bd19fe70a6295580a51590dd4f57',
-             'phase_d_chance.py':'3b0cc40e6709bd19fe70a6295580a51590dd4f57',
-             'conditional_law.py':'3b0cc40e6709bd19fe70a6295580a51590dd4f57',
-             'engine_source_frame_witness.py':'3b0cc40e6709bd19fe70a6295580a51590dd4f57',
+  # Transform re-certifies four at its exact-chance commit 0f09b0b5: chance_consumers.py's and phase_d_chance.py's
+  # Transform closure (a selected Transform copies the foe's ability and stages into the plan) and their DOMAIN_MODULES,
+  # conditional_law.py's KERNEL_MODULES (transform) and engine_source_frame_witness.py's SOURCE_PINS (transform.py).
+  certified={'chance_consumers.py':'0f09b0b5b3b2dd7647477027876f2533b8a30671',
+             'phase_d_chance.py':'0f09b0b5b3b2dd7647477027876f2533b8a30671',
+             'conditional_law.py':'0f09b0b5b3b2dd7647477027876f2533b8a30671',
+             'engine_source_frame_witness.py':'0f09b0b5b3b2dd7647477027876f2533b8a30671',
              'ordinary_law.py':'53dc3add38e37c36b7609edabe4f96e313022b16'}
   constants={'SOURCE_PINS','MAPPING_PINS','DOMAIN_SHA256','KERNEL_SHA256'}
   for file in ('chance_consumers.py','ordinary_law.py','conditional_law.py',
