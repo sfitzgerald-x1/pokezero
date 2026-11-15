@@ -275,6 +275,20 @@ class DigestAndRuleTests(unittest.TestCase):
         self.assertEqual(d['pinch'](p).tolist(), [no, no, no, no, no, [False, True], no, no])
         self.assertTrue(all(e in ALLOWED for e in d))
 
+    def test_tier_d_pinch_accepts_anything_only_on_a_ko_cascade(self):
+        """D: a pinch-boosted KO that moved within the step decides whether the target's action ran (the GPU pass's 13
+        lane-steps: a status on the pinch user, the target's PP and action bookkeeping). Without a cascade the damage
+        allowance stays strict; the other D effects are unchanged."""
+        from gpu_engine.v2e_regress import lane_verdict
+        changed = {('state.status', 0), ('state.pp', 1), ('state.spikes', 0), ('trackers.tendency.moved', 1), ('state.baton_pass', 1)}
+        cascade = dict(ko_sides=[False, False], mon_ok=lambda leaf, side: False, families=())
+        self.assertEqual(lane_verdict(changed, {'pinch': [0]}, None, cascade=cascade)[0], [])
+        self.assertEqual(lane_verdict(changed, {'pinch': [0]}, None)[0], sorted(changed, key=lambda x: (x[0], x[1])))
+        # Inside the damage allowance a non-cascade pinch lane is accepted as before.
+        self.assertEqual(lane_verdict({('state.hp', 1), ('state.hp', 0)}, {'pinch': [0]}, None)[0], [])
+        # A non-pinch effect gains nothing from the cascade allowance.
+        self.assertEqual(lane_verdict({('state.status', 0)}, {'irontail': [0]}, None, cascade=cascade)[0], [('state.status', 0)])
+
     def test_pr0_meanlook_arrival_predicate_reads_the_tracker_pre_value(self):
         from gpu_engine.v2e_regress import Pre, PLUGINS, lane_verdict, MEANLOOK
         L = 6;s = pre_arrays(L);actions = np.zeros((L, 2), np.int32);MEAN = len(VOCAB['moves'])

@@ -818,6 +818,15 @@ ALLOWED['pinch'] = dict(user=('hp', 'item', 'boosts', 'visible', 'reveal'),
 KO_ALLOWED = {'bonemerang': dict(user=('status', 'clause'))}
 
 
+# D (GPU pass, review of the 13 unexpected lane-steps): the pinch boost can move a KO within the step (earlier or later,
+# often the same mon fainting in both trees, so the per-side KO rules miss it), which decides whether the target's queued
+# action runs at all: its PP, action history and move lines, and whatever that move does to either side (a status on the
+# pinch user, Spikes on its side, its own Baton Pass flag or recharge). So on a KO-cascade lane (the faint set, the
+# residual phase or the battle end moved) a pinch lane accepts any leaf, as a sleep landing does (A1); every other pinch
+# lane keeps the damage allowance (ALLOWED['pinch']).
+CASCADE_ALLOWED = {'pinch': ALL}
+
+
 def allowed_leaf(name, families):
     return any(re.search(p, name) for f in families for p in FAMILIES[f])
 
@@ -878,6 +887,11 @@ def lane_verdict(changed, effects, side_axis, *, cascade=None, waive=()):
             if side is None:ok |= allowed_leaf(leaf, rule['glob'])
             else:ok |= any(allowed_leaf(leaf, rule['user' if side == a else 'target']) for a in actors)
             if ok:break
+        if not ok and cascade is not None:
+            # D: an effect's allowance on a KO-cascade lane only (CASCADE_ALLOWED).
+            ok = any(allowed_leaf(leaf, CASCADE_ALLOWED[effect]['glob' if side is None else
+                                  ('user' if side in actors else 'target')])
+                     for effect, actors in effects.items() if effect in CASCADE_ALLOWED)
         if not ok and cascade is not None:
             # An effect's KO-only allowance on its actor's side, when the other side has a newly (un)fainted mon.
             ko = side is not None and any(side == a and bool(cascade['ko_sides'][1 - a])
