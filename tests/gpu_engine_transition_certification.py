@@ -10,5 +10,7 @@ Fidelity WH (White Herb, Sacred Fire's thaw and Facade) merged with R1 moved it 
 its review fixes (Trick's received herb, fewer traced triggers) moved it to 91346285, and the B2 Trick-credit rule
 to 13f76e5e. M2's R2 (the older residual handlers traced only at their reachable positions) moved it to a8c48fa7, and its
 Encore stale-move clear to 7c984fe6.
+Fidelity tier D (Wonder Guard, the pinch abilities, Poison Point / Flame Body / Effect Spore) moved it to d880714c, and its
+Pursuit-intercept device reveals to c471195a.
 """
-CURRENT_TRANSITION = '7c984fe631b34e1ced9835aaa383c10bc313a586'
+CURRENT_TRANSITION = 'c471195a14db96b36eba226e4a0929faf8b86e7f'
