@@ -715,7 +715,7 @@ class DepthNLiveSearch:
             gather=lambda k:k[0]=='gather'and k[1]==2*cap*dn.LANES,leaf=lambda k:k[0]=='leaf')
         return[name for name,test in want.items()if not any(test(k)for k in keys)]
 
-    def warmup(self,requests,warm_in=()):
+    def warmup(self,requests,warm_in=(),warm_in_saved=False):
         """The full path on saved requests (their eight address keys) once cold and once warm per bucket, each forced to that
         bucket, so every program compiles before READY. Windows of the saved requests are tried until one prices at the bucket
         with every program of a live call compiled (missing_programs; RuntimeError if none does, e.g. saved roots whose every
@@ -729,20 +729,27 @@ class DepthNLiveSearch:
         of them (r5a's servers compiled 22-44 of them over their first 25-200 live roots). Each is prepared and classified once,
         in order, sessions kept through the list (a battle's later decision folds incrementally, an unseen battle's late
         decision from scratch, as live), after the warm passes and once more after the trace release's re-warm (whatever the
-        release unkeys compiles again before READY); then every session is forgotten. The report's warm_in records it."""
+        release unkeys compiles again before READY); then every session is forgotten. The report's warm_in records it.
+        `warm_in` may also be passes (lists of requests), every session forgotten between them. `warm_in_saved` (the server's
+        in-process prepare slot, whose prepares the pool's workers would otherwise make): the saved requests themselves first,
+        as their own pass, held to the workers' rule (an address or format refusal is counted, not fatal: a saved file may
+        repeat an address or go back in a battle, as warmup's windows allow); the list's passes keep the strict rule."""
         trace_release.caches()   # a JAX that moved jit's tracing caches fails here, not after the lowering
         keys=PROTOCOL_KEYS[2:];pool=[];listed=[]
         for r in requests:
             if not isinstance(r,dict)or any(k not in r for k in keys):raise ValueError('saved requests with '+', '.join(keys)+' required')
             pool.append({k:r[k]for k in keys})
         if not pool:raise ValueError('at least one saved request required')
-        passes=[list(p)for p in warm_in]if warm_in and isinstance(warm_in[0],(list,tuple))else[list(warm_in)]if warm_in else[];j=0
-        for one in passes:   # one pass (a list), or passes (lists of them) with every session forgotten between (prepare_warm_in)
+        passes=[list(p)for p in warm_in]if warm_in and isinstance(warm_in[0],(list,tuple))else[list(warm_in)]if warm_in else[]
+        passes=[(p,False)for p in passes if p]
+        if warm_in_saved:passes=[(pool,True)]+passes   # the saved requests' own pass first, lenient as a worker's
+        j=0;lenient=set()
+        for one,soft in passes:   # passes (lists of requests), every session forgotten between them (prepare_warm_in)
+            if soft:lenient.add(len(listed))
             listed.append([])
             for r in one:
                 if not isinstance(r,dict)or any(k not in r for k in keys):raise ValueError('warm-in requests with '+', '.join(keys)+' required')
                 listed[-1].append(dict({k:r[k]for k in keys},schema=SCHEMA,request_id=f'warm-in-{j}'));j+=1
-        listed=[p for p in listed if p]
         started=time.perf_counter();self.carry=None;self.warming=True;self.reply_completed=0;self.reply_warm=None
         # No full (gen-2) collection while the programs trace: each would rescan the trace's own growing live state (tens of
         # millions of objects) and find little garbage. Young collections go on; the thresholds come back only after
@@ -751,7 +758,7 @@ class DepthNLiveSearch:
         try:
             try:
                 report,batches=self._warm_buckets(pool);labels=self._hold_to_reference(pool)
-                warmed=self.prepare_warm_in(listed)if listed else None
+                warmed=self.prepare_warm_in(listed,lenient=lenient)if listed else None
             finally:self.warming=False;self.reset_sessions()
             missing=[b for b in self.buckets if isinstance(self.pricers[b],guard_inputs.ObservedDepthNPricer)
                 and 2*b*self.K*dn.LANES not in self.pricers[b].label_rows]
@@ -765,7 +772,7 @@ class DepthNLiveSearch:
             signatures={k[-1][2]for k in self.programs if type(k[-1])is tuple and k[-1][:2]==('worlds',cw.SOURCE)}
             if self.carry is None or signatures!={self.carry['signature']}:
                 raise RuntimeError(f'warmup: the recorded carry signature {None if self.carry is None else self.carry["signature"]} is not the warmed programs\' {sorted(signatures)}')
-            released=self._release_traces(batches,listed,None if warmed is None else warmed['outcomes'])
+            released=self._release_traces(batches,listed,None if warmed is None else warmed['outcomes'],lenient)
         finally:gc.set_threshold(*thresholds)
         self.warm=dict(buckets=report,programs=len(self.programs),seconds=time.perf_counter()-started,carry_signature=self.carry['signature'],
             trace_release=released,**({}if not listed else dict(warm_in=dict(warmed,rewarm_seconds=released.pop('warm_in_seconds'),
@@ -774,19 +781,23 @@ class DepthNLiveSearch:
             **({}if getattr(self,'reply',None)is None else dict(reply=dict(views=self.reply.mode,seats_seconds=self.reply_warm))))
         return self.warm
 
-    def prepare_warm_in(self,requests,expected=None):
+    def prepare_warm_in(self,requests,expected=None,lenient=()):
         """Prepare's warm-in (warmup's `warm_in`): each protocol request through prepare_roots and the classification, in order,
         sessions kept through a pass, then every session and this constructor's peer folds forgotten. `requests`: one pass (a
         list of protocol requests) or passes (lists of them), each forgotten before the next (the server's in-process slot: its
-        warmup requests, then the pinned list, which may share an address or go back in a battle). A root refusal is fine
+        warmup requests, then the pinned list, which may share an address or go back in a battle). Each pass starts from
+        forgotten sessions and attempts too (warmup's own prepares have attempted the saved addresses). A root refusal is fine
         (that path compiles too, e.g. PUBLIC_ROOT_REFUSED); a request that warms nothing fails it (RuntimeError naming the
         request): an exception other than a refusal, an address or format refusal (WARM_IN_UNUSABLE: the entry never reached
-        the root) or a bare exception kind (a ValueError, KeyError, ... that prepare_roots caught). `expected`: the first pass's
+        the root) or a bare exception kind (a ValueError, KeyError, ... that prepare_roots caught), except in the passes whose
+        indices are in `lenient` (warmup's saved requests), where those are counted as the workers count them. `expected`: the first pass's
         outcomes, which this pass (after the trace release) must repeat, request by request. dict(requests, passes, seconds,
         kinds: count per outcome, outcomes: per request in pass order, 'Prepared' or the refusal kind)."""
         passes=[list(p)for p in requests]if requests and isinstance(requests[0],(list,tuple))else[list(requests)]
         started=time.perf_counter();outcomes=[];j=0
-        for one in passes:
+        for n,one in enumerate(passes):
+            self.reset_sessions()   # every pass from forgotten sessions and attempts, as a fresh worker's: warmup's own prepares
+            for key in[k for k in list(cw._PEER_FOLDS)if k[0]==id(self.constructor)]:cw._PEER_FOLDS.pop(key,None)   # attempted its saved addresses
             try:
                 for request in one:
                     rid=request.get('request_id')
@@ -794,7 +805,7 @@ class DepthNLiveSearch:
                     except FATAL:raise
                     except Exception as error:raise RuntimeError(f'warm-in request {rid}: {type(error).__name__}: {error}')from error
                     kind='Prepared'if type(item)is cw.Prepared else str(getattr(item,'kind',type(item).__name__))
-                    if kind in WARM_IN_UNUSABLE or kind in{e.__name__ for e in cw.ROOT_ERRORS}:
+                    if n not in lenient and(kind in WARM_IN_UNUSABLE or kind in{e.__name__ for e in cw.ROOT_ERRORS}):
                         raise RuntimeError(f'warm-in request {rid}: refused {kind} ({getattr(item,"detail","")}): it warms nothing; fix the list')
                     if expected is not None and kind!=expected[j]:
                         raise RuntimeError(f'warm-in request {rid}: the second pass (after the trace release) gave {kind}, the first {expected[j]}')
@@ -806,7 +817,7 @@ class DepthNLiveSearch:
         for kind in outcomes:kinds[kind]=kinds.get(kind,0)+1
         return dict(requests=j,passes=len(passes),seconds=time.perf_counter()-started,kinds=kinds,outcomes=outcomes)
 
-    def _release_traces(self,batches,warm_in=(),outcomes=None):
+    def _release_traces(self,batches,warm_in=(),outcomes=None,lenient=()):
         """The end of warmup, once every program has compiled: empty jit's tracing caches (gpu_engine.trace_release: the
         warmed programs' traces, kept alive there by the executor's long-lived jitted functions, are about 66M objects after
         a DN2W16 warmup, and every full collection while serving would rescan them), collect once, then run each bucket's warm
@@ -828,7 +839,7 @@ class DepthNLiveSearch:
         self.reset_sessions();rewarm=time.perf_counter()-clock
         out=dict(entries=released,gc_seconds=collected,rewarm_seconds=rewarm,jax=jax.__version__)
         if warm_in:
-            out['warm_in_seconds']=self.prepare_warm_in(warm_in,expected=outcomes)['seconds']
+            out['warm_in_seconds']=self.prepare_warm_in(warm_in,expected=outcomes,lenient=lenient)['seconds']
             out['warm_in_trace_cache_entries']=sum(c.cache_info().currsize for c in trace_release.caches())
         return out
 

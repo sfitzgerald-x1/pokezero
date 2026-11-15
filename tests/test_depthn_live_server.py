@@ -227,12 +227,13 @@ class ServerTests(unittest.TestCase):
 
     def test_the_in_process_slot_warms_in_as_a_worker_does(self):
         """With a pool and an in-process slot (local_battles), warmup's prepares run in this process: its warm-in is the
-        workers' two passes (the warmup requests, then the list), or the warmup requests alone without a list (R1: the slot
-        warm at READY without --prepare-warm-in). Without the slot nothing prepares here, so there is no warm-in."""
+        workers' two passes (warmup_saved: the warmup requests, leniently as the workers; then the list), or the warmup requests
+        alone without a list (R1: the slot warm at READY without --prepare-warm-in). Without the slot nothing prepares here, so
+        there is no warm-in."""
         seen=[]
         class Warming(FakeSearch):
             constructor=object()
-            def warmup(self,requests,warm_in=()):seen.append(tuple(tuple(p)for p in warm_in));return super().warmup(requests)
+            def warmup(self,requests,warm_in=(),warm_in_saved=False):seen.append((tuple(warm_in),warm_in_saved));return super().warmup(requests)
             def attach_pool(self,pool):self.pool=pool
         class Pool:
             size=1;workers=();closed=False
@@ -252,18 +253,23 @@ class ServerTests(unittest.TestCase):
                 self.assertTrue(pool.closed)
             S.run(Warming(),host='127.0.0.1',port=free_port(),warmup_requests=warmup,max_requests=4,log=lambda row:None,pool=Pool(),
                 pipeline_options=dict(local_battles=0),warm_in=listed)   # workers only: they warm in at their start
-        self.assertEqual(seen,[((dict(battle_id='w'),),listed),((dict(battle_id='w'),),),()])
+        self.assertEqual(seen,[(listed,True),((),True),((),False)])
 
-    def test_main_closes_the_pool_when_build_fails(self):
-        """The prepare workers start before build(): a build that raises closes them (no orphaned workers warming in)."""
-        closed=[]
+    def test_main_closes_the_pool_whatever_fails_after_it_starts(self):
+        """The prepare workers start before build(): a build, a header or a telemetry file that raises closes them (no
+        orphaned workers warming in); so does a run that ends."""
         class Pool:
             def close(self):closed.append(True)
-        args=NS(warmup_requests='w.jsonl')
-        with patch.object(S,'options',return_value=args),patch.object(S,'read_requests',return_value=[]),patch.object(S,'read_warm_in',return_value=()),\
-                patch.object(S,'make_pool',return_value=Pool()),patch.object(S,'build',side_effect=RuntimeError('no device')):
-            with self.assertRaisesRegex(RuntimeError,'no device'):S.main([])
-        self.assertEqual(closed,[True])
+        args=NS(warmup_requests='w.jsonl',host='127.0.0.1',port=free_port(),max_requests=4,batch_wait_seconds=.005,queue_limit=256,telemetry=None,server_id='s',
+            batch_window_seconds=.05,flush_guard_seconds=.15,reply_forward='reduce',local_battles=0,split_worlds=0,split_min_worlds=0)
+        for name,kw in(('build',dict(build=RuntimeError('no device'))),('header',dict(header=RuntimeError('no header'))),
+                       ('telemetry',dict(Recorder=OSError('telemetry unwritable')))):
+            with self.subTest(failing=name):
+                closed=[];stand={k:patch.object(S,k,side_effect=v)for k,v in kw.items()}
+                with patch.object(S,'options',return_value=args),patch.object(S,'read_requests',return_value=[]),patch.object(S,'read_warm_in',return_value=()),\
+                        patch.object(S,'make_pool',return_value=Pool()),patch.object(S,'build',return_value=FakeSearch()),patch.object(S,'header',return_value={}):
+                    with stand[next(iter(kw))],self.assertRaises((RuntimeError,OSError)):S.main([])
+                self.assertGreaterEqual(len(closed),1)
 
     def test_server_id_stamps_responses_only_when_given(self):
         plain=S.Recorder(FakeSearch()).process_many([request(1)]);self.assertNotIn('server_id',plain[0])   # no id: the search's responses, unchanged

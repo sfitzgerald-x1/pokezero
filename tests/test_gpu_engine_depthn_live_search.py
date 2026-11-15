@@ -594,6 +594,26 @@ class LiveSearchTests(unittest.TestCase):
         with Codex(outcomes):report=self.search(pricers=self.make_pricers(8,(1,))).warmup([request('w0',0)],warm_in=((),[request('x',0)]))
         self.assertEqual({k:report['warm_in'][k]for k in('requests','passes')},dict(requests=1,passes=1))
 
+    def test_the_saved_requests_pass_counts_address_refusals_as_the_workers_do(self):
+        """warm_in_saved (the server's in-process slot): the saved requests warm in as their own first pass, held to the workers'
+        rule: a saved file that repeats an address (SEARCH_REQUEST_ALREADY_ATTEMPTED) warms in, the refusal counted, and the
+        second pass repeats it; the list after it keeps the strict rule."""
+        outcomes={('w0',0):self.outcome(0),('x',0):self.outcome(1)}
+        s=self.search(pricers=self.make_pricers(8,(1,)))
+        with Codex(outcomes):report=s.warmup([request('w0',0),request('w0',0)],warm_in=[request('x',0)],warm_in_saved=True)
+        warm=report['warm_in']
+        self.assertEqual({k:warm[k]for k in('requests','passes','outcomes')},dict(requests=3,passes=2,outcomes=['Prepared','SEARCH_REQUEST_ALREADY_ATTEMPTED','Prepared']))
+        self.assertEqual((s.constructor.seen,s.constructor.sessions,s.battles),(set(),{},{}))
+        with Codex(outcomes):report=self.search(pricers=self.make_pricers(8,(1,))).warmup([request('w0',0)],warm_in_saved=True)   # no list: the saved pass alone
+        self.assertEqual({k:report['warm_in'][k]for k in('requests','passes','outcomes')},dict(requests=1,passes=1,outcomes=['Prepared']))
+        with Codex(outcomes),self.assertRaisesRegex(RuntimeError,'warm-in request warm-in-2: refused SEARCH_REQUEST_ALREADY_ATTEMPTED'):   # the list: strict
+            self.search(pricers=self.make_pricers(8,(1,))).warmup([request('w0',0)],warm_in=[request('x',0),request('x',0)],warm_in_saved=True)
+        # every pass starts from forgotten attempts: warmup's own prepares attempted w0, and neither the saved pass nor a list
+        # that shares its address sees it attempted (the first pass as the second, after the release, which starts fresh too)
+        for saved in(True,False):
+            with Codex(outcomes):report=self.search(pricers=self.make_pricers(8,(1,))).warmup([request('w0',0)],warm_in=[request('w0',0)],warm_in_saved=saved)
+            self.assertEqual(report['warm_in']['outcomes'],['Prepared']*(2 if saved else 1))
+
     def test_a_warm_in_entry_that_warms_nothing_stops_warmup(self):
         outcomes={('w0',0):self.outcome(0),('x',0):self.outcome(1)}
         prepare=live.cw.prepare_roots

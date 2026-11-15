@@ -254,16 +254,17 @@ def run(search,*,host,port,warmup_requests,max_requests,batch_wait_seconds=.005,
     stop() ends run once serving). With `pool` (a started PreparePool of this search's constructor), the search prepares
     through it and serves through a depthn_batching.Pipeline (pipeline_options: its keywords); the pool is closed on exit.
     `warm_in`: prepare's warm-in list (DepthNLiveSearch.warmup's: this process's own prepare), when there is one."""
-    compiles=CompileCounter();recorder=Recorder(search,telemetry,server_id=server_id,compiles=compiles)
-    try:
+    compiles=CompileCounter();recorder=None
+    try:   # the pool's workers are up: everything from here closes them on the way out
+        recorder=Recorder(search,telemetry,server_id=server_id,compiles=compiles)
         server=Server(recorder,max_requests=max_requests,batch_wait_seconds=batch_wait_seconds,queue_limit=queue_limit)
         if on_server is not None:on_server(server)
         workers=None
-        local=pool is not None and(pipeline_options or{}).get('local_battles',0)>0
+        local=pool is not None and(pipeline_options or{}).get('local_battles',0)>0;warm_saved=False
         if local:
             pool.attach_local(search.constructor)   # batch 1 in process: this search's own prepare, warmed below as the serial server's
-            warm_in=tuple(p for p in(tuple(warmup_requests),tuple(warm_in))if p)   # two passes, as a worker's: warmup's own prepares
-            # go to the workers once the pool is attached, so this slot's prepare warms the warmup requests here, then the list
+            warm_saved=True   # as a worker's two passes: warmup's own prepares go to the workers once the pool is attached, so
+            # this slot's prepare warms the warmup requests here (leniently, as the workers do), then the list (strictly)
         elif pool is not None:warm_in=()   # nothing prepares in this process: only the workers warm in (at their start)
         if pool is not None:
             started=time.perf_counter();pool.wait_ready();search.attach_pool(pool)
@@ -271,7 +272,7 @@ def run(search,*,host,port,warmup_requests,max_requests,batch_wait_seconds=.005,
                 atomic_cache={w.index:(w.ident or{}).get('atomic_cache')for w in pool.workers})
             if(pipeline_options or{}).get('reply_forward')=='device'and getattr(search,'reply',None)is not None:
                 search.reply_batches=tuple(search.buckets)   # warmup compiles each bucket's batched reply forward, both seats
-        warm=search.warmup(warmup_requests,**({'warm_in':warm_in}if warm_in else{}));buckets=warm.get('buckets',{})
+        warm=search.warmup(warmup_requests,**({'warm_in':warm_in}if warm_in else{}),**({'warm_in_saved':True}if warm_saved else{}));buckets=warm.get('buckets',{})
         if pool is not None:
             from gpu_engine.depthn_batching import Pipeline
             server.pipeline=Pipeline(search,pool,max_batch=max_requests,**(pipeline_options or{})).start()
@@ -285,7 +286,8 @@ def run(search,*,host,port,warmup_requests,max_requests,batch_wait_seconds=.005,
     finally:
         try:
             if pool is not None:pool.close()
-        finally:recorder.close()
+        finally:
+            if recorder is not None:recorder.close()
 
 
 # Command line ---------------------------------------------------------------------------------------------------------------------
@@ -584,15 +586,15 @@ def header(args,search):
 
 def main(argv=None):
     args=options(argv);saved=read_requests(args.warmup_requests);warm_in=read_warm_in(args);pool=make_pool(args)
-    try:search=build(args)
-    except BaseException:   # the workers started before build(): never orphaned through their warm-in
+    try:   # the workers start before build(): whatever fails from here (build, header, run) never orphans them (close is idempotent)
+        search=build(args)
+        run(search,host=args.host,port=args.port,warmup_requests=saved,max_requests=args.max_requests,batch_wait_seconds=args.batch_wait_seconds,
+            queue_limit=args.queue_limit,telemetry=args.telemetry,header=header(args,search),server_id=args.server_id or f'{socket.gethostname()}:{args.port}',
+            pool=pool,pipeline_options=None if pool is None else dict(window_seconds=args.batch_window_seconds,guard_seconds=args.flush_guard_seconds,
+                reply_forward=args.reply_forward,local_battles=args.local_battles,split_worlds=args.split_worlds,
+                split_min_worlds=args.split_min_worlds),warm_in=warm_in)
+    finally:
         if pool is not None:pool.close()
-        raise
-    run(search,host=args.host,port=args.port,warmup_requests=saved,max_requests=args.max_requests,batch_wait_seconds=args.batch_wait_seconds,
-        queue_limit=args.queue_limit,telemetry=args.telemetry,header=header(args,search),server_id=args.server_id or f'{socket.gethostname()}:{args.port}',
-        pool=pool,pipeline_options=None if pool is None else dict(window_seconds=args.batch_window_seconds,guard_seconds=args.flush_guard_seconds,
-            reply_forward=args.reply_forward,local_battles=args.local_battles,split_worlds=args.split_worlds,
-            split_min_worlds=args.split_min_worlds),warm_in=warm_in)
 
 
 if __name__=='__main__':main()
