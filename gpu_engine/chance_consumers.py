@@ -361,7 +361,7 @@ def plan_for_state(state, index, actions, table, metadata, *, cap, native_input=
         # §6: the appended effect stream (fidelity R, design 2.1; M2's residual consumers). transition.py:580-582 reads
         # ChanceInputs.effect; a resumed suspended turn reads the saved block instead (refused above).
         for s in range(2):
-            # Bonemerang's second hit (transition.py:1113-1153, run when damage_moves.hits>1 at :1335): its own critical
+            # Bonemerang's second hit (transition.py:1133-1173, run when damage_moves.hits>1 at :1335): its own critical
             # roll effect[s][0] (critical.is_critical: below 2 for a high-crit move, else below 1; below 1 without the
             # table) and damage roll 85+effect[s][1]. Callers and Encore are already in the selected closure.
             critical = (t.get("critical") or {}).get("high")
@@ -370,18 +370,18 @@ def plan_for_state(state, index, actions, table, metadata, *, cap, native_input=
                 use(f"effect.{s}.0", *(Observation("less_than", 2 if critical is not None and critical[move] else 1)
                                        for move in sorted(second_hit)))
                 use(f"effect.{s}.1", Observation("identity"))
-            # Yawn's residual sleep (transition.py:2571-2581): a holder whose count is 1 when this residual runs sleeps
+            # Yawn's residual sleep (transition.py:2591-2601): a holder whose count is 1 when this residual runs sleeps
             # for 2+effect[s][2], s the drowsy mon's own side. A Yawn landing this turn sets 2 (:1742-1750), which ends
             # at the next turn's residual, and only a holder that stays in keeps a count (entry.py, baton.py drop it).
             if not replacement and any(_counter(data, "yawn_counter", s, p) == 1 for p in participants[s]):
                 use(f"effect.{s}.2", Observation("identity"))
-        # The order-10 partial-trap pair (transition.py:2278-2285 with residual_order): effect[0][3] orders the two
+        # The order-10 partial-trap pair (transition.py:2298-2305 with residual_order): effect[0][3] orders the two
         # Wrap holders' events at equal Speed. A seat holds a trap already or gets one from the other's Wrap (:1945-1955).
         trapped = [any(_counter(data, "partial_trap_counter", s, p) > 0 for p in participants[s])
                    or any(_at(t, "effects", "wrap", move) for move in selected[1-s]) for s in range(2)]
         if not replacement and all(trapped):
             use("effect.0.3", Observation("identity"))
-        # Perish Song's order-12 pair (transition.py:2616-2633): effect[1][3] orders the two holders at equal Speed.
+        # Perish Song's order-12 pair (transition.py:2636-2657): effect[1][3] orders the two holders at equal Speed.
         # Perish Song gives every active without a count one (:1728-1735), so either seat's use reaches both.
         perish_song = any(_at(t, "effects", "perishsong", move) for choices in selected for move in choices)
         if not replacement and all(perish_song or any(_counter(data, "perish_counter", s, p) > 0 for p in participants[s])
