@@ -253,26 +253,46 @@ class DigestAndRuleTests(unittest.TestCase):
         self.assertEqual(faint_rule(entries, {vol: wrong}, {vol: base}, fainted, p2p, slots), (entries, []))
 
     def test_tier_d_plug_in_predicates(self):
-        """D: Wonder Guard / contact holders as targets (active, a switch-in, a Trace entrant facing one), the attacker the
-        actor; a pinch active is its own actor. Every D effect has an allowance."""
+        """D: Wonder Guard / contact holders as targets (active; a voluntary switch only into a holder; any holder or a Trace
+        entrant facing one for an entry the side does not choose), the attacker the actor, with a qualifying move (damaging
+        for Wonder Guard, contact for the contact abilities); a pinch active with a matching-type move (Hidden Power by its
+        own type); Pursuit's intercept reveals. Every D effect has an allowance."""
         from gpu_engine.v2e_regress import Pre, PLUGINS, ALLOWED
-        WG, BLAZE, TRACE, ROAR = 4, 5, 6, len(VOCAB['moves'])
-        vocab = dict(VOCAB, moves=VOCAB['moves'] + ['roar'], abilities=VOCAB['abilities'] + ['wonderguard', 'blaze', 'trace'])
-        L = 8;s = pre_arrays(L);actions = np.zeros((L, 2), np.int32)
+        WG, BLAZE, TRACE, STATIC, ROAR, PURSUIT, EMBER, HPOWER = 4, 5, 6, 7, *range(len(VOCAB['moves']), len(VOCAB['moves']) + 4)
+        types = ['_none', 'normal', 'fire', 'dark', 'grass']
+        vocab = dict(VOCAB, moves=VOCAB['moves'] + ['roar', 'pursuit', 'ember', 'hiddenpowerfire'], types=types,
+                     abilities=VOCAB['abilities'] + ['wonderguard', 'blaze', 'trace', 'static'])
+        L = 11;s = pre_arrays(L);actions = np.zeros((L, 2), np.int32)
+        s['hidden_power_type'] = np.zeros((L, 2, 6), np.int32)
         s['ability'][0, 1, 0] = WG                                         # lane 0: side 1's active holds Wonder Guard
         s['ability'][1, 1, 3] = WG                                         # lane 1: a benched holder, no switch
-        s['ability'][2, 1, 3] = WG;actions[2, 1] = 6                       # lane 2: side 1 switches (any holder may come)
+        s['ability'][2, 1, 3] = WG;actions[2, 1] = 6                       # lane 2: side 1 switches into the holder (slot 3)
         s['ability'][3, 0, 0] = WG;s['ability'][3, 1, 2] = TRACE;s['moves'][3, 0, 0, 0] = ROAR   # lane 3: dragged Tracer
-        # (lane 3: side 0's own Wonder Guard active makes side 1 an actor too)
+        # (lane 3: side 1 may hit side 0's Wonder Guard active; side 0's Roar is a Status move, so not an actor)
         s['ability'][4, 0, 0] = 3                                          # lane 4: side 0's active holds Effect Spore
-        s['ability'][5, 1, 0] = BLAZE                                      # lane 5: side 1's active holds Blaze
+        s['ability'][5, 1, 0] = BLAZE                                      # lane 5: Blaze, but only Tackle (no Fire move)
         s['ability'][6, 1, 2] = BLAZE;actions[6, 1] = 5                    # lane 6: a Blaze entrant does not move
+        s['ability'][7, 1, 3] = WG;actions[7, 1] = 5                       # lane 7: switches into a non-holder (slot 2)
+        s['ability'][8, 1, 0] = BLAZE;s['moves'][8, 1, 0, 1] = HPOWER;s['hidden_power_type'][8, 1, 0] = 2;actions[8, 1] = 1   # HP Fire
+        s['ability'][9, 0, 0] = 3;s['moves'][9, 1, 0] = [SPORE, SPORE, SPORE, SPORE]   # lane 9: no contact move at Spore
+        s['ability'][10, 1, 0] = STATIC;s['moves'][10, 0, 0, 0] = PURSUIT;actions[10, 1] = 5   # lane 10: Pursuit, Static leaves
         named = {f'state.{k}': v for k, v in s.items()};named['actions'] = actions
-        p = Pre(named, vocab, np.append(CALLABLE, False), np.zeros((L, 2), bool))
+        row = lambda name, typ, category, contact: dict(id=name, type=typ, category=category, flags={'contact': 1} if contact else {})
+        rows = [None, row('curse', 0, 'Status', False), row('tackle', 1, 'Physical', True), row('sleeptalk', 1, 'Status', False),
+                row('spore', 4, 'Status', False), row('struggle', 1, 'Physical', True), row('encore', 1, 'Status', False),
+                row('magiccoat', 1, 'Status', False), row('batonpass', 1, 'Status', False), row('roar', 1, 'Status', False),
+                row('pursuit', 3, 'Special', True), row('ember', 2, 'Special', False), row('hiddenpowerfire', 2, 'Physical', False)]
+        callable_ = np.append(CALLABLE, [False] * 4)
+        p = Pre(named, vocab, callable_, np.zeros((L, 2), bool), moves=rows)
         d = PLUGINS['D'];no = [False, False]
-        self.assertEqual(d['wonderguard'](p).tolist(), [[True, False], no, [True, False], [True, True], no, no, no, no])
-        self.assertEqual(d['contact_status'](p).tolist(), [no, no, no, no, [False, True], no, no, no])
-        self.assertEqual(d['pinch'](p).tolist(), [no, no, no, no, no, [False, True], no, no])
+        self.assertEqual(d['wonderguard'](p).tolist(),
+                         [[True, False], no, [True, False], [False, True], no, no, no, no, no, no, no])
+        self.assertEqual(d['contact_status'](p).tolist(), [no, no, no, no, [False, True], no, no, no, no, no, no])
+        self.assertEqual(d['pinch'](p).tolist(), [no, no, no, no, no, no, no, no, [False, True], no, no])
+        self.assertEqual(d['pursuit_reveal'](p).tolist(), [no] * 10 + [[True, False]])
+        # Without move rows every move counts (a superset): lane 5's Blaze active and lane 9's Spore user count.
+        q = Pre(named, vocab, callable_, np.zeros((L, 2), bool))
+        self.assertTrue(d['pinch'](q)[5, 1] and d['contact_status'](q)[9, 1])
         self.assertTrue(all(e in ALLOWED for e in d))
 
     def test_tier_d_pinch_accepts_anything_only_on_a_ko_cascade(self):

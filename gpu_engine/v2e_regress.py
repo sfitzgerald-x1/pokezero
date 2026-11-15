@@ -374,7 +374,7 @@ def pad_lanes(named, lanes):
 
 class Pre:
     """Numpy view of a migrated pre-state plus the move resolution of the step."""
-    def __init__(self, named, vocab, sleep_talk_callable, struggle_mask, *, destiny_bond=DEFAULT_DESTINY_BOND):
+    def __init__(self, named, vocab, sleep_talk_callable, struggle_mask, *, destiny_bond=DEFAULT_DESTINY_BOND, moves=None):
         self.s = {k[len('state.'):]: np.asarray(v) for k, v in named.items() if k.startswith('state.')}
         # Tracker pre-values a predicate may read (PRE_TRACKERS): a public flag can outlive its engine link.
         self.t = {k[len('trackers.'):]: np.asarray(v) for k, v in named.items() if k.startswith('trackers.')}
@@ -382,6 +382,26 @@ class Pre:
         self.lanes = self.actions.shape[0];self.ids = {m: i for i, m in enumerate(vocab['moves'])}
         self.sleep_talk_callable = np.asarray(sleep_talk_callable);self.struggle = np.asarray(struggle_mask)
         self.candidates = self._candidates()
+        # D: the pool's move rows (contact flag, category, type) when the pass has them; without them every move counts
+        # as a contact, damaging move of any type (a superset).
+        self.move_rows = moves
+
+    def move_facts(self):
+        """D: ([M] contact, [M] Status category, [M] type id (-1: unknown), [M] Hidden Power) from the move rows."""
+        names = self.vocab['moves'];n = len(names)
+        hidden = np.array([m.startswith('hiddenpower') for m in names], bool)
+        rows = self.move_rows
+        if rows is None or len(rows) != n:
+            return np.ones(n, bool), np.zeros(n, bool), np.full(n, -1), hidden
+        contact = np.array([bool(r) and bool((r.get('flags') or {}).get('contact')) for r in rows], bool)
+        status = np.array([bool(r) and r.get('category') == 'Status' for r in rows], bool)
+        mtype = np.array([int((r or {}).get('type') or 0) if r else 0 for r in rows])
+        return contact, status, mtype, hidden
+
+    def candidate_any(self, mask):
+        """[L,2] some candidate move m > 0 of the side has mask[m]."""
+        c = self.candidates;mask = np.asarray(mask, bool)
+        return (mask[np.clip(c, 0, len(mask) - 1)] & (c > 0)).any(-1)
 
     def active(self, name):
         rows = np.arange(self.lanes)[:, None];sides = np.arange(2)[None, :]
@@ -521,29 +541,76 @@ def frozen_defrost(p):
 
 # Fidelity tier D abilities (data/mods/gen4/abilities.ts, data/mods/gen3/abilities.ts at f76228a1).
 PINCH_ABILITIES = ('blaze', 'torrent', 'overgrow', 'swarm')
+PINCH_TYPE_NAMES = {'blaze': 'fire', 'torrent': 'water', 'overgrow': 'grass', 'swarm': 'bug'}
 CONTACT_ABILITIES = ('poisonpoint', 'flamebody', 'effectspore')
 
 
-def ability_target(*names):
+def holder_target(p, *names):
     """D: [L,2] the side whose active may hold one of these abilities when the other side's move hits it this step: its
-    active holds it (the current ability: a Trace copy included), or a holder in its party may come in (installs: a
-    switch, Baton Pass, the foe's Roar/Whirlwind, a replacement), or a Trace holder that may come in faces a holder
-    (Trace copies the foe active's ability at its entry). The actor is the other side (the attacker)."""
+    active holds it (the current ability: a Trace copy included); a voluntary switch whose target is a holder (or a Trace
+    holder facing an active holder: Trace copies at entry); or, for an entry it does not choose (a replacement, Baton Pass,
+    the foe's Roar/Whirlwind), any holder (or Trace holder facing one) in its party."""
+    holders = np.isin(p.s['ability'], p.ability_ids(*names))                         # [L,2,6]
+    tracers = np.isin(p.s['ability'], p.ability_ids('trace'))
+    active = p.active_ability(*names)
+    rows = np.arange(p.lanes)[:, None];sides = np.arange(2)[None, :]
+    active_hp = p.s['hp'][rows, sides, p.s['active']]
+    forced = p.s['forced_switch'].astype(bool) | (active_hp <= 0)
+    slot = np.clip(p.actions - 4, 0, 4);target = slot + (slot >= p.s['active'])       # state.bench_indices
+    voluntary = (p.actions >= 4) & ~forced
+    chosen = holders[rows, sides, target] | (tracers[rows, sides, target] & active[:, ::-1])
+    other = forced | p.side_uses('batonpass') | p.side_uses('roar', 'whirlwind')[:, ::-1]
+    unchosen = holders.any(-1) | (tracers.any(-1) & active[:, ::-1])
+    return active | (voluntary & chosen) | (other & unchosen)
+
+
+def ability_target(*names, move_ok=None):
+    """D: [L,2] the actor sides: the other side of a holder_target, which may execute a qualifying move (move_ok(p): [L,2];
+    None: any). Pursuit's intercept counts as the actor's move (it is a candidate)."""
     def predicate(p):
-        ids = p.ability_ids(*names)
-        holders = np.isin(p.s['ability'], ids)                                          # [L,2,6]
-        trace = np.isin(p.s['ability'], p.ability_ids('trace')).any(-1)
-        active = p.active_ability(*names)
-        target = active | ((holders.any(-1) | (trace & active[:, ::-1])) & installs(p))
-        return target[:, ::-1]
+        actor = holder_target(p, *names)[:, ::-1]
+        return actor & (np.ones_like(actor) if move_ok is None else move_ok(p))
     return predicate
 
 
+def damaging_move(p):
+    """D: [L,2] the side may execute a non-Status move (Wonder Guard's TryHit ignores Status moves)."""
+    return p.candidate_any(~p.move_facts()[1])
+
+
+def contact_move(p):
+    """D: [L,2] the side may execute a contact move (the contact abilities are onDamagingHit of a contact hit)."""
+    return p.candidate_any(p.move_facts()[0])
+
+
 def pinch_active(p):
-    """D: [L,2] a side whose active holds Blaze, Torrent, Overgrow or Swarm (the current ability, a Trace copy included):
-    its own matching-type move may be boosted (HP <= max/3 at its getDamage, which earlier hits in the step may reach,
-    so HP is not predicted). An entrant does not move in its entry step."""
-    return p.active_ability(*PINCH_ABILITIES)
+    """D: [L,2] a side whose active holds Blaze, Torrent, Overgrow or Swarm (the current ability, a Trace copy included)
+    and may execute a move of that type (Hidden Power by the active's own type): its move may be boosted (HP <= max/3 at
+    its getDamage, which earlier hits in the step may reach, so HP is not predicted). An entrant does not move in its
+    entry step."""
+    _, _, mtype, hidden = p.move_facts()
+    types = p.vocab['types'];out = np.zeros((p.lanes, 2), bool)
+    hp_type = p.active('hidden_power_type') if 'hidden_power_type' in p.s else np.zeros((p.lanes, 2), int)
+    dark = types.index('dark') if 'dark' in types else -1
+    hp_type = np.where(hp_type > 0, hp_type, dark)                                     # variable_moves.resolve's default
+    c = p.candidates;cc = np.clip(c, 0, len(mtype) - 1)
+    resolved = np.where(hidden[cc], hp_type[..., None], mtype[cc])                      # [L,2,K]
+    for ability, name in PINCH_TYPE_NAMES.items():
+        if name not in types:continue
+        t = types.index(name)
+        holds = p.active_ability(ability)
+        out |= holds & (((resolved == t) | (resolved < 0)) & (c > 0)).any(-1)
+    return out
+
+
+def pursuit_reveal(p):
+    """D (c471195a): a Pursuit user whose foe may switch out while its active holds Static, Rough Skin or a contact-status
+    ability (the intercept's DamagingHit lines now reveal it on the device), or a Synchronize Pursuit user (its reflection
+    line). Allowance: the reveals only."""
+    pursuer = p.side_uses('pursuit')
+    switching = (p.actions >= 4)[:, ::-1]
+    holder = p.active_ability('static', 'roughskin', *CONTACT_ABILITIES)[:, ::-1]
+    return pursuer & switching & (holder | p.active_ability('synchronize'))
 
 
 def entering_ability(*names):
@@ -808,6 +875,8 @@ ALLOWED['sacredfire'] = ALL
 # user's HP from the reply (Counter/Mirror Coat), its drain (Giga Drain under Overgrow) or Liquid Ooze, and its HP items.
 ALLOWED['wonderguard'] = ALL
 ALLOWED['contact_status'] = ALL
+# D (c471195a): the Pursuit intercept's ability reveals (the target's contact ability, the pursuer's Synchronize).
+ALLOWED['pursuit_reveal'] = dict(user=('reveal',), target=('reveal',), glob=())
 ALLOWED['pinch'] = dict(user=('hp', 'item', 'boosts', 'visible', 'reveal'),
                         target=('hp', 'item', 'boosts', 'typechange', 'reveal', 'visible', 'subtracker', 'wish', 'focus'), glob=())
 
@@ -856,8 +925,8 @@ PLUGINS = {
     # WH (White Herb plus C-lite, which replaces C's draft; Psycho Boost's drop is unchanged, its restore is White Herb's).
     'WH': dict(whiteherb=white_herb, facade=facade_status, sacredfire=frozen_defrost),
     # D (fidelity tier D): Wonder Guard, the pinch abilities, Poison Point / Flame Body / Effect Spore.
-    'D': dict(wonderguard=ability_target('wonderguard'), pinch=pinch_active,
-              contact_status=ability_target(*CONTACT_ABILITIES)),
+    'D': dict(wonderguard=ability_target('wonderguard', move_ok=damaging_move), pinch=pinch_active,
+              contact_status=ability_target(*CONTACT_ABILITIES, move_ok=contact_move), pursuit_reveal=pursuit_reveal),
 }
 
 
@@ -2081,7 +2150,7 @@ def patched_pass(args, *, step_override=None, prepared=None):
                 diff[:, position[PUBLIC_ORDER]] = bad.any(-1)
             struggle = ~np.asarray(usable(_state_only(named, template, real))).any(-1)
             pre = Pre({n: np.asarray(named[n])[:real] for n in named if n.startswith('state.') or n == 'actions' or n in PRE_TRACKERS},
-                vocab, callable_moves, struggle, destiny_bond=destiny_bond)
+                vocab, callable_moves, struggle, destiny_bond=destiny_bond, moves=metadata.get('moves'))
             involved = {k: np.asarray(f(pre), bool) for k, f in table.items()}       # [L,2] actor sides
             done = np.asarray(named['state.done'])[:real]
             ko_mons_all = result['fainted'][:real] != base['fainted']                       # [L,2,6] (un)fainted mons
