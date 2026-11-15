@@ -1,5 +1,6 @@
-"""gpu_engine.atomic_compilation_cache: this process's persistent-cache entries appear whole (a temporary file renamed into
-place), with JAX's own key, bytes, get and no-overwrite rule; a size-limited cache keeps JAX's put. CPU only."""
+"""gpu_engine.atomic_compilation_cache: this process's persistent-cache entries appear whole (a unique temporary file, fsynced,
+renamed into place; a failed write leaves nothing), with JAX's own key, bytes, get and no-overwrite rule; a size-limited cache
+and a remote one keep JAX's put; an unknown JAX is left alone and said so. CPU only."""
 import os
 import tempfile
 import unittest
@@ -29,6 +30,32 @@ class AtomicCacheTests(unittest.TestCase):
         cache.put('k', b'other');self.assertEqual(cache.get('k'), value)   # JAX's rule: an existing entry stays
         with self.assertRaises(ValueError):
             cache.put('', value)
+
+    def test_a_failed_write_leaves_no_entry_and_no_temporary(self):
+        cache = self.lru.LRUCache(self.dir.name, max_size=-1)
+        with mock.patch.object(os, 'replace', side_effect=OSError('disk full')), self.assertRaises(OSError):
+            cache.put('k', b'v')
+        self.assertEqual(os.listdir(self.dir.name), []);self.assertIsNone(cache.get('k'))
+
+    def test_temporaries_are_unique_per_write(self):   # mkstemp: no pid / thread name to collide across pods on a shared volume
+        cache = self.lru.LRUCache(self.dir.name, max_size=-1);names = []
+        replace = os.replace
+        with mock.patch.object(os, 'replace', lambda src, dst: (names.append(os.path.basename(src)), replace(src, dst))):
+            for key in ('a', 'b', 'c'):
+                cache.put(key, key.encode())
+        self.assertEqual(len(set(names)), 3);self.assertTrue(all(n.startswith('.') and n.endswith('.tmp') for n in names))
+
+    def test_a_cache_off_the_local_filesystem_keeps_jaxs_own_put(self):
+        cache = self.lru.LRUCache(self.dir.name, max_size=-1);cache._is_local = False
+        with mock.patch.object(os, 'replace', side_effect=AssertionError('not JAX\'s put')):
+            cache.put('k', b'v')
+        self.assertEqual(cache.get('k'), b'v')
+
+    def test_an_unknown_jax_is_left_alone_and_said_so(self):
+        with mock.patch.object(self.lru, '_CACHE_SUFFIX', None):
+            self.assertFalse(atomic_compilation_cache.install())
+            self.assertEqual(atomic_compilation_cache.STATUS['installed'], False);self.assertIn('patched shape', atomic_compilation_cache.STATUS['reason'])
+        self.assertTrue(atomic_compilation_cache.install());self.assertTrue(atomic_compilation_cache.STATUS['installed'])
 
     def test_a_size_limited_cache_keeps_jaxs_own_put(self):
         if self.lru.filelock is None:

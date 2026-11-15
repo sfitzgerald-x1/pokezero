@@ -305,19 +305,23 @@ def prepare_one(constructor, request, *, device='cpu', redaction=None):
 
 
 def warm_in(constructor, requests, *, device='cpu', redaction=None, compiles=(0,)):
-    """A worker's warm-in, before it is ready: every request prepared and classified once, in order, sessions kept through the
-    list (a battle's later decisions fold incrementally, an unseen battle's late decision from scratch, as live), so the
+    """A worker's warm-in, before it is ready: every request prepared and classified once, in order, sessions kept through a
+    pass (a battle's later decisions fold incrementally, an unseen battle's late decision from scratch, as live), so the
     first-use compiles of the shapes they reach happen now; then every session, attempt, held root and peer fold is forgotten.
-    dict(requests, seconds, compiles, kinds: count per result kind)."""
+    `requests`: one pass (protocol requests), or a sequence of passes (each a sequence of them) with every session forgotten
+    between passes, so two lists may repeat an address or go back in a battle (the server's: its warmup requests, then the
+    pinned list). dict(requests, passes, seconds, compiles, kinds: count per result kind)."""
     from . import constructor_worlds as cw
+    passes = [list(p) for p in requests] if requests and isinstance(requests[0], (list, tuple)) else [list(requests)]
     started = time.perf_counter();before = compiles[0];kinds = {}
-    for request in requests:
-        kind = prepare_one(constructor, request, device=device, redaction=redaction)[0];kinds[kind] = kinds.get(kind, 0) + 1
-    reset_constructor(constructor);cw._PEER_FOLDS.clear()
+    for one in passes:
+        for request in one:
+            kind = prepare_one(constructor, request, device=device, redaction=redaction)[0];kinds[kind] = kinds.get(kind, 0) + 1
+        reset_constructor(constructor);cw._PEER_FOLDS.clear()
     rss = rss_bytes();gc.collect();_trim()   # the warm-in's garbage, given back before serving (the RSS reported is after it)
     gc.freeze()   # what is left (the constructor, compiled programs' caches) leaves the collector's generations: serving's
                   # collections never rescan it (r5a's live servers froze after warmup the same way)
-    return dict(requests=len(requests), seconds=time.perf_counter() - started, compiles=compiles[0] - before, kinds=kinds,
+    return dict(requests=sum(len(p) for p in passes), passes=len(passes), seconds=time.perf_counter() - started, compiles=compiles[0] - before, kinds=kinds,
                 rss_before_collect=rss, rss=rss_bytes())
 
 
@@ -342,13 +346,15 @@ def worker_main(fd):
     try:
         import jax
         from . import atomic_compilation_cache
-        atomic_compilation_cache.install()   # this worker writes the shared cache's entries whole (its module docstring)
+        jax_config = options.get('jax_config') or {}
+        if not atomic_compilation_cache.install() and jax_config.get('jax_compilation_cache_dir'):   # a shared cache: whole entries only
+            raise RuntimeError(f'the persistent cache needs whole-entry writes: {atomic_compilation_cache.STATUS["reason"]}')
         jax.config.update('jax_enable_x64', False)
-        for name, value in (options.get('jax_config') or {}).items():
+        for name, value in jax_config.items():
             jax.config.update(name, value)
         constructor = _resolve(factory)(payload)
         from . import constructor_worlds as cw
-        ident = dict(pid=os.getpid(), jax=jax.__version__, platforms=sorted({d.platform for d in jax.devices()}),
+        ident = dict(pid=os.getpid(), jax=jax.__version__, atomic_cache=dict(atomic_compilation_cache.STATUS), platforms=sorted({d.platform for d in jax.devices()}),
                      x64=bool(jax.config.jax_enable_x64), matmul_precision=str(jax.config.jax_default_matmul_precision or 'default'),
                      binding=cw.constructor_binding(constructor), count=getattr(constructor, 'count', None))
     except BaseException as error:
@@ -468,9 +474,17 @@ class _Local(_Worker):
                 except BaseException as error:   # noqa: BLE001 -- the request's server_error (MemoryError too: this thread goes on)
                     out = ('error', task, time.perf_counter() - clock, None, f'{type(error).__name__}: {error}')
             elif kind == 'drop':
-                drop_battles(self.constructor, message[1]);continue
+                try:
+                    drop_battles(self.constructor, message[1])
+                except Exception:   # noqa: BLE001 -- a battle it cannot drop is forgotten by the next reset; the slot goes on
+                    pass
+                continue
             elif kind == 'reset':
-                reset_constructor(self.constructor);out = ('reset_done', message[1])
+                try:
+                    reset_constructor(self.constructor)
+                except Exception:   # noqa: BLE001 -- acknowledged all the same: the reset's caller must not hang on the slot
+                    pass
+                out = ('reset_done', message[1])
             else:
                 continue
             self.pool.events.put(('pool', self.index, self.generation, out + (time.monotonic(),)))
@@ -756,6 +770,10 @@ class PreparePool:
         """Kill every worker whose task has run longer than timeout_seconds (its reader then reports it gone). Returns the next
         time (monotonic) a running task would time out, or None."""
         now = time.monotonic() if now is None else now;nxt = None
+        for w in self.workers:   # a worker process that exited: its 'gone' now, whether or not its reader's arrives (handle takes one)
+            if (w is not self.local and w.process is not None and w.state in ('ready', 'starting') and w.process.poll() is not None
+                    and getattr(w, 'gone_sent', None) != w.generation):
+                w.gone_sent = w.generation;self.events.put(('pool', w.index, w.generation, ('gone',)))
         for w in self.workers:
             if w.busy is not None and w.state == 'ready':
                 due = w.started + self.timeout
@@ -776,6 +794,10 @@ class PreparePool:
         if generation != w.generation:
             return []   # a previous incarnation's last words
         kind = message[0];out = []
+        if kind == 'gone':   # one per incarnation: the reader's and the watchdog's may both arrive
+            if getattr(w, 'gone_handled', None) == generation:
+                return []
+            w.gone_handled = generation
         if kind == 'ready':
             same = lambda ident: {k: ident.get(k) for k in IDENTITY}
             if self.identity is None:
@@ -826,7 +848,10 @@ class PreparePool:
                 if w.state == 'failed' or len(w.restarts) > self.max_restarts:
                     w.ident = w.ident if w.state == 'failed' and w.ident else text;w.state = 'failed'
                 else:
-                    self._spawn(w)   # it comes back empty (its warm-in first) and takes new battles
+                    try:
+                        self._spawn(w)   # it comes back empty (its warm-in first) and takes new battles
+                    except Exception as error:   # noqa: BLE001 -- it fails for good; its died task and queue are still answered below
+                        w.ident = f'restart failed: {type(error).__name__}: {error}';w.state = 'failed'
                 # Its battles move now, in their order, to the live workers (they fold from scratch there: an evicted
                 # battle's path), so none waits for the restart's warm-in.
                 for battle in [b for b, i in self.affinity.items() if i == index]:
@@ -836,8 +861,10 @@ class PreparePool:
                     others = [x for x in self.workers if x.state == 'ready' and x is not w]
                     if others:
                         target = self.workers[self.assign(battle if type(battle) is str else None, exclude=index)]
-                    else:
-                        target = w
+                    elif w.state != 'failed':
+                        target = w   # it restarts: they wait for it
+                    else:   # no live worker to take it: answered now, never left on a dead worker's queue
+                        out.append(Result(task, 'died', index, text=text + ' (no live prepare worker)'));continue
                     target.queue.append(('prepare', (task, request, on_start)))
         out.extend(self.pump())
         return out

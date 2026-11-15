@@ -41,9 +41,17 @@ ready roots with the earliest deadlines; it goes when
       waiting would add no root.
 est(b) = EWMA (alpha 0.2) of the measured build + price and reduce seconds of batches at bucket b, seeded from warmup's warm
 pass at b (a bucket never seen: the nearest seen bucket's, scaled by b / that bucket); the prepare EWMA starts at 1 s.
-Before a batch is formed, a ready root whose deadline leaves less than min_price_seconds (the live search's own minimum to
-price, as at its prepare start) is refused unpriced: cause expired_in_queue, refusal EXPIRED_BEFORE_PRICE (it was prepared,
-so its address is attempted; it waited for the device, not for a prepare).
+Before a batch is formed, a ready root that LOST its margin waiting for the device is refused unpriced: one that still had
+min_price_seconds (the live search's own minimum to price, as at its prepare start) when it became ready, and has less now
+(cause expired_in_queue, refusal EXPIRED_BEFORE_PRICE; it was prepared, so its address is attempted: the serial search's
+expired_in_queue roots are not). A root that came out of its prepare already under the minimum is priced, as the serial search
+prices it (it checks the minimum only at the batch's start): at batch 1 with nothing waiting, the pipeline answers as serial.
+
+Numerics. At batch 1 every stage is the serial search's, bit for bit. A batch of b > 1 roots prices at bucket b (P1's forwards
+over all the batch's roots, shapes keyed by capacity), as the serial search does when b requests coincide: whether that is bit
+for bit each root's bucket-1 price is not shown for the real champion (the fake engine's tests are; the GPU reduce dump's
+bucket_invariance check measures it). The reply forward is per root by default; reply_forward='device' (one forward per seat
+over the batch, padded) is NOT bitwise the per-root forward (another batch shape; reply_logits), so it is opt-in.
 
 Responses are the serial search's (the same stage functions); per response: queue_seconds = arrival -> prepare start,
 prepare/classify/structure_seconds the root's own, build/price/reduce_seconds its batch's, decision_seconds = prepare start ->
@@ -75,6 +83,21 @@ class Task:
         self.arrival = request.get(live.ARRIVAL)
         self.deadline = self.started = self.item = self.labels = self.gate = self.worker = self.sent = self.received = None
         self.unpack_seconds = self.ready_at = self.compiles = self.bytes = self.split = None
+
+
+def _purged(events):
+    """`events` (a queue.SimpleQueue) with every entry that is not the pool's own ('pool', ...) dropped, the pool's kept in order."""
+    kept = []
+    while True:
+        try:
+            event = events.get_nowait()
+        except queue.Empty:
+            break
+        if type(event) is tuple and len(event) == 4 and event[0] == 'pool':
+            kept.append(event)
+    for event in kept:
+        events.put(event)
+    return events
 
 
 class Estimates:
@@ -136,7 +159,8 @@ class Pipeline:
         self.window, self.guard, self.reply_forward = float(window_seconds), float(guard_seconds), reply_forward
         self.clock = clock or search.clock;self.log = log or (lambda *a: None)
         self.estimates = estimates or Estimates(search.buckets, seed=warm_seed(search))
-        self.inbox = pool.events = queue.SimpleQueue()   # one queue: requests, the pool's events (redirected here), the device's and reduce's ends
+        self.inbox = _purged(pool.events)   # one queue, the pool's own (none of its events can be lost to a swap): requests, the pool's
+                                            # events, the device's and reduce's ends (a previous pipeline's leftovers dropped)
         self.device_q, self.reduce_q = queue.SimpleQueue(), queue.SimpleQueue()
         self.tasks = {};self.ready = [];self.device_busy = False;self.closing = False;self.ids = itertools.count()
         self.threads = [];self.batches = 0;self.stats = dict(batches={}, flush={}, expired_before_price=0, migrated=0);self.resets = [];self.deferred = []
@@ -169,8 +193,8 @@ class Pipeline:
             self._close_sent = True;self.inbox.put(('close',))
         for t in self.threads:
             t.join(timeout)
-        if not any(t.is_alive() for t in self.threads) and self.pool.events is self.inbox:
-            self.pool.events = queue.SimpleQueue()   # the pool's own again: nothing of this pipeline's left on it
+        if not any(t.is_alive() for t in self.threads):
+            _purged(self.inbox)   # nothing of this pipeline's left on the pool's queue (its own events stay)
 
     # scheduler ------------------------------------------------------------------------------------------------------------------
     def _schedule(self):
@@ -268,6 +292,8 @@ class Pipeline:
         self.load += .1 * (others - self.load)
         if battle is not None:
             self.activity[battle] = now
+            if len(self.activity) > 4 * max(1, self.local_battles) + 256:   # idle battles forgotten: the map stays the live ones'
+                self.activity = {b: t for b, t in self.activity.items() if now - t < self.local_idle}
         if not self.local_battles or battle is None or battle in self.pool.affinity or others or self.load >= LOCAL_LOAD:
             return False
         index = self.pool.local.index
@@ -339,6 +365,7 @@ class Pipeline:
         if result.kind != 'prepared':
             return self._respond(task, search._encodable(search._failed(task.row, None, live.RemoteError(result.text or result.kind)), 1))
         task.item, task.labels = result.item, dict(result.labels);task.received = time.monotonic();task.unpack_seconds = result.unpack_seconds
+        task.worker = result.worker   # the worker that prepared it (a dead worker's queue is re-queued elsewhere)
         task.compiles, task.bytes = result.compiles, result.bytes
         if task.started is not None:
             self.estimates.observe_prepare(max(0., self.clock() - task.started))
@@ -354,7 +381,7 @@ class Pipeline:
         if self.device_busy or self.unreduced >= 2 or not self.ready:
             return None
         now = self.clock();floor = getattr(self.search, 'min_price_seconds', 0.)
-        for t in [t for t in self.ready if t.deadline - now < floor]:   # it cannot be priced in time: refused before the device
+        for t in [t for t in self.ready if t.deadline - t.ready_at >= floor and t.deadline - now < floor]:   # lost its margin in `ready`
             self.ready.remove(t);self.stats['expired_before_price'] += 1
             self._respond(t, self.search._encodable(self._expired_before_price(t, now, floor), 1))
         if not self.ready:

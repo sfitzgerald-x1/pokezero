@@ -58,7 +58,7 @@ import threading
 import time
 
 from pokezero import phase_d_search_server as original
-from gpu_engine import champion_evaluator as evaluators,depthn_live_search as live
+from gpu_engine import atomic_compilation_cache,champion_evaluator as evaluators,depthn_live_search as live
 
 
 class ArrivalQueue(asyncio.Queue):
@@ -262,11 +262,12 @@ def run(search,*,host,port,warmup_requests,max_requests,batch_wait_seconds=.005,
         local=pool is not None and(pipeline_options or{}).get('local_battles',0)>0
         if local:
             pool.attach_local(search.constructor)   # batch 1 in process: this search's own prepare, warmed below as the serial server's
-            warm_in=tuple(warmup_requests)+tuple(warm_in)
+            warm_in=tuple(warm_in)   # the pinned list alone: warmup prepares the warmup requests itself (its own passes, sessions reset)
         elif pool is not None:warm_in=()   # nothing prepares in this process: only the workers warm in (at their start)
         if pool is not None:
             started=time.perf_counter();pool.wait_ready();search.attach_pool(pool)
-            workers=dict(workers=pool.size,ready_wait_seconds=time.perf_counter()-started,warm_in={w.index:(w.ident or{}).get('warm_in')for w in pool.workers})
+            workers=dict(workers=pool.size,ready_wait_seconds=time.perf_counter()-started,warm_in={w.index:(w.ident or{}).get('warm_in')for w in pool.workers},
+                atomic_cache={w.index:(w.ident or{}).get('atomic_cache')for w in pool.workers})
             if(pipeline_options or{}).get('reply_forward')=='device'and getattr(search,'reply',None)is not None:
                 search.reply_batches=tuple(search.buckets)   # warmup compiles each bucket's batched reply forward, both seats
         warm=search.warmup(warmup_requests,**({'warm_in':warm_in}if warm_in else{}));buckets=warm.get('buckets',{})
@@ -276,7 +277,8 @@ def run(search,*,host,port,warmup_requests,max_requests,batch_wait_seconds=.005,
             warm=dict(warm,prepare_workers=dict(workers,rss_bytes=pool.rss()),pipeline=dict(pipeline_options or{},max_batch=max_requests))
         ready=dict(event='READY',host=host,port=port,server_id=server_id,**(header or{}),cold_seconds={b:x.get('cold_seconds')for b,x in buckets.items()},
             warm_seconds={b:x.get('warm_seconds')for b,x in buckets.items()},programs=warm.get('programs'),carry_reference=warm.get('carry_reference'),warmup=warm,
-            warmup_compiles=compiles.delta())   # everything up to READY: each request row's compiles and cache counts are serving's own
+            warmup_compiles=compiles.delta(),   # everything up to READY: each request row's compiles and cache counts are serving's own
+            atomic_cache=dict(atomic_compilation_cache.STATUS))   # this process's whole-entry cache writes (the workers': prepare_workers.atomic_cache)
         def announce():log(ready);recorder.record(dict(ready,kind='ready'))
         asyncio.run(server.serve(host,port,on_ready=announce))
     finally:
@@ -463,8 +465,8 @@ def build(args):
     jax.config.update('jax_enable_x64',False)   # pinned off, as phase_d_ladder_server
     if matmul_precision()!=args.matmul_precision:   # the hard pin, again once JAX is imported, before anything loads or warms up
         raise ValueError(f'JAX default matmul precision {matmul_precision()!r} differs from the pinned {args.matmul_precision!r}')
-    from gpu_engine import atomic_compilation_cache
-    atomic_compilation_cache.install()   # whole entries only, for every process sharing the cache (its module docstring)
+    if not atomic_compilation_cache.install()and args.compilation_cache:   # whole entries only, for every process sharing the cache
+        raise ValueError(f'--compilation-cache needs whole-entry cache writes: {atomic_compilation_cache.STATUS["reason"]}')
     if args.compilation_cache:
         from pokezero.owning_worker_runtime import configure_compilation_cache
         configure_compilation_cache(args.compilation_cache)
@@ -536,17 +538,21 @@ def make_pool(args):
     from gpu_engine.prepare_pool import PreparePool
     payload={k:getattr(args,k)for k in CONSTRUCTOR_ARGUMENTS}
     redaction={**({'redact_private_reveals':True}if args.redact_private_reveals or args.peer_view_b else{}),**({'peer_view_b':True}if args.peer_view_b else{})}
+    cache={}if not args.compilation_cache else dict(jax_enable_compilation_cache=True,jax_compilation_cache_dir=str(Path(args.compilation_cache).resolve()),
+        jax_persistent_cache_min_compile_time_secs=0.)   # the workers' prepare uses the server's persistent cache (written whole, as the server)
     return PreparePool('scripts.depthn_live_server:worker_constructor',payload,workers=args.prepare_workers,device='cpu',redaction=redaction,
         cpus=prepare_cpu_sets(args.prepare_cpus,args.prepare_workers)if args.prepare_cpus else None,
-        timeout_seconds=args.prepare_timeout_seconds,warm_in=warm_in_requests(args)).start(wait=False)
+        timeout_seconds=args.prepare_timeout_seconds,warm_in=warm_in_requests(args),jax_config=cache).start(wait=False)
 
 
 def warm_in_requests(args):
-    """Every prepare worker's warm-in: the warmup requests, then --prepare-warm-in's (its bytes held to the sha256), as protocol
-    requests (warm-in-<j> request ids)."""
-    rows=read_requests(args.warmup_requests)+list(read_warm_in(args))
-    keys=live.PROTOCOL_KEYS[2:]
-    return[dict({k:r[k]for k in keys},schema=original.SCHEMA,request_id=f'warm-in-{j}')for j,r in enumerate(rows)]
+    """Every prepare worker's warm-in: two passes, every session forgotten between them (so the lists may share an address or
+    go back in a battle): the warmup requests, then --prepare-warm-in's (its bytes held to the sha256), as protocol requests
+    (warm-in-<j> request ids)."""
+    keys=live.PROTOCOL_KEYS[2:];passes=(read_requests(args.warmup_requests),list(read_warm_in(args)));out=[];j=0
+    for rows in passes:
+        if rows:out.append(tuple(dict({k:r[k]for k in keys},schema=original.SCHEMA,request_id=f'warm-in-{j+i}')for i,r in enumerate(rows)));j+=len(rows)
+    return tuple(out)
 
 
 def header(args,search):

@@ -9,7 +9,9 @@ request_id. Per batch (process_many chunks a longer list into batches of max_req
 - validate: exactly Codex's ten ladder keys (what ProtocolConstructor.prepare accepts) plus ours, `rung` (this server's)
   and `budget_seconds` (finite > 0), and the server queue's private ARRIVAL stamp; anything else is REFUSED bad_request.
 - expired_in_queue: a request whose queue wait (ARRIVAL -> the batch's start, both time.monotonic; 0 without a stamp)
-  leaves less than min_price_seconds of its budget is refused unpriced and unprepared (its address stays unattempted).
+  leaves less than min_price_seconds of its budget is refused unpriced and unprepared (its address stays unattempted). (The
+  batching pipeline also refuses expired_in_queue a prepared root that lost that margin waiting for the device, refusal
+  EXPIRED_BEFORE_PRICE: prepared, so attempted; depthn_batching's module docstring.)
 - the rest, stripped to Codex's keys: constructor_worlds.prepare_roots (CPU device) -> build (only_complete: Codex's all-W
   rule refuses a root with any refused world before any device work) -> ONE price call on the smallest bucket holding the
   batch's blocks -> per root, depthn_backups.backup(frame, row, learner_max) per block, once. DepthN's capacity counts
@@ -606,14 +608,21 @@ class DepthNLiveSearch:
                     alt=decide(check['blocks'],root['root_logits'],root['root_legal'])
                     reply.update(jit_action_index=alt['action_index'],jit_q_values=alt['q_values'],jit_max_abs_logit_diff=check['max_abs_logit_diff'])
             blocks=replied
-        decision=decide(blocks,root['root_logits'],root['root_legal'])
-        if self._gated()and decision['status']=='COMPLETE':decision=noise_gate(decision,blocks,root['root_logits'],root['root_legal'])
+        played=self._substitute(blocks,root,items[root['request_id']])   # THE HOOK: after the reply prior, before decide and the noise gate
+        decision=decide(played,root['root_logits'],root['root_legal'])
+        if self._gated()and decision['status']=='COMPLETE':decision=noise_gate(decision,played,root['root_logits'],root['root_legal'])
         if reply is not None:
             decision['reply_prior']=reply;self.reply_completed+=decision['status']=='COMPLETE'
         if decision['status']=='COMPLETE':decision['effect_guard']=self._effect_guard(frame,root,made,by_id[root['request_id']],children,seam_notes,
             decision['action_index'],labels,reply_logits=None if reply is None else[None if w is None or not w.opponent_requested else
-                w.opponent_logits for pair in blocks for w in pair])   # br_fp: the union guard on the reply model's logits
+                w.opponent_logits for pair in blocks for w in pair])   # br_fp: the union guard on the reply model's logits (the PRE-hook blocks)
         return dict(base,**decision)
+
+    def _substitute(self,blocks,root,item):
+        """The decision's block-substitution hook (identity here): what decide and the noise gate play, from the root's backed-up
+        blocks after the reply prior. A substitution of the worlds' opponent priors goes here (measurement's R3pa); the effect
+        guard keeps reading the blocks before it."""
+        return blocks
 
     def _assemble(self,todo,prepared,results,classified,gates,priced,t_reduce,decided):
         """{response index: response} of the batch: each request's row with its root's labels, the stage timings

@@ -183,6 +183,28 @@ class PoolTests(Fixture, unittest.TestCase):
             for event in iter(lambda: pool._get(.2, []), None):pool.handle(event)
         self.assertTrue(all(w.state == 'ready' for w in pool.workers))
 
+    def test_a_restart_that_cannot_spawn_answers_the_dead_workers_tasks(self):
+        keys = [('crash', 0), ('ok', 0)]
+        payload = dict(W=8, outcomes=[(k, ('outcome', i, ())) for i, k in enumerate(keys)], crash=[('crash', 0)])
+        pool = self.pool(1, payload)
+        def cannot(w):
+            raise OSError('no process')
+        pool._spawn = cannot   # the restart after the crash fails: no live worker is left for the queued task
+        results = pool.prepare_many([protocol(L.request(b, d)) for b, d in keys])
+        self.assertEqual([r.kind for r in results], ['died', 'died']);self.assertIn('no live prepare worker', results[1].text)
+        self.assertEqual(pool.workers[0].state, 'failed');self.assertTrue(pool.workers[0].ident.startswith('restart failed: OSError'))
+
+    def test_a_dead_process_is_reported_once_even_without_its_readers_word(self):
+        payload = dict(W=8, outcomes=[(('ok', 0), ('outcome', 0, ()))])
+        pool = self.pool(2, payload);w = pool.workers[0];generation = w.generation
+        w.process.kill();w.process.wait()
+        pool.watchdog()   # the watchdog's own 'gone' for the exited process (the reader's may come too: one is handled)
+        deadline = time.monotonic() + 120
+        while (w.generation == generation or w.state != 'ready') and time.monotonic() < deadline:
+            for event in iter(lambda: pool._get(.2, []), None):pool.handle(event)
+        for event in iter(lambda: pool._get(1., []), None):pool.handle(event)   # any late duplicate 'gone'
+        self.assertEqual((w.generation, len(w.restarts), w.state), (generation + 1, 1, 'ready'))
+
     def test_the_warm_in_runs_before_ready_and_forgets_its_sessions(self):
         keys = [('w', 0), ('w', 1), ('v', 3)]
         payload = dict(W=8, outcomes=[(k, ('outcome', i, ())) for i, k in enumerate(keys)])

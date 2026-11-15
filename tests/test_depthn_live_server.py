@@ -257,6 +257,18 @@ class ServerTests(unittest.TestCase):
                 S.run(search,host='127.0.0.1',port=free_port(),warmup_requests=[{}],**{'max_requests':4,**bad})
         self.assertFalse(search.warmed)
 
+    def test_build_refuses_a_shared_cache_without_whole_entry_writes(self):
+        """--compilation-cache with an atomic_compilation_cache.install() that cannot patch this JAX: build() refuses, before it
+        configures the cache or touches the device; without the flag the server starts (nothing shares a cache)."""
+        from gpu_engine import atomic_compilation_cache as atomic
+        base=['--showdown-root','s','--node-binary','n','--metadata','m','--expected-metadata-sha256','a'*64,'--vocabulary','v',
+            '--expected-vocabulary-sha256','b'*64,'--port','9000','--warmup-requests','w.jsonl','--champion-archive','c.npz','--champion-archive-sha256','c'*64,
+            '--champion-checkpoint-sha256','d'*64,'--tree-commit','t'*40]
+        with tempfile.TemporaryDirectory()as tmp:
+            with patch.dict(os.environ,PINNED):args=S.options(base+['--compilation-cache',tmp])
+            with patch.object(atomic,'install',return_value=False),patch.object(S,'matmul_precision',return_value='highest'):
+                with self.assertRaisesRegex(ValueError,'whole-entry cache writes'):S.build(args)
+
     def test_build_passes_the_command_line_through(self):
         """build() on stand-ins for the GPU, Codex's inputs, the champion and the pricers: --refuse-classes (and the queue
         settings) reach the DepthNLiveSearch it returns."""
