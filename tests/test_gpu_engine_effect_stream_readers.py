@@ -62,6 +62,12 @@ REVIEWED = {
     ('step_with_chance', 'effect_draws[:, 0, 3, None]', '3d5baa07a30ba9d5'): 1,
     # effect.s.2: Yawn's sleep duration 2+d on the drowsy mon's side
     ('step_with_chance', 'effect_draws[rows, side, 2]', 'ea96e049c275d980'): 1,
+    # effect.s.2, fidelity tier D: an Effect Spore sleep's duration 2+d on the attacker's side, passed as sleep_roll to the
+    # two secondary.apply_contact calls and to the Pursuit intercept's (secondary.apply_contact reads it only for a
+    # contact hit on an Effect Spore holder whose draw put the attacker to sleep; the plans observe effect.s.2 then).
+    ('step_with_chance', 'effect_draws[:, side, 2]', 'bcdea411b7efe931'): 1,
+    ('step_with_chance', 'effect_draws[rows, side, 2]', '453f2ff1f5dc7438'): 1,
+    ('step_with_chance', 'effect_draws[rows, side, 2]', '83200148dadb1808'): 1,
     # effect.1.3: the Perish pair tie, used only when the end speeds are equal
     ('step_with_chance', 'effect_draws[:, 1, 3]', '6ce6f3f90b0dd01e'): 1,
     # the save of the block into state.effect_draws when the residual is deferred (a suspended turn)
@@ -84,6 +90,38 @@ REVIEWED = {
 }
 
 
+# Fidelity tier D: the effect[s][2] value transition passes on as `sleep_roll` is consumed in secondary.apply_contact
+# (2 + sleep_roll for an Effect Spore sleep) and passed through by pursuit.intercept. Every use of that name in those
+# modules, and every assignment to the gates that decide an Effect Spore sleep, is keyed the same way.
+SLEEP_ROLL_MODULES = ('secondary.py', 'pursuit.py')
+SLEEP_ROLL_NAMES = frozenset({'sleep_roll'})
+SLEEP_ROLL_GATES = frozenset({'spore', 'status', 'rolled', 'proc', 'slept'})
+SLEEP_ROLL_FUNCTIONS = frozenset({'apply_contact', 'intercept'})   # the gate names recur elsewhere in secondary.py
+
+
+def sleep_roll_readers():
+    found, statements = collections.Counter(), {}
+    for name in SLEEP_ROLL_MODULES:
+        counts, texts, _ = readers((TRANSITION.with_name(name)).read_text(), names=SLEEP_ROLL_NAMES, attrs=frozenset(),
+                                   whole_names=frozenset(), gates=SLEEP_ROLL_GATES)
+        for key, count in counts.items():
+            if key[0] in SLEEP_ROLL_FUNCTIONS:
+                found[(name, *key)] += count;statements[(name, *key)] = texts[key]
+    return found, statements
+SLEEP_ROLL_REVIEWED = {
+    # transition passes effect[s][2] on; pursuit.intercept passes it to its contact call
+    ('pursuit.py', 'intercept', 'secondaries.apply_contact(state, side, move, contact_roll, table.secondary, eligible=used & (dealt > 0) & (sub == 0), sleep_roll=sleep_roll)', 'fc60174c79b77819'): 1,
+    ('secondary.py', 'apply_contact', 'gate proc', '4223e413f02161c2'): 1,
+    ('secondary.py', 'apply_contact', 'gate rolled', '3becf7407f15669f'): 1,
+    ('secondary.py', 'apply_contact', 'gate slept', '4ea0471ca753fbc2'): 1,
+    ('secondary.py', 'apply_contact', 'gate spore', '78091197fa96a1e4'): 1,
+    ('secondary.py', 'apply_contact', 'gate status', 'dfc5804fe1a7d584'): 1,
+    ('secondary.py', 'apply_contact', 'gate status', 'e486262ac6f66245'): 1,
+    ('secondary.py', 'apply_contact', 'jnp.asarray(sleep_roll, jnp.int32)', '18069047a31d8b59'): 1,
+    ('secondary.py', 'apply_contact', 'sleep_roll is None', 'c61efa852f8640ca'): 1,
+}
+
+
 def _statement(node, parents):
     while not isinstance(node, ast.stmt):
         node = parents[node]
@@ -103,7 +141,7 @@ def _render(stmt):
     return ast.unparse(stmt)
 
 
-def readers(source):
+def readers(source, names=STREAM_NAMES, attrs=STREAM_ATTRS, whole_names=WHOLE, gates=GATES):
     """(snapshot Counter, {key: rendered statement}, [line of each field-name string constant]) for `source`."""
     tree = ast.parse(source)
     parents = {}
@@ -126,9 +164,9 @@ def readers(source):
 
     found, statements, strings = collections.Counter(), {}, []
     for node in ast.walk(tree):
-        stream = isinstance(node, ast.Name) and node.id in STREAM_NAMES
-        whole = isinstance(node, ast.Name) and node.id in WHOLE and isinstance(node.ctx, ast.Load)
-        attr = isinstance(node, ast.Attribute) and node.attr in STREAM_ATTRS and isinstance(node.ctx, ast.Load)
+        stream = isinstance(node, ast.Name) and node.id in names
+        whole = isinstance(node, ast.Name) and node.id in whole_names and isinstance(node.ctx, ast.Load)
+        attr = isinstance(node, ast.Attribute) and node.attr in attrs and isinstance(node.ctx, ast.Load)
         if isinstance(node, ast.Constant) and node.value in FIELD_STRINGS:
             strings.append(node.lineno)
         if stream or whole or attr:
@@ -138,8 +176,8 @@ def readers(source):
             statements[key] = text
         if isinstance(node, (ast.Assign, ast.AugAssign, ast.AnnAssign)):
             targets = node.targets if isinstance(node, ast.Assign) else [node.target]
-            gates = sorted({n.id for t in targets for n in ast.walk(t) if isinstance(n, ast.Name) and n.id in GATES})
-            for gate in gates:
+            found_gates = sorted({n.id for t in targets for n in ast.walk(t) if isinstance(n, ast.Name) and n.id in gates})
+            for gate in found_gates:
                 text = ast.unparse(node)
                 key = (enclosing(node), 'gate ' + gate, hashlib.sha256(text.encode()).hexdigest()[:16])
                 found[key] += 1
@@ -160,6 +198,15 @@ class EffectStreamReaderTests(unittest.TestCase):
                          "reviewed. Re-check the effect gating in chance_consumers, phase_d_chance and ordinary_law's "
                          'plan_for_state, then update REVIEWED (--print shows the current snapshot).\nNew or changed:\n'
                          + detail)
+
+    def test_every_sleep_roll_use_is_reviewed(self):
+        found, statements = sleep_roll_readers()
+        new = {k: v for k, v in found.items() if SLEEP_ROLL_REVIEWED.get(k) != v}
+        gone = {k: v for k, v in SLEEP_ROLL_REVIEWED.items() if found.get(k) != v}
+        detail = '\n'.join(f'  {k} x{v}\n    {statements[k]}' for k, v in new.items())
+        self.assertEqual((new, gone), ({}, {}), 'The Effect Spore sleep duration (effect[s][2], sleep_roll) is used or '
+                         'gated somewhere, or in a way, the exact-chance plans have not reviewed. Re-check the plans\' '
+                         'effect.s.2 gating, then update SLEEP_ROLL_REVIEWED (--print-sleep shows the snapshot).\n' + detail)
 
     def test_the_scan_sees_each_kind_of_change(self):
         base = TRANSITION.read_text()
@@ -197,7 +244,11 @@ class EffectStreamReaderTests(unittest.TestCase):
 
 
 if __name__ == '__main__':
-    if sys.argv[1:] == ['--print']:
+    if sys.argv[1:] == ['--print-sleep']:
+        found, statements = sleep_roll_readers()
+        for key, count in sorted(found.items()):
+            print(f'    {key!r}: {count},\n        # {statements[key][:160]}')
+    elif sys.argv[1:] == ['--print']:
         found, statements, strings = readers(TRANSITION.read_text())
         for key, count in sorted(found.items()):
             print(f'    {key!r}: {count},\n        # {statements[key][:160]}')

@@ -377,6 +377,59 @@ class ChanceConsumerTests(unittest.TestCase):
         plan = self.plan(data, meta, actions=(0, 4), kernel_table=t)
         self.assertEqual(len(self.cells(plan, 'phazing.0')), 2)
 
+    def test_tier_d_contact_abilities_share_the_auxiliary_axis_exactly(self):
+        # Fidelity tier D (secondary.apply_contact): Poison Point / Flame Body at phazing[s] < 20 (1/3) like Static; Effect
+        # Spore at < 6 (1/10) with its slp/par/psn pick draw // 2 (1/30 each), and an Effect Spore sleep's 2+effect[s][2].
+        for name, status, masses in (('poisonpoint', 3, [Fraction(1, 3), Fraction(2, 3)]),
+                                     ('flamebody', 2, [Fraction(1, 3), Fraction(2, 3)]),
+                                     ('effectspore', None, [Fraction(1, 30)] * 3 + [Fraction(9, 10)])):
+            with self.subTest(name):
+                data, meta = fixture(); meta['vocabulary']['abilities'].append(name)
+                data['ability'][1][0] = 2
+                n = len(meta['vocabulary']['abilities'])
+                t = table(meta); t['secondary']['static'] = [False] * n; t['secondary']['synchronize'] = [False] * n
+                t['secondary']['contact_status'] = [0] * n; t['secondary']['effect_spore'] = [False] * n
+                if status is None:t['secondary']['effect_spore'][2] = True
+                else:t['secondary']['contact_status'][2] = status
+                t['secondary']['contact'][meta['vocabulary']['moves'].index('tackle')] = True
+                plan = self.plan(data, meta, actions=(0, 1), kernel_table=t)
+                self.assertIsInstance(plan, c.ConsumerPlan, plan)
+                self.assertEqual(sorted(x.mass for x in self.cells(plan, 'phazing.0')), sorted(masses))
+                self.assertEqual(len(self.cells(plan, 'phazing.1')), 1)
+                self.assertEqual(len(self.cells(plan, 'effect.0.2')), 4 if status is None else 1)
+                self.assertEqual(len(self.cells(plan, 'effect.1.2')), 1)
+                # Effect Spore's paralysis reaches this side's later paralysis gate (the status closure).
+                self.assertEqual(len(self.cells(plan, 'draws.0.2')), 2 if status is None else 1)
+                # No contact move: no axis.
+                t['secondary']['contact'][meta['vocabulary']['moves'].index('tackle')] = False
+                plan = self.plan(data, meta, actions=(0, 1), kernel_table=t)
+                self.assertEqual((len(self.cells(plan, 'phazing.0')), len(self.cells(plan, 'effect.0.2'))), (1, 1))
+
+    def test_tier_d_contact_poison_and_burn_reach_the_residual_status_coin(self):
+        data, meta = fixture(); meta['vocabulary']['abilities'] += ['poisonpoint', 'flamebody']
+        data['ability'][1][0] = 2;data['ability'][0][0] = 3
+        n = len(meta['vocabulary']['abilities'])
+        t = table(meta); t['secondary']['static'] = [False] * n; t['secondary']['synchronize'] = [False] * n
+        t['secondary']['contact_status'] = [0, 0, 3, 2]; t['secondary']['effect_spore'] = [False] * n
+        tackle = meta['vocabulary']['moves'].index('tackle'); t['secondary']['contact'][tackle] = True
+        for seat in (0, 1):self.choose(data, meta, seat, 'tackle')
+        plan = self.plan(data, meta, kernel_table=t)
+        self.assertIsInstance(plan, c.ConsumerPlan, plan)
+        self.assertEqual(len(self.cells(plan, 'draws.1.9')), 2)
+        t['secondary']['contact_status'] = [0] * n
+        self.assertEqual(len(self.cells(self.plan(data, meta, kernel_table=t), 'draws.1.9')), 1)
+
+    def test_tier_d_multihit_contact_move_refuses(self):
+        data, meta = fixture()
+        t = table(meta); tackle = meta['vocabulary']['moves'].index('tackle')
+        t['secondary']['contact'][tackle] = True
+        t['damage_moves'] = {'hits': [1] * len(meta['vocabulary']['moves'])}
+        self.assertIsInstance(self.plan(data, meta, kernel_table=t), c.ConsumerPlan)
+        t['damage_moves']['hits'][tackle] = 2
+        out = self.plan(data, meta, kernel_table=t)
+        self.assertIsInstance(out, mapping.Refused)
+        self.assertEqual(out.gaps[0].code, 'CONTACT_MULTIHIT')
+
     def test_caller_union_refines_shared_phazing_static_axis_without_multiplying_it(self):
         data, meta = fixture(); meta['vocabulary']['abilities'].append('static')
         data['ability'][1][0] = 2

@@ -38,7 +38,7 @@ CONSUMERS = {
     "draws.0.11": ("transition switch installation ordering",),
     "draws.1.11": ("transition residual Encore ordering",),
     **{f"{name}.{s}": (use,) for s in range(2) for name, use in (
-        ("phazing", "phazing.choose_bench modulo bench count OR secondary.apply_contact Static<20; dispatched Gen3 moves are disjoint"),
+        ("phazing", "phazing.choose_bench modulo bench count OR secondary.apply_contact Static/Poison Point/Flame Body<20, Effect Spore<6 then its status draw//2 (<2, <4); dispatched Gen3 moves are disjoint, and no contact move is multi-hit"),
         ("secondary", "secondary.apply and secondary.apply_chance_effects: shared draw<chance*SereneGrace"),
         ("sleep_talk", "sleep_talk.choose: draw modulo callable count before PP test"),
         ("entry_ties", "transition resumed switch/callback ordering"))},
@@ -48,7 +48,7 @@ CONSUMERS = {
         (0, "transition Bonemerang second hit: critical<1 or<2 (critical.is_critical)"),
         (1, "transition Bonemerang second hit: damage 85+draw"),
         # Fidelity M2: the reserved columns. Column 2 is the drowsy mon's own side; column 3 is a pair tie per row.
-        (2, "transition residual Yawn sleep duration 2+draw (the drowsy mon's side)"))},
+        (2, "transition residual Yawn sleep duration 2+draw (the drowsy mon's side); secondary.apply_contact Effect Spore sleep duration 2+draw (the attacker's side; fidelity tier D, never with a Yawn sleep of that side in one step)"))},
     "effect.0.3": ("transition residual partial-trap (Wrap) pair ordering, subOrder 9",),
     "effect.1.3": ("transition residual Perish pair ordering, order 12 (both ends resolve before faintMessages, so no Gen 3 outcome depends on it)",),
 }
@@ -72,6 +72,14 @@ def _host(value):
 def _at(table, family, field, index, default=0):
     group = table.get(family)
     return default if group is None else group[field][index]
+
+
+def _opt(table, family, field, index, default=0):
+    """Fidelity tier D's appended table fields (SecondaryTable.contact_status, effect_spore; DamageMoveTable.hits):
+    an authored host table without the field has no such consumer."""
+    group = table.get(family)
+    values = None if group is None else group.get(field)
+    return default if values is None else values[index]
 
 
 def _counter(data, name, side, slot):
@@ -166,6 +174,11 @@ def plan_for_state(state, index, actions, table, metadata, *, cap, native_input=
                for move in range(moves_count)):
             return refuse('CONTACT_PHAZING_OVERLAP',
                 'The shared auxiliary stream requires mutually exclusive dispatched moves')
+        # Fidelity tier D: the contact abilities read one roll per action; a multi-hit contact move would need one per hit.
+        if any(_at(t, 'secondary', 'contact', move) and _opt(t, 'damage_moves', 'hits', move, 1) > 1
+               for move in range(moves_count)):
+            return refuse('CONTACT_MULTIHIT',
+                'One contact-ability roll per action cannot serve a DamagingHit per hit')
         if any(len(t[name]) != moves_count for name in ("power", "accuracy", "always_hit", "priority")):
             return refuse("TABLE_VOCABULARY_SHAPE", "Move table/vocabulary lengths must agree")
         active = data["active"]
@@ -223,6 +236,13 @@ def plan_for_state(state, index, actions, table, metadata, *, cap, native_input=
                     and any(_at(t, 'secondary', 'static', ability)
                             for ability in abilities[1-s])):
                 statuses[s].add(1)  # conservative own-contact paralysis closure
+            # Fidelity tier D: Poison Point psn, Flame Body brn, Effect Spore slp/par/psn on the contact attacker.
+            if any(_at(t, 'secondary', 'contact', move) for move in selected[s]):
+                for ability in abilities[1-s]:
+                    if _opt(t, 'secondary', 'contact_status', ability):
+                        statuses[s].add(_opt(t, 'secondary', 'contact_status', ability))
+                    if _opt(t, 'secondary', 'effect_spore', ability, False):
+                        statuses[s].update((5, 1, 3))
             for move in selected[1-s]:
                 statuses[s].add(_at(t, "effects", "status", move))
                 statuses[s].add(_at(t, "secondary", "status", move))
@@ -332,6 +352,14 @@ def plan_for_state(state, index, actions, table, metadata, *, cap, native_input=
                     and any(_at(t, 'secondary', 'static', ability)
                             for ability in abilities[1-s])):
                 use(f'phazing.{s}', Observation('less_than', 20))
+            # Fidelity tier D (secondary.apply_contact): Poison Point and Flame Body <20 as Static; Effect Spore's chance <6
+            # and its slp/par/psn draw//2 (<2, <4); an Effect Spore sleep lasts 2+effect[s][2] (the attacker's side).
+            if any(_at(t, 'secondary', 'contact', move) for move in selected[s]):
+                if any(_opt(t, 'secondary', 'contact_status', ability) for ability in abilities[1-s]):
+                    use(f'phazing.{s}', Observation('less_than', 20))
+                if any(_opt(t, 'secondary', 'effect_spore', ability, False) for ability in abilities[1-s]):
+                    use(f'phazing.{s}', Observation('less_than', 2), Observation('less_than', 4), Observation('less_than', 6))
+                    use(f'effect.{s}.2', Observation('identity'))
             for move in selected[s]:
                 chance = _at(t, "secondary", "chance", move)
                 if chance:
