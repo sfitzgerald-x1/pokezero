@@ -242,8 +242,11 @@ class ServerTests(unittest.TestCase):
             with ExitStack()as stack:
                 for target,name,value in stand_ins:stack.enter_context(patch.object(target,name,side_effect=value))
                 return S.build(S.options(argv))
+        import gpu_engine   # `from gpu_engine import depthn_r3pa_labels` reads the package attribute first: hide both while this test runs
         name='gpu_engine.depthn_r3pa_labels';real=sys.modules.pop(name,None)
         if real is not None:self.addCleanup(sys.modules.__setitem__,name,real)
+        attribute=gpu_engine.__dict__.pop('depthn_r3pa_labels',None)
+        if attribute is not None:self.addCleanup(setattr,gpu_engine,'depthn_r3pa_labels',attribute)
         self.assertEqual(build(base),'search')
         self.assertNotIn(name,sys.modules);self.assertFalse({'r3pa','r3pa_labels'}&set(made))   # off: built exactly as before the flag
         class LaneLabels:
@@ -254,7 +257,7 @@ class ServerTests(unittest.TestCase):
         fake=types.ModuleType(name);fake.LaneLabels=LaneLabels;fake.mismatch=[]
         fake.peer_legal_mismatch=lambda flat,views:list(fake.mismatch)
         fake.lane_labels_live=lambda views,names:[['move:a']+[None]*8 for _ in views[1]]
-        with patch.dict(sys.modules,{name:fake}):
+        with patch.dict(sys.modules,{name:fake}),patch.object(gpu_engine,'depthn_r3pa_labels',fake,create=True):
             self.assertEqual(build(base+gate+['--r3pa','gated']),'search')
         labels=made['r3pa_labels'];self.assertEqual(made['r3pa'],'gated');self.assertIsInstance(labels,S._R3paLabels)
         self.assertEqual(labels.lanes.args,(executors[0],'vocab'))   # the pricers' executor and the constructor's vocabulary
