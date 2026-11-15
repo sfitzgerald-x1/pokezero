@@ -23,13 +23,13 @@ class DoubleEdgeSourceBindingTests(unittest.TestCase):
   # §6 (the effect-coordinate chance proof) re-certifies four bodies and the pinned-file inventories at its own commits:
   # 72670171 and 3b0cc40e (plan_for_state's effect axes and SUSPENDED_ROOT_SAVED_BLOCKS, conditional_law's saved
   # effect block, residual_order.py in SOURCE_PINS and the domain lists) and 53dc3add (ordinary_law's effect bank).
-  # Per-module domain pins (cf0bb33d) re-certify the four gate bodies: each aggregate DOMAIN_SHA256 / KERNEL_SHA256
+  # Per-module domain pins (cf0bb33d; the plan gates' domain identity restored at a1b0218a) re-certify the four gate bodies: each aggregate DOMAIN_SHA256 / KERNEL_SHA256
   # literal became a per-module DOMAIN_PINS / KERNEL_PINS table, the gates check it module by module (and the table
   # against the module list, in order), and chance_consumers' tables moved to chance_consumers_pins.py, whose
   # inventory is bound here too. The witness body is unchanged (its SOURCE_PINS only took one entry per line).
-  certified={'chance_consumers.py':'cf0bb33db8c2ab0247c8c0988538eb29811d0a9b',
+  certified={'chance_consumers.py':'a1b0218a5ae9ec2be430f48e5c4f07dae4df818e',
              'chance_consumers_pins.py':'cf0bb33db8c2ab0247c8c0988538eb29811d0a9b',
-             'phase_d_chance.py':'cf0bb33db8c2ab0247c8c0988538eb29811d0a9b',
+             'phase_d_chance.py':'a1b0218a5ae9ec2be430f48e5c4f07dae4df818e',
              'conditional_law.py':'cf0bb33db8c2ab0247c8c0988538eb29811d0a9b',
              'engine_source_frame_witness.py':'3b0cc40e6709bd19fe70a6295580a51590dd4f57',
              'ordinary_law.py':'cf0bb33db8c2ab0247c8c0988538eb29811d0a9b'}
