@@ -1,0 +1,184 @@
+{
+ "schema": "pokezero.effect_probe.scenario.v1",
+ "move": "toxic_reentry",
+ "note": "Toxic across switch-out and re-entry (Showdown tox.onSwitchIn sets statusState.stage = 0): both Kangaskhan Toxic each other at different Speed (toxic_faster's teams, so the probe catalog is unchanged), then each in turn switches out to Swampert and back. Ticks: side 1 at stages 1, out, 1, 2, 3 and side 2 at 1, 2, out, 1, 2. Device mode compares each side's public toxic stage, as its opponent sees it (/100 HP), with B2 through both re-entries.",
+ "teams": [
+  [
+   {
+    "species": "Kangaskhan",
+    "moves": [
+     "splash",
+     "seismictoss",
+     "leechseed",
+     "toxic"
+    ],
+    "ability": "Early Bird",
+    "item": "",
+    "evs": {
+     "spe": 0
+    }
+   },
+   {
+    "species": "Starmie",
+    "moves": [
+     "splash",
+     "surf",
+     "recover",
+     "protect"
+    ],
+    "ability": "Illuminate",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Skarmory",
+    "moves": [
+     "splash",
+     "protect",
+     "spikes",
+     "peck"
+    ],
+    "ability": "Keen Eye",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Swampert",
+    "moves": [
+     "splash",
+     "protect",
+     "surf",
+     "earthquake"
+    ],
+    "ability": "Torrent",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Metagross",
+    "moves": [
+     "splash",
+     "protect",
+     "meteormash",
+     "earthquake"
+    ],
+    "ability": "Clear Body",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Celebi",
+    "moves": [
+     "splash",
+     "protect",
+     "psychic",
+     "recover"
+    ],
+    "ability": "Natural Cure",
+    "item": "Leftovers"
+   }
+  ],
+  [
+   {
+    "species": "Kangaskhan",
+    "moves": [
+     "splash",
+     "seismictoss",
+     "leechseed",
+     "toxic"
+    ],
+    "ability": "Early Bird",
+    "item": "",
+    "evs": {
+     "spe": 252
+    }
+   },
+   {
+    "species": "Starmie",
+    "moves": [
+     "splash",
+     "surf",
+     "recover",
+     "protect"
+    ],
+    "ability": "Illuminate",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Skarmory",
+    "moves": [
+     "splash",
+     "protect",
+     "spikes",
+     "peck"
+    ],
+    "ability": "Keen Eye",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Swampert",
+    "moves": [
+     "splash",
+     "protect",
+     "surf",
+     "earthquake"
+    ],
+    "ability": "Torrent",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Metagross",
+    "moves": [
+     "splash",
+     "protect",
+     "meteormash",
+     "earthquake"
+    ],
+    "ability": "Clear Body",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Celebi",
+    "moves": [
+     "splash",
+     "protect",
+     "psychic",
+     "recover"
+    ],
+    "ability": "Natural Cure",
+    "item": "Leftovers"
+   }
+  ]
+ ],
+ "script": [
+  [
+   "move 4",
+   "move 4"
+  ],
+  [
+   "switch 4",
+   "move 1"
+  ],
+  [
+   "switch 1",
+   "switch 4"
+  ],
+  [
+   "move 1",
+   "switch 1"
+  ],
+  [
+   "move 1",
+   "move 1"
+  ]
+ ],
+ "axes": [],
+ "expect": {
+  "exact": true
+ },
+ "require_fields": [
+  "perish_counter",
+  "yawn_counter",
+  "partial_trap_counter",
+  "partial_trap_source",
+  "item_knocked",
+  "destiny_bond",
+  "effect"
+ ]
+}
