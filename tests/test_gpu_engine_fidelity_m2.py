@@ -337,14 +337,16 @@ class TransitionTests(unittest.TestCase):
         ran (at equal Speed both Leftovers heals sat at 6 and 7). event_key reads the tie's low bit, so each wider draw gives
         exactly its low bit's step and every handler runs (2 and 3 shift every pair's key alike, so they kept the bit order
         even before; 98 and 99 did not). Both actives at 200/320, equal Speed: 0 Leftovers, 1 poison, 2 both, 3 trapped by
-        each other, 4 seeded by each other, 5 encored at 3 (each side's handler lowers or ends it), 6 drowsy; 7 Leftovers and
-        poison, side 1 faster."""
+        each other, 4 side 0 seeded (drained 40, side 1 healed 40), 5 both encored on their recorded Splash (3 -> 2), 6 drowsy;
+        7 Leftovers and poison, side 1 faster."""
         from gpu_engine.state import LEECH_SEED
+        from gpu_engine.action_history import MOVE
         both = lambda value: [((0, 0), value), ((1, 0), value)]
         tie = {'hp': both(200), 'stats': [((0, 0, 5), 200)]}
         lanes = [{**tie, 'item': both(LEFTOVERS)}, {**tie, 'status': both(PSN)}, {**tie, 'item': both(LEFTOVERS), 'status': both(PSN)},
-                 {**tie, 'partial_trap_counter': both(3), 'partial_trap_source': both(0)}, {**tie, 'volatile': both(LEECH_SEED)},
-                 {**tie, 'encore_counter': both(3), 'encore_move': both(SPLASH)}, {**tie, 'yawn_counter': both(1)},
+                 {**tie, 'partial_trap_counter': both(3), 'partial_trap_source': both(0)}, {**tie, 'volatile': [((0, 0), LEECH_SEED)]},
+                 {**tie, 'encore_counter': both(3), 'encore_move': both(SPLASH), 'last_action_kind': [((0,), MOVE), ((1,), MOVE)],
+                  'last_action_index': [((0,), 0), ((1,), 0)]}, {**tie, 'yawn_counter': both(1)},
                  {'hp': both(200), 'stats': [((0, 0, 5), 150)], 'item': both(LEFTOVERS), 'status': both(PSN)}]
         s = self.build(lanes)
         columns = ((1, 0), (0, 9), (0, 10), (1, 9), (1, 11))
@@ -354,11 +356,10 @@ class TransitionTests(unittest.TestCase):
             out = play(wide)
             for name in out._fields:
                 np.testing.assert_array_equal(np.asarray(getattr(out, name)), np.asarray(getattr(bits[wide & 1], name)), err_msg=f'{wide} {name}')
-            hp = np.asarray(out.hp)[:, :, 0].tolist()
-            self.assertEqual(hp[:5] + hp[6:], [[220, 220], [160, 160], [180, 180], [180, 180], [200, 200], [200, 200], [180, 180]], wide)
-            self.assertEqual(hp[5][0], hp[5][1])
+            self.assertEqual(np.asarray(out.hp)[:, :, 0].tolist(),
+                             [[220, 220], [160, 160], [180, 180], [180, 180], [160, 240], [200, 200], [200, 200], [180, 180]], wide)
             self.assertEqual(np.asarray(out.partial_trap_counter)[3, :, 0].tolist(), [2, 2])
-            encore = np.asarray(out.encore_counter)[5, :, 0].tolist();self.assertEqual(encore[0], encore[1]);self.assertLess(encore[0], 3)
+            self.assertEqual(np.asarray(out.encore_counter)[5, :, 0].tolist(), [2, 2])
             self.assertEqual(np.asarray(out.status)[6, :, 0].tolist(), [SLP, SLP])
 
     def test_zz_one_compile(self):
