@@ -26,8 +26,10 @@ class DoubleEdgeSourceBindingTests(unittest.TestCase):
   # Fidelity tier D (covered by its Opus review) re-certifies the chance_consumers.py and phase_d_chance.py bodies at
   # 67399362: the CONSUMERS rows for the contact abilities' phazing[s] reads and Effect Spore's effect[s][2] sleep, and
   # plan_for_state's contact-status closure, observations and CONTACT_MULTIHIT refusal. Their mappings are unchanged.
-  certified={'chance_consumers.py':'673993621ce2c4f7e423d76ee32b9a536a903aa3',
-             'phase_d_chance.py':'673993621ce2c4f7e423d76ee32b9a536a903aa3',
+  # Stick re-certifies them at 3eb8bc1e: the critical rows' "< 4 with Stick" text, plan_for_state's _stick cut on
+  # draws.s.4 and effect.s.0 and its CRIT_RATIO_UNREPRESENTABLE refusal. Their mappings are unchanged.
+  certified={'chance_consumers.py':'3eb8bc1edf52935c53cbdca39cbb3efdde1f32a9',
+             'phase_d_chance.py':'3eb8bc1edf52935c53cbdca39cbb3efdde1f32a9',
              'conditional_law.py':'3b0cc40e6709bd19fe70a6295580a51590dd4f57',
              'engine_source_frame_witness.py':'3b0cc40e6709bd19fe70a6295580a51590dd4f57',
              'ordinary_law.py':'53dc3add38e37c36b7609edabe4f96e313022b16'}
