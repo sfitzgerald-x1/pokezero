@@ -1,0 +1,179 @@
+{
+ "schema": "pokezero.effect_probe.scenario.v1",
+ "move": "narrowing_hidden_power",
+ "note": "Narrowing A: Electabuzz's Hidden Power Ice on Aerodactyl (Rock/Flying), super-effective. Of its variants the Fire one is resisted (no fitting roll) and the Ground one cannot touch a Flying target (set_posterior d411aa15: count 0, the strike admitted); the pin must hold the Ice variant, as set_posterior's support does. The literal probe source pools every scenario file's authored sets, so Tauros has two variants (Choice Band here, Leftovers in narrowing_refusals) and Electabuzz three (Hidden Power Fire here, Ice in narrowing_hidden_power, Ground in narrowing_refusals); every other species has one.",
+ "teams": [
+  [
+   {
+    "species": "Electabuzz",
+    "moves": [
+     "thunderbolt",
+     "hiddenpowerice",
+     "crosschop",
+     "splash"
+    ],
+    "ability": "Static",
+    "item": "",
+    "ivs": {
+     "atk": 30,
+     "def": 30
+    }
+   },
+   {
+    "species": "Tauros",
+    "moves": [
+     "return",
+     "earthquake",
+     "rockslide",
+     "splash"
+    ],
+    "ability": "Intimidate",
+    "item": "Choice Band"
+   },
+   {
+    "species": "Aggron",
+    "moves": [
+     "splash",
+     "protect",
+     "rest",
+     "irontail"
+    ],
+    "ability": "Rock Head",
+    "item": ""
+   },
+   {
+    "species": "Gardevoir",
+    "moves": [
+     "splash",
+     "protect",
+     "rest",
+     "psychic"
+    ],
+    "ability": "Synchronize",
+    "item": ""
+   },
+   {
+    "species": "Claydol",
+    "moves": [
+     "splash",
+     "protect",
+     "rest",
+     "earthquake"
+    ],
+    "ability": "Levitate",
+    "item": ""
+   },
+   {
+    "species": "Cradily",
+    "moves": [
+     "splash",
+     "protect",
+     "rest",
+     "gigadrain"
+    ],
+    "ability": "Suction Cups",
+    "item": ""
+   }
+  ],
+  [
+   {
+    "species": "Aerodactyl",
+    "moves": [
+     "splash",
+     "protect",
+     "rest",
+     "rockslide"
+    ],
+    "ability": "Rock Head",
+    "item": ""
+   },
+   {
+    "species": "Golem",
+    "moves": [
+     "splash",
+     "protect",
+     "rest",
+     "earthquake"
+    ],
+    "ability": "Rock Head",
+    "item": ""
+   },
+   {
+    "species": "Houndoom",
+    "moves": [
+     "splash",
+     "protect",
+     "rest",
+     "flamethrower"
+    ],
+    "ability": "Flash Fire",
+    "item": ""
+   },
+   {
+    "species": "Gyarados",
+    "moves": [
+     "splash",
+     "protect",
+     "rest",
+     "waterfall"
+    ],
+    "ability": "Intimidate",
+    "item": ""
+   },
+   {
+    "species": "Ninetales",
+    "moves": [
+     "splash",
+     "protect",
+     "rest",
+     "flamethrower"
+    ],
+    "ability": "Flash Fire",
+    "item": ""
+   },
+   {
+    "species": "Xatu",
+    "moves": [
+     "splash",
+     "protect",
+     "rest",
+     "psychic"
+    ],
+    "ability": "Synchronize",
+    "item": ""
+   }
+  ]
+ ],
+ "script": [
+  [
+   "move 2",
+   "move 1"
+  ],
+  [
+   "move 2",
+   "move 1"
+  ]
+ ],
+ "axes": [
+  {
+   "name": "roll",
+   "field": "draws.0.5",
+   "values": [
+    0,
+    15
+   ]
+  }
+ ],
+ "expect": {
+  "exact": true
+ },
+ "require_fields": [
+  "perish_counter",
+  "yawn_counter",
+  "partial_trap_counter",
+  "partial_trap_source",
+  "item_knocked",
+  "destiny_bond",
+  "effect"
+ ]
+}

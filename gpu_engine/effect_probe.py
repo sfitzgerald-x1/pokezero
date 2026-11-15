@@ -382,7 +382,7 @@ class Device:
     """Device mode's run-wide pieces: the B2 catalog and batched folds (effect_probe_device), the device's belief tables
     compiled from the same catalog (engine_device_observation.compile_tables, as the production collector builds them),
     and the allowlist."""
-    def __init__(self, catalog, metadata, lanes, allowlist=None, pins=None):
+    def __init__(self, catalog, metadata, lanes, allowlist=None, pins=None, narrowing=None):
         from gpu_engine import effect_probe_device as dev
         self.allowlist = dev.ALLOWLIST if allowlist is None else allowlist
         if pins is None and self.allowlist and not dev.PINS_PATH.exists():
@@ -394,10 +394,14 @@ class Device:
         from gpu_engine import engine_device_observation
         self.dev, self.catalog = dev, catalog
         self.belief_tables = engine_device_observation.compile_tables(metadata, catalog=catalog).belief
+        # --set-posterior (narrowing A): the producer's tables on, and the pin fields checked against set_posterior
+        # (gpu_engine/effect_probe_set_posterior.py) instead of B2, which carries no set_posterior pin here.
+        self.narrowing = narrowing
+        if narrowing is not None:self.belief_tables = narrowing.tables(self.belief_tables)
         self.b2 = dev.B2Batch(catalog, 2 * lanes)
 
     @classmethod
-    def for_scenarios(cls, scenarios, showdown, showdown_root, metadata, lanes, allowlist=None):
+    def for_scenarios(cls, scenarios, showdown, showdown_root, metadata, lanes, allowlist=None, set_posterior=False):
         """B2's catalog, and the device belief tables compiled from it, over the authored sets of EVERY scenario file in
         gpu_engine/effect_probes (the directory's contents, tracked or not) plus the run's own: one fixed universe, so a
         belief field never depends on which scenarios share a run or a shard (a per-run catalog let a variant exclusion
@@ -407,12 +411,20 @@ class Device:
         committed = [load_scenario(p) for p in sorted((ROOT / 'gpu_engine/effect_probes').glob('*.json'))]
         teams = {json.dumps(s['teams'], sort_keys=True): s['teams'] for s in committed + list(scenarios)}
         sets = [showdown.ask(cmd='prepare', teams=t)['sets'] for _, t in sorted(teams.items())]
-        return cls(dev.compile_b2(sets, showdown_root), metadata, lanes, allowlist)
+        catalog = dev.compile_b2(sets, showdown_root)
+        narrowing = None
+        if set_posterior:
+            from pokezero.dex import load_showdown_dex_cached
+            from gpu_engine import effect_probe_set_posterior
+            dex = load_showdown_dex_cached(showdown_root)
+            narrowing = effect_probe_set_posterior.Narrowing(catalog, dev.literal_source(sets, dex), dex, metadata)
+        return cls(catalog, metadata, lanes, allowlist, narrowing=narrowing)
 
     def compare(self, scenario, record, step, trackers, b2, lane, vocab, channels=None):
         """One case's device-vs-B2 comparison after `step` ('initial' before the first request); a step with open diffs
         keeps that step's two player channels."""
         dev = self.dev;device = record['device']
+        if self.narrowing is not None and channels is not None:self.narrowing.feed(lane, step, channels)
         refused = [self.b2.refused[q] for q in (2 * lane, 2 * lane + 1)]
         if any(refused):
             # B2 stops at this step; an allowlisted refusal (field 'b2_refusal') is a known B2 limit, explained.
@@ -429,7 +441,11 @@ class Device:
                 else:refusal.update(unpinned_reason=self.allowlist[key], pin=pin)
             device.update(status='B2_LIMIT' if 'reason' in refusal else 'B2_REFUSED', refusal=refusal);return
         numeric = []
-        diffs = dev.compare_views(dev.device_view(trackers, lane, vocab), dev.b2_view(b2, lane, self.catalog), numeric)
+        b2_view = dev.b2_view(b2, lane, self.catalog)
+        diffs = dev.compare_views(dev.device_view(trackers, lane, vocab), b2_view, numeric)
+        if self.narrowing is not None:
+            from gpu_engine.effect_probe_set_posterior import PIN_FIELDS
+            diffs = [d for d in diffs if dev.field_kind(d['field']) not in PIN_FIELDS] + self.narrowing.diffs(trackers, b2_view, lane)
         open_, allowed = dev.apply_allowlist(scenario['move'], record['case_id'], step, diffs, self.used, self.allowlist,
                                              self.pins)
         device['steps_compared'] += 1;device['numeric'] += len(numeric)
@@ -604,7 +620,11 @@ def main(argv=None):
                         help='compile step_with_public with LOW_OPTIMIZATION')
     parser.add_argument('--device-eager', action='store_true',
                         help='run step_with_public op by op (jax.disable_jit): no step compile, slow steps')
+    parser.add_argument('--set-posterior', action='store_true',
+                        help='device mode with set_posterior_narrowing\'s producer on: the pins against set_posterior '
+                        '(gpu_engine/effect_probe_set_posterior.py)')
     args = parser.parse_args(argv)
+    if args.set_posterior and not args.device:parser.error('--set-posterior is a device mode')
     out = Path(args.out)
     if out.exists():raise FileExistsError(f'{out} exists')
     scenarios = [load_scenario(p) for p in args.scenarios]
@@ -614,14 +634,15 @@ def main(argv=None):
     engine = Engine(metadata, args.lanes);showdown = Showdown(args.node, args.showdown_root)
     device = None
     if args.device:
-        device = Device.for_scenarios(scenarios, showdown, args.showdown_root, metadata, args.lanes)
+        device = Device.for_scenarios(scenarios, showdown, args.showdown_root, metadata, args.lanes,
+                                      set_posterior=args.set_posterior)
         engine.enable_device(device.belief_tables, LOW_OPTIMIZATION if args.device_low_optimization else None,
                              eager=args.device_eager)
     out.mkdir(parents=True)
     source = subprocess.run(['git', '-C', str(ROOT), 'rev-parse', 'HEAD'], capture_output=True, text=True).stdout.strip()
     dirty = subprocess.run(['git', '-C', str(ROOT), 'status', '--porcelain', '--', 'gpu_engine', 'src'], capture_output=True, text=True).stdout
     summary = dict(schema=RESULT_SCHEMA + '.summary', source_commit=source, source_dirty=bool(dirty.strip()), pool_sha256=pool_sha,
-        showdown_root=str(args.showdown_root), scenarios={})
+        showdown_root=str(args.showdown_root), scenarios={}, **({'set_posterior': True} if args.set_posterior else {}))
     try:
         for path, scenario in zip(args.scenarios, scenarios):
             result = run_scenario(scenario, engine, showdown, metadata, device=device)
