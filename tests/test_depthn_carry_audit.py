@@ -45,8 +45,8 @@ def citations(text):
 # a removed one loses it.
 CITATION_ANCHORS = {
     'gpu_engine/baton.py:16': 'batonpass',
-    'gpu_engine/constructor_worlds.py:482': 'OPPONENT_RECHARGE_UNREPRESENTED',
-    'gpu_engine/constructor_worlds.py:843': 'def fix_recharge',
+    'gpu_engine/constructor_worlds.py:484': 'OPPONENT_RECHARGE_UNREPRESENTED',
+    'gpu_engine/constructor_worlds.py:845': 'def fix_recharge',
     'gpu_engine/effects.py:175': 'def stall_success',
     'gpu_engine/effects.py:46': 'destinybond',
     'gpu_engine/encore.py:14-20': '^def from_metadata',
@@ -67,7 +67,7 @@ CITATION_ANCHORS = {
     'gpu_engine/phase_d_live_worlds.py:344-345': "'perish1'",
     'gpu_engine/phase_d_live_worlds.py:355-356': 'OWN_VOLATILE_OR_LATENT_CLOCK_UNAVAILABLE',
     'gpu_engine/phase_d_live_worlds.py:362': 'DESTINY_BOND',
-    'gpu_engine/phase_d_protocol_constructor.py:175': 'load_gen3_randbat_source_cached',
+    'gpu_engine/phase_d_protocol_constructor.py:177': 'load_gen3_randbat_source_cached',
     'gpu_engine/phase_d_protocol_world.py:130-132': '^PUBLIC_ITEM_SWAP_NOT_SUPPORTED',
     'gpu_engine/phase_d_protocol_world.py:201-219': '^_defer_yawn',
     'gpu_engine/phase_d_protocol_world.py:222-237': '^_perish_counts',

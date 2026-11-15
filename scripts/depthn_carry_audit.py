@@ -17,7 +17,7 @@ escalated.
 
 Enumeration (`EFFECTS`, `REPRESENTED`, `NOT_IN_POOL`; every row cites file:line at this tree and at the pinned Showdown f76228a).
 The pool is the set source the constructor reads: pokezero.randbat.load_gen3_randbat_source_cached(showdown_root) loads
-data/random-battles/gen3/sets.json (gpu_engine/phase_d_protocol_constructor.py:175). Its 220 species hold 125 moves; the
+data/random-battles/gen3/sets.json (gpu_engine/phase_d_protocol_constructor.py:177). Its 220 species hold 125 moves; the
 pool_species of each row are the species with a set listing the move. With --showdown-root that file is re-read and every row's
 pool membership is checked against it (pool_check; a mismatch is reported, never silently accepted).
 - Audited (in the pool, not represented): recharge (Hyper Beam), partial_trap (Wrap), perish_count (Perish Song), drowsy (Yawn),
@@ -141,8 +141,8 @@ EFFECTS = (
          'Showdown data/conditions.ts:364-378: mustrecharge cancels the next move (onBeforeMovePriority 11) and is onLockMove recharge; '
          'sim/pokemon.ts:1085-1088: a locked move sets trapped, so the recharge turn has no switch',
          'in-tree since M1 (8b212312): gpu_engine/state.py:87 recharge_counter; transition.py:840-845 the recharge turn',
-         'live roots: since #1949 an opponent that must recharge is built with its counter (gpu_engine/constructor_worlds.py:843 '
-         'fix_recharge; the pre-M1 OPPONENT_RECHARGE_UNREPRESENTED name, constructor_worlds.py:482, is kept for old rows); the owner\'s recharge turn is single-legal (the phase-D '
+         'live roots: since #1949 an opponent that must recharge is built with its counter (gpu_engine/constructor_worlds.py:845 '
+         'fix_recharge; the pre-M1 OPPONENT_RECHARGE_UNREPRESENTED name, constructor_worlds.py:484, is kept for old rows); the owner\'s recharge turn is single-legal (the phase-D '
          'mapper refuses a live mustrecharge too: future_state.py:476, RECHARGE_UNREPRESENTED)'),
         'Only Slaking carries it, and Slaking\'s one ability is Truant: a residual clock in Gen 3 (Showdown data/mods/gen3/abilities.ts:'
         '197-212) the engine models (state.py:84 truant_loaf, transition.py:641-643 and 851-852). In-tree since M1 the recharge turn '
