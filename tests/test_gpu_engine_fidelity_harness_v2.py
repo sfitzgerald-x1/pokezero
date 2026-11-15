@@ -34,6 +34,27 @@ class TapeV2Tests(unittest.TestCase):
         draws = jax.random.randint(key, (2, 12), 0, j.array([2, 100, 100, 100, 16, 16, 100, 4, 8, 2, 2, 2], j.int32))
         self.assertEqual(tape['draws'], np.asarray(draws).tolist())
 
+    def test_v3_phazing_is_sample_chance_inputs_draw_and_a_resumed_turn_replays_its_saved_block(self):
+        """Fidelity tier D: tape v3's phazing is the engine's ChanceInputs.phazing (fold_in 271828 of the split key, [0,60)),
+        and a resumed suspended turn replays state.phazing_draws, as transition.step_with_chance reads them."""
+        import jax.numpy as j
+        from gpu_engine import transition
+        from gpu_engine.fidelity import PHAZING_SALT, chance_tape
+        from gpu_engine.state import empty_state
+        self.assertEqual(PHAZING_SALT, 271828)
+        for seed in (23, 29, 31):
+            s = empty_state(1, seed=seed)
+            tape = chance_tape(s, 50000, 0)
+            sampled = transition.sample_chance_inputs(s)
+            self.assertEqual(tape['phazing'], np.asarray(sampled.phazing)[0].tolist())
+            self.assertEqual(tape['draws'], np.asarray(sampled.draws)[0].tolist())
+            self.assertEqual(tape['effect'], np.asarray(sampled.effect)[0].tolist())
+            saved = [(tape['phazing'][0] + 17) % 60, (tape['phazing'][1] + 41) % 60]
+            pending = s._replace(pending_residual=j.array([True]), residual_draws=j.asarray([tape['draws']]),
+                secondary_draws=j.asarray([tape['secondary']]), sleep_talk_draws=j.asarray([tape['sleep_talk']]),
+                effect_draws=j.asarray([tape['effect']]), phazing_draws=j.asarray([saved], j.int32), keys=s.keys + 1)
+            self.assertEqual(chance_tape(pending, 50000, 1)['phazing'], saved)
+
     def test_suspended_turn_replays_the_saved_effect(self):
         import jax.numpy as j
         from gpu_engine.fidelity import chance_tape

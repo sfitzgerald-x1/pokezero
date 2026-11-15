@@ -39,11 +39,17 @@ def from_metadata(metadata):
     vocab = metadata["vocabulary"]
     flag = lambda name:jnp.asarray([value == name for value in vocab["abilities"]])
     typ = lambda name:jnp.asarray(vocab["types"].index(name))
+    # Wonder Guard exempts Status moves by category, so a vocabulary with Wonder Guard needs the move rows; without
+    # Wonder Guard (ability-only fixtures, or a table with no moves) status_move is never read and stays all False.
+    names = vocab.get("moves", ())
     rows = metadata.get("moves")
-    if rows is not None and len(rows) != len(vocab["moves"]):
+    if rows is not None and len(rows) != len(names):
         raise ValueError("move metadata/vocabulary mismatch")
+    if rows is None and "wonderguard" in vocab["abilities"] and names:
+        raise ValueError("Wonder Guard needs the move rows (category) to exempt Status moves")
+    # (At least one row: a table with no move vocabulary still gathers status_move[move] in the step.)
     status_move = ([bool(row) and row.get("category") == "Status" for row in rows] if rows is not None
-        else [False]*len(vocab["moves"]))
+        else [False]*max(1, len(names)))
     return CombatTable(flag("guts"),flag("thickfat"),flag("arenatrap"),flag("magnetpull"),
         flag("shadowtag"),flag("levitate"),typ("flying"),typ("steel"),typ("fire"),typ("ice"),
         jnp.asarray([name in {"hugepower","purepower"} for name in vocab["abilities"]]),

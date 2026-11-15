@@ -229,8 +229,9 @@ def apply_contact(state, side, move, roll, table, *, eligible, item_table=None, 
     Water Veil, Insomnia, Vital Spirit: ability_immunity; Sleep Clause Mod against a foe-made sleep while another
     living member of the attacker's side sleeps from a foe, data/rulesets.ts sleepclausemod). The Effect Spore sleep's
     slp onStart (data/mods/gen3/conditions.ts) rolls random(2, 6): `sleep_roll` is the attacker's effect[s][2]
-    (2 + draw), Yawn's residual column, which no Yawn sleep of that side can also read in one step (the slept mon is
-    that side's only active between its action and the residual, and a slept holder's yawn finds it statused).
+    (2 + draw), Yawn's residual column. A Yawn sleep of that side reads it again in the same step only if this sleep
+    was cured at once (a Lum Berry; the slept mon is that side's only active between its action and the residual, and a
+    still-asleep holder's yawn finds it statused): the cure discards the first value, so the step's law stays exact.
     psn/brn/par print -status|ATTACKER|X|[from] ability: NAME|[of] HOLDER (data/conditions.ts), which reveals the
     holder's ability; Gen 3's slp onStart prints a plain -status|ATTACKER|slp (no [from]), which reveals nothing.
 

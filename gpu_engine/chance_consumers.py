@@ -48,15 +48,15 @@ CONSUMERS = {
         (0, "transition Bonemerang second hit: critical<1 or<2 (critical.is_critical)"),
         (1, "transition Bonemerang second hit: damage 85+draw"),
         # Fidelity M2: the reserved columns. Column 2 is the drowsy mon's own side; column 3 is a pair tie per row.
-        (2, "transition residual Yawn sleep duration 2+draw (the drowsy mon's side); secondary.apply_contact Effect Spore sleep duration 2+draw (the attacker's side; fidelity tier D, never with a Yawn sleep of that side in one step)"))},
+        (2, "transition residual Yawn sleep duration 2+draw (the drowsy mon's side); secondary.apply_contact Effect Spore sleep duration 2+draw (the attacker's side; fidelity tier D: a Yawn sleep of that side reads it again in one step only after a Lum Berry cured this sleep at once, which discards the first value)"))},
     "effect.0.3": ("transition residual partial-trap (Wrap) pair ordering, subOrder 9",),
     "effect.1.3": ("transition residual Perish pair ordering, order 12 (both ends resolve before faintMessages, so no Gen 3 outcome depends on it)",),
 }
 
 # Changing any source that supplies the consumer/domain proof requires review.
-SOURCE_PINS = {'action_history.py': 'a47bdb2712f7eadaed12d91ede70be2ebe9f1c1ae3f70fe56495437997212407', 'critical.py': 'b66e6cf10c0d4df625b1c4f5e5db238af42052e556d7649a10f911745181401e', 'effects.py': '47f549d608b60d46e8cc4db7bad5be249ae728a4aab2a0ef28f105f3614e40e2', 'encore.py': '63da39bbd181a8c6371b3bca853322291a03674c60f535ad0eacdbe1a440e0dd', 'entry.py': 'eabf2713a100256ba86fd0b5ac4155042e2a0c6dfe0bc37c7f0c6219dbdd22c1', 'mechanics.py': 'e8476cc3e0029f3ed0bf82276312440e6dd8b340ffeb0c68cdd5611754eef661', 'phazing.py': 'c27039f267bd18660adb3c2bd826e58a7da953eea0e79677de5428f042447969', 'pursuit.py': '5b966584634b5230b3efaf16609699484d29966ff8f7ebaf6d160864dba8c2e5', 'residual_order.py': '86877424cd7d277f130d7f9616812bb996b872a83d0478adadcab14b1f192c77', 'secondary.py': '9f9de4483edd6abd1612d87d809acf7a4fb807e25c2f5e59bb73bc2ff50b7225', 'sleep_talk.py': '968a78ddde87158b13f68dfcacc2158f07336d82c1be472d2283421e8583c154', 'state.py': '67ca721ce1f6b1a5c3e9c6fd42fe33d65f62ffcec006f5c5efd188225111a59c', 'transition.py': '9e7d34a2d04c64499cddb594bc3e0102270b286bdf5ddc7432b633ef436d7f37', 'weather.py': '3c861027e16d27917fa47fa5cf5d6dc0c68d3a74af282108dfb94369d4db57e5'}
+SOURCE_PINS = {'action_history.py': 'a47bdb2712f7eadaed12d91ede70be2ebe9f1c1ae3f70fe56495437997212407', 'critical.py': 'b66e6cf10c0d4df625b1c4f5e5db238af42052e556d7649a10f911745181401e', 'effects.py': '47f549d608b60d46e8cc4db7bad5be249ae728a4aab2a0ef28f105f3614e40e2', 'encore.py': '63da39bbd181a8c6371b3bca853322291a03674c60f535ad0eacdbe1a440e0dd', 'entry.py': 'eabf2713a100256ba86fd0b5ac4155042e2a0c6dfe0bc37c7f0c6219dbdd22c1', 'mechanics.py': 'e8476cc3e0029f3ed0bf82276312440e6dd8b340ffeb0c68cdd5611754eef661', 'phazing.py': 'c27039f267bd18660adb3c2bd826e58a7da953eea0e79677de5428f042447969', 'pursuit.py': '5b966584634b5230b3efaf16609699484d29966ff8f7ebaf6d160864dba8c2e5', 'residual_order.py': '86877424cd7d277f130d7f9616812bb996b872a83d0478adadcab14b1f192c77', 'secondary.py': '0731b80b9f7fc0b583ea62686c106666b5274ab80cb9d79fb9eb8647b654efd8', 'sleep_talk.py': '968a78ddde87158b13f68dfcacc2158f07336d82c1be472d2283421e8583c154', 'state.py': '67ca721ce1f6b1a5c3e9c6fd42fe33d65f62ffcec006f5c5efd188225111a59c', 'transition.py': '9e7d34a2d04c64499cddb594bc3e0102270b286bdf5ddc7432b633ef436d7f37', 'weather.py': '3c861027e16d27917fa47fa5cf5d6dc0c68d3a74af282108dfb94369d4db57e5'}
 DOMAIN_MODULES = tuple("action_history absorption baton combat critical damage_moves effects encore entry focus_punch items linked_traps mechanics phazing pressure pursuit residual_order secondary self_destruct sleep_talk solar_beam state sustain transition variable_moves weather".split())
-DOMAIN_SHA256 = 'b69f11a42272f3ae2e033be28a6956987c0b5d4c9fe751b7499ea5bfdc603a04'
+DOMAIN_SHA256 = '681272a4722e6cbd41b1dc43658b87d6955d04bce7c46ccda73dcea6704903fe'
 
 
 def _host(value):
@@ -389,7 +389,7 @@ def plan_for_state(state, index, actions, table, metadata, *, cap, native_input=
         # §6: the appended effect stream (fidelity R, design 2.1; M2's residual consumers). transition.py:580-582 reads
         # ChanceInputs.effect; a resumed suspended turn reads the saved block instead (refused above).
         for s in range(2):
-            # Bonemerang's second hit (transition.py:1113-1153, run when damage_moves.hits>1 at :1335): its own critical
+            # Bonemerang's second hit (transition.py:1135-1175, run when damage_moves.hits>1 at :1362): its own critical
             # roll effect[s][0] (critical.is_critical: below 2 for a high-crit move, else below 1; below 1 without the
             # table) and damage roll 85+effect[s][1]. Callers and Encore are already in the selected closure.
             critical = (t.get("critical") or {}).get("high")
@@ -398,18 +398,18 @@ def plan_for_state(state, index, actions, table, metadata, *, cap, native_input=
                 use(f"effect.{s}.0", *(Observation("less_than", 2 if critical is not None and critical[move] else 1)
                                        for move in sorted(second_hit)))
                 use(f"effect.{s}.1", Observation("identity"))
-            # Yawn's residual sleep (transition.py:2571-2581): a holder whose count is 1 when this residual runs sleeps
+            # Yawn's residual sleep (transition.py:2601-2611): a holder whose count is 1 when this residual runs sleeps
             # for 2+effect[s][2], s the drowsy mon's own side. A Yawn landing this turn sets 2 (:1742-1750), which ends
             # at the next turn's residual, and only a holder that stays in keeps a count (entry.py, baton.py drop it).
             if not replacement and any(_counter(data, "yawn_counter", s, p) == 1 for p in participants[s]):
                 use(f"effect.{s}.2", Observation("identity"))
-        # The order-10 partial-trap pair (transition.py:2278-2285 with residual_order): effect[0][3] orders the two
+        # The order-10 partial-trap pair (transition.py:2308-2315 with residual_order): effect[0][3] orders the two
         # Wrap holders' events at equal Speed. A seat holds a trap already or gets one from the other's Wrap (:1945-1955).
         trapped = [any(_counter(data, "partial_trap_counter", s, p) > 0 for p in participants[s])
                    or any(_at(t, "effects", "wrap", move) for move in selected[1-s]) for s in range(2)]
         if not replacement and all(trapped):
             use("effect.0.3", Observation("identity"))
-        # Perish Song's order-12 pair (transition.py:2616-2633): effect[1][3] orders the two holders at equal Speed.
+        # Perish Song's order-12 pair (transition.py:2646-2663): effect[1][3] orders the two holders at equal Speed.
         # Perish Song gives every active without a count one (:1728-1735), so either seat's use reaches both.
         perish_song = any(_at(t, "effects", "perishsong", move) for choices in selected for move in choices)
         if not replacement and all(perish_song or any(_counter(data, "perish_counter", s, p) > 0 for p in participants[s])
