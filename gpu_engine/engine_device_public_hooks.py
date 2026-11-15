@@ -101,7 +101,7 @@ def _reset_item_narrowing(c,side,physical,use):
     """B2 stops narrowing by a mutated item (design 13 item 4).
 
     public_items.matching_item gives key 0 once an item is mutated while
-    item_belief_narrowing is False (src/pokezero/observation.py:382), so B2's
+    item_belief_narrowing is False (src/pokezero/observation.py:403), so B2's
     full belief is rebuilt from the facts that still narrow it: the species
     pool, the original ability, the revealed moves and the standing ability/
     item exclusions. _narrow's AND cannot be undone, so the subject's hard mask
@@ -266,7 +266,7 @@ def install(c,state,side,use,*,initial=False):
         if name in c.trackers.mon_features:c=feature(c,side,p,name,j.zeros(b,j.int32),use)
     # Every arrival (switch, replacement, drag, Baton target) clears the public Mean
     # Look flag on BOTH seats, matching B2 (public_active.py:246, ARRIVE ignores
-    # baton_pass) and the champion parser (src/pokezero/showdown.py:2752-2770).
+    # baton_pass) and the champion parser (src/pokezero/showdown.py:2756-2774).
     # Known B2 quirk, kept deliberately (lead decision, as for the stale recharge
     # bit): Showdown is right to release the trap on a switch or drag (the linked
     # trapped/trapper volatiles drop), but gen3 keeps it through Baton Pass in
@@ -360,7 +360,7 @@ def reveal_item(c,state,side,item,use,*,original=True):
     c=c._replace(trackers=_write(c.trackers,'shown_item',side,p,item,use))
     if not original:return _refresh(c,side,p,use)
     # Fidelity M1: B2 narrows by public_items.matching_item, which is 0 for a mutated item (Trick, Knock Off)
-    # while item_belief_narrowing is False (src/pokezero/observation.py:382): a later reveal of a Tricked-in
+    # while item_belief_narrowing is False (src/pokezero/observation.py:403): a later reveal of a Tricked-in
     # item (its Leftovers heal, its berry) never narrows the holder's belief.
     mutated=_mon_fact(c,'item_mutated',side,p)!=0
     c=_narrow(c,side,p,item,use&~mutated,'item')
