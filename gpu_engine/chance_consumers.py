@@ -55,7 +55,7 @@ CONSUMERS = {
 
 # Changing any source that supplies the consumer/domain proof requires review.
 SOURCE_PINS = {'action_history.py': 'a47bdb2712f7eadaed12d91ede70be2ebe9f1c1ae3f70fe56495437997212407', 'critical.py': 'b66e6cf10c0d4df625b1c4f5e5db238af42052e556d7649a10f911745181401e', 'effects.py': '47f549d608b60d46e8cc4db7bad5be249ae728a4aab2a0ef28f105f3614e40e2', 'encore.py': '63da39bbd181a8c6371b3bca853322291a03674c60f535ad0eacdbe1a440e0dd', 'entry.py': 'eabf2713a100256ba86fd0b5ac4155042e2a0c6dfe0bc37c7f0c6219dbdd22c1', 'mechanics.py': 'e8476cc3e0029f3ed0bf82276312440e6dd8b340ffeb0c68cdd5611754eef661', 'phazing.py': 'c27039f267bd18660adb3c2bd826e58a7da953eea0e79677de5428f042447969', 'pursuit.py': '2b01102bb3819791fc1edea0ba0fe0a0b913e8dfa5a8f6501f48f3fe260a8309', 'residual_order.py': '86877424cd7d277f130d7f9616812bb996b872a83d0478adadcab14b1f192c77', 'secondary.py': 'ada20a946cc106dcf798fa053392ed895fe778c977af13774ab58e0c8c657fe6', 'sleep_talk.py': '968a78ddde87158b13f68dfcacc2158f07336d82c1be472d2283421e8583c154', 'state.py': '67ca721ce1f6b1a5c3e9c6fd42fe33d65f62ffcec006f5c5efd188225111a59c', 'transition.py': '820fdcc40285b362cbfacb5c91749e7b20446543ac63278afc160d0bd80f143f', 'weather.py': '3c861027e16d27917fa47fa5cf5d6dc0c68d3a74af282108dfb94369d4db57e5'}
-DOMAIN_MODULES = tuple("action_history absorption baton combat critical damage_moves effects encore entry focus_punch items linked_traps mechanics phazing pressure pursuit residual_order secondary self_destruct sleep_talk solar_beam state sustain transition variable_moves weather".split())
+DOMAIN_MODULES = tuple("action_history absorption baton combat critical damage_moves effects encore entry focus_punch items linked_traps mechanics phazing pressure pursuit residual_order secondary self_destruct sleep_talk solar_beam state sustain transform transition variable_moves weather".split())
 DOMAIN_SHA256 = 'a68fb69537e457fc2f75c660afb869d303a7fa90941b631c57fb5391bf034179'
 
 
@@ -217,6 +217,18 @@ def plan_for_state(state, index, actions, table, metadata, *, cap, native_input=
                 if trace_table is not None and any(trace_table[ability] for ability in abilities[s]):
                     abilities[s].update(abilities[1-s])
             changed=before!=tuple(frozenset(values) for values in abilities)
+        # Transform (gpu_engine/transform.py) draws nothing, but a selected Transform copies the foe active's ability, so a
+        # copied Static, Synchronize, Hustle, Compound Eyes, Sand Veil or weather ability can switch on an existing axis
+        # this step. Close it with the Trace closure (both copy the opposing current ability) to one fixed point.
+        transform_move=(t.get('transform') or {}).get('move')
+        transforms=[transform_move is not None and any(transform_move[move] for move in selected[s]) for s in range(2)]
+        changed=any(transforms)
+        while changed:
+            before=tuple(frozenset(values) for values in abilities)
+            for s in range(2):
+                if transforms[s] or (trace_table is not None and any(trace_table[ability] for ability in abilities[s])):
+                    abilities[s].update(abilities[1-s])
+            changed=before!=tuple(frozenset(values) for values in abilities)
         statuses = [{data["status"][s][p] for p in participants[s]} for s in range(2)]
         for s in range(2):
             if (any(_at(t, 'secondary', 'contact', move) for move in selected[s])
@@ -251,6 +263,11 @@ def plan_for_state(state, index, actions, table, metadata, *, cap, native_input=
                 # Include both orderings of Haze then self boost and vice versa.
                 stages[s][position].update(max(-6, min(6, value+change))
                     for value in tuple(stages[s][position]) for change in delta)
+        # Transform copies the foe's accuracy and evasion stages too (its own and the foe's later moves read them).
+        for s in range(2):
+            if transforms[s]:
+                for position in range(2):
+                    stages[s][position].update(stages[1-s][position])
 
         observations = {name: [] for name, _ in COORDINATES}
         reasons = {}
