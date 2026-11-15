@@ -681,6 +681,17 @@ def plus_minus_active(p):
     return (plus | minus) & moves
 
 
+def stick_crit(p):
+    """STICK: [L,2] a side whose active is a Farfetch'd holding Stick (critical.ratio 3: crits below 4, not 1), or one a
+    foe active holding Stick may Trick it to, with a damaging candidate. An entrant does not move."""
+    items, species = p.vocab['items'], p.vocab.get('species', ())
+    if 'stick' not in items or 'farfetchd' not in species:return np.zeros((p.lanes, 2), bool)
+    held = p.active('item') == items.index('stick')
+    farfetchd = p.active('species') == species.index('farfetchd')
+    _, damaging = dm_candidate_moves(p)
+    return farfetchd & (held | (held[:, ::-1] & p.side_uses('trick')[:, ::-1])) & damaging.any(-1)
+
+
 def entering_ability(*names):
     """PR0 reveal gates: a side may install a holder of one of these abilities this step (the
     reveal happens at its switch-in; the foe's HP/Substitute or the weather is not predicted).
@@ -969,6 +980,9 @@ DM_DAMAGE = ('hp', 'item', 'boosts', 'typechange', 'reveal', 'visible', 'subtrac
 for _effect in ('silkscarf', 'twistedspoon', 'marvelscale', 'plusminus'):
     ALLOWED[_effect] = dict(user=DM_DAMAGE, target=DM_DAMAGE, glob=())
     CASCADE_ALLOWED[_effect] = ALL
+# STICK: a critical hit that now lands (or not) changes the hit's damage, as a damage modifier does.
+ALLOWED['stick_crit'] = dict(user=DM_DAMAGE, target=DM_DAMAGE, glob=())
+CASCADE_ALLOWED['stick_crit'] = ALL
 
 
 def allowed_leaf(name, families):
@@ -1005,6 +1019,8 @@ PLUGINS = {
     # DM (damage modifiers): Silk Scarf, Twisted Spoon, Marvel Scale, Gen 3's Plus/Minus.
     'DM': dict(silkscarf=type_item_active('silkscarf', 'normal'), twistedspoon=type_item_active('twistedspoon', 'psychic'),
                marvelscale=marvel_scale_target, plusminus=plus_minus_active),
+    # STICK (Farfetch'd's critRatio +2).
+    'STICK': dict(stick_crit=stick_crit),
 }
 
 

@@ -354,6 +354,29 @@ class DigestAndRuleTests(unittest.TestCase):
         cascade = dict(ko_sides=[False, False], mon_ok=lambda leaf, side: False, families=())
         self.assertEqual(lane_verdict({('state.status', 1)}, {'silkscarf': [0]}, None, cascade=cascade)[0], [])
 
+    def test_stick_plug_in_predicate(self):
+        """STICK: a Farfetch'd active holding Stick (or facing a Stick holder's Trick) with a damaging candidate; another
+        species holding Stick, a bare Farfetch'd or a Status-only Farfetch'd is not involved."""
+        from gpu_engine.v2e_regress import Pre, PLUGINS, ALLOWED, CASCADE_ALLOWED
+        vocab = dict(VOCAB, moves=VOCAB['moves'] + ['trick'], items=VOCAB['items'] + ['stick'],
+                     species=['_none', 'farfetchd', 'mew'])
+        TRICK, STICK, FARFETCHD, MEW = len(VOCAB['moves']), 3, 1, 2
+        row = lambda name, typ, category: dict(id=name, type=typ, category=category, flags={})
+        rows = [None, row('curse', 0, 'Status'), row('tackle', 1, 'Physical'), row('sleeptalk', 1, 'Status'),
+                row('spore', 12, 'Status'), row('struggle', 1, 'Physical'), row('encore', 1, 'Status'),
+                row('magiccoat', 14, 'Status'), row('batonpass', 1, 'Status'), row('trick', 14, 'Status')]
+        L = 6;s = pre_arrays(L);s['species'] = np.full((L, 2, 6), MEW, np.int32)
+        s['species'][0, 0, 0] = FARFETCHD;s['item'][0, 0, 0] = STICK                       # 0: Farfetch'd + Stick, Tackle
+        s['species'][1, 0, 0] = MEW;s['item'][1, 0, 0] = STICK                             # 1: another species
+        s['species'][2, 0, 0] = FARFETCHD                                                  # 2: no Stick
+        s['species'][3, 0, 0] = FARFETCHD;s['item'][3, 1, 0] = STICK;s['moves'][3, 1, 0] = TRICK   # 3: the foe's Trick
+        s['species'][4, 0, 0] = FARFETCHD;s['item'][4, 0, 0] = STICK;s['moves'][4, 0, 0] = CURSE   # 4: Status only
+        named = {f'state.{k}': v for k, v in s.items()};named['actions'] = np.zeros((L, 2), np.int32)
+        p = Pre(named, vocab, np.append(CALLABLE, False), np.zeros((L, 2), bool), moves=rows)
+        no = [False, False];t0 = [True, False]
+        self.assertEqual(PLUGINS['STICK']['stick_crit'](p).tolist(), [t0, no, no, t0, no, no])
+        self.assertTrue('stick_crit' in ALLOWED and 'stick_crit' in CASCADE_ALLOWED)
+
     def test_tier_d_pinch_accepts_anything_only_on_a_ko_cascade(self):
         """D: a pinch-boosted KO that moved within the step decides whether the target's action ran (the GPU pass's 13
         lane-steps: a status on the pinch user, the target's PP and action bookkeeping). Without a cascade the damage
