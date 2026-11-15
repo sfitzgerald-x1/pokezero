@@ -144,10 +144,12 @@ class HostStackTests(unittest.TestCase):
 class ReplyStackTests(unittest.TestCase):
     """ReplyPrior.jit_logits on host-stacked worlds: the same compiled executable (no compile after jnp.stack's inputs compiled
     it) and the same bits, on the fake engine's prepared worlds."""
+    from tests import test_gpu_engine_depthn_live_search as L
+    make_pricers = classmethod(L.LiveSearchTests.make_pricers.__func__)
+
     @classmethod
     def setUpClass(cls):
-        from tests import test_gpu_engine_depthn_live_search as L
-        cls.L = L;L.LiveSearchTests.setUpClass.__func__(cls)
+        cls.L.LiveSearchTests.setUpClass.__func__(cls)
 
     def test_the_jitted_reply_program_is_unchanged(self):
         import jax
@@ -155,8 +157,7 @@ class ReplyStackTests(unittest.TestCase):
         from gpu_engine import depthn_live_search as live
         from gpu_engine.depthn_reply_prior import ReplyPrior
         from tests.test_gpu_engine_trace_release import CompileEvents
-        L = self.L;self.make_pricers = L.LiveSearchTests.make_pricers.__func__.__get__(type(self))
-        L.LiveSearchTests.setUp(self)
+        L = self.L;L.LiveSearchTests.setUp(self)
         s = L.LiveSearchTests.search(self, 8, pricers=self.make_pricers(8, (1,)));outcomes = {('h', 0): L.LiveSearchTests.outcome(self, 0, 8)}
         with L.Codex(outcomes):
             req = L.request('h', 0);p = {k: req[k] for k in live.PROTOCOL_KEYS};row = s._response(req['request_id'], 1)
