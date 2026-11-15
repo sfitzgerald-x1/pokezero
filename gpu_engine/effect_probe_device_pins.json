@@ -431,6 +431,56 @@
    }
   },
   {
+   "scenario": "forecast_rain_ends",
+   "case": "base",
+   "step": 4,
+   "field": "field:weather_upkeeps",
+   "value": [
+    0,
+    4
+   ]
+  },
+  {
+   "scenario": "forecast_rain_ends",
+   "case": "base",
+   "step": 5,
+   "field": "field:weather_upkeeps",
+   "value": [
+    0,
+    4
+   ]
+  },
+  {
+   "scenario": "forecast_switch_back",
+   "case": "base",
+   "step": 4,
+   "field": "field:weather_upkeeps",
+   "value": [
+    0,
+    4
+   ]
+  },
+  {
+   "scenario": "forecast_switch_back",
+   "case": "base",
+   "step": 5,
+   "field": "field:weather_upkeeps",
+   "value": [
+    0,
+    4
+   ]
+  },
+  {
+   "scenario": "forecast_switch_back",
+   "case": "base",
+   "step": 6,
+   "field": "field:weather_upkeeps",
+   "value": [
+    0,
+    4
+   ]
+  },
+  {
    "scenario": "hyperbeam_roar",
    "case": "base",
    "step": 1,
