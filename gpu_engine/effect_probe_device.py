@@ -158,9 +158,10 @@ LEFT_OUT = {
     'own_order, public_order, physical_to_public, active_physical, next_slot': 'private identity cursors and '
               'request-order permutations (never encoded); B2 indexes by public encounter only',
     'error': 'device diagnostic input-contract bits',
-    'copied_pp_used, transform_own_view': 'Transform: the device\'s copied-slot uses (for device worlds) and the transformer '
-              'owner\'s own view of its copied ability (B2 keeps it only in that owner\'s fold, read for the Pressure charge '
-              'of moves against the transformer); neither has a compared B2 counterpart in the opposing fold',
+    'copied_pp_used, transform_own_view, transform_borrowed': 'Transform: the device\'s copied-slot uses (for device worlds), '
+              'the transformer owner\'s own view of its copied ability (B2 keeps it only in that owner\'s fold, read for the '
+              'Pressure charge of moves against the transformer), and the mark that a borrowed ability is a Transform copy (the '
+              'readout hides it from the traced column, B2\'s traced); none has a compared B2 counterpart in the opposing fold',
     'wish_turns, wish_pending (field_features)': 'zero in the carry; readout derives them from wish_set_turn '
               '(compared)',
 }

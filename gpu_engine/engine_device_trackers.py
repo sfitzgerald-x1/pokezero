@@ -129,6 +129,10 @@ class Trackers(NamedTuple):
     # there, kept when unknown), which can differ from borrowed_ability (the donor owner's fold, which also knows the
     # donor's owner-private Pressure start). B2 reads it for the Pressure charge of moves against that transformer.
     transform_own_view:object=None
+    # [B,2,6] the encounter's borrowed_ability came from a Transform, not a Trace. borrowed_ability mirrors B2's running
+    # ability (both copies), but the observation's traced column is B2's `traced`, which only a Trace line writes, so
+    # readout hides a Transform copy there (it also kept-ability of a benched or fainted ex-transformer). Cleared at arrival.
+    transform_borrowed:object=None
 
 
 class Tendency(NamedTuple):
@@ -315,6 +319,7 @@ def readout(trackers,observer_sides):
             if key not in ('switched_before_attack','stayed_and_attacked','turns_active_total')}
         own_last=own(trackers.last_moves)
         own_borrowed=own(trackers.borrowed_ability)
+        if trackers.transform_borrowed is not None:own_borrowed=j.where(own(trackers.transform_borrowed),0,own_borrowed)
         own_removed=own(trackers.item_removed)
         if trackers.public_volatiles is not None:
             got=trackers.public_volatiles[r[:,None],owner[:,None],j.clip(slots,0,5)]
@@ -356,6 +361,9 @@ def readout(trackers,observer_sides):
         stats={**({}if stats is None else stats),'blocked_on_our_attack':_li.take(h.blocked,r,owner),'pursuit_intercept_predict':_li.take(h.pursuit,r,foe)}
         reveals=_li.take(h.weather,r,foe).reshape(b,6)
         stats.update({'weather_reveal_'+str(i):reveals[:,i]for i in range(6)})
+    borrowed=optional('borrowed_ability')
+    if borrowed is not None and trackers.transform_borrowed is not None:
+        borrowed=j.where(take('transform_borrowed'),0,borrowed)   # B2's traced column: Trace copies only
     transform={}
     if trackers.transformed is not None and trackers.transform_species is not None:
         own_slots=trackers.physical_to_public[r[:,None],owner[:,None],_li.take(trackers.own_order,r,owner)]
@@ -372,7 +380,7 @@ def readout(trackers,observer_sides):
         z if trackers.shown_item is None else take('shown_item'),
         trackers.error|j.where((observer_sides<0)|(observer_sides>1),BAD_OBSERVER,0),None,
         trackers.turn,trackers.weather,trackers.spikes,belief_mask,optional('observed_moves'),
-        optional('pp_used'),optional('last_moves'),optional('borrowed_ability'),own_last,mon,own_mon,fields,own_borrowed,optional('public_volatiles'),own_vol,optional('item_removed'),own_removed,stats,
+        optional('pp_used'),optional('last_moves'),borrowed,own_last,mon,own_mon,fields,own_borrowed,optional('public_volatiles'),own_vol,optional('item_removed'),own_removed,stats,
         None if visible is None else _li.take(visible.visible_pin,r,foe),None if visible is None else _li.take(visible.visible_pin_active,r,foe),
         own_boosts=j.where((own_slot>=0)[:,None],_li.take(trackers.boosts,r,owner,j.clip(own_slot,0,5)),0),**transform)
 

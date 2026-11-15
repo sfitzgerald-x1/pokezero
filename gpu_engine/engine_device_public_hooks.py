@@ -155,7 +155,7 @@ def initialize(state,belief_tables=None,*,port_tables=None):
     t=t._replace(damage_history=damage_history.initialize(state),public_port=port.initialize(b))
     # Transform (B2's ctx.abilities transformed/transform_species; the copied-slot uses for device worlds).
     t=t._replace(transformed=j.zeros((b,2,6),bool),transform_species=z,copied_pp_used=j.zeros((b,2,4),j.int32),
-        transform_own_view=z)
+        transform_own_view=z,transform_borrowed=j.zeros((b,2,6),bool))
     c=Context(t,belief_tables,port_tables)
     for side in range(2):c=install(c,state,side,j.ones(b,bool),initial=True)
     # Original startup emits switches, then TURN1 before the first request.
@@ -242,6 +242,7 @@ def install(c,state,side,use,*,initial=False):
         t=_write(t,'shown_ability',side,p,_li.take(t.original_ability,r,side,at),kept)
         t=_write(t,'borrowed_ability',side,p,j.zeros_like(p),kept)
         if t.transform_own_view is not None:t=_write(t,'transform_own_view',side,p,j.zeros_like(p),use)
+        if t.transform_borrowed is not None:t=_write(t,'transform_borrowed',side,p,j.zeros_like(use),use)
     t=negative_items.hp_line(t,state,side,use,source_class=negative_items.HP_ACTION)
     c=c._replace(trackers=t)
     if c.trackers.damage_history is not None:
@@ -440,6 +441,7 @@ def depart(c,before,after,side,table,use):
     c=c._replace(trackers=_write(c.trackers,'borrowed_ability',side,p,j.zeros_like(use,j.int32),use_borrowed))
     c=type_revert(c,before,after,side,p,use)
     c=_transform_clear(c,before,side,p,gone)
+    c=_copied_clear(c,before,side,_mask(use,len(c.trackers.error)))
     return _refresh(c,side,p,use&~_li.take(c.trackers.fainted,_r(before),side,j.clip(_li.take(c.trackers.active_slot,_r(before),side),0,5)))
 
 
@@ -486,6 +488,14 @@ def _transform_clear(c,state,side,physical,use):
     return c
 
 
+def _copied_clear(c,state,side,use):
+    """The side's copied-slot uses end with its active's Transform (a departure or a faint)."""
+    t=c.trackers
+    if t.copied_pp_used is None:return c
+    r=_r(state);old=_li.take(t.copied_pp_used,r,side)
+    return c._replace(trackers=t._replace(copied_pp_used=_li.put(t.copied_pp_used,r,(side,),j.where(_mask(use,len(r))[:,None],0,old))))
+
+
 def transform(c,before,after,side,use):
     """B2's -transform|X|DONOR on the actual successful copy (transform.apply's `copied`).
 
@@ -516,6 +526,7 @@ def transform(c,before,after,side,use):
     t=_write(t,'transform_species',side,p,donor,use)
     t=_write(t,'borrowed_ability',side,p,copied,use&(copied>0))
     t=_write(t,'shown_ability',side,p,copied,use&(copied>0))
+    if t.transform_borrowed is not None:t=_write(t,'transform_borrowed',side,p,j.ones_like(use),use&(copied>0))
     if t.copied_pp_used is not None:
         old=_li.take(t.copied_pp_used,r,side)
         t=t._replace(copied_pp_used=_li.put(t.copied_pp_used,r,(side,),j.where(use[:,None],0,old)))
@@ -819,6 +830,7 @@ def faint_clear(c,before,after,use):
         # Transform: B2's FAINT clears the mark (public_abilities.faint keeps the running ability); the engine reverted
         # the fainted active (transform.faint_revert), so read the mark from the carry, not the state.
         c=_transform_clear(c,after,side,p,hit[side]&_transformed(c,after,side))
+        c=_copied_clear(c,after,side,hit[side])
     return c
 
 
