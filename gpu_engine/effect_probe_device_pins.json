@@ -183,6 +183,126 @@
    ]
   },
   {
+   "scenario": "contact_pursuit",
+   "case": "roll=0",
+   "step": 0,
+   "field": "0:active:damage_exact_dealt",
+   "value": [
+    0.2584269642829895,
+    0.0
+   ]
+  },
+  {
+   "scenario": "contact_pursuit",
+   "case": "roll=0",
+   "step": 0,
+   "field": "0:active:last_damage_dealt",
+   "value": [
+    0.25,
+    0.0
+   ]
+  },
+  {
+   "scenario": "contact_pursuit",
+   "case": "roll=0",
+   "step": 0,
+   "field": "0:active:last_move",
+   "value": [
+    "<switch>",
+    "pursuit"
+   ]
+  },
+  {
+   "scenario": "contact_pursuit",
+   "case": "roll=20",
+   "step": 0,
+   "field": "0:active:damage_exact_dealt",
+   "value": [
+    0.2584269642829895,
+    0.0
+   ]
+  },
+  {
+   "scenario": "contact_pursuit",
+   "case": "roll=20",
+   "step": 0,
+   "field": "0:active:last_damage_dealt",
+   "value": [
+    0.25,
+    0.0
+   ]
+  },
+  {
+   "scenario": "contact_pursuit",
+   "case": "roll=20",
+   "step": 0,
+   "field": "0:active:last_move",
+   "value": [
+    "<switch>",
+    "pursuit"
+   ]
+  },
+  {
+   "scenario": "contact_pursuit_synchronize",
+   "case": "roll=0",
+   "step": 0,
+   "field": "0:active:damage_exact_dealt",
+   "value": [
+    0.2851063907146454,
+    0.0
+   ]
+  },
+  {
+   "scenario": "contact_pursuit_synchronize",
+   "case": "roll=0",
+   "step": 0,
+   "field": "0:active:last_damage_dealt",
+   "value": [
+    0.2800000011920929,
+    0.0
+   ]
+  },
+  {
+   "scenario": "contact_pursuit_synchronize",
+   "case": "roll=0",
+   "step": 0,
+   "field": "0:active:last_move",
+   "value": [
+    "<switch>",
+    "pursuit"
+   ]
+  },
+  {
+   "scenario": "contact_pursuit_synchronize",
+   "case": "roll=20",
+   "step": 0,
+   "field": "0:active:damage_exact_dealt",
+   "value": [
+    0.2851063907146454,
+    0.0
+   ]
+  },
+  {
+   "scenario": "contact_pursuit_synchronize",
+   "case": "roll=20",
+   "step": 0,
+   "field": "0:active:last_damage_dealt",
+   "value": [
+    0.2800000011920929,
+    0.0
+   ]
+  },
+  {
+   "scenario": "contact_pursuit_synchronize",
+   "case": "roll=20",
+   "step": 0,
+   "field": "0:active:last_move",
+   "value": [
+    "<switch>",
+    "pursuit"
+   ]
+  },
+  {
    "scenario": "counter_sleeptalk",
    "case": "talk=0",
    "step": 1,
@@ -498,6 +618,116 @@
    "value": [
     "<switch>",
     "pursuit"
+   ]
+  },
+  {
+   "scenario": "wonderguard_trace",
+   "case": "base",
+   "step": 0,
+   "field": "1:0:original_ability",
+   "value": [
+    "",
+    "trace"
+   ]
+  },
+  {
+   "scenario": "wonderguard_trace",
+   "case": "base",
+   "step": 1,
+   "field": "1:0:original_ability",
+   "value": [
+    "",
+    "trace"
+   ]
+  },
+  {
+   "scenario": "wonderguard_trace",
+   "case": "base",
+   "step": 2,
+   "field": "1:0:original_ability",
+   "value": [
+    "",
+    "trace"
+   ]
+  },
+  {
+   "scenario": "wonderguard_trace",
+   "case": "base",
+   "step": 3,
+   "field": "0:active:last_move",
+   "value": [
+    "<switch>",
+    "pursuit"
+   ]
+  },
+  {
+   "scenario": "wonderguard_trace",
+   "case": "base",
+   "step": 3,
+   "field": "1:0:borrowed_ability",
+   "value": [
+    "wonderguard",
+    ""
+   ]
+  },
+  {
+   "scenario": "wonderguard_trace",
+   "case": "base",
+   "step": 3,
+   "field": "1:0:original_ability",
+   "value": [
+    "",
+    "trace"
+   ]
+  },
+  {
+   "scenario": "wonderguard_trace",
+   "case": "base",
+   "step": 3,
+   "field": "1:0:shown_ability",
+   "value": [
+    "wonderguard",
+    "trace"
+   ]
+  },
+  {
+   "scenario": "wonderguard_trace",
+   "case": "base",
+   "step": 4,
+   "field": "1:0:borrowed_ability",
+   "value": [
+    "wonderguard",
+    ""
+   ]
+  },
+  {
+   "scenario": "wonderguard_trace",
+   "case": "base",
+   "step": 4,
+   "field": "1:0:original_ability",
+   "value": [
+    "",
+    "trace"
+   ]
+  },
+  {
+   "scenario": "wonderguard_trace",
+   "case": "base",
+   "step": 4,
+   "field": "1:0:shown_ability",
+   "value": [
+    "wonderguard",
+    "trace"
+   ]
+  },
+  {
+   "scenario": "wonderguard_trace",
+   "case": "base",
+   "step": "initial",
+   "field": "1:0:original_ability",
+   "value": [
+    "",
+    "trace"
    ]
   },
   {

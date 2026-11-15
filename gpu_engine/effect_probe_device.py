@@ -192,10 +192,30 @@ for _scenario, _steps in (('destinybond_pursuer', (1, 2)), ('wh_pursuit', (0,)))
     for _step in _steps:
         for _field in ('1:active:last_move', '1:active:last_damage_dealt', '1:active:damage_exact_dealt'):
             ALLOWLIST[(_scenario, 'base', _step, _field)] = _PURSUIT_FROM
+# Fidelity tier D: the same intercept in contact_pursuit (Tyranitar's Pursuit on a switching Poison Point Nidoking),
+# contact_pursuit_synchronize (Umbreon's Pursuit on a switching Static Raichu; its ability fields, the reveals that probe
+# checks, are not allowlisted) and wonderguard_trace (a Pursuit a Traced Wonder Guard blocks: no damage, so only the last move).
+for _scenario in ('contact_pursuit', 'contact_pursuit_synchronize'):
+    for _case in ('roll=0', 'roll=20'):
+        for _field in ('0:active:last_move', '0:active:last_damage_dealt', '0:active:damage_exact_dealt'):
+            ALLOWLIST[(_scenario, _case, 0, _field)] = _PURSUIT_FROM
+ALLOWLIST[('wonderguard_trace', 'base', 3, '0:active:last_move')] = _PURSUIT_FROM
+# OPEN BUG (reported to the coordinator; pre-existing, first exposed by fidelity tier D's wonderguard_trace, the first probe
+# with a Trace holder): Porygon2 traces Shedinja's Wonder Guard at entry (|-ability|p2a: Porygon2|Wonder Guard|[from]
+# ability: Trace|[of] p1a: Shedinja). B2 records the copy for the traced mon and nothing for the tracer's own Trace
+# (belief._trace_copy_source), so the tracer's original ability stays unknown; the device records 'trace' as its original.
+# After the tracer switches out, B2 keeps the copied ability as its borrowed and shown ability; the device shows its own
+# Trace again and no borrowed ability.
+_TRACE_TRACER = 'OPEN BUG: Trace at entry: B2 records nothing for the tracer and keeps the copy after it leaves; the device records Trace'
+for _step in ('initial', 0, 1, 2, 3, 4):
+    ALLOWLIST[('wonderguard_trace', 'base', _step, '1:0:original_ability')] = _TRACE_TRACER
+for _step in (3, 4):
+    for _field in ('1:0:borrowed_ability', '1:0:shown_ability'):
+        ALLOWLIST[('wonderguard_trace', 'base', _step, _field)] = _TRACE_TRACER
 # OPEN BUG (reported): a failing Counter called by Sleep Talk. Showdown prints |move|p1a: X|Counter|p2a: Y|[from] Sleep
-# Talk and B2 reveals Counter (0 PP charged); the device's called-move reveal (transition.py:1008, device_public.move(...,
+# Talk and B2 reveals Counter (0 PP charged); the device's called-move reveal (transition.py:1016, device_public.move(...,
 # acts & (move!=caller_move), pp_use=False, count_turn=False)) is gated by acts, which Counter's failure gate (transition.py:
-# 990, acts &= ~(counter kind & (taken kind differs | the called move is not the chosen one))) has already cleared.
+# 998, acts &= ~(counter kind & (taken kind differs | the called move is not the chosen one))) has already cleared.
 _SLEEP_TALK_COUNTER = 'OPEN BUG: Sleep Talk\'s failing called Counter is revealed by B2 ([from] Sleep Talk line), not by the device'
 for _step in (1, 2):ALLOWLIST[('counter_sleeptalk', 'talk=0', _step, '0:0:moves')] = _SLEEP_TALK_COUNTER
 # Fixed (history): OPEN BUG I, the upkeep's Lum and pinch-berry rules (engine_device_negative_items.upkeep), 140 entries retired.
