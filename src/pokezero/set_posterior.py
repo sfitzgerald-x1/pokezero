@@ -164,7 +164,7 @@ def posterior(lines: Sequence[str], own_request: Mapping[str, Any] | None, *, so
         rows = []
         single = sum(hard) == 1
         for strike in raw:
-            if species_key(strike['attacker']) != key:
+            if strike['attacker_key'] != key:
                 continue
             reason, counts = strike['reason'], None
             if reason is None and single:
@@ -379,6 +379,7 @@ def parse_strikes(lines: Sequence[str], owner: str) -> list[dict[str, Any]]:
         strike = dict(line=i, last=window[-1][0] if window else i, attacker=active.get(foe) or (context.attacker_species if context else ''),
                       defender=active.get(me) or (context.defender_species if context else ''), move=move, crit=crit, weather=weather,
                       pursuit=pursuit, hp_before=hp, maxhp=maxhp, observed=observed, ko=ko, eff=eff, context=context)
+        strike['attacker_key'] = species_key(strike['attacker'])   # once per strike, not once per (strike, species)
         strike['reason'] = _refusal(strike, closed=closed, called=called, hitcount=hitcount, damage=damage, substitute=substitute,
                                     endure=endure, hit_by=hit_by[foe], effects=effects, me=me, foe=foe, item_changed=item_changed)
         strikes.append(strike)
@@ -415,7 +416,7 @@ def _refusal(s, *, closed, called, hitcount, damage, substitute, endure, hit_by,
         return 'transform'
     if context.attacker_type_changed or context.defender_type_changed:
         return 'type-change'
-    if (context.attacker_item_mutated or context.defender_item_mutated or (foe, species_key(s['attacker'])) in item_changed
+    if (context.attacker_item_mutated or context.defender_item_mutated or (foe, s['attacker_key']) in item_changed
             or (me, species_key(s['defender'])) in item_changed):
         return 'item-changed'
     if context.attacker_ability_overridden or context.defender_ability_overridden:
