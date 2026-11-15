@@ -105,7 +105,19 @@ class EndToEndMaterialize(unittest.TestCase):
         from unittest.mock import patch
         import test_phase_d_batch2_facts as transport
         public, start, inputs, physical, world = transport.ProductionTransport().fixture()
-        unpack = lambda team: tuple(NS(species=part.split('|')[0], ability='', item='') for part in team.split(']'))
+        # The fixture's carry is a namespace for the rebase it patches; here the rebase is real, so the carry is a NamedTuple with
+        # the leaves _rebase writes as from_b2 builds them (uncommitted device arrays) and the fixture's own leaves alongside.
+        import dataclasses
+        from typing import NamedTuple
+        import jax.numpy as jnp
+        History = NamedTuple('History', [('hp', object), ('maximum', object)])
+        own = vars(inputs.root.public)
+        Carry = NamedTuple('Carry', [(name, object) for name in (*own, 'damage_history', 'physical_to_public', 'active_physical', 'own_order')])
+        carry = Carry(**own, damage_history=History(jnp.full((1, 2), 7, jnp.int32), jnp.full((1, 2), 9, jnp.int32)),
+                      physical_to_public=jnp.full((1, 2, 6), -1, jnp.int32), active_physical=jnp.zeros((1, 2), jnp.int32),
+                      own_order=jnp.tile(jnp.arange(6, dtype=jnp.int32), (1, 2, 1)))
+        inputs = dataclasses.replace(inputs, root=dataclasses.replace(inputs.root, public=carry))
+        unpack =lambda team: tuple(NS(species=part.split('|')[0], ability='', item='') for part in team.split(']'))
         made = {}
         for host in (False, True):
             state = jax.tree_util.tree_map(lambda x: np.array(x), physical) if host else physical
