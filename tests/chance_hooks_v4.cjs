@@ -49,6 +49,36 @@ function sourceLeft(order,tied){
   assert(b.sides.every(s=>!s.active[0].volatiles.attract));return view(b);
 }
 assert.deepEqual(sourceLeft([0,1]),sourceLeft([1,0]));assert.deepEqual(sourceLeft([0,1],true),sourceLeft([1,0]));checks++;
+// Weather chip is applied to both holders before the faint queue is drained.
+// Exercise immunity, suppression, a single KO and the double-last-mon tie.
+for(const weather of ['sandstorm','hail'])for(const scenario of ['chip','immune','suppressed','one-ko','double-ko']){
+  function weatherRun(order,tied){
+    const b=battle([mon(scenario==='immune'?'Tyranitar':'Snorlax',scenario==='suppressed'?'Cloud Nine':'Thick Fat')],[mon()]);
+    for(const s of b.sides)s.active[0].speed=100;
+    b.field.setWeather(weather,b.p1.active[0]);
+    if(scenario==='one-ko'||scenario==='double-ko')b.p1.active[0].hp=1;
+    if(scenario==='double-ko')b.p2.active[0].hp=1;
+    controlled(T(),()=>{if(tied)b.eachEvent('Weather');else for(const s of order)b.runEvent('Weather',b.sides[s].active[0]);});
+    if(tied)assert(events.some(e=>e.kind==='INERT_EACH_EVENT_TIE'&&e.event==='Weather'));
+    b.faintMessages();return {state:view(b),ended:b.ended,winner:b.winner};
+  }
+  assert.deepEqual(weatherRun([0,1]),weatherRun([1,0]));assert.deepEqual(weatherRun([0,1],true),weatherRun([1,0]));checks++;
+}
+for(const event of ['TrapPokemon','MaybeTrapPokemon'])for(const steel of [false,true]){
+  function trapRun(reverse,tied){
+    const b=battle([mon(steel?'Magneton':'Nosepass','Magnet Pull')],[mon('Nosepass','Magnet Pull')]),p=b.p1.active[0];
+    for(const s of b.sides)s.active[0].speed=100;
+    p.trapped=false;p.maybeTrapped=false;
+    controlled(T(),()=>{if(tied)b.runEvent(event,p);else{
+      const holders=reverse?[b.p2.active[0],p]:[p,b.p2.active[0]];
+      for(const holder of holders)b.singleEvent('Any'+event,holder.getAbility(),holder.abilityState,p);
+    }});
+    if(tied)assert(events.some(e=>e.kind==='INERT_MAGNET_PULL_TIE'));
+    assert.equal(event==='TrapPokemon'?!!p.trapped:!!p.maybeTrapped,steel);
+    return [p.trapped,p.maybeTrapped];
+  }
+  assert.deepEqual(trapRun(false),trapRun(true));assert.deepEqual(trapRun(false,true),trapRun(true));checks++;
+}
 // Truant is inert only in Residual; both flags really change in both orders.
 for(const reverse of [false,true]){
   const b=battle([mon('Slaking','Truant')],[mon('Slaking','Truant')]);
@@ -151,5 +181,10 @@ for(const field of ['phazing','entry_ties','resuming']){
   const t=T();t.schema='pokezero.gpu_chance_tape.v2';
   for(const key of ['phazing','entry_ties','resuming'])if(key!==field)delete t[key];
   assert.equal(require(hooks).validTape(t),false);checks++;
+}
+for(let roll=0;roll<60;roll++){
+  const b=battle([mon()],[mon('Pikachu','Static')]),t=T();t.phazing[0]=roll;
+  controlled(t,()=>b.makeChoices('move 2','move 1'));
+  assert.equal(b.p1.active[0].status,roll<20?'par':'');assert.deepEqual(coupled('static').map(e=>e.raw),[roll]);checks++;
 }
 process.stdout.write(JSON.stringify({checks})+'\n');

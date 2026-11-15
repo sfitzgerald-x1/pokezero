@@ -57,6 +57,12 @@ function install(Battle,PRNG,load,audit,initializing=()=>null,pokemonPath='') {
     if(!Array.isArray(c.effect))return unknown('EFFECT_STREAM_ABSENT',{role,side});
     return take(c,role,side,c.effect[side][column]);
   }
+  function phazingDraw(c,role,side){
+    if(c.schema!==TAPE_V4)return unknown('PHAZING_STREAM_ABSENT',{role,side});
+    const key='phazing_draw:'+side;
+    if(used.has(key))return unknown('REPEATED_ROLE',key);
+    used.add(key);return take(c,role,side,c.phazing[side]);
+  }
   // Hit index inside one multihit move (gen3 trySpreadMoveHit sets move.hit=i+1).
   const multihitIndex=b=>b.activeMove?.multihit?b.activeMove.hit:undefined;
   // Yawn's residual sleep: slp onStart with no active move, from yawn's onEnd
@@ -167,6 +173,9 @@ function install(Battle,PRNG,load,audit,initializing=()=>null,pokemonPath='') {
       audit({kind:'INERT_QUICK_CLAW_ROLL',nonce:c.nonce});return false;
     }
     if(s!==0&&s!==1)return unknown('MISSING_ACTOR',from);
+    if(effect==='static'&&n===1&&d===3&&singles(this)&&from.includes('Battle.onDamagingHit')
+      &&this.activeMove?.flags?.contact&&this.effectState?.target===this.sides[1-s].active[0])
+      return phazingDraw(c,'static',s)<20;
     if(from.includes('tryMoveHit')&&d===100)return take(c,'accuracy',s,c.draws[s][6])<n;
     if(from.includes('getDamage')&&Number.isInteger(16*n/d)){
       const hit=multihitIndex(this);
@@ -229,12 +238,11 @@ function install(Battle,PRNG,load,audit,initializing=()=>null,pokemonPath='') {
       const s=seat(this),foe=this.sides[1-s];
       if(!singles(this)||!foe||!items.length||items.length>5||items.some(p=>p.side!==foe||p.isActive||p.fainted))
         return unknown('PHAZING_CONTEXT',null);
-      if(!c.phazing)return unknown('PHAZING_STREAM_ABSENT',null);
       // Team sets retain identity when Showdown swaps side.pokemon entries.
       const original=foe.team,ordered=items.slice().sort((a,b)=>original.indexOf(a.set)-original.indexOf(b.set));
       if(ordered.some(p=>!original.includes(p.set))||new Set(ordered.map(p=>original.indexOf(p.set))).size!==items.length)
         return unknown('PHAZING_IDENTITY',null);
-      return ordered[take(c,'phazing',s,c.phazing[s])%ordered.length];
+      return ordered[phazingDraw(c,'phazing',s)%ordered.length];
     }
     if(!c){
       const from=caller();
@@ -275,7 +283,13 @@ function install(Battle,PRNG,load,audit,initializing=()=>null,pokemonPath='') {
       const group=items.slice(start,end);
       if(eachEventId&&group.every(x=>x&&x.side&&Array.isArray(x.moveSlots))
         &&group.every(x=>battle.findEventHandlers(x,eachEventId).every(h=>
-          eachEventId==='Update'&&singles(battle)&&active(battle,x)&&ownUpdate(h,x)))){
+          singles(battle)&&active(battle,x)&&(
+            (eachEventId==='Update'&&ownUpdate(h,x))||
+            // Gen3 weather chip reaches both actives before faintMessages.
+            // Only the field's own sand/hail handler is covered; any other
+            // Weather handler must acquire its own commutation proof.
+            (eachEventId==='Weather'&&['sandstorm','hail'].includes(h.effect?.id)
+              &&h.effectHolder===battle.field&&originalCallback(h,'Weather')))))){
         audit({kind:'INERT_EACH_EVENT_TIE',nonce:c?.nonce,phase:c?'turn':'initial',event:eachEventId,sides:group.map(x=>x.side.n)});return;
       }
       if(!c)return shuffle.call(battle.prng,items,start,end);
@@ -294,6 +308,13 @@ function install(Battle,PRNG,load,audit,initializing=()=>null,pokemonPath='') {
         &&group.every(h=>['choicelock','encore'].includes(h.effect?.id)&&h.effectHolder===group[0].effectHolder
           &&active(battle,h.effectHolder)&&originalCallback(h,'DisableMove'))){
         audit({kind:'INERT_DISABLE_MOVE_TIE',nonce:c.nonce});return;
+      }
+      if(singles(battle)&&['TrapPokemon','MaybeTrapPokemon'].includes(runEventId)&&group.length===2
+        &&group.every(h=>h.effect?.id==='magnetpull'&&active(battle,h.effectHolder)&&originalCallback(h,'Any'+runEventId))
+        &&group[0].effectHolder.side!==group[1].effectHolder.side){
+        // In singles the holder is not adjacent to itself; only the foe can
+        // set the target's trapped/maybeTrapped flag. Neither handler clears it.
+        audit({kind:'INERT_MAGNET_PULL_TIE',nonce:c.nonce,event:runEventId});return;
       }
       if(singles(battle)&&fieldEventId==='Residual'&&group.length===2
         &&group.every(h=>active(battle,h.effectHolder))&&group[0].effectHolder.side!==group[1].effectHolder.side){
