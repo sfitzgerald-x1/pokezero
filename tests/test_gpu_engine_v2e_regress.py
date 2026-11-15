@@ -315,6 +315,44 @@ class DigestAndRuleTests(unittest.TestCase):
                          [('state.types', 1), ('trackers.shown_types', 1)])
 
 
+class ForecastPluginTests(unittest.TestCase):
+    """FC (gpu_engine/forecast.py): the involvement predicate on synthetic pre-states (numpy only), with its controls."""
+    def test_forecast_involvement_and_controls(self):
+        from gpu_engine.v2e_regress import Pre, PLUGINS, ALLOWED, ALL, lane_verdict
+        RAIN_DANCE = len(VOCAB['moves']);ROAR = RAIN_DANCE + 1
+        FORECAST, DRIZZLE, CLOUD = 4, 5, 6
+        vocab = dict(VOCAB, moves=VOCAB['moves'] + ['raindance', 'roar'],
+                     abilities=VOCAB['abilities'] + ['forecast', 'drizzle', 'cloudnine'], species=['_none', 'castform', 'golduck'])
+        L = 10;s = pre_arrays(L);actions = np.zeros((L, 2), np.int32)
+        s['species'] = np.full((L, 2, 6), 2, np.int32);s['weather'] = np.zeros(L, np.int32)
+        cast = lambda lane, side, slot: (s['species'].__setitem__((lane, side, slot), 1), s['ability'].__setitem__((lane, side, slot), FORECAST))
+        cast(0, 0, 0);s['weather'][0] = 1                                    # lane 0: active Castform in rain
+        cast(1, 0, 0)                                                        # lane 1: active, no weather, no setter: control
+        cast(2, 1, 0);s['moves'][2, 0, 0, 0] = RAIN_DANCE                    # lane 2: the foe's Rain Dance
+        cast(3, 0, 2);s['weather'][3] = 2;actions[3, 0] = 5                  # lane 3: a switch may bring it into sun
+        cast(4, 0, 2);s['weather'][4] = 2                                    # lane 4: benched, no install: control
+        cast(5, 0, 0);s['ability'][5, 1, 3] = DRIZZLE;actions[5, 1] = 6      # lane 5: a Drizzle holder may switch in
+        cast(6, 0, 0);s['ability'][6, 1, 3] = DRIZZLE                        # lane 6: a benched Drizzle holder only: control
+        s['species'][7, 0, 0] = 1;s['weather'][7] = 1                        # lane 7: Castform without Forecast: control
+        cast(8, 0, 0);s['hp'][8, 0, 0] = 0;s['weather'][8] = 1               # lane 8: a fainted Castform: control
+        cast(9, 1, 3);s['weather'][9] = 1;s['moves'][9, 0, 0, 0] = ROAR      # lane 9: the foe's Roar may drag it in
+        s['ability'][0, 1, 0] = CLOUD
+        named = {f'state.{k}': v for k, v in s.items()};named['actions'] = actions
+        p = Pre(named, vocab, np.append(CALLABLE, [False, False]), np.zeros((L, 2), bool))
+        got = PLUGINS['FC']['forecast'](p)
+        no = [False, False]
+        self.assertEqual(got.tolist(), [[True, False], no, [False, True], [True, False], no, [True, False], no, no, no,
+                                        [False, True]])
+        self.assertIs(ALLOWED['forecast'], ALL)
+        # Negative controls: a changed lane-step the plug-in does not cover stays unexpected; covered, anything goes.
+        changed = {('state.types', 0), ('trackers.shown_types', 0), ('state.hp', 1)}
+        self.assertEqual(lane_verdict(changed, {}, None)[0], sorted(changed))
+        self.assertEqual(lane_verdict(changed, {'forecast': [0]}, None)[0], [])
+        # A vocabulary without Castform involves nothing.
+        bare = Pre(named, dict(vocab, species=['_none', 'golduck']), np.append(CALLABLE, [False, False]), np.zeros((L, 2), bool))
+        self.assertFalse(PLUGINS['FC']['forecast'](bare).any())
+
+
 @unittest.skipUnless(HAS_JAX, 'requires JAX')
 class TwoPassTests(unittest.TestCase):
     """base -> patched end to end on three synthetic shards, without a V2 runtime."""
