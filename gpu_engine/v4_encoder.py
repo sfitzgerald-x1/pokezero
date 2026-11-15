@@ -33,6 +33,11 @@ from . import private_self_moves
 
 SCHEMA='pokezero.protocol_v4_encoder.v1'
 PENDING_NUMERIC_COLUMNS=()
+# Mask keys a checkpoint's resolved mask dict may omit (absent resolves False), and the subset that changes encode() only,
+# never the fold, so it stays out of the fold-state binding. A future fold-changing V2 mask (e.g. set-posterior narrowing)
+# is OPTIONAL but NOT encode-only: it must join the binding.
+OPTIONAL_KEYS=frozenset({'self_moves'})
+ENCODE_ONLY=frozenset({'self_moves'})
 
 
 @dataclass(frozen=True)
@@ -45,15 +50,15 @@ class Masks:
     tier2_investment: bool
     tier2_residuals: bool
     transition_token_budget: int
-    # V2 (private_self_moves): own moves and PP on the self tokens. The one optional key: absent
-    # resolves False (every checkpoint predating it), and OBS_SELF_MOVES=on|off overrides it
-    # (pokezero.observation.resolve_self_moves, as for the Python encoder's masks).
+    # V2 (private_self_moves): own moves and PP on the self tokens. An OPTIONAL key: present, it is the
+    # declaration and wins; absent (every checkpoint predating it) it resolves False unless the OBS_SELF_MOVES
+    # measurement override says on (pokezero.observation.resolve_self_moves, as for the Python masks).
     self_moves: bool = False
 
     @classmethod
     def from_checkpoint(cls,values):
         from pokezero.observation import resolve_self_moves
-        required=set(cls.__dataclass_fields__)-{'self_moves'}
+        required=set(cls.__dataclass_fields__)-OPTIONAL_KEYS
         if not isinstance(values,dict) or not required<=set(values)<=set(cls.__dataclass_fields__):
             raise ValueError('all resolved champion mask fields required, without defaults')
         for key,value in values.items():
@@ -62,7 +67,7 @@ class Masks:
             elif type(value) is not bool:raise ValueError('resolved checkpoint masks must be booleans')
         if values['investment_belief_narrowing']:
             raise ValueError('investment evidence producer is not installed in this encoder')
-        return cls(**{**values,'self_moves':resolve_self_moves(values.get('self_moves',False))})
+        return cls(**{**values,'self_moves':resolve_self_moves(values.get('self_moves'))})
 
 
 @dataclass(frozen=True, eq=False)
@@ -359,7 +364,7 @@ def compile_encoder(source,dex,vocabulary,*,checkpoint_sha256,feature_masks):
     self_moves=private_self_moves.compile_self_moves(moves,features,vocabulary) if masks.self_moves else None
     # self_moves changes encode() only, never the fold: it stays out of the fold-state binding,
     # so one fold serves both settings and the off binding is the one every caller has today.
-    bindings=dict(checkpoint=checkpoint_sha256,masks={k:v for k,v in feature_masks.items() if k!='self_moves'},schema=SCHEMA,
+    bindings=dict(checkpoint=checkpoint_sha256,masks={k:v for k,v in feature_masks.items() if k not in ENCODE_ONLY},schema=SCHEMA,
         context=np.asarray(context.binding).tolist(),features=np.asarray(features.binding).tolist(),
         expected=np.asarray(expected.device.binding).tolist(),hazard=np.asarray(hazard.device.binding).tolist(),
         actions=np.asarray(actions.device.binding).tolist(),substitute=np.asarray(substitute.binding).tolist(),
@@ -391,7 +396,7 @@ class OwnFacts(NamedTuple):
     hazard: object
     exact_abilities: object
     binding: object
-    self_moves: object = None   # private_self_moves.OwnMoves under masks.self_moves, else None (no pytree leaves)
+    self_moves: object = None   # private_self_moves.OwnMoves when parsed with own_lines under masks.self_moves, else None
 
 
 class Encoded(NamedTuple):
@@ -425,9 +430,14 @@ def initialize(catalog,*,stream_ids,owner_sides=None):
     return State(cursor,beliefs,mons,context,jnp.broadcast_to(catalog.binding,(b,8)))
 
 
-def parse_own_requests(catalog,requests,*,owner_sides):
-    """Read only the supplied owning packets, never the opponent request."""
+def parse_own_requests(catalog,requests,*,owner_sides,own_lines=None):
+    """Read only the supplied owning packets, never the opponent request.
+
+    own_lines (V2 self_moves): per request, the owner's protocol history up to and including it (pokezero.own_moves);
+    parsed into OwnFacts.self_moves only under masks.self_moves. Without it the facts carry no own moves, and encode()
+    refuses an on catalog rather than guess."""
     if len(requests)!=len(owner_sides) or not requests:raise ValueError('matching nonempty request/owner rows required')
+    if own_lines is not None and len(own_lines)!=len(requests):raise ValueError('one own line history per request required')
     rows=[]
     for request,owner in zip(requests,owner_sides):
         if type(owner) is not int or owner not in (0,1):raise ValueError('absolute owning side required')
@@ -438,8 +448,8 @@ def parse_own_requests(catalog,requests,*,owner_sides):
             public_hazard_exposure.parse_own_hazard(request,owner_side=owner,catalog=catalog.hazard,vocabulary=catalog.vocabulary),
             public_exact.parse_own_abilities(request,owner_side=owner,catalog=catalog.exact,vocabulary=catalog.vocabulary),
             catalog.binding,
-            None if catalog.self_moves is None else
-                private_self_moves.parse_own_moves(request,owner_side=owner,catalog=catalog.self_moves)))
+            None if catalog.self_moves is None or own_lines is None else
+                private_self_moves.parse_own_moves(request,owner_side=owner,catalog=catalog.self_moves,lines=own_lines[len(rows)])))
     return jax.tree.map(lambda *values:jnp.stack(values),*rows)
 
 
@@ -579,11 +589,11 @@ def encode(state,own,catalog,*,observer_sides):
     result=v4_assembly.overlay(result,exact.own,section='own')
     result=v4_assembly.overlay(result,exact.opponent,section='opponent')
     if catalog.masks.self_moves:
-        # V2 self_moves (static: the off trace is unchanged). Own moves from the request, PP from
-        # the owner's own public ledger in the fold (private_self_moves).
+        # V2 self_moves (static: the off trace is unchanged). The owner's real moves and exact PP,
+        # parsed on host from its protocol history (private_self_moves, pokezero.own_moves).
         if catalog.self_moves is None or own.self_moves is None:
-            raise ValueError('self_moves requires the self-move catalog and own request move facts')
-        result=v4_assembly.overlay(result,private_self_moves.project(own.self_moves,context.moves,mons,own.status,
+            raise ValueError('self_moves requires the self-move catalog and own move facts (parse_own_requests own_lines)')
+        result=v4_assembly.overlay(result,private_self_moves.project(own.self_moves,mons,own.status,
             catalog.self_moves.device,observer_side=observer,exact_state=catalog.masks.exact_state),section='own')
     result=v4_assembly.overlay(result,public_damage.project_credits(context.damage,tables.damage,mons,
         observer_side=observer,expected_vocabulary=catalog.species.device.vocabulary_binding),section='field')

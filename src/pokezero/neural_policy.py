@@ -3023,8 +3023,9 @@ def feature_masks_from_model_config(config: TransformerPolicyConfig) -> Observat
             getattr(config, "investment_belief_narrowing", False)
         ),
         item_belief_narrowing=bool(getattr(config, "item_belief_narrowing", False)),
-        # OBS_SELF_MOVES (observation.SELF_MOVES_ENV) overrides this in the masks' __post_init__.
-        self_moves=bool(getattr(config, "self_moves", False)),
+        # A config that declares self_moves (True) is explicit; one that does not (False, the absent key) leaves the
+        # mask undeclared, which only the OBS_SELF_MOVES measurement override can turn on (observation.resolve_self_moves).
+        self_moves=True if getattr(config, "self_moves", False) else None,
     )
 
 

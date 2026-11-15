@@ -401,12 +401,12 @@ class ObservationFeatureMasks:
     feature_pack_last_move: bool = True
     investment_belief_narrowing: bool = False
     item_belief_narrowing: bool = False
-    self_moves: bool = False
+    # None = not declared (the dataclass default, a checkpoint predating the switch): resolved at
+    # construction from the OBS_SELF_MOVES measurement override, else False. An explicit bool is a
+    # declaration and always wins. After construction the field is a plain bool.
+    self_moves: bool | None = None
 
     def __post_init__(self) -> None:
-        # OBS_SELF_MOVES=on|off (unset/empty: no override) forces ``self_moves`` for every
-        # mask built in this process: the measurement switch for encoding an existing
-        # checkpoint with our own moves visible. See resolve_self_moves.
         resolved = resolve_self_moves(self.self_moves)
         if resolved is not self.self_moves:
             object.__setattr__(self, "self_moves", resolved)
@@ -424,26 +424,46 @@ class ObservationFeatureMasks:
 SELF_MOVES_ENV = "OBS_SELF_MOVES"
 
 
-def resolve_self_moves(declared: bool) -> bool:
-    """The ``self_moves`` mask for a declared value under the ``OBS_SELF_MOVES`` override.
+def resolve_self_moves(declared: bool | None) -> bool:
+    """The ``self_moves`` mask: a declaration (True/False) wins; an absent one (None) reads ``OBS_SELF_MOVES``.
 
-    Unset or empty: the declared value. ``on`` / ``off``: forced on / off, for measurement runs
-    that encode an existing checkpoint (e.g. the champion) with our own moves and PP visible.
-    Any other value raises: a typo must never silently encode with the default. Read by both
-    mask types, ``ObservationFeatureMasks`` (the Python encoder) and
-    ``gpu_engine.v4_encoder.Masks`` (B2), so one process encodes both paths the same way.
+    ``OBS_SELF_MOVES`` is a MEASUREMENT override for encoding a checkpoint that does not declare the switch (e.g. the
+    champion) with our own moves visible: ``on`` / ``off``, unset or empty = False. Any other value raises: a typo must
+    never silently encode with the default. Read by both mask types, ``ObservationFeatureMasks`` (the Python encoder)
+    and ``gpu_engine.v4_encoder.Masks`` (B2), so one process resolves both paths the same way. Serving entry points
+    additionally refuse a set override that contradicts their checkpoint (``require_declared_self_moves``).
     """
     import os
 
+    if declared is not None:
+        return bool(declared)
     value = os.environ.get(SELF_MOVES_ENV, "")
     if value == "":
-        return bool(declared)
+        return False
     if value not in ("on", "off"):
         raise ValueError(f"{SELF_MOVES_ENV} must be 'on' or 'off', got {value!r}")
     return value == "on"
 
 
-DEFAULT_OBSERVATION_FEATURE_MASKS = ObservationFeatureMasks()
+def require_declared_self_moves(declared: bool, *, context: str) -> None:
+    """Serving entry points: refuse an ``OBS_SELF_MOVES`` override that differs from the checkpoint's declared value.
+
+    The override exists for measurement tools that deliberately encode a checkpoint with or without our own moves. A
+    serving process (the live actor, the search server) must encode exactly what its checkpoint was trained on, so a
+    stray environment variable must stop it at startup instead of silently changing every encode.
+    """
+    import os
+
+    value = os.environ.get(SELF_MOVES_ENV, "")
+    if value != "" and resolve_self_moves(None) != bool(declared):
+        raise ValueError(
+            f"{context}: {SELF_MOVES_ENV}={value!r} overrides the checkpoint's self_moves={bool(declared)}; "
+            "serving refuses an observation override (measurement tools only)"
+        )
+
+
+# Declared off: the import-time default never reads the environment.
+DEFAULT_OBSERVATION_FEATURE_MASKS = ObservationFeatureMasks(self_moves=False)
 
 
 @dataclass(frozen=True)

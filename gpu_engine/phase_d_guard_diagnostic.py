@@ -74,6 +74,7 @@ def scan(adapter,request,public,source,metadata,*,lines,checks=None):
     hooks=w.hooks
     c=payload_checks(request,public.materialization_payload,lines,owner=public.address.owner,checks=checks)
     owner=public.address.owner;foe=1-owner;catalog=adapter.catalog;state=adapter.state
+    adapter.own_lines=lines   # V2 self_moves: B2's own moves/PP read the root's literal history
     from .phase_d_tail import inspect_facts,facts
     _,tail=inspect_facts(request,public.materialization_payload,lines)
     replacement=tail['replacement'] is not None

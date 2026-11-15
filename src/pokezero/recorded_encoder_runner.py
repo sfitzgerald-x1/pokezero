@@ -87,6 +87,9 @@ class JaxRecordedAdapter:
                 or not isinstance(battle_id,str) or not battle_id.strip() or battle_id in self.registered.values()):
             raise ValueError('fresh unique stream/battle registration required')
         self.stream_ids=np.array([stream_id],np.int32);self.battle_id=battle_id
+        # V2 self_moves: the owner's protocol history (fed lines plus the requests it encodes, in order) and an explicit
+        # override a caller with the literal history sets (own_lines); both read only under masks.self_moves.
+        self._own_log=[];self._own_requests=[];self.own_lines=None
         owners=None if self.owner_side is None else np.array([self.owner_side],np.int32)
         self.state=self.encoder.initialize(self.catalog,stream_ids=self.jax.numpy.asarray(self.stream_ids),owner_sides=owners)
         self.host=public_wire.WireState();self.bindings=None;self.registered[stream_id]=battle_id
@@ -116,12 +119,23 @@ class JaxRecordedAdapter:
             if np.any(np.asarray(error)!=0):raise ValueError('JAX public fold refused boundary')
         # A late host/device failure leaves both previous public cursors intact.
         self.state,self.host,self.bindings=state,host,bindings
+        if getattr(self.catalog,'self_moves',None) is not None:self._own_log.extend(lines)
+
+    def own_history(self,request):
+        """V2 self_moves: the owner's protocol history up to and including `request`: the caller's literal own_lines when
+        set (the protocol constructor sets its request lines), else this adapter's log of fed lines and encoded requests.
+        The log is exact when every own move request is encoded in order (the recorded and live actor flows)."""
+        if self.own_lines is not None:return tuple(self.own_lines)
+        if not (self._own_requests and self._own_requests[-1]==request):
+            self._own_log.append('|request|'+json.dumps(request,separators=(',',':')));self._own_requests.append(request)
+        return tuple(self._own_log)
 
     def encode(self,request,*,owner_side):
         self._check_compiled_functions()
         if self.owner_side is not None and owner_side != self.owner_side:
             raise ValueError('request owner differs from owning stream')
-        own=self.encoder.parse_own_requests(self.catalog,[request],owner_sides=[owner_side])
+        own_lines=None if getattr(self.catalog,'self_moves',None) is None else [self.own_history(request)]
+        own=self.encoder.parse_own_requests(self.catalog,[request],owner_sides=[owner_side],own_lines=own_lines)
         out=self.encode_step(self.state,own,self.jax.numpy.array([owner_side],self.jax.numpy.int32))
         observation=out.observation
         valid=bool(np.asarray(observation.admitted).all()) and not np.asarray(out.pending_numeric_columns).size

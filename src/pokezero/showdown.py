@@ -1932,6 +1932,10 @@ class PlayerRelativeBattleState:
     opponent_matchup_switch_evidence: Mapping[str, tuple[int, int]] = field(
         default_factory=dict
     )
+    # V2 self_moves: our own Pokemon's real movesets and exact PP (pokezero.own_moves.OwnMoveState per own request
+    # row), attached by the env from the owner's protocol history when its masks have self_moves; None otherwise. Read
+    # only by the encoder's self_moves branch, which refuses a state without them rather than guess.
+    self_move_states: tuple | None = None
 
     @property
     def self_active(self) -> ShowdownPokemon | None:
@@ -4626,6 +4630,7 @@ def observation_from_player_state(
         active_last_damage_taken=state.self_last_damage_taken,
         dex=dex,
         exact_beliefs_by_species=self_exact_beliefs,
+        self_move_states=state.self_move_states,
         masks=feature_masks,
         schema_v2_1=schema_v2_1,
         schema_v3=schema_v3,
@@ -6564,6 +6569,8 @@ def _encode_pokemon_tokens(
     # Per-opponent-mon (switched, stayed) against OUR current active; opponent
     # tokens only, and empty under every schema below v4.
     matchup_switch_evidence: Mapping[str, tuple[int, int]] | None = None,
+    # V2 self_moves: PlayerRelativeBattleState.self_move_states (self tokens only).
+    self_move_states: tuple | None = None,
 ) -> None:
     # Spec v3 change 7: reuse the determinization gender parser (single source of truth for the
     # ``, M`` / ``, F`` details convention). Imported lazily to avoid a module-load cycle
@@ -6609,15 +6616,16 @@ def _encode_pokemon_tokens(
             possible_abilities = (revealed_ability,) if revealed_ability else ()
             possible_items = (revealed_item,) if revealed_item else ()
             item_removed = False
-        # V2 self_moves (ObservationFeatureMasks.self_moves, default off = byte-identical): our
-        # own moves are request-known, so they are written exactly as a FULLY revealed opponent
-        # mon's are: the request's moves are both the revealed and the possible set (sorted,
-        # deduplicated labels in the move buckets; both counts = the number of own moves), and
-        # the PP block below writes every one of them as certain. Every own mon, bench and
-        # active, fainted included (the request lists them all).
+        # V2 self_moves (ObservationFeatureMasks.self_moves, default off = byte-identical): our own moves are known,
+        # so they are written exactly as a FULLY revealed opponent mon's are: the REAL moveset (never Transform's
+        # copies) is both the revealed and the possible set (sorted labels in the move buckets; both counts = the
+        # number of own moves), and the PP block below writes the exact PP (pokezero.own_moves). Every own mon,
+        # bench and active, fainted included (the request lists them all).
         self_moves = role == "self" and bool(getattr(masks, "self_moves", False))
+        own_move_state = None
         if self_moves:
-            revealed_moves = _compact_belief_values(tuple(_self_move_id(move) for move in candidate.moves))
+            own_move_state = _self_move_state(self_move_states, candidate)
+            revealed_moves = _compact_belief_values(own_move_state.moves)
             possible_moves = revealed_moves
         ability_feature_values = _known_or_possible_values(revealed_ability, possible_abilities)
         item_feature_values = _known_or_possible_values(revealed_item, possible_items)
@@ -6807,7 +6815,7 @@ def _encode_pokemon_tokens(
             if self_moves:
                 _encode_self_move_pp_fractions(
                     numeric_features[token_index],
-                    exact,
+                    own_move_state,
                     bucket_moves,
                     dex=dex,
                     write_validity=schema_v2_1,
@@ -6962,56 +6970,42 @@ def _opponent_rest_wake_known(exact: RevealedPokemonBelief) -> bool:
     return "earlybird" not in candidates
 
 
-def _self_move_id(move: str) -> str:
-    """One of our own request moves as the move it names (its belief:possible_move label).
-
-    Showdown's getSwitchRequestData spells Return and Frustration with their resolved power
-    (``return102``) and, from gen 6, Hidden Power with its power; the trailing digits are stripped
-    for exactly those three prefixes (``tier2.canonical_move_id``'s rule, so ``conversion2`` keeps
-    its digit). Hidden Power keeps its type (``hiddenpowerfire``), the typed id the set source's
-    possible-move labels use.
-    """
-    key = _normalize_identifier(move)
-    for prefix in ("return", "frustration", "hiddenpower"):
-        if key.startswith(prefix):
-            return key.rstrip("0123456789") or key
-    return key
-
-
-def _self_move_ledger_key(move: str) -> str:
-    """The PP-ledger key of one of our own request moves.
-
-    The request names Hidden Power by its type (``hiddenpowerfire``: Showdown's
-    getSwitchRequestData, gen < 6 without the power suffix), while the ledger counts the
-    protocol's ``|move|...|Hidden Power|`` line under the generic ``hiddenpower`` id.
-    """
-    key = _normalize_identifier(move)
-    return "hiddenpower" if key.startswith("hiddenpower") else key
+def _self_move_state(states: tuple | None, candidate: ShowdownPokemon):
+    """The pokezero.own_moves.OwnMoveState of one own request row, joined by identity; refuses rather than guess."""
+    if states is None:
+        raise ValueError(
+            "self_moves requires the owner's move states (PlayerRelativeBattleState.self_move_states, "
+            "pokezero.own_moves.own_move_states over the owner's protocol history)"
+        )
+    identity = str(candidate.ident).split(":", 1)[-1].strip().casefold()
+    for state in states:
+        if state.ident == identity:
+            return state
+    raise ValueError(f"self_moves: no own move state for {candidate.ident!r}")
 
 
 def _encode_self_move_pp_fractions(
     num_row: list[float],
-    exact: RevealedPokemonBelief | None,
+    state,
     bucket_moves: Sequence[str],
     *,
     dex: "ShowdownDex | None",
     write_validity: bool = False,
 ) -> None:
-    """V2 self_moves: remaining-PP fraction and validity for EVERY one of our own moves.
+    """V2 self_moves: the exact remaining-PP fraction and its validity for each of our own moves.
 
-    The opponent writer's twin (``_encode_opponent_move_pp_fractions``) with our own moves as
-    the revealed set: every bucket move is certain, so its validity bit is 1.0 (v2.1+ specs),
-    and its fraction is (catalog max PP - ledger uses) / max PP. ``exact.move_uses`` is the
-    belief engine's PP ledger for our mon: the opponent ledger's charging rules (Pressure
-    doubles only against a foe whose Pressure is public to us, Sleep Talk's callee and
-    Struggle uncharged, transformed use not charged to the real set). A mon with no ledger
-    entry (never sent out) has used nothing. The request's own PP is not read: it covers the
-    active mon only, and active and bench follow one rule.
+    The opponent writer's twin (``_encode_opponent_move_pp_fractions``) with our own moves as the revealed set. ``state``
+    is the mon's pokezero.own_moves.OwnMoveState: when its PP is exact (the latest exact request snapshot plus the public
+    charges since, own_pp_carry's rule), every bucket move gets the validity bit 1.0 (v2.1+ specs) and the fraction
+    remaining / catalog max PP; when the history cannot state it (``pp is None``: Spite, Grudge, Leppa Berry, an unknown
+    called-move cost, ...), validity and fraction stay 0.0 and the moves remain certain.
     """
-    uses_by_move = {key: uses for key, uses in exact.move_uses} if exact is not None else {}
+    if state.pp is None:
+        return
+    remaining = {_normalize_identifier(move): pp for move, pp in zip(state.moves, state.pp)}
     for index, move in enumerate(bucket_moves[:BELIEF_MOVE_BUCKET_COUNT]):
         key = _normalize_identifier(move)
-        if not key:
+        if key not in remaining:
             continue
         if write_validity:
             _set_numeric(num_row, NUMERIC_OPP_MOVE_PP_VALID_OFFSET + index, 1.0)
@@ -7019,8 +7013,7 @@ def _encode_self_move_pp_fractions(
         max_pp = info.max_pp if info is not None else 0
         if max_pp <= 0:
             continue
-        remaining = max(0, max_pp - int(uses_by_move.get(_self_move_ledger_key(key), 0)))
-        _set_numeric(num_row, NUMERIC_OPP_MOVE_PP_OFFSET + index, remaining / float(max_pp))
+        _set_numeric(num_row, NUMERIC_OPP_MOVE_PP_OFFSET + index, min(1.0, max(0, remaining[key]) / float(max_pp)))
 
 
 def _encode_opponent_move_pp_fractions(

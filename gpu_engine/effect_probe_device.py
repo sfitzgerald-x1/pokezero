@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from pathlib import Path
 import re
 
@@ -330,8 +331,10 @@ def compile_b2(set_lists, showdown_root):
             labels |= {'belief:possible_move:' + normalize_id(m) for m in v.moves if m}
             if v.ability:labels |= {'ability:' + normalize_id(v.ability), 'belief:possible_ability:' + normalize_id(v.ability)}
             if v.item:labels |= {'item:' + normalize_id(v.item), 'belief:possible_item:' + normalize_id(v.item)}
+    # The champion's masks, self_moves declared off: the probe compares the public carry, never an override's encode.
+    if os.environ.get('OBS_SELF_MOVES', ''):raise ValueError('the device probe runs with self_moves declared off: unset OBS_SELF_MOVES')
     catalog = v4_encoder.compile_encoder(public_belief.compile_source(source), dex, CategoryVocabulary(tuple(sorted(labels))),
-        checkpoint_sha256=CHAMPION_CONTRACT['checkpoint_sha256'], feature_masks=dict(CHAMPION_CONTRACT['feature_masks']))
+        checkpoint_sha256=CHAMPION_CONTRACT['checkpoint_sha256'], feature_masks=dict(CHAMPION_CONTRACT['feature_masks'], self_moves=False))
     return catalog
 
 
