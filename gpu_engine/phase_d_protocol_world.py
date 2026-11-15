@@ -41,7 +41,9 @@ def _device(state):
 
 def _device_carry(carry):
     """_rebase_host's carry with exactly the leaves _rebase writes made device arrays, as _rebase's scatters made them; every
-    other leaf is the root's own, unchanged."""
+    other leaf is the root's own, unchanged. Equal placement holds because the protocol route's root carry is uncommitted
+    (from_b2 builds it with j.asarray/j.zeros and eager scatters): a scatter keeps an uncommitted input on the default device,
+    exactly where j.asarray puts the converted leaf. A committed root carry would need its device passed here."""
     history=carry.damage_history
     if history is not None:history=history._replace(hp=j.asarray(history.hp),maximum=j.asarray(history.maximum))
     return carry._replace(damage_history=history,physical_to_public=j.asarray(carry.physical_to_public),
@@ -414,7 +416,8 @@ def _downstream_unknowns(diagnostics,reason):
 
 def _host_arrays(seed,key):
     """empty_state(1, seed=seed) on the host: the cached constant template and this seed's key (world_keys, computed for all of
-    a root's worlds in one call by sample())."""
+    a root's worlds in one call by sample()). The seed is checked as empty_state checks it, so a bad seed refuses the same way."""
+    if type(seed) is not int or not 0<=seed<2**32:raise ValueError('seed must be an unsigned 32-bit integer')
     arrays=states._empty_arrays()
     if key is None:key=states.world_keys([seed])[0]
     arrays['keys']=np.array(key,np.uint32).reshape(arrays['keys'].shape)

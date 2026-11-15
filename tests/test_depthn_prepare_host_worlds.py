@@ -1,5 +1,7 @@
-"""Host-built protocol worlds (phase_d_protocol_world.HOST_WORLDS): each host (NumPy) step equals the eager device build byte for
-byte (values, dtypes, shapes), so a world that differs fails here. The full-root parity runs pod-side on replayed screen roots."""
+"""Host-built protocol worlds (phase_d_protocol_world.HOST_WORLDS): each host (NumPy) step, and a whole materialize_protocol on
+the batch-2 transport fixture, equals the eager device build byte for byte (values, dtypes, shapes, leaf types, weak_type,
+committed), so a world that differs fails here. Named test_depthn_* so the depthn-light CI job runs it; the full-root parity
+runs pod-side on replayed screen roots."""
 import unittest
 
 import numpy as np
@@ -20,6 +22,10 @@ def assert_same(test, device, host, label=''):
 
 
 class HostTemplate(unittest.TestCase):
+    def test_a_bad_seed_refuses_as_empty_state_does(self):
+        for seed in (-1, 2**32, 1.5, np.uint32(3)):
+            with self.subTest(seed=seed), self.assertRaisesRegex(ValueError, 'unsigned 32-bit'):protocol._host_arrays(seed, None)
+
     def test_host_arrays_equal_empty_state_for_every_seed_and_batched_key(self):
         keys = states.world_keys(list(SEEDS))
         for seed, key in zip(SEEDS, keys):
@@ -69,7 +75,57 @@ class HostMapping(unittest.TestCase):
             device = mapping.map_spec(spec, seed=seed, **args).state;host = mapping.map_spec(spec, seed=seed, arrays=protocol._host_arrays(seed, None), **args).state
             a = tail.restore(device, spec, (0, 0), facts, metadata=metadata, checks=[]);b = tail.restore(host, spec, (0, 0), facts, metadata=metadata, checks=[])
             assert_same(self, a, b, f'seed {seed} ')
-            self.assertEqual(int(np.asarray(b.substitute_hp)[0, 1, 0]), 50)   # max HP 200 // 4;self.assertEqual(int(np.asarray(b.wish_counter)[0, 0]), 1)
+            self.assertEqual(int(np.asarray(b.substitute_hp)[0, 1, 0]), 50)   # max HP 200 // 4
+            self.assertEqual(int(np.asarray(b.wish_counter)[0, 0]), 1)
+
+
+class HostRestoreReplacement(unittest.TestCase):
+    def test_a_fainted_cursors_last_move_choice_lock_and_struggle_restore_alike(self):
+        from dataclasses import replace
+        spec, metadata = mapping_tests.TypedMappingTests().fixture()
+        args = dict(metadata=metadata, turn=7, active_turns=(2, 4), happiness=((7,), (255,)))
+        facts = dict(replacement=dict(pending_residual=False, queued_actor=-1, turn=6, ages=(1, 2)), fresh_substitutes={},
+                     substitute_origins={}, wish_set_turns={}, turn=7)
+        for last, item in (('move:1', 'choiceband'), ('move:struggle', None), ('switch:0', None)):
+            fainted = replace(spec.side_one, pokemon=(replace(spec.side_one.pokemon[0], hp=0, item=item),), last_used_move=last)
+            original = replace(spec, side_one=fainted)
+            device = mapping.map_spec(spec, seed=4, **args).state;host = mapping.map_spec(spec, seed=4, arrays=protocol._host_arrays(4, None), **args).state
+            a = tail.restore(device, original, (0, 0), facts, metadata=metadata, checks=[]);b = tail.restore(host, original, (0, 0), facts, metadata=metadata, checks=[])
+            with self.subTest(last=last):assert_same(self, a, b, f'{last} ')
+        self.assertEqual(int(np.asarray(b.last_action_kind)[0, 0]), 1)
+
+
+class EndToEndMaterialize(unittest.TestCase):
+    """materialize_protocol on the batch-2 production-transport fixture (own update, foe carry, sleep restore, held counts,
+    rebase and transfer all real; only the bridge, the start unpacker and the revealed posterior are patched), host versus
+    device: the world's state and public carry leaf for leaf."""
+    def test_host_and_device_worlds_are_identical_leaf_for_leaf(self):
+        import jax
+        from types import SimpleNamespace as NS
+        from unittest.mock import patch
+        import test_phase_d_batch2_facts as transport
+        public, start, inputs, physical, world = transport.ProductionTransport().fixture()
+        unpack = lambda team: tuple(NS(species=part.split('|')[0], ability='', item='') for part in team.split(']'))
+        made = {}
+        for host in (False, True):
+            state = jax.tree_util.tree_map(lambda x: np.array(x), physical) if host else physical
+            with patch.object(protocol, 'HOST_WORLDS', host), patch.object(protocol, 'battle_spec_from_payload', return_value=world), \
+                    patch.object(protocol, 'map_spec', return_value=NS(state=state)), patch.object(protocol, 'unpack_team', side_effect=unpack), \
+                    patch.object(protocol.public_worlds, '_revealed', return_value=()):
+                made[host] = protocol.materialize_protocol(public, start, inputs=inputs, seed=17)
+        a, b = made[False], made[True]
+        self.assertIsNotNone(a.state, a.refusals);self.assertEqual(a.refusals, b.refusals)
+        for label, x, y in (('state', a.state, b.state), ('public', a.public, b.public)):
+            xs, ys = jax.tree_util.tree_flatten_with_path(x)[0], jax.tree_util.tree_flatten_with_path(y)[0]
+            self.assertEqual([jax.tree_util.keystr(p) for p, _ in xs], [jax.tree_util.keystr(p) for p, _ in ys])
+            for (path, u), (_, v) in zip(xs, ys):
+                name = label + jax.tree_util.keystr(path)
+                self.assertEqual(type(u), type(v), name)
+                self.assertEqual((getattr(u, 'weak_type', None), getattr(u, 'committed', None)), (getattr(v, 'weak_type', None), getattr(v, 'committed', None)), name)
+                if hasattr(u, 'dtype'):
+                    p, q = np.asarray(u), np.asarray(v)
+                    self.assertEqual((p.dtype, p.shape, p.tobytes()), (q.dtype, q.shape, q.tobytes()), name)
+                else:self.assertEqual(u, v, name)
 
 
 class DeviceTransfer(unittest.TestCase):
