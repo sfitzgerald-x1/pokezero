@@ -293,6 +293,11 @@ class DigestAndRuleTests(unittest.TestCase):
         # Without move rows every move counts (a superset): lane 5's Blaze active and lane 9's Spore user count.
         q = Pre(named, vocab, callable_, np.zeros((L, 2), bool))
         self.assertTrue(d['pinch'](q)[5, 1] and d['contact_status'](q)[9, 1])
+        # A pre-state without hidden_power_type resolves Hidden Power to any type (a superset), not Dark.
+        r = Pre({k: v for k, v in named.items() if k != 'state.hidden_power_type'}, vocab, callable_, np.zeros((L, 2), bool), moves=rows)
+        self.assertTrue(d['pinch'](r)[8, 1])
+        s['hidden_power_type'][8, 1, 0] = 3                                # present: HP Dark, which Blaze does not boost
+        self.assertFalse(d['pinch'](Pre(named, vocab, callable_, np.zeros((L, 2), bool), moves=rows))[8, 1])
         self.assertTrue(all(e in ALLOWED for e in d))
 
     def test_tier_d_pinch_accepts_anything_only_on_a_ko_cascade(self):
@@ -303,6 +308,9 @@ class DigestAndRuleTests(unittest.TestCase):
         changed = {('state.status', 0), ('state.pp', 1), ('state.spikes', 0), ('trackers.tendency.moved', 1), ('state.baton_pass', 1)}
         cascade = dict(ko_sides=[False, False], mon_ok=lambda leaf, side: False, families=())
         self.assertEqual(lane_verdict(changed, {'pinch': [0]}, None, cascade=cascade)[0], [])
+        # The entries only CASCADE_ALLOWED accepted are collected for the listing (cascade_allowed), so they stay visible.
+        accepted = [];lane_verdict(changed | {('state.hp', 1)}, {'pinch': [0]}, None, cascade=cascade, cascade_accepted=accepted)
+        self.assertEqual(sorted(accepted), sorted(changed))
         self.assertEqual(lane_verdict(changed, {'pinch': [0]}, None)[0], sorted(changed, key=lambda x: (x[0], x[1])))
         # Inside the damage allowance a non-cascade pinch lane is accepted as before.
         self.assertEqual(lane_verdict({('state.hp', 1), ('state.hp', 0)}, {'pinch': [0]}, None)[0], [])

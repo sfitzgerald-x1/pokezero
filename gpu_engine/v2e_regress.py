@@ -590,9 +590,10 @@ def pinch_active(p):
     entry step."""
     _, _, mtype, hidden = p.move_facts()
     types = p.vocab['types'];out = np.zeros((p.lanes, 2), bool)
-    hp_type = p.active('hidden_power_type') if 'hidden_power_type' in p.s else np.zeros((p.lanes, 2), int)
     dark = types.index('dark') if 'dark' in types else -1
-    hp_type = np.where(hp_type > 0, hp_type, dark)                                     # variable_moves.resolve's default
+    if 'hidden_power_type' in p.s:                                                     # 0: variable_moves.resolve's Dark
+        hp_type = np.where(p.active('hidden_power_type') > 0, p.active('hidden_power_type'), dark)
+    else:hp_type = np.full((p.lanes, 2), -1)                                           # not in the pre-state: any type
     c = p.candidates;cc = np.clip(c, 0, len(mtype) - 1)
     resolved = np.where(hidden[cc], hp_type[..., None], mtype[cc])                      # [L,2,K]
     for ability, name in PINCH_TYPE_NAMES.items():
@@ -938,7 +939,7 @@ def predicates(prs):
     return table
 
 
-def lane_verdict(changed, effects, side_axis, *, cascade=None, waive=()):
+def lane_verdict(changed, effects, side_axis, *, cascade=None, waive=(), cascade_accepted=None):
     """changed: {(leaf, side)} for side-axis leaves, {(leaf, None)} for side-less ones;
     effects: {effect: [actor sides]}; cascade: None, or dict(ko_sides=[2] bool (sides whose every tracker
     may follow a KO), mon_ok=callable(leaf, side) -> a KO_MON_LEAVES leaf differs only on that side's
@@ -947,6 +948,7 @@ def lane_verdict(changed, effects, side_axis, *, cascade=None, waive=()):
     this tree's saved effect block equals the design derivation per side (state.effect_draws is accepted only there),
     optional retype_ok=callable(leaf, side) -> bool: that side's RETYPE_LEAVES differ from the base only at a Color Change
     holder that fainted this step here or (un)fainted relative to the base).
+    cascade_accepted: an optional list that collects the entries only CASCADE_ALLOWED accepted (listed, so they stay visible).
     Returns (unexpected entries, waived entries, entries accepted only as KO consequences)."""
     unexpected, waived, by_ko = [], [], []
     for leaf, side in sorted(changed, key=lambda x: (x[0], -1 if x[1] is None else x[1])):
@@ -961,6 +963,7 @@ def lane_verdict(changed, effects, side_axis, *, cascade=None, waive=()):
             ok = any(allowed_leaf(leaf, CASCADE_ALLOWED[effect]['glob' if side is None else
                                   ('user' if side in actors else 'target')])
                      for effect, actors in effects.items() if effect in CASCADE_ALLOWED)
+            if ok and cascade_accepted is not None:cascade_accepted.append((leaf, side))
         if not ok and cascade is not None:
             # An effect's KO-only allowance on its actor's side, when the other side has a newly (un)fainted mon.
             ko = side is not None and any(side == a and bool(cascade['ko_sides'][1 - a])
@@ -2348,8 +2351,9 @@ def patched_pass(args, *, step_override=None, prepared=None):
                         return bool(diff.any()) and not (diff & ~mons).any()
                     cascade_info = dict(ko_sides=ko_mons.any(-1), mon_ok=mon_ok, families=families, effect_ok=effect_ok,
                                         retype_ok=retype_ok)
-                unexpected, waived, by_ko = lane_verdict(entries, effects, side_axis, cascade=cascade_info, waive=args.waive or ()) \
-                    if changed_rest and effects else ([], [], [])
+                by_cascade = []
+                unexpected, waived, by_ko = lane_verdict(entries, effects, side_axis, cascade=cascade_info, waive=args.waive or (),
+                    cascade_accepted=by_cascade) if changed_rest and effects else ([], [], [])
                 m2_wrong = []
                 if changed_rest and m2_rules and any(e in effects for e in M2_EFFECTS):
                     # M2: an M2 effect's per-mon leaves may differ only at that side's pre- or post-step active.
@@ -2412,6 +2416,7 @@ def patched_pass(args, *, step_override=None, prepared=None):
                     wh_rule=[f'{l}@{side}' for l, side in wh_explained],
                     unexpected=[f"{l}@{'glob' if s is None else s}" for l, s in unexpected],
                     ko_consequences=[f"{l}@{'glob' if s is None else s}" for l, s in by_ko],
+                    cascade_allowed=[f"{l}@{'glob' if s is None else s}" for l, s in by_cascade],
                     waived=[f"{l}@{'glob' if s is None else s}" for l, s in waived])) + '\n')
             if index % 50 == 0:
                 log('PATCHED_SHARD', index=index, shard=path.name, seconds=time.perf_counter() - begin, **counts)
