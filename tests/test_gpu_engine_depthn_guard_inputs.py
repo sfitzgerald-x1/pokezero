@@ -126,6 +126,8 @@ class SeamTests(unittest.TestCase):
         self.assertEqual(union['union']['champion'], union['union']['reply']);self.assertEqual(union['tripped'], plain['tripped'])
         self.assertFalse(union['union_only'])
         self.assertEqual({k: v for k, v in union.items() if k not in ('union', 'union_only')}, plain)   # every champion field unchanged
+        # the reply arm's own reasons: the same evaluation as the champion's here, so the record's reasons (no ability guard: None)
+        self.assertEqual(union['union']['reply_detail'], dict(reasons=union['reasons'], ability_reasons=None))
         clear, _, _ = self.record(lambda s: fake_labels(s, peer_moves=(TACKLE, REST, PROTECT, 0)), reply=self.champion_reply)
         self.assertEqual((clear['tripped'], clear['union']['tripped']), (False, False))
         with self.assertRaisesRegex(ValueError, 'reply logits for'):self.record(fake_labels, reply=lambda f, r:self.champion_reply(f, r)[:-1])
@@ -155,8 +157,14 @@ class SeamTests(unittest.TestCase):
         self.assertEqual((union['tripped'], union['union']['champion']['tripped'], union['union']['reply']['tripped']), (True, False, True))
         self.assertTrue(union['union']['reply']['b_turn1']);self.assertEqual(union['b_turn1'], False)   # the record's own fields: the champion's
         self.assertTrue(union['union_only'])
+        # reply_detail names the reply-only trip: Surf on the peer's turn-1 lane, which the champion's own reasons do not hold
+        detail = union['union']['reply_detail']
+        self.assertEqual([(x['source'], x['move'], x['side'], x['tier']) for x in detail['reasons']], [('turn1', 'surf', 'opp', 'A')])
+        self.assertTrue(detail['reasons'][0]['max_mass'] >= G.THRESHOLD and detail['reasons'][0]['worlds'])
+        self.assertEqual((union['reasons'], detail['ability_reasons']), ([], None))
         lowered_reply, _, _ = self.record(roots_only, edit=lowered, reply=lambda f, r:self.champion_reply(f, r, lane, high=-50.))
         self.assertEqual((lowered_reply['tripped'], lowered_reply['union']['reply']['tripped']), (False, False))
+        self.assertEqual(lowered_reply['union']['reply_detail'], dict(reasons=[], ability_reasons=None))   # nothing tripped: no reasons
 
     def test_the_peers_turn_1_and_turn_2_priors_trip_the_guard(self):
         record, frame, root = self.record(fake_labels)
@@ -266,7 +274,37 @@ class SeamTests(unittest.TestCase):
         union, _, _ = self.record(lambda s: ability_labels(s, ours=WONDERGUARD, peer_moves=quiet), metadata=meta, reply=self.champion_reply)
         reply = union['union']['reply']   # the champion's logits as the reply model: the arms agree, ability fields included
         self.assertEqual((reply['ability_b'], reply['ability_own_lanes'], union['tripped']), (wg['ability']['b'], [None] * 4, True))
-        self.assertNotIn('ability_b', self.record(lambda s: ability_labels(s, ours=WONDERGUARD, peer_moves=quiet), reply=self.champion_reply)[0]['union']['reply'])
+        # reply_detail carries the reply arm's ability reasons (the same as the champion's here: Wonder Guard on their turn-1 Tackle)
+        self.assertEqual(union['union']['reply_detail']['ability_reasons'], union['ability']['reasons'])
+        self.assertIn(('ability_turn1', ['WG'], 'opp'), [(x['source'], x['family'], x['side']) for x in union['union']['reply_detail']['ability_reasons']])
+        no_meta = self.record(lambda s: ability_labels(s, ours=WONDERGUARD, peer_moves=quiet), reply=self.champion_reply)[0]
+        self.assertNotIn('ability_b', no_meta['union']['reply']);self.assertIsNone(no_meta['union']['reply_detail']['ability_reasons'])
+
+    def test_the_reply_detail_is_additive(self):
+        """reply_detail is the one key the union gains, written after the decision: the union keeps its tripped and its two
+        summaries over UNION_FIELDS (plus the ability guard's ability_b and ability_own_lanes), and every top-level field except
+        `tripped` and `union_only` equals the record built without a reply model, on the champion-reply, reply-only and
+        ability-guard fixtures."""
+        meta = self.ability_metadata();quiet = (TACKLE, REST, PROTECT, 0)
+        wg = lambda s: ability_labels(s, ours=WONDERGUARD, peer_moves=quiet)
+        lane = 1
+        def roots_only(states):
+            out = fake_labels(states, peer_moves=(TACKLE, SURF, PROTECT, 0))
+            if out['moves'].shape[0] > 16:out['moves'][:, 1] = (TACKLE, REST, PROTECT, 0)
+            return out
+        def lowered(frame):
+            logits = np.array(frame.root_peer_logits, np.float32);logits[..., lane] = -50.
+            return replace(frame, root_peer_logits=logits)
+        cases = [(fake_labels, {}, self.champion_reply), (roots_only, dict(edit=lowered), lambda f, r:self.champion_reply(f, r, lane)),
+                 (wg, dict(metadata=meta), self.champion_reply)]
+        for labels, kw, reply in cases:
+            plain, _, _ = self.record(labels, **kw);union, _, _ = self.record(labels, reply=reply, **kw)
+            fields = set(gi.UNION_FIELDS) | ({'ability_b', 'ability_own_lanes'} if 'metadata' in kw else set())
+            self.assertEqual(set(union['union']), {'tripped', 'champion', 'reply', 'reply_detail'})
+            self.assertEqual((set(union['union']['champion']), set(union['union']['reply'])), (fields, fields))
+            self.assertEqual(set(union['union']['reply_detail']), {'reasons', 'ability_reasons'})
+            self.assertEqual(union['tripped'], union['union']['tripped']);self.assertEqual(union['union_only'], union['tripped'] and not plain['tripped'])
+            self.assertEqual({k: v for k, v in union.items() if k not in ('union', 'union_only', 'tripped')}, {k: v for k, v in plain.items() if k != 'tripped'})
 
 
 class AbilityRootTests(unittest.TestCase):

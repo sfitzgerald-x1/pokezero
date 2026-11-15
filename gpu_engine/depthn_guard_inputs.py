@@ -228,7 +228,10 @@ def effect_record(frame, root, worlds, children, request, owner, vocabulary, cho
     stays the champion's evaluation; `union` adds dict(tripped=champion OR reply, champion=..., reply=...) over UNION_FIELDS (with
     the ability guard also ability_b and ability_own_lanes, its (c) lanes: those can differ between the arms),
     `union_only` whether only the reply arm tripped (then the record's b, c, arms and m_* describe the champion, which did not), and
-    the top-level `tripped` becomes union['tripped'] (the live actor plays greedy on it). Without reply_logits: unchanged. The move
+    the top-level `tripped` becomes union['tripped'] (the live actor plays greedy on it). union['reply_detail'] is telemetry, written
+    after all of that and read by nothing: the reply arm's own `reasons` (guard.evaluate's: turn 1, choice, the reach per tripping
+    side with its per-move contributions, an unavailable capture) and `ability_reasons` (its ability record's reasons; None without
+    the ability guard), so a reply-only trip names its move or family. Without reply_logits: unchanged. The move
     guard's (c) reads our own prior and lanes, the same in both arms; the ability guard's (c) can differ (its root PINCH rule reads
     the other side's prior), so the reply summary carries its (c) lanes (ability_own_lanes).
     `metadata` (the engine metadata: vocabulary, moves, type_chart): with it the ability guard runs too (AbilityFacts,
@@ -302,4 +305,7 @@ def effect_record(frame, root, worlds, children, request, owner, vocabulary, cho
         record['union'] = dict(tripped=bool(record['tripped'] or reply['tripped']), champion=summary(record), reply=summary(reply))
         record['union_only'] = bool(record['union']['tripped'] and not record['tripped'])   # only the reply arm tripped: b, c, arms, m_* are the champion's
         record['tripped'] = record['union']['tripped']
+        # Telemetry only, written after the decision: what the reply arm tripped on (its summary keeps only flags). Nothing reads it.
+        record['union']['reply_detail'] = dict(reasons=reply['reasons'],
+            ability_reasons=reply['ability']['reasons'] if 'ability' in reply else None)
     return record
