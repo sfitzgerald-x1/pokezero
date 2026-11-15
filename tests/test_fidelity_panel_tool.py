@@ -16,7 +16,15 @@ class PanelToolTests(unittest.TestCase):
         for role, detail in [('SAMPLE',{'move':'metronome','length':5}),('TIE_ORDER',['surprise','surprise']),
                              ('MISSING_ACTOR','sample'),('NEW_ROLE',None)]:
             row=dict(status='UNRESOLVED_CHANCE_ROLE',steps=[dict(chance_audit=[dict(kind='UNRESOLVED',role=role,detail=detail)])])
-            self.assertEqual(P.classify(row,[[],[]],set())[1],'d')
+            self.assertEqual(P.classify(row,[[],[]],set())[1],'u')
+
+    def test_old_pinch_debug_line_does_not_attribute_a_new_request(self):
+        before=['|turn|2','|debug|Swarm boost','|upkeep','|turn|3']
+        row=dict(first_divergence=[dict(field='0:0:hp',gpu=10,showdown=20)],
+                 pre_boundary=dict(showdown=dict(log_tail=before)),native_log_tail=before+['|move|p1a: Mew|Tackle|p2a: Mew'])
+        self.assertEqual(P.state_cause(row,[[],[]])[1],'u')
+        row['native_log_tail'].append('|debug|Swarm boost')
+        self.assertEqual(P.state_cause(row,[[],[]])[:2],('Swarm','a'))
 
     def test_shards_bind_pool_format_and_tape(self):
         base=dict(source_commit='head',pool_sha256='pool',format_id='format',chance_tape_schema='tape',

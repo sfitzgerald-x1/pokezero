@@ -246,7 +246,8 @@ TIE_COLUMN = {'heal': 'draws[0][9]', 'ability': 'draws[1][0]', 'seed': 'draws[0]
 
 def classify(row, teams, vocab_has):
     """(cause, class, detail) for an unmatched row. class: a unmodelled effect, b known open bug, c convention row (an engine
-    chance input exists or the order is inert, but the comparator's tape has no row for it), d harness/comparator noise."""
+    chance input exists or the order is inert, but the comparator's tape has no row for it), d harness/comparator noise,
+    u unclassified. Attribution is diagnostic evidence, not a substitute for reviewing the engine source at the recorded head."""
     status = row['status']
     if status == 'UNRESOLVED_INITIAL_CHANCE':
         ev = [e for e in row.get('initial_chance_audit', []) if e['kind'] == 'INITIAL_RANDOM']
@@ -266,13 +267,16 @@ def classify(row, teams, vocab_has):
         st = row['steps'][-1];u = [e for e in st['chance_audit'] if e['kind'] == 'UNRESOLVED'][0]
         role, detail = u.get('role'), u.get('detail');stack = ' '.join(u.get('diag_stack') or [])
         diag = u.get('diag') or {}
+        if role=='RANDOM_CHANCE' and isinstance(detail,dict) and detail.get('effect') in ('poisonpoint','flamebody','effectspore'):
+            return ({'poisonpoint':'Poison Point','flamebody':'Flame Body','effectspore':'Effect Spore'}[detail['effect']],
+                    'a','contact ability roll; confirm the recorded engine still lacks this consumer')
         if role == 'TIE_ORDER' and isinstance(detail, list):
             kinds = [RESIDUAL_KIND.get(x) for x in detail]
             if all(kinds) and len(set(kinds)) == 1:
                 kind = kinds[0]
                 return (f'residual {kind} tie ({"/".join(detail)}) at equal Speed', 'c',
                         f'engine tie bit {TIE_COLUMN[kind]}; no tape row')
-            if all(kinds):return (f'residual tie across kinds ({"/".join(detail)})', 'd', 'unclassified: mixed subOrder kinds need a proof')
+            if all(kinds):return (f'residual tie across kinds ({"/".join(detail)})', 'u', 'unclassified: mixed subOrder kinds need a proof')
             if detail == ['switch', 'switch']:
                 return ('both players switch at equal Speed', 'c', 'engine switch_coin draws[0][11]; no tape row')
             if set(detail) <= {'choicelock', 'encore'}:
@@ -281,12 +285,12 @@ def classify(row, teams, vocab_has):
                 acts = [a[0] for a in diag.get('actives', []) if a and a[0]]
                 who = ', '.join(f"{a.get('species')} ({a.get('ability')}/{a.get('item') or '-'})" for a in acts)
                 if 'eachEvent' in stack and 'runAction' in stack:
-                    return ("eachEvent('Update') Pokemon-order tie (equal Speed, a handler present)", 'd',
+                    return ("eachEvent('Update') Pokemon-order tie (equal Speed, a handler present)", 'u',
                             f'unclassified: actual handlers need a commutation proof; actives {who}')
                 if 'insertChoice' in stack:
                     return ('switch-in insertion Speed tie (insertChoice)', 'c', f'engine entry tie bit; actives {who}')
-                return ('Pokemon-order tie', 'd', f'unclassified: actives {who}; {stack[:120]}')
-            return (f'tie {detail}', 'd', 'unclassified: no reviewed mapping or commutation proof')
+                return ('Pokemon-order tie', 'u', f'unclassified: actives {who}; {stack[:120]}')
+            return (f'tie {detail}', 'u', 'unclassified: no reviewed mapping or commutation proof')
         if role == 'MISSING_ACTOR':
             if 'randomFoe' in stack:return ('Trace on a switch-in: randomFoe over one foe', 'c',
                                             'sample over the single foe in singles: inert, but the tape has no row (the probes force it)')
@@ -295,14 +299,14 @@ def classify(row, teams, vocab_has):
                 acts = [a[0] for a in diag.get('actives', []) if a and a[0]]
                 if any(a.get('ability') == 'shedskin' and a.get('status') for a in acts):
                     return ('Shed Skin (residual cure roll)', 'a', 'unmodelled in the engine; data/abilities.ts shedskin randomChance(33,100)')
-                return ('residual random with no active move', 'd', 'unclassified: '+stack[:160])
+                return ('residual random with no active move', 'u', 'unclassified: '+stack[:160])
             if 'insertChoice' in str(detail) or 'insertChoice' in stack:
                 return ('switch insertion Speed tie (insertChoice)', 'c', 'engine entry tie; no tape row')
-            return ('sample with no active move: ' + (diag.get('effect') or '?'), 'd', 'unclassified: '+stack[:160])
+            return ('sample with no active move: ' + (diag.get('effect') or '?'), 'u', 'unclassified: '+stack[:160])
         if role == 'SAMPLE' and (detail or {}).get('move') in ('roar','whirlwind'):
             return (f"{(detail or {}).get('move')} target pick over {(detail or {}).get('length')}", 'c',
                     'engine phazing[s] drag roll; no tape row')
-        return (f'{role} {str(detail)[:60]}', 'd', 'unclassified: '+stack[:160])
+        return (f'{role} {str(detail)[:60]}', 'u', 'unclassified: '+stack[:160])
     if status == 'LEGAL_ACTION_MISMATCH' and 'transform' in json.dumps(row.get('first_divergence')):
         return ('Transform (move identities after -transform)', 'a', 'open PR #1970')
     if status in ('STATE_MISMATCH', 'TERMINAL_MISMATCH'):
@@ -315,9 +319,26 @@ def state_cause(row, teams):
     log = row.get('native_log_tail') or []
     turn = max([i for i, l in enumerate(log) if l.startswith('|turn|')][-2:-1] or [0])
     last = [l for l in log[turn:] if l]
+    before=(row.get('pre_boundary') or {}).get('showdown',{}).get('log_tail') or []
+    # Isolate the stopping request, including switch requests in the middle
+    # of a turn. A debug marker from an earlier request is not evidence here.
+    for overlap in range(min(len(before),len(log)),0,-1):
+        if before[-overlap:]==log[:overlap]:last=log[overlap:];break
     fd = json.dumps(row.get('first_divergence'))[:100]
     if any(l.startswith('|-transform|') for l in log):return ('Transform', 'a', 'open PR #1970; ' + fd)
     if any('Forecast' in l for l in log):return ('Forecast (Castform type change)', 'a', 'Forecast agent; ' + fd)
+    if any(l.startswith('|-immune|') and '[from] ability: Wonder Guard' in l for l in last):
+        return ('Wonder Guard','a','reference immunity on the stopping request; '+fd)
+    for ability in ('Overgrow','Blaze','Torrent','Swarm'):
+        if f'|debug|{ability} boost' in last:return (ability,'a','reference pinch boost on the stopping request; '+fd)
+    pre=(row.get('pre_boundary') or {}).get('showdown',{}).get('parties')
+    if pre:
+        for diff in row.get('first_divergence') or []:
+            parts=diff['field'].split(':')
+            if len(parts)==3 and parts[2]=='hp' and diff['gpu']<diff['showdown']:
+                mon=pre[int(parts[0])][int(parts[1])]
+                if mon.get('ability')=='marvelscale' and mon.get('status'):
+                    return ('Marvel Scale','a','statused defender takes excess engine damage; '+fd)
     toid = lambda x: ''.join(c for c in x.lower() if c.isalnum())
     for l in last:
         parts = l.split('|')
@@ -331,7 +352,7 @@ def state_cause(row, teams):
                         f"{parts[3]} by {mon['species']}; damage-mods agent; " + fd)
             if item == 'stick' and any(x.startswith('|-crit|') for x in last):
                 return ('Stick (critical-hit stage)', 'a', f"{parts[3]} by {mon['species']}; " + fd)
-    return ('state mismatch: ' + fd, 'a', 'unattributed')
+    return ('state mismatch: ' + fd, 'u', 'unattributed; review required before ceiling arithmetic')
 
 
 def attribute(a):
@@ -358,6 +379,8 @@ def attribute(a):
                         showdown_turn=(turns[-1] if turns else 0), gpu_turns=r['gpu_ordinary_turns'], cause=cause, cls=cls, detail=detail))
     counts = collections.Counter((x['cause'], x['cls']) for x in out)
     res = dict(source_commit=p['source_commit'], panel=p['panel'], matched=p['matched'], games=p['games'], unmatched=len(out),
+               class_counts=dict(collections.Counter(x['cls'] for x in out)),
+               attribution_requires_source_review=True,
                rows=out, causes=[dict(cause=c, cls=k, games=n) for (c, k), n in counts.most_common()])
     with open(a.out, 'x') as f:json.dump(res, f, indent=1)
     print(f"matched {p['matched']}/{p['games']}; unmatched {len(out)}")

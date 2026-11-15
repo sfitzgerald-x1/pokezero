@@ -53,7 +53,8 @@ assert.deepEqual(sourceLeft([0,1]),sourceLeft([1,0]));assert.deepEqual(sourceLef
 // Exercise immunity, suppression, a single KO and the double-last-mon tie.
 for(const weather of ['sandstorm','hail'])for(const scenario of ['chip','immune','suppressed','one-ko','double-ko']){
   function weatherRun(order,tied){
-    const b=battle([mon(scenario==='immune'?'Tyranitar':'Snorlax',scenario==='suppressed'?'Cloud Nine':'Thick Fat')],[mon()]);
+    const immune=weather==='hail'?'Articuno':'Tyranitar';
+    const b=battle([mon(scenario==='immune'?immune:'Snorlax',scenario==='suppressed'?'Cloud Nine':'Thick Fat')],[mon()]);
     for(const s of b.sides)s.active[0].speed=100;
     b.field.setWeather(weather,b.p1.active[0]);
     if(scenario==='one-ko'||scenario==='double-ko')b.p1.active[0].hp=1;
@@ -182,9 +183,25 @@ for(const field of ['phazing','entry_ties','resuming']){
   for(const key of ['phazing','entry_ties','resuming'])if(key!==field)delete t[key];
   assert.equal(require(hooks).validTape(t),false);checks++;
 }
-for(let roll=0;roll<60;roll++){
-  const b=battle([mon()],[mon('Pikachu','Static')]),t=T();t.phazing[0]=roll;
-  controlled(t,()=>b.makeChoices('move 2','move 1'));
-  assert.equal(b.p1.active[0].status,roll<20?'par':'');assert.deepEqual(coupled('static').map(e=>e.raw),[roll]);checks++;
+for(const side of [0,1])for(const ko of [false,true])for(let roll=0;roll<60;roll++){
+  const teams=[[mon()],[mon('Pikachu','Static')]];if(side)teams.reverse();
+  const b=battle(...teams),t=T();t.phazing[side]=roll;
+  if(ko)b.sides[1-side].active[0].hp=1;
+  controlled(t,()=>b.makeChoices(...(side?['move 1','move 2']:['move 2','move 1'])));
+  assert.equal(b.sides[side].active[0].status,roll<20?'par':'');
+  assert.deepEqual(coupled('static').map(e=>[e.side,e.raw]),[[side,roll]]);checks++;
+}
+{
+  const special=mon();special.moves=['psychic'];const b=battle([special],[mon('Pikachu','Static')]);
+  controlled(T(),()=>b.makeChoices('move 1','move 1'));assert.equal(coupled('static').length,0);checks++;
+}
+{
+  const b=battle([mon()],[mon('Pikachu','Static'),mon('Blissey')]),source=b.p1.active[0],target=b.p2.active[0];
+  b.activePokemon=source;
+  assert.throws(()=>controlled(T(),()=>{
+    b.activeMove=b.dex.getActiveMove('whirlwind');b.getRandomSwitchable(b.p2);
+    b.activeMove=b.dex.getActiveMove('tackle');
+    b.singleEvent('DamagingHit',target.getAbility(),target.abilityState,target,source,b.activeMove,1);
+  }),/SPIKE_UNRESOLVED:REPEATED_ROLE/);checks++;
 }
 process.stdout.write(JSON.stringify({checks})+'\n');
