@@ -41,7 +41,8 @@ def world_state(rng, foe, core):
     """A BattleState whose side `foe` has the core species plus random ones, a random active with random moves, PP and charge."""
     s = empty_state(1);species = list(core) + [int(x) for x in rng.integers(1, EMPTY, 6 - len(core))];rng.shuffle(species)
     if rng.random() < .04:species[int(rng.integers(6))] = 0 if rng.random() < .5 else EMPTY
-    active = int(rng.integers(6));moves = [int(x) for x in rng.integers(0, len(VOCABULARY['moves']), 4)]
+    active = -1 if rng.random() < .1 else int(rng.integers(6))   # -1: an active outside the party (its move lanes unlabelled)
+    moves = [int(x) for x in rng.integers(0, len(VOCABULARY['moves']), 4)]
     pp = [0] * 4 if rng.random() < .15 else [int(x) for x in rng.integers(0, 3, 4)]
     charge = 0 if rng.random() < .8 else (moves[int(rng.integers(4))] if rng.random() < .5 else int(rng.integers(1, len(VOCABULARY['moves']))))
     other = 1 - foe
@@ -52,7 +53,7 @@ def world_state(rng, foe, core):
 
 
 def world_public(rng):
-    return dict(legal=rng.random((1, 2, 9)) < .6, move_targets=rng.integers(0, 4, (1, 2, 4)).astype(np.int32),
+    return dict(legal=rng.random((1, 2, 9)) < .6, move_targets=rng.integers(-1, 5, (1, 2, 4)).astype(np.int32),   # -1 and 4: outside the active's moves
         switch_targets=rng.integers(-1, 7, (1, 2, 5)).astype(np.int32))
 
 
@@ -71,7 +72,7 @@ def offline(worlds, owner, peer_lanes):
 class ParityTests(unittest.TestCase):
     def test_random_roots_label_as_the_offline_path(self):
         rng = np.random.default_rng(20261115);executor = Executor();labels = L.LaneLabels(executor, VOCABULARY);peer_lanes = R.PeerLanes(executor)
-        compared = missing = 0;kinds = set()
+        compared = missing = 0;kinds = set();unlabelled = dict(move=0, switch=0)   # legal lanes without a label
         for _ in range(120):
             owner = int(rng.integers(2));core = [int(x) for x in rng.integers(1, EMPTY, int(rng.integers(0, 4)))]
             worlds = [SimpleNamespace(state=world_state(rng, 1 - owner, core), public=world_public(rng)) for _ in range(W)]
@@ -81,8 +82,11 @@ class ParityTests(unittest.TestCase):
                 missing += 1;continue
             got = L.lane_labels_live(views, labels.names)
             self.assertEqual(got, want[0]);self.assertEqual(views.legal.tolist(), want[1])
+            for w in range(W):
+                for b in range(9):unlabelled['move' if b < 4 else 'switch'] += bool(views.legal[w, b]) and got[w][b] is None
             compared += W;kinds |= {x if x is None or x == L.UNSEEN else x.split(':')[0] + (':struggle' if x == 'move:struggle' else '') for row in got for x in row}
         self.assertGreater(compared, 300);self.assertGreater(missing, 0)
+        self.assertTrue(all(unlabelled.values()), unlabelled)   # both None paths (target outside, active outside) compared
         self.assertEqual(kinds, {None, 'move', 'move:struggle', 'switch', L.UNSEEN})   # every label kind was exercised
         self.assertEqual(labels.traces, {0: 1, 1: 1})   # one trace per seat at this world count
 
