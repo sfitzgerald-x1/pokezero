@@ -390,8 +390,13 @@ def _wrap_agreement(facts,wrapped,detached,owner):
     fold holds it on that active exactly there too, with its wrap_trap_turns (public turns elapsed) equal to the lines'
     |turn| count since the start (else PUBLIC_WRAP_B2_DISAGREEMENT)."""
     view=detached.view;bit=live.hooks.VOLATILE_NAMES.index('partiallytrapped');foe=1-owner
+    if any(view.get(name) is None for name in ('active','own_volatiles','volatiles')):
+        # A carry without B2's bags holds no partial trap: only lines and a payload that show none agree with it.
+        if wrapped or any(fact is not None for fact in facts):raise ValueError('PUBLIC_WRAP_B2_DISAGREEMENT')
+        return
     own_at=int(np.asarray(detached.own['active']));shown=np.asarray(view['active'])[0].astype(bool)
     held={owner:bool(np.asarray(view['own_volatiles'])[0,own_at,bit]),foe:bool((np.asarray(view['volatiles'])[0,:,bit]&shown).any())}
+    if not wrapped and not any(held.values()) and all(fact is None for fact in facts):return
     clocks={owner:np.asarray(view['own_mon_features']['wrap_trap_turns'])[0,[own_at]],foe:np.asarray(view['mon_features']['wrap_trap_turns'])[0,shown]}
     for side in (0,1):
         if facts[side] is not None and side not in wrapped:raise ValueError('PUBLIC_WRAP_PAYLOAD_DISAGREEMENT')
@@ -427,9 +432,10 @@ def _write_own_meanlook(physical,detached,meanlook,owner):
     wrote the link as 0, a coordinate of no world; it becomes the opposing active's party index here, as
     device_public_world_state's materializer rebases it (the engine traps while trap_source is the foe's living active,
     state.legal_actions). Refuses when B2 and the payload disagree (OWN_MEANLOOK_B2_PAYLOAD_DISAGREEMENT)."""
-    at=int(np.asarray(detached.own['active']))
-    if (int(np.asarray(detached.own['trap_source'])[at])>=0)!=meanlook:raise ValueError('OWN_MEANLOOK_B2_PAYLOAD_DISAGREEMENT')
+    if bool((np.asarray(detached.own.get('trap_source',-1))>=0).any())!=meanlook:raise ValueError('OWN_MEANLOOK_B2_PAYLOAD_DISAGREEMENT')
     if not meanlook:return physical
+    at=int(np.asarray(detached.own['active']))
+    if int(np.asarray(detached.own['trap_source'])[at])<0:raise ValueError('OWN_MEANLOOK_B2_PAYLOAD_DISAGREEMENT')
     return physical._replace(trap_source=tail._put(physical.trap_source,(0,owner,at),int(physical.active[0,1-owner])))
 
 

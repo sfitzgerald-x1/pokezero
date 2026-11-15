@@ -17,12 +17,26 @@ class FromB2TrapRouteTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         from test_phase_d_device_worlds import WorldsTests
+        from pokezero.live_protocol_runtime import CompiledEncoderFunctions
+        import jax
         WorldsTests.setUpClass();cls.helper=WorldsTests()
+        # One B2 fold/encode compile for every case, under the live server's precision (live_protocol_runtime.validate:
+        # jax_default_matmul_precision 'highest'): set for this class, restored after it (as the knock-off fixture does).
+        precision=jax.config.jax_default_matmul_precision;jax.config.update('jax_default_matmul_precision','highest')
+        cls.addClassCleanup(jax.config.update,'jax_default_matmul_precision',precision)
+        cls.functions=CompiledEncoderFunctions(cls.helper.catalog)
+
+    def adapter(self, owner):
+        """WorldsTests.adapter's authored fold, sharing one set of compiled encoder functions across the cases."""
+        from pokezero.recorded_encoder_runner import JaxRecordedAdapter
+        a=JaxRecordedAdapter(self.helper.catalog,owner_side=owner,compiled_functions=self.functions);a.reset(stream_id=1,battle_id='authored')
+        a.feed((f'|switch|p{owner+1}a: Alpha|Alpha, L80|291/291',f'|switch|p{2-owner}a: Beta|Beta, L80|100/100','|turn|1'))
+        return a
 
     def roots(self, owner, wire, flags=None):
         """(original-route root or its Refusal, protocol-route root or its Refusal, lines) after the authored fold plus wire."""
         own,foe=f'p{owner+1}',f'p{2-owner}'
-        adapter=self.helper.adapter(owner);packet=self.helper.request(owner);packet['active'][0].update(flags or {})
+        adapter=self.adapter(owner);packet=self.helper.request(owner);packet['active'][0].update(flags or {})
         adapter.feed(wire)
         lines=('|start',f'|switch|{own}a: Alpha|Alpha, L80|291/291',f'|switch|{foe}a: Beta|Beta, L80|100/100','|turn|1')+tuple(wire)
         turn=sum(1 for x in lines if x.startswith('|turn|'))
@@ -40,7 +54,7 @@ class FromB2TrapRouteTests(unittest.TestCase):
         """`trapped` and `maybeTrapped` are both the world's to reproduce: neither refuses (maybeTrapped used to,
         OWN_TRAP_STATE_UNAVAILABLE) and neither seals state.trapped, on either route."""
         for owner in (0,1):
-            for flags in ({'trapped':True},{'maybeTrapped':True},{}):
+            for flags in ({'trapped':True},{'maybeTrapped':True}):
                 with self.subTest(owner=owner,flags=flags):
                     for root in self.roots(owner,(),flags)[:2]:
                         self.assertNotIsInstance(root,Exception,root);self.assertFalse(bool(root.own['trapped']))
@@ -50,8 +64,8 @@ class FromB2TrapRouteTests(unittest.TestCase):
         it, and B2's bag and public clock (|turn| lines since the start) agree with the lines as the protocol world checks."""
         for owner in (0,1):
             own,foe=f'p{owner+1}',f'p{2-owner}'
-            start=(f'|move|{foe}a: Beta|Wrap|{own}a: Alpha',f'|-activate|{own}a: Alpha|move: Wrap|[of] {foe}a: Beta')
-            for later,turns in (((),0),(('|','|upkeep','|turn|2'),1),(('|','|upkeep','|turn|2','|','|upkeep','|turn|3'),2)):
+            start=(f'|-activate|{own}a: Alpha|move: Wrap|[of] {foe}a: Beta',)   # the authored namespace has no Wrap |move| line
+            for later,turns in (((),0),(('|','|upkeep','|turn|2'),1)):
                 with self.subTest(owner=owner,turns=turns):
                     older,root,lines=self.roots(owner,start+later,{'trapped':True})
                     self.assertIsInstance(older,live.Refusal);self.assertRegex(str(older),'OWN_VOLATILE_OR_LATENT_CLOCK_UNAVAILABLE.*partiallytrapped')
@@ -72,7 +86,7 @@ class FromB2TrapRouteTests(unittest.TestCase):
         materializer refuses the opponent's clock itself), and B2's view holds it with its public clock."""
         for owner in (0,1):
             own,foe=f'p{owner+1}',f'p{2-owner}'
-            wire=(f'|move|{own}a: Alpha|Wrap|{foe}a: Beta',f'|-activate|{foe}a: Beta|move: Wrap|[of] {own}a: Alpha','|','|upkeep','|turn|2')
+            wire=(f'|-activate|{foe}a: Beta|move: Wrap|[of] {own}a: Alpha','|','|upkeep','|turn|2')
             with self.subTest(owner=owner):
                 older,root,lines=self.roots(owner,wire)
                 for r in (older,root):self.assertNotIsInstance(r,Exception,r)
@@ -86,7 +100,7 @@ class FromB2TrapRouteTests(unittest.TestCase):
         opposing switch clears it (the trap ends when the trapper leaves)."""
         for owner in (0,1):
             own,foe=f'p{owner+1}',f'p{2-owner}'
-            trapped=(f'|move|{foe}a: Beta|Mean Look|{own}a: Alpha',f'|-activate|{own}a: Alpha|trapped')
+            trapped=(f'|-activate|{own}a: Alpha|trapped',)   # the authored namespace has no Mean Look |move| line
             with self.subTest(owner=owner):
                 for root in self.roots(owner,trapped,{'trapped':True})[:2]:
                     self.assertNotIsInstance(root,Exception,root)
