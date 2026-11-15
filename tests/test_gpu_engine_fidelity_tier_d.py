@@ -47,8 +47,8 @@ class TableTests(unittest.TestCase):
         self.assertEqual(np.asarray(c.pinch_type).tolist(),
                          [0, 0, FIRE, WATER, GRASS, BUG] + [0] * (len(ABILITIES) - 6))
         self.assertEqual(np.flatnonzero(np.asarray(c.status_move)).tolist(), [SPLASH, TOXIC])
-        # The pre-tier-D fields keep their positions (appended fields only).
-        self.assertEqual(combat.CombatTable._fields[-4:], ('compound_eyes', 'wonder_guard', 'pinch_type', 'status_move'))
+        # The pre-tier-D fields keep their positions (appended fields only; later fields may follow tier D's).
+        self.assertEqual(combat.CombatTable._fields[13:17], ('compound_eyes', 'wonder_guard', 'pinch_type', 'status_move'))
         s = secondary.from_metadata(meta)
         self.assertEqual(np.asarray(s.contact_status).tolist(),
                          [m.PSN if i == POISONPOINT else m.BRN if i == FLAMEBODY else 0 for i in range(len(ABILITIES))])
