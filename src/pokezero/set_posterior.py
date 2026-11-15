@@ -25,7 +25,8 @@ Per revealed opponent species, over the source's existing variant list (source o
 Deliberately stricter than the r5a census (each can only refuse a strike the census admitted, never exclude a variant):
 - a Substitute event in the strike's window refuses it, even with a -damage line on our mon beside it ('hit-substitute');
 - the whole strike is refused when one hard-support variant has no rolls from the core ('core-unsupported:<move>'), where
-  the census gave that variant 0;
+  the census gave that variant 0, except type immunity: a variant whose move cannot touch our mon (an immune Hidden Power
+  type) fits 0 rolls of a hit that did damage, as in the census;
 - our hit on their Substitute counts as hitting them for Revenge ('conditional-power:revenge');
 - a window still open at the end of the lines is refused ('window-open'); a prefix ending at a request is a closed boundary;
 - a strike whose effectiveness line a variant with fitting rolls could not have printed is refused
@@ -473,10 +474,16 @@ def _own_participant(team, species: str, dex: ShowdownDex, max_hp: int | None):
             tuple(info.types) if info else ())
 
 
-def _effectiveness_line(attacker: tier2.StrikeParticipant, move: str, defender_types: tuple[str, ...], dex: ShowdownDex) -> str | None:
-    """The effectiveness line this attacker's own move prints on our mon (Hidden Power resolves to its set's type)."""
+def _effectiveness(attacker: tier2.StrikeParticipant, move: str, defender_types: tuple[str, ...], dex: ShowdownDex) -> float:
+    """The type effectiveness of this attacker's own move on our mon (Hidden Power resolves to its set's type), from the dex's
+    chart, as the core computes it (tier2._strike_damage: dex.effectiveness of the participant's move type)."""
     info = dex.move_info(tier2._participant_move_id(attacker, move))
-    value = dex.effectiveness(info.type if info else None, defender_types)
+    return dex.effectiveness(info.type if info else None, defender_types)
+
+
+def _effectiveness_line(attacker: tier2.StrikeParticipant, move: str, defender_types: tuple[str, ...], dex: ShowdownDex) -> str | None:
+    """The effectiveness line this attacker's own move prints on our mon."""
+    value = _effectiveness(attacker, move, defender_types, dex)
     return 'supereffective' if value > 1 else 'resisted' if 0 < value < 1 else None
 
 
@@ -499,6 +506,13 @@ def _counts(strike, species, variants, hard, own_team, *, source, dex):
         result = None if attacker is None else tier2._strike_damage(attacker=attacker, defender=defender, defender_types=types,
             observed_move=strike['move'], token=token, context=strike['context'], dex=dex, require_move_in_set=True,
             pinch_ambiguity_band=_PINCH_BAND, split_choice_band_baseline=False)
+        if (result is not None and not result.rolls and strike['observed'] is not None and strike['observed'] > 0
+                and _effectiveness(attacker, strike['move'], types, dex) == 0):
+            # The core's no-damage case (gen3_damage_rolls: an empty tuple for an immune type; _strike_damage already
+            # returned None for zero base power), confirmed as type immunity on the chart it used: a Hidden Power type
+            # that cannot touch our mon. Damage was dealt, so this variant cannot be the attacker: it fits 0 rolls.
+            counts.append(0)
+            continue
         if result is None or len(result.rolls) != ROLLS:
             return 'core-unsupported:' + strike['move'], None
         if result.ambiguous:

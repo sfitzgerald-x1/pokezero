@@ -14,6 +14,7 @@ from pathlib import Path
 import random
 from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 
 from _showdown_root import requires_showdown, showdown_root_str
 from pokezero import determinization as D, set_posterior as SP, tier2
@@ -206,6 +207,37 @@ class Narrowing(Base):
                 refused = self.post(data, lines)[key]
                 self.assertEqual(self.strike_at(refused, strike.line).reason, 'effectiveness-disagreement')
                 self.assertEqual(self.alive(refused), self.hard(refused))
+
+    def test_a_type_immune_hidden_power_variant_fits_zero_and_the_strike_stays_admitted(self):
+        # r5a: an Umbreon Hidden Power on Butterfree and a Kingler one on Snorlax. One hard variant's type cannot touch our mon
+        # (the core returns no rolls); damage was dealt, so it fits 0 and the strike is admitted, the true set kept.
+        for name, key in (('hp_immune_umbreon', 'umbreon'), ('hp_immune_kingler', 'kingler')):
+            with self.subTest(fixture=name):
+                data = fixture(name)
+                post = self.post(data)[key]
+                strike, = post.strikes
+                census = next(c for c in data['census']['strikes'] if c['line'] == strike.line)
+                self.assertTrue(strike.admitted);self.assertIsNone(census['reason'])
+                true = [v.variant_id for v in self.variants(key)].index(census['true_variant'])
+                self.assertEqual(strike.counts[true], census['true_match']);self.assertGreater(post.weights[true], 0)
+                defender = data['request']['lines'][strike.line].split('|')[4].split(': ', 1)[1]
+                types = tuple(self.dex.species_info(SP.species_key(defender)).types)
+                hp = lambda i: next(m for m in map(normalize_id, self.variants(key)[i].moves) if m.startswith('hiddenpower'))
+                immune = [i for i in self.hard(post) if self.dex.effectiveness(self.dex.move_info(hp(i)).type, types) == 0]
+                self.assertTrue(immune);self.assertEqual([strike.counts[i] for i in immune], [0] * len(immune))
+
+    def test_only_type_immunity_turns_empty_rolls_into_zero(self):
+        original = tier2._strike_damage
+        empty = lambda **kw: replace(original(**kw), rolls=())
+        # Empty rolls on a move that does touch our mon (a Body Slam): another cause, still refused.
+        with patch.object(tier2, '_strike_damage', side_effect=empty):
+            post = self.post(fixture('cb_excluded'))['snorlax']
+        self.assertEqual(post.strikes[0].reason, 'core-unsupported:bodyslam')
+        # Every hard variant immune: every count 0, so the off-model drop keeps the whole hard support.
+        data = fixture('hp_immune_umbreon')
+        with patch.object(tier2, '_strike_damage', side_effect=empty), patch.object(SP, '_effectiveness', return_value=0.0):
+            post = self.post(data)['umbreon']
+        self.assertEqual(post.strikes[0].reason, SP.OFF_MODEL);self.assertEqual(self.alive(post), self.hard(post))
 
     def test_an_effectiveness_line_a_fitting_variant_cannot_print_refuses_the_strike(self):
         # The KO is censored above every Hidden Power type's rolls on four survivors; drop its -supereffective line and a
