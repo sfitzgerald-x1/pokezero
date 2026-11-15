@@ -775,6 +775,62 @@ ALLOWED['facade'] = dict(user=('hp', 'visible', 'subtracker', 'wish'), target=('
 ALLOWED['sacredfire'] = ALL
 
 
+# TB (the batched transition PR: bugs F, G, F1, F2 and the TURN-line parity of the clocks and weather upkeeps; all on the
+# device public path, no engine state, so no allowance names a state leaf). F: the Pursuit intercept's damage credit (the hit's HP lines: damage history, both
+# sides' damage sums, the departing target's public HP and negative-item snapshot), its [from] line (no last move, Choice
+# lock or Truant anchor on the pursuer, which B2's STALL_ATTEMPT 0 resets the stall counter of). G: a Sleep Talk-called move
+# that then fails is still revealed (moves, PP ledger, the moves_shown count and the belief narrowing). The end-of-turn
+# bookkeeping: a held clock advances on the TURN line (a battle-ending step has none; a turn whose residual faint asks for a
+# replacement has it at the replacement step), a battle ended before its residual counts no weather upkeep, and a battle
+# ended by Perish Song's queued faints still runs the upkeep (post_upkeep, the sleep pending clears, the non-proc sweep).
+FAMILIES['tb_last'] = (r'^trackers\.last_moves$',)
+FAMILIES['tb_stall'] = (r"^trackers\.mon_features\['stall_counter'\]$",)
+FAMILIES['tb_moves'] = (r'^trackers\.(observed_moves|pp_used)$', r"^trackers\.mon_features\['moves_shown'\]$")
+FAMILIES['tb_clocks'] = (r"^trackers\.mon_features\['(confusion_turns|encore_turns|wrap_trap_turns)'\]$",)
+FAMILIES['tb_end'] = (r"^trackers\.mon_features\['(sleep_skipped_turns|sleep_cant_pending|sleep_usable_pending)'\]$",
+                      r'^trackers\.public_port\.post_upkeep$', r'^trackers\.negative_items\.', r'^trackers\.visible_belief\.',
+                      r'^trackers\.belief_mask$', r"^trackers\.field_features\['weather_upkeeps'\]$")
+ALLOWED['pursuit_intercept'] = dict(user=('hp_lines', 'visible', 'tb_last', 'tb_stall', 'itemflags', 'port'),
+                                    target=('hp_lines', 'visible'), glob=())
+ALLOWED['sleeptalk_call'] = dict(user=('tb_moves', 'reveal'), target=(), glob=())
+ALLOWED['turn_clock'] = dict(user=('tb_clocks',), target=('tb_clocks',), glob=())
+ALLOWED['battle_end'] = dict(user=('tb_clocks', 'tb_end'), target=('tb_clocks', 'tb_end'), glob=('tb_end',))
+
+
+def pursuit_intercept(p):
+    """TB (bug F): a side that may execute Pursuit while the other side chooses a switch (the intercept)."""
+    return p.side_uses('pursuit') & (p.actions >= 4)[:, ::-1]
+
+
+def sleeptalk_call(p):
+    """TB (bug G): a side that may execute Sleep Talk (its called move's reveal no longer waits on the called move's gates)."""
+    return p.side_uses('sleeptalk')
+
+
+CLOCK_MOVES = ('encore', 'wrap', 'bind', 'firespin', 'clamp', 'whirlpool', 'sandtomb', 'confuseray', 'supersonic', 'swagger',
+               'flatter', 'sweetkiss', 'teeterdance', 'signalbeam', 'dynamicpunch', 'psybeam', 'confusion', 'waterpulse', 'dizzypunch')
+
+
+def turn_clock(p):
+    """TB (the clocks' TURN line): both sides of a lane whose TURN line may fall on another step than its ordinary step: a
+    replacement step (a pre-step forced switch or fainted active, which prints the TURN its residual turn lacked), or a turn
+    with a held or newly set clock (confusion, Encore, a partial trap) that a residual faint may end with a replacement request
+    or a battle end. A superset: the clock moves only on such a lane."""
+    rows = np.arange(p.lanes)[:, None];sides = np.arange(2)[None, :]
+    active_hp = p.s['hp'][rows, sides, p.s['active']]
+    replacement = (p.s['forced_switch'].astype(bool) | (active_hp <= 0)).any(-1)
+    held = (p.active('confusion_counter') > 0) | (p.active('encore_counter') > 0)
+    if 'partial_trap_counter' in p.s:held |= p.active('partial_trap_counter') > 0
+    lane = replacement | held.any(-1) | p.side_uses(*CLOCK_MOVES).any(-1) | p.side_uses('batonpass').any(-1)
+    return np.repeat(lane[:, None], 2, axis=1)
+
+
+def battle_end(p):
+    """TB (F1, F2, weather upkeeps): both sides of a lane whose battle may end this step: a side with at most one living mon."""
+    lane = ((np.asarray(p.s['hp']) > 0).sum(-1) <= 1).any(-1)
+    return np.repeat(lane[:, None], 2, axis=1)
+
+
 # Allowances an effect earns only on a KO cascade in which the other side (its target's) has a newly (un)fainted
 # mon: R: a second-hit KO of a slower target cancels its queued move, which can then no longer status the user
 # (seen: a thawing Parasect's Spore; the Sleep Clause port and the public status bag follow the status).
@@ -809,6 +865,8 @@ PLUGINS = {
     'C': dict(psychoboost=move('psychoboost'), whiteherb=white_herb, sacredfire=move('sacredfire'), facade=move('facade')),
     # WH (White Herb plus C-lite, which replaces C's draft; Psycho Boost's drop is unchanged, its restore is White Herb's).
     'WH': dict(whiteherb=white_herb, facade=facade_status, sacredfire=frozen_defrost),
+    # TB: the batched transition PR (bugs F, G, F1, F2; see ALLOWED's TB block).
+    'TB': dict(pursuit_intercept=pursuit_intercept, sleeptalk_call=sleeptalk_call, turn_clock=turn_clock, battle_end=battle_end),
 }
 
 
