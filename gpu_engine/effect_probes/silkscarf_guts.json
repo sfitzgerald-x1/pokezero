@@ -1,7 +1,7 @@
 {
  "schema": "pokezero.effect_probe.scenario.v1",
  "move": "silkscarf_guts",
- "note": "Damage modifiers: Guts (priority 5) and Silk Scarf (priority 1) chain in one ModifyAtk event: (6144*4505+2048)>>12 = 6758, applied once (the item's 4505/4096 times 3/2 as a fraction is 6757). Ursaring (L75, Atk IV 10: Atk 207, Silk Scarf) is paralyzed by Suicune's Thunder Wave, then Facade (140, Guts) and Body Slam (85) at every roll; Atk 207 is where 6758 and 6757 round apart.",
+ "note": "Damage modifiers: Guts (priority 5) and Silk Scarf (priority 1) chain in one ModifyAtk event: (6144*4505+2048)>>12 = 6758, applied once (the item's 4505/4096 times 3/2 as a fraction is 6757). Ursaring (L60, Atk IV 11 and EV 0: Atk 167, Silk Scarf) is paralyzed by Suicune's Thunder Wave, then Facade (140, Guts) and Body Slam (85) at every roll; against Suicune's Def 213, Facade's damage at Atk 167 differs between 6758 and 6757 at all 16 rolls.",
  "teams": [
   [
    {
@@ -14,9 +14,12 @@
     ],
     "ability": "Guts",
     "item": "Silk Scarf",
-    "level": 75,
+    "level": 60,
     "ivs": {
-     "atk": 10
+     "atk": 11
+    },
+    "evs": {
+     "atk": 0
     }
    },
    {

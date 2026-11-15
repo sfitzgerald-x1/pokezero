@@ -1,7 +1,7 @@
 {
  "schema": "pokezero.effect_probe.scenario.v1",
  "move": "marvelscale_psn",
- "note": "Damage modifiers: Marvel Scale (data/abilities.ts:2488-2498, `if (pokemon.status)`: Def x1.5) with psn from poisonpowder. Metagross (L80) then hits Milotic with Earthquake (physical: Def x1.5) and Thunderbolt (special: SpD, never boosted).",
+ "note": "Damage modifiers: Marvel Scale (data/abilities.ts:2488-2498, `if (pokemon.status)`: Def x1.5) with psn from poisonpowder. Metagross (L60) then hits Milotic with Earthquake (physical: Def x1.5) and Thunderbolt (special: SpD, never boosted).",
  "teams": [
   [
    {
@@ -82,7 +82,7 @@
     ],
     "ability": "Clear Body",
     "item": "",
-    "level": 80
+    "level": 60
    },
    {
     "species": "Gengar",

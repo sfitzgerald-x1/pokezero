@@ -1,7 +1,7 @@
 {
  "schema": "pokezero.effect_probe.scenario.v1",
  "move": "plusminus_pair",
- "note": "Damage modifiers: Gen 3 Plus/Minus read getAllActive() (both sides), so Plusle (Plus) facing Minun (Minus) has SpA x1.5 and so does Minun. Plusle (L79, SpA IV 10: SpA 147, Twisted Spoon) Thunderbolts Minun (Plus), Psychics it (Plus chained with Twisted Spoon: (4505*6144+2048)>>12 = 6758, where 6758 and 6757 round apart) while Minun Thunderbolts back (Minus), then Quick Attack (physical: no Plus).",
+ "note": "Damage modifiers: Gen 3 Plus/Minus read getAllActive() (both sides), so Plusle (Plus) facing Minun (Minus) has SpA x1.5 and so does Minun. Plusle (L79, SpA IV 15: SpA 167, Twisted Spoon) Thunderbolts Minun (Plus), Psychics it (Plus chained with Twisted Spoon: (4505*6144+2048)>>12 = 6758; against Minun's SpD 202 it differs from 6757's at all 16 rolls) while Minun Thunderbolts back (Minus), then Quick Attack (physical: no Plus).",
  "teams": [
   [
    {
@@ -16,7 +16,7 @@
     "item": "Twisted Spoon",
     "level": 79,
     "ivs": {
-     "spa": 10
+     "spa": 15
     }
    },
    {
