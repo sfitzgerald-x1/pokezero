@@ -1849,7 +1849,8 @@ class LocalShowdownEnv:
                     0.0, time.perf_counter() - annotation_started_at
                 )
                 self._root_puct_branch_observation_state_annotation_count += 1
-        if getattr(self.config.feature_masks, "self_moves", False):
+        # (getattr twice: timing tests drive this with a config double that has no masks; off = no attachment.)
+        if getattr(getattr(self.config, "feature_masks", None), "self_moves", False):
             state = replace(state, self_move_states=self.self_move_states(player))
         return state
 
