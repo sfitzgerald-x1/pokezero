@@ -471,6 +471,36 @@
    }
   },
   {
+   "scenario": "transform_pursuit",
+   "case": "base",
+   "step": 1,
+   "field": "1:active:damage_exact_dealt",
+   "value": [
+    0.11627907305955887,
+    0.0
+   ]
+  },
+  {
+   "scenario": "transform_pursuit",
+   "case": "base",
+   "step": 1,
+   "field": "1:active:last_damage_dealt",
+   "value": [
+    0.10999999940395355,
+    0.0
+   ]
+  },
+  {
+   "scenario": "transform_pursuit",
+   "case": "base",
+   "step": 1,
+   "field": "1:active:last_move",
+   "value": [
+    "splash",
+    "pursuit"
+   ]
+  },
+  {
    "scenario": "wh_pursuit",
    "case": "base",
    "step": 0,

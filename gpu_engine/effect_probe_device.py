@@ -194,7 +194,8 @@ for _case in ('selfhit=99,paralysis=0', 'selfhit=99,paralysis=99'):
 # last move and its damage history credits the intercept no dealt damage.
 _PURSUIT_FROM = 'OPEN BUG: the [from] Pursuit intercept: B2 keeps the prior last move and credits its damage dealt; the device does neither'
 ALLOWLIST[('destinybond_pursuit', 'base', 1, '1:active:last_move')] = _PURSUIT_FROM
-for _scenario, _steps in (('destinybond_pursuer', (1, 2)), ('wh_pursuit', (0,))):
+# transform_pursuit's turn 2 is the same intercept (Tyranitar's Pursuit on the switching transformed Ditto).
+for _scenario, _steps in (('destinybond_pursuer', (1, 2)), ('wh_pursuit', (0,)), ('transform_pursuit', (1,))):
     for _step in _steps:
         for _field in ('1:active:last_move', '1:active:last_damage_dealt', '1:active:damage_exact_dealt'):
             ALLOWLIST[(_scenario, 'base', _step, _field)] = _PURSUIT_FROM
