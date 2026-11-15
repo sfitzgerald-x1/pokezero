@@ -614,6 +614,73 @@ def pursuit_reveal(p):
     return pursuer & switching & (holder | p.active_ability('synchronize'))
 
 
+# DM (damage modifiers): Silk Scarf / Twisted Spoon (data/mods/gen3/items.ts), Marvel Scale (data/abilities.ts) and Gen 3's
+# Plus / Minus (data/mods/gen3/abilities.ts) at f76228a1. Gen 3's category follows the (resolved) type.
+GEN3_PHYSICAL_TYPES = ('normal', 'fighting', 'flying', 'poison', 'ground', 'rock', 'bug', 'ghost', 'steel')
+# Moves that can confuse a target in a step (a Marvel Scale holder's own self-hit can follow in the same step).
+CONFUSING_MOVES = ('signalbeam', 'confuseray', 'swagger', 'supersonic', 'dynamicpunch', 'psybeam', 'confusion',
+                   'waterpulse', 'flatter', 'teeterdance', 'dizzypunch', 'sweetkiss', 'rockclimb')
+
+
+def dm_candidate_moves(p):
+    """DM: [L,2,K] each candidate's resolved type (Hidden Power by the active's own type, as pinch_active resolves it; -1:
+    unknown, any), and [L,2,K] whether it is a damaging hit (a candidate that is not a Status move or Struggle's ???)."""
+    _, status, mtype, hidden = p.move_facts()
+    types = p.vocab['types']
+    dark = types.index('dark') if 'dark' in types else -1
+    if 'hidden_power_type' in p.s:
+        hp_type = np.where(p.active('hidden_power_type') > 0, p.active('hidden_power_type'), dark)
+    else:hp_type = np.full((p.lanes, 2), -1)
+    c = p.candidates;cc = np.clip(c, 0, len(mtype) - 1)
+    resolved = np.where(hidden[cc], hp_type[..., None], mtype[cc])
+    damaging = (c > 0) & ~status[cc] & (c != p.ids.get('struggle', -1))
+    return resolved, damaging
+
+
+def dm_physical(p, resolved):
+    """DM: [L,2,K] (physical may hold, special may hold) for resolved types (-1: both)."""
+    types = p.vocab['types']
+    physical = np.isin(resolved, [types.index(t) for t in GEN3_PHYSICAL_TYPES if t in types])
+    return physical | (resolved < 0), ~physical | (resolved < 0)
+
+
+def type_item_active(item, type_name):
+    """DM: [L,2] a side whose active holds `item` (a Gen 3 1.1x type item) when it may execute a damaging move of that
+    type, or a side a faster foe's Trick may hand the foe active's `item` before its move. An entrant does not move."""
+    def predicate(p):
+        items, types = p.vocab['items'], p.vocab['types']
+        if item not in items or type_name not in types:return np.zeros((p.lanes, 2), bool)
+        holds = p.active('item') == items.index(item)
+        holds = holds | (holds[:, ::-1] & p.side_uses('trick')[:, ::-1])
+        resolved, damaging = dm_candidate_moves(p)
+        t = types.index(type_name)
+        return holds & (damaging & ((resolved == t) | (resolved < 0))).any(-1)
+    return predicate
+
+
+def marvel_scale_target(p):
+    """DM: [L,2] the actor sides of a Marvel Scale Def boost: a side that may execute a physical damaging move into a side
+    whose active may hold Marvel Scale (holder_target: the active, a switch target or an entrant holder, a Trace copy), and
+    a holder's own side when its active may hit itself in confusion (confused, or a foe may confuse it this step).
+    Status is not predicted (it may land earlier in the step)."""
+    resolved, damaging = dm_candidate_moves(p)
+    physical, _ = dm_physical(p, resolved)
+    attacker = holder_target(p, 'marvelscale')[:, ::-1] & (damaging & physical).any(-1)
+    confusable = (p.active('confusion_counter') > 0) | p.side_uses(*CONFUSING_MOVES)[:, ::-1]
+    return attacker | (p.active_ability('marvelscale') & confusable)
+
+
+def plus_minus_active(p):
+    """DM: [L,2] a side whose active holds Plus (Minus) when the foe side's active may hold Minus (Plus) at its hit
+    (holder_target: a switch-in or a Trace copy included) and it may execute a special damaging move."""
+    resolved, damaging = dm_candidate_moves(p)
+    _, special = dm_physical(p, resolved)
+    moves = (damaging & special).any(-1)
+    plus = p.active_ability('plus') & holder_target(p, 'minus')[:, ::-1]
+    minus = p.active_ability('minus') & holder_target(p, 'plus')[:, ::-1]
+    return (plus | minus) & moves
+
+
 def entering_ability(*names):
     """PR0 reveal gates: a side may install a holder of one of these abilities this step (the
     reveal happens at its switch-in; the foe's HP/Substitute or the weather is not predicted).
@@ -895,6 +962,13 @@ KO_ALLOWED = {'bonemerang': dict(user=('status', 'clause'))}
 # residual phase or the battle end moved) a pinch lane accepts any leaf, as a sleep landing does (A1); every other pinch
 # lane keeps the damage allowance (ALLOWED['pinch']).
 CASCADE_ALLOWED = {'pinch': ALL}
+# DM: like the pinch boost, a stat modifier changes a hit's damage: the target's HP and what follows from it, and the
+# attacker's from the reply (Counter/Mirror Coat), recoil, drain and its HP items; a Marvel Scale self-hit is its holder's
+# own HP. Both sides take the damage allowance; a KO cascade accepts anything (CASCADE_ALLOWED).
+DM_DAMAGE = ('hp', 'item', 'boosts', 'typechange', 'reveal', 'visible', 'subtracker', 'wish', 'focus')
+for _effect in ('silkscarf', 'twistedspoon', 'marvelscale', 'plusminus'):
+    ALLOWED[_effect] = dict(user=DM_DAMAGE, target=DM_DAMAGE, glob=())
+    CASCADE_ALLOWED[_effect] = ALL
 
 
 def allowed_leaf(name, families):
@@ -928,6 +1002,9 @@ PLUGINS = {
     # D (fidelity tier D): Wonder Guard, the pinch abilities, Poison Point / Flame Body / Effect Spore.
     'D': dict(wonderguard=ability_target('wonderguard', move_ok=damaging_move), pinch=pinch_active,
               contact_status=ability_target(*CONTACT_ABILITIES, move_ok=contact_move), pursuit_reveal=pursuit_reveal),
+    # DM (damage modifiers): Silk Scarf, Twisted Spoon, Marvel Scale, Gen 3's Plus/Minus.
+    'DM': dict(silkscarf=type_item_active('silkscarf', 'normal'), twistedspoon=type_item_active('twistedspoon', 'psychic'),
+               marvelscale=marvel_scale_target, plusminus=plus_minus_active),
 }
 
 
