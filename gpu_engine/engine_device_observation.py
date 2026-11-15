@@ -178,7 +178,8 @@ def compile_tables(metadata, *, catalog):
     return Tables(*(j.asarray(value, j.float32 if name in floats else j.int32)
         for name, value in zip(Tables._fields, arrays)), engine_device_belief.compile_tables(metadata, catalog),
         engine_device_features.compile_tables(metadata, catalog), j.asarray(category('move:recharge'), j.int32),
-        base_pp=j.asarray([int((row or {}).get('pp', 0)) if i else 0 for i, row in enumerate(metadata['moves'])], j.int32),
+        base_pp=j.asarray([catalog.dex.move_info(n).pp if i and catalog.dex.move_info(n) is not None else 0
+            for i, n in enumerate(moves)], j.int32),
         original_hp=j.asarray(np.asarray(sd.original_hp)[species_ids], j.float32))
 
 
