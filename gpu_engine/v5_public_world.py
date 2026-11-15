@@ -167,7 +167,7 @@ def _source_foe(root, start, history, catalog, public):
                 raise ValueError('sampled-foe-outside-actual-root-posterior')
 
 
-def materialize(root, start, *, prepared, history, own_static, seed, retained=None):
+def materialize(root, start, *, prepared, history, own_static, seed, retained=None, host_key=None):
     """One source-sampled start -> exact ordinary current root or refusal.
 
     Caller may reuse the SAME ``retained`` result of public_carry across both
@@ -179,7 +179,8 @@ def materialize(root, start, *, prepared, history, own_static, seed, retained=No
     if type(prepared) is ProtocolInputs:
         if history is not None or own_static is not None or retained is not None:
             raise ValueError('protocol route cannot carry retained-driver evidence')
-        return materialize_protocol(root,start,inputs=prepared,seed=seed)
+        return materialize_protocol(root,start,inputs=prepared,seed=seed,key=host_key)
+    if host_key is not None:raise ValueError('a host world key is the protocol route\'s (phase_d_protocol_world.sample)')
     if type(root) is not PublicRoot or type(start) is not BattleStartOverride or type(history) is not capture.History or type(own_static) is not OwnStatic:
         raise ValueError('original public root, owning history and sampled packed override required')
     runtime=driver._checked(prepared);catalog=runtime['catalog']
