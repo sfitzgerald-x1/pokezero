@@ -121,6 +121,9 @@ class ConstantsTests(unittest.TestCase):
         fixtures step with every draw 99. A raw 99/98 tie outweighs subOrder*2 (and Speed*64), which put both Leftovers
         events at 6 and 7 at equal Speed, where R2 traces no heal handler: the heal ran nowhere and nothing refused. The
         key reads only the tie's low bit, so any integer draw gives one of the bit orders POSITIONS was derived from."""
+        # Unchanged for every in-bound draw: R1/R2's literal key for draw 0/1 on either side, at every Speed and subOrder.
+        for speed, suborder, draw, side in itertools.product(SPEEDS, ro.EVENT_SUBORDER, (0, 1), (0, 1)):
+            self.assertEqual(ro.event_key(speed, suborder, draw ^ side), -speed * 64 + suborder * 2 + (draw ^ side))
         for tie in range(-4, 260):
             for speed, suborder in ((0, 3), (7, 19), (2000, 14)):
                 self.assertEqual(ro.event_key(speed, suborder, tie), ro.event_key(speed, suborder, tie & 1))
