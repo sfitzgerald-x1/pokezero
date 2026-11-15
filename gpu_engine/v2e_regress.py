@@ -776,6 +776,11 @@ FAMILIES['m2'] = tuple(f'^{re.escape(n)}$' for n in M2_COUNTER_LEAVES) + (rf'^{r
 ALLOWED['whiteherb'] = dict(user=('hp', 'visible', 'subtracker', 'wish'), target=('hp', 'visible', 'subtracker', 'wish'), glob=())
 ALLOWED['facade'] = dict(user=('hp', 'visible', 'subtracker', 'wish'), target=('hp', 'visible', 'subtracker', 'wish'), glob=())
 ALLOWED['sacredfire'] = ALL
+# Transform (gpu_engine/transform.py): a side whose executed move may be Transform (the pre-state candidates: its action slot,
+# a Sleep Talk call, an Encore override) copies the foe active in place; everything of both actives and both trackers after
+# it in that step may differ (the foe's later move resolves against the copy, the Update cure, the Choice unlock, the faint
+# revert, the six new leaves). No capture carries a transformed mon, so every other lane must stay bitwise.
+ALLOWED['transform'] = ALL
 
 
 # Allowances an effect earns only on a KO cascade in which the other side (its target's) has a newly (un)fainted
@@ -812,6 +817,7 @@ PLUGINS = {
     'C': dict(psychoboost=move('psychoboost'), whiteherb=white_herb, sacredfire=move('sacredfire'), facade=move('facade')),
     # WH (White Herb plus C-lite, which replaces C's draft; Psycho Boost's drop is unchanged, its restore is White Herb's).
     'WH': dict(whiteherb=white_herb, facade=facade_status, sacredfire=frozen_defrost),
+    'T': dict(transform=move('transform')),
 }
 
 

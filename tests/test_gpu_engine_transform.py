@@ -62,6 +62,16 @@ class TableTests(unittest.TestCase):
         with open(f.__file__) as source:self.assertIn('TRANSFORM_UNREPRESENTED', source.read())
 
 
+    def test_regression_plugin_and_tracker_defaults(self):
+        """v2e_regress: plug-in T involves a side whose executed move may be Transform (ALL allowed after it); the new
+        tracker leaves migrate to zeros (no captured lane is transformed)."""
+        from gpu_engine import v2e_regress as r
+        self.assertEqual(sorted(r.predicates(['T'])), ['transform']);self.assertEqual(r.ALLOWED['transform'], r.ALL)
+        for name in r.TRANSFORM_TRACKERS:
+            fill = r.tracker_default(name, np.zeros((1, 2, 6), np.int32))
+            self.assertEqual(np.asarray(fill(3)).tolist(), np.zeros((3, 2, 6), np.int32).tolist())
+
+
 class HelperTests(unittest.TestCase):
     """transform.apply/revert/update_cure/choice_unlock called eagerly on a two-lane authored state."""
     def state(self):
