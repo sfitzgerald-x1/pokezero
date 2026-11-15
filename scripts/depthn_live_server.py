@@ -62,10 +62,31 @@ from gpu_engine import atomic_compilation_cache,champion_evaluator as evaluators
 
 
 class ArrivalQueue(asyncio.Queue):
-    """asyncio.Queue stamping request[live.ARRIVAL] = arrival on each (request, future, arrival) item it accepts."""
+    """asyncio.Queue stamping request[live.ARRIVAL] = arrival on each (request, future, arrival) item it accepts, and keeping,
+    per connection handler task (the putter), the future of the request whose answer it owes (owing: a handler has one request
+    in flight; the entry goes when its answer is written, AnswerMark, or the task ends), so a stop can wait for exactly the
+    handlers that still have an answer to write."""
+    def __init__(self,*a,**kw):
+        super().__init__(*a,**kw);self.owing={}
+
     def _put(self,item):
-        if item is not None:item[0][live.ARRIVAL]=item[2]
+        if item is not None:
+            item[0][live.ARRIVAL]=item[2];task=asyncio.current_task()
+            if task is not None:
+                if task not in self.owing:task.add_done_callback(lambda done:self.owing.pop(done,None))
+                self.owing[task]=item[1]
         super()._put(item)
+
+
+class AnswerMark:
+    """A connection's StreamWriter for Codex's handle: write() (the handle loop's one write per request: the answer) also
+    clears its task's debt in `owing`; everything else is the writer's."""
+    def __init__(self,writer,owing):self._writer=writer;self._owing=owing
+
+    def write(self,data):
+        self._writer.write(data);self._owing.pop(asyncio.current_task(),None)
+
+    def __getattr__(self,name):return getattr(self._writer,name)
 
 
 class Server(original.Server):
@@ -91,7 +112,6 @@ class Server(original.Server):
             self.pipeline.submit(request,lambda response,request=request,future=future:loop.call_soon_threadsafe(self._settle,request,future,response,slots))
         for _ in range(self.limit):await slots.acquire()   # drain: every accepted request answered
         await loop.run_in_executor(None,self.pipeline.close)
-        await asyncio.sleep(.05)   # let the handle loops write the last answers before serve() cancels them
 
     def _settle(self,request,future,response,slots):
         """On the loop: one request's end (Codex's consumer's checks: a response for another request_id is an error)."""
@@ -138,17 +158,20 @@ class Server(original.Server):
         cancelling the listener's serve_forever: since CPython 3.13.(14..18) a cancelled serve_forever also closes every client
         connection at once (asyncio.Server.close_clients), so the answers owed to requests already accepted were lost (the
         pipelined server's drain test failed on CI). Here the listener only stops accepting; then, as Codex's: closing set,
-        the queue's sentinel, the consumer drained (every accepted request answered, its handler writing its answer), the
-        handlers ended, the executor shut down."""
+        the queue's sentinel, the consumer drained (every accepted request's future set), each handler owed an answer waited
+        for while it writes it and ends (closing: at most 10 s), the other handlers (idle on their connections) ended, the
+        executor shut down."""
         consumer=asyncio.create_task(self.consume());server=None
         try:
-            server=await asyncio.start_server(self.handle,host,port)
+            server=await asyncio.start_server(lambda reader,writer:self.handle(reader,AnswerMark(writer,self.queue.owing)),host,port)
             await self.stop_event.wait()
         finally:
             if server is not None:server.close()   # no new connections; the accepted ones stay open until answered
             self.closing=True
             await self.queue.put(None)
             await consumer
+            owed=[task for task,future in self.queue.owing.items()if future.done()and not task.done()]
+            if owed:await asyncio.wait(owed,timeout=10.)   # each writes the answer it owes, then (closing) leaves its loop
             for task in tuple(self.clients):task.cancel()
             await asyncio.gather(*self.clients,return_exceptions=True)
             if server is not None:await server.wait_closed()
