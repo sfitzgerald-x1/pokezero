@@ -128,6 +128,35 @@ class ForecastUpdateTests(unittest.TestCase):
         self.assertEqual(self.f.entry_events(before, before, j.asarray([0, 1, 1]), self.wt).tolist(),
                          [[True, False], [False, True], [False, True]])
 
+    def test_faint_queue_reforms_only_a_recipient_not_yet_fainted(self):
+        j=self.j;cast=('castform','forecast',50);duck=('golduck','cloudnine',50)
+        before=self.state([(cast,duck,RAIN),(cast,duck,RAIN),(duck,cast,SUN),(duck,cast,SUN),
+                           (('castform','forecast',0),duck,RAIN),(cast,duck,RAIN)])
+        # Both HP writes can precede faintMessages. Queue order determines whether the zero-HP Castform is still
+        # active when the suppressor's End runs: target before recoil/Bond, actor first for Explosion, Perish order.
+        after=before._replace(hp=before.hp.at[:5,:,0].set(0).at[5,1,0].set(0))
+        present=self.f.faint_recipients(after,before.hp,j.asarray([1,0,0,1,1,1]))
+        event=self.f.suppressor_fainted(after,before.hp,self.wt)
+        out,changed=self.f.update(after,self.table,self.wt,eligible=event,not_fainted=present)
+        self.assertEqual(changed.tolist(),[[True,False],[False,False],[False,True],[False,False],
+                                          [False,False],[True,False]])
+        self.assertEqual(self.types(out)[0][0],[WATER,0])
+        self.assertEqual(self.types(out)[2][1],[FIRE,0])
+        self.assertEqual(out.hp.tolist(),after.hp.tolist())
+
+    def test_separate_residual_faints_preserve_the_earlier_forme(self):
+        j=self.j
+        before=self.state([(('castform','forecast',11),('golduck','cloudnine',36),RAIN)])
+        first=before._replace(hp=before.hp.at[0,1,0].set(0))
+        first,changed=self.f.update(first,self.table,self.wt,
+            eligible=self.f.suppressor_fainted(first,before.hp,self.wt))
+        self.assertEqual(changed.tolist(),[[True,False]])
+        later=first._replace(hp=first.hp.at[0,0,0].set(0))
+        later,changed=self.f.update(later,self.table,self.wt,
+            eligible=self.f.suppressor_fainted(later,first.hp,self.wt))
+        self.assertEqual(changed.tolist(),[[False,False]])
+        self.assertEqual(self.types(later)[0][0],[WATER,0])
+
 
 def _step_source():
     tree = ast.parse((ROOT / 'gpu_engine' / 'transition.py').read_text())
@@ -158,7 +187,8 @@ class ForecastWiringTests(unittest.TestCase):
     def test_the_weather_change_points(self):
         self.assertEqual(self.kinds(self.fns['initialize']), ['entered'])
         self.assertEqual(self.kinds(self.step), ['fainted_since', 'departed', 'entered', 'entered', 'weather_since',
-                                                 'departed', 'entered', 'fainted_since', 'weather_since', 'fainted_since'])
+                                                 'departed', 'entered', 'fainted_since', 'weather_since', 'fainted_since',
+                                                 'fainted_since'])
         # Each call threads the lifecycle tape and the device context, and reassigns the state.
         for call in _calls(self.step, '_forecast'):
             keys = {k.arg: ast.unparse(k.value) for k in call.keywords}
@@ -167,7 +197,7 @@ class ForecastWiringTests(unittest.TestCase):
         assigns = [n for n in ast.walk(self.step) if isinstance(n, ast.Assign) and isinstance(n.value, ast.Call)
                    and isinstance(n.value.func, ast.Name) and n.value.func.id == '_forecast']
         self.assertEqual({ast.unparse(n.targets[0]) for n in assigns}, {'(work, _public_trace)'})
-        self.assertEqual(len(assigns), 10)
+        self.assertEqual(len(assigns), 11)
 
     def test_order_against_the_events_they_follow(self):
         lines = [c.lineno for c in _calls(self.step, '_forecast')]
@@ -187,14 +217,20 @@ class ForecastWiringTests(unittest.TestCase):
         actions = [n for n in self.step.body if isinstance(n, ast.For) and ast.unparse(n.iter) == 'range(2)'
                    and any(isinstance(s, ast.Assign) and ast.unparse(s) == '_faint_before_hp = work.hp' for s in n.body[:1])]
         self.assertEqual(len(actions), 1)
-        self.assertTrue(actions[0].end_lineno < lines[7] < turn_context)
+        self.assertTrue(actions[0].lineno < lines[7] < actions[0].end_lineno < turn_context)
+        action_call=_calls(actions[0],'_forecast')[-1]
+        self.assertEqual({k.arg:ast.unparse(k.value) for k in action_call.keywords}['queue_first'],
+                         'jnp.where(explodes, side, foe)')
         clock = first('climate.residual_clock(')[-1]
         self.assertTrue(clock < lines[8])
         residual = [n for n in ast.walk(self.step) if isinstance(n, ast.For) and ast.unparse(n.iter) == 'range(residual_order.EVENTS)']
         self.assertEqual(len(residual), 1)
-        self.assertFalse(_calls(residual[0], '_forecast'), 'the residual event loop stays free of Forecast')
+        self.assertEqual(len(_calls(residual[0], '_forecast')),1)
+        self.assertTrue(residual[0].lineno < lines[9] < residual[0].end_lineno)
         herb = first('_white_herb_pair(work, table, 0, _herb_residual')[0]
-        self.assertTrue(residual[0].end_lineno < herb < lines[9])
+        self.assertTrue(residual[0].end_lineno < herb < lines[10])
+        perish_call=_calls(self.step,'_forecast')[-1]
+        self.assertEqual({k.arg:ast.unparse(k.value) for k in perish_call.keywords}['queue_first'],'_perish_first')
 
     def test_the_device_line_is_the_forecast_hook(self):
         helper = self.fns['_forecast']

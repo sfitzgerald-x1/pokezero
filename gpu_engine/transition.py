@@ -252,13 +252,14 @@ def _speeds(state,table):
     return jnp.where(state.hp[rows,sides,state.active] > 0,live_speed,stats[...,5])
 
 
-def _forecast(state,table,eligible,*,entered=None,departed=None,weather_since=None,fainted_since=None,weather=None,
+def _forecast(state,table,eligible,*,entered=None,departed=None,weather_since=None,fainted_since=None,weather=None,queue_first=None,
               _public_trace=None,_lifecycle=False,_device_public=None):
     """Forecast at one Showdown WeatherChange point (gpu_engine/forecast.py). eligible: [B] rows where the point runs; the
     event that fires there (one keyword): entered=(before, side), one entry's events (forecast.entry_events);
     departed=(before, side), a living suppressor's End at its switch-out (it, and that side, stop suppressing);
     weather_since=before, the field weather changed since `before` (setWeather, clearWeather); fainted_since=hp, a
-    suppressor's End at its faint since `hp`; none: every eligible row. weather: the field weather the event sees
+    suppressor's End at its faint since `hp`; queue_first names the first side in a potentially double-faint queue.
+    None: every eligible row. weather: the field weather the event sees
     (default the state's). The device writes each re-formed active's |-formechange|...|[from] ability: Forecast as B2
     folds it (its live types and the Forecast reveal, device_public.forecast); in lifecycle mode a re-formed row's tape
     takes an unknown-status refusal. Returns (state, tape)."""
@@ -272,7 +273,9 @@ def _forecast(state,table,eligible,*,entered=None,departed=None,weather_since=No
         eligible=eligible & forecasting.suppressor_departs(*departed,table.weather)[:,None] & ~ending
     if weather_since is not None:eligible=eligible & (state.weather!=weather_since.weather)[:,None]
     if fainted_since is not None:eligible=eligible & forecasting.suppressor_fainted(state,fainted_since,table.weather)[:,None]
-    state,changed=forecasting.update(state,table.forecast,table.weather,eligible=eligible,weather=weather,ending=ending)
+    not_fainted=None if queue_first is None else forecasting.faint_recipients(state,fainted_since,queue_first)
+    state,changed=forecasting.update(state,table.forecast,table.weather,eligible=eligible,weather=weather,ending=ending,
+        not_fainted=not_fainted)
     if _device_public is not None:device_public.forecast(_device_public,state,changed)
     if _lifecycle:
         from . import engine_status_callbacks as _forecast_status
@@ -867,7 +870,6 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
     # reply in one step (a suspension follows only a Baton Pass, which deals no damage).
     _taken_amount=jnp.zeros_like(state.active)
     _taken_kind=jnp.zeros_like(state.active)    # 0 none, 1 Counter-able, 2 Mirror Coat-able
-    _forecast_action_hp=work.hp   # Forecast: the action phase's faint baseline (below the loop)
     for order in range(2):
         _faint_before_hp=work.hp
         side = jnp.where(order == 0, first, 1 - first)
@@ -2228,15 +2230,16 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
             paused |= passed
         # All move effects, including self-KO/recoil and forced-entry hazards,
         # finish before the original runAction faint queue is processed.
+        # Forecast runs at this queue's suppressor End. A target KO precedes recoil/Destiny Bond; Explosion instead
+        # queues the actor first. The second queued mon is still active even at zero HP (getAllActive checks fainted).
+        work,_public_trace=_forecast(work,table,live & move_context,fainted_since=_faint_before_hp,
+            queue_first=jnp.where(explodes,side,foe),_public_trace=_public_trace,
+            _lifecycle=_lifecycle_trace,_device_public=_device_public)
         work=_clear_fainted_boosts(work,_faint_before_hp,eligible=live & move_context)
     # Gen 3 action-phase faints request replacement BEFORE the residual action.
     # A KO cancels queued moves; direct Baton retains at most one selected foe
     # move. Both pause residuals, including hazard-KO recovery chains.
     # Post-residual replacement requests stay separate.
-    # Forecast: a Cloud Nine / Air Lock holder's End at an action's faintMessages. Any faint cancels the step's remaining
-    # move (moves_cancelled), so no later move reads a Castform's forme between that faint and here.
-    work,_public_trace=_forecast(work,table,live,fainted_since=_forecast_action_hp,_public_trace=_public_trace,
-        _lifecycle=_lifecycle_trace,_device_public=_device_public)
     turn_context = live & (~replacement | state.pending_residual)
     parties_alive = jnp.all(jnp.any(work.hp>0,axis=2),axis=1)
     active_alive = jnp.all(work.hp[rows[:,None],sides,work.active]>0,axis=1)
@@ -2345,7 +2348,6 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                 _public_trace=_weather_segment.tape
                 _weather_hp_record=_weather_segment.record
         work=_clear_fainted_boosts(work,_faint_before_hp,eligible=ordinary)
-    _forecast_residual_hp=work.hp   # Forecast: the residual handlers' faint baseline (after White Herb's, below)
     # Selected order10/priority0 handlers snapshot SPEED before suborder; ability boosts do not re-sort the queued handlers.
     # Equal-speed Speed Boost(3), Leftovers(4), seed(5), status(6) use independent ties. Fidelity M2 (design 2.3):
     # partiallytrapped (subOrder 9, events 8-9) and Yawn (19, events 12-13) join the list (14 events; Encore moves to 10-11).
@@ -2687,6 +2689,11 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
             if table.encore is not None:
                 work=work._replace(encore_move=_set_active(work.encore_move,work,side,
                     jnp.where(_active(work.encore_counter,work,side)>0,_active(work.encore_move,work,side),0)))
+        # fieldEvent runs faintMessages after EACH callback. Preserve a Forecast reveal even when Castform faints in
+        # a later callback, and latch its lifecycle refusal before later residual handlers qualify their writes.
+        if order in residual_order.POSITIONS['seed'] | residual_order.POSITIONS['status'] | residual_order.POSITIONS['wrap']:
+            work,_public_trace=_forecast(work,table,eligible,fainted_since=_faint_before_hp,_public_trace=_public_trace,
+                _lifecycle=_lifecycle_trace,_device_public=_device_public)
         work=_clear_fainted_boosts(work,_faint_before_hp,eligible=eligible)
     # Fidelity M2 (design 2.3): Perish Song's residual (data/mods/gen4/moves.ts:993-999, order 12), after the order-10
     # list. Faster first; an equal-Speed pair takes effect[1][3] (that side first). The duration falls; at 0 its onEnd
@@ -2695,6 +2702,7 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
     # first faint empties a side (Gen 3 checkWin with both sides empty is a tie): the pass is gated once, at its start.
     _perish_continues=residual_ready & jnp.all(jnp.any(work.hp>0,axis=2),axis=1)
     _perish_first=jnp.where(end_speed[:,0]!=end_speed[:,1],(end_speed[:,1]>end_speed[:,0]).astype(jnp.int32),effect_draws[:,1,3])
+    _forecast_perish_hp=work.hp
     for order in range(2):
         side=jnp.where(order==0,_perish_first,1-_perish_first)
         _faint_before_hp=work.hp
@@ -2714,12 +2722,10 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
     _herb_residual=residual_ready & jnp.all(jnp.any(work.hp>0,axis=2),axis=1)
     work,_herb=_white_herb_pair(work,table,0,_herb_residual,_device_public=_device_public)
     if _lifecycle_trace:_public_trace=status_callbacks.unknown(_public_trace,jnp.any(_herb,axis=1))
-    # Forecast: a Cloud Nine / Air Lock holder's End at a residual faint (Leech Seed, status or Wrap damage in the order-10
-    # list, or the Perish pass). No residual handler reads a forme and the weather is fixed after the clock, so one event
-    # here re-forms a Castform alive at that faint exactly as faintMessages did (forecast.py: a Castform that also faints
-    # later in the same residual keeps its forme; it is fainted and departs with base types).
-    work,_public_trace=_forecast(work,table,residual_ready,fainted_since=_forecast_residual_hp,_public_trace=_public_trace,
-        _lifecycle=_lifecycle_trace,_device_public=_device_public)
+    # Perish's duration-end callbacks both queue before faintMessages; the later queued recipient remains active at
+    # the earlier suppressor's End, even if its HP is already zero. The next ordinary callback flushes the queue.
+    work,_public_trace=_forecast(work,table,_perish_continues,fainted_since=_forecast_perish_hp,queue_first=_perish_first,
+        _public_trace=_public_trace,_lifecycle=_lifecycle_trace,_device_public=_device_public)
     # Fidelity M1 (design 2.3): mustrecharge has a duration and no residual handler, so the Residual event
     # still decrements it, last (order false sorts after every numbered handler, sim/battle.ts). At 0 it ends
     # silently: a recharge action cancelled by a Gen 3 faint expires here. Fainted holders are cleared below;

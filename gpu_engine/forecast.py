@@ -56,10 +56,12 @@ def _actives(state,name):
     return getattr(state,name)[rows,sides,state.active]
 
 
-def update(state,table,weather_table,*,eligible,weather=None,ending=None):
+def update(state,table,weather_table,*,eligible,weather=None,ending=None,not_fainted=None):
     """One WeatherChange event: every eligible living active Castform holding Forecast takes the forme of the effective
     weather. eligible: [B] (both actives) or [B,2]; weather: the field weather the event sees (default state.weather);
-    ending: [B,2] actives whose suppressor ability no longer counts (an End in progress). Returns (state, changed [B,2])."""
+    ending: [B,2] actives whose suppressor ability no longer counts (an End in progress). not_fainted: [B,2] recipients
+    still in Showdown's active list at a faint-queue event, including a zero-HP mon whose faint is queued later.
+    Otherwise positive HP identifies the living recipients. Returns (state, changed [B,2])."""
     b=state.hp.shape[0];rows=jnp.arange(b)[:,None];sides=jnp.arange(2)[None,:]
     eligible=jnp.asarray(eligible,bool)
     eligible=jnp.broadcast_to(eligible[:,None] if eligible.ndim==1 else eligible,(b,2))
@@ -70,7 +72,8 @@ def update(state,table,weather_table,*,eligible,weather=None,ending=None):
     effective=jnp.where(jnp.any(suppressing,axis=1),climate.NONE,raw)
     old=state.types[rows,sides,state.active]
     target=jnp.where(table.retyped[effective][:,None,None],table.forme[effective][:,None,:],_actives(state,'base_types'))
-    holder=eligible & (_actives(state,'species')==table.castform) & table.forecast[ability] & (hp>0)
+    live=(hp>0) if not_fainted is None else jnp.asarray(not_fainted,bool)
+    holder=eligible & (_actives(state,'species')==table.castform) & table.forecast[ability] & live
     # Transform (when the state carries it): onWeatherChange returns for a transformed mon.
     if hasattr(state,'transformed'):holder &= ~state.transformed
     new=jnp.where(holder[...,None],target,old)
@@ -82,6 +85,18 @@ def suppressor_fainted(state,before_hp,weather_table):
     End at faintMessages fires WeatherChange."""
     fainted=(before_hp[jnp.arange(state.hp.shape[0])[:,None],jnp.arange(2)[None,:],state.active]>0) & (_actives(state,'hp')<=0)
     return jnp.any(fainted & weather_table.suppressor[_actives(state,'ability')],axis=1)
+
+
+def faint_recipients(state,before_hp,queue_first):
+    """Recipients at a suppressor's End in a two-active faint queue (sim/battle.ts faintMessages/getAllActive).
+
+    A living recipient is present; a newly zero-HP recipient is also present if its faint is queued second. A mon
+    already fainted before this queue is absent. Call only for a new suppressor faint: with Forecast on the recipient,
+    the suppressor must be the other active. Ordinary damage queues the target before recoil/Destiny Bond, Explosion
+    queues its user first, and Perish queues in its residual order.
+    """
+    before=before_hp[jnp.arange(state.hp.shape[0])[:,None],jnp.arange(2)[None,:],state.active]
+    return (before>0) & ((_actives(state,'hp')>0) | (jnp.arange(2)[None,:]!=queue_first[:,None]))
 
 
 def suppressor_departs(before,side,weather_table):
