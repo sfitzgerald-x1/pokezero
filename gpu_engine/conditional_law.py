@@ -18,7 +18,35 @@ from .finite_law import Axis, Case, COORDINATES, Observation, Plan
 
 
 KERNEL_MODULES = tuple("action_history absorption baton combat critical damage_moves effects encore entry focus_punch items linked_traps mechanics phazing pressure pursuit residual_order secondary self_destruct sleep_talk solar_beam state sustain transition variable_moves weather".split())
-KERNEL_SHA256 = '189c9f8fb6a7dc21e879929ee044b627770178ba606a11c309784cf652770c5c'
+# One whole-file sha256 per kernel module, in KERNEL_MODULES order (it replaced a single KERNEL_SHA256 over them).
+KERNEL_PINS = {
+    'action_history.py': 'a47bdb2712f7eadaed12d91ede70be2ebe9f1c1ae3f70fe56495437997212407',
+    'absorption.py': '2d684602eb9aa69bc470b215c188533b0e1c4d8495dd5b71ca2508dc38f20623',
+    'baton.py': 'f86ad12ae0d59c1c8f89eb3f84f2d0519e1214ae4a4506d5cb700c6e0c20fa01',
+    'combat.py': '3e802d3fd2f488e9aa2a8ead663f935158c5fec1b7fb745034e54f21d38015af',
+    'critical.py': 'b66e6cf10c0d4df625b1c4f5e5db238af42052e556d7649a10f911745181401e',
+    'damage_moves.py': 'c2427b88dc7f7b643625659f12498e1c06412c6875c60d548fa573f6e7a45e72',
+    'effects.py': '47f549d608b60d46e8cc4db7bad5be249ae728a4aab2a0ef28f105f3614e40e2',
+    'encore.py': '63da39bbd181a8c6371b3bca853322291a03674c60f535ad0eacdbe1a440e0dd',
+    'entry.py': 'eabf2713a100256ba86fd0b5ac4155042e2a0c6dfe0bc37c7f0c6219dbdd22c1',
+    'focus_punch.py': '881bd17a84dc22576aa618256ada2b0f67bee29224dbb50508925b55e119585f',
+    'items.py': 'e6813b7460655965e194a058c4f279ef5cb684281c30f918ef5bc89beb030bfe',
+    'linked_traps.py': '743c01ee69509162e7829ae555b85f069f1c20ec9bd19cec0779d066894bade4',
+    'mechanics.py': 'e8476cc3e0029f3ed0bf82276312440e6dd8b340ffeb0c68cdd5611754eef661',
+    'phazing.py': 'c27039f267bd18660adb3c2bd826e58a7da953eea0e79677de5428f042447969',
+    'pressure.py': '73eefb16678fedf1885a4e11cbc8954d15706592742caa6b0b673fb4d63d698c',
+    'pursuit.py': '2b01102bb3819791fc1edea0ba0fe0a0b913e8dfa5a8f6501f48f3fe260a8309',
+    'residual_order.py': '7b1a958d4ce27cf8fe7560d8f5a4f95d5cb54a17adbe23ba72dccc00e35bf454',
+    'secondary.py': 'ada20a946cc106dcf798fa053392ed895fe778c977af13774ab58e0c8c657fe6',
+    'self_destruct.py': 'b3c9df0ea093eca7c0960b4c4ffd4277e289a0ded6f32f914466c0752fa9b739',
+    'sleep_talk.py': '968a78ddde87158b13f68dfcacc2158f07336d82c1be472d2283421e8583c154',
+    'solar_beam.py': '5463e103392e24df7cc560003740b7e425aba766a0d1bba90ff4428606849155',
+    'state.py': '67ca721ce1f6b1a5c3e9c6fd42fe33d65f62ffcec006f5c5efd188225111a59c',
+    'sustain.py': '0b575a55f091312679058e0ab990116b1f2348f163654ae777e293c1e7b51b24',
+    'transition.py': '820fdcc40285b362cbfacb5c91749e7b20446543ac63278afc160d0bd80f143f',
+    'variable_moves.py': '0d3655aac5b547782457be46ebfee0b8b66ece3a360d05d4ec34cebbf801ea6d',
+    'weather.py': '3c861027e16d27917fa47fa5cf5d6dc0c68d3a74af282108dfb94369d4db57e5',
+}
 MAPPING_PINS = {
     'conditioned_future.py': '95e86f5a019850cea2507305221754fde2fb9456e15a2c6f5cf21d9ea624ffbd',
     'fidelity_panel.py': '728c1d14c3cc5e95de63d6d3770d143263d58c0d5d7dec8a444b64c5b829099f',
@@ -31,17 +59,19 @@ def _source_certificate():
     root = Path(mapping.__file__).parent
     if Path(conditioned.__file__).parent != root:
         raise ValueError("CONSUMER_SOURCE_ROOT_MISMATCH")
-    domain = hashlib.sha256(b"".join(name.encode()+b"\0"+(root/(name+".py")).read_bytes()+b"\0"
-        for name in KERNEL_MODULES)).hexdigest()
-    if domain != KERNEL_SHA256:
-        raise ValueError("CONSUMER_DOMAIN_DRIFT")
+    if tuple(KERNEL_PINS) != tuple(name+".py" for name in KERNEL_MODULES):
+        raise ValueError("CONSUMER_DOMAIN_DRIFT: KERNEL_MODULES")
+    data = {name: (root/(name+".py")).read_bytes() for name in KERNEL_MODULES}
+    for name in KERNEL_MODULES:
+        if hashlib.sha256(data[name]).hexdigest() != KERNEL_PINS[name+".py"]:
+            raise ValueError("CONSUMER_DOMAIN_DRIFT: " + name + ".py")
     rows = []
     for name, expected in MAPPING_PINS.items():
         actual = hashlib.sha256((root/name).read_bytes()).hexdigest()
         if actual != expected:
             raise ValueError("CONSUMER_MAPPING_DRIFT: " + name)
         rows.append((name, actual))
-    rows.extend((name+".py", hashlib.sha256((root/(name+".py")).read_bytes()).hexdigest())
+    rows.extend((name+".py", hashlib.sha256(data[name]).hexdigest())
         for name in KERNEL_MODULES)
     rows.append(("conditional_law.py", hashlib.sha256(Path(__file__).read_bytes()).hexdigest()))
     return tuple(rows)
