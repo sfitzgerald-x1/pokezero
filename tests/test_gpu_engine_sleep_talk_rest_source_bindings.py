@@ -7,11 +7,12 @@ def val(path,name):
  tree=ast.parse((ROOT/path).read_text());node=next(n for n in tree.body if isinstance(n,ast.Assign)and any(isinstance(t,ast.Name)and t.id==name for t in n.targets));return ast.literal_eval(node.value)
 class SleepTalkRestSourceTests(unittest.TestCase):
  def test_all_actual_pins_and_domains(self):
-  for file,key in [('engine_source_frame_witness.py','SOURCE_PINS'),('chance_consumers.py','SOURCE_PINS'),('ordinary_law.py','MAPPING_PINS'),('conditional_law.py','MAPPING_PINS')]:
+  for file,key in [('engine_source_frame_witness.py','SOURCE_PINS'),('chance_consumers_pins.py','SOURCE_PINS'),('ordinary_law.py','MAPPING_PINS'),('conditional_law.py','MAPPING_PINS')]:
    for name,digest in val(file,key).items():self.assertEqual(hashlib.sha256((ROOT/name).read_bytes()).hexdigest(),digest,(file,name))
   modules=tuple('action_history absorption baton combat critical damage_moves effects encore entry focus_punch items linked_traps mechanics phazing pressure pursuit residual_order secondary self_destruct sleep_talk solar_beam state sustain transition variable_moves weather'.split())
-  domain=hashlib.sha256(b''.join(n.encode()+b'\0'+(ROOT/(n+'.py')).read_bytes()+b'\0'for n in modules)).hexdigest()
-  for file,key in [('conditional_law.py','KERNEL_SHA256'),('chance_consumers.py','DOMAIN_SHA256'),('ordinary_law.py','DOMAIN_SHA256')]:self.assertEqual(val(file,key),domain)
+  # the per-module domain pins (they replaced one KERNEL_SHA256 / DOMAIN_SHA256 over these modules): every module, in order, at its bytes
+  current=[(n+'.py',hashlib.sha256((ROOT/(n+'.py')).read_bytes()).hexdigest())for n in modules]
+  for file,key in [('conditional_law.py','KERNEL_PINS'),('chance_consumers_pins.py','DOMAIN_PINS'),('ordinary_law.py','DOMAIN_PINS')]:self.assertEqual(list(val(file,key).items()),current,(file,key))
  def test_default_numerics_and_detect_real_mutations(self):
   old=subprocess.check_output(['git','show','3a1655ad73da6f61fa5cbe5961c40600587162dc:gpu_engine/transition.py'],text=True)
   historical=ast.parse(subprocess.check_output(['git','show','76ef9e6b:gpu_engine/transition.py'],text=True))

@@ -148,14 +148,17 @@ class TransitionObserverWiringTests(unittest.TestCase):
                 if isinstance(n, ast.Assign) and any(
                     isinstance(t, ast.Name) and t.id == name for t in n.targets)))
 
-        for file, name, count in (
-                # §6 pins residual_order.py (R1) beside transition.py: 89 and 14.
-                ("engine_source_frame_witness.py", "SOURCE_PINS", 89),
-                ("chance_consumers.py", "SOURCE_PINS", 14),
-                ("ordinary_law.py", "MAPPING_PINS", 6),
-                ("conditional_law.py", "MAPPING_PINS", 4)):
+        from tests._source_pins import PIN_COUNTS   # the counts' one home (tests/_source_pins.py)
+        for file, name in (
+                ("engine_source_frame_witness.py", "SOURCE_PINS"),
+                ("chance_consumers_pins.py", "SOURCE_PINS"),
+                ("chance_consumers_pins.py", "DOMAIN_PINS"),
+                ("ordinary_law.py", "MAPPING_PINS"),
+                ("ordinary_law.py", "DOMAIN_PINS"),
+                ("conditional_law.py", "MAPPING_PINS"),
+                ("conditional_law.py", "KERNEL_PINS")):
             pins = literal(file, name)
-            self.assertEqual(len(pins), count)
+            self.assertEqual(len(pins), PIN_COUNTS[(file, name)])
             for target, expected in pins.items():
                 with self.subTest(binding=file, target=target):
                     actual = hashlib.sha256((ROOT / "gpu_engine" / target).read_bytes()).hexdigest()
@@ -163,13 +166,12 @@ class TransitionObserverWiringTests(unittest.TestCase):
         modules = ("action_history absorption baton combat critical damage_moves effects encore "
                    "entry focus_punch items linked_traps mechanics phazing pressure pursuit residual_order secondary "
                    "self_destruct sleep_talk solar_beam state sustain transition variable_moves weather").split()
-        domain = hashlib.sha256(b"".join(name.encode() + b"\0" +
-            (ROOT / "gpu_engine" / (name + ".py")).read_bytes() + b"\0"
-            for name in modules)).hexdigest()
-        for file, name in (("chance_consumers.py", "DOMAIN_SHA256"),
-                           ("ordinary_law.py", "DOMAIN_SHA256"),
-                           ("conditional_law.py", "KERNEL_SHA256")):
-            self.assertEqual(literal(file, name), domain)
+        # The per-module domain pins replaced one DOMAIN_SHA256 / KERNEL_SHA256 over these modules: each table names
+        # every module, in this order (each entry's bytes are checked in the loop above).
+        for file, name in (("chance_consumers_pins.py", "DOMAIN_PINS"),
+                           ("ordinary_law.py", "DOMAIN_PINS"),
+                           ("conditional_law.py", "KERNEL_PINS")):
+            self.assertEqual(list(literal(file, name)), [module + ".py" for module in modules])
 
 
 if __name__ == "__main__":

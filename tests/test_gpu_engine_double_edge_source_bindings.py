@@ -23,13 +23,18 @@ class DoubleEdgeSourceBindingTests(unittest.TestCase):
   # §6 (the effect-coordinate chance proof) re-certifies four bodies and the pinned-file inventories at its own commits:
   # 72670171 and 3b0cc40e (plan_for_state's effect axes and SUSPENDED_ROOT_SAVED_BLOCKS, conditional_law's saved
   # effect block, residual_order.py in SOURCE_PINS and the domain lists) and 53dc3add (ordinary_law's effect bank).
-  certified={'chance_consumers.py':'3b0cc40e6709bd19fe70a6295580a51590dd4f57',
-             'phase_d_chance.py':'3b0cc40e6709bd19fe70a6295580a51590dd4f57',
-             'conditional_law.py':'3b0cc40e6709bd19fe70a6295580a51590dd4f57',
+  # Per-module domain pins (cf0bb33d) re-certify the four gate bodies: each aggregate DOMAIN_SHA256 / KERNEL_SHA256
+  # literal became a per-module DOMAIN_PINS / KERNEL_PINS table, the gates check it module by module (and the table
+  # against the module list, in order), and chance_consumers' tables moved to chance_consumers_pins.py, whose
+  # inventory is bound here too. The witness body is unchanged (its SOURCE_PINS only took one entry per line).
+  certified={'chance_consumers.py':'cf0bb33db8c2ab0247c8c0988538eb29811d0a9b',
+             'chance_consumers_pins.py':'cf0bb33db8c2ab0247c8c0988538eb29811d0a9b',
+             'phase_d_chance.py':'cf0bb33db8c2ab0247c8c0988538eb29811d0a9b',
+             'conditional_law.py':'cf0bb33db8c2ab0247c8c0988538eb29811d0a9b',
              'engine_source_frame_witness.py':'3b0cc40e6709bd19fe70a6295580a51590dd4f57',
-             'ordinary_law.py':'53dc3add38e37c36b7609edabe4f96e313022b16'}
-  constants={'SOURCE_PINS','MAPPING_PINS','DOMAIN_SHA256','KERNEL_SHA256'}
-  for file in ('chance_consumers.py','ordinary_law.py','conditional_law.py',
+             'ordinary_law.py':'cf0bb33db8c2ab0247c8c0988538eb29811d0a9b'}
+  constants={'SOURCE_PINS','MAPPING_PINS','DOMAIN_PINS','KERNEL_PINS','DOMAIN_SHA256','KERNEL_SHA256'}
+  for file in ('chance_consumers.py','chance_consumers_pins.py','ordinary_law.py','conditional_law.py',
                'engine_source_frame_witness.py','phase_d_chance.py'):
    old=ast.parse(subprocess.check_output(['git','show',certified.get(file,baseline)+':gpu_engine/'+file],cwd=ROOT,text=True))
    current=ast.parse((ROOT/'gpu_engine'/file).read_text())
@@ -41,13 +46,14 @@ class DoubleEdgeSourceBindingTests(unittest.TestCase):
    def mappings(tree):
     return {target.id:tuple(ast.literal_eval(node.value)) for node in tree.body
      if isinstance(node,ast.Assign) for target in node.targets
-     if isinstance(target,ast.Name) and target.id in ('SOURCE_PINS','MAPPING_PINS')}
+     if isinstance(target,ast.Name) and target.id in ('SOURCE_PINS','MAPPING_PINS','DOMAIN_PINS','KERNEL_PINS')}
    self.assertEqual(mappings(old),mappings(current),file)
  def test_all_three_domain_guards_and_every_owned_mapping_pin(self):
   modules='action_history absorption baton combat critical damage_moves effects encore entry focus_punch items linked_traps mechanics phazing pressure pursuit residual_order secondary self_destruct sleep_talk solar_beam state sustain transition variable_moves weather'.split()
-  domain=hashlib.sha256(b''.join(n.encode()+b'\0'+(ROOT/'gpu_engine'/(n+'.py')).read_bytes()+b'\0'for n in modules)).hexdigest()
-  for file,key in [('conditional_law.py','KERNEL_SHA256'),('chance_consumers.py','DOMAIN_SHA256'),('ordinary_law.py','DOMAIN_SHA256')]:self.assertEqual(constant(file,key),domain,(file,key))
-  for file,key in [('engine_source_frame_witness.py','SOURCE_PINS'),('chance_consumers.py','SOURCE_PINS'),('conditional_law.py','MAPPING_PINS'),('ordinary_law.py','MAPPING_PINS')]:
+  # the per-module domain pins (they replaced one KERNEL_SHA256 / DOMAIN_SHA256 over these modules): every module, in order
+  domain=[(n+'.py',hashlib.sha256((ROOT/'gpu_engine'/(n+'.py')).read_bytes()).hexdigest())for n in modules]
+  for file,key in [('conditional_law.py','KERNEL_PINS'),('chance_consumers_pins.py','DOMAIN_PINS'),('ordinary_law.py','DOMAIN_PINS'),('phase_d_chance.py','DOMAIN_PINS')]:self.assertEqual(list(constant(file,key).items()),domain,(file,key))
+  for file,key in [('engine_source_frame_witness.py','SOURCE_PINS'),('chance_consumers_pins.py','SOURCE_PINS'),('conditional_law.py','MAPPING_PINS'),('ordinary_law.py','MAPPING_PINS')]:
    for name,want in constant(file,key).items():self.assertEqual(hashlib.sha256((ROOT/'gpu_engine'/name).read_bytes()).hexdigest(),want,(file,name))
  def test_literal_only_repair_leaves_all_guard_and_helper_bodies_exact(self):
   # This regression binds the historical repair, not later reviewed source batches.
