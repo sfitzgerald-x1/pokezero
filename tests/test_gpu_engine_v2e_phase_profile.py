@@ -22,9 +22,9 @@ from gpu_engine import v2e_census as cz, v2e_phase_profile as pp
 
 ROOT = Path(__file__).resolve().parents[1]
 # Statements of a stand-in step_with_chance on the real phase lines (A, B, D, E0, two actions E1/E4, F1, two residual events, G).
-CODE = {400: 'def step_with_chance(x, y):', 545: '    a = helper(x) + y', 602: '    b = a * y', 673: '    c = b - x', 793: '    c = c + 1',
-    816: '    for order in range(2):', 818: '        c = c * 2 + order', 2059: '        c = jnp.where(c > 0, c, -c)', 2169: '    d = c - y',
-    2289: '    for event in range(2):', 2290: '        d = d + event', 2386: '        d = d * 3', 2648: '    return d + a'}
+CODE = {403: 'def step_with_chance(x, y):', 548: '    a = helper(x) + y', 605: '    b = a * y', 676: '    c = b - x', 796: '    c = c + 1',
+    819: '    for order in range(2):', 821: '        c = c * 2 + order', 2073: '        c = jnp.where(c > 0, c, -c)', 2191: '    d = c - y',
+    2311: '    for event in range(2):', 2312: '        d = d + event', 2408: '        d = d * 3', 2670: '    return d + a'}
 HEADER = ['import jax', 'import jax.numpy as jnp', '', '', '@jax.jit', 'def helper(x):', '    return x * 3 + 1']
 LABELS = ['A', 'B', 'D', 'E0', 'E1.0', 'E4.0', 'E1.1', 'E4.1', 'F1', 'F2.0', 'F2.1', 'G']
 
@@ -81,7 +81,7 @@ class PhaseTableTest(unittest.TestCase):
         for tag, label in cz.BOUNDARIES:self.assertTrue(label == 'END' or cz.base(label) in names, tag)
 
     def test_label_lines(self):
-        lines = [None, 546, 602, 636, 707, 803, 829, 1076, 1487, 2059, 829, 1076, 2125, 2180, 2282, 2290, 2386, 2295, 2321, 2298, 2666, None]
+        lines = [None, 549, 605, 639, 710, 806, 832, 1079, 1490, 2073, 832, 1079, 2139, 2202, 2304, 2312, 2408, 2317, 2343, 2320, 2688, None]
         want = ['outside', 'A', 'B', 'C', 'D', 'E0', 'E1.0', 'E2.0', 'E3.0', 'E4.0', 'E1.1', 'E2.1', 'E4.1', 'F1', 'F2.pre', 'F2.0', 'F2.0',
             'F2.1', 'F2.1', 'F2.2', 'G', 'outside']
         self.assertEqual(cz.label_lines(lines), want)
@@ -90,7 +90,7 @@ class PhaseTableTest(unittest.TestCase):
 
     def test_listing_lines(self):
         with tempfile.TemporaryDirectory() as d:
-            path = Path(d, 'listing.txt');path.write_text('  411:   check\n  545:   rows\n  602:   speed\n 2180:   x\n 2706:   return\nnoise\n')
+            path = Path(d, 'listing.txt');path.write_text('  414:   check\n  548:   rows\n  605:   speed\n 2202:   x\n 2731:   return\nnoise\n')
             self.assertEqual(cz.listing_lines(path), {'pre': 1, 'A': 1, 'B': 1, 'F1': 1, 'G': 1})
 
 
