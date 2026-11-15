@@ -84,6 +84,13 @@ class ReplyPrior:
     def jit_logits(self, worlds, owner):
         """The same logits from one jitted program: the views vmapped over the stacked worlds, then the reply model."""
         import jax
+        return np.asarray(jax.device_get(self.jit_dispatch(worlds, owner)), np.float32)
+
+    def jit_dispatch(self, worlds, owner):
+        """jit_logits' program dispatched, not fetched: its device array (JAX runs it asynchronously). jit_logits is this,
+        then device_get as float32: the batching pipeline's reply_forward='root' dispatches it in the device thread right after
+        the price and fetches it in reduce (the same program on the same inputs: the same bits)."""
+        import jax
         import jax.numpy as jnp
         if any(w.state is None for w in worlds):raise ValueError('a priced root with an unconstructed world')
         if owner not in self._jitted:
@@ -93,8 +100,7 @@ class ReplyPrior:
                 inputs = jax.tree.map(lambda x: x.reshape((x.shape[0] * x.shape[1],) + x.shape[2:]), inputs)
                 return evaluator(params, inputs).policy_logits
             self._jitted[owner] = jax.jit(program)
-        out = self._jitted[owner](self.params, host_stack([w.state for w in worlds]), host_stack([w.public for w in worlds]))
-        return np.asarray(jax.device_get(out), np.float32)
+        return self._jitted[owner](self.params, host_stack([w.state for w in worlds]), host_stack([w.public for w in worlds]))
 
     def warm(self, worlds):
         """Compile what a live root of these worlds' shapes runs, for both owner seats, before READY (a seat first compiled on

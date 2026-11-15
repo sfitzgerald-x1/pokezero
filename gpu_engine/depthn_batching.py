@@ -12,7 +12,8 @@ device price of the current batch:
   device; the rest wait in `ready` for the device.
 - device: build (views and root forward) and ONE price call on the smallest bucket holding the batch (DepthNLiveSearch._price),
   then, with reply_forward='device', the reply prior's forward for every priced root of the batch (one call per owner seat,
-  padded to the bucket's world count). Then the batch goes to the reduce thread and the device takes the next batch.
+  padded to the bucket's world count), or with reply_forward='root' (jit views) each priced root's own per-root forward,
+  dispatched (asynchronous) for reduce to fetch. Then the batch goes to the reduce thread and the device takes the next batch.
 - reduce: per root backups, the reply prior (its forward too, with reply_forward='reduce', the default: per root, exactly as
   the serial search), decide, the noise gate, the effect guard; the responses (DepthNLiveSearch._decide/_assemble), each
   checked by phase_d_search_server.encode, go to their requests' `done` callbacks.
@@ -51,7 +52,9 @@ Numerics. At batch 1 every stage is the serial search's, bit for bit. A batch of
 over all the batch's roots, shapes keyed by capacity), as the serial search does when b requests coincide: whether that is bit
 for bit each root's bucket-1 price is not shown for the real champion (the fake engine's tests are; the GPU reduce dump's
 bucket_invariance check measures it). The reply forward is per root by default; reply_forward='device' (one forward per seat
-over the batch, padded) is NOT bitwise the per-root forward (another batch shape; reply_logits), so it is opt-in.
+over the batch, padded) is NOT bitwise the per-root forward (another batch shape; reply_logits), so it is opt-in;
+reply_forward='root' IS bitwise the default (the same per-root program on the same inputs, only dispatched by the device
+thread: reduce no longer runs the host stacking, the dispatch and the forward's wait).
 
 Responses are the serial search's (the same stage functions); per response: queue_seconds = arrival -> prepare start,
 prepare/classify/structure_seconds the root's own, build/price/reduce_seconds its batch's, decision_seconds = prepare start ->
@@ -70,7 +73,7 @@ import time
 
 from . import constructor_worlds as cw, depthn_live_search as live
 
-REPLY_FORWARDS = ('reduce', 'device')
+REPLY_FORWARDS = ('reduce', 'device', 'root')
 LOCAL_LOAD = .5   # the arriving requests' mean in-flight count under which a new battle may be homed in process
 
 
@@ -430,6 +433,8 @@ class Pipeline:
                 priced = search._price(gated, None)
                 if self.reply_forward == 'device' and getattr(search, 'reply', None) is not None:
                     priced['reply_logits'] = reply_logits(search, priced, {t.p['request_id']: t.item for t in batch})
+                elif self.reply_forward == 'root' and getattr(getattr(search, 'reply', None), 'mode', None) == 'jit':
+                    priced['reply_pending'] = reply_dispatch(search, priced, {t.p['request_id']: t.item for t in batch})
             except BaseException as caught:   # noqa: BLE001 -- answered per request by the reduce thread
                 error = caught
             seconds = None if priced is None else priced['build_seconds'] + priced['price_seconds']
@@ -452,6 +457,8 @@ class Pipeline:
             try:
                 if error is not None:
                     raise error
+                if 'reply_pending' in priced:   # reply_forward='root': the device thread's per-root forwards, fetched here
+                    fetch_replies(priced)
                 results = search._decide(todo, [t.item for t in batch], priced);t_reduce = time.perf_counter();now = self.clock()
                 out = search._assemble(todo, [t.item for t in batch], results, {k: dict(t.labels) for k, t in enumerate(batch)},
                                        {k: t.gate for k, t in enumerate(batch) if t.gate is not None}, priced, t_reduce,
@@ -503,6 +510,35 @@ def warm_seed(search):
         if stages:
             out[b] = (stages['build_seconds'] + stages['price_seconds'], stages['reduce_seconds'])
     return out
+
+
+def reply_dispatch(search, priced, items):
+    """reply_forward='root' (jit views only): {request_id: the reply program's device array} for every priced root of a batch,
+    each root's own per-root program (ReplyPrior.jit_dispatch: the forward reduce would run, the same shapes and inputs, so the
+    same bits) dispatched right after the price, in the device thread, and fetched by reduce (fetch_replies). A root whose
+    dispatch raises is left out: reduce runs its forward itself, and refuses it there as before."""
+    reply = search.reply;out = {}
+    for root in priced['made'].roots if priced.get('chosen') is not None else ():
+        if root['status'] != 'PRICED' or root['request_id'] not in items:
+            continue
+        item = items[root['request_id']]
+        try:
+            out[root['request_id']] = reply.jit_dispatch(tuple(item.made.worlds), int(item.detached.address.owner))
+        except Exception:   # noqa: BLE001 -- reduce's own forward raises it again, for this root only
+            continue
+    return out
+
+
+def fetch_replies(priced):
+    """reply_forward='root', in reduce: the dispatched programs' logits fetched (float32, as jit_logits returns them) into
+    priced['reply_logits'], which the search's reduce uses instead of running each root's forward."""
+    import jax
+    import numpy as np
+    pending = priced.pop('reply_pending', None)
+    if pending:
+        fetched = jax.device_get(pending)
+        priced['reply_logits'] = {k: np.asarray(v, np.float32) for k, v in fetched.items()}
+    return priced
 
 
 def reply_logits(search, priced, items):

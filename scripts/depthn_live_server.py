@@ -349,8 +349,10 @@ def parser():
         'world-range seam): a lone in-process decision of W >= --split-min-worlds builds its worlds across up to this many idle workers '
         '(default 0: off)')
     p.add_argument('--split-min-worlds',type=int,default=32,help='the smallest W --split-worlds splits (default 32)')
-    p.add_argument('--reply-forward',choices=('reduce','device'),default='reduce',help='batched serving: the reply prior\'s forward per root '
-        'on the reduce thread (default; as the serial search) or once per batch on the device thread. device is NOT bitwise the per-root '
+    p.add_argument('--reply-forward',choices=('reduce','device','root'),default='reduce',help='batched serving: the reply prior\'s forward per root '
+        'on the reduce thread (default; as the serial search), per root dispatched by the device thread right after the price and fetched '
+        'by reduce (root, --reply-views jit only: the same program on the same inputs, bitwise the default), or once per batch on the '
+        'device thread (device). device is NOT bitwise the per-root '
         'forward: the batch\'s forward has another batch shape, and the backend may pick another matmul (CPU: 0 of 194 roots equal, max '
         '|logit difference| 0.052); never on a served config until shown batch-invariant on its GPU')
     p.add_argument('--block-lanes',type=int,default=2187);p.add_argument('--blocks-per-call',type=int,default=16)

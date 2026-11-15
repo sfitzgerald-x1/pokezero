@@ -170,3 +170,5 @@ class ReplyStackTests(unittest.TestCase):
             old = np.asarray(jax.device_get(reply._jitted[owner](reply.params, states, publics)), np.float32)
             new = reply.jit_logits(worlds, owner)
         self.assertEqual(events.seen, []);self.assertEqual(old.tobytes(), new.tobytes())
+        fetched = np.asarray(jax.device_get(reply.jit_dispatch(worlds, owner)), np.float32)   # dispatched, fetched later: the same bits
+        self.assertEqual(fetched.tobytes(), new.tobytes())
