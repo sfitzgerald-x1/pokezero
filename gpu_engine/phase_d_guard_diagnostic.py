@@ -68,13 +68,19 @@ def payload_checks(request,payload,lines,*,owner,checks=None):
 
 
 def scan(adapter,request,public,source,metadata,*,lines,checks=None):
+    # V2 self_moves: every B2 encode in the scan (the owning observation and from_b2's) reads the root's literal history,
+    # cleared from the adapter on exit
+    with adapter.literal_history(lines):
+        return _scan(adapter,request,public,source,metadata,lines=lines,checks=checks)
+
+
+def _scan(adapter,request,public,source,metadata,*,lines,checks=None):
     import numpy as np
     from pokezero.dex import normalize_id
     from . import phase_d_live_worlds as w,public_context
     hooks=w.hooks
     c=payload_checks(request,public.materialization_payload,lines,owner=public.address.owner,checks=checks)
     owner=public.address.owner;foe=1-owner;catalog=adapter.catalog;state=adapter.state
-    adapter.own_lines=lines   # V2 self_moves: B2's own moves/PP read the root's literal history
     from .phase_d_tail import inspect_facts,facts
     _,tail=inspect_facts(request,public.materialization_payload,lines)
     replacement=tail['replacement'] is not None

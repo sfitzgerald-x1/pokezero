@@ -80,6 +80,15 @@ class JaxRecordedAdapter:
         try:yield self
         finally:self._catalog_checked=False
 
+    @contextmanager
+    def literal_history(self,lines):
+        """V2 self_moves: a block whose encodes read `lines` (the owner's literal history, requests included, ending with the
+        encoded request) as own_lines. Cleared on exit, so a session adapter kept across requests never encodes a later
+        request with this root's stale history."""
+        self.own_lines=tuple(lines)
+        try:yield self
+        finally:self.own_lines=None
+
     def reset(self,*,stream_id,battle_id):
         from gpu_engine import public_wire
         self._check_compiled_functions()
@@ -88,7 +97,7 @@ class JaxRecordedAdapter:
             raise ValueError('fresh unique stream/battle registration required')
         self.stream_ids=np.array([stream_id],np.int32);self.battle_id=battle_id
         # V2 self_moves: the owner's protocol history (fed lines plus the requests it encodes, in order) and an explicit
-        # override a caller with the literal history sets (own_lines); both read only under masks.self_moves.
+        # override a caller sets for one block (literal_history); both read only under masks.self_moves.
         self._own_log=[];self._own_requests=[];self.own_lines=None
         owners=None if self.owner_side is None else np.array([self.owner_side],np.int32)
         self.state=self.encoder.initialize(self.catalog,stream_ids=self.jax.numpy.asarray(self.stream_ids),owner_sides=owners)
@@ -122,9 +131,10 @@ class JaxRecordedAdapter:
         if getattr(self.catalog,'self_moves',None) is not None:self._own_log.extend(lines)
 
     def own_history(self,request):
-        """V2 self_moves: the owner's protocol history up to and including `request`: the caller's literal own_lines when
-        set (the protocol constructor sets its request lines), else this adapter's log of fed lines and encoded requests.
-        The log is exact when every own move request is encoded in order (the recorded and live actor flows)."""
+        """V2 self_moves: the owner's protocol history up to and including `request`: the caller's literal own_lines inside
+        a literal_history block (the protocol constructor, phase_d_search, the guard diagnostic), else this adapter's log of
+        fed lines and encoded requests. The log is exact when every own move request is encoded in order (the recorded and
+        live actor flows)."""
         if self.own_lines is not None:return tuple(self.own_lines)
         if not (self._own_requests and self._own_requests[-1]==request):
             self._own_log.append('|request|'+json.dumps(request,separators=(',',':')));self._own_requests.append(request)

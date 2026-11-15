@@ -335,6 +335,23 @@ class B2SelfMovesTests(unittest.TestCase):
         self.assertFalse(num[1, valid].any())     # Snorlax moved with no snapshot in this log
         self.assertTrue(num[3, valid].all())      # Zapdos: the final request is its snapshot
 
+    def test_literal_history_is_cleared_on_exit(self):
+        """A session adapter (the protocol constructor's, phase_d_search's) never keeps a root's literal history: inside
+        literal_history the encode reads it; after the block, even one that raised, the adapter reads its own log again."""
+        import numpy as np
+        adapter, lines, final = self.adapter(True)
+        with adapter.literal_history(lines):
+            inside = np.asarray(adapter.encode(final, owner_side=0)['numeric_features'])
+        self.assertIsNone(adapter.own_lines)
+        self.assertTrue(np.array_equal(inside, self.b2(True)['numeric_features']))
+        with self.assertRaises(RuntimeError), adapter.literal_history(lines):
+            raise RuntimeError('a refused root')
+        self.assertIsNone(adapter.own_lines)
+        after = np.asarray(adapter.encode(final, owner_side=0)['numeric_features'])
+        auto, _, _ = self.adapter(True)
+        self.assertTrue(np.array_equal(after, np.asarray(auto.encode(final, owner_side=0)['numeric_features'])))
+        self.assertFalse(np.array_equal(after, inside))   # the stale literal history is gone
+
     def test_python_and_b2_agree_off_and_on(self):
         """The Spite variant is Python-only: B2's wire refuses this authored -activate line (a fixture limit); B2's
         PP-unknown path is covered by test_auto_log_reads_the_requests_it_encoded, through the same own_move_states."""
