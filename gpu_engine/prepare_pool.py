@@ -341,6 +341,8 @@ def worker_main(fd):
         return 0
     try:
         import jax
+        from . import atomic_compilation_cache
+        atomic_compilation_cache.install()   # this worker writes the shared cache's entries whole (its module docstring)
         jax.config.update('jax_enable_x64', False)
         for name, value in (options.get('jax_config') or {}).items():
             jax.config.update(name, value)
