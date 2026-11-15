@@ -184,6 +184,8 @@ class ConstructorTests(unittest.TestCase):
                  '|move|p1a: Ditto|Sleep Talk|p1a: Ditto', '|move|p1a: Ditto|Protect|p1a: Ditto|[from] move: Sleep Talk']
         facts = cw.line_facts(lines, 1)
         self.assertEqual(facts.transform, (cw.TransformFacts('zapdos', (('thunderbolt', 4), ('sleeptalk', 1))), None))
+        pursuit = cw.line_facts(lines + ['|move|p1a: Ditto|Pursuit|p2a: Zapdos|[from] Pursuit'], 1).transform[0]
+        self.assertEqual(pursuit.copied_uses[-1], ('pursuit', 2))                # the intercept pays, Pressure included
         self.assertEqual(cw.line_facts(lines + ['|switch|p1a: Mew|Mew, L72|100/100'], 1).transform, (None, None))
         names = ['_none', 'thunderbolt', 'sleeptalk', 'protect']
         tables = cw._table(np.zeros((3, 2), np.int32), move_names=names, foe_targeted=[False] * 4)
@@ -208,7 +210,7 @@ class ConstructorTests(unittest.TestCase):
         arrays['ability'][0, 1, 0] = 7;arrays['ability'][0, 0, 0] = 9;arrays['base_ability'][0, 0, 1] = 4
         arrays['moves'][0, 0, 1] = [1, 2, 0, 0];arrays['moves'][0, 1, 1] = [5, 6, 0, 0];arrays['pp'][0, 1, 1] = [10, 3, 0, 0]
         arrays['base_types'][0, 0, 1] = [3, 0]
-        tables = NS(namespaces=dict(abilities={'trace': 50, 'colorchange': 51}, items={}), copied_pp=tuple([0] + [5] * 9))
+        tables = NS(namespaces=dict(abilities={'trace': 50, 'colorchange': 51, 'truant': 60}, items={}), copied_pp=tuple([0] + [5] * 9))
         own = dict(transformed=np.bool_(True), transform_species=np.int32(21), active=np.int32(0),
                    transform_stats=np.zeros(5, np.int32), transform_moves=np.zeros(4, np.int32), transform_hidden_power=np.zeros(2, np.int32))
         view = dict(transformed=np.zeros((1, 6), bool), transform_species=np.zeros((1, 6), np.int32))
@@ -225,9 +227,98 @@ class ConstructorTests(unittest.TestCase):
         self.assertEqual(arrays['transform_moves'][0, 1].tolist(), [5, 6, 0, 0]);self.assertEqual(arrays['transform_pp'][0, 1].tolist(), [10, 3, 0, 0])
         self.assertEqual((int(arrays['ability'][0, 1, 1]), arrays['types'][0, 1, 1].tolist()), (4, [3, 0]))
         self.assertEqual((bool(arrays['transformed'][0, 1]), int(arrays['transform_species'][0, 1])), (True, 12))
+        arrays['base_ability'][0, 0, 1] = 60
+        with self.assertRaisesRegex(ValueError, 'public Truant phase'):                     # the copy's Truant clock
+            dws._materialize_transform(root, tables, arrays, 0, 1, 1, {0: 0, 1: 1})
         arrays['base_ability'][0, 0, 1] = 50
         with self.assertRaisesRegex(ValueError, 'PUBLIC_TRANSFORM_DONOR_OVERRIDDEN'):
             dws._materialize_transform(root, tables, arrays, 0, 1, 1, {0: 0, 1: 1})
+
+    def test_device_world_refuses_a_donor_unlike_our_copy(self):
+        """Our request names the copied moves and the copied Hidden Power exactly: a sampled donor with another set, or
+        with another Hidden Power when one is copied, refuses; a matching donor keeps our own Hidden Power cells."""
+        from types import SimpleNamespace as NS
+        from gpu_engine import device_public_world_state as dws
+        from gpu_engine.state import empty_state
+        arrays = {k: np.array(v, copy=True) for k, v in empty_state(1)._asdict().items()}
+        arrays['species'][0] = [[11, 12, 13, 14, 15, 16], [21, 22, 23, 24, 25, 26]]
+        arrays['moves'][0, 0, 0] = [1, 3, 0, 0];arrays['moves'][0, 1, 0] = [3, 1, 0, 0]
+        arrays['hidden_power_type'][0, 0, 0], arrays['hidden_power_power'][0, 0, 0] = 4, 70
+        arrays['hidden_power_type'][0, 1, 0], arrays['hidden_power_power'][0, 1, 0] = 4, 70
+        source = NS(vocabulary=dict(moves=('_none', 'surf', 'tackle', 'hiddenpower')))
+        tables = NS(namespaces=dict(abilities={}, items={}), copied_pp=tuple([0] + [5] * 3), source=source)
+        own = dict(transformed=np.bool_(True), transform_species=np.int32(21), active=np.int32(0))
+        root = NS(own=own, view=dict(transformed=None, transform_species=None), public=NS(copied_pp_used=None))
+        dws._materialize_transform(root, tables, arrays, 0, 1, 1, {0: 0})
+        self.assertEqual((int(arrays['hidden_power_type'][0, 0, 0]), int(arrays['hidden_power_power'][0, 0, 0])), (4, 70))
+        arrays['hidden_power_power'][0, 1, 0] = 40
+        with self.assertRaisesRegex(ValueError, 'Hidden Power differs'):
+            dws._materialize_transform(root, tables, arrays, 0, 1, 1, {0: 0})
+        arrays['moves'][0, 1, 0] = [2, 1, 0, 0]
+        with self.assertRaisesRegex(ValueError, 'differs from the copied moves'):
+            dws._materialize_transform(root, tables, arrays, 0, 1, 1, {0: 0})
+
+
+class ObservationTests(unittest.TestCase):
+    """The device observation and readout overlays (engine_device_observation.encode, engine_device_trackers.readout) on
+    the device observation fixture's catalog: B2/Python's transformed own and foe tokens, the request's copied-slot PP
+    fraction, and the traced column that only a Trace copy fills."""
+    @classmethod
+    def setUpClass(cls):
+        import test_gpu_engine_device_observation as fixture
+        fixture.DeviceObservationTests.setUpClass()
+        cls.fixture, cls.e = fixture, fixture.e
+        cls.tables = fixture.DeviceObservationTests.tables
+        fields = fixture.State._fields + ('transformed', 'transform_species', 'transform_stats', 'transform_moves')
+        from typing import NamedTuple
+        cls.TState = NamedTuple('TState', [(name, object) for name in fields])
+
+    def encode(self, transformed):
+        state, public, _, legal = self.fixture.DeviceObservationTests.facts(None, b=1)
+        tstate = self.TState(*state, transformed=j.asarray([[transformed, False]]), transform_species=j.asarray([[3, 0]], j.int32),
+            transform_stats=j.asarray([[[51, 52, 53, 54, 55], [0] * 5]], j.int32), transform_moves=j.asarray([[[2, 0, 0, 0], [0] * 4]], j.int32))
+        tstate = tstate._replace(pp=tstate.pp.at[0, 0, 1].set(j.asarray([5, 5, 0, 0], j.int32)))
+        public = public._replace(transformed=j.zeros((1, 6), bool).at[0, 0].set(transformed),
+                                 transform_species=j.zeros((1, 6), j.int32).at[0, 0].set(1))
+        return self.e.encode(tstate, public, self.tables, observer_sides=j.zeros(1, j.int32), legal_action_mask=legal[:1])
+
+    def test_own_and_foe_overlays_and_the_copied_pp_fraction(self):
+        e, t = self.e, self.tables
+        plain, copied = self.encode(False), self.encode(True)
+        num, cat = np.asarray(copied.numeric_features)[0], np.asarray(copied.categorical_ids)[0]
+        base_num = np.asarray(plain.numeric_features)[0]
+        actual = [e._index('ACTUAL_' + n) for n in ('ATK', 'DEF', 'SPA', 'SPD', 'SPE')]
+        np.testing.assert_allclose(num[1, actual], np.asarray([51, 52, 53, 54, 55]) / 714, atol=1e-6)   # the saved original
+        np.testing.assert_allclose(base_num[1, actual], np.asarray([151, 160, 170, 180, 190]) / 714, atol=1e-6)
+        base = np.asarray(t.base_stats);hp = np.asarray(t.original_hp)
+        columns = [e._index('BASE_' + n) for n in ('HP', 'ATK', 'DEF', 'SPA', 'SPD', 'SPE')]
+        own_base = np.minimum(1, np.concatenate(([hp[2]], base[3, 1:])) / 200)         # Absol's, with Snorlax's own base HP
+        np.testing.assert_allclose(num[1, columns], own_base, atol=1e-6)
+        self.assertEqual(int(cat[1, 0]), int(np.asarray(t.species)[3]))
+        self.assertEqual(cat[1, 4:6].tolist(), np.asarray(t.base_types)[3].tolist())
+        foe_base = np.minimum(1, np.concatenate(([hp[3]], base[1, 1:])) / 200)        # the foe Absol shown as Gardevoir
+        np.testing.assert_allclose(num[7, columns], foe_base, atol=1e-6)
+        self.assertEqual(int(cat[7, 0]), int(np.asarray(t.species)[1]))
+        fraction = e._index('MOVE_PP_FRACTION')
+        maximum, dex = np.asarray(t.max_pp), np.asarray(t.base_pp)
+        # Surf in a slot where the transformer had its own move (3 PP Ups), Body Slam past its own moves (none).
+        np.testing.assert_allclose(num[13:15, fraction], [5 / maximum[1], 5 / dex[2]], atol=1e-6)
+        np.testing.assert_allclose(base_num[13:15, fraction], [5 / maximum[1], 5 / maximum[2]], atol=1e-6)
+
+    def test_readout_hides_a_transform_copy_from_the_traced_column(self):
+        from gpu_engine import engine_device_trackers as tr
+        from gpu_engine.state import empty_state
+        mon = lambda value: j.full((1, 2, 6), value, j.int32)
+        t = tr.initialize(empty_state(1)._replace(species=mon(1), level=mon(80), hp=mon(100), max_hp=mon(100)))
+        zero = mon(0).astype(j.float32)
+        t = t._replace(mon_features={}, damage_exact_dealt=zero, damage_exact_taken=zero, last_moves=mon(0),
+                       item_removed=j.zeros((1, 2, 6), bool),
+                       borrowed_ability=mon(0).at[0, :, 0].set(7), transform_borrowed=j.zeros((1, 2, 6), bool))
+        for marked in (False, True):
+            u = t._replace(transform_borrowed=t.transform_borrowed.at[0, :, 0].set(marked))
+            view = tr.readout(u, j.zeros(1, j.int32))
+            self.assertEqual(int(np.asarray(view.borrowed_ability)[0, 0]), 0 if marked else 7)
+            self.assertEqual(int(np.asarray(view.own_borrowed_ability)[0, 0]), 0 if marked else 7)
 
 
 class TransitionTests(unittest.TestCase):

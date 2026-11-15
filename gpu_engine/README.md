@@ -343,9 +343,13 @@ new chance):
 - Device: B2's Transform mark and donor species, the donor's species types, the
   running ability per fold (the donor owner also knows a private Pressure start),
   no move reveal or public PP charge while transformed (copied uses counted for
-  device worlds), ability claims ignored; the observation shows a transformed foe's
-  and our own species and base stats as the donor's (base HP its own), our ACTUAL
-  stats from the saves and the copied slots' PP over the request's maxpp.
+  device worlds, cleared at departure and faint), ability claims ignored; the
+  traced column shows Trace copies only (B2's `traced`), never a Transform copy;
+  the observation shows a transformed foe's and our own species and base stats as
+  the donor's (base HP its own), our ACTUAL stats from the saves and the copied
+  slots' PP over the request's maxpp. A device world rebuilds our copy's hidden
+  Atk..Spe and ability from its sampled donor (refusing one whose moves or copied
+  Hidden Power differ from our request) and a foe's copy from our donor.
 
 The existing fixed critical roll now resolves ordinary 1/16 and catalog +1
 high-crit 1/8 chances. Battle Armor and Shell Armor veto critical hits in both
