@@ -54,6 +54,22 @@ def varied_labels(states, *, seat=1, sleeper=None, move=SURF):
     return out
 
 
+SURF_LANE = 1   # the reply-only fixture: the peer's lane holding Surf (a legal lane of the fixture's peer)
+
+
+def surf_at_roots_only(states):
+    """The peer knows Surf on SURF_LANE at the roots only: no turn-2 child knows it."""
+    out = fake_labels(states, peer_moves=(TACKLE, SURF, PROTECT, 0))
+    if out['moves'].shape[0] > 16:out['moves'][:, 1] = (TACKLE, REST, PROTECT, 0)   # the children: no Surf
+    return out
+
+
+def lowered_surf_lane(frame):
+    """The champion's turn-1 logit on SURF_LANE lowered to -50 in every world."""
+    logits = np.array(frame.root_peer_logits, np.float32);logits[..., SURF_LANE] = -50.
+    return replace(frame, root_peer_logits=logits)
+
+
 class SeamTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -126,7 +142,9 @@ class SeamTests(unittest.TestCase):
         self.assertEqual(union['union']['champion'], union['union']['reply']);self.assertEqual(union['tripped'], plain['tripped'])
         self.assertFalse(union['union_only'])
         self.assertEqual({k: v for k, v in union.items() if k not in ('union', 'union_only')}, plain)   # every champion field unchanged
-        # the reply arm's own reasons: the same evaluation as the champion's here, so the record's reasons (no ability guard: None)
+        # the reply arm's own reasons: the same evaluation as the champion's here, so the record's reasons (no ability guard: None);
+        # the fixture trips with reasons, so the equality is not an empty one
+        self.assertTrue(union['reasons'])
         self.assertEqual(union['union']['reply_detail'], dict(reasons=union['reasons'], ability_reasons=None))
         clear, _, _ = self.record(lambda s: fake_labels(s, peer_moves=(TACKLE, REST, PROTECT, 0)), reply=self.champion_reply)
         self.assertEqual((clear['tripped'], clear['union']['tripped']), (False, False))
@@ -142,14 +160,7 @@ class SeamTests(unittest.TestCase):
         """Surf on the peer's lane 1 (a legal lane of the fixture's peer) at the roots only (no turn-2 child knows it), and the
         champion's turn-1 logit on lane 1 lowered to -50 in every world: the champion's record stays clear; a reply model raising
         lane 1 trips the union only."""
-        lane = 1
-        def roots_only(states):
-            out = fake_labels(states, peer_moves=(TACKLE, SURF, PROTECT, 0))
-            if out['moves'].shape[0] > 16:out['moves'][:, 1] = (TACKLE, REST, PROTECT, 0)   # the children: no Surf
-            return out
-        def lowered(frame):
-            logits = np.array(frame.root_peer_logits, np.float32);logits[..., lane] = -50.
-            return replace(frame, root_peer_logits=logits)
+        lane, roots_only, lowered = SURF_LANE, surf_at_roots_only, lowered_surf_lane
         champion, frame, root = self.record(roots_only, edit=lowered)
         self.assertTrue(any(bool(frame.root_peer_legal[r, jw][lane]) and bool(frame.root_peer_requested[r, jw]) for r in root['rows'] for jw in (0, 1)))
         self.assertEqual((champion['tripped'], champion['b_turn1']), (False, False))
@@ -287,15 +298,8 @@ class SeamTests(unittest.TestCase):
         ability-guard fixtures."""
         meta = self.ability_metadata();quiet = (TACKLE, REST, PROTECT, 0)
         wg = lambda s: ability_labels(s, ours=WONDERGUARD, peer_moves=quiet)
-        lane = 1
-        def roots_only(states):
-            out = fake_labels(states, peer_moves=(TACKLE, SURF, PROTECT, 0))
-            if out['moves'].shape[0] > 16:out['moves'][:, 1] = (TACKLE, REST, PROTECT, 0)
-            return out
-        def lowered(frame):
-            logits = np.array(frame.root_peer_logits, np.float32);logits[..., lane] = -50.
-            return replace(frame, root_peer_logits=logits)
-        cases = [(fake_labels, {}, self.champion_reply), (roots_only, dict(edit=lowered), lambda f, r:self.champion_reply(f, r, lane)),
+        cases = [(fake_labels, {}, self.champion_reply),
+                 (surf_at_roots_only, dict(edit=lowered_surf_lane), lambda f, r:self.champion_reply(f, r, SURF_LANE)),
                  (wg, dict(metadata=meta), self.champion_reply)]
         for labels, kw, reply in cases:
             plain, _, _ = self.record(labels, **kw);union, _, _ = self.record(labels, reply=reply, **kw)

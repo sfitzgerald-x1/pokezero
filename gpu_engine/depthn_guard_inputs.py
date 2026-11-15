@@ -231,7 +231,8 @@ def effect_record(frame, root, worlds, children, request, owner, vocabulary, cho
     the top-level `tripped` becomes union['tripped'] (the live actor plays greedy on it). union['reply_detail'] is telemetry, written
     after all of that and read by nothing: the reply arm's own `reasons` (guard.evaluate's: turn 1, choice, the reach per tripping
     side with its per-move contributions, an unavailable capture) and `ability_reasons` (its ability record's reasons; None without
-    the ability guard), so a reply-only trip names its move or family. Without reply_logits: unchanged. The move
+    the ability guard), so a reply-only trip names its move or family. Records written before this key (screen-r5a and earlier)
+    lack it: read it with .get, and treat a missing key as "not recorded", never as "no reasons". Without reply_logits: unchanged. The move
     guard's (c) reads our own prior and lanes, the same in both arms; the ability guard's (c) can differ (its root PINCH rule reads
     the other side's prior), so the reply summary carries its (c) lanes (ability_own_lanes).
     `metadata` (the engine metadata: vocabulary, moves, type_chart): with it the ability guard runs too (AbilityFacts,
