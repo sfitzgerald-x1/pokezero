@@ -33,7 +33,7 @@ import numpy as np
 
 SCHEMA = 'pokezero.v2e-census.v1'
 # transition.step_with_chance: def line and last line (design note section 1.1; tree 5bc2fe8c, shifted by fidelity A1, A2, R, B, M1, M2, R1, WH and R2).
-SPAN = (400, 2762)
+SPAN = (400, 2775)
 # (phase, first line, last line, group). 'pre' is the host-side argument checks; boundary statements open the next phase.
 PHASES = (
     ('pre', 400, 544, 'pre'),
@@ -42,13 +42,13 @@ PHASES = (
     ('C', 635, 680, 'C'),      # Pursuit per side
     ('D', 681, 800, 'D'),      # switch order, Baton, depart/install/enter, forced replacement entries, post-switch Lum
     ('E0', 801, 823, 'E'),     # ordering
-    ('E1', 824, 1042, 'E'),     # per action: pre-move (the recharge turn included)
-    ('E2', 1043, 1437, 'E'),    # damage
-    ('E3', 1438, 2070, 'E'),   # effects (Perish Song, Yawn, the Substitute's trap release and Wrap's trap included)
-    ('E4', 2071, 2198, 'E'),   # post (recoil, move weather, Spikes, drag, Baton, fainted boosts)
-    ('F1', 2199, 2310, 'F'),   # defer/ready, end speeds, Wish, weather
-    ('F2', 2311, 2677, 'F'),   # residual events (argsort at 2318, the 14-event loop at 2319), the Perish pass, White Herb's order 29 and the recharge tick
-    ('G', 2678, 2762, 'G'),    # end of turn
+    ('E1', 824, 1048, 'E'),     # per action: pre-move (the recharge turn included)
+    ('E2', 1049, 1450, 'E'),    # damage
+    ('E3', 1451, 2083, 'E'),   # effects (Perish Song, Yawn, the Substitute's trap release and Wrap's trap included)
+    ('E4', 2084, 2211, 'E'),   # post (recoil, move weather, Spikes, drag, Baton, fainted boosts)
+    ('F1', 2212, 2323, 'F'),   # defer/ready, end speeds, Wish, weather
+    ('F2', 2324, 2690, 'F'),   # residual events (argsort at 2331, the 14-event loop at 2332), the Perish pass, White Herb's order 29 and the recharge tick
+    ('G', 2691, 2775, 'G'),    # end of turn
 )
 GROUPS = ('A', 'B', 'C', 'D', 'E', 'F', 'G')
 GROUP = {name: group for name, _, _, group in PHASES}
@@ -64,23 +64,23 @@ ANCHORS = {
     801: 'priority = table.priority[moves]',
     824: 'for order in range(2):',
     825: '_faint_before_hp=work.hp',
-    1043: 'attack_stats = _active(work.stats, work, side)',
-    1438: 'if table.effects is not None:',
-    2071: '# Gen3 applies contact DamagingHit',
-    2163: 'work,changed,hazard_ko=dragging.drag(work,foe,move,phazing_draws[rows,side],',
-    2199: 'turn_context = live & (~replacement | state.pending_residual)',
-    2311: 'event_sides = jnp.array(residual_order.EVENT_SIDES)',
-    2318: 'event_order = jnp.argsort(event_keys,axis=1)',
-    2319: 'for order in range(residual_order.EVENTS):',
-    2334: 'if _status_residual_context is not None:',
-    2678: 'work=linking.prune(work)',
-    2753: 'work = jax.tree.map(lambda old, new: jnp.where(live.reshape(',
-    2762: 'return result if _public_trace is None else public_callbacks.TracedStep(result,_public_trace)',
+    1049: 'attack_stats = _active(work.stats, work, side)',
+    1451: 'if table.effects is not None:',
+    2084: '# Gen3 applies contact DamagingHit',
+    2176: 'work,changed,hazard_ko=dragging.drag(work,foe,move,phazing_draws[rows,side],',
+    2212: 'turn_context = live & (~replacement | state.pending_residual)',
+    2324: 'event_sides = jnp.array(residual_order.EVENT_SIDES)',
+    2331: 'event_order = jnp.argsort(event_keys,axis=1)',
+    2332: 'for order in range(residual_order.EVENTS):',
+    2347: 'if _status_residual_context is not None:',
+    2691: 'work=linking.prune(work)',
+    2766: 'work = jax.tree.map(lambda old, new: jnp.where(live.reshape(',
+    2775: 'return result if _public_trace is None else public_callbacks.TracedStep(result,_public_trace)',
 }
 # Iteration rules over lines in program order (the scratch census's): an E1..E4 line <= E_RESTART after one >= E_LATE
 # starts the second action; in F2 a line <= F2_HEAD after one > F2_BODY starts the next of the 14 residual events.
-E_LATE, E_RESTART = 2089, 910
-F2_LOOP, F2_HEAD, F2_BODY = 2319, 2334, 2349
+E_LATE, E_RESTART = 2102, 910
+F2_LOOP, F2_HEAD, F2_BODY = 2332, 2347, 2362
 # Design boundaries: the phase label whose first equation each one is (b0: the first step_with_chance equation; b8: the end).
 BOUNDARIES = (('b0', 'A'), ('b1', 'B'), ('b2', 'D'), ('b3', 'E0'), ('b4', 'E1.0'), ('b5', 'E1.1'), ('b6', 'F1'), ('b7', 'G'), ('b8', 'END'))
 TRACKERS = {'engine_device_public_hooks', 'engine_device_trackers', 'engine_device_public_port', 'engine_device_visible_belief',
