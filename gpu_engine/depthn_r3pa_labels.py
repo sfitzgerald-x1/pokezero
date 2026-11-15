@@ -63,9 +63,8 @@ class Names:
     def __init__(self, vocabulary):
         from pokezero.dex import normalize_id
         from .phase_d_live_worlds import _source_move
-        self.moves = tuple(vocabulary['moves']);self.species = tuple(vocabulary['species'])
-        self._move = [None] + [_source_move(x) for x in self.moves[1:]]
-        self._species = [None] + [normalize_id(x) for x in self.species[1:]]
+        self._move = [None] + [_source_move(x) for x in vocabulary['moves'][1:]]
+        self._species = [None] + [normalize_id(x) for x in vocabulary['species'][1:]]
         self._key = [species_key(str(x)) for x in self._species]   # backline's species_key of the lane's 'switch:<species>' text
 
     def move_label(self, i):

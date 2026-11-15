@@ -115,10 +115,10 @@ class MapperTests(unittest.TestCase):
         self.assertEqual(L.WorldSetsMissing('x').reason, 'world_sets_missing')
 
     def test_peer_legal_mismatch(self):
-        legal = np.asarray([[True, False] + [False] * 7, [True] * 9, [False] * 9], bool)
+        legal = np.asarray([[True, False] + [False] * 7, [True] * 9, [True] + [False] * 8], bool)   # world 2 waits: never compared
         views = L.LaneViews(legal, np.zeros((3, 9), np.int32), np.zeros((3, 9), np.int32), np.ones((3, 6), np.int32))
         prices = lambda kept, asked=True: v5_gumbel.WorldPrices(asked, kept, (0.,) * 9, ((0.,) * 9,) * 9)
-        self.assertEqual(L.peer_legal_mismatch([prices(tuple(legal[0])), prices((True,) * 8 + (False,)), prices((True,) + (False,) * 8, False)], views), [1])
+        self.assertEqual(L.peer_legal_mismatch([prices(tuple(bool(x) for x in legal[0])), prices((True,) * 8 + (False,)), prices((False,) * 9, False)], views), [1])
         self.assertEqual(L.peer_legal_mismatch([None, prices((True,) * 9), None], views), [])
         with self.assertRaises(ValueError):L.peer_legal_mismatch([None, None], views)
 

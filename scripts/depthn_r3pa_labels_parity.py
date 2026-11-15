@@ -12,8 +12,10 @@ root, block order:
   and public, opponent_facts, PeerLanes, lane_labels), then mc_ladder_backline.labels(world, seen_species(worlds)).
 Both are compared string for string on every world and lane (world_sets_missing must agree too), and the views' legal masks
 against PeerLanes'. Costs per root: views_seconds (stack, the device pass, the fetch), map_seconds (lane_labels_live), split into
-each seat's first root (its compile) and the rest. Flag-off: the backend compile events (jax.monitoring) while the module is
-imported and LaneLabels constructed must be 0; traces per seat after the run.
+each seat's first root (its compile) and the rest; stack_seconds times the host stack alone (once more, beside views). Flag-off: the backend compile events (jax.monitoring) while the module is
+imported and LaneLabels constructed must be 0; traces per seat after the run. Last, as the live warmup ends, jit's tracing caches
+are released (gpu_engine.trace_release) and the last root viewed again for both seats: the retraces and backend compiles that
+causes (both 0: the programs serve from their executable caches).
 
 usage: python scripts/depthn_r3pa_labels_parity.py --server-args ARGV.json --requests REQUESTS.jsonl --out NEW.json [--limit N]
 Exit 1 on any mismatch, or when nothing is compared.
@@ -89,12 +91,13 @@ def main(argv=None):
     if args.peer_view_b:redaction['peer_view_b'] = True
     roots, examples, refused = [], [], {}
     totals = dict(roots=0, worlds=0, lanes=0, mismatched_lanes=0, legal_mismatched_worlds=0, both_world_sets_missing=0, missing_disagrees=0)
-    seats_seen = set()
+    seats_seen, last = set(), None
     for request in requests:
         item = cw.prepare_roots(constructor, [request], device='cpu', **redaction)[0]
         if type(item) is not cw.Prepared or not item.made.fully_constructed:
             kind = getattr(item, 'kind', 'not_fully_constructed');refused[kind] = refused.get(kind, 0) + 1;continue
-        owner = int(item.detached.address.owner);worlds = item.made.worlds
+        owner = int(item.detached.address.owner);worlds = last = item.made.worlds
+        clock = time.perf_counter();L.stack_worlds(worlds);stack_seconds = time.perf_counter() - clock   # the host stack alone (its share of views)
         compiles_before = len(compiles);views = labeller.views(worlds, owner);view_compiles = len(compiles) - compiles_before
         clock = time.perf_counter()
         try:live, missing = L.lane_labels_live(views, labeller.names), False
@@ -102,7 +105,7 @@ def main(argv=None):
         map_seconds = time.perf_counter() - clock
         want, legal, offline_seconds = offline_labels(worlds, owner, vocabulary, peer_lanes)
         row = dict(request_id=request['request_id'], owner=owner, worlds=len(worlds), first_of_seat=owner not in seats_seen, views_seconds=views.seconds,
-            view_compiles=view_compiles, map_seconds=map_seconds, offline_seconds=offline_seconds, world_sets_missing=missing)
+            stack_seconds=stack_seconds, view_compiles=view_compiles, map_seconds=map_seconds, offline_seconds=offline_seconds, world_sets_missing=missing)
         seats_seen.add(owner);totals['roots'] += 1;totals['worlds'] += len(worlds)
         legal_bad = [w for w in range(len(worlds)) if views.legal[w].tolist() != legal[w]];totals['legal_mismatched_worlds'] += len(legal_bad)
         if (want is None) != missing:
@@ -115,11 +118,18 @@ def main(argv=None):
             row['labels'] = live
         if legal_bad:row['legal_mismatched_worlds'] = legal_bad
         roots.append(row)
+    release = None
+    if last is not None:   # the live warmup ends with trace_release.release(): the warmed programs must serve without a retrace
+        from gpu_engine import trace_release
+        traces, before = dict(labeller.traces), len(compiles);dropped = trace_release.release()
+        for owner in (0, 1):labeller.views(last, owner)
+        release = dict(entries_dropped=dropped, retraces={o: labeller.traces[o] - traces[o] for o in (0, 1)}, backend_compiles=len(compiles) - before)
     warm = [r for r in roots if not r['first_of_seat']]
     report = dict(server_rung=args.rung, requests=len(requests), refused=refused, totals=totals, flag_off=flag_off,
-        traces_after_run=dict(labeller.traces), programs_after_run=len(labeller.programs),
+        traces_after_run=dict(labeller.traces), programs_after_run=len(labeller.programs), after_trace_release=release,
         cost=dict(first_of_seat=[dict(owner=r['owner'], views_seconds=r['views_seconds'], view_compiles=r['view_compiles']) for r in roots if r['first_of_seat']],
             warm_views_seconds=stats([r['views_seconds'] for r in warm]), warm_map_seconds=stats([r['map_seconds'] for r in warm]),
+            warm_stack_seconds=stats([r['stack_seconds'] for r in warm]),
             warm_total_seconds=stats([r['views_seconds'] + r['map_seconds'] for r in warm]), warm_view_compiles=sum(r['view_compiles'] for r in warm),
             offline_seconds=stats([r['offline_seconds'] for r in warm])),
         label_kinds=dict(sorted(_kinds(roots).items())), examples=examples, devices=[str(d) for d in jax.devices()], jax=jax.__version__)
