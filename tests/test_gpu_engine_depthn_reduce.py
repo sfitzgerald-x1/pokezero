@@ -109,3 +109,63 @@ class FastBackupTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class HostStackTests(unittest.TestCase):
+    """depthn_reply_prior.host_stack: jnp.stack per leaf, built on the host (numpy) and placed with one device_put."""
+    def test_every_leaf_as_jnp_stack_makes_it(self):
+        import jax
+        import jax.numpy as jnp
+        from gpu_engine.depthn_reply_prior import host_stack
+        g = np.random.default_rng(0)
+        def tree(i):   # strong float32, int8, bool, a weak float (a Python scalar's), a weak int, a nested pytree
+            return dict(f=jnp.asarray(g.normal(size=(1, 3)).astype(np.float32)), i=jnp.asarray(g.integers(-5, 5, (2,)).astype(np.int8)),
+                        b=jnp.asarray(g.random(4) < .5), weak=jnp.asarray(float(i)) * 2, weak_int=jnp.asarray(i) + 1,
+                        nested=(jnp.zeros((2, 2), jnp.int32) + i, [jnp.full((1,), i, jnp.uint8)]))
+        trees = [tree(i) for i in range(5)]
+        want, got = jax.tree.map(lambda *x: jnp.stack(x), *trees), host_stack(trees)
+        self.assertEqual(jax.tree.structure(want), jax.tree.structure(got))
+        for w, x in zip(jax.tree.leaves(want), jax.tree.leaves(got)):
+            self.assertEqual((w.dtype, w.shape, w.aval.weak_type, w.committed, set(w.devices())), (x.dtype, x.shape, x.aval.weak_type, x.committed, set(x.devices())))
+            self.assertTrue(np.array_equal(np.asarray(w), np.asarray(x)))
+        self.assertTrue(any(x.aval.weak_type for x in jax.tree.leaves(got)), 'the fixture has weak leaves')
+
+    def test_a_column_that_differs_in_dtype_keeps_jnp_stack(self):
+        import jax
+        import jax.numpy as jnp
+        from gpu_engine.depthn_reply_prior import host_stack
+        trees = [dict(x=jnp.zeros((2,), jnp.float32)), dict(x=jnp.zeros((2,), jnp.int32))]
+        want, got = jax.tree.map(lambda *x: jnp.stack(x), *trees), host_stack(trees)
+        self.assertEqual((got['x'].dtype, got['x'].aval.weak_type), (want['x'].dtype, want['x'].aval.weak_type))
+        with self.assertRaises(ValueError):
+            host_stack([dict(x=jnp.zeros(2)), dict(y=jnp.zeros(2))])
+
+
+class ReplyStackTests(unittest.TestCase):
+    """ReplyPrior.jit_logits on host-stacked worlds: the same compiled executable (no compile after jnp.stack's inputs compiled
+    it) and the same bits, on the fake engine's prepared worlds."""
+    @classmethod
+    def setUpClass(cls):
+        from tests import test_gpu_engine_depthn_live_search as L
+        cls.L = L;L.LiveSearchTests.setUpClass.__func__(cls)
+
+    def test_the_jitted_reply_program_is_unchanged(self):
+        import jax
+        import jax.numpy as jnp
+        from gpu_engine import depthn_live_search as live
+        from gpu_engine.depthn_reply_prior import ReplyPrior
+        from tests.test_gpu_engine_trace_release import CompileEvents
+        L = self.L;self.make_pricers = L.LiveSearchTests.make_pricers.__func__.__get__(type(self))
+        L.LiveSearchTests.setUp(self)
+        s = L.LiveSearchTests.search(self, 8, pricers=self.make_pricers(8, (1,)));outcomes = {('h', 0): L.LiveSearchTests.outcome(self, 0, 8)}
+        with L.Codex(outcomes):
+            req = L.request('h', 0);p = {k: req[k] for k in live.PROTOCOL_KEYS};row = s._response(req['request_id'], 1)
+            item = s._prepare([(0, p, row)], {})[0]
+        reply = ReplyPrior(self.executor, self.evaluator, L.PARAMS[0], mode='jit');worlds = item.made.worlds;owner = int(item.detached.address.owner)
+        reply.jit_logits(worlds, owner)   # builds and compiles the seat's program (host-stacked inputs)
+        stack = lambda xs: jax.tree.map(lambda *leaves: jnp.stack(leaves), *xs)
+        states, publics = jax.block_until_ready((stack([w.state for w in worlds]), stack([w.public for w in worlds])))   # the previous code's inputs
+        with CompileEvents() as events:   # they reach the seat's program without a trace, a lowering or a compile: the same avals and executable
+            old = np.asarray(jax.device_get(reply._jitted[owner](reply.params, states, publics)), np.float32)
+            new = reply.jit_logits(worlds, owner)
+        self.assertEqual(events.seen, []);self.assertEqual(old.tobytes(), new.tobytes())
