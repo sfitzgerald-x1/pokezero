@@ -140,6 +140,8 @@ _EXPECTED_HARNESS_CLOSURE = frozenset(
         "src/pokezero/neural_selfplay.py",
         "src/pokezero/observation.py",
         "src/pokezero/opponents.py",
+        # V2 self_moves: the Python encoder's own real moves and exact PP (local_showdown / showdown import it).
+        "src/pokezero/own_moves.py",
         "src/pokezero/padding.py",
         "src/pokezero/paths.py",
         "src/pokezero/poke_engine_adapter.py",
