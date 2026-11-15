@@ -369,9 +369,8 @@ def mechanism(protocol,factory,data):
     # are explicitly unmeasured and the panel still runs. The device bank records its encoding (BankData.self_moves,
     # compared in evaluate_device_bank). The Python capture bank is always encoded off (the champion driver catalog; its
     # header records no encoding, and its own source files are bound into every captured bank, so they stay untouched).
-    if not hasattr(data,'self_moves'):
-        unmeasured=unmeasured_self_moves(False,factory,heldout_positions=len(data.positions),sibling_groups=len(data.groups))
-        if unmeasured is not None:return unmeasured
+    if not hasattr(data,'self_moves') and unmeasured_self_moves(False,factory) is not None:
+        return unmeasured_self_moves(False,factory,heldout_positions=len(data.positions),sibling_groups=len(data.groups))
     return resolver.evaluate_original_capture(protocol,factory,data)
 
 
