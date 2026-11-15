@@ -19,7 +19,10 @@ from pokezero.dex import normalize_id
 from pokezero.engine_world import battle_spec_from_payload,EngineWorldUnsupported,unpack_team,_engine_species_id
 from pokezero.env import BattleStartOverride
 from pokezero.v5_teacher_public_root import PublicRoot,capture_root
-from pokezero.determinization import _gen3_randbat_belief_start_override_result
+from pokezero.determinization import _gen3_randbat_belief_start_override_result,player_belief_view_from_payload
+from pokezero import set_posterior
+# The game-line rule (and its hash) moved to set_posterior, whose provenance hashes the same lines; re-exported here.
+from pokezero.set_posterior import NON_GAME_LINE_TAGS,game_lines_sha256
 from . import device_public_worlds as public_worlds,device_public_world_state as states
 from . import phase_d_live_worlds as live,phase_d_tail as tail
 from .v5_hypothetical_state import map_spec
@@ -32,6 +35,13 @@ SCHEMA='pokezero.phase-d.protocol-materialization.v1'
 # (_device), instead of ~800 eager device ops per world. False keeps the eager device build, the byte-for-byte reference
 # the parity tests compare against.
 HOST_WORLDS=True
+
+
+# Each revealed foe's set is drawn from set_posterior (its hard facts, today's reveals, times the damage likelihood of its
+# public strikes on our active) instead of uniformly over the hard-fact survivors, and that hard support is checked against
+# B2's public posterior in both directions (_check_set_posterior). With equal weights the draw is today's call, so the worlds
+# of roots without damage narrowing are byte-identical. False restores today's uniform draw and one-way check exactly.
+SET_POSTERIOR=True
 
 
 def _device(state):
@@ -425,6 +435,35 @@ def _host_arrays(seed,key):
     return arrays
 
 
+def _set_posteriors(inputs,root):
+    """The root's set posteriors (set_posterior.posterior over its owning lines and the belief view the start sampler filters
+    with), computed once per root and shared by its worlds."""
+    def compute():
+        context=root.context
+        view=player_belief_view_from_payload(context.observation.metadata.get('belief_view'))
+        if view is None:raise ValueError('PUBLIC_SET_POSTERIOR_BELIEF_UNAVAILABLE')
+        return set_posterior.posterior(inputs.lines,context.public_materialization_state.self_request,source=inputs.source.original,
+            owner=view.self_slot,beliefs=view.opponent_pokemon,format_id=context.format_id,dex=inputs.catalog.dex,
+            binding=inputs.source.binding_sha256)
+    return _once(inputs,root,'set_posterior',compute,shared=True)
+
+
+def _check_set_posterior(inputs,root,rows,diagnostics):
+    """The reverse of the sampled-foe check, at root level: set_posterior's hard support must equal B2's public posterior
+    (_revealed's eligible variants, `rows`) for every revealed foe species, as full variant identity (the source index, so
+    Hidden Power type too), in both directions. Else every world of the root refuses PUBLIC_SET_POSTERIOR_B2_DISAGREEMENT, with
+    the species and the variants only one side holds. Damage-excluded variants are a strict subset by design, so the hard
+    support is compared, never the weighted one."""
+    b2={set_posterior.species_key(name):tuple(index for index,_ in candidates) for slot,universe,candidates,gender,name in rows}
+    posts=_set_posteriors(inputs,root);checked=set_posterior.two_way(posts,b2)
+    bad=[key for key,post in checked.items() if post.refusals]
+    if bad:
+        ours=lambda key:{i for i,h in enumerate(posts[key].hard) if h} if key in posts else set()
+        diagnostics.append(dict(kind=set_posterior.B2_DISAGREEMENT,status='TRIGGERED',fatal=True,species=[dict(species=key,
+            set_posterior_only=sorted(ours(key)-set(b2.get(key,()))),b2_only=sorted(set(b2.get(key,()))-ours(key))) for key in bad]))
+        raise ValueError(set_posterior.B2_DISAGREEMENT)
+
+
 def materialize_protocol(root,start,*,inputs,seed,key=None):
     """Pure typed mapping with exact own request and no true-opponent donor."""
     if type(root)is not PublicRoot or type(start)is not BattleStartOverride or type(inputs)is not ProtocolInputs:
@@ -445,8 +484,9 @@ def materialize_protocol(root,start,*,inputs,seed,key=None):
         projected=tail.defer_substitutes(projected,tail_facts['fresh_substitutes'])
         projected,yawns=_defer_yawn(projected,inputs.lines)
         origins=_once(inputs,root,'origins',lambda:_sleep_origins(inputs.lines))
-        revealed={normalize_id(name):candidates for slot,universe,candidates,gender,name in
-                  _once(inputs,root,'revealed',lambda:tuple(public_worlds._revealed(detached,inputs.source)),shared=True)}
+        rows=_once(inputs,root,'revealed',lambda:tuple(public_worlds._revealed(detached,inputs.source)),shared=True)
+        if SET_POSTERIOR:_check_set_posterior(inputs,root,rows,diagnostics)
+        revealed={normalize_id(name):candidates for slot,universe,candidates,gender,name in rows}
         for mon in unpack_team(start.player_teams[f'p{foe+1}']):
             candidates=revealed.get(normalize_id(mon.species))
             if candidates is None:continue
@@ -576,22 +616,6 @@ def diagnostic_inputs(public,detached,*,lines,metadata):
     return tuple(checks)
 
 
-# Showdown protocol lines that carry no game state: wall clock (|t:| is the turn's unix time, from sim/battle.ts; |:| a server
-# room log's; |inactive| / |inactiveoff| the timer) and room transport (chat, join, leave, rename, raw HTML). r4a3's owning
-# wire carries |t:| alone (25,823 of its lines); the rest are listed defensively (a server-relayed stream could carry them).
-# Filtering only feeds the seed hash, never a parser.
-NON_GAME_LINE_TAGS=frozenset(('t:',':','c','c:','chat','j','J','join','l','L','leave','n','N','name','raw','html','uhtml',
-    'uhtmlchange','inactive','inactiveoff'))
-
-
-def game_lines_sha256(lines):
-    """sha256 of the owner's protocol lines without the non-game ones (NON_GAME_LINE_TAGS), in the owner_lines_sha256 format:
-    the same game state hashes the same in every run, whatever the wall clock said. It seeds the drawn worlds;
-    owner_lines_sha256 stays the exact-bytes record of the root."""
-    keep=(x for x in lines if not (x.startswith('|') and x.split('|',2)[1] in NON_GAME_LINE_TAGS))
-    return hashlib.sha256(''.join(x+'\n'for x in keep).encode()).hexdigest()
-
-
 def world_seeds(root,detached,game_lines,seed,index):
     """World `index`'s (world_seed, kernel_seed): sha256 over the run's seed, the battle, the game content of the owner's lines
     (game_lines = game_lines_sha256(lines), never the exact bytes: |t:| would make the same state draw different worlds in
@@ -616,7 +640,8 @@ def sample(root,detached,*,lines,catalog,source,metadata,config,battle_id,seed,c
         seeds.append(world_seed)
         try:
             start,reason=_gen3_randbat_belief_start_override_result(context=root.context,set_source=source.original,
-                rng=random.Random(world_seed),team_size=6,canonicalize_revealed_variants=True)
+                rng=random.Random(world_seed),team_size=6,canonicalize_revealed_variants=True,
+                **(dict(set_posteriors=lambda:_set_posteriors(inputs,root)) if SET_POSTERIOR else {}))
             if start is None:
                 unknown=[];_downstream_unknowns(unknown,'Original public sampler unavailable: '+str(reason))
                 made=ProtocolWorld(None,None,(reason or 'public-sampler-unavailable',),mapper_diagnostics=tuple(unknown))

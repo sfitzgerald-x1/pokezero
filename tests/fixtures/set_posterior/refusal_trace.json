@@ -1,0 +1,177 @@
+{
+ "beliefs": [
+  {
+   "condition": "100/100",
+   "gender": "M",
+   "item_mutated": false,
+   "revealed_ability": "Levitate",
+   "revealed_item": null,
+   "revealed_moves": [
+    "Sludge Bomb"
+   ],
+   "ruled_out_abilities": [],
+   "ruled_out_items": [
+    "lumberry"
+   ],
+   "showdown_slot": "p1",
+   "species": "Weezing"
+  }
+ ],
+ "census": {
+  "species": {
+   "weezing": {
+    "census_lik": [
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0
+    ],
+    "census_n": 12,
+    "census_n_after": 12,
+    "census_strikes": 0,
+    "survivor_ids": [
+     "weezing-1-variant-1",
+     "weezing-1-variant-2",
+     "weezing-1-variant-3",
+     "weezing-1-variant-4",
+     "weezing-1-variant-5",
+     "weezing-1-variant-6",
+     "weezing-1-variant-7",
+     "weezing-1-variant-8",
+     "weezing-1-variant-9",
+     "weezing-1-variant-10",
+     "weezing-1-variant-11",
+     "weezing-1-variant-12"
+    ],
+    "true_variant": "weezing-1-variant-3"
+   }
+  },
+  "strikes": [
+   {
+    "attacker": "Weezing",
+    "crit": false,
+    "eff": null,
+    "hp_before": 267,
+    "ko": false,
+    "line": 27,
+    "move": "sludgebomb",
+    "n_excluded_universe": null,
+    "n_variants_with_move": null,
+    "observed": 87,
+    "reason": "ability-overridden",
+    "true_match": null,
+    "true_variant": null
+   }
+  ]
+ },
+ "decision_index": 1,
+ "format_id": "gen3randombattle",
+ "name": "refusal_trace",
+ "note": "Census refusal: trace",
+ "ordinal": 1547,
+ "owner": "p2",
+ "posterior": {
+  "weezing": {
+   "hard": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10,
+    11
+   ],
+   "provenance": "e776b10cf8fd4243ce35b639f6f6db1b275135c39ba7e9a668efef78e6965a1b",
+   "strikes": [
+    {
+     "admitted": false,
+     "counts": null,
+     "crit": false,
+     "ko": false,
+     "line": 27,
+     "move": "sludgebomb",
+     "observed": 87,
+     "reason": "ability-overridden"
+    }
+   ],
+   "weights": [
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1
+   ]
+  }
+ },
+ "prefix_sha256": "4208e5aa2f65c51206450aa83280190a17f931afc56fd7f17eb715c153e6fb71",
+ "request": {
+  "battle_id": "battle-gen3randombattle-controlled-2103400257",
+  "decision_index": 1,
+  "generation": 4,
+  "lines": [
+   "|t:|1794581135",
+   "|gametype|singles",
+   "|player|p1|FoulPlayBot||",
+   "|player|p2|PokeZeroBot||",
+   "|gen|3",
+   "|tier|[Gen 3] Random Battle",
+   "|rule|HP Percentage Mod: HP is shown in percentages",
+   "|rule|Beat Up Nicknames Mod: Beat Up will not reveal any party members",
+   "|rule|Endless Battle Clause: Forcing endless battles is banned",
+   "|rule|Sleep Clause Mod: Limit one foe put to sleep",
+   "|rule|Switch Priority Clause Mod: Faster Pok\u00e9mon switch first",
+   "|rule|Species Clause: Limit one of each Pok\u00e9mon",
+   "|rule|OHKO Clause: OHKO moves are banned",
+   "|rule|Evasion Items Clause: Evasion items are banned",
+   "|rule|Evasion Moves Clause: Evasion moves are banned",
+   "|",
+   "|t:|1794581136",
+   "|teamsize|p1|6",
+   "|teamsize|p2|6",
+   "|start",
+   "|switch|p1a: Weezing|Weezing, L81, M|100/100",
+   "|switch|p2a: Porygon2|Porygon2, L80|267/267",
+   "|-ability|p2a: Porygon2|Levitate|Trace|[from] ability: Trace|[of] p1a: Weezing",
+   "|turn|1",
+   "|request|{\"active\":[{\"moves\":[{\"move\":\"Recover\",\"id\":\"recover\",\"pp\":32,\"maxpp\":32,\"target\":\"self\",\"disabled\":false},{\"move\":\"Thunderbolt\",\"id\":\"thunderbolt\",\"pp\":24,\"maxpp\":24,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Return 102\",\"id\":\"return\",\"pp\":32,\"maxpp\":32,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Thunder Wave\",\"id\":\"thunderwave\",\"pp\":32,\"maxpp\":32,\"target\":\"normal\",\"disabled\":false}]}],\"side\":{\"name\":\"PokeZeroBot\",\"id\":\"p2\",\"pokemon\":[{\"ident\":\"p2: Porygon2\",\"details\":\"Porygon2, L80\",\"condition\":\"267/267\",\"active\":true,\"stats\":{\"atk\":174,\"def\":190,\"spa\":214,\"spd\":198,\"spe\":142},\"moves\":[\"recover\",\"thunderbolt\",\"return102\",\"thunderwave\"],\"baseAbility\":\"trace\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Entei\",\"details\":\"Entei, L78\",\"condition\":\"307/307\",\"active\":false,\"stats\":{\"atk\":185,\"def\":178,\"spa\":185,\"spd\":162,\"spe\":201},\"moves\":[\"hiddenpowergrass\",\"flamethrower\",\"calmmind\",\"substitute\"],\"baseAbility\":\"pressure\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Hariyama\",\"details\":\"Hariyama, L83, F\",\"condition\":\"375/375\",\"active\":false,\"stats\":{\"atk\":247,\"def\":147,\"spa\":114,\"spd\":147,\"spe\":131},\"moves\":[\"crosschop\",\"sleeptalk\",\"rest\",\"rockslide\"],\"baseAbility\":\"guts\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Venomoth\",\"details\":\"Venomoth, L87, M\",\"condition\":\"264/264\",\"active\":false,\"stats\":{\"atk\":163,\"def\":154,\"spa\":206,\"spd\":180,\"spe\":206},\"moves\":[\"substitute\",\"sludgebomb\",\"batonpass\",\"psychic\"],\"baseAbility\":\"shielddust\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Raticate\",\"details\":\"Raticate, L85, M\",\"condition\":\"232/232\",\"active\":false,\"stats\":{\"atk\":186,\"def\":151,\"spa\":133,\"spd\":167,\"spe\":214},\"moves\":[\"hiddenpowerground\",\"shadowball\",\"doubleedge\",\"quickattack\"],\"baseAbility\":\"guts\",\"item\":\"choiceband\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Glalie\",\"details\":\"Glalie, L82, F\",\"condition\":\"265/265\",\"active\":false,\"stats\":{\"atk\":178,\"def\":178,\"spa\":178,\"spd\":178,\"spe\":178},\"moves\":[\"earthquake\",\"icebeam\",\"explosion\",\"spikes\"],\"baseAbility\":\"innerfocus\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"}]}}",
+   "|",
+   "|t:|1794581138",
+   "|move|p1a: Weezing|Sludge Bomb|p2a: Porygon2",
+   "|-damage|p2a: Porygon2|180/267",
+   "|move|p2a: Porygon2|Thunder Wave|p1a: Weezing",
+   "|-status|p1a: Weezing|par",
+   "|",
+   "|-heal|p2a: Porygon2|196/267|[from] item: Leftovers",
+   "|upkeep",
+   "|turn|2",
+   "|request|{\"active\":[{\"moves\":[{\"move\":\"Recover\",\"id\":\"recover\",\"pp\":32,\"maxpp\":32,\"target\":\"self\",\"disabled\":false},{\"move\":\"Thunderbolt\",\"id\":\"thunderbolt\",\"pp\":24,\"maxpp\":24,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Return 102\",\"id\":\"return\",\"pp\":32,\"maxpp\":32,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Thunder Wave\",\"id\":\"thunderwave\",\"pp\":31,\"maxpp\":32,\"target\":\"normal\",\"disabled\":false}]}],\"side\":{\"name\":\"PokeZeroBot\",\"id\":\"p2\",\"pokemon\":[{\"ident\":\"p2: Porygon2\",\"details\":\"Porygon2, L80\",\"condition\":\"196/267\",\"active\":true,\"stats\":{\"atk\":174,\"def\":190,\"spa\":214,\"spd\":198,\"spe\":142},\"moves\":[\"recover\",\"thunderbolt\",\"return102\",\"thunderwave\"],\"baseAbility\":\"trace\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Entei\",\"details\":\"Entei, L78\",\"condition\":\"307/307\",\"active\":false,\"stats\":{\"atk\":185,\"def\":178,\"spa\":185,\"spd\":162,\"spe\":201},\"moves\":[\"hiddenpowergrass\",\"flamethrower\",\"calmmind\",\"substitute\"],\"baseAbility\":\"pressure\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Hariyama\",\"details\":\"Hariyama, L83, F\",\"condition\":\"375/375\",\"active\":false,\"stats\":{\"atk\":247,\"def\":147,\"spa\":114,\"spd\":147,\"spe\":131},\"moves\":[\"crosschop\",\"sleeptalk\",\"rest\",\"rockslide\"],\"baseAbility\":\"guts\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Venomoth\",\"details\":\"Venomoth, L87, M\",\"condition\":\"264/264\",\"active\":false,\"stats\":{\"atk\":163,\"def\":154,\"spa\":206,\"spd\":180,\"spe\":206},\"moves\":[\"substitute\",\"sludgebomb\",\"batonpass\",\"psychic\"],\"baseAbility\":\"shielddust\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Raticate\",\"details\":\"Raticate, L85, M\",\"condition\":\"232/232\",\"active\":false,\"stats\":{\"atk\":186,\"def\":151,\"spa\":133,\"spd\":167,\"spe\":214},\"moves\":[\"hiddenpowerground\",\"shadowball\",\"doubleedge\",\"quickattack\"],\"baseAbility\":\"guts\",\"item\":\"choiceband\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Glalie\",\"details\":\"Glalie, L82, F\",\"condition\":\"265/265\",\"active\":false,\"stats\":{\"atk\":178,\"def\":178,\"spa\":178,\"spd\":178,\"spe\":178},\"moves\":[\"earthquake\",\"icebeam\",\"explosion\",\"spikes\"],\"baseAbility\":\"innerfocus\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"}]}}"
+  ],
+  "own_request_line": "|request|{\"active\":[{\"moves\":[{\"move\":\"Recover\",\"id\":\"recover\",\"pp\":32,\"maxpp\":32,\"target\":\"self\",\"disabled\":false},{\"move\":\"Thunderbolt\",\"id\":\"thunderbolt\",\"pp\":24,\"maxpp\":24,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Return 102\",\"id\":\"return\",\"pp\":32,\"maxpp\":32,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Thunder Wave\",\"id\":\"thunderwave\",\"pp\":31,\"maxpp\":32,\"target\":\"normal\",\"disabled\":false}]}],\"side\":{\"name\":\"PokeZeroBot\",\"id\":\"p2\",\"pokemon\":[{\"ident\":\"p2: Porygon2\",\"details\":\"Porygon2, L80\",\"condition\":\"196/267\",\"active\":true,\"stats\":{\"atk\":174,\"def\":190,\"spa\":214,\"spd\":198,\"spe\":142},\"moves\":[\"recover\",\"thunderbolt\",\"return102\",\"thunderwave\"],\"baseAbility\":\"trace\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Entei\",\"details\":\"Entei, L78\",\"condition\":\"307/307\",\"active\":false,\"stats\":{\"atk\":185,\"def\":178,\"spa\":185,\"spd\":162,\"spe\":201},\"moves\":[\"hiddenpowergrass\",\"flamethrower\",\"calmmind\",\"substitute\"],\"baseAbility\":\"pressure\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Hariyama\",\"details\":\"Hariyama, L83, F\",\"condition\":\"375/375\",\"active\":false,\"stats\":{\"atk\":247,\"def\":147,\"spa\":114,\"spd\":147,\"spe\":131},\"moves\":[\"crosschop\",\"sleeptalk\",\"rest\",\"rockslide\"],\"baseAbility\":\"guts\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Venomoth\",\"details\":\"Venomoth, L87, M\",\"condition\":\"264/264\",\"active\":false,\"stats\":{\"atk\":163,\"def\":154,\"spa\":206,\"spd\":180,\"spe\":206},\"moves\":[\"substitute\",\"sludgebomb\",\"batonpass\",\"psychic\"],\"baseAbility\":\"shielddust\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Raticate\",\"details\":\"Raticate, L85, M\",\"condition\":\"232/232\",\"active\":false,\"stats\":{\"atk\":186,\"def\":151,\"spa\":133,\"spd\":167,\"spe\":214},\"moves\":[\"hiddenpowerground\",\"shadowball\",\"doubleedge\",\"quickattack\"],\"baseAbility\":\"guts\",\"item\":\"choiceband\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Glalie\",\"details\":\"Glalie, L82, F\",\"condition\":\"265/265\",\"active\":false,\"stats\":{\"atk\":178,\"def\":178,\"spa\":178,\"spd\":178,\"spe\":178},\"moves\":[\"earthquake\",\"icebeam\",\"explosion\",\"spikes\"],\"baseAbility\":\"innerfocus\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"}]}}",
+  "owner": "p2",
+  "prefix_sha256": "4208e5aa2f65c51206450aa83280190a17f931afc56fd7f17eb715c153e6fb71",
+  "request_id": "battle-gen3randombattle-controlled-2103400257:1",
+  "schema": "pokezero.phase-d.shared-gpu-search.v1",
+  "stream_id": 1
+ },
+ "source_hash": "f5a5265143d423af"
+}

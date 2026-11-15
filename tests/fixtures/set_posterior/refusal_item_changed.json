@@ -1,0 +1,621 @@
+{
+ "beliefs": [
+  {
+   "condition": "2/100",
+   "gender": "F",
+   "item_mutated": false,
+   "revealed_ability": null,
+   "revealed_item": null,
+   "revealed_moves": [
+    "Earthquake"
+   ],
+   "ruled_out_abilities": [],
+   "ruled_out_items": [
+    "leftovers",
+    "salacberry",
+    "petayaberry",
+    "liechiberry"
+   ],
+   "showdown_slot": "p1",
+   "species": "Marowak"
+  },
+  {
+   "condition": "100/100",
+   "gender": "F",
+   "item_mutated": false,
+   "revealed_ability": null,
+   "revealed_item": null,
+   "revealed_moves": [
+    "Toxic",
+    "Hidden Power"
+   ],
+   "ruled_out_abilities": [],
+   "ruled_out_items": [
+    "lumberry"
+   ],
+   "showdown_slot": "p1",
+   "species": "Mantine"
+  },
+  {
+   "condition": "100/100",
+   "gender": "F",
+   "item_mutated": false,
+   "revealed_ability": null,
+   "revealed_item": null,
+   "revealed_moves": [
+    "Hypnosis"
+   ],
+   "ruled_out_abilities": [],
+   "ruled_out_items": [],
+   "showdown_slot": "p1",
+   "species": "Golduck"
+  },
+  {
+   "condition": "100/100",
+   "gender": "F",
+   "item_mutated": false,
+   "revealed_ability": null,
+   "revealed_item": null,
+   "revealed_moves": [
+    "Knock Off",
+    "Seismic Toss"
+   ],
+   "ruled_out_abilities": [],
+   "ruled_out_items": [],
+   "showdown_slot": "p1",
+   "species": "Sableye"
+  },
+  {
+   "condition": "63/100",
+   "gender": "F",
+   "item_mutated": false,
+   "revealed_ability": null,
+   "revealed_item": null,
+   "revealed_moves": [
+    "Hidden Power"
+   ],
+   "ruled_out_abilities": [],
+   "ruled_out_items": [
+    "leftovers"
+   ],
+   "showdown_slot": "p1",
+   "species": "Dragonite"
+  }
+ ],
+ "census": {
+  "species": {
+   "dragonite": {
+    "census_lik": [
+     1.0,
+     1.0,
+     1.0,
+     1.0
+    ],
+    "census_n": 4,
+    "census_n_after": 4,
+    "census_strikes": 0,
+    "survivor_ids": [
+     "dragonite-1-variant-1",
+     "dragonite-2-variant-7",
+     "dragonite-2-variant-8",
+     "dragonite-2-variant-9"
+    ],
+    "true_variant": "dragonite-1-variant-1"
+   },
+   "golduck": {
+    "census_lik": [
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0
+    ],
+    "census_n": 8,
+    "census_n_after": 8,
+    "census_strikes": 0,
+    "survivor_ids": [
+     "golduck-1-variant-5",
+     "golduck-1-variant-7",
+     "golduck-1-variant-9",
+     "golduck-1-variant-11",
+     "golduck-1-variant-13",
+     "golduck-1-variant-15",
+     "golduck-1-variant-17",
+     "golduck-1-variant-18"
+    ],
+    "true_variant": "golduck-1-variant-5"
+   },
+   "mantine": {
+    "census_lik": [
+     0.0625
+    ],
+    "census_n": 1,
+    "census_n_after": 1,
+    "census_strikes": 1,
+    "survivor_ids": [
+     "mantine-1-variant-1"
+    ],
+    "true_variant": "mantine-1-variant-1"
+   },
+   "marowak": {
+    "census_lik": [
+     0.03515625
+    ],
+    "census_n": 1,
+    "census_n_after": 1,
+    "census_strikes": 2,
+    "survivor_ids": [
+     "marowak-1-variant-1"
+    ],
+    "true_variant": "marowak-1-variant-1"
+   },
+   "sableye": {
+    "census_lik": [
+     0.3125
+    ],
+    "census_n": 1,
+    "census_n_after": 1,
+    "census_strikes": 1,
+    "survivor_ids": [
+     "sableye-1-variant-1"
+    ],
+    "true_variant": "sableye-1-variant-1"
+   }
+  },
+  "strikes": [
+   {
+    "attacker": "Mantine",
+    "crit": false,
+    "eff": "supereffective",
+    "hp_before": 274,
+    "ko": false,
+    "line": 46,
+    "move": "hiddenpower",
+    "n_excluded_universe": 0,
+    "n_variants_with_move": 4,
+    "observed": 89,
+    "reason": null,
+    "true_match": 1,
+    "true_variant": "mantine-1-variant-1"
+   },
+   {
+    "attacker": "Marowak",
+    "crit": false,
+    "eff": null,
+    "hp_before": 167,
+    "ko": true,
+    "line": 85,
+    "move": "earthquake",
+    "n_excluded_universe": 0,
+    "n_variants_with_move": 1,
+    "observed": 167,
+    "reason": null,
+    "true_match": 9,
+    "true_variant": "marowak-1-variant-1"
+   },
+   {
+    "attacker": "Marowak",
+    "crit": false,
+    "eff": null,
+    "hp_before": 316,
+    "ko": false,
+    "line": 101,
+    "move": "earthquake",
+    "n_excluded_universe": 0,
+    "n_variants_with_move": 1,
+    "observed": 187,
+    "reason": null,
+    "true_match": 1,
+    "true_variant": "marowak-1-variant-1"
+   },
+   {
+    "attacker": "Sableye",
+    "crit": false,
+    "eff": null,
+    "hp_before": 266,
+    "ko": false,
+    "line": 119,
+    "move": "knockoff",
+    "n_excluded_universe": 0,
+    "n_variants_with_move": 1,
+    "observed": 18,
+    "reason": null,
+    "true_match": 5,
+    "true_variant": "sableye-1-variant-1"
+   },
+   {
+    "attacker": "Sableye",
+    "crit": false,
+    "eff": null,
+    "hp_before": 248,
+    "ko": false,
+    "line": 129,
+    "move": "seismictoss",
+    "n_excluded_universe": null,
+    "n_variants_with_move": null,
+    "observed": 91,
+    "reason": "fixed-damage",
+    "true_match": null,
+    "true_variant": null
+   },
+   {
+    "attacker": "Dragonite",
+    "crit": false,
+    "eff": "supereffective",
+    "hp_before": 266,
+    "ko": false,
+    "line": 148,
+    "move": "hiddenpower",
+    "n_excluded_universe": null,
+    "n_variants_with_move": null,
+    "observed": 168,
+    "reason": "item-changed",
+    "true_match": null,
+    "true_variant": null
+   }
+  ]
+ },
+ "decision_index": 14,
+ "format_id": "gen3randombattle",
+ "name": "refusal_item_changed",
+ "note": "Census refusal: item_changed",
+ "ordinal": 4101,
+ "owner": "p2",
+ "posterior": {
+  "dragonite": {
+   "hard": [
+    0,
+    6,
+    7,
+    8
+   ],
+   "provenance": "fcbf1776ba48974925465c7ae325780f51d98f5131679fc0ad9062afcf4c8a01",
+   "strikes": [
+    {
+     "admitted": false,
+     "counts": null,
+     "crit": false,
+     "ko": false,
+     "line": 148,
+     "move": "hiddenpower",
+     "observed": 168,
+     "reason": "item-changed"
+    }
+   ],
+   "weights": [
+    1,
+    0,
+    0,
+    0,
+    0,
+    0,
+    1,
+    1,
+    1
+   ]
+  },
+  "golduck": {
+   "hard": [
+    4,
+    6,
+    8,
+    10,
+    12,
+    14,
+    16,
+    17
+   ],
+   "provenance": "fcbf1776ba48974925465c7ae325780f51d98f5131679fc0ad9062afcf4c8a01",
+   "strikes": [],
+   "weights": [
+    0,
+    0,
+    0,
+    0,
+    1,
+    0,
+    1,
+    0,
+    1,
+    0,
+    1,
+    0,
+    1,
+    0,
+    1,
+    0,
+    1,
+    1
+   ]
+  },
+  "mantine": {
+   "hard": [
+    0
+   ],
+   "provenance": "fcbf1776ba48974925465c7ae325780f51d98f5131679fc0ad9062afcf4c8a01",
+   "strikes": [
+    {
+     "admitted": true,
+     "counts": [
+      1,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0
+     ],
+     "crit": false,
+     "ko": false,
+     "line": 46,
+     "move": "hiddenpower",
+     "observed": 89,
+     "reason": ""
+    }
+   ],
+   "weights": [
+    1,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  "marowak": {
+   "hard": [
+    0
+   ],
+   "provenance": "fcbf1776ba48974925465c7ae325780f51d98f5131679fc0ad9062afcf4c8a01",
+   "strikes": [
+    {
+     "admitted": true,
+     "counts": [
+      9,
+      0
+     ],
+     "crit": false,
+     "ko": true,
+     "line": 85,
+     "move": "earthquake",
+     "observed": 167,
+     "reason": ""
+    },
+    {
+     "admitted": true,
+     "counts": [
+      1,
+      0
+     ],
+     "crit": false,
+     "ko": false,
+     "line": 101,
+     "move": "earthquake",
+     "observed": 187,
+     "reason": ""
+    }
+   ],
+   "weights": [
+    1,
+    0
+   ]
+  },
+  "sableye": {
+   "hard": [
+    0
+   ],
+   "provenance": "fcbf1776ba48974925465c7ae325780f51d98f5131679fc0ad9062afcf4c8a01",
+   "strikes": [
+    {
+     "admitted": true,
+     "counts": [
+      5,
+      0
+     ],
+     "crit": false,
+     "ko": false,
+     "line": 119,
+     "move": "knockoff",
+     "observed": 18,
+     "reason": ""
+    },
+    {
+     "admitted": false,
+     "counts": null,
+     "crit": false,
+     "ko": false,
+     "line": 129,
+     "move": "seismictoss",
+     "observed": 91,
+     "reason": "fixed-damage"
+    }
+   ],
+   "weights": [
+    1,
+    0
+   ]
+  }
+ },
+ "prefix_sha256": "4ce7ca24eaaa3e4702922d7a13be9816147f41957d127a02cf90a00cbfc476a8",
+ "request": {
+  "battle_id": "battle-gen3randombattle-controlled-2103400683",
+  "decision_index": 14,
+  "generation": 30,
+  "lines": [
+   "|t:|1794609309",
+   "|gametype|singles",
+   "|player|p1|FoulPlayBot||",
+   "|player|p2|PokeZeroBot||",
+   "|gen|3",
+   "|tier|[Gen 3] Random Battle",
+   "|rule|HP Percentage Mod: HP is shown in percentages",
+   "|rule|Beat Up Nicknames Mod: Beat Up will not reveal any party members",
+   "|rule|Endless Battle Clause: Forcing endless battles is banned",
+   "|rule|Sleep Clause Mod: Limit one foe put to sleep",
+   "|rule|Switch Priority Clause Mod: Faster Pok\u00e9mon switch first",
+   "|rule|Species Clause: Limit one of each Pok\u00e9mon",
+   "|rule|OHKO Clause: OHKO moves are banned",
+   "|rule|Evasion Items Clause: Evasion items are banned",
+   "|rule|Evasion Moves Clause: Evasion moves are banned",
+   "|",
+   "|t:|1794609309",
+   "|teamsize|p1|6",
+   "|teamsize|p2|6",
+   "|start",
+   "|switch|p1a: Marowak|Marowak, L83, F|100/100",
+   "|switch|p2a: Poliwrath|Poliwrath, L85, F|292/292",
+   "|turn|1",
+   "|request|{\"active\":[{\"moves\":[{\"move\":\"Hypnosis\",\"id\":\"hypnosis\",\"pp\":32,\"maxpp\":32,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Hidden Power Ghost 70\",\"id\":\"hiddenpower\",\"pp\":24,\"maxpp\":24,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Brick Break\",\"id\":\"brickbreak\",\"pp\":24,\"maxpp\":24,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Hydro Pump\",\"id\":\"hydropump\",\"pp\":8,\"maxpp\":8,\"target\":\"normal\",\"disabled\":false}]}],\"side\":{\"name\":\"PokeZeroBot\",\"id\":\"p2\",\"pokemon\":[{\"ident\":\"p2: Poliwrath\",\"details\":\"Poliwrath, L85, F\",\"condition\":\"292/292\",\"active\":true,\"stats\":{\"atk\":193,\"def\":209,\"spa\":168,\"spd\":201,\"spe\":168},\"moves\":[\"hypnosis\",\"hiddenpowerghost\",\"brickbreak\",\"hydropump\"],\"baseAbility\":\"waterabsorb\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Rayquaza\",\"details\":\"Rayquaza, L70\",\"condition\":\"262/262\",\"active\":false,\"stats\":{\"atk\":250,\"def\":166,\"spa\":250,\"spd\":166,\"spe\":174},\"moves\":[\"earthquake\",\"overheat\",\"extremespeed\",\"hiddenpowerflying\"],\"baseAbility\":\"airlock\",\"item\":\"choiceband\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Kecleon\",\"details\":\"Kecleon, L92, F\",\"condition\":\"260/260\",\"active\":false,\"stats\":{\"atk\":218,\"def\":181,\"spa\":163,\"spd\":273,\"spe\":126},\"moves\":[\"brickbreak\",\"shadowball\",\"return102\",\"trick\"],\"baseAbility\":\"colorchange\",\"item\":\"choiceband\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Espeon\",\"details\":\"Espeon, L76, M\",\"condition\":\"224/224\",\"active\":false,\"stats\":{\"atk\":105,\"def\":135,\"spa\":241,\"spd\":188,\"spe\":210},\"moves\":[\"hiddenpowerfire\",\"psychic\",\"substitute\",\"calmmind\"],\"baseAbility\":\"synchronize\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Azumarill\",\"details\":\"Azumarill, L87, M\",\"condition\":\"316/316\",\"active\":false,\"stats\":{\"atk\":137,\"def\":188,\"spa\":137,\"spd\":188,\"spe\":137},\"moves\":[\"hydropump\",\"brickbreak\",\"hiddenpowerghost\",\"return102\"],\"baseAbility\":\"hugepower\",\"item\":\"choiceband\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Vileplume\",\"details\":\"Vileplume, L85, M\",\"condition\":\"266/266\",\"active\":false,\"stats\":{\"atk\":185,\"def\":193,\"spa\":219,\"spd\":202,\"spe\":134},\"moves\":[\"aromatherapy\",\"sleeppowder\",\"synthesis\",\"sludgebomb\"],\"baseAbility\":\"chlorophyll\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"}]}}",
+   "|",
+   "|t:|1794609312",
+   "|switch|p1a: Mantine|Mantine, L86, F|100/100",
+   "|move|p2a: Poliwrath|Hypnosis|p1a: Mantine|[miss]",
+   "|-miss|p2a: Poliwrath|p1a: Mantine",
+   "|",
+   "|upkeep",
+   "|turn|2",
+   "|request|{\"active\":[{\"moves\":[{\"move\":\"Hypnosis\",\"id\":\"hypnosis\",\"pp\":31,\"maxpp\":32,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Hidden Power Ghost 70\",\"id\":\"hiddenpower\",\"pp\":24,\"maxpp\":24,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Brick Break\",\"id\":\"brickbreak\",\"pp\":24,\"maxpp\":24,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Hydro Pump\",\"id\":\"hydropump\",\"pp\":8,\"maxpp\":8,\"target\":\"normal\",\"disabled\":false}]}],\"side\":{\"name\":\"PokeZeroBot\",\"id\":\"p2\",\"pokemon\":[{\"ident\":\"p2: Poliwrath\",\"details\":\"Poliwrath, L85, F\",\"condition\":\"292/292\",\"active\":true,\"stats\":{\"atk\":193,\"def\":209,\"spa\":168,\"spd\":201,\"spe\":168},\"moves\":[\"hypnosis\",\"hiddenpowerghost\",\"brickbreak\",\"hydropump\"],\"baseAbility\":\"waterabsorb\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Rayquaza\",\"details\":\"Rayquaza, L70\",\"condition\":\"262/262\",\"active\":false,\"stats\":{\"atk\":250,\"def\":166,\"spa\":250,\"spd\":166,\"spe\":174},\"moves\":[\"earthquake\",\"overheat\",\"extremespeed\",\"hiddenpowerflying\"],\"baseAbility\":\"airlock\",\"item\":\"choiceband\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Kecleon\",\"details\":\"Kecleon, L92, F\",\"condition\":\"260/260\",\"active\":false,\"stats\":{\"atk\":218,\"def\":181,\"spa\":163,\"spd\":273,\"spe\":126},\"moves\":[\"brickbreak\",\"shadowball\",\"return102\",\"trick\"],\"baseAbility\":\"colorchange\",\"item\":\"choiceband\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Espeon\",\"details\":\"Espeon, L76, M\",\"condition\":\"224/224\",\"active\":false,\"stats\":{\"atk\":105,\"def\":135,\"spa\":241,\"spd\":188,\"spe\":210},\"moves\":[\"hiddenpowerfire\",\"psychic\",\"substitute\",\"calmmind\"],\"baseAbility\":\"synchronize\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Azumarill\",\"details\":\"Azumarill, L87, M\",\"condition\":\"316/316\",\"active\":false,\"stats\":{\"atk\":137,\"def\":188,\"spa\":137,\"spd\":188,\"spe\":137},\"moves\":[\"hydropump\",\"brickbreak\",\"hiddenpowerghost\",\"return102\"],\"baseAbility\":\"hugepower\",\"item\":\"choiceband\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Vileplume\",\"details\":\"Vileplume, L85, M\",\"condition\":\"266/266\",\"active\":false,\"stats\":{\"atk\":185,\"def\":193,\"spa\":219,\"spd\":202,\"spe\":134},\"moves\":[\"aromatherapy\",\"sleeppowder\",\"synthesis\",\"sludgebomb\"],\"baseAbility\":\"chlorophyll\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"}]}}",
+   "|",
+   "|t:|1794609315",
+   "|move|p1a: Mantine|Toxic|p2a: Poliwrath",
+   "|-status|p2a: Poliwrath|tox",
+   "|move|p2a: Poliwrath|Hypnosis|p1a: Mantine|[miss]",
+   "|-miss|p2a: Poliwrath|p1a: Mantine",
+   "|",
+   "|-damage|p2a: Poliwrath|274/292 tox|[from] psn",
+   "|upkeep",
+   "|turn|3",
+   "|request|{\"active\":[{\"moves\":[{\"move\":\"Hypnosis\",\"id\":\"hypnosis\",\"pp\":30,\"maxpp\":32,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Hidden Power Ghost 70\",\"id\":\"hiddenpower\",\"pp\":24,\"maxpp\":24,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Brick Break\",\"id\":\"brickbreak\",\"pp\":24,\"maxpp\":24,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Hydro Pump\",\"id\":\"hydropump\",\"pp\":8,\"maxpp\":8,\"target\":\"normal\",\"disabled\":false}]}],\"side\":{\"name\":\"PokeZeroBot\",\"id\":\"p2\",\"pokemon\":[{\"ident\":\"p2: Poliwrath\",\"details\":\"Poliwrath, L85, F\",\"condition\":\"274/292 tox\",\"active\":true,\"stats\":{\"atk\":193,\"def\":209,\"spa\":168,\"spd\":201,\"spe\":168},\"moves\":[\"hypnosis\",\"hiddenpowerghost\",\"brickbreak\",\"hydropump\"],\"baseAbility\":\"waterabsorb\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Rayquaza\",\"details\":\"Rayquaza, L70\",\"condition\":\"262/262\",\"active\":false,\"stats\":{\"atk\":250,\"def\":166,\"spa\":250,\"spd\":166,\"spe\":174},\"moves\":[\"earthquake\",\"overheat\",\"extremespeed\",\"hiddenpowerflying\"],\"baseAbility\":\"airlock\",\"item\":\"choiceband\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Kecleon\",\"details\":\"Kecleon, L92, F\",\"condition\":\"260/260\",\"active\":false,\"stats\":{\"atk\":218,\"def\":181,\"spa\":163,\"spd\":273,\"spe\":126},\"moves\":[\"brickbreak\",\"shadowball\",\"return102\",\"trick\"],\"baseAbility\":\"colorchange\",\"item\":\"choiceband\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Espeon\",\"details\":\"Espeon, L76, M\",\"condition\":\"224/224\",\"active\":false,\"stats\":{\"atk\":105,\"def\":135,\"spa\":241,\"spd\":188,\"spe\":210},\"moves\":[\"hiddenpowerfire\",\"psychic\",\"substitute\",\"calmmind\"],\"baseAbility\":\"synchronize\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Azumarill\",\"details\":\"Azumarill, L87, M\",\"condition\":\"316/316\",\"active\":false,\"stats\":{\"atk\":137,\"def\":188,\"spa\":137,\"spd\":188,\"spe\":137},\"moves\":[\"hydropump\",\"brickbreak\",\"hiddenpowerghost\",\"return102\"],\"baseAbility\":\"hugepower\",\"item\":\"choiceband\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Vileplume\",\"details\":\"Vileplume, L85, M\",\"condition\":\"266/266\",\"active\":false,\"stats\":{\"atk\":185,\"def\":193,\"spa\":219,\"spd\":202,\"spe\":134},\"moves\":[\"aromatherapy\",\"sleeppowder\",\"synthesis\",\"sludgebomb\"],\"baseAbility\":\"chlorophyll\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"}]}}",
+   "|",
+   "|t:|1794609317",
+   "|move|p1a: Mantine|Hidden Power|p2a: Poliwrath",
+   "|-supereffective|p2a: Poliwrath",
+   "|-damage|p2a: Poliwrath|185/292 tox",
+   "|move|p2a: Poliwrath|Hypnosis|p1a: Mantine",
+   "|-status|p1a: Mantine|slp|[from] move: Hypnosis",
+   "|",
+   "|-heal|p2a: Poliwrath|203/292 tox|[from] item: Leftovers",
+   "|-damage|p2a: Poliwrath|167/292 tox|[from] psn",
+   "|upkeep",
+   "|turn|4",
+   "|request|{\"active\":[{\"moves\":[{\"move\":\"Hypnosis\",\"id\":\"hypnosis\",\"pp\":29,\"maxpp\":32,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Hidden Power Ghost 70\",\"id\":\"hiddenpower\",\"pp\":24,\"maxpp\":24,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Brick Break\",\"id\":\"brickbreak\",\"pp\":24,\"maxpp\":24,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Hydro Pump\",\"id\":\"hydropump\",\"pp\":8,\"maxpp\":8,\"target\":\"normal\",\"disabled\":false}]}],\"side\":{\"name\":\"PokeZeroBot\",\"id\":\"p2\",\"pokemon\":[{\"ident\":\"p2: Poliwrath\",\"details\":\"Poliwrath, L85, F\",\"condition\":\"167/292 tox\",\"active\":true,\"stats\":{\"atk\":193,\"def\":209,\"spa\":168,\"spd\":201,\"spe\":168},\"moves\":[\"hypnosis\",\"hiddenpowerghost\",\"brickbreak\",\"hydropump\"],\"baseAbility\":\"waterabsorb\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Rayquaza\",\"details\":\"Rayquaza, L70\",\"condition\":\"262/262\",\"active\":false,\"stats\":{\"atk\":250,\"def\":166,\"spa\":250,\"spd\":166,\"spe\":174},\"moves\":[\"earthquake\",\"overheat\",\"extremespeed\",\"hiddenpowerflying\"],\"baseAbility\":\"airlock\",\"item\":\"choiceband\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Kecleon\",\"details\":\"Kecleon, L92, F\",\"condition\":\"260/260\",\"active\":false,\"stats\":{\"atk\":218,\"def\":181,\"spa\":163,\"spd\":273,\"spe\":126},\"moves\":[\"brickbreak\",\"shadowball\",\"return102\",\"trick\"],\"baseAbility\":\"colorchange\",\"item\":\"choiceband\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Espeon\",\"details\":\"Espeon, L76, M\",\"condition\":\"224/224\",\"active\":false,\"stats\":{\"atk\":105,\"def\":135,\"spa\":241,\"spd\":188,\"spe\":210},\"moves\":[\"hiddenpowerfire\",\"psychic\",\"substitute\",\"calmmind\"],\"baseAbility\":\"synchronize\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Azumarill\",\"details\":\"Azumarill, L87, M\",\"condition\":\"316/316\",\"active\":false,\"stats\":{\"atk\":137,\"def\":188,\"spa\":137,\"spd\":188,\"spe\":137},\"moves\":[\"hydropump\",\"brickbreak\",\"hiddenpowerghost\",\"return102\"],\"baseAbility\":\"hugepower\",\"item\":\"choiceband\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Vileplume\",\"details\":\"Vileplume, L85, M\",\"condition\":\"266/266\",\"active\":false,\"stats\":{\"atk\":185,\"def\":193,\"spa\":219,\"spd\":202,\"spe\":134},\"moves\":[\"aromatherapy\",\"sleeppowder\",\"synthesis\",\"sludgebomb\"],\"baseAbility\":\"chlorophyll\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"}]}}",
+   "|",
+   "|t:|1794609320",
+   "|switch|p1a: Golduck|Golduck, L81, F|100/100",
+   "|switch|p2a: Kecleon|Kecleon, L92, F|260/260",
+   "|",
+   "|upkeep",
+   "|turn|5",
+   "|request|{\"active\":[{\"moves\":[{\"move\":\"Brick Break\",\"id\":\"brickbreak\",\"pp\":24,\"maxpp\":24,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Shadow Ball\",\"id\":\"shadowball\",\"pp\":24,\"maxpp\":24,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Return 102\",\"id\":\"return\",\"pp\":32,\"maxpp\":32,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Trick\",\"id\":\"trick\",\"pp\":16,\"maxpp\":16,\"target\":\"normal\",\"disabled\":false}]}],\"side\":{\"name\":\"PokeZeroBot\",\"id\":\"p2\",\"pokemon\":[{\"ident\":\"p2: Kecleon\",\"details\":\"Kecleon, L92, F\",\"condition\":\"260/260\",\"active\":true,\"stats\":{\"atk\":218,\"def\":181,\"spa\":163,\"spd\":273,\"spe\":126},\"moves\":[\"brickbreak\",\"shadowball\",\"return102\",\"trick\"],\"baseAbility\":\"colorchange\",\"item\":\"choiceband\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Rayquaza\",\"details\":\"Rayquaza, L70\",\"condition\":\"262/262\",\"active\":false,\"stats\":{\"atk\":250,\"def\":166,\"spa\":250,\"spd\":166,\"spe\":174},\"moves\":[\"earthquake\",\"overheat\",\"extremespeed\",\"hiddenpowerflying\"],\"baseAbility\":\"airlock\",\"item\":\"choiceband\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Poliwrath\",\"details\":\"Poliwrath, L85, F\",\"condition\":\"167/292 tox\",\"active\":false,\"stats\":{\"atk\":193,\"def\":209,\"spa\":168,\"spd\":201,\"spe\":168},\"moves\":[\"hypnosis\",\"hiddenpowerghost\",\"brickbreak\",\"hydropump\"],\"baseAbility\":\"waterabsorb\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Espeon\",\"details\":\"Espeon, L76, M\",\"condition\":\"224/224\",\"active\":false,\"stats\":{\"atk\":105,\"def\":135,\"spa\":241,\"spd\":188,\"spe\":210},\"moves\":[\"hiddenpowerfire\",\"psychic\",\"substitute\",\"calmmind\"],\"baseAbility\":\"synchronize\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Azumarill\",\"details\":\"Azumarill, L87, M\",\"condition\":\"316/316\",\"active\":false,\"stats\":{\"atk\":137,\"def\":188,\"spa\":137,\"spd\":188,\"spe\":137},\"moves\":[\"hydropump\",\"brickbreak\",\"hiddenpowerghost\",\"return102\"],\"baseAbility\":\"hugepower\",\"item\":\"choiceband\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Vileplume\",\"details\":\"Vileplume, L85, M\",\"condition\":\"266/266\",\"active\":false,\"stats\":{\"atk\":185,\"def\":193,\"spa\":219,\"spd\":202,\"spe\":134},\"moves\":[\"aromatherapy\",\"sleeppowder\",\"synthesis\",\"sludgebomb\"],\"baseAbility\":\"chlorophyll\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"}]}}",
+   "|",
+   "|t:|1794609323",
+   "|move|p1a: Golduck|Hypnosis|p2a: Kecleon",
+   "|-status|p2a: Kecleon|slp|[from] move: Hypnosis",
+   "|cant|p2a: Kecleon|slp",
+   "|",
+   "|upkeep",
+   "|turn|6",
+   "|request|{\"active\":[{\"moves\":[{\"move\":\"Brick Break\",\"id\":\"brickbreak\",\"pp\":24,\"maxpp\":24,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Shadow Ball\",\"id\":\"shadowball\",\"pp\":24,\"maxpp\":24,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Return 102\",\"id\":\"return\",\"pp\":32,\"maxpp\":32,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Trick\",\"id\":\"trick\",\"pp\":16,\"maxpp\":16,\"target\":\"normal\",\"disabled\":false}]}],\"side\":{\"name\":\"PokeZeroBot\",\"id\":\"p2\",\"pokemon\":[{\"ident\":\"p2: Kecleon\",\"details\":\"Kecleon, L92, F\",\"condition\":\"260/260 slp\",\"active\":true,\"stats\":{\"atk\":218,\"def\":181,\"spa\":163,\"spd\":273,\"spe\":126},\"moves\":[\"brickbreak\",\"shadowball\",\"return102\",\"trick\"],\"baseAbility\":\"colorchange\",\"item\":\"choiceband\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Rayquaza\",\"details\":\"Rayquaza, L70\",\"condition\":\"262/262\",\"active\":false,\"stats\":{\"atk\":250,\"def\":166,\"spa\":250,\"spd\":166,\"spe\":174},\"moves\":[\"earthquake\",\"overheat\",\"extremespeed\",\"hiddenpowerflying\"],\"baseAbility\":\"airlock\",\"item\":\"choiceband\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Poliwrath\",\"details\":\"Poliwrath, L85, F\",\"condition\":\"167/292 tox\",\"active\":false,\"stats\":{\"atk\":193,\"def\":209,\"spa\":168,\"spd\":201,\"spe\":168},\"moves\":[\"hypnosis\",\"hiddenpowerghost\",\"brickbreak\",\"hydropump\"],\"baseAbility\":\"waterabsorb\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Espeon\",\"details\":\"Espeon, L76, M\",\"condition\":\"224/224\",\"active\":false,\"stats\":{\"atk\":105,\"def\":135,\"spa\":241,\"spd\":188,\"spe\":210},\"moves\":[\"hiddenpowerfire\",\"psychic\",\"substitute\",\"calmmind\"],\"baseAbility\":\"synchronize\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Azumarill\",\"details\":\"Azumarill, L87, M\",\"condition\":\"316/316\",\"active\":false,\"stats\":{\"atk\":137,\"def\":188,\"spa\":137,\"spd\":188,\"spe\":137},\"moves\":[\"hydropump\",\"brickbreak\",\"hiddenpowerghost\",\"return102\"],\"baseAbility\":\"hugepower\",\"item\":\"choiceband\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Vileplume\",\"details\":\"Vileplume, L85, M\",\"condition\":\"266/266\",\"active\":false,\"stats\":{\"atk\":185,\"def\":193,\"spa\":219,\"spd\":202,\"spe\":134},\"moves\":[\"aromatherapy\",\"sleeppowder\",\"synthesis\",\"sludgebomb\"],\"baseAbility\":\"chlorophyll\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"}]}}",
+   "|",
+   "|t:|1794609325",
+   "|switch|p1a: Marowak|Marowak, L83, F|100/100",
+   "|cant|p2a: Kecleon|slp",
+   "|",
+   "|upkeep",
+   "|turn|7",
+   "|request|{\"active\":[{\"moves\":[{\"move\":\"Brick Break\",\"id\":\"brickbreak\",\"pp\":24,\"maxpp\":24,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Shadow Ball\",\"id\":\"shadowball\",\"pp\":24,\"maxpp\":24,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Return 102\",\"id\":\"return\",\"pp\":32,\"maxpp\":32,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Trick\",\"id\":\"trick\",\"pp\":16,\"maxpp\":16,\"target\":\"normal\",\"disabled\":false}]}],\"side\":{\"name\":\"PokeZeroBot\",\"id\":\"p2\",\"pokemon\":[{\"ident\":\"p2: Kecleon\",\"details\":\"Kecleon, L92, F\",\"condition\":\"260/260 slp\",\"active\":true,\"stats\":{\"atk\":218,\"def\":181,\"spa\":163,\"spd\":273,\"spe\":126},\"moves\":[\"brickbreak\",\"shadowball\",\"return102\",\"trick\"],\"baseAbility\":\"colorchange\",\"item\":\"choiceband\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Rayquaza\",\"details\":\"Rayquaza, L70\",\"condition\":\"262/262\",\"active\":false,\"stats\":{\"atk\":250,\"def\":166,\"spa\":250,\"spd\":166,\"spe\":174},\"moves\":[\"earthquake\",\"overheat\",\"extremespeed\",\"hiddenpowerflying\"],\"baseAbility\":\"airlock\",\"item\":\"choiceband\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Poliwrath\",\"details\":\"Poliwrath, L85, F\",\"condition\":\"167/292 tox\",\"active\":false,\"stats\":{\"atk\":193,\"def\":209,\"spa\":168,\"spd\":201,\"spe\":168},\"moves\":[\"hypnosis\",\"hiddenpowerghost\",\"brickbreak\",\"hydropump\"],\"baseAbility\":\"waterabsorb\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Espeon\",\"details\":\"Espeon, L76, M\",\"condition\":\"224/224\",\"active\":false,\"stats\":{\"atk\":105,\"def\":135,\"spa\":241,\"spd\":188,\"spe\":210},\"moves\":[\"hiddenpowerfire\",\"psychic\",\"substitute\",\"calmmind\"],\"baseAbility\":\"synchronize\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Azumarill\",\"details\":\"Azumarill, L87, M\",\"condition\":\"316/316\",\"active\":false,\"stats\":{\"atk\":137,\"def\":188,\"spa\":137,\"spd\":188,\"spe\":137},\"moves\":[\"hydropump\",\"brickbreak\",\"hiddenpowerghost\",\"return102\"],\"baseAbility\":\"hugepower\",\"item\":\"choiceband\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Vileplume\",\"details\":\"Vileplume, L85, M\",\"condition\":\"266/266\",\"active\":false,\"stats\":{\"atk\":185,\"def\":193,\"spa\":219,\"spd\":202,\"spe\":134},\"moves\":[\"aromatherapy\",\"sleeppowder\",\"synthesis\",\"sludgebomb\"],\"baseAbility\":\"chlorophyll\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"}]}}",
+   "|",
+   "|t:|1794609328",
+   "|switch|p2a: Poliwrath|Poliwrath, L85, F|167/292 tox",
+   "|move|p1a: Marowak|Earthquake|p2a: Poliwrath",
+   "|-damage|p2a: Poliwrath|0 fnt",
+   "|faint|p2a: Poliwrath",
+   "|request|{\"forceSwitch\":[true],\"side\":{\"name\":\"PokeZeroBot\",\"id\":\"p2\",\"pokemon\":[{\"ident\":\"p2: Poliwrath\",\"details\":\"Poliwrath, L85, F\",\"condition\":\"0 fnt\",\"active\":true,\"stats\":{\"atk\":193,\"def\":209,\"spa\":168,\"spd\":201,\"spe\":168},\"moves\":[\"hypnosis\",\"hiddenpowerghost\",\"brickbreak\",\"hydropump\"],\"baseAbility\":\"waterabsorb\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Rayquaza\",\"details\":\"Rayquaza, L70\",\"condition\":\"262/262\",\"active\":false,\"stats\":{\"atk\":250,\"def\":166,\"spa\":250,\"spd\":166,\"spe\":174},\"moves\":[\"earthquake\",\"overheat\",\"extremespeed\",\"hiddenpowerflying\"],\"baseAbility\":\"airlock\",\"item\":\"choiceband\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Kecleon\",\"details\":\"Kecleon, L92, F\",\"condition\":\"260/260 slp\",\"active\":false,\"stats\":{\"atk\":218,\"def\":181,\"spa\":163,\"spd\":273,\"spe\":126},\"moves\":[\"brickbreak\",\"shadowball\",\"return102\",\"trick\"],\"baseAbility\":\"colorchange\",\"item\":\"choiceband\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Espeon\",\"details\":\"Espeon, L76, M\",\"condition\":\"224/224\",\"active\":false,\"stats\":{\"atk\":105,\"def\":135,\"spa\":241,\"spd\":188,\"spe\":210},\"moves\":[\"hiddenpowerfire\",\"psychic\",\"substitute\",\"calmmind\"],\"baseAbility\":\"synchronize\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Azumarill\",\"details\":\"Azumarill, L87, M\",\"condition\":\"316/316\",\"active\":false,\"stats\":{\"atk\":137,\"def\":188,\"spa\":137,\"spd\":188,\"spe\":137},\"moves\":[\"hydropump\",\"brickbreak\",\"hiddenpowerghost\",\"return102\"],\"baseAbility\":\"hugepower\",\"item\":\"choiceband\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Vileplume\",\"details\":\"Vileplume, L85, M\",\"condition\":\"266/266\",\"active\":false,\"stats\":{\"atk\":185,\"def\":193,\"spa\":219,\"spd\":202,\"spe\":134},\"moves\":[\"aromatherapy\",\"sleeppowder\",\"synthesis\",\"sludgebomb\"],\"baseAbility\":\"chlorophyll\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"}]},\"noCancel\":true}",
+   "|",
+   "|t:|1794609328",
+   "|switch|p2a: Azumarill|Azumarill, L87, M|316/316",
+   "|",
+   "|upkeep",
+   "|turn|8",
+   "|request|{\"active\":[{\"moves\":[{\"move\":\"Hydro Pump\",\"id\":\"hydropump\",\"pp\":8,\"maxpp\":8,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Brick Break\",\"id\":\"brickbreak\",\"pp\":24,\"maxpp\":24,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Hidden Power Ghost 70\",\"id\":\"hiddenpower\",\"pp\":24,\"maxpp\":24,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Return 102\",\"id\":\"return\",\"pp\":32,\"maxpp\":32,\"target\":\"normal\",\"disabled\":false}]}],\"side\":{\"name\":\"PokeZeroBot\",\"id\":\"p2\",\"pokemon\":[{\"ident\":\"p2: Azumarill\",\"details\":\"Azumarill, L87, M\",\"condition\":\"316/316\",\"active\":true,\"stats\":{\"atk\":137,\"def\":188,\"spa\":137,\"spd\":188,\"spe\":137},\"moves\":[\"hydropump\",\"brickbreak\",\"hiddenpowerghost\",\"return102\"],\"baseAbility\":\"hugepower\",\"item\":\"choiceband\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Rayquaza\",\"details\":\"Rayquaza, L70\",\"condition\":\"262/262\",\"active\":false,\"stats\":{\"atk\":250,\"def\":166,\"spa\":250,\"spd\":166,\"spe\":174},\"moves\":[\"earthquake\",\"overheat\",\"extremespeed\",\"hiddenpowerflying\"],\"baseAbility\":\"airlock\",\"item\":\"choiceband\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Kecleon\",\"details\":\"Kecleon, L92, F\",\"condition\":\"260/260 slp\",\"active\":false,\"stats\":{\"atk\":218,\"def\":181,\"spa\":163,\"spd\":273,\"spe\":126},\"moves\":[\"brickbreak\",\"shadowball\",\"return102\",\"trick\"],\"baseAbility\":\"colorchange\",\"item\":\"choiceband\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Espeon\",\"details\":\"Espeon, L76, M\",\"condition\":\"224/224\",\"active\":false,\"stats\":{\"atk\":105,\"def\":135,\"spa\":241,\"spd\":188,\"spe\":210},\"moves\":[\"hiddenpowerfire\",\"psychic\",\"substitute\",\"calmmind\"],\"baseAbility\":\"synchronize\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Poliwrath\",\"details\":\"Poliwrath, L85, F\",\"condition\":\"0 fnt\",\"active\":false,\"stats\":{\"atk\":193,\"def\":209,\"spa\":168,\"spd\":201,\"spe\":168},\"moves\":[\"hypnosis\",\"hiddenpowerghost\",\"brickbreak\",\"hydropump\"],\"baseAbility\":\"waterabsorb\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Vileplume\",\"details\":\"Vileplume, L85, M\",\"condition\":\"266/266\",\"active\":false,\"stats\":{\"atk\":185,\"def\":193,\"spa\":219,\"spd\":202,\"spe\":134},\"moves\":[\"aromatherapy\",\"sleeppowder\",\"synthesis\",\"sludgebomb\"],\"baseAbility\":\"chlorophyll\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"}]}}",
+   "|",
+   "|t:|1794609331",
+   "|move|p2a: Azumarill|Return|p1a: Marowak",
+   "|-crit|p1a: Marowak",
+   "|-damage|p1a: Marowak|2/100",
+   "|move|p1a: Marowak|Earthquake|p2a: Azumarill",
+   "|-damage|p2a: Azumarill|129/316",
+   "|",
+   "|upkeep",
+   "|turn|9",
+   "|request|{\"active\":[{\"moves\":[{\"move\":\"Hydro Pump\",\"id\":\"hydropump\",\"pp\":8,\"maxpp\":8,\"target\":\"normal\",\"disabled\":true},{\"move\":\"Brick Break\",\"id\":\"brickbreak\",\"pp\":24,\"maxpp\":24,\"target\":\"normal\",\"disabled\":true},{\"move\":\"Hidden Power Ghost 70\",\"id\":\"hiddenpower\",\"pp\":24,\"maxpp\":24,\"target\":\"normal\",\"disabled\":true},{\"move\":\"Return 102\",\"id\":\"return\",\"pp\":31,\"maxpp\":32,\"target\":\"normal\",\"disabled\":false}]}],\"side\":{\"name\":\"PokeZeroBot\",\"id\":\"p2\",\"pokemon\":[{\"ident\":\"p2: Azumarill\",\"details\":\"Azumarill, L87, M\",\"condition\":\"129/316\",\"active\":true,\"stats\":{\"atk\":137,\"def\":188,\"spa\":137,\"spd\":188,\"spe\":137},\"moves\":[\"hydropump\",\"brickbreak\",\"hiddenpowerghost\",\"return102\"],\"baseAbility\":\"hugepower\",\"item\":\"choiceband\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Rayquaza\",\"details\":\"Rayquaza, L70\",\"condition\":\"262/262\",\"active\":false,\"stats\":{\"atk\":250,\"def\":166,\"spa\":250,\"spd\":166,\"spe\":174},\"moves\":[\"earthquake\",\"overheat\",\"extremespeed\",\"hiddenpowerflying\"],\"baseAbility\":\"airlock\",\"item\":\"choiceband\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Kecleon\",\"details\":\"Kecleon, L92, F\",\"condition\":\"260/260 slp\",\"active\":false,\"stats\":{\"atk\":218,\"def\":181,\"spa\":163,\"spd\":273,\"spe\":126},\"moves\":[\"brickbreak\",\"shadowball\",\"return102\",\"trick\"],\"baseAbility\":\"colorchange\",\"item\":\"choiceband\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Espeon\",\"details\":\"Espeon, L76, M\",\"condition\":\"224/224\",\"active\":false,\"stats\":{\"atk\":105,\"def\":135,\"spa\":241,\"spd\":188,\"spe\":210},\"moves\":[\"hiddenpowerfire\",\"psychic\",\"substitute\",\"calmmind\"],\"baseAbility\":\"synchronize\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Poliwrath\",\"details\":\"Poliwrath, L85, F\",\"condition\":\"0 fnt\",\"active\":false,\"stats\":{\"atk\":193,\"def\":209,\"spa\":168,\"spd\":201,\"spe\":168},\"moves\":[\"hypnosis\",\"hiddenpowerghost\",\"brickbreak\",\"hydropump\"],\"baseAbility\":\"waterabsorb\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Vileplume\",\"details\":\"Vileplume, L85, M\",\"condition\":\"266/266\",\"active\":false,\"stats\":{\"atk\":185,\"def\":193,\"spa\":219,\"spd\":202,\"spe\":134},\"moves\":[\"aromatherapy\",\"sleeppowder\",\"synthesis\",\"sludgebomb\"],\"baseAbility\":\"chlorophyll\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"}]}}",
+   "|",
+   "|t:|1794609334",
+   "|switch|p1a: Sableye|Sableye, L91, F|100/100",
+   "|move|p2a: Azumarill|Return|p1a: Sableye",
+   "|-immune|p1a: Sableye",
+   "|",
+   "|upkeep",
+   "|turn|10",
+   "|request|{\"active\":[{\"moves\":[{\"move\":\"Hydro Pump\",\"id\":\"hydropump\",\"pp\":8,\"maxpp\":8,\"target\":\"normal\",\"disabled\":true},{\"move\":\"Brick Break\",\"id\":\"brickbreak\",\"pp\":24,\"maxpp\":24,\"target\":\"normal\",\"disabled\":true},{\"move\":\"Hidden Power Ghost 70\",\"id\":\"hiddenpower\",\"pp\":24,\"maxpp\":24,\"target\":\"normal\",\"disabled\":true},{\"move\":\"Return 102\",\"id\":\"return\",\"pp\":30,\"maxpp\":32,\"target\":\"normal\",\"disabled\":false}]}],\"side\":{\"name\":\"PokeZeroBot\",\"id\":\"p2\",\"pokemon\":[{\"ident\":\"p2: Azumarill\",\"details\":\"Azumarill, L87, M\",\"condition\":\"129/316\",\"active\":true,\"stats\":{\"atk\":137,\"def\":188,\"spa\":137,\"spd\":188,\"spe\":137},\"moves\":[\"hydropump\",\"brickbreak\",\"hiddenpowerghost\",\"return102\"],\"baseAbility\":\"hugepower\",\"item\":\"choiceband\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Rayquaza\",\"details\":\"Rayquaza, L70\",\"condition\":\"262/262\",\"active\":false,\"stats\":{\"atk\":250,\"def\":166,\"spa\":250,\"spd\":166,\"spe\":174},\"moves\":[\"earthquake\",\"overheat\",\"extremespeed\",\"hiddenpowerflying\"],\"baseAbility\":\"airlock\",\"item\":\"choiceband\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Kecleon\",\"details\":\"Kecleon, L92, F\",\"condition\":\"260/260 slp\",\"active\":false,\"stats\":{\"atk\":218,\"def\":181,\"spa\":163,\"spd\":273,\"spe\":126},\"moves\":[\"brickbreak\",\"shadowball\",\"return102\",\"trick\"],\"baseAbility\":\"colorchange\",\"item\":\"choiceband\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Espeon\",\"details\":\"Espeon, L76, M\",\"condition\":\"224/224\",\"active\":false,\"stats\":{\"atk\":105,\"def\":135,\"spa\":241,\"spd\":188,\"spe\":210},\"moves\":[\"hiddenpowerfire\",\"psychic\",\"substitute\",\"calmmind\"],\"baseAbility\":\"synchronize\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Poliwrath\",\"details\":\"Poliwrath, L85, F\",\"condition\":\"0 fnt\",\"active\":false,\"stats\":{\"atk\":193,\"def\":209,\"spa\":168,\"spd\":201,\"spe\":168},\"moves\":[\"hypnosis\",\"hiddenpowerghost\",\"brickbreak\",\"hydropump\"],\"baseAbility\":\"waterabsorb\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Vileplume\",\"details\":\"Vileplume, L85, M\",\"condition\":\"266/266\",\"active\":false,\"stats\":{\"atk\":185,\"def\":193,\"spa\":219,\"spd\":202,\"spe\":134},\"moves\":[\"aromatherapy\",\"sleeppowder\",\"synthesis\",\"sludgebomb\"],\"baseAbility\":\"chlorophyll\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"}]}}",
+   "|",
+   "|t:|1794609336",
+   "|switch|p2a: Vileplume|Vileplume, L85, M|266/266",
+   "|move|p1a: Sableye|Knock Off|p2a: Vileplume",
+   "|-damage|p2a: Vileplume|248/266",
+   "|-enditem|p2a: Vileplume|Leftovers|[from] move: Knock Off|[of] p1a: Sableye",
+   "|-hint|In Gens 3-4, Knock Off only makes the target's item unusable; it cannot obtain a new item.",
+   "|",
+   "|upkeep",
+   "|turn|11",
+   "|request|{\"active\":[{\"moves\":[{\"move\":\"Aromatherapy\",\"id\":\"aromatherapy\",\"pp\":8,\"maxpp\":8,\"target\":\"allyTeam\",\"disabled\":false},{\"move\":\"Sleep Powder\",\"id\":\"sleeppowder\",\"pp\":24,\"maxpp\":24,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Synthesis\",\"id\":\"synthesis\",\"pp\":8,\"maxpp\":8,\"target\":\"self\",\"disabled\":false},{\"move\":\"Sludge Bomb\",\"id\":\"sludgebomb\",\"pp\":16,\"maxpp\":16,\"target\":\"normal\",\"disabled\":false}]}],\"side\":{\"name\":\"PokeZeroBot\",\"id\":\"p2\",\"pokemon\":[{\"ident\":\"p2: Vileplume\",\"details\":\"Vileplume, L85, M\",\"condition\":\"248/266\",\"active\":true,\"stats\":{\"atk\":185,\"def\":193,\"spa\":219,\"spd\":202,\"spe\":134},\"moves\":[\"aromatherapy\",\"sleeppowder\",\"synthesis\",\"sludgebomb\"],\"baseAbility\":\"chlorophyll\",\"item\":\"\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Rayquaza\",\"details\":\"Rayquaza, L70\",\"condition\":\"262/262\",\"active\":false,\"stats\":{\"atk\":250,\"def\":166,\"spa\":250,\"spd\":166,\"spe\":174},\"moves\":[\"earthquake\",\"overheat\",\"extremespeed\",\"hiddenpowerflying\"],\"baseAbility\":\"airlock\",\"item\":\"choiceband\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Kecleon\",\"details\":\"Kecleon, L92, F\",\"condition\":\"260/260 slp\",\"active\":false,\"stats\":{\"atk\":218,\"def\":181,\"spa\":163,\"spd\":273,\"spe\":126},\"moves\":[\"brickbreak\",\"shadowball\",\"return102\",\"trick\"],\"baseAbility\":\"colorchange\",\"item\":\"choiceband\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Espeon\",\"details\":\"Espeon, L76, M\",\"condition\":\"224/224\",\"active\":false,\"stats\":{\"atk\":105,\"def\":135,\"spa\":241,\"spd\":188,\"spe\":210},\"moves\":[\"hiddenpowerfire\",\"psychic\",\"substitute\",\"calmmind\"],\"baseAbility\":\"synchronize\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Poliwrath\",\"details\":\"Poliwrath, L85, F\",\"condition\":\"0 fnt\",\"active\":false,\"stats\":{\"atk\":193,\"def\":209,\"spa\":168,\"spd\":201,\"spe\":168},\"moves\":[\"hypnosis\",\"hiddenpowerghost\",\"brickbreak\",\"hydropump\"],\"baseAbility\":\"waterabsorb\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Azumarill\",\"details\":\"Azumarill, L87, M\",\"condition\":\"129/316\",\"active\":false,\"stats\":{\"atk\":137,\"def\":188,\"spa\":137,\"spd\":188,\"spe\":137},\"moves\":[\"hydropump\",\"brickbreak\",\"hiddenpowerghost\",\"return102\"],\"baseAbility\":\"hugepower\",\"item\":\"choiceband\",\"pokeball\":\"pokeball\"}]}}",
+   "|",
+   "|t:|1794609339",
+   "|move|p1a: Sableye|Seismic Toss|p2a: Vileplume",
+   "|-damage|p2a: Vileplume|157/266",
+   "|move|p2a: Vileplume|Aromatherapy|p2a: Vileplume",
+   "|-cureteam|p2a: Vileplume|[from] move: Aromatherapy",
+   "|",
+   "|upkeep",
+   "|turn|12",
+   "|request|{\"active\":[{\"moves\":[{\"move\":\"Aromatherapy\",\"id\":\"aromatherapy\",\"pp\":7,\"maxpp\":8,\"target\":\"allyTeam\",\"disabled\":false},{\"move\":\"Sleep Powder\",\"id\":\"sleeppowder\",\"pp\":24,\"maxpp\":24,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Synthesis\",\"id\":\"synthesis\",\"pp\":8,\"maxpp\":8,\"target\":\"self\",\"disabled\":false},{\"move\":\"Sludge Bomb\",\"id\":\"sludgebomb\",\"pp\":16,\"maxpp\":16,\"target\":\"normal\",\"disabled\":false}]}],\"side\":{\"name\":\"PokeZeroBot\",\"id\":\"p2\",\"pokemon\":[{\"ident\":\"p2: Vileplume\",\"details\":\"Vileplume, L85, M\",\"condition\":\"157/266\",\"active\":true,\"stats\":{\"atk\":185,\"def\":193,\"spa\":219,\"spd\":202,\"spe\":134},\"moves\":[\"aromatherapy\",\"sleeppowder\",\"synthesis\",\"sludgebomb\"],\"baseAbility\":\"chlorophyll\",\"item\":\"\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Rayquaza\",\"details\":\"Rayquaza, L70\",\"condition\":\"262/262\",\"active\":false,\"stats\":{\"atk\":250,\"def\":166,\"spa\":250,\"spd\":166,\"spe\":174},\"moves\":[\"earthquake\",\"overheat\",\"extremespeed\",\"hiddenpowerflying\"],\"baseAbility\":\"airlock\",\"item\":\"choiceband\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Kecleon\",\"details\":\"Kecleon, L92, F\",\"condition\":\"260/260\",\"active\":false,\"stats\":{\"atk\":218,\"def\":181,\"spa\":163,\"spd\":273,\"spe\":126},\"moves\":[\"brickbreak\",\"shadowball\",\"return102\",\"trick\"],\"baseAbility\":\"colorchange\",\"item\":\"choiceband\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Espeon\",\"details\":\"Espeon, L76, M\",\"condition\":\"224/224\",\"active\":false,\"stats\":{\"atk\":105,\"def\":135,\"spa\":241,\"spd\":188,\"spe\":210},\"moves\":[\"hiddenpowerfire\",\"psychic\",\"substitute\",\"calmmind\"],\"baseAbility\":\"synchronize\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Poliwrath\",\"details\":\"Poliwrath, L85, F\",\"condition\":\"0 fnt\",\"active\":false,\"stats\":{\"atk\":193,\"def\":209,\"spa\":168,\"spd\":201,\"spe\":168},\"moves\":[\"hypnosis\",\"hiddenpowerghost\",\"brickbreak\",\"hydropump\"],\"baseAbility\":\"waterabsorb\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Azumarill\",\"details\":\"Azumarill, L87, M\",\"condition\":\"129/316\",\"active\":false,\"stats\":{\"atk\":137,\"def\":188,\"spa\":137,\"spd\":188,\"spe\":137},\"moves\":[\"hydropump\",\"brickbreak\",\"hiddenpowerghost\",\"return102\"],\"baseAbility\":\"hugepower\",\"item\":\"choiceband\",\"pokeball\":\"pokeball\"}]}}",
+   "|",
+   "|t:|1794609342",
+   "|switch|p1a: Dragonite|Dragonite, L75, F|100/100",
+   "|move|p2a: Vileplume|Synthesis|p2a: Vileplume",
+   "|-heal|p2a: Vileplume|266/266",
+   "|",
+   "|upkeep",
+   "|turn|13",
+   "|request|{\"active\":[{\"moves\":[{\"move\":\"Aromatherapy\",\"id\":\"aromatherapy\",\"pp\":7,\"maxpp\":8,\"target\":\"allyTeam\",\"disabled\":false},{\"move\":\"Sleep Powder\",\"id\":\"sleeppowder\",\"pp\":24,\"maxpp\":24,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Synthesis\",\"id\":\"synthesis\",\"pp\":7,\"maxpp\":8,\"target\":\"self\",\"disabled\":false},{\"move\":\"Sludge Bomb\",\"id\":\"sludgebomb\",\"pp\":16,\"maxpp\":16,\"target\":\"normal\",\"disabled\":false}]}],\"side\":{\"name\":\"PokeZeroBot\",\"id\":\"p2\",\"pokemon\":[{\"ident\":\"p2: Vileplume\",\"details\":\"Vileplume, L85, M\",\"condition\":\"266/266\",\"active\":true,\"stats\":{\"atk\":185,\"def\":193,\"spa\":219,\"spd\":202,\"spe\":134},\"moves\":[\"aromatherapy\",\"sleeppowder\",\"synthesis\",\"sludgebomb\"],\"baseAbility\":\"chlorophyll\",\"item\":\"\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Rayquaza\",\"details\":\"Rayquaza, L70\",\"condition\":\"262/262\",\"active\":false,\"stats\":{\"atk\":250,\"def\":166,\"spa\":250,\"spd\":166,\"spe\":174},\"moves\":[\"earthquake\",\"overheat\",\"extremespeed\",\"hiddenpowerflying\"],\"baseAbility\":\"airlock\",\"item\":\"choiceband\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Kecleon\",\"details\":\"Kecleon, L92, F\",\"condition\":\"260/260\",\"active\":false,\"stats\":{\"atk\":218,\"def\":181,\"spa\":163,\"spd\":273,\"spe\":126},\"moves\":[\"brickbreak\",\"shadowball\",\"return102\",\"trick\"],\"baseAbility\":\"colorchange\",\"item\":\"choiceband\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Espeon\",\"details\":\"Espeon, L76, M\",\"condition\":\"224/224\",\"active\":false,\"stats\":{\"atk\":105,\"def\":135,\"spa\":241,\"spd\":188,\"spe\":210},\"moves\":[\"hiddenpowerfire\",\"psychic\",\"substitute\",\"calmmind\"],\"baseAbility\":\"synchronize\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Poliwrath\",\"details\":\"Poliwrath, L85, F\",\"condition\":\"0 fnt\",\"active\":false,\"stats\":{\"atk\":193,\"def\":209,\"spa\":168,\"spd\":201,\"spe\":168},\"moves\":[\"hypnosis\",\"hiddenpowerghost\",\"brickbreak\",\"hydropump\"],\"baseAbility\":\"waterabsorb\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Azumarill\",\"details\":\"Azumarill, L87, M\",\"condition\":\"129/316\",\"active\":false,\"stats\":{\"atk\":137,\"def\":188,\"spa\":137,\"spd\":188,\"spe\":137},\"moves\":[\"hydropump\",\"brickbreak\",\"hiddenpowerghost\",\"return102\"],\"baseAbility\":\"hugepower\",\"item\":\"choiceband\",\"pokeball\":\"pokeball\"}]}}",
+   "|",
+   "|t:|1794609344",
+   "|move|p1a: Dragonite|Hidden Power|p2a: Vileplume",
+   "|-supereffective|p2a: Vileplume",
+   "|-damage|p2a: Vileplume|98/266",
+   "|move|p2a: Vileplume|Sludge Bomb|p1a: Dragonite",
+   "|-damage|p1a: Dragonite|63/100",
+   "|",
+   "|upkeep",
+   "|turn|14",
+   "|request|{\"active\":[{\"moves\":[{\"move\":\"Aromatherapy\",\"id\":\"aromatherapy\",\"pp\":7,\"maxpp\":8,\"target\":\"allyTeam\",\"disabled\":false},{\"move\":\"Sleep Powder\",\"id\":\"sleeppowder\",\"pp\":24,\"maxpp\":24,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Synthesis\",\"id\":\"synthesis\",\"pp\":7,\"maxpp\":8,\"target\":\"self\",\"disabled\":false},{\"move\":\"Sludge Bomb\",\"id\":\"sludgebomb\",\"pp\":15,\"maxpp\":16,\"target\":\"normal\",\"disabled\":false}]}],\"side\":{\"name\":\"PokeZeroBot\",\"id\":\"p2\",\"pokemon\":[{\"ident\":\"p2: Vileplume\",\"details\":\"Vileplume, L85, M\",\"condition\":\"98/266\",\"active\":true,\"stats\":{\"atk\":185,\"def\":193,\"spa\":219,\"spd\":202,\"spe\":134},\"moves\":[\"aromatherapy\",\"sleeppowder\",\"synthesis\",\"sludgebomb\"],\"baseAbility\":\"chlorophyll\",\"item\":\"\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Rayquaza\",\"details\":\"Rayquaza, L70\",\"condition\":\"262/262\",\"active\":false,\"stats\":{\"atk\":250,\"def\":166,\"spa\":250,\"spd\":166,\"spe\":174},\"moves\":[\"earthquake\",\"overheat\",\"extremespeed\",\"hiddenpowerflying\"],\"baseAbility\":\"airlock\",\"item\":\"choiceband\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Kecleon\",\"details\":\"Kecleon, L92, F\",\"condition\":\"260/260\",\"active\":false,\"stats\":{\"atk\":218,\"def\":181,\"spa\":163,\"spd\":273,\"spe\":126},\"moves\":[\"brickbreak\",\"shadowball\",\"return102\",\"trick\"],\"baseAbility\":\"colorchange\",\"item\":\"choiceband\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Espeon\",\"details\":\"Espeon, L76, M\",\"condition\":\"224/224\",\"active\":false,\"stats\":{\"atk\":105,\"def\":135,\"spa\":241,\"spd\":188,\"spe\":210},\"moves\":[\"hiddenpowerfire\",\"psychic\",\"substitute\",\"calmmind\"],\"baseAbility\":\"synchronize\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Poliwrath\",\"details\":\"Poliwrath, L85, F\",\"condition\":\"0 fnt\",\"active\":false,\"stats\":{\"atk\":193,\"def\":209,\"spa\":168,\"spd\":201,\"spe\":168},\"moves\":[\"hypnosis\",\"hiddenpowerghost\",\"brickbreak\",\"hydropump\"],\"baseAbility\":\"waterabsorb\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Azumarill\",\"details\":\"Azumarill, L87, M\",\"condition\":\"129/316\",\"active\":false,\"stats\":{\"atk\":137,\"def\":188,\"spa\":137,\"spd\":188,\"spe\":137},\"moves\":[\"hydropump\",\"brickbreak\",\"hiddenpowerghost\",\"return102\"],\"baseAbility\":\"hugepower\",\"item\":\"choiceband\",\"pokeball\":\"pokeball\"}]}}"
+  ],
+  "own_request_line": "|request|{\"active\":[{\"moves\":[{\"move\":\"Aromatherapy\",\"id\":\"aromatherapy\",\"pp\":7,\"maxpp\":8,\"target\":\"allyTeam\",\"disabled\":false},{\"move\":\"Sleep Powder\",\"id\":\"sleeppowder\",\"pp\":24,\"maxpp\":24,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Synthesis\",\"id\":\"synthesis\",\"pp\":7,\"maxpp\":8,\"target\":\"self\",\"disabled\":false},{\"move\":\"Sludge Bomb\",\"id\":\"sludgebomb\",\"pp\":15,\"maxpp\":16,\"target\":\"normal\",\"disabled\":false}]}],\"side\":{\"name\":\"PokeZeroBot\",\"id\":\"p2\",\"pokemon\":[{\"ident\":\"p2: Vileplume\",\"details\":\"Vileplume, L85, M\",\"condition\":\"98/266\",\"active\":true,\"stats\":{\"atk\":185,\"def\":193,\"spa\":219,\"spd\":202,\"spe\":134},\"moves\":[\"aromatherapy\",\"sleeppowder\",\"synthesis\",\"sludgebomb\"],\"baseAbility\":\"chlorophyll\",\"item\":\"\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Rayquaza\",\"details\":\"Rayquaza, L70\",\"condition\":\"262/262\",\"active\":false,\"stats\":{\"atk\":250,\"def\":166,\"spa\":250,\"spd\":166,\"spe\":174},\"moves\":[\"earthquake\",\"overheat\",\"extremespeed\",\"hiddenpowerflying\"],\"baseAbility\":\"airlock\",\"item\":\"choiceband\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Kecleon\",\"details\":\"Kecleon, L92, F\",\"condition\":\"260/260\",\"active\":false,\"stats\":{\"atk\":218,\"def\":181,\"spa\":163,\"spd\":273,\"spe\":126},\"moves\":[\"brickbreak\",\"shadowball\",\"return102\",\"trick\"],\"baseAbility\":\"colorchange\",\"item\":\"choiceband\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Espeon\",\"details\":\"Espeon, L76, M\",\"condition\":\"224/224\",\"active\":false,\"stats\":{\"atk\":105,\"def\":135,\"spa\":241,\"spd\":188,\"spe\":210},\"moves\":[\"hiddenpowerfire\",\"psychic\",\"substitute\",\"calmmind\"],\"baseAbility\":\"synchronize\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Poliwrath\",\"details\":\"Poliwrath, L85, F\",\"condition\":\"0 fnt\",\"active\":false,\"stats\":{\"atk\":193,\"def\":209,\"spa\":168,\"spd\":201,\"spe\":168},\"moves\":[\"hypnosis\",\"hiddenpowerghost\",\"brickbreak\",\"hydropump\"],\"baseAbility\":\"waterabsorb\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Azumarill\",\"details\":\"Azumarill, L87, M\",\"condition\":\"129/316\",\"active\":false,\"stats\":{\"atk\":137,\"def\":188,\"spa\":137,\"spd\":188,\"spe\":137},\"moves\":[\"hydropump\",\"brickbreak\",\"hiddenpowerghost\",\"return102\"],\"baseAbility\":\"hugepower\",\"item\":\"choiceband\",\"pokeball\":\"pokeball\"}]}}",
+  "owner": "p2",
+  "prefix_sha256": "4ce7ca24eaaa3e4702922d7a13be9816147f41957d127a02cf90a00cbfc476a8",
+  "request_id": "battle-gen3randombattle-controlled-2103400683:14",
+  "schema": "pokezero.phase-d.shared-gpu-search.v1",
+  "stream_id": 1
+ },
+ "source_hash": "f5a5265143d423af"
+}
