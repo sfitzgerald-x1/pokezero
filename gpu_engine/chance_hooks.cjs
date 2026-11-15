@@ -38,7 +38,8 @@ function validTape(c){
     &&['secondary','sleep_talk'].every(k=>Array.isArray(c[k])&&c[k].length===2
       &&c[k].every(v=>Number.isInteger(v)&&v>=0&&v<(k==='secondary'?100:60)))
     &&(v2?Array.isArray(c.effect)&&c.effect.length===2&&c.effect.every(x=>row(x,EFFECT_BOUNDS)):c.effect===undefined)
-    &&(!v4||(row(c.phazing,[60,60])&&row(c.entry_ties,[2,2])&&typeof c.resuming==='boolean'));
+    &&(v4?(row(c.phazing,[60,60])&&row(c.entry_ties,[2,2])&&typeof c.resuming==='boolean'):
+      c.phazing===undefined&&c.entry_ties===undefined&&c.resuming===undefined);
 }
 function install(Battle,PRNG,load,audit,initializing=()=>null,pokemonPath='') {
   let nonce,used=new Set(),inert=0;
@@ -282,7 +283,8 @@ function install(Battle,PRNG,load,audit,initializing=()=>null,pokemonPath='') {
         const first=take(c,'move_tie',0,c.draws[0][0]);
         group.sort((a,b)=>(a.pokemon.side.n===first?-1:1));items.splice(start,2,...group);return;
       }
-      if(singles(battle)&&group.length===2&&group.every(x=>x.choice==='switch'&&active(battle,x.pokemon))
+      if(singles(battle)&&group.length===2&&['switch','instaswitch'].includes(group[0].choice)
+        &&group.every(x=>x.choice===group[0].choice&&active(battle,x.pokemon))
         &&group[0].pokemon.side!==group[1].pokemon.side){
         const first=take(c,'switch_tie',0,c.resuming?c.entry_ties[0]:c.draws[0][11]);
         group.sort((a,b)=>a.pokemon.side.n===first?-1:1);items.splice(start,2,...group);return;

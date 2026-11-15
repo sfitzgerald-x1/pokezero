@@ -281,8 +281,8 @@ def classify(row, teams, vocab_has):
                 acts = [a[0] for a in diag.get('actives', []) if a and a[0]]
                 who = ', '.join(f"{a.get('species')} ({a.get('ability')}/{a.get('item') or '-'})" for a in acts)
                 if 'eachEvent' in stack and 'runAction' in stack:
-                    return ("eachEvent('Update') Pokemon-order tie (equal Speed, a handler present)", 'c',
-                            f'Gen 3 runAction ends with eachEvent Update; actives {who}; inert only without handlers (hooks)')
+                    return ("eachEvent('Update') Pokemon-order tie (equal Speed, a handler present)", 'd',
+                            f'unclassified: actual handlers need a commutation proof; actives {who}')
                 if 'insertChoice' in stack:
                     return ('switch-in insertion Speed tie (insertChoice)', 'c', f'engine entry tie bit; actives {who}')
                 return ('Pokemon-order tie', 'd', f'unclassified: actives {who}; {stack[:120]}')

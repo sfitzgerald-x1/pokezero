@@ -40,6 +40,15 @@ for(const [ability,item,condition] of updateCases){
   }
   assert.deepEqual(run([0,1]),run([1,0]));assert.deepEqual(run([0,1],true),run([1,0]));checks++;
 }
+// Attract's own Update cleanup (distinct from Oblivious): the source has left
+// before either holder's handler executes. Neither execution changes membership.
+function sourceLeft(order,tied){
+  const b=battle([mon(),mon('Blissey')],[mon(),mon('Blissey')]);
+  for(const s of b.sides){const p=s.active[0];p.volatiles.attract={id:'attract',target:p,source:b.sides[1-s.n].pokemon[1]};}
+  controlled(T(),()=>{if(tied)b.eachEvent('Update');else for(const s of order)b.runEvent('Update',b.sides[s].active[0]);});
+  assert(b.sides.every(s=>!s.active[0].volatiles.attract));return view(b);
+}
+assert.deepEqual(sourceLeft([0,1]),sourceLeft([1,0]));assert.deepEqual(sourceLeft([0,1],true),sourceLeft([1,0]));checks++;
 // Truant is inert only in Residual; both flags really change in both orders.
 for(const reverse of [false,true]){
   const b=battle([mon('Slaking','Truant')],[mon('Slaking','Truant')]);
@@ -80,8 +89,13 @@ for(const [id,role,r,c] of [['leftovers','heal_tie',0,9],['psn','status_tie',1,9
     if(id==='leechseed')p.volatiles[id]={id,target:p,sourceSlot:b.sides[1-s.n].active[0].getSlot()};
     if(id==='encore')p.volatiles[id]={id,target:p,move:'splash',duration:3};
   }
+  const actual=[],single=b.singleEvent;
+  b.singleEvent=function(event,effect,state,p,...rest){
+    if(event==='Residual'&&effect.id===id)actual.push(p.side.n);
+    return single.call(this,event,effect,state,p,...rest);
+  };
   const t=T();t.draws[r][c]=bit;controlled(t,()=>b.fieldEvent('Residual'));
-  assert.deepEqual(coupled(role).map(e=>e.raw),[bit]);checks++;
+  assert.deepEqual(coupled(role).map(e=>e.raw),[bit]);assert.deepEqual(actual,[bit,1-bit]);checks++;
 }
 // Entry insertion has absolute bounds, both incoming seats and queue offsets.
 for(const incoming of [0,1])for(const offset of [0,1])for(const bit of [0,1])for(const resumed of [false,true]){
@@ -124,5 +138,10 @@ for(const forged of [false,true]){
   const b=battle([mon('Snorlax',forged?'Limber':'Disguise')],[mon('Snorlax',forged?'Limber':'Disguise')]);
   if(forged){const original=b.findEventHandlers;b.findEventHandlers=function(...args){return original.apply(this,args).map(h=>({...h,callback(){}}));};}
   assert.throws(()=>controlled(T(),()=>b.eachEvent('Update')),/SPIKE_UNRESOLVED:TIE_ORDER/);checks++;
+}
+for(const field of ['phazing','entry_ties','resuming']){
+  const t=T();t.schema='pokezero.gpu_chance_tape.v2';
+  for(const key of ['phazing','entry_ties','resuming'])if(key!==field)delete t[key];
+  assert.equal(require(hooks).validTape(t),false);checks++;
 }
 process.stdout.write(JSON.stringify({checks})+'\n');
