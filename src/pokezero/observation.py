@@ -427,11 +427,14 @@ SELF_MOVES_ENV = "OBS_SELF_MOVES"
 def resolve_self_moves(declared: bool | None) -> bool:
     """The ``self_moves`` mask: a declaration (True/False) wins; an absent one (None) reads ``OBS_SELF_MOVES``.
 
-    ``OBS_SELF_MOVES`` is a MEASUREMENT override for encoding a checkpoint that does not declare the switch (e.g. the
-    champion) with our own moves visible: ``on`` / ``off``, unset or empty = False. Any other value raises: a typo must
-    never silently encode with the default. Read by both mask types, ``ObservationFeatureMasks`` (the Python encoder)
-    and ``gpu_engine.v4_encoder.Masks`` (B2), so one process resolves both paths the same way. Serving entry points
-    additionally refuse a set override that contradicts their checkpoint (``require_declared_self_moves``).
+    ``OBS_SELF_MOVES`` is a MEASUREMENT override for masks built without a declaration (a measurement tool's own
+    ``ObservationFeatureMasks(...)`` or a B2 mask dict without the key): ``on`` / ``off``, unset or empty = False. Any
+    other value raises: a typo must never silently encode with the default. Read by both mask types,
+    ``ObservationFeatureMasks`` (the Python encoder) and ``gpu_engine.v4_encoder.Masks`` (B2), so one process resolves
+    both paths the same way. Everything tied to a checkpoint declares (``ActorContract.encoder_masks``,
+    ``feature_masks_from_model_config``, ``DEFAULT_OBSERVATION_FEATURE_MASKS``), so the override never flips it, and
+    those flows refuse a set override that contradicts their checkpoint (``require_declared_self_moves``). To measure a
+    checkpoint with our own moves visible, declare it: ``dataclasses.replace(masks, self_moves=True)``.
     """
     import os
 

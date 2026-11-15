@@ -184,11 +184,17 @@ class ActorContract:
             c['model_config_sha256'], tuple((k, c['feature_masks'][k]) for k in MASK_NAMES),
             'f76228a1354b5d0f307ca2d16101294ad3a2308b')
 
+    def identity(self):
+        """The contract's identity document: every field, self_moves only when on (off: the pre-self_moves identity, byte
+        for byte). THE serialization of a contract: the namespace hashes it, and anything that records a contract (a study
+        prespec, a provenance document) records it, never asdict(contract) or contract.__dict__."""
+        identity = dict(self.__dict__)
+        if not identity['self_moves']:del identity['self_moves']
+        return identity
+
     @property
     def namespace(self):
-        identity = dict(self.__dict__)
-        if not identity['self_moves']:del identity['self_moves']   # off: the pre-self_moves identity, byte for byte
-        return _sha(_canonical(identity))
+        return _sha(_canonical(self.identity()))
 
     def encoder_masks(self):
         """The mask dict every v4_encoder.compile_encoder call for this contract passes: the declared feature_masks plus each

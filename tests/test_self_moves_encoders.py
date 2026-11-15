@@ -190,20 +190,24 @@ class SelfMovesMaskTests(unittest.TestCase):
         with mock.patch.dict(os.environ, {'OBS_SELF_MOVES': ''}):
             require_declared_self_moves(True, context='t'); require_declared_self_moves(False, context='t')
 
-    def test_model_config_latch_is_silent_when_off(self):
+    def test_model_config_always_declares(self):
+        """A model config declares self_moves even when off (absent = off): the override never flips a checkpoint's
+        encoding, and a contradicting override is refused (every eval/collection flow derives its masks here)."""
         from dataclasses import replace
         from pokezero.neural_policy import TransformerPolicyConfig, feature_masks_from_model_config
         config = TransformerPolicyConfig.compact_category(category_vocab=('species:snorlax', 'pokemon:self'))
         self.assertNotIn('self_moves', config.to_dict())
         self.assertEqual(TransformerPolicyConfig.from_dict(config.to_dict()), config)
-        with mock.patch.dict(os.environ, {'OBS_SELF_MOVES': ''}):
-            self.assertIs(feature_masks_from_model_config(config).self_moves, False)
         on = replace(config, self_moves=True)
         self.assertIs(on.to_dict()['self_moves'], True)
         self.assertIs(TransformerPolicyConfig.from_dict(on.to_dict()).self_moves, True)
-        with mock.patch.dict(os.environ, {'OBS_SELF_MOVES': 'off'}):
-            # A declared on checkpoint is on without (and despite) the measurement override.
-            self.assertIs(feature_masks_from_model_config(on).self_moves, True)
+        for value, model, want in (('', config, False), ('off', config, False), ('', on, True), ('on', on, True),
+                                   ('on', config, None), ('off', on, None)):
+            with mock.patch.dict(os.environ, {'OBS_SELF_MOVES': value}):
+                if want is None:
+                    with self.assertRaisesRegex(ValueError, 'checkpoint model config'):feature_masks_from_model_config(model)
+                else:
+                    self.assertIs(feature_masks_from_model_config(model).self_moves, want, (value, want))
 
     def test_cache_payload_records_only_when_on(self):
         from pokezero.dataset import _feature_masks_payload

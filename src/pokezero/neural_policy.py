@@ -3012,6 +3012,13 @@ def feature_masks_from_model_config(config: TransformerPolicyConfig) -> Observat
     ``local_showdown.env_config_from_checkpoint_provenance``) — provenance nothing reads back is
     how the #492 train/eval observation mismatch happened.
     """
+    # V2 self_moves: a model config ALWAYS declares it (absent = off), so the OBS_SELF_MOVES measurement override never
+    # flips a checkpoint's encoding; every flow that encodes for a checkpoint (eval, collection, training) refuses a set
+    # override that contradicts it rather than encode against its declaration.
+    from .observation import require_declared_self_moves
+
+    self_moves = bool(getattr(config, "self_moves", False))
+    require_declared_self_moves(self_moves, context="checkpoint model config")
     return ObservationFeatureMasks(
         opponent_tendency_stats_block=config.stats_block_enabled,
         exact_state=config.exact_state_enabled,
@@ -3023,9 +3030,7 @@ def feature_masks_from_model_config(config: TransformerPolicyConfig) -> Observat
             getattr(config, "investment_belief_narrowing", False)
         ),
         item_belief_narrowing=bool(getattr(config, "item_belief_narrowing", False)),
-        # A config that declares self_moves (True) is explicit; one that does not (False, the absent key) leaves the
-        # mask undeclared, which only the OBS_SELF_MOVES measurement override can turn on (observation.resolve_self_moves).
-        self_moves=True if getattr(config, "self_moves", False) else None,
+        self_moves=self_moves,
     )
 
 

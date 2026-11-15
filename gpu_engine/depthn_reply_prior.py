@@ -35,6 +35,9 @@ class ReplyPrior:
         # V2 self_moves: the reply model's declaration (default its archive meta, absent = False); its peer views carry own
         # move/PP cells only when it declares them (never filled from the owner's view).
         self.self_moves = bool((getattr(evaluator, 'meta', None) or {}).get('self_moves', False)) if self_moves is None else bool(self_moves)
+        if self.self_moves and getattr(executor, 'observe_self_moves_off', None) is None:
+            # Off tables (the executor has no self_moves observe) would hand an on reply model views with no own move cells.
+            raise ValueError('a self_moves reply model requires self_moves observation tables')
         self.views = depth2._make_views(executor, peer_self_moves=self.self_moves) if views is None else views
         self.evaluator, self.params, self.mode = evaluator, (evaluator.params if params is None else params), mode
         if identity is not None and (type(identity) is not dict or set(identity) != {'archive_sha256', 'checkpoint_sha256', 'view'}):

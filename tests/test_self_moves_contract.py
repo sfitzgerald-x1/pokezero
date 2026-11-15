@@ -29,6 +29,10 @@ class ContractIdentityTests(unittest.TestCase):
         self.assertEqual(champion.namespace, _sha(_canonical(legacy)))
         on = replace(champion, self_moves=True)
         self.assertNotEqual(on.namespace, champion.namespace)
+        # identity(): THE contract serialization (the namespace and the B3 study prespec): off = the legacy document.
+        self.assertEqual(champion.identity(), legacy)
+        self.assertEqual(on.identity(), dict(legacy, self_moves=True))
+        self.assertEqual(on.namespace, _sha(_canonical(on.identity())))
         self.assertEqual(champion.encoder_masks(), dict(champion.feature_masks, self_moves=False))
         self.assertEqual(on.encoder_masks()['self_moves'], True)
         with self.assertRaises(ValueError):replace(champion, self_moves=1)
@@ -105,6 +109,34 @@ class ContractCheckTests(unittest.TestCase):
             JaxBackend(contract, catalog=catalog, battle_id='ok', owner='p1', stream_id=1)
             with self.assertRaisesRegex(Exception, 'JAX encoder contract differs'):
                 JaxBackend(replace(contract, self_moves=not on), catalog=catalog, battle_id='bad', owner='p1', stream_id=2)
+
+    @unittest.skipUnless(importlib.util.find_spec('jax'), 'requires isolated JAX')
+    def test_v5_load_factory_refuses_an_archive_declaration_mismatch(self):
+        """V5 serving (review B1): the archive's meta['self_moves'], the contract and the catalog must agree. Agreeing
+        cases pass the check and stop at the next binding check (checkpoint b*64 is not the contract's)."""
+        from dataclasses import replace
+        from gpu_engine import v5_live_protocol as v5
+        from pokezero.live_protocol_actor import ActorContract
+        off = ActorContract.champion(); on = replace(off, self_moves=True)
+        kwargs = dict(expected_archive_sha256='a' * 64, expected_checkpoint_sha256='b' * 64,
+                      expected_category_vocabulary_sha256='c' * 64, expected_label_vocabulary_sha256='d' * 64, enable_v5=True)
+        for meta, contract, catalog_on, ok in (({}, off, False, True), ({'self_moves': True}, on, True, True),
+                                               ({'self_moves': True}, off, False, False), ({}, on, True, False),
+                                               ({'self_moves': True}, on, False, False), ({}, off, True, False)):
+            catalog = SimpleNamespace(masks=SimpleNamespace(self_moves=catalog_on))
+            with (mock.patch.object(v5, 'CompiledEncoderFunctions'),
+                  mock.patch.object(v5.model, 'load', return_value=({}, None, meta)),
+                  self.assertRaisesRegex(ValueError, 'same explicit v5 archive' if ok else 'self_moves declaration differs')):
+                v5.load_factory('archive.npz', catalog=catalog, contract=contract, **kwargs)
+
+    @unittest.skipUnless(importlib.util.find_spec('jax'), 'requires isolated JAX')
+    def test_reply_prior_refuses_an_on_reply_model_over_off_tables(self):
+        from gpu_engine.depthn_reply_prior import ReplyPrior
+        on_model = SimpleNamespace(meta={'self_moves': True}, params={})
+        with self.assertRaisesRegex(ValueError, 'self_moves observation tables'):
+            ReplyPrior(SimpleNamespace(), on_model, views=lambda *a: None)
+        ReplyPrior(SimpleNamespace(observe_self_moves_off=object()), on_model, views=lambda *a: None)   # on tables: accepted
+        ReplyPrior(SimpleNamespace(), SimpleNamespace(meta={}, params={}), views=lambda *a: None)       # off model: accepted
 
     @unittest.skipUnless(importlib.util.find_spec('jax'), 'requires isolated JAX')
     def test_search_serving_fails_closed_until_threaded(self):
