@@ -138,3 +138,25 @@ These original-main measurements are from run [43641647612](https://github.com/s
 Main-only modules are measured on a CPU pod with the workflow’s pinned runtime, two lanes of four CPU cores, and the pod’s effective CPU/memory limits checked before starting. Each module uses the original process-block path, preserving its case isolation and low-optimization options. The observer records process-tree PSS/RSS and process/kernel high-water marks once per second. A measurement exceeding 32 GiB or 20 minutes is stopped and recorded as an unsettled lower bound; it is assigned outside light and remains fully runnable by the documented heavy route. Such a classification measurement is not reported as a test pass.
 
 Completed measurements will be listed here before review readiness. Canary tracker currently passes both cases at 3.23 GiB peak RSS and 1.89 minutes; it remains light.
+
+## Main-only tier assignments
+
+The original main hosted run already puts these 15 modules over the ten-minute wall rule or the memory rule. Their initial heavy assignments use that measured evidence; the requested fresh four-CPU profiles must finish before review readiness. The profiler uses the same component test bodies as main. Canary tracker is the remaining main-only module: 2/2 pass, 3.23 GiB RSS, 1.89 min, light.
+
+| Module | Tier | Integration tier | Hosted process HWM GiB | Hosted wall min | Fresh CPU profile |
+|---|---|---|---:|---:|---|
+| `test_gpu_engine_calm_mind_owning` | heavy | absent | 7.50 | 13.15 | 8.84 GiB / 10.58 min, all 4 tests pass |
+| `test_gpu_engine_direct_ko_owning` | heavy | absent | 10.69 | 26.89 | pending |
+| `test_gpu_engine_engine_status_callbacks` | heavy | absent | 14.49 | 16.48 | pending |
+| `test_gpu_engine_entry_spikes_owning` | heavy | absent | 7.30 | 15.12 | pending |
+| `test_gpu_engine_execution_actual_sites` | heavy | absent | 14.66 | 29.20 | pending |
+| `test_gpu_engine_execution_runtime_plumbing` | heavy | absent | 14.81 | 167.92 | pending |
+| `test_gpu_engine_kernel_risk_combined_runtime` | heavy | absent | 14.83 | 22.77 | pending |
+| `test_gpu_engine_leftovers_owning_callers` | heavy | absent | 13.85 | 9.72 | pending |
+| `test_gpu_engine_ordinary_intimidate_owning` | heavy | absent | 9.02 | 28.50 | pending |
+| `test_gpu_engine_seismic_toss_owning` | heavy | absent | 10.86 | 32.38 | pending |
+| `test_gpu_engine_spikes_owning` | heavy | absent | 7.43 | 16.84 | pending |
+| `test_gpu_engine_status_kernel_owner_drain` | heavy | absent | 14.86 | 210.57 | pending |
+| `test_gpu_engine_status_residual_runtime` | heavy | absent | 14.74 | 103.17 | pending |
+| `test_gpu_engine_swords_dance_owning` | heavy | absent | 7.59 | 10.08 | pending |
+| `test_gpu_engine_terminal_source` | heavy | absent | 14.71 | 84.03 | pending |

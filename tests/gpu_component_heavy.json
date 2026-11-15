@@ -27,6 +27,23 @@
    "note": "does not complete on any machine as-is: uncapped (170 GiB cap) its low-optimization full-frame case dies with SIGSEGV during its second slow XLA compile (the first took 15m55s), at a 95.04 GiB peak, 41.6 min for the module; the other 2 cases pass (1 test each). The peak is a lower bound. Killed at the 64 GiB cap at 24.8 min in the capped run. Family-A PR 4 (remove the 292- and 402-argument closure compiles) is the only route to light."
   },
   {
+   "module": "test_gpu_engine_calm_mind_owning",
+   "reason": "wall",
+   "integration_tier": "absent",
+   "hosted_wall_min": 13.1524,
+   "hosted_process_hwm_gib": 7.4953,
+   "measurement_run": 43641647612,
+   "measurement_source_commit": "32df2cef8659f0414d7be995e83004b13f3ef941",
+   "cpu_profile_pending": false,
+   "note": "Main-only module. Initial heavy assignment is supported by the original main hosted wall/process-memory measurement. Fresh four-CPU isolated profiling is required before review readiness; an unfinished or capped profile is never a test pass.",
+   "hosted_gate_peak_gib": 8.2123,
+   "isolated_wall_min": 10.5797,
+   "isolated_peak_gib": 8.8437,
+   "isolated_measured_at": "69f7a188, CI runtime, one original module per four-CPU lane",
+   "isolated_returncode": 0,
+   "isolated_capped": null
+  },
+  {
    "module": "test_gpu_engine_color_change_owning",
    "reason": "wall+memory",
    "hosted_median_min": null,
@@ -61,6 +78,18 @@
    "note": "Main-specific assignment from original workflow block samples. Gate peak is the maximum observed while this module runs; process HWM independently exceeds 11 GiB. Shared job charges can contribute to the gate peak. Wall sums the original fresh-process units. Test bodies are unchanged from main.",
    "isolated_wall_min": null,
    "isolated_peak_gib": null
+  },
+  {
+   "module": "test_gpu_engine_direct_ko_owning",
+   "reason": "wall",
+   "integration_tier": "absent",
+   "hosted_wall_min": 26.8902,
+   "hosted_process_hwm_gib": 10.6901,
+   "measurement_run": 43641647612,
+   "measurement_source_commit": "32df2cef8659f0414d7be995e83004b13f3ef941",
+   "cpu_profile_pending": true,
+   "note": "Main-only module. Initial heavy assignment is supported by the original main hosted wall/process-memory measurement. Fresh four-CPU isolated profiling is required before review readiness; an unfinished or capped profile is never a test pass.",
+   "hosted_gate_peak_gib": 11.5079
   },
   {
    "module": "test_gpu_engine_engine_execution_completeness",
@@ -111,6 +140,18 @@
    "isolated_peak_gib": null
   },
   {
+   "module": "test_gpu_engine_engine_status_callbacks",
+   "reason": "wall+memory",
+   "integration_tier": "absent",
+   "hosted_wall_min": 16.4831,
+   "hosted_process_hwm_gib": 14.4887,
+   "measurement_run": 43641647612,
+   "measurement_source_commit": "32df2cef8659f0414d7be995e83004b13f3ef941",
+   "cpu_profile_pending": true,
+   "note": "Main-only module. Initial heavy assignment is supported by the original main hosted wall/process-memory measurement. Fresh four-CPU isolated profiling is required before review readiness; an unfinished or capped profile is never a test pass.",
+   "hosted_gate_peak_gib": 16.4923
+  },
+  {
    "module": "test_gpu_engine_engine_weather_public",
    "reason": "wall+memory",
    "hosted_wall_min": 14.6863,
@@ -125,6 +166,42 @@
    "note": "Main-specific assignment from original workflow block samples. Gate peak is the maximum observed while this module runs; process HWM independently exceeds 11 GiB. Shared job charges can contribute to the gate peak. Wall sums the original fresh-process units. Test bodies are unchanged from main.",
    "isolated_wall_min": null,
    "isolated_peak_gib": null
+  },
+  {
+   "module": "test_gpu_engine_entry_spikes_owning",
+   "reason": "wall",
+   "integration_tier": "absent",
+   "hosted_wall_min": 15.1247,
+   "hosted_process_hwm_gib": 7.3018,
+   "measurement_run": 43641647612,
+   "measurement_source_commit": "32df2cef8659f0414d7be995e83004b13f3ef941",
+   "cpu_profile_pending": true,
+   "note": "Main-only module. Initial heavy assignment is supported by the original main hosted wall/process-memory measurement. Fresh four-CPU isolated profiling is required before review readiness; an unfinished or capped profile is never a test pass.",
+   "hosted_gate_peak_gib": 8.2233
+  },
+  {
+   "module": "test_gpu_engine_execution_actual_sites",
+   "reason": "wall+memory",
+   "integration_tier": "absent",
+   "hosted_wall_min": 29.2007,
+   "hosted_process_hwm_gib": 14.6648,
+   "measurement_run": 43641647612,
+   "measurement_source_commit": "32df2cef8659f0414d7be995e83004b13f3ef941",
+   "cpu_profile_pending": true,
+   "note": "Main-only module. Initial heavy assignment is supported by the original main hosted wall/process-memory measurement. Fresh four-CPU isolated profiling is required before review readiness; an unfinished or capped profile is never a test pass.",
+   "hosted_gate_peak_gib": 23.3239
+  },
+  {
+   "module": "test_gpu_engine_execution_runtime_plumbing",
+   "reason": "wall+memory",
+   "integration_tier": "absent",
+   "hosted_wall_min": 167.9225,
+   "hosted_process_hwm_gib": 14.8102,
+   "measurement_run": 43641647612,
+   "measurement_source_commit": "32df2cef8659f0414d7be995e83004b13f3ef941",
+   "cpu_profile_pending": true,
+   "note": "Main-only module. Initial heavy assignment is supported by the original main hosted wall/process-memory measurement. Fresh four-CPU isolated profiling is required before review readiness; an unfinished or capped profile is never a test pass.",
+   "hosted_gate_peak_gib": 46.0892
   },
   {
    "module": "test_gpu_engine_flash_fire_end_owning",
@@ -151,6 +228,30 @@
    "isolated_wall_min": 3.7,
    "isolated_peak_gib": 11.1,
    "completes_on_hosted": true
+  },
+  {
+   "module": "test_gpu_engine_kernel_risk_combined_runtime",
+   "reason": "wall+memory",
+   "integration_tier": "absent",
+   "hosted_wall_min": 22.7731,
+   "hosted_process_hwm_gib": 14.8299,
+   "measurement_run": 43641647612,
+   "measurement_source_commit": "32df2cef8659f0414d7be995e83004b13f3ef941",
+   "cpu_profile_pending": true,
+   "note": "Main-only module. Initial heavy assignment is supported by the original main hosted wall/process-memory measurement. Fresh four-CPU isolated profiling is required before review readiness; an unfinished or capped profile is never a test pass.",
+   "hosted_gate_peak_gib": 24.0059
+  },
+  {
+   "module": "test_gpu_engine_leftovers_owning_callers",
+   "reason": "memory",
+   "integration_tier": "absent",
+   "hosted_wall_min": 9.7151,
+   "hosted_process_hwm_gib": 13.8477,
+   "measurement_run": 43641647612,
+   "measurement_source_commit": "32df2cef8659f0414d7be995e83004b13f3ef941",
+   "cpu_profile_pending": true,
+   "note": "Main-only module. Initial heavy assignment is supported by the original main hosted wall/process-memory measurement. Fresh four-CPU isolated profiling is required before review readiness; an unfinished or capped profile is never a test pass.",
+   "hosted_gate_peak_gib": 14.5061
   },
   {
    "module": "test_gpu_engine_leftovers_public",
@@ -217,6 +318,17 @@
    ],
    "measurement_source_commit": "32df2cef8659f0414d7be995e83004b13f3ef941",
    "note": "Main-specific assignment from original workflow block samples. Gate peak is the maximum observed while this module runs; process HWM independently exceeds 11 GiB. Shared job charges can contribute to the gate peak. Wall sums the original fresh-process units. Test bodies are unchanged from main."
+  },
+  {
+   "module": "test_gpu_engine_ordinary_intimidate_owning",
+   "reason": "wall",
+   "integration_tier": "absent",
+   "hosted_wall_min": 28.4976,
+   "hosted_process_hwm_gib": 9.0162,
+   "measurement_run": 43641647612,
+   "measurement_source_commit": "32df2cef8659f0414d7be995e83004b13f3ef941",
+   "cpu_profile_pending": true,
+   "note": "Main-only module. Initial heavy assignment is supported by the original main hosted wall/process-memory measurement. Fresh four-CPU isolated profiling is required before review readiness; an unfinished or capped profile is never a test pass."
   },
   {
    "module": "test_gpu_engine_primary_plain_status_owning",
@@ -339,6 +451,18 @@
    "isolated_peak_gib": null
   },
   {
+   "module": "test_gpu_engine_seismic_toss_owning",
+   "reason": "wall",
+   "integration_tier": "absent",
+   "hosted_wall_min": 32.3819,
+   "hosted_process_hwm_gib": 10.8557,
+   "measurement_run": 43641647612,
+   "measurement_source_commit": "32df2cef8659f0414d7be995e83004b13f3ef941",
+   "cpu_profile_pending": true,
+   "note": "Main-only module. Initial heavy assignment is supported by the original main hosted wall/process-memory measurement. Fresh four-CPU isolated profiling is required before review readiness; an unfinished or capped profile is never a test pass.",
+   "hosted_gate_peak_gib": 11.6615
+  },
+  {
    "module": "test_gpu_engine_sleep_powder_runtime",
    "reason": "wall+memory",
    "hosted_wall_min": 17.4555,
@@ -377,6 +501,30 @@
    "isolated_killed_at_cap": false
   },
   {
+   "module": "test_gpu_engine_spikes_owning",
+   "reason": "wall",
+   "integration_tier": "absent",
+   "hosted_wall_min": 16.8448,
+   "hosted_process_hwm_gib": 7.4276,
+   "measurement_run": 43641647612,
+   "measurement_source_commit": "32df2cef8659f0414d7be995e83004b13f3ef941",
+   "cpu_profile_pending": true,
+   "note": "Main-only module. Initial heavy assignment is supported by the original main hosted wall/process-memory measurement. Fresh four-CPU isolated profiling is required before review readiness; an unfinished or capped profile is never a test pass.",
+   "hosted_gate_peak_gib": 8.0965
+  },
+  {
+   "module": "test_gpu_engine_status_kernel_owner_drain",
+   "reason": "wall+memory",
+   "integration_tier": "absent",
+   "hosted_wall_min": 210.5686,
+   "hosted_process_hwm_gib": 14.8641,
+   "measurement_run": 43641647612,
+   "measurement_source_commit": "32df2cef8659f0414d7be995e83004b13f3ef941",
+   "cpu_profile_pending": true,
+   "note": "Main-only module. Initial heavy assignment is supported by the original main hosted wall/process-memory measurement. Fresh four-CPU isolated profiling is required before review readiness; an unfinished or capped profile is never a test pass.",
+   "hosted_gate_peak_gib": 40.4341
+  },
+  {
    "module": "test_gpu_engine_status_residual_public",
    "reason": "wall+memory",
    "hosted_wall_min": 14.4439,
@@ -393,6 +541,18 @@
    "isolated_peak_gib": null
   },
   {
+   "module": "test_gpu_engine_status_residual_runtime",
+   "reason": "wall+memory",
+   "integration_tier": "absent",
+   "hosted_wall_min": 103.1747,
+   "hosted_process_hwm_gib": 14.7427,
+   "measurement_run": 43641647612,
+   "measurement_source_commit": "32df2cef8659f0414d7be995e83004b13f3ef941",
+   "cpu_profile_pending": true,
+   "note": "Main-only module. Initial heavy assignment is supported by the original main hosted wall/process-memory measurement. Fresh four-CPU isolated profiling is required before review readiness; an unfinished or capped profile is never a test pass.",
+   "hosted_gate_peak_gib": 47.5097
+  },
+  {
    "module": "test_gpu_engine_substitute_damage_owning",
    "reason": "wall+memory",
    "hosted_wall_min": 74.8502,
@@ -407,6 +567,30 @@
    "note": "Main-specific assignment from original workflow block samples. Gate peak is the maximum observed while this module runs; process HWM independently exceeds 11 GiB. Shared job charges can contribute to the gate peak. Wall sums the original fresh-process units. Test bodies are unchanged from main.",
    "isolated_wall_min": null,
    "isolated_peak_gib": null
+  },
+  {
+   "module": "test_gpu_engine_swords_dance_owning",
+   "reason": "wall",
+   "integration_tier": "absent",
+   "hosted_wall_min": 10.0776,
+   "hosted_process_hwm_gib": 7.5931,
+   "measurement_run": 43641647612,
+   "measurement_source_commit": "32df2cef8659f0414d7be995e83004b13f3ef941",
+   "cpu_profile_pending": true,
+   "note": "Main-only module. Initial heavy assignment is supported by the original main hosted wall/process-memory measurement. Fresh four-CPU isolated profiling is required before review readiness; an unfinished or capped profile is never a test pass.",
+   "hosted_gate_peak_gib": 8.4534
+  },
+  {
+   "module": "test_gpu_engine_terminal_source",
+   "reason": "wall+memory",
+   "integration_tier": "absent",
+   "hosted_wall_min": 84.0347,
+   "hosted_process_hwm_gib": 14.7117,
+   "measurement_run": 43641647612,
+   "measurement_source_commit": "32df2cef8659f0414d7be995e83004b13f3ef941",
+   "cpu_profile_pending": true,
+   "note": "Main-only module. Initial heavy assignment is supported by the original main hosted wall/process-memory measurement. Fresh four-CPU isolated profiling is required before review readiness; an unfinished or capped profile is never a test pass.",
+   "hosted_gate_peak_gib": 20.9963
   },
   {
    "module": "test_gpu_engine_thunder_wave_runtime",
