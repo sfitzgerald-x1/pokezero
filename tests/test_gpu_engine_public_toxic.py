@@ -92,6 +92,50 @@ class PublicToxicTests(unittest.TestCase):
                 '|switch|p2a: Gardevoir|Gardevoir, L80|100/100 tox',
                 '|-damage|p1a: Gardevoir|94/100 tox|[from] psn','|-damage|p2a: Gardevoir|95/100 tox|[from] psn'])
 
+    def test_reentry_restarts_the_ramp_on_both_seats_given_hp_provenance(self):
+        """A toxed mon that leaves and returns restarts its ramp (Showdown tox.onSwitchIn: stage = 0).
+
+        Owner p1: its own HP is exact (/307), the opponent's is /100. The opponent's first residual after re-entry
+        re-seeds stage 1 only with representation provenance: explicit visibility, as every production B2 adapter has
+        through owner_side, or an owner request. Without it B2 and Python both fail closed to 0 for the stint, which
+        is what an owner-less JaxRecordedAdapter shows against an owning PythonBackend.
+        """
+        stint=['|switch|p1a: Snorlax|Snorlax, L80|307/307','|switch|p2a: Absol|Absol, L80|100/100','|turn|1',
+            '|-status|p1a: Snorlax|tox','|-status|p2a: Absol|tox',
+            '|-damage|p1a: Snorlax|288/307 tox|[from] psn','|-damage|p2a: Absol|94/100 tox|[from] psn','|upkeep','|turn|2',
+            '|-damage|p1a: Snorlax|250/307 tox|[from] psn','|-damage|p2a: Absol|82/100 tox|[from] psn','|upkeep','|turn|3']
+        out=['|switch|p1a: Gardevoir|Gardevoir, L80|250/250','|switch|p2a: Gardevoir|Gardevoir, L80|100/100','|upkeep','|turn|4']
+        back=['|switch|p1a: Snorlax|Snorlax, L80|250/307 tox','|switch|p2a: Absol|Absol, L80|82/100 tox']
+        ticks=['|-damage|p1a: Snorlax|231/307 tox|[from] psn','|-damage|p2a: Absol|76/100 tox|[from] psn','|upkeep','|turn|5',
+            '|-damage|p1a: Snorlax|193/307 tox|[from] psn','|-damage|p2a: Absol|64/100 tox|[from] psn','|upkeep','|turn|6']
+        request='|request|'+json.dumps({'side':{'id':'p1'}})
+        modes={1:'exact',2:'percentage'}
+        for middle,visibility,opponent in (([],(1,2),3),([request],(0,0),3),([],(0,0),0)):
+            with self.subTest(middle=bool(middle),visibility=visibility):
+                state=self.initial(visibility=visibility)
+                parser=self.reference._ReplayParser('toxic-device-fixture',complete_prefix=True,
+                    hp_visibility={f'p{s+1}':modes[v] for s,v in enumerate(visibility) if v})
+                seen={}
+                for name,lines in (('middle',middle),('stint',stint),('out',out),('back',back),('ticks',ticks)):
+                    for line in lines:
+                        fact=self.t.decode_line(line,identity_ids=self.ids)
+                        state,ok=self.t.apply(state,self.tables,fact,producer_binding=self.tables.binding)
+                        self.assertTrue(bool(ok.all()),line)
+                        parser._feed_line(line)
+                        self.compare(state,parser)
+                    seen[name]=(state.stage[0].tolist(),state.known[0].tolist())
+                # Ramp before the switch: the next tick's multiplier, on both seats and in every mode.
+                self.assertEqual(seen['stint'],([3,3],[True,True]))
+                # Untoxed replacements, then the toxed mons' return: a public, known zero until the first tick.
+                self.assertEqual(seen['out'],([0,0],[True,True]))
+                self.assertEqual(seen['back'],([0,0],[True,True]))
+                # Two ticks after re-entry: restarted at 1, so 3 at the next request; /100 needs provenance.
+                self.assertEqual(seen['ticks'],([3,opponent],[True,opponent>0]))
+                # The encoded cell; places=6 as compare() uses (the /15 rounding is not this test's subject).
+                patch=self.t.project_active(state,self.tables,expected_vocabulary=self.tables.vocabulary_binding)
+                for side,stage in enumerate((3,opponent)):
+                    self.assertAlmostEqual(float(patch.numeric[0,side,self.t.COLUMN]),stage/15,places=6)
+
     def test_request_payload_side_does_not_invalidate_pending_faint(self):
         state,_=self.prefixes([*self.prefix,'|turn|1','|faint|p1a: Snorlax','|upkeep',
             '|request|'+json.dumps({'side':{'id':'p1'}}),
