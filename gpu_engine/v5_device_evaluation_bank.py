@@ -295,6 +295,7 @@ def collect(reference, prepared, pool, *, gender_policy, resume=False):
                 positions.append(p); groups.append(g)
     header = dict(split='PHASE_C_FIXED_HELDOUT',rows=1024,category_vocabulary_sha256=prepared.category_sha256,
         label_vocabulary_sha256=labels.sha256,category_count=prepared.category_size,device_bank=reference,device_source=plan['source_commit'])
+    if getattr(getattr(prepared.catalog,'masks',None),'self_moves',False):header['self_moves']=True   # V2: the bank's encoding (only when on)
     publication = directory/('publication-'+uuid.uuid4().hex); publication.mkdir()
     artifacts = {}
     for name,rows,kind in [('positions',positions,schema.POSITIONS),('siblings',groups,schema.SIBLINGS)]:

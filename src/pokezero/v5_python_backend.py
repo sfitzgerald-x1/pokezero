@@ -241,6 +241,10 @@ class RuntimeBackend:
         metadata=json.loads(factory.metadata)
         if factory.config!=store.plan.model or metadata['checkpoint_sha256']!=snapshot['checkpoint_sha256']:
             raise ValueError('cached immutable actor checkpoint differs')
+        # V2 self_moves: load_factory serves an archive as declared; this route's plans are off, so an on archive is refused.
+        from gpu_engine.private_self_moves import check_run_actor
+        iteration=snapshot.get('iteration') if isinstance(snapshot,dict) else getattr(snapshot,'iteration',None)
+        check_run_actor(metadata,plan_self_moves=bool(getattr(store.plan,'self_moves',False)),iteration=iteration,context='python backend actor')
         return factory
 
     def prepare_batch(self,plan,batch,current,assignments,store):

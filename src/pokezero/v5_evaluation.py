@@ -272,6 +272,26 @@ def _mechanism_data(protocol):
     return positions,groups
 
 
+UNMEASURED_SELF_MOVES='UNMEASURED_SELF_MOVES_BANK_MISMATCH'
+
+
+def bank_self_moves(header):
+    """V2 self_moves: the heldout bank's encoding, recorded in its header only when on (absent = off)."""
+    value=header.get('self_moves',False)
+    if type(value) is not bool:raise ValueError('heldout bank self_moves must be a bool')
+    return value
+
+
+def unmeasured_self_moves(bank_encoded,factory,**counts):
+    """V2 self_moves: a heldout bank encoded with self_moves=`bank_encoded` scored by a head served with a different
+    declaration (factory.contract.self_moves) would read inputs it was not trained on. Return explicitly unmeasured
+    mechanisms then (the panel still runs and the milestone is not UNKNOWN), or None when the two agree."""
+    served=bool(getattr(getattr(factory,'contract',None),'self_moves',False))
+    if bool(bank_encoded)==served:return None
+    return dict(status=UNMEASURED_SELF_MOVES,bank_self_moves=bool(bank_encoded),served_self_moves=served,calibration=None,
+        outcome_rmse=None,top_two_rows=[],**counts,scientific_qualification=False)
+
+
 def _columns(rows,config):
     import numpy as np
     if any(row.observation.view!='PUBLIC' or row.observation.category_vocabulary_sha256!=config.category_vocabulary_sha256
@@ -344,7 +364,15 @@ def _capture_resolver(protocol=None):
 
 def mechanism(protocol,factory,data):
     """Production entry cannot turn hand-authored record metadata into claims."""
-    return _capture_resolver(protocol).evaluate_original_capture(protocol,factory,data)
+    resolver=_capture_resolver(protocol)
+    # V2 self_moves: a heldout bank is scored only by a head served with the bank's own encoding; otherwise the mechanisms
+    # are explicitly unmeasured and the panel still runs. The device bank records its encoding (BankData.self_moves,
+    # compared in evaluate_device_bank). The Python capture bank is always encoded off (the champion driver catalog; its
+    # header records no encoding, and its own source files are bound into every captured bank, so they stay untouched).
+    if not hasattr(data,'self_moves'):
+        unmeasured=unmeasured_self_moves(False,factory,heldout_positions=len(data.positions),sibling_groups=len(data.groups))
+        if unmeasured is not None:return unmeasured
+    return resolver.evaluate_original_capture(protocol,factory,data)
 
 
 def _atomic(path,value):

@@ -232,5 +232,59 @@ class ServingEndpointTests(unittest.TestCase):
                 self.assertIs(factory.catalog.masks.self_moves, want)
 
 
+@unittest.skipUnless(importlib.util.find_spec('jax'), 'requires isolated JAX')
+class HeldoutMechanismTests(unittest.TestCase):
+    """An on run's milestone: the panel is served on, and the heldout mechanisms are measured only on a bank with the
+    served head's encoding; otherwise they are explicitly unmeasured (not a raise, so the panel still runs)."""
+
+    def factory(self, on):
+        import numpy as np
+        forward = lambda n: SimpleNamespace(valid=np.ones(n, bool), value=np.linspace(-0.5, 0.5, n))
+        return SimpleNamespace(contract=SimpleNamespace(self_moves=on), forward=forward,
+                               config=SimpleNamespace(label_vocabulary=None, category_vocabulary_sha256='c' * 64, category_vocab_size=7))
+
+    def protocol(self, tmp, schema):
+        import hashlib, json
+        path = Path(tmp) / 'positions.jsonl';blob = (json.dumps(dict(schema=schema)) + '\n').encode();path.write_bytes(blob)
+        return dict(positions=dict(path=str(path), sha256=hashlib.sha256(blob).hexdigest()), batch_size=4, bins=2)
+
+    def test_bank_encoding_header(self):
+        from pokezero.v5_evaluation import bank_self_moves
+        self.assertIs(bank_self_moves({}), False);self.assertIs(bank_self_moves({'self_moves': True}), True)
+        with self.assertRaisesRegex(ValueError, 'must be a bool'):bank_self_moves({'self_moves': 'on'})
+
+    def test_device_bank_is_measured_only_with_its_own_encoding(self):
+        from pokezero import v5_evaluation as evaluation, v5_device_evaluation_bank as bank
+        outcomes = (1, -1, 0, 1, -1)
+        with tempfile.TemporaryDirectory() as tmp:
+            protocol = self.protocol(tmp, bank.POSITIONS)
+            for bank_on, served_on, measured in ((False, True, False), (True, False, False), (True, True, True), (False, False, True)):
+                data = bank.BankData(tuple((None, object(), y) for y in outcomes), (), None, bank_on)
+                with (mock.patch('pokezero.v5_evaluation._columns', side_effect=lambda rows, config: rows),
+                      mock.patch('gpu_engine.v5_model.prepare_inputs', side_effect=lambda rows, config: len(rows)),
+                      mock.patch('gpu_engine.v5_live_protocol.check_factory')):
+                    result = evaluation.mechanism(protocol, self.factory(served_on), data)
+                if measured:
+                    self.assertEqual(result['known_outcomes'], len(outcomes));self.assertIsNotNone(result['calibration'])
+                    self.assertNotIn('status', result)
+                else:
+                    self.assertEqual(result['status'], evaluation.UNMEASURED_SELF_MOVES)
+                    self.assertEqual((result['bank_self_moves'], result['served_self_moves']), (bank_on, served_on))
+                    self.assertIsNone(result['calibration']);self.assertEqual(result['heldout_positions'], len(outcomes))
+
+    def test_python_capture_bank_is_off(self):
+        from pokezero import v5_evaluation as evaluation
+        data = SimpleNamespace(positions=(1, 2, 3), groups=(4,))
+        with tempfile.TemporaryDirectory() as tmp:
+            protocol = self.protocol(tmp, evaluation.POSITIONS)
+            resolver = SimpleNamespace(evaluate_original_capture=mock.Mock(return_value='measured'))
+            with mock.patch.object(evaluation, '_capture_resolver', return_value=resolver):
+                self.assertEqual(evaluation.mechanism(protocol, self.factory(False), data), 'measured')
+                result = evaluation.mechanism(protocol, self.factory(True), data)
+            self.assertEqual(result['status'], evaluation.UNMEASURED_SELF_MOVES)
+            self.assertEqual((result['heldout_positions'], result['sibling_groups']), (3, 1))
+            resolver.evaluate_original_capture.assert_called_once()
+
+
 if __name__ == '__main__':
     unittest.main()
