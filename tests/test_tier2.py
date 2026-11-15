@@ -526,6 +526,23 @@ class ResidualChannelTest(unittest.TestCase):
         self.assertFalse(strike.residual_valid)
         self.assertIn("baseline-disagreement", strike.disqualifiers)
 
+    def test_guts_raises_attack_on_physical_moves_only(self) -> None:
+        """Showdown's Guts is onModifyAtk only: a statused Guts attacker's special move rolls as without Guts."""
+        from pokezero.tier2 import StrikeContext, StrikeParticipant, _strike_damage
+        stats = {"hp": 300, "atk": 200, "def": 150, "spa": 180, "spd": 150, "spe": 100}
+        defender = StrikeParticipant(species_key="slowbro", level=_LEVEL, stats=dict(_OWN_SLOWBRO.stats), ability="oblivious",
+                                     item="leftovers", moves=())
+        token = SimpleNamespace(crit=False, weather="", pursuit_intercept=False)
+        def rolls(ability, status, move):
+            attacker = StrikeParticipant(species_key="snorlax", level=_LEVEL, stats=dict(stats), ability=ability, item="leftovers",
+                                         moves=(move,))
+            result = _strike_damage(attacker=attacker, defender=defender, defender_types=("Water", "Psychic"), observed_move=move,
+                token=token, context=StrikeContext("Snorlax", "Slowbro", attacker_status=status), dex=_DEX, require_move_in_set=True,
+                pinch_ambiguity_band=0.04, split_choice_band_baseline=False)
+            return result.rolls
+        self.assertEqual(rolls("guts", "par", "flamethrower"), rolls("immunity", "par", "flamethrower"))
+        self.assertGreater(rolls("guts", "par", "bodyslam")[0], rolls("immunity", "par", "bodyslam")[0])
+
     def test_bonemerang_normalizes_per_hit(self) -> None:
         stats = _snorlax_stats()
         per_hit = gen3_damage_rolls(
