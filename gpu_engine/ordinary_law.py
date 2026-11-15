@@ -55,7 +55,7 @@ DOMAIN_PINS = {
 # Filled only after reviewed implementation stabilizes; drift must refuse.
 MAPPING_PINS = {
     'carry_law.py': '19bb86991bc09212a46d849bdd3d7629044512c1d8b78f0e79487ddeae45237e',
-    'chance_consumers.py': 'a650fce286f0b2e54227537b7a4b511776d2a460b0b9c0b64e46d90de1aeaec0',
+    'chance_consumers.py': 'fcfd7554244352cce6d74da9e562482b66b95c48b85513d9a67c99b55ac71d75',
     'conditioned_future.py': '95e86f5a019850cea2507305221754fde2fb9456e15a2c6f5cf21d9ea624ffbd',
     'fidelity_panel.py': '728c1d14c3cc5e95de63d6d3770d143263d58c0d5d7dec8a444b64c5b829099f',
     'finite_law.py': '49c5f0060683814ba182028e4ab54669314aa40e032b2dabee7d71338062e141',

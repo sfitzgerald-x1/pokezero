@@ -191,6 +191,10 @@ def plan_for_state(state, index, actions, table, metadata, *, cap, native_input=
         drift = _domain_drift(Path(__file__).parent)
         if drift is not None:
             return refuse("CONSUMER_DOMAIN_DRIFT", drift)
+        # the transitive kernel domain identity the plan carries: the single digest the per-module pins replaced, over
+        # the same bytes they just admitted (so its value is unchanged)
+        domain = sha256(b"".join(name.encode()+b"\0"+(Path(__file__).parent/(name+".py")).read_bytes()+b"\0"
+                                for name in DOMAIN_MODULES)).hexdigest()
         native = (mapping.native_input_from_jax(state, index, metadata)
                   if native_input is None else native_input)
         if isinstance(native, mapping.Refused):
