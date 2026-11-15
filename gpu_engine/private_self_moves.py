@@ -42,6 +42,19 @@ NUMERIC_COLUMNS = COUNT_COLUMNS + PP_COLUMNS + VALID_COLUMNS
 CATEGORY_COLUMNS = tuple(range(reference.CATEGORY_BELIEF_MOVE_OFFSET, reference.CATEGORY_BELIEF_MOVE_OFFSET + BUCKETS))
 
 
+SEARCH_FOLLOW_UP = ('self_moves search serving is not threaded yet: the search stack captures the Python root under '
+    'ActorContract.champion() (phase_d_protocol_constructor, depthn_live_search, d3_depthn_gate, owning_python_reference, '
+    'mc_ladder_captures); the follow-up threads the served contract there')
+
+
+def refuse_search_serving(*, catalog=None, meta=None, context):
+    """Search serving fails closed on self_moves until the follow-up lands: a served catalog compiled with it, or a served
+    archive declaring it (meta['self_moves']), stops the server at build instead of pricing an on catalog under an off
+    Python root capture."""
+    if bool(getattr(getattr(catalog, 'masks', None), 'self_moves', False)) or bool((meta or {}).get('self_moves', False)):
+        raise ValueError(f'{context}: {SEARCH_FOLLOW_UP}')
+
+
 class Tables(NamedTuple):
     max_pp: jax.Array               # [M] public_moves catalog rule floor(base PP * 8 / 5)
     category: jax.Array             # [M] vocabulary row of belief:possible_move:<name>

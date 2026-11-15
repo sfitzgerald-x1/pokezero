@@ -16,6 +16,8 @@ from types import SimpleNamespace
 import unittest
 from unittest import mock
 
+from _showdown_root import requires_showdown, showdown_root_str
+
 
 class ContractIdentityTests(unittest.TestCase):
     def test_off_namespace_is_the_pre_self_moves_identity(self):
@@ -104,12 +106,20 @@ class ContractCheckTests(unittest.TestCase):
             with self.assertRaisesRegex(Exception, 'JAX encoder contract differs'):
                 JaxBackend(replace(contract, self_moves=not on), catalog=catalog, battle_id='bad', owner='p1', stream_id=2)
 
+    @unittest.skipUnless(importlib.util.find_spec('jax'), 'requires isolated JAX')
+    def test_search_serving_fails_closed_until_threaded(self):
+        from gpu_engine.private_self_moves import refuse_search_serving
+        refuse_search_serving(catalog=SimpleNamespace(masks=SimpleNamespace(self_moves=False)), meta={}, context='t')
+        for kwargs in (dict(catalog=SimpleNamespace(masks=SimpleNamespace(self_moves=True))), dict(meta={'self_moves': True})):
+            with self.assertRaisesRegex(ValueError, 'not threaded yet'):refuse_search_serving(context='t', **kwargs)
+
     def test_serving_entry_points_refuse_a_contradicting_override(self):
         from pokezero.observation import require_declared_self_moves
         with mock.patch.dict(os.environ, {'OBS_SELF_MOVES': 'on'}):
             with self.assertRaisesRegex(ValueError, 'serving refuses'):require_declared_self_moves(False, context='server')
 
 
+@requires_showdown('neural_cli builds its category vocabulary from a pokemon-showdown checkout')
 @unittest.skipUnless(importlib.util.find_spec('torch'), 'requires PyTorch')
 class TrainerFlagTests(unittest.TestCase):
     def test_neural_cli_train_builds_an_on_config(self):
@@ -123,7 +133,7 @@ class TrainerFlagTests(unittest.TestCase):
         for flag, want in (('--self-moves', True), ('--no-self-moves', False), (None, False)):
             with tempfile.TemporaryDirectory() as temp_dir:
                 argv = ['train', '--data', 'train-rollouts.jsonl', '--out', str(Path(temp_dir) / 'c.pt'),
-                        '--showdown-root', '/tmp/showdown', '--observation-schema', 'v2.1'] + ([flag] if flag else [])
+                        '--showdown-root', showdown_root_str(), '--observation-schema', 'v2.1'] + ([flag] if flag else [])
                 with (mock.patch('pokezero.neural_cli.train_transformer_policy', side_effect=fake_train) as train,
                       mock.patch('pokezero.neural_cli.save_transformer_checkpoint'),
                       contextlib.redirect_stdout(io.StringIO())):
