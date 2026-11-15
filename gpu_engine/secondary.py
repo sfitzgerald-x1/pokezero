@@ -146,7 +146,11 @@ def apply_color_change(state,side,move_type,table,*,eligible,_status_trace=None,
 
 
 def synchronize_reflects(state, source, afflicted, status, table, *, applied):
-    """(reflected status, [B] mask): after_status_event's Synchronize reflection of a fresh status onto its source."""
+    """(reflected status, [B] mask): after_status_event's Synchronize reflection of a fresh status onto its source.
+
+    For Pursuit's intercept reveal masks (apply_contact's _reveal_masks). These statements are after_status_event's own,
+    kept inline there (tests/test_gpu_engine_engine_item_callbacks.py certifies that function's AST against b8092a85);
+    tests/test_gpu_engine_fidelity_tier_d.py pins the two copies equal."""
     rows=jnp.arange(state.hp.shape[0])
     own,target=state.active[rows,source],state.active[rows,afflicted]
     reflected=jnp.where(status==m.TOX,m.PSN,status)
@@ -167,8 +171,13 @@ def after_status_event(state, source, afflicted, status, table, *, applied, item
     Existing type/ability immunity and a living, unstatused source still apply.
     """
     rows=jnp.arange(state.hp.shape[0])
-    own=state.active[rows,source]
-    reflected,reflects=synchronize_reflects(state,source,afflicted,status,table,applied=applied)
+    own,target=state.active[rows,source],state.active[rows,afflicted]
+    reflected=jnp.where(status==m.TOX,m.PSN,status)
+    reflects=(jnp.asarray(applied) & (source!=afflicted)
+        & table.synchronize[state.ability[rows,afflicted,target]]
+        & ((status==m.PAR)|(status==m.BRN)|(status==m.PSN)|(status==m.TOX))
+        & (state.hp[rows,source,own]>0) & (state.status[rows,source,own]==m.NONE)
+        & status_allowed(table,reflected,state.types[rows,source,own],state.ability[rows,source,own]))
     if _status_trace is not None:
         from . import engine_status_callbacks as callbacks
         _status_trace=callbacks.unknown(_status_trace,reflects)

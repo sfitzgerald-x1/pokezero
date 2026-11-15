@@ -235,5 +235,20 @@ class ContactTests(unittest.TestCase):
             secondary.apply_contact(s, 0, j.asarray([TACKLE]), j.asarray([0]), self.table, eligible=True)
 
 
+class SourceTests(unittest.TestCase):
+    def test_synchronize_reflects_repeats_after_status_event_inline(self):
+        """secondary.synchronize_reflects (the Pursuit intercept's reveal masks) repeats after_status_event's reflection
+        statements, which stay inline there: test_gpu_engine_engine_item_callbacks certifies that function's AST against
+        b8092a85. The two copies must stay equal (pure AST, no engine import)."""
+        import ast
+        from pathlib import Path
+        tree = ast.parse((Path(__file__).resolve().parents[1] / 'gpu_engine/secondary.py').read_text())
+        fn = {n.name: n for n in tree.body if isinstance(n, ast.FunctionDef)}
+        names = {'rows', '(own, target)', 'reflected', 'reflects'}
+        pick = lambda f: [ast.dump(s) for s in f.body if isinstance(s, ast.Assign) and {ast.unparse(t) for t in s.targets} & names]
+        helper = pick(fn['synchronize_reflects'])
+        self.assertEqual(len(helper), 4)
+        self.assertEqual(pick(fn['after_status_event']), helper)
+
 if __name__ == '__main__':
     unittest.main()
