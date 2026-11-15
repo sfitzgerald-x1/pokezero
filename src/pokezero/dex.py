@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import functools
 import json
 from pathlib import Path
 import re
@@ -236,7 +237,16 @@ def gen3_move_category(move_type: str, category: str) -> str:
     return category or "Status"
 
 
+@functools.lru_cache(maxsize=65536)
+def _normalize_str(value: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "", value.lower())
+
+
 def normalize_id(value: str | None) -> str:
+    # Pure on a str argument, so a bounded memo returns exactly what re.sub returns; the live constructor calls this about
+    # 56k times per decision (host-stage profile 2026-11-14). Any other type takes the unmemoized expression unchanged.
+    if type(value) is str:
+        return _normalize_str(value)
     return re.sub(r"[^a-z0-9]+", "", str(value or "").lower())
 
 
