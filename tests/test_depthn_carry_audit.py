@@ -46,7 +46,7 @@ def citations(text):
 CITATION_ANCHORS = {
     'gpu_engine/baton.py:16': 'batonpass',
     'gpu_engine/constructor_worlds.py:482': 'OPPONENT_RECHARGE_UNREPRESENTED',
-    'gpu_engine/constructor_worlds.py:866': 'def fix_recharge',
+    'gpu_engine/constructor_worlds.py:870': 'def fix_recharge',
     'gpu_engine/effects.py:175': 'def stall_success',
     'gpu_engine/effects.py:46': 'destinybond',
     'gpu_engine/encore.py:14-20': '^def from_metadata',
@@ -122,7 +122,9 @@ CITATION_ANCHORS = {
     'gpu_engine/transition.py:2725-2729': 'truant_loaf=work.truant_loaf',
     'gpu_engine/transition.py:614-615': '^charge_moves',
     'gpu_engine/transition.py:644-646': 'initial_loaf = (table.entry.truant',
-    'gpu_engine/transition.py:84-116': '^def tables_from_metadata',
+    'gpu_engine/transform.py:132': 'def revert',
+    'gpu_engine/transform.py:70': 'def apply',
+    'gpu_engine/transition.py:84-117': '^def tables_from_metadata',
     'gpu_engine/transition.py:828': 'charge_locked',
     'gpu_engine/transition.py:835-839': '~DESTINY_BOND&0xffffffff',
     'gpu_engine/transition.py:843-848': '^_recharge_turn',
@@ -201,10 +203,13 @@ class EnumerationTests(unittest.TestCase):
         source = (ROOT / 'gpu_engine/engine_request_source.py').read_text().splitlines()
         self.assertIn('LOCK', source[379]);self.assertIn('charge_move', source[340])
         state = (ROOT / 'gpu_engine/state.py').read_text().lower()
-        # an effect the engine models in-tree (engine_since) names its state; the others still have none
+        # an effect the engine models in-tree (engine_since) names its state; the others still have none. Transform is in-tree from
+        # its PR, before its merge exists to be the engine_since (set with the guard change that follows): pending until then.
         words = dict(recharge='recharge', perish_count='perish', drowsy='yawn', destiny_bond='destiny', partial_trap='partial', transform='transform')
+        pending = {'transform'}
         for e in A.EFFECTS:
-            if e.id in words:(self.assertIn if e.engine_since else self.assertNotIn)(words[e.id], state, e.id)
+            if e.id in pending:self.assertEqual(e.engine_since, '', f'{e.id} has its engine_since: drop it from pending')
+            if e.id in words:(self.assertIn if e.engine_since or e.id in pending else self.assertNotIn)(words[e.id], state, e.id)
         traps = (ROOT / 'gpu_engine/linked_traps.py').read_text().splitlines()[12]
         self.assertIn('meanlook', traps);self.assertNotIn('wrap', traps)
         transition = (ROOT / 'gpu_engine/transition.py').read_text()

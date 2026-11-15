@@ -24,7 +24,8 @@ pool membership is checked against it (pool_check; a mismatch is reported, never
   destiny_bond (Destiny Bond), transform (Transform), trick_lock (Trick: its user always holds Choice Band, so the target ends up
   choice-locked). recharge, partial_trap and transform are also LOCK-class at gpu_engine/engine_request_source.py:380.
   engine_since: destiny_bond 286a5ffe (A2); recharge and trick_lock 8b212312 (M1); partial_trap, perish_count and drowsy f3e71663 (M2 + R1);
-  transform none.
+  transform none yet: in-tree from the Transform PR (gpu_engine/transform.py), its engine_since is that PR's merge, set with the
+  guard change that follows it (tests/_engine_since.py), so until then it is counted unrepresented, as the guard's tier A keeps it.
 - Not in the pool (zero by construction): the locked-move family (Outrage, Thrash, Petal Dance), Uproar, Rollout, Ice Ball, Bide,
   Rage, the two-turn moves other than Solar Beam (Fly, Dig, Dive, Bounce, Skull Bash, Razor Wind, Sky Attack), the other partial
   traps, Future Sight / Doom Desire, Taunt / Disable / Torment.
@@ -141,11 +142,11 @@ EFFECTS = (
          'Showdown data/conditions.ts:364-378: mustrecharge cancels the next move (onBeforeMovePriority 11) and is onLockMove recharge; '
          'sim/pokemon.ts:1085-1088: a locked move sets trapped, so the recharge turn has no switch',
          'in-tree since M1 (8b212312): gpu_engine/state.py:87 recharge_counter; transition.py:843-848 the recharge turn',
-         'live roots: since #1949 an opponent that must recharge is built with its counter (gpu_engine/constructor_worlds.py:866 '
+         'live roots: since #1949 an opponent that must recharge is built with its counter (gpu_engine/constructor_worlds.py:870 '
          'fix_recharge; the pre-M1 OPPONENT_RECHARGE_UNREPRESENTED name, constructor_worlds.py:482, is kept for old rows); the owner\'s recharge turn is single-legal (the phase-D '
          'mapper refuses a live mustrecharge too: future_state.py:494, RECHARGE_UNREPRESENTED)'),
         'Only Slaking carries it, and Slaking\'s one ability is Truant: a residual clock in Gen 3 (Showdown data/mods/gen3/abilities.ts:'
-        '197-212) the engine models (state.py:84 truant_loaf, transition.py:644-646 and 851-852). In-tree since M1 the recharge turn '
+        '197-212) the engine models (state.py:84 truant_loaf, transition.py:644-646 and 854-855). In-tree since M1 the recharge turn '
         'is modelled (trapped, no move); before it the engine\'s free turn after Hyper Beam was spent loafing anyway. A Transform '
         'user copying Slaking remains (Transform is itself unrepresented).', engine_since='8b212312'),
     Effect('partial_trap', ('wrap',), ('shuckle',), False,
@@ -206,8 +207,9 @@ EFFECTS = (
         'request_source_rules.cjs:65-66 transform is a missing origin -> engine_request_source.py:380',
         'the user copies the target\'s species, types, stats, ability, boosts and moves while it stays in',
         ('Showdown data/moves.ts:19836 (gen4 mod data/mods/gen4/moves.ts:1443): Transform',
-         'gpu_engine/transition.py:84-116: no move table names transform (no effect in search); public_refresh_stream.py:17 is the '
-         'encoder\'s public refresh only',
+         'gpu_engine/transition.py:84-117: tables_from_metadata builds the Transform table (gpu_engine/transform.py:70 apply, the '
+         'copy; transform.py:132 revert), in-tree from the Transform PR and still guarded (tier A) until its merge is the engine_since; '
+         'public_refresh_stream.py:17 is the encoder\'s public refresh only',
          'gpu_engine/phase_d_live_worlds.py:278-279: a root with a transformed Pokemon is refused (PUBLIC_TRANSFORM_NOT_MATERIALIZED)'),
         'Ditto and Mew. A transformed root is refused, so the effect reaches the search only as a turn-1 or turn-2 move.'),
     Effect('trick_lock', ('trick',), ('furret', 'kecleon'), False, '',
@@ -225,7 +227,7 @@ REPRESENTED = (
     Effect('charge', ('solarbeam',), ('exeggutor', 'sunflora', 'tangela', 'victreebel'), True,
         'engine_request_source.py:341 a mid-charge request (charge_move != 0) is LOCK', 'two-turn charge',
         ('gpu_engine/state.py:49-50 charge_move/charge_counter', 'gpu_engine/solar_beam.py:14-15 (Solar Beam only, solar_beam.py:1)',
-         'gpu_engine/transition.py:614-615, 825')),
+         'gpu_engine/transition.py:614-615, 828')),
     Effect('encore', ('encore',), (), True, 'engine_request_source.py:341-342 LOCK while the counters exist and the origin is unknown '
         '(request_source_rules.cjs:64 exempts it from the missing-condition rule)', 'repeat the last move',
         ('gpu_engine/state.py:47-48 encore_move/encore_counter', 'gpu_engine/encore.py:14-20, 33-52')),
@@ -249,7 +251,7 @@ REPRESENTED = (
     Effect('substitute', ('substitute',), (), True, '', 'HP decoy', ('gpu_engine/state.py:58 substitute_hp',)),
     Effect('baton_pass', ('batonpass',), (), True, '', 'switch keeping boosts and volatiles', ('gpu_engine/baton.py:16',)),
     Effect('truant', (), (), True, '', 'ability: loaf every other turn (Gen 3 residual clock)',
-        ('gpu_engine/state.py:84 truant_loaf', 'gpu_engine/transition.py:855, 2700-2704')),
+        ('gpu_engine/state.py:84 truant_loaf', 'gpu_engine/transition.py:855, 2725-2729')),
 )
 
 NOT_IN_POOL = (
