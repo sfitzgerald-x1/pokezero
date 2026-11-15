@@ -122,10 +122,11 @@ def _rebase(root, assignment, active, *, state):
 def _materialize_transform(root, tables, arrays, owner, foe, active, assignment):
     """Transform (gpu_engine/transform.py) in one world, after the owner cells and the sampled opponent are written.
 
-    Our transformed active: the request shows its copied moves and PP and its Hidden Power type, but its copied Atk..Spe,
-    ability and Hidden Power power are the TRUE opponent's (transformInto copies them; the request shows baseStoredStats).
-    They are rebuilt from this world's sampled donor (the opposing member of the donor species), so no actual opposing
-    stat reaches a sampled world. The saves, flag, moves, PP and types (public) stay the owner's own.
+    Our transformed active: the request shows its copied moves and PP and its copied Hidden Power type and power (Gen 3
+    names both), but its copied Atk..Spe and ability are the TRUE opponent's (transformInto copies them; the request
+    shows baseStoredStats). They are rebuilt from this world's sampled donor (the opposing member of the donor species),
+    so no actual opposing stat reaches a sampled world; a sampled donor whose moves (or Hidden Power, when copied) differ
+    from the copy refuses. The saves, flag, moves, PP, Hidden Power and types (public) stay the owner's own.
     The opponent's transformed active (the public Transform mark on its active slot): the sampled member is the base,
     so its sampled stats, moves, PP (source max minus the public uses before the Transform: the carry charges nothing
     while transformed) and Hidden Power become the saves, and the copy is our donor's (the member of the donor species):
@@ -140,9 +141,17 @@ def _materialize_transform(root, tables, arrays, owner, foe, active, assignment)
         if len(donor) != 1:
             raise ValueError('own Transform donor not in the sampled party')
         d = donor[0]
+        # The copied moves are exact (our request lists them), so the sampled donor must hold that set; its Hidden Power
+        # type and power are exact too (the request names them, gen < 6) and stay the owner's own.
+        copied = arrays['moves'][0, owner, mine]
+        if sorted(int(m) for m in arrays['moves'][0, foe, d] if m) != sorted(int(m) for m in copied if m):
+            raise ValueError('own Transform donor set differs from the copied moves')
+        names = getattr(getattr(tables, 'source', None), 'vocabulary', {}).get('moves', ())
+        if any(0 < int(m) < len(names) and normalize_id(names[int(m)]).startswith('hiddenpower') for m in copied) and any(
+                int(arrays[leaf][0, foe, d]) != int(arrays[leaf][0, owner, mine]) for leaf in ('hidden_power_type', 'hidden_power_power')):
+            raise ValueError('own Transform donor Hidden Power differs from the copy')
         arrays['stats'][0, owner, mine, 1:] = arrays['stats'][0, foe, d, 1:]
         arrays['ability'][0, owner, mine] = arrays['ability'][0, foe, d]
-        arrays['hidden_power_power'][0, owner, mine] = arrays['hidden_power_power'][0, foe, d]
     view = root.view
     marks, donors = view.get('transformed'), view.get('transform_species')
     slot = next((s for s, physical in assignment.items() if physical == active), None)
@@ -178,6 +187,9 @@ def _materialize_transform(root, tables, arrays, owner, foe, active, assignment)
     arrays['hidden_power_type'][address], arrays['hidden_power_power'][address] = hp_type, hp_power
     arrays['transformed'][0, foe] = True
     arrays['transform_species'][0, foe] = species
+    truant = tables.namespaces['abilities'].get('truant', 0)
+    if truant and base_ability == truant:
+        raise ValueError('public Truant phase not materialized')   # the copy's clock, as for any Truant foe active
     # Its last move (the public caller identity) names a copied slot, or Transform itself (failencore: history slot -1).
     last = view.get('last_moves')
     move = 0 if last is None else int(np.asarray(last)[0, slot])

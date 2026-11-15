@@ -561,8 +561,9 @@ class LineFacts:
 class TransformFacts:
     """A side's current transformed active on the lines (gpu_engine/transform.py): `donor` the normalized species of its
     latest -transform line's target, `copied_uses` ((move, pp charged), ...) in first-use order since that line: each move
-    line of the transformer without [from] (not Struggle) charges 1, or 2 when the opposing active's Pressure is known to the
-    owner (a public -ability Pressure, or the owner's own side-private start line) and the move is foe-targeted. A switch,
+    line of the transformer without [from] (not Struggle), or with [from] Pursuit (a switch intercept), charges 1, or 2 when
+    the opposing active's Pressure is known to the owner (a public -ability Pressure, or the owner's own side-private start
+    line) and the move is foe-targeted. A switch,
     drag or faint ends it; a re-transform restarts the uses (fresh 5 PP)."""
     donor:str
     copied_uses:tuple=()
@@ -613,7 +614,10 @@ def line_facts(lines,owner,*,peer_damage=False):
             tracers[seat].add(species.get((seat,name))or normalize_id(name))
         if kind=='move'and seat in active:
             move=normalize_id(parts[3])
-            if seat in copied and not any(t.startswith('[from]')for t in tags)and move!='struggle':
+            # Gen 3's Pursuit intercept ([from] Pursuit) is a paid use, Pressure included (data/mods/gen3/scripts.ts:176);
+            # every other [from] line (a Sleep Talk call, a locked move) pays nothing.
+            paid=not any(t.startswith('[from]')and t!='[from] pursuit'for t in tags)
+            if seat in copied and paid and move!='struggle':
                 other=peer if seat==own else own
                 known=(active[other]in original_pressure or active[other]in running_pressure if other==peer
                        else (other,active[other],'pressure')in private|public)
