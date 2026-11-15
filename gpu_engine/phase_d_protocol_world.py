@@ -416,7 +416,8 @@ def _downstream_unknowns(diagnostics,reason):
 
 def _host_arrays(seed,key):
     """empty_state(1, seed=seed) on the host: the cached constant template and this seed's key (world_keys, computed for all of
-    a root's worlds in one call by sample()). The seed is checked as empty_state checks it, so a bad seed refuses the same way."""
+    a root's worlds in one call by sample()). The seed is checked as empty_state checks it, and map_spec calls this builder where
+    empty_state would run, so a bad seed refuses with the same error at the same point."""
     if type(seed) is not int or not 0<=seed<2**32:raise ValueError('seed must be an unsigned 32-bit integer')
     arrays=states._empty_arrays()
     if key is None:key=states.world_keys([seed])[0]
@@ -476,7 +477,7 @@ def materialize_protocol(root,start,*,inputs,seed,key=None):
         mapping_spec,cursors=tail.mapping_spec(world.spec,tail_facts['replacement'])
         mapped=map_spec(mapping_spec,metadata=metadata,dex=catalog.dex,seed=seed,
             turn=root.materialization_payload['turn'],active_turns=_once(inputs,root,'chronology',lambda:_chronology(inputs.lines)),happiness=tuple(mood),held_volatiles=True,
-            arrays=_host_arrays(seed,key) if HOST_WORLDS else None)
+            arrays=(lambda:_host_arrays(seed,key)) if HOST_WORLDS else None)
         if mapped.state is None:
             _downstream_unknowns(diagnostics,'Typed mapper refused: '+repr(mapped.refusals))
             return ProtocolWorld(None,None,mapped.refusals,mapper_diagnostics=tuple(diagnostics))

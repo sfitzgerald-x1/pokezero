@@ -72,8 +72,8 @@ CITATION_ANCHORS = {
     'gpu_engine/phase_d_protocol_world.py:201-219': '^_defer_yawn',
     'gpu_engine/phase_d_protocol_world.py:222-237': '^_perish_counts',
     'gpu_engine/phase_d_protocol_world.py:309-320': '^def _write_held_counts',
-    'gpu_engine/phase_d_protocol_world.py:464-465': 'approximate_partial_trap_turns=False',
-    'gpu_engine/phase_d_protocol_world.py:477': 'map_spec',
+    'gpu_engine/phase_d_protocol_world.py:465-466': 'approximate_partial_trap_turns=False',
+    'gpu_engine/phase_d_protocol_world.py:478': 'map_spec',
     'gpu_engine/public_active.py:217-233': '^PERISH_START',
     'gpu_engine/public_active.py:46': 'perish',
     'gpu_engine/public_refresh_stream.py:17': 'TRANSFORM',
@@ -128,8 +128,8 @@ CITATION_ANCHORS = {
     'gpu_engine/transition.py:840-845': '^_recharge_turn',
     'gpu_engine/transition.py:851-852': 'loafing=table.entry.truant',
     'gpu_engine/transition.py:852': 'loafing=table.entry.truant',
-    'gpu_engine/v5_hypothetical_state.py:117': 'DESTINY_BOND',
-    'gpu_engine/v5_hypothetical_state.py:119': 'perish_counter',
+    'gpu_engine/v5_hypothetical_state.py:119': 'DESTINY_BOND',
+    'gpu_engine/v5_hypothetical_state.py:121': 'perish_counter',
 }
 CITATION = re.compile(r'((?:gpu_engine/)?[\w-]+\.(?:py|cjs)):(\d+)(?:-(\d+))?')
 CITATION_TAIL = re.compile(r'(?:,\s*|\s+and\s+)(\d+)(?:-(\d+))?(?![\w.-])')

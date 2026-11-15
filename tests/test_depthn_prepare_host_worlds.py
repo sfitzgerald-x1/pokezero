@@ -66,6 +66,20 @@ class HostMapping(unittest.TestCase):
             self.assertIsInstance(host.state.hp, np.ndarray)
             assert_same(self, device.state, host.state, f'seed {seed} ')
 
+    def test_a_bad_seed_refuses_at_the_same_point_on_both_builds(self):
+        """materialize_protocol passes the host template as a builder, which map_spec calls where empty_state runs: a spec
+        refusal still comes first, and otherwise both builds raise empty_state's seed error."""
+        from dataclasses import replace
+        spec, metadata = mapping_tests.TypedMappingTests().fixture()
+        args = dict(metadata=metadata, seed=-1, turn=7, active_turns=(2, 4), happiness=((7,), (255,)))
+        build = lambda: protocol._host_arrays(-1, None)
+        refused = replace(spec, trick_room=True)
+        self.assertEqual(mapping.map_spec(refused, **args).refusals, ('global-field-unrepresentable',))
+        self.assertEqual(mapping.map_spec(refused, arrays=build, **args).refusals, ('global-field-unrepresentable',))
+        for arrays in (None, build):
+            with self.subTest(host=arrays is not None), self.assertRaisesRegex(ValueError, 'seed must be an unsigned 32-bit integer'):
+                mapping.map_spec(spec, arrays=arrays, **args)
+
     def test_tail_restore_host_equals_device_with_a_pending_residual_wish_and_fresh_substitute(self):
         spec, metadata = mapping_tests.TypedMappingTests().fixture()
         args = dict(metadata=metadata, turn=7, active_turns=(2, 4), happiness=((7,), (255,)))
@@ -127,6 +141,7 @@ class EndToEndMaterialize(unittest.TestCase):
                 made[host] = protocol.materialize_protocol(public, start, inputs=inputs, seed=17)
         a, b = made[False], made[True]
         self.assertIsNotNone(a.state, a.refusals);self.assertEqual(a.refusals, b.refusals)
+        self.assertEqual((a.mapper_diagnostics, a.origin_sha256), (b.mapper_diagnostics, b.origin_sha256))
         for label, x, y in (('state', a.state, b.state), ('public', a.public, b.public)):
             xs, ys = jax.tree_util.tree_flatten_with_path(x)[0], jax.tree_util.tree_flatten_with_path(y)[0]
             self.assertEqual([jax.tree_util.keystr(p) for p, _ in xs], [jax.tree_util.keystr(p) for p, _ in ys])

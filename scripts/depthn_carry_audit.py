@@ -162,7 +162,7 @@ EFFECTS = (
          'wrap_tie, 11 wrap_trapper_faint and wrap_trapper_switch)',
          'live roots: a held partial trap is refused (its 3-6 turn count is hidden): an own-held one is refused first (gpu_engine/phase_d_live_worlds.py:355-356, OWN_VOLATILE_OR_LATENT_CLOCK_UNAVAILABLE); '
          'an opponent-held one because the protocol world is built with '
-         'approximate_partial_trap_turns=False (gpu_engine/phase_d_protocol_world.py:464-465), so pokezero.engine_world raises '
+         'approximate_partial_trap_turns=False (gpu_engine/phase_d_protocol_world.py:465-466), so pokezero.engine_world raises '
          'volatile_unsupported'),
         'Shuckle (Staller) only. In-tree since M2 the trap and its residual chip are modelled; a root already holding a partial trap '
         'is refused.', engine_since='f3e71663'),
@@ -175,7 +175,7 @@ EFFECTS = (
          'probes: 10 perishsong* scenarios (perishsong, _tie, _last_faster, _baton, _switch, _meanlook, _soundproof, _soundproof_user, '
          '_protect_sub, _reuse), EXACT against Showdown f76228a1 at M2 + R1 (3e0878e4)',
          'live roots: since #1949 a held perish count is built (both sides): the protocol world\'s typed mapper writes the shown count '
-         '(gpu_engine/phase_d_protocol_world.py:477 -> v5_hypothetical_state.py:119, held_volatiles) and the protocol world writes '
+         '(gpu_engine/phase_d_protocol_world.py:478 -> v5_hypothetical_state.py:121, held_volatiles) and the protocol world writes '
          'Showdown\'s duration, 4 for the silent perish3 of the Song\'s own turn, carried across a Baton Pass '
          '(gpu_engine/phase_d_protocol_world.py:222-237, 309-320); an own-held one only on the protocol route (gpu_engine/phase_d_live_worlds.py:344-345); '
          'gpu_engine/public_active.py:46, 217-233 keeps the public counts for the encoder'),
@@ -200,7 +200,7 @@ EFFECTS = (
          'in-tree since A2 (286a5ffe): gpu_engine/state.py:21 DESTINY_BOND; effects.py:46; transition.py:832-836 its end at the '
          'holder\'s next move',
          'live roots: since #1949 a bonded active is built with the DESTINY_BOND bit: our own by gpu_engine/phase_d_live_worlds.py:362, '
-         'the opponent\'s by the protocol world\'s typed mapper (gpu_engine/v5_hypothetical_state.py:117, held_volatiles)'),
+         'the opponent\'s by the protocol world\'s typed mapper (gpu_engine/v5_hypothetical_state.py:119, held_volatiles)'),
         'Gengar, Wobbuffet, Qwilfish, Banette.', engine_since='286a5ffe'),
     Effect('transform', ('transform',), ('ditto', 'mew'), False,
         'request_source_rules.cjs:65-66 transform is a missing origin -> engine_request_source.py:380',

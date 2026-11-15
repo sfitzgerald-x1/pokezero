@@ -34,8 +34,9 @@ def map_spec(spec, *, metadata, seed, turn, active_turns, happiness, dex=None, h
     encore to encore_move = the resolved lock with a placeholder count the protocol world replaces by its posterior draw.
 
     ``arrays``: a host copy of ``empty_state(1, seed=seed)`` (device_public_world_state._empty_arrays with this seed's
-    world_keys), which the mapping then fills and returns as host NumPy arrays for the caller's one device transfer per
-    world. The mapping is the same either way: the same values and dtypes, byte for byte.
+    world_keys), or a zero-argument builder of one, called where ``empty_state`` would run (so a bad seed refuses after the
+    spec's own refusals, in the same order). The mapping then fills it and returns host NumPy arrays for the caller's one
+    device transfer per world. The mapping is the same either way: the same values and dtypes, byte for byte.
 
     ``turn`` is the displayed public request turn. ORIGINAL BattleState.turn
     counts completed ordinary turns, so its exact value here is turn-1.
@@ -74,6 +75,7 @@ def map_spec(spec, *, metadata, seed, turn, active_turns, happiness, dex=None, h
                 if info is None or mon.weight_kg!=info.weight_kg:reasons.append(f'custom-weight:{seat}:{slot}')
     if reasons:return Mapping(None,tuple(reasons))
     host=arrays is not None
+    if callable(arrays):arrays=arrays()
     if not host:
         state=empty_state(1,seed=seed)
         arrays={name:np.array(value,copy=True) for name,value in state._asdict().items()}
