@@ -17,6 +17,9 @@ const {Battle}=require(path.join(root,'dist/sim/battle.js'));
 const {PRNG}=require(path.join(root,'dist/sim/prng.js'));
 let tape=null;const events=[];
 require(hooks).install(Battle,PRNG,()=>tape,e=>events.push(e),()=>null,path.join(root,'dist/sim/pokemon.js'));
+// Tag an error with the eachEvent it escaped (innermost first), so a test can tell which tie stayed unresolved.
+const eachEvent=Battle.prototype.eachEvent;
+Battle.prototype.eachEvent=function(id,...rest){try{return eachEvent.call(this,id,...rest);}catch(e){if(e&&e.eachEvent===undefined)e.eachEvent=id;throw e;}};
 const row=()=>[0,99,99,0,15,0,0,0,0,0,0,0];
 function T(nonce,o={},schema='v2'){
   const t={schema:'pokezero.gpu_chance_tape.'+schema,nonce,draws:[row(),row()],secondary:[99,99],sleep_talk:[0,0]};
@@ -31,9 +34,9 @@ function battle(p1,p2){
   b.setPlayer('p1',{name:'p1',team:p1});b.setPlayer('p2',{name:'p2',team:p2});return b;
 }
 function turn(b,t,c1='move 1',c2='move 1'){
-  tape=t;events.length=0;let error=null;
-  try{b.makeChoices(c1,c2);}catch(e){error=e.message;}
-  tape=null;return {error,events:events.slice(),log:b.log.slice(-30)};
+  tape=t;events.length=0;let error=null,error_event=null;
+  try{b.makeChoices(c1,c2);}catch(e){error=e.message;error_event=e.eachEvent??null;}
+  tape=null;return {error,error_event,events:events.slice(),log:b.log.slice(-30)};
 }
 const out={};
 {const b=battle([mon('Machamp',['superpower'],'Guts')],[mon('Snorlax',['splash'],'Thick Fat')]);
@@ -85,6 +88,22 @@ for(const [name,t] of Object.entries({
 {const b=battle([mon('Snorlax',['splash'],'Thick Fat')],[mon('Snorlax',['splash'],'Thick Fat')]);out.eachevent=turn(b,T('ee'));}
 {const b=battle([mon('Hypno',['splash'],'Insomnia')],[mon('Hypno',['splash'],'Insomnia')]);out.eachevent_handler=turn(b,T('eh'));}
 {const lum=()=>({...mon('Hypno',['splash'],'Insomnia'),item:'Lum Berry'});out.eachevent_item=turn(battle([lum()],[lum()]),T('ei'));}
+// Transform's rules, mixed and negative cases: one own-holder cure against one unlisted Update handler (Lum Berry beside an
+// ability with no Update handler); a residual pair of Speed Boosts on distinct holders (inert), of Speed Boost against Truant
+// and of two Speed Boosts on one holder (both unresolved).
+{const b=battle([mon('Hypno',['splash'],'Insomnia')],[{...mon('Hypno',['splash'],'Inner Focus'),item:'Lum Berry'}]);
+ out.eachevent_mixed=turn(b,T('em'));}
+function abilityTie(ids,same=false){
+  const b=battle([mon('Ninjask',['splash'],'Speed Boost')],[mon('Ninjask',['splash'],'Speed Boost')]);
+  const holders=[b.p1.active[0],same?b.p1.active[0]:b.p2.active[0]];
+  const list=ids.map((id,k)=>({effect:{id,effectType:'Ability'},effectHolder:holders[k],order:26,priority:0,speed:200,subOrder:1,callback(){}}));
+  tape=T('at:'+ids.join(',')+(same?':same':''));events.length=0;let error=null;
+  try{b.speedSort(list);}catch(e){error=e.message;}
+  tape=null;return {error,events:events.slice()};
+}
+out.abilitytie=abilityTie(['speedboost','speedboost']);
+out.abilitytie_mixed=abilityTie(['speedboost','truant']);
+out.abilitytie_same=abilityTie(['speedboost','speedboost'],true);
 out.yawntie=pairTie('yawn',{});
 process.stdout.write(JSON.stringify(out));
 '''
@@ -172,8 +191,25 @@ class ChanceHooksV2Tests(unittest.TestCase):
         own = [e for e in r['events'] if e['kind'] == 'INERT_EACH_EVENT_TIE' and e.get('own_holder')]
         self.assertTrue(own);self.assertEqual({e['event'] for e in own}, {'Update'})
         self.assertIn('SPIKE_UNRESOLVED:TIE_ORDER', self.out['eachevent_item']['error'])
+        self.assertEqual(self.out['eachevent_item']['error_event'], 'Update')
         r = self.out['yawntie'];self.assertResolved(r);self.assertEqual(coupled(r), [])
         self.assertEqual([e['effects'] for e in r['events'] if e['kind'] == 'INERT_RESIDUAL_TIE'], [['yawn', 'yawn']])
+
+    def test_transform_inert_ties_cover_own_holder_handlers_only(self):
+        """chance_hooks.cjs's two Transform rules: an Update tie is inert only when EVERY handler on both Pokemon is a Gen 3
+        own-holder cure ability (OWN_UPDATE), so one cure holder against a Lum Berry holder stays unresolved at Update; a
+        residual tie is inert only for one OWN_RESIDUAL ability (Truant or Speed Boost) on distinct holders, so Speed Boost
+        against Truant, or two Speed Boost handlers on one holder, stay unresolved."""
+        r = self.out['eachevent_mixed']
+        self.assertIn('SPIKE_UNRESOLVED:TIE_ORDER', r['error']);self.assertEqual(r['error_event'], 'Update')
+        self.assertFalse([e for e in r['events'] if e.get('own_holder')])
+        r = self.out['abilitytie'];self.assertIsNone(r['error'], r)
+        self.assertEqual([e['effects'] for e in r['events'] if e['kind'] == 'INERT_RESIDUAL_TIE'], [['speedboost', 'speedboost']])
+        for name in ('abilitytie_mixed', 'abilitytie_same'):
+            with self.subTest(name=name):
+                r = self.out[name]
+                self.assertIn('SPIKE_UNRESOLVED:TIE_ORDER', r['error'])
+                self.assertFalse([e for e in r['events'] if e['kind'] == 'INERT_RESIDUAL_TIE'])
 
     def test_tape_schema_validation(self):
         for name, error in self.out['invalid'].items():
