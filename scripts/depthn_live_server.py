@@ -345,7 +345,9 @@ def parser():
         '(default 0: off)')
     p.add_argument('--split-min-worlds',type=int,default=32,help='the smallest W --split-worlds splits (default 32)')
     p.add_argument('--reply-forward',choices=('reduce','device'),default='reduce',help='batched serving: the reply prior\'s forward per root '
-        'on the reduce thread (default; as the serial search) or once per batch on the device thread')
+        'on the reduce thread (default; as the serial search) or once per batch on the device thread. device is NOT bitwise the per-root '
+        'forward: the batch\'s forward has another batch shape, and the backend may pick another matmul (CPU: 0 of 194 roots equal, max '
+        '|logit difference| 0.052); never on a served config until shown batch-invariant on its GPU')
     p.add_argument('--block-lanes',type=int,default=2187);p.add_argument('--blocks-per-call',type=int,default=16)
     p.add_argument('--warmup-requests',required=True,help='JSONL of saved Showdown requests, one object per line with the eight address keys of '
         'Codex\'s ladder request (battle_id, owner, stream_id, decision_index, generation, prefix_sha256, lines, own_request_line)')

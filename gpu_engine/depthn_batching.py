@@ -481,7 +481,10 @@ def warm_seed(search):
 def reply_logits(search, priced, items):
     """{request_id: the reply model's logits [W, 9]} for every priced root of a batch: one forward per owner seat over the roots'
     worlds, padded (the first root's worlds repeated) to the batch bucket's world count, so each bucket compiles one program per
-    seat (DepthNLiveSearch's reply prior; its mode's forward: eager views, or the jitted views)."""
+    seat (DepthNLiveSearch's reply prior; its mode's forward: eager views, or the jitted views). NOT bitwise the per-root forward
+    (reply_forward='reduce', the default): another batch shape may take another matmul implementation (on CPU every logit of a
+    16-world root differed from its 32-world batch's, by up to 0.018), so --reply-forward device is opt-in, never served before
+    it is shown batch-invariant on the serving GPU."""
     import numpy as np
     reply = search.reply;made = priced['made'];bucket = priced['chosen'];out = {}
     if bucket is None:
