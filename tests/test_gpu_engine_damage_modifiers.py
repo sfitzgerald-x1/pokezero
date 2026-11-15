@@ -7,7 +7,10 @@ as JavaScript evaluates them.
 """
 import importlib.util
 import itertools
-import math
+import json
+import os
+import shutil
+import subprocess
 import unittest
 
 import numpy as np
@@ -202,6 +205,130 @@ class ChainTests(unittest.TestCase):
         self.assertEqual(got, expected)
 
 
+# Every chained handler on Gen 3's stat and BasePower events that a Gen 3 Random Battle can reach (Showdown f76228a1, resolved
+# gen3 -> gen4 -> ... -> base): (holder kind, id, hook) -> (priority, factor, applies(move id, resolved type, physical)).
+# The hook's prefix says whose: onX is the event target's own (the attacker on ModifyAtk/SpA/BasePower, the defender on
+# ModifyDef/SpD), onSourceX the other side's. Hustle's onModifyAtk returns this.modify directly (gen3_damage), not a
+# chainModify, so it is listed but chains nothing. Status, HP and species gates are "may hold" here (a superset).
+PHYSICAL_TYPES = ('normal', 'fighting', 'flying', 'poison', 'ground', 'rock', 'bug', 'ghost', 'steel')
+CHAIN = {
+    ('ability', 'guts', 'onModifyAtk'): (5, 1.5, lambda m, t, ph: ph),          # data/abilities.ts:1725-1732
+    ('ability', 'hugepower', 'onModifyAtk'): (5, 2, lambda m, t, ph: ph),       # data/abilities.ts:1841-1846
+    ('ability', 'purepower', 'onModifyAtk'): (5, 2, lambda m, t, ph: ph),       # data/abilities.ts:3562-3567
+    ('ability', 'hustle', 'onModifyAtk'): (5, None, lambda m, t, ph: ph),       # data/abilities.ts:1863-1868 (direct)
+    ('ability', 'plus', 'onModifySpA'): (0, 1.5, lambda m, t, ph: not ph),      # data/mods/gen3/abilities.ts:125-134
+    ('ability', 'minus', 'onModifySpA'): (0, 1.5, lambda m, t, ph: not ph),     # (gen4 abilities.ts:270, 325: priority 0)
+    ('ability', 'marvelscale', 'onModifyDef'): (6, 1.5, lambda m, t, ph: ph),   # data/abilities.ts:2488-2498
+    ('ability', 'blaze', 'onBasePower'): (2, 1.5, lambda m, t, ph: t == 'fire'),       # data/mods/gen4/abilities.ts:25-35
+    ('ability', 'overgrow', 'onBasePower'): (2, 1.5, lambda m, t, ph: t == 'grass'),   # :307-317
+    ('ability', 'swarm', 'onBasePower'): (2, 1.5, lambda m, t, ph: t == 'bug'),        # :457-467
+    ('ability', 'torrent', 'onBasePower'): (2, 1.5, lambda m, t, ph: t == 'water'),    # :502-512
+    ('ability', 'thickfat', 'onSourceBasePower'): (1, 0.5, lambda m, t, ph: t in ('fire', 'ice')),  # :491-500
+    ('item', 'choiceband', 'onModifyAtk'): (1, 1.5, lambda m, t, ph: ph),       # data/items.ts:959-979
+    ('item', 'thickclub', 'onModifyAtk'): (1, 2, lambda m, t, ph: ph),          # data/mods/gen4/items.ts:410-417
+    ('item', 'silkscarf', 'onModifyAtk'): (1, 1.1, lambda m, t, ph: t == 'normal'),    # data/mods/gen3/items.ts:337-345
+    ('item', 'lightball', 'onModifySpA'): (1, 2, lambda m, t, ph: not ph),      # data/mods/gen3/items.ts:187-195
+    ('item', 'souldew', 'onModifySpA'): (1, 1.5, lambda m, t, ph: not ph),      # data/mods/gen6/items.ts:166-180
+    ('item', 'souldew', 'onModifySpD'): (2, 1.5, lambda m, t, ph: not ph),
+    ('item', 'twistedspoon', 'onModifySpA'): (1, 1.1, lambda m, t, ph: t == 'psychic'),  # data/mods/gen3/items.ts:406-415
+    ('move', 'facade', 'onBasePower'): (0, 2, lambda m, t, ph: m == 'facade'),          # data/moves.ts:5029-5046
+    ('move', 'solarbeam', 'onBasePower'): (0, 0.5, lambda m, t, ph: m == 'solarbeam'),  # data/moves.ts:17227-17260
+}
+# gen3 teams.ts getItem (452-513) assigns exactly these items.
+POOL_ITEMS = ('choiceband', 'leftovers', 'liechiberry', 'lightball', 'lumberry', 'petayaberry', 'salacberry', 'silkscarf',
+              'souldew', 'stick', 'thickclub', 'twistedspoon', 'whiteherb')
+EVENTS = ('BasePower', 'ModifyAtk', 'ModifySpA', 'ModifyDef', 'ModifySpD')
+HP_TYPES = ('fighting', 'flying', 'poison', 'ground', 'rock', 'bug', 'ghost', 'steel', 'fire', 'water', 'grass',
+            'electric', 'psychic', 'ice', 'dragon', 'dark')
+
+
+def reachable_chains():
+    """{event: {factor multiset (sorted handler keys) seen with >= 1 handler}} over every reachable (move, type) and every
+    holder combination, each holder slot (target's ability, target's item, source's ability, source's item, the move)
+    holding at most one effect. Gen 3's category is its type's (Hidden Power: any of its 16 types)."""
+    out = {e: set() for e in EVENTS}
+    moves = [('hiddenpower', t) for t in HP_TYPES] + [('facade', 'normal'), ('solarbeam', 'grass')]
+    moves += [('other', t) for t in HP_TYPES + ('normal',)]
+    for event in EVENTS:
+        own, source = f'on{event}', f'onSource{event}'
+        for move, typ in moves:
+            physical = typ in PHYSICAL_TYPES
+            if event in ('ModifyAtk', 'ModifyDef') and not physical:continue
+            if event in ('ModifySpA', 'ModifySpD') and physical:continue
+            fits = lambda kind, hook: [None] + [k for k, (_, _, ok) in CHAIN.items()
+                                                if k[0] == kind and k[2] == hook and ok(move, typ, physical)]
+            slots = [fits('ability', own), fits('item', own), fits('ability', source), fits('item', source),
+                     [None] + [k for k, (_, _, ok) in CHAIN.items() if k[0] == 'move' and k[2] == own and ok(move, typ, physical)]]
+            for combo in itertools.product(*slots):
+                handlers = tuple(sorted(k for k in combo if k is not None))
+                if handlers:out[event].add(handlers)
+    return out
+
+
+class ChainOrderTests(unittest.TestCase):
+    """No reachable Gen 3 stat or BasePower chain has three or more chained factors, so none is order-sensitive (with
+    two, (a*b+2048)>>12 is commutative); the engine follows runEvent's priority order regardless."""
+
+    def test_no_reachable_chain_is_order_sensitive(self):
+        chains = reachable_chains()
+        sizes = {}
+        sensitive = []
+        for event, sets in chains.items():
+            for handlers in sets:
+                factors = [CHAIN[k][1] for k in handlers if CHAIN[k][1] is not None]
+                sizes[event] = max(sizes.get(event, 0), len(factors))
+                results = {int(sd_chain(order) * 4096) for order in itertools.permutations(factors)}
+                if len(results) > 1:sensitive.append((event, handlers, sorted(results)))
+        self.assertEqual(sensitive, [])
+        self.assertEqual(sizes, {'BasePower': 2, 'ModifyAtk': 2, 'ModifySpA': 2, 'ModifyDef': 1, 'ModifySpD': 1})
+        two = {e: sorted(tuple(k[1] for k in h if CHAIN[k][1] is not None) for h in sets
+                         if sum(CHAIN[k][1] is not None for k in h) == 2) for e, sets in chains.items()}
+        self.assertEqual(sorted(two['BasePower']), [('blaze', 'thickfat'), ('overgrow', 'solarbeam')])
+        self.assertEqual(sorted(two['ModifyAtk']), sorted((a, i) for a in ('guts', 'hugepower', 'purepower')
+                                                        for i in ('choiceband', 'silkscarf', 'thickclub')))
+        self.assertEqual(sorted(two['ModifySpA']), sorted((a, i) for a in ('minus', 'plus')
+                                                        for i in ('lightball', 'souldew', 'twistedspoon')))
+        # Within each two-factor set the priorities differ, so runEvent's order is fixed anyway (ability 5 then item 1 on
+        # Atk; item 1 then Plus/Minus 0 on SpA; pinch 2 then Thick Fat 1 or the move's own 0 on BasePower).
+        for event in ('BasePower', 'ModifyAtk', 'ModifySpA'):
+            for handlers in chains[event]:
+                chained = [k for k in handlers if CHAIN[k][1] is not None]
+                if len(chained) == 2:self.assertNotEqual(CHAIN[chained[0]][0], CHAIN[chained[1]][0], handlers)
+
+    @unittest.skipUnless((os.environ.get('NODE') or shutil.which('node')) and os.environ.get('POKEZERO_SHOWDOWN_ROOT'),
+                         'requires node and the pinned Showdown checkout')
+    def test_the_table_is_every_reachable_chain_handler_in_the_dex(self):
+        """Every reachable ability (sets.json), item (getItem's 13), move and their conditions, plus the status, volatile
+        and weather conditions, read from the built gen3 dex: exactly CHAIN's handlers, at CHAIN's priorities."""
+        script = r"""
+const root = process.argv[1], items = JSON.parse(process.argv[2]), d = require(root + '/dist/sim/dex.js').Dex.mod('gen3');
+const sets = require(root + '/data/random-battles/gen3/sets.json'), id = s => s.toLowerCase().replace(/[^a-z0-9]/g, '');
+const abilities = new Set(), moves = new Set(['struggle']);
+for (const sp in sets) for (const set of sets[sp].sets) {
+  for (const a of set.abilities || []) abilities.add(id(a));
+  for (const m of set.movepool) moves.add(m.startsWith('hiddenpower') ? 'hiddenpower' : m);
+}
+const re = /^on(Source|Ally|Any|Foe)?(BasePower|ModifyAtk|ModifySpA|ModifyDef|ModifySpD)$/, out = [];
+const scan = (kind, name, x) => {
+  if (!x || !x.exists) throw new Error(kind + ' ' + name + ' missing');
+  for (const [where, obj] of [[kind, x], [kind + '.condition', x.condition || {}]])
+    for (const k of Object.keys(obj)) if (re.test(k) && typeof obj[k] === 'function') out.push([where, name, k, obj[k + 'Priority'] || 0]);
+};
+for (const a of abilities) scan('ability', a, d.abilities.get(a));
+for (const i of items) scan('item', i, d.items.get(i));
+for (const m of moves) scan('move', m, d.moves.get(m));
+for (const c of ['brn', 'par', 'psn', 'tox', 'slp', 'frz', 'confusion', 'flinch', 'trapped', 'partiallytrapped',
+                 'mustrecharge', 'choicelock', 'sunnyday', 'raindance', 'sandstorm', 'hail']) scan('condition', c, d.conditions.get(c));
+process.stdout.write(JSON.stringify({abilities: abilities.size, moves: moves.size, hooks: out}));
+"""
+        node = os.environ.get('NODE') or shutil.which('node')
+        got = json.loads(subprocess.run([node, '-e', script, os.environ['POKEZERO_SHOWDOWN_ROOT'], json.dumps(POOL_ITEMS)],
+                                        capture_output=True, text=True, check=True, timeout=60).stdout)
+        self.assertEqual((got['abilities'], got['moves']), (71, 114))
+        self.assertEqual(sorted((kind, name, hook, priority) for kind, name, hook, priority in got['hooks']),
+                         sorted((kind, name, hook, prio) for (kind, name, hook), (prio, _, _) in CHAIN.items()))
+
+
 @unittest.skipUnless(HAS_JAX, 'requires JAX')
 class MarvelScaleTests(unittest.TestCase):
     def test_every_status_on_def_only(self):
@@ -290,7 +417,8 @@ class StepTests(unittest.TestCase):
             typeless=typ == 0, burned=status == BRN, guts=ability == GUTS, attack_num=num, attack_den=den,
             defense_num=3 if scaled else 1, defense_den=2 if scaled else 1, roll=85 + roll))
         residual = int(m.major_status_residual(1000 - damage, 1000, foe_status, 0).damage)
-        return 0, damage, residual
+        recoil = max(1, damage // 4) if move == STRUGGLE else 0   # Struggle's own recoil [1,4] (the engine's core)
+        return recoil, damage, residual
 
     def test_the_four_modifiers_in_the_step(self):
         cases = []
