@@ -4,10 +4,10 @@ transition.step_with_chance runs Showdown's order-10 residual handlers (fieldEve
 Speed, then subOrder; sim/battle.ts:404-411) as a fixed list of EVENTS events, one per side per kind. Event e is side
 EVENT_SIDES[e]'s handler of kind EVENT_KIND[e] at subOrder EVENT_SUBORDER[e]. Per lane the step builds every event's key
 
-    event_key(end_speed[EVENT_SIDES[e]], EVENT_SUBORDER[e], tie[e]) = -speed*SPEED_MULTIPLIER + subOrder*SUBORDER_STRIDE + tie
+    event_key(end_speed[EVENT_SIDES[e]], EVENT_SUBORDER[e], tie[e]) = -speed*SPEED_MULTIPLIER + subOrder*SUBORDER_STRIDE + (tie & 1)
 
 where the two events of a pair (TIE_PAIR, one per side, same subOrder) share one tie draw and take complementary bits
-(draw ^ side; the inert Yawn pair's draw is the fixed 0). It argsorts the keys and runs one handler iteration per position.
+((draw ^ side) & 1; the inert Yawn pair's draw is the fixed 0). It argsorts the keys and runs one handler per position.
 
 Two invariants make the kinds a position can hold a static fact (tests/test_gpu_engine_residual_order.py checks both on
 transition.py's source):
@@ -44,9 +44,9 @@ if not len(EVENT_SIDES) == len(EVENT_SUBORDER) == len(TIE_PAIR) == EVENTS or not
 
 
 def event_key(speed, suborder, tie):
-    """An event's order key: Speed first (faster first), then subOrder, then the tie bit. transition applies it to its
-    jnp arrays (M2's ops: negate, two products, two sums); orders() applies it to ints."""
-    return -speed*SPEED_MULTIPLIER + suborder*SUBORDER_STRIDE + tie
+    """Speed first (faster first), then subOrder, then the tie's low bit: the identity on a bound-2 draw ^ side, and an explicit
+    wider draw (a fixture's 99) still sorts every event inside POSITIONS. Applied to transition's jnp arrays and to ints."""
+    return -speed*SPEED_MULTIPLIER + suborder*SUBORDER_STRIDE + (tie & 1)
 
 
 def kind_events(kind):
