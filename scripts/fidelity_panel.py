@@ -138,7 +138,8 @@ def run(a):
                 control = folder / 'chance.json';audit = folder / 'chance-audit.jsonl';initializing = folder / 'initializing.json'
                 gender_sensitive = any(metadata['vocabulary']['moves'][int(x)] == 'attract' for x in np.asarray(state.moves).flat)
                 gender_sensitive |= any(metadata['vocabulary']['abilities'][int(x)] == 'cutecharm' for x in np.asarray(state.ability).flat)
-                initializing.write_text(json.dumps(dict(allow_inert_gender=not gender_sensitive)))
+                initial=F.initial_chance(state,allow_inert_gender=not gender_sensitive) if hasattr(F,'initial_chance') else dict(allow_inert_gender=not gender_sensitive)
+                initializing.write_text(json.dumps(initial))
                 env = F.LocalShowdownEnv(F.LocalShowdownConfig(showdown_root=Path(a.showdown_root), node_binary=a.node, bridge_path=bridge,
                     feature_masks=F.ObservationFeatureMasks(transition_token_budget=0)))
                 try:
@@ -202,10 +203,12 @@ MATCHED = ('MATCHED_TERMINAL', 'MATCHED_THROUGH_TURN20')
 
 
 def merge(a):
-    shards = [json.load(open(p)) for p in a.shards]
+    shards = [json.loads(Path(p).read_text()) for p in a.shards]
     panels = {json.dumps(s['panel'] | dict(shard=None, game_range=None), sort_keys=True) for s in shards}
     commits = {s['source_commit'] for s in shards}
     if len(panels) != 1 or len(commits) != 1:raise ValueError(f'shards disagree: {panels} {commits}')
+    for key in ('pool_sha256','format_id','chance_tape_schema'):
+        if len({s[key] for s in shards})!=1:raise ValueError(f'shards disagree: {key}')
     panel = shards[0]['panel'];rows = sorted((r for s in shards for r in s['rows']), key=lambda r: r['game_id'])
     ids = [r['game_id'] for r in rows];want = list(range(panel['first_game'], panel['first_game'] + panel['games']))
     if ids != want:raise ValueError(f'missing or repeated games: {sorted(set(want) - set(ids))[:10]} {len(ids)} vs {len(want)}')
@@ -269,7 +272,7 @@ def classify(row, teams, vocab_has):
                 kind = kinds[0]
                 return (f'residual {kind} tie ({"/".join(detail)}) at equal Speed', 'c',
                         f'engine tie bit {TIE_COLUMN[kind]}; no tape row')
-            if all(kinds):return (f'residual tie across kinds ({"/".join(detail)})', 'c', 'mixed subOrder kinds; no tape row')
+            if all(kinds):return (f'residual tie across kinds ({"/".join(detail)})', 'd', 'unclassified: mixed subOrder kinds need a proof')
             if detail == ['switch', 'switch']:
                 return ('both players switch at equal Speed', 'c', 'engine switch_coin draws[0][11]; no tape row')
             if set(detail) <= {'choicelock', 'encore'}:
@@ -282,8 +285,8 @@ def classify(row, teams, vocab_has):
                             f'Gen 3 runAction ends with eachEvent Update; actives {who}; inert only without handlers (hooks)')
                 if 'insertChoice' in stack:
                     return ('switch-in insertion Speed tie (insertChoice)', 'c', f'engine entry tie bit; actives {who}')
-                return ('Pokemon-order tie', 'c', f'actives {who}; {stack[:120]}')
-            return (f'tie {detail}', 'c', '')
+                return ('Pokemon-order tie', 'd', f'unclassified: actives {who}; {stack[:120]}')
+            return (f'tie {detail}', 'd', 'unclassified: no reviewed mapping or commutation proof')
         if role == 'MISSING_ACTOR':
             if 'randomFoe' in stack:return ('Trace on a switch-in: randomFoe over one foe', 'c',
                                             'sample over the single foe in singles: inert, but the tape has no row (the probes force it)')
@@ -292,14 +295,14 @@ def classify(row, teams, vocab_has):
                 acts = [a[0] for a in diag.get('actives', []) if a and a[0]]
                 if any(a.get('ability') == 'shedskin' and a.get('status') for a in acts):
                     return ('Shed Skin (residual cure roll)', 'a', 'unmodelled in the engine; data/abilities.ts shedskin randomChance(33,100)')
-                return ('residual random with no active move', 'c', stack[:160])
+                return ('residual random with no active move', 'd', 'unclassified: '+stack[:160])
             if 'insertChoice' in str(detail) or 'insertChoice' in stack:
                 return ('switch insertion Speed tie (insertChoice)', 'c', 'engine entry tie; no tape row')
-            return ('sample with no active move: ' + (diag.get('effect') or '?'), 'c', stack[:160])
-        if role == 'SAMPLE':
+            return ('sample with no active move: ' + (diag.get('effect') or '?'), 'd', 'unclassified: '+stack[:160])
+        if role == 'SAMPLE' and (detail or {}).get('move') in ('roar','whirlwind'):
             return (f"{(detail or {}).get('move')} target pick over {(detail or {}).get('length')}", 'c',
                     'engine phazing[s] drag roll; no tape row')
-        return (f'{role} {str(detail)[:60]}', 'c', stack[:160])
+        return (f'{role} {str(detail)[:60]}', 'd', 'unclassified: '+stack[:160])
     if status == 'LEGAL_ACTION_MISMATCH' and 'transform' in json.dumps(row.get('first_divergence')):
         return ('Transform (move identities after -transform)', 'a', 'open PR #1970')
     if status in ('STATE_MISMATCH', 'TERMINAL_MISMATCH'):

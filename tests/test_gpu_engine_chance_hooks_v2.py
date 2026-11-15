@@ -163,7 +163,7 @@ class ChanceHooksV2Tests(unittest.TestCase):
         ties = [e for e in r['events'] if e['kind'] == 'INERT_EACH_EVENT_TIE']
         self.assertTrue(ties);self.assertTrue({e['event'] for e in ties} <= {'BeforeTurn', 'Update'})
         self.assertEqual(coupled(r), [('move_tie', 0, 0)])
-        self.assertIn('SPIKE_UNRESOLVED:TIE_ORDER', self.out['eachevent_handler']['error'])
+        self.assertResolved(self.out['eachevent_handler'])  # v4: reviewed own-holder Update callback
         r = self.out['yawntie'];self.assertResolved(r);self.assertEqual(coupled(r), [])
         self.assertEqual([e['effects'] for e in r['events'] if e['kind'] == 'INERT_RESIDUAL_TIE'], [['yawn', 'yawn']])
 
