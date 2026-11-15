@@ -103,7 +103,9 @@ class ThunderWaveStaticTests(unittest.TestCase):
   source=ast.parse(Path('src/pokezero/v5_worker.py').read_text());before=ast.parse(subprocess.check_output(['git','show',BASE+':src/pokezero/v5_worker.py'],text=True))
   current=next(n for n in source.body if isinstance(n,ast.FunctionDef)and n.name=='_prepare_runtime')
   old=next(n for n in before.body if isinstance(n,ast.FunctionDef)and n.name=='_prepare_runtime')
-  normalized=ast.parse(ast.unparse(current).replace("name in ('recoil', 'thunder_wave')","name == 'recoil'"))
+  # V2 self_moves: the compile site passes the contract's declared masks (ActorContract.encoder_masks), a documented delta.
+  normalized=ast.parse(ast.unparse(current).replace("name in ('recoil', 'thunder_wave')","name == 'recoil'")
+      .replace('feature_masks=contract.encoder_masks()','feature_masks=dict(contract.feature_masks)'))
   self.assertEqual(ast.dump(normalized.body[0],include_attributes=False),ast.dump(old,include_attributes=False))
   loop=next(n for n in ast.walk(current)if isinstance(n,ast.For)and isinstance(n.target,ast.Tuple)and [x.id for x in n.target.elts]==['name','move','module','function'])
   assignment=loop.body[0];code=compile(ast.fix_missing_locations(ast.Module(body=[assignment],type_ignores=[])),'<original-worker-compiler-call>','exec')
