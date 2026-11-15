@@ -78,13 +78,13 @@ Source: integration snapshot `994242ce519a1646825bb1252fc438d9b0517123`, read-on
 | `test_gpu_engine_before_move_blocked_input` | extended | integration `994242ce`: 4.0 min, 6.15 GiB |
 | `test_gpu_engine_earthquake_levitate_input` | extended | integration `994242ce`: 4.6 min, 6.23 GiB |
 | `test_gpu_engine_encore_owning` | extended | integration `994242ce`: 3.6 min, 6.35 GiB |
-| `test_gpu_engine_flash_fire_end_owning` | extended | integration `994242ce`: 6.9 min, 8.16 GiB |
+| `test_gpu_engine_flash_fire_end_owning` | heavy | integration `994242ce`: 6.9 min, 8.16 GiB | Main-specific measurement is listed below.
 | `test_gpu_engine_focus_punch_input` | extended | integration `994242ce`: 4.0 min, 6.19 GiB |
 | `test_gpu_engine_heal_bell_owning` | extended | integration `994242ce`: 8.7 min, 8.08 GiB |
 | `test_gpu_engine_hidden_power_substitute_input` | extended | integration `994242ce`: 3.7 min, 6.28 GiB |
 | `test_gpu_engine_levitate_twisted_spoon_input` | extended | integration `994242ce`: 3.8 min, 6.08 GiB |
 | `test_gpu_engine_natural_cure_departure_input` | extended | integration `994242ce`: 7.4 min, 8.27 GiB |
-| `test_gpu_engine_no_damage_owning` | extended | integration `994242ce`: 6.8 min, 8.41 GiB |
+| `test_gpu_engine_no_damage_owning` | heavy | integration `994242ce`: 6.8 min, 8.41 GiB | Main-specific measurement is listed below.
 | `test_gpu_engine_primary_sleep_miss` | extended | integration `994242ce`: 4.1 min, 5.97 GiB |
 | `test_gpu_engine_rest_success_input` | extended | integration `994242ce`: 4.9 min, 6.85 GiB |
 | `test_gpu_engine_return_substitute_input` | extended | integration `994242ce`: 3.7 min, 6.18 GiB |
@@ -95,9 +95,40 @@ Source: integration snapshot `994242ce519a1646825bb1252fc438d9b0517123`, read-on
 | `test_gpu_engine_thunder_wave_ground_immunity` | extended | integration `994242ce`: 3.6 min, 6.36 GiB |
 | `test_gpu_engine_thunder_wave_limber_input` | extended | integration `994242ce`: 4.1 min, 6.44 GiB |
 | `test_gpu_engine_thunder_wave_substitute_failure` | extended | integration `994242ce`: 3.7 min, 6.21 GiB |
-| `test_gpu_engine_toxic_runtime` | extended | integration `994242ce`: 6.6 min, 8.17 GiB |
+| `test_gpu_engine_toxic_runtime` | heavy | integration `994242ce`: 6.6 min, 8.17 GiB | Main-specific measurement is listed below.
 | `test_gpu_engine_v5_depth1_provider` | extended | integration `994242ce`: 8.2 min, 7.91 GiB |
 | `test_gpu_engine_v5_public_world` | extended | integration `994242ce`: 7.7 min, 7.59 GiB |
-| `test_gpu_engine_variable_direct_runtime` | extended | integration `994242ce`: 6.4 min, 7.96 GiB |
+| `test_gpu_engine_variable_direct_runtime` | heavy | integration `994242ce`: 6.4 min, 7.96 GiB | Main-specific measurement is listed below.
 | `test_gpu_engine_will_o_wisp_miss_input` | extended | integration `994242ce`: 4.3 min, 6.29 GiB |
 | `test_gpu_engine_wonder_guard_immunity` | extended | integration `994242ce`: 8.3 min, 8.15 GiB |
+
+## Main-specific shared assignments
+
+These original-main measurements are from run [43641647612](https://github.com/sfitzgerald-x1/pokezero/actions/runs/43641647612) at `32df2cef`, before tiering. Gate peaks are observed during the module in the shared job cgroup; the independently measured process HWM exceeds 11 GiB in every row. Wall time sums its original process-block units. Four short low-RSS modules with inherited cgroup peaks remain light pending the clean light run; they are not classified from another module’s retained charges.
+
+| Module | Main tier | Integration tier at 994242ce | Observed gate peak (GiB) | Process HWM (GiB) | Wall (min) |
+|---|---|---|---:|---:|---:|
+| `test_gpu_engine_direct_ko_forced_runtime` | heavy | light | 32.37 | 14.75 | 28.98 |
+| `test_gpu_engine_engine_execution_completeness` | heavy | light | 13.42 | 12.68 | 20.61 |
+| `test_gpu_engine_engine_full_retained_driver` | heavy | light | 21.88 | 13.74 | 7.95 |
+| `test_gpu_engine_engine_retained_encoder_driver` | heavy | light | 12.78 | 11.81 | 7.76 |
+| `test_gpu_engine_engine_weather_public` | heavy | light | 12.65 | 11.85 | 14.69 |
+| `test_gpu_engine_flash_fire_end_owning` | heavy | extended | 31.05 | 14.57 | 28.44 |
+| `test_gpu_engine_leftovers_public` | heavy | light | 18.87 | 14.58 | 33.01 |
+| `test_gpu_engine_leftovers_registered_runtime` | heavy | light | 12.47 | 11.67 | 4.21 |
+| `test_gpu_engine_no_damage_guards` | heavy | light | 14.00 | 13.33 | 21.59 |
+| `test_gpu_engine_no_damage_owning` | heavy | extended | 31.78 | 14.74 | 32.67 |
+| `test_gpu_engine_primary_sleep_runtime` | heavy | light | 19.27 | 14.80 | 23.67 |
+| `test_gpu_engine_registered_leftovers_driver` | heavy | light | 16.95 | 14.82 | 17.17 |
+| `test_gpu_engine_retained_driver_advancing` | heavy | light | 18.04 | 14.56 | 18.02 |
+| `test_gpu_engine_retained_throughput_composition` | heavy | light | 14.35 | 13.69 | 6.12 |
+| `test_gpu_engine_rough_skin_owning` | heavy | light | 68.41 | 14.75 | 92.77 |
+| `test_gpu_engine_secondary_status_frame_runtime` | heavy | light | 68.42 | 14.78 | 93.38 |
+| `test_gpu_engine_sleep_powder_runtime` | heavy | light | 18.92 | 14.76 | 17.46 |
+| `test_gpu_engine_status_residual_public` | heavy | light | 12.16 | 11.21 | 14.44 |
+| `test_gpu_engine_substitute_damage_owning` | heavy | light | 50.09 | 14.69 | 74.85 |
+| `test_gpu_engine_thunder_wave_runtime` | heavy | light | 18.87 | 14.58 | 24.25 |
+| `test_gpu_engine_toxic_runtime` | heavy | extended | 25.18 | 14.86 | 24.85 |
+| `test_gpu_engine_toxic_success_runtime` | heavy | light | 41.67 | 14.65 | 33.46 |
+| `test_gpu_engine_variable_direct_runtime` | heavy | extended | 31.59 | 14.61 | 32.80 |
+| `test_gpu_engine_weather_hp_runtime` | heavy | light | 15.65 | 14.71 | 15.55 |

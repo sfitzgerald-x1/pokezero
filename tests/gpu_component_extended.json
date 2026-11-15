@@ -59,14 +59,6 @@
    "isolated_measured_at": "9640bbe1 with every pin refreshed (isolated: one process per module on 4 CPUs with the CI runtime)"
   },
   {
-   "module": "test_gpu_engine_flash_fire_end_owning",
-   "reason": "pull-request wall budget",
-   "rank": 28,
-   "isolated_wall_min": 6.9,
-   "isolated_peak_gib": 8.16,
-   "isolated_measured_at": "0c2d2e5a with every pin refreshed (CI process-block path: one fresh process per block on 4 CPUs with the CI runtime; peak includes the parent)"
-  },
-  {
    "module": "test_gpu_engine_focus_punch_input",
    "reason": "pull-request wall budget",
    "rank": 14,
@@ -105,14 +97,6 @@
    "isolated_wall_min": 7.4,
    "isolated_peak_gib": 8.27,
    "isolated_measured_at": "9640bbe1 with every pin refreshed (isolated: one process per module on 4 CPUs with the CI runtime)"
-  },
-  {
-   "module": "test_gpu_engine_no_damage_owning",
-   "reason": "pull-request wall budget",
-   "rank": 29,
-   "isolated_wall_min": 6.8,
-   "isolated_peak_gib": 8.41,
-   "isolated_measured_at": "0c2d2e5a with every pin refreshed (CI process-block path: one fresh process per block on 4 CPUs with the CI runtime; peak includes the parent)"
   },
   {
    "module": "test_gpu_engine_primary_sleep_miss",
@@ -195,14 +179,6 @@
    "isolated_measured_at": "9640bbe1 with every pin refreshed (isolated: one process per module on 4 CPUs with the CI runtime)"
   },
   {
-   "module": "test_gpu_engine_toxic_runtime",
-   "reason": "pull-request wall budget",
-   "rank": 30,
-   "isolated_wall_min": 6.6,
-   "isolated_peak_gib": 8.17,
-   "isolated_measured_at": "0c2d2e5a with every pin refreshed (CI process-block path: one fresh process per block on 4 CPUs with the CI runtime; peak includes the parent)"
-  },
-  {
    "module": "test_gpu_engine_v5_depth1_provider",
    "reason": "pull-request wall budget",
    "rank": 3,
@@ -217,14 +193,6 @@
    "isolated_wall_min": 7.7,
    "isolated_peak_gib": 7.59,
    "isolated_measured_at": "9640bbe1 with every pin refreshed (isolated: one process per module on 4 CPUs with the CI runtime)"
-  },
-  {
-   "module": "test_gpu_engine_variable_direct_runtime",
-   "reason": "pull-request wall budget",
-   "rank": 31,
-   "isolated_wall_min": 6.4,
-   "isolated_peak_gib": 7.96,
-   "isolated_measured_at": "0c2d2e5a with every pin refreshed (CI process-block path: one fresh process per block on 4 CPUs with the CI runtime; peak includes the parent)"
   },
   {
    "module": "test_gpu_engine_will_o_wisp_miss_input",
