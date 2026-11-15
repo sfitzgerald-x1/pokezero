@@ -359,12 +359,12 @@ class DigestAndRuleTests(unittest.TestCase):
         species holding Stick, a bare Farfetch'd or a Status-only Farfetch'd is not involved."""
         from gpu_engine.v2e_regress import Pre, PLUGINS, ALLOWED, CASCADE_ALLOWED
         vocab = dict(VOCAB, moves=VOCAB['moves'] + ['trick'], items=VOCAB['items'] + ['stick'],
-                     species=['_none', 'farfetchd', 'mew'])
+                     species=['_none', 'farfetchd', 'mew'], types=['_none', 'normal', 'dark', 'grass', 'psychic'])
         TRICK, STICK, FARFETCHD, MEW = len(VOCAB['moves']), 3, 1, 2
         row = lambda name, typ, category: dict(id=name, type=typ, category=category, flags={})
         rows = [None, row('curse', 0, 'Status'), row('tackle', 1, 'Physical'), row('sleeptalk', 1, 'Status'),
-                row('spore', 12, 'Status'), row('struggle', 1, 'Physical'), row('encore', 1, 'Status'),
-                row('magiccoat', 14, 'Status'), row('batonpass', 1, 'Status'), row('trick', 14, 'Status')]
+                row('spore', 3, 'Status'), row('struggle', 1, 'Physical'), row('encore', 1, 'Status'),
+                row('magiccoat', 4, 'Status'), row('batonpass', 1, 'Status'), row('trick', 4, 'Status')]
         L = 6;s = pre_arrays(L);s['species'] = np.full((L, 2, 6), MEW, np.int32)
         s['species'][0, 0, 0] = FARFETCHD;s['item'][0, 0, 0] = STICK                       # 0: Farfetch'd + Stick, Tackle
         s['species'][1, 0, 0] = MEW;s['item'][1, 0, 0] = STICK                             # 1: another species
