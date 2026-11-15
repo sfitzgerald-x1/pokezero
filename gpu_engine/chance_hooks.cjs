@@ -78,8 +78,8 @@ function install(Battle,PRNG,load,audit,initializing=()=>null,pokemonPath='') {
   const encoreFrames=new WeakMap();let boundRandom;
   const insertionFrames=new WeakMap();let gen3Dex;
   let fieldEventId=null,runEventId=null;
-  const singles=b=>b.gen===3&&b.sides?.length===2&&b.sides.every(s=>s.active.length===1);
-  const active=(b,p)=>p&&b.sides[p.side?.n]===p.side&&p.side.active[0]===p;
+  const singles=b=>b.gen===3&&b.sides?.length===2&&b.sides.every(s=>s?.active?.length===1);
+  const active=(b,p)=>p?.side&&b.sides[p.side.n]===p.side&&p.side.active[0]===p;
   const ownUpdates={Ability:new Set(['magmaarmor','limber','insomnia','vitalspirit','immunity','owntempo','oblivious','waterveil']),
     Item:new Set(['lumberry','cheriberry','chestoberry','pechaberry','rawstberry','aspearberry','persimberry','leppaberry']),
     // Attract's Update only removes its holder's volatile if the source left;

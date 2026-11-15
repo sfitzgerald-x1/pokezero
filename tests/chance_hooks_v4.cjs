@@ -131,6 +131,14 @@ for(const bit of [0,1]){
   const t=T();t.draws[0][11]=bit;
   controlled(t,()=>sw.makeChoices('switch 2','switch 2'));
   assert.equal(sw.field.weather,bit?'sunnyday':'raindance');assert.equal(coupled('switch_tie').length,1);checks++;
+  const replacement=battle([mon(),mon('Groudon','Drought')],[mon(),mon('Kyogre','Drizzle')]);
+  for(const s of replacement.sides){s.active[0].faint();s.active[0].switchFlag=true;}
+  replacement.faintMessages();replacement.makeRequest('switch');
+  const rt=T();rt.resuming=true;rt.entry_ties=[1-bit,bit];
+  controlled(rt,()=>replacement.makeChoices('switch 2','switch 2'));
+  assert.equal(replacement.field.weather,bit?'sunnyday':'raindance');
+  assert.deepEqual(coupled('switch_tie').map(e=>e.raw),[1-bit]);
+  assert.deepEqual(coupled('entry_tie').map(e=>e.raw),[bit]);checks++;
 }
 // A handler with the same name but a different callback never inherits an
 // order-irrelevance proof. Nor does an unreviewed own-holder ability.
