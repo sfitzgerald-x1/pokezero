@@ -94,11 +94,11 @@ class DeviceCanaryRuntimeTests(unittest.TestCase):
         process=NS(returncode=None,stdin=Input(),stdout=Output())
         with tempfile.TemporaryDirectory() as folder:
             root=Path(folder);(root/'fp-results').mkdir();(root/'fp-requests').mkdir()
-            paths=[]
+            paths=[];plan=NS(fp_cpu_pairs=((1,2),));cells=endpoint.cells(plan)   # launch validates the cell (_execution_slot)
             for i in (0,4):
-                p=root/'fp-requests'/f'{i}.json';p.write_text('{"cell":{"slot":0}}');paths.append(p)
+                p=root/'fp-requests'/f'{i}.json';endpoint._write(p,{'cell':cells[i]});paths.append(p)
                 endpoint._write(root/'fp-results'/p.name,{'ordinal':i})
-            pool=endpoint.WorkerPool(root,NS(fp_cpu_pairs=((1,2),)))
+            pool=endpoint.WorkerPool(root,plan)
             async def run():
                 values=[await pool.launch(p)for p in paths];await pool.close();return values
             with patch.object(endpoint,'_spawn_owned',new=AsyncMock(return_value=process)) as spawn,\
