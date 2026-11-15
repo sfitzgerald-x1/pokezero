@@ -1,0 +1,185 @@
+{
+ "schema": "pokezero.effect_probe.scenario.v1",
+ "move": "marvelscale_slp",
+ "note": "Damage modifiers: Marvel Scale (data/abilities.ts:2488-2498, `if (pokemon.status)`: Def x1.5) with slp from hypnosis. Metagross (L80) then hits Milotic with Earthquake (physical: Def x1.5) and Thunderbolt (special: SpD, never boosted).",
+ "teams": [
+  [
+   {
+    "species": "Milotic",
+    "moves": [
+     "splash",
+     "recover",
+     "refresh",
+     "protect"
+    ],
+    "ability": "Marvel Scale",
+    "item": ""
+   },
+   {
+    "species": "Starmie",
+    "moves": [
+     "splash",
+     "surf",
+     "recover",
+     "protect"
+    ],
+    "ability": "Natural Cure",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Skarmory",
+    "moves": [
+     "splash",
+     "protect",
+     "spikes",
+     "drillpeck"
+    ],
+    "ability": "Keen Eye",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Celebi",
+    "moves": [
+     "splash",
+     "protect",
+     "psychic",
+     "recover"
+    ],
+    "ability": "Natural Cure",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Blissey",
+    "moves": [
+     "splash",
+     "softboiled",
+     "protect",
+     "seismictoss"
+    ],
+    "ability": "Natural Cure",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Swampert",
+    "moves": [
+     "splash",
+     "protect",
+     "surf",
+     "earthquake"
+    ],
+    "ability": "Torrent",
+    "item": "Leftovers"
+   }
+  ],
+  [
+   {
+    "species": "Metagross",
+    "moves": [
+     "hypnosis",
+     "earthquake",
+     "thunderbolt",
+     "protect"
+    ],
+    "ability": "Clear Body",
+    "item": "",
+    "level": 80
+   },
+   {
+    "species": "Gengar",
+    "moves": [
+     "splash",
+     "protect",
+     "thunderbolt",
+     "icepunch"
+    ],
+    "ability": "Levitate",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Jolteon",
+    "moves": [
+     "splash",
+     "protect",
+     "thunderbolt",
+     "batonpass"
+    ],
+    "ability": "Volt Absorb",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Zapdos",
+    "moves": [
+     "splash",
+     "protect",
+     "thunderbolt",
+     "drillpeck"
+    ],
+    "ability": "Pressure",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Heracross",
+    "moves": [
+     "splash",
+     "protect",
+     "megahorn",
+     "rockslide"
+    ],
+    "ability": "Guts",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Lapras",
+    "moves": [
+     "splash",
+     "protect",
+     "surf",
+     "icebeam"
+    ],
+    "ability": "Water Absorb",
+    "item": "Leftovers"
+   }
+  ]
+ ],
+ "script": [
+  [
+   "move 1",
+   "move 1"
+  ],
+  [
+   "move 1",
+   "move 2"
+  ],
+  [
+   "move 1",
+   "move 3"
+  ]
+ ],
+ "axes": [
+  {
+   "name": "roll",
+   "field": "draws.1.5",
+   "steps": [
+    1,
+    2
+   ],
+   "values": [
+    0,
+    7,
+    15
+   ]
+  }
+ ],
+ "expect": {
+  "exact": true
+ },
+ "require_fields": [
+  "perish_counter",
+  "yawn_counter",
+  "partial_trap_counter",
+  "partial_trap_source",
+  "item_knocked",
+  "destiny_bond",
+  "effect"
+ ]
+}
