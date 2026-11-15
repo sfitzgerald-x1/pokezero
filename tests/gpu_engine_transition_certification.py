@@ -13,5 +13,6 @@ Encore stale-move clear to 7c984fe6.
 Fidelity tier D (Wonder Guard, the pinch abilities, Poison Point / Flame Body / Effect Spore) moved it to d880714c, and its
 Pursuit-intercept device reveals to c471195a.
 The damage modifiers (Silk Scarf, Twisted Spoon, Marvel Scale and Gen 3 Plus/Minus) moved it to 61b00f72.
+Stick (Farfetch'd's critRatio +2) moved it to 3eb8bc1e.
 """
-CURRENT_TRANSITION = '61b00f72f427000e87625add8050e9ba88aec202'
+CURRENT_TRANSITION = '3eb8bc1edf52935c53cbdca39cbb3efdde1f32a9'
