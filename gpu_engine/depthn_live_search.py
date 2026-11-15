@@ -590,7 +590,7 @@ class DepthNLiveSearch:
         if root['status']!='PRICED':return dict(request_id=root['request_id'],status='REFUSED',refusal=root['reason'],block_causes=None,**view)
         block=[causes[r]['cause']for r in root['rows']];base=dict(request_id=root['request_id'],block_causes=block,**view)
         if any(block):return dict(base,status='REFUSED',refusal=next(c for c in block if c))   # DepthN's rule: a refused block refuses the root
-        try:blocks=[backups.backup(frame,r,backups.learner_max)for r in root['rows']]   # WorldPrices: averaging's value and logit rules
+        try:blocks=[backups.backup_learner_max_fast(frame,r)for r in root['rows']]   # WorldPrices: averaging's value and logit rules (bitwise the reference's)
         except ValueError as error:return dict(base,status='REFUSED',refusal=f'AVERAGING_ERROR: {error}')
         reply=None
         if getattr(self,'reply',None)is not None:   # br_fp: the reply model's logits on the same worlds; the champion's averaging is reported
