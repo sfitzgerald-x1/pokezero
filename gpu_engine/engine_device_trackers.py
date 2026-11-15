@@ -125,6 +125,10 @@ class Trackers(NamedTuple):
     transformed:object=None
     transform_species:object=None
     copied_pp_used:object=None
+    # [B,2,6] a transformer's running ability as its OWN owner's B2 fold holds it (the donor's public running-else-original
+    # there, kept when unknown), which can differ from borrowed_ability (the donor owner's fold, which also knows the
+    # donor's owner-private Pressure start). B2 reads it for the Pressure charge of moves against that transformer.
+    transform_own_view:object=None
 
 
 class Tendency(NamedTuple):

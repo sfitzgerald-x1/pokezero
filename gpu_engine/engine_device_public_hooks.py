@@ -154,7 +154,8 @@ def initialize(state,belief_tables=None,*,port_tables=None):
             'wish_set_turn':j.full((b,2),-1,j.int32),'items_removed_credit':j.zeros((b,2),j.int32)})
     t=t._replace(damage_history=damage_history.initialize(state),public_port=port.initialize(b))
     # Transform (B2's ctx.abilities transformed/transform_species; the copied-slot uses for device worlds).
-    t=t._replace(transformed=j.zeros((b,2,6),bool),transform_species=z,copied_pp_used=j.zeros((b,2,4),j.int32))
+    t=t._replace(transformed=j.zeros((b,2,6),bool),transform_species=z,copied_pp_used=j.zeros((b,2,4),j.int32),
+        transform_own_view=z)
     c=Context(t,belief_tables,port_tables)
     for side in range(2):c=install(c,state,side,j.ones(b,bool),initial=True)
     # Original startup emits switches, then TURN1 before the first request.
@@ -240,6 +241,7 @@ def install(c,state,side,use,*,initial=False):
         kept=use&(_li.take(t.borrowed_ability,r,side,at)!=0)
         t=_write(t,'shown_ability',side,p,_li.take(t.original_ability,r,side,at),kept)
         t=_write(t,'borrowed_ability',side,p,j.zeros_like(p),kept)
+        if t.transform_own_view is not None:t=_write(t,'transform_own_view',side,p,j.zeros_like(p),use)
     t=negative_items.hp_line(t,state,side,use,source_class=negative_items.HP_ACTION)
     c=c._replace(trackers=t)
     if c.trackers.damage_history is not None:
@@ -501,6 +503,15 @@ def transform(c,before,after,side,use):
     donor=_li.take(t.species,r,foe,fslot)
     copied=_li.take(t.borrowed_ability,r,foe,fslot)
     copied=j.where(copied>0,copied,_li.take(t.original_ability,r,foe,fslot))
+    # The carry's donor entry is the TRANSFORMER's owner's view (side d's facts are read by d's opponent): that fold's
+    # running copy. The donor's own fold, which supplies the transformer's facts, also knows the donor's owner-private
+    # Gen 3 Pressure start (addSplit, owner only), so there the copy is Pressure when the public entry is unknown.
+    if t.transform_own_view is not None:
+        t=_write(t,'transform_own_view',side,p,copied,use&(copied>0))
+    if c.belief_tables is not None and hasattr(c.belief_tables,'public_pressure'):
+        pressure=c.belief_tables.public_pressure;actual=_get(before,'ability',foe)
+        private=(copied==0)&(actual>0)&(actual<len(pressure))&pressure[j.clip(actual,0,len(pressure)-1)]
+        copied=j.where(private,actual,copied)
     t=_write(t,'transformed',side,p,j.ones(b,bool),use)
     t=_write(t,'transform_species',side,p,donor,use)
     t=_write(t,'borrowed_ability',side,p,copied,use&(copied>0))
@@ -563,6 +574,10 @@ def move(c,state,side,move,use,*,pp_use=False,original=True,count_turn=True,prep
         # This is the receiving observer's exact owning fact, not the acting
         # seat's hidden opponent fact. Keep all shared reveal arrays untouched.
         running=_get(state,'ability',foe)
+        if c.trackers.transform_own_view is not None:
+            # Transform: the observer's fold knows its own transformed active only by its public copy (transform_own_view).
+            own_slot=j.clip(_li.take(c.trackers.active_slot,r,foe),0,5)
+            running=j.where(_transformed(c,state,foe),_li.take(c.trackers.transform_own_view,r,foe,own_slot),running)
         valid_ability=(running>0)&(running<len(pressure))
         own_pressure=valid_ability&pressure[j.clip(running,0,len(pressure)-1)]&(_get(state,'hp',foe)>0)
         target_known=(actual_move>0)&(actual_move<len(targets))

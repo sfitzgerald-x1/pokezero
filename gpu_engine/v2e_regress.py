@@ -224,7 +224,7 @@ DEFAULT_DESTINY_BOND = 64
 SLEEP_MOVES = ('spore', 'hypnosis', 'sleeppowder', 'sing', 'lovelykiss', 'grasswhistle')
 # M2: the new leaves (the captures predate them) and the bag columns m2_rule reads.
 WRAP_CLOCK = "trackers.mon_features['wrap_trap_turns']"
-TRANSFORM_TRACKERS = ('trackers.transformed', 'trackers.transform_species', 'trackers.copied_pp_used')
+TRANSFORM_TRACKERS = ('trackers.transformed', 'trackers.transform_species', 'trackers.copied_pp_used', 'trackers.transform_own_view')
 M2_BAG = ('perish0', 'perish1', 'perish2', 'perish3', 'yawn', 'partiallytrapped')
 M2_COUNTER_LEAVES = ('state.perish_counter', 'state.yawn_counter', 'state.partial_trap_counter', 'state.partial_trap_source')
 
