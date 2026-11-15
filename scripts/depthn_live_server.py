@@ -149,23 +149,41 @@ def request_row(request,response,finished):
 
 
 class CompileCounter:
-    """JAX backend compiles in this process (jax.monitoring's backend_compile_duration events), read as deltas."""
-    EVENT='/jax/core/compile/backend_compile_duration'
+    """This process's JAX backend compiles (jax.monitoring's backend_compile_duration events), persistent compilation cache
+    hits and misses (its cache_hits events; cache_misses: an entry compiled and written), and cache entries it could not read
+    (JAX's 'Error reading persistent compilation cache entry' warnings, as shown), read as deltas: run() reads the warmup's
+    at READY (recorded there), so each request row's are its own."""
+    EVENT='/jax/core/compile/backend_compile_duration';HIT='/jax/compilation_cache/cache_hits';MISS='/jax/compilation_cache/cache_misses'
+    UNREADABLE='Error reading persistent compilation cache entry'
+    KEYS=('compiles','compile_seconds','cache_hits','cache_misses','cache_read_errors')
 
     def __init__(self):
-        self.count=0;self.seconds=0.;self.read=(0,0.);self.lock=threading.Lock()
+        self.now=dict.fromkeys(self.KEYS,0);self.now['compile_seconds']=0.;self.read=dict(self.now);self.lock=threading.Lock()
         try:
             import jax
-            jax.monitoring.register_event_duration_secs_listener(self._listen)
+            jax.monitoring.register_event_duration_secs_listener(self._listen);jax.monitoring.register_event_listener(self._event)
         except Exception:pass   # noqa: BLE001 -- a JAX without monitoring: the counts stay 0
+        import warnings
+        shown=warnings.showwarning
+        def showwarning(message,category,filename,lineno,file=None,line=None):
+            if self.UNREADABLE in str(message):
+                with self.lock:self.now['cache_read_errors']+=1
+            return shown(message,category,filename,lineno,file,line)
+        warnings.showwarning=showwarning
 
     def _listen(self,event,duration,**kw):
         if event==self.EVENT:
-            with self.lock:self.count+=1;self.seconds+=duration
+            with self.lock:self.now['compiles']+=1;self.now['compile_seconds']+=duration
+
+    def _event(self,event,**kw):
+        key={self.HIT:'cache_hits',self.MISS:'cache_misses'}.get(event)
+        if key is not None:
+            with self.lock:self.now[key]+=1
 
     def delta(self):
+        """{compiles, compile_seconds, cache_hits, cache_misses, cache_read_errors} since the previous read."""
         with self.lock:
-            out=(self.count-self.read[0],self.seconds-self.read[1]);self.read=(self.count,self.seconds)
+            out={k:self.now[k]-self.read[k]for k in self.KEYS};self.read=dict(self.now)
         return out
 
 
@@ -194,8 +212,7 @@ class Recorder:
 
     def _rows(self,requests,responses,finished):
         rows=[request_row(q,r,finished)for q,r in zip(requests,responses)]
-        if self.compiles is not None and rows:
-            count,seconds=self.compiles.delta();rows[0]['compiles']=count;rows[0]['compile_seconds']=seconds
+        if self.compiles is not None and rows:rows[0].update(self.compiles.delta())
         return rows
 
     def record(self,row):
@@ -237,7 +254,7 @@ def run(search,*,host,port,warmup_requests,max_requests,batch_wait_seconds=.005,
     stop() ends run once serving). With `pool` (a started PreparePool of this search's constructor), the search prepares
     through it and serves through a depthn_batching.Pipeline (pipeline_options: its keywords); the pool is closed on exit.
     `warm_in`: prepare's warm-in list (DepthNLiveSearch.warmup's: this process's own prepare), when there is one."""
-    recorder=Recorder(search,telemetry,server_id=server_id,compiles=CompileCounter())
+    compiles=CompileCounter();recorder=Recorder(search,telemetry,server_id=server_id,compiles=compiles)
     try:
         server=Server(recorder,max_requests=max_requests,batch_wait_seconds=batch_wait_seconds,queue_limit=queue_limit)
         if on_server is not None:on_server(server)
@@ -258,7 +275,8 @@ def run(search,*,host,port,warmup_requests,max_requests,batch_wait_seconds=.005,
             server.pipeline=Pipeline(search,pool,max_batch=max_requests,**(pipeline_options or{})).start()
             warm=dict(warm,prepare_workers=dict(workers,rss_bytes=pool.rss()),pipeline=dict(pipeline_options or{},max_batch=max_requests))
         ready=dict(event='READY',host=host,port=port,server_id=server_id,**(header or{}),cold_seconds={b:x.get('cold_seconds')for b,x in buckets.items()},
-            warm_seconds={b:x.get('warm_seconds')for b,x in buckets.items()},programs=warm.get('programs'),carry_reference=warm.get('carry_reference'),warmup=warm)
+            warm_seconds={b:x.get('warm_seconds')for b,x in buckets.items()},programs=warm.get('programs'),carry_reference=warm.get('carry_reference'),warmup=warm,
+            warmup_compiles=compiles.delta())   # everything up to READY: each request row's compiles and cache counts are serving's own
         def announce():log(ready);recorder.record(dict(ready,kind='ready'))
         asyncio.run(server.serve(host,port,on_ready=announce))
     finally:
@@ -443,6 +461,8 @@ def build(args):
     jax.config.update('jax_enable_x64',False)   # pinned off, as phase_d_ladder_server
     if matmul_precision()!=args.matmul_precision:   # the hard pin, again once JAX is imported, before anything loads or warms up
         raise ValueError(f'JAX default matmul precision {matmul_precision()!r} differs from the pinned {args.matmul_precision!r}')
+    from gpu_engine import atomic_compilation_cache
+    atomic_compilation_cache.install()   # whole entries only, for every process sharing the cache (its module docstring)
     if args.compilation_cache:
         from pokezero.owning_worker_runtime import configure_compilation_cache
         configure_compilation_cache(args.compilation_cache)

@@ -201,6 +201,19 @@ class ServerTests(unittest.TestCase):
         self.assertEqual((rows[1]['response']['request_id'],rows[1]['address']['battle_id'],rows[1]['lines'],rows[1]['budget_seconds']),('r1','b1',1,2.5))
         self.assertEqual(rows[1]['arrival_monotonic'],rows[1]['response']['arrival']);self.assertGreaterEqual(rows[1]['server_seconds'],0)
         self.assertEqual(rows[1]['response']['server_id'],'gpu0:7001')
+        keys=set(S.CompileCounter.KEYS);self.assertEqual(set(ready['warmup_compiles']),keys);self.assertLessEqual(keys,set(rows[1]))   # READY: the warmup's; a row: its own
+
+    def test_the_compile_counter_reads_compiles_cache_hits_misses_and_unreadable_entries_as_deltas(self):
+        import jax,warnings
+        counter=S.CompileCounter();counter.delta()
+        jax.monitoring.record_event_duration_secs(S.CompileCounter.EVENT,.25);jax.monitoring.record_event(S.CompileCounter.HIT)
+        jax.monitoring.record_event(S.CompileCounter.HIT);jax.monitoring.record_event(S.CompileCounter.MISS)
+        with warnings.catch_warnings():
+            warnings.simplefilter('always')   # shown (through the counter's hook), however often this test runs
+            warnings.warn("Error reading persistent compilation cache entry for 'jit_x': error: truncated")
+        got=counter.delta();self.assertEqual({k:got[k]for k in('compiles','cache_hits','cache_misses')},dict(compiles=1,cache_hits=2,cache_misses=1))
+        self.assertGreaterEqual(got['compile_seconds'],.25);self.assertGreaterEqual(got['cache_read_errors'],1)
+        self.assertEqual(counter.delta(),dict(compiles=0,compile_seconds=0.,cache_hits=0,cache_misses=0,cache_read_errors=0))
 
     def test_run_hands_prepare_its_warm_in_list(self):
         seen=[]
