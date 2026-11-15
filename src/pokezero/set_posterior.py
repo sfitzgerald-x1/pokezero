@@ -17,6 +17,21 @@ Per revealed opponent species, over the source's existing variant list (source o
   carry its own effectiveness, and a strike whose line a variant with fitting rolls could not have printed (a KO censored
   above every roll, say) is refused rather than trusted either way.
 - Off-model safety: a strike that would give every surviving variant 0 is dropped and recorded, so the support never empties.
+  The worlds consumer has the same rule: if every one of the sampler's own survivors has weight 0 (restrict), it draws
+  uniformly over them, today's call, and the world records the off-model draw (its PUBLIC_SET_POSTERIOR row).
+- A hard support of one variant cannot narrow: its strikes are classified but their rolls are not computed (reason
+  'single-variant').
+
+Deliberately stricter than the r5a census (each can only refuse a strike the census admitted, never exclude a variant):
+- a Substitute event in the strike's window refuses it, even with a -damage line on our mon beside it ('hit-substitute');
+- the whole strike is refused when one hard-support variant has no rolls from the core ('core-unsupported:<move>'), where
+  the census gave that variant 0;
+- our hit on their Substitute counts as hitting them for Revenge ('conditional-power:revenge');
+- a window still open at the end of the lines is refused ('window-open'); a prefix ending at a request is a closed boundary;
+- a strike whose effectiveness line a variant with fitting rolls could not have printed is refused
+  ('effectiveness-disagreement');
+- Reflect / Light Screen on our side refuse the strike ('unvalidated:screen'), and the pinch / Flail ambiguity is checked
+  on the hard support, not on the whole universe.
 
 Weights are integers, reduced by their gcd (uniform weights are all 1) and never floats, so every consumer and process gets
 the same bytes. draw() with all-equal weights makes exactly today's sampler call (rng.randrange over the survivors in source
@@ -48,8 +63,9 @@ SAMPLER_DISAGREEMENT = 'PUBLIC_SET_POSTERIOR_SAMPLER_DISAGREEMENT'
 SAMPLER_EMPTY = 'PUBLIC_SET_POSTERIOR_SAMPLER_EMPTY'
 MISSING_SPECIES = 'PUBLIC_SET_POSTERIOR_MISSING_SPECIES'
 DUPLICATE_SPECIES = 'PUBLIC_SET_POSTERIOR_DUPLICATE_SPECIES'
-# The reason of a strike dropped by the off-model rule.
+# The reason of a strike dropped by the off-model rule, and of one whose rolls a single-variant support makes moot.
 OFF_MODEL = 'off-model-drop'
+SINGLE_VARIANT = 'single-variant'
 
 # Showdown protocol lines that carry no game state: wall clock (|t:| is the turn's unix time, from sim/battle.ts; |:| a server
 # room log's; |inactive| / |inactiveoff| the timer) and room transport (chat, join, leave, rename, raw HTML). r4a3's owning
@@ -146,11 +162,14 @@ def posterior(lines: Sequence[str], own_request: Mapping[str, Any] | None, *, so
         for payload in _worlds._canonical_revealed_variant_payloads(belief, set_source=source, format_id=format_id):
             hard[index[payload['variant_id']]] = True
         rows = []
+        single = sum(hard) == 1
         for strike in raw:
             if species_key(strike['attacker']) != key:
                 continue
             reason, counts = strike['reason'], None
-            if reason is None:
+            if reason is None and single:
+                reason = SINGLE_VARIANT
+            elif reason is None:
                 reason, counts = _counts(strike, belief.species, variants, hard, own_team, source=source, dex=dex)
             rows.append((strike, reason, counts))
         out[key] = _encounter(foe, owner, key, tuple(hard), rows, provenance)
@@ -176,13 +195,15 @@ def draw(post: EncounterPosterior, rng: random.Random) -> int:
 
 def restrict(post: EncounterPosterior, indices: Sequence[int]) -> EncounterPosterior:
     """The posterior with zero weight outside `indices` (a sampler's own survivors, which must lie in the hard support: its
-    replay filters only remove variants). Refuses, named, when the survivors leave the hard support or hold no weight."""
+    replay filters only remove variants; else it refuses, named). Off-model safety at the consumer: when the survivors hold
+    no weight, every survivor gets weight 1, so draw() makes today's uniform call over them (the world's PUBLIC_SET_POSTERIOR
+    row records the zero-weight draw)."""
     keep = set(indices)
-    if any(not 0 <= i < len(post.hard) or not post.hard[i] for i in keep):
+    if not keep or any(not 0 <= i < len(post.hard) or not post.hard[i] for i in keep):
         raise ValueError(SAMPLER_DISAGREEMENT)
     weights = tuple(w if i in keep else 0 for i, w in enumerate(post.weights))
     if not any(weights):
-        raise ValueError(SAMPLER_EMPTY)
+        weights = tuple(int(i in keep) for i in range(len(post.weights)))
     if weights == post.weights:
         return post
     return replace(post, weights=weights, support=tuple(w > 0 for w in weights))
@@ -204,6 +225,17 @@ def two_way(posts: Mapping[str, EncounterPosterior], b2: Mapping[str, Iterable[i
             post = EncounterPosterior(seat, key, (), (), (), (), (), '')
         out[key] = replace(post, refusals=post.refusals + (B2_DISAGREEMENT,))
     return out
+
+
+def summary(post: EncounterPosterior) -> dict[str, Any]:
+    """One encounter's diagnostic record (JSON-ready): hard and weighted support sizes, strikes admitted, refused by reason
+    (off-model drops and single-variant strikes among them), and the provenance."""
+    refused: dict[str, int] = {}
+    for strike in post.strikes:
+        if not strike.admitted:
+            refused[strike.reason] = refused.get(strike.reason, 0) + 1
+    return dict(species=post.species, hard=sum(post.hard), weighted=sum(post.support), admitted=sum(s.admitted for s in post.strikes),
+                refused=dict(sorted(refused.items())), off_model_drops=refused.get(OFF_MODEL, 0), provenance=post.provenance)
 
 
 # --- Strikes from the owner's lines (the census's parse; a strike is classified when its window has closed). ---

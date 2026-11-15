@@ -1437,7 +1437,8 @@ def _set_posterior_variant(
 ) -> Mapping[str, Any]:
     """The survivor set_posterior.draw picks over the sampler's own survivors (source order).
 
-    With equal weights on them this is exactly ``variants[rng.randrange(len(variants))]``, today's uniform draw.
+    With equal weights on them this is exactly ``variants[rng.randrange(len(variants))]``, today's uniform draw; so it is
+    when they hold no weight at all (set_posterior.restrict's off-model fallback, recorded by the world's diagnostics).
     """
     from .set_posterior import SAMPLER_DISAGREEMENT, draw, restrict
 

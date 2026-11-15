@@ -3,17 +3,20 @@
 Fixtures (tests/fixtures/set_posterior) are real screen r5a roots: the search request prepare() saw, rebuilt from the owning
 wire (wallslib.Wire(run, ordinal).request(decision)), its prefix sha256, the root's opponent belief hard facts (capture_root's
 belief view), the r5a census's anchors for that decision and a snapshot of this posterior. Edits of their lines cover the
-classes r5a never exercised. Checks: Choice Band collapse and exclusion, a crit, KO censoring, Hidden Power effectiveness,
-every refusal reason, the off-model drop, draw's byte identity with today's uniform call, the two-way check, provenance."""
+classes r5a never exercised. Checks: Choice Band collapse and exclusion, a crit, KO censoring, Hidden Power type settled by
+damage with the effectiveness line as a consistency refusal, every refusal reason, the off-model drop (in the posterior and
+at the sampler), the riskiest false-exclusion paths (a Pursuit intercept, Revenge, a mid-turn replacement), single-variant
+supports, draw's byte identity with today's uniform call, the two-way check and provenance. In depthn-light (no skips)."""
 from dataclasses import replace
 import hashlib
 import json
 from pathlib import Path
 import random
+from types import SimpleNamespace
 import unittest
 
 from _showdown_root import requires_showdown, showdown_root_str
-from pokezero import determinization as D, set_posterior as SP
+from pokezero import determinization as D, set_posterior as SP, tier2
 from pokezero.belief import PlayerBeliefView, RevealedPokemonBelief
 from pokezero.dex import load_showdown_dex_cached, normalize_id
 from pokezero.randbat import load_gen3_randbat_source_cached
@@ -122,6 +125,9 @@ class FixtureAnchors(Base):
                 for c in data['census']['strikes']:
                     key = SP.species_key(c['attacker'])
                     mine = self.strike_at(posts[key], c['line'])
+                    if c['reason'] is None and sum(posts[key].hard) == 1:   # one variant: classified, rolls not computed
+                        self.assertEqual((mine.reason, mine.counts), (SP.SINGLE_VARIANT, None), c)
+                        continue
                     self.assertEqual(mine.reason or None, c['reason'], c)
                     if c['reason'] is None and c['true_match'] is not None:
                         ids = [v.variant_id for v in self.variants(key)]
@@ -170,7 +176,7 @@ class Narrowing(Base):
         self.assertGreater(strike.counts[true], 2)   # censored: every roll at or above our HP fits, not one exact value
         self.assertEqual(strike.observed, census['hp_before'])
 
-    def test_hidden_power_type_is_settled_by_damage_and_its_effectiveness_line(self):
+    def test_damage_settles_hidden_power_type_and_the_effectiveness_line_is_only_a_consistency_refusal(self):
         for name, observed in (('hp_effectiveness', 'supereffective'), ('hp_neutral_unown', None)):
             with self.subTest(fixture=name):
                 data = fixture(name)
@@ -190,6 +196,16 @@ class Narrowing(Base):
                 self.assertTrue(all(line_of(i) == observed for i in self.alive(post)))
                 cannot = [i for i in self.hard(post) if line_of(i) != observed]
                 self.assertTrue(cannot);self.assertFalse(set(cannot) & set(self.alive(post)))
+                # The line itself excludes nothing: rewrite it and the survivors whose rolls fit could not have printed it,
+                # so the strike is refused (L = 1) and the whole hard support comes back.
+                lines = list(data['request']['lines'])
+                if observed is None:
+                    lines.insert(strike.line + 1, '|-supereffective|' + lines[strike.line].split('|')[4])
+                else:
+                    lines = [x for x in lines if not x.startswith('|-supereffective|')]
+                refused = self.post(data, lines)[key]
+                self.assertEqual(self.strike_at(refused, strike.line).reason, 'effectiveness-disagreement')
+                self.assertEqual(self.alive(refused), self.hard(refused))
 
     def test_an_effectiveness_line_a_fitting_variant_cannot_print_refuses_the_strike(self):
         # The KO is censored above every Hidden Power type's rolls on four survivors; drop its -supereffective line and a
@@ -209,7 +225,8 @@ class Refusals(Edits):
     def test_the_census_refusals_on_real_roots(self):
         expected = dict(refusal_hit_substitute='hit-substitute', refusal_fixed_damage='fixed-damage', refusal_called='called',
                         refusal_trace='ability-overridden', refusal_type_change='type-change', refusal_transform='transform',
-                        refusal_item_changed='item-changed', refusal_ambiguous_band='ambiguous-band', refusal_endure='endure-or-focusband',
+                        refusal_item_changed='item-changed', refusal_ambiguous_pinch='ambiguous-band', refusal_ambiguous_flail='ambiguous-band',
+                        refusal_endure='endure-or-focusband',
                         refusal_multi_hit='multi-hit')
         for name, reason in expected.items():
             with self.subTest(fixture=name):
@@ -310,6 +327,75 @@ class Refusals(Edits):
         self.assertEqual({post.weights[i] for i in self.hard(post)}, {1})
 
 
+class RiskyPaths(Edits):
+    """The paths most likely to exclude a true set by mistake; each keeps it."""
+
+    def true_index(self, data, key):
+        return [v.variant_id for v in self.variants(key)].index(data['census']['species'][key]['true_variant'])
+
+    def test_a_pursuit_intercept_on_a_switch_doubles_and_keeps_the_true_set(self):
+        data = fixture('pursuit_switch')   # r5a: Houndoom's Pursuit on our switching Alakazam, two hard variants
+        census = next(c for c in data['census']['strikes'] if c['move'] == 'pursuit')
+        lines = list(data['request']['lines'])
+        line = census['line']
+        self.assertTrue(lines[line - 1].endswith('|move: Pursuit') and lines[line].endswith('|[from] Pursuit'))
+        true = self.true_index(data, 'houndoom')
+        strike = self.strike_at(self.post(data)['houndoom'], line)
+        self.assertTrue(strike.admitted);self.assertEqual(strike.counts[true], census['true_match'])
+        # The -activate lookback alone marks the intercept: the same strike without the move line's [from] Pursuit.
+        bare = list(lines);bare[line] = lines[line].replace('|[from] Pursuit', '')
+        self.assertEqual(self.strike_at(self.post(data, bare)['houndoom'], line), strike)
+        # Without the intercept (base power 40) the damage fits no survivor: dropped, and the true set kept.
+        plain = bare[:line - 1] + bare[line:]
+        dropped = self.post(data, plain)['houndoom']
+        self.assertEqual(self.strike_at(dropped, line - 1).reason, SP.OFF_MODEL)
+        self.assertGreater(dropped.weights[true], 0)
+
+    def test_revenge_is_in_no_gen3_set_so_an_unhit_revenge_is_refused_and_keeps_the_true_set(self):
+        self.assertFalse(any('revenge' in {normalize_id(m) for m in v.moves} for u in self.src.universes.values() for v in u.variants))
+        strike, post = self.reason(self.moved('Revenge'))
+        self.assertEqual(strike.reason, 'core-unsupported:revenge')
+        self.assertGreater(post.weights[self.true_index(self.data, 'snorlax')], 0)
+        self.assertEqual(self.alive(post), self.hard(post))
+
+    def test_a_strike_on_a_mid_turn_replacement_after_a_faint_reads_the_replacement(self):
+        # Gen 3 sends a fainted mon's replacement in at once, mid-turn. Our active explodes and faints, another member comes in,
+        # and the Snorlax's Body Slam then hits it: our HP, maximum and typing must be the replacement's.
+        request = next(json.loads(x[len('|request|'):]) for x in self.lines if x.startswith('|request|'))
+        team = tier2.own_team_from_request(request)
+        active = SP.species_key(self.me_ident.split(': ', 1)[1])
+        mon = next(m for m in team if SP.species_key(m.species) != active and 'hp' in m.stats)
+        ident = f'{self.me}a: {mon.species}'
+        true = self.true_index(self.data, 'snorlax')
+        attacker = SP._variant_participant(self.src, 'snorlax', self.variants('snorlax')[true])
+        types = tuple(self.dex.species_info(SP.species_key(mon.species)).types)
+        defender = tier2.StrikeParticipant(species_key=SP.species_key(mon.species), level=mon.level, stats=dict(mon.stats),
+                                           ability=normalize_id(mon.ability or ''), item=normalize_id(mon.item or ''), moves=mon.moves)
+        rolls = tier2._strike_damage(attacker=attacker, defender=defender, defender_types=types, observed_move='bodyslam',
+            token=SimpleNamespace(crit=False, weather='', pursuit_intercept=False), context=tier2.StrikeContext('Snorlax', mon.species),
+            dex=self.dex, require_move_in_set=True, pinch_ambiguity_band=0.04, split_choice_band_baseline=False).rolls
+        top = mon.stats['hp'];damage = rolls[8];self.assertLess(damage, top)
+        lines, at = self.inserted(f'|move|{self.me_ident}|Explosion|{self.foe_ident}', f'|-damage|{self.foe_ident}|40/100',
+                                  f'|faint|{self.me_ident}', '|request|{"wait":true}', f'|switch|{ident}|{mon.species}, L{mon.level}|{top}/{top}')
+        lines[at] = f'|move|{self.foe_ident}|Body Slam|{ident}'
+        hit = next(i for i in range(at + 1, len(lines)) if lines[i].startswith('|-damage|' + self.me_ident))
+        lines[hit] = f'|-damage|{ident}|{top - damage}/{top}'
+        strike, post = self.reason(lines, at)
+        self.assertTrue(strike.admitted, strike.reason);self.assertEqual(strike.observed, damage)
+        self.assertGreater(strike.counts[true], 0);self.assertGreater(post.weights[true], 0)
+
+    def test_a_single_variant_support_classifies_its_strikes_without_rolls(self):
+        posts = self.post(fixture('refusal_item_changed'))
+        marowak = posts['marowak']
+        self.assertEqual(sum(marowak.hard), 1)
+        self.assertEqual([(s.reason, s.counts) for s in marowak.strikes], [(SP.SINGLE_VARIANT, None)] * 2)
+        self.assertEqual(self.alive(marowak), self.hard(marowak))
+        self.assertEqual(SP.summary(posts['sableye']), dict(species='sableye', hard=1, weighted=1, admitted=0,
+            refused={'fixed-damage': 1, SP.SINGLE_VARIANT: 1}, off_model_drops=0, provenance=posts['sableye'].provenance))
+        self.assertEqual({k: v for k, v in SP.summary(self.post(fixture('cb_collapse'))['rhydon']).items() if k != 'provenance'},
+                         dict(species='rhydon', hard=4, weighted=1, admitted=1, refused={}, off_model_drops=0))
+
+
 class Draw(Base):
     def uniform(self, hard, n=12, weight=1):
         flags = tuple(i in hard for i in range(n))
@@ -338,7 +424,28 @@ class Draw(Base):
         self.assertIs(SP.restrict(post, [1, 3, 4]), post)
         self.assertEqual(SP.restrict(post, [3, 4]).weights[1], 0)
         with self.assertRaisesRegex(ValueError, SP.SAMPLER_DISAGREEMENT):SP.restrict(post, [1, 2])
-        with self.assertRaisesRegex(ValueError, SP.SAMPLER_EMPTY):SP.restrict(replace(post, weights=(0, 1) + (0,) * 10), [3])
+        with self.assertRaisesRegex(ValueError, SP.SAMPLER_DISAGREEMENT):SP.restrict(post, [])
+        # Off-model at the consumer: survivors holding no weight are drawn uniformly, today's call over them.
+        fallback = SP.restrict(replace(post, weights=(0, 7) + (0,) * 10), [3, 4])
+        self.assertEqual(fallback.weights, tuple(int(i in (3, 4)) for i in range(12)))
+        for seed in range(50):
+            old, new = random.Random(seed), random.Random(seed)
+            self.assertEqual(SP.draw(fallback, new), [3, 4][old.randrange(2)]);self.assertEqual(new.getstate(), old.getstate())
+
+    def test_the_sampler_draws_its_own_zero_weight_survivors_uniformly(self):
+        # A replay filter (move slots, public max HP) that leaves only damage-excluded variants: today's uniform call over
+        # those survivors, never a refusal. cb_collapse's Rhydon holds weight on its Choice Band variant alone.
+        data = fixture('cb_collapse')
+        belief, = beliefs(data)
+        post = self.post(data)['rhydon']
+        payloads = D._canonical_revealed_variant_payloads(belief, set_source=self.src, format_id=data['format_id'])
+        ids = [v.variant_id for v in self.variants('rhydon')]
+        excluded = [p for p in payloads if post.weights[ids.index(p['variant_id'])] == 0]
+        self.assertGreater(len(excluded), 1)
+        for seed in range(50):
+            old, new = random.Random(seed), random.Random(seed)
+            drawn = D._set_posterior_variant(post, excluded, belief, set_source=self.src, rng=new)
+            self.assertEqual(drawn, excluded[old.randrange(len(excluded))]);self.assertEqual(new.getstate(), old.getstate())
 
     def test_the_worlds_sampler_is_byte_identical_under_uniform_weights_and_draws_choice_band_when_settled(self):
         data = fixture('refusal_trace')   # twelve Weezing survivors, its one strike refused: uniform

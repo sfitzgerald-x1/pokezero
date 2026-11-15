@@ -16,6 +16,7 @@ import jax.numpy as j
 import numpy as np
 
 from pokezero.dex import normalize_id
+from pokezero.tier2 import canonical_move_id
 from pokezero.engine_world import battle_spec_from_payload,EngineWorldUnsupported,unpack_team,_engine_species_id
 from pokezero.env import BattleStartOverride
 from pokezero.v5_teacher_public_root import PublicRoot,capture_root
@@ -37,11 +38,18 @@ SCHEMA='pokezero.phase-d.protocol-materialization.v1'
 HOST_WORLDS=True
 
 
-# Each revealed foe's set is drawn from set_posterior (its hard facts, today's reveals, times the damage likelihood of its
-# public strikes on our active) instead of uniformly over the hard-fact survivors, and that hard support is checked against
-# B2's public posterior in both directions (_check_set_posterior). With equal weights the draw is today's call, so the worlds
-# of roots without damage narrowing are byte-identical. False restores today's uniform draw and one-way check exactly.
-SET_POSTERIOR=True
+# set_posterior on the protocol route, three switches:
+# - SET_POSTERIOR_DRAW: each revealed foe's set is drawn from set_posterior (its hard facts, today's reveals, times the damage
+#   likelihood of its public strikes on our active) instead of uniformly over the hard-fact survivors. With equal weights the
+#   draw is today's call, so the worlds of roots without damage narrowing are byte-identical. False: today's uniform draw.
+# - SET_POSTERIOR_CHECK: the hard support is checked against B2's public posterior in both directions (_check_set_posterior),
+#   beside today's one-way sampled-foe check. False: the one-way check alone.
+# - SET_POSTERIOR_CHECK_FATAL: a disagreement refuses the root's worlds (PUBLIC_SET_POSTERIOR_B2_DISAGREEMENT); False writes
+#   the same row, non-fatal, and the world goes on.
+# Every world either switch touches carries a non-fatal PUBLIC_SET_POSTERIOR row (_set_posterior_row).
+SET_POSTERIOR_DRAW=True
+SET_POSTERIOR_CHECK=True
+SET_POSTERIOR_CHECK_FATAL=True
 
 
 def _device(state):
@@ -451,17 +459,56 @@ def _set_posteriors(inputs,root):
 def _check_set_posterior(inputs,root,rows,diagnostics):
     """The reverse of the sampled-foe check, at root level: set_posterior's hard support must equal B2's public posterior
     (_revealed's eligible variants, `rows`) for every revealed foe species, as full variant identity (the source index, so
-    Hidden Power type too), in both directions. Else every world of the root refuses PUBLIC_SET_POSTERIOR_B2_DISAGREEMENT, with
-    the species and the variants only one side holds. Damage-excluded variants are a strict subset by design, so the hard
-    support is compared, never the weighted one."""
+    Hidden Power type too), in both directions. A disagreement writes a TRIGGERED row with the species and the variants only
+    one side holds; with SET_POSTERIOR_CHECK_FATAL every world of the root then refuses PUBLIC_SET_POSTERIOR_B2_DISAGREEMENT.
+    Damage-excluded variants are a strict subset by design, so the hard support is compared, never the weighted one. Returns
+    whether the two agree (the caller refuses)."""
     b2={set_posterior.species_key(name):tuple(index for index,_ in candidates) for slot,universe,candidates,gender,name in rows}
     posts=_set_posteriors(inputs,root);checked=set_posterior.two_way(posts,b2)
     bad=[key for key,post in checked.items() if post.refusals]
     if bad:
         ours=lambda key:{i for i,h in enumerate(posts[key].hard) if h} if key in posts else set()
-        diagnostics.append(dict(kind=set_posterior.B2_DISAGREEMENT,status='TRIGGERED',fatal=True,species=[dict(species=key,
+        diagnostics.append(dict(kind=set_posterior.B2_DISAGREEMENT,status='TRIGGERED',fatal=SET_POSTERIOR_CHECK_FATAL,species=[dict(species=key,
             set_posterior_only=sorted(ours(key)-set(b2.get(key,()))),b2_only=sorted(set(b2.get(key,()))-ours(key))) for key in bad]))
-        raise ValueError(set_posterior.B2_DISAGREEMENT)
+    return not bad
+
+
+def _drawn_indices(source,mon):
+    """The source indices of the variants a sampled foe holds (its level, moves, ability and item): one, or several equal
+    variants of two roles; () when the start cannot be joined to the source."""
+    try:
+        moves=sorted(canonical_move_id(x) for x in mon.moves);universe=source.original.universe_for(mon.species)
+        return tuple(i for i,v in enumerate(universe.variants) if v.level==mon.level and sorted(canonical_move_id(x) for x in v.moves)==moves
+            and normalize_id(v.ability or '')==normalize_id(mon.ability or '') and normalize_id(v.item or '')==normalize_id(mon.item or ''))
+    except (AttributeError,KeyError,TypeError,ValueError):return ()
+
+
+def _set_posterior_row(inputs,root,rows,foes,diagnostics):
+    """The non-fatal PUBLIC_SET_POSTERIOR row of one world, for the replay: per revealed foe species set_posterior's hard and
+    weighted support sizes, strikes admitted and refused by reason (off-model drops among them), the variants this world
+    drew and their weight (0, a zero-weight draw: restrict's off-model fallback under the weighted draw, or a damage-excluded
+    set under today's uniform draw; TRIGGERED, still non-fatal), and the root's provenance; then the
+    two-way check when SET_POSTERIOR_CHECK. A posterior the root cannot give (no belief view) is NOT_EVALUABLE here unless
+    the fatal check needs it."""
+    try:posts=_set_posteriors(inputs,root)
+    except (ValueError,KeyError,IndexError,TypeError,AttributeError) as error:
+        diagnostics.append(dict(kind='PUBLIC_SET_POSTERIOR',status='NOT_EVALUABLE',fatal=False,reason=str(error)))
+        if SET_POSTERIOR_CHECK and SET_POSTERIOR_CHECK_FATAL:raise
+        return
+    species=[]
+    for key,post in posts.items():
+        row=set_posterior.summary(post);row.pop('provenance')
+        drawn=next((_drawn_indices(inputs.source,mon) for mon in foes if set_posterior.species_key(getattr(mon,'species',''))==key),None)
+        row.update(drawn=None if drawn is None else list(drawn),drawn_weight=None if not drawn else max(post.weights[i] for i in drawn))
+        species.append(row)
+    zero=[row['species'] for row in species if row['drawn_weight']==0]
+    record=dict(kind='PUBLIC_SET_POSTERIOR',status='TRIGGERED' if zero else 'CLEAR',fatal=False,
+        drawn_by='set_posterior' if SET_POSTERIOR_DRAW else 'uniform',zero_weight_draws=zero,
+        provenance=next((post.provenance for post in posts.values()),None),species=species,b2_agrees=None)
+    diagnostics.append(record)
+    if SET_POSTERIOR_CHECK:
+        record['b2_agrees']=_check_set_posterior(inputs,root,rows,diagnostics)
+        if not record['b2_agrees'] and SET_POSTERIOR_CHECK_FATAL:raise ValueError(set_posterior.B2_DISAGREEMENT)
 
 
 def materialize_protocol(root,start,*,inputs,seed,key=None):
@@ -485,9 +532,10 @@ def materialize_protocol(root,start,*,inputs,seed,key=None):
         projected,yawns=_defer_yawn(projected,inputs.lines)
         origins=_once(inputs,root,'origins',lambda:_sleep_origins(inputs.lines))
         rows=_once(inputs,root,'revealed',lambda:tuple(public_worlds._revealed(detached,inputs.source)),shared=True)
-        if SET_POSTERIOR:_check_set_posterior(inputs,root,rows,diagnostics)
+        foes=unpack_team(start.player_teams[f'p{foe+1}'])
+        if SET_POSTERIOR_DRAW or SET_POSTERIOR_CHECK:_set_posterior_row(inputs,root,rows,foes,diagnostics)
         revealed={normalize_id(name):candidates for slot,universe,candidates,gender,name in rows}
-        for mon in unpack_team(start.player_teams[f'p{foe+1}']):
+        for mon in foes:
             candidates=revealed.get(normalize_id(mon.species))
             if candidates is None:continue
             move_key=lambda xs:tuple(sorted(live._source_move(x)for x in xs))
@@ -641,7 +689,7 @@ def sample(root,detached,*,lines,catalog,source,metadata,config,battle_id,seed,c
         try:
             start,reason=_gen3_randbat_belief_start_override_result(context=root.context,set_source=source.original,
                 rng=random.Random(world_seed),team_size=6,canonicalize_revealed_variants=True,
-                **(dict(set_posteriors=lambda:_set_posteriors(inputs,root)) if SET_POSTERIOR else {}))
+                **(dict(set_posteriors=lambda:_set_posteriors(inputs,root)) if SET_POSTERIOR_DRAW else {}))
             if start is None:
                 unknown=[];_downstream_unknowns(unknown,'Original public sampler unavailable: '+str(reason))
                 made=ProtocolWorld(None,None,(reason or 'public-sampler-unavailable',),mapper_diagnostics=tuple(unknown))

@@ -338,25 +338,14 @@
    "provenance": "fcbf1776ba48974925465c7ae325780f51d98f5131679fc0ad9062afcf4c8a01",
    "strikes": [
     {
-     "admitted": true,
-     "counts": [
-      1,
-      0,
-      0,
-      0,
-      0,
-      0,
-      0,
-      0,
-      0,
-      0
-     ],
+     "admitted": false,
+     "counts": null,
      "crit": false,
      "ko": false,
      "line": 46,
      "move": "hiddenpower",
      "observed": 89,
-     "reason": ""
+     "reason": "single-variant"
     }
    ],
    "weights": [
@@ -379,30 +368,24 @@
    "provenance": "fcbf1776ba48974925465c7ae325780f51d98f5131679fc0ad9062afcf4c8a01",
    "strikes": [
     {
-     "admitted": true,
-     "counts": [
-      9,
-      0
-     ],
+     "admitted": false,
+     "counts": null,
      "crit": false,
      "ko": true,
      "line": 85,
      "move": "earthquake",
      "observed": 167,
-     "reason": ""
+     "reason": "single-variant"
     },
     {
-     "admitted": true,
-     "counts": [
-      1,
-      0
-     ],
+     "admitted": false,
+     "counts": null,
      "crit": false,
      "ko": false,
      "line": 101,
      "move": "earthquake",
      "observed": 187,
-     "reason": ""
+     "reason": "single-variant"
     }
    ],
    "weights": [
@@ -417,17 +400,14 @@
    "provenance": "fcbf1776ba48974925465c7ae325780f51d98f5131679fc0ad9062afcf4c8a01",
    "strikes": [
     {
-     "admitted": true,
-     "counts": [
-      5,
-      0
-     ],
+     "admitted": false,
+     "counts": null,
      "crit": false,
      "ko": false,
      "line": 119,
      "move": "knockoff",
      "observed": 18,
-     "reason": ""
+     "reason": "single-variant"
     },
     {
      "admitted": false,

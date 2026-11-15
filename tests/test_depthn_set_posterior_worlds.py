@@ -1,7 +1,8 @@
 """set_posterior in the protocol world route, on real screen r5a roots (tests/fixtures/set_posterior): capture_root's own
 belief view gives the fixture's posterior; the start sampler is byte-identical under uniform weights and draws Choice Band
 when a strike settles it; phase_d_protocol_world.sample hands the root's posteriors to the sampler (and the switch restores
-today's call); materialize_protocol refuses a root whose hard support differs from B2's, in either direction, by name."""
+today's call); materialize_protocol refuses a root whose hard support differs from B2's, in either direction, by name (or,
+non-fatal, records it), and every world carries a non-fatal PUBLIC_SET_POSTERIOR row. Light (no engine compile): depthn-light."""
 from contextlib import ExitStack
 from dataclasses import replace
 import random
@@ -10,7 +11,7 @@ import unittest
 from unittest.mock import patch
 
 from _showdown_root import requires_showdown, showdown_root_str
-from test_set_posterior import FIXTURES, beliefs, fixture
+from test_depthn_set_posterior import FIXTURES, beliefs, fixture
 from gpu_engine import phase_d_protocol_world as pw
 from pokezero import determinization as D, set_posterior as SP, v5_contract
 from pokezero.category_vocab import build_category_vocabulary
@@ -114,7 +115,7 @@ class ProtocolRoute(unittest.TestCase):
             today.add(item(old))
         self.assertGreater(len(today), 1)
 
-    def test_sample_hands_the_roots_posteriors_to_the_sampler_and_the_switch_restores_today(self):
+    def test_sample_hands_the_roots_posteriors_to_the_sampler_and_the_draw_switch_restores_today(self):
         data, root = self.root('cb_collapse')
         detached = NS(address=root.address, source_binding_sha256='bound')
         calls = []
@@ -125,7 +126,7 @@ class ProtocolRoute(unittest.TestCase):
         for switch in (True, False):
             calls.clear()
             with ExitStack() as stack:
-                stack.enter_context(patch.object(pw, 'SET_POSTERIOR', switch))
+                stack.enter_context(patch.object(pw, 'SET_POSTERIOR_DRAW', switch))
                 stack.enter_context(patch.object(pw, '_gen3_randbat_belief_start_override_result', side_effect=sampler))
                 stack.enter_context(patch.object(pw, '_carried_root', return_value=detached))
                 made = pw.sample(root, detached, lines=inputs.lines, catalog=inputs.catalog, source=inputs.source, metadata={}, config=None,
@@ -139,18 +140,26 @@ class ProtocolRoute(unittest.TestCase):
             else:
                 self.assertTrue(all('set_posteriors' not in call for call in calls))
 
-    def materialize(self, name, rows_of):
-        """materialize_protocol on a real root and its posterior-drawn world 0, with B2's posterior rows rows_of(posts) and the
-        own packet (Detached: 'reached-after-posterior-checks' once both posterior checks passed); the tail facts, removals and
-        preflight are patched clear."""
+    def posts(self, data):
+        return SP.posterior(data['request']['lines'], None, source=self.src, owner=data['owner'], beliefs=beliefs(data),
+                            format_id=data['format_id'], dex=self.dex, binding='bound')
+
+    def world_start(self, name, index, posts):
+        data, root = self.root(name)
+        seed = pw.world_seeds(root, NS(address=root.address), SP.game_lines_sha256(data['request']['lines']), SEED, index)[0]
+        (start, reason), _ = self.start(root, seed, set_posteriors=posts)
+        self.assertIsNotNone(start, reason)
+        return start
+
+    def materialize(self, name, rows_of, start=None):
+        """materialize_protocol on a real root and a start (default: its posterior-drawn world 0), with B2's posterior rows
+        rows_of(posts) and the own packet (Detached: 'reached-after-posterior-checks' once both posterior checks passed); the
+        tail facts, removals and preflight are patched clear."""
         data, root = self.root(name)
         inputs = self.inputs(data)
         inputs = pw.ProtocolInputs(Detached(root.address), inputs.lines, inputs.catalog, {}, inputs.source)
-        posts = SP.posterior(inputs.lines, None, source=self.src, owner=data['owner'], beliefs=beliefs(data), format_id=data['format_id'],
-                             dex=self.dex, binding='bound')
-        (start, _), _ = self.start(root, pw.world_seeds(root, NS(address=root.address), SP.game_lines_sha256(inputs.lines), SEED, 0)[0],
-                                   set_posteriors=posts)
-        self.assertIsNotNone(start)
+        posts = self.posts(data)
+        start = self.world_start(name, 0, posts) if start is None else start
         rows = rows_of(posts)
         with ExitStack() as stack:
             stack.enter_context(patch.object(pw.tail, 'facts', return_value=dict(fresh_substitutes={}, replacement=None)))
@@ -160,30 +169,76 @@ class ProtocolRoute(unittest.TestCase):
             stack.enter_context(patch.object(pw.public_worlds, '_revealed', return_value=rows))
             return pw.materialize_protocol(root, start, inputs=inputs, seed=1), posts
 
+    def rows(self, posts, change=None):
+        out = []
+        for slot, (key, post) in enumerate(posts.items()):
+            universe = self.src.universe_for(key)
+            indices = [i for i, h in enumerate(post.hard) if h]
+            if key == change:indices = indices[1:]
+            out.append((slot, universe, tuple((i, universe.variants[i]) for i in indices), None, universe.species))
+        return tuple(out)
+
+    @staticmethod
+    def row(made, kind):
+        found = [x for x in made.mapper_diagnostics if x['kind'] == kind]
+        return found[0] if len(found) == 1 else found
+
     def test_materialize_refuses_a_root_whose_hard_support_differs_from_b2s(self):
         name = 'refusal_item_changed'   # five revealed foes, one with eight hard variants
-        def rows(posts, change=None):
-            out = []
-            for slot, (key, post) in enumerate(posts.items()):
-                universe = self.src.universe_for(key)
-                indices = [i for i, h in enumerate(post.hard) if h]
-                if key == change:indices = indices[1:]
-                out.append((slot, universe, tuple((i, universe.variants[i]) for i in indices), None, universe.species))
-            return tuple(out)
-        made, _ = self.materialize(name, rows)
+        made, _ = self.materialize(name, self.rows)
         self.assertEqual(made.refusals, ('reached-after-posterior-checks',))
-        made, posts = self.materialize(name, lambda posts: rows(posts, 'golduck'))
+        self.assertTrue(self.row(made, 'PUBLIC_SET_POSTERIOR')['b2_agrees']);self.assertEqual(self.row(made, SP.B2_DISAGREEMENT), [])
+        made, posts = self.materialize(name, lambda posts: self.rows(posts, 'golduck'))
         self.assertEqual(made.refusals, (SP.B2_DISAGREEMENT,))
-        row = next(x for x in made.mapper_diagnostics if x['kind'] == SP.B2_DISAGREEMENT)
+        row = self.row(made, SP.B2_DISAGREEMENT)
         first = [i for i, h in enumerate(posts['golduck'].hard) if h][0]
-        self.assertEqual((row['status'], row['species']), ('TRIGGERED', [dict(species='golduck', set_posterior_only=[first], b2_only=[])]))
+        self.assertEqual((row['status'], row['fatal'], row['species']),
+                         ('TRIGGERED', True, [dict(species='golduck', set_posterior_only=[first], b2_only=[])]))
+        self.assertIs(self.row(made, 'PUBLIC_SET_POSTERIOR')['b2_agrees'], False)
         # A species set_posterior holds and B2 does not: refused too.
-        made, _ = self.materialize(name, lambda posts: rows(posts)[1:])
+        made, _ = self.materialize(name, lambda posts: self.rows(posts)[1:])
         self.assertEqual(made.refusals, (SP.B2_DISAGREEMENT,))
-        # The switch off: today's one-way check only, which a species B2 lacks passes.
-        with patch.object(pw, 'SET_POSTERIOR', False):
-            made, _ = self.materialize(name, lambda posts: rows(posts)[1:])
+        # Non-fatal: the same TRIGGERED row, fatal False, and the world goes on (to today's one-way check, which a species B2
+        # lacks passes).
+        with patch.object(pw, 'SET_POSTERIOR_CHECK_FATAL', False):
+            made, posts = self.materialize(name, lambda posts: self.rows(posts)[1:])
         self.assertEqual(made.refusals, ('reached-after-posterior-checks',))
+        first = next(iter(posts))
+        self.assertEqual(self.row(made, SP.B2_DISAGREEMENT)['species'],
+                         [dict(species=first, set_posterior_only=[i for i, h in enumerate(posts[first].hard) if h], b2_only=[])])
+        self.assertEqual((self.row(made, SP.B2_DISAGREEMENT)['fatal'], self.row(made, 'PUBLIC_SET_POSTERIOR')['b2_agrees']), (False, False))
+        # The check off: today's one-way check only, which a species B2 lacks passes; the diagnostic row stays, unchecked.
+        with patch.object(pw, 'SET_POSTERIOR_CHECK', False):
+            made, _ = self.materialize(name, lambda posts: self.rows(posts)[1:])
+        self.assertEqual(made.refusals, ('reached-after-posterior-checks',))
+        self.assertEqual(self.row(made, SP.B2_DISAGREEMENT), []);self.assertIsNone(self.row(made, 'PUBLIC_SET_POSTERIOR')['b2_agrees'])
+        # Both off: no set_posterior row at all.
+        with patch.object(pw, 'SET_POSTERIOR_CHECK', False), patch.object(pw, 'SET_POSTERIOR_DRAW', False):
+            made, _ = self.materialize(name, lambda posts: self.rows(posts)[1:])
+        self.assertEqual(self.row(made, 'PUBLIC_SET_POSTERIOR'), [])
+
+    def test_every_world_carries_a_non_fatal_set_posterior_row(self):
+        data, root = self.root('cb_collapse')
+        posts = self.posts(data)
+        made, _ = self.materialize('cb_collapse', self.rows)
+        row = self.row(made, 'PUBLIC_SET_POSTERIOR')
+        cb = next(i for i, w in enumerate(posts['rhydon'].weights) if w)
+        self.assertEqual({k: row[k] for k in ('status', 'fatal', 'drawn_by', 'zero_weight_draws', 'provenance', 'b2_agrees')},
+                         dict(status='CLEAR', fatal=False, drawn_by='set_posterior', zero_weight_draws=[], provenance=posts['rhydon'].provenance,
+                              b2_agrees=True))
+        self.assertEqual(row['species'], [dict(species='rhydon', hard=4, weighted=1, admitted=1, refused={}, off_model_drops=0,
+                                               drawn=[cb], drawn_weight=1)])
+        # A world today's uniform draw gave a damage-excluded Rhydon: the row names the zero-weight draw, still non-fatal.
+        uniform = {k: replace(p, weights=tuple(int(h) for h in p.hard), support=p.hard) for k, p in posts.items()}
+        start = next(start for start in (self.world_start('cb_collapse', i, uniform) for i in range(16))
+                     if next(normalize_id(m.item or '') for m in unpack_team(start.player_teams['p1' if data['owner'] == 'p2' else 'p2'])
+                             if normalize_id(m.species) == 'rhydon') != 'choiceband')
+        with patch.object(pw, 'SET_POSTERIOR_DRAW', False):
+            made, _ = self.materialize('cb_collapse', self.rows, start=start)
+        row = self.row(made, 'PUBLIC_SET_POSTERIOR')
+        self.assertEqual(made.refusals, ('reached-after-posterior-checks',))
+        self.assertEqual((row['status'], row['fatal'], row['drawn_by'], row['zero_weight_draws'], row['species'][0]['drawn_weight']),
+                         ('TRIGGERED', False, 'uniform', ['rhydon'], 0))
 
 
 if __name__ == '__main__':
