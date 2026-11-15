@@ -12,5 +12,6 @@ to 13f76e5e. M2's R2 (the older residual handlers traced only at their reachable
 Encore stale-move clear to 7c984fe6.
 Fidelity tier D (Wonder Guard, the pinch abilities, Poison Point / Flame Body / Effect Spore) moved it to d880714c, and its
 Pursuit-intercept device reveals to c471195a.
+The damage modifiers (Silk Scarf, Twisted Spoon, Marvel Scale and Gen 3 Plus/Minus) moved it to 61b00f72.
 """
-CURRENT_TRANSITION = 'c471195a14db96b36eba226e4a0929faf8b86e7f'
+CURRENT_TRANSITION = '61b00f72f427000e87625add8050e9ba88aec202'
