@@ -169,7 +169,8 @@ class WrappedStartupVocabulary(unittest.TestCase):
             self.assertEqual(config.feature_masks.opponent_tendency_stats_block,dict(contract.feature_masks)['stats_block'])
             compiled_vocab=compile_encoder.call_args.args[2]
             self.assertIs(compiled_vocab,config.category_vocab)
-            self.assertEqual(compile_encoder.call_args.kwargs['feature_masks'],dict(contract.feature_masks))
+            # The contract's declared masks (ActorContract.encoder_masks: feature_masks plus self_moves, declared).
+            self.assertEqual(compile_encoder.call_args.kwargs['feature_masks'],dict(contract.feature_masks,self_moves=contract.self_moves))
             self.assertEqual(compile_source.call_args.args,(source,metadata))
             self.assertEqual(compile_source.call_args.kwargs,dict(expected_source_hash=contract.belief_set_source_hash,
                 expected_source_rows_sha256='c'*64))

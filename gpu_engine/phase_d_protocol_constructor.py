@@ -72,6 +72,7 @@ class ProtocolConstructor:
             public=self._capture(key,address,request,lines,owner)
             packet=_packet(request['own_request_line'],request['owner'])
             adapter.feed(tuple(x for x in lines[len(old):]if not x.startswith('|request|')))
+            adapter.own_lines=lines   # V2 self_moves: B2's own moves/PP read this root's literal history (from_b2 and the mask encode)
             if not self.saved_root_admission:self.sessions[key]=(adapter,lines)
             facts=protocol.tail.facts(public,packet,lines)
             detached=worlds.from_b2(adapter,packet,self.source,self.metadata,address=public.address,defer_sleep=True,protocol_facts=facts)
@@ -174,10 +175,10 @@ def load_inputs(args):
     metadata=read_bound(args.metadata,args.expected_metadata_sha256)
     source=load_gen3_randbat_source_cached(args.showdown_root)
     catalog=v4_encoder.compile_encoder(public_belief.compile_source(source),load_showdown_dex_cached(args.showdown_root),
-        vocab,checkpoint_sha256=contract.checkpoint_sha256,feature_masks=dict(contract.feature_masks))
+        vocab,checkpoint_sha256=contract.checkpoint_sha256,feature_masks=contract.encoder_masks())
     bound=device_public_worlds.compile_source(source,metadata,expected_source_hash=contract.belief_set_source_hash,
         expected_source_rows_sha256=v5_contract.source_variant_census(source)['source_rows_sha256'])
-    masks=dict(contract.feature_masks);masks['opponent_tendency_stats_block']=masks.pop('stats_block')
+    masks=contract.encoder_masks();masks['opponent_tendency_stats_block']=masks.pop('stats_block')
     config=LocalShowdownConfig(showdown_root=args.showdown_root,node_binary=args.node_binary,observation_spec=v5_contract.V4_SPEC,
         category_vocab=vocab,feature_masks=ObservationFeatureMasks(**masks),set_belief_source=True)
     return catalog,bound,metadata,config
