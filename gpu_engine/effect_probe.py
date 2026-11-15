@@ -4,7 +4,7 @@ A scenario (JSON, schema SCENARIO_SCHEMA) names two authored teams, a per-reques
 action script and the outcome axes of one effect. The probe takes the Cartesian
 product of the axes; each case is one lane of the JAX engine and one Showdown
 f76228a1 battle (gpu_engine/effect_probe.cjs). Every request step sends the
-same semantic chance tape (pokezero.gpu_chance_tape.v2) to both engines, then
+same semantic chance tape (pokezero.gpu_chance_tape.v3) to both engines, then
 compares the post-step states on the fields of the fidelity-patch design 5.1.
 Fields whose engine leaf does not exist yet (perish_counter and so on) are
 always compared, against the engine's neutral value (0, -1 or False), so a
@@ -44,7 +44,7 @@ import numpy as np
 ROOT = Path(__file__).resolve().parents[1]
 SCENARIO_SCHEMA = 'pokezero.effect_probe.scenario.v1'
 RESULT_SCHEMA = 'pokezero.effect_probe.result.v1'
-TAPE_SCHEMA = 'pokezero.gpu_chance_tape.v2'
+TAPE_SCHEMA = 'pokezero.gpu_chance_tape.v3'
 SLEEP_CLAUSE_FORMAT = 'gen3customgame@@@sleepclausemod'
 STATUS = ['', 'par', 'brn', 'psn', 'tox', 'slp', 'frz']
 DRAW_BOUNDS = (2, 100, 100, 100, 16, 16, 100, 4, 8, 2, 2, 2)
@@ -53,10 +53,14 @@ EFFECT_BOUNDS = (16, 16, 4, 2)
 # damage roll (draws[5]=0 -> random(16)=15), no secondary, protect succeeds,
 # side 0 wins ties. Scenarios override fields.
 DEFAULT_ROW = [0, 99, 99, 0, 15, 0, 0, 0, 0, 0, 0, 0]
+# Fidelity tier D: tape v3 carries phazing (the attacker's [0,60) auxiliary roll, the contact abilities' Showdown role
+# and the drag's bench pick); its default 0 is the value the engine-only auxiliary input had before, so every scenario's
+# engine inputs are unchanged. 0 procs a contact ability (0 < 20, < 6: Effect Spore's slp), so a scenario that makes
+# contact with such a holder sets phazing explicitly.
 DEFAULT_TAPE = dict(draws=[list(DEFAULT_ROW), list(DEFAULT_ROW)], secondary=[99, 99], sleep_talk=[0, 0],
-                    effect=[[15, 0, 0, 0], [15, 0, 0, 0]])
+                    effect=[[15, 0, 0, 0], [15, 0, 0, 0]], phazing=[0, 0])
 # Engine-only auxiliary inputs (no Showdown role); kept explicit and in-range.
-DEFAULT_AUX = dict(phazing=[0, 0], entry_ties=[0, 0], initial_tie=0)
+DEFAULT_AUX = dict(entry_ties=[0, 0], initial_tie=0)
 BOUNDS = dict(draws=DRAW_BOUNDS, effect=EFFECT_BOUNDS, secondary=100, sleep_talk=60, phazing=60, entry_ties=2, initial_tie=2)
 # Device mode's optional low-optimization compile of step_with_public (XLA's own options for that one executable, as the
 # CI's low-optimization cases set them): the public step's CPU compile at the default level peaks far above the light tier.
@@ -340,7 +344,7 @@ class Engine:
         import jax.numpy as j
         stack = lambda key, dtype=j.int32: j.asarray(np.asarray([t[key] for t in tapes]), dtype)
         fields = dict(draws=stack('draws'), secondary=stack('secondary'), sleep_talk=stack('sleep_talk'),
-            phazing=j.asarray(np.asarray([a['phazing'] for a in auxes]), j.int32),
+            phazing=stack('phazing'),
             entry_ties=j.asarray(np.asarray([a['entry_ties'] for a in auxes]), j.int32),
             initial_tie=j.asarray(np.asarray([a['initial_tie'] for a in auxes]), j.int32))
         if self.has_effect:fields['effect'] = stack('effect')
