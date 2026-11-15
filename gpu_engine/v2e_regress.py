@@ -775,26 +775,32 @@ ALLOWED['facade'] = dict(user=('hp', 'visible', 'subtracker', 'wish'), target=('
 ALLOWED['sacredfire'] = ALL
 
 
-# TB (the batched transition PR: bugs F, G, F1, F2 and the TURN-line parity of the clocks and weather upkeeps; all on the
-# device public path, no engine state, so no allowance names a state leaf). F: the Pursuit intercept's damage credit (the hit's HP lines: damage history, both
-# sides' damage sums, the departing target's public HP and negative-item snapshot), its [from] line (no last move, Choice
-# lock or Truant anchor on the pursuer, which B2's STALL_ATTEMPT 0 resets the stall counter of). G: a Sleep Talk-called move
-# that then fails is still revealed (moves, PP ledger, the moves_shown count and the belief narrowing). The end-of-turn
-# bookkeeping: a held clock advances on the TURN line (a battle-ending step has none; a turn whose residual faint asks for a
-# replacement has it at the replacement step), a battle ended before its residual counts no weather upkeep, and a battle
-# ended by Perish Song's queued faints still runs the upkeep (post_upkeep, the sleep pending clears, the non-proc sweep).
+# TB (the batched transition PR: bugs F, G, F1, F2 and the TURN-line parity of the clocks and weather upkeeps), all on the
+# device public path: no engine state changes, so no allowance names a state leaf. Each effect allows only its own fix's leaves:
+# - pursuit_intercept (F): the intercept's damage credit (the hit's HP lines: damage history, both sides' damage sums, the
+#   departing target's public HP and negative-item snapshot) and its [from] line (no last move, Choice lock or Truant anchor on
+#   the pursuer; B2's STALL_ATTEMPT 0 resets its public stall counter);
+# - sleeptalk_call (G): a Sleep Talk-called move that then fails is still revealed (moves, PP ledger, moves_shown, narrowing);
+# - turn_clock (F2): a held clock advances on the TURN line (none on a battle-ending step; a turn whose residual faint asks
+#   for a replacement has it at the replacement step);
+# - perish_upkeep (F1): a battle ended by Perish Song's queued faints still runs the upkeep (post_upkeep, the sleep pending
+#   clears, the non-proc sweep), and a Perish faint printed after |upkeep is swept as living;
+# - weather_end: a battle ended before its residual counts no weather upkeep.
 FAMILIES['tb_last'] = (r'^trackers\.last_moves$',)
 FAMILIES['tb_stall'] = (r"^trackers\.mon_features\['stall_counter'\]$",)
+FAMILIES['tb_truant'] = (r'^trackers\.public_port\.(known|loaf)$',)
 FAMILIES['tb_moves'] = (r'^trackers\.(observed_moves|pp_used)$', r"^trackers\.mon_features\['moves_shown'\]$")
 FAMILIES['tb_clocks'] = (r"^trackers\.mon_features\['(confusion_turns|encore_turns|wrap_trap_turns)'\]$",)
-FAMILIES['tb_end'] = (r"^trackers\.mon_features\['(sleep_skipped_turns|sleep_cant_pending|sleep_usable_pending)'\]$",
-                      r'^trackers\.public_port\.post_upkeep$', r'^trackers\.negative_items\.', r'^trackers\.visible_belief\.',
-                      r'^trackers\.belief_mask$', r"^trackers\.field_features\['weather_upkeeps'\]$")
-ALLOWED['pursuit_intercept'] = dict(user=('hp_lines', 'visible', 'tb_last', 'tb_stall', 'itemflags', 'port'),
+FAMILIES['tb_upkeep'] = (r"^trackers\.mon_features\['(sleep_skipped_turns|sleep_cant_pending|sleep_usable_pending)'\]$",
+                         r'^trackers\.negative_items\.', r'^trackers\.visible_belief\.', r'^trackers\.belief_mask$')
+FAMILIES['tb_post_upkeep'] = (r'^trackers\.public_port\.post_upkeep$',)
+FAMILIES['tb_weather'] = (r"^trackers\.field_features\['weather_upkeeps'\]$",)
+ALLOWED['pursuit_intercept'] = dict(user=('hp_lines', 'visible', 'tb_last', 'tb_stall', 'itemflags', 'tb_truant'),
                                     target=('hp_lines', 'visible'), glob=())
 ALLOWED['sleeptalk_call'] = dict(user=('tb_moves', 'reveal'), target=(), glob=())
 ALLOWED['turn_clock'] = dict(user=('tb_clocks',), target=('tb_clocks',), glob=())
-ALLOWED['battle_end'] = dict(user=('tb_clocks', 'tb_end'), target=('tb_clocks', 'tb_end'), glob=('tb_end',))
+ALLOWED['perish_upkeep'] = dict(user=('tb_upkeep',), target=('tb_upkeep',), glob=('tb_post_upkeep',))
+ALLOWED['weather_end'] = dict(user=(), target=(), glob=('tb_weather',))
 
 
 def pursuit_intercept(p):
@@ -809,26 +815,43 @@ def sleeptalk_call(p):
 
 CLOCK_MOVES = ('encore', 'wrap', 'bind', 'firespin', 'clamp', 'whirlpool', 'sandtomb', 'confuseray', 'supersonic', 'swagger',
                'flatter', 'sweetkiss', 'teeterdance', 'signalbeam', 'dynamicpunch', 'psybeam', 'confusion', 'waterpulse', 'dizzypunch')
+# Gen 3's flavor berries confuse a holder that dislikes the flavor (data/mods/gen3/items.ts), a clock set with no move.
+CONFUSION_BERRIES = ('figyberry', 'wikiberry', 'magoberry', 'aguavberry', 'iapapaberry')
+WEATHER_MOVES = ('raindance', 'sunnyday', 'sandstorm', 'hail')
 
 
 def turn_clock(p):
-    """TB (the clocks' TURN line): both sides of a lane whose TURN line may fall on another step than its ordinary step: a
-    replacement step (a pre-step forced switch or fainted active, which prints the TURN its residual turn lacked), or a turn
-    with a held or newly set clock (confusion, Encore, a partial trap) that a residual faint may end with a replacement request
-    or a battle end. A superset: the clock moves only on such a lane."""
+    """TB (the clocks' TURN line, F2): both sides of a lane whose held clock may advance on another step than its ordinary step: a
+    replacement step (a pre-step forced switch or fainted active, which prints the TURN its residual turn lacked), or a turn with a
+    held or newly set clock (confusion, Encore, a partial trap; a Baton Pass carries confusion) that a residual faint may end with
+    a replacement request or that may end the battle. A superset: the clock moves only on such a lane."""
     rows = np.arange(p.lanes)[:, None];sides = np.arange(2)[None, :]
     active_hp = p.s['hp'][rows, sides, p.s['active']]
     replacement = (p.s['forced_switch'].astype(bool) | (active_hp <= 0)).any(-1)
     held = (p.active('confusion_counter') > 0) | (p.active('encore_counter') > 0)
     if 'partial_trap_counter' in p.s:held |= p.active('partial_trap_counter') > 0
+    berries = [p.vocab['items'].index(n) for n in CONFUSION_BERRIES if n in p.vocab['items']]
+    if berries:held |= np.isin(p.active('item'), berries)
     lane = replacement | held.any(-1) | p.side_uses(*CLOCK_MOVES).any(-1) | p.side_uses('batonpass').any(-1)
     return np.repeat(lane[:, None], 2, axis=1)
 
 
-def battle_end(p):
-    """TB (F1, F2, weather upkeeps): both sides of a lane whose battle may end this step: a side with at most one living mon."""
-    lane = ((np.asarray(p.s['hp']) > 0).sum(-1) <= 1).any(-1)
+def perish_upkeep(p):
+    """TB (F1 and its upkeep sweep): both sides of a lane whose Perish Song count is 1 on an active before the step, the only way
+    its residual can queue an end-path faint (perish0 then a |faint| after |upkeep: the device's upkeep on a battle-ending step,
+    and the non-proc sweep's `living`)."""
+    lane = (p.active('perish_counter') == 1).any(-1) if 'perish_counter' in p.s else np.zeros(p.lanes, bool)
     return np.repeat(lane[:, None], 2, axis=1)
+
+
+def weather_end(p):
+    """TB (weather upkeeps): both sides of a lane whose battle may end this step (a side with at most one living mon) under a
+    weather that is up before the step or may be set in it (a weather move, or the entry of a weather ability holder): a battle
+    ended before its residual prints no -weather ...|[upkeep] line."""
+    last = ((np.asarray(p.s['hp']) > 0).sum(-1) <= 1).any(-1)
+    weather = np.asarray(p.s['weather']) != 0 if 'weather' in p.s else np.zeros(p.lanes, bool)
+    weather = weather | p.side_uses(*WEATHER_MOVES).any(-1) | entering_ability('drizzle', 'drought', 'sandstream')(p).any(-1)
+    return np.repeat((last & weather)[:, None], 2, axis=1)
 
 
 # Allowances an effect earns only on a KO cascade in which the other side (its target's) has a newly (un)fainted
@@ -866,7 +889,8 @@ PLUGINS = {
     # WH (White Herb plus C-lite, which replaces C's draft; Psycho Boost's drop is unchanged, its restore is White Herb's).
     'WH': dict(whiteherb=white_herb, facade=facade_status, sacredfire=frozen_defrost),
     # TB: the batched transition PR (bugs F, G, F1, F2; see ALLOWED's TB block).
-    'TB': dict(pursuit_intercept=pursuit_intercept, sleeptalk_call=sleeptalk_call, turn_clock=turn_clock, battle_end=battle_end),
+    'TB': dict(pursuit_intercept=pursuit_intercept, sleeptalk_call=sleeptalk_call, turn_clock=turn_clock,
+               perish_upkeep=perish_upkeep, weather_end=weather_end),
 }
 
 

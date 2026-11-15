@@ -119,21 +119,22 @@ class PerishUpkeepSweepTests(unittest.TestCase):
 
 
 class TBPlugInTests(unittest.TestCase):
-    VOCAB = dict(moves=['_none', 'tackle', 'pursuit', 'sleeptalk', 'encore', 'wrap', 'counter', 'struggle'],
-                 abilities=['_none', 'pressure'], items=['_none', 'leftovers'])
-    TACKLE, PURSUIT, SLEEPTALK, ENCORE, WRAP = 1, 2, 3, 4, 5
+    VOCAB = dict(moves=['_none', 'tackle', 'pursuit', 'sleeptalk', 'encore', 'wrap', 'counter', 'struggle', 'sunnyday'],
+                 abilities=['_none', 'pressure', 'drought'], items=['_none', 'leftovers', 'figyberry'])
+    TACKLE, PURSUIT, SLEEPTALK, ENCORE, WRAP, SUNNYDAY = 1, 2, 3, 4, 5, 8
 
-    def pre(self, edit):
+    def pre(self, edit, L=12):
         from gpu_engine.v2e_regress import Pre
-        L = 8;z = lambda *s: np.zeros(s, np.int32)
+        z = lambda *s: np.zeros(s, np.int32)
         s = {k: z(L, 2, 6) for k in ('status', 'charge_move', 'encore_move', 'encore_counter', 'ability', 'item', 'confusion_counter',
-                                      'partial_trap_counter')}
+                                      'partial_trap_counter', 'perish_counter')}
         s.update(hp=np.full((L, 2, 6), 50), rest_origin=np.zeros((L, 2, 6), bool), volatile=np.zeros((L, 2, 6), np.uint32), active=z(L, 2),
                  pending_residual=np.zeros(L, bool), queued_actor=np.full(L, -1), queued_actions=z(L, 2), last_action_kind=z(L, 2),
-                 last_action_index=np.full((L, 2), -1), forced_switch=np.zeros((L, 2), bool), moves=np.full((L, 2, 6, 4), self.TACKLE))
+                 last_action_index=np.full((L, 2), -1), forced_switch=np.zeros((L, 2), bool), moves=np.full((L, 2, 6, 4), self.TACKLE),
+                 weather=z(L))
         actions = np.zeros((L, 2), np.int32);edit(s, actions)
         named = {f'state.{k}': v for k, v in s.items()};named['actions'] = actions
-        callable_ = np.array([False, True, True, False, True, True, True, False])
+        callable_ = np.array([False, True, True, False, True, True, True, False, True])
         return Pre(named, self.VOCAB, callable_, np.zeros((L, 2), bool))
 
     def test_predicates(self):
@@ -145,20 +146,28 @@ class TBPlugInTests(unittest.TestCase):
             s['forced_switch'][3, 0] = True                                        # lane 3: a replacement step
             s['confusion_counter'][4, 1, 0] = 2                                   # lane 4: a held clock
             s['moves'][5, 0, 0, 0] = self.ENCORE                                  # lane 5: Encore this step
-            s['hp'][6, 0, 1:] = 0                                                 # lane 6: side 0 is down to its last mon
+            s['hp'][6, 0, 1:] = 0                                                 # lane 6: side 0's last mon, no weather
+            s['hp'][7, 0, 1:] = 0;s['weather'][7] = 3                             # lane 7: its last mon under sandstorm
+            s['hp'][8, 1, 1:] = 0;s['moves'][8, 0, 0, 0] = self.SUNNYDAY           # lane 8: a last mon, Sunny Day this step
+            s['hp'][9, 1, 1:] = 0;s['ability'][9, 0, 2] = 2;s['forced_switch'][9, 0] = True   # lane 9: a Drought holder may enter
+            s['perish_counter'][10, 1, 0] = 1                                     # lane 10: a Perish count of 1
+            s['item'][11, 0, 0] = 2                                               # lane 11: an active Figy Berry (confusion)
         tb = PLUGINS['TB'];p = self.pre(edit);no, both = [False, False], [True, True]
-        self.assertEqual(tb['pursuit_intercept'](p).tolist(), [[False, True]] + [no] * 7)
-        self.assertEqual(tb['sleeptalk_call'](p).tolist(), [no, no, [True, False]] + [no] * 5)
-        self.assertEqual(tb['turn_clock'](p).tolist(), [no, no, no, both, both, both, no, no])
-        self.assertEqual(tb['battle_end'](p).tolist(), [no] * 6 + [both, no])
+        self.assertEqual(tb['pursuit_intercept'](p).tolist(), [[False, True]] + [no] * 11)
+        self.assertEqual(tb['sleeptalk_call'](p).tolist(), [no, no, [True, False]] + [no] * 9)
+        self.assertEqual(tb['turn_clock'](p).tolist(), [no, no, no, both, both, both, no, no, no, both, no, both])
+        self.assertEqual(tb['weather_end'](p).tolist(), [no] * 7 + [both, both, both, no, no])
+        self.assertEqual(tb['perish_upkeep'](p).tolist(), [no] * 10 + [both, no])
 
     def test_allowances(self):
         from gpu_engine.v2e_regress import ALLOWED, PLUGINS, lane_verdict
         self.assertTrue(all(e in ALLOWED for e in PLUGINS['TB']))
         ok = {('trackers.last_moves', 1), ("trackers.mon_features['stall_counter']", 1), ('trackers.damage_history.dealt', 1),
-              ("trackers.mon_features['last_damage_dealt']", 1), ('trackers.hp_percent', 0), ('trackers.negative_items.percent', 0)}
+              ("trackers.mon_features['last_damage_dealt']", 1), ('trackers.hp_percent', 0), ('trackers.negative_items.percent', 0),
+              ('trackers.public_port.known', 1), ('trackers.public_port.loaf', 1)}
         self.assertEqual(lane_verdict(ok, {'pursuit_intercept': [1]}, None)[0], [])
-        for bad in (('state.hp', 0), ('trackers.last_moves', 0), ('trackers.observed_moves', 1)):
+        for bad in (('state.hp', 0), ('trackers.last_moves', 0), ('trackers.observed_moves', 1), ('trackers.public_port.blocked', 1),
+                    ('trackers.public_port.post_upkeep', None)):
             self.assertEqual(lane_verdict({bad}, {'pursuit_intercept': [1]}, None)[0], [bad])
         self.assertEqual(lane_verdict({('trackers.observed_moves', 0), ("trackers.mon_features['moves_shown']", 0),
                                        ('trackers.belief_mask', 0)}, {'sleeptalk_call': [0]}, None)[0], [])
@@ -166,10 +175,63 @@ class TBPlugInTests(unittest.TestCase):
         clocks = {("trackers.mon_features['confusion_turns']", 0), ("trackers.mon_features['wrap_trap_turns']", 1)}
         self.assertEqual(lane_verdict(clocks, {'turn_clock': [0, 1]}, None)[0], [])
         self.assertEqual(lane_verdict({('trackers.turn', None)}, {'turn_clock': [0, 1]}, None)[0], [('trackers.turn', None)])
-        end = {('trackers.public_port.post_upkeep', None), ("trackers.field_features['weather_upkeeps']", None),
-               ("trackers.mon_features['sleep_cant_pending']", 1), ('trackers.visible_belief.visible_hard', 0)}
-        self.assertEqual(lane_verdict(end, {'battle_end': [0, 1]}, None)[0], [])
-        self.assertEqual(lane_verdict({('state.hp', 0)}, {'battle_end': [0, 1]}, None)[0], [('state.hp', 0)])
+        upkeep = {('trackers.public_port.post_upkeep', None), ("trackers.mon_features['sleep_cant_pending']", 1),
+                  ('trackers.visible_belief.visible_hard', 0), ('trackers.negative_items.known', 0), ('trackers.belief_mask', 1)}
+        self.assertEqual(lane_verdict(upkeep, {'perish_upkeep': [0, 1]}, None)[0], [])
+        for bad in (("trackers.field_features['weather_upkeeps']", None), ("trackers.mon_features['encore_turns']", 0), ('state.hp', 0)):
+            self.assertEqual(lane_verdict({bad}, {'perish_upkeep': [0, 1]}, None)[0], [bad])
+        self.assertEqual(lane_verdict({("trackers.field_features['weather_upkeeps']", None)}, {'weather_end': [0, 1]}, None)[0], [])
+        for bad in (('trackers.public_port.post_upkeep', None), ("trackers.mon_features['encore_turns']", 1), ('trackers.belief_mask', 0)):
+            self.assertEqual(lane_verdict({bad}, {'weather_end': [0, 1]}, None)[0], [bad])
+
+
+@unittest.skipUnless(HAS_JAX, 'requires JAX')
+class PerishUpkeepLineTests(unittest.TestCase):
+    """transition._perish_upkeep_line, the pure F1 rule, case by case: each later handler that reaches faintMessages after a
+    battle-ending Perish end path suppresses the |upkeep line (ended False) and the living mark; without one, both stand."""
+    def run_line(self, edit, *, count=(1, 1), alive=(True, True), first=0, hp_after=(0, 0)):
+        import jax.numpy as j
+        from types import SimpleNamespace as NS
+        from gpu_engine import transition
+        from gpu_engine.state import empty_state
+        s = empty_state(1)
+        s = s._replace(hp=j.zeros((1, 2, 6), j.int32).at[0, :, 0].set(j.asarray(hp_after, j.int32)), max_hp=j.full((1, 2, 6), 100, j.int32))
+        s = edit(s)
+        truant = j.zeros(4, bool).at[3].set(True);herb = j.zeros(4, bool).at[2].set(True)
+        table = NS(entry=NS(truant=truant), items=NS(white_herb=herb))
+        ended, living = transition._perish_upkeep_line(s, table, j.asarray([True]), j.asarray([first], j.int32),
+            j.asarray([alive]), j.asarray([count], j.int32))
+        return bool(ended[0]), np.asarray(living)[0].tolist()
+
+    def test_a_plain_perish_end_prints_upkeep(self):
+        self.assertEqual(self.run_line(lambda s: s), (True, [True, True]))
+
+    def test_each_later_handler_suppresses_it(self):
+        cases = {
+            'Truant (order 27)': lambda s: s._replace(ability=s.ability.at[0, 1, 0].set(3)),
+            'White Herb (order 29)': lambda s: s._replace(item=s.item.at[0, 0, 0].set(2)),
+            'a stall volatile set this turn': lambda s: s._replace(protect_counter=s.protect_counter.at[0, 0, 0].set(2)),
+            'mustrecharge at duration 2': lambda s: s._replace(recharge_counter=s.recharge_counter.at[0, 1, 0].set(2)),
+            "Solar Beam's charge turn (twoturnmove at 2)": lambda s: s._replace(charge_counter=s.charge_counter.at[0, 0, 0].set(2)),
+        }
+        for name, edit in cases.items():
+            with self.subTest(name):self.assertEqual(self.run_line(edit), (False, [False, False]))
+
+    def test_spent_durations_are_end_paths_not_handlers(self):
+        for name, edit in {'mustrecharge at 1': lambda s: s._replace(recharge_counter=s.recharge_counter.at[0, 1, 0].set(1)),
+                           'Solar Beam released (charge 1)': lambda s: s._replace(charge_counter=s.charge_counter.at[0, 0, 0].set(1))}.items():
+            with self.subTest(name):self.assertEqual(self.run_line(edit), (True, [True, True]))
+
+    def test_the_other_holders_tick_counts_only_after_the_first_end_path(self):
+        # side 0 ends (count 1), side 1 ticks (count 3, a callback): side 0 first -> the tick's faintMessages ends it, no |upkeep
+        self.assertEqual(self.run_line(lambda s: s, count=(1, 3), first=0, hp_after=(0, 50)), (False, [False, False]))
+        # side 1 first: its tick runs before side 0's end path, nothing after it -> |upkeep, then the faint
+        self.assertEqual(self.run_line(lambda s: s, count=(1, 3), first=1, hp_after=(0, 50)), (True, [True, False]))
+
+    def test_a_holder_fainted_before_the_pass_runs_no_handler(self):
+        # side 1's Truant holder fainted earlier in the residual (not alive at the pass): its handler is skipped
+        self.assertEqual(self.run_line(lambda s: s._replace(ability=s.ability.at[0, 1, 0].set(3)), alive=(True, False), count=(1, 0)),
+                         (True, [True, False]))
 
 
 if __name__ == '__main__':
