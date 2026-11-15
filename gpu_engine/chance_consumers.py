@@ -361,7 +361,7 @@ def plan_for_state(state, index, actions, table, metadata, *, cap, native_input=
         # §6: the appended effect stream (fidelity R, design 2.1; M2's residual consumers). transition.py:580-582 reads
         # ChanceInputs.effect; a resumed suspended turn reads the saved block instead (refused above).
         for s in range(2):
-            # Bonemerang's second hit (transition.py:1133-1173, run when damage_moves.hits>1 at :1335): its own critical
+            # Bonemerang's second hit (transition.py:1133-1173, run when damage_moves.hits>1 at :1355): its own critical
             # roll effect[s][0] (critical.is_critical: below 2 for a high-crit move, else below 1; below 1 without the
             # table) and damage roll 85+effect[s][1]. Callers and Encore are already in the selected closure.
             critical = (t.get("critical") or {}).get("high")
