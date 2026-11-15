@@ -2784,11 +2784,15 @@ def _perish_upkeep_line(state,table,perish_continues,perish_first,alive,count):
     Showdown's residual prints |upkeep after fieldEvent('Residual') unless the battle has ended (`if (!this.ended)
     this.add('upkeep')`, sim/battle.ts:2838). The battle ends at a checkWin, which runs only in faintMessages: a handler
     callback's faintMessages (sim/battle.ts:565-566; a damaging residual's KO, so no |upkeep), or runAction's after the
-    residual (2856). Perish Song's count reaching 0 takes the duration end path (515-520): onEnd prints perish0 and only
-    queues the faint (data/mods/gen4/moves.ts:993-999), and the path skips faintMessages. So a battle ended by Perish faints
+    residual (2856). Perish Song's count reaching 0 takes the duration end path (515-520): its condition's onEnd prints perish0
+    and only queues the faint (data/moves.ts:13262-13264; Gen 4's mod, inherited by Gen 3, only sets onResidualOrder 12,
+    data/mods/gen4/moves.ts:993-999), and the path skips faintMessages. So a battle ended by Perish faints
     prints |upkeep before its |faint| lines, unless a later handler of the same Residual event reaches the loop's
     faintMessages first. Handlers are collected at the event's start and only a `.fainted` holder is skipped; a queued
-    faint is not yet `.fainted`. The Gen 3 handlers after Perish Song's order 12 that the engine models:
+    faint is not yet `.fainted`. Showdown runs that first later handler's own callback before its faintMessages ends the
+    battle; the engine gates White Herb, the Truant flip and the recharge tick on the battle continuing, so it skips it,
+    which is inert: a done state is never expanded or encoded. The Gen 3 handlers after Perish Song's order 12 that the
+    engine models:
     - the other holder's Perish tick (count >= 2, a callback) after the first holder's end path (Speed order, perish_first);
     - Truant's onResidual (order 27, data/mods/gen3/abilities.ts:197-213) and White Herb's (order 29, data/items.ts);
     - the duration-only volatiles (order false, last) that do not end at this tick: stall (duration 2, set by a successful
