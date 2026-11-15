@@ -656,20 +656,6 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                 device_public.reveal_ability(_device_public,work,1-side,(used & intercepts.wonder_guard_blocked(work,side,moves[:,side],table))
                     | _contact_reveals[0])
                 device_public.reveal_ability(_device_public,work,side,_contact_reveals[1])
-                if device_public.set_posterior_enabled(_device_public):
-                    # Narrowing A: the intercept is a damage reveal on the switching target (base power 80). Its operands
-                    # are the intercept's own: the pre-hit state, the same crit draw, the HP and Substitute it changed.
-                    _sp_before=_device_pursuit_before;_sp_move=moves[:,side]
-                    _sp_crit=draws[:,side][:,4]==0
-                    if table.critical is not None:
-                        _sp_crit=crits.is_critical(table.critical,_sp_move,_active(_sp_before.ability,_sp_before,1-side),draws[:,side][:,4])
-                    _,_sp_num,_sp_den=intercepts._effectiveness(_sp_before,side,_sp_move,table)
-                    _sp_hp,_sp_after=_active(_sp_before.hp,_sp_before,1-side),_active(work.hp,work,1-side)
-                    _sp_sub=_active(_sp_before.substitute_hp,_sp_before,1-side)>0
-                    _sp_hit=_sp_sub & (_active(work.substitute_hp,work,1-side)<_active(_sp_before.substitute_hp,_sp_before,1-side))
-                    device_public.set_posterior_strike(_device_public,_sp_before,side,_sp_move,_sp_move,_sp_crit,_sp_sub,
-                        jnp.zeros_like(used),jnp.where(_sp_sub,0,_sp_hp-_sp_after),_sp_hp,_sp_after,_sp_num,_sp_den,
-                        used & ((_sp_hp>_sp_after) | _sp_hit),pursuit=True)
             if _lifecycle_trace:
                 _public_trace=status_callbacks.unknown(_public_trace,used)
             if _lifecycle_trace:work,_public_trace=_lum_update(work,table,used,_public_trace,_device_public=_device_public)
@@ -688,6 +674,21 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
             work=_clear_fainted_boosts(work,_faint_before_hp,eligible=used)
             if _device_public is not None:
                 device_public.move(_device_public,work,side,moves[:,side],used,pp_use=True)
+                if device_public.set_posterior_enabled(_device_public):
+                    # Narrowing A: the intercept is a damage reveal on the switching target (base power 80), read after its
+                    # move line is in the hard mask. Its operands are the intercept's own: the pre-hit state, the same crit
+                    # draw, the HP and Substitute it changed.
+                    _sp_before=_device_pursuit_before;_sp_move=moves[:,side]
+                    _sp_crit=draws[:,side][:,4]==0
+                    if table.critical is not None:
+                        _sp_crit=crits.is_critical(table.critical,_sp_move,_active(_sp_before.ability,_sp_before,1-side),draws[:,side][:,4])
+                    _,_sp_num,_sp_den=intercepts._effectiveness(_sp_before,side,_sp_move,table)
+                    _sp_hp,_sp_after=_active(_sp_before.hp,_sp_before,1-side),_active(work.hp,work,1-side)
+                    _sp_sub=_active(_sp_before.substitute_hp,_sp_before,1-side)>0
+                    _sp_hit=_sp_sub & (_active(work.substitute_hp,work,1-side)<_active(_sp_before.substitute_hp,_sp_before,1-side))
+                    device_public.set_posterior_strike(_device_public,_sp_before,side,_sp_move,_sp_move,_sp_crit,_sp_sub,
+                        jnp.zeros_like(used),jnp.where(_sp_sub,0,_sp_hp-_sp_after),_sp_hp,_sp_after,_sp_num,_sp_den,
+                        used & ((_sp_hp>_sp_after) | _sp_hit),pursuit=True)
                 device_public.port_count(_device_public,side,used,'pursuit')
                 device_public.item_changes(_device_public,_device_pursuit_before,work,used)
             pursuit_used = pursuit_used.at[:,side].set(used)

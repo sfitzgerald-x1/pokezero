@@ -435,3 +435,98 @@ class SourceTableTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+@unittest.skipUnless(HAS_JAX, 'requires JAX')
+class InTreeTests(unittest.TestCase):
+    """device_set_posterior.in_tree, the hook adapter, on a minimal carry: operands from engine state and the public
+    carry, the pin written through engine_device_visible_belief (narrow_pin, then the subject's refresh)."""
+
+    def setUp(self):
+        import jax.numpy as j
+        from typing import NamedTuple
+        from gpu_engine import device_set_posterior as dsp
+        posterior, self.case = two_variant_tables()
+        self.dsp, self.j = dsp, j
+        B = 2
+
+        class Belief(NamedTuple):
+            species_initial_mask: object
+            ability_mask: object
+            item_mask: object
+            source_species: object
+            posterior: object
+
+        class Carry(NamedTuple):
+            error: object
+            physical_to_public: object
+            species: object
+            present: object
+            belief_mask: object
+            hp_percent: object
+            mon_features: object
+            visible_belief: object = None
+
+        class State(NamedTuple):
+            active: object
+            species: object
+            types: object
+            base_types: object
+            ability: object
+            base_ability: object
+            status: object
+            boosts: object
+            volatile: object
+            stats: object
+            item: object
+            weather: object
+            hp: object
+
+        pool = np.zeros((3, 2), np.uint32);pool[2] = [0b1111, 0]       # engine species 2 -> source species 1, four variants
+        self.tables = Belief(j.asarray(pool), j.zeros((3, 4, 2), j.uint32), j.zeros((3, 4, 2), j.uint32),
+                             j.asarray([0, 0, 1], j.int32), posterior)
+        c = self.case
+        z = lambda *shape, dtype=j.int32:j.zeros(shape, dtype)
+        mapping = np.full((B, 2, 6), -1, np.int32);mapping[:, :, 0] = 0
+        species = np.zeros((B, 2, 6), np.int32);species[:, 0, 0] = 2
+        hard = np.zeros((B, 2, 6, 2), np.uint32);hard[:, 0, 0] = [0b1111, 0]
+        self.carry = Carry(z(B), j.asarray(mapping), j.asarray(species), j.asarray(species > 0), j.asarray(hard),
+                           j.full((B, 2, 6), 100, j.int32), {'item_mutated': z(B, 2, 6)})
+        stats = np.zeros((B, 2, 6, 6), np.int32);stats[:, 1, 0] = c['defender_stats'];stats[:, 0, 0] = c['stats']
+        types = np.zeros((B, 2, 6, 2), np.int32);types[:, 1, 0] = c['defender_types'];types[:, 0, 0] = [T['normal'], 0]
+        self.state = State(z(B, 2), j.asarray(species), j.asarray(types), j.asarray(types), z(B, 2, 6), z(B, 2, 6), z(B, 2, 6),
+                           z(B, 2, 6, 7), z(B, 2, 6, dtype=j.uint32), j.asarray(stats), z(B, 2, 6), z(B), z(B, 2, 6))
+
+    def hit(self, observed, *, hits_sub=False, called=False, endured=False, hit_by=False, move='tackle'):
+        j = self.j
+        B = 2
+        b = lambda value:j.full(B, value)
+        trackers, reduced = self.dsp.in_tree(self.carry, self.tables, self.state, 0, b(M[move]),
+            b(M['struggle'] if called else M[move]), b(False), b(hits_sub), b(endured), b(observed), b(300), b(300 - observed),
+            b(1), b(1), b(True), hit_by=b(hit_by))
+        vb = trackers.visible_belief
+        bits = lambda words:np.flatnonzero(np.asarray(self.dsp.unpack(j.asarray(words)))).tolist()
+        return dict(reason=self.dsp.REASONS[int(reduced.reason[0])], pin=bits(vb.pin[0, 0, 0]), active=bool(vb.pin_active[0, 0, 0]),
+                    visible=bits(vb.visible_pin[0, 0, 0]), visible_active=bool(vb.visible_pin_active[0, 0, 0]),
+                    conflicts=int(vb.conflicts[0, 0, 0]))
+
+    def test_choice_band_hit_pins_and_refreshes(self):
+        banded = tier2_rolls(base_case(item='choiceband'))[0]
+        plain = tier2_rolls(base_case())[0]
+        observed = next(r for r in banded if r not in plain)
+        out = self.hit(observed)
+        self.assertEqual(out['reason'], '')
+        self.assertEqual((out['pin'], out['active']), ([1], True))
+        self.assertEqual((out['visible'], out['visible_active']), ([1], True))
+        self.assertEqual(out['conflicts'], 0)
+
+    def test_refused_strikes_leave_the_pin(self):
+        observed = tier2_rolls(base_case(item='choiceband'))[0][-1]
+        for kwargs, reason in ((dict(hits_sub=True), 'hit-substitute'), (dict(called=True), 'called'),
+                               (dict(endured=True), 'endure-or-focusband')):
+            out = self.hit(observed, **kwargs)
+            self.assertEqual((out['reason'], out['active'], out['visible_active']), (reason, False, False), kwargs)
+
+    def test_off_model_strike_is_declined(self):
+        out = self.hit(1)   # no variant's roll is 1 HP: no fitting hard variant, the incoming set is empty
+        self.assertEqual((out['reason'], out['active'], out['conflicts']), ('', False, 0))

@@ -502,7 +502,7 @@ def champion_inputs(observation):
         token_types=observation.token_type_ids[:, :23], attention=observation.attention_mask[:, :23])
 
 
-def column_manifest(public=None, *, tracked_types=None, tracked_ability=None, tracked_item=None, posterior=True):
+def column_manifest(public=None, *, tracked_types=None, tracked_ability=None, tracked_item=None, posterior=True, set_posterior=False):
     """Complete meanings; optional real readout keys describe installed hooks.
 
     No array contents are copied to host: only the static dictionary keys and
@@ -618,6 +618,10 @@ def column_manifest(public=None, *, tracked_types=None, tracked_ability=None, tr
                     status, reason = 'TRACKED', 'original source prior + public hard/pin mask fallback; uniform current sampler'
                     if column == 131:
                         status, reason = 'TRACKED', 'produced constant0: frozen investment_belief_narrowing=False disables both standing-pin producers'
+                        if set_posterior:
+                            # Narrowing A: with set_posterior_narrowing the device's damage reveals narrow the standing
+                            # pin (engine_device_belief.Tables.posterior), so a pin disjoint from the hard mask is live.
+                            status, reason = 'TRACKED', 'set_posterior_narrowing standing pin (device damage-reveal producer): pin_conflict live'
                 # Fidelity M1: Trick's -item lines (hooks.trick) and the holder's move lines (hooks.move)
                 # now write ITEM_SWAPPED and CHOICE_LOCKED, so the readout keys are tracked like the others.
                 if status == 'ZERO':
