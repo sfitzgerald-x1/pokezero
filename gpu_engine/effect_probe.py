@@ -420,11 +420,11 @@ class Device:
             narrowing = effect_probe_set_posterior.Narrowing(catalog, dev.literal_source(sets, dex), dex, metadata)
         return cls(catalog, metadata, lanes, allowlist, narrowing=narrowing)
 
-    def compare(self, scenario, record, step, trackers, b2, lane, vocab, channels=None):
+    def compare(self, scenario, record, step, trackers, b2, lane, vocab, channels=None, state=None):
         """One case's device-vs-B2 comparison after `step` ('initial' before the first request); a step with open diffs
         keeps that step's two player channels."""
-        dev = self.dev;device = record['device']
-        if self.narrowing is not None and channels is not None:self.narrowing.feed(lane, step, channels)
+        dev = self.dev;device = record['device'];narrowing = getattr(self, 'narrowing', None)
+        if narrowing is not None and channels is not None:narrowing.feed(lane, step, channels, state)
         refused = [self.b2.refused[q] for q in (2 * lane, 2 * lane + 1)]
         if any(refused):
             # B2 stops at this step; an allowlisted refusal (field 'b2_refusal') is a known B2 limit, explained.
@@ -443,9 +443,10 @@ class Device:
         numeric = []
         b2_view = dev.b2_view(b2, lane, self.catalog)
         diffs = dev.compare_views(dev.device_view(trackers, lane, vocab), b2_view, numeric)
-        if self.narrowing is not None:
+        if narrowing is not None:
             from gpu_engine.effect_probe_set_posterior import PIN_FIELDS
-            diffs = [d for d in diffs if dev.field_kind(d['field']) not in PIN_FIELDS] + self.narrowing.diffs(trackers, b2_view, lane)
+            diffs = [d for d in diffs if dev.field_kind(d['field']) not in PIN_FIELDS] + narrowing.diffs(trackers, b2_view, lane)
+            device.setdefault('narrowing', []).extend(dict(step=step, **row) for row in narrowing.last_rows)
         open_, allowed = dev.apply_allowlist(scenario['move'], record['case_id'], step, diffs, self.used, self.allowlist,
                                              self.pins)
         device['steps_compared'] += 1;device['numeric'] += len(numeric)
@@ -486,6 +487,7 @@ def run_scenario(scenario, engine, showdown, metadata, device=None):
         device.b2.reset([0, 1] * engine.lanes)
         device.b2.feed([lines for i in range(len(cases)) for lines in started['channels'][i]] + [None] * (2 * (engine.lanes - len(cases))))
         host_trackers, host_b2 = engine.jax.device_get(trackers), device.b2.host()
+        host_state = engine.jax.device_get(pstate)
     records = []
     # Start-of-battle randomness runs on the seeded PRNG but is audited: anything
     # beyond inert gender and the no-Quick-Claw roll (a lead Speed tie, a real
@@ -501,7 +503,8 @@ def run_scenario(scenario, engine, showdown, metadata, device=None):
         if device is not None:
             records[-1]['device'] = dict(status=None, state_equal=initial_equal, steps_compared=0, steps=[], refusal=None, numeric=0)
             if records[-1]['live']:
-                device.compare(scenario, records[-1], 'initial', host_trackers, host_b2, i, vocab, started['channels'][i])
+                device.compare(scenario, records[-1], 'initial', host_trackers, host_b2, i, vocab, started['channels'][i],
+                               state=host_state)
     for step, script in enumerate(scenario['script']):
         if not any(r['live'] for r in records):break
         pending = np.asarray(state.pending_residual)

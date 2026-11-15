@@ -36,15 +36,37 @@ class Narrowing:
         from gpu_engine import device_set_posterior as dsp
         self.sp, self.dsp, self.catalog, self.source, self.dex = set_posterior, dsp, catalog, dsp.register_source(source), dex
         self.posterior = dsp.compile_tables(source, dex, metadata, source_tables=catalog.source)[0]
-        self.lines = {}
+        self.vocab = metadata['vocabulary']
+        self.lines, self.teams, self.last_rows = {}, {}, []
 
     def tables(self, belief_tables):
         return self.dsp.enable(belief_tables, self.posterior)
 
-    def feed(self, lane, step, channels):
-        """The lane's owner channels (p1's, p2's) from battle start: reset at 'initial', extended at every step."""
-        if step == 'initial' or lane not in self.lines:self.lines[lane] = ([], [])
+    def feed(self, lane, step, channels, state=None):
+        """The lane's owner channels (p1's, p2's) from battle start: reset at 'initial', extended at every step. At
+        'initial' the engine state gives each owner's own team, the exact facts set_posterior reads from the owner's
+        first request (the probe channels carry no |request| line): species, level, stats with max HP, the original
+        ability and item, the moves."""
+        if step == 'initial' or lane not in self.lines:
+            self.lines[lane] = ([], [])
+            if state is not None:self.teams[lane] = tuple(self._team(state, lane, owner) for owner in range(2))
         for owner in range(2):self.lines[lane][owner].extend(channels[owner] or ())
+
+    def _team(self, state, lane, owner):
+        from pokezero import tier2
+        v = self.vocab
+        names = ('hp', 'atk', 'def', 'spa', 'spd', 'spe')
+        team = []
+        for k in range(6):
+            species = int(state.species[lane, owner, k])
+            if species <= 0:continue
+            stats = dict(zip(names, (int(x) for x in state.stats[lane, owner, k])))
+            stats['hp'] = int(state.max_hp[lane, owner, k])
+            team.append(tier2.OwnMon(species=v['species'][species], level=int(state.level[lane, owner, k]), stats=stats,
+                ability=v['abilities'][int(state.base_ability[lane, owner, k])] if int(state.base_ability[lane, owner, k]) else None,
+                item=v['items'][int(state.item[lane, owner, k])] if int(state.item[lane, owner, k]) else None,
+                moves=tuple(tier2.canonical_move_id(v['moves'][int(m)]) for m in state.moves[lane, owner, k] if int(m))))
+        return tuple(team)
 
     def reference(self, lane, owner, species, hard_words):
         """set_posterior's (support bits, narrowed) for the opponent of `owner` holding `species` with B2's hard mask."""
@@ -55,9 +77,12 @@ class Narrowing:
         universe = self.source.universe_for(species)
         variants = universe.variants if universe is not None else ()
         hard = tuple(_words_to_bits(hard_words)[:len(variants)])
-        request = sp._first_request(lines) or {}
-        from pokezero import tier2
-        team = tier2.own_team_from_request(request)
+        request = sp._first_request(lines)
+        if request is not None:
+            from pokezero import tier2
+            team = tier2.own_team_from_request(request)
+        else:
+            team = self.teams.get(lane, ((), ()))[owner]
         rows = []
         single = sum(hard) == 1
         for strike in sp.parse_strikes(lines, seat):
@@ -68,11 +93,12 @@ class Narrowing:
             rows.append((strike, reason, counts))
         post = sp._encounter('p2' if owner == 0 else 'p1', seat, key, hard, rows, '')
         narrowed = any(s.admitted for s in post.strikes)
+        self.last_reasons = [(s.line, s.move, s.reason or 'admitted') for s in post.strikes]
         return list(post.support) + [False] * (64 - len(post.support)), narrowed
 
     def diffs(self, trackers, b2_view, lane):
         """The narrowing diffs of one compared step (keys side:slot:field, as compare_views keys them)."""
-        out = []
+        out, self.last_rows = [], []
         vb = trackers.visible_belief
         for s in range(2):
             owner = 1 - s
@@ -88,9 +114,12 @@ class Narrowing:
                 want = np.asarray(support)
                 if not np.array_equal(device, want):
                     out.append(dict(field=f'{s}:{k}:posterior_support', b2=np.flatnonzero(want).tolist(),
-                                    device=np.flatnonzero(device).tolist()))
+                                    device=np.flatnonzero(device).tolist(), strikes=self.last_reasons))
                 if active != narrowed:
                     out.append(dict(field=f'{s}:{k}:posterior_active', b2=narrowed, device=active))
+                if self.last_reasons or active:
+                    self.last_rows.append(dict(side=s, slot=k, species=mon['species'], hard=np.flatnonzero(hard).tolist(),
+                        device=np.flatnonzero(device).tolist(), reference=np.flatnonzero(want).tolist(), strikes=self.last_reasons))
                 if int(vb.conflicts[lane, s, k]):
                     out.append(dict(field=f'{s}:{k}:posterior_conflicts', b2=0, device=int(vb.conflicts[lane, s, k])))
         return out
