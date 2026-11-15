@@ -17,6 +17,7 @@ import numpy as np
 from gpu_engine import device_depthn_pricer as dn
 from tests import test_gpu_engine_depth2_pricer as T
 from tests import test_gpu_engine_depthn_pricer as DN
+from tests import test_gpu_engine_depthn_live_search as LS
 from tests.test_gpu_engine_device_public_teacher import facts
 
 SPECS=(((0,27),0,0,1),((27,21),1,1,0),((22,23),0,2,2),((24,25),1,0,2),((29,30),0,1,1),((20,6),1,2,0))   # three learner actors
@@ -179,6 +180,60 @@ class FrameTests(unittest.TestCase):
             with patch.object(dn,target,bug):frame=self.price(SPECS,ex=ex,leaf_layout='wide',**kw)[0]
             with self.assertRaises(AssertionError,msg=name):self.assert_frames_equal(blocks,frame)
         self.assert_frames_equal(blocks,self.price(SPECS,ex=ex,leaf_layout='wide',**kw)[0])   # unpatched again: equal
+
+
+class LiveLayoutTests(unittest.TestCase):
+    """make_pricers(leaf_layout=...), DepthNLiveSearch and the server flags: LiveSearchTests' harness (fake engine), not its tests."""
+    LS=LS
+    setUpClass=classmethod(LS.LiveSearchTests.setUpClass.__func__);make_pricers=classmethod(LS.LiveSearchTests.make_pricers.__func__)
+    setUp,search,outcome,run_batch=LS.LiveSearchTests.setUp,LS.LiveSearchTests.search,LS.LiveSearchTests.outcome,LS.LiveSearchTests.run_batch
+
+    def layout_pricers(self,buckets,**kw):
+        from tests.test_gpu_engine_depthn_guard_inputs import fake_labels
+        return self.LS.live.make_pricers(self.executor,self.evaluator,self.LS.PARAMS,worlds=8,buckets=buckets,block_lanes=81,blocks_per_call=4,labels=fake_labels,**kw)
+
+    def test_wide_pricers_warm_up_serve_without_compiling_and_answer_as_blocks(self):
+        LS=self.LS;outcomes={('w0',0):self.outcome(0),('w1',0):self.outcome(1),**{(f'l{i}',0):self.outcome(2+i)for i in range(3)}};answers={}
+        for layout in('blocks','wide'):
+            pricers=self.layout_pricers((1,2),**({}if layout=='blocks'else dict(leaf_layout='wide')));s=self.search(pricers=pricers)
+            self.assertTrue(all(p.leaf_layout==layout for p in pricers.values()))
+            with LS.Codex(outcomes):report=s.warmup([LS.request('w0',0),LS.request('w1',0)])
+            self.assertEqual([s.missing_programs(b)for b in(1,2)],[[]]*2);self.assertTrue(all(e['warm_compiled']==0 for e in report['buckets'].values()))
+            leaf=[k for k in pricers[1].programs if k[0]=='leaf'];self.assertEqual(len(leaf),1);self.assertEqual(leaf[0][1]=='wide',layout=='wide')
+            rows=[]
+            for n,b in((1,1),(2,2),(1,1)):
+                got,_=self.run_batch(s,[dict(LS.request(f'l{i}',0),request_id=f'l{i}:{n}:{b}')for i in range(n)],outcomes)
+                self.assertEqual(pricers[b].compiles,());self.assertEqual({r['bucket']for r in got},{b});rows+=got;s.reset_sessions()
+            answers[layout]=rows
+            self.assertEqual({k:s.pricer_identity[k]for k in('leaf_layout','wide_nodes')if k in s.pricer_identity},{}if layout=='blocks'else dict(leaf_layout='wide',wide_nodes=None))
+        def canon(r):
+            r={k:v for k,v in r.items()if k not in('timings','decision_seconds')};r['pricer']={k:v for k,v in r['pricer'].items()if k not in('leaf_layout','wide_nodes')}
+            return r
+        self.assertEqual([canon(r)for r in answers['blocks']],[canon(r)for r in answers['wide']])
+        self.assertTrue(all(r['status']=='COMPLETE'and r['effect_guard']is not None for r in answers['wide']))
+
+    def test_server_flags_reach_make_pricers(self):
+        import io,os
+        from contextlib import ExitStack,redirect_stderr
+        from types import SimpleNamespace as NS
+        from tests import test_depthn_live_server as TS
+        from gpu_engine import constructor_worlds as cw,device_public_teacher as teacher,engine_device_observation,phase_d_protocol_constructor as pc,transition
+        S=TS.S;base=['--showdown-root','s','--node-binary','n','--metadata','m','--expected-metadata-sha256','a'*64,'--vocabulary','v',
+            '--expected-vocabulary-sha256','b'*64,'--port','9000','--warmup-requests','w.jsonl','--champion-archive','c.npz','--champion-archive-sha256','c'*64,
+            '--champion-checkpoint-sha256','d'*64]
+        made={}
+        stand_ins=((S,'matmul_precision',lambda:'highest'),(jax,'devices',lambda:[NS(platform='gpu')]),(pc,'load_inputs',lambda a:('catalog','source','metadata','config')),
+            (S.evaluators,'load_from_arguments',lambda a:NS(params='champion')),(pc,'ProtocolConstructor',lambda **kw:NS(**kw)),
+            (teacher,'make_executor',lambda *a,**k:'executor'),(transition,'tables_from_metadata',lambda m:'tables'),
+            (engine_device_observation,'compile_tables',lambda m,catalog:'observation'),(S.live,'make_pricers',lambda *a,**k:made.update(k)or'pricers'),
+            (cw,'binding',lambda *a:'binding'),(S.live,'DepthNLiveSearch',lambda **kw:'search'))
+        for extra,want in(([],('blocks',None)),(['--leaf-layout','wide'],('wide',None)),(['--leaf-layout','wide','--wide-nodes','512'],('wide',512))):
+            with patch.dict(os.environ,TS.PINNED):args=S.options(base+extra)
+            with ExitStack()as stack:
+                for target,name,value in stand_ins:stack.enter_context(patch.object(target,name,side_effect=value))
+                self.assertEqual(S.build(args),'search')
+            self.assertEqual((made['leaf_layout'],made['wide_nodes']),want)
+        with patch.dict(os.environ,TS.PINNED),redirect_stderr(io.StringIO()),self.assertRaises(SystemExit):S.options(base+['--leaf-layout','rows'])
 
 
 if __name__=='__main__':unittest.main()

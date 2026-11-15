@@ -135,15 +135,18 @@ FATAL=(MemoryError,)
 WARMUP_BUDGET=3600.
 
 
-def make_pricers(executor,forward,params,*,worlds,buckets=(1,2,4),block_lanes=2187,blocks_per_call=16,labels=guard_inputs.child_labels):
+def make_pricers(executor,forward,params,*,worlds,buckets=(1,2,4),block_lanes=2187,blocks_per_call=16,labels=guard_inputs.child_labels,
+        leaf_layout='blocks',wide_nodes=None):
     """The live pricers: {bucket b: ObservedDepthNPricer(capacity b x W/2, depth 2, k 9, k1 9/9, prior, fixed_capacity)} with
     `forward` (the champion) and one program table shared after binding `params` (block programs compile once, P1 once per
-    bucket); `labels` is the effect guard's turn-1 child gather (depthn_guard_inputs)."""
+    bucket); `labels` is the effect guard's turn-1 child gather (depthn_guard_inputs); `leaf_layout`/`wide_nodes` the leaf
+    program (device_depthn_pricer.LEAF_LAYOUTS: 'blocks', the default, or 'wide')."""
     if forward is None:raise ValueError('an explicit evaluator (the champion) required')
     guard_inputs.check_seam();table={};out={}
     for b in buckets:
         p=guard_inputs.ObservedDepthNPricer(executor,None,capacity=b*(worlds//2),depth=DEPTH,k_own=WIDTH,k_opp=WIDTH,k1_own=WIDTH,k1_opp=WIDTH,block_lanes=block_lanes,
-            blocks_per_call=blocks_per_call,selection='prior',fixed_capacity=True,forward=forward,actor_capacity=len(params),labels=labels)
+            blocks_per_call=blocks_per_call,selection='prior',fixed_capacity=True,forward=forward,actor_capacity=len(params),labels=labels,
+            leaf_layout=leaf_layout,wide_nodes=wide_nodes)
         p.bind(params);p.programs=table;out[b]=p
     return out
 
@@ -349,7 +352,8 @@ class DepthNLiveSearch:
             buckets=list(self.buckets),capacities=[b*self.K for b in self.buckets],fixed_capacity=True,block_lanes=first.block_lanes,
             blocks_per_call=first.blocks_per_call,precision=getattr(self.forward,'precision',None)or(ident[2]if len(ident)>2 else None),
             evaluator=evaluators.describe(self.forward)['identity'],world_source=cw.SOURCE,backup='learner_max',root_operator=self._operator(),
-            root_operator_impl=ROOT_OPERATOR_IMPL,matmul_precision=str(jax.config.jax_default_matmul_precision or'default'))
+            root_operator_impl=ROOT_OPERATOR_IMPL,matmul_precision=str(jax.config.jax_default_matmul_precision or'default'),
+            **({}if getattr(first,'leaf_layout','blocks')=='blocks'else dict(leaf_layout=first.leaf_layout,wide_nodes=first.wide_nodes)))   # default: unchanged
 
     def _redaction(self):
         """prepare_roots' keywords for the private-reveal redaction and view b: each given only when it is on (a search built
