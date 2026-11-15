@@ -28,6 +28,14 @@ class ItemTable(NamedTuple):
     trick: jax.Array           # [M]
     # Fidelity WH (appended): White Herb (data/items.ts whiteherb; no gen3/gen4/gen5-8 override, so Gen 3 is the base item).
     white_herb: jax.Array      # [I]
+    # Damage modifiers (appended): Gen 3's 1.1x type items in the pool, Silk Scarf and Twisted Spoon (see attack_modifier).
+    type_boost: jax.Array      # [I], the type index the item boosts (0: none)
+
+
+# data/mods/gen3/items.ts (f76228a1) moves the type items from BasePower to the attack stat; the Gen 3 category follows
+# the move's type, so the one hook (onModifyAtk for Normal, onModifySpA for the special types) is the move's category.
+# getItem (data/random-battles/gen3/teams.ts) assigns only these two: Linoone's Silk Scarf, Unown's Twisted Spoon.
+TYPE_BOOST_ITEMS = {"silkscarf": "normal", "twistedspoon": "psychic"}
 
 
 def from_metadata(metadata):
@@ -41,16 +49,36 @@ def from_metadata(metadata):
         jnp.asarray([name=="knockoff" for name in vocab.get("moves",["_none"])]),
         jnp.asarray([name=="stickyhold" for name in vocab.get("abilities",["_none"])]),
         jnp.asarray([name=="trick" for name in vocab.get("moves",["_none"])]),
-        flag("items",{"whiteherb"}))
+        flag("items",{"whiteherb"}),_type_boost(vocab))
 
 
-def attack_modifier(table,item,species,physical):
+def _type_boost(vocab):
+    types = vocab.get("types")
+    if types is None and any(name in TYPE_BOOST_ITEMS for name in vocab["items"]):
+        raise ValueError("a type item needs the type vocabulary")
+    return jnp.asarray([types.index(TYPE_BOOST_ITEMS[name]) if name in TYPE_BOOST_ITEMS else 0
+        for name in vocab["items"]],jnp.int32)
+
+
+def attack_modifier(table,item,species,physical,*,move_type=None):
+    """The held item's Atk/SpA handler as (num, den): one item, so one factor of the ModifyAtk/ModifySpA chain.
+
+    Damage modifiers: Silk Scarf (data/mods/gen3/items.ts:337-345, onModifyAtkPriority 1) is chainModify(1.1) on Atk for
+    a Normal move, Twisted Spoon (data/mods/gen3/items.ts:406-415, onModifySpAPriority 1) on SpA for a Psychic move (Gen 3
+    clears both items' base onBasePower): 1.1*4096 truncates to 4505, returned as 4505/4096 (combat.attack_modifier chains
+    it with the ability in Q12). move_type is the move's resolved type: Hidden Power's own (a Hidden Power Psychic takes
+    Twisted Spoon; Hidden Power is never Normal), Struggle and the confusion self-hit the typeless 0. None (the confusion
+    self-hit, Pursuit's Dark intercept) is no type item."""
     physical = jnp.asarray(physical,jnp.bool_)
     band = physical & table.choice_band[item]
     doubled = ((physical & table.thick_club[item] & table.club_species[species])
         | (~physical & table.light_ball[item] & table.ball_species[species]))
     dew = ~physical & table.soul_dew[item] & table.dew_species[species]
-    return jnp.where(band | dew,3,jnp.where(doubled,2,1)),jnp.where(band | dew,2,1)
+    num,den = jnp.where(band | dew,3,jnp.where(doubled,2,1)),jnp.where(band | dew,2,1)
+    if move_type is None:
+        return num,den
+    boosted = (table.type_boost[item] > 0) & (jnp.asarray(move_type) == table.type_boost[item])
+    return jnp.where(boosted,4505,num),jnp.where(boosted,4096,den)
 
 
 def defense_modifier(table,item,species,physical):
