@@ -82,7 +82,9 @@ async def load_and_run(config,archive,*,catalog,contract,expected_archive_sha256
     """Actual explicit archive load -> owning actor -> original FP game body."""
     if enable_v5 is not True:raise ValueError('explicit v5 FP enablement required')
     import jax
-    from gpu_engine.v5_live_protocol import load_factory
+    from gpu_engine.v5_live_protocol import declared_contract,load_factory
+    # V2 self_moves: serve the archive as it declares (on archive -> on contract and catalog), never refuse it.
+    contract,catalog=declared_contract(archive,contract=contract,catalog=catalog,expected_archive_sha256=expected_archive_sha256)
     # Own matched main-thread setup, restoring it when this explicit call ends.
     with jax.default_matmul_precision('highest'),jax.enable_x64(False):
         factory=load_factory(archive,catalog=catalog,contract=contract,

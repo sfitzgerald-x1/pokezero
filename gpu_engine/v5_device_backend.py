@@ -117,8 +117,9 @@ class RuntimeBackend:
                 expected_checkpoint_sha256=checkpoint,expected_category_vocabulary_sha256=plan.model.category_vocabulary_sha256,
                 expected_label_vocabulary_sha256=plan.model.label_vocabulary.sha256,enable_v5=True)
             if config!=plan.model:raise ValueError('loaded original actor configuration differs')
-            # V2 self_moves: an actor archive declares it (meta, absent = off); the run's plan must say the same.
-            if bool(metadata.get('self_moves',False))!=bool(getattr(plan,'self_moves',False)):raise ValueError('loaded actor self_moves differs from the plan')
+            # V2 self_moves: the archive's declaration against the plan's (private_self_moves.check_run_actor).
+            from .private_self_moves import check_run_actor
+            check_run_actor(metadata,plan_self_moves=bool(getattr(plan,'self_moves',False)),iteration=snapshot.get('iteration'),context='device backend')
             self.actors[digest]=(params,metadata)
         params,metadata=self.actors[digest]
         if metadata['checkpoint_sha256']!=checkpoint:raise ValueError('cached actor checkpoint provenance differs')

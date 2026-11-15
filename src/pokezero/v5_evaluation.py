@@ -505,7 +505,10 @@ def _factory(protocol,request):
     if _vocab_sha(v)!=original.category_vocab_sha256:raise ValueError('original categorical row order required')
     source=load_gen3_randbat_source_cached(runtime['showdown']['root'])
     if source.metadata.source_hash!=original.belief_set_source_hash:raise ValueError('original public source differs')
-    contract=replace(original,checkpoint_sha256=request.snapshot.checkpoint_sha256,model_config_sha256=request.snapshot.model_sha256)
+    # V2 self_moves: the archive's declaration (absent = off) is the served contract's, so an on archive is served on.
+    from gpu_engine.v5_live_protocol import archive_self_moves
+    contract=replace(original,checkpoint_sha256=request.snapshot.checkpoint_sha256,model_config_sha256=request.snapshot.model_sha256,
+        self_moves=archive_self_moves(request.archive_path,expected_archive_sha256=request.snapshot.archive_sha256))
     catalog=v4_encoder.compile_encoder(public_belief.compile_source(source),load_showdown_dex_cached(runtime['showdown']['root']),v,
         checkpoint_sha256=contract.checkpoint_sha256,feature_masks=contract.encoder_masks())
     factory=load_factory(request.archive_path,catalog=catalog,contract=contract,

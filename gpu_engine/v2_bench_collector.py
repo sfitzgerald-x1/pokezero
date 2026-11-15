@@ -66,7 +66,8 @@ def actor(args, plan, events):
         expected_checkpoint_sha256=snapshot.checkpoint_sha256, expected_category_vocabulary_sha256=plan.model.category_vocabulary_sha256,
         expected_label_vocabulary_sha256=plan.model.label_vocabulary.sha256, enable_v5=True)
     if config != plan.model:raise ValueError('loaded initial actor configuration differs')
-    if bool(metadata.get('self_moves', False)) != plan.self_moves:raise ValueError('initial actor self_moves differs from plan')   # V2
+    from gpu_engine.private_self_moves import check_run_actor   # V2 self_moves: the initial archive against the plan
+    check_run_actor(metadata, plan_self_moves=plan.self_moves, iteration=snapshot.iteration, context='v2 bench initial actor')
     return snapshot, params, metadata
 
 

@@ -66,6 +66,17 @@ def refuse_unthreaded(meta, *, context):
         raise ValueError(f'{context}: {UNTHREADED}')
 
 
+def check_run_actor(meta, *, plan_self_moves, iteration, context):
+    """A V2 run's actor archive against its plan's declaration (meta['self_moves'], absent = off). An on archive in an off
+    run is refused. In an on run every archive the run exports is stamped on; only the initial snapshot (iteration -1,
+    the checkpoint the run starts from, e.g. a shared off init) may be off: the plan's declaration wins and its tables
+    encode that actor on."""
+    declared = bool((meta or {}).get('self_moves', False))
+    if declared == bool(plan_self_moves) or plan_self_moves and iteration == -1:
+        return
+    raise ValueError(f'{context}: actor archive self_moves={declared} differs from the plan self_moves={bool(plan_self_moves)}')
+
+
 class Tables(NamedTuple):
     max_pp: jax.Array               # [M] public_moves catalog rule floor(base PP * 8 / 5)
     category: jax.Array             # [M] vocabulary row of belief:possible_move:<name>
