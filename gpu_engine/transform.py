@@ -74,7 +74,9 @@ def apply(state, side, eligible, table):
     lastMove is `transform`, whose failencore makes a later Encore fail (data/moves.ts encore), while the engine keys
     Encore on the slot, which now names a copied move (encore.apply, encore.override, chance_consumers' closure all read
     "no encorable last move"). last_move (the caller identity) stays transform. A user already transformed keeps its
-    saves: a re-transform (a Ditto that copied a Mew with Transform) must restore the true base.
+    saves: a re-transform (a Ditto that copied a Mew with Transform) must restore the true base. (A Sleep Talk call of
+    Transform also clears the slot, while Showdown's lastMove is then Sleep Talk; no pool set holds both moves, so a
+    later Encore of a copied Sleep Talk is unreachable.)
 
     Written as whole-leaf selects over side and member masks (no per-row scatter), so its traced size stays small."""
     user = _sides(state, side, eligible)                            # [B,2]
@@ -161,7 +163,7 @@ def update_cure(state, side, eligible, entry_table):
     if entry_table is not None and entry_table.status_cure is not None:
         cured = sides & (status != m.NONE) & entry_table.status_cure[ability, status]
     if entry_table is not None and entry_table.own_tempo is not None:
-        unconfused = sides & entry_table.own_tempo[ability] & (_cells(state, state.confusion_counter) > 0)
+        unconfused = sides & entry_table.own_tempo[ability] & (_cells(state, state.confusion_counter) != 0)
     cure, calm = _at_active(state, cured), _at_active(state, unconfused)
     state = state._replace(status=jnp.where(cure, m.NONE, state.status), status_counter=jnp.where(cure, 0, state.status_counter),
         sleep_skipped=jnp.where(cure, 0, state.sleep_skipped), rest_origin=jnp.where(cure, False, state.rest_origin),
