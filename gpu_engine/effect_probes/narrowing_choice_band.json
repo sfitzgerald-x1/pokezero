@@ -1,7 +1,7 @@
 {
  "schema": "pokezero.effect_probe.scenario.v1",
  "move": "narrowing_choice_band",
- "note": "Narrowing A (set_posterior_narrowing, device mode --set-posterior): a Choice Band Tauros Return on Lapras three times, every roll and crit pair; the third hit can KO (censored: rolls >= the HP before it). The device pin of Tauros, as p2 sees it, must equal set_posterior's support over p2's lines: the Choice Band variant. The literal probe source pools every scenario file's authored sets, so Tauros has two variants (Choice Band here, Leftovers in narrowing_refusals) and Electabuzz three (Hidden Power Fire here, Ice in narrowing_hidden_power, Ground in narrowing_refusals); every other species has one.",
+ "note": "Narrowing A (set_posterior_narrowing, device mode --set-posterior): a Choice Band Tauros Return on Lapras three times, the third at the lowest or highest roll and critical or not; the third hit can KO (censored: rolls >= the HP before it). The device pin of Tauros, as p2 sees it, must equal set_posterior's support over p2's lines: the Choice Band variant. The literal probe source pools every scenario file's authored sets, so Tauros has two variants (Choice Band here, Leftovers in narrowing_refusals) and Electabuzz three (Hidden Power Fire here, Ice in narrowing_hidden_power, Ground in narrowing_refusals); every other species has one.",
  "teams": [
   [
    {
@@ -163,6 +163,9 @@
   {
    "name": "roll",
    "field": "draws.0.5",
+   "steps": [
+    2
+   ],
    "values": [
     0,
     15
@@ -171,6 +174,9 @@
   {
    "name": "crit",
    "field": "draws.0.4",
+   "steps": [
+    2
+   ],
    "values": [
     0,
     3
