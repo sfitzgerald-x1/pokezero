@@ -187,23 +187,10 @@ for _case in ('selfhit=99,paralysis=0', 'selfhit=99,paralysis=99'):
 # Fixed (history): OPEN BUG C, Encore's residual -end (engine_device_public_hooks.derived_volatiles), 24 entries retired.
 # Fixed (history): OPEN BUG D, a fainted active's kept stages (engine_device_trackers._observe), 13 entries retired.
 # Fixed (history): OPEN BUG E, Flash Fire's -start (engine_device_public_hooks.derived_volatiles), 2 entries retired.
-# OPEN BUG (reported; the last-move half is possibly B2's quirk, for the lead to rule): Pursuit's switch intercept prints
-# |move|p2a: X|Pursuit|p1a: Y|[from] Pursuit. B2 records a move line's last-used move only without [from]
-# (public_moves.record_move: last_kind/last_id gated by ~has_from, gpu_engine/public_moves.py:210-211) and credits the
-# line's -damage to the user's dealt sums (public_damage's move window); the device's move hook records Pursuit as the
-# last move and its damage history credits the intercept no dealt damage.
-_PURSUIT_FROM = 'OPEN BUG: the [from] Pursuit intercept: B2 keeps the prior last move and credits its damage dealt; the device does neither'
-ALLOWLIST[('destinybond_pursuit', 'base', 1, '1:active:last_move')] = _PURSUIT_FROM
-for _scenario, _steps in (('destinybond_pursuer', (1, 2)), ('wh_pursuit', (0,))):
-    for _step in _steps:
-        for _field in ('1:active:last_move', '1:active:last_damage_dealt', '1:active:damage_exact_dealt'):
-            ALLOWLIST[(_scenario, 'base', _step, _field)] = _PURSUIT_FROM
-# OPEN BUG (reported): a failing Counter called by Sleep Talk. Showdown prints |move|p1a: X|Counter|p2a: Y|[from] Sleep
-# Talk and B2 reveals Counter (0 PP charged); the device's called-move reveal (transition.py:1008, device_public.move(...,
-# acts & (move!=caller_move), pp_use=False, count_turn=False)) is gated by acts, which Counter's failure gate (transition.py:
-# 990, acts &= ~(counter kind & (taken kind differs | the called move is not the chosen one))) has already cleared.
-_SLEEP_TALK_COUNTER = 'OPEN BUG: Sleep Talk\'s failing called Counter is revealed by B2 ([from] Sleep Talk line), not by the device'
-for _step in (1, 2):ALLOWLIST[('counter_sleeptalk', 'talk=0', _step, '0:0:moves')] = _SLEEP_TALK_COUNTER
+# Fixed (history): OPEN BUG F, the [from] Pursuit intercept's last move (the device copies B2: engine_device_public_hooks.move
+# from_tag) and its damage credit (transition.step_with_chance's intercept), 10 entries retired.
+# Fixed (history): OPEN BUG G, Sleep Talk's failing called Counter (the reveal precedes the called move's gates:
+# transition.step_with_chance's _called_line), 2 entries retired.
 # Fixed (history): OPEN BUG I, the upkeep's Lum and pinch-berry rules (engine_device_negative_items.upkeep), 140 entries retired.
 # B2 limit (explained, not a device fact): B2's fold refuses (PAYLOAD) a side's second encounter of one species, at the
 # repeat's arrival line (|switch|p2a: Gengar2|Gengar, L74, M|...: RAW_BEGIN, SWITCH_PRELUDE, MUDSHOT, SWITCH, NONPROC,
