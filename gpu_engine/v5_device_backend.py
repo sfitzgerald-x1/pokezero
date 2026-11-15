@@ -119,7 +119,9 @@ class RuntimeBackend:
             if config!=plan.model:raise ValueError('loaded original actor configuration differs')
             # V2 self_moves: the archive's declaration against the plan's (private_self_moves.check_run_actor).
             from .private_self_moves import check_run_actor
-            check_run_actor(metadata,plan_self_moves=bool(getattr(plan,'self_moves',False)),iteration=snapshot['iteration'],context='device backend')
+            # (Planner opponents are Snapshot objects, journal payloads dicts; a binding without an iteration is not initial.)
+            iteration=snapshot.get('iteration') if isinstance(snapshot,dict) else getattr(snapshot,'iteration',None)
+            check_run_actor(metadata,plan_self_moves=bool(getattr(plan,'self_moves',False)),iteration=iteration,context='device backend')
             self.actors[digest]=(params,metadata)
         params,metadata=self.actors[digest]
         if metadata['checkpoint_sha256']!=checkpoint:raise ValueError('cached actor checkpoint provenance differs')
