@@ -9,6 +9,6 @@ M2's R1 (the Wrap and Yawn residual handlers traced only at their reachable posi
 Fidelity WH (White Herb, Sacred Fire's thaw and Facade) merged with R1 moved it to a19958b5, the merge's transition.py;
 its review fixes (Trick's received herb, fewer traced triggers) moved it to 91346285, and the B2 Trick-credit rule
 to 13f76e5e. M2's R2 (the older residual handlers traced only at their reachable positions) moved it to a8c48fa7, and its
-Encore stale-move clear to 7c984fe6. Forecast (Castform's forme at every WeatherChange) moved it to adc2d812.
+Encore stale-move clear to 7c984fe6. Forecast (Castform's forme at every WeatherChange) moved it to adc2d812; ordered-faint Forecast events moved it to 3c3e7682.
 """
-CURRENT_TRANSITION = 'adc2d812cc9f9534dde2d029500a4f2447251432'
+CURRENT_TRANSITION = '3c3e76821725d8b23b05183235e412c48ba0a25e'
