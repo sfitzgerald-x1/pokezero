@@ -924,11 +924,22 @@ class R3paTests(unittest.TestCase):
                 if self.fail:raise RuntimeError('no views')
                 self.warmed.append(len(worlds))
         on, off = Labels(), Labels()
-        with Codex(outcomes):self.search(root_operator=live.NOISE_GATED_K2, r3pa='gated', r3pa_labels=on).warmup([request('w0', 0), request('w1', 0)])
-        with Codex(outcomes):self.search(r3pa_labels=off).warmup([request('w0', 0), request('w1', 0)])
+        with Codex(outcomes):warm = self.search(root_operator=live.NOISE_GATED_K2, r3pa='gated', r3pa_labels=on).warmup([request('w0', 0), request('w1', 0)])
+        with Codex(outcomes):cold = self.search(r3pa_labels=off).warmup([request('w0', 0), request('w1', 0)])
         self.assertEqual((on.warmed, off.warmed), ([8], []))
+        self.assertEqual((warm['r3pa']['mode'], warm['r3pa']['labels_seats_seconds']), ('gated', None));self.assertGreater(warm['r3pa']['substituted_roots'], 0)
+        self.assertNotIn('r3pa', cold)
         with Codex(outcomes), self.assertRaisesRegex(RuntimeError, 'R3pa lane labels did not warm'):
             self.search(r3pa='replace_gate', r3pa_labels=Labels(fail=True)).warmup([request('w0', 0), request('w1', 0)])
+
+    def test_warmup_refuses_ready_when_r3pa_never_substitutes(self):
+        outcomes = {('w0', 0):self.outcome(0), ('w1', 0):self.outcome(1)}
+        class Broken:
+            def __call__(self, worlds, owner, flat):raise ValueError('vocabulary index out of range')
+            def warm(self, worlds):return {0:0., 1:0.}
+        for mode in ('gated', 'replace_gate'):
+            with self.subTest(mode=mode), Codex(outcomes), self.assertRaisesRegex(RuntimeError, 'R3pa substituted no warmup root'):
+                self.search(root_operator=live.NOISE_GATED_K2, r3pa=mode, r3pa_labels=Broken()).warmup([request('w0', 0), request('w1', 0)])
 
 
 class AveragingEquivalenceTests(unittest.TestCase):

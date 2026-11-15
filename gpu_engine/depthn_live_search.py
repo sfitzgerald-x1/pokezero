@@ -310,16 +310,17 @@ class DepthNLiveSearch:
         NOISE_GATED_K2 on those blocks (it needs that root operator), 'replace_gate' plays their averaging choice without the
         gate. `r3pa_labels(worlds, owner, flat_world_prices)`, required with it, labels the flat block-order worlds' nine
         reply lanes and raises on any labelling problem (kept lanes other than the peer-legal ones too); its `warm(worlds)`,
-        when it has one, runs in warmup. A labelling or substitution error plays the unsubstituted decision. Every COMPLETE
-        response then carries r3pa (mode, unsubstituted_action: today's played action on the same blocks,
-        substituted_action, gate_passed, error); the effect guard keeps the pre-R3pa logits."""
+        when it has one, runs in warmup, and warmup refuses READY unless R3pa substituted at least one warmup root. A labelling
+        or substitution error plays the unsubstituted decision. Every COMPLETE response then carries r3pa (mode,
+        unsubstituted_action: today's played action on the same blocks, substituted_action, gate_passed: the played decision's
+        gate, the unsubstituted one's when error is set, error); the effect guard keeps the pre-R3pa logits."""
         if root_operator not in ROOT_OPERATORS:raise ValueError(f'root_operator in {ROOT_OPERATORS} required')
         if r3pa!='off':   # flag off: depthn_r3pa is never imported
             from . import depthn_r3pa
             if r3pa not in depthn_r3pa.MODES:raise ValueError(f'r3pa in {depthn_r3pa.MODES} required')
             if not callable(r3pa_labels):raise ValueError('r3pa needs an r3pa_labels(worlds, owner, flat_world_prices) callable')
             if r3pa=='gated'and root_operator!=NOISE_GATED_K2:raise ValueError(f'r3pa gated keeps the noise gate: root_operator {NOISE_GATED_K2} required')
-        self.r3pa,self.r3pa_labels=r3pa,r3pa_labels
+        self.r3pa,self.r3pa_labels=r3pa,r3pa_labels;self.r3pa_completed=0;self.r3pa_warm=None   # roots R3pa substituted (warmup's check)
         self.root_operator=root_operator
         self.ability_guard=bool(ability_guard)   # the effect guard's ability arms (depthn_guard_inputs.effect_record's metadata); off by default
         if self.ability_guard and any(getattr(p,'labels',None)is not guard_inputs.ability_labels for p in pricers.values()):
@@ -522,6 +523,7 @@ class DepthNLiveSearch:
                 gate=decision.get('noise_gate')
                 decision['r3pa']=dict(r3pa,substituted_action=None if r3pa['error']is not None else decision['action_index'],
                     gate_passed=None if gate is None else gate['passed'])
+                self.r3pa_completed+=decision['status']=='COMPLETE'and r3pa['error']is None
             if reply is not None:
                 decision['reply_prior']=reply;self.reply_completed+=decision['status']=='COMPLETE'
             if decision['status']=='COMPLETE':decision['effect_guard']=self._effect_guard(frame,root,made,by_id[root['request_id']],children,seam_notes,
@@ -629,7 +631,7 @@ class DepthNLiveSearch:
             if not isinstance(r,dict)or any(k not in r for k in keys):raise ValueError('saved requests with '+', '.join(keys)+' required')
             pool.append({k:r[k]for k in keys})
         if not pool:raise ValueError('at least one saved request required')
-        started=time.perf_counter();self.carry=None;self.warming=True;self.reply_completed=0;self.reply_warm=None
+        started=time.perf_counter();self.carry=None;self.warming=True;self.reply_completed=0;self.reply_warm=None;self.r3pa_completed=0;self.r3pa_warm=None
         # No full (gen-2) collection while the programs trace: each would rescan the trace's own growing live state (tens of
         # millions of objects) and find little garbage. Young collections go on; the thresholds come back only after
         # _release_traces' one collection, so no full pass ever runs over the still-retained traces.
@@ -646,6 +648,8 @@ class DepthNLiveSearch:
                 raise RuntimeError('warmup: the reply prior completed no warmup root (every one refused REPLY_PRIOR_ERROR or refused before it)')
             if getattr(self,'reply',None)is not None and set(self.reply_warm or ())!={0,1}:
                 raise RuntimeError('warmup: the reply prior did not compile both owner seats (no fully constructed warmup root)')
+            if self._r3pa()!='off'and not self.r3pa_completed:   # labels that fail on every root would serve today's decisions as a silent no-op
+                raise RuntimeError('warmup: R3pa substituted no warmup root (every COMPLETE root played the unsubstituted decision with r3pa.error set, or none completed)')
             signatures={k[-1][2]for k in self.programs if type(k[-1])is tuple and k[-1][:2]==('worlds',cw.SOURCE)}
             if self.carry is None or signatures!={self.carry['signature']}:
                 raise RuntimeError(f'warmup: the recorded carry signature {None if self.carry is None else self.carry["signature"]} is not the warmed programs\' {sorted(signatures)}')
@@ -654,7 +658,8 @@ class DepthNLiveSearch:
         self.warm=dict(buckets=report,programs=len(self.programs),seconds=time.perf_counter()-started,carry_signature=self.carry['signature'],
             trace_release=released,
             carry_reference=self.carry['root'],labels=dict(p1_rows={b:2*b*self.K*dn.LANES for b in self.buckets},root_rows=labels),
-            **({}if getattr(self,'reply',None)is None else dict(reply=dict(views=self.reply.mode,seats_seconds=self.reply_warm))))
+            **({}if getattr(self,'reply',None)is None else dict(reply=dict(views=self.reply.mode,seats_seconds=self.reply_warm))),
+            **({}if self._r3pa()=='off'else dict(r3pa=dict(mode=self.r3pa,labels_seats_seconds=self.r3pa_warm,substituted_roots=self.r3pa_completed))))
         return self.warm
 
     def _release_traces(self,batches):
@@ -697,7 +702,7 @@ class DepthNLiveSearch:
                     except FATAL:raise
                     except Exception as error:raise RuntimeError(f'warmup: the reply prior did not compile both seats: {type(error).__name__}: {error}')from error
                 if self._r3pa()!='off'and callable(getattr(self.r3pa_labels,'warm',None)):   # R3pa's lane labels, before READY
-                    try:self.r3pa_labels.warm(item.made.worlds)
+                    try:self.r3pa_warm=self.r3pa_labels.warm(item.made.worlds)
                     except FATAL:raise
                     except Exception as error:raise RuntimeError(f'warmup: the R3pa lane labels did not warm: {type(error).__name__}: {error}')from error
             diff=self._structure(item,request,None)
