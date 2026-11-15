@@ -116,12 +116,15 @@ def _make_leaf_joint(executor):
     return jax.vmap(single,in_axes=(None,None,None,None,None,None,0,None))
 
 
-def _make_views(executor):
-    """Both seats' observations of one world (dispatch views and encoder inputs), from the engine masks."""
+def _make_views(executor,*,peer_self_moves=None):
+    """Both seats' observations of one world (dispatch views and encoder inputs), from the engine masks.
+    peer_self_moves=False (V2): the peer's view without own move/PP cells (a reply model that does not declare self_moves)."""
+    peer_observe=executor.observe
+    if peer_self_moves is False and getattr(executor,'observe_self_moves_off',None) is not None:peer_observe=executor.observe_self_moves_off
     def views(state,public,owner):
         masks=executor.legal(state);seat=j.asarray([owner],j.int32)
         own=executor.observe(state,public,seat,masks[:,owner])
-        peer=executor.observe(state,public,1-seat,masks[:,1-owner])
+        peer=peer_observe(state,public,1-seat,masks[:,1-owner])
         return own.observation,peer.observation,own.inputs,peer.inputs
     return views
 

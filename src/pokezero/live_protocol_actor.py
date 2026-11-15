@@ -151,6 +151,9 @@ class ActorContract:
     showdown_revision: str
     categorical_vocab_size: int = 916
     token_type_vocab_size: int = 16
+    # V2 self_moves: the served checkpoint's declaration (its model config / archive metadata). Recorded in the contract
+    # identity only when on (namespace omits it when False), so every existing contract hash is unchanged.
+    self_moves: bool = False
 
     def __post_init__(self):
         _require(all(_hex(v) for v in (self.checkpoint_sha256,
@@ -172,6 +175,7 @@ class ActorContract:
         masks = dict(self.feature_masks)
         _require(masks['transition_token_budget'] == 0 and not masks['investment_belief_narrowing'],
                  'installed one-frame V4 masks required')
+        _require(type(self.self_moves) is bool, 'self_moves must be a bool')
 
     @classmethod
     def champion(cls):
@@ -182,7 +186,16 @@ class ActorContract:
 
     @property
     def namespace(self):
-        return _sha(_canonical(self.__dict__))
+        identity = dict(self.__dict__)
+        if not identity['self_moves']:del identity['self_moves']   # off: the pre-self_moves identity, byte for byte
+        return _sha(_canonical(identity))
+
+    def encoder_masks(self):
+        """The mask dict every v4_encoder.compile_encoder call for this contract passes: the declared feature_masks plus each
+        OPTIONAL key, here self_moves, always declared (so an OBS_SELF_MOVES measurement override cannot flip a served
+        catalog). THE single place optional mask keys are added. See gpu_engine.v4_encoder OPTIONAL_KEYS / ENCODE_ONLY: a
+        future optional key that changes the fold (e.g. set-posterior narrowing) must stay IN the fold binding."""
+        return dict(self.feature_masks, self_moves=self.self_moves)
 
 
 def _vocab_sha(vocab):
@@ -264,8 +277,11 @@ class RawPolicy(OwnedProvider):
             item_belief_narrowing=config.item_belief_narrowing, stats_block=config.stats_block_enabled,
             tier2_investment=config.tier2_investment, tier2_residuals=config.tier2_residuals,
             transition_token_budget=config.transition_token_budget)
-        _require(tuple((k, mask_values[k]) for k in MASK_NAMES) == contract.feature_masks,
-                 'raw feature masks differ')
+        _require(tuple((k, mask_values[k]) for k in MASK_NAMES) == contract.feature_masks
+                 and bool(getattr(config, 'self_moves', False)) == contract.self_moves, 'raw feature masks differ')
+        # V2 self_moves: a serving actor encodes what its checkpoint declares; OBS_SELF_MOVES is for measurement tools.
+        from .observation import require_declared_self_moves
+        require_declared_self_moves(bool(getattr(config, 'self_moves', False)), context='live protocol actor')
         _require(config.categorical_vocab_size == contract.categorical_vocab_size
             and config.token_type_vocab_size == contract.token_type_vocab_size
             and config.observation_schema_version == 'pokezero.observation.v4'
@@ -302,7 +318,8 @@ class RawPolicy(OwnedProvider):
                 and _sha(_canonical(config.category_vocab)) == contract.category_vocab_sha256,
                 'raw model/config/vocabulary binding drift')
             _require(tuple((k, getattr(config, {'exact_state':'exact_state_enabled',
-                'stats_block':'stats_block_enabled'}.get(k,k))) for k in MASK_NAMES) == contract.feature_masks,
+                'stats_block':'stats_block_enabled'}.get(k,k))) for k in MASK_NAMES) == contract.feature_masks
+                and bool(getattr(config, 'self_moves', False)) == contract.self_moves,
                 'raw feature mask binding drift')
             _require(tuple((type(getattr(policy,k)),getattr(policy,k)) for k in fields) == selection
                 and _same_callable(policy.forward_fn, forward)
@@ -335,6 +352,7 @@ class PythonBackend(OwnedProvider):
             and _vocab_sha(config.category_vocab) == contract.category_vocab_sha256
             and config.category_vocab.size == contract.categorical_vocab_size
             and _mask_values(config.feature_masks) == contract.feature_masks
+            and bool(getattr(config.feature_masks, 'self_moves', False)) == contract.self_moves
             and config.set_belief_source is True, 'Python encoder contract differs')
         self.owner, self.env = owner, LocalShowdownEnv(config)
         _require(self.env._process is None and self.env._battle_token is None
@@ -368,6 +386,7 @@ class PythonBackend(OwnedProvider):
             and self.env._belief_set_source.metadata.source_hash == self.contract.belief_set_source_hash
             and _vocab_sha(self.env.config.category_vocab) == self.contract.category_vocab_sha256
             and _mask_values(self.env.config.feature_masks) == self.contract.feature_masks
+            and bool(getattr(self.env.config.feature_masks, 'self_moves', False)) == self.contract.self_moves
             and self.env._parser.hp_visibility == {self.owner:'exact',
                 'p2' if self.owner=='p1' else 'p1':'percentage'}, 'Python namespace drift')
 
@@ -386,7 +405,8 @@ class JaxBackend(OwnedProvider):
             and catalog.source.source_hash == contract.belief_set_source_hash
             and _vocab_sha(catalog.vocabulary) == contract.category_vocab_sha256
             and catalog.vocabulary.size == contract.categorical_vocab_size
-            and tuple((k,getattr(catalog.masks,k)) for k in MASK_NAMES) == contract.feature_masks,
+            and tuple((k,getattr(catalog.masks,k)) for k in MASK_NAMES) == contract.feature_masks
+            and bool(getattr(catalog.masks,'self_moves',False)) == contract.self_moves,
             'JAX encoder contract differs')
         _require(owner in ('p1','p2'), 'absolute owning side required')
         self.catalog, self.owner = catalog, owner
@@ -410,6 +430,7 @@ class JaxBackend(OwnedProvider):
             and self.catalog.source.source_hash == self.contract.belief_set_source_hash
             and _vocab_sha(self.catalog.vocabulary) == self.contract.category_vocab_sha256
             and tuple((k,getattr(self.catalog.masks,k)) for k in MASK_NAMES) == self.contract.feature_masks
+            and bool(getattr(self.catalog.masks,'self_moves',False)) == self.contract.self_moves
             and np.array_equal(np.asarray(self.catalog.binding),self._catalog_binding), 'JAX namespace drift')
         _require(not self.adapter.jax.config.jax_enable_x64
             and self.adapter.jax.config.jax_default_matmul_precision == 'highest', 'JAX precision drift')

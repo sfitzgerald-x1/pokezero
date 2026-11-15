@@ -104,7 +104,7 @@ class Runtime:
         source = load_gen3_randbat_source_cached(config.showdown_root)
         _require(source.metadata.source_hash == contract.belief_set_source_hash, 'same original public source required')
         catalog = v4_encoder.compile_encoder(public_belief.compile_source(source), load_showdown_dex_cached(config.showdown_root),
-            vocab, checkpoint_sha256=contract.checkpoint_sha256, feature_masks=dict(contract.feature_masks))
+            vocab, checkpoint_sha256=contract.checkpoint_sha256, feature_masks=contract.encoder_masks())
         functions = CompiledEncoderFunctions(catalog)
         def backend(c, *, env_config, **identity):
             _require(c == contract and env_config is env, 'fresh game requires same current B2 runtime')

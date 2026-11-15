@@ -263,6 +263,11 @@ def check_reply_view(meta,args):
 
 def options(argv=None):
     p=parser();args=p.parse_args(argv);evaluators.check_arguments(p,args);check_precision_environment(p,args)
+    # V2 self_moves: the server encodes what its champion contract declares (the contract's masks carry no self_moves, so
+    # False); an OBS_SELF_MOVES override is for measurement tools and refuses a serving start.
+    from pokezero.observation import require_declared_self_moves
+    try:require_declared_self_moves(False,context='depthn live server')
+    except ValueError as error:p.error(str(error))
     if not args.champion_archive:p.error('--champion-archive with its two sha256 flags is required: the champion prices every root and leaf')
     check_reply_arguments(p,args)
     if getattr(args,'eager_peer_fold',False)and not(args.redact_private_reveals or args.peer_view_b):
