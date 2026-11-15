@@ -29,6 +29,8 @@ Read the pod's actual `memory.max` and `cpu.max`, then choose concurrency from t
 For each `index` from 0 to 15, run the light workflow's command with only `--tier heavy` changed (same count, case-isolation and compiler options). Set `ci_memory_dir` and `CI_SUMMARY` to fresh result locations:
 
 ```sh
+set -o pipefail
+mkdir -p "$ci_memory_dir"
 python scripts/run_component_memory_check.py --output "$ci_memory_dir" \
   --label "shard-$index" --summary "$CI_SUMMARY" -- \
   python scripts/run_gpu_component_shard.py --tier heavy --index "$index" --count 16 --process-blocks \
