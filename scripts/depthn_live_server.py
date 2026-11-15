@@ -106,7 +106,7 @@ class Server(original.Server):
     async def serve(self,host,port,*,on_ready=None):
         """Codex's serve (listener and consumer; on exit it drains accepted work and shuts the executor down), plus on_ready()
         once the listener accepts a connection, and stop() from any thread (SIGTERM when serving on the main thread)."""
-        self.loop=asyncio.get_running_loop();self.task=asyncio.ensure_future(super().serve(host,port))
+        self.loop=asyncio.get_running_loop();self.stop_event=asyncio.Event();self.task=asyncio.ensure_future(self._serve(host,port))
         if threading.current_thread()is threading.main_thread():self.loop.add_signal_handler(signal.SIGTERM,self.stop)
         try:
             if on_ready is not None and await self._listening(host,port):on_ready()
@@ -133,10 +133,31 @@ class Server(original.Server):
                 with suppress(OSError):await writer.wait_closed()
         self.task.result();return False
 
+    async def _serve(self,host,port):
+        """Codex's serve (phase_d_search_server.Server.serve), its steps in its order, stopped by stop()'s event instead of by
+        cancelling the listener's serve_forever: since CPython 3.13.(14..18) a cancelled serve_forever also closes every client
+        connection at once (asyncio.Server.close_clients), so the answers owed to requests already accepted were lost (the
+        pipelined server's drain test failed on CI). Here the listener only stops accepting; then, as Codex's: closing set,
+        the queue's sentinel, the consumer drained (every accepted request answered, its handler writing its answer), the
+        handlers ended, the executor shut down."""
+        consumer=asyncio.create_task(self.consume());server=None
+        try:
+            server=await asyncio.start_server(self.handle,host,port)
+            await self.stop_event.wait()
+        finally:
+            if server is not None:server.close()   # no new connections; the accepted ones stay open until answered
+            self.closing=True
+            await self.queue.put(None)
+            await consumer
+            for task in tuple(self.clients):task.cancel()
+            await asyncio.gather(*self.clients,return_exceptions=True)
+            if server is not None:await server.wait_closed()
+            self.executor.shutdown(wait=True,cancel_futures=False)
+
     def stop(self):
-        """Stop serving, from any thread."""
+        """Stop serving, from any thread: the listener closes, accepted requests are answered, then serve returns."""
         self.stopping=True
-        if self.loop is not None:self.loop.call_soon_threadsafe(self.task.cancel)
+        if self.loop is not None:self.loop.call_soon_threadsafe(self.stop_event.set)
 
 
 def request_row(request,response,finished):
