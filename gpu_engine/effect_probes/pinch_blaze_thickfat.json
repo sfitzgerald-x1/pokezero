@@ -1,7 +1,7 @@
 {
  "schema": "pokezero.effect_probe.scenario.v1",
  "move": "pinch_blaze_thickfat",
- "note": "Tier D PINCH chained with Thick Fat in one BasePower event: Blaziken (L80, 257 HP, HP Fire 69 by IVs) at exactly floor(257/3) hits Thick Fat Snorlax: chainModify(1.5) then chainModify(0.5) is (6144*2048+2048)>>12 = 3072/4096, power 52 (sequential modifies: 51). Every damage roll.",
+ "note": "Tier D PINCH chained with Thick Fat in one BasePower event: Blaziken (L100, 319 HP, HP Fire 69 by IVs) takes three level-71 Seismic Tosses to exactly floor(319/3) and hits Thick Fat Snorlax (SpD IV/EV 0): chainModify(1.5) then chainModify(0.5) is (6144*2048+2048)>>12 = 3072/4096, power 52 (two separate modifies: 51, which changes the damage at every roll). Every damage roll.",
  "teams": [
   [
    {
@@ -14,7 +14,7 @@
     ],
     "ability": "Blaze",
     "item": "",
-    "level": 80,
+    "level": 100,
     "ivs": {
      "hp": 28,
      "atk": 31,
@@ -91,7 +91,13 @@
     ],
     "ability": "Thick Fat",
     "item": "",
-    "level": 86
+    "level": 71,
+    "ivs": {
+     "spd": 0
+    },
+    "evs": {
+     "spd": 0
+    }
    },
    {
     "species": "Blissey",
@@ -160,6 +166,10 @@
    "move 1"
   ],
   [
+   "move 2",
+   "move 1"
+  ],
+  [
    "move 1",
    "move 2"
   ]
@@ -169,7 +179,7 @@
    "name": "roll",
    "field": "draws.0.5",
    "steps": [
-    2
+    3
    ],
    "values": [
     0,
