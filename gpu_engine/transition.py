@@ -230,11 +230,7 @@ def _clear_fainted_boosts(state,before_hp,*,eligible):
     Previously dead slots and ineligible rows are not new faint transactions.
     """
     fainted=jnp.asarray(eligible)[:,None,None] & (before_hp>0) & (state.hp<=0)
-    state=state._replace(boosts=jnp.where(fainted[...,None],0,state.boosts))
-    # The same clearVolatile reverts a fainted transformed active (transform.revert, gated on the flag), so the outgoing
-    # Speed a replacement order reads (_speeds) is its original, as in Showdown.
-    if hasattr(state,'transformed'):state=shift.faint_revert(state,fainted)
-    return state
+    return state._replace(boosts=jnp.where(fainted[...,None],0,state.boosts))
 
 
 def _speeds(state,table):
@@ -2691,6 +2687,9 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
     # until that target's next residual tick releases it silently (data/mods/gen5/conditions.ts:14-20).
     work=work._replace(**{name:jnp.where(work.hp>0,getattr(work,name),0) for name in ("perish_counter","yawn_counter","partial_trap_counter")},
         partial_trap_source=jnp.where(work.hp>0,work.partial_trap_source,-1))
+    # Transform: and the copy of a transformed active (transform.faint_revert, gated on the flag), so the replacement's
+    # outgoing Speed (_speeds) and every step boundary see its original, as in Showdown.
+    if table.transform is not None:work=shift.faint_revert(work)
     alive = jnp.any(work.hp > 0, axis=2)
     done = ~jnp.all(alive, axis=1)
     winner = jnp.where(alive[:, 0], 0, jnp.where(alive[:, 1], 1, 2))
