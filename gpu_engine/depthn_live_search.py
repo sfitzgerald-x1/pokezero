@@ -279,6 +279,11 @@ def wire_b2_view(view):
         numeric_max_abs_diff=float(diff)if isinstance(diff,(int,float))and math.isfinite(diff)else None,error=None if error is None else str(error))
 
 
+def _gated(item):
+    """The stand-in build sees for a root refused before pricing: a RootRefusal (GATED) with the root's id, seconds and binding."""
+    return cw.RootRefusal(item.request_id,'GATED','',item.seconds,item.binding)
+
+
 def _battle(key):
     """The battle of a ProtocolConstructor session key (rung, battle, owner, stream), else None."""
     return key[1]if type(key)is tuple and len(key)==4 else None
@@ -286,6 +291,44 @@ def _battle(key):
 
 def _real(x):
     return type(x)in(int,float)and math.isfinite(x)
+
+
+def classify_prepared(constructor,request,item):
+    """The root-class labels of one prepare_roots result (module docstring, root classes): dict(root_classes, root_class,
+    root_class_source, root_class_crosscheck (fully constructed roots only), classify_seconds, structure_seconds=None).
+    The search's own step after prepare, and a prepare worker's (gpu_engine.prepare_pool) on its own constructor."""
+    clock=time.perf_counter()
+    try:classes,source=classify(constructor,request)
+    except FATAL:raise
+    except Exception as error:classes,source=None,f'UNCLASSIFIED: {type(error).__name__}: {error}'
+    full=type(item)is cw.Prepared and item.made.fully_constructed   # a root with a refused world keeps its constructor cause
+    return dict(root_classes=classes,root_class=None if classes is None else root_class(classes),root_class_source=source,
+        root_class_crosscheck=class_crosscheck(classes,item.made)if full else None,classify_seconds=time.perf_counter()-clock,structure_seconds=None)
+
+
+def drop_battles(constructor,drop):
+    """Forget the sessions, attempted addresses and incremental roots of the battle ids in `drop` (a set)."""
+    sessions,seen=constructor.sessions,constructor.seen
+    for key in[k for k in sessions if _battle(k)in drop]:del sessions[key]
+    seen.difference_update([a for a in seen if type(a)is tuple and len(a)==3 and _battle(a[0])in drop])
+    if callable(getattr(constructor,'drop_roots',None)):constructor.drop_roots(drop)
+
+
+def reset_constructor(constructor):
+    """Forget every constructor session, attempted address and incremental root."""
+    constructor.seen.clear();constructor.sessions.clear()
+    if callable(getattr(constructor,'drop_roots',None)):constructor.drop_roots()
+
+
+class RemoteError(RuntimeError):
+    """A prepare worker's failure (gpu_engine.prepare_pool): `text` is the server_error refusal, already in the search's own
+    'Type: message' form."""
+    def __init__(self,text):super().__init__(text);self.text=text
+
+
+def error_text(error):
+    """A server_error refusal's text for an exception: 'Type: message' (a prepare worker's error keeps its own)."""
+    return error.text if isinstance(error,RemoteError)else f'{type(error).__name__}: {error}'
 
 
 class DepthNLiveSearch:
@@ -346,7 +389,8 @@ class DepthNLiveSearch:
         from .depthn_reply_prior import ReplyPrior
         if reply is not None and not isinstance(reply,ReplyPrior):raise ValueError('reply: a depthn_reply_prior.ReplyPrior or None required')
         self.device,self.clock,self.reply=device,clock,reply;self.reply_completed=0   # roots the reply prior completed (warmup's check)
-        self.battles=OrderedDict();self.evicted=0;self.warm=None
+        self.battles=OrderedDict();self.evicted=0;self.warm=None;self.pool=None
+        self.reply_batches=()   # bucket sizes whose batched reply forward warmup compiles (the pipeline's reply_forward='device')
         self.pricer_identity=dict(engine='DepthNPricer',depth=DEPTH,k=[WIDTH,WIDTH],k1=[WIDTH,WIDTH],selection='prior',W=W,K=self.K,
             buckets=list(self.buckets),capacities=[b*self.K for b in self.buckets],fixed_capacity=True,block_lanes=first.block_lanes,
             blocks_per_call=first.blocks_per_call,precision=getattr(self.forward,'precision',None)or(ident[2]if len(ident)>2 else None),
@@ -407,62 +451,114 @@ class DepthNLiveSearch:
         for start in range(0,len(requests),self.max_requests):out.extend(self._batch(requests[start:start+self.max_requests]))
         return out
 
+    def _admit(self,request,n):
+        """(response row, refusal): the request's response skeleton (a batch of n) and its bad_request refusal, or None."""
+        rid=request.get('request_id')if isinstance(request,dict)else None
+        row=self._response(rid if type(rid)is str else None,n);problem=self._problem(request)
+        if isinstance(request,dict)and type(request.get('rung'))is str:row['rung']=request['rung']   # the client matches its own rung
+        if problem is None and request['rung']!=self.rung:problem=f'RUNG_NOT_SERVED: {request["rung"]!r} (this server serves {self.rung})'
+        return row,problem
+
+    def _expired(self,request,row,started):
+        """Sets the row's queue_seconds (ARRIVAL -> started); the expired_in_queue response when the wait leaves less than
+        min_price_seconds of the budget, else None."""
+        wait=max(0.,started-request.get(ARRIVAL,started));row['timings']['queue_seconds']=wait
+        if request['budget_seconds']-wait<self.min_price_seconds:
+            return dict(row,cause='expired_in_queue',refusal=f'EXPIRED_IN_QUEUE: waited {wait:.3f}s of a {float(request["budget_seconds"]):.3f}s budget, '
+                f'under the {self.min_price_seconds:.3f}s minimum to price')
+        return None
+
+    def _failed(self,row,labels,error):
+        """A request's server_error response for an exception of its shared batch (its classes kept when it was classified)."""
+        labels=dict(labels or{});seconds={k:labels.pop(k,None)for k in('classify_seconds','structure_seconds')}
+        return dict(row,**labels,timings=dict(row['timings'],**seconds),cause='server_error',refusal=error_text(error))
+
+    def _encodable(self,row,n):
+        """The row, or server_error RESPONSE_NOT_ENCODABLE when phase_d_search_server.encode refuses it."""
+        try:encode(row)
+        except(ValueError,TypeError)as error:
+            return dict(self._response(row.get('request_id'),n),cause='server_error',refusal=f'RESPONSE_NOT_ENCODABLE: {type(error).__name__}: {error}')
+        return row
+
     def _batch(self,requests,*,bucket=None):
         started=self.clock();n=len(requests);out=[None]*n;todo=[]
         for i,request in enumerate(requests):
-            rid=request.get('request_id')if isinstance(request,dict)else None
-            row=self._response(rid if type(rid)is str else None,n);problem=self._problem(request)
-            if isinstance(request,dict)and type(request.get('rung'))is str:row['rung']=request['rung']   # the client matches its own rung
-            if problem is None and request['rung']!=self.rung:problem=f'RUNG_NOT_SERVED: {request["rung"]!r} (this server serves {self.rung})'
+            row,problem=self._admit(request,n)
             if problem is not None:out[i]=dict(row,cause='bad_request',refusal=problem);continue
-            wait=max(0.,started-request.get(ARRIVAL,started));row['timings']['queue_seconds']=wait
-            if request['budget_seconds']-wait<self.min_price_seconds:
-                out[i]=dict(row,cause='expired_in_queue',refusal=f'EXPIRED_IN_QUEUE: waited {wait:.3f}s of a {float(request["budget_seconds"]):.3f}s budget, '
-                    f'under the {self.min_price_seconds:.3f}s minimum to price');continue
+            expired=self._expired(request,row,started)
+            if expired is not None:out[i]=expired;continue
             todo.append((i,{k:request[k]for k in PROTOCOL_KEYS},row))
         if todo:
             classified={}   # filled per root as soon as it is classified, so a batch exception still reports the classes
             try:done=self._search(todo,started,bucket,classified)
             except FATAL:raise
-            except Exception as error:
-                done={}
-                for i,_,row in todo:
-                    labels=dict(classified.get(i,{}));seconds={k:labels.pop(k,None)for k in('classify_seconds','structure_seconds')}
-                    done[i]=dict(row,**labels,timings=dict(row['timings'],**seconds),cause='server_error',refusal=f'{type(error).__name__}: {error}')
+            except Exception as error:done={i:self._failed(row,classified.get(i),error)for i,_,row in todo}
             finally:self._evict()
             for i,row in done.items():out[i]=row
-        for i,row in enumerate(out):
-            try:encode(row)
-            except(ValueError,TypeError)as error:
-                out[i]=dict(self._response(row.get('request_id'),n),cause='server_error',refusal=f'RESPONSE_NOT_ENCODABLE: {type(error).__name__}: {error}')
-        return out
+        return[self._encodable(row,n)for row in out]
 
     def _search(self,todo,started,bucket,classified):
         """prepare -> classify -> gates (refused classes, carry structure) -> build -> one price -> decide for the batch's valid
-        requests; {response index: response}."""
-        for _,p,_ in todo:
-            if type(p['battle_id'])is str:self.battles[p['battle_id']]=None;self.battles.move_to_end(p['battle_id'])
-        prepared=cw.prepare_roots(self.constructor,[p for _,p,_ in todo],device=self.device,
-            **self._redaction());t_prepare=time.perf_counter()
-        gated=[];gates={}
+        requests; {response index: response}. The stages are the batching pipeline's too (gpu_engine.depthn_batching)."""
+        self._touch(p for _,p,_ in todo)
+        prepared=self._prepare(todo,classified)
+        gates={}
         for(i,p,_),item in zip(todo,prepared):
-            clock=time.perf_counter()
-            try:classes,source=classify(self.constructor,p)
-            except FATAL:raise
-            except Exception as error:classes,source=None,f'UNCLASSIFIED: {type(error).__name__}: {error}'
-            full=type(item)is cw.Prepared and item.made.fully_constructed   # a root with a refused world keeps its constructor cause
-            classified[i]=dict(root_classes=classes,root_class=None if classes is None else root_class(classes),root_class_source=source,
-                root_class_crosscheck=class_crosscheck(classes,item.made)if full else None,classify_seconds=time.perf_counter()-clock,structure_seconds=None)
-            refused=[c for c in self.refuse_classes if classes and c in classes]
-            if full and refused:gates[i]=('class_refused','ROOT_CLASS_REFUSED:'+','.join(refused))
-            elif full and classes is None and self.refuse_classes:gates[i]=('class_refused','ROOT_CLASS_UNKNOWN')
-            elif full:
-                clock=time.perf_counter();diff=self._structure(item,p,classes);classified[i]['structure_seconds']=time.perf_counter()-clock
-                if diff:gates[i]=('depthn_refused','WORLD_STRUCTURE_MISMATCH:'+diff)
-            gated.append(cw.RootRefusal(item.request_id,'GATED','',item.seconds,item.binding)if i in gates else item)
-        t_classify=time.perf_counter()
+            gate=self._gate(i,p,item,classified)
+            if gate is not None:gates[i]=gate
+        gated=[_gated(item)if i in gates else item for(i,_,_),item in zip(todo,prepared)]
+        priced=self._price(gated,bucket)
+        results=self._decide(todo,prepared,priced);t_reduce=time.perf_counter();decided=self.clock()-started
+        return self._assemble(todo,prepared,results,classified,gates,priced,t_reduce,{i:decided for i,_,_ in todo})
+
+    def _touch(self,requests):
+        """The session LRU: these requests' battles become the most recently prepared."""
+        for p in requests:
+            if type(p['battle_id'])is str:self.battles[p['battle_id']]=None;self.battles.move_to_end(p['battle_id'])
+
+    def _prepare(self,todo,classified):
+        """prepare_roots for the batch's protocol requests, each classified (classified[i]); through the prepare workers when the
+        search has them (a worker's failure is a RemoteError: the batch's server_error, as any exception of prepare_roots)."""
+        pool=getattr(self,'pool',None)
+        if pool is None:
+            prepared=cw.prepare_roots(self.constructor,[p for _,p,_ in todo],device=self.device,**self._redaction())
+            for(i,p,_),item in zip(todo,prepared):classified[i]=classify_prepared(self.constructor,p,item)
+            return prepared
+        prepared=[]
+        for(i,_,_),result in zip(todo,pool.prepare_many([p for _,p,_ in todo])):
+            if result.kind!='prepared':raise RemoteError(result.text or f'prepare worker {result.worker}: {result.kind}')
+            classified[i]=dict(result.labels);prepared.append(result.item)
+        return tuple(prepared)
+
+    def _prepare_items(self,requests):
+        """prepare_roots' items for protocol requests (warmup's), through the prepare workers when the search has them."""
+        pool=getattr(self,'pool',None)
+        if pool is None:return cw.prepare_roots(self.constructor,requests,device=self.device,**self._redaction())
+        out=[]
+        for result in pool.prepare_many(requests):
+            if result.kind!='prepared':raise RemoteError(result.text or f'prepare worker {result.worker}: {result.kind}')
+            out.append(result.item)
+        return tuple(out)
+
+    def _gate(self,i,p,item,classified):
+        """(cause, refusal) of a prepared root refused before pricing (a refused class, an unclassified root when classes are
+        refused, a carry structure mismatch), else None; classified[i]'s structure_seconds is set when the structure is checked."""
+        classes=classified[i]['root_classes'];full=type(item)is cw.Prepared and item.made.fully_constructed
+        refused=[c for c in self.refuse_classes if classes and c in classes]
+        if full and refused:return('class_refused','ROOT_CLASS_REFUSED:'+','.join(refused))
+        if full and classes is None and self.refuse_classes:return('class_refused','ROOT_CLASS_UNKNOWN')
+        if full:
+            clock=time.perf_counter();diff=self._structure(item,p,classes);classified[i]['structure_seconds']=time.perf_counter()-clock
+            if diff:return('depthn_refused','WORLD_STRUCTURE_MISMATCH:'+diff)
+        return None
+
+    def _price(self,gated,bucket):
+        """build (only complete roots) -> ONE price call on the smallest bucket holding the blocks (or `bucket`), the effect
+        guard's observer seam around it. dict(made, chosen, frame, children, seam_notes, labels, build_seconds, price_seconds,
+        price_end: its perf_counter)."""
+        clock=time.perf_counter()
         made=cw.build(self.constructor,gated,self.pricers[self.buckets[0]],self.params,binding=self.binding,recipe=self.recipe,only_complete=True)
-        t_build=time.perf_counter();chosen=frame=None
+        t_build=time.perf_counter();chosen=frame=children=seam_notes=labels=None
         if made.requests:
             chosen=bucket if bucket is not None else next((b for b in self.buckets if len(made.requests)<=b*self.K),None)
             if chosen is None:raise ValueError(f'{len(made.requests)} blocks exceed the largest bucket\'s capacity')
@@ -470,56 +566,73 @@ class DepthNLiveSearch:
             if observer is not None:observer.observe()
             try:frame,_=cw.price(pricer,made,self.binding,self.recipe,self.params)
             finally:children,seam_notes=observer.observed()if observer is not None else([],['the pricer has no observer seam'])
-        t_price=time.perf_counter();results=[];causes=backups.refusal_summary(frame)['roots']if made.requests else()
-        items={p['request_id']:item for(_,p,_),item in zip(todo,prepared)}
-        by_id={p['request_id']:p for _,p,_ in todo};labels=getattr(observer,'labels',guard_inputs.child_labels)if made.requests else None
-        for root in made.roots:
-            view=dict(root_view_source=root.get('root_view_source'),b2_view=wire_b2_view(root.get('b2_view')))
-            if root['status']!='PRICED':results.append(dict(request_id=root['request_id'],status='REFUSED',refusal=root['reason'],block_causes=None,**view));continue
-            block=[causes[r]['cause']for r in root['rows']];base=dict(request_id=root['request_id'],block_causes=block,**view)
-            if any(block):results.append(dict(base,status='REFUSED',refusal=next(c for c in block if c)));continue   # DepthN's rule: a refused block refuses the root
-            try:blocks=[backups.backup(frame,r,backups.learner_max)for r in root['rows']]   # WorldPrices: averaging's value and logit rules
-            except ValueError as error:results.append(dict(base,status='REFUSED',refusal=f'AVERAGING_ERROR: {error}'));continue
-            reply=None
-            if getattr(self,'reply',None)is not None:   # br_fp: the reply model's logits on the same worlds; the champion's averaging is reported
-                item=items[root['request_id']]
-                try:replied,seconds,check=self.reply.apply(blocks,item.made.worlds,int(item.detached.address.owner))
-                except FATAL:raise
-                except Exception as error:results.append(dict(base,status='REFUSED',refusal=f'REPLY_PRIOR_ERROR: {type(error).__name__}: {error}'));continue
-                champion=decide(blocks,root['root_logits'],root['root_legal'])
-                reply=dict(operator='br_fp',views=self.reply.mode,seconds=seconds,champion_action_index=champion['action_index'],champion_q_values=champion['q_values'],
-                    **{f'reply_{k}':v for k,v in (getattr(self.reply,'identity',None)or{}).items()})   # the served archive: the proxy's and panel's pin
-                if check is not None:   # --reply-views check: the jitted views' logits, averaged and reported beside (eager plays)
-                    if check.get('error'):reply.update(jit_error=check['error'])
-                    else:
-                        alt=decide(check['blocks'],root['root_logits'],root['root_legal'])
-                        reply.update(jit_action_index=alt['action_index'],jit_q_values=alt['q_values'],jit_max_abs_logit_diff=check['max_abs_logit_diff'])
-                blocks=replied
-            decision=decide(blocks,root['root_logits'],root['root_legal'])
-            if self._gated()and decision['status']=='COMPLETE':decision=noise_gate(decision,blocks,root['root_logits'],root['root_legal'])
-            if reply is not None:
-                decision['reply_prior']=reply;self.reply_completed+=decision['status']=='COMPLETE'
-            if decision['status']=='COMPLETE':decision['effect_guard']=self._effect_guard(frame,root,made,by_id[root['request_id']],children,seam_notes,
-                decision['action_index'],labels,reply_logits=None if reply is None else[None if w is None or not w.opponent_requested else
-                    w.opponent_logits for pair in blocks for w in pair])   # br_fp: the union guard on the reply model's logits
-            results.append(dict(base,**decision))
-        t_reduce=time.perf_counter();decided=self.clock()-started
+            labels=getattr(observer,'labels',guard_inputs.child_labels)
+        t_price=time.perf_counter()
+        return dict(made=made,chosen=chosen,frame=frame,children=children,seam_notes=seam_notes,labels=labels,build_seconds=t_build-clock,
+            price_seconds=t_price-t_build,price_end=t_price)
+
+    def _decide(self,todo,prepared,priced):
+        """Per root of the priced batch (build's order, the batch's): its result (decide, the noise gate, the reply prior, the
+        effect guard). ValueError unless the results answer the batch's requests in order."""
+        made,frame,children,seam_notes,labels=(priced[k]for k in('made','frame','children','seam_notes','labels'))
+        causes=backups.refusal_summary(frame)['roots']if made.requests else()
+        items={p['request_id']:item for(_,p,_),item in zip(todo,prepared)};by_id={p['request_id']:p for _,p,_ in todo}
+        logits=priced.get('reply_logits')or{}   # the batching pipeline's reply forward, done beside the price (else per root, here)
+        results=[self._decide_root(root,frame,made,causes,items,by_id,children,seam_notes,labels,logits.get(root['request_id']))for root in made.roots]
         if len(prepared)!=len(todo)or len(results)!=len(todo)or any(r['request_id']!=p['request_id']for r,(_,p,_)in zip(results,todo)):
             raise ValueError('the decisions do not answer the batch\'s requests in order')
-        out={}
+        return results
+
+    def _decide_root(self,root,frame,made,causes,items,by_id,children,seam_notes,labels,reply_logits=None):
+        view=dict(root_view_source=root.get('root_view_source'),b2_view=wire_b2_view(root.get('b2_view')))
+        if root['status']!='PRICED':return dict(request_id=root['request_id'],status='REFUSED',refusal=root['reason'],block_causes=None,**view)
+        block=[causes[r]['cause']for r in root['rows']];base=dict(request_id=root['request_id'],block_causes=block,**view)
+        if any(block):return dict(base,status='REFUSED',refusal=next(c for c in block if c))   # DepthN's rule: a refused block refuses the root
+        try:blocks=[backups.backup(frame,r,backups.learner_max)for r in root['rows']]   # WorldPrices: averaging's value and logit rules
+        except ValueError as error:return dict(base,status='REFUSED',refusal=f'AVERAGING_ERROR: {error}')
+        reply=None
+        if getattr(self,'reply',None)is not None:   # br_fp: the reply model's logits on the same worlds; the champion's averaging is reported
+            item=items[root['request_id']]
+            try:replied,seconds,check=self.reply.apply(blocks,item.made.worlds,int(item.detached.address.owner),
+                **({}if reply_logits is None else{'logits':reply_logits}))
+            except FATAL:raise
+            except Exception as error:return dict(base,status='REFUSED',refusal=f'REPLY_PRIOR_ERROR: {type(error).__name__}: {error}')
+            champion=decide(blocks,root['root_logits'],root['root_legal'])
+            reply=dict(operator='br_fp',views=self.reply.mode,seconds=seconds,champion_action_index=champion['action_index'],champion_q_values=champion['q_values'],
+                **{f'reply_{k}':v for k,v in (getattr(self.reply,'identity',None)or{}).items()})   # the served archive: the proxy's and panel's pin
+            if check is not None:   # --reply-views check: the jitted views' logits, averaged and reported beside (eager plays)
+                if check.get('error'):reply.update(jit_error=check['error'])
+                else:
+                    alt=decide(check['blocks'],root['root_logits'],root['root_legal'])
+                    reply.update(jit_action_index=alt['action_index'],jit_q_values=alt['q_values'],jit_max_abs_logit_diff=check['max_abs_logit_diff'])
+            blocks=replied
+        decision=decide(blocks,root['root_logits'],root['root_legal'])
+        if self._gated()and decision['status']=='COMPLETE':decision=noise_gate(decision,blocks,root['root_logits'],root['root_legal'])
+        if reply is not None:
+            decision['reply_prior']=reply;self.reply_completed+=decision['status']=='COMPLETE'
+        if decision['status']=='COMPLETE':decision['effect_guard']=self._effect_guard(frame,root,made,by_id[root['request_id']],children,seam_notes,
+            decision['action_index'],labels,reply_logits=None if reply is None else[None if w is None or not w.opponent_requested else
+                w.opponent_logits for pair in blocks for w in pair])   # br_fp: the union guard on the reply model's logits
+        return dict(base,**decision)
+
+    def _assemble(self,todo,prepared,results,classified,gates,priced,t_reduce,decided):
+        """{response index: response} of the batch: each request's row with its root's labels, the stage timings
+        (prepare/classify/structure its own; build/price the batch's; reduce from the price's end to t_reduce) and decided[i]
+        as decision_seconds (COMPLETE only)."""
+        out={};reduce_seconds=t_reduce-priced['price_end']
         for(i,_,row),item,result in zip(todo,prepared,results):
             worlds=item.made.worlds if type(item)is cw.Prepared else();labels=dict(classified[i])
             timings=dict(row['timings'],prepare_seconds=item.seconds,classify_seconds=labels.pop('classify_seconds'),structure_seconds=labels.pop('structure_seconds'),
-                build_seconds=t_build-t_classify,price_seconds=t_price-t_build,reduce_seconds=t_reduce-t_price)
+                build_seconds=priced['build_seconds'],price_seconds=priced['price_seconds'],reduce_seconds=reduce_seconds)
             base=dict(row,**labels,constructed_worlds=sum(w.state is not None for w in worlds),world_refusals=[dict(world=w.index,kinds=list(w.refusals))for w in worlds if w.refusals],
-                timings=timings,bucket=chosen,block_causes=None if result['block_causes']is None else list(result['block_causes']),
+                timings=timings,bucket=priced['chosen'],block_causes=None if result['block_causes']is None else list(result['block_causes']),
                 root_view_source=result['root_view_source'],b2_view=result['b2_view'],
                 private_reveals=getattr(item,'private_reveals',None)if type(item)is cw.Prepared else None,
                 **({'peer_view_b':getattr(item,'peer_view_b',None)if type(item)is cw.Prepared else None}if self._view_b()else{}))
             if i in gates:out[i]=dict(base,cause=gates[i][0],refusal=gates[i][1])
             elif result['status']=='COMPLETE':
                 out[i]=dict(base,**{k:result[k]for k in('status','action_index','q_values','completed_q','policy_target','root_value','action_mean_q',
-                    'action_policy_target','mean_q_agrees','reduction_note','effect_guard')},decision_seconds=decided,
+                    'action_policy_target','mean_q_agrees','reduction_note','effect_guard')},decision_seconds=decided[i],
                     **({}if getattr(self,'reply',None)is None else dict(reply_prior=result.get('reply_prior'))),
                     **({'noise_gate':result.get('noise_gate')}if self._gated()else{}))
             else:out[i]=dict(base,cause=refusal_cause(result['refusal']),refusal=result['refusal'])
@@ -555,16 +668,34 @@ class DepthNLiveSearch:
         drop=set()
         while len(self.battles)>self.session_cap:drop.add(self.battles.popitem(last=False)[0])
         if not drop:return
-        sessions,seen=self.constructor.sessions,self.constructor.seen
-        for key in[k for k in sessions if _battle(k)in drop]:del sessions[key]
-        seen.difference_update([a for a in seen if type(a)is tuple and len(a)==3 and _battle(a[0])in drop])
-        if callable(getattr(self.constructor,'drop_roots',None)):self.constructor.drop_roots(drop)
+        pool=getattr(self,'pool',None)
+        if pool is None:drop_battles(self.constructor,drop)
+        else:pool.evict(drop)   # each owning worker drops them after that battle's pending prepares
         self.evicted+=len(drop)
 
     def reset_sessions(self):
-        """Forget every constructor session and attempted address (warmup does, around each pass; a bench between rosters)."""
-        self.constructor.seen.clear();self.constructor.sessions.clear();self.battles.clear()
-        if callable(getattr(self.constructor,'drop_roots',None)):self.constructor.drop_roots()
+        """Forget every constructor session and attempted address (warmup does, around each pass; a bench between rosters),
+        the prepare workers' too."""
+        reset_constructor(self.constructor);self.battles.clear()
+        if getattr(self,'pool',None)is not None:self.pool.reset()
+
+    def attach_pool(self,pool):
+        """Prepare through `pool` (a started gpu_engine.prepare_pool.PreparePool of this search's constructor arguments) from now
+        on: every worker's constructor must build under this search's binding, W and JAX settings."""
+        if any(w.state=='starting'for w in pool.workers):pool.wait_ready()   # a restarting worker: its identity first
+        if pool.options.get('device')!=self.device or pool.options.get('redaction')!=self._redaction():
+            raise ValueError(f'the prepare workers prepare on {pool.options.get("device")!r} with {pool.options.get("redaction")}, this search on '
+                f'{self.device!r} with {self._redaction()}')
+        for w in pool.workers:
+            if w is getattr(pool,'local',None):
+                if w.constructor is not self.constructor:raise ValueError('the pool\'s in-process slot prepares on another constructor than this search\'s')
+                continue
+            ident=w.ident or{}
+            if ident.get('binding')!=self.binding or ident.get('count')!=self.W:
+                raise ValueError(f'prepare worker {w.index} builds another binding or world count than this search\'s')
+            if ident.get('matmul_precision')!=self.pricer_identity['matmul_precision']or ident.get('x64')is not bool(jax.config.jax_enable_x64):
+                raise ValueError(f'prepare worker {w.index} runs other JAX settings ({ident.get("matmul_precision")}, x64 {ident.get("x64")})')
+        self.pool=pool
 
     # Warmup -------------------------------------------------------------------------------------------------------------------------
     def missing_programs(self,b):
@@ -692,8 +823,7 @@ class DepthNLiveSearch:
         self.reset_sessions()
         requests=[dict(r,schema=SCHEMA,request_id=f'warmup-structure-{j}')for j,r in enumerate(pool)]
         odd=[];labels=None;tried=False;gather=getattr(self.pricers[self.buckets[0]],'labels',guard_inputs.child_labels)
-        for request,item in zip(requests,cw.prepare_roots(self.constructor,requests,device=self.device,
-                **self._redaction())):
+        for request,item in zip(requests,self._prepare_items(requests)):
             if type(item)is not cw.Prepared or not item.made.fully_constructed:continue
             if not tried:
                 tried=True
@@ -701,7 +831,12 @@ class DepthNLiveSearch:
                 except FATAL:raise
                 except Exception:labels=None   # warmup then refuses READY: the gather does not run on these worlds
                 if getattr(self,'reply',None)is not None:   # both owner seats' reply programs, whichever seat the warmup roots had
-                    try:self.reply_warm=self.reply.warm(item.made.worlds)
+                    try:
+                        self.reply_warm=self.reply.warm(item.made.worlds)
+                        for b in getattr(self,'reply_batches',()):   # the batching pipeline's reply forward: one call over b roots' worlds
+                            for owner in(0,1):
+                                worlds=tuple(item.made.worlds)*b
+                                jax.block_until_ready(self.reply.jit_logits(worlds,owner)if self.reply.mode=='jit'else self.reply.logits(worlds,owner))
                     except FATAL:raise
                     except Exception as error:raise RuntimeError(f'warmup: the reply prior did not compile both seats: {type(error).__name__}: {error}')from error
             diff=self._structure(item,request,None)
@@ -725,7 +860,9 @@ class DepthNLiveSearch:
                     +'; '.join(sorted({f'{r["cause"]}: {r["refusal"]}'for r in rows})))
             compiles=self.pricers[b].compiles
             self.reset_sessions();clock=time.perf_counter();again=self._batch(batch,bucket=b);warm=time.perf_counter()-clock
+            stages=[r['timings']for r in again if r['bucket']==b]
             report[b]=dict(cold_seconds=cold,warm_seconds=warm,attempts=attempt+1,roots=b,complete=sum(r['status']=='COMPLETE'for r in rows),
+                warm_stages={k:max(s[k]for s in stages)for k in('build_seconds','price_seconds','reduce_seconds')}if stages else None,
                 causes=sorted({r['cause']for r in rows if r['cause']}),compiled=len(compiles),lower_seconds=sum(c[1]for c in compiles),
                 compile_seconds=sum(c[2]for c in compiles),warm_compiled=len(self.pricers[b].compiles)if any(r['bucket']==b for r in again)else None)
             batches[b]=(batch,again)

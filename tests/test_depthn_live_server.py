@@ -57,6 +57,99 @@ class FakeSearch:
         return[dict(schema=original.SCHEMA,request_id=r['request_id'],status='COMPLETE',warmed=self.warmed,arrival=r.get(live.ARRIVAL))for r in requests]
 
 
+class FakePipeline:
+    """A batching pipeline stand-in: holds what it is submitted; the test completes requests in any order it likes."""
+    def __init__(self):self.submitted=[];self.lock=threading.Lock();self.closed=False
+
+    def submit(self,request,done):
+        with self.lock:self.submitted.append((request,done))
+
+    def count(self):
+        with self.lock:return len(self.submitted)
+
+    def complete(self,i,**extra):
+        request,done=self.submitted[i];done(dict(schema=original.SCHEMA,request_id=request['request_id'],status='COMPLETE',n=i,**extra))
+
+    def close(self):self.closed=True
+
+
+async def until(test,timeout=10.):
+    deadline=time.monotonic()+timeout
+    while not test():
+        if time.monotonic()>deadline:raise TimeoutError('condition never held')
+        await asyncio.sleep(.01)
+
+
+class PipelinedServerTests(unittest.TestCase):
+    """Server.consume with a pipeline (--prepare-workers): out-of-order completion, backpressure, drain on stop."""
+    def scenario(self,body,*,queue_limit=8,pipeline=None):
+        pipeline=pipeline or FakePipeline()
+        async def run():
+            server=S.Server(FakeSearch(),max_requests=1,queue_limit=queue_limit,pipeline=pipeline);port=free_port();ready=asyncio.Event()
+            task=asyncio.create_task(server.serve('127.0.0.1',port,on_ready=ready.set));await asyncio.wait_for(ready.wait(),10)
+            try:return await body(server,port,pipeline,task)
+            finally:
+                if not task.done():server.stop();await asyncio.wait_for(task,10)
+        return asyncio.run(run())
+
+    @staticmethod
+    async def client(port,i,got):
+        reader,writer=await asyncio.open_connection('127.0.0.1',port)
+        writer.write(original.encode(request(i)));await writer.drain()
+        row=await asyncio.wait_for(original.receive(reader),20);got.append(row['request_id'])
+        writer.close();await writer.wait_closed();return row
+
+    def test_completions_out_of_order_reach_their_own_connections(self):
+        async def body(server,port,pipeline,task):
+            got=[];clients=[asyncio.create_task(self.client(port,i,got))for i in range(2)]
+            await until(lambda:pipeline.count()==2)
+            order=sorted(range(2),key=lambda k:pipeline.submitted[k][0]['request_id'],reverse=True)   # r1 first, then r0
+            for k in order:pipeline.complete(k);await asyncio.sleep(.05)
+            rows=await asyncio.gather(*clients);return rows,got
+        rows,got=self.scenario(body)
+        self.assertEqual([r['request_id']for r in rows],['r0','r1']);self.assertEqual(got,['r1','r0'])   # each its own answer, as completed
+        self.assertTrue(all(r['server_wall_seconds']>=0 for r in rows))
+
+    def test_a_response_for_another_request_closes_that_connection(self):
+        async def body(server,port,pipeline,task):
+            got=[];client=asyncio.create_task(self.client(port,0,got));await until(lambda:pipeline.count()==1)
+            request_,done=pipeline.submitted[0];done(dict(schema=original.SCHEMA,request_id='someone-else',status='COMPLETE'))
+            with self.assertRaises((asyncio.IncompleteReadError,ConnectionError)):await client
+            return got
+        self.assertEqual(self.scenario(body),[])
+
+    def test_in_flight_is_capped_at_the_queue_limit(self):
+        async def body(server,port,pipeline,task):
+            got=[];clients=[asyncio.create_task(self.client(port,i,got))for i in range(5)]
+            await until(lambda:pipeline.count()==2);await asyncio.sleep(.3)
+            capped=(pipeline.count(),server.inflight)   # the rest wait in Codex's bounded queue (and the handle loop's put)
+            for k in range(5):
+                await until(lambda:pipeline.count()>k);pipeline.complete(k)
+            await asyncio.gather(*clients);return capped,sorted(got)
+        capped,got=self.scenario(body,queue_limit=2)
+        self.assertEqual(capped,(2,2));self.assertEqual(got,[f'r{i}'for i in range(5)])
+
+    def test_stop_answers_everything_accepted_then_closes_the_pipeline(self):
+        async def body(server,port,pipeline,task):
+            got=[];clients=[asyncio.create_task(self.client(port,i,got))for i in range(3)]
+            await until(lambda:pipeline.count()==3)
+            server.stop();await asyncio.sleep(.2)
+            self.assertFalse(task.done());self.assertFalse(pipeline.closed)   # draining: three answers owed
+            for k in range(3):pipeline.complete(k)
+            rows=await asyncio.gather(*clients);await asyncio.wait_for(task,10)
+            return rows,pipeline.closed
+        rows,closed=self.scenario(body)
+        self.assertEqual(sorted(r['request_id']for r in rows),['r0','r1','r2']);self.assertTrue(closed)
+
+    def test_a_fatal_error_closes_its_connection(self):
+        async def body(server,port,pipeline,task):
+            got=[];client=asyncio.create_task(self.client(port,0,got));await until(lambda:pipeline.count()==1)
+            pipeline.submitted[0][1](MemoryError('out'))
+            with self.assertRaises((asyncio.IncompleteReadError,ConnectionError)):await client
+            return got
+        self.assertEqual(self.scenario(body),[])
+
+
 class ServerTests(unittest.TestCase):
     def test_requests_batch_through_codexs_queue_with_arrival_stamps(self):
         async def scenario():
