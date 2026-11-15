@@ -215,7 +215,8 @@ def collect(reference, prepared, pool, *, gender_policy, resume=False):
         if key not in loaded:
             loaded[key] = v5_model.load(actor['archive']['path'],expected_archive_sha256=key[0],expected_checkpoint_sha256=key[1],
                 expected_category_vocabulary_sha256=plan['category_vocabulary_sha256'],expected_label_vocabulary_sha256=labels.sha256,enable_v5=True)
-        params,actual,_ = loaded[key]
+        params,actual,meta = loaded[key]
+        from gpu_engine.private_self_moves import refuse_unthreaded;refuse_unthreaded(meta, context='v5 device evaluation bank')   # V2 self_moves
         if config is not None and actual!=config: raise ValueError('same frozen actor geometry required')
         config = actual; parameters.append(params)
     parameters = tuple(jax.block_until_ready(parameters)); directory = Path(plan['output_directory'])

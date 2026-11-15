@@ -38,6 +38,9 @@ class Prepared:
 
 def prepare(inputs):
     """Read the literal pool, including IVs, without constructing any game."""
+    if getattr(inputs.plan,'self_moves',False):
+        from .v5_worker import SELF_MOVES_DEVICE_ONLY
+        raise ValueError(SELF_MOVES_DEVICE_ONLY)
     from .category_vocab import CategoryVocabulary
     from .dex import load_showdown_dex_cached
     from .randbat import load_gen3_randbat_source_cached

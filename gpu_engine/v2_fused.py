@@ -49,7 +49,9 @@ def prepare(args):
         runtime = worker._record(config['runtime']);labels = contract.LabelVocabulary(**worker._record(config['labels']))
         profile, vocabulary, gender, category = worker._runtime_metadata(runtime, expected_pool_sha256=config['bank']['pool_sha256'])
         if gender is None:raise ValueError('original gender metadata for declared pool required')
-        plan = smoke.build_plan(config['bank'], profile, labels, category, arm=args.arm, iterations=args.iterations)
+        # V2 self_moves: the config's optional declaration (absent = off); Plan refuses a non-bool value.
+        plan = smoke.build_plan(config['bank'], profile, labels, category, arm=args.arm, iterations=args.iterations,
+            self_moves=config.get('self_moves', False))
         inputs = worker.Inputs(plan, profile, json.dumps(runtime), json.dumps(vocabulary), json.dumps(gender), runs._sha(plan.manifest()))
         declared = dict(config_sha256=hashlib.sha256(blob).hexdigest())
     else:
@@ -76,10 +78,11 @@ def sha(path):
 
 def load_actor(plan, snapshot, root):
     from gpu_engine import v5_model
-    params, config, _ = v5_model.load(Path(root, snapshot.archive), expected_archive_sha256=snapshot.archive_sha256,
+    params, config, meta = v5_model.load(Path(root, snapshot.archive), expected_archive_sha256=snapshot.archive_sha256,
         expected_checkpoint_sha256=snapshot.checkpoint_sha256, expected_category_vocabulary_sha256=plan.model.category_vocabulary_sha256,
         expected_label_vocabulary_sha256=plan.model.label_vocabulary.sha256, enable_v5=True)
     if config != plan.model:raise ValueError('loaded actor configuration differs from plan')
+    if bool(meta.get('self_moves', False)) != plan.self_moves:raise ValueError('loaded actor self_moves differs from plan')   # V2
     return params
 
 
@@ -291,7 +294,8 @@ def main(argv=None):
         del store, tensors;gc.collect()
         checkpoint = out / 'artifacts' / f'train-{iteration}.pt';v2t.save_checkpoint(checkpoint, runtime)
         archive = out / 'artifacts' / f'actor-{iteration}.npz';checkpoint_sha = sha(checkpoint)
-        metadata = v5_model.export(checkpoint, archive, expected_checkpoint_sha256=checkpoint_sha, enable_v5=True)
+        metadata = v5_model.export(checkpoint, archive, expected_checkpoint_sha256=checkpoint_sha, enable_v5=True,
+            self_moves=plan.self_moves)
         snapshot = runs.Snapshot(iteration=iteration, checkpoint=f'artifacts/train-{iteration}.pt', checkpoint_sha256=checkpoint_sha,
             archive=f'artifacts/actor-{iteration}.npz', archive_sha256=metadata['weights_archive_sha256'],
             model_sha256=runs._sha(plan.model.metadata()))

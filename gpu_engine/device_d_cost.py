@@ -67,6 +67,7 @@ def actor(path,*,snapshot,plan):
         expected_checkpoint_sha256=snapshot.checkpoint_sha256,expected_category_vocabulary_sha256=plan.model.category_vocabulary_sha256,
         expected_label_vocabulary_sha256=plan.model.label_vocabulary.sha256,enable_v5=True)
     if config!=plan.model:raise ValueError('actual D actor configuration differs')
+    if bool(metadata.get('self_moves',False))!=plan.self_moves:raise ValueError('actual D actor self_moves differs from the plan')   # V2
     return params,metadata
 
 

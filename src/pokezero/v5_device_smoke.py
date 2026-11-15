@@ -17,8 +17,9 @@ BANK_FIELDS=('run_id','pool_sha256','games','batch_rows','model_seed','stream_st
     'constructor_seed_start','sampling_seed_start','gender_seed','gender_root_start','gender_domain','selection_seed','max_requests')
 
 
-def build_plan(bank,profile,labels,category,*,arm='B',iterations=1):
-    """Use genuine Plan types and the original B model/loss/optimizer recipe."""
+def build_plan(bank,profile,labels,category,*,arm='B',iterations=1,self_moves=False):
+    """Use genuine Plan types and the original B model/loss/optimizer recipe. `self_moves` (V2): the plan's declaration
+    (Plan.self_moves); its collectors, exports and actor loads follow it."""
     from . import v5_run as runs,v5_training as training
     from . import v5_phasec as phase
     if set(bank)!=set(BANK_FIELDS)or bank['games']!=GAMES or bank['batch_rows']!=2048:
@@ -43,7 +44,7 @@ def build_plan(bank,profile,labels,category,*,arm='B',iterations=1):
         declared.append(tuple(batches))
     return runs.Plan(bank['run_id'],config['model'],config['loss'],train,tuple(declared),bank['pool_sha256'],
         bank['selection_seed'],config['historical_fraction'],config['historical_window'],bank['max_requests'],
-        runs.Watchdog(21600 if arm=='D' else 1800),checkpoint_updates=32,discount=config['discount'])
+        runs.Watchdog(21600 if arm=='D' else 1800),checkpoint_updates=32,discount=config['discount'],self_moves=self_moves)
 
 
 

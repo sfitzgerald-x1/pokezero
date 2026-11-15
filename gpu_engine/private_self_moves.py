@@ -55,6 +55,17 @@ def refuse_search_serving(*, catalog=None, meta=None, context):
         raise ValueError(f'{context}: {SEARCH_FOLLOW_UP}')
 
 
+UNTHREADED = ('self_moves is not threaded through this tool yet: it encodes with the champion contract (self_moves off), so '
+    'an archive that declares self_moves would be played or scored on observations it was not trained on')
+
+
+def refuse_unthreaded(meta, *, context):
+    """Gate and evaluation tools that load run archives but encode with the champion contract fail closed on an archive
+    that declares self_moves (meta['self_moves'], absent = off) until they are threaded."""
+    if bool((meta or {}).get('self_moves', False)):
+        raise ValueError(f'{context}: {UNTHREADED}')
+
+
 class Tables(NamedTuple):
     max_pp: jax.Array               # [M] public_moves catalog rule floor(base PP * 8 / 5)
     category: jax.Array             # [M] vocabulary row of belief:possible_move:<name>
