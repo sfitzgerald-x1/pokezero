@@ -270,12 +270,16 @@ def compile_tables(source, dex, metadata, *, source_tables=None):
                 moves[sid, v, n] = key(move)
                 if moves[sid, v, n] < 0:unknown['move'].add(move)
             hidden = next((x for x in canonical if x.startswith('hiddenpower')), None)   # _participant_move_id: the first
-            if hidden is not None and len(hidden) > len('hiddenpower'):
+            if hidden is not None:
+                # The variant's own Hidden Power move, as tier2 resolves it (dex type and base power). Every production
+                # variant names its type; a source whose sets carry the bare 'hiddenpower' (a probe's literal source, whose
+                # prepared ids drop the type) gets the bare move's dex type and power, as tier2 computes it there.
                 hp_info = dex.move_info(hidden)
                 hp_type[sid, v] = type_ids.get(normalize_id(hp_info.type if hp_info else ''), 0)
                 if hp_info is None or not hp_type[sid, v]:unknown['type'].add(hidden)
                 hp_power[sid, v] = hp_info.base_power if hp_info else 0
-                if hp_info is not None and hp_info.base_power != _hidden_power_iv_power(fixture.ivs):
+                if (len(hidden) > len('hiddenpower') and hp_info is not None
+                        and hp_info.base_power != _hidden_power_iv_power(fixture.ivs)):
                     raise ValueError(f'{variant.variant_id}: dex Hidden Power power {hp_info.base_power} differs from its IVs')
     variants = dict(count=count, species_types=species_types, engine_species=engine_species, valid=valid,
         participant=participant, level=level, stats=stats, ability=ability, item=item, moves=moves, hp_type=hp_type,

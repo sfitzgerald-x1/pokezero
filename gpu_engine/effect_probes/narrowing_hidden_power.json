@@ -1,7 +1,7 @@
 {
  "schema": "pokezero.effect_probe.scenario.v1",
  "move": "narrowing_hidden_power",
- "note": "Narrowing A: Electabuzz's Hidden Power Ice on Aerodactyl (Rock/Flying), super-effective. Of its variants the Fire one is resisted (no fitting roll) and the Ground one cannot touch a Flying target (set_posterior d411aa15: count 0, the strike admitted); the pin must hold the Ice variant, as set_posterior's support does. The literal probe source pools every scenario file's authored sets, so Tauros has two variants (Choice Band here, Leftovers in narrowing_refusals) and Electabuzz three (Hidden Power Fire here, Ice in narrowing_hidden_power, Ground in narrowing_refusals); every other species has one.",
+ "note": "Narrowing A: Electabuzz's Hidden Power Ice on Aerodactyl (Rock/Flying), super-effective. The literal probe source cannot tell Hidden Power types apart (Showdown's prepared move id is the bare hiddenpower, and IVs are not a variant key), so its three authored Electabuzz sets (Ice here, Fire in narrowing_choice_band, Ground in narrowing_refusals) are one variant: this case checks the in-tree path of a Hidden Power strike on a single-variant species (no narrowing, as set_posterior's single-variant skip). Hidden Power typing, including the resisted and the type-immune (count 0) variants, is gated by the production corpus parity (scripts/set_posterior_device_parity.py).",
  "teams": [
   [
    {
