@@ -547,6 +547,11 @@ def move(c,state,side,move,use,*,pp_use=False,original=True,count_turn=True,prep
     # Struggle is an ordinary MOVE header but is never a real-set reveal or
     # PP charge in the original public_moves.record_move writer.
     room=has|j.any(old==0,axis=1);use=declared&evidence&room
+    # Transform (B2 public_moves.record_move: reveal = ~transformed): a transformed actor's move line reveals no move,
+    # charges no public PP and narrows nothing; its copied slot's uses go to copied_pp_used below (the last move,
+    # tendency and opportunity are unchanged).
+    copied_actor=_transformed(c,state,side)
+    use=use&~copied_actor
     previous=_li.take(t.observed_moves,r,side,slot,at)
     observed=_li.put(t.observed_moves,r,(side,slot,at),j.where(use,move,previous))
     count=_li.take(t.pp_used,r,side,slot,at)
@@ -565,6 +570,13 @@ def move(c,state,side,move,use,*,pp_use=False,original=True,count_turn=True,prep
     charge=(use&j.asarray(pp_use)).astype(j.int32)*(1+extra.astype(j.int32))
     pp=_li.put(t.pp_used,r,(side,slot,at),count+charge)
     c=c._replace(trackers=t._replace(observed_moves=observed,pp_used=pp))
+    if c.trackers.copied_pp_used is not None:
+        # The copied slot holding the move (a moveset never repeats a move), charged as the public PP would be.
+        copied_moves=_li.take(state.moves,r,side,j.clip(p,0,5))
+        hit=(copied_moves==actual_move[:,None])&(actual_move[:,None]>0)
+        paid=(declared&copied_actor&j.asarray(pp_use)).astype(j.int32)*(1+extra.astype(j.int32))
+        ledger=c.trackers.copied_pp_used;old_used=_li.take(ledger,r,side)
+        c=c._replace(trackers=c.trackers._replace(copied_pp_used=_li.put(ledger,r,(side,),old_used+j.where(hit,paid[:,None],0))))
     # The child [from] line and preparation-only -singleturn annotation can
     # reveal a move, but neither is an ordinary MOVE header/decision datum.
     header=count_turn
@@ -585,7 +597,7 @@ def move(c,state,side,move,use,*,pp_use=False,original=True,count_turn=True,prep
         t=c.trackers;td=t.tendency
         c=c._replace(trackers=t._replace(tendency=td._replace(moved=_li.put(td.moved,r,(side,),_li.take(td.moved,r,side)|declared))))
         c=opportunity(c,side,declared&(_get(state,'charge_move',side)==0))
-    c=_narrow(c,side,p,move,declared&evidence,'move') if original else c
+    c=_narrow(c,side,p,move,declared&evidence&~copied_actor,'move') if original else c
     return _refresh(c,side,p,declared&~j.asarray(preparation))
 
 
