@@ -70,7 +70,7 @@ console.log(JSON.stringify({clear:H(clear),copy:H(copy),par:H(par.onBeforeMove),
             self.assertEqual(Path('gpu_engine',n).read_bytes(),subprocess.check_output(['git','show','b8092a85:gpu_engine/'+n]),n)
         from gpu_engine import engine_source_frame_witness as witness
         witness._source()
-        self.assertEqual(len(witness.SOURCE_PINS),89)   # 88, and residual_order.py since §6
+        self.assertEqual(len(witness.SOURCE_PINS),90)   # 88, residual_order.py since §6, and forecast.py since Forecast
         # Rollback/claimed snapshot consumers remain exactly their original AST. suspension_shape gained fidelity R's
         # saved effect block (reviewed; the file is byte-certified against SOURCE_PINS above).
         old=ast.parse(subprocess.check_output(['git','show','b8092a85:gpu_engine/engine_baton_pass_callbacks.py'],text=True));new=ast.parse(Path(cb.__file__).read_text())
