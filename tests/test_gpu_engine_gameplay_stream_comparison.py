@@ -33,11 +33,13 @@ def state(batch=1, *, hp=100, done=False):
     # recharge_counter in its M1 block, the perish, yawn and partial-trap fields in its M2 block.)
     fields = {name:np.array(value) for name,value in empty_state(batch)._asdict().items()}
     for name in ('species','level','hidden_power_type','hidden_power_power','happiness','gender','hp','max_hp',
-                 'status','status_counter','sleep_skipped','rest_origin','choice_move','last_move','encore_move','encore_counter',
+                 'status','status_counter','sleep_skipped','choice_move','last_move','encore_move','encore_counter',
                  'charge_move','charge_counter','item','ability','base_ability','volatile','confusion_counter','protect_counter',
-                 'substitute_hp','trap_source','truant_loaf'):
+                 'substitute_hp','trap_source'):
         fields[name]=np.zeros((batch,2,6),np.int32)
-    fields.update(species=np.broadcast_to(np.arange(1,13).reshape(1,2,6),(batch,2,6)).copy(),
+    for name in ('rest_origin','truant_loaf'):   # the engine stores both as bool (empty_state)
+        fields[name]=np.zeros((batch,2,6),bool)
+    fields.update(species=np.broadcast_to(np.arange(1,13,dtype=np.int32).reshape(1,2,6),(batch,2,6)).copy(),
         level=np.full((batch,2,6),80,np.int32),hp=np.full((batch,2,6),hp,np.int32),max_hp=np.full((batch,2,6),100,np.int32),
         stats=np.full((batch,2,6,6),100,np.int32),types=np.ones((batch,2,6,2),np.int32),base_types=np.ones((batch,2,6,2),np.int32),
         moves=np.ones((batch,2,6,4),np.int32),pp=np.full((batch,2,6,4),10,np.int32),disabled=np.zeros((batch,2,6,4),bool),
@@ -87,13 +89,15 @@ def write_trace(path, *, frames=2, max_bytes=10**6, batch=1):
 
 class LiteralStateShapeTests(unittest.TestCase):
     def test_every_field_has_the_engine_shape(self):
-        # The fixture authors values, not layout: every BattleState leaf has empty_state's shape, a leaf a later tier adds
-        # included. A per-mon leaf left at (batch,) failed only where entry.depart indexed it per mon, behind a refusal.
+        # The fixture authors values, not layout: every BattleState leaf has empty_state's shape and dtype, a leaf a later
+        # tier adds included. A per-mon leaf left at (batch,) failed only where entry.depart indexed it per mon, behind a
+        # refusal; rest_origin and truant_loaf were authored as int32 where the engine stores bool, species as int64.
         for batch in (1, 3):
             literal, engine = state(batch), empty_state(batch)
             for name in BattleState._fields:
                 with self.subTest(batch=batch, field=name):
                     self.assertEqual(np.shape(getattr(literal, name)), np.shape(getattr(engine, name)))
+                    self.assertEqual(np.asarray(getattr(literal, name)).dtype, np.asarray(getattr(engine, name)).dtype)
 
 
 class GameplayCaptureTests(unittest.TestCase):

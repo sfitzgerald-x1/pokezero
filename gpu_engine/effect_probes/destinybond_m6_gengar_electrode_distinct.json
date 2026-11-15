@@ -1,0 +1,204 @@
+{
+ "schema": "pokezero.effect_probe.scenario.v1",
+ "move": "destinybond_m6_gengar_electrode_distinct",
+ "note": "Distinct-species twin of destinybond_m6_gengar_electrode (B2 folds no repeated species, so device mode compares every step; destinybond_m6_gengar_electrode keeps the exact Showdown setup). Destiny Bond gate-3 matchup 6 (opp Gengar vs Electrode Explosion / Thunderbolt / Hidden Power [Ice] / Substitute), gen3 randbats sets; Gengar never makes contact with the Static Electrode or the Static Raichu. The faster Electrode chips Gengar with Thunderbolt and Gengar bonds. Explosion into the Ghost: Electrode's own faint is queued before the hit (data/mods/gen3/scripts.ts useMoveInner, selfdestruct 'always'), Gengar is immune, so no KO and no trigger, and the faint cancels Gengar's queued Destiny Bond (sim/battle.ts faintMessages, gen 3 cancelAction), so the previous turn's bond holds. Raichu's Thunderbolt KO, before Gengar acts, faints it too; both replace. Substitution: Raichu (L82, Static; Electrode's set and Hidden Power [Ice] IVs) for the second Electrode: Electric with Static, Speed 211 above Gengar's 206, and its Thunderbolt KOs the 28% Gengar.",
+ "teams": [
+  [
+   {
+    "species": "Electrode",
+    "moves": [
+     "explosion",
+     "thunderbolt",
+     "hiddenpowerice",
+     "substitute"
+    ],
+    "ability": "Static",
+    "item": "Leftovers",
+    "level": 82,
+    "ivs": {
+     "atk": 30,
+     "def": 30
+    }
+   },
+   {
+    "species": "Raichu",
+    "moves": [
+     "explosion",
+     "thunderbolt",
+     "hiddenpowerice",
+     "substitute"
+    ],
+    "ability": "Static",
+    "item": "Leftovers",
+    "level": 82,
+    "ivs": {
+     "atk": 30,
+     "def": 30
+    }
+   },
+   {
+    "species": "Starmie",
+    "moves": [
+     "splash",
+     "surf",
+     "recover",
+     "protect"
+    ],
+    "ability": "Illuminate",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Blissey",
+    "moves": [
+     "splash",
+     "softboiled",
+     "protect",
+     "seismictoss"
+    ],
+    "ability": "Serene Grace",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Skarmory",
+    "moves": [
+     "splash",
+     "protect",
+     "spikes",
+     "peck"
+    ],
+    "ability": "Keen Eye",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Swampert",
+    "moves": [
+     "splash",
+     "protect",
+     "surf",
+     "earthquake"
+    ],
+    "ability": "Torrent",
+    "item": "Leftovers"
+   }
+  ],
+  [
+   {
+    "species": "Gengar",
+    "moves": [
+     "destinybond",
+     "thunderbolt",
+     "icepunch",
+     "willowisp"
+    ],
+    "ability": "Levitate",
+    "item": "Leftovers",
+    "level": 74,
+    "ivs": {
+     "atk": 0
+    },
+    "evs": {
+     "atk": 0
+    }
+   },
+   {
+    "species": "Starmie",
+    "moves": [
+     "splash",
+     "surf",
+     "recover",
+     "protect"
+    ],
+    "ability": "Illuminate",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Blissey",
+    "moves": [
+     "splash",
+     "softboiled",
+     "protect",
+     "seismictoss"
+    ],
+    "ability": "Serene Grace",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Skarmory",
+    "moves": [
+     "splash",
+     "protect",
+     "spikes",
+     "peck"
+    ],
+    "ability": "Keen Eye",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Swampert",
+    "moves": [
+     "splash",
+     "protect",
+     "surf",
+     "earthquake"
+    ],
+    "ability": "Torrent",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Metagross",
+    "moves": [
+     "splash",
+     "protect",
+     "meteormash",
+     "earthquake"
+    ],
+    "ability": "Clear Body",
+    "item": "Leftovers"
+   }
+  ]
+ ],
+ "script": [
+  [
+   "move 2",
+   "move 2"
+  ],
+  [
+   "move 2",
+   "move 1"
+  ],
+  [
+   "move 1",
+   "move 1"
+  ],
+  [
+   "switch 2",
+   ""
+  ],
+  [
+   "move 2",
+   "move 1"
+  ],
+  [
+   "switch 4",
+   "switch 2"
+  ]
+ ],
+ "axes": [],
+ "expect": {
+  "exact": true
+ },
+ "require_fields": [
+  "item_knocked",
+  "destiny_bond"
+ ],
+ "tape": {
+  "draws.0.4": 15,
+  "draws.0.5": 0,
+  "draws.0.6": 0,
+  "draws.1.4": 15,
+  "draws.1.5": 0,
+  "draws.1.6": 0,
+  "secondary.0": 99,
+  "secondary.1": 99
+ }
+}

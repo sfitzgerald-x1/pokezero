@@ -14,7 +14,7 @@ import numpy as np
 
 from gpu_engine import transition as t, mechanics as m, engine_lifecycle_callbacks as life
 from gpu_engine import engine_status_residual_callbacks as c, engine_public_events as public
-from gpu_engine import engine_execution_completeness as execution
+from gpu_engine import engine_execution_completeness as execution, residual_order
 from gpu_engine import engine_public_event_device as base, engine_full_v4_event_device as full
 from gpu_engine import engine_request_source as source
 import test_gpu_engine_engine_own_facts as fixtures
@@ -68,7 +68,8 @@ class StatusResidualOwningCallerTests(unittest.TestCase):
         with patch.object(c,'record_status_residual_device',side_effect=capture):frame=self.trace(state,cursor)
         default=self.trace(state,cursor,compiled=False)
         self.same(frame.state,default.state)
-        self.assertEqual(len(seen),14)   # one call per residual-scheduler event (14 since fidelity M2's Wrap and Yawn pairs)
+        # One call per position a status event can sort to: R2 traces the status handler only there (3, 6, 7, 10).
+        self.assertEqual(len(seen),len(residual_order.POSITIONS['status']))
         for row in range(2):
             words=self.words(frame,row);self.assertEqual(len(words),2)
             self.assertTrue(int(frame.callbacks.refusal[row])&256)

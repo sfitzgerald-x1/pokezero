@@ -312,6 +312,24 @@ class TransitionTests(unittest.TestCase):
             slow = self.t.step_with_chance(s, actions, self.table, chance).state
         for name in s._fields:np.testing.assert_array_equal(np.asarray(getattr(fast, name)), np.asarray(getattr(slow, name)), err_msg=name)
 
+    def test_a_stale_encore_move_is_cleared_in_every_residual_order(self):
+        """R2 (residual gating): Encore's residual() with an all-false mask still clears an encore_move whose counter is 0,
+        so the step keeps that clear at the positions no Encore event sorts to. Lanes put one or both actives on a stale
+        encore_move (counter 0) under each Speed relation and Encore tie draw: after the step it is 0, and every other leaf
+        equals the same lane without it."""
+        stale = lambda *sides: {'encore_move': [((side, 0), TACKLE) for side in sides]}
+        slow0 = {'stats': [((0, m, 5), 150) for m in range(6)]}   # side 1 faster
+        tie = {'stats': [((0, m, 5), 200) for m in range(6)]}     # equal Speed: the residual pairs take their tie draws
+        orders = [{}, slow0, tie, tie, {}, slow0, tie, tie]
+        sides = [(0, 1), (0, 1), (0, 1), (0, 1), (1,), (0,), (0,), (1,)]
+        draws = [{}, {}, {(1, 11): 0}, {(1, 11): 1}, {}, {}, {(1, 11): 0, (1, 0): 1},
+                 {(1, 0): 1, (0, 9): 1, (0, 10): 1, (1, 9): 1, (1, 11): 1}]
+        chance = self.chance(draws=draws)
+        clean = self.play(self.build(orders), chance)
+        s = self.play(self.build([{**order, **stale(*side)} for order, side in zip(orders, sides)]), chance)
+        self.assertEqual(np.asarray(s.encore_move)[:, :, 0].tolist(), [[0, 0]] * N)
+        for name in s._fields:np.testing.assert_array_equal(np.asarray(getattr(s, name)), np.asarray(getattr(clean, name)), err_msg=name)
+
     def test_zz_one_compile(self):
         """Every transition test used the one compiled step (no recompile)."""
         self.assertEqual(self.jitted['step']._cache_size(), 1)
