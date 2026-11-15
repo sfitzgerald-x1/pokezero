@@ -40,6 +40,7 @@ from . import self_destruct as exploding
 from . import encore as repeating
 from . import solar_beam as charging
 from . import focus_punch as focusing
+from . import transform as shift
 from .effects import MoveEffects, from_metadata as effects_from_metadata, stall_success, cure_team, weather_healing
 from .state import FLINCH, FOCUS_PUNCH, FOCUS_LOST, BattleState, bench_indices, empty_state, legal_actions, usable_moves
 from .state import DESTINY_BOND
@@ -77,6 +78,7 @@ class MoveTable(NamedTuple):
     focus_punch: focusing.FocusTable | None = None
     solar_beam: charging.SolarTable | None = None
     public_port: object = None
+    transform: shift.TransformTable | None = None
 
 
 def tables_from_metadata(metadata: dict) -> MoveTable:
@@ -111,7 +113,8 @@ def tables_from_metadata(metadata: dict) -> MoveTable:
         variable.from_metadata(metadata),intercepts.from_metadata(metadata),passing.from_metadata(metadata),
         dragging.from_metadata(metadata),linking.from_metadata(metadata),crits.from_metadata(metadata),
         secondaries.from_metadata(metadata),talking.from_metadata(metadata),exploding.from_metadata(metadata),
-        repeating.from_metadata(metadata),focusing.from_metadata(metadata),charging.from_metadata(metadata),public_port.compile_tables(metadata))
+        repeating.from_metadata(metadata),focusing.from_metadata(metadata),charging.from_metadata(metadata),public_port.compile_tables(metadata),
+        transform=shift.from_metadata(metadata))
 
 
 def state_from_pool(pool, team_indices, *, seed=0, table=None) -> BattleState:
@@ -227,7 +230,11 @@ def _clear_fainted_boosts(state,before_hp,*,eligible):
     Previously dead slots and ineligible rows are not new faint transactions.
     """
     fainted=jnp.asarray(eligible)[:,None,None] & (before_hp>0) & (state.hp<=0)
-    return state._replace(boosts=jnp.where(fainted[...,None],0,state.boosts))
+    state=state._replace(boosts=jnp.where(fainted[...,None],0,state.boosts))
+    # The same clearVolatile reverts a fainted transformed active (transform.revert, gated on the flag), so the outgoing
+    # Speed a replacement order reads (_speeds) is its original, as in Showdown.
+    if hasattr(state,'transformed'):state=shift.faint_revert(state,fainted)
+    return state
 
 
 def _speeds(state,table):
@@ -1699,6 +1706,14 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                 if _device_public is not None:
                     device_public.trick(_device_public,_device_trick_before,_trick_swapped,side,_trick,table.items.choice_band,
                         herb_used=_herb)
+            if table.transform is not None:
+                # Transform (data/moves.ts transform, sim/pokemon.ts transformInto; gpu_engine/transform.py): accuracy true and
+                # no protect flag, so `hit` holds; bypasssub, so no Substitute gate; a Status move ignores type immunity. `move`
+                # is the post-Sleep-Talk move, so a called Transform is covered. PP (Pressure included) was paid above, before
+                # the saves; the Choice lock site below locks on `transform`, as Showdown does.
+                _transform_used=acts & hit & table.transform.move[move]
+                work,_transform_copied=shift.apply(work,side,_transform_used,table.transform)
+                if _lifecycle_trace:_public_trace=status_callbacks.unknown(_public_trace,_transform_used)
             # Charm's primary boosts (moveHit after TryHit): Protect is already in `hit`; a
             # Substitute fails it (TryPrimaryHit); status moves ignore type immunity
             # (tryMoveHit sets ignoreImmunity for Status). The drop is capped first, then
@@ -2162,6 +2177,10 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
         # All move effects, including self-KO/recoil and forced-entry hazards,
         # finish before the original runAction faint queue is processed.
         work=_clear_fainted_boosts(work,_faint_before_hp,eligible=live & move_context)
+        if table.transform is not None and table.effects is not None:
+            # Gen < 5 eachEvent('Update') after the action (sim/battle.ts:2938): a copied curing ability or Own Tempo acts now.
+            work,_transform_cured,_transform_unconfused=shift.update_cure(work,side,_transform_copied,table.entry)
+            if _lifecycle_trace:_public_trace=status_callbacks.unknown(_public_trace,_transform_cured|_transform_unconfused)
     # Gen 3 action-phase faints request replacement BEFORE the residual action.
     # A KO cancels queued moves; direct Baton retains at most one selected foe
     # move. Both pause residuals, including hazard-KO recovery chains.
@@ -2720,6 +2739,9 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
         _end_turn=~work.done & ~work.pending_residual & ~jnp.any(work.forced_switch,axis=1)
         work=work._replace(choice_move=jnp.where(_end_turn[:,None,None] & ~table.items.choice_band[work.item],
             0,work.choice_move))
+    if table.transform is not None:
+        # The same DisableMove drops a transformed holder's lock on a move it no longer has (transform.choice_unlock).
+        work=shift.choice_unlock(work,~work.done & ~work.pending_residual & ~jnp.any(work.forced_switch,axis=1))
     work = jax.tree.map(lambda old, new: jnp.where(live.reshape((-1,) + (1,) * (old.ndim - 1)), new, old), state, work)
     if _device_public is not None:
         device_public.turn_end(_device_public,state,work,ordinary,upkeep=residual_ready & ~work.done,
