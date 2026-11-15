@@ -470,7 +470,38 @@ def narrow(pin, pin_active, conflicts, fit, admitted):
     return updated.pin, updated.pin_active, updated.conflicts, changed
 
 
-# --------------------------------------------------------------------------- in-tree producer (wired after the go)
+_SOURCES = {}
+
+
+def register_source(source):
+    """Bind a Gen3RandbatSource for engine_device_belief.compile_tables by its hash (a source the process cache does
+    not hold: a copied production source, a probe's literal source)."""
+    _SOURCES[source.metadata.source_hash] = source
+    return source
+
+
+def bound_source(source_hash, source=None):
+    """The Gen3RandbatSource the encoder catalog's compiled source was built from: the explicit one, a registered one,
+    else randbat's process cache (load_gen3_randbat_source_cached), matched by source hash. Refuses rather than guess."""
+    if source is None:
+        source = _SOURCES.get(source_hash)
+    if source is None:
+        from pokezero import randbat
+        with randbat._SOURCE_CACHE_LOCK:
+            found = [s for s in randbat._SOURCE_CACHE.values() if s.metadata.source_hash == source_hash]
+        source = found[0] if found else None
+    if source is None or source.metadata.source_hash != source_hash:
+        raise ValueError('set_posterior_narrowing needs the bound Gen3RandbatSource of source hash ' + str(source_hash))
+    return source
+
+
+def enable(belief_tables, posterior):
+    """Belief tables with the producer's tables and the standing pins on (what compile_tables builds when the
+    checkpoint masks carry set_posterior_narrowing; tests and probes without that mask use this)."""
+    return belief_tables._replace(standing_pins_enabled=j.asarray(True), posterior=posterior)
+
+
+# --------------------------------------------------------------------------- in-tree producer
 
 
 def in_tree(trackers, belief_tables, state, side, move, caller_move, critical, hits_sub, endured, dealt, hp_before, hp_after,

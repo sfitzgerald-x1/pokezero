@@ -656,6 +656,20 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                 device_public.reveal_ability(_device_public,work,1-side,(used & intercepts.wonder_guard_blocked(work,side,moves[:,side],table))
                     | _contact_reveals[0])
                 device_public.reveal_ability(_device_public,work,side,_contact_reveals[1])
+                if device_public.set_posterior_enabled(_device_public):
+                    # Narrowing A: the intercept is a damage reveal on the switching target (base power 80). Its operands
+                    # are the intercept's own: the pre-hit state, the same crit draw, the HP and Substitute it changed.
+                    _sp_before=_device_pursuit_before;_sp_move=moves[:,side]
+                    _sp_crit=draws[:,side][:,4]==0
+                    if table.critical is not None:
+                        _sp_crit=crits.is_critical(table.critical,_sp_move,_active(_sp_before.ability,_sp_before,1-side),draws[:,side][:,4])
+                    _,_sp_num,_sp_den=intercepts._effectiveness(_sp_before,side,_sp_move,table)
+                    _sp_hp,_sp_after=_active(_sp_before.hp,_sp_before,1-side),_active(work.hp,work,1-side)
+                    _sp_sub=_active(_sp_before.substitute_hp,_sp_before,1-side)>0
+                    _sp_hit=_sp_sub & (_active(work.substitute_hp,work,1-side)<_active(_sp_before.substitute_hp,_sp_before,1-side))
+                    device_public.set_posterior_strike(_device_public,_sp_before,side,_sp_move,_sp_move,_sp_crit,_sp_sub,
+                        jnp.zeros_like(used),jnp.where(_sp_sub,0,_sp_hp-_sp_after),_sp_hp,_sp_after,_sp_num,_sp_den,
+                        used & ((_sp_hp>_sp_after) | _sp_hit),pursuit=True)
             if _lifecycle_trace:
                 _public_trace=status_callbacks.unknown(_public_trace,used)
             if _lifecycle_trace:work,_public_trace=_lum_update(work,table,used,_public_trace,_device_public=_device_public)
@@ -821,6 +835,9 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
     # reply in one step (a suspension follows only a Baton Pass, which deals no damage).
     _taken_amount=jnp.zeros_like(state.active)
     _taken_kind=jnp.zeros_like(state.active)    # 0 none, 1 Counter-able, 2 Mirror Coat-able
+    # Narrowing A: [B,2] a side's active was hit by the other side's move earlier this turn (HP or Substitute), the
+    # Revenge condition set_posterior refuses (built only with the producer, so flag-off programs are unchanged).
+    _sp_hit_by=jnp.zeros_like(state.active,dtype=jnp.bool_) if _device_public is not None and device_public.set_posterior_enabled(_device_public) else None
     for order in range(2):
         _faint_before_hp=work.hp
         side = jnp.where(order == 0, first, 1 - first)
@@ -1288,6 +1305,13 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                 sub_hp - jnp.where(hits_sub,dealt,0)))
         if _device_public is not None:
             device_public.damage(_device_public,work,side,jnp.where(hits_sub,0,dealt),jnp.where(hits_sub,0,dealt),acts)
+            if _sp_hit_by is not None:
+                # Narrowing A: this hit's damage reveal (device_set_posterior.in_tree). Endure's activation is the
+                # capped hit; the observed loss is the HP's, 0 on a Substitute (refused as set_posterior refuses it).
+                device_public.set_posterior_strike(_device_public,work,side,move,caller_move,critical,hits_sub,
+                    acts & hit & ~hits_sub & enduring[rows,foe] & (damage>=hp),jnp.where(hits_sub,0,dealt),hp,foe_hp,num,den,
+                    acts & hit & (dealt>0),hit_by=_sp_hit_by[rows,side])
+                _sp_hit_by=_sp_hit_by.at[rows,foe].set(_sp_hit_by[rows,foe] | (acts & hit & (dealt>0)))
             device_public.negative_hp_line(_device_public,work,foe,acts & ~hits_sub & (dealt>0),source_class=device_public.negative_items.HP_ACTION)
             device_public.observe(_device_public,work,acts)
         if table.damage_moves is not None:

@@ -51,11 +51,22 @@ class Tables(NamedTuple):
     # (engine_device_negative_items.upkeep); an ID absent from the vocabulary is 0, and a pinch berry absent there takes
     # a present one's ID (a repeated name is a no-op in visible_belief.exclude). None: no Lum/pinch rules (fixtures).
     nonproc_items: object = None
+    # Narrowing A (appended): device_set_posterior.PosteriorTables, present only when the resolved checkpoint masks
+    # carry set_posterior_narrowing; None keeps every flag-off program unchanged (the damage-reveal producer is traced
+    # only when it is set, and standing_pins_enabled then comes from the same mask).
+    posterior: object = None
 
 
-def compile_tables(metadata, catalog):
-    """Join existing compiled source tables; never sample/materialize a world."""
+def compile_tables(metadata, catalog, *, posterior_source=None):
+    """Join existing compiled source tables; never sample/materialize a world.
+
+    With set_posterior_narrowing on (catalog.masks; absent means off) the standing pins are enabled and the damage
+    reveal's producer tables are compiled over the bound Gen3RandbatSource (posterior_source, else the process's
+    cached source with the catalog's source hash; device_set_posterior.bound_source)."""
     v = metadata['vocabulary']; source = catalog.source; feature = catalog.features
+    # The standing pins' producer: set_posterior's support (narrowing A), replacing the never-installed investment
+    # producer, whose mask the frozen champion catalog requires False (v4_encoder.Masks.from_checkpoint).
+    narrowing = bool(getattr(catalog.masks, 'set_posterior_narrowing', False))
     sid = np.asarray([source.species_id(n) if i else 0 for i, n in enumerate(v['species'])], np.int32)
     def predicates(kind, names):
         ids = [source.predicate_id(kind, 'hiddenpower' if kind == 'move' and normalize_id(n).startswith('hiddenpower') else n)
@@ -93,9 +104,15 @@ def compile_tables(metadata, catalog):
         np.asarray([bool(i) and normalize_id(n) != 'struggle' for i, n in enumerate(v['moves'])], bool),
         np.asarray(feature.move_tables.foe_targeted)[engine_moves],
         np.asarray([bool(i) and normalize_id(n) == 'pressure' for i, n in enumerate(v['abilities'])], bool),
-        np.asarray(catalog.masks.investment_belief_narrowing,bool), nonproc_item_ids(v['items']))
+        np.asarray(narrowing,bool), nonproc_item_ids(v['items']))
     # Preserve primitive dtype (especially uint32 bitmasks and compact spreads).
-    return Tables(*(j.asarray(a, j.float32 if n in floating else None) for n, a in zip(Tables._fields, arrays)))
+    tables = Tables(*(j.asarray(a, j.float32 if n in floating else None) for n, a in zip(Tables._fields, arrays)))
+    if narrowing:
+        from . import device_set_posterior
+        source_object = device_set_posterior.bound_source(catalog.source.source_hash, posterior_source)
+        tables = tables._replace(posterior=device_set_posterior.compile_tables(source_object, catalog.dex, metadata,
+            source_tables=catalog.source)[0])
+    return tables
 
 
 def nonproc_item_ids(items):
