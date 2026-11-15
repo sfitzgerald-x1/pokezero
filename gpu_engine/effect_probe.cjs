@@ -109,7 +109,13 @@ function snapshot(battle) {
           destinybond:!!v.destinybond,
           substitute:v.substitute ? v.substitute.hp : null,
           names:Object.keys(v).sort(),
-        }};
+        },
+        // Transform (compared only under require_fields ["transform"]): the copy's species, stats, types, ability and
+        // Hidden Power, and the base move slots (baseMoveSlots: the revert's moves and PP).
+        transform:{transformed:!!p.transformed, species:p.species.id,
+          stats:['atk', 'def', 'spa', 'spd', 'spe'].map(k => p.storedStats[k]), types:p.getTypes().map(t => t.toLowerCase()),
+          ability:p.ability || '', hp_type:(p.hpType || '').toLowerCase(), hp_power:p.hpPower ?? null,
+          base_moves:p.baseMoveSlots.map(m => m.id), base_pp:p.baseMoveSlots.map(m => m.pp)}};
     });
     return {active:originalIndex(side.active[0]), mons, mask:requestMask(battle, side.n)};
   });

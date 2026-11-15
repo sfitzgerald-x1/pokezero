@@ -24,6 +24,8 @@
 // are broken by effectOrder), with a Choice Band user's own onAfterMove (addVolatile choicelock) beside them, are an
 // inert tie: each Item handler touches only its own holder and draws nothing, so the order cannot change the battle.
 const TAPE_V1='pokezero.gpu_chance_tape.v1',TAPE_V2='pokezero.gpu_chance_tape.v2';
+const OWN_UPDATE=new Set(['immunity','insomnia','limber','magmaarmor','oblivious','owntempo','vitalspirit','waterveil']);
+const OWN_RESIDUAL=new Set(['truant','speedboost']);
 const DRAW_BOUNDS=[2,100,100,100,16,16,100,4,8,2,2,2],EFFECT_BOUNDS=[16,16,4,2];
 function validTape(c){
   const v2=c.schema===TAPE_V2,row=(x,bounds)=>Array.isArray(x)&&x.length===bounds.length
@@ -203,6 +205,18 @@ function install(Battle,PRNG,load,audit,initializing=()=>null,pokemonPath='') {
       if(eachEventId&&group.every(x=>x&&x.side&&Array.isArray(x.moveSlots))
         &&group.every(x=>battle.findEventHandlers(x,eachEventId).length===0)){
         audit({kind:'INERT_EACH_EVENT_TIE',nonce:c.nonce,event:eachEventId,sides:group.map(x=>x.side.n)});return;
+      }
+      // Transform: a transformed mon runs its donor's ability at the donor's Speed, so equal-Speed ties appear between two
+      // holders of one ability. An Update tie whose handlers are all Gen 3's own-holder cures (each touches only its holder's
+      // status or volatile and draws nothing) commutes; so does a residual pair of Truant flips or Speed Boosts on distinct
+      // holders (each writes only its holder's truantTurn or Speed stage). Anything else still falls through.
+      if(eachEventId==='Update'&&group.every(x=>x&&x.side&&Array.isArray(x.moveSlots))
+        &&group.every(x=>battle.findEventHandlers(x,'Update').every(h=>h.effect?.effectType==='Ability'&&OWN_UPDATE.has(h.effect.id)))){
+        audit({kind:'INERT_EACH_EVENT_TIE',nonce:c.nonce,event:eachEventId,sides:group.map(x=>x.side.n),own_holder:true});return;
+      }
+      if(group.length>=2&&group.every(x=>x.effect?.effectType==='Ability'&&OWN_RESIDUAL.has(x.effect.id)&&x.effect.id===group[0].effect.id
+        &&x.effectHolder&&Array.isArray(x.effectHolder.moveSlots))&&new Set(group.map(x=>x.effectHolder)).size===group.length){
+        audit({kind:'INERT_RESIDUAL_TIE',nonce:c.nonce,effects:group.map(x=>x.effect.id)});return;
       }
       if(group.length===2&&group.every(x=>x.choice==='move')&&new Set(group.map(x=>x.pokemon.side.n)).size===2){
         const first=take(c,'move_tie',0,c.draws[0][0]);
