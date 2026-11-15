@@ -141,6 +141,85 @@ class HelperTests(unittest.TestCase):
         self.assertEqual(np.asarray(transform.choice_unlock(plain, True).choice_move)[:, 0, 0].tolist(), [TACKLE, TACKLE])
 
 
+class ConstructorTests(unittest.TestCase):
+    """The constructor helpers in this PR's files (gpu_engine/phase_d_constructor_rules, constructor_worlds,
+    device_public_world_state); Codex's materializers that consume them are a separate patch (no engine step here)."""
+    def test_own_pp_carry_returns_the_base_ledger_of_a_transformed_active(self):
+        """The walls fixture's Ditto (one move, Transform 16 PP) at its first transformed request: the copied PP stays the
+        request's, and transform_base gives the -transform line's ledger (Transform paid: 15)."""
+        import json
+        from pathlib import Path
+        from pokezero.live_protocol_actor import _packet
+        from gpu_engine.phase_d_constructor_rules import own_pp_carry
+        data = json.loads((Path(__file__).parent / 'fixtures/phase_d_constructor_walls/ditto_transform.json').read_text())
+        lines = data['request']['lines'];owner = data['request']['owner']
+        at = next(i for i, line in enumerate(lines) if line.startswith('|request|') and '"Hidden Power Grass 70"' in line)
+        packet = _packet(lines[at], owner);maximum = data['own_pp_carry']['maximum_pp']
+        rows, base = own_pp_carry(lines[:at + 1], packet, maximum, transform_base=True)
+        self.assertEqual(rows, own_pp_carry(lines[:at + 1], packet, maximum))
+        ditto = next(i for i, row in enumerate(packet['side']['pokemon']) if row['ident'].endswith(': Ditto'))
+        self.assertEqual(base[ditto], [('transform', 15)])
+        self.assertEqual([b for k, b in enumerate(base) if k != ditto], [None] * 5)
+
+    def test_line_facts_and_the_copied_pp_fills(self):
+        """line_facts' TransformFacts: the donor and the copied uses since the latest -transform (Pressure doubles one known to
+        the owner); a switch ends it. fix_copied_pp / fill_copied_pp write the peer's copied PP and the carry's uses only on a
+        world whose state already holds the peer's Transform."""
+        from gpu_engine import constructor_worlds as cw
+        from gpu_engine.state import empty_state
+        from gpu_engine import engine_device_trackers as tr
+        lines = ['|switch|p1a: Ditto|Ditto|258/258', '|switch|p2a: Zapdos|Zapdos, L74|100/100', '|turn|1',
+                 '|-ability|p2a: Zapdos|Pressure', '|move|p1a: Ditto|Transform|p2a: Zapdos', '|-transform|p1a: Ditto|p2a: Zapdos',
+                 '|turn|2', '|move|p1a: Ditto|Thunderbolt|p2a: Zapdos', '|turn|3', '|move|p1a: Ditto|Thunderbolt|p2a: Zapdos',
+                 '|move|p1a: Ditto|Sleep Talk|p1a: Ditto', '|move|p1a: Ditto|Protect|p1a: Ditto|[from] move: Sleep Talk']
+        facts = cw.line_facts(lines, 1)
+        self.assertEqual(facts.transform, (cw.TransformFacts('zapdos', (('thunderbolt', 4), ('sleeptalk', 1))), None))
+        self.assertEqual(cw.line_facts(lines + ['|switch|p1a: Mew|Mew, L72|100/100'], 1).transform, (None, None))
+        names = ['_none', 'thunderbolt', 'sleeptalk', 'protect']
+        tables = cw._table(np.zeros((3, 2), np.int32), move_names=names, foe_targeted=[False] * 4)
+        s = empty_state(1)._replace(moves=j.zeros((1, 2, 6, 4), j.int32).at[0, 0, 0].set(j.asarray([1, 2, 3, 0])),
+                                    pp=j.full((1, 2, 6, 4), 9, j.int32))
+        self.assertIs(cw.fix_copied_pp(s, 1, facts, tables), s)                     # the world does not hold the Transform
+        held = s._replace(transformed=s.transformed.at[0, 0].set(True))
+        self.assertEqual(np.asarray(cw.fix_copied_pp(held, 1, facts, tables).pp)[0, 0, 0].tolist(), [1, 4, 5, 9])
+        public = tr.Trackers(*([j.zeros((1,), j.int32)] * 17), copied_pp_used=j.zeros((1, 2, 4), j.int32))
+        self.assertEqual(np.asarray(cw.fill_copied_pp(held, public, 1, facts, tables).copied_pp_used)[0, 0].tolist(), [4, 1, 0, 0])
+
+    def test_device_world_rebuilds_both_copies_from_the_world(self):
+        """_materialize_transform: our transformed active's hidden copied stats and ability come from the world's sampled donor
+        (not the actual root), and the opponent's transformed active becomes a copy of our donor over its sampled base."""
+        from types import SimpleNamespace as NS
+        from gpu_engine import device_public_world_state as dws
+        from gpu_engine.state import empty_state
+        arrays = {k: np.array(v, copy=True) for k, v in empty_state(1)._asdict().items()}
+        arrays['species'][0] = [[11, 12, 13, 14, 15, 16], [21, 22, 23, 24, 25, 26]]
+        arrays['stats'][0, 1, 0] = [300, 201, 202, 203, 204, 205];arrays['stats'][0, 0, 1] = [250, 101, 102, 103, 104, 105]
+        arrays['stats'][0, 0, 0] = [258, 999, 999, 999, 999, 999]      # the TRUE donor's, as the actual root copied them
+        arrays['ability'][0, 1, 0] = 7;arrays['ability'][0, 0, 0] = 9;arrays['base_ability'][0, 0, 1] = 4
+        arrays['moves'][0, 0, 1] = [1, 2, 0, 0];arrays['moves'][0, 1, 1] = [5, 6, 0, 0];arrays['pp'][0, 1, 1] = [10, 3, 0, 0]
+        arrays['base_types'][0, 0, 1] = [3, 0]
+        tables = NS(namespaces=dict(abilities={'trace': 50, 'colorchange': 51}, items={}), copied_pp=tuple([0] + [5] * 9))
+        own = dict(transformed=np.bool_(True), transform_species=np.int32(21), active=np.int32(0),
+                   transform_stats=np.zeros(5, np.int32), transform_moves=np.zeros(4, np.int32), transform_hidden_power=np.zeros(2, np.int32))
+        view = dict(transformed=np.zeros((1, 6), bool), transform_species=np.zeros((1, 6), np.int32))
+        root = NS(own=own, view=view, public=NS(copied_pp_used=None))
+        dws._materialize_transform(root, tables, arrays, 0, 1, 1, {0: 0, 1: 1})
+        self.assertEqual(arrays['stats'][0, 0, 0].tolist(), [258, 201, 202, 203, 204, 205])
+        self.assertEqual(int(arrays['ability'][0, 0, 0]), 7)
+        own['transformed'] = np.bool_(False)
+        view['transformed'][0, 1] = True;view['transform_species'][0, 1] = 12
+        root = NS(own=own, view=view, public=NS(copied_pp_used=j.asarray([[[0, 0, 0, 0], [2, 0, 0, 0]]], j.int32)))
+        dws._materialize_transform(root, tables, arrays, 0, 1, 1, {0: 0, 1: 1})
+        self.assertEqual(arrays['stats'][0, 1, 1, 1:].tolist(), [101, 102, 103, 104, 105])
+        self.assertEqual(arrays['moves'][0, 1, 1].tolist(), [1, 2, 0, 0]);self.assertEqual(arrays['pp'][0, 1, 1].tolist(), [3, 5, 0, 0])
+        self.assertEqual(arrays['transform_moves'][0, 1].tolist(), [5, 6, 0, 0]);self.assertEqual(arrays['transform_pp'][0, 1].tolist(), [10, 3, 0, 0])
+        self.assertEqual((int(arrays['ability'][0, 1, 1]), arrays['types'][0, 1, 1].tolist()), (4, [3, 0]))
+        self.assertEqual((bool(arrays['transformed'][0, 1]), int(arrays['transform_species'][0, 1])), (True, 12))
+        arrays['base_ability'][0, 0, 1] = 50
+        with self.assertRaisesRegex(ValueError, 'PUBLIC_TRANSFORM_DONOR_OVERRIDDEN'):
+            dws._materialize_transform(root, tables, arrays, 0, 1, 1, {0: 0, 1: 1})
+
+
 class TransitionTests(unittest.TestCase):
     """step_with_chance on authored 8-lane states: side 0 (faster) uses its slot-0 move, side 1 its slot 0 (Splash by
     default). One jit, the table and every array as arguments, compiled once (asserted last)."""
