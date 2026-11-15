@@ -366,10 +366,11 @@ def mechanism(protocol,factory,data):
     """Production entry cannot turn hand-authored record metadata into claims."""
     resolver=_capture_resolver(protocol)
     # V2 self_moves: a heldout bank is scored only by a head served with the bank's own encoding; otherwise the mechanisms
-    # are explicitly unmeasured and the panel still runs. The device bank records its encoding (BankData.self_moves,
-    # compared in evaluate_device_bank). The Python capture bank is always encoded off (the champion driver catalog; its
-    # header records no encoding, and its own source files are bound into every captured bank, so they stay untouched).
-    if not hasattr(data,'self_moves') and unmeasured_self_moves(False,factory) is not None:
+    # are explicitly unmeasured and the panel still runs. A device bank (BankData) carries its header's encoding, compared in
+    # evaluate_device_bank; every other bank (the Python capture bank, built on the champion driver catalog, whose own
+    # source files are bound into every captured bank and so stay untouched) is treated as off here.
+    from .v5_device_evaluation_bank import BankData
+    if type(data) is not BankData and unmeasured_self_moves(False,factory) is not None:
         return unmeasured_self_moves(False,factory,heldout_positions=len(data.positions),sibling_groups=len(data.groups))
     return resolver.evaluate_original_capture(protocol,factory,data)
 

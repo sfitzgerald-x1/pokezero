@@ -194,6 +194,12 @@ def collect(reference, prepared, pool, *, gender_policy, resume=False):
     """
     from .v5_device_backend import Prepared
     from .engine_request_source import _gender
+    # V2 self_moves: bank capture is not threaded yet. Its actors must be off archives (refuse_unthreaded below), so an on
+    # catalog would mix on inputs with off actors' trajectories: refuse it. Banks are off, and their headers carry no key
+    # (v5_evaluation.bank_self_moves reads absent as off; an on bank would record `self_moves: true`).
+    if getattr(getattr(getattr(prepared,'catalog',None),'masks',None),'self_moves',False):
+        raise ValueError('device evaluation bank capture with self_moves is not threaded yet: an on catalog would pair on inputs '
+            'with off actors; capture banks off')
     from . import source_provenance
     if type(resume) is not bool: raise ValueError('explicit no-replay resume mode required')
     plan,batches,games,labels = schema.declaration(reference)
@@ -295,7 +301,6 @@ def collect(reference, prepared, pool, *, gender_policy, resume=False):
                 positions.append(p); groups.append(g)
     header = dict(split='PHASE_C_FIXED_HELDOUT',rows=1024,category_vocabulary_sha256=prepared.category_sha256,
         label_vocabulary_sha256=labels.sha256,category_count=prepared.category_size,device_bank=reference,device_source=plan['source_commit'])
-    if getattr(getattr(prepared.catalog,'masks',None),'self_moves',False):header['self_moves']=True   # V2: the bank's encoding (only when on)
     publication = directory/('publication-'+uuid.uuid4().hex); publication.mkdir()
     artifacts = {}
     for name,rows,kind in [('positions',positions,schema.POSITIONS),('siblings',groups,schema.SIBLINGS)]:
