@@ -10,7 +10,7 @@ from pathlib import Path
 import time
 
 from pokezero.live_protocol_actor import ActorContract,_packet
-from pokezero.recorded_encoder_runner import JaxRecordedAdapter
+from pokezero.recorded_encoder_runner import JaxRecordedAdapter,literal_history
 from pokezero.live_protocol_runtime import CompiledEncoderFunctions
 from pokezero.phase_d_search_server import SCHEMA
 from pokezero.v5_contract import DecisionAddress
@@ -68,7 +68,7 @@ class ProtocolConstructor:
         if lines[:len(old)]!=old or len(lines)<=len(old):raise worlds.Refusal('SEARCH_PREFIX_NOT_ORIGINAL_SUCCESSOR')
         # the compiled catalog's structure walk once per request, not on every feed/encode; V2 self_moves: B2's own moves/PP
         # read this root's literal history (from_b2 and the mask encode), cleared on exit from the session adapter
-        with adapter.checked_catalog(),adapter.literal_history(lines):
+        with adapter.checked_catalog(),literal_history(adapter,lines):
             # Original Python public-root capture checks literal owning request and
             # exact-foe/split contamination before either constructor can consume it.
             public=self._capture(key,address,request,lines,owner)

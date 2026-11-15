@@ -70,7 +70,8 @@ def payload_checks(request,payload,lines,*,owner,checks=None):
 def scan(adapter,request,public,source,metadata,*,lines,checks=None):
     # V2 self_moves: every B2 encode in the scan (the owning observation and from_b2's) reads the root's literal history,
     # cleared from the adapter on exit
-    with adapter.literal_history(lines):
+    from pokezero.recorded_encoder_runner import literal_history
+    with literal_history(adapter,lines):
         return _scan(adapter,request,public,source,metadata,lines=lines,checks=checks)
 
 

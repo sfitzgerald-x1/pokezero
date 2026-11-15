@@ -343,12 +343,13 @@ class B2SelfMovesTests(unittest.TestCase):
         """A session adapter (the protocol constructor's, phase_d_search's) never keeps a root's literal history: inside
         literal_history the encode reads it; after the block, even one that raised, the adapter reads its own log again."""
         import numpy as np
+        from pokezero.recorded_encoder_runner import literal_history
         adapter, lines, final = self.adapter(True)
-        with adapter.literal_history(lines):
+        with literal_history(adapter, lines):
             inside = np.asarray(adapter.encode(final, owner_side=0)['numeric_features'])
         self.assertIsNone(adapter.own_lines)
         self.assertTrue(np.array_equal(inside, self.b2(True)['numeric_features']))
-        with self.assertRaises(RuntimeError), adapter.literal_history(lines):
+        with self.assertRaises(RuntimeError), literal_history(adapter, lines):
             raise RuntimeError('a refused root')
         self.assertIsNone(adapter.own_lines)
         after = np.asarray(adapter.encode(final, owner_side=0)['numeric_features'])

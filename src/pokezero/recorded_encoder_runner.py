@@ -42,6 +42,17 @@ def compare_battle(rows,*,battle,stream_id,adapter,tally,with_forward):
         terminal_validated_not_encoded=True)
 
 
+@contextmanager
+def literal_history(adapter,lines):
+    """V2 self_moves: a block in which `adapter`'s encodes read `lines` (the owner's literal history, requests included,
+    ending with the encoded request) as its own_lines. Cleared on exit, also when the block raises, so a session adapter
+    kept across requests never encodes a later request with this root's stale history. A function over any adapter (the
+    protocol constructor's, phase_d_search's, the guard diagnostic's), not a method: their test doubles need no twin."""
+    adapter.own_lines=tuple(lines)
+    try:yield adapter
+    finally:adapter.own_lines=None
+
+
 class JaxRecordedAdapter:
     """Actual device fold/encode with atomic public-boundary host commitment."""
     def __init__(self,catalog,*,model=None,torch_module=None,owner_side=None,compiled_functions=None):
@@ -79,15 +90,6 @@ class JaxRecordedAdapter:
         self._check_compiled_functions();self._catalog_checked=True
         try:yield self
         finally:self._catalog_checked=False
-
-    @contextmanager
-    def literal_history(self,lines):
-        """V2 self_moves: a block whose encodes read `lines` (the owner's literal history, requests included, ending with the
-        encoded request) as own_lines. Cleared on exit, so a session adapter kept across requests never encodes a later
-        request with this root's stale history."""
-        self.own_lines=tuple(lines)
-        try:yield self
-        finally:self.own_lines=None
 
     def reset(self,*,stream_id,battle_id):
         from gpu_engine import public_wire
@@ -132,7 +134,7 @@ class JaxRecordedAdapter:
 
     def own_history(self,request):
         """V2 self_moves: the owner's protocol history up to and including `request`: the caller's literal own_lines inside
-        a literal_history block (the protocol constructor, phase_d_search, the guard diagnostic), else this adapter's log of
+        a literal_history(adapter, lines) block (the protocol constructor, phase_d_search, the guard diagnostic), else this adapter's log of
         fed lines and encoded requests. The log is exact when every own move request is encoded in order (the recorded and
         live actor flows)."""
         if self.own_lines is not None:return tuple(self.own_lines)
