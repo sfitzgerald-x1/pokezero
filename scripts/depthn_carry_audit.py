@@ -72,8 +72,8 @@ not modified. While its main runs, three of its module globals are swapped (turn
 bytecode that it looks each up at call time): Capture -> Turn2Capture, describe -> a wrapper that returns the original's detail
 unchanged and builds the decision's turn-2 record, decision_row -> a wrapper that returns the original's record unchanged and writes
 that turn-2 record to turn2.jsonl. Turn2Capture.installed() is rr's own context manager (decide and prepare_roots wrapped) and, for the
-same process_many call, also wraps constructor_worlds.price (DepthNLiveSearch._search calls `cw.price(...)` through the module
-attribute) to keep the batch and the frame it returns, and DepthNPricer._program (price() calls `self._program(...)`; the class
+same process_many call, also wraps constructor_worlds.price (the live search's batch path, its _price stage, calls `cw.price(...)`
+through the module attribute) to keep the batch and the frame it returns, and DepthNPricer._program (price() calls `self._program(...)`; the class
 attribute) so the compiled P1 program's output, the 81 turn-1 children per world row, also yields each child's active, its four
 moves, its charge move and usable_moves (gpu_engine.state) through one small jitted read before price() pops them
 (check_turn2_call_sites verifies both lookups from bytecode). Every wrapper calls the original with the same objects, returns its
@@ -807,23 +807,27 @@ def turn2_record(capture, owner, vocabulary, watch, *, name=None):
 
 
 def check_turn2_call_sites(search=None, price=None):
-    """True when DepthNLiveSearch._search calls cw.price through the module attribute and DepthNPricer.price calls self._program
-    through the attribute (so the class-level wrapper applies); RuntimeError otherwise."""
+    """True when the live search's batch path (DepthNLiveSearch._search and the stage methods it runs: the re-pricer's
+    search_stages(); or `search`, one function or a tuple of them) calls cw.price through the module attribute and
+    DepthNPricer.price calls self._program through the attribute (so the class-level wrappers apply); RuntimeError otherwise."""
     from gpu_engine import constructor_worlds as cw, depthn_live_search as live, device_depthn_pricer as dn
-    search = live.DepthNLiveSearch._search if search is None else search
+    from scripts import depthn_rr_reprice as rr
+    searches = rr.search_stages() if search is None else search if isinstance(search, tuple) else (search,)
     price = dn.DepthNPricer.price if price is None else price
-    found = dict(price=False, program=False);previous = None
-    for i in dis.get_instructions(search):
-        if (i.opname in ('LOAD_ATTR', 'LOAD_METHOD') and i.argval == 'price' and previous is not None and previous.opname == 'LOAD_GLOBAL'
-                and previous.argval == 'cw'):found['price'] = True
-        previous = i
+    found = dict(price=False, program=False)
+    for function in searches:   # the price call lives in the _price stage since the batched search
+        previous = None
+        for i in dis.get_instructions(function):
+            if (i.opname in ('LOAD_ATTR', 'LOAD_METHOD') and i.argval == 'price' and previous is not None and previous.opname == 'LOAD_GLOBAL'
+                    and previous.argval == 'cw'):found['price'] = True
+            previous = i
     previous = None
     for i in dis.get_instructions(price):   # self is a local or, captured by price's lambdas, a cell
         if (i.opname in ('LOAD_ATTR', 'LOAD_METHOD') and i.argval == '_program' and previous is not None
                 and (previous.opname.startswith('LOAD_FAST') or previous.opname == 'LOAD_DEREF')
                 and (previous.argval == 'self' or isinstance(previous.argval, tuple) and previous.argval[-1] == 'self')):found['program'] = True
         previous = i
-    if not all(found.values()) or search.__globals__ is not vars(live) or live.cw is not cw:
+    if not all(found.values()) or any(f.__globals__ is not vars(live) for f in searches) or live.cw is not cw:
         raise RuntimeError(f'the search does not reach cw.price / self._program at call time: {found}')
     return True
 
