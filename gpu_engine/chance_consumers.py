@@ -24,7 +24,7 @@ CONSUMERS = {
         (1, "mechanics.before_move: thaw<20"),
         (2, "mechanics.before_move: paralysis<25"),
         (3, "mechanics.before_move: confusion>=50"),
-        (4, "transition/pursuit: critical<1 or<2"),
+        (4, "transition/pursuit: critical<1 or<2, or <4 for a Farfetch'd holding Stick (critical.ratio 3)"),
         (5, "transition/pursuit: damage85+draw; confusion damage reuses draw"),
         (6, "mechanics.accuracy_hit: pinned binary64/Q12 integer-roll predicates"),
         (7, "transition primary sleep; encore.apply duration; secondary.apply_chance_effects Signal Beam confusion 2+draw; transition Wrap duration 3+draw"),
@@ -45,7 +45,7 @@ CONSUMERS = {
     "initial_tie": ("transition.initialize unresolved initial entry ordering",),
     # Fidelity R (design 2.1): the appended effect stream's consumers, finite_law.COORDINATES' effect.{s}.{c} axes (§6).
     **{f"effect.{s}.{c}": (use,) for s in range(2) for c, use in (
-        (0, "transition Bonemerang second hit: critical<1 or<2 (critical.is_critical)"),
+        (0, "transition Bonemerang second hit: critical<1 or<2, or <4 with Stick (critical.is_critical)"),
         (1, "transition Bonemerang second hit: damage 85+draw"),
         # Fidelity M2: the reserved columns. Column 2 is the drowsy mon's own side; column 3 is a pair tie per row.
         (2, "transition residual Yawn sleep duration 2+draw (the drowsy mon's side); secondary.apply_contact Effect Spore sleep duration 2+draw (the attacker's side; fidelity tier D: a Yawn sleep of that side reads it again in one step only after a Lum Berry cured this sleep at once, which discards the first value)"))},
@@ -80,6 +80,16 @@ def _opt(table, family, field, index, default=0):
     group = table.get(family)
     values = None if group is None else group.get(field)
     return default if values is None else values[index]
+
+
+def _stick(table, data, side, active):
+    """Stick (critical.ratio): the side's active is a Farfetch'd that holds Stick, or that a foe active holding Stick may
+    Trick it to (a superset); a host table without the fields (pre-Stick) has none."""
+    group = table.get("critical") or {}
+    stick, farfetchd = group.get("stick"), group.get("farfetchd")
+    if stick is None or farfetchd is None or not farfetchd[data["species"][side][active[side]]]:
+        return False
+    return bool(stick[data["item"][side][active[side]]] or stick[data["item"][1-side][active[1-side]]])
 
 
 def _counter(data, name, side, slot):
@@ -299,6 +309,13 @@ def plan_for_state(state, index, actions, table, metadata, *, cap, native_input=
             random_damage |= bool(observations[prefix+"3"])
             if random_damage:
                 use(prefix+"4", Observation("less_than", 1), Observation("less_than", 2))
+                # Stick: a Farfetch'd holding it crits below 4 (ratio 3, 1/4). With a high-crit move its ratio is 4 (1/3),
+                # which no [0,16) cut represents (critical.CRIT_THRESHOLD): refused; no randbats Farfetch'd has one.
+                if live_move[s] and _stick(t, data, s, active):
+                    if any(_at(t, "critical", "high", move) for move in selected[s]):
+                        return refuse("CRIT_RATIO_UNREPRESENTABLE",
+                                      "Stick on a high-crit move is Gen 3 critRatio 4 (1/3), not a [0,16) cut")
+                    use(prefix+"4", Observation("less_than", 4))
                 use(prefix+"5", Observation("identity"))
             accuracy = set()
             reachable_hustle = any(_at(t, "combat", "hustle", ability) for ability in abilities[s])
@@ -397,6 +414,8 @@ def plan_for_state(state, index, actions, table, metadata, *, cap, native_input=
             if second_hit:
                 use(f"effect.{s}.0", *(Observation("less_than", 2 if critical is not None and critical[move] else 1)
                                        for move in sorted(second_hit)))
+                if _stick(t, data, s, active):
+                    use(f"effect.{s}.0", Observation("less_than", 4))
                 use(f"effect.{s}.1", Observation("identity"))
             # Yawn's residual sleep (transition.py:2601-2611): a holder whose count is 1 when this residual runs sleeps
             # for 2+effect[s][2], s the drowsy mon's own side. A Yawn landing this turn sets 2 (:1742-1750), which ends
