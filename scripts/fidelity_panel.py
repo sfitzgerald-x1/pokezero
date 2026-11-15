@@ -336,7 +336,13 @@ def state_cause(row, teams):
 
 def attribute(a):
     import numpy as np
-    p = json.load(open(a.panel));pool = np.load(a.pool);meta = json.loads(pool['metadata_utf8'].tobytes());V = meta['vocabulary']
+    p = json.loads(Path(a.panel).read_text())
+    with np.load(a.pool,allow_pickle=False) as archive:
+        meta = json.loads(archive['metadata_utf8'].tobytes())
+        # NpzFile re-decompresses an array on every subscription. Cache only
+        # the four compact columns needed for attribution, once per panel.
+        pool = {key:archive[key] for key in ('species','ability','item','moves')}
+    V = meta['vocabulary']
     def team(t):
         return [dict(species=V['species'][int(pool['species'][t, m])], ability=V['abilities'][int(pool['ability'][t, m])],
                      item=V['items'][int(pool['item'][t, m])] if int(pool['item'][t, m]) else '',
