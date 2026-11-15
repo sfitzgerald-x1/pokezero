@@ -1,0 +1,184 @@
+"""The depth-N pricer's wide, compact leaf layout: lane packing and placement, and frames equal to the blocks layout's.
+
+leaf_layout='wide' packs only the enumerated leaf lanes into one wide iteration per call (the forward in chunks of the
+blocks program's B*K rows) and writes them back to the blocks layout's dense positions. On the inert-world fakes every
+frame array must equal the blocks layout's (and the oracle's), at any geometry: lane- or node-bound calls, partial calls
+with dead forward chunks, several learner actors, waiting seats, terminal and error lanes, digests on and off, depth 3
+(the expand ply stays blocks). Planted bugs in the wide path (lane placement off by one, swapped slots, a neighbour's
+chance draw, a dropped lane) must break the equality."""
+import inspect
+import textwrap
+import unittest
+from unittest.mock import patch
+
+import jax
+import numpy as np
+
+from gpu_engine import device_depthn_pricer as dn
+from tests import test_gpu_engine_depth2_pricer as T
+from tests import test_gpu_engine_depthn_pricer as DN
+from tests.test_gpu_engine_device_public_teacher import facts
+
+SPECS=(((0,27),0,0,1),((27,21),1,1,0),((22,23),0,2,2),((24,25),1,0,2),((29,30),0,1,1),((20,6),1,2,0))   # three learner actors
+
+
+def mutant(fn,old,new):
+    """`fn` with one source edit, compiled in its module's namespace (a planted bug for the negative controls)."""
+    src=textwrap.dedent(inspect.getsource(fn))
+    if src.count(old)!=1:raise AssertionError(f'mutation site not unique in {fn.__name__}: {old!r}')
+    space=dict(vars(inspect.getmodule(fn)));exec(compile(src.replace(old,new),inspect.getsourcefile(fn),'exec'),space)
+    return space[fn.__name__]
+
+
+class PackingTests(unittest.TestCase):
+    def pack(self,group,own,opp,**kw):
+        own=np.asarray(own,bool);opp=np.asarray(opp,bool);p=dn.pack_wide_leaf(group,own,opp,**kw)
+        k_opp=opp.shape[1];L=kw['lanes'];per_call=np.bincount(p.lane_pos//L,minlength=p.calls)
+        self.assertTrue((per_call<=L).all());self.assertTrue(((p.call_nodes>=0).sum(1)<=kw['nodes']).all())
+        expect=[(i,s,x)for i in range(len(group))for s in range(own.shape[1])for x in range(k_opp)if own[i,s]and opp[i,x]]
+        self.assertEqual(list(zip(p.lane_parent.tolist(),p.lane_slot_own.tolist(),p.lane_slot_opp.tolist())),expect)   # every lane once, in order
+        for i in np.unique(p.lane_parent):   # a parent's lanes are contiguous in one call, its node slot holds it
+            pos=p.lane_pos[p.lane_parent==i];self.assertEqual(pos.tolist(),list(range(pos[0],pos[0]+len(pos))));self.assertEqual(len(set(pos//L)),1)
+            c=pos[0]//L;self.assertEqual(p.call_nodes[c,p.node_slot[i]],i);self.assertTrue((p.lane_node.reshape(-1)[pos]==p.node_slot[i]).all())
+        flat=lambda x:x.reshape(-1)
+        self.assertEqual(int(flat(p.lane_live).sum()),len(expect));self.assertTrue((flat(p.lane_own)[p.lane_pos]==p.lane_slot_own).all())
+        self.assertTrue((flat(p.lane_opp)[p.lane_pos]==p.lane_slot_opp).all())
+        self.assertTrue((flat(p.chunk_group)[p.lane_pos//kw['chunk']]==np.asarray(group)[p.lane_parent]).all())
+        return p
+
+    def test_greedy_calls_keep_a_parent_whole(self):
+        live=lambda c:[True]*c+[False]*(2-c)
+        p=self.pack([0,0,0,0],[live(2),live(1),live(2),live(1)],[live(2),live(2),live(1),live(1)],nodes=8,lanes=8,chunk=4)
+        # 4 + 2 lanes fill call 0 to 6; the third parent's 2 lanes fit (8); the fourth's 1 lane opens call 1.
+        self.assertEqual((p.calls,p.node_call.tolist(),p.node_lane.tolist()),(2,[0,0,0,1],[0,4,6,0]))
+        self.assertEqual(p.chunk_group.tolist(),[[0,0],[0,-1]])
+        p=self.pack([0,0,0],[live(2)]*3,[live(2)]*3,nodes=8,lanes=8,chunk=4)
+        self.assertEqual((p.calls,p.node_call.tolist(),p.node_lane.tolist()),(2,[0,0,1],[0,4,0]))
+
+    def test_node_capacity_closes_a_call(self):
+        p=self.pack([0]*5,[[True,False]]*5,[[True,False]]*5,nodes=2,lanes=8,chunk=4)
+        self.assertEqual((p.calls,p.node_call.tolist(),p.node_slot.tolist()),(3,[0,0,1,1,2],[0,1,0,1,0]))
+        self.assertEqual(p.call_nodes.tolist(),[[0,1],[2,3],[4,-1]])
+
+    def test_a_group_change_starts_a_forward_chunk(self):
+        one=[[True,False]]
+        p=self.pack([0,0,1,2,2],one*5,one*5,nodes=9,lanes=8,chunk=4)
+        # group 0 at lanes 0,1; group 1 at the next chunk (4); group 2 cannot start a chunk in call 0 (8 is full): call 1.
+        self.assertEqual((p.calls,p.node_call.tolist(),p.node_lane.tolist()),(2,[0,0,0,1,1],[0,1,4,0,1]))
+        self.assertEqual(p.chunk_group.tolist(),[[0,1],[2,-1]])
+
+    def test_parents_without_lanes_are_not_packed(self):
+        p=self.pack([0,0,0],[[True,True],[False,False],[True,False]],[[True,False],[True,True],[False,True]],nodes=4,lanes=4,chunk=4)
+        self.assertEqual((p.node_call.tolist(),p.node_lane.tolist()),([0,-1,0],[0,-1,2]))
+        empty=self.pack([],np.zeros((0,3),bool),np.zeros((0,2),bool),nodes=4,lanes=12,chunk=6)
+        self.assertEqual((empty.calls,empty.lane_live.shape,len(empty.lane_pos)),(0,(0,12),0))
+
+    def test_random_packings_and_placement_roundtrip(self):
+        rng=np.random.default_rng(7)
+        for trial in range(40):
+            P=int(rng.integers(1,60));k_own,k_opp=int(rng.integers(1,5)),int(rng.integers(1,5));K=k_own*k_opp
+            chunk=K*int(rng.integers(1,4));lanes=chunk*int(rng.integers(1,5));nodes=int(rng.integers(1,12))
+            group=np.sort(rng.integers(0,3,P));own=rng.random((P,k_own))<.6;opp=rng.random((P,k_opp))<.6
+            p=self.pack(group,own,opp,nodes=nodes,lanes=lanes,chunk=chunk)
+            flat=rng.permutation(4*50)[:P];pw,pid=flat//50,flat%50   # distinct (world, node) per parent
+            fields=dict(v=np.arange(p.calls*lanes,dtype=np.float32)+1,d=np.stack([np.arange(p.calls*lanes)]*2,-1).astype(np.uint32)+1)
+            out=dn.place_wide_leaf(p,fields,pw,pid,4,50,k_own,k_opp,[('v',(),np.float32),('d',(2,),np.uint32)])
+            for i in range(P):
+                for s in range(k_own):
+                    for x in range(k_opp):
+                        hit=(p.lane_parent==i)&(p.lane_slot_own==s)&(p.lane_slot_opp==x)
+                        want=fields['v'][p.lane_pos[hit][0]]if hit.any()else 0.
+                        self.assertEqual(out['v'][pw[i],pid[i],s,x],want,f'trial {trial}')
+                        self.assertEqual(out['d'][pw[i],pid[i],s,x].tolist(),[int(want)]*2)
+            self.assertEqual(int(np.count_nonzero(out['v'])),len(p.lane_pos))
+
+    def test_fail_closed(self):
+        one=np.ones((2,2),bool)
+        for kw in(dict(nodes=0,lanes=8,chunk=4),dict(nodes=2,lanes=6,chunk=4),dict(nodes=2,lanes=6,chunk=3)):   # no nodes; lanes % chunk; chunk < K
+            with self.assertRaises(ValueError):dn.pack_wide_leaf([0,0],one,one,**kw)
+        with self.assertRaises(ValueError):dn.pack_wide_leaf([0,1,0],np.ones((3,2),bool),np.ones((3,2),bool),nodes=4,lanes=8,chunk=4)   # a group split
+
+
+class FrameTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        _,cls.root,_,cls.tables,cls.recipe=facts()
+
+    def requests(self,specs,ex):return T.Depth2PricerTests.requests(self,specs,ex)
+    def price(self,specs,**kw):return DN.DepthNPricerTests.price(self,specs,**kw)
+    def check_oracle(self,*a,**kw):return DN.DepthNPricerTests.check_oracle(self,*a,**kw)
+    def assert_frames_equal(self,a,b,msg=''):return DN.DepthNPricerTests.assert_frames_equal(self,a,b,msg)
+
+    def both(self,specs,*,ex=None,wide=None,**kw):
+        """(blocks frame, wide frame, wide engine): one fake executor, two fresh pricers at the same geometry."""
+        ex=ex or DN.deep_executor()
+        blocks=self.price(specs,ex=ex,**kw)[0];frame,_,engine,_=self.price(specs,ex=ex,leaf_layout='wide',**dict(kw,**(wide or {})))
+        self.assertGreater(int(np.count_nonzero(blocks.leaf_status)),0)
+        return blocks,frame,engine
+
+    def test_depth2_wide_equals_blocks_across_geometries(self):
+        for ex in(T.executor()[0],T.permuting_executor(),DN.lane_executor()):
+            for (k_own,k_opp),lanes,calls,wide,digest in(((9,9),5*81,2,{},False),((9,9),81,4,{},True),((9,9),81,1,dict(wide_nodes=1),False),
+                    ((2,3),40,3,dict(wide_nodes=2),True),((3,2),6,16,{},False),((9,9),2187,16,{},True)):
+                blocks,frame,engine=self.both(SPECS,ex=ex,depth=2,k_own=(k_own,),k_opp=(k_opp,),block_lanes=lanes,blocks_per_call=calls,digest=digest,wide=wide)
+                self.assert_frames_equal(blocks,frame,f'k=({k_own},{k_opp}) lanes={lanes} calls={calls} {wide}')
+                self.assertEqual([w['status']for pair in blocks.world_reports for w in pair],[w['status']for pair in frame.world_reports for w in pair])
+                t=frame.timing['plies'][-1];self.assertEqual(t['packed_lanes'],t['enumerated'])
+                self.assertEqual(t['enumerated'],blocks.timing['plies'][-1]['enumerated'])
+
+    def test_depth3_wide_leaf_after_blocks_expand_matches_blocks_and_the_oracle(self):
+        specs=(((0,27),0,0,1),((27,0),1,1,0),((0,0),0,2,2))
+        blocks,frame,engine=self.both(specs,depth=3,k_own=(2,3),k_opp=(3,2),block_lanes=40,blocks_per_call=4,digest=True)
+        self.assert_frames_equal(blocks,frame)
+        self.check_oracle(frame,self.requests(specs,DN.deep_executor()),DN.deep_executor(),specs,((2,3),(3,2)))
+        kinds=[k[:2]for k in engine.programs if k[0]in('expand','leaf')]
+        self.assertEqual(kinds,[('expand',6),('leaf','wide')])   # ply 2 expands on the blocks program (B=6), the leaf is wide
+        self.assertNotIn('layout',frame.timing['plies'][0]);self.assertEqual(frame.timing['plies'][1]['layout'],'wide')
+
+    def test_waiting_terminal_error_and_padding_lanes(self):
+        specs=(((40,41),0,0,1),((20,21),1,1,0),((22,23),0,0,1),((24,25),1,1,0),((43,44),0,2,1),((28,27),1,1,0),((46,47),0,1,2))
+        blocks,frame,_=self.both(specs,depth=3,k_own=(3,2),k_opp=(2,3),block_lanes=40,blocks_per_call=2,wide=dict(wide_nodes=3))
+        self.assert_frames_equal(blocks,frame)
+        self.assertTrue({1,3,4}<=set(np.unique(frame.leaf_status).tolist()))   # terminal, error and head leaves all placed
+        specs=(((0,0),0,0,1),((0,27),1,1,0),((32,32),0,0,2));missing=((1,1),)   # a missing world and padding roots
+        blocks=self.price(specs,depth=3,k_own=(2,2),k_opp=(2,2),missing=missing,block_lanes=20,blocks_per_call=3)[0]
+        frame=self.price(specs,depth=3,k_own=(2,2),k_opp=(2,2),missing=missing,block_lanes=20,blocks_per_call=3,leaf_layout='wide')[0]
+        self.assert_frames_equal(blocks,frame)
+
+    def test_keys_timing_and_the_default(self):
+        blocks,frame,engine=self.both(SPECS,depth=2,k_own=(9,),k_opp=(9,),block_lanes=81,blocks_per_call=4,digest=True)
+        keys=[k for k in engine.programs if k[0]=='leaf'];self.assertEqual(keys,[('leaf','wide',20,324,81,9,9)])   # nodes = lanes // 16
+        self.assertEqual([k for k in blocks.timing['programs']if k[0]=='leaf'],[('leaf',1,4,9,9)])
+        self.assertTrue(any(k[0]=='gather'and k[2]==20 for k in engine.programs))
+        b,w=blocks.timing['plies'][-1],frame.timing['plies'][-1]
+        self.assertTrue(set(b)<set(w));self.assertNotIn('layout',b);self.assertNotIn('leaf_layout',blocks.timing);self.assertEqual(frame.timing['leaf_layout'],'wide')
+        self.assertEqual((w['layout'],w['node_capacity'],w['lane_capacity'],w['forward_chunk_rows'],w['blocks_per_call']),('wide',20,324,81,4))
+        self.assertEqual((w['evaluated_lanes'],w['lanes'],w['forward_chunks']),(w['calls']*324,w['calls']*324,w['calls']*4))
+        self.assertEqual(w['packed_lanes'],int(np.count_nonzero(frame.leaf_status)));self.assertLessEqual(w['packed_nodes'],w['parents'])
+        self.assertEqual((w['dense_blocks'],w['dense_lanes']),(b['blocks'],b['lanes']));self.assertEqual(w['forward_rows'],w['forward_chunks_live']*81)
+        self.assertLess(w['calls'],b['calls']);self.assertEqual(frame.timing['evaluated_leaf_lanes'],w['lanes'])
+        ex=DN.deep_executor()
+        for kw in(dict(leaf_layout='rows'),dict(wide_nodes=4),dict(leaf_layout='wide',wide_nodes=0),dict(leaf_layout='wide',wide_nodes=2.)):
+            with self.assertRaises(ValueError):dn.DepthNPricer(ex,None,capacity=1,depth=2,k_own=2,k_opp=2,actor_capacity=1,**kw)
+        self.assertEqual(dn.DepthNPricer(ex,None,capacity=1,depth=2,k_own=2,k_opp=2,actor_capacity=1).leaf_layout,'blocks')
+
+    def test_planted_bugs_break_the_equality(self):
+        kw=dict(depth=2,k_own=(9,),k_opp=(9,),block_lanes=81,blocks_per_call=4,digest=True)
+        ex=T.executor()[0];blocks=self.price(SPECS,ex=ex,**kw)[0]
+        place=dn.place_wide_leaf;pack=dn.pack_wide_leaf;program=dn.make_wide_leaf_program
+        def dropped(*a,**k):   # the last packed lane is never stepped
+            p=pack(*a,**k);live=p.lane_live.copy().reshape(-1);live[p.lane_pos[-1]]=False
+            from dataclasses import replace
+            return replace(p,lane_live=live.reshape(p.lane_live.shape))
+        bugs=dict(off_by_one=('place_wide_leaf',mutant(place,'np.asarray(fields[name])[pack.lane_pos]','np.asarray(fields[name])[np.minimum(pack.lane_pos+1,len(fields[name])-1)]')),
+            swapped_slots=('place_wide_leaf',mutant(place,'pack.lane_slot_own,pack.lane_slot_opp]','pack.lane_slot_own[::-1],pack.lane_slot_opp[::-1]]')),
+            neighbour_chance=('make_wide_leaf_program',mutant(program,'chance=jax.vmap(executor.sample)(states)',
+                'chance=jax.tree.map(lambda x:j.roll(x,1,axis=0),jax.vmap(executor.sample)(states))')),
+            dropped_lane=('pack_wide_leaf',dropped))
+        for name,(target,bug)in bugs.items():
+            with patch.object(dn,target,bug):frame=self.price(SPECS,ex=ex,leaf_layout='wide',**kw)[0]
+            with self.assertRaises(AssertionError,msg=name):self.assert_frames_equal(blocks,frame)
+        self.assert_frames_equal(blocks,self.price(SPECS,ex=ex,leaf_layout='wide',**kw)[0])   # unpatched again: equal
+
+
+if __name__=='__main__':unittest.main()
