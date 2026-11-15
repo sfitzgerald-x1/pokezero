@@ -78,13 +78,13 @@ Source: integration snapshot `994242ce519a1646825bb1252fc438d9b0517123`, read-on
 | `test_gpu_engine_before_move_blocked_input` | extended | integration `994242ce`: 4.0 min, 6.15 GiB |
 | `test_gpu_engine_earthquake_levitate_input` | extended | integration `994242ce`: 4.6 min, 6.23 GiB |
 | `test_gpu_engine_encore_owning` | extended | integration `994242ce`: 3.6 min, 6.35 GiB |
-| `test_gpu_engine_flash_fire_end_owning` | heavy | integration `994242ce`: 6.9 min, 8.16 GiB | Main-specific measurement is listed below.
+| `test_gpu_engine_flash_fire_end_owning` | heavy | integration `994242ce`: 6.9 min, 8.16 GiB |
 | `test_gpu_engine_focus_punch_input` | extended | integration `994242ce`: 4.0 min, 6.19 GiB |
 | `test_gpu_engine_heal_bell_owning` | extended | integration `994242ce`: 8.7 min, 8.08 GiB |
 | `test_gpu_engine_hidden_power_substitute_input` | extended | integration `994242ce`: 3.7 min, 6.28 GiB |
 | `test_gpu_engine_levitate_twisted_spoon_input` | extended | integration `994242ce`: 3.8 min, 6.08 GiB |
 | `test_gpu_engine_natural_cure_departure_input` | extended | integration `994242ce`: 7.4 min, 8.27 GiB |
-| `test_gpu_engine_no_damage_owning` | heavy | integration `994242ce`: 6.8 min, 8.41 GiB | Main-specific measurement is listed below.
+| `test_gpu_engine_no_damage_owning` | heavy | integration `994242ce`: 6.8 min, 8.41 GiB |
 | `test_gpu_engine_primary_sleep_miss` | extended | integration `994242ce`: 4.1 min, 5.97 GiB |
 | `test_gpu_engine_rest_success_input` | extended | integration `994242ce`: 4.9 min, 6.85 GiB |
 | `test_gpu_engine_return_substitute_input` | extended | integration `994242ce`: 3.7 min, 6.18 GiB |
@@ -95,10 +95,10 @@ Source: integration snapshot `994242ce519a1646825bb1252fc438d9b0517123`, read-on
 | `test_gpu_engine_thunder_wave_ground_immunity` | extended | integration `994242ce`: 3.6 min, 6.36 GiB |
 | `test_gpu_engine_thunder_wave_limber_input` | extended | integration `994242ce`: 4.1 min, 6.44 GiB |
 | `test_gpu_engine_thunder_wave_substitute_failure` | extended | integration `994242ce`: 3.7 min, 6.21 GiB |
-| `test_gpu_engine_toxic_runtime` | heavy | integration `994242ce`: 6.6 min, 8.17 GiB | Main-specific measurement is listed below.
+| `test_gpu_engine_toxic_runtime` | heavy | integration `994242ce`: 6.6 min, 8.17 GiB |
 | `test_gpu_engine_v5_depth1_provider` | extended | integration `994242ce`: 8.2 min, 7.91 GiB |
 | `test_gpu_engine_v5_public_world` | extended | integration `994242ce`: 7.7 min, 7.59 GiB |
-| `test_gpu_engine_variable_direct_runtime` | heavy | integration `994242ce`: 6.4 min, 7.96 GiB | Main-specific measurement is listed below.
+| `test_gpu_engine_variable_direct_runtime` | heavy | integration `994242ce`: 6.4 min, 7.96 GiB |
 | `test_gpu_engine_will_o_wisp_miss_input` | extended | integration `994242ce`: 4.3 min, 6.29 GiB |
 | `test_gpu_engine_wonder_guard_immunity` | extended | integration `994242ce`: 8.3 min, 8.15 GiB |
 
@@ -132,3 +132,9 @@ These original-main measurements are from run [43641647612](https://github.com/s
 | `test_gpu_engine_toxic_success_runtime` | heavy | light | 41.67 | 14.65 | 33.46 |
 | `test_gpu_engine_variable_direct_runtime` | heavy | extended | 31.59 | 14.61 | 32.80 |
 | `test_gpu_engine_weather_hp_runtime` | heavy | light | 15.65 | 14.71 | 15.55 |
+
+## Main-only measurement protocol
+
+Main-only modules are measured on a CPU pod with the workflow’s pinned runtime, two lanes of four CPU cores, and the pod’s effective CPU/memory limits checked before starting. Each module uses the original process-block path, preserving its case isolation and low-optimization options. The observer records process-tree PSS/RSS and process/kernel high-water marks once per second. A measurement exceeding 32 GiB or 20 minutes is stopped and recorded as an unsettled lower bound; it is assigned outside light and remains fully runnable by the documented heavy route. Such a classification measurement is not reported as a test pass.
+
+Completed measurements will be listed here before review readiness. Canary tracker currently passes both cases at 3.23 GiB peak RSS and 1.89 minutes; it remains light.
