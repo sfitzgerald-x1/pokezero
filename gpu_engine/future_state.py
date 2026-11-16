@@ -153,7 +153,7 @@ CONDITIONS = ("aurora_veil", "crafty_shield", "healing_wish", "light_screen", "l
     "lunar_dance", "mat_block", "mist", "protect", "quick_guard", "reflect", "safeguard",
     "spikes", "stealth_rock", "sticky_web", "tailwind", "toxic_count", "toxic_spikes", "wide_guard")
 DURATIONS = ("confusion", "encore", "lockedmove", "slowstart", "taunt", "yawn")
-VOLATILES = {1: "flinch", 2: "flashfire", 4: "leechseed", 8: "ingrain", 64: "destinybond"}
+VOLATILES = {1: "flinch", 2: "flashfire", 4: "leechseed", 8: "ingrain", 64: "destinybond", 128: "attract"}
 MON_FIELDS = ("id", "level", "type0", "type1", "base_type0", "base_type1", "hp", "maxhp",
     "ability", "base_ability", "item", "nature", "evs", "attack", "defense", "special_attack",
     "special_defense", "speed", "status", "rest_turns", "sleep_turns", "weight_kg")
@@ -174,7 +174,7 @@ SHAPES.update({name: (2,) for name in ("active", "entry_pending", "active_turns"
 SHAPES.update({name: () for name in ("queued_actor", "pending_residual", "replacement_count", "weather",
     "weather_counter", "turn", "done", "winner")})
 SHAPES.update(types=(2, 6, 2), base_types=(2, 6, 2), stats=(2, 6, 6), moves=(2, 6, 4), pp=(2, 6, 4), disabled=(2, 6, 4),
-    boosts=(2, 6, 7), residual_draws=(2, 12), effect_draws=(2, 4))
+    boosts=(2, 6, 7), residual_draws=(2, 12), effect_draws=(2, 5))
 
 
 @dataclass(frozen=True)

@@ -72,15 +72,15 @@ class ChanceControl:
         if 'effect' in raw:
             # Tape v2 (fidelity R): the appended effect stream, from the saved block on a suspended turn.
             effect=state.effect_draws[0] if pending else arrays['effect'][0]
-            if (effect.shape!=(2,4) or effect.dtype.kind not in 'iu' or np.any(effect<0)
-                    or np.any(effect>=np.array([16,16,4,2]))):
+            if (effect.shape!=(2,5) or effect.dtype.kind not in 'iu' or np.any(effect<0)
+                    or np.any(effect>=np.array([16,16,4,2,2]))):
                 raise ValueError('actual original finite chance operands required')
             # Tape v3 (fidelity tier D): phazing, the contact abilities' and the drag's auxiliary roll (the saved block on a
             # suspended turn), so Static / Poison Point / Flame Body / Effect Spore rolls resolve as the engine read them.
             phazing=state.phazing_draws[0] if pending else arrays['phazing'][0]
             if phazing.shape!=(2,) or phazing.dtype.kind not in 'iu' or np.any(phazing<0) or np.any(phazing>=60):
                 raise ValueError('actual original finite chance operands required')
-            value.update(schema='pokezero.gpu_chance_tape.v3',effect=effect.tolist(),phazing=phazing.tolist())
+            value.update(schema='pokezero.gpu_chance_tape.v5',effect=effect.tolist(),phazing=phazing.tolist())
         self.control.write_text(json.dumps(value));return value
 
     def end(self):

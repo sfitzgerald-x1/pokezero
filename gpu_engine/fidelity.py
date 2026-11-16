@@ -35,13 +35,14 @@ FORMATS={SLEEP_CLAUSE_FORMAT:'gen3customgame@@@sleepclausemod; Sleep Clause Mod,
     'gen3customgame':'gen3customgame; no Sleep/Freeze Clause'}
 # Fidelity tier D: tape v3 adds phazing (sample_chance_inputs' fold_in 271828, [0,60)), the contact abilities' and the
 # drag's auxiliary roll, so Static (before: unmapped, the "Static mapping gap") and the tier D abilities resolve.
-TAPE_SCHEMA='pokezero.gpu_chance_tape.v3'
+TAPE_SCHEMA='pokezero.gpu_chance_tape.v5'
 PHAZING_SALT=271828
 # The appended ChanceInputs.effect stream (design 2.1), derived here independently of
 # transition.effect_chance so a drift between the two shows as a divergence. Fidelity R
 # consumes [s][0..1] (Bonemerang's second hit); the residual roles arrive with M2.
 EFFECT_SALT=1732050
-EFFECT_BOUNDS=(16,16,4,2)
+EFFECT_BOUNDS=(16,16,4,2,2)
+INFATUATION_SALT=2236067
 # The first 50000..50199 panel is immutable historical evidence. Following
 # its authored adapter correction, use one disjoint fixed panel, not a replay.
 FIRST_GAME=50200
@@ -83,8 +84,31 @@ def reconstruct(pool,metadata,showdown,node,*,first_game=FIRST_GAME,games=200):
 
 def effect_draws(keys):
     """ChanceInputs.effect exactly as design 2.1 derives it from the step's split keys."""
-    return jax.vmap(lambda key:jax.random.randint(jax.random.fold_in(key,EFFECT_SALT),(2,4),0,
-        j.array(EFFECT_BOUNDS,j.int32)))(keys)
+    old=jax.vmap(lambda key:jax.random.randint(jax.random.fold_in(key,EFFECT_SALT),(2,4),0,
+        j.array(EFFECT_BOUNDS[:4],j.int32)))(keys)
+    attract=jax.vmap(lambda key:jax.random.randint(jax.random.fold_in(key,INFATUATION_SALT),(2,1),0,2))(keys)
+    return j.concatenate((old,attract),axis=-1)
+
+
+def initialize_comparison_genders(state,metadata,showdown,node,root_ids):
+    """Fresh, addressed constructor values coupled to actual Showdown samples.
+
+    This is a prospective comparison cohort, never a reconstruction of genders
+    missing from an old recorded battle. Existing pool tensors/turn keys stay
+    unchanged. The original fixed-gender sets are checked again by the JS hook.
+    """
+    from .gender import initialize_genders
+    policy=json.loads(subprocess.check_output([node,str(ROOT/'gpu_engine/comparison_gender_policy.cjs'),str(showdown)],
+        input=json.dumps(metadata),text=True))
+    return initialize_genders(state,policy,metadata['vocabulary']['species'],
+        seed=719,domain=1129595218,root_ids=np.asarray(root_ids,dtype=np.uint32))
+
+
+def gender_initialization(state):
+    values=np.asarray(state.gender)
+    if values.shape!=(1,2,6) or not np.isin(values,[0,1,2]).all():
+        raise ValueError('comparison requires retained per-party gender')
+    return dict(genders=values[0].tolist(),allow_inert_gender=False)
 
 
 def chance_tape(state,game,index,saved_effect=None):
@@ -245,6 +269,7 @@ def run(pool_path,expected_sha,showdown,node,out,format_id=SLEEP_CLAUSE_FORMAT):
     table=transition.tables_from_metadata(metadata);reference_actions.table=table
     base=transition.state_from_pool(pool,np.arange(2*FIRST_GAME,2*(FIRST_GAME+200)).reshape(200,2),seed=719)
     base=base._replace(keys=jax.vmap(lambda n:jax.random.fold_in(jax.random.PRNGKey(719),n))(j.arange(FIRST_GAME,FIRST_GAME+200)))
+    base=initialize_comparison_genders(base,metadata,showdown,node,np.arange(FIRST_GAME,FIRST_GAME+200))
     base=jax.block_until_ready(transition.initialize(base,table));advance=jax.jit(lambda s,a:transition.step(s,a,table))
     header=dict(schema='pokezero.gpu_fidelity_trace.v1',source_commit=source,source_sha256=before,pool_sha256=pool_sha,
         roster=roster,format=FORMATS[format_id],format_id=format_id,chance_tape_schema=TAPE_SCHEMA,ordinary_turn_cap=20,request_cap=200,
@@ -270,7 +295,7 @@ def run(pool_path,expected_sha,showdown,node,out,format_id=SLEEP_CLAUSE_FORMAT):
                 # gender draw. This check uses the original unfiltered teams.
                 gender_sensitive=any(metadata['vocabulary']['moves'][int(x)]=='attract' for x in np.asarray(state.moves).flat)
                 gender_sensitive |= any(metadata['vocabulary']['abilities'][int(x)]=='cutecharm' for x in np.asarray(state.ability).flat)
-                initializing.write_text(json.dumps(dict(allow_inert_gender=not gender_sensitive)))
+                initializing.write_text(json.dumps(gender_initialization(state)))
                 env=LocalShowdownEnv(LocalShowdownConfig(showdown_root=showdown,node_binary=node,bridge_path=bridge,
                     feature_masks=ObservationFeatureMasks(transition_token_budget=0)))
                 try:

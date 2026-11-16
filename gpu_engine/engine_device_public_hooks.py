@@ -856,6 +856,9 @@ def derived_volatiles(c,state,use):
         bag=bag.at[:,VOLATILE_NAMES.index('encore')].set((_get(state,'encore_counter',side)>0)&(_get(state,'hp',side)>0))
         bag=bag.at[:,VOLATILE_NAMES.index('flashfire')].set(
             ((_get(state,'volatile',side)&j.uint32(FLASH_FIRE))!=0)&(_get(state,'hp',side)>0))
+        from .state import ATTRACT
+        bag=bag.at[:,VOLATILE_NAMES.index('attract')].set(
+            ((_get(state,'volatile',side)&j.uint32(ATTRACT))!=0)&(_get(state,'hp',side)>0))
         c=c._replace(trackers=_write(c.trackers,'public_volatiles',side,p,bag,use))
     return c
 

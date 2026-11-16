@@ -107,6 +107,7 @@ function snapshot(battle) {
     const mons = side.pokemon.slice().sort((a, b) => a.pzIndex - b.pzIndex).map(p => {
       const v = p.volatiles;
       return {hp:p.hp, maxhp:p.maxhp, status:p.status || '', fainted:!!p.fainted,
+        gender:({M:1,F:2})[p.gender] || 0,
         status_time:p.status === 'slp' ? (p.statusState.time ?? null) : null,
         tox_stage:p.status === 'tox' ? (p.statusState.stage ?? null) : null,
         boosts:BOOSTS.map(b => p.boosts[b]), item:p.item || '', item_knocked:!!p.itemKnockedOff,
@@ -121,6 +122,7 @@ function snapshot(battle) {
             source:originalIndex(v.partiallytrapped.source)} : null,
           mustrecharge:v.mustrecharge ? v.mustrecharge.duration : null,
           destinybond:!!v.destinybond,
+          attract:!!v.attract,
           substitute:v.substitute ? v.substitute.hp : null,
           names:Object.keys(v).sort(),
         }};
@@ -162,7 +164,9 @@ function main() {
     prepare(cmd) {
       const sets = cmd.teams.map(team => team.map(set => fill(env, set)));
       const teamRows = sets.map(team => team.map(set => rows.memberRow(env.pool.dex, env.pool.id, set)));
-      return {sets, rows:teamRows, vocabulary:env.pool.vocabulary};
+      // Retain explicit authored gender; old insensitive fixtures keep UNKNOWN.
+      const genders=sets.map(team=>team.map(set=>({N:0,M:1,F:2})[set.gender] ?? -1));
+      return {sets, rows:teamRows, vocabulary:env.pool.vocabulary, genders};
     },
     start(cmd) {
       env.setTape(null); env.takeAudit();

@@ -40,9 +40,10 @@ from . import self_destruct as exploding
 from . import encore as repeating
 from . import solar_beam as charging
 from . import focus_punch as focusing
+from . import infatuation
 from .effects import MoveEffects, from_metadata as effects_from_metadata, stall_success, cure_team, weather_healing
 from .state import FLINCH, FOCUS_PUNCH, FOCUS_LOST, BattleState, bench_indices, empty_state, legal_actions, usable_moves
-from .state import DESTINY_BOND
+from .state import DESTINY_BOND, ATTRACT
 
 
 class MoveTable(NamedTuple):
@@ -77,6 +78,7 @@ class MoveTable(NamedTuple):
     focus_punch: focusing.FocusTable | None = None
     solar_beam: charging.SolarTable | None = None
     public_port: object = None
+    infatuation: infatuation.InfatuationTable | None = None
 
 
 def tables_from_metadata(metadata: dict) -> MoveTable:
@@ -111,7 +113,8 @@ def tables_from_metadata(metadata: dict) -> MoveTable:
         variable.from_metadata(metadata),intercepts.from_metadata(metadata),passing.from_metadata(metadata),
         dragging.from_metadata(metadata),linking.from_metadata(metadata),crits.from_metadata(metadata),
         secondaries.from_metadata(metadata),talking.from_metadata(metadata),exploding.from_metadata(metadata),
-        repeating.from_metadata(metadata),focusing.from_metadata(metadata),charging.from_metadata(metadata),public_port.compile_tables(metadata))
+        repeating.from_metadata(metadata),focusing.from_metadata(metadata),charging.from_metadata(metadata),public_port.compile_tables(metadata),
+        infatuation.from_metadata(metadata))
 
 
 def state_from_pool(pool, team_indices, *, seed=0, table=None) -> BattleState:
@@ -145,8 +148,17 @@ def _set_active(value, state, side, update):
     return value.at[rows, side, state.active[rows, side]].set(update)
 
 
-def _lum_update(state,table,eligible,_status_trace=None,*,_device_public=None):
+def _lum_update(state,table,eligible,_status_trace=None,*,_device_public=None,_infatuation_update=True):
     if _device_public is not None:_device_before=state
+    if _status_trace is not None:
+        from . import engine_status_callbacks as status_callbacks
+        # Infatuation has no owning lifecycle receipt yet. Refuse any live
+        # carried relation before it can activate (even on a pass), be cured,
+        # or end on departure. Fresh applications also refuse at their write.
+        _status_trace=status_callbacks.unknown(_status_trace,jnp.asarray(eligible)
+            & jnp.any((state.volatile&jnp.uint32(ATTRACT))!=0,axis=(1,2)))
+    if table.infatuation is not None and _infatuation_update:
+        state=infatuation.update(state,table.infatuation,eligible=eligible,_device_public=_device_public)
     if table.items is None:
         if _status_trace is not None:return state,_status_trace
         return state
@@ -227,7 +239,8 @@ def _clear_fainted_boosts(state,before_hp,*,eligible):
     Previously dead slots and ineligible rows are not new faint transactions.
     """
     fainted=jnp.asarray(eligible)[:,None,None] & (before_hp>0) & (state.hp<=0)
-    return state._replace(boosts=jnp.where(fainted[...,None],0,state.boosts))
+    state=state._replace(boosts=jnp.where(fainted[...,None],0,state.boosts))
+    return infatuation.clear_fainted(state,eligible=eligible)
 
 
 def _speeds(state,table):
@@ -335,13 +348,16 @@ class ChanceInputs(NamedTuple):
 # The hand-written CUDA chance kernel (cuda/v2e_ffi.cu) does not draw this field yet: it is deferred to the
 # CUDA option-A work (design 13 item 6), so `v2e_diff chance` and v2e_cuda_check p2 report it as differing.
 EFFECT_SALT = 1732050
-EFFECT_BOUNDS = (16, 16, 4, 2)
+EFFECT_BOUNDS = (16, 16, 4, 2, 2)
+INFATUATION_SALT = 2236067
 
 
 def effect_chance(keys):
     """ChanceInputs.effect from the step's split keys (split(state.keys, 2)[:, 1], as sample_chance_inputs uses)."""
-    return jax.vmap(lambda key:jax.random.randint(jax.random.fold_in(key,EFFECT_SALT),(2,4),0,
-        jnp.array(EFFECT_BOUNDS,jnp.int32)))(keys)
+    old=jax.vmap(lambda key:jax.random.randint(jax.random.fold_in(key,EFFECT_SALT),(2,4),0,
+        jnp.array(EFFECT_BOUNDS[:4],jnp.int32)))(keys)
+    attract=jax.vmap(lambda key:jax.random.randint(jax.random.fold_in(key,INFATUATION_SALT),(2,1),0,2))(keys)
+    return jnp.concatenate((old,attract),axis=-1)
 
 
 def sample_chance_inputs(state: BattleState) -> ChanceInputs:
@@ -535,10 +551,11 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                 raise ValueError('owning birth record and original static weather profile required')
             _weather_hp_record=_weather_observer_context[0]
     batch = state.hp.shape[0]
-    shapes = ((batch,2,12),(batch,2),(batch,2),(batch,2),(batch,2),(batch,),(batch,2,4))
+    shapes = ((batch,2,12),(batch,2),(batch,2),(batch,2),(batch,2),(batch,),(batch,2,5))
     for value,shape in zip(chance_inputs,shapes,strict=True):
-        if value is None and shape == (batch,2,4):continue   # effect omitted: derived from the keys below
-        if value.shape != shape or not jnp.issubdtype(value.dtype,jnp.integer):
+        if value is None and shape == (batch,2,5):continue   # effect omitted: derived from the keys below
+        compatible=(shape==(batch,2,5) and value.shape==(batch,2,4))
+        if (value.shape != shape and not compatible) or not jnp.issubdtype(value.dtype,jnp.integer):
             raise ValueError('chance inputs must have declared integer batch shapes')
     if actions.shape != state.active.shape or not jnp.issubdtype(actions.dtype, jnp.integer):
         raise ValueError("actions must be integer [B,2]")
@@ -579,6 +596,10 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
     # sample_chance_inputs draws from these keys; a resumed suspended turn replays its saved block.
     effect_draws=chance_inputs.effect
     if effect_draws is None:effect_draws=effect_chance(splits[:,1])
+    elif effect_draws.shape[-1]==4:
+        # Legacy explicit callers did not bind infatuation. Keep their four
+        # coordinates and use the independent sampled column for the new gate.
+        effect_draws=jnp.concatenate((effect_draws,effect_chance(splits[:,1])[...,4:]),axis=-1)
     effect_draws=jnp.where(resuming[:,None,None],state.effect_draws,effect_draws)
     # Replacement requests do not consume another ordinary-turn chance block.
     # A separate counted fold-in distinguishes repeated hazard-KO entry ties.
@@ -884,7 +905,9 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
             _active(work.confusion_counter, work, side), thaw_roll=chance[:, 1],
             paralysis_roll=chance[:, 2], confusion_roll=chance[:, 3],
             flinched=(_active(work.volatile, work, side) & FLINCH) != 0,
-            sleep_usable=sleep_usable,early_bird=early_bird,loafing=loafing,defrost_move=_defrost)
+            sleep_usable=sleep_usable,early_bird=early_bird,loafing=loafing,defrost_move=_defrost,
+            infatuated=((_active(work.volatile,work,side)&jnp.uint32(ATTRACT))!=0)
+                & (_active(work.hp,work,foe)>0),attract_roll=effect_draws[rows,side,4])
         if _lifecycle_trace and table.effects is not None:
             _public_trace=status_callbacks.unknown(_public_trace,eligible & _defrost & (_active(work.status,work,side)==m.FRZ))
         if _device_public is not None:device_public.before_move(_device_public,work,side,before,eligible,loafing=loafing,sleep_usable=sleep_usable)
@@ -1741,6 +1764,14 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
             if _device_public is not None:
                 device_public.reveal_ability(_device_public,work,foe,_drop_lands
                     & jnp.any(_drop_blocked & (jnp.clip(_drop_old+_drop,-6,6)!=_drop_old),axis=1))
+            if table.infatuation is not None:
+                # Status moves ignore type immunity; Attract has bypasssub.
+                work,_attracted=infatuation.apply(work,foe,table.infatuation,
+                    eligible=acts & hit & table.infatuation.attract[move])
+                # Failed attempts print -immune/-fail too; no owning receipt
+                # exists for those events, so success is not the refusal gate.
+                if _lifecycle_trace:_public_trace=status_callbacks.unknown(_public_trace,
+                    acts & table.infatuation.attract[move])
             # Destiny Bond: volatileStatus destinybond with -singlemove (accuracy true, targets the
             # user, bypasses a Substitute; Gen 3 reuse never fails).
             _bond=acts & effects.destinybond[move]
@@ -2052,12 +2083,12 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                     _rough_skin_capture=(kernel_risks.CapturedDirectHit(_direct_hit_context,_direct_ticket,side,
                         work.active[rows,side],work.active[rows,foe],move,_direct_write)
                         if _direct_hit_context is not None and _direct_hit_registered else None),_device_public=_device_public,
-                    sleep_roll=effect_draws[rows,side,2])
+                    sleep_roll=effect_draws[rows,side,2],infatuation_table=table.infatuation)
             else:
                 # Fidelity tier D: an Effect Spore sleep lasts 2+effect[s][2], the attacker's column (secondary.apply_contact).
                 work = secondaries.apply_contact(work,side,move,phazing_draws[rows,side],table.secondary,
                     eligible=acts & hit & (dealt>0) & ~hits_sub,item_table=table.items,_device_public=_device_public,
-                    sleep_roll=effect_draws[rows,side,2])
+                    sleep_roll=effect_draws[rows,side,2],infatuation_table=table.infatuation)
         if table.secondary is not None:
             if _lifecycle_trace:
                 work,_public_trace=secondaries.apply_color_change(work,side,typ,table.secondary,
@@ -2066,8 +2097,8 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
             else:
                 work=secondaries.apply_color_change(work,side,typ,table.secondary,
                     eligible=acts & hit & (dealt>0) & ~hits_sub,_device_public=_device_public)
-        if _lifecycle_trace:work,_public_trace=_lum_update(work,table,live & move_context,_public_trace,_device_public=_device_public)
-        else:work = _lum_update(work,table,live & move_context,_device_public=_device_public)
+        if _lifecycle_trace:work,_public_trace=_lum_update(work,table,live & move_context,_public_trace,_device_public=_device_public,_infatuation_update=False)
+        else:work = _lum_update(work,table,live & move_context,_device_public=_device_public,_infatuation_update=False)
         # Gen3 applies contact DamagingHit (and immediate Lum cure) before
         # recoil. A source about to faint can still consume its berry first.
         if _recoil_context is not None:
@@ -2087,6 +2118,10 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
             _public_trace=recoil_callbacks.record_device(_public_trace,_recoil_pending,recoil_callbacks.Write(
                 _recoil_before.actor_physical,_recoil_before.target_physical,_recoil_before.ability,
                 _recoil_before.old_hp,_active(work.hp,work,side),_recoil_before.maximum,_recoil_before.status))
+        if table.infatuation is not None:
+            # Gen3 tryMoveHit Update follows recoil. A recoil KO cannot use
+            # Mental Herb, unlike a Lum consumed immediately by a status event.
+            work=infatuation.update(work,table.infatuation,eligible=live & move_context,_device_public=_device_public)
         # Fidelity WH: the move's runMove reached AfterMove (it passed BeforeMove and PP: caller_acts, a miss, a failure or a
         # charge turn included), so every active White Herb holder's onAnyAfterMove runs (sim/battle-actions.ts:311-312),
         # after all of the move's effects (recoil included) and before runMove's faintMessages: a holder at 0 HP cannot
@@ -2676,6 +2711,7 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
     work=work._replace(recharge_counter=jnp.where(_recharge_tick[:,None,None] & (work.recharge_counter>0),
         work.recharge_counter-1,work.recharge_counter))
     work=linking.prune(work)
+    work=infatuation.clear_fainted(work,eligible=live)
     work=work._replace(volatile=jnp.where(work.hp>0,work.volatile,
         work.volatile & jnp.uint32(~(FOCUS_PUNCH|FOCUS_LOST)&0xffffffff)))
     work=work._replace(**{name:jnp.where(work.hp>0,getattr(work,name),0)

@@ -44,11 +44,11 @@ import numpy as np
 ROOT = Path(__file__).resolve().parents[1]
 SCENARIO_SCHEMA = 'pokezero.effect_probe.scenario.v1'
 RESULT_SCHEMA = 'pokezero.effect_probe.result.v1'
-TAPE_SCHEMA = 'pokezero.gpu_chance_tape.v3'
+TAPE_SCHEMA = 'pokezero.gpu_chance_tape.v5'
 SLEEP_CLAUSE_FORMAT = 'gen3customgame@@@sleepclausemod'
 STATUS = ['', 'par', 'brn', 'psn', 'tox', 'slp', 'frz']
 DRAW_BOUNDS = (2, 100, 100, 100, 16, 16, 100, 4, 8, 2, 2, 2)
-EFFECT_BOUNDS = (16, 16, 4, 2)
+EFFECT_BOUNDS = (16, 16, 4, 2, 2)
 # Neutral tape: no thaw, no full paralysis, hits, no crit, the minimum (85%)
 # damage roll (draws[5]=0 -> random(16)=15), no secondary, protect succeeds,
 # side 0 wins ties. Scenarios override fields.
@@ -58,7 +58,7 @@ DEFAULT_ROW = [0, 99, 99, 0, 15, 0, 0, 0, 0, 0, 0, 0]
 # engine inputs are unchanged. 0 procs a contact ability (0 < 20, < 6: Effect Spore's slp), so a scenario that makes
 # contact with such a holder sets phazing explicitly.
 DEFAULT_TAPE = dict(draws=[list(DEFAULT_ROW), list(DEFAULT_ROW)], secondary=[99, 99], sleep_talk=[0, 0],
-                    effect=[[15, 0, 0, 0], [15, 0, 0, 0]], phazing=[0, 0])
+                    effect=[[15, 0, 0, 0, 1], [15, 0, 0, 0, 1]], phazing=[0, 0])
 # Engine-only auxiliary inputs (no Showdown role); kept explicit and in-range.
 DEFAULT_AUX = dict(entry_ties=[0, 0], initial_tie=0)
 BOUNDS = dict(draws=DRAW_BOUNDS, effect=EFFECT_BOUNDS, secondary=100, sleep_talk=60, phazing=60, entry_ties=2, initial_tie=2)
@@ -208,6 +208,8 @@ def compare_lane(view, snapshot, vocab, *, mask, destiny_bond=None):
             hp = int(view['hp'][side, slot])
             check(p + 'hp', mon['hp'], hp)
             check(p + 'fainted', mon['fainted'], hp <= 0)
+            if int(view['gender'][side, slot]) >= 0 and 'gender' in mon:
+                check(p + 'gender', mon['gender'], int(view['gender'][side, slot]))
             alive = mon['hp'] > 0 or hp > 0
             if alive:check(p + 'status', mon['status'], STATUS[int(view['status'][side, slot])])
             if alive and mon['status'] == 'slp':
@@ -230,6 +232,7 @@ def compare_lane(view, snapshot, vocab, *, mask, destiny_bond=None):
             check(p + name, read(v), int(view[name][side, active]) if name in view else neutral)
         check(p + 'destiny_bond', v['destinybond'],
               bool(int(view['volatile'][side, active]) & destiny_bond) if destiny_bond is not None else False)
+        check(p + 'attract', v.get('attract', False), bool(int(view['volatile'][side, active]) & 128))
     for side in range(2):
         check(f'{side}:mask', snapshot['sides'][side]['mask'], [bool(x) for x in mask[side]])
     done = bool(view['done'])
@@ -330,7 +333,12 @@ class Engine:
                 if len(team) != 6:raise ValueError('the engine needs six-member teams')
                 teams.append([m[name] for m in team])
             pool[name] = np.asarray(teams)
-        return self.transition.state_from_pool(pool, np.tile([[0, 1]], (self.lanes, 1)), seed=0)
+        state=self.transition.state_from_pool(pool, np.tile([[0, 1]], (self.lanes, 1)), seed=0)
+        genders=getattr(self,'explicit_genders',None)
+        if genders is not None:
+            import jax.numpy as j
+            state=state._replace(gender=j.broadcast_to(j.asarray(genders,j.int32),state.gender.shape))
+        return state
 
     def start(self, rows):
         return self.jax.block_until_ready(self.transition.initialize(self._raw(rows), self.table))
@@ -347,7 +355,11 @@ class Engine:
             phazing=stack('phazing'),
             entry_ties=j.asarray(np.asarray([a['entry_ties'] for a in auxes]), j.int32),
             initial_tie=j.asarray(np.asarray([a['initial_tie'] for a in auxes]), j.int32))
-        if self.has_effect:fields['effect'] = stack('effect')
+        if self.has_effect:
+            # Harness-only backports can test an older engine as the negative
+            # control. Its declared effect columns are unchanged; Showdown
+            # still consumes the new column and exposes missing behavior.
+            fields['effect'] = stack('effect')[..., :len(self.transition.EFFECT_BOUNDS)]
         return self.transition.ChanceInputs(**fields)
 
     def advance(self, state, actions, tapes, auxes):
@@ -454,6 +466,7 @@ def run_scenario(scenario, engine, showdown, metadata, device=None):
             status_counts={'MISSING_ENGINE_FIELDS': 1}, missing_engine_fields=missing, expectation=scenario.get('expect'),
             expectation_met=False, expectation_detail=f'engine lacks required fields {missing}', results=[])
     prepared = showdown.ask(cmd='prepare', teams=scenario['teams'])
+    engine.explicit_genders=prepared.get('genders')
     if prepared['vocabulary'] != metadata['vocabulary']:raise ValueError('probe vocabulary differs from the pool metadata')
     cases = enumerate_cases(scenario)
     if len(cases) > engine.lanes:raise ValueError(f"{scenario['move']}: {len(cases)} cases exceed {engine.lanes} lanes")

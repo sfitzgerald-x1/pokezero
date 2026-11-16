@@ -17,9 +17,9 @@ from .fidelity_panel import WholeSlotUnknown, table_snapshot
 from .finite_law import Axis, Case, COORDINATES, Observation, Plan
 
 
-KERNEL_MODULES = tuple("action_history absorption baton combat critical damage_moves effects encore entry focus_punch items linked_traps mechanics phazing pressure pursuit residual_order secondary self_destruct sleep_talk solar_beam state sustain transition variable_moves weather".split())
-KERNEL_SHA256 = '1a43333381c9aa52cb71b0c8f3bb9804ce7a87f2e98e58dd8020ea0ab9bce3fe'
-MAPPING_PINS = {'conditioned_future.py': '95e86f5a019850cea2507305221754fde2fb9456e15a2c6f5cf21d9ea624ffbd', 'fidelity_panel.py': '728c1d14c3cc5e95de63d6d3770d143263d58c0d5d7dec8a444b64c5b829099f', 'finite_law.py': '49c5f0060683814ba182028e4ab54669314aa40e032b2dabee7d71338062e141', 'future_state.py': '57d76476704b138bc8463123ed2cf2d52feb70f7ed38098c5e1ba592c259d940'}
+KERNEL_MODULES = tuple("action_history absorption baton combat critical damage_moves effects encore entry focus_punch infatuation items linked_traps mechanics phazing pressure pursuit residual_order secondary self_destruct sleep_talk solar_beam state sustain transition variable_moves weather".split())
+KERNEL_SHA256 = '4d5781d16df5e8232a23d9d6874beee0c208ac929212a14705b129b1bebf3e02'
+MAPPING_PINS = {'conditioned_future.py': '6aaff1975525bd64178db5c78a938e61ac78a785a9dedbaf5936b017cdd33b43', 'fidelity_panel.py': '728c1d14c3cc5e95de63d6d3770d143263d58c0d5d7dec8a444b64c5b829099f', 'finite_law.py': '14aabd57a444e7297485f648dfb2ae2bb7bad607964683828870f5cc4d07a3bd', 'future_state.py': '3cd944e7cb4d2c3efa47bdc32f410204443251bffe9ad24c8cc12d1b590ce804'}
 
 
 def _source_certificate():

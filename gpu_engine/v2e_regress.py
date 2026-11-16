@@ -217,6 +217,7 @@ PUBLIC_ORDER = 'trackers.public_order'
 # against an independent copy of the design's derivation (EFFECT_SALT, EFFECT_BOUNDS) instead of bitwise.
 EFFECT_DRAWS = 'state.effect_draws'
 EFFECT_SALT, EFFECT_BOUNDS = 1732050, (16, 16, 4, 2)
+INFATUATION_SALT = 2236067
 MEANLOOK = "trackers.mon_features['meanlook_trap']"
 PRE_TRACKERS = (MEANLOOK, 'trackers.active_slot')
 TRAP_MOVES = ('meanlook', 'spiderweb', 'block')
@@ -499,6 +500,10 @@ def counter(name):
 
 def destiny_bond_bit(p):
     return ((p.s['volatile'] & p.destiny_bond) != 0).any(axis=2)
+
+
+def infatuated(p):
+    return ((p.s['volatile'] & 128) != 0).any(axis=2)
 
 
 def installs(p):
@@ -876,6 +881,9 @@ ALLOWED['sacredfire'] = ALL
 # user's HP from the reply (Counter/Mirror Coat), its drain (Giga Drain under Overgrow) or Liquid Ooze, and its HP items.
 ALLOWED['wonderguard'] = ALL
 ALLOWED['contact_status'] = ALL
+ALLOWED['cutecharm'] = ALL
+ALLOWED['attract'] = ALL
+ALLOWED['infatuated'] = ALL
 # D (c471195a): the Pursuit intercept's ability reveals (the target's contact ability, the pursuer's Synchronize).
 ALLOWED['pursuit_reveal'] = dict(user=('reveal',), target=('reveal',), glob=())
 ALLOWED['pinch'] = dict(user=('hp', 'item', 'boosts', 'visible', 'reveal'),
@@ -928,6 +936,8 @@ PLUGINS = {
     # D (fidelity tier D): Wonder Guard, the pinch abilities, Poison Point / Flame Body / Effect Spore.
     'D': dict(wonderguard=ability_target('wonderguard', move_ok=damaging_move), pinch=pinch_active,
               contact_status=ability_target(*CONTACT_ABILITIES, move_ok=contact_move), pursuit_reveal=pursuit_reveal),
+    'CC': dict(cutecharm=ability_target('cutecharm', move_ok=contact_move),
+               attract=move('attract'), infatuated=infatuated),
 }
 
 
@@ -1834,6 +1844,10 @@ class Stepper:
                 split = jax.vmap(lambda k: jax.random.split(k, 2))(state.keys)[:, 1]
                 fresh = jax.vmap(lambda k: jax.random.randint(jax.random.fold_in(k, EFFECT_SALT), (2, 4), 0,
                     j.array(EFFECT_BOUNDS, j.int32)))(split)
+                if state.effect_draws.shape[-1]==5:
+                    attraction=jax.vmap(lambda k:jax.random.randint(jax.random.fold_in(k,INFATUATION_SALT),
+                        (2,1),0,2))(split)
+                    fresh=j.concatenate((fresh,attraction),axis=-1)
                 live = ~state.done & ~out.step.invalid_actions
                 used = j.where((live & state.pending_residual)[:, None, None], state.effect_draws, fresh)
                 saved = j.where(out.step.state.pending_residual[:, None, None], used, 0)
@@ -2059,6 +2073,10 @@ def patched_pass(args, *, step_override=None, prepared=None):
     public_order_rule = PUBLIC_ORDER in new_inputs and PUBLIC_ORDER not in base_names
     # Fidelity R: likewise the saved effect block is checked against the design's derivation while the base lacks it.
     effect_rule = EFFECT_DRAWS in new_inputs and EFFECT_DRAWS not in base_names
+    # The fifth column extends an existing leaf: independently check the whole
+    # saved block, including all four old columns, rather than accepting its
+    # new shape as involvement. This check also runs with CC dropped.
+    effect_rule |= EFFECT_DRAWS in template_named and np.asarray(template_named[EFFECT_DRAWS]).shape[-1]==5
     m2_rules = 'M2' in plugins
     m2_ids = {n: vocab['moves'].index(n) for n in ('perishsong', 'yawn', 'wrap') if n in vocab['moves']} if m2_rules else None
     # WH: White Herb's post-state rule and recorded uses, and Facade's recorded line status.
@@ -2140,12 +2158,14 @@ def patched_pass(args, *, step_override=None, prepared=None):
             for k, n in enumerate(result['pre_names']):
                 if n == PUBLIC_ORDER and public_order_rule:continue
                 diff[:, position[n]] = (digests[:, position[n]] != result['pre_digests'][:real, k]).any(-1)
-                if n == EFFECT_DRAWS and effect_rule:
-                    # A saved block equal to the derivation explains the change; anything else stays a change.
-                    counts['effect_draws_saved'] += int((diff[:, position[n]].any(-1) & ~done_now[:real]).sum())
-                    diff[:, position[n]] = ~np.asarray(result['effect_ok'])[:real]
             for n in new_outputs:
                 if n not in result['pre_names']:diff[:, position[n]] = True          # a new output with no pre value
+            if effect_rule:
+                # Applies both to an appended leaf and an appended column of
+                # an existing leaf. Check every old and new value, independently
+                # of the CC involvement predicates and the kernel's RNG helper.
+                counts['effect_draws_saved'] += int((diff[:,position[EFFECT_DRAWS]].any(-1)&~done_now[:real]).sum())
+                diff[:,position[EFFECT_DRAWS]]=~np.asarray(result['effect_ok'])[:real]
             if public_order_rule:
                 calls = [(np.asarray(a)[:real], np.asarray(b)[:real], np.asarray(c)[:real]) for a, b, c in result['calls']]
                 replay = replay_public_order(np.asarray(named[PUBLIC_ORDER])[:real], calls)

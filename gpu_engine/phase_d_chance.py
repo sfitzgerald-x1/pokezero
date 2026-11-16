@@ -43,7 +43,7 @@ CONSUMERS = {
     "draws.0.11": ("transition switch installation ordering",),
     "draws.1.11": ("transition residual Encore ordering",),
     **{f"{name}.{s}": (use,) for s in range(2) for name, use in (
-        ("phazing", "phazing.choose_bench modulo bench count OR secondary.apply_contact Static/Poison Point/Flame Body<20, Effect Spore<6 then its status draw//2 (<2, <4); dispatched Gen3 moves are disjoint, and no contact move is multi-hit"),
+        ("phazing", "phazing.choose_bench modulo bench count OR secondary.apply_contact Static/Poison Point/Flame Body/Cute Charm<20, Effect Spore<6 then its status draw//2 (<2, <4); dispatched Gen3 moves are disjoint, and no contact move is multi-hit"),
         ("secondary", "secondary.apply and secondary.apply_chance_effects: shared draw<chance*SereneGrace"),
         ("sleep_talk", "sleep_talk.choose: draw modulo callable count before PP test"),
         ("entry_ties", "transition resumed switch/callback ordering"))},
@@ -54,14 +54,15 @@ CONSUMERS = {
         (1, "transition Bonemerang second hit: damage 85+draw"),
         # Fidelity M2: the reserved columns. Column 2 is the drowsy mon's own side; column 3 is a pair tie per row.
         (2, "transition residual Yawn sleep duration 2+draw (the drowsy mon's side); secondary.apply_contact Effect Spore sleep duration 2+draw (the attacker's side; fidelity tier D: a Yawn sleep of that side reads it again in one step only after a Lum Berry cured this sleep at once, which discards the first value)"))},
+    **{f"effect.{s}.4": ("mechanics.before_move: infatuation immobilizes before paralysis on draw<1",) for s in range(2)},
     "effect.0.3": ("transition residual partial-trap (Wrap) pair ordering, subOrder 9",),
     "effect.1.3": ("transition residual Perish pair ordering, order 12 (both ends resolve before faintMessages, so no Gen 3 outcome depends on it)",),
 }
 
 # Changing any source that supplies the consumer/domain proof requires review.
-SOURCE_PINS = {'action_history.py': 'a47bdb2712f7eadaed12d91ede70be2ebe9f1c1ae3f70fe56495437997212407', 'critical.py': 'b66e6cf10c0d4df625b1c4f5e5db238af42052e556d7649a10f911745181401e', 'effects.py': '47f549d608b60d46e8cc4db7bad5be249ae728a4aab2a0ef28f105f3614e40e2', 'encore.py': '63da39bbd181a8c6371b3bca853322291a03674c60f535ad0eacdbe1a440e0dd', 'entry.py': 'eabf2713a100256ba86fd0b5ac4155042e2a0c6dfe0bc37c7f0c6219dbdd22c1', 'mechanics.py': 'e8476cc3e0029f3ed0bf82276312440e6dd8b340ffeb0c68cdd5611754eef661', 'phazing.py': 'c27039f267bd18660adb3c2bd826e58a7da953eea0e79677de5428f042447969', 'pursuit.py': '5b966584634b5230b3efaf16609699484d29966ff8f7ebaf6d160864dba8c2e5', 'residual_order.py': '7b1a958d4ce27cf8fe7560d8f5a4f95d5cb54a17adbe23ba72dccc00e35bf454', 'secondary.py': '68f74574caab36e5f8e8be3426f96b5858964fb24346b2c4641eb6196640e532', 'sleep_talk.py': '968a78ddde87158b13f68dfcacc2158f07336d82c1be472d2283421e8583c154', 'state.py': '67ca721ce1f6b1a5c3e9c6fd42fe33d65f62ffcec006f5c5efd188225111a59c', 'transition.py': '9e7d34a2d04c64499cddb594bc3e0102270b286bdf5ddc7432b633ef436d7f37', 'weather.py': '3c861027e16d27917fa47fa5cf5d6dc0c68d3a74af282108dfb94369d4db57e5'}
-DOMAIN_MODULES = tuple("action_history absorption baton combat critical damage_moves effects encore entry focus_punch items linked_traps mechanics phazing pressure pursuit residual_order secondary self_destruct sleep_talk solar_beam state sustain transition variable_moves weather".split())
-DOMAIN_SHA256 = '1a43333381c9aa52cb71b0c8f3bb9804ce7a87f2e98e58dd8020ea0ab9bce3fe'
+SOURCE_PINS = {'action_history.py': 'a47bdb2712f7eadaed12d91ede70be2ebe9f1c1ae3f70fe56495437997212407', 'critical.py': 'b66e6cf10c0d4df625b1c4f5e5db238af42052e556d7649a10f911745181401e', 'effects.py': '47f549d608b60d46e8cc4db7bad5be249ae728a4aab2a0ef28f105f3614e40e2', 'encore.py': '63da39bbd181a8c6371b3bca853322291a03674c60f535ad0eacdbe1a440e0dd', 'entry.py': '416d6014e00a51cf93ac8097d283526fef7cb0ede3ffc90c4e07413ed38a7432', 'mechanics.py': 'fa63643594e8e01cae573c324fbd442fd82ddf63e4514bc23c2e3a4c337e3444', 'phazing.py': 'c27039f267bd18660adb3c2bd826e58a7da953eea0e79677de5428f042447969', 'pursuit.py': '31a6805d9a6b0032c849877efcb2b5a2447b9abc29fbe5170e687b0abe1fbb55', 'residual_order.py': '7b1a958d4ce27cf8fe7560d8f5a4f95d5cb54a17adbe23ba72dccc00e35bf454', 'secondary.py': 'a3058e796b8affc38f5aa0d188bf52cc554d6c07cc8b4e83ac792ed70734001a', 'sleep_talk.py': '968a78ddde87158b13f68dfcacc2158f07336d82c1be472d2283421e8583c154', 'state.py': '695448625b1470df4e8e9c94b69974fa4f8916dab0d461b8a76a9da1cf92a5ff', 'transition.py': '468506241caa835c0152c205fc6da052a39e9b4f0f7d33f24f1d18e513c537aa', 'weather.py': '3c861027e16d27917fa47fa5cf5d6dc0c68d3a74af282108dfb94369d4db57e5'}
+DOMAIN_MODULES = tuple("action_history absorption baton combat critical damage_moves effects encore entry focus_punch infatuation items linked_traps mechanics phazing pressure pursuit residual_order secondary self_destruct sleep_talk solar_beam state sustain transition variable_moves weather".split())
+DOMAIN_SHA256 = '4d5781d16df5e8232a23d9d6874beee0c208ac929212a14705b129b1bebf3e02'
 
 
 def _host(value):
@@ -360,6 +361,8 @@ def plan_for_state(state, index, actions, table, metadata, *, cap, native_input=
             # Fidelity tier D (secondary.apply_contact): Poison Point and Flame Body <20 as Static; Effect Spore's chance <6
             # and its slp/par/psn draw//2 (<2, <4); an Effect Spore sleep lasts 2+effect[s][2] (the attacker's side).
             if any(_at(t, 'secondary', 'contact', move) for move in selected[s]):
+                if any(_opt(t, 'infatuation', 'cute_charm', ability, False) for ability in abilities[1-s]):
+                    use(f'phazing.{s}', Observation('less_than', 20))
                 if any(_opt(t, 'secondary', 'contact_status', ability) for ability in abilities[1-s]):
                     use(f'phazing.{s}', Observation('less_than', 20))
                 if any(_opt(t, 'secondary', 'effect_spore', ability, False) for ability in abilities[1-s]):
@@ -394,6 +397,11 @@ def plan_for_state(state, index, actions, table, metadata, *, cap, native_input=
         # §6: the appended effect stream (fidelity R, design 2.1; M2's residual consumers). transition.py:580-582 reads
         # ChanceInputs.effect; a resumed suspended turn reads the saved block instead (refused above).
         for s in range(2):
+            # Attract can land before the slower actor's move in this step.
+            # selected includes callable Sleep Talk and Encore closure.
+            if live_move[s] and (any(data['volatile'][s][p] & 128 for p in participants[s])
+                    or any(_opt(t, 'infatuation', 'attract', move, False) for move in selected[1-s])):
+                use(f'effect.{s}.4', Observation('less_than', 1))
             # Bonemerang's second hit (transition.py:1135-1175, run when damage_moves.hits>1 at :1362): its own critical
             # roll effect[s][0] (critical.is_critical: below 2 for a high-crit move, else below 1; below 1 without the
             # table) and damage roll 85+effect[s][1]. Callers and Encore are already in the selected closure.

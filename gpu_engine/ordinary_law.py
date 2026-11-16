@@ -22,9 +22,9 @@ from .finite_law import Axis, COORDINATES, DRAW_BOUNDS, EFFECT_BOUNDS, Cardinali
 # Complete transition-domain proof, including the copy/zero assignments in
 # transition.step_with_chance (the four saved blocks and, since §6, the effect
 # block at :2663-2664). A numeric representative alone is not proof.
-DOMAIN_SHA256 = '1a43333381c9aa52cb71b0c8f3bb9804ce7a87f2e98e58dd8020ea0ab9bce3fe'
+DOMAIN_SHA256 = '4d5781d16df5e8232a23d9d6874beee0c208ac929212a14705b129b1bebf3e02'
 # Filled only after reviewed implementation stabilizes; drift must refuse.
-MAPPING_PINS = {'carry_law.py': '19bb86991bc09212a46d849bdd3d7629044512c1d8b78f0e79487ddeae45237e', 'chance_consumers.py': '0e4c271eb13cd5b4118bc9e5282275d8e7638040916a0b4e29aa734a529fd4bc', 'conditioned_future.py': '95e86f5a019850cea2507305221754fde2fb9456e15a2c6f5cf21d9ea624ffbd', 'fidelity_panel.py': '728c1d14c3cc5e95de63d6d3770d143263d58c0d5d7dec8a444b64c5b829099f', 'finite_law.py': '49c5f0060683814ba182028e4ab54669314aa40e032b2dabee7d71338062e141', 'future_state.py': '57d76476704b138bc8463123ed2cf2d52feb70f7ed38098c5e1ba592c259d940'}
+MAPPING_PINS = {'carry_law.py': '19bb86991bc09212a46d849bdd3d7629044512c1d8b78f0e79487ddeae45237e', 'chance_consumers.py': 'f724c9f2c86324a50dd6e0d98287f11d3a654b9cbc8390ec0ac7a2bda40cfb69', 'conditioned_future.py': '6aaff1975525bd64178db5c78a938e61ac78a785a9dedbaf5936b017cdd33b43', 'fidelity_panel.py': '728c1d14c3cc5e95de63d6d3770d143263d58c0d5d7dec8a444b64c5b829099f', 'finite_law.py': '14aabd57a444e7297485f648dfb2ae2bb7bad607964683828870f5cc4d07a3bd', 'future_state.py': '3cd944e7cb4d2c3efa47bdc32f410204443251bffe9ad24c8cc12d1b590ce804'}
 NATIVE_BANK = tuple([(f'residual_draws.{s}.{i}', f'draws.{s}.{i}', bound)
     for s in range(2) for i,bound in enumerate(DRAW_BOUNDS)]
     + [(f'{field}_draws.{s}', f'{field}.{s}', bound)
@@ -32,7 +32,8 @@ NATIVE_BANK = tuple([(f'residual_draws.{s}.{i}', f'draws.{s}.{i}', bound)
 # §6: the saved effect block (fidelity R) is the bank's last rows. It is JAX-only: the native wire (CAPSULE_FIELDS, the
 # ordinary-step chance and bank) has no effect stream, so a native output takes it by the engine's save rule.
 EFFECT_BANK = tuple((f'{conditioned_future.SAVED_BLOCK}.{s}.{c}', f'effect.{s}.{c}', bound)
-    for s in range(2) for c,bound in enumerate(EFFECT_BOUNDS))
+    for s in range(2) for c,bound in enumerate(EFFECT_BOUNDS[:4])) + tuple(
+        (f'{conditioned_future.SAVED_BLOCK}.{s}.4',f'effect.{s}.4',2) for s in range(2))
 BANK = NATIVE_BANK + EFFECT_BANK
 SPACE = algebra.OutputSpace(tuple((name,bound) for name,_,bound in BANK))
 BANK_FIELDS = {'residual_draws','phazing_draws','secondary_draws','sleep_talk_draws',conditioned_future.SAVED_BLOCK}
