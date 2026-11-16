@@ -102,6 +102,27 @@ class EncoderNumericTests(unittest.TestCase):
         self.assertEqual(int(expected.view(np.uint32)), 1056964609)
         self.assertLess(abs(float(got) - float(expected)), 1e-6)
 
+    def test_gen3_spikes_sequence_preserves_python_rounding(self):
+        # Blissey76, Meganium85, Sableye91, Swampert78, Lanturn82,
+        # Steelix82: HP IV31/EV85, all grounded with Leftovers. Start Steelix
+        # before one Spikes layer; recover to full between these switch-ins.
+        hp = (513, 275, 239, 284, 339, 257)
+        order = (1,4,1,4,1,4,1,3,4,0,1,2,3,4,0,1,2,3,4,5,
+                 0,1,2,3,4,5,0,1,2,3,4,5,0,1,2,3,4,5)
+        d = np.asarray([hp[i] for i in order], np.int32)
+        self.assertTrue(np.all((d >= 1) & (d <= 714)))
+        self.assertTrue(all(a != b for a, b in zip(order, order[1:])))
+        n = d // 8
+        def accumulate(n, d):
+            terms = en.ratio(n, d, pair=True)
+            total, _ = jax.lax.scan(lambda a, b: (en.add_pair(a, b), None),
+                                   j.zeros(2, j.float32), terms)
+            return en.scaled_value(total, 6)
+        expected = 0.0
+        for numerator, denominator in zip(n, d):
+            expected += int(numerator) / int(denominator)
+        same_bits(jax.jit(accumulate)(n, d), expected / 6)
+
     def test_hazard_exposure_rounds_the_entire_python_expression(self):
         count, layers = np.meshgrid(np.arange(7, dtype=np.int32),
                                     np.arange(4, dtype=np.int32), indexing='ij')
