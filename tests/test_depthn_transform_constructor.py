@@ -2,6 +2,7 @@
 from copy import deepcopy
 from dataclasses import replace
 from types import SimpleNamespace as NS
+import json
 import unittest
 
 import jax.numpy as j
@@ -31,6 +32,37 @@ def fixture(name='ditto',owner=0):
 
 
 class TransformMappingTests(unittest.TestCase):
+    def test_retained_request_order_paid_base_pp_and_choice_lock(self):
+        from test_phase_d_transform_constructor import source_fixture,request
+        source,metadata=source_fixture();metadata['vocabulary']['items'].append('choiceband')
+        for copied_transform in (False,True):
+            spec,_,base=fixture();copy=spec.side_one.pokemon[0];donor=spec.side_two.pokemon[0]
+            first='transform' if copied_transform else 'tackle'
+            copied=(MoveSpec(first,4),*copy.moves[1:])
+            copy=replace(copy,moves=copied,item='choiceband',pre_transform=replace(base,moves=(MoveSpec('transform',16),)))
+            donor=replace(donor,moves=copied)
+            spec=BattleSpec(SideSpec((donor,copy),active_index=1,volatile_statuses=('transformed','typechange'),last_used_move='move:0'),SideSpec((donor,)))
+            mapped=map_spec(spec,metadata=metadata,seed=1,turn=2,active_turns=(1,1),happiness=((255,255),(255,)))
+            self.assertFalse(mapped.refusals)
+            before=request(source,'ditto');after=deepcopy(before)
+            after['side']['pokemon'][0]['moves']=[first,'protect','hiddenpowerwater']
+            after['side']['pokemon'][0]['item']='choiceband'
+            after['active'][0]['moves']=[dict(id=mid,move=title,pp=pp,maxpp=5) for mid,title,pp in
+                ((first,first,4),('protect','Protect',5),('hiddenpower','Hidden Power Water 63',3))]
+            lines=('|start','|switch|p1a: ditto|ditto, L80|100/200','|switch|p2a: snorlax|snorlax, L80|100/100',
+                '|request|'+json.dumps(before),'|move|p1a: ditto|Transform|p2a: snorlax','|-transform|p1a: ditto|p2a: snorlax',
+                '|request|'+json.dumps(after))
+            transform_id=metadata['vocabulary']['moves'].index('transform')
+            public=NS(context=NS(moves=NS(last_kind=np.array([[2,1]]),last_id=np.array([[transform_id,0]])),
+                active=NS(truant_known=np.zeros((1,2),bool),truant_loaf=np.zeros((1,2),bool))))
+            catalog=NS(moves=NS(names=metadata['vocabulary']['moves']))
+            result=facts.retained_copy(mapped.state,public,after,lines,metadata,catalog,0)
+            self.assertEqual(result.transform_pp[0,0].tolist(),[15,0,0,0])
+            self.assertEqual(int(result.active[0,0]),1)
+            self.assertEqual((int(result.last_action_kind[0,0]),int(result.last_action_index[0,0])),(2,-1))
+            self.assertEqual(int(result.last_move[0,0,1]),transform_id)
+            self.assertEqual(int(result.choice_move[0,0,1]),transform_id if copied_transform else 0)
+
     def test_ditto_and_mew_both_seats_revert_to_base(self):
         for name in ('ditto','mew'):
             for owner in (0,1):
@@ -106,6 +138,15 @@ class TransformHistoryTests(unittest.TestCase):
         self.assertEqual(read['public']['p2','porygon2'],'trace')
         copied=facts.history((*lines,'|switch|p2a: copy|Ditto, L80|100/100','|-transform|p2a: copy|p1a: donor'))
         self.assertEqual(copied['public']['p2','ditto'],'pressure')
+
+    def test_field_and_explicit_activation_ability_reveals(self):
+        for species,line,ability in (
+            ('Tyranitar','|-weather|Sandstorm|[from] ability: Sand Stream|[of] p1a: donor','sandstream'),
+            ('Arbok','|-activate|p1a: donor|ability: Shed Skin','shedskin'),
+            ('Arcanine','|-start|p1a: donor|ability: Flash Fire','flashfire')):
+            lines=(f'|switch|p1a: donor|{species}, L80|100/100','|switch|p2a: copy|Ditto, L80|100/100',line,
+                '|-transform|p2a: copy|p1a: donor')
+            self.assertEqual(facts.history(lines)['public']['p2','ditto'],ability)
 
     def test_truant_uses_the_transformers_clock_or_refuses(self):
         arrays={name:np.array(value) for name,value in empty_state(1)._asdict().items()}

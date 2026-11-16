@@ -4,6 +4,7 @@ from dataclasses import replace
 from types import SimpleNamespace as NS
 import json
 import unittest
+from unittest.mock import patch
 
 import jax
 import jax.numpy as j
@@ -61,6 +62,7 @@ class TransformConstructorTests(unittest.TestCase):
         raw=cls.source.original
         moves={n:MoveInfo(n,n,'Normal','Physical','Physical',50,100,0,False,False,False,None,{},'normal',False,pp=m['pp'])
             for n,m in zip(cls.metadata['vocabulary']['moves'][1:],cls.metadata['moves'][1:])}
+        moves['hiddenpower']=replace(moves['hiddenpowerwater'],id='hiddenpower',name='Hidden Power')
         dex=ShowdownDex(moves,{n:SpeciesInfo(n,n,tuple(v['types']),v['baseStats']) for n,v in raw.species_metadata.items()},{})
         labels={'field','stats','pokemon:self','pokemon:opponent','status:none'}
         labels|={'belief:possible_ability:'+n for n in cls.metadata['vocabulary']['abilities'][1:]}
@@ -75,6 +77,15 @@ class TransformConstructorTests(unittest.TestCase):
         jax.config.update('jax_default_matmul_precision','highest')
         cls.functions=CompiledEncoderFunctions(cls.catalog)
         cls.tables=states.compile_tables(cls.source,cls.metadata)
+        from pokezero.local_showdown import LocalShowdownConfig
+        from pokezero.live_protocol_actor import ActorContract,_vocab_sha
+        from pokezero.observation import ObservationFeatureMasks
+        from pokezero.showdown import V4_REPLAY_OBSERVATION_SPEC
+        masks=dict(cls.catalog.masks.__dict__);masks['opponent_tendency_stats_block']=masks.pop('stats_block')
+        cls.config=LocalShowdownConfig(showdown_root='/literal-source-only',set_belief_source=True,
+            category_vocab=cls.catalog.vocabulary,observation_spec=V4_REPLAY_OBSERVATION_SPEC,feature_masks=ObservationFeatureMasks(**masks))
+        cls.contract=replace(ActorContract.champion(),category_vocab_sha256=_vocab_sha(cls.config.category_vocab),
+            categorical_vocab_size=cls.config.category_vocab.size,belief_set_source_hash=cls.catalog.source.source_hash)
 
     @classmethod
     def tearDownClass(cls):jax.config.update('jax_default_matmul_precision',cls.precision)
@@ -158,6 +169,56 @@ class TransformConstructorTests(unittest.TestCase):
                     self.assertEqual(moved.trackers.copied_pp_used[0,foe,0],2)
                     refused=future_state.native_input_from_jax(s,0,self.metadata,module=NS())
                     self.assertIn('TRANSFORM_UNREPRESENTED',[gap.code for gap in refused.gaps])
+                    self.compare_protocol_device(root,packet,lines,owner)
+
+    def compare_protocol_device(self,root,packet,lines,owner):
+        from pokezero.v5_teacher_public_root import capture_root
+        from pokezero.v5_gumbel import Recipe
+        from pokezero.env import BattleStartOverride
+        from pokezero.showdown_fixture import pack_team
+        from gpu_engine import phase_d_protocol_world as protocol
+        with (patch('subprocess.Popen',side_effect=AssertionError('no simulator')),
+                patch('pokezero.local_showdown.load_gen3_randbat_source_cached',return_value=self.source.original),
+                patch('pokezero.local_showdown.load_showdown_dex_cached',return_value=self.catalog.dex)):
+            public=capture_root(config=self.config,contract=self.contract,lines=lines,address=root.address,battle_id='transform-authored',seed=7)
+        recipe=next(Recipe(seed) for seed in range(100) if Recipe(seed).selected(root.address))
+        start=plans.plan_starts(root,self.source,recipe).starts[0]
+        device=live._materialize_phase_d(root,start,self.tables,recipe)
+        self.assertIsNotNone(device.state,device.refusals)
+        own=[]
+        for row in packet['side']['pokemon']:
+            species=normalize_id(row['details'].split(',')[0]);variant=self.source.original.universe_for(species).variants[0]
+            own.append(_fixture_from_variant_payload(variant.to_summary(),fallback_species=species,set_source=self.source.original,gender='N'))
+        packed=BattleStartOverride({f'p{owner+1}':pack_team(own),f'p{2-owner}':pack_team(start.opponent_fixtures)})
+        inputs=protocol.ProtocolInputs(root,lines,self.catalog,self.metadata,self.source)
+        other=protocol.materialize_protocol(public,packed,inputs=inputs,seed=states.kernel_seed(root,0,recipe))
+        self.assertIsNotNone(other.state,other.refusals)
+        for name in device.state._fields:
+            np.testing.assert_array_equal(getattr(device.state,name),getattr(other.state,name),err_msg=name)
+        for (path,a),(other_path,b) in zip(jax.tree_util.tree_flatten_with_path(device.public)[0],jax.tree_util.tree_flatten_with_path(other.public)[0],strict=True):
+            self.assertEqual(path,other_path);np.testing.assert_array_equal(a,b,err_msg=str(path))
+
+    def test_departed_transform_borrow_is_cleared_on_device_and_b2_return(self):
+        from gpu_engine import engine_device_public_hooks as hooks,engine_device_trackers as trackers
+        packet=request(self.source,'snorlax');base=('|start','|switch|p1a: snorlax|snorlax, L80|'+packet['side']['pokemon'][0]['condition'],
+            '|switch|p2a: ditto|ditto, L80|100/100','|-ability|p1a: snorlax|Immunity','|-ability|p2a: ditto|Limber',
+            '|turn|1','|request|'+json.dumps(packet),'|move|p2a: ditto|Transform|p1a: snorlax','|-transform|p2a: ditto|p1a: snorlax',
+            '|upkeep','|turn|2','|move|p2a: ditto|Tackle|p1a: snorlax','|upkeep','|turn|3',
+            '|switch|p2a: mew|mew, L80|100/100','|upkeep','|turn|4','|request|'+json.dumps(packet))
+        adapter=self.adapter(base,0)
+        root=live.from_b2(adapter,packet,self.source,self.metadata,address=DecisionAddress(1,1,0),lines=base)
+        slot=0;self.assertTrue(root.public.transform_borrowed[0,1,slot])
+        world=live.sample_worlds(root,self.source,self.tables,count=16,seed=7).worlds[0]
+        self.assertIsNotNone(world.state,world.refusals)
+        at=int(np.flatnonzero(np.asarray(world.public.physical_to_public)[0,1]==slot)[0])
+        state=world.state._replace(active=world.state.active.at[0,1].set(at))
+        installed=hooks.install(hooks.Context(world.public),state,j.array([1]),j.array([True])).trackers
+        self.assertFalse(installed.transform_borrowed[0,1,slot]);self.assertEqual(installed.borrowed_ability[0,1,slot],0)
+        returned=(*base[:-1],'|switch|p2a: ditto|ditto, L80|100/100','|upkeep','|turn|5',base[-1])
+        actual=live.from_b2(self.adapter(returned,0),packet,self.source,self.metadata,address=DecisionAddress(1,2,0),lines=returned)
+        a=trackers.readout(installed,j.array([0]));b=trackers.readout(actual.public,j.array([0]))
+        np.testing.assert_array_equal(a.borrowed_ability,b.borrowed_ability)
+        np.testing.assert_array_equal(a.ability,b.ability)
 
 
 if __name__=='__main__':unittest.main()

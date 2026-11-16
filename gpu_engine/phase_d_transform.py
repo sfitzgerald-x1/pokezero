@@ -43,37 +43,39 @@ def history(lines):
     Side-private silent ability starts never enter the public ability ledger.
     """
     from .constructor_worlds import _seat_name
-    names={};active={};borrowed={};original={};running={};retyped={};copies={}
+    from pokezero.belief import _confirmed_ability_from_event,_trace_copy_source
+    from pokezero.showdown import _public_event_from_line
+    names={};borrowed={};original={};running={};retyped={};copies={}
     member=lambda seat,name:names.get((seat,name),normalize_id(name))
     current=lambda who:running.get(who,original.get(who,''))
-    def reveal(who,ability):
-        (running if who in borrowed else original)[who]=ability
+    def reveal(who,ability,authoritative=False):
+        ledger=running if who in borrowed else original
+        if authoritative or not ledger.get(who):ledger[who]=ability
     for line in lines:
         parts=line.split('|')
-        if len(parts)<3:continue
+        if len(parts)<3 or parts[1]=='request':continue
         kind=parts[1];seat,name=_seat_name(parts[2])
-        if seat not in ('p1','p2'):continue
         who=(seat,member(seat,name))
         if kind=='faint':copies.pop(seat,None)
         if len(parts)<4:continue
         if kind in ('switch','drag','replace'):
             species=normalize_id(parts[3].split(',')[0]);names[seat,name]=species
-            who=(seat,species);active[seat]=species;borrowed.pop(who,None);running.pop(who,None)
+            who=(seat,species);borrowed.pop(who,None);running.pop(who,None)
             retyped[seat]=False;copies.pop(seat,None)
         tags=[x.strip().lower() for x in parts[4:]]
-        others=[_seat_name(p.strip()[4:].strip()) for p in parts[4:] if p.strip().lower().startswith('[of]')]
-        others=[(s,member(s,n)) for s,n in others]
-        traced=kind=='-ability' and any(t.startswith('[from] ability: trace') for t in tags)
+        traced,_=_trace_copy_source(line) if kind in ('-ability','ability') else (False,None)
         if traced:
             if seat not in copies:original[who]='trace'
             borrowed[who]='trace';running[who]=normalize_id(parts[3])
-            for other in others:reveal(other,normalize_id(parts[3]))
-        elif kind=='-ability' and tags!=['[silent]']:
-            reveal(who,normalize_id(parts[3]))
-        elif kind!='-ability':
-            for tag in tags:
-                if tag.startswith('[from] ability:'):
-                    for holder in others or [who]:reveal(holder,normalize_id(tag[len('[from] ability:'):]))
+        # Use B2's holder attribution, including field procs, Trace's donor,
+        # and ability: activation lines. The redaction helper intentionally
+        # over-attributes and is not a current-ability ledger.
+        if not (kind in ('-ability','ability') and tags==['[silent]']):
+            ident,ability=_confirmed_ability_from_event(_public_event_from_line(line))
+            if ident and ability:
+                holder,holder_name=_seat_name(ident)
+                if holder in ('p1','p2'):reveal((holder,member(holder,holder_name)),normalize_id(ability),kind in ('-ability','ability') and not traced)
+        if seat not in ('p1','p2'):continue
         if kind=='-start' and normalize_id(parts[3])=='typechange':retyped[seat]=True
         if kind=='-transform':
             donor_seat,donor_name=_seat_name(parts[3]);donor=(donor_seat,member(donor_seat,donor_name))
@@ -222,9 +224,12 @@ def retained_copy(state,public,request,lines,metadata,catalog,owner):
     from .phase_d_live_worlds import _source_move,_own_move,_lookup
     arrays={name:np.array(value,copy=True) for name,value in state._asdict().items()};v=metadata['vocabulary']
     if arrays['transformed'][0,owner]:
-        at=int(arrays['active'][0,owner]);row=request['side']['pokemon'][at]
+        at=int(arrays['active'][0,owner]);species=normalize_id(v['species'][int(arrays['species'][0,owner,at])])
+        matches=[i for i,row in enumerate(request['side']['pokemon']) if normalize_id(row['details'].split(',')[0])==species]
+        if len(matches)!=1:raise ValueError('OWN_TRANSFORM_REQUEST_IDENTITY_UNAVAILABLE')
+        request_slot=matches[0];row=request['side']['pokemon'][request_slot]
         maximum={_source_move(n):int(m['pp'])*8//5 for n,m in zip(v['moves'],metadata['moves']) if m and m.get('pp')}
-        _,saved=own_pp_carry(lines,request,maximum,transform_base=True);ledger=saved[at]
+        _,saved=own_pp_carry(lines,request,maximum,transform_base=True);ledger=saved[request_slot]
         if ledger is None:raise ValueError('OWN_TRANSFORM_EVIDENCE_DISAGREES')
         typ,power=arrays['transform_hidden_power'][0,owner]
         resolved='hiddenpower'+normalize_id(v['types'][int(typ)])+str(int(power)) if typ else None
