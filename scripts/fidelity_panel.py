@@ -334,9 +334,27 @@ def state_cause(row, teams):
     # of a turn. A debug marker from an earlier request is not evidence here.
     for overlap in range(min(len(before),len(log)),0,-1):
         if before[-overlap:]==log[:overlap]:last=log[overlap:];break
+    else:
+        return ('state mismatch: '+json.dumps(row.get('first_divergence'))[:100],'u',
+                'cannot isolate the stopping request from the retained log; source review required')
     fd = json.dumps(row.get('first_divergence'))[:100]
-    if any(l.startswith('|-transform|') for l in log):return ('Transform', 'a', 'open PR #1970; ' + fd)
-    if any('Forecast' in l for l in log):return ('Forecast (Castform type change)', 'a', 'Forecast agent; ' + fd)
+    toid = lambda x: ''.join(c for c in x.lower() if c.isalnum())
+    active=(row.get('post_boundary') or {}).get('showdown',{}).get('active') or []
+    # A historical transformation may have ended at a switch. Even a current
+    # event is only evidence when the affected holder has the HP divergence.
+    # Later-turn consequences without that link need manual source review.
+    for line in last:
+        parts=line.split('|')
+        if len(parts)<4:continue
+        cause=('Transform' if parts[1]=='-transform' else
+               'Forecast (Castform type change)' if parts[1]=='-formechange' and '[from] ability: Forecast' in parts else None)
+        if not cause or not parts[2].startswith(('p1a: ','p2a: ')):continue
+        side=int(parts[2][1])-1;name=toid(parts[2].split(': ',1)[1])
+        if len(active)!=2:continue
+        slot=active[side]
+        if not 0<=slot<len(teams[side]) or toid(teams[side][slot]['species'])!=name:continue
+        if any(d.get('field')==f'{side}:{slot}:hp' for d in row.get('first_divergence') or []):
+            return (cause,'a','holder changes form on the stopping request and has the HP divergence; source review required; '+fd)
     if any(l.startswith('|-immune|') and '[from] ability: Wonder Guard' in l for l in last):
         return ('Wonder Guard','a','reference immunity on the stopping request; '+fd)
     for ability in ('Overgrow','Blaze','Torrent','Swarm'):
@@ -349,7 +367,6 @@ def state_cause(row, teams):
                 mon=pre[int(parts[0])][int(parts[1])]
                 if mon.get('ability')=='marvelscale' and mon.get('status'):
                     return ('Marvel Scale','a','statused defender takes excess engine damage; '+fd)
-    toid = lambda x: ''.join(c for c in x.lower() if c.isalnum())
     for l in last:
         parts = l.split('|')
         if len(parts) > 3 and parts[1] == 'move':

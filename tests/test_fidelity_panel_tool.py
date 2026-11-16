@@ -70,6 +70,41 @@ class PanelToolTests(unittest.TestCase):
         row['native_log_tail'].append('|debug|Swarm boost')
         self.assertEqual(P.state_cause(row,[[],[]])[:2],('Swarm','a'))
 
+    def test_stale_form_events_do_not_override_current_damage(self):
+        teams=[[dict(species='ditto',item='metalpowder'),dict(species='unown',item='twistedspoon'),
+                dict(species='castform',item='leftovers')],[dict(species='mew',item='')]]
+        for event in ('|-transform|p1a: Ditto|p2a: Mew',
+                      '|-formechange|p1a: Castform|Castform-Rainy|[from] ability: Forecast'):
+            before=['|turn|2',event,'|switch|p1a: Unown|Unown, L100|100/100','|turn|3']
+            row=dict(first_divergence=[dict(field='1:0:hp',gpu=100,showdown=90)],
+                     pre_boundary=dict(showdown=dict(log_tail=before)),post_boundary=dict(showdown=dict(active=[1,0])),
+                     native_log_tail=before+['|move|p1a: Unown|Hidden Power|p2a: Mew','|-damage|p2a: Mew|90/100'])
+            self.assertEqual(P.state_cause(row,teams)[:2],('Twisted Spoon (type-boost item)','a'))
+            row['native_log_tail']=before+['|move|p2a: Mew|Tackle|p1a: Unown']
+            self.assertEqual(P.state_cause(row,teams)[1],'u')
+
+    def test_current_form_event_requires_affected_holder(self):
+        for species,event,cause in (
+            ('ditto','|-transform|p1a: Ditto|p2a: Mew','Transform'),
+            ('castform','|-formechange|p1a: Castform|Castform-Rainy|[from] ability: Forecast','Forecast (Castform type change)')):
+            teams=[[dict(species=species,item='')],[dict(species='mew',item='')]]
+            before=['|turn|2']
+            row=dict(first_divergence=[dict(field='0:0:hp',gpu=100,showdown=90)],
+                     pre_boundary=dict(showdown=dict(log_tail=before)),post_boundary=dict(showdown=dict(active=[0,0])),
+                     native_log_tail=before+[event,'|move|p2a: Mew|Tackle|p1a: '+species.title()])
+            self.assertEqual(P.state_cause(row,teams)[:2],(cause,'a'))
+            row['first_divergence'][0]['field']='1:0:hp'
+            self.assertEqual(P.state_cause(row,teams)[1],'u')
+            row['first_divergence'][0]['field']='0:0:hp'
+            row['post_boundary']['showdown']['active']=[1,0]
+            self.assertEqual(P.state_cause(row,teams)[1],'u')
+
+    def test_truncated_request_log_requires_manual_attribution(self):
+        row=dict(first_divergence=[dict(field='0:0:hp',gpu=100,showdown=90)],
+                 pre_boundary=dict(showdown=dict(log_tail=['|turn|2'])),
+                 native_log_tail=['|debug|Swarm boost','|-damage|p1a: Mew|90/100'])
+        self.assertEqual(P.state_cause(row,[[],[]])[1],'u')
+
     def test_shards_bind_pool_format_and_tape(self):
         base=dict(source_commit='head',pool_sha256='pool',format_id='format',chance_tape_schema='tape',
                   panel=dict(first_game=1,games=2),rows=[])
