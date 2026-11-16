@@ -44,7 +44,7 @@ pokezero-capstone = "pokezero.capstone_cli:main"
 pokezero-scenarios = "pokezero.scenario_studio.cli:main"
 
 [tool.setuptools.package-data]
-"pokezero" = ["data/gen3_generator_weights.json"]
+"pokezero" = ["data/gen3_generator_weights.json", "data/gen3_team_model.json"]
 "pokezero.scenario_studio" = ["static/*"]
 
 [tool.setuptools.packages.find]

@@ -60,6 +60,7 @@ class GeneratorWeights:
     provenance: str
     source_hash: str
     species: Mapping[str, SpeciesWeights]
+    variant_manifest_sha256: str | None = None
 
     def weights(self, species: str, *, team_context: Mapping[str, object]) -> tuple[int, ...]:
         """Exact unnormalized integer prior; requires an explicit context."""
@@ -94,7 +95,7 @@ def load_generator_weights(source, path: Path | str | None = None) -> GeneratorW
         if any(len(weights) != len(ids) or sum(weights) != denominator for weights in contexts):
             raise ValueError(f"generator probability mass mismatch: {key}")
         species[key] = SpeciesWeights(denominator, ids, contexts)
-    return GeneratorWeights(table_hash, payload["source_hash"], MappingProxyType(species))
+    return GeneratorWeights(table_hash, payload["source_hash"], MappingProxyType(species), digest(manifest))
 
 
 def _integer(value, *, positive=False):
