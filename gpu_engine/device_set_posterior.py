@@ -73,7 +73,7 @@ FULL_HP_MOVES = frozenset({'eruption', 'waterspout'})
 # the kernel adds the static move classes and the first set bit names the strike, as _refusal's first match does.
 REASONS = ('', 'called', 'struggle', 'fixed-damage', 'ohko', 'conditional-power', 'multi-hit', 'hit-substitute',
     'endure-or-focusband', 'transform', 'type-change', 'item-changed', 'ability-overridden', 'defender-semi-invulnerable',
-    'unmodelled:charge', 'unmodelled:mud/water-sport', 'unvalidated:screen', 'no-hp-drop', 'single-variant', 'no-support',
+    'unmodelled:charge', 'unmodelled:mud/water-sport', 'unvalidated:screen', 'no-hp-drop', 'single-variant', 'unknown-defender', 'no-support',
     'core-unsupported', 'ambiguous-band', 'effectiveness-disagreement',
     'engine-unmodeled:typeboost', 'engine-unmodeled:marvelscale', 'engine-unmodeled:plusminus')
 CODE = {name: i for i, name in enumerate(REASONS)}
@@ -557,6 +557,13 @@ def in_tree(trackers, belief_tables, state, side, move, caller_move, critical, h
         defender_status=get(state.status, foe, target), hp_before=hp_before, observed=dealt, ko=hp_after == 0,
         effectiveness=j.where(num > den, 1, j.where(num < den, -1, 0)), precondition=pre.astype(j.int32))
     reduced = reduce(strike(tables, x), hard, x.precondition, guard=True)
+    # The host resolves its own defender by species in the original request, not by physical slot or active status.
+    # Identical duplicates are ambiguous too; being able to read the engine's exact active stats does not admit them.
+    defender_species = get(state.species, foe, target)
+    known_defender = (defender_species > 0) & (j.sum(li.take(state.species, r, foe) == defender_species[:, None], axis=1) == 1)
+    unknown = ~known_defender & ((reduced.reason == 0) | (reduced.reason > CODE['unknown-defender']))
+    reduced = Reduced(j.where(unknown, CODE['unknown-defender'], reduced.reason),
+                      j.where(unknown[:, None], j.uint32(0), reduced.fit))
     admitted = j.broadcast_to(j.asarray(use, bool), (b,)) & (reduced.reason == 0) & (source_species > 0)
     trackers, _ = visible.register_variant_survivors(trackers, belief_tables, side, own, reduced.fit, admitted)
     trackers = visible.refresh(trackers, belief_tables, side, own, admitted)

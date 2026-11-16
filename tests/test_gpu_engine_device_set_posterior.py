@@ -494,7 +494,8 @@ class InTreeTests(unittest.TestCase):
                            j.full((B, 2, 6), 100, j.int32), {'item_mutated': z(B, 2, 6)})
         stats = np.zeros((B, 2, 6, 6), np.int32);stats[:, 1, 0] = c['defender_stats'];stats[:, 0, 0] = c['stats']
         types = np.zeros((B, 2, 6, 2), np.int32);types[:, 1, 0] = c['defender_types'];types[:, 0, 0] = [T['normal'], 0]
-        self.state = State(z(B, 2), j.asarray(species), j.asarray(types), j.asarray(types), z(B, 2, 6), z(B, 2, 6), z(B, 2, 6),
+        state_species = species.copy();state_species[:, 1, 0] = c['defender_species']
+        self.state = State(z(B, 2), j.asarray(state_species), j.asarray(types), j.asarray(types), z(B, 2, 6), z(B, 2, 6), z(B, 2, 6),
                            z(B, 2, 6, 7), z(B, 2, 6, dtype=j.uint32), j.asarray(stats), z(B, 2, 6), z(B), z(B, 2, 6))
 
     def hit(self, observed, *, hits_sub=False, called=False, endured=False, hit_by=False, move='tackle'):
@@ -530,3 +531,18 @@ class InTreeTests(unittest.TestCase):
     def test_off_model_strike_is_declined(self):
         out = self.hit(1)   # no variant's roll is 1 HP: no fitting hard variant, the incoming set is empty
         self.assertEqual((out['reason'], out['active'], out['conflicts']), ('', False, 0))
+
+    def test_duplicate_own_defender_is_unknown_even_when_active_stats_are_known(self):
+        self.state = self.state._replace(species=self.state.species.at[:, 1, 1].set(self.state.species[:, 1, 0]))
+        observed = tier2_rolls(base_case(item='choiceband'))[0][-1]
+        out = self.hit(observed)
+        self.assertEqual((out['reason'], out['active'], out['visible_active']), ('unknown-defender', False, False))
+        self.assertEqual(self.hit(observed, hits_sub=True)['reason'], 'hit-substitute')
+        self.carry = self.carry._replace(belief_mask=self.carry.belief_mask.at[:, 0, 0].set(self.j.asarray([1, 0], self.j.uint32)))
+        self.assertEqual(self.hit(observed)['reason'], 'single-variant')
+
+    def test_missing_own_defender_refuses_before_core_or_no_support(self):
+        self.state = self.state._replace(species=self.state.species.at[:, 1, 0].set(0))
+        self.assertEqual(self.hit(1)['reason'], 'unknown-defender')
+        self.carry = self.carry._replace(belief_mask=self.j.zeros_like(self.carry.belief_mask))
+        self.assertEqual(self.hit(1)['reason'], 'unknown-defender')
