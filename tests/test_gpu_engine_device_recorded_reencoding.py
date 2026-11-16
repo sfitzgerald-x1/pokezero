@@ -64,27 +64,39 @@ class Runtime:
         return NS(step=NS(state=after,invalid_actions=np.array([False])),trackers=t+1)
 
 
-def dataset(folder,*,reference_value=0,routing_mismatch=False):
+def dataset(folder,*,reference_value=0,routing_mismatch=False,legacy_suspended=False):
     root=Path(folder)/'old';writer=c.Evidence(root)
+    legacy=json.loads((Path(__file__).parent/'fixtures/state_schemas/pre_shed_skin_6caf071b.json').read_text()) if legacy_suspended else None
+    source_commit=legacy['source_commit'] if legacy else LEGACY_SOURCE_COMMIT
+    def saved(root_id,step=0):
+        value=packet(state(root_id,step))
+        if legacy:
+            value['state']={name:value['state'][name] for name in legacy['packet']}
+            value['state']['pending_residual']=[root_id==0 and step==1]
+        return value
+    def saved_chance():
+        value=chance()
+        if legacy:value.pop('shed_skin')
+        return value
     cells=[dict(stream_id=10+n,root_id=20+n,native_seed=30+n,team_indices=[2*n,2*n+1])for n in range(2)]
     refdoc=dict(path='/not-loaded',sha256='a'*64)
-    plan=dict(schema=c.SCHEMA,source_commit=LEGACY_SOURCE_COMMIT,pool=refdoc,vocabulary=refdoc,labels=refdoc,gender_policy=refdoc,
+    plan=dict(schema=c.SCHEMA,source_commit=source_commit,pool=refdoc,vocabulary=refdoc,labels=refdoc,gender_policy=refdoc,
         showdown_root='/not-loaded',node='/not-loaded',node_sha256='b'*64,constructor_seed=1,sampling_seed=2,
         gender_seed=3,gender_domain=4,max_requests=2,max_turns=100,cells=cells,
         policy='PCG64_SEEDSEQUENCE_UNIFORM_PHYSICAL_LEGAL_V1')
-    oldsource=subprocess.check_output(['git','show',LEGACY_SOURCE_COMMIT+':gpu_engine/device_observation_parity.py'],cwd=c.ROOT)
+    oldsource=subprocess.check_output(['git','show',source_commit+':gpu_engine/device_observation_parity.py'],cwd=c.ROOT)
     (root/'original-reducer.py').write_bytes(oldsource)
     bindings={'test':'original','source_commit':plan['source_commit'],
         'source_files':{'gpu_engine/device_observation_parity.py':hashlib.sha256(oldsource).hexdigest()}}
     old=r._frozen_reducer(bindings)(source_bindings=bindings);final=[]
-    flags=[[True,None],[False,True]]
+    flags=[[True,True],[False,True]] if legacy else [[True,None],[False,True]]
     for n,cell in enumerate(cells):
         writer.event(dict(kind='START',**cell,status='ATTEMPTED'))
-        writer.boundary(dict(kind='CONSTRUCTOR',stream_id=cell['stream_id'],raw=packet(state(n)),initialized=packet(state(n))))
+        writer.boundary(dict(kind='CONSTRUCTOR',stream_id=cell['stream_id'],raw=saved(n),initialized=saved(n)))
         for step in range(2):
             record=dict(kind='STEP',stream_id=cell['stream_id'],request=step,
-                before=packet(state(n,step)),after=packet(state(n,step+1)),
-                pre_agreement=flags[n][step],actions=[[0,1]],chance=chance())
+                before=saved(n,step),after=saved(n,step+1),
+                pre_agreement=flags[n][step],actions=[[0,1]],chance=saved_chance())
             sha=writer.boundary(record)
             for side in (0,1):
                 row=dict(decision_id=f"{cell['stream_id']}-{step}-{side}",stream_id=cell['stream_id'],
@@ -128,6 +140,28 @@ class DeviceRecordedReencodingTests(unittest.TestCase):
                     self.assertEqual(arrays['reference__numeric_features'][0,0],7)
                     self.assertEqual(arrays['candidate__numeric_features'][0,0],0)
                 self.assertEqual(row['original_tensor_sha256'],c.digest(row['original_tensor_path']))
+
+    def test_legacy_suspension_refuses_one_root_and_completes_the_stored_report(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root,plan,summary,bindings=dataset(folder,legacy_suspended=True)
+            writer=c.Evidence(Path(folder)/'new');runtime=Runtime()
+            try:result=r.reencode_records(runtime,root,plan,summary,bindings,root/'physical.jsonl',root/'decisions.jsonl',writer)
+            finally:writer.close()
+            self.assertTrue(result['original_report_recomputed_exact'])
+            self.assertEqual(result['new_games'],0)
+            self.assertEqual(result['counts']['agreement'],6)
+            self.assertEqual(result['counts']['compared'],4)
+            self.assertEqual(result['counts']['comparison_refused'],2)
+            stopped=result['reencoding_cells'][0]['reencoding_stopped']
+            self.assertIn('legacy suspended state lacks saved Shed Skin draws',stopped['reason'])
+            self.assertIsNone(result['reencoding_cells'][1]['reencoding_stopped'])
+            self.assertEqual(result['replay_integrity_failed_roots'],1)
+            self.assertFalse(result['full_B4_pass'])
+            oldrows=[x for x,_ in r._records(root/'decisions.jsonl')]
+            newrows=[x for x,_ in r._records(Path(folder)/'new'/'decisions.jsonl')]
+            self.assertEqual(len(newrows),8)
+            self.assertEqual([x['original_metadata'] for x in newrows],oldrows)
+            self.assertEqual(len([x for x in runtime.calls if x[0]=='advance']),2)
 
     def test_numeric_mismatch_stops_root_refuses_but_keeps_original_agreement(self):
         with tempfile.TemporaryDirectory()as folder:

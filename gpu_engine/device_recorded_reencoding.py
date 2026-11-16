@@ -182,11 +182,17 @@ def differences(actual,expected):
         or not np.array_equal(np.asarray(getattr(actual,key)),np.asarray(getattr(expected,key)))]
 
 
-def _boundary(packet):
+def _requested(packet):
+    # Decision addressing remains readable when a numeric state is refused.
     if type(packet)is not dict or set(packet)!={'state','requested'}:
         raise ValueError('complete recorded device boundary required')
     requested=np.asarray(packet['requested'])
     if requested.shape!=(2,)or requested.dtype!=np.bool_:raise ValueError('literal requested seats required')
+    return requested
+
+
+def _boundary(packet):
+    requested=_requested(packet)
     return decode_state(packet['state']),requested
 
 
@@ -280,7 +286,7 @@ def reencode_records(runtime,root,plan,summary,old_bindings,physical_path,decisi
                 if record.get('request')!=steps:raise ValueError('original STEP order differs')
                 if not constructor:replay.stop=_refusal('MISSING_STORED_CONSTRUCTOR')
                 candidates,bits,pre_error,post_error=replay.step(record)
-                _,requested=_boundary(record['before'])
+                requested=_requested(record['before'])
                 owners=list(np.flatnonzero(requested))
                 for side in owners:
                     if next_decision is None:raise ValueError('original decision missing')
