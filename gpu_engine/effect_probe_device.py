@@ -212,6 +212,12 @@ for _step in ('initial', 0, 1, 2, 3, 4):
 for _step in (3, 4):
     for _field in ('1:0:borrowed_ability', '1:0:shown_ability'):
         ALLOWLIST[('wonderguard_trace', 'base', _step, _field)] = _TRACE_TRACER
+# Approved extension of the same Trace B2 bug: retire these ability-display pins when Trace is fixed.
+# Engine state remains exact; no physics, gender or volatile fields are allowlisted.
+for _step in ('initial', 0, 1, 2, 3, 4):
+    ALLOWLIST[('cutecharm_trace', 'base', _step, '1:0:original_ability')] = _TRACE_TRACER
+for _field in ('1:0:borrowed_ability', '1:0:shown_ability'):
+    ALLOWLIST[('cutecharm_trace', 'base', 2, _field)] = _TRACE_TRACER
 # OPEN BUG (reported): a failing Counter called by Sleep Talk. Showdown prints |move|p1a: X|Counter|p2a: Y|[from] Sleep
 # Talk and B2 reveals Counter (0 PP charged); the device's called-move reveal (transition.py:1016, device_public.move(...,
 # acts & (move!=caller_move), pp_use=False, count_turn=False)) is gated by acts, which Counter's failure gate (transition.py:
