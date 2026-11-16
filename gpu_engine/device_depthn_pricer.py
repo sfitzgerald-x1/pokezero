@@ -492,7 +492,12 @@ def place_wide_leaf(pack,fields,pw,pid,n,M,k_own,k_opp,specs):
     if len(pack.lane_pos):
         # Share one dense destination index across the heterogeneous fields.
         # Only their trailing dimensions remain in the scatter, including digests.
-        dest=((pw[pack.lane_parent]*M+pid[pack.lane_parent])*k_own+pack.lane_slot_own)*k_opp+pack.lane_slot_opp
+        packed=np.flatnonzero(pack.node_call>=0)
+        # Index an axis once per parent to retain NumPy's negative-index and
+        # bounds behavior, and promote narrow integers before multiplying.
+        w,node=np.arange(n,dtype=np.intp)[pw[packed]],np.arange(M,dtype=np.intp)[pid[packed]]
+        parent_dest=np.zeros(len(pack.node_call),np.intp);parent_dest[packed]=(w*M+node)*k_own*k_opp
+        dest=parent_dest[pack.lane_parent]+pack.lane_slot_own*k_opp+pack.lane_slot_opp
         for name,x in out.items():x.reshape((n*M*k_own*k_opp,)+x.shape[4:])[dest]=np.asarray(fields[name])[pack.lane_pos]
     return out
 

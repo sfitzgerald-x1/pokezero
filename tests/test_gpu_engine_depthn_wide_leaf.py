@@ -39,6 +39,27 @@ def mutant(fn,old,new):
 
 
 class PackingTests(unittest.TestCase):
+    def test_placement_preserves_integer_index_semantics(self):
+        from tests.fixtures import wide_leaf_host_reference as old
+        p=dn.pack_wide_leaf([0]*4,np.ones((4,2),bool),np.ones((4,3),bool),nodes=4,lanes=24,chunk=6)
+        data=dict(v=np.arange(24,dtype=np.float32));specs=[('v',(),np.float32)]
+        for dtype in (np.uint8,np.uint64,np.int8,np.int64):
+            pw=np.array([0,1,2,3],dtype);pid=np.array([99,30,80,0],dtype)
+            a=old.place_wide_leaf(p,data,pw,pid,4,100,2,3,specs)
+            b=dn.place_wide_leaf(p,data,pw,pid,4,100,2,3,specs)
+            self.assertEqual(a['v'].tobytes(),b['v'].tobytes(),dtype)
+        pw=np.array([0,-3,-2,-1],np.int8);pid=np.array([-1,-70,-20,-100],np.int8)
+        a=old.place_wide_leaf(p,data,pw,pid,4,100,2,3,specs)
+        b=dn.place_wide_leaf(p,data,pw,pid,4,100,2,3,specs)
+        self.assertEqual(a['v'].tobytes(),b['v'].tobytes())
+        for w,node in ((4,0),(-5,0),(0,100),(0,-101)):
+            for place in (old.place_wide_leaf,dn.place_wide_leaf):
+                with self.assertRaises(IndexError):place(p,data,np.array([w]*4),np.array([node]*4),4,100,2,3,specs)
+        # Coordinates belonging to a parent without a packed lane are ignored.
+        p=dn.pack_wide_leaf([0,0],[[True],[False]],[[True],[True]],nodes=2,lanes=2,chunk=1)
+        for place in (old.place_wide_leaf,dn.place_wide_leaf):
+            self.assertEqual(place(p,dict(v=np.array([1,0])),np.array([0,99]),np.array([0,99]),1,1,1,1,specs)['v'].item(),1.)
+
     def test_host_outputs_byte_identical_to_pinned_reference(self):
         from dataclasses import fields as members
         from tests.fixtures import wide_leaf_host_reference as old
@@ -211,8 +232,8 @@ class FrameTests(unittest.TestCase):
             from dataclasses import replace
             return replace(p,lane_live=live.reshape(p.lane_live.shape))
         bugs=dict(off_by_one=('place_wide_leaf',mutant(place,'np.asarray(fields[name])[pack.lane_pos]','np.asarray(fields[name])[np.minimum(pack.lane_pos+1,len(fields[name])-1)]')),
-            swapped_slots=('place_wide_leaf',mutant(place,'+pack.lane_slot_own)*k_opp+pack.lane_slot_opp',
-                '+pack.lane_slot_own[::-1])*k_opp+pack.lane_slot_opp[::-1]')),
+            swapped_slots=('place_wide_leaf',mutant(place,'+pack.lane_slot_own*k_opp+pack.lane_slot_opp',
+                '+pack.lane_slot_own[::-1]*k_opp+pack.lane_slot_opp[::-1]')),
             neighbour_chance=('make_wide_leaf_program',mutant(program,'chance=jax.vmap(executor.sample)(states)',
                 'chance=jax.tree.map(lambda x:j.roll(x,1,axis=0),jax.vmap(executor.sample)(states))')),
             dropped_lane=('pack_wide_leaf',dropped))
