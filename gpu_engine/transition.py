@@ -649,8 +649,27 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                 & ~initial_loaf)
             _faint_before_hp=work.hp
             if _device_public is not None:_device_pursuit_before=work
-            work,used,fainted = intercepts.intercept(work,side,slot[:,side],moves[:,side],
-                draws[:,side],table,eligible=eligible,contact_roll=phazing_draws[:,side])
+            work,used,fainted,_contact_reveals = intercepts.intercept(work,side,slot[:,side],moves[:,side],
+                draws[:,side],table,eligible=eligible,contact_roll=phazing_draws[:,side],
+                sleep_roll=effect_draws[:,side,2],_reveal_masks=True)   # tier D: an Effect Spore sleep's 2+effect[s][2]
+            # Tier D: the intercept's public ability reveals (it runs no device hooks): a Wonder Guard holder's TryHit line
+            # on a blocked Pursuit (a Traced one: Pursuit is Dark, super-effective on Shedinja), the target's contact
+            # ability's -status/-damage [from] ability line, and the pursuer's Synchronize. The target has not switched yet.
+            if _device_public is not None:
+                device_public.reveal_ability(_device_public,work,1-side,(used & intercepts.wonder_guard_blocked(work,side,moves[:,side],table))
+                    | _contact_reveals[0])
+                device_public.reveal_ability(_device_public,work,side,_contact_reveals[1])
+            # BUG F (damage credit): the intercept's |-damage|, after its |move|...|[from] Pursuit line, is an untagged hit in the
+            # pursuer's move window: B2 credits it to the pursuer's dealt sums (public_damage.apply) and the switching target's
+            # taken, as the ordinary hit's damage/negative_hp_line/observe triple does below. A Substitute takes the hit with no
+            # -damage line, so the target's HP drop is the credit (0 there).
+            if _device_public is not None:
+                _pursuit_dealt=_active(_device_pursuit_before.hp,_device_pursuit_before,1-side)-_active(work.hp,work,1-side)
+                device_public.damage(_device_public,work,side,_pursuit_dealt,_pursuit_dealt,used)
+                device_public.negative_hp_line(_device_public,work,1-side,used & (_pursuit_dealt>0),
+                    source_class=device_public.negative_items.HP_ACTION)
+                device_public.observe(_device_public,work,used)
+            # END BUG F (damage credit)
             if _lifecycle_trace:
                 _public_trace=status_callbacks.unknown(_public_trace,used)
             if _lifecycle_trace:work,_public_trace=_lum_update(work,table,used,_public_trace,_device_public=_device_public)
@@ -668,7 +687,12 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                 device_public.volatile(_device_public,work,side,'destinybond',jnp.zeros_like(used),used)
             work=_clear_fainted_boosts(work,_faint_before_hp,eligible=used)
             if _device_public is not None:
-                device_public.move(_device_public,work,side,moves[:,side],used,pp_use=True)
+                # BUG F (last move): the intercept's move line carries [from] Pursuit; the device copies B2 (from_tag: no last
+                # move, Choice lock or Truant anchor), and B2's STALL_ATTEMPT 0 on that line (a non-stall move) breaks the
+                # public stall counter, which the ordinary move path below resets for a non-stall move too.
+                device_public.move(_device_public,work,side,moves[:,side],used,pp_use=True,from_tag=True)
+                device_public.feature(_device_public,side,work.active[:,side],'stall_counter',jnp.zeros_like(used,jnp.int32),used)
+                # END BUG F (last move)
                 device_public.port_count(_device_public,side,used,'pursuit')
                 device_public.item_changes(_device_public,_device_pursuit_before,work,used)
             pursuit_used = pursuit_used.at[:,side].set(used)
@@ -982,6 +1006,10 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
             move=jnp.where(sleep_usable,called,move)
             acts &= ~sleep_usable | executes
             placeholders += (acts & sleep_usable).astype(jnp.int32)
+        # BUG G: Gen 3 useMoveInner prints the called move's |move|...|[from] Sleep Talk line right after ModifyMove
+        # (data/mods/gen3/scripts.ts:120-165), before its own TryMove/Try gates: Counter's onTry, Damp's TryMove and the like
+        # fail it only after the line, so the reveal is decided here, ahead of those gates (B2 reveals it, 0 PP charged).
+        _called_line=acts & (move!=caller_move)
         explodes=jnp.zeros_like(acts)
         if table.focus_punch is not None:
             acts &= ~focusing.failed(work,side,move,table.focus_punch)
@@ -1008,7 +1036,7 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
             acts &= ~blocked
             explodes=acts & table.self_destruct.move[move]
         if _device_public is not None:
-            device_public.move(_device_public,work,side,move,acts & (move!=caller_move),pp_use=False,count_turn=False)
+            device_public.move(_device_public,work,side,move,_called_line,pp_use=False,count_turn=False)
         if _lifecycle_trace:
             from . import engine_self_move_callbacks as self_move_callbacks
             _self_move_context=_direct_hit_context if _direct_hit_context is not None and _direct_hit_registered else None
@@ -1074,6 +1102,15 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
         immune = num == 0
         if table.entry is not None:
             immune |= (typ == table.entry.ground_type) & table.entry.levitate[_active(work.ability,work,foe)]
+        # Fidelity tier D: Wonder Guard (combat.wonder_guard_blocks) returns null from TryHit for a typed, non-Status hit
+        # that is not super-effective. Every effect gated on an immune hit (damage, fixed damage and Counter, the
+        # secondaries, contact, Knock Off, drain, recoil, self effects, the second hit) then does nothing, as for a type
+        # immunity; Protect's TryHit runs first and a missed move never reaches it (the reveal below).
+        _wonder=jnp.zeros_like(immune)
+        if table.combat is not None:
+            _wonder=traits.wonder_guard_blocks(table.combat,_active(work.ability,work,foe),move,typ,num,den)
+            immune |= _wonder
+            if _lifecycle_trace:_public_trace=status_callbacks.unknown(_public_trace,acts & _wonder & ~(num==0))
         weather_num,weather_den = (1,1)
         accuracy,always_hit = table.accuracy[move],table.always_hit[move]
         if table.weather is not None:
@@ -1086,7 +1123,12 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
         if table.absorption is not None:
             phase1_num,phase1_den = absorb.damage_phase1(table.absorption,typ,_active(work.volatile,work,side))
         if table.combat is not None:
-            power = traits.base_power(table.combat,_active(work.ability,work,foe),typ,power)
+            # Fidelity tier D: the attacker's pinch ability joins Thick Fat's BasePower chain (combat.base_power).
+            power = traits.base_power(table.combat,_active(work.ability,work,foe),typ,power,
+                attacker_ability=_active(work.ability,work,side),hp=_active(work.hp,work,side),max_hp=_active(work.max_hp,work,side))
+            if _lifecycle_trace:
+                _public_trace=status_callbacks.unknown(_public_trace,acts & traits.pinch_boost(table.combat,
+                    _active(work.ability,work,side),typ,_active(work.hp,work,side),_active(work.max_hp,work,side)))
         critical = chance[:,4] == 0
         if table.critical is not None:
             critical = crits.is_critical(table.critical,move,_active(work.ability,work,foe),chance[:,4])
@@ -1206,6 +1248,11 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                 _public_trace,_protect_block_capture=protect_callbacks.finish_block(_public_trace,_protect_block_pending,hit)
                 _protect_block_mask=protect_callbacks.captured_block_matches(_public_trace,_protect_block_capture)
             bypass_sub = table.effects.bypass_sub[move]
+        if _device_public is not None:
+            # Fidelity tier D: Wonder Guard's TryHit line, -immune|TARGET|[from] ability: Wonder Guard, prints only for a hit
+            # that passed accuracy and Protect (gen3 tryMoveHit); B2 reveals the holder's ability from it. A natural
+            # immunity on a Wonder Guard holder prints the same tagged line, as WG's TryHit runs before its -immune.
+            device_public.reveal_ability(_device_public,work,foe,acts & hit & _wonder)
         # Gen3 emits a generic -immune for ordinary Ground/Levitate immunity.
         # B2 does not mark an ability revealed without an attribution line;
         # source possibilities can still imply Levitate without that flag.
@@ -2038,10 +2085,13 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                     _rough_skin_context=_direct_hit_context if _direct_hit_context is not None and _direct_hit_registered else None,
                     _rough_skin_capture=(kernel_risks.CapturedDirectHit(_direct_hit_context,_direct_ticket,side,
                         work.active[rows,side],work.active[rows,foe],move,_direct_write)
-                        if _direct_hit_context is not None and _direct_hit_registered else None),_device_public=_device_public)
+                        if _direct_hit_context is not None and _direct_hit_registered else None),_device_public=_device_public,
+                    sleep_roll=effect_draws[rows,side,2])
             else:
+                # Fidelity tier D: an Effect Spore sleep lasts 2+effect[s][2], the attacker's column (secondary.apply_contact).
                 work = secondaries.apply_contact(work,side,move,phazing_draws[rows,side],table.secondary,
-                    eligible=acts & hit & (dealt>0) & ~hits_sub,item_table=table.items,_device_public=_device_public)
+                    eligible=acts & hit & (dealt>0) & ~hits_sub,item_table=table.items,_device_public=_device_public,
+                    sleep_roll=effect_draws[rows,side,2])
         if table.secondary is not None:
             if _lifecycle_trace:
                 work,_public_trace=secondaries.apply_color_change(work,side,typ,table.secondary,
@@ -2639,6 +2689,10 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
     # prints perish0 and faints the holder (faint() queues it), else -start|X|perishN. A fainted holder is skipped. The end
     # path runs no faintMessages before the next handler (sim/battle.ts:515-523), so both holders resolve even when the
     # first faint empties a side (Gen 3 checkWin with both sides empty is a tie): the pass is gated once, at its start.
+    if _device_public is not None:
+        # BUG F1 (snapshot): each active alive at the Perish pass's start and its perish counter (_perish_upkeep_line).
+        _upkeep_alive=work.hp[rows[:,None],sides,work.active]>0
+        _upkeep_count=work.perish_counter[rows[:,None],sides,work.active]
     _perish_continues=residual_ready & jnp.all(jnp.any(work.hp>0,axis=2),axis=1)
     _perish_first=jnp.where(end_speed[:,0]!=end_speed[:,1],(end_speed[:,1]>end_speed[:,0]).astype(jnp.int32),effect_draws[:,1,3])
     for order in range(2):
@@ -2653,6 +2707,10 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
         # perish0 then faint: a faint line, no -damage (as Destiny Bond's and Self-Destruct's faints).
         if _device_public is not None:device_public.observe(_device_public,work,_perish_faint,record_damage=False)
         work=_clear_fainted_boosts(work,_faint_before_hp,eligible=_perish_continues)
+    if _device_public is not None:
+        # BUG F1: a battle ended by the Perish pass's queued faints still prints |upkeep (unless a later handler's
+        # faintMessages ends it first), so the device's upkeep is "the residual printed |upkeep", not residual_ready & ~done.
+        _upkeep_perish_end,_upkeep_living=_perish_upkeep_line(work,table,_perish_continues,_perish_first,_upkeep_alive,_upkeep_count)
     # Fidelity WH: White Herb's onResidual (order 29, after every Gen 3 handler above; data/items.ts:7697-7700). fieldEvent
     # skips a fainted holder and stops once the battle has ended (sim/battle.ts:510-514, 565-566). An equal-Speed pair is
     # inert (each restore touches only its own holder). Reached in Gen 3 when an Intimidate switch-in's drop met no later
@@ -2750,8 +2808,8 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
         work=shift.choice_unlock(work,~work.done & ~work.pending_residual & ~jnp.any(work.forced_switch,axis=1))
     work = jax.tree.map(lambda old, new: jnp.where(live.reshape((-1,) + (1,) * (old.ndim - 1)), new, old), state, work)
     if _device_public is not None:
-        device_public.turn_end(_device_public,state,work,ordinary,upkeep=residual_ready & ~work.done,
-            leftovers=None if table.items is None else table.items.leftovers)
+        device_public.turn_end(_device_public,state,work,ordinary,upkeep=residual_ready & (~work.done | _upkeep_perish_end),
+            leftovers=None if table.items is None else table.items.leftovers,residual=residual_ready,upkeep_living=_upkeep_living)
     result = StepResult(work, invalid, placeholders)
     if _device_public is not None:return device_public.PublicStepResult(result,_device_public.trackers)
     if _lifecycle_trace:
@@ -2774,3 +2832,43 @@ def step_with_public(state,actions,table,trackers,*,belief_tables=None,chance_in
     context=device_public.Context(trackers,belief_tables,port_tables=getattr(table,'public_port',None))
     chance=sample_chance_inputs(state) if chance_inputs is None else chance_inputs
     return step_with_chance(state,actions,table,chance,_device_public=context)
+
+
+def _perish_upkeep_line(state,table,perish_continues,perish_first,alive,count):
+    """BUG F1: (ended [B], living [B,2]). ended: the lanes on which a battle ended by Perish Song's end path still prints
+    |upkeep. living: each side's Perish faint whose |faint| line follows |upkeep (runAction's faintMessages, sim/battle.ts:2856):
+    B2's non-proc sweep at |upkeep still sees that mon alive (engine_device_negative_items.upkeep's `living`).
+
+    Showdown's residual prints |upkeep after fieldEvent('Residual') unless the battle has ended (`if (!this.ended)
+    this.add('upkeep')`, sim/battle.ts:2838). The battle ends at a checkWin, which runs only in faintMessages: a handler
+    callback's faintMessages (sim/battle.ts:565-566; a damaging residual's KO, so no |upkeep), or runAction's after the
+    residual (2856). Perish Song's count reaching 0 takes the duration end path (515-520): its condition's onEnd prints perish0
+    and only queues the faint (data/moves.ts:13262-13264; Gen 4's mod, inherited by Gen 3, only sets onResidualOrder 12,
+    data/mods/gen4/moves.ts:993-999), and the path skips faintMessages. So a battle ended by Perish faints
+    prints |upkeep before its |faint| lines, unless a later handler of the same Residual event reaches the loop's
+    faintMessages first. Handlers are collected at the event's start and only a `.fainted` holder is skipped; a queued
+    faint is not yet `.fainted`. Showdown runs that first later handler's own callback before its faintMessages ends the
+    battle; the engine gates White Herb, the Truant flip and the recharge tick on the battle continuing, so it skips it,
+    which is inert: a done state is never expanded or encoded. The Gen 3 handlers after Perish Song's order 12 that the
+    engine models:
+    - the other holder's Perish tick (count >= 2, a callback) after the first holder's end path (Speed order, perish_first);
+    - Truant's onResidual (order 27, data/mods/gen3/abilities.ts:197-213) and White Herb's (order 29, data/items.ts);
+    - the duration-only volatiles (order false, last) that do not end at this tick: stall (duration 2, set by a successful
+      Protect/Detect/Endure this turn: protect_counter > 0), mustrecharge at duration 2 (recharge_counter == 2) and
+      twoturnmove on Solar Beam's charge turn (charge_counter == 2; data/conditions.ts).
+    Not modelled by the engine, so not here: the other order-false duration volatiles (lockedmove, Lock-On, Charge, Bide,
+    Gen 3 Disable, Rollout, Fury Cutter).
+
+    state: the step's state right after the Perish pass (items, abilities and counters before White Herb, the recharge tick
+    and Solar Beam's residual). alive [B,2]: each active alive when the pass started (not fainted earlier, so its handlers
+    run); count [B,2]: their perish counters then."""
+    rows=jnp.arange(state.hp.shape[0]);first=jnp.asarray(perish_first,jnp.int32)
+    holder=perish_continues[:,None] & alive & (count>0)
+    later=(holder & (count==1))[rows,first] & (holder & (count>1))[rows,1-first]
+    pick=lambda value:value[rows[:,None],jnp.arange(2)[None,:],state.active]
+    handlers=(pick(state.protect_counter)>0) | (pick(state.recharge_counter)==2) | (pick(state.charge_counter)==2)
+    if table.entry is not None and table.entry.truant is not None:handlers |= table.entry.truant[pick(state.ability)]
+    if table.items is not None:handlers |= table.items.white_herb[pick(state.item)]
+    later |= jnp.any(alive & handlers,axis=1)
+    ended=perish_continues & ~jnp.all(jnp.any(state.hp>0,axis=2),axis=1)
+    return ended & ~later,holder & (count==1) & ~later[:,None]
