@@ -985,6 +985,8 @@ def lane_verdict(changed, effects, side_axis, *, cascade=None, waive=(), cascade
                   or (side is not None and leaf in KO_MON_LEAVES + KO_LINK_LEAVES and cascade['mon_ok'](leaf, side))
                   or (side is not None and leaf == EFFECT_DRAWS and cascade.get('effect_ok') is not None
                       and bool(cascade['effect_ok'][side]))
+                  or (side is not None and leaf == SHED_SKIN_DRAWS and cascade.get('shed_skin_ok') is not None
+                      and bool(cascade['shed_skin_ok'][side]))
                   or (side is not None and leaf in RETYPE_LEAVES and cascade.get('retype_ok') is not None
                       and bool(cascade['retype_ok'](leaf, side)))
                   or (side is not None and (leaf.startswith('trackers.') or allowed_leaf(leaf, ('ko_action',)))
@@ -2377,6 +2379,7 @@ def patched_pass(args, *, step_override=None, prepared=None):
                         mons = moved[side] if leaf == 'state.types' else _slots(moved[side], result['physical_to_public'][lane][side])
                         return bool(diff.any()) and not (diff & ~mons).any()
                     cascade_info = dict(ko_sides=ko_mons.any(-1), mon_ok=mon_ok, families=families, effect_ok=effect_ok,
+                                        shed_skin_ok=None if result.get('shed_skin_ok') is None else np.asarray(result['shed_skin_ok'])[lane],
                                         retype_ok=retype_ok)
                 by_cascade = []
                 unexpected, waived, by_ko = lane_verdict(entries, effects, side_axis, cascade=cascade_info, waive=args.waive or (),

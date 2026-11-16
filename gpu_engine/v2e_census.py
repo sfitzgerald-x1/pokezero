@@ -47,7 +47,7 @@ PHASES = (
     ('E3', 1448, 2080, 'E'),   # effects (Perish Song, Yawn, the Substitute's trap release and Wrap's trap included)
     ('E4', 2081, 2208, 'E'),   # post (recoil, move weather, Spikes, drag, Baton, fainted boosts)
     ('F1', 2209, 2320, 'F'),   # defer/ready, end speeds, Wish, weather
-    ('F2', 2321, 2701, 'F'),   # residual events (argsort at 2318, the 14-event loop at 2319), the Perish pass, White Herb's order 29 and the recharge tick
+    ('F2', 2321, 2701, 'F'),   # residual events (argsort at 2328, the 14-event loop at 2329), the Perish pass, White Herb's order 29 and the recharge tick
     ('G', 2702, 2787, 'G'),    # end of turn
 )
 GROUPS = ('A', 'B', 'C', 'D', 'E', 'F', 'G')
@@ -79,8 +79,8 @@ ANCHORS = {
 }
 # Iteration rules over lines in program order (the scratch census's): an E1..E4 line <= E_RESTART after one >= E_LATE
 # starts the second action; in F2 a line <= F2_HEAD after one > F2_BODY starts the next of the 14 residual events.
-E_LATE, E_RESTART = 2089, 910
-F2_LOOP, F2_HEAD, F2_BODY = 2319, 2334, 2349
+E_LATE, E_RESTART = 2099, 920
+F2_LOOP, F2_HEAD, F2_BODY = 2329, 2344, 2359
 # Design boundaries: the phase label whose first equation each one is (b0: the first step_with_chance equation; b8: the end).
 BOUNDARIES = (('b0', 'A'), ('b1', 'B'), ('b2', 'D'), ('b3', 'E0'), ('b4', 'E1.0'), ('b5', 'E1.1'), ('b6', 'F1'), ('b7', 'G'), ('b8', 'END'))
 TRACKERS = {'engine_device_public_hooks', 'engine_device_trackers', 'engine_device_public_port', 'engine_device_visible_belief',

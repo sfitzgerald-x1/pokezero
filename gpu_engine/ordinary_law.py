@@ -24,7 +24,7 @@ from .finite_law import Axis, COORDINATES, DRAW_BOUNDS, EFFECT_BOUNDS, Cardinali
 # block at :2663-2664). A numeric representative alone is not proof.
 DOMAIN_SHA256 = 'a46e4b2308044877009f85551c67f476c605aaf1508cde8af2edae850a82ba8e'
 # Filled only after reviewed implementation stabilizes; drift must refuse.
-MAPPING_PINS = {'carry_law.py': '19bb86991bc09212a46d849bdd3d7629044512c1d8b78f0e79487ddeae45237e', 'chance_consumers.py': 'd65a95c50b1df82d238abd466c32495e5f18e43cc28439c2425a443d38341fb2', 'conditioned_future.py': '99a44eb240c2a21a98431616202022cc3e5a687a201fe98530b87c56a43e9d59', 'fidelity_panel.py': '728c1d14c3cc5e95de63d6d3770d143263d58c0d5d7dec8a444b64c5b829099f', 'finite_law.py': '30a00a038d82ded418d58e8a0589ed7259a0e2a99733611cb22b733bd32c2575', 'future_state.py': '054ccf15e7b44da738984995a496ab1176f60868b07afb63024e40a5ef009c08'}
+MAPPING_PINS = {'carry_law.py': '19bb86991bc09212a46d849bdd3d7629044512c1d8b78f0e79487ddeae45237e', 'chance_consumers.py': 'd65a95c50b1df82d238abd466c32495e5f18e43cc28439c2425a443d38341fb2', 'conditioned_future.py': '4d52003c04ccf6f20a1fb8adb0b1df3d52540ce540beafc73177fda7afead3ff', 'fidelity_panel.py': '728c1d14c3cc5e95de63d6d3770d143263d58c0d5d7dec8a444b64c5b829099f', 'finite_law.py': '30a00a038d82ded418d58e8a0589ed7259a0e2a99733611cb22b733bd32c2575', 'future_state.py': '054ccf15e7b44da738984995a496ab1176f60868b07afb63024e40a5ef009c08'}
 NATIVE_BANK = tuple([(f'residual_draws.{s}.{i}', f'draws.{s}.{i}', bound)
     for s in range(2) for i,bound in enumerate(DRAW_BOUNDS)]
     + [(f'{field}_draws.{s}', f'{field}.{s}', bound)

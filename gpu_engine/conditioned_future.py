@@ -187,7 +187,7 @@ def suspended_input_from_jax(state, index, metadata, *, certificate, module=None
         return mapping.Refused((mapping.Gap("suspension", "SUSPENSION_INPUT_REFUSED", str(error)),), raw, native_wire)
 
 
-def _complete_key(physical, capsule, saved_block, saved_cure=(0,0)):
+def _complete_key(physical, capsule, saved_block, saved_cure):
     if isinstance(physical, mapping.Refused):
         return physical
     # Complete physical state and all future-reused/external carry participate.
