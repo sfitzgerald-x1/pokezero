@@ -1,6 +1,13 @@
 name: GPU engine CPU component checks
 
 on:
+  workflow_dispatch:
+    inputs:
+      tier:
+        description: Component tier to run on demand
+        type: choice
+        options: [light, extended]
+        default: light
   pull_request:
     paths:
       - 'gpu_engine/**'
@@ -14,6 +21,9 @@ on:
       - 'tests/data/gpu_ordinary_switch_catalog.json'
       - 'scripts/run_gpu_component_shard.py'
       - 'scripts/run_component_memory_check.py'
+      - 'tests/gpu_component_heavy.json'
+      - 'tests/gpu_component_extended.json'
+      - '.github/workflows/gpu-engine-components-extended.yml'
       - 'tests/test_gpu_component_shards.py'
       - 'tests/test_component_memory_check.py'
       - '.github/workflows/gpu-engine-components.yml'
@@ -23,11 +33,12 @@ permissions:
 
 concurrency:
   # A configured isolated run preserves an older hosted run's diagnostics.
-  group: gpu-components-${{ github.event.pull_request.number }}${{ github.event.pull_request.head.repo.full_name == github.repository && github.head_ref == vars.CPU_COMPONENT_RUNNER_BRANCH && vars.CPU_COMPONENT_RUNNER && '-isolated' || '' }}
+  group: gpu-components-${{ github.event_name == 'workflow_dispatch' && format('manual-{0}-{1}', github.ref_name, inputs.tier) || github.event.pull_request.number }}${{ github.event.pull_request.head.repo.full_name == github.repository && github.head_ref == vars.CPU_COMPONENT_RUNNER_BRANCH && vars.CPU_COMPONENT_RUNNER && '-isolated' || '' }}
   cancel-in-progress: true
 
 jobs:
   cpu-component-shards:
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.tier == 'light' }}
     name: CPU component shard ${{ matrix.shard }}
     # Repository configuration can select isolated high-memory Linux runners
     # for one branch without rerouting unrelated pull requests.
@@ -140,7 +151,7 @@ jobs:
           # including fresh original module/class fixtures for every case.
           python scripts/run_component_memory_check.py --output "$ci_memory_dir" \
             --label 'shard-${{ matrix.shard }}' --summary "$GITHUB_STEP_SUMMARY" -- \
-            python scripts/run_gpu_component_shard.py --index '${{ matrix.shard }}' --count 16 --process-blocks \
+            python scripts/run_gpu_component_shard.py --tier light --index '${{ matrix.shard }}' --count 16 --process-blocks \
             --isolate-standard-class test_gpu_engine_execution_runtime_plumbing.ExecutionRuntimePlumbingTests \
             --isolate-standard-class test_gpu_engine_status_kernel_owner_drain.StatusKernelOwnerDrainTests \
             --low-optimization-case test_gpu_engine_color_change_owning.ColorChangeOwningTests.test_actual_original_frame_both_views_public_types_requests_and_physics \
@@ -172,7 +183,7 @@ jobs:
           if-no-files-found: error
 
   cpu-components:
-    if: ${{ always() }}
+    if: ${{ always() && (github.event_name != 'workflow_dispatch' || inputs.tier == 'light') }}
     needs: cpu-component-shards
     runs-on: ubuntu-latest
     steps:
@@ -180,3 +191,7 @@ jobs:
         env:
           SHARD_RESULT: ${{ needs.cpu-component-shards.result }}
         run: test "$SHARD_RESULT" = success
+
+  extended-on-demand:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.tier == 'extended' }}
+    uses: ./.github/workflows/gpu-engine-components-extended.yml
