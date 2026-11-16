@@ -6,6 +6,12 @@ on:
       - 'third_party/poke-engine-gen3-patches.txt'
       - 'scripts/apply_poke_engine_patches.py'
       - 'rust/pokezero-search/**'
+      - 'src/pokezero/joint_generator.py'
+      - 'src/pokezero/joint_native.py'
+      - 'src/pokezero/generator_weights.py'
+      - 'src/pokezero/data/gen3_team_model.json'
+      - 'tests/test_native_joint_generator.py'
+      - 'scripts/prove_gen3_team_completion.py'
       - 'gpu_engine/**'
       - 'tests/test_conditioned_native_resume.py'
       - 'tests/test_conditioned_native_faint_replacements.py'
@@ -63,6 +69,8 @@ jobs:
     env:
       NATIVE_SHARD: ${{ matrix.shard }}
       JAX_PLATFORMS: cpu
+      CUDA_VISIBLE_DEVICES: ''
+      NVIDIA_VISIBLE_DEVICES: void
       OMP_NUM_THREADS: '2'
       OPENBLAS_NUM_THREADS: '2'
       PYTHONPATH: src:.
@@ -79,7 +87,8 @@ jobs:
           node-version: '22.22.2'
       - name: Build isolated opt-in oracle bindings
         run: |
-          python -m pip install 'jax==0.12.0' 'numpy==2.5.4' 'maturin>=1.5,<2'
+          python -m pip install 'jax==0.12.0' 'numpy==2.5.4' 'maturin>=1.5,<2' 'z3-solver==5.4.1.0'
+          python scripts/prove_gen3_team_completion.py src/pokezero/data/gen3_team_model.json /tmp/joint-completion-proof
           scripts/vendor_poke_engine_src.sh "$(command -v python)"
           cargo test --manifest-path third_party/poke-engine-src/Cargo.toml --no-default-features --features gen3 --test test_gen3
           cargo test --manifest-path third_party/poke-engine-src/Cargo.toml --no-default-features --features gen3 --lib accuracy::tests
@@ -111,6 +120,7 @@ jobs:
           import os, unittest, pokezero_search
           assert pokezero_search.CONDITIONED_ORACLE_ENABLED
           names = [
+              'tests.test_native_joint_generator',
               'tests.test_conditioned_native_resume', 'tests.test_conditioned_native_faint_replacements',
               'tests.test_conditioned_native_ordinary', 'tests.test_gpu_engine_carry_law',
               'tests.test_ordinary_carry_panel',
@@ -142,10 +152,10 @@ jobs:
                     [name for name in names if name not in first]]
           assert set(groups[0]).isdisjoint(groups[1])
           assert set(groups[0]) | set(groups[1]) == set(names)
-          assert unittest.defaultTestLoader.loadTestsFromNames(names).countTestCases() == 168
+          assert unittest.defaultTestLoader.loadTestsFromNames(names).countTestCases() == 182
           shard = int(os.environ['NATIVE_SHARD'])
           assert shard in (0, 1)
-          expected = (48, 120)[shard]
+          expected = (48, 134)[shard]
           suite = unittest.defaultTestLoader.loadTestsFromNames(groups[shard])
           assert suite.countTestCases() == expected
           result = unittest.TextTestRunner(verbosity=2).run(suite)
