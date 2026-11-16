@@ -101,6 +101,29 @@ class LiteralStateShapeTests(unittest.TestCase):
 
 
 class GameplayCaptureTests(unittest.TestCase):
+    def test_legacy_pending_schema_spools_literal_records_before_per_root_refusal(self):
+        fixture=json.loads((Path(__file__).parent/'fixtures/state_schemas/pre_shed_skin_6caf071b.json').read_text())
+        fields=tuple(fixture['packet']);legacy_type=namedtuple('PreShedSkinState',fields)
+        current_state=state
+        def legacy_state(batch=1,*,hp=100,done=False):
+            current=current_state(batch,hp=hp,done=done)
+            values={name:getattr(current,name) for name in fields}
+            values['pending_residual']=np.array([hp==99]+[False]*(batch-1))
+            return legacy_type(**values)
+        with tempfile.TemporaryDirectory() as tmp:
+            path=Path(tmp)/'trace';spool=Path(tmp)/'spool';spool.mkdir()
+            with patch(__name__+'.state',side_effect=legacy_state), patch.object(trace,'BattleState',legacy_type):
+                measured=write_trace(path,batch=2)
+            header,counts=comparison._spool(path,measured,measured['gameplay_trace']['sha256'],spool)
+            self.assertEqual(counts,{101:2,102:2})
+            rows=[json.loads(line) for line in (spool/'101').read_text().splitlines()]
+            pending=rows[1]['payload']['after']['state']
+            self.assertTrue(pending['pending_residual'][0])
+            self.assertNotIn('shed_skin_draws',pending)
+            self.assertNotIn('shed_skin_draws',header['state_layout'])
+            with self.assertRaisesRegex(ValueError,'legacy suspended state lacks saved Shed Skin draws'):
+                comparison.decode_state(pending,header['state_layout'])
+
     def test_actual_boundaries_semantics_hashchain_terminal_and_bounded_capture(self):
         with tempfile.TemporaryDirectory()as tmp:
             path=Path(tmp)/'trace';measured=write_trace(path,batch=2)

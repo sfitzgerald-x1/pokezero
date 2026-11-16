@@ -93,10 +93,8 @@ class ChanceControl:
         return self.take_audit()
 
 
-def decode_state(packet, layout):
-    # The immediate pre-Shed Skin schema has no saved cure bank. Its closed
-    # turns can be promoted with an inactive zero bank; suspended turns cannot
-    # recover a missing random operand and must refuse rather than invent one.
+def _state_values(packet, layout):
+    """Validate either complete known storage schema without creating operands."""
     fields=set(BattleState._fields);legacy=fields-{'shed_skin_draws'}
     old=set(packet)==legacy
     if set(packet) not in (fields,legacy) or set(layout) not in ((fields,legacy) if old else (fields,)):
@@ -115,6 +113,14 @@ def decode_state(packet, layout):
         if dtype.kind != 'b' and (np.any(value < np.iinfo(dtype).min) or np.any(value > np.iinfo(dtype).max)):
             raise ValueError('state integer outside original dtype: '+name)
         values[name] = value.astype(dtype)
+    return values,old
+
+
+def decode_state(packet, layout):
+    # The immediate pre-Shed Skin schema has no saved cure bank. Its closed
+    # turns can be promoted with an inactive zero bank; suspended turns cannot
+    # recover a missing random operand and must refuse rather than invent one.
+    values,old=_state_values(packet,layout)
     if old:
         if values['pending_residual'].any():
             raise ValueError('legacy suspended state lacks saved Shed Skin draws')
@@ -456,7 +462,7 @@ def _spool(path, measured, expected_sha256, folder):
             if stream not in counts: raise ValueError('foreign stream in actual trace')
             if kind == 'INITIAL':
                 if stream in initials or counts[stream]: raise ValueError('duplicate/migrated constructor')
-                decode_state(payload['boundary']['state'], header['state_layout'])
+                _state_values(payload['boundary']['state'], header['state_layout'])
                 initials.add(stream); last[stream] = original._sha(payload['boundary'])
             elif kind == 'DECISION':
                 if (stream not in initials or payload['request'] != counts[stream]
@@ -464,7 +470,9 @@ def _spool(path, measured, expected_sha256, folder):
                         or original._sha(payload['before']) != last[stream]):
                     raise ValueError('actual decision history gap/reorder/before-state join changed')
                 before, after = payload['before'], payload['after']
-                for boundary in (before, after): decode_state(boundary['state'], header['state_layout'])
+                # Validate the literal historical schema here. Promotion to a
+                # current state (and any missing-operand refusal) is per root.
+                for boundary in (before, after): _state_values(boundary['state'], header['state_layout'])
                 if (after['frame'] != before['frame']+int(payload['executed'])
                         or before['cursor']['stream_id'] != stream or after['cursor']['stream_id'] != stream):
                     raise ValueError('actual executed frame/stream join changed')
