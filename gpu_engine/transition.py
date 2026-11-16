@@ -302,7 +302,13 @@ def initialize(state,table,*,eligible=True,tie_coin=None,_weather_trace=None,_de
                 _weather_trace=_herb_status.unknown(_weather_trace,_herb)
         state = state._replace(entry_pending=state.entry_pending.at[rows,side].set(
             state.entry_pending[rows,side] & ~pending))
-    if _weather_trace is not None:return _lum_update(state,table,pending_battle,_device_public=_device_public),_weather_trace
+    if _weather_trace is not None:
+        # Authored pending-entry states may carry a relation that Update cures.
+        # Preserve the conservative refusal before the relation disappears.
+        from . import engine_status_callbacks as status_callbacks
+        _weather_trace=status_callbacks.unknown(_weather_trace,pending_battle
+            & jnp.any((state.volatile&jnp.uint32(ATTRACT))!=0,axis=(1,2)))
+        return _lum_update(state,table,pending_battle,_device_public=_device_public),_weather_trace
     return _lum_update(state,table,pending_battle,_device_public=_device_public)
 
 
