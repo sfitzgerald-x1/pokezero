@@ -77,7 +77,8 @@ class Codex:
         def sample(public,detached,*,start,stop,**kw):
             made=harness.current[1]
             return pc.protocol.WorldRange(start,stop,('fixture',),made.root,made.worlds[start:stop],made.seeds[start:stop],
-                made.requested_worlds,tuple(dict(world=w.index,checks=[])for w in made.worlds[start:stop]))
+                made.requested_worlds,tuple(made.mapper_diagnostics[start:stop]) if made.mapper_diagnostics
+                else tuple(dict(world=w.index,checks=[])for w in made.worlds[start:stop]))
         self.stack=ExitStack()
         # Batch 2's prepare also reads the protocol tail's facts and passes defer_sleep / protocol_facts to from_b2: fake the
         # first (its shape: phase_d_tail.facts) and accept the second, so the outcome's root and worlds come through unchanged.
