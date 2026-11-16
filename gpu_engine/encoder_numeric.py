@@ -68,10 +68,17 @@ def ratio(numerator, denominator, *, limit=714, pair=False):
     """
     table = j.asarray(_ratio_table(limit, pair))
     numerator, denominator = j.broadcast_arrays(j.asarray(numerator), j.asarray(denominator))
-    denominator = j.where(denominator == 0, 1, denominator)
+    if j.issubdtype(denominator.dtype, j.floating):
+        bits = jax.lax.bitcast_convert_type(denominator, j.uint32)
+        zero = (bits & j.uint32(0x7fffffff)) == 0
+    else:
+        zero = denominator == 0
+    denominator = j.where(zero, 1, denominator)
     def integral_int32(x):
         if j.issubdtype(x.dtype, j.integer):return j.ones_like(x, bool)
-        return (x < float(2**31)) & (x == j.floor(x))
+        bits = jax.lax.bitcast_convert_type(x, j.uint32) & j.uint32(0x7fffffff)
+        subnormal = (bits > 0) & (bits < j.uint32(1 << 23))
+        return ~subnormal & (x < float(2**31)) & (x == j.floor(x))
     integer_domain = ((numerator >= 0) & (denominator > 0) &
         integral_int32(numerator) & integral_int32(denominator))
     n = j.clip(numerator, 0, denominator).astype(j.int32)
@@ -81,9 +88,11 @@ def ratio(numerator, denominator, *, limit=714, pair=False):
     def generic(_):
         def floating(_):
             raw = _float_quotient_pair(numerator, denominator)
-            high = raw[..., 0]
-            return j.where((high < 0)[..., None], 0,
-                j.where((high > 1)[..., None], j.stack((j.ones_like(high), j.zeros_like(high)), -1), raw))
+            high = jax.lax.bitcast_convert_type(raw[..., 0], j.uint32)
+            negative = (high >> j.uint32(31)) != 0
+            above_one = (high & j.uint32(0x7fffffff)) > j.uint32(0x3f800000)
+            one = j.stack((j.ones_like(raw[..., 0]), j.zeros_like(raw[..., 0])), -1)
+            return j.where(negative[..., None], 0, j.where(above_one[..., None], one, raw))
         result = jax.lax.cond(j.all(integer_domain),
             lambda _: _integer_ratio_pair(n, d), floating, None)
         return result if pair else result[..., 0]
@@ -100,13 +109,55 @@ def _float_quotient_pair(numerator, denominator):
         return mantissa, exponent, (bits >> j.uint32(31)) != 0
     n, ne, ns = decode(numerator)
     d, de, ds = decode(denominator)
-    raw = _integer_ratio_pair(n.astype(j.int32), j.maximum(d, 1).astype(j.int32))
-    scaled = j.ldexp(raw, (ne - de)[..., None])
-    signed = j.where((ns != ds)[..., None], -scaled, scaled)
-    return signed.at[..., 1].set(j.where(signed[..., 1] == 0, 0., signed[..., 1]))
+    raw = _integer_ratio_pair(n.astype(j.int32), j.maximum(d, 1).astype(j.int32),
+                              exponent_offset=ne - de)
+    bits = jax.lax.bitcast_convert_type(raw, j.uint32)
+    bits = bits ^ j.where(ns != ds, j.uint32(1 << 31), j.uint32(0))[..., None]
+    low = bits[..., 1]
+    bits = bits.at[..., 1].set(j.where((low & j.uint32(0x7fffffff)) == 0, j.uint32(0), low))
+    return jax.lax.bitcast_convert_type(bits, j.float32)
 
 
-def _integer_ratio_pair(numerator, denominator):
+def _round_shift53(high, low, shift):
+    """Round an unsigned two-word significand right by 29 or more bits."""
+    amount = j.clip(shift, 1, 63).astype(j.uint32)
+    small = amount <= j.uint32(32)
+    quotient = j.where(small,
+        (high << (j.uint32(32) - amount)) | (low >> amount),
+        high >> (amount - j.uint32(32)))
+    guard_position = j.where(small, amount - j.uint32(1), amount - j.uint32(33))
+    word = j.where(small, low, high)
+    guard = ((word >> guard_position) & j.uint32(1)) != 0
+    mask = (j.uint32(1) << guard_position) - j.uint32(1)
+    sticky = ((word & mask) != 0) | (~small & (low != 0))
+    up = guard & (sticky | ((quotient & j.uint32(1)) != 0))
+    return j.where(shift > 63, j.uint32(0), quotient + up.astype(j.uint32))
+
+
+def _float32_bits(high, low, exponent):
+    """Round at the final exponent, including subnormals, without float ops."""
+    mantissa = _round_shift53(high, low, j.full_like(exponent, 29))
+    carry = mantissa == j.uint32(1 << 24)
+    biased = exponent + 127 + carry.astype(j.int32)
+    mantissa = j.where(carry, mantissa >> j.uint32(1), mantissa)
+    normal = (biased.astype(j.uint32) << j.uint32(23)) | (mantissa & j.uint32(0x7fffff))
+    normal = j.where(biased >= 255, j.uint32(0x7f800000), normal)
+    subnormal = _round_shift53(high, low, 29 + (-126 - exponent))
+    return j.where(exponent < -126, subnormal, normal)
+
+
+def _scaled_integer_bits(magnitude, exponent):
+    """Encode magnitude * 2**exponent with one final float32 rounding."""
+    leading = 31 - jax.lax.clz(magnitude).astype(j.int32)
+    shift = (52 - leading).astype(j.uint32)
+    high = j.where(shift >= 32, magnitude << (shift - j.uint32(32)),
+                   magnitude >> (j.uint32(32) - shift))
+    low = magnitude << shift
+    bits = _float32_bits(high, low, exponent + leading)
+    return j.where(magnitude != 0, bits, j.uint32(0))
+
+
+def _integer_ratio_pair(numerator, denominator, *, exponent_offset=0):
     """Python binary64 quotient, split into float32 high and signed low.
 
     Remainders are below a positive int32 denominator, so doubling them fits
@@ -140,15 +191,19 @@ def _integer_ratio_pair(numerator, denominator):
     carry = high == j.uint32(1 << 21)
     low = j.where(carry, (low >> j.uint32(1)) | (high << j.uint32(31)), low)
     high = j.where(carry, high >> j.uint32(1), high)
-    exponent = -shift.astype(j.int32) + carry.astype(j.int32)
+    exponent = -shift.astype(j.int32) + carry.astype(j.int32) + exponent_offset
     mantissa = (high << j.uint32(3)) | (low >> j.uint32(29))
     residual = low & j.uint32((1 << 29) - 1)
     up32 = (residual > j.uint32(1 << 28)) | (
         (residual == j.uint32(1 << 28)) & ((mantissa & j.uint32(1)) != 0))
-    first = j.ldexp((mantissa + up32.astype(j.uint32)).astype(j.float32), exponent - 23)
-    magnitude = j.where(up32, j.uint32(1 << 29) - residual, residual).astype(j.float32)
-    second = j.ldexp(j.where(up32, -magnitude, magnitude), exponent - 52)
-    result = j.stack((first, second), axis=-1)
+    first = _float32_bits(high, low, exponent)
+    magnitude = j.where(up32, j.uint32(1 << 29) - residual, residual)
+    second = _scaled_integer_bits(magnitude, exponent - 52)
+    second = second | j.where(up32 & (second != 0), j.uint32(1 << 31), j.uint32(0))
+    # A subnormal first component's residual is at most half a subnormal ulp;
+    # it rounds to zero. Construct bits directly to avoid backend FTZ behavior.
+    second = j.where(exponent < -126, j.uint32(0), second)
+    result = jax.lax.bitcast_convert_type(j.stack((first, second), axis=-1), j.float32)
     return j.where((numerator > 0)[..., None], result, 0)
 
 

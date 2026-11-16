@@ -75,6 +75,33 @@ class EncoderNumericTests(unittest.TestCase):
         same_bits(jax.jit(lambda x: en.normalized(x, 714))(values),
                   np.minimum(1, values.astype(np.float64) / 714))
 
+    def test_subnormal_outputs_are_rounded_at_the_final_exponent(self):
+        tiny = np.float32(np.finfo(np.float32).tiny)
+        n = np.asarray([tiny, tiny, tiny, tiny, tiny, tiny], np.float32)
+        d = np.asarray([1.5, 3., 6., 714., 2**23, 2**24], np.float32)
+        expected = (n.astype(np.float64) / d.astype(np.float64)).astype(np.float32)
+        same_bits(jax.jit(en.ratio)(n, d), expected)
+        # Include values on both sides of the normal/subnormal boundary and
+        # random normal transports whose quotients require subnormal rounding.
+        rng = np.random.default_rng(176)
+        n = rng.integers(1 << 23, 1 << 25, size=4096, dtype=np.uint32).view(np.float32)
+        d = rng.uniform(1, 1000, size=len(n)).astype(np.float32)
+        expected = (n.astype(np.float64) / d.astype(np.float64)).astype(np.float32)
+        same_bits(jax.jit(en.ratio)(n, d), expected)
+
+    def test_generic_midpoint_remains_within_tolerance_outside_gen3(self):
+        denominator = 33554431
+        self.assertGreater(denominator, 714)
+        def sum_terms():
+            a = en.ratio(j.int32(1), j.int32(2), pair=True)
+            b = en.ratio(j.int32(1), j.int32(denominator), pair=True)
+            return en.value(en.add_pair(a, b))
+        got = np.asarray(jax.jit(sum_terms)())
+        expected = np.float32(1/2 + 1/denominator)
+        self.assertEqual(int(got.view(np.uint32)), 1056964608)
+        self.assertEqual(int(expected.view(np.uint32)), 1056964609)
+        self.assertLess(abs(float(got) - float(expected)), 1e-6)
+
     def test_hazard_exposure_rounds_the_entire_python_expression(self):
         count, layers = np.meshgrid(np.arange(7, dtype=np.int32),
                                     np.arange(4, dtype=np.int32), indexing='ij')
