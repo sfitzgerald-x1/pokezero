@@ -963,10 +963,11 @@ KO_ALLOWED = {'bonemerang': dict(user=('status', 'clause'))}
 # action runs at all: its PP, action history and move lines, and whatever that move does to either side (a status on the
 # pinch user, Spikes on its side, its own Baton Pass flag or recharge). So on a KO-cascade lane (the faint set, the
 # residual phase or the battle end moved) a pinch lane accepts any leaf, as a sleep landing does (A1); every other pinch
-# lane keeps the damage allowance (ALLOWED['pinch']). DM: the same holds on a KO-timing lane (a mon faints this step in
-# either tree with the faint set unchanged, the faint moved before or after the other side's queued action; the patched
-# pass's timing_lanes): lane_verdict's timing applies CASCADE_ALLOWED there, and nothing else of the KO rules.
+# lane keeps the damage allowance (ALLOWED['pinch']). Same-set faint timing is narrower: it requires a witnessed
+# one-PP action and matching executed-move count difference, and permits only that actor's move bookkeeping below.
 CASCADE_ALLOWED = {'pinch': ALL}
+TIMING_ACTION_LEAVES = ('state.pp', "trackers.mon_features['moves_shown']", 'trackers.pp_used',
+                        'trackers.tendency.opportunities', 'trackers.tendency.opportunity_turn')
 # DM: like the pinch boost, a stat modifier changes a hit's damage: the target's HP and what follows from it, and the
 # attacker's from the reply (Counter/Mirror Coat), recoil, drain and its HP items; a Marvel Scale self-hit is its holder's
 # own HP. Both sides take the damage allowance; a KO cascade accepts anything (CASCADE_ALLOWED).
@@ -1021,7 +1022,41 @@ def predicates(prs):
     return table
 
 
-def lane_verdict(changed, effects, side_axis, *, cascade=None, waive=(), cascade_accepted=None, timing=False):
+def ko_timing_sides(pre, fainted, base_fainted, pp, base_pp, post_active, base_active, move_count, base_move_count):
+    """Witness a cancelled ordinary one-PP action, not merely an unchanged faint set.
+
+    Fail closed for switches, resumed turns, charge/Struggle and multi-count actions. PP must differ only at the
+    selected active's slot, with exactly one tree spending one PP; its executed-move count must differ by the same
+    signed unit. The limited timing allowance never covers a move's arbitrary state effects.
+    """
+    empty = np.zeros((pre.lanes, 2), bool)
+    if base_active is None or any(x is None for x in (pp, base_pp, move_count, base_move_count)):return empty
+    active = np.asarray(pre.s['active']);actions = pre.actions;before = pre.s.get('pp')
+    if before is None:return empty
+    rows = np.arange(pre.lanes)[:, None];sides = np.arange(2)[None, :];slots = np.clip(actions, 0, 3)
+    a, b = np.asarray(pp), np.asarray(base_pp)
+    old = before[rows, sides, active, slots];here = a[rows, sides, active, slots];there = b[rows, sides, active, slots]
+    selected = ((np.arange(6)[None, None, :, None] == active[..., None, None]) &
+                (np.arange(4)[None, None, None, :] == slots[..., None, None]))
+    other_equal = np.where(selected, True, a == b).reshape(pre.lanes, 2, -1).all(-1)
+    delta = there - here
+    spent_once = (old > 0) & (np.minimum(here, there) == old - 1) & (np.maximum(here, there) == old)
+    count_delta = np.asarray(move_count) - np.asarray(base_move_count)
+    fainted, base_fainted = np.asarray(fainted, bool), np.asarray(base_fainted, bool)
+    same_faint = (fainted == base_fainted).reshape(pre.lanes, -1).all(-1)
+    active_faint = (fainted & (np.arange(6)[None, None, :] == active[..., None])).any((1, 2))
+    stable = (np.asarray(post_active) == active).all(-1) & (np.asarray(base_active) == active).all(-1)
+    ordinary = (~pre.s['pending_residual'].astype(bool) & (pre.s['queued_actor'] < 0) &
+                ((actions >= 0) & (actions < 4)).all(-1))
+    known_counts = ((np.asarray(move_count) >= 0) & (np.asarray(move_count) <= 4) &
+                    (np.asarray(base_move_count) >= 0) & (np.asarray(base_move_count) <= 4))
+    valid = (other_equal & spent_once & (np.abs(delta) == 1) & (count_delta[:, None] == delta) &
+             ~pre.struggle & (pre.active('charge_move') == 0))
+    valid &= (same_faint & active_faint & stable & ordinary & known_counts)[:, None]
+    return valid & (valid.sum(-1) == 1)[:, None]
+
+
+def lane_verdict(changed, effects, side_axis, *, cascade=None, waive=(), cascade_accepted=None, timing=()):
     """changed: {(leaf, side)} for side-axis leaves, {(leaf, None)} for side-less ones;
     effects: {effect: [actor sides]}; cascade: None, or dict(ko_sides=[2] bool (sides whose every tracker
     may follow a KO), mon_ok=callable(leaf, side) -> a KO_MON_LEAVES leaf differs only on that side's
@@ -1031,10 +1066,11 @@ def lane_verdict(changed, effects, side_axis, *, cascade=None, waive=(), cascade
     optional retype_ok=callable(leaf, side) -> bool: that side's RETYPE_LEAVES differ from the base only at a Color Change
     holder that fainted this step here or (un)fainted relative to the base).
     cascade_accepted: an optional list that collects the entries only CASCADE_ALLOWED accepted (listed, so they stay visible).
-    timing: a KO-timing lane (a mon faints this step in either tree): CASCADE_ALLOWED applies there too, but none of the
-    KO-consequence rules (the faint set is the same).
+    timing: actor side indices witnessed by ko_timing_sides. Only those sides' TIMING_ACTION_LEAVES and the executed
+    move count may follow the cancelled action; neither CASCADE_ALLOWED nor other KO rules apply on timing alone.
     Returns (unexpected entries, waived entries, entries accepted only as KO consequences)."""
     unexpected, waived, by_ko = [], [], []
+    timed_sides = tuple(timing) if isinstance(timing, (tuple, list, np.ndarray)) else ()
     for leaf, side in sorted(changed, key=lambda x: (x[0], -1 if x[1] is None else x[1])):
         ok = False
         for effect, actors in effects.items():
@@ -1042,11 +1078,14 @@ def lane_verdict(changed, effects, side_axis, *, cascade=None, waive=(), cascade
             if side is None:ok |= allowed_leaf(leaf, rule['glob'])
             else:ok |= any(allowed_leaf(leaf, rule['user' if side == a else 'target']) for a in actors)
             if ok:break
-        if not ok and (cascade is not None or timing):
-            # D: an effect's allowance on a KO-cascade lane only (CASCADE_ALLOWED); DM: or a KO-timing lane.
+        if not ok and cascade is not None:
+            # D: an effect's allowance on a KO-cascade lane only (CASCADE_ALLOWED).
             ok = any(allowed_leaf(leaf, CASCADE_ALLOWED[effect]['glob' if side is None else
                                   ('user' if side in actors else 'target')])
                      for effect, actors in effects.items() if effect in CASCADE_ALLOWED)
+            if ok and cascade_accepted is not None:cascade_accepted.append((leaf, side))
+        if not ok and timed_sides and any(effect in CASCADE_ALLOWED for effect in effects):
+            ok = (side in timed_sides and leaf in TIMING_ACTION_LEAVES) or (side is None and leaf == 'step.placeholder_moves')
             if ok and cascade_accepted is not None:cascade_accepted.append((leaf, side))
         if not ok and cascade is not None:
             # An effect's KO-only allowance on its actor's side, when the other side has a newly (un)fainted mon.
@@ -1952,6 +1991,7 @@ class Stepper:
                 if bag is not None and bag.ndim == 4 and bag.shape[-1] == len(bag_names):
                     m2['bag'] = j.stack([bag[..., bag_names.index(n)] for n in M2_BAG], axis=-1)
             return dict(digests=digests, pre_digests=pre, fainted=(state.hp > 0) & (out.step.state.hp <= 0), m1=m1,
+                move_count=out.step.placeholder_moves,
                 extra={n: named_out[n] for n in faint_leaves if n in named_out}, calls=calls,
                 ko={n: named_out[n] for n in KO_MON_LEAVES + KO_LINK_LEAVES if n in named_out},
                 post_active=out.step.state.active, post_done=out.step.state.done,
@@ -2202,6 +2242,10 @@ def patched_pass(args, *, step_override=None, prepared=None):
     if not manifest.get('post_active_recorded'):
         warnings.append('base pass predates the post-step actives: departures are read from this tree only')
     uninvolved_leaves = {};new_outputs = None
+    # Decode the old base's existing scalar digest without changing or replacing its saved pass. Ordinary turns
+    # execute at most two caller moves and two Sleep Talk children. Unknown/malformed digests provide no evidence.
+    move_count_digests = np.asarray(lane_digest(np.arange(5, dtype=np.int32), 5))
+    move_count_index = base_names.index('step.placeholder_moves') if 'step.placeholder_moves' in base_names else None
     listing = (out / 'changed.jsonl').open('x');begin = time.perf_counter()
     names_order = _template_names(template)
     defaults = state_defaults(template_named)
@@ -2242,12 +2286,6 @@ def patched_pass(args, *, step_override=None, prepared=None):
             done = np.asarray(named['state.done'])[:real]
             ko_mons_all = result['fainted'][:real] != base['fainted']                       # [L,2,6] (un)fainted mons
             cascade_lanes = ko_mons_all.reshape(real, -1).any(-1)
-            # DM (GPU pass, shard-000294 lane 741): a damage change can move a faint within the step while the same mon
-            # faints in both trees (a Double-Edge's recoil KO before the target's move here, the target's own move after
-            # it there), which decides whether the other side's queued action runs: its PP, action history and lines.
-            # The faint set is unchanged, so cascade_lanes misses it; a faint this step in either tree is a KO-timing
-            # lane, where CASCADE_ALLOWED (the damage effects: pinch, the DM effects, Stick) applies as on a cascade.
-            timing_lanes = (np.asarray(result['fainted'][:real], bool) | np.asarray(base['fainted'], bool)).reshape(real, -1).any(-1)
             # A phase shift: the residual was deferred in exactly one tree (see FAMILIES['residual']).
             phase_lanes = diff[:, position['state.pending_residual']].any(-1) if 'state.pending_residual' in position \
                 else np.zeros(real, bool)
@@ -2261,6 +2299,14 @@ def patched_pass(args, *, step_override=None, prepared=None):
                 residual_lanes = np.ones(real, bool)
             base_post_active = base['post_active'] if 'post_active' in base.files else None
             base_ko = {n: base[f'ko_{i:02d}'] for i, n in enumerate(ko_leaves)}
+            base_move_count = np.full(real, -1, np.int32)
+            if move_count_index is not None:
+                matches = (base['digests'][:, move_count_index, None] == move_count_digests[None, :, None, :]).all((-2, -1))
+                base_move_count = np.where(matches.sum(-1) == 1, matches.argmax(-1), -1)
+            timing_pp = result['ko'].get('state.pp')
+            timing_actors = ko_timing_sides(pre, result['fainted'][:real], base['fainted'],
+                None if timing_pp is None else timing_pp[:real], base_ko.get('state.pp'), result['post_active'][:real], base_post_active,
+                result['move_count'][:real], base_move_count)
             base_wit = {n: base[f'wit_{i:02d}'] for i, n in enumerate(witness_leaves or ())}
             wit = {n: np.asarray(v)[:real] for n, v in result['wit'].items()}
             sub_pre = np.asarray(named['state.substitute_hp'])[:real] if 'state.substitute_hp' in named else None
@@ -2442,9 +2488,10 @@ def patched_pass(args, *, step_override=None, prepared=None):
                     cascade_info = dict(ko_sides=ko_mons.any(-1), mon_ok=mon_ok, families=families, effect_ok=effect_ok,
                                         retype_ok=retype_ok)
                 by_cascade = []
-                timing = bool(timing_lanes[lane]) and not cascade
+                timing_sides = np.flatnonzero(timing_actors[lane]).tolist() if not cascade else []
+                timing = bool(timing_sides)
                 unexpected, waived, by_ko = lane_verdict(entries, effects, side_axis, cascade=cascade_info, waive=args.waive or (),
-                    cascade_accepted=by_cascade, timing=timing) if changed_rest and effects else ([], [], [])
+                    cascade_accepted=by_cascade, timing=timing_sides) if changed_rest and effects else ([], [], [])
                 m2_wrong = []
                 if changed_rest and m2_rules and any(e in effects for e in M2_EFFECTS):
                     # M2: an M2 effect's per-mon leaves may differ only at that side's pre- or post-step active.
@@ -2493,7 +2540,8 @@ def patched_pass(args, *, step_override=None, prepared=None):
                 else:
                     counts['changed_but_uninvolved'] += 1
                     for n in changed_rest:uninvolved_leaves[n] = uninvolved_leaves.get(n, 0) + 1
-                listing.write(json.dumps(dict(shard=path.name, lane=lane, tick=tick, kind=kind, ko_cascade=cascade, ko_timing=timing, phase_shift=phase,
+                listing.write(json.dumps(dict(shard=path.name, lane=lane, tick=tick, kind=kind, ko_cascade=cascade, ko_timing=timing,
+                    ko_timing_sides=timing_sides, phase_shift=phase,
                     terminal=terminal, terminal_residual=terminal_residual,
                     involved={k: v for k, v in effects.items()}, leaves=changed, entries=labels, faint_rule=faint_explained,
                     clear_volatile_rule=[f'{l}@{side}' for l, side in clear_explained],

@@ -355,22 +355,49 @@ class DigestAndRuleTests(unittest.TestCase):
         cascade = dict(ko_sides=[False, False], mon_ok=lambda leaf, side: False, families=())
         self.assertEqual(lane_verdict({('state.status', 1)}, {'silkscarf': [0]}, None, cascade=cascade)[0], [])
 
-    def test_ko_timing_lane_applies_cascade_allowed_only(self):
+    def test_ko_timing_lane_accepts_only_witnessed_actor_bookkeeping(self):
         """DM (GPU pass, shard-000294 lane 741): with the faint set unchanged, a damage change moved a faint within the step
         (a Double-Edge user's recoil KO before the target's move in one tree, the target's own KO of it after its move in
-        the other), so the target's move bookkeeping differs. A KO-timing lane accepts that for the CASCADE_ALLOWED
-        effects (pinch, the DM effects) and gives nothing else, nor any KO-consequence rule."""
+        the other), so the target's move bookkeeping differs. A timing witness permits only that actor's bookkeeping,
+        not arbitrary effects of a move or the other actor's bookkeeping."""
         from gpu_engine.v2e_regress import lane_verdict
         moved = {('state.pp', 0), ('step.placeholder_moves', None), ("trackers.mon_features['moves_shown']", 0),
                  ('trackers.pp_used', 0), ('trackers.tendency.opportunities', 0)}
         for effect in ('marvelscale', 'pinch', 'silkscarf', 'plusminus', 'twistedspoon'):
             self.assertEqual(lane_verdict(moved, {effect: [1]}, None)[0], sorted(moved, key=lambda x: (x[0], -1 if x[1] is None else x[1])))
-            self.assertEqual(lane_verdict(moved, {effect: [1]}, None, timing=True)[0], [], effect)
-            accepted = [];lane_verdict(moved, {effect: [1]}, None, timing=True, cascade_accepted=accepted)
+            self.assertEqual(lane_verdict(moved, {effect: [1]}, None, timing=(0,))[0], [], effect)
+            accepted = [];lane_verdict(moved, {effect: [1]}, None, timing=(0,), cascade_accepted=accepted)
             self.assertEqual(sorted(accepted, key=str), sorted(moved, key=str))
-        self.assertEqual(len(lane_verdict(moved, {'irontail': [1]}, None, timing=True)[0]), len(moved))
+        self.assertEqual(len(lane_verdict(moved, {'irontail': [1]}, None, timing=(0,))[0]), len(moved))
+        # A same-set faint is not a timing witness. Even a valid action witness cannot mask these unrelated writes.
+        unrelated = {('state.moves', 0), ('state.stats', 1), ('state.status', 0), ('state.pp', 1)}
+        for timing in (True, (), (0,)):
+            self.assertEqual(set(lane_verdict(unrelated, {'marvelscale': [1]}, None, timing=timing)[0]), unrelated)
         # No KO-consequence rule on a timing lane: a fainted-mon leaf with a non-cascade effect stays unexpected.
-        self.assertEqual(lane_verdict({('state.forced_switch', 0)}, {'irontail': [1]}, None, timing=True)[0], [('state.forced_switch', 0)])
+        self.assertEqual(lane_verdict({('state.forced_switch', 0)}, {'irontail': [1]}, None, timing=(0,))[0], [('state.forced_switch', 0)])
+
+    def test_ko_timing_requires_selected_pp_and_matching_move_count(self):
+        from gpu_engine.v2e_regress import Pre, ko_timing_sides, lane_digest
+        L = 9;s = pre_arrays(L);s['pp'] = np.full(s['moves'].shape, 10, np.int32)
+        s['pending_residual'][5] = True
+        named = {f'state.{k}': v for k, v in s.items()};named['actions'] = np.zeros((L, 2), np.int32)
+        pre = Pre(named, VOCAB, CALLABLE, np.zeros((L, 2), bool))
+        faint = np.zeros((L, 2, 6), bool);faint[:, 1, 0] = True;base_faint = faint.copy();base_faint[8] = False
+        pp = s['pp'].copy();base_pp = pp.copy();pp[[0, 4, 5, 6, 8], 0, 0, 0] = 9
+        pp[2, 0, 1, 0] = 9;pp[3, 0, 0, 0] = 8;base_pp[7, 0, 0, 0] = 9
+        active = s['active'].copy();active[6, 0] = 1
+        count = np.full(L, 2);base_count = np.ones(L, np.int32);base_count[[4, 7]] = 2;count[7] = 1
+        expected = np.zeros((L, 2), bool);expected[[0, 7], 0] = True
+        got = ko_timing_sides(pre, faint, base_faint, pp, base_pp, active, s['active'], count, base_count)
+        np.testing.assert_array_equal(got, expected)
+        self.assertFalse(ko_timing_sides(pre, faint, base_faint, pp, base_pp, active, None, count, base_count).any())
+        # Identify the old base's recorded scalar count without rerunning or replacing the shared base pass.
+        digests = np.asarray(lane_digest(np.arange(5, dtype=np.int32), 5))
+        recorded = np.repeat(digests[[2, 0, 4], None], 2, axis=1)
+        matches = (recorded[:, None] == digests[None, :, None, :]).all((-2, -1))
+        np.testing.assert_array_equal(matches.argmax(-1), [2, 0, 4])
+        recorded[0, 1, 0] ^= np.uint32(1)
+        self.assertFalse((recorded[0, None] == digests[:, None, :]).all((-2, -1)).any())
 
     def test_tier_d_pinch_accepts_anything_only_on_a_ko_cascade(self):
         """D: a pinch-boosted KO that moved within the step decides whether the target's action ran (the GPU pass's 13
