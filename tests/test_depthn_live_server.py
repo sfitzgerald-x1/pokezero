@@ -73,6 +73,25 @@ class FakePipeline:
     def close(self):self.closed=True
 
 
+async def serve_forever_closing_clients(self):
+    """CPython 3.13.18's asyncio.Server.serve_forever (Lib/asyncio/base_events.py), installed by the stop tests whatever this
+    Python's patch level: a cancelled serve_forever also closes every client connection (close_clients), before an accepted
+    request is answered. The server's stop must not rely on cancelling it."""
+    if self._serving_forever_fut is not None:raise RuntimeError(f'server {self!r} is already being awaited on serve_forever()')
+    if self._sockets is None:raise RuntimeError(f'server {self!r} is closed')
+    self._start_serving();self._serving_forever_fut=self._loop.create_future()
+    try:await self._serving_forever_fut
+    except asyncio.CancelledError:
+        try:self.close();self.close_clients();await self.wait_closed()
+        finally:raise
+    finally:self._serving_forever_fut=None
+
+
+def newer_asyncio():
+    import asyncio.base_events
+    return patch.object(asyncio.base_events.Server,'serve_forever',serve_forever_closing_clients)
+
+
 async def until(test,timeout=10.):
     deadline=time.monotonic()+timeout
     while not test():
@@ -138,7 +157,7 @@ class PipelinedServerTests(unittest.TestCase):
             for k in range(3):pipeline.complete(k)
             rows=await asyncio.gather(*clients);await asyncio.wait_for(task,10)
             return rows,pipeline.closed
-        rows,closed=self.scenario(body)
+        with newer_asyncio():rows,closed=self.scenario(body)   # CI's CPython 3.13.18 closed the three connections at stop()
         self.assertEqual(sorted(r['request_id']for r in rows),['r0','r1','r2']);self.assertTrue(closed)
 
     def test_a_fatal_error_closes_its_connection(self):
@@ -151,6 +170,23 @@ class PipelinedServerTests(unittest.TestCase):
 
 
 class ServerTests(unittest.TestCase):
+    def test_stop_answers_the_requests_already_accepted(self):
+        """Serial serving (no pipeline): a stop while accepted requests are being searched answers them first, then serve
+        returns, under CPython 3.13.18's serve_forever too (it closes client connections when cancelled)."""
+        async def scenario():
+            search=FakeSearch(delay=.4);server=S.Server(search,max_requests=4);port=free_port();ready=asyncio.Event()
+            task=asyncio.create_task(server.serve('127.0.0.1',port,on_ready=ready.set));await asyncio.wait_for(ready.wait(),10)
+            async def client(i):
+                reader,writer=await asyncio.open_connection('127.0.0.1',port)
+                writer.write(original.encode(request(i)));await writer.drain()
+                row=await asyncio.wait_for(original.receive(reader),20);writer.close();await writer.wait_closed();return row
+            clients=[asyncio.create_task(client(i))for i in range(2)]
+            await until(lambda:sum(len(b)for _,b in search.batches)==2)   # both accepted and being searched
+            server.stop();rows=await asyncio.gather(*clients);await asyncio.wait_for(task,10)
+            return rows,server.closing
+        with newer_asyncio():rows,closing=asyncio.run(scenario())
+        self.assertEqual(sorted(r['request_id']for r in rows),['r0','r1']);self.assertTrue(closing)
+
     def test_requests_batch_through_codexs_queue_with_arrival_stamps(self):
         async def scenario():
             search=FakeSearch(delay=.05);server=S.Server(search,max_requests=4,batch_wait_seconds=.05);port=free_port();ready=asyncio.Event()
