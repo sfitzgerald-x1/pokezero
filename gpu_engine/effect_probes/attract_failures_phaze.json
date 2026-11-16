@@ -1,7 +1,7 @@
 {
  "schema": "pokezero.effect_probe.scenario.v1",
  "move": "attract_failures_phaze",
- "note": "A positive Attract followed by repeated, same-gender, genderless, Oblivious and Protect failures; source phazing clears the relation.",
+ "note": "Four distinct level-5 reserves are KOd by Seismic Toss, leaving one bench candidate (the established forced-sample probe path). Then a positive Attract is followed by repeated, same-gender, genderless, Oblivious and Protect failures. Roar forces the source out and clears the relation; the final turn checks the cleared recipient can act. The final recipient roll is immobilizing if stale infatuation survives.",
  "teams": [
   [
    {
@@ -17,51 +17,55 @@
     "gender": "M"
    },
    {
-    "species": "Metagross",
-    "moves": [
-     "metalclaw",
-     "splash",
-     "protect",
-     "rest"
-    ],
-    "ability": "Clear Body",
-    "item": "",
-    "gender": "N"
-   },
-   {
-    "species": "Jynx",
-    "moves": [
-     "pound",
-     "splash",
-     "protect",
-     "rest"
-    ],
-    "ability": "Oblivious",
-    "item": "",
-    "gender": "F"
-   },
-   {
-    "species": "Starmie",
+    "species": "Magikarp",
     "moves": [
      "splash",
-     "surf",
-     "recover",
+     "tackle",
+     "flail",
      "protect"
     ],
-    "ability": "Natural Cure",
-    "item": "Leftovers",
+    "ability": "Swift Swim",
+    "item": "",
+    "level": 5,
     "gender": "M"
    },
    {
-    "species": "Skarmory",
+    "species": "Tentacruel",
     "moves": [
      "splash",
      "protect",
-     "spikes",
-     "drillpeck"
+     "surf",
+     "sonicboom"
     ],
-    "ability": "Keen Eye",
-    "item": "Leftovers",
+    "ability": "Liquid Ooze",
+    "item": "",
+    "level": 5,
+    "gender": "M"
+   },
+   {
+    "species": "Smeargle",
+    "moves": [
+     "splash",
+     "spore",
+     "spikes",
+     "encore"
+    ],
+    "ability": "Own Tempo",
+    "item": "",
+    "level": 5,
+    "gender": "M"
+   },
+   {
+    "species": "Dunsparce",
+    "moves": [
+     "splash",
+     "tackle",
+     "protect",
+     "rest"
+    ],
+    "ability": "Serene Grace",
+    "item": "",
+    "level": 5,
     "gender": "M"
    },
    {
@@ -84,7 +88,7 @@
      "splash",
      "protect",
      "roar",
-     "rest"
+     "seismictoss"
     ],
     "ability": "Cute Charm",
     "item": "",
@@ -154,6 +158,38 @@
  ],
  "script": [
   [
+   "switch 2",
+   "move 4"
+  ],
+  [
+   "switch 3",
+   ""
+  ],
+  [
+   "move 1",
+   "move 4"
+  ],
+  [
+   "switch 4",
+   ""
+  ],
+  [
+   "move 1",
+   "move 4"
+  ],
+  [
+   "switch 5",
+   ""
+  ],
+  [
+   "move 1",
+   "move 4"
+  ],
+  [
+   "switch 1",
+   ""
+  ],
+  [
    "move 1",
    "move 1"
   ],
@@ -209,5 +245,10 @@
  "axes": [],
  "expect": {
   "exact": true
+ },
+ "tape_steps": {
+  "20": {
+   "effect.1.4": 0
+  }
  }
 }
