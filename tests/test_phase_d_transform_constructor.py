@@ -177,6 +177,7 @@ class TransformConstructorTests(unittest.TestCase):
         from pokezero.env import BattleStartOverride
         from pokezero.showdown_fixture import pack_team
         from gpu_engine import phase_d_protocol_world as protocol
+        lines=('|gen|3','|gametype|singles',*lines)
         with (patch('subprocess.Popen',side_effect=AssertionError('no simulator')),
                 patch('pokezero.local_showdown.load_gen3_randbat_source_cached',return_value=self.source.original),
                 patch('pokezero.local_showdown.load_showdown_dex_cached',return_value=self.catalog.dex)):
