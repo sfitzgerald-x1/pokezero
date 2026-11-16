@@ -912,6 +912,9 @@ def _copied_move_spec(
     """
 
     move_id = normalize_id(move.id)
+    # Four-slot specs include padding; Transform gives PP only to real moves.
+    if move_id == "none":
+        return move
     # Request rows report Hidden Power as plain `hiddenpower`; the spec id is the
     # engine's typed+BP form. Same tolerance `_move_specs` applies on the
     # non-transformed path, and gen3 has at most one Hidden Power slot.

@@ -32,6 +32,17 @@ def fixture(name='ditto',owner=0):
 
 
 class TransformMappingTests(unittest.TestCase):
+    def test_copy_fallback_keeps_absent_slots_neutral(self):
+        from pokezero.engine_world import _apply_transform
+        spec,metadata,base=fixture()
+        donor=replace(spec.side_two.pokemon[0],moves=(*spec.side_two.pokemon[0].moves,MoveSpec('none',0,True)))
+        sides=dict(p1=SideSpec((base,)),p2=SideSpec((donor,)))
+        copied=_apply_transform(sides,{'p1':'snorlax'})
+        mapped=map_spec(BattleSpec(copied['p1'],copied['p2']),metadata=metadata,seed=7,
+            turn=3,active_turns=(1,1),happiness=((255,),(255,)))
+        self.assertFalse(mapped.refusals)
+        self.assertEqual(mapped.state.pp[0,0,0].tolist(),[5,5,5,0])
+
     def test_retained_request_order_paid_base_pp_and_choice_lock(self):
         from test_phase_d_transform_constructor import source_fixture,request
         source,metadata=source_fixture();metadata['vocabulary']['items'].append('choiceband')
