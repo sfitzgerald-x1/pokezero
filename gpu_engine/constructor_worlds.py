@@ -1130,7 +1130,7 @@ def fix_knocked_items(state,owner,facts,tables):
     """The world state with item_knocked[0, side, p] set for each member the lines show knocked off (facts.knocked, both sides):
     A2's engine leaf (gpu_engine/state.py: pokemon.itemKnockedOff, never reset), which Showdown's Gen 3 Knock Off sets on the
     target whose item it removes (data/mods/gen4/moves.ts:700-701 at f76228a13) and the engine's own Knock Off sets on the same
-    hit (transition.py:2020-2023). Its only engine reader is Trick's Gen 3-4 failure check (transition.py:1703; Showdown's
+    hit (transition.py:2063-2064). Its only engine reader is Trick's Gen 3-4 failure check (transition.py:1733; Showdown's
     sim/pokemon.ts:1853 takeItem: gen <= 4 and either mon's itemKnockedOff): without it an in-tree Trick on that member succeeds
     where Showdown fails. from_b2 and the materializer predate the leaf and leave it False. Members join by normalized species,
     as fix_trace_base_ability joins (the owner's side: the request's party; the peer's: this world's party, whose revealed
