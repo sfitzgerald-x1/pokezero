@@ -163,7 +163,7 @@ def stack_record(tree_head=None):
         jaxlib = importlib.metadata.version('jaxlib')
     except importlib.metadata.PackageNotFoundError:
         jaxlib = None
-    device = jax.devices()[0]; cache = jax.config.jax_compilation_cache_dir; xla_caches = jax.config.jax_persistent_cache_enable_xla_caches or ''
+    device = jax.devices()[0]; cache = jax.config.jax_compilation_cache_dir; xla_caches = getattr(jax.config, 'jax_persistent_cache_enable_xla_caches', '') or ''
     autotune = os.path.join(cache, 'xla_gpu_per_fusion_autotune_cache_dir') if cache and ('all' in xla_caches or 'xla_gpu_per_fusion_autotune_cache_dir' in xla_caches) else None
     return dict(jax=jax.__version__, jaxlib=jaxlib, platform=device.platform, device_kind=device.device_kind, devices=len(jax.devices()),
                 xla_flags=os.environ.get('XLA_FLAGS'), compilation_cache_dir=cache, compilation_cache_enabled=bool(jax.config.jax_enable_compilation_cache),
@@ -190,6 +190,8 @@ def main(argv=None):
     p = parser(); a = p.parse_args(argv[:cut]); server_argv = argv[cut + 1:]
     if any(x is not None and x <= 0 for x in (a.chunks, a.wide_nodes, a.max_roots)) or a.min_priced <= 0:
         p.error('--chunks, --wide-nodes, --max-roots and --min-priced are positive')
+    if a.max_roots is not None and a.max_roots < a.min_priced:
+        p.error('--max-roots must be at least --min-priced')
     if Path(a.out).exists():
         p.error(f'{a.out} exists')
     if not Path(a.out).resolve().parent.is_dir():
@@ -211,16 +213,23 @@ def main(argv=None):
         print(f'{TAG} SETUP_ERROR build: {type(error).__name__}: {error}'[:1000], flush=True); return 3
     requests = [dict(r, schema=SCHEMA, request_id=f'gate-{i}') for i, r in enumerate(saved)]
     started = time.perf_counter()
-    report = gate(search, blocks, wide, requests, min_priced=a.min_priced, negative_control=a.negative_control, log=lambda line: print(line, flush=True))
+    try:
+        report = gate(search, blocks, wide, requests, min_priced=a.min_priced, negative_control=a.negative_control, log=lambda line: print(line, flush=True))
+    except MemoryError:
+        raise
+    except Exception as error:
+        print(f'{TAG} SETUP_ERROR gate report: {type(error).__name__}: {error}'[:1000], flush=True); return 3
     try:
         head = srv.tree_commit()
     except Exception as error:
         head = f'unavailable: {type(error).__name__}: {error}'[:200]
-    report.update(rung=a.rung, roots_file=a.roots, cache=a.cache, chunks=a.chunks or server.blocks_per_call, seconds=time.perf_counter() - started,
-                  stack=stack_record(head), tree_commit_label=search.tree_commit, pricer_identity=search.pricer_identity, argv=argv)
     try:
+        report.update(rung=a.rung, roots_file=a.roots, cache=a.cache, chunks=a.chunks or server.blocks_per_call, seconds=time.perf_counter() - started,
+                      stack=stack_record(head), tree_commit_label=search.tree_commit, pricer_identity=search.pricer_identity, argv=argv)
         Path(a.out).write_text(json.dumps(report, indent=1, sort_keys=True, default=repr))
-    except OSError as error:
+    except MemoryError:
+        raise
+    except Exception as error:
         print(f'{TAG} SETUP_ERROR report: {type(error).__name__}: {error}'[:1000], flush=True); return 3
     t = report['tally']
     print(f'{TAG} {report["verdict"]}{" (negative control)" if a.negative_control else ""} rung={a.rung} chunks={report["chunks"]} '

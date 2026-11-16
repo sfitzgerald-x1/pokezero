@@ -39,6 +39,38 @@ def mutant(fn,old,new):
 
 
 class PackingTests(unittest.TestCase):
+    def test_host_outputs_byte_identical_to_pinned_reference(self):
+        from dataclasses import fields as members
+        from tests.fixtures import wide_leaf_host_reference as old
+        rng=np.random.default_rng(1715)
+        for trial in range(100):
+            P=int(rng.integers(0,150));ko,kr=map(int,rng.integers(1,10,2));K=ko*kr
+            chunk=K*int(rng.integers(1,5));lanes=chunk*int(rng.integers(1,5));nodes=int(rng.integers(1,40))
+            if trial in (98,99):P,ko,kr,chunk,lanes,nodes=(32 if trial==98 else 64)*81,9,9,2187,34992,2187
+            # Groups need only be contiguous, not sorted. Empty parents and
+            # non-prefix live slots exercise holes on both sides of each node.
+            groups=np.array([7,2,11])[np.sort(rng.integers(0,3,P))]
+            own=rng.random((P,ko))<.7;opp=rng.random((P,kr))<.7
+            if trial%10==0:own[:]=False
+            kw=dict(nodes=nodes,lanes=lanes,chunk=chunk)
+            a=old.pack_wide_leaf(groups,own,opp,**kw);b=dn.pack_wide_leaf(groups,own,opp,**kw)
+            for member in members(a):
+                x,y=getattr(a,member.name),getattr(b,member.name)
+                if isinstance(x,np.ndarray):
+                    self.assertEqual((x.dtype,x.shape,x.tobytes()),(y.dtype,y.shape,y.tobytes()),(trial,member.name))
+                else:self.assertEqual(x,y,(trial,member.name))
+            n,M=4,max(1,-(-P//4));indices=rng.permutation(n*M)[:P];pw,pid=indices//M,indices%M
+            E=a.calls*lanes;bits=rng.integers(0,2**32,size=E,dtype=np.uint32)
+            # Preserve float payload bits, including signed zeros and NaNs.
+            special=np.array([0,0x80000000,0x7fc00001,0x7fa00001,0xff800000],np.uint32)
+            bits[:min(E,len(special))]=special[:min(E,len(special))]
+            data=dict(value=bits.view(np.float32),digest=rng.integers(0,2**32,size=(E,2),dtype=np.uint32),
+                status=rng.integers(-128,128,size=E,dtype=np.int8))
+            specs=[('value',(),np.float32),('digest',(2,),np.uint32),('status',(),np.int8)]
+            A=old.place_wide_leaf(a,data,pw,pid,n,M,ko,kr,specs);B=dn.place_wide_leaf(b,data,pw,pid,n,M,ko,kr,specs)
+            for name in A:self.assertEqual((A[name].dtype,A[name].shape,A[name].tobytes()),
+                (B[name].dtype,B[name].shape,B[name].tobytes()),(trial,name))
+
     def pack(self,group,own,opp,**kw):
         own=np.asarray(own,bool);opp=np.asarray(opp,bool);p=dn.pack_wide_leaf(group,own,opp,**kw)
         k_opp=opp.shape[1];L=kw['lanes'];per_call=np.bincount(p.lane_pos//L,minlength=p.calls)
@@ -179,7 +211,8 @@ class FrameTests(unittest.TestCase):
             from dataclasses import replace
             return replace(p,lane_live=live.reshape(p.lane_live.shape))
         bugs=dict(off_by_one=('place_wide_leaf',mutant(place,'np.asarray(fields[name])[pack.lane_pos]','np.asarray(fields[name])[np.minimum(pack.lane_pos+1,len(fields[name])-1)]')),
-            swapped_slots=('place_wide_leaf',mutant(place,'pack.lane_slot_own,pack.lane_slot_opp]','pack.lane_slot_own[::-1],pack.lane_slot_opp[::-1]]')),
+            swapped_slots=('place_wide_leaf',mutant(place,'+pack.lane_slot_own)*k_opp+pack.lane_slot_opp',
+                '+pack.lane_slot_own[::-1])*k_opp+pack.lane_slot_opp[::-1]')),
             neighbour_chance=('make_wide_leaf_program',mutant(program,'chance=jax.vmap(executor.sample)(states)',
                 'chance=jax.tree.map(lambda x:j.roll(x,1,axis=0),jax.vmap(executor.sample)(states))')),
             dropped_lane=('pack_wide_leaf',dropped))
@@ -301,7 +334,14 @@ class LiveLayoutTests(unittest.TestCase):
             with patch.dict(os.environ,TS.PINNED),patch.object(TS.S,'build',side_effect=RuntimeError('no GPU')),redirect_stdout(out):
                 rc=G.main(['--roots',roots,'--rung','DN2W8','--out',os.path.join(tmp,'setup.json'),'--']+server)
             self.assertEqual(rc,3);self.assertIn('SETUP_ERROR build: RuntimeError: no GPU',out.getvalue());self.assertFalse(os.path.exists(os.path.join(tmp,'setup.json')))
-            for bad in(['--chunks','0'],['--max-roots','0'],['--min-priced','0'],['--out',os.path.join(tmp,'missing','x.json')]):
+            # Metadata collection errors use the documented setup-error exit.
+            for target in ('stack_record','program_hashes'):
+                output=io.StringIO()
+                with patch.object(G,target,side_effect=RuntimeError('metadata unavailable')),patch.dict(os.environ,TS.PINNED),\
+                        patch.object(TS.S,'build',return_value=s),LS.Codex(outcomes),redirect_stdout(output):
+                    rc=G.main(['--roots',roots,'--rung','DN2W8','--out',os.path.join(tmp,target+'.json'),'--min-priced','1','--']+server)
+                self.assertEqual(rc,3);self.assertIn('SETUP_ERROR',output.getvalue());self.assertIn('metadata unavailable',output.getvalue())
+            for bad in(['--chunks','0'],['--max-roots','0'],['--min-priced','0'],['--max-roots','1','--min-priced','2'],['--out',os.path.join(tmp,'missing','x.json')]):
                 with self.subTest(bad=bad),redirect_stdout(io.StringIO()),__import__('contextlib').redirect_stderr(io.StringIO()),self.assertRaises(SystemExit)as e:
                     G.main(['--roots',roots,'--rung','DN2W8','--out',os.path.join(tmp,'x.json'),*bad,'--']+server)
                 self.assertEqual(e.exception.code,2)
