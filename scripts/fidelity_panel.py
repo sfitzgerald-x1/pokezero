@@ -100,6 +100,10 @@ def roster(F, pool, metadata, showdown, node, first_game, games):
                         regeneration_sha256=hashlib.sha256(raw.encode()).hexdigest())
 
 
+def protocol_completed(rows, expected):
+    return len(rows) == expected and all(r['status'] != 'HARNESS_ERROR' for r in rows)
+
+
 def run(a):
     tree = Path(a.tree).resolve();jax, j, np, F, transition = _engine(tree)
     blob = Path(a.team_pool).read_bytes();pool_sha = hashlib.sha256(blob).hexdigest()
@@ -195,8 +199,10 @@ def run(a):
             print(json.dumps(dict(game_id=game, status=row['status'], ordinary_turns=row['gpu_ordinary_turns'])), flush=True)
     if git('rev-parse', 'HEAD') != source or git('status', '--porcelain', '--', *bound):raise RuntimeError('bound source changed during trace')
     counts = collections.Counter(r['status'] for r in rows)
+    result = dict(**header, protocol_completed=protocol_completed(rows, n), status_counts=dict(counts), rows=rows)
     with out.open('x') as target:
-        json.dump(dict(**header, status_counts=dict(counts), rows=rows), target, sort_keys=True);target.write('\n')
+        json.dump(result, target, sort_keys=True);target.write('\n')
+    return result
 
 
 MATCHED = ('MATCHED_TERMINAL', 'MATCHED_THROUGH_TURN20')
@@ -216,9 +222,13 @@ def merge(a):
     out = dict(schema='pokezero.fidelity_panel.v1', source_commit=commits.pop(), pool_sha256=shards[0]['pool_sha256'],
                panel=dict(first_game=panel['first_game'], games=panel['games']), format_id=shards[0]['format_id'],
                chance_tape_schema=shards[0]['chance_tape_schema'], diag=any(s.get('diag') for s in shards),
+               protocol_completed=protocol_completed(rows, panel['games'])
+                   and all(s.get('protocol_completed', True) is True for s in shards),
                status_counts=dict(counts), matched=matched, games=len(rows), rows=rows)
     with open(a.out, 'x') as f:json.dump(out, f, sort_keys=True);f.write('\n')
-    print(f"matched {matched}/{len(rows)}", dict(counts))
+    prefix = '' if out['protocol_completed'] else 'INCOMPLETE: '
+    print(f"{prefix}matched {matched}/{len(rows)}", dict(counts))
+    return out
 
 
 def check_canonical(a):
@@ -356,8 +366,10 @@ def state_cause(row, teams):
 
 
 def attribute(a):
-    import numpy as np
     p = json.loads(Path(a.panel).read_text())
+    if p.get('protocol_completed', True) is not True or not protocol_completed(p['rows'], p['games']):
+        raise ValueError('incomplete panel: harness execution failed')
+    import numpy as np
     with np.load(a.pool,allow_pickle=False) as archive:
         meta = json.loads(archive['metadata_utf8'].tobytes())
         # NpzFile re-decompresses an array on every subscription. Cache only
@@ -398,8 +410,9 @@ def main():
     t = sub.add_parser('attribute');t.add_argument('panel');t.add_argument('--pool', required=True);t.add_argument('--out', required=True)
     c = sub.add_parser('check-canonical');c.add_argument('panel');c.add_argument('fidelity')
     a = ap.parse_args()
-    if a.cmd == 'run':run(a)
-    elif a.cmd == 'merge':merge(a)
+    if a.cmd in ('run', 'merge'):
+        result = run(a) if a.cmd == 'run' else merge(a)
+        raise SystemExit(0 if result['protocol_completed'] else 1)
     elif a.cmd == 'attribute':attribute(a)
     else:raise SystemExit(check_canonical(a))
 

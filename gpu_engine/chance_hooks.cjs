@@ -102,7 +102,12 @@ function install(Battle,PRNG,load,audit,initializing=()=>null,pokemonPath='') {
       ||!singles(b)||!active(b,p)||!active(b,other.pokemon)||p.side===other.pokemon.side)
       return unknown('ENTRY_INSERTION_CONTEXT',{m,n});
     let first;
-    if(c)first=take(c,'entry_tie',0,c.resuming?c.entry_ties[1]:c.draws[1][10]);
+    if(c){
+      // Legacy tapes cannot distinguish ordinary entry from a resumed request,
+      // whose engine coins come from the fresh entry stream instead.
+      if(c.schema!==TAPE_V4)return unknown('ENTRY_PHASE_ABSENT',{role:'entry_tie'});
+      first=take(c,'entry_tie',0,c.resuming?c.entry_ties[1]:c.draws[1][10]);
+    }
     else{
       first=initializing()?.initial_tie;
       if(first!==0&&first!==1)return unknown('INITIAL_TIE_ABSENT',null);
@@ -304,6 +309,7 @@ function install(Battle,PRNG,load,audit,initializing=()=>null,pokemonPath='') {
       if(singles(battle)&&group.length===2&&['switch','instaswitch'].includes(group[0].choice)
         &&group.every(x=>x.choice===group[0].choice&&active(battle,x.pokemon))
         &&group[0].pokemon.side!==group[1].pokemon.side){
+        if(c.schema!==TAPE_V4)return unknown('ENTRY_PHASE_ABSENT',{role:'switch_tie'});
         const first=take(c,'switch_tie',0,c.resuming?c.entry_ties[0]:c.draws[0][11]);
         group.sort((a,b)=>a.pokemon.side.n===first?-1:1);items.splice(start,2,...group);return;
       }

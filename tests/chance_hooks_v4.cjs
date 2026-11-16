@@ -183,6 +183,34 @@ for(const bit of [0,1]){
   assert.deepEqual(coupled('switch_tie').map(e=>e.raw),[1-bit]);
   assert.deepEqual(coupled('entry_tie').map(e=>e.raw),[bit]);checks++;
 }
+// Actual double KOs create replacement requests. With unequal lead Speeds the
+// insertion tie is the first consumer; equal leads also exercise instaswitch.
+// Legacy tapes lack the phase and fresh coins, so cannot claim a coupling.
+for(const equalLeads of [false,true])for(const version of [1,2,4]){
+  const first={...mon('Electrode','Soundproof'),moves:['explosion']};
+  const foe=equalLeads?{...first}:mon('Magikarp','Swift Swim');
+  const b=battle([first,mon('Groudon','Drought')],[foe,mon('Kyogre','Drizzle')]);
+  const make=resuming=>{
+    const t=T();t.draws[0][11]=1;t.draws[1][10]=1;t.resuming=resuming;t.entry_ties=[0,0];
+    if(version!==4){t.schema=`pokezero.gpu_chance_tape.v${version}`;
+      for(const key of ['phazing','entry_ties','resuming'])delete t[key];
+      if(version===1)delete t.effect;
+    }
+    return t;
+  };
+  controlled(make(false),()=>b.makeChoices('move 1','move 1'));
+  assert(b.sides.every(s=>s.active[0].fainted));
+  if(version===4){
+    controlled(make(true),()=>b.makeChoices('switch 2','switch 2'));
+    assert.equal(b.field.weather,'raindance');assert.equal(coupled('entry_tie')[0].raw,0);
+    if(equalLeads)assert.equal(coupled('switch_tie')[0].raw,0);
+  }else{
+    assert.throws(()=>controlled(make(true),()=>b.makeChoices('switch 2','switch 2')),/ENTRY_PHASE_ABSENT/);
+    assert(events.some(e=>e.kind==='UNRESOLVED'));
+    assert(!events.some(e=>e.kind==='COUPLED'&&['entry_tie','switch_tie'].includes(e.role)));
+  }
+  checks++;
+}
 // A handler with the same name but a different callback never inherits an
 // order-irrelevance proof. Nor does an unreviewed own-holder ability.
 for(const forged of [false,true]){
