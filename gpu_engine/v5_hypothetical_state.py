@@ -23,7 +23,7 @@ class Mapping:
     refusals: tuple[str, ...]
 
 
-def map_spec(spec, *, metadata, seed, turn, active_turns, happiness, dex=None, held_volatiles=False, arrays=None):
+def map_spec(spec, *, metadata, seed, turn, active_turns, happiness, dex=None, held_volatiles=False, arrays=None, transform_last_moves=None):
     """Trusted lower mapping; the public-root factory supplies source inputs.
 
     ``held_volatiles`` maps the public volatiles the engine holds since fidelity A2/M2 instead of refusing them:
@@ -204,7 +204,21 @@ def map_spec(spec, *, metadata, seed, turn, active_turns, happiness, dex=None, h
                     arrays['transform_moves'][0,seat]=ids;arrays['transform_pp'][0,seat]=pp
                     arrays['transform_hidden_power'][0,seat]=hidden
             last=side.last_used_move
-            if last:
+            if arrays['transformed'][0,seat] and transform_last_moves is not None:
+                # The CPU spec's slot was resolved against the original set.
+                # Resolve the public move identity against the copied set now.
+                name=normalize_id(transform_last_moves[seat] or '')
+                canonical=lambda x:'hiddenpower' if x.startswith('hiddenpower') else x
+                matches=[k for k,mid in enumerate(arrays['moves'][0,seat,active])
+                    if mid and canonical(normalize_id(vocab['moves'][mid]))==canonical(name)]
+                index=-1 if name=='transform' else matches[0] if len(matches)==1 else None
+                if index is None:raise ValueError('PUBLIC_TRANSFORM_LAST_MOVE_UNAVAILABLE')
+                move=identity('moves','transform') if index<0 else arrays['moves'][0,seat,active,index]
+                arrays['last_action_kind'][0,seat]=2;arrays['last_action_index'][0,seat]=index
+                arrays['last_move'][0,seat,active]=move
+                if matches and normalize_id(side.pokemon[active].item or '')=='choiceband':
+                    arrays['choice_move'][0,seat,active]=move
+            elif last:
                 if last=='move:struggle':
                     arrays['last_action_kind'][0,seat]=3
                     arrays['last_move'][0,seat,active]=identity('moves','struggle')

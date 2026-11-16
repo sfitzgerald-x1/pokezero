@@ -120,6 +120,15 @@ class TransformMappingTests(unittest.TestCase):
 
 class TransformHistoryTests(unittest.TestCase):
     start=('|switch|p1a: donor|Kecleon, L80|100/100','|switch|p2a: copy|Ditto, L80|100/100')
+    def test_later_trace_confirmation_does_not_reveal_unknown_copied_owner_view(self):
+        lines=('|switch|p1a: bird|Articuno, L80|100/100','|-ability|p1a: bird|Pressure|[silent]',
+            '|switch|p2a: copy|Ditto, L80|100/100','|-transform|p2a: copy|p1a: bird',
+            '|switch|p1a: tracer|Gardevoir, L80|100/100',
+            '|-ability|p1a: tracer|Pressure|[from] ability: Trace|[of] p2a: copy')
+        read=facts.history(lines)
+        self.assertEqual(read['public']['p2','ditto'],'')
+        self.assertEqual(read['public']['p1','gardevoir'],'pressure')
+
     def test_only_overrides_before_the_copy_refuse(self):
         copy='|-transform|p2a: copy|p1a: donor'
         change='|-start|p1a: donor|typechange|Water|[from] ability: Color Change'

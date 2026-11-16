@@ -49,8 +49,10 @@ def history(lines):
     member=lambda seat,name:names.get((seat,name),normalize_id(name))
     current=lambda who:running.get(who,original.get(who,''))
     def reveal(who,ability,authoritative=False):
-        ledger=running if who in borrowed else original
-        if authoritative or not ledger.get(who):ledger[who]=ability
+        # B2 confirmations do not update an existing copy, even when that
+        # owner's copied ability was unknown (notably private Gen 3 Pressure).
+        if running.get(who) or (who in borrowed and who[0] in copies):return
+        if authoritative or not original.get(who):original[who]=ability
     for line in lines:
         parts=line.split('|')
         if len(parts)<3 or parts[1]=='request':continue

@@ -251,6 +251,7 @@ def materialize(root, start, *, prepared, history, own_static, seed, retained=No
             own_moods.append(own_static.happiness[matches[0]])
         moods[history.owner]=tuple(own_moods)
         mapped=map_spec(world.spec,metadata=metadata,dex=catalog.dex,seed=seed,
+            transform_last_moves=tuple(payload['sides'][seat].get('lastUsedMove','') for seat in ('p1','p2')),
             turn=payload['turn'],active_turns=_chronology(history),happiness=tuple(moods))
         if mapped.state is None:return Result(None,mapped.refusals)
         physical_gender=np.array(mapped.state.gender,copy=True)

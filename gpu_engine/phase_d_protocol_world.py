@@ -603,6 +603,7 @@ def materialize_protocol(root,start,*,inputs,seed,key=None):
         mood[owner]=tuple(map(int,detached.own['happiness']))
         mapping_spec,cursors=tail.mapping_spec(world.spec,tail_facts['replacement'])
         mapped=map_spec(mapping_spec,metadata=metadata,dex=catalog.dex,seed=seed,
+            transform_last_moves=tuple(projected['sides'][seat].get('lastUsedMove','') for seat in ('p1','p2')),
             turn=root.materialization_payload['turn'],active_turns=_once(inputs,root,'chronology',lambda:_chronology(inputs.lines)),happiness=tuple(mood),held_volatiles=True,
             arrays=(lambda:_host_arrays(seed,key)) if HOST_WORLDS else None)
         if mapped.state is None:

@@ -209,6 +209,10 @@ class TransformConstructorTests(unittest.TestCase):
         adapter=self.adapter(base,0)
         root=live.from_b2(adapter,packet,self.source,self.metadata,address=DecisionAddress(1,1,0),lines=base)
         slot=0;self.assertTrue(root.public.transform_borrowed[0,1,slot])
+        # Exact §2.6 marker, including the departed encounter and all neutral slots.
+        expected=np.zeros((1,2,6),bool);expected[0,1,slot]=True
+        np.testing.assert_array_equal(root.public.transform_borrowed,expected)
+        self.assertFalse(np.any(root.public.transformed))
         world=live.sample_worlds(root,self.source,self.tables,count=16,seed=7).worlds[0]
         self.assertIsNotNone(world.state,world.refusals)
         at=int(np.flatnonzero(np.asarray(world.public.physical_to_public)[0,1]==slot)[0])
