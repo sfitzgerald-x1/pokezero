@@ -1,0 +1,213 @@
+{
+ "schema": "pokezero.effect_probe.scenario.v1",
+ "move": "attract_failures_phaze",
+ "note": "A positive Attract followed by repeated, same-gender, genderless, Oblivious and Protect failures; source phazing clears the relation.",
+ "teams": [
+  [
+   {
+    "species": "Alakazam",
+    "moves": [
+     "attract",
+     "splash",
+     "protect",
+     "rest"
+    ],
+    "ability": "Synchronize",
+    "item": "",
+    "gender": "M"
+   },
+   {
+    "species": "Metagross",
+    "moves": [
+     "metalclaw",
+     "splash",
+     "protect",
+     "rest"
+    ],
+    "ability": "Clear Body",
+    "item": "",
+    "gender": "N"
+   },
+   {
+    "species": "Jynx",
+    "moves": [
+     "pound",
+     "splash",
+     "protect",
+     "rest"
+    ],
+    "ability": "Oblivious",
+    "item": "",
+    "gender": "F"
+   },
+   {
+    "species": "Starmie",
+    "moves": [
+     "splash",
+     "surf",
+     "recover",
+     "protect"
+    ],
+    "ability": "Natural Cure",
+    "item": "Leftovers",
+    "gender": "M"
+   },
+   {
+    "species": "Skarmory",
+    "moves": [
+     "splash",
+     "protect",
+     "spikes",
+     "drillpeck"
+    ],
+    "ability": "Keen Eye",
+    "item": "Leftovers",
+    "gender": "M"
+   },
+   {
+    "species": "Celebi",
+    "moves": [
+     "splash",
+     "protect",
+     "psychic",
+     "recover"
+    ],
+    "ability": "Natural Cure",
+    "item": "Leftovers",
+    "gender": "M"
+   }
+  ],
+  [
+   {
+    "species": "Clefable",
+    "moves": [
+     "splash",
+     "protect",
+     "roar",
+     "rest"
+    ],
+    "ability": "Cute Charm",
+    "item": "",
+    "gender": "F"
+   },
+   {
+    "species": "Snorlax",
+    "gender": "M",
+    "ability": "Thick Fat",
+    "item": "",
+    "moves": [
+     "splash",
+     "protect",
+     "roar",
+     "rest"
+    ]
+   },
+   {
+    "species": "Metagross",
+    "gender": "N",
+    "ability": "Clear Body",
+    "item": "",
+    "moves": [
+     "splash",
+     "protect",
+     "roar",
+     "rest"
+    ]
+   },
+   {
+    "species": "Jynx",
+    "gender": "F",
+    "ability": "Oblivious",
+    "item": "",
+    "moves": [
+     "splash",
+     "protect",
+     "roar",
+     "rest"
+    ]
+   },
+   {
+    "species": "Blissey",
+    "gender": "F",
+    "ability": "Natural Cure",
+    "item": "",
+    "moves": [
+     "splash",
+     "protect",
+     "roar",
+     "rest"
+    ]
+   },
+   {
+    "species": "Jolteon",
+    "moves": [
+     "splash",
+     "protect",
+     "thunderbolt",
+     "batonpass"
+    ],
+    "ability": "Volt Absorb",
+    "item": "Leftovers",
+    "gender": "M"
+   }
+  ]
+ ],
+ "script": [
+  [
+   "move 1",
+   "move 1"
+  ],
+  [
+   "move 1",
+   "move 1"
+  ],
+  [
+   "move 2",
+   "switch 2"
+  ],
+  [
+   "move 1",
+   "move 1"
+  ],
+  [
+   "move 2",
+   "switch 3"
+  ],
+  [
+   "move 1",
+   "move 1"
+  ],
+  [
+   "move 2",
+   "switch 4"
+  ],
+  [
+   "move 1",
+   "move 1"
+  ],
+  [
+   "move 2",
+   "switch 5"
+  ],
+  [
+   "move 1",
+   "move 2"
+  ],
+  [
+   "move 1",
+   "move 1"
+  ],
+  [
+   "move 2",
+   "move 3"
+  ],
+  [
+   "move 1",
+   "move 1"
+  ]
+ ],
+ "axes": [],
+ "expect": {
+  "exact": true
+ }
+}

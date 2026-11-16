@@ -108,13 +108,15 @@ class LegacyStreamTests(unittest.TestCase):
         expected = jax.vmap(lambda k: jax.random.randint(jax.random.fold_in(k, 1732050), (2, 4), 0,
             j.array([16, 16, 4, 2], j.int32)))(split)
         effect = np.asarray(new.effect)
-        np.testing.assert_array_equal(effect, np.asarray(expected))
-        self.assertEqual(effect.shape, (self.LANES, 2, 4));self.assertEqual(new.effect.dtype, j.int32)
-        for column, bound in enumerate((16, 16, 4, 2)):
+        np.testing.assert_array_equal(effect[..., :4], np.asarray(expected))
+        fifth = jax.vmap(lambda k: jax.random.randint(jax.random.fold_in(k, 2236067), (2, 1), 0, 2, dtype=j.int32))(split)
+        np.testing.assert_array_equal(effect[..., 4:], np.asarray(fifth))
+        self.assertEqual(effect.shape, (self.LANES, 2, 5));self.assertEqual(new.effect.dtype, j.int32)
+        for column, bound in enumerate((16, 16, 4, 2, 2)):
             self.assertEqual(set(np.unique(effect[..., column]).tolist()), set(range(bound)))
         # A different stream from every original field it could alias (same split key, other salts).
         self.assertFalse(np.array_equal(effect[..., 0], np.asarray(new.draws)[..., 4]))
-        self.assertEqual((self.t.EFFECT_SALT, self.t.EFFECT_BOUNDS), (1732050, (16, 16, 4, 2)))
+        self.assertEqual((self.t.EFFECT_SALT, self.t.EFFECT_BOUNDS), (1732050, (16, 16, 4, 2, 2)))
 
     def test_key_advance_and_six_field_callers_are_unchanged(self):
         jax, j, t = self.jax, self.j, self.t
@@ -174,7 +176,7 @@ class BonemerangTests(unittest.TestCase):
         """No thaw/full paralysis/confusion hit, no crit, max damage roll, accuracy roll 0, side 0 wins ties; the
         effect stream: no second-hit crit, max second-hit roll. draws/effect: per-lane {(side, column): value}."""
         j = self.j;d = np.zeros((B, 2, 12), np.int32);d[:, :, 1:3] = 99;d[:, :, 4] = 15;d[:, :, 5] = 15
-        e = np.zeros((B, 2, 4), np.int32);e[:, :, 0] = 15;e[:, :, 1] = 15
+        e = np.zeros((B, 2, 5), np.int32);e[:, :, 0] = 15;e[:, :, 1] = 15
         for target, lanes in ((d, draws), (e, effect)):
             for lane, edits in enumerate(lanes):
                 for (side, column), value in edits.items():target[lane, side, column] = value
@@ -332,7 +334,7 @@ class BonemerangTests(unittest.TestCase):
         s = s._replace(pending_residual=j.ones(B, bool), queued_actor=j.zeros(B, j.int32), queued_actions=j.zeros((B, 2), j.int32),
             baton_pass=s.baton_pass.at[:, 1].set(True), forced_switch=s.forced_switch.at[:, 1].set(True),
             residual_draws=self.chance().draws)
-        saved = np.zeros((B, 2, 4), np.int32);saved[:, :, 0] = 15;saved[:, :, 1] = 15;saved[1::2, 0, 0] = 0   # odd lanes: crit2
+        saved = np.zeros((B, 2, 5), np.int32);saved[:, :, 0] = 15;saved[:, :, 1] = 15;saved[1::2, 0, 0] = 0   # odd lanes: crit2
         s = s._replace(effect_draws=j.asarray(saved))
         crit_supplied = self.chance(effect=[{(0, 0): 0}] * B)
         quiet_supplied = self.chance()
