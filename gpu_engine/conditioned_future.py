@@ -30,6 +30,8 @@ SAVED_CURE = "shed_skin_draws"
 
 
 def _saved_cure(data):
+    if data.get("pending_residual") and SAVED_CURE not in data:
+        raise ValueError("MISSING_SAVED_SHED_SKIN_BLOCK")
     value=mapping._freeze(data.get(SAVED_CURE,(0,0)))
     if mapping._shape(value)!=(2,) or any(type(v) is not int or not 0<=v<100 for v in value):
         raise ValueError("INVALID_SAVED_SHED_SKIN_BLOCK")
@@ -69,6 +71,7 @@ def _binding_digest(raw_native, raw_jax, capsule, certificate, source_certificat
 
 
 def _check_binding(value):
+    _saved_cure(dict(value.raw_jax))
     if (value.integrity_sha256 != _binding_digest(value.raw_native, value.raw_jax,
             value.capsule, value.certificate, value.source_certificate)
             or value.certificate.input_fields != value.raw_jax
@@ -134,6 +137,7 @@ def suspended_input_from_jax(state, index, metadata, *, certificate, module=None
     try:
         data = mapping._sample(state, index)
         raw = mapping._freeze(data)
+        _saved_cure(data)
         if not isinstance(certificate, mapping.Certificate):
             raise ValueError("SUSPENSION_PROVENANCE_REQUIRED")
         required_static = {f"{side}.pokemon[{p}]" for side in mapping.SIDE_NAMES for p in range(6)}
