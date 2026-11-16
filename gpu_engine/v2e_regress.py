@@ -914,6 +914,15 @@ def allowed_leaf(name, families):
 # are never involvement (design 5.2). `none` is the base-against-base self-test.
 ALLOWED['shedskin'] = dict(user=('hp','status','reveal','clause','visible'), target=('hp','clause','visible'), glob=())
 
+SHED_SKIN_STATUS_LEAVES = tuple('state.'+name for name in ('status','status_counter','sleep_skipped','rest_origin'))
+
+
+def shed_skin_status_member_ok(leaf, side, post, reference, active):
+    """A cure's physical status writes belong only to the residual holder, never its bench."""
+    if leaf not in post or leaf not in reference:return False
+    differ=(np.asarray(post[leaf][side])!=np.asarray(reference[leaf][side])).reshape(6,-1).any(-1)
+    return not (differ & ~active_mask(active)[side]).any()
+
 
 PLUGINS = {
     'SS': dict(shedskin=shed_skin_holders),
@@ -952,7 +961,7 @@ def predicates(prs):
     return table
 
 
-def lane_verdict(changed, effects, side_axis, *, cascade=None, waive=(), cascade_accepted=None):
+def lane_verdict(changed, effects, side_axis, *, cascade=None, waive=(), cascade_accepted=None, shed_skin_member_ok=None):
     """changed: {(leaf, side)} for side-axis leaves, {(leaf, None)} for side-less ones;
     effects: {effect: [actor sides]}; cascade: None, or dict(ko_sides=[2] bool (sides whose every tracker
     may follow a KO), mon_ok=callable(leaf, side) -> a KO_MON_LEAVES leaf differs only on that side's
@@ -961,6 +970,7 @@ def lane_verdict(changed, effects, side_axis, *, cascade=None, waive=(), cascade
     this tree's saved effect block equals the design derivation per side (state.effect_draws is accepted only there),
     optional retype_ok=callable(leaf, side) -> bool: that side's RETYPE_LEAVES differ from the base only at a Color Change
     holder that fainted this step here or (un)fainted relative to the base).
+    shed_skin_member_ok: required per-member status evidence for the Shed Skin allowance.
     cascade_accepted: an optional list that collects the entries only CASCADE_ALLOWED accepted (listed, so they stay visible).
     Returns (unexpected entries, waived entries, entries accepted only as KO consequences)."""
     unexpected, waived, by_ko = [], [], []
@@ -968,8 +978,11 @@ def lane_verdict(changed, effects, side_axis, *, cascade=None, waive=(), cascade
         ok = False
         for effect, actors in effects.items():
             rule = ALLOWED.get(effect, ALL)
-            if side is None:ok |= allowed_leaf(leaf, rule['glob'])
-            else:ok |= any(allowed_leaf(leaf, rule['user' if side == a else 'target']) for a in actors)
+            if side is None:accept = allowed_leaf(leaf, rule['glob'])
+            else:accept = any(allowed_leaf(leaf, rule['user' if side == a else 'target']) for a in actors)
+            if accept and effect=='shedskin' and leaf in SHED_SKIN_STATUS_LEAVES:
+                accept = shed_skin_member_ok is not None and shed_skin_member_ok(leaf,side)
+            ok |= accept
             if ok:break
         if not ok and cascade is not None:
             # D: an effect's allowance on a KO-cascade lane only (CASCADE_ALLOWED).
@@ -2200,6 +2213,8 @@ def patched_pass(args, *, step_override=None, prepared=None):
                 residual_lanes = np.ones(real, bool)
             base_post_active = base['post_active'] if 'post_active' in base.files else None
             base_ko = {n: base[f'ko_{i:02d}'] for i, n in enumerate(ko_leaves)}
+            ss_post = {n:np.asarray(result['ko'][n])[:real] for n in SHED_SKIN_STATUS_LEAVES
+                if 'shedskin' in table and n in result['ko']}
             base_wit = {n: base[f'wit_{i:02d}'] for i, n in enumerate(witness_leaves or ())}
             wit = {n: np.asarray(v)[:real] for n, v in result['wit'].items()}
             sub_pre = np.asarray(named['state.substitute_hp'])[:real] if 'state.substitute_hp' in named else None
@@ -2382,8 +2397,13 @@ def patched_pass(args, *, step_override=None, prepared=None):
                                         shed_skin_ok=None if result.get('shed_skin_ok') is None else np.asarray(result['shed_skin_ok'])[lane],
                                         retype_ok=retype_ok)
                 by_cascade = []
+                ss_member_ok = None
+                if changed_rest and 'shedskin' in effects:
+                    ss_values={n:v[lane] for n,v in ss_post.items()}
+                    ss_reference={n:base_ko[n][lane] for n in SHED_SKIN_STATUS_LEAVES if n in base_ko}
+                    ss_member_ok=lambda leaf,side: shed_skin_status_member_ok(leaf,side,ss_values,ss_reference,post_active[lane])
                 unexpected, waived, by_ko = lane_verdict(entries, effects, side_axis, cascade=cascade_info, waive=args.waive or (),
-                    cascade_accepted=by_cascade) if changed_rest and effects else ([], [], [])
+                    cascade_accepted=by_cascade,shed_skin_member_ok=ss_member_ok) if changed_rest and effects else ([], [], [])
                 m2_wrong = []
                 if changed_rest and m2_rules and any(e in effects for e in M2_EFFECTS):
                     # M2: an M2 effect's per-mon leaves may differ only at that side's pre- or post-step active.

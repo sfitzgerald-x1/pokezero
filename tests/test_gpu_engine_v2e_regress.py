@@ -427,6 +427,45 @@ class TwoPassTests(unittest.TestCase):
             step_override=step, prepared=(self.context, template or self.template))
         return code, json.loads((out / 'report.json').read_text()), [json.loads(x) for x in (out / 'changed.jsonl').read_text().splitlines()]
 
+    def test_shed_skin_cure_cannot_clear_an_unrelated_benched_member(self):
+        import jax
+        import jax.numpy as j
+        from gpu_engine import v2e_regress as r
+        from gpu_engine.v2e_capture import leaf_paths
+        root=self.tmp/'ss-members';shards=root/'cap'/'shards';shards.mkdir(parents=True)
+        state=lanes_state(self.LANES,154)
+        names=('status','status_counter','sleep_skipped','rest_origin')
+        state=state._replace(**{name:j.ones_like(getattr(state,name)) for name in names})
+        tree=(state,j.zeros((self.LANES,2),j.int32),trackers(self.LANES))
+        template=jax.tree.map(lambda x:x[:1],tree)
+        np.savez_compressed(shards/'shard-000000.npz',tick=np.int64(0),level=np.int64(0),
+            **{f'l{i:03d}':np.asarray(x) for i,x in enumerate(jax.tree.leaves(tree))})
+        (shards.parent/'capture.json').write_text(json.dumps(dict(shards=1,paths=leaf_paths(template))))
+        vocab={**VOCAB,'abilities':['shedskin',*VOCAB['abilities'][1:]]}
+        context={**self.context,'pool':SimpleNamespace(metadata=lambda:dict(vocabulary=vocab))}
+        base=root/'base'
+        self.assertEqual(r.base_pass(self.args(out=base,shards=str(shards),pad_lanes=self.LANES),
+            step_override=base_step,prepared=(context,template)),0)
+        def cure(s,a,t,*,wide):
+            out=base_step(s,a,t);changes={}
+            for name in names:
+                value=getattr(out.step.state,name)
+                for member in ((0,1) if wide else (0,)):
+                    value=value.at[:,0,member].set(j.where(s.done,value[:,0,member],j.zeros_like(value[:,0,member])))
+                changes[name]=value
+            return result(out.step.state._replace(**changes),out.trackers)
+        for wide in (False,True):
+            out=root/('bench-mutant' if wide else 'holder-only')
+            code=r.patched_pass(self.args(out=out,base=str(base),shards=str(shards),pr='SS',faint_clear=False),
+                step_override=lambda s,a,t:cure(s,a,t,wide=wide),prepared=(context,template))
+            report=json.loads((out/'report.json').read_text())
+            self.assertEqual(code,int(wide),report['counts'])
+            self.assertEqual(report['counts']['changed_but_uninvolved'],0)
+            if wide:
+                self.assertGreater(report['counts']['changed_involved_unexpected_fields'],0)
+                self.assertEqual(set(report['by_effect']['shedskin']['unexpected_fields']),
+                    {'state.'+name+'@user' for name in names})
+
     def test_base_pass_manifest(self):
         m = self.manifest
         self.assertEqual(m['lane_steps'], 2 * self.LANES + self.LANES // 2);self.assertEqual(m['live_lane_steps'], m['lane_steps'] - 3)

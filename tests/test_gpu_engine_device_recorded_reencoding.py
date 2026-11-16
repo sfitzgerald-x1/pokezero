@@ -162,6 +162,32 @@ class DeviceRecordedReencodingTests(unittest.TestCase):
         self.assertIsNotNone(candidates[0]);self.assertIsNone(pre);self.assertIn('NO_NEW_OUTCOME',post['reason'])
         self.assertFalse(any(x[0]=='advance'for x in runtime.calls))
 
+    def test_actual_base_schema_promotes_only_closed_turns_without_inventing_saved_draws(self):
+        from gpu_engine.finite_gameplay_comparison import decode_state
+        fixture=json.loads((Path(__file__).parent/'fixtures/state_schemas/pre_shed_skin_6caf071b.json').read_text())
+        source=subprocess.check_output(['git','show',fixture['source_commit']+':gpu_engine/state.py'],cwd=c.ROOT)
+        self.assertEqual(hashlib.sha256(source).hexdigest(),fixture['source_sha256'])
+        cls=next(n for n in ast.parse(source).body if isinstance(n,ast.ClassDef) and n.name=='BattleState')
+        fields={n.target.id for n in cls.body if isinstance(n,ast.AnnAssign)}
+        self.assertEqual(set(fixture['packet']),fields)
+        self.assertNotIn('shed_skin_draws',fields)
+        for layout in (fixture['layout'],r._state_layout()):
+            decoded=decode_state(fixture['packet'],layout)
+            for name in fields:
+                np.testing.assert_array_equal(getattr(decoded,name),fixture['packet'][name],err_msg=name)
+                self.assertEqual(str(getattr(decoded,name).dtype),fixture['layout'][name]['dtype'])
+            np.testing.assert_array_equal(decoded.shed_skin_draws,np.zeros((1,2),np.int32))
+        boundary=dict(state=fixture['packet'],requested=[not fixture['packet']['done'][0]]*2)
+        replay=r.Replay(Runtime())
+        self.assertIsNone(replay.constructor(dict(raw=boundary,initialized=boundary)))
+        suspended=copy.deepcopy(fixture['packet']);suspended.update(done=[False],pending_residual=[True])
+        for layout in (fixture['layout'],r._state_layout()):
+            with self.assertRaisesRegex(ValueError,'legacy suspended state lacks saved Shed Skin draws'):
+                decode_state(suspended,layout)
+        missing=copy.deepcopy(fixture['packet']);del missing['hp']
+        with self.assertRaisesRegex(ValueError,'literal complete actual state packet required'):
+            decode_state(missing,fixture['layout'])
+
     def test_final_owner_manifest_and_dataset_hash_guards(self):
         with tempfile.TemporaryDirectory()as folder:
             root,plan,summary,bindings=dataset(folder)

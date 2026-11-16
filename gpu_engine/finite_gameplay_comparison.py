@@ -94,10 +94,20 @@ class ChanceControl:
 
 
 def decode_state(packet, layout):
-    if set(packet) != set(BattleState._fields) or set(layout) != set(packet):
+    # The immediate pre-Shed Skin schema has no saved cure bank. Its closed
+    # turns can be promoted with an inactive zero bank; suspended turns cannot
+    # recover a missing random operand and must refuse rather than invent one.
+    fields=set(BattleState._fields);legacy=fields-{'shed_skin_draws'}
+    old=set(packet)==legacy
+    if set(packet) not in (fields,legacy) or set(layout) not in ((fields,legacy) if old else (fields,)):
         raise ValueError('literal complete actual state packet required')
+    if old and 'shed_skin_draws' in layout:
+        spec=layout['shed_skin_draws']
+        if tuple(spec['shape'])!=(2,) or np.dtype(spec['dtype'])!=np.dtype('int32'):
+            raise ValueError('actual state shape/type changed: shed_skin_draws')
     values = {}
     for name in BattleState._fields:
+        if old and name=='shed_skin_draws':continue
         dtype = np.dtype(layout[name]['dtype']); value = np.asarray(packet[name])
         if (dtype.kind not in 'iub' or value.shape != (1, *layout[name]['shape'])
                 or value.dtype.kind not in ('b' if dtype.kind == 'b' else 'iu')):
@@ -105,6 +115,10 @@ def decode_state(packet, layout):
         if dtype.kind != 'b' and (np.any(value < np.iinfo(dtype).min) or np.any(value > np.iinfo(dtype).max)):
             raise ValueError('state integer outside original dtype: '+name)
         values[name] = value.astype(dtype)
+    if old:
+        if values['pending_residual'].any():
+            raise ValueError('legacy suspended state lacks saved Shed Skin draws')
+        values['shed_skin_draws']=np.zeros((1,2),np.int32)
     return BattleState(**values)
 
 
