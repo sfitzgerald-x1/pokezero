@@ -186,6 +186,11 @@ Mirror Move, Metronome and Assist calls (not in the Gen 3 randbats pool).
 
 Both passes must run on the same JAX version, digest scheme and lane padding.
 Paths are command-line arguments.
+
+NAR is a separate narrowing-only pass against the exact merged integration baseline. It permits only the five
+visible-belief pin leaves at public slots witnessed by an admitted damage event. Every producer call is also audited
+for writes outside its admitted subject. It bypasses all cascade/effect exceptions and refuses plugin supersets,
+waivers and faint-clear. A forced-on run with --pr none remains the dropped-plugin negative control.
 """
 import argparse
 from concurrent.futures import ThreadPoolExecutor
@@ -905,6 +910,8 @@ def allowed_leaf(name, families):
 # are never involvement (design 5.2). `none` is the base-against-base self-test.
 PLUGINS = {
     'none': {},
+    # Replaced with hook-time admitted subjects by the strict NAR path, never a pre-state damage superset.
+    'NAR': dict(narrowing=lambda p: np.zeros((p.lanes, 2), bool)),
     # PR0's public_order and faint-clear rules are special rules (see the docstring);
     # these are its remaining tracker changes.
     'PR0': dict(intimidate_reveal=entering_ability('intimidate'),
@@ -929,6 +936,9 @@ PLUGINS = {
     'D': dict(wonderguard=ability_target('wonderguard', move_ok=damaging_move), pinch=pinch_active,
               contact_status=ability_target(*CONTACT_ABILITIES, move_ok=contact_move), pursuit_reveal=pursuit_reveal),
 }
+
+FAMILIES['narrowing_pin'] = (r'^trackers\.visible_belief\.(pin|pin_active|visible_pin|visible_pin_active|conflicts)$',)
+ALLOWED['narrowing'] = dict(user=('narrowing_pin',), target=(), glob=())
 
 
 def predicates(prs):
@@ -1600,7 +1610,7 @@ class Stepper:
     their own pre values are digested too (new leaves must keep their defaults).
     """
     def __init__(self, step_fn, treedef, *, base_names=None, faint_leaves=FAINT_CLEAR_LEAVES, record_installs=False,
-                 effect_rule=False, m2_ids=None, wh_ids=None):
+                 effect_rule=False, m2_ids=None, wh_ids=None, record_narrowing=False):
         import jax
         import jax.numpy as j
         names = {}
@@ -1797,6 +1807,10 @@ class Stepper:
                 act_history.record_move = record_move_recorder
                 mech.before_move, hooks.before_move = before_move_fn_recorder, before_move_recorder
                 if trick_hook is not None:hooks.trick = trick_recorder
+            narrowing = None
+            if record_narrowing:
+                from gpu_engine.v2e_narrowing_audit import Recorder
+                narrowing = Recorder(lanes);narrowing.install()
             try:
                 if record_installs:
                     original = hooks.install
@@ -1812,6 +1826,7 @@ class Stepper:
                 else:
                     out = step_fn(state, actions, trackers)
             finally:
+                if narrowing is not None:narrowing.restore()
                 climate.residual_clock = clock;hooks.damage, hooks.move = damage_hook, move_hook
                 hooks.port_protect, hooks.turn_end, hooks.hp_line = protect_hook, turn_end_hook, hp_line_hook
                 if herb_hook is not None:hooks.white_herb = herb_hook
@@ -1874,7 +1889,7 @@ class Stepper:
                 physical_to_public=out.trackers.physical_to_public, active_slot=out.trackers.active_slot,
                 public_order=named_out.get(PUBLIC_ORDER), residual_ran=ran[0] if len(ran) == 1 else None,
                 effect_ok=effect_ok, wit={n: named_out[n] for n in witness_names(named_out)}, m2=m2,
-                wh=whe if wh_ids is not None else None)
+                wh=whe if wh_ids is not None else None, narrowing=narrowing.result() if narrowing is not None else None)
         self._jit = jax.jit(traced);self._names = names
 
     def __call__(self, leaves):
@@ -2024,6 +2039,10 @@ def patched_pass(args, *, step_override=None, prepared=None):
     import jax
     from gpu_engine import state as state_module
     from gpu_engine.v2e_diff import oracle_digest
+    from gpu_engine import v2e_narrowing_audit as nar
+    plugins = [p for p in args.pr.split(',') if p]
+    nar.validate_options(plugins, waive=args.waive, faint_clear=args.faint_clear)
+    narrowing_rules = plugins == ['NAR']
     base_dir = Path(args.base);manifest = json.loads((base_dir / 'manifest.json').read_text())
     rev, dirty = git_source()
     if dirty and not args.allow_dirty:raise SystemExit('the source tree is dirty; commit it or pass --allow-dirty')
@@ -2031,7 +2050,6 @@ def patched_pass(args, *, step_override=None, prepared=None):
     out = Path(args.out);out.mkdir(parents=True, exist_ok=False)
     capture, capture_sha = capture_record(args)
     if capture_sha != manifest['capture_sha256']:raise ValueError('capture differs from the base pass')
-    plugins = [p for p in args.pr.split(',') if p]
     warnings = []
     if len([p for p in plugins if p != 'none']) > 1:
         warnings.append(f'plug-in superset {plugins}: changes are attributed to every listed PR\'s effects')
@@ -2059,6 +2077,8 @@ def patched_pass(args, *, step_override=None, prepared=None):
     public_order_rule = PUBLIC_ORDER in new_inputs and PUBLIC_ORDER not in base_names
     # Fidelity R: likewise the saved effect block is checked against the design's derivation while the base lacks it.
     effect_rule = EFFECT_DRAWS in new_inputs and EFFECT_DRAWS not in base_names
+    if narrowing_rules and (public_order_rule or effect_rule):
+        raise SystemExit('NAR requires a baseline with public-order and effect-draw outputs; migration exceptions are forbidden')
     m2_rules = 'M2' in plugins
     m2_ids = {n: vocab['moves'].index(n) for n in ('perishsong', 'yawn', 'wrap') if n in vocab['moves']} if m2_rules else None
     # WH: White Herb's post-state rule and recorded uses, and Facade's recorded line status.
@@ -2067,7 +2087,7 @@ def patched_pass(args, *, step_override=None, prepared=None):
                   facade=vocab['moves'].index('facade') if 'facade' in vocab['moves'] else None,
                   sacredfire=vocab['moves'].index('sacredfire') if 'sacredfire' in vocab['moves'] else -9) if wh_rules else None
     stepper = Stepper(step_override or _engine_step(tables), treedef, base_names=set(base_names), record_installs=public_order_rule,
-        effect_rule=effect_rule, m2_ids=m2_ids, wh_ids=wh_ids)
+        effect_rule=effect_rule, m2_ids=m2_ids, wh_ids=wh_ids, record_narrowing=narrowing_rules)
     shards = [p for p in shard_list(args, capture) if p.name in set(manifest['shards'])]
     if args.limit == 0 and len(shards) != len(manifest['shards']):raise ValueError('shard set differs from the base pass')
     usable = jax.jit(state_module.usable_moves)
@@ -2078,11 +2098,13 @@ def patched_pass(args, *, step_override=None, prepared=None):
                   rule_explained=0, faint_rule_leaves=0, clear_volatile_leaves=0, effect_draws_saved=0,
                   recharge_leaves=0, bag_leaves=0, trick_witness_leaves=0, ledger_leaves=0, m2_leaves=0, m2_wrong_mon=0, m2_forced=0,
                   wh_leaves=0, wh_bad=0, wh_trick_order=0, wh_dropped=0, facade_dropped=0, sacredfire_dropped=0,
-                  sacredfire_stopped=0, pinch_leaves=0)
+                  sacredfire_stopped=0, pinch_leaves=0, narrowing_bad=0)
     clear_volatile = 'B' in plugins
     m1_rules = 'M1' in plugins
     # M1 review: the base's per-lane witness arrays (wit_XX); the M1 rules compare per mon and per bag column.
     witness_leaves = manifest.get('witness_leaves')
+    if narrowing_rules and not set(nar.PIN_LEAVES) <= set(witness_leaves or ()):
+        raise SystemExit('NAR requires the exact baseline to store all five pin witness leaves')
     if (m1_rules or m2_rules or wh_rules) and witness_leaves is None:
         raise SystemExit('base pass predates the M1 witness arrays (wit_XX); re-run the base pass with this harness')
     if wh_rules and not set(WH_MON_LEAVES) <= set(witness_leaves):
@@ -2194,6 +2216,33 @@ def patched_pass(args, *, step_override=None, prepared=None):
                     else:entries.add((leaf, None))
                 changed = sorted({leaf for leaf, _ in entries})
                 effects = {k: [s for s in (0, 1) if v[lane, s]] for k, v in involved.items() if v[lane].any()}
+                if narrowing_rules:
+                    # Inspect raw differences before any generic rule consumes them. Even a terminal/KO lane may
+                    # change only witnessed pin cells; a malformed transient write fails if later calls undo it.
+                    evidence = result['narrowing'];admitted = np.asarray(evidence['admitted'])[lane]
+                    bad = bool(np.asarray(evidence['bad'])[lane]);counts['narrowing_bad'] += bad
+                    unexpected = nar.unexpected(entries, {n: v[lane] for n, v in wit.items()},
+                                                {n: v[lane] for n, v in base_wit.items()}, admitted, bad)
+                    actors = np.flatnonzero(admitted.any(-1)).tolist()
+                    effects = {'narrowing': actors} if actors else {}
+                    stats = by_effect['narrowing']
+                    if not changed and not bad:
+                        counts['unchanged'] += 1;stats['involved_unchanged'] += bool(actors);continue
+                    kind = 'unexpected' if unexpected else 'involved' if actors else 'uninvolved'
+                    counter = {'unexpected': 'changed_involved_unexpected_fields', 'involved': 'changed_and_involved',
+                               'uninvolved': 'changed_but_uninvolved'}[kind]
+                    counts[counter] += 1;stats['changed'] += 1
+                    for leaf, side in entries:
+                        key = f'{leaf}@{"user" if side in actors else "target"}'
+                        stats['changed_fields'][key] = stats['changed_fields'].get(key, 0) + 1
+                    for leaf, side in unexpected:
+                        key = f'{leaf}@{"user" if side in actors else "target"}'
+                        stats['unexpected_fields'][key] = stats['unexpected_fields'].get(key, 0) + 1
+                    listing.write(json.dumps(dict(shard=path.name, lane=lane, tick=tick, kind=kind, involved=effects,
+                        leaves=changed, entries=[f'{leaf}@{side}' for leaf, side in sorted(entries, key=str)],
+                        admitted_slots=np.argwhere(admitted).tolist(), narrowing_bad=bad,
+                        unexpected=[f'{leaf}@{side}' for leaf, side in unexpected])) + '\n')
+                    continue
                 # WH: White Herb stays involved only where this tree recorded a valid use (and no malformed call); Facade only
                 # for a side whose own Facade line ran under par/brn/psn/tox (post-state witnesses, never the predicate alone).
                 wh_lane = None
@@ -2430,7 +2479,7 @@ def patched_pass(args, *, step_override=None, prepared=None):
         source_dirty=dirty, allow_dirty=bool(args.allow_dirty), oracle_digest=digest, base_oracle_digest=manifest['oracle_digest'],
         capture_sha256=capture_sha, **base_check, shards=len(shards), partial=partial, failures=failures,
         migrated_new_inputs=new_inputs, new_outputs=new_outputs, public_order_rule=public_order_rule, link_rule=link_rule,
-        effect_rule=effect_rule, residual_rule=residual_rule,
+        effect_rule=effect_rule, residual_rule=residual_rule, narrowing_rules=narrowing_rules,
         faint_clear_rule=bool(args.faint_clear), clear_volatile_rule=clear_volatile, m1_rules=m1_rules, m2_rules=m2_rules, wh_rules=wh_rules,
         witness_leaves=witness_leaves, base_source_dirty=manifest.get('source_dirty'), base_dirty_paths=manifest.get('dirty_paths'),
         base_harness_sha256=manifest.get('harness_sha256'), harness_sha256=hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
