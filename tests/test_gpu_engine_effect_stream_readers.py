@@ -28,6 +28,7 @@ FIELD_STRINGS = frozenset({'effect', 'effect_draws'})   # a string naming the fi
 GATES = frozenset({'_second', '_yawn_counter', '_yawn_holder', '_yawn_sleep', '_wrap_holder', '_wrap_held', '_wrap_tick',
                    '_perish_continues', '_perish_holder', '_perish_first', 'tie', 'event_keys'})
 
+# Snapshot rendering uses the CI Python 3.13 ast.unparse formatter.
 # (enclosing function, the expression around the use, digest of the enclosing statement) -> count
 # Infatuation review: old columns/saved replay are unchanged, the independent
 # fifth column is observed for an existing relation or same-turn opposing Attract.
@@ -41,7 +42,7 @@ REVIEWED = {
     ('step_with_chance', 'chance_inputs.draws', '653cd7a43c8cba1a'): 1,
     ('step_with_chance', 'chance_inputs.effect', '89911b9f6b3ff76e'): 1,
     ('step_with_chance', 'chance_inputs.entry_ties', '57f87950e8336da9'): 1,
-    ('step_with_chance', 'chance_inputs.initial_tie', '6461257890dce00a'): 1,
+    ('step_with_chance', 'chance_inputs.initial_tie', '80e55ffb01720a47'): 1,
     ('step_with_chance', 'chance_inputs.initial_tie', '9b7a3d3766e1c57c'): 1,
     ('step_with_chance', 'chance_inputs.phazing', '01581d9737c0f395'): 1,
     ('step_with_chance', 'chance_inputs.secondary', 'f5b5a9ab28d576ff'): 1,
@@ -54,8 +55,8 @@ REVIEWED = {
     ('step_with_chance', 'effect_draws.shape', 'e62018b93d213ded'): 1,
     ('step_with_chance', 'effect_draws[:, 0, 3, None]', '3d5baa07a30ba9d5'): 1,
     ('step_with_chance', 'effect_draws[:, 1, 3]', '6ce6f3f90b0dd01e'): 1,
-    ('step_with_chance', 'effect_draws[:, side, 2]', 'cb5783f78d5814b5'): 1,
-    ('step_with_chance', 'effect_draws[rows, side, 2]', '846f2df9dab07bc4'): 1,
+    ('step_with_chance', 'effect_draws[:, side, 2]', '817f323b84511227'): 1,
+    ('step_with_chance', 'effect_draws[rows, side, 2]', 'e3536277377b7b2a'): 1,
     ('step_with_chance', 'effect_draws[rows, side, 2]', 'e16344807b2214e1'): 1,
     ('step_with_chance', 'effect_draws[rows, side, 2]', 'ea96e049c275d980'): 1,
     ('step_with_chance', 'effect_draws[rows, side, 4]', '57342f1bbef6bd5b'): 1,
@@ -100,8 +101,8 @@ def sleep_roll_readers():
                 found[(name, *key)] += count;statements[(name, *key)] = texts[key]
     return found, statements
 SLEEP_ROLL_REVIEWED = {
-    ('pursuit.py', 'intercept', 'jnp.zeros_like(contact_roll) if sleep_roll is None else sleep_roll', '78dc27448c71386a'): 1,
-    ('pursuit.py', 'intercept', 'sleep_roll is None', '78dc27448c71386a'): 1,
+    ('pursuit.py', 'intercept', 'jnp.zeros_like(contact_roll) if sleep_roll is None else sleep_roll', 'ba6d07bd01c4aa50'): 1,
+    ('pursuit.py', 'intercept', 'sleep_roll is None', 'ba6d07bd01c4aa50'): 1,
     ('secondary.py', 'apply_contact', 'gate proc', '4223e413f02161c2'): 1,
     ('secondary.py', 'apply_contact', 'gate rolled', '3becf7407f15669f'): 1,
     ('secondary.py', 'apply_contact', 'gate slept', '4ea0471ca753fbc2'): 1,

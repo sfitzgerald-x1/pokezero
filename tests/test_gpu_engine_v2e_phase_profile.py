@@ -22,9 +22,9 @@ from gpu_engine import v2e_census as cz, v2e_phase_profile as pp
 
 ROOT = Path(__file__).resolve().parents[1]
 # Statements of a stand-in step_with_chance on the real phase lines (A, B, D, E0, two actions E1/E4, F1, two residual events, G).
-CODE = {400: 'def step_with_chance(x, y):', 545: '    a = helper(x) + y', 602: '    b = a * y', 681: '    c = b - x', 801: '    c = c + 1',
-    824: '    for order in range(2):', 826: '        c = c * 2 + order', 2089: '        c = jnp.where(c > 0, c, -c)', 2199: '    d = c - y',
-    2319: '    for event in range(2):', 2320: '        d = d + event', 2416: '        d = d * 3', 2678: '    return d + a'}
+CODE = {422: 'def step_with_chance(x, y):', 568: '    a = helper(x) + y', 629: '    b = a * y', 708: '    c = b - x', 828: '    c = c + 1',
+    851: '    for order in range(2):', 853: '        c = c * 2 + order', 2126: '        c = jnp.where(c > 0, c, -c)', 2240: '    d = c - y',
+    2360: '    for event in range(2):', 2361: '        d = d + event', 2457: '        d = d * 3', 2719: '    return d + a'}
 HEADER = ['import jax', 'import jax.numpy as jnp', '', '', '@jax.jit', 'def helper(x):', '    return x * 3 + 1']
 LABELS = ['A', 'B', 'D', 'E0', 'E1.0', 'E4.0', 'E1.1', 'E4.1', 'F1', 'F2.0', 'F2.1', 'G']
 

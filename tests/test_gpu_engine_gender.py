@@ -71,13 +71,15 @@ class GenderCorrespondenceTests(unittest.TestCase):
         result=f.canonical_jax_future(data,None,meta,certificate=native.certificate)
         self.assertIn('RETAINED_GENDER_CHANGED',{g.code for g in result.gaps})
 
-    def test_known_genders_do_not_admit_unsupported_positive_attraction_future(self):
+    def test_known_genders_and_infatuation_have_matching_complete_futures(self):
         data,meta=self.live();native=f.native_input_from_jax(data,None,meta,module=FAKE)
+        before=f.canonical_jax_future(data,None,meta,certificate=native.certificate)
         native.state.side_one.volatile_statuses={'attract'}
         result=f.canonical_native_future(native.state,native.certificate)
-        self.assertIn('NATIVE_UNREPRESENTED_VOLATILE',{g.code for g in result.gaps})
-        from gpu_engine.fidelity_panel import require_future, WholeSlotUnknown
-        with self.assertRaises(WholeSlotUnknown):require_future(result)
+        data['volatile'][0][0]=128
+        after=f.canonical_jax_future(data,None,meta,certificate=native.certificate)
+        self.assertEqual(result.key,after.key)
+        self.assertNotEqual(before.key,after.key)
 
 
 @unittest.skipUnless(importlib.util.find_spec('jax'),'requires isolated JAX')

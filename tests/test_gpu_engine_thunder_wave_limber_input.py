@@ -72,7 +72,7 @@ class ThunderLimberTests(unittest.TestCase):
   # transition.py is certified against CURRENT_TRANSITION (full AST plus mutations) by terminal_closeout and seismic_toss_components.
   # entry.py, effects.py, secondary.py and state.py are byte-certified against the reviewed SOURCE_PINS by transition_observer_wiring.
   for f in ('mechanics.py','engine_retained_encoder_driver.py'):
-   self.assertEqual(Path('gpu_engine',f).read_bytes(),subprocess.check_output(['git','show','b8092a85:gpu_engine/'+f]))
+   self.assertEqual(Path('gpu_engine',f).read_bytes(),subprocess.check_output(['git','show',('233bf444:gpu_engine/' if f=='mechanics.py' else 'b8092a85:gpu_engine/')+f]))
   witness._source()
   # Original current setStatus -> Limber callback -> runMoveEffects null
   # interruption emits immunity only, without fail/still or private writes.
