@@ -40,10 +40,11 @@ class ConstructorExtraction(unittest.TestCase):
         cls=next(x for x in tree.body if isinstance(x,ast.ClassDef)and x.name=='ProtocolConstructor')
         method=next(x for x in cls.body if isinstance(x,ast.FunctionDef)and x.name=='prepare')
         body='\n'.join(source.splitlines()[method.lineno:method.end_lineno])
-        # Approved transport: expose the exact carried root returned by sample.
+        # Approved transport: expose the carried root and pass its owning history
+        # for the Transform donor/borrow checks required by constructor §2.6.
         self.assertIn('return made.root,made,',body)
-        self.assertIn('address=public.address,defer_sleep=True,protocol_facts=facts)',body)
-        body=body.replace('return made.root,made,','return detached,made,').replace('address=public.address,defer_sleep=True,protocol_facts=facts)','address=public.address)')
+        self.assertIn('address=public.address,defer_sleep=True,protocol_facts=facts,lines=lines)',body)
+        body=body.replace('return made.root,made,','return detached,made,').replace('address=public.address,defer_sleep=True,protocol_facts=facts,lines=lines)','address=public.address)')
         body=body.replace('        facts=protocol.tail.facts(public,packet,lines)\n','')
         # All other reviewed 3975b1fa Search._prepare_protocol body bytes remain.
         self.assertEqual(hashlib.sha256(body.encode()).hexdigest(),
