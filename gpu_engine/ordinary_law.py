@@ -156,7 +156,7 @@ def _native_output(branch,certificate,values):
     if isinstance(physical,mapping.Refused):
         raise WholeSlotUnknown('UNSUPPORTED_POSITIVE_NATIVE_OUTPUT',asdict(physical))
     native_capsule=branch['capsule']
-    if type(native_capsule) is not dict or conditioned_future.SAVED_BLOCK in native_capsule:
+    if type(native_capsule) is not dict or set(native_capsule)!={*conditioned_future.CAPSULE_FIELDS,'version','schema'}:
         raise ValueError('ORDINARY_CAPSULE_FIELDS')
     # The engine's save rule (transition.py:2717-2718): a suspended successor saves the case's effect block, any other
     # carries 0. The native engine draws no effect stream, so its output takes the block by that rule.

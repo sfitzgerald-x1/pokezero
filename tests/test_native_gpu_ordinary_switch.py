@@ -100,9 +100,11 @@ class OrdinarySwitchTests(unittest.TestCase):
                 self.assertEqual(c['replacement_count'],0)
                 if forced is not None:self.assertEqual(tuple(c['forced_switch']),forced)
                 self.assertEqual(c['turn'],18)
-                # 30 native bank rows plus §6's 8 saved effect rows (ordinary_law.EFFECT_BANK, JAX-only; the native output
-                # takes them by the engine's save rule)
-                self.assertEqual(len(out['expressions']),38)
+                # 30 native rows, 8 saved effect rows, and 2 saved Shed Skin rows.
+                self.assertEqual(len(out['expressions']),40)
+                cure=out['expressions'][-2:]
+                self.assertEqual(cure,[dict(name=f'shed_skin_draws.{side}',
+                    **({'copy':f'shed_skin.{side}'} if pending else {'constant':0})) for side in range(2)])
                 for expression in out['expressions']:
                     self.assertIn('copy' if pending else 'constant',expression)
                     if not pending:self.assertEqual(expression['constant'],0)
