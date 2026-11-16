@@ -43,7 +43,7 @@ whose replay.status is COMPLETE (root logits and legal mask and every world's gr
   over its enumerated slots (depthn_backups._softmax over t1_own_actions / t1_opp_actions; learner_max averages exactly that
   opponent prior, and the learner's is its prior under the `average` rule). The lane -> move map is read from the turn-1 child state
   (the encoder's: lane i is the active's move slot i, lane 0 the charge move while one charges and Struggle when no move is usable,
-  engine_device_observation.py:331-351). The replay rows hold none of this: `capture` records it (below), and the report joins it by
+  engine_device_observation.py:346-368). The replay rows hold none of this: `capture` records it (below), and the report joins it by
   (ordinal, decision_index). Where a priced root has no turn-2 record the proxy (b1) stands in and the decision is PROVISIONAL.
   (b1) turn-1 mass, the proxy: our root prior (softmax of root.root_logits over root.root_legal) or some world's peer prior
   (softmax of worlds[w].root_peer_logits over worlds[w].kept, the replies turn 1 enumerated: the mass learner_max averages at the

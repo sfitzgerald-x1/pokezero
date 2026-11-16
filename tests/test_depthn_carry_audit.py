@@ -51,7 +51,7 @@ CITATION_ANCHORS = {
     'gpu_engine/effects.py:46': 'destinybond',
     'gpu_engine/encore.py:14-20': '^def from_metadata',
     'gpu_engine/encore.py:33-52': '^def apply',
-    'gpu_engine/engine_device_observation.py:331-351': "own['moves']",
+    'gpu_engine/engine_device_observation.py:346-368': "own['moves']",
     'gpu_engine/engine_request_source.py:261-265': '^_unsafe_history',
     'gpu_engine/engine_request_source.py:341': 'charge_move',
     'gpu_engine/engine_request_source.py:341-342': '^encore',

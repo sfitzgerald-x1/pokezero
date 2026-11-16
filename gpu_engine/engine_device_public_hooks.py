@@ -901,7 +901,7 @@ def drag(c,before,after,side,table,use):
     # state; only public handler results are exposed.
     c=depart(c,before,after,side,table,use)
     # The dragged-out mon's slot drops its stages, as withdraw does for a switch (entry.depart zeroes the engine's), so
-    # no stale stages sit on a bench slot: device_public_world_state.py:303 copies every public slot's stages into a
+    # no stale stages sit on a bench slot: device_public_world_state.py:388 copies every public slot's stages into a
     # materialized foe, bench included.
     c=c._replace(trackers=_write(c.trackers,'boosts',side,_li.take(before.active,_r(before),side),
         j.zeros((len(c.trackers.error),7),j.int32),use))

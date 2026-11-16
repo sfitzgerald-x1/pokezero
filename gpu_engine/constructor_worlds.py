@@ -998,7 +998,7 @@ def fill_item_ledger(public,facts,tables):
     sides), as the device path and B2 hold it after the same -enditem line: mon_features['item_mutated'][side, slot] = 1 and,
     when that member's ledger is fresh (item_mutated and item_original both 0), item_original[side, slot] = the engine item id of
     the removed item (tables.item_names). `slot` is the member's public slot (the carry's species, joined as fix_knocked_items
-    joins). The rule is the device knock_off hook's (engine_device_public_hooks.py:562-566: fresh = item_mutated == 0 and
+    joins). The rule is the device knock_off hook's (engine_device_public_hooks.py:692-695: fresh = item_mutated == 0 and
     item_original == 0; item_original = the item held before the hit when fresh; item_mutated = 1) and B2's REMOVE
     (public_items.py:185, a -enditem line tagged [from] move: Knock Off is REMOVE; public_items.py:130-138: REMOVE sets mutated,
     and own_removal = REMOVE, not yet mutated and no recorded original, records the removed item as the original). Both ledgers

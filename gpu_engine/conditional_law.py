@@ -49,7 +49,7 @@ def _law():
             axes.append(Axis(name, (Observation("identity"),),
                 ("transition.step_with_chance: resumed switch installation/runSwitch ordering",)))
         elif name.startswith("effect."):
-            # §6: the resumed step reads the saved block, never this fresh coordinate (transition.py:580-582,
+            # §6: the resumed step reads the saved block, never this fresh coordinate (transition.py:583-585,
             # effect_draws=jnp.where(resuming,state.effect_draws,..)). The block is bound with the root's raw input
             # and joins every suspended successor's key (conditioned_future.SAVED_BLOCK).
             axes.append(Axis(name, (), inactive_reason="A legal live pending-residual request replays its saved "
