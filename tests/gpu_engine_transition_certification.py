@@ -12,5 +12,6 @@ to 13f76e5e. M2's R2 (the older residual handlers traced only at their reachable
 Encore stale-move clear to 7c984fe6.
 Fidelity tier D (Wonder Guard, the pinch abilities, Poison Point / Flame Body / Effect Spore) moved it to d880714c, and its
 Pursuit-intercept device reveals to c471195a.
+Cute Charm and Attract, independent infatuation chance and conservative lifecycle refusals moved it to cfbf7484.
 """
-CURRENT_TRANSITION = 'c471195a14db96b36eba226e4a0929faf8b86e7f'
+CURRENT_TRANSITION = 'cfbf74842b073561fb61a7b93f8986f8d1b3dc0b'
