@@ -26,11 +26,12 @@ class DoubleEdgeSourceBindingTests(unittest.TestCase):
   # Fidelity tier D (covered by its Opus review) re-certifies the chance_consumers.py and phase_d_chance.py bodies at
   # 67399362: the CONSUMERS rows for the contact abilities' phazing[s] reads and Effect Spore's effect[s][2] sleep, and
   # plan_for_state's contact-status closure, observations and CONTACT_MULTIHIT refusal. Their mappings are unchanged.
-  certified={'chance_consumers.py':'673993621ce2c4f7e423d76ee32b9a536a903aa3',
-             'phase_d_chance.py':'673993621ce2c4f7e423d76ee32b9a536a903aa3',
-             'conditional_law.py':'3b0cc40e6709bd19fe70a6295580a51590dd4f57',
-             'engine_source_frame_witness.py':'3b0cc40e6709bd19fe70a6295580a51590dd4f57',
-             'ordinary_law.py':'53dc3add38e37c36b7609edabe4f96e313022b16'}
+  # Infatuation review re-certifies the independent fifth axis, saved five-column block,
+  # same-turn Attract closure, Cute Charm contact reader and the new witnessed module.
+  # Historical repair controls above remain unchanged.
+  certified={name:'233bf444d679283fd6ef24b367754139b413b704' for name in (
+   'chance_consumers.py','phase_d_chance.py','conditional_law.py',
+   'engine_source_frame_witness.py','ordinary_law.py')}
   constants={'SOURCE_PINS','MAPPING_PINS','DOMAIN_SHA256','KERNEL_SHA256'}
   for file in ('chance_consumers.py','ordinary_law.py','conditional_law.py',
                'engine_source_frame_witness.py','phase_d_chance.py'):
@@ -47,7 +48,7 @@ class DoubleEdgeSourceBindingTests(unittest.TestCase):
      if isinstance(target,ast.Name) and target.id in ('SOURCE_PINS','MAPPING_PINS')}
    self.assertEqual(mappings(old),mappings(current),file)
  def test_all_three_domain_guards_and_every_owned_mapping_pin(self):
-  modules='action_history absorption baton combat critical damage_moves effects encore entry focus_punch items linked_traps mechanics phazing pressure pursuit residual_order secondary self_destruct sleep_talk solar_beam state sustain transition variable_moves weather'.split()
+  modules='action_history absorption baton combat critical damage_moves effects encore entry focus_punch infatuation items linked_traps mechanics phazing pressure pursuit residual_order secondary self_destruct sleep_talk solar_beam state sustain transition variable_moves weather'.split()
   domain=hashlib.sha256(b''.join(n.encode()+b'\0'+(ROOT/'gpu_engine'/(n+'.py')).read_bytes()+b'\0'for n in modules)).hexdigest()
   for file,key in [('conditional_law.py','KERNEL_SHA256'),('chance_consumers.py','DOMAIN_SHA256'),('ordinary_law.py','DOMAIN_SHA256')]:self.assertEqual(constant(file,key),domain,(file,key))
   for file,key in [('engine_source_frame_witness.py','SOURCE_PINS'),('chance_consumers.py','SOURCE_PINS'),('conditional_law.py','MAPPING_PINS'),('ordinary_law.py','MAPPING_PINS')]:
