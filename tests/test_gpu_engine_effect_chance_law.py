@@ -105,7 +105,7 @@ class SuspendedLawTests(unittest.TestCase):
         # The engine line the inactivity cites: a resumed step replaces the supplied stream by the saved block.
         source = (ENGINE/'transition.py').read_text()
         self.assertIn('effect_draws=jnp.where(resuming[:,None,None],state.effect_draws,effect_draws)', source)
-        self.assertIn('work = work._replace(effect_draws=jnp.where(defer_residual[:,None,None],effect_draws,0))', source)
+        self.assertIn('effect_draws=jnp.where(defer_residual[:,None,None],effect_draws,0)', source)
 
 
 if __name__ == '__main__':
