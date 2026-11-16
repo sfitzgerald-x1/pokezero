@@ -41,6 +41,10 @@ class LayoutTests(unittest.TestCase):
     def test_chance_bounds_and_outer_trace_refuse_before_execution(self):
         good=transition.ChanceInputs(j.zeros((1,2,12),j.int32),*[j.zeros((1,2),j.int32) for _ in range(4)],j.zeros(1,j.int32))
         batch._chance(good)
+        batch._chance(good._replace(shed_skin=j.array([[0,99]],j.int32)))
+        for bad in (j.array([[-1,99]],j.int32),j.array([[0,100]],j.int32),
+                    j.zeros((1,2,1),j.int32),j.zeros((1,2),j.float32)):
+            with self.subTest(shed_skin=bad),self.assertRaises(ValueError):batch._chance(good._replace(shed_skin=bad))
         with self.assertRaises(ValueError):batch._chance(good._replace(draws=good.draws.at[0,0,0].set(2)))
         with self.assertRaises(ValueError):jax.jit(lambda dummy:batch._host() or dummy)(j.array(0))
 

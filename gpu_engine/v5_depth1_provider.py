@@ -111,7 +111,7 @@ class GridBatch:
             if address in shared and root.public is not shared[address]:raise ValueError('same world-independent public root carry required')
             shared[address]=root.public
             if type(chance) is not transition.ChanceInputs:raise ValueError('original chance block required')
-            shapes=((1,2,12),(1,2),(1,2),(1,2),(1,2),(1,),(1,2,4))   # effect (fidelity R) may be None: derived from keys
+            shapes=((1,2,12),(1,2),(1,2),(1,2),(1,2),(1,),(1,2,4),(1,2))   # effect and Shed Skin may be derived from keys
             if any(value.shape!=shape or value.dtype!=j.int32 for value,shape in zip(chance,shapes,strict=True) if value is not None):
                 raise ValueError('original B1 finite integer chance layout required')
         for cell in self.cells:
