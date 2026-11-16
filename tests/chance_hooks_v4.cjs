@@ -153,6 +153,18 @@ for(let n=1;n<=5;n++)for(let raw=0;raw<60;raw++){
   const t=T();t.phazing[0]=raw;
   controlled(t,()=>assert.equal(b.getRandomSwitchable(b.p2),wanted));checks++;
 }
+// Older effect-probe callers omit the initial coordinate. They must still
+// receive an uncoupled-draw audit, so their case stays unresolved, not matched.
+initial={allow_inert_gender:true};events=[];
+battle([mon('Groudon','Drought')],[mon('Kyogre','Drizzle')]);initial=null;
+assert(events.some(e=>e.kind==='INITIAL_RANDOM'));
+assert(!events.some(e=>e.kind==='COUPLED_INITIAL'));checks++;
+for(const value of [undefined,null,-1,2,true,false,'0','1',NaN,0.5]){
+  initial={initial_tie:value,allow_inert_gender:true};events=[];
+  try{assert.throws(()=>battle([mon('Groudon','Drought')],[mon('Kyogre','Drizzle')]),/INITIAL_TIE_ABSENT/);}
+  finally{initial=null;}
+  assert(events.some(e=>e.kind==='UNRESOLVED'));checks++;
+}
 for(const bit of [0,1]){
   initial={initial_tie:bit,allow_inert_gender:true};events=[];
   const b=battle([mon('Groudon','Drought')],[mon('Kyogre','Drizzle')]);initial=null;

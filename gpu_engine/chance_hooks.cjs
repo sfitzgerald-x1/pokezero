@@ -190,8 +190,12 @@ function install(Battle,PRNG,load,audit,initializing=()=>null,pokemonPath='') {
     return unknown('RANDOM_CHANCE',{from,n,d,effect});
   };
   Battle.prototype.random=function(m,n){
-    const c=control();
-    if((c||initializing())&&insertionFrames.has(this)&&caller().includes('BattleQueue.insertChoice'))return insertion(this,c,m,n);
+    const c=control(),init=c?null:initializing();
+    // Legacy probe initialization has no engine coordinate: keep its native
+    // draw and INITIAL_RANDOM audit, which makes that case unresolved.
+    // A supplied coordinate, including a malformed one, must use validation.
+    if((c||(init&&Object.prototype.hasOwnProperty.call(init,'initial_tie')))
+      &&insertionFrames.has(this)&&caller().includes('BattleQueue.insertChoice'))return insertion(this,c,m,n);
     if(!c)return oldRandom.call(this,m,n);
     const from=caller(),s=seat(this);
     if(m===2&&n===6){const t=yawnSleeper(this);if(t)return 2+effectDraw(c,'yawn_sleep_duration',t.side.n,2);}
