@@ -646,8 +646,16 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                 & ~initial_loaf)
             _faint_before_hp=work.hp
             if _device_public is not None:_device_pursuit_before=work
-            work,used,fainted = intercepts.intercept(work,side,slot[:,side],moves[:,side],
-                draws[:,side],table,eligible=eligible,contact_roll=phazing_draws[:,side])
+            work,used,fainted,_contact_reveals = intercepts.intercept(work,side,slot[:,side],moves[:,side],
+                draws[:,side],table,eligible=eligible,contact_roll=phazing_draws[:,side],
+                sleep_roll=effect_draws[:,side,2],_reveal_masks=True)   # tier D: an Effect Spore sleep's 2+effect[s][2]
+            # Tier D: the intercept's public ability reveals (it runs no device hooks): a Wonder Guard holder's TryHit line
+            # on a blocked Pursuit (a Traced one: Pursuit is Dark, super-effective on Shedinja), the target's contact
+            # ability's -status/-damage [from] ability line, and the pursuer's Synchronize. The target has not switched yet.
+            if _device_public is not None:
+                device_public.reveal_ability(_device_public,work,1-side,(used & intercepts.wonder_guard_blocked(work,side,moves[:,side],table))
+                    | _contact_reveals[0])
+                device_public.reveal_ability(_device_public,work,side,_contact_reveals[1])
             # BUG F (damage credit): the intercept's |-damage|, after its |move|...|[from] Pursuit line, is an untagged hit in the
             # pursuer's move window: B2 credits it to the pursuer's dealt sums (public_damage.apply) and the switching target's
             # taken, as the ordinary hit's damage/negative_hp_line/observe triple does below. A Substitute takes the hit with no
@@ -1091,6 +1099,15 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
         immune = num == 0
         if table.entry is not None:
             immune |= (typ == table.entry.ground_type) & table.entry.levitate[_active(work.ability,work,foe)]
+        # Fidelity tier D: Wonder Guard (combat.wonder_guard_blocks) returns null from TryHit for a typed, non-Status hit
+        # that is not super-effective. Every effect gated on an immune hit (damage, fixed damage and Counter, the
+        # secondaries, contact, Knock Off, drain, recoil, self effects, the second hit) then does nothing, as for a type
+        # immunity; Protect's TryHit runs first and a missed move never reaches it (the reveal below).
+        _wonder=jnp.zeros_like(immune)
+        if table.combat is not None:
+            _wonder=traits.wonder_guard_blocks(table.combat,_active(work.ability,work,foe),move,typ,num,den)
+            immune |= _wonder
+            if _lifecycle_trace:_public_trace=status_callbacks.unknown(_public_trace,acts & _wonder & ~(num==0))
         weather_num,weather_den = (1,1)
         accuracy,always_hit = table.accuracy[move],table.always_hit[move]
         if table.weather is not None:
@@ -1103,7 +1120,12 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
         if table.absorption is not None:
             phase1_num,phase1_den = absorb.damage_phase1(table.absorption,typ,_active(work.volatile,work,side))
         if table.combat is not None:
-            power = traits.base_power(table.combat,_active(work.ability,work,foe),typ,power)
+            # Fidelity tier D: the attacker's pinch ability joins Thick Fat's BasePower chain (combat.base_power).
+            power = traits.base_power(table.combat,_active(work.ability,work,foe),typ,power,
+                attacker_ability=_active(work.ability,work,side),hp=_active(work.hp,work,side),max_hp=_active(work.max_hp,work,side))
+            if _lifecycle_trace:
+                _public_trace=status_callbacks.unknown(_public_trace,acts & traits.pinch_boost(table.combat,
+                    _active(work.ability,work,side),typ,_active(work.hp,work,side),_active(work.max_hp,work,side)))
         critical = chance[:,4] == 0
         if table.critical is not None:
             critical = crits.is_critical(table.critical,move,_active(work.ability,work,foe),chance[:,4])
@@ -1223,6 +1245,11 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                 _public_trace,_protect_block_capture=protect_callbacks.finish_block(_public_trace,_protect_block_pending,hit)
                 _protect_block_mask=protect_callbacks.captured_block_matches(_public_trace,_protect_block_capture)
             bypass_sub = table.effects.bypass_sub[move]
+        if _device_public is not None:
+            # Fidelity tier D: Wonder Guard's TryHit line, -immune|TARGET|[from] ability: Wonder Guard, prints only for a hit
+            # that passed accuracy and Protect (gen3 tryMoveHit); B2 reveals the holder's ability from it. A natural
+            # immunity on a Wonder Guard holder prints the same tagged line, as WG's TryHit runs before its -immune.
+            device_public.reveal_ability(_device_public,work,foe,acts & hit & _wonder)
         # Gen3 emits a generic -immune for ordinary Ground/Levitate immunity.
         # B2 does not mark an ability revealed without an attribution line;
         # source possibilities can still imply Levitate without that flag.
@@ -2044,10 +2071,13 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                     _rough_skin_context=_direct_hit_context if _direct_hit_context is not None and _direct_hit_registered else None,
                     _rough_skin_capture=(kernel_risks.CapturedDirectHit(_direct_hit_context,_direct_ticket,side,
                         work.active[rows,side],work.active[rows,foe],move,_direct_write)
-                        if _direct_hit_context is not None and _direct_hit_registered else None),_device_public=_device_public)
+                        if _direct_hit_context is not None and _direct_hit_registered else None),_device_public=_device_public,
+                    sleep_roll=effect_draws[rows,side,2])
             else:
+                # Fidelity tier D: an Effect Spore sleep lasts 2+effect[s][2], the attacker's column (secondary.apply_contact).
                 work = secondaries.apply_contact(work,side,move,phazing_draws[rows,side],table.secondary,
-                    eligible=acts & hit & (dealt>0) & ~hits_sub,item_table=table.items,_device_public=_device_public)
+                    eligible=acts & hit & (dealt>0) & ~hits_sub,item_table=table.items,_device_public=_device_public,
+                    sleep_roll=effect_draws[rows,side,2])
         if table.secondary is not None:
             if _lifecycle_trace:
                 work,_public_trace=secondaries.apply_color_change(work,side,typ,table.secondary,

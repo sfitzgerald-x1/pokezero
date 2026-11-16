@@ -84,7 +84,9 @@ class PureTests(unittest.TestCase):
         self.assertEqual(len(cases), 6);self.assertEqual(cases[0]['case_id'], 'hit=0,roll=0')
         case = cases[-1]                                   # hit=99, roll=3
         tape, aux = probe.step_inputs(s, case, 0)
-        self.assertEqual((tape['draws'][0][6], tape['effect'][1][2], tape['secondary'][1], aux['phazing'][0]), (99, 3, 7, 5))
+        # Tape v3 (fidelity tier D): phazing is a tape field (the contact abilities' Showdown role), no longer an engine-only aux.
+        self.assertEqual((tape['draws'][0][6], tape['effect'][1][2], tape['secondary'][1], tape['phazing'][0]), (99, 3, 7, 5))
+        self.assertNotIn('phazing', aux)
         tape, _ = probe.step_inputs(s, case, 1)
         self.assertEqual((tape['draws'][0][6], tape['draws'][1][4], tape['effect'][1][2]), (probe.DEFAULT_ROW[6], 0, 3))
         self.assertEqual(probe.enumerate_cases(scenario()), [dict(case_id='base', assignment={})])

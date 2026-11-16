@@ -1,0 +1,179 @@
+{
+ "schema": "pokezero.effect_probe.scenario.v1",
+ "move": "contact_effectspore_synchronize",
+ "note": "Tier D review N2: Espeon's Quick Attack into Effect Spore Breloom: the paralysis (phazing 2) and the poison (4) are reflected onto Breloom by Espeon's Synchronize; the sleep (0) is not.",
+ "teams": [
+  [
+   {
+    "species": "Espeon",
+    "moves": [
+     "quickattack",
+     "splash",
+     "protect",
+     "rest"
+    ],
+    "ability": "Synchronize",
+    "item": ""
+   },
+   {
+    "species": "Starmie",
+    "moves": [
+     "splash",
+     "surf",
+     "recover",
+     "protect"
+    ],
+    "ability": "Natural Cure",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Skarmory",
+    "moves": [
+     "splash",
+     "protect",
+     "spikes",
+     "drillpeck"
+    ],
+    "ability": "Keen Eye",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Metagross",
+    "moves": [
+     "splash",
+     "protect",
+     "meteormash",
+     "earthquake"
+    ],
+    "ability": "Clear Body",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Celebi",
+    "moves": [
+     "splash",
+     "protect",
+     "psychic",
+     "recover"
+    ],
+    "ability": "Natural Cure",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Suicune",
+    "moves": [
+     "splash",
+     "protect",
+     "surf",
+     "icebeam"
+    ],
+    "ability": "Pressure",
+    "item": "Leftovers"
+   }
+  ],
+  [
+   {
+    "species": "Breloom",
+    "moves": [
+     "splash",
+     "protect",
+     "rest",
+     "spore"
+    ],
+    "ability": "Effect Spore",
+    "item": ""
+   },
+   {
+    "species": "Snorlax",
+    "moves": [
+     "splash",
+     "rest",
+     "protect",
+     "bodyslam"
+    ],
+    "ability": "Thick Fat",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Blissey",
+    "moves": [
+     "splash",
+     "softboiled",
+     "protect",
+     "seismictoss"
+    ],
+    "ability": "Natural Cure",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Gengar",
+    "moves": [
+     "splash",
+     "protect",
+     "thunderbolt",
+     "icepunch"
+    ],
+    "ability": "Levitate",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Tyranitar",
+    "moves": [
+     "splash",
+     "protect",
+     "rockslide",
+     "earthquake"
+    ],
+    "ability": "Sand Stream",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Jolteon",
+    "moves": [
+     "splash",
+     "protect",
+     "thunderbolt",
+     "batonpass"
+    ],
+    "ability": "Volt Absorb",
+    "item": "Leftovers"
+   }
+  ]
+ ],
+ "script": [
+  [
+   "move 1",
+   "move 1"
+  ],
+  [
+   "move 2",
+   "move 1"
+  ]
+ ],
+ "axes": [
+  {
+   "name": "roll",
+   "field": "phazing.0",
+   "steps": [
+    0
+   ],
+   "values": [
+    0,
+    2,
+    4
+   ]
+  }
+ ],
+ "expect": {
+  "exact": true
+ },
+ "require_fields": [
+  "perish_counter",
+  "yawn_counter",
+  "partial_trap_counter",
+  "partial_trap_source",
+  "item_knocked",
+  "destiny_bond",
+  "effect"
+ ]
+}

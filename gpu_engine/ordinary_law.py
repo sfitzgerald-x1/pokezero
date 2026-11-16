@@ -21,10 +21,10 @@ from .finite_law import Axis, COORDINATES, DRAW_BOUNDS, EFFECT_BOUNDS, Cardinali
 
 # Complete transition-domain proof, including the copy/zero assignments in
 # transition.step_with_chance (the four saved blocks and, since §6, the effect
-# block at :2663-2664). A numeric representative alone is not proof.
-DOMAIN_SHA256 = '9baa7780b4d753de882d5935024f38839cc3265a242e0721b22276585cad0a0a'
+# block at :2745-2746). A numeric representative alone is not proof.
+DOMAIN_SHA256 = '97b41e17c3410c79ec25cca57d08933f4b0ef4d434327cd7415da9cb212ab2e4'
 # Filled only after reviewed implementation stabilizes; drift must refuse.
-MAPPING_PINS = {'carry_law.py': '19bb86991bc09212a46d849bdd3d7629044512c1d8b78f0e79487ddeae45237e', 'chance_consumers.py': 'bf652a5ed12fb65c504c5212a382a6a2dbc05c251ec7255b24c19dd0124182bf', 'conditioned_future.py': '95e86f5a019850cea2507305221754fde2fb9456e15a2c6f5cf21d9ea624ffbd', 'fidelity_panel.py': '728c1d14c3cc5e95de63d6d3770d143263d58c0d5d7dec8a444b64c5b829099f', 'finite_law.py': '49c5f0060683814ba182028e4ab54669314aa40e032b2dabee7d71338062e141', 'future_state.py': '57d76476704b138bc8463123ed2cf2d52feb70f7ed38098c5e1ba592c259d940'}
+MAPPING_PINS = {'carry_law.py': '19bb86991bc09212a46d849bdd3d7629044512c1d8b78f0e79487ddeae45237e', 'chance_consumers.py': '2f3f8edd00f2f8d0d826f3b8fe3f81e43887a2bcaf524b26461cc29b7bf0bc16', 'conditioned_future.py': '95e86f5a019850cea2507305221754fde2fb9456e15a2c6f5cf21d9ea624ffbd', 'fidelity_panel.py': '728c1d14c3cc5e95de63d6d3770d143263d58c0d5d7dec8a444b64c5b829099f', 'finite_law.py': '49c5f0060683814ba182028e4ab54669314aa40e032b2dabee7d71338062e141', 'future_state.py': '57d76476704b138bc8463123ed2cf2d52feb70f7ed38098c5e1ba592c259d940'}
 NATIVE_BANK = tuple([(f'residual_draws.{s}.{i}', f'draws.{s}.{i}', bound)
     for s in range(2) for i,bound in enumerate(DRAW_BOUNDS)]
     + [(f'{field}_draws.{s}', f'{field}.{s}', bound)
@@ -157,7 +157,7 @@ def _native_output(branch,certificate,values):
     native_capsule=branch['capsule']
     if type(native_capsule) is not dict or conditioned_future.SAVED_BLOCK in native_capsule:
         raise ValueError('ORDINARY_CAPSULE_FIELDS')
-    # The engine's save rule (transition.py:2715-2716): a suspended successor saves the case's effect block, any other
+    # The engine's save rule (transition.py:2745-2746): a suspended successor saves the case's effect block, any other
     # carries 0. The native engine draws no effect stream, so its output takes the block by that rule.
     pending=native_capsule.get('pending_residual') is True
     effect=chance_fields(values)['effect']

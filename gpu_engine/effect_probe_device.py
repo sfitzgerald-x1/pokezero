@@ -191,6 +191,18 @@ for _case in ('selfhit=99,paralysis=0', 'selfhit=99,paralysis=99'):
 # from_tag) and its damage credit (transition.step_with_chance's intercept), 10 entries retired.
 # Fixed (history): OPEN BUG G, Sleep Talk's failing called Counter (the reveal precedes the called move's gates:
 # transition.step_with_chance's _called_line), 2 entries retired.
+# OPEN BUG (reported to the coordinator; pre-existing, first exposed by fidelity tier D's wonderguard_trace, the first probe
+# with a Trace holder): Porygon2 traces Shedinja's Wonder Guard at entry (|-ability|p2a: Porygon2|Wonder Guard|[from]
+# ability: Trace|[of] p1a: Shedinja). B2 records the copy for the traced mon and nothing for the tracer's own Trace
+# (belief._trace_copy_source), so the tracer's original ability stays unknown; the device records 'trace' as its original.
+# After the tracer switches out, B2 keeps the copied ability as its borrowed and shown ability; the device shows its own
+# Trace again and no borrowed ability.
+_TRACE_TRACER = 'OPEN BUG: Trace at entry: B2 records nothing for the tracer and keeps the copy after it leaves; the device records Trace'
+for _step in ('initial', 0, 1, 2, 3, 4):
+    ALLOWLIST[('wonderguard_trace', 'base', _step, '1:0:original_ability')] = _TRACE_TRACER
+for _step in (3, 4):
+    for _field in ('1:0:borrowed_ability', '1:0:shown_ability'):
+        ALLOWLIST[('wonderguard_trace', 'base', _step, _field)] = _TRACE_TRACER
 # Fixed (history): OPEN BUG I, the upkeep's Lum and pinch-berry rules (engine_device_negative_items.upkeep), 140 entries retired.
 # B2 limit (explained, not a device fact): B2's fold refuses (PAYLOAD) a side's second encounter of one species, at the
 # repeat's arrival line (|switch|p2a: Gengar2|Gengar, L74, M|...: RAW_BEGIN, SWITCH_PRELUDE, MUDSHOT, SWITCH, NONPROC,

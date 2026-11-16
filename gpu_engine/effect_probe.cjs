@@ -1,6 +1,6 @@
 // Showdown side of the per-move two-engine probe (gpu_engine/effect_probe.py).
 // Diagnostic only: one Battle per enumerated case, driven turn by turn with the
-// same semantic chance tape the JAX engine receives (chance_hooks.cjs, tape v2).
+// same semantic chance tape the JAX engine receives (chance_hooks.cjs, tape v3).
 // JSON lines on stdin/stdout; usage: node effect_probe.cjs SHOWDOWN_ROOT
 const fs = require('node:fs');
 const path = require('node:path');
@@ -31,6 +31,20 @@ function setup(root) {
       return candidates[0];
     }
     return randomSwitchable.call(this, side);
+  };
+  // Probe-only (fidelity tier D): Gen 3 Trace's onStart picks its source with side.randomFoe(), a sample over the foe
+  // actives. In singles there is exactly one, so the pick is forced (the engine's Trace copies the one opposing active):
+  // audited as inert, at battle start too, instead of an INITIAL_RANDOM or an unmapped sample. Zero or two or more
+  // candidates still take the original path.
+  const {Side} = require(path.join(root, 'dist/sim/side.js'));
+  const randomFoe = Side.prototype.randomFoe;
+  Side.prototype.randomFoe = function () {
+    const actives = this.foes();
+    if ((tape || initializing) && actives.length === 1) {
+      audit.push({kind:'INERT_FORCED_FOE', side:this.n, candidates:1});
+      return actives[0];
+    }
+    return randomFoe.call(this);
   };
   return {Battle, extractChannelMessages, pool, levels, setTape(value) {tape = value;}, setInitializing(value) {initializing = value;},
     takeAudit() {const a = audit; audit = []; return a;}};

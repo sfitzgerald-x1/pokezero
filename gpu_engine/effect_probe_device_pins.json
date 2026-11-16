@@ -353,6 +353,106 @@
    }
   },
   {
+   "scenario": "wonderguard_trace",
+   "case": "base",
+   "step": 0,
+   "field": "1:0:original_ability",
+   "value": [
+    "",
+    "trace"
+   ]
+  },
+  {
+   "scenario": "wonderguard_trace",
+   "case": "base",
+   "step": 1,
+   "field": "1:0:original_ability",
+   "value": [
+    "",
+    "trace"
+   ]
+  },
+  {
+   "scenario": "wonderguard_trace",
+   "case": "base",
+   "step": 2,
+   "field": "1:0:original_ability",
+   "value": [
+    "",
+    "trace"
+   ]
+  },
+  {
+   "scenario": "wonderguard_trace",
+   "case": "base",
+   "step": 3,
+   "field": "1:0:borrowed_ability",
+   "value": [
+    "wonderguard",
+    ""
+   ]
+  },
+  {
+   "scenario": "wonderguard_trace",
+   "case": "base",
+   "step": 3,
+   "field": "1:0:original_ability",
+   "value": [
+    "",
+    "trace"
+   ]
+  },
+  {
+   "scenario": "wonderguard_trace",
+   "case": "base",
+   "step": 3,
+   "field": "1:0:shown_ability",
+   "value": [
+    "wonderguard",
+    "trace"
+   ]
+  },
+  {
+   "scenario": "wonderguard_trace",
+   "case": "base",
+   "step": 4,
+   "field": "1:0:borrowed_ability",
+   "value": [
+    "wonderguard",
+    ""
+   ]
+  },
+  {
+   "scenario": "wonderguard_trace",
+   "case": "base",
+   "step": 4,
+   "field": "1:0:original_ability",
+   "value": [
+    "",
+    "trace"
+   ]
+  },
+  {
+   "scenario": "wonderguard_trace",
+   "case": "base",
+   "step": 4,
+   "field": "1:0:shown_ability",
+   "value": [
+    "wonderguard",
+    "trace"
+   ]
+  },
+  {
+   "scenario": "wonderguard_trace",
+   "case": "base",
+   "step": "initial",
+   "field": "1:0:original_ability",
+   "value": [
+    "",
+    "trace"
+   ]
+  },
+  {
    "scenario": "wrap_tie",
    "case": "tie=0",
    "step": 1,

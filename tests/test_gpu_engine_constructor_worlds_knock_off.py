@@ -168,7 +168,7 @@ class KnockOffCarryParityTests(unittest.TestCase):
         from gpu_engine.effect_probe import DEFAULT_AUX, DEFAULT_TAPE
         tile = lambda value, dtype=j.int32: j.asarray(np.broadcast_to(np.asarray(value), (n,) + np.shape(value)), dtype)
         return transition.ChanceInputs(draws=tile(DEFAULT_TAPE['draws']), secondary=tile(DEFAULT_TAPE['secondary']), sleep_talk=tile(DEFAULT_TAPE['sleep_talk']),
-            phazing=tile(DEFAULT_AUX['phazing']), entry_ties=tile(DEFAULT_AUX['entry_ties']), initial_tie=tile(DEFAULT_AUX['initial_tie']),
+            phazing=tile(DEFAULT_TAPE['phazing']), entry_ties=tile(DEFAULT_AUX['entry_ties']), initial_tie=tile(DEFAULT_AUX['initial_tie']),
             effect=tile(DEFAULT_TAPE['effect']))
 
     @classmethod

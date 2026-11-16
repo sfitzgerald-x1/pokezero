@@ -9,7 +9,9 @@ M2's R1 (the Wrap and Yawn residual handlers traced only at their reachable posi
 Fidelity WH (White Herb, Sacred Fire's thaw and Facade) merged with R1 moved it to a19958b5, the merge's transition.py;
 its review fixes (Trick's received herb, fewer traced triggers) moved it to 91346285, and the B2 Trick-credit rule
 to 13f76e5e. M2's R2 (the older residual handlers traced only at their reachable positions) moved it to a8c48fa7, and its
-Encore stale-move clear to 7c984fe6. The batched transition PR (bugs F, G, F1, F2: Pursuit's intercept, Sleep Talk's failing
-call, the battle-ending upkeep and the TURN-line clocks, all on the device public path) moved it to 55b28d7a.
+Encore stale-move clear to 7c984fe6.
+Fidelity tier D (Wonder Guard, the pinch abilities, Poison Point / Flame Body / Effect Spore) moved it to d880714c, and its
+Pursuit-intercept device reveals to c471195a. The combined Tier D and transition-batch canary merge
+adds the reviewed Pursuit damage-credit path while preserving contact ability reveals and sleep draws.
 """
-CURRENT_TRANSITION = '55b28d7a8433c4539de0f51b7b3416a2dc9cab81'
+CURRENT_TRANSITION = '90fbaa6e68039392a24851030495908f7402efa9'
