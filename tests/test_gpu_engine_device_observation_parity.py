@@ -3,6 +3,7 @@ import json
 import subprocess
 import numpy as np
 from gpu_engine.device_observation_parity import AgreementParity
+from gpu_engine.encoder_parity_policy import cumulative_columns, float32_ulp_distance
 
 
 def view():
@@ -52,7 +53,7 @@ class DeviceAgreementParityTests(unittest.TestCase):
         self.assertEqual(reports[1]['joint_match_fraction_on_ALL_agreement_views'],1/3)
         with self.assertRaises(ValueError):AgreementParity(source_bindings={'test':'synthetic'},comparison_mode='guess')
 
-    def test_strict_reports_preserve_baseline_except_the_zero_numeric_threshold(self):
+    def test_reports_preserve_baseline_except_explicit_numeric_policy(self):
         baseline={}
         source=subprocess.check_output(['git','show','f7b1ebc919738775d4bb259d8d339952c33fbd71:gpu_engine/device_observation_parity.py'],text=True)
         exec(compile(source,'<frozen-original-comparator>','exec'),baseline)
@@ -67,11 +68,40 @@ class DeviceAgreementParityTests(unittest.TestCase):
             r.add(decision_id='good',turn=13,line_kinds=['move'],agreement=True,reference=a,candidate=a)
             r.add(decision_id='good',turn=13,line_kinds=['move'],agreement=True,reference=a,candidate=a)
             report=r.report()
-            if cls is baseline['AgreementParity']:
-                for column in report['columns']:
-                    if column['kind']=='numeric':column['tolerance']=0
+            report['counts'].pop('one_ulp_cumulative_cells', None)
+            for column in report['columns']:
+                if column['kind']=='numeric':
+                    column['tolerance']=0
+                    for key in ('tolerance_unit', 'cumulative_accumulator', 'one_ulp_cells', 'max_float32_ulp_difference'):
+                        column.pop(key, None)
             reports.append(json.dumps(report,sort_keys=True,indent=2,allow_nan=False)+'\n')
         self.assertEqual(reports[0],reports[1]);self.assertEqual(reports[0],reports[2])
+
+    def test_only_named_pair_columns_allow_one_ulp_and_report_counts(self):
+        self.assertEqual(set(cumulative_columns().values()), {
+            'LAST_DAMAGE_DEALT', 'LAST_DAMAGE_TAKEN', 'SELF_HAZARD_CREDIT', 'OPP_HAZARD_CREDIT'})
+        for column in range(132):
+            for steps in (1, 2):
+                a=view();b=view();value=np.float32(.5)
+                a['numeric_features'][0,column]=value
+                for _ in range(steps):value=np.nextafter(value,np.float32(1))
+                b['numeric_features'][0,column]=value
+                r=AgreementParity(source_bindings={'test':'synthetic'})
+                r.add(decision_id='ulp',turn=11,line_kinds=['-damage'],agreement=True,reference=a,candidate=b)
+                report=r.report();allowed=column in cumulative_columns()
+                self.assertEqual(report['counts']['joint_match'], int(allowed and steps==1))
+                item=next(c for c in report['columns'] if c['kind']=='numeric' and c['column']==column)
+                self.assertEqual(item['tolerance'], int(allowed))
+                self.assertEqual(item['max_float32_ulp_difference'], steps)
+                self.assertEqual(item['one_ulp_cells'], int(steps==1))
+                self.assertEqual(report['counts']['one_ulp_cumulative_cells'],int(allowed and steps==1))
+
+    def test_ulp_gate_rejects_nonfinite_and_lossy_json_values(self):
+        for a,b in ((float('inf'),float('inf')), (float('nan'),0.), (.5,.5+2**-40)):
+            self.assertGreater(int(float32_ulp_distance(a,b)),1)
+        for a,b in ((np.float32(-.5),np.nextafter(np.float32(-.5),np.float32(0))),
+                    (np.float32(0),np.nextafter(np.float32(0),np.float32(1)))):
+            self.assertEqual(int(float32_ulp_distance(a,b)),1)
 
     def test_one_ulp_and_signed_zero_are_mismatches_by_default(self):
         for old,new in ((np.float32(.73),np.nextafter(np.float32(.73),np.float32(0))),

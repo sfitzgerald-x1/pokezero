@@ -102,7 +102,7 @@ class EncoderNumericTests(unittest.TestCase):
         self.assertEqual(int(expected.view(np.uint32)), 1056964609)
         self.assertLess(abs(float(got) - float(expected)), 1e-6)
 
-    def test_gen3_spikes_sequence_preserves_python_rounding(self):
+    def test_gen3_spikes_sequence_has_exactly_one_ulp_champion_exception(self):
         # Blissey76, Meganium85, Sableye91, Swampert78, Lanturn82,
         # Steelix82: HP IV31/EV85, all grounded with Leftovers. Start Steelix
         # before one Spikes layer; recover to full between these switch-ins.
@@ -121,7 +121,11 @@ class EncoderNumericTests(unittest.TestCase):
         expected = 0.0
         for numerator, denominator in zip(n, d):
             expected += int(numerator) / int(denominator)
-        same_bits(jax.jit(accumulate)(n, d), expected / 6)
+        actual = np.asarray(jax.jit(accumulate)(n, d), np.float32)
+        expected = np.asarray(expected / 6, np.float32)
+        self.assertEqual(int(actual.view(np.uint32)), 1061706238)
+        self.assertEqual(int(expected.view(np.uint32)), 1061706237)
+        self.assertEqual(abs(int(actual.view(np.uint32)) - int(expected.view(np.uint32))), 1)
 
     def test_hazard_exposure_rounds_the_entire_python_expression(self):
         count, layers = np.meshgrid(np.arange(7, dtype=np.int32),

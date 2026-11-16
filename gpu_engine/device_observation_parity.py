@@ -8,6 +8,7 @@ Numerical checks alone do not attest collection provenance or pass all B4 gates.
 """
 from collections import Counter, defaultdict
 import numpy as np
+from .encoder_parity_policy import compare_numeric, cumulative_columns
 
 
 SHAPES = dict(numeric_features=((29, 132), 'f'), categorical_ids=((29, 41), 'iu'),
@@ -29,6 +30,8 @@ class AgreementParity:
         self.category_bad = np.zeros((29, 41), np.int64)
         self.numeric_max = np.zeros((29, 132), np.float64)
         self.numeric_nonfinite = np.zeros((29, 132), np.int64)
+        self.numeric_one_ulp = np.zeros((29, 132), np.int64)
+        self.numeric_max_ulp = np.zeros((29, 132), np.int64)
         self.structure_bad = Counter()
         self.column_kind = Counter()
         self.switch_coordinate_bad = np.zeros(5, np.int64)
@@ -102,7 +105,10 @@ class AgreementParity:
         finite = np.isfinite(left) & np.isfinite(right)
         with np.errstate(invalid='ignore', over='ignore'):
             delta = np.where(finite, np.abs(left-right), 0.)
-        nb = ~finite | (delta > 0) | (np.signbit(left) != np.signbit(right))
+        nb, ulps = compare_numeric(left, right)
+        self.numeric_one_ulp += ulps == 1
+        self.numeric_max_ulp = np.maximum(self.numeric_max_ulp, np.where(finite, ulps, 0))
+        self.total['one_ulp_cumulative_cells'] += int((ulps[:, list(cumulative_columns())] == 1).sum())
         cb = (ref['categorical_ids'] != got['categorical_ids']) | (got['categorical_ids'] < 0) | (ref['categorical_ids'] < 0)
         self.numeric_bad += nb; self.category_bad += cb
         self.numeric_nonfinite += ~finite | ~np.isfinite(delta)
@@ -129,7 +135,11 @@ class AgreementParity:
                 value = dict(kind=kind, column=column, compared_views=self.total['compared'],
                     compared_cells=29*self.total['compared'], mismatched_cells=int(bad[:, column].sum()),
                     token_mismatched_cells=bad[:, column].tolist())
-                if kind == 'numeric':value.update(tolerance=0,
+                if kind == 'numeric':value.update(tolerance=int(column in cumulative_columns()),
+                    tolerance_unit='float32_ulp',
+                    cumulative_accumulator=cumulative_columns().get(column),
+                    one_ulp_cells=int(self.numeric_one_ulp[:, column].sum()),
+                    max_float32_ulp_difference=int(self.numeric_max_ulp[:, column].max()),
                     max_finite_absolute_difference=float(self.numeric_max[:, column].max()),
                     nonfinite_cells=int(self.numeric_nonfinite[:, column].sum()))
                 else:value['tolerance'] = 0

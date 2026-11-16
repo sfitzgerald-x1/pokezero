@@ -561,20 +561,21 @@ def b2_view(b2, lane, catalog):
 
 FLOAT_FIELDS = ('last_damage_taken', 'last_damage_dealt', 'damage_exact_taken', 'damage_exact_dealt', 'hazard_shown',
                 'hazard_exact')
-# Encoder readouts and damage accumulators now follow Python's float32 bits.
-# Retain the report's numeric-list field for compatibility, with no exemptions.
-FLOAT_TOLERANCE = 0.0
-NUMERIC_NOTE = 'Python-rounded lookup fractions and compensated sums; zero tolerance'
+# Only these underlying cumulative damage/hazard sums receive the lead's
+# one-ULP exception; every other probe field remains exact.
+FLOAT_ULP_TOLERANCE = 1
+NUMERIC_NOTE = 'Cumulative damage/hazard sums: at most 1 float32 ULP; all other fields exact'
 
 
 def _within_tolerance(a, b):
     if not isinstance(a, float) or not isinstance(b, float):return False
-    return abs(a - b) < FLOAT_TOLERANCE
+    from .encoder_parity_policy import float32_ulp_distance
+    return bool(float32_ulp_distance(a, b) <= FLOAT_ULP_TOLERANCE)
 
 
 def compare_views(device, b2, numeric=None):
     """Field-by-field differences, keyed side:slot:field (mon), side:active:field, side:field and field. A FLOAT_FIELDS
-    pair closer than FLOAT_TOLERANCE goes to `numeric` (a list), see NUMERIC_NOTE."""
+    pair at most FLOAT_ULP_TOLERANCE apart goes to `numeric` (a list), see NUMERIC_NOTE."""
     diffs = []
     for s in range(2):
         for part in ('active', 'side'):
