@@ -149,6 +149,17 @@ class DeviceAgreementParityTests(unittest.TestCase):
         self.assertEqual(p['columns'][132+40]['mismatched_cells'],1)
         self.assertFalse(p['numerical_gate_only'])
 
+    def test_any_outside_policy_cell_fails_an_otherwise_qualified_cohort(self):
+        r=AgreementParity(source_bindings={'test':'synthetic'});a=view()
+        for i in range(10000):
+            r.add(decision_id=str(i),turn=11,line_kinds=['move'],agreement=True,reference=a,candidate=a)
+        self.assertTrue(r.report()['numerical_gate_only'])
+        b=view();column=next(iter(cumulative_columns()))
+        a['numeric_features'][0,column]=np.float32(.5)
+        b['numeric_features'][0,column]=np.nextafter(np.nextafter(np.float32(.5),np.float32(1)),np.float32(1))
+        r.add(decision_id='two-ulp',turn=11,line_kinds=['-damage'],agreement=True,reference=a,candidate=b)
+        self.assertFalse(r.report()['numerical_gate_only'])
+
     def test_refusals_are_nonfatal_and_keep_agreement_denominator(self):
         r=AgreementParity(source_bindings={'test':'synthetic'});a=view()
         r.add(decision_id='a',turn=1,line_kinds=['UNSUPPORTED_KIND'],agreement=True,

@@ -156,7 +156,7 @@ class AgreementParity:
             views_by_turn=[dict(turn=k, **dict(v)) for k, v in sorted(self.turns.items())],
             compared_views_turn10_or_later=late,
             minimum_compared_views_met=enough, minimum_late_views_met=late_enough,
-            numerical_gate_only=bool(enough and late_enough and ratio is not None and ratio >= .99
+            numerical_gate_only=bool(enough and late_enough and ratio is not None and ratio == 1.0
                 and not self.total['metadata_refused']),
             collection_provenance_independently_verified=False, full_B4_pass=False,
             structure_mismatched_views=dict(self.structure_bad),
