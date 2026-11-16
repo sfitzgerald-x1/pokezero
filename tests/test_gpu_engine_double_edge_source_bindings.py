@@ -27,9 +27,10 @@ class DoubleEdgeSourceBindingTests(unittest.TestCase):
   # literal became a per-module DOMAIN_PINS / KERNEL_PINS table, the gates check it module by module (and the table
   # against the module list, in order), and chance_consumers' tables moved to chance_consumers_pins.py, whose
   # inventory is bound here too. The witness body is unchanged (its SOURCE_PINS only took one entry per line).
-  certified={'chance_consumers.py':'a1b0218a5ae9ec2be430f48e5c4f07dae4df818e',
+  # 5166db32 binds each plan identity to the same source snapshot its per-module gate validated.
+  certified={'chance_consumers.py':'5166db320a7681c6e0181409adc2425c176ece9c',
              'chance_consumers_pins.py':'cf0bb33db8c2ab0247c8c0988538eb29811d0a9b',
-             'phase_d_chance.py':'a1b0218a5ae9ec2be430f48e5c4f07dae4df818e',
+             'phase_d_chance.py':'5166db320a7681c6e0181409adc2425c176ece9c',
              'conditional_law.py':'cf0bb33db8c2ab0247c8c0988538eb29811d0a9b',
              'engine_source_frame_witness.py':'3b0cc40e6709bd19fe70a6295580a51590dd4f57',
              'ordinary_law.py':'cf0bb33db8c2ab0247c8c0988538eb29811d0a9b'}
