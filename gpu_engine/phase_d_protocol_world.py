@@ -11,6 +11,7 @@ import hashlib
 import json
 import random
 
+import jax
 import jax.numpy as j
 import numpy as np
 
@@ -25,6 +26,28 @@ from .v5_hypothetical_state import map_spec
 from .phase_d_constructor_rules import public_hp_bin,request_ordered_packed,own_pp_carry,sleep_support
 
 SCHEMA='pokezero.phase-d.protocol-materialization.v1'
+
+
+# Each world is built on the host (NumPy, from a host empty-state template and its batched world key) and transferred once
+# (_device), instead of ~800 eager device ops per world. False keeps the eager device build, the byte-for-byte reference
+# the parity tests compare against.
+HOST_WORLDS=True
+
+
+def _device(state):
+    """A host-built world state's NumPy leaves as device arrays, as map_spec's own j.asarray made them: same values, dtypes."""
+    return jax.tree_util.tree_map(lambda x:j.asarray(x) if isinstance(x,np.ndarray) else x,state)
+
+
+def _device_carry(carry):
+    """_rebase_host's carry with exactly the leaves _rebase writes made device arrays, as _rebase's scatters made them; every
+    other leaf is the root's own, unchanged. Equal placement holds because the protocol route's root carry is uncommitted
+    (from_b2 builds it with j.asarray/j.zeros and eager scatters): a scatter keeps an uncommitted input on the default device,
+    exactly where j.asarray puts the converted leaf. A committed root carry would need its device passed here."""
+    history=carry.damage_history
+    if history is not None:history=history._replace(hp=j.asarray(history.hp),maximum=j.asarray(history.maximum))
+    return carry._replace(damage_history=history,physical_to_public=j.asarray(carry.physical_to_public),
+        active_physical=j.asarray(carry.active_physical),own_order=j.asarray(carry.own_order))
 
 
 @dataclass(frozen=True)
@@ -74,12 +97,14 @@ def _chronology(lines):
 
 def preflight_checks(payload,removed=None):
     """Same predicates used by production and collect-all; missing is UNKNOWN."""
-    checks=[dict(kind='native-probed-hard-trapped-own-request',status='TRIGGERED' if payload.get('selfActiveRequestState',{}).get('trapped') else 'CLEAR',fatal=True),
-        dict(kind='deferred-baton-phase',status='TRIGGERED' if payload.get('pendingBatonPassSides') else 'CLEAR',fatal=True)]
+    # A request `trapped` is not probed here: battle_spec_from_payload requires the sampled world to reproduce it
+    # (engine_world._require_world_reproduces_trap) and the device derives it per request (transition.action_mask).
+    checks=[dict(kind='deferred-baton-phase',status='TRIGGERED' if payload.get('pendingBatonPassSides') else 'CLEAR',fatal=True)]
     for seat,side in payload['sides'].items():
-        # encore is not refused: its count is drawn from the public posterior (_encore_facts, _write_encores); trapped,
-        # solarbeam and a Mean Look trap still are.
-        fail=bool(side.get('meanlookTrap') or set(side['volatiles'])&{'trapped','solarbeam'})
+        # encore is not refused: its count is drawn from the public posterior (_encore_facts, _write_encores); nor is a Mean
+        # Look trap on our own active (no clock: _write_own_meanlook links it to the world's trapper). trapped, solarbeam and
+        # a Mean Look trap on the opponent still are.
+        fail=bool(side.get('meanlookTrap') and seat!=payload.get('selfPlayer') or set(side['volatiles'])&{'trapped','solarbeam'})
         checks.append(dict(kind='native-probed-or-hidden-volatile-clock',status='TRIGGERED' if fail else 'CLEAR',side=seat,fatal=True))
         blockers=side.get('materializationBlockers',())
         failed=[kind for kind in blockers if not (str(kind).startswith('item-state-removed:') and normalize_id(str(kind).split(':',1)[1]) in (removed or {}).get(seat,()))]
@@ -276,10 +301,10 @@ def _write_encores(physical,encored,facts,seed,*,replacement,owner):
             ids=np.asarray(physical.moves)[0,side,at];off=np.asarray(physical.disabled)[0,side,at];pp=np.asarray(physical.pp)[0,side,at]
             if off[slot] or any(ids[k]>0 and not off[k] and pp[k]>0 for k in range(len(ids)) if k!=slot):
                 raise ValueError('PUBLIC_ENCORE_REQUEST_DISAGREEMENT')
-            physical=physical._replace(disabled=physical.disabled.at[0,side,at].set(False))
+            physical=physical._replace(disabled=tail._put(physical.disabled,(0,side,at),False))
         count=random.Random(f'encore:{seed}:{side}').choice(support)
-        physical=physical._replace(encore_move=physical.encore_move.at[0,side,at].set(move),
-            encore_counter=physical.encore_counter.at[0,side,at].set(count))
+        physical=physical._replace(encore_move=tail._put(physical.encore_move,(0,side,at),move),
+            encore_counter=tail._put(physical.encore_counter,(0,side,at),count))
     return physical
 
 
@@ -287,13 +312,131 @@ def _write_held_counts(physical,yawns,perish):
     """The mapped world with Yawn's public count (_defer_yawn) and Perish Song's duration (_perish_counts) on each side's
     active; neither is an own field. map_spec wrote the shown perishN; a count the lines do not explain refuses."""
     for side,count in yawns:
-        physical=physical._replace(yawn_counter=physical.yawn_counter.at[0,side,physical.active[0,side]].set(count))
+        physical=physical._replace(yawn_counter=tail._put(physical.yawn_counter,(0,side,int(physical.active[0,side])),count))
     for side in (0,1):
         at=int(physical.active[0,side]);shown=int(physical.perish_counter[0,side,at])
         if not shown:continue
         if perish[side] is None or min(perish[side],3)!=shown:raise ValueError('PUBLIC_PERISH_COUNT_UNAVAILABLE')
-        physical=physical._replace(perish_counter=physical.perish_counter.at[0,side,at].set(perish[side]))
+        physical=physical._replace(perish_counter=tail._put(physical.perish_counter,(0,side,at),perish[side]))
     return physical
+
+
+PARTIAL_TRAP_MOVES=frozenset(('wrap','bind','clamp','firespin','whirlpool','sandtomb'))   # pokezero.showdown._PARTIAL_TRAP_MOVES
+
+
+def wrap_support(k):
+    """The remaining partial-trap duration Showdown can hold after k residual ticks since the trap started: Gen 3 inherits
+    gen4's partiallytrapped durationCallback, random(3, 7) (data/mods/gen4/conditions.ts:110-118); each residual lowers the
+    duration first and at 0 ends it with |-end|X|<move>|[partiallytrapped] and no damage (sim/battle.ts:515-523, onEnd at
+    data/conditions.ts:245-247), else its onResidual (data/mods/gen5/conditions.ts:14-22) damages the holder,
+    |-damage|X|<hp>|[from] move: <move>|[partiallytrapped] (sim/battle.ts:2140-2141). Still trapped after k ticks means
+    D > k, so the remaining duration r = D - k (the engine's partial_trap_counter, transition.py's residual) is uniform on
+    this support (empty: the lines contradict a live trap)."""
+    return tuple(range(max(1,3-k),7-k))
+
+
+def _wrap_facts(lines):
+    """Per side (p1, p2): that side's live partial trap as the lines show it, or None without one. The trap starts at the
+    side's latest |-activate|<side>a: X|move: M|[of] <trapper> (partiallytrapped's onStart, data/conditions.ts:229-232; a
+    repeat hit on a trapped mon adds nothing and prints no line); it is over at a later |-end|<side>a: X|M|[partiallytrapped]
+    (silent or not: the duration, Rapid Spin, the holder's Substitute, a trapper gone at a residual) or a faint of the
+    side, and not this active's when the side's current active arrived after it or is another mon (a Baton Pass carries
+    the trap with no new line). The fact: k, the |-damage|<side>a: X|..|[partiallytrapped] ticks since the start; upkeeps,
+    the |upkeep| lines since (each residual since ticks or ends it, so a live trap has k == upkeeps); turns, the |turn|
+    lines since (B2's wrap_trap_turns, public_active.py's TURN clock); trapper_active, whether the [of] mon is the opposing
+    side's current active (its latest switch-in precedes the start)."""
+    rows=[str(x).split('|') for x in lines];out=[None,None]
+    arrivals=lambda seat:max((i for i,p in enumerate(rows) if len(p)>2 and p[1] in ('switch','drag','replace') and p[2].startswith(seat)),default=None)
+    for side in (0,1):
+        seat=f'p{side+1}a'
+        start=max((i for i,p in enumerate(rows) if len(p)>3 and p[1]=='-activate' and p[2].startswith(seat)
+            and p[3].startswith('move: ') and normalize_id(p[3][len('move: '):]) in PARTIAL_TRAP_MOVES),default=None)
+        if start is None:continue
+        later=rows[start+1:]
+        if any(len(p)>3 and p[1]=='-end' and p[2].startswith(seat) and normalize_id(p[3].removeprefix('move: ')) in PARTIAL_TRAP_MOVES
+                or len(p)>2 and p[1]=='faint' and p[2].startswith(seat) for p in later):continue
+        active=arrivals(seat)
+        if active is None or active>start or rows[active][2]!=rows[start][2]:continue
+        of=[x[len('[of] '):] for x in rows[start][4:] if x.startswith('[of] ')];trapper=arrivals(f'p{2-side}a')
+        out[side]=dict(k=sum(1 for p in later if len(p)>4 and p[1]=='-damage' and p[2].startswith(seat) and '[partiallytrapped]' in p[4:]),
+            upkeeps=sum(1 for p in later if p[1:2]==['upkeep']),turns=sum(1 for p in later if p[1:2]==['turn']),
+            trapper_active=len(of)==1 and trapper is not None and trapper<start and rows[trapper][2]==of[0])
+    return tuple(out)
+
+
+def _defer_traps(payload,owner):
+    """Typed bridge projection: the payload without each side's partiallytrapped volatile (the CPU materializer refuses it,
+    volatile_unsupported, as its remaining duration is hidden; _write_wraps draws it per world) and without our own Mean
+    Look flag (meanlookTrap: the CPU materializer would add the native-probed trapped volatile; _write_own_meanlook links the
+    world's trapper instead). When either cause is ours, our request's `trapped` leaves the projection too: the CPU world no
+    longer holds its cause (engine_world._require_world_reproduces_trap would refuse it), and the finished world's root mask
+    is checked against the request instead (OWN_REQUEST_TRAP_REPRODUCED). Returns (projection, our Mean Look, wrapped sides);
+    the payload itself when there is nothing to defer."""
+    seat=f'p{owner+1}'
+    wrapped=tuple(sorted(int(name[1])-1 for name,side in payload['sides'].items() if 'partiallytrapped' in side['volatiles']))
+    meanlook=bool(payload['sides'][seat].get('meanlookTrap'))
+    if not wrapped and not meanlook:return payload,False,()
+    projected=json.loads(json.dumps(payload))
+    for side in projected['sides'].values():side['volatiles']=[v for v in side['volatiles'] if v!='partiallytrapped']
+    if meanlook:projected['sides'][seat]['meanlookTrap']=False
+    request=projected.get('selfActiveRequestState')
+    if (meanlook or owner in wrapped) and isinstance(request,dict) and request.get('trapped'):request['trapped']=False
+    return projected,meanlook,wrapped
+
+
+def _wrap_agreement(facts,wrapped,detached,owner):
+    """Lines, payload and B2 agree on every side's partial trap: the payload holds partiallytrapped exactly where the lines
+    show a live trap (else PUBLIC_WRAP_PAYLOAD_DISAGREEMENT; payload without lines is _write_wraps' START refusal), and B2's
+    fold holds it on that active exactly there too, with its wrap_trap_turns (public turns elapsed) equal to the lines'
+    |turn| count since the start (else PUBLIC_WRAP_B2_DISAGREEMENT)."""
+    view=detached.view;bit=live.hooks.VOLATILE_NAMES.index('partiallytrapped');foe=1-owner
+    if any(view.get(name) is None for name in ('active','own_volatiles','volatiles')):
+        # A carry without B2's bags holds no partial trap: only lines and a payload that show none agree with it.
+        if wrapped or any(fact is not None for fact in facts):raise ValueError('PUBLIC_WRAP_B2_DISAGREEMENT')
+        return
+    own_at=int(np.asarray(detached.own['active']));shown=np.asarray(view['active'])[0].astype(bool)
+    held={owner:bool(np.asarray(view['own_volatiles'])[0,own_at,bit]),foe:bool((np.asarray(view['volatiles'])[0,:,bit]&shown).any())}
+    if not wrapped and not any(held.values()) and all(fact is None for fact in facts):return
+    clocks={owner:np.asarray(view['own_mon_features']['wrap_trap_turns'])[0,[own_at]],foe:np.asarray(view['mon_features']['wrap_trap_turns'])[0,shown]}
+    for side in (0,1):
+        if facts[side] is not None and side not in wrapped:raise ValueError('PUBLIC_WRAP_PAYLOAD_DISAGREEMENT')
+        if held[side]!=(side in wrapped):raise ValueError('PUBLIC_WRAP_B2_DISAGREEMENT')
+        if held[side] and facts[side] is not None and [int(x) for x in clocks[side]]!=[facts[side]['turns']]:
+            raise ValueError('PUBLIC_WRAP_B2_DISAGREEMENT')
+
+
+def _write_wraps(physical,wrapped,facts,seed):
+    """The world with each wrapped active's remaining partial-trap duration drawn uniformly from wrap_support (its own RNG
+    per world and side, as _write_encores) and its trapper, the opposing active, as this world's party index (the engine's
+    partial_trap_source: transition.py's residual releases the trap once that index is not the foe's living active, and
+    state.partially_trapped traps only while it is). Refuses: no live trap on the lines (PUBLIC_WRAP_START_UNAVAILABLE), a
+    support the lines rule out (PUBLIC_WRAP_COUNT_UNAVAILABLE), ticks that are not one per residual since the start
+    (PUBLIC_WRAP_TICK_DISAGREEMENT), or a trapper that is not the opposing current active (PUBLIC_WRAP_TRAPPER_NOT_ACTIVE)."""
+    for side in wrapped:
+        fact=facts[side]
+        if fact is None:raise ValueError('PUBLIC_WRAP_START_UNAVAILABLE')
+        support=wrap_support(fact['k'])
+        if not support:raise ValueError('PUBLIC_WRAP_COUNT_UNAVAILABLE')
+        if fact['k']!=fact['upkeeps']:raise ValueError('PUBLIC_WRAP_TICK_DISAGREEMENT')
+        if not fact['trapper_active']:raise ValueError('PUBLIC_WRAP_TRAPPER_NOT_ACTIVE')
+        at=int(physical.active[0,side]);count=random.Random(f'wrap:{seed}:{side}').choice(support)
+        physical=physical._replace(partial_trap_counter=tail._put(physical.partial_trap_counter,(0,side,at),count),
+            partial_trap_source=tail._put(physical.partial_trap_source,(0,side,at),int(physical.active[0,1-side])))
+    return physical
+
+
+def _write_own_meanlook(physical,detached,meanlook,owner):
+    """Our active's Mean Look / Spider Web / Block trap, linked to this world's trapper. B2's fold and the payload both clear
+    the flag at any switch, drag or faint of either active (pokezero.showdown._update_meanlook_trap and its parse loop), so
+    a live one was set by the opposing current active, and the trap has no clock (it lasts until either leaves). from_b2
+    wrote the link as 0, a coordinate of no world; it becomes the opposing active's party index here, as
+    device_public_world_state's materializer rebases it (the engine traps while trap_source is the foe's living active,
+    state.legal_actions). Refuses when B2 and the payload disagree (OWN_MEANLOOK_B2_PAYLOAD_DISAGREEMENT)."""
+    if bool((np.asarray(detached.own.get('trap_source',-1))>=0).any())!=meanlook:raise ValueError('OWN_MEANLOOK_B2_PAYLOAD_DISAGREEMENT')
+    if not meanlook:return physical
+    at=int(np.asarray(detached.own['active']))
+    if int(np.asarray(detached.own['trap_source'])[at])<0:raise ValueError('OWN_MEANLOOK_B2_PAYLOAD_DISAGREEMENT')
+    return physical._replace(trap_source=tail._put(physical.trap_source,(0,owner,at),int(physical.active[0,1-owner])))
 
 
 def _restore_sleep(physical,detached,metadata,sleepers,origins,rng,base_abilities,*,diagnostics=None):
@@ -325,8 +468,8 @@ def _restore_sleep(physical,detached,metadata,sleepers,origins,rng,base_abilitie
             rates=tuple(2 if (ability if ability is not None else base)=='earlybird' else 1 for ability in attempts)
             support=sleep_support(count,rest,early_bird=early,skipped=skipped,pending=evidence['pending'],refunded=refunded,attempt_rates=rates,attempt_refunds=evidence['attempt_refunds'])
             counter=support[0] if len(support)==1 else rng.choice(support)
-            restored=restored._replace(status=restored.status.at[0,side,at].set(5),status_counter=restored.status_counter.at[0,side,at].set(counter),
-                rest_origin=restored.rest_origin.at[0,side,at].set(rest),sleep_skipped=restored.sleep_skipped.at[0,side,at].set(skipped))
+            restored=restored._replace(status=tail._put(restored.status,(0,side,at),5),status_counter=tail._put(restored.status_counter,(0,side,at),counter),
+                rest_origin=tail._put(restored.rest_origin,(0,side,at),rest),sleep_skipped=tail._put(restored.sleep_skipped,(0,side,at),skipped))
             restored_slots.add((side,at))
             diagnostics.append(dict(kind='public-sleep-posterior',status='CLEAR',fatal=False,side=side,slot=at,support=list(support),sampled_counter=counter,rest=rest,skipped=skipped,
                 validation='HIDDEN_CLOCK_SUPPORT_NOT_EXACT_OWN_EQUALITY'))
@@ -369,7 +512,7 @@ def _carry_public_foe(physical,detached,metadata,world,foe,rng,diagnostics):
         if int(physical.status[0,foe,slot])==4:
             try:
                 counter=live._physical_toxic_counter(detached.view['mon_features']['toxic_stage'][0,public])
-                physical=physical._replace(status_counter=physical.status_counter.at[0,foe,slot].set(counter))
+                physical=physical._replace(status_counter=tail._put(physical.status_counter,(0,foe,slot),counter))
                 record('PUBLIC_TOXIC_STAGE_INVALID',False,slot=slot)
             except ValueError as error:record(getattr(error,'kind',str(error)),True,slot=slot)
     active=int(physical.active[0,foe]);active_public=[p for p,v in assignment.items()if v==active]
@@ -377,11 +520,12 @@ def _carry_public_foe(physical,detached,metadata,world,foe,rng,diagnostics):
     if len(active_public)==1:
         try:
             counter=live._physical_protect_counter(detached.view['mon_features']['stall_counter'][0,active_public[0]])
-            physical=physical._replace(protect_counter=physical.protect_counter.at[0,foe,active].set(counter))
+            physical=physical._replace(protect_counter=tail._put(physical.protect_counter,(0,foe,active),counter))
             record('PUBLIC_PROTECT_STREAK_INVALID',False)
         except ValueError as error:record(getattr(error,'kind',str(error)),True)
     else:diagnostics.append(dict(kind='PUBLIC_PROTECT_STREAK_INVALID',status='NOT_EVALUABLE',fatal=True,reason='Actual active public join unavailable'))
-    return physical._replace(pp=j.asarray(pp),hp=j.asarray(hp)),assignment,active,failures
+    host=isinstance(physical.hp,np.ndarray)   # a host-built world keeps NumPy until its one transfer
+    return physical._replace(pp=pp if host else j.asarray(pp),hp=hp if host else j.asarray(hp)),assignment,active,failures
 
 
 def _downstream_unknowns(diagnostics,reason):
@@ -390,7 +534,18 @@ def _downstream_unknowns(diagnostics,reason):
             diagnostics.append(dict(kind=kind,status='NOT_EVALUABLE',fatal=True,reason=reason))
 
 
-def materialize_protocol(root,start,*,inputs,seed):
+def _host_arrays(seed,key):
+    """empty_state(1, seed=seed) on the host: the cached constant template and this seed's key (world_keys, computed for all of
+    a root's worlds in one call by sample()). The seed is checked as empty_state checks it, and map_spec calls this builder where
+    empty_state would run, so a bad seed refuses with the same error at the same point."""
+    if type(seed) is not int or not 0<=seed<2**32:raise ValueError('seed must be an unsigned 32-bit integer')
+    arrays=states._empty_arrays()
+    if key is None:key=states.world_keys([seed])[0]
+    arrays['keys']=np.array(key,np.uint32).reshape(arrays['keys'].shape)
+    return arrays
+
+
+def materialize_protocol(root,start,*,inputs,seed,key=None):
     """Pure typed mapping with exact own request and no true-opponent donor."""
     if type(root)is not PublicRoot or type(start)is not BattleStartOverride or type(inputs)is not ProtocolInputs:
         raise ValueError('typed genuine public root/start/protocol inputs required')
@@ -409,6 +564,7 @@ def materialize_protocol(root,start,*,inputs,seed):
         projected,sleepers=_defer_sleep(root.materialization_payload)
         projected=tail.defer_substitutes(projected,tail_facts['fresh_substitutes'])
         projected,yawns=_defer_yawn(projected,inputs.lines)
+        projected,own_meanlook,wrapped=_defer_traps(projected,owner)
         origins=_once(inputs,root,'origins',lambda:_sleep_origins(inputs.lines))
         revealed={normalize_id(name):candidates for slot,universe,candidates,gender,name in
                   _once(inputs,root,'revealed',lambda:tuple(public_worlds._revealed(detached,inputs.source)),shared=True)}
@@ -441,7 +597,8 @@ def materialize_protocol(root,start,*,inputs,seed):
         mood[owner]=tuple(map(int,detached.own['happiness']))
         mapping_spec,cursors=tail.mapping_spec(world.spec,tail_facts['replacement'])
         mapped=map_spec(mapping_spec,metadata=metadata,dex=catalog.dex,seed=seed,
-            turn=root.materialization_payload['turn'],active_turns=_once(inputs,root,'chronology',lambda:_chronology(inputs.lines)),happiness=tuple(mood),held_volatiles=True)
+            turn=root.materialization_payload['turn'],active_turns=_once(inputs,root,'chronology',lambda:_chronology(inputs.lines)),happiness=tuple(mood),held_volatiles=True,
+            arrays=(lambda:_host_arrays(seed,key)) if HOST_WORLDS else None)
         if mapped.state is None:
             _downstream_unknowns(diagnostics,'Typed mapper refused: '+repr(mapped.refusals))
             return ProtocolWorld(None,None,mapped.refusals,mapper_diagnostics=tuple(diagnostics))
@@ -471,7 +628,7 @@ def materialize_protocol(root,start,*,inputs,seed):
             source='LATEST_OWN_ACTIVE_REQUEST_PLUS_PUBLIC_POST_SNAPSHOT_COSTS',
             entries=[dict(slot=int(a),move=int(b),mapped=int(physical.pp[0,owner,a,b]),carried=int(own['pp'][a,b])) for a,b in zip(*np.where(np.asarray(physical.pp)[0,owner]!=own['pp']))]))
         if not failures:
-            updates={name:getattr(physical,name).at[0,owner].set(j.asarray(own[name]))
+            updates={name:tail._put(getattr(physical,name),(0,owner),np.asarray(own[name]))
                 for name in public_worlds.OWN_MON_FIELDS+public_worlds.OWN_SIDE_FIELDS}
             physical=physical._replace(**updates)
         # A known public PP charge subtracts from sampled source max; no
@@ -488,13 +645,41 @@ def materialize_protocol(root,start,*,inputs,seed):
         try:physical=_write_encores(physical,encored,_once(inputs,root,'encore_facts',lambda:_encore_facts(inputs.lines)) if encored else (None,None),
             seed,replacement=tail_facts['replacement'] is not None,owner=owner)
         except ValueError as error:failures.append(str(error))
+        # Traps with no public clock in the payload: our Mean Look link, and each side's partial trap (drawn per world).
+        try:
+            physical=_write_own_meanlook(physical,detached,own_meanlook,owner)
+            wrap_facts=_once(inputs,root,'wrap_facts',lambda:_wrap_facts(inputs.lines),shared=True)
+            _wrap_agreement(wrap_facts,wrapped,detached,owner)
+            physical=_write_wraps(physical,wrapped,wrap_facts,seed)
+        except ValueError as error:
+            failures.append(str(error))
+            if wrapped:diagnostics.append(dict(kind='PUBLIC_WRAP_WORLD_POSTERIOR',status='TRIGGERED',fatal=True,reason=str(error)))
+        else:
+            if wrapped:diagnostics.append(dict(kind='PUBLIC_WRAP_WORLD_POSTERIOR',status='CLEAR',fatal=True,
+                supports={side:list(wrap_support(wrap_facts[side]['k'])) for side in wrapped},
+                drawn={side:int(physical.partial_trap_counter[0,side,int(physical.active[0,side])]) for side in wrapped}))
+        if tail_facts['replacement'] is None and ((state.self_request.get('active')or[{}])[0]).get('trapped'):
+            # A known request trap must be this world's own: the device's root mask (ability traps, Mean Look's link,
+            # Ingrain, a charge) allows no switch. maybeTrapped accepts either outcome (it leaks nothing).
+            from types import SimpleNamespace
+            from . import combat,transition
+            mask=np.asarray(transition.action_mask(physical,SimpleNamespace(combat=combat.from_metadata(metadata))))[0,owner]
+            fail=bool(mask[4:].any())
+            diagnostics.append(dict(kind='OWN_REQUEST_TRAP_REPRODUCED',status='TRIGGERED' if fail else 'CLEAR',fatal=True))
+            if fail:failures.append('OWN_REQUEST_TRAP_NOT_REPRODUCED')
+        elif tail_facts['replacement'] is None and (own_meanlook or owner in wrapped):
+            # The other direction for a trap written on our active: Showdown traps it (tryTrap: trapped = true) and its
+            # request shows `trapped` whenever we have a living bench to switch to (getMoveRequestData's canSwitchIn).
+            at=int(physical.active[0,owner])
+            if any(int(physical.hp[0,owner,k])>0 for k in range(6) if k!=at):failures.append('OWN_TRAP_REQUEST_DISAGREEMENT')
         if failures:raise ValueError(failures[0])
-        carry=states._rebase(detached,assignment,active,state=physical)
+        host=isinstance(physical.hp,np.ndarray)
+        carry=(states._rebase_host if host else states._rebase)(detached,assignment,active,state=physical)
         diagnostics.append(dict(kind='FINAL_PUBLIC_CARRY',status='CLEAR',fatal=True))
         body=dict(schema=SCHEMA,prefix=root.owner_lines_sha256,address=vars(root.address),seed=seed,
             public_source=catalog.source.source_hash,sampled_teams=dict(start.player_teams))
         digest=hashlib.sha256(json.dumps(body,sort_keys=True,separators=(',',':')).encode()).hexdigest()
-        return ProtocolWorld(physical,carry,(),world,digest,tuple(diagnostics))
+        return ProtocolWorld(_device(physical) if host else physical,_device_carry(carry) if host else carry,(),world,digest,tuple(diagnostics))
     except EngineWorldUnsupported as error:
         _downstream_unknowns(diagnostics,'Original public mapper refused: '+error.reason)
         return ProtocolWorld(None,None,('original-public-mapper:'+error.reason,),mapper_diagnostics=tuple(diagnostics))
@@ -573,15 +758,17 @@ def sample(root,detached,*,lines,catalog,source,metadata,config,battle_id,seed,c
     detached=_carried_root(root,detached,lines,metadata)
     inputs=ProtocolInputs(detached,tuple(lines),catalog,metadata,source)
     result=[];seeds=[];diagnostics=[];game=game_lines_sha256(lines)
-    for index in range(count):
-        world_seed,kernel_seed=world_seeds(root,detached,game,seed,index);seeds.append(world_seed)
+    pairs=[world_seeds(root,detached,game,seed,index) for index in range(count)]
+    keys=states.world_keys([kernel for _,kernel in pairs]) if HOST_WORLDS else [None]*count   # every world's key in one call
+    for index,(world_seed,kernel_seed) in enumerate(pairs):
+        seeds.append(world_seed)
         try:
             start,reason=_gen3_randbat_belief_start_override_result(context=root.context,set_source=source.original,
                 rng=random.Random(world_seed),team_size=6,canonicalize_revealed_variants=True)
             if start is None:
                 unknown=[];_downstream_unknowns(unknown,'Original public sampler unavailable: '+str(reason))
                 made=ProtocolWorld(None,None,(reason or 'public-sampler-unavailable',),mapper_diagnostics=tuple(unknown))
-            else:made=v5_public_world.materialize(root,start,prepared=inputs,history=None,own_static=None,seed=kernel_seed)
+            else:made=v5_public_world.materialize(root,start,prepared=inputs,history=None,own_static=None,seed=kernel_seed,host_key=keys[index])
             diagnostics.append(dict(world=index,checks=list(made.mapper_diagnostics)))
             result.append(states.World(index,made.state,made.public,made.refusals,kernel_seed,False))
         except (ValueError,KeyError,TypeError,IndexError)as error:

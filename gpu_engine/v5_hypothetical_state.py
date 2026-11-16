@@ -12,7 +12,7 @@ import numpy as np
 
 from pokezero.dex import normalize_id
 from pokezero.poke_engine_adapter import BattleSpec
-from .state import empty_state, LEECH_SEED, DESTINY_BOND
+from .state import BattleState, empty_state, LEECH_SEED, DESTINY_BOND
 
 PERISH=('perish1','perish2','perish3')   # Showdown never shows perish4 (the use prints a silent perish3)
 
@@ -23,7 +23,7 @@ class Mapping:
     refusals: tuple[str, ...]
 
 
-def map_spec(spec, *, metadata, seed, turn, active_turns, happiness, dex=None, held_volatiles=False):
+def map_spec(spec, *, metadata, seed, turn, active_turns, happiness, dex=None, held_volatiles=False, arrays=None):
     """Trusted lower mapping; the public-root factory supplies source inputs.
 
     ``held_volatiles`` maps the public volatiles the engine holds since fidelity A2/M2 instead of refusing them:
@@ -32,6 +32,11 @@ def map_spec(spec, *, metadata, seed, turn, active_turns, happiness, dex=None, h
     residual decrements it before printing |-start|X|perishN, so the shown N is the remaining count after a residual;
     the protocol world writes 4 for the silent perish3 of the Song's own turn, phase_d_protocol_world._perish_counts) and
     encore to encore_move = the resolved lock with a placeholder count the protocol world replaces by its posterior draw.
+
+    ``arrays``: a host copy of ``empty_state(1, seed=seed)`` (device_public_world_state._empty_arrays with this seed's
+    world_keys), or a zero-argument builder of one, called where ``empty_state`` would run (so a bad seed refuses after the
+    spec's own refusals, in the same order). The mapping then fills it and returns host NumPy arrays for the caller's one
+    device transfer per world. The mapping is the same either way: the same values and dtypes, byte for byte.
 
     ``turn`` is the displayed public request turn. ORIGINAL BattleState.turn
     counts completed ordinary turns, so its exact value here is turn-1.
@@ -69,8 +74,11 @@ def map_spec(spec, *, metadata, seed, turn, active_turns, happiness, dex=None, h
                 info=None if dex is None else dex.species_info(mon.id)
                 if info is None or mon.weight_kg!=info.weight_kg:reasons.append(f'custom-weight:{seat}:{slot}')
     if reasons:return Mapping(None,tuple(reasons))
-    state=empty_state(1,seed=seed)
-    arrays={name:np.array(value,copy=True) for name,value in state._asdict().items()}
+    host=arrays is not None
+    if callable(arrays):arrays=arrays()
+    if not host:
+        state=empty_state(1,seed=seed)
+        arrays={name:np.array(value,copy=True) for name,value in state._asdict().items()}
     vocab=metadata['vocabulary']
     namespaces={kind:{normalize_id(name):i for i,name in enumerate(vocab[kind])}
         for kind in ('species','types','abilities','items','moves')}
@@ -206,4 +214,5 @@ def map_spec(spec, *, metadata, seed, turn, active_turns, happiness, dex=None, h
             arrays['weather_counter'][0]=max(0,spec.weather_turns_remaining)
         arrays['turn'][0]=turn-1;arrays['done'][0]=False;arrays['winner'][0]=-1
     except (ValueError,KeyError,IndexError) as error:return Mapping(None,(str(error),))
+    if host:return Mapping(BattleState(**arrays),())
     return Mapping(type(state)(**{name:j.asarray(value) for name,value in arrays.items()}),())
