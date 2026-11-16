@@ -55,7 +55,7 @@ This route is documented, not claimed to have passed in this PR. Its gate remain
 
 ## Moved modules and evidence
 
-Source: integration snapshot `994242ce519a1646825bb1252fc438d9b0517123`, read-only. Integration-only modules are omitted from the manifests. Shared entries retain their recorded measurements. Main-specific assignments below use measured main results because main's test helpers differ from integration's. All 426 main modules are assigned: 348 light, 26 extended and 52 heavy.
+Source: integration snapshot `994242ce519a1646825bb1252fc438d9b0517123`, read-only. Integration-only modules are omitted from the manifests. Shared entries retain their recorded measurements. Main-specific assignments below use measured main results because main's test helpers differ from integration's. All 426 main modules are assigned: 345 light, 26 extended and 55 heavy.
 
 | Module | Tier | Evidence |
 |---|---|---|
@@ -154,3 +154,13 @@ Peak is the maximum of sampled tree PSS, individual process HWM and kernel child
 | `test_gpu_engine_status_residual_runtime` | heavy | absent | ≥32.11 | ≥8.60 | memory cap | 103.17 |
 | `test_gpu_engine_swords_dance_owning` | heavy | absent | 8.83 | 9.95 | 4 tests pass | 10.08 |
 | `test_gpu_engine_terminal_source` | heavy | absent | ≥12.90 | ≥20.01 | wall cap | 84.03 |
+
+## Additional main-specific assignments from light CI
+
+The completed light-tier run [43758532211](https://github.com/sfitzgerald-x1/pokezero/actions/runs/43758532211) at `490aa5b8` exposed three more main modules above the unchanged memory limit. Each individual process HWM exceeds 14 GiB, independently of shared cgroup charges. Wall spans the original module block from launch through its successful completion. All nine module tests passed without skips, failures or errors. The component bodies remain identical to main. These rows supplement the earlier main-equivalent measurements above.
+
+| Module | Main tier | Integration tier at 994242ce | Process HWM GiB | Wall min | Passing tests | Evidence |
+|---|---|---|---:|---:|---:|---|
+| `test_gpu_engine_leftovers_no_output_runtime` | heavy | light | 14.74 | 53.48 | 4 | [shard 9](https://github.com/sfitzgerald-x1/pokezero/actions/runs/43758532211/job/132949550705) |
+| `test_gpu_engine_weather_profile_runtime` | heavy | light | 14.52 | 19.99 | 4 | [shard 9](https://github.com/sfitzgerald-x1/pokezero/actions/runs/43758532211/job/132949550705) |
+| `test_gpu_engine_substitute_runtime` | heavy | light | 14.39 | 15.31 | 1 | [shard 10](https://github.com/sfitzgerald-x1/pokezero/actions/runs/43758532211/job/132949550880) |

@@ -286,6 +286,23 @@
    "isolated_tests_run": 1
   },
   {
+   "module": "test_gpu_engine_leftovers_no_output_runtime",
+   "reason": "wall+memory",
+   "integration_tier": "light",
+   "hosted_wall_min": 53.476,
+   "hosted_process_hwm_gib": 14.743,
+   "measurement_run": 43758532211,
+   "measurement_job": 132949550705,
+   "measurement_shards": [
+    9
+   ],
+   "measurement_source_commit": "490aa5b8aafe18f6913885a5b893384bda4a2f50",
+   "hosted_tests_run": 4,
+   "isolated_wall_min": null,
+   "isolated_peak_gib": null,
+   "note": "Main-specific assignment from a completed light-tier module. Individual process HWM exceeds 11 GiB independently of shared cgroup charges; wall spans the original process-block start to its successful completion. All module tests passed with zero skips, failures or errors. Component bodies are unchanged from main."
+  },
+  {
    "module": "test_gpu_engine_leftovers_owning_callers",
    "reason": "memory",
    "integration_tier": "absent",
@@ -655,6 +672,23 @@
    "isolated_peak_gib": null
   },
   {
+   "module": "test_gpu_engine_substitute_runtime",
+   "reason": "wall+memory",
+   "integration_tier": "light",
+   "hosted_wall_min": 15.313,
+   "hosted_process_hwm_gib": 14.3882,
+   "measurement_run": 43758532211,
+   "measurement_job": 132949550880,
+   "measurement_shards": [
+    10
+   ],
+   "measurement_source_commit": "490aa5b8aafe18f6913885a5b893384bda4a2f50",
+   "hosted_tests_run": 1,
+   "isolated_wall_min": null,
+   "isolated_peak_gib": null,
+   "note": "Main-specific assignment from a completed light-tier module. Individual process HWM exceeds 11 GiB independently of shared cgroup charges; wall spans the original process-block start to its successful completion. All module tests passed with zero skips, failures or errors. Component bodies are unchanged from main."
+  },
+  {
    "module": "test_gpu_engine_swords_dance_owning",
    "reason": "wall",
    "integration_tier": "absent",
@@ -820,6 +854,23 @@
    "note": "Main-specific assignment from original workflow block samples. Gate peak is the maximum observed while this module runs; process HWM independently exceeds 11 GiB. Shared job charges can contribute to the gate peak. Wall sums the original fresh-process units. Test bodies are unchanged from main.",
    "isolated_wall_min": null,
    "isolated_peak_gib": null
+  },
+  {
+   "module": "test_gpu_engine_weather_profile_runtime",
+   "reason": "wall+memory",
+   "integration_tier": "light",
+   "hosted_wall_min": 19.9923,
+   "hosted_process_hwm_gib": 14.5244,
+   "measurement_run": 43758532211,
+   "measurement_job": 132949550705,
+   "measurement_shards": [
+    9
+   ],
+   "measurement_source_commit": "490aa5b8aafe18f6913885a5b893384bda4a2f50",
+   "hosted_tests_run": 4,
+   "isolated_wall_min": null,
+   "isolated_peak_gib": null,
+   "note": "Main-specific assignment from a completed light-tier module. Individual process HWM exceeds 11 GiB independently of shared cgroup charges; wall spans the original process-block start to its successful completion. All module tests passed with zero skips, failures or errors. Component bodies are unchanged from main."
   }
  ]
 }
