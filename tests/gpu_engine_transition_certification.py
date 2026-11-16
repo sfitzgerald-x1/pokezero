@@ -13,4 +13,4 @@ Encore stale-move clear to 7c984fe6.
 Fidelity tier D (Wonder Guard, the pinch abilities, Poison Point / Flame Body / Effect Spore) moved it to d880714c, and its
 Pursuit-intercept device reveals to c471195a.
 """
-CURRENT_TRANSITION = 'c471195a14db96b36eba226e4a0929faf8b86e7f'
+CURRENT_TRANSITION = '1da6e3ba06d8ccb7806f96b717cb77b4e36318cc'
