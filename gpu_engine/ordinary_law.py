@@ -295,9 +295,9 @@ def compare_plan(plan,state,actions,table,*,cap,batch_size,max_nodes,retain_evid
                 validate_output_address(output,plan.address)
                 reference.append(output.term(plan.law,cell))
                 v=dict(cell.case.values)
-                # The native ordinary-step wire carries the six original fields only (no effect stream); the JAX
-                # executor above received the case's effect block explicitly.
-                chance={name:value for name,value in chance_fields(v).items() if name!='effect'}
+                # The native ordinary-step wire carries only the six original fields. The JAX executor
+                # receives both JAX-only banks explicitly; their native carry is supplied by _native_output.
+                chance={name:value for name,value in chance_fields(v).items() if name not in ('effect','shed_skin')}
                 request={'version':1,'schema':'pokezero.ordinary-step','actions':plan.native_actions.raw_actions,
                     'chance':chance,'address':dict(plan.address)}
                 report=json.loads(module.conditioned_step(plan.native_input.raw_native,json.dumps(request)))
