@@ -19,14 +19,14 @@ import sys
 import unittest
 
 TRANSITION = Path(__file__).resolve().parents[1] / 'gpu_engine' / 'transition.py'
-STREAM_NAMES = frozenset({'effect_draws', '_effect'})   # loads and stores (an AugAssign target is a store)
-STREAM_ATTRS = frozenset({'effect_draws', 'effect'})    # attribute loads, e.g. chance_inputs.effect, state.effect_draws
+STREAM_NAMES = frozenset({'effect_draws', '_effect', 'shed_skin_draws'})   # loads and stores (an AugAssign target is a store)
+STREAM_ATTRS = frozenset({'effect_draws', 'effect', 'shed_skin_draws', 'shed_skin'})    # attribute loads, e.g. chance_inputs.effect, state.effect_draws
 WHOLE = frozenset({'chance_inputs'})                    # any use of the whole object: indexing, unpacking, _asdict(), zip
-FIELD_STRINGS = frozenset({'effect', 'effect_draws'})   # a string naming the field, e.g. getattr(x, 'effect')
+FIELD_STRINGS = frozenset({'effect', 'effect_draws', 'shed_skin', 'shed_skin_draws'})   # a string naming the field, e.g. getattr(x, 'effect')
 # The conditions that switch an effect consumer on, which the plans' gating copies: every assignment to these names is
 # keyed too, so a changed gate (say hits>1 becoming hits>0) needs the same re-review as a changed read.
 GATES = frozenset({'_second', '_yawn_counter', '_yawn_holder', '_yawn_sleep', '_wrap_holder', '_wrap_held', '_wrap_tick',
-                   '_perish_continues', '_perish_holder', '_perish_first', 'tie', 'event_keys'})
+                   '_perish_continues', '_perish_holder', '_perish_first', 'tie', 'event_keys', '_shed_skin_cure'})
 
 # (enclosing function, the expression around the use, digest of the enclosing statement) -> count
 REVIEWED = {
@@ -34,10 +34,8 @@ REVIEWED = {
     ('step_with_public', 'chance_inputs is None', '1455bf5b131674e9'): 1,
     ('step_with_public', 'sample_chance_inputs(state) if chance_inputs is None else chance_inputs', '1455bf5b131674e9'): 1,
     # step_with_chance: the shape check over every field, and the six non-effect fields read by attribute
-    ('step_with_chance', 'zip(chance_inputs, shapes, strict=True)', 'fa1719d7f1411a5c'): 1,
     ('step_with_chance', 'chance_inputs.draws', '653cd7a43c8cba1a'): 1,
     ('step_with_chance', 'chance_inputs.entry_ties', '57f87950e8336da9'): 1,
-    ('step_with_chance', 'chance_inputs.initial_tie', '80e55ffb01720a47'): 1,
     ('step_with_chance', 'chance_inputs.initial_tie', '9b7a3d3766e1c57c'): 1,
     ('step_with_chance', 'chance_inputs.phazing', '01581d9737c0f395'): 1,
     ('step_with_chance', 'chance_inputs.secondary', 'f5b5a9ab28d576ff'): 1,
@@ -65,13 +63,10 @@ REVIEWED = {
     # effect.s.2, fidelity tier D: an Effect Spore sleep's duration 2+d on the attacker's side, passed as sleep_roll to the
     # two secondary.apply_contact calls and to the Pursuit intercept's (secondary.apply_contact reads it only for a
     # contact hit on an Effect Spore holder whose draw put the attacker to sleep; the plans observe effect.s.2 then).
-    ('step_with_chance', 'effect_draws[:, side, 2]', '817f323b84511227'): 1,
     ('step_with_chance', 'effect_draws[rows, side, 2]', '453f2ff1f5dc7438'): 1,
-    ('step_with_chance', 'effect_draws[rows, side, 2]', '83200148dadb1808'): 1,
     # effect.1.3: the Perish pair tie, used only when the end speeds are equal
     ('step_with_chance', 'effect_draws[:, 1, 3]', '6ce6f3f90b0dd01e'): 1,
     # the save of the block into state.effect_draws when the residual is deferred (a suspended turn)
-    ('step_with_chance', 'jnp.where(defer_residual[:, None, None], effect_draws, 0)', 'fe528e3dd29798d3'): 1,
     # the gates: Bonemerang's second hit (hits > 1, so Bonemerang alone), the Yawn sleep (count 1 before the decrement), the
     # Wrap and Perish holders and the residual order's tie and event keys
     ('step_with_chance', 'gate _second', 'c9e42262b234db09'): 1,
@@ -87,6 +82,25 @@ REVIEWED = {
     ('step_with_chance', 'gate _perish_first', '6ce6f3f90b0dd01e'): 1,
     ('step_with_chance', 'gate tie', '3d5baa07a30ba9d5'): 1,
     ('step_with_chance', 'gate event_keys', '06962d48c87c7b2f'): 1,
+    # Shed Skin: independent <33 residual gate, original optional-field validation, and saved replay/copy.
+    ('step_with_chance', 'chance_inputs.shed_skin', '44372a908d7c17df'): 1,
+    ('step_with_chance', 'gate _shed_skin_cure', '7c7bcac707fc9518'): 1,
+    ('step_with_chance', 'jnp.where(defer_residual[:, None, None], effect_draws, 0)', '10dca801ea751ce1'): 1,
+    ('step_with_chance', 'jnp.where(defer_residual[:, None], shed_skin_draws, 0)', '10dca801ea751ce1'): 1,
+    ('step_with_chance', 'jnp.where(resuming[:, None], state.shed_skin_draws, shed_skin_draws)', '5a5cb644276082f7'): 2,
+    ('step_with_chance', 'shed_skin_draws = chance_inputs.shed_skin', '44372a908d7c17df'): 2,
+    ('step_with_chance', 'shed_skin_draws = jnp.where(resuming[:, None], state.shed_skin_draws, shed_skin_draws)', '5a5cb644276082f7'): 1,
+    ('step_with_chance', 'shed_skin_draws = shed_skin_chance(splits[:, 1])', '71029f5924b33fae'): 1,
+    ('step_with_chance', 'shed_skin_draws is None', '717ac1585966e566'): 1,
+    ('step_with_chance', 'shed_skin_draws[rows, side]', '7c7bcac707fc9518'): 1,
+    ('step_with_chance', 'table.entry.shed_skin is not None', '5260e6d97205bbbc'): 1,
+    ('step_with_chance', 'table.entry.shed_skin[_active(work.ability, work, side)]', '7c7bcac707fc9518'): 1,
+    ('step_with_chance', 'zip(chance_inputs, shapes, strict=True)', '701beb69af03d725'): 1,
+
+    ('step_with_chance', 'chance_inputs.initial_tie', '80e55ffb01720a47'): 1,
+    ('step_with_chance', 'effect_draws[:, side, 2]', '817f323b84511227'): 1,
+    ('step_with_chance', 'effect_draws[rows, side, 2]', '83200148dadb1808'): 1,
+
 }
 
 

@@ -58,10 +58,10 @@ DEFAULT_ROW = [0, 99, 99, 0, 15, 0, 0, 0, 0, 0, 0, 0]
 # engine inputs are unchanged. 0 procs a contact ability (0 < 20, < 6: Effect Spore's slp), so a scenario that makes
 # contact with such a holder sets phazing explicitly.
 DEFAULT_TAPE = dict(draws=[list(DEFAULT_ROW), list(DEFAULT_ROW)], secondary=[99, 99], sleep_talk=[0, 0],
-                    effect=[[15, 0, 0, 0], [15, 0, 0, 0]], phazing=[0, 0])
+                    effect=[[15, 0, 0, 0], [15, 0, 0, 0]], phazing=[0, 0],shed_skin=[99,99])
 # Engine-only auxiliary inputs (no Showdown role); kept explicit and in-range.
 DEFAULT_AUX = dict(entry_ties=[0, 0], initial_tie=0)
-BOUNDS = dict(draws=DRAW_BOUNDS, effect=EFFECT_BOUNDS, secondary=100, sleep_talk=60, phazing=60, entry_ties=2, initial_tie=2)
+BOUNDS = dict(draws=DRAW_BOUNDS, effect=EFFECT_BOUNDS, secondary=100, sleep_talk=60, phazing=60, entry_ties=2, initial_tie=2,shed_skin=100)
 # Device mode's optional low-optimization compile of step_with_public (XLA's own options for that one executable, as the
 # CI's low-optimization cases set them): the public step's CPU compile at the default level peaks far above the light tier.
 LOW_OPTIMIZATION = {'xla_backend_optimization_level': 0, 'xla_llvm_disable_expensive_passes': True}
@@ -348,6 +348,7 @@ class Engine:
             entry_ties=j.asarray(np.asarray([a['entry_ties'] for a in auxes]), j.int32),
             initial_tie=j.asarray(np.asarray([a['initial_tie'] for a in auxes]), j.int32))
         if self.has_effect:fields['effect'] = stack('effect')
+        if 'shed_skin' in self.transition.ChanceInputs._fields:fields['shed_skin']=stack('shed_skin')
         return self.transition.ChanceInputs(**fields)
 
     def advance(self, state, actions, tapes, auxes):

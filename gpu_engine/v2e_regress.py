@@ -216,6 +216,7 @@ PUBLIC_ORDER = 'trackers.public_order'
 # Fidelity R (design 2.1): the saved effect stream. While the base pass predates the leaf it is checked
 # against an independent copy of the design's derivation (EFFECT_SALT, EFFECT_BOUNDS) instead of bitwise.
 EFFECT_DRAWS = 'state.effect_draws'
+SHED_SKIN_DRAWS = 'state.shed_skin_draws'
 EFFECT_SALT, EFFECT_BOUNDS = 1732050, (16, 16, 4, 2)
 MEANLOOK = "trackers.mon_features['meanlook_trap']"
 PRE_TRACKERS = (MEANLOOK, 'trackers.active_slot')
@@ -573,6 +574,14 @@ def ability_target(*names, move_ok=None):
     return predicate
 
 
+def shed_skin_holders(p):
+    """Reachable holders, including Trace copying an earlier incoming holder on either side."""
+    possible=holder_target(p,'shedskin')
+    trace=installs(p) & np.isin(p.s['ability'],p.ability_ids('trace')).any(-1)
+    for _ in range(2):possible=possible | (trace & possible[:,::-1])
+    return possible
+
+
 def damaging_move(p):
     """D: [L,2] the side may execute a non-Status move (Wonder Guard's TryHit ignores Status moves)."""
     return p.candidate_any(~p.move_facts()[1])
@@ -903,7 +912,11 @@ def allowed_leaf(name, families):
 
 # Per-PR plug-in table: effect -> predicate. Choice unlock and the effect stream
 # are never involvement (design 5.2). `none` is the base-against-base self-test.
+ALLOWED['shedskin'] = dict(user=('hp','status','reveal','clause','visible'), target=('hp','clause','visible'), glob=())
+
+
 PLUGINS = {
+    'SS': dict(shedskin=shed_skin_holders),
     'none': {},
     # PR0's public_order and faint-clear rules are special rules (see the docstring);
     # these are its remaining tracker changes.
@@ -1839,6 +1852,16 @@ class Stepper:
                 saved = j.where(out.step.state.pending_residual[:, None, None], used, 0)
                 reference = j.where(live[:, None, None], saved, state.effect_draws)
                 effect_ok = (out.step.state.effect_draws == reference).all(-1)              # [L,2]
+            shed_skin_ok = None
+            if hasattr(state,'shed_skin_draws'):
+                # Independent copy of the new stream's law and save/replay rule; never effect involvement.
+                split=jax.vmap(lambda k:jax.random.split(k,2))(state.keys)[:,1]
+                fresh=jax.vmap(lambda k:jax.random.randint(jax.random.fold_in(k,2236067),(2,),0,100))(split)
+                live=~state.done & ~out.step.invalid_actions
+                used=j.where((live & state.pending_residual)[:,None],state.shed_skin_draws,fresh)
+                saved=j.where(out.step.state.pending_residual[:,None],used,0)
+                reference=j.where(live[:,None],saved,state.shed_skin_draws)
+                shed_skin_ok=out.step.state.shed_skin_draws==reference
             # M1 rule arrays: this tree's post values the recharge and ledger rules read (absent leaves: None).
             m1 = {}
             if 'state.recharge_counter' in named_out:m1['counter'] = named_out['state.recharge_counter']
@@ -1873,7 +1896,7 @@ class Stepper:
                 post_active=out.step.state.active, post_done=out.step.state.done,
                 physical_to_public=out.trackers.physical_to_public, active_slot=out.trackers.active_slot,
                 public_order=named_out.get(PUBLIC_ORDER), residual_ran=ran[0] if len(ran) == 1 else None,
-                effect_ok=effect_ok, wit={n: named_out[n] for n in witness_names(named_out)}, m2=m2,
+                effect_ok=effect_ok, shed_skin_ok=shed_skin_ok, wit={n: named_out[n] for n in witness_names(named_out)}, m2=m2,
                 wh=whe if wh_ids is not None else None)
         self._jit = jax.jit(traced);self._names = names
 
@@ -2075,7 +2098,7 @@ def patched_pass(args, *, step_override=None, prepared=None):
     destiny_bond = getattr(state_module, 'DESTINY_BOND', DEFAULT_DESTINY_BOND)
     counts = dict(lane_steps=0, done_skipped=0, unchanged=0, changed_and_involved=0, changed_but_uninvolved=0,
                   changed_involved_unexpected_fields=0, ko_cascade=0, phase_shift=0, terminal=0, terminal_residual=0, waived=0,
-                  rule_explained=0, faint_rule_leaves=0, clear_volatile_leaves=0, effect_draws_saved=0,
+                  rule_explained=0, faint_rule_leaves=0, clear_volatile_leaves=0, effect_draws_saved=0, shed_skin_integrity_failures=0,
                   recharge_leaves=0, bag_leaves=0, trick_witness_leaves=0, ledger_leaves=0, m2_leaves=0, m2_wrong_mon=0, m2_forced=0,
                   wh_leaves=0, wh_bad=0, wh_trick_order=0, wh_dropped=0, facade_dropped=0, sacredfire_dropped=0,
                   sacredfire_stopped=0, pinch_leaves=0)
@@ -2132,6 +2155,8 @@ def patched_pass(args, *, step_override=None, prepared=None):
             new_outputs = sorted(set(names) - set(base_names))
             digests = result['digests'][:real]
             done_now = np.asarray(named['state.done'])
+            if result.get('shed_skin_ok') is not None:
+                counts['shed_skin_integrity_failures'] += int((~np.asarray(result['shed_skin_ok'])[:real]).any(-1).sum())
             base = np.load(base_dir / f'digest-{path.stem}.npz')
             diff = np.zeros((real, len(names), 2), bool)
             shared = [position[n] for n in base_names]
@@ -2144,6 +2169,8 @@ def patched_pass(args, *, step_override=None, prepared=None):
                     # A saved block equal to the derivation explains the change; anything else stays a change.
                     counts['effect_draws_saved'] += int((diff[:, position[n]].any(-1) & ~done_now[:real]).sum())
                     diff[:, position[n]] = ~np.asarray(result['effect_ok'])[:real]
+                if n == SHED_SKIN_DRAWS and n not in base_names:
+                    diff[:,position[n]]=~np.asarray(result['shed_skin_ok'])[:real]
             for n in new_outputs:
                 if n not in result['pre_names']:diff[:, position[n]] = True          # a new output with no pre value
             if public_order_rule:
@@ -2423,7 +2450,7 @@ def patched_pass(args, *, step_override=None, prepared=None):
     finally:
         listing.close()
     digest, modules = oracle_digest()
-    failures = counts['changed_but_uninvolved'] + counts['changed_involved_unexpected_fields']
+    failures = counts['changed_but_uninvolved'] + counts['changed_involved_unexpected_fields'] + counts['shed_skin_integrity_failures']
     partial = bool(args.limit) or manifest.get('partial', False)
     # A partial run never passes: passed is None without failures (exit 2), False with them (exit 1).
     report = dict(schema=SCHEMA, digest_format=DIGEST_FORMAT, pass_='patched', plug_ins=plugins, source_commit=rev,

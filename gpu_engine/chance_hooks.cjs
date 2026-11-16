@@ -40,7 +40,8 @@ function validTape(c){
     &&['secondary','sleep_talk'].every(k=>Array.isArray(c[k])&&c[k].length===2
       &&c[k].every(v=>Number.isInteger(v)&&v>=0&&v<(k==='secondary'?100:60)))
     &&(v2?Array.isArray(c.effect)&&c.effect.length===2&&c.effect.every(x=>row(x,EFFECT_BOUNDS)):c.effect===undefined)
-    &&(v3?row(c.phazing,[60,60]):c.phazing===undefined);
+    &&(v3?row(c.phazing,[60,60]):c.phazing===undefined)
+    &&(c.shed_skin===undefined||row(c.shed_skin,[100,100]));
 }
 function install(Battle,PRNG,load,audit,initializing=()=>null,pokemonPath='') {
   let nonce,used=new Set(),inert=0;
@@ -140,6 +141,13 @@ function install(Battle,PRNG,load,audit,initializing=()=>null,pokemonPath='') {
     if(from.includes('Battle.endTurn')&&n===1&&d===5){
       if(this.sides.some(x=>x.active.some(p=>p?.item==='quickclaw')))return unknown('QUICK_CLAW',from);
       audit({kind:'INERT_QUICK_CLAW_ROLL',nonce:c.nonce});return false;
+    }
+    if(effect==='shedskin'&&n===33&&d===100&&from.includes('onResidual')){
+      const holder=this.effectState?.target,side=holder?.side?.n;
+      if((side!==0&&side!==1)||!holder.hp||!holder.status||holder.getAbility().id!=='shedskin'
+        ||holder!==this.sides[side].active[0])return unknown('SHED_SKIN_HOLDER',from);
+      if(!Array.isArray(c.shed_skin))return unknown('SHED_SKIN_STREAM_ABSENT',{side});
+      return take(c,'shed_skin',side,c.shed_skin[side])<33;
     }
     if(s!==0&&s!==1)return unknown('MISSING_ACTOR',from);
     if(from.includes('tryMoveHit')&&d===100)return take(c,'accuracy',s,c.draws[s][6])<n;
@@ -244,6 +252,13 @@ function install(Battle,PRNG,load,audit,initializing=()=>null,pokemonPath='') {
       if(group.length===2&&group.every(x=>x.choice==='move')&&new Set(group.map(x=>x.pokemon.side.n)).size===2){
         const first=take(c,'move_tie',0,c.draws[0][0]);
         group.sort((a,b)=>(a.pokemon.side.n===first?-1:1));items.splice(start,2,...group);return;
+      }
+      // Gen3 order10/subOrder3 ability pair. These handlers have the same frozen-Speed key.
+      if(group.length===2&&new Set(group.map(h=>h.effectHolder?.side?.n)).size===2
+        &&group.every(h=>['speedboost','shedskin'].includes(h.effect?.id)&&h.order===10&&h.subOrder===3
+          &&h.callback===h.effect.onResidual&&h.effectHolder===battle.sides[h.effectHolder?.side?.n]?.active[0])){
+        const first=take(c,'ability_tie',1,c.draws[1][0]);
+        group.sort((a,b)=>a.effectHolder.side.n===first?-1:1);items.splice(start,2,...group);return;
       }
       // Same-holder residual countdowns (no callback, no onEnd: stall+protect, ...) commute;
       // their order cannot change the battle, so keep it and audit the tie as inert.

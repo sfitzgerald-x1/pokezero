@@ -325,6 +325,7 @@ class ChanceInputs(NamedTuple):
     entry_ties: jax.Array          # [B,2]
     initial_tie: jax.Array         # [B]
     effect: jax.Array | None = None  # [B,2,4]; appended last, so positional six-field constructors still work
+    shed_skin: jax.Array | None = None  # [B,2], independent uniform [0,100) residual cure rolls
 
 
 # Fidelity patch R (design 2.1): ChanceInputs.effect is fold_in(step key, EFFECT_SALT), drawn from the same
@@ -336,6 +337,12 @@ class ChanceInputs(NamedTuple):
 # CUDA option-A work (design 13 item 6), so `v2e_diff chance` and v2e_cuda_check p2 report it as differing.
 EFFECT_SALT = 1732050
 EFFECT_BOUNDS = (16, 16, 4, 2)
+SHED_SKIN_SALT = 2236067
+
+
+def shed_skin_chance(keys):
+    """Independent residual stream; preserves every previously sampled coordinate."""
+    return jax.vmap(lambda key:jax.random.randint(jax.random.fold_in(key,SHED_SKIN_SALT),(2,),0,100))(keys)
 
 
 def effect_chance(keys):
@@ -361,7 +368,7 @@ def sample_chance_inputs(state: BattleState) -> ChanceInputs:
             key,jnp.uint32(982451653)+count.astype(jnp.uint32)),(2,),0,2))(
                 state.keys,state.replacement_count),
         jax.vmap(lambda key:jax.random.randint(jax.random.fold_in(key,314159),(),0,2))(state.keys),
-        effect=effect_chance(keys))
+        effect=effect_chance(keys),shed_skin=shed_skin_chance(keys))
 
 
 def action_mask(state,table):
@@ -535,9 +542,9 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                 raise ValueError('owning birth record and original static weather profile required')
             _weather_hp_record=_weather_observer_context[0]
     batch = state.hp.shape[0]
-    shapes = ((batch,2,12),(batch,2),(batch,2),(batch,2),(batch,2),(batch,),(batch,2,4))
-    for value,shape in zip(chance_inputs,shapes,strict=True):
-        if value is None and shape == (batch,2,4):continue   # effect omitted: derived from the keys below
+    shapes = ((batch,2,12),(batch,2),(batch,2),(batch,2),(batch,2),(batch,),(batch,2,4),(batch,2))
+    for index,(value,shape) in enumerate(zip(chance_inputs,shapes,strict=True)):
+        if value is None and index>=6:continue   # effect omitted: derived from the keys below
         if value.shape != shape or not jnp.issubdtype(value.dtype,jnp.integer):
             raise ValueError('chance inputs must have declared integer batch shapes')
     if actions.shape != state.active.shape or not jnp.issubdtype(actions.dtype, jnp.integer):
@@ -580,6 +587,9 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
     effect_draws=chance_inputs.effect
     if effect_draws is None:effect_draws=effect_chance(splits[:,1])
     effect_draws=jnp.where(resuming[:,None,None],state.effect_draws,effect_draws)
+    shed_skin_draws=chance_inputs.shed_skin
+    if shed_skin_draws is None:shed_skin_draws=shed_skin_chance(splits[:,1])
+    shed_skin_draws=jnp.where(resuming[:,None],state.shed_skin_draws,shed_skin_draws)
     # Replacement requests do not consume another ordinary-turn chance block.
     # A separate counted fold-in distinguishes repeated hazard-KO entry ties.
     entry_ties = chance_inputs.entry_ties
@@ -2353,6 +2363,20 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                 work = work._replace(boosts=_set_active(work.boosts,work,side,boosts))
             if _device_public is not None and table.entry is not None:
                 device_public.reveal_ability(_device_public,work,side,speed_boost & (_active(work.boosts,work,side)[:,4]!=_active(_device_residual_before.boosts,_device_residual_before,side)[:,4]))
+            # f76228a1: Gen3 inherits Gen4 order 10/subOrder 3 and the base 33/100 cure.
+            # This shares the ability pair with Speed Boost, but has no active-turn restriction.
+            # end_speed was frozen before the loop: curing paralysis cannot reorder this queue.
+            if table.entry is not None and table.entry.shed_skin is not None:
+                _shed_skin_cure=(eligible & ability_event & (hp>0) & (_active(work.status,work,side)!=m.NONE)
+                    & table.entry.shed_skin[_active(work.ability,work,side)] & (shed_skin_draws[rows,side]<33))
+                if _lifecycle_trace:
+                    _public_trace=status_callbacks.unknown(_public_trace,_shed_skin_cure)
+                work=work._replace(**{name:_set_active(getattr(work,name),work,side,
+                    jnp.where(_shed_skin_cure,jnp.zeros_like(_active(getattr(work,name),work,side)),_active(getattr(work,name),work,side)))
+                    for name in ('status','status_counter','sleep_skipped','rest_origin')})
+                if _device_public is not None:
+                    device_public.reveal_ability(_device_public,work,side,_shed_skin_cure)
+                    device_public.observe(_device_public,work,_shed_skin_cure)
         healed = hp
         if _leftovers_context is not None:
             # Literal BEFORE values precede both the numerical heal and item
@@ -2715,7 +2739,8 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
             | work.baton_pass) & alive,
         baton_pass=work.baton_pass & ~done[:,None])
     # The effect stream is saved with the other blocks for a suspended turn (design 2.1), zero otherwise.
-    work = work._replace(effect_draws=jnp.where(defer_residual[:,None,None],effect_draws,0))
+    work = work._replace(effect_draws=jnp.where(defer_residual[:,None,None],effect_draws,0),
+        shed_skin_draws=jnp.where(defer_residual[:,None],shed_skin_draws,0))
     if _lifecycle_trace:
         from . import engine_baton_pass_callbacks as baton_callbacks
         _public_trace=baton_callbacks.finalize_request(_public_trace,work)

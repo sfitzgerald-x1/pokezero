@@ -28,7 +28,7 @@ import itertools
 import types
 
 KINDS = ('ability', 'heal', 'seed', 'status', 'wrap', 'encore', 'yawn')
-# Speed Boost (subOrder 3), Leftovers and the pinch berries (4), Leech Seed (5), brn/psn/tox (6), partiallytrapped (9),
+# Speed Boost and Shed Skin (mutually exclusive ability handlers, subOrder 3), Leftovers and the pinch berries (4), Leech Seed (5), brn/psn/tox (6), partiallytrapped (9),
 # Encore (14) and Yawn (19), side 0's event then side 1's.
 EVENT_KIND = ('ability', 'ability', 'heal', 'heal', 'seed', 'seed', 'status', 'status', 'wrap', 'wrap', 'encore', 'encore',
               'yawn', 'yawn')

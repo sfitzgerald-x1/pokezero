@@ -90,6 +90,7 @@ class BattleState(NamedTuple):
     yawn_counter: jax.Array        # [B,2,6], volatiles.yawn.duration: 2 at Yawn, -1 at residual subOrder 19, sleep attempt at 0
     partial_trap_counter: jax.Array  # [B,2,6], volatiles.partiallytrapped.duration: 3+draws[s][7] at Wrap, -1 at subOrder 9
     partial_trap_source: jax.Array   # [B,2,6], effectState.source as an opposing party index; -1 none
+    shed_skin_draws: jax.Array     # [B,2], independent residual cure rolls saved across suspended turns
 
 
 def empty_state(batch_size: int, *, seed: int = 0) -> BattleState:
@@ -134,7 +135,7 @@ def empty_state(batch_size: int, *, seed: int = 0) -> BattleState:
         truant_loaf=jnp.zeros((b,2,6),jnp.bool_),item_knocked=jnp.zeros((b,2,6),jnp.bool_),
         effect_draws=jnp.zeros((b,2,4),jnp.int32),recharge_counter=mon(),
         perish_counter=mon(),yawn_counter=mon(),partial_trap_counter=mon(),
-        partial_trap_source=jnp.full((b,2,6),-1,jnp.int32))
+        partial_trap_source=jnp.full((b,2,6),-1,jnp.int32),shed_skin_draws=side())
 
 
 def bench_indices(active: jax.Array) -> jax.Array:

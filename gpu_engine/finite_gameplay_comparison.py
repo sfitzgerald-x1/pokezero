@@ -53,7 +53,7 @@ class ChanceControl:
     def begin(self, captured, layout):
         state=decode_state(captured['before']['state'],layout);raw=captured['chance']
         legacy={'draws','phazing','secondary','sleep_talk','entry_ties','initial_tie'}
-        if set(raw) not in (legacy,legacy|{'effect'}):
+        if set(raw) not in (legacy,legacy|{'effect'},legacy|{'shed_skin'},legacy|{'effect','shed_skin'}):
             raise ValueError('complete original ChanceInputs required')
         # These are the original kernel's saved-array selectors on a suspended
         # action turn; not another RNG sample or reconstructed outcome.
@@ -81,6 +81,11 @@ class ChanceControl:
             if phazing.shape!=(2,) or phazing.dtype.kind not in 'iu' or np.any(phazing<0) or np.any(phazing>=60):
                 raise ValueError('actual original finite chance operands required')
             value.update(schema='pokezero.gpu_chance_tape.v3',effect=effect.tolist(),phazing=phazing.tolist())
+        if 'shed_skin' in raw:
+            cure=state.shed_skin_draws[0] if pending else arrays['shed_skin'][0]
+            if cure.shape!=(2,) or cure.dtype.kind not in 'iu' or np.any(cure<0) or np.any(cure>=100):
+                raise ValueError('actual original finite chance operands required')
+            value['shed_skin']=cure.tolist()
         self.control.write_text(json.dumps(value));return value
 
     def end(self):

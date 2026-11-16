@@ -74,7 +74,7 @@ class TableTests(unittest.TestCase):
         from gpu_engine import future_state as f
         from gpu_engine.state import BattleState
         names = ('perish_counter', 'yawn_counter', 'partial_trap_counter', 'partial_trap_source')
-        self.assertEqual(BattleState._fields[-4:], names)
+        self.assertEqual(BattleState._fields[-5:-1], names)
         for name in names:
             self.assertIn(name, f.FIELD_POLICY);self.assertIn(name, f.NATIVE_PATHS);self.assertEqual(f.SHAPES[name], (2, 6))
         source = open(f.__file__).read()

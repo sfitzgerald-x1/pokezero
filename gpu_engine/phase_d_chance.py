@@ -48,6 +48,7 @@ CONSUMERS = {
         ("sleep_talk", "sleep_talk.choose: draw modulo callable count before PP test"),
         ("entry_ties", "transition resumed switch/callback ordering"))},
     "initial_tie": ("transition.initialize unresolved initial entry ordering",),
+    **{f"shed_skin.{s}": ("transition residual Shed Skin: independent roll<33 of 100",) for s in range(2)},
     # Fidelity R (design 2.1): the appended effect stream's consumers, finite_law.COORDINATES' effect.{s}.{c} axes (§6).
     **{f"effect.{s}.{c}": (use,) for s in range(2) for c, use in (
         (0, "transition Bonemerang second hit: critical<1 or<2 (critical.is_critical)"),
@@ -59,9 +60,9 @@ CONSUMERS = {
 }
 
 # Changing any source that supplies the consumer/domain proof requires review.
-SOURCE_PINS = {'action_history.py': 'a47bdb2712f7eadaed12d91ede70be2ebe9f1c1ae3f70fe56495437997212407', 'critical.py': 'b66e6cf10c0d4df625b1c4f5e5db238af42052e556d7649a10f911745181401e', 'effects.py': '47f549d608b60d46e8cc4db7bad5be249ae728a4aab2a0ef28f105f3614e40e2', 'encore.py': '63da39bbd181a8c6371b3bca853322291a03674c60f535ad0eacdbe1a440e0dd', 'entry.py': 'eabf2713a100256ba86fd0b5ac4155042e2a0c6dfe0bc37c7f0c6219dbdd22c1', 'mechanics.py': 'e8476cc3e0029f3ed0bf82276312440e6dd8b340ffeb0c68cdd5611754eef661', 'phazing.py': 'c27039f267bd18660adb3c2bd826e58a7da953eea0e79677de5428f042447969', 'pursuit.py': '5b966584634b5230b3efaf16609699484d29966ff8f7ebaf6d160864dba8c2e5', 'residual_order.py': '7b1a958d4ce27cf8fe7560d8f5a4f95d5cb54a17adbe23ba72dccc00e35bf454', 'secondary.py': '68f74574caab36e5f8e8be3426f96b5858964fb24346b2c4641eb6196640e532', 'sleep_talk.py': '968a78ddde87158b13f68dfcacc2158f07336d82c1be472d2283421e8583c154', 'state.py': '67ca721ce1f6b1a5c3e9c6fd42fe33d65f62ffcec006f5c5efd188225111a59c', 'transition.py': '9e7d34a2d04c64499cddb594bc3e0102270b286bdf5ddc7432b633ef436d7f37', 'weather.py': '3c861027e16d27917fa47fa5cf5d6dc0c68d3a74af282108dfb94369d4db57e5'}
+SOURCE_PINS = {'action_history.py': 'a47bdb2712f7eadaed12d91ede70be2ebe9f1c1ae3f70fe56495437997212407', 'critical.py': 'b66e6cf10c0d4df625b1c4f5e5db238af42052e556d7649a10f911745181401e', 'effects.py': '47f549d608b60d46e8cc4db7bad5be249ae728a4aab2a0ef28f105f3614e40e2', 'encore.py': '63da39bbd181a8c6371b3bca853322291a03674c60f535ad0eacdbe1a440e0dd', 'entry.py': '8a046ab0f4ae6414ec882676feb17d4ad15b321bdf6036601828038e8bb378aa', 'mechanics.py': 'e8476cc3e0029f3ed0bf82276312440e6dd8b340ffeb0c68cdd5611754eef661', 'phazing.py': 'c27039f267bd18660adb3c2bd826e58a7da953eea0e79677de5428f042447969', 'pursuit.py': '5b966584634b5230b3efaf16609699484d29966ff8f7ebaf6d160864dba8c2e5', 'residual_order.py': 'd49fbd0f47ffe4fa1c98bba49eeaacfb5e16518c2ef938aa7ff311d996a0df94', 'secondary.py': '68f74574caab36e5f8e8be3426f96b5858964fb24346b2c4641eb6196640e532', 'sleep_talk.py': '968a78ddde87158b13f68dfcacc2158f07336d82c1be472d2283421e8583c154', 'state.py': 'e216688dc65a264e581f4facffb7c41b2131ea4d70b336b07ca27f61417d1f5d', 'transition.py': '26ff629660c65cd07551f1264183b33cd7edf77701f26f55c967e62ae2de3008', 'weather.py': '3c861027e16d27917fa47fa5cf5d6dc0c68d3a74af282108dfb94369d4db57e5'}
 DOMAIN_MODULES = tuple("action_history absorption baton combat critical damage_moves effects encore entry focus_punch items linked_traps mechanics phazing pressure pursuit residual_order secondary self_destruct sleep_talk solar_beam state sustain transition variable_moves weather".split())
-DOMAIN_SHA256 = '1a43333381c9aa52cb71b0c8f3bb9804ce7a87f2e98e58dd8020ea0ab9bce3fe'
+DOMAIN_SHA256 = 'a46e4b2308044877009f85551c67f476c605aaf1508cde8af2edae850a82ba8e'
 
 
 def _host(value):
@@ -408,6 +409,11 @@ def plan_for_state(state, index, actions, table, metadata, *, cap, native_input=
             # at the next turn's residual, and only a holder that stays in keeps a count (entry.py, baton.py drop it).
             if not replacement and any(_counter(data, "yawn_counter", s, p) == 1 for p in participants[s]):
                 use(f"effect.{s}.2", Observation("identity"))
+        # Shed Skin may become statused or be copied by Trace during either action.
+        # Preserve the exact 33/100 partition even when the current holder is healthy.
+        for s in range(2):
+            if not replacement and any(_opt(t,'entry','shed_skin',a,False) for a in abilities[s]):
+                use(f'shed_skin.{s}',Observation('less_than',33))
         # The order-10 partial-trap pair (transition.py:2308-2315 with residual_order): effect[0][3] orders the two
         # Wrap holders' events at equal Speed. A seat holds a trap already or gets one from the other's Wrap (:1945-1955).
         trapped = [any(_counter(data, "partial_trap_counter", s, p) > 0 for p in participants[s])
@@ -420,7 +426,7 @@ def plan_for_state(state, index, actions, table, metadata, *, cap, native_input=
         if not replacement and all(perish_song or any(_counter(data, "perish_counter", s, p) > 0 for p in participants[s])
                                    for s in range(2)):
             use("effect.1.3", Observation("identity"))
-        inactive("draws.1.0", "SpeedBoost paired callbacks change only own stage; neither can KO or alter the frozen residual ordering")
+        inactive("draws.1.0", "Speed Boost/Shed Skin paired callbacks change only their own holder; neither can KO or alter the frozen residual ordering")
         inactive("draws.0.9", "Selected item callbacks heal or boost only their own live holder; neither can KO, resurrect, or alter the frozen residual ordering or the other's callback")
         inactive("draws.1.11", "Encore residual callbacks change only own counter/lock and cannot KO or alter the other's callback")
         inactive("initial_tie", "Full input mapper refuses unresolved entry_pending; initialize has no eligible initial callback")

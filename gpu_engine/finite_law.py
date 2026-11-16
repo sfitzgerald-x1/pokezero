@@ -34,6 +34,7 @@ COORDINATES = tuple(
     + [("initial_tie", 2)]
     + [(f"effect.{side}.{column}", bound)
        for side in range(2) for column, bound in enumerate(EFFECT_BOUNDS)]
+    + [(f"shed_skin.{side}",100) for side in range(2)]
 )
 EFFECT_COORDINATES = tuple(name for name, _ in COORDINATES if name.startswith("effect."))
 
@@ -53,6 +54,7 @@ def chance_fields(values: Mapping[str, int]) -> dict:
         **{field: [values[f"{field}.{s}"] for s in range(2)]
            for field in ("phazing", "secondary", "sleep_talk", "entry_ties")},
         initial_tie=values["initial_tie"],
+        shed_skin=[values[f"shed_skin.{s}"] for s in range(2)],
         effect=[[values[f"effect.{s}.{c}"] for c in range(len(EFFECT_BOUNDS))] for s in range(2)])
 
 
