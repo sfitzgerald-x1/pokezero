@@ -94,6 +94,7 @@ class TypeState(NamedTuple):
     encounter: jax.Array
     overridden: jax.Array
     categories: jax.Array
+    type_changed: jax.Array  # sticky protocol history; independent of the current overlay
 
 
 def _binding(value):
@@ -108,7 +109,8 @@ def initialize(batch,tables,*,species_binding):
     if not np.array_equal(np.asarray(species_binding),np.asarray(tables.species_binding)):
         raise ValueError('live types require their frozen public species namespace')
     return TypeState(jnp.broadcast_to(tables.binding,(batch,8)),jnp.broadcast_to(species_binding,(batch,8)),
-        jnp.zeros((batch,2),jnp.int32),jnp.zeros((batch,2),bool),jnp.zeros((batch,2,2),jnp.int32))
+        jnp.zeros((batch,2),jnp.int32),jnp.zeros((batch,2),bool),jnp.zeros((batch,2,2),jnp.int32),
+        jnp.zeros((batch,2),bool))
 
 
 def _shape(state,tables,mons):
@@ -116,7 +118,8 @@ def _shape(state,tables,mons):
         raise ValueError('live-type state requires B by two public sides')
     b=state.encounter.shape[0]
     for name,shape,dtype in [('binding',(b,8),jnp.uint32),('species_binding',(b,8),jnp.uint32),
-        ('encounter',(b,2),jnp.int32),('overridden',(b,2),jnp.bool_),('categories',(b,2,2),jnp.int32)]:
+        ('encounter',(b,2),jnp.int32),('overridden',(b,2),jnp.bool_),('categories',(b,2,2),jnp.int32),
+        ('type_changed',(b,2),jnp.bool_)]:
         x=getattr(state,name)
         if x.shape!=shape or x.dtype!=dtype:raise ValueError('live-type state shape/dtype: '+name)
     for name,shape in [('active',(b,2)),('encounter',(b,2,6)),('species',(b,2,6))]:
@@ -171,7 +174,9 @@ def apply(state,tables,mons,*,operation,side,encounter,first=0,second=0,producer
     use=ok&valid
     updated=state._replace(encounter=state.encounter.at[address].set(jnp.where(use,enc,state.encounter[address])),
         overridden=state.overridden.at[address].set(jnp.where(use,overridden,state.overridden[address])),
-        categories=state.categories.at[address].set(jnp.where(use[:,None],pair,state.categories[address])))
+        categories=state.categories.at[address].set(jnp.where(use[:,None],pair,state.categories[address])),
+        type_changed=state.type_changed.at[address].set(jnp.where(use,
+            jnp.where(arrival,False,state.type_changed[address]|(op==TYPE)|(op==FORME)),state.type_changed[address])))
     return updated,ok|~valid
 
 
