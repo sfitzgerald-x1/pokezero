@@ -715,17 +715,20 @@ class EffectAndResidualRuleTests(unittest.TestCase):
 
     def test_a_phase_shift_changes_the_saved_effect_block_only_by_the_derivation(self):
         """M1 GPU pass (2 lanes of 1.1M): once the base pass has state.effect_draws it is compared bitwise, and a
-        phase shift (the deferral moved) saves or drops the block. Accepted per side only where this tree's block
-        is the design derivation (effect_ok); a wrong block on the same lanes stays unexpected."""
+        phase shift (the deferral moved) saves or drops the block. The five-column block is independently checked
+        even when present at base; a wrong old or appended coordinate stays unexpected."""
         import jax.numpy as j
         from gpu_engine import v2e_regress
 
-        def saving(state, actions, t, *, shift=False, wrong=False):
+        def saving(state, actions, t, *, shift=False, wrong=False, wrong_column=None):
             out = pending_step(state, actions, t);s = out.step.state
             uses = curse_users(state, actions)
             if shift:s = s._replace(pending_residual=s.pending_residual ^ uses)      # Curse lanes move the deferral
             block = saved_block(state, s)
             if wrong:block = j.where(uses[:, None, None], (block + 1) % 2, block)
+            if wrong_column is not None:
+                column=block[:,:,wrong_column]
+                block=block.at[:,:,wrong_column].set(j.where(uses[:,None],(column+1)%2,column))
             return result(s._replace(effect_draws=block), out.trackers)
         args = lambda **extra: TwoPassTests.args.__func__(type(self), **extra)
         base = self.tmp / 'base-with-effect'
@@ -740,13 +743,18 @@ class EffectAndResidualRuleTests(unittest.TestCase):
                 step_override=clocked(lambda s, a, t: saving(s, a, t, **kind), even), prepared=(self.context, self.new))
             return code, json.loads((out / 'report.json').read_text()), [json.loads(x) for x in (out / 'changed.jsonl').read_text().splitlines()]
         code, report, listing = run('effect-shift', shift=True)
-        self.assertEqual(code, 0, report['counts']);self.assertFalse(report['effect_rule'])
+        self.assertEqual(code, 0, report['counts']);self.assertTrue(report['effect_rule'])
+        self.assertGreater(report['counts']['effect_draws_saved'],0)
         shifted = [x for x in listing if x['phase_shift']]
         self.assertTrue(shifted);self.assertEqual(len(shifted), len(listing))
-        self.assertTrue(all({'state.effect_draws@0', 'state.effect_draws@1'} <= set(x['ko_consequences']) for x in shifted))
+        self.assertTrue(all(not {'state.effect_draws@0', 'state.effect_draws@1'} & set(x['ko_consequences']) for x in shifted))
         code, report, _ = run('effect-shift-wrong', shift=True, wrong=True)
         self.assertEqual(code, 1)
         self.assertEqual(set(report['by_effect']['curse']['unexpected_fields']), {'state.effect_draws@user', 'state.effect_draws@target'})
+        for column in (0,4):
+            code, report, _ = run('effect-shift-wrong-column-'+str(column),shift=True,wrong_column=column)
+            self.assertEqual(code,1)
+            self.assertEqual(set(report['by_effect']['curse']['unexpected_fields']),{'state.effect_draws@user','state.effect_draws@target'})
 
     def test_a_moved_ko_retypes_only_a_color_change_holder(self):
         """M1 GPU pass (shard 176 lane 1687: a Trick-given Choice Band KOs Kecleon in the action phase, so Color Change

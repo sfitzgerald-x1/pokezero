@@ -47,7 +47,7 @@ def view():
     v = dict(active=z(2), hp=np.full((2, 6), 100), status=z(2, 6), status_counter=z(2, 6), item=np.ones((2, 6), np.int32),
              pp=np.full((2, 6, 4), 56), boosts=z(2, 6, 7), confusion_counter=z(2, 6), choice_move=z(2, 6),
              encore_counter=z(2, 6), encore_move=z(2, 6), substitute_hp=z(2, 6), volatile=np.zeros((2, 6), np.uint32),
-             done=np.bool_(False), winner=np.int32(-1))
+             gender=np.full((2, 6), -1, np.int32), done=np.bool_(False), winner=np.int32(-1))
     v['pp'][..., 1:] = 0
     return v
 
@@ -108,6 +108,15 @@ class PureTests(unittest.TestCase):
         self.assertEqual(fields, {'1:2:hp', '0:0:encore_counter', '0:0:encore_move', '0:0:status', '0:0:status_counter'})
         mask = MASK.copy();mask[1, 4] = False
         self.assertEqual([d['field'] for d in probe.compare_lane(view(), snapshot(), VOCAB, mask=mask)], ['1:mask'])
+
+    def test_compare_gender_checks_known_values_and_preserves_unknown(self):
+        sd=snapshot();sd['sides'][0]['mons'][0]['gender']=1
+        v=view()
+        self.assertEqual(probe.compare_lane(v,sd,VOCAB,mask=MASK),[])
+        for gender in (0,1,2):
+            v['gender'][0,0]=gender
+            fields=[d['field']for d in probe.compare_lane(v,sd,VOCAB,mask=MASK)]
+            self.assertEqual(fields,[]if gender==1 else ['0:0:gender'])
 
     def test_absent_engine_fields_compare_as_neutral_values(self):
         sd = snapshot();sd['sides'][0]['mons'][0]['volatiles']['perishsong'] = 3
