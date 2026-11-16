@@ -18,14 +18,15 @@ Checks (each mismatch is classified and sampled; nothing is skipped silently):
   is a move class, and no earlier one otherwise (single-variant and every later reason: none);
 - per decision and attacker species: narrow_pin over the admitted strikes in line order gives set_posterior's
   support (hard & every admitted strike's counts > 0; the corpus has no off-model drops);
-- divergence of the device's strike-time verdict: a strike's verdict at its first decision against every later
-  decision's (the hard support only shrinks), by direction and reason;
+- divergence of first-decision replay: a strike's verdict at its first recorded decision against every later
+  decision's (the hard support only shrinks), by direction and reason. The corpus does not record damage-time hard
+  support, so this does not measure within-step reveals or establish event-time versus root-time equivalence;
 - the in-tree guard: admitted rows with an engine-unmodeled modifier (type-boost item, Marvel Scale, Plus/Minus)
   active on a hard variant, by cause;
 - known departure: Guts boosting a special move's SpA in tier2 (Showdown's Guts is onModifyAtk only), counted.
 
 usage: python scripts/set_posterior_device_parity.py --corpus DIR_OR_FILES --metadata META.json --out OUT_DIR
-       [--showdown-root ROOT] [--shards 0,1,...] [--batch 4096] [--limit-rows N]
+       [--showdown-root ROOT] [--shards 0,1,...] [--batch 4096]
 Runs on CPU (JAX_PLATFORMS=cpu); the kernel is the only JAX code.
 """
 from __future__ import annotations
@@ -228,7 +229,8 @@ def check_shard(rows, kernel, mapper, host, check, tables_np):
             continue
         stats['core-rows'] += 1
         if k in problems:
-            stats['core-rows-with-input-problems'] += 1;continue
+            stats['core-rows-with-input-problems'] += 1
+            check.bad('core-inputs', dict(key=k, problems=problems[k]));continue
         i = at[k];s = fields[i]['species'];entries = r.get('variants', [])
         for e in entries:
             v, a = e['index'], e['attacker']
@@ -311,10 +313,9 @@ def check_shard(rows, kernel, mapper, host, check, tables_np):
 
 def check_supports(rows, verdicts, dsp, check):
     """Per decision and attacker species with a known hard support (an admitted strike lists it): narrow_pin over the
-    decision's admitted strikes in line order equals set_posterior's support; and the in-tree device's support, which
-    applied each strike once at its first decision (the strike-time hard; the device never re-reads an old strike),
-    compared with it: equal, or wider (the device narrowed less), narrower, or a pin conflict (project then falls back
-    to the hard support and sets pin_conflict)."""
+    decision's admitted strikes in line order equals set_posterior's support. Separately replay each strike once at
+    its first recorded decision and compare it with root-time support. This is not damage-time support: later reveals
+    within the first step can already have changed its hard mask. A damage-event capture is needed to measure that."""
     import jax.numpy as j
     first = {}
     for r in sorted(rows, key=lambda r:r['decision_index']):
@@ -325,6 +326,8 @@ def check_supports(rows, verdicts, dsp, check):
     for r in rows:groups[(r['ordinal'], r['decision_index'], r['attacker_species'])].append(r)
     for (ordinal, d, species), members in groups.items():
         members.sort(key=lambda r:r['line'])
+        if any(r['admitted'] and (strike_key(r), d) not in verdicts for r in members):
+            check.bad('support-inputs-missing', dict(key=(ordinal, d, species)));continue
         known = [verdicts[(strike_key(r), d)] for r in members if r['admitted']]
         if not known:continue
         hard = known[0][0]
@@ -333,7 +336,7 @@ def check_supports(rows, verdicts, dsp, check):
             if not np.array_equal(h, hard):check.bad('decision-hard-differs', dict(key=(ordinal, d, species)))
             expected &= want
         for label, fits in (('root', [verdicts[(strike_key(r), d)][1] for r in members if r['admitted']]),
-                            ('strike-time', [first.get(strike_key(r)) for r in members])):
+                            ('first-decision', [first.get(strike_key(r)) for r in members])):
             pin, active, conflicts = j.zeros((1, 2), j.uint32), j.zeros(1, bool), j.zeros(1, j.int32)
             for fit in fits:
                 if fit is None:continue
@@ -351,9 +354,9 @@ def check_supports(rows, verdicts, dsp, check):
             kind = ('pin-conflict' if conflict else 'equal' if np.array_equal(device, expected) else
                     'device-wider' if (expected & ~device).sum() == 0 else 'device-narrower' if (device & ~expected).sum() == 0
                     else 'device-different')
-            check.stats['strike-time-support:' + kind] += 1
-            if kind != 'equal' and len(check.samples['strike-time-support:' + kind]) < check.limit:
-                check.samples['strike-time-support:' + kind].append(dict(key=(ordinal, d, species),
+            check.stats['first-decision-support:' + kind] += 1
+            if kind != 'equal' and len(check.samples['first-decision-support:' + kind]) < check.limit:
+                check.samples['first-decision-support:' + kind].append(dict(key=(ordinal, d, species),
                     device=np.flatnonzero(device).tolist(), corpus=np.flatnonzero(expected).tolist()))
 
 
@@ -364,7 +367,24 @@ def shard_files(paths, shards):
         files += sorted(p.glob('strikes-*.jsonl*')) if p.is_dir() else [p]
     if shards is not None:
         files = [f for f in files if int(f.name.split('-')[1].split('.')[0]) in shards]
+        found = {int(f.name.split('-')[1].split('.')[0]) for f in files}
+        if found != shards:raise ValueError('missing requested shards: ' + str(sorted(shards - found)))
+    if not files:raise ValueError('no corpus files selected')
+    if len({f.resolve() for f in files}) != len(files):raise ValueError('duplicate corpus files selected')
+    if any(not f.is_file() for f in files):raise ValueError('corpus file does not exist')
     return files
+
+
+def constant_parity(sp, dsp):
+    names = ('FIXED_DAMAGE_MOVES', 'OHKO_MOVES', 'CONDITIONAL_POWER_MOVES', 'MULTI_HIT_MOVES')
+    equal = {name: getattr(sp, name) == getattr(dsp, name) for name in names}
+    if not all(equal.values()):raise ValueError('host/device move classes differ: ' + str(equal))
+    return equal
+
+
+def check_coverage(check):
+    for name in ('rows', 'core-rows', 'variant-entries', 'supports-root'):
+        if not check.stats[name]:check.bad('missing-coverage', dict(counter=name))
 
 
 def main(argv=None):
@@ -377,6 +397,7 @@ def main(argv=None):
     parser.add_argument('--batch', type=int, default=2048)
     parser.add_argument('--samples', type=int, default=20)
     args = parser.parse_args(argv)
+    files = shard_files(args.corpus, None if args.shards is None else {int(x) for x in args.shards.split(',')})
     out = Path(args.out);out.mkdir(parents=True, exist_ok=False)
     t0 = time.time()
     from pokezero.dex import load_showdown_dex_cached
@@ -390,24 +411,20 @@ def main(argv=None):
     host = {name: np.asarray(getattr(tables, name)) for name in ('level', 'stats', 'ability', 'item', 'move_class')}
     tables_np = dict(physical=np.asarray(tables.physical), hp_type=np.asarray(tables.hp_type),
                      special_type=np.asarray(tables.variable.special_type))
-    constants = {}
-    try:
-        from pokezero import set_posterior as sp
-        constants = {name: getattr(sp, name) == getattr(dsp, name)
-                     for name in ('FIXED_DAMAGE_MOVES', 'OHKO_MOVES', 'CONDITIONAL_POWER_MOVES', 'MULTI_HIT_MOVES')}
-    except ImportError:
-        constants = {'set_posterior': 'not importable'}
+    from pokezero import set_posterior as sp
+    constants = constant_parity(sp, dsp)
     mapper = Mapper(metadata, source_tables)
     kernel = Kernel(dsp, tables, args.batch)
     check = Check(args.samples)
-    files = shard_files(args.corpus, None if args.shards is None else {int(x) for x in args.shards.split(',')})
     for n, f in enumerate(files):
         opener = gzip.open if f.suffix == '.gz' else open
         with opener(f, 'rt') as stream:
             rows = [json.loads(line) for line in stream]
+        if not rows:check.bad('empty-shard', dict(file=f.name))
         check_shard(rows, kernel, mapper, host, check, tables_np)
         print(f'{f.name}: {len(rows)} rows, {time.time() - t0:.0f}s, mismatches so far '
               f'{sum(v for k, v in check.stats.items() if k.startswith("mismatch:"))}', flush=True)
+    check_coverage(check)
     mismatches = sum(v for k, v in check.stats.items() if k.startswith('mismatch:'))
     summary = dict(schema='pokezero.set_posterior_device_parity.v1', files=[f.name for f in files],
         table_binding=np.asarray(tables.binding).tolist(), unknown_table_names=unknown, constants_equal=constants,
