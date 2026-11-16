@@ -334,7 +334,7 @@ class ChanceInputs(NamedTuple):
     Saved ordinary-turn draws override these during suspended replacements.
     Reused columns remain shared; enumeration must not break that correlation.
     ``effect`` (fidelity patch R, design 2.1) is an appended, independent
-    stream with bounds 16,16,4,2; None means "the value sample_chance_inputs
+    stream with bounds 16,16,4,2,2; None means "the value sample_chance_inputs
     draws", so six-field explicit callers keep their exact trajectories.
     """
     draws: jax.Array               # [B,2,12]
@@ -343,7 +343,7 @@ class ChanceInputs(NamedTuple):
     sleep_talk: jax.Array          # [B,2]
     entry_ties: jax.Array          # [B,2]
     initial_tie: jax.Array         # [B]
-    effect: jax.Array | None = None  # [B,2,4]; appended last, so positional six-field constructors still work
+    effect: jax.Array | None = None  # [B,2,5]; appended last, so positional six-field constructors still work
 
 
 # Fidelity patch R (design 2.1): ChanceInputs.effect is fold_in(step key, EFFECT_SALT), drawn from the same
