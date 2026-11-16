@@ -357,7 +357,8 @@ class DigestAndRuleTests(unittest.TestCase):
 
     def test_stick_plug_in_predicate(self):
         """STICK: a Farfetch'd active holding Stick (or facing a Stick holder's Trick) with a damaging candidate; another
-        species holding Stick, a bare Farfetch'd or a Status-only Farfetch'd is not involved."""
+        species holding Stick, a bare Farfetch'd or a Status-only Farfetch'd with PP is not involved. Exhausted PP makes
+        even a selected Status slot execute Struggle, which can receive the Stick critical-hit boost."""
         from gpu_engine.v2e_regress import Pre, PLUGINS, ALLOWED, CASCADE_ALLOWED
         vocab = dict(VOCAB, moves=VOCAB['moves'] + ['trick'], items=VOCAB['items'] + ['stick'],
                      species=['_none', 'farfetchd', 'mew'], types=['_none', 'normal', 'dark', 'grass', 'psychic'])
@@ -366,16 +367,22 @@ class DigestAndRuleTests(unittest.TestCase):
         rows = [None, row('curse', 0, 'Status'), row('tackle', 1, 'Physical'), row('sleeptalk', 1, 'Status'),
                 row('spore', 3, 'Status'), row('struggle', 1, 'Physical'), row('encore', 1, 'Status'),
                 row('magiccoat', 4, 'Status'), row('batonpass', 1, 'Status'), row('trick', 4, 'Status')]
-        L = 6;s = pre_arrays(L);s['species'] = np.full((L, 2, 6), MEW, np.int32)
+        L = 9;s = pre_arrays(L);s['species'] = np.full((L, 2, 6), MEW, np.int32)
         s['species'][0, 0, 0] = FARFETCHD;s['item'][0, 0, 0] = STICK                       # 0: Farfetch'd + Stick, Tackle
         s['species'][1, 0, 0] = MEW;s['item'][1, 0, 0] = STICK                             # 1: another species
         s['species'][2, 0, 0] = FARFETCHD                                                  # 2: no Stick
         s['species'][3, 0, 0] = FARFETCHD;s['item'][3, 1, 0] = STICK;s['moves'][3, 1, 0] = TRICK   # 3: the foe's Trick
         s['species'][4, 0, 0] = FARFETCHD;s['item'][4, 0, 0] = STICK;s['moves'][4, 0, 0] = CURSE   # 4: Status only
+        s['pp'] = np.full(s['moves'].shape, 10, np.int32)
+        s['moves'][6:, 0, 0] = CURSE;s['pp'][6:, 0, 0] = 0
+        s['species'][6, 0, 0] = FARFETCHD;s['item'][6, 0, 0] = STICK                       # 6: Struggle + Stick
+        s['item'][7, 0, 0] = STICK                                                        # 7: Struggle, another species
+        s['species'][8, 0, 0] = FARFETCHD                                                 # 8: Struggle, no Stick
+        struggle = np.zeros((L, 2), bool);struggle[6:, 0] = True
         named = {f'state.{k}': v for k, v in s.items()};named['actions'] = np.zeros((L, 2), np.int32)
-        p = Pre(named, vocab, np.append(CALLABLE, False), np.zeros((L, 2), bool), moves=rows)
+        p = Pre(named, vocab, np.append(CALLABLE, False), struggle, moves=rows)
         no = [False, False];t0 = [True, False]
-        self.assertEqual(PLUGINS['STICK']['stick_crit'](p).tolist(), [t0, no, no, t0, no, no])
+        self.assertEqual(PLUGINS['STICK']['stick_crit'](p).tolist(), [t0, no, no, t0, no, no, t0, no, no])
         self.assertTrue('stick_crit' in ALLOWED and 'stick_crit' in CASCADE_ALLOWED)
 
     def test_ko_timing_lane_applies_cascade_allowed_only(self):

@@ -686,12 +686,12 @@ def plus_minus_active(p):
 
 def stick_crit(p):
     """STICK: [L,2] a side whose active is a Farfetch'd holding Stick (critical.ratio 3: crits below 4, not 1), or one a
-    foe active holding Stick may Trick it to, with a damaging candidate. An entrant does not move."""
+    foe active holding Stick may Trick it to, with a damaging candidate (including Struggle). An entrant does not move."""
     items, species = p.vocab['items'], p.vocab.get('species', ())
     if 'stick' not in items or 'farfetchd' not in species:return np.zeros((p.lanes, 2), bool)
     held = p.active('item') == items.index('stick')
     farfetchd = p.active('species') == species.index('farfetchd')
-    _, damaging = dm_candidate_moves(p)
+    _, damaging = dm_candidate_moves(p, typed=False)
     return farfetchd & (held | (held[:, ::-1] & p.side_uses('trick')[:, ::-1])) & damaging.any(-1)
 
 
