@@ -34,14 +34,16 @@
    "hosted_process_hwm_gib": 7.4953,
    "measurement_run": 43641647612,
    "measurement_source_commit": "32df2cef8659f0414d7be995e83004b13f3ef941",
-   "cpu_profile_pending": false,
-   "note": "Main-only module. Initial heavy assignment is supported by the original main hosted wall/process-memory measurement. Fresh four-CPU isolated profiling is required before review readiness; an unfinished or capped profile is never a test pass.",
+   "note": "Main-only module. Original hosted wall/process-memory evidence and fresh CPU profile support the heavy assignment. Original process-block execution completed with zero skips, failures or errors. Hosted wall over ten minutes remains a heavy criterion even if the isolated wall is lower.",
    "hosted_gate_peak_gib": 8.2123,
    "isolated_wall_min": 10.5797,
    "isolated_peak_gib": 8.8437,
-   "isolated_measured_at": "69f7a188, CI runtime, one original module per four-CPU lane",
+   "isolated_measured_at": "69f7a188 (component bodies identical to main), CI runtime, one original module per four-CPU lane",
    "isolated_returncode": 0,
-   "isolated_capped": null
+   "isolated_capped": null,
+   "isolated_peak_method": "sampled process-tree RSS sum",
+   "isolated_peak_lower_bound": false,
+   "isolated_tests_run": 4
   },
   {
    "module": "test_gpu_engine_color_change_owning",
@@ -87,9 +89,16 @@
    "hosted_process_hwm_gib": 10.6901,
    "measurement_run": 43641647612,
    "measurement_source_commit": "32df2cef8659f0414d7be995e83004b13f3ef941",
-   "cpu_profile_pending": true,
-   "note": "Main-only module. Initial heavy assignment is supported by the original main hosted wall/process-memory measurement. Fresh four-CPU isolated profiling is required before review readiness; an unfinished or capped profile is never a test pass.",
-   "hosted_gate_peak_gib": 11.5079
+   "note": "Main-only module. Original hosted wall/process-memory evidence and fresh CPU profile support the heavy assignment. Original process-block execution completed with zero skips, failures or errors. Hosted wall over ten minutes remains a heavy criterion even if the isolated wall is lower.",
+   "hosted_gate_peak_gib": 11.5079,
+   "isolated_wall_min": 20.0085,
+   "isolated_peak_gib": 13.1049,
+   "isolated_measured_at": "69f7a188 (component bodies identical to main), CI runtime, one original module per four-CPU lane",
+   "isolated_peak_method": "sampled process-tree RSS sum",
+   "isolated_returncode": 0,
+   "isolated_capped": null,
+   "isolated_peak_lower_bound": false,
+   "isolated_tests_run": 4
   },
   {
    "module": "test_gpu_engine_engine_execution_completeness",
@@ -147,9 +156,16 @@
    "hosted_process_hwm_gib": 14.4887,
    "measurement_run": 43641647612,
    "measurement_source_commit": "32df2cef8659f0414d7be995e83004b13f3ef941",
-   "cpu_profile_pending": true,
-   "note": "Main-only module. Initial heavy assignment is supported by the original main hosted wall/process-memory measurement. Fresh four-CPU isolated profiling is required before review readiness; an unfinished or capped profile is never a test pass.",
-   "hosted_gate_peak_gib": 16.4923
+   "note": "Main-only module. Original hosted wall/process-memory evidence and fresh CPU profile support the heavy assignment. Original process-block execution completed with zero skips, failures or errors. Hosted wall over ten minutes remains a heavy criterion even if the isolated wall is lower.",
+   "hosted_gate_peak_gib": 16.4923,
+   "isolated_wall_min": 11.889,
+   "isolated_peak_gib": 17.3067,
+   "isolated_measured_at": "69f7a188 (component bodies identical to main), CI runtime, one original module per four-CPU lane",
+   "isolated_peak_method": "sampled process-tree RSS sum",
+   "isolated_returncode": 0,
+   "isolated_capped": null,
+   "isolated_peak_lower_bound": false,
+   "isolated_tests_run": 7
   },
   {
    "module": "test_gpu_engine_engine_weather_public",
@@ -175,9 +191,16 @@
    "hosted_process_hwm_gib": 7.3018,
    "measurement_run": 43641647612,
    "measurement_source_commit": "32df2cef8659f0414d7be995e83004b13f3ef941",
-   "cpu_profile_pending": true,
-   "note": "Main-only module. Initial heavy assignment is supported by the original main hosted wall/process-memory measurement. Fresh four-CPU isolated profiling is required before review readiness; an unfinished or capped profile is never a test pass.",
-   "hosted_gate_peak_gib": 8.2233
+   "note": "Main-only module. Original hosted wall/process-memory evidence and fresh CPU profile support the heavy assignment. Original process-block execution completed with zero skips, failures or errors. Hosted wall over ten minutes remains a heavy criterion even if the isolated wall is lower.",
+   "hosted_gate_peak_gib": 8.2233,
+   "isolated_wall_min": 9.7091,
+   "isolated_peak_gib": 8.4452,
+   "isolated_measured_at": "69f7a188 (component bodies identical to main), CI runtime, one original module per four-CPU lane",
+   "isolated_peak_method": "max(tree PSS, observed process HWM, kernel child HWM)",
+   "isolated_returncode": 0,
+   "isolated_capped": null,
+   "isolated_peak_lower_bound": false,
+   "isolated_tests_run": 4
   },
   {
    "module": "test_gpu_engine_execution_actual_sites",
@@ -187,9 +210,16 @@
    "hosted_process_hwm_gib": 14.6648,
    "measurement_run": 43641647612,
    "measurement_source_commit": "32df2cef8659f0414d7be995e83004b13f3ef941",
-   "cpu_profile_pending": true,
-   "note": "Main-only module. Initial heavy assignment is supported by the original main hosted wall/process-memory measurement. Fresh four-CPU isolated profiling is required before review readiness; an unfinished or capped profile is never a test pass.",
-   "hosted_gate_peak_gib": 23.3239
+   "note": "Main-only module. Original hosted wall/process-memory evidence and fresh CPU profile support the heavy assignment. Original process-block execution completed with zero skips, failures or errors. Hosted wall over ten minutes remains a heavy criterion even if the isolated wall is lower.",
+   "hosted_gate_peak_gib": 23.3239,
+   "isolated_wall_min": 16.8398,
+   "isolated_peak_gib": 25.255,
+   "isolated_measured_at": "69f7a188 (component bodies identical to main), CI runtime, one original module per four-CPU lane",
+   "isolated_peak_method": "sampled process-tree RSS sum",
+   "isolated_returncode": 0,
+   "isolated_capped": null,
+   "isolated_peak_lower_bound": false,
+   "isolated_tests_run": 12
   },
   {
    "module": "test_gpu_engine_execution_runtime_plumbing",
@@ -199,9 +229,16 @@
    "hosted_process_hwm_gib": 14.8102,
    "measurement_run": 43641647612,
    "measurement_source_commit": "32df2cef8659f0414d7be995e83004b13f3ef941",
-   "cpu_profile_pending": true,
-   "note": "Main-only module. Initial heavy assignment is supported by the original main hosted wall/process-memory measurement. Fresh four-CPU isolated profiling is required before review readiness; an unfinished or capped profile is never a test pass.",
-   "hosted_gate_peak_gib": 46.0892
+   "note": "Main-only module. Original hosted wall/process-memory evidence and fresh CPU profile support the heavy assignment. Profile stopped at its classification cap: peak and wall are observed lower bounds, not a passing test result. All tests remain runnable through the full heavy route.",
+   "hosted_gate_peak_gib": 46.0892,
+   "isolated_wall_min": 11.8237,
+   "isolated_peak_gib": 32.8285,
+   "isolated_measured_at": "69f7a188 (component bodies identical to main), CI runtime, one original module per four-CPU lane",
+   "isolated_peak_method": "max(tree PSS, observed process HWM, kernel child HWM)",
+   "isolated_returncode": -15,
+   "isolated_capped": "deduplicated memory lower bound above 32 GiB",
+   "isolated_peak_lower_bound": true,
+   "isolated_tests_run": null
   },
   {
    "module": "test_gpu_engine_flash_fire_end_owning",
@@ -237,9 +274,16 @@
    "hosted_process_hwm_gib": 14.8299,
    "measurement_run": 43641647612,
    "measurement_source_commit": "32df2cef8659f0414d7be995e83004b13f3ef941",
-   "cpu_profile_pending": true,
-   "note": "Main-only module. Initial heavy assignment is supported by the original main hosted wall/process-memory measurement. Fresh four-CPU isolated profiling is required before review readiness; an unfinished or capped profile is never a test pass.",
-   "hosted_gate_peak_gib": 24.0059
+   "note": "Main-only module. Original hosted wall/process-memory evidence and fresh CPU profile support the heavy assignment. Original process-block execution completed with zero skips, failures or errors. Hosted wall over ten minutes remains a heavy criterion even if the isolated wall is lower.",
+   "hosted_gate_peak_gib": 24.0059,
+   "isolated_wall_min": 11.3422,
+   "isolated_peak_gib": 24.5036,
+   "isolated_measured_at": "69f7a188 (component bodies identical to main), CI runtime, one original module per four-CPU lane",
+   "isolated_peak_method": "max(tree PSS, observed process HWM, kernel child HWM)",
+   "isolated_returncode": 0,
+   "isolated_capped": null,
+   "isolated_peak_lower_bound": false,
+   "isolated_tests_run": 1
   },
   {
    "module": "test_gpu_engine_leftovers_owning_callers",
@@ -249,9 +293,16 @@
    "hosted_process_hwm_gib": 13.8477,
    "measurement_run": 43641647612,
    "measurement_source_commit": "32df2cef8659f0414d7be995e83004b13f3ef941",
-   "cpu_profile_pending": true,
-   "note": "Main-only module. Initial heavy assignment is supported by the original main hosted wall/process-memory measurement. Fresh four-CPU isolated profiling is required before review readiness; an unfinished or capped profile is never a test pass.",
-   "hosted_gate_peak_gib": 14.5061
+   "note": "Main-only module. Original hosted wall/process-memory evidence and fresh CPU profile support the heavy assignment. Original process-block execution completed with zero skips, failures or errors. Hosted wall over ten minutes remains a heavy criterion even if the isolated wall is lower.",
+   "hosted_gate_peak_gib": 14.5061,
+   "isolated_wall_min": 8.3107,
+   "isolated_peak_gib": 15.2722,
+   "isolated_measured_at": "69f7a188 (component bodies identical to main), CI runtime, one original module per four-CPU lane",
+   "isolated_peak_method": "max(tree PSS, observed process HWM, kernel child HWM)",
+   "isolated_returncode": 0,
+   "isolated_capped": null,
+   "isolated_peak_lower_bound": false,
+   "isolated_tests_run": 7
   },
   {
    "module": "test_gpu_engine_leftovers_public",
@@ -327,8 +378,15 @@
    "hosted_process_hwm_gib": 9.0162,
    "measurement_run": 43641647612,
    "measurement_source_commit": "32df2cef8659f0414d7be995e83004b13f3ef941",
-   "cpu_profile_pending": true,
-   "note": "Main-only module. Initial heavy assignment is supported by the original main hosted wall/process-memory measurement. Fresh four-CPU isolated profiling is required before review readiness; an unfinished or capped profile is never a test pass."
+   "note": "Main-only module. Original hosted wall/process-memory evidence and fresh CPU profile support the heavy assignment. Original process-block execution completed with zero skips, failures or errors. Hosted wall over ten minutes remains a heavy criterion even if the isolated wall is lower.",
+   "isolated_wall_min": 15.477,
+   "isolated_peak_gib": 10.7679,
+   "isolated_measured_at": "69f7a188 (component bodies identical to main), CI runtime, one original module per four-CPU lane",
+   "isolated_peak_method": "max(tree PSS, observed process HWM, kernel child HWM)",
+   "isolated_returncode": 0,
+   "isolated_capped": null,
+   "isolated_peak_lower_bound": false,
+   "isolated_tests_run": 4
   },
   {
    "module": "test_gpu_engine_primary_plain_status_owning",
@@ -458,9 +516,16 @@
    "hosted_process_hwm_gib": 10.8557,
    "measurement_run": 43641647612,
    "measurement_source_commit": "32df2cef8659f0414d7be995e83004b13f3ef941",
-   "cpu_profile_pending": true,
-   "note": "Main-only module. Initial heavy assignment is supported by the original main hosted wall/process-memory measurement. Fresh four-CPU isolated profiling is required before review readiness; an unfinished or capped profile is never a test pass.",
-   "hosted_gate_peak_gib": 11.6615
+   "note": "Main-only module. Original hosted wall/process-memory evidence and fresh CPU profile support the heavy assignment. Original process-block execution completed with zero skips, failures or errors. Hosted wall over ten minutes remains a heavy criterion even if the isolated wall is lower.",
+   "hosted_gate_peak_gib": 11.6615,
+   "isolated_wall_min": 19.417,
+   "isolated_peak_gib": 13.2705,
+   "isolated_measured_at": "69f7a188 (component bodies identical to main), CI runtime, one original module per four-CPU lane",
+   "isolated_peak_method": "max(tree PSS, observed process HWM, kernel child HWM)",
+   "isolated_returncode": 0,
+   "isolated_capped": null,
+   "isolated_peak_lower_bound": false,
+   "isolated_tests_run": 4
   },
   {
    "module": "test_gpu_engine_sleep_powder_runtime",
@@ -508,9 +573,16 @@
    "hosted_process_hwm_gib": 7.4276,
    "measurement_run": 43641647612,
    "measurement_source_commit": "32df2cef8659f0414d7be995e83004b13f3ef941",
-   "cpu_profile_pending": true,
-   "note": "Main-only module. Initial heavy assignment is supported by the original main hosted wall/process-memory measurement. Fresh four-CPU isolated profiling is required before review readiness; an unfinished or capped profile is never a test pass.",
-   "hosted_gate_peak_gib": 8.0965
+   "note": "Main-only module. Original hosted wall/process-memory evidence and fresh CPU profile support the heavy assignment. Original process-block execution completed with zero skips, failures or errors. Hosted wall over ten minutes remains a heavy criterion even if the isolated wall is lower.",
+   "hosted_gate_peak_gib": 8.0965,
+   "isolated_wall_min": 10.0206,
+   "isolated_peak_gib": 8.7238,
+   "isolated_measured_at": "69f7a188 (component bodies identical to main), CI runtime, one original module per four-CPU lane",
+   "isolated_peak_method": "max(tree PSS, observed process HWM, kernel child HWM)",
+   "isolated_returncode": 0,
+   "isolated_capped": null,
+   "isolated_peak_lower_bound": false,
+   "isolated_tests_run": 5
   },
   {
    "module": "test_gpu_engine_status_kernel_owner_drain",
@@ -520,9 +592,16 @@
    "hosted_process_hwm_gib": 14.8641,
    "measurement_run": 43641647612,
    "measurement_source_commit": "32df2cef8659f0414d7be995e83004b13f3ef941",
-   "cpu_profile_pending": true,
-   "note": "Main-only module. Initial heavy assignment is supported by the original main hosted wall/process-memory measurement. Fresh four-CPU isolated profiling is required before review readiness; an unfinished or capped profile is never a test pass.",
-   "hosted_gate_peak_gib": 40.4341
+   "note": "Main-only module. Original hosted wall/process-memory evidence and fresh CPU profile support the heavy assignment. Profile stopped at its classification cap: peak and wall are observed lower bounds, not a passing test result. All tests remain runnable through the full heavy route.",
+   "hosted_gate_peak_gib": 40.4341,
+   "isolated_wall_min": 7.2455,
+   "isolated_peak_gib": 32.197,
+   "isolated_measured_at": "69f7a188 (component bodies identical to main), CI runtime, one original module per four-CPU lane",
+   "isolated_peak_method": "max(tree PSS, observed process HWM, kernel child HWM)",
+   "isolated_returncode": -15,
+   "isolated_capped": "deduplicated memory lower bound above 32 GiB",
+   "isolated_peak_lower_bound": true,
+   "isolated_tests_run": null
   },
   {
    "module": "test_gpu_engine_status_residual_public",
@@ -548,9 +627,16 @@
    "hosted_process_hwm_gib": 14.7427,
    "measurement_run": 43641647612,
    "measurement_source_commit": "32df2cef8659f0414d7be995e83004b13f3ef941",
-   "cpu_profile_pending": true,
-   "note": "Main-only module. Initial heavy assignment is supported by the original main hosted wall/process-memory measurement. Fresh four-CPU isolated profiling is required before review readiness; an unfinished or capped profile is never a test pass.",
-   "hosted_gate_peak_gib": 47.5097
+   "note": "Main-only module. Original hosted wall/process-memory evidence and fresh CPU profile support the heavy assignment. Profile stopped at its classification cap: peak and wall are observed lower bounds, not a passing test result. All tests remain runnable through the full heavy route.",
+   "hosted_gate_peak_gib": 47.5097,
+   "isolated_wall_min": 8.5977,
+   "isolated_peak_gib": 32.1138,
+   "isolated_measured_at": "69f7a188 (component bodies identical to main), CI runtime, one original module per four-CPU lane",
+   "isolated_peak_method": "max(tree PSS, observed process HWM, kernel child HWM)",
+   "isolated_returncode": -15,
+   "isolated_capped": "deduplicated memory lower bound above 32 GiB",
+   "isolated_peak_lower_bound": true,
+   "isolated_tests_run": null
   },
   {
    "module": "test_gpu_engine_substitute_damage_owning",
@@ -576,9 +662,16 @@
    "hosted_process_hwm_gib": 7.5931,
    "measurement_run": 43641647612,
    "measurement_source_commit": "32df2cef8659f0414d7be995e83004b13f3ef941",
-   "cpu_profile_pending": true,
-   "note": "Main-only module. Initial heavy assignment is supported by the original main hosted wall/process-memory measurement. Fresh four-CPU isolated profiling is required before review readiness; an unfinished or capped profile is never a test pass.",
-   "hosted_gate_peak_gib": 8.4534
+   "note": "Main-only module. Original hosted wall/process-memory evidence and fresh CPU profile support the heavy assignment. Original process-block execution completed with zero skips, failures or errors. Hosted wall over ten minutes remains a heavy criterion even if the isolated wall is lower.",
+   "hosted_gate_peak_gib": 8.4534,
+   "isolated_wall_min": 9.9536,
+   "isolated_peak_gib": 8.8327,
+   "isolated_measured_at": "69f7a188 (component bodies identical to main), CI runtime, one original module per four-CPU lane",
+   "isolated_peak_method": "max(tree PSS, observed process HWM, kernel child HWM)",
+   "isolated_returncode": 0,
+   "isolated_capped": null,
+   "isolated_peak_lower_bound": false,
+   "isolated_tests_run": 4
   },
   {
    "module": "test_gpu_engine_terminal_source",
@@ -588,9 +681,16 @@
    "hosted_process_hwm_gib": 14.7117,
    "measurement_run": 43641647612,
    "measurement_source_commit": "32df2cef8659f0414d7be995e83004b13f3ef941",
-   "cpu_profile_pending": true,
-   "note": "Main-only module. Initial heavy assignment is supported by the original main hosted wall/process-memory measurement. Fresh four-CPU isolated profiling is required before review readiness; an unfinished or capped profile is never a test pass.",
-   "hosted_gate_peak_gib": 20.9963
+   "note": "Main-only module. Original hosted wall/process-memory evidence and fresh CPU profile support the heavy assignment. Profile stopped at its classification cap: peak and wall are observed lower bounds, not a passing test result. All tests remain runnable through the full heavy route.",
+   "hosted_gate_peak_gib": 20.9963,
+   "isolated_wall_min": 20.0129,
+   "isolated_peak_gib": 12.9,
+   "isolated_measured_at": "69f7a188 (component bodies identical to main), CI runtime, one original module per four-CPU lane",
+   "isolated_peak_method": "max(tree PSS, observed process HWM, kernel child HWM)",
+   "isolated_returncode": -15,
+   "isolated_capped": "wall lower bound above 20 min",
+   "isolated_peak_lower_bound": true,
+   "isolated_tests_run": null
   },
   {
    "module": "test_gpu_engine_thunder_wave_runtime",
