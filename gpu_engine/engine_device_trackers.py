@@ -8,6 +8,7 @@ hooks and appended knowledge fields; this module does not establish parity or th
 from typing import NamedTuple
 import jax
 import jax.numpy as j
+from . import encoder_numeric as en
 from . import lane_index as _li
 
 SCHEMA='pokezero.engine_device_public_trackers.v3'
@@ -333,12 +334,13 @@ def readout(trackers,observer_sides):
         fields={**({}if fields is None else fields),
             'self_sleep_clause':_li.take(h.holder,r,owner)>=0,'opp_sleep_clause':_li.take(h.holder,r,foe)>=0,
             'sleep_clause_blocks_self':j.any(_li.take(h.victims,r,foe),axis=-1),'sleep_clause_blocks_opp':j.any(_li.take(h.victims,r,owner),axis=-1),
-            'self_hazard_credit':_li.take(hazard,r,owner,1),'opp_hazard_credit':_li.take(hazard,r,foe,0)}
+            'self_hazard_credit':_li.take(hazard,r,owner,1),'opp_hazard_credit':_li.take(hazard,r,foe,0),
+            'self_hazard_credit_pair':_li.take(h.hazards,r,owner,1),'opp_hazard_credit_pair':_li.take(h.hazards,r,foe,0)}
         stats={**({}if stats is None else stats),'blocked_on_our_attack':_li.take(h.blocked,r,owner),'pursuit_intercept_predict':_li.take(h.pursuit,r,foe)}
         reveals=_li.take(h.weather,r,foe).reshape(b,6)
         stats.update({'weather_reveal_'+str(i):reveals[:,i]for i in range(6)})
     return PublicView(_li.take(trackers.own_order,r,owner),take('species'),take('level'),take('gender'),
-        take('hp_percent').astype(j.float32)/100.0,take('status'),active,present,take('fainted'),
+        en.normalized(take('hp_percent'), 100),take('status'),active,present,take('fainted'),
         j.zeros((b,6,2),j.int32) if trackers.shown_types is None else take('shown_types'),take('boosts'),
         z if trackers.original_ability is None else take('original_ability'),
         z if trackers.shown_item is None else take('shown_item'),

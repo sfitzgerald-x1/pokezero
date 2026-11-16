@@ -102,7 +102,7 @@ class AgreementParity:
         finite = np.isfinite(left) & np.isfinite(right)
         with np.errstate(invalid='ignore', over='ignore'):
             delta = np.where(finite, np.abs(left-right), 0.)
-        nb = ~finite | (delta > 1e-6)
+        nb = ~finite | (delta > 0) | (np.signbit(left) != np.signbit(right))
         cb = (ref['categorical_ids'] != got['categorical_ids']) | (got['categorical_ids'] < 0) | (ref['categorical_ids'] < 0)
         self.numeric_bad += nb; self.category_bad += cb
         self.numeric_nonfinite += ~finite | ~np.isfinite(delta)
@@ -129,7 +129,7 @@ class AgreementParity:
                 value = dict(kind=kind, column=column, compared_views=self.total['compared'],
                     compared_cells=29*self.total['compared'], mismatched_cells=int(bad[:, column].sum()),
                     token_mismatched_cells=bad[:, column].tolist())
-                if kind == 'numeric':value.update(tolerance=1e-6,
+                if kind == 'numeric':value.update(tolerance=0,
                     max_finite_absolute_difference=float(self.numeric_max[:, column].max()),
                     nonfinite_cells=int(self.numeric_nonfinite[:, column].sum()))
                 else:value['tolerance'] = 0

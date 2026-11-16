@@ -7,6 +7,7 @@ losses. Current accumulators settle only when the caller opens a public TURN.
 from typing import NamedTuple
 import jax
 import jax.numpy as j
+from . import encoder_numeric as en
 
 
 class History(NamedTuple):
@@ -47,20 +48,21 @@ def arrive(history,state,side,use):
 def observe(history,state,use,percent,*,record_damage=True):
     r=j.arange(len(state.hp))[:,None];s=j.arange(2)[None,:]
     hp=state.hp[r,s,state.active];maximum=state.max_hp[r,s,state.active]
-    exact=j.maximum(0,history.hp-hp).astype(j.float32)/j.maximum(history.maximum,1)
-    shown=j.maximum(0,percent(history.hp,history.maximum)-percent(hp,maximum)).astype(j.float32)/100
-    values=j.stack((shown,exact),-1)*j.asarray(record_damage,j.bool_)
-    values=j.where(use[:,None,None],values,0)
-    taken=_add(history.taken,values)
+    exact=en.ratio(j.maximum(0,history.hp-hp),history.maximum,pair=True)
+    shown=en.ratio(j.maximum(0,percent(history.hp,history.maximum)-percent(hp,maximum)),100,limit=100,pair=True)
+    values=j.stack((shown,exact),-2)*j.asarray(record_damage,j.bool_)
+    values=j.where(use[:,None,None,None],values,0)
+    taken=en.add_pair(history.taken,values)
     return history._replace(hp=j.where(use[:,None],hp,history.hp),
         maximum=j.where(use[:,None],maximum,history.maximum),taken=taken)
 
 
-def direct(history,side,shown,exact,use):
-    r=j.arange(len(use));value=j.stack((shown,exact),-1)
+def direct(history,side,shown,exact,use,*,pairs=False):
+    r=j.arange(len(use));value=j.stack((shown,exact),-2 if pairs else -1)
+    if not pairs:value=j.stack((value,j.zeros_like(value)),-1)
     old=history.dealt[r,side]
     return history._replace(dealt=history.dealt.at[r,side].set(
-        j.where(use[:,None,None],_add(old,value),old)))
+        j.where(use[:,None,None],en.add_pair(old,value),old)))
 
 
 def settle(history,use):

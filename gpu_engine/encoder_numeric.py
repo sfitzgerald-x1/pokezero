@@ -17,11 +17,33 @@ def _normalized_table(divisor, minimum):
     return np.asarray([i / divisor for i in range(minimum, divisor + 1)], np.float32)
 
 
-def normalized(value, divisor, *, minimum=0):
-    """Saturating integer feature, with a single Python-to-float32 rounding."""
-    table = j.asarray(_normalized_table(divisor, minimum))
-    index = j.clip(value, minimum, divisor).astype(j.int32) - minimum
-    return table[index]
+def normalized(value, divisor, *, minimum=None):
+    """Upper-saturating feature; integer LUT with a precise float transport path.
+
+    Private request stats also admit fractional float32 values. Preserve those
+    values, and the source's lack of a lower clamp unless one is specified.
+    """
+    if int(divisor) != divisor or divisor <= 0:
+        raise ValueError('positive integer normalization divisor required')
+    divisor = int(divisor)
+    lower = 0 if minimum is None else minimum
+    clipped = j.minimum(value, divisor)
+    if minimum is not None:clipped = j.maximum(clipped, minimum)
+    table = j.asarray(_normalized_table(divisor, lower))
+    index = j.clip(clipped, lower, divisor).astype(j.int32) - lower
+    integral = (clipped >= lower) & (clipped == j.floor(clipped))
+    if j.issubdtype(j.asarray(clipped).dtype, j.floating):
+        integral &= ~((clipped == 0) & j.signbit(clipped))
+    return jax.lax.cond(j.all(integral), lambda _: table[index],
+        lambda _: _float_quotient_pair(clipped, j.float32(divisor))[..., 0], None)
+
+
+def hazard_exposure(count, layers):
+    """Full Python expression, rounded once after count * fraction / 6."""
+    table = np.asarray([[min(1.0, n * f / 6) for f in (0.0, 1/8, 1/6, 1/4)]
+                        for n in range(7)], np.float32)
+    return j.asarray(table)[j.clip(count, 0, 6).astype(j.int32),
+                            j.clip(layers, 0, 3).astype(j.int32)]
 
 
 @lru_cache(None)
@@ -45,15 +67,43 @@ def ratio(numerator, denominator, *, limit=714, pair=False):
     the binary64 rounding performed by Python. No device float division runs.
     """
     table = j.asarray(_ratio_table(limit, pair))
-    denominator = j.maximum(1, denominator).astype(j.int32)
-    numerator = j.clip(numerator, 0, denominator).astype(j.int32)
-    numerator, denominator = j.broadcast_arrays(numerator, denominator)
+    numerator, denominator = j.broadcast_arrays(j.asarray(numerator), j.asarray(denominator))
+    denominator = j.where(denominator == 0, 1, denominator)
+    def integral_int32(x):
+        if j.issubdtype(x.dtype, j.integer):return j.ones_like(x, bool)
+        return (x < float(2**31)) & (x == j.floor(x))
+    integer_domain = ((numerator >= 0) & (denominator > 0) &
+        integral_int32(numerator) & integral_int32(denominator))
+    n = j.clip(numerator, 0, denominator).astype(j.int32)
+    d = denominator.astype(j.int32)
     def lookup(_):
-        return table[j.clip(denominator, 1, limit), j.clip(numerator, 0, limit)]
+        return table[j.clip(d, 1, limit), j.clip(n, 0, limit)]
     def generic(_):
-        result = _integer_ratio_pair(numerator, denominator)
+        def floating(_):
+            raw = _float_quotient_pair(numerator, denominator)
+            high = raw[..., 0]
+            return j.where((high < 0)[..., None], 0,
+                j.where((high > 1)[..., None], j.stack((j.ones_like(high), j.zeros_like(high)), -1), raw))
+        result = jax.lax.cond(j.all(integer_domain),
+            lambda _: _integer_ratio_pair(n, d), floating, None)
         return result if pair else result[..., 0]
-    return jax.lax.cond(j.all(denominator <= limit), lookup, generic, operand=None)
+    return jax.lax.cond(j.all(integer_domain & (denominator <= limit)), lookup, generic, operand=None)
+
+
+def _float_quotient_pair(numerator, denominator):
+    """Divide finite float32 transports through their integer significands."""
+    def decode(x):
+        bits = jax.lax.bitcast_convert_type(j.asarray(x, j.float32), j.uint32)
+        encoded = (bits >> j.uint32(23)) & j.uint32(255)
+        mantissa = (bits & j.uint32((1 << 23) - 1)) | j.where(encoded != 0, j.uint32(1 << 23), j.uint32(0))
+        exponent = j.where(encoded != 0, encoded.astype(j.int32) - 150, -149)
+        return mantissa, exponent, (bits >> j.uint32(31)) != 0
+    n, ne, ns = decode(numerator)
+    d, de, ds = decode(denominator)
+    raw = _integer_ratio_pair(n.astype(j.int32), j.maximum(d, 1).astype(j.int32))
+    scaled = j.ldexp(raw, (ne - de)[..., None])
+    signed = j.where((ns != ds)[..., None], -scaled, scaled)
+    return signed.at[..., 1].set(j.where(signed[..., 1] == 0, 0., signed[..., 1]))
 
 
 def _integer_ratio_pair(numerator, denominator):
@@ -65,10 +115,11 @@ def _integer_ratio_pair(numerator, denominator):
     """
     n = j.maximum(numerator, 1).astype(j.uint32)
     d = denominator.astype(j.uint32)
-    shift = jax.lax.clz(n) - jax.lax.clz(d)
-    scaled = n << shift
+    shift = jax.lax.clz(n).astype(j.int32) - jax.lax.clz(d).astype(j.int32)
+    scaled = n << j.maximum(shift, 0).astype(j.uint32)
+    d = d << j.maximum(-shift, 0).astype(j.uint32)
     extra = scaled < d
-    shift = shift + extra.astype(j.uint32)
+    shift = shift + extra.astype(j.int32)
     scaled = j.where(extra, scaled << j.uint32(1), scaled)
     remainder = scaled - d
     def bit(_, carry):

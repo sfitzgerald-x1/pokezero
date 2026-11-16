@@ -13,6 +13,7 @@ from typing import NamedTuple
 
 import jax
 import jax.numpy as jnp
+from . import encoder_numeric as en
 import numpy as np
 
 from pokezero import showdown as reference
@@ -250,7 +251,7 @@ def project_actions(facts,tables,*,observer_side):
     numerator=jnp.clip(facts.hp_numerator,0,tables.hp_power.shape[2]-1)
     dynamic=tables.hp_power[kind,denominator[...,None],numerator[...,None]].astype(jnp.float32)
     power=jnp.where(variable&facts.hp_known[...,None],dynamic,values[...,0])
-    values=values.at[...,0].set(jnp.minimum(1,power/200.))
+    values=values.at[...,0].set(en.normalized(power, 200))
     numeric=numeric.at[...,:4,jnp.asarray(MOVE_COLUMNS)].set(values)
     idx=lambda name:reference.v4_numeric_index(getattr(reference,'NUMERIC_'+name))
     numeric=numeric.at[...,:4,idx('MOVE_PP_FRACTION')].set(actions.move_pp_fraction)

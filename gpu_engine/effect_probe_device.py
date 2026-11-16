@@ -561,16 +561,10 @@ def b2_view(b2, lane, catalog):
 
 FLOAT_FIELDS = ('last_damage_taken', 'last_damage_dealt', 'damage_exact_taken', 'damage_exact_dealt', 'hazard_shown',
                 'hazard_exact')
-# OPEN BUG (numeric, reported to the coordinator): the device's shown-percent damage fractions divide a float32 by the
-# literal 100 (engine_device_damage_history.observe `.../100`, engine_device_public_port.spikes), which XLA compiles to a
-# multiply by float32(0.01), one ulp below the correctly rounded quotient for most percents (30 -> 0.29999998, B2
-# 0.30000001); B2 (public_damage.apply) divides by its hp_denominator array (100) and rounds correctly, and a round's sum
-# of several such fractions drifts by one ulp per line. A float field whose two values differ by less than
-# FLOAT_TOLERANCE is recorded in the step's `numeric` list, not as a diff: any real difference is at least one HP point
-# of the largest Gen 3 max HP (1/714, ~1.4e-3) or one shown percent (0.01), so the tolerance hides only rounding.
-FLOAT_TOLERANCE = 1e-6
-NUMERIC_NOTE = ('OPEN BUG: device shown-percent damage fraction divides by the literal 100 (XLA: multiply by '
-                'float32(0.01)), float32 ulps from B2\'s division by hp_denominator')
+# Encoder readouts and damage accumulators now follow Python's float32 bits.
+# Retain the report's numeric-list field for compatibility, with no exemptions.
+FLOAT_TOLERANCE = 0.0
+NUMERIC_NOTE = 'Python-rounded lookup fractions and compensated sums; zero tolerance'
 
 
 def _within_tolerance(a, b):

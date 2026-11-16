@@ -807,11 +807,11 @@ def order_peer(state,public,owner,facts,tables):
 
 def fill_owner_spikes(public,owner,facts):
     """The public carry with hazards[owner, shown] (the peer's OPP_HAZARD_CREDIT) filled where from_b2 left it zero: the
-    owner's Spikes hits on the lines, each (_percent(hp before) - _percent(hp after)) / 100 in float32 (the peer sees the
+    owner's Spikes hits on the lines, each (_percent(hp before) - _percent(hp after)) / 100 (the peer sees the
     owner's HP as Showdown's public percent), accumulated by the device's own compensated sum
-    (engine_device_damage_history._add), as engine_device_public_port.spikes would have. Unchanged when the hits are not
+    with quotient residuals, as engine_device_public_port.spikes would have. Unchanged when the hits are not
     all on the lines (facts.owner_spikes None), when there is none, or when the half is already non-zero."""
-    from .engine_device_damage_history import _add
+    from .encoder_numeric import add_pair, ratio
     b=_trackers(public);port=public.public_port
     if port is None or facts is None or not facts.owner_spikes:return public
     _leaf(port.hazards,(b,2,2,2),np.float32,'public_port.hazards')
@@ -820,7 +820,7 @@ def fill_owner_spikes(public,owner,facts):
     pair=jnp.zeros(2,jnp.float32)
     for before,after,maximum in facts.owner_spikes:
         drop=max(0,int(public_trackers._percent(before,maximum))-int(public_trackers._percent(after,maximum)))
-        pair=_add(pair,jnp.asarray(drop,jnp.float32)/100)
+        pair=add_pair(pair,ratio(jnp.asarray(drop,jnp.int32),100,limit=100,pair=True))
     hazards=hazards.copy();hazards[:,owner,0]=np.asarray(pair)
     if not np.any(hazards[:,owner,0]):return public
     return public._replace(public_port=port._replace(hazards=jnp.asarray(hazards)))

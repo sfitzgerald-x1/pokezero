@@ -52,7 +52,7 @@ class DeviceAgreementParityTests(unittest.TestCase):
         self.assertEqual(reports[1]['joint_match_fraction_on_ALL_agreement_views'],1/3)
         with self.assertRaises(ValueError):AgreementParity(source_bindings={'test':'synthetic'},comparison_mode='guess')
 
-    def test_default_and_explicit_strict_reports_are_byte_exact_frozen_baseline(self):
+    def test_strict_reports_preserve_baseline_except_the_zero_numeric_threshold(self):
         baseline={}
         source=subprocess.check_output(['git','show','f7b1ebc919738775d4bb259d8d339952c33fbd71:gpu_engine/device_observation_parity.py'],text=True)
         exec(compile(source,'<frozen-original-comparator>','exec'),baseline)
@@ -66,8 +66,24 @@ class DeviceAgreementParityTests(unittest.TestCase):
             r.add(decision_id='refusal',turn=12,line_kinds=['move'],agreement=True,reference={},candidate=a)
             r.add(decision_id='good',turn=13,line_kinds=['move'],agreement=True,reference=a,candidate=a)
             r.add(decision_id='good',turn=13,line_kinds=['move'],agreement=True,reference=a,candidate=a)
-            reports.append(json.dumps(r.report(),sort_keys=True,indent=2,allow_nan=False)+'\n')
+            report=r.report()
+            if cls is baseline['AgreementParity']:
+                for column in report['columns']:
+                    if column['kind']=='numeric':column['tolerance']=0
+            reports.append(json.dumps(report,sort_keys=True,indent=2,allow_nan=False)+'\n')
         self.assertEqual(reports[0],reports[1]);self.assertEqual(reports[0],reports[2])
+
+    def test_one_ulp_and_signed_zero_are_mismatches_by_default(self):
+        for old,new in ((np.float32(.73),np.nextafter(np.float32(.73),np.float32(0))),
+                        (np.float32(0),np.float32(-0.0))):
+            a=view();b=view();a['numeric_features'][7,0]=old;b['numeric_features'][7,0]=new
+            r=AgreementParity(source_bindings={'test':'synthetic'})
+            r.add(decision_id='ulp',turn=11,line_kinds=['-damage'],agreement=True,reference=a,candidate=b)
+            report=r.report()
+            self.assertEqual(report['counts']['joint_match'],0)
+            column=next(c for c in report['columns'] if c['kind']=='numeric' and c['column']==0)
+            self.assertEqual(column['tolerance'],0)
+            self.assertEqual(column['mismatched_cells'],1)
 
     def test_integer_numeric_inputs_cannot_collapse_into_false_matches(self):
         r=AgreementParity(source_bindings={'test':'synthetic'});a=view();b=view()

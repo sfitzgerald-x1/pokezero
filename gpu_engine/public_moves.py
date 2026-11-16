@@ -14,6 +14,7 @@ from typing import Mapping, NamedTuple
 
 import jax
 import jax.numpy as jnp
+from . import encoder_numeric as en
 import numpy as np
 
 from pokezero.belief import _CALLER_MOVES, _NEVER_PRESSURED_POOL_MOVES, _called_move_source
@@ -235,7 +236,7 @@ def bucket_pp(state: MoveState, tables: MoveTables, bucket_move_ids):
     seen = jnp.any(matches, axis=-1) & in_range
     uses = jnp.sum(jnp.where(matches, state.uses[..., None, :], 0), axis=-1)
     maximum = tables.max_pp[jnp.clip(ids, 0, tables.max_pp.shape[0] - 1)]
-    fraction = jnp.where(seen & (maximum > 0), jnp.maximum(0, maximum - uses) / jnp.maximum(maximum, 1), 0)
+    fraction = jnp.where(seen & (maximum > 0), en.ratio(jnp.maximum(0, maximum - uses), maximum, limit=64), 0)
     mask = admitted.reshape((admitted.shape[0],) + (1,) * (ids.ndim - 1))
     return jnp.where(mask, fraction, 0).astype(jnp.float32), seen & mask, admitted
 

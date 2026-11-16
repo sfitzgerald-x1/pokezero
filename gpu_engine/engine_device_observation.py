@@ -10,6 +10,7 @@ from typing import NamedTuple
 
 import jax
 import jax.numpy as j
+from . import encoder_numeric as en
 import numpy as np
 
 from pokezero import showdown as reference
@@ -241,18 +242,18 @@ def encode(state, public, tables, *, observer_sides, legal_action_mask):
     cat = j.zeros((b, TOKENS, CATEGORICAL), j.int32)
     present = own['species'] > 0
     active = j.arange(6)[None] == own['active'][:, None]
-    hp = j.clip(own['hp'] / j.maximum(1, own['max_hp']), 0, 1)
+    hp = en.ratio(own['hp'], own['max_hp'])
     alive = own['hp'] > 0
     own_num = j.zeros((b, 6, NUMERIC), j.float32)
     own_num = _put(own_num, ('HP_FRACTION', 'ACTIVE', 'LEGAL', 'PRESENT', 'LEVEL'),
-        (hp, active, alive, present, j.minimum(1, own['level'] / 100)))
+        (hp, active, alive, present, en.normalized(own['level'], 100)))
     stats = ('HP', 'ATK', 'DEF', 'SPA', 'SPD', 'SPE')
     own_num = _put(own_num, tuple('BASE_' + n for n in stats),
-        tuple(j.minimum(1, _lookup(tables.base_stats, own['species'])[..., i] / 200) for i in range(6)))
+        tuple(en.normalized(_lookup(tables.base_stats, own['species'])[..., i], 200) for i in range(6)))
     # Original _self_team_from_request fills stats.hp from exact condition maxHP.
     own_num = _put(own_num, tuple('ACTUAL_' + n for n in stats),
-        (j.where(alive, j.minimum(1, own['max_hp'] / 714), 0),) +
-        tuple(j.minimum(1, own['stats'][..., i] / 714) for i in range(1, 6)))
+        (j.where(alive, en.normalized(own['max_hp'], 714), 0),) +
+        tuple(en.normalized(own['stats'][..., i], 714) for i in range(1, 6)))
     # The own fainted active's stages come from the public carry, as the opponent's do: the engine zeroed them at the
     # faint (Showdown's clearVolatile), the champion's B2/Python inputs keep them until the replacement arrives. See the
     # convention note at engine_device_trackers._observe; do not "fix" it toward Showdown without retraining.
@@ -260,7 +261,7 @@ def encode(state, public, tables, *, observer_sides, legal_action_mask):
     if kept is not None:
         own['boosts'] = j.where((active & ~alive)[..., None], j.asarray(kept, j.int32)[:, None, :], own['boosts'])
     own_num = _put(own_num, tuple('BOOST_' + n for n in stats[1:]),
-        tuple(j.where(active, j.clip(own['boosts'][..., i] / 6, -1, 1), 0) for i in range(5)))
+        tuple(j.where(active, en.normalized(own['boosts'][..., i], 6, minimum=-6), 0) for i in range(5)))
     own_num = _put(own_num, ('GENDER_MALE', 'GENDER_FEMALE', 'POSSIBLE_ABILITY_COUNT',
         'POSSIBLE_ITEM_COUNT', 'REVEALED_ABILITY', 'REVEALED_ITEM'),
         (own['gender'] == 1, own['gender'] == 2, own['ability'] > 0, own['item'] > 0,
@@ -278,11 +279,11 @@ def encode(state, public, tables, *, observer_sides, legal_action_mask):
     foe_num = j.zeros((b, 6, NUMERIC), j.float32)
     foe_num = _put(foe_num, ('HP_FRACTION', 'ACTIVE', 'LEGAL', 'PRESENT', 'LEVEL', 'GENDER_MALE', 'GENDER_FEMALE'),
         (public.hp_fraction, public.active, ~public.fainted, public.present,
-         j.minimum(1, public.level / 100), public.gender == 1, public.gender == 2))
+         en.normalized(public.level, 100), public.gender == 1, public.gender == 2))
     foe_num = _put(foe_num, tuple('BASE_' + n for n in stats),
-        tuple(j.minimum(1, _lookup(tables.base_stats, public.species)[..., i] / 200) for i in range(6)))
+        tuple(en.normalized(_lookup(tables.base_stats, public.species)[..., i], 200) for i in range(6)))
     foe_num = _put(foe_num, tuple('BOOST_' + n for n in stats[1:]),
-        tuple(j.where(public.active, j.clip(public.boosts[..., i] / 6, -1, 1), 0) for i in range(5)))
+        tuple(j.where(public.active, en.normalized(public.boosts[..., i], 6, minimum=-6), 0) for i in range(5)))
     foe_num = _put(foe_num, ('REVEALED_ABILITY', 'REVEALED_ITEM'), (public.ability > 0, public.item > 0))
     foe_cat = j.zeros((b, 6, CATEGORICAL), j.int32)
     for col, value in ((0, _lookup(tables.species, public.species)), (1, _lookup(tables.statuses, public.status)),
@@ -336,11 +337,11 @@ def encode(state, public, tables, *, observer_sides, legal_action_mask):
     numerator = j.clip(own['hp'][rows, actor], 0, den)
     dynamic = tables.hp_power[j.clip(hp_kind - 1, 0, 1), den[:, None], numerator[:, None]].astype(j.float32)
     power = j.where(hp_kind > 0, dynamic, values[..., 0])
-    values = values.at[..., 0].set(j.minimum(1, power / 200))
+    values = values.at[..., 0].set(en.normalized(power, 200))
     action_num = j.zeros((b, 9, NUMERIC), j.float32)
     action_num = action_num.at[:, :4, j.asarray([_index(n) for n in ('BASE_POWER', 'PRIORITY', 'ACCURACY', 'EFFECT_CHANCE', 'SELF_HP_COST')])].set(values)
     action_num = action_num.at[:, :4, _index('MOVE_PP_FRACTION')].set(j.where(moves_present,
-        j.where((struggle | charged | recharging)[:, None], 1., j.clip(pp / j.maximum(1, tables.max_pp[safe_move]), 0, 1)), 0))
+        j.where((struggle | charged | recharging)[:, None], 1., en.ratio(pp, tables.max_pp[safe_move], limit=64)), 0))
     action_num = action_num.at[:, :4, _index('PRESENT')].set(moves_present)
     action_num = action_num.at[:, :4, _index('ACTIVE')].set(moves_present & (usable | struggle[:, None]))
     request_active = j.argmax(gather(active), axis=-1)
@@ -371,7 +372,7 @@ def encode(state, public, tables, *, observer_sides, legal_action_mask):
     turn = state.turn if getattr(public, 'turn', None) is None else public.turn
     weather = state.weather if getattr(public, 'weather', None) is None else public.weather
     spikes = state.spikes if getattr(public, 'spikes', None) is None else public.spikes
-    num = num.at[:, 0, _index('PRESENT')].set(1).at[:, 0, _index('TURN_COUNT')].set(j.minimum(1, turn / 1000))
+    num = num.at[:, 0, _index('PRESENT')].set(1).at[:, 0, _index('TURN_COUNT')].set(en.normalized(turn, 1000))
     num = num.at[:, 0, _index('SELF_HAZARDS')].set(spikes[rows, owner] / 3)
     num = num.at[:, 0, _index('OPP_HAZARDS')].set(spikes[rows, 1 - owner] / 3)
     request_kind = j.where(state.done, 0, j.where(~j.any(legal_action_mask, axis=-1), 1, j.where(forced, 2, 3)))
@@ -404,9 +405,8 @@ def encode(state, public, tables, *, observer_sides, legal_action_mask):
         foe_flying = _lookup(tables.belief.flying, public.species)
         foe_levitate = (certain == tables.belief.levitate) & (tables.belief.levitate > 0)
         foe_count = j.maximum(0, 6 - public.present.sum(axis=-1)) + j.sum(public.present & ~public.active & ~public.fainted & ~foe_flying & ~foe_levitate, axis=-1)
-        fractions = j.asarray((0., 1 / 8, 1 / 6, 1 / 4), j.float32)
-        num = num.at[:, 0, _index('SELF_HAZARD_EXPECTED')].set(j.minimum(1., own_count * fractions[j.clip(spikes[rows, owner], 0, 3)] / 6))
-        num = num.at[:, 0, _index('OPP_HAZARD_EXPECTED')].set(j.minimum(1., foe_count * fractions[j.clip(spikes[rows, 1 - owner], 0, 3)] / 6))
+        num = num.at[:, 0, _index('SELF_HAZARD_EXPECTED')].set(en.hazard_exposure(own_count, spikes[rows, owner]))
+        num = num.at[:, 0, _index('OPP_HAZARD_EXPECTED')].set(en.hazard_exposure(foe_count, spikes[rows, 1 - owner]))
         posterior = belief_result.weights
         belief_error = belief_result.error | expected_bad
     else:
@@ -426,7 +426,7 @@ def encode(state, public, tables, *, observer_sides, legal_action_mask):
         own_sub = None
         if hasattr(state, 'substitute_hp'):
             sub = getattr(state, 'substitute_hp')[rows, owner] > 0
-            own_sub = gather(j.where(sub, j.floor(own['max_hp'] / 4) / j.maximum(1, own['max_hp']), 0))
+            own_sub = gather(j.where(sub, en.ratio(own['max_hp'] // 4, own['max_hp']), 0))
         foe_sub = None if foe_facts is None or 'sub_present' not in foe_facts else j.where(foe_facts['sub_present'], .25, 0)
         on, oc, bad_own = features.project_mon(num[:, 1:7], cat[:, 1:7], own_facts,
             active=gather(active), present=gather(present), tables=tables.features,
