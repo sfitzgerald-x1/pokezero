@@ -158,6 +158,9 @@ def compare(state,snapshot,original,vocab,*,initial=False):
         for slot,mon in enumerate(parties[side]):
             prefix=f'{side}:{slot}:'
             check(prefix+'hp',mon['hp'],int(state.hp[0,side,slot]))
+            if int(state.gender[0,side,slot])>=0:
+                check(prefix+'gender',{'':0,'N':0,'M':1,'F':2}[mon.get('gender','')],int(state.gender[0,side,slot]))
+            check(prefix+'attract','attract' in mon.get('volatiles',{}),bool(int(state.volatile[0,side,slot])&128))
             # Showdown serializes a KO as status="fnt"; the tensor keeps
             # major status separate from HP/faint. Compare major status only
             # while either representation is alive, retaining independent KO
