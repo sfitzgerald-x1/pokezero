@@ -531,7 +531,7 @@ class ChanceConsumerTests(unittest.TestCase):
 
     # §6: the appended effect stream's consumers (transition.py:1158-1198, 2350-2357, 2643-2653, 2688-2709).
     def plan_live(self, data, meta, actions=(0, 0), *, kernel_table=None, cap=100_000_000, clean=()):
-        """The input mapper refuses a live Yawn, Perish or partial-trap count (future_state.py:477-484). Bind the native
+        """The input mapper refuses a live Yawn, Perish or partial-trap count (future_state.py:495-502). Bind the native
         input and actions on a copy without those counts, so the plan's own consumer closure, which reads the actual
         root, is what the test sees."""
         fields = dict(yawn_counter=nested((2, 6), 0), perish_counter=nested((2, 6), 0),

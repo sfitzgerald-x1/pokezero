@@ -56,15 +56,15 @@ dict keys and leaves two members None). This module turns prepared roots into De
     (d3_depthn_gate.constructor_roots, prepare_roots per roster root) treats it as a root that did not fully construct
     (listed among the selection's refused roots, never selected).
   - the peer's OPP_HAZARD_CREDIT (fill_owner_spikes): from_b2 fills only hazards[owner, exact] and hazards[foe, shown]
-    (phase_d_live_worlds.py:415), so hazards[owner, shown], the peer's view of the owner's Spikes losses, read 0. The
+    (phase_d_live_worlds.py:432), so hazards[owner, shown], the peer's view of the owner's Spikes losses, read 0. The
     device's shown half is the per-hit sum of (_percent(hp) - _percent(new)) / 100 (engine_device_public_port.spikes);
     B2 keeps only the exact sum, whose per-hit rounding is lost (300 max HP, 37 damage: 300 -> 263 shows 12%, 299 -> 262
     shows 11%), but the owner's own lines carry each hit exactly (a Spikes -damage line after the owner's exact HP on its
     switch-in line), so it is rebuilt hit by hit with the device's own compensated sum. Left 0 when a hit's previous HP
     is not on the lines.
   - Baton Pass arrivals (fill_baton): from_b2 writes last_moves -1 for an active whose last public action was a switch
-    (phase_d_live_worlds.py:320); the device writes -2 after a Baton Pass arrival (engine_device_public_hooks.baton_copy,
-    :569) and B2 encodes the Baton Pass sentinel (mons.arrived_by_baton). The carry does not keep B2's flag, but the lines
+    (phase_d_live_worlds.py:323-324); the device writes -2 after a Baton Pass arrival (engine_device_public_hooks.baton_copy,
+    :1090) and B2 encodes the Baton Pass sentinel (mons.arrived_by_baton). The carry does not keep B2's flag, but the lines
     carry the same fact by the env's and B2's host rule (line_facts' baton), so -1 becomes -2 for that active, both sides.
     That rule is the env's pending flag: a passer that faints to Pursuit before its recipient arrives leaves the flag
     set, so the env and the fill mark the next switch a Baton Pass arrival where the device (no baton_copy) may not;
@@ -928,7 +928,7 @@ def fill_recharge(public,facts):
     """The public carry with the mustrecharge volatile set on each side's active that must recharge (facts.recharge). B2 keeps
     that fact in its own flag beside the volatile bag (public_active.ActiveState.recharge, merged into the bag only when it
     encodes: public_active.project, `bag=state.volatiles.at[...,RECHARGE_ID].set(state.recharge)`), so from_b2's copy of the
-    bag (phase_d_live_worlds.py:311) drops it and the encoder showed no volatile:mustrecharge where B2 does. In search the
+    bag (phase_d_live_worlds.py:315) drops it and the encoder showed no volatile:mustrecharge where B2 does. In search the
     device clears it with M1's counter (the recharge_turn hook, an arrival, a faint); fix_recharge writes that counter on
     the world state. A silent expiry leaves the bit set with the counter 0, as B2 does."""
     from .public_active import NAMES
@@ -948,7 +948,7 @@ def fill_blocked_window(public,facts):
     == 2), and the device public path counts a blocked move when it is blocked (engine_device_public_port.protect), so both read
     one more than B2's closed count while the window is open: a mid-turn forced-switch root right after the owner's Explosion or
     Self-Destruct into Protect. from_b2 seeds public_port.blocked with the closed count alone (ctx.tendency.blocked,
-    phase_d_live_worlds.py:430), so world 0's NUMERIC_STAT_BLOCKED_ON_OUR_ATTACK read one below B2's there. The window's side
+    phase_d_live_worlds.py:436), so world 0's NUMERIC_STAT_BLOCKED_ON_OUR_ATTACK read one below B2's there. The window's side
     takes min(64, closed + 1) when the carry holds the lines' closed count (from_b2's), so a second pass is a no-op and a carry
     the lines do not explain is left alone."""
     b=_trackers(public)
