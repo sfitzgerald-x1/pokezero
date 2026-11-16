@@ -115,8 +115,8 @@ tree guard) on the live inputs.
   its arm); --targets rows carry cell_arm and target_kind. Sending a later decision alone is the live path's own: with no session, the constructor
   folds the battle's whole prefix from a fresh adapter, and world seeds do not depend on earlier calls.
 - True worlds (--true-worlds DIR --true-kind true|true_private; off by default; the MC ladder's rungs R1 and R2): around each
-  process_many call only, phase_d_protocol_world.sample is wrapped too (ProtocolConstructor.prepare looks it up as
-  `protocol.sample` at call time; depthn_opponent_view_parity.check_call_site verifies that before anything loads). The wrapper
+  process_many call only, phase_d_protocol_world.world_range and the legacy sample entry are wrapped too (the constructor
+  resolves the range sampler through its module at call time; depthn_opponent_view_parity.check_call_site verifies that before anything loads). The wrapper
   calls the original sampler with the same arguments (it raises as usual) and returns its WorldSet (the carried root, the seeds,
   the diagnostics) with its W = count worlds replaced by true worlds: world i is depthn_opponent_view_parity.build_true_world
   (the opponent's true team, materialized with sampled world i's kernel seed: W chance draws of one true state); true_private
@@ -867,9 +867,12 @@ def true_world_set(ov, call, made, inputs):
     opponent's side. A world that cannot be built has no state and its reason as its refusal (fail closed)."""
     from gpu_engine.device_public_world_state import World
     from gpu_engine.phase_d_live_worlds import WorldSet
+    from gpu_engine.phase_d_protocol_world import WorldRange
+    from dataclasses import replace
     named = call.named;count = int(named['count']);owner = int(named['detached'].address.owner);worlds, facts, start = [], [], None
-    for i in range(count):
-        sampled = made.worlds[i].kernel_seed if i < len(made.worlds) else None
+    indices = range(made.start, made.stop) if isinstance(made, WorldRange) else range(count)
+    for offset, i in enumerate(indices):
+        sampled = made.worlds[offset].kernel_seed if offset < len(made.worlds) else None
         fact = dict(world=i, true_kind=inputs['kind'], built=False, reason=inputs['problem'], notes=[], kernel_seed=sampled, kernel_seed_is_sampled=None, refusals=[])
         state = public = None
         if inputs['problem'] is None:
@@ -888,11 +891,13 @@ def true_world_set(ov, call, made, inputs):
         fact['built'] = state is not None
         if state is None and not fact['refusals']:fact['refusals'] = [str(fact['reason'] or 'not built')]
         worlds.append(World(i, state, public, tuple(fact['refusals']), fact['kernel_seed'], False));facts.append(fact)
-    return WorldSet(made.root, tuple(worlds), tuple(made.seeds), count, tuple(made.mapper_diagnostics)), facts, start
+    out = (replace(made, worlds=tuple(worlds)) if isinstance(made, WorldRange)
+        else WorldSet(made.root, tuple(worlds), tuple(made.seeds), count, tuple(made.mapper_diagnostics)))
+    return out, facts, start
 
 
 class TrueWorlds:
-    """--true-worlds DIR --true-kind KIND (module docstring): installed(cell, decision_index) wraps phase_d_protocol_world.sample
+    """--true-worlds DIR --true-kind KIND (module docstring): installed(cell, decision_index) wraps the protocol range and legacy sample entry points
     for one process_many call so it returns true worlds, and yields the decision's record."""
     def __init__(self, directory, kind):
         if kind not in TRUE_KINDS:raise ValueError(f'--true-kind must be one of {TRUE_KINDS}, not {kind!r}')
@@ -911,17 +916,22 @@ class TrueWorlds:
 
     @contextmanager
     def installed(self, cell, decision_index):
-        """phase_d_protocol_world.sample wrapped while the block runs (restored when it ends or raises). The record holds the
+        """Protocol world range and legacy sample wrapped while the block runs (restored when it ends or raises). The record holds the
         sidecar and, per sample call, the played kind, fallback, problem, true start and each world's facts (or the sampler's
         error, which is raised on)."""
         from gpu_engine import phase_d_protocol_world as pw
-        ov = _ov();original = pw.sample;sidecar, found = self.load(cell);record = dict(found, requested_kind=self.kind, calls=[])
+        ov = _ov();original = pw.sample;original_range = pw.world_range;depth = 0
+        sidecar, found = self.load(cell);record = dict(found, requested_kind=self.kind, calls=[])
 
-        def wrapper(*arguments, **keywords):
+        def wrapper(function, *arguments, **keywords):
+            nonlocal depth
+            if depth:return function(*arguments, **keywords)
             call = ov.SampleCall(dict(zip(ov.SAMPLE_PARAMETERS, arguments), **keywords))
-            try:made = original(*arguments, **keywords)
+            depth += 1
+            try:made = function(*arguments, **keywords)
             except BaseException as error:
                 record['calls'].append(dict(error=f'{type(error).__name__}: {error}'[:300]));raise
+            finally:depth -= 1
             call.result = made;owner = int(call.named['detached'].address.owner)
             inputs = (dict(kind=self.kind, fallback=None, problem=found['problem']) if sidecar is None
                 else true_inputs(sidecar, self.kind, cell, owner, decision_index))
@@ -929,9 +939,10 @@ class TrueWorlds:
             record['calls'].append(dict(kind=inputs['kind'], fallback=inputs['fallback'], problem=inputs['problem'], start=start, worlds=facts))
             return out
 
-        pw.sample = wrapper
+        pw.sample = lambda *a, **kw: wrapper(original, *a, **kw)
+        pw.world_range = lambda *a, **kw: wrapper(original_range, *a, **kw)
         try:yield record
-        finally:pw.sample = original
+        finally:pw.sample = original;pw.world_range = original_range
 
 
 def true_worlds_fields(detail, record):

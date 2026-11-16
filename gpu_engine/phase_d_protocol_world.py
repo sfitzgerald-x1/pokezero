@@ -823,29 +823,88 @@ def world_seeds(root,detached,game_lines,seed,index):
 
 def sample(root,detached,*,lines,catalog,source,metadata,config,battle_id,seed,count):
     """Same public posterior draws and their prefix at all ladder budgets."""
-    from . import v5_public_world
     if count not in (2,8,16,32,64):raise ValueError('declared2/8/16/32/64 world budget required')
     if detached.source_binding_sha256!=source.binding_sha256:
         raise live.Refusal('SAME_PUBLIC_ROOT_SOURCE_BINDING_REQUIRED')
     detached=_carried_root(root,detached,lines,metadata)
+    return assemble((world_range(root,detached,start=0,stop=count,lines=lines,catalog=catalog,source=source,metadata=metadata,
+        config=config,battle_id=battle_id,seed=seed,count=count),),count=count)
+
+
+@dataclass(frozen=True)
+class WorldRange:
+    """Worlds [start, stop), with global indices and one carried root's provenance.
+
+    Completion may replace worlds in this range before assemble; it must retain
+    the indices, seeds, diagnostics and binding. Empty ranges are allowed.
+    """
+    start:int
+    stop:int
+    binding:tuple
+    root:object
+    worlds:tuple
+    seeds:tuple
+    requested_worlds:int
+    mapper_diagnostics:tuple
+
+
+def world_range(root,detached,*,start,stop,lines,catalog,source,metadata,config,battle_id,seed,count):
+    """Sample [start, stop) of an already carried root, without capture or B2 work.
+
+    Use ProtocolConstructor.prepare_root to obtain the carried root. Each range
+    owns its ProtocolInputs memo and batches its keys; the global world index
+    determines both seeds independently of the range and total world budget.
+    """
+    from . import v5_public_world
+    if type(count)is not int or count not in (2,8,16,32,64):raise ValueError('declared2/8/16/32/64 world budget required')
+    if type(start)is not int or type(stop)is not int or not 0<=start<=stop<=count:
+        raise ValueError('world range must satisfy 0 <= start <= stop <= count')
+    if detached.source_binding_sha256!=source.binding_sha256:
+        raise live.Refusal('SAME_PUBLIC_ROOT_SOURCE_BINDING_REQUIRED')
     inputs=ProtocolInputs(detached,tuple(lines),catalog,metadata,source)
     result=[];seeds=[];diagnostics=[];game=game_lines_sha256(lines)
-    pairs=[world_seeds(root,detached,game,seed,index) for index in range(count)]
-    keys=states.world_keys([kernel for _,kernel in pairs]) if HOST_WORLDS else [None]*count   # every world's key in one call
-    for index,(world_seed,kernel_seed) in enumerate(pairs):
+    binding=(root.context.battle_id,root.owner_lines_sha256,detached.address,source.binding_sha256,seed,game)
+    pairs=[world_seeds(root,detached,game,seed,index) for index in range(start,stop)]
+    keys=states.world_keys([kernel for _,kernel in pairs]) if HOST_WORLDS else [None]*len(pairs)
+    for offset,(world_seed,kernel_seed) in enumerate(pairs):
+        index=start+offset
         seeds.append(world_seed)
         try:
-            start,reason=_gen3_randbat_belief_start_override_result(context=root.context,set_source=source.original,
+            sampled_start,reason=_gen3_randbat_belief_start_override_result(context=root.context,set_source=source.original,
                 rng=random.Random(world_seed),team_size=6,canonicalize_revealed_variants=True,
                 **(dict(set_posteriors=lambda:_set_posteriors(inputs,root)) if SET_POSTERIOR_DRAW else {}))
-            if start is None:
+            if sampled_start is None:
                 unknown=[];_downstream_unknowns(unknown,'Original public sampler unavailable: '+str(reason))
                 made=ProtocolWorld(None,None,(reason or 'public-sampler-unavailable',),mapper_diagnostics=tuple(unknown))
-            else:made=v5_public_world.materialize(root,start,prepared=inputs,history=None,own_static=None,seed=kernel_seed,host_key=keys[index])
+            else:made=v5_public_world.materialize(root,sampled_start,prepared=inputs,history=None,own_static=None,seed=kernel_seed,host_key=keys[offset])
             diagnostics.append(dict(world=index,checks=list(made.mapper_diagnostics)))
             result.append(states.World(index,made.state,made.public,made.refusals,kernel_seed,False))
         except (ValueError,KeyError,TypeError,IndexError)as error:
             unknown=[];_downstream_unknowns(unknown,'Production sample prerequisite refused: '+str(error))
             diagnostics.append(dict(world=index,checks=unknown))
             result.append(states.World(index,None,None,(str(error),),kernel_seed,False))
-    return live.WorldSet(detached,tuple(result),tuple(seeds),count,tuple(diagnostics))
+    return WorldRange(start,stop,binding,detached,tuple(result),tuple(seeds),count,tuple(diagnostics))
+
+
+def assemble(ranges,*,count):
+    """Gather one root's disjoint ranges in index order into the serial WorldSet.
+
+    Reject gaps, overlaps, mixed roots/budgets and changed world ordering rather
+    than silently dropping, duplicating or relabelling helper results.
+    """
+    ranges=tuple(ranges)
+    if type(count)is not int or count not in (2,8,16,32,64):raise ValueError('declared2/8/16/32/64 world budget required')
+    if not ranges or any(type(r)is not WorldRange for r in ranges):raise ValueError('WorldRange results required')
+    ranges=sorted(ranges,key=lambda r:(r.start,r.stop));first=ranges[0];cursor=0
+    worlds=[];seeds=[];diagnostics=[]
+    for part in ranges:
+        if part.binding!=first.binding or part.requested_worlds!=count:raise ValueError('same root and world budget required')
+        if type(part.start)is not int or type(part.stop)is not int or not cursor==part.start<=part.stop<=count:
+            raise ValueError('world ranges must cover the budget exactly once')
+        indices=tuple(range(part.start,part.stop))
+        if (tuple(w.index for w in part.worlds)!=indices or len(part.seeds)!=len(indices)
+                or tuple(d['world']for d in part.mapper_diagnostics)!=indices):
+            raise ValueError('world range indices, seeds and diagnostics must align')
+        worlds.extend(part.worlds);seeds.extend(part.seeds);diagnostics.extend(part.mapper_diagnostics);cursor=part.stop
+    if cursor!=count:raise ValueError('world ranges must cover the budget exactly once')
+    return live.WorldSet(first.root,tuple(worlds),tuple(seeds),count,tuple(diagnostics))

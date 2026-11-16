@@ -67,7 +67,7 @@ CITATION_ANCHORS = {
     'gpu_engine/phase_d_live_worlds.py:349-350': "'partiallytrapped'",
     'gpu_engine/phase_d_live_worlds.py:360-361': 'OWN_VOLATILE_OR_LATENT_CLOCK_UNAVAILABLE',
     'gpu_engine/phase_d_live_worlds.py:367': 'DESTINY_BOND',
-    'gpu_engine/phase_d_protocol_constructor.py:175': 'load_gen3_randbat_source_cached',
+    'gpu_engine/phase_d_protocol_constructor.py:220': 'load_gen3_randbat_source_cached',
     'gpu_engine/phase_d_protocol_world.py:150-152': '^PUBLIC_ITEM_SWAP_NOT_SUPPORTED',
     'gpu_engine/phase_d_protocol_world.py:221-239': '^_defer_yawn',
     'gpu_engine/phase_d_protocol_world.py:242-257': '^_perish_counts',
