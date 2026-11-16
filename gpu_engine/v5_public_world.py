@@ -225,9 +225,13 @@ def materialize(root, start, *, prepared, history, own_static, seed, retained=No
         if payload['pendingBatonPassSides']:raise ValueError('deferred-baton-phase')
         metadata=json.loads(runtime['request']['metadata'])
         state=_own_pp_state(state,history,metadata)
+        from . import phase_d_transform as transform_facts
+        transform_history=transform_facts.history(decoded.lines)
+        if any(copy['overridden'] for copy in transform_history['copies'].values()):raise ValueError('PUBLIC_TRANSFORM_DONOR_OVERRIDDEN')
         world=world_battle_spec(state,start,dex=catalog.dex,approximate_sleep_turns=False,
             approximate_substitute_health=False,approximate_partial_trap_turns=False,
-            approximate_hidden_duration_volatiles=False)
+            approximate_hidden_duration_volatiles=False,
+            transformed_slots={seat:copy['donor'] for seat,copy in transform_history['copies'].items()})
         if any(len(side.pokemon)!=6 for side in (world.spec.side_one,world.spec.side_two)):
             raise ValueError('full-six-member-source-world-required')
         moods=[]
@@ -262,7 +266,9 @@ def materialize(root, start, *, prepared, history, own_static, seed, retained=No
                 if (int(mapped.state.hp[0,side,slot]),int(mapped.state.max_hp[0,side,slot]))!=(hp,maximum):
                     raise ValueError('same-own-public-root-exact-hp')
             for index,key in enumerate(('atk','def','spa','spd','spe'),1):
-                if int(mapped.state.stats[0,side,slot,index])!=row['stats'][key]:raise ValueError('same-own-public-root-stat:'+key)
+                actual=(mapped.state.transform_stats[0,side,index-1] if bool(mapped.state.transformed[0,side]) and slot==int(mapped.state.active[0,side])
+                    else mapped.state.stats[0,side,slot,index])
+                if int(actual)!=row['stats'][key]:raise ValueError('same-own-public-root-stat:'+key)
             if int(mapped.state.gender[0,side,slot])==-1:
                 # ORIGINAL source completeness rejects physical gender-1.
                 # Thus a complete owning packet with no M/F is source gender0,
@@ -277,7 +283,7 @@ def materialize(root, start, *, prepared, history, own_static, seed, retained=No
                     zip(jax.tree.leaves(expected),jax.tree.leaves(public),strict=True)):
                 raise ValueError('same-world-independent-root-public-carry-required')
         _source_foe(root,start,history,catalog,public)
-        foe=1-history.owner;physical=np.array(mapped.state.pp,copy=True)
+        foe=1-history.owner;physical=np.array(mapped.state.pp,copy=True);saved_pp=np.array(mapped.state.transform_pp,copy=True)
         for slot,name in enumerate(world.party_species[f'p{foe+1}']):
             matches=[i for i,sid in enumerate(np.asarray(public.mons.species)[0,foe])
                 if int(sid)>0 and normalize_id(catalog.species.names[int(sid)])==normalize_id(name)]
@@ -291,15 +297,23 @@ def materialize(root, start, *, prepared, history, own_static, seed, retained=No
             if shown!=expected:raise ValueError('sampled-hp-does-not-reproduce-public-bin')
             ids=np.asarray(public.context.moves.move_ids)[0,foe,public_slot]
             uses=np.asarray(public.context.moves.uses)[0,foe,public_slot]
-            for index,move in enumerate((world.spec.side_one,world.spec.side_two)[foe].pokemon[slot].moves):
+            member=(world.spec.side_one,world.spec.side_two)[foe].pokemon[slot]
+            ledger=saved_pp[0,foe] if member.pre_transform is not None else physical[0,foe,slot]
+            for index,move in enumerate((member.pre_transform or member).moves):
                 if move.id=='none':continue
                 name=_base_move(move.id)
                 spent=sum(int(count) for mid,count in zip(ids,uses) if int(mid)>0 and _base_move(catalog.moves.names[int(mid)])==name)
                 # The typed mapper's full foe PP is only the source max; all
                 # actual public charges are now subtracted without truncating.
-                if spent>physical[0,foe,slot,index]:raise ValueError('public-opponent-PP-charge-exceeds-source-max')
-                physical[0,foe,slot,index]-=spent
-        mapped_state=mapped.state._replace(pp=j.asarray(physical),gender=j.asarray(physical_gender))
+                if spent>ledger[index]:raise ValueError('public-opponent-PP-charge-exceeds-source-max')
+                ledger[index]-=spent
+        mapped_state=mapped.state._replace(pp=j.asarray(physical),gender=j.asarray(physical_gender),transform_pp=j.asarray(saved_pp))
+        if bool(np.asarray(mapped_state.transformed).any()):
+            from types import SimpleNamespace
+            from .constructor_worlds import line_facts,fix_copied_pp
+            mapped_state=fix_copied_pp(mapped_state,history.owner,line_facts(decoded.lines,history.owner),
+                SimpleNamespace(move_names=metadata['vocabulary']['moves']))
+            mapped_state=transform_facts.retained_copy(mapped_state,public,state.self_request,decoded.lines,metadata,catalog,history.owner)
         body=dict(scope='HYPOTHETICAL_PUBLIC_WORLD_NOT_ORDINARY_SESSION',root=root.owner_lines_sha256,
             engine=np.asarray(runtime['request']['rules'].device.engine_binding).tolist(),
             sampled_teams=dict(start.player_teams),seed=seed)

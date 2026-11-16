@@ -162,7 +162,7 @@ class Search:
         if not self.saved_root_admission:self.sessions[key]=(adapter,lines)
         packet=_packet(request['own_request_line'],request['owner'])
         root=worlds.from_b2(adapter,packet,self.source,self.metadata,
-            address=DecisionAddress(request['stream_id'],request['decision_index'],owner))
+            address=DecisionAddress(request['stream_id'],request['decision_index'],owner),lines=lines)
         pending.root=root
         pending.worldset=worlds.sample_worlds(root,self.source,self.tables,count=self.count,seed=self.seed)
         if not pending.worldset.fully_constructed:

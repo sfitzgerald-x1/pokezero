@@ -21,7 +21,7 @@ from pokezero.env import BattleStartOverride
 from pokezero.v5_teacher_public_root import PublicRoot,capture_root
 from pokezero.determinization import _gen3_randbat_belief_start_override_result
 from . import device_public_worlds as public_worlds,device_public_world_state as states
-from . import phase_d_live_worlds as live,phase_d_tail as tail
+from . import phase_d_live_worlds as live,phase_d_tail as tail,phase_d_transform as transform_facts
 from .v5_hypothetical_state import map_spec
 from .phase_d_constructor_rules import public_hp_bin,request_ordered_packed,own_pp_carry,sleep_support
 
@@ -484,6 +484,7 @@ def _restore_sleep(physical,detached,metadata,sleepers,origins,rng,base_abilitie
 def _carry_public_foe(physical,detached,metadata,world,foe,rng,diagnostics):
     """Original postmap carries; collect every independently evaluable guard."""
     assignment={};pp=np.array(physical.pp,copy=True);hp=np.array(physical.hp,copy=True);failures=[]
+    saved_pp=np.array(physical.transform_pp,copy=True)
     present=np.asarray(detached.view['present'])[0];species=np.asarray(detached.view['species'])[0]
     moves=np.asarray(detached.view['revealed_moves'])[0];used=np.asarray(detached.view['move_pp_used'])[0]
     move_identity=lambda mid:live._source_move(metadata['vocabulary']['moves'][int(mid)])
@@ -503,12 +504,15 @@ def _carry_public_foe(physical,detached,metadata,world,foe,rng,diagnostics):
             hp[0,foe,slot]=rng.randint(lo,hi)
             record('PUBLIC_FOE_HP_BIN',False,slot=slot,lower=lo,upper=hi)
         except (ValueError,KeyError,TypeError,IndexError) as error:record(str(error),True,slot=slot)
-        for index,mid in enumerate(np.asarray(physical.moves)[0,foe,slot]):
+        transformed=bool(physical.transformed[0,foe]) and slot==int(physical.active[0,foe])
+        base_moves=physical.transform_moves[0,foe] if transformed else physical.moves[0,foe,slot]
+        ledger=saved_pp[0,foe] if transformed else pp[0,foe,slot]
+        for index,mid in enumerate(np.asarray(base_moves)):
             charge=sum(int(n)for known,n in zip(moves[public],used[public])
                 if int(known)>0 and int(mid)>0 and move_identity(known)==move_identity(mid))
-            failed=charge>pp[0,foe,slot,index]
+            failed=charge>ledger[index]
             record('public-opponent-PP-charge-exceeds-source-max',failed,slot=slot,move=index)
-            if not failed:pp[0,foe,slot,index]-=charge
+            if not failed:ledger[index]-=charge
         if int(physical.status[0,foe,slot])==4:
             try:
                 counter=live._physical_toxic_counter(detached.view['mon_features']['toxic_stage'][0,public])
@@ -525,7 +529,8 @@ def _carry_public_foe(physical,detached,metadata,world,foe,rng,diagnostics):
         except ValueError as error:record(getattr(error,'kind',str(error)),True)
     else:diagnostics.append(dict(kind='PUBLIC_PROTECT_STREAK_INVALID',status='NOT_EVALUABLE',fatal=True,reason='Actual active public join unavailable'))
     host=isinstance(physical.hp,np.ndarray)   # a host-built world keeps NumPy until its one transfer
-    return physical._replace(pp=pp if host else j.asarray(pp),hp=hp if host else j.asarray(hp)),assignment,active,failures
+    return physical._replace(pp=pp if host else j.asarray(pp),hp=hp if host else j.asarray(hp),
+        transform_pp=saved_pp if host else j.asarray(saved_pp)),assignment,active,failures
 
 
 def _downstream_unknowns(diagnostics,reason):
@@ -584,7 +589,8 @@ def materialize_protocol(root,start,*,inputs,seed,key=None):
         teams[own_key]=request_ordered_packed(teams[own_key],sampled_names,own_names)
         start=replace(start,player_teams=teams)
         world=battle_spec_from_payload(projected,start,dex=catalog.dex,approximate_sleep_turns=False,
-            approximate_substitute_health=False,approximate_partial_trap_turns=False,approximate_hidden_duration_volatiles=False,removed_item_species=removed)
+            approximate_substitute_health=False,approximate_partial_trap_turns=False,approximate_hidden_duration_volatiles=False,removed_item_species=removed,
+            transformed_slots=transform_facts.public_slots(detached.public,metadata['vocabulary']))
         if any(len(x.pokemon)!=6 for x in (world.spec.side_one,world.spec.side_two)):raise ValueError('full-source-six-world-required')
         mood=[]
         for seat in ('p1','p2'):
@@ -606,7 +612,20 @@ def materialize_protocol(root,start,*,inputs,seed,key=None):
         physical=_write_held_counts(physical,yawns,_perish_counts(inputs.lines))
         encored=_mapped_encores(physical)   # read before the own update, which writes our own (zero) clock
         maximum_pp={live._source_move(metadata['vocabulary']['moves'][int(mid)]):int(metadata['moves'][int(mid)]['pp'])*8//5 for row in detached.own['moves'] for mid in row if mid}
-        own=dict(detached.own);own['pp']=np.asarray(_once(inputs,root,'own_pp',lambda:own_pp_carry(inputs.lines,state.self_request,maximum_pp)),np.int32)
+        own=dict(detached.own);own['pp']=np.asarray(_once(inputs,root,'own_pp',lambda:own_pp_carry(inputs.lines,state.self_request,maximum_pp,transform_base=True)[0]),np.int32)
+        if bool(own['transformed']):
+            from .phase_d_transform import donor_slot,check_donor
+            at=int(own['active']);d=donor_slot(physical.species[0,foe],own['transform_species'])
+            donor=transform_facts.donor_values(physical._asdict(),foe,d)
+            check_donor(own['moves'][at],own['hidden_power_type'][at],own['hidden_power_power'][at],
+                donor['moves'],*donor['hidden'],metadata['vocabulary']['moves'])
+            for name in ('stats','ability'):
+                own[name]=np.array(own[name],copy=True)
+            own['stats'][at,1:]=donor['stats']
+            own['ability'][at]=donor['ability']
+            for name in ('transformed','transform_species','transform_stats','transform_moves','transform_hidden_power'):
+                if not np.array_equal(np.asarray(getattr(physical,name))[0,owner],own[name]):
+                    raise ValueError('own-request-mapper-disagreement:'+name)
         # Exact facts were read from the owning packet by B2's detached root.
         # Check all mapper-provided literal own fields before preserving the
         # complete own packet state (including exact private request flags).
@@ -675,6 +694,14 @@ def materialize_protocol(root,start,*,inputs,seed,key=None):
         if failures:raise ValueError(failures[0])
         host=isinstance(physical.hp,np.ndarray)
         carry=(states._rebase_host if host else states._rebase)(detached,assignment,active,state=physical)
+        if bool(np.asarray(physical.transformed).any()):
+            from types import SimpleNamespace
+            from . import constructor_worlds as completion
+            facts=_once(inputs,root,'transform_line_facts',lambda:completion.line_facts(inputs.lines,owner))
+            tables=SimpleNamespace(move_names=metadata['vocabulary']['moves'])
+            physical=completion.fix_copied_pp(physical,owner,facts,tables)
+            carry=completion.fill_copied_pp(physical,carry,owner,facts,tables)
+            physical=_transform_history(physical,detached,metadata)
         diagnostics.append(dict(kind='FINAL_PUBLIC_CARRY',status='CLEAR',fatal=True))
         body=dict(schema=SCHEMA,prefix=root.owner_lines_sha256,address=vars(root.address),seed=seed,
             public_source=catalog.source.source_hash,sampled_teams=dict(start.player_teams))
@@ -690,8 +717,35 @@ def materialize_protocol(root,start,*,inputs,seed,key=None):
 
 def _carried_root(public,detached,lines,metadata):
     maximum={live._source_move(metadata['vocabulary']['moves'][int(mid)]):int(metadata['moves'][int(mid)]['pp'])*8//5 for row in detached.own['moves'] for mid in row if mid}
-    carried=np.asarray(own_pp_carry(lines,public.context.public_materialization_state.self_request,maximum),np.int32)
-    return replace(detached,own=public_worlds._freeze({**detached.own,'pp':carried}))
+    carried,saved=own_pp_carry(lines,public.context.public_materialization_state.self_request,maximum,transform_base=True)
+    own={**detached.own,'pp':np.asarray(carried,np.int32)}
+    if bool(own['transformed']):
+        ledger=saved[int(own['active'])]
+        if ledger is None:raise live.Refusal('OWN_TRANSFORM_EVIDENCE_DISAGREES')
+        own['transform_pp']=np.asarray([pp for _,pp in ledger]+[0]*(4-len(ledger)),np.int32)
+    return replace(detached,own=public_worlds._freeze(own))
+
+
+def _transform_history(physical,detached,metadata):
+    """A transformed side's last action indexes its current copy, except Transform itself (-1)."""
+    from .phase_d_transform import restore_truant
+    arrays={name:np.array(value,copy=True) for name,value in physical._asdict().items()}
+    restore_truant(arrays,detached.public,metadata['vocabulary'])
+    physical=physical._replace(truant_loaf=j.asarray(arrays['truant_loaf']))
+    foe=1-detached.address.owner
+    if not bool(physical.transformed[0,foe]):return physical
+    slot=int(np.asarray(detached.public.active_slot)[0,foe]);move=int(np.asarray(detached.public.last_moves)[0,foe,slot])
+    if move<=0:return physical
+    at=int(physical.active[0,foe]);names=metadata['vocabulary']['moves']
+    matches=[k for k,m in enumerate(physical.moves[0,foe,at]) if m and live._source_move(names[int(m)])==live._source_move(names[move])]
+    index=-1 if live._source_move(names[move])=='transform' else matches[0] if len(matches)==1 else None
+    if index is None:raise ValueError('PUBLIC_TRANSFORM_LAST_MOVE_UNAVAILABLE')
+    if index>=0:move=int(physical.moves[0,foe,at,index])
+    updates={name:tail._put(getattr(physical,name),address,value) for name,address,value in (
+        ('last_action_kind',(0,foe),2),('last_action_index',(0,foe),index),('last_move',(0,foe,at),move))}
+    if normalize_id(metadata['vocabulary']['items'][int(physical.item[0,foe,at])])=='choiceband':
+        updates['choice_move']=tail._put(physical.choice_move,(0,foe,at),move if matches else 0)
+    return physical._replace(**updates)
 
 
 def diagnostic_inputs(public,detached,*,lines,metadata):
