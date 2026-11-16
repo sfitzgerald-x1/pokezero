@@ -106,13 +106,26 @@ DOMAIN_PINS = {
 }
 
 
-def _domain_drift(root):
-    """The reviewed transition domain, per module: the first DOMAIN_MODULES file whose bytes differ from its DOMAIN_PINS
-    entry, or 'DOMAIN_MODULES' when DOMAIN_PINS no longer names DOMAIN_MODULES in order; None when unchanged. Equivalent
-    to the single DOMAIN_SHA256 it replaced (sha256 over name, NUL, bytes, NUL in this order), and names the module."""
+def _domain_certificate(root):
+    """Return the first drifting module and no identity, or the identity of the checked bytes.
+
+    Preserve the aggregate formula (name, NUL, bytes, NUL in module order), using each
+    file's one read for both its pin check and the identity carried by the plan.
+    """
     if tuple(DOMAIN_PINS) != tuple(name+".py" for name in DOMAIN_MODULES):
-        return "DOMAIN_MODULES"
-    return next((name for name, expected in DOMAIN_PINS.items() if sha256((root/name).read_bytes()).hexdigest() != expected), None)
+        return "DOMAIN_MODULES", None
+    domain = sha256()
+    for name, expected in DOMAIN_PINS.items():
+        data = (root/name).read_bytes()
+        if sha256(data).hexdigest() != expected:
+            return name, None
+        domain.update(name[:-3].encode()+b"\0"+data+b"\0")
+    return None, domain.hexdigest()
+
+
+def _domain_drift(root):
+    """The first drifting domain module, or None when every ordered pin matches."""
+    return _domain_certificate(root)[0]
 
 
 def _host(value):
@@ -188,13 +201,9 @@ def plan_for_state(state, index, actions, table, metadata, *, cap, native_input=
                        for name in SOURCE_PINS)
         if actual != tuple(SOURCE_PINS.items()):
             return refuse("CONSUMER_SOURCE_DRIFT", repr(actual))
-        drift = _domain_drift(Path(__file__).parent)
+        drift, domain = _domain_certificate(Path(__file__).parent)
         if drift is not None:
             return refuse("CONSUMER_DOMAIN_DRIFT", drift)
-        # the transitive kernel domain identity the plan carries: the single digest the per-module pins replaced, over
-        # the same bytes they just admitted (so its value is unchanged)
-        domain = sha256(b"".join(name.encode()+b"\0"+(Path(__file__).parent/(name+".py")).read_bytes()+b"\0"
-                                for name in DOMAIN_MODULES)).hexdigest()
         native = (mapping.native_input_from_jax(state, index, metadata)
                   if native_input is None else native_input)
         if isinstance(native, mapping.Refused):

@@ -124,7 +124,9 @@ class SourcePinRefreshTests(unittest.TestCase):
             law.write_text(before)
             phase = root/'gpu_engine'/'phase_d_chance.py'
             text = phase.read_text()
-            phase.write_text(re.sub(r"^    'weather\.py': '[0-9a-f]{64}',\n(?=\}\n\n\ndef _domain_drift)", '', text, count=1, flags=re.M))
+            match = refresh._pins(text, 'DOMAIN_PINS')
+            shortened = re.sub(r"^    'weather\.py': '[0-9a-f]{64}',\n", '', match.group(1), count=1, flags=re.M)
+            phase.write_text(text[:match.start(1)] + shortened + text[match.end(1):])
             self.assertNotEqual(phase.read_text(), text)
             code, out = run('--root', str(root), '--check')
             self.assertEqual(code, 1)

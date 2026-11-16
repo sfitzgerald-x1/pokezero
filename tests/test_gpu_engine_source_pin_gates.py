@@ -99,6 +99,27 @@ class DomainGateTests(unittest.TestCase):
                     out = plan(module, data, meta)
                 self.assertEqual((out.gaps[0].code, out.gaps[0].detail), ('CONSUMER_DOMAIN_DRIFT', 'items.py'))
 
+    def test_plan_identity_uses_the_same_domain_bytes_the_gate_checked(self):
+        expected = pins.domain_digest(cc.DOMAIN_MODULES, lambda name: READ(ENGINE/name))
+        for module in (cc, pd):
+            with self.subTest(gate=module.__name__):
+                data, meta = fixture()
+                reads = []
+
+                def changing_read(path):
+                    content = READ(path)
+                    if path == ENGINE/'items.py':
+                        reads.append(content)
+                        if len(reads) > 1:
+                            return bytes([content[0] ^ 1]) + content[1:]
+                    return content
+
+                with patch.object(Path, 'read_bytes', changing_read):
+                    result = plan(module, data, meta)
+                self.assertIsInstance(result, module.ConsumerPlan)
+                self.assertEqual(dict(result.source_certificate)['transitive_kernel_domain'], expected)
+                self.assertEqual(len(reads), 1)
+
     def test_a_pin_that_does_not_match_its_source_refuses(self):
         self.assertIs(cc.DOMAIN_PINS, __import__('gpu_engine.chance_consumers_pins', fromlist=['DOMAIN_PINS']).DOMAIN_PINS)
         wrong = {'transition.py': '0' * 64}
