@@ -131,24 +131,38 @@ def compare_saved(measured, pool, catalog, *, showdown_root, node, native_seed_s
     state_packet = measured.get('initial_engine_state')
     witness = measured.get('initial_frame_input_witness')
     required = ('owner_full_words', 'owner_full_valid', 'owner_full_more')
-    if (not isinstance(state_packet, dict) or set(state_packet) != set(BattleState._fields)
+    fields = set(BattleState._fields)
+    legacy = fields - {'shed_skin_draws'}
+    if (not isinstance(state_packet, dict) or set(state_packet) not in (fields, legacy)
             or not isinstance(witness, dict) or any(name not in witness for name in required)):
         rows = [dict(root_id=value, state_status='UNKNOWN', owners=[],
             error=dict(type='MISSING_ACTUAL_CONSTRUCTOR_CAPTURE',
                 message='Original state and both owner FULL captures are required; no replay or inference.')) for value in ids]
         return dict(schema=comparison.SCHEMA, rows=rows, summary=comparison.reduce_cohort(rows, root_ids=ids))
     # Direct decode only: never empty_state/state_from_pool/initialize/step.
-    state = BattleState(**{name:np.asarray(state_packet[name]) for name in BattleState._fields})
+    arrays = {name:np.asarray(value) for name,value in state_packet.items()}
     capture = tuple(np.asarray(witness[name]) for name in required)
-    if any(value.shape[0] != len(ids) for value in (*state, *capture)):
+    if any(value.shape[0] != len(ids) for value in (*arrays.values(), *capture)):
         raise ValueError('original saved constructor batch shape required')
+    if set(state_packet) == legacy and (arrays['pending_residual'].shape != (len(ids),)
+            or arrays['pending_residual'].dtype != np.bool_):
+        raise ValueError('literal legacy pending-residual flags required')
     rows = []
     for index, root_id in enumerate(ids):
+        values = {name:value[index:index+1] for name,value in arrays.items()}
+        if set(state_packet) == legacy:
+            if arrays['pending_residual'][index]:
+                rows.append(dict(root_id=root_id,state_status='UNKNOWN',owners=[],
+                    error=dict(type='MISSING_SAVED_SHED_SKIN_BLOCK',
+                        message='Legacy suspended state has no saved cure roll.')))
+                continue
+            # Closed legacy constructor boundaries have no future-reused cure roll.
+            values['shed_skin_draws'] = np.zeros((1,2),np.int32)
         actual = captured_observations(measured, index, len(ids))
         # B=1 slicing preserves the actual packet and allows each refused owner
         # to remain absent independently. Native seeds retain original ordinal.
         result = comparison.collect_constructors(pool, [cohort[index]['team_indices']],
-            BattleState(*(value[index:index+1] for value in state)),
+            BattleState(**values),
             tuple(value[index:index+1] for value in capture), catalog, root_ids=[root_id],
             showdown_root=showdown_root, node=node, native_seed_start=native_seed_start+index,
             env_config=env_config, engine_observations=actual, original_ivs=original_ivs)
