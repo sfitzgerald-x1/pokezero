@@ -400,6 +400,14 @@ class Device:
         if narrowing is not None:self.belief_tables = narrowing.tables(self.belief_tables)
         self.b2 = dev.B2Batch(catalog, 2 * lanes)
 
+    def reset(self, owners):
+        self.b2.reset(owners)
+        if self.narrowing is not None:self.narrowing.reset()
+
+    def feed(self, deltas):
+        if self.narrowing is None:return self.b2.feed(deltas)
+        return self.narrowing.feed_b2(self.b2, deltas)
+
     @classmethod
     def for_scenarios(cls, scenarios, showdown, showdown_root, metadata, lanes, allowlist=None, set_posterior=False):
         """B2's catalog, and the device belief tables compiled from it, over the authored sets of EVERY scenario file in
@@ -484,8 +492,8 @@ def run_scenario(scenario, engine, showdown, metadata, device=None):
         dev = device.dev
         pstate, trackers = engine.start_public(prepared['rows'])
         initial_equal = dev.trees_equal(state, pstate)
-        device.b2.reset([0, 1] * engine.lanes)
-        device.b2.feed([lines for i in range(len(cases)) for lines in started['channels'][i]] + [None] * (2 * (engine.lanes - len(cases))))
+        device.reset([0, 1] * engine.lanes)
+        device.feed([lines for i in range(len(cases)) for lines in started['channels'][i]] + [None] * (2 * (engine.lanes - len(cases))))
         host_trackers, host_b2 = engine.jax.device_get(trackers), device.b2.host()
         host_state = engine.jax.device_get(pstate)
     records = []
@@ -535,7 +543,7 @@ def run_scenario(scenario, engine, showdown, metadata, device=None):
             pstate, trackers = public.step.state, public.trackers
             step_equal = (dev.trees_equal(result.state, pstate) and dev.trees_equal(result.invalid_actions, public.step.invalid_actions)
                           and dev.trees_equal(result.placeholder_moves, public.step.placeholder_moves))
-            device.b2.feed([lines for i in range(len(cases)) for lines in (reply['results'][i]['channels'] if live[i] else [None, None])]
+            device.feed([lines for i in range(len(cases)) for lines in (reply['results'][i]['channels'] if live[i] else [None, None])]
                            + [None] * (2 * (engine.lanes - len(cases))))
             host_trackers, host_b2 = engine.jax.device_get(trackers), device.b2.host()
         for i, record in enumerate(records):

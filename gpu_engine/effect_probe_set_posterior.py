@@ -9,7 +9,8 @@ by this check. After every compared step, for each side s and present public slo
   active (engine_device_belief.project), equals set_posterior's support, computed from the owner's channel lines with
   set_posterior's own strike parse and likelihood (parse_strikes, the single-variant skip, _counts, _encounter's
   off-model drop) over B2's hard mask (the hard support set_posterior's two-way check holds equal to B2's);
-- posterior_active: the device's visible pin is active exactly when an admitted strike narrowed set_posterior's weights;
+- posterior_active: the device's visible pin stays active after the reference admits nonempty survivors over the hard
+  support captured from B2 at the damage event, before later reveals in the same step;
 - posterior_conflicts: the device counted no pin conflict (set_posterior never empties a support).
 
 The literal probe source is registered with device_set_posterior so its tables compile from the same variants. The
@@ -37,7 +38,53 @@ class Narrowing:
         self.sp, self.dsp, self.catalog, self.source, self.dex = set_posterior, dsp, catalog, dsp.register_source(source), dex
         self.posterior = dsp.compile_tables(source, dex, metadata, source_tables=catalog.source)[0]
         self.vocab = metadata['vocabulary']
+        self.reset()
+
+    def reset(self):
+        """A new scenario's battles, including raw-line offsets and event-time evidence."""
         self.lines, self.teams, self.last_rows = {}, {}, []
+        self.active, self.damage, self.evaluated = {}, {}, {}
+
+    @staticmethod
+    def _own_damage(line, owner):
+        parts = line.split('|')
+        return (len(parts) > 3 and parts[1] == '-damage' and parts[2].startswith(f'p{owner + 1}')
+                and not any(p.startswith('[from]') for p in parts[4:]))
+
+    def feed_b2(self, b2, deltas):
+        """Fold complete raw-line prefixes through canonical B2, cutting immediately after each owner's damage line.
+
+        The snapshots are full hard support, never the visible basis or device pins. Offsets count original channel
+        lines, including those B2 filters. Crit/effectiveness/refusal evaluation waits for the completed host window.
+        The ordinary flag-off feed is unchanged. Independent streams can reach their next cut in the same batch."""
+        if len(deltas) != b2.streams:raise ValueError('one channel delta per B2 stream')
+        offsets, cursors = list(b2.lines), [0] * b2.streams
+        fresh = []
+        while any(cursors[q] < len(lines or ()) for q, lines in enumerate(deltas)):
+            parts, cuts = [], {}
+            for q, lines in enumerate(deltas):
+                lines = lines or ()
+                start, end = cursors[q], len(lines)
+                for index in range(start, end):
+                    if self._own_damage(lines[index], q % 2):
+                        end = index + 1;cuts[q] = offsets[q] + index;break
+                parts.append(lines[start:end] or None);cursors[q] = end
+            fresh.extend(b2.feed(parts))
+            if not cuts:continue
+            host = b2.host()
+            for q, offset in cuts.items():
+                if b2.refused[q] is not None:continue
+                owner, attacker = q % 2, 1 - q % 2
+                slot = int(host.mons.active[q, attacker])
+                if not 0 <= slot < 6:raise ValueError(f'no attacker slot at damage line {offset} in stream {q}')
+                species = b2.catalog.species.names[int(host.mons.species[q, attacker, slot])]
+                snapshot = dict(species=self.sp.species_key(species), slot=slot,
+                    encounter=int(host.mons.encounter[q, attacker, slot]),
+                    hard=np.asarray(host.beliefs.hard[q, owner, slot], np.uint32).copy())
+                self.damage.setdefault(q, {})[offset] = snapshot
+        for q, refusal in enumerate(b2.refused):
+            if refusal is not None:self.damage.pop(q, None)
+        return fresh
 
     def tables(self, belief_tables):
         return self.dsp.enable(belief_tables, self.posterior)
@@ -48,7 +95,11 @@ class Narrowing:
         first request (the probe channels carry no |request| line): species, level, stats with max HP, the original
         ability and item, the moves."""
         if step == 'initial' or lane not in self.lines:
+            if lane in self.lines:
+                for owner in range(2):self.damage.pop(2 * lane + owner, None)
             self.lines[lane] = ([], [])
+            self.active[lane] = set()
+            self.evaluated[lane] = set()
             if state is not None:self.teams[lane] = tuple(self._team(state, lane, owner) for owner in range(2))
         for owner in range(2):self.lines[lane][owner].extend(channels[owner] or ())
 
@@ -85,16 +136,36 @@ class Narrowing:
             team = self.teams.get(lane, ((), ()))[owner]
         rows = []
         single = sum(hard) == 1
-        for strike in sp.parse_strikes(lines, seat):
+        # compare() runs only after a complete Showdown step. Its channels omit requests, including at a forced
+        # replacement after a KO, so mark that known boundary for the parser without inventing an own-team request.
+        for strike in sp.parse_strikes([*lines, '|request|{}'], seat):
             if strike['attacker_key'] != key:continue
+            self._activity(lane, owner, key, species, variants, team, strike)
             reason, counts = strike['reason'], None
             if reason is None and single:reason = sp.SINGLE_VARIANT
             elif reason is None:reason, counts = sp._counts(strike, species, variants, hard, team, source=self.source, dex=self.dex)
             rows.append((strike, reason, counts))
         post = sp._encounter('p2' if owner == 0 else 'p1', seat, key, hard, rows, '')
-        narrowed = any(s.admitted for s in post.strikes)
+        # Activity comes only from event-time host evidence. Support above is independently recomputed at root time,
+        # so a later reveal cannot erase activity or hide a strike-time/root-time support discrepancy.
+        narrowed = (owner, key) in self.active[lane]
         self.last_reasons = [(s.line, s.move, s.reason or 'admitted') for s in post.strikes]
         return list(post.support) + [False] * (64 - len(post.support)), narrowed
+
+    def _activity(self, lane, owner, key, species, variants, team, strike):
+        identity = (owner, strike['line'])
+        if identity in self.evaluated[lane]:return
+        if strike['reason'] is None:
+            captures = [s for i, s in self.damage.get(2 * lane + owner, {}).items()
+                        if strike['line'] < i <= strike['last']]
+            if len(captures) != 1 or captures[0]['species'] != key:
+                raise ValueError(f'expected one B2 damage capture for {key} at line {strike["line"]}, got {captures}')
+            hard = tuple(_words_to_bits(captures[0]['hard'])[:len(variants)])
+            if sum(hard) > 1:
+                reason, counts = self.sp._counts(strike, species, variants, hard, team, source=self.source, dex=self.dex)
+                if reason is None and any(keep and count > 0 for keep, count in zip(hard, counts)):
+                    self.active[lane].add((owner, key))
+        self.evaluated[lane].add(identity)
 
     def diffs(self, trackers, b2_view, lane):
         """The narrowing diffs of one compared step (keys side:slot:field, as compare_views keys them)."""
