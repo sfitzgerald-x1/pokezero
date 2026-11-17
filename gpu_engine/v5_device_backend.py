@@ -165,6 +165,8 @@ class RuntimeBackend:
         # Original pure constructor-field helper, including retained explicit
         # genders and its source binding; no lifecycle or captured writer.
         raw=_gender(raw,self.pool,indices,gender_initialization)
+        if np.any((np.asarray(raw.species)>0)&~np.isin(np.asarray(raw.gender),(0,1,2))):
+            raise ValueError('fresh self-play requires retained or prospectively initialized genders')
         truth=rollout.constructor_truth(raw,self.pool,indices,source=self.prepared.source,
             compiled_source=self.prepared.catalog.source,vocabulary=self._plan.model.label_vocabulary)
         if self.measure_runtime:

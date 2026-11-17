@@ -21,7 +21,7 @@ from typing import Callable, Hashable, Iterator, Mapping
 
 DRAW_BOUNDS = (2, 100, 100, 100, 16, 16, 100, 4, 8, 2, 2, 2)
 # transition.EFFECT_BOUNDS (fidelity patch R, design 2.1), restated without importing JAX: ChanceInputs.effect[s][c].
-EFFECT_BOUNDS = (16, 16, 4, 2)
+EFFECT_BOUNDS = (16, 16, 4, 2, 2)
 # Names follow ChanceInputs, without importing JAX or mutating a native flag. The effect stream is appended last
 # (§6), so every earlier coordinate keeps its position.
 COORDINATES = tuple(
@@ -33,7 +33,8 @@ COORDINATES = tuple(
        for side in range(2)]
     + [("initial_tie", 2)]
     + [(f"effect.{side}.{column}", bound)
-       for side in range(2) for column, bound in enumerate(EFFECT_BOUNDS)]
+       for side in range(2) for column, bound in enumerate(EFFECT_BOUNDS[:4])]
+    + [(f"effect.{side}.4", 2) for side in range(2)]
 )
 EFFECT_COORDINATES = tuple(name for name, _ in COORDINATES if name.startswith("effect."))
 
