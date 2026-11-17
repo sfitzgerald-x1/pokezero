@@ -123,7 +123,7 @@ class TransformLawTests(unittest.TestCase):
             with self.subTest(name=chance):
                 self.assertNotIn(chance, names)
         self.assertIn('transform', conditional_law.KERNEL_MODULES)
-        self.assertEqual(len(COORDINATES), 41)                     # no Transform axis
+        self.assertEqual(len(COORDINATES), 43)                     # includes both infatuation axes; no Transform axis
 
 
 if __name__ == '__main__':
