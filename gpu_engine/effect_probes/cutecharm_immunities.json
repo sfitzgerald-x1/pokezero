@@ -1,0 +1,205 @@
+{
+ "schema": "pokezero.effect_probe.scenario.v1",
+ "move": "cutecharm_immunities",
+ "note": "Positive proc followed by same gender, genderless, Oblivious, Lum retention and Mental Herb cure; all genders explicit.",
+ "teams": [
+  [
+   {
+    "species": "Machamp",
+    "moves": [
+     "machpunch",
+     "splash",
+     "protect",
+     "rest"
+    ],
+    "ability": "Guts",
+    "item": "",
+    "gender": "M"
+   },
+   {
+    "species": "Zangoose",
+    "moves": [
+     "quickattack",
+     "splash",
+     "protect",
+     "rest"
+    ],
+    "ability": "Immunity",
+    "item": "",
+    "gender": "F"
+   },
+   {
+    "species": "Metagross",
+    "moves": [
+     "metalclaw",
+     "splash",
+     "protect",
+     "rest"
+    ],
+    "ability": "Clear Body",
+    "item": "",
+    "gender": "N"
+   },
+   {
+    "species": "Jynx",
+    "moves": [
+     "pound",
+     "splash",
+     "protect",
+     "rest"
+    ],
+    "ability": "Oblivious",
+    "item": "",
+    "gender": "M"
+   },
+   {
+    "species": "Skarmory",
+    "moves": [
+     "peck",
+     "splash",
+     "protect",
+     "rest"
+    ],
+    "ability": "Keen Eye",
+    "item": "Lum Berry",
+    "gender": "M"
+   },
+   {
+    "species": "Celebi",
+    "moves": [
+     "tackle",
+     "splash",
+     "protect",
+     "rest"
+    ],
+    "ability": "Natural Cure",
+    "item": "Mental Herb",
+    "gender": "M"
+   }
+  ],
+  [
+   {
+    "species": "Clefable",
+    "moves": [
+     "splash",
+     "substitute",
+     "protect",
+     "batonpass"
+    ],
+    "ability": "Cute Charm",
+    "item": "",
+    "gender": "F"
+   },
+   {
+    "species": "Snorlax",
+    "moves": [
+     "splash",
+     "rest",
+     "protect",
+     "bodyslam"
+    ],
+    "ability": "Thick Fat",
+    "item": "Leftovers",
+    "gender": "M"
+   },
+   {
+    "species": "Blissey",
+    "moves": [
+     "splash",
+     "softboiled",
+     "protect",
+     "seismictoss"
+    ],
+    "ability": "Natural Cure",
+    "item": "Leftovers",
+    "gender": "M"
+   },
+   {
+    "species": "Gengar",
+    "moves": [
+     "splash",
+     "protect",
+     "thunderbolt",
+     "icepunch"
+    ],
+    "ability": "Levitate",
+    "item": "Leftovers",
+    "gender": "M"
+   },
+   {
+    "species": "Tyranitar",
+    "moves": [
+     "splash",
+     "protect",
+     "rockslide",
+     "earthquake"
+    ],
+    "ability": "Sand Stream",
+    "item": "Leftovers",
+    "gender": "M"
+   },
+   {
+    "species": "Jolteon",
+    "moves": [
+     "splash",
+     "protect",
+     "thunderbolt",
+     "batonpass"
+    ],
+    "ability": "Volt Absorb",
+    "item": "Leftovers",
+    "gender": "M"
+   }
+  ]
+ ],
+ "script": [
+  [
+   "move 1",
+   "move 1"
+  ],
+  [
+   "switch 2",
+   "move 1"
+  ],
+  [
+   "move 1",
+   "move 1"
+  ],
+  [
+   "switch 3",
+   "move 1"
+  ],
+  [
+   "move 1",
+   "move 1"
+  ],
+  [
+   "switch 4",
+   "move 1"
+  ],
+  [
+   "move 1",
+   "move 1"
+  ],
+  [
+   "switch 5",
+   "move 1"
+  ],
+  [
+   "move 1",
+   "move 1"
+  ],
+  [
+   "switch 6",
+   "move 1"
+  ],
+  [
+   "move 1",
+   "move 1"
+  ]
+ ],
+ "axes": [],
+ "expect": {
+  "exact": true
+ }
+}

@@ -29,11 +29,12 @@ class DoubleEdgeSourceBindingTests(unittest.TestCase):
   # The combined train at 87e75985 preserves Transform's closure plus Tier D's source inventories.
   # Train B's combined Stick tree at b3b3b6cd additionally preserves its reviewed <4 cuts and
   # CRIT_RATIO_UNREPRESENTABLE refusal alongside Transform's closure; strict AST/membership equality stays required.
-  certified={'chance_consumers.py':'b3b3b6cd52a0ac0194381e45f7c4e02fb99c2bb3',
-             'phase_d_chance.py':'b3b3b6cd52a0ac0194381e45f7c4e02fb99c2bb3',
-             'conditional_law.py':'b3b3b6cd52a0ac0194381e45f7c4e02fb99c2bb3',
-             'engine_source_frame_witness.py':'b3b3b6cd52a0ac0194381e45f7c4e02fb99c2bb3',
-             'ordinary_law.py':'53dc3add38e37c36b7609edabe4f96e313022b16'}
+  # V6 composition binds all five bodies, including ordinary_law's fifth effect column.
+  certified={'chance_consumers.py':'77a780c2e8ac8c941b9cca1ef57a46292c013d2b',
+             'phase_d_chance.py':'77a780c2e8ac8c941b9cca1ef57a46292c013d2b',
+             'conditional_law.py':'77a780c2e8ac8c941b9cca1ef57a46292c013d2b',
+             'engine_source_frame_witness.py':'77a780c2e8ac8c941b9cca1ef57a46292c013d2b',
+             'ordinary_law.py':'77a780c2e8ac8c941b9cca1ef57a46292c013d2b'}
   constants={'SOURCE_PINS','MAPPING_PINS','DOMAIN_SHA256','KERNEL_SHA256'}
   for file in ('chance_consumers.py','ordinary_law.py','conditional_law.py',
                'engine_source_frame_witness.py','phase_d_chance.py'):
@@ -50,7 +51,7 @@ class DoubleEdgeSourceBindingTests(unittest.TestCase):
      if isinstance(target,ast.Name) and target.id in ('SOURCE_PINS','MAPPING_PINS')}
    self.assertEqual(mappings(old),mappings(current),file)
  def test_all_three_domain_guards_and_every_owned_mapping_pin(self):
-  modules='action_history absorption baton combat critical damage_moves effects encore entry focus_punch items linked_traps mechanics phazing pressure pursuit residual_order secondary self_destruct sleep_talk solar_beam state sustain transform transition variable_moves weather'.split()
+  modules='absorption action_history baton combat critical damage_moves effects encore entry focus_punch forecast infatuation items linked_traps mechanics phazing pressure pursuit residual_order secondary self_destruct sleep_talk solar_beam state sustain transform transition variable_moves weather'.split()
   domain=hashlib.sha256(b''.join(n.encode()+b'\0'+(ROOT/'gpu_engine'/(n+'.py')).read_bytes()+b'\0'for n in modules)).hexdigest()
   for file,key in [('conditional_law.py','KERNEL_SHA256'),('chance_consumers.py','DOMAIN_SHA256'),('ordinary_law.py','DOMAIN_SHA256')]:self.assertEqual(constant(file,key),domain,(file,key))
   for file,key in [('engine_source_frame_witness.py','SOURCE_PINS'),('chance_consumers.py','SOURCE_PINS'),('conditional_law.py','MAPPING_PINS'),('ordinary_law.py','MAPPING_PINS')]:

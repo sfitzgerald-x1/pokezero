@@ -49,6 +49,33 @@ def table(meta):
 
 
 class ChanceConsumerTests(unittest.TestCase):
+    def test_infatuation_axis_in_both_planners_and_same_turn_closure(self):
+        import sys
+        from gpu_engine import phase_d_chance
+        for planner in (c,phase_d_chance):
+            with self.subTest(planner=planner.__name__),patch.object(sys.modules[__name__],'c',planner):
+                data,meta=fixture();meta['vocabulary']['moves'].append('attract')
+                data['gender']=[[1]*6,[2]*6]
+                t=table(meta);names=meta['vocabulary']['moves']
+                t['infatuation']=dict(attract=[n=='attract' for n in names],
+                    cute_charm=[False]*len(meta['vocabulary']['abilities']))
+                plain=self.plan(data,meta,kernel_table=t)
+                self.assertIsInstance(plain,planner.ConsumerPlan,plain)
+                self.assertEqual(len(self.cells(plain,'effect.0.4')),1)
+                data['volatile'][0][0]|=128
+                held=self.plan(data,meta,kernel_table=t)
+                self.assertIsInstance(held,planner.ConsumerPlan,held)
+                self.assertEqual([x.mass for x in self.cells(held,'effect.0.4')],[Fraction(1,2)]*2)
+                data['volatile'][0][0]=0
+                self.choose(data,meta,1,'attract')
+                same_turn=self.plan(data,meta,kernel_table=t)
+                self.assertIsInstance(same_turn,planner.ConsumerPlan,same_turn)
+                self.assertEqual(len(self.cells(same_turn,'effect.0.4')),2)
+                self.choose(data,meta,1,'sleeptalk');self.choose(data,meta,1,'attract',slot=1)
+                called=self.plan(data,meta,kernel_table=t)
+                self.assertIsInstance(called,planner.ConsumerPlan,called)
+                self.assertEqual(len(self.cells(called,'effect.0.4')),2)
+
     def test_plain_binary64_threshold_refines_actual_integer_rolls(self):
         data,meta=fixture();self.choose(data,meta,0,'return');move=meta['vocabulary']['moves'].index('return')
         t=table(meta);t['accuracy'][move]=80
