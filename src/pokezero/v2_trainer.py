@@ -89,6 +89,8 @@ class V2Config:
         ``None`` pads only in the compiled modes.
     emulate_precision_casts: have Inductor round fused bf16 intermediates as
         eager autocast does. With it on, compiled CPU updates are bitwise eager.
+    distributed_rows: use DistributedTrainer's canonical rank-local rows and
+        globally normalized loss, never the legacy replicated-store DDP math.
     """
     order: str = 'ordered'
     order_seed: int | None = None
@@ -97,12 +99,14 @@ class V2Config:
     check_interval: int = 64
     pad_partial: bool | None = None
     emulate_precision_casts: bool = True
+    distributed_rows: bool = False
 
     def __post_init__(self):
         if (self.order not in ORDERS or self.mode not in MODES or self.optimizer not in OPTIMIZERS
                 or type(self.check_interval) is not int or self.check_interval <= 0
                 or self.order_seed is not None and (type(self.order_seed) is not int or not 0 <= self.order_seed < 2**63)
-                or self.pad_partial not in (None, True, False) or type(self.emulate_precision_casts) is not bool):
+                or self.pad_partial not in (None, True, False) or type(self.emulate_precision_casts) is not bool
+                or type(self.distributed_rows) is not bool):
             raise ValueError('explicit V2 order/mode/optimizer/check interval required')
         if self.mode == 'reference' and self.pad_partial:
             raise ValueError('reference mode runs the original unpadded batch')
@@ -470,11 +474,15 @@ def static_v5_loss(output, tensors, model_config, config, *, variant_counts):
     zero = sum(value.reshape(-1)[:0].sum() for name in _OUTPUT_FIELDS
         if (value := getattr(output, name)) is not None)
     metrics = {}
+    global_denominators = tensors.get('_v2_global_denominators')
+    reduction_names = metric_names(model_config, config)[:-1:2]
 
     def average(name, values, mask, row_weights):
         count = mask.sum()
         w = torch.where(mask, row_weights, 0)
         denominator = torch.where(count > 0, w.sum(), 1)
+        if global_denominators is not None:
+            denominator = global_denominators[reduction_names.index(name)]
         result = (torch.where(mask, values, 0) * w).sum() / denominator
         metrics[name] = result.detach(); metrics[name + '_count'] = count
         return result
@@ -497,6 +505,8 @@ def static_v5_loss(output, tensors, model_config, config, *, variant_counts):
         total_weight = torch.where(count > 0, w.sum(), 1)
         mean = (advantage * w).sum() / total_weight
         variance = (torch.where(ppo, (advantage - mean).square(), 0) * w).sum() / total_weight
+        if '_v2_global_advantage' in tensors:
+            count, mean, variance = tensors['_v2_global_advantage'].unbind()
         advantage = torch.where(ppo & (count > 1), (advantage - mean) / (variance.sqrt() + 1e-8), advantage)
     chosen = torch.where(ppo, log_probs.gather(1, actions[:, None]).squeeze(-1), 0.)
     log_ratio = chosen - behavior.log()
@@ -676,6 +686,8 @@ class Trainer:
     def __init__(self, runtime):
         if type(runtime) is not Runtime:
             raise ValueError('V2 runtime required')
+        if runtime.v2_config.distributed_rows and type(self) is Trainer:
+            raise ValueError('distributed row checkpoints require DistributedTrainer')
         torch = _torch()
         self.runtime = runtime
         self.requested_mode = runtime.v2_config.mode
@@ -748,6 +760,12 @@ class Trainer:
         return loss, vector, logits_ok
 
     # -- data ---------------------------------------------------------------
+    def _batch_order(self, store):
+        rt = self.runtime
+        seed = rt.train_config.seed if rt.v2_config.order_seed is None else rt.v2_config.order_seed
+        return BatchOrder(store.rows, store.segments, rt.train_config.batch_size,
+            order=rt.v2_config.order, seed=seed, world_size=rt.world_size)
+
     def _bind(self, store, window):
         rt = self.runtime; config = rt.train_config
         if type(store) is not RowStore or not _same_device(store.device, rt.device):
@@ -757,9 +775,7 @@ class Trainer:
             raise ValueError('explicit immutable declared-game learning-rate window required')
         if not scheduled and window is not None:
             raise ValueError('constant learning rate does not accept a scheduled window')
-        seed = config.seed if rt.v2_config.order_seed is None else rt.v2_config.order_seed
-        order = BatchOrder(store.rows, store.segments, config.batch_size, order=rt.v2_config.order,
-            seed=seed, world_size=rt.world_size)
+        order = self._batch_order(store)
         description = dict(order.describe(), store=_sha(store.fingerprint()))
         if rt.cursor is not None and not rt.cursor['complete']:
             if description != rt.order or window != rt.window:
@@ -1052,6 +1068,8 @@ def load_checkpoint(path, *, enable_v5=False, v2_config=None, expected_model_con
             raise ValueError('explicit resume configuration differs')
     saved = V2Config(**section['config'])
     v2_config = saved if v2_config is None else v2_config
+    if saved.distributed_rows != v2_config.distributed_rows:
+        raise ValueError('resume cannot change distributed row/loss semantics')
     if section['cursor'] is not None and not section['cursor']['complete'] and (
             (v2_config.order, v2_config.order_seed) != (saved.order, saved.order_seed)):
         raise ValueError('an unfinished cursor resumes only with its original batch order')
