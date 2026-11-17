@@ -156,7 +156,7 @@ EFFECTS = (
          'Showdown data/conditions.ts:222-252: partiallytrapped lasts several turns, damages at each residual and traps (onTrapPokemon)',
          'gpu_engine/linked_traps.py:12-14: the represented move traps are Mean Look, Spider Web and Block only (Wrap is its own volatile)',
          'in-tree since M2 + R1 (f3e71663): gpu_engine/state.py:91-92 partial_trap_counter (3 + draws[s][7] at Wrap) and '
-         'partial_trap_source; transition.py:2011-2016 the Wrap set (the counter and partial_trap_source); transition.py:2615-2635 its residual tick (the trapper read at '
+         'partial_trap_source; transition.py:2024-2029 the Wrap set (the counter and partial_trap_source); transition.py:2628-2648 its residual tick (the trapper read at '
          'the holder\'s own handler), traced by R1 only at residual_order.POSITIONS wrap 4, 8, 9, 11 (gpu_engine/residual_order.py:99)',
          'probes: 12 wrap* scenarios (20 cases), EXACT against Showdown f76228a1 at M2 + R1 (3e0878e4); each gated position fails a '
          'named probe when dropped (#1930 (M2 + R1) PR body, R1 section, position -> probe table: 4 wrap and seven more, 8 and 9 '
@@ -173,7 +173,7 @@ EFFECTS = (
         'both actives faint at the end of the third following turn unless they switch',
         ('Showdown data/moves.ts:13232 (gen4 mod data/mods/gen4/moves.ts:993): Perish Song starts a 3-turn count on both actives',
          'in-tree since M2 + R1 (f3e71663): gpu_engine/state.py:89 perish_counter (4 at Perish Song, -1 per residual, faint at 0); '
-         'transition.py:1790-1798 the count set (Soundproof exempt); transition.py:2696-2709 its residual, a two-holder pass after the '
+         'transition.py:1803-1811 the count set (Soundproof exempt); transition.py:2709-2722 its residual, a two-holder pass after the '
          'order-10 list, faster side first, an equal-Speed pair on a drawn effect bit, the count and the faint at 0 (not gated by R1)',
          'probes: 10 perishsong* scenarios (perishsong, _tie, _last_faster, _baton, _switch, _meanlook, _soundproof, _soundproof_user, '
          '_protect_sub, _reuse), EXACT against Showdown f76228a1 at M2 + R1 (3e0878e4)',
@@ -187,7 +187,7 @@ EFFECTS = (
         'the target falls asleep at the end of the next turn',
         ('Showdown data/moves.ts:21141 (gen4 mod data/mods/gen4/moves.ts:1527): Yawn puts the target to sleep a turn later',
          'in-tree since M2 + R1 (f3e71663): gpu_engine/state.py:90 yawn_counter (2 at Yawn, -1 at residual subOrder 19, a sleep attempt '
-         'at 0); transition.py:1803-1811 the Yawn set; transition.py:2636-2664 its countdown (transition.py:2646-2650 Sleep Clause and the '
+         'at 0); transition.py:1816-1824 the Yawn set; transition.py:2649-2677 its countdown (transition.py:2659-2663 Sleep Clause and the '
          'immunities) and the after-status step, '
          'traced by R1 only at residual_order.POSITIONS yawn 6, 12, 13 (gpu_engine/residual_order.py:99)',
          'probes: 11 yawn* scenarios, EXACT against Showdown f76228a1 at M2 + R1 (3e0878e4); each gated position fails a named probe '
@@ -218,8 +218,8 @@ EFFECTS = (
         'items swap: the user\'s Choice Band choice-locks the target from its next move, the user gets the target\'s item',
         ('Showdown data/random-battles/gen3/teams.ts:473: a set with Trick always holds Choice Band',
          'Showdown data/moves.ts:19875: Trick swaps the two items',
-         'in-tree since M1 (8b212312): gpu_engine/items.py:27-28 the Trick table; transition.py:1730-1739 the swap; state.py:85 '
-         'item_knocked (live roots carry it since #1935, 3f48093b); since WH + C-lite (8823d7c5) transition.py:1740-1751 a received '
+         'in-tree since M1 (8b212312): gpu_engine/items.py:27-28 the Trick table; transition.py:1743-1752 the swap; state.py:85 '
+         'item_knocked (live roots carry it since #1935, 3f48093b); since WH + C-lite (8823d7c5) transition.py:1753-1764 a received '
          'White Herb is used inside Trick\'s onHit, before the device\'s trick hook (probes wh_trick, wh_trick_receive_negative)',
          'live roots: gpu_engine/phase_d_protocol_world.py:132-134 a root after a public item swap is refused (PUBLIC_ITEM_SWAP_NOT_SUPPORTED)'),
         'Furret and Kecleon. Not LOCK-class at the request source (choice_move and item are read from the state).', engine_since='8b212312'),
@@ -238,7 +238,7 @@ REPRESENTED = (
     Effect('move_trap', ('meanlook', 'spiderweb'), (), True, '', 'the target cannot switch while the source stays in',
         ('gpu_engine/state.py:63 trap_source', 'gpu_engine/linked_traps.py:12-25')),
     Effect('seed_and_wish', ('leechseed', 'wish'), (), True, '', 'residual drain; delayed heal',
-        ('gpu_engine/state.py:14, 76-77', 'gpu_engine/sustain.py:22-27', 'gpu_engine/transition.py:1974-1983')),
+        ('gpu_engine/state.py:14, 76-77', 'gpu_engine/sustain.py:22-27', 'gpu_engine/transition.py:1987-1996')),
     Effect('stall_counter', ('protect', 'endure'), (), True, '', 'consecutive-use success chance',
         ('gpu_engine/state.py:57 protect_counter', 'gpu_engine/effects.py:175 stall_success')),
     Effect('status_counters', ('rest', 'toxic'), (), True, '', 'sleep turns, Rest origin, Toxic count',
@@ -253,7 +253,7 @@ REPRESENTED = (
     Effect('substitute', ('substitute',), (), True, '', 'HP decoy', ('gpu_engine/state.py:58 substitute_hp',)),
     Effect('baton_pass', ('batonpass',), (), True, '', 'switch keeping boosts and volatiles', ('gpu_engine/baton.py:16',)),
     Effect('truant', (), (), True, '', 'ability: loaf every other turn (Gen 3 residual clock)',
-        ('gpu_engine/state.py:84 truant_loaf', 'gpu_engine/transition.py:879, 2783-2787')),
+        ('gpu_engine/state.py:84 truant_loaf', 'gpu_engine/transition.py:879, 2796-2800')),
 )
 
 NOT_IN_POOL = (

@@ -124,13 +124,15 @@ class DirectSpanDiagnosticTests(unittest.TestCase):
     self.assertEqual(ast.dump(b[name]),ast.dump(a[name]),name)
     self.assertEqual(ast.dump(Strip().visit(deepcopy(b[name]))if name in owned else b[name]),ast.dump(Strip().visit(deepcopy(a[name]))if name in owned else a[name]),name)
   # transition.py is certified against CURRENT_TRANSITION (full AST plus mutations) by terminal_closeout and seismic_toss_components.
-  # baton, damage_moves, effects, entry, items, secondary, state, sustain and variable_moves changed in reviewed tiers since
-  # b8092a85 and are byte-certified against the witness SOURCE_PINS (witness._source() below, transition_observer_wiring).
-  physical='action_history absorption combat critical encore focus_punch linked_traps mechanics phazing pressure pursuit self_destruct sleep_talk solar_beam weather'.split()
+  # These reviewed physical modules changed since b8092a85 and are byte-certified against the witness SOURCE_PINS
+  # (witness._source() below, transition_observer_wiring), including tier D's combat and Pursuit changes.
+  physical='action_history absorption critical encore focus_punch linked_traps mechanics phazing pressure self_destruct sleep_talk solar_beam weather'.split()
   for name in physical+['engine_retained_encoder_driver','engine_kernel_frame_risk','engine_full_v4_event_device','engine_lifecycle_event_device','benchmark_capture_gap_census']:
    ref=TIER_D_SOURCE if name in ('combat','pursuit') else 'b8092a85'
    path='gpu_engine/'+name+'.py';self.assertEqual(Path(path).read_bytes(),subprocess.check_output(['git','show',ref+':'+path]))
   from gpu_engine import engine_source_frame_witness as witness
+  reviewed='baton combat damage_moves effects entry items pursuit secondary state sustain variable_moves'.split()
+  for name in reviewed:self.assertIn(name+'.py',witness.SOURCE_PINS)
   witness._source()
   for names in [('gpu_engine.benchmark_retained_games','gpu_engine.engine_outcome_diagnostics','gpu_engine.engine_full_v4_event_device'),('gpu_engine.engine_full_v4_event_device','gpu_engine.engine_outcome_diagnostics','gpu_engine.benchmark_retained_games')]:
    r=subprocess.run([sys.executable,'-B','-c','import importlib;'+''.join('importlib.import_module('+repr(n)+');'for n in names)],env=dict(os.environ,PYTHONDONTWRITEBYTECODE='1'),capture_output=True,text=True,timeout=30);self.assertEqual(r.returncode,0,r.stderr)

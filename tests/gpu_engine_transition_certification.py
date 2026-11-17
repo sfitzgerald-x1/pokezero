@@ -11,6 +11,8 @@ its review fixes (Trick's received herb, fewer traced triggers) moved it to 9134
 to 13f76e5e. M2's R2 (the older residual handlers traced only at their reachable positions) moved it to a8c48fa7, and its
 Encore stale-move clear to 7c984fe6. Transform (the copy, its reverts, the Update cure and the choice unlock) moved it to
 e4fc7e8e, its last transition.py commit (whole-leaf masked selects and one faint revert at the step's end).
+The damage modifiers (Silk Scarf, Twisted Spoon, Marvel Scale and Gen 3 Plus/Minus) moved it to 61b00f72.
 The combined Transform + transition batch + Tier D train moves it to 87e75985: interception reveals, damage credit and ability effects.
+Train B composes the damage modifiers with tape v4 and the Transform/tier-D train at 3029a7e6.
 """
-CURRENT_TRANSITION = '87e759858f953da905ffcb88b2eb1388ab6cca35'
+CURRENT_TRANSITION = '3029a7e6a9dc065c980b4f01273b0294f71bb4db'
