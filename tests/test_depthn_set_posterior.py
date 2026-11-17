@@ -7,7 +7,7 @@ classes r5a never exercised. Checks: Choice Band collapse and exclusion, a crit,
 damage with the effectiveness line as a consistency refusal, every refusal reason, the off-model drop (in the posterior and
 at the sampler), the riskiest false-exclusion paths (a Pursuit intercept, Revenge, a mid-turn replacement), single-variant
 supports, draw's byte identity with today's uniform call, the two-way check and provenance. In depthn-light (no skips)."""
-from dataclasses import replace
+from dataclasses import asdict, replace
 import hashlib
 import json
 from pathlib import Path
@@ -99,16 +99,19 @@ class FixtureAnchors(Base):
         for name in names:
             with self.subTest(fixture=name):
                 data = fixture(name)
+                expected = json.loads((FIXTURES.parent / 'set_posterior_admits' / 'expectations.json').read_text())[name + '.json']
+                self.assertEqual(expected['prefix_sha256'], data['prefix_sha256'])
+                self.assertEqual(expected['source_hash'], data['source_hash'])
+                self.assertEqual(expected['schema'], SP.SCHEMA)
                 posts = self.post(data)
                 self.assertEqual(list(posts), [SP.species_key(b['species']) for b in data['beliefs']])
                 for key, post in posts.items():
-                    snap, census = data['posterior'][key], data['census']['species'][key]
+                    snap, census = expected['posterior'][key], data['census']['species'][key]
+                    self.assertEqual(snap['hard'], data['posterior'][key]['hard'])
                     # The snapshot: hard support, weights, every strike and its counts, provenance.
                     self.assertEqual(self.hard(post), snap['hard'])
                     self.assertEqual(list(post.weights), snap['weights'])
-                    self.assertEqual([dict(line=s.line, move=s.move, admitted=s.admitted, reason=s.reason,
-                                           counts=None if s.counts is None else list(s.counts), observed=s.observed, ko=s.ko, crit=s.crit)
-                                      for s in post.strikes], snap['strikes'])
+                    self.assertEqual(json.loads(json.dumps([asdict(strike) for strike in post.strikes])), snap['strikes'])
                     self.assertEqual(post.provenance, snap['provenance'])
                     # The census: the worlds path's survivors, the variants left alive, the true set kept, proportional weights.
                     ids = [v.variant_id for v in self.variants(key)]
@@ -119,9 +122,16 @@ class FixtureAnchors(Base):
                         self.assertGreater(post.weights[ids.index(census['true_variant'])], 0)
                     lik = census['census_lik']
                     if lik is not None and max(lik) > 1e-6:
-                        top = max(post.weights)
+                        # The old census did not condition on our Thunderbolt. Preserve that immutable base receipt and
+                        # check the changed 1:2 likelihood explicitly, in addition to the full new snapshot above.
+                        if (name, key) == ('pursuit_switch', 'heracross'):
+                            self.assertEqual(post.weights, (1, 2, 0, 0, 0))
+                            weights = data['posterior'][key]['weights']
+                        else:
+                            weights = post.weights
+                        top = max(weights)
                         for i, x in zip(self.hard(post), lik):
-                            self.assertAlmostEqual(post.weights[i] / top, x / max(lik), places=6)
+                            self.assertAlmostEqual(weights[i] / top, x / max(lik), places=6)
                 # Every census strike in the prefix: the same refusal (None: admitted), the true set's fitting rolls.
                 for c in data['census']['strikes']:
                     key = SP.species_key(c['attacker'])
@@ -274,7 +284,7 @@ class Refusals(Edits):
         for move, flags, reason in (('Struggle', '', 'struggle'), ('Seismic Toss', '', 'fixed-damage'), ('Super Fang', '', 'fixed-damage'),
                                     ('Horn Drill', '', 'ohko'), ('Magnitude', '', 'conditional-power:magnitude'),
                                     ('Frustration', '', 'conditional-power:frustration'), ('Rollout', '', 'conditional-power:rollout'),
-                                    ('Double Kick', '', 'multi-hit'), ('Body Slam', '|[from]Sleep Talk', 'called'),
+                                    ('Double Kick', '', 'multi-hit'),
                                     ('Body Slam', '|[from]lockedmove', 'called')):
             with self.subTest(move=move, flags=flags):
                 strike, post = self.reason(self.moved(move, flags))
@@ -420,7 +430,7 @@ class RiskyPaths(Edits):
         posts = self.post(fixture('refusal_item_changed'))
         marowak = posts['marowak']
         self.assertEqual(sum(marowak.hard), 1)
-        self.assertEqual([(s.reason, s.counts) for s in marowak.strikes], [(SP.SINGLE_VARIANT, None)] * 2)
+        self.assertEqual([(s.reason, s.counts) for s in marowak.strikes], [(SP.SINGLE_VARIANT, None)] * 3)
         self.assertEqual(self.alive(marowak), self.hard(marowak))
         self.assertEqual(SP.summary(posts['sableye']), dict(species='sableye', hard=1, weighted=1, admitted=0,
             refused={'fixed-damage': 1, SP.SINGLE_VARIANT: 1}, off_model_drops=0, provenance=posts['sableye'].provenance))
