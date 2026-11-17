@@ -127,6 +127,55 @@ def backup_learner_max(frame,root):
     return backup(frame,root,learner_max)
 
 
+def backup_learner_max_fast(frame,root):
+    """backup_learner_max(frame, root), bit for bit, with each world's leaf reads, masks and products done as arrays (the live
+    search's reduce: the reference reads every leaf as a numpy scalar). A depth-2 frame only (the live DepthN pricer's); any
+    other depth is the reference itself. The float steps are the reference's, in its order: each enumerated leaf value as a
+    float64, the opponent's masked softmax (max, math.exp per slot, math.fsum, division), each row's products, math.fsum per
+    row (exact, so the order of its terms cannot matter), the strict max over own slots, then min(1, max(-1, .))."""
+    if frame.depth!=2:return backup(frame,root,learner_max)
+    return tuple(_world_fast(frame,root,world)for world in range(2))
+
+
+def _world_fast(frame,root,world):
+    if int(frame.pre[root,world])!=0:return None
+    requested=bool(frame.root_peer_requested[root,world]);status=frame.t1_status[root,world]
+    kept=tuple(bool(np.any(status[:,r]!=0))for r in range(9))if requested else(False,)*9
+    values=_cell_values(frame,root,world,np.asarray(status).reshape(81))
+    grid=[[values[a*9+r]if status[a,r]else None for r in range(9)]for a in range(9)]
+    return original.WorldPrices(requested,kept,tuple(map(float,frame.root_peer_logits[root,world])),grid)
+
+
+def _cell_values(frame,root,world,status):
+    """[81] each turn-1 cell's node_value at ply 1 under learner_max (None where the reference's is None), depth 2."""
+    out=[None]*81;k_own,k_opp=frame.k_own[0],frame.k_opp[0]
+    terminal=np.flatnonzero(status==1)
+    if terminal.size:
+        t1v=np.asarray(frame.t1_value[root,world]).reshape(81).astype(np.float64)
+        for c in terminal.tolist():out[c]=float(t1v[c])
+    cells=np.flatnonzero(status==2)
+    if not cells.size:return out
+    own=np.asarray(frame.t1_own_actions[root,world]).reshape(81,k_own)[cells]>=0
+    opp_actions=np.asarray(frame.t1_opp_actions[root,world]).reshape(81,k_opp)[cells];opp=opp_actions>=0
+    leaf_status=np.asarray(frame.leaf_status[root,world])[cells];good=(leaf_status==1)|(leaf_status==4)
+    needed=own[:,:,None]&opp[:,None,:]
+    usable=own.any(1)&opp.any(1)&~(needed&~good).any(axis=(1,2))
+    if not usable.any():return out
+    leaf_value=np.asarray(frame.leaf_value[root,world])[cells].astype(np.float64)
+    opp_logits=np.asarray(frame.t1_peer_logits[root,world]).reshape(81,-1)[cells]
+    for j in np.flatnonzero(usable).tolist():
+        rows=np.flatnonzero(own[j]);cols=np.flatnonzero(opp[j])
+        logits=opp_logits[j][opp_actions[j][cols]].astype(np.float64).tolist()
+        top=max(logits);weights=[math.exp(x-top)for x in logits];total=math.fsum(weights)
+        pi=np.array([w/total for w in weights])
+        best=None
+        for row in(leaf_value[j][np.ix_(rows,cols)]*pi).tolist():
+            q=math.fsum(row)
+            if best is None or q>best:best=q
+        out[int(cells[j])]=min(1.,max(-1.,best))
+    return out
+
+
 def backup_average(frame,root):
     """Diagnostic: both seats' prior play at every ply below turn 1."""
     return backup(frame,root,average)

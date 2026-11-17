@@ -104,8 +104,14 @@ def _config(metadata):
     return config
 
 
-def export(checkpoint, out, *, expected_checkpoint_sha256, enable_v5=False):
-    """Export an explicit v5 checkpoint snapshot; Torch is imported only here."""
+def export(checkpoint, out, *, expected_checkpoint_sha256, enable_v5=False, self_moves=False):
+    """Export an explicit v5 checkpoint snapshot; Torch is imported only here.
+
+    ``self_moves`` (V2): the exporter declares that the checkpoint trained with own moves and PP on its self tokens.
+    V5ModelConfig cannot carry it (pokezero/v5_model.py is source-pinned: TORCH_SOURCE_SHA256, and every archive records
+    it), so it is recorded in the archive metadata, only when on: off archives are byte-identical."""
+    if type(self_moves) is not bool:
+        raise ValueError('explicit bool self_moves required')
     if enable_v5 is not True:
         raise ValueError('explicit v5 actor enablement required')
     contract._binding(expected_checkpoint_sha256); _sources()
@@ -142,6 +148,8 @@ def export(checkpoint, out, *, expected_checkpoint_sha256, enable_v5=False):
         actor='RAW_POLICY', view='PUBLIC', auxiliary_heads=False, evaluation=True,
         parameter_count=sum(a.size for a in params.values()),
         tensor_sha256={name: hashlib.sha256(a.tobytes()).hexdigest() for name, a in params.items()})
+    if self_moves:
+        result['self_moves'] = True
     encoded = np.frombuffer(json.dumps(result, sort_keys=True, allow_nan=False).encode(), np.uint8)
     archive = io.BytesIO()
     np.savez_compressed(archive, metadata_json=encoded, **params)

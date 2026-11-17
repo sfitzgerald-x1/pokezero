@@ -44,7 +44,7 @@ def from_roots(world_state, root_public, root_rows, tables, *, observer_sides,
 
 
 def from_public(world_state, world_public, tables, *, observer_sides,
-                legal_action_mask, enable_device_leaf=False, legacy_champion=False):
+                legal_action_mask, enable_device_leaf=False, legacy_champion=False, self_moves=None):
     """Observe root-cloned knowledge, possibly advanced by actual public steps.
 
     Start with from_roots. Subsequent world_public must be its returned carry or
@@ -54,8 +54,9 @@ def from_public(world_state, world_public, tables, *, observer_sides,
     """
     _enabled(enable_device_leaf, legacy_champion)
     view = public.readout(world_public, observer_sides)
+    # self_moves: engine_device_observation.encode's static V2 override (None: the tables'; False: this view off).
     encoded = observation.encode(world_state, view, tables,
-        observer_sides=observer_sides, legal_action_mask=legal_action_mask)
+        observer_sides=observer_sides, legal_action_mask=legal_action_mask, self_moves=self_moves)
     inputs = (observation.champion_inputs(encoded) if legacy_champion else
         observation.actor_inputs(encoded))
     return Leaf(world_public, encoded, inputs, observer_sides)

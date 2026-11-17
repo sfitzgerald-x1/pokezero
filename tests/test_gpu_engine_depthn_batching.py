@@ -292,6 +292,77 @@ class ReplyForwardTests(unittest.TestCase):
                     self.assertEqual({k: v for k, v in got['reply_prior'].items() if k != 'seconds'}, {k: v for k, v in want['reply_prior'].items() if k != 'seconds'})
 
 
+    def test_the_per_root_forward_dispatched_by_the_device_thread_is_the_default_bit_for_bit(self):
+        """reply_forward='root': each priced root's own forward (ReplyPrior.jit_dispatch, the program reduce would run on the same
+        inputs) dispatched by the device thread right after the price, fetched by reduce: the default's responses bit for bit,
+        no compile, and reduce runs no reply forward. A root whose dispatch raises is left to reduce, which runs it as before."""
+        requests = [request(f'l{i}', 0) for i in range(3)] + [request('a', 0), request('b', 0)]
+        serial = self.search(pricers=self.make_pricers(8, (1, 2, 4)), reply=self.reply('jit'));expected = []
+        for r in requests:
+            rows, _ = self.run_batch(serial, [r], PP.outcomes_of(self.cw, PAYLOAD));expected.append(rows[0])
+        same = lambda got, want: (self.assertEqual(strip(got, BATCH + ('pricer', 'reply_prior')), strip(want, BATCH + ('pricer', 'reply_prior')), want['request_id']),
+                                  self.assertEqual({k: v for k, v in got['reply_prior'].items() if k != 'seconds'}, {k: v for k, v in want['reply_prior'].items() if k != 'seconds'}))
+        for failing in (False, True):
+            with self.subTest(failing=failing):
+                s = self.pooled((1, 2, 4), reply=self.reply('jit'));s.warmup([request('w0', 0), request('w1', 0)])
+                p = self.pipeline(s, window_seconds=5., reply_forward='root');real = s.reply.jit_dispatch;threads = []
+                def spy(worlds, owner):
+                    threads.append(threading.current_thread().name)
+                    if failing and threading.current_thread().name == 'depthn-device':
+                        raise ValueError('a dispatch that fails')
+                    return real(worlds, owner)
+                with patch.object(s.reply, 'jit_dispatch', side_effect=spy), CompileEvents() as events:
+                    rows, _ = self.serve(p, requests)
+                p.close(60)
+                self.assertEqual(events.seen, []);self.assertGreater(max(r['batch_size'] for r in rows), 1)
+                want = ['depthn-device'] * len(requests) + (['depthn-reduce'] * len(requests) if failing else [])
+                self.assertEqual(sorted(threads), sorted(want))   # failing: every root's forward again in reduce
+                for got, w in zip(rows, expected):
+                    same(got, w)
+        with self.assertRaisesRegex(ValueError, 'reply_forward'):
+            batching.Pipeline(s, self.pool, reply_forward='batched')
+
+
+    def test_delayed_reply_failure_refuses_only_its_root(self):
+        import jax
+        requests = [request(f'l{i}', 0) for i in range(2)]
+        serial = self.search(pricers=self.make_pricers(8, (1,)), reply=self.reply('jit'))
+        expected, _ = self.run_batch(serial, requests[1:], PP.outcomes_of(self.cw, PAYLOAD))
+        s = self.pooled((1, 2), reply=self.reply('jit'));s.warmup([request('w0', 0), request('w1', 0)])
+        p = self.pipeline(s, window_seconds=5., reply_forward='root')
+        dispatch, fetch, failed = batching.reply_dispatch, jax.device_get, object()
+        def pending(search, priced, items):
+            out = dispatch(search, priced, items)
+            if requests[0]['request_id'] in out:
+                out[requests[0]['request_id']] = failed
+            return out
+        def device_get(value):
+            if value is failed:raise ValueError('delayed reply failure')
+            return fetch(value)
+        with patch.object(batching, 'reply_dispatch', side_effect=pending), patch.object(jax, 'device_get', side_effect=device_get):
+            rows, _ = self.serve(p, requests)
+        p.close(60)
+        self.assertEqual([r['batch_size'] for r in rows], [2, 2])
+        self.assertEqual(rows[0]['status'], 'REFUSED')
+        self.assertEqual(rows[0]['refusal'], 'REPLY_PRIOR_ERROR: ValueError: delayed reply failure')
+        self.assertEqual(rows[1]['status'], 'COMPLETE')
+        for key in ('action_index', 'q_values'):
+            self.assertEqual(rows[1][key], expected[0][key])
+
+
+class ReplyFailureTests(unittest.TestCase):
+    def test_fatal_dispatch_and_fetch_errors_propagate(self):
+        import jax
+        item = NS(made=NS(worlds=()), detached=NS(address=NS(owner=0)))
+        priced = dict(chosen=1, made=NS(roots=[dict(status='PRICED', request_id='r')]))
+        def fatal(*args):raise MemoryError('fatal reply')
+        with self.assertRaisesRegex(MemoryError, 'fatal reply'):
+            batching.reply_dispatch(NS(reply=NS(jit_dispatch=fatal)), priced, {'r': item})
+        with patch.object(jax, 'device_get', side_effect=fatal):
+            with self.assertRaisesRegex(MemoryError, 'fatal reply'):
+                batching.fetch_replies(dict(reply_pending={'r': object()}))
+
+
 class FlushRuleTests(unittest.TestCase):
     """Pipeline._maybe_flush alone: a pipeline's scheduler state, a fixed clock."""
     def pipeline(self, now, *, max_batch=4, window=.05, guard=.15, device=1., prepare=1.):

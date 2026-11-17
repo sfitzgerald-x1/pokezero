@@ -5,10 +5,10 @@ const {Dex} = require(path.join(process.argv[2], 'dist/sim/dex.js'));
 const dex = Dex.mod('gen3');
 const names = dex.moves.all().filter(move=>move.gen<=3 && move.critRatio===2)
   .map(move=>move.id).sort();
-function sample(name, ability) {
+function sample(name, ability, species='Mew', item='') {
   const b = new Battle({formatid:'gen3customgame',seed:[1,2,3,4]});
   for (let i=0; i<2; i++) b.setPlayer(`p${i+1}`,{name:`seat${i}`,team:[
-    {species:'Mew',ability:i?ability:'Limber',moves:['splash'],level:100}]});
+    {species:i?'Mew':species,item:i?'':item,ability:i?ability:'Limber',moves:['splash'],level:100}]});
   const p=b.p1.active[0],q=b.p2.active[0],move=b.dex.getActiveMove(name),draws=[];
   b.randomChance=(a,z)=>{draws.push([a,z]);return true;};
   b.randomizer=x=>x;
@@ -18,4 +18,7 @@ function sample(name, ability) {
 }
 process.stdout.write(JSON.stringify({high_ids:names,ratios:names.map(name=>dex.moves.get(name).critRatio),
   ordinary:sample('tackle','Limber'),high:sample('slash','Limber'),
-  battle:sample('slash','Battle Armor'),shell:sample('pursuit','Shell Armor')}));
+  battle:sample('slash','Battle Armor'),shell:sample('pursuit','Shell Armor'),
+  // Stick (data/mods/gen4/items.ts, Gen 3 inherits it): +2 for a Farfetch'd only.
+  stick:sample('return','Limber',"Farfetch'd",'Stick'),stick_high:sample('slash','Limber',"Farfetch'd",'Stick'),
+  stick_other:sample('return','Limber','Mew','Stick'),farfetchd:sample('return','Limber',"Farfetch'd",'')}));

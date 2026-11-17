@@ -278,8 +278,13 @@ class Plan:
     checkpoint_updates:int=32
     discount:float=1.0
     evaluation:EvaluationProtocol|None=None
+    # V2 self_moves: the run's actors encode (and train on) own moves and PP on their self tokens. V5ModelConfig is
+    # source-pinned, so the declaration lives here: the manifest records it only when on (an off plan's declaration,
+    # resume and identity are byte-identical), and every collector, export and actor load of the run follows it.
+    self_moves:bool=False
 
     def __post_init__(self):
+        if type(self.self_moves) is not bool:raise ValueError('explicit bool self_moves required')
         object.__setattr__(self,'iterations',tuple(tuple(x) for x in self.iterations))
         _seed(self.selection_seed);c._binding(self.pool_sha256)
         if isinstance(self.discount,bool) or not isinstance(self.discount,Real) or not math.isfinite(self.discount) or not 0<=self.discount<=1:
@@ -322,6 +327,7 @@ class Plan:
             initial_history='EMPTY_POOL_EXPLICIT_SELFPLAY',actor='RAW_POLICY',
             game_seed_scope='TRAJECTORY_IDENTITY_ONLY_BATCH_CONSTRUCTOR_AND_SAMPLING_SEEDS_DRIVE_RNG',scientific_qualification=False)
         if self.evaluation is not None:value['evaluation']=self.evaluation.metadata()
+        if self.self_moves:value['self_moves']=True
         return value
 
 
@@ -394,7 +400,8 @@ class Store:
         from gpu_engine import v5_model
         path=self.resolve(checkpoint['path'],checkpoint['sha256'])
         relative=f'artifacts/actor-{iteration}-{uuid.uuid4().hex}.npz'
-        metadata=v5_model.export(path,self.path/relative,expected_checkpoint_sha256=checkpoint['sha256'],enable_v5=True)
+        metadata=v5_model.export(path,self.path/relative,expected_checkpoint_sha256=checkpoint['sha256'],enable_v5=True,
+            self_moves=self.plan.self_moves)
         (self.path/relative).chmod(0o444)
         value=Snapshot(iteration=iteration,checkpoint=checkpoint['path'],checkpoint_sha256=checkpoint['sha256'],
             archive=relative,archive_sha256=metadata['weights_archive_sha256'],model_sha256=_sha(self.plan.model.metadata()))

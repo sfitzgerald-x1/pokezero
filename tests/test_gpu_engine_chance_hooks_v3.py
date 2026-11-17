@@ -69,9 +69,11 @@ def coupled(result):
 @requires_showdown()
 @unittest.skipUnless(NODE, 'requires node')
 class ChanceHooksV3Tests(unittest.TestCase):
+    schema = 'v3'
     @classmethod
     def setUpClass(cls):
-        raw = subprocess.check_output([NODE, '-e', SCRIPT, str(showdown_root()), str(ROOT / 'gpu_engine/chance_hooks.cjs')], text=True)
+        script = SCRIPT if cls.schema == 'v3' else SCRIPT.replace("'v3'", "'v4'").replace("t.phazing=[59,59];", "{t.phazing=[59,59];t.entry_ties=[0,0];t.resuming=false;}")
+        raw = subprocess.check_output([NODE, '-e', script, str(showdown_root()), str(ROOT / 'gpu_engine/chance_hooks.cjs')], text=True)
         cls.out = json.loads(raw)
 
     def assertResolved(self, result):
@@ -80,7 +82,7 @@ class ChanceHooksV3Tests(unittest.TestCase):
 
     def test_one_third_abilities_read_phazing_below_twenty(self):
         for ability, status in (('Static', 'par'), ('Poison Point', 'psn'), ('Flame Body', 'brn')):
-            role = 'contact_' + ability.lower().replace(' ', '')
+            role = 'static' if ability == 'Static' and self.schema == 'v4' else 'contact_' + ability.lower().replace(' ', '')
             for raw, r in zip((19, 20), self.out[ability]):
                 with self.subTest(ability=ability, raw=raw):
                     self.assertResolved(r)
@@ -106,6 +108,10 @@ class ChanceHooksV3Tests(unittest.TestCase):
     def test_tape_schema_validation(self):
         for name, error in self.out['invalid'].items():
             with self.subTest(name=name):self.assertEqual(error, 'invalid chance tape')
+
+
+class ChanceHooksV4ContactTests(ChanceHooksV3Tests):
+    schema = 'v4'
 
 
 if __name__ == '__main__':

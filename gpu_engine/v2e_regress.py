@@ -224,6 +224,8 @@ DEFAULT_DESTINY_BOND = 64
 SLEEP_MOVES = ('spore', 'hypnosis', 'sleeppowder', 'sing', 'lovelykiss', 'grasswhistle')
 # M2: the new leaves (the captures predate them) and the bag columns m2_rule reads.
 WRAP_CLOCK = "trackers.mon_features['wrap_trap_turns']"
+TRANSFORM_TRACKERS = ('trackers.transformed', 'trackers.transform_species', 'trackers.copied_pp_used', 'trackers.transform_own_view',
+                      'trackers.transform_borrowed')
 M2_BAG = ('perish0', 'perish1', 'perish2', 'perish3', 'yawn', 'partiallytrapped')
 M2_COUNTER_LEAVES = ('state.perish_counter', 'state.yawn_counter', 'state.partial_trap_counter', 'state.partial_trap_source')
 
@@ -322,6 +324,8 @@ def tracker_default(name, template):
         if template.shape[1:] != (2, 6):raise MigrationError(f'{name}: expected [B,2,6], tree has {template.shape}')
         return lambda lanes: np.broadcast_to(np.arange(6, dtype=template.dtype), (lanes, 2, 6))
     if re.match(r"^trackers\.(mon_features|field_features)\[", name):
+        return lambda lanes: np.zeros((lanes,) + template.shape[1:], template.dtype)
+    if name in TRANSFORM_TRACKERS:   # Transform: no captured lane is transformed (no mark, no donor, no copied uses)
         return lambda lanes: np.zeros((lanes,) + template.shape[1:], template.dtype)
     raise MigrationError(f'new tracker leaf {name} has no declared neutral value; add it to tracker_default()')
 
@@ -614,6 +618,87 @@ def pursuit_reveal(p):
     return pursuer & switching & (holder | p.active_ability('synchronize'))
 
 
+# DM (damage modifiers): Silk Scarf / Twisted Spoon (data/mods/gen3/items.ts), Marvel Scale (data/abilities.ts) and Gen 3's
+# Plus / Minus (data/mods/gen3/abilities.ts) at f76228a1. Gen 3's category follows the (resolved) type.
+GEN3_PHYSICAL_TYPES = ('normal', 'fighting', 'flying', 'poison', 'ground', 'rock', 'bug', 'ghost', 'steel')
+# Moves that can confuse a target in a step (a Marvel Scale holder's own self-hit can follow in the same step).
+CONFUSING_MOVES = ('signalbeam', 'confuseray', 'swagger', 'supersonic', 'dynamicpunch', 'psybeam', 'confusion',
+                   'waterpulse', 'flatter', 'teeterdance', 'dizzypunch', 'sweetkiss', 'rockclimb')
+
+
+def dm_candidate_moves(p, *, typed=True):
+    """DM: [L,2,K] each candidate's resolved type (Hidden Power by the active's own type, as pinch_active resolves it; -1:
+    unknown, any), and [L,2,K] whether it is a damaging hit: a candidate that is not a Status move; typed=True also drops
+    Struggle, whose ??? type no type item matches (it stays a physical hit for Marvel Scale: GPU pass shard-000434 lane
+    2047, a no-PP Politoed's Struggle into a sleeping Milotic)."""
+    _, status, mtype, hidden = p.move_facts()
+    types = p.vocab['types']
+    dark = types.index('dark') if 'dark' in types else -1
+    if 'hidden_power_type' in p.s:
+        hp_type = np.where(p.active('hidden_power_type') > 0, p.active('hidden_power_type'), dark)
+    else:hp_type = np.full((p.lanes, 2), -1)
+    c = p.candidates;cc = np.clip(c, 0, len(mtype) - 1)
+    resolved = np.where(hidden[cc], hp_type[..., None], mtype[cc])
+    damaging = (c > 0) & ~status[cc]
+    if typed:damaging &= c != p.ids.get('struggle', -1)
+    return resolved, damaging
+
+
+def dm_physical(p, resolved):
+    """DM: [L,2,K] (physical may hold, special may hold) for resolved types (-1: both)."""
+    types = p.vocab['types']
+    physical = np.isin(resolved, [types.index(t) for t in GEN3_PHYSICAL_TYPES if t in types])
+    return physical | (resolved < 0), ~physical | (resolved < 0)
+
+
+def type_item_active(item, type_name):
+    """DM: [L,2] a side whose active holds `item` (a Gen 3 1.1x type item) when it may execute a damaging move of that
+    type, or a side a faster foe's Trick may hand the foe active's `item` before its move. An entrant does not move."""
+    def predicate(p):
+        items, types = p.vocab['items'], p.vocab['types']
+        if item not in items or type_name not in types:return np.zeros((p.lanes, 2), bool)
+        holds = p.active('item') == items.index(item)
+        holds = holds | (holds[:, ::-1] & p.side_uses('trick')[:, ::-1])
+        resolved, damaging = dm_candidate_moves(p)
+        t = types.index(type_name)
+        return holds & (damaging & ((resolved == t) | (resolved < 0))).any(-1)
+    return predicate
+
+
+def marvel_scale_target(p):
+    """DM: [L,2] the actor sides of a Marvel Scale Def boost: a side that may execute a physical damaging move into a side
+    whose active may hold Marvel Scale (holder_target: the active, a switch target or an entrant holder, a Trace copy), and
+    a holder's own side when its active may hit itself in confusion (confused, or a foe may confuse it this step).
+    Status is not predicted (it may land earlier in the step)."""
+    resolved, damaging = dm_candidate_moves(p, typed=False)
+    physical, _ = dm_physical(p, resolved)
+    attacker = holder_target(p, 'marvelscale')[:, ::-1] & (damaging & physical).any(-1)
+    confusable = (p.active('confusion_counter') > 0) | p.side_uses(*CONFUSING_MOVES)[:, ::-1]
+    return attacker | (p.active_ability('marvelscale') & confusable)
+
+
+def plus_minus_active(p):
+    """DM: [L,2] a side whose active holds Plus (Minus) when the foe side's active may hold Minus (Plus) at its hit
+    (holder_target: a switch-in or a Trace copy included) and it may execute a special damaging move."""
+    resolved, damaging = dm_candidate_moves(p)
+    _, special = dm_physical(p, resolved)
+    moves = (damaging & special).any(-1)
+    plus = p.active_ability('plus') & holder_target(p, 'minus')[:, ::-1]
+    minus = p.active_ability('minus') & holder_target(p, 'plus')[:, ::-1]
+    return (plus | minus) & moves
+
+
+def stick_crit(p):
+    """STICK: [L,2] a side whose active is a Farfetch'd holding Stick (critical.ratio 3: crits below 4, not 1), or one a
+    foe active holding Stick may Trick it to, with a damaging candidate (including Struggle). An entrant does not move."""
+    items, species = p.vocab['items'], p.vocab.get('species', ())
+    if 'stick' not in items or 'farfetchd' not in species:return np.zeros((p.lanes, 2), bool)
+    held = p.active('item') == items.index('stick')
+    farfetchd = p.active('species') == species.index('farfetchd')
+    _, damaging = dm_candidate_moves(p, typed=False)
+    return farfetchd & (held | (held[:, ::-1] & p.side_uses('trick')[:, ::-1])) & damaging.any(-1)
+
+
 def entering_ability(*names):
     """PR0 reveal gates: a side may install a holder of one of these abilities this step (the
     reveal happens at its switch-in; the foe's HP/Substitute or the weather is not predicted).
@@ -868,6 +953,11 @@ FAMILIES['m2'] = tuple(f'^{re.escape(n)}$' for n in M2_COUNTER_LEAVES) + (rf'^{r
 ALLOWED['whiteherb'] = dict(user=('hp', 'visible', 'subtracker', 'wish'), target=('hp', 'visible', 'subtracker', 'wish'), glob=())
 ALLOWED['facade'] = dict(user=('hp', 'visible', 'subtracker', 'wish'), target=('hp', 'visible', 'subtracker', 'wish'), glob=())
 ALLOWED['sacredfire'] = ALL
+# Transform (gpu_engine/transform.py): a side whose executed move may be Transform (the pre-state candidates: its action slot,
+# a Sleep Talk call, an Encore override) copies the foe active in place; everything of both actives and both trackers after
+# it in that step may differ (the foe's later move resolves against the copy, the Update cure, the Choice unlock, the faint
+# revert, the six new leaves). No capture carries a transformed mon, so every other lane must stay bitwise.
+ALLOWED['transform'] = ALL
 # D. Wonder Guard: a hit that is now blocked or not decides whether the holder (Shedinja: 1 HP) survives and whether the
 # move's effects, contact abilities, drain and recoil happen at all, so, like a sleep landing (A1), anything. The contact
 # abilities: a status landing on the attacker decides whether it acts later (sleep, full paralysis), so anything too.
@@ -972,8 +1062,21 @@ KO_ALLOWED = {'bonemerang': dict(user=('status', 'clause'))}
 # action runs at all: its PP, action history and move lines, and whatever that move does to either side (a status on the
 # pinch user, Spikes on its side, its own Baton Pass flag or recharge). So on a KO-cascade lane (the faint set, the
 # residual phase or the battle end moved) a pinch lane accepts any leaf, as a sleep landing does (A1); every other pinch
-# lane keeps the damage allowance (ALLOWED['pinch']).
+# lane keeps the damage allowance (ALLOWED['pinch']). Same-set faint timing is narrower: it requires a witnessed
+# one-PP action and matching executed-move count difference, and permits only that actor's move bookkeeping below.
 CASCADE_ALLOWED = {'pinch': ALL}
+TIMING_ACTION_LEAVES = ('state.pp', "trackers.mon_features['moves_shown']", 'trackers.pp_used',
+                        'trackers.tendency.opportunities', 'trackers.tendency.opportunity_turn')
+# DM: like the pinch boost, a stat modifier changes a hit's damage: the target's HP and what follows from it, and the
+# attacker's from the reply (Counter/Mirror Coat), recoil, drain and its HP items; a Marvel Scale self-hit is its holder's
+# own HP. Both sides take the damage allowance; a KO cascade accepts anything (CASCADE_ALLOWED).
+DM_DAMAGE = ('hp', 'item', 'boosts', 'typechange', 'reveal', 'visible', 'subtracker', 'wish', 'focus')
+for _effect in ('silkscarf', 'twistedspoon', 'marvelscale', 'plusminus'):
+    ALLOWED[_effect] = dict(user=DM_DAMAGE, target=DM_DAMAGE, glob=())
+    CASCADE_ALLOWED[_effect] = ALL
+# STICK: a critical hit that now lands (or not) changes the hit's damage, as a damage modifier does.
+ALLOWED['stick_crit'] = dict(user=DM_DAMAGE, target=DM_DAMAGE, glob=())
+CASCADE_ALLOWED['stick_crit'] = ALL
 
 
 def allowed_leaf(name, families):
@@ -1004,9 +1107,15 @@ PLUGINS = {
     'C': dict(psychoboost=move('psychoboost'), whiteherb=white_herb, sacredfire=move('sacredfire'), facade=move('facade')),
     # WH (White Herb plus C-lite, which replaces C's draft; Psycho Boost's drop is unchanged, its restore is White Herb's).
     'WH': dict(whiteherb=white_herb, facade=facade_status, sacredfire=frozen_defrost),
+    'T': dict(transform=move('transform')),
     # D (fidelity tier D): Wonder Guard, the pinch abilities, Poison Point / Flame Body / Effect Spore.
     'D': dict(wonderguard=ability_target('wonderguard', move_ok=damaging_move), pinch=pinch_active,
               contact_status=ability_target(*CONTACT_ABILITIES, move_ok=contact_move), pursuit_reveal=pursuit_reveal),
+    # DM (damage modifiers): Silk Scarf, Twisted Spoon, Marvel Scale, Gen 3's Plus/Minus.
+    'DM': dict(silkscarf=type_item_active('silkscarf', 'normal'), twistedspoon=type_item_active('twistedspoon', 'psychic'),
+               marvelscale=marvel_scale_target, plusminus=plus_minus_active),
+    # STICK (Farfetch'd's critRatio +2).
+    'STICK': dict(stick_crit=stick_crit),
     # TB: the batched transition PR (bugs F, G, F1, F2; see ALLOWED's TB block).
     'TB': dict(pursuit_intercept=pursuit_intercept, sleeptalk_call=sleeptalk_call, turn_clock=turn_clock,
                perish_upkeep=perish_upkeep, weather_end=weather_end),
@@ -1021,7 +1130,41 @@ def predicates(prs):
     return table
 
 
-def lane_verdict(changed, effects, side_axis, *, cascade=None, waive=(), cascade_accepted=None):
+def ko_timing_sides(pre, fainted, base_fainted, pp, base_pp, post_active, base_active, move_count, base_move_count):
+    """Witness a cancelled ordinary one-PP action, not merely an unchanged faint set.
+
+    Fail closed for switches, resumed turns, charge/Struggle and multi-count actions. PP must differ only at the
+    selected active's slot, with exactly one tree spending one PP; its executed-move count must differ by the same
+    signed unit. The limited timing allowance never covers a move's arbitrary state effects.
+    """
+    empty = np.zeros((pre.lanes, 2), bool)
+    if base_active is None or any(x is None for x in (pp, base_pp, move_count, base_move_count)):return empty
+    active = np.asarray(pre.s['active']);actions = pre.actions;before = pre.s.get('pp')
+    if before is None:return empty
+    rows = np.arange(pre.lanes)[:, None];sides = np.arange(2)[None, :];slots = np.clip(actions, 0, 3)
+    a, b = np.asarray(pp), np.asarray(base_pp)
+    old = before[rows, sides, active, slots];here = a[rows, sides, active, slots];there = b[rows, sides, active, slots]
+    selected = ((np.arange(6)[None, None, :, None] == active[..., None, None]) &
+                (np.arange(4)[None, None, None, :] == slots[..., None, None]))
+    other_equal = np.where(selected, True, a == b).reshape(pre.lanes, 2, -1).all(-1)
+    delta = there - here
+    spent_once = (old > 0) & (np.minimum(here, there) == old - 1) & (np.maximum(here, there) == old)
+    count_delta = np.asarray(move_count) - np.asarray(base_move_count)
+    fainted, base_fainted = np.asarray(fainted, bool), np.asarray(base_fainted, bool)
+    same_faint = (fainted == base_fainted).reshape(pre.lanes, -1).all(-1)
+    active_faint = (fainted & (np.arange(6)[None, None, :] == active[..., None])).any((1, 2))
+    stable = (np.asarray(post_active) == active).all(-1) & (np.asarray(base_active) == active).all(-1)
+    ordinary = (~pre.s['pending_residual'].astype(bool) & (pre.s['queued_actor'] < 0) &
+                ((actions >= 0) & (actions < 4)).all(-1))
+    known_counts = ((np.asarray(move_count) >= 0) & (np.asarray(move_count) <= 4) &
+                    (np.asarray(base_move_count) >= 0) & (np.asarray(base_move_count) <= 4))
+    valid = (other_equal & spent_once & (np.abs(delta) == 1) & (count_delta[:, None] == delta) &
+             ~pre.struggle & (pre.active('charge_move') == 0))
+    valid &= (same_faint & active_faint & stable & ordinary & known_counts)[:, None]
+    return valid & (valid.sum(-1) == 1)[:, None]
+
+
+def lane_verdict(changed, effects, side_axis, *, cascade=None, waive=(), cascade_accepted=None, timing=()):
     """changed: {(leaf, side)} for side-axis leaves, {(leaf, None)} for side-less ones;
     effects: {effect: [actor sides]}; cascade: None, or dict(ko_sides=[2] bool (sides whose every tracker
     may follow a KO), mon_ok=callable(leaf, side) -> a KO_MON_LEAVES leaf differs only on that side's
@@ -1031,8 +1174,11 @@ def lane_verdict(changed, effects, side_axis, *, cascade=None, waive=(), cascade
     optional retype_ok=callable(leaf, side) -> bool: that side's RETYPE_LEAVES differ from the base only at a Color Change
     holder that fainted this step here or (un)fainted relative to the base).
     cascade_accepted: an optional list that collects the entries only CASCADE_ALLOWED accepted (listed, so they stay visible).
+    timing: actor side indices witnessed by ko_timing_sides. Only those sides' TIMING_ACTION_LEAVES and the executed
+    move count may follow the cancelled action; neither CASCADE_ALLOWED nor other KO rules apply on timing alone.
     Returns (unexpected entries, waived entries, entries accepted only as KO consequences)."""
     unexpected, waived, by_ko = [], [], []
+    timed_sides = tuple(timing) if isinstance(timing, (tuple, list, np.ndarray)) else ()
     for leaf, side in sorted(changed, key=lambda x: (x[0], -1 if x[1] is None else x[1])):
         ok = False
         for effect, actors in effects.items():
@@ -1045,6 +1191,9 @@ def lane_verdict(changed, effects, side_axis, *, cascade=None, waive=(), cascade
             ok = any(allowed_leaf(leaf, CASCADE_ALLOWED[effect]['glob' if side is None else
                                   ('user' if side in actors else 'target')])
                      for effect, actors in effects.items() if effect in CASCADE_ALLOWED)
+            if ok and cascade_accepted is not None:cascade_accepted.append((leaf, side))
+        if not ok and timed_sides and any(effect in CASCADE_ALLOWED for effect in effects):
+            ok = (side in timed_sides and leaf in TIMING_ACTION_LEAVES) or (side is None and leaf == 'step.placeholder_moves')
             if ok and cascade_accepted is not None:cascade_accepted.append((leaf, side))
         if not ok and cascade is not None:
             # An effect's KO-only allowance on its actor's side, when the other side has a newly (un)fainted mon.
@@ -1950,6 +2099,7 @@ class Stepper:
                 if bag is not None and bag.ndim == 4 and bag.shape[-1] == len(bag_names):
                     m2['bag'] = j.stack([bag[..., bag_names.index(n)] for n in M2_BAG], axis=-1)
             return dict(digests=digests, pre_digests=pre, fainted=(state.hp > 0) & (out.step.state.hp <= 0), m1=m1,
+                move_count=out.step.placeholder_moves,
                 extra={n: named_out[n] for n in faint_leaves if n in named_out}, calls=calls,
                 ko={n: named_out[n] for n in KO_MON_LEAVES + KO_LINK_LEAVES if n in named_out},
                 post_active=out.step.state.active, post_done=out.step.state.done,
@@ -2156,7 +2306,7 @@ def patched_pass(args, *, step_override=None, prepared=None):
     callable_moves = np.asarray(tables.engine_tables.sleep_talk.callable)
     destiny_bond = getattr(state_module, 'DESTINY_BOND', DEFAULT_DESTINY_BOND)
     counts = dict(lane_steps=0, done_skipped=0, unchanged=0, changed_and_involved=0, changed_but_uninvolved=0,
-                  changed_involved_unexpected_fields=0, ko_cascade=0, phase_shift=0, terminal=0, terminal_residual=0, waived=0,
+                  changed_involved_unexpected_fields=0, ko_cascade=0, ko_timing=0, phase_shift=0, terminal=0, terminal_residual=0, waived=0,
                   rule_explained=0, faint_rule_leaves=0, clear_volatile_leaves=0, effect_draws_saved=0,
                   recharge_leaves=0, bag_leaves=0, trick_witness_leaves=0, ledger_leaves=0, m2_leaves=0, m2_wrong_mon=0, m2_forced=0,
                   wh_leaves=0, wh_bad=0, wh_trick_order=0, wh_dropped=0, facade_dropped=0, sacredfire_dropped=0,
@@ -2200,6 +2350,10 @@ def patched_pass(args, *, step_override=None, prepared=None):
     if not manifest.get('post_active_recorded'):
         warnings.append('base pass predates the post-step actives: departures are read from this tree only')
     uninvolved_leaves = {};new_outputs = None
+    # Decode the old base's existing scalar digest without changing or replacing its saved pass. Ordinary turns
+    # execute at most two caller moves and two Sleep Talk children. Unknown/malformed digests provide no evidence.
+    move_count_digests = np.asarray(lane_digest(np.arange(5, dtype=np.int32), 5))
+    move_count_index = base_names.index('step.placeholder_moves') if 'step.placeholder_moves' in base_names else None
     listing = (out / 'changed.jsonl').open('x');begin = time.perf_counter()
     names_order = _template_names(template)
     defaults = state_defaults(template_named)
@@ -2253,6 +2407,14 @@ def patched_pass(args, *, step_override=None, prepared=None):
                 residual_lanes = np.ones(real, bool)
             base_post_active = base['post_active'] if 'post_active' in base.files else None
             base_ko = {n: base[f'ko_{i:02d}'] for i, n in enumerate(ko_leaves)}
+            base_move_count = np.full(real, -1, np.int32)
+            if move_count_index is not None:
+                matches = (base['digests'][:, move_count_index, None] == move_count_digests[None, :, None, :]).all((-2, -1))
+                base_move_count = np.where(matches.sum(-1) == 1, matches.argmax(-1), -1)
+            timing_pp = result['ko'].get('state.pp')
+            timing_actors = ko_timing_sides(pre, result['fainted'][:real], base['fainted'],
+                None if timing_pp is None else timing_pp[:real], base_ko.get('state.pp'), result['post_active'][:real], base_post_active,
+                result['move_count'][:real], base_move_count)
             base_wit = {n: base[f'wit_{i:02d}'] for i, n in enumerate(witness_leaves or ())}
             wit = {n: np.asarray(v)[:real] for n, v in result['wit'].items()}
             sub_pre = np.asarray(named['state.substitute_hp'])[:real] if 'state.substitute_hp' in named else None
@@ -2434,8 +2596,10 @@ def patched_pass(args, *, step_override=None, prepared=None):
                     cascade_info = dict(ko_sides=ko_mons.any(-1), mon_ok=mon_ok, families=families, effect_ok=effect_ok,
                                         retype_ok=retype_ok)
                 by_cascade = []
+                timing_sides = np.flatnonzero(timing_actors[lane]).tolist() if not cascade else []
+                timing = bool(timing_sides)
                 unexpected, waived, by_ko = lane_verdict(entries, effects, side_axis, cascade=cascade_info, waive=args.waive or (),
-                    cascade_accepted=by_cascade) if changed_rest and effects else ([], [], [])
+                    cascade_accepted=by_cascade, timing=timing_sides) if changed_rest and effects else ([], [], [])
                 m2_wrong = []
                 if changed_rest and m2_rules and any(e in effects for e in M2_EFFECTS):
                     # M2: an M2 effect's per-mon leaves may differ only at that side's pre- or post-step active.
@@ -2465,7 +2629,7 @@ def patched_pass(args, *, step_override=None, prepared=None):
                 if kind == 'rule':counts['rule_explained'] += 1
                 elif kind in ('involved', 'unexpected'):
                     counts['changed_and_involved' if kind == 'involved' else 'changed_involved_unexpected_fields'] += 1
-                    counts['ko_cascade'] += cascade;counts['phase_shift'] += phase;counts['terminal'] += terminal
+                    counts['ko_cascade'] += cascade;counts['ko_timing'] += timing;counts['phase_shift'] += phase;counts['terminal'] += terminal
                     counts['terminal_residual'] += terminal_residual
                     counts['waived'] += bool(waived)
                     for e, actors in effects.items():
@@ -2484,7 +2648,8 @@ def patched_pass(args, *, step_override=None, prepared=None):
                 else:
                     counts['changed_but_uninvolved'] += 1
                     for n in changed_rest:uninvolved_leaves[n] = uninvolved_leaves.get(n, 0) + 1
-                listing.write(json.dumps(dict(shard=path.name, lane=lane, tick=tick, kind=kind, ko_cascade=cascade, phase_shift=phase,
+                listing.write(json.dumps(dict(shard=path.name, lane=lane, tick=tick, kind=kind, ko_cascade=cascade, ko_timing=timing,
+                    ko_timing_sides=timing_sides, phase_shift=phase,
                     terminal=terminal, terminal_residual=terminal_residual,
                     involved={k: v for k, v in effects.items()}, leaves=changed, entries=labels, faint_rule=faint_explained,
                     clear_volatile_rule=[f'{l}@{side}' for l, side in clear_explained],

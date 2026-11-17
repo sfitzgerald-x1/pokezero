@@ -49,7 +49,7 @@ def _end_transform(ledger,base,identity):
     else:ledger[identity]=value
 
 
-def own_pp_carry(lines,request,maximum_pp):
+def own_pp_carry(lines,request,maximum_pp,*,transform_base=False):
     """Latest owning active PP, plus only public costs after that snapshot.
 
     Costs before a later owning request are overwritten by that exact packet.
@@ -59,6 +59,11 @@ def own_pp_carry(lines,request,maximum_pp):
     from the -transform line and restored when the member leaves the field
     (switch, drag or faint), as Showdown restores its base move slots.
     No peer request, sampled ability, or hidden PP is used.
+
+    `transform_base` (Transform's constructor, gpu_engine/transform.py) also returns the base ledger of a CURRENTLY
+    transformed own active: (result, base), base a list in request party order, None for every other member and for
+    that active [(move, pp), ...] in its base slot order, the ledger at its -transform line (Transform's own cost paid),
+    which the engine's transform_moves/transform_pp hold. Its own refusal code raises, as the copied ledger's does.
     """
     from pokezero.live_protocol_actor import _packet
     from pokezero.belief import _called_move_source,_CALLER_MOVES,_NEVER_PRESSURED_POOL_MOVES
@@ -104,7 +109,9 @@ def own_pp_carry(lines,request,maximum_pp):
             side=p[2][:2]
             if active.get(side)==_identity(p[2]):ability[side]=normalize_id(p[3]) if kind=='-ability' else ''
         elif kind=='-transform' and len(p)>3 and p[2][:2]==owner:
-            identity=_identity(p[2]);value=ledger.get(identity);base[identity]=dict(value) if isinstance(value,dict) else value
+            # A re-transform (a copied Transform: transformInto keeps baseMoveSlots) keeps the first -transform's base.
+            identity=_identity(p[2]);value=ledger.get(identity)
+            if identity not in base:base[identity]=dict(value) if isinstance(value,dict) else value
         elif kind=='faint' and len(p)>2 and p[2][:2]==owner and _identity(p[2]) in base:
             _end_transform(ledger,base,_identity(p[2]))
         elif kind=='move' and len(p)>3 and p[2][:2]==owner:
@@ -129,7 +136,13 @@ def own_pp_carry(lines,request,maximum_pp):
         if not isinstance(value,dict):raise ValueError(value or 'OWN_PP_LAST_ACTIVE_REQUEST_UNAVAILABLE')
         if set(value)!=set(moves):raise ValueError('OWN_PP_REQUEST_MOVESET_DIFFERS')
         result.append([value[move] for move in moves]+[0]*(4-len(moves)))
-    return result
+    if not transform_base:return result
+    saved=[]
+    for identity in identities:
+        value=base.get(identity) if identity in base else None
+        if identity in base and not isinstance(value,dict):raise ValueError(value or 'OWN_PP_LAST_ACTIVE_REQUEST_UNAVAILABLE')
+        saved.append(None if value is None else list(value.items()))
+    return result,saved
 
 
 def sleep_support(count,rest,*,early_bird=False,skipped=0,pending=False,refunded=0,attempt_rates=None,attempt_refunds=None):
