@@ -199,6 +199,7 @@ import sys
 import time
 
 import numpy as np
+from gpu_engine.encoder_regression_witness import ENCODER_SHAPES, ENCODER_WITNESS_VERSION
 
 SCHEMA = 'pokezero.v2e_regress.v2'
 DIGEST_FORMAT = 'per-lane-per-side-v2'
@@ -785,10 +786,59 @@ def allowed_leaf(name, families):
     return any(re.search(p, name) for f in families for p in FAMILIES[f])
 
 
+# ENC's exact post-state scope. Internal accumulator limbs never receive a
+# numerical tolerance; a host replay must witness the complete corrected array.
+def encoder_rule(entries, witness):
+    """Explain exact (leaf, side) entries using two independent obligations.
+
+    All arrays are for one lane. ``actual`` and the independent host replay's
+    ``expected`` contain complete float32 arrays; ``legacy`` and ``base`` hold
+    the two-word uint32 digests for each side. The caller must establish that
+    event capture is complete and that actual/legacy outputs outside these
+    seven leaves agree. Missing or malformed evidence fails closed.
+
+    Return remaining, explained, forced entries. The caller must append forced
+    entries to unexpected *after* ordinary effect, KO and waiver processing.
+    """
+    remaining, explained, forced = set(entries), [], []
+    valid = (witness.get('version') == ENCODER_WITNESS_VERSION
+             and witness.get('events_complete') is True
+             and witness.get('arrays_valid') is True
+             and witness.get('outside_equal') is True)
+    for leaf, side in sorted(entries, key=str):
+        if leaf not in ENCODER_SHAPES:
+            continue
+        ok = False
+        if valid and side in (0, 1):
+            try:
+                actual = np.asarray(witness['actual'][leaf])
+                expected = np.asarray(witness['expected'][leaf])
+                legacy = np.asarray(witness['legacy'][leaf])
+                base = np.asarray(witness['base'][leaf])
+                shape = ENCODER_SHAPES[leaf]
+                ok = (actual.shape == expected.shape == shape
+                      and actual.dtype == expected.dtype == np.dtype('float32')
+                      and legacy.shape == base.shape == (2, 2)
+                      and legacy.dtype == base.dtype == np.dtype('uint32'))
+                if ok:
+                    ok = (bool(np.isfinite(actual[side]).all())
+                          and np.array_equal(actual[side].view(np.uint32), expected[side].view(np.uint32))
+                          and np.array_equal(legacy[side], base[side]))
+            except (KeyError, TypeError, ValueError, IndexError):
+                ok = False
+        if ok:
+            remaining.remove((leaf, side));explained.append((leaf, side))
+        else:
+            forced.append((leaf, side))
+    return remaining, explained, forced
+
+
 # Per-PR plug-in table: effect -> predicate. Choice unlock and the effect stream
 # are never involvement (design 5.2). `none` is the base-against-base self-test.
 PLUGINS = {
     'none': {},
+    # Exact post-state arithmetic witnesses, never a broad HP allowance.
+    'ENC': {},
     # PR0's public_order and faint-clear rules are special rules (see the docstring);
     # these are its remaining tracker changes.
     'PR0': dict(intimidate_reveal=entering_ability('intimidate'),
@@ -1474,11 +1524,11 @@ class Stepper:
     their own pre values are digested too (new leaves must keep their defaults).
     """
     def __init__(self, step_fn, treedef, *, base_names=None, faint_leaves=FAINT_CLEAR_LEAVES, record_installs=False,
-                 effect_rule=False, m2_ids=None, wh_ids=None):
+                 effect_rule=False, m2_ids=None, wh_ids=None, encoder=False):
         import jax
         import jax.numpy as j
-        names = {}
-        def traced(leaves):
+        names = {};encoder_schemas = {}
+        def traced(leaves, encoder_mode='corrected'):
             state, actions, trackers = jax.tree.unflatten(treedef, leaves)
             lanes = state.hp.shape[0];calls = [];ran = []
             # A2 review L1: whether the residual ran, read at its one weather clock call (eligible is
@@ -1671,6 +1721,14 @@ class Stepper:
                 act_history.record_move = record_move_recorder
                 mech.before_move, hooks.before_move = before_move_fn_recorder, before_move_recorder
                 if trick_hook is not None:hooks.trick = trick_recorder
+            encoder_build = None
+            def run_step():
+                nonlocal encoder_build
+                if not encoder:return step_fn(state, actions, trackers)
+                from gpu_engine.encoder_regression_trace import trace_encoder_call
+                encoder_build = trace_encoder_call(step_fn, state, actions, trackers, mode=encoder_mode)
+                encoder_schemas[encoder_mode] = encoder_build.schema
+                return encoder_build.out
             try:
                 if record_installs:
                     original = hooks.install
@@ -1681,10 +1739,10 @@ class Stepper:
                         calls.append((s, slot, j.broadcast_to(j.asarray(use, j.bool_), (lanes,)) & (not initial)))
                         return out
                     hooks.install = recorder
-                    try:out = step_fn(state, actions, trackers)
+                    try:out = run_step()
                     finally:hooks.install = original
                 else:
-                    out = step_fn(state, actions, trackers)
+                    out = run_step()
             finally:
                 climate.residual_clock = clock;hooks.damage, hooks.move = damage_hook, move_hook
                 hooks.port_protect, hooks.turn_end, hooks.hp_line = protect_hook, turn_end_hook, hp_line_hook
@@ -1741,7 +1799,7 @@ class Stepper:
                           clock=named_out.get(WRAP_CLOCK), **{k: v for k, v in m2e.items() if v is not None})
                 if bag is not None and bag.ndim == 4 and bag.shape[-1] == len(bag_names):
                     m2['bag'] = j.stack([bag[..., bag_names.index(n)] for n in M2_BAG], axis=-1)
-            return dict(digests=digests, pre_digests=pre, fainted=(state.hp > 0) & (out.step.state.hp <= 0), m1=m1,
+            answer = dict(digests=digests, pre_digests=pre, fainted=(state.hp > 0) & (out.step.state.hp <= 0), m1=m1,
                 extra={n: named_out[n] for n in faint_leaves if n in named_out}, calls=calls,
                 ko={n: named_out[n] for n in KO_MON_LEAVES + KO_LINK_LEAVES if n in named_out},
                 post_active=out.step.state.active, post_done=out.step.state.done,
@@ -1749,11 +1807,35 @@ class Stepper:
                 public_order=named_out.get(PUBLIC_ORDER), residual_ran=ran[0] if len(ran) == 1 else None,
                 effect_ok=effect_ok, wit={n: named_out[n] for n in witness_names(named_out)}, m2=m2,
                 wh=whe if wh_ids is not None else None)
-        self._jit = jax.jit(traced);self._names = names
+            if encoder:
+                answer['_encoder'] = dict(outputs=named_out, pre=encoder_build.pre, events=encoder_build.events)
+            return answer
+        self._jit = None if encoder else jax.jit(traced);self._names = names
+        self._encoder = encoder;self._encoder_schemas = encoder_schemas;self._traced = traced
+        self._encoder_programs = {};self._treedef = treedef
+        if encoder:
+            from gpu_engine.encoder_regression_trace import encoder_source_identity
+            self.encoder_source_identity = encoder_source_identity()
 
     def __call__(self, leaves):
         import jax
-        result = jax.device_get(self._jit(leaves))
+        if self._encoder:
+            from gpu_engine.encoder_regression_trace import compile_encoder_programs
+            key = (tuple((tuple(a.shape), str(a.dtype)) for a in leaves), repr(self._treedef),
+                   jax.default_backend(), tuple(str(d) for d in jax.devices()),
+                   bool(jax.config.jax_enable_x64), str(jax.config.jax_default_matmul_precision),
+                   json.dumps(self.encoder_source_identity, sort_keys=True))
+            if key not in self._encoder_programs:
+                def build(mode):return lambda values: self._traced(values, mode)
+                programs = compile_encoder_programs(build, leaves, source_identity=self.encoder_source_identity)
+                if self._encoder_schemas.get('corrected') != self._encoder_schemas.get('legacy'):
+                    raise ValueError('corrected/legacy ENC event schemas differ')
+                programs.schema = self._encoder_schemas['corrected']
+                self._encoder_programs[key] = programs
+            result = jax.device_get(self._encoder_programs[key].execute(leaves))
+            result['encoder']['schema'] = self._encoder_programs[key].schema
+        else:
+            result = jax.device_get(self._jit(leaves))
         result.update(names=self._names['out'], pre_names=self._names['pre'], side_axis=self._names['side_axis'])
         return result
 
@@ -1940,8 +2022,9 @@ def patched_pass(args, *, step_override=None, prepared=None):
     wh_ids = dict(herb=vocab['items'].index('whiteherb') if 'whiteherb' in vocab.get('items', ()) else -9,
                   facade=vocab['moves'].index('facade') if 'facade' in vocab['moves'] else None,
                   sacredfire=vocab['moves'].index('sacredfire') if 'sacredfire' in vocab['moves'] else -9) if wh_rules else None
+    encoder_rules = 'ENC' in plugins
     stepper = Stepper(step_override or _engine_step(tables), treedef, base_names=set(base_names), record_installs=public_order_rule,
-        effect_rule=effect_rule, m2_ids=m2_ids, wh_ids=wh_ids)
+        effect_rule=effect_rule, m2_ids=m2_ids, wh_ids=wh_ids, encoder=encoder_rules)
     shards = [p for p in shard_list(args, capture) if p.name in set(manifest['shards'])]
     if args.limit == 0 and len(shards) != len(manifest['shards']):raise ValueError('shard set differs from the base pass')
     usable = jax.jit(state_module.usable_moves)
@@ -1952,7 +2035,8 @@ def patched_pass(args, *, step_override=None, prepared=None):
                   rule_explained=0, faint_rule_leaves=0, clear_volatile_leaves=0, effect_draws_saved=0,
                   recharge_leaves=0, bag_leaves=0, trick_witness_leaves=0, ledger_leaves=0, m2_leaves=0, m2_wrong_mon=0, m2_forced=0,
                   wh_leaves=0, wh_bad=0, wh_trick_order=0, wh_dropped=0, facade_dropped=0, sacredfire_dropped=0,
-                  sacredfire_stopped=0, pinch_leaves=0)
+                  sacredfire_stopped=0, pinch_leaves=0, encoder_explained=0, encoder_failed_lanes=0)
+    encoder_event_counts = {}
     clear_volatile = 'B' in plugins
     m1_rules = 'M1' in plugins
     # M1 review: the base's per-lane witness arrays (wit_XX); the M1 rules compare per mon and per bag column.
@@ -2007,6 +2091,22 @@ def patched_pass(args, *, step_override=None, prepared=None):
             digests = result['digests'][:real]
             done_now = np.asarray(named['state.done'])
             base = np.load(base_dir / f'digest-{path.stem}.npz')
+            encoder_witness = None
+            if encoder_rules:
+                from gpu_engine.encoder_regression_witness import make_encoder_witness
+                trace = result['encoder']
+                missing_encoder = sorted(set(ENCODER_SHAPES) - set(base_names))
+                if missing_encoder:raise ValueError(f'base lacks encoder digest leaves: {missing_encoder}')
+                evidence = dict(schema=trace['schema'],
+                    events=tuple({n: np.asarray(a)[:real] for n, a in event.items()} for event in trace['events']),
+                    actual={n: np.asarray(a)[:real] for n, a in trace['actual'].items()},
+                    legacy={n: np.asarray(trace['legacy_digests'])[:real, position[n]] for n in ENCODER_SHAPES},
+                    outside_equal=np.asarray(trace['outside_equal'])[:real],
+                    event_inputs_equal=np.asarray(trace['event_inputs_equal'])[:real])
+                encoder_witness = make_encoder_witness({n: np.asarray(a)[:real] for n, a in trace['pre'].items()}, evidence,
+                    {n: np.asarray(base['digests'])[:, base_names.index(n)] for n in ENCODER_SHAPES})
+                for kind, count in encoder_witness['event_counts'].items():
+                    encoder_event_counts[kind] = encoder_event_counts.get(kind, 0) + count
             diff = np.zeros((real, len(names), 2), bool)
             shared = [position[n] for n in base_names]
             diff[:, shared] = (digests[:, shared] != base['digests']).any(-1)
@@ -2060,13 +2160,19 @@ def patched_pass(args, *, step_override=None, prepared=None):
                 faint_set = set(lanes_list)
             for lane in range(real):
                 counts['lane_steps'] += 1
-                if done[lane]:counts['done_skipped'] += 1;continue
+                encoder_lane = None if encoder_witness is None else encoder_witness['lanes'][lane]
+                encoder_errors = [] if encoder_lane is None else encoder_lane['errors']
+                if done[lane] and not encoder_errors:counts['done_skipped'] += 1;continue
                 entries = set()
                 for i in np.flatnonzero(diff[lane].any(-1)):
                     leaf = names[i]
                     if side_axis[leaf]:entries |= {(leaf, s) for s in (0, 1) if diff[lane, i, s]}
                     else:entries.add((leaf, None))
                 changed = sorted({leaf for leaf, _ in entries})
+                encoder_explained, encoder_forced = [], []
+                if encoder_lane is not None:
+                    entries, encoder_explained, encoder_forced = encoder_rule(entries, encoder_lane)
+                    counts['encoder_explained'] += len(encoder_explained)
                 effects = {k: [s for s in (0, 1) if v[lane, s]] for k, v in involved.items() if v[lane].any()}
                 # WH: White Herb stays involved only where this tree recorded a valid use (and no malformed call); Facade only
                 # for a side whose own Facade line ran under par/brn/psn/tox (post-state witnesses, never the predicate alone).
@@ -2247,7 +2353,17 @@ def patched_pass(args, *, step_override=None, prepared=None):
                 # WH: a malformed White Herb call (use without a valid restore, or a change without use) is unexpected.
                 if changed and wh_lane is not None and bool(wh_lane['bad']):
                     unexpected = unexpected + [('wh_evidence', None)];rule_ok = False;counts['wh_bad'] += 1
-                kind = classify(changed, bool(effects), rule_ok, unexpected)
+                if encoder_forced or encoder_errors:
+                    # Forced after every ordinary rule, KO allowance and waiver.
+                    # A bad full-array witness fails even when changed is empty.
+                    forced = set(encoder_forced)
+                    if encoder_errors:forced.add(('encoder_evidence', None))
+                    unexpected += [e for e in sorted(forced, key=str) if e not in unexpected]
+                    waived = [e for e in waived if e not in forced]
+                    by_ko = [e for e in by_ko if e not in forced]
+                    kind = 'unexpected';rule_ok = False;counts['encoder_failed_lanes'] += 1
+                else:
+                    kind = classify(changed, bool(effects), rule_ok, unexpected)
                 if kind == 'unchanged':
                     counts['unchanged'] += 1
                     for e in effects:by_effect[e]['involved_unchanged'] += 1
@@ -2287,6 +2403,9 @@ def patched_pass(args, *, step_override=None, prepared=None):
                     m2_wrong_mon=[f'{l}@{side}' for l, side in m2_wrong],
                     m2_forced=[f'{l}@{side}' for l, side in m2_forced],
                     wh_rule=[f'{l}@{side}' for l, side in wh_explained],
+                    encoder_rule=[f'{l}@{side}' for l, side in encoder_explained],
+                    encoder_forced=[f"{l}@{'glob' if side is None else side}" for l, side in encoder_forced],
+                    encoder_errors=encoder_errors,
                     unexpected=[f"{l}@{'glob' if s is None else s}" for l, s in unexpected],
                     ko_consequences=[f"{l}@{'glob' if s is None else s}" for l, s in by_ko],
                     waived=[f"{l}@{'glob' if s is None else s}" for l, s in waived])) + '\n')
@@ -2304,6 +2423,9 @@ def patched_pass(args, *, step_override=None, prepared=None):
         migrated_new_inputs=new_inputs, new_outputs=new_outputs, public_order_rule=public_order_rule, link_rule=link_rule,
         effect_rule=effect_rule, residual_rule=residual_rule,
         faint_clear_rule=bool(args.faint_clear), clear_volatile_rule=clear_volatile, m1_rules=m1_rules, m2_rules=m2_rules, wh_rules=wh_rules,
+        encoder_rule=encoder_rules, encoder_witness_version=ENCODER_WITNESS_VERSION if encoder_rules else None,
+        encoder_sources=stepper.encoder_source_identity if encoder_rules else None,
+        encoder_event_counts=encoder_event_counts,
         witness_leaves=witness_leaves, base_source_dirty=manifest.get('source_dirty'), base_dirty_paths=manifest.get('dirty_paths'),
         base_harness_sha256=manifest.get('harness_sha256'), harness_sha256=hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
         waive=list(args.waive or ()), counts=counts, by_effect=by_effect,
