@@ -66,7 +66,7 @@ CITATION_ANCHORS = {
     'gpu_engine/phase_d_live_worlds.py:278-279': 'PUBLIC_TRANSFORM_NOT_MATERIALIZED',
     'gpu_engine/phase_d_live_worlds.py:344-345': "'perish1'",
     'gpu_engine/phase_d_live_worlds.py:355-356': 'OWN_VOLATILE_OR_LATENT_CLOCK_UNAVAILABLE',
-    'gpu_engine/phase_d_live_worlds.py:362': 'DESTINY_BOND',
+    'gpu_engine/phase_d_live_worlds.py:364': 'DESTINY_BOND',
     'gpu_engine/phase_d_protocol_constructor.py:175': 'load_gen3_randbat_source_cached',
     'gpu_engine/phase_d_protocol_world.py:130-132': '^PUBLIC_ITEM_SWAP_NOT_SUPPORTED',
     'gpu_engine/phase_d_protocol_world.py:201-219': '^_defer_yawn',
@@ -128,8 +128,8 @@ CITATION_ANCHORS = {
     'gpu_engine/transition.py:875-880': '^_recharge_turn',
     'gpu_engine/transition.py:886-887': 'loafing=table.entry.truant',
     'gpu_engine/transition.py:887': 'loafing=table.entry.truant',
-    'gpu_engine/v5_hypothetical_state.py:119': 'DESTINY_BOND',
-    'gpu_engine/v5_hypothetical_state.py:121': 'perish_counter',
+    'gpu_engine/v5_hypothetical_state.py:121': 'DESTINY_BOND',
+    'gpu_engine/v5_hypothetical_state.py:124': 'perish_counter',
 }
 CITATION = re.compile(r'((?:gpu_engine/)?[\w-]+\.(?:py|cjs)):(\d+)(?:-(\d+))?')
 CITATION_TAIL = re.compile(r'(?:,\s*|\s+and\s+)(\d+)(?:-(\d+))?(?![\w.-])')
