@@ -209,6 +209,12 @@ for _step in ('initial', 0, 1, 2, 3, 4):
 for _step in (3, 4):
     for _field in ('1:0:borrowed_ability', '1:0:shown_ability'):
         ALLOWLIST[('wonderguard_trace', 'base', _step, _field)] = _TRACE_TRACER
+# Approved extension of the same Trace B2 bug: retire these ability-display pins when Trace is fixed.
+# Engine state remains exact; no physics, gender or volatile fields are allowlisted.
+for _step in ('initial', 0, 1, 2, 3, 4):
+    ALLOWLIST[('cutecharm_trace', 'base', _step, '1:0:original_ability')] = _TRACE_TRACER
+for _field in ('1:0:borrowed_ability', '1:0:shown_ability'):
+    ALLOWLIST[('cutecharm_trace', 'base', 2, _field)] = _TRACE_TRACER
 # Damage modifiers: the same OPEN BUG in plusminus_trace, whose Gardevoir traces Minun's Minus at entry (|-ability|p1a:
 # Gardevoir|Minus|[from] ability: Trace|[of] p2a: Minun) and stays in: only the tracer's original ability differs.
 for _case in ('roll=0', 'roll=5', 'roll=10', 'roll=15'):

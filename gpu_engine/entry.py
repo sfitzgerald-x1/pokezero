@@ -67,6 +67,8 @@ def depart(state,side,table,*,eligible):
     Baton copies its supported fields before calling this. This does not run
     BeforeSwitchOut/Pursuit, which does not apply to a drag or direct Baton.
     """
+    from . import infatuation
+    state=infatuation.source_departed(state,side,eligible=eligible)
     rows=jnp.arange(state.hp.shape[0]);active=state.active[rows,side]
     hp=state.hp[rows,side,active];status=state.status[rows,side,active]
     cure=hp<=0
