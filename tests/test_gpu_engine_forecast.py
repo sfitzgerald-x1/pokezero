@@ -105,10 +105,8 @@ class ForecastUpdateTests(unittest.TestCase):
         self.assertEqual(changed.tolist(), [[False, False]] * 3)
 
     def test_transformed_holder_is_inert_when_the_state_carries_the_flag(self):
-        from typing import NamedTuple
         s = self.state([(('castform', 'forecast', 50), ('ditto', 'static', 50), RAIN)] * 2)
-        Flagged = NamedTuple('Flagged', [(name, object) for name in s._fields] + [('transformed', object)])
-        flagged = Flagged(*s, self.j.asarray([[True, False], [False, False]]))
+        flagged = s._replace(transformed=s.transformed.at[0, 0].set(True))
         out, changed = self.f.update(flagged, self.table, self.wt, eligible=self.j.ones(2, bool))
         self.assertEqual(changed.tolist(), [[False, False], [True, False]])
 
