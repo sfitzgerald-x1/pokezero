@@ -34,6 +34,7 @@ SLEEP_CLAUSE_FORMAT='gen3customgame@@@sleepclausemod'
 FORMATS={SLEEP_CLAUSE_FORMAT:'gen3customgame@@@sleepclausemod; Sleep Clause Mod, no Freeze Clause',
     'gen3customgame':'gen3customgame; no Sleep/Freeze Clause'}
 TAPE_SCHEMA='pokezero.gpu_chance_tape.v4'
+PHAZING_SALT=271828
 # The appended ChanceInputs.effect stream (design 2.1), derived here independently of
 # transition.effect_chance so a drift between the two shows as a divergence. Fidelity R
 # consumes [s][0..1] (Bonemerang's second hit); the residual roles arrive with M2.
@@ -93,8 +94,8 @@ def chance_tape(state,game,index,saved_effect=None):
     draws=jax.vmap(lambda key:jax.random.randint(key,(2,12),0,j.array([2,100,100,100,16,16,100,4,8,2,2,2],j.int32)))(split)
     secondary=jax.vmap(lambda key:jax.random.randint(jax.random.fold_in(key,1618033),(2,),0,100))(split)
     sleep=jax.vmap(lambda key:jax.random.randint(jax.random.fold_in(key,1414213),(2,),0,60))(split)
+    phazing=jax.vmap(lambda key:jax.random.randint(jax.random.fold_in(key,PHAZING_SALT),(2,),0,60))(split)
     effect=np.asarray(effect_draws(split))[0].tolist()
-    phazing=jax.vmap(lambda key:jax.random.randint(jax.random.fold_in(key,271828),(2,),0,60))(split)
     entry=jax.vmap(lambda key,count:jax.random.randint(jax.random.fold_in(
         key,j.uint32(982451653)+count.astype(j.uint32)),(2,),0,2))(state.keys,state.replacement_count)
     resuming=bool(np.asarray(state.pending_residual)[0])

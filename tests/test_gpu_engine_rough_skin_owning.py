@@ -116,7 +116,8 @@ class RoughSkinTests(unittest.TestCase):
         move=j.full(b,self.metadata['vocabulary']['moves'].index('firepunch'),j.int32)
         move=move.at[5].set(self.metadata['vocabulary']['moves'].index('surf'))
         eligible=j.ones(b,bool).at[4].set(False)
-        run=jax.jit(lambda s,r:secondary.apply_contact(s,j.zeros(b,j.int32),move,r,self.table.secondary,eligible=eligible))
+        run=jax.jit(lambda s,r:secondary.apply_contact(s,j.zeros(b,j.int32),move,r,self.table.secondary,eligible=eligible,
+            sleep_roll=j.zeros(b,j.int32)))
         out=run(state,j.zeros(b,j.int32));other=run(state,j.full(b,59,j.int32))
         self.assertEqual(out.hp[:,0,0].tolist(),[189,0,0,189,201,201,189,189])
         self.same(out,other);np.testing.assert_array_equal(state.keys,out.keys)
@@ -158,7 +159,7 @@ class RoughSkinTests(unittest.TestCase):
             max_hp=state.max_hp.at[rows,actor,physical].set(201).at[rows,foe,target].set(100),
             ability=state.ability.at[rows,foe,target].set(self.metadata['vocabulary']['abilities'].index('roughskin')))
         _,out=secondary.apply_contact(state,actor,move,z,self.table.secondary,eligible=yes,_status_trace=tape,
-            _rough_skin_context=context,_rough_skin_capture=captured)
+            _rough_skin_context=context,_rough_skin_capture=captured,sleep_roll=j.zeros(b,j.int32))
         self.assertEqual(out.execution.ledger.refusal.tolist(),[0]*b)
         self.assertEqual(out.count.tolist(),[3]*b)
         self.assertEqual(rs.owned(out,2,cursor).tolist(),[True]*b)
@@ -168,7 +169,7 @@ class RoughSkinTests(unittest.TestCase):
         self.assertFalse(bool(rs.owned(forged,2,cursor)[1]))
         old=tape._replace(refusal=tape.refusal|64)
         _,dirty=secondary.apply_contact(state,actor,move,z,self.table.secondary,eligible=yes,_status_trace=old,
-            _rough_skin_context=context,_rough_skin_capture=captured)
+            _rough_skin_context=context,_rough_skin_capture=captured,sleep_roll=j.zeros(b,j.int32))
         self.assertTrue(bool(j.all((dirty.refusal&64)!=0)))
         self.assertTrue(bool(j.all((dirty.execution.ledger.refusal&ex.UNKNOWN_SITE)!=0)))
         adapter=self.runtime['public'];kw=v4_encoder.wire_kwargs(self.catalog)

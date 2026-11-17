@@ -17,6 +17,9 @@ const {Battle}=require(path.join(root,'dist/sim/battle.js'));
 const {PRNG}=require(path.join(root,'dist/sim/prng.js'));
 let tape=null;const events=[];
 require(hooks).install(Battle,PRNG,()=>tape,e=>events.push(e),()=>null,path.join(root,'dist/sim/pokemon.js'));
+// Tag an error with the eachEvent it escaped (innermost first), so a test can tell which tie stayed unresolved.
+const eachEvent=Battle.prototype.eachEvent;
+Battle.prototype.eachEvent=function(id,...rest){try{return eachEvent.call(this,id,...rest);}catch(e){if(e&&e.eachEvent===undefined)e.eachEvent=id;throw e;}};
 const row=()=>[0,99,99,0,15,0,0,0,0,0,0,0];
 function T(nonce,o={},schema='v2'){
   const t={schema:'pokezero.gpu_chance_tape.'+schema,nonce,draws:[row(),row()],secondary:[99,99],sleep_talk:[0,0]};
@@ -31,9 +34,9 @@ function battle(p1,p2){
   b.setPlayer('p1',{name:'p1',team:p1});b.setPlayer('p2',{name:'p2',team:p2});return b;
 }
 function turn(b,t,c1='move 1',c2='move 1'){
-  tape=t;events.length=0;let error=null;
-  try{b.makeChoices(c1,c2);}catch(e){error=e.message;}
-  tape=null;return {error,events:events.slice(),log:b.log.slice(-30)};
+  tape=t;events.length=0;let error=null,error_event=null;
+  try{b.makeChoices(c1,c2);}catch(e){error=e.message;error_event=e.eachEvent??null;}
+  tape=null;return {error,error_event,events:events.slice(),log:b.log.slice(-30)};
 }
 const out={};
 {const b=battle([mon('Machamp',['superpower'],'Guts')],[mon('Snorlax',['splash'],'Thick Fat')]);
@@ -80,9 +83,25 @@ for(const [name,t] of Object.entries({
 })){const b=battle([mon('Snorlax',['splash'],'Thick Fat')],[mon('Blissey',['splash'],'Natural Cure')]);out.invalid[name]=turn(b,t).error;}
 {const b=battle([mon('Snorlax',['splash'],'Thick Fat')],[mon('Blissey',['splash'],'Natural Cure')]);out.v1_ok=turn(b,T('ok',{},'v1')).error;}
 // M2: an equal-Speed turn (eachEvent BeforeTurn/Update Pokemon-order ties with no handler are inert), the same with an
-// Update handler (Insomnia's onUpdate: unresolved), and the Yawn residual pair (inert).
+// Update handler (Insomnia's own-holder cure, and Lum Berry's reviewed v4 callback), and the Yawn residual pair (inert).
 {const b=battle([mon('Snorlax',['splash'],'Thick Fat')],[mon('Snorlax',['splash'],'Thick Fat')]);out.eachevent=turn(b,T('ee'));}
 {const b=battle([mon('Hypno',['splash'],'Insomnia')],[mon('Hypno',['splash'],'Insomnia')]);out.eachevent_handler=turn(b,T('eh'));}
+{const lum=()=>({...mon('Hypno',['splash'],'Insomnia'),item:'Lum Berry'});out.eachevent_item=turn(battle([lum()],[lum()]),T('ei'));}
+// Reviewed mixed Update handlers commute. Synthetic residual callbacks remain
+// unresolved even when their labels name a reviewed ability.
+{const b=battle([mon('Hypno',['splash'],'Insomnia')],[{...mon('Hypno',['splash'],'Inner Focus'),item:'Lum Berry'}]);
+ out.eachevent_mixed=turn(b,T('em'));}
+function abilityTie(ids,same=false){
+  const b=battle([mon('Ninjask',['splash'],'Speed Boost')],[mon('Ninjask',['splash'],'Speed Boost')]);
+  const holders=[b.p1.active[0],same?b.p1.active[0]:b.p2.active[0]];
+  const list=ids.map((id,k)=>({effect:{id,effectType:'Ability'},effectHolder:holders[k],order:26,priority:0,speed:200,subOrder:1,callback(){}}));
+  tape=T('at:'+ids.join(',')+(same?':same':''));events.length=0;let error=null;
+  try{b.speedSort(list);}catch(e){error=e.message;}
+  tape=null;return {error,events:events.slice()};
+}
+out.abilitytie=abilityTie(['speedboost','speedboost']);
+out.abilitytie_mixed=abilityTie(['speedboost','truant']);
+out.abilitytie_same=abilityTie(['speedboost','speedboost'],true);
 out.yawntie=pairTie('yawn',{});
 process.stdout.write(JSON.stringify(out));
 '''
@@ -157,15 +176,26 @@ class ChanceHooksV2Tests(unittest.TestCase):
         self.assertEqual(len(ties), 1);self.assertEqual(sorted(ties[0]['effects']), ['protect', 'stall'])
 
     def test_equal_speed_each_event_and_yawn_pair_ties(self):
-        """M2: an eachEvent Pokemon-order tie is inert only when neither Pokemon has a handler for that event (both runEvent
-        calls do nothing); the Yawn residual pair is inert (each countdown and sleep attempt touch only their holder)."""
+        """Original own-holder Update callbacks commute, including the reviewed v4 berries."""
         r = self.out['eachevent'];self.assertResolved(r)
         ties = [e for e in r['events'] if e['kind'] == 'INERT_EACH_EVENT_TIE']
         self.assertTrue(ties);self.assertTrue({e['event'] for e in ties} <= {'BeforeTurn', 'Update'})
         self.assertEqual(coupled(r), [('move_tie', 0, 0)])
-        self.assertResolved(self.out['eachevent_handler'])  # v4: reviewed own-holder Update callback
+        for name in ('eachevent_handler', 'eachevent_item', 'eachevent_mixed'):
+            self.assertResolved(self.out[name])  # v4 reviewed own-holder cures, including berries
         r = self.out['yawntie'];self.assertResolved(r);self.assertEqual(coupled(r), [])
         self.assertEqual([e['effects'] for e in r['events'] if e['kind'] == 'INERT_RESIDUAL_TIE'], [['yawn', 'yawn']])
+
+    def test_transform_inert_ties_cover_own_holder_handlers_only(self):
+        """Synthetic or wrong-context residual handlers must not inherit an inert proof.
+
+        Real Residual callbacks and both execution orders are covered by chance_hooks_v4.cjs.
+        """
+        for name in ('abilitytie', 'abilitytie_mixed', 'abilitytie_same'):
+            with self.subTest(name=name):
+                r = self.out[name]
+                self.assertIn('SPIKE_UNRESOLVED:TIE_ORDER', r['error'])
+                self.assertFalse([e for e in r['events'] if e['kind'] == 'INERT_RESIDUAL_TIE'])
 
     def test_tape_schema_validation(self):
         for name, error in self.out['invalid'].items():

@@ -1,0 +1,211 @@
+{
+ "schema": "pokezero.effect_probe.scenario.v1",
+ "move": "pinch_swarm",
+ "note": "Tier D PINCH (Swarm: gen4 onBasePowerPriority 2, chainModify 1.5 while hp <= maxhp/3, inherited by Gen 3). Beedrill (L93, 272 HP) takes two level-91 Seismic Tosses to exactly floor(272/3) = 90 and its hiddenpowerbug is boosted; Heracross (L77, 250 HP) takes two level-83 ones to 84, one above floor(250/3), and its megahorn is not.",
+ "teams": [
+  [
+   {
+    "species": "Beedrill",
+    "moves": [
+     "hiddenpowerbug",
+     "splash",
+     "protect",
+     "rest"
+    ],
+    "ability": "Swarm",
+    "item": "",
+    "level": 93,
+    "ivs": {
+     "hp": 31,
+     "atk": 30,
+     "def": 31,
+     "spe": 30,
+     "spa": 31,
+     "spd": 30
+    }
+   },
+   {
+    "species": "Heracross",
+    "moves": [
+     "megahorn",
+     "splash",
+     "protect",
+     "rest"
+    ],
+    "ability": "Swarm",
+    "item": "",
+    "level": 77
+   },
+   {
+    "species": "Starmie",
+    "moves": [
+     "splash",
+     "surf",
+     "recover",
+     "protect"
+    ],
+    "ability": "Natural Cure",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Skarmory",
+    "moves": [
+     "splash",
+     "protect",
+     "spikes",
+     "drillpeck"
+    ],
+    "ability": "Keen Eye",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Metagross",
+    "moves": [
+     "splash",
+     "protect",
+     "meteormash",
+     "earthquake"
+    ],
+    "ability": "Clear Body",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Celebi",
+    "moves": [
+     "splash",
+     "protect",
+     "psychic",
+     "recover"
+    ],
+    "ability": "Natural Cure",
+    "item": "Leftovers"
+   }
+  ],
+  [
+   {
+    "species": "Skarmory",
+    "moves": [
+     "seismictoss",
+     "splash",
+     "protect",
+     "rest"
+    ],
+    "ability": "Keen Eye",
+    "item": "",
+    "level": 91
+   },
+   {
+    "species": "Forretress",
+    "moves": [
+     "seismictoss",
+     "splash",
+     "protect",
+     "rest"
+    ],
+    "ability": "Sturdy",
+    "item": "",
+    "level": 83
+   },
+   {
+    "species": "Snorlax",
+    "moves": [
+     "splash",
+     "rest",
+     "protect",
+     "bodyslam"
+    ],
+    "ability": "Thick Fat",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Blissey",
+    "moves": [
+     "splash",
+     "softboiled",
+     "protect",
+     "seismictoss"
+    ],
+    "ability": "Natural Cure",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Gengar",
+    "moves": [
+     "splash",
+     "protect",
+     "thunderbolt",
+     "icepunch"
+    ],
+    "ability": "Levitate",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Tyranitar",
+    "moves": [
+     "splash",
+     "protect",
+     "rockslide",
+     "earthquake"
+    ],
+    "ability": "Sand Stream",
+    "item": "Leftovers"
+   }
+  ]
+ ],
+ "script": [
+  [
+   "move 2",
+   "move 1"
+  ],
+  [
+   "move 2",
+   "move 1"
+  ],
+  [
+   "move 1",
+   "move 2"
+  ],
+  [
+   "switch 2",
+   "switch 2"
+  ],
+  [
+   "move 2",
+   "move 1"
+  ],
+  [
+   "move 2",
+   "move 1"
+  ],
+  [
+   "move 1",
+   "move 2"
+  ]
+ ],
+ "axes": [
+  {
+   "name": "roll",
+   "field": "draws.0.5",
+   "steps": [
+    2,
+    6
+   ],
+   "values": [
+    0,
+    15
+   ]
+  }
+ ],
+ "expect": {
+  "exact": true
+ },
+ "require_fields": [
+  "perish_counter",
+  "yawn_counter",
+  "partial_trap_counter",
+  "partial_trap_source",
+  "item_knocked",
+  "destiny_bond",
+  "effect"
+ ]
+}

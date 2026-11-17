@@ -223,6 +223,19 @@ for(const field of ['phazing','entry_ties','resuming']){
   for(const key of ['phazing','entry_ties','resuming'])if(key!==field)delete t[key];
   assert.equal(require(hooks).validTape(t),false);checks++;
 }
+// Every supported schema keeps its exact appended-field contract.
+for(const version of [1,2,3,4]){
+  const t=T();t.schema='pokezero.gpu_chance_tape.v'+version;
+  if(version===1)delete t.effect;
+  if(version<3)delete t.phazing;
+  if(version<4){delete t.entry_ties;delete t.resuming;}
+  assert.equal(require(hooks).validTape(t),true);checks++;
+  for(const field of ['effect','phazing','entry_ties','resuming']){
+    const bad={...t};
+    if(field in t)delete bad[field];else bad[field]=field==='resuming'?false:[0,0];
+    assert.equal(require(hooks).validTape(bad),false);checks++;
+  }
+}
 for(const side of [0,1])for(const ko of [false,true])for(let roll=0;roll<60;roll++){
   const teams=[[mon()],[mon('Pikachu','Static')]];if(side)teams.reverse();
   const b=battle(...teams),t=T();t.phazing[side]=roll;
