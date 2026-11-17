@@ -9,6 +9,8 @@ import subprocess
 import sys
 import unittest
 
+from tests._source_pins import PIN_COUNTS
+
 ROOT=Path(__file__).resolve().parents[1]
 PARENT='5ca765f559cf67993f8bccb6b4a25962a9d01a2d'
 MODULES=('gpu_engine.benchmark_retained_games','gpu_engine.engine_lifecycle_event_device',
@@ -49,7 +51,9 @@ class EntrySpikesImportOrderTests(unittest.TestCase):
         for name,digest in pins.items():self.assertEqual(hashlib.sha256((gpu/name).read_bytes()).hexdigest(),digest,name)
         value=assignment(gpu/'chance_consumers.py','DOMAIN_MODULES')
         modules=value.args[0].func.value.value.split()
-        self.assertEqual(len(modules),26);self.assertIn('residual_order',modules);self.assertNotIn('engine_entry_spikes_callbacks',modules)
+        self.assertEqual(len(modules),PIN_COUNTS[('chance_consumers_pins.py','DOMAIN_PINS')])
+        self.assertIn('residual_order',modules);self.assertNotIn('engine_entry_spikes_callbacks',modules)
+        self.assertIn('transform',modules)
         # the per-module domain pins (they replaced one DOMAIN_SHA256 / KERNEL_SHA256 over these modules): every module, in order
         actual=[(n+'.py',hashlib.sha256((gpu/(n+'.py')).read_bytes()).hexdigest())for n in modules]
         for file,name in (('chance_consumers_pins.py','DOMAIN_PINS'),('ordinary_law.py','DOMAIN_PINS'),('conditional_law.py','KERNEL_PINS')):
