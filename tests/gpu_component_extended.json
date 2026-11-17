@@ -1,6 +1,6 @@
 {
  "schema": "gpu-component-extended.v1",
- "rule": "extended: modules under the isolated heavy thresholds (wall at most 10 min, peak at most 10.5 GiB; one process per module on 4 CPUs with the CI runtime) that run on push to integration and on demand, not per pull request. They are the modules whose setup refuses until the pending source-pin refresh, ranked by isolated wall at refreshed pins and taken in rank order until the per-pull-request light tier's projected mean shard wall after that refresh is at most 51.8 min (2026-11-12's 36.8 plus 15; the cap is absolute). Ranks 1-25 were measured at 9640bbe1 and projected at the conservative hosted/isolated ratio 1.43. Rank 26 is outside that ranking and never returns by it: the effect probe's device-mode subset, which runs step_with_public eagerly (minutes per step) because its jitted CPU compile peaks far above the light bar. Ranks 27-31 continue the ranking over the converted frame-witness modules, re-measured at 0c2d2e5a, when the light tier's projection rose to 54.1 min at ratio 1.26 (51.4 after the move); modules with low-optimization cases are skipped, because this tier's command carries none. After the first hosted measurement past the refresh, the next ranks leave the light tier while its measured mean exceeds 51.8 min, and the highest ranks, rank 26 excepted, return while it stays within the cap.",
+ "rule": "extended: the original ranks select modules under the isolated heavy thresholds (wall at most 10 min, peak at most 10.5 GiB; one process per module on 4 CPUs with the CI runtime) that run on push to integration and on demand, not per pull request. They are the modules whose setup refuses until the pending source-pin refresh, ranked by isolated wall at refreshed pins and taken in rank order until the per-pull-request light tier's projected mean shard wall after that refresh is at most 51.8 min (2026-11-12's 36.8 plus 15; the cap is absolute). Ranks 1-25 were measured at 9640bbe1 and projected at the conservative hosted/isolated ratio 1.43. Rank 26 is outside that ranking and never returns by it: the effect probe's device-mode subset, which runs step_with_public eagerly (minutes per step) because its jitted CPU compile peaks far above the light bar. Ranks 27-31 continue the ranking over the converted frame-witness modules, re-measured at 0c2d2e5a, when the light tier's projection rose to 54.1 min at ratio 1.26 (51.4 after the move); modules with low-optimization cases are skipped, because this tier's command carries none. After the first hosted measurement past the refresh, the next ranks leave the light tier while its measured mean exceeds 51.8 min, and the highest ranks, rank 26 excepted, return while it stays within the cap. Ranks 32-37 rebalance the whole light tier by descending hosted module execution wall at 2f4973ea (run 44127237211), retaining light coverage of production files changed in the prior week. Their hosted measurements are recorded separately from isolated measurements; all containing shards passed the unchanged memory gate. Six modules are required for both stacked projections to be at most 51.0 min: 53.622917 to 49.274030 at 2f4973ea and 54.643750 to 50.500293 at c7a99167. With only five, the latter is 51.087116. Extended coverage still runs on every integration push.",
  "modules": [
   {
    "module": "test_gpu_engine_baton_paralysis_input",
@@ -41,6 +41,18 @@
    "isolated_wall_min": 4.0,
    "isolated_peak_gib": 6.15,
    "isolated_measured_at": "9640bbe1 with every pin refreshed (isolated: one process per module on 4 CPUs with the CI runtime)"
+  },
+  {
+   "module": "test_gpu_engine_constructor_worlds_carry",
+   "reason": "pull-request wall budget",
+   "rank": 32,
+   "hosted_wall_min": 12.880117,
+   "hosted_run_id": 44127237211,
+   "hosted_job_id": 134194692319,
+   "hosted_head": "2f4973eaa2a6bc2a75dba0087e5795f74d62716b",
+   "hosted_shard_peak_gib": 8.142956,
+   "hosted_shard_bar_gib": 11.70936,
+   "measurement_scope": "Unittest module execution wall, excluding discovery/process setup; peak and bar cover the complete containing shard."
   },
   {
    "module": "test_gpu_engine_earthquake_levitate_input",
@@ -131,6 +143,18 @@
    "isolated_measured_at": "9640bbe1 with every pin refreshed (isolated: one process per module on 4 CPUs with the CI runtime)"
   },
   {
+   "module": "test_gpu_engine_public_formechange_stream",
+   "reason": "pull-request wall budget",
+   "rank": 34,
+   "hosted_wall_min": 11.8998,
+   "hosted_run_id": 44127237211,
+   "hosted_job_id": 134194692798,
+   "hosted_head": "2f4973eaa2a6bc2a75dba0087e5795f74d62716b",
+   "hosted_shard_peak_gib": 8.394531,
+   "hosted_shard_bar_gib": 11.706333,
+   "measurement_scope": "Unittest module execution wall, excluding discovery/process setup; peak and bar cover the complete containing shard."
+  },
+  {
    "module": "test_gpu_engine_rest_success_input",
    "reason": "pull-request wall budget",
    "rank": 8,
@@ -153,6 +177,42 @@
    "isolated_wall_min": 7.5,
    "isolated_peak_gib": 8.27,
    "isolated_measured_at": "0c2d2e5a with every pin refreshed (CI process-block path: one fresh process per block on 4 CPUs with the CI runtime; peak includes the parent)"
+  },
+  {
+   "module": "test_gpu_engine_secondary_status_frame_runtime",
+   "reason": "pull-request wall budget",
+   "rank": 36,
+   "hosted_wall_min": 11.082383,
+   "hosted_run_id": 44127237211,
+   "hosted_job_id": 134194693033,
+   "hosted_head": "2f4973eaa2a6bc2a75dba0087e5795f74d62716b",
+   "hosted_shard_peak_gib": 8.964592,
+   "hosted_shard_bar_gib": 11.706333,
+   "measurement_scope": "Unittest module execution wall, excluding discovery/process setup; peak and bar cover the complete containing shard."
+  },
+  {
+   "module": "test_gpu_engine_seismic_toss_components",
+   "reason": "pull-request wall budget",
+   "rank": 33,
+   "hosted_wall_min": 12.691767,
+   "hosted_run_id": 44127237211,
+   "hosted_job_id": 134194693075,
+   "hosted_head": "2f4973eaa2a6bc2a75dba0087e5795f74d62716b",
+   "hosted_shard_peak_gib": 9.04385,
+   "hosted_shard_bar_gib": 11.70633,
+   "measurement_scope": "Unittest module execution wall, excluding discovery/process setup; peak and bar cover the complete containing shard."
+  },
+  {
+   "module": "test_gpu_engine_self_boost_input_union",
+   "reason": "pull-request wall budget",
+   "rank": 35,
+   "hosted_wall_min": 11.501733,
+   "hosted_run_id": 44127237211,
+   "hosted_job_id": 134194693076,
+   "hosted_head": "2f4973eaa2a6bc2a75dba0087e5795f74d62716b",
+   "hosted_shard_peak_gib": 7.723053,
+   "hosted_shard_bar_gib": 11.706333,
+   "measurement_scope": "Unittest module execution wall, excluding discovery/process setup; peak and bar cover the complete containing shard."
   },
   {
    "module": "test_gpu_engine_self_destruct_conditional_abilities",
@@ -233,6 +293,18 @@
    "isolated_wall_min": 6.4,
    "isolated_peak_gib": 7.96,
    "isolated_measured_at": "0c2d2e5a with every pin refreshed (CI process-block path: one fresh process per block on 4 CPUs with the CI runtime; peak includes the parent)"
+  },
+  {
+   "module": "test_gpu_engine_weather_profile_runtime",
+   "reason": "pull-request wall budget",
+   "rank": 37,
+   "hosted_wall_min": 9.526383,
+   "hosted_run_id": 44127237211,
+   "hosted_job_id": 134194693001,
+   "hosted_head": "2f4973eaa2a6bc2a75dba0087e5795f74d62716b",
+   "hosted_shard_peak_gib": 8.671528,
+   "hosted_shard_bar_gib": 11.706333,
+   "measurement_scope": "Unittest module execution wall, excluding discovery/process setup; peak and bar cover the complete containing shard."
   },
   {
    "module": "test_gpu_engine_will_o_wisp_miss_input",
