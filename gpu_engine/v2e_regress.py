@@ -949,7 +949,7 @@ def predicates(prs):
     return table
 
 
-def lane_verdict(changed, effects, side_axis, *, cascade=None, waive=(), cascade_accepted=None):
+def lane_verdict(changed, effects, side_axis, *, cascade=None, waive=(), cascade_accepted=None, effect_ok=None):
     """changed: {(leaf, side)} for side-axis leaves, {(leaf, None)} for side-less ones;
     effects: {effect: [actor sides]}; cascade: None, or dict(ko_sides=[2] bool (sides whose every tracker
     may follow a KO), mon_ok=callable(leaf, side) -> a KO_MON_LEAVES leaf differs only on that side's
@@ -958,10 +958,16 @@ def lane_verdict(changed, effects, side_axis, *, cascade=None, waive=(), cascade
     this tree's saved effect block equals the design derivation per side (state.effect_draws is accepted only there),
     optional retype_ok=callable(leaf, side) -> bool: that side's RETYPE_LEAVES differ from the base only at a Color Change
     holder that fainted this step here or (un)fainted relative to the base).
+    effect_ok: independent saved-block validation, including lanes without a cascade; false is never waived.
     cascade_accepted: an optional list that collects the entries only CASCADE_ALLOWED accepted (listed, so they stay visible).
     Returns (unexpected entries, waived entries, entries accepted only as KO consequences)."""
     unexpected, waived, by_ko = [], [], []
+    effect_ok = effect_ok if effect_ok is not None else (cascade or {}).get('effect_ok')
     for leaf, side in sorted(changed, key=lambda x: (x[0], -1 if x[1] is None else x[1])):
+        # Saved chance coordinates are a replay invariant, not an effect allowance.
+        # A failed derivation cannot be excused by ALL, a KO cascade, or a waiver.
+        if leaf == EFFECT_DRAWS and side is not None and effect_ok is not None and not bool(effect_ok[side]):
+            unexpected.append((leaf, side));continue
         ok = False
         for effect, actors in effects.items():
             rule = ALLOWED.get(effect, ALL)
@@ -2373,7 +2379,8 @@ def patched_pass(args, *, step_override=None, prepared=None):
                                         retype_ok=retype_ok)
                 by_cascade = []
                 unexpected, waived, by_ko = lane_verdict(entries, effects, side_axis, cascade=cascade_info, waive=args.waive or (),
-                    cascade_accepted=by_cascade) if changed_rest and effects else ([], [], [])
+                    cascade_accepted=by_cascade, effect_ok=None if result['effect_ok'] is None else
+                    np.asarray(result['effect_ok'])[lane]) if changed_rest and effects else ([], [], [])
                 m2_wrong = []
                 if changed_rest and m2_rules and any(e in effects for e in M2_EFFECTS):
                     # M2: an M2 effect's per-mon leaves may differ only at that side's pre- or post-step active.

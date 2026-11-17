@@ -107,6 +107,19 @@ def pre_arrays(L):
 
 @unittest.skipUnless(HAS_JAX, 'requires JAX')
 class DigestAndRuleTests(unittest.TestCase):
+    def test_invalid_saved_effect_blocks_override_full_allowances_and_waivers(self):
+        from gpu_engine.v2e_regress import lane_verdict, EFFECT_DRAWS
+        for effect in ('cutecharm','attract','infatuated'):
+            for side in (0,1):
+                for cascade in (None,dict(ko_sides=[True,True],mon_ok=lambda *_:True,families=('residual',))):
+                    with self.subTest(effect=effect,side=side,cascade=bool(cascade)):
+                        checks=[True,True];checks[side]=False
+                        changed={(EFFECT_DRAWS,side),('state.hp',1-side)}
+                        self.assertEqual(lane_verdict(changed,{effect:[0]},None,cascade=cascade,
+                            effect_ok=checks,waive=('.*',)),([(EFFECT_DRAWS,side)],[],[]))
+                        self.assertEqual(lane_verdict(changed,{effect:[0]},None,cascade=cascade,
+                            effect_ok=[True,True]),([],[],[]))
+
     def test_lane_digest_sees_every_single_element_change(self):
         import jax.numpy as j
         from gpu_engine.v2e_regress import lane_digest
@@ -737,9 +750,9 @@ class EffectAndResidualRuleTests(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertIn('state.effect_draws', json.loads((base / 'manifest.json').read_text())['output_names'])
 
-        def run(name, **kind):
+        def run(name, pr='A1', **kind):
             out = self.tmp / name
-            code = v2e_regress.patched_pass(args(out=out, base=str(base), pr='A1', faint_clear=False),
+            code = v2e_regress.patched_pass(args(out=out, base=str(base), pr=pr, faint_clear=False),
                 step_override=clocked(lambda s, a, t: saving(s, a, t, **kind), even), prepared=(self.context, self.new))
             return code, json.loads((out / 'report.json').read_text()), [json.loads(x) for x in (out / 'changed.jsonl').read_text().splitlines()]
         code, report, listing = run('effect-shift', shift=True)
@@ -755,6 +768,16 @@ class EffectAndResidualRuleTests(unittest.TestCase):
             code, report, _ = run('effect-shift-wrong-column-'+str(column),shift=True,wrong_column=column)
             self.assertEqual(code,1)
             self.assertEqual(set(report['by_effect']['curse']['unexpected_fields']),{'state.effect_draws@user','state.effect_draws@target'})
+
+        # Isolate each CC allowance from its predicate: involved, non-cascade lanes
+        # must still reject corruption in both an old coordinate and the new fifth one.
+        for effect in ('cutecharm','attract','infatuated'):
+            with mock.patch.dict(v2e_regress.PLUGINS,{'CC':{effect:lambda pre:np.ones((pre.lanes,2),bool)}}):
+                for column in (0,4):
+                    code,report,_=run('cc-corrupt-'+effect+'-'+str(column),pr='CC',wrong_column=column)
+                    self.assertEqual(code,1)
+                    self.assertEqual(set(report['by_effect'][effect]['unexpected_fields']),
+                        {'state.effect_draws@user','state.effect_draws@target'})
 
     def test_a_moved_ko_retypes_only_a_color_change_holder(self):
         """M1 GPU pass (shard 176 lane 1687: a Trick-given Choice Band KOs Kecleon in the action phase, so Color Change
