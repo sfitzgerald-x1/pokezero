@@ -81,7 +81,7 @@ class WispMissTests(unittest.TestCase):
   for filename in ('effects.py','secondary.py','state.py','mechanics.py','engine_retained_encoder_driver.py'):
    self.assertEqual(subprocess.check_output(['git','show','5379f638:gpu_engine/'+filename]),subprocess.check_output(['git','show',BASE+':gpu_engine/'+filename]))
    # effects.py, secondary.py and state.py are byte-certified against the reviewed SOURCE_PINS by transition_observer_wiring.
-   if filename not in ('effects.py','secondary.py','state.py'):self.assertEqual(Path('gpu_engine',filename).read_bytes(),subprocess.check_output(['git','show','b8092a85:gpu_engine/'+filename]))
+   if filename not in ('effects.py','secondary.py','state.py'):self.assertEqual(Path('gpu_engine',filename).read_bytes(),subprocess.check_output(['git','show',('233bf444:gpu_engine/' if filename=='mechanics.py' else 'b8092a85:gpu_engine/')+filename]))
   # No source capability means the named new route stays closed.
   tape,c,_=self.component();data=c.pending.context.data;plain=data.primary_plain_status._replace(wisp_miss=j.array(0,j.int32));context=c.pending.context._replace(data=data._replace(primary_plain_status=plain));bad=c._replace(pending=c.pending._replace(context=context));self.assertFalse(bool(cb.captured_matches(tape,bad).any()))
  def test_original_miss_writer_both_owners_join_and_atomic_rollback(self):

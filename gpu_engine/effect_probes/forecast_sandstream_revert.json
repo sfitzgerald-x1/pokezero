@@ -1,0 +1,169 @@
+{
+ "schema": "pokezero.effect_probe.scenario.v1",
+ "move": "forecast_sandstream_revert",
+ "note": "Forecast (data/abilities.ts forecast at f76228a1; gen3 flags {}): onStart and onWeatherChange take the forme of effectiveWeather() (rain Water, sun Fire, else Normal) for a non-transformed Castform; WeatherChange fires at setWeather/clearWeather (sim/field.ts) and at a Cloud Nine / Air Lock End (data/abilities.ts; gen4 removes their arrival event). Castform-Sunny (its Sunny Day) Fire Blasts Blissey (sun 1.5x, Fire STAB 1.5x); Tyranitar switches in (Sand Stream replaces the sun): Castform reverts (Normal) before its next Fire Blast (no sun, no STAB). Next turn its Return has Normal STAB and Tyranitar's Rock Slide is 1x; sand chips it.",
+ "teams": [
+  [
+   {
+    "species": "Castform",
+    "moves": [
+     "raindance",
+     "sunnyday",
+     "return",
+     "fireblast"
+    ],
+    "ability": "Forecast",
+    "item": ""
+   },
+   {
+    "species": "Starmie",
+    "moves": [
+     "splash",
+     "surf",
+     "recover",
+     "protect"
+    ],
+    "ability": "Illuminate",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Blissey",
+    "moves": [
+     "splash",
+     "softboiled",
+     "protect",
+     "seismictoss"
+    ],
+    "ability": "Serene Grace",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Skarmory",
+    "moves": [
+     "splash",
+     "protect",
+     "spikes",
+     "peck"
+    ],
+    "ability": "Keen Eye",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Swampert",
+    "moves": [
+     "splash",
+     "protect",
+     "surf",
+     "earthquake"
+    ],
+    "ability": "Torrent",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Metagross",
+    "moves": [
+     "splash",
+     "protect",
+     "meteormash",
+     "earthquake"
+    ],
+    "ability": "Clear Body",
+    "item": "Leftovers"
+   }
+  ],
+  [
+   {
+    "species": "Blissey",
+    "moves": [
+     "splash",
+     "softboiled",
+     "protect",
+     "seismictoss"
+    ],
+    "ability": "Serene Grace",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Tyranitar",
+    "moves": [
+     "rockslide",
+     "earthquake",
+     "fireblast",
+     "icebeam"
+    ],
+    "ability": "Sand Stream",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Starmie",
+    "moves": [
+     "splash",
+     "surf",
+     "recover",
+     "protect"
+    ],
+    "ability": "Illuminate",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Skarmory",
+    "moves": [
+     "splash",
+     "protect",
+     "spikes",
+     "peck"
+    ],
+    "ability": "Keen Eye",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Swampert",
+    "moves": [
+     "splash",
+     "protect",
+     "surf",
+     "earthquake"
+    ],
+    "ability": "Torrent",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Metagross",
+    "moves": [
+     "splash",
+     "protect",
+     "meteormash",
+     "earthquake"
+    ],
+    "ability": "Clear Body",
+    "item": "Leftovers"
+   }
+  ]
+ ],
+ "script": [
+  [
+   "move 2",
+   "move 1"
+  ],
+  [
+   "move 4",
+   "move 1"
+  ],
+  [
+   "move 4",
+   "switch 2"
+  ],
+  [
+   "move 3",
+   "move 1"
+  ]
+ ],
+ "expect": {
+  "exact": true
+ },
+ "showdown_lines": {
+  "2": [
+   "|-formechange|p1a: Castform|Castform|[msg]|[from] ability: Forecast"
+  ]
+ }
+}

@@ -122,6 +122,8 @@ def run(a):
     n = hi - lo
     base = transition.state_from_pool(pool, np.arange(2 * lo, 2 * hi).reshape(n, 2), seed=719)
     base = base._replace(keys=jax.vmap(lambda g: jax.random.fold_in(jax.random.PRNGKey(719), g))(j.arange(lo, hi)))
+    if hasattr(F, 'initialize_comparison_genders'):
+        base = F.initialize_comparison_genders(base, metadata, Path(a.showdown_root), a.node, np.arange(lo, hi))
     base = jax.block_until_ready(transition.initialize(base, table));advance = jax.jit(lambda s, act: transition.step(s, act, table))
     header = dict(schema='pokezero.fidelity_panel_shard.v1', source_commit=source, pool_sha256=pool_sha, roster=ros, panel=dict(
         first_game=a.first_game, games=a.games, shard=a.shard, game_range=[lo, hi]), format_id=a.format, chance_tape_schema=F.TAPE_SCHEMA,

@@ -1,0 +1,165 @@
+{
+ "schema": "pokezero.effect_probe.scenario.v1",
+ "move": "forecast_suppressor_handoff",
+ "note": "Forecast (data/abilities.ts forecast at f76228a1; gen3 flags {}): onStart and onWeatherChange take the forme of effectiveWeather() (rain Water, sun Fire, else Normal) for a non-transformed Castform; WeatherChange fires at setWeather/clearWeather (sim/field.ts) and at a Cloud Nine / Air Lock End (data/abilities.ts; gen4 removes their arrival event). Kyogre leads (Drizzle); Castform comes in under Golduck's Cloud Nine (Normal). Golduck switches to Rayquaza: Golduck's End re-forms Castform (Rainy) before Rayquaza is in, and Air Lock's arrival fires nothing, so Castform stays Rainy under Air Lock: its Return has no STAB and Rayquaza's Overheat is 0.5x (no sun or rain modifier).",
+ "teams": [
+  [
+   {
+    "species": "Kyogre",
+    "moves": [
+     "splash",
+     "thunder",
+     "surf",
+     "icebeam"
+    ],
+    "ability": "Drizzle",
+    "item": ""
+   },
+   {
+    "species": "Castform",
+    "moves": [
+     "raindance",
+     "sunnyday",
+     "return",
+     "fireblast"
+    ],
+    "ability": "Forecast",
+    "item": ""
+   },
+   {
+    "species": "Starmie",
+    "moves": [
+     "splash",
+     "surf",
+     "recover",
+     "protect"
+    ],
+    "ability": "Illuminate",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Blissey",
+    "moves": [
+     "splash",
+     "softboiled",
+     "protect",
+     "seismictoss"
+    ],
+    "ability": "Serene Grace",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Skarmory",
+    "moves": [
+     "splash",
+     "protect",
+     "spikes",
+     "peck"
+    ],
+    "ability": "Keen Eye",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Swampert",
+    "moves": [
+     "splash",
+     "protect",
+     "surf",
+     "earthquake"
+    ],
+    "ability": "Torrent",
+    "item": "Leftovers"
+   }
+  ],
+  [
+   {
+    "species": "Golduck",
+    "moves": [
+     "splash",
+     "hydropump",
+     "surf",
+     "icebeam"
+    ],
+    "ability": "Cloud Nine",
+    "item": ""
+   },
+   {
+    "species": "Rayquaza",
+    "moves": [
+     "splash",
+     "overheat",
+     "earthquake",
+     "extremespeed"
+    ],
+    "ability": "Air Lock",
+    "item": ""
+   },
+   {
+    "species": "Starmie",
+    "moves": [
+     "splash",
+     "surf",
+     "recover",
+     "protect"
+    ],
+    "ability": "Illuminate",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Blissey",
+    "moves": [
+     "splash",
+     "softboiled",
+     "protect",
+     "seismictoss"
+    ],
+    "ability": "Serene Grace",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Skarmory",
+    "moves": [
+     "splash",
+     "protect",
+     "spikes",
+     "peck"
+    ],
+    "ability": "Keen Eye",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Swampert",
+    "moves": [
+     "splash",
+     "protect",
+     "surf",
+     "earthquake"
+    ],
+    "ability": "Torrent",
+    "item": "Leftovers"
+   }
+  ]
+ ],
+ "script": [
+  [
+   "switch 2",
+   "move 1"
+  ],
+  [
+   "move 3",
+   "switch 2"
+  ],
+  [
+   "move 3",
+   "move 2"
+  ]
+ ],
+ "expect": {
+  "exact": true
+ },
+ "showdown_lines": {
+  "1": [
+   "|-formechange|p1a: Castform|Castform-Rainy|[msg]|[from] ability: Forecast"
+  ]
+ }
+}
