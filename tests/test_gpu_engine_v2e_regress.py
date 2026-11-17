@@ -355,6 +355,36 @@ class DigestAndRuleTests(unittest.TestCase):
         cascade = dict(ko_sides=[False, False], mon_ok=lambda leaf, side: False, families=())
         self.assertEqual(lane_verdict({('state.status', 1)}, {'silkscarf': [0]}, None, cascade=cascade)[0], [])
 
+    def test_stick_plug_in_predicate(self):
+        """STICK: a Farfetch'd active holding Stick (or facing a Stick holder's Trick) with a damaging candidate; another
+        species holding Stick, a bare Farfetch'd or a Status-only Farfetch'd with PP is not involved. Exhausted PP makes
+        even a selected Status slot execute Struggle, which can receive the Stick critical-hit boost."""
+        from gpu_engine.v2e_regress import Pre, PLUGINS, ALLOWED, CASCADE_ALLOWED
+        vocab = dict(VOCAB, moves=VOCAB['moves'] + ['trick'], items=VOCAB['items'] + ['stick'],
+                     species=['_none', 'farfetchd', 'mew'], types=['_none', 'normal', 'dark', 'grass', 'psychic'])
+        TRICK, STICK, FARFETCHD, MEW = len(VOCAB['moves']), 3, 1, 2
+        row = lambda name, typ, category: dict(id=name, type=typ, category=category, flags={})
+        rows = [None, row('curse', 0, 'Status'), row('tackle', 1, 'Physical'), row('sleeptalk', 1, 'Status'),
+                row('spore', 3, 'Status'), row('struggle', 1, 'Physical'), row('encore', 1, 'Status'),
+                row('magiccoat', 4, 'Status'), row('batonpass', 1, 'Status'), row('trick', 4, 'Status')]
+        L = 9;s = pre_arrays(L);s['species'] = np.full((L, 2, 6), MEW, np.int32)
+        s['species'][0, 0, 0] = FARFETCHD;s['item'][0, 0, 0] = STICK                       # 0: Farfetch'd + Stick, Tackle
+        s['species'][1, 0, 0] = MEW;s['item'][1, 0, 0] = STICK                             # 1: another species
+        s['species'][2, 0, 0] = FARFETCHD                                                  # 2: no Stick
+        s['species'][3, 0, 0] = FARFETCHD;s['item'][3, 1, 0] = STICK;s['moves'][3, 1, 0] = TRICK   # 3: the foe's Trick
+        s['species'][4, 0, 0] = FARFETCHD;s['item'][4, 0, 0] = STICK;s['moves'][4, 0, 0] = CURSE   # 4: Status only
+        s['pp'] = np.full(s['moves'].shape, 10, np.int32)
+        s['moves'][6:, 0, 0] = CURSE;s['pp'][6:, 0, 0] = 0
+        s['species'][6, 0, 0] = FARFETCHD;s['item'][6, 0, 0] = STICK                       # 6: Struggle + Stick
+        s['item'][7, 0, 0] = STICK                                                        # 7: Struggle, another species
+        s['species'][8, 0, 0] = FARFETCHD                                                 # 8: Struggle, no Stick
+        struggle = np.zeros((L, 2), bool);struggle[6:, 0] = True
+        named = {f'state.{k}': v for k, v in s.items()};named['actions'] = np.zeros((L, 2), np.int32)
+        p = Pre(named, vocab, np.append(CALLABLE, False), struggle, moves=rows)
+        no = [False, False];t0 = [True, False]
+        self.assertEqual(PLUGINS['STICK']['stick_crit'](p).tolist(), [t0, no, no, t0, no, no, t0, no, no])
+        self.assertTrue('stick_crit' in ALLOWED and 'stick_crit' in CASCADE_ALLOWED)
+
     def test_ko_timing_lane_accepts_only_witnessed_actor_bookkeeping(self):
         """DM (GPU pass, shard-000294 lane 741): with the faint set unchanged, a damage change moved a faint within the step
         (a Double-Edge user's recoil KO before the target's move in one tree, the target's own KO of it after its move in
@@ -363,7 +393,7 @@ class DigestAndRuleTests(unittest.TestCase):
         from gpu_engine.v2e_regress import lane_verdict
         moved = {('state.pp', 0), ('step.placeholder_moves', None), ("trackers.mon_features['moves_shown']", 0),
                  ('trackers.pp_used', 0), ('trackers.tendency.opportunities', 0)}
-        for effect in ('marvelscale', 'pinch', 'silkscarf', 'plusminus', 'twistedspoon'):
+        for effect in ('marvelscale', 'pinch', 'silkscarf', 'plusminus', 'twistedspoon', 'stick_crit'):
             self.assertEqual(lane_verdict(moved, {effect: [1]}, None)[0], sorted(moved, key=lambda x: (x[0], -1 if x[1] is None else x[1])))
             self.assertEqual(lane_verdict(moved, {effect: [1]}, None, timing=(0,))[0], [], effect)
             accepted = [];lane_verdict(moved, {effect: [1]}, None, timing=(0,), cascade_accepted=accepted)

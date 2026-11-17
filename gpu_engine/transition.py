@@ -1144,7 +1144,9 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                     _active(work.ability,work,side),typ,_active(work.hp,work,side),_active(work.max_hp,work,side)))
         critical = chance[:,4] == 0
         if table.critical is not None:
-            critical = crits.is_critical(table.critical,move,_active(work.ability,work,foe),chance[:,4])
+            # Stick: the attacker's ModifyCritRatio +2 when a Farfetch'd holds it (critical.ratio; 1/4 is roll < 4).
+            critical = crits.is_critical(table.critical,move,_active(work.ability,work,foe),chance[:,4],
+                item=_active(work.item,work,side),species=_active(work.species,work,side))
         damage = m.gen3_damage(level=_active(work.level, work, side), power=power,
             attack=jnp.where(physical, attack_stats[:, 1], attack_stats[:, 3]),
             defense=jnp.where(physical, defense_stats[:, 2], defense_stats[:, 4]),
@@ -1174,7 +1176,8 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
         _effect=effect_draws[rows,side]
         critical2=_effect[:,0]==0
         if table.critical is not None:
-            critical2=crits.is_critical(table.critical,move,_active(work.ability,work,foe),_effect[:,0])
+            critical2=crits.is_critical(table.critical,move,_active(work.ability,work,foe),_effect[:,0],
+                item=_active(work.item,work,side),species=_active(work.species,work,side))
         damage2=m.gen3_damage(level=_active(work.level, work, side), power=power,
             attack=jnp.where(physical, attack_stats[:, 1], attack_stats[:, 3]),
             defense=jnp.where(physical, defense_stats[:, 2], defense_stats[:, 4]),
