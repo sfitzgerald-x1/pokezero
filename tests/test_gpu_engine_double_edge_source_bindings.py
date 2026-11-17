@@ -23,13 +23,14 @@ class DoubleEdgeSourceBindingTests(unittest.TestCase):
   # §6 (the effect-coordinate chance proof) re-certifies four bodies and the pinned-file inventories at its own commits:
   # 72670171 and 3b0cc40e (plan_for_state's effect axes and SUSPENDED_ROOT_SAVED_BLOCKS, conditional_law's saved
   # effect block, residual_order.py in SOURCE_PINS and the domain lists) and 53dc3add (ordinary_law's effect bank).
-  # Fidelity tier D (covered by its Opus review) re-certifies the chance_consumers.py and phase_d_chance.py bodies at
-  # 67399362: the CONSUMERS rows for the contact abilities' phazing[s] reads and Effect Spore's effect[s][2] sleep, and
-  # plan_for_state's contact-status closure, observations and CONTACT_MULTIHIT refusal. Their mappings are unchanged.
-  certified={'chance_consumers.py':'673993621ce2c4f7e423d76ee32b9a536a903aa3',
-             'phase_d_chance.py':'673993621ce2c4f7e423d76ee32b9a536a903aa3',
-             'conditional_law.py':'3b0cc40e6709bd19fe70a6295580a51590dd4f57',
-             'engine_source_frame_witness.py':'3b0cc40e6709bd19fe70a6295580a51590dd4f57',
+  # Transform re-certifies four at its exact-chance commit 0f09b0b5: chance_consumers.py's and phase_d_chance.py's
+  # Transform closure (a selected Transform copies the foe's ability and stages into the plan) and their DOMAIN_MODULES,
+  # conditional_law.py's KERNEL_MODULES (transform) and engine_source_frame_witness.py's SOURCE_PINS (transform.py).
+  # The combined train at 87e75985 preserves Transform's closure plus Tier D's source inventories.
+  certified={'chance_consumers.py':'87e759858f953da905ffcb88b2eb1388ab6cca35',
+             'phase_d_chance.py':'87e759858f953da905ffcb88b2eb1388ab6cca35',
+             'conditional_law.py':'87e759858f953da905ffcb88b2eb1388ab6cca35',
+             'engine_source_frame_witness.py':'87e759858f953da905ffcb88b2eb1388ab6cca35',
              'ordinary_law.py':'53dc3add38e37c36b7609edabe4f96e313022b16'}
   constants={'SOURCE_PINS','MAPPING_PINS','DOMAIN_SHA256','KERNEL_SHA256'}
   for file in ('chance_consumers.py','ordinary_law.py','conditional_law.py',
@@ -47,7 +48,7 @@ class DoubleEdgeSourceBindingTests(unittest.TestCase):
      if isinstance(target,ast.Name) and target.id in ('SOURCE_PINS','MAPPING_PINS')}
    self.assertEqual(mappings(old),mappings(current),file)
  def test_all_three_domain_guards_and_every_owned_mapping_pin(self):
-  modules='action_history absorption baton combat critical damage_moves effects encore entry focus_punch items linked_traps mechanics phazing pressure pursuit residual_order secondary self_destruct sleep_talk solar_beam state sustain transition variable_moves weather'.split()
+  modules='action_history absorption baton combat critical damage_moves effects encore entry focus_punch items linked_traps mechanics phazing pressure pursuit residual_order secondary self_destruct sleep_talk solar_beam state sustain transform transition variable_moves weather'.split()
   domain=hashlib.sha256(b''.join(n.encode()+b'\0'+(ROOT/'gpu_engine'/(n+'.py')).read_bytes()+b'\0'for n in modules)).hexdigest()
   for file,key in [('conditional_law.py','KERNEL_SHA256'),('chance_consumers.py','DOMAIN_SHA256'),('ordinary_law.py','DOMAIN_SHA256')]:self.assertEqual(constant(file,key),domain,(file,key))
   for file,key in [('engine_source_frame_witness.py','SOURCE_PINS'),('chance_consumers.py','SOURCE_PINS'),('conditional_law.py','MAPPING_PINS'),('ordinary_law.py','MAPPING_PINS')]:

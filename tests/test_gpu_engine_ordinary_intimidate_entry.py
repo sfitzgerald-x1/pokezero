@@ -59,8 +59,57 @@ def strip_m2_volatiles(depart,*,required=False):
  return depart
 
 
+# Transform's approved entry physics change (gpu_engine/transform.py): the module imports transform, departure reverts a
+# transformed active (after the Natural Cure read) and keeps its Truant clock (Showdown's truantTurn is a Pokemon field),
+# and entry writes the clock only for a Truant holder. Each piece is removed or restored only when it is exactly this code.
+TRANSFORM_IMPORT=ast.parse("from . import transform as shift").body[0]
+TRANSFORM_DEPART=ast.parse("""keep_clock=jnp.zeros_like(eligible)
+if hasattr(state,'transformed'):
+    keep_clock=state.transformed[rows,side]
+    state,_=shift.revert(state,side,eligible)""").body
+TRANSFORM_DEPART_CLOCK=(ast.parse("eligible & ~keep_clock",mode='eval').body,ast.parse("eligible",mode='eval').body)
+TRANSFORM_ENTER_CLOCK=(ast.parse("eligible & table.truant[ability]",mode='eval').body,ast.parse("eligible",mode='eval').body)
+
+
+def _restore_once(node,pair,required):
+ """Replace the one occurrence of pair[0] (by AST) with pair[1] in node, in place."""
+ want=ast.dump(pair[0]);count=[0]
+ class Restore(ast.NodeTransformer):
+  def visit(self,n):
+   if isinstance(n,ast.expr)and ast.dump(n)==want:count[0]+=1;return ast.parse(ast.unparse(pair[1]),mode='eval').body
+   return super().visit(n)
+ Restore().visit(node)
+ assert count[0]<=1 and (count[0] or not required),'entry: the Transform clock gate is missing or repeated'
+ return node
+
+
+def strip_transform_depart(depart,*,required=False):
+ """entry.depart (edited in place) without Transform's approved revert and Truant-clock keep."""
+ dumps=[ast.dump(n)for n in TRANSFORM_DEPART];body=[ast.dump(n)for n in depart.body]
+ found=[i for i in range(len(body))if body[i:i+len(dumps)]==dumps]
+ assert len(found)<=1 and (found or not required),'entry.depart: the Transform revert is missing or repeated'
+ for i in found:del depart.body[i:i+len(dumps)]
+ return _restore_once(depart,TRANSFORM_DEPART_CLOCK,required)
+
+
+def strip_transform_enter(enter,*,required=False):
+ """entry.enter (edited in place) with the Truant clock written for every entrant again (Transform's approved gate removed)."""
+ return _restore_once(enter,TRANSFORM_ENTER_CLOCK,required)
+
+
+def strip_transform_module(tree,*,required=False):
+ """An entry module tree (edited in place) without every Transform piece."""
+ found=[n for n in tree.body if ast.dump(n)==ast.dump(TRANSFORM_IMPORT)]
+ assert len(found)<=1 and (found or not required),'entry: the transform import is missing or repeated'
+ for n in found:tree.body.remove(n)
+ strip_transform_depart(next(n for n in tree.body if isinstance(n,ast.FunctionDef)and n.name=='depart'),required=required)
+ strip_transform_enter(next(n for n in tree.body if isinstance(n,ast.FunctionDef)and n.name=='enter'),required=required)
+ return tree
+
+
 def default_entry_program(text):
  tree=ast.parse(text)
+ strip_transform_module(tree)
  strip_m1_recharge(next(n for n in tree.body if isinstance(n,ast.FunctionDef)and n.name=='depart'))
  strip_m2_volatiles(next(n for n in tree.body if isinstance(n,ast.FunctionDef)and n.name=='depart'))
  fields=('spikes_type_count','spikes_item_count','spikes_boots_item')

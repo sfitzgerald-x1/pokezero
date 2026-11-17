@@ -37,7 +37,8 @@ def put_active(s, side, physical):
 class PublicOrderTests(unittest.TestCase):
     def test_schema_initialize_identity_and_no_readout(self):
         self.assertEqual(tr.SCHEMA, 'pokezero.engine_device_public_trackers.v3')
-        self.assertEqual(tr.Trackers._fields[-1], 'public_order')
+        k = tr.Trackers._fields.index('public_order')   # appended after the v2 fields; Transform's optional leaves follow it
+        self.assertEqual(tr.Trackers._fields[k - 1:k + 2], ('public_port', 'public_order', 'transformed'))
         s = put_active(state(), 1, j.array([3, 0], j.int32))
         for t in (tr.initialize(s), h.initialize(s).trackers):
             self.assertEqual(t.public_order.dtype, j.int32)
