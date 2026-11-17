@@ -366,7 +366,7 @@ class B2SelfMovesTests(unittest.TestCase):
         from pokezero.recorded_encoder_runner import JaxRecordedAdapter, literal_history
         catalog = self.catalogs[True]
         constructor = module.ProtocolConstructor(catalog=catalog, source=NS(binding_sha256='binding'),
-            metadata={}, owning_config=object(), count=16)
+            metadata={}, owning_config=object(), count=16, saved_root_admission=False)
         adapter = JaxRecordedAdapter(catalog, owner_side=0, compiled_functions=constructor.functions)
         reference = JaxRecordedAdapter(catalog, owner_side=0, compiled_functions=constructor.functions)
         reference.reset(stream_id=1, battle_id='self-moves-fixture')  # pre-merge #1972 reset ordering
