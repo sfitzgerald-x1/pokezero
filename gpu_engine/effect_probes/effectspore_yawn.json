@@ -1,0 +1,223 @@
+{
+ "schema": "pokezero.effect_probe.scenario.v1",
+ "move": "effectspore_yawn",
+ "note": "Tier D Effect Spore sharing effect[s][2] with Yawn (the exclusivity edges): Breloom's Yawn lands on an unstatused Swellow (step 0 roll 6) or fails on a paralyzed one (roll 2). At step 1 a drowsy Swellow is slept by Effect Spore for 2+effect[0][2] (roll 0), and its Yawn at that residual then finds it asleep; or it is not (roll 6) and the Yawn sleep reads effect[0][2] instead.",
+ "teams": [
+  [
+   {
+    "species": "Swellow",
+    "moves": [
+     "quickattack",
+     "splash",
+     "protect",
+     "rest"
+    ],
+    "ability": "Guts",
+    "item": ""
+   },
+   {
+    "species": "Starmie",
+    "moves": [
+     "splash",
+     "surf",
+     "recover",
+     "protect"
+    ],
+    "ability": "Natural Cure",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Skarmory",
+    "moves": [
+     "splash",
+     "protect",
+     "spikes",
+     "drillpeck"
+    ],
+    "ability": "Keen Eye",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Metagross",
+    "moves": [
+     "splash",
+     "protect",
+     "meteormash",
+     "earthquake"
+    ],
+    "ability": "Clear Body",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Celebi",
+    "moves": [
+     "splash",
+     "protect",
+     "psychic",
+     "recover"
+    ],
+    "ability": "Natural Cure",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Suicune",
+    "moves": [
+     "splash",
+     "protect",
+     "surf",
+     "icebeam"
+    ],
+    "ability": "Pressure",
+    "item": "Leftovers"
+   }
+  ],
+  [
+   {
+    "species": "Breloom",
+    "moves": [
+     "yawn",
+     "splash",
+     "protect",
+     "rest"
+    ],
+    "ability": "Effect Spore",
+    "item": ""
+   },
+   {
+    "species": "Snorlax",
+    "moves": [
+     "splash",
+     "rest",
+     "protect",
+     "bodyslam"
+    ],
+    "ability": "Thick Fat",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Blissey",
+    "moves": [
+     "splash",
+     "softboiled",
+     "protect",
+     "seismictoss"
+    ],
+    "ability": "Natural Cure",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Gengar",
+    "moves": [
+     "splash",
+     "protect",
+     "thunderbolt",
+     "icepunch"
+    ],
+    "ability": "Levitate",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Tyranitar",
+    "moves": [
+     "splash",
+     "protect",
+     "rockslide",
+     "earthquake"
+    ],
+    "ability": "Sand Stream",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Jolteon",
+    "moves": [
+     "splash",
+     "protect",
+     "thunderbolt",
+     "batonpass"
+    ],
+    "ability": "Volt Absorb",
+    "item": "Leftovers"
+   }
+  ]
+ ],
+ "script": [
+  [
+   "move 1",
+   "move 1"
+  ],
+  [
+   "move 1",
+   "move 2"
+  ],
+  [
+   "move 1",
+   "move 2"
+  ],
+  [
+   "move 1",
+   "move 2"
+  ],
+  [
+   "move 1",
+   "move 2"
+  ]
+ ],
+ "axes": [
+  {
+   "name": "s0",
+   "field": "phazing.0",
+   "steps": [
+    0
+   ],
+   "values": [
+    2,
+    6
+   ]
+  },
+  {
+   "name": "s1",
+   "field": "phazing.0",
+   "steps": [
+    1
+   ],
+   "values": [
+    0,
+    6
+   ]
+  },
+  {
+   "name": "dur",
+   "field": "effect.0.2",
+   "steps": [
+    1
+   ],
+   "values": [
+    0,
+    3
+   ]
+  }
+ ],
+ "expect": {
+  "exact": true
+ },
+ "require_fields": [
+  "perish_counter",
+  "yawn_counter",
+  "partial_trap_counter",
+  "partial_trap_source",
+  "item_knocked",
+  "destiny_bond",
+  "effect"
+ ],
+ "tape_steps": {
+  "2": {
+   "phazing.0": 6
+  },
+  "3": {
+   "phazing.0": 6
+  },
+  "4": {
+   "phazing.0": 6
+  }
+ }
+}

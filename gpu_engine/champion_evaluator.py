@@ -251,6 +251,10 @@ def check_binding(evaluator, catalog):
         raise ValueError('the bank encoder catalog\'s category vocabulary is not the champion\'s (sha256 or size)')
     if tuple((k, getattr(catalog.masks, k)) for k in MASK_NAMES) != contract.feature_masks:
         raise ValueError('the bank encoder catalog\'s feature masks are not the champion contract\'s')
+    # V2 self_moves: the archive declares it (meta['self_moves'], written only when on; absent = False) and the catalog
+    # that encodes for it must agree, both ways.
+    if bool(getattr(catalog.masks, 'self_moves', False)) != bool((evaluator.meta or {}).get('self_moves', False)):
+        raise ValueError('the bank encoder catalog\'s self_moves differs from the archive\'s declaration')
     return True
 
 

@@ -1,0 +1,145 @@
+{
+ "beliefs": [
+  {
+   "condition": "100/100",
+   "gender": "M",
+   "item_mutated": false,
+   "revealed_ability": null,
+   "revealed_item": null,
+   "revealed_moves": [
+    "Rock Slide"
+   ],
+   "ruled_out_abilities": [],
+   "ruled_out_items": [],
+   "showdown_slot": "p1",
+   "species": "Rhydon"
+  }
+ ],
+ "census": {
+  "species": {
+   "rhydon": {
+    "census_lik": [
+     0.0,
+     0.0,
+     0.0,
+     1.0
+    ],
+    "census_n": 4,
+    "census_n_after": 1,
+    "census_strikes": 1,
+    "survivor_ids": [
+     "rhydon-1-variant-1",
+     "rhydon-1-variant-2",
+     "rhydon-1-variant-3",
+     "rhydon-2-variant-4"
+    ],
+    "true_variant": "rhydon-2-variant-4"
+   }
+  },
+  "strikes": [
+   {
+    "attacker": "Rhydon",
+    "crit": true,
+    "eff": null,
+    "hp_before": 295,
+    "ko": true,
+    "line": 28,
+    "move": "rockslide",
+    "n_excluded_universe": 3,
+    "n_variants_with_move": 4,
+    "observed": 295,
+    "reason": null,
+    "true_match": 16,
+    "true_variant": "rhydon-2-variant-4"
+   }
+  ]
+ },
+ "decision_index": 1,
+ "format_id": "gen3randombattle",
+ "name": "cb_collapse",
+ "note": "One Rhydon hit only its Choice Band variant explains (census lik [0,0,0,1]).",
+ "ordinal": 2769,
+ "owner": "p2",
+ "posterior": {
+  "rhydon": {
+   "hard": [
+    0,
+    1,
+    2,
+    3
+   ],
+   "provenance": "6055d116b4808d6cb20078a82233ee338bea493531d449e2c519da230106e822",
+   "strikes": [
+    {
+     "admitted": true,
+     "counts": [
+      0,
+      0,
+      0,
+      16
+     ],
+     "crit": true,
+     "ko": true,
+     "line": 28,
+     "move": "rockslide",
+     "observed": 295,
+     "reason": ""
+    }
+   ],
+   "weights": [
+    0,
+    0,
+    0,
+    1
+   ]
+  }
+ },
+ "prefix_sha256": "809607ed238d53d2c6b81fcc1e8efbe5adb3cca7980e1af816da34415078d657",
+ "request": {
+  "battle_id": "battle-gen3randombattle-controlled-2103400461",
+  "decision_index": 1,
+  "generation": 4,
+  "lines": [
+   "|t:|1794594890",
+   "|gametype|singles",
+   "|player|p1|FoulPlayBot||",
+   "|player|p2|PokeZeroBot||",
+   "|gen|3",
+   "|tier|[Gen 3] Random Battle",
+   "|rule|HP Percentage Mod: HP is shown in percentages",
+   "|rule|Beat Up Nicknames Mod: Beat Up will not reveal any party members",
+   "|rule|Endless Battle Clause: Forcing endless battles is banned",
+   "|rule|Sleep Clause Mod: Limit one foe put to sleep",
+   "|rule|Switch Priority Clause Mod: Faster Pok\u00e9mon switch first",
+   "|rule|Species Clause: Limit one of each Pok\u00e9mon",
+   "|rule|OHKO Clause: OHKO moves are banned",
+   "|rule|Evasion Items Clause: Evasion items are banned",
+   "|rule|Evasion Moves Clause: Evasion moves are banned",
+   "|",
+   "|t:|1794594890",
+   "|teamsize|p1|6",
+   "|teamsize|p2|6",
+   "|start",
+   "|switch|p1a: Rhydon|Rhydon, L83, M|100/100",
+   "|switch|p2a: Kangaskhan|Kangaskhan, L79, F|295/295",
+   "|turn|1",
+   "|request|{\"active\":[{\"moves\":[{\"move\":\"Toxic\",\"id\":\"toxic\",\"pp\":16,\"maxpp\":16,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Double-Edge\",\"id\":\"doubleedge\",\"pp\":24,\"maxpp\":24,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Earthquake\",\"id\":\"earthquake\",\"pp\":16,\"maxpp\":16,\"target\":\"allAdjacent\",\"disabled\":false},{\"move\":\"Rest\",\"id\":\"rest\",\"pp\":16,\"maxpp\":16,\"target\":\"self\",\"disabled\":false}]}],\"side\":{\"name\":\"PokeZeroBot\",\"id\":\"p2\",\"pokemon\":[{\"ident\":\"p2: Kangaskhan\",\"details\":\"Kangaskhan, L79, F\",\"condition\":\"295/295\",\"active\":true,\"stats\":{\"atk\":196,\"def\":172,\"spa\":109,\"spd\":172,\"spe\":188},\"moves\":[\"toxic\",\"doubleedge\",\"earthquake\",\"rest\"],\"baseAbility\":\"earlybird\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Raikou\",\"details\":\"Raikou, L74\",\"condition\":\"255/255\",\"active\":false,\"stats\":{\"atk\":132,\"def\":153,\"spa\":213,\"spd\":191,\"spe\":213},\"moves\":[\"thunderbolt\",\"hiddenpowerice\",\"substitute\",\"calmmind\"],\"baseAbility\":\"pressure\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Shuckle\",\"details\":\"Shuckle, L98, M\",\"condition\":\"198/198\",\"active\":false,\"stats\":{\"atk\":75,\"def\":506,\"spa\":75,\"spd\":506,\"spe\":65},\"moves\":[\"wrap\",\"rest\",\"toxic\",\"encore\"],\"baseAbility\":\"sturdy\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Jolteon\",\"details\":\"Jolteon, L77, F\",\"condition\":\"227/227\",\"active\":false,\"stats\":{\"atk\":106,\"def\":136,\"spa\":214,\"spd\":191,\"spe\":245},\"moves\":[\"protect\",\"toxic\",\"hiddenpowerice\",\"thunderbolt\"],\"baseAbility\":\"voltabsorb\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Ditto\",\"details\":\"Ditto\",\"condition\":\"258/258\",\"active\":false,\"stats\":{\"atk\":153,\"def\":153,\"spa\":153,\"spd\":153,\"spe\":153},\"moves\":[\"transform\"],\"baseAbility\":\"limber\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Feraligatr\",\"details\":\"Feraligatr, L83, M\",\"condition\":\"276/276\",\"active\":false,\"stats\":{\"atk\":221,\"def\":213,\"spa\":178,\"spd\":185,\"spe\":177},\"moves\":[\"earthquake\",\"rockslide\",\"hiddenpowerflying\",\"hydropump\"],\"baseAbility\":\"torrent\",\"item\":\"choiceband\",\"pokeball\":\"pokeball\"}]}}",
+   "|",
+   "|t:|1794594893",
+   "|move|p2a: Kangaskhan|Toxic|p1a: Rhydon",
+   "|-status|p1a: Rhydon|tox",
+   "|move|p1a: Rhydon|Rock Slide|p2a: Kangaskhan",
+   "|-crit|p2a: Kangaskhan",
+   "|-damage|p2a: Kangaskhan|0 fnt",
+   "|faint|p2a: Kangaskhan",
+   "|request|{\"forceSwitch\":[true],\"side\":{\"name\":\"PokeZeroBot\",\"id\":\"p2\",\"pokemon\":[{\"ident\":\"p2: Kangaskhan\",\"details\":\"Kangaskhan, L79, F\",\"condition\":\"0 fnt\",\"active\":true,\"stats\":{\"atk\":196,\"def\":172,\"spa\":109,\"spd\":172,\"spe\":188},\"moves\":[\"toxic\",\"doubleedge\",\"earthquake\",\"rest\"],\"baseAbility\":\"earlybird\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Raikou\",\"details\":\"Raikou, L74\",\"condition\":\"255/255\",\"active\":false,\"stats\":{\"atk\":132,\"def\":153,\"spa\":213,\"spd\":191,\"spe\":213},\"moves\":[\"thunderbolt\",\"hiddenpowerice\",\"substitute\",\"calmmind\"],\"baseAbility\":\"pressure\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Shuckle\",\"details\":\"Shuckle, L98, M\",\"condition\":\"198/198\",\"active\":false,\"stats\":{\"atk\":75,\"def\":506,\"spa\":75,\"spd\":506,\"spe\":65},\"moves\":[\"wrap\",\"rest\",\"toxic\",\"encore\"],\"baseAbility\":\"sturdy\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Jolteon\",\"details\":\"Jolteon, L77, F\",\"condition\":\"227/227\",\"active\":false,\"stats\":{\"atk\":106,\"def\":136,\"spa\":214,\"spd\":191,\"spe\":245},\"moves\":[\"protect\",\"toxic\",\"hiddenpowerice\",\"thunderbolt\"],\"baseAbility\":\"voltabsorb\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Ditto\",\"details\":\"Ditto\",\"condition\":\"258/258\",\"active\":false,\"stats\":{\"atk\":153,\"def\":153,\"spa\":153,\"spd\":153,\"spe\":153},\"moves\":[\"transform\"],\"baseAbility\":\"limber\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Feraligatr\",\"details\":\"Feraligatr, L83, M\",\"condition\":\"276/276\",\"active\":false,\"stats\":{\"atk\":221,\"def\":213,\"spa\":178,\"spd\":185,\"spe\":177},\"moves\":[\"earthquake\",\"rockslide\",\"hiddenpowerflying\",\"hydropump\"],\"baseAbility\":\"torrent\",\"item\":\"choiceband\",\"pokeball\":\"pokeball\"}]},\"noCancel\":true}"
+  ],
+  "own_request_line": "|request|{\"forceSwitch\":[true],\"side\":{\"name\":\"PokeZeroBot\",\"id\":\"p2\",\"pokemon\":[{\"ident\":\"p2: Kangaskhan\",\"details\":\"Kangaskhan, L79, F\",\"condition\":\"0 fnt\",\"active\":true,\"stats\":{\"atk\":196,\"def\":172,\"spa\":109,\"spd\":172,\"spe\":188},\"moves\":[\"toxic\",\"doubleedge\",\"earthquake\",\"rest\"],\"baseAbility\":\"earlybird\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Raikou\",\"details\":\"Raikou, L74\",\"condition\":\"255/255\",\"active\":false,\"stats\":{\"atk\":132,\"def\":153,\"spa\":213,\"spd\":191,\"spe\":213},\"moves\":[\"thunderbolt\",\"hiddenpowerice\",\"substitute\",\"calmmind\"],\"baseAbility\":\"pressure\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Shuckle\",\"details\":\"Shuckle, L98, M\",\"condition\":\"198/198\",\"active\":false,\"stats\":{\"atk\":75,\"def\":506,\"spa\":75,\"spd\":506,\"spe\":65},\"moves\":[\"wrap\",\"rest\",\"toxic\",\"encore\"],\"baseAbility\":\"sturdy\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Jolteon\",\"details\":\"Jolteon, L77, F\",\"condition\":\"227/227\",\"active\":false,\"stats\":{\"atk\":106,\"def\":136,\"spa\":214,\"spd\":191,\"spe\":245},\"moves\":[\"protect\",\"toxic\",\"hiddenpowerice\",\"thunderbolt\"],\"baseAbility\":\"voltabsorb\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Ditto\",\"details\":\"Ditto\",\"condition\":\"258/258\",\"active\":false,\"stats\":{\"atk\":153,\"def\":153,\"spa\":153,\"spd\":153,\"spe\":153},\"moves\":[\"transform\"],\"baseAbility\":\"limber\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Feraligatr\",\"details\":\"Feraligatr, L83, M\",\"condition\":\"276/276\",\"active\":false,\"stats\":{\"atk\":221,\"def\":213,\"spa\":178,\"spd\":185,\"spe\":177},\"moves\":[\"earthquake\",\"rockslide\",\"hiddenpowerflying\",\"hydropump\"],\"baseAbility\":\"torrent\",\"item\":\"choiceband\",\"pokeball\":\"pokeball\"}]},\"noCancel\":true}",
+  "owner": "p2",
+  "prefix_sha256": "809607ed238d53d2c6b81fcc1e8efbe5adb3cca7980e1af816da34415078d657",
+  "request_id": "battle-gen3randombattle-controlled-2103400461:1",
+  "schema": "pokezero.phase-d.shared-gpu-search.v1",
+  "stream_id": 1
+ },
+ "source_hash": "f5a5265143d423af"
+}

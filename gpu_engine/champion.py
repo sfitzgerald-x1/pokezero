@@ -124,6 +124,8 @@ def export(checkpoint,out,*,extra=None):
         'checkpoint_sha256':digest,
         'parameter_count':sum(a.size for a in params.values())}
     if extra is not None:meta['extra']=extra
+    # V2 self_moves: the checkpoint's model config declares it; recorded only when on, so off archives are unchanged.
+    if payload['model_config'].get('self_moves'):meta['self_moves']=True
     encoded=np.frombuffer(json.dumps(meta,sort_keys=True).encode(),np.uint8)
     with Path(out).open('xb') as stream:np.savez_compressed(stream,metadata_json=encoded,**params)
     return meta

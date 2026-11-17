@@ -1,0 +1,195 @@
+{
+ "schema": "pokezero.effect_probe.scenario.v1",
+ "move": "wonderguard_struggle",
+ "note": "Tier D WG and typeless Struggle: Kingdra's only move, Hydro Pump (8 PP), is blocked 8 times; then Struggle (type ??? via gen4 onModifyMove) is exempt from WG and KOs Shedinja, with recoil.",
+ "teams": [
+  [
+   {
+    "species": "Shedinja",
+    "moves": [
+     "splash",
+     "agility",
+     "toxic",
+     "shadowball"
+    ],
+    "ability": "Wonder Guard",
+    "item": "Lum Berry"
+   },
+   {
+    "species": "Starmie",
+    "moves": [
+     "splash",
+     "surf",
+     "recover",
+     "protect"
+    ],
+    "ability": "Natural Cure",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Skarmory",
+    "moves": [
+     "splash",
+     "protect",
+     "spikes",
+     "drillpeck"
+    ],
+    "ability": "Keen Eye",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Metagross",
+    "moves": [
+     "splash",
+     "protect",
+     "meteormash",
+     "earthquake"
+    ],
+    "ability": "Clear Body",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Celebi",
+    "moves": [
+     "splash",
+     "protect",
+     "psychic",
+     "recover"
+    ],
+    "ability": "Natural Cure",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Suicune",
+    "moves": [
+     "splash",
+     "protect",
+     "surf",
+     "icebeam"
+    ],
+    "ability": "Pressure",
+    "item": "Leftovers"
+   }
+  ],
+  [
+   {
+    "species": "Kingdra",
+    "moves": [
+     "hydropump"
+    ],
+    "ability": "Swift Swim",
+    "item": ""
+   },
+   {
+    "species": "Snorlax",
+    "moves": [
+     "splash",
+     "rest",
+     "protect",
+     "bodyslam"
+    ],
+    "ability": "Thick Fat",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Blissey",
+    "moves": [
+     "splash",
+     "softboiled",
+     "protect",
+     "seismictoss"
+    ],
+    "ability": "Natural Cure",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Gengar",
+    "moves": [
+     "splash",
+     "protect",
+     "thunderbolt",
+     "icepunch"
+    ],
+    "ability": "Levitate",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Tyranitar",
+    "moves": [
+     "splash",
+     "protect",
+     "rockslide",
+     "earthquake"
+    ],
+    "ability": "Sand Stream",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Jolteon",
+    "moves": [
+     "splash",
+     "protect",
+     "thunderbolt",
+     "batonpass"
+    ],
+    "ability": "Volt Absorb",
+    "item": "Leftovers"
+   }
+  ]
+ ],
+ "script": [
+  [
+   "move 1",
+   "move 1"
+  ],
+  [
+   "move 1",
+   "move 1"
+  ],
+  [
+   "move 1",
+   "move 1"
+  ],
+  [
+   "move 1",
+   "move 1"
+  ],
+  [
+   "move 1",
+   "move 1"
+  ],
+  [
+   "move 1",
+   "move 1"
+  ],
+  [
+   "move 1",
+   "move 1"
+  ],
+  [
+   "move 1",
+   "move 1"
+  ],
+  [
+   "move 1",
+   "move 1"
+  ],
+  [
+   "switch 2",
+   ""
+  ]
+ ],
+ "axes": [],
+ "expect": {
+  "exact": true
+ },
+ "require_fields": [
+  "perish_counter",
+  "yawn_counter",
+  "partial_trap_counter",
+  "partial_trap_source",
+  "item_knocked",
+  "destiny_bond",
+  "effect"
+ ]
+}

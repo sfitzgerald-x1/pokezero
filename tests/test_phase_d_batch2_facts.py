@@ -12,6 +12,7 @@ import jax.numpy as j
 import numpy as np
 from gpu_engine.phase_d_constructor_rules import own_pp_carry,sleep_support
 from gpu_engine import phase_d_protocol_world as protocol
+from pokezero import set_posterior
 from gpu_engine import phase_d_live_worlds as live
 from gpu_engine.state import empty_state,legal_actions
 from gpu_engine.mechanics import before_move
@@ -192,7 +193,7 @@ class ProductionTransport(unittest.TestCase):
             return 'inert-carried-public'
         unpack=lambda team:tuple(NS(species=part.split('|')[0],ability='',item='') for part in team.split(']'))
         with patch.object(protocol,'battle_spec_from_payload',side_effect=bridge),patch.object(protocol,'map_spec',return_value=NS(state=physical)), \
-                patch.object(protocol,'unpack_team',side_effect=unpack),patch.object(protocol.public_worlds,'_revealed',return_value=()), \
+                patch.object(protocol,'unpack_team',side_effect=unpack),patch.object(protocol.public_worlds,'_revealed',return_value=()),patch.object(protocol,'_set_posteriors',return_value={}), \
                 patch.object(protocol.states,'_rebase',side_effect=rebase):
             made=protocol.materialize_protocol(public,start,inputs=inputs,seed=17)
         self.assertIsNotNone(made.state,made.refusals);self.assertEqual(public.materialization_payload,before)
@@ -204,11 +205,13 @@ class ProductionTransport(unittest.TestCase):
         public,start,inputs,physical,world=self.fixture()
         variant=NS(level=100,moves=('tackle',),ability='',item='leftovers')
         revealed=((0,None,((0,variant),),'N','g'),)
+        # The fixture's root has no belief view: set_posterior's hard support is stubbed to agree with the patched B2 posterior.
+        posts={'g':set_posterior.EncounterPosterior('p2','g',(True,),(True,),(1,),(),(),'')}
         def unpack(item):
             return lambda team:tuple(NS(species=part.split('|')[0],ability='',item=item if part.split('|')[0]=='g' else '',level=100,moves=('tackle',)) for part in team.split(']'))
         for item,expected in (('oranberry',False),('leftovers',True)):
             with patch.object(protocol,'battle_spec_from_payload',return_value=world) as bridge,patch.object(protocol,'map_spec',return_value=NS(state=physical)), \
-                    patch.object(protocol,'unpack_team',side_effect=unpack(item)),patch.object(protocol.public_worlds,'_revealed',return_value=revealed), \
+                    patch.object(protocol,'unpack_team',side_effect=unpack(item)),patch.object(protocol.public_worlds,'_revealed',return_value=revealed),patch.object(protocol,'_set_posteriors',return_value=posts), \
                     patch.object(protocol.states,'_rebase',return_value='inert'):
                 made=protocol.materialize_protocol(public,start,inputs=inputs,seed=17)
             self.assertEqual(made.state is not None,expected,made.refusals)
@@ -222,7 +225,7 @@ class ProductionTransport(unittest.TestCase):
         for ability in ('','pressure'):
             unpack=lambda team:tuple(NS(species=part.split('|')[0],ability=ability if part.split('|')[0] in 'ghijkl' else '',item='') for part in team.split(']'))
             with patch.object(protocol,'battle_spec_from_payload',return_value=world),patch.object(protocol,'map_spec',return_value=NS(state=physical)), \
-                    patch.object(protocol,'unpack_team',side_effect=unpack),patch.object(protocol.public_worlds,'_revealed',return_value=()), \
+                    patch.object(protocol,'unpack_team',side_effect=unpack),patch.object(protocol.public_worlds,'_revealed',return_value=()),patch.object(protocol,'_set_posteriors',return_value={}), \
                     patch.object(protocol.states,'_rebase',return_value='inert'):
                 made=protocol.materialize_protocol(public,start,inputs=inputs,seed=17)
             self.assertIsNotNone(made.state,made.refusals);values.append(np.asarray(made.state.pp)[0,0].tolist())

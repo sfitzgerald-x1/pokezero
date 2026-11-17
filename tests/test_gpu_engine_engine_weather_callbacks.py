@@ -83,7 +83,8 @@ class WeatherCallbacksTests(unittest.TestCase):
         # do not erase unfamiliar operands to force the historical proof.
         integrated=ast.parse(subprocess.check_output(['git','show','b8092a85:gpu_engine/entry.py'],text=True))
         original_enter=next(n for n in integrated.body if isinstance(n,ast.FunctionDef)and n.name=='enter')
-        current_enter=ast.parse(inspect.getsource(entry.enter)).body[0]
+        import test_gpu_engine_ordinary_intimidate_entry as ordinary   # Transform's approved Truant-clock gate only
+        current_enter=ordinary.strip_transform_enter(ast.parse(inspect.getsource(entry.enter)).body[0],required=True)
         self.assertEqual(ast.dump(current_enter,include_attributes=False),ast.dump(original_enter,include_attributes=False))
         table=next(n for n in integrated.body if isinstance(n,ast.ClassDef)and n.name=='EntryTable')
         fields=tuple(n.target.id for n in table.body if isinstance(n,ast.AnnAssign))

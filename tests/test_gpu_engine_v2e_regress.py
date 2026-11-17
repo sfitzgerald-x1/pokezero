@@ -252,6 +252,200 @@ class DigestAndRuleTests(unittest.TestCase):
         wrong = post.copy();wrong[0, 2, 0] = True
         self.assertEqual(faint_rule(entries, {vol: wrong}, {vol: base}, fainted, p2p, slots), (entries, []))
 
+    def test_tier_d_plug_in_predicates(self):
+        """D: Wonder Guard / contact holders as targets (active; a voluntary switch only into a holder; any holder or a Trace
+        entrant facing one for an entry the side does not choose), the attacker the actor, with a qualifying move (damaging
+        for Wonder Guard, contact for the contact abilities); a pinch active with a matching-type move (Hidden Power by its
+        own type); Pursuit's intercept reveals. Every D effect has an allowance."""
+        from gpu_engine.v2e_regress import Pre, PLUGINS, ALLOWED
+        WG, BLAZE, TRACE, STATIC, ROAR, PURSUIT, EMBER, HPOWER = 4, 5, 6, 7, *range(len(VOCAB['moves']), len(VOCAB['moves']) + 4)
+        types = ['_none', 'normal', 'fire', 'dark', 'grass']
+        vocab = dict(VOCAB, moves=VOCAB['moves'] + ['roar', 'pursuit', 'ember', 'hiddenpowerfire'], types=types,
+                     abilities=VOCAB['abilities'] + ['wonderguard', 'blaze', 'trace', 'static'])
+        L = 11;s = pre_arrays(L);actions = np.zeros((L, 2), np.int32)
+        s['hidden_power_type'] = np.zeros((L, 2, 6), np.int32)
+        s['ability'][0, 1, 0] = WG                                         # lane 0: side 1's active holds Wonder Guard
+        s['ability'][1, 1, 3] = WG                                         # lane 1: a benched holder, no switch
+        s['ability'][2, 1, 3] = WG;actions[2, 1] = 6                       # lane 2: side 1 switches into the holder (slot 3)
+        s['ability'][3, 0, 0] = WG;s['ability'][3, 1, 2] = TRACE;s['moves'][3, 0, 0, 0] = ROAR   # lane 3: dragged Tracer
+        # (lane 3: side 1 may hit side 0's Wonder Guard active; side 0's Roar is a Status move, so not an actor)
+        s['ability'][4, 0, 0] = 3                                          # lane 4: side 0's active holds Effect Spore
+        s['ability'][5, 1, 0] = BLAZE                                      # lane 5: Blaze, but only Tackle (no Fire move)
+        s['ability'][6, 1, 2] = BLAZE;actions[6, 1] = 5                    # lane 6: a Blaze entrant does not move
+        s['ability'][7, 1, 3] = WG;actions[7, 1] = 5                       # lane 7: switches into a non-holder (slot 2)
+        s['ability'][8, 1, 0] = BLAZE;s['moves'][8, 1, 0, 1] = HPOWER;s['hidden_power_type'][8, 1, 0] = 2;actions[8, 1] = 1   # HP Fire
+        s['ability'][9, 0, 0] = 3;s['moves'][9, 1, 0] = [SPORE, SPORE, SPORE, SPORE]   # lane 9: no contact move at Spore
+        s['ability'][10, 1, 0] = STATIC;s['moves'][10, 0, 0, 0] = PURSUIT;actions[10, 1] = 5   # lane 10: Pursuit, Static leaves
+        named = {f'state.{k}': v for k, v in s.items()};named['actions'] = actions
+        row = lambda name, typ, category, contact: dict(id=name, type=typ, category=category, flags={'contact': 1} if contact else {})
+        rows = [None, row('curse', 0, 'Status', False), row('tackle', 1, 'Physical', True), row('sleeptalk', 1, 'Status', False),
+                row('spore', 4, 'Status', False), row('struggle', 1, 'Physical', True), row('encore', 1, 'Status', False),
+                row('magiccoat', 1, 'Status', False), row('batonpass', 1, 'Status', False), row('roar', 1, 'Status', False),
+                row('pursuit', 3, 'Special', True), row('ember', 2, 'Special', False), row('hiddenpowerfire', 2, 'Physical', False)]
+        callable_ = np.append(CALLABLE, [False] * 4)
+        p = Pre(named, vocab, callable_, np.zeros((L, 2), bool), moves=rows)
+        d = PLUGINS['D'];no = [False, False]
+        self.assertEqual(d['wonderguard'](p).tolist(),
+                         [[True, False], no, [True, False], [False, True], no, no, no, no, no, no, no])
+        self.assertEqual(d['contact_status'](p).tolist(), [no, no, no, no, [False, True], no, no, no, no, no, no])
+        self.assertEqual(d['pinch'](p).tolist(), [no, no, no, no, no, no, no, no, [False, True], no, no])
+        self.assertEqual(d['pursuit_reveal'](p).tolist(), [no] * 10 + [[True, False]])
+        # Without move rows every move counts (a superset): lane 5's Blaze active and lane 9's Spore user count.
+        q = Pre(named, vocab, callable_, np.zeros((L, 2), bool))
+        self.assertTrue(d['pinch'](q)[5, 1] and d['contact_status'](q)[9, 1])
+        # A pre-state without hidden_power_type resolves Hidden Power to any type (a superset), not Dark.
+        r = Pre({k: v for k, v in named.items() if k != 'state.hidden_power_type'}, vocab, callable_, np.zeros((L, 2), bool), moves=rows)
+        self.assertTrue(d['pinch'](r)[8, 1])
+        s['hidden_power_type'][8, 1, 0] = 3                                # present: HP Dark, which Blaze does not boost
+        self.assertFalse(d['pinch'](Pre(named, vocab, callable_, np.zeros((L, 2), bool), moves=rows))[8, 1])
+        self.assertTrue(all(e in ALLOWED for e in d))
+
+    def test_dm_plug_in_predicates(self):
+        """DM: a type item's holder with a damaging move of its type (Hidden Power by its own type; not Struggle's ???), or a
+        side a foe's Trick hands it to; the attacker into a Marvel Scale holder with a physical move, and the holder itself
+        when it may hit itself in confusion; a Plus (Minus) active facing a possible Minus (Plus) with a special move. Every
+        DM effect has the damage allowance, and anything on a KO cascade."""
+        from gpu_engine.v2e_regress import Pre, PLUGINS, ALLOWED, CASCADE_ALLOWED, lane_verdict
+        types = ['_none', 'normal', 'fighting', 'flying', 'poison', 'ground', 'rock', 'bug', 'ghost', 'steel', 'fire', 'water',
+                 'grass', 'electric', 'psychic', 'ice', 'dragon', 'dark']
+        extra = ['extremespeed', 'shadowball', 'psychic', 'thunderbolt', 'hiddenpowerghost', 'signalbeam', 'trick']
+        ES, SB, PSY, TB, HPG, SIG, TRICK = range(len(VOCAB['moves']), len(VOCAB['moves']) + len(extra))
+        MARVEL, PLUS, MINUS = 4, 5, 6
+        SCARF, SPOON = 3, 4
+        vocab = dict(VOCAB, moves=VOCAB['moves'] + extra, types=types,
+                     abilities=VOCAB['abilities'] + ['marvelscale', 'plus', 'minus'], items=VOCAB['items'] + ['silkscarf', 'twistedspoon'])
+        row = lambda name, typ, category: dict(id=name, type=typ, category=category, flags={})
+        rows = [None, row('curse', 0, 'Status'), row('tackle', 1, 'Physical'), row('sleeptalk', 1, 'Status'),
+                row('spore', 12, 'Status'), row('struggle', 1, 'Physical'), row('encore', 1, 'Status'),
+                row('magiccoat', 14, 'Status'), row('batonpass', 1, 'Status'), row('extremespeed', 1, 'Physical'),
+                row('shadowball', 8, 'Physical'), row('psychic', 14, 'Special'), row('thunderbolt', 13, 'Special'),
+                row('hiddenpowerghost', 8, 'Physical'), row('signalbeam', 7, 'Physical'), row('trick', 14, 'Status')]
+        L = 16;s = pre_arrays(L);actions = np.zeros((L, 2), np.int32);s['hidden_power_type'] = np.zeros((L, 2, 6), np.int32)
+        struggle = np.zeros((L, 2), bool)
+        s['item'][0, 0, 0] = SCARF                                                         # 0: Tackle (Normal)
+        s['item'][1, 0, 0] = SCARF;s['moves'][1, 0, 0] = SB                                 # 1: Shadow Ball only
+        s['item'][2, 0, 0] = SCARF;s['moves'][2, 0, 0] = CURSE;struggle[2, 0] = True        # 2: Struggle's ???
+        s['item'][3, 1, 0] = SCARF;s['moves'][3, 1, 0] = TRICK                              # 3: the foe Tricks it over
+        s['item'][4, 0, 0] = SPOON;s['moves'][4, 0, 0] = PSY                                # 4: Psychic
+        s['item'][5, 0, 0] = SPOON;s['moves'][5, 0, 0] = TB                                 # 5: Thunderbolt only
+        s['item'][6, 0, 0] = SPOON;s['moves'][6, 0, 0] = HPG;s['hidden_power_type'][6, 0, 0] = 14   # 6: HP Psychic
+        s['ability'][7, 1, 0] = MARVEL                                                     # 7: Tackle into Marvel Scale
+        s['ability'][8, 1, 0] = MARVEL;s['moves'][8, 0, 0] = PSY                            # 8: special only
+        s['ability'][9, 0, 0] = MARVEL;s['confusion_counter'][9, 0, 0] = 2;s['moves'][9, 1, 0] = PSY   # 9: its self-hit
+        s['ability'][10, 0, 0] = MARVEL;s['moves'][10, 1, 0] = SIG                          # 10: Signal Beam (Bug: physical)
+        s['ability'][11, 0, 0] = PLUS;s['ability'][11, 1, 0] = MINUS;s['moves'][11, 0, 0] = TB   # 11: Plus vs Minus
+        s['ability'][12, 0, 0] = PLUS;s['ability'][12, 1, 0] = PLUS;s['moves'][12, 0, 0] = TB    # 12: Plus vs Plus
+        s['ability'][13, 0, 0] = PLUS;s['ability'][13, 1, 3] = MINUS;s['moves'][13, 0, 0] = TB;actions[13, 1] = 6  # 13: Minus enters
+        s['ability'][14, 0, 0] = PLUS;s['ability'][14, 1, 0] = MINUS                       # 14: Tackle only
+        s['ability'][15, 1, 0] = MARVEL;s['moves'][15, 0, 0] = CURSE;struggle[15, 0] = True     # 15: Struggle (physical) into it
+        named = {f'state.{k}': v for k, v in s.items()};named['actions'] = actions
+        p = Pre(named, vocab, np.append(CALLABLE, [False] * len(extra)), struggle, moves=rows)
+        dm = PLUGINS['DM'];no = [False, False];t0 = [True, False]
+        self.assertEqual(dm['silkscarf'](p).tolist(), [t0, no, no, t0] + [no] * 12)
+        self.assertEqual(dm['twistedspoon'](p).tolist(), [no] * 4 + [t0, no, t0] + [no] * 9)
+        self.assertEqual(dm['marvelscale'](p).tolist(), [no] * 7 + [t0, no, t0, [True, True]] + [no] * 4 + [t0])
+        self.assertEqual(dm['plusminus'](p).tolist(), [no] * 11 + [t0, no, t0, no, no])
+        # Without move rows every move counts (a superset): lane 1's Shadow Ball and lane 14's Tackle count.
+        q = Pre(named, vocab, np.append(CALLABLE, [False] * len(extra)), struggle)
+        self.assertTrue(dm['silkscarf'](q)[1, 0] and dm['plusminus'](q)[14, 0])
+        self.assertTrue(all(e in ALLOWED and e in CASCADE_ALLOWED for e in dm))
+        self.assertEqual(lane_verdict({('state.hp', 0), ('state.hp', 1), ('state.item', 1), ('state.boosts', 0)},
+                                      {'marvelscale': [0]}, None)[0], [])
+        self.assertEqual(lane_verdict({('state.status', 1)}, {'silkscarf': [0]}, None)[0], [('state.status', 1)])
+        cascade = dict(ko_sides=[False, False], mon_ok=lambda leaf, side: False, families=())
+        self.assertEqual(lane_verdict({('state.status', 1)}, {'silkscarf': [0]}, None, cascade=cascade)[0], [])
+
+    def test_stick_plug_in_predicate(self):
+        """STICK: a Farfetch'd active holding Stick (or facing a Stick holder's Trick) with a damaging candidate; another
+        species holding Stick, a bare Farfetch'd or a Status-only Farfetch'd with PP is not involved. Exhausted PP makes
+        even a selected Status slot execute Struggle, which can receive the Stick critical-hit boost."""
+        from gpu_engine.v2e_regress import Pre, PLUGINS, ALLOWED, CASCADE_ALLOWED
+        vocab = dict(VOCAB, moves=VOCAB['moves'] + ['trick'], items=VOCAB['items'] + ['stick'],
+                     species=['_none', 'farfetchd', 'mew'], types=['_none', 'normal', 'dark', 'grass', 'psychic'])
+        TRICK, STICK, FARFETCHD, MEW = len(VOCAB['moves']), 3, 1, 2
+        row = lambda name, typ, category: dict(id=name, type=typ, category=category, flags={})
+        rows = [None, row('curse', 0, 'Status'), row('tackle', 1, 'Physical'), row('sleeptalk', 1, 'Status'),
+                row('spore', 3, 'Status'), row('struggle', 1, 'Physical'), row('encore', 1, 'Status'),
+                row('magiccoat', 4, 'Status'), row('batonpass', 1, 'Status'), row('trick', 4, 'Status')]
+        L = 9;s = pre_arrays(L);s['species'] = np.full((L, 2, 6), MEW, np.int32)
+        s['species'][0, 0, 0] = FARFETCHD;s['item'][0, 0, 0] = STICK                       # 0: Farfetch'd + Stick, Tackle
+        s['species'][1, 0, 0] = MEW;s['item'][1, 0, 0] = STICK                             # 1: another species
+        s['species'][2, 0, 0] = FARFETCHD                                                  # 2: no Stick
+        s['species'][3, 0, 0] = FARFETCHD;s['item'][3, 1, 0] = STICK;s['moves'][3, 1, 0] = TRICK   # 3: the foe's Trick
+        s['species'][4, 0, 0] = FARFETCHD;s['item'][4, 0, 0] = STICK;s['moves'][4, 0, 0] = CURSE   # 4: Status only
+        s['pp'] = np.full(s['moves'].shape, 10, np.int32)
+        s['moves'][6:, 0, 0] = CURSE;s['pp'][6:, 0, 0] = 0
+        s['species'][6, 0, 0] = FARFETCHD;s['item'][6, 0, 0] = STICK                       # 6: Struggle + Stick
+        s['item'][7, 0, 0] = STICK                                                        # 7: Struggle, another species
+        s['species'][8, 0, 0] = FARFETCHD                                                 # 8: Struggle, no Stick
+        struggle = np.zeros((L, 2), bool);struggle[6:, 0] = True
+        named = {f'state.{k}': v for k, v in s.items()};named['actions'] = np.zeros((L, 2), np.int32)
+        p = Pre(named, vocab, np.append(CALLABLE, False), struggle, moves=rows)
+        no = [False, False];t0 = [True, False]
+        self.assertEqual(PLUGINS['STICK']['stick_crit'](p).tolist(), [t0, no, no, t0, no, no, t0, no, no])
+        self.assertTrue('stick_crit' in ALLOWED and 'stick_crit' in CASCADE_ALLOWED)
+
+    def test_ko_timing_lane_accepts_only_witnessed_actor_bookkeeping(self):
+        """DM (GPU pass, shard-000294 lane 741): with the faint set unchanged, a damage change moved a faint within the step
+        (a Double-Edge user's recoil KO before the target's move in one tree, the target's own KO of it after its move in
+        the other), so the target's move bookkeeping differs. A timing witness permits only that actor's bookkeeping,
+        not arbitrary effects of a move or the other actor's bookkeeping."""
+        from gpu_engine.v2e_regress import lane_verdict
+        moved = {('state.pp', 0), ('step.placeholder_moves', None), ("trackers.mon_features['moves_shown']", 0),
+                 ('trackers.pp_used', 0), ('trackers.tendency.opportunities', 0)}
+        for effect in ('marvelscale', 'pinch', 'silkscarf', 'plusminus', 'twistedspoon', 'stick_crit'):
+            self.assertEqual(lane_verdict(moved, {effect: [1]}, None)[0], sorted(moved, key=lambda x: (x[0], -1 if x[1] is None else x[1])))
+            self.assertEqual(lane_verdict(moved, {effect: [1]}, None, timing=(0,))[0], [], effect)
+            accepted = [];lane_verdict(moved, {effect: [1]}, None, timing=(0,), cascade_accepted=accepted)
+            self.assertEqual(sorted(accepted, key=str), sorted(moved, key=str))
+        self.assertEqual(len(lane_verdict(moved, {'irontail': [1]}, None, timing=(0,))[0]), len(moved))
+        # A same-set faint is not a timing witness. Even a valid action witness cannot mask these unrelated writes.
+        unrelated = {('state.moves', 0), ('state.stats', 1), ('state.status', 0), ('state.pp', 1)}
+        for timing in (True, (), (0,)):
+            self.assertEqual(set(lane_verdict(unrelated, {'marvelscale': [1]}, None, timing=timing)[0]), unrelated)
+        # No KO-consequence rule on a timing lane: a fainted-mon leaf with a non-cascade effect stays unexpected.
+        self.assertEqual(lane_verdict({('state.forced_switch', 0)}, {'irontail': [1]}, None, timing=(0,))[0], [('state.forced_switch', 0)])
+
+    def test_ko_timing_requires_selected_pp_and_matching_move_count(self):
+        from gpu_engine.v2e_regress import Pre, ko_timing_sides, lane_digest
+        L = 9;s = pre_arrays(L);s['pp'] = np.full(s['moves'].shape, 10, np.int32)
+        s['pending_residual'][5] = True
+        named = {f'state.{k}': v for k, v in s.items()};named['actions'] = np.zeros((L, 2), np.int32)
+        pre = Pre(named, VOCAB, CALLABLE, np.zeros((L, 2), bool))
+        faint = np.zeros((L, 2, 6), bool);faint[:, 1, 0] = True;base_faint = faint.copy();base_faint[8] = False
+        pp = s['pp'].copy();base_pp = pp.copy();pp[[0, 4, 5, 6, 8], 0, 0, 0] = 9
+        pp[2, 0, 1, 0] = 9;pp[3, 0, 0, 0] = 8;base_pp[7, 0, 0, 0] = 9
+        active = s['active'].copy();active[6, 0] = 1
+        count = np.full(L, 2);base_count = np.ones(L, np.int32);base_count[[4, 7]] = 2;count[7] = 1
+        expected = np.zeros((L, 2), bool);expected[[0, 7], 0] = True
+        got = ko_timing_sides(pre, faint, base_faint, pp, base_pp, active, s['active'], count, base_count)
+        np.testing.assert_array_equal(got, expected)
+        self.assertFalse(ko_timing_sides(pre, faint, base_faint, pp, base_pp, active, None, count, base_count).any())
+        # Identify the old base's recorded scalar count without rerunning or replacing the shared base pass.
+        digests = np.asarray(lane_digest(np.arange(5, dtype=np.int32), 5))
+        recorded = np.repeat(digests[[2, 0, 4], None], 2, axis=1)
+        matches = (recorded[:, None] == digests[None, :, None, :]).all((-2, -1))
+        np.testing.assert_array_equal(matches.argmax(-1), [2, 0, 4])
+        recorded[0, 1, 0] ^= np.uint32(1)
+        self.assertFalse((recorded[0, None] == digests[:, None, :]).all((-2, -1)).any())
+
+    def test_tier_d_pinch_accepts_anything_only_on_a_ko_cascade(self):
+        """D: a pinch-boosted KO that moved within the step decides whether the target's action ran (the GPU pass's 13
+        lane-steps: a status on the pinch user, the target's PP and action bookkeeping). Without a cascade the damage
+        allowance stays strict; the other D effects are unchanged."""
+        from gpu_engine.v2e_regress import lane_verdict
+        changed = {('state.status', 0), ('state.pp', 1), ('state.spikes', 0), ('trackers.tendency.moved', 1), ('state.baton_pass', 1)}
+        cascade = dict(ko_sides=[False, False], mon_ok=lambda leaf, side: False, families=())
+        self.assertEqual(lane_verdict(changed, {'pinch': [0]}, None, cascade=cascade)[0], [])
+        # The entries only CASCADE_ALLOWED accepted are collected for the listing (cascade_allowed), so they stay visible.
+        accepted = [];lane_verdict(changed | {('state.hp', 1)}, {'pinch': [0]}, None, cascade=cascade, cascade_accepted=accepted)
+        self.assertEqual(sorted(accepted), sorted(changed))
+        self.assertEqual(lane_verdict(changed, {'pinch': [0]}, None)[0], sorted(changed, key=lambda x: (x[0], x[1])))
+        # Inside the damage allowance a non-cascade pinch lane is accepted as before.
+        self.assertEqual(lane_verdict({('state.hp', 1), ('state.hp', 0)}, {'pinch': [0]}, None)[0], [])
+        # A non-pinch effect gains nothing from the cascade allowance.
+        self.assertEqual(lane_verdict({('state.status', 0)}, {'irontail': [0]}, None, cascade=cascade)[0], [('state.status', 0)])
+
     def test_pr0_meanlook_arrival_predicate_reads_the_tracker_pre_value(self):
         from gpu_engine.v2e_regress import Pre, PLUGINS, lane_verdict, MEANLOOK
         L = 6;s = pre_arrays(L);actions = np.zeros((L, 2), np.int32);MEAN = len(VOCAB['moves'])

@@ -81,7 +81,9 @@ def main(argv=None):
     train_seconds = time.perf_counter() - begin
     checkpoint = out / 'artifacts' / f'train-{args.iteration}.pt';v2t.save_checkpoint(checkpoint, runtime)
     archive = out / 'artifacts' / f'actor-{args.iteration}.npz';digest = sha(checkpoint)
-    metadata = v5_model.export(checkpoint, archive, expected_checkpoint_sha256=digest, enable_v5=True)
+    # V2 self_moves: the reference run's declaration (its plan manifest records the key only when on).
+    declared = json.loads((run / 'declaration.json').read_text()).get('self_moves', False)
+    metadata = v5_model.export(checkpoint, archive, expected_checkpoint_sha256=digest, enable_v5=True, self_moves=declared)
     snapshot = runs.Snapshot(iteration=args.iteration, checkpoint=f'artifacts/train-{args.iteration}.pt', checkpoint_sha256=digest,
         archive=f'artifacts/actor-{args.iteration}.npz', archive_sha256=metadata['weights_archive_sha256'], model_sha256=target.model_sha256)
     summary = dict(reference_run=str(run), iteration=args.iteration, caches=len(paths), rows=store.rows,
