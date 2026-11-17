@@ -209,6 +209,12 @@ for _step in ('initial', 0, 1, 2, 3, 4):
 for _step in (3, 4):
     for _field in ('1:0:borrowed_ability', '1:0:shown_ability'):
         ALLOWLIST[('wonderguard_trace', 'base', _step, _field)] = _TRACE_TRACER
+# Approved extension of the same Trace B2 bug: retire these ability-display pins when Trace is fixed.
+# Engine state remains exact; no physics, gender or volatile fields are allowlisted.
+for _step in ('initial', 0, 1, 2, 3, 4):
+    ALLOWLIST[('cutecharm_trace', 'base', _step, '1:0:original_ability')] = _TRACE_TRACER
+for _field in ('1:0:borrowed_ability', '1:0:shown_ability'):
+    ALLOWLIST[('cutecharm_trace', 'base', 2, _field)] = _TRACE_TRACER
 # Damage modifiers: the same OPEN BUG in plusminus_trace, whose Gardevoir traces Minun's Minus at entry (|-ability|p1a:
 # Gardevoir|Minus|[from] ability: Trace|[of] p2a: Minun) and stays in: only the tracer's original ability differs.
 for _case in ('roll=0', 'roll=5', 'roll=10', 'roll=15'):
@@ -229,6 +235,13 @@ for _scenario, _cases, _step in (
         ('perishsong_last_faster', ('base',), 1), ('perishsong_tie', ('tie=0', 'tie=1'), 1), ('wrap_tie', ('tie=0', 'tie=1'), 1),
         ('wrap_trapper_dragged_back', ('base',), 1)):
     for _case in _cases:ALLOWLIST[(_scenario, _case, _step, 'b2_refusal')] = _REPEATED_SPECIES
+# OPEN BUG (reported with Forecast; pre-existing, not Forecast's): a temporary weather that the residual clock ends. B2's
+# field fold resets its upkeep count at |-weather|none (public_field.apply: `clear`); the device resets weather_upkeeps
+# only at a weather hook (a weather move, a weather ability), and the residual clock calls none, so the device keeps the
+# last count. The readout never shows it (weather_turns is 0 without weather, and the next weather resets the count).
+_WEATHER_END_UPKEEPS = 'OPEN BUG: the residual clock ends the weather; B2 resets its upkeep count, the device keeps the stale one'
+for _scenario, _steps in (('forecast_rain_ends', (4, 5)), ('forecast_switch_back', (4, 5, 6))):
+    for _step in _steps:ALLOWLIST[(_scenario, 'base', _step, 'field:weather_upkeeps')] = _WEATHER_END_UPKEEPS
 
 
 PINS_PATH = Path(__file__).with_name('effect_probe_device_pins.json')

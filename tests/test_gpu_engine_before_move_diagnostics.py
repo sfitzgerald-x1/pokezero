@@ -14,13 +14,52 @@ import test_gpu_engine_outcome_diagnostics as fixture
 BASE='b34783d025a54d626404659a716d85fd174898e1'
 
 
+def infatuation_refusal_proof(tree, contact_tree):
+    """The omitted diagnostic fields are sound only behind these refusals."""
+    dump=lambda n:ast.dump(n,include_attributes=False)
+    expression=lambda s:dump(ast.parse(s,mode='eval').body)
+    function=lambda t,name:next(n for n in t.body if isinstance(n,ast.FunctionDef)and n.name==name)
+    def branch(body,condition):
+        return next(n for n in body if isinstance(n,ast.If)and dump(n.test)==expression(condition))
+    def statement(body,code):
+        expected=dump(ast.parse(code).body[0])
+        matches=[n for n in body if dump(n)==expected]
+        assert len(matches)==1,code
+        return matches[0]
+    lum=function(tree,'_lum_update')
+    carried=branch(lum.body,'_status_trace is not None')
+    statement(carried.body,'_status_trace = status_callbacks.unknown(_status_trace, jnp.asarray(eligible) & jnp.any((state.volatile & jnp.uint32(ATTRACT)) != 0, axis=(1,2)))')
+    assert lum.body.index(carried)<lum.body.index(branch(lum.body,'table.infatuation is not None and _infatuation_update'))
+    assert lum.body.index(carried)<lum.body.index(branch(lum.body,'table.items is None'))
+    initial=branch(function(tree,'initialize').body,'_weather_trace is not None')
+    refusal=statement(initial.body,'_weather_trace = status_callbacks.unknown(_weather_trace, pending_battle & jnp.any((state.volatile & jnp.uint32(ATTRACT)) != 0, axis=(1,2)))')
+    assert initial.body.index(refusal)<next(i for i,n in enumerate(initial.body)if isinstance(n,ast.Return))
+    step=function(tree,'step_with_chance')
+    first_update=next(n for n in step.body if isinstance(n,ast.If)and dump(n.test)==expression('_lifecycle_trace')
+        and any(isinstance(x,ast.Assign)and isinstance(x.value,ast.Call)and isinstance(x.value.func,ast.Name)
+                and x.value.func.id=='_lum_update' for x in n.body))
+    statement(first_update.body,'work, _public_trace = _lum_update(work, table, live, _public_trace, _device_public=_device_public)')
+    init_calls=[n for n in ast.walk(step)if isinstance(n,ast.Call)and isinstance(n.func,ast.Name)and n.func.id=='initialize']
+    action=next(n for n in step.body if isinstance(n,ast.For)and isinstance(n.target,ast.Name)and n.target.id=='order')
+    assert max(n.lineno for n in init_calls)<first_update.lineno<action.lineno
+    before=next(n for n in ast.walk(step)if isinstance(n,ast.Call)and dump(n.func)==expression('m.before_move'))
+    kwargs={k.arg:dump(k.value)for k in before.keywords}
+    assert kwargs['infatuated']==expression('((_active(work.volatile,work,side)&jnp.uint32(ATTRACT))!=0)&(_active(work.hp,work,foe)>0)')
+    assert kwargs['attract_roll']==expression('effect_draws[rows,side,4]')
+    attract=next(n for n in ast.walk(step)if isinstance(n,ast.If)and dump(n.test)==expression('table.infatuation is not None')
+        and any(isinstance(x,ast.Call)and dump(x.func)==expression('infatuation.apply')for x in ast.walk(n)))
+    statement(branch(attract.body,'_lifecycle_trace').body,'_public_trace = status_callbacks.unknown(_public_trace, acts & table.infatuation.attract[move])')
+    contact=branch(function(contact_tree,'apply_contact').body,'infatuation_table is not None')
+    statement(branch(contact.body,'_status_trace is not None').body,'_status_trace = callbacks.unknown(_status_trace, attracted)')
+
+
 class BeforeMoveDiagnosticsTests(unittest.TestCase):
     def setUp(self):self.t,_=fixture.OutcomeDiagnosticTests().tape()
 
     def inputs(self):
         z=j.arange(8,dtype=j.int32);yes=j.ones(8,bool)
         before=m.BeforeMove(j.array([1,6,0,5,1,0,1,6],j.int32),z+2,z+3,
-            j.array([False,False,False,False,True,True,False,False]),j.array([False,False,True,False,False,False,False,False]))
+            j.array([False,False,False,False,True,True,False,False]),j.array([False,False,True,False,False,False,False,False]),j.zeros(8,bool))
         args=(before,z%2,z%2+3,z+91,z+90,before.status,z+7,z+8)
         kwargs=dict(hp=z+100,maximum=z+200,ability=z+1,thaw_roll=z+20,paralysis_roll=z+21,confusion_roll=z+22,
             flinched=z%2==0,loafing=z%3==0,sleep_usable=z%2==1,early_bird=z%3==1,
@@ -84,9 +123,10 @@ class BeforeMoveDiagnosticsTests(unittest.TestCase):
         kw={k.arg:k.value for k in recorded.keywords}
         # WH + C-lite: defrost_move (Sacred Fire) reaches before_move only. It changes BeforeMove only for a frozen user, and the
         # lifecycle path refuses a frozen defrost user in the statement right after the call, so the recorder never has to
-        # rebuild that case. The exemption is exactly {'defrost_move'}; every other keyword still has to reach the recorder.
+        # rebuild that case. Infatuation fields have the source-bound refusal proof below.
         # If that refusal is ever removed, defrost_move must be passed to record_before_move_on_tape instead (option B).
-        EXEMPT={'defrost_move'}
+        EXEMPT={'defrost_move','infatuated','attract_roll'}
+        infatuation_refusal_proof(new,ast.parse(Path('gpu_engine/secondary.py').read_text()))
         for k in original.keywords:
             if k.arg in EXEMPT:continue
             self.assertIn(k.arg,kw,f'before_move keyword {k.arg!r} does not reach record_before_move_on_tape')
@@ -104,6 +144,21 @@ class BeforeMoveDiagnosticsTests(unittest.TestCase):
         # mechanics, engine_execution_completeness, engine_kernel_frame_risk and engine_retained_encoder_driver: byte-exact against reviewed SOURCE_PINS in transition_observer_wiring's source-binding subtests.
         for name in ('benchmark_retained_games.py',):
             self.assertEqual(Path('gpu_engine',name).read_bytes(),subprocess.check_output(['git','show','b8092a85:gpu_engine/'+name]))
+
+    def test_infatuation_omission_proof_detects_removed_or_weakened_refusals(self):
+        import copy
+        tree=ast.parse(Path('gpu_engine/transition.py').read_text())
+        contact=ast.parse(Path('gpu_engine/secondary.py').read_text())
+        infatuation_refusal_proof(tree,contact)
+        for name in ('_lum_update','initialize','step_with_chance','apply_contact'):
+            changed=copy.deepcopy(contact if name=='apply_contact' else tree)
+            fn=next(n for n in changed.body if isinstance(n,ast.FunctionDef)and n.name==name)
+            target=next(n for n in ast.walk(fn)if isinstance(n,ast.Assign)and isinstance(n.value,ast.Call)
+                and isinstance(n.value.func,ast.Attribute)and n.value.func.attr=='unknown'
+                and ('ATTRACT' in ast.unparse(n) or 'attracted' in ast.unparse(n) or 'table.infatuation.attract' in ast.unparse(n)))
+            target.value.args[-1]=ast.Constant(False)
+            with self.subTest(refusal=name),self.assertRaises(AssertionError):
+                infatuation_refusal_proof(tree if name=='apply_contact' else changed,changed if name=='apply_contact' else contact)
 
     def test_original_context_replacement_and_frame_row_commit_retain_tail(self):
         from gpu_engine import engine_execution_completeness as ex,engine_retained_encoder_driver as driver

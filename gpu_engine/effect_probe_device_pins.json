@@ -183,6 +183,86 @@
    ]
   },
   {
+   "scenario": "cutecharm_trace",
+   "case": "base",
+   "step": 0,
+   "field": "1:0:original_ability",
+   "value": [
+    "",
+    "trace"
+   ]
+  },
+  {
+   "scenario": "cutecharm_trace",
+   "case": "base",
+   "step": 1,
+   "field": "1:0:original_ability",
+   "value": [
+    "",
+    "trace"
+   ]
+  },
+  {
+   "scenario": "cutecharm_trace",
+   "case": "base",
+   "step": 2,
+   "field": "1:0:borrowed_ability",
+   "value": [
+    "cutecharm",
+    ""
+   ]
+  },
+  {
+   "scenario": "cutecharm_trace",
+   "case": "base",
+   "step": 2,
+   "field": "1:0:original_ability",
+   "value": [
+    "",
+    "trace"
+   ]
+  },
+  {
+   "scenario": "cutecharm_trace",
+   "case": "base",
+   "step": 2,
+   "field": "1:0:shown_ability",
+   "value": [
+    "cutecharm",
+    "trace"
+   ]
+  },
+  {
+   "scenario": "cutecharm_trace",
+   "case": "base",
+   "step": 3,
+   "field": "1:0:original_ability",
+   "value": [
+    "",
+    "trace"
+   ]
+  },
+  {
+   "scenario": "cutecharm_trace",
+   "case": "base",
+   "step": 4,
+   "field": "1:0:original_ability",
+   "value": [
+    "",
+    "trace"
+   ]
+  },
+  {
+   "scenario": "cutecharm_trace",
+   "case": "base",
+   "step": "initial",
+   "field": "1:0:original_ability",
+   "value": [
+    "",
+    "trace"
+   ]
+  },
+  {
    "scenario": "destinybond_expire",
    "case": "base",
    "step": 2,
@@ -311,6 +391,56 @@
     "kind": "FOLD_ERROR",
     "error": 6
    }
+  },
+  {
+   "scenario": "forecast_rain_ends",
+   "case": "base",
+   "step": 4,
+   "field": "field:weather_upkeeps",
+   "value": [
+    0,
+    4
+   ]
+  },
+  {
+   "scenario": "forecast_rain_ends",
+   "case": "base",
+   "step": 5,
+   "field": "field:weather_upkeeps",
+   "value": [
+    0,
+    4
+   ]
+  },
+  {
+   "scenario": "forecast_switch_back",
+   "case": "base",
+   "step": 4,
+   "field": "field:weather_upkeeps",
+   "value": [
+    0,
+    4
+   ]
+  },
+  {
+   "scenario": "forecast_switch_back",
+   "case": "base",
+   "step": 5,
+   "field": "field:weather_upkeeps",
+   "value": [
+    0,
+    4
+   ]
+  },
+  {
+   "scenario": "forecast_switch_back",
+   "case": "base",
+   "step": 6,
+   "field": "field:weather_upkeeps",
+   "value": [
+    0,
+    4
+   ]
   },
   {
    "scenario": "hyperbeam_roar",
