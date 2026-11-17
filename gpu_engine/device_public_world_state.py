@@ -27,6 +27,7 @@ class Tables:
     source: plans.Source
     namespaces: object
     max_pp: tuple
+    copied_pp: tuple = ()   # Transform: a copied slot's pp, min(5, move.pp) (sim/pokemon.ts transformInto)
 
 
 def compile_tables(source, metadata):
@@ -46,16 +47,16 @@ def compile_tables(source, metadata):
     rows = metadata['moves']
     if len(rows) != len(vocabulary['moves']):
         raise ValueError('same engine move rows required')
-    pp = []
+    pp = [];copied = []
     for index, row in enumerate(rows):
         if index == 0:
-            pp.append(0)
+            pp.append(0);copied.append(0)
             continue
         value = row.get('pp') if isinstance(row, dict) else None
         if type(value) is not int or value <= 0:
             raise ValueError('original engine move maxPP unavailable')
-        pp.append(value*8//5)
-    return Tables(source, MappingProxyType(names), tuple(pp))
+        pp.append(value*8//5);copied.append(min(5, value))
+    return Tables(source, MappingProxyType(names), tuple(pp), tuple(copied))
 
 
 @dataclass(frozen=True)
@@ -116,6 +117,90 @@ def _rebase(root, assignment, active, *, state):
         physical_to_public=t.physical_to_public.at[0, foe].set(j.asarray(mapping)),
         active_physical=t.active_physical.at[0, foe].set(active),
         own_order=t.own_order.at[0, foe].set(j.asarray(order)))
+
+
+def _materialize_transform(root, tables, arrays, owner, foe, active, assignment):
+    """Transform (gpu_engine/transform.py) in one world, after the owner cells and the sampled opponent are written.
+
+    Our transformed active: the request shows its copied moves and PP and its copied Hidden Power type and power (Gen 3
+    names both), but its copied Atk..Spe and ability are the TRUE opponent's (transformInto copies them; the request
+    shows baseStoredStats). They are rebuilt from this world's sampled donor (the opposing member of the donor species),
+    so no actual opposing stat reaches a sampled world; a sampled donor whose moves (or Hidden Power, when copied) differ
+    from the copy refuses. The saves, flag, moves, PP, Hidden Power and types (public) stay the owner's own.
+    The opponent's transformed active (the public Transform mark on its active slot): the sampled member is the base,
+    so its sampled stats, moves, PP (source max minus the public uses before the Transform: the carry charges nothing
+    while transformed) and Hidden Power become the saves, and the copy is our donor's (the member of the donor species):
+    Atk..Spe, moves, base ability, species types and Hidden Power, the copied slots at min(5, pp) minus the carry's
+    copied_pp_used. A donor that may have run another ability or type at the Transform (Trace, Color Change) refuses."""
+    if 'transformed' not in arrays:
+        return
+    own = root.own
+    if bool(np.asarray(own['transformed'])):
+        mine = int(np.asarray(own['active']))
+        donor = [k for k in range(6) if int(arrays['species'][0, foe, k]) == int(np.asarray(own['transform_species']))]
+        if len(donor) != 1:
+            raise ValueError('own Transform donor not in the sampled party')
+        d = donor[0]
+        # The copied moves are exact (our request lists them), so the sampled donor must hold that set; its Hidden Power
+        # type and power are exact too (the request names them, gen < 6) and stay the owner's own.
+        copied = arrays['moves'][0, owner, mine]
+        if sorted(int(m) for m in arrays['moves'][0, foe, d] if m) != sorted(int(m) for m in copied if m):
+            raise ValueError('own Transform donor set differs from the copied moves')
+        names = getattr(getattr(tables, 'source', None), 'vocabulary', {}).get('moves', ())
+        if any(0 < int(m) < len(names) and normalize_id(names[int(m)]).startswith('hiddenpower') for m in copied) and any(
+                int(arrays[leaf][0, foe, d]) != int(arrays[leaf][0, owner, mine]) for leaf in ('hidden_power_type', 'hidden_power_power')):
+            raise ValueError('own Transform donor Hidden Power differs from the copy')
+        arrays['stats'][0, owner, mine, 1:] = arrays['stats'][0, foe, d, 1:]
+        arrays['ability'][0, owner, mine] = arrays['ability'][0, foe, d]
+    view = root.view
+    marks, donors = view.get('transformed'), view.get('transform_species')
+    slot = next((s for s, physical in assignment.items() if physical == active), None)
+    if marks is None or donors is None or slot is None or not bool(np.asarray(marks)[0, slot]):
+        return
+    species = int(np.asarray(donors)[0, slot])
+    donor = [k for k in range(6) if int(arrays['species'][0, owner, k]) == species]
+    if len(donor) != 1:
+        raise ValueError('public Transform donor not in the owner party')
+    d = donor[0]
+    names = tables.namespaces['abilities']
+    base_ability = int(arrays['base_ability'][0, owner, d])
+    if base_ability in (names.get('trace', -1), names.get('colorchange', -1)):
+        raise ValueError('PUBLIC_TRANSFORM_DONOR_OVERRIDDEN')
+    mine = bool(np.asarray(own['transformed'])) and d == int(np.asarray(own['active']))
+    stats = np.asarray(own['transform_stats']) if mine else arrays['stats'][0, owner, d, 1:]
+    moves = np.asarray(own['transform_moves']) if mine else arrays['moves'][0, owner, d]
+    hp_type, hp_power = (np.asarray(own['transform_hidden_power']) if mine else
+        (arrays['hidden_power_type'][0, owner, d], arrays['hidden_power_power'][0, owner, d]))
+    address = (0, foe, active)
+    arrays['transform_stats'][0, foe] = arrays['stats'][address][1:]
+    arrays['transform_moves'][0, foe] = arrays['moves'][address]
+    arrays['transform_pp'][0, foe] = arrays['pp'][address]
+    arrays['transform_hidden_power'][0, foe] = (arrays['hidden_power_type'][address], arrays['hidden_power_power'][address])
+    used = getattr(root.public, 'copied_pp_used', None)
+    used = np.zeros(4, np.int32) if used is None else np.asarray(used)[0, foe]
+    arrays['stats'][address][1:] = stats
+    arrays['moves'][address] = moves
+    arrays['pp'][address] = [max(0, tables.copied_pp[int(m)] - int(n)) if m else 0 for m, n in zip(moves, used)]
+    arrays['disabled'][address] = False
+    arrays['ability'][address] = base_ability
+    arrays['types'][address] = arrays['base_types'][0, owner, d]
+    arrays['hidden_power_type'][address], arrays['hidden_power_power'][address] = hp_type, hp_power
+    arrays['transformed'][0, foe] = True
+    arrays['transform_species'][0, foe] = species
+    truant = tables.namespaces['abilities'].get('truant', 0)
+    if truant and base_ability == truant:
+        raise ValueError('public Truant phase not materialized')   # the copy's clock, as for any Truant foe active
+    # Its last move (the public caller identity) names a copied slot, or Transform itself (failencore: history slot -1).
+    last = view.get('last_moves')
+    move = 0 if last is None else int(np.asarray(last)[0, slot])
+    if move > 0:
+        match = np.flatnonzero(arrays['moves'][address] == move)
+        arrays['last_move'][address] = move
+        arrays['last_action_kind'][0, foe] = 2
+        arrays['last_action_index'][0, foe] = int(match[0]) if len(match) == 1 else -1
+        held = int(arrays['item'][address])
+        if held and held == tables.namespaces['items'].get('choiceband', -1):
+            arrays['choice_move'][address] = move if len(match) == 1 else 0
 
 
 def world_keys(seeds):
@@ -356,6 +441,9 @@ def _materialize(root, start, tables, recipe, host_keys=None):
                 if last is None:
                     raise ValueError('public caller identity unavailable')
                 move = int(last[0, public_slot])
+                marks = view.get('transformed')
+                if marks is not None and bool(np.asarray(marks)[0, public_slot]):
+                    move = 0   # Transform: its last move names the copy's slots (_materialize_transform)
                 if move > 0:
                     match = np.flatnonzero(arrays['moves'][address] == move)
                     name = normalize_id(tables.source.vocabulary['moves'][move])
@@ -376,6 +464,7 @@ def _materialize(root, start, tables, recipe, host_keys=None):
                 truant = tables.namespaces['abilities'].get('truant', 0)
                 if truant and arrays['ability'][address] == truant:
                     raise ValueError('public Truant phase not materialized')
+        _materialize_transform(root, tables, arrays, owner, foe, active, assignment)
         if arrays['hp'][0, foe, active] <= 0:
             raise ValueError('opposing faint/replacement boundary not materialized')
         fields = view.get('field_features')

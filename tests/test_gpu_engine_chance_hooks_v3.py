@@ -17,16 +17,17 @@ ROOT = Path(__file__).resolve().parents[1]
 NODE = os.environ.get('NODE') or shutil.which('node')
 
 SCRIPT = r'''
-const path=require('path'),root=process.argv[1],hooks=process.argv[2];
+const path=require('path'),root=process.argv[1],hooks=process.argv[2],version=process.argv[3];
 const {Battle}=require(path.join(root,'dist/sim/battle.js'));
 const {PRNG}=require(path.join(root,'dist/sim/prng.js'));
 let tape=null;const events=[];
 require(hooks).install(Battle,PRNG,()=>tape,e=>events.push(e),()=>null,path.join(root,'dist/sim/pokemon.js'));
 const row=()=>[0,99,99,0,15,0,0,0,0,0,0,0];
-function T(nonce,o={},schema='v3'){
+function T(nonce,o={},schema=version){
   const t={schema:'pokezero.gpu_chance_tape.'+schema,nonce,draws:[row(),row()],secondary:[99,99],sleep_talk:[0,0]};
-  if(schema!=='v1')t.effect=[[15,0,0,0],[15,0,0,0]];
-  if(schema==='v3')t.phazing=[59,59];
+  if(schema!=='v1')t.effect=Array.from({length:2},()=>['v5','v6'].includes(schema)?[15,0,0,0,1]:[15,0,0,0]);
+  if(['v3','v4','v5','v6'].includes(schema))t.phazing=[59,59];
+  if(['v4','v6'].includes(schema)){t.entry_ties=[0,0];t.resuming=false;}
   for(const [k,v] of Object.entries(o)){const [a,b,c]=k.split('.');if(c!==undefined)t[a][+b][+c]=v;else if(b!==undefined)t[a][+b]=v;else t[a]=v;}
   return t;
 }
@@ -48,8 +49,8 @@ function contact(holder,ability,o,schema){
 }
 const out={};
 for(const [holder,ability] of [['Raichu','Static'],['Nidoking','Poison Point'],['Magcargo','Flame Body']])
-  out[ability]=[19,20].map(v=>contact(holder,ability,{'phazing.0':v},'v3'));
-out.spore=[0,1,2,3,4,5,6].map(v=>contact('Breloom','Effect Spore',{'phazing.0':v,'effect.0.2':3},'v3'));
+  out[ability]=[19,20].map(v=>contact(holder,ability,{'phazing.0':v},version));
+out.spore=[0,1,2,3,4,5,6].map(v=>contact('Breloom','Effect Spore',{'phazing.0':v,'effect.0.2':3},version));
 out.static_v2=contact('Raichu','Static',{},'v2');
 out.invalid={};
 for(const [name,t] of Object.entries({
@@ -69,9 +70,11 @@ def coupled(result):
 @requires_showdown()
 @unittest.skipUnless(NODE, 'requires node')
 class ChanceHooksV3Tests(unittest.TestCase):
+    schema = 'v3'
     @classmethod
     def setUpClass(cls):
-        raw = subprocess.check_output([NODE, '-e', SCRIPT, str(showdown_root()), str(ROOT / 'gpu_engine/chance_hooks.cjs')], text=True)
+        raw = subprocess.check_output([NODE, '-e', SCRIPT, str(showdown_root()),
+                                       str(ROOT / 'gpu_engine/chance_hooks.cjs'), cls.schema], text=True)
         cls.out = json.loads(raw)
 
     def assertResolved(self, result):
@@ -80,7 +83,7 @@ class ChanceHooksV3Tests(unittest.TestCase):
 
     def test_one_third_abilities_read_phazing_below_twenty(self):
         for ability, status in (('Static', 'par'), ('Poison Point', 'psn'), ('Flame Body', 'brn')):
-            role = 'contact_' + ability.lower().replace(' ', '')
+            role = 'static' if ability == 'Static' and self.schema in ('v4', 'v6') else 'contact_' + ability.lower().replace(' ', '')
             for raw, r in zip((19, 20), self.out[ability]):
                 with self.subTest(ability=ability, raw=raw):
                     self.assertResolved(r)
@@ -106,6 +109,18 @@ class ChanceHooksV3Tests(unittest.TestCase):
     def test_tape_schema_validation(self):
         for name, error in self.out['invalid'].items():
             with self.subTest(name=name):self.assertEqual(error, 'invalid chance tape')
+
+
+class ChanceHooksV4ContactTests(ChanceHooksV3Tests):
+    schema = 'v4'
+
+
+class ChanceHooksV5ContactTests(ChanceHooksV3Tests):
+    schema = 'v5'
+
+
+class ChanceHooksV6ContactTests(ChanceHooksV3Tests):
+    schema = 'v6'
 
 
 if __name__ == '__main__':

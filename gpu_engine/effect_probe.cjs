@@ -1,6 +1,6 @@
 // Showdown side of the per-move two-engine probe (gpu_engine/effect_probe.py).
 // Diagnostic only: one Battle per enumerated case, driven turn by turn with the
-// same semantic chance tape the JAX engine receives (chance_hooks.cjs, tape v3).
+// same semantic chance tape the JAX engine receives (chance_hooks.cjs, tape v6).
 // JSON lines on stdin/stdout; usage: node effect_probe.cjs SHOWDOWN_ROOT
 const fs = require('node:fs');
 const path = require('node:path');
@@ -125,7 +125,13 @@ function snapshot(battle) {
           attract:!!v.attract,
           substitute:v.substitute ? v.substitute.hp : null,
           names:Object.keys(v).sort(),
-        }};
+        },
+        // Transform (compared only under require_fields ["transform"]): the copy's species, stats, types, ability and
+        // Hidden Power, and the base move slots (baseMoveSlots: the revert's moves and PP).
+        transform:{transformed:!!p.transformed, species:p.species.id,
+          stats:['atk', 'def', 'spa', 'spd', 'spe'].map(k => p.storedStats[k]), types:p.getTypes().map(t => t.toLowerCase()),
+          ability:p.ability || '', hp_type:(p.hpType || '').toLowerCase(), hp_power:p.hpPower ?? null,
+          base_moves:p.baseMoveSlots.map(m => m.id), base_pp:p.baseMoveSlots.map(m => m.pp)}};
     });
     return {active:originalIndex(side.active[0]), mons, mask:requestMask(battle, side.n)};
   });
@@ -173,13 +179,18 @@ function main() {
       // Start-of-battle randomness uses the seeded PRNG but is audited by the chance
       // hooks: an M/F gender draw is inert unless a set uses Attract or Cute Charm,
       // the end-of-turn Quick Claw roll is inert without a Quick Claw holder, and
-      // any other draw (a lead Speed tie) is reported as INITIAL_RANDOM.
+      // the per-case initial tie is shared with the engine; other draws stay audited.
       const genderSensitive = cmd.sets.some(team => team.some(set =>
         set.moves.includes('attract') || env.pool.toID(set.ability) === 'cutecharm'));
-      env.setInitializing({allow_inert_gender: !genderSensitive});
+      if (cmd.initial_ties !== undefined && (!Array.isArray(cmd.initial_ties) || cmd.initial_ties.length !== cmd.cases
+          || cmd.initial_ties.some(x => x !== 0 && x !== 1))) throw Error('one initial tie bit per case required');
       device = !!cmd.device;
       try {
-        battles = Array.from({length:cmd.cases}, () => {
+        battles = Array.from({length:cmd.cases}, (_, i) => {
+          const initial = {allow_inert_gender: !genderSensitive};
+          // An older caller without the coordinate keeps the audited unresolved fallback.
+          if (cmd.initial_ties !== undefined) initial.initial_tie = cmd.initial_ties[i];
+          env.setInitializing(initial);
           const b = new env.Battle({formatid:cmd.format, seed:cmd.seed});
           // Device mode: the Custom Game format is a debug format, so getHealth shares the exact HP (sim/battle.ts
           // reportExactHP = !!format.debug; sim/pokemon.ts getHealth). Gen 3 Random Battle shares HP Percentage

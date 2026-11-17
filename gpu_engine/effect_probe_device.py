@@ -23,8 +23,9 @@ teams): the .cjs turns off Custom Game's debug exact-HP display so shared HP lin
 wire_lines below drops |debug| lines (debug-format only, never on a randbats wire), the |raw| custom-rule infobox
 (the format's @@@sleepclausemod suffix; Gen 3 Random Battle has Sleep Clause Mod built in, announced by its |rule|
 line), Splash's |-nothing| message (the probes' filler move, in no Gen 3 random set: B2's wire has no consumer for
-it, and the line carries no public fact) and the start-of-battle EV-limit |bigerror| warning (authored EVs; random
-sets keep the limit), and replaces the |tier| header.
+it, and the line carries no public fact), the start-of-battle EV-limit |bigerror| warning (authored EVs; random
+sets keep the limit) and the battle-end |win| and |tie| lines (BATTLE_END: B2 folds per decision and never sees one), and
+replaces the |tier| header.
 
 The device runs with the production belief tables (engine_device_observation.compile_tables over the B2 catalog, as
 gpu_engine/device_observation_collector.py builds them), so its Pressure PP charge, its hard belief masks and its shown
@@ -48,6 +49,11 @@ B2_STATUS = ('', 'slp', 'par', 'brn', 'frz', 'psn', 'tox')                 # pub
 WEATHER = {0: '', 1: 'raindance', 2: 'sunnyday', 3: 'sandstorm', 4: 'hail'}  # engine weather codes (phase_d_live_worlds)
 TIER_LINE = '|tier|[Gen 3] Random Battle'
 EV_LIMIT_WARNING = "|bigerror|Warning: One player isn't adhering to a 510 EV limit, and the other player is."
+# The battle-end line kinds, |win|<player> and |tie. B2 folds per decision, and no decision follows a battle end, so
+# production never feeds B2 either line (public_refresh_stream.family has no consumer for them and refuses them); a probe
+# battle that ends feeds B2 its production input domain without them. The outcome itself (done, winner, tie) is engine
+# state, which state mode compares.
+BATTLE_END = ('win', 'tie')
 
 SOURCE_HASH_PREFIX = 'effect-probe-'
 
@@ -72,7 +78,9 @@ FIELDS = (
     ('borrowed_ability', 'mon', 'vocab abilities[t.borrowed_ability]', 'catalog.abilities.names[ctx.abilities.running]'),
     ('shown_ability', 'mon', 'vocab abilities[t.shown_ability]', 'ctx.abilities.running, else ctx.abilities.original'),
     ('types', 'mon', 'vocab types[t.shown_types]', 'TYPE labels of ctx.types.categories when overridden, else '
-     'catalog.species.device.type_categories[mons.species]'),
+     'catalog.species.device.type_categories[ctx.abilities.transform_species when transformed, else mons.species]'),
+    ('transformed', 'mon', 't.transformed', 'ctx.abilities.transformed'),
+    ('transform_species', 'mon', 'vocab species[t.transform_species]', 'catalog.species.names[ctx.abilities.transform_species]'),
     ('belief_hard', 'mon', 't.belief_mask', 'beliefs.hard[observer 1-side]'),
     ('visible_hard', 'mon', 't.visible_belief.visible_hard', 'beliefs.hard[observer 1-side]'),
     ('belief_pin', 'mon', 't.visible_belief.pin / pin_active', 'beliefs.pin / pin_active[observer 1-side]'),
@@ -156,6 +164,10 @@ LEFT_OUT = {
     'own_order, public_order, physical_to_public, active_physical, next_slot': 'private identity cursors and '
               'request-order permutations (never encoded); B2 indexes by public encounter only',
     'error': 'device diagnostic input-contract bits',
+    'copied_pp_used, transform_own_view, transform_borrowed': 'Transform: the device\'s copied-slot uses (for device worlds), '
+              'the transformer owner\'s own view of its copied ability (B2 keeps it only in that owner\'s fold, read for the '
+              'Pressure charge of moves against the transformer), and the mark that a borrowed ability is a Transform copy (the '
+              'readout hides it from the traced column, B2\'s traced); none has a compared B2 counterpart in the opposing fold',
     'wish_turns, wish_pending (field_features)': 'zero in the carry; readout derives them from wish_set_turn '
               '(compared)',
 }
@@ -181,25 +193,10 @@ for _case in ('selfhit=99,paralysis=0', 'selfhit=99,paralysis=99'):
 # Fixed (history): OPEN BUG C, Encore's residual -end (engine_device_public_hooks.derived_volatiles), 24 entries retired.
 # Fixed (history): OPEN BUG D, a fainted active's kept stages (engine_device_trackers._observe), 13 entries retired.
 # Fixed (history): OPEN BUG E, Flash Fire's -start (engine_device_public_hooks.derived_volatiles), 2 entries retired.
-# OPEN BUG (reported; the last-move half is possibly B2's quirk, for the lead to rule): Pursuit's switch intercept prints
-# |move|p2a: X|Pursuit|p1a: Y|[from] Pursuit. B2 records a move line's last-used move only without [from]
-# (public_moves.record_move: last_kind/last_id gated by ~has_from, gpu_engine/public_moves.py:210-211) and credits the
-# line's -damage to the user's dealt sums (public_damage's move window); the device's move hook records Pursuit as the
-# last move and its damage history credits the intercept no dealt damage.
-_PURSUIT_FROM = 'OPEN BUG: the [from] Pursuit intercept: B2 keeps the prior last move and credits its damage dealt; the device does neither'
-ALLOWLIST[('destinybond_pursuit', 'base', 1, '1:active:last_move')] = _PURSUIT_FROM
-for _scenario, _steps in (('destinybond_pursuer', (1, 2)), ('wh_pursuit', (0,))):
-    for _step in _steps:
-        for _field in ('1:active:last_move', '1:active:last_damage_dealt', '1:active:damage_exact_dealt'):
-            ALLOWLIST[(_scenario, 'base', _step, _field)] = _PURSUIT_FROM
-# Fidelity tier D: the same intercept in contact_pursuit (Tyranitar's Pursuit on a switching Poison Point Nidoking),
-# contact_pursuit_synchronize (Umbreon's Pursuit on a switching Static Raichu; its ability fields, the reveals that probe
-# checks, are not allowlisted) and wonderguard_trace (a Pursuit a Traced Wonder Guard blocks: no damage, so only the last move).
-for _scenario in ('contact_pursuit', 'contact_pursuit_synchronize'):
-    for _case in ('roll=0', 'roll=20'):
-        for _field in ('0:active:last_move', '0:active:last_damage_dealt', '0:active:damage_exact_dealt'):
-            ALLOWLIST[(_scenario, _case, 0, _field)] = _PURSUIT_FROM
-ALLOWLIST[('wonderguard_trace', 'base', 3, '0:active:last_move')] = _PURSUIT_FROM
+# Fixed (history): OPEN BUG F, the [from] Pursuit intercept's last move (the device copies B2: engine_device_public_hooks.move
+# from_tag) and its damage credit (transition.step_with_chance's intercept), 10 entries retired.
+# Fixed (history): OPEN BUG G, Sleep Talk's failing called Counter (the reveal precedes the called move's gates:
+# transition.step_with_chance's _called_line), 2 entries retired.
 # OPEN BUG (reported to the coordinator; pre-existing, first exposed by fidelity tier D's wonderguard_trace, the first probe
 # with a Trace holder): Porygon2 traces Shedinja's Wonder Guard at entry (|-ability|p2a: Porygon2|Wonder Guard|[from]
 # ability: Trace|[of] p1a: Shedinja). B2 records the copy for the traced mon and nothing for the tracer's own Trace
@@ -218,12 +215,11 @@ for _step in ('initial', 0, 1, 2, 3, 4):
     ALLOWLIST[('cutecharm_trace', 'base', _step, '1:0:original_ability')] = _TRACE_TRACER
 for _field in ('1:0:borrowed_ability', '1:0:shown_ability'):
     ALLOWLIST[('cutecharm_trace', 'base', 2, _field)] = _TRACE_TRACER
-# OPEN BUG (reported): a failing Counter called by Sleep Talk. Showdown prints |move|p1a: X|Counter|p2a: Y|[from] Sleep
-# Talk and B2 reveals Counter (0 PP charged); the device's called-move reveal (transition.py:1016, device_public.move(...,
-# acts & (move!=caller_move), pp_use=False, count_turn=False)) is gated by acts, which Counter's failure gate (transition.py:
-# 998, acts &= ~(counter kind & (taken kind differs | the called move is not the chosen one))) has already cleared.
-_SLEEP_TALK_COUNTER = 'OPEN BUG: Sleep Talk\'s failing called Counter is revealed by B2 ([from] Sleep Talk line), not by the device'
-for _step in (1, 2):ALLOWLIST[('counter_sleeptalk', 'talk=0', _step, '0:0:moves')] = _SLEEP_TALK_COUNTER
+# Damage modifiers: the same OPEN BUG in plusminus_trace, whose Gardevoir traces Minun's Minus at entry (|-ability|p1a:
+# Gardevoir|Minus|[from] ability: Trace|[of] p2a: Minun) and stays in: only the tracer's original ability differs.
+for _case in ('roll=0', 'roll=5', 'roll=10', 'roll=15'):
+    for _step in ('initial', 0, 1, 2):
+        ALLOWLIST[('plusminus_trace', _case, _step, '0:0:original_ability')] = _TRACE_TRACER
 # Fixed (history): OPEN BUG I, the upkeep's Lum and pinch-berry rules (engine_device_negative_items.upkeep), 140 entries retired.
 # B2 limit (explained, not a device fact): B2's fold refuses (PAYLOAD) a side's second encounter of one species, at the
 # repeat's arrival line (|switch|p2a: Gengar2|Gengar, L74, M|...: RAW_BEGIN, SWITCH_PRELUDE, MUDSHOT, SWITCH, NONPROC,
@@ -239,6 +235,13 @@ for _scenario, _cases, _step in (
         ('perishsong_last_faster', ('base',), 1), ('perishsong_tie', ('tie=0', 'tie=1'), 1), ('wrap_tie', ('tie=0', 'tie=1'), 1),
         ('wrap_trapper_dragged_back', ('base',), 1)):
     for _case in _cases:ALLOWLIST[(_scenario, _case, _step, 'b2_refusal')] = _REPEATED_SPECIES
+# OPEN BUG (reported with Forecast; pre-existing, not Forecast's): a temporary weather that the residual clock ends. B2's
+# field fold resets its upkeep count at |-weather|none (public_field.apply: `clear`); the device resets weather_upkeeps
+# only at a weather hook (a weather move, a weather ability), and the residual clock calls none, so the device keeps the
+# last count. The readout never shows it (weather_turns is 0 without weather, and the next weather resets the count).
+_WEATHER_END_UPKEEPS = 'OPEN BUG: the residual clock ends the weather; B2 resets its upkeep count, the device keeps the stale one'
+for _scenario, _steps in (('forecast_rain_ends', (4, 5)), ('forecast_switch_back', (4, 5, 6))):
+    for _step in _steps:ALLOWLIST[(_scenario, 'base', _step, 'field:weather_upkeeps')] = _WEATHER_END_UPKEEPS
 
 
 PINS_PATH = Path(__file__).with_name('effect_probe_device_pins.json')
@@ -288,6 +291,7 @@ def wire_lines(lines):
     out = []
     for line in lines:
         if line.startswith('|debug|') or line.startswith('|raw|') or line in ('|-nothing', EV_LIMIT_WARNING):continue
+        if line.startswith('|') and line.split('|')[1] in BATTLE_END:continue   # exactly the |win| and |tie| kinds
         out.append(TIER_LINE if line.startswith('|tier|') else line)
     return out
 
@@ -455,6 +459,8 @@ def device_view(t, lane, vocab):
                 moves=moves, original_ability=original, borrowed_ability=borrowed,
                 shown_ability=_name(vocab['abilities'], t.shown_ability[lane, s, k]),
                 types=[_name(vocab['types'], x) for x in t.shown_types[lane, s, k] if int(x)],
+                transformed=False if t.transformed is None else bool(t.transformed[lane, s, k]),
+                transform_species='' if t.transform_species is None else _name(vocab['species'], t.transform_species[lane, s, k]),
                 belief_hard=_words(t.belief_mask[lane, s, k]),
                 **({} if vb is None else dict(visible_hard=_words(vb.visible_hard[lane, s, k]),
                     belief_pin=[_words(vb.pin[lane, s, k]), bool(vb.pin_active[lane, s, k])],
@@ -531,7 +537,10 @@ def b2_side(b2, q, own, s, catalog):
             moves=[(_name(catalog.moves.names, m), int(n)) for m, n in zip(ids, uses) if int(m)],
             original_ability=original, borrowed_ability=running, shown_ability=running or original,
             types=type_names(ctx.types.categories[q, s] if bool(ctx.types.overridden[q, s]) and int(ctx.types.encounter[q, s]) == int(mons.encounter[q, s, k])
-                             else static_types[int(mons.species[q, s, k])]),
+                             else static_types[int(ctx.abilities.transform_species[q, s, k]) if bool(ctx.abilities.transformed[q, s, k])
+                                               and int(ctx.abilities.transform_species[q, s, k]) > 0 else int(mons.species[q, s, k])]),
+            transformed=bool(ctx.abilities.transformed[q, s, k]),
+            transform_species=_name(catalog.species.names, ctx.abilities.transform_species[q, s, k]),
             **_belief(beliefs.hard[q, 1 - s, k], beliefs.pin[q, 1 - s, k], beliefs.pin_active[q, 1 - s, k], beliefs.conflicts[q, 1 - s, k]),
             sleep_turns=int(ctx.sleep.count[q, s, k]), rest_sleep=int(ctx.sleep.rest[q, s, k]),
             sleep_skipped_turns=int(ctx.sleep.skipped[q, s, k]), sleep_cant_pending=int(ctx.sleep.pending[q, s, k]),

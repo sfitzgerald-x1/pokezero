@@ -149,8 +149,8 @@ class TransitionObserverWiringTests(unittest.TestCase):
                     isinstance(t, ast.Name) and t.id == name for t in n.targets)))
 
         for file, name, count in (
-                # §6 pins residual_order.py (R1) beside transition.py: 89 and 14.
-                ("engine_source_frame_witness.py", "SOURCE_PINS", 90),
+                # §6 pins residual_order.py (R1) beside transition.py; Forecast, Transform and infatuation bring the witness to 92.
+                ("engine_source_frame_witness.py", "SOURCE_PINS", 92),
                 ("chance_consumers.py", "SOURCE_PINS", 14),
                 ("ordinary_law.py", "MAPPING_PINS", 6),
                 ("conditional_law.py", "MAPPING_PINS", 4)):
@@ -160,9 +160,9 @@ class TransitionObserverWiringTests(unittest.TestCase):
                 with self.subTest(binding=file, target=target):
                     actual = hashlib.sha256((ROOT / "gpu_engine" / target).read_bytes()).hexdigest()
                     self.assertEqual(actual, expected)
-        modules = ("action_history absorption baton combat critical damage_moves effects encore "
-                   "entry focus_punch infatuation items linked_traps mechanics phazing pressure pursuit residual_order secondary "
-                   "self_destruct sleep_talk solar_beam state sustain transition variable_moves weather").split()
+        modules = ("absorption action_history baton combat critical damage_moves effects encore "
+                   "entry focus_punch forecast infatuation items linked_traps mechanics phazing pressure pursuit residual_order secondary "
+                   "self_destruct sleep_talk solar_beam state sustain transform transition variable_moves weather").split()
         domain = hashlib.sha256(b"".join(name.encode() + b"\0" +
             (ROOT / "gpu_engine" / (name + ".py")).read_bytes() + b"\0"
             for name in modules)).hexdigest()

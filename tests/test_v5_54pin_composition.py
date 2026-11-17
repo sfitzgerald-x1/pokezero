@@ -28,7 +28,7 @@ class CompositionTests(unittest.TestCase):
 
     def test_exact_ordinary_inventory_plus_existing_hypothesis_and_matching_schema(self):
         from gpu_engine import engine_source_frame_witness as witness
-        witness._source();self.assertEqual(len(witness.SOURCE_PINS),90)
+        witness._source();self.assertEqual(len(witness.SOURCE_PINS),92)
         old=subprocess.check_output(['git','show','2b0ec76a:gpu_engine/engine_source_frame_witness.py'],text=True)
         inventory=next(ast.literal_eval(n.value) for n in ast.parse(old).body if isinstance(n,ast.Assign)
             and any(isinstance(t,ast.Name) and t.id=='SOURCE_PINS' for t in n.targets))
@@ -39,7 +39,7 @@ class CompositionTests(unittest.TestCase):
         baseline=subprocess.check_output(['git','show',BASE+':gpu_engine/engine_source_frame_witness.py'],text=True)
         inherited=next(ast.literal_eval(n.value) for n in ast.parse(baseline).body if isinstance(n,ast.Assign)
             and any(isinstance(t,ast.Name) and t.id=='SOURCE_PINS' for t in n.targets))
-        self.assertEqual(set(witness.SOURCE_PINS)-set(inherited),{'infatuation.py'})
+        self.assertEqual(set(witness.SOURCE_PINS)-set(inherited),{'infatuation.py','transform.py','forecast.py'})
         self.assertEqual(set(inherited)-set(witness.SOURCE_PINS),set())
         for file,expected,historical_count in [('engine_full_v4_event_device.py',62,34),('engine_lifecycle_event_device.py',53,41),('engine_kernel_frame_risk.py',107,28)]:
             original=subprocess.check_output(['git','show','2b0ec76a:gpu_engine/'+file],text=True)
@@ -184,5 +184,11 @@ class CompositionTests(unittest.TestCase):
             changed=current.replace(before,after)
             self.assertNotEqual(shape(expected),shape(changed))
 
+
+    def test_forecast_keeps_complete_integrated_private_sources(self):
+        normalize=lambda s:ast.dump(ast.parse(s),include_attributes=False)
+        for file in ('engine_retained_encoder_driver.py','v5_public_branch.py','v5_hypothetical_batch.py'):
+            old=subprocess.check_output(['git','show','766833fc8e6f40d2ffa80aa95a19fd940a519f33:gpu_engine/'+file],text=True)
+            self.assertEqual(normalize(old),normalize(Path('gpu_engine',file).read_text()))
 
 if __name__=='__main__':unittest.main()

@@ -438,8 +438,9 @@ console.log(JSON.stringify(orders));"""
         return state._replace(confusion_counter=state.confusion_counter.at[:,side,slot].set(value))
 
     def confusion_turn(self,c,a,fact,state,turn):
-        """One TURN while seat 1 is confused: turn_end's CONFUSION_TURNS tick and B2's TURN fact."""
-        h.turn_end(c,state,state,j.ones(2,bool));fact(a.TURN,-1,turn)
+        """One TURN while seat 1 is confused: turn_end's CONFUSION_TURNS tick and B2's TURN fact. The device step prints
+        its TURN line too (after.turn advances): both tick a held clock only on |turn| (public_active.py:240)."""
+        h.turn_end(c,state,state._replace(turn=c.trackers.turn),j.ones(2,bool));fact(a.TURN,-1,turn)
 
     def test_confusion_snap_out_ends_the_bag_entry_and_clock_like_b2(self):
         """B (design 2.5): Signal Beam's -start adds the confusion bag entry (public_move_state), each TURN ticks
