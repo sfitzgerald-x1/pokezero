@@ -13,5 +13,6 @@ Encore stale-move clear to 7c984fe6.
 Fidelity tier D (Wonder Guard, the pinch abilities, Poison Point / Flame Body / Effect Spore) moved it to d880714c, and its
 Pursuit-intercept device reveals to c471195a. The combined Tier D and transition-batch canary merge
 adds the reviewed Pursuit damage-credit path while preserving contact ability reveals and sleep draws.
+The narrowing/provenance merge preserves that path and the default-off damage-evidence callbacks.
 """
-CURRENT_TRANSITION = '90fbaa6e68039392a24851030495908f7402efa9'
+CURRENT_TRANSITION = 'b65b15075'
