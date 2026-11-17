@@ -99,5 +99,28 @@ class WorldSplit(unittest.TestCase):
                 self.assertEqual(backend.parts, {})
                 self.assertIsNone(ws._local.backend)
 
+    def _assert_stale_replies_rejected(self, k):
+        self.ranges = []
+        def stale(blobs):
+            previous = []
+            for blob in blobs:
+                root, *rest = pp.pickle.loads(blob)
+                root.owner_lines_sha256 = 'previous-request'
+                previous.append(pp.dumps((root, *rest)))
+            return self.dispatch(previous)
+        backend = ws.Backend(k, stale)
+        with self.fixture.patches(), patch.object(self.con, 'prepare_root', return_value=self.prepared), \
+                patch.object(pp, 'unpack_worlds', side_effect=AssertionError('stale worlds unpacked')):
+            with self.assertRaisesRegex(RuntimeError, 'does not match its dispatched root'):
+                with ws.split(backend):self.con.prepare({}, 0)
+        self.assertEqual(backend.parts, {})
+        self.assertIsNone(ws._local.backend)
+
+    def test_single_stale_helper_reply_raises_before_unpack(self):
+        self._assert_stale_replies_rejected(1)
+
+    def test_complete_stale_reply_set_raises_before_unpack(self):
+        self._assert_stale_replies_rejected(2)
+
 
 if __name__ == '__main__':unittest.main()

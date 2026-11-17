@@ -72,7 +72,7 @@ process.stdout.write(JSON.stringify({out,sha:require('crypto').createHash('sha25
   # transition.py is certified against CURRENT_TRANSITION (full AST plus mutations) by terminal_closeout and seismic_toss_components.
   # secondary.py, entry.py and state.py are byte-certified against the reviewed SOURCE_PINS by transition_observer_wiring.
   for n in ('mechanics.py','engine_no_damage_callbacks.py','engine_direct_hit_controls.py'):
-   self.assertEqual(Path('gpu_engine',n).read_bytes(),subprocess.check_output(['git','show','b8092a85:gpu_engine/'+n]))
+   self.assertEqual(Path('gpu_engine',n).read_bytes(),subprocess.check_output(['git','show',('233bf444:gpu_engine/' if n=='mechanics.py' else 'b8092a85:gpu_engine/')+n]))
   self.assertEqual(int(self.runtime['public'].device.causal.wonder_guard_engine_ability),self.wg)
   self.assertEqual(int(self.runtime['public'].device.causal.wonder_guard_public_ability),self.catalog.abilities.ids['wonderguard'])
 

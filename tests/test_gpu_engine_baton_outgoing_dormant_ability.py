@@ -111,7 +111,7 @@ console.log(JSON.stringify(rows));
   # transition.py is certified against CURRENT_TRANSITION (full AST plus mutations) by terminal_closeout and seismic_toss_components.
   # entry.py, baton.py and state.py are byte-certified against the reviewed SOURCE_PINS by transition_observer_wiring.
   for name in ('mechanics.py','engine_retained_encoder_driver.py','engine_full_v4_event_device.py','engine_lifecycle_event_device.py'):
-   self.assertEqual(Path('gpu_engine',name).read_bytes(),subprocess.check_output(['git','show','b8092a85:gpu_engine/'+name]),name)
+   self.assertEqual(Path('gpu_engine',name).read_bytes(),subprocess.check_output(['git','show',('233bf444:gpu_engine/' if name=='mechanics.py' else 'b8092a85:gpu_engine/')+name]),name)
   # engine_baton_pass_callbacks.py is byte-certified against the reviewed SOURCE_PINS by transition_observer_wiring.
   new=ast.parse(Path(cb.__file__).read_text())
   actual=[]

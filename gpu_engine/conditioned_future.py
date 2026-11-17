@@ -26,13 +26,13 @@ _DRAW_BOUNDS = (2, 100, 100, 100, 16, 16, 100, 4, 8, 2, 2, 2)
 # successor still suspended keeps the block its resumed step replayed; any other carries 0). Two suspended
 # futures that differ only in the saved block therefore never compare equal.
 SAVED_BLOCK = "effect_draws"
-_EFFECT_BOUNDS = (16, 16, 4, 2)
-_NO_BLOCK = ((0, 0, 0, 0), (0, 0, 0, 0))
+_EFFECT_BOUNDS = (16, 16, 4, 2, 2)
+_NO_BLOCK = ((0, 0, 0, 0, 0), (0, 0, 0, 0, 0))
 
 
 def _saved_block(data):
     value = mapping._freeze(data[SAVED_BLOCK]) if SAVED_BLOCK in data else _NO_BLOCK
-    if (mapping._shape(value) != (2, 4) or any(type(v) is not int for v in _leaves(value))
+    if (mapping._shape(value) != (2, 5) or any(type(v) is not int for v in _leaves(value))
             or any(not 0 <= v < bound for row in value for v, bound in zip(row, _EFFECT_BOUNDS, strict=True))):
         raise ValueError("INVALID_SAVED_EFFECT_BLOCK")
     return value
