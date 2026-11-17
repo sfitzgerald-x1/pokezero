@@ -110,6 +110,7 @@ class Trackers(NamedTuple):
     # from public installs only. Reset only by initialize (identity: the lead
     # holds public slot 0); never encoded, read out or redacted.
     public_order:object=None
+    type_changed:object=None     # [B,2] sticky public type/forme event history; no policy/encoder reader
 
 
 class Tendency(NamedTuple):
@@ -221,7 +222,7 @@ def initialize(state):
     # public_order starts as identity: the lead's install below takes next_slot0.
     t=Trackers(j.full((b,2,6),-1,j.int32),j.full((b,2),-1,j.int32),j.full((b,2),-1,j.int32),j.zeros((b,2),j.int32),order,
         z,z,j.full_like(z,-1),z,z,j.zeros((b,2,6,7),j.int32),no,no,state.turn,state.weather,state.spikes,j.zeros(b,j.int32),
-        public_order=order)
+        public_order=order,type_changed=j.zeros((b,2),bool))
     r=j.arange(b);yes=j.ones(b,bool)
     for side in range(2):
         physical=j.clip(state.active[:,side],0,5)

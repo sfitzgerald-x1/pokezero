@@ -54,9 +54,9 @@ CONSUMERS = {
 }
 
 # Changing any source that supplies the consumer/domain proof requires review.
-SOURCE_PINS = {'action_history.py': 'a47bdb2712f7eadaed12d91ede70be2ebe9f1c1ae3f70fe56495437997212407', 'critical.py': 'b66e6cf10c0d4df625b1c4f5e5db238af42052e556d7649a10f911745181401e', 'effects.py': '47f549d608b60d46e8cc4db7bad5be249ae728a4aab2a0ef28f105f3614e40e2', 'encore.py': '63da39bbd181a8c6371b3bca853322291a03674c60f535ad0eacdbe1a440e0dd', 'entry.py': 'eabf2713a100256ba86fd0b5ac4155042e2a0c6dfe0bc37c7f0c6219dbdd22c1', 'mechanics.py': 'e8476cc3e0029f3ed0bf82276312440e6dd8b340ffeb0c68cdd5611754eef661', 'phazing.py': 'c27039f267bd18660adb3c2bd826e58a7da953eea0e79677de5428f042447969', 'pursuit.py': '5b966584634b5230b3efaf16609699484d29966ff8f7ebaf6d160864dba8c2e5', 'residual_order.py': '7b1a958d4ce27cf8fe7560d8f5a4f95d5cb54a17adbe23ba72dccc00e35bf454', 'secondary.py': '68f74574caab36e5f8e8be3426f96b5858964fb24346b2c4641eb6196640e532', 'sleep_talk.py': '968a78ddde87158b13f68dfcacc2158f07336d82c1be472d2283421e8583c154', 'state.py': '67ca721ce1f6b1a5c3e9c6fd42fe33d65f62ffcec006f5c5efd188225111a59c', 'transition.py': 'f0f17cd92f09bb5b0115dd2c8152abdf3714dd08451ed813ce6a595b3313b872', 'weather.py': '3c861027e16d27917fa47fa5cf5d6dc0c68d3a74af282108dfb94369d4db57e5'}
+SOURCE_PINS = {'action_history.py': 'a47bdb2712f7eadaed12d91ede70be2ebe9f1c1ae3f70fe56495437997212407', 'critical.py': 'b66e6cf10c0d4df625b1c4f5e5db238af42052e556d7649a10f911745181401e', 'effects.py': '47f549d608b60d46e8cc4db7bad5be249ae728a4aab2a0ef28f105f3614e40e2', 'encore.py': '63da39bbd181a8c6371b3bca853322291a03674c60f535ad0eacdbe1a440e0dd', 'entry.py': 'eabf2713a100256ba86fd0b5ac4155042e2a0c6dfe0bc37c7f0c6219dbdd22c1', 'mechanics.py': 'e8476cc3e0029f3ed0bf82276312440e6dd8b340ffeb0c68cdd5611754eef661', 'phazing.py': 'c27039f267bd18660adb3c2bd826e58a7da953eea0e79677de5428f042447969', 'pursuit.py': '5b966584634b5230b3efaf16609699484d29966ff8f7ebaf6d160864dba8c2e5', 'residual_order.py': '7b1a958d4ce27cf8fe7560d8f5a4f95d5cb54a17adbe23ba72dccc00e35bf454', 'secondary.py': '68f74574caab36e5f8e8be3426f96b5858964fb24346b2c4641eb6196640e532', 'sleep_talk.py': '968a78ddde87158b13f68dfcacc2158f07336d82c1be472d2283421e8583c154', 'state.py': '67ca721ce1f6b1a5c3e9c6fd42fe33d65f62ffcec006f5c5efd188225111a59c', 'transition.py': 'f03d36eccbe183780daab851beaacde368964fc4b2da12fe6c19c61902f88224', 'weather.py': '3c861027e16d27917fa47fa5cf5d6dc0c68d3a74af282108dfb94369d4db57e5'}
 DOMAIN_MODULES = tuple("action_history absorption baton combat critical damage_moves effects encore entry focus_punch items linked_traps mechanics phazing pressure pursuit residual_order secondary self_destruct sleep_talk solar_beam state sustain transition variable_moves weather".split())
-DOMAIN_SHA256 = 'c372799dcd8be0da80b963b791ce8e6fef26dcd791088c0c0d5380c8c0d17faf'
+DOMAIN_SHA256 = '4c7128e52d03448ca73a1304df960ab4df82fd753ad2a708bdd2aef81b92d860'
 
 
 def _host(value):
@@ -389,7 +389,7 @@ def plan_for_state(state, index, actions, table, metadata, *, cap, native_input=
         # §6: the appended effect stream (fidelity R, design 2.1; M2's residual consumers). transition.py:580-582 reads
         # ChanceInputs.effect; a resumed suspended turn reads the saved block instead (refused above).
         for s in range(2):
-            # Bonemerang's second hit (transition.py:1135-1175, run when damage_moves.hits>1 at :1362): its own critical
+            # Bonemerang's second hit (transition.py:1155-1195, run when damage_moves.hits>1 at :1382): its own critical
             # roll effect[s][0] (critical.is_critical: below 2 for a high-crit move, else below 1; below 1 without the
             # table) and damage roll 85+effect[s][1]. Callers and Encore are already in the selected closure.
             critical = (t.get("critical") or {}).get("high")
@@ -398,19 +398,19 @@ def plan_for_state(state, index, actions, table, metadata, *, cap, native_input=
                 use(f"effect.{s}.0", *(Observation("less_than", 2 if critical is not None and critical[move] else 1)
                                        for move in sorted(second_hit)))
                 use(f"effect.{s}.1", Observation("identity"))
-            # Yawn's residual sleep (transition.py:2601-2611): a holder whose count is 1 when this residual runs sleeps
-            # for 2+effect[s][2], s the drowsy mon's own side. A Yawn landing this turn sets 2 (:1742-1750), which ends
+            # Yawn's residual sleep (transition.py:2621-2631): a holder whose count is 1 when this residual runs sleeps
+            # for 2+effect[s][2], s the drowsy mon's own side. A Yawn landing this turn sets 2 (:1789-1797), which ends
             # at the next turn's residual, and only a holder that stays in keeps a count (entry.py, baton.py drop it).
             if not replacement and any(_counter(data, "yawn_counter", s, p) == 1 for p in participants[s]):
                 use(f"effect.{s}.2", Observation("identity"))
-        # The order-10 partial-trap pair (transition.py:2308-2315 with residual_order): effect[0][3] orders the two
-        # Wrap holders' events at equal Speed. A seat holds a trap already or gets one from the other's Wrap (:1945-1955).
+        # The order-10 partial-trap pair (transition.py:2328-2335 with residual_order): effect[0][3] orders the two
+        # Wrap holders' events at equal Speed. A seat holds a trap already or gets one from the other's Wrap (:1997-2002).
         trapped = [any(_counter(data, "partial_trap_counter", s, p) > 0 for p in participants[s])
                    or any(_at(t, "effects", "wrap", move) for move in selected[1-s]) for s in range(2)]
         if not replacement and all(trapped):
             use("effect.0.3", Observation("identity"))
-        # Perish Song's order-12 pair (transition.py:2646-2663): effect[1][3] orders the two holders at equal Speed.
-        # Perish Song gives every active without a count one (:1728-1735), so either seat's use reaches both.
+        # Perish Song's order-12 pair (transition.py:2666-2687): effect[1][3] orders the two holders at equal Speed.
+        # Perish Song gives every active without a count one (:1776-1784), so either seat's use reaches both.
         perish_song = any(_at(t, "effects", "perishsong", move) for choices in selected for move in choices)
         if not replacement and all(perish_song or any(_counter(data, "perish_counter", s, p) > 0 for p in participants[s])
                                    for s in range(2)):

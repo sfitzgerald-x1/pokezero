@@ -517,8 +517,8 @@ def in_tree(trackers, belief_tables, state, side, move, caller_move, critical, h
     actual HP, and num/den of the true move type (the printed effectiveness line). The attacker's public facts come from
     the carry (its public encounter slot, its species, its hard mask and its shown HP percent); the defender is the
     observer's own active, read exactly from state. Refusals that only engine state can tell are the caller bits:
-    called (a Sleep Talk callee: move != caller_move), hit-substitute, endure-or-focusband, type-change (types !=
-    base_types on either side), ability-overridden (ability != base_ability: Trace), item-changed (B2's item_mutated
+    called (a Sleep Talk callee: move != caller_move), hit-substitute, endure-or-focusband, type-change (sticky public type-event history
+    on either side, including restoration to native types), ability-overridden (ability != base_ability: Trace), item-changed (B2's item_mutated
     ledger on either slot), Revenge after a hit this turn (hit_by) and no-hp-drop. An admitted strike's fitting hard
     variants narrow the attacker's standing pin (narrow_pin: intersect, decline empty, count a disjoint conflict) and
     that subject is refreshed, as B2 installs set_posterior's support. Returns (trackers, reduced)."""
@@ -536,8 +536,10 @@ def in_tree(trackers, belief_tables, state, side, move, caller_move, critical, h
     hard = li.take(trackers.belief_mask, r, side, slot)
     mutated = trackers.mon_features.get('item_mutated') if trackers.mon_features is not None else None
     changed = j.zeros(b, bool) if mutated is None else (li.take(mutated, r, side, slot) != 0) | (li.take(mutated, r, foe, target_slot) != 0)
-    retyped = j.any(get(state.types, side, own) != get(state.base_types, side, own), axis=-1) | j.any(
-        get(state.types, foe, target) != get(state.base_types, foe, target), axis=-1)
+    # Host provenance is sticky until switch/faint. Comparing current and base
+    # types misses Color Change back to native typing and ended overlays.
+    history = trackers.type_changed
+    retyped = j.ones(b, bool) if history is None else j.any(history, axis=-1)
     traced = (get(state.ability, side, own) != get(state.base_ability, side, own)) | (
         get(state.ability, foe, target) != get(state.base_ability, foe, target))
     pre = (j.where(move != caller_move, bit('called'), 0) | j.where(hits_sub, bit('hit-substitute'), 0)

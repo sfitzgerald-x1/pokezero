@@ -126,7 +126,9 @@ class PublicEvent:
                     or (d[2]==0 and (self.actor_side!=-1 or any(d[3:])))):
                 raise ValueError('pending-switch prelude requires typed public lexical facts')
         elif self.kind==Kind.RAW_BEGIN:
-            d=self.payload
+            marker=(self.payload[0]&public_types.RAW_HISTORY_MASK)>>public_types.RAW_HISTORY_SHIFT
+            if marker==3:raise ValueError('raw type history must name one public side')
+            d=(self.payload[0]&~public_types.RAW_HISTORY_MASK,*self.payload[1:])
             if not public_refresh_stream.item_word_ok(d[0],framed=d[3]!=0,code=d[3]) or (d[3]==0 and any(d[4:])) or (d[3]!=0 and not public_refresh_stream.metadata_words_ok(d[3],d[4:])):
                 raise ValueError("raw boundary requires a named item family")
             if d[0]&3==2:
@@ -158,9 +160,9 @@ class PublicEvent:
         elif self.kind==Kind.TYPES:
             d=self.payload
             if ((self.actor_side,self.actor_slot)!=(-1,-1) or self.target_side not in (0,1)
-                    or not 0<=self.target_slot<6 or d[0]<=0 or not public_types.CLEAR<=d[1]<=public_types.FORME
+                    or not 0<=self.target_slot<6 or d[0]<=0 or not public_types.CLEAR<=d[1]<=public_types.CLEAR_EVENT
                     or any(d[4:]) or d[2]<0 or d[3]<0 or d[1]!=public_types.TYPE and d[3]!=0
-                    or d[1]==public_types.CLEAR and d[2]!=0 or d[1]==public_types.TYPE and d[2]==0):
+                    or d[1] in (public_types.CLEAR,public_types.CLEAR_EVENT) and d[2]!=0 or d[1]==public_types.TYPE and d[2]==0):
                 raise ValueError('type fact requires a resolved encounter and named value')
         elif self.kind==Kind.SLEEP:
             d=self.payload
@@ -701,6 +703,13 @@ def fold_chunk(cursor: StreamCursor, beliefs: public_belief.BeliefState,
     def step(carry, event_and_valid):
         current, state, error, mons, ctx, basis = carry
         row, valid = event_and_valid
+        # Strip the lexical-only transport before every pre-existing consumer.
+        # Neither the raw summary nor cursor layout changes; chunk commit still rolls it back.
+        raw_history=jnp.where(row[:,0]==Kind.RAW_BEGIN,
+            (row[:,8]&public_types.RAW_HISTORY_MASK)>>public_types.RAW_HISTORY_SHIFT,0)
+        history_ok=(raw_history!=3)&((raw_history==0)|type_enabled)
+        error=jnp.where(valid&(error==0)&~history_ok,Error.PAYLOAD,error)
+        row=row.at[:,8].set(jnp.where(row[:,0]==Kind.RAW_BEGIN,row[:,8]&~public_types.RAW_HISTORY_MASK,row[:,8]))
         kind, sequence, turn, phase = (row[:, i] for i in range(4))
         boundary = (kind == Kind.TURN) | (kind == Kind.ACTION_CHUNK_END) | (kind == Kind.UPKEEP)
         fact = (kind == Kind.SET_REVEAL) | (kind == Kind.SET_EXCLUDE)
@@ -801,9 +810,9 @@ def fold_chunk(cursor: StreamCursor, beliefs: public_belief.BeliefState,
                     (d[:,2]==0)|(d[:,2]==1),jnp.where(d[:,1]==public_active.ITEM_SET,(d[:,2]>=0)&(d[:,2]<=3),d[:,2]==0)))
                 payload_ok &= ~active_kind|active_payload
             if type_enabled:
-                type_payload=(d[:,0]>0)&(d[:,1]>=public_types.CLEAR)&(d[:,1]<=public_types.FORME)&jnp.all(d[:,4:]==0,axis=1)
+                type_payload=(d[:,0]>0)&(d[:,1]>=public_types.CLEAR)&(d[:,1]<=public_types.CLEAR_EVENT)&jnp.all(d[:,4:]==0,axis=1)
                 type_payload &= jnp.where(d[:,1]==public_types.TYPE,(d[:,2]>0)&(d[:,3]>=0),
-                    (d[:,3]==0)&jnp.where(d[:,1]==public_types.CLEAR,d[:,2]==0,d[:,2]>=0))
+                    (d[:,3]==0)&jnp.where((d[:,1]==public_types.CLEAR)|(d[:,1]==public_types.CLEAR_EVENT),d[:,2]==0,d[:,2]>=0))
                 payload_ok &= ~type_kind|type_payload
             if sleep_enabled:
                 sleep_op=d[:,1]
@@ -884,6 +893,9 @@ def fold_chunk(cursor: StreamCursor, beliefs: public_belief.BeliefState,
             phase=jnp.where(apply, phase, current.phase),
             action_chunks=current.action_chunks + (apply & ((kind == Kind.ACTION_CHUNK_END) | (kind == Kind.UPKEEP))).astype(jnp.int32),
             upkeeps=current.upkeeps + (apply & (kind == Kind.UPKEEP)).astype(jnp.int32))
+        if type_enabled:
+            marked=((raw_history[:,None]&(1<<jnp.arange(2)))!=0)&apply[:,None]
+            ctx=ctx._replace(types=ctx.types._replace(type_changed=ctx.types.type_changed|marked))
         return (current, state, error, mons, ctx, basis), None
 
     (candidate, state, error, mons, ctx, basis), _ = jax.lax.scan(step, (cursor, beliefs, error, mon_state, context, base),

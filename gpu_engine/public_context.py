@@ -948,5 +948,9 @@ def consume(context, base, mons, source_tables, tables, row, valid, *,
                 valid=queue_arrival&summary_ok&bound&ok)
             accepted &= ~queue_arrival|(queued&jnp.all(cache_ok,axis=(1,2)))
         accepted &= summary_ok&bound&ok
+    if types is not None:
+        address=(jnp.arange(side.shape[0]),jnp.clip(side,0,1))
+        types=types._replace(type_changed=types.type_changed.at[address].set(
+            jnp.where(valid&accepted&faint,False,types.type_changed[address])))
     return context._replace(refresh=summary,lifecycle=life,sleep_clause=clauses,switches=switches if tables.switches is not None else context.switches,nonproc=nonproc if tables.nonproc is not None else context.nonproc,mudshot=mudshot if tables.mudshot is not None else context.mudshot,abilities=a,moves=m,items=items,field=fields,active=active,damage=damage,types=types,sleep=sleep,
         toxic=toxic,toxic_raw_pending=raw_pending,tendency=tendency,tendency_raw_pending=pending),base,accepted | ~valid

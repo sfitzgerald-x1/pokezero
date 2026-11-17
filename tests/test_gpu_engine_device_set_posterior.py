@@ -466,6 +466,7 @@ class InTreeTests(unittest.TestCase):
             hp_percent: object
             mon_features: object
             visible_belief: object = None
+            type_changed: object = None
 
         class State(NamedTuple):
             active: object
@@ -491,7 +492,7 @@ class InTreeTests(unittest.TestCase):
         species = np.zeros((B, 2, 6), np.int32);species[:, 0, 0] = 2
         hard = np.zeros((B, 2, 6, 2), np.uint32);hard[:, 0, 0] = [0b1111, 0]
         self.carry = Carry(z(B), j.asarray(mapping), j.asarray(species), j.asarray(species > 0), j.asarray(hard),
-                           j.full((B, 2, 6), 100, j.int32), {'item_mutated': z(B, 2, 6)})
+                           j.full((B, 2, 6), 100, j.int32), {'item_mutated': z(B, 2, 6)}, type_changed=z(B, 2, dtype=bool))
         stats = np.zeros((B, 2, 6, 6), np.int32);stats[:, 1, 0] = c['defender_stats'];stats[:, 0, 0] = c['stats']
         types = np.zeros((B, 2, 6, 2), np.int32);types[:, 1, 0] = c['defender_types'];types[:, 0, 0] = [T['normal'], 0]
         state_species = species.copy();state_species[:, 1, 0] = c['defender_species']
@@ -527,6 +528,28 @@ class InTreeTests(unittest.TestCase):
                                (dict(endured=True), 'endure-or-focusband')):
             out = self.hit(observed, **kwargs)
             self.assertEqual((out['reason'], out['active'], out['visible_active']), (reason, False, False), kwargs)
+
+    def test_sticky_type_history_refuses_after_native_restore(self):
+        from gpu_engine import engine_device_public_hooks as hooks
+        from typing import NamedTuple
+        class Context(NamedTuple):
+            trackers: object
+        observed = tier2_rolls(base_case(item='choiceband'))[0][-1]
+        original = self.carry
+        for side in (0, 1):
+            # Normal -> Fire -> Normal must still refuse on either participant.
+            self.carry = original
+            state = self.state
+            self.state = state._replace(types=state.types.at[:, side, 0, 0].set(T['fire']))
+            c = hooks.type_event(Context(self.carry), side, self.j.ones(2, bool))
+            self.state = state
+            self.carry = hooks.type_event(c, side, self.j.ones(2, bool)).trackers
+            out = self.hit(observed)
+            self.assertEqual((out['reason'], out['active'], out['visible_active']), ('type-change', False, False))
+        self.carry = original._replace(type_changed=None)
+        self.assertEqual(self.hit(observed)['reason'], 'type-change')
+        self.carry = original
+        self.assertEqual(self.hit(observed)['reason'], '')
 
     def test_off_model_strike_is_declined(self):
         out = self.hit(1)   # no variant's roll is 1 HP: no fitting hard variant, the incoming set is empty
