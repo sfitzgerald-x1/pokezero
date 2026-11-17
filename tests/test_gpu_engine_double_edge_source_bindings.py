@@ -26,11 +26,14 @@ class DoubleEdgeSourceBindingTests(unittest.TestCase):
   # Fidelity tier D (covered by its Opus review) re-certifies the chance_consumers.py and phase_d_chance.py bodies at
   # 67399362: the CONSUMERS rows for the contact abilities' phazing[s] reads and Effect Spore's effect[s][2] sleep, and
   # plan_for_state's contact-status closure, observations and CONTACT_MULTIHIT refusal. Their mappings are unchanged.
-  certified={'chance_consumers.py':'673993621ce2c4f7e423d76ee32b9a536a903aa3',
-             'phase_d_chance.py':'673993621ce2c4f7e423d76ee32b9a536a903aa3',
-             'conditional_law.py':'3b0cc40e6709bd19fe70a6295580a51590dd4f57',
+  # Shed Skin re-certifies the four chance/carry bodies below at the combined integration commit:
+  # exact 33/100 residual coordinates, saved-cure validation, and immediate legacy-schema handling.
+  # The complete bodies and mapping inventories remain frozen; literal pin values alone may refresh.
+  certified={'chance_consumers.py':'d28e5f70897d742c7b8a4abbc9f5416f35e02c08',
+             'phase_d_chance.py':'d28e5f70897d742c7b8a4abbc9f5416f35e02c08',
+             'conditional_law.py':'d28e5f70897d742c7b8a4abbc9f5416f35e02c08',
              'engine_source_frame_witness.py':'3b0cc40e6709bd19fe70a6295580a51590dd4f57',
-             'ordinary_law.py':'53dc3add38e37c36b7609edabe4f96e313022b16'}
+             'ordinary_law.py':'d28e5f70897d742c7b8a4abbc9f5416f35e02c08'}
   constants={'SOURCE_PINS','MAPPING_PINS','DOMAIN_SHA256','KERNEL_SHA256'}
   for file in ('chance_consumers.py','ordinary_law.py','conditional_law.py',
                'engine_source_frame_witness.py','phase_d_chance.py'):

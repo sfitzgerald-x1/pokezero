@@ -14,4 +14,4 @@ Fidelity tier D (Wonder Guard, the pinch abilities, Poison Point / Flame Body / 
 Pursuit-intercept device reveals to c471195a. The combined Tier D and transition-batch canary merge
 adds the reviewed Pursuit damage-credit path while preserving contact ability reveals and sleep draws.
 """
-CURRENT_TRANSITION = '1da6e3ba06d8ccb7806f96b717cb77b4e36318cc'
+CURRENT_TRANSITION = 'd28e5f70897d742c7b8a4abbc9f5416f35e02c08'
