@@ -458,7 +458,7 @@ console.log(JSON.stringify(orders));"""
         cols=j.asarray(a.NUMERIC_COLUMNS);clock=a.NUMERIC_COLUMNS[a.CORE.index('CONFUSION_TURNS')]
         expected=project();self.compare_active(c.trackers,expected,a);self.assertTrue(bool(expected.numeric[0,1,clock]))
         def attempt(before,left):
-            return BeforeMove(before.status[:,1,0],before.status_counter[:,1,0],j.full(2,left,j.int32),yes,no)
+            return BeforeMove(before.status[:,1,0],before.status_counter[:,1,0],j.full(2,left,j.int32),yes,no,no)
         one=self.confused(state,1,1)
         h.before_move(c,two,1,attempt(two,1),yes);self.b2_lines(a,catalog,fact,'|-activate|p2a: Absol|confusion')
         self.compare_active(c.trackers,project(),a)

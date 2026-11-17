@@ -130,7 +130,7 @@ class TraceMeasuredTargetsTests(unittest.TestCase):
    # transition.py is certified against CURRENT_TRANSITION (full AST plus mutations) by terminal_closeout and seismic_toss_components.
    # entry.py and state.py are byte-certified against the reviewed SOURCE_PINS below and by transition_observer_wiring.
    if name not in('transition.py','entry.py','state.py'):
-    self.assertEqual(Path('gpu_engine',name).read_bytes(),subprocess.check_output(['git','show','b8092a85:'+str(Path('gpu_engine')/name)]))
+    self.assertEqual(Path('gpu_engine',name).read_bytes(),subprocess.check_output(['git','show',('233bf444:' if name=='mechanics.py' else 'b8092a85:')+str(Path('gpu_engine')/name)]))
   for name,expected in witness.SOURCE_PINS.items():self.assertEqual(hashlib.sha256(Path('gpu_engine',name).read_bytes()).hexdigest(),expected)
   root=Path(showdown_root_str())
   for name in ('sim/pokemon.ts','data/mods/gen3/abilities.ts'):

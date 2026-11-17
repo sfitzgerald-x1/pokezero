@@ -160,7 +160,7 @@ def decode_chance(packet):
     arrays={}
     for key in ChanceInputs._fields:
         if key not in packet:continue
-        a=np.asarray(packet[key]);shape=(1,2,12)if key=='draws'else(1,)if key=='initial_tie'else(1,2,4)if key=='effect'else(1,2)
+        a=np.asarray(packet[key]);shape=(1,2,12)if key=='draws'else(1,)if key=='initial_tie'else(1,2,len(EFFECT_BOUNDS))if key=='effect'else(1,2)
         bound=(np.array([2,100,100,100,16,16,100,4,8,2,2,2]) if key=='draws' else np.array(EFFECT_BOUNDS) if key=='effect'
             else 100 if key=='secondary' else 2 if key in ('entry_ties','initial_tie') else 60)
         if a.shape!=shape or a.dtype.kind not in 'iu' or np.any(a<0) or np.any(a>=bound):

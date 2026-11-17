@@ -1,5 +1,6 @@
 """Pure-data controls for panel binding and conservative attribution."""
 import argparse
+import hashlib
 import importlib.util
 import json
 from pathlib import Path
@@ -7,6 +8,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from types import SimpleNamespace
 from unittest import mock
 
 SPEC=importlib.util.spec_from_file_location('panel_tool',Path(__file__).resolve().parents[1]/'scripts/fidelity_panel.py')
@@ -15,6 +17,43 @@ SPEC.loader.exec_module(P)
 
 
 class PanelToolTests(unittest.TestCase):
+    def test_panel_initializes_retained_genders_before_entry_and_supports_legacy_parent(self):
+        for retained in (False, True):
+            with self.subTest(retained=retained), tempfile.TemporaryDirectory() as folder:
+                pool = Path(folder) / 'pool.npz';pool.write_bytes(b'pool')
+                metadata = {'vocabulary': {}}
+                archive = mock.MagicMock()
+                archive.files = ['metadata_utf8']
+                archive.__getitem__.return_value.tobytes.return_value = json.dumps(metadata).encode()
+                np = mock.Mock()
+                np.load.return_value.__enter__ = mock.Mock(return_value=archive)
+                np.load.return_value.__exit__ = mock.Mock(return_value=False)
+                jax, j, transition = mock.Mock(), mock.Mock(), mock.Mock()
+                initial, gendered, table = mock.Mock(), mock.Mock(), object()
+                transition.tables_from_metadata.return_value = table
+                transition.state_from_pool.return_value._replace.return_value = initial
+                events = []
+                F = SimpleNamespace(reference_actions=SimpleNamespace())
+                if retained:
+                    def genders(state, data, showdown, node, roots):
+                        self.assertIs(state, initial);self.assertEqual(data, metadata)
+                        self.assertEqual((showdown, node), (Path('oracle'), 'node'))
+                        events.append('genders');return gendered
+                    F.initialize_comparison_genders = mock.Mock(side_effect=genders)
+                def entry(state, actual_table):
+                    self.assertIs(state, gendered if retained else initial)
+                    self.assertIs(actual_table, table);events.append('entry')
+                    raise RuntimeError('stop after entry boundary')
+                transition.initialize.side_effect = entry
+                args = argparse.Namespace(tree=folder, team_pool=pool, expected_pool_sha=hashlib.sha256(b'pool').hexdigest(),
+                                          shard='1/2', first_game=50200, games=200, showdown_root='oracle', node='node')
+                with mock.patch.object(P, '_engine', return_value=(jax,j,np,F,transition)), \
+                     mock.patch.object(P, 'roster', return_value=([],{})), \
+                     mock.patch.object(P.subprocess, 'check_output', side_effect=['', 'head']):
+                    with self.assertRaisesRegex(RuntimeError, 'stop after entry boundary'):P.run(args)
+                self.assertEqual(events, ['genders','entry'] if retained else ['entry'])
+                if retained:self.assertEqual(np.arange.call_args, mock.call(50300,50400))
+
     def test_cli_preserves_harness_failure_but_returns_nonzero(self):
         with tempfile.TemporaryDirectory() as folder:
             folder=Path(folder)
