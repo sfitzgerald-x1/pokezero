@@ -52,7 +52,7 @@ class PrimarySleepMissTests(unittest.TestCase):
         # transition.py is certified against CURRENT_TRANSITION (full AST plus mutations) by terminal_closeout and seismic_toss_components.
         # secondary.py, state.py and entry.py are byte-certified against the reviewed SOURCE_PINS by transition_observer_wiring.
         for name in ('mechanics.py','engine_retained_encoder_driver.py'):
-            self.assertEqual(Path('gpu_engine',name).read_bytes(),subprocess.check_output(['git','show','b8092a85:gpu_engine/'+name]))
+            self.assertEqual(Path('gpu_engine',name).read_bytes(),subprocess.check_output(['git','show',('233bf444:gpu_engine/' if name=='mechanics.py' else 'b8092a85:gpu_engine/')+name]))
         for name in ('hypnosis','spore','sleeppowder','sing'):
             row=ids.index(name);self.assertTrue(bool(data.miss_mask[row]));self.assertTrue(bool(f.runtime['public'].device.no_damage_miss[row]))
         legacy=data._replace(primary_sleep=j.array(False),miss_mask=j.zeros_like(data.miss_mask))

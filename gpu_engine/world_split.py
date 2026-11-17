@@ -62,6 +62,9 @@ class Backend:
         import jax
         if self.parts:
             raise RuntimeError('one decision per world split context required')
+        lines = tuple(lines)
+        expected_binding = (root.context.battle_id, root.owner_lines_sha256, detached.address,
+            detached.source_binding_sha256, seed, protocol.game_lines_sha256(lines))
         k = min(self.k, count)
         bounds = [(count * i // k, count * (i + 1) // k) for i in range(k)]
         clock = time.perf_counter()
@@ -75,6 +78,8 @@ class Backend:
             header, shells, packed = pp.pickle.loads(reply)
             if type(header) is not protocol.WorldRange or (header.start, header.stop) != (start, stop):
                 raise RuntimeError('world split reply does not match its dispatched range')
+            if header.binding != expected_binding:
+                raise RuntimeError('world split reply does not match its dispatched root')
             parts.append(replace(header, root=detached, worlds=pp.unpack_worlds(shells, packed, jax.devices('cpu')[0])))
         made = protocol.assemble(parts, count=count)
         self.parts = dict(k=k, worlds=count, ship=shipped-clock, helpers=back-shipped,
