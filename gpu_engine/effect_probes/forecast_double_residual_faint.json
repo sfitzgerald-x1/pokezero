@@ -1,0 +1,189 @@
+{
+ "schema": "pokezero.effect_probe.scenario.v1",
+ "move": "forecast_double_residual_faint",
+ "note": "Forecast at the individual residual faint boundary: the faster Cloud Nine holder faints from Toxic, re-forming the still-alive Castform before its own later Toxic faint. An earlier Surf into Rainy Castform makes the state-mode base control diverge; Soft-Boiled restores full HP before the residual sequence. Sunny Day under Cloud Nine reverts Castform and remains active when the suppressor faints.",
+ "teams": [
+  [
+   {
+    "species": "Kyogre",
+    "moves": [
+     "splash",
+     "thunder",
+     "surf",
+     "icebeam"
+    ],
+    "ability": "Drizzle",
+    "item": ""
+   },
+   {
+    "species": "Castform",
+    "moves": [
+     "toxic",
+     "seismictoss",
+     "softboiled",
+     "sunnyday"
+    ],
+    "ability": "Forecast",
+    "item": "",
+    "level": 100,
+    "evs": {
+     "hp": 252,
+     "atk": 0,
+     "spa": 0,
+     "spd": 0,
+     "spe": 0,
+     "def": 0
+    }
+   },
+   {
+    "species": "Starmie",
+    "moves": [
+     "splash",
+     "surf",
+     "recover",
+     "protect"
+    ],
+    "ability": "Illuminate",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Blissey",
+    "moves": [
+     "splash",
+     "softboiled",
+     "protect",
+     "seismictoss"
+    ],
+    "ability": "Serene Grace",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Skarmory",
+    "moves": [
+     "splash",
+     "protect",
+     "spikes",
+     "peck"
+    ],
+    "ability": "Keen Eye",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Swampert",
+    "moves": [
+     "splash",
+     "protect",
+     "surf",
+     "earthquake"
+    ],
+    "ability": "Torrent",
+    "item": "Leftovers"
+   }
+  ],
+  [
+   {
+    "species": "Lanturn",
+    "moves": [
+     "splash",
+     "thunderbolt",
+     "raindance",
+     "surf"
+    ],
+    "ability": "Illuminate",
+    "item": "",
+    "level": 60
+   },
+   {
+    "species": "Golduck",
+    "moves": [
+     "toxic",
+     "seismictoss",
+     "splash",
+     "surf"
+    ],
+    "ability": "Cloud Nine",
+    "item": "",
+    "level": 90
+   },
+   {
+    "species": "Starmie",
+    "moves": [
+     "splash",
+     "surf",
+     "recover",
+     "protect"
+    ],
+    "ability": "Illuminate",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Blissey",
+    "moves": [
+     "splash",
+     "softboiled",
+     "protect",
+     "seismictoss"
+    ],
+    "ability": "Serene Grace",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Skarmory",
+    "moves": [
+     "splash",
+     "protect",
+     "spikes",
+     "peck"
+    ],
+    "ability": "Keen Eye",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Swampert",
+    "moves": [
+     "splash",
+     "protect",
+     "surf",
+     "earthquake"
+    ],
+    "ability": "Torrent",
+    "item": "Leftovers"
+   }
+  ]
+ ],
+ "script": [
+  [
+   "switch 2",
+   "move 4"
+  ],
+  [
+   "move 3",
+   "switch 2"
+  ],
+  [
+   "move 4",
+   "move 2"
+  ],
+  [
+   "move 1",
+   "move 1"
+  ],
+  [
+   "move 2",
+   "move 2"
+  ],
+  [
+   "move 2",
+   "move 2"
+  ]
+ ],
+ "expect": {
+  "exact": true
+ },
+ "showdown_lines": {
+  "5": [
+   "|faint|p2a: Golduck",
+   "|-formechange|p1a: Castform|Castform-Sunny|[msg]|[from] ability: Forecast"
+  ]
+ }
+}

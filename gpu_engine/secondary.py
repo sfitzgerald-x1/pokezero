@@ -219,7 +219,7 @@ def after_status_event(state, source, afflicted, status, table, *, applied, item
 
 def apply_contact(state, side, move, roll, table, *, eligible, item_table=None, _status_trace=None,
                   _rough_skin_context=None, _rough_skin_capture=None, _device_public=None, sleep_roll=None,
-                  _reveal_masks=False):
+                  _reveal_masks=False, infatuation_table=None):
     """Gen3 contact onDamagingHit abilities (Static, Poison Point, Flame Body, Effect Spore, Rough Skin), before Lum/recoil.
 
     The existing uniform [0,60) auxiliary draw (the attacker's phazing[s]) gives Static's, Poison Point's and Flame
@@ -261,6 +261,16 @@ def apply_contact(state, side, move, roll, table, *, eligible, item_table=None, 
     ability = state.ability[rows, side, own]
     holder = state.ability[rows, foe, target]
     roll = jnp.asarray(roll)
+    attracted=jnp.zeros_like(jnp.asarray(eligible),dtype=jnp.bool_)
+    if infatuation_table is not None:
+        from . import infatuation
+        state,attracted=infatuation.apply(state,side,infatuation_table,
+            eligible=jnp.asarray(eligible) & table.contact[move]
+                & infatuation_table.cute_charm[holder] & (roll<20))
+        if _device_public is not None:device_public.reveal_ability(_device_public,state,foe,attracted)
+        if _status_trace is not None:
+            from . import engine_status_callbacks as callbacks
+            _status_trace=callbacks.unknown(_status_trace,attracted)
     spore = table.effect_spore[holder]
     status = jnp.where(table.static[holder], m.PAR, table.contact_status[holder])
     status = jnp.where(spore, jnp.asarray(EFFECT_SPORE_STATUS, jnp.int32)[jnp.clip(roll // 2, 0, 2)], status)
@@ -286,7 +296,7 @@ def apply_contact(state, side, move, roll, table, *, eligible, item_table=None, 
         device_public.reveal_ability(_device_public,state,foe,proc & ~slept)
         device_public.observe(_device_public,state,proc)
     if _reveal_masks:
-        holder_reveal=proc & ~slept
+        holder_reveal=(proc & ~slept) | attracted
         _,attacker_reveal=synchronize_reflects(state,foe,side,status,table,applied=proc)
     if _status_trace is not None:
         state,_status_trace=after_status_event(state,foe,side,status,table,

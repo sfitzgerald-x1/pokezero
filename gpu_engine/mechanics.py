@@ -158,12 +158,14 @@ class BeforeMove(NamedTuple):
     confusion_counter: jax.Array
     can_act: jax.Array
     confusion_self_hit: jax.Array
+    infatuation_cant: jax.Array
 
 
 def before_move(status, counter, confusion_counter=0, *, thaw_roll=99,
                 paralysis_roll=99, confusion_roll=0, flinched=False,
-                sleep_usable=False, defrost_move=False, early_bird=False, loafing=False):
-    """Sleep/freeze -> Truant -> flinch -> confusion -> paralysis, supplied draws.
+                sleep_usable=False, defrost_move=False, early_bird=False, loafing=False,
+                infatuated=False, attract_roll=1):
+    """Sleep/freeze -> Truant -> flinch -> confusion -> Attract -> paralysis.
 
     Sleep starts at 2..5 (Rest: 3) and decrements before testing whether it ends.
     Confusion similarly starts at 2..5. A defrost move may pass freeze without
@@ -184,8 +186,10 @@ def before_move(status, counter, confusion_counter=0, *, thaw_roll=99,
     confusion = jnp.asarray(confusion_counter)
     confusion = jnp.where(~blocked, jnp.maximum(0, confusion - 1), confusion)
     self_hit = ~blocked & (confusion > 0) & (jnp.asarray(confusion_roll) >= 50)
-    paralyzed = (new_status == PAR) & (jnp.asarray(paralysis_roll) < 25)
-    return BeforeMove(new_status, new_counter, confusion, ~(blocked | self_hit | paralyzed), self_hit)
+    attracted = ~blocked & ~self_hit & jnp.asarray(infatuated) & (jnp.asarray(attract_roll) < 1)
+    paralyzed = ~blocked & ~self_hit & ~attracted & (new_status == PAR) & (jnp.asarray(paralysis_roll) < 25)
+    return BeforeMove(new_status, new_counter, confusion,
+        ~(blocked | self_hit | attracted | paralyzed), self_hit, attracted)
 
 
 class Residual(NamedTuple):

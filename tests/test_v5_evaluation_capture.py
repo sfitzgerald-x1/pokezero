@@ -293,7 +293,11 @@ class OriginalEvaluationCaptureTests(unittest.TestCase):
                 if n.id=='finished':return ast.parse('data.finish(decisions,closed)',mode='eval').body
                 return n
         expected=ast.parse(subprocess.check_output(['git','show','d1076adb69e78364b205f68456c1ddaad329b38b:gpu_engine/v5_selfplay.py'],text=True))
-        self.assertEqual(ast.dump(Erase().visit(tree),include_attributes=False),ast.dump(expected,include_attributes=False))
+        # Preserve the original capture/durability erasure proof. The later
+        # source-finalized terminal guard is inherited from the reviewed base.
+        historical=ast.parse(subprocess.check_output(['git','show','edb0b907:gpu_engine/v5_selfplay.py'],text=True))
+        self.assertEqual(ast.dump(Erase().visit(historical),include_attributes=False),ast.dump(expected,include_attributes=False))
+        self.assertEqual(path.read_bytes(),subprocess.check_output(['git','show','6caf071b:gpu_engine/v5_selfplay.py']))
 
     def test_durable_attempt_before_constructor_interruption_skips_never_replays_and_joins_batch_file(self):
         with tempfile.TemporaryDirectory() as temp:

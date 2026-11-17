@@ -24,26 +24,32 @@
 // Fidelity WH: White Herb handlers of two holders at equal Speed (onAnyAfterMove, onResidual order 29; SwitchIn ties
 // are broken by effectOrder), with a Choice Band user's own onAfterMove (addVolatile choicelock) beside them, are an
 // inert tie: each Item handler touches only its own holder and draws nothing, so the order cannot change the battle.
-// Tape v4 appends phazing [2] and entry_ties [2], plus a resuming flag. Ordinary
-// switch/entry ties read draws[0][11]/draws[1][10]; resumed requests read fresh
-// entry_ties while the turn's phazing and residual draws remain saved. Lead
-// entries use a separate initializing.initial_tie from the unsplit initial key.
-const TAPE_V1='pokezero.gpu_chance_tape.v1',TAPE_V2='pokezero.gpu_chance_tape.v2',TAPE_V3='pokezero.gpu_chance_tape.v3',TAPE_V4='pokezero.gpu_chance_tape.v4';
+// Tape v4 supplies entry_ties/resuming; v5 supplies the fifth effect column.
+// Tape v6 combines both without changing either historical schema's shape.
+// Ordinary switch/entry ties use draws[0][11]/draws[1][10]; resumed requests
+// use fresh entry_ties while the saved turn's other coordinates are replayed.
+const TAPE_V1='pokezero.gpu_chance_tape.v1',TAPE_V2='pokezero.gpu_chance_tape.v2',TAPE_V3='pokezero.gpu_chance_tape.v3';
+const TAPE_V4='pokezero.gpu_chance_tape.v4',TAPE_V5='pokezero.gpu_chance_tape.v5',TAPE_V6='pokezero.gpu_chance_tape.v6';
 const DRAW_BOUNDS=[2,100,100,100,16,16,100,4,8,2,2,2],EFFECT_BOUNDS=[16,16,4,2];
+const hasPhazing=c=>[TAPE_V3,TAPE_V4,TAPE_V5,TAPE_V6].includes(c.schema);
+const hasEntryTies=c=>c.schema===TAPE_V4||c.schema===TAPE_V6;
+const hasInfatuation=c=>c.schema===TAPE_V5||c.schema===TAPE_V6;
 function validTape(c){
-  const v4=c.schema===TAPE_V4,v3=c.schema===TAPE_V3,v2=c.schema===TAPE_V2||v3||v4,row=(x,bounds)=>Array.isArray(x)&&x.length===bounds.length
+  const v2=[TAPE_V2,TAPE_V3,TAPE_V4,TAPE_V5,TAPE_V6].includes(c.schema),row=(x,bounds)=>Array.isArray(x)&&x.length===bounds.length
     &&x.every((v,i)=>Number.isInteger(v)&&v>=0&&v<bounds[i]);
   return (c.schema===TAPE_V1||v2)&&typeof c.nonce==='string'&&!!c.nonce
     &&Array.isArray(c.draws)&&c.draws.length===2&&c.draws.every(x=>row(x,DRAW_BOUNDS))
     &&['secondary','sleep_talk'].every(k=>Array.isArray(c[k])&&c[k].length===2
       &&c[k].every(v=>Number.isInteger(v)&&v>=0&&v<(k==='secondary'?100:60)))
-    &&(v2?Array.isArray(c.effect)&&c.effect.length===2&&c.effect.every(x=>row(x,EFFECT_BOUNDS)):c.effect===undefined)
-    &&((v3||v4)?row(c.phazing,[60,60]):c.phazing===undefined)
-    &&(v4?(row(c.entry_ties,[2,2])&&typeof c.resuming==='boolean'):
+    &&(v2?Array.isArray(c.effect)&&c.effect.length===2
+      &&c.effect.every(x=>row(x,hasInfatuation(c)?[...EFFECT_BOUNDS,2]:EFFECT_BOUNDS)):c.effect===undefined)
+    &&(hasPhazing(c)?row(c.phazing,[60,60]):c.phazing===undefined)
+    &&(hasEntryTies(c)?(row(c.entry_ties,[2,2])&&typeof c.resuming==='boolean'):
       c.entry_ties===undefined&&c.resuming===undefined);
 }
 function install(Battle,PRNG,load,audit,initializing=()=>null,pokemonPath='') {
   let nonce,used=new Set(),inert=0;
+  let construction=null,coupledGender=null;
   const control=()=>{
     const c=load();if(!c)return null;
     if(!validTape(c))throw Error('invalid chance tape');
@@ -55,7 +61,7 @@ function install(Battle,PRNG,load,audit,initializing=()=>null,pokemonPath='') {
     used.add(key);audit({kind:'COUPLED',nonce:c.nonce,role,side,raw:value});return value;
   }
   function effectDraw(c,role,side,column){
-    if(!Array.isArray(c.effect))return unknown('EFFECT_STREAM_ABSENT',{role,side});
+    if(!Array.isArray(c.effect)||c.effect[side]?.[column]===undefined)return unknown('EFFECT_STREAM_ABSENT',{role,side});
     return take(c,role,side,c.effect[side][column]);
   }
   // Tier D: effect[s][2] has two consumers (Yawn's residual sleep, an Effect Spore sleep): one read per seat per nonce.
@@ -66,7 +72,7 @@ function install(Battle,PRNG,load,audit,initializing=()=>null,pokemonPath='') {
   // Tier D: the attacker's phazing[s] (tape v3), one use per seat per nonce (drag and contact moves are disjoint).
   let spore=null;
   function auxiliary(c,role,side){
-    if(c.schema!==TAPE_V3&&c.schema!==TAPE_V4)return unknown('PHAZING_STREAM_ABSENT',{role,side});
+    if(!hasPhazing(c))return unknown('PHAZING_STREAM_ABSENT',{role,side});
     const key='phazing_draw:'+side;if(used.has(key))return unknown('REPEATED_ROLE',key);
     used.add(key);return take(c,role,side,c.phazing[side]);
   }
@@ -112,7 +118,7 @@ function install(Battle,PRNG,load,audit,initializing=()=>null,pokemonPath='') {
     if(c){
       // Legacy tapes cannot distinguish ordinary entry from a resumed request,
       // whose engine coins come from the fresh entry stream instead.
-      if(c.schema!==TAPE_V4)return unknown('ENTRY_PHASE_ABSENT',{role:'entry_tie'});
+      if(!hasEntryTies(c))return unknown('ENTRY_PHASE_ABSENT',{role:'entry_tie'});
       first=take(c,'entry_tie',0,c.resuming?c.entry_ties[1]:c.draws[1][10]);
     }
     else{
@@ -170,6 +176,44 @@ function install(Battle,PRNG,load,audit,initializing=()=>null,pokemonPath='') {
   }
   const caller=()=>new Error().stack.split('\n')[3]||'';
   const oldChance=Battle.prototype.randomChance,oldRandom=Battle.prototype.random,oldSample=Battle.prototype.sample;
+  // Gen3 randomSet retains fixed species gender, leaving mixed sets undefined.
+  // getTeam precedes Side's ordered Pokemon construction within setPlayer.
+  // Only the actual constructor fallback may consume these initial coordinates.
+  const setPlayer=Battle.prototype.setPlayer,getTeam=Battle.prototype.getTeam;
+  if(setPlayer&&getTeam){
+    Battle.prototype.setPlayer=function(slot,options){
+      const genders=initializing()?.genders;
+      if(!genders)return setPlayer.call(this,slot,options);
+      if(!Array.isArray(genders)||genders.length!==2||genders.some(row=>!Array.isArray(row)||row.length!==6
+          ||row.some(g=>![0,1,2].includes(g))))throw Error('invalid construction genders');
+      const previous=construction;
+      construction={battle:this,side:({p1:0,p2:1})[slot],genders,rows:null,index:0};
+      if(construction.side===undefined)throw Error('invalid construction side');
+      try{
+        const result=setPlayer.call(this,slot,options);
+        if(!construction.rows||construction.index!==construction.rows.length)
+          return unknown('GENDER_CONSTRUCTION_COUNT',construction.index);
+        return result;
+      }finally{construction=previous;}
+    };
+    Battle.prototype.getTeam=function(options){
+      const team=getTeam.call(this,options);
+      if(construction?.battle===this){
+        if(team.length!==6||construction.rows!==null)throw Error('invalid construction team');
+        construction.rows=[];
+        team.forEach((set,slot)=>{
+          const fixed=({M:1,F:2,N:0})[set.gender] ?? ({M:1,F:2,N:0})[this.dex.species.get(set.species).gender];
+          const value=construction.genders[construction.side][slot];
+          if(fixed!==undefined){if(value!==fixed)throw Error('fixed construction gender differs');}
+          else{
+            if(value!==1&&value!==2)throw Error('mixed construction gender must be M/F');
+            construction.rows.push({side:construction.side,slot,value});
+          }
+        });
+      }
+      return team;
+    };
+  }
   Battle.prototype.randomChance=function(n,d){
     const c=control();
     if(!c){
@@ -187,7 +231,7 @@ function install(Battle,PRNG,load,audit,initializing=()=>null,pokemonPath='') {
     if(s!==0&&s!==1)return unknown('MISSING_ACTOR',from);
     if(effect==='static'&&n===1&&d===3&&singles(this)&&from.includes('Battle.onDamagingHit')
       &&this.activeMove?.flags?.contact&&this.effectState?.target===this.sides[1-s].active[0])
-      return auxiliary(c,c.schema===TAPE_V3?'contact_static':'static',s)<20;
+      return auxiliary(c,(c.schema===TAPE_V3||c.schema===TAPE_V5)?'contact_static':'static',s)<20;
     if(from.includes('tryMoveHit')&&d===100)return take(c,'accuracy',s,c.draws[s][6])<n;
     if(from.includes('getDamage')&&Number.isInteger(16*n/d)){
       const hit=multihitIndex(this);
@@ -198,7 +242,17 @@ function install(Battle,PRNG,load,audit,initializing=()=>null,pokemonPath='') {
     if(effect==='par'&&n===1&&d===4)return take(c,'paralysis',s,c.draws[s][2])<25;
     if(effect==='frz'&&n===1&&d===5)return take(c,'thaw',s,c.draws[s][1])<20;
     if(effect==='confusion'&&n===1&&d===2)return take(c,'confusion',s,c.draws[s][3])<50;
+    if(effect==='attract'&&n===1&&d===2&&from.includes('onBeforeMove'))
+      return effectDraw(c,'infatuation',s,4)<1;
     if(effect==='stall'&&n===1&&[1,2,4,8].includes(d))return take(c,'stall',s,c.draws[s][8])*d<8;
+    // Cute Charm uses the attacker's auxiliary coordinate only for the current
+    // opposing holder's contact callback; another holder's state is unresolved.
+    if(effect==='cutecharm'&&n===1&&d===3&&singles(this)&&from.includes('Battle.onDamagingHit')
+      &&this.activeMove?.flags?.contact&&this.activePokemon===this.sides[s].active[0]
+      &&this.effect===this.dex.abilities.get('cutecharm')
+      &&this.effectState===this.sides[1-s].active[0]?.abilityState
+      &&this.effectState?.target===this.sides[1-s].active[0])
+      return auxiliary(c,'contact_cutecharm',s)<20;
     // Tier D: the contact abilities' onDamagingHit (this.effect is the ability; s is the attacker's seat).
     if((effect==='poisonpoint'||effect==='flamebody')&&n===1&&d===3&&from.includes('onDamagingHit'))
       return auxiliary(c,'contact_'+effect,s)<20;
@@ -273,6 +327,13 @@ function install(Battle,PRNG,load,audit,initializing=()=>null,pokemonPath='') {
     }
     if(!c){
       const from=caller();
+      if(initializing()?.genders&&pokemonPath&&from.includes('new Pokemon ('+pokemonPath+':108:')
+          &&items.length===2&&items[0]==='M'&&items[1]==='F'){
+        if(construction?.battle!==this||!construction.rows||construction.index>=construction.rows.length)
+          return unknown('GENDER_CONSTRUCTION_CONTEXT',from);
+        coupledGender=construction.rows[construction.index++];
+        try{return oldSample.call(this,items);}finally{coupledGender=null;}
+      }
       if(initializing()?.allow_inert_gender&&pokemonPath
         &&from.includes('new Pokemon ('+pokemonPath+':108:')
         &&items.length===2&&items[0]==='M'&&items[1]==='F'){
@@ -335,7 +396,7 @@ function install(Battle,PRNG,load,audit,initializing=()=>null,pokemonPath='') {
       if(singles(battle)&&group.length===2&&['switch','instaswitch'].includes(group[0].choice)
         &&group.every(x=>x.choice===group[0].choice&&active(battle,x.pokemon))
         &&group[0].pokemon.side!==group[1].pokemon.side){
-        if(c.schema!==TAPE_V4)return unknown('ENTRY_PHASE_ABSENT',{role:'switch_tie'});
+        if(!hasEntryTies(c))return unknown('ENTRY_PHASE_ABSENT',{role:'switch_tie'});
         const first=take(c,'switch_tie',0,c.resuming?c.entry_ties[0]:c.draws[0][11]);
         group.sort((a,b)=>a.pokemon.side.n===first?-1:1);items.splice(start,2,...group);return;
       }
@@ -400,10 +461,14 @@ function install(Battle,PRNG,load,audit,initializing=()=>null,pokemonPath='') {
     if(control())return unknown('UNMAPPED_RAW_RNG',args);
     const value=raw.apply(this,args);
     if(initializing()){
+      if(coupledGender&&args.length===1&&args[0]===2){
+        audit({kind:'COUPLED_INITIAL_GENDER',...coupledGender,raw:coupledGender.value-1});
+        return coupledGender.value-1;
+      }
       if(inert&&args.length===1&&args[0]===2)audit({kind:'INERT_GENDER',args,raw:value});
       else audit({kind:'INITIAL_RANDOM',args,raw:value,stack:new Error().stack.split('\n').slice(1,9)});
     }
     return value;
   };
 }
-module.exports={install,validTape,TAPE_V1,TAPE_V2,TAPE_V3,TAPE_V4,DRAW_BOUNDS,EFFECT_BOUNDS};
+module.exports={install,validTape,TAPE_V1,TAPE_V2,TAPE_V3,TAPE_V4,TAPE_V5,TAPE_V6,DRAW_BOUNDS,EFFECT_BOUNDS};
