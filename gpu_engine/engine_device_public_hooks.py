@@ -1109,3 +1109,16 @@ def port_count(c,side,use,name):
 
 def port_protect(c,side,acts,accuracy_pass,protected,protectable):
     return c._replace(trackers=port.protect(c.trackers,side,acts,accuracy_pass,protected,protectable))
+
+
+def forecast(c,state,changed):
+    """Forecast's |-formechange|X|<forme>|[msg]|[from] ability: Forecast for each active the engine re-formed at one
+    WeatherChange event (changed [B,2], transition._forecast). B2 folds it as color_change's pair: the active's live-type
+    overlay (public_types: a weather forme is a TYPE fact; the forme back to Castform is the species itself, which clears
+    the overlay to its base types, the engine's revert value) and the ability reveal ([from] ability:,
+    _confirmed_ability_from_event). An arrival (install) and a departure (type_revert) end the overlay as before."""
+    for side in range(2):
+        use=changed[:,side]
+        c=reveal_ability(c,state,side,use)
+        c=c._replace(trackers=_write(c.trackers,'shown_types',side,_li.take(state.active,_r(state),side),_get(state,'types',side),use))
+    return c

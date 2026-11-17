@@ -769,6 +769,29 @@ def substitute_holder(p):
     return held | p.side_uses('substitute')
 
 
+# FC (Forecast): the weather moves and abilities (Gen 3: Rain Dance, Sunny Day, Sandstorm, Hail; Drizzle, Drought, Sand Stream).
+WEATHER_MOVES = ('raindance', 'sunnyday', 'sandstorm', 'hail')
+WEATHER_ABILITIES = ('drizzle', 'drought', 'sandstream')
+
+
+def forecast_involved(p):
+    """FC: [L,2] a side whose party holds a living Castform with Forecast (gpu_engine/forecast.py) that a WeatherChange may
+    re-form this step: its active, or a holder that may install (a switch, Baton Pass, the foe's Roar/Whirlwind, a
+    replacement: its own Forecast Start), while a field weather is up (its clock may end it; a Cloud Nine / Air Lock holder
+    may leave or faint) or may be set (a weather move by either side, a weather-ability holder that may install on either
+    side). With no weather and no setter every Castform keeps Castform's own types (no capture carries a re-formed one), so
+    such a lane must stay bitwise. A re-formed Castform's types decide damage both ways, Ghost immunity and Fire's burn
+    immunity, and so whether either side acts later in the step: like a sleep landing (A1), it may change anything."""
+    species = p.vocab.get('species', ())
+    if 'castform' not in species:return np.zeros((p.lanes, 2), bool)
+    s = p.s;rows = np.arange(p.lanes)[:, None];sides = np.arange(2)[None, :]
+    holder = (s['species'] == species.index('castform')) & np.isin(s['ability'], p.ability_ids('forecast')) & (s['hp'] > 0)
+    reach = holder[rows, sides, s['active']] | (holder.any(-1) & installs(p))
+    setters = np.isin(s['ability'], p.ability_ids(*WEATHER_ABILITIES)) & (s['hp'] > 0)
+    weather = (np.asarray(s['weather']) != 0) | p.uses(*WEATHER_MOVES) | (setters.any(-1) & installs(p)).any(-1)
+    return reach & weather[:, None]
+
+
 # Leaf families for the allowed-change sets (regexes over output names).
 FAMILIES = {
     'hp': (r'^state\.(hp|substitute_hp)$', r'^trackers\.(hp_percent|damage_exact_(dealt|taken))$',
@@ -1138,6 +1161,11 @@ def predicates(prs):
         if pr not in PLUGINS:raise ValueError(f'unknown plug-in {pr}; choose from {sorted(PLUGINS)}')
         table.update(PLUGINS[pr])
     return table
+
+
+# FC (Forecast): a re-formed Castform may change anything on its lane (forecast_involved); every other lane stays bitwise.
+ALLOWED['forecast'] = ALL
+PLUGINS['FC'] = dict(forecast=forecast_involved)
 
 
 def ko_timing_sides(pre, fainted, base_fainted, pp, base_pp, post_active, base_active, move_count, base_move_count):
