@@ -15,7 +15,7 @@ A refresh is a deliberate review step, run last, after every other source edit o
 Layout, so concurrent changes merge: every pin dict holds one `'file': 'sha256',` entry per line. SOURCE_PINS and
 MAPPING_PINS are sorted by file; DOMAIN_PINS and KERNEL_PINS follow their module list's order, which the gates check.
 Two changes that refresh different files edit different lines; two that refresh the same file still conflict, as they
-should. The domain digests were once single DOMAIN_SHA256 / KERNEL_SHA256 literals over all 26 modules, which any two
+should. The domain digests were once single DOMAIN_SHA256 / KERNEL_SHA256 literals over all domain modules, which any two
 domain edits changed on the same line. Problems --check reports besides stale values:
 - FORMAT: a single-line or unsorted table, or a per-module table out of its list's order (a refresh rewrites it);
 - AGGREGATE: a DOMAIN_SHA256 / KERNEL_SHA256 literal is back (from a branch older than per-module pins): remove it by hand;

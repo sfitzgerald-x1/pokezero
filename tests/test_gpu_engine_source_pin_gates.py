@@ -1,8 +1,8 @@
 """The per-module domain gates (chance_consumers, phase_d_chance, ordinary_law, conditional_law) refuse exactly what the
 single DOMAIN_SHA256 / KERNEL_SHA256 literals they replaced refused, and now name the module.
 
-- Equivalence at the change. At its base (994242ce) each aggregate literal is the digest of the base's domain bytes;
-  at the change (cf0bb33d) every per-module pin is the sha256 of those same bytes, in the same module order. So the
+- Equivalence at the change. At its base (0ea558eb) each aggregate literal is the digest of the base's domain bytes;
+  at the change (ccfb1486) every per-module pin is the sha256 of those same bytes, in the same module order. So the
   per-module gates admit exactly the tree the aggregate gates admitted.
 - A one-byte change to ANY of the 27 domain modules, as the real gate code reads it, refuses in all four gates and names
   that module.
@@ -24,8 +24,8 @@ from test_gpu_engine_chance_consumers import fixture, table
 from test_gpu_engine_future_state import FAKE
 
 ENGINE = Path(cc.__file__).parent
-BASE = '994242ce519a1646825bb1252fc438d9b0517123'     # the last tree with the aggregate literals
-CHANGE = 'cf0bb33db8c2ab0247c8c0988538eb29811d0a9b'   # the per-module pins, at the same domain bytes
+BASE = '0ea558eb0602284dfd2792d85a66b796f2030624'     # integrated tree with aggregate literals
+CHANGE = 'ccfb148638dab12fbcf62339cfe4c7905e54f13f'   # per-module pins at the same integrated domain bytes
 READ = Path.read_bytes
 
 
