@@ -158,9 +158,9 @@ class PublicEvent:
         elif self.kind==Kind.TYPES:
             d=self.payload
             if ((self.actor_side,self.actor_slot)!=(-1,-1) or self.target_side not in (0,1)
-                    or not 0<=self.target_slot<6 or d[0]<=0 or not public_types.CLEAR<=d[1]<=public_types.FORME
+                    or not 0<=self.target_slot<6 or d[0]<=0 or not public_types.CLEAR<=d[1]<=public_types.CLEAR_EVENT
                     or any(d[4:]) or d[2]<0 or d[3]<0 or d[1]!=public_types.TYPE and d[3]!=0
-                    or d[1]==public_types.CLEAR and d[2]!=0 or d[1]==public_types.TYPE and d[2]==0):
+                    or d[1] in (public_types.CLEAR,public_types.CLEAR_EVENT) and d[2]!=0 or d[1]==public_types.TYPE and d[2]==0):
                 raise ValueError('type fact requires a resolved encounter and named value')
         elif self.kind==Kind.SLEEP:
             d=self.payload
@@ -801,9 +801,9 @@ def fold_chunk(cursor: StreamCursor, beliefs: public_belief.BeliefState,
                     (d[:,2]==0)|(d[:,2]==1),jnp.where(d[:,1]==public_active.ITEM_SET,(d[:,2]>=0)&(d[:,2]<=3),d[:,2]==0)))
                 payload_ok &= ~active_kind|active_payload
             if type_enabled:
-                type_payload=(d[:,0]>0)&(d[:,1]>=public_types.CLEAR)&(d[:,1]<=public_types.FORME)&jnp.all(d[:,4:]==0,axis=1)
+                type_payload=(d[:,0]>0)&(d[:,1]>=public_types.CLEAR)&(d[:,1]<=public_types.CLEAR_EVENT)&jnp.all(d[:,4:]==0,axis=1)
                 type_payload &= jnp.where(d[:,1]==public_types.TYPE,(d[:,2]>0)&(d[:,3]>=0),
-                    (d[:,3]==0)&jnp.where(d[:,1]==public_types.CLEAR,d[:,2]==0,d[:,2]>=0))
+                    (d[:,3]==0)&jnp.where((d[:,1]==public_types.CLEAR)|(d[:,1]==public_types.CLEAR_EVENT),d[:,2]==0,d[:,2]>=0))
                 payload_ok &= ~type_kind|type_payload
             if sleep_enabled:
                 sleep_op=d[:,1]

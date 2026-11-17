@@ -37,6 +37,7 @@ class TypeProvenanceTests(unittest.TestCase):
                 '|-start|p2a: Lizard|typechange|Normal|[from] ability: Color Change',
                 '|move|p2a: Lizard|Return|p1a: Cloud',
                 '|-end|p2a: Lizard|typechange', '|faint|p2a: Lizard'],
+            'unresolvable_type_event': ['|-start|p2a: Lizard|typechange|???'],
             'conversion': ['|-start|p2a: Lizard|typechange|Fire|[from] move: Conversion'],
             'conversion2': ['|-start|p2a: Lizard|typechange|Water|[from] move: Conversion 2'],
             'camouflage': ['|-start|p2a: Lizard|typechange|Normal|[from] move: Camouflage'],

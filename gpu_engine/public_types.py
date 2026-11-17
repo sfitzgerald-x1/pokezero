@@ -24,7 +24,8 @@ from .public_mon_state import _int32
 from .public_abilities import _bool
 
 SCHEMA='pokezero.public_types.v1'
-ARRIVE, CLEAR, TYPE, FORME=range(4)
+ARRIVE, CLEAR, TYPE, FORME, CLEAR_EVENT=range(5)
+# An unresolvable typechange clears its overlay but still records the lexical event.
 COLUMNS=(reference.CATEGORY_TYPE_1,reference.CATEGORY_TYPE_2)
 
 
@@ -159,7 +160,7 @@ def apply(state,tables,mons,*,operation,side,encounter,first=0,second=0,producer
     valid=jnp.broadcast_to(_bool(valid),(b,))
     current,species,ok=_coherent(state,tables,mons)
     row=jnp.arange(b);target=jnp.clip(seat,0,1);address=(row,target);arrival=op==ARRIVE
-    ok &= jnp.all(producer_binding==tables.binding)&(op>=ARRIVE)&(op<=FORME)&(seat>=0)&(seat<2)&(enc>0)&(current[address]==enc)
+    ok &= jnp.all(producer_binding==tables.binding)&(op>=ARRIVE)&(op<=CLEAR_EVENT)&(seat>=0)&(seat<2)&(enc>0)&(current[address]==enc)
     same=state.encounter==current
     same=jnp.where(arrival[:,None]&(jnp.arange(2)==target[:,None]),True,same)
     ok &= jnp.all(same,axis=-1)
@@ -176,7 +177,7 @@ def apply(state,tables,mons,*,operation,side,encounter,first=0,second=0,producer
         overridden=state.overridden.at[address].set(jnp.where(use,overridden,state.overridden[address])),
         categories=state.categories.at[address].set(jnp.where(use[:,None],pair,state.categories[address])),
         type_changed=state.type_changed.at[address].set(jnp.where(use,
-            jnp.where(arrival,False,state.type_changed[address]|(op==TYPE)|(op==FORME)),state.type_changed[address])))
+            jnp.where(arrival,False,state.type_changed[address]|(op==TYPE)|(op==FORME)|(op==CLEAR_EVENT)),state.type_changed[address])))
     return updated,ok|~valid
 
 
@@ -224,6 +225,6 @@ def project_line(line,*,catalog):
             if pair is not None:
                 a,c=pair;facts.append((TYPE,side,_static_category(catalog.vocabulary,'type:'+a),
                     _static_category(catalog.vocabulary,'type:'+c) if c else 0))
-            else:facts.append((CLEAR,side,0,0))
+            else:facts.append((CLEAR_EVENT,side,0,0))
         elif kind=='-end' and len(p)>=4 and reference._normalize_identifier(p[3])=='typechange':facts.append((CLEAR,side,0,0))
     return TypeProjection(line,tuple(facts),tuple(int(x) for x in np.asarray(catalog.device.binding)))
