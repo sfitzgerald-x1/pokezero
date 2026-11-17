@@ -75,9 +75,12 @@ OPTIONAL = {
     'partial_trap_source': (lambda v: -1 if v['partiallytrapped'] is None else v['partiallytrapped']['source'], -1),
     'recharge_counter': (lambda v: v['mustrecharge'] or 0, 0),
 }
-# require_fields names: the OPTIONAL leaves, item_knocked, destiny_bond (state.DESTINY_BOND)
-# and effect (ChanceInputs.effect).
-REQUIRABLE = tuple(OPTIONAL) + ('item_knocked', 'destiny_bond', 'effect')
+# require_fields names: the OPTIONAL leaves, item_knocked, destiny_bond (state.DESTINY_BOND),
+# effect (ChanceInputs.effect) and transform (the Transform leaves: compare_lane's transform fields).
+REQUIRABLE = tuple(OPTIONAL) + ('item_knocked', 'destiny_bond', 'effect', 'transform')
+# Transform's state leaves (gpu_engine/state.py); a scenario requiring 'transform' needs them all.
+TRANSFORM_LEAVES = ('transformed', 'transform_species', 'transform_stats', 'transform_moves', 'transform_pp',
+                    'transform_hidden_power')
 
 
 # ---------------------------------------------------------------------------
@@ -192,14 +195,20 @@ def requested_seats(state):
     return (~forced.any(axis=1)[:, None] | forced) & ~np.asarray(state['done'])[:, None]
 
 
-def compare_lane(view, snapshot, vocab, *, mask, destiny_bond=None):
+def compare_lane(view, snapshot, vocab, *, mask, destiny_bond=None, transform=False):
     """Differences between one engine lane (numpy dict) and one Showdown snapshot.
 
     Every design 5.1 field is compared; an engine leaf that does not exist yet is
-    read as its neutral value (OPTIONAL, item_knocked False, Destiny Bond False)."""
+    read as its neutral value (OPTIONAL, item_knocked False, Destiny Bond False).
+    `transform` (a scenario's require_fields 'transform') adds every mon's transform fields (transform_fields)."""
     diffs = []
     def check(field, showdown, engine):
         if showdown != engine:diffs.append(dict(field=field, showdown=showdown, engine=engine))
+    if transform:
+        for side in range(2):
+            for slot, mon in enumerate(snapshot['sides'][side]['mons']):
+                for name, (want, got) in transform_fields(view, mon, vocab, side, slot).items():
+                    check(f'{side}:{slot}:{name}', want, got)
     for side in range(2):
         sd = snapshot['sides'][side];active = int(view['active'][side])
         check(f'{side}:active', sd['active'], active)
@@ -235,6 +244,29 @@ def compare_lane(view, snapshot, vocab, *, mask, destiny_bond=None):
     done = bool(view['done'])
     check('winner', snapshot['winner'] if snapshot['ended'] else None, int(view['winner']) if done else None)
     return diffs
+
+
+def transform_fields(view, mon, vocab, side, slot):
+    """{field: (Showdown, engine)} for one mon (require_fields 'transform'). The engine keeps the original species and
+    writes the copy in place; Showdown's species, stats, types, ability and Hidden Power are the current (copied) ones and
+    baseMoveSlots the revert's moves and PP. A transformed engine mon is its side's active; its base slots are the saves."""
+    active = int(view['active'][side]) == slot
+    copied = bool(view['transformed'][side]) and active
+    species = int(view['transform_species'][side]) if copied else int(view['species'][side, slot])
+    moves = view['transform_moves'][side] if copied else view['moves'][side, slot]
+    pp = view['transform_pp'][side] if copied else view['pp'][side, slot]
+    n = len(mon['transform']['base_moves'])
+    out = dict(transformed=(mon['transform']['transformed'], copied),
+        species=(mon['transform']['species'], _name(vocab, 'species', species)),
+        stats=(mon['transform']['stats'], [int(x) for x in view['stats'][side, slot, 1:]]),
+        types=(mon['transform']['types'], [_name(vocab, 'types', x) for x in view['types'][side, slot] if int(x)]),
+        ability=(mon['transform']['ability'], _name(vocab, 'abilities', view['ability'][side, slot])),
+        base_moves=(mon['transform']['base_moves'], [_name(vocab, 'moves', x) for x in moves[:n]]),
+        base_pp=(mon['transform']['base_pp'], [int(x) for x in pp[:n]]))
+    if 'hiddenpower' in mon['moves']:   # Hidden Power's type and power matter only to a mon that has it
+        out['hidden_power'] = ([mon['transform']['hp_type'], mon['transform']['hp_power']],
+            [_name(vocab, 'types', view['hidden_power_type'][side, slot]), int(view['hidden_power_power'][side, slot])])
+    return out
 
 
 def lines_in_order(log, expected):
@@ -306,6 +338,7 @@ class Engine:
         self.fields = set(self.optional) | ({'item_knocked'} if 'item_knocked' in state_module.BattleState._fields else set())
         self.fields |= ({'destiny_bond'} if self.destiny_bond is not None else set())
         self.fields |= ({'effect'} if 'effect' in transition.ChanceInputs._fields else set())
+        self.fields |= ({'transform'} if set(TRANSFORM_LEAVES) <= set(state_module.BattleState._fields) else set())
         self.has_effect = 'effect' in transition.ChanceInputs._fields
         self.pstep = None
 
@@ -455,6 +488,7 @@ def run_scenario(scenario, engine, showdown, metadata, device=None):
             expectation_met=False, expectation_detail=f'engine lacks required fields {missing}', results=[])
     prepared = showdown.ask(cmd='prepare', teams=scenario['teams'])
     if prepared['vocabulary'] != metadata['vocabulary']:raise ValueError('probe vocabulary differs from the pool metadata')
+    transform = 'transform' in scenario.get('require_fields', ())
     cases = enumerate_cases(scenario)
     if len(cases) > engine.lanes:raise ValueError(f"{scenario['move']}: {len(cases)} cases exceed {engine.lanes} lanes")
     vocab = metadata['vocabulary']
@@ -477,7 +511,7 @@ def run_scenario(scenario, engine, showdown, metadata, device=None):
     initial_random = [e for e in started['audit'] if e['kind'] in ('INITIAL_RANDOM', 'UNRESOLVED')]
     for i, case in enumerate(cases):
         diffs = compare_lane(lane_view(arrays, i), started['snapshots'][i], vocab, mask=mask[i],
-            destiny_bond=engine.destiny_bond)
+            destiny_bond=engine.destiny_bond, transform=transform)
         records.append(dict(case_id=case['case_id'], assignment=case['assignment'], status=None, initial_diffs=diffs,
             initial_audit=started['audit'], steps=[], last_tape=None, last_aux=None, live=True))
         if initial_random:records[-1].update(status='UNRESOLVED_INITIAL_CHANCE', live=False)
@@ -535,7 +569,7 @@ def run_scenario(scenario, engine, showdown, metadata, device=None):
             if invalid[i]:
                 record.update(status='ENGINE_INVALID_ACTION', live=False);continue
             entry['diffs'] = compare_lane(lane_view(arrays, i), sd['snapshot'], vocab, mask=mask[i],
-                destiny_bond=engine.destiny_bond)
+                destiny_bond=engine.destiny_bond, transform=transform)
             compared.append(i)
             if entry['diffs']:entry['showdown_log_tail'] = sd['snapshot']['log_tail']
             expected_lines = scenario.get('showdown_lines', {}).get(str(step))

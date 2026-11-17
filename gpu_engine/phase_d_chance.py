@@ -59,9 +59,9 @@ CONSUMERS = {
 }
 
 # Changing any source that supplies the consumer/domain proof requires review.
-SOURCE_PINS = {'action_history.py': 'a47bdb2712f7eadaed12d91ede70be2ebe9f1c1ae3f70fe56495437997212407', 'critical.py': '7f8be9394e5a5473df5e6e9e9dcd242947ac0970cf5f46d50e27b27658e58f72', 'effects.py': '47f549d608b60d46e8cc4db7bad5be249ae728a4aab2a0ef28f105f3614e40e2', 'encore.py': '63da39bbd181a8c6371b3bca853322291a03674c60f535ad0eacdbe1a440e0dd', 'entry.py': 'eabf2713a100256ba86fd0b5ac4155042e2a0c6dfe0bc37c7f0c6219dbdd22c1', 'mechanics.py': 'e8476cc3e0029f3ed0bf82276312440e6dd8b340ffeb0c68cdd5611754eef661', 'phazing.py': 'c27039f267bd18660adb3c2bd826e58a7da953eea0e79677de5428f042447969', 'pursuit.py': '5b966584634b5230b3efaf16609699484d29966ff8f7ebaf6d160864dba8c2e5', 'residual_order.py': '7b1a958d4ce27cf8fe7560d8f5a4f95d5cb54a17adbe23ba72dccc00e35bf454', 'secondary.py': '68f74574caab36e5f8e8be3426f96b5858964fb24346b2c4641eb6196640e532', 'sleep_talk.py': '968a78ddde87158b13f68dfcacc2158f07336d82c1be472d2283421e8583c154', 'state.py': '67ca721ce1f6b1a5c3e9c6fd42fe33d65f62ffcec006f5c5efd188225111a59c', 'transition.py': 'c3c1dff3a2ae96b5c454c5c236256c9983e07954f3428b476f6d942ad9132e1a', 'weather.py': '3c861027e16d27917fa47fa5cf5d6dc0c68d3a74af282108dfb94369d4db57e5'}
-DOMAIN_MODULES = tuple("action_history absorption baton combat critical damage_moves effects encore entry focus_punch items linked_traps mechanics phazing pressure pursuit residual_order secondary self_destruct sleep_talk solar_beam state sustain transition variable_moves weather".split())
-DOMAIN_SHA256 = '20ef2ca53aff932d09e47dcb7ce574393a4f48cbcde9a35478e82f66045652c3'
+SOURCE_PINS = {'action_history.py': 'a47bdb2712f7eadaed12d91ede70be2ebe9f1c1ae3f70fe56495437997212407', 'critical.py': '7f8be9394e5a5473df5e6e9e9dcd242947ac0970cf5f46d50e27b27658e58f72', 'effects.py': '47f549d608b60d46e8cc4db7bad5be249ae728a4aab2a0ef28f105f3614e40e2', 'encore.py': '63da39bbd181a8c6371b3bca853322291a03674c60f535ad0eacdbe1a440e0dd', 'entry.py': '317536e3d6c1813d0d313308e8c8a87f109dbebda5b2cc6da4a8c60b4d1021f1', 'mechanics.py': 'e8476cc3e0029f3ed0bf82276312440e6dd8b340ffeb0c68cdd5611754eef661', 'phazing.py': 'c27039f267bd18660adb3c2bd826e58a7da953eea0e79677de5428f042447969', 'pursuit.py': '5b966584634b5230b3efaf16609699484d29966ff8f7ebaf6d160864dba8c2e5', 'residual_order.py': '7b1a958d4ce27cf8fe7560d8f5a4f95d5cb54a17adbe23ba72dccc00e35bf454', 'secondary.py': '68f74574caab36e5f8e8be3426f96b5858964fb24346b2c4641eb6196640e532', 'sleep_talk.py': '968a78ddde87158b13f68dfcacc2158f07336d82c1be472d2283421e8583c154', 'state.py': 'c39b77308bdf7b7d69e0fdfeeb880bb8f98752738e02428dd551cb566c73e080', 'transition.py': 'ac819a99f89870d7fc27ad4e28458b95d818bb454d3db160198c6ff7f302d8c5', 'weather.py': '3c861027e16d27917fa47fa5cf5d6dc0c68d3a74af282108dfb94369d4db57e5'}
+DOMAIN_MODULES = tuple("action_history absorption baton combat critical damage_moves effects encore entry focus_punch items linked_traps mechanics phazing pressure pursuit residual_order secondary self_destruct sleep_talk solar_beam state sustain transform transition variable_moves weather".split())
+DOMAIN_SHA256 = '885680bf05ee857c3a5431b3af794d8347a76cec56df3908cb72a128c1cc06a6'
 
 
 def _host(value):
@@ -179,7 +179,7 @@ def plan_for_state(state, index, actions, table, metadata, *, cap, native_input=
         data = mapping._sample(state, index)
         if data["pending_residual"]:
             # A resumed suspended turn replays its saved blocks (residual_draws.., and effect_draws at transition.py:
-            # 580-582), never fresh coordinates: conditional_law plans those roots. The input mapper refuses them first.
+            # 583-585), never fresh coordinates: conditional_law plans those roots. The input mapper refuses them first.
             return refuse("SUSPENDED_ROOT_SAVED_BLOCKS", "A pending-residual root reads its saved draws and effect blocks")
         t = _host(table._asdict() if hasattr(table, "_asdict") else table)
         if not isinstance(t, dict):
@@ -245,6 +245,18 @@ def plan_for_state(state, index, actions, table, metadata, *, cap, native_input=
                 if trace_table is not None and any(trace_table[ability] for ability in abilities[s]):
                     abilities[s].update(abilities[1-s])
             changed=before!=tuple(frozenset(values) for values in abilities)
+        # Transform (gpu_engine/transform.py) draws nothing, but a selected Transform copies the foe active's ability, so a
+        # copied Static, Synchronize, Hustle, Compound Eyes, Sand Veil or weather ability can switch on an existing axis
+        # this step. Close it with the Trace closure (both copy the opposing current ability) to one fixed point.
+        transform_move=(t.get('transform') or {}).get('move')
+        transforms=[transform_move is not None and any(transform_move[move] for move in selected[s]) for s in range(2)]
+        changed=any(transforms)
+        while changed:
+            before=tuple(frozenset(values) for values in abilities)
+            for s in range(2):
+                if transforms[s] or (trace_table is not None and any(trace_table[ability] for ability in abilities[s])):
+                    abilities[s].update(abilities[1-s])
+            changed=before!=tuple(frozenset(values) for values in abilities)
         statuses = [{data["status"][s][p] for p in participants[s]} for s in range(2)]
         for s in range(2):
             if (any(_at(t, 'secondary', 'contact', move) for move in selected[s])
@@ -286,6 +298,11 @@ def plan_for_state(state, index, actions, table, metadata, *, cap, native_input=
                 # Include both orderings of Haze then self boost and vice versa.
                 stages[s][position].update(max(-6, min(6, value+change))
                     for value in tuple(stages[s][position]) for change in delta)
+        # Transform copies the foe's accuracy and evasion stages too (its own and the foe's later moves read them).
+        for s in range(2):
+            if transforms[s]:
+                for position in range(2):
+                    stages[s][position].update(stages[1-s][position])
 
         observations = {name: [] for name, _ in COORDINATES}
         reasons = {}
@@ -408,10 +425,10 @@ def plan_for_state(state, index, actions, table, metadata, *, cap, native_input=
             use("draws.0.10", Observation("identity"))
         if not replacement and all(statuses[s] & {2, 3, 4} for s in range(2)):
             use("draws.1.9", Observation("identity"))
-        # §6: the appended effect stream (fidelity R, design 2.1; M2's residual consumers). transition.py:580-582 reads
+        # §6: the appended effect stream (fidelity R, design 2.1; M2's residual consumers). transition.py:583-585 reads
         # ChanceInputs.effect; a resumed suspended turn reads the saved block instead (refused above).
         for s in range(2):
-            # Bonemerang's second hit (transition.py:1135-1175, run when damage_moves.hits>1 at :1362): its own critical
+            # Bonemerang's second hit (transition.py:1158-1198, run when damage_moves.hits>1 at :1385-1386): its own critical
             # roll effect[s][0] (critical.is_critical: below 2 for a high-crit move, else below 1; below 1 without the
             # table) and damage roll 85+effect[s][1]. Callers and Encore are already in the selected closure.
             critical = (t.get("critical") or {}).get("high")
@@ -422,19 +439,19 @@ def plan_for_state(state, index, actions, table, metadata, *, cap, native_input=
                 if _stick(t, data, s, active):
                     use(f"effect.{s}.0", Observation("less_than", 4))
                 use(f"effect.{s}.1", Observation("identity"))
-            # Yawn's residual sleep (transition.py:2601-2611): a holder whose count is 1 when this residual runs sleeps
-            # for 2+effect[s][2], s the drowsy mon's own side. A Yawn landing this turn sets 2 (:1742-1750), which ends
+            # Yawn's residual sleep (transition.py:2643-2653): a holder whose count is 1 when this residual runs sleeps
+            # for 2+effect[s][2], s the drowsy mon's own side. A Yawn landing this turn sets 2 (:1803-1811), which ends
             # at the next turn's residual, and only a holder that stays in keeps a count (entry.py, baton.py drop it).
             if not replacement and any(_counter(data, "yawn_counter", s, p) == 1 for p in participants[s]):
                 use(f"effect.{s}.2", Observation("identity"))
-        # The order-10 partial-trap pair (transition.py:2308-2315 with residual_order): effect[0][3] orders the two
-        # Wrap holders' events at equal Speed. A seat holds a trap already or gets one from the other's Wrap (:1945-1955).
+        # The order-10 partial-trap pair (transition.py:2350-2357 with residual_order): effect[0][3] orders the two
+        # Wrap holders' events at equal Speed. A seat holds a trap already or gets one from the other's Wrap (:2011-2016).
         trapped = [any(_counter(data, "partial_trap_counter", s, p) > 0 for p in participants[s])
                    or any(_at(t, "effects", "wrap", move) for move in selected[1-s]) for s in range(2)]
         if not replacement and all(trapped):
             use("effect.0.3", Observation("identity"))
-        # Perish Song's order-12 pair (transition.py:2646-2663): effect[1][3] orders the two holders at equal Speed.
-        # Perish Song gives every active without a count one (:1728-1735), so either seat's use reaches both.
+        # Perish Song's order-12 pair (transition.py:2688-2709): effect[1][3] orders the two holders at equal Speed.
+        # Perish Song gives every active without a count one (:1790-1798), so either seat's use reaches both.
         perish_song = any(_at(t, "effects", "perishsong", move) for choices in selected for move in choices)
         if not replacement and all(perish_song or any(_counter(data, "perish_counter", s, p) > 0 for p in participants[s])
                                    for s in range(2)):

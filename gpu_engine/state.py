@@ -90,6 +90,15 @@ class BattleState(NamedTuple):
     yawn_counter: jax.Array        # [B,2,6], volatiles.yawn.duration: 2 at Yawn, -1 at residual subOrder 19, sleep attempt at 0
     partial_trap_counter: jax.Array  # [B,2,6], volatiles.partiallytrapped.duration: 3+draws[s][7] at Wrap, -1 at subOrder 9
     partial_trap_source: jax.Array   # [B,2,6], effectState.source as an opposing party index; -1 none
+    # Transform (sim/pokemon.ts transformInto/clearVolatile). Only an active can be transformed, so the saves are per side.
+    # `species` keeps the original (item gates, identity); the copy is written in place into stats[1:6], types, moves, pp,
+    # disabled, ability, hidden_power_* and boosts, and these leaves hold what the revert restores (gpu_engine/transform.py).
+    transformed: jax.Array             # [B,2] bool, pokemon.transformed of the side's active
+    transform_species: jax.Array       # [B,2], pokemon.species while transformed (the donor's original species), else 0
+    transform_stats: jax.Array         # [B,2,5], saved original Atk..Spe (baseStoredStats)
+    transform_moves: jax.Array         # [B,2,4], saved original move ids (baseMoveSlots)
+    transform_pp: jax.Array            # [B,2,4], saved base PP, Transform's own cost already paid
+    transform_hidden_power: jax.Array  # [B,2,2], saved original Hidden Power type and power
 
 
 def empty_state(batch_size: int, *, seed: int = 0) -> BattleState:
@@ -134,7 +143,10 @@ def empty_state(batch_size: int, *, seed: int = 0) -> BattleState:
         truant_loaf=jnp.zeros((b,2,6),jnp.bool_),item_knocked=jnp.zeros((b,2,6),jnp.bool_),
         effect_draws=jnp.zeros((b,2,4),jnp.int32),recharge_counter=mon(),
         perish_counter=mon(),yawn_counter=mon(),partial_trap_counter=mon(),
-        partial_trap_source=jnp.full((b,2,6),-1,jnp.int32))
+        partial_trap_source=jnp.full((b,2,6),-1,jnp.int32),
+        transformed=jnp.zeros((b,2),jnp.bool_),transform_species=side(),
+        transform_stats=jnp.zeros((b,2,5),jnp.int32),transform_moves=jnp.zeros((b,2,4),jnp.int32),
+        transform_pp=jnp.zeros((b,2,4),jnp.int32),transform_hidden_power=jnp.zeros((b,2,2),jnp.int32))
 
 
 def bench_indices(active: jax.Array) -> jax.Array:

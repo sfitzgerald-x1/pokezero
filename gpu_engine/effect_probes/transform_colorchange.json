@@ -1,0 +1,171 @@
+{
+ "schema": "pokezero.effect_probe.scenario.v1",
+ "move": "transform_colorchange",
+ "note": "Starmie's Surf turns Kecleon Water; Ditto copies the current (Water) type and Color Change; Kecleon's Return then turns the copy Normal; the switch-out reverts the types. B2 and the device show the donor's species types.",
+ "teams": [
+  [
+   {
+    "species": "Starmie",
+    "moves": [
+     "splash",
+     "surf",
+     "recover",
+     "protect"
+    ],
+    "ability": "Natural Cure",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Ditto",
+    "moves": [
+     "transform"
+    ],
+    "ability": "Limber",
+    "item": ""
+   },
+   {
+    "species": "Blissey",
+    "moves": [
+     "splash",
+     "softboiled",
+     "protect",
+     "seismictoss"
+    ],
+    "ability": "Serene Grace",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Skarmory",
+    "moves": [
+     "splash",
+     "protect",
+     "spikes",
+     "peck"
+    ],
+    "ability": "Keen Eye",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Swampert",
+    "moves": [
+     "splash",
+     "protect",
+     "surf",
+     "earthquake"
+    ],
+    "ability": "Torrent",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Metagross",
+    "moves": [
+     "splash",
+     "protect",
+     "meteormash",
+     "earthquake"
+    ],
+    "ability": "Clear Body",
+    "item": "Leftovers"
+   }
+  ],
+  [
+   {
+    "species": "Kecleon",
+    "moves": [
+     "splash",
+     "return",
+     "protect",
+     "tackle"
+    ],
+    "ability": "Color Change",
+    "item": ""
+   },
+   {
+    "species": "Starmie",
+    "moves": [
+     "splash",
+     "surf",
+     "recover",
+     "protect"
+    ],
+    "ability": "Natural Cure",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Blissey",
+    "moves": [
+     "splash",
+     "softboiled",
+     "protect",
+     "seismictoss"
+    ],
+    "ability": "Serene Grace",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Skarmory",
+    "moves": [
+     "splash",
+     "protect",
+     "spikes",
+     "peck"
+    ],
+    "ability": "Keen Eye",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Swampert",
+    "moves": [
+     "splash",
+     "protect",
+     "surf",
+     "earthquake"
+    ],
+    "ability": "Torrent",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Metagross",
+    "moves": [
+     "splash",
+     "protect",
+     "meteormash",
+     "earthquake"
+    ],
+    "ability": "Clear Body",
+    "item": "Leftovers"
+   }
+  ]
+ ],
+ "script": [
+  [
+   "move 2",
+   "move 1"
+  ],
+  [
+   "switch 2",
+   "move 1"
+  ],
+  [
+   "move 1",
+   "move 1"
+  ],
+  [
+   "move 1",
+   "move 2"
+  ],
+  [
+   "switch 1",
+   "move 1"
+  ]
+ ],
+ "expect": {
+  "exact": true
+ },
+ "require_fields": [
+  "item_knocked",
+  "destiny_bond",
+  "effect",
+  "transform"
+ ]
+}

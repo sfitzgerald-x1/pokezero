@@ -333,6 +333,18 @@ class DevicePureTests(unittest.TestCase):
         left = {n.strip() for key in device.LEFT_OUT for n in key.split(',')}
         self.assertFalse(left & set(names))
 
+    def test_wire_lines_drop_exactly_the_battle_end_lines(self):
+        # B2 folds per decision and no decision follows a battle end: a stream with |win| or |tie| wires as it does without,
+        # and every other line, including ones that only resemble the two kinds, passes through unchanged
+        step = ['|', '|t:|1763100000', '|move|p1a: Misdreavus|Splash|p1a: Misdreavus', '|-start|p1a: Misdreavus|perish0',
+                '|-start|p2a: Misdreavus|perish0', '|faint|p1a: Misdreavus', '|faint|p2a: Misdreavus']
+        near = [device.TIER_LINE, '|winner|p1', '|tied', '|-message|p1 wins', '|c|p1|tie', '|-hint|win', 'win', '']
+        self.assertEqual(device.wire_lines(step + near), step + near)
+        for end in (['|win|p2'], ['|win|p1'], ['|tie']):
+            with self.subTest(end=end):
+                self.assertEqual(device.wire_lines(step + end), device.wire_lines(step))
+                self.assertEqual(device.wire_lines(step[:3] + end + step[3:]), step)
+
 
 @requires_showdown()
 @unittest.skipUnless(NODE, 'requires node')

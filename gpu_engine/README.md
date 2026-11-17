@@ -320,6 +320,37 @@ no new state, no new chance):
   before the receiver's `-item` line, so the device runs `white_herb` first and
   `trick` (with the swapped pre-herb state) last, as B2 folds the four lines.
 
+Transform (`transform.py`; new per-side state `transformed`, `transform_species`,
+`transform_stats`, `transform_moves`, `transform_pp`, `transform_hidden_power`; no
+new chance):
+- The move: accuracy true, no protect flag, bypasssub, so Protect, a Substitute
+  and type immunity never stop it; it fails (`-fail`, PP spent) on a transformed
+  target, and a transformed user may re-transform (Gen < 5). The copy is written
+  in place: Atk..Spe (HP and max HP stay), the donor's current types, moves at
+  min(5, pp), nothing disabled, ability (no Start: a copied Intimidate or weather
+  ability does nothing), Hidden Power and all stages. `species` keeps the
+  original; the saves hold the base (a re-transform keeps the first).
+- Every executed Transform sets its side's history slot to -1 (failencore: a later
+  Encore fails); a Choice holder locks on Transform and endTurn's DisableMove drops
+  the lock unless the copied moves include it. The gen < 5 Update right after the
+  action cures a status a copied Immunity, Limber, Insomnia, Vital Spirit, Water
+  Veil or Magma Armor prevents, and a copied Own Tempo ends confusion.
+- clearVolatile reverts at every departure (after the SwitchOut read, so a copied
+  Natural Cure cures; a drag and Baton Pass included) and at a faint (once, at the
+  step's end, before any replacement reads the outgoing Speed). A departing
+  transformed mon keeps its own Truant clock (Showdown's truantTurn is a Pokemon
+  field); entry writes the clock only for a Truant holder.
+- Device: B2's Transform mark and donor species, the donor's species types, the
+  running ability per fold (the donor owner also knows a private Pressure start),
+  no move reveal or public PP charge while transformed (copied uses counted for
+  device worlds, cleared at departure and faint), ability claims ignored; the
+  traced column shows Trace copies only (B2's `traced`), never a Transform copy;
+  the observation shows a transformed foe's and our own species and base stats as
+  the donor's (base HP its own), our ACTUAL stats from the saves and the copied
+  slots' PP over the request's maxpp. A device world rebuilds our copy's hidden
+  Atk..Spe and ability from its sampled donor (refusing one whose moves or copied
+  Hidden Power differ from our request) and a foe's copy from our donor.
+
 The existing fixed critical roll now resolves ordinary 1/16 and catalog +1
 high-crit 1/8 chances. Battle Armor and Shell Armor veto critical hits in both
 ordinary damage and pre-switch Pursuit, using the actual outgoing holder.

@@ -9,10 +9,10 @@ M2's R1 (the Wrap and Yawn residual handlers traced only at their reachable posi
 Fidelity WH (White Herb, Sacred Fire's thaw and Facade) merged with R1 moved it to a19958b5, the merge's transition.py;
 its review fixes (Trick's received herb, fewer traced triggers) moved it to 91346285, and the B2 Trick-credit rule
 to 13f76e5e. M2's R2 (the older residual handlers traced only at their reachable positions) moved it to a8c48fa7, and its
-Encore stale-move clear to 7c984fe6.
-Fidelity tier D (Wonder Guard, the pinch abilities, Poison Point / Flame Body / Effect Spore) moved it to d880714c, and its
-Pursuit-intercept device reveals to c471195a.
+Encore stale-move clear to 7c984fe6. Transform (the copy, its reverts, the Update cure and the choice unlock) moved it to
+e4fc7e8e, its last transition.py commit (whole-leaf masked selects and one faint revert at the step's end).
 The damage modifiers (Silk Scarf, Twisted Spoon, Marvel Scale and Gen 3 Plus/Minus) moved it to 61b00f72.
-Stick (Farfetch'd's critRatio +2) moved it to 3eb8bc1e.
+The combined Transform + transition batch + Tier D train moves it to 87e75985: interception reveals, damage credit and ability effects.
+Train B composes the damage modifiers with tape v4 and the Transform/tier-D train at 3029a7e6.
 """
-CURRENT_TRANSITION = '3eb8bc1edf52935c53cbdca39cbb3efdde1f32a9'
+CURRENT_TRANSITION = '3029a7e6a9dc065c980b4f01273b0294f71bb4db'
