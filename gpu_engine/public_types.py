@@ -26,6 +26,9 @@ from .public_abilities import _bool
 SCHEMA='pokezero.public_types.v1'
 ARRIVE, CLEAR, TYPE, FORME, CLEAR_EVENT=range(5)
 # An unresolvable typechange clears its overlay but still records the lexical event.
+# Two reserved raw-envelope bits carry lexical history when no overlay fact exists.
+RAW_HISTORY_SHIFT=29
+RAW_HISTORY_MASK=3<<RAW_HISTORY_SHIFT
 COLUMNS=(reference.CATEGORY_TYPE_1,reference.CATEGORY_TYPE_2)
 
 

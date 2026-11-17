@@ -12,14 +12,14 @@ class TypeProvenanceTests(unittest.TestCase):
         from gpu_engine import public_team
         from pokezero.category_vocab import CategoryVocabulary
         from pokezero.dex import ShowdownDex, MoveInfo
-        cls.vocab = CategoryVocabulary(cls.vocab.tokens + ('ability:colorchange', 'ability:forecast', 'move:return'))
+        cls.vocab = CategoryVocabulary(cls.vocab.tokens + ('ability:colorchange', 'ability:forecast', 'ability:waterabsorb', 'move:return'))
         moves = dict(cls.dex.moves)
         moves['return'] = MoveInfo('return', 'Return', 'Normal', 'Physical', 'Physical', 102, 100, 0,
                                   False, False, False, None, {}, 'normal', False, pp=20)
         cls.dex = ShowdownDex(moves, cls.dex.species, cls.dex.type_chart)
         cls.catalog = cls.p.compile_moves(cls.host, cls.dex, cls.vocab)
         cls.abilities = cls.a.compile_abilities(cls.host, cls.vocab,
-            ability_names=('Pressure', 'Trace', 'Immunity', 'Levitate', 'Color Change', 'Forecast'))
+            ability_names=('Pressure', 'Trace', 'Immunity', 'Levitate', 'Color Change', 'Forecast', 'Water Absorb'))
         cls.item_catalog = cls.items.compile_items(cls.host, cls.vocab, item_names=('Mystery Orb',))
         cls.species_catalog = public_team.compile_species(cls.host, cls.dex, cls.vocab, cls.abilities)
         cls.field_catalog = cls.f.compile_field(cls.vocab)
