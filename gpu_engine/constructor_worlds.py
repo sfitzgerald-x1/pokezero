@@ -56,15 +56,15 @@ dict keys and leaves two members None). This module turns prepared roots into De
     (d3_depthn_gate.constructor_roots, prepare_roots per roster root) treats it as a root that did not fully construct
     (listed among the selection's refused roots, never selected).
   - the peer's OPP_HAZARD_CREDIT (fill_owner_spikes): from_b2 fills only hazards[owner, exact] and hazards[foe, shown]
-    (phase_d_live_worlds.py:415), so hazards[owner, shown], the peer's view of the owner's Spikes losses, read 0. The
+    (phase_d_live_worlds.py:432), so hazards[owner, shown], the peer's view of the owner's Spikes losses, read 0. The
     device's shown half is the per-hit sum of (_percent(hp) - _percent(new)) / 100 (engine_device_public_port.spikes);
     B2 keeps only the exact sum, whose per-hit rounding is lost (300 max HP, 37 damage: 300 -> 263 shows 12%, 299 -> 262
     shows 11%), but the owner's own lines carry each hit exactly (a Spikes -damage line after the owner's exact HP on its
     switch-in line), so it is rebuilt hit by hit with the device's own compensated sum. Left 0 when a hit's previous HP
     is not on the lines.
   - Baton Pass arrivals (fill_baton): from_b2 writes last_moves -1 for an active whose last public action was a switch
-    (phase_d_live_worlds.py:320); the device writes -2 after a Baton Pass arrival (engine_device_public_hooks.baton_copy,
-    :569) and B2 encodes the Baton Pass sentinel (mons.arrived_by_baton). The carry does not keep B2's flag, but the lines
+    (phase_d_live_worlds.py:323-324); the device writes -2 after a Baton Pass arrival (engine_device_public_hooks.baton_copy,
+    :1090) and B2 encodes the Baton Pass sentinel (mons.arrived_by_baton). The carry does not keep B2's flag, but the lines
     carry the same fact by the env's and B2's host rule (line_facts' baton), so -1 becomes -2 for that active, both sides.
     That rule is the env's pending flag: a passer that faints to Pursuit before its recipient arrives leaves the flag
     set, so the env and the fill mark the next switch a Baton Pass arrival where the device (no baton_copy) may not;
@@ -82,6 +82,11 @@ dict keys and leaves two members None). This module turns prepared roots into De
     the 160-battle replay: a Hyper Beam user's next decision). The lines carry B2's rule (-mustrecharge sets it; the side's
     |cant| recharge, arrival or faint clears it), so the bit is set on that side's active, both sides. In search the device
     clears it with the counter (M1's recharge_turn hook, an arrival or a faint).
+  - an open Protect-blocked move window (fill_blocked_window): from_b2 seeds public_port.blocked with B2's closed windows only
+    (ctx.tendency.blocked), but B2's readout also counts the open window provisionally when its move was blocked, and so does
+    the device path (it counts the block when it happens): at a mid-turn forced-switch root after the owner's Explosion into
+    Protect world 0's NUMERIC_STAT_BLOCKED_ON_OUR_ATTACK read one below B2's. line_facts replays B2's window rules on the lines
+    (_blocked_windows) and the open window's side takes the closed count plus one.
   - the peer's count of the owner's PP (fill_peer_pressure): from_b2 copies B2's uses, which charge an owner move twice only
     against a PUBLIC Pressure (public_abilities.move_context); Gen 3 Pressure is silent, and the peer knows its own
     ability, so the device move hook (the receiving observer's own active ability) and the env charge twice whenever the
@@ -555,6 +560,10 @@ class LineFacts:
     knocked:tuple=((),())          # per side (p1, p2): (species, item) of each member whose item Knock Off removed (line_facts)
     recharge_counter:tuple=(0,0)   # per side (p1, p2): its active's remaining recharge count, 2 or 1 (0: none; line_facts)
     transform:tuple=(None,None)    # per side (p1, p2): TransformFacts of its CURRENT transformed active, else None (line_facts)
+    # B2's Protect-blocked move windows (public_tendency, _blocked_windows): per side (p1, p2) the closed ones' count, and the side
+    # whose open window is a blocked move at the prefix's end (-1: none), which B2's readout counts provisionally (fill_blocked_window)
+    blocked_closed:tuple=(0,0)
+    blocked_open:int=-1
 
 
 @dataclass(frozen=True)
@@ -652,11 +661,46 @@ def line_facts(lines,owner,*,peer_damage=False):
                 else:spikes.append((before[0],new,maximum))
             hp[name]=(new,maximum)
     hidden=tuple(sorted((who,ability)for side,who,ability in private if side==own and(side,who,ability)not in public))
+    closed,opened=_blocked_windows(lines)
     return LineFacts(tuple(switches),tuple(spikes)if complete else None,(baton['p1'],baton['p2']),tuple(moves),(recharge['p1'],recharge['p2']),
         (tuple(sorted(tracers['p1'])),tuple(sorted(tracers['p2']))),(hidden,())if own=='p1'else((),hidden),
         knocked=tuple(tuple(sorted(knocked[seat].items()))for seat in('p1','p2')),
         recharge_counter=tuple(count[seat]if recharge[seat]else 0 for seat in('p1','p2')),
-        transform=tuple(TransformFacts(donors[seat],tuple(copied[seat].items()))if seat in donors else None for seat in('p1','p2')))
+        transform=tuple(TransformFacts(donors[seat],tuple(copied[seat].items()))if seat in donors else None for seat in('p1','p2')),
+        blocked_closed=closed,blocked_open=opened)
+
+
+def _blocked_windows(lines):
+    """(closed, open) of B2's Protect-blocked move windows on protocol `lines` (line_facts): public_tendency.decode_line's lexical
+    facts and apply's window rules, replayed host-side. A |move|, |cant| or |switch| line opens its side's window (a move's target:
+    the side its target ident names, else the other side); an arrival (switch, drag, replace), a move, a cant, a |turn|, the blank
+    |, |upkeep or |win| closes it, counting it in that side's blocked total (capped at 64) when it was a move whose outcome is 2;
+    the outcome is the least rank of the outcome lines on the window's target side: -immune 1 (0 from an absorbing ability),
+    an absorbing -heal / -start 0, -activate Protect or Detect 2, -end Substitute 3, -activate Substitute 4, -activate Endure 5.
+    closed: per side (p1, p2), the windows counted; open: the side whose still-open window is a blocked move (B2's provisional
+    count, public_tendency.project: window_move & window_side == observer & window_outcome == 2), else -1."""
+    from pokezero import showdown as reference,transitions as source
+    closed=[0,0];side_open=-1;move_open=False;target=-1;outcome=9
+    for line in lines:
+        line=str(line);p=line.split('|');name=p[1]if len(p)>1 else '';ident=p[2]if len(p)>2 else ''
+        seat=reference._slot_from_ident(ident);side=int(seat[1])-1 if seat in('p1','p2')else -1
+        arrive=name in('switch','drag','replace');move=name=='move'and len(p)>=4 and side>=0;cant=name=='cant'
+        if arrive or move or cant or name in('turn','','win')or line=='|upkeep':
+            if move_open and side_open>=0 and outcome==2:closed[side_open]=min(64,closed[side_open]+1)
+            side_open,move_open,target,outcome=-1,False,-1,9
+        if move or cant or name=='switch':side_open,move_open=side,move
+        if move:
+            defender=(reference._slot_from_ident(p[4])if len(p)>4 else None)or f'p{2-side}';target=int(defender[1])-1
+        if name in('-immune','-heal','-start','-activate','-end')and side>=0:
+            payload=source._from_tag_payload(line);label=reference._side_condition_identifier(p[3])if len(p)>3 else '';rank=None
+            if name=='-immune':rank=0 if source._is_absorb_signature(payload)else 1
+            elif name in('-heal','-start')and(source._is_absorb_signature(payload)or source._is_absorb_start(name,p)):rank=0
+            elif name=='-activate'and label in('protect','detect'):rank=2
+            elif name=='-activate'and label=='substitute':rank=4
+            elif name=='-activate'and label=='endure':rank=5
+            elif name=='-end'and label=='substitute':rank=3
+            if rank is not None and side==target and side_open>=0:outcome=min(outcome,rank)
+    return tuple(closed),(side_open if move_open and side_open>=0 and outcome==2 else -1)
 
 
 def _ability_attributions(kind,seat,subject,parts,tags,member):
@@ -884,7 +928,7 @@ def fill_recharge(public,facts):
     """The public carry with the mustrecharge volatile set on each side's active that must recharge (facts.recharge). B2 keeps
     that fact in its own flag beside the volatile bag (public_active.ActiveState.recharge, merged into the bag only when it
     encodes: public_active.project, `bag=state.volatiles.at[...,RECHARGE_ID].set(state.recharge)`), so from_b2's copy of the
-    bag (phase_d_live_worlds.py:311) drops it and the encoder showed no volatile:mustrecharge where B2 does. In search the
+    bag (phase_d_live_worlds.py:315) drops it and the encoder showed no volatile:mustrecharge where B2 does. In search the
     device clears it with M1's counter (the recharge_turn hook, an arrival, a faint); fix_recharge writes that counter on
     the world state. A silent expiry leaves the bit set with the counter 0, as B2 does."""
     from .public_active import NAMES
@@ -896,6 +940,23 @@ def fill_recharge(public,facts):
         at=int(slots[0,side])
         if must and 0<=at<6:new[0,side,at,bit]=True
     return public if np.array_equal(new,bag)else public._replace(public_volatiles=jnp.asarray(new))
+
+
+def fill_blocked_window(public,facts):
+    """The public carry with B2's open Protect-blocked move window counted (facts.blocked_open, _blocked_windows). B2's readout
+    adds the open window provisionally (public_tendency.project: blocked + window_move & window_side == observer & window_outcome
+    == 2), and the device public path counts a blocked move when it is blocked (engine_device_public_port.protect), so both read
+    one more than B2's closed count while the window is open: a mid-turn forced-switch root right after the owner's Explosion or
+    Self-Destruct into Protect. from_b2 seeds public_port.blocked with the closed count alone (ctx.tendency.blocked,
+    phase_d_live_worlds.py:436), so world 0's NUMERIC_STAT_BLOCKED_ON_OUR_ATTACK read one below B2's there. The window's side
+    takes min(64, closed + 1) when the carry holds the lines' closed count (from_b2's), so a second pass is a no-op and a carry
+    the lines do not explain is left alone."""
+    b=_trackers(public)
+    if facts is None or facts.blocked_open not in(0,1)or public.public_port is None:return public
+    port=public.public_port;_leaf(port.blocked,(b,2),np.int32,'public_port.blocked')
+    blocked=_host(port.blocked);new=blocked.copy();side=facts.blocked_open;closed=int(facts.blocked_closed[side])
+    new[:,side]=np.where(blocked[:,side]==closed,min(64,closed+1),blocked[:,side])
+    return public if np.array_equal(new,blocked)else public._replace(public_port=port._replace(blocked=jnp.asarray(new)))
 
 
 LEDGER_KEYS=('item_mutated','item_original')   # M1's per-mon item ledger in mon_features (engine_device_public_hooks.MON_KEYS)
@@ -937,7 +998,7 @@ def fill_item_ledger(public,facts,tables):
     sides), as the device path and B2 hold it after the same -enditem line: mon_features['item_mutated'][side, slot] = 1 and,
     when that member's ledger is fresh (item_mutated and item_original both 0), item_original[side, slot] = the engine item id of
     the removed item (tables.item_names). `slot` is the member's public slot (the carry's species, joined as fix_knocked_items
-    joins). The rule is the device knock_off hook's (engine_device_public_hooks.py:562-566: fresh = item_mutated == 0 and
+    joins). The rule is the device knock_off hook's (engine_device_public_hooks.py:692-695: fresh = item_mutated == 0 and
     item_original == 0; item_original = the item held before the hit when fresh; item_mutated = 1) and B2's REMOVE
     (public_items.py:185, a -enditem line tagged [from] move: Knock Off is REMOVE; public_items.py:130-138: REMOVE sets mutated,
     and own_removal = REMOVE, not yet mutated and no recorded original, records the removed item as the original). Both ledgers
@@ -1069,7 +1130,7 @@ def fix_knocked_items(state,owner,facts,tables):
     """The world state with item_knocked[0, side, p] set for each member the lines show knocked off (facts.knocked, both sides):
     A2's engine leaf (gpu_engine/state.py: pokemon.itemKnockedOff, never reset), which Showdown's Gen 3 Knock Off sets on the
     target whose item it removes (data/mods/gen4/moves.ts:700-701 at f76228a13) and the engine's own Knock Off sets on the same
-    hit (transition.py:2000-2003). Its only engine reader is Trick's Gen 3-4 failure check (transition.py:1683; Showdown's
+    hit (transition.py:2063-2064). Its only engine reader is Trick's Gen 3-4 failure check (transition.py:1733; Showdown's
     sim/pokemon.ts:1853 takeItem: gen <= 4 and either mon's itemKnockedOff): without it an in-tree Trick on that member succeeds
     where Showdown fails. from_b2 and the materializer predate the leaf and leave it False. Members join by normalized species,
     as fix_trace_base_ability joins (the owner's side: the request's party; the peer's: this world's party, whose revealed
@@ -1402,6 +1463,7 @@ def _view_b_problem(record):
 def complete_public(state,public,tables,owner,*,facts=None,root=None,redact_private_reveals=False,peer_view_b=False):
     """A constructor world's public carry completed (module docstring): fill_shown_types, fill_negative_items,
     orient_credits, and with the root's LineFacts order_peer, fill_owner_spikes, fill_baton, fill_recharge, fill_item_ledger,
+    fill_blocked_window,
     (with the root's own carry, `root`) fill_peer_pressure and, when `redact_private_reveals`, redact_private_reveals; `peer_view_b` (module
     docstring, Peer view b) implies redact_private_reveals and adds project_peer_damage (its facts need peer_damage). Pure; the
     same carry when nothing changes. CarryLayoutError on another carry layout, PeerOrderUnavailable when the peer order cannot
@@ -1412,6 +1474,7 @@ def complete_public(state,public,tables,owner,*,facts=None,root=None,redact_priv
         done=fill_recharge(fill_baton(fill_owner_spikes(order_peer(state,done,owner,facts,tables),owner,facts),facts),facts)
         done=fill_item_ledger(done,facts,tables)
         done=fill_copied_pp(state,done,owner,facts,tables)
+        done=fill_blocked_window(done,facts)
         done=fill_peer_pressure(state,done,owner,facts,tables,root)
         if redact_private_reveals or peer_view_b:done=_redact(done,owner,facts,tables)
         if peer_view_b:done=project_peer_damage(done,owner,facts)

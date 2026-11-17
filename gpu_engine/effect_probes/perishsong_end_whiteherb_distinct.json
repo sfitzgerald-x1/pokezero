@@ -1,0 +1,222 @@
+{
+ "schema": "pokezero.effect_probe.scenario.v1",
+ "move": "perishsong_end_whiteherb_distinct",
+ "note": "Transition batch, bug F1: perishsong_last_faster_distinct with p2's Misdreavus holding White Herb. Its onResidual (order 29) handler runs after both perish0 end paths (a queued faint is not yet .fainted), reaches faintMessages and checkWin ends the battle: no |upkeep, so the device's upkeep stays off.",
+ "teams": [
+  [
+   {
+    "species": "Electrode",
+    "moves": [
+     "explosion",
+     "splash",
+     "protect",
+     "thunderbolt"
+    ],
+    "ability": "Soundproof",
+    "item": "",
+    "level": 1
+   },
+   {
+    "species": "Voltorb",
+    "moves": [
+     "explosion",
+     "splash",
+     "protect",
+     "thunderbolt"
+    ],
+    "ability": "Soundproof",
+    "item": "",
+    "level": 1
+   },
+   {
+    "species": "Steelix",
+    "moves": [
+     "explosion",
+     "splash",
+     "protect",
+     "thunderbolt"
+    ],
+    "ability": "Rock Head",
+    "item": "",
+    "level": 1
+   },
+   {
+    "species": "Exeggutor",
+    "moves": [
+     "explosion",
+     "splash",
+     "protect",
+     "thunderbolt"
+    ],
+    "ability": "Chlorophyll",
+    "item": "",
+    "level": 1
+   },
+   {
+    "species": "Muk",
+    "moves": [
+     "explosion",
+     "splash",
+     "protect",
+     "thunderbolt"
+    ],
+    "ability": "Sticky Hold",
+    "item": "",
+    "level": 1
+   },
+   {
+    "species": "Misdreavus",
+    "moves": [
+     "perishsong",
+     "splash",
+     "protect",
+     "shadowball"
+    ],
+    "ability": "Levitate",
+    "item": "",
+    "evs": {
+     "spe": 252
+    }
+   }
+  ],
+  [
+   {
+    "species": "Misdreavus",
+    "moves": [
+     "splash",
+     "perishsong",
+     "protect",
+     "shadowball"
+    ],
+    "ability": "Levitate",
+    "item": "White Herb"
+   },
+   {
+    "species": "Starmie",
+    "moves": [
+     "splash",
+     "surf",
+     "recover",
+     "protect"
+    ],
+    "ability": "Illuminate",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Skarmory",
+    "moves": [
+     "splash",
+     "protect",
+     "spikes",
+     "peck"
+    ],
+    "ability": "Keen Eye",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Swampert",
+    "moves": [
+     "splash",
+     "protect",
+     "surf",
+     "earthquake"
+    ],
+    "ability": "Torrent",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Metagross",
+    "moves": [
+     "splash",
+     "protect",
+     "meteormash",
+     "earthquake"
+    ],
+    "ability": "Clear Body",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Celebi",
+    "moves": [
+     "splash",
+     "protect",
+     "psychic",
+     "recover"
+    ],
+    "ability": "Natural Cure",
+    "item": "Leftovers"
+   }
+  ]
+ ],
+ "script": [
+  [
+   "move 1",
+   "move 3"
+  ],
+  [
+   "switch 2",
+   ""
+  ],
+  [
+   "move 1",
+   "move 3"
+  ],
+  [
+   "switch 3",
+   ""
+  ],
+  [
+   "move 1",
+   "move 3"
+  ],
+  [
+   "switch 4",
+   ""
+  ],
+  [
+   "move 1",
+   "move 3"
+  ],
+  [
+   "switch 5",
+   ""
+  ],
+  [
+   "move 1",
+   "move 3"
+  ],
+  [
+   "switch 6",
+   ""
+  ],
+  [
+   "move 1",
+   "move 1"
+  ],
+  [
+   "move 2",
+   "move 1"
+  ],
+  [
+   "move 2",
+   "move 1"
+  ],
+  [
+   "move 2",
+   "move 1"
+  ]
+ ],
+ "axes": [],
+ "expect": {
+  "exact": true
+ },
+ "require_fields": [
+  "perish_counter",
+  "yawn_counter",
+  "partial_trap_counter",
+  "partial_trap_source",
+  "item_knocked",
+  "destiny_bond",
+  "effect"
+ ]
+}

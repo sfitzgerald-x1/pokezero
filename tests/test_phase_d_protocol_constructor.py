@@ -46,9 +46,11 @@ class ConstructorExtraction(unittest.TestCase):
         self.assertIn('address=public.address,defer_sleep=True,protocol_facts=facts,lines=lines)',body)
         body=body.replace('return made.root,made,','return detached,made,').replace('address=public.address,defer_sleep=True,protocol_facts=facts,lines=lines)','address=public.address)')
         body=body.replace('        facts=protocol.tail.facts(public,packet,lines)\n','')
-        # All other reviewed 3975b1fa Search._prepare_protocol body bytes remain.
+        # Re-certify the combined prepare body after reviewed incremental-root capture
+        # (4e28fba5) and the once-per-request checked_catalog scope (4189b48b).
+        # Keep the transport presence checks and normalization above unchanged.
         self.assertEqual(hashlib.sha256(body.encode()).hexdigest(),
-            '93776b7997069c281389bdec10b2c35b0651d3ff291f373caabd0bcb2777cc49')
+            '4cf2f83b053fd7dd62a5e12a0310df2c96148231cc2da16af79814d537ce6794')
 
     def test_search_delegates_and_preserves_real_shared_holders(self):
         seen=set();sessions={};constructor=self.constructor(seen=seen,sessions=sessions)

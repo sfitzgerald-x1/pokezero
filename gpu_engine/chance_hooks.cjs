@@ -20,21 +20,29 @@
 // Update) Pokemon-order tie between equal-Speed actives is inert when neither Pokemon has a
 // handler for that event (findEventHandlers is empty, so both runEvent calls do nothing);
 // with a handler it stays unresolved (TIE_ORDER).
+// Fidelity tier D: tape v3 adds phazing [2] (bound 60), the engine's ChanceInputs.phazing, the attacker's auxiliary
+// [0,60) roll. Its contact-ability roles (data/mods/gen3/abilities.ts, onDamagingHit of a damaging contact hit, seat =
+// the attacker): Static / Poison Point / Flame Body randomChance(1,3) -> phazing[s] < 20; Effect Spore randomChance(1,10)
+// -> phazing[s] < 6, then its sample(['slp','par','psn']) -> items[phazing[s] >> 1] (the same draw, reachable only
+// below 6: 2/60 each = 1/10 x 1/3), and that sleep's slp onStart random(2,6) -> 2 + effect[s][2] (Yawn's column; one
+// read of effect[s][2] per seat per nonce, else REPEATED_ROLE). One phazing coordinate use per seat per nonce. A v1/v2
+// tape has no phazing: those roles stay unresolved (PHAZING_STREAM_ABSENT), as before.
 // Fidelity WH: White Herb handlers of two holders at equal Speed (onAnyAfterMove, onResidual order 29; SwitchIn ties
 // are broken by effectOrder), with a Choice Band user's own onAfterMove (addVolatile choicelock) beside them, are an
 // inert tie: each Item handler touches only its own holder and draws nothing, so the order cannot change the battle.
-const TAPE_V1='pokezero.gpu_chance_tape.v1',TAPE_V2='pokezero.gpu_chance_tape.v2';
+const TAPE_V1='pokezero.gpu_chance_tape.v1',TAPE_V2='pokezero.gpu_chance_tape.v2',TAPE_V3='pokezero.gpu_chance_tape.v3';
 const OWN_UPDATE=new Set(['immunity','insomnia','limber','magmaarmor','oblivious','owntempo','vitalspirit','waterveil']);
 const OWN_RESIDUAL=new Set(['truant','speedboost']);
 const DRAW_BOUNDS=[2,100,100,100,16,16,100,4,8,2,2,2],EFFECT_BOUNDS=[16,16,4,2];
 function validTape(c){
-  const v2=c.schema===TAPE_V2,row=(x,bounds)=>Array.isArray(x)&&x.length===bounds.length
+  const v3=c.schema===TAPE_V3,v2=c.schema===TAPE_V2||v3,row=(x,bounds)=>Array.isArray(x)&&x.length===bounds.length
     &&x.every((v,i)=>Number.isInteger(v)&&v>=0&&v<bounds[i]);
   return (c.schema===TAPE_V1||v2)&&typeof c.nonce==='string'&&!!c.nonce
     &&Array.isArray(c.draws)&&c.draws.length===2&&c.draws.every(x=>row(x,DRAW_BOUNDS))
     &&['secondary','sleep_talk'].every(k=>Array.isArray(c[k])&&c[k].length===2
       &&c[k].every(v=>Number.isInteger(v)&&v>=0&&v<(k==='secondary'?100:60)))
-    &&(v2?Array.isArray(c.effect)&&c.effect.length===2&&c.effect.every(x=>row(x,EFFECT_BOUNDS)):c.effect===undefined);
+    &&(v2?Array.isArray(c.effect)&&c.effect.length===2&&c.effect.every(x=>row(x,EFFECT_BOUNDS)):c.effect===undefined)
+    &&(v3?row(c.phazing,[60,60]):c.phazing===undefined);
 }
 function install(Battle,PRNG,load,audit,initializing=()=>null,pokemonPath='') {
   let nonce,used=new Set(),inert=0;
@@ -51,6 +59,18 @@ function install(Battle,PRNG,load,audit,initializing=()=>null,pokemonPath='') {
   function effectDraw(c,role,side,column){
     if(!Array.isArray(c.effect))return unknown('EFFECT_STREAM_ABSENT',{role,side});
     return take(c,role,side,c.effect[side][column]);
+  }
+  // Tier D: effect[s][2] has two consumers (Yawn's residual sleep, an Effect Spore sleep): one read per seat per nonce.
+  function sleepColumn(c,role,side){
+    const key='effect_draw2:'+side;if(used.has(key))return unknown('REPEATED_ROLE',key);
+    used.add(key);return effectDraw(c,role,side,2);
+  }
+  // Tier D: the attacker's phazing[s] (tape v3), one use per seat per nonce (drag and contact moves are disjoint).
+  let spore=null;
+  function auxiliary(c,role,side){
+    if(!Array.isArray(c.phazing))return unknown('PHAZING_STREAM_ABSENT',{role,side});
+    const key='phazing_draw:'+side;if(used.has(key))return unknown('REPEATED_ROLE',key);
+    used.add(key);return take(c,role,side,c.phazing[side]);
   }
   // Hit index inside one multihit move (gen3 trySpreadMoveHit sets move.hit=i+1).
   const multihitIndex=b=>b.activeMove?.multihit?b.activeMove.hit:undefined;
@@ -135,12 +155,18 @@ function install(Battle,PRNG,load,audit,initializing=()=>null,pokemonPath='') {
     if(effect==='frz'&&n===1&&d===5)return take(c,'thaw',s,c.draws[s][1])<20;
     if(effect==='confusion'&&n===1&&d===2)return take(c,'confusion',s,c.draws[s][3])<50;
     if(effect==='stall'&&n===1&&[1,2,4,8].includes(d))return take(c,'stall',s,c.draws[s][8])*d<8;
+    // Tier D: the contact abilities' onDamagingHit (this.effect is the ability; s is the attacker's seat).
+    if((effect==='static'||effect==='poisonpoint'||effect==='flamebody')&&n===1&&d===3&&from.includes('onDamagingHit'))
+      return auxiliary(c,'contact_'+effect,s)<20;
+    if(effect==='effectspore'&&n===1&&d===10&&from.includes('onDamagingHit')){
+      const raw=auxiliary(c,'contact_effectspore',s);spore={nonce:c.nonce,side:s,raw};return raw<6;
+    }
     return unknown('RANDOM_CHANCE',{from,n,d,effect});
   };
   Battle.prototype.random=function(m,n){
     const c=control();if(!c)return oldRandom.call(this,m,n);
     const from=caller(),s=seat(this);
-    if(m===2&&n===6){const t=yawnSleeper(this);if(t)return 2+effectDraw(c,'yawn_sleep_duration',t.side.n,2);}
+    if(m===2&&n===6){const t=yawnSleeper(this);if(t)return 2+sleepColumn(c,'yawn_sleep_duration',t.side.n);}
     if(s!==0&&s!==1)return unknown('MISSING_ACTOR',from);
     if(from.includes('randomizer')&&m===16&&n===undefined){
       const hit=multihitIndex(this);
@@ -167,6 +193,11 @@ function install(Battle,PRNG,load,audit,initializing=()=>null,pokemonPath='') {
         return unknown('ENCORE_DURATION_CONTEXT',{from,s});
       return 3+duration(c,'encore_duration',s);
     }
+    // Tier D: an Effect Spore sleep (slp onStart under setStatus's Start event, whose effect is the ability).
+    if(this.effect?.id==='slp'&&m===2&&n===6&&this.event?.effect?.id==='effectspore'){
+      if(!spore||spore.nonce!==c.nonce||spore.side!==s||spore.raw>=6)return unknown('EFFECT_SPORE_CONTEXT',{s});
+      return 2+sleepColumn(c,'effect_spore_sleep_duration',s);
+    }
     if(this.effect?.id==='slp'&&m===2&&n===6)return 2+duration(c,'sleep_duration',s);
     if(this.effect?.id==='confusion'&&m===2&&n===6)return 2+duration(c,'confusion_duration',s);
     if(m===3&&n===7&&trapCallbackPath&&from.includes('durationCallback ('+trapCallbackPath+':'))
@@ -188,6 +219,12 @@ function install(Battle,PRNG,load,audit,initializing=()=>null,pokemonPath='') {
     const s=seat(this);if(s!==0&&s!==1)return unknown('MISSING_ACTOR','sample');
     if(this.activeMove?.id==='sleeptalk'&&items.length>=1&&items.length<=4)
       return items[take(c,'sleep_talk',s,c.sleep_talk[s])%items.length];
+    // Tier D: Effect Spore's status pick, from the same phazing[s] draw its randomChance(1,10) just passed (raw < 6).
+    if(this.effect?.id==='effectspore'&&items.length===3&&items.join()==='slp,par,psn'){
+      if(!spore||spore.nonce!==c.nonce||spore.side!==s||spore.raw>=6)return unknown('EFFECT_SPORE_CONTEXT',{s});
+      audit({kind:'COUPLED',nonce:c.nonce,role:'effect_spore_status',side:s,raw:spore.raw});
+      return items[spore.raw>>1];
+    }
     return unknown('SAMPLE',{move:this.activeMove?.id,length:items.length});
   };
   const eachEvent=Battle.prototype.eachEvent;let eachEventId=null;
@@ -261,4 +298,4 @@ function install(Battle,PRNG,load,audit,initializing=()=>null,pokemonPath='') {
     return value;
   };
 }
-module.exports={install,validTape,TAPE_V1,TAPE_V2,DRAW_BOUNDS,EFFECT_BOUNDS};
+module.exports={install,validTape,TAPE_V1,TAPE_V2,TAPE_V3,DRAW_BOUNDS,EFFECT_BOUNDS};

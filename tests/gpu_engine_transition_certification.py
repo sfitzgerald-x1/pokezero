@@ -11,5 +11,6 @@ its review fixes (Trick's received herb, fewer traced triggers) moved it to 9134
 to 13f76e5e. M2's R2 (the older residual handlers traced only at their reachable positions) moved it to a8c48fa7, and its
 Encore stale-move clear to 7c984fe6. Transform (the copy, its reverts, the Update cure and the choice unlock) moved it to
 e4fc7e8e, its last transition.py commit (whole-leaf masked selects and one faint revert at the step's end).
+The combined Transform + transition batch + Tier D train moves it to 87e75985: interception reveals, damage credit and ability effects.
 """
-CURRENT_TRANSITION = 'e4fc7e8eb537cd81737ccd2b5e912cfbb56967fc'
+CURRENT_TRANSITION = '87e759858f953da905ffcb88b2eb1388ab6cca35'
