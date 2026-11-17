@@ -145,7 +145,7 @@ EFFECTS = (
          'fix_recharge; the pre-M1 OPPONENT_RECHARGE_UNREPRESENTED name, constructor_worlds.py:487, is kept for old rows); the owner\'s recharge turn is single-legal (the phase-D '
          'mapper refuses a live mustrecharge too: future_state.py:478, RECHARGE_UNREPRESENTED)'),
         'Only Slaking carries it, and Slaking\'s one ability is Truant: a residual clock in Gen 3 (Showdown data/mods/gen3/abilities.ts:'
-        '197-212) the engine models (state.py:84 truant_loaf, transition.py:651-653 and 869-870). In-tree since M1 the recharge turn '
+        '197-212) the engine models (state.py:84 truant_loaf, transition.py:651-653 and 885-886). In-tree since M1 the recharge turn '
         'is modelled (trapped, no move); before it the engine\'s free turn after Hyper Beam was spent loafing anyway. A Transform '
         'user copying Slaking remains (Transform is itself unrepresented).', engine_since='8b212312'),
     Effect('partial_trap', ('wrap',), ('shuckle',), False,
@@ -227,7 +227,7 @@ REPRESENTED = (
     Effect('charge', ('solarbeam',), ('exeggutor', 'sunflora', 'tangela', 'victreebel'), True,
         'engine_request_source.py:341 a mid-charge request (charge_move != 0) is LOCK', 'two-turn charge',
         ('gpu_engine/state.py:49-50 charge_move/charge_counter', 'gpu_engine/solar_beam.py:14-15 (Solar Beam only, solar_beam.py:1)',
-         'gpu_engine/transition.py:621-622, 843')),
+         'gpu_engine/transition.py:621-622, 859')),
     Effect('encore', ('encore',), (), True, 'engine_request_source.py:341-342 LOCK while the counters exist and the origin is unknown '
         '(request_source_rules.cjs:64 exempts it from the missing-condition rule)', 'repeat the last move',
         ('gpu_engine/state.py:47-48 encore_move/encore_counter', 'gpu_engine/encore.py:14-20, 33-52')),
@@ -251,7 +251,7 @@ REPRESENTED = (
     Effect('substitute', ('substitute',), (), True, '', 'HP decoy', ('gpu_engine/state.py:58 substitute_hp',)),
     Effect('baton_pass', ('batonpass',), (), True, '', 'switch keeping boosts and volatiles', ('gpu_engine/baton.py:16',)),
     Effect('truant', (), (), True, '', 'ability: loaf every other turn (Gen 3 residual clock)',
-        ('gpu_engine/state.py:84 truant_loaf', 'gpu_engine/transition.py:886, 2755-2759')),
+        ('gpu_engine/state.py:84 truant_loaf', 'gpu_engine/transition.py:886, 2783-2787')),
 )
 
 NOT_IN_POOL = (
