@@ -183,54 +183,6 @@
    ]
   },
   {
-   "scenario": "counter_sleeptalk",
-   "case": "talk=0",
-   "step": 1,
-   "field": "0:0:moves",
-   "value": [
-    [
-     [
-      "sleeptalk",
-      1
-     ],
-     [
-      "counter",
-      0
-     ]
-    ],
-    [
-     [
-      "sleeptalk",
-      1
-     ]
-    ]
-   ]
-  },
-  {
-   "scenario": "counter_sleeptalk",
-   "case": "talk=0",
-   "step": 2,
-   "field": "0:0:moves",
-   "value": [
-    [
-     [
-      "sleeptalk",
-      2
-     ],
-     [
-      "counter",
-      0
-     ]
-    ],
-    [
-     [
-      "sleeptalk",
-      2
-     ]
-    ]
-   ]
-  },
-  {
    "scenario": "destinybond_expire",
    "case": "base",
    "step": 2,
@@ -351,76 +303,6 @@
    }
   },
   {
-   "scenario": "destinybond_pursuer",
-   "case": "base",
-   "step": 1,
-   "field": "1:active:damage_exact_dealt",
-   "value": [
-    0.08056872338056564,
-    0.0
-   ]
-  },
-  {
-   "scenario": "destinybond_pursuer",
-   "case": "base",
-   "step": 1,
-   "field": "1:active:last_damage_dealt",
-   "value": [
-    0.07999999821186066,
-    0.0
-   ]
-  },
-  {
-   "scenario": "destinybond_pursuer",
-   "case": "base",
-   "step": 1,
-   "field": "1:active:last_move",
-   "value": [
-    "destinybond",
-    "pursuit"
-   ]
-  },
-  {
-   "scenario": "destinybond_pursuer",
-   "case": "base",
-   "step": 2,
-   "field": "1:active:damage_exact_dealt",
-   "value": [
-    0.08056872338056564,
-    0.0
-   ]
-  },
-  {
-   "scenario": "destinybond_pursuer",
-   "case": "base",
-   "step": 2,
-   "field": "1:active:last_damage_dealt",
-   "value": [
-    0.07999999821186066,
-    0.0
-   ]
-  },
-  {
-   "scenario": "destinybond_pursuer",
-   "case": "base",
-   "step": 2,
-   "field": "1:active:last_move",
-   "value": [
-    "destinybond",
-    "pursuit"
-   ]
-  },
-  {
-   "scenario": "destinybond_pursuit",
-   "case": "base",
-   "step": 1,
-   "field": "1:active:last_move",
-   "value": [
-    "splash",
-    "pursuit"
-   ]
-  },
-  {
    "scenario": "facade_status",
    "case": "base",
    "step": 1,
@@ -471,33 +353,103 @@
    }
   },
   {
-   "scenario": "wh_pursuit",
+   "scenario": "wonderguard_trace",
    "case": "base",
    "step": 0,
-   "field": "1:active:damage_exact_dealt",
+   "field": "1:0:original_ability",
    "value": [
-    0.40860214829444885,
-    0.0
+    "",
+    "trace"
    ]
   },
   {
-   "scenario": "wh_pursuit",
+   "scenario": "wonderguard_trace",
    "case": "base",
-   "step": 0,
-   "field": "1:active:last_damage_dealt",
+   "step": 1,
+   "field": "1:0:original_ability",
    "value": [
-    0.4000000059604645,
-    0.0
+    "",
+    "trace"
    ]
   },
   {
-   "scenario": "wh_pursuit",
+   "scenario": "wonderguard_trace",
    "case": "base",
-   "step": 0,
-   "field": "1:active:last_move",
+   "step": 2,
+   "field": "1:0:original_ability",
    "value": [
-    "<switch>",
-    "pursuit"
+    "",
+    "trace"
+   ]
+  },
+  {
+   "scenario": "wonderguard_trace",
+   "case": "base",
+   "step": 3,
+   "field": "1:0:borrowed_ability",
+   "value": [
+    "wonderguard",
+    ""
+   ]
+  },
+  {
+   "scenario": "wonderguard_trace",
+   "case": "base",
+   "step": 3,
+   "field": "1:0:original_ability",
+   "value": [
+    "",
+    "trace"
+   ]
+  },
+  {
+   "scenario": "wonderguard_trace",
+   "case": "base",
+   "step": 3,
+   "field": "1:0:shown_ability",
+   "value": [
+    "wonderguard",
+    "trace"
+   ]
+  },
+  {
+   "scenario": "wonderguard_trace",
+   "case": "base",
+   "step": 4,
+   "field": "1:0:borrowed_ability",
+   "value": [
+    "wonderguard",
+    ""
+   ]
+  },
+  {
+   "scenario": "wonderguard_trace",
+   "case": "base",
+   "step": 4,
+   "field": "1:0:original_ability",
+   "value": [
+    "",
+    "trace"
+   ]
+  },
+  {
+   "scenario": "wonderguard_trace",
+   "case": "base",
+   "step": 4,
+   "field": "1:0:shown_ability",
+   "value": [
+    "wonderguard",
+    "trace"
+   ]
+  },
+  {
+   "scenario": "wonderguard_trace",
+   "case": "base",
+   "step": "initial",
+   "field": "1:0:original_ability",
+   "value": [
+    "",
+    "trace"
    ]
   },
   {
