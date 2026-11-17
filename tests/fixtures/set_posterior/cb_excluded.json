@@ -1,0 +1,155 @@
+{
+ "beliefs": [
+  {
+   "condition": "100/100",
+   "gender": "M",
+   "item_mutated": false,
+   "revealed_ability": null,
+   "revealed_item": null,
+   "revealed_moves": [
+    "Body Slam"
+   ],
+   "ruled_out_abilities": [],
+   "ruled_out_items": [],
+   "showdown_slot": "p2",
+   "species": "Snorlax"
+  }
+ ],
+ "census": {
+  "species": {
+   "snorlax": {
+    "census_lik": [
+     0.0625,
+     0.0625,
+     0.0,
+     0.0625,
+     0.0625,
+     0.0625
+    ],
+    "census_n": 6,
+    "census_n_after": 5,
+    "census_strikes": 1,
+    "survivor_ids": [
+     "snorlax-1-variant-1",
+     "snorlax-1-variant-2",
+     "snorlax-1-variant-3",
+     "snorlax-2-variant-4",
+     "snorlax-3-variant-5",
+     "snorlax-3-variant-6"
+    ],
+    "true_variant": "snorlax-2-variant-4"
+   }
+  },
+  "strikes": [
+   {
+    "attacker": "Snorlax",
+    "crit": false,
+    "eff": null,
+    "hp_before": 278,
+    "ko": false,
+    "line": 27,
+    "move": "bodyslam",
+    "n_excluded_universe": 1,
+    "n_variants_with_move": 6,
+    "observed": 92,
+    "reason": null,
+    "true_match": 1,
+    "true_variant": "snorlax-2-variant-4"
+   }
+  ]
+ },
+ "decision_index": 1,
+ "format_id": "gen3randombattle",
+ "name": "cb_excluded",
+ "note": "One Snorlax hit below every Choice Band roll excludes Choice Band.",
+ "ordinal": 2060,
+ "owner": "p1",
+ "posterior": {
+  "snorlax": {
+   "hard": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5
+   ],
+   "provenance": "4a1703b7a8be957d71bbd4d1f7735d48b1109b03eea5402c08a0722ee3f96444",
+   "strikes": [
+    {
+     "admitted": true,
+     "counts": [
+      1,
+      1,
+      0,
+      1,
+      1,
+      1
+     ],
+     "crit": false,
+     "ko": false,
+     "line": 27,
+     "move": "bodyslam",
+     "observed": 92,
+     "reason": ""
+    }
+   ],
+   "weights": [
+    1,
+    1,
+    0,
+    1,
+    1,
+    1
+   ]
+  }
+ },
+ "prefix_sha256": "b001d6e6850d10a61f79af8721ec8a4f7ed33ef79d158cf5692002afa9b06898",
+ "request": {
+  "battle_id": "battle-gen3randombattle-controlled-2103400343",
+  "decision_index": 1,
+  "generation": 4,
+  "lines": [
+   "|t:|1794586979",
+   "|gametype|singles",
+   "|player|p1|PokeZeroBot||",
+   "|player|p2|FoulPlayBot||",
+   "|gen|3",
+   "|tier|[Gen 3] Random Battle",
+   "|rule|HP Percentage Mod: HP is shown in percentages",
+   "|rule|Beat Up Nicknames Mod: Beat Up will not reveal any party members",
+   "|rule|Endless Battle Clause: Forcing endless battles is banned",
+   "|rule|Sleep Clause Mod: Limit one foe put to sleep",
+   "|rule|Switch Priority Clause Mod: Faster Pok\u00e9mon switch first",
+   "|rule|Species Clause: Limit one of each Pok\u00e9mon",
+   "|rule|OHKO Clause: OHKO moves are banned",
+   "|rule|Evasion Items Clause: Evasion items are banned",
+   "|rule|Evasion Moves Clause: Evasion moves are banned",
+   "|",
+   "|t:|1794586979",
+   "|teamsize|p1|6",
+   "|teamsize|p2|6",
+   "|start",
+   "|switch|p1a: Dragonite|Dragonite, L75, M|259/259",
+   "|switch|p2a: Snorlax|Snorlax, L71, M|100/100",
+   "|turn|1",
+   "|request|{\"active\":[{\"moves\":[{\"move\":\"Hidden Power Flying 70\",\"id\":\"hiddenpower\",\"pp\":24,\"maxpp\":24,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Substitute\",\"id\":\"substitute\",\"pp\":16,\"maxpp\":16,\"target\":\"self\",\"disabled\":false},{\"move\":\"Dragon Dance\",\"id\":\"dragondance\",\"pp\":32,\"maxpp\":32,\"target\":\"self\",\"disabled\":false},{\"move\":\"Earthquake\",\"id\":\"earthquake\",\"pp\":16,\"maxpp\":16,\"target\":\"allAdjacent\",\"disabled\":false}]}],\"side\":{\"name\":\"PokeZeroBot\",\"id\":\"p1\",\"pokemon\":[{\"ident\":\"p1: Dragonite\",\"details\":\"Dragonite, L75, M\",\"condition\":\"259/259\",\"active\":true,\"stats\":{\"atk\":244,\"def\":185,\"spa\":193,\"spd\":193,\"spe\":164},\"moves\":[\"hiddenpowerflying\",\"substitute\",\"dragondance\",\"earthquake\"],\"baseAbility\":\"innerfocus\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p1: Celebi\",\"details\":\"Celebi, L74\",\"condition\":\"270/270\",\"active\":false,\"stats\":{\"atk\":154,\"def\":191,\"spa\":190,\"spd\":191,\"spe\":191},\"moves\":[\"hiddenpowergrass\",\"recover\",\"toxic\",\"psychic\"],\"baseAbility\":\"naturalcure\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p1: Togetic\",\"details\":\"Togetic, L97, M\",\"condition\":\"264/264\",\"active\":false,\"stats\":{\"atk\":82,\"def\":220,\"spa\":210,\"spd\":259,\"spe\":133},\"moves\":[\"wish\",\"protect\",\"seismictoss\",\"toxic\"],\"baseAbility\":\"serenegrace\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p1: Ursaring\",\"details\":\"Ursaring, L81, F\",\"condition\":\"278/278\",\"active\":false,\"stats\":{\"atk\":257,\"def\":167,\"spa\":168,\"spd\":167,\"spe\":136},\"moves\":[\"facade\",\"hiddenpowerghost\",\"earthquake\",\"return102\"],\"baseAbility\":\"guts\",\"item\":\"choiceband\",\"pokeball\":\"pokeball\"},{\"ident\":\"p1: Alakazam\",\"details\":\"Alakazam, L76, F\",\"condition\":\"209/209\",\"active\":false,\"stats\":{\"atk\":81,\"def\":112,\"spa\":249,\"spd\":173,\"spe\":226},\"moves\":[\"calmmind\",\"psychic\",\"substitute\",\"firepunch\"],\"baseAbility\":\"synchronize\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p1: Venomoth\",\"details\":\"Venomoth, L87, F\",\"condition\":\"264/264\",\"active\":false,\"stats\":{\"atk\":162,\"def\":154,\"spa\":205,\"spd\":180,\"spe\":205},\"moves\":[\"signalbeam\",\"hiddenpowerfire\",\"psychic\",\"sludgebomb\"],\"baseAbility\":\"shielddust\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"}]}}",
+   "|",
+   "|t:|1794586982",
+   "|switch|p1a: Ursaring|Ursaring, L81, F|278/278",
+   "|move|p2a: Snorlax|Body Slam|p1a: Ursaring",
+   "|-damage|p1a: Ursaring|186/278",
+   "|",
+   "|upkeep",
+   "|turn|2",
+   "|request|{\"active\":[{\"moves\":[{\"move\":\"Facade\",\"id\":\"facade\",\"pp\":32,\"maxpp\":32,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Hidden Power Ghost 70\",\"id\":\"hiddenpower\",\"pp\":24,\"maxpp\":24,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Earthquake\",\"id\":\"earthquake\",\"pp\":16,\"maxpp\":16,\"target\":\"allAdjacent\",\"disabled\":false},{\"move\":\"Return 102\",\"id\":\"return\",\"pp\":32,\"maxpp\":32,\"target\":\"normal\",\"disabled\":false}]}],\"side\":{\"name\":\"PokeZeroBot\",\"id\":\"p1\",\"pokemon\":[{\"ident\":\"p1: Ursaring\",\"details\":\"Ursaring, L81, F\",\"condition\":\"186/278\",\"active\":true,\"stats\":{\"atk\":257,\"def\":167,\"spa\":168,\"spd\":167,\"spe\":136},\"moves\":[\"facade\",\"hiddenpowerghost\",\"earthquake\",\"return102\"],\"baseAbility\":\"guts\",\"item\":\"choiceband\",\"pokeball\":\"pokeball\"},{\"ident\":\"p1: Celebi\",\"details\":\"Celebi, L74\",\"condition\":\"270/270\",\"active\":false,\"stats\":{\"atk\":154,\"def\":191,\"spa\":190,\"spd\":191,\"spe\":191},\"moves\":[\"hiddenpowergrass\",\"recover\",\"toxic\",\"psychic\"],\"baseAbility\":\"naturalcure\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p1: Togetic\",\"details\":\"Togetic, L97, M\",\"condition\":\"264/264\",\"active\":false,\"stats\":{\"atk\":82,\"def\":220,\"spa\":210,\"spd\":259,\"spe\":133},\"moves\":[\"wish\",\"protect\",\"seismictoss\",\"toxic\"],\"baseAbility\":\"serenegrace\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p1: Dragonite\",\"details\":\"Dragonite, L75, M\",\"condition\":\"259/259\",\"active\":false,\"stats\":{\"atk\":244,\"def\":185,\"spa\":193,\"spd\":193,\"spe\":164},\"moves\":[\"hiddenpowerflying\",\"substitute\",\"dragondance\",\"earthquake\"],\"baseAbility\":\"innerfocus\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p1: Alakazam\",\"details\":\"Alakazam, L76, F\",\"condition\":\"209/209\",\"active\":false,\"stats\":{\"atk\":81,\"def\":112,\"spa\":249,\"spd\":173,\"spe\":226},\"moves\":[\"calmmind\",\"psychic\",\"substitute\",\"firepunch\"],\"baseAbility\":\"synchronize\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p1: Venomoth\",\"details\":\"Venomoth, L87, F\",\"condition\":\"264/264\",\"active\":false,\"stats\":{\"atk\":162,\"def\":154,\"spa\":205,\"spd\":180,\"spe\":205},\"moves\":[\"signalbeam\",\"hiddenpowerfire\",\"psychic\",\"sludgebomb\"],\"baseAbility\":\"shielddust\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"}]}}"
+  ],
+  "own_request_line": "|request|{\"active\":[{\"moves\":[{\"move\":\"Facade\",\"id\":\"facade\",\"pp\":32,\"maxpp\":32,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Hidden Power Ghost 70\",\"id\":\"hiddenpower\",\"pp\":24,\"maxpp\":24,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Earthquake\",\"id\":\"earthquake\",\"pp\":16,\"maxpp\":16,\"target\":\"allAdjacent\",\"disabled\":false},{\"move\":\"Return 102\",\"id\":\"return\",\"pp\":32,\"maxpp\":32,\"target\":\"normal\",\"disabled\":false}]}],\"side\":{\"name\":\"PokeZeroBot\",\"id\":\"p1\",\"pokemon\":[{\"ident\":\"p1: Ursaring\",\"details\":\"Ursaring, L81, F\",\"condition\":\"186/278\",\"active\":true,\"stats\":{\"atk\":257,\"def\":167,\"spa\":168,\"spd\":167,\"spe\":136},\"moves\":[\"facade\",\"hiddenpowerghost\",\"earthquake\",\"return102\"],\"baseAbility\":\"guts\",\"item\":\"choiceband\",\"pokeball\":\"pokeball\"},{\"ident\":\"p1: Celebi\",\"details\":\"Celebi, L74\",\"condition\":\"270/270\",\"active\":false,\"stats\":{\"atk\":154,\"def\":191,\"spa\":190,\"spd\":191,\"spe\":191},\"moves\":[\"hiddenpowergrass\",\"recover\",\"toxic\",\"psychic\"],\"baseAbility\":\"naturalcure\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p1: Togetic\",\"details\":\"Togetic, L97, M\",\"condition\":\"264/264\",\"active\":false,\"stats\":{\"atk\":82,\"def\":220,\"spa\":210,\"spd\":259,\"spe\":133},\"moves\":[\"wish\",\"protect\",\"seismictoss\",\"toxic\"],\"baseAbility\":\"serenegrace\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p1: Dragonite\",\"details\":\"Dragonite, L75, M\",\"condition\":\"259/259\",\"active\":false,\"stats\":{\"atk\":244,\"def\":185,\"spa\":193,\"spd\":193,\"spe\":164},\"moves\":[\"hiddenpowerflying\",\"substitute\",\"dragondance\",\"earthquake\"],\"baseAbility\":\"innerfocus\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p1: Alakazam\",\"details\":\"Alakazam, L76, F\",\"condition\":\"209/209\",\"active\":false,\"stats\":{\"atk\":81,\"def\":112,\"spa\":249,\"spd\":173,\"spe\":226},\"moves\":[\"calmmind\",\"psychic\",\"substitute\",\"firepunch\"],\"baseAbility\":\"synchronize\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p1: Venomoth\",\"details\":\"Venomoth, L87, F\",\"condition\":\"264/264\",\"active\":false,\"stats\":{\"atk\":162,\"def\":154,\"spa\":205,\"spd\":180,\"spe\":205},\"moves\":[\"signalbeam\",\"hiddenpowerfire\",\"psychic\",\"sludgebomb\"],\"baseAbility\":\"shielddust\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"}]}}",
+  "owner": "p1",
+  "prefix_sha256": "b001d6e6850d10a61f79af8721ec8a4f7ed33ef79d158cf5692002afa9b06898",
+  "request_id": "battle-gen3randombattle-controlled-2103400343:1",
+  "schema": "pokezero.phase-d.shared-gpu-search.v1",
+  "stream_id": 1
+ },
+ "source_hash": "f5a5265143d423af"
+}

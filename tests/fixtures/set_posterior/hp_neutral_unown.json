@@ -1,0 +1,145 @@
+{
+ "beliefs": [
+  {
+   "condition": "94/100 tox",
+   "gender": null,
+   "item_mutated": false,
+   "revealed_ability": null,
+   "revealed_item": null,
+   "revealed_moves": [
+    "Hidden Power"
+   ],
+   "ruled_out_abilities": [],
+   "ruled_out_items": [
+    "lumberry"
+   ],
+   "showdown_slot": "p1",
+   "species": "Unown-I"
+  }
+ ],
+ "census": {
+  "species": {
+   "unown": {
+    "census_lik": [
+     0.0,
+     0.0,
+     0.0625
+    ],
+    "census_n": 3,
+    "census_n_after": 1,
+    "census_strikes": 1,
+    "survivor_ids": [
+     "unown-1-variant-1",
+     "unown-2-variant-2",
+     "unown-2-variant-3"
+    ],
+    "true_variant": "unown-2-variant-3"
+   }
+  },
+  "strikes": [
+   {
+    "attacker": "Unown-I",
+    "crit": false,
+    "eff": null,
+    "hp_before": 308,
+    "ko": false,
+    "line": 26,
+    "move": "hiddenpower",
+    "n_excluded_universe": 2,
+    "n_variants_with_move": 3,
+    "observed": 102,
+    "reason": null,
+    "true_match": 1,
+    "true_variant": "unown-2-variant-3"
+   }
+  ]
+ },
+ "decision_index": 1,
+ "format_id": "gen3randombattle",
+ "name": "hp_neutral_unown",
+ "note": "Hidden Power from Unown-I, no effectiveness line on Sunflora: the super-effective types are excluded.",
+ "ordinal": 1425,
+ "owner": "p2",
+ "posterior": {
+  "unown": {
+   "hard": [
+    0,
+    1,
+    2
+   ],
+   "provenance": "7d3e122222663b62dbe9bf4dec3a64d70fcb7887b5c45a9e4d4eaf79f9cdacf3",
+   "strikes": [
+    {
+     "admitted": true,
+     "counts": [
+      0,
+      0,
+      1
+     ],
+     "crit": false,
+     "ko": false,
+     "line": 26,
+     "move": "hiddenpower",
+     "observed": 102,
+     "reason": ""
+    }
+   ],
+   "weights": [
+    0,
+    0,
+    1
+   ]
+  }
+ },
+ "prefix_sha256": "d023975e83bb530b5744235d8b53d4596c768483041c261e6fe7229139f7a304",
+ "request": {
+  "battle_id": "battle-gen3randombattle-controlled-2103400237",
+  "decision_index": 1,
+  "generation": 4,
+  "lines": [
+   "|t:|1794579444",
+   "|gametype|singles",
+   "|player|p1|FoulPlayBot||",
+   "|player|p2|PokeZeroBot||",
+   "|gen|3",
+   "|tier|[Gen 3] Random Battle",
+   "|rule|HP Percentage Mod: HP is shown in percentages",
+   "|rule|Beat Up Nicknames Mod: Beat Up will not reveal any party members",
+   "|rule|Endless Battle Clause: Forcing endless battles is banned",
+   "|rule|Sleep Clause Mod: Limit one foe put to sleep",
+   "|rule|Switch Priority Clause Mod: Faster Pok\u00e9mon switch first",
+   "|rule|Species Clause: Limit one of each Pok\u00e9mon",
+   "|rule|OHKO Clause: OHKO moves are banned",
+   "|rule|Evasion Items Clause: Evasion items are banned",
+   "|rule|Evasion Moves Clause: Evasion moves are banned",
+   "|",
+   "|t:|1794579445",
+   "|teamsize|p1|6",
+   "|teamsize|p2|6",
+   "|start",
+   "|switch|p1a: Unown|Unown-I|100/100",
+   "|switch|p2a: Sunflora|Sunflora, L99, M|308/308",
+   "|turn|1",
+   "|request|{\"active\":[{\"moves\":[{\"move\":\"Razor Leaf\",\"id\":\"razorleaf\",\"pp\":40,\"maxpp\":40,\"target\":\"allAdjacentFoes\",\"disabled\":false},{\"move\":\"Toxic\",\"id\":\"toxic\",\"pp\":16,\"maxpp\":16,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Synthesis\",\"id\":\"synthesis\",\"pp\":8,\"maxpp\":8,\"target\":\"self\",\"disabled\":false},{\"move\":\"Hidden Power Fire 70\",\"id\":\"hiddenpower\",\"pp\":24,\"maxpp\":24,\"target\":\"normal\",\"disabled\":false}]}],\"side\":{\"name\":\"PokeZeroBot\",\"id\":\"p2\",\"pokemon\":[{\"ident\":\"p2: Sunflora\",\"details\":\"Sunflora, L99, M\",\"condition\":\"308/308\",\"active\":true,\"stats\":{\"atk\":155,\"def\":165,\"spa\":263,\"spd\":224,\"spe\":114},\"moves\":[\"razorleaf\",\"toxic\",\"synthesis\",\"hiddenpowerfire\"],\"baseAbility\":\"chlorophyll\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Vileplume\",\"details\":\"Vileplume, L85, M\",\"condition\":\"266/266\",\"active\":false,\"stats\":{\"atk\":184,\"def\":193,\"spa\":218,\"spd\":202,\"spe\":133},\"moves\":[\"hiddenpowerfire\",\"sludgebomb\",\"sleeppowder\",\"synthesis\"],\"baseAbility\":\"chlorophyll\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Volbeat\",\"details\":\"Volbeat, L94, M\",\"condition\":\"275/275\",\"active\":false,\"stats\":{\"atk\":142,\"def\":157,\"spa\":142,\"spd\":194,\"spe\":213},\"moves\":[\"icepunch\",\"batonpass\",\"thunderbolt\",\"tailglow\"],\"baseAbility\":\"swarm\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Absol\",\"details\":\"Absol, L87, M\",\"condition\":\"255/255\",\"active\":false,\"stats\":{\"atk\":276,\"def\":153,\"spa\":179,\"spd\":153,\"spe\":179},\"moves\":[\"doubleedge\",\"shadowball\",\"swordsdance\",\"hiddenpowerfighting\"],\"baseAbility\":\"pressure\",\"item\":\"salacberry\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Charizard\",\"details\":\"Charizard, L79, M\",\"condition\":\"252/252\",\"active\":false,\"stats\":{\"atk\":139,\"def\":169,\"spa\":217,\"spd\":180,\"spe\":204},\"moves\":[\"dragonclaw\",\"fireblast\",\"hiddenpowergrass\",\"substitute\"],\"baseAbility\":\"blaze\",\"item\":\"petayaberry\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Donphan\",\"details\":\"Donphan, L83, F\",\"condition\":\"285/285\",\"active\":false,\"stats\":{\"atk\":247,\"def\":247,\"spa\":147,\"spd\":147,\"spe\":131},\"moves\":[\"rockslide\",\"rest\",\"earthquake\",\"sleeptalk\"],\"baseAbility\":\"sturdy\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"}]}}",
+   "|",
+   "|t:|1794579447",
+   "|move|p1a: Unown|Hidden Power|p2a: Sunflora",
+   "|-damage|p2a: Sunflora|206/308",
+   "|move|p2a: Sunflora|Toxic|p1a: Unown",
+   "|-status|p1a: Unown|tox",
+   "|",
+   "|-damage|p1a: Unown|94/100 tox|[from] psn",
+   "|-heal|p2a: Sunflora|225/308|[from] item: Leftovers",
+   "|upkeep",
+   "|turn|2",
+   "|request|{\"active\":[{\"moves\":[{\"move\":\"Razor Leaf\",\"id\":\"razorleaf\",\"pp\":40,\"maxpp\":40,\"target\":\"allAdjacentFoes\",\"disabled\":false},{\"move\":\"Toxic\",\"id\":\"toxic\",\"pp\":15,\"maxpp\":16,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Synthesis\",\"id\":\"synthesis\",\"pp\":8,\"maxpp\":8,\"target\":\"self\",\"disabled\":false},{\"move\":\"Hidden Power Fire 70\",\"id\":\"hiddenpower\",\"pp\":24,\"maxpp\":24,\"target\":\"normal\",\"disabled\":false}]}],\"side\":{\"name\":\"PokeZeroBot\",\"id\":\"p2\",\"pokemon\":[{\"ident\":\"p2: Sunflora\",\"details\":\"Sunflora, L99, M\",\"condition\":\"225/308\",\"active\":true,\"stats\":{\"atk\":155,\"def\":165,\"spa\":263,\"spd\":224,\"spe\":114},\"moves\":[\"razorleaf\",\"toxic\",\"synthesis\",\"hiddenpowerfire\"],\"baseAbility\":\"chlorophyll\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Vileplume\",\"details\":\"Vileplume, L85, M\",\"condition\":\"266/266\",\"active\":false,\"stats\":{\"atk\":184,\"def\":193,\"spa\":218,\"spd\":202,\"spe\":133},\"moves\":[\"hiddenpowerfire\",\"sludgebomb\",\"sleeppowder\",\"synthesis\"],\"baseAbility\":\"chlorophyll\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Volbeat\",\"details\":\"Volbeat, L94, M\",\"condition\":\"275/275\",\"active\":false,\"stats\":{\"atk\":142,\"def\":157,\"spa\":142,\"spd\":194,\"spe\":213},\"moves\":[\"icepunch\",\"batonpass\",\"thunderbolt\",\"tailglow\"],\"baseAbility\":\"swarm\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Absol\",\"details\":\"Absol, L87, M\",\"condition\":\"255/255\",\"active\":false,\"stats\":{\"atk\":276,\"def\":153,\"spa\":179,\"spd\":153,\"spe\":179},\"moves\":[\"doubleedge\",\"shadowball\",\"swordsdance\",\"hiddenpowerfighting\"],\"baseAbility\":\"pressure\",\"item\":\"salacberry\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Charizard\",\"details\":\"Charizard, L79, M\",\"condition\":\"252/252\",\"active\":false,\"stats\":{\"atk\":139,\"def\":169,\"spa\":217,\"spd\":180,\"spe\":204},\"moves\":[\"dragonclaw\",\"fireblast\",\"hiddenpowergrass\",\"substitute\"],\"baseAbility\":\"blaze\",\"item\":\"petayaberry\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Donphan\",\"details\":\"Donphan, L83, F\",\"condition\":\"285/285\",\"active\":false,\"stats\":{\"atk\":247,\"def\":247,\"spa\":147,\"spd\":147,\"spe\":131},\"moves\":[\"rockslide\",\"rest\",\"earthquake\",\"sleeptalk\"],\"baseAbility\":\"sturdy\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"}]}}"
+  ],
+  "own_request_line": "|request|{\"active\":[{\"moves\":[{\"move\":\"Razor Leaf\",\"id\":\"razorleaf\",\"pp\":40,\"maxpp\":40,\"target\":\"allAdjacentFoes\",\"disabled\":false},{\"move\":\"Toxic\",\"id\":\"toxic\",\"pp\":15,\"maxpp\":16,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Synthesis\",\"id\":\"synthesis\",\"pp\":8,\"maxpp\":8,\"target\":\"self\",\"disabled\":false},{\"move\":\"Hidden Power Fire 70\",\"id\":\"hiddenpower\",\"pp\":24,\"maxpp\":24,\"target\":\"normal\",\"disabled\":false}]}],\"side\":{\"name\":\"PokeZeroBot\",\"id\":\"p2\",\"pokemon\":[{\"ident\":\"p2: Sunflora\",\"details\":\"Sunflora, L99, M\",\"condition\":\"225/308\",\"active\":true,\"stats\":{\"atk\":155,\"def\":165,\"spa\":263,\"spd\":224,\"spe\":114},\"moves\":[\"razorleaf\",\"toxic\",\"synthesis\",\"hiddenpowerfire\"],\"baseAbility\":\"chlorophyll\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Vileplume\",\"details\":\"Vileplume, L85, M\",\"condition\":\"266/266\",\"active\":false,\"stats\":{\"atk\":184,\"def\":193,\"spa\":218,\"spd\":202,\"spe\":133},\"moves\":[\"hiddenpowerfire\",\"sludgebomb\",\"sleeppowder\",\"synthesis\"],\"baseAbility\":\"chlorophyll\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Volbeat\",\"details\":\"Volbeat, L94, M\",\"condition\":\"275/275\",\"active\":false,\"stats\":{\"atk\":142,\"def\":157,\"spa\":142,\"spd\":194,\"spe\":213},\"moves\":[\"icepunch\",\"batonpass\",\"thunderbolt\",\"tailglow\"],\"baseAbility\":\"swarm\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Absol\",\"details\":\"Absol, L87, M\",\"condition\":\"255/255\",\"active\":false,\"stats\":{\"atk\":276,\"def\":153,\"spa\":179,\"spd\":153,\"spe\":179},\"moves\":[\"doubleedge\",\"shadowball\",\"swordsdance\",\"hiddenpowerfighting\"],\"baseAbility\":\"pressure\",\"item\":\"salacberry\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Charizard\",\"details\":\"Charizard, L79, M\",\"condition\":\"252/252\",\"active\":false,\"stats\":{\"atk\":139,\"def\":169,\"spa\":217,\"spd\":180,\"spe\":204},\"moves\":[\"dragonclaw\",\"fireblast\",\"hiddenpowergrass\",\"substitute\"],\"baseAbility\":\"blaze\",\"item\":\"petayaberry\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Donphan\",\"details\":\"Donphan, L83, F\",\"condition\":\"285/285\",\"active\":false,\"stats\":{\"atk\":247,\"def\":247,\"spa\":147,\"spd\":147,\"spe\":131},\"moves\":[\"rockslide\",\"rest\",\"earthquake\",\"sleeptalk\"],\"baseAbility\":\"sturdy\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"}]}}",
+  "owner": "p2",
+  "prefix_sha256": "d023975e83bb530b5744235d8b53d4596c768483041c261e6fe7229139f7a304",
+  "request_id": "battle-gen3randombattle-controlled-2103400237:1",
+  "schema": "pokezero.phase-d.shared-gpu-search.v1",
+  "stream_id": 1
+ },
+ "source_hash": "f5a5265143d423af"
+}

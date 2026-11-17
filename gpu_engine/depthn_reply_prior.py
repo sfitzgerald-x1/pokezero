@@ -104,14 +104,17 @@ class ReplyPrior:
             out.append(tuple(row))
         return out
 
-    def apply(self, blocks, worlds, owner):
+    def apply(self, blocks, worlds, owner, logits=None):
         """(blocks with each requested world's opponent_logits replaced by the reply model's, seconds, check or None).
         `blocks`: the root's backed-up worlds, pairs in block order, which is `worlds`' order. check (mode 'check' only):
-        dict(blocks=the jitted logits' blocks, max_abs_logit_diff over the requested worlds)."""
+        dict(blocks=the jitted logits' blocks, max_abs_logit_diff over the requested worlds). `logits`: the reply model's
+        logits [W, 9] for these worlds and owner, already computed (the batching pipeline's batched forward); None computes
+        them here (this mode's forward)."""
         started = time.perf_counter()
         flat = [w for pair in blocks for w in pair]
         if len(flat) != len(worlds):raise ValueError(f'{len(flat)} priced worlds for {len(worlds)} constructed')
-        reply = self.jit_logits(worlds, owner) if self.mode == 'jit' else self.logits(worlds, owner)
+        if logits is not None and np.shape(logits) != (len(worlds), 9):raise ValueError(f'precomputed reply logits {np.shape(logits)} for {len(worlds)} worlds')
+        reply = logits if logits is not None else self.jit_logits(worlds, owner) if self.mode == 'jit' else self.logits(worlds, owner)
         out = self.substitute(blocks, reply);seconds = time.perf_counter() - started;check = None
         if self.mode == 'check':   # eager plays: a failure of the jitted side is recorded, never a refusal of the root
             try:
