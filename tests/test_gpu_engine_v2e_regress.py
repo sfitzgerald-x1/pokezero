@@ -772,7 +772,7 @@ class EffectAndResidualRuleTests(unittest.TestCase):
         # Isolate each CC allowance from its predicate: involved, non-cascade lanes
         # must still reject corruption in both an old coordinate and the new fifth one.
         for effect in ('cutecharm','attract','infatuated'):
-            with mock.patch.dict(v2e_regress.PLUGINS,{'CC':{effect:lambda pre:np.ones((pre.lanes,2),bool)}}):
+            with mock.patch.dict(v2e_regress.PLUGINS,{'CC':{effect:lambda pre:np.broadcast_to(np.array([True,False]),(pre.lanes,2))}}):
                 for column in (0,4):
                     code,report,_=run('cc-corrupt-'+effect+'-'+str(column),pr='CC',wrong_column=column)
                     self.assertEqual(code,1)
