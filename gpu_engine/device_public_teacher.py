@@ -43,6 +43,9 @@ class Executor:
     sample: object
     advance: object
     joint: object = None
+    # V2 self_moves: the same observe with the own move/PP cells forced off, for a reply model that does not declare
+    # self_moves (depth2._make_views' peer_self_moves). None when the tables are off: there is nothing to turn off.
+    observe_self_moves_off: object = None
 
 
 JOINT_LANES = 81
@@ -94,6 +97,10 @@ def make_executor(engine_tables, observation_tables, *, enable_device_teacher=Fa
         jax.jit(lambda state, public, actions, chance: transition.step_with_public(
             state, actions, engine_tables, public,
             belief_tables=observation_tables.belief, chance_inputs=chance)))
+    if getattr(observation_tables.belief, 'self_moves', None) is not None:
+        executor = replace(executor, observe_self_moves_off=jax.jit(lambda state, public, owner, legal: leaf.from_public(
+            state, public, observation_tables, observer_sides=owner, legal_action_mask=legal, enable_device_leaf=True,
+            self_moves=False)))
     return replace(executor, joint=_make_joint(executor)) if batch_joint else executor
 
 

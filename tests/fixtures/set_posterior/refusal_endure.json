@@ -1,0 +1,291 @@
+{
+ "beliefs": [
+  {
+   "condition": "100/100",
+   "gender": "M",
+   "item_mutated": false,
+   "revealed_ability": null,
+   "revealed_item": null,
+   "revealed_moves": [],
+   "ruled_out_abilities": [],
+   "ruled_out_items": [],
+   "showdown_slot": "p1",
+   "species": "Scizor"
+  },
+  {
+   "condition": "100/100",
+   "gender": "M",
+   "item_mutated": false,
+   "revealed_ability": null,
+   "revealed_item": null,
+   "revealed_moves": [
+    "Rock Slide",
+    "Earthquake"
+   ],
+   "ruled_out_abilities": [],
+   "ruled_out_items": [],
+   "showdown_slot": "p1",
+   "species": "Relicanth"
+  }
+ ],
+ "census": {
+  "species": {
+   "relicanth": {
+    "census_lik": [
+     0.0,
+     0.0,
+     0.0625,
+     0.0625,
+     0.0625,
+     0.0625
+    ],
+    "census_n": 6,
+    "census_n_after": 4,
+    "census_strikes": 1,
+    "survivor_ids": [
+     "relicanth-1-variant-1",
+     "relicanth-1-variant-2",
+     "relicanth-1-variant-3",
+     "relicanth-1-variant-4",
+     "relicanth-1-variant-5",
+     "relicanth-1-variant-6"
+    ],
+    "true_variant": "relicanth-1-variant-6"
+   },
+   "scizor": {
+    "census_lik": [
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0
+    ],
+    "census_n": 14,
+    "census_n_after": 14,
+    "census_strikes": 0,
+    "survivor_ids": [
+     "scizor-1-variant-1",
+     "scizor-1-variant-2",
+     "scizor-1-variant-3",
+     "scizor-1-variant-4",
+     "scizor-1-variant-5",
+     "scizor-1-variant-6",
+     "scizor-1-variant-7",
+     "scizor-1-variant-8",
+     "scizor-1-variant-9",
+     "scizor-1-variant-10",
+     "scizor-2-variant-11",
+     "scizor-2-variant-12",
+     "scizor-2-variant-13",
+     "scizor-2-variant-14"
+    ],
+    "true_variant": "scizor-1-variant-9"
+   }
+  },
+  "strikes": [
+   {
+    "attacker": "Relicanth",
+    "crit": false,
+    "eff": null,
+    "hp_before": 262,
+    "ko": false,
+    "line": 37,
+    "move": "rockslide",
+    "n_excluded_universe": 2,
+    "n_variants_with_move": 6,
+    "observed": 105,
+    "reason": null,
+    "true_match": 1,
+    "true_variant": "relicanth-1-variant-6"
+   },
+   {
+    "attacker": "Relicanth",
+    "crit": false,
+    "eff": "supereffective",
+    "hp_before": 157,
+    "ko": false,
+    "line": 47,
+    "move": "earthquake",
+    "n_excluded_universe": null,
+    "n_variants_with_move": null,
+    "observed": 156,
+    "reason": "endure-or-focusband",
+    "true_match": null,
+    "true_variant": null
+   }
+  ]
+ },
+ "decision_index": 3,
+ "format_id": "gen3randombattle",
+ "name": "refusal_endure",
+ "note": "Census refusal: endure",
+ "ordinal": 2387,
+ "owner": "p2",
+ "posterior": {
+  "relicanth": {
+   "hard": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5
+   ],
+   "provenance": "ae7cdd16b3646968fd8c2c194d16a53f2b5b8143b9ab2960057b9d2a59ba4772",
+   "strikes": [
+    {
+     "admitted": true,
+     "counts": [
+      0,
+      0,
+      1,
+      1,
+      1,
+      1
+     ],
+     "crit": false,
+     "ko": false,
+     "line": 37,
+     "move": "rockslide",
+     "observed": 105,
+     "reason": ""
+    },
+    {
+     "admitted": false,
+     "counts": null,
+     "crit": false,
+     "ko": false,
+     "line": 47,
+     "move": "earthquake",
+     "observed": 156,
+     "reason": "endure-or-focusband"
+    }
+   ],
+   "weights": [
+    0,
+    0,
+    1,
+    1,
+    1,
+    1
+   ]
+  },
+  "scizor": {
+   "hard": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10,
+    11,
+    12,
+    13
+   ],
+   "provenance": "ae7cdd16b3646968fd8c2c194d16a53f2b5b8143b9ab2960057b9d2a59ba4772",
+   "strikes": [],
+   "weights": [
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1
+   ]
+  }
+ },
+ "prefix_sha256": "b8780e9f68b9fd85343ef498a677a7088caed0f88f2e2c1ebb79791e877a030d",
+ "request": {
+  "battle_id": "battle-gen3randombattle-controlled-2103400397",
+  "decision_index": 3,
+  "generation": 8,
+  "lines": [
+   "|t:|1794590603",
+   "|gametype|singles",
+   "|player|p1|FoulPlayBot||",
+   "|player|p2|PokeZeroBot||",
+   "|gen|3",
+   "|tier|[Gen 3] Random Battle",
+   "|rule|HP Percentage Mod: HP is shown in percentages",
+   "|rule|Beat Up Nicknames Mod: Beat Up will not reveal any party members",
+   "|rule|Endless Battle Clause: Forcing endless battles is banned",
+   "|rule|Sleep Clause Mod: Limit one foe put to sleep",
+   "|rule|Switch Priority Clause Mod: Faster Pok\u00e9mon switch first",
+   "|rule|Species Clause: Limit one of each Pok\u00e9mon",
+   "|rule|OHKO Clause: OHKO moves are banned",
+   "|rule|Evasion Items Clause: Evasion items are banned",
+   "|rule|Evasion Moves Clause: Evasion moves are banned",
+   "|",
+   "|t:|1794590603",
+   "|teamsize|p1|6",
+   "|teamsize|p2|6",
+   "|start",
+   "|switch|p1a: Scizor|Scizor, L82, M|100/100",
+   "|switch|p2a: Blaziken|Blaziken, L81, F|262/262",
+   "|turn|1",
+   "|request|{\"active\":[{\"moves\":[{\"move\":\"Fire Blast\",\"id\":\"fireblast\",\"pp\":8,\"maxpp\":8,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Reversal\",\"id\":\"reversal\",\"pp\":24,\"maxpp\":24,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Swords Dance\",\"id\":\"swordsdance\",\"pp\":48,\"maxpp\":48,\"target\":\"self\",\"disabled\":false},{\"move\":\"Endure\",\"id\":\"endure\",\"pp\":16,\"maxpp\":16,\"target\":\"self\",\"disabled\":false}]}],\"side\":{\"name\":\"PokeZeroBot\",\"id\":\"p2\",\"pokemon\":[{\"ident\":\"p2: Blaziken\",\"details\":\"Blaziken, L81, F\",\"condition\":\"262/262\",\"active\":true,\"stats\":{\"atk\":241,\"def\":160,\"spa\":225,\"spd\":160,\"spe\":176},\"moves\":[\"fireblast\",\"reversal\",\"swordsdance\",\"endure\"],\"baseAbility\":\"blaze\",\"item\":\"salacberry\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Steelix\",\"details\":\"Steelix, L82, F\",\"condition\":\"257/257\",\"active\":false,\"stats\":{\"atk\":187,\"def\":375,\"spa\":137,\"spd\":154,\"spe\":96},\"moves\":[\"earthquake\",\"roar\",\"toxic\",\"irontail\"],\"baseAbility\":\"rockhead\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Kecleon\",\"details\":\"Kecleon, L92, F\",\"condition\":\"260/260\",\"active\":false,\"stats\":{\"atk\":218,\"def\":181,\"spa\":163,\"spd\":273,\"spe\":126},\"moves\":[\"return102\",\"thunderwave\",\"brickbreak\",\"shadowball\"],\"baseAbility\":\"colorchange\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Kingler\",\"details\":\"Kingler, L90, F\",\"condition\":\"245/245\",\"active\":false,\"stats\":{\"atk\":285,\"def\":257,\"spa\":141,\"spd\":140,\"spe\":186},\"moves\":[\"hiddenpowerghost\",\"swordsdance\",\"doubleedge\",\"surf\"],\"baseAbility\":\"hypercutter\",\"item\":\"salacberry\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Snorlax\",\"details\":\"Snorlax, L71, M\",\"condition\":\"345/345\",\"active\":false,\"stats\":{\"atk\":198,\"def\":134,\"spa\":134,\"spd\":198,\"spe\":84},\"moves\":[\"curse\",\"rest\",\"bodyslam\",\"sleeptalk\"],\"baseAbility\":\"thickfat\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Alakazam\",\"details\":\"Alakazam, L76, F\",\"condition\":\"209/209\",\"active\":false,\"stats\":{\"atk\":81,\"def\":112,\"spa\":249,\"spd\":173,\"spe\":226},\"moves\":[\"firepunch\",\"psychic\",\"calmmind\",\"recover\"],\"baseAbility\":\"synchronize\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"}]}}",
+   "|",
+   "|t:|1794590606",
+   "|switch|p1a: Relicanth|Relicanth, L88, M|100/100",
+   "|move|p2a: Blaziken|Swords Dance|p2a: Blaziken",
+   "|-boost|p2a: Blaziken|atk|2",
+   "|",
+   "|upkeep",
+   "|turn|2",
+   "|request|{\"active\":[{\"moves\":[{\"move\":\"Fire Blast\",\"id\":\"fireblast\",\"pp\":8,\"maxpp\":8,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Reversal\",\"id\":\"reversal\",\"pp\":24,\"maxpp\":24,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Swords Dance\",\"id\":\"swordsdance\",\"pp\":47,\"maxpp\":48,\"target\":\"self\",\"disabled\":false},{\"move\":\"Endure\",\"id\":\"endure\",\"pp\":16,\"maxpp\":16,\"target\":\"self\",\"disabled\":false}]}],\"side\":{\"name\":\"PokeZeroBot\",\"id\":\"p2\",\"pokemon\":[{\"ident\":\"p2: Blaziken\",\"details\":\"Blaziken, L81, F\",\"condition\":\"262/262\",\"active\":true,\"stats\":{\"atk\":241,\"def\":160,\"spa\":225,\"spd\":160,\"spe\":176},\"moves\":[\"fireblast\",\"reversal\",\"swordsdance\",\"endure\"],\"baseAbility\":\"blaze\",\"item\":\"salacberry\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Steelix\",\"details\":\"Steelix, L82, F\",\"condition\":\"257/257\",\"active\":false,\"stats\":{\"atk\":187,\"def\":375,\"spa\":137,\"spd\":154,\"spe\":96},\"moves\":[\"earthquake\",\"roar\",\"toxic\",\"irontail\"],\"baseAbility\":\"rockhead\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Kecleon\",\"details\":\"Kecleon, L92, F\",\"condition\":\"260/260\",\"active\":false,\"stats\":{\"atk\":218,\"def\":181,\"spa\":163,\"spd\":273,\"spe\":126},\"moves\":[\"return102\",\"thunderwave\",\"brickbreak\",\"shadowball\"],\"baseAbility\":\"colorchange\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Kingler\",\"details\":\"Kingler, L90, F\",\"condition\":\"245/245\",\"active\":false,\"stats\":{\"atk\":285,\"def\":257,\"spa\":141,\"spd\":140,\"spe\":186},\"moves\":[\"hiddenpowerghost\",\"swordsdance\",\"doubleedge\",\"surf\"],\"baseAbility\":\"hypercutter\",\"item\":\"salacberry\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Snorlax\",\"details\":\"Snorlax, L71, M\",\"condition\":\"345/345\",\"active\":false,\"stats\":{\"atk\":198,\"def\":134,\"spa\":134,\"spd\":198,\"spe\":84},\"moves\":[\"curse\",\"rest\",\"bodyslam\",\"sleeptalk\"],\"baseAbility\":\"thickfat\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Alakazam\",\"details\":\"Alakazam, L76, F\",\"condition\":\"209/209\",\"active\":false,\"stats\":{\"atk\":81,\"def\":112,\"spa\":249,\"spd\":173,\"spe\":226},\"moves\":[\"firepunch\",\"psychic\",\"calmmind\",\"recover\"],\"baseAbility\":\"synchronize\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"}]}}",
+   "|",
+   "|t:|1794590609",
+   "|move|p2a: Blaziken|Endure|p2a: Blaziken",
+   "|-singleturn|p2a: Blaziken|move: Endure",
+   "|move|p1a: Relicanth|Rock Slide|p2a: Blaziken",
+   "|-damage|p2a: Blaziken|157/262",
+   "|",
+   "|upkeep",
+   "|turn|3",
+   "|request|{\"active\":[{\"moves\":[{\"move\":\"Fire Blast\",\"id\":\"fireblast\",\"pp\":8,\"maxpp\":8,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Reversal\",\"id\":\"reversal\",\"pp\":24,\"maxpp\":24,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Swords Dance\",\"id\":\"swordsdance\",\"pp\":47,\"maxpp\":48,\"target\":\"self\",\"disabled\":false},{\"move\":\"Endure\",\"id\":\"endure\",\"pp\":15,\"maxpp\":16,\"target\":\"self\",\"disabled\":false}]}],\"side\":{\"name\":\"PokeZeroBot\",\"id\":\"p2\",\"pokemon\":[{\"ident\":\"p2: Blaziken\",\"details\":\"Blaziken, L81, F\",\"condition\":\"157/262\",\"active\":true,\"stats\":{\"atk\":241,\"def\":160,\"spa\":225,\"spd\":160,\"spe\":176},\"moves\":[\"fireblast\",\"reversal\",\"swordsdance\",\"endure\"],\"baseAbility\":\"blaze\",\"item\":\"salacberry\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Steelix\",\"details\":\"Steelix, L82, F\",\"condition\":\"257/257\",\"active\":false,\"stats\":{\"atk\":187,\"def\":375,\"spa\":137,\"spd\":154,\"spe\":96},\"moves\":[\"earthquake\",\"roar\",\"toxic\",\"irontail\"],\"baseAbility\":\"rockhead\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Kecleon\",\"details\":\"Kecleon, L92, F\",\"condition\":\"260/260\",\"active\":false,\"stats\":{\"atk\":218,\"def\":181,\"spa\":163,\"spd\":273,\"spe\":126},\"moves\":[\"return102\",\"thunderwave\",\"brickbreak\",\"shadowball\"],\"baseAbility\":\"colorchange\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Kingler\",\"details\":\"Kingler, L90, F\",\"condition\":\"245/245\",\"active\":false,\"stats\":{\"atk\":285,\"def\":257,\"spa\":141,\"spd\":140,\"spe\":186},\"moves\":[\"hiddenpowerghost\",\"swordsdance\",\"doubleedge\",\"surf\"],\"baseAbility\":\"hypercutter\",\"item\":\"salacberry\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Snorlax\",\"details\":\"Snorlax, L71, M\",\"condition\":\"345/345\",\"active\":false,\"stats\":{\"atk\":198,\"def\":134,\"spa\":134,\"spd\":198,\"spe\":84},\"moves\":[\"curse\",\"rest\",\"bodyslam\",\"sleeptalk\"],\"baseAbility\":\"thickfat\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Alakazam\",\"details\":\"Alakazam, L76, F\",\"condition\":\"209/209\",\"active\":false,\"stats\":{\"atk\":81,\"def\":112,\"spa\":249,\"spd\":173,\"spe\":226},\"moves\":[\"firepunch\",\"psychic\",\"calmmind\",\"recover\"],\"baseAbility\":\"synchronize\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"}]}}",
+   "|",
+   "|t:|1794590612",
+   "|move|p2a: Blaziken|Endure|p2a: Blaziken",
+   "|-singleturn|p2a: Blaziken|move: Endure",
+   "|move|p1a: Relicanth|Earthquake|p2a: Blaziken",
+   "|-supereffective|p2a: Blaziken",
+   "|-activate|p2a: Blaziken|move: Endure",
+   "|-damage|p2a: Blaziken|1/262",
+   "|",
+   "|-enditem|p2a: Blaziken|Salac Berry|[eat]",
+   "|-boost|p2a: Blaziken|spe|1|[from] item: Salac Berry",
+   "|upkeep",
+   "|turn|4",
+   "|request|{\"active\":[{\"moves\":[{\"move\":\"Fire Blast\",\"id\":\"fireblast\",\"pp\":8,\"maxpp\":8,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Reversal\",\"id\":\"reversal\",\"pp\":24,\"maxpp\":24,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Swords Dance\",\"id\":\"swordsdance\",\"pp\":47,\"maxpp\":48,\"target\":\"self\",\"disabled\":false},{\"move\":\"Endure\",\"id\":\"endure\",\"pp\":14,\"maxpp\":16,\"target\":\"self\",\"disabled\":false}]}],\"side\":{\"name\":\"PokeZeroBot\",\"id\":\"p2\",\"pokemon\":[{\"ident\":\"p2: Blaziken\",\"details\":\"Blaziken, L81, F\",\"condition\":\"1/262\",\"active\":true,\"stats\":{\"atk\":241,\"def\":160,\"spa\":225,\"spd\":160,\"spe\":176},\"moves\":[\"fireblast\",\"reversal\",\"swordsdance\",\"endure\"],\"baseAbility\":\"blaze\",\"item\":\"\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Steelix\",\"details\":\"Steelix, L82, F\",\"condition\":\"257/257\",\"active\":false,\"stats\":{\"atk\":187,\"def\":375,\"spa\":137,\"spd\":154,\"spe\":96},\"moves\":[\"earthquake\",\"roar\",\"toxic\",\"irontail\"],\"baseAbility\":\"rockhead\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Kecleon\",\"details\":\"Kecleon, L92, F\",\"condition\":\"260/260\",\"active\":false,\"stats\":{\"atk\":218,\"def\":181,\"spa\":163,\"spd\":273,\"spe\":126},\"moves\":[\"return102\",\"thunderwave\",\"brickbreak\",\"shadowball\"],\"baseAbility\":\"colorchange\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Kingler\",\"details\":\"Kingler, L90, F\",\"condition\":\"245/245\",\"active\":false,\"stats\":{\"atk\":285,\"def\":257,\"spa\":141,\"spd\":140,\"spe\":186},\"moves\":[\"hiddenpowerghost\",\"swordsdance\",\"doubleedge\",\"surf\"],\"baseAbility\":\"hypercutter\",\"item\":\"salacberry\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Snorlax\",\"details\":\"Snorlax, L71, M\",\"condition\":\"345/345\",\"active\":false,\"stats\":{\"atk\":198,\"def\":134,\"spa\":134,\"spd\":198,\"spe\":84},\"moves\":[\"curse\",\"rest\",\"bodyslam\",\"sleeptalk\"],\"baseAbility\":\"thickfat\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Alakazam\",\"details\":\"Alakazam, L76, F\",\"condition\":\"209/209\",\"active\":false,\"stats\":{\"atk\":81,\"def\":112,\"spa\":249,\"spd\":173,\"spe\":226},\"moves\":[\"firepunch\",\"psychic\",\"calmmind\",\"recover\"],\"baseAbility\":\"synchronize\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"}]}}"
+  ],
+  "own_request_line": "|request|{\"active\":[{\"moves\":[{\"move\":\"Fire Blast\",\"id\":\"fireblast\",\"pp\":8,\"maxpp\":8,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Reversal\",\"id\":\"reversal\",\"pp\":24,\"maxpp\":24,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Swords Dance\",\"id\":\"swordsdance\",\"pp\":47,\"maxpp\":48,\"target\":\"self\",\"disabled\":false},{\"move\":\"Endure\",\"id\":\"endure\",\"pp\":14,\"maxpp\":16,\"target\":\"self\",\"disabled\":false}]}],\"side\":{\"name\":\"PokeZeroBot\",\"id\":\"p2\",\"pokemon\":[{\"ident\":\"p2: Blaziken\",\"details\":\"Blaziken, L81, F\",\"condition\":\"1/262\",\"active\":true,\"stats\":{\"atk\":241,\"def\":160,\"spa\":225,\"spd\":160,\"spe\":176},\"moves\":[\"fireblast\",\"reversal\",\"swordsdance\",\"endure\"],\"baseAbility\":\"blaze\",\"item\":\"\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Steelix\",\"details\":\"Steelix, L82, F\",\"condition\":\"257/257\",\"active\":false,\"stats\":{\"atk\":187,\"def\":375,\"spa\":137,\"spd\":154,\"spe\":96},\"moves\":[\"earthquake\",\"roar\",\"toxic\",\"irontail\"],\"baseAbility\":\"rockhead\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Kecleon\",\"details\":\"Kecleon, L92, F\",\"condition\":\"260/260\",\"active\":false,\"stats\":{\"atk\":218,\"def\":181,\"spa\":163,\"spd\":273,\"spe\":126},\"moves\":[\"return102\",\"thunderwave\",\"brickbreak\",\"shadowball\"],\"baseAbility\":\"colorchange\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Kingler\",\"details\":\"Kingler, L90, F\",\"condition\":\"245/245\",\"active\":false,\"stats\":{\"atk\":285,\"def\":257,\"spa\":141,\"spd\":140,\"spe\":186},\"moves\":[\"hiddenpowerghost\",\"swordsdance\",\"doubleedge\",\"surf\"],\"baseAbility\":\"hypercutter\",\"item\":\"salacberry\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Snorlax\",\"details\":\"Snorlax, L71, M\",\"condition\":\"345/345\",\"active\":false,\"stats\":{\"atk\":198,\"def\":134,\"spa\":134,\"spd\":198,\"spe\":84},\"moves\":[\"curse\",\"rest\",\"bodyslam\",\"sleeptalk\"],\"baseAbility\":\"thickfat\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Alakazam\",\"details\":\"Alakazam, L76, F\",\"condition\":\"209/209\",\"active\":false,\"stats\":{\"atk\":81,\"def\":112,\"spa\":249,\"spd\":173,\"spe\":226},\"moves\":[\"firepunch\",\"psychic\",\"calmmind\",\"recover\"],\"baseAbility\":\"synchronize\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"}]}}",
+  "owner": "p2",
+  "prefix_sha256": "b8780e9f68b9fd85343ef498a677a7088caed0f88f2e2c1ebb79791e877a030d",
+  "request_id": "battle-gen3randombattle-controlled-2103400397:3",
+  "schema": "pokezero.phase-d.shared-gpu-search.v1",
+  "stream_id": 1
+ },
+ "source_hash": "f5a5265143d423af"
+}

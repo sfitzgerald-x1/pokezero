@@ -16,7 +16,7 @@ import jax.numpy as j
 import numpy as np
 
 from pokezero.live_protocol_actor import ActorContract, _packet
-from pokezero.recorded_encoder_runner import JaxRecordedAdapter
+from pokezero.recorded_encoder_runner import JaxRecordedAdapter, literal_history
 from pokezero.live_protocol_runtime import CompiledEncoderFunctions
 from pokezero.v5_contract import DecisionAddress
 from . import champion, transition, device_public_leaf as leaf
@@ -161,13 +161,14 @@ class Search:
         adapter.feed(tuple(x for x in lines[len(old):] if not x.startswith('|request|')))
         if not self.saved_root_admission:self.sessions[key]=(adapter,lines)
         packet=_packet(request['own_request_line'],request['owner'])
-        root=worlds.from_b2(adapter,packet,self.source,self.metadata,
-            address=DecisionAddress(request['stream_id'],request['decision_index'],owner),lines=lines)
-        pending.root=root
-        pending.worldset=worlds.sample_worlds(root,self.source,self.tables,count=self.count,seed=self.seed)
-        if not pending.worldset.fully_constructed:
-            raise worlds.Refusal('WORLD_CONSTRUCTOR_REFUSED',';'.join(sorted({r for w in pending.worldset.worlds for r in w.refusals})))
-        pending.legal=tuple(map(bool,adapter.encode(packet,owner_side=owner)['legal_action_mask']))
+        with literal_history(adapter,lines):   # V2 self_moves: B2's own moves/PP read this root's literal history, then cleared
+            root=worlds.from_b2(adapter,packet,self.source,self.metadata,
+                address=DecisionAddress(request['stream_id'],request['decision_index'],owner),lines=lines)
+            pending.root=root
+            pending.worldset=worlds.sample_worlds(root,self.source,self.tables,count=self.count,seed=self.seed)
+            if not pending.worldset.fully_constructed:
+                raise worlds.Refusal('WORLD_CONSTRUCTOR_REFUSED',';'.join(sorted({r for w in pending.worldset.worlds for r in w.refusals})))
+            pending.legal=tuple(map(bool,adapter.encode(packet,owner_side=owner)['legal_action_mask']))
         pending.reports=[]
 
     def _forward_rows(self, rows):

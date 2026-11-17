@@ -1,0 +1,390 @@
+{
+ "beliefs": [
+  {
+   "condition": "100/100",
+   "gender": "M",
+   "item_mutated": false,
+   "revealed_ability": null,
+   "revealed_item": null,
+   "revealed_moves": [
+    "Spikes"
+   ],
+   "ruled_out_abilities": [],
+   "ruled_out_items": [],
+   "showdown_slot": "p1",
+   "species": "Omastar"
+  },
+  {
+   "condition": "94/100 tox",
+   "gender": "F",
+   "item_mutated": false,
+   "revealed_ability": null,
+   "revealed_item": null,
+   "revealed_moves": [],
+   "ruled_out_abilities": [],
+   "ruled_out_items": [
+    "lumberry"
+   ],
+   "showdown_slot": "p1",
+   "species": "Clefable"
+  },
+  {
+   "condition": "47/100",
+   "gender": "M",
+   "item_mutated": false,
+   "revealed_ability": null,
+   "revealed_item": null,
+   "revealed_moves": [
+    "Brick Break"
+   ],
+   "ruled_out_abilities": [],
+   "ruled_out_items": [
+    "leftovers"
+   ],
+   "showdown_slot": "p1",
+   "species": "Heracross"
+  },
+  {
+   "condition": "100/100",
+   "gender": "F",
+   "item_mutated": false,
+   "revealed_ability": null,
+   "revealed_item": null,
+   "revealed_moves": [
+    "Pursuit"
+   ],
+   "ruled_out_abilities": [],
+   "ruled_out_items": [],
+   "showdown_slot": "p1",
+   "species": "Houndoom"
+  }
+ ],
+ "census": {
+  "species": {
+   "clefable": {
+    "census_lik": [
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0
+    ],
+    "census_n": 8,
+    "census_n_after": 8,
+    "census_strikes": 0,
+    "survivor_ids": [
+     "clefable-1-variant-1",
+     "clefable-1-variant-2",
+     "clefable-1-variant-3",
+     "clefable-1-variant-4",
+     "clefable-1-variant-5",
+     "clefable-1-variant-6",
+     "clefable-1-variant-7",
+     "clefable-2-variant-8"
+    ],
+    "true_variant": "clefable-2-variant-8"
+   },
+   "heracross": {
+    "census_lik": [
+     0.625,
+     0.625,
+     0.0
+    ],
+    "census_n": 3,
+    "census_n_after": 2,
+    "census_strikes": 1,
+    "survivor_ids": [
+     "heracross-1-variant-1",
+     "heracross-1-variant-2",
+     "heracross-2-variant-3"
+    ],
+    "true_variant": "heracross-1-variant-2"
+   },
+   "houndoom": {
+    "census_lik": [
+     0.0625,
+     0.0625
+    ],
+    "census_n": 2,
+    "census_n_after": 2,
+    "census_strikes": 1,
+    "survivor_ids": [
+     "houndoom-2-variant-2",
+     "houndoom-2-variant-4"
+    ],
+    "true_variant": "houndoom-2-variant-4"
+   },
+   "omastar": {
+    "census_lik": [
+     1.0,
+     1.0,
+     1.0,
+     1.0
+    ],
+    "census_n": 4,
+    "census_n_after": 4,
+    "census_strikes": 0,
+    "survivor_ids": [
+     "omastar-1-variant-1",
+     "omastar-1-variant-2",
+     "omastar-1-variant-3",
+     "omastar-1-variant-4"
+    ],
+    "true_variant": "omastar-1-variant-3"
+   }
+  },
+  "strikes": [
+   {
+    "attacker": "Heracross",
+    "crit": false,
+    "eff": "supereffective",
+    "hp_before": 224,
+    "ko": true,
+    "line": 54,
+    "move": "brickbreak",
+    "n_excluded_universe": 1,
+    "n_variants_with_move": 3,
+    "observed": 224,
+    "reason": null,
+    "true_match": 10,
+    "true_variant": "heracross-1-variant-2"
+   },
+   {
+    "attacker": "Houndoom",
+    "crit": false,
+    "eff": "supereffective",
+    "hp_before": 209,
+    "ko": false,
+    "line": 81,
+    "move": "pursuit",
+    "n_excluded_universe": 0,
+    "n_variants_with_move": 2,
+    "observed": 195,
+    "reason": null,
+    "true_match": 1,
+    "true_variant": "houndoom-2-variant-4"
+   }
+  ]
+ },
+ "decision_index": 7,
+ "format_id": "gen3randombattle",
+ "name": "pursuit_switch",
+ "note": "Pursuit on our switching mon (the -activate lookback and [from] Pursuit), two hard variants.",
+ "ordinal": 5883,
+ "owner": "p2",
+ "posterior": {
+  "clefable": {
+   "hard": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7
+   ],
+   "provenance": "432d41c340500d04a6ce194513f4a39f6593ff8d02fbc10b41bf5573ac116f3a",
+   "strikes": [],
+   "weights": [
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1
+   ]
+  },
+  "heracross": {
+   "hard": [
+    0,
+    1,
+    2
+   ],
+   "provenance": "432d41c340500d04a6ce194513f4a39f6593ff8d02fbc10b41bf5573ac116f3a",
+   "strikes": [
+    {
+     "admitted": true,
+     "counts": [
+      10,
+      10,
+      0,
+      0,
+      0
+     ],
+     "crit": false,
+     "ko": true,
+     "line": 54,
+     "move": "brickbreak",
+     "observed": 224,
+     "reason": ""
+    }
+   ],
+   "weights": [
+    1,
+    1,
+    0,
+    0,
+    0
+   ]
+  },
+  "houndoom": {
+   "hard": [
+    1,
+    3
+   ],
+   "provenance": "432d41c340500d04a6ce194513f4a39f6593ff8d02fbc10b41bf5573ac116f3a",
+   "strikes": [
+    {
+     "admitted": true,
+     "counts": [
+      0,
+      1,
+      0,
+      1
+     ],
+     "crit": false,
+     "ko": false,
+     "line": 81,
+     "move": "pursuit",
+     "observed": 195,
+     "reason": ""
+    }
+   ],
+   "weights": [
+    0,
+    1,
+    0,
+    1
+   ]
+  },
+  "omastar": {
+   "hard": [
+    0,
+    1,
+    2,
+    3
+   ],
+   "provenance": "432d41c340500d04a6ce194513f4a39f6593ff8d02fbc10b41bf5573ac116f3a",
+   "strikes": [],
+   "weights": [
+    1,
+    1,
+    1,
+    1,
+    0,
+    0
+   ]
+  }
+ },
+ "prefix_sha256": "be7217d2bafaed05957213835cd18baeedd8559c96b5da0c958a2bf4f1d8aee2",
+ "request": {
+  "battle_id": "battle-gen3randombattle-controlled-2103400980",
+  "decision_index": 7,
+  "generation": 16,
+  "lines": [
+   "|t:|1794629628",
+   "|gametype|singles",
+   "|player|p1|FoulPlayBot||",
+   "|player|p2|PokeZeroBot||",
+   "|gen|3",
+   "|tier|[Gen 3] Random Battle",
+   "|rule|HP Percentage Mod: HP is shown in percentages",
+   "|rule|Beat Up Nicknames Mod: Beat Up will not reveal any party members",
+   "|rule|Endless Battle Clause: Forcing endless battles is banned",
+   "|rule|Sleep Clause Mod: Limit one foe put to sleep",
+   "|rule|Switch Priority Clause Mod: Faster Pok\u00e9mon switch first",
+   "|rule|Species Clause: Limit one of each Pok\u00e9mon",
+   "|rule|OHKO Clause: OHKO moves are banned",
+   "|rule|Evasion Items Clause: Evasion items are banned",
+   "|rule|Evasion Moves Clause: Evasion moves are banned",
+   "|",
+   "|t:|1794629628",
+   "|teamsize|p1|6",
+   "|teamsize|p2|6",
+   "|start",
+   "|switch|p1a: Omastar|Omastar, L84, M|100/100",
+   "|switch|p2a: Corsola|Corsola, L98, M|266/266",
+   "|turn|1",
+   "|request|{\"active\":[{\"moves\":[{\"move\":\"Surf\",\"id\":\"surf\",\"pp\":24,\"maxpp\":24,\"target\":\"allAdjacentFoes\",\"disabled\":false},{\"move\":\"Calm Mind\",\"id\":\"calmmind\",\"pp\":32,\"maxpp\":32,\"target\":\"self\",\"disabled\":false},{\"move\":\"Recover\",\"id\":\"recover\",\"pp\":32,\"maxpp\":32,\"target\":\"self\",\"disabled\":false},{\"move\":\"Ice Beam\",\"id\":\"icebeam\",\"pp\":16,\"maxpp\":16,\"target\":\"normal\",\"disabled\":false}]}],\"side\":{\"name\":\"PokeZeroBot\",\"id\":\"p2\",\"pokemon\":[{\"ident\":\"p2: Corsola\",\"details\":\"Corsola, L98, M\",\"condition\":\"266/266\",\"active\":true,\"stats\":{\"atk\":112,\"def\":222,\"spa\":183,\"spd\":222,\"spe\":124},\"moves\":[\"surf\",\"calmmind\",\"recover\",\"icebeam\"],\"baseAbility\":\"naturalcure\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Magneton\",\"details\":\"Magneton, L85\",\"condition\":\"224/224\",\"active\":false,\"stats\":{\"atk\":108,\"def\":209,\"spa\":253,\"spd\":168,\"spe\":168},\"moves\":[\"hiddenpowerice\",\"protect\",\"thunderbolt\",\"toxic\"],\"baseAbility\":\"magnetpull\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Primeape\",\"details\":\"Primeape, L84, M\",\"condition\":\"244/244\",\"active\":false,\"stats\":{\"atk\":225,\"def\":149,\"spa\":149,\"spd\":166,\"spe\":208},\"moves\":[\"crosschop\",\"bulkup\",\"substitute\",\"rockslide\"],\"baseAbility\":\"vitalspirit\",\"item\":\"salacberry\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Houndoom\",\"details\":\"Houndoom, L79, F\",\"condition\":\"248/248\",\"active\":false,\"stats\":{\"atk\":148,\"def\":125,\"spa\":219,\"spd\":172,\"spe\":196},\"moves\":[\"hiddenpowergrass\",\"fireblast\",\"crunch\",\"substitute\"],\"baseAbility\":\"flashfire\",\"item\":\"petayaberry\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Alakazam\",\"details\":\"Alakazam, L76, F\",\"condition\":\"209/209\",\"active\":false,\"stats\":{\"atk\":83,\"def\":112,\"spa\":249,\"spd\":173,\"spe\":226},\"moves\":[\"firepunch\",\"hiddenpowerdark\",\"calmmind\",\"psychic\"],\"baseAbility\":\"synchronize\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Feraligatr\",\"details\":\"Feraligatr, L83, F\",\"condition\":\"276/276\",\"active\":false,\"stats\":{\"atk\":221,\"def\":213,\"spa\":178,\"spd\":185,\"spe\":177},\"moves\":[\"swordsdance\",\"earthquake\",\"hiddenpowerflying\",\"hydropump\"],\"baseAbility\":\"torrent\",\"item\":\"salacberry\",\"pokeball\":\"pokeball\"}]}}",
+   "|",
+   "|t:|1794629631",
+   "|switch|p2a: Magneton|Magneton, L85|224/224",
+   "|move|p1a: Omastar|Spikes|p2a: Magneton",
+   "|-sidestart|p2: PokeZeroBot|Spikes",
+   "|",
+   "|upkeep",
+   "|turn|2",
+   "|request|{\"active\":[{\"moves\":[{\"move\":\"Hidden Power Ice 70\",\"id\":\"hiddenpower\",\"pp\":24,\"maxpp\":24,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Protect\",\"id\":\"protect\",\"pp\":16,\"maxpp\":16,\"target\":\"self\",\"disabled\":false},{\"move\":\"Thunderbolt\",\"id\":\"thunderbolt\",\"pp\":24,\"maxpp\":24,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Toxic\",\"id\":\"toxic\",\"pp\":16,\"maxpp\":16,\"target\":\"normal\",\"disabled\":false}]}],\"side\":{\"name\":\"PokeZeroBot\",\"id\":\"p2\",\"pokemon\":[{\"ident\":\"p2: Magneton\",\"details\":\"Magneton, L85\",\"condition\":\"224/224\",\"active\":true,\"stats\":{\"atk\":108,\"def\":209,\"spa\":253,\"spd\":168,\"spe\":168},\"moves\":[\"hiddenpowerice\",\"protect\",\"thunderbolt\",\"toxic\"],\"baseAbility\":\"magnetpull\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Corsola\",\"details\":\"Corsola, L98, M\",\"condition\":\"266/266\",\"active\":false,\"stats\":{\"atk\":112,\"def\":222,\"spa\":183,\"spd\":222,\"spe\":124},\"moves\":[\"surf\",\"calmmind\",\"recover\",\"icebeam\"],\"baseAbility\":\"naturalcure\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Primeape\",\"details\":\"Primeape, L84, M\",\"condition\":\"244/244\",\"active\":false,\"stats\":{\"atk\":225,\"def\":149,\"spa\":149,\"spd\":166,\"spe\":208},\"moves\":[\"crosschop\",\"bulkup\",\"substitute\",\"rockslide\"],\"baseAbility\":\"vitalspirit\",\"item\":\"salacberry\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Houndoom\",\"details\":\"Houndoom, L79, F\",\"condition\":\"248/248\",\"active\":false,\"stats\":{\"atk\":148,\"def\":125,\"spa\":219,\"spd\":172,\"spe\":196},\"moves\":[\"hiddenpowergrass\",\"fireblast\",\"crunch\",\"substitute\"],\"baseAbility\":\"flashfire\",\"item\":\"petayaberry\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Alakazam\",\"details\":\"Alakazam, L76, F\",\"condition\":\"209/209\",\"active\":false,\"stats\":{\"atk\":83,\"def\":112,\"spa\":249,\"spd\":173,\"spe\":226},\"moves\":[\"firepunch\",\"hiddenpowerdark\",\"calmmind\",\"psychic\"],\"baseAbility\":\"synchronize\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Feraligatr\",\"details\":\"Feraligatr, L83, F\",\"condition\":\"276/276\",\"active\":false,\"stats\":{\"atk\":221,\"def\":213,\"spa\":178,\"spd\":185,\"spe\":177},\"moves\":[\"swordsdance\",\"earthquake\",\"hiddenpowerflying\",\"hydropump\"],\"baseAbility\":\"torrent\",\"item\":\"salacberry\",\"pokeball\":\"pokeball\"}]}}",
+   "|",
+   "|t:|1794629634",
+   "|switch|p1a: Clefable|Clefable, L85, F|100/100",
+   "|move|p2a: Magneton|Toxic|p1a: Clefable",
+   "|-status|p1a: Clefable|tox",
+   "|",
+   "|-damage|p1a: Clefable|94/100 tox|[from] psn",
+   "|upkeep",
+   "|turn|3",
+   "|request|{\"active\":[{\"moves\":[{\"move\":\"Hidden Power Ice 70\",\"id\":\"hiddenpower\",\"pp\":24,\"maxpp\":24,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Protect\",\"id\":\"protect\",\"pp\":16,\"maxpp\":16,\"target\":\"self\",\"disabled\":false},{\"move\":\"Thunderbolt\",\"id\":\"thunderbolt\",\"pp\":24,\"maxpp\":24,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Toxic\",\"id\":\"toxic\",\"pp\":15,\"maxpp\":16,\"target\":\"normal\",\"disabled\":false}]}],\"side\":{\"name\":\"PokeZeroBot\",\"id\":\"p2\",\"pokemon\":[{\"ident\":\"p2: Magneton\",\"details\":\"Magneton, L85\",\"condition\":\"224/224\",\"active\":true,\"stats\":{\"atk\":108,\"def\":209,\"spa\":253,\"spd\":168,\"spe\":168},\"moves\":[\"hiddenpowerice\",\"protect\",\"thunderbolt\",\"toxic\"],\"baseAbility\":\"magnetpull\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Corsola\",\"details\":\"Corsola, L98, M\",\"condition\":\"266/266\",\"active\":false,\"stats\":{\"atk\":112,\"def\":222,\"spa\":183,\"spd\":222,\"spe\":124},\"moves\":[\"surf\",\"calmmind\",\"recover\",\"icebeam\"],\"baseAbility\":\"naturalcure\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Primeape\",\"details\":\"Primeape, L84, M\",\"condition\":\"244/244\",\"active\":false,\"stats\":{\"atk\":225,\"def\":149,\"spa\":149,\"spd\":166,\"spe\":208},\"moves\":[\"crosschop\",\"bulkup\",\"substitute\",\"rockslide\"],\"baseAbility\":\"vitalspirit\",\"item\":\"salacberry\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Houndoom\",\"details\":\"Houndoom, L79, F\",\"condition\":\"248/248\",\"active\":false,\"stats\":{\"atk\":148,\"def\":125,\"spa\":219,\"spd\":172,\"spe\":196},\"moves\":[\"hiddenpowergrass\",\"fireblast\",\"crunch\",\"substitute\"],\"baseAbility\":\"flashfire\",\"item\":\"petayaberry\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Alakazam\",\"details\":\"Alakazam, L76, F\",\"condition\":\"209/209\",\"active\":false,\"stats\":{\"atk\":83,\"def\":112,\"spa\":249,\"spd\":173,\"spe\":226},\"moves\":[\"firepunch\",\"hiddenpowerdark\",\"calmmind\",\"psychic\"],\"baseAbility\":\"synchronize\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Feraligatr\",\"details\":\"Feraligatr, L83, F\",\"condition\":\"276/276\",\"active\":false,\"stats\":{\"atk\":221,\"def\":213,\"spa\":178,\"spd\":185,\"spe\":177},\"moves\":[\"swordsdance\",\"earthquake\",\"hiddenpowerflying\",\"hydropump\"],\"baseAbility\":\"torrent\",\"item\":\"salacberry\",\"pokeball\":\"pokeball\"}]}}",
+   "|",
+   "|t:|1794629636",
+   "|switch|p1a: Heracross|Heracross, L77, M|100/100",
+   "|move|p2a: Magneton|Thunderbolt|p1a: Heracross",
+   "|-damage|p1a: Heracross|47/100",
+   "|",
+   "|upkeep",
+   "|turn|4",
+   "|request|{\"active\":[{\"moves\":[{\"move\":\"Hidden Power Ice 70\",\"id\":\"hiddenpower\",\"pp\":24,\"maxpp\":24,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Protect\",\"id\":\"protect\",\"pp\":16,\"maxpp\":16,\"target\":\"self\",\"disabled\":false},{\"move\":\"Thunderbolt\",\"id\":\"thunderbolt\",\"pp\":23,\"maxpp\":24,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Toxic\",\"id\":\"toxic\",\"pp\":15,\"maxpp\":16,\"target\":\"normal\",\"disabled\":false}]}],\"side\":{\"name\":\"PokeZeroBot\",\"id\":\"p2\",\"pokemon\":[{\"ident\":\"p2: Magneton\",\"details\":\"Magneton, L85\",\"condition\":\"224/224\",\"active\":true,\"stats\":{\"atk\":108,\"def\":209,\"spa\":253,\"spd\":168,\"spe\":168},\"moves\":[\"hiddenpowerice\",\"protect\",\"thunderbolt\",\"toxic\"],\"baseAbility\":\"magnetpull\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Corsola\",\"details\":\"Corsola, L98, M\",\"condition\":\"266/266\",\"active\":false,\"stats\":{\"atk\":112,\"def\":222,\"spa\":183,\"spd\":222,\"spe\":124},\"moves\":[\"surf\",\"calmmind\",\"recover\",\"icebeam\"],\"baseAbility\":\"naturalcure\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Primeape\",\"details\":\"Primeape, L84, M\",\"condition\":\"244/244\",\"active\":false,\"stats\":{\"atk\":225,\"def\":149,\"spa\":149,\"spd\":166,\"spe\":208},\"moves\":[\"crosschop\",\"bulkup\",\"substitute\",\"rockslide\"],\"baseAbility\":\"vitalspirit\",\"item\":\"salacberry\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Houndoom\",\"details\":\"Houndoom, L79, F\",\"condition\":\"248/248\",\"active\":false,\"stats\":{\"atk\":148,\"def\":125,\"spa\":219,\"spd\":172,\"spe\":196},\"moves\":[\"hiddenpowergrass\",\"fireblast\",\"crunch\",\"substitute\"],\"baseAbility\":\"flashfire\",\"item\":\"petayaberry\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Alakazam\",\"details\":\"Alakazam, L76, F\",\"condition\":\"209/209\",\"active\":false,\"stats\":{\"atk\":83,\"def\":112,\"spa\":249,\"spd\":173,\"spe\":226},\"moves\":[\"firepunch\",\"hiddenpowerdark\",\"calmmind\",\"psychic\"],\"baseAbility\":\"synchronize\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Feraligatr\",\"details\":\"Feraligatr, L83, F\",\"condition\":\"276/276\",\"active\":false,\"stats\":{\"atk\":221,\"def\":213,\"spa\":178,\"spd\":185,\"spe\":177},\"moves\":[\"swordsdance\",\"earthquake\",\"hiddenpowerflying\",\"hydropump\"],\"baseAbility\":\"torrent\",\"item\":\"salacberry\",\"pokeball\":\"pokeball\"}]}}",
+   "|",
+   "|t:|1794629639",
+   "|move|p1a: Heracross|Brick Break|p2a: Magneton",
+   "|-supereffective|p2a: Magneton",
+   "|-damage|p2a: Magneton|0 fnt",
+   "|faint|p2a: Magneton",
+   "|request|{\"forceSwitch\":[true],\"side\":{\"name\":\"PokeZeroBot\",\"id\":\"p2\",\"pokemon\":[{\"ident\":\"p2: Magneton\",\"details\":\"Magneton, L85\",\"condition\":\"0 fnt\",\"active\":true,\"stats\":{\"atk\":108,\"def\":209,\"spa\":253,\"spd\":168,\"spe\":168},\"moves\":[\"hiddenpowerice\",\"protect\",\"thunderbolt\",\"toxic\"],\"baseAbility\":\"magnetpull\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Corsola\",\"details\":\"Corsola, L98, M\",\"condition\":\"266/266\",\"active\":false,\"stats\":{\"atk\":112,\"def\":222,\"spa\":183,\"spd\":222,\"spe\":124},\"moves\":[\"surf\",\"calmmind\",\"recover\",\"icebeam\"],\"baseAbility\":\"naturalcure\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Primeape\",\"details\":\"Primeape, L84, M\",\"condition\":\"244/244\",\"active\":false,\"stats\":{\"atk\":225,\"def\":149,\"spa\":149,\"spd\":166,\"spe\":208},\"moves\":[\"crosschop\",\"bulkup\",\"substitute\",\"rockslide\"],\"baseAbility\":\"vitalspirit\",\"item\":\"salacberry\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Houndoom\",\"details\":\"Houndoom, L79, F\",\"condition\":\"248/248\",\"active\":false,\"stats\":{\"atk\":148,\"def\":125,\"spa\":219,\"spd\":172,\"spe\":196},\"moves\":[\"hiddenpowergrass\",\"fireblast\",\"crunch\",\"substitute\"],\"baseAbility\":\"flashfire\",\"item\":\"petayaberry\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Alakazam\",\"details\":\"Alakazam, L76, F\",\"condition\":\"209/209\",\"active\":false,\"stats\":{\"atk\":83,\"def\":112,\"spa\":249,\"spd\":173,\"spe\":226},\"moves\":[\"firepunch\",\"hiddenpowerdark\",\"calmmind\",\"psychic\"],\"baseAbility\":\"synchronize\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Feraligatr\",\"details\":\"Feraligatr, L83, F\",\"condition\":\"276/276\",\"active\":false,\"stats\":{\"atk\":221,\"def\":213,\"spa\":178,\"spd\":185,\"spe\":177},\"moves\":[\"swordsdance\",\"earthquake\",\"hiddenpowerflying\",\"hydropump\"],\"baseAbility\":\"torrent\",\"item\":\"salacberry\",\"pokeball\":\"pokeball\"}]},\"noCancel\":true}",
+   "|",
+   "|t:|1794629639",
+   "|switch|p2a: Alakazam|Alakazam, L76, F|209/209",
+   "|-damage|p2a: Alakazam|183/209|[from] Spikes",
+   "|",
+   "|-heal|p2a: Alakazam|196/209|[from] item: Leftovers",
+   "|upkeep",
+   "|turn|5",
+   "|request|{\"active\":[{\"moves\":[{\"move\":\"Fire Punch\",\"id\":\"firepunch\",\"pp\":24,\"maxpp\":24,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Hidden Power Dark 70\",\"id\":\"hiddenpower\",\"pp\":24,\"maxpp\":24,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Calm Mind\",\"id\":\"calmmind\",\"pp\":32,\"maxpp\":32,\"target\":\"self\",\"disabled\":false},{\"move\":\"Psychic\",\"id\":\"psychic\",\"pp\":16,\"maxpp\":16,\"target\":\"normal\",\"disabled\":false}]}],\"side\":{\"name\":\"PokeZeroBot\",\"id\":\"p2\",\"pokemon\":[{\"ident\":\"p2: Alakazam\",\"details\":\"Alakazam, L76, F\",\"condition\":\"196/209\",\"active\":true,\"stats\":{\"atk\":83,\"def\":112,\"spa\":249,\"spd\":173,\"spe\":226},\"moves\":[\"firepunch\",\"hiddenpowerdark\",\"calmmind\",\"psychic\"],\"baseAbility\":\"synchronize\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Corsola\",\"details\":\"Corsola, L98, M\",\"condition\":\"266/266\",\"active\":false,\"stats\":{\"atk\":112,\"def\":222,\"spa\":183,\"spd\":222,\"spe\":124},\"moves\":[\"surf\",\"calmmind\",\"recover\",\"icebeam\"],\"baseAbility\":\"naturalcure\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Primeape\",\"details\":\"Primeape, L84, M\",\"condition\":\"244/244\",\"active\":false,\"stats\":{\"atk\":225,\"def\":149,\"spa\":149,\"spd\":166,\"spe\":208},\"moves\":[\"crosschop\",\"bulkup\",\"substitute\",\"rockslide\"],\"baseAbility\":\"vitalspirit\",\"item\":\"salacberry\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Houndoom\",\"details\":\"Houndoom, L79, F\",\"condition\":\"248/248\",\"active\":false,\"stats\":{\"atk\":148,\"def\":125,\"spa\":219,\"spd\":172,\"spe\":196},\"moves\":[\"hiddenpowergrass\",\"fireblast\",\"crunch\",\"substitute\"],\"baseAbility\":\"flashfire\",\"item\":\"petayaberry\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Magneton\",\"details\":\"Magneton, L85\",\"condition\":\"0 fnt\",\"active\":false,\"stats\":{\"atk\":108,\"def\":209,\"spa\":253,\"spd\":168,\"spe\":168},\"moves\":[\"hiddenpowerice\",\"protect\",\"thunderbolt\",\"toxic\"],\"baseAbility\":\"magnetpull\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Feraligatr\",\"details\":\"Feraligatr, L83, F\",\"condition\":\"276/276\",\"active\":false,\"stats\":{\"atk\":221,\"def\":213,\"spa\":178,\"spd\":185,\"spe\":177},\"moves\":[\"swordsdance\",\"earthquake\",\"hiddenpowerflying\",\"hydropump\"],\"baseAbility\":\"torrent\",\"item\":\"salacberry\",\"pokeball\":\"pokeball\"}]}}",
+   "|",
+   "|t:|1794629642",
+   "|switch|p1a: Houndoom|Houndoom, L79, F|100/100",
+   "|move|p2a: Alakazam|Psychic|p1a: Houndoom",
+   "|-immune|p1a: Houndoom",
+   "|",
+   "|-heal|p2a: Alakazam|209/209|[from] item: Leftovers",
+   "|upkeep",
+   "|turn|6",
+   "|request|{\"active\":[{\"moves\":[{\"move\":\"Fire Punch\",\"id\":\"firepunch\",\"pp\":24,\"maxpp\":24,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Hidden Power Dark 70\",\"id\":\"hiddenpower\",\"pp\":24,\"maxpp\":24,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Calm Mind\",\"id\":\"calmmind\",\"pp\":32,\"maxpp\":32,\"target\":\"self\",\"disabled\":false},{\"move\":\"Psychic\",\"id\":\"psychic\",\"pp\":15,\"maxpp\":16,\"target\":\"normal\",\"disabled\":false}]}],\"side\":{\"name\":\"PokeZeroBot\",\"id\":\"p2\",\"pokemon\":[{\"ident\":\"p2: Alakazam\",\"details\":\"Alakazam, L76, F\",\"condition\":\"209/209\",\"active\":true,\"stats\":{\"atk\":83,\"def\":112,\"spa\":249,\"spd\":173,\"spe\":226},\"moves\":[\"firepunch\",\"hiddenpowerdark\",\"calmmind\",\"psychic\"],\"baseAbility\":\"synchronize\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Corsola\",\"details\":\"Corsola, L98, M\",\"condition\":\"266/266\",\"active\":false,\"stats\":{\"atk\":112,\"def\":222,\"spa\":183,\"spd\":222,\"spe\":124},\"moves\":[\"surf\",\"calmmind\",\"recover\",\"icebeam\"],\"baseAbility\":\"naturalcure\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Primeape\",\"details\":\"Primeape, L84, M\",\"condition\":\"244/244\",\"active\":false,\"stats\":{\"atk\":225,\"def\":149,\"spa\":149,\"spd\":166,\"spe\":208},\"moves\":[\"crosschop\",\"bulkup\",\"substitute\",\"rockslide\"],\"baseAbility\":\"vitalspirit\",\"item\":\"salacberry\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Houndoom\",\"details\":\"Houndoom, L79, F\",\"condition\":\"248/248\",\"active\":false,\"stats\":{\"atk\":148,\"def\":125,\"spa\":219,\"spd\":172,\"spe\":196},\"moves\":[\"hiddenpowergrass\",\"fireblast\",\"crunch\",\"substitute\"],\"baseAbility\":\"flashfire\",\"item\":\"petayaberry\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Magneton\",\"details\":\"Magneton, L85\",\"condition\":\"0 fnt\",\"active\":false,\"stats\":{\"atk\":108,\"def\":209,\"spa\":253,\"spd\":168,\"spe\":168},\"moves\":[\"hiddenpowerice\",\"protect\",\"thunderbolt\",\"toxic\"],\"baseAbility\":\"magnetpull\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Feraligatr\",\"details\":\"Feraligatr, L83, F\",\"condition\":\"276/276\",\"active\":false,\"stats\":{\"atk\":221,\"def\":213,\"spa\":178,\"spd\":185,\"spe\":177},\"moves\":[\"swordsdance\",\"earthquake\",\"hiddenpowerflying\",\"hydropump\"],\"baseAbility\":\"torrent\",\"item\":\"salacberry\",\"pokeball\":\"pokeball\"}]}}",
+   "|",
+   "|t:|1794629644",
+   "|-activate|p2a: Alakazam|move: Pursuit",
+   "|move|p1a: Houndoom|Pursuit|p2a: Alakazam|[from] Pursuit",
+   "|-supereffective|p2a: Alakazam",
+   "|-damage|p2a: Alakazam|14/209",
+   "|switch|p2a: Houndoom|Houndoom, L79, F|248/248",
+   "|-damage|p2a: Houndoom|217/248|[from] Spikes",
+   "|",
+   "|upkeep",
+   "|turn|7",
+   "|request|{\"active\":[{\"moves\":[{\"move\":\"Hidden Power Grass 70\",\"id\":\"hiddenpower\",\"pp\":24,\"maxpp\":24,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Fire Blast\",\"id\":\"fireblast\",\"pp\":8,\"maxpp\":8,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Crunch\",\"id\":\"crunch\",\"pp\":24,\"maxpp\":24,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Substitute\",\"id\":\"substitute\",\"pp\":16,\"maxpp\":16,\"target\":\"self\",\"disabled\":false}]}],\"side\":{\"name\":\"PokeZeroBot\",\"id\":\"p2\",\"pokemon\":[{\"ident\":\"p2: Houndoom\",\"details\":\"Houndoom, L79, F\",\"condition\":\"217/248\",\"active\":true,\"stats\":{\"atk\":148,\"def\":125,\"spa\":219,\"spd\":172,\"spe\":196},\"moves\":[\"hiddenpowergrass\",\"fireblast\",\"crunch\",\"substitute\"],\"baseAbility\":\"flashfire\",\"item\":\"petayaberry\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Corsola\",\"details\":\"Corsola, L98, M\",\"condition\":\"266/266\",\"active\":false,\"stats\":{\"atk\":112,\"def\":222,\"spa\":183,\"spd\":222,\"spe\":124},\"moves\":[\"surf\",\"calmmind\",\"recover\",\"icebeam\"],\"baseAbility\":\"naturalcure\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Primeape\",\"details\":\"Primeape, L84, M\",\"condition\":\"244/244\",\"active\":false,\"stats\":{\"atk\":225,\"def\":149,\"spa\":149,\"spd\":166,\"spe\":208},\"moves\":[\"crosschop\",\"bulkup\",\"substitute\",\"rockslide\"],\"baseAbility\":\"vitalspirit\",\"item\":\"salacberry\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Alakazam\",\"details\":\"Alakazam, L76, F\",\"condition\":\"14/209\",\"active\":false,\"stats\":{\"atk\":83,\"def\":112,\"spa\":249,\"spd\":173,\"spe\":226},\"moves\":[\"firepunch\",\"hiddenpowerdark\",\"calmmind\",\"psychic\"],\"baseAbility\":\"synchronize\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Magneton\",\"details\":\"Magneton, L85\",\"condition\":\"0 fnt\",\"active\":false,\"stats\":{\"atk\":108,\"def\":209,\"spa\":253,\"spd\":168,\"spe\":168},\"moves\":[\"hiddenpowerice\",\"protect\",\"thunderbolt\",\"toxic\"],\"baseAbility\":\"magnetpull\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Feraligatr\",\"details\":\"Feraligatr, L83, F\",\"condition\":\"276/276\",\"active\":false,\"stats\":{\"atk\":221,\"def\":213,\"spa\":178,\"spd\":185,\"spe\":177},\"moves\":[\"swordsdance\",\"earthquake\",\"hiddenpowerflying\",\"hydropump\"],\"baseAbility\":\"torrent\",\"item\":\"salacberry\",\"pokeball\":\"pokeball\"}]}}"
+  ],
+  "own_request_line": "|request|{\"active\":[{\"moves\":[{\"move\":\"Hidden Power Grass 70\",\"id\":\"hiddenpower\",\"pp\":24,\"maxpp\":24,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Fire Blast\",\"id\":\"fireblast\",\"pp\":8,\"maxpp\":8,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Crunch\",\"id\":\"crunch\",\"pp\":24,\"maxpp\":24,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Substitute\",\"id\":\"substitute\",\"pp\":16,\"maxpp\":16,\"target\":\"self\",\"disabled\":false}]}],\"side\":{\"name\":\"PokeZeroBot\",\"id\":\"p2\",\"pokemon\":[{\"ident\":\"p2: Houndoom\",\"details\":\"Houndoom, L79, F\",\"condition\":\"217/248\",\"active\":true,\"stats\":{\"atk\":148,\"def\":125,\"spa\":219,\"spd\":172,\"spe\":196},\"moves\":[\"hiddenpowergrass\",\"fireblast\",\"crunch\",\"substitute\"],\"baseAbility\":\"flashfire\",\"item\":\"petayaberry\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Corsola\",\"details\":\"Corsola, L98, M\",\"condition\":\"266/266\",\"active\":false,\"stats\":{\"atk\":112,\"def\":222,\"spa\":183,\"spd\":222,\"spe\":124},\"moves\":[\"surf\",\"calmmind\",\"recover\",\"icebeam\"],\"baseAbility\":\"naturalcure\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Primeape\",\"details\":\"Primeape, L84, M\",\"condition\":\"244/244\",\"active\":false,\"stats\":{\"atk\":225,\"def\":149,\"spa\":149,\"spd\":166,\"spe\":208},\"moves\":[\"crosschop\",\"bulkup\",\"substitute\",\"rockslide\"],\"baseAbility\":\"vitalspirit\",\"item\":\"salacberry\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Alakazam\",\"details\":\"Alakazam, L76, F\",\"condition\":\"14/209\",\"active\":false,\"stats\":{\"atk\":83,\"def\":112,\"spa\":249,\"spd\":173,\"spe\":226},\"moves\":[\"firepunch\",\"hiddenpowerdark\",\"calmmind\",\"psychic\"],\"baseAbility\":\"synchronize\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Magneton\",\"details\":\"Magneton, L85\",\"condition\":\"0 fnt\",\"active\":false,\"stats\":{\"atk\":108,\"def\":209,\"spa\":253,\"spd\":168,\"spe\":168},\"moves\":[\"hiddenpowerice\",\"protect\",\"thunderbolt\",\"toxic\"],\"baseAbility\":\"magnetpull\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Feraligatr\",\"details\":\"Feraligatr, L83, F\",\"condition\":\"276/276\",\"active\":false,\"stats\":{\"atk\":221,\"def\":213,\"spa\":178,\"spd\":185,\"spe\":177},\"moves\":[\"swordsdance\",\"earthquake\",\"hiddenpowerflying\",\"hydropump\"],\"baseAbility\":\"torrent\",\"item\":\"salacberry\",\"pokeball\":\"pokeball\"}]}}",
+  "owner": "p2",
+  "prefix_sha256": "be7217d2bafaed05957213835cd18baeedd8559c96b5da0c958a2bf4f1d8aee2",
+  "request_id": "battle-gen3randombattle-controlled-2103400980:7",
+  "schema": "pokezero.phase-d.shared-gpu-search.v1",
+  "stream_id": 1
+ },
+ "source_hash": "f5a5265143d423af"
+}

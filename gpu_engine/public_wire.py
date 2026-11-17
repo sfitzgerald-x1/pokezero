@@ -481,6 +481,18 @@ def project_line(state, line, *, species_catalog, source, moves, abilities, item
         event=PublicEvent(Kind.TENDENCY,state.next_sequence+len(events),last.turn,last.phase,
             target_side=tendency_projection.side,payload=tendency_projection.payload)
         event.words();events.append(event)
+    if type_catalog is not None and not type_projection.facts:
+        lexical_side=_slot_from_ident(parts[2]) if len(parts)>2 else None
+        lexical_type=(kind=='-formechange' or (kind=='-start' and len(parts)>=4
+            and public_types.reference._normalize_identifier(parts[3])=='typechange'))
+        if lexical_type and lexical_side in ('p1','p2'):
+            # Admission above is unchanged, including refusal of plain empty payloads.
+            # An incidental admitted OUTCOME may still carry a host type-event bit.
+            if not events or events[0].kind!=Kind.RAW_BEGIN:
+                raise ValueError('lexical type history requires its existing raw envelope')
+            marker=(1<<(int(lexical_side[1])-1))<<public_types.RAW_HISTORY_SHIFT
+            events[0]=replace(events[0],payload=(events[0].payload[0]|marker,*events[0].payload[1:]))
+            events[0].words()
     pending = {f'p{s+1}' for s in (0, 1) if state.pending_baton[s]}
     _flag_baton_pass(parts, pending)
     if side is not None:

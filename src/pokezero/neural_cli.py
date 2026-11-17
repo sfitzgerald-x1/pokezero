@@ -570,6 +570,16 @@ def build_arg_parser() -> argparse.ArgumentParser:
             "disagreeing flag hard-fails."
         ),
     )
+    train.add_argument(
+        "--self-moves",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help=(
+            "V2 self_moves: our own Pokemon tokens carry their real movesets and exact PP in the move-belief "
+            "columns (zero on self tokens otherwise). Recorded in the model config (emitted only when on). "
+            "Default: OFF. A checkpoint's stored value wins; a disagreeing explicit flag hard-fails."
+        ),
+    )
     train.add_argument("--epochs", type=int, default=1, help="Number of training epochs.")
     train.add_argument("--batch-size", type=int, default=64, help="Training batch size.")
     train.add_argument("--learning-rate", type=float, default=3e-4, help="AdamW learning rate.")
@@ -2101,6 +2111,16 @@ def build_arg_parser() -> argparse.ArgumentParser:
             "validation."
         ),
     )
+    iterate.add_argument(
+        "--self-moves",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help=(
+            "V2 self_moves: our own Pokemon tokens carry their real movesets and exact PP in the move-belief "
+            "columns (zero on self tokens otherwise). Recorded in the model config (emitted only when on). "
+            "Default: OFF. A checkpoint's stored value wins; a disagreeing explicit flag hard-fails."
+        ),
+    )
     iterate.add_argument("--policy-id", default="entity-transformer-selfplay", help="Base policy id for generated checkpoints.")
     iterate.add_argument(
         "--category-oov-buckets",
@@ -2850,6 +2870,7 @@ _MASK_FLAG_FIELDS = (
         "investment_belief_narrowing",
     ),
     ("--item-belief-narrowing/--no-item-belief-narrowing", "item_belief_narrowing"),
+    ("--self-moves/--no-self-moves", "self_moves"),
 )
 
 
@@ -2872,6 +2893,8 @@ def _explicit_mask_requests(args: argparse.Namespace) -> dict[str, object]:
         requested["investment_belief_narrowing"] = bool(args.investment_belief_narrowing)
     if getattr(args, "item_belief_narrowing", None) is not None:
         requested["item_belief_narrowing"] = bool(args.item_belief_narrowing)
+    if getattr(args, "self_moves", None) is not None:
+        requested["self_moves"] = bool(args.self_moves)
     return requested
 
 
@@ -2964,6 +2987,9 @@ def _require_cache_masks_match_model_config(paths, model_config) -> None:
         # getattr: a config without the item-certainty switch trained on candidate sets that
         # discarded the original item after a mutation (same strict latch as the pair above).
         "item_belief_narrowing": getattr(model_config, "item_belief_narrowing", False),
+        # getattr: a config without the V2 self_moves switch trained with zero self-token
+        # move/PP columns (same strict latch).
+        "self_moves": getattr(model_config, "self_moves", False),
     }
     for cache_path, masks in cache_feature_masks_by_path(paths):
         if masks is None:
@@ -2975,6 +3001,7 @@ def _require_cache_masks_match_model_config(paths, model_config) -> None:
             "feature_pack_last_move": True,
             "investment_belief_narrowing": False,
             "item_belief_narrowing": False,
+            "self_moves": False,
             **masks,
         }
         if masks != expected:
@@ -3188,6 +3215,7 @@ def _train(args: argparse.Namespace) -> int:
             item_belief_narrowing=(
                 False if args.item_belief_narrowing is None else bool(args.item_belief_narrowing)
             ),
+            self_moves=bool(getattr(args, "self_moves", None)),
             reward_shaping=shaping_weights_json,
         )
         # Fresh train: --observation-schema SETS the stamped schema + widths (default
@@ -5902,6 +5930,7 @@ def _iterate(args: argparse.Namespace) -> int:
         item_belief_narrowing=(
             False if args.item_belief_narrowing is None else bool(args.item_belief_narrowing)
         ),
+        self_moves=bool(getattr(args, "self_moves", None)),
         reward_shaping=iterate_shaping_json,
         observation_schema_version=iterate_schema_version,
         categorical_feature_count=iterate_schema_spec.categorical_feature_count,

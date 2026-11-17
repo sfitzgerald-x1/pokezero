@@ -1,0 +1,168 @@
+{
+ "beliefs": [
+  {
+   "condition": "100/100",
+   "gender": "M",
+   "item_mutated": false,
+   "revealed_ability": null,
+   "revealed_item": null,
+   "revealed_moves": [
+    "Hidden Power"
+   ],
+   "ruled_out_abilities": [],
+   "ruled_out_items": [],
+   "showdown_slot": "p2",
+   "species": "Huntail"
+  }
+ ],
+ "census": {
+  "species": {
+   "huntail": {
+    "census_lik": [
+     0.0,
+     0.0,
+     1.0,
+     1.0,
+     0.0,
+     0.0,
+     1.0,
+     1.0
+    ],
+    "census_n": 8,
+    "census_n_after": 4,
+    "census_strikes": 1,
+    "survivor_ids": [
+     "huntail-1-variant-1",
+     "huntail-1-variant-2",
+     "huntail-1-variant-3",
+     "huntail-1-variant-4",
+     "huntail-1-variant-7",
+     "huntail-1-variant-8",
+     "huntail-1-variant-9",
+     "huntail-1-variant-10"
+    ],
+    "true_variant": "huntail-1-variant-10"
+   }
+  },
+  "strikes": [
+   {
+    "attacker": "Huntail",
+    "crit": true,
+    "eff": "supereffective",
+    "hp_before": 266,
+    "ko": true,
+    "line": 26,
+    "move": "hiddenpower",
+    "n_excluded_universe": 4,
+    "n_variants_with_move": 8,
+    "observed": 266,
+    "reason": null,
+    "true_match": 16,
+    "true_variant": "huntail-1-variant-10"
+   }
+  ]
+ },
+ "decision_index": 1,
+ "format_id": "gen3randombattle",
+ "name": "hp_crit_ko_effectiveness",
+ "note": "Hidden Power, crit, KO, -supereffective: KO censoring cannot separate every type.",
+ "ordinal": 1104,
+ "owner": "p1",
+ "posterior": {
+  "huntail": {
+   "hard": [
+    0,
+    1,
+    2,
+    3,
+    6,
+    7,
+    8,
+    9
+   ],
+   "provenance": "ab44085d77a039f3442227368f2c13fb7252d0e46d70bf5fb9429f65ea5c7c42",
+   "strikes": [
+    {
+     "admitted": true,
+     "counts": [
+      0,
+      0,
+      16,
+      16,
+      0,
+      0,
+      0,
+      0,
+      16,
+      16
+     ],
+     "crit": true,
+     "ko": true,
+     "line": 26,
+     "move": "hiddenpower",
+     "observed": 266,
+     "reason": ""
+    }
+   ],
+   "weights": [
+    0,
+    0,
+    1,
+    1,
+    0,
+    0,
+    0,
+    0,
+    1,
+    1
+   ]
+  }
+ },
+ "prefix_sha256": "061594f7fdef69926e112c26ef4be664d66dfa5cfa450e6512c1a328a8b1a31d",
+ "request": {
+  "battle_id": "battle-gen3randombattle-controlled-2103400184",
+  "decision_index": 1,
+  "generation": 4,
+  "lines": [
+   "|t:|1794575496",
+   "|gametype|singles",
+   "|player|p1|PokeZeroBot||",
+   "|player|p2|FoulPlayBot||",
+   "|gen|3",
+   "|tier|[Gen 3] Random Battle",
+   "|rule|HP Percentage Mod: HP is shown in percentages",
+   "|rule|Beat Up Nicknames Mod: Beat Up will not reveal any party members",
+   "|rule|Endless Battle Clause: Forcing endless battles is banned",
+   "|rule|Sleep Clause Mod: Limit one foe put to sleep",
+   "|rule|Switch Priority Clause Mod: Faster Pok\u00e9mon switch first",
+   "|rule|Species Clause: Limit one of each Pok\u00e9mon",
+   "|rule|OHKO Clause: OHKO moves are banned",
+   "|rule|Evasion Items Clause: Evasion items are banned",
+   "|rule|Evasion Moves Clause: Evasion moves are banned",
+   "|",
+   "|t:|1794575496",
+   "|teamsize|p1|6",
+   "|teamsize|p2|6",
+   "|start",
+   "|switch|p1a: Corsola|Corsola, L98, M|266/266",
+   "|switch|p2a: Huntail|Huntail, L89, M|100/100",
+   "|turn|1",
+   "|request|{\"active\":[{\"moves\":[{\"move\":\"Ice Beam\",\"id\":\"icebeam\",\"pp\":16,\"maxpp\":16,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Recover\",\"id\":\"recover\",\"pp\":32,\"maxpp\":32,\"target\":\"self\",\"disabled\":false},{\"move\":\"Explosion\",\"id\":\"explosion\",\"pp\":8,\"maxpp\":8,\"target\":\"allAdjacent\",\"disabled\":false},{\"move\":\"Surf\",\"id\":\"surf\",\"pp\":24,\"maxpp\":24,\"target\":\"allAdjacentFoes\",\"disabled\":false}]}],\"side\":{\"name\":\"PokeZeroBot\",\"id\":\"p1\",\"pokemon\":[{\"ident\":\"p1: Corsola\",\"details\":\"Corsola, L98, M\",\"condition\":\"266/266\",\"active\":true,\"stats\":{\"atk\":163,\"def\":222,\"spa\":183,\"spd\":222,\"spe\":124},\"moves\":[\"icebeam\",\"recover\",\"explosion\",\"surf\"],\"baseAbility\":\"naturalcure\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p1: Moltres\",\"details\":\"Moltres, L78\",\"condition\":\"268/268\",\"active\":false,\"stats\":{\"atk\":162,\"def\":185,\"spa\":239,\"spd\":178,\"spe\":185},\"moves\":[\"willowisp\",\"morningsun\",\"hiddenpowergrass\",\"flamethrower\"],\"baseAbility\":\"pressure\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p1: Sceptile\",\"details\":\"Sceptile, L82, F\",\"condition\":\"248/248\",\"active\":false,\"stats\":{\"atk\":146,\"def\":153,\"spa\":219,\"spd\":187,\"spe\":244},\"moves\":[\"hiddenpowerice\",\"leafblade\",\"substitute\",\"thunderpunch\"],\"baseAbility\":\"overgrow\",\"item\":\"petayaberry\",\"pokeball\":\"pokeball\"},{\"ident\":\"p1: Metagross\",\"details\":\"Metagross, L73\",\"condition\":\"237/237\",\"active\":false,\"stats\":{\"atk\":240,\"def\":232,\"spa\":181,\"spd\":174,\"spe\":145},\"moves\":[\"agility\",\"meteormash\",\"earthquake\",\"rockslide\"],\"baseAbility\":\"clearbody\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p1: Dusclops\",\"details\":\"Dusclops, L86, M\",\"condition\":\"209/209\",\"active\":false,\"stats\":{\"atk\":125,\"def\":273,\"spa\":152,\"spd\":273,\"spe\":92},\"moves\":[\"rest\",\"sleeptalk\",\"willowisp\",\"seismictoss\"],\"baseAbility\":\"pressure\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p1: Mew\",\"details\":\"Mew, L72\",\"condition\":\"263/263\",\"active\":false,\"stats\":{\"atk\":186,\"def\":186,\"spa\":186,\"spd\":186,\"spe\":186},\"moves\":[\"rockslide\",\"swordsdance\",\"earthquake\",\"explosion\"],\"baseAbility\":\"synchronize\",\"item\":\"salacberry\",\"pokeball\":\"pokeball\"}]}}",
+   "|",
+   "|t:|1794575499",
+   "|move|p2a: Huntail|Hidden Power|p1a: Corsola",
+   "|-supereffective|p1a: Corsola",
+   "|-crit|p1a: Corsola",
+   "|-damage|p1a: Corsola|0 fnt",
+   "|faint|p1a: Corsola",
+   "|request|{\"forceSwitch\":[true],\"side\":{\"name\":\"PokeZeroBot\",\"id\":\"p1\",\"pokemon\":[{\"ident\":\"p1: Corsola\",\"details\":\"Corsola, L98, M\",\"condition\":\"0 fnt\",\"active\":true,\"stats\":{\"atk\":163,\"def\":222,\"spa\":183,\"spd\":222,\"spe\":124},\"moves\":[\"icebeam\",\"recover\",\"explosion\",\"surf\"],\"baseAbility\":\"naturalcure\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p1: Moltres\",\"details\":\"Moltres, L78\",\"condition\":\"268/268\",\"active\":false,\"stats\":{\"atk\":162,\"def\":185,\"spa\":239,\"spd\":178,\"spe\":185},\"moves\":[\"willowisp\",\"morningsun\",\"hiddenpowergrass\",\"flamethrower\"],\"baseAbility\":\"pressure\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p1: Sceptile\",\"details\":\"Sceptile, L82, F\",\"condition\":\"248/248\",\"active\":false,\"stats\":{\"atk\":146,\"def\":153,\"spa\":219,\"spd\":187,\"spe\":244},\"moves\":[\"hiddenpowerice\",\"leafblade\",\"substitute\",\"thunderpunch\"],\"baseAbility\":\"overgrow\",\"item\":\"petayaberry\",\"pokeball\":\"pokeball\"},{\"ident\":\"p1: Metagross\",\"details\":\"Metagross, L73\",\"condition\":\"237/237\",\"active\":false,\"stats\":{\"atk\":240,\"def\":232,\"spa\":181,\"spd\":174,\"spe\":145},\"moves\":[\"agility\",\"meteormash\",\"earthquake\",\"rockslide\"],\"baseAbility\":\"clearbody\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p1: Dusclops\",\"details\":\"Dusclops, L86, M\",\"condition\":\"209/209\",\"active\":false,\"stats\":{\"atk\":125,\"def\":273,\"spa\":152,\"spd\":273,\"spe\":92},\"moves\":[\"rest\",\"sleeptalk\",\"willowisp\",\"seismictoss\"],\"baseAbility\":\"pressure\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p1: Mew\",\"details\":\"Mew, L72\",\"condition\":\"263/263\",\"active\":false,\"stats\":{\"atk\":186,\"def\":186,\"spa\":186,\"spd\":186,\"spe\":186},\"moves\":[\"rockslide\",\"swordsdance\",\"earthquake\",\"explosion\"],\"baseAbility\":\"synchronize\",\"item\":\"salacberry\",\"pokeball\":\"pokeball\"}]},\"noCancel\":true}"
+  ],
+  "own_request_line": "|request|{\"forceSwitch\":[true],\"side\":{\"name\":\"PokeZeroBot\",\"id\":\"p1\",\"pokemon\":[{\"ident\":\"p1: Corsola\",\"details\":\"Corsola, L98, M\",\"condition\":\"0 fnt\",\"active\":true,\"stats\":{\"atk\":163,\"def\":222,\"spa\":183,\"spd\":222,\"spe\":124},\"moves\":[\"icebeam\",\"recover\",\"explosion\",\"surf\"],\"baseAbility\":\"naturalcure\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p1: Moltres\",\"details\":\"Moltres, L78\",\"condition\":\"268/268\",\"active\":false,\"stats\":{\"atk\":162,\"def\":185,\"spa\":239,\"spd\":178,\"spe\":185},\"moves\":[\"willowisp\",\"morningsun\",\"hiddenpowergrass\",\"flamethrower\"],\"baseAbility\":\"pressure\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p1: Sceptile\",\"details\":\"Sceptile, L82, F\",\"condition\":\"248/248\",\"active\":false,\"stats\":{\"atk\":146,\"def\":153,\"spa\":219,\"spd\":187,\"spe\":244},\"moves\":[\"hiddenpowerice\",\"leafblade\",\"substitute\",\"thunderpunch\"],\"baseAbility\":\"overgrow\",\"item\":\"petayaberry\",\"pokeball\":\"pokeball\"},{\"ident\":\"p1: Metagross\",\"details\":\"Metagross, L73\",\"condition\":\"237/237\",\"active\":false,\"stats\":{\"atk\":240,\"def\":232,\"spa\":181,\"spd\":174,\"spe\":145},\"moves\":[\"agility\",\"meteormash\",\"earthquake\",\"rockslide\"],\"baseAbility\":\"clearbody\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p1: Dusclops\",\"details\":\"Dusclops, L86, M\",\"condition\":\"209/209\",\"active\":false,\"stats\":{\"atk\":125,\"def\":273,\"spa\":152,\"spd\":273,\"spe\":92},\"moves\":[\"rest\",\"sleeptalk\",\"willowisp\",\"seismictoss\"],\"baseAbility\":\"pressure\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p1: Mew\",\"details\":\"Mew, L72\",\"condition\":\"263/263\",\"active\":false,\"stats\":{\"atk\":186,\"def\":186,\"spa\":186,\"spd\":186,\"spe\":186},\"moves\":[\"rockslide\",\"swordsdance\",\"earthquake\",\"explosion\"],\"baseAbility\":\"synchronize\",\"item\":\"salacberry\",\"pokeball\":\"pokeball\"}]},\"noCancel\":true}",
+  "owner": "p1",
+  "prefix_sha256": "061594f7fdef69926e112c26ef4be664d66dfa5cfa450e6512c1a328a8b1a31d",
+  "request_id": "battle-gen3randombattle-controlled-2103400184:1",
+  "schema": "pokezero.phase-d.shared-gpu-search.v1",
+  "stream_id": 1
+ },
+ "source_hash": "f5a5265143d423af"
+}

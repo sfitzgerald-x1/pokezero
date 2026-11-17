@@ -109,6 +109,7 @@ def load_v2(args):
     params, config, meta = v5_model.load(args.v2_archive, expected_archive_sha256=args.v2_archive_sha256, expected_checkpoint_sha256=args.v2_checkpoint_sha256,
         expected_category_vocabulary_sha256=args.v2_category_sha256 or recorded.category_vocabulary_sha256,
         expected_label_vocabulary_sha256=args.v2_label_sha256 or recorded.label_vocabulary.sha256, enable_v5=True)
+    from gpu_engine.private_self_moves import refuse_unthreaded;refuse_unthreaded(meta, context='champion forward bench')   # V2 self_moves
     header = dict(kind='v2', archive=args.v2_archive, archive_sha256=args.v2_archive_sha256, checkpoint_sha256=args.v2_checkpoint_sha256, arm=config.arm,
         replicate=config.replicate, precision='bfloat16', parameter_count=meta.get('parameter_count'), forward='device_depth2_pricer.default_forward(model)',
         category_vocabulary_sha256=config.category_vocabulary_sha256, label_vocabulary_sha256=config.label_vocabulary.sha256)

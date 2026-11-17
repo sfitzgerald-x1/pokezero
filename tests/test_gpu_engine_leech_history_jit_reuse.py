@@ -19,6 +19,8 @@ from gpu_engine import public_active, sustain
 
 
 BASE='6a55ed80787129fdfab289f20f97193e263f60c2'
+# self_moves adds declared own-move/PP encoding to the reviewed encoder source.
+ENCODER_SOURCE='63a76f9b4d71916854c4a8caa6cc9f1923e17f3c'
 SOURCE=Path('gpu_engine/engine_retained_encoder_driver.py')
 Engine=namedtuple('Engine','active')
 Cursor=namedtuple('Cursor','stream_id turn generation physical_active public_slot encounter')
@@ -161,7 +163,7 @@ class LeechHistoryJitReuseTests(unittest.TestCase):
         # No helper, physics, catalog or admission code is changed. transition.py is certified against CURRENT_TRANSITION (full AST plus mutations) by terminal_closeout and seismic_toss_components;
         # state.py and engine_leech_seed_callbacks.py: byte-exact against reviewed SOURCE_PINS in transition_observer_wiring's source-binding subtests.
         for name in ('v4_encoder.py',):
-            self.assertEqual(Path('gpu_engine',name).read_bytes(),subprocess.check_output(['git','show','b8092a85:gpu_engine/'+name]))
+            self.assertEqual(Path('gpu_engine',name).read_bytes(),subprocess.check_output(['git','show',ENCODER_SOURCE+':gpu_engine/'+name]))
 
 
 if __name__=='__main__':unittest.main()

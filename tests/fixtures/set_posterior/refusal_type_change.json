@@ -1,0 +1,143 @@
+{
+ "beliefs": [
+  {
+   "condition": "87/100",
+   "gender": "F",
+   "item_mutated": false,
+   "revealed_ability": "Color Change",
+   "revealed_item": null,
+   "revealed_moves": [
+    "Return"
+   ],
+   "ruled_out_abilities": [],
+   "ruled_out_items": [
+    "leftovers",
+    "lumberry"
+   ],
+   "showdown_slot": "p1",
+   "species": "Kecleon"
+  }
+ ],
+ "census": {
+  "species": {
+   "kecleon": {
+    "census_lik": [
+     1.0,
+     1.0,
+     1.0
+    ],
+    "census_n": 3,
+    "census_n_after": 3,
+    "census_strikes": 0,
+    "survivor_ids": [
+     "kecleon-1-variant-2",
+     "kecleon-1-variant-3",
+     "kecleon-1-variant-4"
+    ],
+    "true_variant": "kecleon-1-variant-2"
+   }
+  },
+  "strikes": [
+   {
+    "attacker": "Kecleon",
+    "crit": false,
+    "eff": null,
+    "hp_before": 240,
+    "ko": false,
+    "line": 29,
+    "move": "return",
+    "n_excluded_universe": null,
+    "n_variants_with_move": null,
+    "observed": 171,
+    "reason": "type-change",
+    "true_match": null,
+    "true_variant": null
+   }
+  ]
+ },
+ "decision_index": 1,
+ "format_id": "gen3randombattle",
+ "name": "refusal_type_change",
+ "note": "Census refusal: type_change",
+ "ordinal": 2777,
+ "owner": "p2",
+ "posterior": {
+  "kecleon": {
+   "hard": [
+    1,
+    2,
+    3
+   ],
+   "provenance": "b9026fe016a24e9bfe9520d4ebc305b1098a6b352aaddd5ccf45a3ec2cc454f1",
+   "strikes": [
+    {
+     "admitted": false,
+     "counts": null,
+     "crit": false,
+     "ko": false,
+     "line": 29,
+     "move": "return",
+     "observed": 171,
+     "reason": "type-change"
+    }
+   ],
+   "weights": [
+    0,
+    1,
+    1,
+    1
+   ]
+  }
+ },
+ "prefix_sha256": "fbe99744825628f6b055ef67d34d22cf3168fb119e732656769265ec2806d008",
+ "request": {
+  "battle_id": "battle-gen3randombattle-controlled-2103400462",
+  "decision_index": 1,
+  "generation": 4,
+  "lines": [
+   "|t:|1794594991",
+   "|gametype|singles",
+   "|player|p1|FoulPlayBot||",
+   "|player|p2|PokeZeroBot||",
+   "|gen|3",
+   "|tier|[Gen 3] Random Battle",
+   "|rule|HP Percentage Mod: HP is shown in percentages",
+   "|rule|Beat Up Nicknames Mod: Beat Up will not reveal any party members",
+   "|rule|Endless Battle Clause: Forcing endless battles is banned",
+   "|rule|Sleep Clause Mod: Limit one foe put to sleep",
+   "|rule|Switch Priority Clause Mod: Faster Pok\u00e9mon switch first",
+   "|rule|Species Clause: Limit one of each Pok\u00e9mon",
+   "|rule|OHKO Clause: OHKO moves are banned",
+   "|rule|Evasion Items Clause: Evasion items are banned",
+   "|rule|Evasion Moves Clause: Evasion moves are banned",
+   "|",
+   "|t:|1794594992",
+   "|teamsize|p1|6",
+   "|teamsize|p2|6",
+   "|start",
+   "|switch|p1a: Kecleon|Kecleon, L92, F|100/100",
+   "|switch|p2a: Electabuzz|Electabuzz, L82, F|240/240",
+   "|turn|1",
+   "|request|{\"active\":[{\"moves\":[{\"move\":\"Thunderbolt\",\"id\":\"thunderbolt\",\"pp\":24,\"maxpp\":24,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Substitute\",\"id\":\"substitute\",\"pp\":16,\"maxpp\":16,\"target\":\"self\",\"disabled\":false},{\"move\":\"Ice Punch\",\"id\":\"icepunch\",\"pp\":24,\"maxpp\":24,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Fire Punch\",\"id\":\"firepunch\",\"pp\":24,\"maxpp\":24,\"target\":\"normal\",\"disabled\":false}]}],\"side\":{\"name\":\"PokeZeroBot\",\"id\":\"p2\",\"pokemon\":[{\"ident\":\"p2: Electabuzz\",\"details\":\"Electabuzz, L82, F\",\"condition\":\"240/240\",\"active\":true,\"stats\":{\"atk\":141,\"def\":141,\"spa\":203,\"spd\":187,\"spe\":219},\"moves\":[\"thunderbolt\",\"substitute\",\"icepunch\",\"firepunch\"],\"baseAbility\":\"static\",\"item\":\"petayaberry\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Latios\",\"details\":\"Latios, L66, M\",\"condition\":\"215/215\",\"active\":false,\"stats\":{\"atk\":123,\"def\":144,\"spa\":210,\"spd\":184,\"spe\":184},\"moves\":[\"recover\",\"psychic\",\"calmmind\",\"dragonclaw\"],\"baseAbility\":\"levitate\",\"item\":\"souldew\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Snorlax\",\"details\":\"Snorlax, L71, F\",\"condition\":\"345/345\",\"active\":false,\"stats\":{\"atk\":198,\"def\":134,\"spa\":134,\"spd\":198,\"spe\":84},\"moves\":[\"rest\",\"bodyslam\",\"curse\",\"sleeptalk\"],\"baseAbility\":\"thickfat\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Kingdra\",\"details\":\"Kingdra, L81, F\",\"condition\":\"254/254\",\"active\":false,\"stats\":{\"atk\":161,\"def\":201,\"spa\":200,\"spd\":201,\"spe\":184},\"moves\":[\"hiddenpowerelectric\",\"surf\",\"icebeam\",\"raindance\"],\"baseAbility\":\"swiftswim\",\"item\":\"petayaberry\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Ariados\",\"details\":\"Ariados, L98, M\",\"condition\":\"296/296\",\"active\":false,\"stats\":{\"atk\":232,\"def\":193,\"spa\":173,\"spd\":173,\"spe\":134},\"moves\":[\"sludgebomb\",\"batonpass\",\"signalbeam\",\"spiderweb\"],\"baseAbility\":\"insomnia\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Relicanth\",\"details\":\"Relicanth, L88, M\",\"condition\":\"319/319\",\"active\":false,\"stats\":{\"atk\":209,\"def\":279,\"spa\":129,\"spd\":165,\"spe\":147},\"moves\":[\"earthquake\",\"rockslide\",\"sleeptalk\",\"rest\"],\"baseAbility\":\"swiftswim\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"}]}}",
+   "|",
+   "|t:|1794594994",
+   "|move|p2a: Electabuzz|Fire Punch|p1a: Kecleon",
+   "|-damage|p1a: Kecleon|87/100",
+   "|-start|p1a: Kecleon|typechange|Fire|[from] ability: Color Change",
+   "|move|p1a: Kecleon|Return|p2a: Electabuzz",
+   "|-damage|p2a: Electabuzz|69/240",
+   "|-status|p1a: Kecleon|par|[from] ability: Static|[of] p2a: Electabuzz",
+   "|",
+   "|upkeep",
+   "|turn|2",
+   "|request|{\"active\":[{\"moves\":[{\"move\":\"Thunderbolt\",\"id\":\"thunderbolt\",\"pp\":24,\"maxpp\":24,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Substitute\",\"id\":\"substitute\",\"pp\":16,\"maxpp\":16,\"target\":\"self\",\"disabled\":false},{\"move\":\"Ice Punch\",\"id\":\"icepunch\",\"pp\":24,\"maxpp\":24,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Fire Punch\",\"id\":\"firepunch\",\"pp\":23,\"maxpp\":24,\"target\":\"normal\",\"disabled\":false}]}],\"side\":{\"name\":\"PokeZeroBot\",\"id\":\"p2\",\"pokemon\":[{\"ident\":\"p2: Electabuzz\",\"details\":\"Electabuzz, L82, F\",\"condition\":\"69/240\",\"active\":true,\"stats\":{\"atk\":141,\"def\":141,\"spa\":203,\"spd\":187,\"spe\":219},\"moves\":[\"thunderbolt\",\"substitute\",\"icepunch\",\"firepunch\"],\"baseAbility\":\"static\",\"item\":\"petayaberry\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Latios\",\"details\":\"Latios, L66, M\",\"condition\":\"215/215\",\"active\":false,\"stats\":{\"atk\":123,\"def\":144,\"spa\":210,\"spd\":184,\"spe\":184},\"moves\":[\"recover\",\"psychic\",\"calmmind\",\"dragonclaw\"],\"baseAbility\":\"levitate\",\"item\":\"souldew\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Snorlax\",\"details\":\"Snorlax, L71, F\",\"condition\":\"345/345\",\"active\":false,\"stats\":{\"atk\":198,\"def\":134,\"spa\":134,\"spd\":198,\"spe\":84},\"moves\":[\"rest\",\"bodyslam\",\"curse\",\"sleeptalk\"],\"baseAbility\":\"thickfat\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Kingdra\",\"details\":\"Kingdra, L81, F\",\"condition\":\"254/254\",\"active\":false,\"stats\":{\"atk\":161,\"def\":201,\"spa\":200,\"spd\":201,\"spe\":184},\"moves\":[\"hiddenpowerelectric\",\"surf\",\"icebeam\",\"raindance\"],\"baseAbility\":\"swiftswim\",\"item\":\"petayaberry\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Ariados\",\"details\":\"Ariados, L98, M\",\"condition\":\"296/296\",\"active\":false,\"stats\":{\"atk\":232,\"def\":193,\"spa\":173,\"spd\":173,\"spe\":134},\"moves\":[\"sludgebomb\",\"batonpass\",\"signalbeam\",\"spiderweb\"],\"baseAbility\":\"insomnia\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Relicanth\",\"details\":\"Relicanth, L88, M\",\"condition\":\"319/319\",\"active\":false,\"stats\":{\"atk\":209,\"def\":279,\"spa\":129,\"spd\":165,\"spe\":147},\"moves\":[\"earthquake\",\"rockslide\",\"sleeptalk\",\"rest\"],\"baseAbility\":\"swiftswim\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"}]}}"
+  ],
+  "own_request_line": "|request|{\"active\":[{\"moves\":[{\"move\":\"Thunderbolt\",\"id\":\"thunderbolt\",\"pp\":24,\"maxpp\":24,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Substitute\",\"id\":\"substitute\",\"pp\":16,\"maxpp\":16,\"target\":\"self\",\"disabled\":false},{\"move\":\"Ice Punch\",\"id\":\"icepunch\",\"pp\":24,\"maxpp\":24,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Fire Punch\",\"id\":\"firepunch\",\"pp\":23,\"maxpp\":24,\"target\":\"normal\",\"disabled\":false}]}],\"side\":{\"name\":\"PokeZeroBot\",\"id\":\"p2\",\"pokemon\":[{\"ident\":\"p2: Electabuzz\",\"details\":\"Electabuzz, L82, F\",\"condition\":\"69/240\",\"active\":true,\"stats\":{\"atk\":141,\"def\":141,\"spa\":203,\"spd\":187,\"spe\":219},\"moves\":[\"thunderbolt\",\"substitute\",\"icepunch\",\"firepunch\"],\"baseAbility\":\"static\",\"item\":\"petayaberry\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Latios\",\"details\":\"Latios, L66, M\",\"condition\":\"215/215\",\"active\":false,\"stats\":{\"atk\":123,\"def\":144,\"spa\":210,\"spd\":184,\"spe\":184},\"moves\":[\"recover\",\"psychic\",\"calmmind\",\"dragonclaw\"],\"baseAbility\":\"levitate\",\"item\":\"souldew\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Snorlax\",\"details\":\"Snorlax, L71, F\",\"condition\":\"345/345\",\"active\":false,\"stats\":{\"atk\":198,\"def\":134,\"spa\":134,\"spd\":198,\"spe\":84},\"moves\":[\"rest\",\"bodyslam\",\"curse\",\"sleeptalk\"],\"baseAbility\":\"thickfat\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Kingdra\",\"details\":\"Kingdra, L81, F\",\"condition\":\"254/254\",\"active\":false,\"stats\":{\"atk\":161,\"def\":201,\"spa\":200,\"spd\":201,\"spe\":184},\"moves\":[\"hiddenpowerelectric\",\"surf\",\"icebeam\",\"raindance\"],\"baseAbility\":\"swiftswim\",\"item\":\"petayaberry\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Ariados\",\"details\":\"Ariados, L98, M\",\"condition\":\"296/296\",\"active\":false,\"stats\":{\"atk\":232,\"def\":193,\"spa\":173,\"spd\":173,\"spe\":134},\"moves\":[\"sludgebomb\",\"batonpass\",\"signalbeam\",\"spiderweb\"],\"baseAbility\":\"insomnia\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Relicanth\",\"details\":\"Relicanth, L88, M\",\"condition\":\"319/319\",\"active\":false,\"stats\":{\"atk\":209,\"def\":279,\"spa\":129,\"spd\":165,\"spe\":147},\"moves\":[\"earthquake\",\"rockslide\",\"sleeptalk\",\"rest\"],\"baseAbility\":\"swiftswim\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"}]}}",
+  "owner": "p2",
+  "prefix_sha256": "fbe99744825628f6b055ef67d34d22cf3168fb119e732656769265ec2806d008",
+  "request_id": "battle-gen3randombattle-controlled-2103400462:1",
+  "schema": "pokezero.phase-d.shared-gpu-search.v1",
+  "stream_id": 1
+ },
+ "source_hash": "f5a5265143d423af"
+}

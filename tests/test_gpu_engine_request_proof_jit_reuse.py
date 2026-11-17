@@ -9,6 +9,8 @@ import weakref
 BASE='0d51ac06e34af37ad868850456c5209b2b045e29'
 FEATURE='a6c75ad734a024825afbdd3d9f09b867ae405cd7'
 INTEGRATED='b8092a85d9c1f2ed9c0daf4c4bd8e833a94a2380'
+# self_moves adds declared own-move/PP encoding; historical proof refs stay fixed.
+ENCODER_SOURCE='63a76f9b4d71916854c4a8caa6cc9f1923e17f3c'
 SOURCE=Path('gpu_engine/engine_retained_encoder_driver.py')
 
 def tree():return ast.parse(SOURCE.read_text())
@@ -83,7 +85,7 @@ class RequestProofReuseTests(unittest.TestCase):
    self.assertEqual(subprocess.check_output(['git','show',FEATURE+':gpu_engine/'+name]),subprocess.check_output(['git','show',BASE+':gpu_engine/'+name]))
    # transition.py is certified against CURRENT_TRANSITION (full AST plus mutations) by terminal_closeout and seismic_toss_components; the color_change, encore and kernel_frame_risk sources:
    # byte-exact against reviewed SOURCE_PINS in transition_observer_wiring's source-binding subtests.
-   if name=='v4_encoder.py':self.assertEqual(Path('gpu_engine',name).read_bytes(),subprocess.check_output(['git','show',INTEGRATED+':gpu_engine/'+name]))
+   if name=='v4_encoder.py':self.assertEqual(Path('gpu_engine',name).read_bytes(),subprocess.check_output(['git','show',ENCODER_SOURCE+':gpu_engine/'+name]))
 
  def test_actual_current_call_disabled_predicates_match_original(self):
   old=ast.parse(subprocess.check_output(['git','show',BASE+':'+str(SOURCE)],text=True));new=tree()

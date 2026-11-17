@@ -24,7 +24,11 @@ from .public_mon_state import _int32
 from .public_abilities import _bool
 
 SCHEMA='pokezero.public_types.v1'
-ARRIVE, CLEAR, TYPE, FORME=range(4)
+ARRIVE, CLEAR, TYPE, FORME, CLEAR_EVENT=range(5)
+# An unresolvable typechange clears its overlay but still records the lexical event.
+# Two reserved raw-envelope bits carry lexical history when no overlay fact exists.
+RAW_HISTORY_SHIFT=29
+RAW_HISTORY_MASK=3<<RAW_HISTORY_SHIFT
 COLUMNS=(reference.CATEGORY_TYPE_1,reference.CATEGORY_TYPE_2)
 
 
@@ -94,6 +98,7 @@ class TypeState(NamedTuple):
     encounter: jax.Array
     overridden: jax.Array
     categories: jax.Array
+    type_changed: jax.Array  # sticky protocol history; independent of the current overlay
 
 
 def _binding(value):
@@ -108,7 +113,8 @@ def initialize(batch,tables,*,species_binding):
     if not np.array_equal(np.asarray(species_binding),np.asarray(tables.species_binding)):
         raise ValueError('live types require their frozen public species namespace')
     return TypeState(jnp.broadcast_to(tables.binding,(batch,8)),jnp.broadcast_to(species_binding,(batch,8)),
-        jnp.zeros((batch,2),jnp.int32),jnp.zeros((batch,2),bool),jnp.zeros((batch,2,2),jnp.int32))
+        jnp.zeros((batch,2),jnp.int32),jnp.zeros((batch,2),bool),jnp.zeros((batch,2,2),jnp.int32),
+        jnp.zeros((batch,2),bool))
 
 
 def _shape(state,tables,mons):
@@ -116,7 +122,8 @@ def _shape(state,tables,mons):
         raise ValueError('live-type state requires B by two public sides')
     b=state.encounter.shape[0]
     for name,shape,dtype in [('binding',(b,8),jnp.uint32),('species_binding',(b,8),jnp.uint32),
-        ('encounter',(b,2),jnp.int32),('overridden',(b,2),jnp.bool_),('categories',(b,2,2),jnp.int32)]:
+        ('encounter',(b,2),jnp.int32),('overridden',(b,2),jnp.bool_),('categories',(b,2,2),jnp.int32),
+        ('type_changed',(b,2),jnp.bool_)]:
         x=getattr(state,name)
         if x.shape!=shape or x.dtype!=dtype:raise ValueError('live-type state shape/dtype: '+name)
     for name,shape in [('active',(b,2)),('encounter',(b,2,6)),('species',(b,2,6))]:
@@ -156,7 +163,7 @@ def apply(state,tables,mons,*,operation,side,encounter,first=0,second=0,producer
     valid=jnp.broadcast_to(_bool(valid),(b,))
     current,species,ok=_coherent(state,tables,mons)
     row=jnp.arange(b);target=jnp.clip(seat,0,1);address=(row,target);arrival=op==ARRIVE
-    ok &= jnp.all(producer_binding==tables.binding)&(op>=ARRIVE)&(op<=FORME)&(seat>=0)&(seat<2)&(enc>0)&(current[address]==enc)
+    ok &= jnp.all(producer_binding==tables.binding)&(op>=ARRIVE)&(op<=CLEAR_EVENT)&(seat>=0)&(seat<2)&(enc>0)&(current[address]==enc)
     same=state.encounter==current
     same=jnp.where(arrival[:,None]&(jnp.arange(2)==target[:,None]),True,same)
     ok &= jnp.all(same,axis=-1)
@@ -171,7 +178,9 @@ def apply(state,tables,mons,*,operation,side,encounter,first=0,second=0,producer
     use=ok&valid
     updated=state._replace(encounter=state.encounter.at[address].set(jnp.where(use,enc,state.encounter[address])),
         overridden=state.overridden.at[address].set(jnp.where(use,overridden,state.overridden[address])),
-        categories=state.categories.at[address].set(jnp.where(use[:,None],pair,state.categories[address])))
+        categories=state.categories.at[address].set(jnp.where(use[:,None],pair,state.categories[address])),
+        type_changed=state.type_changed.at[address].set(jnp.where(use,
+            jnp.where(arrival,False,state.type_changed[address]|(op==TYPE)|(op==FORME)|(op==CLEAR_EVENT)),state.type_changed[address])))
     return updated,ok|~valid
 
 
@@ -219,6 +228,6 @@ def project_line(line,*,catalog):
             if pair is not None:
                 a,c=pair;facts.append((TYPE,side,_static_category(catalog.vocabulary,'type:'+a),
                     _static_category(catalog.vocabulary,'type:'+c) if c else 0))
-            else:facts.append((CLEAR,side,0,0))
+            else:facts.append((CLEAR_EVENT,side,0,0))
         elif kind=='-end' and len(p)>=4 and reference._normalize_identifier(p[3])=='typechange':facts.append((CLEAR,side,0,0))
     return TypeProjection(line,tuple(facts),tuple(int(x) for x in np.asarray(catalog.device.binding)))

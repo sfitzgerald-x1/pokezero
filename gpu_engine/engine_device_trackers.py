@@ -133,6 +133,7 @@ class Trackers(NamedTuple):
     # ability (both copies), but the observation's traced column is B2's `traced`, which only a Trace line writes, so
     # readout hides a Transform copy there (it also kept-ability of a benched or fainted ex-transformer). Cleared at arrival.
     transform_borrowed:object=None
+    type_changed:object=None     # [B,2] sticky public type/forme event history; no policy/encoder reader
 
 
 class Tendency(NamedTuple):
@@ -185,7 +186,7 @@ def _observe(t,state,side,physical,rows_active,*,identity):
     # Showdown clears them at the faint (sim/pokemon.ts:1509-1518, faintMessages' clearVolatile), and so does the engine
     # (transition._clear_fainted_boosts); B2 keeps them (gpu_engine/public_mon_state.py:164-173: faint writes no boosts;
     # the arrival resets them, :111-112), and so does the Python encoder the champion was trained on
-    # (src/pokezero/showdown.py:2607-2617: cleared only at switch-in). The principle: observation inputs follow the
+    # (src/pokezero/showdown.py:2611-2621: cleared only at switch-in). The principle: observation inputs follow the
     # convention the champion was trained on (B2 + the Python encoder) until V2 retrains; mechanics (legality, dynamics,
     # engine state) follow Showdown. Nobody should "fix" this toward Showdown without retraining the network; V2's flip
     # list records it. So the carry keeps its stages for the side's still-active mon at hp 0, unless the read precedes the
@@ -244,7 +245,7 @@ def initialize(state):
     # public_order starts as identity: the lead's install below takes next_slot0.
     t=Trackers(j.full((b,2,6),-1,j.int32),j.full((b,2),-1,j.int32),j.full((b,2),-1,j.int32),j.zeros((b,2),j.int32),order,
         z,z,j.full_like(z,-1),z,z,j.zeros((b,2,6,7),j.int32),no,no,state.turn,state.weather,state.spikes,j.zeros(b,j.int32),
-        public_order=order)
+        public_order=order,type_changed=j.zeros((b,2),bool))
     r=j.arange(b);yes=j.ones(b,bool)
     for side in range(2):
         physical=j.clip(state.active[:,side],0,5)

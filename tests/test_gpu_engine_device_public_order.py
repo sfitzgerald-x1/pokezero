@@ -39,6 +39,7 @@ class PublicOrderTests(unittest.TestCase):
         self.assertEqual(tr.SCHEMA, 'pokezero.engine_device_public_trackers.v3')
         k = tr.Trackers._fields.index('public_order')   # appended after the v2 fields; Transform's optional leaves follow it
         self.assertEqual(tr.Trackers._fields[k - 1:k + 2], ('public_port', 'public_order', 'transformed'))
+        self.assertEqual(tr.Trackers._fields[-1], 'type_changed')
         s = put_active(state(), 1, j.array([3, 0], j.int32))
         for t in (tr.initialize(s), h.initialize(s).trackers):
             self.assertEqual(t.public_order.dtype, j.int32)

@@ -101,7 +101,7 @@ def _reset_item_narrowing(c,side,physical,use):
     """B2 stops narrowing by a mutated item (design 13 item 4).
 
     public_items.matching_item gives key 0 once an item is mutated while
-    item_belief_narrowing is False (src/pokezero/observation.py:382), so B2's
+    item_belief_narrowing is False (src/pokezero/observation.py:403), so B2's
     full belief is rebuilt from the facts that still narrow it: the species
     pool, the original ability, the revealed moves and the standing ability/
     item exclusions. _narrow's AND cannot be undone, so the subject's hard mask
@@ -223,6 +223,8 @@ def matchup(c,side,use,kind):
 
 def install(c,state,side,use,*,initial=False):
     t=c.trackers;b=len(t.error);use=_mask(use,b);r=j.arange(b);p=_li.take(state.active,r,side)
+    history=j.zeros((b,2),bool) if t.type_changed is None else t.type_changed
+    t=t._replace(type_changed=_li.put(history,r,(side,),j.where(use,False,_li.take(history,r,side))))
     old=_li.take(t.active_physical,r,side);fresh=_li.take(t.physical_to_public,r,side,j.clip(p,0,5))<0
     if not initial:
         # One actual installation, including intermediate drag/Baton installs.
@@ -278,7 +280,7 @@ def install(c,state,side,use,*,initial=False):
         if name in c.trackers.mon_features:c=feature(c,side,p,name,j.zeros(b,j.int32),use)
     # Every arrival (switch, replacement, drag, Baton target) clears the public Mean
     # Look flag on BOTH seats, matching B2 (public_active.py:246, ARRIVE ignores
-    # baton_pass) and the champion parser (src/pokezero/showdown.py:2752-2770).
+    # baton_pass) and the champion parser (src/pokezero/showdown.py:2756-2774).
     # Known B2 quirk, kept deliberately (lead decision, as for the stale recharge
     # bit): Showdown is right to release the trap on a switch or drag (the linked
     # trapped/trapper volatiles drop), but gen3 keeps it through Baton Pass in
@@ -376,7 +378,7 @@ def reveal_item(c,state,side,item,use,*,original=True):
     c=c._replace(trackers=_write(c.trackers,'shown_item',side,p,item,use))
     if not original:return _refresh(c,side,p,use)
     # Fidelity M1: B2 narrows by public_items.matching_item, which is 0 for a mutated item (Trick, Knock Off)
-    # while item_belief_narrowing is False (src/pokezero/observation.py:382): a later reveal of a Tricked-in
+    # while item_belief_narrowing is False (src/pokezero/observation.py:403): a later reveal of a Tricked-in
     # item (its Leftovers heal, its berry) never narrows the holder's belief.
     mutated=_mon_fact(c,'item_mutated',side,p)!=0
     c=_narrow(c,side,p,item,use&~mutated,'item')
@@ -831,6 +833,9 @@ def faint_clear(c,before,after,use):
         hit.append(use&(_li.take(before.hp,r,side,j.clip(p,0,5))>0)&(_get(after,'hp',side)==0))
     for side in range(2):
         p=_li.take(after.active,r,side)
+        history=c.trackers.type_changed
+        c=c._replace(trackers=c.trackers._replace(type_changed=_li.put(history,r,(side,),
+            j.where(hit[side],False,_li.take(history,r,side)))))
         c=c._replace(trackers=_write(c.trackers,'public_volatiles',side,p,j.zeros((b,len(VOLATILE_NAMES)),bool),hit[side]))
         for name in FAINT_CLEAR_KEYS:
             if name in c.trackers.mon_features:c=feature(c,side,p,name,j.zeros_like(p),hit[side])
@@ -890,9 +895,21 @@ def turn_end(c,before,after,ordinary,*,upkeep=None,leftovers=None,residual=None,
 
 def color_change(c,before,after,side,use):
     changed=use&j.any(_get(before,'types',side)!=_get(after,'types',side),axis=1)
+    c=type_event(c,side,changed)
     c=reveal_ability(c,after,side,changed)
     p=_li.take(after.active,_r(after),side)
     return c._replace(trackers=_write(c.trackers,'shown_types',side,p,_get(after,'types',side),changed))
+
+
+def type_event(c,side,use):
+    """Record an emitted typechange or formechange event, even a return to native typing.
+
+    Transform alone is a separate host refusal and does not set this history. Producers pass their actual public
+    event mask; identity or current typing cannot reconstruct an earlier event. No inference consumes this yet.
+    """
+    t=c.trackers;r=j.arange(len(t.error));history=t.type_changed
+    return c._replace(trackers=t._replace(type_changed=_li.put(history,r,(side,),
+        _li.take(history,r,side)|_mask(use,len(r)))))
 
 
 def drag(c,before,after,side,table,use):

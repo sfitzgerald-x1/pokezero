@@ -472,7 +472,7 @@ def from_b2(adapter, request, source, metadata, *, address, defer_sleep=False, p
         field.turn,j.asarray([weather],j.int32),field.spikes,j.zeros(1,j.int32),
         observed_moves=visible_moves,pp_used=j.asarray(used),last_moves=j.asarray(last),belief_mask=state.beliefs.hard[:,::-1],
         shown_ability=j.asarray(original_ability),original_ability=j.asarray(original_ability),shown_item=j.asarray(shown_item),
-        shown_types=j.zeros((1,2,6,2),j.int32),borrowed_ability=j.asarray(running),
+        shown_types=j.zeros((1,2,6,2),j.int32),borrowed_ability=j.asarray(running),type_changed=ctx.types.type_changed,
         mon_features={k:j.asarray(x) for k,x in mon_features.items()},public_volatiles=j.asarray(vol),
         item_removed=ctx.items.removed,damage_exact_dealt=exact_dealt,damage_exact_taken=exact_taken,tendency=tendency,
         field_features=dict(weather_upkeeps=field.weather_upkeeps,weather_permanent=field.weather_ability,

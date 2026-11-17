@@ -312,9 +312,11 @@ def metadata_sha256(metadata):
 def encoder_identity(catalog):
     """The encoder catalog's identity: checkpoint sha256, category vocabulary sha256 and size, feature masks, source hash."""
     from pokezero.live_protocol_actor import MASK_NAMES,_vocab_sha
-    return (('checkpoint_sha256',catalog.checkpoint_sha256),('category_vocab_sha256',_vocab_sha(catalog.vocabulary)),
+    identity=(('checkpoint_sha256',catalog.checkpoint_sha256),('category_vocab_sha256',_vocab_sha(catalog.vocabulary)),
         ('category_vocab_size',int(catalog.vocabulary.size)),('feature_masks',tuple((k,getattr(catalog.masks,k))for k in MASK_NAMES)),
         ('source_hash',catalog.source.source_hash))
+    # V2 self_moves joins the identity only when on: off bindings are unchanged; on, a pricer and constructor disagreeing fail closed.
+    return identity+((('self_moves',True),)if getattr(catalog.masks,'self_moves',False)else())
 
 
 def binding(source,metadata,catalog):
@@ -1273,9 +1275,11 @@ def _peer_fold(constructor,request,owner,catalog,functions):
     lines=peer_wire_lines(request['lines'],owner);key=(id(constructor),request.get('battle_id'),owner,request.get('stream_id'))
     held=_PEER_FOLDS.pop(key,None)
     if held is None or held[0]is not constructor or held[2]!=lines[:len(held[2])]:
-        adapter=JaxRecordedAdapter(catalog,owner_side=owner,compiled_functions=functions);adapter.reset(stream_id=1,battle_id='peer-wire');fed=()
-    else:_,adapter,fed=held
-    if len(lines)>len(fed):adapter.feed(lines[len(fed):])
+        adapter=JaxRecordedAdapter(catalog,owner_side=owner,compiled_functions=functions);fed=();fresh=True
+    else:_,adapter,fed=held;fresh=False
+    with adapter.checked_catalog():
+        if fresh:adapter.reset(stream_id=1,battle_id='peer-wire')
+        if len(lines)>len(fed):adapter.feed(lines[len(fed):])
     _PEER_FOLDS[key]=(constructor,adapter,lines)
     while len(_PEER_FOLDS)>PEER_FOLD_CAP:_PEER_FOLDS.pop(next(iter(_PEER_FOLDS)))
     return adapter

@@ -527,4 +527,28 @@ class ServerTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError,'one JSON object per line'):S.read_requests(path)
 
 
+class SelfMovesBuildGuards(unittest.TestCase):
+    def test_shared_constructor_keeps_catalog_and_evaluator_guards_before_executor(self):
+        import jax
+        from gpu_engine import constructor_worlds as cw
+        args = NS(matmul_precision='highest', compilation_cache=None, rung=next(iter(live.RUNGS)))
+        for catalog_on, model_on in ((True, False), (False, True), (False, False)):
+            with self.subTest(catalog_on=catalog_on, model_on=model_on):
+                constructor = NS(catalog=NS(masks=NS(self_moves=catalog_on)), source=object(), metadata={})
+                evaluator = NS(meta={'self_moves': model_on})
+                with (patch.object(S, 'matmul_precision', return_value='highest'),
+                      patch.object(S.atomic_compilation_cache, 'install', return_value=True),
+                      patch.object(jax, 'devices', return_value=[NS(platform='gpu')]),
+                      patch.object(S, 'build_constructor', return_value=constructor) as build,
+                      patch.object(S.evaluators, 'load_from_arguments', return_value=evaluator),
+                      patch.object(cw, 'live_executor', side_effect=RuntimeError('executor reached')) as executor):
+                    if catalog_on or model_on:
+                        with self.assertRaisesRegex(ValueError, 'not threaded yet'):S.build(args)
+                        executor.assert_not_called()
+                    else:
+                        with self.assertRaisesRegex(RuntimeError, 'executor reached'):S.build(args)
+                        executor.assert_called_once_with(constructor.metadata, constructor.catalog)
+                    build.assert_called_once_with(args)
+
+
 if __name__=='__main__':unittest.main()
