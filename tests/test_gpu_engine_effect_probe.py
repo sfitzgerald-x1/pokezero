@@ -170,6 +170,62 @@ class PureTests(unittest.TestCase):
                 self.assertLessEqual(len(probe.enumerate_cases(data)), 16)
 
 
+class TapeV6AdapterTests(unittest.TestCase):
+    def test_suspended_request_keeps_saved_draws_but_uses_fresh_entry_coins(self):
+        from types import SimpleNamespace as NS
+        initial_state=lambda: NS(active=np.zeros((2,2),np.int32),pending_residual=np.zeros(2,bool))
+        class Engine:
+            lanes=2;fields={'effect'};destiny_bond=None;has_effect=True
+            jax=NS(device_get=lambda x:x)
+            def __init__(self):self.calls=[];self.initial=[];self.public_initial=[]
+            def start(self,rows,initial_ties=None):
+                self.initial=initial_ties;return initial_state()
+            def start_public(self,rows,initial_ties=None):
+                self.public_initial=initial_ties;return initial_state(),None
+            def views(self,state):
+                return {k:np.stack([v,v]) for k,v in view().items()},np.stack([MASK,MASK])
+            def advance(self,state,actions,tapes,auxes):
+                self.calls.append(copy.deepcopy((tapes,auxes)))
+                state=NS(active=state.active,pending_residual=np.array([len(self.calls)==1]*2))
+                self.result=NS(state=state,invalid_actions=np.zeros(2,bool),placeholder_moves=np.zeros(2,bool))
+                return self.result
+            def advance_public(self,state,trackers,actions,tapes,auxes):
+                self.public_args=copy.deepcopy((tapes,auxes));return NS(step=self.result,trackers=None)
+        class Showdown:
+            def __init__(self):self.calls=[]
+            def ask(self,**cmd):
+                self.calls.append(copy.deepcopy(cmd))
+                if cmd['cmd']=='prepare':return dict(sets=[],rows=[],vocabulary=VOCAB)
+                if cmd['cmd']=='start':return dict(snapshots=[snapshot()],audit=[],channels=[[[],[]]])
+                return dict(results=[dict(snapshot=snapshot(),audit=[],error=None,ignored=[],channels=[[],[]])])
+        class Device:
+            dev=NS(trees_equal=lambda a,b:True,field_kind=lambda x:x)
+            b2=NS(reset=lambda x:None,feed=lambda x:None,host=lambda:None)
+            def compare(self,scenario,record,*args):record['device']['steps_compared']+=1
+        data=scenario(format=probe.SLEEP_CLAUSE_FORMAT,seed=[1,2,3,4],expect=dict(exact=True),
+            tape={'initial_tie':1,'entry_ties.0':0,'entry_ties.1':1,'effect.0.4':0,'phazing.0':19},
+            tape_steps={'1':{'initial_tie':0,'entry_ties.0':1,'entry_ties.1':0,'effect.0.4':1,'phazing.0':20}})
+        engine=Engine();sd=Showdown()
+        result=probe.run_scenario(data,engine,sd,dict(vocabulary=VOCAB),device=Device())
+        self.assertEqual(result['status_counts'],{'EXACT':1})
+        self.assertEqual(result['device']['status_counts'],{'EXACT':1})
+        self.assertEqual(sd.calls[1]['initial_ties'],[1])
+        self.assertEqual(engine.initial,[1,1]);self.assertEqual(engine.public_initial,[1,1])
+        first,second=engine.calls
+        self.assertEqual(first[0][0]['schema'],'pokezero.gpu_chance_tape.v6')
+        self.assertFalse(first[0][0]['resuming']);self.assertTrue(second[0][0]['resuming'])
+        self.assertEqual(first[0][0]['entry_ties'],[0,1]);self.assertEqual(second[0][0]['entry_ties'],[1,0])
+        self.assertEqual(second[1][0]['entry_ties'],[1,0])
+        self.assertEqual(second[1][0]['initial_tie'],1)
+        for field in ('draws','effect','phazing','secondary','sleep_talk'):
+            self.assertEqual(second[0][0][field],first[0][0][field],field)
+        self.assertEqual(second[0][0]['effect'][0][4],0)
+        self.assertEqual(second[0][0]['phazing'][0],19)
+        self.assertEqual(sd.calls[3]['tapes'],second[0][:1])
+        self.assertEqual(engine.public_args,second)
+        self.assertEqual(second[0][1],second[0][0])  # padded lane keeps the same wire contract
+
+
 def side_view(**mon):
     base = dict(present=True, species='raichu', level=83, fainted=False, hp_percent=100, status='', moves=[('thunderbolt', 1)])
     base.update(mon)
@@ -342,6 +398,18 @@ class DevicePureTests(unittest.TestCase):
         left = {n.strip() for key in device.LEFT_OUT for n in key.split(',')}
         self.assertFalse(left & set(names))
 
+    def test_wire_lines_drop_exactly_the_battle_end_lines(self):
+        # B2 folds per decision and no decision follows a battle end: a stream with |win| or |tie| wires as it does without,
+        # and every other line, including ones that only resemble the two kinds, passes through unchanged
+        step = ['|', '|t:|1763100000', '|move|p1a: Misdreavus|Splash|p1a: Misdreavus', '|-start|p1a: Misdreavus|perish0',
+                '|-start|p2a: Misdreavus|perish0', '|faint|p1a: Misdreavus', '|faint|p2a: Misdreavus']
+        near = [device.TIER_LINE, '|winner|p1', '|tied', '|-message|p1 wins', '|c|p1|tie', '|-hint|win', 'win', '']
+        self.assertEqual(device.wire_lines(step + near), step + near)
+        for end in (['|win|p2'], ['|win|p1'], ['|tie']):
+            with self.subTest(end=end):
+                self.assertEqual(device.wire_lines(step + end), device.wire_lines(step))
+                self.assertEqual(device.wire_lines(step[:3] + end + step[3:]), step)
+
 
 @requires_showdown()
 @unittest.skipUnless(NODE, 'requires node')
@@ -362,8 +430,8 @@ class ShowdownSideTests(unittest.TestCase):
             tie = sd.ask(cmd='start', format=data['format'], seed=data['seed'], cases=1, sets=[mirror, prepared['sets'][1]])
             self.assertIn('INITIAL_RANDOM', {e['kind'] for e in tie['audit']})
             started = sd.ask(cmd='start', format=data['format'], seed=data['seed'], cases=2, sets=prepared['sets'])
-            tape, _ = probe.step_inputs(data, dict(assignment=dict(par=0, full_para=99)), 0)
-            tapes = [dict(schema=probe.TAPE_SCHEMA, nonce=f'test:{i}', **tape) for i in range(2)]
+            tape, aux = probe.step_inputs(data, dict(assignment=dict(par=0, full_para=99)), 0)
+            tapes = [dict(schema=probe.TAPE_SCHEMA, nonce=f'test:{i}', entry_ties=aux['entry_ties'], resuming=False, **tape) for i in range(2)]
             tapes[1]['secondary'] = [99, 99]
             reply = sd.ask(cmd='step', tapes=tapes, choices=[['move 1', 'move 1']] * 2, live=[True, True])
             first, second = reply['results']
@@ -372,6 +440,23 @@ class ShowdownSideTests(unittest.TestCase):
             self.assertIn('secondary', [e['role'] for e in first['audit'] if e['kind'] == 'COUPLED'])
             bad = sd.ask(cmd='step', tapes=tapes, choices=[['move 1', None]] * 2, live=[True, False])
             self.assertIn('SCRIPT_MISSING_CHOICE', bad['results'][0]['error']);self.assertIsNone(bad['results'][1])
+        finally:
+            sd.close()
+
+    def test_initial_tie_bits_are_per_case_and_malformed_inputs_rejected(self):
+        sd=probe.Showdown(NODE,showdown_root())
+        try:
+            lead=lambda species,ability:dict(species=species,ability=ability,moves=['splash'],level=100)
+            bench=[lead('Snorlax','Thick Fat') for _ in range(5)]
+            prepared=sd.ask(cmd='prepare',teams=[[lead('Groudon','Drought'),*bench],[lead('Kyogre','Drizzle'),*bench]])
+            start=dict(cmd='start',format=probe.SLEEP_CLAUSE_FORMAT,seed=[1,2,3,4],cases=2,sets=prepared['sets'])
+            reply=sd.ask(**start,initial_ties=[0,1])
+            coupled=[e['raw'] for e in reply['audit'] if e['kind']=='COUPLED_INITIAL']
+            self.assertEqual(coupled,[0,1])
+            self.assertFalse(any(e['kind'] in ('INITIAL_RANDOM','UNRESOLVED') for e in reply['audit']))
+            for bad in ([0],[0,2],[True,0],['0',1]):
+                with self.subTest(bad=bad),self.assertRaisesRegex(RuntimeError,'initial tie bit'):
+                    sd.ask(**start,initial_ties=bad)
         finally:
             sd.close()
 
@@ -387,8 +472,8 @@ class ShowdownSideTests(unittest.TestCase):
             mine = [x for x in p1 if x.startswith('|switch|p1a:')];theirs = [x for x in p2 if x.startswith('|switch|p1a:')]
             self.assertNotEqual(mine[0].rsplit('|', 1)[1], '100/100')            # p1's own exact HP (the split's secret)
             self.assertTrue(theirs[0].endswith('|100/100'))                     # HP Percentage Mod's shared percent
-            tape, _ = probe.step_inputs(data, dict(assignment=dict(par=0, full_para=99)), 0)
-            reply = sd.ask(cmd='step', tapes=[dict(schema=probe.TAPE_SCHEMA, nonce='t:0', **tape)], choices=[['move 1', 'move 1']],
+            tape, aux = probe.step_inputs(data, dict(assignment=dict(par=0, full_para=99)), 0)
+            reply = sd.ask(cmd='step', tapes=[dict(schema=probe.TAPE_SCHEMA, nonce='t:0', entry_ties=aux['entry_ties'], resuming=False, **tape)], choices=[['move 1', 'move 1']],
                            live=[True])
             p1, p2 = reply['results'][0]['channels']
             self.assertIn('|turn|2', p1);self.assertNotIn('|turn|1', p1)          # only the step's new lines

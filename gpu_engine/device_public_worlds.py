@@ -46,6 +46,10 @@ OWN_SIDE_FIELDS = (
     'active', 'last_action_kind', 'last_action_index', 'entry_pending',
     'active_turns', 'trapped', 'forced_switch', 'baton_pass', 'wish_counter',
     'wish_amount',
+    # Transform's per-side leaves (gpu_engine/state.py): our active's flag, donor species and the revert's saves. The
+    # copy's hidden donor facts are rebuilt per world (device_public_world_state), never carried from the actual root.
+    'transformed', 'transform_species', 'transform_stats', 'transform_moves', 'transform_pp',
+    'transform_hidden_power',
 )
 
 

@@ -118,7 +118,9 @@ class EntrySpikesComponentTests(unittest.TestCase):
    a=next(n for n in old.body if isinstance(n,ast.FunctionDef)and n.name==name);b=next(n for n in new.body if isinstance(n,ast.FunctionDef)and n.name==name)
    if name=='depart':
     b=ordinary.strip_infatuation_departure(deepcopy(b),required=True)
-    b=ordinary.strip_m2_volatiles(ordinary.strip_m1_recharge(b,required=True),required=True)     # exact approved departure clears only
+    b=ordinary.strip_transform_depart(b,required=True)
+    b=ordinary.strip_m2_volatiles(ordinary.strip_m1_recharge(b,required=True),required=True)     # exact approved departure changes only
+   if name=='enter':b=ordinary.strip_transform_enter(deepcopy(b),required=True)
    self.assertEqual(dump_default_program(a),dump_default_program(b))
   a=next(n for n in old.body if isinstance(n,ast.FunctionDef)and n.name=='from_metadata');b=next(n for n in new.body if isinstance(n,ast.FunctionDef)and n.name=='from_metadata')
   self.assertEqual([ast.dump(x)for x in a.body[-1].value.args],[ast.dump(x)for x in b.body[-1].value.args[:-3]])

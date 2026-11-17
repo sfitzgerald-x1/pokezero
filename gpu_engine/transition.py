@@ -41,6 +41,7 @@ from . import encore as repeating
 from . import solar_beam as charging
 from . import focus_punch as focusing
 from . import infatuation
+from . import transform as shift
 from .effects import MoveEffects, from_metadata as effects_from_metadata, stall_success, cure_team, weather_healing
 from .state import FLINCH, FOCUS_PUNCH, FOCUS_LOST, BattleState, bench_indices, empty_state, legal_actions, usable_moves
 from .state import DESTINY_BOND, ATTRACT
@@ -79,6 +80,7 @@ class MoveTable(NamedTuple):
     solar_beam: charging.SolarTable | None = None
     public_port: object = None
     infatuation: infatuation.InfatuationTable | None = None
+    transform: shift.TransformTable | None = None
 
 
 def tables_from_metadata(metadata: dict) -> MoveTable:
@@ -114,7 +116,7 @@ def tables_from_metadata(metadata: dict) -> MoveTable:
         dragging.from_metadata(metadata),linking.from_metadata(metadata),crits.from_metadata(metadata),
         secondaries.from_metadata(metadata),talking.from_metadata(metadata),exploding.from_metadata(metadata),
         repeating.from_metadata(metadata),focusing.from_metadata(metadata),charging.from_metadata(metadata),public_port.compile_tables(metadata),
-        infatuation.from_metadata(metadata))
+        infatuation=infatuation.from_metadata(metadata),transform=shift.from_metadata(metadata))
 
 
 def state_from_pool(pool, team_indices, *, seed=0, table=None) -> BattleState:
@@ -683,6 +685,17 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                 device_public.reveal_ability(_device_public,work,1-side,(used & intercepts.wonder_guard_blocked(work,side,moves[:,side],table))
                     | _contact_reveals[0])
                 device_public.reveal_ability(_device_public,work,side,_contact_reveals[1])
+            # BUG F (damage credit): the intercept's |-damage|, after its |move|...|[from] Pursuit line, is an untagged hit in the
+            # pursuer's move window: B2 credits it to the pursuer's dealt sums (public_damage.apply) and the switching target's
+            # taken, as the ordinary hit's damage/negative_hp_line/observe triple does below. A Substitute takes the hit with no
+            # -damage line, so the target's HP drop is the credit (0 there).
+            if _device_public is not None:
+                _pursuit_dealt=_active(_device_pursuit_before.hp,_device_pursuit_before,1-side)-_active(work.hp,work,1-side)
+                device_public.damage(_device_public,work,side,_pursuit_dealt,_pursuit_dealt,used)
+                device_public.negative_hp_line(_device_public,work,1-side,used & (_pursuit_dealt>0),
+                    source_class=device_public.negative_items.HP_ACTION)
+                device_public.observe(_device_public,work,used)
+            # END BUG F (damage credit)
             if _lifecycle_trace:
                 _public_trace=status_callbacks.unknown(_public_trace,used)
             if _lifecycle_trace:work,_public_trace=_lum_update(work,table,used,_public_trace,_device_public=_device_public)
@@ -700,7 +713,12 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                 device_public.volatile(_device_public,work,side,'destinybond',jnp.zeros_like(used),used)
             work=_clear_fainted_boosts(work,_faint_before_hp,eligible=used)
             if _device_public is not None:
-                device_public.move(_device_public,work,side,moves[:,side],used,pp_use=True)
+                # BUG F (last move): the intercept's move line carries [from] Pursuit; the device copies B2 (from_tag: no last
+                # move, Choice lock or Truant anchor), and B2's STALL_ATTEMPT 0 on that line (a non-stall move) breaks the
+                # public stall counter, which the ordinary move path below resets for a non-stall move too.
+                device_public.move(_device_public,work,side,moves[:,side],used,pp_use=True,from_tag=True)
+                device_public.feature(_device_public,side,work.active[:,side],'stall_counter',jnp.zeros_like(used,jnp.int32),used)
+                # END BUG F (last move)
                 device_public.port_count(_device_public,side,used,'pursuit')
                 device_public.item_changes(_device_public,_device_pursuit_before,work,used)
             pursuit_used = pursuit_used.at[:,side].set(used)
@@ -951,18 +969,24 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                 _active(work.item,work,side),_active(work.species,work,side),jnp.ones_like(eligible))
         guts = jnp.zeros_like(eligible)
         hustle = jnp.zeros_like(eligible)
+        confusion_defense_num,confusion_defense_den = (1,1)
         if table.combat is not None:
             ability = _active(work.ability,work,side)
             guts = table.combat.guts[ability]
             hustle = table.combat.hustle[ability]
             confusion_num,confusion_den = traits.attack_modifier(table.combat,ability,
                 _active(work.status,work,side),True,item_num=confusion_num,item_den=confusion_den)
+            # Damage modifiers: the self-hit is getDamage(pokemon, pokemon, 40), so a statused Marvel Scale holder's own
+            # ModifyDef applies (combat.defense_modifier); the typeless move takes no type item.
+            confusion_defense_num,confusion_defense_den = traits.defense_modifier(table.combat,ability,
+                _active(work.status,work,side),True)
         confusion_damage = m.gen3_damage(level=_active(work.level, work, side), power=40,
             attack=own_stats[:, 1], defense=own_stats[:, 2],
             attack_stage=own_boosts[:, 0], defense_stage=own_boosts[:, 1],
             typeless=True, burned=_active(work.status, work, side) == m.BRN,
             guts=guts,hustle=hustle,
             attack_num=confusion_num,attack_den=confusion_den,
+            defense_num=confusion_defense_num,defense_den=confusion_defense_den,
             roll=85 + chance[:, 5])
         hp = _active(work.hp, work, side)
         if _lifecycle_trace:
@@ -1016,6 +1040,10 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
             move=jnp.where(sleep_usable,called,move)
             acts &= ~sleep_usable | executes
             placeholders += (acts & sleep_usable).astype(jnp.int32)
+        # BUG G: Gen 3 useMoveInner prints the called move's |move|...|[from] Sleep Talk line right after ModifyMove
+        # (data/mods/gen3/scripts.ts:120-165), before its own TryMove/Try gates: Counter's onTry, Damp's TryMove and the like
+        # fail it only after the line, so the reveal is decided here, ahead of those gates (B2 reveals it, 0 PP charged).
+        _called_line=acts & (move!=caller_move)
         explodes=jnp.zeros_like(acts)
         if table.focus_punch is not None:
             acts &= ~focusing.failed(work,side,move,table.focus_punch)
@@ -1042,7 +1070,7 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
             acts &= ~blocked
             explodes=acts & table.self_destruct.move[move]
         if _device_public is not None:
-            device_public.move(_device_public,work,side,move,acts & (move!=caller_move),pp_use=False,count_turn=False)
+            device_public.move(_device_public,work,side,move,_called_line,pp_use=False,count_turn=False)
         if _lifecycle_trace:
             from . import engine_self_move_callbacks as self_move_callbacks
             _self_move_context=_direct_hit_context if _direct_hit_context is not None and _direct_hit_registered else None
@@ -1087,20 +1115,27 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
             _facade_power=power
             power=variable.facade_power(table.variable_moves,move,power,_active(work.status,work,side))
             if _lifecycle_trace:_public_trace=status_callbacks.unknown(_public_trace,acts & (power!=_facade_power))
+        # Struggle's ??? (gen4 struggle onModifyMove) is resolved before the stat events: no type item matches it.
+        is_struggle = move == table.struggle
+        typ = jnp.where(is_struggle, 0, typ)
         attack_num,attack_den = (1,1)
         if table.items is not None:
+            # Damage modifiers: Silk Scarf's Atk factor reads the resolved type (items.attack_modifier).
             attack_num,attack_den = held.attack_modifier(table.items,
-                _active(work.item,work,side),_active(work.species,work,side),physical)
+                _active(work.item,work,side),_active(work.species,work,side),physical,move_type=typ)
         defense_num,defense_den = (1,1)
         if table.items is not None:
             defense_num,defense_den = held.defense_modifier(table.items,
                 _active(work.item,work,foe),_active(work.species,work,foe),physical)
         if table.combat is not None:
             hustle = table.combat.hustle[_active(work.ability,work,side)]
+            # Damage modifiers: the ability and item chain in Q12; Gen 3's Plus/Minus read the foe active (combat.attack_modifier).
             attack_num,attack_den = traits.attack_modifier(table.combat,_active(work.ability,work,side),
-                _active(work.status,work,side),physical,item_num=attack_num,item_den=attack_den)
-        is_struggle = move == table.struggle
-        typ = jnp.where(is_struggle, 0, typ)
+                _active(work.status,work,side),physical,item_num=attack_num,item_den=attack_den,
+                foe_ability=_active(work.ability,work,foe),foe_hp=_active(work.hp,work,foe))
+            # Damage modifiers: the target's Marvel Scale (combat.defense_modifier), chained after its item's Def/SpD factor.
+            defense_num,defense_den = traits.defense_modifier(table.combat,_active(work.ability,work,foe),
+                _active(work.status,work,foe),physical,item_num=defense_num,item_den=defense_den)
         own_types = _active(work.types, work, side)
         foe_types = _active(work.types, work, foe)
         num = table.type_num[typ, foe_types[:, 0]] * table.type_num[typ, foe_types[:, 1]]
@@ -1137,7 +1172,9 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                     _active(work.ability,work,side),typ,_active(work.hp,work,side),_active(work.max_hp,work,side)))
         critical = chance[:,4] == 0
         if table.critical is not None:
-            critical = crits.is_critical(table.critical,move,_active(work.ability,work,foe),chance[:,4])
+            # Stick: the attacker's ModifyCritRatio +2 when a Farfetch'd holds it (critical.ratio; 1/4 is roll < 4).
+            critical = crits.is_critical(table.critical,move,_active(work.ability,work,foe),chance[:,4],
+                item=_active(work.item,work,side),species=_active(work.species,work,side))
         damage = m.gen3_damage(level=_active(work.level, work, side), power=power,
             attack=jnp.where(physical, attack_stats[:, 1], attack_stats[:, 3]),
             defense=jnp.where(physical, defense_stats[:, 2], defense_stats[:, 4]),
@@ -1167,7 +1204,8 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
         _effect=effect_draws[rows,side]
         critical2=_effect[:,0]==0
         if table.critical is not None:
-            critical2=crits.is_critical(table.critical,move,_active(work.ability,work,foe),_effect[:,0])
+            critical2=crits.is_critical(table.critical,move,_active(work.ability,work,foe),_effect[:,0],
+                item=_active(work.item,work,side),species=_active(work.species,work,side))
         damage2=m.gen3_damage(level=_active(work.level, work, side), power=power,
             attack=jnp.where(physical, attack_stats[:, 1], attack_stats[:, 3]),
             defense=jnp.where(physical, defense_stats[:, 2], defense_stats[:, 4]),
@@ -1755,6 +1793,17 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                 if _device_public is not None:
                     device_public.trick(_device_public,_device_trick_before,_trick_swapped,side,_trick,table.items.choice_band,
                         herb_used=_herb)
+            if table.transform is not None:
+                # Transform (data/moves.ts transform, sim/pokemon.ts transformInto; gpu_engine/transform.py): accuracy true and
+                # no protect flag, so `hit` holds; bypasssub, so no Substitute gate; a Status move ignores type immunity. `move`
+                # is the post-Sleep-Talk move, so a called Transform is covered. PP (Pressure included) was paid above, before
+                # the saves; the Choice lock site below locks on `transform`, as Showdown does.
+                _transform_used=acts & hit & table.transform.move[move]
+                if _device_public is not None:_device_transform_before=work
+                work,_transform_copied=shift.apply(work,side,_transform_used,table.transform)
+                if _lifecycle_trace:_public_trace=status_callbacks.unknown(_public_trace,_transform_used)
+                if _device_public is not None:
+                    device_public.transform(_device_public,_device_transform_before,work,side,_transform_copied)
             # Charm's primary boosts (moveHit after TryHit): Protect is already in `hit`; a
             # Substitute fails it (TryPrimaryHit); status moves ignore type immunity
             # (tryMoveHit sets ignoreImmunity for Status). The drop is capped first, then
@@ -2233,6 +2282,14 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
         # All move effects, including self-KO/recoil and forced-entry hazards,
         # finish before the original runAction faint queue is processed.
         work=_clear_fainted_boosts(work,_faint_before_hp,eligible=live & move_context)
+        if table.transform is not None and table.effects is not None:
+            # Gen < 5 eachEvent('Update') after the action (sim/battle.ts:2938): a copied curing ability or Own Tempo acts now.
+            work,_transform_cured,_transform_unconfused=shift.update_cure(work,side,_transform_copied,table.entry)
+            if _lifecycle_trace:_public_trace=status_callbacks.unknown(_public_trace,_transform_cured|_transform_unconfused)
+            if _device_public is not None:
+                # -activate|X|ability: ... (B2 ignores a transformed mon's ability claim), then -curestatus or -end confusion.
+                device_public.observe(_device_public,work,_transform_cured)
+                device_public.confusion_end(_device_public,work,side,_transform_unconfused)
     # Gen 3 action-phase faints request replacement BEFORE the residual action.
     # A KO cancels queued moves; direct Baton retains at most one selected foe
     # move. Both pause residuals, including hazard-KO recovery chains.
@@ -2688,6 +2745,10 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
     # prints perish0 and faints the holder (faint() queues it), else -start|X|perishN. A fainted holder is skipped. The end
     # path runs no faintMessages before the next handler (sim/battle.ts:515-523), so both holders resolve even when the
     # first faint empties a side (Gen 3 checkWin with both sides empty is a tie): the pass is gated once, at its start.
+    if _device_public is not None:
+        # BUG F1 (snapshot): each active alive at the Perish pass's start and its perish counter (_perish_upkeep_line).
+        _upkeep_alive=work.hp[rows[:,None],sides,work.active]>0
+        _upkeep_count=work.perish_counter[rows[:,None],sides,work.active]
     _perish_continues=residual_ready & jnp.all(jnp.any(work.hp>0,axis=2),axis=1)
     _perish_first=jnp.where(end_speed[:,0]!=end_speed[:,1],(end_speed[:,1]>end_speed[:,0]).astype(jnp.int32),effect_draws[:,1,3])
     for order in range(2):
@@ -2702,6 +2763,10 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
         # perish0 then faint: a faint line, no -damage (as Destiny Bond's and Self-Destruct's faints).
         if _device_public is not None:device_public.observe(_device_public,work,_perish_faint,record_damage=False)
         work=_clear_fainted_boosts(work,_faint_before_hp,eligible=_perish_continues)
+    if _device_public is not None:
+        # BUG F1: a battle ended by the Perish pass's queued faints still prints |upkeep (unless a later handler's
+        # faintMessages ends it first), so the device's upkeep is "the residual printed |upkeep", not residual_ready & ~done.
+        _upkeep_perish_end,_upkeep_living=_perish_upkeep_line(work,table,_perish_continues,_perish_first,_upkeep_alive,_upkeep_count)
     # Fidelity WH: White Herb's onResidual (order 29, after every Gen 3 handler above; data/items.ts:7697-7700). fieldEvent
     # skips a fainted holder and stops once the battle has ended (sim/battle.ts:510-514, 565-566). An equal-Speed pair is
     # inert (each restore touches only its own holder). Reached in Gen 3 when an Intimidate switch-in's drop met no later
@@ -2737,6 +2802,9 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
     # until that target's next residual tick releases it silently (data/mods/gen5/conditions.ts:14-20).
     work=work._replace(**{name:jnp.where(work.hp>0,getattr(work,name),0) for name in ("perish_counter","yawn_counter","partial_trap_counter")},
         partial_trap_source=jnp.where(work.hp>0,work.partial_trap_source,-1))
+    # Transform: and the copy of a transformed active (transform.faint_revert, gated on the flag), so the replacement's
+    # outgoing Speed (_speeds) and every step boundary see its original, as in Showdown.
+    if table.transform is not None:work=shift.faint_revert(work)
     alive = jnp.any(work.hp > 0, axis=2)
     done = ~jnp.all(alive, axis=1)
     winner = jnp.where(alive[:, 0], 0, jnp.where(alive[:, 1], 1, 2))
@@ -2792,10 +2860,13 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
         _end_turn=~work.done & ~work.pending_residual & ~jnp.any(work.forced_switch,axis=1)
         work=work._replace(choice_move=jnp.where(_end_turn[:,None,None] & ~table.items.choice_band[work.item],
             0,work.choice_move))
+    if table.transform is not None:
+        # The same DisableMove drops a transformed holder's lock on a move it no longer has (transform.choice_unlock).
+        work=shift.choice_unlock(work,~work.done & ~work.pending_residual & ~jnp.any(work.forced_switch,axis=1))
     work = jax.tree.map(lambda old, new: jnp.where(live.reshape((-1,) + (1,) * (old.ndim - 1)), new, old), state, work)
     if _device_public is not None:
-        device_public.turn_end(_device_public,state,work,ordinary,upkeep=residual_ready & ~work.done,
-            leftovers=None if table.items is None else table.items.leftovers)
+        device_public.turn_end(_device_public,state,work,ordinary,upkeep=residual_ready & (~work.done | _upkeep_perish_end),
+            leftovers=None if table.items is None else table.items.leftovers,residual=residual_ready,upkeep_living=_upkeep_living)
     result = StepResult(work, invalid, placeholders)
     if _device_public is not None:return device_public.PublicStepResult(result,_device_public.trackers)
     if _lifecycle_trace:
@@ -2818,3 +2889,43 @@ def step_with_public(state,actions,table,trackers,*,belief_tables=None,chance_in
     context=device_public.Context(trackers,belief_tables,port_tables=getattr(table,'public_port',None))
     chance=sample_chance_inputs(state) if chance_inputs is None else chance_inputs
     return step_with_chance(state,actions,table,chance,_device_public=context)
+
+
+def _perish_upkeep_line(state,table,perish_continues,perish_first,alive,count):
+    """BUG F1: (ended [B], living [B,2]). ended: the lanes on which a battle ended by Perish Song's end path still prints
+    |upkeep. living: each side's Perish faint whose |faint| line follows |upkeep (runAction's faintMessages, sim/battle.ts:2856):
+    B2's non-proc sweep at |upkeep still sees that mon alive (engine_device_negative_items.upkeep's `living`).
+
+    Showdown's residual prints |upkeep after fieldEvent('Residual') unless the battle has ended (`if (!this.ended)
+    this.add('upkeep')`, sim/battle.ts:2838). The battle ends at a checkWin, which runs only in faintMessages: a handler
+    callback's faintMessages (sim/battle.ts:565-566; a damaging residual's KO, so no |upkeep), or runAction's after the
+    residual (2856). Perish Song's count reaching 0 takes the duration end path (515-520): its condition's onEnd prints perish0
+    and only queues the faint (data/moves.ts:13262-13264; Gen 4's mod, inherited by Gen 3, only sets onResidualOrder 12,
+    data/mods/gen4/moves.ts:993-999), and the path skips faintMessages. So a battle ended by Perish faints
+    prints |upkeep before its |faint| lines, unless a later handler of the same Residual event reaches the loop's
+    faintMessages first. Handlers are collected at the event's start and only a `.fainted` holder is skipped; a queued
+    faint is not yet `.fainted`. Showdown runs that first later handler's own callback before its faintMessages ends the
+    battle; the engine gates White Herb, the Truant flip and the recharge tick on the battle continuing, so it skips it,
+    which is inert: a done state is never expanded or encoded. The Gen 3 handlers after Perish Song's order 12 that the
+    engine models:
+    - the other holder's Perish tick (count >= 2, a callback) after the first holder's end path (Speed order, perish_first);
+    - Truant's onResidual (order 27, data/mods/gen3/abilities.ts:197-213) and White Herb's (order 29, data/items.ts);
+    - the duration-only volatiles (order false, last) that do not end at this tick: stall (duration 2, set by a successful
+      Protect/Detect/Endure this turn: protect_counter > 0), mustrecharge at duration 2 (recharge_counter == 2) and
+      twoturnmove on Solar Beam's charge turn (charge_counter == 2; data/conditions.ts).
+    Not modelled by the engine, so not here: the other order-false duration volatiles (lockedmove, Lock-On, Charge, Bide,
+    Gen 3 Disable, Rollout, Fury Cutter).
+
+    state: the step's state right after the Perish pass (items, abilities and counters before White Herb, the recharge tick
+    and Solar Beam's residual). alive [B,2]: each active alive when the pass started (not fainted earlier, so its handlers
+    run); count [B,2]: their perish counters then."""
+    rows=jnp.arange(state.hp.shape[0]);first=jnp.asarray(perish_first,jnp.int32)
+    holder=perish_continues[:,None] & alive & (count>0)
+    later=(holder & (count==1))[rows,first] & (holder & (count>1))[rows,1-first]
+    pick=lambda value:value[rows[:,None],jnp.arange(2)[None,:],state.active]
+    handlers=(pick(state.protect_counter)>0) | (pick(state.recharge_counter)==2) | (pick(state.charge_counter)==2)
+    if table.entry is not None and table.entry.truant is not None:handlers |= table.entry.truant[pick(state.ability)]
+    if table.items is not None:handlers |= table.items.white_herb[pick(state.item)]
+    later |= jnp.any(alive & handlers,axis=1)
+    ended=perish_continues & ~jnp.all(jnp.any(state.hp>0,axis=2),axis=1)
+    return ended & ~later,holder & (count==1) & ~later[:,None]

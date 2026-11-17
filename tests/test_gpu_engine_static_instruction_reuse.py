@@ -179,7 +179,7 @@ class StaticInstructionReuseTests(unittest.TestCase):
             return ast.dump(tree,include_attributes=False)
         # The reviewed witness body is integration 11ce1be7's (M2's 7476bce7 moved ENCORE's cutpoints from 12 to 16).
         self.assertEqual(without_pins((root/path).read_text()),without_pins(subprocess.check_output(['git','show','11ce1be7:'+path],cwd=root,text=True)))
-        self.assertEqual(len(witness.SOURCE_PINS),90)   # 88, and residual_order.py since §6
+        self.assertEqual(len(witness.SOURCE_PINS),91)   # 88, residual_order.py since §6, and infatuation.py/transform.py for both features
 
 
 if __name__ == '__main__':

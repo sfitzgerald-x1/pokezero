@@ -17,9 +17,9 @@ from .fidelity_panel import WholeSlotUnknown, table_snapshot
 from .finite_law import Axis, Case, COORDINATES, Observation, Plan
 
 
-KERNEL_MODULES = tuple("action_history absorption baton combat critical damage_moves effects encore entry focus_punch infatuation items linked_traps mechanics phazing pressure pursuit residual_order secondary self_destruct sleep_talk solar_beam state sustain transition variable_moves weather".split())
-KERNEL_SHA256 = 'b86e7d879e4cbe949e00718e9dfff9d0143ef33621c05bf6dcc64eb943825abf'
-MAPPING_PINS = {'conditioned_future.py': '6aaff1975525bd64178db5c78a938e61ac78a785a9dedbaf5936b017cdd33b43', 'fidelity_panel.py': '728c1d14c3cc5e95de63d6d3770d143263d58c0d5d7dec8a444b64c5b829099f', 'finite_law.py': '14aabd57a444e7297485f648dfb2ae2bb7bad607964683828870f5cc4d07a3bd', 'future_state.py': '3cd944e7cb4d2c3efa47bdc32f410204443251bffe9ad24c8cc12d1b590ce804'}
+KERNEL_MODULES = tuple("absorption action_history baton combat critical damage_moves effects encore entry focus_punch infatuation items linked_traps mechanics phazing pressure pursuit residual_order secondary self_destruct sleep_talk solar_beam state sustain transform transition variable_moves weather".split())
+KERNEL_SHA256 = 'af6097a58785f222be8e4569ac0efe114c504e58d2add4de5581ca21e394d2f9'
+MAPPING_PINS = {'conditioned_future.py': '6aaff1975525bd64178db5c78a938e61ac78a785a9dedbaf5936b017cdd33b43', 'fidelity_panel.py': '728c1d14c3cc5e95de63d6d3770d143263d58c0d5d7dec8a444b64c5b829099f', 'finite_law.py': '14aabd57a444e7297485f648dfb2ae2bb7bad607964683828870f5cc4d07a3bd', 'future_state.py': 'a0b0da922c5d03fcab83ffcdd008d0563b398256530724d065984b9d1a7cf416'}
 
 
 def _source_certificate():
@@ -49,7 +49,7 @@ def _law():
             axes.append(Axis(name, (Observation("identity"),),
                 ("transition.step_with_chance: resumed switch installation/runSwitch ordering",)))
         elif name.startswith("effect."):
-            # §6: the resumed step reads the saved block, never this fresh coordinate (transition.py:580-582,
+            # §6: the resumed step reads the saved block, never this fresh coordinate (transition.py:583-585,
             # effect_draws=jnp.where(resuming,state.effect_draws,..)). The block is bound with the root's raw input
             # and joins every suspended successor's key (conditioned_future.SAVED_BLOCK).
             axes.append(Axis(name, (), inactive_reason="A legal live pending-residual request replays its saved "
