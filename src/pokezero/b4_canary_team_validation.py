@@ -6,6 +6,9 @@ unused rows. Team identity ignores seed, member/move/type ordering and numeric
 vocabulary IDs. Gender is assigned separately by the bound gender policy.
 """
 import hashlib
+import io
+import json
+from pathlib import Path
 
 from .b4_fidelity_canary import encoded, require
 
@@ -17,16 +20,21 @@ REFERENCE_ROLES = frozenset(('r1', 'r2', 'training', 'holdout'))
 
 def team_hashes(record):
     """Yield canonical team hashes from one verified immutable pool snapshot."""
-    from gpu_engine import source_provenance, team_pool
-    pool = source_provenance.load_constructor_pool(record['path'])
-    receipt = source_provenance._pool(pool, rehash=True)
-    require(receipt['pool_sha256'] == record['sha256'], 'team bank digest differs')
-    arrays = pool.arrays
-    vocabulary = pool.metadata()['vocabulary']
+    import numpy as np
+    from gpu_engine import team_pool
+    # The engine's constructor loader drops IVs; compare the full stored team
+    # definition from the exact digest-bound byte snapshot instead.
+    payload = Path(record['path']).read_bytes()
+    require(hashlib.sha256(payload).hexdigest() == record['sha256'], 'team bank digest differs')
+    with np.load(io.BytesIO(payload), allow_pickle=False) as archive:
+        vocabulary = json.loads(archive['metadata_utf8'].tobytes())['vocabulary']
+        arrays = {name: archive[name] for name in team_pool.FIELDS}
+    del payload
     count = len(arrays['species'])
     require(count > 0, 'empty team bank')
     for name, (shape, _) in team_pool.FIELDS.items():
-        require(arrays[name].shape == (count, *shape), 'team bank shape: ' + name)
+        require(arrays[name].dtype.kind in 'iu' and arrays[name].shape == (count, *shape),
+                'team bank integer shape: ' + name)
     for i in range(count):
         members = []
         for slot in range(6):
