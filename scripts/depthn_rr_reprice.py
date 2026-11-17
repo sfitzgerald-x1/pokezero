@@ -280,18 +280,29 @@ def accepted_tree_guard(root, head, commit, *, run=git):
         live_trees=dict(LIVE_TREES), differs_from_live=[p for p in LIVE_TREES if trees[p] != LIVE_TREES[p]], note=MODIFIED_TREE)
 
 
+SEARCH_STAGES = ('_search', '_prepare', '_prepare_items', '_price', '_decide_root')   # DepthNLiveSearch._search and its stages
+
+
+def search_stages():
+    """The live search's batch path: _search and the stage methods it runs (the ones this tree has)."""
+    return tuple(getattr(live.DepthNLiveSearch, name) for name in SEARCH_STAGES if hasattr(live.DepthNLiveSearch, name))
+
+
 def check_call_sites(function=None):
-    """True when `function` (DepthNLiveSearch._search) reads `decide` as a global of depthn_live_search and `prepare_roots` and
-    `price` as attributes of the global `cw` at call time, so the wrappers take effect; RuntimeError otherwise."""
-    function = live.DepthNLiveSearch._search if function is None else function
-    found = {'decide': False, 'prepare_roots': False, 'price': False};previous = None
-    for instruction in dis.get_instructions(function):
-        if instruction.opname == 'LOAD_GLOBAL' and instruction.argval == 'decide':found['decide'] = True
-        for name in ('prepare_roots', 'price'):
-            if (instruction.opname in ('LOAD_ATTR', 'LOAD_METHOD') and instruction.argval == name and previous is not None
-                    and previous.opname == 'LOAD_GLOBAL' and previous.argval == 'cw'):found[name] = True
-        previous = instruction
-    if not all(found.values()) or function.__globals__ is not vars(live) or live.cw is not cw:
+    """True when the live search's batch path (search_stages(); or `function`, one function or a tuple of them) reads `decide`
+    as a global of depthn_live_search and `prepare_roots` and `price` as attributes of the global `cw` at call time, so the
+    wrappers take effect; RuntimeError otherwise."""
+    functions = search_stages() if function is None else function if isinstance(function, tuple) else (function,)
+    found = {'decide': False, 'prepare_roots': False, 'price': False}
+    for function in functions:
+        previous = None
+        for instruction in dis.get_instructions(function):
+            if instruction.opname == 'LOAD_GLOBAL' and instruction.argval == 'decide':found['decide'] = True
+            for name in ('prepare_roots', 'price'):
+                if (instruction.opname in ('LOAD_ATTR', 'LOAD_METHOD') and instruction.argval == name and previous is not None
+                        and previous.opname == 'LOAD_GLOBAL' and previous.argval == 'cw'):found[name] = True
+            previous = instruction
+    if not all(found.values()) or any(f.__globals__ is not vars(live) for f in functions) or live.cw is not cw:
         raise RuntimeError(f'the search does not look decide / cw.prepare_roots / cw.price up through their modules at call time: {found}')
     return True
 

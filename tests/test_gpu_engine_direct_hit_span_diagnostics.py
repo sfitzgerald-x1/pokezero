@@ -12,6 +12,8 @@ from gpu_engine import engine_direct_hit_controls as direct,engine_execution_com
 from gpu_engine import engine_lifecycle_callbacks as life,engine_public_events as public,engine_outcome_diagnostics as d
 import test_gpu_engine_outcome_diagnostics as fixture
 BASE='de4180168925e163cb87d3220d58975086f8e96f'
+# Tier D changes combat abilities and Pursuit's Wonder Guard/contact reveals.
+TIER_D_SOURCE='6caf071b2b01a176686c9f0f383c8316defb8a77'
 def old_functions(module,path):
  ns=dict(vars(module));tree=ast.parse(subprocess.check_output(['git','show','b8092a85:'+path],text=True))
  for n in tree.body:
@@ -122,12 +124,15 @@ class DirectSpanDiagnosticTests(unittest.TestCase):
     self.assertEqual(ast.dump(b[name]),ast.dump(a[name]),name)
     self.assertEqual(ast.dump(Strip().visit(deepcopy(b[name]))if name in owned else b[name]),ast.dump(Strip().visit(deepcopy(a[name]))if name in owned else a[name]),name)
   # transition.py is certified against CURRENT_TRANSITION (full AST plus mutations) by terminal_closeout and seismic_toss_components.
-  # baton, damage_moves, effects, entry, items, secondary, state, sustain and variable_moves changed in reviewed tiers since
-  # b8092a85 and are byte-certified against the witness SOURCE_PINS (witness._source() below, transition_observer_wiring).
-  physical='action_history absorption combat critical encore focus_punch linked_traps mechanics phazing pressure pursuit self_destruct sleep_talk solar_beam weather'.split()
+  # These reviewed physical modules changed since b8092a85 and are byte-certified against the witness SOURCE_PINS
+  # (witness._source() below, transition_observer_wiring), including tier D's combat/Pursuit and Stick's critical changes.
+  physical='action_history absorption encore focus_punch linked_traps mechanics phazing pressure self_destruct sleep_talk solar_beam weather'.split()
   for name in physical+['engine_retained_encoder_driver','engine_kernel_frame_risk','engine_full_v4_event_device','engine_lifecycle_event_device','benchmark_capture_gap_census']:
-   path='gpu_engine/'+name+'.py';self.assertEqual(Path(path).read_bytes(),subprocess.check_output(['git','show','b8092a85:'+path]))
+   ref=TIER_D_SOURCE if name in ('combat','pursuit') else 'b8092a85'
+   path='gpu_engine/'+name+'.py';self.assertEqual(Path(path).read_bytes(),subprocess.check_output(['git','show',ref+':'+path]))
   from gpu_engine import engine_source_frame_witness as witness
+  reviewed='baton combat critical damage_moves effects entry items pursuit secondary state sustain variable_moves'.split()
+  for name in reviewed:self.assertIn(name+'.py',witness.SOURCE_PINS)
   witness._source()
   for names in [('gpu_engine.benchmark_retained_games','gpu_engine.engine_outcome_diagnostics','gpu_engine.engine_full_v4_event_device'),('gpu_engine.engine_full_v4_event_device','gpu_engine.engine_outcome_diagnostics','gpu_engine.benchmark_retained_games')]:
    r=subprocess.run([sys.executable,'-B','-c','import importlib;'+''.join('importlib.import_module('+repr(n)+');'for n in names)],env=dict(os.environ,PYTHONDONTWRITEBYTECODE='1'),capture_output=True,text=True,timeout=30);self.assertEqual(r.returncode,0,r.stderr)

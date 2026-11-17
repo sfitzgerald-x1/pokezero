@@ -1,0 +1,191 @@
+{
+ "schema": "pokezero.effect_probe.scenario.v1",
+ "move": "contact_flamebody",
+ "note": "Tier D Flame Body (gen3 randomChance(1,3), trySetStatus brn): Snorlax's Body Slam is burned at phazing 0 and 19, not at 20; Fire Blaziken (Fire Punch) and Water Veil Seaking (Megahorn) are never burned.",
+ "teams": [
+  [
+   {
+    "species": "Snorlax",
+    "moves": [
+     "bodyslam",
+     "splash",
+     "protect",
+     "rest"
+    ],
+    "ability": "Immunity",
+    "item": ""
+   },
+   {
+    "species": "Blaziken",
+    "moves": [
+     "firepunch",
+     "splash",
+     "protect",
+     "rest"
+    ],
+    "ability": "Blaze",
+    "item": ""
+   },
+   {
+    "species": "Seaking",
+    "moves": [
+     "megahorn",
+     "splash",
+     "protect",
+     "rest"
+    ],
+    "ability": "Water Veil",
+    "item": ""
+   },
+   {
+    "species": "Starmie",
+    "moves": [
+     "splash",
+     "surf",
+     "recover",
+     "protect"
+    ],
+    "ability": "Natural Cure",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Skarmory",
+    "moves": [
+     "splash",
+     "protect",
+     "spikes",
+     "drillpeck"
+    ],
+    "ability": "Keen Eye",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Metagross",
+    "moves": [
+     "splash",
+     "protect",
+     "meteormash",
+     "earthquake"
+    ],
+    "ability": "Clear Body",
+    "item": "Leftovers"
+   }
+  ],
+  [
+   {
+    "species": "Magcargo",
+    "moves": [
+     "splash",
+     "protect",
+     "rest",
+     "toxic"
+    ],
+    "ability": "Flame Body",
+    "item": ""
+   },
+   {
+    "species": "Snorlax",
+    "moves": [
+     "splash",
+     "rest",
+     "protect",
+     "bodyslam"
+    ],
+    "ability": "Thick Fat",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Blissey",
+    "moves": [
+     "splash",
+     "softboiled",
+     "protect",
+     "seismictoss"
+    ],
+    "ability": "Natural Cure",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Gengar",
+    "moves": [
+     "splash",
+     "protect",
+     "thunderbolt",
+     "icepunch"
+    ],
+    "ability": "Levitate",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Tyranitar",
+    "moves": [
+     "splash",
+     "protect",
+     "rockslide",
+     "earthquake"
+    ],
+    "ability": "Sand Stream",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Jolteon",
+    "moves": [
+     "splash",
+     "protect",
+     "thunderbolt",
+     "batonpass"
+    ],
+    "ability": "Volt Absorb",
+    "item": "Leftovers"
+   }
+  ]
+ ],
+ "script": [
+  [
+   "move 1",
+   "move 1"
+  ],
+  [
+   "switch 2",
+   "move 1"
+  ],
+  [
+   "move 1",
+   "move 1"
+  ],
+  [
+   "switch 3",
+   "move 1"
+  ],
+  [
+   "move 1",
+   "move 1"
+  ]
+ ],
+ "axes": [
+  {
+   "name": "roll",
+   "field": "phazing.0",
+   "steps": [
+    0
+   ],
+   "values": [
+    0,
+    19,
+    20
+   ]
+  }
+ ],
+ "expect": {
+  "exact": true
+ },
+ "require_fields": [
+  "perish_counter",
+  "yawn_counter",
+  "partial_trap_counter",
+  "partial_trap_source",
+  "item_knocked",
+  "destiny_bond",
+  "effect"
+ ]
+}
