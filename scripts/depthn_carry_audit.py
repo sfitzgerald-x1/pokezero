@@ -162,9 +162,9 @@ EFFECTS = (
          'named probe when dropped (#1930 (M2 + R1) PR body, R1 section, position -> probe table: 4 wrap and seven more, 8 and 9 '
          'wrap_tie, 11 wrap_trapper_faint and wrap_trapper_switch)',
          'live roots: since the trap walls a held partial trap is built (both sides): the protocol world takes partiallytrapped out '
-         'of the payload the CPU materializer sees (gpu_engine/phase_d_protocol_world.py:367-384), counts its ticks on the lines '
-         '(gpu_engine/phase_d_protocol_world.py:338-364) and draws the hidden remaining duration from Showdown\'s posterior, uniform '
-         'on wrap_support, with the opposing active as its trapper (gpu_engine/phase_d_protocol_world.py:327-335, 408-425); an '
+         'of the payload the CPU materializer sees (gpu_engine/phase_d_protocol_world.py:366-385), counts its ticks on the lines '
+         '(gpu_engine/phase_d_protocol_world.py:337-363) and draws the hidden remaining duration from Showdown\'s posterior, uniform '
+         'on wrap_support, with the opposing active as its trapper (gpu_engine/phase_d_protocol_world.py:326-334, 408-425); an '
          'own-held one only on the protocol route (gpu_engine/phase_d_live_worlds.py:349-350; the older route still refuses it, '
          'gpu_engine/phase_d_live_worlds.py:360-361, OWN_VOLATILE_OR_LATENT_CLOCK_UNAVAILABLE)'),
         'Shuckle (Staller) only. In-tree since M2 the trap and its residual chip are modelled; since the trap walls a root already '
@@ -178,9 +178,9 @@ EFFECTS = (
          'probes: 10 perishsong* scenarios (perishsong, _tie, _last_faster, _baton, _switch, _meanlook, _soundproof, _soundproof_user, '
          '_protect_sub, _reuse), EXACT against Showdown f76228a1 at M2 + R1 (3e0878e4)',
          'live roots: since #1949 a held perish count is built (both sides): the protocol world\'s typed mapper writes the shown count '
-         '(gpu_engine/phase_d_protocol_world.py:599 -> v5_hypothetical_state.py:121, held_volatiles) and the protocol world writes '
+         '(gpu_engine/phase_d_protocol_world.py:636 -> v5_hypothetical_state.py:121, held_volatiles) and the protocol world writes '
          'Showdown\'s duration, 4 for the silent perish3 of the Song\'s own turn, carried across a Baton Pass '
-         '(gpu_engine/phase_d_protocol_world.py:224-239, 311-321); an own-held one only on the protocol route (gpu_engine/phase_d_live_worlds.py:349-350); '
+         '(gpu_engine/phase_d_protocol_world.py:223-238, 311-321); an own-held one only on the protocol route (gpu_engine/phase_d_live_worlds.py:349-350); '
          'gpu_engine/public_active.py:46, 217-233 keeps the public counts for the encoder'),
         'Misdreavus (Staller), the set that also carries Mean Look (a represented trap).', engine_since='f3e71663'),
     Effect('drowsy', ('yawn',), ('swalot',), False, '',
@@ -195,7 +195,7 @@ EFFECTS = (
          'reached it; 12 yawn_tie; 13 yawn and six more)',
          'live roots: since #1949 a held drowsy is built (both sides): the protocol world takes yawn out of the payload the CPU '
          'materializer sees and writes yawn_counter, 2 before the Yawn turn\'s residual and 1 after it '
-         '(gpu_engine/phase_d_protocol_world.py:203-221, 311-321); an own-held one only on the protocol route (gpu_engine/phase_d_live_worlds.py:349-350)'),
+         '(gpu_engine/phase_d_protocol_world.py:202-220, 311-321); an own-held one only on the protocol route (gpu_engine/phase_d_live_worlds.py:349-350)'),
         'Swalot (Bulky Attacker) only.', engine_since='f3e71663'),
     Effect('destiny_bond', ('destinybond',), ('banette', 'gengar', 'qwilfish', 'wobbuffet'), False, '',
         'a KO of the user by a move takes its attacker down, until the user moves again (so into the next turn)',
@@ -221,7 +221,7 @@ EFFECTS = (
          'in-tree since M1 (8b212312): gpu_engine/items.py:27-28 the Trick table; transition.py:1746-1755 the swap; state.py:85 '
          'item_knocked (live roots carry it since #1935, 3f48093b); since WH + C-lite (8823d7c5) transition.py:1756-1767 a received '
          'White Herb is used inside Trick\'s onHit, before the device\'s trick hook (probes wh_trick, wh_trick_receive_negative)',
-         'live roots: gpu_engine/phase_d_protocol_world.py:132-134 a root after a public item swap is refused (PUBLIC_ITEM_SWAP_NOT_SUPPORTED)'),
+         'live roots: gpu_engine/phase_d_protocol_world.py:131-133 a root after a public item swap is refused (PUBLIC_ITEM_SWAP_NOT_SUPPORTED)'),
         'Furret and Kecleon. Not LOCK-class at the request source (choice_move and item are read from the state).', engine_since='8b212312'),
 )
 
