@@ -11,6 +11,7 @@ its review fixes (Trick's received herb, fewer traced triggers) moved it to 9134
 to 13f76e5e. M2's R2 (the older residual handlers traced only at their reachable positions) moved it to a8c48fa7, and its
 Encore stale-move clear to 7c984fe6.
 Fidelity tier D (Wonder Guard, the pinch abilities, Poison Point / Flame Body / Effect Spore) moved it to d880714c, and its
-Pursuit-intercept device reveals to c471195a.
+Pursuit-intercept device reveals to c471195a. The combined Tier D and transition-batch canary merge
+adds the reviewed Pursuit damage-credit path while preserving contact ability reveals and sleep draws.
 """
 CURRENT_TRANSITION = '1da6e3ba06d8ccb7806f96b717cb77b4e36318cc'

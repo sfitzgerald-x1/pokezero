@@ -63,7 +63,7 @@ def default_entry_program(text):
  tree=ast.parse(text)
  strip_m1_recharge(next(n for n in tree.body if isinstance(n,ast.FunctionDef)and n.name=='depart'))
  strip_m2_volatiles(next(n for n in tree.body if isinstance(n,ast.FunctionDef)and n.name=='depart'))
- fields=('spikes_type_count','spikes_item_count','spikes_boots_item')
+ fields=('spikes_type_count','spikes_item_count','spikes_boots_item','shed_skin')
  table=next(n for n in tree.body if isinstance(n,ast.ClassDef)and n.name=='EntryTable')
  added=[n for n in table.body if isinstance(n,ast.AnnAssign)and n.target.id in fields]
  if added:
@@ -73,9 +73,9 @@ def default_entry_program(text):
   table.body=[n for n in table.body if n not in added]
   factory=next(n for n in tree.body if isinstance(n,ast.FunctionDef)and n.name=='from_metadata')
   arguments=factory.body[-1].value.args
-  approved=ast.parse("x(jnp.asarray(len(vocab['types']),jnp.int32),jnp.asarray(len(vocab.get('items',[])),jnp.int32),jnp.asarray(next((i for i,name in enumerate(vocab.get('items',[])) if name=='heavydutyboots'),0),jnp.int32))").body[0].value.args
-  assert [ast.dump(n)for n in arguments[-3:]]==[ast.dump(n)for n in approved]
-  del arguments[-3:]
+  approved=ast.parse("x(jnp.asarray(len(vocab['types']),jnp.int32),jnp.asarray(len(vocab.get('items',[])),jnp.int32),jnp.asarray(next((i for i,name in enumerate(vocab.get('items',[])) if name=='heavydutyboots'),0),jnp.int32),flag({'shedskin'}))").body[0].value.args
+  assert [ast.dump(n)for n in arguments[-4:]]==[ast.dump(n)for n in approved]
+  del arguments[-4:]
  return dump_default_program(tree)
 
 

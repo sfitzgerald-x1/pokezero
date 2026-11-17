@@ -1,0 +1,180 @@
+{
+ "schema": "pokezero.effect_probe.scenario.v1",
+ "move": "protect_explosion_replacement",
+ "note": "Transition batch (STAT_BLOCKED_ON_OUR_ATTACK): a level-1 Electrode Explodes into the faster Starmie's Protect and faints; at its replacement request the move window is still open (no blank line, move or turn closed it), so B2's readout counts it provisionally (public_tendency.project) and the device has counted it at the block (engine_device_public_port.protect): the compared blocked field is closed + 1 there. Then the mirror for side 1: Voltorb Explodes into Blissey's Protect.",
+ "teams": [
+  [
+   {
+    "species": "Electrode",
+    "moves": [
+     "explosion",
+     "splash",
+     "protect",
+     "thunderbolt"
+    ],
+    "ability": "Soundproof",
+    "item": "",
+    "level": 1
+   },
+   {
+    "species": "Blissey",
+    "moves": [
+     "splash",
+     "softboiled",
+     "protect",
+     "seismictoss"
+    ],
+    "ability": "Serene Grace",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Skarmory",
+    "moves": [
+     "splash",
+     "protect",
+     "spikes",
+     "peck"
+    ],
+    "ability": "Keen Eye",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Swampert",
+    "moves": [
+     "splash",
+     "protect",
+     "surf",
+     "earthquake"
+    ],
+    "ability": "Torrent",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Metagross",
+    "moves": [
+     "splash",
+     "protect",
+     "meteormash",
+     "earthquake"
+    ],
+    "ability": "Clear Body",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Celebi",
+    "moves": [
+     "splash",
+     "protect",
+     "psychic",
+     "recover"
+    ],
+    "ability": "Natural Cure",
+    "item": "Leftovers"
+   }
+  ],
+  [
+   {
+    "species": "Starmie",
+    "moves": [
+     "splash",
+     "surf",
+     "recover",
+     "protect"
+    ],
+    "ability": "Illuminate",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Voltorb",
+    "moves": [
+     "explosion",
+     "splash",
+     "protect",
+     "thunderbolt"
+    ],
+    "ability": "Soundproof",
+    "item": "",
+    "level": 1
+   },
+   {
+    "species": "Skarmory",
+    "moves": [
+     "splash",
+     "protect",
+     "spikes",
+     "peck"
+    ],
+    "ability": "Keen Eye",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Swampert",
+    "moves": [
+     "splash",
+     "protect",
+     "surf",
+     "earthquake"
+    ],
+    "ability": "Torrent",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Metagross",
+    "moves": [
+     "splash",
+     "protect",
+     "meteormash",
+     "earthquake"
+    ],
+    "ability": "Clear Body",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Celebi",
+    "moves": [
+     "splash",
+     "protect",
+     "psychic",
+     "recover"
+    ],
+    "ability": "Natural Cure",
+    "item": "Leftovers"
+   }
+  ]
+ ],
+ "script": [
+  [
+   "move 1",
+   "move 4"
+  ],
+  [
+   "switch 2",
+   ""
+  ],
+  [
+   "move 1",
+   "switch 2"
+  ],
+  [
+   "move 3",
+   "move 1"
+  ],
+  [
+   "",
+   "switch 3"
+  ],
+  [
+   "move 1",
+   "move 1"
+  ]
+ ],
+ "axes": [],
+ "expect": {
+  "exact": true
+ },
+ "require_fields": [
+  "item_knocked",
+  "destiny_bond",
+  "effect"
+ ]
+}

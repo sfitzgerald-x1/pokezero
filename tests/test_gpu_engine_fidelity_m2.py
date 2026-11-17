@@ -392,8 +392,10 @@ class DeviceB2ParityTests(unittest.TestCase):
         return out
 
     def end_turn(self, before, after, *lines):
+        # The device step prints its TURN line as B2's TURN fact does (after.turn advances): a held clock ticks only on
+        # |turn| on both paths (public_active.py:240; turn_end's `ready` since the transition batch's F2).
         self.b2_lines(self.a, self.catalog, self.fact, *lines)
-        self.h.turn_end(self.c, before, after, self.yes);self.turn += 1;self.fact(self.a.TURN, -1, self.turn)
+        self.h.turn_end(self.c, before, after._replace(turn=self.c.trackers.turn), self.yes);self.turn += 1;self.fact(self.a.TURN, -1, self.turn)
         return self.check()
 
     def check(self):
