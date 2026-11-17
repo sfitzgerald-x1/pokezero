@@ -105,6 +105,7 @@ jobs:
             --label 'shard-${{ matrix.shard }}' --summary "$GITHUB_STEP_SUMMARY" -- \
             python scripts/run_gpu_component_shard.py --tier extended --index '${{ matrix.shard }}' --count 4 --process-blocks \
             --low-optimization-case test_gpu_engine_secondary_status_frame_runtime.SecondaryStatusFrameRuntimeTests.test_actual_secondary_receipt_survives_end_turn_and_both_full_consumers \
+            --low-optimization-case test_gpu_engine_substitute_damage_owning.SubstituteDamageTests.test_actual_create_then_hit_survive_and_break_both_consumers \
             --resource-interval-seconds 30 2>&1 \
             | tee /tmp/gpu-components.log "$ci_memory_dir/component.log"
           if grep -Eq 'skipped=[1-9]|\.\.\. skipped' /tmp/gpu-components.log; then
