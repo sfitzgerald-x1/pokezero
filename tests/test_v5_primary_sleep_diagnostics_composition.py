@@ -8,11 +8,26 @@ from gpu_engine import engine_outcome_diagnostics as diag,v5_hypothetical_batch 
 
 class PrimarySleepCompositionTests(unittest.TestCase):
     def test_reviewed_ordinary_components_and_distinct_private_origins_unchanged(self):
-        for name in ('engine_sleep_powder_callbacks.py','engine_outcome_diagnostics.py','engine_kernel_frame_risk.py','benchmark_retained_games.py'):
-            self.assertEqual(Path('gpu_engine',name).read_bytes(),subprocess.check_output(['git','show','2b0ec76a:gpu_engine/'+name]))
-        for name in ('v5_hypothetical_profile.py','v5_public_branch.py','v5_hypothetical_batch.py','engine_weather_speed_profile.py',
-                'engine_leftovers_callbacks.py','engine_leftovers_no_output.py','engine_status_residual_callbacks.py','engine_weather_hp_segment.py'):
-            self.assertEqual(Path('gpu_engine',name).read_bytes(),subprocess.check_output(['git','show','c3166bdc:gpu_engine/'+name]))
+        from gpu_engine import transition
+        self.assertEqual(transition.EFFECT_BOUNDS,(16,16,4,2,2))
+        groups=(('2b0ec76a',('engine_sleep_powder_callbacks.py','engine_outcome_diagnostics.py','engine_kernel_frame_risk.py','benchmark_retained_games.py')),
+            ('c3166bdc',('v5_hypothetical_profile.py','v5_public_branch.py','v5_hypothetical_batch.py','engine_weather_speed_profile.py',
+                'engine_leftovers_callbacks.py','engine_leftovers_no_output.py','engine_status_residual_callbacks.py','engine_weather_hp_segment.py')))
+        for original,names in groups:
+            for name in names:
+                path='gpu_engine/'+name
+                # Keep the original composition proof at its assembly commit.
+                self.assertEqual(subprocess.check_output(['git','show','40228424:'+path]),
+                    subprocess.check_output(['git','show',original+':'+path]))
+                expected=subprocess.check_output(['git','show','6caf071b:'+path])
+                if name=='v5_hypothetical_batch.py':
+                    # Only the reviewed fifth-coordinate extension may differ
+                    # from this branch's base; every other byte stays bound.
+                    for before,after,count in ((b'(1,2,4)',b'(1,2,len(transition.EFFECT_BOUNDS))',2),
+                            (b'np.array([16,16,4,2])',b'np.array(transition.EFFECT_BOUNDS)',1)):
+                        self.assertEqual(expected.count(before),count)
+                        expected=expected.replace(before,after)
+                self.assertEqual(Path(path).read_bytes(),expected)
 
     def test_two_literal_outcome_slots_stack_and_take_as_rows_at_b8(self):
         rows=[]
