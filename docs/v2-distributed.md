@@ -101,3 +101,17 @@ Required before launch: same-node GPU equivalence/collection and resume
 validation, actual per-rank throughput/memory/utilization, independent review,
 the canary route decision, S0 at the launch rank count, and the final signed
 declaration. CPU gloo results alone are not GPU qualification.
+
+The v5 builder retains one custom module type family per complete immutable
+model configuration for the process lifetime. Lookup and class construction
+are synchronized; every call still creates independent model parameters and
+buffers in the original initialization order. Caching types avoids a known
+Dynamo type-identity guard failure when an equal-config runtime is rebuilt.
+It changes neither checkpoint schema nor optimizer, dropout, or RNG handling.
+
+Stable types are a candidate correction for unnecessary recompilation, not
+proof of exact GPU resume. Qualification must compare the uninterrupted suffix
+with both a new runtime in the same process and a fresh worker process loading
+the same prefix checkpoint. A cold process does not inherit type identities,
+compiled state, or CUDA graphs. Record compiler-cache policy and preserve
+strict state/statistic comparisons before proceeding to production smoke.
