@@ -72,14 +72,21 @@ class Codex:
         def capture(*,config,contract,lines,address,battle_id,seed):
             harness.captures.append((battle_id,address.frame));out=harness.outcomes[(battle_id,address.frame)]
             if isinstance(out,BaseException):raise out
-            harness.current=out;return NS(address=out[0].address,materialization_payload=harness.payloads.get((battle_id,address.frame))or payload())
+            harness.current=out;return NS(address=out[0].address,context=NS(battle_id=battle_id),
+                materialization_payload=harness.payloads.get((battle_id,address.frame))or payload())
+        def sample(public,detached,*,start,stop,**kw):
+            made=harness.current[1]
+            return pc.protocol.WorldRange(start,stop,('fixture',),made.root,made.worlds[start:stop],made.seeds[start:stop],
+                made.requested_worlds,tuple(made.mapper_diagnostics[start:stop]) if made.mapper_diagnostics
+                else tuple(dict(world=w.index,checks=[])for w in made.worlds[start:stop]))
         self.stack=ExitStack()
         # Batch 2's prepare also reads the protocol tail's facts and passes defer_sleep / protocol_facts to from_b2: fake the
         # first (its shape: phase_d_tail.facts) and accept the second, so the outcome's root and worlds come through unchanged.
         tail=getattr(pc.protocol,'tail',None)
         for target,name,value in((pc,'JaxRecordedAdapter',Adapter),(pc,'capture_root',capture),
                 (pc.worlds,'from_b2',lambda adapter,packet,source,metadata,*,address,**kw:harness.current[0]),
-                (pc.protocol,'sample',lambda public,detached,**kw:harness.current[1]),
+                (pc.protocol,'world_range',sample),
+                (pc.protocol,'_carried_root',lambda *a,**kw:harness.current[0]),
                 *(()if tail is None else((tail,'facts',lambda *a,**k:dict(replacement=None,fresh_substitutes={},wish_set_turns={},turn=0)),))):
             self.stack.enter_context(patch.object(target,name,value))
         return self
@@ -566,6 +573,53 @@ class LiveSearchTests(unittest.TestCase):
         for b,d in(('l',0),('l',1)):
             with_list,_=self.run_batch(s,[request(b,d)],outcomes);without,_=self.run_batch(plain,[request(b,d)],outcomes)
             self.assertEqual(strip(with_list[0]),strip(without[0]))
+
+    def test_warm_in_passes_forget_every_session_between_them(self):
+        """The server's in-process slot warms in as a worker does: passes (its warmup requests, then the list), every session
+        forgotten between them, so a later pass may repeat an address or go back in a battle; both passes once before the trace
+        release and once after, each request held to its first-pass outcome."""
+        outcomes={('w0',0):self.outcome(0),('x',0):self.outcome(1),('x',1):self.outcome(2),('y',3):Refusal('PUBLIC_ROOT_REFUSED')}
+        prepared=[];prepare=live.cw.prepare_roots;released=[];release=live.trace_release.release
+        def spy(constructor,requests,**kw):
+            prepared.extend((r['battle_id'],r['decision_index'],r['request_id'])for r in requests);return prepare(constructor,requests,**kw)
+        def releasing():released.append(len(prepared));return release()
+        s=self.search(pricers=self.make_pricers(8,(1,)));first,second=[('x',0),('x',1)],[('x',0),('y',3)]   # x's 0 again, after its 1
+        with Codex(outcomes),patch.object(live.cw,'prepare_roots',side_effect=spy),patch.object(live.trace_release,'release',side_effect=releasing):
+            report=s.warmup([request('w0',0)],warm_in=([request(b,d)for b,d in first],[request(b,d)for b,d in second]))
+        warm=report['warm_in']
+        self.assertEqual({k:warm[k]for k in('requests','passes','kinds','outcomes')},dict(requests=4,passes=2,kinds={'Prepared':3,'PUBLIC_ROOT_REFUSED':1},
+            outcomes=['Prepared','Prepared','Prepared','PUBLIC_ROOT_REFUSED']))
+        ids=[(b,d,f'warm-in-{j}')for j,(b,d)in enumerate(first+second)]
+        before,after=prepared[:released[0]],prepared[released[0]:]
+        self.assertEqual((before[-4:],after[-4:]),(ids,ids))   # request ids run on across the passes; both passes again after the release
+        self.assertEqual((s.constructor.seen,s.constructor.sessions,s.battles),(set(),{},{}))
+        self.assertEqual([k for k in live.cw._PEER_FOLDS if k[0]==id(s.constructor)],[])
+        # the same requests as one pass refuse x's 0 the second time: the passes are what forget it
+        with Codex(outcomes),self.assertRaisesRegex(RuntimeError,'warm-in request warm-in-2: refused SEARCH_REQUEST_ALREADY_ATTEMPTED'):
+            self.search(pricers=self.make_pricers(8,(1,))).warmup([request('w0',0)],warm_in=[request(b,d)for b,d in first+second])
+        # empty passes are dropped; a flat list is one pass
+        with Codex(outcomes):report=self.search(pricers=self.make_pricers(8,(1,))).warmup([request('w0',0)],warm_in=((),[request('x',0)]))
+        self.assertEqual({k:report['warm_in'][k]for k in('requests','passes')},dict(requests=1,passes=1))
+
+    def test_the_saved_requests_pass_counts_address_refusals_as_the_workers_do(self):
+        """warm_in_saved (the server's in-process slot): the saved requests warm in as their own first pass, held to the workers'
+        rule: a saved file that repeats an address (SEARCH_REQUEST_ALREADY_ATTEMPTED) warms in, the refusal counted, and the
+        second pass repeats it; the list after it keeps the strict rule."""
+        outcomes={('w0',0):self.outcome(0),('x',0):self.outcome(1)}
+        s=self.search(pricers=self.make_pricers(8,(1,)))
+        with Codex(outcomes):report=s.warmup([request('w0',0),request('w0',0)],warm_in=[request('x',0)],warm_in_saved=True)
+        warm=report['warm_in']
+        self.assertEqual({k:warm[k]for k in('requests','passes','outcomes')},dict(requests=3,passes=2,outcomes=['Prepared','SEARCH_REQUEST_ALREADY_ATTEMPTED','Prepared']))
+        self.assertEqual((s.constructor.seen,s.constructor.sessions,s.battles),(set(),{},{}))
+        with Codex(outcomes):report=self.search(pricers=self.make_pricers(8,(1,))).warmup([request('w0',0)],warm_in_saved=True)   # no list: the saved pass alone
+        self.assertEqual({k:report['warm_in'][k]for k in('requests','passes','outcomes')},dict(requests=1,passes=1,outcomes=['Prepared']))
+        with Codex(outcomes),self.assertRaisesRegex(RuntimeError,'warm-in request warm-in-2: refused SEARCH_REQUEST_ALREADY_ATTEMPTED'):   # the list: strict
+            self.search(pricers=self.make_pricers(8,(1,))).warmup([request('w0',0)],warm_in=[request('x',0),request('x',0)],warm_in_saved=True)
+        # every pass starts from forgotten attempts: warmup's own prepares attempted w0, and neither the saved pass nor a list
+        # that shares its address sees it attempted (the first pass as the second, after the release, which starts fresh too)
+        for saved in(True,False):
+            with Codex(outcomes):report=self.search(pricers=self.make_pricers(8,(1,))).warmup([request('w0',0)],warm_in=[request('w0',0)],warm_in_saved=saved)
+            self.assertEqual(report['warm_in']['outcomes'],['Prepared']*(2 if saved else 1))
 
     def test_a_warm_in_entry_that_warms_nothing_stops_warmup(self):
         outcomes={('w0',0):self.outcome(0),('x',0):self.outcome(1)}

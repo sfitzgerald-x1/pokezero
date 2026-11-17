@@ -38,7 +38,8 @@ def prepare(args):
     runtime = worker._record(config['runtime']);labels = contract.LabelVocabulary(**worker._record(config['labels']))
     profile, vocabulary, gender, category = worker._runtime_metadata(runtime, expected_pool_sha256=config['bank']['pool_sha256'])
     if gender is None:raise ValueError('original gender metadata for declared pool required')
-    plan = smoke.build_plan(config['bank'], profile, labels, category, arm=args.arm, iterations=1)
+    # V2 self_moves: the config's optional declaration (absent = off); Plan refuses a non-bool value.
+    plan = smoke.build_plan(config['bank'], profile, labels, category, arm=args.arm, iterations=1, self_moves=config.get('self_moves', False))
     # Same precision/runtime probe as the original worker; the memory policy
     # is the launcher's (this benchmark holds the row store, no trainer).
     try:worker._probe(runtime)
@@ -65,6 +66,8 @@ def actor(args, plan, events):
         expected_checkpoint_sha256=snapshot.checkpoint_sha256, expected_category_vocabulary_sha256=plan.model.category_vocabulary_sha256,
         expected_label_vocabulary_sha256=plan.model.label_vocabulary.sha256, enable_v5=True)
     if config != plan.model:raise ValueError('loaded initial actor configuration differs')
+    from gpu_engine.private_self_moves import check_run_actor   # V2 self_moves: the initial archive against the plan
+    check_run_actor(metadata, plan_self_moves=plan.self_moves, iteration=snapshot.iteration, context='v2 bench initial actor')
     return snapshot, params, metadata
 
 

@@ -368,8 +368,14 @@ def _gen3_randbat_belief_start_override_result(
     team_size: int = DEFAULT_RANDBAT_TEAM_SIZE,
     witnessed_fallback: bool = False,
     canonicalize_revealed_variants: bool = False,
+    set_posteriors: Any = None,
 ) -> tuple[BattleStartOverride | None, str | None]:
-    """Return a sampled start override plus a public-data failure reason for diagnostics."""
+    """Return a sampled start override plus a public-data failure reason for diagnostics.
+
+    ``set_posteriors`` (None: today's uniform draw) is set_posterior.posterior's mapping for this root, or a zero-argument
+    callable returning it (evaluated once, when the first revealed opponent is drawn): each revealed opponent's variant is
+    then set_posterior.draw's over the sampler's own survivors, which is today's call when their weights are equal.
+    """
 
     if team_size <= 0:
         raise ValueError("team_size must be positive.")
@@ -406,6 +412,7 @@ def _gen3_randbat_belief_start_override_result(
         public_context=context,
         witnessed_fallback=witnessed_fallback,
         canonicalize_revealed_variants=canonicalize_revealed_variants,
+        set_posteriors=set_posteriors,
     )
     if opponent_team is None:
         return None, opponent_team_failure or "opponent belief could not be materialized"
@@ -1173,9 +1180,11 @@ def _opponent_team_from_belief_result(
     witnessed_fallback: bool = False,
     canonicalize_revealed_variants: bool = False,
     public_context: PolicyContext | None = None,
+    set_posteriors: Any = None,
 ) -> tuple[tuple[FixturePokemon, ...] | None, str | None]:
     team: list[FixturePokemon] = []
     used_species: set[str] = set()
+    posteriors = set_posteriors() if callable(set_posteriors) else set_posteriors
     for belief in view.opponent_pokemon:
         fixture = _sample_revealed_opponent_fixture(
             belief,
@@ -1185,6 +1194,7 @@ def _opponent_team_from_belief_result(
             move_slot_constraints=move_slot_constraints,
             witnessed_fallback=witnessed_fallback,
             canonicalize_revealed_variants=canonicalize_revealed_variants,
+            set_posterior=None if posteriors is None else _species_set_posterior(posteriors, belief),
         )
         if fixture is None:
             return None, f"opponent {belief.species} could not be sampled from public belief"
@@ -1293,6 +1303,7 @@ def _sample_revealed_opponent_fixture(
     move_slot_constraints: Mapping[str, Mapping[int, str]] | None = None,
     witnessed_fallback: bool = False,
     canonicalize_revealed_variants: bool = False,
+    set_posterior: Any = None,
 ) -> FixturePokemon | None:
     sampled_gender = pokemon.gender or _sample_gender(pokemon.species, set_source=set_source, rng=rng)
     if canonicalize_revealed_variants:
@@ -1381,7 +1392,10 @@ def _sample_revealed_opponent_fixture(
                 else None
             )
         variants = slot_matched
-    variant = variants[rng.randrange(len(variants))]
+    if set_posterior is None:
+        variant = variants[rng.randrange(len(variants))]
+    else:
+        variant = _set_posterior_variant(set_posterior, variants, pokemon, set_source=set_source, rng=rng)
     fixture = _fixture_from_variant_payload(
         variant,
         fallback_species=pokemon.species,
@@ -1402,6 +1416,38 @@ def _sample_revealed_opponent_fixture(
         if witnessed_fallback
         else None
     )
+
+
+def _species_set_posterior(posteriors: Mapping[str, Any], pokemon: RevealedPokemonBelief) -> Any:
+    from .set_posterior import MISSING_SPECIES
+
+    posterior = posteriors.get(_normalize_species_id(pokemon.species))
+    if posterior is None:
+        raise ValueError(MISSING_SPECIES)
+    return posterior
+
+
+def _set_posterior_variant(
+    posterior: Any,
+    variants: Sequence[Mapping[str, Any]],
+    pokemon: RevealedPokemonBelief,
+    *,
+    set_source: Gen3RandbatSource,
+    rng: random.Random,
+) -> Mapping[str, Any]:
+    """The survivor set_posterior.draw picks over the sampler's own survivors (source order).
+
+    With equal weights on them this is exactly ``variants[rng.randrange(len(variants))]``, today's uniform draw; so it is
+    when they hold no weight at all (set_posterior.restrict's off-model fallback, recorded by the world's diagnostics).
+    """
+    from .set_posterior import SAMPLER_DISAGREEMENT, draw, restrict
+
+    universe = set_source.universe_for(pokemon.species)
+    positions = {} if universe is None else {variant.variant_id: index for index, variant in enumerate(universe.variants)}
+    indices = [positions.get(str(variant.get("variant_id"))) for variant in variants]
+    if None in indices or indices != sorted(indices):
+        raise ValueError(SAMPLER_DISAGREEMENT)
+    return variants[indices.index(draw(restrict(posterior, indices), rng))]
 
 
 def _canonical_revealed_variant_payloads(

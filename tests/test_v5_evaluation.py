@@ -174,8 +174,10 @@ class EvaluationTests(unittest.TestCase):
         config=old.ControlledFoulPlayConfig(checkpoint=Path('/fake'),showdown_root=Path('/fake-source'),games=5,seed_start=10,
             foulplay_random_seed=100,policy_mode='raw',device='cpu',encoder_kind='jax-owning',belief_set_source=True,
             allow_search_fallback=False,opponent_crash_retries=0)
-        factory=NS(contract=NS(checkpoint_sha256='c'*64,feature_masks=tuple(dict(exact_state=False,feature_pack_last_move=False,investment_belief_narrowing=False,
-            item_belief_narrowing=False,stats_block=False,tier2_investment=False,tier2_residuals=False,transition_token_budget=0).items())),
+        masks=tuple(dict(exact_state=False,feature_pack_last_move=False,investment_belief_narrowing=False,
+            item_belief_narrowing=False,stats_block=False,tier2_investment=False,tier2_residuals=False,transition_token_budget=0).items())
+        # The contract's declared encoder masks (ActorContract.encoder_masks: feature_masks plus self_moves, declared off).
+        factory=NS(contract=NS(checkpoint_sha256='c'*64,feature_masks=masks,encoder_masks=lambda:dict(masks,self_moves=False)),
             catalog=NS(vocabulary=object(),dex=object()))
         seen=[]
         async def source(cfg,**kwargs):

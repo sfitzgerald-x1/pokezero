@@ -310,15 +310,18 @@ def encoding_diff(b2, root_inputs, tokens=TOKENS):
 
 # Capture -----------------------------------------------------------------------------------------------------------------------------
 def check_build_call_site(function=None):
-    """True when `function` (DepthNLiveSearch._search) reads `build` as an attribute of the global `cw` at call time, so the
-    wrapper takes effect (rr.check_call_sites' rule); RuntimeError otherwise."""
-    function = live.DepthNLiveSearch._search if function is None else function
-    found, previous = False, None
-    for instruction in dis.get_instructions(function):
-        if (instruction.opname in ('LOAD_ATTR', 'LOAD_METHOD') and instruction.argval == 'build' and previous is not None
-                and previous.opname == 'LOAD_GLOBAL' and previous.argval == 'cw'):found = True
-        previous = instruction
-    if not found or function.__globals__ is not vars(live) or live.cw is not cw:
+    """True when the live search's batch path (rr.search_stages(); or `function`, one function or a tuple of them) reads `build`
+    as an attribute of the global `cw` at call time, so the wrapper takes effect (rr.check_call_sites' rule); RuntimeError
+    otherwise."""
+    functions = rr.search_stages() if function is None else function if isinstance(function, tuple) else (function,)
+    found = False
+    for function in functions:
+        previous = None
+        for instruction in dis.get_instructions(function):
+            if (instruction.opname in ('LOAD_ATTR', 'LOAD_METHOD') and instruction.argval == 'build' and previous is not None
+                    and previous.opname == 'LOAD_GLOBAL' and previous.argval == 'cw'):found = True
+            previous = instruction
+    if not found or any(f.__globals__ is not vars(live) for f in functions) or live.cw is not cw:
         raise RuntimeError('the search does not look cw.build up through its module at call time')
     return True
 

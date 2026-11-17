@@ -55,7 +55,7 @@ class StatModifierTests(unittest.TestCase):
             self.row(attacker='Medicham',item='',ability='Pure Power',physical=True),
             self.row(attacker='Azumarill',item='',ability='Huge Power',physical=False)]
         num,den,dn,dd=self.factors(rows)
-        self.assertEqual((num.tolist(),den.tolist()),([3,3,1,1,3,6,2,1],[2,2,1,1,2,2,1,1]))
+        self.assertEqual((num.tolist(),den.tolist()),([6144,6144,4096,4096,6144,12288,8192,4096],[4096]*8))
         self.assertEqual((dn.tolist(),dd.tolist()),([1,1,1,1,3,1,1,1],[1,1,1,1,2,1,1,1]))
 
     def state(self,rows):

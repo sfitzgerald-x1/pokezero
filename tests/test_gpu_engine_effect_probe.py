@@ -84,7 +84,9 @@ class PureTests(unittest.TestCase):
         self.assertEqual(len(cases), 6);self.assertEqual(cases[0]['case_id'], 'hit=0,roll=0')
         case = cases[-1]                                   # hit=99, roll=3
         tape, aux = probe.step_inputs(s, case, 0)
-        self.assertEqual((tape['draws'][0][6], tape['effect'][1][2], tape['secondary'][1], aux['phazing'][0]), (99, 3, 7, 5))
+        # Tape v3 (fidelity tier D): phazing is a tape field (the contact abilities' Showdown role), no longer an engine-only aux.
+        self.assertEqual((tape['draws'][0][6], tape['effect'][1][2], tape['secondary'][1], tape['phazing'][0]), (99, 3, 7, 5))
+        self.assertNotIn('phazing', aux)
         tape, _ = probe.step_inputs(s, case, 1)
         self.assertEqual((tape['draws'][0][6], tape['draws'][1][4], tape['effect'][1][2]), (probe.DEFAULT_ROW[6], 0, 3))
         self.assertEqual(probe.enumerate_cases(scenario()), [dict(case_id='base', assignment={})])
@@ -330,6 +332,18 @@ class DevicePureTests(unittest.TestCase):
         self.assertTrue({'shown_item', 'item_removed', 'item_mutated', 'item_original', 'boosts'} <= set(names))
         left = {n.strip() for key in device.LEFT_OUT for n in key.split(',')}
         self.assertFalse(left & set(names))
+
+    def test_wire_lines_drop_exactly_the_battle_end_lines(self):
+        # B2 folds per decision and no decision follows a battle end: a stream with |win| or |tie| wires as it does without,
+        # and every other line, including ones that only resemble the two kinds, passes through unchanged
+        step = ['|', '|t:|1763100000', '|move|p1a: Misdreavus|Splash|p1a: Misdreavus', '|-start|p1a: Misdreavus|perish0',
+                '|-start|p2a: Misdreavus|perish0', '|faint|p1a: Misdreavus', '|faint|p2a: Misdreavus']
+        near = [device.TIER_LINE, '|winner|p1', '|tied', '|-message|p1 wins', '|c|p1|tie', '|-hint|win', 'win', '']
+        self.assertEqual(device.wire_lines(step + near), step + near)
+        for end in (['|win|p2'], ['|win|p1'], ['|tie']):
+            with self.subTest(end=end):
+                self.assertEqual(device.wire_lines(step + end), device.wire_lines(step))
+                self.assertEqual(device.wire_lines(step[:3] + end + step[3:]), step)
 
 
 @requires_showdown()
