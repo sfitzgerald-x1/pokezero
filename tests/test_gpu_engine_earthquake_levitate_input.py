@@ -64,7 +64,7 @@ class EarthquakeLevitateTests(unittest.TestCase):
   finish=next(n for n in ast.walk(new)if isinstance(n,ast.Call)and isinstance(n.func,ast.Attribute)and isinstance(n.func.value,ast.Name)and n.func.value.id=='no_damage_callbacks'and n.func.attr=='finish')
   self.assertEqual({k.arg:ast.unparse(k.value)for k in finish.keywords},dict(target_types='_active(work.types, work, foe)',item='_active(work.item, work, foe)',ability='_active(work.ability, work, foe)'))
   # state.py, entry.py and secondary.py are byte-certified against the reviewed SOURCE_PINS by transition_observer_wiring.
-  for name in ('mechanics.py','engine_retained_encoder_driver.py'):self.assertEqual(Path('gpu_engine',name).read_bytes(),subprocess.check_output(['git','show','b8092a85:gpu_engine/'+name]))
+  for name in ('mechanics.py','engine_retained_encoder_driver.py'):self.assertEqual(Path('gpu_engine',name).read_bytes(),subprocess.check_output(['git','show',('233bf444:gpu_engine/' if name=='mechanics.py' else 'b8092a85:gpu_engine/')+name]))
   witness._source()
 
  def test_mixed_source_capture_grounding_namespaces_and_outcomes(self):

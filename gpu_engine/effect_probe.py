@@ -4,7 +4,7 @@ A scenario (JSON, schema SCENARIO_SCHEMA) names two authored teams, a per-reques
 action script and the outcome axes of one effect. The probe takes the Cartesian
 product of the axes; each case is one lane of the JAX engine and one Showdown
 f76228a1 battle (gpu_engine/effect_probe.cjs). Every request step sends the
-same semantic chance tape (pokezero.gpu_chance_tape.v2) to both engines, then
+same semantic chance tape (pokezero.gpu_chance_tape.v3) to both engines, then
 compares the post-step states on the fields of the fidelity-patch design 5.1.
 Fields whose engine leaf does not exist yet (perish_counter and so on) are
 always compared, against the engine's neutral value (0, -1 or False), so a
@@ -44,19 +44,24 @@ import numpy as np
 ROOT = Path(__file__).resolve().parents[1]
 SCENARIO_SCHEMA = 'pokezero.effect_probe.scenario.v1'
 RESULT_SCHEMA = 'pokezero.effect_probe.result.v1'
-TAPE_SCHEMA = 'pokezero.gpu_chance_tape.v2'
+TAPE_SCHEMA = 'pokezero.gpu_chance_tape.v6'
 SLEEP_CLAUSE_FORMAT = 'gen3customgame@@@sleepclausemod'
 STATUS = ['', 'par', 'brn', 'psn', 'tox', 'slp', 'frz']
 DRAW_BOUNDS = (2, 100, 100, 100, 16, 16, 100, 4, 8, 2, 2, 2)
-EFFECT_BOUNDS = (16, 16, 4, 2)
+EFFECT_BOUNDS = (16, 16, 4, 2, 2)
 # Neutral tape: no thaw, no full paralysis, hits, no crit, the minimum (85%)
 # damage roll (draws[5]=0 -> random(16)=15), no secondary, protect succeeds,
 # side 0 wins ties. Scenarios override fields.
 DEFAULT_ROW = [0, 99, 99, 0, 15, 0, 0, 0, 0, 0, 0, 0]
+# Fidelity tier D: tape v3 carries phazing (the attacker's [0,60) auxiliary roll, the contact abilities' Showdown role
+# and the drag's bench pick); its default 0 is the value the engine-only auxiliary input had before, so every scenario's
+# engine inputs are unchanged. 0 procs a contact ability (0 < 20, < 6: Effect Spore's slp), so a scenario that makes
+# contact with such a holder sets phazing explicitly.
 DEFAULT_TAPE = dict(draws=[list(DEFAULT_ROW), list(DEFAULT_ROW)], secondary=[99, 99], sleep_talk=[0, 0],
-                    effect=[[15, 0, 0, 0], [15, 0, 0, 0]])
-# Engine-only auxiliary inputs (no Showdown role); kept explicit and in-range.
-DEFAULT_AUX = dict(phazing=[0, 0], entry_ties=[0, 0], initial_tie=0)
+                    effect=[[15, 0, 0, 0, 1], [15, 0, 0, 0, 1]], phazing=[0, 0])
+# Entry coordinates are authored separately, then shared with the v6 Showdown tape.
+# The initial coin is shared by both initializers; resuming is derived from engine state.
+DEFAULT_AUX = dict(entry_ties=[0, 0], initial_tie=0)
 BOUNDS = dict(draws=DRAW_BOUNDS, effect=EFFECT_BOUNDS, secondary=100, sleep_talk=60, phazing=60, entry_ties=2, initial_tie=2)
 # Device mode's optional low-optimization compile of step_with_public (XLA's own options for that one executable, as the
 # CI's low-optimization cases set them): the public step's CPU compile at the default level peaks far above the light tier.
@@ -71,9 +76,12 @@ OPTIONAL = {
     'partial_trap_source': (lambda v: -1 if v['partiallytrapped'] is None else v['partiallytrapped']['source'], -1),
     'recharge_counter': (lambda v: v['mustrecharge'] or 0, 0),
 }
-# require_fields names: the OPTIONAL leaves, item_knocked, destiny_bond (state.DESTINY_BOND)
-# and effect (ChanceInputs.effect).
-REQUIRABLE = tuple(OPTIONAL) + ('item_knocked', 'destiny_bond', 'effect')
+# require_fields names: the OPTIONAL leaves, item_knocked, destiny_bond (state.DESTINY_BOND),
+# effect (ChanceInputs.effect) and transform (the Transform leaves: compare_lane's transform fields).
+REQUIRABLE = tuple(OPTIONAL) + ('item_knocked', 'destiny_bond', 'effect', 'transform')
+# Transform's state leaves (gpu_engine/state.py); a scenario requiring 'transform' needs them all.
+TRANSFORM_LEAVES = ('transformed', 'transform_species', 'transform_stats', 'transform_moves', 'transform_pp',
+                    'transform_hidden_power')
 
 
 # ---------------------------------------------------------------------------
@@ -188,14 +196,20 @@ def requested_seats(state):
     return (~forced.any(axis=1)[:, None] | forced) & ~np.asarray(state['done'])[:, None]
 
 
-def compare_lane(view, snapshot, vocab, *, mask, destiny_bond=None):
+def compare_lane(view, snapshot, vocab, *, mask, destiny_bond=None, transform=False):
     """Differences between one engine lane (numpy dict) and one Showdown snapshot.
 
     Every design 5.1 field is compared; an engine leaf that does not exist yet is
-    read as its neutral value (OPTIONAL, item_knocked False, Destiny Bond False)."""
+    read as its neutral value (OPTIONAL, item_knocked False, Destiny Bond False).
+    `transform` (a scenario's require_fields 'transform') adds every mon's transform fields (transform_fields)."""
     diffs = []
     def check(field, showdown, engine):
         if showdown != engine:diffs.append(dict(field=field, showdown=showdown, engine=engine))
+    if transform:
+        for side in range(2):
+            for slot, mon in enumerate(snapshot['sides'][side]['mons']):
+                for name, (want, got) in transform_fields(view, mon, vocab, side, slot).items():
+                    check(f'{side}:{slot}:{name}', want, got)
     for side in range(2):
         sd = snapshot['sides'][side];active = int(view['active'][side])
         check(f'{side}:active', sd['active'], active)
@@ -204,6 +218,8 @@ def compare_lane(view, snapshot, vocab, *, mask, destiny_bond=None):
             hp = int(view['hp'][side, slot])
             check(p + 'hp', mon['hp'], hp)
             check(p + 'fainted', mon['fainted'], hp <= 0)
+            if int(view['gender'][side, slot]) >= 0 and 'gender' in mon:
+                check(p + 'gender', mon['gender'], int(view['gender'][side, slot]))
             alive = mon['hp'] > 0 or hp > 0
             if alive:check(p + 'status', mon['status'], STATUS[int(view['status'][side, slot])])
             if alive and mon['status'] == 'slp':
@@ -226,11 +242,35 @@ def compare_lane(view, snapshot, vocab, *, mask, destiny_bond=None):
             check(p + name, read(v), int(view[name][side, active]) if name in view else neutral)
         check(p + 'destiny_bond', v['destinybond'],
               bool(int(view['volatile'][side, active]) & destiny_bond) if destiny_bond is not None else False)
+        check(p + 'attract', v.get('attract', False), bool(int(view['volatile'][side, active]) & 128))
     for side in range(2):
         check(f'{side}:mask', snapshot['sides'][side]['mask'], [bool(x) for x in mask[side]])
     done = bool(view['done'])
     check('winner', snapshot['winner'] if snapshot['ended'] else None, int(view['winner']) if done else None)
     return diffs
+
+
+def transform_fields(view, mon, vocab, side, slot):
+    """{field: (Showdown, engine)} for one mon (require_fields 'transform'). The engine keeps the original species and
+    writes the copy in place; Showdown's species, stats, types, ability and Hidden Power are the current (copied) ones and
+    baseMoveSlots the revert's moves and PP. A transformed engine mon is its side's active; its base slots are the saves."""
+    active = int(view['active'][side]) == slot
+    copied = bool(view['transformed'][side]) and active
+    species = int(view['transform_species'][side]) if copied else int(view['species'][side, slot])
+    moves = view['transform_moves'][side] if copied else view['moves'][side, slot]
+    pp = view['transform_pp'][side] if copied else view['pp'][side, slot]
+    n = len(mon['transform']['base_moves'])
+    out = dict(transformed=(mon['transform']['transformed'], copied),
+        species=(mon['transform']['species'], _name(vocab, 'species', species)),
+        stats=(mon['transform']['stats'], [int(x) for x in view['stats'][side, slot, 1:]]),
+        types=(mon['transform']['types'], [_name(vocab, 'types', x) for x in view['types'][side, slot] if int(x)]),
+        ability=(mon['transform']['ability'], _name(vocab, 'abilities', view['ability'][side, slot])),
+        base_moves=(mon['transform']['base_moves'], [_name(vocab, 'moves', x) for x in moves[:n]]),
+        base_pp=(mon['transform']['base_pp'], [int(x) for x in pp[:n]]))
+    if 'hiddenpower' in mon['moves']:   # Hidden Power's type and power matter only to a mon that has it
+        out['hidden_power'] = ([mon['transform']['hp_type'], mon['transform']['hp_power']],
+            [_name(vocab, 'types', view['hidden_power_type'][side, slot]), int(view['hidden_power_power'][side, slot])])
+    return out
 
 
 def lines_in_order(log, expected):
@@ -302,6 +342,7 @@ class Engine:
         self.fields = set(self.optional) | ({'item_knocked'} if 'item_knocked' in state_module.BattleState._fields else set())
         self.fields |= ({'destiny_bond'} if self.destiny_bond is not None else set())
         self.fields |= ({'effect'} if 'effect' in transition.ChanceInputs._fields else set())
+        self.fields |= ({'transform'} if set(TRANSFORM_LEAVES) <= set(state_module.BattleState._fields) else set())
         self.has_effect = 'effect' in transition.ChanceInputs._fields
         self.pstep = None
 
@@ -326,24 +367,43 @@ class Engine:
                 if len(team) != 6:raise ValueError('the engine needs six-member teams')
                 teams.append([m[name] for m in team])
             pool[name] = np.asarray(teams)
-        return self.transition.state_from_pool(pool, np.tile([[0, 1]], (self.lanes, 1)), seed=0)
+        state=self.transition.state_from_pool(pool, np.tile([[0, 1]], (self.lanes, 1)), seed=0)
+        genders=getattr(self,'explicit_genders',None)
+        if genders is not None:
+            import jax.numpy as j
+            state=state._replace(gender=j.broadcast_to(j.asarray(genders,j.int32),state.gender.shape))
+        return state
 
-    def start(self, rows):
-        return self.jax.block_until_ready(self.transition.initialize(self._raw(rows), self.table))
+    def _initial_coin(self, initial_ties):
+        if initial_ties is None:return None
+        values=np.asarray(initial_ties)
+        if values.shape!=(self.lanes,) or values.dtype.kind not in 'iu' or not np.isin(values,[0,1]).all():
+            raise ValueError('one initial tie bit per engine lane required')
+        import jax.numpy as j
+        return j.asarray(values,j.int32)
 
-    def start_public(self, rows):
-        """(state, trackers): the same lanes through initialize_with_public."""
-        init = self.transition.initialize_with_public(self._raw(rows), self.table, belief_tables=self.belief_tables)
+    def start(self, rows, initial_ties=None):
+        return self.jax.block_until_ready(self.transition.initialize(self._raw(rows), self.table,
+            tie_coin=self._initial_coin(initial_ties)))
+
+    def start_public(self, rows, initial_ties=None):
+        """(state, trackers): the same lanes and initial coins through initialize_with_public."""
+        init = self.transition.initialize_with_public(self._raw(rows), self.table, belief_tables=self.belief_tables,
+            tie_coin=self._initial_coin(initial_ties))
         return self.jax.block_until_ready((init.state, init.trackers))
 
     def chance(self, tapes, auxes):
         import jax.numpy as j
         stack = lambda key, dtype=j.int32: j.asarray(np.asarray([t[key] for t in tapes]), dtype)
         fields = dict(draws=stack('draws'), secondary=stack('secondary'), sleep_talk=stack('sleep_talk'),
-            phazing=j.asarray(np.asarray([a['phazing'] for a in auxes]), j.int32),
+            phazing=stack('phazing'),
             entry_ties=j.asarray(np.asarray([a['entry_ties'] for a in auxes]), j.int32),
             initial_tie=j.asarray(np.asarray([a['initial_tie'] for a in auxes]), j.int32))
-        if self.has_effect:fields['effect'] = stack('effect')
+        if self.has_effect:
+            # Harness-only backports can test an older engine as the negative
+            # control. Its declared effect columns are unchanged; Showdown
+            # still consumes the new column and exposes missing behavior.
+            fields['effect'] = stack('effect')[..., :len(self.transition.EFFECT_BOUNDS)]
         return self.transition.ChanceInputs(**fields)
 
     def advance(self, state, actions, tapes, auxes):
@@ -450,30 +510,35 @@ def run_scenario(scenario, engine, showdown, metadata, device=None):
             status_counts={'MISSING_ENGINE_FIELDS': 1}, missing_engine_fields=missing, expectation=scenario.get('expect'),
             expectation_met=False, expectation_detail=f'engine lacks required fields {missing}', results=[])
     prepared = showdown.ask(cmd='prepare', teams=scenario['teams'])
+    engine.explicit_genders=prepared.get('genders')
     if prepared['vocabulary'] != metadata['vocabulary']:raise ValueError('probe vocabulary differs from the pool metadata')
+    transform = 'transform' in scenario.get('require_fields', ())
     cases = enumerate_cases(scenario)
     if len(cases) > engine.lanes:raise ValueError(f"{scenario['move']}: {len(cases)} cases exceed {engine.lanes} lanes")
     vocab = metadata['vocabulary']
-    start = dict(cmd='start', format=scenario['format'], seed=scenario['seed'], cases=len(cases), sets=prepared['sets'])
+    initial_ties=[step_inputs(scenario,case,0)[1]['initial_tie'] for case in cases]
+    start = dict(cmd='start', format=scenario['format'], seed=scenario['seed'], cases=len(cases),
+        sets=prepared['sets'], initial_ties=initial_ties)
     if device is not None:start['device'] = True
     started = showdown.ask(**start)
-    state = engine.start(prepared['rows'])
+    lane_initial_ties=initial_ties+[initial_ties[0]]*(engine.lanes-len(cases))
+    state = engine.start(prepared['rows'], initial_ties=lane_initial_ties)
     arrays, mask = engine.views(state)
     if device is not None:
         dev = device.dev
-        pstate, trackers = engine.start_public(prepared['rows'])
+        pstate, trackers = engine.start_public(prepared['rows'], initial_ties=lane_initial_ties)
         initial_equal = dev.trees_equal(state, pstate)
         device.b2.reset([0, 1] * engine.lanes)
         device.b2.feed([lines for i in range(len(cases)) for lines in started['channels'][i]] + [None] * (2 * (engine.lanes - len(cases))))
         host_trackers, host_b2 = engine.jax.device_get(trackers), device.b2.host()
     records = []
     # Start-of-battle randomness runs on the seeded PRNG but is audited: anything
-    # beyond inert gender and the no-Quick-Claw roll (a lead Speed tie, a real
-    # Quick Claw, gender that matters) makes the case unresolved.
+    # beyond the shared initial tie, inert gender and the no-Quick-Claw roll
+    # (a real Quick Claw or an uncoupled gender that matters) stays unresolved.
     initial_random = [e for e in started['audit'] if e['kind'] in ('INITIAL_RANDOM', 'UNRESOLVED')]
     for i, case in enumerate(cases):
         diffs = compare_lane(lane_view(arrays, i), started['snapshots'][i], vocab, mask=mask[i],
-            destiny_bond=engine.destiny_bond)
+            destiny_bond=engine.destiny_bond, transform=transform)
         records.append(dict(case_id=case['case_id'], assignment=case['assignment'], status=None, initial_diffs=diffs,
             initial_audit=started['audit'], steps=[], last_tape=None, last_aux=None, live=True))
         if initial_random:records[-1].update(status='UNRESOLVED_INITIAL_CHANCE', live=False)
@@ -490,10 +555,13 @@ def run_scenario(scenario, engine, showdown, metadata, device=None):
         for i, record in enumerate(records):
             body, aux = step_inputs(scenario, cases[i], step)
             if pending[i] and record['last_tape'] is not None:
-                body, aux = record['last_tape'], record['last_aux']   # a suspended turn replays its block
+                # Reuse the saved turn block, but replacement entries consume the
+                # current request's authored entry coordinates, never the saved ones.
+                body, aux = record['last_tape'], dict(record['last_aux'],entry_ties=aux['entry_ties'])
             else:
                 record['last_tape'], record['last_aux'] = body, aux
-            tapes.append(dict(schema=TAPE_SCHEMA, nonce=f"{scenario['move']}:{i}:{step}", **body));auxes.append(aux)
+            tapes.append(dict(schema=TAPE_SCHEMA, nonce=f"{scenario['move']}:{i}:{step}", **body,
+                entry_ties=list(aux['entry_ties']),resuming=bool(pending[i])));auxes.append(aux)
             actions.append([engine_action(script[s], int(active[i, s])) for s in range(2)])
             choices.append(list(script))
         for lane in range(len(cases), engine.lanes):
@@ -531,7 +599,7 @@ def run_scenario(scenario, engine, showdown, metadata, device=None):
             if invalid[i]:
                 record.update(status='ENGINE_INVALID_ACTION', live=False);continue
             entry['diffs'] = compare_lane(lane_view(arrays, i), sd['snapshot'], vocab, mask=mask[i],
-                destiny_bond=engine.destiny_bond)
+                destiny_bond=engine.destiny_bond, transform=transform)
             compared.append(i)
             if entry['diffs']:entry['showdown_log_tail'] = sd['snapshot']['log_tail']
             expected_lines = scenario.get('showdown_lines', {}).get(str(step))

@@ -22,7 +22,7 @@ class WeatherCallsiteTests(unittest.TestCase):
         s=s._replace(entry_pending=j.ones((2,2),bool),
             ability=s.ability.at[rows,0,2].set(1).at[rows,1,4].set(2),
             base_ability=s.base_ability.at[rows,0,2].set(1).at[rows,1,4].set(2))
-        engine=SimpleNamespace(entry=table(),weather=None,items=None,forecast=None)
+        engine=SimpleNamespace(entry=table(),weather=None,items=None,infatuation=None,forecast=None)
         coin=j.array([0,1],j.int32)
         expected=transition.initialize(s,engine,tie_coin=coin)
         traced,receipt=transition.initialize(s,engine,tie_coin=coin,_weather_trace=tape(s))

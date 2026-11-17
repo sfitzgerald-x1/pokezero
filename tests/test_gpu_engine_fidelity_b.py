@@ -68,7 +68,9 @@ class TableTests(unittest.TestCase):
         self.assertEqual(np.flatnonzero(np.asarray(t.spd_drop)).tolist(), [CRUNCH])
         self.assertEqual(np.flatnonzero(np.asarray(t.speed_drop)).tolist(), [MUDSHOT])
         self.assertEqual(np.flatnonzero(np.asarray(t.self_omni)).tolist(), [SILVERWIND])
-        self.assertEqual(secondary.SecondaryTable._fields[-4:], ('target_drops', 'self_boosts', 'confusion', 'own_tempo'))
+        # B's four fields follow the original subset (color_change); fidelity tier D appends after them.
+        fields = secondary.SecondaryTable._fields;at = fields.index('color_change') + 1
+        self.assertEqual(fields[at:at + 4], ('target_drops', 'self_boosts', 'confusion', 'own_tempo'))
         self.assertEqual(int(np.asarray(t.status)[CRUNCH]), m.NONE)
 
 

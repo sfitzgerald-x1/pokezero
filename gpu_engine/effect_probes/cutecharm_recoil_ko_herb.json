@@ -1,0 +1,188 @@
+{
+ "schema": "pokezero.effect_probe.scenario.v1",
+ "move": "cutecharm_recoil_ko_herb",
+ "note": "Positive proc then a new low-HP Mental Herb holder faints to recoil before Update and keeps the herb.",
+ "teams": [
+  [
+   {
+    "species": "Machamp",
+    "moves": [
+     "machpunch",
+     "splash",
+     "protect",
+     "rest"
+    ],
+    "ability": "Guts",
+    "item": "",
+    "gender": "M",
+    "level": 100
+   },
+   {
+    "species": "Zangoose",
+    "moves": [
+     "doubleedge",
+     "splash",
+     "protect",
+     "rest"
+    ],
+    "ability": "Immunity",
+    "item": "Mental Herb",
+    "gender": "M",
+    "level": 100
+   },
+   {
+    "species": "Jynx",
+    "moves": [
+     "pound",
+     "splash",
+     "protect",
+     "rest"
+    ],
+    "ability": "Oblivious",
+    "item": "",
+    "gender": "F"
+   },
+   {
+    "species": "Starmie",
+    "moves": [
+     "splash",
+     "surf",
+     "recover",
+     "protect"
+    ],
+    "ability": "Natural Cure",
+    "item": "Leftovers",
+    "gender": "M"
+   },
+   {
+    "species": "Skarmory",
+    "moves": [
+     "splash",
+     "protect",
+     "spikes",
+     "drillpeck"
+    ],
+    "ability": "Keen Eye",
+    "item": "Leftovers",
+    "gender": "M"
+   },
+   {
+    "species": "Celebi",
+    "moves": [
+     "splash",
+     "protect",
+     "psychic",
+     "recover"
+    ],
+    "ability": "Natural Cure",
+    "item": "Leftovers",
+    "gender": "M"
+   }
+  ],
+  [
+   {
+    "species": "Clefable",
+    "moves": [
+     "splash",
+     "seismictoss",
+     "protect",
+     "batonpass"
+    ],
+    "ability": "Cute Charm",
+    "item": "",
+    "gender": "F",
+    "level": 100
+   },
+   {
+    "species": "Snorlax",
+    "moves": [
+     "splash",
+     "rest",
+     "protect",
+     "bodyslam"
+    ],
+    "ability": "Thick Fat",
+    "item": "Leftovers",
+    "gender": "M"
+   },
+   {
+    "species": "Blissey",
+    "moves": [
+     "splash",
+     "softboiled",
+     "protect",
+     "seismictoss"
+    ],
+    "ability": "Natural Cure",
+    "item": "Leftovers",
+    "gender": "M"
+   },
+   {
+    "species": "Gengar",
+    "moves": [
+     "splash",
+     "protect",
+     "thunderbolt",
+     "icepunch"
+    ],
+    "ability": "Levitate",
+    "item": "Leftovers",
+    "gender": "M"
+   },
+   {
+    "species": "Tyranitar",
+    "moves": [
+     "splash",
+     "protect",
+     "rockslide",
+     "earthquake"
+    ],
+    "ability": "Sand Stream",
+    "item": "Leftovers",
+    "gender": "M"
+   },
+   {
+    "species": "Jolteon",
+    "moves": [
+     "splash",
+     "protect",
+     "thunderbolt",
+     "batonpass"
+    ],
+    "ability": "Volt Absorb",
+    "item": "Leftovers",
+    "gender": "M"
+   }
+  ]
+ ],
+ "script": [
+  [
+   "move 1",
+   "move 1"
+  ],
+  [
+   "switch 2",
+   "move 2"
+  ],
+  [
+   "move 2",
+   "move 2"
+  ],
+  [
+   "move 2",
+   "move 2"
+  ],
+  [
+   "move 1",
+   "move 1"
+  ],
+  [
+   "switch 3",
+   ""
+  ]
+ ],
+ "axes": [],
+ "expect": {
+  "exact": true
+ }
+}

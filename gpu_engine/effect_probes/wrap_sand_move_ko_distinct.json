@@ -1,0 +1,216 @@
+{
+ "schema": "pokezero.effect_probe.scenario.v1",
+ "move": "wrap_sand_move_ko_distinct",
+ "note": "Transition batch, F2 and weather_upkeeps: under Tyranitar's permanent sandstorm, p1's last mon, a level-1 Arbok, Wraps Tyranitar, then Tyranitar's Rock Slide KOs it in the move phase: the battle ends with no residual (no -weather ...|[upkeep] line) and no |turn|. B2 keeps the wrapped survivor's clock and weather_upkeeps; the device must not advance either. Setup: p1's five level-1 exploders Explode into Tyranitar's Protect.",
+ "teams": [
+  [
+   {
+    "species": "Electrode",
+    "moves": [
+     "explosion",
+     "splash",
+     "protect",
+     "thunderbolt"
+    ],
+    "ability": "Soundproof",
+    "item": "",
+    "level": 1
+   },
+   {
+    "species": "Voltorb",
+    "moves": [
+     "explosion",
+     "splash",
+     "protect",
+     "thunderbolt"
+    ],
+    "ability": "Soundproof",
+    "item": "",
+    "level": 1
+   },
+   {
+    "species": "Steelix",
+    "moves": [
+     "explosion",
+     "splash",
+     "protect",
+     "thunderbolt"
+    ],
+    "ability": "Rock Head",
+    "item": "",
+    "level": 1
+   },
+   {
+    "species": "Exeggutor",
+    "moves": [
+     "explosion",
+     "splash",
+     "protect",
+     "thunderbolt"
+    ],
+    "ability": "Chlorophyll",
+    "item": "",
+    "level": 1
+   },
+   {
+    "species": "Muk",
+    "moves": [
+     "explosion",
+     "splash",
+     "protect",
+     "thunderbolt"
+    ],
+    "ability": "Sticky Hold",
+    "item": "",
+    "level": 1
+   },
+   {
+    "species": "Arbok",
+    "moves": [
+     "wrap",
+     "splash",
+     "protect",
+     "glare"
+    ],
+    "ability": "Intimidate",
+    "item": "",
+    "level": 1
+   }
+  ],
+  [
+   {
+    "species": "Tyranitar",
+    "moves": [
+     "rockslide",
+     "splash",
+     "earthquake",
+     "protect"
+    ],
+    "ability": "Sand Stream",
+    "item": ""
+   },
+   {
+    "species": "Starmie",
+    "moves": [
+     "splash",
+     "surf",
+     "recover",
+     "protect"
+    ],
+    "ability": "Illuminate",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Skarmory",
+    "moves": [
+     "splash",
+     "protect",
+     "spikes",
+     "peck"
+    ],
+    "ability": "Keen Eye",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Swampert",
+    "moves": [
+     "splash",
+     "protect",
+     "surf",
+     "earthquake"
+    ],
+    "ability": "Torrent",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Metagross",
+    "moves": [
+     "splash",
+     "protect",
+     "meteormash",
+     "earthquake"
+    ],
+    "ability": "Clear Body",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Celebi",
+    "moves": [
+     "splash",
+     "protect",
+     "psychic",
+     "recover"
+    ],
+    "ability": "Natural Cure",
+    "item": "Leftovers"
+   }
+  ]
+ ],
+ "script": [
+  [
+   "move 1",
+   "move 4"
+  ],
+  [
+   "switch 2",
+   ""
+  ],
+  [
+   "move 1",
+   "move 4"
+  ],
+  [
+   "switch 3",
+   ""
+  ],
+  [
+   "move 1",
+   "move 4"
+  ],
+  [
+   "switch 4",
+   ""
+  ],
+  [
+   "move 1",
+   "move 4"
+  ],
+  [
+   "switch 5",
+   ""
+  ],
+  [
+   "move 1",
+   "move 4"
+  ],
+  [
+   "switch 6",
+   ""
+  ],
+  [
+   "move 1",
+   "move 2"
+  ],
+  [
+   "move 2",
+   "move 1"
+  ]
+ ],
+ "axes": [],
+ "expect": {
+  "exact": true
+ },
+ "require_fields": [
+  "perish_counter",
+  "yawn_counter",
+  "partial_trap_counter",
+  "partial_trap_source",
+  "item_knocked",
+  "destiny_bond",
+  "effect"
+ ],
+ "tape": {
+  "draws.0.7": 3,
+  "draws.1.7": 3
+ }
+}

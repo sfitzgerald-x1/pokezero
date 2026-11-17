@@ -110,7 +110,7 @@ class DeviceBackendTests(unittest.TestCase):
  def test_constructor_uses_original_selection_seed_gender_and_fresh_initializer(self):
   plan,prepared,carry=inputs();batch=replace(plan.iterations[0][0],gender_seed=9,gender_domain=10,gender_root_ids=(31,32))
   backend=b.RuntimeBackend(prepared,NS(arrays={'gender':'retained-original'}),gender_policy={'genuine':'policy'});backend._plan=plan
-  truth=object();raw=object();after_gender=object();initialized=object()
+  truth=object();raw=object();after_gender=NS(species=np.ones((2,2,6),np.int32),gender=np.ones((2,2,6),np.int32));initialized=object()
   with patch.object(b.transition,'state_from_pool',return_value=raw)as birth,\
    patch('gpu_engine.engine_request_source._gender',return_value=after_gender)as genders,\
    patch.object(d,'constructor_truth',return_value=truth)as labels,patch.object(backend,'initialize',return_value=initialized)as initialize,\
@@ -122,6 +122,15 @@ class DeviceBackendTests(unittest.TestCase):
   self.assertIs(labels.call_args.args[0],after_gender);self.assertIs(labels.call_args.kwargs['source'],prepared.source)
   self.assertIs(labels.call_args.kwargs['compiled_source'],prepared.catalog.source);initialize.assert_called_once_with(after_gender)
   self.assertIs(register.call_args.args[0],initialized);np.testing.assert_array_equal(register.call_args.args[1],[101,202])
+
+ def test_fresh_constructor_refuses_unknown_gender_before_entry(self):
+  plan,prepared,_=inputs();backend=b.RuntimeBackend(prepared,NS(arrays={}));backend._plan=plan
+  raw=NS(species=np.ones((2,2,6),np.int32),gender=np.full((2,2,6),-1,np.int32))
+  with patch.object(b.transition,'state_from_pool',return_value=raw),\
+   patch('gpu_engine.engine_request_source._gender',return_value=raw),patch.object(backend,'initialize')as initialize:
+   with self.assertRaisesRegex(ValueError,'fresh self-play requires'):
+    backend._construct(plan.iterations[0][0])
+   initialize.assert_not_called()
 
  def test_terminal_journal_fields_keep_wins_ties_and_unknowns_distinct(self):
   cases=(((d.COMPLETE,0),(d.COMPLETE,1)),((d.COMPLETE,2),(d.CAPPED,0)),((d.REFUSED,1),(d.CAPPED,2)))

@@ -15,9 +15,9 @@ def plan(changes=None):
 
 class FiniteLawTests(unittest.TestCase):
     def test_full_physical_inventory(self):
-        # 33 original coordinates and, since §6, the eight appended effect.{s}.{c} axes.
-        self.assertEqual(len(COORDINATES), 41)
-        self.assertEqual(len(dict(COORDINATES)), 41)
+        # 33 original coordinates and, since §6, the ten appended effect.{s}.{c} axes.
+        self.assertEqual(len(COORDINATES), 43)
+        self.assertEqual(len(dict(COORDINATES)), 43)
 
     def test_shared_draw_refines_one_axis_not_independent_coins(self):
         p = plan({'draws.0.2': (Observation('less_than', 25), Observation('less_than', 50))})
