@@ -61,7 +61,7 @@ whose replay.status is COMPLETE (root logits and legal mask and every world's gr
   (carried_effects' marker rules: -mustrecharge, -activate ... move: Wrap, -start ... perishN, -start ... move: Yawn, -singlemove
   ... Destiny Bond, -transform, -item ... Choice Band [from] move: Trick; a switch, drag or faint of that side clears it, as do the
   end markers). The constructor refuses roots after a Transform (phase_d_live_worlds.py:282-283) or a public item swap
-  (phase_d_protocol_world.py:132-134), so their (d) among priced roots should be zero. Since #1949 roots holding an opponent's
+  (phase_d_protocol_world.py:131-133), so their (d) among priced roots should be zero. Since #1949 roots holding an opponent's
   recharge, a Destiny Bond, a drowsy or a perish count are built with that state, and since the trap walls roots holding a partial
   trap (with a drawn duration) are too (their rows' live-root evidence), so their (d) among priced roots can be nonzero; the
   owner's own recharge turn stays single-legal.
@@ -164,7 +164,7 @@ EFFECTS = (
          'live roots: since the trap walls a held partial trap is built (both sides): the protocol world takes partiallytrapped out '
          'of the payload the CPU materializer sees (gpu_engine/phase_d_protocol_world.py:366-385), counts its ticks on the lines '
          '(gpu_engine/phase_d_protocol_world.py:337-363) and draws the hidden remaining duration from Showdown\'s posterior, uniform '
-         'on wrap_support, with the opposing active as its trapper (gpu_engine/phase_d_protocol_world.py:326-334, 408-425); an '
+         'on wrap_support, with the opposing active as its trapper (gpu_engine/phase_d_protocol_world.py:326-334, 426-443); an '
          'own-held one only on the protocol route (gpu_engine/phase_d_live_worlds.py:349-350; the older route still refuses it, '
          'gpu_engine/phase_d_live_worlds.py:360-361, OWN_VOLATILE_OR_LATENT_CLOCK_UNAVAILABLE)'),
         'Shuckle (Staller) only. In-tree since M2 the trap and its residual chip are modelled; since the trap walls a root already '
@@ -180,7 +180,7 @@ EFFECTS = (
          'live roots: since #1949 a held perish count is built (both sides): the protocol world\'s typed mapper writes the shown count '
          '(gpu_engine/phase_d_protocol_world.py:636 -> v5_hypothetical_state.py:121, held_volatiles) and the protocol world writes '
          'Showdown\'s duration, 4 for the silent perish3 of the Song\'s own turn, carried across a Baton Pass '
-         '(gpu_engine/phase_d_protocol_world.py:223-238, 311-321); an own-held one only on the protocol route (gpu_engine/phase_d_live_worlds.py:349-350); '
+         '(gpu_engine/phase_d_protocol_world.py:223-238, 310-320); an own-held one only on the protocol route (gpu_engine/phase_d_live_worlds.py:349-350); '
          'gpu_engine/public_active.py:46, 217-233 keeps the public counts for the encoder'),
         'Misdreavus (Staller), the set that also carries Mean Look (a represented trap).', engine_since='f3e71663'),
     Effect('drowsy', ('yawn',), ('swalot',), False, '',
