@@ -50,7 +50,7 @@ class DoubleEdgeSourceBindingTests(unittest.TestCase):
      if isinstance(target,ast.Name) and target.id in ('SOURCE_PINS','MAPPING_PINS','DOMAIN_PINS','KERNEL_PINS')}
    self.assertEqual(mappings(old),mappings(current),file)
  def test_all_three_domain_guards_and_every_owned_mapping_pin(self):
-  modules='action_history absorption baton combat critical damage_moves effects encore entry focus_punch items linked_traps mechanics phazing pressure pursuit residual_order secondary self_destruct sleep_talk solar_beam state sustain transition variable_moves weather'.split()
+  modules='action_history absorption baton combat critical damage_moves effects encore entry focus_punch items linked_traps mechanics phazing pressure pursuit residual_order secondary self_destruct sleep_talk solar_beam state sustain transform transition variable_moves weather'.split()
   # the per-module domain pins (they replaced one KERNEL_SHA256 / DOMAIN_SHA256 over these modules): every module, in order
   domain=[(n+'.py',hashlib.sha256((ROOT/'gpu_engine'/(n+'.py')).read_bytes()).hexdigest())for n in modules]
   for file,key in [('conditional_law.py','KERNEL_PINS'),('chance_consumers_pins.py','DOMAIN_PINS'),('ordinary_law.py','DOMAIN_PINS'),('phase_d_chance.py','DOMAIN_PINS')]:self.assertEqual(list(constant(file,key).items()),domain,(file,key))

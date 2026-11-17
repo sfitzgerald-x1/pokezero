@@ -15,15 +15,15 @@ ENGINE = ROOT / 'gpu_engine'
 # (file, table) -> entries. SOURCE_PINS / MAPPING_PINS are sorted by file; DOMAIN_PINS / KERNEL_PINS hold one entry per
 # transition-domain module, in their module list's order.
 PIN_COUNTS = {
-    ('engine_source_frame_witness.py', 'SOURCE_PINS'): 89,   # 88, and residual_order.py since §6
+    ('engine_source_frame_witness.py', 'SOURCE_PINS'): 90,   # 88, residual_order.py since §6, transform.py since Transform
     ('chance_consumers_pins.py', 'SOURCE_PINS'): 14,
-    ('chance_consumers_pins.py', 'DOMAIN_PINS'): 26,
+    ('chance_consumers_pins.py', 'DOMAIN_PINS'): 27,
     ('phase_d_chance.py', 'SOURCE_PINS'): 14,
-    ('phase_d_chance.py', 'DOMAIN_PINS'): 26,
+    ('phase_d_chance.py', 'DOMAIN_PINS'): 27,
     ('ordinary_law.py', 'MAPPING_PINS'): 6,
-    ('ordinary_law.py', 'DOMAIN_PINS'): 26,
+    ('ordinary_law.py', 'DOMAIN_PINS'): 27,
     ('conditional_law.py', 'MAPPING_PINS'): 4,
-    ('conditional_law.py', 'KERNEL_PINS'): 26,
+    ('conditional_law.py', 'KERNEL_PINS'): 27,
 }
 # per-module tables -> (file holding the module list, list name); the gates require the table to name it in order
 DOMAIN_TABLES = {

@@ -1,0 +1,182 @@
+{
+ "schema": "pokezero.effect_probe.scenario.v1",
+ "move": "wonderguard_fixed",
+ "note": "Tier D WG on fixed and reply damage: Seismic Toss (Fighting: Ghost-immune, and WG prints its own line first) is blocked; Shedinja's Ice Beam (special, neutral) hits Wobbuffet, whose Mirror Coat (Psychic, neutral on Bug/Ghost) is then blocked by WG; after its Shadow Ball (physical) Counter is blocked too.",
+ "teams": [
+  [
+   {
+    "species": "Shedinja",
+    "moves": [
+     "agility",
+     "shadowball",
+     "icebeam",
+     "toxic"
+    ],
+    "ability": "Wonder Guard",
+    "item": "Lum Berry"
+   },
+   {
+    "species": "Starmie",
+    "moves": [
+     "splash",
+     "surf",
+     "recover",
+     "protect"
+    ],
+    "ability": "Natural Cure",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Skarmory",
+    "moves": [
+     "splash",
+     "protect",
+     "spikes",
+     "drillpeck"
+    ],
+    "ability": "Keen Eye",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Metagross",
+    "moves": [
+     "splash",
+     "protect",
+     "meteormash",
+     "earthquake"
+    ],
+    "ability": "Clear Body",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Celebi",
+    "moves": [
+     "splash",
+     "protect",
+     "psychic",
+     "recover"
+    ],
+    "ability": "Natural Cure",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Suicune",
+    "moves": [
+     "splash",
+     "protect",
+     "surf",
+     "icebeam"
+    ],
+    "ability": "Pressure",
+    "item": "Leftovers"
+   }
+  ],
+  [
+   {
+    "species": "Blissey",
+    "moves": [
+     "seismictoss",
+     "softboiled",
+     "splash",
+     "protect"
+    ],
+    "ability": "Natural Cure",
+    "item": ""
+   },
+   {
+    "species": "Wobbuffet",
+    "moves": [
+     "mirrorcoat",
+     "counter",
+     "encore",
+     "destinybond"
+    ],
+    "ability": "Shadow Tag",
+    "item": ""
+   },
+   {
+    "species": "Snorlax",
+    "moves": [
+     "splash",
+     "rest",
+     "protect",
+     "bodyslam"
+    ],
+    "ability": "Thick Fat",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Gengar",
+    "moves": [
+     "splash",
+     "protect",
+     "thunderbolt",
+     "icepunch"
+    ],
+    "ability": "Levitate",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Tyranitar",
+    "moves": [
+     "splash",
+     "protect",
+     "rockslide",
+     "earthquake"
+    ],
+    "ability": "Sand Stream",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Jolteon",
+    "moves": [
+     "splash",
+     "protect",
+     "thunderbolt",
+     "batonpass"
+    ],
+    "ability": "Volt Absorb",
+    "item": "Leftovers"
+   }
+  ]
+ ],
+ "script": [
+  [
+   "move 1",
+   "move 1"
+  ],
+  [
+   "move 1",
+   "switch 2"
+  ],
+  [
+   "move 3",
+   "move 1"
+  ],
+  [
+   "move 2",
+   "move 2"
+  ]
+ ],
+ "axes": [],
+ "expect": {
+  "exact": true
+ },
+ "require_fields": [
+  "perish_counter",
+  "yawn_counter",
+  "partial_trap_counter",
+  "partial_trap_source",
+  "item_knocked",
+  "destiny_bond",
+  "effect"
+ ],
+ "showdown_lines": {
+  "0": [
+   "|-immune|p1a: Shedinja|[from] ability: Wonder Guard"
+  ],
+  "2": [
+   "|-immune|p1a: Shedinja|[from] ability: Wonder Guard"
+  ]
+ }
+}
