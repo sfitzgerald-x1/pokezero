@@ -160,7 +160,7 @@ class TransitionObserverWiringTests(unittest.TestCase):
                 with self.subTest(binding=file, target=target):
                     actual = hashlib.sha256((ROOT / "gpu_engine" / target).read_bytes()).hexdigest()
                     self.assertEqual(actual, expected)
-        modules = ("action_history absorption baton combat critical damage_moves effects encore "
+        modules = ("absorption action_history baton combat critical damage_moves effects encore "
                    "entry focus_punch infatuation items linked_traps mechanics phazing pressure pursuit residual_order secondary "
                    "self_destruct sleep_talk solar_beam state sustain transform transition variable_moves weather").split()
         domain = hashlib.sha256(b"".join(name.encode() + b"\0" +
