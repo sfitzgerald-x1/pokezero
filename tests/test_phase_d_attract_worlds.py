@@ -1,5 +1,6 @@
 """Attract carry and prospective gender isolation at the public-world boundary."""
 from dataclasses import replace
+import json
 import unittest
 
 import jax
@@ -73,8 +74,11 @@ class PublicAttractTests(unittest.TestCase):
     def test_sampled_hidden_genders_do_not_enter_public_carry_or_reveal_order(self):
         h = self.helper
         # Every synthetic species is mixed despite a strongly biased dex ratio.
-        raw = replace(h.source.original, species_metadata={name: {**info, 'gender': '', 'genderRatio': {'M': .875, 'F': .125}}
-            for name, info in h.source.original.species_metadata.items()})
+        # compile_source takes a mutable source payload, not its frozen output.
+        payload = json.loads(json.dumps(h.source.original.to_payload(), default=dict))
+        raw = type(h.source.original).from_payload(payload)
+        raw = replace(raw, species_metadata={name: {**info, 'gender': '', 'genderRatio': {'M': .875, 'F': .125}}
+            for name, info in raw.species_metadata.items()})
         source = live.original.compile_source(raw, h.metadata, expected_source_hash=raw.metadata.source_hash,
             expected_source_rows_sha256=source_variant_census(raw)['source_rows_sha256'])
         tables = states.compile_tables(source, h.metadata)
