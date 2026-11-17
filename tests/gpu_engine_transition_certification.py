@@ -14,5 +14,6 @@ e4fc7e8e, its last transition.py commit (whole-leaf masked selects and one faint
 The damage modifiers (Silk Scarf, Twisted Spoon, Marvel Scale and Gen 3 Plus/Minus) moved it to 61b00f72.
 The combined Transform + transition batch + Tier D train moves it to 87e75985: interception reveals, damage credit and ability effects.
 Train B composes the damage modifiers with tape v4 and the Transform/tier-D train at 3029a7e6.
+Train B's combined Stick tree moves it to b3b3b6cd: both critical call sites retain current item/species and both planners retain the Stick cut.
 """
-CURRENT_TRANSITION = '3029a7e6a9dc065c980b4f01273b0294f71bb4db'
+CURRENT_TRANSITION = 'b3b3b6cd52a0ac0194381e45f7c4e02fb99c2bb3'

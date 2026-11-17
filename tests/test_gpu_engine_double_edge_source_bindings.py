@@ -27,11 +27,12 @@ class DoubleEdgeSourceBindingTests(unittest.TestCase):
   # Transform closure (a selected Transform copies the foe's ability and stages into the plan) and their DOMAIN_MODULES,
   # conditional_law.py's KERNEL_MODULES (transform) and engine_source_frame_witness.py's SOURCE_PINS (transform.py).
   # The combined train at 87e75985 preserves Transform's closure plus Tier D's source inventories.
-  # Stick additionally preserves its reviewed <4 cuts and CRIT_RATIO_UNREPRESENTABLE refusal.
-  certified={'chance_consumers.py':'87e759858f953da905ffcb88b2eb1388ab6cca35',
-             'phase_d_chance.py':'87e759858f953da905ffcb88b2eb1388ab6cca35',
-             'conditional_law.py':'87e759858f953da905ffcb88b2eb1388ab6cca35',
-             'engine_source_frame_witness.py':'87e759858f953da905ffcb88b2eb1388ab6cca35',
+  # Train B's combined Stick tree at b3b3b6cd additionally preserves its reviewed <4 cuts and
+  # CRIT_RATIO_UNREPRESENTABLE refusal alongside Transform's closure; strict AST/membership equality stays required.
+  certified={'chance_consumers.py':'b3b3b6cd52a0ac0194381e45f7c4e02fb99c2bb3',
+             'phase_d_chance.py':'b3b3b6cd52a0ac0194381e45f7c4e02fb99c2bb3',
+             'conditional_law.py':'b3b3b6cd52a0ac0194381e45f7c4e02fb99c2bb3',
+             'engine_source_frame_witness.py':'b3b3b6cd52a0ac0194381e45f7c4e02fb99c2bb3',
              'ordinary_law.py':'53dc3add38e37c36b7609edabe4f96e313022b16'}
   constants={'SOURCE_PINS','MAPPING_PINS','DOMAIN_SHA256','KERNEL_SHA256'}
   for file in ('chance_consumers.py','ordinary_law.py','conditional_law.py',
