@@ -96,7 +96,7 @@ def prepare_original(worker,decl,runtime_ref):
     from gpu_engine import source_provenance,public_belief,v4_encoder,v5_device_backend
     source=load_gen3_randbat_source_cached(runtime['showdown']['root']);dex=load_showdown_dex_cached(runtime['showdown']['root'])
     contract=ActorContract.champion();vocabulary=CategoryVocabulary(tuple(v['tokens']),v['oov_buckets'],v['aliases'])
-    catalog=v4_encoder.compile_encoder(public_belief.compile_source(source),dex,vocabulary,checkpoint_sha256=contract.checkpoint_sha256,feature_masks=dict(contract.feature_masks))
+    catalog=v4_encoder.compile_encoder(public_belief.compile_source(source),dex,vocabulary,checkpoint_sha256=contract.checkpoint_sha256,feature_masks=contract.encoder_masks())
     pool=source_provenance.load_constructor_pool(runtime['constructor_pool']['path'])
     prepared=v5_device_backend.prepare(catalog,source,pool,source_commit=runtime['source_commit'])
     if prepared.source_sha256!=decl['source_sha256']or prepared.pool_sha256!=decl['pool_sha256']or prepared.category_sha256!=decl['category_vocabulary_sha256']:
@@ -125,7 +125,8 @@ def reconstruct(prepared,pool,gender,decl,batches,positions,index,directory,bank
     from gpu_engine.v5_device_rollout import RootContext
     params=[];config=None
     for actor in decl['actors']:
-        p,c,_=v5_model.load(actor['archive']['path'],expected_archive_sha256=actor['archive']['sha256'],expected_checkpoint_sha256=actor['checkpoint_sha256'],expected_category_vocabulary_sha256=decl['category_vocabulary_sha256'],expected_label_vocabulary_sha256=label_vocabulary_sha256(decl['label_vocabulary']),enable_v5=True)
+        p,c,meta=v5_model.load(actor['archive']['path'],expected_archive_sha256=actor['archive']['sha256'],expected_checkpoint_sha256=actor['checkpoint_sha256'],expected_category_vocabulary_sha256=decl['category_vocabulary_sha256'],expected_label_vocabulary_sha256=label_vocabulary_sha256(decl['label_vocabulary']),enable_v5=True)
+        from gpu_engine.private_self_moves import refuse_unthreaded;refuse_unthreaded(meta,context='device rollout truth')   # V2 self_moves
         if config is not None and config!=c:raise ValueError('original actor geometry differs')
         config=c;params.append(p)
     executor=bank.make_executor(prepared,config)

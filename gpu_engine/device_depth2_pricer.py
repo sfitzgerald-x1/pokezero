@@ -102,7 +102,16 @@ def _make_child_joint(executor):
 
 
 def _make_leaf_joint(executor):
-    """Turn 2: both seats may be waiting, so each seat's engine action is -1 unless it is requested."""
+    """Turn 2: both seats may be waiting, so each seat's engine action is -1 unless it is requested. One node's K pairs
+    (`_leaf_lane` vmapped over the pair, the node's state, views and draw shared)."""
+    return jax.vmap(_leaf_lane(executor),in_axes=(None,None,None,None,None,None,0,None))
+
+
+def _leaf_lane(executor):
+    """One leaf lane: the node's dispatch views, both seats' engine actions (-1 for a seat that is not requested), one
+    step under the node's draw, the engine masks and the learner's leaf view. `_make_leaf_joint` maps it over a node's
+    pairs; the depth-N pricer's wide leaf program maps it over packed lanes, each with its own node's state, views and
+    draw, so both layouts run this one function."""
     def single(state,public,own,peer,owner,requested,pair,chance):
         actions=j.full((1,2),-1,j.int32)
         chosen=executor.dispatch(own,state,owner,pair[:1])
@@ -113,15 +122,18 @@ def _make_leaf_joint(executor):
         masks=executor.legal(after.step.state)
         view=executor.observe(after.step.state,after.trackers,owner,masks[:,owner[0]])
         return after.step.invalid_actions,after.step.state.done,after.step.state.winner,view.observation.error,view.inputs
-    return jax.vmap(single,in_axes=(None,None,None,None,None,None,0,None))
+    return single
 
 
-def _make_views(executor):
-    """Both seats' observations of one world (dispatch views and encoder inputs), from the engine masks."""
+def _make_views(executor,*,peer_self_moves=None):
+    """Both seats' observations of one world (dispatch views and encoder inputs), from the engine masks.
+    peer_self_moves=False (V2): the peer's view without own move/PP cells (a reply model that does not declare self_moves)."""
+    peer_observe=executor.observe
+    if peer_self_moves is False and getattr(executor,'observe_self_moves_off',None) is not None:peer_observe=executor.observe_self_moves_off
     def views(state,public,owner):
         masks=executor.legal(state);seat=j.asarray([owner],j.int32)
         own=executor.observe(state,public,seat,masks[:,owner])
-        peer=executor.observe(state,public,1-seat,masks[:,1-owner])
+        peer=peer_observe(state,public,1-seat,masks[:,1-owner])
         return own.observation,peer.observation,own.inputs,peer.inputs
     return views
 
@@ -392,7 +404,11 @@ def pack_turn1(requests,worlds,recipe,capacity,params,*,k1_own=9,fixed_capacity=
     if not available:return None
     count=len(requests);first=available[0];flat=[w if w.state is not None else first for pair in worlds for w in pair]
     def stacked(values,world_axis=False):
-        values=jax.device_get(tuple(values))
+        values=tuple(values)
+        # NumPy can read CPU buffers directly. Keep explicit, prefetched transfers for accelerator leaves,
+        # including a mixed-device tree, so transfer guards and asynchronous copies retain their behavior.
+        if any(isinstance(x,jax.Array)and any(d.platform!='cpu'for d in x.devices())for x in jax.tree.leaves(values)):
+            values=jax.device_get(values)
         def pack(*leaves):
             value=np.stack(leaves);length=capacity*(2 if world_axis else 1)
             padded=np.empty((length,)+value.shape[1:],value.dtype);padded[:len(value)]=value;padded[len(value):]=value[0]

@@ -90,9 +90,10 @@ def main(argv=None):
     backend = RuntimeBackend(prepared, pool, gender_policy=gender, teacher=providers['baseline']);backend.check_plan(plan)
     events = (json.loads(p.read_text()) for p in sorted((root / 'run' / 'journal').glob('*.json')))
     snapshot = next(e['payload'] for e in events if e['kind'] == 'SNAPSHOT' and e['payload']['iteration'] == -1)
-    params, config, _ = v5_model.load(root / 'run' / snapshot['archive'], expected_archive_sha256=snapshot['archive_sha256'],
+    params, config, meta = v5_model.load(root / 'run' / snapshot['archive'], expected_archive_sha256=snapshot['archive_sha256'],
         expected_checkpoint_sha256=snapshot['checkpoint_sha256'], expected_category_vocabulary_sha256=plan.model.category_vocabulary_sha256,
         expected_label_vocabulary_sha256=plan.model.label_vocabulary.sha256, enable_v5=True)
+    from gpu_engine.private_self_moves import refuse_unthreaded;refuse_unthreaded(meta, context='d3 chunk equal')   # V2 self_moves
     if config != plan.model:raise SystemExit('actor configuration differs')
     batch = plan.iterations[0][0];ordinal = {g.stream_id: i for i, g in enumerate(plan.games)};snap = runs.Snapshot(**snapshot)
     assignments = json.loads(runs._json(tuple(runs.assignment(plan, g, ordinal[g.stream_id], snap, ()) for g in batch.games)))

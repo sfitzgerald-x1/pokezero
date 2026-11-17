@@ -142,13 +142,25 @@ def _runtime_metadata(runtime_document,*,expected_pool_sha256):
     return profile,vocabulary,gender,resolved
 
 
+def _declared_plan(document,profile,arm,category_vocabulary):
+    """_plan of the declaration, with V2 self_moves: an on declaration records `self_moves: true` (Plan.manifest writes the
+    key only when on). The rest of the document is the reviewed Phase C recipe _plan checks; the declared plan's manifest
+    must reproduce the whole document, so a present false or non-bool value is refused (no default or discarded field)."""
+    from . import v5_run as run
+    if 'self_moves' not in document:return _plan(document,profile,arm,category_vocabulary)
+    rest={k:v for k,v in document.items() if k!='self_moves'}
+    plan=replace(_plan(rest,profile,arm,category_vocabulary),self_moves=document['self_moves'])
+    if run._json(plan.manifest())!=run._json(document):raise ValueError('full original plan differs; no default or discarded fields')
+    return plan
+
+
 def load_inputs(*,declaration,expected_declaration_sha256,runtime,expected_runtime_sha256,arm,enable_v5=False):
     """Hash/read only; no source compiler, engine constructor or model allocation."""
     if enable_v5 is not True:raise ValueError('explicit v5 worker enablement required before artifact access')
     declaration_document=_record(dict(path=str(declaration),sha256=expected_declaration_sha256))
     runtime_document=_record(dict(path=str(runtime),sha256=expected_runtime_sha256))
     profile,vocabulary,gender,resolved=_runtime_metadata(runtime_document,expected_pool_sha256=declaration_document['pool_sha256'])
-    plan=_plan(declaration_document,profile,arm,resolved)
+    plan=_declared_plan(declaration_document,profile,arm,resolved)
     uses_gender=any(b.gender_seed is not None for iteration in plan.iterations for b in iteration)
     if uses_gender!=(gender is not None):raise ValueError('explicit gender policy must match declared gender recipe')
     return Inputs(plan,profile,json.dumps(runtime_document,sort_keys=True,allow_nan=False),
@@ -213,7 +225,13 @@ def _source(runtime):
 
 def prepare_runtime(inputs):
     """Original training wrapper; compilation is shared with nontraining capture."""
+    if getattr(inputs.plan,'self_moves',False):raise ValueError(SELF_MOVES_DEVICE_ONLY)
     return _prepare_runtime(inputs.runtime,inputs.vocabulary,expected_pool_sha256=inputs.plan.pool_sha256)
+
+
+# V2 self_moves: a run that declares it collects on the device route only. The Python routes (prepare_runtime and
+# v5_python_backend) encode with the champion contract's off masks and do not thread the owner's line history.
+SELF_MOVES_DEVICE_ONLY='a self_moves plan collects on the device route only (prepare_device_runtime); the Python routes are not threaded'
 
 
 def prepare_device_runtime(inputs):
@@ -223,12 +241,15 @@ def prepare_device_runtime(inputs):
     from .randbat import load_gen3_randbat_source_cached
     from .live_protocol_actor import ActorContract
     from gpu_engine import source_provenance,public_belief,v4_encoder,v5_device_backend
-    runtime=inputs.runtime;v=inputs.vocabulary;show=runtime['showdown'];contract=ActorContract.champion()
+    # V2 self_moves: the plan declares it (absent = off: gate scripts pass a bare pool binding); the catalog, and so the
+    # prepared device tables every collector encodes with, follow it.
+    runtime=inputs.runtime;v=inputs.vocabulary;show=runtime['showdown']
+    contract=replace(ActorContract.champion(),self_moves=bool(getattr(inputs.plan,'self_moves',False)))
     vocabulary=CategoryVocabulary(tuple(v['tokens']),v['oov_buckets'],v['aliases'])
     source=load_gen3_randbat_source_cached(show['root']);dex=load_showdown_dex_cached(show['root'])
     if source.metadata.source_hash!=contract.belief_set_source_hash:raise ValueError('original public belief source differs')
     catalog=v4_encoder.compile_encoder(public_belief.compile_source(source),dex,vocabulary,
-        checkpoint_sha256=contract.checkpoint_sha256,feature_masks=dict(contract.feature_masks))
+        checkpoint_sha256=contract.checkpoint_sha256,feature_masks=contract.encoder_masks())
     pool=source_provenance.load_constructor_pool(runtime['constructor_pool']['path']);metadata=pool.metadata()
     if (source_provenance._pool(pool,rehash=True)['pool_sha256']!=inputs.plan.pool_sha256
             or metadata['compiled_tree']['sha256']!=show['compiled_tree_sha256']):
@@ -280,7 +301,7 @@ def _prepare_runtime(runtime,vocabulary,*,expected_pool_sha256):
     belief=load_gen3_randbat_source_cached(show['root']);dex=load_showdown_dex_cached(show['root'])
     if belief.metadata.source_hash!=contract.belief_set_source_hash:raise ValueError('original public belief source differs')
     catalog=v4_encoder.compile_encoder(public_belief.compile_source(belief),dex,vocabulary,
-        checkpoint_sha256=contract.checkpoint_sha256,feature_masks=dict(contract.feature_masks))
+        checkpoint_sha256=contract.checkpoint_sha256,feature_masks=contract.encoder_masks())
     pool=source_provenance.load_constructor_pool(runtime['constructor_pool']['path'])
     metadata=pool.metadata()
     if (source_provenance._pool(pool,rehash=True)['pool_sha256']!=expected_pool_sha256

@@ -1441,6 +1441,7 @@ def load_head(args, *, plan, labels, category_sha256):
     params, head_config, meta = v5_model.load(args.head_archive, expected_archive_sha256=args.head_archive_sha256,
         expected_checkpoint_sha256=args.head_checkpoint_sha256, expected_category_vocabulary_sha256=category_sha256,
         expected_label_vocabulary_sha256=labels.sha256, enable_v5=True)
+    from gpu_engine.private_self_moves import refuse_unthreaded;refuse_unthreaded(meta, context='d3 depth2 gate head')   # V2 self_moves
     if replace(head_config, arm='D', replicate=0) != plan.model:raise ValueError('head geometry differs from the bank D model')
     model_sha256 = runs._sha(head_config.metadata())   # what Snapshot.model_sha256 records for a model
     if args.head_model_sha256 is not None and model_sha256 != args.head_model_sha256:
@@ -1789,9 +1790,10 @@ def bank_chunk_requests(args):
     backend = RuntimeBackend(prepared, pool, gender_policy=gender, teacher=provider);backend.check_plan(plan)
     events = (json.loads(p.read_text()) for p in sorted((root / 'run' / 'journal').glob('*.json')))
     snapshot = next(e['payload'] for e in events if e['kind'] == 'SNAPSHOT' and e['payload']['iteration'] == -1)
-    params, config, _ = v5_model.load(root / 'run' / snapshot['archive'], expected_archive_sha256=snapshot['archive_sha256'],
+    params, config, meta = v5_model.load(root / 'run' / snapshot['archive'], expected_archive_sha256=snapshot['archive_sha256'],
         expected_checkpoint_sha256=snapshot['checkpoint_sha256'], expected_category_vocabulary_sha256=plan.model.category_vocabulary_sha256,
         expected_label_vocabulary_sha256=plan.model.label_vocabulary.sha256, enable_v5=True)
+    from gpu_engine.private_self_moves import refuse_unthreaded;refuse_unthreaded(meta, context='d3 depth2 gate actor')   # V2 self_moves
     if config != plan.model:raise SystemExit('actor configuration differs')
     batch = plan.iterations[0][0];ordinal = {g.stream_id: i for i, g in enumerate(plan.games)};snap = runs.Snapshot(**snapshot)
     assignments = json.loads(runs._json(tuple(runs.assignment(plan, g, ordinal[g.stream_id], snap, ()) for g in batch.games)))

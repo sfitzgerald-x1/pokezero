@@ -182,7 +182,7 @@ def champion_actor_factory(config):
             _require(source.metadata.source_hash == c.belief_set_source_hash, 'JAX source hash differs')
             catalog = v4_encoder.compile_encoder(public_belief.compile_source(source),
                 load_showdown_dex_cached(config.showdown_root), env_config.category_vocab,
-                checkpoint_sha256=c.checkpoint_sha256, feature_masks=dict(c.feature_masks))
+                checkpoint_sha256=c.checkpoint_sha256, feature_masks=c.encoder_masks())
             bound['functions'] = CompiledEncoderFunctions(catalog)
         functions = bound['functions']
         return JaxBackend(c, catalog=functions.catalog, compiled_functions=functions, **identity)

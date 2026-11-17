@@ -1,19 +1,12 @@
-"""MEASUREMENT ONLY: one decision's worlds built across idle prepare workers (the batching pipeline's opt-in --split-worlds).
+"""Opt-in measurement adapter: dispatch the supported world-range seam to helpers.
 
-Never on by default, and never to be enabled in production before worlds' own world-range seam lands (prepare_root,
-sample_range, assemble: worlds' PR after its prepare speedups). Until then this module is the narrow internal interface that
-seam will replace: one decision's per-world loop over an index range (world_range), run by a pool worker on its own constructor,
-and a sampler that farms phase_d_protocol_world.sample's world loop out to a backend (Backend.worlds) for the calls made inside
-`split(backend)` on this thread, and is phase_d_protocol_world.sample itself everywhere else.
-
-world_range is phase_d_protocol_world.sample's per-world body as it stands at 43937f12, copied, not changed (scripts' k-split
-harness runs the same copy): the start sampler and v5_public_world.materialize on the decision's own public root and carried
-root, its own ProtocolInputs (the per-root _once memo recomputed per range). A split sample returns the same WorldSet
-serial sample() returns: the carried root, the worlds, their seeds and diagnostics in index order (the k-split harness checks
-it byte for byte, prepare_pool.digest, on W16/W32/W64 roots; a worlds change to that body breaks the equality, so it must be
-re-checked on every tree before a measurement). The ship cost (pickling the roots for the helpers, their unpickling, the
-worlds' way back) is inside prepare_roots, so it is counted in prepare_seconds."""
-import random
+The owner captures and carries the root once. Helpers call protocol.world_range
+for contiguous global index ranges; no sampler implementation is copied here.
+Completion remains in prepare_roots' existing chain after the ranges return.
+Outside split(), the installed hook delegates to the original range function.
+A requested split must actually use the hook; a serial fallback is an error.
+"""
+from dataclasses import replace
 import threading
 import time
 
@@ -21,95 +14,116 @@ _local = threading.local()
 _installed = {}
 
 
-def world_range(root, detached, lines, seed, indices, *, catalog, metadata, source):
-    """[(index, world_seed, World, diagnostic)] for these world indices of one decision: sample()'s per-world body, verbatim."""
-    from . import phase_d_protocol_world as protocol, v5_public_world, device_public_world_state as states
-    from pokezero.determinization import _gen3_randbat_belief_start_override_result
-    inputs = protocol.ProtocolInputs(detached, tuple(lines), catalog, metadata, source);game = protocol.game_lines_sha256(lines);out = []
-    for index in indices:
-        world_seed, kernel_seed = protocol.world_seeds(root, detached, game, seed, index)
-        try:
-            start, reason = _gen3_randbat_belief_start_override_result(context=root.context, set_source=source.original,
-                rng=random.Random(world_seed), team_size=6, canonicalize_revealed_variants=True)
-            if start is None:
-                unknown = [];protocol._downstream_unknowns(unknown, 'Original public sampler unavailable: ' + str(reason))
-                made = protocol.ProtocolWorld(None, None, (reason or 'public-sampler-unavailable',), mapper_diagnostics=tuple(unknown))
-            else:
-                made = v5_public_world.materialize(root, start, prepared=inputs, history=None, own_static=None, seed=kernel_seed)
-            out.append((index, world_seed, states.World(index, made.state, made.public, made.refusals, kernel_seed, False),
-                        dict(world=index, checks=list(made.mapper_diagnostics))))
-        except (ValueError, KeyError, TypeError, IndexError) as error:
-            unknown = [];protocol._downstream_unknowns(unknown, 'Production sample prerequisite refused: ' + str(error))
-            out.append((index, world_seed, states.World(index, None, None, (str(error),), kernel_seed, False), dict(world=index, checks=unknown)))
-    return out
-
-
 def worker_range(constructor, blob):
-    """A pool worker's side: (root, detached, lines, seed, indices) pickled -> the range's worlds packed for the way back."""
+    """Build and pack one supported range on a worker's own static inputs."""
     import jax
-    from . import prepare_pool as pp
+    from . import prepare_pool as pp, phase_d_protocol_world as protocol
     with jax.default_device(jax.devices('cpu')[0]):
-        root, detached, lines, seed, indices = pp.pickle.loads(blob)
-        rows = world_range(root, detached, lines, seed, indices, catalog=constructor.catalog, metadata=constructor.metadata, source=constructor.source)
-        jax.block_until_ready([(w.state, w.public) for _, _, w, _ in rows if w.state is not None])
-    shells, packed = pp.pack_worlds([w for _, _, w, _ in rows])
-    return pp.dumps(([(i, s, d) for i, s, _, d in rows], shells, packed))
+        root, detached, lines, seed, start, stop, count = pp.pickle.loads(blob)
+        part = protocol.world_range(root, detached, start=start, stop=stop, lines=lines,
+            catalog=constructor.catalog, metadata=constructor.metadata, source=constructor.source,
+            config=constructor.owning_config, battle_id=root.context.battle_id, seed=seed, count=count)
+        jax.block_until_ready([(w.state, w.public) for w in part.worlds if w.state is not None])
+    shells, packed = pp.pack_worlds(part.worlds)
+    return pp.dumps((replace(part, root=None, worlds=()), shells, packed))
 
 
 class Backend:
-    """Where a split sample's world ranges go: `ranges(blobs)` sends each pickled range to a helper and returns their packed
-    replies in the same order (the pipeline's scheduler does the sending, its idle workers the work)."""
+    """Send pickled contiguous ranges to helpers and validate their ordered replies."""
     def __init__(self, k, ranges):
-        self.k, self.ranges = int(k), ranges
+        if type(k) is not int or k < 1 or not callable(ranges):
+            raise ValueError('world split requires k >= 1 and a range dispatcher')
+        self.k, self.ranges = k, ranges
         self.parts = {}
+        self._refused = False
+
+    def require_split(self):
+        if not self.parts or self.parts.get('k', 0) < min(self.k, self.parts.get('worlds', self.k)):
+            raise RuntimeError('world split hook did not execute the requested ranges; serial fallback forbidden')
+
+    def check_result(self, item):
+        """A genuine constructor refusal has no worlds to split; preserve it."""
+        from . import constructor_worlds as cw
+        self._refused = type(item) is cw.RootRefusal
+        if not self._refused:
+            self.require_split()
 
     def worlds(self, root, detached, lines, seed, count):
-        from . import prepare_pool as pp
+        from .constructor_worlds import ROOT_ERRORS
+        try:
+            return self._worlds(root, detached, lines, seed, count)
+        except ROOT_ERRORS as error:
+            # These errors describe broken dispatch/replies, not a constructor
+            # refusing the public root. Keep them outside prepare_roots' net.
+            raise RuntimeError(f'world split dispatch/gather failed: {type(error).__name__}: {error}') from error
+
+    def _worlds(self, root, detached, lines, seed, count):
+        from . import prepare_pool as pp, phase_d_protocol_world as protocol
         import jax
-        k = max(1, min(self.k, count));indices = [list(range(count))[i::k] for i in range(k)];clock = time.perf_counter()
-        blobs = [pp.dumps((root, detached, tuple(lines), seed, r)) for r in indices];shipped = time.perf_counter()
-        replies = self.ranges(blobs);back = time.perf_counter();rows = {}
-        for reply in replies:
-            meta, shells, packed = pp.pickle.loads(reply)
-            for (i, s, d), w in zip(meta, pp.unpack_worlds(shells, packed, jax.devices('cpu')[0])):
-                rows[i] = (s, w, d)
-        self.parts = dict(k=k, ship=shipped - clock, helpers=back - shipped, gather=time.perf_counter() - back,
-                          bytes=sum(len(b) for b in blobs) + sum(len(r) for r in replies))
-        return tuple(rows[i][1] for i in range(count)), tuple(rows[i][0] for i in range(count)), tuple(rows[i][2] for i in range(count))
+        if self.parts:
+            raise RuntimeError('one decision per world split context required')
+        k = min(self.k, count)
+        bounds = [(count * i // k, count * (i + 1) // k) for i in range(k)]
+        clock = time.perf_counter()
+        blobs = [pp.dumps((root, detached, tuple(lines), seed, a, b, count)) for a, b in bounds]
+        shipped = time.perf_counter()
+        replies = tuple(self.ranges(blobs));back = time.perf_counter()
+        if len(replies) != k:
+            raise RuntimeError('world split did not return every dispatched range')
+        parts = []
+        for (start, stop), reply in zip(bounds, replies):
+            header, shells, packed = pp.pickle.loads(reply)
+            if type(header) is not protocol.WorldRange or (header.start, header.stop) != (start, stop):
+                raise RuntimeError('world split reply does not match its dispatched range')
+            parts.append(replace(header, root=detached, worlds=pp.unpack_worlds(shells, packed, jax.devices('cpu')[0])))
+        made = protocol.assemble(parts, count=count)
+        self.parts = dict(k=k, worlds=count, ship=shipped-clock, helpers=back-shipped,
+            gather=time.perf_counter()-back, bytes=sum(map(len, blobs)) + sum(map(len, replies)))
+        return replace(parts[0], start=0, stop=count, worlds=made.worlds, seeds=made.seeds,
+            mapper_diagnostics=made.mapper_diagnostics)
 
 
-def _split_sample(root, detached, *, lines, catalog, source, metadata, config, battle_id, seed, count):
-    """phase_d_protocol_world.sample, or inside split(backend) on this thread: its preamble, then the backend's worlds."""
-    from . import phase_d_protocol_world as protocol, phase_d_live_worlds as live_worlds
+def _split_range(root, detached, *, start, stop, lines, catalog, source, metadata, config, battle_id, seed, count):
     backend = getattr(_local, 'backend', None)
     if backend is None:
-        return _installed['sample'](root, detached, lines=lines, catalog=catalog, source=source, metadata=metadata, config=config,
-                                    battle_id=battle_id, seed=seed, count=count)
-    if count not in (2, 8, 16, 32, 64):
-        raise ValueError('declared2/8/16/32/64 world budget required')
-    if detached.source_binding_sha256 != source.binding_sha256:
-        raise live_worlds.Refusal('SAME_PUBLIC_ROOT_SOURCE_BINDING_REQUIRED')
-    detached = protocol._carried_root(root, detached, lines, metadata)
-    worlds, seeds, diagnostics = backend.worlds(root, detached, lines, seed, count)
-    return live_worlds.WorldSet(detached, worlds, seeds, count, diagnostics)
+        return _installed['world_range'](root, detached, start=start, stop=stop, lines=lines, catalog=catalog,
+            source=source, metadata=metadata, config=config, battle_id=battle_id, seed=seed, count=count)
+    if type(count) is not int or count not in (2, 8, 16, 32, 64) or start != 0 or stop != count:
+        raise RuntimeError('world split requires one full declared world budget from the constructor seam')
+    return backend.worlds(root, detached, lines, seed, count)
 
 
 def install():
-    """Route phase_d_protocol_world.sample through _split_sample in this process (idempotent). Outside split(), it calls the
-    original: every other caller's sample is unchanged."""
+    """Install once; refuse a missing or replaced hook instead of silently running serially."""
     from . import phase_d_protocol_world as protocol
-    if 'sample' not in _installed:
-        _installed['sample'] = protocol.sample;protocol.sample = _split_sample
+    current = getattr(protocol, 'world_range', None)
+    if 'world_range' not in _installed:
+        if not callable(current):
+            raise RuntimeError('world split requires the protocol.world_range seam hook')
+        _installed['world_range'] = current
+        protocol.world_range = _split_range
+    elif current is not _split_range:
+        raise RuntimeError('world split seam hook is missing or replaced')
 
 
 class split:
-    """Context: this thread's sample() calls farm their world loop to `backend`."""
+    """Route one decision's range through backend on this thread; fail if bypassed.
+
+    Call backend.check_result on prepare_roots' result to preserve a RootRefusal
+    before any worlds were built. A successful prepare must dispatch ranges.
+    """
     def __init__(self, backend):
         self.backend = backend
 
     def __enter__(self):
-        install();_local.backend = self.backend
+        if getattr(_local, 'backend', None) is not None:
+            raise RuntimeError('nested world split contexts are not supported')
+        install()
+        self.backend.parts = {};self.backend._refused = False
+        _local.backend = self.backend
         return self.backend
 
-    def __exit__(self, *exc):
+    def __exit__(self, exc_type, *exc):
         _local.backend = None
+        if exc_type is None and not self.backend._refused:
+            self.backend.require_split()

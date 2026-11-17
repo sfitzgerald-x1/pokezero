@@ -370,6 +370,27 @@ class ObservationFeatureMasks:
       frozen legacy positions present in EVERY schema, plus the possible-items/moves/abilities
       counts and every sampled search world. Turning this on is not an ablation of something
       already written — it perturbs encodes that every existing checkpoint trained against.
+    - ``self_moves`` (V2): whether OUR OWN Pokemon tokens (self tokens 1-6, every own mon, bench
+      and active, fainted included) carry their movesets and PP in the move-belief columns that
+      are otherwise structurally zero on self tokens. Default False: every existing checkpoint
+      (the champion included) trained with those columns zero, and False encodes
+      byte-identically. No shape or vocabulary change. Representation, mirroring how a FULLY
+      revealed opponent mon is written (our own moves are known exactly, so they are certain):
+
+      * the request's moves (``ShowdownPokemon.moves``; typed Hidden Power ids such as
+        ``hiddenpowerfire``, as the request names them) are both the "revealed" and the
+        "possible" moves: ``belief:possible_move:<id>`` labels in the 16
+        ``CATEGORY_BELIEF_MOVE_OFFSET`` buckets (sorted, as every bucket list is), and
+        ``NUMERIC_REVEALED_MOVE_COUNT`` = ``NUMERIC_POSSIBLE_MOVE_COUNT`` = the number of own moves;
+      * under ``exact_state`` (as for the opponent): per bucket, the PP validity bit 1.0
+        (``NUMERIC_OPP_MOVE_PP_VALID_OFFSET``, v2.1+ schemas) and the remaining-PP fraction
+        (``NUMERIC_OPP_MOVE_PP_OFFSET``) = (catalog max PP - uses) / max PP, where ``uses`` is the
+        owner's own public PP ledger (the belief engine's ``move_uses`` for our mon: the same
+        charging rules as the opponent PP columns, i.e. Pressure doubles only when the foe's
+        Pressure is public to us, Sleep Talk's callee and Struggle are uncharged, moves used
+        while transformed are not charged to the real set). Typed Hidden Power reads the
+        ledger's generic ``hiddenpower`` count. The request's own PP is deliberately NOT used:
+        it covers the active mon only, and the bench must follow the same rule as the active.
     """
 
     opponent_tendency_stats_block: bool = True
@@ -380,8 +401,15 @@ class ObservationFeatureMasks:
     feature_pack_last_move: bool = True
     investment_belief_narrowing: bool = False
     item_belief_narrowing: bool = False
+    # None = not declared (the dataclass default, a checkpoint predating the switch): resolved at
+    # construction from the OBS_SELF_MOVES measurement override, else False. An explicit bool is a
+    # declaration and always wins. After construction the field is a plain bool.
+    self_moves: bool | None = None
 
     def __post_init__(self) -> None:
+        resolved = resolve_self_moves(self.self_moves)
+        if resolved is not self.self_moves:
+            object.__setattr__(self, "self_moves", resolved)
         # 0 is a valid budget: the transition region exists but is fully masked
         # (Markov-state-only ablations). The encoder fill/mask paths handle it. Under v4 there
         # is no region at all, so the budget is inert rather than meaningful — the encoder
@@ -393,7 +421,52 @@ class ObservationFeatureMasks:
             )
 
 
-DEFAULT_OBSERVATION_FEATURE_MASKS = ObservationFeatureMasks()
+SELF_MOVES_ENV = "OBS_SELF_MOVES"
+
+
+def resolve_self_moves(declared: bool | None) -> bool:
+    """The ``self_moves`` mask: a declaration (True/False) wins; an absent one (None) reads ``OBS_SELF_MOVES``.
+
+    ``OBS_SELF_MOVES`` is a MEASUREMENT override for masks built without a declaration (a measurement tool's own
+    ``ObservationFeatureMasks(...)`` or a B2 mask dict without the key): ``on`` / ``off``, unset or empty = False. Any
+    other value raises: a typo must never silently encode with the default. Read by both mask types,
+    ``ObservationFeatureMasks`` (the Python encoder) and ``gpu_engine.v4_encoder.Masks`` (B2), so one process resolves
+    both paths the same way. Everything tied to a checkpoint declares (``ActorContract.encoder_masks``,
+    ``feature_masks_from_model_config``, ``DEFAULT_OBSERVATION_FEATURE_MASKS``), so the override never flips it, and
+    those flows refuse a set override that contradicts their checkpoint (``require_declared_self_moves``). To measure a
+    checkpoint with our own moves visible, declare it: ``dataclasses.replace(masks, self_moves=True)``.
+    """
+    import os
+
+    if declared is not None:
+        return bool(declared)
+    value = os.environ.get(SELF_MOVES_ENV, "")
+    if value == "":
+        return False
+    if value not in ("on", "off"):
+        raise ValueError(f"{SELF_MOVES_ENV} must be 'on' or 'off', got {value!r}")
+    return value == "on"
+
+
+def require_declared_self_moves(declared: bool, *, context: str) -> None:
+    """Serving entry points: refuse an ``OBS_SELF_MOVES`` override that differs from the checkpoint's declared value.
+
+    The override exists for measurement tools that deliberately encode a checkpoint with or without our own moves. A
+    serving process (the live actor, the search server) must encode exactly what its checkpoint was trained on, so a
+    stray environment variable must stop it at startup instead of silently changing every encode.
+    """
+    import os
+
+    value = os.environ.get(SELF_MOVES_ENV, "")
+    if value != "" and resolve_self_moves(None) != bool(declared):
+        raise ValueError(
+            f"{context}: {SELF_MOVES_ENV}={value!r} overrides the checkpoint's self_moves={bool(declared)}; "
+            "serving refuses an observation override (measurement tools only)"
+        )
+
+
+# Declared off: the import-time default never reads the environment.
+DEFAULT_OBSERVATION_FEATURE_MASKS = ObservationFeatureMasks(self_moves=False)
 
 
 @dataclass(frozen=True)

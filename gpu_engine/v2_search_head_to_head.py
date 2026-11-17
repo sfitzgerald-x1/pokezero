@@ -473,9 +473,10 @@ def main(argv=None):
         if champion:return loaded[('champion', None)]   # one parameter tree for both seats: (champion,), actors 0/0
         if (run, iteration) not in loaded:
             snap = snapshot(run, iteration)
-            params, config, _ = v5_model.load(Path(run, snap.archive), expected_archive_sha256=snap.archive_sha256,
+            params, config, meta = v5_model.load(Path(run, snap.archive), expected_archive_sha256=snap.archive_sha256,
                 expected_checkpoint_sha256=snap.checkpoint_sha256, expected_category_vocabulary_sha256=plan.model.category_vocabulary_sha256,
                 expected_label_vocabulary_sha256=plan.model.label_vocabulary.sha256, enable_v5=True)
+            from gpu_engine.private_self_moves import refuse_unthreaded;refuse_unthreaded(meta, context='v2 search head to head')   # V2 self_moves
             if replace(config, replicate=plan.model.replicate) != plan.model:raise ValueError('actor architecture differs from evaluation model')
             loaded[(run, iteration)] = (snap, params)
         return loaded[(run, iteration)]

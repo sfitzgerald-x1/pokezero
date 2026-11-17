@@ -132,6 +132,7 @@ class BankData:
     positions: tuple
     groups: tuple
     declaration: object
+    self_moves: bool = False    # V2: the bank's encoding (header key, written only when on)
 
 
 def _records(reference, schema):
@@ -154,6 +155,9 @@ def resolve_device_bank(protocol, request):
     if (ph['split']!='PHASE_C_FIXED_HELDOUT' or sh['split']!=ph['split']
             or any(ph[k] != sh[k] for k in ('device_bank','device_source','category_vocabulary_sha256','label_vocabulary_sha256','category_count'))):
         raise ValueError('positions/siblings name different device banks')
+    from .v5_evaluation import bank_self_moves
+    encoded = bank_self_moves(ph)
+    if bank_self_moves(sh) != encoded: raise ValueError('positions/siblings name different device-bank encodings')
     plan, _, games, labels = declaration(ph['device_bank']); expected = selectors(games)
     if (ph['device_source'] != plan['source_commit'] or ph['category_vocabulary_sha256'] != plan['category_vocabulary_sha256']
             or ph['label_vocabulary_sha256'] != labels.sha256 or labels.sha256 != protocol['label_vocabulary_sha256']
@@ -200,7 +204,7 @@ def resolve_device_bank(protocol, request):
                 elif branch['status'] not in ('REFUSED','FAILED') or branch['observation'] is not None or branch['terminal'] is not None: raise ValueError('unknown sibling disposition required')
         elif group['branches'] or group['status'] not in ('UNREACHED','REFUSED','FAILED','NOT_ATTEMPTED'):
             raise ValueError('unknown root cannot manufacture sibling branches')
-    return BankData(tuple(resolved), tuple(_freeze(g) for g in groups), _freeze(plan))
+    return BankData(tuple(resolved), tuple(_freeze(g) for g in groups), _freeze(plan), encoded)
 
 
 def evaluate_device_bank(protocol, factory, data):
@@ -210,6 +214,10 @@ def evaluate_device_bank(protocol, factory, data):
     from gpu_engine.v5_live_protocol import check_factory
     import numpy as np
     if type(data) is not BankData: raise ValueError('resolved fixed device bank required')
+    from .v5_evaluation import unmeasured_self_moves
+    unmeasured = unmeasured_self_moves(data.self_moves, factory, heldout_positions=len(data.positions), sibling_groups=len(data.groups),
+        bank_role='NONTRAINING_EVALUATION')
+    if unmeasured is not None: return unmeasured
     labels = factory.config.label_vocabulary
     header = dict(category_vocabulary_sha256=factory.config.category_vocabulary_sha256, category_count=factory.config.category_vocab_size)
     def predict(observations):

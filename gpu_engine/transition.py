@@ -40,6 +40,7 @@ from . import self_destruct as exploding
 from . import encore as repeating
 from . import solar_beam as charging
 from . import focus_punch as focusing
+from . import transform as shift
 from .effects import MoveEffects, from_metadata as effects_from_metadata, stall_success, cure_team, weather_healing
 from .state import FLINCH, FOCUS_PUNCH, FOCUS_LOST, BattleState, bench_indices, empty_state, legal_actions, usable_moves
 from .state import DESTINY_BOND
@@ -77,6 +78,7 @@ class MoveTable(NamedTuple):
     focus_punch: focusing.FocusTable | None = None
     solar_beam: charging.SolarTable | None = None
     public_port: object = None
+    transform: shift.TransformTable | None = None
 
 
 def tables_from_metadata(metadata: dict) -> MoveTable:
@@ -111,7 +113,8 @@ def tables_from_metadata(metadata: dict) -> MoveTable:
         variable.from_metadata(metadata),intercepts.from_metadata(metadata),passing.from_metadata(metadata),
         dragging.from_metadata(metadata),linking.from_metadata(metadata),crits.from_metadata(metadata),
         secondaries.from_metadata(metadata),talking.from_metadata(metadata),exploding.from_metadata(metadata),
-        repeating.from_metadata(metadata),focusing.from_metadata(metadata),charging.from_metadata(metadata),public_port.compile_tables(metadata))
+        repeating.from_metadata(metadata),focusing.from_metadata(metadata),charging.from_metadata(metadata),public_port.compile_tables(metadata),
+        transform=shift.from_metadata(metadata))
 
 
 def state_from_pool(pool, team_indices, *, seed=0, table=None) -> BattleState:
@@ -938,18 +941,24 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                 _active(work.item,work,side),_active(work.species,work,side),jnp.ones_like(eligible))
         guts = jnp.zeros_like(eligible)
         hustle = jnp.zeros_like(eligible)
+        confusion_defense_num,confusion_defense_den = (1,1)
         if table.combat is not None:
             ability = _active(work.ability,work,side)
             guts = table.combat.guts[ability]
             hustle = table.combat.hustle[ability]
             confusion_num,confusion_den = traits.attack_modifier(table.combat,ability,
                 _active(work.status,work,side),True,item_num=confusion_num,item_den=confusion_den)
+            # Damage modifiers: the self-hit is getDamage(pokemon, pokemon, 40), so a statused Marvel Scale holder's own
+            # ModifyDef applies (combat.defense_modifier); the typeless move takes no type item.
+            confusion_defense_num,confusion_defense_den = traits.defense_modifier(table.combat,ability,
+                _active(work.status,work,side),True)
         confusion_damage = m.gen3_damage(level=_active(work.level, work, side), power=40,
             attack=own_stats[:, 1], defense=own_stats[:, 2],
             attack_stage=own_boosts[:, 0], defense_stage=own_boosts[:, 1],
             typeless=True, burned=_active(work.status, work, side) == m.BRN,
             guts=guts,hustle=hustle,
             attack_num=confusion_num,attack_den=confusion_den,
+            defense_num=confusion_defense_num,defense_den=confusion_defense_den,
             roll=85 + chance[:, 5])
         hp = _active(work.hp, work, side)
         if _lifecycle_trace:
@@ -1078,20 +1087,27 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
             _facade_power=power
             power=variable.facade_power(table.variable_moves,move,power,_active(work.status,work,side))
             if _lifecycle_trace:_public_trace=status_callbacks.unknown(_public_trace,acts & (power!=_facade_power))
+        # Struggle's ??? (gen4 struggle onModifyMove) is resolved before the stat events: no type item matches it.
+        is_struggle = move == table.struggle
+        typ = jnp.where(is_struggle, 0, typ)
         attack_num,attack_den = (1,1)
         if table.items is not None:
+            # Damage modifiers: Silk Scarf's Atk factor reads the resolved type (items.attack_modifier).
             attack_num,attack_den = held.attack_modifier(table.items,
-                _active(work.item,work,side),_active(work.species,work,side),physical)
+                _active(work.item,work,side),_active(work.species,work,side),physical,move_type=typ)
         defense_num,defense_den = (1,1)
         if table.items is not None:
             defense_num,defense_den = held.defense_modifier(table.items,
                 _active(work.item,work,foe),_active(work.species,work,foe),physical)
         if table.combat is not None:
             hustle = table.combat.hustle[_active(work.ability,work,side)]
+            # Damage modifiers: the ability and item chain in Q12; Gen 3's Plus/Minus read the foe active (combat.attack_modifier).
             attack_num,attack_den = traits.attack_modifier(table.combat,_active(work.ability,work,side),
-                _active(work.status,work,side),physical,item_num=attack_num,item_den=attack_den)
-        is_struggle = move == table.struggle
-        typ = jnp.where(is_struggle, 0, typ)
+                _active(work.status,work,side),physical,item_num=attack_num,item_den=attack_den,
+                foe_ability=_active(work.ability,work,foe),foe_hp=_active(work.hp,work,foe))
+            # Damage modifiers: the target's Marvel Scale (combat.defense_modifier), chained after its item's Def/SpD factor.
+            defense_num,defense_den = traits.defense_modifier(table.combat,_active(work.ability,work,foe),
+                _active(work.status,work,foe),physical,item_num=defense_num,item_den=defense_den)
         own_types = _active(work.types, work, side)
         foe_types = _active(work.types, work, foe)
         num = table.type_num[typ, foe_types[:, 0]] * table.type_num[typ, foe_types[:, 1]]
@@ -1128,7 +1144,9 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                     _active(work.ability,work,side),typ,_active(work.hp,work,side),_active(work.max_hp,work,side)))
         critical = chance[:,4] == 0
         if table.critical is not None:
-            critical = crits.is_critical(table.critical,move,_active(work.ability,work,foe),chance[:,4])
+            # Stick: the attacker's ModifyCritRatio +2 when a Farfetch'd holds it (critical.ratio; 1/4 is roll < 4).
+            critical = crits.is_critical(table.critical,move,_active(work.ability,work,foe),chance[:,4],
+                item=_active(work.item,work,side),species=_active(work.species,work,side))
         damage = m.gen3_damage(level=_active(work.level, work, side), power=power,
             attack=jnp.where(physical, attack_stats[:, 1], attack_stats[:, 3]),
             defense=jnp.where(physical, defense_stats[:, 2], defense_stats[:, 4]),
@@ -1158,7 +1176,8 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
         _effect=effect_draws[rows,side]
         critical2=_effect[:,0]==0
         if table.critical is not None:
-            critical2=crits.is_critical(table.critical,move,_active(work.ability,work,foe),_effect[:,0])
+            critical2=crits.is_critical(table.critical,move,_active(work.ability,work,foe),_effect[:,0],
+                item=_active(work.item,work,side),species=_active(work.species,work,side))
         damage2=m.gen3_damage(level=_active(work.level, work, side), power=power,
             attack=jnp.where(physical, attack_stats[:, 1], attack_stats[:, 3]),
             defense=jnp.where(physical, defense_stats[:, 2], defense_stats[:, 4]),
@@ -1746,6 +1765,17 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                 if _device_public is not None:
                     device_public.trick(_device_public,_device_trick_before,_trick_swapped,side,_trick,table.items.choice_band,
                         herb_used=_herb)
+            if table.transform is not None:
+                # Transform (data/moves.ts transform, sim/pokemon.ts transformInto; gpu_engine/transform.py): accuracy true and
+                # no protect flag, so `hit` holds; bypasssub, so no Substitute gate; a Status move ignores type immunity. `move`
+                # is the post-Sleep-Talk move, so a called Transform is covered. PP (Pressure included) was paid above, before
+                # the saves; the Choice lock site below locks on `transform`, as Showdown does.
+                _transform_used=acts & hit & table.transform.move[move]
+                if _device_public is not None:_device_transform_before=work
+                work,_transform_copied=shift.apply(work,side,_transform_used,table.transform)
+                if _lifecycle_trace:_public_trace=status_callbacks.unknown(_public_trace,_transform_used)
+                if _device_public is not None:
+                    device_public.transform(_device_public,_device_transform_before,work,side,_transform_copied)
             # Charm's primary boosts (moveHit after TryHit): Protect is already in `hit`; a
             # Substitute fails it (TryPrimaryHit); status moves ignore type immunity
             # (tryMoveHit sets ignoreImmunity for Status). The drop is capped first, then
@@ -2212,6 +2242,14 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
         # All move effects, including self-KO/recoil and forced-entry hazards,
         # finish before the original runAction faint queue is processed.
         work=_clear_fainted_boosts(work,_faint_before_hp,eligible=live & move_context)
+        if table.transform is not None and table.effects is not None:
+            # Gen < 5 eachEvent('Update') after the action (sim/battle.ts:2938): a copied curing ability or Own Tempo acts now.
+            work,_transform_cured,_transform_unconfused=shift.update_cure(work,side,_transform_copied,table.entry)
+            if _lifecycle_trace:_public_trace=status_callbacks.unknown(_public_trace,_transform_cured|_transform_unconfused)
+            if _device_public is not None:
+                # -activate|X|ability: ... (B2 ignores a transformed mon's ability claim), then -curestatus or -end confusion.
+                device_public.observe(_device_public,work,_transform_cured)
+                device_public.confusion_end(_device_public,work,side,_transform_unconfused)
     # Gen 3 action-phase faints request replacement BEFORE the residual action.
     # A KO cancels queued moves; direct Baton retains at most one selected foe
     # move. Both pause residuals, including hazard-KO recovery chains.
@@ -2723,6 +2761,9 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
     # until that target's next residual tick releases it silently (data/mods/gen5/conditions.ts:14-20).
     work=work._replace(**{name:jnp.where(work.hp>0,getattr(work,name),0) for name in ("perish_counter","yawn_counter","partial_trap_counter")},
         partial_trap_source=jnp.where(work.hp>0,work.partial_trap_source,-1))
+    # Transform: and the copy of a transformed active (transform.faint_revert, gated on the flag), so the replacement's
+    # outgoing Speed (_speeds) and every step boundary see its original, as in Showdown.
+    if table.transform is not None:work=shift.faint_revert(work)
     alive = jnp.any(work.hp > 0, axis=2)
     done = ~jnp.all(alive, axis=1)
     winner = jnp.where(alive[:, 0], 0, jnp.where(alive[:, 1], 1, 2))
@@ -2778,6 +2819,9 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
         _end_turn=~work.done & ~work.pending_residual & ~jnp.any(work.forced_switch,axis=1)
         work=work._replace(choice_move=jnp.where(_end_turn[:,None,None] & ~table.items.choice_band[work.item],
             0,work.choice_move))
+    if table.transform is not None:
+        # The same DisableMove drops a transformed holder's lock on a move it no longer has (transform.choice_unlock).
+        work=shift.choice_unlock(work,~work.done & ~work.pending_residual & ~jnp.any(work.forced_switch,axis=1))
     work = jax.tree.map(lambda old, new: jnp.where(live.reshape((-1,) + (1,) * (old.ndim - 1)), new, old), state, work)
     if _device_public is not None:
         device_public.turn_end(_device_public,state,work,ordinary,upkeep=residual_ready & (~work.done | _upkeep_perish_end),
