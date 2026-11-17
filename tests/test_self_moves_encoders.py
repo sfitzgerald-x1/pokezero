@@ -357,6 +357,67 @@ class B2SelfMovesTests(unittest.TestCase):
         self.assertTrue(np.array_equal(after, np.asarray(auto.encode(final, owner_side=0)['numeric_features'])))
         self.assertFalse(np.array_equal(after, inside))   # the stale literal history is gone
 
+    def test_constructor_fresh_and_reused_sessions_match_premerge_history_encoding(self):
+        """Reset must precede literal_history; both decisions retain the pre-seam encoder inputs."""
+        import hashlib
+        import numpy as np
+        from types import SimpleNamespace as NS
+        from gpu_engine import phase_d_protocol_constructor as module
+        from pokezero.recorded_encoder_runner import JaxRecordedAdapter, literal_history
+        catalog = self.catalogs[True]
+        constructor = module.ProtocolConstructor(catalog=catalog, source=NS(binding_sha256='binding'),
+            metadata={}, owning_config=object(), count=16)
+        adapter = JaxRecordedAdapter(catalog, owner_side=0, compiled_functions=constructor.functions)
+        reference = JaxRecordedAdapter(catalog, owner_side=0, compiled_functions=constructor.functions)
+        reference.reset(stream_id=1, battle_id='self-moves-fixture')  # pre-merge #1972 reset ordering
+        encode = adapter.encode; actual = []; expected_lines = None
+        def record(packet, **kwargs):
+            self.assertEqual(adapter.own_lines, expected_lines)
+            self.assertTrue(adapter._catalog_checked)
+            result = encode(packet, **kwargs)
+            actual.append({k: np.asarray(v) for k, v in result.items()})
+            return result
+        reset = adapter.reset
+        def checked_reset(**kwargs):
+            self.assertTrue(adapter._catalog_checked)
+            reset(**kwargs)
+            self.assertIsNone(adapter.own_lines)
+        def from_b2(*args, **kwargs):
+            self.assertEqual(adapter.own_lines, expected_lines)
+            return NS(source_binding_sha256='binding')
+        old = ()
+        with (mock.patch.object(module, 'JaxRecordedAdapter', return_value=adapter),
+              mock.patch.object(adapter, 'reset', side_effect=checked_reset) as resets,
+              mock.patch.object(adapter, 'encode', side_effect=record),
+              mock.patch.object(constructor, '_capture', return_value=NS(address='address')) as capture,
+              mock.patch.object(module.protocol.tail, 'facts', return_value=object()),
+              mock.patch.object(module.worlds, 'from_b2', side_effect=from_b2),
+              mock.patch.object(module.protocol, '_carried_root', side_effect=lambda public, root, *args: root)):
+            for index, stop in enumerate((6, None)):
+                lines, packet = history(stop=stop); expected_lines = lines
+                request = dict(schema=module.SCHEMA, request_id=str(index), battle_id='self-moves-fixture',
+                    owner='p1', stream_id=1, decision_index=index, generation=1, lines=lines,
+                    own_request_line=lines[-1], prefix_sha256=hashlib.sha256(''.join(x+'\n' for x in lines).encode()).hexdigest())
+                with reference.checked_catalog(), literal_history(reference, lines):
+                    reference.feed(tuple(x for x in lines[len(old):] if not x.startswith('|request|')))
+                    expected = {k: np.asarray(v) for k, v in reference.encode(packet, owner_side=0).items()}
+                prepared = constructor.prepare_root(request)
+                self.assertEqual(prepared.legal, tuple(map(bool, expected['legal_action_mask'])))
+                self.assertEqual(set(actual[-1]), set(expected))
+                for key in expected:
+                    self.assertEqual(actual[-1][key].dtype, expected[key].dtype)
+                    self.assertEqual(actual[-1][key].shape, expected[key].shape)
+                    self.assertEqual(actual[-1][key].tobytes(), expected[key].tobytes(), key)
+                self.assertIsNone(adapter.own_lines); self.assertFalse(adapter._catalog_checked)
+                old = lines
+            self.assertEqual(resets.call_count, 1)
+            # A capture refusal must clear history even for a newly reset adapter.
+            constructor.sessions.clear()
+            capture.side_effect = RuntimeError('capture refused')
+            request = dict(request, stream_id=2, battle_id='refused-session', decision_index=0)
+            with self.assertRaisesRegex(RuntimeError, 'capture refused'):constructor.prepare_root(request)
+            self.assertIsNone(adapter.own_lines); self.assertFalse(adapter._catalog_checked)
+
     def test_python_and_b2_agree_off_and_on(self):
         """The Spite variant is Python-only: B2's wire refuses this authored -activate line (a fixture limit); B2's
         PP-unknown path is covered by test_auto_log_reads_the_requests_it_encoded, through the same own_move_states."""

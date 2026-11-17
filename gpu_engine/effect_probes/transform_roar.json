@@ -1,0 +1,191 @@
+{
+ "schema": "pokezero.effect_probe.scenario.v1",
+ "move": "transform_roar",
+ "note": "Four level-5 mons are KOd so Ditto's side has one bench mon (Roar's target is forced); Ditto copies Snorlax and is Roared out: the drag reverts it (base moves and PP), and Starmie comes in.",
+ "teams": [
+  [
+   {
+    "species": "Ditto",
+    "moves": [
+     "transform"
+    ],
+    "ability": "Limber",
+    "item": ""
+   },
+   {
+    "species": "Starmie",
+    "moves": [
+     "splash",
+     "surf",
+     "recover",
+     "protect"
+    ],
+    "ability": "Natural Cure",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Magikarp",
+    "moves": [
+     "splash",
+     "tackle"
+    ],
+    "ability": "Swift Swim",
+    "item": "",
+    "level": 5
+   },
+   {
+    "species": "Feebas",
+    "moves": [
+     "splash",
+     "tackle"
+    ],
+    "ability": "Swift Swim",
+    "item": "",
+    "level": 5
+   },
+   {
+    "species": "Wurmple",
+    "moves": [
+     "splash",
+     "tackle"
+    ],
+    "ability": "Shield Dust",
+    "item": "",
+    "level": 5
+   },
+   {
+    "species": "Sunkern",
+    "moves": [
+     "splash",
+     "tackle"
+    ],
+    "ability": "Chlorophyll",
+    "item": "",
+    "level": 5
+   }
+  ],
+  [
+   {
+    "species": "Snorlax",
+    "moves": [
+     "bodyslam",
+     "roar",
+     "curse",
+     "splash"
+    ],
+    "ability": "Immunity",
+    "item": ""
+   },
+   {
+    "species": "Starmie",
+    "moves": [
+     "splash",
+     "surf",
+     "recover",
+     "protect"
+    ],
+    "ability": "Natural Cure",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Blissey",
+    "moves": [
+     "splash",
+     "softboiled",
+     "protect",
+     "seismictoss"
+    ],
+    "ability": "Serene Grace",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Skarmory",
+    "moves": [
+     "splash",
+     "protect",
+     "spikes",
+     "peck"
+    ],
+    "ability": "Keen Eye",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Swampert",
+    "moves": [
+     "splash",
+     "protect",
+     "surf",
+     "earthquake"
+    ],
+    "ability": "Torrent",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Metagross",
+    "moves": [
+     "splash",
+     "protect",
+     "meteormash",
+     "earthquake"
+    ],
+    "ability": "Clear Body",
+    "item": "Leftovers"
+   }
+  ]
+ ],
+ "script": [
+  [
+   "switch 3",
+   "move 1"
+  ],
+  [
+   "switch 4",
+   ""
+  ],
+  [
+   "move 1",
+   "move 1"
+  ],
+  [
+   "switch 5",
+   ""
+  ],
+  [
+   "move 1",
+   "move 1"
+  ],
+  [
+   "switch 6",
+   ""
+  ],
+  [
+   "move 1",
+   "move 1"
+  ],
+  [
+   "switch 1",
+   ""
+  ],
+  [
+   "move 1",
+   "move 4"
+  ],
+  [
+   "move 4",
+   "move 2"
+  ],
+  [
+   "move 1",
+   "move 4"
+  ]
+ ],
+ "expect": {
+  "exact": true
+ },
+ "require_fields": [
+  "item_knocked",
+  "destiny_bond",
+  "effect",
+  "transform"
+ ]
+}

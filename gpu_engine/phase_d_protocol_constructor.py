@@ -8,6 +8,7 @@ import hashlib
 import json
 from pathlib import Path
 import time
+from dataclasses import dataclass,replace
 
 from pokezero.live_protocol_actor import ActorContract,_packet
 from pokezero.recorded_encoder_runner import JaxRecordedAdapter,literal_history
@@ -20,6 +21,24 @@ from . import phase_d_live_worlds as worlds,phase_d_protocol_world as protocol
 
 
 HELD_ROOTS=64   # roots kept for classify, most recent first (a batch larger than this recomputes the oldest, same value)
+
+
+@dataclass(frozen=True)
+class PreparedRoot:
+    """Per-decision inputs for helper processes; no live adapter or session.
+
+    Helpers supply their own constructor with the same catalog/source/config.
+    Sampling this value never captures or folds the request again. The frozen
+    root includes mapping proxies and read-only arrays; process transport must
+    preserve those, as the engine's prepared-world serializer does (plain
+    multiprocessing pickle is insufficient).
+    """
+    public:object
+    root:object
+    lines:tuple
+    legal:tuple
+    count:int
+    seed:int
 
 
 class ProtocolConstructor:
@@ -45,6 +64,13 @@ class ProtocolConstructor:
         self.eager_peer_fold=eager_peer_fold
 
     def prepare(self,request,index):
+        """The original serial prepare, using one full world range."""
+        prepared=self.prepare_root(request,index)
+        made=protocol.assemble((self.sample_range(prepared,0,self.count),),count=self.count)
+        return made.root,made,prepared.legal
+
+    def prepare_root(self,request,index=0):
+        """Capture, fold B2 and carry one decision, once, before sampling ranges."""
         required={'schema','request_id','battle_id','owner','stream_id','decision_index','generation','prefix_sha256','lines','own_request_line'}
         if set(request)!=required or request['schema']!=SCHEMA or request['owner']not in ('p1','p2'):
             raise worlds.Refusal('MALFORMED_SEARCH_REQUEST')
@@ -63,23 +89,42 @@ class ProtocolConstructor:
         prior=None if self.saved_root_admission else self.sessions.get(key)
         if prior is None:
             adapter=JaxRecordedAdapter(self.catalog,owner_side=owner,compiled_functions=self.functions)
-            adapter.reset(stream_id=request['stream_id'],battle_id=request['battle_id']);old=()
+            old=()
         else:adapter,old=prior
         if lines[:len(old)]!=old or len(lines)<=len(old):raise worlds.Refusal('SEARCH_PREFIX_NOT_ORIGINAL_SUCCESSOR')
-        # the compiled catalog's structure walk once per request, not on every feed/encode; V2 self_moves: B2's own moves/PP
-        # read this root's literal history (from_b2 and the mask encode), cleared on exit from the session adapter
-        with adapter.checked_catalog(),literal_history(adapter,lines):
-            # Original Python public-root capture checks literal owning request and
-            # exact-foe/split contamination before either constructor can consume it.
-            public=self._capture(key,address,request,lines,owner)
-            packet=_packet(request['own_request_line'],request['owner'])
-            adapter.feed(tuple(x for x in lines[len(old):]if not x.startswith('|request|')))
-            if not self.saved_root_admission:self.sessions[key]=(adapter,lines)
-            facts=protocol.tail.facts(public,packet,lines)
-            detached=worlds.from_b2(adapter,packet,self.source,self.metadata,address=public.address,defer_sleep=True,protocol_facts=facts)
-            made=protocol.sample(public,detached,lines=lines,catalog=self.catalog,source=self.source,metadata=self.metadata,
-                config=self.owning_config,battle_id=request['battle_id'],seed=self.seed,count=self.count)
-            return made.root,made,tuple(map(bool,adapter.encode(packet,owner_side=owner)['legal_action_mask']))
+        with adapter.checked_catalog():   # the compiled catalog's structure walk once per request, not on every feed/encode
+            if prior is None:adapter.reset(stream_id=request['stream_id'],battle_id=request['battle_id'])
+            # reset clears own_lines; install this decision's history afterwards and clear it on every exit.
+            with literal_history(adapter,lines):
+                # Original Python public-root capture checks literal owning request and
+                # exact-foe/split contamination before either constructor can consume it.
+                public=self._capture(key,address,request,lines,owner)
+                packet=_packet(request['own_request_line'],request['owner'])
+                adapter.feed(tuple(x for x in lines[len(old):]if not x.startswith('|request|')))
+                if not self.saved_root_admission:self.sessions[key]=(adapter,lines)
+                facts=protocol.tail.facts(public,packet,lines)
+                detached=worlds.from_b2(adapter,packet,self.source,self.metadata,address=public.address,defer_sleep=True,protocol_facts=facts)
+                if detached.source_binding_sha256!=self.source.binding_sha256:
+                    raise worlds.Refusal('SAME_PUBLIC_ROOT_SOURCE_BINDING_REQUIRED')
+                detached=protocol._carried_root(public,detached,lines,self.metadata)
+                return PreparedRoot(public,detached,lines,tuple(map(bool,adapter.encode(packet,owner_side=owner)['legal_action_mask'])),
+                    self.count,self.seed)
+
+    def sample_range(self,prepared,start,stop,*,complete=None):
+        """Build [start, stop) of prepare_root's decision with global world seeds.
+
+        Optional complete(world) runs here, on each constructed world, so a
+        helper can apply constructor_worlds' existing completion chain before
+        returning the range. Leave it unset for prepare's original raw worlds.
+        """
+        if type(prepared)is not PreparedRoot or (prepared.count,prepared.seed)!=(self.count,self.seed):
+            raise ValueError('prepared root with the same world budget and seed required')
+        part=protocol.world_range(prepared.public,prepared.root,start=start,stop=stop,lines=prepared.lines,
+            catalog=self.catalog,source=self.source,metadata=self.metadata,config=self.owning_config,
+            battle_id=prepared.public.context.battle_id,seed=self.seed,count=self.count)
+        if complete is not None:
+            part=replace(part,worlds=tuple(w if w.state is None else complete(w)for w in part.worlds))
+        return part
 
 
     def _capture(self,key,address,request,lines,owner):

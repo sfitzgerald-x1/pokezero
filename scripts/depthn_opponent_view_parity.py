@@ -39,19 +39,19 @@ Capture (one GPU; the live server's build, as scripts/depthn_rr_reprice.py repla
   never dropped: the capture's, the env's and the reply row's turns agree, the re-computed env observation equals the reply
   row key by key, and Foul Play's journal action equals the row's label.
 - Replay: every sent decision of the cell goes to process_many alone in decision order, its request built as the re-pricer
-  builds it (the battle's session folds exactly as live). Around each call only, phase_d_protocol_world.sample is wrapped
-  (ProtocolConstructor.prepare looks it up as `protocol.sample` at call time; check_call_site verifies that from its
+  builds it (the battle's session folds exactly as live). Around each call only, phase_d_protocol_world.world_range (or the legacy sample entry) is wrapped
+  (ProtocolConstructor.sample_range looks it up through `protocol` at call time; check_call_site verifies that from its
   bytecode before anything loads): the wrapper keeps the sampler's arguments and its WorldSet, calls the original with the
   same objects and is restored when the call returns or raises. Nothing on the decision path changes.
 - Worlds per position (after the call returns; every world built on the CPU device as prepare_roots builds them):
   - true: the sampler's own construction with Foul Play's team swapped in. The sampler draws
     start, reason = _gen3_randbat_belief_start_override_result(...) and calls v5_public_world.materialize(root, start,
     prepared=ProtocolInputs(_carried_root(root, detached, lines, metadata), lines, catalog, metadata, source), history=None,
-    own_static=None, seed=kernel_seed) (phase_d_protocol_world.py:398-411). Here start = BattleStartOverride(our team exactly
-    as the sampler builds it, determinization.py:384-390 (_root_self_team_payload or metadata['self_team'] ->
+    own_static=None, seed=kernel_seed) (phase_d_protocol_world.py:873-879). Here start = BattleStartOverride(our team exactly
+    as the sampler builds it, determinization.py:390-396 (_root_self_team_payload or metadata['self_team'] ->
     _self_team_from_metadata_result -> pack_team); Foul Play's true team through the very same function on Foul Play's own
     round-0 self_team rows, so level, gender, item, ability, move order and an EV/IV spread verified against the request's
-    stats are exact; observation_format_id the root's format, determinization.py:414-422), materialized the same way with
+    stats are exact; observation_format_id the root's format, determinization.py:421-429), materialized the same way with
     world 0's kernel seed (phase_d_protocol_world.world_seeds). One fact the sampler's format never writes: happiness (packed
     field 11, '' = 255). Where the literal round-0 request's Return/Frustration power proves a unique value other than 255
     (phase_d_live_worlds._own_happiness, the constructor's own inversion), it is written; an ambiguous power leaves 255 and
@@ -545,7 +545,7 @@ def with_happiness(packed, rows, request):
 
 
 def true_start(root, team_rows, round0_request, set_source, owner):
-    """(BattleStartOverride, info): our team exactly as the sampler builds it (determinization.py:384-390), Foul Play's true team
+    """(BattleStartOverride, info): our team exactly as the sampler builds it (determinization.py:390-396), Foul Play's true team
     through the same function on its own round-0 self_team rows, packed by the same pack_team (plus a proven happiness);
     (None, info with the reason) when either team cannot be reconstructed."""
     from pokezero.determinization import _root_self_team_payload, _self_team_from_metadata_result
@@ -576,7 +576,7 @@ def cpu_device():
 
 
 def build_true_world(call, team_rows, round0_request, *, index=0):
-    """(ProtocolWorld or None, info): the sampler's materialization (phase_d_protocol_world.py:398-411) of the true start, on the
+    """(ProtocolWorld or None, info): the sampler's materialization (phase_d_protocol_world.py:873-879) of the true start, on the
     CPU device as prepare_roots builds worlds, with world `index`'s kernel seed."""
     import jax
     from gpu_engine import phase_d_protocol_world as pw, v5_public_world as vw
@@ -732,40 +732,49 @@ class SampleCall:
 
 
 class SampleCapture:
-    """References to every phase_d_protocol_world.sample call's arguments and WorldSet while installed() is active."""
+    """Capture the serial sampler or the constructor's supported world range.
+
+    sample delegates to world_range, so capture only the outermost call.
+    """
     def __init__(self):
         self.calls = []
 
     @contextmanager
     def installed(self):
         from gpu_engine import phase_d_protocol_world as pw
-        original = pw.sample
+        original = pw.sample;original_range = pw.world_range;depth = 0
 
-        def wrapper(*arguments, **keywords):
+        def capture(function, *arguments, **keywords):
+            nonlocal depth
+            if depth:return function(*arguments, **keywords)
             call = SampleCall(dict(zip(SAMPLE_PARAMETERS, arguments), **keywords));self.calls.append(call)
-            try:call.result = original(*arguments, **keywords)
+            depth += 1
+            try:call.result = function(*arguments, **keywords)
             except BaseException as error:
                 call.error = f'{type(error).__name__}: {error}'
                 raise
+            finally:depth -= 1
             return call.result
 
-        pw.sample = wrapper
+        pw.sample = lambda *a, **kw: capture(original, *a, **kw)
+        pw.world_range = lambda *a, **kw: capture(original_range, *a, **kw)
         try:yield self
-        finally:pw.sample = original
+        finally:pw.sample = original;pw.world_range = original_range
 
 
 def check_call_site(function=None):
-    """True when `function` (ProtocolConstructor.prepare) reads `sample` as an attribute of its global `protocol`
+    """True when the range seam (or an explicitly supplied legacy function) reads its sampler through global `protocol`
     (phase_d_protocol_world) at call time, so the wrapper takes effect; RuntimeError otherwise."""
     from gpu_engine import phase_d_protocol_constructor as pc, phase_d_protocol_world as pw
-    function = pc.ProtocolConstructor.prepare if function is None else function
+    method = 'world_range' if function is None else 'sample'
+    function = pc.ProtocolConstructor.sample_range if function is None else function
     found, previous = False, None
     for instruction in dis.get_instructions(function):
-        if (instruction.opname in ('LOAD_ATTR', 'LOAD_METHOD') and instruction.argval == 'sample' and previous is not None
+        if (instruction.opname in ('LOAD_ATTR', 'LOAD_METHOD') and instruction.argval == method and previous is not None
                 and previous.opname == 'LOAD_GLOBAL' and previous.argval == 'protocol'):found = True
         previous = instruction
     if not found or function.__globals__.get('protocol') is not pw:
-        raise RuntimeError('ProtocolConstructor.prepare does not look phase_d_protocol_world.sample up through its module at call time')
+        raise RuntimeError('constructor does not look the protocol sampler up through its module at call time')
     return True
 
 

@@ -80,7 +80,8 @@ class SynchronizeTests(unittest.TestCase):
         for side in (0,1):
             s=self.live(60,side,'bodyslam');a=s.ability.at[:,side,0].set(self.ability('synchronize')).at[:,1-side,0].set(self.ability('static'))
             s=s._replace(ability=a,base_ability=a)
-            r=self.sec.apply_contact(s,side,self.j.full(60,self.id('bodyslam')),self.j.arange(60),self.profile,eligible=True)
+            r=self.sec.apply_contact(s,side,self.j.full(60,self.id('bodyslam')),self.j.arange(60),self.profile,eligible=True,
+                sleep_roll=self.j.zeros(60,self.j.int32))
             self.assertEqual(r.status[:,side,0].tolist(),[self.m.PAR]*20+[0]*40)
             self.assertEqual(r.status[:,1-side,0].tolist(),[self.m.PAR]*20+[0]*40)
 

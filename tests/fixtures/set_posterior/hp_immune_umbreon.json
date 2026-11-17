@@ -1,0 +1,145 @@
+{
+ "beliefs": [
+  {
+   "condition": "94/100 tox",
+   "gender": "M",
+   "item_mutated": false,
+   "revealed_ability": "Synchronize",
+   "revealed_item": null,
+   "revealed_moves": [
+    "Hidden Power"
+   ],
+   "ruled_out_abilities": [],
+   "ruled_out_items": [
+    "lumberry"
+   ],
+   "showdown_slot": "p2",
+   "species": "Umbreon"
+  }
+ ],
+ "census": {
+  "species": {
+   "umbreon": {
+    "census_lik": [
+     0.125,
+     0.0
+    ],
+    "census_n": 2,
+    "census_n_after": 1,
+    "census_strikes": 1,
+    "survivor_ids": [
+     "umbreon-1-variant-1",
+     "umbreon-1-variant-2"
+    ],
+    "true_variant": "umbreon-1-variant-1"
+   }
+  },
+  "strikes": [
+   {
+    "attacker": "Umbreon",
+    "crit": false,
+    "eff": "supereffective",
+    "hp_before": 273,
+    "ko": false,
+    "line": 29,
+    "move": "hiddenpower",
+    "n_excluded_universe": 1,
+    "n_variants_with_move": 2,
+    "observed": 68,
+    "reason": null,
+    "true_match": 2,
+    "true_variant": "umbreon-1-variant-1"
+   }
+  ]
+ },
+ "decision_index": 1,
+ "format_id": "gen3randombattle",
+ "name": "hp_immune_umbreon",
+ "note": "Hidden Power on Butterfree: one Umbreon variant's type cannot touch it (empty rolls), so it fits 0; the other is the true set.",
+ "ordinal": 4902,
+ "owner": "p1",
+ "posterior": {
+  "umbreon": {
+   "hard": [
+    0,
+    1
+   ],
+   "provenance": "3402f84cb72087a858328f173867eed9ac2440a86f3338e0c6660819716c1ef3",
+   "strikes": [
+    {
+     "admitted": true,
+     "counts": [
+      2,
+      0,
+      0
+     ],
+     "crit": false,
+     "ko": false,
+     "line": 29,
+     "move": "hiddenpower",
+     "observed": 68,
+     "reason": ""
+    }
+   ],
+   "weights": [
+    1,
+    0,
+    0
+   ]
+  }
+ },
+ "prefix_sha256": "6076fb5893a641beaa7c47435c98e18166224c049e0eb95d0894cef6962fa6d7",
+ "request": {
+  "battle_id": "battle-gen3randombattle-controlled-2103400817",
+  "decision_index": 1,
+  "generation": 4,
+  "lines": [
+   "|t:|1794618737",
+   "|gametype|singles",
+   "|player|p1|PokeZeroBot||",
+   "|player|p2|FoulPlayBot||",
+   "|gen|3",
+   "|tier|[Gen 3] Random Battle",
+   "|rule|HP Percentage Mod: HP is shown in percentages",
+   "|rule|Beat Up Nicknames Mod: Beat Up will not reveal any party members",
+   "|rule|Endless Battle Clause: Forcing endless battles is banned",
+   "|rule|Sleep Clause Mod: Limit one foe put to sleep",
+   "|rule|Switch Priority Clause Mod: Faster Pok\u00e9mon switch first",
+   "|rule|Species Clause: Limit one of each Pok\u00e9mon",
+   "|rule|OHKO Clause: OHKO moves are banned",
+   "|rule|Evasion Items Clause: Evasion items are banned",
+   "|rule|Evasion Moves Clause: Evasion moves are banned",
+   "|",
+   "|t:|1794618738",
+   "|teamsize|p1|6",
+   "|teamsize|p2|6",
+   "|start",
+   "|switch|p1a: Butterfree|Butterfree, L97, M|273/273",
+   "|switch|p2a: Umbreon|Umbreon, L88, M|100/100",
+   "|turn|1",
+   "|request|{\"active\":[{\"moves\":[{\"move\":\"Morning Sun\",\"id\":\"morningsun\",\"pp\":8,\"maxpp\":8,\"target\":\"self\",\"disabled\":false},{\"move\":\"Toxic\",\"id\":\"toxic\",\"pp\":16,\"maxpp\":16,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Sleep Powder\",\"id\":\"sleeppowder\",\"pp\":24,\"maxpp\":24,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Psychic\",\"id\":\"psychic\",\"pp\":16,\"maxpp\":16,\"target\":\"normal\",\"disabled\":false}]}],\"side\":{\"name\":\"PokeZeroBot\",\"id\":\"p1\",\"pokemon\":[{\"ident\":\"p1: Butterfree\",\"details\":\"Butterfree, L97, M\",\"condition\":\"273/273\",\"active\":true,\"stats\":{\"atk\":92,\"def\":152,\"spa\":210,\"spd\":210,\"spe\":191},\"moves\":[\"morningsun\",\"toxic\",\"sleeppowder\",\"psychic\"],\"baseAbility\":\"compoundeyes\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p1: Raticate\",\"details\":\"Raticate, L85, F\",\"condition\":\"232/232\",\"active\":false,\"stats\":{\"atk\":186,\"def\":151,\"spa\":133,\"spd\":167,\"spe\":214},\"moves\":[\"return102\",\"hiddenpowerground\",\"shadowball\",\"facade\"],\"baseAbility\":\"guts\",\"item\":\"choiceband\",\"pokeball\":\"pokeball\"},{\"ident\":\"p1: Whiscash\",\"details\":\"Whiscash, L83, F\",\"condition\":\"318/318\",\"active\":false,\"stats\":{\"atk\":177,\"def\":169,\"spa\":174,\"spd\":166,\"spe\":147},\"moves\":[\"protect\",\"earthquake\",\"icebeam\",\"toxic\"],\"baseAbility\":\"oblivious\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p1: Arcanine\",\"details\":\"Arcanine, L78, F\",\"condition\":\"268/268\",\"active\":false,\"stats\":{\"atk\":176,\"def\":170,\"spa\":201,\"spd\":170,\"spe\":193},\"moves\":[\"rest\",\"flamethrower\",\"sleeptalk\",\"toxic\"],\"baseAbility\":\"intimidate\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p1: Dugtrio\",\"details\":\"Dugtrio, L78, F\",\"condition\":\"183/183\",\"active\":false,\"stats\":{\"atk\":169,\"def\":122,\"spa\":123,\"spd\":153,\"spe\":232},\"moves\":[\"sludgebomb\",\"earthquake\",\"rockslide\",\"hiddenpowerbug\"],\"baseAbility\":\"arenatrap\",\"item\":\"choiceband\",\"pokeball\":\"pokeball\"},{\"ident\":\"p1: Flareon\",\"details\":\"Flareon, L89, M\",\"condition\":\"260/260\",\"active\":false,\"stats\":{\"atk\":236,\"def\":158,\"spa\":220,\"spd\":247,\"spe\":166},\"moves\":[\"flamethrower\",\"toxic\",\"wish\",\"protect\"],\"baseAbility\":\"flashfire\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"}]}}",
+   "|",
+   "|t:|1794618740",
+   "|move|p1a: Butterfree|Toxic|p2a: Umbreon",
+   "|-status|p2a: Umbreon|tox",
+   "|-status|p1a: Butterfree|psn|[from] ability: Synchronize|[of] p2a: Umbreon",
+   "|move|p2a: Umbreon|Hidden Power|p1a: Butterfree",
+   "|-supereffective|p1a: Butterfree",
+   "|-damage|p1a: Butterfree|205/273 psn",
+   "|",
+   "|-heal|p1a: Butterfree|222/273 psn|[from] item: Leftovers",
+   "|-damage|p1a: Butterfree|188/273 psn|[from] psn",
+   "|-damage|p2a: Umbreon|94/100 tox|[from] psn",
+   "|upkeep",
+   "|turn|2",
+   "|request|{\"active\":[{\"moves\":[{\"move\":\"Morning Sun\",\"id\":\"morningsun\",\"pp\":8,\"maxpp\":8,\"target\":\"self\",\"disabled\":false},{\"move\":\"Toxic\",\"id\":\"toxic\",\"pp\":15,\"maxpp\":16,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Sleep Powder\",\"id\":\"sleeppowder\",\"pp\":24,\"maxpp\":24,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Psychic\",\"id\":\"psychic\",\"pp\":16,\"maxpp\":16,\"target\":\"normal\",\"disabled\":false}]}],\"side\":{\"name\":\"PokeZeroBot\",\"id\":\"p1\",\"pokemon\":[{\"ident\":\"p1: Butterfree\",\"details\":\"Butterfree, L97, M\",\"condition\":\"188/273 psn\",\"active\":true,\"stats\":{\"atk\":92,\"def\":152,\"spa\":210,\"spd\":210,\"spe\":191},\"moves\":[\"morningsun\",\"toxic\",\"sleeppowder\",\"psychic\"],\"baseAbility\":\"compoundeyes\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p1: Raticate\",\"details\":\"Raticate, L85, F\",\"condition\":\"232/232\",\"active\":false,\"stats\":{\"atk\":186,\"def\":151,\"spa\":133,\"spd\":167,\"spe\":214},\"moves\":[\"return102\",\"hiddenpowerground\",\"shadowball\",\"facade\"],\"baseAbility\":\"guts\",\"item\":\"choiceband\",\"pokeball\":\"pokeball\"},{\"ident\":\"p1: Whiscash\",\"details\":\"Whiscash, L83, F\",\"condition\":\"318/318\",\"active\":false,\"stats\":{\"atk\":177,\"def\":169,\"spa\":174,\"spd\":166,\"spe\":147},\"moves\":[\"protect\",\"earthquake\",\"icebeam\",\"toxic\"],\"baseAbility\":\"oblivious\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p1: Arcanine\",\"details\":\"Arcanine, L78, F\",\"condition\":\"268/268\",\"active\":false,\"stats\":{\"atk\":176,\"def\":170,\"spa\":201,\"spd\":170,\"spe\":193},\"moves\":[\"rest\",\"flamethrower\",\"sleeptalk\",\"toxic\"],\"baseAbility\":\"intimidate\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p1: Dugtrio\",\"details\":\"Dugtrio, L78, F\",\"condition\":\"183/183\",\"active\":false,\"stats\":{\"atk\":169,\"def\":122,\"spa\":123,\"spd\":153,\"spe\":232},\"moves\":[\"sludgebomb\",\"earthquake\",\"rockslide\",\"hiddenpowerbug\"],\"baseAbility\":\"arenatrap\",\"item\":\"choiceband\",\"pokeball\":\"pokeball\"},{\"ident\":\"p1: Flareon\",\"details\":\"Flareon, L89, M\",\"condition\":\"260/260\",\"active\":false,\"stats\":{\"atk\":236,\"def\":158,\"spa\":220,\"spd\":247,\"spe\":166},\"moves\":[\"flamethrower\",\"toxic\",\"wish\",\"protect\"],\"baseAbility\":\"flashfire\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"}]}}"
+  ],
+  "own_request_line": "|request|{\"active\":[{\"moves\":[{\"move\":\"Morning Sun\",\"id\":\"morningsun\",\"pp\":8,\"maxpp\":8,\"target\":\"self\",\"disabled\":false},{\"move\":\"Toxic\",\"id\":\"toxic\",\"pp\":15,\"maxpp\":16,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Sleep Powder\",\"id\":\"sleeppowder\",\"pp\":24,\"maxpp\":24,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Psychic\",\"id\":\"psychic\",\"pp\":16,\"maxpp\":16,\"target\":\"normal\",\"disabled\":false}]}],\"side\":{\"name\":\"PokeZeroBot\",\"id\":\"p1\",\"pokemon\":[{\"ident\":\"p1: Butterfree\",\"details\":\"Butterfree, L97, M\",\"condition\":\"188/273 psn\",\"active\":true,\"stats\":{\"atk\":92,\"def\":152,\"spa\":210,\"spd\":210,\"spe\":191},\"moves\":[\"morningsun\",\"toxic\",\"sleeppowder\",\"psychic\"],\"baseAbility\":\"compoundeyes\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p1: Raticate\",\"details\":\"Raticate, L85, F\",\"condition\":\"232/232\",\"active\":false,\"stats\":{\"atk\":186,\"def\":151,\"spa\":133,\"spd\":167,\"spe\":214},\"moves\":[\"return102\",\"hiddenpowerground\",\"shadowball\",\"facade\"],\"baseAbility\":\"guts\",\"item\":\"choiceband\",\"pokeball\":\"pokeball\"},{\"ident\":\"p1: Whiscash\",\"details\":\"Whiscash, L83, F\",\"condition\":\"318/318\",\"active\":false,\"stats\":{\"atk\":177,\"def\":169,\"spa\":174,\"spd\":166,\"spe\":147},\"moves\":[\"protect\",\"earthquake\",\"icebeam\",\"toxic\"],\"baseAbility\":\"oblivious\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p1: Arcanine\",\"details\":\"Arcanine, L78, F\",\"condition\":\"268/268\",\"active\":false,\"stats\":{\"atk\":176,\"def\":170,\"spa\":201,\"spd\":170,\"spe\":193},\"moves\":[\"rest\",\"flamethrower\",\"sleeptalk\",\"toxic\"],\"baseAbility\":\"intimidate\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p1: Dugtrio\",\"details\":\"Dugtrio, L78, F\",\"condition\":\"183/183\",\"active\":false,\"stats\":{\"atk\":169,\"def\":122,\"spa\":123,\"spd\":153,\"spe\":232},\"moves\":[\"sludgebomb\",\"earthquake\",\"rockslide\",\"hiddenpowerbug\"],\"baseAbility\":\"arenatrap\",\"item\":\"choiceband\",\"pokeball\":\"pokeball\"},{\"ident\":\"p1: Flareon\",\"details\":\"Flareon, L89, M\",\"condition\":\"260/260\",\"active\":false,\"stats\":{\"atk\":236,\"def\":158,\"spa\":220,\"spd\":247,\"spe\":166},\"moves\":[\"flamethrower\",\"toxic\",\"wish\",\"protect\"],\"baseAbility\":\"flashfire\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"}]}}",
+  "owner": "p1",
+  "prefix_sha256": "6076fb5893a641beaa7c47435c98e18166224c049e0eb95d0894cef6962fa6d7",
+  "request_id": "battle-gen3randombattle-controlled-2103400817:1",
+  "schema": "pokezero.phase-d.shared-gpu-search.v1",
+  "stream_id": 1
+ },
+ "source_hash": "f5a5265143d423af"
+}

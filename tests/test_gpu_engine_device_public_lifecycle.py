@@ -92,7 +92,9 @@ class FaintClearTests(unittest.TestCase):
         from gpu_engine import engine_device_features as features
         s, c = self.prepared(2)
         live = s._replace(confusion_counter=s.confusion_counter.at[:, 1, 0].set(2), encore_counter=s.encore_counter.at[:, 1, 0].set(2))
-        after = live._replace(hp=live.hp.at[0, 1, 0].set(0))
+        # An ordinary step that prints its TURN line (after.turn advances): B2 ticks a held clock only on |turn|
+        # (public_active.py:240), and so does turn_end since the transition batch's F2.
+        after = live._replace(hp=live.hp.at[0, 1, 0].set(0), turn=c.trackers.turn)
         h.turn_end(c, live, after, j.ones(2, bool))
         f = c.trackers.mon_features
         self.assertEqual(f['confusion_turns'][:, 1, 0].tolist(), [0, 3])          # fainted stays 0; survivor ticks

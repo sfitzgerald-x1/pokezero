@@ -97,6 +97,34 @@ class DeviceSelfMovesTests(unittest.TestCase):
         self.assertEqual(pp[:4], [float(np.float32(x)) for x in (1.0, 1.0, 1.0, 3 / 24)])
         self.assertNotIn(float(np.float32(21 / 24)), pp)
 
+    def test_transformed_active_self_tokens_keep_saved_moves_and_pp(self):
+        import jax.numpy as j
+        import numpy as np
+        from gpu_engine import engine_device_observation as encoder, engine_device_public_hooks as hooks, engine_device_trackers as tr
+        for observer in (0, 1):
+            for slot in (0, 2):
+                with self.subTest(observer=observer, slot=slot):
+                    state = self.world(); state = state._replace(active=state.active.at[0, observer].set(slot))
+                    side = j.asarray([observer], j.int32)
+                    public = tr.readout(hooks.initialize(state, self.tables[True].belief).trackers, side)
+                    encode = lambda value: encoder.encode(value, public, self.tables[True], observer_sides=side,
+                        legal_action_mask=j.ones((1, 9), bool))
+                    before = encode(state)
+                    copied = j.roll(state.moves[0, observer, slot], 1).at[2:].set(0)
+                    transformed = state._replace(transformed=state.transformed.at[0, observer].set(True),
+                        transform_moves=state.transform_moves.at[0, observer].set(state.moves[0, observer, slot]),
+                        transform_pp=state.transform_pp.at[0, observer].set(state.pp[0, observer, slot]),
+                        transform_stats=state.transform_stats.at[0, observer].set(state.stats[0, observer, slot, 1:]),
+                        moves=state.moves.at[0, observer, slot].set(copied),
+                        pp=state.pp.at[0, observer, slot].set(j.asarray([5, 3, 0, 0], j.int32)))
+                    after = encode(transformed)
+                    for token in range(1, 7):self.assertEqual(self.cells(after, token), self.cells(before, token))
+                    # Copied action slots still describe the transformed active, not its saved set.
+                    self.assertFalse(np.array_equal(np.asarray(before.categorical_ids)[:, 13:17],
+                        np.asarray(after.categorical_ids)[:, 13:17]))
+                    spent = transformed._replace(pp=transformed.pp.at[0, observer, slot, 0].set(1))
+                    for token in range(1, 7):self.assertEqual(self.cells(encode(spent), token), self.cells(before, token))
+
     def test_static_override_turns_a_view_off(self):
         import numpy as np
         a, b = self.encode(True, observer=1, self_moves=False), self.encode(False, observer=1)
