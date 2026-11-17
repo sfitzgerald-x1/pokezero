@@ -46,20 +46,20 @@ def citations(text):
 CITATION_ANCHORS = {
     'gpu_engine/baton.py:16': 'batonpass',
     'gpu_engine/constructor_worlds.py:487': 'OPPONENT_RECHARGE_UNREPRESENTED',
-    'gpu_engine/constructor_worlds.py:887': 'def fix_recharge',
+    'gpu_engine/constructor_worlds.py:914': 'def fix_recharge',
     'gpu_engine/effects.py:175': 'def stall_success',
     'gpu_engine/effects.py:46': 'destinybond',
     'gpu_engine/encore.py:14-20': '^def from_metadata',
     'gpu_engine/encore.py:33-52': '^def apply',
-    'gpu_engine/engine_device_observation.py:290-302': "own['moves']",
+    'gpu_engine/engine_device_observation.py:346-368': "own['moves']",
     'gpu_engine/engine_request_source.py:261-265': '^_unsafe_history',
     'gpu_engine/engine_request_source.py:341': 'charge_move',
     'gpu_engine/engine_request_source.py:341-342': '^encore',
     'gpu_engine/engine_request_source.py:380': 'LOCK',
-    'gpu_engine/entry.py:50': 'spikes',
+    'gpu_engine/entry.py:51': 'spikes',
     'gpu_engine/focus_punch.py:15-19': 'focuspunch',
-    'gpu_engine/future_state.py:155': 'lockedmove',
-    'gpu_engine/future_state.py:476': 'RECHARGE_UNREPRESENTED',
+    'gpu_engine/future_state.py:164': 'lockedmove',
+    'gpu_engine/future_state.py:494': 'RECHARGE_UNREPRESENTED',
     'gpu_engine/items.py:27-28': 'trick: jax.Array',
     'gpu_engine/linked_traps.py:12-14': 'meanlook',
     'gpu_engine/linked_traps.py:12-25': 'meanlook',
@@ -90,7 +90,7 @@ CITATION_ANCHORS = {
     'gpu_engine/solar_beam.py:1': 'Solar Beam',
     'gpu_engine/solar_beam.py:14-15': 'solarbeam',
     'gpu_engine/state.py:14': 'LEECH_SEED',
-    'gpu_engine/state.py:146-148': '^def usable_moves',
+    'gpu_engine/state.py:158-160': '^def usable_moves',
     'gpu_engine/state.py:16-17': '^FOCUS_PUNCH',
     'gpu_engine/state.py:21': 'DESTINY_BOND',
     'gpu_engine/state.py:24-92': '^class BattleState',
@@ -112,25 +112,27 @@ CITATION_ANCHORS = {
     'gpu_engine/state.py:90': 'yawn_counter',
     'gpu_engine/state.py:91-92': '^partial_trap_counter',
     'gpu_engine/sustain.py:22-27': 'leechseed',
-    'gpu_engine/transition.py:1727-1736': '^_trick=',
-    'gpu_engine/transition.py:1737-1748': '_white_herb_pair',
-    'gpu_engine/transition.py:1776-1784': '^_perish_used',
-    'gpu_engine/transition.py:1789-1797': '^_yawn_try',
-    'gpu_engine/transition.py:1960-1969': '^seed_target',
-    'gpu_engine/transition.py:1997-2002': '^_wrap_set',
-    'gpu_engine/transition.py:2593-2613': "^POSITIONS['wrap']",
-    'gpu_engine/transition.py:2614-2642': "^POSITIONS['yawn']",
-    'gpu_engine/transition.py:2624-2628': '^_yawn_clause',
-    'gpu_engine/transition.py:2674-2687': '^_perish_continues',
-    'gpu_engine/transition.py:2758-2762': 'truant_loaf=work.truant_loaf',
-    'gpu_engine/transition.py:611-612': '^charge_moves',
-    'gpu_engine/transition.py:641-643': 'initial_loaf = (table.entry.truant',
-    'gpu_engine/transition.py:82-114': '^def tables_from_metadata',
-    'gpu_engine/transition.py:849': 'charge_locked',
-    'gpu_engine/transition.py:856-860': '~DESTINY_BOND&0xffffffff',
-    'gpu_engine/transition.py:864-869': '^_recharge_turn',
-    'gpu_engine/transition.py:875-876': 'loafing=table.entry.truant',
-    'gpu_engine/transition.py:876': 'loafing=table.entry.truant',
+    'gpu_engine/transition.py:1730-1739': '^_trick=',
+    'gpu_engine/transition.py:1740-1751': '_white_herb_pair',
+    'gpu_engine/transition.py:1790-1798': '^_perish_used',
+    'gpu_engine/transition.py:1803-1811': '^_yawn_try',
+    'gpu_engine/transition.py:1974-1983': '^seed_target',
+    'gpu_engine/transition.py:2011-2016': '^_wrap_set',
+    'gpu_engine/transition.py:2615-2635': "^POSITIONS['wrap']",
+    'gpu_engine/transition.py:2636-2664': "^POSITIONS['yawn']",
+    'gpu_engine/transition.py:2646-2650': '^_yawn_clause',
+    'gpu_engine/transition.py:2696-2709': '^_perish_continues',
+    'gpu_engine/transition.py:2783-2787': 'truant_loaf=work.truant_loaf',
+    'gpu_engine/transition.py:614-615': '^charge_moves',
+    'gpu_engine/transition.py:644-646': 'initial_loaf = (table.entry.truant',
+    'gpu_engine/transform.py:132': 'def revert',
+    'gpu_engine/transform.py:70': 'def apply',
+    'gpu_engine/transition.py:84-117': '^def tables_from_metadata',
+    'gpu_engine/transition.py:852': 'charge_locked',
+    'gpu_engine/transition.py:859-863': '~DESTINY_BOND&0xffffffff',
+    'gpu_engine/transition.py:867-872': '^_recharge_turn',
+    'gpu_engine/transition.py:878-879': 'loafing=table.entry.truant',
+    'gpu_engine/transition.py:879': 'loafing=table.entry.truant',
     'gpu_engine/v5_hypothetical_state.py:119': 'DESTINY_BOND',
     'gpu_engine/v5_hypothetical_state.py:121': 'perish_counter',
 }
@@ -204,10 +206,13 @@ class EnumerationTests(unittest.TestCase):
         source = (ROOT / 'gpu_engine/engine_request_source.py').read_text().splitlines()
         self.assertIn('LOCK', source[379]);self.assertIn('charge_move', source[340])
         state = (ROOT / 'gpu_engine/state.py').read_text().lower()
-        # an effect the engine models in-tree (engine_since) names its state; the others still have none
+        # an effect the engine models in-tree (engine_since) names its state; the others still have none. Transform is in-tree from
+        # its PR, before its merge exists to be the engine_since (set with the guard change that follows): pending until then.
         words = dict(recharge='recharge', perish_count='perish', drowsy='yawn', destiny_bond='destiny', partial_trap='partial', transform='transform')
+        pending = {'transform'}
         for e in A.EFFECTS:
-            if e.id in words:(self.assertIn if e.engine_since else self.assertNotIn)(words[e.id], state, e.id)
+            if e.id in pending:self.assertEqual(e.engine_since, '', f'{e.id} has its engine_since: drop it from pending')
+            if e.id in words:(self.assertIn if e.engine_since or e.id in pending else self.assertNotIn)(words[e.id], state, e.id)
         traps = (ROOT / 'gpu_engine/linked_traps.py').read_text().splitlines()[12]
         self.assertIn('meanlook', traps);self.assertNotIn('wrap', traps)
         transition = (ROOT / 'gpu_engine/transition.py').read_text()

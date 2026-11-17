@@ -78,7 +78,9 @@ FIELDS = (
     ('borrowed_ability', 'mon', 'vocab abilities[t.borrowed_ability]', 'catalog.abilities.names[ctx.abilities.running]'),
     ('shown_ability', 'mon', 'vocab abilities[t.shown_ability]', 'ctx.abilities.running, else ctx.abilities.original'),
     ('types', 'mon', 'vocab types[t.shown_types]', 'TYPE labels of ctx.types.categories when overridden, else '
-     'catalog.species.device.type_categories[mons.species]'),
+     'catalog.species.device.type_categories[ctx.abilities.transform_species when transformed, else mons.species]'),
+    ('transformed', 'mon', 't.transformed', 'ctx.abilities.transformed'),
+    ('transform_species', 'mon', 'vocab species[t.transform_species]', 'catalog.species.names[ctx.abilities.transform_species]'),
     ('belief_hard', 'mon', 't.belief_mask', 'beliefs.hard[observer 1-side]'),
     ('visible_hard', 'mon', 't.visible_belief.visible_hard', 'beliefs.hard[observer 1-side]'),
     ('belief_pin', 'mon', 't.visible_belief.pin / pin_active', 'beliefs.pin / pin_active[observer 1-side]'),
@@ -162,6 +164,10 @@ LEFT_OUT = {
     'own_order, public_order, physical_to_public, active_physical, next_slot': 'private identity cursors and '
               'request-order permutations (never encoded); B2 indexes by public encounter only',
     'error': 'device diagnostic input-contract bits',
+    'copied_pp_used, transform_own_view, transform_borrowed': 'Transform: the device\'s copied-slot uses (for device worlds), '
+              'the transformer owner\'s own view of its copied ability (B2 keeps it only in that owner\'s fold, read for the '
+              'Pressure charge of moves against the transformer), and the mark that a borrowed ability is a Transform copy (the '
+              'readout hides it from the traced column, B2\'s traced); none has a compared B2 counterpart in the opposing fold',
     'wish_turns, wish_pending (field_features)': 'zero in the carry; readout derives them from wish_set_turn '
               '(compared)',
 }
@@ -435,6 +441,8 @@ def device_view(t, lane, vocab):
                 moves=moves, original_ability=original, borrowed_ability=borrowed,
                 shown_ability=_name(vocab['abilities'], t.shown_ability[lane, s, k]),
                 types=[_name(vocab['types'], x) for x in t.shown_types[lane, s, k] if int(x)],
+                transformed=False if t.transformed is None else bool(t.transformed[lane, s, k]),
+                transform_species='' if t.transform_species is None else _name(vocab['species'], t.transform_species[lane, s, k]),
                 belief_hard=_words(t.belief_mask[lane, s, k]),
                 **({} if vb is None else dict(visible_hard=_words(vb.visible_hard[lane, s, k]),
                     belief_pin=[_words(vb.pin[lane, s, k]), bool(vb.pin_active[lane, s, k])],
@@ -511,7 +519,10 @@ def b2_side(b2, q, own, s, catalog):
             moves=[(_name(catalog.moves.names, m), int(n)) for m, n in zip(ids, uses) if int(m)],
             original_ability=original, borrowed_ability=running, shown_ability=running or original,
             types=type_names(ctx.types.categories[q, s] if bool(ctx.types.overridden[q, s]) and int(ctx.types.encounter[q, s]) == int(mons.encounter[q, s, k])
-                             else static_types[int(mons.species[q, s, k])]),
+                             else static_types[int(ctx.abilities.transform_species[q, s, k]) if bool(ctx.abilities.transformed[q, s, k])
+                                               and int(ctx.abilities.transform_species[q, s, k]) > 0 else int(mons.species[q, s, k])]),
+            transformed=bool(ctx.abilities.transformed[q, s, k]),
+            transform_species=_name(catalog.species.names, ctx.abilities.transform_species[q, s, k]),
             **_belief(beliefs.hard[q, 1 - s, k], beliefs.pin[q, 1 - s, k], beliefs.pin_active[q, 1 - s, k], beliefs.conflicts[q, 1 - s, k]),
             sleep_turns=int(ctx.sleep.count[q, s, k]), rest_sleep=int(ctx.sleep.rest[q, s, k]),
             sleep_skipped_turns=int(ctx.sleep.skipped[q, s, k]), sleep_cant_pending=int(ctx.sleep.pending[q, s, k]),

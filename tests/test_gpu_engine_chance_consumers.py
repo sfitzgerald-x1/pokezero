@@ -360,6 +360,47 @@ class ChanceConsumerTests(unittest.TestCase):
             without_copy=self.plan(data,meta,actions=actions,kernel_table=t)
             self.assertEqual(len(self.cells(without_copy,f'phazing.{actor}')),1)
 
+    def plan_transform(self, data, meta, actions, kernel_table, module=c):
+        """The input mapper refuses a Transform inventory (future_state DYNAMIC_INVENTORY), so bind the native input and actions
+        on a copy whose Transform reads Tackle: the plan's own closure, which reads the actual root, is what the test sees."""
+        names = meta['vocabulary']['moves'];transform, splash = names.index('transform'), names.index('tackle')
+        def strip(state):
+            copy = deepcopy(state)
+            copy['moves'] = [[[splash if m == transform else m for m in row] for row in party] for party in copy['moves']]
+            return copy
+        build, bind = mapping.native_input_from_jax, mapping.native_actions_from_jax
+        with patch.object(module.mapping, 'native_input_from_jax',
+                          side_effect=lambda state, index, metadata: build(strip(state), index, metadata, module=FAKE)), \
+             patch.object(module.mapping, 'native_actions_from_jax',
+                          side_effect=lambda state, index, acts, native, **kw: bind(strip(state), index, acts, native, **kw)):
+            return module.plan_for_state(data, None, actions, kernel_table, meta, cap=100_000_000)
+
+    def test_transform_closure_copies_static_and_evasion_in_both_plan_programs(self):
+        """Transform draws nothing, but a selected Transform copies the foe's ability and stages (gpu_engine/transform.py): a
+        copied Static switches on the foe's contact axis, and a copied +2 evasion refines the foe's accuracy axis. Without the
+        table (or without Transform selected) both stay as before. chance_consumers and phase_d_chance carry the same closure."""
+        from gpu_engine import phase_d_chance
+        for module in (c, phase_d_chance):
+            data, meta = fixture();meta['vocabulary']['abilities'] += ['static']
+            names = meta['vocabulary']['moves'];names.append('bodyslam');body = names.index('bodyslam')
+            transform = names.index('transform')
+            data['moves'][0][0][0] = transform
+            data['moves'][1][0][0] = body
+            data['ability'][1][0] = 2;data['base_ability'][1][0] = 2
+            data['boosts'][1][0][6] = 2                     # the foe's +2 evasion, which a Transform copies
+            t = table(meta)
+            t['secondary']['static'][2] = True
+            t['power'][body] = 85;t['accuracy'][body] = 80;t['secondary']['contact'][body] = True
+            t['transform'] = dict(move=[name == 'transform' for name in names], copied_pp=[5] * len(names))
+            plan = self.plan_transform(data, meta, (0, 0), t, module)
+            self.assertIsInstance(plan, module.ConsumerPlan, plan)
+            self.assertEqual([x.mass for x in self.cells(plan, 'phazing.1')], [Fraction(1, 3), Fraction(2, 3)])
+            with_copy = len(self.cells(plan, 'draws.1.6'))
+            t['transform'] = None
+            plan = self.plan_transform(data, meta, (0, 0), t, module)
+            self.assertEqual(len(self.cells(plan, 'phazing.1')), 1)
+            self.assertLess(len(self.cells(plan, 'draws.1.6')), with_copy)
+
     def test_static_has_exact_thirds_on_one_existing_auxiliary_axis(self):
         data, meta = fixture(); meta['vocabulary']['abilities'].append('static')
         data['ability'][1][0] = 2
@@ -488,9 +529,9 @@ class ChanceConsumerTests(unittest.TestCase):
         self.assertIn("LIVE_SUSPENSION_INTERFACE", {g.code for g in out.gaps})
         self.assertTrue(out.raw_jax)
 
-    # §6: the appended effect stream's consumers (transition.py:1155-1195, 2328-2335, 2621-2631, 2666-2687).
+    # §6: the appended effect stream's consumers (transition.py:1158-1198, 2350-2357, 2643-2653, 2688-2709).
     def plan_live(self, data, meta, actions=(0, 0), *, kernel_table=None, cap=100_000_000, clean=()):
-        """The input mapper refuses a live Yawn, Perish or partial-trap count (future_state.py:477-484). Bind the native
+        """The input mapper refuses a live Yawn, Perish or partial-trap count (future_state.py:495-502). Bind the native
         input and actions on a copy without those counts, so the plan's own consumer closure, which reads the actual
         root, is what the test sees."""
         fields = dict(yawn_counter=nested((2, 6), 0), perish_counter=nested((2, 6), 0),

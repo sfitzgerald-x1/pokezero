@@ -84,6 +84,12 @@ FIELD_POLICY = {
     "yawn_counter": "yawn duration; elapsed vs sampled unresolved, so a live yawn refuses",
     "partial_trap_counter": "hidden sampled duration plus source; a live partial trap refuses",
     "partial_trap_source": "partial-trap source party index (-1 none); refuses with its counter",
+    "transformed": "Transform flag of the side's active; a live Transform refuses (no certified native pre_transform mapping)",
+    "transform_species": "donor's original species while transformed (0 otherwise); refuses with the flag",
+    "transform_stats": "saved original Atk..Spe for the revert; refuses with the flag",
+    "transform_moves": "saved original move ids for the revert; refuses with the flag",
+    "transform_pp": "saved base PP for the revert; refuses with the flag",
+    "transform_hidden_power": "saved original Hidden Power type and power for the revert; refuses with the flag",
 }
 NATIVE_PATHS = {
     "species": ("side[].pokemon[].id",), "level": ("side[].pokemon[].level",),
@@ -144,6 +150,9 @@ NATIVE_PATHS = {
     "yawn_counter": ("UNRESOLVED: side[].volatile_status_durations.yawn (refused while nonzero)",),
     "partial_trap_counter": ("UNRESOLVED: side[].volatile_statuses.PARTIALLYTRAPPED + hidden duration (refused while nonzero)",),
     "partial_trap_source": ("UNRESOLVED: opposing side.active_index of the trapper (refused unless -1)",),
+    **{name: ("UNRESOLVED: side[].pokemon[].pre_transform + base stats/moves (refused while transformed)",)
+       for name in ("transformed", "transform_species", "transform_stats", "transform_moves", "transform_pp",
+                    "transform_hidden_power")},
 }
 SIDE_NAMES = ("side_one", "side_two")
 BOOST_NAMES = ("attack", "defense", "special_attack", "special_defense", "speed", "accuracy", "evasion")
@@ -170,11 +179,14 @@ SHAPES = {name: (2, 6) for name in ("species", "level", "hidden_power_type", "hi
 SHAPES.update({name: (2,) for name in ("active", "entry_pending", "active_turns", "trapped", "forced_switch",
     "last_action_kind", "last_action_index",
     "baton_pass", "queued_actions", "queued_stall", "phazing_draws", "secondary_draws", "sleep_talk_draws",
-    "spikes", "wish_counter", "wish_amount", "keys")})
+    "spikes", "wish_counter", "wish_amount", "keys", "transformed", "transform_species")})
 SHAPES.update({name: () for name in ("queued_actor", "pending_residual", "replacement_count", "weather",
     "weather_counter", "turn", "done", "winner")})
 SHAPES.update(types=(2, 6, 2), base_types=(2, 6, 2), stats=(2, 6, 6), moves=(2, 6, 4), pp=(2, 6, 4), disabled=(2, 6, 4),
-    boosts=(2, 6, 7), residual_draws=(2, 12), effect_draws=(2, 4))
+    boosts=(2, 6, 7), residual_draws=(2, 12), effect_draws=(2, 4),
+    transform_stats=(2, 5), transform_moves=(2, 4), transform_pp=(2, 4), transform_hidden_power=(2, 2))
+TRANSFORM_FIELDS = ("transformed", "transform_species", "transform_stats", "transform_moves", "transform_pp",
+    "transform_hidden_power")
 
 
 @dataclass(frozen=True)
@@ -346,7 +358,8 @@ def _prepare(data, metadata, certificate=None, *, boundary="ordinary",
             add("source", "INCOMPLETE_ORIGINAL_STATIC", "All12 constructor records and retained genders required")
             return None, gaps, (), False, False
     expected = set(FIELD_POLICY) - {"truant_loaf", "gender", "item_knocked", "effect_draws", "recharge_counter",
-        "perish_counter", "yawn_counter", "partial_trap_counter", "partial_trap_source"}  # legacy fields remain explicitly unknown
+        "perish_counter", "yawn_counter", "partial_trap_counter", "partial_trap_source",
+        *TRANSFORM_FIELDS}  # legacy fields remain explicitly unknown
     if set(data) - set(FIELD_POLICY) or expected - set(data):
         add("schema", "UNCLASSIFIED_JAX_FIELD", repr(sorted(set(data) ^ expected)))
         return None, gaps, (), False, False
@@ -401,6 +414,11 @@ def _prepare(data, metadata, certificate=None, *, boundary="ordinary",
         add("queued_actor", "UNSUPPORTED_SUSPENSION_QUEUE", "Queued actor must be the waiter, or an explicitly empty queue")
     if inventory & DYNAMIC_INVENTORY:
         add("moves", "DYNAMIC_HISTORY_CONTEXT_UNRESOLVED", "Dynamic move acquisition/callers defeat the fixed-inventory inactive-history proof; do not erase lastMove/damage conditioning")
+    for side, side_name in enumerate(SIDE_NAMES):
+        # Transform: the copy is written in place and the saves are only the revert's; native pre_transform is not certified.
+        if data.get("transformed", (False, False))[side] or any(not _all(data.get(name, ((0,),)*2)[side])
+                for name in TRANSFORM_FIELDS[1:]):
+            add(side_name+".transformed", "TRANSFORM_UNREPRESENTED", "A live Transform (or its saved base) needs the native pre_transform mapping, not certified here")
     genders = data.get("gender", ((-1,)*6,)*2)
     if original_genders is not None and genders != original_genders:
         add("gender", "RETAINED_GENDER_CHANGED", "Gender differs from original constructor provenance")

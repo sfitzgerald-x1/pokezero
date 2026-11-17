@@ -224,6 +224,8 @@ DEFAULT_DESTINY_BOND = 64
 SLEEP_MOVES = ('spore', 'hypnosis', 'sleeppowder', 'sing', 'lovelykiss', 'grasswhistle')
 # M2: the new leaves (the captures predate them) and the bag columns m2_rule reads.
 WRAP_CLOCK = "trackers.mon_features['wrap_trap_turns']"
+TRANSFORM_TRACKERS = ('trackers.transformed', 'trackers.transform_species', 'trackers.copied_pp_used', 'trackers.transform_own_view',
+                      'trackers.transform_borrowed')
 M2_BAG = ('perish0', 'perish1', 'perish2', 'perish3', 'yawn', 'partiallytrapped')
 M2_COUNTER_LEAVES = ('state.perish_counter', 'state.yawn_counter', 'state.partial_trap_counter', 'state.partial_trap_source')
 
@@ -322,6 +324,8 @@ def tracker_default(name, template):
         if template.shape[1:] != (2, 6):raise MigrationError(f'{name}: expected [B,2,6], tree has {template.shape}')
         return lambda lanes: np.broadcast_to(np.arange(6, dtype=template.dtype), (lanes, 2, 6))
     if re.match(r"^trackers\.(mon_features|field_features)\[", name):
+        return lambda lanes: np.zeros((lanes,) + template.shape[1:], template.dtype)
+    if name in TRANSFORM_TRACKERS:   # Transform: no captured lane is transformed (no mark, no donor, no copied uses)
         return lambda lanes: np.zeros((lanes,) + template.shape[1:], template.dtype)
     raise MigrationError(f'new tracker leaf {name} has no declared neutral value; add it to tracker_default()')
 
@@ -868,6 +872,11 @@ FAMILIES['m2'] = tuple(f'^{re.escape(n)}$' for n in M2_COUNTER_LEAVES) + (rf'^{r
 ALLOWED['whiteherb'] = dict(user=('hp', 'visible', 'subtracker', 'wish'), target=('hp', 'visible', 'subtracker', 'wish'), glob=())
 ALLOWED['facade'] = dict(user=('hp', 'visible', 'subtracker', 'wish'), target=('hp', 'visible', 'subtracker', 'wish'), glob=())
 ALLOWED['sacredfire'] = ALL
+# Transform (gpu_engine/transform.py): a side whose executed move may be Transform (the pre-state candidates: its action slot,
+# a Sleep Talk call, an Encore override) copies the foe active in place; everything of both actives and both trackers after
+# it in that step may differ (the foe's later move resolves against the copy, the Update cure, the Choice unlock, the faint
+# revert, the six new leaves). No capture carries a transformed mon, so every other lane must stay bitwise.
+ALLOWED['transform'] = ALL
 # D. Wonder Guard: a hit that is now blocked or not decides whether the holder (Shedinja: 1 HP) survives and whether the
 # move's effects, contact abilities, drain and recoil happen at all, so, like a sleep landing (A1), anything. The contact
 # abilities: a status landing on the attacker decides whether it acts later (sleep, full paralysis), so anything too.
@@ -1004,6 +1013,7 @@ PLUGINS = {
     'C': dict(psychoboost=move('psychoboost'), whiteherb=white_herb, sacredfire=move('sacredfire'), facade=move('facade')),
     # WH (White Herb plus C-lite, which replaces C's draft; Psycho Boost's drop is unchanged, its restore is White Herb's).
     'WH': dict(whiteherb=white_herb, facade=facade_status, sacredfire=frozen_defrost),
+    'T': dict(transform=move('transform')),
     # D (fidelity tier D): Wonder Guard, the pinch abilities, Poison Point / Flame Body / Effect Spore.
     'D': dict(wonderguard=ability_target('wonderguard', move_ok=damaging_move), pinch=pinch_active,
               contact_status=ability_target(*CONTACT_ABILITIES, move_ok=contact_move), pursuit_reveal=pursuit_reveal),
