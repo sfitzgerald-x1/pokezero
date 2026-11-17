@@ -225,8 +225,9 @@ class Narrowing(Base):
             with self.subTest(fixture=name):
                 data = fixture(name)
                 post = self.post(data)[key]
-                strike, = post.strikes
-                census = next(c for c in data['census']['strikes'] if c['line'] == strike.line)
+                census = next(c for c in data['census']['strikes']
+                              if c['move'] == 'hiddenpower' and SP.species_key(c['attacker']) == key)
+                strike = self.strike_at(post, census['line'])
                 self.assertTrue(strike.admitted);self.assertIsNone(census['reason'])
                 true = [v.variant_id for v in self.variants(key)].index(census['true_variant'])
                 self.assertEqual(strike.counts[true], census['true_match']);self.assertGreater(post.weights[true], 0)
