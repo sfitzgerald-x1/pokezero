@@ -441,13 +441,21 @@ def type_revert(c,before,after,side,physical,use):
     return c._replace(trackers=_write(c.trackers,'shown_types',side,physical,base,reverted))
 
 
-def move(c,state,side,move,use,*,pp_use=False,original=True,count_turn=True,preparation=False):
+def move(c,state,side,move,use,*,pp_use=False,original=True,count_turn=True,preparation=False,from_tag=False):
     """Actual declarations charge public PP, never hidden physical PP cost.
 
     The ledger for side s is read as opponent knowledge only by seat 1-s.
     That observer knows its OWN active ability, including owner-only Pressure;
     using it for PP accounting does not reveal that ability to the acting seat.
     Original source targeting applies; called Sleep Talk children stay uncharged.
+
+    from_tag (a static bool): the header line carries a [from] tag, as a Pursuit intercept's
+    |move|X|Pursuit|Y|[from] Pursuit does. B2 records a last move only from an untagged line
+    (public_moves.record_move: last_kind/last_id gated by ~has_from, gpu_engine/public_moves.py:210-211;
+    the Python encoder likewise, src/pokezero/showdown.py:3786), and its CHOICE_MOVE fact is 0 on a
+    tagged line (public_active.project_line), so the line neither locks a public Choice item nor anchors
+    a Truant holder. The tendency counters still read it as a move line. The champion convention: the
+    device copies B2 here (Showdown's lastMove is Pursuit).
     """
     # Gen3 emits cant(slp) even for Sleep Talk/Snore, then an actual usable
     # original MOVE classifies that cant as skippedTime. Called children and
@@ -492,12 +500,12 @@ def move(c,state,side,move,use,*,pp_use=False,original=True,count_turn=True,prep
     # The child [from] line and preparation-only -singleturn annotation can
     # reveal a move, but neither is an ordinary MOVE header/decision datum.
     header=count_turn
-    if header:
+    if header and not from_tag:
         c=c._replace(trackers=_write(c.trackers,'last_moves',side,p,move,declared))
         c=c._replace(trackers=port.anchor(c.trackers,side,declared,loaf=False))
     if not preparation:
         c=feature(c,side,p,'moves_shown',j.ones_like(move),declared,add=True)
-    if header and c.trackers.mon_features is not None and 'choice_locked' in c.trackers.mon_features:
+    if header and not from_tag and c.trackers.mon_features is not None and 'choice_locked' in c.trackers.mon_features:
         # Fidelity M1: B2's CHOICE_MOVE (public_active) on the holder's own move line (no [from]: not a
         # called child, not a preparation): a publicly received Choice Band now locks (column 40).
         public=_mon_fact(c,'choice_public',side,p)!=0
@@ -716,21 +724,37 @@ def faint_clear(c,before,after,use):
     return c
 
 
-def turn_end(c,before,after,ordinary,*,upkeep=None,leftovers=None):
+def turn_end(c,before,after,ordinary,*,upkeep=None,leftovers=None,residual=None,upkeep_living=None):
+    """End of an actual step: the step's final observation, then its residual/upkeep facts, then the TURN line.
+
+    upkeep: the lanes on which Showdown printed |upkeep (the residual ran to its end without a checkWin inside a handler;
+    the caller decides, transition.step_with_chance's F1 mask). residual: the lanes whose residual ran, so printed its
+    weather -weather|...|[upkeep] line (None: ordinary, as before). upkeep_living [B,2]: an active whose |faint| line
+    follows that |upkeep (a Perish end-path faint), which B2's non-proc sweep still sees alive (None: none)."""
     c=observe(c,after,~before.done)
     c=faint_clear(c,before,after,~before.done)
     c=derived_volatiles(c,after,~before.done)
+    # A paused action/residual or forced replacement has no next TURN line.
+    # A completed replacement may open that line even without residual work.
+    ready=(~before.done&~after.done&~after.pending_residual&~j.any(after.forced_switch,axis=1)
+        &(c.trackers.turn<after.turn+1))
     for side in range(2):
-        p=_li.take(after.active,_r(after),side);alive=ordinary&(_get(after,'hp',side)>0)
+        p=_li.take(after.active,_r(after),side);alive=ready&(_get(after,'hp',side)>0)
         clocks=[('confusion_turns',_get(after,'confusion_counter',side)>0),('encore_turns',_get(after,'encore_counter',side)>0)]
         # Fidelity M2: WRAP_TRAP_TURNS follows the same TURN rule while partiallytrapped is held.
         if hasattr(after,'partial_trap_counter') and 'wrap_trap_turns' in c.trackers.mon_features:
             clocks.append(('wrap_trap_turns',_get(after,'partial_trap_counter',side)>0))
         for name,active in clocks:
+            # BUG F2: B2 advances a held clock only on a |turn| line (public_active.py:240, elapsed += held at TURN): so
+            # on `ready`, the TURN line's own gate below, not on every ordinary step. A battle-ending step prints no TURN;
+            # a turn whose residual KO requests a replacement prints its TURN at the replacement step.
             c=feature(c,side,p,name,j.ones_like(p),alive&active,add=True)
             c=feature(c,side,p,name,j.zeros_like(p),ordinary&~active)
     t=c.trackers;fields=t.field_features
-    up=fields['weather_upkeeps']+(ordinary&(after.weather!=0)).astype(j.int32)
+    # B2 counts a -weather|X|[upkeep] line (public_field.apply), printed by the residual's weather handler (order 8, before
+    # any residual faint): not on a step whose battle ended before its residual.
+    weather_tick=ordinary if residual is None else _mask(residual,len(c.trackers.error))
+    up=fields['weather_upkeeps']+(weather_tick&(after.weather!=0)).astype(j.int32)
     c=c._replace(trackers=t._replace(field_features={**fields,'weather_upkeeps':up}))
     if upkeep is not None:
         facts=c.trackers.mon_features
@@ -741,11 +765,8 @@ def turn_end(c,before,after,ordinary,*,upkeep=None,leftovers=None):
             'sleep_cant_pending':j.where(on,0,facts['sleep_cant_pending']),
             'sleep_usable_pending':j.where(on,0,facts['sleep_usable_pending'])}))
         c=c._replace(trackers=port.upkeep(c.trackers,upkeep))
-        c=c._replace(trackers=negative_items.upkeep(c.trackers,c.belief_tables,leftovers,upkeep,current_state=after))
-    # A paused action/residual or forced replacement has no next TURN line.
-    # A completed replacement may open that line even without residual work.
-    ready=(~before.done&~after.done&~after.pending_residual&~j.any(after.forced_switch,axis=1)
-        &(c.trackers.turn<after.turn+1))
+        c=c._replace(trackers=negative_items.upkeep(c.trackers,c.belief_tables,leftovers,upkeep,current_state=after,
+            living=upkeep_living))
     return public_turn(c,after,ready,after.turn+1)
 
 

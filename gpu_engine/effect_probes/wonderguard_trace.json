@@ -1,0 +1,178 @@
+{
+ "schema": "pokezero.effect_probe.scenario.v1",
+ "move": "wonderguard_trace",
+ "note": "Tier D WG copied by Trace: Porygon2 traces Shedinja's Wonder Guard at entry. Shadow Ball (Ghost, Normal-immune) and Hidden Power (Dark, neutral on Normal) are blocked by the copy; Porygon2's Ice Beam is blocked by Shedinja's own. Then Tyranitar's Pursuit on the switching Porygon2 (Dark, neutral) is blocked too.",
+ "teams": [
+  [
+   {
+    "species": "Shedinja",
+    "moves": [
+     "shadowball",
+     "hiddenpowerfighting",
+     "splash",
+     "toxic"
+    ],
+    "ability": "Wonder Guard",
+    "item": "Lum Berry"
+   },
+   {
+    "species": "Tyranitar",
+    "moves": [
+     "pursuit",
+     "splash",
+     "rockslide",
+     "earthquake"
+    ],
+    "ability": "Sand Stream",
+    "item": ""
+   },
+   {
+    "species": "Starmie",
+    "moves": [
+     "splash",
+     "surf",
+     "recover",
+     "protect"
+    ],
+    "ability": "Natural Cure",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Skarmory",
+    "moves": [
+     "splash",
+     "protect",
+     "spikes",
+     "drillpeck"
+    ],
+    "ability": "Keen Eye",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Metagross",
+    "moves": [
+     "splash",
+     "protect",
+     "meteormash",
+     "earthquake"
+    ],
+    "ability": "Clear Body",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Celebi",
+    "moves": [
+     "splash",
+     "protect",
+     "psychic",
+     "recover"
+    ],
+    "ability": "Natural Cure",
+    "item": "Leftovers"
+   }
+  ],
+  [
+   {
+    "species": "Porygon2",
+    "moves": [
+     "icebeam",
+     "splash",
+     "thunderbolt",
+     "recover"
+    ],
+    "ability": "Trace",
+    "item": ""
+   },
+   {
+    "species": "Blissey",
+    "moves": [
+     "splash",
+     "softboiled",
+     "protect",
+     "seismictoss"
+    ],
+    "ability": "Natural Cure",
+    "item": ""
+   },
+   {
+    "species": "Snorlax",
+    "moves": [
+     "splash",
+     "rest",
+     "protect",
+     "bodyslam"
+    ],
+    "ability": "Thick Fat",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Gengar",
+    "moves": [
+     "splash",
+     "protect",
+     "thunderbolt",
+     "icepunch"
+    ],
+    "ability": "Levitate",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Tyranitar",
+    "moves": [
+     "splash",
+     "protect",
+     "rockslide",
+     "earthquake"
+    ],
+    "ability": "Sand Stream",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Jolteon",
+    "moves": [
+     "splash",
+     "protect",
+     "thunderbolt",
+     "batonpass"
+    ],
+    "ability": "Volt Absorb",
+    "item": "Leftovers"
+   }
+  ]
+ ],
+ "script": [
+  [
+   "move 1",
+   "move 1"
+  ],
+  [
+   "move 2",
+   "move 2"
+  ],
+  [
+   "switch 2",
+   "move 2"
+  ],
+  [
+   "move 1",
+   "switch 2"
+  ],
+  [
+   "move 2",
+   "move 1"
+  ]
+ ],
+ "axes": [],
+ "expect": {
+  "exact": true
+ },
+ "require_fields": [
+  "perish_counter",
+  "yawn_counter",
+  "partial_trap_counter",
+  "partial_trap_source",
+  "item_knocked",
+  "destiny_bond",
+  "effect"
+ ]
+}

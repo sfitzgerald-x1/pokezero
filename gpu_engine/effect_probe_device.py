@@ -23,8 +23,9 @@ teams): the .cjs turns off Custom Game's debug exact-HP display so shared HP lin
 wire_lines below drops |debug| lines (debug-format only, never on a randbats wire), the |raw| custom-rule infobox
 (the format's @@@sleepclausemod suffix; Gen 3 Random Battle has Sleep Clause Mod built in, announced by its |rule|
 line), Splash's |-nothing| message (the probes' filler move, in no Gen 3 random set: B2's wire has no consumer for
-it, and the line carries no public fact) and the start-of-battle EV-limit |bigerror| warning (authored EVs; random
-sets keep the limit), and replaces the |tier| header.
+it, and the line carries no public fact), the start-of-battle EV-limit |bigerror| warning (authored EVs; random
+sets keep the limit) and the battle-end |win| and |tie| lines (BATTLE_END: B2 folds per decision and never sees one), and
+replaces the |tier| header.
 
 The device runs with the production belief tables (engine_device_observation.compile_tables over the B2 catalog, as
 gpu_engine/device_observation_collector.py builds them), so its Pressure PP charge, its hard belief masks and its shown
@@ -48,6 +49,11 @@ B2_STATUS = ('', 'slp', 'par', 'brn', 'frz', 'psn', 'tox')                 # pub
 WEATHER = {0: '', 1: 'raindance', 2: 'sunnyday', 3: 'sandstorm', 4: 'hail'}  # engine weather codes (phase_d_live_worlds)
 TIER_LINE = '|tier|[Gen 3] Random Battle'
 EV_LIMIT_WARNING = "|bigerror|Warning: One player isn't adhering to a 510 EV limit, and the other player is."
+# The battle-end line kinds, |win|<player> and |tie. B2 folds per decision, and no decision follows a battle end, so
+# production never feeds B2 either line (public_refresh_stream.family has no consumer for them and refuses them); a probe
+# battle that ends feeds B2 its production input domain without them. The outcome itself (done, winner, tie) is engine
+# state, which state mode compares.
+BATTLE_END = ('win', 'tie')
 
 SOURCE_HASH_PREFIX = 'effect-probe-'
 
@@ -181,23 +187,22 @@ for _case in ('selfhit=99,paralysis=0', 'selfhit=99,paralysis=99'):
 # Fixed (history): OPEN BUG C, Encore's residual -end (engine_device_public_hooks.derived_volatiles), 24 entries retired.
 # Fixed (history): OPEN BUG D, a fainted active's kept stages (engine_device_trackers._observe), 13 entries retired.
 # Fixed (history): OPEN BUG E, Flash Fire's -start (engine_device_public_hooks.derived_volatiles), 2 entries retired.
-# OPEN BUG (reported; the last-move half is possibly B2's quirk, for the lead to rule): Pursuit's switch intercept prints
-# |move|p2a: X|Pursuit|p1a: Y|[from] Pursuit. B2 records a move line's last-used move only without [from]
-# (public_moves.record_move: last_kind/last_id gated by ~has_from, gpu_engine/public_moves.py:210-211) and credits the
-# line's -damage to the user's dealt sums (public_damage's move window); the device's move hook records Pursuit as the
-# last move and its damage history credits the intercept no dealt damage.
-_PURSUIT_FROM = 'OPEN BUG: the [from] Pursuit intercept: B2 keeps the prior last move and credits its damage dealt; the device does neither'
-ALLOWLIST[('destinybond_pursuit', 'base', 1, '1:active:last_move')] = _PURSUIT_FROM
-for _scenario, _steps in (('destinybond_pursuer', (1, 2)), ('wh_pursuit', (0,))):
-    for _step in _steps:
-        for _field in ('1:active:last_move', '1:active:last_damage_dealt', '1:active:damage_exact_dealt'):
-            ALLOWLIST[(_scenario, 'base', _step, _field)] = _PURSUIT_FROM
-# OPEN BUG (reported): a failing Counter called by Sleep Talk. Showdown prints |move|p1a: X|Counter|p2a: Y|[from] Sleep
-# Talk and B2 reveals Counter (0 PP charged); the device's called-move reveal (transition.py:1008, device_public.move(...,
-# acts & (move!=caller_move), pp_use=False, count_turn=False)) is gated by acts, which Counter's failure gate (transition.py:
-# 990, acts &= ~(counter kind & (taken kind differs | the called move is not the chosen one))) has already cleared.
-_SLEEP_TALK_COUNTER = 'OPEN BUG: Sleep Talk\'s failing called Counter is revealed by B2 ([from] Sleep Talk line), not by the device'
-for _step in (1, 2):ALLOWLIST[('counter_sleeptalk', 'talk=0', _step, '0:0:moves')] = _SLEEP_TALK_COUNTER
+# Fixed (history): OPEN BUG F, the [from] Pursuit intercept's last move (the device copies B2: engine_device_public_hooks.move
+# from_tag) and its damage credit (transition.step_with_chance's intercept), 10 entries retired.
+# Fixed (history): OPEN BUG G, Sleep Talk's failing called Counter (the reveal precedes the called move's gates:
+# transition.step_with_chance's _called_line), 2 entries retired.
+# OPEN BUG (reported to the coordinator; pre-existing, first exposed by fidelity tier D's wonderguard_trace, the first probe
+# with a Trace holder): Porygon2 traces Shedinja's Wonder Guard at entry (|-ability|p2a: Porygon2|Wonder Guard|[from]
+# ability: Trace|[of] p1a: Shedinja). B2 records the copy for the traced mon and nothing for the tracer's own Trace
+# (belief._trace_copy_source), so the tracer's original ability stays unknown; the device records 'trace' as its original.
+# After the tracer switches out, B2 keeps the copied ability as its borrowed and shown ability; the device shows its own
+# Trace again and no borrowed ability.
+_TRACE_TRACER = 'OPEN BUG: Trace at entry: B2 records nothing for the tracer and keeps the copy after it leaves; the device records Trace'
+for _step in ('initial', 0, 1, 2, 3, 4):
+    ALLOWLIST[('wonderguard_trace', 'base', _step, '1:0:original_ability')] = _TRACE_TRACER
+for _step in (3, 4):
+    for _field in ('1:0:borrowed_ability', '1:0:shown_ability'):
+        ALLOWLIST[('wonderguard_trace', 'base', _step, _field)] = _TRACE_TRACER
 # Fixed (history): OPEN BUG I, the upkeep's Lum and pinch-berry rules (engine_device_negative_items.upkeep), 140 entries retired.
 # B2 limit (explained, not a device fact): B2's fold refuses (PAYLOAD) a side's second encounter of one species, at the
 # repeat's arrival line (|switch|p2a: Gengar2|Gengar, L74, M|...: RAW_BEGIN, SWITCH_PRELUDE, MUDSHOT, SWITCH, NONPROC,
@@ -262,6 +267,7 @@ def wire_lines(lines):
     out = []
     for line in lines:
         if line.startswith('|debug|') or line.startswith('|raw|') or line in ('|-nothing', EV_LIMIT_WARNING):continue
+        if line.startswith('|') and line.split('|')[1] in BATTLE_END:continue   # exactly the |win| and |tie| kinds
         out.append(TIER_LINE if line.startswith('|tier|') else line)
     return out
 

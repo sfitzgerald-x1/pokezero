@@ -33,7 +33,10 @@ STATUS=['','par','brn','psn','tox','slp','frz']
 SLEEP_CLAUSE_FORMAT='gen3customgame@@@sleepclausemod'
 FORMATS={SLEEP_CLAUSE_FORMAT:'gen3customgame@@@sleepclausemod; Sleep Clause Mod, no Freeze Clause',
     'gen3customgame':'gen3customgame; no Sleep/Freeze Clause'}
-TAPE_SCHEMA='pokezero.gpu_chance_tape.v2'
+# Fidelity tier D: tape v3 adds phazing (sample_chance_inputs' fold_in 271828, [0,60)), the contact abilities' and the
+# drag's auxiliary roll, so Static (before: unmapped, the "Static mapping gap") and the tier D abilities resolve.
+TAPE_SCHEMA='pokezero.gpu_chance_tape.v3'
+PHAZING_SALT=271828
 # The appended ChanceInputs.effect stream (design 2.1), derived here independently of
 # transition.effect_chance so a drift between the two shows as a divergence. Fidelity R
 # consumes [s][0..1] (Bonemerang's second hit); the residual roles arrive with M2.
@@ -85,20 +88,22 @@ def effect_draws(keys):
 
 
 def chance_tape(state,game,index,saved_effect=None):
-    """Tape v2. A suspended turn replays its saved block; `effect` comes from the
+    """Tape v3 (v2 plus phazing). A suspended turn replays its saved block; `effect` comes from the
     engine's saved effect_draws (fidelity R), else (an engine without the leaf) from
     the caller's copy of the suspended turn's tape (saved_effect), else it is freshly derived."""
     split=jax.vmap(lambda key:jax.random.split(key,2))(state.keys)[:,1]
     draws=jax.vmap(lambda key:jax.random.randint(key,(2,12),0,j.array([2,100,100,100,16,16,100,4,8,2,2,2],j.int32)))(split)
     secondary=jax.vmap(lambda key:jax.random.randint(jax.random.fold_in(key,1618033),(2,),0,100))(split)
     sleep=jax.vmap(lambda key:jax.random.randint(jax.random.fold_in(key,1414213),(2,),0,60))(split)
+    phazing=jax.vmap(lambda key:jax.random.randint(jax.random.fold_in(key,PHAZING_SALT),(2,),0,60))(split)
     effect=np.asarray(effect_draws(split))[0].tolist()
     if bool(np.asarray(state.pending_residual)[0]):
-        draws=state.residual_draws;secondary=state.secondary_draws;sleep=state.sleep_talk_draws
+        draws=state.residual_draws;secondary=state.secondary_draws;sleep=state.sleep_talk_draws;phazing=state.phazing_draws
         if hasattr(state,'effect_draws'):effect=np.asarray(state.effect_draws)[0].tolist()
         elif saved_effect is not None:effect=[list(row) for row in saved_effect]
     return dict(schema=TAPE_SCHEMA,nonce=f'{game}:{index}',draws=np.asarray(draws)[0].tolist(),
-        secondary=np.asarray(secondary)[0].tolist(),sleep_talk=np.asarray(sleep)[0].tolist(),effect=effect)
+        secondary=np.asarray(secondary)[0].tolist(),sleep_talk=np.asarray(sleep)[0].tolist(),effect=effect,
+        phazing=np.asarray(phazing)[0].tolist())
 
 
 def native_view(snapshot,original,vocab):
