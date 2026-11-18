@@ -51,7 +51,11 @@ def refuse_search_serving(*, catalog=None, meta=None, context):
     """Search serving fails closed on self_moves until the follow-up lands: a served catalog compiled with it, or a served
     archive declaring it (meta['self_moves']), stops the server at build instead of pricing an on catalog under an off
     Python root capture."""
-    if bool(getattr(getattr(catalog, 'masks', None), 'self_moves', False)) or bool((meta or {}).get('self_moves', False)):
+    from pokezero.checkpoint_self_moves import archive_self_moves
+    declared=archive_self_moves({} if meta is None else meta)
+    catalog_declared=getattr(getattr(catalog,'masks',None),'self_moves',False)
+    if type(catalog_declared) is not bool:raise ValueError('explicit bool catalog self_moves required')
+    if catalog_declared or declared:
         raise ValueError(f'{context}: {SEARCH_FOLLOW_UP}')
 
 
@@ -59,21 +63,41 @@ UNTHREADED = ('self_moves is not threaded through this tool yet: it encodes with
     'an archive that declares self_moves would be played or scored on observations it was not trained on')
 
 
-def refuse_unthreaded(meta, *, context):
-    """Gate and evaluation tools that load run archives but encode with the champion contract fail closed on an archive
-    that declares self_moves (meta['self_moves'], absent = off) until they are threaded."""
-    if bool((meta or {}).get('self_moves', False)):
+def refuse_unthreaded(meta=None, *, plan=None, catalog=None, context):
+    """Off-only tools reject on archives, plans or catalogs before evaluating actors."""
+    from pokezero.checkpoint_self_moves import archive_self_moves
+    declared=archive_self_moves({} if meta is None else meta)
+    flags=(getattr(plan,'self_moves',False),getattr(getattr(catalog,'masks',None),'self_moves',False))
+    if any(type(value) is not bool for value in flags):raise ValueError('explicit bool plan/catalog self_moves required')
+    if declared or any(flags):
         raise ValueError(f'{context}: {UNTHREADED}')
 
 
-def check_run_actor(meta, *, plan_self_moves, iteration, context):
+def checked_actor_initializer(meta, *, plan_self_moves, snapshot, root):
+    """Resolve original evidence only when an OFF actor needs the ON initializer exception."""
+    if plan_self_moves is True and (meta or {}).get('self_moves',False) is False and snapshot.iteration==-1:
+        from pokezero.checkpoint_self_moves import original_initializer
+        try:return original_initializer(root,snapshot)[0]
+        except (OSError,ValueError) as error:
+            raise ValueError('verified original initializer evidence required') from error
+    return None
+
+
+def check_run_actor(meta, *, plan_self_moves, iteration, context, initializer=None):
     """A V2 run's actor archive against its plan's declaration (meta['self_moves'], absent = off). An on archive in an off
     run is refused. In an on run every archive the run exports is stamped on; only the initial snapshot (iteration -1,
-    the checkpoint the run starts from, e.g. a shared off init) may be off: the plan's declaration wins and its tables
-    encode that actor on."""
-    declared = bool((meta or {}).get('self_moves', False))
-    if declared == bool(plan_self_moves) or plan_self_moves and iteration == -1:
+    a verified untrained checkpoint and exact original archive) may be off. A caller-supplied iteration alone is not
+    provenance. The destination's tables encode the verified initializer on."""
+    declared = (meta or {}).get('self_moves', False)
+    if type(declared) is not bool or type(plan_self_moves) is not bool:
+        raise ValueError('explicit bool actor/plan self_moves declarations required')
+    if declared == plan_self_moves:
         return
+    if plan_self_moves and iteration == -1:
+        from pokezero.checkpoint_self_moves import WeightsOnlyInitializer
+        if (type(initializer) is WeightsOnlyInitializer
+                and initializer.checkpoint_sha256==(meta or {}).get('checkpoint_sha256')
+                and initializer.archive_sha256==(meta or {}).get('weights_archive_sha256')):return
     raise ValueError(f'{context}: actor archive self_moves={declared} differs from the plan self_moves={bool(plan_self_moves)}')
 
 

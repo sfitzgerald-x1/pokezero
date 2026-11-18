@@ -179,8 +179,11 @@ def execute(plan,out,*,enable_non_game=False):
             completed(role+'_CUDA_UPDATE1_CHECKPOINT_COMPLETE')
             del runtime;gc.collect();torch.cuda.empty_cache()
             if sha(checkpoint['path'])!=checkpoint['sha256']:raise ValueError('component checkpoint changed')
+            from .checkpoint_self_moves import off_from_receipt
             runtime=training.load_checkpoint(checkpoint['path'],enable_v5=True,expected_model_config=config,
-                expected_loss_config=chosen['loss'],expected_train_config=train,expected_learning_rate_window=window)
+                expected_loss_config=chosen['loss'],expected_train_config=train,expected_learning_rate_window=window,
+                expected_self_moves=False,off_provenance=off_from_receipt(checkpoint['encoding_receipt']),
+                expected_checkpoint_sha256=checkpoint['sha256'])
             if (tensor_tree_sha(runtime.model.state_dict(),torch)!=changed
                     or tensor_tree_sha(runtime.optimizer.state_dict(),torch)!=before_optimizer):
                 raise ValueError('original CUDA checkpoint model/AdamW restore differs')
@@ -190,7 +193,8 @@ def execute(plan,out,*,enable_non_game=False):
             checkpoint=training.save_checkpoint(directory/'NON_GAME-update2.pt',runtime)
             del runtime;gc.collect();torch.cuda.empty_cache()
             archive=directory/'NON_GAME-actor.npz'
-            exported=export.export(checkpoint['path'],archive,expected_checkpoint_sha256=checkpoint['sha256'],enable_v5=True)
+            exported=export.export(checkpoint['path'],archive,expected_checkpoint_sha256=checkpoint['sha256'],enable_v5=True,
+                self_moves=False,off_provenance=off_from_receipt(checkpoint['encoding_receipt']))
             params,loaded,binding=export.load(archive,expected_archive_sha256=exported['weights_archive_sha256'],
                 expected_checkpoint_sha256=checkpoint['sha256'],expected_category_vocabulary_sha256=config.category_vocabulary_sha256,
                 expected_label_vocabulary_sha256=config.label_vocabulary.sha256,enable_v5=True)
