@@ -171,7 +171,7 @@ def write_json(path, value):
     os.replace(temporary, path)
 
 
-def main(argv=None, *, distribution=None):
+def argument_parser():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--config', help='20k diagnostic config (smoke schema)')
     parser.add_argument('--declaration');parser.add_argument('--declaration-sha256')
@@ -183,6 +183,10 @@ def main(argv=None, *, distribution=None):
     parser.add_argument('--max-iterations', type=int, default=None, help='stop after this many declared iterations')
     parser.add_argument('--lanes', type=int, default=2048)
     parser.add_argument('--mode', default='cudagraphs')
+    parser.add_argument('--native-embedding-backward', action='store_true',
+        help='opt in to native category-embedding backward; must match on resume')
+    parser.add_argument('--fallback-random', action='store_true',
+        help='opt in to compiler native random/dropout (compiled modes); must match on resume')
     parser.add_argument('--order', default='ordered')
     parser.add_argument('--row-order', choices=('tick', 'file'), default=None,
         help='tick: collection order; file (default for new runs): the file pipeline cache order (block, frame, row, owner). '
@@ -195,7 +199,11 @@ def main(argv=None, *, distribution=None):
     parser.add_argument('--torch-memory-fraction', type=float, default=0.45,
         help='Torch per-process GPU memory cap after the runtime probe (V2 also holds the row store in Torch); '
              '0 keeps the runtime declaration\'s torch_fraction. JAX keeps its own fraction')
-    args = parser.parse_args(argv)
+    return parser
+
+
+def main(argv=None, *, distribution=None):
+    args = argument_parser().parse_args(argv)
     if bool(args.config) == bool(args.declaration):raise SystemExit('exactly one of --config or --declaration')
     out = Path(args.out);(out / 'artifacts').mkdir(parents=True, exist_ok=True);(out / 'audit').mkdir(exist_ok=True)
     wall_start = time.perf_counter()
@@ -223,7 +231,8 @@ def main(argv=None, *, distribution=None):
     if first.model_sha256 != runs._sha(plan.model.metadata()):raise ValueError('initial snapshot model differs from plan')
     roots = {first.archive_sha256: Path(args.reference_run)}
     v2_config = v2t.V2Config(mode=args.mode, order=args.order, optimizer='fused', check_interval=args.check_interval,
-        distributed_rows=distribution is not None)
+        distributed_rows=distribution is not None, native_embedding_backward=args.native_embedding_backward,
+        fallback_random=args.fallback_random)
     placement = {} if distribution is None else dict(process_group=distribution.process_group)
     state_path = out / 'state.json'
     if state_path.exists():
