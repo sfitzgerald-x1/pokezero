@@ -85,3 +85,20 @@ test('unknown Native class stays explicitly opaque and exact original throws are
   assert.ok(f.rows.some(r=>r.operation==='CALL_THROW'));
   assert.equal(f.native.manifest().qualification,false);f.finish();
 });
+
+test('field and queue mutations retain literal before/after data without extra Native calls',()=>{
+  let weatherCalls=0,queueCalls=0;const answer={same:true};
+  const f=fixture({Field:{setWeather:function(weather){weatherCalls++;this.weather=weather;this.weatherState={duration:5};return answer;}},
+    BattleQueue:{push:function(action){queueCalls++;return this.list.push(action);}}});
+  f.battle.field=new f.classes.Field();f.battle.field.battle=f.battle;f.battle.field.weather='';f.battle.field.weatherState={};
+  f.battle.queue.list=[];
+  assert.equal(f.battle.field.setWeather('sunnyday'),answer);
+  const action={choice:'residual'};assert.equal(f.battle.queue.push(action),1);
+  assert.equal(weatherCalls,1);assert.equal(queueCalls,1);assert.equal(f.battle.queue.list[0],action);
+  assert.equal(f.finish().poisoned,false);
+  const weather=f.rows.find(r=>r.operation==='CALL_RETURN'&&r.frame.operation==='Field.setWeather');
+  assert.equal(weather.evidence.after.fields.field.weather,'sunnyday');
+  const queue=f.rows.find(r=>r.operation==='CALL_RETURN'&&r.frame.operation==='BattleQueue.push');
+  assert.equal(queue.evidence.after.fields.queueList.items.length,1);
+  assert.equal(f.classes.Pokemon.prototype.addVolatile,f.encore);
+});

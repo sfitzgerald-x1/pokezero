@@ -10,13 +10,14 @@ const POKEMON=['moveUsed','getMoveData','deductPP','transformInto','clearVolatil
 const SIDE=['chooseMove','chooseSwitch','commitChoices','clearChoice','getRequestData','emitRequest','addSlotCondition','removeSlotCondition','addSideCondition','removeSideCondition'];
 const ACTIONS=['switchIn','dragIn','runSwitch','runMove','useMove','useMoveInner'];
 const QUEUE=['resolveAction','addChoice','insertChoice','shift','push','unshift','cancelAction','cancelMove','changeAction','prioritizeAction','clear','sort'];
+const FIELD=['setWeather','clearWeather','addPseudoWeather','removePseudoWeather'];
 const MATERIAL=new Set(['choose','runAction','turnLoop','commitChoices','clearChoice','clearRequest','makeRequest','getRequests','endTurn','fieldEvent','faintMessages',
   'switchIn','dragIn','runSwitch','runMove','useMove','useMoveInner','chooseMove','chooseSwitch','getRequestData','getMoveRequestData',
-  'addSlotCondition','removeSlotCondition','addSideCondition','removeSideCondition','moveUsed','deductPP','transformInto','clearVolatile','copyVolatileFrom','removeVolatile','faint','disableMove','tryTrap']);
+  'addSlotCondition','removeSlotCondition','addSideCondition','removeSideCondition','moveUsed','deductPP','transformInto','clearVolatile','copyVolatileFrom','removeVolatile','faint','disableMove','tryTrap',...QUEUE,...FIELD]);
 const METHODS=Object.freeze({Battle:Object.freeze(BATTLE),Pokemon:Object.freeze(POKEMON),Side:Object.freeze(SIDE),
-  BattleActions:Object.freeze(ACTIONS),BattleQueue:Object.freeze(QUEUE)});
+  BattleActions:Object.freeze(ACTIONS),BattleQueue:Object.freeze(QUEUE),Field:Object.freeze(FIELD)});
 
-function createRecorder(core,{Battle,Pokemon,Side,BattleActions,BattleQueue}){
+function createRecorder(core,{Battle,Pokemon,Side,BattleActions,BattleQueue,Field}){
   const objects=new WeakMap(),bound=new WeakSet();let nextObject=0;
   const protectedAddVolatile=Pokemon.prototype.addVolatile;
   function token(value){let id=objects.get(value);if(id===undefined){id=nextObject++;objects.set(value,id);}return id;}
@@ -60,7 +61,7 @@ function createRecorder(core,{Battle,Pokemon,Side,BattleActions,BattleQueue}){
     if(value instanceof Pokemon)return {kind:'Pokemon',...physical(value)};
     if(value instanceof Battle)return {kind:'Battle',object:token(value)};
     if(value instanceof Side)return {kind:'Side',object:token(value),n:project(data(value,'n'),seen,depth+1)};
-    if(value instanceof BattleActions||value instanceof BattleQueue)return {kind:'NativeService',object:token(value)};
+    if(value instanceof BattleActions||value instanceof BattleQueue||value instanceof Field)return {kind:'NativeService',object:token(value)};
     const id=token(value);
     if(seen.has(value))return {$object:id};
     seen.add(value);let result;
@@ -79,12 +80,19 @@ function createRecorder(core,{Battle,Pokemon,Side,BattleActions,BattleQueue}){
   function member(mon){
     const result={identity:physical(mon),fields:{}};
     for(const key of ['hp','maxhp','fainted','isActive','position','status','statusState','volatiles','trapped','maybeTrapped','maybeDisabled','maybeLocked',
-      'moveSlots','lastMove','moveThisTurn','switchFlag','forceSwitchFlag','activeTurns','transformed','baseStoredStats','baseMoveSlots','baseHpType','baseHpPower'])result.fields[key]=field(mon,key);
+      'moveSlots','lastMove','moveThisTurn','switchFlag','forceSwitchFlag','activeTurns','transformed','baseStoredStats','baseMoveSlots','baseHpType','baseHpPower',
+      'species','types','baseTypes','ability','baseAbility','item','boosts','level','happiness','hpType','hpPower','gender','addedType'])result.fields[key]=field(mon,key);
     return result;
   }
   function cache(battle){
     const result={battle:token(battle),fields:{},sides:[]};
     for(const key of ['turn','midTurn','requestState','ended','winner','event','effect','effectState','activePokemon','activeTarget','activeMove'])result.fields[key]=field(battle,key);
+    const queue=data(battle,'queue'),nativeField=data(battle,'field');
+    if(queue)result.fields.queueList=field(queue,'list');
+    if(nativeField){
+      result.fields.field={};
+      for(const key of ['weather','weatherState','terrain','terrainState','pseudoWeather'])result.fields.field[key]=field(nativeField,key);
+    }
     const sides=data(battle,'sides');
     if(Array.isArray(sides))for(const side of values(sides)){
       if(side===null){result.sides.push(null);continue;}
@@ -143,6 +151,7 @@ function createRecorder(core,{Battle,Pokemon,Side,BattleActions,BattleQueue}){
   }
   for(const name of POKEMON)method(Pokemon.prototype,name,'Pokemon.'+name);
   for(const name of SIDE)method(Side.prototype,name,'Side.'+name);
+  for(const name of FIELD)method(Field.prototype,name,'Field.'+name);
   return {
     bindBattle(battle){
       if(bound.has(battle))return;bound.add(battle);

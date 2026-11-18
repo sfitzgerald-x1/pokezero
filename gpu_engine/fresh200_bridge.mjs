@@ -29,7 +29,8 @@ if(fs.existsSync(witnessControl)){
   fs.writeFileSync(path.join(dir,'witness-source-registry.json'),JSON.stringify({registry,sourceRegistryHash})+'\n',{flag:'wx'});
   const nativeFactory=nativeMode?core=>require('./fresh200_witness_native.cjs').createRecorder(core,{Battle,
     Pokemon:require(path.join(root,'dist/sim/pokemon.js')).Pokemon,Side:require(path.join(root,'dist/sim/side.js')).Side,
-    BattleActions:require(path.join(root,'dist/sim/battle-actions.js')).BattleActions,BattleQueue:require(path.join(root,'dist/sim/battle-queue.js')).BattleQueue}):null;
+    BattleActions:require(path.join(root,'dist/sim/battle-actions.js')).BattleActions,BattleQueue:require(path.join(root,'dist/sim/battle-queue.js')).BattleQueue,
+    Field:require(path.join(root,'dist/sim/field.js')).Field}):null;
   setNativeWitness(require('./fresh200_witness_bridge.cjs').createObserver({Battle,sourceRegistryHash,nativeFactory,
     loadControl:()=>JSON.parse(fs.readFileSync(witnessControl,'utf8')),
     appendAudit:bytes=>fs.appendFileSync(path.join(dir,'witness-audit.jsonl'),bytes),
