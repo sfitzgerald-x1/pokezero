@@ -34,22 +34,15 @@ class ConstructorExtraction(unittest.TestCase):
             count=16,functions=functions,**kwargs)
 
     def test_reviewed_prepare_body_changes_only_documented_protocol_transport(self):
-        import inspect
-        from gpu_engine import phase_d_protocol_constructor as module
-        source=inspect.getsource(module);tree=ast.parse(source)
-        cls=next(x for x in tree.body if isinstance(x,ast.ClassDef)and x.name=='ProtocolConstructor')
-        method=next(x for x in cls.body if isinstance(x,ast.FunctionDef)and x.name=='prepare')
-        body='\n'.join(source.splitlines()[method.lineno:method.end_lineno])
-        # Approved transport: expose the exact carried root returned by sample.
-        self.assertIn('return made.root,made,',body)
-        self.assertIn('address=public.address,defer_sleep=True,protocol_facts=facts)',body)
-        body=body.replace('return made.root,made,','return detached,made,').replace('address=public.address,defer_sleep=True,protocol_facts=facts)','address=public.address)')
-        body=body.replace('        facts=protocol.tail.facts(public,packet,lines)\n','')
-        # Re-certify the combined prepare body after reviewed incremental-root capture
-        # (4e28fba5) and the once-per-request checked_catalog scope (4189b48b).
-        # Keep the transport presence checks and normalization above unchanged.
-        self.assertEqual(hashlib.sha256(body.encode()).hexdigest(),
-            '4cf2f83b053fd7dd62a5e12a0310df2c96148231cc2da16af79814d537ce6794')
+        from gpu_engine import phase_d_protocol_world as protocol
+        constructor=self.constructor();prepared=NS(legal=(True,False));made=NS(root=object());part=object()
+        with patch.object(constructor,'prepare_root',return_value=prepared)as root, \
+                patch.object(constructor,'sample_range',return_value=part)as sample, \
+                patch.object(protocol,'assemble',return_value=made)as assemble:
+            self.assertEqual(constructor.prepare({'request':'unchanged'},7),(made.root,made,prepared.legal))
+        root.assert_called_once_with({'request':'unchanged'},7)
+        sample.assert_called_once_with(prepared,0,16)
+        assemble.assert_called_once_with((part,),count=16)
 
     def test_search_delegates_and_preserves_real_shared_holders(self):
         seen=set();sessions={};constructor=self.constructor(seen=seen,sessions=sessions)

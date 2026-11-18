@@ -70,6 +70,29 @@ def all_w_build(constructor, prepared, *arguments, **keywords):
 
 
 class WrapperTests(unittest.TestCase):
+    def test_true_worlds_intercepts_real_constructor_seam_and_keeps_range_indices(self):
+        from tests.test_depthn_world_range import WorldRanges
+        from gpu_engine import phase_d_protocol_constructor as pc
+        fixture = WorldRanges();constructor, prepared = fixture.fixture();seen = []
+        original_range = pw.world_range
+        with tempfile.TemporaryDirectory() as tmp, fixture.patches(), \
+                patch.object(pc.ProtocolConstructor, 'prepare_root', return_value=prepared), \
+                patch.object(P, 'build_true_world', fake_true_world(seen)):
+            write_sidecar(tmp)
+            with R.TrueWorlds(tmp, 'true').installed(CELL, 0) as record, P.SampleCapture().installed() as capture:
+                _, made, _ = constructor.prepare({}, 0)
+            self.assertEqual([i for i, _, _ in seen], list(range(16)))
+            self.assertEqual(len(record['calls']), 1);self.assertEqual(len(capture.calls), 1)
+            self.assertTrue(all(w.state is RT.STATE for w in made.worlds))
+            seen.clear()
+            with R.TrueWorlds(tmp, 'true').installed(CELL, 0) as record:
+                part = constructor.sample_range(prepared, 5, 8)
+            self.assertIsInstance(part, pw.WorldRange)
+            self.assertEqual([w.index for w in part.worlds], [5, 6, 7])
+            self.assertEqual([i for i, _, _ in seen], [5, 6, 7])
+            self.assertEqual([f['world'] for f in record['calls'][0]['worlds']], [5, 6, 7])
+        self.assertIs(pw.world_range, original_range)
+
     def prepare(self, directory, kind, decision=0, cell=CELL, build=None):
         """One prepare() under the wrapper: (its WorldSet, the record, build_true_world's calls). The sampler is restored after."""
         seen = []

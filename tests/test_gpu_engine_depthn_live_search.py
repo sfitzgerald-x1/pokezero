@@ -72,14 +72,21 @@ class Codex:
         def capture(*,config,contract,lines,address,battle_id,seed):
             harness.captures.append((battle_id,address.frame));out=harness.outcomes[(battle_id,address.frame)]
             if isinstance(out,BaseException):raise out
-            harness.current=out;return NS(address=out[0].address,materialization_payload=harness.payloads.get((battle_id,address.frame))or payload())
+            harness.current=out;return NS(address=out[0].address,context=NS(battle_id=battle_id),
+                materialization_payload=harness.payloads.get((battle_id,address.frame))or payload())
+        def sample(public,detached,*,start,stop,**kw):
+            made=harness.current[1]
+            return pc.protocol.WorldRange(start,stop,('fixture',),made.root,made.worlds[start:stop],made.seeds[start:stop],
+                made.requested_worlds,tuple(made.mapper_diagnostics[start:stop]) if made.mapper_diagnostics
+                else tuple(dict(world=w.index,checks=[])for w in made.worlds[start:stop]))
         self.stack=ExitStack()
         # Batch 2's prepare also reads the protocol tail's facts and passes defer_sleep / protocol_facts to from_b2: fake the
         # first (its shape: phase_d_tail.facts) and accept the second, so the outcome's root and worlds come through unchanged.
         tail=getattr(pc.protocol,'tail',None)
         for target,name,value in((pc,'JaxRecordedAdapter',Adapter),(pc,'capture_root',capture),
                 (pc.worlds,'from_b2',lambda adapter,packet,source,metadata,*,address,**kw:harness.current[0]),
-                (pc.protocol,'sample',lambda public,detached,**kw:harness.current[1]),
+                (pc.protocol,'world_range',sample),
+                (pc.protocol,'_carried_root',lambda *a,**kw:harness.current[0]),
                 *(()if tail is None else((tail,'facts',lambda *a,**k:dict(replacement=None,fresh_substitutes={},wish_set_turns={},turn=0)),))):
             self.stack.enter_context(patch.object(target,name,value))
         return self

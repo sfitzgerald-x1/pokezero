@@ -17,7 +17,7 @@ escalated.
 
 Enumeration (`EFFECTS`, `REPRESENTED`, `NOT_IN_POOL`; every row cites file:line at this tree and at the pinned Showdown f76228a).
 The pool is the set source the constructor reads: pokezero.randbat.load_gen3_randbat_source_cached(showdown_root) loads
-data/random-battles/gen3/sets.json (gpu_engine/phase_d_protocol_constructor.py:175). Its 220 species hold 125 moves; the
+data/random-battles/gen3/sets.json (gpu_engine/phase_d_protocol_constructor.py:220). Its 220 species hold 125 moves; the
 pool_species of each row are the species with a set listing the move. With --showdown-root that file is re-read and every row's
 pool membership is checked against it (pool_check; a mismatch is reported, never silently accepted).
 - Audited (in the pool, not represented): recharge (Hyper Beam), partial_trap (Wrap), perish_count (Perish Song), drowsy (Yawn),
