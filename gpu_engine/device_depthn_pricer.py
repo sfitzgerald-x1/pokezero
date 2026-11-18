@@ -464,18 +464,24 @@ def pack_wide_leaf(group,own_live,opp_live,*,nodes,lanes,chunk):
         used_nodes+=e-i;used_lanes+=int(cum[e]-cum[i]);i=e
     calls=call+1;C=lanes//chunk
     pi,q=np.nonzero(live&(node_call>=0)[:,None])   # row-major: one parent's lanes contiguous, (own, opp) slot order
-    rank=np.arange(len(pi))-np.searchsorted(pi,pi,'left')
+    # nonzero is parent-major. Each parent's first live lane is its count prefix;
+    # gather it once rather than binary-searching the parent array for every lane.
+    first=np.cumsum(count)-count
+    rank=np.arange(len(pi))-first[pi]
     pos=node_call[pi]*lanes+node_lane[pi]+rank
     flat=lambda dtype:np.zeros(calls*lanes,dtype)
     lane_node=flat(np.int32);lane_own=flat(np.int32);lane_opp=flat(np.int32);lane_live=flat(bool)
-    lane_node[pos]=node_slot[pi];lane_own[pos]=q//k_opp;lane_opp[pos]=q%k_opp;lane_live[pos]=True
+    slot_own,slot_opp=q//k_opp,q%k_opp
+    lane_node[pos]=node_slot[pi];lane_own[pos]=slot_own;lane_opp[pos]=slot_opp;lane_live[pos]=True
     call_nodes=np.full((calls,nodes),-1,np.int64);packed=np.flatnonzero(node_call>=0);call_nodes[node_call[packed],node_slot[packed]]=packed
     chunk_group=np.full(calls*C,-1,np.int64);chunk_group[pos//chunk]=group[pi]
-    if len(np.unique(pos))!=len(pos)or not np.array_equal(chunk_group[pos//chunk],group[pi]):raise RuntimeError('wide leaf packing overlaps lanes or mixes groups in a chunk')
+    # Greedy calls and parent-major lanes make pos strictly increasing. Check
+    # adjacent positions instead of sorting all lanes to detect overlaps.
+    if np.any(pos[1:]<=pos[:-1])or not np.array_equal(chunk_group[pos//chunk],group[pi]):raise RuntimeError('wide leaf packing overlaps lanes or mixes groups in a chunk')
     shape=lambda x:x.reshape(calls,lanes)
     return WidePack(calls=calls,nodes=nodes,lanes=lanes,chunk=chunk,node_call=node_call,node_slot=node_slot,node_lane=node_lane,call_nodes=call_nodes,
         lane_node=shape(lane_node),lane_own=shape(lane_own),lane_opp=shape(lane_opp),lane_live=shape(lane_live),chunk_group=chunk_group.reshape(calls,C),
-        lane_parent=pi.astype(np.int64),lane_slot_own=(q//k_opp).astype(np.int64),lane_slot_opp=(q%k_opp).astype(np.int64),lane_pos=pos)
+        lane_parent=pi.astype(np.int64,copy=False),lane_slot_own=slot_own.astype(np.int64,copy=False),lane_slot_opp=slot_opp.astype(np.int64,copy=False),lane_pos=pos)
 
 
 def place_wide_leaf(pack,fields,pw,pid,n,M,k_own,k_opp,specs):
@@ -484,8 +490,15 @@ def place_wide_leaf(pack,fields,pw,pid,n,M,k_own,k_opp,specs):
     blocks layout leaves non-enumerated lanes. `specs`: (name, trailing shape, dtype)."""
     out={name:np.zeros((n,M,k_own,k_opp)+shape,dtype)for name,shape,dtype in specs}
     if len(pack.lane_pos):
-        w,node=pw[pack.lane_parent],pid[pack.lane_parent]
-        for name,x in out.items():x[w,node,pack.lane_slot_own,pack.lane_slot_opp]=np.asarray(fields[name])[pack.lane_pos]
+        # Share one dense destination index across the heterogeneous fields.
+        # Only their trailing dimensions remain in the scatter, including digests.
+        packed=np.flatnonzero(pack.node_call>=0)
+        # Index an axis once per parent to retain NumPy's negative-index and
+        # bounds behavior, and promote narrow integers before multiplying.
+        w,node=np.arange(n,dtype=np.intp)[pw[packed]],np.arange(M,dtype=np.intp)[pid[packed]]
+        parent_dest=np.zeros(len(pack.node_call),np.intp);parent_dest[packed]=(w*M+node)*k_own*k_opp
+        dest=parent_dest[pack.lane_parent]+pack.lane_slot_own*k_opp+pack.lane_slot_opp
+        for name,x in out.items():x.reshape((n*M*k_own*k_opp,)+x.shape[4:])[dest]=np.asarray(fields[name])[pack.lane_pos]
     return out
 
 

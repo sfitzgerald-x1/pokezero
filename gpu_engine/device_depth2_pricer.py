@@ -404,7 +404,11 @@ def pack_turn1(requests,worlds,recipe,capacity,params,*,k1_own=9,fixed_capacity=
     if not available:return None
     count=len(requests);first=available[0];flat=[w if w.state is not None else first for pair in worlds for w in pair]
     def stacked(values,world_axis=False):
-        values=jax.device_get(tuple(values))
+        values=tuple(values)
+        # NumPy can read CPU buffers directly. Keep explicit, prefetched transfers for accelerator leaves,
+        # including a mixed-device tree, so transfer guards and asynchronous copies retain their behavior.
+        if any(isinstance(x,jax.Array)and any(d.platform!='cpu'for d in x.devices())for x in jax.tree.leaves(values)):
+            values=jax.device_get(values)
         def pack(*leaves):
             value=np.stack(leaves);length=capacity*(2 if world_axis else 1)
             padded=np.empty((length,)+value.shape[1:],value.dtype);padded[:len(value)]=value;padded[len(value):]=value[0]
