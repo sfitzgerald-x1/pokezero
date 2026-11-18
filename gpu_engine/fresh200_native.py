@@ -72,6 +72,23 @@ def require_resolved(events):
     return events
 
 
+def step_packet_from_native(phase,fresh,retained_packet,*,stream,request):
+    """Select only ORIGINAL INPUT operands using an independent Native phase.
+
+    All seven fresh fields remain checked during a suspended replacement. The
+    old five groups come from the sealed ordinary packet, never device State.
+    """
+    from .fresh200_native_phase import PhaseProof,retained_inputs
+    if (not isinstance(phase,PhaseProof) or phase.kind=='terminal' or type(stream) is not int or stream<=0
+            or type(request) is not int or request<0 or type(fresh) is not dict or set(fresh)!=set(CHANCE_FIELDS)):
+        raise ValueError('Native phase and complete sealed fresh chance row required')
+    shapes=dict(draws=(2,12),phazing=(2,),secondary=(2,),sleep_talk=(2,),entry_ties=(2,),initial_tie=(),effect=(2,5))
+    bounds=dict(draws=DRAW_BOUNDS,phazing=60,secondary=100,sleep_talk=60,entry_ties=2,initial_tie=2,effect=EFFECT_BOUNDS)
+    selected={name:_operand(fresh[name],shapes[name],bounds[name],name) for name in CHANCE_FIELDS}
+    if phase.pending_residual:selected.update(retained_inputs(phase,retained_packet))
+    return dict(schema='pokezero.gpu_chance_tape.v6',nonce=f'{stream}:{request}',**selected,resuming=phase.pending_residual)
+
+
 class SealedChanceControl:
     """Own finite replay files; the caller seals audits even on divergence."""
     def __init__(self, folder, config, initial):
@@ -107,3 +124,9 @@ class SealedChanceControl:
     def end(self):
         self.control.unlink()
         return self.take_audit()
+
+    def begin_from_native(self,phase,fresh,retained_packet,*,stream,request):
+        if self.initializing.exists():raise ValueError('initialization audit must precede actions')
+        packet=step_packet_from_native(phase,fresh,retained_packet,stream=stream,request=request)
+        with self.control.open('x') as output:json.dump(packet,output,allow_nan=False)
+        return packet

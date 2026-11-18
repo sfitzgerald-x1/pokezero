@@ -9,7 +9,7 @@ import {fileURLToPath, pathToFileURL} from "node:url";
 import {referenceRestState, bindReferenceRestSources} from "./battle_bridge_reference_rest.mjs";
 import {restoreReferenceSleep} from "./battle_bridge_reference_sleep.mjs";
 import {restoreReferenceTrace} from "./battle_bridge_reference_trace.mjs";
-import {witnessCommandBegin, witnessCommandEnd, witnessSnapshotBegin, witnessSnapshotEnd}
+import {witnessCommandBegin, witnessCommandEnd, witnessSnapshotBegin, witnessSnapshotEnd, snapshotRequestsForCommand}
   from "./battle_bridge_witness_port.mjs";
 import {
   invalidatedBoundaryState,
@@ -351,18 +351,23 @@ function snapshotBattle(command) {
   // request API has not materialized it yet. A nonempty direct result replaces
   // the cache; an empty one must not erase that boundary before a fresh shell
   // restores the snapshot.
-  const simulatorRequests = boundaryRequestsFromBattle(battle.battleStream.battle);
-  battle.boundaryRequests = snapshotBoundaryRequests(
-    battle.boundaryRequests,
-    battle.boundaryRequestGeneration === battle.boundaryGeneration,
-    simulatorRequests
-  );
-  battle.boundaryRequestGeneration = hasBoundaryRequests(battle.boundaryRequests)
-    ? battle.boundaryGeneration
-    : null;
+  const passive = command.witnessPassive === true;
+  const simulatorRequests = snapshotRequestsForCommand(battle.battleId,battle.battleStream.battle,requestId,
+    {passive,getRequests:()=>boundaryRequestsFromBattle(battle.battleStream.battle)});
+  if(!passive){
+    battle.boundaryRequests = snapshotBoundaryRequests(
+      battle.boundaryRequests,
+      battle.boundaryRequestGeneration === battle.boundaryGeneration,
+      simulatorRequests
+    );
+    battle.boundaryRequestGeneration = hasBoundaryRequests(battle.boundaryRequests)
+      ? battle.boundaryGeneration
+      : null;
+  }
+  const boundaryRequests = passive ? simulatorRequests : battle.boundaryRequests;
   const serialized = State.serializeBattle(battle.battleStream.battle);
   const witness = witnessSnapshotEnd(battle.battleId, battle.battleStream.battle,
-    serialized, battle.boundaryRequests, requestId);
+    serialized, boundaryRequests, requestId);
   emit({
     type: "snapshot",
     battleId: battle.battleId,
@@ -371,7 +376,7 @@ function snapshotBattle(command) {
       // Keep the engine state API explicit: snapshots are cloned simulator worlds, never
       // protocol replays and never a serialization of the live decision environment.
       battle: serialized,
-      boundaryRequests: battle.boundaryRequests,
+      boundaryRequests,
       terminalScheduled: battle.terminalScheduled,
       ...(witness === undefined ? {} : {witness}),
     },

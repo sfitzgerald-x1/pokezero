@@ -79,14 +79,15 @@ function createRecorder(core,{Battle,Pokemon,Side,BattleActions,BattleQueue,Fiel
   function field(value,key){const d=property(value,key);return d.present?project(d.value):{$native:'missing'};}
   function member(mon){
     const result={identity:physical(mon),fields:{}};
-    for(const key of ['hp','maxhp','fainted','isActive','position','status','statusState','volatiles','trapped','maybeTrapped','maybeDisabled','maybeLocked',
+    for(const key of ['hp','maxhp','fainted','faintQueued','isActive','isStarted','position','status','statusState','volatiles','trapped','maybeTrapped','maybeDisabled','maybeLocked',
       'moveSlots','lastMove','moveThisTurn','switchFlag','forceSwitchFlag','activeTurns','transformed','baseStoredStats','baseMoveSlots','baseHpType','baseHpPower',
-      'species','types','baseTypes','ability','baseAbility','item','boosts','level','happiness','hpType','hpPower','gender','addedType'])result.fields[key]=field(mon,key);
+      'species','types','baseTypes','ability','baseAbility','item','boosts','level','happiness','hpType','hpPower','gender','addedType',
+      'storedStats','baseMaxhp','truantTurn','itemKnockedOff'])result.fields[key]=field(mon,key);
     return result;
   }
   function cache(battle){
     const result={battle:token(battle),fields:{},sides:[]};
-    for(const key of ['turn','midTurn','requestState','ended','winner','event','effect','effectState','activePokemon','activeTarget','activeMove'])result.fields[key]=field(battle,key);
+    for(const key of ['turn','midTurn','requestState','ended','winner','event','effect','effectState','activePokemon','activeTarget','activeMove','faintQueue'])result.fields[key]=field(battle,key);
     const queue=data(battle,'queue'),nativeField=data(battle,'field');
     if(queue)result.fields.queueList=field(queue,'list');
     if(nativeField){

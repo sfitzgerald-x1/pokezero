@@ -4,6 +4,7 @@ const assert=require('node:assert/strict');
 const {pathToFileURL}=require('node:url');
 const path=require('node:path');
 const {createObserver,wireValue,elidedProperties}=require('../gpu_engine/fresh200_witness_bridge.cjs');
+const {materializedRequests}=require('../gpu_engine/fresh200_witness_bridge.cjs');
 const {ZERO}=require('../gpu_engine/fresh200_witness_core.cjs');
 const control=(command,phase,parent=ZERO)=>({schema:'pokezero.native_witness_control.v1',run:'bridge-fixture',stream:0,reset:0,
   command,phase,request:command,nonce:'bridge-fixture/0/0/'+command,chance_nonce:null,previous_receipt_hash:parent});
@@ -81,4 +82,35 @@ test('receipt output failure cannot return a clean snapshot proof',()=>{
     appendReceipt:()=>{throw Error('disk');},sourceRegistryHash:'5'.repeat(64)});
   const battle=new Battle();const token=observer.commandBegin({type:'start',battleId:'b'});battle.setPlayer('p1');battle.setPlayer('p2');
   assert.equal(observer.commandEnd(token,{originalThrew:false}),undefined);assert.equal(observer.core.poisoned,true);
+});
+
+test('passive requests read materialized wait/null packets without Native getters or stale cache',()=>{
+  let calls=0;const p1={wait:false,side:{id:'p1'}},p2={wait:true,side:{id:'p2'}};
+  const battle={sides:[{n:0,activeRequest:p1},{n:1,activeRequest:p2}],getRequests(){calls++;throw Error('forbidden');}};
+  const actual=materializedRequests(battle);assert.equal(actual.p1,p1);assert.equal(actual.p2,p2);assert.equal(calls,0);
+  battle.sides[0].activeRequest=null;assert.deepEqual(materializedRequests(battle),{p2});assert.equal(calls,0);
+  let getters=0;Object.defineProperty(battle.sides[1],'activeRequest',{get(){getters++;return p2;}});
+  assert.throws(()=>materializedRequests(battle),/DATA_PROPERTY/);assert.equal(getters,0);
+});
+
+test('passive request origin and exact packet are bound into the closed snapshot',()=>{
+  class Battle {constructor(){this.sides=sides();this.sides.forEach((s,i)=>{s.activeRequest={side:{id:'p'+(i+1)},wait:i===1};});}setPlayer(side){return side;}}
+  let packet=control(0,'start');const observer=createObserver({Battle,loadControl:()=>packet,appendAudit:()=>{},appendReceipt:()=>{},sourceRegistryHash:'7'.repeat(64)});
+  const battle=new Battle();const start=observer.commandBegin({type:'start',battleId:'b'});battle.setPlayer('p1');battle.setPlayer('p2');observer.commandEnd(start,{});
+  packet=control(1,'snapshot',observer.core.lastReceiptHash);const token=observer.commandBegin({type:'snapshot',battleId:'b'});
+  observer.snapshotBegin('b',battle,'q');const requests=observer.snapshotRequests('b',battle,'q');
+  const proof=observer.snapshotEnd('b',battle,{turn:1},requests,'q');observer.commandEnd(token,{});
+  assert.equal(proof.receipt.poisoned,false);assert.equal(proof.requestOrigin,'materialized_activeRequest');
+  assert.equal(proof.receipt.boundary.requestOrigin,proof.requestOrigin);
+  assert.equal(Buffer.from(proof.wire.requests_wire_base64,'base64').toString(),JSON.stringify(requests));
+});
+
+test('passive routing refuses a missing observer and never falls back to getRequests',async()=>{
+  const port=await import(pathToFileURL(path.resolve('scripts/battle_bridge_witness_port.mjs')).href+'?passive-routing');
+  let calls=0;const getRequests=()=>{calls++;return {ordinary:true};};
+  assert.deepEqual(port.snapshotRequestsForCommand('b',{},'q',{passive:false,getRequests}),{ordinary:true});assert.equal(calls,1);
+  assert.throws(()=>port.snapshotRequestsForCommand('b',{},'q',{passive:true,getRequests}),/EXPLICIT_PASSIVE/);assert.equal(calls,1);
+  const materialized={p1:{wait:true}};
+  port.setNativeWitness({commandBegin:()=>{},commandEnd:()=>{},snapshotBegin:()=>{},snapshotEnd:()=>{},poison:()=>{},snapshotRequests:()=>materialized});
+  assert.equal(port.snapshotRequestsForCommand('b',{},'q',{passive:true,getRequests}),materialized);assert.equal(calls,1);
 });

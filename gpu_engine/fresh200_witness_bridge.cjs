@@ -29,6 +29,18 @@ function elidedProperties(battle){
   return result;
 }
 
+function materializedRequests(battle){
+  const result={};
+  for(const [index,side] of ownArray(ownData(battle,'sides'),2).entries()){
+    if(ownData(side,'n')!==index)throw Error('NATIVE_SIDE_IDENTITY_DIFFERS');
+    const request=ownData(side,'activeRequest');
+    if(request===null)continue;
+    if(!request||typeof request!=='object'||Array.isArray(request))throw Error('LITERAL_NATIVE_REQUEST_REQUIRED');
+    result['p'+(index+1)]=request;
+  }
+  return result;
+}
+
 function wireValue(value, array = false, seen = new Set()) {
   if (value === undefined) return array ? null : undefined;
   if (value === null || typeof value === 'string' || typeof value === 'boolean') return value;
@@ -93,8 +105,17 @@ function createObserver({Battle,loadControl,appendAudit,appendReceipt,sourceRegi
     snapshotBegin(battleId,battle,requestId) {
       requireBattle(battleId,battle);core.record('SNAPSHOT_BEGIN',{requestId});
     },
+    snapshotRequests(battleId,battle,requestId) {
+      requireBattle(battleId,battle);
+      const requests=materializedRequests(battle);
+      core.active.passiveRequests={requestId,requests};
+      return requests;
+    },
     snapshotEnd(battleId,battle,state,requests,requestId) {
       requireBattle(battleId,battle);
+      const passive=core.active.passiveRequests;
+      if(passive&&(passive.requestId!==requestId||passive.requests!==requests))throw Error('PASSIVE_REQUEST_BOUNDARY_DIFFERS');
+      const requestOrigin=passive?'materialized_activeRequest':'getRequests';
       // State.serializePokemon intentionally elides these data properties.
       // Observe actual live values; never fill them from saved device state or
       // infer a constructor default from an absent serialized set field.
@@ -104,12 +125,12 @@ function createObserver({Battle,loadControl,appendAudit,appendReceipt,sourceRegi
       const requestWire=Buffer.from(JSON.stringify(wireValue(requests)),'utf8');
       const packet={state_wire_base64:stateWire.toString('base64'),state_sha256:hash(stateWire),
         requests_wire_base64:requestWire.toString('base64'),requests_sha256:hash(requestWire)};
-      core.record('SNAPSHOT_SERIALIZED',{requestId,wire:packet,elidedProperties:elided,nativeObservation});
-      const receipt=finish(core.active,{boundary:{kind:'snapshot',requestId,wire:packet,elidedProperties:elided,nativeObservation,causalCoverageComplete:false}});
+      core.record('SNAPSHOT_SERIALIZED',{requestId,requestOrigin,wire:packet,elidedProperties:elided,nativeObservation});
+      const receipt=finish(core.active,{boundary:{kind:'snapshot',requestId,requestOrigin,wire:packet,elidedProperties:elided,nativeObservation,causalCoverageComplete:false}});
       if (!receipt) return undefined;
-      return {receipt,wire:packet,elidedProperties:elided,nativeObservation,causalCoverageComplete:false,qualification:false};
+      return {receipt,wire:packet,elidedProperties:elided,nativeObservation,requestOrigin,causalCoverageComplete:false,qualification:false};
     },
   };
 }
 
-module.exports={createObserver,wireValue,elidedProperties};
+module.exports={createObserver,wireValue,elidedProperties,materializedRequests};

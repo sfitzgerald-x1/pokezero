@@ -102,3 +102,18 @@ test('field and queue mutations retain literal before/after data without extra N
   assert.equal(queue.evidence.after.fields.queueList.items.length,1);
   assert.equal(f.classes.Pokemon.prototype.addVolatile,f.encore);
 });
+
+test('faint queue and restore fields are passive actual Native data including negative HP',()=>{
+  let calls=0;const f=fixture({Pokemon:{faint:function(){calls++;const hp=this.hp;this.hp=0;this.faintQueued=true;this.battle.faintQueue.push({target:this});return hp;}}});
+  f.battle.faintQueue=[];const side=new f.classes.Side();side.n=0;side.battle=f.battle;side.team=[{species:'literal'}];
+  const mon=new f.classes.Pokemon();Object.assign(mon,{side,set:side.team[0],battle:f.battle,hp:-2,maxhp:317,
+    fainted:false,faintQueued:false,isStarted:true,storedStats:{atk:90},baseMaxhp:317,truantTurn:false,itemKnockedOff:false});
+  side.pokemon=[mon];side.active=[mon];f.battle.sides=[side,null];
+  assert.equal(mon.faint(),-2);assert.equal(calls,1);assert.equal(f.battle.faintQueue[0].target,mon);
+  assert.equal(f.finish().poisoned,false);
+  const before=f.rows.find(r=>r.operation==='CALL_ENTER').evidence.before.sides[0].pokemon[0].fields;
+  const after=f.rows.find(r=>r.operation==='CALL_RETURN').evidence.after;
+  assert.equal(before.hp,-2);assert.equal(before.faintQueued,false);
+  assert.equal(after.sides[0].pokemon[0].fields.faintQueued,true);assert.equal(after.fields.faintQueue.items.length,1);
+  assert.equal(before.baseMaxhp,317);assert.equal(before.truantTurn,false);
+});

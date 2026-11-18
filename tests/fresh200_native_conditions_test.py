@@ -44,7 +44,9 @@ class NativeConditionHistoryTests(unittest.TestCase):
     def test_pre_faint_major_status_is_literal_even_when_initially_healthy(self):
         for status in ('','tox'):
             trace=Trace();before=living_cache();before['sides'][0]['pokemon'][0]['fields'].update(status=status,statusState=obj(19300,id=status,stage=4))
+            before['sides'][0]['pokemon'][0]['fields'].update(fainted=False,faintQueued=False)
             after=copy.deepcopy(before);after['sides'][0]['pokemon'][0]['fields']['hp']=0
+            after['sides'][0]['pokemon'][0]['fields']['faintQueued']=True
             trace.enter('Pokemon.faint',mon(0,0),(),before);trace.leave(317,after=after)
             retained=ledger().consume(trace.rows).snapshot()['retained_status'][0]
             self.assertEqual(retained['status'],status);self.assertEqual(retained['state'],before['sides'][0]['pokemon'][0]['fields']['statusState'])

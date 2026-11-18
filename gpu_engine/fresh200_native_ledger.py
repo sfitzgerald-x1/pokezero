@@ -75,7 +75,27 @@ class NativeHistory:
         self.last_kind=[0,0];self.last_index=[-1,-1];self.wish_amount=[0,0];self.transforms={}
         self.retained_status={};self.disable_causes={};self.trap_causes={};self.rest_states=set();self.encore_slots={}
         self.weather_creation=None;self.phase_epoch=0;self.old_stall=None;self.stall_refreshed={};self.lock_results={}
+        self.dispatch_slots={};self.charge_slots={}
         self.initial=False
+
+    def bind_constructor(self, rows):
+        """Bind a continuing Native start command BEFORE folding startup events.
+
+        The caller first verifies these exact rows with the independent source
+        and command roster. Unlike the offline startup certificate, this does
+        not require ending/closing a live battle or erasing entry events.
+        """
+        need(not self.initial and not self.frames and not self.events,'fresh Native history constructor binding required')
+        begins=[r for r in rows if r['operation']=='COMMAND_BEGIN'];ends=[r for r in rows if r['operation']=='COMMAND_END']
+        need(len(begins)==len(ends)==1 and begins[0]['phase']==ends[0]['phase']=='start'
+            and all(r['battleId']==self.battle_id for r in rows),'one independently verified Native start command required')
+        players=[r for r in rows if r['operation']=='CALL_ENTER' and r['frame']['operation']=='Battle.setPlayer']
+        need(len(players)==2 and [r['evidence'].get('side') for r in players]==['p1','p2'],
+            'literal ordered Native p1/p2 constructors required')
+        forbidden={'Side.chooseMove','Side.chooseSwitch','Side.commitChoices','Pokemon.moveUsed','Pokemon.transformInto'}
+        need(not any(r['operation']=='CALL_THROW' or r['operation']=='CALL_ENTER' and r['frame']['operation'] in forbidden for r in rows),
+            'Native constructor already contains action history')
+        self.initial=True
 
     def bind_initial(self, certificate):
         need(not self.initial and not self.events and not self.stack and certificate.get('field_count')==73 and certificate.get('initial_history_absence_proved') is True
@@ -119,9 +139,26 @@ class NativeHistory:
             need(len(matches)==1,'actual Native move-slot object does not resolve uniquely')
             need(fields(slots[matches[0]])['id']==move,'actual Native dispatch/slot ID disagrees')
             candidates.append((result['object'],matches[0],getter.call))
-        need(candidates and len({(x[0],x[1]) for x in candidates})==1,
-            'missing or ambiguous actual Native dispatch-slot witness; no ID/ordinal fallback')
-        return candidates[-1][1],candidates[-1][2]
+        if candidates:
+            need(len({(x[0],x[1]) for x in candidates})==1,'ambiguous actual Native dispatch-slot witness')
+            return candidates[-1][1],candidates[-1][2],candidates[-1][0],False
+        # A locked release legitimately skips deductPP/getMoveData. Its slot
+        # must be the actual original charge token, still in this actor's
+        # current roster, with an actual same-runMove hard-lock query.
+        hard=[f for f in self.frames.values() if f.operation=='Pokemon.getLockedMove' and f.end is not None
+            and f.end<frame.sequence and self.within(f,root) and pokemon(f.enter['subject'])==identity and f.leave['result']==move]
+        need(hard,'missing actual Native dispatch-slot witness; no ID/ordinal fallback')
+        volatile=fields(member(root.enter['before'],identity).get('volatiles'))
+        charge=volatile.get('twoturnmove');record=self.charge_slots.get(charge.get('object')) if type(charge) is dict else None
+        need(hard and record and record['actor']==identity and record['move_id']==move,
+            'missing actual Native dispatch-slot witness; no ID/ordinal fallback')
+        need(not any(f.operation=='Pokemon.deductPP' and self.within(f,root) for f in self.frames.values()),
+            'locked release has contradictory PP-deduction evidence')
+        slots=items(member(frame.enter['before'],identity)['moveSlots'])
+        matches=[i for i,x in enumerate(slots) if x.get('object')==record['slot_object']]
+        need(matches==[record['physical_slot']] and fields(slots[matches[0]])['id']==move,
+            'stale or copied Native charge slot cannot establish execution history')
+        return matches[0],record['get_move_data_call_id'],record['slot_object'],True
 
     def _commit(self, frame):
         side=frame.enter['subject'].get('n');need(type(side) is int and side in (0,1),'literal Native committing side required')
@@ -151,10 +188,13 @@ class NativeHistory:
     def _dispatch(self, frame):
         identity=pokemon(frame.enter['subject']);move=move_id(items(frame.enter['arguments'])[0]);side=identity[0]
         need(self.ancestor(frame,'BattleActions.runMove') is not None,'Native moveUsed lacks dispatch ancestry')
-        if move=='struggle':slot=-1;getter=None;kind=3
-        else:slot,getter=self._slot(frame,identity,move);kind=2
+        if move=='struggle':slot=-1;getter=None;kind=3;slot_object=None;retained=False
+        else:slot,getter,slot_object,retained=self._slot(frame,identity,move);kind=2
         self.last_kind[side]=kind;self.last_index[side]=-1 if move=='transform' else slot
-        self.event('MOVE_USED',frame,side=side,original_actor=identity[1],move_id=move,physical_slot=slot,get_move_data_call_id=getter)
+        self.dispatch_slots[identity]=dict(actor=identity,move_id=move,physical_slot=slot,slot_object=slot_object,
+            get_move_data_call_id=getter,run_move_call_id=self.ancestor(frame,'BattleActions.runMove').call)
+        self.event('MOVE_USED',frame,side=side,original_actor=identity[1],move_id=move,physical_slot=slot,
+            get_move_data_call_id=getter,slot_object=slot_object,retained_charge_witness=retained)
 
     def _transform(self, frame):
         identity=pokemon(frame.enter['subject']);donor=pokemon(items(frame.enter['arguments'])[0])
@@ -219,7 +259,9 @@ class NativeHistory:
 
     def _faint(self, frame):
         identity=pokemon(frame.enter['subject']);before=member(frame.enter['before'],identity);after=member(frame.leave['after'],identity)
-        if before['hp']>0 and after['hp']==0 and before['status']!='fnt':
+        need(type(before.get('fainted')) is bool and type(before.get('faintQueued')) is bool
+            and type(after.get('faintQueued')) is bool,'literal Native faint-queue transition required')
+        if not before['fainted'] and not before['faintQueued'] and after['faintQueued'] and after['hp']==0 and before['status']!='fnt':
             need(type(before['status']) is str,'literal Native pre-faint major status required')
             self.retained_status[identity]=dict(status=before['status'],state=before['statusState'],call_id=frame.call,sequence=frame.end)
             self.event('PRE_FAINT_MAJOR_STATUS',frame,actor=list(identity),status=before['status'])
@@ -254,7 +296,7 @@ class NativeHistory:
         if len(arguments)<4 or arguments[0] not in ('Start','Restart'):return
         effect=self._effect(arguments[1]);target=arguments[3]
         if not effect or type(target) is not dict or target.get('kind')!='Pokemon':return
-        if effect['id'] not in ('slp','stall','encore'):return
+        if effect['id'] not in ('slp','stall','encore','twoturnmove'):return
         identity=pokemon(target);state=arguments[2]
         need(type(state) is dict and type(state.get('object')) is int,'actual Native condition-state identity required')
         if effect['id']=='slp' and arguments[0]=='Start':
@@ -262,6 +304,13 @@ class NativeHistory:
             if source and source['effect_type']=='Move' and source['id']=='rest':self.rest_states.add(state['object'])
         elif effect['id']=='stall':
             self.stall_refreshed[identity]=dict(epoch=self.phase_epoch,call_id=frame.call,sequence=frame.end)
+        elif effect['id']=='twoturnmove' and arguments[0]=='Start':
+            source=self._effect(arguments[5]) if len(arguments)>5 else None;dispatch=self.dispatch_slots.get(identity)
+            root=self.ancestor(frame,'BattleActions.runMove')
+            need(source and source['id']=='solarbeam' and dispatch and dispatch['move_id']==source['id']
+                and root and dispatch['run_move_call_id']==root.call and dispatch['slot_object'] is not None,
+                'charge start lacks actual same-move Native dispatch-slot provenance')
+            self.charge_slots[state['object']]=dict(dispatch,condition_call_id=frame.call)
         elif effect['id']=='encore' and arguments[0]=='Start':
             candidates=[]
             for getter in self.frames.values():
@@ -334,6 +383,7 @@ class NativeHistory:
                 elif frame.operation=='Pokemon.clearVolatile':
                     identity=pokemon(frame.enter['subject']);self.trap_causes.pop(identity,None);self.lock_results.pop(identity,None)
                     self.disable_causes={k:v for k,v in self.disable_causes.items() if k[:2]!=identity}
+                    self.charge_slots={k:v for k,v in self.charge_slots.items() if v['actor']!=identity}
             elif operation=='COMMAND_END':
                 need(not self.stack,'Native command ended with open causal frames');self.frames.clear()
         return self
@@ -349,6 +399,7 @@ class NativeHistory:
             weather_creation=self.weather_creation,phase_epoch=self.phase_epoch,old_stall=self.old_stall,
             stall_refreshed=[dict(actor=list(k),**v) for k,v in sorted(self.stall_refreshed.items())],
             lock_results=[dict(actor=list(k),**v) for k,v in sorted(self.lock_results.items())],
+            charge_records=[dict(state_object=k,**dict(v,actor=list(v['actor']))) for k,v in sorted(self.charge_slots.items())],
             events=list(self.events),source_registry_hash=self.source_registry_hash,
             qualification=False,causal_coverage_complete=False,
             open_gates=['queue/residual chronology','complete disable/trap causes','all73 physical projector','literal owner-prefix binding'])
