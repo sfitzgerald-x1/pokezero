@@ -19,7 +19,7 @@ class WorldRanges(unittest.TestCase):
         public = NS(context=NS(battle_id='range-test'), owner_lines_sha256='wire', address=address)
         root = NS(address=address, source_binding_sha256='bound')
         con = pc.ProtocolConstructor(catalog='catalog', source=NS(binding_sha256='bound', original='source'), metadata={},
-            owning_config=None, count=count, functions=NS(catalog='catalog'), seed=17)
+            owning_config=None, count=count, functions=NS(catalog='catalog'), seed=17,joint_generator=False)
         prepared = pc.PreparedRoot(public, root, ('|turn|3',), (True, False), count, 17)
         return con, prepared
 

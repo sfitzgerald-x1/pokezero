@@ -120,7 +120,17 @@ def _require(value, shape, dtype, name):
         raise ValueError('typed v5 public adapter field required: ' + name)
 
 
-def append_device(encoded, public_state, adapter, *, observer_sides,set_posterior=None):
+def append_device(encoded,public_state,adapter,*,observer_sides):
+    """Legacy public-only adapter; its input contract remains unchanged."""
+    return _append_device(encoded,public_state,adapter,observer_sides=observer_sides)
+
+
+def append_posterior_device(encoded,public_state,adapter,*,observer_sides,set_posterior):
+    """Opt-in adapter for validated, source-bound root-evidence weights."""
+    return _append_device(encoded,public_state,adapter,observer_sides=observer_sides,set_posterior=set_posterior)
+
+
+def _append_device(encoded, public_state, adapter, *, observer_sides,set_posterior=None):
     """Append to an actual Encoded for the SAME public state/owning observer.
 
     The callsite supplies that actual pairing; this adapter does not attest the

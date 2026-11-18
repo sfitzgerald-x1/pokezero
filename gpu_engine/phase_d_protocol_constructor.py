@@ -45,7 +45,7 @@ class PreparedRoot:
 class ProtocolConstructor:
     def __init__(self,*,catalog,source,metadata,owning_config,count,seed=20261103,
                  rung='R1',saved_root_admission=True,functions=None,seen=None,sessions=None,incremental_roots=False,eager_peer_fold=False,
-                 team_producer='shared-battle'):
+                 team_producer='shared-battle',joint_generator=True):
         if count not in (2,8,16,32,64)or type(seed)is not int or type(saved_root_admission)is not bool:
             raise ValueError('original fixed world budget, seed and saved-root mode required')
         if type(incremental_roots)is not bool or(incremental_roots and saved_root_admission):
@@ -66,8 +66,12 @@ class ProtocolConstructor:
         self.eager_peer_fold=eager_peer_fold
         if team_producer not in ('shared-battle','independent-teams'):raise ValueError('explicit supported team producer required')
         self.team_producer,self.joint_session=team_producer,None
+        if type(joint_generator)is not bool:raise ValueError('joint_generator must be bool')
+        self.joint_generator=joint_generator
         from pokezero.live_protocol_actor import _mask_values
-        self.actor_contract=replace(ActorContract.champion(),feature_masks=_mask_values(catalog.masks))
+        self.actor_contract=ActorContract.champion()
+        if getattr(getattr(catalog,'masks',None),'set_posterior_narrowing',False):
+            self.actor_contract=replace(self.actor_contract,feature_masks=_mask_values(catalog.masks))
 
     def prepare(self,request,index):
         """The original serial prepare, using one full world range."""
@@ -112,7 +116,7 @@ class ProtocolConstructor:
                 raise worlds.Refusal('SAME_PUBLIC_ROOT_SOURCE_BINDING_REQUIRED')
             detached=protocol._carried_root(public,detached,lines,self.metadata)
             joint_plan=None
-            if protocol.JOINT_POSTERIOR_DRAW:
+            if protocol.JOINT_POSTERIOR_DRAW and self.joint_generator:
                 from pokezero.joint_serving import JointSession
                 if self.joint_session is None:
                     self.joint_session=JointSession(self.source.original,producer=self.team_producer)
