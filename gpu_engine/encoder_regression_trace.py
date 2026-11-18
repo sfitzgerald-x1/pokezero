@@ -348,12 +348,13 @@ def trace_encoder_call(step_fn, state, actions, trackers, *, mode):
             payload = dict(use=vector(use), number=vector(turn), active=st.active, mapping=t.physical_to_public)
             return record('TURN', payload, lambda: old_turn(c, st, use, turn))
 
-        def turn_end(c, before, after, ordinary, *, upkeep=None, leftovers=None):
+        def turn_end(c, before, after, ordinary, *, upkeep=None, leftovers=None, residual=None, upkeep_living=None):
             t = c.trackers;encoder_pre(t)
             payload = dict(before_done=before.done, after_done=after.done, pending_residual=after.pending_residual,
                            forced_switch=after.forced_switch, after_turn=after.turn, incoming_turn=t.turn,
                            ordinary=vector(ordinary))
-            return record('BOUNDARY', payload, lambda: old_end(c, before, after, ordinary, upkeep=upkeep, leftovers=leftovers))
+            return record('BOUNDARY', payload, lambda: old_end(c, before, after, ordinary,
+                upkeep=upkeep, leftovers=leftovers, residual=residual, upkeep_living=upkeep_living))
 
         def arrive_guard(h, st, side, use):
             guard('arrive', ('ARRIVE',))

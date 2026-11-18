@@ -9,7 +9,7 @@ from unittest import mock
 
 import numpy as np
 
-from gpu_engine.v2e_regress import ENCODER_SHAPES, ENCODER_WITNESS_VERSION, encoder_rule, lane_verdict
+from gpu_engine.v2e_regress import ENCODER_SHAPES, ENCODER_WITNESS_VERSION, encoder_rule, lane_verdict, predicates
 from gpu_engine import encoder_regression_witness as ew
 from gpu_engine import encoder_regression_trace as et
 
@@ -219,6 +219,10 @@ class EncoderEventFoldTests(unittest.TestCase):
 
 
 class EncoderRegressionRuleTests(unittest.TestCase):
+    def test_secondary_plugin_cannot_use_undeclared_allowance(self):
+        with self.assertRaisesRegex(ValueError, 'psychoboost'):
+            predicates(['ENC', 'C'])
+
     def test_both_seats_need_corrected_arrays_and_baseline_shadow(self):
         entries = {(n, s) for n in ENCODER_SHAPES for s in (0, 1)}
         remaining, explained, forced = encoder_rule(entries, evidence())
@@ -365,6 +369,28 @@ class EncoderTraceTests(unittest.TestCase):
         def broken(*args):raise RuntimeError('planted trace failure')
         with self.assertRaisesRegex(RuntimeError, 'planted trace failure'):
             et.trace_encoder_call(broken, state, actions, t, mode='corrected')
+        self.assert_restored(saved)
+
+    def test_boundary_forwards_current_upkeep_flags_and_restores(self):
+        import jax.numpy as j
+        from gpu_engine import engine_device_public_hooks as hooks
+        state, actions, inp = self.inputs();saved = self.attributes()
+        state = SimpleNamespace(**vars(state), done=j.zeros(1, j.bool_), pending_residual=j.zeros(1, j.bool_),
+            forced_switch=j.zeros((1, 2), j.bool_), turn=j.ones(1, j.int32))
+        supplied = dict(upkeep=j.ones(1, j.bool_), leftovers=j.zeros((1, 2), j.bool_),
+                        residual=j.zeros(1, j.bool_), upkeep_living=j.ones((1, 2), j.bool_))
+        calls = []
+        def current_end(c, before, after, ordinary, **kwargs):
+            calls.append(kwargs)
+            return c
+        def step(st, acts, t):
+            return hooks.turn_end(SimpleNamespace(trackers=t), st, st, j.ones(1, j.bool_), **supplied)
+        with mock.patch.object(hooks, 'turn_end', current_end):
+            build = et.trace_encoder_call(step, state, actions, inp, mode='corrected')
+        self.assertEqual([s['kind'] for s in build.schema], ['BOUNDARY'])
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(set(calls[0]), set(supplied))
+        for key in supplied:self.assertIs(calls[0][key], supplied[key])
         self.assert_restored(saved)
 
     def test_unknown_writer_fails_and_restores(self):

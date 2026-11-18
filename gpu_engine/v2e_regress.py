@@ -1212,6 +1212,9 @@ def predicates(prs):
     for pr in prs:
         if pr not in PLUGINS:raise ValueError(f'unknown plug-in {pr}; choose from {sorted(PLUGINS)}')
         table.update(PLUGINS[pr])
+    undeclared = sorted(set(table) - set(ALLOWED))
+    if undeclared:
+        raise ValueError(f'selected plug-ins {prs} have effects without declared allowed fields: {undeclared}')
     return table
 
 
@@ -2396,6 +2399,7 @@ def patched_pass(args, *, step_override=None, prepared=None):
     capture, capture_sha = capture_record(args)
     if capture_sha != manifest['capture_sha256']:raise ValueError('capture differs from the base pass')
     plugins = [p for p in args.pr.split(',') if p]
+    table = predicates(plugins)
     warnings = []
     if len([p for p in plugins if p != 'none']) > 1:
         warnings.append(f'plug-in superset {plugins}: changes are attributed to every listed PR\'s effects')
@@ -2406,15 +2410,6 @@ def patched_pass(args, *, step_override=None, prepared=None):
     for name, leaf in zip(_template_names(template), jax.tree.leaves(template)):template_named[name] = np.asarray(leaf)
     capture_names = [capture_name(p) for p in capture['paths']]
     new_inputs = sorted(set(template_named) - set(capture_names))
-    table = predicates(plugins)
-    # The PR's own plug-in (the first listed) must declare allowed fields for every effect;
-    # a superset's other plug-ins only warn.
-    own = PLUGINS[plugins[0]] if plugins else {}
-    undeclared_own = sorted(e for e in own if e not in ALLOWED)
-    if undeclared_own:
-        raise SystemExit(f'plug-in {plugins[0]} has effects without declared allowed fields: {undeclared_own}; add them to ALLOWED')
-    undeclared = sorted(e for e in table if e not in ALLOWED)
-    if undeclared:warnings.append(f'effects of other plug-ins without declared allowed fields (any change accepted): {undeclared}')
     tables = context['prepared'];metadata = context['pool'].metadata();vocab = metadata['vocabulary']
     color_change = [vocab['abilities'].index('colorchange')] if 'colorchange' in vocab.get('abilities', ()) else []
     base_names = manifest['output_names']
