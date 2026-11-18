@@ -13,6 +13,7 @@ import tempfile
 
 
 CHECKPOINT_SCHEMA = 'pokezero.checkpoint.v5'
+CHAMPION_CHECKPOINT_SCHEMA = 'pokezero.checkpoint.champion_adapter.v1'
 RECEIPT_SCHEMA = 'pokezero.checkpoint_encoding_receipt.v1'
 _SEAL = object()
 
@@ -103,10 +104,13 @@ def resolve_self_moves(checked, *, expected_self_moves=None, off_provenance=None
         checked.payload['metadata_sha256'], expected_self_moves, off_provenance)
 
 
-def _writer_receipt(path, *, checkpoint_sha256, metadata_sha256, self_moves):
+def _writer_receipt(path, *, checkpoint_sha256, metadata_sha256, self_moves, checkpoint_schema=CHECKPOINT_SCHEMA):
     """Called only by checkpoint writers after successful immutable publication."""
     if type(self_moves) is not bool:raise ValueError('explicit bool runtime self_moves required')
-    document = dict(schema=RECEIPT_SCHEMA, checkpoint_schema=CHECKPOINT_SCHEMA,
+    if (checkpoint_schema not in (CHECKPOINT_SCHEMA,CHAMPION_CHECKPOINT_SCHEMA)
+            or (checkpoint_schema==CHAMPION_CHECKPOINT_SCHEMA)!=(metadata_sha256 is None)):
+        raise ValueError('supported writer checkpoint schema and metadata binding required')
+    document = dict(schema=RECEIPT_SCHEMA, checkpoint_schema=checkpoint_schema,
         checkpoint_sha256=checkpoint_sha256, metadata_sha256=metadata_sha256, self_moves=self_moves)
     target = Path(str(path)+'.encoding.json')
     blob = json.dumps(document, sort_keys=True, separators=(',', ':'), allow_nan=False).encode()
@@ -128,12 +132,51 @@ def off_from_receipt(reference):
     if digest != reference['sha256']:raise ValueError('original writer receipt digest differs')
     document = json.loads(blob)
     if (type(document) is not dict or set(document) != {'schema','checkpoint_schema','checkpoint_sha256','metadata_sha256','self_moves'}
-            or document['schema'] != RECEIPT_SCHEMA or document['checkpoint_schema'] != CHECKPOINT_SCHEMA
+            or document['schema'] != RECEIPT_SCHEMA
+            or document['checkpoint_schema'] not in (CHECKPOINT_SCHEMA,CHAMPION_CHECKPOINT_SCHEMA)
             or document['self_moves'] is not False):
         raise ValueError('original OFF writer receipt required')
     from .v5_contract import _binding
-    _binding(document['checkpoint_sha256']); _binding(document['metadata_sha256'])
+    _binding(document['checkpoint_sha256'])
+    if document['checkpoint_schema']==CHECKPOINT_SCHEMA:_binding(document['metadata_sha256'])
+    elif document['metadata_sha256'] is not None:raise ValueError('champion writer receipt must use its full-byte binding')
     return TrustedOffProvenance(_SEAL, document['checkpoint_sha256'], document['metadata_sha256'], 'writer:'+digest)
+
+
+def _champion_writer_encoding(model_config, payload_config):
+    from .neural_policy import TransformerPolicyConfig
+    if type(model_config) is not TransformerPolicyConfig or type(model_config.self_moves) is not bool:
+        raise ValueError('original writer model configuration required')
+    declared=payload_config.get('self_moves',False) if type(payload_config) is dict else None
+    if type(declared) is not bool or declared!=model_config.self_moves:
+        raise ValueError('writer checkpoint self_moves differs from runtime configuration')
+    return declared
+
+
+def save_champion_transformer(path, model, *, result):
+    """Fresh original transformer writer plus external encoding receipt.
+
+    This delegates serialization unchanged; it cannot attest an existing file.
+    """
+    from .neural_policy import save_transformer_checkpoint
+    declared=_champion_writer_encoding(result.model_config,result.model_config.to_dict())
+    if Path(path).exists():raise FileExistsError(path)
+    save_transformer_checkpoint(path,model,result=result)
+    _,digest=_snapshot(path)
+    return _writer_receipt(path,checkpoint_sha256=digest,metadata_sha256=None,self_moves=declared,
+        checkpoint_schema=CHAMPION_CHECKPOINT_SCHEMA)
+
+
+def save_champion_payload(path, payload, *, model_config):
+    """Fresh reply writer; retain the existing path-based Torch serialization."""
+    from .neural_policy import require_torch
+    if type(payload) is not dict:raise ValueError('original writer checkpoint payload required')
+    declared=_champion_writer_encoding(model_config,payload.get('model_config'))
+    if Path(path).exists():raise FileExistsError(path)
+    require_torch().save(payload,Path(path))
+    _,digest=_snapshot(path)
+    return _writer_receipt(path,checkpoint_sha256=digest,metadata_sha256=None,self_moves=declared,
+        checkpoint_schema=CHAMPION_CHECKPOINT_SCHEMA)
 
 
 def verified_run(run):

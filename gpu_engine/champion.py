@@ -234,4 +234,6 @@ if __name__=='__main__':
     import argparse
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--checkpoint',required=True);parser.add_argument('--out',required=True)
-    args=parser.parse_args();print(json.dumps(export(args.checkpoint,args.out),sort_keys=True))
+    from pokezero.checkpoint_self_moves import add_receipt_arguments,receipt_from_arguments
+    add_receipt_arguments(parser)
+    args=parser.parse_args();print(json.dumps(export(args.checkpoint,args.out,off_provenance=receipt_from_arguments(args)),sort_keys=True))

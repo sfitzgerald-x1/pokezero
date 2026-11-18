@@ -134,7 +134,9 @@ class CanaryTests(unittest.TestCase):
         real_sha=c.file_sha
         def sha(path):return c.CHAMPION_SHA if str(path)=='/untouched' else real_sha(path)
         def save(path,*args,**kwargs):Path(path).write_bytes(b'unit-checkpoint-not-a-model')
-        def export(cp,path):Path(path).write_bytes(b'unit-archive-not-weights')
+        def export(cp,path,**kwargs):
+            self.assertEqual(kwargs['off_provenance'].checkpoint_sha256,real_sha(cp))
+            Path(path).write_bytes(b'unit-archive-not-weights')
         with patch.object(c,'file_sha',side_effect=sha),patch.object(c,'checkpoint_payload',return_value=payload),\
              patch.object(neural,'EntityTokenTransformerPolicy',FakeModel),patch.object(neural,'train_transformer_policy',side_effect=train),\
              patch.object(neural,'save_transformer_checkpoint',side_effect=save),patch.object(champion,'export',side_effect=export),patch.object(engine,'Backend',Backend):
