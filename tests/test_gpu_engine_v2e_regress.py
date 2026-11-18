@@ -107,6 +107,19 @@ def pre_arrays(L):
 
 @unittest.skipUnless(HAS_JAX, 'requires JAX')
 class DigestAndRuleTests(unittest.TestCase):
+    def test_invalid_saved_effect_blocks_override_full_allowances_and_waivers(self):
+        from gpu_engine.v2e_regress import lane_verdict, EFFECT_DRAWS
+        for effect in ('cutecharm','attract','infatuated'):
+            for side in (0,1):
+                for cascade in (None,dict(ko_sides=[True,True],mon_ok=lambda *_:True,families=('residual',))):
+                    with self.subTest(effect=effect,side=side,cascade=bool(cascade)):
+                        checks=[True,True];checks[side]=False
+                        changed={(EFFECT_DRAWS,side),('state.hp',1-side)}
+                        self.assertEqual(lane_verdict(changed,{effect:[0]},None,cascade=cascade,
+                            effect_ok=checks,waive=('.*',)),([(EFFECT_DRAWS,side)],[],[]))
+                        self.assertEqual(lane_verdict(changed,{effect:[0]},None,cascade=cascade,
+                            effect_ok=[True,True]),([],[],[]))
+
     def test_lane_digest_sees_every_single_element_change(self):
         import jax.numpy as j
         from gpu_engine.v2e_regress import lane_digest
@@ -509,6 +522,44 @@ class DigestAndRuleTests(unittest.TestCase):
                          [('state.types', 1), ('trackers.shown_types', 1)])
 
 
+class ForecastPluginTests(unittest.TestCase):
+    """FC (gpu_engine/forecast.py): the involvement predicate on synthetic pre-states (numpy only), with its controls."""
+    def test_forecast_involvement_and_controls(self):
+        from gpu_engine.v2e_regress import Pre, PLUGINS, ALLOWED, ALL, lane_verdict
+        RAIN_DANCE = len(VOCAB['moves']);ROAR = RAIN_DANCE + 1
+        FORECAST, DRIZZLE, CLOUD = 4, 5, 6
+        vocab = dict(VOCAB, moves=VOCAB['moves'] + ['raindance', 'roar'],
+                     abilities=VOCAB['abilities'] + ['forecast', 'drizzle', 'cloudnine'], species=['_none', 'castform', 'golduck'])
+        L = 10;s = pre_arrays(L);actions = np.zeros((L, 2), np.int32)
+        s['species'] = np.full((L, 2, 6), 2, np.int32);s['weather'] = np.zeros(L, np.int32)
+        cast = lambda lane, side, slot: (s['species'].__setitem__((lane, side, slot), 1), s['ability'].__setitem__((lane, side, slot), FORECAST))
+        cast(0, 0, 0);s['weather'][0] = 1                                    # lane 0: active Castform in rain
+        cast(1, 0, 0)                                                        # lane 1: active, no weather, no setter: control
+        cast(2, 1, 0);s['moves'][2, 0, 0, 0] = RAIN_DANCE                    # lane 2: the foe's Rain Dance
+        cast(3, 0, 2);s['weather'][3] = 2;actions[3, 0] = 5                  # lane 3: a switch may bring it into sun
+        cast(4, 0, 2);s['weather'][4] = 2                                    # lane 4: benched, no install: control
+        cast(5, 0, 0);s['ability'][5, 1, 3] = DRIZZLE;actions[5, 1] = 6      # lane 5: a Drizzle holder may switch in
+        cast(6, 0, 0);s['ability'][6, 1, 3] = DRIZZLE                        # lane 6: a benched Drizzle holder only: control
+        s['species'][7, 0, 0] = 1;s['weather'][7] = 1                        # lane 7: Castform without Forecast: control
+        cast(8, 0, 0);s['hp'][8, 0, 0] = 0;s['weather'][8] = 1               # lane 8: a fainted Castform: control
+        cast(9, 1, 3);s['weather'][9] = 1;s['moves'][9, 0, 0, 0] = ROAR      # lane 9: the foe's Roar may drag it in
+        s['ability'][0, 1, 0] = CLOUD
+        named = {f'state.{k}': v for k, v in s.items()};named['actions'] = actions
+        p = Pre(named, vocab, np.append(CALLABLE, [False, False]), np.zeros((L, 2), bool))
+        got = PLUGINS['FC']['forecast'](p)
+        no = [False, False]
+        self.assertEqual(got.tolist(), [[True, False], no, [False, True], [True, False], no, [True, False], no, no, no,
+                                        [False, True]])
+        self.assertIs(ALLOWED['forecast'], ALL)
+        # Negative controls: a changed lane-step the plug-in does not cover stays unexpected; covered, anything goes.
+        changed = {('state.types', 0), ('trackers.shown_types', 0), ('state.hp', 1)}
+        self.assertEqual(lane_verdict(changed, {}, None)[0], sorted(changed))
+        self.assertEqual(lane_verdict(changed, {'forecast': [0]}, None)[0], [])
+        # A vocabulary without Castform involves nothing.
+        bare = Pre(named, dict(vocab, species=['_none', 'golduck']), np.append(CALLABLE, [False, False]), np.zeros((L, 2), bool))
+        self.assertFalse(PLUGINS['FC']['forecast'](bare).any())
+
+
 @unittest.skipUnless(HAS_JAX, 'requires JAX')
 class TwoPassTests(unittest.TestCase):
     """base -> patched end to end on three synthetic shards, without a V2 runtime."""
@@ -844,17 +895,20 @@ class EffectAndResidualRuleTests(unittest.TestCase):
 
     def test_a_phase_shift_changes_the_saved_effect_block_only_by_the_derivation(self):
         """M1 GPU pass (2 lanes of 1.1M): once the base pass has state.effect_draws it is compared bitwise, and a
-        phase shift (the deferral moved) saves or drops the block. Accepted per side only where this tree's block
-        is the design derivation (effect_ok); a wrong block on the same lanes stays unexpected."""
+        phase shift (the deferral moved) saves or drops the block. The five-column block is independently checked
+        even when present at base; a wrong old or appended coordinate stays unexpected."""
         import jax.numpy as j
         from gpu_engine import v2e_regress
 
-        def saving(state, actions, t, *, shift=False, wrong=False):
+        def saving(state, actions, t, *, shift=False, wrong=False, wrong_column=None):
             out = pending_step(state, actions, t);s = out.step.state
             uses = curse_users(state, actions)
             if shift:s = s._replace(pending_residual=s.pending_residual ^ uses)      # Curse lanes move the deferral
             block = saved_block(state, s)
             if wrong:block = j.where(uses[:, None, None], (block + 1) % 2, block)
+            if wrong_column is not None:
+                column=block[:,:,wrong_column]
+                block=block.at[:,:,wrong_column].set(j.where(uses[:,None],(column+1)%2,column))
             return result(s._replace(effect_draws=block), out.trackers)
         args = lambda **extra: TwoPassTests.args.__func__(type(self), **extra)
         base = self.tmp / 'base-with-effect'
@@ -863,19 +917,34 @@ class EffectAndResidualRuleTests(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertIn('state.effect_draws', json.loads((base / 'manifest.json').read_text())['output_names'])
 
-        def run(name, **kind):
+        def run(name, pr='A1', **kind):
             out = self.tmp / name
-            code = v2e_regress.patched_pass(args(out=out, base=str(base), pr='A1', faint_clear=False),
+            code = v2e_regress.patched_pass(args(out=out, base=str(base), pr=pr, faint_clear=False),
                 step_override=clocked(lambda s, a, t: saving(s, a, t, **kind), even), prepared=(self.context, self.new))
             return code, json.loads((out / 'report.json').read_text()), [json.loads(x) for x in (out / 'changed.jsonl').read_text().splitlines()]
         code, report, listing = run('effect-shift', shift=True)
-        self.assertEqual(code, 0, report['counts']);self.assertFalse(report['effect_rule'])
+        self.assertEqual(code, 0, report['counts']);self.assertTrue(report['effect_rule'])
+        self.assertGreater(report['counts']['effect_draws_saved'],0)
         shifted = [x for x in listing if x['phase_shift']]
         self.assertTrue(shifted);self.assertEqual(len(shifted), len(listing))
-        self.assertTrue(all({'state.effect_draws@0', 'state.effect_draws@1'} <= set(x['ko_consequences']) for x in shifted))
+        self.assertTrue(all(not {'state.effect_draws@0', 'state.effect_draws@1'} & set(x['ko_consequences']) for x in shifted))
         code, report, _ = run('effect-shift-wrong', shift=True, wrong=True)
         self.assertEqual(code, 1)
         self.assertEqual(set(report['by_effect']['curse']['unexpected_fields']), {'state.effect_draws@user', 'state.effect_draws@target'})
+        for column in (0,4):
+            code, report, _ = run('effect-shift-wrong-column-'+str(column),shift=True,wrong_column=column)
+            self.assertEqual(code,1)
+            self.assertEqual(set(report['by_effect']['curse']['unexpected_fields']),{'state.effect_draws@user','state.effect_draws@target'})
+
+        # Isolate each CC allowance from its predicate: involved, non-cascade lanes
+        # must still reject corruption in both an old coordinate and the new fifth one.
+        for effect in ('cutecharm','attract','infatuated'):
+            with mock.patch.dict(v2e_regress.PLUGINS,{'CC':{effect:lambda pre:np.broadcast_to(np.array([True,False]),(pre.lanes,2))}}):
+                for column in (0,4):
+                    code,report,_=run('cc-corrupt-'+effect+'-'+str(column),pr='CC',wrong_column=column)
+                    self.assertEqual(code,1)
+                    self.assertEqual(set(report['by_effect'][effect]['unexpected_fields']),
+                        {'state.effect_draws@user','state.effect_draws@target'})
 
     def test_a_moved_ko_retypes_only_a_color_change_holder(self):
         """M1 GPU pass (shard 176 lane 1687: a Trick-given Choice Band KOs Kecleon in the action phase, so Color Change

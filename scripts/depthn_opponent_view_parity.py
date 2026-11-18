@@ -47,11 +47,11 @@ Capture (one GPU; the live server's build, as scripts/depthn_rr_reprice.py repla
   - true: the sampler's own construction with Foul Play's team swapped in. The sampler draws
     start, reason = _gen3_randbat_belief_start_override_result(...) and calls v5_public_world.materialize(root, start,
     prepared=ProtocolInputs(_carried_root(root, detached, lines, metadata), lines, catalog, metadata, source), history=None,
-    own_static=None, seed=kernel_seed) (phase_d_protocol_world.py:398-411). Here start = BattleStartOverride(our team exactly
-    as the sampler builds it, determinization.py:384-390 (_root_self_team_payload or metadata['self_team'] ->
+    own_static=None, seed=kernel_seed) (phase_d_protocol_world.py:838-844). Here start = BattleStartOverride(our team exactly
+    as the sampler builds it, determinization.py:390-396 (_root_self_team_payload or metadata['self_team'] ->
     _self_team_from_metadata_result -> pack_team); Foul Play's true team through the very same function on Foul Play's own
     round-0 self_team rows, so level, gender, item, ability, move order and an EV/IV spread verified against the request's
-    stats are exact; observation_format_id the root's format, determinization.py:414-422), materialized the same way with
+    stats are exact; observation_format_id the root's format, determinization.py:421-429), materialized the same way with
     world 0's kernel seed (phase_d_protocol_world.world_seeds). One fact the sampler's format never writes: happiness (packed
     field 11, '' = 255). Where the literal round-0 request's Return/Frustration power proves a unique value other than 255
     (phase_d_live_worlds._own_happiness, the constructor's own inversion), it is written; an ambiguous power leaves 255 and
@@ -545,7 +545,7 @@ def with_happiness(packed, rows, request):
 
 
 def true_start(root, team_rows, round0_request, set_source, owner):
-    """(BattleStartOverride, info): our team exactly as the sampler builds it (determinization.py:384-390), Foul Play's true team
+    """(BattleStartOverride, info): our team exactly as the sampler builds it (determinization.py:390-396), Foul Play's true team
     through the same function on its own round-0 self_team rows, packed by the same pack_team (plus a proven happiness);
     (None, info with the reason) when either team cannot be reconstructed."""
     from pokezero.determinization import _root_self_team_payload, _self_team_from_metadata_result
@@ -576,7 +576,7 @@ def cpu_device():
 
 
 def build_true_world(call, team_rows, round0_request, *, index=0):
-    """(ProtocolWorld or None, info): the sampler's materialization (phase_d_protocol_world.py:398-411) of the true start, on the
+    """(ProtocolWorld or None, info): the sampler's materialization (phase_d_protocol_world.py:838-844) of the true start, on the
     CPU device as prepare_roots builds worlds, with world `index`'s kernel seed."""
     import jax
     from gpu_engine import phase_d_protocol_world as pw, v5_public_world as vw

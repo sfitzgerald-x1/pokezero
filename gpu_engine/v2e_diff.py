@@ -79,7 +79,7 @@ def _chance():
             jax.vmap(lambda k: jax.random.split(k, 2))(s.keys)[:, 0], x.effect)
     def cuda(s, a, t, c):
         out = v2e_cuda.chance(s.keys, s.replacement_count)
-        return tuple(out) + (j.full((s.keys.shape[0], 2, 4), -1, j.int32),)   # CUDA_EFFECT_DEFERRED
+        return tuple(out) + (j.full((s.keys.shape[0], 2, len(transition.EFFECT_BOUNDS)), -1, j.int32),)   # CUDA_EFFECT_DEFERRED
     return reference, cuda
 
 

@@ -1,13 +1,20 @@
 // Real Showdown callback tests. No engine is loaded by this script.
 const assert=require('node:assert/strict'),path=require('node:path');
-const root=process.argv[2],hooks=process.argv[3];
+const root=process.argv[2],hooks=process.argv[3],version=Number(process.argv[4]||4);
 const {Battle}=require(path.join(root,'dist/sim/battle.js'));
 const {PRNG}=require(path.join(root,'dist/sim/prng.js'));
 let tape=null,initial=null,events=[];
 require(hooks).install(Battle,PRNG,()=>tape,e=>events.push(e),()=>initial,path.join(root,'dist/sim/pokemon.js'));
 const row=()=>[0,99,99,99,15,0,0,0,0,0,0,0];let nonce=0;
-function T(){return {schema:'pokezero.gpu_chance_tape.v4',nonce:String(++nonce),draws:[row(),row()],effect:[[15,0,0,0],[15,0,0,0]],
-  secondary:[99,99],sleep_talk:[0,0],phazing:[0,0],entry_ties:[0,0],resuming:false};}
+function tapeFor(version){
+  const t={schema:'pokezero.gpu_chance_tape.v'+version,nonce:String(++nonce),draws:[row(),row()],
+    secondary:[99,99],sleep_talk:[0,0]};
+  if(version>=2)t.effect=Array.from({length:2},()=>version>=5?[15,0,0,0,1]:[15,0,0,0]);
+  if(version>=3)t.phazing=[0,0];
+  if(version===4||version===6){t.entry_ties=[0,0];t.resuming=false;}
+  return t;
+}
+function T(){return tapeFor(version);}
 const mon=(species='Snorlax',ability='Thick Fat',item='')=>({species,ability,item,gender:'M',level:100,moves:['splash','tackle'],
   evs:{hp:0,atk:0,def:0,spa:0,spd:0,spe:0},ivs:{hp:31,atk:31,def:31,spa:31,spd:31,spe:31}});
 function battle(a=[mon()],b=[mon()]){
@@ -186,21 +193,18 @@ for(const bit of [0,1]){
 // Actual double KOs create replacement requests. With unequal lead Speeds the
 // insertion tie is the first consumer; equal leads also exercise instaswitch.
 // Legacy tapes lack the phase and fresh coins, so cannot claim a coupling.
-for(const equalLeads of [false,true])for(const version of [1,2,4]){
+for(const equalLeads of [false,true])for(const version of [1,2,3,4,5,6]){
   const first={...mon('Electrode','Soundproof'),moves:['explosion']};
   const foe=equalLeads?{...first}:mon('Magikarp','Swift Swim');
   const b=battle([first,mon('Groudon','Drought')],[foe,mon('Kyogre','Drizzle')]);
   const make=resuming=>{
-    const t=T();t.draws[0][11]=1;t.draws[1][10]=1;t.resuming=resuming;t.entry_ties=[0,0];
-    if(version!==4){t.schema=`pokezero.gpu_chance_tape.v${version}`;
-      for(const key of ['phazing','entry_ties','resuming'])delete t[key];
-      if(version===1)delete t.effect;
-    }
+    const t=tapeFor(version);t.draws[0][11]=1;t.draws[1][10]=1;
+    if(version===4||version===6){t.resuming=resuming;t.entry_ties=[0,0];}
     return t;
   };
   controlled(make(false),()=>b.makeChoices('move 1','move 1'));
   assert(b.sides.every(s=>s.active[0].fainted));
-  if(version===4){
+  if(version===4||version===6){
     controlled(make(true),()=>b.makeChoices('switch 2','switch 2'));
     assert.equal(b.field.weather,'raindance');assert.equal(coupled('entry_tie')[0].raw,0);
     if(equalLeads)assert.equal(coupled('switch_tie')[0].raw,0);
@@ -223,18 +227,43 @@ for(const field of ['phazing','entry_ties','resuming']){
   for(const key of ['phazing','entry_ties','resuming'])if(key!==field)delete t[key];
   assert.equal(require(hooks).validTape(t),false);checks++;
 }
-// Every supported schema keeps its exact appended-field contract.
-for(const version of [1,2,3,4]){
-  const t=T();t.schema='pokezero.gpu_chance_tape.v'+version;
-  if(version===1)delete t.effect;
-  if(version<3)delete t.phazing;
-  if(version<4){delete t.entry_ties;delete t.resuming;}
+// Every supported schema keeps its exact appended-field contract, including
+// legacy widths. Appended coordinates may not silently upgrade an older tape.
+for(const version of [1,2,3,4,5,6]){
+  const t=tapeFor(version);
   assert.equal(require(hooks).validTape(t),true);checks++;
   for(const field of ['effect','phazing','entry_ties','resuming']){
-    const bad={...t};
+    const bad=structuredClone(t);
     if(field in t)delete bad[field];else bad[field]=field==='resuming'?false:[0,0];
     assert.equal(require(hooks).validTape(bad),false);checks++;
   }
+  if(version>=2){
+    for(const width of [0,3,4,5,6]){
+      if(width===(version>=5?5:4))continue;
+      const bad=structuredClone(t);bad.effect=[Array(width).fill(0),Array(width).fill(0)];
+      assert.equal(require(hooks).validTape(bad),false);checks++;
+    }
+    for(const value of [-1,2,0.5,true,'1',null]){
+      const bad=structuredClone(t);bad.effect[0][version>=5?4:3]=value;
+      assert.equal(require(hooks).validTape(bad),false);checks++;
+    }
+  }
+}
+// Retained construction genders and the initial insertion coin must coexist.
+// All six party identities are verified; the ten mixed slots still advance the
+// native PRNG once each, while the tied lead abilities use the supplied coin.
+for(const bit of [0,1]){
+  const sets=[['Groudon','Drought'],['Kyogre','Drizzle']].map(([species,ability])=>[
+    {species,ability,moves:['splash'],level:100},
+    ...Array.from({length:5},()=>({species:'Snorlax',ability:'Thick Fat',moves:['splash'],level:100}))]);
+  const genders=[[0,1,2,1,2,1],[0,2,1,2,1,2]];
+  initial={genders,allow_inert_gender:false,initial_tie:bit};events=[];
+  let b;try{b=battle(...sets);}finally{initial=null;}
+  assert.deepEqual(b.sides.map(s=>s.pokemon.map(p=>({M:1,F:2})[p.gender]||0)),genders);
+  assert.equal(b.field.weather,bit?'sunnyday':'raindance');
+  assert.equal(events.filter(e=>e.kind==='COUPLED_INITIAL_GENDER').length,10);
+  assert(events.some(e=>e.kind==='COUPLED_INITIAL'&&e.raw===bit));
+  assert(!events.some(e=>['INITIAL_RANDOM','INERT_GENDER','UNRESOLVED'].includes(e.kind)));checks++;
 }
 for(const side of [0,1])for(const ko of [false,true])for(let roll=0;roll<60;roll++){
   const teams=[[mon()],[mon('Pikachu','Static')]];if(side)teams.reverse();

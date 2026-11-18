@@ -40,8 +40,8 @@ def packet(s):
 
 
 def chance():
-    from gpu_engine.transition import ChanceInputs
-    return {key:np.zeros((1,2,12)if key=='draws'else(1,)if key=='initial_tie'else(1,2,4)if key=='effect'else(1,2),np.int32).tolist()
+    from gpu_engine.transition import ChanceInputs, EFFECT_BOUNDS
+    return {key:np.zeros((1,2,12)if key=='draws'else(1,)if key=='initial_tie'else(1,2,len(EFFECT_BOUNDS))if key=='effect'else(1,2),np.int32).tolist()
         for key in ChanceInputs._fields}
 
 

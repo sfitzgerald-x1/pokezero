@@ -16,10 +16,14 @@ import jax.numpy as j
 import numpy as np
 
 from pokezero.dex import normalize_id
+from pokezero.tier2 import canonical_move_id
 from pokezero.engine_world import battle_spec_from_payload,EngineWorldUnsupported,unpack_team,_engine_species_id
 from pokezero.env import BattleStartOverride
 from pokezero.v5_teacher_public_root import PublicRoot,capture_root
-from pokezero.determinization import _gen3_randbat_belief_start_override_result
+from pokezero.determinization import _gen3_randbat_belief_start_override_result,player_belief_view_from_payload
+from pokezero import set_posterior
+# The game-line rule (and its hash) moved to set_posterior, whose provenance hashes the same lines; re-exported here.
+from pokezero.set_posterior import NON_GAME_LINE_TAGS,game_lines_sha256
 from . import device_public_worlds as public_worlds,device_public_world_state as states
 from . import phase_d_live_worlds as live,phase_d_tail as tail
 from .v5_hypothetical_state import map_spec
@@ -32,6 +36,20 @@ SCHEMA='pokezero.phase-d.protocol-materialization.v1'
 # (_device), instead of ~800 eager device ops per world. False keeps the eager device build, the byte-for-byte reference
 # the parity tests compare against.
 HOST_WORLDS=True
+
+
+# set_posterior on the protocol route, three switches:
+# - SET_POSTERIOR_DRAW: each revealed foe's set is drawn from set_posterior (its hard facts, today's reveals, times the damage
+#   likelihood of its public strikes on our active) instead of uniformly over the hard-fact survivors. With equal weights the
+#   draw is today's call, so the worlds of roots without damage narrowing are byte-identical. False: today's uniform draw.
+# - SET_POSTERIOR_CHECK: the hard support is checked against B2's public posterior in both directions (_check_set_posterior),
+#   beside today's one-way sampled-foe check. False: the one-way check alone.
+# - SET_POSTERIOR_CHECK_FATAL: a disagreement refuses the root's worlds (PUBLIC_SET_POSTERIOR_B2_DISAGREEMENT); False writes
+#   the same row, non-fatal, and the world goes on.
+# Every world either switch touches carries a non-fatal PUBLIC_SET_POSTERIOR row (_set_posterior_row).
+SET_POSTERIOR_DRAW=True
+SET_POSTERIOR_CHECK=True
+SET_POSTERIOR_CHECK_FATAL=True
 
 
 def _device(state):
@@ -580,6 +598,74 @@ def _host_arrays(seed,key):
     return arrays
 
 
+def _set_posteriors(inputs,root):
+    """The root's set posteriors (set_posterior.posterior over its owning lines and the belief view the start sampler filters
+    with), computed once per root and shared by its worlds."""
+    def compute():
+        context=root.context
+        view=player_belief_view_from_payload(context.observation.metadata.get('belief_view'))
+        if view is None:raise ValueError('PUBLIC_SET_POSTERIOR_BELIEF_UNAVAILABLE')
+        return set_posterior.posterior(inputs.lines,context.public_materialization_state.self_request,source=inputs.source.original,
+            owner=view.self_slot,beliefs=view.opponent_pokemon,format_id=context.format_id,dex=inputs.catalog.dex,
+            binding=inputs.source.binding_sha256)
+    return _once(inputs,root,'set_posterior',compute,shared=True)
+
+
+def _check_set_posterior(inputs,root,rows,diagnostics):
+    """The reverse of the sampled-foe check, at root level: set_posterior's hard support must equal B2's public posterior
+    (_revealed's eligible variants, `rows`) for every revealed foe species, as full variant identity (the source index, so
+    Hidden Power type too), in both directions. A disagreement writes a TRIGGERED row with the species and the variants only
+    one side holds; with SET_POSTERIOR_CHECK_FATAL every world of the root then refuses PUBLIC_SET_POSTERIOR_B2_DISAGREEMENT.
+    Damage-excluded variants are a strict subset by design, so the hard support is compared, never the weighted one. Returns
+    whether the two agree (the caller refuses)."""
+    b2={set_posterior.species_key(name):tuple(index for index,_ in candidates) for slot,universe,candidates,gender,name in rows}
+    posts=_set_posteriors(inputs,root);checked=set_posterior.two_way(posts,b2)
+    bad=[key for key,post in checked.items() if post.refusals]
+    if bad:
+        ours=lambda key:{i for i,h in enumerate(posts[key].hard) if h} if key in posts else set()
+        diagnostics.append(dict(kind=set_posterior.B2_DISAGREEMENT,status='TRIGGERED',fatal=SET_POSTERIOR_CHECK_FATAL,species=[dict(species=key,
+            set_posterior_only=sorted(ours(key)-set(b2.get(key,()))),b2_only=sorted(set(b2.get(key,()))-ours(key))) for key in bad]))
+    return not bad
+
+
+def _drawn_indices(source,mon):
+    """The source indices of the variants a sampled foe holds (its level, moves, ability and item): one, or several equal
+    variants of two roles; () when the start cannot be joined to the source."""
+    try:
+        moves=sorted(canonical_move_id(x) for x in mon.moves);universe=source.original.universe_for(mon.species)
+        return tuple(i for i,v in enumerate(universe.variants) if v.level==mon.level and sorted(canonical_move_id(x) for x in v.moves)==moves
+            and normalize_id(v.ability or '')==normalize_id(mon.ability or '') and normalize_id(v.item or '')==normalize_id(mon.item or ''))
+    except (AttributeError,KeyError,TypeError,ValueError):return ()
+
+
+def _set_posterior_row(inputs,root,rows,foes,diagnostics):
+    """The non-fatal PUBLIC_SET_POSTERIOR row of one world, for the replay: per revealed foe species set_posterior's hard and
+    weighted support sizes, strikes admitted and refused by reason (off-model drops among them), the variants this world
+    drew and their weight (0, a zero-weight draw: restrict's off-model fallback under the weighted draw, or a damage-excluded
+    set under today's uniform draw; TRIGGERED, still non-fatal), and the root's provenance; then the
+    two-way check when SET_POSTERIOR_CHECK. A posterior the root cannot give (no belief view) is NOT_EVALUABLE here unless
+    the fatal check needs it."""
+    try:posts=_set_posteriors(inputs,root)
+    except (ValueError,KeyError,IndexError,TypeError,AttributeError) as error:
+        diagnostics.append(dict(kind='PUBLIC_SET_POSTERIOR',status='NOT_EVALUABLE',fatal=False,reason=str(error)))
+        if SET_POSTERIOR_CHECK and SET_POSTERIOR_CHECK_FATAL:raise
+        return
+    species=[]
+    for key,post in posts.items():
+        row=set_posterior.summary(post);row.pop('provenance')
+        drawn=next((_drawn_indices(inputs.source,mon) for mon in foes if set_posterior.species_key(getattr(mon,'species',''))==key),None)
+        row.update(drawn=None if drawn is None else list(drawn),drawn_weight=None if not drawn else max(post.weights[i] for i in drawn))
+        species.append(row)
+    zero=[row['species'] for row in species if row['drawn_weight']==0]
+    record=dict(kind='PUBLIC_SET_POSTERIOR',status='TRIGGERED' if zero else 'CLEAR',fatal=False,
+        drawn_by='set_posterior' if SET_POSTERIOR_DRAW else 'uniform',zero_weight_draws=zero,
+        provenance=next((post.provenance for post in posts.values()),None),species=species,b2_agrees=None)
+    diagnostics.append(record)
+    if SET_POSTERIOR_CHECK:
+        record['b2_agrees']=_check_set_posterior(inputs,root,rows,diagnostics)
+        if not record['b2_agrees'] and SET_POSTERIOR_CHECK_FATAL:raise ValueError(set_posterior.B2_DISAGREEMENT)
+
+
 def materialize_protocol(root,start,*,inputs,seed,key=None):
     """Pure typed mapping with exact own request and no true-opponent donor."""
     if type(root)is not PublicRoot or type(start)is not BattleStartOverride or type(inputs)is not ProtocolInputs:
@@ -603,9 +689,11 @@ def materialize_protocol(root,start,*,inputs,seed,key=None):
         projected,own_meanlook,wrapped=_defer_traps(projected,owner)
         projected,foe_meanlook=_defer_foe_meanlook(projected,owner)
         origins=_once(inputs,root,'origins',lambda:_sleep_origins(inputs.lines))
-        revealed={normalize_id(name):candidates for slot,universe,candidates,gender,name in
-                  _once(inputs,root,'revealed',lambda:tuple(public_worlds._revealed(detached,inputs.source)),shared=True)}
-        for mon in unpack_team(start.player_teams[f'p{foe+1}']):
+        rows=_once(inputs,root,'revealed',lambda:tuple(public_worlds._revealed(detached,inputs.source)),shared=True)
+        foes=unpack_team(start.player_teams[f'p{foe+1}'])
+        if SET_POSTERIOR_DRAW or SET_POSTERIOR_CHECK:_set_posterior_row(inputs,root,rows,foes,diagnostics)
+        revealed={normalize_id(name):candidates for slot,universe,candidates,gender,name in rows}
+        for mon in foes:
             candidates=revealed.get(normalize_id(mon.species))
             if candidates is None:continue
             move_key=lambda xs:tuple(sorted(live._source_move(x)for x in xs))
@@ -762,22 +850,6 @@ def diagnostic_inputs(public,detached,*,lines,metadata):
     return tuple(checks)
 
 
-# Showdown protocol lines that carry no game state: wall clock (|t:| is the turn's unix time, from sim/battle.ts; |:| a server
-# room log's; |inactive| / |inactiveoff| the timer) and room transport (chat, join, leave, rename, raw HTML). r4a3's owning
-# wire carries |t:| alone (25,823 of its lines); the rest are listed defensively (a server-relayed stream could carry them).
-# Filtering only feeds the seed hash, never a parser.
-NON_GAME_LINE_TAGS=frozenset(('t:',':','c','c:','chat','j','J','join','l','L','leave','n','N','name','raw','html','uhtml',
-    'uhtmlchange','inactive','inactiveoff'))
-
-
-def game_lines_sha256(lines):
-    """sha256 of the owner's protocol lines without the non-game ones (NON_GAME_LINE_TAGS), in the owner_lines_sha256 format:
-    the same game state hashes the same in every run, whatever the wall clock said. It seeds the drawn worlds;
-    owner_lines_sha256 stays the exact-bytes record of the root."""
-    keep=(x for x in lines if not (x.startswith('|') and x.split('|',2)[1] in NON_GAME_LINE_TAGS))
-    return hashlib.sha256(''.join(x+'\n'for x in keep).encode()).hexdigest()
-
-
 def world_seeds(root,detached,game_lines,seed,index):
     """World `index`'s (world_seed, kernel_seed): sha256 over the run's seed, the battle, the game content of the owner's lines
     (game_lines = game_lines_sha256(lines), never the exact bytes: |t:| would make the same state draw different worlds in
@@ -802,7 +874,8 @@ def sample(root,detached,*,lines,catalog,source,metadata,config,battle_id,seed,c
         seeds.append(world_seed)
         try:
             start,reason=_gen3_randbat_belief_start_override_result(context=root.context,set_source=source.original,
-                rng=random.Random(world_seed),team_size=6,canonicalize_revealed_variants=True)
+                rng=random.Random(world_seed),team_size=6,canonicalize_revealed_variants=True,
+                **(dict(set_posteriors=lambda:_set_posteriors(inputs,root)) if SET_POSTERIOR_DRAW else {}))
             if start is None:
                 unknown=[];_downstream_unknowns(unknown,'Original public sampler unavailable: '+str(reason))
                 made=ProtocolWorld(None,None,(reason or 'public-sampler-unavailable',),mapper_diagnostics=tuple(unknown))

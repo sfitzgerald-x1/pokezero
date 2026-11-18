@@ -175,6 +175,8 @@ _EXPECTED_HARNESS_CLOSURE = frozenset(
         "src/pokezero/search_labels.py",
         "src/pokezero/search_policy.py",
         "src/pokezero/selfplay.py",
+        # The opponent-world sampler reaches the damage-conditioned set weights.
+        "src/pokezero/set_posterior.py",
         "src/pokezero/shaping.py",
         "src/pokezero/showdown.py",
         "src/pokezero/showdown_fixture.py",

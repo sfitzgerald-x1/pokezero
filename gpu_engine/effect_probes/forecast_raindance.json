@@ -1,0 +1,163 @@
+{
+ "schema": "pokezero.effect_probe.scenario.v1",
+ "move": "forecast_raindance",
+ "note": "Forecast (data/abilities.ts forecast at f76228a1; gen3 flags {}): onStart and onWeatherChange take the forme of effectiveWeather() (rain Water, sun Fire, else Normal) for a non-transformed Castform; WeatherChange fires at setWeather/clearWeather (sim/field.ts) and at a Cloud Nine / Air Lock End (data/abilities.ts; gen4 removes their arrival event). Castform (faster) uses Rain Dance: Castform-Rainy at once, so the slower Lanturn's Thunderbolt the same turn is 2x; next turn Castform-Rainy's Return has no STAB.",
+ "teams": [
+  [
+   {
+    "species": "Castform",
+    "moves": [
+     "raindance",
+     "return",
+     "thunderbolt",
+     "splash"
+    ],
+    "ability": "Forecast",
+    "item": ""
+   },
+   {
+    "species": "Starmie",
+    "moves": [
+     "splash",
+     "surf",
+     "recover",
+     "protect"
+    ],
+    "ability": "Illuminate",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Blissey",
+    "moves": [
+     "splash",
+     "softboiled",
+     "protect",
+     "seismictoss"
+    ],
+    "ability": "Serene Grace",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Skarmory",
+    "moves": [
+     "splash",
+     "protect",
+     "spikes",
+     "peck"
+    ],
+    "ability": "Keen Eye",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Swampert",
+    "moves": [
+     "splash",
+     "protect",
+     "surf",
+     "earthquake"
+    ],
+    "ability": "Torrent",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Metagross",
+    "moves": [
+     "splash",
+     "protect",
+     "meteormash",
+     "earthquake"
+    ],
+    "ability": "Clear Body",
+    "item": "Leftovers"
+   }
+  ],
+  [
+   {
+    "species": "Lanturn",
+    "moves": [
+     "splash",
+     "thunderbolt",
+     "raindance",
+     "surf"
+    ],
+    "ability": "Illuminate",
+    "item": "",
+    "level": 60
+   },
+   {
+    "species": "Starmie",
+    "moves": [
+     "splash",
+     "surf",
+     "recover",
+     "protect"
+    ],
+    "ability": "Illuminate",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Blissey",
+    "moves": [
+     "splash",
+     "softboiled",
+     "protect",
+     "seismictoss"
+    ],
+    "ability": "Serene Grace",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Skarmory",
+    "moves": [
+     "splash",
+     "protect",
+     "spikes",
+     "peck"
+    ],
+    "ability": "Keen Eye",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Swampert",
+    "moves": [
+     "splash",
+     "protect",
+     "surf",
+     "earthquake"
+    ],
+    "ability": "Torrent",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Metagross",
+    "moves": [
+     "splash",
+     "protect",
+     "meteormash",
+     "earthquake"
+    ],
+    "ability": "Clear Body",
+    "item": "Leftovers"
+   }
+  ]
+ ],
+ "script": [
+  [
+   "move 1",
+   "move 2"
+  ],
+  [
+   "move 2",
+   "move 1"
+  ]
+ ],
+ "expect": {
+  "exact": true
+ },
+ "showdown_lines": {
+  "0": [
+   "|-weather|RainDance",
+   "|-formechange|p1a: Castform|Castform-Rainy|[msg]|[from] ability: Forecast"
+  ]
+ }
+}

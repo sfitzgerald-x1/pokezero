@@ -1,0 +1,132 @@
+{
+ "beliefs": [
+  {
+   "condition": "100/100",
+   "gender": null,
+   "item_mutated": false,
+   "revealed_ability": null,
+   "revealed_item": null,
+   "revealed_moves": [
+    "Seismic Toss"
+   ],
+   "ruled_out_abilities": [],
+   "ruled_out_items": [
+    "lumberry"
+   ],
+   "showdown_slot": "p2",
+   "species": "Registeel"
+  }
+ ],
+ "census": {
+  "species": {
+   "registeel": {
+    "census_lik": [
+     1.0
+    ],
+    "census_n": 1,
+    "census_n_after": 1,
+    "census_strikes": 0,
+    "survivor_ids": [
+     "registeel-1-variant-1"
+    ],
+    "true_variant": "registeel-1-variant-1"
+   }
+  },
+  "strikes": [
+   {
+    "attacker": "Registeel",
+    "crit": false,
+    "eff": null,
+    "hp_before": 222,
+    "ko": false,
+    "line": 26,
+    "move": "seismictoss",
+    "n_excluded_universe": null,
+    "n_variants_with_move": null,
+    "observed": 78,
+    "reason": "fixed-damage",
+    "true_match": null,
+    "true_variant": null
+   }
+  ]
+ },
+ "decision_index": 1,
+ "format_id": "gen3randombattle",
+ "name": "refusal_fixed_damage",
+ "note": "Census refusal: fixed_damage",
+ "ordinal": 1830,
+ "owner": "p1",
+ "posterior": {
+  "registeel": {
+   "hard": [
+    0
+   ],
+   "provenance": "440f07c779702942171223406ddb083d5ac197d99695854ca194b97740e8056f",
+   "strikes": [
+    {
+     "admitted": false,
+     "counts": null,
+     "crit": false,
+     "ko": false,
+     "line": 26,
+     "move": "seismictoss",
+     "observed": 78,
+     "reason": "fixed-damage"
+    }
+   ],
+   "weights": [
+    1
+   ]
+  }
+ },
+ "prefix_sha256": "3aac79d7d33ddfcbe33f6aa86192cf08cb022a2b8a2508d50b68fb5222e146fa",
+ "request": {
+  "battle_id": "battle-gen3randombattle-controlled-2103400305",
+  "decision_index": 1,
+  "generation": 4,
+  "lines": [
+   "|t:|1794584356",
+   "|gametype|singles",
+   "|player|p1|PokeZeroBot||",
+   "|player|p2|FoulPlayBot||",
+   "|gen|3",
+   "|tier|[Gen 3] Random Battle",
+   "|rule|HP Percentage Mod: HP is shown in percentages",
+   "|rule|Beat Up Nicknames Mod: Beat Up will not reveal any party members",
+   "|rule|Endless Battle Clause: Forcing endless battles is banned",
+   "|rule|Sleep Clause Mod: Limit one foe put to sleep",
+   "|rule|Switch Priority Clause Mod: Faster Pok\u00e9mon switch first",
+   "|rule|Species Clause: Limit one of each Pok\u00e9mon",
+   "|rule|OHKO Clause: OHKO moves are banned",
+   "|rule|Evasion Items Clause: Evasion items are banned",
+   "|rule|Evasion Moves Clause: Evasion moves are banned",
+   "|",
+   "|t:|1794584356",
+   "|teamsize|p1|6",
+   "|teamsize|p2|6",
+   "|start",
+   "|switch|p1a: Nosepass|Nosepass, F|222/222",
+   "|switch|p2a: Registeel|Registeel, L78|100/100",
+   "|turn|1",
+   "|request|{\"active\":[{\"moves\":[{\"move\":\"Explosion\",\"id\":\"explosion\",\"pp\":8,\"maxpp\":8,\"target\":\"allAdjacent\",\"disabled\":false},{\"move\":\"Rock Slide\",\"id\":\"rockslide\",\"pp\":16,\"maxpp\":16,\"target\":\"allAdjacentFoes\",\"disabled\":false},{\"move\":\"Earthquake\",\"id\":\"earthquake\",\"pp\":16,\"maxpp\":16,\"target\":\"allAdjacent\",\"disabled\":false},{\"move\":\"Thunder Wave\",\"id\":\"thunderwave\",\"pp\":32,\"maxpp\":32,\"target\":\"normal\",\"disabled\":false}]}],\"side\":{\"name\":\"PokeZeroBot\",\"id\":\"p1\",\"pokemon\":[{\"ident\":\"p1: Nosepass\",\"details\":\"Nosepass, F\",\"condition\":\"222/222\",\"active\":true,\"stats\":{\"atk\":147,\"def\":327,\"spa\":147,\"spd\":237,\"spe\":117},\"moves\":[\"explosion\",\"rockslide\",\"earthquake\",\"thunderwave\"],\"baseAbility\":\"magnetpull\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p1: Slaking\",\"details\":\"Slaking, L78, F\",\"condition\":\"362/362\",\"active\":false,\"stats\":{\"atk\":295,\"def\":201,\"spa\":193,\"spd\":146,\"spe\":201},\"moves\":[\"earthquake\",\"hyperbeam\",\"shadowball\",\"doubleedge\"],\"baseAbility\":\"truant\",\"item\":\"choiceband\",\"pokeball\":\"pokeball\"},{\"ident\":\"p1: Celebi\",\"details\":\"Celebi, L74\",\"condition\":\"270/270\",\"active\":false,\"stats\":{\"atk\":153,\"def\":191,\"spa\":191,\"spd\":191,\"spe\":191},\"moves\":[\"calmmind\",\"psychic\",\"batonpass\",\"recover\"],\"baseAbility\":\"naturalcure\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p1: Ludicolo\",\"details\":\"Ludicolo, L84, F\",\"condition\":\"272/272\",\"active\":false,\"stats\":{\"atk\":124,\"def\":166,\"spa\":199,\"spd\":216,\"spe\":166},\"moves\":[\"hiddenpowergrass\",\"hydropump\",\"icebeam\",\"raindance\"],\"baseAbility\":\"swiftswim\",\"item\":\"petayaberry\",\"pokeball\":\"pokeball\"},{\"ident\":\"p1: Crobat\",\"details\":\"Crobat, L78, M\",\"condition\":\"261/261\",\"active\":false,\"stats\":{\"atk\":185,\"def\":170,\"spa\":153,\"spd\":169,\"spe\":248},\"moves\":[\"sludgebomb\",\"toxic\",\"shadowball\",\"hiddenpowerground\"],\"baseAbility\":\"innerfocus\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p1: Tyranitar\",\"details\":\"Tyranitar, L74, M\",\"condition\":\"270/270\",\"active\":false,\"stats\":{\"atk\":241,\"def\":206,\"spa\":184,\"spd\":191,\"spe\":133},\"moves\":[\"rockslide\",\"rest\",\"earthquake\",\"sleeptalk\"],\"baseAbility\":\"sandstream\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"}]}}",
+   "|",
+   "|t:|1794584359",
+   "|move|p2a: Registeel|Seismic Toss|p1a: Nosepass",
+   "|-damage|p1a: Nosepass|144/222",
+   "|move|p1a: Nosepass|Thunder Wave|p2a: Registeel",
+   "|-status|p2a: Registeel|par",
+   "|",
+   "|-heal|p1a: Nosepass|157/222|[from] item: Leftovers",
+   "|upkeep",
+   "|turn|2",
+   "|request|{\"active\":[{\"moves\":[{\"move\":\"Explosion\",\"id\":\"explosion\",\"pp\":8,\"maxpp\":8,\"target\":\"allAdjacent\",\"disabled\":false},{\"move\":\"Rock Slide\",\"id\":\"rockslide\",\"pp\":16,\"maxpp\":16,\"target\":\"allAdjacentFoes\",\"disabled\":false},{\"move\":\"Earthquake\",\"id\":\"earthquake\",\"pp\":16,\"maxpp\":16,\"target\":\"allAdjacent\",\"disabled\":false},{\"move\":\"Thunder Wave\",\"id\":\"thunderwave\",\"pp\":31,\"maxpp\":32,\"target\":\"normal\",\"disabled\":false}]}],\"side\":{\"name\":\"PokeZeroBot\",\"id\":\"p1\",\"pokemon\":[{\"ident\":\"p1: Nosepass\",\"details\":\"Nosepass, F\",\"condition\":\"157/222\",\"active\":true,\"stats\":{\"atk\":147,\"def\":327,\"spa\":147,\"spd\":237,\"spe\":117},\"moves\":[\"explosion\",\"rockslide\",\"earthquake\",\"thunderwave\"],\"baseAbility\":\"magnetpull\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p1: Slaking\",\"details\":\"Slaking, L78, F\",\"condition\":\"362/362\",\"active\":false,\"stats\":{\"atk\":295,\"def\":201,\"spa\":193,\"spd\":146,\"spe\":201},\"moves\":[\"earthquake\",\"hyperbeam\",\"shadowball\",\"doubleedge\"],\"baseAbility\":\"truant\",\"item\":\"choiceband\",\"pokeball\":\"pokeball\"},{\"ident\":\"p1: Celebi\",\"details\":\"Celebi, L74\",\"condition\":\"270/270\",\"active\":false,\"stats\":{\"atk\":153,\"def\":191,\"spa\":191,\"spd\":191,\"spe\":191},\"moves\":[\"calmmind\",\"psychic\",\"batonpass\",\"recover\"],\"baseAbility\":\"naturalcure\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p1: Ludicolo\",\"details\":\"Ludicolo, L84, F\",\"condition\":\"272/272\",\"active\":false,\"stats\":{\"atk\":124,\"def\":166,\"spa\":199,\"spd\":216,\"spe\":166},\"moves\":[\"hiddenpowergrass\",\"hydropump\",\"icebeam\",\"raindance\"],\"baseAbility\":\"swiftswim\",\"item\":\"petayaberry\",\"pokeball\":\"pokeball\"},{\"ident\":\"p1: Crobat\",\"details\":\"Crobat, L78, M\",\"condition\":\"261/261\",\"active\":false,\"stats\":{\"atk\":185,\"def\":170,\"spa\":153,\"spd\":169,\"spe\":248},\"moves\":[\"sludgebomb\",\"toxic\",\"shadowball\",\"hiddenpowerground\"],\"baseAbility\":\"innerfocus\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p1: Tyranitar\",\"details\":\"Tyranitar, L74, M\",\"condition\":\"270/270\",\"active\":false,\"stats\":{\"atk\":241,\"def\":206,\"spa\":184,\"spd\":191,\"spe\":133},\"moves\":[\"rockslide\",\"rest\",\"earthquake\",\"sleeptalk\"],\"baseAbility\":\"sandstream\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"}]}}"
+  ],
+  "own_request_line": "|request|{\"active\":[{\"moves\":[{\"move\":\"Explosion\",\"id\":\"explosion\",\"pp\":8,\"maxpp\":8,\"target\":\"allAdjacent\",\"disabled\":false},{\"move\":\"Rock Slide\",\"id\":\"rockslide\",\"pp\":16,\"maxpp\":16,\"target\":\"allAdjacentFoes\",\"disabled\":false},{\"move\":\"Earthquake\",\"id\":\"earthquake\",\"pp\":16,\"maxpp\":16,\"target\":\"allAdjacent\",\"disabled\":false},{\"move\":\"Thunder Wave\",\"id\":\"thunderwave\",\"pp\":31,\"maxpp\":32,\"target\":\"normal\",\"disabled\":false}]}],\"side\":{\"name\":\"PokeZeroBot\",\"id\":\"p1\",\"pokemon\":[{\"ident\":\"p1: Nosepass\",\"details\":\"Nosepass, F\",\"condition\":\"157/222\",\"active\":true,\"stats\":{\"atk\":147,\"def\":327,\"spa\":147,\"spd\":237,\"spe\":117},\"moves\":[\"explosion\",\"rockslide\",\"earthquake\",\"thunderwave\"],\"baseAbility\":\"magnetpull\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p1: Slaking\",\"details\":\"Slaking, L78, F\",\"condition\":\"362/362\",\"active\":false,\"stats\":{\"atk\":295,\"def\":201,\"spa\":193,\"spd\":146,\"spe\":201},\"moves\":[\"earthquake\",\"hyperbeam\",\"shadowball\",\"doubleedge\"],\"baseAbility\":\"truant\",\"item\":\"choiceband\",\"pokeball\":\"pokeball\"},{\"ident\":\"p1: Celebi\",\"details\":\"Celebi, L74\",\"condition\":\"270/270\",\"active\":false,\"stats\":{\"atk\":153,\"def\":191,\"spa\":191,\"spd\":191,\"spe\":191},\"moves\":[\"calmmind\",\"psychic\",\"batonpass\",\"recover\"],\"baseAbility\":\"naturalcure\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p1: Ludicolo\",\"details\":\"Ludicolo, L84, F\",\"condition\":\"272/272\",\"active\":false,\"stats\":{\"atk\":124,\"def\":166,\"spa\":199,\"spd\":216,\"spe\":166},\"moves\":[\"hiddenpowergrass\",\"hydropump\",\"icebeam\",\"raindance\"],\"baseAbility\":\"swiftswim\",\"item\":\"petayaberry\",\"pokeball\":\"pokeball\"},{\"ident\":\"p1: Crobat\",\"details\":\"Crobat, L78, M\",\"condition\":\"261/261\",\"active\":false,\"stats\":{\"atk\":185,\"def\":170,\"spa\":153,\"spd\":169,\"spe\":248},\"moves\":[\"sludgebomb\",\"toxic\",\"shadowball\",\"hiddenpowerground\"],\"baseAbility\":\"innerfocus\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p1: Tyranitar\",\"details\":\"Tyranitar, L74, M\",\"condition\":\"270/270\",\"active\":false,\"stats\":{\"atk\":241,\"def\":206,\"spa\":184,\"spd\":191,\"spe\":133},\"moves\":[\"rockslide\",\"rest\",\"earthquake\",\"sleeptalk\"],\"baseAbility\":\"sandstream\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"}]}}",
+  "owner": "p1",
+  "prefix_sha256": "3aac79d7d33ddfcbe33f6aa86192cf08cb022a2b8a2508d50b68fb5222e146fa",
+  "request_id": "battle-gen3randombattle-controlled-2103400305:1",
+  "schema": "pokezero.phase-d.shared-gpu-search.v1",
+  "stream_id": 1
+ },
+ "source_hash": "f5a5265143d423af"
+}
