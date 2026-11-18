@@ -125,7 +125,7 @@ class ProtocolConstructor:
                 joint_plan=self.joint_session.prepare(public.context,lines,dex=self.catalog.dex,seed=joint_seed,count=self.count,
                     binding=self.source.binding_sha256,features=getattr(self.catalog.masks,'set_posterior_narrowing',False))
             feature_kwargs={}
-            if getattr(self.catalog.masks,'set_posterior_narrowing',False):
+            if getattr(getattr(self.catalog,'masks',None),'set_posterior_narrowing',False):
                 if joint_plan is None:raise ValueError('joint feature producer required')
                 feature_kwargs=dict(set_posterior_payload=joint_plan.feature_payload,game_sha256=joint_plan.game_sha256)
                 from .set_posterior_features import compile_inputs,attach_root
