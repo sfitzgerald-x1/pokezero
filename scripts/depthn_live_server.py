@@ -398,6 +398,13 @@ def parser():
         'forward: the batch\'s forward has another batch shape, and the backend may pick another matmul (CPU: 0 of 194 roots equal, max '
         '|logit difference| 0.052); never on a served config until shown batch-invariant on its GPU')
     p.add_argument('--block-lanes',type=int,default=2187);p.add_argument('--blocks-per-call',type=int,default=16)
+    p.add_argument('--leaf-layout',choices=('blocks','wide'),default='blocks',help='the DepthN leaf program (device_depthn_pricer.LEAF_LAYOUTS): '
+        'blocks (default, the programs as before) or wide (one iteration of --blocks-per-call forward chunks of the blocks\' B*K rows per call, '
+        'only enumerated lanes packed). Placement and digest are the blocks layout\'s by construction, and so are leaf status and error '
+        'except the forward-usability code (error 4); that code and the leaf values match only while the forward is row-position invariant: '
+        'gated on GB300 under the pinned stack, not on CPU, so a run serving wide passes scripts/depthn_wide_leaf_frame_gate.py at bind time. '
+        'The pricer identity records the layout when not blocks')
+    p.add_argument('--wide-nodes',type=int,help='node slots per wide leaf call (default its lanes // 16; only with --leaf-layout wide)')
     p.add_argument('--warmup-requests',required=True,help='JSONL of saved Showdown requests, one object per line with the eight address keys of '
         'Codex\'s ladder request (battle_id, owner, stream_id, decision_index, generation, prefix_sha256, lines, own_request_line)')
     p.add_argument('--prepare-warm-in',help='JSONL of saved requests (the eight address keys, as --warmup-requests) that prepare runs once '
@@ -465,6 +472,8 @@ def options(argv=None):
         p.error('--split-worlds (measurement only) goes with --prepare-workers and --local-battles')
     if bool(getattr(args,'prepare_warm_in',None))!=bool(getattr(args,'prepare_warm_in_sha256',None)):
         p.error('--prepare-warm-in and --prepare-warm-in-sha256 go together')
+    if args.wide_nodes is not None and(args.leaf_layout!='wide'or args.wide_nodes<=0):
+        p.error('--wide-nodes is a positive node capacity of --leaf-layout wide')
     if args.prepare_cpus:
         try:prepare_cpu_sets(args.prepare_cpus,args.prepare_workers)
         except ValueError as error:p.error(f'--prepare-cpus: {error}')
@@ -533,7 +542,8 @@ def build(args):
     params=(evaluator.params,)
     from gpu_engine import depthn_guard_inputs as guard_inputs
     pricers=live.make_pricers(executor,evaluator,params,worlds=W,buckets=args.buckets,block_lanes=args.block_lanes,blocks_per_call=args.blocks_per_call,
-        labels=guard_inputs.ability_labels if getattr(args,'ability_guard',False)else guard_inputs.child_labels)
+        labels=guard_inputs.ability_labels if getattr(args,'ability_guard',False)else guard_inputs.child_labels,
+        leaf_layout=getattr(args,'leaf_layout','blocks'),wide_nodes=getattr(args,'wide_nodes',None))
     reply=None
     if getattr(args,'reply_archive',None):   # br_fp: the reply model at the champion's precision, on the same executor's views
         from gpu_engine.depthn_reply_prior import ReplyPrior

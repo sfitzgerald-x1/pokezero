@@ -15,6 +15,23 @@ Programs (compile is flat in depth and, past turn 1, independent of capacity):
 - P_leaf(B, K) steps, observes the learner and runs the value forward.
   Both block programs are jitted once per (B, K) and reused across plies,
   capacities and depths; B = block_lanes // K sizes blocks in lanes.
+- P_leaf wide (leaf_layout='wide'; make_wide_leaf_program) replaces P_leaf at
+  the leaf ply: a call is ONE iteration over blocks_per_call*B*K lanes
+  holding only enumerated (node, own slot, opp slot) lanes (pack_wide_leaf),
+  with each node's gather, views and one draw as above, the step, masks and
+  observe once over every lane, and the forward in blocks_per_call chunks of
+  exactly B*K rows. place_wide_leaf writes P_leaf's dense positions (dropped
+  lanes stay zero), so placement and digest are P_leaf's by construction
+  (per-lane programs, the same inputs per lane), and so are leaf status and
+  error except the forward-usability code (error 4 and the status 3 it sets:
+  the forward's valid flag, finite outputs and |v| <= 1 on the lane's own
+  row). That code and leaf_value equal P_leaf's only while the forward is
+  row-position invariant (a lane sits at another row of its 2,187-row
+  chunk): that held on the GB300 frame gate under the pinned stack and
+  autotune cache, NOT on CPU (1 of 429,928 leaf values over 7 CPU-gated roots
+  differed, in a root of 102,577 leaves, its digest equal). Re-gate
+  (scripts/depthn_wide_leaf_frame_gate.py) after any jax/XLA, cuBLAS or
+  autotune-cache change.
 Selection is an input to the block programs: per node, each seat's slot ->
 action map ([k], -1 padded; a waiting seat [0, -1, ...] with engine action
 -1). `prior` ranks each seat's encoder-legal actions by its own logits (the
@@ -69,6 +86,7 @@ LANES=depth2.LANES;UNAVAILABLE=depth2.UNAVAILABLE;INPUT_KEYS=depth2.INPUT_KEYS
 PEER_VIEW_ERROR=depth2.PEER_VIEW_ERROR;PEER_PRIOR_REFUSED=depth2.PEER_PRIOR_REFUSED
 PRE_REASONS=depth2.PRE_REASONS;ERROR_REASONS=depth2.ERROR_REASONS
 SELECTIONS=('prior','searched')
+LEAF_LAYOUTS=('blocks','wide')   # the leaf ply's program: blocks (make_block_program, the default) or wide (make_wide_leaf_program)
 T1_FIELDS=('pre','root_peer_requested','root_peer_legal','root_peer_logits','t1_status','t1_value','t1_error',
     't1_own_requested','t1_own_legal','t1_own_logits','t1_peer_requested','t1_peer_legal','t1_peer_logits')
 NODE_FIELDS=('status','value','error','own_requested','opp_requested','own_legal','opp_legal','own_logits','opp_logits')
@@ -336,6 +354,141 @@ def make_block_program(executor,*,params,forward,nodes,blocks,k_own,k_opp,leaf,d
     return jax.jit(run)
 
 
+def make_wide_leaf_program(executor,*,params,forward,nodes,lanes,chunk,digest=False):
+    """P_leaf wide (leaf_layout='wide'): one call is ONE iteration of `lanes` packed leaf lanes under `nodes` node slots.
+
+    Inputs: the call's gathered node batch [nodes,...] (states and trackers, `owner`, `requested` [nodes,2] seat-indexed,
+    both maps [nodes,k]), then per lane [lanes] its node slot, own and opponent slot and `lane_live` (a packed lane, not
+    padding), and the learner actor per forward chunk [lanes // chunk]. Per node, as the blocks program: the dispatch views
+    and ONE executor.sample draw. Per lane: the node's state, trackers, views and draw gathered by node slot, its
+    (own, opp) action pair, then depth2._leaf_lane (the blocks program's own lane function, mapped over lanes instead of
+    over a node's pairs). The engine step, masks and observe run once over all `lanes`; the forward runs in
+    lanes // chunk chunks of exactly `chunk` rows under jax.lax.map (`chunk` is the blocks program's B*K, so the forward's
+    shapes are its), each chunk skipped (zeros, never enumerated) when it holds no live lane. Status, value, error and
+    the digest follow the blocks leaf rules lane for lane; outputs are [lanes(,...)] in lane order. The shape key is
+    (nodes, lanes, chunk, k_own, k_opp): k enters through the maps' widths."""
+    if any(type(x)is not int or x<=0 for x in(nodes,lanes,chunk))or lanes%chunk:
+        raise ValueError('positive node and lane capacities, the lanes a whole number of forward chunks, required')
+    C=lanes//chunk;seen=depth2._seen(forward)
+    lane_joint=jax.vmap(depth2._leaf_lane(executor));views=depth2._make_views(executor)
+    stacked=params[0]if len(params)==1 else jax.tree.map(lambda *xs:j.stack(xs),*params)
+    actor_params=lambda actor:params[0]if len(params)==1 else jax.tree.map(lambda x:x[actor],stacked)
+    def head(actor,inputs):
+        prediction=forward(actor_params(actor),inputs)
+        lg=prediction.policy_logits.reshape(chunk,9).astype(j.float32);v=prediction.value.reshape(chunk).astype(j.float32);ok=prediction.valid.reshape(chunk)
+        return v,ok&j.all(j.isfinite(lg),axis=-1)&j.isfinite(v)&(j.abs(v)<=1)
+    def forward_chunk(args):
+        actor,inputs,live=args
+        return jax.lax.cond(j.any(live),lambda:head(actor,inputs),lambda:(j.zeros((chunk,),j.float32),j.zeros((chunk,),bool)))
+    def run(states,publics,owner,requested,own_map,opp_map,lane_node,lane_own,lane_opp,lane_live,chunk_actor):
+        own_act=j.where(own_map>=0,own_map,own_map[:,:1]);opp_act=j.where(opp_map>=0,opp_map,opp_map[:,:1])
+        # Per node: the views its own expansion saw (re-observed, as the blocks program) and its one chance draw.
+        bo,bpe,_,_=jax.vmap(views)(states,publics,owner)
+        chance=jax.vmap(executor.sample)(states)
+        at=lambda x:x[lane_node]
+        pair=j.stack((own_act[lane_node,lane_own],opp_act[lane_node,lane_opp]),axis=-1)
+        lane_owner=owner[lane_node]
+        out=lane_joint(jax.tree.map(at,states),jax.tree.map(at,publics),jax.tree.map(at,bo),jax.tree.map(at,bpe),lane_owner[:,None],
+            requested[lane_node],pair,jax.tree.map(at,chance))
+        invalid,done,winner,error=(x[:,0]for x in out[:4]);inputs=out[4]
+        v,usable=jax.lax.map(forward_chunk,(chunk_actor,jax.tree.map(lambda x:x.reshape((C,chunk)+x.shape[2:]),inputs),lane_live.reshape(C,chunk)))
+        v=v.reshape(lanes);usable=usable.reshape(lanes)
+        terminal_ok=(winner>=0)&(winner<=2)
+        err=j.where(invalid,1,j.where(done&~terminal_ok,2,j.where(~done&(error!=0),3,j.where(~done&~usable,4,0))))
+        terminal=j.where(winner==2,0.,j.where(winner==lane_owner,1.,-1.))
+        enumerated=lane_live&(own_map[lane_node,lane_own]>=0)&(opp_map[lane_node,lane_opp]>=0)
+        # The blocks program's invariant, lane for lane: each lane's value (v, from head over this `inputs`' chunk) and its
+        # digest are computed from the SAME `inputs` and leave through this one result dict (GUARD_DEPTHN_RULE).
+        result=dict(status=j.where(~enumerated,0,j.where(err!=0,3,j.where(done,1,4))).astype(j.int8),
+            value=j.where(enumerated&(err==0),j.where(done,terminal,v),0.).astype(j.float32),error=j.where(enumerated,err,0).astype(j.int8))
+        if digest:result['digest']=j.where(enumerated[:,None],digests.batched(seen(inputs),axes=1),j.zeros((),j.uint32))
+        return result
+    return jax.jit(run)
+
+
+@dataclass(frozen=True)
+class WidePack:
+    """A leaf ply packed for the wide program (pack_wide_leaf). Parents are indexed in the ply's parent order.
+
+    `node_call`/`node_slot`/`node_lane` [P]: each parent's call, node slot and first lane (-1: a parent with no enumerated
+    lane, not packed); `call_nodes` [calls,nodes] (parent per node slot, -1 padding); `lane_node`, `lane_own`,
+    `lane_opp` [calls,lanes] (node slot, own and opponent slot; 0 on padding) and `lane_live` [calls,lanes];
+    `chunk_group` [calls,lanes//chunk] (the group of the chunk's lanes, -1 for a chunk without one); `lane_parent`,
+    `lane_slot_own`, `lane_slot_opp`, `lane_pos` [E]: every packed lane's parent, slots and flat position call*lanes+offset."""
+    calls:int
+    nodes:int
+    lanes:int
+    chunk:int
+    node_call:object
+    node_slot:object
+    node_lane:object
+    call_nodes:object
+    lane_node:object
+    lane_own:object
+    lane_opp:object
+    lane_live:object
+    chunk_group:object
+    lane_parent:object
+    lane_slot_own:object
+    lane_slot_opp:object
+    lane_pos:object
+
+
+def pack_wide_leaf(group,own_live,opp_live,*,nodes,lanes,chunk):
+    """Pack only the enumerated (parent, own slot, opponent slot) lanes into calls of `lanes` lanes and `nodes` node slots.
+
+    `group` [P] (the forward's actor per parent; equal groups contiguous), `own_live` [P,k_own] and `opp_live` [P,k_opp]
+    (the live map slots). Parents are taken in order, greedily: a parent's lanes are contiguous, in (own slot, opponent
+    slot) order, and never span calls; a call closes when the next parent's lanes or node slot do not fit; a group change
+    starts a new forward chunk, so every chunk holds one group. A parent without an enumerated lane is not packed. Pure
+    numpy; raises ValueError on bad capacities or non-contiguous groups."""
+    group=np.asarray(group,np.int64);own_live=np.asarray(own_live,bool);opp_live=np.asarray(opp_live,bool)
+    P=len(group);k_own,k_opp=own_live.shape[1],opp_live.shape[1];K=k_own*k_opp
+    if any(type(x)is not int or x<=0 for x in(nodes,lanes,chunk))or lanes%chunk or chunk<K:
+        raise ValueError('positive capacities, lanes a whole number of chunks and a chunk of at least K lanes required')
+    if own_live.shape[0]!=P or opp_live.shape[0]!=P:raise ValueError('one map row per parent required')
+    starts=np.flatnonzero(np.r_[True,group[1:]!=group[:-1]])if P else np.zeros(0,np.int64)
+    if len(starts)!=len(np.unique(group)):raise ValueError('each group\'s parents must be contiguous')
+    live=(own_live[:,:,None]&opp_live[:,None,:]).reshape(P,K);count=live.sum(1)
+    node_call=np.full(P,-1,np.int64);node_slot=np.full(P,-1,np.int64);node_lane=np.full(P,-1,np.int64)
+    packable=np.flatnonzero(count>0);cum=np.concatenate(([0],np.cumsum(count[packable])))
+    call=-1;used_lanes=lanes;used_nodes=nodes;i=0;prev=None
+    while i<len(packable):
+        g=group[packable[i]]
+        if g!=prev:
+            used_lanes=-(-used_lanes//chunk)*chunk;prev=g   # a new group starts a new forward chunk
+        run=i+int(np.searchsorted(group[packable[i:]]!=g,True))   # packable parents of this group from i (contiguous)
+        e=min(run,i+nodes-used_nodes,int(np.searchsorted(cum,cum[i]+lanes-used_lanes,'right'))-1)
+        if e<=i:call+=1;used_lanes=0;used_nodes=0;continue
+        idx=packable[i:e];node_call[idx]=call;node_slot[idx]=used_nodes+np.arange(e-i);node_lane[idx]=used_lanes+cum[i:e]-cum[i]
+        used_nodes+=e-i;used_lanes+=int(cum[e]-cum[i]);i=e
+    calls=call+1;C=lanes//chunk
+    pi,q=np.nonzero(live&(node_call>=0)[:,None])   # row-major: one parent's lanes contiguous, (own, opp) slot order
+    rank=np.arange(len(pi))-np.searchsorted(pi,pi,'left')
+    pos=node_call[pi]*lanes+node_lane[pi]+rank
+    flat=lambda dtype:np.zeros(calls*lanes,dtype)
+    lane_node=flat(np.int32);lane_own=flat(np.int32);lane_opp=flat(np.int32);lane_live=flat(bool)
+    lane_node[pos]=node_slot[pi];lane_own[pos]=q//k_opp;lane_opp[pos]=q%k_opp;lane_live[pos]=True
+    call_nodes=np.full((calls,nodes),-1,np.int64);packed=np.flatnonzero(node_call>=0);call_nodes[node_call[packed],node_slot[packed]]=packed
+    chunk_group=np.full(calls*C,-1,np.int64);chunk_group[pos//chunk]=group[pi]
+    if len(np.unique(pos))!=len(pos)or not np.array_equal(chunk_group[pos//chunk],group[pi]):raise RuntimeError('wide leaf packing overlaps lanes or mixes groups in a chunk')
+    shape=lambda x:x.reshape(calls,lanes)
+    return WidePack(calls=calls,nodes=nodes,lanes=lanes,chunk=chunk,node_call=node_call,node_slot=node_slot,node_lane=node_lane,call_nodes=call_nodes,
+        lane_node=shape(lane_node),lane_own=shape(lane_own),lane_opp=shape(lane_opp),lane_live=shape(lane_live),chunk_group=chunk_group.reshape(calls,C),
+        lane_parent=pi.astype(np.int64),lane_slot_own=(q//k_opp).astype(np.int64),lane_slot_opp=(q%k_opp).astype(np.int64),lane_pos=pos)
+
+
+def place_wide_leaf(pack,fields,pw,pid,n,M,k_own,k_opp,specs):
+    """The dense leaf arrays [n,M,k_own,k_opp(,...)] from a wide ply's flat call outputs (`fields[name]` [calls*lanes(,...)]):
+    each packed lane at (world, node, own slot, opponent slot) of its parent; every other position stays zero, as the
+    blocks layout leaves non-enumerated lanes. `specs`: (name, trailing shape, dtype)."""
+    out={name:np.zeros((n,M,k_own,k_opp)+shape,dtype)for name,shape,dtype in specs}
+    if len(pack.lane_pos):
+        w,node=pw[pack.lane_parent],pid[pack.lane_parent]
+        for name,x in out.items():x[w,node,pack.lane_slot_own,pack.lane_slot_opp]=np.asarray(fields[name])[pack.lane_pos]
+    return out
+
+
 def make_gather():
     """One call's node batch from a pool by row: a plain XLA gather, keyed by the pool's row count (negligible compile)."""
     return jax.jit(lambda pool,rows:jax.tree.map(lambda x:x[rows],pool))
@@ -494,7 +647,7 @@ def _ply_widths(k,depth,name,limit):
 
 class DepthNPricer:
     def __init__(self,executor,model,*,capacity,depth,k_own,k_opp,k1_own=9,k1_opp=9,block_lanes=2187,blocks_per_call=16,selection='prior',
-            fixed_capacity=False,digest=False,forward=None,actor_capacity=33):
+            fixed_capacity=False,digest=False,forward=None,actor_capacity=33,leaf_layout='blocks',wide_nodes=None):
         """`k_own`/`k_opp`: one integer per ply 2..N (an int repeats). In `prior` mode they are the slot widths (top-k by prior).
         In `searched` mode the ply-2 entries are the search widths k of `searched_maps(frame, k_own, k_opp)`, and the pricer
         derives the ply-2 SLOT widths from them with `searched_widths` (k_own+1 for the learner, up to k_own+2 for the
@@ -513,6 +666,20 @@ class DepthNPricer:
         Every program key gains the forward's identity
         (`evaluator_suffix` = champion_evaluator.program_suffix(forward): () for
         the default), so one evaluator reuses its programs and two never share.
+
+        `leaf_layout` (LEAF_LAYOUTS) is the leaf ply's program: 'blocks' (the
+        default; every program and frame as before) or 'wide'
+        (make_wide_leaf_program): a call is one iteration of
+        blocks_per_call*B*K packed leaf lanes, only enumerated lanes packed
+        (pack_wide_leaf), the forward in blocks_per_call chunks of B*K rows;
+        `wide_nodes` node slots per call (default lanes//16). Expand plies keep
+        the blocks programs. Placement and digest are the blocks layout's by
+        construction, and so are status and error except the
+        forward-usability code (error 4 / status 3); that code and leaf_value
+        match only while the forward is row-position invariant (gated on
+        GB300 under the pinned stack, not on CPU; module docstring). Its
+        program key starts ('leaf','wide',...), so the two layouts never
+        share a program.
         """
         if type(capacity)is not int or capacity<=0 or type(actor_capacity)is not int or actor_capacity<=0:
             raise ValueError('finite explicit root/actor capacities required')
@@ -525,6 +692,10 @@ class DepthNPricer:
         depth2._widths(9,9,k1_own,k1_opp,1)
         if any(type(x)is not int or x<=0 for x in(block_lanes,blocks_per_call)):raise ValueError('positive block lane budget and blocks per call required')
         if any(type(x)is not bool for x in(fixed_capacity,digest)):raise ValueError('explicit digest/fixed-capacity bools required')
+        if leaf_layout not in LEAF_LAYOUTS:raise ValueError(f'leaf_layout in {LEAF_LAYOUTS} required')
+        if wide_nodes is not None and(leaf_layout!='wide'or type(wide_nodes)is not int or wide_nodes<=0):
+            raise ValueError('wide_nodes is a positive node capacity of the wide leaf layout')
+        self.leaf_layout=leaf_layout;self.wide_nodes=wide_nodes
         self.executor=executor;self.model=model;self.capacity=capacity;self.actor_capacity=actor_capacity;self.depth=depth
         self.k1_own=k1_own;self.k1_opp=k1_opp;self.block_lanes=block_lanes;self.blocks_per_call=blocks_per_call;self.selection=selection;self.fixed_capacity=fixed_capacity
         self.digest=digest;self.forward=forward if forward is not None else depth2.default_forward(model)
@@ -551,6 +722,51 @@ class DepthNPricer:
         k_own,k_opp=self.k_own[p-2],self.k_opp[p-2];leaf=p==self.depth;g=self.blocks_per_call
         return ('leaf'if leaf else'expand',b,g,k_own,k_opp),lambda:make_block_program(self.executor,params=self.params,forward=self.forward,
             nodes=b,blocks=g,k_own=k_own,k_opp=k_opp,leaf=leaf,digest=self.digest)
+
+    def _wide_geometry(self,p):
+        """(node capacity, lane capacity, forward chunk rows) of the wide leaf program at ply p: lanes = blocks_per_call*B*K,
+        chunk = B*K (the blocks program's forward rows), nodes = wide_nodes or lanes//16."""
+        k_own,k_opp=self.k_own[p-2],self.k_opp[p-2];chunk=block_nodes(self.block_lanes,k_own,k_opp)*k_own*k_opp;lanes=self.blocks_per_call*chunk
+        return(self.wide_nodes if self.wide_nodes is not None else max(1,lanes//16)),lanes,chunk
+
+    def _wide_leaf_program(self,p):
+        k_own,k_opp=self.k_own[p-2],self.k_opp[p-2];nodes,lanes,chunk=self._wide_geometry(p)
+        return ('leaf','wide',nodes,lanes,chunk,k_own,k_opp),lambda:make_wide_leaf_program(self.executor,params=self.params,forward=self.forward,
+            nodes=nodes,lanes=lanes,chunk=chunk,digest=self.digest)
+
+    def _wide_leaf(self,level,p,pw,pid,group,own_maps,opp_maps,owners,n):
+        """The leaf ply on the wide program: pack the enumerated lanes, one gather and one wide call per call (async), one
+        sync, then the dense placement. Returns (leaf arrays, the ply's work stats, host_pack seconds, ply_loop seconds,
+        device invocations). At the leaf the group is the learner actor, the forward's actor per chunk. The stats keep the
+        blocks fields (blocks = live forward chunks, lanes = evaluated_lanes = calls x lane capacity: every lane a call
+        steps) and add the compaction counts: packed nodes and lanes, the capacities, forward chunks (all, live) and rows,
+        what the blocks layout would run (dense_blocks, dense_calls, dense_lanes) and the packing's host seconds."""
+        k_own,k_opp=self.k_own[p-2],self.k_opp[p-2];K=k_own*k_opp;B=block_nodes(self.block_lanes,k_own,k_opp);G=self.blocks_per_call
+        nodes,lanes,chunk=self._wide_geometry(p);M=level['status'].shape[1];clock=time.perf_counter()
+        pack=pack_wide_leaf(group,own_maps[pw,pid]>=0,opp_maps[pw,pid]>=0,nodes=nodes,lanes=lanes,chunk=chunk);packing=time.perf_counter()-clock
+        chunk_actor=np.where(pack.chunk_group>=0,pack.chunk_group,0).astype(np.int32)
+        key,build=self._wide_leaf_program(p);small=[];host_pack=0.;invocations=0;started=time.perf_counter()
+        for c in range(pack.calls):
+            clock=time.perf_counter()
+            f=pack.call_nodes[c];f=np.where(f>=0,f,f[0]);bw,bid=pw[f],pid[f]   # node padding repeats the call's first node, never read by a live lane
+            requested=np.zeros((nodes,2),bool);requested[np.arange(nodes),owners[bw]]=level['own_requested'][bw,bid];requested[np.arange(nodes),1-owners[bw]]=level['opp_requested'][bw,bid]
+            rows,own_block,opp_block=level['row_of'][bw,bid],own_maps[bw,bid],opp_maps[bw,bid];host_pack+=time.perf_counter()-clock
+            states,publics=self._gather(level['pool'],rows)
+            args=(states,publics,j.asarray(owners[bw],j.int32),j.asarray(requested),j.asarray(own_block,j.int32),j.asarray(opp_block,j.int32),
+                j.asarray(pack.lane_node[c]),j.asarray(pack.lane_own[c]),j.asarray(pack.lane_opp[c]),j.asarray(pack.lane_live[c]),j.asarray(chunk_actor[c]))
+            small.append(self._program(key,build,*args)(*args));invocations+=2;del states,publics,args
+        level['pool']=None
+        small=jax.device_get(small);loop=time.perf_counter()-started
+        specs=[('status',(),np.int8),('value',(),np.float32),('error',(),np.int8)]+([('digest',(2,),np.uint32)]if self.digest else[])
+        fields={name:np.concatenate([s[name]for s in small])for name,_,_ in specs}if pack.calls else{}
+        out=place_wide_leaf(pack,fields,pw,pid,n,M,k_own,k_opp,specs)
+        groups=np.unique(group);dense_blocks=int(sum(-(-int(np.count_nonzero(group==g))//B)for g in groups))
+        live_chunks=int(np.count_nonzero(pack.chunk_group>=0))
+        stats=dict(ply=p,parents=len(pw),blocks=live_chunks,calls=pack.calls,blocks_per_call=G,lanes=pack.calls*lanes,evaluated_lanes=pack.calls*lanes,nodes_per_world=M*K,
+            layout='wide',packed_nodes=int(np.count_nonzero(pack.node_call>=0)),packed_lanes=len(pack.lane_pos),node_capacity=nodes,lane_capacity=lanes,
+            forward_chunk_rows=chunk,forward_chunks=pack.calls*G,forward_chunks_live=live_chunks,forward_rows=live_chunks*chunk,
+            dense_blocks=dense_blocks,dense_calls=-(-dense_blocks//G),dense_lanes=dense_blocks*B*K,pack_seconds=packing)
+        return out,stats,host_pack,loop,invocations
 
     def _gather(self,pool,rows):
         rows=j.asarray(rows,j.int32);key=('gather',jax.tree.leaves(pool)[0].shape[0],rows.shape[0])
@@ -657,6 +873,10 @@ class DepthNPricer:
             pw,pid=np.nonzero(level['status']==2)
             group=actors[pw,0]*(1 if leaf else len(params))+(0 if leaf else actors[pw,1])
             order=np.lexsort((pid,pw,group));pw,pid,group=pw[order],pid[order],group[order]
+            if leaf and self.leaf_layout=='wide':   # the wide leaf program (make_wide_leaf_program); expand plies stay blocks
+                leaves,stats,packing,loop,calls=self._wide_leaf(level,p,pw,pid,group,own_maps,opp_maps,owners,n)
+                host_pack+=packing;ply_loop+=loop;invocations+=calls;work.append(dict(stats,enumerated=int(np.count_nonzero(leaves['status']))))
+                break
             blocks=[]
             for g in np.unique(group):
                 members=np.flatnonzero(group==g)
@@ -726,6 +946,7 @@ class DepthNPricer:
             plies=tuple(work),enumerated_leaves=work[-1]['enumerated']if work else 0,evaluated_leaf_lanes=work[-1]['lanes']if work else 0,
             bytes_per_node_state=node_bytes)
         if source is not None:timing.update(source)
+        if self.leaf_layout!='blocks':timing.update(leaf_layout=self.leaf_layout)   # the default's timing keys are unchanged
         self.last_timing=timing
         frame=self._frame(t1,levels,count,leaves,timing)
         tag=None if source is None else source['world_source']
