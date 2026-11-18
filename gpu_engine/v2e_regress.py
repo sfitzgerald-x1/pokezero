@@ -797,8 +797,10 @@ def encoder_rule(entries, witness):
     event capture is complete and that actual/legacy outputs outside these
     seven leaves agree. Missing or malformed evidence fails closed.
 
+    A well-formed legacy digest mismatch leaves the entry for the existing
+    physics rules: legacy replay uses current physics, not baseline physics.
     Return remaining, explained, forced entries. The caller must append forced
-    entries to unexpected *after* ordinary effect, KO and waiver processing.
+    evidence failures to unexpected *after* ordinary effect, KO and waiver processing.
     """
     remaining, explained, forced = set(entries), [], []
     valid = (witness.get('version') == ENCODER_WITNESS_VERSION
@@ -808,7 +810,7 @@ def encoder_rule(entries, witness):
     for leaf, side in sorted(entries, key=str):
         if leaf not in ENCODER_SHAPES:
             continue
-        ok = False
+        corrected_ok, baseline_matches = False, False
         if valid and side in (0, 1):
             try:
                 actual = np.asarray(witness['actual'][leaf])
@@ -816,19 +818,19 @@ def encoder_rule(entries, witness):
                 legacy = np.asarray(witness['legacy'][leaf])
                 base = np.asarray(witness['base'][leaf])
                 shape = ENCODER_SHAPES[leaf]
-                ok = (actual.shape == expected.shape == shape
-                      and actual.dtype == expected.dtype == np.dtype('float32')
-                      and legacy.shape == base.shape == (2, 2)
-                      and legacy.dtype == base.dtype == np.dtype('uint32'))
-                if ok:
-                    ok = (bool(np.isfinite(actual[side]).all())
-                          and np.array_equal(actual[side].view(np.uint32), expected[side].view(np.uint32))
-                          and np.array_equal(legacy[side], base[side]))
+                corrected_ok = (actual.shape == expected.shape == shape
+                                and actual.dtype == expected.dtype == np.dtype('float32')
+                                and legacy.shape == base.shape == (2, 2)
+                                and legacy.dtype == base.dtype == np.dtype('uint32'))
+                if corrected_ok:
+                    corrected_ok = (bool(np.isfinite(actual[side]).all())
+                                    and np.array_equal(actual[side].view(np.uint32), expected[side].view(np.uint32)))
+                    baseline_matches = np.array_equal(legacy[side], base[side])
             except (KeyError, TypeError, ValueError, IndexError):
-                ok = False
-        if ok:
+                corrected_ok = False
+        if corrected_ok and baseline_matches:
             remaining.remove((leaf, side));explained.append((leaf, side))
-        else:
+        elif not corrected_ok:
             forced.append((leaf, side))
     return remaining, explained, forced
 

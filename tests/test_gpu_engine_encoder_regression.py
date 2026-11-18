@@ -9,7 +9,7 @@ from unittest import mock
 
 import numpy as np
 
-from gpu_engine.v2e_regress import ENCODER_SHAPES, ENCODER_WITNESS_VERSION, encoder_rule
+from gpu_engine.v2e_regress import ENCODER_SHAPES, ENCODER_WITNESS_VERSION, encoder_rule, lane_verdict
 from gpu_engine import encoder_regression_witness as ew
 from gpu_engine import encoder_regression_trace as et
 
@@ -199,7 +199,7 @@ class EncoderEventFoldTests(unittest.TestCase):
         self.assertEqual(encoder_rule({entry}, receipt['lanes'][0]), (set(), [entry], []))
         trace['legacy'][ew.TAKEN][0, 0, 0] = np.uint32(1)
         receipt = ew.make_encoder_witness(pre, trace, base)
-        self.assertEqual(encoder_rule({entry}, receipt['lanes'][0]), ({entry}, [], [entry]))
+        self.assertEqual(encoder_rule({entry}, receipt['lanes'][0]), ({entry}, [], []))
 
     def test_witness_builder_retains_error_without_any_changed_entries(self):
         pre, trace, base = self.witness_inputs()
@@ -258,10 +258,30 @@ class EncoderRegressionRuleTests(unittest.TestCase):
         self.assertEqual(explained, [(n, 0)])
         self.assertEqual(forced, [(n, 1)])
 
-    def test_shadow_mismatch_is_forced_even_when_corrected_array_matches(self):
-        w = evidence();n = 'trackers.public_port.hazards'
-        w['legacy'][n][0, 0] ^= np.uint32(1)
-        self.assert_forced(w, (n, 0))
+    def test_shadow_mismatch_requires_existing_physics_involvement(self):
+        w = evidence();entry = ('trackers.damage_history.taken', 0)
+        w['legacy'][entry[0]][0, 0] ^= np.uint32(1)
+        remaining, explained, forced = encoder_rule({entry}, w)
+        self.assertEqual((remaining, explained, forced), ({entry}, [], []))
+        self.assertEqual(lane_verdict(remaining, {'gigadrain': [1]}, {}), ([], [], []))
+        self.assertEqual(lane_verdict(remaining, {}, {}), ([entry], [], []))
+
+    def test_corrected_corruption_remains_forced_with_physics_involvement(self):
+        w = evidence();entry = ('trackers.damage_history.taken', 0)
+        w['legacy'][entry[0]][0, 0] ^= np.uint32(1)
+        w['actual'][entry[0]][0, 0, 1] = np.float32(0.5)
+        remaining, explained, forced = encoder_rule({entry}, w)
+        self.assertEqual(lane_verdict(remaining, {'gigadrain': [1]}, {}), ([], [], []))
+        self.assertEqual(explained, [])
+        self.assertEqual(forced, [entry])
+
+    def test_malformed_legacy_digests_are_forced(self):
+        entry = ('trackers.damage_history.taken', 0)
+        for key in ('legacy', 'base'):
+            for invalid in (np.zeros((2, 3), np.uint32), np.zeros((2, 2), np.float32)):
+                with self.subTest(key=key, shape=invalid.shape, dtype=invalid.dtype):
+                    w = evidence();w[key][entry[0]] = invalid
+                    self.assert_forced(w, entry)
 
     def test_missing_or_incomplete_evidence_is_forced(self):
         n = 'trackers.damage_history.dealt'
