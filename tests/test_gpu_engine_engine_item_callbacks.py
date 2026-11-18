@@ -84,11 +84,11 @@ class ItemCallbacksTests(unittest.TestCase):
             if isinstance(node, list):
                 return [canonical(value) for value in node]
             return node
-        # Re-certify these complete functions against the integrated baseline;
+        # Infatuation re-certifies _lum_update; after_status_event retains the integrated baseline;
         # normalize only the same explicit disabled status observer as before.
         for function,path in ((transition._lum_update,'gpu_engine/transition.py'),
                               (secondary.after_status_event,'gpu_engine/secondary.py')):
-            frozen=ast.parse(subprocess.check_output(['git','show','b8092a85:'+path],text=True))
+            frozen=ast.parse(subprocess.check_output(['git','show',('233bf444:' if function.__name__=='_lum_update' else 'b8092a85:')+path],text=True))
             reference=next(n for n in frozen.body if isinstance(n,ast.FunctionDef)and n.name==function.__name__)
             expected=hashlib.sha256(json.dumps(canonical(StripTrace().visit(reference)),separators=(',',':')).encode()).hexdigest()
             parsed = ast.parse(inspect.getsource(function)).body[0]

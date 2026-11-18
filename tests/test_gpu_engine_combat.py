@@ -43,13 +43,15 @@ class CombatTests(unittest.TestCase):
         return self.tr.step(s,actions,self.table if table is None else table)
 
     def test_guts_all_statuses_physical_only_and_exact_item_chain(self):
+        # The modifier is the event's Q12 chain over 4096 (damage modifiers: ability x item chained, not multiplied).
         j = self.j
         num,den = self.c.attack_modifier(self.ct,j.ones(7,j.int32),j.arange(7),True)
-        self.assertEqual(num.tolist(),[1,3,3,3,3,3,3])
-        self.assertEqual(den.tolist(),[1,2,2,2,2,2,2])
+        self.assertEqual(num.tolist(),[4096,6144,6144,6144,6144,6144,6144])
+        self.assertEqual(den.tolist(),[4096]*7)
         num,den = self.c.attack_modifier(self.ct,j.array([1]),j.array([self.m.BRN]),False,item_num=3,item_den=2)
-        self.assertEqual((num.tolist(),den.tolist()),([3],[2]))
+        self.assertEqual((num.tolist(),den.tolist()),([6144],[4096]))
         num,den = self.c.attack_modifier(self.ct,j.array([1]),j.array([self.m.BRN]),True,item_num=3,item_den=2)
+        self.assertEqual((num.tolist(),den.tolist()),([9216],[4096]))
         self.assertEqual(int(self.m.modify(103,num,den)[0]),232)
 
     def test_thick_fat_changes_base_power_with_gen3_rounding(self):

@@ -38,7 +38,7 @@ class PublicPortTests(unittest.TestCase):
         # Public copy announces holder only, not a guessed phase.
         h.reveal_ability(c,state,0,yes,ability=j.array([1],j.int32),original=False)
         self.assertFalse(bool(c.trackers.public_port.known[0,0]))
-        result=m.BeforeMove(j.array([0]),j.array([0]),j.array([0]),j.array([False]),j.array([False]))
+        result=m.BeforeMove(j.array([0]),j.array([0]),j.array([0]),j.array([False]),j.array([False]),j.array([False]))
         h.before_move(c,state,0,result,yes,loafing=yes)
         self.assertTrue(bool(view()))
         # Actual sleep/freeze block precedes Truant; do not anchor a hidden phase.

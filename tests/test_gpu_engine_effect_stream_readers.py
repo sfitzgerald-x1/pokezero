@@ -28,65 +28,57 @@ FIELD_STRINGS = frozenset({'effect', 'effect_draws'})   # a string naming the fi
 GATES = frozenset({'_second', '_yawn_counter', '_yawn_holder', '_yawn_sleep', '_wrap_holder', '_wrap_held', '_wrap_tick',
                    '_perish_continues', '_perish_holder', '_perish_first', 'tie', 'event_keys'})
 
+# Snapshot rendering uses the CI Python 3.13 ast.unparse formatter.
 # (enclosing function, the expression around the use, digest of the enclosing statement) -> count
+# Infatuation review: old columns/saved replay are unchanged, the independent
+# fifth column is observed for an existing relation or same-turn opposing Attract.
 REVIEWED = {
-    # step_with_public: a missing ChanceInputs is sampled (the sampled path, never an enumerated one)
-    ('step_with_public', 'chance_inputs is None', '1455bf5b131674e9'): 1,
-    ('step_with_public', 'sample_chance_inputs(state) if chance_inputs is None else chance_inputs', '1455bf5b131674e9'): 1,
-    # step_with_chance: the shape check over every field, and the six non-effect fields read by attribute
-    ('step_with_chance', 'zip(chance_inputs, shapes, strict=True)', 'fa1719d7f1411a5c'): 1,
+    ('step_with_chance', '(effect_draws, effect_chance(splits[:, 1])[..., 4:])', 'a2d13e46f33d9f41'): 1,
+    ('step_with_chance', '_effect = effect_draws[rows, side]', '7f5df1dc7c8e6bf2'): 1,
+    ('step_with_chance', '_effect[:, 0]', '5a8ffe9b41bf21f8'): 1,
+    ('step_with_chance', '_effect[:, 0]', 'd3837b047324fe45'): 1,
+    ('step_with_chance', '_effect[:, 1]', 'd8920e3f51f499bc'): 1,
+    ('step_with_chance', '_effect[:, 1]', 'f743e714554dfea8'): 1,
     ('step_with_chance', 'chance_inputs.draws', '653cd7a43c8cba1a'): 1,
+    ('step_with_chance', 'chance_inputs.effect', '89911b9f6b3ff76e'): 1,
     ('step_with_chance', 'chance_inputs.entry_ties', '57f87950e8336da9'): 1,
     ('step_with_chance', 'chance_inputs.initial_tie', '80e55ffb01720a47'): 1,
     ('step_with_chance', 'chance_inputs.initial_tie', '9b7a3d3766e1c57c'): 1,
     ('step_with_chance', 'chance_inputs.phazing', '01581d9737c0f395'): 1,
     ('step_with_chance', 'chance_inputs.secondary', 'f5b5a9ab28d576ff'): 1,
     ('step_with_chance', 'chance_inputs.sleep_talk', '6be5687bad2958b1'): 1,
-    # the step's effect block: the caller's ChanceInputs.effect, sampled when None, the saved block when resuming
-    ('step_with_chance', 'chance_inputs.effect', '89911b9f6b3ff76e'): 1,
     ('step_with_chance', 'effect_draws = chance_inputs.effect', '89911b9f6b3ff76e'): 2,
-    ('step_with_chance', 'effect_draws is None', 'fedd903f55b03880'): 1,
     ('step_with_chance', 'effect_draws = effect_chance(splits[:, 1])', '0f130d6ceb9f662e'): 1,
-    ('step_with_chance', 'effect_draws = jnp.where(resuming[:, None, None], state.effect_draws, effect_draws)',
-     'b46e3faddf766b3e'): 1,
-    ('step_with_chance', 'jnp.where(resuming[:, None, None], state.effect_draws, effect_draws)', 'b46e3faddf766b3e'): 2,
-    # effect.s.0 / effect.s.1: Bonemerang's second hit, read only under _second. Column 0 is the crit check (== 0, or
-    # crits.is_critical's high-crit threshold); column 1 is the damage roll 85+d in both damage calls.
-    ('step_with_chance', '_effect = effect_draws[rows, side]', '7f5df1dc7c8e6bf2'): 1,
-    ('step_with_chance', 'effect_draws[rows, side]', '7f5df1dc7c8e6bf2'): 1,
-    ('step_with_chance', '_effect[:, 0]', '5a8ffe9b41bf21f8'): 1,
-    ('step_with_chance', '_effect[:, 0]', '03f7a7675074d496'): 1,
-    ('step_with_chance', '_effect[:, 1]', 'd8920e3f51f499bc'): 1,
-    ('step_with_chance', '_effect[:, 1]', 'f743e714554dfea8'): 1,
-    # effect.0.3: the Wrap pair tie bit
+    ('step_with_chance', 'effect_draws = jnp.concatenate((effect_draws, effect_chance(splits[:, 1])[..., 4:]), axis=-1)', 'a2d13e46f33d9f41'): 1,
+    ('step_with_chance', 'effect_draws = jnp.where(resuming[:, None, None], state.effect_draws, effect_draws)', 'b46e3faddf766b3e'): 1,
+    ('step_with_chance', 'effect_draws is None', 'fedd903f55b03880'): 1,
+    ('step_with_chance', 'effect_draws.shape', 'e62018b93d213ded'): 1,
     ('step_with_chance', 'effect_draws[:, 0, 3, None]', '3d5baa07a30ba9d5'): 1,
-    # effect.s.2: Yawn's sleep duration 2+d on the drowsy mon's side
-    ('step_with_chance', 'effect_draws[rows, side, 2]', 'ea96e049c275d980'): 1,
-    # effect.s.2, fidelity tier D: an Effect Spore sleep's duration 2+d on the attacker's side, passed as sleep_roll to the
-    # two secondary.apply_contact calls and to the Pursuit intercept's (secondary.apply_contact reads it only for a
-    # contact hit on an Effect Spore holder whose draw put the attacker to sleep; the plans observe effect.s.2 then).
-    ('step_with_chance', 'effect_draws[:, side, 2]', '817f323b84511227'): 1,
-    ('step_with_chance', 'effect_draws[rows, side, 2]', '453f2ff1f5dc7438'): 1,
-    ('step_with_chance', 'effect_draws[rows, side, 2]', '83200148dadb1808'): 1,
-    # effect.1.3: the Perish pair tie, used only when the end speeds are equal
     ('step_with_chance', 'effect_draws[:, 1, 3]', '6ce6f3f90b0dd01e'): 1,
-    # the save of the block into state.effect_draws when the residual is deferred (a suspended turn)
-    ('step_with_chance', 'jnp.where(defer_residual[:, None, None], effect_draws, 0)', 'fe528e3dd29798d3'): 1,
-    # the gates: Bonemerang's second hit (hits > 1, so Bonemerang alone), the Yawn sleep (count 1 before the decrement), the
-    # Wrap and Perish holders and the residual order's tie and event keys
+    ('step_with_chance', 'effect_draws[:, side, 2]', '817f323b84511227'): 1,
+    ('step_with_chance', 'effect_draws[rows, side, 2]', 'e16344807b2214e1'): 1,
+    ('step_with_chance', 'effect_draws[rows, side, 2]', 'e3536277377b7b2a'): 1,
+    ('step_with_chance', 'effect_draws[rows, side, 2]', 'ea96e049c275d980'): 1,
+    ('step_with_chance', 'effect_draws[rows, side, 4]', '57342f1bbef6bd5b'): 1,
+    ('step_with_chance', 'effect_draws[rows, side]', '7f5df1dc7c8e6bf2'): 1,
+    ('step_with_chance', 'gate _perish_continues', 'c56f7684931b73f4'): 1,
+    ('step_with_chance', 'gate _perish_first', '6ce6f3f90b0dd01e'): 1,
+    ('step_with_chance', 'gate _perish_holder', 'c3217ad029f1bd93'): 1,
     ('step_with_chance', 'gate _second', 'c9e42262b234db09'): 1,
+    ('step_with_chance', 'gate _wrap_held', '22569d4bbf65f598'): 1,
+    ('step_with_chance', 'gate _wrap_holder', '7a99fb53264f7804'): 1,
+    ('step_with_chance', 'gate _wrap_tick', 'd01dc288c92376e7'): 1,
     ('step_with_chance', 'gate _yawn_counter', 'e8e7928c1fd8ab6e'): 1,
     ('step_with_chance', 'gate _yawn_holder', 'f39efe625b1ee9be'): 1,
     ('step_with_chance', 'gate _yawn_sleep', '0088b5859e70205d'): 1,
     ('step_with_chance', 'gate _yawn_sleep', 'c57fe97b2ab6eeec'): 1,
-    ('step_with_chance', 'gate _wrap_holder', '7a99fb53264f7804'): 1,
-    ('step_with_chance', 'gate _wrap_held', '22569d4bbf65f598'): 1,
-    ('step_with_chance', 'gate _wrap_tick', 'd01dc288c92376e7'): 1,
-    ('step_with_chance', 'gate _perish_continues', 'c56f7684931b73f4'): 1,
-    ('step_with_chance', 'gate _perish_holder', 'c3217ad029f1bd93'): 1,
-    ('step_with_chance', 'gate _perish_first', '6ce6f3f90b0dd01e'): 1,
-    ('step_with_chance', 'gate tie', '3d5baa07a30ba9d5'): 1,
     ('step_with_chance', 'gate event_keys', '06962d48c87c7b2f'): 1,
+    ('step_with_chance', 'gate tie', '3d5baa07a30ba9d5'): 1,
+    ('step_with_chance', 'jnp.where(defer_residual[:, None, None], effect_draws, 0)', 'fe528e3dd29798d3'): 1,
+    ('step_with_chance', 'jnp.where(resuming[:, None, None], state.effect_draws, effect_draws)', 'b46e3faddf766b3e'): 2,
+    ('step_with_chance', 'zip(chance_inputs, shapes, strict=True)', 'fa1719d7f1411a5c'): 1,
+    ('step_with_public', 'chance_inputs is None', '1455bf5b131674e9'): 1,
+    ('step_with_public', 'sample_chance_inputs(state) if chance_inputs is None else chance_inputs', '1455bf5b131674e9'): 1,
 }
 
 
@@ -109,9 +101,8 @@ def sleep_roll_readers():
                 found[(name, *key)] += count;statements[(name, *key)] = texts[key]
     return found, statements
 SLEEP_ROLL_REVIEWED = {
-    # transition passes effect[s][2] on; pursuit.intercept passes it to its contact call
-    ('pursuit.py', 'intercept', 'jnp.zeros_like(contact_roll) if sleep_roll is None else sleep_roll', 'bfc3b378824dcab0'): 1,
-    ('pursuit.py', 'intercept', 'sleep_roll is None', 'bfc3b378824dcab0'): 1,
+    ('pursuit.py', 'intercept', 'jnp.zeros_like(contact_roll) if sleep_roll is None else sleep_roll', 'ba6d07bd01c4aa50'): 1,
+    ('pursuit.py', 'intercept', 'sleep_roll is None', 'ba6d07bd01c4aa50'): 1,
     ('secondary.py', 'apply_contact', 'gate proc', '4223e413f02161c2'): 1,
     ('secondary.py', 'apply_contact', 'gate rolled', '3becf7407f15669f'): 1,
     ('secondary.py', 'apply_contact', 'gate slept', '4ea0471ca753fbc2'): 1,

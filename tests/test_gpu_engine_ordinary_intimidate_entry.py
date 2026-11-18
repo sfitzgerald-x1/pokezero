@@ -59,6 +59,22 @@ def strip_m2_volatiles(depart,*,required=False):
  return depart
 
 
+INFATUATION_DEPART=ast.parse("""from . import infatuation
+state=infatuation.source_departed(state,side,eligible=eligible)""").body
+
+
+def strip_infatuation_departure(depart,*,required=False):
+ """Erase only the exact, once-only source-departure prefix, before all old entry physics."""
+ prefix=1 if isinstance(depart.body[0],ast.Expr)and isinstance(depart.body[0].value,ast.Constant)and isinstance(depart.body[0].value.value,str)else 0
+ imports=[n for n in ast.walk(depart)if isinstance(n,ast.ImportFrom)and any(a.name=='infatuation'for a in n.names)]
+ calls=[n for n in ast.walk(depart)if isinstance(n,ast.Call)and isinstance(n.func,ast.Attribute)and n.func.attr=='source_departed']
+ if required or imports or calls:
+  assert len(imports)==len(calls)==1,'entry.depart: infatuation prefix missing or repeated'
+  assert [ast.dump(n)for n in depart.body[prefix:prefix+2]]==[ast.dump(n)for n in INFATUATION_DEPART], 'entry.depart: infatuation prefix changed or moved'
+  del depart.body[prefix:prefix+2]
+ return depart
+
+
 # Transform's approved entry physics change (gpu_engine/transform.py): the module imports transform, departure reverts a
 # transformed active (after the Natural Cure read) and keeps its Truant clock (Showdown's truantTurn is a Pokemon field),
 # and entry writes the clock only for a Truant holder. Each piece is removed or restored only when it is exactly this code.
@@ -107,8 +123,9 @@ def strip_transform_module(tree,*,required=False):
  return tree
 
 
-def default_entry_program(text):
+def default_entry_program(text,*,require_infatuation=False):
  tree=ast.parse(text)
+ strip_infatuation_departure(next(n for n in tree.body if isinstance(n,ast.FunctionDef)and n.name=='depart'),required=require_infatuation)
  strip_transform_module(tree)
  strip_m1_recharge(next(n for n in tree.body if isinstance(n,ast.FunctionDef)and n.name=='depart'))
  strip_m2_volatiles(next(n for n in tree.body if isinstance(n,ast.FunctionDef)and n.name=='depart'))
@@ -235,17 +252,30 @@ class OrdinaryIntimidateEntryTests(unittest.TestCase):
   self.assertFalse(bool((clean.refusal[:7]&512).any()));self.assertFalse(bool((clean.refusal[:7]&256).any()))
  def test_original_default_ast_constructor_api_and_source_callback(self):
   path=Path('gpu_engine/entry.py');old=subprocess.check_output(['git','show','f3c9dbea:'+str(path)],text=True)
-  self.assertEqual(default_entry_program(old),default_entry_program(path.read_text()))
+  self.assertEqual(default_entry_program(old),default_entry_program(path.read_text(),require_infatuation=True))
   for old_numeric,new_numeric in [('jnp.maximum(-6,old-1)','jnp.maximum(-5,old-1)'),
       ('jnp.maximum(-6,old-1)','jnp.maximum(-6,old-2)')]:
    self.assertIn(old_numeric,path.read_text())
    self.assertNotEqual(default_entry_program(old),
-    default_entry_program(path.read_text().replace(old_numeric,new_numeric)))
+    default_entry_program(path.read_text().replace(old_numeric,new_numeric),require_infatuation=True))
   original=ast.parse(subprocess.check_output(['git','show','f3c9dbea:gpu_engine/engine_intimidate_callbacks.py'],text=True))
   current=ast.parse(Path('gpu_engine/engine_intimidate_callbacks.py').read_text())
   for name in('_constructor','record_device'):
    self.assertEqual(ast.dump(next(n for n in original.body if isinstance(n,ast.FunctionDef)and n.name==name)),ast.dump(next(n for n in current.body if isinstance(n,ast.FunctionDef)and n.name==name)))
   initial_fixture.InitialIntimidateOwningTests.test_default_entry_ast_unchanged_and_original_gen3_callback_pair(self)
+ def test_infatuation_departure_normalization_rejects_missing_changed_and_moved_prefix(self):
+  source=Path('gpu_engine/entry.py').read_text()
+  prefix='    from . import infatuation\n    state=infatuation.source_departed(state,side,eligible=eligible)\n'
+  self.assertEqual(source.count(prefix),1)
+  row='    rows=jnp.arange(state.hp.shape[0]);active=state.active[rows,side]\n'
+  self.assertIn(prefix+row,source)
+  mutants=[source.replace(prefix,''),source.replace(prefix,prefix+prefix),
+   source.replace(prefix,prefix.replace('eligible=eligible','eligible=~eligible')),
+   source.replace(prefix,prefix.replace('state,side,','state,1-side,')),
+   source.replace(prefix+row,row+prefix)]
+  for index,changed in enumerate(mutants):
+   with self.subTest(mutation=index):
+    with self.assertRaises(AssertionError):default_entry_program(changed,require_infatuation=True)
  def test_all_four_global_namespaces_require_exact_uint32_eight_before_context(self):
   names=('engine_binding','source_binding','move_binding','producer_binding')
   fields={name:j.arange(8,dtype=j.uint32)for name in names}
