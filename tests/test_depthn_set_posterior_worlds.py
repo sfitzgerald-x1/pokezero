@@ -161,6 +161,7 @@ class ProtocolRoute(unittest.TestCase):
         rows_of(posts) and trap-free own agreement facts (Detached: other own reads raise 'reached-after-posterior-checks'); the
         tail facts, removals and preflight are patched clear."""
         data, root = self.root(name)
+        self.assertNotIn('ingrain', root.materialization_payload['sides'][f'p{root.address.owner+1}']['volatiles'])
         inputs = self.inputs(data)
         inputs = pw.ProtocolInputs(Detached(root.address), inputs.lines, inputs.catalog, {}, inputs.source)
         posts = self.posts(data)
