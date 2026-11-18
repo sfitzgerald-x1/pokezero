@@ -37,7 +37,11 @@ Deliberately stricter than the r5a census (each can only refuse a strike the cen
 Weights are integers, reduced by their gcd (uniform weights are all 1) and never floats, so every consumer and process gets
 the same bytes. draw() with all-equal weights makes exactly today's sampler call (rng.randrange over the survivors in source
 order, determinization._sample_revealed_opponent_fixture), so worlds of roots without damage narrowing are byte-identical.
-Stage 1 has a uniform prior (generator_weights must be None); our strikes on them are out of scope.
+Without a bound joint payload this is the stage-1 uniform prior. Stage 2 can
+export the admitted whole-team law's integer marginals through generator_weights;
+those marginals do not authorize independent per-species team sampling. Under
+certified truncation support is conservative and can include zero lower mass.
+Our strikes on them are out of scope.
 """
 from __future__ import annotations
 
@@ -120,7 +124,7 @@ class EncounterPosterior:
     seat: str                       # the opponent's seat
     species: str                    # species key (tier2._species_key)
     hard: tuple[bool, ...]          # the hard-fact support (today's reveals), per variant of the source list, in source order
-    support: tuple[bool, ...]       # weights > 0: the hard support narrowed by the admitted strikes
+    support: tuple[bool, ...]       # positive weights, or conservative upper support under certified truncation
     weights: tuple[int, ...]        # integer weights, 0 outside the support, gcd-reduced (uniform weights are all 1)
     strikes: tuple[Strike, ...]
     refusals: tuple[str, ...]       # root-level codes (e.g. PUBLIC_SET_POSTERIOR_B2_DISAGREEMENT)

@@ -57,7 +57,8 @@ class JointSession:
         posts = set_posterior.posterior(lines, context.public_materialization_state.self_request,
             source=self.source, owner=view.self_slot, beliefs=view.opponent_pokemon,
             format_id=context.format_id, dex=dex, binding=binding)
-        evidence = self._evidence(context, view, posts)
+        stage1_posts={}
+        evidence = self._evidence(context, view, posts,stage1_posts=stage1_posts)
         fixed = self._generation_slots(lines, view.opponent_slot)
         # Owning initial-team decoding is inside the admission boundary too.
         try:
@@ -78,6 +79,7 @@ class JointSession:
             mode, reason, tv = outcome.mode, outcome.reason, outcome.tv_bound
         elapsed = perf_counter() - started
         game = set_posterior.game_lines_sha256(lines)
+        if teams is None:posts=stage1_posts
         if features and payload is None:
             rows={}
             for key,post in posts.items():
@@ -93,7 +95,7 @@ class JointSession:
             payload['game_sha256']=game
             payload['payload_sha256']=hashlib.sha256(json.dumps(payload,sort_keys=True,
                 separators=(',',':')).encode()).hexdigest()
-        original_posts=posts
+        original_posts=stage1_posts
         if teams is not None:
             posts={key:replace(post,weights=tuple(payload['rows'][canonical_gen3_randbat_species_id(key)]['weights']),
                 support=tuple(payload['rows'][canonical_gen3_randbat_species_id(key)]['support']),provenance=payload['provenance'])
@@ -147,7 +149,7 @@ class JointSession:
                 return {0: canonical_gen3_randbat_species_id(p[3].split(',')[0])}
         return {}
 
-    def _evidence(self, context, view, posts):
+    def _evidence(self, context, view, posts,*,stage1_posts=None):
         constraints = worlds._public_opponent_move_slot_constraints(context, view.opponent_slot)
         evidence = {}
         for belief in view.opponent_pokemon:
@@ -156,17 +158,21 @@ class JointSession:
             slot = constraints.get(worlds._normalize_species_id(belief.species), {})
             hp = worlds._condition_max_hp(belief.condition)
             likelihood = []
-            for variant, weight in zip(self.source.universe_for(belief.species).variants, post.weights):
+            sampler_indices=[]
+            for index,(variant, weight) in enumerate(zip(self.source.universe_for(belief.species).variants, post.weights)):
                 payload = variant.to_summary()
                 valid = (not hp or worlds._variant_public_max_hp(payload, fallback_species=belief.species,
                          set_source=self.source) == hp)
-                original_item=getattr(belief,'original_public_item',None)
-                if original_item:
-                    valid=valid and normalize_id(variant.item or '')==normalize_id(original_item)
                 if valid and slot:
                     valid = worlds._fixture_from_variant_payload(payload, fallback_species=belief.species,
                         set_source=self.source, move_slot_constraints=slot, gender=belief.gender) is not None
+                if valid and post.hard[index]:sampler_indices.append(index)
+                original_item=getattr(belief,'original_public_item',None)
+                if original_item:
+                    valid=valid and normalize_id(variant.item or '')==normalize_id(original_item)
                 likelihood.append(weight if valid else 0)
+            if stage1_posts is not None:
+                stage1_posts[set_posterior.species_key(belief.species)]=set_posterior.restrict(post,sampler_indices)if sampler_indices else post
             evidence[species] = tuple(likelihood)
         return evidence
 

@@ -14,6 +14,24 @@ from tests.test_depthn_set_posterior_worlds import ProtocolRoute
 from tests.test_depthn_set_posterior import fixture
 
 
+class JointEvidenceArithmetic(unittest.TestCase):
+    def test_fallback_features_use_the_actual_restricted_stage1_law(self):
+        session=JointSession.__new__(JointSession)
+        variants=tuple(NS(item='Leftovers',to_summary=lambda i=i:{'index':i})for i in range(2))
+        session.source=NS(universe_for=lambda name:NS(variants=variants))
+        belief=NS(species='a',condition='42/42',gender=None,original_public_item=None)
+        view=NS(opponent_slot='p2',opponent_pokemon=(belief,))
+        post=SP.EncounterPosterior('p2','a',(True,True),(True,False),(3,0),(),(),'fixture')
+        fallback={}
+        with patch.object(D,'_public_opponent_move_slot_constraints',return_value={}), \
+             patch.object(D,'_condition_max_hp',return_value=42), \
+             patch.object(D,'_variant_public_max_hp',side_effect=lambda payload,**kw:42 if payload['index']==1 else 99):
+            evidence=session._evidence(None,view,{'a':post},stage1_posts=fallback)
+        self.assertEqual(evidence,{'a':(0,0)})
+        self.assertEqual(fallback['a'].weights,(0,1))
+        self.assertEqual(fallback['a'].hard,post.hard)
+
+
 class JointProtocol(ProtocolRoute):
     # Reuse root/source construction, not inherited verification cases.
     def test_joint_draw_bypasses_both_independent_draws(self):
