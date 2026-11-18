@@ -106,7 +106,7 @@ class RunChecksTests(unittest.TestCase):
         checkpoint it starts from) may be off: the plan's declaration wins."""
         from gpu_engine.private_self_moves import check_run_actor
         on, off = {'self_moves': True}, {}
-        for meta, plan_on, iteration, ok in ((off, False, 0, True), (on, True, 3, True), (off, True, -1, True), (on, True, -1, True),
+        for meta, plan_on, iteration, ok in ((off, False, 0, True), (on, True, 3, True), (off, True, -1, False), (on, True, -1, True),
                                              (off, True, 0, False), (on, False, -1, False), (on, False, 2, False)):
             if ok:check_run_actor(meta, plan_self_moves=plan_on, iteration=iteration, context='t')
             else:
@@ -117,14 +117,15 @@ class RunChecksTests(unittest.TestCase):
         from gpu_engine import v2_fused
         model = object()
         for meta, plan_on, iteration, ok in (({}, False, 0, True), ({'self_moves': True}, True, 0, True),
-                                             ({}, True, -1, True), ({'self_moves': True}, False, -1, False), ({}, True, 0, False)):
+                                             ({}, True, -1, False), ({'self_moves': True}, False, -1, False), ({}, True, 0, False)):
             snapshot = SimpleNamespace(archive='a.npz', archive_sha256='a' * 64, checkpoint_sha256='b' * 64, iteration=iteration)
             plan = SimpleNamespace(model=SimpleNamespace(category_vocabulary_sha256='c' * 64,
                 label_vocabulary=SimpleNamespace(sha256='d' * 64)), self_moves=plan_on)
             with mock.patch('gpu_engine.v5_model.load', return_value=(model, plan.model, meta)):
                 if ok:self.assertIs(v2_fused.load_actor(plan, snapshot, '/unit'), model)
                 else:
-                    with self.assertRaisesRegex(ValueError, 'differs from the plan'):v2_fused.load_actor(plan, snapshot, '/unit')
+                    message='verified original initializer' if plan_on and iteration==-1 else 'differs from the plan'
+                    with self.assertRaisesRegex(ValueError, message):v2_fused.load_actor(plan, snapshot, '/unit')
 
     def test_unthreaded_tools_refuse_an_on_archive(self):
         from gpu_engine.private_self_moves import refuse_unthreaded

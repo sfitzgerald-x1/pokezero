@@ -3,7 +3,7 @@
 Evidence is external to legacy checkpoint/archive bytes. An expectation is an
 assertion, never evidence and never permission to relabel saved weights.
 """
-from dataclasses import dataclass
+from dataclasses import dataclass, asdict
 import hashlib
 import io
 import json
@@ -204,7 +204,7 @@ def verified_run(run):
     return root, declaration, events
 
 
-def run_checkpoint(run, relative, digest, *, iteration=None, require_snapshot=False):
+def run_checkpoint(run, relative, digest, *, iteration=None, require_snapshot=False, expected_snapshot=None):
     root, declaration, events = verified_run(run)
     path = (root/relative).resolve()
     if not path.is_relative_to(root):raise ValueError('owned run checkpoint required')
@@ -223,6 +223,9 @@ def run_checkpoint(run, relative, digest, *, iteration=None, require_snapshot=Fa
             and e['payload'].get('checkpoint_sha256') == digest
             and e['payload'].get('iteration') == records[0]['iteration'] for e in events):
         raise ValueError('original SNAPSHOT checkpoint binding required')
+    if expected_snapshot is not None and sum(e['kind']=='SNAPSHOT' and e['payload']==asdict(expected_snapshot)
+            for e in events)!=1:
+        raise ValueError('exact original SNAPSHOT binding required')
     proof = None
     if not declaration.get('self_moves', False):
         proof = TrustedOffProvenance(_SEAL, checked.sha256, checked.payload['metadata_sha256'], 'run:'+str(root))
@@ -233,22 +236,30 @@ def run_checkpoint(run, relative, digest, *, iteration=None, require_snapshot=Fa
 @dataclass(frozen=True, init=False)
 class WeightsOnlyInitializer:
     checkpoint_sha256: str
+    archive_sha256: str
 
-    def __init__(self, seal, digest):
+    def __init__(self, seal, digest, archive_digest):
         if seal is not _SEAL:raise ValueError('verified original initializer required')
         object.__setattr__(self, 'checkpoint_sha256', digest)
+        object.__setattr__(self, 'archive_sha256', archive_digest)
 
 
 def original_initializer(run, snapshot):
+    from .v5_run import Snapshot
+    if type(snapshot) is not Snapshot:raise ValueError('original typed initializer snapshot required')
     if snapshot.iteration != -1:raise ValueError('only original iteration -1 weights-only initialization permitted')
     checked, _, proof = run_checkpoint(run, snapshot.checkpoint, snapshot.checkpoint_sha256,
-        iteration=-1, require_snapshot=True)
+        iteration=-1, require_snapshot=True, expected_snapshot=snapshot)
     metadata = checked.metadata; section = checked.payload.get('v2')
     if (type(metadata.get('steps')) is not int or type(metadata.get('rows')) is not int
             or metadata['steps'] != 0 or metadata['rows'] != 0 or metadata.get('progress') is not None
             or section is not None and (section.get('steps') != 0 or section.get('rows') != 0 or section.get('cursor') is not None)):
         raise ValueError('untrained original iteration -1 initializer required')
-    return WeightsOnlyInitializer(_SEAL, checked.sha256), proof
+    if snapshot.model_sha256!=_sha(metadata['model']):raise ValueError('original initializer model binding differs')
+    root=Path(run).resolve();archive=(root/snapshot.archive).resolve()
+    if not archive.is_relative_to(root) or _snapshot(archive)[1]!=snapshot.archive_sha256:
+        raise ValueError('original initializer archive binding differs')
+    return WeightsOnlyInitializer(_SEAL, checked.sha256,snapshot.archive_sha256), proof
 
 
 def resolve_champion_self_moves(blob, payload, *, expected_self_moves=None, off_provenance=None):

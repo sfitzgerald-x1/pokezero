@@ -160,10 +160,12 @@ class RuntimeDeclarationTests(unittest.TestCase):
         runtime=v5_training.create(*cfg,enable_v5=True,self_moves=self_moves)
         runtime.steps=steps
         checkpoint=store.checkpoint(runtime,iteration=-1 if steps==0 else 0)
+        archive_blob=b'authored original initializer archive'
+        (root/'unused.npz').write_bytes(archive_blob)
         # The relationship itself is needed for initializer verification; no
         # actual game/model evaluation is involved in this synthetic journal.
         store.emit('SNAPSHOT',iteration=checkpoint['iteration'],checkpoint=checkpoint['path'],
-            checkpoint_sha256=checkpoint['sha256'],archive='unused.npz',archive_sha256='a'*64,
+            checkpoint_sha256=checkpoint['sha256'],archive='unused.npz',archive_sha256=hashlib.sha256(archive_blob).hexdigest(),
             model_sha256=v5_run._sha(runtime.model_config.metadata()))
         return store,checkpoint
 
@@ -197,7 +199,7 @@ class RuntimeDeclarationTests(unittest.TestCase):
                 self.assertIs(actual,False)
                 runtime=v5_training.load_checkpoint(root/record['path'],enable_v5=True,off_provenance=proof)
                 self.assertIs(runtime.self_moves,False)
-                snapshot=v5_run.Snapshot(-1,record['path'],record['sha256'],'unused.npz','a'*64,'b'*64)
+                snapshot=v5_run.Snapshot(**store.matching('SNAPSHOT')[0])
                 initializer,proof=enc.original_initializer(root,snapshot)
                 _,_,_,_,provenance=configurations(root/record['path'],expected_self_moves=True,
                     off_provenance=proof,weights_only_initializer=initializer)
@@ -207,7 +209,7 @@ class RuntimeDeclarationTests(unittest.TestCase):
                 with self.assertRaises(ValueError):enc.original_initializer(root,replace(snapshot,iteration=0))
         with tempfile.TemporaryDirectory() as tmp:
             store,record=self.make_run(Path(tmp)/'trained',steps=1)
-            snapshot=v5_run.Snapshot(-1,record['path'],record['sha256'],'unused.npz','a'*64,'b'*64)
+            snapshot=replace(v5_run.Snapshot(**store.matching('SNAPSHOT')[0]),iteration=-1)
             with self.assertRaises(ValueError):enc.original_initializer(store.path,snapshot)
 
     def test_store_rejects_runtime_plan_disagreement_before_write(self):
@@ -248,8 +250,7 @@ class RuntimeDeclarationTests(unittest.TestCase):
             with patch.object(v2_fused,'prepare',return_value=context),patch.object(v2_trainer,'create',side_effect=ReachedCreate) as create:
                 with self.assertRaises(ReachedCreate):v2_fused.main(args)
                 self.assertIs(create.call_args.kwargs['self_moves'],True)
-            snapshot=v5_run.Snapshot(-1,record['path'],record['sha256'],'unused.npz','a'*64,
-                v5_run._sha(store.plan.model.metadata()))
+            snapshot=v5_run.Snapshot(**store.matching('SNAPSHOT')[0])
             state=dict(snapshots=[snapshot.__dict__],reports=[],row_order='file',
                 declaration_sha256=v5_run._sha(document),checkpoint_encoding_receipts={})
             (root/'out/state.json').write_text(json.dumps(state))

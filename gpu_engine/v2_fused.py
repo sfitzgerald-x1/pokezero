@@ -82,8 +82,10 @@ def load_actor(plan, snapshot, root):
         expected_checkpoint_sha256=snapshot.checkpoint_sha256, expected_category_vocabulary_sha256=plan.model.category_vocabulary_sha256,
         expected_label_vocabulary_sha256=plan.model.label_vocabulary.sha256, enable_v5=True)
     if config != plan.model:raise ValueError('loaded actor configuration differs from plan')
-    from gpu_engine.private_self_moves import check_run_actor   # V2 self_moves: the archive's declaration against the plan's
-    check_run_actor(meta, plan_self_moves=plan.self_moves, iteration=snapshot.iteration, context='v2 fused actor')
+    from gpu_engine.private_self_moves import check_run_actor,checked_actor_initializer
+    initializer=checked_actor_initializer(meta,plan_self_moves=plan.self_moves,snapshot=snapshot,root=root)
+    check_run_actor(meta, plan_self_moves=plan.self_moves, iteration=snapshot.iteration, context='v2 fused actor',
+        initializer=initializer)
     return params
 
 

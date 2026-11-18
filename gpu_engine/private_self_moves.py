@@ -66,14 +66,31 @@ def refuse_unthreaded(meta=None, *, plan=None, catalog=None, context):
         raise ValueError(f'{context}: {UNTHREADED}')
 
 
-def check_run_actor(meta, *, plan_self_moves, iteration, context):
+def checked_actor_initializer(meta, *, plan_self_moves, snapshot, root):
+    """Resolve original evidence only when an OFF actor needs the ON initializer exception."""
+    if plan_self_moves is True and (meta or {}).get('self_moves',False) is False and snapshot.iteration==-1:
+        from pokezero.checkpoint_self_moves import original_initializer
+        try:return original_initializer(root,snapshot)[0]
+        except (OSError,ValueError) as error:
+            raise ValueError('verified original initializer evidence required') from error
+    return None
+
+
+def check_run_actor(meta, *, plan_self_moves, iteration, context, initializer=None):
     """A V2 run's actor archive against its plan's declaration (meta['self_moves'], absent = off). An on archive in an off
     run is refused. In an on run every archive the run exports is stamped on; only the initial snapshot (iteration -1,
-    the checkpoint the run starts from, e.g. a shared off init) may be off: the plan's declaration wins and its tables
-    encode that actor on."""
-    declared = bool((meta or {}).get('self_moves', False))
-    if declared == bool(plan_self_moves) or plan_self_moves and iteration == -1:
+    a verified untrained checkpoint and exact original archive) may be off. A caller-supplied iteration alone is not
+    provenance. The destination's tables encode the verified initializer on."""
+    declared = (meta or {}).get('self_moves', False)
+    if type(declared) is not bool or type(plan_self_moves) is not bool:
+        raise ValueError('explicit bool actor/plan self_moves declarations required')
+    if declared == plan_self_moves:
         return
+    if plan_self_moves and iteration == -1:
+        from pokezero.checkpoint_self_moves import WeightsOnlyInitializer
+        if (type(initializer) is WeightsOnlyInitializer
+                and initializer.checkpoint_sha256==(meta or {}).get('checkpoint_sha256')
+                and initializer.archive_sha256==(meta or {}).get('weights_archive_sha256')):return
     raise ValueError(f'{context}: actor archive self_moves={declared} differs from the plan self_moves={bool(plan_self_moves)}')
 
 
