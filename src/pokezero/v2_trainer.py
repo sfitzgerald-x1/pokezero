@@ -91,6 +91,8 @@ class V2Config:
         eager autocast does. With it on, compiled CPU updates are bitwise eager.
     distributed_rows: use DistributedTrainer's canonical rank-local rows and
         globally normalized loss, never the legacy replicated-store DDP math.
+    role_routing: ``indexed`` retains the original expert routing; ``sliced``
+        opts into fixed disjoint slices for the validated 29-token role layout.
     """
     order: str = 'ordered'
     order_seed: int | None = None
@@ -100,16 +102,19 @@ class V2Config:
     pad_partial: bool | None = None
     emulate_precision_casts: bool = True
     distributed_rows: bool = False
+    role_routing: str = 'indexed'
 
     def __post_init__(self):
         if (self.order not in ORDERS or self.mode not in MODES or self.optimizer not in OPTIMIZERS
                 or type(self.check_interval) is not int or self.check_interval <= 0
                 or self.order_seed is not None and (type(self.order_seed) is not int or not 0 <= self.order_seed < 2**63)
                 or self.pad_partial not in (None, True, False) or type(self.emulate_precision_casts) is not bool
-                or type(self.distributed_rows) is not bool):
+                or type(self.distributed_rows) is not bool or self.role_routing not in ('indexed', 'sliced')):
             raise ValueError('explicit V2 order/mode/optimizer/check interval required')
         if self.mode == 'reference' and self.pad_partial:
             raise ValueError('reference mode runs the original unpadded batch')
+        if self.mode == 'reference' and self.role_routing != 'indexed':
+            raise ValueError('reference mode requires original indexed role routing')
 
     def pads(self, mode):
         return self.pad_partial if self.pad_partial is not None else mode in ('compiled', 'cudagraphs')
@@ -391,12 +396,33 @@ def expert_indices(model, device):
     return tuple((roles == role).nonzero().flatten() for role in range(3))
 
 
-def forward_unchecked(model, tensors, *, include_auxiliary, experts):
+def _validate_sliced_roles(model):
+    """Validate every layer once, outside the update/compiled callable."""
+    expected = (2,) + (0,) * 12 + (1,) * 9 + (2,) * 7
+    for block in model.encoder.layers:
+        roles = tuple(block.role_experts.roles.detach().cpu().tolist())
+        if roles != expected or len(block.role_experts.experts) != 3:
+            raise ValueError('sliced routing requires the original 29-token expert role mapping in every layer')
+
+
+def _sliced_expert_output(block, hidden):
+    """Fixed disjoint routes, preserving expert invocation order and layouts."""
+    if hidden.ndim != 3 or hidden.shape[1] != 29:
+        raise ValueError('sliced routing requires 29 tokens')
+    torch = _torch()
+    experts = block.role_experts.experts
+    role0 = experts[0](hidden[:, 1:13].contiguous()).to(hidden.dtype)
+    role1 = experts[1](hidden[:, 13:22].contiguous()).to(hidden.dtype)
+    role2 = experts[2](torch.cat((hidden[:, :1], hidden[:, 22:29]), dim=1)).to(hidden.dtype)
+    return torch.cat((role2[:, :1], role0, role1, role2[:, 1:]), dim=1)
+
+
+def forward_unchecked(model, tensors, *, include_auxiliary, experts, role_routing='indexed'):
     """``Model.forward`` without its input checks (``validate_store`` made them).
 
     Same modules in the same order, so it consumes dropout RNG identically. The
-    one change is in ``RoleExperts``: the per-call ``nonzero`` is replaced by
-    precomputed ``experts`` indices.
+    Default ``RoleExperts`` replaces per-call ``nonzero`` with precomputed
+    indices. Explicit sliced routing uses the validated fixed role layout.
     """
     torch = _torch()
     config = model.config
@@ -412,10 +438,13 @@ def forward_unchecked(model, tensors, *, include_auxiliary, experts):
         value = block.self_attn(normalized, normalized, normalized, key_padding_mask=~mask, need_weights=False)[0]
         x = x + block.dropout(value)
         hidden = block.norm2(x)
-        result = torch.zeros_like(hidden)
-        for indices, expert in zip(experts, block.role_experts.experts):
-            values = expert(hidden.index_select(1, indices)).to(result.dtype)
-            result = result.index_copy(1, indices, values)
+        if role_routing == 'sliced':
+            result = _sliced_expert_output(block, hidden)
+        else:
+            result = torch.zeros_like(hidden)
+            for indices, expert in zip(experts, block.role_experts.experts):
+                values = expert(hidden.index_select(1, indices)).to(result.dtype)
+                result = result.index_copy(1, indices, values)
         x = x + block.dropout(result)
         x = x.masked_fill(~mask[..., None], 0)
     encoded = model.final_norm(x).masked_fill(~mask[..., None], 0)
@@ -581,11 +610,13 @@ def _autocast(torch, device, precision):
     return torch.autocast(device_type=torch.device(device).type, dtype=torch.bfloat16)
 
 
-def _static_forward_loss(model, tensors, model_config, loss_config, precision, device, experts, variant_counts):
+def _static_forward_loss(model, tensors, model_config, loss_config, precision, device, experts, variant_counts,
+                         role_routing='indexed'):
     """Forward + loss under the original autocast scope; returns (loss, metric vector, logits_ok)."""
     torch = _torch()
     with _autocast(torch, device, precision):
-        output = forward_unchecked(model, tensors, include_auxiliary=model_config.treatment, experts=experts)
+        output = forward_unchecked(model, tensors, include_auxiliary=model_config.treatment, experts=experts,
+            role_routing=role_routing)
         loss, metrics, logits_ok = static_v5_loss(output, tensors, model_config, loss_config, variant_counts=variant_counts)
     vector = torch.stack([metrics[name].float() for name in metric_names(model_config, loss_config)])
     return loss, vector, logits_ok
@@ -695,6 +726,8 @@ class Trainer:
         self.fallbacks = []
         self._compiled = None; self._warm = False
         self._experts = expert_indices(runtime.model, runtime.device)
+        if runtime.v2_config.role_routing == 'sliced':
+            _validate_sliced_roles(runtime.model)
         self._variant_counts = _variant_counts(runtime.model_config, runtime.device)
         self._names = metric_names(runtime.model_config, runtime.loss_config)
         self._parameters = [p for p in runtime.model.parameters()]
@@ -725,7 +758,8 @@ class Trainer:
 
     def mode_report(self):
         return dict(requested=self.requested_mode, active=self.mode, fallbacks=list(self.fallbacks),
-            optimizer=self.runtime.v2_config.optimizer, pad_partial=self.runtime.v2_config.pads(self.mode))
+            optimizer=self.runtime.v2_config.optimizer, pad_partial=self.runtime.v2_config.pads(self.mode),
+            role_routing=self.runtime.v2_config.role_routing)
 
     def _call(self, arguments):
         torch = _torch()
@@ -743,7 +777,7 @@ class Trainer:
         """
         rt = self.runtime; torch = _torch()
         arguments = (rt.model, batch, rt.model_config, rt.loss_config, rt.train_config.precision, rt.device,
-            self._experts, self._variant_counts)
+            self._experts, self._variant_counts, rt.v2_config.role_routing)
         while self._compiled is not None and not self._warm:
             rng = v5._rng_state(torch, rt.device.startswith('cuda'))
             try:
@@ -1070,6 +1104,8 @@ def load_checkpoint(path, *, enable_v5=False, v2_config=None, expected_model_con
     v2_config = saved if v2_config is None else v2_config
     if saved.distributed_rows != v2_config.distributed_rows:
         raise ValueError('resume cannot change distributed row/loss semantics')
+    if saved.role_routing != v2_config.role_routing:
+        raise ValueError('resume requires original role routing; switching is unqualified')
     if section['cursor'] is not None and not section['cursor']['complete'] and (
             (v2_config.order, v2_config.order_seed) != (saved.order, saved.order_seed)):
         raise ValueError('an unfinished cursor resumes only with its original batch order')

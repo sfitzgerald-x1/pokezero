@@ -94,6 +94,34 @@ def counter_delta(before, after):
         for group in sorted(before.keys() | after.keys())}
 
 
+def device_activity_summary(events, cuda_type, updates):
+    """Sum actual CUDA events, excluding GPU copies of user annotation ranges.
+
+    CUDA graph annotations also have DeviceType.CUDA. Device type alone would
+    count an enclosing range and its kernels twice. Fail closed if annotation
+    metadata is absent. Copies remain device activities, not compute kernels.
+    """
+    totals = {}
+    for event in events:
+        if event.device_type != cuda_type:
+            continue
+        annotation = getattr(event, 'is_user_annotation', None)
+        if annotation is None:
+            raise ValueError('CUDA event lacks annotation classification')
+        if annotation:
+            continue
+        duration = getattr(event, 'self_device_time_total', getattr(event, 'self_cuda_time_total', 0.))
+        record = totals.setdefault(event.key, dict(calls=0, microseconds=0.))
+        record['calls'] += event.count
+        record['microseconds'] += duration
+    return dict(device_activity_ms_per_update=sum(value['microseconds'] for value in totals.values())/1000/updates,
+        device_activity_calls_per_update=sum(value['calls'] for value in totals.values())/updates,
+        includes_device_copies=True, excludes_user_annotations=True, summed_time_is_not_union=True,
+        top_device_activities=[dict(name=name, calls_per_update=value['calls']/updates,
+            device_ms_per_update=value['microseconds']/1000/updates)
+            for name, value in sorted(totals.items(), key=lambda pair:pair[1]['microseconds'], reverse=True)[:20]])
+
+
 def profile_updates(trainer, store, window, updates, trace):
     import torch
     from torch.autograd import DeviceType
@@ -106,26 +134,18 @@ def profile_updates(trainer, store, window, updates, trace):
     if len(result['updates']) != updates:
         raise ValueError('profiling reached the end of the row store before its update budget')
     averages = prof.key_averages()
-    kernels = [event for event in averages if event.device_type == DeviceType.CUDA]
     ranges = [event for event in averages if event.key.startswith('v2/')]
 
     def device_us(event):
         return getattr(event, 'device_time_total', getattr(event, 'cuda_time_total', 0.))
 
-    def self_device_us(event):
-        return getattr(event, 'self_device_time_total', getattr(event, 'self_cuda_time_total', 0.))
-
     prof.export_chrome_trace(str(trace))
     return dict(updates=updates, trace=str(trace),
         ranges=[dict(name=event.key, calls=event.count, cpu_ms_per_update=event.cpu_time_total/1000/updates,
-            device_ms_per_update=device_us(event)/1000/updates) for event in ranges],
+            device_type=str(event.device_type), device_ms_per_update=device_us(event)/1000/updates) for event in ranges],
         ranges_are_nested_not_additive=True,
-        kernel_ms_per_update=sum(self_device_us(event) for event in kernels)/1000/updates,
-        kernel_time_is_sum_not_union=True,
-        kernel_launches_per_update=sum(event.count for event in kernels)/updates,
-        top_kernels=[dict(name=event.key, calls_per_update=event.count/updates,
-            device_ms_per_update=self_device_us(event)/1000/updates)
-            for event in sorted(kernels, key=self_device_us, reverse=True)[:20]],
+        cuda_graph_range_attribution_is_not_complete_forward_backward_timing=True,
+        **device_activity_summary(prof.events(), DeviceType.CUDA, updates),
         compile_counter_delta=counter_delta(before, compile_counters()))
 
 
@@ -167,6 +187,7 @@ def main(argv=None):
     parser.add_argument('--precision', choices=('float32', 'bfloat16'), default='bfloat16')
     parser.add_argument('--mode', choices=('eager', 'compiled', 'cudagraphs'), default='cudagraphs')
     parser.add_argument('--optimizer', choices=('fused', 'foreach', 'single'), default='fused')
+    parser.add_argument('--role-routing', choices=('indexed', 'sliced'), default='indexed')
     parser.add_argument('--warmup', type=int, default=8)
     parser.add_argument('--updates', type=int, default=64)
     parser.add_argument('--profile', type=int, default=4)
@@ -213,7 +234,8 @@ def main(argv=None):
         if (model.width, model.layers, model.dropout) != (512, 3, .1):
             raise ValueError('production width512/layers3/dropout0.1 required')
         train = replace(train, batch_size=args.local_batch*args.world_size, precision=args.precision)
-        config = v2.V2Config(mode=args.mode, optimizer=args.optimizer, distributed_rows=True)
+        config = v2.V2Config(mode=args.mode, optimizer=args.optimizer, distributed_rows=True,
+            role_routing=args.role_routing)
         runtime = v2.create(model, loss, train, config, enable_v5=True, device='cuda', process_group=group)
         runtime.model.load_state_dict(payload['state_dict'])
         v2._load_optimizer_state(runtime.optimizer, payload['optimizer_state'])
@@ -260,7 +282,7 @@ def main(argv=None):
         args.out.mkdir(parents=True, exist_ok=True)
         profiling = profile_updates(trainer, store, window, args.profile,
             args.out/f'trace-{args.rank}.json') if args.profile else None
-        report = dict(schema='v2-learner-profile.v1', rank=args.rank, world_size=args.world_size,
+        report = dict(schema='v2-learner-profile.v2', rank=args.rank, world_size=args.world_size,
             local_batch=args.local_batch, global_batch=train.batch_size, model=model.metadata(),
             precision=train.precision, fp32_master_weights=True, mode=mode,
             rows_sha256=args.rows_sha256, checkpoint_sha256=args.checkpoint_sha256,

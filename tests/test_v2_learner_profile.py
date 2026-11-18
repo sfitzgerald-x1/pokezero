@@ -5,7 +5,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
-from gpu_engine.v2_profile_learner import annotated, compare_statistics, counter_delta
+from gpu_engine.v2_profile_learner import annotated, compare_statistics, counter_delta, device_activity_summary
 
 
 class StatisticTests(unittest.TestCase):
@@ -93,6 +93,25 @@ class AnnotationTests(unittest.TestCase):
             self.assertIs(trainer._step, original)
             self.assertIs(torch.autograd.backward, original)
             self.assertIs(trainer.runtime.optimizer.step, original)
+
+
+class DeviceActivityTests(unittest.TestCase):
+    def test_cuda_annotation_and_cpu_time_are_not_kernel_time(self):
+        def event(name, kind, annotation, elapsed):
+            return SimpleNamespace(key=name, device_type=kind, is_user_annotation=annotation,
+                self_device_time_total=elapsed, count=1)
+        events = [event('whole GPU range', 'cuda', True, 10000),
+            event('kernel', 'cuda', False, 6000), event('kernel', 'cuda', False, 2000),
+            event('Memcpy DtoH', 'cuda', False, 100), event('CPU op', 'cpu', False, 50000)]
+        result = device_activity_summary(events, 'cuda', 2)
+        self.assertEqual(result['device_activity_ms_per_update'], 4.05)
+        self.assertEqual(result['device_activity_calls_per_update'], 1.5)
+        self.assertEqual(result['top_device_activities'][0]['name'], 'kernel')
+        self.assertEqual(result['top_device_activities'][0]['calls_per_update'], 1.)
+
+    def test_unclassified_cuda_event_fails_closed(self):
+        with self.assertRaisesRegex(ValueError, 'annotation classification'):
+            device_activity_summary([SimpleNamespace(device_type='cuda')], 'cuda', 1)
 
 
 if __name__ == '__main__':
