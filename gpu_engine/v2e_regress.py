@@ -2399,7 +2399,10 @@ def patched_pass(args, *, step_override=None, prepared=None):
     capture, capture_sha = capture_record(args)
     if capture_sha != manifest['capture_sha256']:raise ValueError('capture differs from the base pass')
     plugins = [p for p in args.pr.split(',') if p]
-    table = predicates(plugins)
+    try:
+        table = predicates(plugins)
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
     warnings = []
     if len([p for p in plugins if p != 'none']) > 1:
         warnings.append(f'plug-in superset {plugins}: changes are attributed to every listed PR\'s effects')
