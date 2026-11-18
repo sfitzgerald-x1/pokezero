@@ -107,10 +107,6 @@ class FastBackupTests(unittest.TestCase):
         self.assertEqual(len(calls), 1)
 
 
-if __name__ == '__main__':
-    unittest.main()
-
-
 class HostStackTests(unittest.TestCase):
     """depthn_reply_prior.host_stack: jnp.stack per leaf, built on the host (numpy) and placed with one device_put."""
     def test_every_leaf_as_jnp_stack_makes_it(self):
@@ -172,3 +168,7 @@ class ReplyStackTests(unittest.TestCase):
         self.assertEqual(events.seen, []);self.assertEqual(old.tobytes(), new.tobytes())
         fetched = np.asarray(jax.device_get(reply.jit_dispatch(worlds, owner)), np.float32)   # dispatched, fetched later: the same bits
         self.assertEqual(fetched.tobytes(), new.tobytes())
+
+
+if __name__ == '__main__':
+    unittest.main()
