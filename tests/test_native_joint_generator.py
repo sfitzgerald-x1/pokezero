@@ -176,6 +176,18 @@ class NativeJointExactness(unittest.TestCase):
         self.assertEqual(calls, [32])
         self.assertIsNone(result.tv_bound)
 
+    def test_late_feature_export_preserves_stage1_rng(self):
+        context=dict(owner='p1',own_initial_team=(('a',0),('b',1),('c',0)),producer='shared-battle')
+        rng=random.Random(75);expected=random.Random(75)
+        with patch('pokezero.joint_native.validate_pinned_catalog'),patch.object(
+                NativeJointPosterior,'feature_payload',side_effect=JointBudgetExceeded('late feature')):
+            result=draw_with_stage1_fallback(*fixture(),count=2,rng=rng,export_features=True,
+                stage1_sampler=lambda count,rng:tuple(rng.randrange(1000)for _ in range(count)),
+                battle_context=context,budget_seconds=2,draw_reserve_seconds=.05)
+        self.assertEqual(result.mode,'stage1_fallback')
+        self.assertEqual(result.teams,tuple(expected.randrange(1000)for _ in range(2)))
+        self.assertEqual(rng.getstate(),expected.getstate())
+
     def test_native_certificate_and_population_inputs_are_checked(self):
         payload = json.loads(native_payload(JointGenerator(*fixture())))
         payload['completable'] = True

@@ -347,6 +347,7 @@ class TransformerPolicyConfig:
     # candidate-set count and uncertainty columns, which exist in every schema — but a
     # SEPARATE field, because the evidence class and the arm attribution both differ.
     item_belief_narrowing: bool = False
+    set_posterior_narrowing: bool = False
     # Dense potential-based reward-shaping provenance (canonical JSON of the
     # pokezero.shaping ShapingConfig the value targets were trained under, or None for an
     # unshaped head). Same latch pattern as tier2_residuals: from_dict resolves payloads
@@ -589,7 +590,10 @@ class TransformerPolicyConfig:
             )
 
     def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        payload = asdict(self)
+        if not self.set_posterior_narrowing:
+            payload.pop('set_posterior_narrowing')
+        return payload
 
     @property
     def value_head_layer_widths(self) -> tuple[int, ...]:
@@ -680,6 +684,7 @@ class TransformerPolicyConfig:
             # Item-certainty latch: absent means a checkpoint trained on candidate sets that
             # discarded the original item after a mutation and never ruled out Choice Band.
             item_belief_narrowing=bool(payload.get("item_belief_narrowing", False)),
+            set_posterior_narrowing=bool(payload.get("set_posterior_narrowing", False)),
             # Shaping latch: payloads lacking the field are pre-shaping checkpoints trained
             # on terminal-only value targets -> always resolve to unshaped.
             reward_shaping=(str(payload["reward_shaping"]) if payload.get("reward_shaping") else None),
@@ -3009,6 +3014,7 @@ def feature_masks_from_model_config(config: TransformerPolicyConfig) -> Observat
             getattr(config, "investment_belief_narrowing", False)
         ),
         item_belief_narrowing=bool(getattr(config, "item_belief_narrowing", False)),
+        set_posterior_narrowing=bool(getattr(config, "set_posterior_narrowing", False)),
     )
 
 

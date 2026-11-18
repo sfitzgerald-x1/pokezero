@@ -73,6 +73,8 @@ class PublicView(NamedTuple):
     own_transformed:object=None
     own_transform_species:object=None
     own_shown_types:object=None
+    set_posterior_weights:object=None
+    set_posterior_prior:object=None
 
 class Trackers(NamedTuple):
     physical_to_public:object # [B,2,6], private identity cursor only; never an encoder feature
@@ -133,6 +135,8 @@ class Trackers(NamedTuple):
     # ability (both copies), but the observation's traced column is B2's `traced`, which only a Trace line writes, so
     # readout hides a Transform copy there (it also kept-ability of a benched or fainted ex-transformer). Cleared at arrival.
     transform_borrowed:object=None
+    set_posterior_weights:object=None
+    set_posterior_prior:object=None
 
 
 class Tendency(NamedTuple):
@@ -382,7 +386,8 @@ def readout(trackers,observer_sides):
         trackers.turn,trackers.weather,trackers.spikes,belief_mask,optional('observed_moves'),
         optional('pp_used'),optional('last_moves'),borrowed,own_last,mon,own_mon,fields,own_borrowed,optional('public_volatiles'),own_vol,optional('item_removed'),own_removed,stats,
         None if visible is None else _li.take(visible.visible_pin,r,foe),None if visible is None else _li.take(visible.visible_pin_active,r,foe),
-        own_boosts=j.where((own_slot>=0)[:,None],_li.take(trackers.boosts,r,owner,j.clip(own_slot,0,5)),0),**transform)
+        own_boosts=j.where((own_slot>=0)[:,None],_li.take(trackers.boosts,r,owner,j.clip(own_slot,0,5)),0),
+        set_posterior_weights=optional('set_posterior_weights'),set_posterior_prior=optional('set_posterior_prior'),**transform)
 
 
 def clone_for_worlds(trackers,root_rows):

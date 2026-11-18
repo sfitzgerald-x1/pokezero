@@ -139,7 +139,7 @@ def posterior(lines: Sequence[str], own_request: Mapping[str, Any] | None, *, so
 
     lines are the owner's protocol lines (the owning prefix); our team is read from their first |request| (the original
     items), else from own_request. binding names the source (the bound public source's binding; default its hash)."""
-    if generator_weights is not None:
+    if generator_weights is not None and not isinstance(generator_weights,Mapping):
         raise ValueError('set_posterior stage 1 has a uniform prior: generator_weights must be None')
     owner = _seat(owner)
     if owner is None:
@@ -174,6 +174,13 @@ def posterior(lines: Sequence[str], own_request: Mapping[str, Any] | None, *, so
                 reason, counts = _counts(strike, belief.species, variants, hard, own_team, source=source, dex=dex)
             rows.append((strike, reason, counts))
         out[key] = _encounter(foe, owner, key, tuple(hard), rows, provenance)
+    if generator_weights is not None:
+        from .randbat import canonical_gen3_randbat_species_id
+        rows=feature_rows(generator_weights,source,game_sha256=game_lines_sha256(lines))
+        for key,post in tuple(out.items()):
+            row=rows[canonical_gen3_randbat_species_id(key)]
+            out[key]=replace(post,weights=tuple(row['weights']),support=tuple(row['support']),
+                provenance=generator_weights['provenance'])
     return out
 
 
@@ -192,6 +199,47 @@ def draw(post: EncounterPosterior, rng: random.Random) -> int:
         if pick < 0:
             return i
     raise AssertionError('unreachable')
+
+
+def feature_rows(payload,source,*,game_sha256):
+    """Validate the exact root/source row axis before any opt-in pin is applied."""
+    from .randbat import canonical_gen3_randbat_species_id
+    encoded={k:v for k,v in payload.items()if k!='payload_sha256'}
+    actual=hashlib.sha256(json.dumps(encoded,sort_keys=True,separators=(',',':')).encode()).hexdigest()
+    source_hash=getattr(source,'source_hash',None)or source.metadata.source_hash
+    if (payload.get('schema')!='gen3-joint-features-v1'or payload.get('payload_sha256')!=actual
+            or payload.get('game_sha256')!=game_sha256 or payload.get('source_hash')!=source_hash):
+        raise ValueError('set posterior feature provenance mismatch')
+    if set(payload['rows'])!=set(payload['prior_rows']):raise ValueError('feature prior/posterior species mismatch')
+    for name,row in payload['rows'].items():
+        if hasattr(source,'universes'):variants=source.universes[name].variants
+        else:variants=source.variants[source.species_id(name)]
+        ids=tuple(v.variant_id for v in variants)
+        for entry in(row,payload['prior_rows'][name]):
+            if(tuple(entry['variant_ids'])!=ids or len(entry['support'])!=len(ids)
+                    or len(entry['weights'])!=len(ids)or not any(entry['weights'])
+                    or any(type(s)is not bool for s in entry['support'])
+                    or any(type(w)is not int or w<0 or(w>0 and not entry['support'][i])for i,w in enumerate(entry['weights']))):
+                raise ValueError('set posterior feature source-row mismatch')
+    return payload['rows']
+
+
+def apply_feature_payload(engine,payload,*,enabled,game_sha256,owner):
+    """Python belief pin consumer. Disabled mode performs no payload reads."""
+    if not enabled:return False
+    rows=feature_rows(payload,engine.set_source,game_sha256=game_sha256)
+    from .randbat import canonical_gen3_randbat_species_id
+    changed=False
+    for belief in engine.snapshot().for_player(owner).opponent_pokemon:
+        row=rows.get(canonical_gen3_randbat_species_id(belief.species))
+        if row is None:continue
+        variants=engine.set_source.universe_for(belief.species).variants
+        survivors=[v.to_summary()for v,alive in zip(variants,row['support'])if alive]
+        changed=engine.narrow_candidate_variants(belief.key,survivors,reason='set-posterior')or changed
+        side=engine._sides[belief.showdown_slot]
+        for i,current in enumerate(side):
+            if current.key==belief.key:side[i]=engine._with_set_summary(current)
+    return changed
 
 
 def restrict(post: EncounterPosterior, indices: Sequence[int]) -> EncounterPosterior:

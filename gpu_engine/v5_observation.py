@@ -120,7 +120,7 @@ def _require(value, shape, dtype, name):
         raise ValueError('typed v5 public adapter field required: ' + name)
 
 
-def append_device(encoded, public_state, adapter, *, observer_sides):
+def append_device(encoded, public_state, adapter, *, observer_sides,set_posterior=None):
     """Append to an actual Encoded for the SAME public state/owning observer.
 
     The callsite supplies that actual pairing; this adapter does not attest the
@@ -166,11 +166,17 @@ def append_device(encoded, public_state, adapter, *, observer_sides):
     context, copied, copy_ok = public_context.observation_boundary_copy(public_state.context,
         public_state.beliefs, public_state.mons, catalog.source.device, catalog.context, valid=a.admitted)
     summary, cache_ok = snapshot.read(context.refresh.controller.visible, copied, catalog.source.device)
+    if catalog.masks.set_posterior_narrowing:
+        if set_posterior is None:raise ValueError('root set posterior inputs required for v5 weights')
+        from .set_posterior_features import apply
+        summary,post_ok=apply(summary,set_posterior,copied,catalog.source.device)
+        copy_ok &= post_ok
     species = copied.species[rows, observer]
     species_ok = (species >= 0) & (species < tables.prior.shape[0])
     safe_species = j.clip(species, 0, tables.prior.shape[0] - 1)
     present = a.attention_mask[:, 7:13]
     expected_weights = belief.variant_weights(summary, catalog.source.device)[rows, observer]
+    if catalog.masks.set_posterior_narrowing:expected_weights=set_posterior.weights
     expected_weights = j.where(present[..., None], expected_weights, 0)
     reason = summary.reason[rows, observer]
     effective = summary.effective[rows, observer]
@@ -195,6 +201,8 @@ def append_device(encoded, public_state, adapter, *, observer_sides):
     admitted = error == 0
     use_prior = present & ~unknown
     prior = j.where(use_prior[..., None], tables.prior[safe_species], 0)
+    if catalog.masks.set_posterior_narrowing:
+        prior=j.pad(set_posterior.prior,((0,0),(0,0),(0,64-set_posterior.prior.shape[-1])))
     posterior = j.pad(encoded.posterior_weights, ((0, 0), (0, 0), (0, 64 - encoded.posterior_weights.shape[-1])))
     prior_count = j.where(use_prior, tables.counts[safe_species], 0)
     summaries = j.stack((prior_count.astype(j.float32) / j.float32(64),

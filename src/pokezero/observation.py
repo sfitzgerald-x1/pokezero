@@ -380,6 +380,7 @@ class ObservationFeatureMasks:
     feature_pack_last_move: bool = True
     investment_belief_narrowing: bool = False
     item_belief_narrowing: bool = False
+    set_posterior_narrowing: bool = False
 
     def __post_init__(self) -> None:
         # 0 is a valid budget: the transition region exists but is fully masked

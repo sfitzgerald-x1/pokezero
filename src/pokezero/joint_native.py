@@ -227,11 +227,12 @@ class JointDrawOutcome:
     tv_bound: Fraction | None
     elapsed_seconds: float
     reason: str | None
+    features: object = None
 
 
 def draw_with_stage1_fallback(model, manifest, table, *, count, rng, stage1_sampler,
                               budget_seconds=0.25, draw_reserve_seconds=0.05,
-                              legality_cache=None, battle_context, **kwargs):
+                              legality_cache=None, battle_context, export_features=False, **kwargs):
     """Try the authorized TV<=.01 joint draw; preserve the stage-1 RNG on fallback.
 
     stage1_sampler(count, rng) is the existing per-slot consumer, supplied by
@@ -260,13 +261,27 @@ def draw_with_stage1_fallback(model, manifest, table, *, count, rng, stage1_samp
         if perf_counter() - started > budget_seconds - draw_reserve_seconds:
             raise JointBudgetExceeded('certificate completed after normalizer deadline')
         teams = joint.draw_many(count, rng)
+        features = joint.feature_payload() if export_features else None
+        if export_features:
+            prior_options=dict(kwargs)
+            prior_options['evidence']={s:(1,)*len(w) for s,w in joint.reference.evidence.items()}
+            prior=NativeJointPosterior(model,manifest,table,legality_cache=legality_cache,**prior_options)
+            remaining=budget_seconds-(perf_counter()-started)
+            if remaining<=0:raise JointBudgetExceeded('feature prior construction exceeded deadline')
+            prior.solve(seconds=remaining,max_tv=Fraction(1,100))
+            prior_features=prior.feature_payload()
+            features['prior_rows']=prior_features['rows']
+            features['prior_tv_bound']=prior_features['tv_bound']
+            features['provenance']=hashlib.sha256(json.dumps((features['provenance'],prior_features['provenance']),
+                separators=(',',':')).encode()).hexdigest()
+            del prior
         mode = 'exact' if joint.result['exact'] else 'certified'
         del joint
         joint = None
         elapsed = perf_counter() - started
         if elapsed > budget_seconds:
             raise JointBudgetExceeded('joint draw completed after deadline')
-        return JointDrawOutcome(teams, mode, tv, elapsed, None)
+        return JointDrawOutcome(teams, mode, tv, elapsed, None, features)
     except (JointBudgetExceeded, ImpossibleJointEvidence) as exc:
         reason = type(exc).__name__ + ':' + str(exc)
     del joint

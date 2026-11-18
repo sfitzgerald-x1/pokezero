@@ -313,7 +313,8 @@ def encoder_identity(catalog):
     """The encoder catalog's identity: checkpoint sha256, category vocabulary sha256 and size, feature masks, source hash."""
     from pokezero.live_protocol_actor import MASK_NAMES,_vocab_sha
     return (('checkpoint_sha256',catalog.checkpoint_sha256),('category_vocab_sha256',_vocab_sha(catalog.vocabulary)),
-        ('category_vocab_size',int(catalog.vocabulary.size)),('feature_masks',tuple((k,getattr(catalog.masks,k))for k in MASK_NAMES)),
+        ('category_vocab_size',int(catalog.vocabulary.size)),('feature_masks',tuple((k,getattr(catalog.masks,k))for k in MASK_NAMES)
+            +((('set_posterior_narrowing',True),)if getattr(catalog.masks,'set_posterior_narrowing',False)else())),
         ('source_hash',catalog.source.source_hash))
 
 

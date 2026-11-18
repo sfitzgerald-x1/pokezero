@@ -93,7 +93,7 @@ def compile_tables(metadata, catalog):
         np.asarray([bool(i) and normalize_id(n) != 'struggle' for i, n in enumerate(v['moves'])], bool),
         np.asarray(feature.move_tables.foe_targeted)[engine_moves],
         np.asarray([bool(i) and normalize_id(n) == 'pressure' for i, n in enumerate(v['abilities'])], bool),
-        np.asarray(catalog.masks.investment_belief_narrowing,bool), nonproc_item_ids(v['items']))
+        np.asarray(getattr(catalog.masks,'set_posterior_narrowing',False),bool), nonproc_item_ids(v['items']))
     # Preserve primitive dtype (especially uint32 bitmasks and compact spreads).
     return Tables(*(j.asarray(a, j.float32 if n in floating else None) for n, a in zip(Tables._fields, arrays)))
 
@@ -203,6 +203,16 @@ def project(view, tables):
     categorical = j.zeros((b, 6, 41), j.int32).at[..., j.asarray(original.CATEGORY_COLUMNS)].set(j.where(visible, cats, 0))
     weights = selected.astype(j.float32) / j.maximum(count[..., None], 1)
     weights = j.pad(weights, ((0, 0), (0, 0), (0, 64 - maximum)))
+    supplied=getattr(view,'set_posterior_weights',None)
+    if supplied is not None:
+        if supplied.shape!=(b,6,64)or supplied.dtype!=j.float32:raise ValueError('source-ordered posterior weights required')
+        selected64=j.pad(selected,((0,0),(0,0),(0,64-maximum)))
+        weighted=j.where(selected64,supplied,0)
+        total=weighted.sum(-1,keepdims=True)
+        bad=j.any(~j.isfinite(supplied)|(supplied<0),axis=(1,2))|j.any(view.present&(total[...,0]<=0),axis=-1)
+        supplied_rows=j.any(supplied>0,axis=(1,2))
+        malformed|=enabled&supplied_rows&bad
+        weights=j.where((enabled&supplied_rows)[:,None,None],weighted/j.maximum(total,j.finfo(j.float32).tiny),weights)
     semantic_count = possible_ability.sum(axis=-1)
     certain = j.where(known_ability > 0, known_ability, j.where(semantic_count == 1, j.argmax(possible_ability, axis=-1), 0))
     return Result(numeric, categorical, j.where(visible, weights, 0), effective, count, uncertainty,

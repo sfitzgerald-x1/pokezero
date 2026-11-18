@@ -117,12 +117,21 @@ class JaxRecordedAdapter:
         # A late host/device failure leaves both previous public cursors intact.
         self.state,self.host,self.bindings=state,host,bindings
 
-    def encode(self,request,*,owner_side):
+    def encode(self,request,*,owner_side,set_posterior_payload=None,game_sha256=None):
         self._check_compiled_functions()
         if self.owner_side is not None and owner_side != self.owner_side:
             raise ValueError('request owner differs from owning stream')
         own=self.encoder.parse_own_requests(self.catalog,[request],owner_sides=[owner_side])
-        out=self.encode_step(self.state,own,self.jax.numpy.array([owner_side],self.jax.numpy.int32))
+        side=self.jax.numpy.array([owner_side],self.jax.numpy.int32)
+        if self.catalog.masks.set_posterior_narrowing:
+            from gpu_engine.set_posterior_features import compile_inputs
+            if set_posterior_payload is None:raise ValueError('root set posterior payload required')
+            inputs=compile_inputs(set_posterior_payload,self.catalog,self.state,owner=owner_side,game_sha256=game_sha256)
+            if not hasattr(self,'_set_posterior_encode'):
+                self._set_posterior_encode=self.jax.jit(lambda state,own,side,post:
+                    self.encoder.encode(state,own,self.catalog,observer_sides=side,set_posterior=post))
+            out=self._set_posterior_encode(self.state,own,side,inputs)
+        else:out=self.encode_step(self.state,own,side)
         observation=out.observation
         valid=bool(np.asarray(observation.admitted).all()) and not np.asarray(out.pending_numeric_columns).size
         for name,coverage in (('numeric_features','numeric_written'),('categorical_ids','categorical_written')):
