@@ -302,8 +302,10 @@ class ObservationTests(unittest.TestCase):
         fraction = e._index('MOVE_PP_FRACTION')
         maximum, dex = np.asarray(t.max_pp), np.asarray(t.base_pp)
         # Surf in a slot where the transformer had its own move (3 PP Ups), Body Slam past its own moves (none).
-        np.testing.assert_allclose(num[13:15, fraction], [5 / maximum[1], 5 / dex[2]], atol=1e-6)
-        np.testing.assert_allclose(base_num[13:15, fraction], [5 / maximum[1], 5 / maximum[2]], atol=1e-6)
+        expected = np.asarray([5 / int(maximum[1]), 5 / int(dex[2])], np.float32)
+        ordinary = np.asarray([5 / int(maximum[1]), 5 / int(maximum[2])], np.float32)
+        np.testing.assert_array_equal(num[13:15, fraction].view(np.uint32), expected.view(np.uint32))
+        np.testing.assert_array_equal(base_num[13:15, fraction].view(np.uint32), ordinary.view(np.uint32))
 
     def test_readout_hides_a_transform_copy_from_the_traced_column(self):
         from gpu_engine import engine_device_trackers as tr
