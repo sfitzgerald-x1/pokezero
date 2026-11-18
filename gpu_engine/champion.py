@@ -111,12 +111,14 @@ def config_from_checkpoint(cfg):
         feedforward=cfg['feedforward_dim'],tanh_value=cfg.get('value_activation','linear')=='tanh')
 
 
-def export(checkpoint,out,*,extra=None):
+def export(checkpoint,out,*,extra=None,self_moves=None,off_provenance=None):
     """CPU-only, safe Torch loader; exclusive NPZ output outside version control. extra (JSON-able), when given, is recorded in
     the archive metadata as meta['extra'] (e.g. a policy-only marker for a reply model)."""
     import torch
     blob,digest=snapshot(checkpoint)
     payload=torch.load(io.BytesIO(blob),map_location='cpu',weights_only=True)
+    from pokezero.checkpoint_self_moves import resolve_champion_self_moves
+    declared=resolve_champion_self_moves(blob,payload,expected_self_moves=self_moves,off_provenance=off_provenance)
     c=config_from_checkpoint(payload['model_config'])
     params={k:v.detach().cpu().numpy() for k,v in payload['state_dict'].items()}
     validate_weights(params,c)
@@ -125,7 +127,7 @@ def export(checkpoint,out,*,extra=None):
         'parameter_count':sum(a.size for a in params.values())}
     if extra is not None:meta['extra']=extra
     # V2 self_moves: the checkpoint's model config declares it; recorded only when on, so off archives are unchanged.
-    if payload['model_config'].get('self_moves'):meta['self_moves']=True
+    if declared:meta['self_moves']=True
     encoded=np.frombuffer(json.dumps(meta,sort_keys=True).encode(),np.uint8)
     with Path(out).open('xb') as stream:np.savez_compressed(stream,metadata_json=encoded,**params)
     return meta

@@ -21,12 +21,14 @@ def main(argv=None):
     parser.add_argument('--caches', required=True, help='glob of reference v5 cache directories')
     parser.add_argument('--checkpoint', required=True, help='a v5/V2 checkpoint of the same model (for the model config)')
     parser.add_argument('--out', required=True)
+    from pokezero.checkpoint_self_moves import add_receipt_arguments,receipt_from_arguments
+    add_receipt_arguments(parser)
     args = parser.parse_args(argv)
     import torch
     from pokezero import v5_data
     from pokezero.v5_loss import v5_batch_to_torch, INTEGER_FIELDS
     from gpu_engine.v2_bench_trainer import configurations
-    model, _, _, _, _ = configurations(args.checkpoint)
+    model, _, _, _, _ = configurations(args.checkpoint,off_provenance=receipt_from_arguments(args))
     ours = dict(np.load(args.audit))
     keys = np.stack([ours['streams'], ours['frames'], ours['owners']], axis=1).astype(np.int64)
     lo, hi = int(keys[:, 0].min()), int(keys[:, 0].max())

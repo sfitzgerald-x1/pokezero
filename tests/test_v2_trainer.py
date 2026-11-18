@@ -117,7 +117,7 @@ class V2TrainerTests(unittest.TestCase):
                 window = v5.DeclaredGameWindow(0, 10, 20)
                 original = v5.create(model, loss, train, enable_v5=True)
                 expected = v5.train_caches(original, paths, learning_rate_window=window)
-                runtime = v2.create(model, loss, train, v2.V2Config(mode='reference', optimizer='single'), enable_v5=True)
+                runtime = v2.create(model, loss, train, v2.V2Config(mode='reference', optimizer='single'), enable_v5=True,self_moves=True)
                 store = v2.load_cache_store(paths, model, loss, device='cpu')
                 self.assertEqual(store.segments, (5, 3))
                 actual = v2.Trainer(runtime).train(store, window=window)
@@ -151,7 +151,7 @@ class V2TrainerTests(unittest.TestCase):
                     expected = v5.train_caches(original, paths, learning_rate_window=window)['updates']
                 by_epoch = {u['learning_rate_epoch']: u['learning_rate'] for u in expected}
                 for order in ('ordered', 'shuffled'):
-                    runtime = v2.create(model, loss, train, v2.V2Config(order=order), enable_v5=True)
+                    runtime = v2.create(model, loss, train, v2.V2Config(order=order), enable_v5=True,self_moves=True)
                     trainer = v2.Trainer(runtime)
                     if window.start_game:
                         trainer.train(store, window=v5.DeclaredGameWindow(0, 10, 40))
@@ -185,7 +185,7 @@ class V2TrainerTests(unittest.TestCase):
                 expected = v5._update(original, batch)
                 results = {}
                 for optimizer in ('single', 'fused', 'foreach'):
-                    runtime = v2.create(model, loss, train, v2.V2Config(optimizer=optimizer), enable_v5=True)
+                    runtime = v2.create(model, loss, train, v2.V2Config(optimizer=optimizer), enable_v5=True,self_moves=True)
                     updates = v2.Trainer(runtime).train(store_of(batch, model, loss))['updates']
                     self.assertEqual(len(updates), 1)
                     results[optimizer] = (updates[0], runtime)
@@ -212,7 +212,7 @@ class V2TrainerTests(unittest.TestCase):
             with self.subTest(arm=arm):
                 batch = varied_batch(arm, rows=9, seed=5)
                 model, loss, train = configurations(arm, batch_size=9)
-                runtime = v2.create(model, loss, train, enable_v5=True)
+                runtime = v2.create(model, loss, train, enable_v5=True,self_moves=True)
                 tensors = v5._training_tensors(batch, model, 'cpu')
                 gradients = []
                 for implementation in ('original', 'static'):
@@ -239,10 +239,10 @@ class V2TrainerTests(unittest.TestCase):
                 config = v2.V2Config(order=order, check_interval=3, optimizer='fused')
                 window = v5.DeclaredGameWindow(0, 5, 10)
                 store = store_of(batch, model, loss, store_id='fixture')
-                full = v2.create(model, loss, train, config, enable_v5=True)
+                full = v2.create(model, loss, train, config, enable_v5=True,self_moves=True)
                 expected = v2.Trainer(full).train(store, window=window)
                 self.assertEqual(len(expected['updates']), 12)
-                partial = v2.create(model, loss, train, config, enable_v5=True)
+                partial = v2.create(model, loss, train, config, enable_v5=True,self_moves=True)
                 first = v2.Trainer(partial).train(store, window=window, max_updates=split)
                 checkpoint = Path(directory) / 'v2.pt'
                 v2.save_checkpoint(checkpoint, partial)
@@ -265,7 +265,7 @@ class V2TrainerTests(unittest.TestCase):
             model, loss, train = configurations(epochs=2, batch_size=2, schedule='mit-thesis')
             window = v5.DeclaredGameWindow(0, 5, 10)
             store = store_of(batch, model, loss, store_id='first')
-            runtime = v2.create(model, loss, train, v2.V2Config(order='shuffled'), enable_v5=True)
+            runtime = v2.create(model, loss, train, v2.V2Config(order='shuffled'), enable_v5=True,self_moves=True)
             v2.Trainer(runtime).train(store, window=window, max_updates=2)
             path = Path(directory) / 'v2.pt'; v2.save_checkpoint(path, runtime)
             resumed = v2.load_checkpoint(path, enable_v5=True)
@@ -276,7 +276,7 @@ class V2TrainerTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'original batch order'):
                 v2.load_checkpoint(path, enable_v5=True, v2_config=v2.V2Config(order='ordered'))
             with self.assertRaisesRegex(ValueError, 'game zero'):
-                v2.Trainer(v2.create(model, loss, train, enable_v5=True)).train(store, window=v5.DeclaredGameWindow(1, 5, 10))
+                v2.Trainer(v2.create(model, loss, train, enable_v5=True,self_moves=True)).train(store, window=v5.DeclaredGameWindow(1, 5, 10))
             # A completed cursor accepts the next contiguous window on a new store, never a replay.
             v2.Trainer(resumed).train(store, window=window)
             with self.assertRaisesRegex(ValueError, 'replay'):
@@ -290,7 +290,7 @@ class V2TrainerTests(unittest.TestCase):
         batch = varied_batch(rows=8, seed=2)
         model, loss, train = configurations(epochs=4, batch_size=2)
         store = store_of(batch, model, loss)
-        runtime = v2.create(model, loss, train, v2.V2Config(check_interval=4), enable_v5=True)
+        runtime = v2.create(model, loss, train, v2.V2Config(check_interval=4), enable_v5=True,self_moves=True)
         trainer = v2.Trainer(runtime)
         self.assertEqual(len(trainer.train(store, max_updates=3)['updates']), 3)
         with torch.no_grad():
@@ -306,7 +306,7 @@ class V2TrainerTests(unittest.TestCase):
         # A non-finite row slipped in after validation trips the loss flag inside the window.
         poisoned = store_of(batch, model, loss)
         poisoned.tensors['numeric_features'][5, 0, 0, 0] = float('inf')
-        runtime = v2.create(model, loss, train, v2.V2Config(check_interval=8), enable_v5=True)
+        runtime = v2.create(model, loss, train, v2.V2Config(check_interval=8), enable_v5=True,self_moves=True)
         with self.assertRaises(v2.NonFiniteUpdate) as raised:
             v2.Trainer(runtime).train(poisoned)
         self.assertEqual((raised.exception.first_step, raised.exception.window), (3, (1, 4)))
@@ -331,7 +331,7 @@ class V2TrainerTests(unittest.TestCase):
         with patch.object(v2, 'validate_store', side_effect=lambda *a: calls.append(1) or original(*a)), \
                 patch.object(v5_data, 'validate_batch', side_effect=AssertionError('per-batch validation')):
             store = v2.row_store(tensors, model, loss)
-            v2.Trainer(v2.create(model, loss, train, enable_v5=True)).train(store)
+            v2.Trainer(v2.create(model, loss, train, enable_v5=True,self_moves=True)).train(store)
         self.assertEqual(len(calls), 1)
 
     # -- order -----------------------------------------------------------------
@@ -356,7 +356,7 @@ class V2TrainerTests(unittest.TestCase):
         model, loss, train = configurations(batch_size=4, dropout=0.)
         states = []
         for pad in (False, True):
-            runtime = v2.create(model, loss, train, v2.V2Config(pad_partial=pad, optimizer='single'), enable_v5=True)
+            runtime = v2.create(model, loss, train, v2.V2Config(pad_partial=pad, optimizer='single'), enable_v5=True,self_moves=True)
             updates = v2.Trainer(runtime).train(store_of(batch, model, loss))['updates']
             self.assertEqual([u['owner_rows'] for u in updates], [4, 3])
             states.append((updates, runtime.model.state_dict()))
@@ -376,13 +376,13 @@ class V2TrainerTests(unittest.TestCase):
             def call(*a, **k):
                 raise RuntimeError('synthetic inductor failure')
             return call
-        runtime = v2.create(model, loss, train, v2.V2Config(mode='cudagraphs', pad_partial=False), enable_v5=True)
+        runtime = v2.create(model, loss, train, v2.V2Config(mode='cudagraphs', pad_partial=False), enable_v5=True,self_moves=True)
         with patch.object(torch, 'compile', broken):
             trainer = v2.Trainer(runtime)
             report = trainer.train(store)
         self.assertEqual(report['mode']['active'], 'eager')
         self.assertEqual([f['mode'] for f in report['mode']['fallbacks']], ['cudagraphs', 'compiled'])
-        eager = v2.create(model, loss, train, enable_v5=True)
+        eager = v2.create(model, loss, train, enable_v5=True,self_moves=True)
         expected = v2.Trainer(eager).train(store)
         self.assertEqual(report['updates'], expected['updates'])
         fixture.assert_tree_equal(self, eager.model.state_dict(), runtime.model.state_dict())
@@ -404,7 +404,7 @@ class V2TrainerTests(unittest.TestCase):
                 runs = {}
                 for mode in ('eager', 'compiled'):
                     config = v2.V2Config(mode=mode, pad_partial=True, emulate_precision_casts=emulate)
-                    runtime = v2.create(model, loss, train, config, enable_v5=True)
+                    runtime = v2.create(model, loss, train, config, enable_v5=True,self_moves=True)
                     runs[mode] = (v2.Trainer(runtime).train(store), runtime)
                 torch._dynamo.reset()
                 compiled = runs['compiled'][0]
@@ -429,7 +429,7 @@ class V2TrainerTests(unittest.TestCase):
             self.skipTest(f'JAX actor unavailable: {error}')
         batch = varied_batch(rows=6, seed=8)
         model, loss, train = configurations(epochs=1, batch_size=3, schedule='mit-thesis')
-        runtime = v2.create(model, loss, train, v2.V2Config(order='shuffled'), enable_v5=True)
+        runtime = v2.create(model, loss, train, v2.V2Config(order='shuffled'), enable_v5=True,self_moves=True)
         v2.Trainer(runtime).train(store_of(batch, model, loss), window=v5.DeclaredGameWindow(0, 4, 4))
         with tempfile.TemporaryDirectory() as directory:
             checkpoint = Path(directory) / 'v2.pt'; archive = Path(directory) / 'actor.npz'
@@ -480,7 +480,7 @@ def _ddp_worker(rank, world_size, port, directory):
     try:
         model, loss, train, batch = _ddp_setup()
         runtime = v2.create(model, loss, train, v2.V2Config(optimizer='single'), enable_v5=True,
-            process_group=dist.group.WORLD)
+            process_group=dist.group.WORLD,self_moves=True)
         report = v2.Trainer(runtime).train(store_of(batch, model, loss))
         torch.save(dict(state=runtime.model.state_dict(), steps=report['steps'], rows=report['rows']),
             Path(directory) / f'rank{rank}.pt')
@@ -492,7 +492,7 @@ def _ddp_worker(rank, world_size, port, directory):
 def _ddp_reference():
     """One process: per step, average the gradients of order batches 2s and 2s+1."""
     model, loss, train, batch = _ddp_setup()
-    runtime = v2.create(model, loss, train, v2.V2Config(optimizer='single'), enable_v5=True)
+    runtime = v2.create(model, loss, train, v2.V2Config(optimizer='single'), enable_v5=True,self_moves=True)
     store = store_of(batch, model, loss)
     order = v2.BatchOrder(store.rows, store.segments, train.batch_size, order='ordered', seed=0, world_size=2)
     experts = v2.expert_indices(runtime.model, 'cpu'); counts = v2._variant_counts(model, 'cpu')
