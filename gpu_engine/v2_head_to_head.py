@@ -56,6 +56,8 @@ def main(argv=None):
     begin = time.perf_counter()
     prep = argparse.Namespace(config=args.config, arm='B', iterations=2 if args.iteration else 1)
     context = prepare(prep);plan = context['plan']
+    from gpu_engine.private_self_moves import refuse_unthreaded
+    refuse_unthreaded(plan=plan, catalog=context['prepared'].catalog, context='v2 head to head')
     a = snapshot(args.a_run, args.a_iteration);b = snapshot(args.b_run, args.b_iteration)
     if a.archive_sha256 == b.archive_sha256:raise ValueError('two distinct actors required')
     def load(snapshot, root):

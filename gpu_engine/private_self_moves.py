@@ -59,10 +59,10 @@ UNTHREADED = ('self_moves is not threaded through this tool yet: it encodes with
     'an archive that declares self_moves would be played or scored on observations it was not trained on')
 
 
-def refuse_unthreaded(meta, *, context):
-    """Gate and evaluation tools that load run archives but encode with the champion contract fail closed on an archive
-    that declares self_moves (meta['self_moves'], absent = off) until they are threaded."""
-    if bool((meta or {}).get('self_moves', False)):
+def refuse_unthreaded(meta=None, *, plan=None, catalog=None, context):
+    """Off-only tools reject on archives, plans or catalogs before evaluating actors."""
+    if (bool((meta or {}).get('self_moves', False)) or bool(getattr(plan, 'self_moves', False))
+            or bool(getattr(getattr(catalog, 'masks', None), 'self_moves', False))):
         raise ValueError(f'{context}: {UNTHREADED}')
 
 

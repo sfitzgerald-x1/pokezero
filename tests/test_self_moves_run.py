@@ -131,6 +131,36 @@ class RunChecksTests(unittest.TestCase):
         refuse_unthreaded({}, context='t');refuse_unthreaded(None, context='t');refuse_unthreaded({'self_moves': False}, context='t')
         with self.assertRaisesRegex(ValueError, 'not threaded through this tool'):refuse_unthreaded({'self_moves': True}, context='t')
 
+    def test_unthreaded_tools_refuse_on_plans_or_catalogs(self):
+        from gpu_engine.private_self_moves import refuse_unthreaded
+        for plan_on, catalog_on in ((False, False), (True, False), (False, True), (True, True)):
+            plan = SimpleNamespace(self_moves=plan_on)
+            catalog = SimpleNamespace(masks=SimpleNamespace(self_moves=catalog_on))
+            with self.subTest(plan_on=plan_on, catalog_on=catalog_on):
+                if plan_on or catalog_on:
+                    with self.assertRaisesRegex(ValueError, 'not threaded through this tool'):
+                        refuse_unthreaded({}, plan=plan, catalog=catalog, context='t')
+                else:
+                    refuse_unthreaded({}, plan=plan, catalog=catalog, context='t')
+
+    def test_off_only_entry_points_refuse_before_actor_or_backend_use(self):
+        from gpu_engine import v2_head_to_head as plain, v2_search_head_to_head as search
+        with tempfile.TemporaryDirectory() as tmp:
+            common = ['--config', 'unused.json', '--out', tmp, '--a-run', 'a', '--a-iteration', '0', '--b-run', 'b', '--b-iteration', '0']
+            champion = ['--config', 'unused.json', '--out', tmp, '--b-run', 'champion', '--b-iteration', '0', '--reduction', 'none',
+                '--champion-archive', 'c.npz', '--champion-archive-sha256', 'a'*64, '--champion-checkpoint-sha256', 'b'*64]
+            for module, args in ((plain, common), (search, common + ['--reduction', 'none']), (search, champion)):
+                for plan_on, catalog_on in ((True, False), (False, True), (True, True)):
+                    context = dict(plan=SimpleNamespace(self_moves=plan_on),
+                        prepared=SimpleNamespace(catalog=SimpleNamespace(masks=SimpleNamespace(self_moves=catalog_on))))
+                    with self.subTest(module=module.__name__, args=args, plan_on=plan_on, catalog_on=catalog_on), \
+                            mock.patch('gpu_engine.v2_fused.prepare', return_value=context), \
+                            mock.patch.object(module, 'snapshot', side_effect=AssertionError('actor loaded')), \
+                            mock.patch.object(search, 'champion_setup', side_effect=AssertionError('champion loaded')), \
+                            mock.patch('gpu_engine.v5_device_backend.RuntimeBackend', side_effect=AssertionError('backend constructed')):
+                        with self.assertRaisesRegex(ValueError, 'not threaded through this tool'):
+                            module.main(args)
+
 
 @requires_showdown('the synthetic fixture compiles its catalog from a pokemon-showdown checkout')
 @unittest.skipUnless(importlib.util.find_spec('jax'), 'requires isolated JAX')
