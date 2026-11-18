@@ -1136,6 +1136,7 @@ def forecast(c,state,changed):
     _confirmed_ability_from_event). An arrival (install) and a departure (type_revert) end the overlay as before."""
     for side in range(2):
         use=changed[:,side]
+        c=type_event(c,side,use)
         c=reveal_ability(c,state,side,use)
         c=c._replace(trackers=_write(c.trackers,'shown_types',side,_li.take(state.active,_r(state),side),_get(state,'types',side),use))
     return c
