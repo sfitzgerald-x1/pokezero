@@ -28,6 +28,7 @@ from . import device_public_worlds as public_worlds,device_public_world_state as
 from . import phase_d_live_worlds as live,phase_d_tail as tail
 from .v5_hypothetical_state import map_spec
 from .phase_d_constructor_rules import public_hp_bin,request_ordered_packed,own_pp_carry,sleep_support
+from .state import partially_trapped
 
 SCHEMA='pokezero.phase-d.protocol-materialization.v1'
 
@@ -441,23 +442,25 @@ def _wrap_agreement(facts,wrapped,detached,owner):
             raise ValueError('PUBLIC_WRAP_B2_DISAGREEMENT')
 
 
-def _write_wraps(physical,wrapped,facts,seed):
+def _write_wraps(physical,wrapped,facts,seed,*,sources=None):
     """The world with each wrapped active's remaining partial-trap duration drawn uniformly from wrap_support (its own RNG
     per world and side, as _write_encores) and its trapper, the opposing active, as this world's party index (the engine's
     partial_trap_source: transition.py's residual releases the trap once that index is not the foe's living active, and
     state.partially_trapped traps only while it is). Refuses: no live trap on the lines (PUBLIC_WRAP_START_UNAVAILABLE), a
     support the lines rule out (PUBLIC_WRAP_COUNT_UNAVAILABLE), ticks that are not one per residual since the start
-    (PUBLIC_WRAP_TICK_DISAGREEMENT), or a trapper that is not the opposing current active (PUBLIC_WRAP_TRAPPER_NOT_ACTIVE)."""
+    (PUBLIC_WRAP_TICK_DISAGREEMENT), or an inactive trapper without an exact public party join at a pending replacement
+    boundary (PUBLIC_WRAP_TRAPPER_NOT_ACTIVE). Such a joined source keeps its identity until the engine's residual."""
     for side in wrapped:
         fact=facts[side]
         if fact is None:raise ValueError('PUBLIC_WRAP_START_UNAVAILABLE')
         support=wrap_support(fact['k'])
         if not support:raise ValueError('PUBLIC_WRAP_COUNT_UNAVAILABLE')
         if fact['k']!=fact['upkeeps']:raise ValueError('PUBLIC_WRAP_TICK_DISAGREEMENT')
-        if not fact['trapper_active']:raise ValueError('PUBLIC_WRAP_TRAPPER_NOT_ACTIVE')
+        source=int(physical.active[0,1-side]) if fact['trapper_active'] else (sources or {}).get(side)
+        if type(source)is not int or not 0<=source<6 or not fact['trapper_active'] and int(physical.hp[0,1-side,source])<=0:raise ValueError('PUBLIC_WRAP_TRAPPER_NOT_ACTIVE')
         at=int(physical.active[0,side]);count=random.Random(f'wrap:{seed}:{side}').choice(support)
         physical=physical._replace(partial_trap_counter=tail._put(physical.partial_trap_counter,(0,side,at),count),
-            partial_trap_source=tail._put(physical.partial_trap_source,(0,side,at),int(physical.active[0,1-side])))
+            partial_trap_source=tail._put(physical.partial_trap_source,(0,side,at),source))
     return physical
 
 
@@ -776,7 +779,10 @@ def materialize_protocol(root,start,*,inputs,seed,key=None):
             physical=_write_foe_meanlook(physical,detached,foe_meanlook,owner)
             wrap_facts=_once(inputs,root,'wrap_facts',lambda:_wrap_facts(inputs.lines),shared=True)
             _wrap_agreement(wrap_facts,wrapped,detached,owner)
-            physical=_write_wraps(physical,wrapped,wrap_facts,seed)
+            from .phase_d_wrap_source import inactive_sources
+            sources=inactive_sources(physical,wrapped,wrap_facts,lines=inputs.lines,request=state.self_request,detached=detached,
+                metadata=metadata,assignment=assignment,owner=owner,replacement=tail_facts['replacement'])
+            physical=_write_wraps(physical,wrapped,wrap_facts,seed,sources=sources)
         except ValueError as error:
             failures.append(str(error))
             if wrapped:diagnostics.append(dict(kind='PUBLIC_WRAP_WORLD_POSTERIOR',status='TRIGGERED',fatal=True,reason=str(error)))
@@ -793,7 +799,7 @@ def materialize_protocol(root,start,*,inputs,seed,key=None):
             fail=bool(mask[4:].any())
             diagnostics.append(dict(kind='OWN_REQUEST_TRAP_REPRODUCED',status='TRIGGERED' if fail else 'CLEAR',fatal=True))
             if fail:failures.append('OWN_REQUEST_TRAP_NOT_REPRODUCED')
-        elif tail_facts['replacement'] is None and (own_meanlook or own_rooted or owner in wrapped):
+        elif tail_facts['replacement'] is None and (own_meanlook or own_rooted or owner in wrapped and bool(np.asarray(partially_trapped(_device(physical)))[0,owner])):
             # The other direction for a trap written on our active: Showdown traps it (tryTrap: trapped = true) and its
             # request shows `trapped` whenever we have a living bench to switch to (getMoveRequestData's canSwitchIn).
             at=int(physical.active[0,owner])

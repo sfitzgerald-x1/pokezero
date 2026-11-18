@@ -123,7 +123,7 @@ class IngrainConstructionTests(unittest.TestCase):
             {name:SpeciesInfo(name,name,('Normal',),stats) for side in names for name in side},{})
         teams={f'p{side+1}':']'.join('|'.join([name,'','','','tackle','Serious','','N','','','100','255']) for name in party) for side,party in enumerate(names)}
         start=BattleStartOverride(teams)
-        meta=metadata();meta['vocabulary'].update(moves=('','tackle'),types=('','normal'),items=('',));meta['moves']=[dict(pp=0),dict(pp=10)]
+        meta=metadata();meta['vocabulary'].update(moves=('','tackle'),types=('','normal','flying','steel','fire','ice'),items=('',));meta['moves']=[dict(pp=0),dict(pp=10)]
         source=NS(source_hash='same')
         for owner in (0,1):
             with self.subTest(owner=owner):
