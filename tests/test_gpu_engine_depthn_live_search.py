@@ -488,7 +488,7 @@ class LiveSearchTests(unittest.TestCase):
             unknown=(live.hedge,'averaging',lambda p,l:None,'AVERAGING_UNKNOWN_PRICE'),
             nan=(live.hedge,'averaging',lambda p,l:(lambda c:hedge.Choice(c.strategy,c.value,tuple(None if q is None else math.nan for q in c.q)))(averaging(p,l)),
                 'AVERAGING_INVALID_RESULT'),
-            value=(live.backups,'backup',lambda frame,row,rule:(_ for _ in()).throw(ValueError('public leaf value outside[-1,1]')),
+            value=(live.backups,'backup_learner_max_fast',lambda frame,row:(_ for _ in()).throw(ValueError('public leaf value outside[-1,1]')),   # the reduce's backup
                 'AVERAGING_ERROR: public leaf value outside[-1,1]'))
         for name,(target,attr,fake,reason)in cases.items():
             with self.subTest(name),patch.object(target,attr,side_effect=fake):rows,_=self.run_batch(self.search(),[request('ok',0)],outcomes)

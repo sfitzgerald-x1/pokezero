@@ -584,23 +584,27 @@ class DepthNLiveSearch:
         causes=backups.refusal_summary(frame)['roots']if made.requests else()
         items={p['request_id']:item for(_,p,_),item in zip(todo,prepared)};by_id={p['request_id']:p for _,p,_ in todo}
         logits=priced.get('reply_logits')or{}   # the batching pipeline's reply forward, done beside the price (else per root, here)
-        results=[self._decide_root(root,frame,made,causes,items,by_id,children,seam_notes,labels,logits.get(root['request_id']))for root in made.roots]
+        errors=priced.get('reply_errors')or{}
+        results=[self._decide_root(root,frame,made,causes,items,by_id,children,seam_notes,labels,logits.get(root['request_id']),
+            **({'reply_error':errors[root['request_id']]}if root['request_id']in errors else{}))for root in made.roots]
         if len(prepared)!=len(todo)or len(results)!=len(todo)or any(r['request_id']!=p['request_id']for r,(_,p,_)in zip(results,todo)):
             raise ValueError('the decisions do not answer the batch\'s requests in order')
         return results
 
-    def _decide_root(self,root,frame,made,causes,items,by_id,children,seam_notes,labels,reply_logits=None):
+    def _decide_root(self,root,frame,made,causes,items,by_id,children,seam_notes,labels,reply_logits=None,*,reply_error=None):
         view=dict(root_view_source=root.get('root_view_source'),b2_view=wire_b2_view(root.get('b2_view')))
         if root['status']!='PRICED':return dict(request_id=root['request_id'],status='REFUSED',refusal=root['reason'],block_causes=None,**view)
         block=[causes[r]['cause']for r in root['rows']];base=dict(request_id=root['request_id'],block_causes=block,**view)
         if any(block):return dict(base,status='REFUSED',refusal=next(c for c in block if c))   # DepthN's rule: a refused block refuses the root
-        try:blocks=[backups.backup(frame,r,backups.learner_max)for r in root['rows']]   # WorldPrices: averaging's value and logit rules
+        try:blocks=[backups.backup_learner_max_fast(frame,r)for r in root['rows']]   # WorldPrices: averaging's value and logit rules (bitwise the reference's)
         except ValueError as error:return dict(base,status='REFUSED',refusal=f'AVERAGING_ERROR: {error}')
         reply=None
         if getattr(self,'reply',None)is not None:   # br_fp: the reply model's logits on the same worlds; the champion's averaging is reported
             item=items[root['request_id']]
-            try:replied,seconds,check=self.reply.apply(blocks,item.made.worlds,int(item.detached.address.owner),
-                **({}if reply_logits is None else{'logits':reply_logits}))
+            try:
+                if reply_error is not None:raise reply_error
+                replied,seconds,check=self.reply.apply(blocks,item.made.worlds,int(item.detached.address.owner),
+                    **({}if reply_logits is None else{'logits':reply_logits}))
             except FATAL:raise
             except Exception as error:return dict(base,status='REFUSED',refusal=f'REPLY_PRIOR_ERROR: {type(error).__name__}: {error}')
             champion=decide(blocks,root['root_logits'],root['root_legal'])

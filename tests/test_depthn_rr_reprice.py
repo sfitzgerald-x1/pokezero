@@ -94,6 +94,7 @@ def pricing(stack, *, still_clock=False):
     stack.enter_context(patch.object(cw, 'price', return_value=(SimpleNamespace(), None)))
     stack.enter_context(patch.object(backups, 'refusal_summary', return_value=dict(roots=[dict(cause=None)] * 64)))
     stack.enter_context(patch.object(backups, 'backup', side_effect=lambda frame, r, rule: (prices(2 * r), prices(2 * r + 1))))
+    stack.enter_context(patch.object(backups, 'backup_learner_max_fast', side_effect=lambda frame, r: (prices(2 * r), prices(2 * r + 1))))   # the live reduce's
     stack.enter_context(patch.object(backups, 'backup_depth1', side_effect=lambda frame, r: (prices(2 * r), prices(2 * r + 1))))
     if still_clock:   # every stage timing 0, so whole responses compare
         for module in (live, cw):stack.enter_context(patch.object(module, 'time', SimpleNamespace(perf_counter=lambda: 0.)))
