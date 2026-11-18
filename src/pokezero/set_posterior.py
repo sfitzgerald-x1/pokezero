@@ -201,7 +201,7 @@ def draw(post: EncounterPosterior, rng: random.Random) -> int:
     raise AssertionError('unreachable')
 
 
-def feature_rows(payload,source,*,game_sha256):
+def feature_rows(payload,source,*,game_sha256,require_prior=False):
     """Validate the exact root/source row axis before any opt-in pin is applied."""
     from .randbat import canonical_gen3_randbat_species_id
     encoded={k:v for k,v in payload.items()if k!='payload_sha256'}
@@ -210,12 +210,14 @@ def feature_rows(payload,source,*,game_sha256):
     if (payload.get('schema')!='gen3-joint-features-v1'or payload.get('payload_sha256')!=actual
             or payload.get('game_sha256')!=game_sha256 or payload.get('source_hash')!=source_hash):
         raise ValueError('set posterior feature provenance mismatch')
-    if set(payload['rows'])!=set(payload['prior_rows']):raise ValueError('feature prior/posterior species mismatch')
+    prior=payload.get('prior_rows')
+    if require_prior and prior is None:raise ValueError('feature prior rows required')
+    if prior is not None and set(payload['rows'])!=set(prior):raise ValueError('feature prior/posterior species mismatch')
     for name,row in payload['rows'].items():
         if hasattr(source,'universes'):variants=source.universes[name].variants
         else:variants=source.variants[source.species_id(name)]
         ids=tuple(v.variant_id for v in variants)
-        for entry in(row,payload['prior_rows'][name]):
+        for entry in((row,prior[name])if prior is not None else(row,)):
             if(tuple(entry['variant_ids'])!=ids or len(entry['support'])!=len(ids)
                     or len(entry['weights'])!=len(ids)or not any(entry['weights'])
                     or any(type(s)is not bool for s in entry['support'])

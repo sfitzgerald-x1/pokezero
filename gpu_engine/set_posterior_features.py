@@ -17,7 +17,7 @@ class Inputs(NamedTuple):
 def compile_inputs(payload,catalog,state,*,owner,game_sha256):
     """Bind integer source rows to the public encounter axis, never party truth."""
     from pokezero.set_posterior import feature_rows
-    rows=feature_rows(payload,catalog.source,game_sha256=game_sha256)
+    rows=feature_rows(payload,catalog.source,game_sha256=game_sha256,require_prior=True)
     species=np.asarray(state.beliefs.species)
     if species.shape!=(1,2,6)or owner not in(0,1):raise ValueError('one owning feature root required')
     support=np.zeros((1,2,6,2),np.uint32);active=np.zeros((1,2,6),bool)

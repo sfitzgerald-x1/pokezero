@@ -4,7 +4,7 @@ Only owning protocol lines, the exact original own request and public beliefs
 enter this boundary. Current party coordinates never become generation slots.
 """
 from collections import OrderedDict
-from dataclasses import dataclass
+from dataclasses import dataclass,replace
 import hashlib
 import json
 from pathlib import Path
@@ -73,7 +73,7 @@ class JointSession:
                 count=count, rng=random.Random(seed), stage1_sampler=lambda count, rng: None,
                 budget_seconds=left, draw_reserve_seconds=.05, legality_cache=self.cache(context.battle_id),
                 battle_context=dict(owner=view.self_slot, own_initial_team=own, producer=self.producer),
-                evidence=evidence, fixed_slots=fixed, export_features=features)
+                evidence=evidence, fixed_slots=fixed, export_features=features,export_posterior=True)
             teams, payload = outcome.teams, outcome.features
             mode, reason, tv = outcome.mode, outcome.reason, outcome.tv_bound
         elapsed = perf_counter() - started
@@ -93,11 +93,18 @@ class JointSession:
             payload['game_sha256']=game
             payload['payload_sha256']=hashlib.sha256(json.dumps(payload,sort_keys=True,
                 separators=(',',':')).encode()).hexdigest()
+        original_posts=posts
+        if teams is not None:
+            posts={key:replace(post,weights=tuple(payload['rows'][canonical_gen3_randbat_species_id(key)]['weights']),
+                support=tuple(payload['rows'][canonical_gen3_randbat_species_id(key)]['support']),provenance=payload['provenance'])
+                for key,post in posts.items()}
         diagnostic = dict(kind='PUBLIC_JOINT_POSTERIOR', status='CLEAR', fatal=False, mode=mode,
             tv_bound=None if tv is None else [tv.numerator, tv.denominator], seconds=elapsed,
             fallback=mode == 'stage1_fallback', reason=reason, source_hash=self.table.source_hash,
             table_sha256=self.table.provenance, model_sha256=self.model['sha256'], game_sha256=game,
             producer=self.producer, owner=view.self_slot)
+        diagnostic['narrowed_vs_hard']=any(sum(post.support)<sum(post.hard)for post in posts.values())
+        diagnostic['narrowed_vs_stage1']=any(sum(post.support)<sum(original_posts[key].support)for key,post in posts.items())
         draws=None if teams is None else [[(m.species,m.variant_index,m.slot,m.incoming_context)for m in team]for team in teams]
         diagnostic['law_sha256']=hashlib.sha256(json.dumps((game,self.table.provenance,self.model['sha256'],
             mode,diagnostic['tv_bound'],draws,payload),sort_keys=True,separators=(',',':')).encode()).hexdigest()

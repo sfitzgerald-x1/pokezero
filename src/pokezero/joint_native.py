@@ -232,7 +232,7 @@ class JointDrawOutcome:
 
 def draw_with_stage1_fallback(model, manifest, table, *, count, rng, stage1_sampler,
                               budget_seconds=0.25, draw_reserve_seconds=0.05,
-                              legality_cache=None, battle_context, export_features=False, **kwargs):
+                              legality_cache=None, battle_context, export_features=False,export_posterior=False, **kwargs):
     """Try the authorized TV<=.01 joint draw; preserve the stage-1 RNG on fallback.
 
     stage1_sampler(count, rng) is the existing per-slot consumer, supplied by
@@ -261,7 +261,7 @@ def draw_with_stage1_fallback(model, manifest, table, *, count, rng, stage1_samp
         if perf_counter() - started > budget_seconds - draw_reserve_seconds:
             raise JointBudgetExceeded('certificate completed after normalizer deadline')
         teams = joint.draw_many(count, rng)
-        features = joint.feature_payload() if export_features else None
+        features = joint.feature_payload() if export_features or export_posterior else None
         if export_features:
             prior_options=dict(kwargs)
             prior_options['evidence']={s:(1,)*len(w) for s,w in joint.reference.evidence.items()}

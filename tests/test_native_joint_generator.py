@@ -188,6 +188,16 @@ class NativeJointExactness(unittest.TestCase):
         self.assertEqual(result.teams,tuple(expected.randrange(1000)for _ in range(2)))
         self.assertEqual(rng.getstate(),expected.getstate())
 
+    def test_sampler_marginals_export_without_feature_prior(self):
+        context=dict(owner='p1',own_initial_team=(('a',0),('b',1),('c',0)),producer='shared-battle')
+        with patch('pokezero.joint_native.validate_pinned_catalog'):
+            result=draw_with_stage1_fallback(*fixture(),count=2,rng=random.Random(6),export_posterior=True,
+                stage1_sampler=lambda count,rng:(),battle_context=context,evidence={'a':(1,7)},
+                budget_seconds=2,draw_reserve_seconds=.05)
+        self.assertEqual(result.mode,'exact')
+        self.assertTrue(result.features['rows']['a']['weights'])
+        self.assertNotIn('prior_rows',result.features)
+
     def test_native_certificate_and_population_inputs_are_checked(self):
         payload = json.loads(native_payload(JointGenerator(*fixture())))
         payload['completable'] = True
