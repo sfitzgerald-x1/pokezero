@@ -115,3 +115,22 @@ with both a new runtime in the same process and a fresh worker process loading
 the same prefix checkpoint. A cold process does not inherit type identities,
 compiled state, or CUDA graphs. Record compiler-cache policy and preserve
 strict state/statistic comparisons before proceeding to production smoke.
+
+
+### Actor archive source compatibility
+
+The installed Torch model and contract must match the actor loader's exact
+committed source hashes. Model class-family caching changed the Torch source
+bytes while preserving initialized state, tensor schema and inference math.
+The loader accepts archives from the explicitly named pre-cache producer and
+the current producer under the same contract; this does not allow the old or
+an unknown implementation to run. Archive/checkpoint SHA bindings, namespaces,
+public evaluation flags and tensor validation remain required.
+
+New exports record the current Torch source hash. Loading a pre-cache archive
+preserves its producer hash and original archive SHA; the returned execution
+receipt separately records `loader_torch_source_sha256` and
+`loader_contract_source_sha256`. Existing plans and archives are not rewritten.
+Actor loading needs no Torch installation; checkpoint export still needs Torch.
+Source compatibility does not attest runtime libraries or qualify production
+collection: execution receipts must also bind source, runtime and test evidence.

@@ -22,8 +22,14 @@ from pokezero.v5_model import EXPERT_ROLES, MODEL_INPUTS, TOKEN_ROLES, V5ModelCo
 
 ARCHIVE_SCHEMA = 'pokezero.gpu_actor.v5'
 CHECKPOINT_SCHEMA = 'pokezero.checkpoint.v5'
-TORCH_SOURCE_SHA256 = 'f593bc5f41fa72d12d78fa57c8ff94b9cadff824f3a3a52cc026743fbd6e3d9b'
+TORCH_SOURCE_SHA256 = 'eee095f5894a11bcf47ea0fb6ef7b8e1ed3e775158f0e81359d1a279222dc16b'
 CONTRACT_SOURCE_SHA256 = 'b6a823195350ff3fed68699ea70bd925c4e9df1ff4f65e222928098d75080170'
+# The class-family cache changed construction identity, preserving initialized
+# state, schema and inference math. Only these two archive producers share that
+# contract. This compatibility set never admits a different installed source.
+LEGACY_ARCHIVE_TORCH_SOURCE_SHA256 = 'f593bc5f41fa72d12d78fa57c8ff94b9cadff824f3a3a52cc026743fbd6e3d9b'
+ACCEPTED_ARCHIVE_TORCH_SOURCE_SHA256 = frozenset((
+    TORCH_SOURCE_SHA256, LEGACY_ARCHIVE_TORCH_SOURCE_SHA256))
 
 
 def _sha(value):
@@ -170,7 +176,8 @@ def load(path, *, expected_archive_sha256, expected_checkpoint_sha256, expected_
             or metadata.get('view') != 'PUBLIC' or metadata.get('auxiliary_heads') is not False
             or metadata.get('evaluation') is not True
             or metadata.get('checkpoint_sha256') != expected_checkpoint_sha256
-            or metadata.get('torch_source_sha256') != TORCH_SOURCE_SHA256
+            or type(metadata.get('torch_source_sha256')) is not str
+            or metadata.get('torch_source_sha256') not in ACCEPTED_ARCHIVE_TORCH_SOURCE_SHA256
             or metadata.get('contract_source_sha256') != CONTRACT_SOURCE_SHA256
             or metadata.get('source_contract_sha256') != _sha(contract.contract_descriptor())):
         raise ValueError('explicit original public v5 actor archive required')
@@ -184,7 +191,9 @@ def load(path, *, expected_archive_sha256, expected_checkpoint_sha256, expected_
                 for name, a in params.items()}):
         raise ValueError('v5 actor tensor digest/count differs')
     import jax.numpy as j
-    return {name: j.asarray(value) for name, value in params.items()}, config, dict(metadata, weights_archive_sha256=digest)
+    return {name: j.asarray(value) for name, value in params.items()}, config, dict(metadata,
+        weights_archive_sha256=digest, loader_torch_source_sha256=TORCH_SOURCE_SHA256,
+        loader_contract_source_sha256=CONTRACT_SOURCE_SHA256)
 
 
 def prepare_inputs(columns, config):
