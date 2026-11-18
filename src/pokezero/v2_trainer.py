@@ -605,6 +605,7 @@ class Runtime:
     order: dict | None = None
     window: v5.DeclaredGameWindow | None = None
     failed: str | None = None
+    self_moves: bool = False
 
 
 def _distributed(process_group):
@@ -626,7 +627,8 @@ def build_optimizer(parameters, train_config, kind):
     return torch.optim.AdamW(parameters, foreach=False, fused=None, **options)
 
 
-def create(model_config, loss_config, train_config, v2_config=None, *, enable_v5=False, device=None, process_group=None):
+def create(model_config, loss_config, train_config, v2_config=None, *, enable_v5=False, device=None, process_group=None,
+           self_moves=False):
     """Scratch runtime. Model parameters and the RNG state come from ``v5_training.create``.
 
     ``device`` overrides ``train_config.device`` for placement only (for example,
@@ -635,13 +637,15 @@ def create(model_config, loss_config, train_config, v2_config=None, *, enable_v5
     """
     if enable_v5 is not True:
         raise ValueError('explicit v5 trainer enablement required')
+    if type(self_moves) is not bool:
+        raise ValueError('explicit bool self_moves required')
     v2_config = V2Config() if v2_config is None else v2_config
     if type(v2_config) is not V2Config:
         raise ValueError('explicit V2 configuration required')
     torch = _torch()
     device = train_config.device if device is None else device
     placed = replace(train_config, device=device)
-    base = v5.create(model_config, loss_config, placed, enable_v5=True)
+    base = v5.create(model_config, loss_config, placed, enable_v5=True, self_moves=self_moves)
     world_size, rank = _distributed(process_group)
     rng = base.rng
     if rank:
@@ -650,7 +654,7 @@ def create(model_config, loss_config, train_config, v2_config=None, *, enable_v5
             rng = v5._rng_state(torch, device.startswith('cuda'))
     optimizer = build_optimizer(base.model.parameters(), train_config, v2_config.optimizer)
     runtime = Runtime(model_config, loss_config, train_config, v2_config, base.model, optimizer, rng,
-        contract.contract_descriptor(), device, world_size, rank, process_group)
+        contract.contract_descriptor(), device, world_size, rank, process_group, self_moves=self_moves)
     if world_size > 1:
         import torch.distributed as dist
         with torch.no_grad():
@@ -971,7 +975,8 @@ def _load_optimizer_state(optimizer, saved):
 
 def _v5_metadata(runtime):
     shim = v5.Runtime(runtime.model_config, runtime.loss_config, runtime.train_config, runtime.model,
-        runtime.optimizer, runtime.rng, runtime.source_contract, steps=runtime.steps, rows=runtime.rows)
+        runtime.optimizer, runtime.rng, runtime.source_contract, steps=runtime.steps, rows=runtime.rows,
+        self_moves=runtime.self_moves)
     return v5._metadata(shim)
 
 
@@ -996,6 +1001,8 @@ def save_checkpoint(path, runtime):
     """
     if type(runtime) is not Runtime:
         raise ValueError('V2 runtime required')
+    if type(runtime.self_moves) is not bool:
+        raise ValueError('explicit bool runtime self_moves required')
     if runtime.failed:
         raise RuntimeError('refusing to checkpoint a runtime that failed a finiteness check')
     torch = _torch()
@@ -1019,6 +1026,9 @@ def save_checkpoint(path, runtime):
         os.link(temporary, path); temporary.unlink()
         receipt = dict(path=str(path), sha256=v5_data._file_sha(path), steps=runtime.steps, rows=runtime.rows,
             schema=v5.CHECKPOINT_SCHEMA, v2_schema=V2_SCHEMA)
+        from .checkpoint_self_moves import _writer_receipt
+        receipt['encoding_receipt'] = _writer_receipt(path, checkpoint_sha256=receipt['sha256'],
+            metadata_sha256=payload['metadata_sha256'], self_moves=runtime.self_moves)
     if runtime.world_size > 1:
         import torch.distributed as dist
         dist.barrier(group=runtime.process_group)
@@ -1026,7 +1036,8 @@ def save_checkpoint(path, runtime):
 
 
 def load_checkpoint(path, *, enable_v5=False, v2_config=None, expected_model_config=None, expected_loss_config=None,
-                    expected_train_config=None, device=None, process_group=None):
+                    expected_train_config=None, device=None, process_group=None, expected_self_moves=None,
+                    off_provenance=None, expected_checkpoint_sha256=None):
     """Resume a V2 checkpoint exactly: model, optimizer, RNG, cursor and counters.
 
     ``v2_config`` may change execution-only choices (mode, check interval,
@@ -1034,8 +1045,11 @@ def load_checkpoint(path, *, enable_v5=False, v2_config=None, expected_model_con
     """
     if enable_v5 is not True:
         raise ValueError('explicit v5 trainer enablement required')
+    from .checkpoint_self_moves import checked_checkpoint, resolve_self_moves
+    checked = checked_checkpoint(path, expected_checkpoint_sha256=expected_checkpoint_sha256)
+    self_moves = resolve_self_moves(checked, expected_self_moves=expected_self_moves, off_provenance=off_provenance)
     torch = _torch()
-    payload = torch.load(Path(path), map_location='cpu', weights_only=True)
+    payload = checked.payload
     metadata = payload.get('metadata', {}); section = payload.get('v2')
     if (metadata.get('schema') != v5.CHECKPOINT_SCHEMA or payload.get('metadata_sha256') != _sha(metadata)
             or metadata.get('training_schema') != TRAINING_CONTRACT_SCHEMA
@@ -1055,7 +1069,8 @@ def load_checkpoint(path, *, enable_v5=False, v2_config=None, expected_model_con
     if section['cursor'] is not None and not section['cursor']['complete'] and (
             (v2_config.order, v2_config.order_seed) != (saved.order, saved.order_seed)):
         raise ValueError('an unfinished cursor resumes only with its original batch order')
-    runtime = create(model, loss, training, v2_config, enable_v5=True, device=device, process_group=process_group)
+    runtime = create(model, loss, training, v2_config, enable_v5=True, device=device, process_group=process_group,
+        self_moves=self_moves)
     if runtime.world_size != section['world_size']:
         raise ValueError('resume requires the original world size')
     runtime.model.load_state_dict(payload['state_dict'], strict=True)
@@ -1072,7 +1087,8 @@ def load_checkpoint(path, *, enable_v5=False, v2_config=None, expected_model_con
     return runtime
 
 
-def export_actor(checkpoint, out):
+def export_actor(checkpoint, out, *, expected_self_moves=None, off_provenance=None):
     """JAX actor archive from a V2 checkpoint, through ``gpu_engine.v5_model.export``."""
     from gpu_engine import v5_model as actor
-    return actor.export(checkpoint, out, expected_checkpoint_sha256=v5_data._file_sha(checkpoint), enable_v5=True)
+    return actor.export(checkpoint, out, expected_checkpoint_sha256=v5_data._file_sha(checkpoint), enable_v5=True,
+        self_moves=expected_self_moves, off_provenance=off_provenance)

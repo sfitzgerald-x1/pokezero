@@ -243,9 +243,10 @@ class Backend:
                     on_end(game.stream_id,status,0.,sha(dict(reason='attempted device cell missing; no replay',binding=self._binding(game,checkpoint))))
             dispositions[status]=dispositions.get(status,0)+1
         return dict(report, status='RECOVERED_STORED_ATTEMPT',dispositions=dispositions)
-    def collect(self, batch, checkpoint, path, *, dataset_config, on_end, check_progress):
+    def collect(self, batch, checkpoint, path, *, dataset_config, on_end, check_progress, off_provenance=None):
         path = Path(path); path.mkdir(parents=True, exist_ok=False)
-        archive = path / 'actor.npz'; receipt = champion.export(checkpoint, archive)
+        archive = path / 'actor.npz'; receipt = champion.export(checkpoint, archive,
+            **(dict(off_provenance=off_provenance) if off_provenance is not None else {}))
         params, config, metadata = champion.load(archive)
         require(config == champion.config_from_checkpoint(self.model_config.to_dict()) and receipt['checkpoint_sha256'] == file_sha(checkpoint), 'original v4 checkpoint/shape')
         indices = np.asarray([g.team_indices for g in batch.games], np.int32)
