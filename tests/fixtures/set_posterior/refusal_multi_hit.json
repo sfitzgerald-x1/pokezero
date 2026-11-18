@@ -1,0 +1,133 @@
+{
+ "beliefs": [
+  {
+   "condition": "100/100",
+   "gender": "F",
+   "item_mutated": false,
+   "revealed_ability": null,
+   "revealed_item": null,
+   "revealed_moves": [
+    "Bonemerang"
+   ],
+   "ruled_out_abilities": [],
+   "ruled_out_items": [],
+   "showdown_slot": "p1",
+   "species": "Marowak"
+  }
+ ],
+ "census": {
+  "species": {
+   "marowak": {
+    "census_lik": [
+     1.0
+    ],
+    "census_n": 1,
+    "census_n_after": 1,
+    "census_strikes": 0,
+    "survivor_ids": [
+     "marowak-2-variant-2"
+    ],
+    "true_variant": "marowak-2-variant-2"
+   }
+  },
+  "strikes": [
+   {
+    "attacker": "Marowak",
+    "crit": false,
+    "eff": null,
+    "hp_before": 258,
+    "ko": false,
+    "line": 28,
+    "move": "bonemerang",
+    "n_excluded_universe": null,
+    "n_variants_with_move": null,
+    "observed": null,
+    "reason": "multi-hit",
+    "true_match": null,
+    "true_variant": null
+   }
+  ]
+ },
+ "decision_index": 1,
+ "format_id": "gen3randombattle",
+ "name": "refusal_multi_hit",
+ "note": "Census refusal: multi_hit",
+ "ordinal": 1077,
+ "owner": "p2",
+ "posterior": {
+  "marowak": {
+   "hard": [
+    1
+   ],
+   "provenance": "f41303c81ea0518a88585b948daddbd030a57507441aba59632c475e07ddd696",
+   "strikes": [
+    {
+     "admitted": false,
+     "counts": null,
+     "crit": false,
+     "ko": false,
+     "line": 28,
+     "move": "bonemerang",
+     "observed": null,
+     "reason": "multi-hit"
+    }
+   ],
+   "weights": [
+    0,
+    1
+   ]
+  }
+ },
+ "prefix_sha256": "a073e08645e10531220fd56ecae891da5e1c4d61e40f1744f5b36b58f62590c3",
+ "request": {
+  "battle_id": "battle-gen3randombattle-controlled-2103400179",
+  "decision_index": 1,
+  "generation": 4,
+  "lines": [
+   "|t:|1794575228",
+   "|gametype|singles",
+   "|player|p1|FoulPlayBot||",
+   "|player|p2|PokeZeroBot||",
+   "|gen|3",
+   "|tier|[Gen 3] Random Battle",
+   "|rule|HP Percentage Mod: HP is shown in percentages",
+   "|rule|Beat Up Nicknames Mod: Beat Up will not reveal any party members",
+   "|rule|Endless Battle Clause: Forcing endless battles is banned",
+   "|rule|Sleep Clause Mod: Limit one foe put to sleep",
+   "|rule|Switch Priority Clause Mod: Faster Pok\u00e9mon switch first",
+   "|rule|Species Clause: Limit one of each Pok\u00e9mon",
+   "|rule|OHKO Clause: OHKO moves are banned",
+   "|rule|Evasion Items Clause: Evasion items are banned",
+   "|rule|Evasion Moves Clause: Evasion moves are banned",
+   "|",
+   "|t:|1794575229",
+   "|teamsize|p1|6",
+   "|teamsize|p2|6",
+   "|start",
+   "|switch|p1a: Marowak|Marowak, L83, F|100/100",
+   "|switch|p2a: Ditto|Ditto|258/258",
+   "|turn|1",
+   "|request|{\"active\":[{\"moves\":[{\"move\":\"Transform\",\"id\":\"transform\",\"pp\":16,\"maxpp\":16,\"target\":\"normal\",\"disabled\":false}]}],\"side\":{\"name\":\"PokeZeroBot\",\"id\":\"p2\",\"pokemon\":[{\"ident\":\"p2: Ditto\",\"details\":\"Ditto\",\"condition\":\"258/258\",\"active\":true,\"stats\":{\"atk\":153,\"def\":153,\"spa\":153,\"spd\":153,\"spe\":153},\"moves\":[\"transform\"],\"baseAbility\":\"limber\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Ninetales\",\"details\":\"Ninetales, L82, M\",\"condition\":\"254/254\",\"active\":false,\"stats\":{\"atk\":131,\"def\":170,\"spa\":179,\"spd\":211,\"spe\":211},\"moves\":[\"substitute\",\"hiddenpowergrass\",\"fireblast\",\"willowisp\"],\"baseAbility\":\"flashfire\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Fearow\",\"details\":\"Fearow, L81, M\",\"condition\":\"238/238\",\"active\":false,\"stats\":{\"atk\":192,\"def\":152,\"spa\":145,\"spd\":145,\"spe\":209},\"moves\":[\"drillpeck\",\"doubleedge\",\"quickattack\",\"hiddenpowerground\"],\"baseAbility\":\"keeneye\",\"item\":\"choiceband\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Shuckle\",\"details\":\"Shuckle, L98, F\",\"condition\":\"198/198\",\"active\":false,\"stats\":{\"atk\":75,\"def\":506,\"spa\":75,\"spd\":506,\"spe\":65},\"moves\":[\"rest\",\"wrap\",\"toxic\",\"encore\"],\"baseAbility\":\"sturdy\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Absol\",\"details\":\"Absol, L87, M\",\"condition\":\"255/255\",\"active\":false,\"stats\":{\"atk\":276,\"def\":153,\"spa\":179,\"spd\":153,\"spe\":179},\"moves\":[\"shadowball\",\"doubleedge\",\"hiddenpowerfighting\",\"quickattack\"],\"baseAbility\":\"pressure\",\"item\":\"choiceband\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Hypno\",\"details\":\"Hypno, L88, M\",\"condition\":\"293/293\",\"active\":false,\"stats\":{\"atk\":133,\"def\":173,\"spa\":179,\"spd\":253,\"spe\":168},\"moves\":[\"firepunch\",\"psychic\",\"calmmind\",\"batonpass\"],\"baseAbility\":\"insomnia\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"}]}}",
+   "|",
+   "|t:|1794575231",
+   "|move|p2a: Ditto|Transform|p1a: Marowak",
+   "|-transform|p2a: Ditto|p1a: Marowak",
+   "|move|p1a: Marowak|Bonemerang|p2a: Ditto",
+   "|-damage|p2a: Ditto|175/258",
+   "|-damage|p2a: Ditto|92/258",
+   "|-hitcount|p2a: Ditto|2",
+   "|",
+   "|-heal|p2a: Ditto|108/258|[from] item: Leftovers",
+   "|upkeep",
+   "|turn|2",
+   "|request|{\"active\":[{\"moves\":[{\"move\":\"Swords Dance\",\"id\":\"swordsdance\",\"pp\":5,\"maxpp\":48,\"target\":\"self\",\"disabled\":false},{\"move\":\"Bonemerang\",\"id\":\"bonemerang\",\"pp\":5,\"maxpp\":10,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Double-Edge\",\"id\":\"doubleedge\",\"pp\":5,\"maxpp\":15,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Rock Slide\",\"id\":\"rockslide\",\"pp\":5,\"maxpp\":10,\"target\":\"allAdjacentFoes\",\"disabled\":false}]}],\"side\":{\"name\":\"PokeZeroBot\",\"id\":\"p2\",\"pokemon\":[{\"ident\":\"p2: Ditto\",\"details\":\"Ditto\",\"condition\":\"108/258\",\"active\":true,\"stats\":{\"atk\":153,\"def\":153,\"spa\":153,\"spd\":153,\"spe\":153},\"moves\":[\"swordsdance\",\"bonemerang\",\"doubleedge\",\"rockslide\"],\"baseAbility\":\"limber\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Ninetales\",\"details\":\"Ninetales, L82, M\",\"condition\":\"254/254\",\"active\":false,\"stats\":{\"atk\":131,\"def\":170,\"spa\":179,\"spd\":211,\"spe\":211},\"moves\":[\"substitute\",\"hiddenpowergrass\",\"fireblast\",\"willowisp\"],\"baseAbility\":\"flashfire\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Fearow\",\"details\":\"Fearow, L81, M\",\"condition\":\"238/238\",\"active\":false,\"stats\":{\"atk\":192,\"def\":152,\"spa\":145,\"spd\":145,\"spe\":209},\"moves\":[\"drillpeck\",\"doubleedge\",\"quickattack\",\"hiddenpowerground\"],\"baseAbility\":\"keeneye\",\"item\":\"choiceband\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Shuckle\",\"details\":\"Shuckle, L98, F\",\"condition\":\"198/198\",\"active\":false,\"stats\":{\"atk\":75,\"def\":506,\"spa\":75,\"spd\":506,\"spe\":65},\"moves\":[\"rest\",\"wrap\",\"toxic\",\"encore\"],\"baseAbility\":\"sturdy\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Absol\",\"details\":\"Absol, L87, M\",\"condition\":\"255/255\",\"active\":false,\"stats\":{\"atk\":276,\"def\":153,\"spa\":179,\"spd\":153,\"spe\":179},\"moves\":[\"shadowball\",\"doubleedge\",\"hiddenpowerfighting\",\"quickattack\"],\"baseAbility\":\"pressure\",\"item\":\"choiceband\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Hypno\",\"details\":\"Hypno, L88, M\",\"condition\":\"293/293\",\"active\":false,\"stats\":{\"atk\":133,\"def\":173,\"spa\":179,\"spd\":253,\"spe\":168},\"moves\":[\"firepunch\",\"psychic\",\"calmmind\",\"batonpass\"],\"baseAbility\":\"insomnia\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"}]}}"
+  ],
+  "own_request_line": "|request|{\"active\":[{\"moves\":[{\"move\":\"Swords Dance\",\"id\":\"swordsdance\",\"pp\":5,\"maxpp\":48,\"target\":\"self\",\"disabled\":false},{\"move\":\"Bonemerang\",\"id\":\"bonemerang\",\"pp\":5,\"maxpp\":10,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Double-Edge\",\"id\":\"doubleedge\",\"pp\":5,\"maxpp\":15,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Rock Slide\",\"id\":\"rockslide\",\"pp\":5,\"maxpp\":10,\"target\":\"allAdjacentFoes\",\"disabled\":false}]}],\"side\":{\"name\":\"PokeZeroBot\",\"id\":\"p2\",\"pokemon\":[{\"ident\":\"p2: Ditto\",\"details\":\"Ditto\",\"condition\":\"108/258\",\"active\":true,\"stats\":{\"atk\":153,\"def\":153,\"spa\":153,\"spd\":153,\"spe\":153},\"moves\":[\"swordsdance\",\"bonemerang\",\"doubleedge\",\"rockslide\"],\"baseAbility\":\"limber\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Ninetales\",\"details\":\"Ninetales, L82, M\",\"condition\":\"254/254\",\"active\":false,\"stats\":{\"atk\":131,\"def\":170,\"spa\":179,\"spd\":211,\"spe\":211},\"moves\":[\"substitute\",\"hiddenpowergrass\",\"fireblast\",\"willowisp\"],\"baseAbility\":\"flashfire\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Fearow\",\"details\":\"Fearow, L81, M\",\"condition\":\"238/238\",\"active\":false,\"stats\":{\"atk\":192,\"def\":152,\"spa\":145,\"spd\":145,\"spe\":209},\"moves\":[\"drillpeck\",\"doubleedge\",\"quickattack\",\"hiddenpowerground\"],\"baseAbility\":\"keeneye\",\"item\":\"choiceband\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Shuckle\",\"details\":\"Shuckle, L98, F\",\"condition\":\"198/198\",\"active\":false,\"stats\":{\"atk\":75,\"def\":506,\"spa\":75,\"spd\":506,\"spe\":65},\"moves\":[\"rest\",\"wrap\",\"toxic\",\"encore\"],\"baseAbility\":\"sturdy\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Absol\",\"details\":\"Absol, L87, M\",\"condition\":\"255/255\",\"active\":false,\"stats\":{\"atk\":276,\"def\":153,\"spa\":179,\"spd\":153,\"spe\":179},\"moves\":[\"shadowball\",\"doubleedge\",\"hiddenpowerfighting\",\"quickattack\"],\"baseAbility\":\"pressure\",\"item\":\"choiceband\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Hypno\",\"details\":\"Hypno, L88, M\",\"condition\":\"293/293\",\"active\":false,\"stats\":{\"atk\":133,\"def\":173,\"spa\":179,\"spd\":253,\"spe\":168},\"moves\":[\"firepunch\",\"psychic\",\"calmmind\",\"batonpass\"],\"baseAbility\":\"insomnia\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"}]}}",
+  "owner": "p2",
+  "prefix_sha256": "a073e08645e10531220fd56ecae891da5e1c4d61e40f1744f5b36b58f62590c3",
+  "request_id": "battle-gen3randombattle-controlled-2103400179:1",
+  "schema": "pokezero.phase-d.shared-gpu-search.v1",
+  "stream_id": 1
+ },
+ "source_hash": "f5a5265143d423af"
+}

@@ -1,0 +1,155 @@
+{
+ "beliefs": [
+  {
+   "condition": "55/100",
+   "gender": "F",
+   "item_mutated": false,
+   "revealed_ability": null,
+   "revealed_item": null,
+   "revealed_moves": [
+    "Swords Dance",
+    "Hidden Power"
+   ],
+   "ruled_out_abilities": [],
+   "ruled_out_items": [
+    "leftovers"
+   ],
+   "showdown_slot": "p1",
+   "species": "Kingler"
+  }
+ ],
+ "census": {
+  "species": {
+   "kingler": {
+    "census_lik": [
+     0.0,
+     0.0625,
+     0.0
+    ],
+    "census_n": 3,
+    "census_n_after": 1,
+    "census_strikes": 1,
+    "survivor_ids": [
+     "kingler-1-variant-1",
+     "kingler-1-variant-2",
+     "kingler-2-variant-3"
+    ],
+    "true_variant": "kingler-1-variant-2"
+   }
+  },
+  "strikes": [
+   {
+    "attacker": "Kingler",
+    "crit": false,
+    "eff": null,
+    "hp_before": 345,
+    "ko": false,
+    "line": 36,
+    "move": "hiddenpower",
+    "n_excluded_universe": 2,
+    "n_variants_with_move": 3,
+    "observed": 218,
+    "reason": null,
+    "true_match": 1,
+    "true_variant": "kingler-1-variant-2"
+   }
+  ]
+ },
+ "decision_index": 2,
+ "format_id": "gen3randombattle",
+ "name": "hp_immune_kingler",
+ "note": "Hidden Power on Snorlax: one Kingler variant's Ghost type cannot touch it (empty rolls), so it fits 0.",
+ "ordinal": 5955,
+ "owner": "p2",
+ "posterior": {
+  "kingler": {
+   "hard": [
+    0,
+    1,
+    2
+   ],
+   "provenance": "7a00611f011ec47d7c293767ee2ccbe1ab99245fbb8211b9d92e68db982f3a31",
+   "strikes": [
+    {
+     "admitted": true,
+     "counts": [
+      0,
+      1,
+      0
+     ],
+     "crit": false,
+     "ko": false,
+     "line": 36,
+     "move": "hiddenpower",
+     "observed": 218,
+     "reason": ""
+    }
+   ],
+   "weights": [
+    0,
+    1,
+    0
+   ]
+  }
+ },
+ "prefix_sha256": "60931923727cd760e77a4cd469a84dc84611997bf86c13f8b22d0e84606f538b",
+ "request": {
+  "battle_id": "battle-gen3randombattle-controlled-2103400992",
+  "decision_index": 2,
+  "generation": 6,
+  "lines": [
+   "|t:|1794630331",
+   "|gametype|singles",
+   "|player|p1|FoulPlayBot||",
+   "|player|p2|PokeZeroBot||",
+   "|gen|3",
+   "|tier|[Gen 3] Random Battle",
+   "|rule|HP Percentage Mod: HP is shown in percentages",
+   "|rule|Beat Up Nicknames Mod: Beat Up will not reveal any party members",
+   "|rule|Endless Battle Clause: Forcing endless battles is banned",
+   "|rule|Sleep Clause Mod: Limit one foe put to sleep",
+   "|rule|Switch Priority Clause Mod: Faster Pok\u00e9mon switch first",
+   "|rule|Species Clause: Limit one of each Pok\u00e9mon",
+   "|rule|OHKO Clause: OHKO moves are banned",
+   "|rule|Evasion Items Clause: Evasion items are banned",
+   "|rule|Evasion Moves Clause: Evasion moves are banned",
+   "|",
+   "|t:|1794630331",
+   "|teamsize|p1|6",
+   "|teamsize|p2|6",
+   "|start",
+   "|switch|p1a: Kingler|Kingler, L90, F|100/100",
+   "|switch|p2a: Snorlax|Snorlax, L71, M|345/345",
+   "|turn|1",
+   "|request|{\"active\":[{\"moves\":[{\"move\":\"Earthquake\",\"id\":\"earthquake\",\"pp\":16,\"maxpp\":16,\"target\":\"allAdjacent\",\"disabled\":false},{\"move\":\"Shadow Ball\",\"id\":\"shadowball\",\"pp\":24,\"maxpp\":24,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Curse\",\"id\":\"curse\",\"pp\":16,\"maxpp\":16,\"target\":\"self\",\"disabled\":false},{\"move\":\"Body Slam\",\"id\":\"bodyslam\",\"pp\":24,\"maxpp\":24,\"target\":\"normal\",\"disabled\":false}]}],\"side\":{\"name\":\"PokeZeroBot\",\"id\":\"p2\",\"pokemon\":[{\"ident\":\"p2: Snorlax\",\"details\":\"Snorlax, L71, M\",\"condition\":\"345/345\",\"active\":true,\"stats\":{\"atk\":198,\"def\":134,\"spa\":134,\"spd\":198,\"spe\":84},\"moves\":[\"earthquake\",\"shadowball\",\"curse\",\"bodyslam\"],\"baseAbility\":\"immunity\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Tropius\",\"details\":\"Tropius, L95, M\",\"condition\":\"341/341\",\"active\":false,\"stats\":{\"atk\":182,\"def\":211,\"spa\":190,\"spd\":218,\"spe\":151},\"moves\":[\"synthesis\",\"toxic\",\"hiddenpowerflying\",\"leechseed\"],\"baseAbility\":\"chlorophyll\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Ditto\",\"details\":\"Ditto\",\"condition\":\"258/258\",\"active\":false,\"stats\":{\"atk\":153,\"def\":153,\"spa\":153,\"spd\":153,\"spe\":153},\"moves\":[\"transform\"],\"baseAbility\":\"limber\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Moltres\",\"details\":\"Moltres, L78\",\"condition\":\"268/268\",\"active\":false,\"stats\":{\"atk\":162,\"def\":185,\"spa\":239,\"spd\":178,\"spe\":185},\"moves\":[\"toxic\",\"flamethrower\",\"hiddenpowergrass\",\"morningsun\"],\"baseAbility\":\"pressure\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Kabutops\",\"details\":\"Kabutops, L84, M\",\"condition\":\"237/237\",\"active\":false,\"stats\":{\"atk\":241,\"def\":224,\"spa\":157,\"spd\":165,\"spe\":183},\"moves\":[\"hiddenpowerflying\",\"rockslide\",\"surf\",\"brickbreak\"],\"baseAbility\":\"battlearmor\",\"item\":\"choiceband\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Slowbro\",\"details\":\"Slowbro, L82, M\",\"condition\":\"290/290\",\"active\":false,\"stats\":{\"atk\":128,\"def\":228,\"spa\":211,\"spd\":178,\"spe\":96},\"moves\":[\"sleeptalk\",\"surf\",\"rest\",\"calmmind\"],\"baseAbility\":\"owntempo\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"}]}}",
+   "|",
+   "|t:|1794630334",
+   "|move|p1a: Kingler|Swords Dance|p1a: Kingler",
+   "|-boost|p1a: Kingler|atk|2",
+   "|move|p2a: Snorlax|Body Slam|p1a: Kingler",
+   "|-damage|p1a: Kingler|76/100",
+   "|",
+   "|upkeep",
+   "|turn|2",
+   "|request|{\"active\":[{\"moves\":[{\"move\":\"Earthquake\",\"id\":\"earthquake\",\"pp\":16,\"maxpp\":16,\"target\":\"allAdjacent\",\"disabled\":false},{\"move\":\"Shadow Ball\",\"id\":\"shadowball\",\"pp\":24,\"maxpp\":24,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Curse\",\"id\":\"curse\",\"pp\":16,\"maxpp\":16,\"target\":\"self\",\"disabled\":false},{\"move\":\"Body Slam\",\"id\":\"bodyslam\",\"pp\":23,\"maxpp\":24,\"target\":\"normal\",\"disabled\":false}]}],\"side\":{\"name\":\"PokeZeroBot\",\"id\":\"p2\",\"pokemon\":[{\"ident\":\"p2: Snorlax\",\"details\":\"Snorlax, L71, M\",\"condition\":\"345/345\",\"active\":true,\"stats\":{\"atk\":198,\"def\":134,\"spa\":134,\"spd\":198,\"spe\":84},\"moves\":[\"earthquake\",\"shadowball\",\"curse\",\"bodyslam\"],\"baseAbility\":\"immunity\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Tropius\",\"details\":\"Tropius, L95, M\",\"condition\":\"341/341\",\"active\":false,\"stats\":{\"atk\":182,\"def\":211,\"spa\":190,\"spd\":218,\"spe\":151},\"moves\":[\"synthesis\",\"toxic\",\"hiddenpowerflying\",\"leechseed\"],\"baseAbility\":\"chlorophyll\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Ditto\",\"details\":\"Ditto\",\"condition\":\"258/258\",\"active\":false,\"stats\":{\"atk\":153,\"def\":153,\"spa\":153,\"spd\":153,\"spe\":153},\"moves\":[\"transform\"],\"baseAbility\":\"limber\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Moltres\",\"details\":\"Moltres, L78\",\"condition\":\"268/268\",\"active\":false,\"stats\":{\"atk\":162,\"def\":185,\"spa\":239,\"spd\":178,\"spe\":185},\"moves\":[\"toxic\",\"flamethrower\",\"hiddenpowergrass\",\"morningsun\"],\"baseAbility\":\"pressure\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Kabutops\",\"details\":\"Kabutops, L84, M\",\"condition\":\"237/237\",\"active\":false,\"stats\":{\"atk\":241,\"def\":224,\"spa\":157,\"spd\":165,\"spe\":183},\"moves\":[\"hiddenpowerflying\",\"rockslide\",\"surf\",\"brickbreak\"],\"baseAbility\":\"battlearmor\",\"item\":\"choiceband\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Slowbro\",\"details\":\"Slowbro, L82, M\",\"condition\":\"290/290\",\"active\":false,\"stats\":{\"atk\":128,\"def\":228,\"spa\":211,\"spd\":178,\"spe\":96},\"moves\":[\"sleeptalk\",\"surf\",\"rest\",\"calmmind\"],\"baseAbility\":\"owntempo\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"}]}}",
+   "|",
+   "|t:|1794630337",
+   "|move|p1a: Kingler|Hidden Power|p2a: Snorlax",
+   "|-damage|p2a: Snorlax|127/345",
+   "|move|p2a: Snorlax|Body Slam|p1a: Kingler",
+   "|-damage|p1a: Kingler|55/100",
+   "|",
+   "|-heal|p2a: Snorlax|148/345|[from] item: Leftovers",
+   "|upkeep",
+   "|turn|3",
+   "|request|{\"active\":[{\"moves\":[{\"move\":\"Earthquake\",\"id\":\"earthquake\",\"pp\":16,\"maxpp\":16,\"target\":\"allAdjacent\",\"disabled\":false},{\"move\":\"Shadow Ball\",\"id\":\"shadowball\",\"pp\":24,\"maxpp\":24,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Curse\",\"id\":\"curse\",\"pp\":16,\"maxpp\":16,\"target\":\"self\",\"disabled\":false},{\"move\":\"Body Slam\",\"id\":\"bodyslam\",\"pp\":22,\"maxpp\":24,\"target\":\"normal\",\"disabled\":false}]}],\"side\":{\"name\":\"PokeZeroBot\",\"id\":\"p2\",\"pokemon\":[{\"ident\":\"p2: Snorlax\",\"details\":\"Snorlax, L71, M\",\"condition\":\"148/345\",\"active\":true,\"stats\":{\"atk\":198,\"def\":134,\"spa\":134,\"spd\":198,\"spe\":84},\"moves\":[\"earthquake\",\"shadowball\",\"curse\",\"bodyslam\"],\"baseAbility\":\"immunity\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Tropius\",\"details\":\"Tropius, L95, M\",\"condition\":\"341/341\",\"active\":false,\"stats\":{\"atk\":182,\"def\":211,\"spa\":190,\"spd\":218,\"spe\":151},\"moves\":[\"synthesis\",\"toxic\",\"hiddenpowerflying\",\"leechseed\"],\"baseAbility\":\"chlorophyll\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Ditto\",\"details\":\"Ditto\",\"condition\":\"258/258\",\"active\":false,\"stats\":{\"atk\":153,\"def\":153,\"spa\":153,\"spd\":153,\"spe\":153},\"moves\":[\"transform\"],\"baseAbility\":\"limber\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Moltres\",\"details\":\"Moltres, L78\",\"condition\":\"268/268\",\"active\":false,\"stats\":{\"atk\":162,\"def\":185,\"spa\":239,\"spd\":178,\"spe\":185},\"moves\":[\"toxic\",\"flamethrower\",\"hiddenpowergrass\",\"morningsun\"],\"baseAbility\":\"pressure\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Kabutops\",\"details\":\"Kabutops, L84, M\",\"condition\":\"237/237\",\"active\":false,\"stats\":{\"atk\":241,\"def\":224,\"spa\":157,\"spd\":165,\"spe\":183},\"moves\":[\"hiddenpowerflying\",\"rockslide\",\"surf\",\"brickbreak\"],\"baseAbility\":\"battlearmor\",\"item\":\"choiceband\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Slowbro\",\"details\":\"Slowbro, L82, M\",\"condition\":\"290/290\",\"active\":false,\"stats\":{\"atk\":128,\"def\":228,\"spa\":211,\"spd\":178,\"spe\":96},\"moves\":[\"sleeptalk\",\"surf\",\"rest\",\"calmmind\"],\"baseAbility\":\"owntempo\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"}]}}"
+  ],
+  "own_request_line": "|request|{\"active\":[{\"moves\":[{\"move\":\"Earthquake\",\"id\":\"earthquake\",\"pp\":16,\"maxpp\":16,\"target\":\"allAdjacent\",\"disabled\":false},{\"move\":\"Shadow Ball\",\"id\":\"shadowball\",\"pp\":24,\"maxpp\":24,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Curse\",\"id\":\"curse\",\"pp\":16,\"maxpp\":16,\"target\":\"self\",\"disabled\":false},{\"move\":\"Body Slam\",\"id\":\"bodyslam\",\"pp\":22,\"maxpp\":24,\"target\":\"normal\",\"disabled\":false}]}],\"side\":{\"name\":\"PokeZeroBot\",\"id\":\"p2\",\"pokemon\":[{\"ident\":\"p2: Snorlax\",\"details\":\"Snorlax, L71, M\",\"condition\":\"148/345\",\"active\":true,\"stats\":{\"atk\":198,\"def\":134,\"spa\":134,\"spd\":198,\"spe\":84},\"moves\":[\"earthquake\",\"shadowball\",\"curse\",\"bodyslam\"],\"baseAbility\":\"immunity\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Tropius\",\"details\":\"Tropius, L95, M\",\"condition\":\"341/341\",\"active\":false,\"stats\":{\"atk\":182,\"def\":211,\"spa\":190,\"spd\":218,\"spe\":151},\"moves\":[\"synthesis\",\"toxic\",\"hiddenpowerflying\",\"leechseed\"],\"baseAbility\":\"chlorophyll\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Ditto\",\"details\":\"Ditto\",\"condition\":\"258/258\",\"active\":false,\"stats\":{\"atk\":153,\"def\":153,\"spa\":153,\"spd\":153,\"spe\":153},\"moves\":[\"transform\"],\"baseAbility\":\"limber\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Moltres\",\"details\":\"Moltres, L78\",\"condition\":\"268/268\",\"active\":false,\"stats\":{\"atk\":162,\"def\":185,\"spa\":239,\"spd\":178,\"spe\":185},\"moves\":[\"toxic\",\"flamethrower\",\"hiddenpowergrass\",\"morningsun\"],\"baseAbility\":\"pressure\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Kabutops\",\"details\":\"Kabutops, L84, M\",\"condition\":\"237/237\",\"active\":false,\"stats\":{\"atk\":241,\"def\":224,\"spa\":157,\"spd\":165,\"spe\":183},\"moves\":[\"hiddenpowerflying\",\"rockslide\",\"surf\",\"brickbreak\"],\"baseAbility\":\"battlearmor\",\"item\":\"choiceband\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Slowbro\",\"details\":\"Slowbro, L82, M\",\"condition\":\"290/290\",\"active\":false,\"stats\":{\"atk\":128,\"def\":228,\"spa\":211,\"spd\":178,\"spe\":96},\"moves\":[\"sleeptalk\",\"surf\",\"rest\",\"calmmind\"],\"baseAbility\":\"owntempo\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"}]}}",
+  "owner": "p2",
+  "prefix_sha256": "60931923727cd760e77a4cd469a84dc84611997bf86c13f8b22d0e84606f538b",
+  "request_id": "battle-gen3randombattle-controlled-2103400992:2",
+  "schema": "pokezero.phase-d.shared-gpu-search.v1",
+  "stream_id": 1
+ },
+ "source_hash": "f5a5265143d423af"
+}
