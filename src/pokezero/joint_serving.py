@@ -26,11 +26,12 @@ class JointPlan:
     diagnostic: object
     source_hash: str
     game_sha256: str
+    fallback_plan: object = None
 
 
 class JointSession:
     """Source snapshot and bounded, game-local legality cache ownership."""
-    def __init__(self, source, *, producer, held_games=64):
+    def __init__(self, source, *, producer, held_games=64, deadline=None):
         if producer not in ('shared-battle', 'independent-teams'):
             raise ValueError('explicit team producer required')
         self.source, self.producer, self.held_games = source, producer, held_games
@@ -39,78 +40,112 @@ class JointSession:
         self.model = json.loads((Path(__file__).with_name('data') / 'gen3_team_model.json').read_text())
         self.games = OrderedDict()
 
-    def cache(self, game):
+    def cache(self, game, *, deadline=None):
+        from .joint_budget import check_deadline
+        check_deadline(deadline,.175 if deadline is not None else None)
         import pokezero_search
         if game not in self.games:
             self.games[game] = pokezero_search.JointLegalityCache()
         self.games.move_to_end(game)
         while len(self.games) > self.held_games:
             self.games.popitem(last=False)
+        check_deadline(deadline,.175 if deadline is not None else None)
         return self.games[game]
 
-    def prepare(self, context, lines, *, dex, seed, count, binding=None, features=False):
-        from time import perf_counter
-        started = perf_counter()
+    def _fallback_payload(self, posts, game):
+        rows = {canonical_gen3_randbat_species_id(key): dict(
+            variant_ids=self.table.species[canonical_gen3_randbat_species_id(key)].variant_ids,
+            support=post.support, weights=post.weights) for key, post in posts.items()}
+        prior = {s: dict(row, support=(True,)*len(row['weights']), weights=(1,)*len(row['weights']))
+                 for s, row in rows.items()}
+        return dict(schema='gen3-joint-features-v1', source_hash=self.table.source_hash, table_sha256='stage1',
+            model_sha256=self.model['sha256'], rows=rows, prior_rows=prior, tv_bound=None, prior_tv_bound=None,
+            provenance=hashlib.sha256(json.dumps((game,self.table.source_hash,'stage1',rows),
+                sort_keys=True,separators=(',',':')).encode()).hexdigest())
+
+    def _plan(self, teams, posts, payload, mode, reason, tv, game, original_posts, fallback=None):
+        if payload is not None:
+            payload['game_sha256'] = game
+            payload['payload_sha256'] = hashlib.sha256(json.dumps(payload,sort_keys=True,
+                separators=(',',':')).encode()).hexdigest()
+        diagnostic = dict(kind='PUBLIC_JOINT_POSTERIOR', status='CLEAR', fatal=False, mode=mode,
+            tv_bound=None if tv is None else [tv.numerator,tv.denominator], seconds=0.0,
+            fallback=mode=='stage1_fallback', reason=reason, source_hash=self.table.source_hash,
+            table_sha256=self.table.provenance, model_sha256=self.model['sha256'], game_sha256=game,
+            producer=self.producer, owner=None,
+            over_budget=False, allocation=dict(expansion_stop=.175,normalizer_return=.200,export_stop=.225,
+                handoff=.250,max_states=65_536))
+        diagnostic['narrowed_vs_hard'] = any(sum(p.support)<sum(p.hard) for p in posts.values())
+        diagnostic['narrowed_vs_stage1'] = any(sum(p.support)<sum(original_posts[k].support) for k,p in posts.items())
+        draws = None if teams is None else [[(m.species,m.variant_index,m.slot,m.incoming_context) for m in team] for team in teams]
+        diagnostic['law_sha256'] = hashlib.sha256(json.dumps((game,self.table.provenance,self.model['sha256'],
+            mode,diagnostic['tv_bound'],draws,payload),sort_keys=True,separators=(',',':')).encode()).hexdigest()
+        return JointPlan(teams,posts,payload,diagnostic,self.table.source_hash,game,fallback)
+
+    @staticmethod
+    def finish_handoff(plan, deadline, *, elapsed_seconds=None, remaining_seconds=None):
+        # Called after the GC guard restores its prior state. Both plans and
+        # their hashes already exist, so choosing fallback allocates no plan.
+        elapsed = (elapsed_seconds or deadline.elapsed_seconds)()
+        late = elapsed > .25 or (remaining_seconds or deadline.remaining_seconds)() <= 0
+        if late and plan.teams is not None:
+            plan = plan.fallback_plan
+            plan.diagnostic['reason'] = 'JointBudgetExceeded:completed handoff exceeded deadline'
+        plan.diagnostic['seconds'] = elapsed
+        plan.diagnostic['over_budget'] = late
+        return plan
+
+    def prepare(self, context, lines, *, dex, seed, count, binding=None, features=False, deadline=None):
+        from .joint_budget import check_deadline, defer_joint_gc, new_joint_deadline
+        if deadline is None:
+            with defer_joint_gc():
+                deadline = new_joint_deadline()
+                plan = self.prepare(context,lines,dex=dex,seed=seed,count=count,binding=binding,
+                    features=features,deadline=deadline)
+                elapsed,remaining = deadline.elapsed_seconds,deadline.remaining_seconds
+            return self.finish_handoff(plan,deadline,elapsed_seconds=elapsed,remaining_seconds=remaining)
         view = worlds.player_belief_view_from_payload(context.observation.metadata.get('belief_view'))
         if view is None:
             raise ValueError('PUBLIC_SET_POSTERIOR_BELIEF_UNAVAILABLE')
-        posts = set_posterior.posterior(lines, context.public_materialization_state.self_request,
-            source=self.source, owner=view.self_slot, beliefs=view.opponent_pokemon,
-            format_id=context.format_id, dex=dex, binding=binding)
-        stage1_posts={}
-        evidence = self._evidence(context, view, posts,stage1_posts=stage1_posts)
-        fixed = self._generation_slots(lines, view.opponent_slot)
-        # Owning initial-team decoding is inside the admission boundary too.
-        try:
-            own = self._own_initial(lines)
-        except (KeyError, ValueError) as error:
-            own, own_error = None, str(error)
-        left = .25 - (perf_counter() - started)
-        if own is None or left <= .05:
-            teams, payload, mode, reason, tv = None, None, 'stage1_fallback', (
-                own_error if own is None else 'public evidence preparation exceeded joint budget'), None
-        else:
-            outcome = draw_with_stage1_fallback(self.model, self.manifest, self.table,
-                count=count, rng=random.Random(seed), stage1_sampler=lambda count, rng: None,
-                budget_seconds=left, draw_reserve_seconds=.05, legality_cache=self.cache(context.battle_id),
-                battle_context=dict(owner=view.self_slot, own_initial_team=own, producer=self.producer),
-                evidence=evidence, fixed_slots=fixed, export_features=features,export_posterior=True)
-            teams, payload = outcome.teams, outcome.features
-            mode, reason, tv = outcome.mode, outcome.reason, outcome.tv_bound
-        elapsed = perf_counter() - started
+        posts = set_posterior.posterior(lines,context.public_materialization_state.self_request,
+            source=self.source,owner=view.self_slot,beliefs=view.opponent_pokemon,
+            format_id=context.format_id,dex=dex,binding=binding)
+        stage1_posts = {}
+        evidence = self._evidence(context,view,posts,stage1_posts=stage1_posts)
+        fixed = self._generation_slots(lines,view.opponent_slot)
         game = set_posterior.game_lines_sha256(lines)
-        if teams is None:posts=stage1_posts
-        if features and payload is None:
-            rows={}
-            for key,post in posts.items():
-                species=canonical_gen3_randbat_species_id(key)
-                rows[species]=dict(variant_ids=self.table.species[species].variant_ids,
-                    support=post.support,weights=post.weights)
-            prior={s:dict(row,support=(True,)*len(row['weights']),weights=(1,)*len(row['weights']))for s,row in rows.items()}
-            payload=dict(schema='gen3-joint-features-v1',source_hash=self.table.source_hash,table_sha256='stage1',
-                model_sha256=self.model['sha256'],rows=rows,prior_rows=prior,tv_bound=None,prior_tv_bound=None,
-                provenance=hashlib.sha256(json.dumps((game,self.table.source_hash,'stage1',rows),
-                    sort_keys=True,separators=(',',':')).encode()).hexdigest())
-        if payload is not None:
-            payload['game_sha256']=game
-            payload['payload_sha256']=hashlib.sha256(json.dumps(payload,sort_keys=True,
-                separators=(',',':')).encode()).hexdigest()
-        original_posts=stage1_posts
-        if teams is not None:
-            posts={key:replace(post,weights=tuple(payload['rows'][canonical_gen3_randbat_species_id(key)]['weights']),
-                support=tuple(payload['rows'][canonical_gen3_randbat_species_id(key)]['support']),provenance=payload['provenance'])
-                for key,post in posts.items()}
-        diagnostic = dict(kind='PUBLIC_JOINT_POSTERIOR', status='CLEAR', fatal=False, mode=mode,
-            tv_bound=None if tv is None else [tv.numerator, tv.denominator], seconds=elapsed,
-            fallback=mode == 'stage1_fallback', reason=reason, source_hash=self.table.source_hash,
-            table_sha256=self.table.provenance, model_sha256=self.model['sha256'], game_sha256=game,
-            producer=self.producer, owner=view.self_slot)
-        diagnostic['narrowed_vs_hard']=any(sum(post.support)<sum(post.hard)for post in posts.values())
-        diagnostic['narrowed_vs_stage1']=any(sum(post.support)<sum(original_posts[key].support)for key,post in posts.items())
-        draws=None if teams is None else [[(m.species,m.variant_index,m.slot,m.incoming_context)for m in team]for team in teams]
-        diagnostic['law_sha256']=hashlib.sha256(json.dumps((game,self.table.provenance,self.model['sha256'],
-            mode,diagnostic['tv_bound'],draws,payload),sort_keys=True,separators=(',',':')).encode()).hexdigest()
-        return JointPlan(teams, posts, payload, diagnostic, self.table.source_hash, game)
+        fallback = self._plan(None,stage1_posts,self._fallback_payload(stage1_posts,game) if features else None,
+            'stage1_fallback',None,None,game,stage1_posts)
+        fallback.diagnostic['owner'] = view.self_slot
+        try:
+            check_deadline(deadline,.175)
+            try:
+                own = self._own_initial(lines)
+            except (KeyError,ValueError) as error:
+                fallback.diagnostic['reason'] = type(error).__name__+':'+str(error)
+                return fallback
+            check_deadline(deadline,.175)
+            outcome = draw_with_stage1_fallback(self.model,self.manifest,self.table,
+                count=count,rng=random.Random(seed),stage1_sampler=lambda count,rng:None,
+                legality_cache=self.cache(context.battle_id,deadline=deadline),deadline=deadline,
+                battle_context=dict(owner=view.self_slot,own_initial_team=own,producer=self.producer),
+                evidence=evidence,fixed_slots=fixed,export_features=features,export_posterior=True)
+            if outcome.teams is None:
+                fallback.diagnostic['reason'] = outcome.reason
+                return fallback
+            payload = outcome.features
+            posts = {key: replace(post,weights=tuple(payload['rows'][canonical_gen3_randbat_species_id(key)]['weights']),
+                support=tuple(payload['rows'][canonical_gen3_randbat_species_id(key)]['support']),
+                provenance=payload['provenance']) for key,post in posts.items()}
+            plan = self._plan(outcome.teams,posts,payload,outcome.mode,None,outcome.tv_bound,game,stage1_posts,fallback)
+            plan.diagnostic['owner'] = view.self_slot
+            check_deadline(deadline)
+            return plan
+        except TimeoutError as error:
+            # Invalid original own recipes already used stage1; budget expiry
+            # has the same explicit handoff, never a partial joint payload.
+            fallback.diagnostic['reason'] = type(error).__name__+':'+str(error)
+            return fallback
 
     def _own_initial(self, lines):
         request = set_posterior._first_request(lines)

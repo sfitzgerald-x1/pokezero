@@ -8,10 +8,12 @@ from math import gcd, lcm
 from time import perf_counter
 from .joint_generator import JointGenerator, JointMember, JointBudgetExceeded, ImpossibleJointEvidence, _pick
 from .generator_weights import SHOWDOWN_PIN, EXECUTED_PIN, digest
+from .joint_budget import check_deadline
 
 
-def validate_pinned_catalog(model, manifest, table):
+def validate_pinned_catalog(model, manifest, table, *, deadline=None):
     """Serving accepts only the measured catalog; generic oracles stay separate."""
+    check_deadline(deadline)
     model_hash = '74d83850ba3cb47ced59caa136e2775d8dc6d7ee664e06dd8e3e80dce35d7aa9'
     if (model.get('schema') != 'gen3-joint-team-model-v1'
             or model.get('showdown_commit') != SHOWDOWN_PIN or model.get('executed_sha256') != EXECUTED_PIN
@@ -29,9 +31,10 @@ def validate_pinned_catalog(model, manifest, table):
     row_hash = hashlib.sha256(json.dumps(rows, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
     if row_hash != 'cb598f07d970aaa79a84756e4751367ed8054c46364d82b59f2d8518d677810b':
         raise ValueError('unsupported pinned weight contents')
+    check_deadline(deadline)
 
 
-def own_team_terminal_weights(model, manifest, table, own_team):
+def own_team_terminal_weights(model, manifest, table, own_team, *, deadline=None):
     """Likelihood of the exact ORIGINAL second team for each incoming flag.
 
     Own entries are (source species ID, variant index) in generation order.
@@ -42,6 +45,7 @@ def own_team_terminal_weights(model, manifest, table, own_team):
         raise ValueError("complete original own team required")
     evidence = {}
     for species, vi in own_team:
+        check_deadline(deadline)
         variants = manifest["species"][species]
         if type(vi) is not int or not 0 <= vi < len(variants):
             raise ValueError("invalid own variant")
@@ -52,8 +56,9 @@ def own_team_terminal_weights(model, manifest, table, own_team):
     fixed = {slot: species for slot, (species, _) in enumerate(own_team)}
     probabilities = []
     for flag in (False, True):
+        check_deadline(deadline)
         try:
-            generator = JointGenerator(model, manifest, table, evidence=evidence, fixed_slots=fixed, initial_wobbuffet=flag)
+            generator = JointGenerator(model, manifest, table, evidence=evidence, fixed_slots=fixed, initial_wobbuffet=flag, deadline=deadline)
             probabilities.append(Fraction(generator.normalizer(), generator.quantum ** generator.slots))
         except ImpossibleJointEvidence:
             probabilities.append(Fraction(0))
@@ -65,12 +70,13 @@ def own_team_terminal_weights(model, manifest, table, own_team):
     return tuple(w // common for w in values)
 
 
-def battle_joint_parameters(model, manifest, table, *, owner, own_initial_team, producer):
+def battle_joint_parameters(model, manifest, table, *, owner, own_initial_team, producer, deadline=None):
     """Select forward/reverse conditioning from the explicitly bound producer.
 
     Battle generates p1 then p2 using one shared generator. Independently
     generated team pools must declare their different flag semantics.
     """
+    check_deadline(deadline)
     if owner not in ('p1', 'p2') or producer not in ('shared-battle', 'independent-teams'):
         raise ValueError('explicit supported owner and team producer required')
     if len(own_initial_team) != model['slots']:
@@ -80,14 +86,16 @@ def battle_joint_parameters(model, manifest, table, *, owner, own_initial_team, 
     if owner == 'p1':
         flag = any(species == 'wobbuffet' for species, _ in own_initial_team[:-1])
         return dict(initial_wobbuffet=flag, terminal_weights=(1, 1))
-    return dict(initial_wobbuffet=False, terminal_weights=own_team_terminal_weights(model, manifest, table, own_initial_team))
+    return dict(initial_wobbuffet=False, terminal_weights=own_team_terminal_weights(model, manifest, table, own_initial_team, deadline=deadline))
 
 
 def native_payload(joint):
+    check_deadline(joint.deadline)
     # Catalog classes exclude evidence and incoming battle flags, making the
     # legality cache reusable as new members/sets are revealed in the game.
     profiles, classes, base_class = {}, [], {}
     for bi, base in enumerate(joint.bases):
+        check_deadline(joint.deadline)
         profile = (tuple(base['types']), tuple(base['weak']), tuple(base['double_weak']),
                    base['level100'], tuple(base['incompatible']))
         if profile not in profiles:
@@ -108,6 +116,7 @@ def native_payload(joint):
     groups = []
     required = {joint.base_group[bi]: 1 << i for i, bi in enumerate(joint.required_bases)}
     for gi, members in enumerate(joint.groups):
+        check_deadline(joint.deadline)
         bi = members[0]
         upper = max(joint.evidence[joint.required_bases[bi]]) if bi in joint.required_bases else 1
         groups.append(dict(size=len(members), tokens=joint.group_tokens[gi], **{'class': base_class[bi]},
@@ -125,15 +134,25 @@ class NativeJointPosterior:
     only after the caller explicitly admits its exact rational TV certificate.
     A failed certificate raises; the serving caller owns stage-1 fallback.
     """
-    def __init__(self, model, manifest, table, *, legality_cache=None, **kwargs):
+    def __init__(self, model, manifest, table, *, legality_cache=None, deadline=None, **kwargs):
         import pokezero_search as native
-        self.reference = JointGenerator(model, manifest, table, **kwargs)
+        self.deadline = deadline
+        check_deadline(deadline, .225 if deadline is not None else None)
+        self.reference = JointGenerator(model, manifest, table, deadline=deadline, **kwargs)
         self.legality_cache = legality_cache if legality_cache is not None else native.JointLegalityCache()
-        self.native = native.NativeJointGenerator(native_payload(self.reference), self.legality_cache)
+        payload = native_payload(self.reference)
+        self.native = native.NativeJointGenerator(payload, self.legality_cache, deadline)
         self.accepted = False
         self.result = None
+        check_deadline(deadline, .225 if deadline is not None else None)
+
+    def _phase(self, cutoff):
+        check_deadline(self.deadline, cutoff if self.deadline is not None else None)
+        if self.deadline is not None:
+            self.native.bind_deadline(self.deadline, .175, cutoff)
 
     def solve(self, *, seconds, max_states=2_000_000, max_tv=Fraction(0)):
+        self._phase(.200)
         if not isinstance(max_tv, Fraction) or not 0 <= max_tv <= Fraction(1, 100):
             raise ValueError('explicit rational TV limit in [0, .01] required')
         self.result = json.loads(self.native.solve(seconds, max_states))
@@ -147,12 +166,14 @@ class NativeJointPosterior:
         return self.result
 
     def draw_many(self, count, rng):
+        self._phase(.225)
         if not self.accepted:
             raise JointBudgetExceeded('joint posterior is not certified for drawing')
         paths = self.native.draw_paths(count, rng.getrandbits(64))
         joint = self.reference
         result = []
         for path in paths:
+            check_deadline(self.deadline, .225 if self.deadline is not None else None)
             selected, team, context = set(), [], 0
             for slot, (gi, after) in enumerate(path):
                 candidates = [bi for bi in joint.groups[gi] if bi not in selected]
@@ -169,11 +190,13 @@ class NativeJointPosterior:
         Truncated zero weights are not proofs of impossibility. Consumers
         must retain a conservative support pin when tv_bound is nonzero.
         """
+        self._phase(.225)
         if not self.accepted:
             raise JointBudgetExceeded('joint posterior is not certified for features')
         joint = self.reference
         masses = {s: [Fraction(0)] * len(joint.manifest['species'][s]) for s in joint.evidence}
         for gi, before, after, value in json.loads(self.native.revealed_context_masses()):
+            check_deadline(self.deadline, .225 if self.deadline is not None else None)
             members = joint.groups[gi]
             if len(members) != 1:
                 raise AssertionError('required group is not a singleton')
@@ -199,6 +222,7 @@ class NativeJointPosterior:
         variant reachable in any generator context. This can over-include;
         it cannot exclude mass merely because the DP did not expand it.
         """
+        check_deadline(self.deadline, .225 if self.deadline is not None else None)
         weights = self.revealed_marginal_weights()
         joint = self.reference
         rows = {}
@@ -232,7 +256,8 @@ class JointDrawOutcome:
 
 def draw_with_stage1_fallback(model, manifest, table, *, count, rng, stage1_sampler,
                               budget_seconds=0.25, draw_reserve_seconds=0.05,
-                              legality_cache=None, battle_context, export_features=False,export_posterior=False, **kwargs):
+                              legality_cache=None, battle_context, export_features=False,export_posterior=False,
+                              deadline=None, **kwargs):
     """Try the authorized TV<=.01 joint draw; preserve the stage-1 RNG on fallback.
 
     stage1_sampler(count, rng) is the existing per-slot consumer, supplied by
@@ -243,48 +268,53 @@ def draw_with_stage1_fallback(model, manifest, table, *, count, rng, stage1_samp
     if not 0 < draw_reserve_seconds < budget_seconds or count <= 0:
         raise ValueError('invalid joint draw budget/count')
     started = perf_counter()
-    validate_pinned_catalog(model, manifest, table)
     if not isinstance(battle_context, dict) or set(battle_context) != {'owner', 'own_initial_team', 'producer'}:
         raise ValueError('explicit complete battle context required')
     if 'initial_wobbuffet' in kwargs or 'terminal_weights' in kwargs:
         raise ValueError('battle context and explicit flag weights are mutually exclusive')
     rng_state = rng.getstate()
-    tv, reason, joint = None, None, None
+    tv, reason, joint, prior, candidate = None, None, None, None, None
     try:
-        kwargs.update(battle_joint_parameters(model, manifest, table, **battle_context))
-        joint = NativeJointPosterior(model, manifest, table, legality_cache=legality_cache, **kwargs)
-        remaining = budget_seconds - draw_reserve_seconds - (perf_counter() - started)
+        check_deadline(deadline, .175 if deadline is not None else None)
+        validate_pinned_catalog(model, manifest, table, deadline=deadline)
+        kwargs.update(battle_joint_parameters(model, manifest, table, deadline=deadline, **battle_context))
+        joint = NativeJointPosterior(model, manifest, table, legality_cache=legality_cache, deadline=deadline, **kwargs)
+        remaining = (.175 - deadline.elapsed_seconds() if deadline is not None
+                     else budget_seconds - draw_reserve_seconds - (perf_counter() - started))
         if remaining <= 0:
             raise JointBudgetExceeded('joint construction consumed normalizer budget')
-        joint.solve(seconds=remaining, max_tv=Fraction(1, 100))
+        joint.solve(seconds=remaining, max_states=65_536 if deadline is not None else 2_000_000, max_tv=Fraction(1, 100))
         tv = joint.tv_bound
-        if perf_counter() - started > budget_seconds - draw_reserve_seconds:
+        if deadline is None and perf_counter() - started > budget_seconds - draw_reserve_seconds:
             raise JointBudgetExceeded('certificate completed after normalizer deadline')
         teams = joint.draw_many(count, rng)
         features = joint.feature_payload() if export_features or export_posterior else None
         if export_features:
             prior_options=dict(kwargs)
             prior_options['evidence']={s:(1,)*len(w) for s,w in joint.reference.evidence.items()}
-            prior=NativeJointPosterior(model,manifest,table,legality_cache=legality_cache,**prior_options)
-            remaining=budget_seconds-(perf_counter()-started)
+            prior=NativeJointPosterior(model,manifest,table,legality_cache=legality_cache,deadline=deadline,**prior_options)
+            remaining=(deadline.remaining_seconds() if deadline is not None else budget_seconds-(perf_counter()-started))
             if remaining<=0:raise JointBudgetExceeded('feature prior construction exceeded deadline')
-            prior.solve(seconds=remaining,max_tv=Fraction(1,100))
+            prior.solve(seconds=remaining,max_states=65_536 if deadline is not None else 2_000_000,max_tv=Fraction(1,100))
             prior_features=prior.feature_payload()
             features['prior_rows']=prior_features['rows']
             features['prior_tv_bound']=prior_features['tv_bound']
             features['provenance']=hashlib.sha256(json.dumps((features['provenance'],prior_features['provenance']),
                 separators=(',',':')).encode()).hexdigest()
-            del prior
         mode = 'exact' if joint.result['exact'] else 'certified'
-        del joint
-        joint = None
-        elapsed = perf_counter() - started
-        if elapsed > budget_seconds:
-            raise JointBudgetExceeded('joint draw completed after deadline')
-        return JointDrawOutcome(teams, mode, tv, elapsed, None, features)
-    except (JointBudgetExceeded, ImpossibleJointEvidence) as exc:
+        candidate = teams, mode, tv, features
+    except (JointBudgetExceeded, ImpossibleJointEvidence, TimeoutError) as exc:
         reason = type(exc).__name__ + ':' + str(exc)
-    del joint
+    finally:
+        # Release both native caches on every outcome before deciding to admit.
+        prior = joint = None
+    elapsed = deadline.elapsed_seconds() if deadline is not None else perf_counter() - started
+    if candidate is not None:
+        if elapsed <= (.225 if deadline is not None else budget_seconds) and (deadline is None or deadline.remaining_seconds()>0):
+            teams, mode, tv, features = candidate
+            return JointDrawOutcome(teams, mode, tv, elapsed, None, features)
+        reason = 'JointBudgetExceeded:joint cleanup completed after export deadline'
     rng.setstate(rng_state)
     teams = stage1_sampler(count, rng)
-    return JointDrawOutcome(teams, 'stage1_fallback', None, perf_counter() - started, reason)
+    return JointDrawOutcome(teams, 'stage1_fallback', None,
+        deadline.elapsed_seconds() if deadline is not None else perf_counter() - started, reason)

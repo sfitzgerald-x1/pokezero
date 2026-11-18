@@ -72,9 +72,13 @@ class JointGenerator:
     """
 
     def __init__(self, model, manifest, table, *, evidence=None, fixed_slots=None,
-                 initial_wobbuffet=False, terminal_weights=(1, 1), max_states=100_000, max_seconds=10.0):
+                 initial_wobbuffet=False, terminal_weights=(1, 1), max_states=100_000, max_seconds=10.0, deadline=None):
+        from .joint_budget import check_deadline
+        self.deadline = deadline
+        check_deadline(deadline)
         # Snapshot caller-owned dictionaries before deriving and caching states.
         model, manifest = json.loads(json.dumps(model)), json.loads(json.dumps(manifest))
+        check_deadline(deadline)
         self.model, self.manifest, self.table = model, manifest, table
         payload = {key: value for key, value in model.items() if key != "sha256"}
         digest = hashlib.sha256(json.dumps(payload, separators=(",", ":"), ensure_ascii=False).encode()).hexdigest()
@@ -91,6 +95,7 @@ class JointGenerator:
         if len(forms) != len(set(forms)) or set(forms) != set(species):
             raise ValueError("joint team-model species coverage mismatch")
         for name, variants in species.items():
+            check_deadline(deadline)
             weights = table.species[name]
             if (not 0 < len(variants) <= 64 or tuple(v["variant_id"] for v in variants) != weights.variant_ids
                     or len(weights.contexts) != 16 or type(weights.denominator) is not int or weights.denominator <= 0
@@ -301,11 +306,15 @@ class JointGenerator:
         return result
 
     def _charge(self):
+        from .joint_budget import check_deadline
+        check_deadline(self.deadline)
         self.nodes += 1
         if self.nodes > self.max_states or (self.nodes % 128 == 0 and perf_counter() - self.started > self.max_seconds):
             raise JointBudgetExceeded(f"joint DP budget exceeded: nodes={self.nodes}, seconds={perf_counter()-self.started:.6f}")
 
     def _mass(self, code, context, outgoing_wobb=False):
+        from .joint_budget import check_deadline
+        check_deadline(self.deadline)
         depth = self._depth(code)
         missing = (self.required_low & ~code).bit_count()
         if missing > self.slots - depth:
@@ -341,6 +350,8 @@ class JointGenerator:
         return result
 
     def _completion_mass(self, code, depth):
+        from .joint_budget import check_deadline
+        check_deadline(self.deadline)
         if depth == self.slots:
             return 1
         if code in self.completion_cache:
@@ -362,6 +373,8 @@ class JointGenerator:
         return result
 
     def normalizer(self):
+        from .joint_budget import check_deadline
+        check_deadline(self.deadline)
         if self._normalizer is None:
             self.started = perf_counter()
             value = self._mass(0, 0, self.initial_wobbuffet)
@@ -403,6 +416,7 @@ class _LegalityCompletion(JointGenerator):
     """Coarsen to legality-only classes after every evidence factor is consumed."""
 
     def __init__(self, parent):
+        self.deadline = parent.deadline
         self.parent, self.model, self.bases = weakref.proxy(parent), parent.model, parent.bases
         self.slots, self.quantum = parent.slots, parent.quantum
         grouped = {}

@@ -1,13 +1,19 @@
 //! Integer joint-team recurrence. No floating-point probability calculations.
 use num_bigint::BigUint;
 use num_traits::{One, Zero};
-use pyo3::{exceptions::PyValueError, prelude::*};
+use pyo3::{
+    exceptions::{PyTimeoutError, PyValueError},
+    prelude::*,
+};
 use rand::{rngs::StdRng, RngCore, SeedableRng};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
-    sync::{Arc, Mutex},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex,
+    },
     time::{Duration, Instant},
 };
 
@@ -25,7 +31,67 @@ fn array(v: &Value) -> Result<&Vec<Value>> {
     v.as_array().ok_or("expected array".into())
 }
 fn err(s: String) -> PyErr {
-    PyValueError::new_err(s)
+    if s.starts_with("joint deadline:") {
+        PyTimeoutError::new_err(s)
+    } else {
+        PyValueError::new_err(s)
+    }
+}
+
+struct DeadlineInner {
+    start: Instant,
+    seconds: f64,
+    cancelled: AtomicBool,
+}
+impl DeadlineInner {
+    fn check(&self, cutoff: f64) -> Result<()> {
+        if self.cancelled.load(Ordering::Relaxed)
+            || self.start.elapsed().as_secs_f64() >= cutoff.min(self.seconds)
+        {
+            Err("joint deadline: exhausted".into())
+        } else {
+            Ok(())
+        }
+    }
+}
+/// One clock for construction, inference, export and completed handoff.
+#[pyclass]
+pub struct JointDeadline {
+    inner: Arc<DeadlineInner>,
+}
+#[pymethods]
+impl JointDeadline {
+    #[new]
+    fn new(seconds: f64) -> PyResult<Self> {
+        if !seconds.is_finite() || !(0.0..=3600.0).contains(&seconds) {
+            return Err(PyValueError::new_err("invalid joint deadline"));
+        }
+        Ok(Self {
+            inner: Arc::new(DeadlineInner {
+                start: Instant::now(),
+                seconds,
+                cancelled: AtomicBool::new(false),
+            }),
+        })
+    }
+    #[pyo3(signature=(reserve_seconds=0.0))]
+    fn remaining_seconds(&self, reserve_seconds: f64) -> PyResult<f64> {
+        if !reserve_seconds.is_finite() || reserve_seconds < 0.0 {
+            return Err(PyValueError::new_err("invalid joint reserve"));
+        }
+        Ok(if self.inner.cancelled.load(Ordering::Relaxed) {
+            0.0
+        } else {
+            (self.inner.seconds - reserve_seconds - self.inner.start.elapsed().as_secs_f64())
+                .max(0.0)
+        })
+    }
+    fn elapsed_seconds(&self) -> f64 {
+        self.inner.start.elapsed().as_secs_f64()
+    }
+    fn cancel(&self) {
+        self.inner.cancelled.store(true, Ordering::Relaxed);
+    }
 }
 fn members(mut code: u64) -> Vec<usize> {
     let mut result = Vec::with_capacity(6);
@@ -171,12 +237,22 @@ pub struct NativeJointGenerator {
     edges: u64,
     max_states: usize,
     deadline: Instant,
+    budget: Option<Arc<DeadlineInner>>,
+    hard_cutoff: f64,
+    aborted: AtomicBool,
     cut: bool,
     solved: Option<Mass>,
 }
 
 impl NativeJointGenerator {
-    fn from_json(payload: &str, shared: Arc<Mutex<Legality>>) -> Result<Self> {
+    fn from_json(
+        payload: &str,
+        shared: Arc<Mutex<Legality>>,
+        budget: Option<Arc<DeadlineInner>>,
+    ) -> Result<Self> {
+        if let Some(b) = &budget {
+            b.check(b.seconds)?;
+        }
         let v: Value = serde_json::from_str(payload).map_err(|e| e.to_string())?;
         let quantum = integer(&v["quantum"])?;
         if quantum.is_zero() {
@@ -372,9 +448,24 @@ impl NativeJointGenerator {
             edges: 0,
             max_states: 0,
             deadline: Instant::now(),
+            budget,
+            hard_cutoff: f64::INFINITY,
+            aborted: AtomicBool::new(false),
             cut: false,
             solved: None,
         })
+    }
+    fn check_budget(&self) -> Result<()> {
+        if self.aborted.load(Ordering::Relaxed) {
+            return Err("joint deadline: attempt already aborted".into());
+        }
+        if let Some(budget) = &self.budget {
+            if let Err(error) = budget.check(self.hard_cutoff) {
+                self.aborted.store(true, Ordering::Relaxed);
+                return Err(error);
+            }
+        }
+        Ok(())
     }
     fn selected(&self, code: u64) -> (Vec<usize>, u8, u64) {
         let chosen = members(code);
@@ -410,6 +501,7 @@ impl NativeJointGenerator {
         Ok((total, choices))
     }
     fn branches(&self, code: u64, context: u8, flag: bool) -> Result<Vec<Branch>> {
+        self.check_budget()?;
         let (chosen, found, _) = self.selected(code);
         let depth = chosen.len();
         let missing = self.required & !found;
@@ -443,6 +535,7 @@ impl NativeJointGenerator {
         }
         let mut result = Vec::new();
         for (i, tokens) in choices {
+            self.check_budget()?;
             let g = &self.groups[i];
             if !allowed[i]
                 || self.fixed[depth].is_some_and(|v| v != i)
@@ -482,6 +575,7 @@ impl NativeJointGenerator {
         upper
     }
     fn mass(&mut self, code: u64, context: u8, flag: bool) -> Result<Mass> {
+        self.check_budget()?;
         let (chosen, found, _) = self.selected(code);
         let depth = chosen.len();
         let missing = self.required & !found;
@@ -516,10 +610,7 @@ impl NativeJointGenerator {
         if let Some(value) = self.cache.get(&key) {
             return Ok(value.clone());
         }
-        if self.cut
-            || self.nodes >= self.max_states
-            || (self.nodes % 128 == 0 && Instant::now() >= self.deadline)
-        {
+        if self.cut || self.nodes >= self.max_states || Instant::now() >= self.deadline {
             self.cut = true;
             return Ok(Mass {
                 lower: BigUint::zero(),
@@ -536,6 +627,7 @@ impl NativeJointGenerator {
         }
         let mut result = Mass::exact(BigUint::zero());
         for branch in self.branches(code, context, flag)? {
+            self.check_budget()?;
             self.edges += 1;
             let mass = self.mass(branch.code, branch.context, branch.flag)?;
             result.lower += &branch.factor * &mass.lower;
@@ -545,15 +637,18 @@ impl NativeJointGenerator {
         Ok(result)
     }
     fn draw_one(&mut self, rng: &mut StdRng) -> Result<Vec<(usize, u8)>> {
+        self.check_budget()?;
         let mut code = 0;
         let mut context = 0;
         let mut flag = self.initial_flag;
         let mut path = Vec::new();
         for _ in 0..self.slots {
+            self.check_budget()?;
             let branches = self.branches(code, context, flag)?;
             let mut weighted = Vec::new();
             let mut total = BigUint::zero();
             for b in branches {
+                self.check_budget()?;
                 let weight = &b.factor * self.mass(b.code, b.context, b.flag)?.lower;
                 total += &weight;
                 weighted.push((b, weight));
@@ -561,7 +656,7 @@ impl NativeJointGenerator {
             if total.is_zero() {
                 return Err("zero completed branch mass".into());
             }
-            let mut value = random_below(&total, rng);
+            let mut value = random_below(&total, rng, self)?;
             let mut selected = None;
             for (b, w) in weighted {
                 if value < w {
@@ -579,27 +674,62 @@ impl NativeJointGenerator {
         Ok(path)
     }
 }
-fn random_below(n: &BigUint, rng: &mut StdRng) -> BigUint {
+fn random_below(n: &BigUint, rng: &mut StdRng, joint: &NativeJointGenerator) -> Result<BigUint> {
     let bits = n.bits();
     let mut bytes = vec![0; (bits.div_ceil(8)) as usize];
     loop {
+        joint.check_budget()?;
         rng.fill_bytes(&mut bytes);
         if bits % 8 != 0 {
             *bytes.last_mut().unwrap() &= (1u8 << (bits % 8)) - 1;
         }
         let x = BigUint::from_bytes_le(&bytes);
         if &x < n {
-            return x;
+            return Ok(x);
         }
     }
 }
 #[pymethods]
 impl NativeJointGenerator {
     #[new]
-    fn new(payload: &str, cache: &JointLegalityCache) -> PyResult<Self> {
-        Self::from_json(payload, cache.inner.clone()).map_err(err)
+    #[pyo3(signature=(payload, cache, deadline=None))]
+    fn new(
+        payload: &str,
+        cache: &JointLegalityCache,
+        deadline: Option<&JointDeadline>,
+    ) -> PyResult<Self> {
+        let result = Self::from_json(
+            payload,
+            cache.inner.clone(),
+            deadline.map(|d| d.inner.clone()),
+        )
+        .map_err(err)?;
+        result.check_budget().map_err(err)?;
+        Ok(result)
+    }
+    fn bind_deadline(
+        &mut self,
+        deadline: &JointDeadline,
+        expansion_cutoff: f64,
+        return_cutoff: f64,
+    ) -> PyResult<()> {
+        if !expansion_cutoff.is_finite()
+            || !return_cutoff.is_finite()
+            || expansion_cutoff < 0.0
+            || expansion_cutoff > return_cutoff
+            || return_cutoff > deadline.inner.seconds
+        {
+            return Err(PyValueError::new_err("invalid joint phase cutoffs"));
+        }
+        // A hard-aborted object cannot be revived with a later clock.
+        self.check_budget().map_err(err)?;
+        self.budget = Some(deadline.inner.clone());
+        self.deadline = deadline.inner.start + Duration::from_secs_f64(expansion_cutoff);
+        self.hard_cutoff = return_cutoff;
+        self.check_budget().map_err(err)
     }
     fn solve(&mut self, seconds: f64, max_states: usize) -> PyResult<String> {
+        self.check_budget().map_err(err)?;
         if self.solved.is_some() {
             return Err(PyValueError::new_err(
                 "posterior already solved; create a new evidence state",
@@ -608,14 +738,20 @@ impl NativeJointGenerator {
         if !seconds.is_finite() || seconds <= 0.0 || seconds > 3600.0 || max_states == 0 {
             return Err(PyValueError::new_err("invalid budget"));
         }
-        self.deadline = Instant::now() + Duration::from_secs_f64(seconds);
+        if self.budget.is_none() {
+            self.deadline = Instant::now() + Duration::from_secs_f64(seconds);
+        }
         self.max_states = max_states;
         self.cut = false;
         let value = self.mass(0, 0, self.initial_flag).map_err(err)?;
-        self.solved = Some(value.clone());
-        Ok(json!({"lower":value.lower.to_string(),"upper":value.upper.to_string(),"exact":value.lower==value.upper,"nodes":self.nodes,"edges":self.edges,"cut":self.cut}).to_string())
+        self.check_budget().map_err(err)?;
+        let output = json!({"lower":value.lower.to_string(),"upper":value.upper.to_string(),"exact":value.lower==value.upper,"nodes":self.nodes,"edges":self.edges,"cut":self.cut}).to_string();
+        self.check_budget().map_err(err)?;
+        self.solved = Some(value);
+        Ok(output)
     }
     fn draw_paths(&mut self, count: usize, seed: u64) -> PyResult<Vec<Vec<(usize, u8)>>> {
+        self.check_budget().map_err(err)?;
         if self.solved.as_ref().is_none_or(|m| m.lower.is_zero()) {
             return Err(PyValueError::new_err(
                 "solve with positive lower mass first",
@@ -633,6 +769,7 @@ impl NativeJointGenerator {
             .collect()
     }
     fn branch_masses(&mut self, code: u64, context: u8, flag: bool) -> PyResult<String> {
+        self.check_budget().map_err(err)?;
         if self.solved.is_none() {
             return Err(PyValueError::new_err(
                 "solve before inspecting branch masses",
@@ -675,9 +812,12 @@ impl NativeJointGenerator {
                 (&b.factor * m.upper).to_string()
             ]));
         }
-        Ok(Value::Array(rows).to_string())
+        let output = Value::Array(rows).to_string();
+        self.check_budget().map_err(err)?;
+        Ok(output)
     }
     fn revealed_context_masses(&mut self) -> PyResult<String> {
+        self.check_budget().map_err(err)?;
         if self.solved.as_ref().is_none_or(|m| m.lower.is_zero()) {
             return Err(PyValueError::new_err("positive solved mass required"));
         }
@@ -691,8 +831,10 @@ impl NativeJointGenerator {
         let mut forward = HashMap::from([((self.initial_flag as u64) << 52, BigUint::one())]);
         let mut counts: BTreeMap<(usize, u8, u8), BigUint> = BTreeMap::new();
         for _ in 0..self.slots {
+            self.check_budget().map_err(err)?;
             let mut next = HashMap::<u64, BigUint>::new();
             for (key, prefix) in forward {
+                self.check_budget().map_err(err)?;
                 let code = key & ((1u64 << 48) - 1);
                 let context = ((key >> 48) & 15) as u8;
                 let flag = (key >> 52) != 0;
@@ -701,6 +843,7 @@ impl NativeJointGenerator {
                     continue;
                 }
                 for branch in self.branches(code, context, flag).map_err(err)? {
+                    self.check_budget().map_err(err)?;
                     let suffix = self
                         .mass(branch.code, branch.context, branch.flag)
                         .map_err(err)?
@@ -718,6 +861,10 @@ impl NativeJointGenerator {
                         | ((branch.context as u64) << 48)
                         | ((branch.flag as u64) << 52);
                     *next.entry(key).or_default() += step;
+                    if self.budget.is_some() && next.len() > self.max_states {
+                        self.aborted.store(true, Ordering::Relaxed);
+                        return Err(err("joint deadline: export state cap".into()));
+                    }
                 }
             }
             forward = next;
@@ -726,6 +873,8 @@ impl NativeJointGenerator {
             .into_iter()
             .map(|((g, before, after), n)| json!([g, before, after, n.to_string()]))
             .collect();
-        Ok(Value::Array(rows).to_string())
+        let output = Value::Array(rows).to_string();
+        self.check_budget().map_err(err)?;
+        Ok(output)
     }
 }

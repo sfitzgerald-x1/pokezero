@@ -9,6 +9,7 @@ import json
 from pathlib import Path
 import time
 from dataclasses import dataclass,replace
+from pokezero.joint_budget import defer_joint_gc,new_joint_deadline
 
 from pokezero.live_protocol_actor import ActorContract,_packet
 from pokezero.recorded_encoder_runner import JaxRecordedAdapter
@@ -114,12 +115,16 @@ class ProtocolConstructor:
             joint_plan=None
             if protocol.JOINT_POSTERIOR_DRAW and self.joint_generator:
                 from pokezero.joint_serving import JointSession
-                if self.joint_session is None:
-                    self.joint_session=JointSession(self.source.original,producer=self.team_producer)
-                joint_seed=int.from_bytes(hashlib.sha256(json.dumps(('joint-v1',self.seed,request['battle_id'],
-                    request['owner'],protocol.game_lines_sha256(lines)),separators=(',',':')).encode()).digest()[:8],'big')
-                joint_plan=self.joint_session.prepare(public.context,lines,dex=self.catalog.dex,seed=joint_seed,count=self.count,
-                    binding=self.source.binding_sha256,features=getattr(self.catalog.masks,'set_posterior_narrowing',False))
+                with defer_joint_gc():
+                    deadline=new_joint_deadline()
+                    if self.joint_session is None:
+                        self.joint_session=JointSession(self.source.original,producer=self.team_producer,deadline=deadline)
+                    joint_seed=int.from_bytes(hashlib.sha256(json.dumps(('joint-v1',self.seed,request['battle_id'],
+                        request['owner'],protocol.game_lines_sha256(lines)),separators=(',',':')).encode()).digest()[:8],'big')
+                    joint_plan=self.joint_session.prepare(public.context,lines,dex=self.catalog.dex,seed=joint_seed,count=self.count,
+                        binding=self.source.binding_sha256,features=getattr(self.catalog.masks,'set_posterior_narrowing',False),deadline=deadline)
+                    elapsed,remaining=deadline.elapsed_seconds,deadline.remaining_seconds
+                joint_plan=JointSession.finish_handoff(joint_plan,deadline,elapsed_seconds=elapsed,remaining_seconds=remaining)
             feature_kwargs={}
             if getattr(getattr(self.catalog,'masks',None),'set_posterior_narrowing',False):
                 if joint_plan is None:raise ValueError('joint feature producer required')

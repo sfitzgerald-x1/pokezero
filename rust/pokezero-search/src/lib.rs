@@ -488,6 +488,7 @@ fn puct_search(state_str: &str, iterations: usize, c_puct: f32, seed: u64) -> Py
 #[pymodule]
 fn pokezero_search(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<joint_generator::JointLegalityCache>()?;
+    m.add_class::<joint_generator::JointDeadline>()?;
     m.add_class::<joint_generator::NativeJointGenerator>()?;
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
     m.add("ENGINE_FEATURES", "gen3 (residual-order patched)")?;
