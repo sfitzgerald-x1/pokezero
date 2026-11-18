@@ -137,7 +137,9 @@ def load(path):
     blob,digest=snapshot(path)
     with np.load(io.BytesIO(blob),allow_pickle=False) as data:
         meta=json.loads(data['metadata_json'].tobytes())
-        if meta['schema']!='pokezero.gpu_champion_forward.v1':raise ValueError('unsupported weight archive')
+        from pokezero.checkpoint_self_moves import archive_self_moves
+        archive_self_moves(meta)
+        if meta.get('schema')!='pokezero.gpu_champion_forward.v1':raise ValueError('unsupported weight archive')
         c=Config(**meta['config']);params={k:data[k] for k in data.files if k!='metadata_json'}
     validate_weights(params,c)
     if meta['parameter_count']!=sum(a.size for a in params.values()):raise ValueError('parameter count mismatch')

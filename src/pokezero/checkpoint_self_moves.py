@@ -22,6 +22,14 @@ def _sha(value):
     return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(',', ':'), allow_nan=False).encode()).hexdigest()
 
 
+def archive_self_moves(metadata):
+    """Missing is legacy OFF; a present declaration must be an exact Boolean."""
+    if type(metadata) is not dict:raise ValueError('actor archive metadata object required')
+    declared=metadata.get('self_moves',False)
+    if type(declared) is not bool:raise ValueError('explicit bool archive self_moves declaration required')
+    return declared
+
+
 def _snapshot(path):
     with Path(path).open('rb') as stream:
         before = os.fstat(stream.fileno()); blob = stream.read(); after = os.fstat(stream.fileno())

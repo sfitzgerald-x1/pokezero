@@ -174,6 +174,8 @@ def load(path, *, expected_archive_sha256, expected_checkpoint_sha256, expected_
         raise ValueError('caller-trusted v5 actor archive SHA256 differs')
     with np.load(io.BytesIO(blob), allow_pickle=False) as archive:
         metadata = json.loads(archive['metadata_json'].tobytes())
+        from pokezero.checkpoint_self_moves import archive_self_moves
+        archive_self_moves(metadata)
         params = {name: archive[name] for name in archive.files if name != 'metadata_json'}
     if (metadata.get('schema') != ARCHIVE_SCHEMA or metadata.get('actor') != 'RAW_POLICY'
             or metadata.get('view') != 'PUBLIC' or metadata.get('auxiliary_heads') is not False

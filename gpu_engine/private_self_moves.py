@@ -51,7 +51,11 @@ def refuse_search_serving(*, catalog=None, meta=None, context):
     """Search serving fails closed on self_moves until the follow-up lands: a served catalog compiled with it, or a served
     archive declaring it (meta['self_moves']), stops the server at build instead of pricing an on catalog under an off
     Python root capture."""
-    if bool(getattr(getattr(catalog, 'masks', None), 'self_moves', False)) or bool((meta or {}).get('self_moves', False)):
+    from pokezero.checkpoint_self_moves import archive_self_moves
+    declared=archive_self_moves({} if meta is None else meta)
+    catalog_declared=getattr(getattr(catalog,'masks',None),'self_moves',False)
+    if type(catalog_declared) is not bool:raise ValueError('explicit bool catalog self_moves required')
+    if catalog_declared or declared:
         raise ValueError(f'{context}: {SEARCH_FOLLOW_UP}')
 
 
@@ -61,8 +65,11 @@ UNTHREADED = ('self_moves is not threaded through this tool yet: it encodes with
 
 def refuse_unthreaded(meta=None, *, plan=None, catalog=None, context):
     """Off-only tools reject on archives, plans or catalogs before evaluating actors."""
-    if (bool((meta or {}).get('self_moves', False)) or bool(getattr(plan, 'self_moves', False))
-            or bool(getattr(getattr(catalog, 'masks', None), 'self_moves', False))):
+    from pokezero.checkpoint_self_moves import archive_self_moves
+    declared=archive_self_moves({} if meta is None else meta)
+    flags=(getattr(plan,'self_moves',False),getattr(getattr(catalog,'masks',None),'self_moves',False))
+    if any(type(value) is not bool for value in flags):raise ValueError('explicit bool plan/catalog self_moves required')
+    if declared or any(flags):
         raise ValueError(f'{context}: {UNTHREADED}')
 
 
