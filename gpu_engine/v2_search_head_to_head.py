@@ -464,6 +464,8 @@ def main(argv=None):
     from gpu_engine.v2_fused import prepare
     begin = time.perf_counter();out = Path(args.out);out.mkdir(parents=True, exist_ok=True)
     context = prepare(argparse.Namespace(config=args.config, arm='B', iterations=2 if args.iteration else 1));plan = context['plan']
+    from gpu_engine.private_self_moves import refuse_unthreaded
+    refuse_unthreaded(plan=plan, catalog=context['prepared'].catalog, context='v2 search head to head')
     loaded = {};evaluator = None
     if champion:
         # The engine session's binding (d3_depth2_gate.load_champion): archive and checkpoint shas, then the runtime catalog.

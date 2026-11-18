@@ -58,8 +58,11 @@ def emit_fixture(directory, arm, replicate):
     payload = dict(metadata=metadata, metadata_sha256=actor._sha(metadata), state_dict=model.state_dict())
     directory = Path(directory); checkpoint = directory / 'synthetic.pt'
     torch.save(payload, checkpoint); digest = hashlib.sha256(checkpoint.read_bytes()).hexdigest()
+    from pokezero.checkpoint_self_moves import _writer_receipt,off_from_receipt
+    proof=off_from_receipt(_writer_receipt(checkpoint,checkpoint_sha256=digest,
+        metadata_sha256=payload['metadata_sha256'],self_moves=False))
     archive = directory / 'actor.npz'
-    receipt = actor.export(checkpoint, archive, expected_checkpoint_sha256=digest, enable_v5=True)
+    receipt = actor.export(checkpoint, archive, expected_checkpoint_sha256=digest, enable_v5=True,off_provenance=proof)
     (directory / 'export-receipt.json').write_text(json.dumps(receipt))
     arrays['checkpoint_sha256'] = np.frombuffer(digest.encode(), np.uint8)
     np.savez_compressed(directory / 'fixture.npz', **arrays)
@@ -79,8 +82,15 @@ def emit_fixture(directory, arm, replicate):
         elif name == 'value_centers': changed['state_dict']['value_centers'] = torch.zeros(config.value_bins)
         else: changed['state_dict']['value_centers'] = torch.nextafter(model.value_centers, torch.ones_like(model.value_centers))
         bad = directory / 'bad.pt'; torch.save(changed, bad)
+        bad_digest=hashlib.sha256(bad.read_bytes()).hexdigest()
+        # Preserve each original shape/namespace/nonfinite rejection's scope.
+        bad_proof=None
+        if name!='legacy':
+            proof_path=directory/(name+'-writer.pt')
+            bad_proof=off_from_receipt(_writer_receipt(proof_path,checkpoint_sha256=bad_digest,
+                metadata_sha256=changed['metadata_sha256'],self_moves=False))
         try: actor.export(bad, directory / 'must-not-exist.npz',
-            expected_checkpoint_sha256=hashlib.sha256(bad.read_bytes()).hexdigest(), enable_v5=True)
+            expected_checkpoint_sha256=bad_digest, enable_v5=True,off_provenance=bad_proof)
         except ValueError: rejected.append(name)
         else: raise AssertionError('export accepted ' + name)
     (directory / 'rejections.json').write_text(json.dumps(rejected))

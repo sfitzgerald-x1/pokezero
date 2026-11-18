@@ -106,7 +106,7 @@ class RunChecksTests(unittest.TestCase):
         checkpoint it starts from) may be off: the plan's declaration wins."""
         from gpu_engine.private_self_moves import check_run_actor
         on, off = {'self_moves': True}, {}
-        for meta, plan_on, iteration, ok in ((off, False, 0, True), (on, True, 3, True), (off, True, -1, True), (on, True, -1, True),
+        for meta, plan_on, iteration, ok in ((off, False, 0, True), (on, True, 3, True), (off, True, -1, False), (on, True, -1, True),
                                              (off, True, 0, False), (on, False, -1, False), (on, False, 2, False)):
             if ok:check_run_actor(meta, plan_self_moves=plan_on, iteration=iteration, context='t')
             else:
@@ -117,19 +117,50 @@ class RunChecksTests(unittest.TestCase):
         from gpu_engine import v2_fused
         model = object()
         for meta, plan_on, iteration, ok in (({}, False, 0, True), ({'self_moves': True}, True, 0, True),
-                                             ({}, True, -1, True), ({'self_moves': True}, False, -1, False), ({}, True, 0, False)):
+                                             ({}, True, -1, False), ({'self_moves': True}, False, -1, False), ({}, True, 0, False)):
             snapshot = SimpleNamespace(archive='a.npz', archive_sha256='a' * 64, checkpoint_sha256='b' * 64, iteration=iteration)
             plan = SimpleNamespace(model=SimpleNamespace(category_vocabulary_sha256='c' * 64,
                 label_vocabulary=SimpleNamespace(sha256='d' * 64)), self_moves=plan_on)
             with mock.patch('gpu_engine.v5_model.load', return_value=(model, plan.model, meta)):
                 if ok:self.assertIs(v2_fused.load_actor(plan, snapshot, '/unit'), model)
                 else:
-                    with self.assertRaisesRegex(ValueError, 'differs from the plan'):v2_fused.load_actor(plan, snapshot, '/unit')
+                    message='verified original initializer' if plan_on and iteration==-1 else 'differs from the plan'
+                    with self.assertRaisesRegex(ValueError, message):v2_fused.load_actor(plan, snapshot, '/unit')
 
     def test_unthreaded_tools_refuse_an_on_archive(self):
         from gpu_engine.private_self_moves import refuse_unthreaded
         refuse_unthreaded({}, context='t');refuse_unthreaded(None, context='t');refuse_unthreaded({'self_moves': False}, context='t')
         with self.assertRaisesRegex(ValueError, 'not threaded through this tool'):refuse_unthreaded({'self_moves': True}, context='t')
+
+    def test_unthreaded_tools_refuse_on_plans_or_catalogs(self):
+        from gpu_engine.private_self_moves import refuse_unthreaded
+        for plan_on, catalog_on in ((False, False), (True, False), (False, True), (True, True)):
+            plan = SimpleNamespace(self_moves=plan_on)
+            catalog = SimpleNamespace(masks=SimpleNamespace(self_moves=catalog_on))
+            with self.subTest(plan_on=plan_on, catalog_on=catalog_on):
+                if plan_on or catalog_on:
+                    with self.assertRaisesRegex(ValueError, 'not threaded through this tool'):
+                        refuse_unthreaded({}, plan=plan, catalog=catalog, context='t')
+                else:
+                    refuse_unthreaded({}, plan=plan, catalog=catalog, context='t')
+
+    def test_off_only_entry_points_refuse_before_actor_or_backend_use(self):
+        from gpu_engine import v2_head_to_head as plain, v2_search_head_to_head as search
+        with tempfile.TemporaryDirectory() as tmp:
+            common = ['--config', 'unused.json', '--out', tmp, '--a-run', 'a', '--a-iteration', '0', '--b-run', 'b', '--b-iteration', '0']
+            champion = ['--config', 'unused.json', '--out', tmp, '--b-run', 'champion', '--b-iteration', '0', '--reduction', 'none', '--label', 'unit',
+                '--champion-archive', 'c.npz', '--champion-archive-sha256', 'a'*64, '--champion-checkpoint-sha256', 'b'*64]
+            for module, args in ((plain, common), (search, common + ['--reduction', 'none', '--label', 'unit']), (search, champion)):
+                for plan_on, catalog_on in ((True, False), (False, True), (True, True)):
+                    context = dict(plan=SimpleNamespace(self_moves=plan_on),
+                        prepared=SimpleNamespace(catalog=SimpleNamespace(masks=SimpleNamespace(self_moves=catalog_on))))
+                    with self.subTest(module=module.__name__, args=args, plan_on=plan_on, catalog_on=catalog_on), \
+                            mock.patch('gpu_engine.v2_fused.prepare', return_value=context), \
+                            mock.patch.object(module, 'snapshot', side_effect=AssertionError('actor loaded')), \
+                            mock.patch.object(search, 'champion_setup', side_effect=AssertionError('champion loaded')), \
+                            mock.patch('gpu_engine.v5_device_backend.RuntimeBackend', side_effect=AssertionError('backend constructed')):
+                        with self.assertRaisesRegex(ValueError, 'not threaded through this tool'):
+                            module.main(args)
 
 
 @requires_showdown('the synthetic fixture compiles its catalog from a pokemon-showdown checkout')
