@@ -188,6 +188,8 @@ def main(argv=None):
     parser.add_argument('--mode', choices=('eager', 'compiled', 'cudagraphs'), default='cudagraphs')
     parser.add_argument('--optimizer', choices=('fused', 'foreach', 'single'), default='fused')
     parser.add_argument('--role-routing', choices=('indexed', 'sliced'), default='indexed')
+    parser.add_argument('--native-embedding-backward', action='store_true')
+    parser.add_argument('--fallback-random', action='store_true')
     parser.add_argument('--warmup', type=int, default=8)
     parser.add_argument('--updates', type=int, default=64)
     parser.add_argument('--profile', type=int, default=4)
@@ -235,7 +237,8 @@ def main(argv=None):
             raise ValueError('production width512/layers3/dropout0.1 required')
         train = replace(train, batch_size=args.local_batch*args.world_size, precision=args.precision)
         config = v2.V2Config(mode=args.mode, optimizer=args.optimizer, distributed_rows=True,
-            role_routing=args.role_routing)
+            role_routing=args.role_routing, native_embedding_backward=args.native_embedding_backward,
+            fallback_random=args.fallback_random)
         runtime = v2.create(model, loss, train, config, enable_v5=True, device='cuda', process_group=group)
         runtime.model.load_state_dict(payload['state_dict'])
         v2._load_optimizer_state(runtime.optimizer, payload['optimizer_state'])

@@ -93,6 +93,10 @@ class V2Config:
         globally normalized loss, never the legacy replicated-store DDP math.
     role_routing: ``indexed`` retains the original expert routing; ``sliced``
         opts into fixed disjoint slices for the validated 29-token role layout.
+    native_embedding_backward: keep the category embedding's native dense
+        first-order backward opaque to compiler decomposition (explicit opt-in).
+    fallback_random: request compiler native random/dropout behavior; this
+        alone is not a guarantee of eager RNG/statistic parity.
     """
     order: str = 'ordered'
     order_seed: int | None = None
@@ -103,18 +107,25 @@ class V2Config:
     emulate_precision_casts: bool = True
     distributed_rows: bool = False
     role_routing: str = 'indexed'
+    native_embedding_backward: bool = False
+    fallback_random: bool = False
 
     def __post_init__(self):
         if (self.order not in ORDERS or self.mode not in MODES or self.optimizer not in OPTIMIZERS
                 or type(self.check_interval) is not int or self.check_interval <= 0
                 or self.order_seed is not None and (type(self.order_seed) is not int or not 0 <= self.order_seed < 2**63)
                 or self.pad_partial not in (None, True, False) or type(self.emulate_precision_casts) is not bool
-                or type(self.distributed_rows) is not bool or self.role_routing not in ('indexed', 'sliced')):
+                or type(self.distributed_rows) is not bool or self.role_routing not in ('indexed', 'sliced')
+                or type(self.native_embedding_backward) is not bool or type(self.fallback_random) is not bool):
             raise ValueError('explicit V2 order/mode/optimizer/check interval required')
         if self.mode == 'reference' and self.pad_partial:
             raise ValueError('reference mode runs the original unpadded batch')
         if self.mode == 'reference' and self.role_routing != 'indexed':
             raise ValueError('reference mode requires original indexed role routing')
+        if self.mode == 'reference' and self.native_embedding_backward:
+            raise ValueError('reference mode requires original embedding backward')
+        if self.fallback_random and self.mode not in ('compiled', 'cudagraphs'):
+            raise ValueError('random fallback requires a compiled execution mode')
 
     def pads(self, mode):
         return self.pad_partial if self.pad_partial is not None else mode in ('compiled', 'cudagraphs')
@@ -417,7 +428,8 @@ def _sliced_expert_output(block, hidden):
     return torch.cat((role2[:, :1], role0, role1, role2[:, 1:]), dim=1)
 
 
-def forward_unchecked(model, tensors, *, include_auxiliary, experts, role_routing='indexed'):
+def forward_unchecked(model, tensors, *, include_auxiliary, experts, role_routing='indexed',
+                      native_embedding_backward=False):
     """``Model.forward`` without its input checks (``validate_store`` made them).
 
     Same modules in the same order, so it consumes dropout RNG identically. The
@@ -429,7 +441,12 @@ def forward_unchecked(model, tensors, *, include_auxiliary, experts, role_routin
     categorical_ids = tensors['categorical_ids']; numeric_features = tensors['numeric_features']
     token_type_ids = tensors['token_type_ids']; attention_mask = tensors['attention_mask']
     mask = attention_mask[:, 0]
-    x = (model.category_embedding(categorical_ids[:, 0]).sum(-2)
+    if native_embedding_backward:
+        from .v2_native_embedding import lookup
+        category = lookup(model.category_embedding, categorical_ids[:, 0])
+    else:
+        category = model.category_embedding(categorical_ids[:, 0])
+    x = (category.sum(-2)
         + model.numeric_projection(numeric_features[:, 0])
         + model.token_type_embedding(token_type_ids[:, 0]) + model.history_position_embedding.weight[0])
     x = x.masked_fill(~mask[..., None], 0)
@@ -611,12 +628,12 @@ def _autocast(torch, device, precision):
 
 
 def _static_forward_loss(model, tensors, model_config, loss_config, precision, device, experts, variant_counts,
-                         role_routing='indexed'):
+                         role_routing='indexed', native_embedding_backward=False):
     """Forward + loss under the original autocast scope; returns (loss, metric vector, logits_ok)."""
     torch = _torch()
     with _autocast(torch, device, precision):
         output = forward_unchecked(model, tensors, include_auxiliary=model_config.treatment, experts=experts,
-            role_routing=role_routing)
+            role_routing=role_routing, native_embedding_backward=native_embedding_backward)
         loss, metrics, logits_ok = static_v5_loss(output, tensors, model_config, loss_config, variant_counts=variant_counts)
     vector = torch.stack([metrics[name].float() for name in metric_names(model_config, loss_config)])
     return loss, vector, logits_ok
@@ -728,6 +745,9 @@ class Trainer:
         self._experts = expert_indices(runtime.model, runtime.device)
         if runtime.v2_config.role_routing == 'sliced':
             _validate_sliced_roles(runtime.model)
+        if runtime.v2_config.native_embedding_backward:
+            from .v2_native_embedding import validate
+            validate(runtime.model.category_embedding)
         self._variant_counts = _variant_counts(runtime.model_config, runtime.device)
         self._names = metric_names(runtime.model_config, runtime.loss_config)
         self._parameters = [p for p in runtime.model.parameters()]
@@ -743,6 +763,8 @@ class Trainer:
         if mode in ('compiled', 'cudagraphs'):
             # 'reduce-overhead' is exactly triton.cudagraphs; options and mode are exclusive.
             options = {'emulate_precision_casts': self.runtime.v2_config.emulate_precision_casts}
+            if self.runtime.v2_config.fallback_random:
+                options['fallback_random'] = True
             if mode == 'cudagraphs':
                 options['triton.cudagraphs'] = True
             try:
@@ -759,7 +781,9 @@ class Trainer:
     def mode_report(self):
         return dict(requested=self.requested_mode, active=self.mode, fallbacks=list(self.fallbacks),
             optimizer=self.runtime.v2_config.optimizer, pad_partial=self.runtime.v2_config.pads(self.mode),
-            role_routing=self.runtime.v2_config.role_routing)
+            role_routing=self.runtime.v2_config.role_routing,
+            native_embedding_backward=self.runtime.v2_config.native_embedding_backward,
+            fallback_random=self.runtime.v2_config.fallback_random)
 
     def _call(self, arguments):
         torch = _torch()
@@ -777,7 +801,7 @@ class Trainer:
         """
         rt = self.runtime; torch = _torch()
         arguments = (rt.model, batch, rt.model_config, rt.loss_config, rt.train_config.precision, rt.device,
-            self._experts, self._variant_counts, rt.v2_config.role_routing)
+            self._experts, self._variant_counts, rt.v2_config.role_routing, rt.v2_config.native_embedding_backward)
         while self._compiled is not None and not self._warm:
             rng = v5._rng_state(torch, rt.device.startswith('cuda'))
             try:
@@ -1106,6 +1130,9 @@ def load_checkpoint(path, *, enable_v5=False, v2_config=None, expected_model_con
         raise ValueError('resume cannot change distributed row/loss semantics')
     if saved.role_routing != v2_config.role_routing:
         raise ValueError('resume requires original role routing; switching is unqualified')
+    if (saved.native_embedding_backward, saved.fallback_random) != (
+            v2_config.native_embedding_backward, v2_config.fallback_random):
+        raise ValueError('resume requires original embedding/RNG execution settings')
     if section['cursor'] is not None and not section['cursor']['complete'] and (
             (v2_config.order, v2_config.order_seed) != (saved.order, saved.order_seed)):
         raise ValueError('an unfinished cursor resumes only with its original batch order')
