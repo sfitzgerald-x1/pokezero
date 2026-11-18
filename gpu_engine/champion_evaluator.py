@@ -116,6 +116,8 @@ class ChampionEvaluator:
     kind = 'champion'
 
     def __post_init__(self):
+        from pokezero.checkpoint_self_moves import archive_self_moves
+        archive_self_moves(self.meta)
         if self.precision not in PRECISIONS.values():raise ValueError(f'champion precision in {tuple(PRECISIONS.values())} required')
         if self.config.tokens != TOKENS:raise ValueError(f'the champion reads the {TOKENS}-token v4 prefix (config.tokens {self.config.tokens})')
         for name in ('weights_archive_sha256', 'checkpoint_sha256'):
@@ -253,7 +255,10 @@ def check_binding(evaluator, catalog):
         raise ValueError('the bank encoder catalog\'s feature masks are not the champion contract\'s')
     # V2 self_moves: the archive declares it (meta['self_moves'], written only when on; absent = False) and the catalog
     # that encodes for it must agree, both ways.
-    if bool(getattr(catalog.masks, 'self_moves', False)) != bool((evaluator.meta or {}).get('self_moves', False)):
+    from pokezero.checkpoint_self_moves import archive_self_moves
+    declared=archive_self_moves(evaluator.meta);catalog_declared=getattr(catalog.masks,'self_moves',False)
+    if type(catalog_declared) is not bool:raise ValueError('explicit bool catalog self_moves required')
+    if catalog_declared != declared:
         raise ValueError('the bank encoder catalog\'s self_moves differs from the archive\'s declaration')
     return True
 

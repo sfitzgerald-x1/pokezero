@@ -206,10 +206,11 @@ class Backend:
         if (path/'endings.jsonl').exists():report.update(endings=str(path/'endings.jsonl'),endings_sha256=file_sha(path/'endings.jsonl'))
         return report
 
-    def collect(self,batch,checkpoint,path,*,dataset_config,on_end,check_progress):
+    def collect(self,batch,checkpoint,path,*,dataset_config,on_end,check_progress,off_provenance=None):
         path=Path(path);path.mkdir(parents=True,exist_ok=False)
         sync_directory(path);sync_directory(path.parent)
-        archive=path/'actor.npz';metadata=champion.export(checkpoint,archive)
+        archive=path/'actor.npz';metadata=champion.export(checkpoint,archive,
+            **(dict(off_provenance=off_provenance) if off_provenance is not None else {}))
         params,config,weights=champion.load(archive)
         require(config==champion.config_from_checkpoint(self.model_config.to_dict()),'original v4 shape changed')
         require(metadata['checkpoint_sha256']==file_sha(checkpoint),'export checkpoint binding')

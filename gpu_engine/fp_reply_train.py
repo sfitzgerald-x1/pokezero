@@ -358,7 +358,7 @@ def apply_redaction(arrays, redaction):
     return arrays
 
 
-def archive_parity(checkpoint, archive, arrays, index, rows, torch, extra, size=512):
+def archive_parity(checkpoint, archive, arrays, index, rows, torch, extra, size=512, *, off_provenance=None):
     """Export π_FP to the champion_evaluator weight archive and require the JAX fp32 forward to reproduce π_FP's torch probabilities,
     recomputed on CPU in fp32, to ARCHIVE_TOLERANCE (an export bug that size can't hide behind kernel noise)."""
     import jax
@@ -367,7 +367,7 @@ def archive_parity(checkpoint, archive, arrays, index, rows, torch, extra, size=
     from pokezero.neural_policy import load_transformer_checkpoint
     cpu_model, _ = load_transformer_checkpoint(checkpoint, map_location='cpu')
     torch_probs = predict(cpu_model, arrays, index, rows, torch, 'cpu')
-    meta = champion.export(checkpoint, archive, extra=extra)
+    meta = champion.export(checkpoint, archive, extra=extra,off_provenance=off_provenance)
     params, config, loaded = champion.load(archive)
     worst = 0.;agree = 0
     for lo in range(0, len(rows), size):
@@ -408,6 +408,8 @@ def main(argv=None):
     parser.add_argument('--test-seeds', metavar='JSON', help='a fixed test set: a JSON list of battle seeds (e.g. an earlier run\'s test games)')
     parser.add_argument('--late-from', type=int, metavar='ORDINAL', help='with --test-seeds: every battle seed whose first game has ordinal >= '
                         'this is a second held-out set (late)')
+    from pokezero.checkpoint_self_moves import add_receipt_arguments,receipt_from_arguments,save_champion_payload
+    add_receipt_arguments(parser)
     args = parser.parse_args(argv)
     if args.late_from is not None and not args.test_seeds:parser.error('--late-from needs --test-seeds (the default split would ignore it)')
     if args.evaluate and args.window:parser.error('--window applies to training, not --evaluate')
@@ -475,7 +477,8 @@ def main(argv=None):
         if args.export_archive:
             if window != 1:raise SystemExit('champion_evaluator archives need window 1')
             payload = torch.load(args.evaluate, map_location='cpu', weights_only=True)
-            report['archive'] = archive_parity(args.evaluate, args.export_archive, arrays, index, test, torch, payload.get('fp_reply'))
+            report['archive'] = archive_parity(args.evaluate, args.export_archive, arrays, index, test, torch, payload.get('fp_reply'),
+                off_provenance=receipt_from_arguments(args))
             (out / 'report-eval.json').write_text(json.dumps(report, indent=1) + '\n')
         print(json.dumps(dict(event='EVALUATED', test_all={k: v['all'] for k, v in report['test'].items() if isinstance(v, dict) and 'all' in v}, bootstrap=report['test']['game_bootstrap_nll'], archive=report.get('archive'))), flush=True)
         return 0
@@ -520,7 +523,7 @@ def main(argv=None):
     payload['fp_reply'] = dict(policy_only=True, base_checkpoint_sha256=base_sha, best_epoch=best['epoch'], data=str(args.data), window=window,
                                redaction=args.redact, view=args.view, split=split_record(arrays, rows, rule, test_seeds, args.late_from),
                                note='policy fine-tuned on Foul Play decisions; the value output is not trained and must not be used')
-    torch.save(payload, out / 'pi-fp.pt')
+    encoding_receipt=save_champion_payload(out/'pi-fp.pt',payload,model_config=result.model_config)
     cost = step_cost(model, arrays, index, test, torch, args.device)
     report = dict(schema='v2s-fp-reply-model.v1', data=str(args.data), checkpoint=str(args.checkpoint),
                   checkpoint_sha256=checkpoint_file_sha256(args.checkpoint), window=window, rows={k: int(len(v)) for k, v in rows.items()},
@@ -532,6 +535,7 @@ def main(argv=None):
                   late=None if 'late' not in rows else late_report(model, arrays, index, rows['late'], calibrated, compare_late, out, torch, args.device, provenance),
                   seconds=round(time.time() - started, 1))
     report['saved'] = dict(path=str(out / 'pi-fp.pt'), sha256=checkpoint_file_sha256(out / 'pi-fp.pt'),
+                           encoding_receipt=encoding_receipt,
                            note='champion checkpoint format; policy fine-tuned on Foul Play decisions; the value head output is not trained')
     (out / 'report.json').write_text(json.dumps(report, indent=1) + '\n')
     print(json.dumps(dict(event='DONE', best_epoch=best['epoch'], test_all={k: v['all'] for k, v in report['test'].items() if isinstance(v, dict) and 'all' in v}, bootstrap=report['test']['game_bootstrap_nll'], inference_cost=cost)), flush=True)

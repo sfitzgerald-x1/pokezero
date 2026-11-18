@@ -792,7 +792,8 @@ def export(args):
                   source_sha256=checkpoint_file_sha256(Path(args.run) / 'human.pt'))
     payload.pop('fp_reply', None)
     payload['human_reply'] = marker
-    torch.save(payload, checkpoint)
+    from pokezero.checkpoint_self_moves import save_champion_payload,off_from_receipt
+    encoding_receipt=save_champion_payload(checkpoint,payload,model_config=model.base.config)
     arrays = load_views(args.views)
     keep = np.flatnonzero(arrays['split'] == 'test')[:args.parity_rows]
     arrays = {k: v[keep] for k, v in arrays.items()};test = np.arange(len(keep))
@@ -807,10 +808,11 @@ def export(args):
     sub = {k: arrays[k][test] for k in fpt.OBS_KEYS + ('legal',)}
     sub['label'] = np.clip(arrays['label'][test], 0, None)   # fp_reply_train.batch reads a label; the parity check does not use it
     extra = dict(marker, view='b', redaction='peer-view-v2', policy_only=True)
-    parity = fpt.archive_parity(checkpoint, archive, sub, np.arange(len(test))[:, None], np.arange(len(test)), torch, extra)
+    parity = fpt.archive_parity(checkpoint, archive, sub, np.arange(len(test))[:, None], np.arange(len(test)), torch, extra,
+        off_provenance=off_from_receipt(encoding_receipt) if not model.base.config.self_moves else None)
     result = dict(schema='v2s-human-reply-export.v1', run=str(args.run), band=marker['band'], checkpoint=str(checkpoint),
                   checkpoint_sha256=checkpoint_file_sha256(checkpoint), fold_max_abs_probability_difference=fold_diff,
-                  fold_tolerance=FOLD_TOLERANCE, archive=parity)
+                  fold_tolerance=FOLD_TOLERANCE, archive=parity,encoding_receipt=encoding_receipt)
     (out / 'export.json').write_text(json.dumps(result, indent=1) + '\n')
     print(json.dumps(dict(event='EXPORTED', **result)), flush=True)
     return 0
