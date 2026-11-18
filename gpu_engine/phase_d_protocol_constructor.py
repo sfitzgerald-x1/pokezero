@@ -114,9 +114,9 @@ class ProtocolConstructor:
             facts=protocol.tail.facts(public,packet,lines)
             joint_plan=None
             if protocol.JOINT_POSTERIOR_DRAW and self.joint_generator:
-                from pokezero.joint_serving import JointSession
                 with defer_joint_gc():
                     deadline=new_joint_deadline()
+                    from pokezero.joint_serving import JointSession
                     if self.joint_session is None:
                         self.joint_session=JointSession(self.source.original,producer=self.team_producer,deadline=deadline)
                     joint_seed=int.from_bytes(hashlib.sha256(json.dumps(('joint-v1',self.seed,request['battle_id'],
