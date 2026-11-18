@@ -51,6 +51,14 @@ class JointProtocol(ProtocolRoute):
         self.assertEqual(after[key],tuple(w if normalize_id(v.item or '')==normalize_id(named or '')else 0
             for v,w in zip(variants,before[key])))
 
+    def test_joint_materialization_preserves_public_cosmetic_species(self):
+        _,root=self.root('hp_neutral_unown')
+        names=['unown']+[s for s in self.src.universes if s!='unown'][:5]
+        team=tuple(JointMember(s,0,i,0)for i,s in enumerate(names))
+        plan=JointPlan((team,),{},None,{},self.src.metadata.source_hash,'fixture')
+        fixtures=opponent_team(plan,0,context=root.context,source=self.src,rng=random.Random(11))
+        self.assertEqual([f.species for f in fixtures if f.species.lower().startswith('unown')],['Unown-I'])
+
     def test_feature_off_does_not_read_or_mutate_payload(self):
         class Poison:
             def __getattribute__(self,name):raise AssertionError(name)

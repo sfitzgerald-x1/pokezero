@@ -176,11 +176,12 @@ def opponent_team(plan, index, *, context, source, rng):
         universe = source.universes[member.species]
         variant = universe.variants[member.variant_index]
         belief = shown.get(member.species)
+        public_species=belief.species if belief is not None else variant.species
         gender = belief.gender if belief is not None else None
-        gender = gender or worlds._sample_gender(variant.species, set_source=source, rng=rng)
-        fixture = worlds._fixture_from_variant_payload(variant.to_summary(), fallback_species=variant.species,
+        gender = gender or worlds._sample_gender(public_species, set_source=source, rng=rng)
+        fixture = worlds._fixture_from_variant_payload(variant.to_summary(), fallback_species=public_species,
             set_source=source, gender=gender,
-            move_slot_constraints=constraints.get(worlds._normalize_species_id(variant.species), {}))
+            move_slot_constraints=constraints.get(worlds._normalize_species_id(public_species), {}))
         if fixture is None:
             raise ValueError('joint source fixture unavailable')
         fixtures.append(fixture)
