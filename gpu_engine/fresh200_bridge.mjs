@@ -18,6 +18,10 @@ const witnessControl=path.join(dir,'witness-control.json');
 if(fs.existsSync(witnessControl)){
   const {setNativeWitness}=await import('../scripts/battle_bridge_witness_port.mjs');
   const nativeMode=fs.existsSync(path.join(dir,'witness-native.json'));
+  const nativeDeclaration=nativeMode?JSON.parse(fs.readFileSync(path.join(dir,'witness-native.json'),'utf8')):null;
+  const registrationEvidence=nativeDeclaration?.registrationEvidence===true;
+  if(registrationEvidence&&(Object.keys(nativeDeclaration).sort().join(',')!=='enabled,qualification,registrationEvidence'
+      ||nativeDeclaration.enabled!==true||nativeDeclaration.qualification!==false))throw Error('EXPLICIT_REGISTRATION_DECLARATION_REQUIRED');
   const transportPath=path.join(dir,'witness-transport.json'),transportMode=fs.existsSync(transportPath);
   if(transportMode&&!nativeMode)throw Error('TRANSPORT_REQUIRES_ACTUAL_NATIVE_REQUEST_OBSERVER');
   const transportBytes=transportMode?fs.readFileSync(transportPath):null;
@@ -50,7 +54,7 @@ if(fs.existsSync(witnessControl)){
       declaration:digest(transportBytes)};
   }
   const registry={nativeRoot:root,node:process.version,
-    nativeMode,transportMode,transportFunctions,
+    nativeMode,transportMode,...(registrationEvidence?{registrationEvidence:true}:{}),transportFunctions,
     helpers:Object.fromEntries(['fresh200_witness_core.cjs','fresh200_witness_bridge.cjs','chance_hooks.cjs','fresh200_bridge.mjs',...(nativeMode?['fresh200_witness_native.cjs']:[]),...(transportMode?['fresh200_witness_transport.cjs']:[])]
       .map(name=>[name,require('node:crypto').createHash('sha256').update(fs.readFileSync(new URL(name,import.meta.url))).digest('hex')])),
     bridge:require('node:crypto').createHash('sha256').update(fs.readFileSync(new URL('../scripts/battle_bridge.mjs',import.meta.url))).digest('hex'),
@@ -65,7 +69,7 @@ if(fs.existsSync(witnessControl)){
     Pokemon:require(path.join(root,'dist/sim/pokemon.js')).Pokemon,Side:require(path.join(root,'dist/sim/side.js')).Side,
     BattleActions:require(path.join(root,'dist/sim/battle-actions.js')).BattleActions,BattleQueue:require(path.join(root,'dist/sim/battle-queue.js')).BattleQueue,
     Field:require(path.join(root,'dist/sim/field.js')).Field},{transport}):null;
-  setNativeWitness(require('./fresh200_witness_bridge.cjs').createObserver({Battle,sourceRegistryHash,nativeFactory,transport,
+  setNativeWitness(require('./fresh200_witness_bridge.cjs').createObserver({Battle,sourceRegistryHash,nativeFactory,transport,registrationEvidence,
     loadControl:()=>JSON.parse(fs.readFileSync(witnessControl,'utf8')),
     appendAudit:bytes=>fs.appendFileSync(path.join(dir,'witness-audit.jsonl'),bytes),
     appendReceipt:bytes=>fs.appendFileSync(path.join(dir,'witness-receipts.jsonl'),bytes),

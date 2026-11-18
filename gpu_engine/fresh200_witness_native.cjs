@@ -56,7 +56,8 @@ function createRecorder(core,{Battle,Pokemon,Side,BattleActions,BattleQueue,Fiel
       if(Number.isFinite(value))return value;
       return {$nativeNumber:Number.isNaN(value)?'NaN':value>0?'+Infinity':'-Infinity'};
     }
-    if(typeof value==='function')return {$function:hash(Reflect.apply(functionText,value,[]))};
+    if(typeof value==='function')return {$function:hash(Reflect.apply(functionText,value,[])),
+      ...(core.registrationEvidence?{function_token:core.registrationToken(value)}:{})};
     if(typeof value!=='object')throw Error('UNSUPPORTED_NATIVE_OBSERVATION_VALUE');
     if(value instanceof Pokemon)return {kind:'Pokemon',...physical(value)};
     if(value instanceof Battle)return {kind:'Battle',object:token(value)};
@@ -112,16 +113,20 @@ function createRecorder(core,{Battle,Pokemon,Side,BattleActions,BattleQueue,Fiel
     if(!battle)return {$native:'constructing'};
     return {battle:token(battle),event:field(battle,'event'),effect:field(battle,'effect'),effectState:field(battle,'effectState')};
   }
-  function callback(fn){
+  function callback(fn,registrationSite){
     if(typeof fn!=='function')return;
     const key='Callback:'+hash(Reflect.apply(functionText,fn,[]));
-    core.instrumentCallback(fn,key,{operation:key,
-      enter(_fn,args){const battle=args[0];return {context:context(battle),arguments:project(args[1]),before:cache(battle)};},
-      leave(_before,_fn,args,outcome){return {context:context(args[0]),result:project(outcome.value),didThrow:outcome.didThrow,after:cache(args[0])};}});
+    core.instrumentCallback(fn,key,{operation:key,registrationSite,
+      enter(actual,args){
+        if(core.registrationEvidence&&actual!==fn)throw Error('EXACT_REGISTERED_CALLBACK_RECEIVER_REQUIRED');
+        const battle=args[0];return {...(core.registrationEvidence?{function_token:core.registrationToken(actual)}:{}),
+          context:context(battle),arguments:project(args[1]),before:cache(battle)};},
+      leave(_before,actual,args,outcome){return {...(core.registrationEvidence?{function_token:core.registrationToken(actual)}:{}),
+        context:context(args[0]),result:project(outcome.value),didThrow:outcome.didThrow,after:cache(args[0])};}});
   }
   function handlers(result){
     if(!Array.isArray(result))return;
-    for(const handler of values(result))if(handler&&typeof handler==='object')callback(data(handler,'callback'));
+    for(const [index,handler] of values(result).entries())if(handler&&typeof handler==='object')callback(data(handler,'callback'),{kind:'handler-result',index});
   }
   function observer(operation,name){return {operation,
     enter(subject,args){
@@ -132,30 +137,34 @@ function createRecorder(core,{Battle,Pokemon,Side,BattleActions,BattleQueue,Fiel
           throw Error('EXACT_NATIVE_REQUEST_CALL_CONTEXT_REQUIRED');
         transport.requestBegin(frame.callId,'p'+(side+1));
       }
+      let callbackSelection=null;
       if(name==='singleEvent'){
         const effect=args[1],custom=args[7];
         // Native uses customCallback || effect[onEvent], including false/0.
-        const fn=custom||(effect&&inheritedData(effect,'on'+args[0]));callback(fn);
+        const fn=custom||(effect&&inheritedData(effect,'on'+args[0]));callback(fn,{kind:'singleEvent-selection'});
+        if(core.registrationEvidence&&typeof fn==='function')callbackSelection={function_token:core.registrationToken(fn),
+          originalSha256:hash(Reflect.apply(functionText,fn,[])),selector:custom?'custom':'effect-property'};
       }
       return {subject:project(subject),arguments:project(args),context:context(battle),
+        ...(core.registrationEvidence&&name==='singleEvent'?{callbackSelection}:{}),
         ...(MATERIAL.has(name)&&battle?{before:cache(battle)}:{})};
     },
     leave(_before,subject,_args,outcome){
       if(transport&&name==='emitRequest')transport.requestEnd(core.frames.at(-1)?.callId,outcome.didThrow);
       if(!outcome.didThrow){
-        if(name==='getCallback')callback(outcome.value);
+        if(name==='getCallback')callback(outcome.value,{kind:'getCallback-result'});
         else if(name.startsWith('find'))handlers(outcome.value);
       }
       const battle=battleOf(subject);
       return {result:project(outcome.value),didThrow:outcome.didThrow,context:context(battle),
         ...(MATERIAL.has(name)&&battle?{after:cache(battle)}:{})};
     }};}
-  function method(target,name,operation){
+  function method(target,name,operation,stage='bootstrap-method'){
     let owner=target,descriptor;
     while(owner&&!(descriptor=Object.getOwnPropertyDescriptor(owner,name)))owner=Object.getPrototypeOf(owner);
     if(!descriptor||typeof descriptor.value!=='function')throw Error('PINNED_NATIVE_METHOD_MISSING:'+operation);
     if(owner!==target)Object.defineProperty(target,name,{value:descriptor.value,writable:true,configurable:true});
-    core.installMethod(target,name,observer(operation,name));
+    core.installMethod(target,name,{...observer(operation,name),registrationSite:{kind:stage,owner:operation.split('.')[0]}});
   }
   for(const name of POKEMON)method(Pokemon.prototype,name,'Pokemon.'+name);
   for(const name of SIDE)method(Side.prototype,name,'Side.'+name);
@@ -163,11 +172,11 @@ function createRecorder(core,{Battle,Pokemon,Side,BattleActions,BattleQueue,Fiel
   return {
     bindBattle(battle){
       if(bound.has(battle))return;bound.add(battle);
-      for(const name of BATTLE)method(battle,name,'Battle.'+name);
+      for(const name of BATTLE)method(battle,name,'Battle.'+name,'instance-method');
       const actions=data(battle,'actions'),queue=data(battle,'queue');
       if(!(actions instanceof BattleActions)||!(queue instanceof BattleQueue))throw Error('PINNED_NATIVE_SERVICES_REQUIRED');
-      for(const name of ACTIONS)method(actions,name,'BattleActions.'+name);
-      for(const name of QUEUE)method(queue,name,'BattleQueue.'+name);
+      for(const name of ACTIONS)method(actions,name,'BattleActions.'+name,'instance-method');
+      for(const name of QUEUE)method(queue,name,'BattleQueue.'+name,'instance-method');
     },
     snapshot(battle){return cache(battle);},
     manifest(){

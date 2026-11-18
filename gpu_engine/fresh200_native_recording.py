@@ -142,7 +142,7 @@ class NativeCommandRecorder:
         try:
             _need(not self.failed and not self.finished and index<self.max_commands, 'closed failed/finished/bounded attempt cannot accept input')
             _need(isinstance(spec,CommandSpec), 'independently sealed original command required')
-            command,control,bound=spec.documents();key=(control['run'],control['stream'],control['reset'])
+            command,control,bound=self.verifier.admit_spec(spec);key=(control['run'],control['stream'],control['reset'])
             _need(control['phase'] in ('start','choices','snapshot','end','close')
                 and control['command']==self.verifier.native_cursor.commands.get(key,-1)+1
                 and control['previous_receipt_hash']==self.verifier.native_cursor.receipt_hash

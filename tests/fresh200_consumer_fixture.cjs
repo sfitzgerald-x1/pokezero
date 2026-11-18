@@ -11,6 +11,7 @@ const {TransportWitness, CHANNELS, READERS, methodHash} = require('../gpu_engine
 const hash = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
 const wire = value => Buffer.from(JSON.stringify(value)+'\n');
 const out = process.argv[2];assert.ok(out);fs.mkdirSync(out,{recursive:true});
+const registrationMode=process.argv[3]==='--registration-policy';
 
 class Reader {
   constructor(){this.buffer=[];this.waiters=[];this.ended=false;}
@@ -39,6 +40,16 @@ async function main(){
   const hooks=[['Battle.setPlayer',Battle.prototype.setPlayer],['Side.emitRequest',Side.prototype.emitRequest]]
     .map(([operation,fn])=>({operation,originalSha256:methodHash(fn),kind:'method'})).sort((a,b)=>a.operation.localeCompare(b.operation));
   const hookDigest=hash(wire(hooks));
+  // Synthetic source declarations captured before any hooks are installed.
+  // Real Native source parsing/admission is a separate gate; these exact class
+  // method spans exercise only the policy/closed-command composition.
+  const sourceBytes=fs.readFileSync(__filename);
+  const catalogFunctions=hooks.map(entry=>{
+    const fn=entry.operation==='Battle.setPlayer'?Battle.prototype.setPlayer:Side.prototype.emitRequest;
+    const text=Buffer.from(Function.prototype.toString.call(fn)),start=sourceBytes.indexOf(text);assert.ok(start>=0);
+    return {...entry,stage:'bootstrap-method',locations:[{source:__filename,start,end:start+text.length,
+      declaration:entry.operation,source_form:'method-definition'}]};
+  });
   const expectedMethods={};
   for(const [name,fn] of [
     ['source.iterator',Reader.prototype[Symbol.asyncIterator]],['source.next',Reader.prototype.next],
@@ -52,11 +63,11 @@ async function main(){
       listeners.splice(listeners.indexOf(waiter),1);waiter.resolve();}}});
   const when=predicate=>predicate()?Promise.resolve():new Promise(resolve=>listeners.push({predicate,resolve}));
   let control,command,transportControl;
-  const observer=createObserver({Battle,sourceRegistryHash:sourceHash,transport,
+  const observer=createObserver({Battle,sourceRegistryHash:sourceHash,transport,registrationEvidence:registrationMode,
     loadControl:()=>control,appendAudit:bytes=>audits.push(bytes),appendReceipt:bytes=>nativeReceipts.push(bytes),
     loadTransportControl:()=>({value:transportControl,sha256:hash(wire(transportControl))}),appendTransportReceipt:bytes=>completions.push(bytes)});
   const core=observer.core;
-  core.installMethod(Side.prototype,'emitRequest',{operation:'Side.emitRequest',
+  core.installMethod(Side.prototype,'emitRequest',{operation:'Side.emitRequest',registrationSite:{kind:'bootstrap-method',owner:'Side'},
     enter(side){transport.requestBegin(core.frames.at(-1).callId,'p'+(side.n+1));return {subject:{kind:'Side',n:side.n}};},
     leave(_before,_side,_args,outcome){transport.requestEnd(core.frames.at(-1).callId,outcome.didThrow);return null;}});
   const source=new Source(),streams=Object.fromEntries(CHANNELS.map(n=>[n,new Reader()])),battle=new Battle(source);
@@ -109,6 +120,8 @@ async function main(){
   token=begin(4,'close');await finish(token,4);
   for(const [name,parts] of Object.entries({audit:audits,events,stdout}))fs.writeFileSync(path.join(out,name+'.jsonl'),Buffer.concat(parts),{flag:'wx'});
   fs.writeFileSync(path.join(out,'manifest.json'),wire({synthetic_only:true,no_actual_native_game:true,session:'consumer-fixture',battle_id:'b',
-    source_registry_hash:sourceHash,expected_methods:expectedMethods,hook_identity_digest:hookDigest,call_operations:hooks.map(x=>x.operation),commands:specs}));
+    source_registry_hash:sourceHash,expected_methods:expectedMethods,hook_identity_digest:hookDigest,call_operations:hooks.map(x=>x.operation),commands:specs,
+    ...(registrationMode?{registration_catalog:{source_pins:{[__filename]:hash(sourceBytes)},functions:catalogFunctions,
+      bootstrap_operations:['Battle.setPlayer','Side.emitRequest'],instance_operations:[]}}:{})}));
 }
 main().catch(error=>{console.error(error);process.exitCode=1;});

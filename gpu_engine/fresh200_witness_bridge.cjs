@@ -58,16 +58,16 @@ function wireValue(value, array = false, seen = new Set()) {
   seen.delete(value);return result;
 }
 
-function createObserver({Battle,loadControl,appendAudit,appendReceipt,sourceRegistryHash,nativeFactory=null,
+function createObserver({Battle,loadControl,appendAudit,appendReceipt,sourceRegistryHash,nativeFactory=null,registrationEvidence=false,
     transport=null,loadTransportControl=null,appendTransportReceipt=null}) {
   if(transport&&(typeof loadTransportControl!=='function'||typeof appendTransportReceipt!=='function'))throw Error('EXPLICIT_TRANSPORT_CONTROL_AND_RECEIPT_REQUIRED');
-  const core=new WitnessCore({appendAudit,sourceRegistryHash});
+  const core=new WitnessCore({appendAudit,sourceRegistryHash,registrationEvidence});
   const native=nativeFactory===null?null:nativeFactory(core);
   const ended=new WeakSet(),battles=new WeakMap(),snapshotHashes=new WeakMap();
   let transportCompletion=null;
   const playerDescriptor=Object.getOwnPropertyDescriptor(Battle.prototype,'setPlayer');
   if (!playerDescriptor || typeof playerDescriptor.value!=='function') throw Error('PINNED_SETPLAYER_SEAM_REQUIRED');
-  core.installMethod(Battle.prototype,'setPlayer',{operation:'Battle.setPlayer',
+  core.installMethod(Battle.prototype,'setPlayer',{operation:'Battle.setPlayer',registrationSite:{kind:'bootstrap-method',owner:'Battle'},
     enter(battle,args) {
       if (!core.active || core.active.control.phase!=='start') throw Error('UNDECLARED_NATIVE_CONSTRUCTION');
       const known=battles.get(battle);

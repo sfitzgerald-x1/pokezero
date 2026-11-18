@@ -30,9 +30,10 @@ function literal(value, seen = new Set()) {
 }
 
 class WitnessCore {
-  constructor({appendAudit, sourceRegistryHash, maxRows = 100000, maxBytes = 64*1024*1024}) {
+  constructor({appendAudit, sourceRegistryHash, maxRows = 100000, maxBytes = 64*1024*1024, registrationEvidence = false}) {
     if (typeof appendAudit !== 'function' || !/^[a-f0-9]{64}$/.test(sourceRegistryHash) ||
-        !Number.isSafeInteger(maxRows) || maxRows <= 0 || !Number.isSafeInteger(maxBytes) || maxBytes <= 0) {
+        !Number.isSafeInteger(maxRows) || maxRows <= 0 || !Number.isSafeInteger(maxBytes) || maxBytes <= 0 ||
+        typeof registrationEvidence !== 'boolean') {
       throw Error('BOUNDED_WITNESS_WRITER_AND_SOURCE_REQUIRED');
     }
     this.appendAudit = appendAudit; this.sourceRegistryHash = sourceRegistryHash;
@@ -41,6 +42,8 @@ class WitnessCore {
     this.poisoned = false; this.faultCode = null; this.active = null;
     this.frames = []; this.hooks = []; this.callbacks = new WeakMap();
     this.commands = new Map(); this.nonces = new Set(); this.lastReceiptHash = ZERO;
+    this.registrationEvidence=registrationEvidence;this.registrationTargets=new WeakMap();this.nextRegistrationTarget=0;
+    this.registrationPending=[];this.registrationEntering=new Set();this.hasBegun=false;
   }
   poison(code) { this.poisoned = true; this.faultCode ??= code; }
   observe(code, callback) {
@@ -81,6 +84,8 @@ class WitnessCore {
       this.commands.set(key, value.command); this.nonces.add(value.nonce);
       this.active = {control:Object.freeze(value), battleId, firstSequence:this.sequence, rows:0, bytes:0};
       this.record('COMMAND_BEGIN');
+      this.hasBegun=true;
+      if(this.registrationEvidence)this.flushRegistrations(null);
       return this.active;
     });
   }
@@ -89,6 +94,7 @@ class WitnessCore {
     this.observe('COMMAND_END_FAILED', () => {
       if (!token || token !== this.active) throw Error('WRONG_COMMAND_TOKEN');
       if (this.frames.length) this.poison('OPEN_CALL_FRAMES');
+      if(this.registrationEvidence&&(this.registrationPending.length||this.registrationEntering.size))this.poison('UNEMITTED_HOOK_REGISTRATION');
       if (originalThrew) this.poison('ORIGINAL_COMMAND_THROW');
       this.verifyHooks();
       this.record('COMMAND_END', {originalThrew, boundary});
@@ -111,8 +117,12 @@ class WitnessCore {
       let frame, before;
       core.observe('OBSERVER_ENTER_FAILED', () => {
         frame = {callId:core.callId++, parentCall:core.frames.at(-1)?.callId ?? null, operation};
-        core.frames.push(frame); before = enter(this, args);
-        core.record('CALL_ENTER', before, frame);
+        core.frames.push(frame);
+        if(core.registrationEvidence)core.registrationEntering.add(frame.callId);
+        try {
+          before = enter(this, args);core.record('CALL_ENTER', before, frame);
+          if(core.registrationEvidence)core.flushRegistrations(frame.callId);
+        } finally {if(core.registrationEvidence)core.registrationEntering.delete(frame.callId);}
       });
       let value, thrown, didThrow = false;
       try { value = apply(original, this, args); }
@@ -136,6 +146,7 @@ class WitnessCore {
     Object.defineProperty(target, name, {...descriptor, value:wrapped});
     this.hooks.push({target, name, wrapped, operation:observer.operation,
       originalSha256:hash(apply(functionText, original, [])), kind:'method'});
+    this.registerHook(target,this.hooks.at(-1),observer.registrationSite);
     return original;
   }
   instrumentCallback(fn, identity, observer) {
@@ -152,7 +163,36 @@ class WitnessCore {
     this.callbacks.set(fn, {identity, wrapped});
     this.hooks.push({target:fn, name:'apply', wrapped, operation:identity,
       originalSha256:hash(apply(functionText, fn, [])), kind:'callback-own-apply'});
+    this.registerHook(fn,this.hooks.at(-1),observer.registrationSite);
     return fn;
+  }
+  registrationToken(target) {
+    if(!this.registrationEvidence||!target||!['object','function'].includes(typeof target))throw Error('REGISTRATION_OBJECT_IDENTITY_REQUIRED');
+    let token=this.registrationTargets.get(target);
+    if(token===undefined){token='h'+this.nextRegistrationTarget++;this.registrationTargets.set(target,token);}
+    return token;
+  }
+  registerHook(target,hook,site) {
+    if(!this.registrationEvidence)return;
+    this.observe('HOOK_REGISTRATION_FAILED',()=>{
+      const discoverySite=literal(site);
+      if(!discoverySite||typeof discoverySite!=='object'||Array.isArray(discoverySite)||typeof discoverySite.kind!=='string'||!discoverySite.kind)throw Error('EXPLICIT_HOOK_DISCOVERY_SITE_REQUIRED');
+      const frame=this.frames.at(-1)??null;
+      const evidence={hook_id:this.hooks.length-1,operation:hook.operation,originalSha256:hook.originalSha256,kind:hook.kind,
+        target_token:this.registrationToken(target),discovery_call_id:frame?.callId??null,discovery_site:discoverySite};
+      if(!this.active){
+        if(this.hasBegun)throw Error('HOOK_INSTALLATION_OUTSIDE_COMMAND');
+        this.registrationPending.push({evidence,frame:null});
+      }else if(frame&&this.registrationEntering.has(frame.callId))this.registrationPending.push({evidence,frame});
+      else this.record('HOOK_REGISTERED',evidence,frame);
+    });
+  }
+  flushRegistrations(callId) {
+    const pending=this.registrationPending;this.registrationPending=[];
+    for(const item of pending){
+      if((item.frame?.callId??null)===callId)this.record('HOOK_REGISTERED',item.evidence,item.frame);
+      else this.registrationPending.push(item);
+    }
   }
   verifyHooks() {
     for (const hook of this.hooks) {

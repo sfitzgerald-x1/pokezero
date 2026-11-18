@@ -14,6 +14,7 @@ import re
 import struct
 
 from . import fresh200_witness_audit as native
+from .fresh200_hook_admission import HookAdmissionBinding, HookCursor, HookPolicy
 
 CHANNELS = ('omniscient', 'spectator', 'p1', 'p2', 'p3', 'p4')
 READERS = ('omniscient', 'p1', 'p2')
@@ -78,7 +79,8 @@ class CommandSpec:
     native_control_wire: bytes
     transport_control_wire: bytes
     battle_id: str
-    hook_identity_digest: str
+    hook_identity_digest: object = None
+    hook_admission: object = None
 
     def documents(self):
         _need(all(type(x) is bytes and x.endswith(b'\n') and b'\r' not in x and len(x) <= MAX_BYTES
@@ -90,7 +92,9 @@ class CommandSpec:
         bound = native.document(self.transport_control_wire.decode('utf8'))
         _need(type(command) is dict and type(self.battle_id) is str and self.battle_id
             and command.get('battleId') == self.battle_id and command.get('type') == control['phase']
-            and native._hex(self.hook_identity_digest), 'independent Native command/source address differs')
+            and ((native._hex(self.hook_identity_digest) and self.hook_admission is None)
+                or self.hook_identity_digest is None and type(self.hook_admission) is HookAdmissionBinding),
+            'independent Native command/source address differs')
         keys = {'schema', 'native_nonce', 'stdin_sha256', 'command', 'previous_completion_hash'}
         _need(type(bound) is dict and set(bound) == keys and bound['schema'] == 'pokezero.native_transport_control.v1'
             and bound['native_nonce'] == control['nonce'] and native._same(bound['command'], command)
@@ -357,22 +361,45 @@ class ClosedCommandVerifier:
     a digest copied from the running witness. No physical/reference admission
     or fixed-input recording program is implemented by this class.
     """
-    def __init__(self, *, session, battle_id, source_registry_hash, expected_methods, call_operations):
+    def __init__(self, *, session, battle_id, source_registry_hash, expected_methods, call_operations, hook_policy=None):
         _need(isinstance(call_operations, (set, frozenset)) and call_operations
             and all(type(x) is str and x for x in call_operations), 'independent causal operation roster required')
         self.call_operations = frozenset(call_operations);self.source_registry_hash = source_registry_hash
+        _need(hook_policy is None or type(hook_policy) is HookPolicy and self.call_operations==hook_policy.operations,
+            'independent complete catalog operation roster required')
+        self.hook_policy=hook_policy;self.hook_cursor=HookCursor() if hook_policy is not None else None
         self.native_cursor = native.Cursor();self.transport_cursor = TransportAudit(session=session, battle_id=battle_id,
             source_registry_hash=source_registry_hash, expected_methods=expected_methods);self.completed = []
 
+    def admit_spec(self,spec):
+        _need(isinstance(spec,CommandSpec),'independently sealed command specification required')
+        documents=spec.documents()
+        if self.hook_policy is None:_need(spec.hook_admission is None,'registration policy was not independently admitted')
+        else:
+            _need(spec.hook_identity_digest is None,'registration mode cannot adopt a runtime exact digest')
+            self.hook_cursor.admit_binding(spec.hook_admission,self.hook_policy)
+        return documents
+
     def verify(self, spec, *, audit, native_receipt_wire, events, transport_receipt_wire, stdout):
         _need(isinstance(spec, CommandSpec), 'independently sealed command specification required')
-        _, control, _ = spec.documents();candidate_native = copy.deepcopy(self.native_cursor);candidate_transport = self.transport_cursor.fork()
+        _, control, _ = self.admit_spec(spec);candidate_native = copy.deepcopy(self.native_cursor);candidate_transport = self.transport_cursor.fork()
+        candidate_hooks=None
         expected = dict(control=control, battle_id=spec.battle_id, hook_identity_digest=spec.hook_identity_digest)
         positions = [(stream, stream.tell()) for stream in (audit, events, stdout)]
         try:
+            extras=('SNAPSHOT_BEGIN','SNAPSHOT_SERIALIZED')
+            if self.hook_policy is not None:
+                raw=native.document(native_receipt_wire.decode('utf8'));count=raw.get('rowCount') if type(raw) is dict else None
+                _need(type(count) is int and 2<=count<=native.MAX_ROWS,'bounded registration command scan required')
+                start=audit.tell();scanned=[];size=0
+                for _ in range(count):
+                    wire,row=native._line(audit);size+=len(wire)
+                    _need(size<=native.MAX_COMMAND_BYTES,'bounded registration command bytes required');scanned.append((wire,row))
+                candidate_hooks=self.hook_cursor.candidate_command(scanned,policy=self.hook_policy,phase=control['phase'])
+                audit.seek(start);expected['hook_identity_digest']=candidate_hooks.digest;extras=(*extras,'HOOK_REGISTERED')
             rows = native.verify_command(audit, native_receipt_wire, expected, cursor=candidate_native,
                 source_registry_hash=self.source_registry_hash, call_operations=self.call_operations,
-                extra_operations=('SNAPSHOT_BEGIN', 'SNAPSHOT_SERIALIZED'))
+                extra_operations=extras)
             receipt = candidate_transport.verify_command(events, transport_receipt_wire, spec, stdout=stdout,
                 native_receipt_hash=native.digest(native_receipt_wire), native_receipt=native.document(native_receipt_wire.decode('utf8')), native_rows=rows)
         except BaseException:
@@ -380,6 +407,7 @@ class ClosedCommandVerifier:
             raise
         # Publish cursor movement only after both independently bound checks.
         self.native_cursor = candidate_native;self.transport_cursor = candidate_transport
+        if candidate_hooks is not None:self.hook_cursor=candidate_hooks
         result = dict(status='RAW_CLOSED_COMMAND_VERIFIED_ONLY', command_id=control['nonce'], phase=control['phase'],
             native_receipt_sha256=native.digest(native_receipt_wire), transport_receipt_hash=receipt['hash'],
             native_rows=len(rows), transport_event_head=candidate_transport.head, qualification=False,
