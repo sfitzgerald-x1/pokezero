@@ -160,6 +160,8 @@ def save_champion_transformer(path, model, *, result):
     """
     from .neural_policy import save_transformer_checkpoint
     declared=_champion_writer_encoding(result.model_config,result.model_config.to_dict())
+    actual_model=getattr(model,'module',model)
+    _champion_writer_encoding(getattr(actual_model,'config',None),result.model_config.to_dict())
     if Path(path).exists():raise FileExistsError(path)
     save_transformer_checkpoint(path,model,result=result)
     _,digest=_snapshot(path)

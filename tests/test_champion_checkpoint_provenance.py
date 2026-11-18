@@ -5,6 +5,7 @@ import importlib.util
 import json
 from pathlib import Path
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
@@ -77,6 +78,34 @@ class ChampionWriterTests(unittest.TestCase):
                     self_moves=False,checkpoint_schema='unsupported')
             with self.assertRaises(ValueError):
                 enc._writer_receipt(root/'wrong-v5.pt',checkpoint_sha256='a'*64,metadata_sha256=None,self_moves=False)
+
+    def test_transformer_writer_binds_actual_unwrapped_model_before_writing(self):
+        from pokezero import checkpoint_self_moves as enc
+        from gpu_engine import champion
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp)
+            for actual_on,result_on in ((True,False),(False,True)):
+                for wrapped in (False,True):
+                    neural,config,model,result=self.fixture(self_moves=actual_on)
+                    result=replace(result,model_config=replace(config,self_moves=result_on))
+                    target=root/f'mismatch-{actual_on}-{wrapped}.pt'
+                    actual=SimpleNamespace(module=model) if wrapped else model
+                    with self.subTest(actual_on=actual_on,result_on=result_on,wrapped=wrapped),\
+                            patch.object(neural,'save_transformer_checkpoint') as writer:
+                        with self.assertRaisesRegex(ValueError,'differs from runtime configuration'):
+                            enc.save_champion_transformer(target,actual,result=result)
+                        writer.assert_not_called()
+                    self.assertFalse(target.exists())
+                    self.assertFalse(Path(str(target)+'.encoding.json').exists())
+            for actual_on in (False,True):
+                for wrapped in (False,True):
+                    _,_,model,result=self.fixture(self_moves=actual_on)
+                    actual=SimpleNamespace(module=model) if wrapped else model
+                    target=root/f'matching-{actual_on}-{wrapped}.pt'
+                    reference=enc.save_champion_transformer(target,actual,result=result)
+                    proof=None if actual_on else enc.off_from_receipt(reference)
+                    exported=champion.export(target,target.with_suffix('.npz'),off_provenance=proof)
+                    self.assertIs(exported.get('self_moves',False),actual_on)
 
     def test_receipt_schema_and_checkpoint_binding_cannot_be_substituted(self):
         from pokezero import checkpoint_self_moves as enc
