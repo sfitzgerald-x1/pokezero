@@ -122,6 +122,8 @@ class TransportWitness{
       this._install(stream,'push','stream.push',(receiver,args)=>{
         need(receiver===stream&&!state.ended&&this.current,'OWNER_PUSH_OUTSIDE_ACTUAL_FANOUT');
         const producer=this.current;need(!producer.fanout.has(name)&&(producer.type==='update'||producer.type==='sideupdate'&&producer.side===name),'DUPLICATE_OR_WRONG_NATIVE_FANOUT');
+        const order=producer.type==='update'?CHANNELS:[producer.side];
+        need(order[producer.fanout.size]===name,'NATIVE_FANOUT_ORDER_DIFFERS');
         producer.fanout.add(name);const packet=raw(args[0]);const chunk={sequence:state.produced.length+1,producer:producer.sequence,value:args[0],request:producer.request};
         state.produced.push(chunk);framed(state.producedHash,text(chunk.value));
         this._event('STREAM_PUSH',{stream:name,stream_sequence:chunk.sequence,producer_sequence:chunk.producer,raw:packet});

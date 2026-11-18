@@ -17,7 +17,7 @@ const MATERIAL=new Set(['choose','runAction','turnLoop','commitChoices','clearCh
 const METHODS=Object.freeze({Battle:Object.freeze(BATTLE),Pokemon:Object.freeze(POKEMON),Side:Object.freeze(SIDE),
   BattleActions:Object.freeze(ACTIONS),BattleQueue:Object.freeze(QUEUE),Field:Object.freeze(FIELD)});
 
-function createRecorder(core,{Battle,Pokemon,Side,BattleActions,BattleQueue,Field}){
+function createRecorder(core,{Battle,Pokemon,Side,BattleActions,BattleQueue,Field},{transport=null}={}){
   const objects=new WeakMap(),bound=new WeakSet();let nextObject=0;
   const protectedAddVolatile=Pokemon.prototype.addVolatile;
   function token(value){let id=objects.get(value);if(id===undefined){id=nextObject++;objects.set(value,id);}return id;}
@@ -126,6 +126,12 @@ function createRecorder(core,{Battle,Pokemon,Side,BattleActions,BattleQueue,Fiel
   function observer(operation,name){return {operation,
     enter(subject,args){
       const battle=battleOf(subject);
+      if(transport&&name==='emitRequest'){
+        const frame=core.frames.at(-1),side=data(subject,'n');
+        if(!frame||frame.operation!=='Side.emitRequest'||![0,1].includes(side)||core.active?.battleId!==transport.battleId)
+          throw Error('EXACT_NATIVE_REQUEST_CALL_CONTEXT_REQUIRED');
+        transport.requestBegin(frame.callId,'p'+(side+1));
+      }
       if(name==='singleEvent'){
         const effect=args[1],custom=args[7];
         // Native uses customCallback || effect[onEvent], including false/0.
@@ -135,6 +141,7 @@ function createRecorder(core,{Battle,Pokemon,Side,BattleActions,BattleQueue,Fiel
         ...(MATERIAL.has(name)&&battle?{before:cache(battle)}:{})};
     },
     leave(_before,subject,_args,outcome){
+      if(transport&&name==='emitRequest')transport.requestEnd(core.frames.at(-1)?.callId,outcome.didThrow);
       if(!outcome.didThrow){
         if(name==='getCallback')callback(outcome.value);
         else if(name.startsWith('find'))handlers(outcome.value);

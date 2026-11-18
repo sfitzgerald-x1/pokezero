@@ -58,10 +58,13 @@ function wireValue(value, array = false, seen = new Set()) {
   seen.delete(value);return result;
 }
 
-function createObserver({Battle,loadControl,appendAudit,appendReceipt,sourceRegistryHash,nativeFactory=null}) {
+function createObserver({Battle,loadControl,appendAudit,appendReceipt,sourceRegistryHash,nativeFactory=null,
+    transport=null,loadTransportControl=null,appendTransportReceipt=null}) {
+  if(transport&&(typeof loadTransportControl!=='function'||typeof appendTransportReceipt!=='function'))throw Error('EXPLICIT_TRANSPORT_CONTROL_AND_RECEIPT_REQUIRED');
   const core=new WitnessCore({appendAudit,sourceRegistryHash});
   const native=nativeFactory===null?null:nativeFactory(core);
-  const ended=new WeakSet(),battles=new WeakMap();
+  const ended=new WeakSet(),battles=new WeakMap(),snapshotHashes=new WeakMap();
+  let transportCompletion=null;
   const playerDescriptor=Object.getOwnPropertyDescriptor(Battle.prototype,'setPlayer');
   if (!playerDescriptor || typeof playerDescriptor.value!=='function') throw Error('PINNED_SETPLAYER_SEAM_REQUIRED');
   core.installMethod(Battle.prototype,'setPlayer',{operation:'Battle.setPlayer',
@@ -95,13 +98,47 @@ function createObserver({Battle,loadControl,appendAudit,appendReceipt,sourceRegi
         core.active.control.phase!=='snapshot') throw Error('EXACT_CONSTRUCTED_SNAPSHOT_CONTEXT_REQUIRED');
   }
   return {
-    core,
-    poison(code) {core.poison(code);},
-    commandBegin(command) {
+    core,transport,
+    poison(code) {core.poison(code);if(transport)transport.poison(code);},
+    commandBegin(command,receivedLine) {
       const battleId=command.battleId==null?'default':String(command.battleId);
-      return core.begin(loadControl(),{battleId,phase:command.type});
+      const control=loadControl(),token=core.begin(control,{battleId,phase:command.type});
+      if(transport){
+        transportCompletion=null;
+        if(battleId!==transport.battleId)throw Error('TRANSPORT_BATTLE_IDENTITY_DIFFERS');
+        const bound=loadTransportControl(),value=bound?.value;
+        if(!bound||Object.keys(bound).sort().join(',')!=='sha256,value'||!value||Object.keys(value).sort().join(',')!=='command,native_nonce,previous_completion_hash,schema,stdin_sha256'
+            ||value.schema!=='pokezero.native_transport_control.v1'||value.native_nonce!==control.nonce||value.previous_completion_hash!==transport.previousCompletion
+            ||JSON.stringify(wireValue(command))!==JSON.stringify(value.command)||typeof bound.sha256!=='string'||!/^[a-f0-9]{64}$/.test(bound.sha256))
+          throw Error('INDEPENDENT_TRANSPORT_COMMAND_BINDING_DIFFERS');
+        transport.commandBegin({id:control.nonce,phase:command.type,receivedLine,stdinSha256:value.stdin_sha256,controlHash:bound.sha256});
+        if(transport.poisoned)core.poison('TRANSPORT_COMMAND_ADMISSION_FAILED');
+      }
+      return token;
     },
-    commandEnd(token,outcome) {return finish(token,outcome);},
+    commandEnd(token,outcome) {
+      const receipt=finish(token,outcome);
+      if(transport){
+        if(core.poisoned)transport.poison(core.faultCode||'NATIVE_CAUSAL_RECEIPT_POISONED');
+        transport.commandEnd({originalThrew:outcome.originalThrew,nativeReceiptHash:core.lastReceiptHash,snapshotHash:snapshotHashes.get(token)??null});
+      }
+      return receipt;
+    },
+    transportComplete() {
+      if(!transport)return undefined;
+      if(core.poisoned)transport.poison(core.faultCode||'NATIVE_CAUSAL_RECEIPT_POISONED');
+      if(transport.poisoned)return Promise.reject(Error('NO_CLEAN_TRANSPORT_COMPLETION'));
+      if(transportCompletion!==null)return transportCompletion;
+      transportCompletion=(async()=>{
+        const receipt=await transport.fence();
+        try{
+          const result=appendTransportReceipt(Buffer.from(JSON.stringify(receipt)+'\n','utf8'));
+          if(result&&typeof result.then==='function')throw Error('SYNCHRONOUS_TRANSPORT_RECEIPT_REQUIRED');
+        }catch(error){core.poison('TRANSPORT_RECEIPT_WRITE_FAILED');transport.poison('TRANSPORT_RECEIPT_WRITE_FAILED');throw error;}
+        return receipt;
+      })();
+      return transportCompletion;
+    },
     snapshotBegin(battleId,battle,requestId) {
       requireBattle(battleId,battle);core.record('SNAPSHOT_BEGIN',{requestId});
     },
@@ -126,8 +163,10 @@ function createObserver({Battle,loadControl,appendAudit,appendReceipt,sourceRegi
       const packet={state_wire_base64:stateWire.toString('base64'),state_sha256:hash(stateWire),
         requests_wire_base64:requestWire.toString('base64'),requests_sha256:hash(requestWire)};
       core.record('SNAPSHOT_SERIALIZED',{requestId,requestOrigin,wire:packet,elidedProperties:elided,nativeObservation});
-      const receipt=finish(core.active,{boundary:{kind:'snapshot',requestId,requestOrigin,wire:packet,elidedProperties:elided,nativeObservation,causalCoverageComplete:false}});
+      const token=core.active;
+      const receipt=finish(token,{boundary:{kind:'snapshot',requestId,requestOrigin,wire:packet,elidedProperties:elided,nativeObservation,causalCoverageComplete:false}});
       if (!receipt) return undefined;
+      if(transport)snapshotHashes.set(token,packet.state_sha256);
       return {receipt,wire:packet,elidedProperties:elided,nativeObservation,requestOrigin,causalCoverageComplete:false,qualification:false};
     },
   };

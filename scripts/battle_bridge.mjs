@@ -9,7 +9,10 @@ import {fileURLToPath, pathToFileURL} from "node:url";
 import {referenceRestState, bindReferenceRestSources} from "./battle_bridge_reference_rest.mjs";
 import {restoreReferenceSleep} from "./battle_bridge_reference_sleep.mjs";
 import {restoreReferenceTrace} from "./battle_bridge_reference_trace.mjs";
-import {witnessCommandBegin, witnessCommandEnd, witnessSnapshotBegin, witnessSnapshotEnd, snapshotRequestsForCommand}
+import {witnessCommandBegin, witnessCommandEnd, witnessSnapshotBegin, witnessSnapshotEnd, snapshotRequestsForCommand,
+  nativeTransportEnabled,witnessTransportSource,witnessTransportStreams,witnessTransportReaderBegin,witnessTransportReaderEnd,
+  witnessTransportReaderEOF,witnessTransportTeardownBegin,witnessTransportTeardownEnd,witnessTransportScheduled,
+  witnessTransportCallbackFinished,witnessTransportStdout,witnessTransportComplete,witnessTransportAbort}
   from "./battle_bridge_witness_port.mjs";
 import {
   invalidatedBoundaryState,
@@ -62,9 +65,12 @@ const DEFAULT_BATTLE_ID = "default";
 const battles = new Map();
 const searchSnapshots = new Map();
 let nextSearchSnapshotId = 1;
+let witnessClosing = false;
 
 function emit(payload) {
-  process.stdout.write(`${JSON.stringify(payload)}\n`);
+  const wire = `${JSON.stringify(payload)}\n`;
+  witnessTransportStdout(wire);
+  process.stdout.write(wire);
 }
 
 function bridgeErrorCodeSites(error, sourceUrl, simulatorUrl) {
@@ -152,6 +158,7 @@ function newBattleState(battleId) {
 }
 
 function emitStreamChunk(battle, stream, chunk) {
+  const token = witnessTransportReaderBegin(battle.battleId, stream, chunk);
   const lines = String(chunk)
     .split("\n")
     .filter(line => line.length > 0);
@@ -159,6 +166,7 @@ function emitStreamChunk(battle, stream, chunk) {
     emit({ type: "stream", battleId: battle.battleId, stream, lines });
     recordBoundaryLines(battle, stream, lines);
   }
+  witnessTransportReaderEnd(battle.battleId, token, lines);
 }
 
 function listenToStream(battle, name, stream) {
@@ -168,6 +176,7 @@ function listenToStream(battle, name, stream) {
         emitStreamChunk(battle, name, chunk);
       }
       emit({ type: "stream_end", battleId: battle.battleId, stream: name });
+      witnessTransportReaderEOF(battle.battleId, name);
     } catch (error) {
       emit({ type: "error", battleId: battle.battleId, stream: name, message: error.message,
         errorOrigin: "stream", codeSites: bridgeErrorCodeSites(error, import.meta.url, showdownSourceUrl),
@@ -250,14 +259,18 @@ function scheduleReady(battle, requested = actionableRequestedPlayers(battle)) {
   battle.readyScheduled = true;
   const readyEpoch = battle.readyEpoch;
   const procMs = nodeProcMs(battle);
+  const witnessCallback = witnessTransportScheduled(battle.battleId, "ready");
   setImmediate(() => {
+    let discarded = false;
+    try {
     // Streams can advance again before this callback runs. Do not advertise
     // the earlier request list after both sides have moved to wait; release
     // the latch so the next actionable request can schedule a real boundary.
-    if (battle.readyEpoch !== readyEpoch || battle.terminalScheduled) return;
+    if (battle.readyEpoch !== readyEpoch || battle.terminalScheduled) { discarded = true; return; }
     const currentRequested = actionableRequestedPlayers(battle);
     if (!currentRequested.length) {
       battle.readyScheduled = false;
+      discarded = true;
       return;
     }
     emit({
@@ -266,6 +279,7 @@ function scheduleReady(battle, requested = actionableRequestedPlayers(battle)) {
       requested: currentRequested,
       nodeProcMs: procMs,
     });
+    } finally { witnessTransportCallbackFinished(battle.battleId, witnessCallback, discarded); }
   });
 }
 
@@ -275,9 +289,13 @@ function scheduleTerminal(battle) {
   const terminalEpoch = battle.readyEpoch;
   battle.terminalScheduled = true;
   const procMs = nodeProcMs(battle);
+  const witnessCallback = witnessTransportScheduled(battle.battleId, "terminal");
   setImmediate(() => {
-    if (battle.readyEpoch !== terminalEpoch || !battle.terminalScheduled) return;
+    let discarded = false;
+    try {
+    if (battle.readyEpoch !== terminalEpoch || !battle.terminalScheduled) { discarded = true; return; }
     emit({ type: "terminal", battleId: battle.battleId, nodeProcMs: procMs });
+    } finally { witnessTransportCallbackFinished(battle.battleId, witnessCallback, discarded); }
   });
 }
 
@@ -293,11 +311,12 @@ function isActionableRequest(request) {
 
 async function teardownBattle(battle) {
   if (battle && battle.streams) {
+    witnessTransportTeardownBegin(battle.battleId);
     try {
       await battle.streams.omniscient.writeEnd();
     } catch (error) {
       // best-effort teardown; the stream may already be ending
-    }
+    } finally { witnessTransportTeardownEnd(battle.battleId); }
     battle.streams = null;
   }
 }
@@ -314,7 +333,9 @@ async function startBattle(command) {
   battle.tRecv = process.hrtime.bigint();
   const battleStream = new BattleStream({ keepAlive: true });
   battle.battleStream = battleStream;
+  witnessTransportSource(battleId, battleStream);
   battle.streams = getPlayerStreams(battleStream);
+  witnessTransportStreams(battleId, battle.streams);
   for (const name of ["omniscient", "p1", "p2"]) {
     listenToStream(battle, name, battle.streams[name]);
   }
@@ -1932,8 +1953,8 @@ async function closeAll() {
   emit({ type: "closed" });
 }
 
-async function handleCommand(command) {
-  const witnessToken = witnessCommandBegin(command);
+async function handleCommand(command, receivedLine) {
+  const witnessToken = witnessCommandBegin(command, receivedLine);
   let originalThrew = true;
   try {
   switch (command.type) {
@@ -1987,6 +2008,7 @@ async function handleCommand(command) {
       break;
     case "close":
       await closeAll();
+      if (nativeTransportEnabled()) { witnessClosing = true; break; }
       witnessCommandEnd(witnessToken, {originalThrew:false});
       process.exit(0);
       break;
@@ -1996,6 +2018,17 @@ async function handleCommand(command) {
   originalThrew = false;
   } finally {
     witnessCommandEnd(witnessToken, {originalThrew});
+    const completion = witnessTransportComplete();
+    if (completion !== undefined) {
+      if (originalThrew) { try { await completion; } catch {} }
+      else await completion;
+    }
+  }
+  if (witnessClosing && command.type === "close") {
+    rl.close();
+    process.stdin.pause();
+    process.exitCode = 0;
+    process.stdout.end();
   }
 }
 
@@ -2008,7 +2041,7 @@ rl.on("line", line => {
   void (async () => {
     if (!line.trim()) return;
     try {
-      await handleCommand(JSON.parse(line));
+      await handleCommand(JSON.parse(line), line);
     } catch (error) {
       emit({ type: "error", message: error.message,
         errorOrigin: "command", codeSites: bridgeErrorCodeSites(error, import.meta.url, showdownSourceUrl),
@@ -2018,5 +2051,7 @@ rl.on("line", line => {
 });
 
 rl.on("close", () => {
+  if (witnessClosing) return;
+  if (nativeTransportEnabled()) { witnessTransportAbort('UNEXPECTED_WITNESS_STDIN_EOF'); process.exitCode = 1; return; }
   void closeAll().finally(() => process.exit(0));
 });
