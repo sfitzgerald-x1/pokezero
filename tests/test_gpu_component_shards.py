@@ -800,10 +800,24 @@ raise SystemExit(run_process_blocks(suite, 0, 1, start_dir=sys.argv[1], tier=sys
         data = json.loads(EXTENDED_MANIFEST.read_text())
         self.assertEqual([e['module'] for e in data['modules']], sorted(e['module'] for e in data['modules']))
         self.assertEqual(sorted(e['rank'] for e in data['modules']), list(range(1, len(data['modules']) + 1)))
-        for entry in data['modules']:   # under the isolated heavy thresholds: the budget, not the module, keeps it off pull requests
+        for entry in data['modules']:
             self.assertEqual(entry['reason'], 'pull-request wall budget', entry['module'])
-            self.assertLessEqual(entry['isolated_wall_min'], 10, entry['module'])
-            self.assertLessEqual(entry['isolated_peak_gib'], 10.5, entry['module'])
+            if 'hosted_wall_min' in entry:
+                # Hosted rebalancing records the actual containing-shard memory
+                # gate; it must not relabel that measurement as an isolated peak.
+                self.assertNotIn('isolated_wall_min', entry)
+                self.assertNotIn('isolated_peak_gib', entry)
+                self.assertGreater(entry['hosted_wall_min'], 0, entry['module'])
+                self.assertGreater(entry['hosted_shard_peak_gib'], 0, entry['module'])
+                self.assertLessEqual(entry['hosted_shard_peak_gib'], entry['hosted_shard_bar_gib'], entry['module'])
+                self.assertLessEqual(entry['hosted_shard_bar_gib'], 12, entry['module'])
+                self.assertGreater(entry['hosted_run_id'], 0)
+                self.assertGreater(entry['hosted_job_id'], 0)
+                self.assertRegex(entry['hosted_head'], r'^[0-9a-f]{40}$')
+                self.assertIn('complete containing shard', entry['measurement_scope'])
+            else:
+                self.assertLessEqual(entry['isolated_wall_min'], 10, entry['module'])
+                self.assertLessEqual(entry['isolated_peak_gib'], 10.5, entry['module'])
         for bad in ({'schema': 'gpu-component-heavy.v1', 'modules': [{'module': 'test_gpu_engine_a'}]},
                     {'schema': 'gpu-component-extended.v1', 'modules': []},
                     {'schema': 'gpu-component-extended.v1', 'modules': [{'module': 'test_gpu_engine_a'}, {'module': 'test_gpu_engine_a'}]},
@@ -831,9 +845,13 @@ raise SystemExit(run_process_blocks(suite, 0, 1, start_dir=sys.argv[1], tier=sys
         light = (ROOT / '.github' / 'workflows' / 'gpu-engine-components.yml').read_text()
         self.assertIn("- 'tests/gpu_component_extended.json'", light)
         self.assertIn("- '.github/workflows/gpu-engine-components-extended.yml'", light)
-        # the extended command has no low-optimization cases, so no such case may sit in an extended module
-        cases = re.findall(r'--low-optimization-case (test_gpu_engine_\w+)\.', light)
-        self.assertTrue(cases);self.assertFalse(set(cases) & load_extended_modules())
+        # Moving a module must preserve every existing case-specific compiler setting.
+        cases = re.findall(r'--low-optimization-case (test_gpu_engine_\S+)', light)
+        self.assertTrue(cases)
+        expected = {case for case in cases if case.split('.')[0] in load_extended_modules()}
+        actual = re.findall(r'--low-optimization-case (test_gpu_engine_\S+)', workflow)
+        self.assertEqual(len(actual), len(set(actual)))
+        self.assertEqual(set(actual), expected)
 
     def test_per_pull_request_checks_run_only_the_light_tier(self):
         workflow = (ROOT / '.github' / 'workflows' / 'gpu-engine-components.yml').read_text()
