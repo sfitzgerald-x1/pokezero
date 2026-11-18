@@ -218,7 +218,11 @@ def crossfit(config,rows_reference,output,*,enable_fit=False):
     snapshot=output/'production-input.pt'
     with snapshot.open('xb')as f:f.write(artifact(config['checkpoint'],json_value=False))
     snapshot.chmod(0o444)
+    from .checkpoint_self_moves import run_checkpoint
+    _,declared,proof=run_checkpoint(Path(config['production_declaration']['path']).resolve().parent,
+        event['path'],event['sha256'],iteration=event['iteration'])
     runtime=training.load_checkpoint(snapshot,enable_v5=True,
+        expected_checkpoint_sha256=event['sha256'],expected_self_moves=declared,off_provenance=proof,
         **({'expected_learning_rate_window':training.DeclaredGameWindow(**config['learning_rate_window'])}if config.get('learning_rate_window')is not None else{}))
     if (runtime.model_config.arm!='B'or runtime.steps!=event['steps']or runtime.rows!=event['rows']
             or truth().digest(runtime.model_config.metadata())!=truth().digest(decl['model'])
