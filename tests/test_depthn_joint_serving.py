@@ -33,6 +33,24 @@ class JointProtocol(ProtocolRoute):
         self.assertEqual(JointSession._generation_slots(('|switch|p2a: A|Ampharos, L83|100/100',
             '|switch|p2a: B|Snorlax, L70|100/100','|drag|p2a: C|Rhydon, L80|100/100'),'p2'),{0:'ampharos'})
 
+    def test_original_named_item_conditions_joint_evidence(self):
+        data,root=self.root('refusal_item_changed')
+        session=JointSession(self.src,producer='shared-battle')
+        view=D.player_belief_view_from_payload(root.context.observation.metadata['belief_view'])
+        posts=SP.posterior(data['request']['lines'],None,source=self.src,owner=view.self_slot,
+            beliefs=view.opponent_pokemon,format_id=root.context.format_id,dex=self.dex)
+        first=view.opponent_pokemon[0];variants=self.src.universe_for(first.species).variants
+        named=variants[0].item
+        changed=replace(first,item_mutated=True,original_public_item=named)
+        view=replace(view,opponent_pokemon=(changed,*view.opponent_pokemon[1:]))
+        from pokezero.randbat import canonical_gen3_randbat_species_id
+        from pokezero.dex import normalize_id
+        before=session._evidence(root.context,D.player_belief_view_from_payload(root.context.observation.metadata['belief_view']),posts)
+        after=session._evidence(root.context,view,posts)
+        key=canonical_gen3_randbat_species_id(first.species)
+        self.assertEqual(after[key],tuple(w if normalize_id(v.item or '')==normalize_id(named or '')else 0
+            for v,w in zip(variants,before[key])))
+
     def test_feature_off_does_not_read_or_mutate_payload(self):
         class Poison:
             def __getattribute__(self,name):raise AssertionError(name)

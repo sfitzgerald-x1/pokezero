@@ -153,6 +153,9 @@ class JointSession:
                 payload = variant.to_summary()
                 valid = (not hp or worlds._variant_public_max_hp(payload, fallback_species=belief.species,
                          set_source=self.source) == hp)
+                original_item=getattr(belief,'original_public_item',None)
+                if original_item:
+                    valid=valid and normalize_id(variant.item or '')==normalize_id(original_item)
                 if valid and slot:
                     valid = worlds._fixture_from_variant_payload(payload, fallback_species=belief.species,
                         set_source=self.source, move_slot_constraints=slot, gender=belief.gender) is not None
