@@ -79,7 +79,7 @@ def prepare(inputs):
     source=load_gen3_randbat_source_cached(show['root'])
     if source.metadata.source_hash!=contract.belief_set_source_hash:
         raise ValueError('original public belief source differs')
-    masks=dict(contract.feature_masks)
+    masks=contract.encoder_masks()
     masks['opponent_tendency_stats_block']=masks.pop('stats_block')
     config=LocalShowdownConfig(showdown_root=show['root'],node_binary=show['node']['path'],
         observation_spec=V4_REPLAY_OBSERVATION_SPEC,feature_masks=ObservationFeatureMasks(**masks),
@@ -173,7 +173,7 @@ def _factory(prepared,snapshot,store):
     contract=replace(prepared.contract,checkpoint_sha256=snapshot['checkpoint_sha256'],
         model_config_sha256=snapshot['model_sha256'])
     catalog=v4_encoder.compile_encoder(prepared.compiled_source,prepared.dex,prepared.vocabulary,
-        checkpoint_sha256=contract.checkpoint_sha256,feature_masks=dict(contract.feature_masks))
+        checkpoint_sha256=contract.checkpoint_sha256,feature_masks=contract.encoder_masks())
     return load_factory(store.resolve(snapshot['archive'],snapshot['archive_sha256']),
         catalog=catalog,contract=contract,expected_archive_sha256=snapshot['archive_sha256'],
         expected_checkpoint_sha256=snapshot['checkpoint_sha256'],

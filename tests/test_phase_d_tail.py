@@ -173,7 +173,7 @@ class FullProtocolTail(unittest.TestCase):
             return 'literal-restored-carry'
         unpack=lambda team:tuple(NS(species=part.split('|')[0],ability='',item='') for part in team.split(']'))
         with patch.object(protocol,'battle_spec_from_payload',return_value=world),patch.object(protocol,'map_spec',side_effect=mapper), \
-                patch.object(protocol,'unpack_team',side_effect=unpack),patch.object(protocol.public_worlds,'_revealed',return_value=()), \
+                patch.object(protocol,'unpack_team',side_effect=unpack),patch.object(protocol.public_worlds,'_revealed',return_value=()),patch.object(protocol,'_set_posteriors',return_value={}), \
                 patch.object(protocol.states,'_rebase',side_effect=rebase):
             made=protocol.materialize_protocol(public,start,inputs=inputs,seed=17)
         self.assertIsNotNone(made.state,made.refusals);self.assertEqual(made.public,'literal-restored-carry')

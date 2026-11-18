@@ -12,6 +12,7 @@ import jax.numpy as jnp
 
 from . import weather
 from . import mechanics as m
+from . import transform as shift
 
 
 class EntryTable(NamedTuple):
@@ -66,11 +67,22 @@ def depart(state,side,table,*,eligible):
     Baton copies its supported fields before calling this. This does not run
     BeforeSwitchOut/Pursuit, which does not apply to a drag or direct Baton.
     """
+    from . import infatuation
+    state=infatuation.source_departed(state,side,eligible=eligible)
     rows=jnp.arange(state.hp.shape[0]);active=state.active[rows,side]
     hp=state.hp[rows,side,active];status=state.status[rows,side,active]
     cure=hp<=0
     if table is not None:
         cure |= table.natural_cure[state.ability[rows,side,active]]
+    # Transform: switchOut's SwitchOut event (a copied Natural Cure, read above) precedes clearVolatile, whose revert
+    # restores the base stats, moves, PP and Hidden Power (ability and types are restored below, as for every departure).
+    # Showdown's truantTurn is a Pokemon field that only a Truant holder's onSwitchIn and residual write: a departing
+    # transformed mon keeps the clock its copied Truant left (entry.enter keeps a non-holder's clock), so a later copy of
+    # Truant resumes from it. Every other departure still resets it (a non-holder's clock is otherwise False).
+    keep_clock=jnp.zeros_like(eligible)
+    if hasattr(state,'transformed'):
+        keep_clock=state.transformed[rows,side]
+        state,_=shift.revert(state,side,eligible)
     # Departure consumers see the current ability first (including a copied
     # Natural Cure). Restore the immutable constructor ability afterwards.
     state=state._replace(ability=state.ability.at[rows,side,active].set(jnp.where(
@@ -82,7 +94,7 @@ def depart(state,side,table,*,eligible):
     counter=state.status_counter[rows,side,active]
     old_clock=state.truant_loaf[rows,side,active]
     state=state._replace(truant_loaf=state.truant_loaf.at[rows,side,active].set(
-        jnp.where(eligible,False,old_clock)))
+        jnp.where(eligible & ~keep_clock,False,old_clock)))
     state=state._replace(status=state.status.at[rows,side,active].set(
         jnp.where(eligible & cure,m.NONE,status)),
         status_counter=state.status_counter.at[rows,side,active].set(
@@ -163,8 +175,10 @@ def enter(state,side,table,*,eligible,hazards=True,startup=False,_weather_trace=
         # The caller supplies startup context rather than guessing from the
         # step's completed-turn counter during a first-turn action switch.
         clock=table.truant[ability] & ~jnp.asarray(startup)
+        # Only a Truant holder's onSwitchIn writes the clock; a non-holder keeps its own (False unless a transformed
+        # departure kept a copied Truant's clock, see depart).
         state=state._replace(truant_loaf=state.truant_loaf.at[rows,side,active].set(
-            jnp.where(eligible,starts & clock,old_clock)))
+            jnp.where(eligible & table.truant[ability],starts & clock,old_clock)))
     # Gen3 Trace attempts only at Ability Start, after hazards/SwitchIn. Keep
     # the pre-Trace current ability for Start handlers below: gaining weather,
     # Intimidate or Truant through Trace does not run their Start/SwitchIn.

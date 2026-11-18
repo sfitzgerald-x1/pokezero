@@ -25,6 +25,17 @@ serves it until stopped (SIGTERM or an interrupt); it is never restarted per gam
   written, flushed and fsynced per batch by a writer thread, off the executor's critical path.
 - server_id (--server-id, default HOSTNAME:PORT): this process's name, in READY and in every response it sends, so a client
   behind a pool (scripts/depthn_live_proxy) records which process answered and the panel readout breaks latency down by it.
+Batched serving (--prepare-workers N > 0; off by default, when everything above is exactly as before): prepare runs in N worker
+processes (gpu_engine.prepare_pool: each its own constructor, built by worker_constructor from this server's own arguments, on
+the CPU, battle affinity) and requests go through gpu_engine.depthn_batching.Pipeline (a scheduler, a device thread and a
+reduce thread; its docstring has the flush rule). Server.consume is then the pipeline's consumer: it takes each queued request
+as it arrives while fewer than --queue-limit are in flight (so the handle loop's put still backpressures), and sets each
+request's future when its response is ready (after the request_id check Codex's consumer makes). Responses may complete out of
+arrival order across connections; each connection still has one request in flight and gets its own answer (Codex's handle
+loop: put, then await that request's future, then write it). On the queue's None (serve's exit, SIGTERM) it admits nothing
+more, answers everything accepted, then stops the pipeline and the workers. Warmup prepares through the workers (every worker
+first prepares the saved requests once, so its first-use compiles happen before READY). Telemetry rows also count JAX backend
+compiles since the previous row (this process: `compiles`; the request's prepare worker: pipeline.prepare_compiles).
 JAX: x64 pinned off (as Codex's ladder server) and the matmul precision hard-pinned to --matmul-precision (default
 'highest', the precision the champion gates R1/R2/R3 were certified under, through the environment's
 JAX_DEFAULT_MATMUL_PRECISION; Codex's ladder server uses 'highest' too). The server refuses to start when the environment
@@ -47,26 +58,75 @@ import threading
 import time
 
 from pokezero import phase_d_search_server as original
-from gpu_engine import champion_evaluator as evaluators,depthn_live_search as live
+from gpu_engine import atomic_compilation_cache,champion_evaluator as evaluators,depthn_live_search as live
 
 
 class ArrivalQueue(asyncio.Queue):
-    """asyncio.Queue stamping request[live.ARRIVAL] = arrival on each (request, future, arrival) item it accepts."""
+    """asyncio.Queue stamping request[live.ARRIVAL] = arrival on each (request, future, arrival) item it accepts, and keeping,
+    per connection handler task (the putter), the future of the request whose answer it owes (owing: a handler has one request
+    in flight; the entry goes when its answer is written, AnswerMark, or the task ends), so a stop can wait for exactly the
+    handlers that still have an answer to write."""
+    def __init__(self,*a,**kw):
+        super().__init__(*a,**kw);self.owing={}
+
     def _put(self,item):
-        if item is not None:item[0][live.ARRIVAL]=item[2]
+        if item is not None:
+            item[0][live.ARRIVAL]=item[2];task=asyncio.current_task()
+            if task is not None:
+                if task not in self.owing:task.add_done_callback(lambda done:self.owing.pop(done,None))
+                self.owing[task]=item[1]
         super()._put(item)
 
 
+class AnswerMark:
+    """A connection's StreamWriter for Codex's handle: write() (the handle loop's one write per request: the answer) also
+    clears its task's debt in `owing`; everything else is the writer's."""
+    def __init__(self,writer,owing):self._writer=writer;self._owing=owing
+
+    def write(self,data):
+        self._writer.write(data);self._owing.pop(asyncio.current_task(),None)
+
+    def __getattr__(self,name):return getattr(self._writer,name)
+
+
 class Server(original.Server):
-    def __init__(self,search,*,max_requests=4,batch_wait_seconds=.005,queue_limit=256):
+    def __init__(self,search,*,max_requests=4,batch_wait_seconds=.005,queue_limit=256,pipeline=None):
         if not callable(getattr(search,'process_many',None)):raise ValueError('a search object with process_many required')
         self._initialize(search,max_requests,batch_wait_seconds,queue_limit)
-        self.queue=ArrivalQueue(queue_limit);self.loop=self.task=None;self.stopping=False
+        self.queue=ArrivalQueue(queue_limit);self.loop=self.task=None;self.stopping=False;self.limit=queue_limit
+        self.pipeline=pipeline   # with one, consume() is the pipeline's (module docstring); without, Codex's
+        self.inflight=0
+
+    async def consume(self):
+        """Codex's consumer, or with a pipeline: each queued request submitted as it arrives while fewer than queue_limit are in
+        flight; its future set when its response is ready; on None, everything accepted answered, then the pipeline stopped."""
+        if self.pipeline is None:return await super().consume()
+        if self.started:raise ValueError('one shared GPU queue consumer required')
+        self.started=True;loop=asyncio.get_running_loop();slots=asyncio.Semaphore(self.limit)
+        while True:
+            await slots.acquire()
+            item=await self.queue.get()
+            if item is None:
+                slots.release();self.queue.task_done();break
+            request,future,_=item;self.inflight+=1
+            self.pipeline.submit(request,lambda response,request=request,future=future:loop.call_soon_threadsafe(self._settle,request,future,response,slots))
+        for _ in range(self.limit):await slots.acquire()   # drain: every accepted request answered
+        await loop.run_in_executor(None,self.pipeline.close)
+
+    def _settle(self,request,future,response,slots):
+        """On the loop: one request's end (Codex's consumer's checks: a response for another request_id is an error)."""
+        self.inflight-=1;slots.release();self.queue.task_done()
+        if future.done():return
+        if isinstance(response,BaseException):future.set_exception(RuntimeError(type(response).__name__+': '+str(response)));return
+        if not isinstance(response,dict)or response.get('request_id')!=request.get('request_id'):
+            future.set_exception(RuntimeError('ValueError: shared GPU result order/address differs'));return
+        finish=getattr(self.search,'finish',None)
+        future.set_result(finish(request,response)if callable(finish)else response)
 
     async def serve(self,host,port,*,on_ready=None):
         """Codex's serve (listener and consumer; on exit it drains accepted work and shuts the executor down), plus on_ready()
         once the listener accepts a connection, and stop() from any thread (SIGTERM when serving on the main thread)."""
-        self.loop=asyncio.get_running_loop();self.task=asyncio.ensure_future(super().serve(host,port))
+        self.loop=asyncio.get_running_loop();self.stop_event=asyncio.Event();self.task=asyncio.ensure_future(self._serve(host,port))
         if threading.current_thread()is threading.main_thread():self.loop.add_signal_handler(signal.SIGTERM,self.stop)
         try:
             if on_ready is not None and await self._listening(host,port):on_ready()
@@ -93,10 +153,34 @@ class Server(original.Server):
                 with suppress(OSError):await writer.wait_closed()
         self.task.result();return False
 
+    async def _serve(self,host,port):
+        """Codex's serve (phase_d_search_server.Server.serve), its steps in its order, stopped by stop()'s event instead of by
+        cancelling the listener's serve_forever: since CPython 3.13.(14..18) a cancelled serve_forever also closes every client
+        connection at once (asyncio.Server.close_clients), so the answers owed to requests already accepted were lost (the
+        pipelined server's drain test failed on CI). Here the listener only stops accepting; then, as Codex's: closing set,
+        the queue's sentinel, the consumer drained (every accepted request's future set), each handler owed an answer waited
+        for while it writes it and ends (closing: at most 10 s), the other handlers (idle on their connections) ended, the
+        executor shut down."""
+        consumer=asyncio.create_task(self.consume());server=None
+        try:
+            server=await asyncio.start_server(lambda reader,writer:self.handle(reader,AnswerMark(writer,self.queue.owing)),host,port)
+            await self.stop_event.wait()
+        finally:
+            if server is not None:server.close()   # no new connections; the accepted ones stay open until answered
+            self.closing=True
+            await self.queue.put(None)
+            await consumer
+            owed=[task for task,future in self.queue.owing.items()if future.done()and not task.done()]
+            if owed:await asyncio.wait(owed,timeout=10.)   # each writes the answer it owes, then (closing) leaves its loop
+            for task in tuple(self.clients):task.cancel()
+            await asyncio.gather(*self.clients,return_exceptions=True)
+            if server is not None:await server.wait_closed()
+            self.executor.shutdown(wait=True,cancel_futures=False)
+
     def stop(self):
-        """Stop serving, from any thread."""
+        """Stop serving, from any thread: the listener closes, accepted requests are answered, then serve returns."""
         self.stopping=True
-        if self.loop is not None:self.loop.call_soon_threadsafe(self.task.cancel)
+        if self.loop is not None:self.loop.call_soon_threadsafe(self.stop_event.set)
 
 
 def request_row(request,response,finished):
@@ -108,12 +192,51 @@ def request_row(request,response,finished):
         arrival_monotonic=arrival,server_seconds=finished-arrival if type(arrival)in(int,float)else None)
 
 
+class CompileCounter:
+    """This process's JAX backend compiles (jax.monitoring's backend_compile_duration events), persistent compilation cache
+    hits and misses (its cache_hits events; cache_misses: an entry compiled and written), and cache entries it could not read
+    (JAX's 'Error reading persistent compilation cache entry' warnings, as shown), read as deltas: run() reads the warmup's
+    at READY (recorded there), so each request row's are its own."""
+    EVENT='/jax/core/compile/backend_compile_duration';HIT='/jax/compilation_cache/cache_hits';MISS='/jax/compilation_cache/cache_misses'
+    UNREADABLE='Error reading persistent compilation cache entry'
+    KEYS=('compiles','compile_seconds','cache_hits','cache_misses','cache_read_errors')
+
+    def __init__(self):
+        self.now=dict.fromkeys(self.KEYS,0);self.now['compile_seconds']=0.;self.read=dict(self.now);self.lock=threading.Lock()
+        try:
+            import jax
+            jax.monitoring.register_event_duration_secs_listener(self._listen);jax.monitoring.register_event_listener(self._event)
+        except Exception:pass   # noqa: BLE001 -- a JAX without monitoring: the counts stay 0
+        import warnings
+        shown=warnings.showwarning
+        def showwarning(message,category,filename,lineno,file=None,line=None):
+            if self.UNREADABLE in str(message):
+                with self.lock:self.now['cache_read_errors']+=1
+            return shown(message,category,filename,lineno,file,line)
+        warnings.showwarning=showwarning
+
+    def _listen(self,event,duration,**kw):
+        if event==self.EVENT:
+            with self.lock:self.now['compiles']+=1;self.now['compile_seconds']+=duration
+
+    def _event(self,event,**kw):
+        key={self.HIT:'cache_hits',self.MISS:'cache_misses'}.get(event)
+        if key is not None:
+            with self.lock:self.now[key]+=1
+
+    def delta(self):
+        """{compiles, compile_seconds, cache_hits, cache_misses, cache_read_errors} since the previous read."""
+        with self.lock:
+            out={k:self.now[k]-self.read[k]for k in self.KEYS};self.read=dict(self.now)
+        return out
+
+
 class Recorder:
     """What the Server calls: the search's process_many, its responses stamped with server_id (when one is given), plus telemetry
-    rows queued for a writer thread."""
-    def __init__(self,search,path=None,*,server_id=None):
+    rows queued for a writer thread (each with the backend compiles since the previous row)."""
+    def __init__(self,search,path=None,*,server_id=None,compiles=None):
         if server_id is not None and (type(server_id)is not str or not server_id):raise ValueError('a non-empty server_id required')
-        self.search=search;self.server_id=server_id;self.rows=self.thread=self.file=None
+        self.search=search;self.server_id=server_id;self.rows=self.thread=self.file=None;self.compiles=compiles
         if path is not None:
             self.file=open(path,'a',encoding='utf-8');self.rows=queue.SimpleQueue()
             self.thread=threading.Thread(target=self._write,name='depthn-live-telemetry',daemon=True);self.thread.start()
@@ -121,8 +244,20 @@ class Recorder:
     def process_many(self,requests):
         requests=list(requests);responses=self.search.process_many(requests);finished=time.monotonic()
         if self.server_id is not None:responses=[dict(r,server_id=self.server_id)if isinstance(r,dict)else r for r in responses]
-        if self.rows is not None:self.rows.put([request_row(q,r,finished)for q,r in zip(requests,responses)])
+        if self.rows is not None:self.rows.put(self._rows(requests,responses,finished))
         return responses
+
+    def finish(self,request,response):
+        """One pipelined request's response (Server._settle): stamped and recorded as process_many's are."""
+        finished=time.monotonic()
+        if self.server_id is not None and isinstance(response,dict):response=dict(response,server_id=self.server_id)
+        if self.rows is not None:self.rows.put(self._rows([request],[response],finished))
+        return response
+
+    def _rows(self,requests,responses,finished):
+        rows=[request_row(q,r,finished)for q,r in zip(requests,responses)]
+        if self.compiles is not None and rows:rows[0].update(self.compiles.delta())
+        return rows
 
     def record(self,row):
         if self.rows is not None:self.rows.put([row])
@@ -157,20 +292,46 @@ def matmul_precision():
 
 
 def run(search,*,host,port,warmup_requests,max_requests,batch_wait_seconds=.005,queue_limit=256,telemetry=None,header=None,log=_print,on_server=None,
-        server_id=None,warm_in=()):
+        server_id=None,pool=None,pipeline_options=None,warm_in=()):
     """Build the Server (Codex's queue checks), warm `search` up, then serve until stopped; READY is logged (and recorded)
     once it is warm AND its own listener accepts connections. `on_server(server)` sees the Server before the warmup (its
-    stop() ends run once serving). `warm_in`: prepare's warm-in list (DepthNLiveSearch.warmup's), when there is one."""
-    recorder=Recorder(search,telemetry,server_id=server_id)
-    try:
+    stop() ends run once serving). With `pool` (a started PreparePool of this search's constructor), the search prepares
+    through it and serves through a depthn_batching.Pipeline (pipeline_options: its keywords); the pool is closed on exit.
+    `warm_in`: prepare's warm-in list (DepthNLiveSearch.warmup's: this process's own prepare), when there is one."""
+    compiles=CompileCounter();recorder=None
+    try:   # the pool's workers are up: everything from here closes them on the way out
+        recorder=Recorder(search,telemetry,server_id=server_id,compiles=compiles)
         server=Server(recorder,max_requests=max_requests,batch_wait_seconds=batch_wait_seconds,queue_limit=queue_limit)
         if on_server is not None:on_server(server)
-        warm=search.warmup(warmup_requests,**({'warm_in':warm_in}if warm_in else{}));buckets=warm.get('buckets',{})
+        workers=None
+        local=pool is not None and(pipeline_options or{}).get('local_battles',0)>0;warm_saved=False
+        if local:
+            pool.attach_local(search.constructor)   # batch 1 in process: this search's own prepare, warmed below as the serial server's
+            warm_saved=True   # as a worker's two passes: warmup's own prepares go to the workers once the pool is attached, so
+            # this slot's prepare warms the warmup requests here (leniently, as the workers do), then the list (strictly)
+        elif pool is not None:warm_in=()   # nothing prepares in this process: only the workers warm in (at their start)
+        if pool is not None:
+            started=time.perf_counter();pool.wait_ready();search.attach_pool(pool)
+            workers=dict(workers=pool.size,ready_wait_seconds=time.perf_counter()-started,warm_in={w.index:(w.ident or{}).get('warm_in')for w in pool.workers},
+                atomic_cache={w.index:(w.ident or{}).get('atomic_cache')for w in pool.workers})
+            if(pipeline_options or{}).get('reply_forward')=='device'and getattr(search,'reply',None)is not None:
+                search.reply_batches=tuple(search.buckets)   # warmup compiles each bucket's batched reply forward, both seats
+        warm=search.warmup(warmup_requests,**({'warm_in':warm_in}if warm_in else{}),**({'warm_in_saved':True}if warm_saved else{}));buckets=warm.get('buckets',{})
+        if pool is not None:
+            from gpu_engine.depthn_batching import Pipeline
+            server.pipeline=Pipeline(search,pool,max_batch=max_requests,**(pipeline_options or{})).start()
+            warm=dict(warm,prepare_workers=dict(workers,rss_bytes=pool.rss()),pipeline=dict(pipeline_options or{},max_batch=max_requests))
         ready=dict(event='READY',host=host,port=port,server_id=server_id,**(header or{}),cold_seconds={b:x.get('cold_seconds')for b,x in buckets.items()},
-            warm_seconds={b:x.get('warm_seconds')for b,x in buckets.items()},programs=warm.get('programs'),carry_reference=warm.get('carry_reference'),warmup=warm)
+            warm_seconds={b:x.get('warm_seconds')for b,x in buckets.items()},programs=warm.get('programs'),carry_reference=warm.get('carry_reference'),warmup=warm,
+            warmup_compiles=compiles.delta(),   # everything up to READY: each request row's compiles and cache counts are serving's own
+            atomic_cache=dict(atomic_compilation_cache.STATUS))   # this process's whole-entry cache writes (the workers': prepare_workers.atomic_cache)
         def announce():log(ready);recorder.record(dict(ready,kind='ready'))
         asyncio.run(server.serve(host,port,on_ready=announce))
-    finally:recorder.close()
+    finally:
+        try:
+            if pool is not None:pool.close()
+        finally:
+            if recorder is not None:recorder.close()
 
 
 # Command line ---------------------------------------------------------------------------------------------------------------------
@@ -217,12 +378,32 @@ def parser():
     p.add_argument('--peer-view-b',action='store_true',help='view b in the peer\'s view (constructor_worlds\' Peer view b; off by default): it '
         'implies --redact-private-reveals and projects the root\'s two peer damage cells to Showdown\'s public percent; the run header '
         'records peer_view_b (and redact_private_reveals true), each built response its peer_view_b record')
+    p.add_argument('--prepare-workers',type=int,default=0,help='batched serving: prepare in this many worker processes and serve through '
+        'gpu_engine.depthn_batching (default 0: off, the serial path)')
+    p.add_argument('--prepare-cpus',help='the workers\' CPUs: a CPU list (e.g. 8-15) split evenly across the workers in order (default: '
+        'this process\'s own CPUs, shared)')
+    p.add_argument('--prepare-timeout-seconds',type=float,default=30.,help='a prepare running longer kills its worker (server_error)')
+    p.add_argument('--batch-window-seconds',type=float,default=.05,help='batched serving: the longest a ready root waits for others while the '
+        'device is idle')
+    p.add_argument('--flush-guard-seconds',type=float,default=.15,help='batched serving: the deadline rule\'s margin (gpu_engine.depthn_batching)')
+    p.add_argument('--local-battles',type=int,default=8,help='batched serving: at most this many live battles prepared in this process (a new '
+        'battle arriving with nothing else in flight while the server runs about one decision at a time; gpu_engine.depthn_batching), so '
+        'batch 1 pays nothing for batching; 0: every battle in a worker')
+    p.add_argument('--split-worlds',type=int,default=0,help='MEASUREMENT ONLY (gpu_engine.world_split; never in production before worlds\' '
+        'world-range seam): a lone in-process decision of W >= --split-min-worlds builds its worlds across up to this many idle workers '
+        '(default 0: off)')
+    p.add_argument('--split-min-worlds',type=int,default=32,help='the smallest W --split-worlds splits (default 32)')
+    p.add_argument('--reply-forward',choices=('reduce','device'),default='reduce',help='batched serving: the reply prior\'s forward per root '
+        'on the reduce thread (default; as the serial search) or once per batch on the device thread. device is NOT bitwise the per-root '
+        'forward: the batch\'s forward has another batch shape, and the backend may pick another matmul (CPU: 0 of 194 roots equal, max '
+        '|logit difference| 0.052); never on a served config until shown batch-invariant on its GPU')
     p.add_argument('--block-lanes',type=int,default=2187);p.add_argument('--blocks-per-call',type=int,default=16)
     p.add_argument('--warmup-requests',required=True,help='JSONL of saved Showdown requests, one object per line with the eight address keys of '
         'Codex\'s ladder request (battle_id, owner, stream_id, decision_index, generation, prefix_sha256, lines, own_request_line)')
     p.add_argument('--prepare-warm-in',help='JSONL of saved requests (the eight address keys, as --warmup-requests) that prepare runs once '
         'each, in order, during warmup (DepthNLiveSearch.warmup\'s warm_in): their first-use CPU compiles happen before READY instead of on '
-        'live roots; with --prepare-warm-in-sha256')
+        'live roots. With --prepare-workers, every worker also runs them before it is ready (after the warmup requests). With '
+        '--prepare-warm-in-sha256')
     p.add_argument('--prepare-warm-in-sha256',help='sha256 of --prepare-warm-in\'s bytes: the same list on every startup (the server refuses '
         'another)')
     p.add_argument('--telemetry',help='server-side JSONL, appended, fsynced per batch')
@@ -268,12 +449,28 @@ def check_reply_view(meta,args):
 
 def options(argv=None):
     p=parser();args=p.parse_args(argv);evaluators.check_arguments(p,args);check_precision_environment(p,args)
+    # V2 self_moves: the server encodes what its champion contract declares (the contract's masks carry no self_moves, so
+    # False); an OBS_SELF_MOVES override is for measurement tools and refuses a serving start.
+    from pokezero.observation import require_declared_self_moves
+    try:require_declared_self_moves(False,context='depthn live server')
+    except ValueError as error:p.error(str(error))
     if not args.champion_archive:p.error('--champion-archive with its two sha256 flags is required: the champion prices every root and leaf')
     check_reply_arguments(p,args)
     if getattr(args,'eager_peer_fold',False)and not(args.redact_private_reveals or args.peer_view_b):
         p.error('--eager-peer-fold folds the peer wire for the redaction: it needs --redact-private-reveals or --peer-view-b')
+    if args.prepare_workers<0:p.error('--prepare-workers must be >= 0')
+    if args.prepare_workers==0 and(args.prepare_cpus or args.reply_forward!='reduce'):p.error('--prepare-cpus and --reply-forward go with --prepare-workers')
+    if args.local_battles<0:p.error('--local-battles must be >= 0')
+    if args.split_worlds<0 or args.split_worlds and(not args.prepare_workers or not args.local_battles):
+        p.error('--split-worlds (measurement only) goes with --prepare-workers and --local-battles')
     if bool(getattr(args,'prepare_warm_in',None))!=bool(getattr(args,'prepare_warm_in_sha256',None)):
         p.error('--prepare-warm-in and --prepare-warm-in-sha256 go together')
+    if args.prepare_cpus:
+        try:prepare_cpu_sets(args.prepare_cpus,args.prepare_workers)
+        except ValueError as error:p.error(f'--prepare-cpus: {error}')
+    for name in('prepare_timeout_seconds','batch_window_seconds','flush_guard_seconds'):
+        value=getattr(args,name)
+        if not(value==value and 0<=value<float('inf'))or name=='prepare_timeout_seconds'and value<=0:p.error(f'--{name.replace("_","-")} must be finite and >= 0 (> 0 for the timeout)')
     if args.max_requests is None:args.max_requests=args.buckets[-1]
     if not 1<=args.max_requests<=args.buckets[-1]:p.error('--max-requests must be in 1..the largest bucket')
     try:   # Codex's own queue/batch checks (phase_d_search_server.Server._initialize), before anything loads or compiles
@@ -320,17 +517,18 @@ def build(args):
     jax.config.update('jax_enable_x64',False)   # pinned off, as phase_d_ladder_server
     if matmul_precision()!=args.matmul_precision:   # the hard pin, again once JAX is imported, before anything loads or warms up
         raise ValueError(f'JAX default matmul precision {matmul_precision()!r} differs from the pinned {args.matmul_precision!r}')
+    if not atomic_compilation_cache.install()and args.compilation_cache:   # whole entries only, for every process sharing the cache
+        raise ValueError(f'--compilation-cache needs whole-entry cache writes: {atomic_compilation_cache.STATUS["reason"]}')
     if args.compilation_cache:
         from pokezero.owning_worker_runtime import configure_compilation_cache
         configure_compilation_cache(args.compilation_cache)
     if len(jax.devices())!=1 or jax.devices()[0].platform!='gpu':raise ValueError('ONE visible GPU required')
     from pokezero import v5_gumbel
     from gpu_engine import constructor_worlds as cw
-    from gpu_engine.phase_d_protocol_constructor import ProtocolConstructor,load_inputs
-    catalog,source,metadata,config=load_inputs(args);evaluator=evaluators.load_from_arguments(args);W=live.RUNGS[args.rung]
-    constructor=ProtocolConstructor(catalog=catalog,source=source,metadata=metadata,owning_config=config,count=W,seed=args.seed,rung=args.rung,
-        saved_root_admission=args.saved_root_admission,incremental_roots=bool(getattr(args,'incremental_roots',False)),
-        eager_peer_fold=bool(getattr(args,'eager_peer_fold',False)))
+    constructor=build_constructor(args);catalog,source,metadata=constructor.catalog,constructor.source,constructor.metadata
+    evaluator=evaluators.load_from_arguments(args);W=live.RUNGS[args.rung]
+    from gpu_engine.private_self_moves import refuse_search_serving   # V2 self_moves: fail closed until the search threading lands
+    refuse_search_serving(catalog=catalog,meta=getattr(evaluator,'meta',None),context='depthn live server')
     executor=cw.live_executor(metadata,catalog)   # the constructor's own engine metadata and catalog (the depth-N gate's CONSTRUCTOR_ROOTS uses the same)
     params=(evaluator.params,)
     from gpu_engine import depthn_guard_inputs as guard_inputs
@@ -342,6 +540,7 @@ def build(args):
         model=evaluators.load(args.reply_archive,expected_archive_sha256=args.reply_archive_sha256,
             expected_checkpoint_sha256=args.reply_checkpoint_sha256,precision=evaluators.PRECISIONS[args.champion_precision])
         check_reply_view(getattr(model,'meta',None),args)
+        refuse_search_serving(meta=getattr(model,'meta',None),context='depthn live server reply model')
         reply=ReplyPrior(executor,model,mode=args.reply_views,identity=dict(archive_sha256=args.reply_archive_sha256,
             checkpoint_sha256=args.reply_checkpoint_sha256,view=reply_view(getattr(model,'meta',None))))
     return live.DepthNLiveSearch(constructor=constructor,pricers=pricers,params=params,binding=cw.binding(source,metadata,catalog),
@@ -350,6 +549,65 @@ def build(args):
         redact_private_reveals=bool(getattr(args,'redact_private_reveals',False)),reply=reply,
         root_operator=getattr(args,'root_operator',live.ROOT_OPERATOR),
         **({'peer_view_b':True}if getattr(args,'peer_view_b',False)else{}),**({'ability_guard':True}if getattr(args,'ability_guard',False)else{}))
+
+
+def build_constructor(args):
+    """The ProtocolConstructor the arguments name (Codex's pinned inputs, W from the rung, sessions keyed by the rung): build()'s,
+    and every prepare worker's (worker_constructor)."""
+    from gpu_engine.phase_d_protocol_constructor import ProtocolConstructor,load_inputs
+    catalog,source,metadata,config=load_inputs(args)
+    return ProtocolConstructor(catalog=catalog,source=source,metadata=metadata,owning_config=config,count=live.RUNGS[args.rung],seed=args.seed,rung=args.rung,
+        saved_root_admission=args.saved_root_admission,incremental_roots=bool(getattr(args,'incremental_roots',False)),
+        eager_peer_fold=bool(getattr(args,'eager_peer_fold',False)))
+
+
+CONSTRUCTOR_ARGUMENTS=('showdown_root','node_binary','metadata','expected_metadata_sha256','vocabulary','expected_vocabulary_sha256','rung','seed',
+    'saved_root_admission','incremental_roots','eager_peer_fold')
+
+
+def worker_constructor(payload):
+    """A prepare worker's constructor (gpu_engine.prepare_pool's factory): build_constructor of the server's own arguments."""
+    return build_constructor(SimpleNamespace(**payload))
+
+
+def prepare_cpu_sets(text,workers):
+    """--prepare-cpus: a CPU list ('8-15' or '8,9,12-15') split into `workers` consecutive, near-equal sets."""
+    cpus=[]
+    for part in text.split(','):
+        lo,_,hi=part.partition('-')
+        try:lo,hi=int(lo),int(hi or lo)
+        except ValueError:raise ValueError(f'{part!r} is not a CPU or a CPU range')from None
+        if lo<0 or hi<lo:raise ValueError(f'{part!r} is not a CPU range')
+        cpus.extend(range(lo,hi+1))
+    if workers<1 or len(cpus)<workers:raise ValueError(f'{len(cpus)} CPUs for {workers} workers')
+    size,extra=divmod(len(cpus),workers);out=[];at=0
+    for i in range(workers):
+        n=size+(i<extra);out.append(tuple(cpus[at:at+n]));at+=n
+    return out
+
+
+def make_pool(args):
+    """The prepare-worker pool of --prepare-workers, its workers starting (None at 0): started before build() so the workers
+    build their constructors while this process loads the champion; run() waits for them."""
+    if not args.prepare_workers:return None
+    from gpu_engine.prepare_pool import PreparePool
+    payload={k:getattr(args,k)for k in CONSTRUCTOR_ARGUMENTS}
+    redaction={**({'redact_private_reveals':True}if args.redact_private_reveals or args.peer_view_b else{}),**({'peer_view_b':True}if args.peer_view_b else{})}
+    cache={}if not args.compilation_cache else dict(jax_enable_compilation_cache=True,jax_compilation_cache_dir=str(Path(args.compilation_cache).resolve()),
+        jax_persistent_cache_min_compile_time_secs=0.)   # the workers' prepare uses the server's persistent cache (written whole, as the server)
+    return PreparePool('scripts.depthn_live_server:worker_constructor',payload,workers=args.prepare_workers,device='cpu',redaction=redaction,
+        cpus=prepare_cpu_sets(args.prepare_cpus,args.prepare_workers)if args.prepare_cpus else None,
+        timeout_seconds=args.prepare_timeout_seconds,warm_in=warm_in_requests(args),jax_config=cache).start(wait=False)
+
+
+def warm_in_requests(args):
+    """Every prepare worker's warm-in: two passes, every session forgotten between them (so the lists may share an address or
+    go back in a battle): the warmup requests, then --prepare-warm-in's (its bytes held to the sha256), as protocol requests
+    (warm-in-<j> request ids)."""
+    keys=live.PROTOCOL_KEYS[2:];passes=(read_requests(args.warmup_requests),list(read_warm_in(args)));out=[];j=0
+    for rows in passes:
+        if rows:out.append(tuple(dict({k:r[k]for k in keys},schema=original.SCHEMA,request_id=f'warm-in-{j+i}')for i,r in enumerate(rows)));j+=len(rows)
+    return tuple(out)
 
 
 def header(args,search):
@@ -371,14 +629,24 @@ def header(args,search):
             reply_checkpoint_sha256=args.reply_checkpoint_sha256,reply_views=args.reply_views,reply_archive_view=reply_view(getattr(getattr(getattr(search,'reply',None),'evaluator',None),'meta',None)))),
         jax_enable_x64=bool(jax.config.jax_enable_x64),matmul_precision=matmul_precision(),matmul_precision_pin=args.matmul_precision,
         **({}if getattr(args,'root_operator',live.ROOT_OPERATOR)==live.ROOT_OPERATOR else dict(live_root_operator=args.root_operator)),
+        **({}if not getattr(args,'prepare_workers',0)else dict(prepare_workers=args.prepare_workers,prepare_cpus=args.prepare_cpus,
+            prepare_timeout_seconds=args.prepare_timeout_seconds,batch_window_seconds=args.batch_window_seconds,
+            flush_guard_seconds=args.flush_guard_seconds,reply_forward=args.reply_forward,local_battles=args.local_battles,
+            **({}if not args.split_worlds else dict(split_worlds=args.split_worlds,split_min_worlds=args.split_min_worlds)))),
         **({}if not getattr(args,'prepare_warm_in_sha256',None)else dict(prepare_warm_in_sha256=args.prepare_warm_in_sha256)))
 
 
 def main(argv=None):
-    args=options(argv);saved=read_requests(args.warmup_requests);warm_in=read_warm_in(args);search=build(args)
-    run(search,host=args.host,port=args.port,warmup_requests=saved,max_requests=args.max_requests,batch_wait_seconds=args.batch_wait_seconds,
-        queue_limit=args.queue_limit,telemetry=args.telemetry,header=header(args,search),server_id=args.server_id or f'{socket.gethostname()}:{args.port}',
-        warm_in=warm_in)
+    args=options(argv);saved=read_requests(args.warmup_requests);warm_in=read_warm_in(args);pool=make_pool(args)
+    try:   # the workers start before build(): whatever fails from here (build, header, run) never orphans them (close is idempotent)
+        search=build(args)
+        run(search,host=args.host,port=args.port,warmup_requests=saved,max_requests=args.max_requests,batch_wait_seconds=args.batch_wait_seconds,
+            queue_limit=args.queue_limit,telemetry=args.telemetry,header=header(args,search),server_id=args.server_id or f'{socket.gethostname()}:{args.port}',
+            pool=pool,pipeline_options=None if pool is None else dict(window_seconds=args.batch_window_seconds,guard_seconds=args.flush_guard_seconds,
+                reply_forward=args.reply_forward,local_battles=args.local_battles,split_worlds=args.split_worlds,
+                split_min_worlds=args.split_min_worlds),warm_in=warm_in)
+    finally:
+        if pool is not None:pool.close()
 
 
 if __name__=='__main__':main()

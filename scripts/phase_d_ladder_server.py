@@ -22,6 +22,8 @@ def build(args):
     from gpu_engine.phase_d_ladder_search import Search
     from gpu_engine.phase_d_protocol_constructor import load_inputs
     catalog,bound,metadata,config=load_inputs(args)
+    from gpu_engine.private_self_moves import refuse_search_serving   # V2 self_moves: fail closed until the search threading lands
+    refuse_search_serving(catalog=catalog,context='phase_d ladder server')
     return Search(args.archive,expected_archive_sha256=args.expected_archive_sha256,catalog=catalog,source=bound,metadata=metadata,
         engine_tables=transition.tables_from_metadata(metadata),observation_tables=engine_device_observation.compile_tables(metadata,catalog=catalog),
         rung=args.rung,owning_config=config,seed=args.seed,chance_cap=args.branch_cap,lanes=args.lanes,

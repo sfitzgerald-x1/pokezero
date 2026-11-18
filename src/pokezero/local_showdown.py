@@ -1849,7 +1849,28 @@ class LocalShowdownEnv:
                     0.0, time.perf_counter() - annotation_started_at
                 )
                 self._root_puct_branch_observation_state_annotation_count += 1
+        # (getattr twice: timing tests drive this with a config double that has no masks; off = no attachment.)
+        if getattr(getattr(self.config, "feature_masks", None), "self_moves", False):
+            state = replace(state, self_move_states=self.self_move_states(player))
         return state
+
+    def self_move_states(self, player: PlayerId) -> tuple:
+        """V2 self_moves: ``player``'s own real movesets and exact PP (pokezero.own_moves.own_move_states) from this
+        env's line log (the protocol stream with ``player``'s requests; another seat's requests are ignored) and its
+        latest request. Attached to the player state by ``_state_for_player`` when the masks have self_moves; public so
+        a measurement can attach it to a state encoded under other masks."""
+        from .own_moves import own_move_states
+
+        request = self._latest_requests.get(player)
+        if request is None:
+            raise LocalShowdownError(f"self_moves: no request for {player}.")
+        dex = load_showdown_dex_cached(self.config.resolved_showdown_root())
+
+        def maximum(key: str) -> int:
+            info = dex.move_info(key)
+            return info.max_pp if info is not None else 0
+
+        return own_move_states(tuple(self._lines), request, maximum_pp=maximum)
 
     def tier2_residuals_active(self) -> bool:
         """Whether this env populates Tier-2 residuals into transition tokens.

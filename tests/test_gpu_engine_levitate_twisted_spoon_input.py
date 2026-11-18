@@ -66,7 +66,7 @@ class TwistedSpoonLevitateTests(unittest.TestCase):
   # transition.py is certified against CURRENT_TRANSITION (full AST plus mutations) by terminal_closeout and seismic_toss_components.
   # state.py and items.py are byte-certified against the reviewed SOURCE_PINS by transition_observer_wiring.
   for name in ('mechanics.py','absorption.py','engine_kernel_frame_risk.py','engine_execution_completeness.py'):
-   self.assertEqual(Path('gpu_engine',name).read_bytes(),subprocess.check_output(['git','show','b8092a85:gpu_engine/'+name]))
+   self.assertEqual(Path('gpu_engine',name).read_bytes(),subprocess.check_output(['git','show',('233bf444:gpu_engine/' if name=='mechanics.py' else 'b8092a85:gpu_engine/')+name]))
   witness._source()
  def test_one_existing_full_grammar_packet_no_private_revelation(self):
   # One owner, two mirrored rows. Reuse existing Levitate grammar, not a FULL

@@ -74,7 +74,8 @@ class TableTests(unittest.TestCase):
         from gpu_engine import future_state as f
         from gpu_engine.state import BattleState
         names = ('perish_counter', 'yawn_counter', 'partial_trap_counter', 'partial_trap_source')
-        self.assertEqual(BattleState._fields[-4:], names)
+        start = BattleState._fields.index('perish_counter')   # appended after recharge_counter; Transform's leaves follow
+        self.assertEqual(BattleState._fields[start - 1:start + 4], ('recharge_counter',) + names)
         for name in names:
             self.assertIn(name, f.FIELD_POLICY);self.assertIn(name, f.NATIVE_PATHS);self.assertEqual(f.SHAPES[name], (2, 6))
         source = open(f.__file__).read()
@@ -392,8 +393,10 @@ class DeviceB2ParityTests(unittest.TestCase):
         return out
 
     def end_turn(self, before, after, *lines):
+        # The device step prints its TURN line as B2's TURN fact does (after.turn advances): a held clock ticks only on
+        # |turn| on both paths (public_active.py:240; turn_end's `ready` since the transition batch's F2).
         self.b2_lines(self.a, self.catalog, self.fact, *lines)
-        self.h.turn_end(self.c, before, after, self.yes);self.turn += 1;self.fact(self.a.TURN, -1, self.turn)
+        self.h.turn_end(self.c, before, after._replace(turn=self.c.trackers.turn), self.yes);self.turn += 1;self.fact(self.a.TURN, -1, self.turn)
         return self.check()
 
     def check(self):

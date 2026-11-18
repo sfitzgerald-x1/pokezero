@@ -1,0 +1,190 @@
+{
+ "schema": "pokezero.effect_probe.scenario.v1",
+ "move": "transform_hiddenpower",
+ "note": "A Mew with Hidden Power Water copies a Hidden Power Fire Snorlax: the copied slot uses Fire; switching out restores Water.",
+ "teams": [
+  [
+   {
+    "species": "Mew",
+    "moves": [
+     "transform",
+     "hiddenpower",
+     "softboiled",
+     "splash"
+    ],
+    "ability": "Synchronize",
+    "item": "",
+    "ivs": {
+     "hp": 30,
+     "atk": 31,
+     "def": 31,
+     "spe": 30,
+     "spa": 30,
+     "spd": 31
+    }
+   },
+   {
+    "species": "Starmie",
+    "moves": [
+     "splash",
+     "surf",
+     "recover",
+     "protect"
+    ],
+    "ability": "Natural Cure",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Blissey",
+    "moves": [
+     "splash",
+     "softboiled",
+     "protect",
+     "seismictoss"
+    ],
+    "ability": "Serene Grace",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Skarmory",
+    "moves": [
+     "splash",
+     "protect",
+     "spikes",
+     "peck"
+    ],
+    "ability": "Keen Eye",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Swampert",
+    "moves": [
+     "splash",
+     "protect",
+     "surf",
+     "earthquake"
+    ],
+    "ability": "Torrent",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Metagross",
+    "moves": [
+     "splash",
+     "protect",
+     "meteormash",
+     "earthquake"
+    ],
+    "ability": "Clear Body",
+    "item": "Leftovers"
+   }
+  ],
+  [
+   {
+    "species": "Snorlax",
+    "moves": [
+     "hiddenpower",
+     "splash",
+     "curse",
+     "bodyslam"
+    ],
+    "ability": "Immunity",
+    "item": "",
+    "ivs": {
+     "hp": 30,
+     "atk": 31,
+     "def": 30,
+     "spe": 30,
+     "spa": 30,
+     "spd": 31
+    }
+   },
+   {
+    "species": "Starmie",
+    "moves": [
+     "splash",
+     "surf",
+     "recover",
+     "protect"
+    ],
+    "ability": "Natural Cure",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Blissey",
+    "moves": [
+     "splash",
+     "softboiled",
+     "protect",
+     "seismictoss"
+    ],
+    "ability": "Serene Grace",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Skarmory",
+    "moves": [
+     "splash",
+     "protect",
+     "spikes",
+     "peck"
+    ],
+    "ability": "Keen Eye",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Swampert",
+    "moves": [
+     "splash",
+     "protect",
+     "surf",
+     "earthquake"
+    ],
+    "ability": "Torrent",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Metagross",
+    "moves": [
+     "splash",
+     "protect",
+     "meteormash",
+     "earthquake"
+    ],
+    "ability": "Clear Body",
+    "item": "Leftovers"
+   }
+  ]
+ ],
+ "script": [
+  [
+   "move 1",
+   "move 2"
+  ],
+  [
+   "move 1",
+   "move 2"
+  ],
+  [
+   "switch 2",
+   "move 2"
+  ],
+  [
+   "switch 1",
+   "move 2"
+  ],
+  [
+   "move 2",
+   "move 2"
+  ]
+ ],
+ "expect": {
+  "exact": true
+ },
+ "require_fields": [
+  "item_knocked",
+  "destiny_bond",
+  "effect",
+  "transform"
+ ]
+}

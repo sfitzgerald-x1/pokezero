@@ -228,7 +228,7 @@ def prepare_device_runtime(inputs):
     source=load_gen3_randbat_source_cached(show['root']);dex=load_showdown_dex_cached(show['root'])
     if source.metadata.source_hash!=contract.belief_set_source_hash:raise ValueError('original public belief source differs')
     catalog=v4_encoder.compile_encoder(public_belief.compile_source(source),dex,vocabulary,
-        checkpoint_sha256=contract.checkpoint_sha256,feature_masks=dict(contract.feature_masks))
+        checkpoint_sha256=contract.checkpoint_sha256,feature_masks=contract.encoder_masks())
     pool=source_provenance.load_constructor_pool(runtime['constructor_pool']['path']);metadata=pool.metadata()
     if (source_provenance._pool(pool,rehash=True)['pool_sha256']!=inputs.plan.pool_sha256
             or metadata['compiled_tree']['sha256']!=show['compiled_tree_sha256']):
@@ -280,7 +280,7 @@ def _prepare_runtime(runtime,vocabulary,*,expected_pool_sha256):
     belief=load_gen3_randbat_source_cached(show['root']);dex=load_showdown_dex_cached(show['root'])
     if belief.metadata.source_hash!=contract.belief_set_source_hash:raise ValueError('original public belief source differs')
     catalog=v4_encoder.compile_encoder(public_belief.compile_source(belief),dex,vocabulary,
-        checkpoint_sha256=contract.checkpoint_sha256,feature_masks=dict(contract.feature_masks))
+        checkpoint_sha256=contract.checkpoint_sha256,feature_masks=contract.encoder_masks())
     pool=source_provenance.load_constructor_pool(runtime['constructor_pool']['path'])
     metadata=pool.metadata()
     if (source_provenance._pool(pool,rehash=True)['pool_sha256']!=expected_pool_sha256

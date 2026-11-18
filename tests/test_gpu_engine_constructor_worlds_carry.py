@@ -932,4 +932,87 @@ class PrivateRevealB2Tests(unittest.TestCase):
         self.assertEqual(cw.private_reveal_record(root.public,0,facts,self.carry,True),dict(enabled=True,found=[],applicable=[],redacted=[],unmatched=[]))
 
 
+class BlockedWindowTests(unittest.TestCase):
+    """line_facts' replay of B2's Protect-blocked move windows (_blocked_windows) and fill_blocked_window: from_b2 seeds
+    public_port.blocked with B2's closed windows only, B2's readout (and the device path) also counts the open blocked window."""
+    PREFIX=[switch('p1','alpha','300/300'),switch('p2','beta'),'|turn|1']
+    BLOCKED=['|move|p1a: Alpha|Explosion|p2a: Beta','|-activate|p2a: Beta|move: Protect','|faint|p1a: Alpha']
+
+    def test_line_facts_replay_b2s_window_rules(self):
+        cases={'our Explosion into Protect, then the faint: open, ours':(self.BLOCKED,((0,0),0)),
+            'the residual boundary closes and counts it':(self.BLOCKED+['|','|upkeep'],((1,0),-1)),
+            'the replacement\'s arrival closes it':(self.BLOCKED+[switch('p1','gamma')],((1,0),-1)),
+            'Detect blocks too':(['|move|p1a: Alpha|Explosion|p2a: Beta','|-activate|p2a: Beta|Detect','|faint|p1a: Alpha'],((0,0),0)),
+            'the peer\'s blocked move is the peer\'s window':(['|move|p2a: Beta|Explosion|p1a: Alpha','|-activate|p1a: Alpha|move: Protect',
+                '|faint|p2a: Beta'],((0,0),1)),
+            'a Substitute is not a block':(['|move|p1a: Alpha|Body Slam|p2a: Beta','|-activate|p2a: Beta|Substitute|[damage]'],((0,0),-1)),
+            'an immunity outranks the block (least rank)':(['|move|p1a: Alpha|Surf|p2a: Beta','|-activate|p2a: Beta|move: Protect',
+                '|-immune|p2a: Beta'],((0,0),-1)),
+            'a block on the other side is not this window\'s':(['|move|p1a: Alpha|Body Slam|p2a: Beta','|-activate|p1a: Alpha|move: Protect'],((0,0),-1)),
+            'a later move closes it and opens its own':(self.BLOCKED[:2]+['|move|p2a: Beta|Splash|p2a: Beta'],((1,0),-1)),
+            'a cant opens an unblocked window':(['|cant|p1a: Alpha|par'],((0,0),-1)),
+            'no lines':([],((0,0),-1))}
+        for name,(tail,want)in cases.items():
+            with self.subTest(name):
+                facts=cw.line_facts(self.PREFIX+tail,0)
+                self.assertEqual((facts.blocked_closed,facts.blocked_open),want)
+                self.assertEqual(cw._blocked_windows(self.PREFIX+tail),want)
+
+    def test_the_fill_adds_the_open_window_to_its_side_once(self):
+        from gpu_engine import engine_device_public_port as port
+        t=carry(SPECIES,MAPPING)._replace(public_port=port.initialize(1)._replace(blocked=j.asarray([[2,1]],j.int32)))
+        facts=cw.LineFacts(('beta',),(),blocked_closed=(2,1),blocked_open=0)
+        out=cw.fill_blocked_window(t,facts)
+        self.assertEqual(np.asarray(out.public_port.blocked).tolist(),[[3,1]])
+        self.assertIs(cw.fill_blocked_window(out,facts),out)                     # a second pass is a no-op
+        self.assertEqual(np.asarray(cw.fill_blocked_window(t,replace(facts,blocked_open=1)).public_port.blocked).tolist(),[[2,2]])
+        self.assertIs(cw.fill_blocked_window(t,replace(facts,blocked_closed=(5,1))),t)   # a carry the lines do not explain
+        self.assertIs(cw.fill_blocked_window(t,replace(facts,blocked_open=-1)),t)
+        self.assertIs(cw.fill_blocked_window(t,None),t)
+        capped=t._replace(public_port=t.public_port._replace(blocked=j.asarray([[64,0]],j.int32)))
+        self.assertIs(cw.fill_blocked_window(capped,replace(facts,blocked_closed=(64,0))),capped)
+        bare=carry(SPECIES,MAPPING);self.assertIs(cw.fill_blocked_window(bare,facts),bare)   # no port: nothing to fill
+
+    def test_complete_public_applies_it(self):
+        from gpu_engine import engine_device_public_port as port
+        state,t,root=pressure_world()
+        t=t._replace(public_port=port.initialize(1))
+        facts=cw.line_facts(self.PREFIX+self.BLOCKED,0);self.assertEqual((facts.blocked_closed,facts.blocked_open),((0,0),0))
+        done=cw.complete_world(World(0,state,t,(),1,False),pressure_tables(),0,facts=facts,root=root)
+        self.assertEqual(np.asarray(done.public.public_port.blocked).tolist(),[[1,0]])
+        self.assertIs(cw.complete_world(done,pressure_tables(),0,facts=facts,root=root),done)
+
+
+class BlockedWindowFoldTests(unittest.TestCase):
+    """_blocked_windows (line_facts' host replay, which fill_blocked_window reads) against B2's own tendency fold after every line
+    (tests/test_gpu_engine_public_tendency's fixture): the closed count per side, and the open window's side when it is a blocked
+    move, which B2's readout counts provisionally (public_tendency.project)."""
+    @classmethod
+    def setUpClass(cls):
+        import test_gpu_engine_public_tendency as T
+        T.PublicTendencyTests.setUpClass.__func__(cls)
+
+    def test_the_replay_matches_the_fold_line_by_line(self):
+        tails={'ours blocked, then the faint and the replacement':['|move|p1a: Snorlax|Body Slam|p2a: Absol','|-activate|p2a: Absol|move: Protect',
+                '|faint|p1a: Snorlax','|switch|p1a: Gardevoir|Gardevoir, L80|100/100','|','|upkeep','|turn|2'],
+            'ranks, boundaries and Pursuit':['|move|p1a: Snorlax|Surf|p2a: Absol','|-activate|p2a: Absol|move: Protect','|-immune|p2a: Absol',
+                '|-heal|p2a: Absol|100/100|[from] ability: Water Absorb','|','|move|p1a: Snorlax|Surf|p2a: Absol','|-activate|p2a: Absol|Detect','|',
+                '|-activate|p1a: Snorlax|move: Pursuit','|','|faint|p1a: Snorlax','|win|p2'],
+            'the peer blocked, closed by the residual':['|move|p2a: Absol|Body Slam|p1a: Snorlax','|-activate|p1a: Snorlax|move: Protect','|',
+                '|upkeep','|turn|2'],
+            'a Substitute':['|move|p1a: Snorlax|Body Slam|p2a: Absol','|-activate|p2a: Absol|Substitute|[damage]','|-end|p2a: Absol|Substitute',
+                '|','|upkeep','|turn|2'],
+            'a cant, then the peer blocked and fainting':['|cant|p1a: Snorlax|par','|move|p2a: Absol|Body Slam|p1a: Snorlax',
+                '|-activate|p1a: Snorlax|Detect','|faint|p2a: Absol']}
+        for name,tail in tails.items():
+            with self.subTest(name):
+                state=self.t.initialize(1,self.tables,species_binding=self.tables.species_binding,complete_prefix=True);lines=[]
+                for line in self.prefix+tail:
+                    state,ok=self.step(state,self.t.decode_line(line,catalog=self.catalog));self.assertTrue(bool(ok.all()),line)
+                    lines.append(line)
+                    provisional=bool(state.window_move[0])and int(state.window_outcome[0])==2 and int(state.window_side[0])>=0
+                    fold=(tuple(int(x)for x in np.asarray(state.blocked)[0]),int(state.window_side[0])if provisional else -1)
+                    self.assertEqual(cw._blocked_windows(lines),fold,line)
+
+
 if __name__=='__main__':unittest.main()

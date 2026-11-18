@@ -142,7 +142,7 @@ async def run_panel(config,factory,*,previous=None,expected_previous_sha256=None
             if status!='COMPLETE' and actual.get('score') is not None:raise ValueError('unknown panel outcome cannot carry a score')
             if status=='RUNNING':expected.update(status='FAILED',score=None,reason='interrupted-original-root-not-replayed')
         started=previous['started_unix']
-    masks=dict(factory.contract.feature_masks);masks['opponent_tendency_stats_block']=masks.pop('stats_block')
+    masks=factory.contract.encoder_masks();masks['opponent_tendency_stats_block']=masks.pop('stats_block')
     masks=ObservationFeatureMasks(**masks)
     path=None if progress_path is None else Path(progress_path)
     if path is not None and path.exists() and (previous is None or _sha(json.loads(path.read_bytes()))!=expected_previous_sha256):
