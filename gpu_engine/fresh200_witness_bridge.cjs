@@ -46,8 +46,9 @@ function wireValue(value, array = false, seen = new Set()) {
   seen.delete(value);return result;
 }
 
-function createObserver({Battle,loadControl,appendAudit,appendReceipt,sourceRegistryHash}) {
+function createObserver({Battle,loadControl,appendAudit,appendReceipt,sourceRegistryHash,nativeFactory=null}) {
   const core=new WitnessCore({appendAudit,sourceRegistryHash});
+  const native=nativeFactory===null?null:nativeFactory(core);
   const ended=new WeakSet(),battles=new WeakMap();
   const playerDescriptor=Object.getOwnPropertyDescriptor(Battle.prototype,'setPlayer');
   if (!playerDescriptor || typeof playerDescriptor.value!=='function') throw Error('PINNED_SETPLAYER_SEAM_REQUIRED');
@@ -57,6 +58,7 @@ function createObserver({Battle,loadControl,appendAudit,appendReceipt,sourceRegi
       const known=battles.get(battle);
       if (known!==undefined && known!==core.active.battleId) throw Error('NATIVE_BATTLE_REBOUND');
       battles.set(battle,core.active.battleId);
+      if(native)native.bindBattle(battle);
       if (!['p1','p2'].includes(args[0])) throw Error('LITERAL_PLAYER_REQUIRED');
       return {side:args[0]};
     }});
@@ -97,14 +99,15 @@ function createObserver({Battle,loadControl,appendAudit,appendReceipt,sourceRegi
       // Observe actual live values; never fill them from saved device state or
       // infer a constructor default from an absent serialized set field.
       const elided=elidedProperties(battle);
+      const nativeObservation=native?{state:native.snapshot(battle),roster:native.manifest()}:null;
       const stateWire=Buffer.from(JSON.stringify(wireValue(state)),'utf8');
       const requestWire=Buffer.from(JSON.stringify(wireValue(requests)),'utf8');
       const packet={state_wire_base64:stateWire.toString('base64'),state_sha256:hash(stateWire),
         requests_wire_base64:requestWire.toString('base64'),requests_sha256:hash(requestWire)};
-      core.record('SNAPSHOT_SERIALIZED',{requestId,wire:packet,elidedProperties:elided});
-      const receipt=finish(core.active,{boundary:{kind:'snapshot',requestId,wire:packet,elidedProperties:elided,causalCoverageComplete:false}});
+      core.record('SNAPSHOT_SERIALIZED',{requestId,wire:packet,elidedProperties:elided,nativeObservation});
+      const receipt=finish(core.active,{boundary:{kind:'snapshot',requestId,wire:packet,elidedProperties:elided,nativeObservation,causalCoverageComplete:false}});
       if (!receipt) return undefined;
-      return {receipt,wire:packet,elidedProperties:elided,causalCoverageComplete:false,qualification:false};
+      return {receipt,wire:packet,elidedProperties:elided,nativeObservation,causalCoverageComplete:false,qualification:false};
     },
   };
 }
