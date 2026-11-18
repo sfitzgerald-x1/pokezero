@@ -114,7 +114,7 @@ class IngrainConstructionTests(unittest.TestCase):
         from pokezero.engine_world import battle_spec_from_payload,EngineWorldUnsupported
         from gpu_engine.device_public_worlds import Root,OWN_MON_FIELDS,OWN_SIDE_FIELDS
         from gpu_engine.v5_hypothetical_state import map_spec
-        from tests.test_phase_d_batch2_facts import carry_fixture,metadata
+        from tests.test_phase_d_batch2_facts import metadata
         from gpu_engine.state import legal_actions
 
         names=('abcdef','ghijkl')
@@ -123,14 +123,14 @@ class IngrainConstructionTests(unittest.TestCase):
             {name:SpeciesInfo(name,name,('Normal',),stats) for side in names for name in side},{})
         teams={f'p{side+1}':']'.join('|'.join([name,'','','','tackle','Serious','','N','','','100','255']) for name in party) for side,party in enumerate(names)}
         start=BattleStartOverride(teams)
-        meta=metadata();meta['vocabulary']['moves']=('','tackle');meta['moves']=[dict(pp=0),dict(pp=10)]
+        meta=metadata();meta['vocabulary'].update(moves=('','tackle'),types=('','normal'),items=('',));meta['moves']=[dict(pp=0),dict(pp=10)]
         source=NS(source_hash='same')
         for owner in (0,1):
             with self.subTest(owner=owner):
                 own,foe=f'p{owner+1}',f'p{2-owner}'
                 active=[0,0];active[owner]=1
                 payload=dict(turn=2,selfPlayer=own,selfRequestKind='move',pendingBatonPassSides=[],wishSetTurns={},
-                    selfActiveRequestState=dict(trapped=False),sides={f'p{s+1}':dict(pokemon=[dict(species=name,condition='100/100',active=i==active[s]) for i,name in enumerate(party)],volatiles=[]) for s,party in enumerate(names)})
+                    selfActiveRequestState=dict(trapped=False),sides={f'p{s+1}':dict(pokemon=[dict(species=name,condition='341/341' if s==owner else '100/100',active=i==active[s]) for i,name in enumerate(party)],volatiles=[]) for s,party in enumerate(names)})
                 baseline=battle_spec_from_payload(payload,start,dex=dex,approximate_sleep_turns=False,
                     approximate_substitute_health=False,approximate_partial_trap_turns=False,approximate_hidden_duration_volatiles=False)
                 mapped=map_spec(baseline.spec,metadata=meta,dex=dex,seed=17,turn=2,active_turns=(1,1),happiness=((255,)*6,)*2,held_volatiles=True)
@@ -149,7 +149,7 @@ class IngrainConstructionTests(unittest.TestCase):
                     battle_spec_from_payload(payload,start,dex=dex,approximate_sleep_turns=False,
                         approximate_substitute_health=False,approximate_partial_trap_turns=False,approximate_hidden_duration_volatiles=False)
                 self.assertEqual(unsupported.exception.reason,'volatile_unsupported')
-                carry=carry_fixture();bit=protocol.live.hooks.VOLATILE_NAMES.index('ingrain');carry.volatiles[0,owner,at,bit]=True
+                carry=protocol.public_worlds.public.initialize(physical)._replace(item_removed=jnp.zeros((1,2,6),bool))
                 address=DecisionAddress(1,0,owner)
                 view=dict(present=np.ones((1,6),bool),active=np.eye(6,dtype=bool)[[0]],species=np.asarray(physical.species)[0,1-owner][None,:],
                     hp_percent=np.full((1,6),100),revealed_moves=np.zeros((1,6,4),np.int32),move_pp_used=np.zeros((1,6,4),np.int32),
