@@ -38,11 +38,11 @@ class ScheduledTrainingTests(unittest.TestCase):
     def test_existing_epoch_schedule_and_exact_dropout_optimizer_rng_resume(self):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp);paths=self.caches(root);cfg=self.config();window=t.DeclaredGameWindow(0,10,20)
-            full=t.create(*cfg,enable_v5=True);report=t.train_caches(full,paths,learning_rate_window=window)
+            full=t.create(*cfg,enable_v5=True,self_moves=True);report=t.train_caches(full,paths,learning_rate_window=window)
             expected=[self.rate(cfg[2],window,epoch) for epoch in (1,1,2,2,3,3)]
             self.assertEqual([m['learning_rate'] for m in report['updates']],expected)
             self.assertEqual([m['learning_rate_epoch'] for m in report['updates']],[1,1,2,2,3,3])
-            partial=t.create(*cfg,enable_v5=True);first=t.train_caches(partial,paths,max_updates=3,learning_rate_window=window)
+            partial=t.create(*cfg,enable_v5=True,self_moves=True);first=t.train_caches(partial,paths,max_updates=3,learning_rate_window=window)
             self.assertEqual((partial.steps,partial.progress['epoch'],partial.progress['cache']),(3,1,1))
             checkpoint=root/'partial.pt';t.save_checkpoint(checkpoint,partial)
             torch.rand(11)
@@ -57,7 +57,7 @@ class ScheduledTrainingTests(unittest.TestCase):
     def test_window_cursor_config_and_literal_optimizer_mutants_refuse(self):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp);paths=self.caches(root);cfg=self.config();window=t.DeclaredGameWindow(0,10,20)
-            runtime=t.create(*cfg,enable_v5=True)
+            runtime=t.create(*cfg,enable_v5=True,self_moves=True)
             with self.assertRaisesRegex(ValueError,'finite train_caches'):t.update(runtime,fixture.batch())
             with self.assertRaisesRegex(ValueError,'window'):t.train_caches(runtime,paths)
             with self.assertRaisesRegex(ValueError,'game zero'):t.train_caches(runtime,paths,learning_rate_window=t.DeclaredGameWindow(1,10,20))
@@ -83,7 +83,7 @@ class ScheduledTrainingTests(unittest.TestCase):
     def test_contiguous_declared_windows_and_no_cache_refill_or_replay(self):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp);first=self.caches(root);second=self.caches(root,2);cfg=self.config(epochs=2)
-            runtime=t.create(*cfg,enable_v5=True);w0=t.DeclaredGameWindow(0,10,20);w1=t.DeclaredGameWindow(10,20,20)
+            runtime=t.create(*cfg,enable_v5=True,self_moves=True);w0=t.DeclaredGameWindow(0,10,20);w1=t.DeclaredGameWindow(10,20,20)
             t.train_caches(runtime,first,learning_rate_window=w0)
             with self.assertRaisesRegex(ValueError,'contiguous'):t.train_caches(runtime,second,learning_rate_window=t.DeclaredGameWindow(11,20,20))
             with self.assertRaisesRegex(ValueError,'replay'):t.train_caches(runtime,first,learning_rate_window=w1)
@@ -99,13 +99,14 @@ class ScheduledTrainingTests(unittest.TestCase):
             with self.assertRaises(ValueError):t.DeclaredGameWindow(*args)
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp);paths=self.caches(root);cfg=self.config(epochs=1);w=t.DeclaredGameWindow(0,4,4)
-            runtime=t.create(*cfg,enable_v5=True);r=t.train_caches(runtime,paths,learning_rate_window=w)
+            runtime=t.create(*cfg,enable_v5=True,self_moves=True);r=t.train_caches(runtime,paths,learning_rate_window=w)
             self.assertEqual([m['learning_rate'] for m in r['updates']],[cfg[2].learning_rate]*2)
-            constant=t.create(*fixture.configurations(),enable_v5=True);p=root/'constant.pt';t.save_checkpoint(p,constant)
+            constant=t.create(*fixture.configurations(),enable_v5=True);p=root/'constant.pt';saved=t.save_checkpoint(p,constant)
             metadata=torch.load(p,weights_only=True)['metadata']
             self.assertNotIn('learning_rate_state',metadata);self.assertNotIn('learning_rate_schedule',metadata['training'])
             legacy=asdict(constant.train_config);legacy.pop('learning_rate_schedule');self.assertEqual(metadata['training'],legacy)
-            t.load_checkpoint(p,enable_v5=True)
+            from pokezero.checkpoint_self_moves import off_from_receipt
+            t.load_checkpoint(p,enable_v5=True,off_provenance=off_from_receipt(saved['encoding_receipt']))
             self.assertNotIn('learning_rate_schedule',run_fixture.plan().manifest()['train'])
 
     def test_resume_inside_cache_keeps_short_last_batch_and_epoch_rate(self):
@@ -115,9 +116,9 @@ class ScheduledTrainingTests(unittest.TestCase):
             v5_data.write_cache(path,_combine_training_batches([fixture.batch(index=i) for i in range(3)]))
             model,loss,cfg=self.config(epochs=2);cfg=replace(cfg,batch_size=2)
             window=t.DeclaredGameWindow(0,3,3)
-            full=t.create(model,loss,cfg,enable_v5=True);r=t.train_caches(full,[path],learning_rate_window=window)
+            full=t.create(model,loss,cfg,enable_v5=True,self_moves=True);r=t.train_caches(full,[path],learning_rate_window=window)
             self.assertEqual([m['owner_rows'] for m in r['updates']],[2,1,2,1])
-            part=t.create(model,loss,cfg,enable_v5=True);t.train_caches(part,[path],max_updates=1,learning_rate_window=window)
+            part=t.create(model,loss,cfg,enable_v5=True,self_moves=True);t.train_caches(part,[path],max_updates=1,learning_rate_window=window)
             self.assertEqual((part.progress['batch'],part.rows),(1,2))
             p=root/'part.pt';t.save_checkpoint(p,part)
             resumed=t.load_checkpoint(p,enable_v5=True,expected_learning_rate_window=window)

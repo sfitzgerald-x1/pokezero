@@ -125,7 +125,8 @@ def reconstruct(prepared,pool,gender,decl,batches,positions,index,directory,bank
     from gpu_engine.v5_device_rollout import RootContext
     params=[];config=None
     for actor in decl['actors']:
-        p,c,_=v5_model.load(actor['archive']['path'],expected_archive_sha256=actor['archive']['sha256'],expected_checkpoint_sha256=actor['checkpoint_sha256'],expected_category_vocabulary_sha256=decl['category_vocabulary_sha256'],expected_label_vocabulary_sha256=label_vocabulary_sha256(decl['label_vocabulary']),enable_v5=True)
+        p,c,meta=v5_model.load(actor['archive']['path'],expected_archive_sha256=actor['archive']['sha256'],expected_checkpoint_sha256=actor['checkpoint_sha256'],expected_category_vocabulary_sha256=decl['category_vocabulary_sha256'],expected_label_vocabulary_sha256=label_vocabulary_sha256(decl['label_vocabulary']),enable_v5=True)
+        from gpu_engine.private_self_moves import refuse_unthreaded;refuse_unthreaded(meta,context='device rollout truth')   # V2 self_moves
         if config is not None and config!=c:raise ValueError('original actor geometry differs')
         config=c;params.append(p)
     executor=bank.make_executor(prepared,config)

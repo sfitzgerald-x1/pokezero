@@ -245,13 +245,15 @@ def run(plan,path,*,checkpoint,prepared,pool,gender_policy,device='cuda',resume=
             model_config.embedding_dim==512 and model_config.transformer_layers==3 and model_config.feedforward_dim==2048 and
             model_config.reward_shaping is None,'original v4 architecture/reward contract required')
     backend=engine.Backend(prepared,pool,gender_policy=gender_policy,plan=plan,model_config=model_config)
-    current=Path(checkpoint);declared=0
+    from .checkpoint_self_moves import save_champion_transformer,off_from_receipt
+    current=Path(checkpoint);current_receipt=None;declared=0
     for iteration,batches in enumerate(plan.iterations):
         end=declared+sum(len(batch.games) for batch in batches);train=controls(original['training_config'],start=declared,end=end,device=device)
         finished=book.matching('TRAIN_END',iteration=iteration)
         if finished:
             require(len(finished)==1,'duplicate trained iteration');current=book.path/finished[0]['checkpoint']
-            require(file_sha(current)==finished[0]['checkpoint_sha256'],'immutable completed checkpoint differs');declared=end;continue
+            require(file_sha(current)==finished[0]['checkpoint_sha256'],'immutable completed checkpoint differs')
+            current_receipt=finished[0].get('encoding_receipt');declared=end;continue
         if book.matching('TRAIN_START',iteration=iteration):raise RuntimeError('interrupted legacy optimizer attempt UNKNOWN; no automatic retrain')
         caches=[]
         def actual_end(stream,status,duration,source_sha256):
@@ -284,7 +286,8 @@ def run(plan,path,*,checkpoint,prepared,pool,gender_policy,device='cuda',resume=
                 book.emit('COLLECT_START',iteration=iteration,batch=index,streams=[g.stream_id for g in batch.games],checkpoint_sha256=file_sha(current))
                 result=backend.collect(batch,current,book.path/f'collection-{iteration}-{index}',
                     dataset_config=dataset_controls(train),on_end=actual_end,
-                    check_progress=progress.check)
+                    check_progress=progress.check,
+                    **(dict(off_provenance=off_from_receipt(current_receipt)) if current_receipt is not None and not model_config.self_moves else {}))
                 result=dict(result,iteration=iteration,batch=index);book.emit('COLLECT_END',**result)
             if result.get('cache'):
                 cache=Path(result['cache']);require(file_sha(cache/'metadata.json')==result['cache_metadata_sha256'],'immutable cache receipt differs')
@@ -305,9 +308,11 @@ def run(plan,path,*,checkpoint,prepared,pool,gender_policy,device='cuda',resume=
         # Collection stall time excludes the separately supervised training phase.
         progress.last+=time.monotonic()-train_started
         current=book.path/f'checkpoint-{iteration}.pt';require(not current.exists(),'exclusive checkpoint output')
-        neural.save_transformer_checkpoint(current,model,result=result)
-        archive=book.path/f'weights-{iteration}.npz';champion.export(current,archive)
-        book.emit('TRAIN_END',iteration=iteration,checkpoint=current.name,checkpoint_sha256=file_sha(current),archive=archive.name,archive_sha256=file_sha(archive))
+        current_receipt=save_champion_transformer(current,model,result=result)
+        archive=book.path/f'weights-{iteration}.npz';champion.export(current,archive,
+            off_provenance=off_from_receipt(current_receipt) if not model_config.self_moves else None)
+        book.emit('TRAIN_END',iteration=iteration,checkpoint=current.name,checkpoint_sha256=file_sha(current),archive=archive.name,
+            archive_sha256=file_sha(archive),encoding_receipt=current_receipt)
         declared=end
     ending=dict(declared_games=declared,checkpoint=str(current.relative_to(book.path)),checkpoint_sha256=file_sha(current))
     prior=book.matching('CANARY_TRAINING_END')

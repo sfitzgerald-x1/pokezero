@@ -111,22 +111,23 @@ class ContractCheckTests(unittest.TestCase):
                 JaxBackend(replace(contract, self_moves=not on), catalog=catalog, battle_id='bad', owner='p1', stream_id=2)
 
     @unittest.skipUnless(importlib.util.find_spec('jax'), 'requires isolated JAX')
-    def test_v5_load_factory_refuses_an_archive_declaration_mismatch(self):
-        """V5 serving (review B1): the archive's meta['self_moves'], the contract and the catalog must agree. Agreeing
-        cases pass the check and stop at the next binding check (checkpoint b*64 is not the contract's)."""
+    def test_v5_load_factory_takes_the_archive_declaration(self):
+        """V5 serving: load_factory TAKES the archive's meta['self_moves'] (take_declaration). Agreeing declarations pass
+        unchanged to the next binding check (checkpoint b*64 is not the contract's); a non-bool one is refused. Taking a
+        differing declaration (the catalog recompiled on) is tests/test_self_moves_run.py's ServingEndpointTests."""
         from dataclasses import replace
         from gpu_engine import v5_live_protocol as v5
         from pokezero.live_protocol_actor import ActorContract
         off = ActorContract.champion(); on = replace(off, self_moves=True)
         kwargs = dict(expected_archive_sha256='a' * 64, expected_checkpoint_sha256='b' * 64,
                       expected_category_vocabulary_sha256='c' * 64, expected_label_vocabulary_sha256='d' * 64, enable_v5=True)
-        for meta, contract, catalog_on, ok in (({}, off, False, True), ({'self_moves': True}, on, True, True),
-                                               ({'self_moves': True}, off, False, False), ({}, on, True, False),
-                                               ({'self_moves': True}, on, False, False), ({}, off, True, False)):
+        for meta, contract, catalog_on, message in (({}, off, False, 'same explicit v5 archive'),
+                                                    ({'self_moves': True}, on, True, 'same explicit v5 archive'),
+                                                    ({'self_moves': 1}, off, False, 'must be a bool')):
             catalog = SimpleNamespace(masks=SimpleNamespace(self_moves=catalog_on))
             with (mock.patch.object(v5, 'CompiledEncoderFunctions'),
                   mock.patch.object(v5.model, 'load', return_value=({}, None, meta)),
-                  self.assertRaisesRegex(ValueError, 'same explicit v5 archive' if ok else 'self_moves declaration differs')):
+                  self.assertRaisesRegex(ValueError, message)):
                 v5.load_factory('archive.npz', catalog=catalog, contract=contract, **kwargs)
 
     @unittest.skipUnless(importlib.util.find_spec('jax'), 'requires isolated JAX')
