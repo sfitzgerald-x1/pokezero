@@ -87,4 +87,38 @@ class ReplayBoundaryTests(unittest.TestCase):
                 capture=capture, attestation=attestation)
 
 
+class JaxSnapshotOrderingTests(unittest.TestCase):
+    def test_constructor_template_matches_actual_device_get_dictionary_order(self):
+        import jax
+        State = namedtuple('StorageState', 'hp keys optional')
+        raw = State(np.zeros((2, 2, 6), np.int32), np.zeros((2, 2), np.uint32), None)
+        actual = jax.device_get(dict(raw=raw, initial_tie=np.zeros(2, np.int32), streams=np.arange(2, dtype=np.int32)))
+        with tempfile.TemporaryDirectory() as directory:
+            reference = attestation.save_snapshot(directory, 'constructor', actual, source=SOURCE)
+            wrong = dict(raw=raw, initial_tie=np.zeros(2, np.int32), streams=np.zeros(2, np.int32))
+            with self.assertRaisesRegex(ValueError, 'template'):attestation.load_snapshot(directory, reference, wrong, expected_source=SOURCE)
+            value = attestation.load_snapshot(directory, reference, replay.constructor_template(raw, rows=2), expected_source=SOURCE)
+            np.testing.assert_array_equal(value['streams'], [0, 1]);self.assertIsNone(value['raw'].optional)
+
+    def test_scan_axis_preserves_captured_outer_order_and_validates_every_leaf(self):
+        import jax
+        State = namedtuple('StorageState', 'hp keys optional')
+        Trackers = namedtuple('StorageTrackers', 'damage_history optional')
+        Chance = namedtuple('StorageChance', 'draws phazing secondary sleep_talk entry_ties initial_tie effect')
+        state = State(np.zeros((2, 2, 6), np.int32), np.zeros((2, 2), np.uint32), None)
+        public = Trackers({'taken':np.zeros((2, 2, 2, 2), np.float32)}, None)
+        base = replay.input_template(state, public, rows=2, chance_type=Chance)
+        # Producer created this mapping after device_get, retaining this order.
+        actual = {key:jax.tree.map(lambda value:np.stack([np.asarray(value)]*4), value) for key,value in base.items()}
+        with tempfile.TemporaryDirectory() as directory:
+            reference = attestation.save_snapshot(directory, 'prefix', actual, source=SOURCE)
+            wrong = jax.tree.map(lambda value:np.stack([np.asarray(value)]*4), base)
+            with self.assertRaisesRegex(ValueError, 'template'):attestation.load_snapshot(directory, reference, wrong, expected_source=SOURCE)
+            template = replay.scanned_template(base, steps=4)
+            restored = attestation.load_snapshot(directory, reference, template, expected_source=SOURCE)
+            capture.assert_tree_bits(actual, restored)
+            template['actions'] = template['actions'].astype(np.int64)
+            with self.assertRaisesRegex(ValueError, 'template'):attestation.load_snapshot(directory, reference, template, expected_source=SOURCE)
+
+
 if __name__ == '__main__':unittest.main()

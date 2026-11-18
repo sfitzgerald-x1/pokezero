@@ -13,6 +13,20 @@ from gpu_engine import fresh200_capture as capture, fresh200_driver as driver
 
 
 class EntryGuardTests(unittest.TestCase):
+    def test_replay_attempt_names_are_bounded_and_cannot_name_a_collection(self):
+        self.assertEqual(driver.stage_name('collect', None), 'collect')
+        self.assertEqual(driver.stage_name('replay', 'r62'), 'replay-r62')
+        for stage, attempt in (('collect', 'r62'), ('replay', '../overwrite'), ('replay', 'x'*33), ('replay', '')):
+            with self.subTest(stage=stage, attempt=attempt), self.assertRaises(ValueError):driver.stage_name(stage, attempt)
+
+    def test_new_adapter_keeps_the_exact_original_capture_producer(self):
+        original = dict(engine_commit='1'*40, producer_commit='2'*40, entry_sha256='3'*64, runtime_sha256='4'*64)
+        self.assertIs(driver.capture_identity(original, dict(original), integration_commit='1'*40, runtime_digest='4'*64), original)
+        for key in original:
+            changed = dict(original);changed[key] = '5'*len(original[key])
+            with self.subTest(key=key), self.assertRaises(ValueError):
+                driver.capture_identity(changed, original, integration_commit='1'*40, runtime_digest='4'*64)
+
     def test_runtime_derivation_changes_only_source_commit(self):
         parent = dict(source_commit='1'*40, precision=dict(jax_x64=False), pool='literal')
         child = dict(parent, source_commit='2'*40)

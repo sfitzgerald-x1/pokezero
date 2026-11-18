@@ -38,6 +38,21 @@ def runtime_derivation(parent, derived, commit):
     return derived
 
 
+def stage_name(stage, attempt):
+    if attempt is None:return stage
+    if stage != 'replay' or not re.fullmatch('[a-z0-9][a-z0-9_-]{0,31}', attempt):
+        raise ValueError('bounded replay-only attempt identity required')
+    return stage+'-'+attempt
+
+
+def capture_identity(recorded, expected, *, integration_commit, runtime_digest):
+    """Keep the original producer/runtime pin across an adapter-only replay."""
+    if (recorded != expected or recorded.get('engine_commit') != integration_commit
+            or recorded.get('runtime_sha256') != runtime_digest):
+        raise ValueError('original integration capture identity changed')
+    return recorded
+
+
 def validate_launch(value, *, integration_commit, producer_commit, policy):
     if (value.get('schema') != 'pokezero.fresh200.launch.v1'
             or value.get('integration_commit') != integration_commit or value.get('producer_commit') != producer_commit
@@ -133,7 +148,9 @@ def main(argv=None):
     parser.add_argument('--arm', choices=('A', 'B'), default='B')
     parser.add_argument('--capture-reference', type=Path)
     parser.add_argument('--capture-reference-sha256')
+    parser.add_argument('--attempt')
     args = parser.parse_args(argv);started = time.monotonic()
+    stage = stage_name(args.stage, args.attempt)
     producer = check_source(args.producer_source, args.producer_commit)
     engine = check_source(args.engine_source, args.engine_commit)
     if Path(__file__).resolve() != producer/'gpu_engine/fresh200_driver.py':raise ValueError('execute the exact producer entry')
@@ -149,6 +166,7 @@ def main(argv=None):
     expected_inputs[args.stage+'_runtime'] = dict(path=str(args.runtime), sha256=args.runtime_sha256)
     if (any(launch_value.get('inputs', {}).get(name) != value for name, value in expected_inputs.items())
             or launch_value.get('arm') != args.arm
+            or launch_value.get('attempt') != args.attempt
             or args.stage == 'collect' and launch_value.get('reference_run') != str(args.reference_run)):
         raise ValueError('stage inputs differ from the prelaunch declaration')
     config = read_document(args.config, args.config_sha256)
@@ -173,14 +191,14 @@ def main(argv=None):
         device=dict(platform=device.platform, kind=device.device_kind, id=device.id, process_index=device.process_index),
         precision=dict(jax_x64=jax.config.jax_enable_x64, jax_matmul=jax.config.jax_default_matmul_precision,
             torch_matmul=torch.get_float32_matmul_precision()),
-        engine_commit=args.engine_commit, producer_commit=args.producer_commit,
+        engine_commit=args.engine_commit, producer_commit=args.producer_commit, attempt=args.attempt,
         helpers={name:attestation.sha256_file(producer/'gpu_engine'/name) for name in HELPERS})
     identity_bytes = canonical(identity)
     source = dict(engine_commit=args.engine_commit, producer_commit=args.producer_commit,
         entry_sha256=identity['helpers']['fresh200_driver.py'], runtime_sha256=hashlib.sha256(identity_bytes).hexdigest())
     root = args.out.resolve();root.mkdir(parents=True, exist_ok=True)
-    with (root/(args.stage+'-runtime-identity.json')).open('xb') as output:output.write(identity_bytes)
-    runtime_ref = attestation.seal_manifest(root, args.stage+'-runtime', identity, parents=[], source=source)
+    with (root/(stage+'-runtime-identity.json')).open('xb') as output:output.write(identity_bytes)
+    runtime_ref = attestation.seal_manifest(root, stage+'-runtime', identity, parents=[], source=source)
     if args.stage == 'collect':
         if args.reference_run is None:raise ValueError('original actor archive directory required')
         from gpu_engine import v2_bench_collector as bench
@@ -196,18 +214,25 @@ def main(argv=None):
         if args.capture_reference is None:raise ValueError('sealed capture reference required')
         reference = read_document(args.capture_reference, args.capture_reference_sha256)
         recorded = json.loads(attestation.verify_artifact(root, reference));original_source = recorded['source']
-        if (original_source['engine_commit'] != args.integration_commit or original_source['producer_commit'] != args.producer_commit
-                or original_source['entry_sha256'] != source['entry_sha256']
-                or original_source['runtime_sha256'] != attestation.sha256_file(root/'collect-runtime-identity.json')):
-            raise ValueError('integration capture source/runtime identity changed')
+        original_runtime_digest = attestation.sha256_file(root/'collect-runtime-identity.json')
+        expected = launch_value.get('capture_source', dict(engine_commit=args.integration_commit,
+            producer_commit=args.producer_commit, entry_sha256=source['entry_sha256'], runtime_sha256=original_runtime_digest))
+        capture_identity(original_source, expected, integration_commit=args.integration_commit,
+            runtime_digest=original_runtime_digest)
+        # A fixed adapter must not relabel the completed capture as its output.
+        original_entry = subprocess.check_output(['git', '-C', str(producer), 'show',
+            original_source['producer_commit']+':gpu_engine/fresh200_driver.py'])
+        if hashlib.sha256(original_entry).hexdigest() != original_source['entry_sha256']:
+            raise ValueError('original capture producer entry differs')
         replay = load_helper(producer, 'fresh200_replay.py')
         result = replay.replay(root, reference, prepared=context['prepared'], integration_source=original_source,
-            candidate_source=source, capture=capture, attestation=attestation, runtime_parent=runtime_ref)
+            candidate_source=source, capture=capture, attestation=attestation, runtime_parent=runtime_ref,
+            artifact_prefix='candidate' if args.attempt is None else 'candidate-'+args.attempt)
     assert_engine_modules(engine)
     document = json.loads(attestation.verify_artifact(root, result))
-    report = dict(stage=args.stage, reference=result, source=source, status=document['payload']['status'],
+    report = dict(stage=args.stage, attempt=args.attempt, reference=result, source=source, status=document['payload']['status'],
         seconds=time.monotonic()-started, qualification=False)
-    with (root/(args.stage+'-result.json')).open('xb') as output:output.write(canonical(report))
+    with (root/(stage+'-result.json')).open('xb') as output:output.write(canonical(report))
     print('FRESH200 '+json.dumps(report, sort_keys=True), flush=True)
     if report['status'] not in ('CAPTURED_ONLY', 'DEVICE_REPLAYED_ONLY'):raise SystemExit(1)
 
