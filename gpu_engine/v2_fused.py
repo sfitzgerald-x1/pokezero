@@ -171,6 +171,19 @@ def write_json(path, value):
     os.replace(temporary, path)
 
 
+def select_learner_precision(context, precision):
+    """Record an explicit learner override without changing the initial binding."""
+    plan = context['plan']
+    if precision is None:
+        return plan
+    from pokezero import v5_run as runs
+    plan = replace(plan, train=replace(plan.train, precision=precision))
+    context['plan'] = plan
+    context['declared'] = dict(context['declared'], learner_precision=precision,
+        effective_plan_sha256=runs._sha(plan.manifest()))
+    return plan
+
+
 def argument_parser():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--config', help='20k diagnostic config (smoke schema)')
@@ -187,6 +200,8 @@ def argument_parser():
         help='opt in to native category-embedding backward; must match on resume')
     parser.add_argument('--fallback-random', action='store_true',
         help='opt in to compiler native random/dropout (compiled modes); must match on resume')
+    parser.add_argument('--learner-precision', choices=('float32', 'bfloat16'), default=None,
+        help='explicit learner precision override; recorded in the effective plan and must match on resume')
     parser.add_argument('--order', default='ordered')
     parser.add_argument('--row-order', choices=('tick', 'file'), default=None,
         help='tick: collection order; file (default for new runs): the file pipeline cache order (block, frame, row, owner). '
@@ -218,6 +233,7 @@ def main(argv=None, *, distribution=None):
         plan = replace(plan, train=recipe_train(initial_train, args.recipe));context['plan'] = plan
         context['declared'] = dict(context['declared'], recipe=args.recipe,
             effective_plan_sha256=runs._sha(plan.manifest()))
+    plan = select_learner_precision(context, args.learner_precision)
     if distribution is not None:
         distribution.bind(context, args)
     if args.torch_memory_fraction > 0:
