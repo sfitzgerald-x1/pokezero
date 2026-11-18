@@ -56,6 +56,46 @@ class WorldSplit(unittest.TestCase):
         with patch.object(pw, 'world_range', self.original), self.assertRaisesRegex(RuntimeError, 'missing or replaced'):
             with ws.split(backend):pass
 
+    def test_synchronous_helper_fallback_preserves_results_and_owner_context(self):
+        with self.fixture.patches(), patch.object(self.con, 'prepare_root', return_value=self.prepared):
+            _, serial, legal = self.con.prepare({}, 0)
+            for k in (1, 2, 4):
+                bounds = []
+                def local(blobs):
+                    replies = []
+                    for blob in blobs:
+                        bounds.append(pp.pickle.loads(blob)[4:6])
+                        replies.append(ws.worker_range(self.con, blob))
+                        self.assertIs(ws._local.backend, backend)
+                    return replies
+                backend = ws.Backend(k, local)
+                with ws.split(backend):
+                    _, made, got_legal = self.con.prepare({}, 0)
+                self.assertEqual(self.fixture.signature(made), self.fixture.signature(serial))
+                self.assertEqual(got_legal, legal)
+                self.assertEqual(bounds, [(16*i//k, 16*(i+1)//k) for i in range(k)])
+                self.assertEqual(backend.parts['k'], k)
+                self.assertIsNone(ws._local.backend)
+
+    def test_failed_local_helper_restores_owner_context_before_retry(self):
+        def local(blobs):
+            def fail(*args, **kwargs):
+                raise ValueError('helper failed')
+            with patch.dict(ws._installed, world_range=fail):
+                with self.assertRaisesRegex(ValueError, 'helper failed'):
+                    ws.worker_range(self.con, blobs[0])
+            self.assertIs(ws._local.backend, backend)
+            replies = [ws.worker_range(self.con, blob) for blob in blobs]
+            self.assertIs(ws._local.backend, backend)
+            return replies
+        backend = ws.Backend(2, local)
+        with self.fixture.patches(), patch.object(self.con, 'prepare_root', return_value=self.prepared):
+            with ws.split(backend):
+                _, made, _ = self.con.prepare({}, 0)
+        self.assertEqual(len(made.worlds), 16)
+        self.assertEqual(backend.parts['k'], 2)
+        self.assertIsNone(ws._local.backend)
+
     def test_bypassed_hook_raises_even_when_serial_prepare_succeeds(self):
         backend = ws.Backend(2, self.dispatch)
         with self.fixture.patches(), patch.object(self.con, 'prepare_root', return_value=self.prepared):
