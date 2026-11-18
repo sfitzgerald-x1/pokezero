@@ -20,9 +20,18 @@ def worker_range(constructor, blob):
     from . import prepare_pool as pp, phase_d_protocol_world as protocol
     with jax.default_device(jax.devices('cpu')[0]):
         root, detached, lines, seed, start, stop, count = pp.pickle.loads(blob)
-        part = protocol.world_range(root, detached, start=start, stop=stop, lines=lines,
-            catalog=constructor.catalog, metadata=constructor.metadata, source=constructor.source,
-            config=constructor.owning_config, battle_id=root.context.battle_id, seed=seed, count=count)
+        had_backend = hasattr(_local, 'backend')
+        previous = getattr(_local, 'backend', None)
+        _local.backend = None
+        try:
+            part = protocol.world_range(root, detached, start=start, stop=stop, lines=lines,
+                catalog=constructor.catalog, metadata=constructor.metadata, source=constructor.source,
+                config=constructor.owning_config, battle_id=root.context.battle_id, seed=seed, count=count)
+        finally:
+            if had_backend:
+                _local.backend = previous
+            else:
+                del _local.backend
         jax.block_until_ready([(w.state, w.public) for w in part.worlds if w.state is not None])
     shells, packed = pp.pack_worlds(part.worlds)
     return pp.dumps((replace(part, root=None, worlds=()), shells, packed))
