@@ -9,6 +9,8 @@ import {fileURLToPath, pathToFileURL} from "node:url";
 import {referenceRestState, bindReferenceRestSources} from "./battle_bridge_reference_rest.mjs";
 import {restoreReferenceSleep} from "./battle_bridge_reference_sleep.mjs";
 import {restoreReferenceTrace} from "./battle_bridge_reference_trace.mjs";
+import {witnessCommandBegin, witnessCommandEnd, witnessSnapshotBegin, witnessSnapshotEnd}
+  from "./battle_bridge_witness_port.mjs";
 import {
   invalidatedBoundaryState,
   snapshotBoundaryRequests,
@@ -342,6 +344,8 @@ function snapshotBattle(command) {
   if (!battle.battleStream?.battle) {
     throw new Error(`No simulator state for battleId ${battle.battleId}.`);
   }
+  const requestId = typeof command.requestId === "string" ? command.requestId : null;
+  witnessSnapshotBegin(battle.battleId, battle.battleStream.battle, requestId);
   // A just-resolved branch can be in the opposite transient too: its stream
   // cache already has the next actionable boundary while Showdown's direct
   // request API has not materialized it yet. A nonempty direct result replaces
@@ -356,16 +360,20 @@ function snapshotBattle(command) {
   battle.boundaryRequestGeneration = hasBoundaryRequests(battle.boundaryRequests)
     ? battle.boundaryGeneration
     : null;
+  const serialized = State.serializeBattle(battle.battleStream.battle);
+  const witness = witnessSnapshotEnd(battle.battleId, battle.battleStream.battle,
+    serialized, battle.boundaryRequests, requestId);
   emit({
     type: "snapshot",
     battleId: battle.battleId,
-    requestId: typeof command.requestId === "string" ? command.requestId : null,
+    requestId,
     snapshot: {
       // Keep the engine state API explicit: snapshots are cloned simulator worlds, never
       // protocol replays and never a serialization of the live decision environment.
-      battle: State.serializeBattle(battle.battleStream.battle),
+      battle: serialized,
       boundaryRequests: battle.boundaryRequests,
       terminalScheduled: battle.terminalScheduled,
+      ...(witness === undefined ? {} : {witness}),
     },
     nodeProcMs: elapsedNodeProcMs(startedAt),
   });
@@ -1920,6 +1928,9 @@ async function closeAll() {
 }
 
 async function handleCommand(command) {
+  const witnessToken = witnessCommandBegin(command);
+  let originalThrew = true;
+  try {
   switch (command.type) {
     case "start":
       await startBattle(command);
@@ -1971,10 +1982,15 @@ async function handleCommand(command) {
       break;
     case "close":
       await closeAll();
+      witnessCommandEnd(witnessToken, {originalThrew:false});
       process.exit(0);
       break;
     default:
       throw new Error(`Unsupported command type: ${command.type}`);
+  }
+  originalThrew = false;
+  } finally {
+    witnessCommandEnd(witnessToken, {originalThrew});
   }
 }
 

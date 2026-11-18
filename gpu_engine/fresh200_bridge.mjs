@@ -14,4 +14,20 @@ require('./chance_hooks.cjs').install(Battle,PRNG,
   row=>fs.appendFileSync(audit,JSON.stringify(row)+'\n'),
   ()=>fs.existsSync(initial)?JSON.parse(fs.readFileSync(initial,'utf8')):null,
   path.join(root,'dist/sim/pokemon.js'),{strictNoRng:true});
+const witnessControl=path.join(dir,'witness-control.json');
+if(fs.existsSync(witnessControl)){
+  const {setNativeWitness}=await import('../scripts/battle_bridge_witness_port.mjs');
+  const registry={nativeRoot:root,node:process.version,
+    helpers:Object.fromEntries(['fresh200_witness_core.cjs','fresh200_witness_bridge.cjs','chance_hooks.cjs','fresh200_bridge.mjs']
+      .map(name=>[name,require('node:crypto').createHash('sha256').update(fs.readFileSync(new URL(name,import.meta.url))).digest('hex')])),
+    bridge:require('node:crypto').createHash('sha256').update(fs.readFileSync(new URL('../scripts/battle_bridge.mjs',import.meta.url))).digest('hex'),
+    port:require('node:crypto').createHash('sha256').update(fs.readFileSync(new URL('../scripts/battle_bridge_witness_port.mjs',import.meta.url))).digest('hex'),
+    setPlayer:require('node:crypto').createHash('sha256').update(Function.prototype.toString.call(Battle.prototype.setPlayer)).digest('hex')};
+  const sourceRegistryHash=require('node:crypto').createHash('sha256').update(JSON.stringify(registry)+'\n').digest('hex');
+  fs.writeFileSync(path.join(dir,'witness-source-registry.json'),JSON.stringify({registry,sourceRegistryHash})+'\n',{flag:'wx'});
+  setNativeWitness(require('./fresh200_witness_bridge.cjs').createObserver({Battle,sourceRegistryHash,
+    loadControl:()=>JSON.parse(fs.readFileSync(witnessControl,'utf8')),
+    appendAudit:bytes=>fs.appendFileSync(path.join(dir,'witness-audit.jsonl'),bytes),
+    appendReceipt:bytes=>fs.appendFileSync(path.join(dir,'witness-receipts.jsonl'),bytes)}));
+}
 await import('../scripts/battle_bridge.mjs');
