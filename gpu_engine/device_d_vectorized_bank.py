@@ -27,7 +27,7 @@ def measure(plan,path,*,backend,enable_benchmark=False):
         raise ValueError('genuine vectorized D3 provider, reviewed queue2 and timings required')
     backend.check_plan(plan);store=runs.Store(path,plan,resume=False)
     setup=time.perf_counter()
-    runtime=training.create(plan.model,plan.loss,plan.train,enable_v5=True)
+    runtime=training.create(plan.model,plan.loss,plan.train,enable_v5=True,self_moves=plan.self_moves)
     checkpoint=store.checkpoint(runtime,iteration=-1);snapshot=store.snapshot(checkpoint,iteration=-1)
     actor_setup=time.perf_counter()-setup
     # Initial parameters and actor export exist, but no optimizer update runs.
