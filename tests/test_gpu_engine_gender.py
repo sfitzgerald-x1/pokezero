@@ -71,13 +71,15 @@ class GenderCorrespondenceTests(unittest.TestCase):
         result=f.canonical_jax_future(data,None,meta,certificate=native.certificate)
         self.assertIn('RETAINED_GENDER_CHANGED',{g.code for g in result.gaps})
 
-    def test_known_genders_do_not_admit_unsupported_positive_attraction_future(self):
+    def test_known_genders_and_infatuation_have_matching_complete_futures(self):
         data,meta=self.live();native=f.native_input_from_jax(data,None,meta,module=FAKE)
+        before=f.canonical_jax_future(data,None,meta,certificate=native.certificate)
         native.state.side_one.volatile_statuses={'attract'}
         result=f.canonical_native_future(native.state,native.certificate)
-        self.assertIn('NATIVE_UNREPRESENTED_VOLATILE',{g.code for g in result.gaps})
-        from gpu_engine.fidelity_panel import require_future, WholeSlotUnknown
-        with self.assertRaises(WholeSlotUnknown):require_future(result)
+        data['volatile'][0][0]=128
+        after=f.canonical_jax_future(data,None,meta,certificate=native.certificate)
+        self.assertEqual(result.key,after.key)
+        self.assertNotEqual(before.key,after.key)
 
 
 @unittest.skipUnless(importlib.util.find_spec('jax'),'requires isolated JAX')
@@ -142,6 +144,32 @@ class GenderInitializationTests(unittest.TestCase):
                        dict(self.policy,species=self.vocab[::-1])):
             with self.assertRaises(ValueError):self.g.initialize_genders(s,policy,self.vocab,
                 seed=17,domain=424242,root_ids=[0,1])
+
+    def test_real_constructor_helper_preserves_retained_values_and_fills_only_fresh_unknowns(self):
+        import hashlib
+        import numpy as np
+        from gpu_engine import engine_request_source as source, source_provenance as provenance
+        metadata=dict(vocabulary=dict(species=self.vocab),compiled_tree={'authored':'constructor-component'})
+        retained=np.array([[2,-1,0,1,2,1],[1,2,1,0,-1,2]],np.int32)
+        retained=np.frombuffer(retained.tobytes(),np.int32).reshape(2,6)
+        receipt=dict(pool_sha256='a'*64,metadata_sha256=provenance.mapping._metadata_sha(metadata),
+            arrays=dict(gender=dict(shape=[2,6],dtype='int32',sha256=hashlib.sha256(retained.tobytes()).hexdigest())))
+        pool=provenance.ConstructorPool({'gender':retained},json.dumps(metadata),provenance._json(receipt),provenance._sha(receipt))
+        policy=dict(self.policy,provenance=dict(showdown_commit=source.SHOWDOWN,compiled_tree=metadata['compiled_tree'],
+            pool_sha256=receipt['pool_sha256'],generator_sources={name:hashlib.sha256(
+                Path(source.__file__).with_name(name).read_bytes()).hexdigest()
+                for name in ('gender_policy.cjs','generate_teams.cjs')}))
+        s=self.live(1)._replace(species=self.j.full_like(self.live(1).species,3))
+        indices=np.array([[0,1]],np.int32)
+        storage=source._gender(s,pool,indices,None)
+        np.testing.assert_array_equal(storage.gender,retained[None])
+        result=source._gender(s,pool,indices,dict(policy=policy,seed=17,domain=424242,root_ids=[31]))
+        expected=np.where(retained<0,1,retained)[None]
+        np.testing.assert_array_equal(result.gender,expected)
+        complete=source._gender(result,type('Retained',(),{'arrays':{}})(),indices,None)
+        np.testing.assert_array_equal(complete.gender,expected)
+        for name in s._fields:
+            if name!='gender':np.testing.assert_array_equal(getattr(result,name),getattr(s,name),err_msg=name)
 
     def test_collector_startup_and_prefix_preserve_legacy_fields_actions_and_keys(self):
         import numpy as np

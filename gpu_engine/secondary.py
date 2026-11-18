@@ -1,4 +1,4 @@
-"""Selected Gen 3 self/target secondaries and Static, not full event coverage.
+"""Selected Gen 3 self/target secondaries and contact abilities, not full event coverage.
 
 The caller supplies one fixed [0,100) roll and the original Substitute-hit
 flag. Self effects survive Substitute damage and a target KO; target effects
@@ -52,6 +52,11 @@ EXTRA_CHANCES = {"silverwind": 10, "ancientpower": 10, "mudshot": 100,
 TARGET_DROPS = {"irontail": [0, -1, 0, 0, 0, 0, 0]}
 SELF_BOOSTS = {"steelwing": [0, 1, 0, 0, 0, 0, 0], "meteormash": [1, 0, 0, 0, 0, 0, 0]}
 CONFUSION_MOVES = ("signalbeam",)
+# Fidelity tier D: the 1/3 contact-status abilities besides Static (data/mods/gen3/abilities.ts poisonpoint 135-144,
+# flamebody 21-30, overriding gen4's 3/10).
+CONTACT_STATUS = {"poisonpoint": m.PSN, "flamebody": m.BRN}
+# Effect Spore's sample(['slp', 'par', 'psn']) order (data/mods/gen3/abilities.ts effectspore 12-20).
+EFFECT_SPORE_STATUS = (m.SLP, m.PAR, m.PSN)
 
 
 class SecondaryTable(NamedTuple):
@@ -77,6 +82,9 @@ class SecondaryTable(NamedTuple):
     self_boosts: jax.Array       # [M,7], secondary.self.boosts on the user (Steel Wing, Meteor Mash)
     confusion: jax.Array         # [M], secondary volatileStatus confusion (Signal Beam)
     own_tempo: jax.Array         # [A], onTryAddVolatile refuses confusion
+    # Fidelity tier D (appended): the other contact-status abilities (data/mods/gen3/abilities.ts).
+    contact_status: jax.Array    # [A], Poison Point psn / Flame Body brn at 1/3 (0: none; Static keeps `static`)
+    effect_spore: jax.Array      # [A], Effect Spore: 1/10, then slp/par/psn uniformly
 
 
 def from_metadata(metadata):
@@ -107,7 +115,9 @@ def from_metadata(metadata):
         jnp.asarray([name in {'silverwind', 'ancientpower'} for name in vocab['moves']]),
         flags({'synchronize'}),flags({'roughskin'}),flags({'colorchange'}),
         stages(TARGET_DROPS),stages(SELF_BOOSTS),
-        jnp.asarray([name in CONFUSION_MOVES for name in vocab['moves']]),flags({'owntempo'}))
+        jnp.asarray([name in CONFUSION_MOVES for name in vocab['moves']]),flags({'owntempo'}),
+        jnp.asarray([CONTACT_STATUS.get(name, m.NONE) for name in vocab['abilities']], jnp.int32),
+        flags({'effectspore'}))
 
 
 def apply_color_change(state,side,move_type,table,*,eligible,_status_trace=None,_direct_hit_context=None,move=None,_device_public=None):
@@ -133,6 +143,23 @@ def apply_color_change(state,side,move_type,table,*,eligible,_status_trace=None,
         _status_trace=callbacks.finish(_status_trace,pending,state)
         return state,_status_trace
     return state
+
+
+def synchronize_reflects(state, source, afflicted, status, table, *, applied):
+    """(reflected status, [B] mask): after_status_event's Synchronize reflection of a fresh status onto its source.
+
+    For Pursuit's intercept reveal masks (apply_contact's _reveal_masks). These statements are after_status_event's own,
+    kept inline there (tests/test_gpu_engine_engine_item_callbacks.py certifies that function's AST against b8092a85);
+    tests/test_gpu_engine_fidelity_tier_d.py pins the two copies equal."""
+    rows=jnp.arange(state.hp.shape[0])
+    own,target=state.active[rows,source],state.active[rows,afflicted]
+    reflected=jnp.where(status==m.TOX,m.PSN,status)
+    reflects=(jnp.asarray(applied) & (source!=afflicted)
+        & table.synchronize[state.ability[rows,afflicted,target]]
+        & ((status==m.PAR)|(status==m.BRN)|(status==m.PSN)|(status==m.TOX))
+        & (state.hp[rows,source,own]>0) & (state.status[rows,source,own]==m.NONE)
+        & status_allowed(table,reflected,state.types[rows,source,own],state.ability[rows,source,own]))
+    return reflected,reflects
 
 
 def after_status_event(state, source, afflicted, status, table, *, applied, item_table=None, _status_trace=None, _device_public=None):
@@ -191,42 +218,91 @@ def after_status_event(state, source, afflicted, status, table, *, applied, item
 
 
 def apply_contact(state, side, move, roll, table, *, eligible, item_table=None, _status_trace=None,
-                  _rough_skin_context=None, _rough_skin_capture=None, _device_public=None):
-    """Gen3 Static and Rough Skin onDamagingHit, before Lum/recoil.
+                  _rough_skin_context=None, _rough_skin_capture=None, _device_public=None, sleep_roll=None,
+                  _reveal_masks=False, infatuation_table=None):
+    """Gen3 contact onDamagingHit abilities (Static, Poison Point, Flame Body, Effect Spore, Rough Skin), before Lum/recoil.
 
-    The existing uniform [0,60) auxiliary draw gives exactly 20/60 = 1/3.
-    It is shared with phazing only across mutually exclusive dispatched moves:
-    the pinned Gen3 Roar/Whirlwind have no contact flag. A source plan rejects
-    a table claiming both consumers for one move. Saved phazing draws already
-    survive interrupted turns. No percentile approximation or extra key draw.
+    The existing uniform [0,60) auxiliary draw (the attacker's phazing[s]) gives Static's, Poison Point's and Flame
+    Body's randomChance(1, 3) exactly as roll < 20 (data/mods/gen3/abilities.ts static, poisonpoint, flamebody).
+    Fidelity tier D: Effect Spore's randomChance(1, 10) is roll < 6 and its following sample(['slp', 'par', 'psn'])
+    is that list's [roll // 2]: 2/60 = 1/30 each, the exact joint law of the two calls (the sample runs only after
+    the chance passed). The roll is shared with phazing only across mutually exclusive dispatched moves: the pinned
+    Gen3 Roar/Whirlwind have no contact flag. A source plan rejects a table claiming both consumers for one move,
+    and one claiming a multi-hit contact move (one roll per action cannot serve one DamagingHit per hit; the Gen 3
+    pool's only multi-hit move, Bonemerang, is not contact). Saved phazing draws already survive interrupted turns.
+    No percentile approximation or extra key draw.
+
+    Each ability calls source.trySetStatus(status, holder): an attacker at 0 HP or already statused is untouched
+    (setStatus: a same status returns false, trySetStatus passes the existing one), then runStatusImmunity (Poison and
+    Steel against psn, Fire against brn; Gen 3 has no par type immunity) and the SetStatus event (Limber, Immunity,
+    Water Veil, Insomnia, Vital Spirit: ability_immunity; Sleep Clause Mod against a foe-made sleep while another
+    living member of the attacker's side sleeps from a foe, data/rulesets.ts sleepclausemod). The Effect Spore sleep's
+    slp onStart (data/mods/gen3/conditions.ts) rolls random(2, 6): `sleep_roll` is the attacker's effect[s][2]
+    (2 + draw), Yawn's residual column. A Yawn sleep of that side reads it again in the same step only if this sleep
+    was cured at once (a Lum Berry; the slept mon is that side's only active between its action and the residual, and a
+    still-asleep holder's yawn finds it statused): the cure discards the first value, so the step's law stays exact.
+    psn/brn/par print -status|ATTACKER|X|[from] ability: NAME|[of] HOLDER (data/conditions.ts), which reveals the
+    holder's ability; Gen 3's slp onStart prints a plain -status|ATTACKER|slp (no [from]), which reveals nothing.
 
     Caller excludes original Substitute damage (even if it broke), misses,
-    immunity, Protect and zero damage. A KO of the Static holder still triggers;
+    immunity, Protect and zero damage. A KO of the ability holder still triggers;
     a fainted attacking source cannot receive status. Shield Dust and Serene
-    Grace do not affect this ability event; Limber and existing status do.
+    Grace do not affect this ability event; the attacker's own Substitute does not either.
+
+    _reveal_masks (Pursuit's intercept, which runs without device hooks): also return the [B] masks of the public
+    ability reveals this event's lines make, (the holder's: a -status [from] ability [of] HOLDER or a Rough Skin -damage
+    line; the attacker's: Synchronize reflecting it), for the caller's device pass.
     """
+    if sleep_roll is None:
+        raise ValueError('sleep_roll required: the attacker\'s effect[s][2] (an Effect Spore sleep\'s 2+draw)')
+    from .effects import sleep_clause_blocked
     rows = jnp.arange(state.hp.shape[0]); foe = 1-side
     own, target = state.active[rows, side], state.active[rows, foe]
     ability = state.ability[rows, side, own]
-    proc = (jnp.asarray(eligible) & table.contact[move]
-        & table.static[state.ability[rows, foe, target]] & (jnp.asarray(roll) < 20)
+    holder = state.ability[rows, foe, target]
+    roll = jnp.asarray(roll)
+    attracted=jnp.zeros_like(jnp.asarray(eligible),dtype=jnp.bool_)
+    if infatuation_table is not None:
+        from . import infatuation
+        state,attracted=infatuation.apply(state,side,infatuation_table,
+            eligible=jnp.asarray(eligible) & table.contact[move]
+                & infatuation_table.cute_charm[holder] & (roll<20))
+        if _device_public is not None:device_public.reveal_ability(_device_public,state,foe,attracted)
+        if _status_trace is not None:
+            from . import engine_status_callbacks as callbacks
+            _status_trace=callbacks.unknown(_status_trace,attracted)
+    spore = table.effect_spore[holder]
+    status = jnp.where(table.static[holder], m.PAR, table.contact_status[holder])
+    status = jnp.where(spore, jnp.asarray(EFFECT_SPORE_STATUS, jnp.int32)[jnp.clip(roll // 2, 0, 2)], status)
+    rolled = jnp.where(spore, roll < 6, roll < 20) & (status != m.NONE)
+    proc = (jnp.asarray(eligible) & table.contact[move] & rolled
         & (state.hp[rows, side, own] > 0) & (state.status[rows, side, own] == m.NONE)
-        & ~table.ability_immunity[ability, m.PAR])
+        & status_allowed(table, status, state.types[rows, side, own], ability)
+        & ~((status == m.SLP) & sleep_clause_blocked(state, side)))
+    slept = proc & (status == m.SLP)
     if _status_trace is not None:
         from . import engine_status_callbacks as callbacks
         _status_trace=callbacks.unknown(_status_trace,proc)
     state=state._replace(
-        status=state.status.at[rows, side, own].set(jnp.where(proc, m.PAR, state.status[rows, side, own])),
+        status=state.status.at[rows, side, own].set(jnp.where(proc, status, state.status[rows, side, own])),
         status_counter=state.status_counter.at[rows, side, own].set(
-            jnp.where(proc, 0, state.status_counter[rows, side, own])))
+            jnp.where(proc, jnp.where(slept, 2 + jnp.asarray(sleep_roll, jnp.int32), 0),
+                state.status_counter[rows, side, own])),
+        sleep_skipped=state.sleep_skipped.at[rows, side, own].set(
+            jnp.where(slept, 0, state.sleep_skipped[rows, side, own])),
+        rest_origin=state.rest_origin.at[rows, side, own].set(
+            state.rest_origin[rows, side, own] & ~slept))
     if _device_public is not None:
-        device_public.reveal_ability(_device_public,state,foe,proc)
+        device_public.reveal_ability(_device_public,state,foe,proc & ~slept)
         device_public.observe(_device_public,state,proc)
+    if _reveal_masks:
+        holder_reveal=(proc & ~slept) | attracted
+        _,attacker_reveal=synchronize_reflects(state,foe,side,status,table,applied=proc)
     if _status_trace is not None:
-        state,_status_trace=after_status_event(state,foe,side,jnp.full(state.hp.shape[0],m.PAR),table,
+        state,_status_trace=after_status_event(state,foe,side,status,table,
             applied=proc,item_table=item_table,_status_trace=_status_trace,_device_public=_device_public)
     else:
-        state=after_status_event(state,foe,side,jnp.full(state.hp.shape[0],m.PAR),table,
+        state=after_status_event(state,foe,side,status,table,
             applied=proc,item_table=item_table,_device_public=_device_public)
     # Original Gen3 roughskin.onDamagingHit: Battle.damage floors and clamps
     # baseMaxhp/16 to at least one, capped by living source HP. No RNG draw.
@@ -243,6 +319,8 @@ def apply_contact(state, side, move, roll, table, *, eligible, item_table=None, 
     if _status_trace is not None:
         _status_trace=rough_callbacks.record(_status_trace,pending,state)
         return state,_status_trace
+    if _reveal_masks:
+        return state,holder_reveal | rough,attacker_reveal
     return state
 
 

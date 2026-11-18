@@ -1,0 +1,52 @@
+{
+ "battles": 4000,
+ "durations": {
+  "3": 996,
+  "4": 1022,
+  "5": 1004,
+  "6": 978
+ },
+ "holder_request_trapped": 4000,
+ "remaining_after_k_ticks": {
+  "0": {
+   "3": 996,
+   "4": 1022,
+   "5": 1004,
+   "6": 978
+  },
+  "1": {
+   "2": 996,
+   "3": 1022,
+   "4": 1004,
+   "5": 978
+  },
+  "2": {
+   "1": 996,
+   "2": 1022,
+   "3": 1004,
+   "4": 978
+  },
+  "3": {
+   "1": 1022,
+   "2": 1004,
+   "3": 978
+  },
+  "4": {
+   "1": 1004,
+   "2": 978
+  },
+  "5": {
+   "1": 978
+  }
+ },
+ "sample_lines": [
+  "|-activate|p2a: Snorlax|move: Wrap|[of] p1a: Arbok",
+  "|-damage|p2a: Snorlax|417/461|[from] move: Wrap|[partiallytrapped]",
+  "|-end|p2a: Snorlax|Wrap|[partiallytrapped]"
+ ],
+ "source": "Showdown f76228a1 (the CI runtime build), gen3customgame: p1 Arbok (Wrap, Splash) Wraps p2 Snorlax (Splash; Blissey on the bench) until it hits, then both Splash until |-end|p2a: Snorlax|Wrap|[partiallytrapped]; 4,000 battles, each seeded with four 16-bit words of a fixed integer hash of its index (structured seeds such as [i+1, 7i+3, 13i+5, 101+i] correlate the duration roll with the accuracy roll before it and skew this table by up to 11%). durations[D] = how often the trap held D residuals (from its -activate line to its -end line, the ending residual included); remaining_after_k_ticks[k][r] = how often the duration still held after k [partiallytrapped] ticks was r = D - k; ticks_equal_duration_minus_one = battles with exactly D - 1 ticks; holder_request_trapped = battles whose holder request showed trapped; sample_lines = the start, a tick and the end; trapper_leaves = 200 battles where Arbok switches out after the hit: the next residual's line. Script: reports trap-walls-20261115/wrap_sim.js.",
+ "ticks_equal_duration_minus_one": 4000,
+ "trapper_leaves": {
+  "|-end|p2a: Snorlax|Wrap|[partiallytrapped]|[silent]": 200
+ }
+}

@@ -16,10 +16,14 @@ import jax.numpy as j
 import numpy as np
 
 from pokezero.dex import normalize_id
+from pokezero.tier2 import canonical_move_id
 from pokezero.engine_world import battle_spec_from_payload,EngineWorldUnsupported,unpack_team,_engine_species_id
 from pokezero.env import BattleStartOverride
 from pokezero.v5_teacher_public_root import PublicRoot,capture_root
-from pokezero.determinization import _gen3_randbat_belief_start_override_result
+from pokezero.determinization import _gen3_randbat_belief_start_override_result,player_belief_view_from_payload
+from pokezero import set_posterior
+# The game-line rule (and its hash) moved to set_posterior, whose provenance hashes the same lines; re-exported here.
+from pokezero.set_posterior import NON_GAME_LINE_TAGS,game_lines_sha256
 from . import device_public_worlds as public_worlds,device_public_world_state as states
 from . import phase_d_live_worlds as live,phase_d_tail as tail
 from .v5_hypothetical_state import map_spec
@@ -32,6 +36,20 @@ SCHEMA='pokezero.phase-d.protocol-materialization.v1'
 # (_device), instead of ~800 eager device ops per world. False keeps the eager device build, the byte-for-byte reference
 # the parity tests compare against.
 HOST_WORLDS=True
+
+
+# set_posterior on the protocol route, three switches:
+# - SET_POSTERIOR_DRAW: each revealed foe's set is drawn from set_posterior (its hard facts, today's reveals, times the damage
+#   likelihood of its public strikes on our active) instead of uniformly over the hard-fact survivors. With equal weights the
+#   draw is today's call, so the worlds of roots without damage narrowing are byte-identical. False: today's uniform draw.
+# - SET_POSTERIOR_CHECK: the hard support is checked against B2's public posterior in both directions (_check_set_posterior),
+#   beside today's one-way sampled-foe check. False: the one-way check alone.
+# - SET_POSTERIOR_CHECK_FATAL: a disagreement refuses the root's worlds (PUBLIC_SET_POSTERIOR_B2_DISAGREEMENT); False writes
+#   the same row, non-fatal, and the world goes on.
+# Every world either switch touches carries a non-fatal PUBLIC_SET_POSTERIOR row (_set_posterior_row).
+SET_POSTERIOR_DRAW=True
+SET_POSTERIOR_CHECK=True
+SET_POSTERIOR_CHECK_FATAL=True
 
 
 def _device(state):
@@ -97,12 +115,14 @@ def _chronology(lines):
 
 def preflight_checks(payload,removed=None):
     """Same predicates used by production and collect-all; missing is UNKNOWN."""
-    checks=[dict(kind='native-probed-hard-trapped-own-request',status='TRIGGERED' if payload.get('selfActiveRequestState',{}).get('trapped') else 'CLEAR',fatal=True),
-        dict(kind='deferred-baton-phase',status='TRIGGERED' if payload.get('pendingBatonPassSides') else 'CLEAR',fatal=True)]
+    # A request `trapped` is not probed here: battle_spec_from_payload requires the sampled world to reproduce it
+    # (engine_world._require_world_reproduces_trap) and the device derives it per request (transition.action_mask).
+    checks=[dict(kind='deferred-baton-phase',status='TRIGGERED' if payload.get('pendingBatonPassSides') else 'CLEAR',fatal=True)]
     for seat,side in payload['sides'].items():
-        # encore is not refused: its count is drawn from the public posterior (_encore_facts, _write_encores); trapped,
-        # solarbeam and a Mean Look trap still are.
-        fail=bool(side.get('meanlookTrap') or set(side['volatiles'])&{'trapped','solarbeam'})
+        # encore is not refused: its count is drawn from the public posterior (_encore_facts, _write_encores); nor is a Mean
+        # Look trap on our own active (no clock: _write_own_meanlook links it to the world's trapper). trapped, solarbeam and
+        # a Mean Look trap on the opponent still are.
+        fail=bool(side.get('meanlookTrap') and seat!=payload.get('selfPlayer') or set(side['volatiles'])&{'trapped','solarbeam'})
         checks.append(dict(kind='native-probed-or-hidden-volatile-clock',status='TRIGGERED' if fail else 'CLEAR',side=seat,fatal=True))
         blockers=side.get('materializationBlockers',())
         failed=[kind for kind in blockers if not (str(kind).startswith('item-state-removed:') and normalize_id(str(kind).split(':',1)[1]) in (removed or {}).get(seat,()))]
@@ -319,6 +339,124 @@ def _write_held_counts(physical,yawns,perish):
     return physical
 
 
+PARTIAL_TRAP_MOVES=frozenset(('wrap','bind','clamp','firespin','whirlpool','sandtomb'))   # pokezero.showdown._PARTIAL_TRAP_MOVES
+
+
+def wrap_support(k):
+    """The remaining partial-trap duration Showdown can hold after k residual ticks since the trap started: Gen 3 inherits
+    gen4's partiallytrapped durationCallback, random(3, 7) (data/mods/gen4/conditions.ts:110-118); each residual lowers the
+    duration first and at 0 ends it with |-end|X|<move>|[partiallytrapped] and no damage (sim/battle.ts:515-523, onEnd at
+    data/conditions.ts:245-247), else its onResidual (data/mods/gen5/conditions.ts:14-22) damages the holder,
+    |-damage|X|<hp>|[from] move: <move>|[partiallytrapped] (sim/battle.ts:2140-2141). Still trapped after k ticks means
+    D > k, so the remaining duration r = D - k (the engine's partial_trap_counter, transition.py's residual) is uniform on
+    this support (empty: the lines contradict a live trap)."""
+    return tuple(range(max(1,3-k),7-k))
+
+
+def _wrap_facts(lines):
+    """Per side (p1, p2): that side's live partial trap as the lines show it, or None without one. The trap starts at the
+    side's latest |-activate|<side>a: X|move: M|[of] <trapper> (partiallytrapped's onStart, data/conditions.ts:229-232; a
+    repeat hit on a trapped mon adds nothing and prints no line); it is over at a later |-end|<side>a: X|M|[partiallytrapped]
+    (silent or not: the duration, Rapid Spin, the holder's Substitute, a trapper gone at a residual) or a faint of the
+    side, and not this active's when the side's current active arrived after it or is another mon (a Baton Pass carries
+    the trap with no new line). The fact: k, the |-damage|<side>a: X|..|[partiallytrapped] ticks since the start; upkeeps,
+    the |upkeep| lines since (each residual since ticks or ends it, so a live trap has k == upkeeps); turns, the |turn|
+    lines since (B2's wrap_trap_turns, public_active.py's TURN clock); trapper_active, whether the [of] mon is the opposing
+    side's current active (its latest switch-in precedes the start)."""
+    rows=[str(x).split('|') for x in lines];out=[None,None]
+    arrivals=lambda seat:max((i for i,p in enumerate(rows) if len(p)>2 and p[1] in ('switch','drag','replace') and p[2].startswith(seat)),default=None)
+    for side in (0,1):
+        seat=f'p{side+1}a'
+        start=max((i for i,p in enumerate(rows) if len(p)>3 and p[1]=='-activate' and p[2].startswith(seat)
+            and p[3].startswith('move: ') and normalize_id(p[3][len('move: '):]) in PARTIAL_TRAP_MOVES),default=None)
+        if start is None:continue
+        later=rows[start+1:]
+        if any(len(p)>3 and p[1]=='-end' and p[2].startswith(seat) and normalize_id(p[3].removeprefix('move: ')) in PARTIAL_TRAP_MOVES
+                or len(p)>2 and p[1]=='faint' and p[2].startswith(seat) for p in later):continue
+        active=arrivals(seat)
+        if active is None or active>start or rows[active][2]!=rows[start][2]:continue
+        of=[x[len('[of] '):] for x in rows[start][4:] if x.startswith('[of] ')];trapper=arrivals(f'p{2-side}a')
+        out[side]=dict(k=sum(1 for p in later if len(p)>4 and p[1]=='-damage' and p[2].startswith(seat) and '[partiallytrapped]' in p[4:]),
+            upkeeps=sum(1 for p in later if p[1:2]==['upkeep']),turns=sum(1 for p in later if p[1:2]==['turn']),
+            trapper_active=len(of)==1 and trapper is not None and trapper<start and rows[trapper][2]==of[0])
+    return tuple(out)
+
+
+def _defer_traps(payload,owner):
+    """Typed bridge projection: the payload without each side's partiallytrapped volatile (the CPU materializer refuses it,
+    volatile_unsupported, as its remaining duration is hidden; _write_wraps draws it per world) and without our own Mean
+    Look flag (meanlookTrap: the CPU materializer would add the native-probed trapped volatile; _write_own_meanlook links the
+    world's trapper instead). When either cause is ours, our request's `trapped` leaves the projection too: the CPU world no
+    longer holds its cause (engine_world._require_world_reproduces_trap would refuse it), and the finished world's root mask
+    is checked against the request instead (OWN_REQUEST_TRAP_REPRODUCED). Returns (projection, our Mean Look, wrapped sides);
+    the payload itself when there is nothing to defer."""
+    seat=f'p{owner+1}'
+    wrapped=tuple(sorted(int(name[1])-1 for name,side in payload['sides'].items() if 'partiallytrapped' in side['volatiles']))
+    meanlook=bool(payload['sides'][seat].get('meanlookTrap'))
+    if not wrapped and not meanlook:return payload,False,()
+    projected=json.loads(json.dumps(payload))
+    for side in projected['sides'].values():side['volatiles']=[v for v in side['volatiles'] if v!='partiallytrapped']
+    if meanlook:projected['sides'][seat]['meanlookTrap']=False
+    request=projected.get('selfActiveRequestState')
+    if (meanlook or owner in wrapped) and isinstance(request,dict) and request.get('trapped'):request['trapped']=False
+    return projected,meanlook,wrapped
+
+
+def _wrap_agreement(facts,wrapped,detached,owner):
+    """Lines, payload and B2 agree on every side's partial trap: the payload holds partiallytrapped exactly where the lines
+    show a live trap (else PUBLIC_WRAP_PAYLOAD_DISAGREEMENT; payload without lines is _write_wraps' START refusal), and B2's
+    fold holds it on that active exactly there too, with its wrap_trap_turns (public turns elapsed) equal to the lines'
+    |turn| count since the start (else PUBLIC_WRAP_B2_DISAGREEMENT)."""
+    view=detached.view;bit=live.hooks.VOLATILE_NAMES.index('partiallytrapped');foe=1-owner
+    if any(view.get(name) is None for name in ('active','own_volatiles','volatiles')):
+        # A carry without B2's bags holds no partial trap: only lines and a payload that show none agree with it.
+        if wrapped or any(fact is not None for fact in facts):raise ValueError('PUBLIC_WRAP_B2_DISAGREEMENT')
+        return
+    own_at=int(np.asarray(detached.own['active']));shown=np.asarray(view['active'])[0].astype(bool)
+    held={owner:bool(np.asarray(view['own_volatiles'])[0,own_at,bit]),foe:bool((np.asarray(view['volatiles'])[0,:,bit]&shown).any())}
+    if not wrapped and not any(held.values()) and all(fact is None for fact in facts):return
+    clocks={owner:np.asarray(view['own_mon_features']['wrap_trap_turns'])[0,[own_at]],foe:np.asarray(view['mon_features']['wrap_trap_turns'])[0,shown]}
+    for side in (0,1):
+        if facts[side] is not None and side not in wrapped:raise ValueError('PUBLIC_WRAP_PAYLOAD_DISAGREEMENT')
+        if held[side]!=(side in wrapped):raise ValueError('PUBLIC_WRAP_B2_DISAGREEMENT')
+        if held[side] and facts[side] is not None and [int(x) for x in clocks[side]]!=[facts[side]['turns']]:
+            raise ValueError('PUBLIC_WRAP_B2_DISAGREEMENT')
+
+
+def _write_wraps(physical,wrapped,facts,seed):
+    """The world with each wrapped active's remaining partial-trap duration drawn uniformly from wrap_support (its own RNG
+    per world and side, as _write_encores) and its trapper, the opposing active, as this world's party index (the engine's
+    partial_trap_source: transition.py's residual releases the trap once that index is not the foe's living active, and
+    state.partially_trapped traps only while it is). Refuses: no live trap on the lines (PUBLIC_WRAP_START_UNAVAILABLE), a
+    support the lines rule out (PUBLIC_WRAP_COUNT_UNAVAILABLE), ticks that are not one per residual since the start
+    (PUBLIC_WRAP_TICK_DISAGREEMENT), or a trapper that is not the opposing current active (PUBLIC_WRAP_TRAPPER_NOT_ACTIVE)."""
+    for side in wrapped:
+        fact=facts[side]
+        if fact is None:raise ValueError('PUBLIC_WRAP_START_UNAVAILABLE')
+        support=wrap_support(fact['k'])
+        if not support:raise ValueError('PUBLIC_WRAP_COUNT_UNAVAILABLE')
+        if fact['k']!=fact['upkeeps']:raise ValueError('PUBLIC_WRAP_TICK_DISAGREEMENT')
+        if not fact['trapper_active']:raise ValueError('PUBLIC_WRAP_TRAPPER_NOT_ACTIVE')
+        at=int(physical.active[0,side]);count=random.Random(f'wrap:{seed}:{side}').choice(support)
+        physical=physical._replace(partial_trap_counter=tail._put(physical.partial_trap_counter,(0,side,at),count),
+            partial_trap_source=tail._put(physical.partial_trap_source,(0,side,at),int(physical.active[0,1-side])))
+    return physical
+
+
+def _write_own_meanlook(physical,detached,meanlook,owner):
+    """Our active's Mean Look / Spider Web / Block trap, linked to this world's trapper. B2's fold and the payload both clear
+    the flag at any switch, drag or faint of either active (pokezero.showdown._update_meanlook_trap and its parse loop), so
+    a live one was set by the opposing current active, and the trap has no clock (it lasts until either leaves). from_b2
+    wrote the link as 0, a coordinate of no world; it becomes the opposing active's party index here, as
+    device_public_world_state's materializer rebases it (the engine traps while trap_source is the foe's living active,
+    state.legal_actions). Refuses when B2 and the payload disagree (OWN_MEANLOOK_B2_PAYLOAD_DISAGREEMENT)."""
+    if bool((np.asarray(detached.own.get('trap_source',-1))>=0).any())!=meanlook:raise ValueError('OWN_MEANLOOK_B2_PAYLOAD_DISAGREEMENT')
+    if not meanlook:return physical
+    at=int(np.asarray(detached.own['active']))
+    if int(np.asarray(detached.own['trap_source'])[at])<0:raise ValueError('OWN_MEANLOOK_B2_PAYLOAD_DISAGREEMENT')
+    return physical._replace(trap_source=tail._put(physical.trap_source,(0,owner,at),int(physical.active[0,1-owner])))
+
+
 def _restore_sleep(physical,detached,metadata,sleepers,origins,rng,base_abilities,*,diagnostics=None):
     """Restore known status and draw hidden clock; no partial world escapes."""
     carry=detached.public;public_species=np.asarray(carry.species);present=np.asarray(carry.present)
@@ -425,6 +563,74 @@ def _host_arrays(seed,key):
     return arrays
 
 
+def _set_posteriors(inputs,root):
+    """The root's set posteriors (set_posterior.posterior over its owning lines and the belief view the start sampler filters
+    with), computed once per root and shared by its worlds."""
+    def compute():
+        context=root.context
+        view=player_belief_view_from_payload(context.observation.metadata.get('belief_view'))
+        if view is None:raise ValueError('PUBLIC_SET_POSTERIOR_BELIEF_UNAVAILABLE')
+        return set_posterior.posterior(inputs.lines,context.public_materialization_state.self_request,source=inputs.source.original,
+            owner=view.self_slot,beliefs=view.opponent_pokemon,format_id=context.format_id,dex=inputs.catalog.dex,
+            binding=inputs.source.binding_sha256)
+    return _once(inputs,root,'set_posterior',compute,shared=True)
+
+
+def _check_set_posterior(inputs,root,rows,diagnostics):
+    """The reverse of the sampled-foe check, at root level: set_posterior's hard support must equal B2's public posterior
+    (_revealed's eligible variants, `rows`) for every revealed foe species, as full variant identity (the source index, so
+    Hidden Power type too), in both directions. A disagreement writes a TRIGGERED row with the species and the variants only
+    one side holds; with SET_POSTERIOR_CHECK_FATAL every world of the root then refuses PUBLIC_SET_POSTERIOR_B2_DISAGREEMENT.
+    Damage-excluded variants are a strict subset by design, so the hard support is compared, never the weighted one. Returns
+    whether the two agree (the caller refuses)."""
+    b2={set_posterior.species_key(name):tuple(index for index,_ in candidates) for slot,universe,candidates,gender,name in rows}
+    posts=_set_posteriors(inputs,root);checked=set_posterior.two_way(posts,b2)
+    bad=[key for key,post in checked.items() if post.refusals]
+    if bad:
+        ours=lambda key:{i for i,h in enumerate(posts[key].hard) if h} if key in posts else set()
+        diagnostics.append(dict(kind=set_posterior.B2_DISAGREEMENT,status='TRIGGERED',fatal=SET_POSTERIOR_CHECK_FATAL,species=[dict(species=key,
+            set_posterior_only=sorted(ours(key)-set(b2.get(key,()))),b2_only=sorted(set(b2.get(key,()))-ours(key))) for key in bad]))
+    return not bad
+
+
+def _drawn_indices(source,mon):
+    """The source indices of the variants a sampled foe holds (its level, moves, ability and item): one, or several equal
+    variants of two roles; () when the start cannot be joined to the source."""
+    try:
+        moves=sorted(canonical_move_id(x) for x in mon.moves);universe=source.original.universe_for(mon.species)
+        return tuple(i for i,v in enumerate(universe.variants) if v.level==mon.level and sorted(canonical_move_id(x) for x in v.moves)==moves
+            and normalize_id(v.ability or '')==normalize_id(mon.ability or '') and normalize_id(v.item or '')==normalize_id(mon.item or ''))
+    except (AttributeError,KeyError,TypeError,ValueError):return ()
+
+
+def _set_posterior_row(inputs,root,rows,foes,diagnostics):
+    """The non-fatal PUBLIC_SET_POSTERIOR row of one world, for the replay: per revealed foe species set_posterior's hard and
+    weighted support sizes, strikes admitted and refused by reason (off-model drops among them), the variants this world
+    drew and their weight (0, a zero-weight draw: restrict's off-model fallback under the weighted draw, or a damage-excluded
+    set under today's uniform draw; TRIGGERED, still non-fatal), and the root's provenance; then the
+    two-way check when SET_POSTERIOR_CHECK. A posterior the root cannot give (no belief view) is NOT_EVALUABLE here unless
+    the fatal check needs it."""
+    try:posts=_set_posteriors(inputs,root)
+    except (ValueError,KeyError,IndexError,TypeError,AttributeError) as error:
+        diagnostics.append(dict(kind='PUBLIC_SET_POSTERIOR',status='NOT_EVALUABLE',fatal=False,reason=str(error)))
+        if SET_POSTERIOR_CHECK and SET_POSTERIOR_CHECK_FATAL:raise
+        return
+    species=[]
+    for key,post in posts.items():
+        row=set_posterior.summary(post);row.pop('provenance')
+        drawn=next((_drawn_indices(inputs.source,mon) for mon in foes if set_posterior.species_key(getattr(mon,'species',''))==key),None)
+        row.update(drawn=None if drawn is None else list(drawn),drawn_weight=None if not drawn else max(post.weights[i] for i in drawn))
+        species.append(row)
+    zero=[row['species'] for row in species if row['drawn_weight']==0]
+    record=dict(kind='PUBLIC_SET_POSTERIOR',status='TRIGGERED' if zero else 'CLEAR',fatal=False,
+        drawn_by='set_posterior' if SET_POSTERIOR_DRAW else 'uniform',zero_weight_draws=zero,
+        provenance=next((post.provenance for post in posts.values()),None),species=species,b2_agrees=None)
+    diagnostics.append(record)
+    if SET_POSTERIOR_CHECK:
+        record['b2_agrees']=_check_set_posterior(inputs,root,rows,diagnostics)
+        if not record['b2_agrees'] and SET_POSTERIOR_CHECK_FATAL:raise ValueError(set_posterior.B2_DISAGREEMENT)
+
+
 def materialize_protocol(root,start,*,inputs,seed,key=None):
     """Pure typed mapping with exact own request and no true-opponent donor."""
     if type(root)is not PublicRoot or type(start)is not BattleStartOverride or type(inputs)is not ProtocolInputs:
@@ -444,10 +650,13 @@ def materialize_protocol(root,start,*,inputs,seed,key=None):
         projected,sleepers=_defer_sleep(root.materialization_payload)
         projected=tail.defer_substitutes(projected,tail_facts['fresh_substitutes'])
         projected,yawns=_defer_yawn(projected,inputs.lines)
+        projected,own_meanlook,wrapped=_defer_traps(projected,owner)
         origins=_once(inputs,root,'origins',lambda:_sleep_origins(inputs.lines))
-        revealed={normalize_id(name):candidates for slot,universe,candidates,gender,name in
-                  _once(inputs,root,'revealed',lambda:tuple(public_worlds._revealed(detached,inputs.source)),shared=True)}
-        for mon in unpack_team(start.player_teams[f'p{foe+1}']):
+        rows=_once(inputs,root,'revealed',lambda:tuple(public_worlds._revealed(detached,inputs.source)),shared=True)
+        foes=unpack_team(start.player_teams[f'p{foe+1}'])
+        if SET_POSTERIOR_DRAW or SET_POSTERIOR_CHECK:_set_posterior_row(inputs,root,rows,foes,diagnostics)
+        revealed={normalize_id(name):candidates for slot,universe,candidates,gender,name in rows}
+        for mon in foes:
             candidates=revealed.get(normalize_id(mon.species))
             if candidates is None:continue
             move_key=lambda xs:tuple(sorted(live._source_move(x)for x in xs))
@@ -524,6 +733,33 @@ def materialize_protocol(root,start,*,inputs,seed,key=None):
         try:physical=_write_encores(physical,encored,_once(inputs,root,'encore_facts',lambda:_encore_facts(inputs.lines)) if encored else (None,None),
             seed,replacement=tail_facts['replacement'] is not None,owner=owner)
         except ValueError as error:failures.append(str(error))
+        # Traps with no public clock in the payload: our Mean Look link, and each side's partial trap (drawn per world).
+        try:
+            physical=_write_own_meanlook(physical,detached,own_meanlook,owner)
+            wrap_facts=_once(inputs,root,'wrap_facts',lambda:_wrap_facts(inputs.lines),shared=True)
+            _wrap_agreement(wrap_facts,wrapped,detached,owner)
+            physical=_write_wraps(physical,wrapped,wrap_facts,seed)
+        except ValueError as error:
+            failures.append(str(error))
+            if wrapped:diagnostics.append(dict(kind='PUBLIC_WRAP_WORLD_POSTERIOR',status='TRIGGERED',fatal=True,reason=str(error)))
+        else:
+            if wrapped:diagnostics.append(dict(kind='PUBLIC_WRAP_WORLD_POSTERIOR',status='CLEAR',fatal=True,
+                supports={side:list(wrap_support(wrap_facts[side]['k'])) for side in wrapped},
+                drawn={side:int(physical.partial_trap_counter[0,side,int(physical.active[0,side])]) for side in wrapped}))
+        if tail_facts['replacement'] is None and ((state.self_request.get('active')or[{}])[0]).get('trapped'):
+            # A known request trap must be this world's own: the device's root mask (ability traps, Mean Look's link,
+            # Ingrain, a charge) allows no switch. maybeTrapped accepts either outcome (it leaks nothing).
+            from types import SimpleNamespace
+            from . import combat,transition
+            mask=np.asarray(transition.action_mask(physical,SimpleNamespace(combat=combat.from_metadata(metadata))))[0,owner]
+            fail=bool(mask[4:].any())
+            diagnostics.append(dict(kind='OWN_REQUEST_TRAP_REPRODUCED',status='TRIGGERED' if fail else 'CLEAR',fatal=True))
+            if fail:failures.append('OWN_REQUEST_TRAP_NOT_REPRODUCED')
+        elif tail_facts['replacement'] is None and (own_meanlook or owner in wrapped):
+            # The other direction for a trap written on our active: Showdown traps it (tryTrap: trapped = true) and its
+            # request shows `trapped` whenever we have a living bench to switch to (getMoveRequestData's canSwitchIn).
+            at=int(physical.active[0,owner])
+            if any(int(physical.hp[0,owner,k])>0 for k in range(6) if k!=at):failures.append('OWN_TRAP_REQUEST_DISAGREEMENT')
         if failures:raise ValueError(failures[0])
         host=isinstance(physical.hp,np.ndarray)
         carry=(states._rebase_host if host else states._rebase)(detached,assignment,active,state=physical)
@@ -576,22 +812,6 @@ def diagnostic_inputs(public,detached,*,lines,metadata):
     return tuple(checks)
 
 
-# Showdown protocol lines that carry no game state: wall clock (|t:| is the turn's unix time, from sim/battle.ts; |:| a server
-# room log's; |inactive| / |inactiveoff| the timer) and room transport (chat, join, leave, rename, raw HTML). r4a3's owning
-# wire carries |t:| alone (25,823 of its lines); the rest are listed defensively (a server-relayed stream could carry them).
-# Filtering only feeds the seed hash, never a parser.
-NON_GAME_LINE_TAGS=frozenset(('t:',':','c','c:','chat','j','J','join','l','L','leave','n','N','name','raw','html','uhtml',
-    'uhtmlchange','inactive','inactiveoff'))
-
-
-def game_lines_sha256(lines):
-    """sha256 of the owner's protocol lines without the non-game ones (NON_GAME_LINE_TAGS), in the owner_lines_sha256 format:
-    the same game state hashes the same in every run, whatever the wall clock said. It seeds the drawn worlds;
-    owner_lines_sha256 stays the exact-bytes record of the root."""
-    keep=(x for x in lines if not (x.startswith('|') and x.split('|',2)[1] in NON_GAME_LINE_TAGS))
-    return hashlib.sha256(''.join(x+'\n'for x in keep).encode()).hexdigest()
-
-
 def world_seeds(root,detached,game_lines,seed,index):
     """World `index`'s (world_seed, kernel_seed): sha256 over the run's seed, the battle, the game content of the owner's lines
     (game_lines = game_lines_sha256(lines), never the exact bytes: |t:| would make the same state draw different worlds in
@@ -603,28 +823,88 @@ def world_seeds(root,detached,game_lines,seed,index):
 
 def sample(root,detached,*,lines,catalog,source,metadata,config,battle_id,seed,count):
     """Same public posterior draws and their prefix at all ladder budgets."""
-    from . import v5_public_world
     if count not in (2,8,16,32,64):raise ValueError('declared2/8/16/32/64 world budget required')
     if detached.source_binding_sha256!=source.binding_sha256:
         raise live.Refusal('SAME_PUBLIC_ROOT_SOURCE_BINDING_REQUIRED')
     detached=_carried_root(root,detached,lines,metadata)
+    return assemble((world_range(root,detached,start=0,stop=count,lines=lines,catalog=catalog,source=source,metadata=metadata,
+        config=config,battle_id=battle_id,seed=seed,count=count),),count=count)
+
+
+@dataclass(frozen=True)
+class WorldRange:
+    """Worlds [start, stop), with global indices and one carried root's provenance.
+
+    Completion may replace worlds in this range before assemble; it must retain
+    the indices, seeds, diagnostics and binding. Empty ranges are allowed.
+    """
+    start:int
+    stop:int
+    binding:tuple
+    root:object
+    worlds:tuple
+    seeds:tuple
+    requested_worlds:int
+    mapper_diagnostics:tuple
+
+
+def world_range(root,detached,*,start,stop,lines,catalog,source,metadata,config,battle_id,seed,count):
+    """Sample [start, stop) of an already carried root, without capture or B2 work.
+
+    Use ProtocolConstructor.prepare_root to obtain the carried root. Each range
+    owns its ProtocolInputs memo and batches its keys; the global world index
+    determines both seeds independently of the range and total world budget.
+    """
+    from . import v5_public_world
+    if type(count)is not int or count not in (2,8,16,32,64):raise ValueError('declared2/8/16/32/64 world budget required')
+    if type(start)is not int or type(stop)is not int or not 0<=start<=stop<=count:
+        raise ValueError('world range must satisfy 0 <= start <= stop <= count')
+    if detached.source_binding_sha256!=source.binding_sha256:
+        raise live.Refusal('SAME_PUBLIC_ROOT_SOURCE_BINDING_REQUIRED')
     inputs=ProtocolInputs(detached,tuple(lines),catalog,metadata,source)
     result=[];seeds=[];diagnostics=[];game=game_lines_sha256(lines)
-    pairs=[world_seeds(root,detached,game,seed,index) for index in range(count)]
-    keys=states.world_keys([kernel for _,kernel in pairs]) if HOST_WORLDS else [None]*count   # every world's key in one call
-    for index,(world_seed,kernel_seed) in enumerate(pairs):
+    binding=(root.context.battle_id,root.owner_lines_sha256,detached.address,source.binding_sha256,seed,game)
+    pairs=[world_seeds(root,detached,game,seed,index) for index in range(start,stop)]
+    keys=states.world_keys([kernel for _,kernel in pairs]) if HOST_WORLDS else [None]*len(pairs)
+    for offset,(world_seed,kernel_seed) in enumerate(pairs):
+        index=start+offset
         seeds.append(world_seed)
         try:
-            start,reason=_gen3_randbat_belief_start_override_result(context=root.context,set_source=source.original,
-                rng=random.Random(world_seed),team_size=6,canonicalize_revealed_variants=True)
-            if start is None:
+            sampled_start,reason=_gen3_randbat_belief_start_override_result(context=root.context,set_source=source.original,
+                rng=random.Random(world_seed),team_size=6,canonicalize_revealed_variants=True,
+                **(dict(set_posteriors=lambda:_set_posteriors(inputs,root)) if SET_POSTERIOR_DRAW else {}))
+            if sampled_start is None:
                 unknown=[];_downstream_unknowns(unknown,'Original public sampler unavailable: '+str(reason))
                 made=ProtocolWorld(None,None,(reason or 'public-sampler-unavailable',),mapper_diagnostics=tuple(unknown))
-            else:made=v5_public_world.materialize(root,start,prepared=inputs,history=None,own_static=None,seed=kernel_seed,host_key=keys[index])
+            else:made=v5_public_world.materialize(root,sampled_start,prepared=inputs,history=None,own_static=None,seed=kernel_seed,host_key=keys[offset])
             diagnostics.append(dict(world=index,checks=list(made.mapper_diagnostics)))
             result.append(states.World(index,made.state,made.public,made.refusals,kernel_seed,False))
         except (ValueError,KeyError,TypeError,IndexError)as error:
             unknown=[];_downstream_unknowns(unknown,'Production sample prerequisite refused: '+str(error))
             diagnostics.append(dict(world=index,checks=unknown))
             result.append(states.World(index,None,None,(str(error),),kernel_seed,False))
-    return live.WorldSet(detached,tuple(result),tuple(seeds),count,tuple(diagnostics))
+    return WorldRange(start,stop,binding,detached,tuple(result),tuple(seeds),count,tuple(diagnostics))
+
+
+def assemble(ranges,*,count):
+    """Gather one root's disjoint ranges in index order into the serial WorldSet.
+
+    Reject gaps, overlaps, mixed roots/budgets and changed world ordering rather
+    than silently dropping, duplicating or relabelling helper results.
+    """
+    ranges=tuple(ranges)
+    if type(count)is not int or count not in (2,8,16,32,64):raise ValueError('declared2/8/16/32/64 world budget required')
+    if not ranges or any(type(r)is not WorldRange for r in ranges):raise ValueError('WorldRange results required')
+    ranges=sorted(ranges,key=lambda r:(r.start,r.stop));first=ranges[0];cursor=0
+    worlds=[];seeds=[];diagnostics=[]
+    for part in ranges:
+        if part.binding!=first.binding or part.requested_worlds!=count:raise ValueError('same root and world budget required')
+        if type(part.start)is not int or type(part.stop)is not int or not cursor==part.start<=part.stop<=count:
+            raise ValueError('world ranges must cover the budget exactly once')
+        indices=tuple(range(part.start,part.stop))
+        if (tuple(w.index for w in part.worlds)!=indices or len(part.seeds)!=len(indices)
+                or tuple(d['world']for d in part.mapper_diagnostics)!=indices):
+            raise ValueError('world range indices, seeds and diagnostics must align')
+        worlds.extend(part.worlds);seeds.extend(part.seeds);diagnostics.extend(part.mapper_diagnostics);cursor=part.stop
+    if cursor!=count:raise ValueError('world ranges must cover the budget exactly once')
+    return live.WorldSet(first.root,tuple(worlds),tuple(seeds),count,tuple(diagnostics))

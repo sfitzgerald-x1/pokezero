@@ -12,7 +12,7 @@ import numpy as np
 
 from gpu_engine import device_selfplay_profile as p
 from gpu_engine.state import empty_state
-from gpu_engine.transition import ChanceInputs
+from gpu_engine.transition import ChanceInputs, EFFECT_BOUNDS
 from gpu_engine import engine_device_public_hooks as hooks
 
 
@@ -22,7 +22,7 @@ def fixture():
     s=s._replace(done=j.array([False,True,True,False]),species=mon(1),level=mon(80),
         hp=j.broadcast_to(j.arange(4,dtype=j.int32)[:,None,None]+50,(4,2,6)),max_hp=mon(100),gender=mon(1))
     public=hooks.initialize(s).trackers
-    chance=ChanceInputs(**{k:j.zeros((4,2,12)if k=='draws'else(4,)if k=='initial_tie'else(4,2,4)if k=='effect'else(4,2),j.int32)
+    chance=ChanceInputs(**{k:j.zeros((4,2,12)if k=='draws'else(4,)if k=='initial_tie'else(4,2,len(EFFECT_BOUNDS))if k=='effect'else(4,2),j.int32)
         for k in ChanceInputs._fields})
     return p.FixedInputs(s,public,j.zeros((4,2),j.int32),chance,~s.done)
 

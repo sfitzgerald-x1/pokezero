@@ -2,6 +2,7 @@
 the same peer wire lines are folded, only split across more feeds; an error drops the fold and is not raised; prepare_roots
 advances the fold only with the redaction on and the constructor's eager_peer_fold."""
 from types import SimpleNamespace
+from contextlib import contextmanager
 import unittest
 from unittest.mock import Mock, patch
 
@@ -18,9 +19,17 @@ class FakeAdapter:
         self.fed, self.fail = [], FakeAdapter.fail_next;FakeAdapter.fail_next = False;FakeAdapter.made.append(self)
 
     def reset(self, *, stream_id, battle_id):
+        assert self.checked
         self.reset_to = (stream_id, battle_id)
 
+    @contextmanager
+    def checked_catalog(self):
+        self.checked = True
+        try:yield self
+        finally:self.checked = False
+
     def feed(self, lines):
+        assert self.checked
         if self.fail:raise ValueError('JAX public fold refused boundary')
         if getattr(self, 'partway', False):   # a failure after part of the feed (B2's feed commits nothing then; the fake keeps the part)
             self.fed.append(tuple(lines[:1]));raise ValueError('JAX public fold refused boundary')

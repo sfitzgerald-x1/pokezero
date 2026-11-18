@@ -47,7 +47,7 @@ def hp_line(trackers, state, side, use, *, source_class):
     return trackers._replace(negative_items=State(values, known))
 
 
-def upkeep(trackers, belief_tables, leftovers, use, *, current_state=None):
+def upkeep(trackers, belief_tables, leftovers, use, *, current_state=None, living=None):
     """The original upkeep non-proc rules, Leftovers, Lum and the pinch berries, then expire evidence.
 
     B2's sweep (gpu_engine/public_item_nonproc.py sweep, its three triggers at :171-172) and the champion's Python
@@ -64,6 +64,10 @@ def upkeep(trackers, belief_tables, leftovers, use, *, current_state=None):
     Leftovers rule. The Lum and pinch IDs come from belief_tables.nonproc_items (engine_device_belief.compile_tables;
     tables without it skip those rules). Positive item reveals and mutations suppress these conclusions. Hard-mask
     inconsistency/fallback remains the original projector's concern.
+
+    ``living`` [B, 2] (None: none) marks an active the device has already observed fainted whose |faint| line Showdown prints
+    after this |upkeep: a Perish Song end-path faint (queued, printed by runAction's faintMessages after the residual,
+    sim/battle.ts:2838, 2856). B2's sweep at |upkeep still sees it alive at its last shown HP, so it is swept as living.
     """
     carry = trackers.negative_items
     if carry is None:
@@ -96,7 +100,9 @@ def upkeep(trackers, belief_tables, leftovers, use, *, current_state=None):
                 maximum = _li.take(current_state.max_hp,r,side,physical)
                 valid &= (maximum > 0) & (hp >= 0) & (hp <= maximum)
             valid &= (species > 0) & (species < belief_tables.item_mask.shape[0])
-            valid &= (_li.take(trackers.hp_percent,r,side,at) > 0) & ~_li.take(trackers.fainted,r,side,at)
+            alive = (_li.take(trackers.hp_percent,r,side,at) > 0) & ~_li.take(trackers.fainted,r,side,at)
+            if living is not None:alive |= j.broadcast_to(j.asarray(living, bool), (len(use), 2))[:, side]
+            valid &= alive
             valid &= (_li.take(trackers.shown_item,r,side,at) == 0) & ~changed
             known = _li.take(carry.known,r,side,at); percent = _li.take(carry.percent,r,side,at)
             physical = _li.take(trackers.active_physical,r,side); b = len(use)

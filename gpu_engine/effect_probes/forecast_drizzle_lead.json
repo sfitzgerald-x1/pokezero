@@ -1,0 +1,152 @@
+{
+ "schema": "pokezero.effect_probe.scenario.v1",
+ "move": "forecast_drizzle_lead",
+ "note": "Forecast (data/abilities.ts forecast at f76228a1; gen3 flags {}): onStart and onWeatherChange take the forme of effectiveWeather() (rain Water, sun Fire, else Normal) for a non-transformed Castform; WeatherChange fires at setWeather/clearWeather (sim/field.ts) and at a Cloud Nine / Air Lock End (data/abilities.ts; gen4 removes their arrival event). Leads: Castform (faster: its Start sees no weather) then Kyogre (Drizzle, permanent rain): WeatherChange re-forms Castform (Rainy) before the first request. Its Return has no STAB; Kyogre's Thunder is 2x.",
+ "teams": [
+  [
+   {
+    "species": "Castform",
+    "moves": [
+     "raindance",
+     "sunnyday",
+     "return",
+     "fireblast"
+    ],
+    "ability": "Forecast",
+    "item": ""
+   },
+   {
+    "species": "Starmie",
+    "moves": [
+     "splash",
+     "surf",
+     "recover",
+     "protect"
+    ],
+    "ability": "Illuminate",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Blissey",
+    "moves": [
+     "splash",
+     "softboiled",
+     "protect",
+     "seismictoss"
+    ],
+    "ability": "Serene Grace",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Skarmory",
+    "moves": [
+     "splash",
+     "protect",
+     "spikes",
+     "peck"
+    ],
+    "ability": "Keen Eye",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Swampert",
+    "moves": [
+     "splash",
+     "protect",
+     "surf",
+     "earthquake"
+    ],
+    "ability": "Torrent",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Metagross",
+    "moves": [
+     "splash",
+     "protect",
+     "meteormash",
+     "earthquake"
+    ],
+    "ability": "Clear Body",
+    "item": "Leftovers"
+   }
+  ],
+  [
+   {
+    "species": "Kyogre",
+    "moves": [
+     "splash",
+     "thunder",
+     "surf",
+     "icebeam"
+    ],
+    "ability": "Drizzle",
+    "item": ""
+   },
+   {
+    "species": "Starmie",
+    "moves": [
+     "splash",
+     "surf",
+     "recover",
+     "protect"
+    ],
+    "ability": "Illuminate",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Blissey",
+    "moves": [
+     "splash",
+     "softboiled",
+     "protect",
+     "seismictoss"
+    ],
+    "ability": "Serene Grace",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Skarmory",
+    "moves": [
+     "splash",
+     "protect",
+     "spikes",
+     "peck"
+    ],
+    "ability": "Keen Eye",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Swampert",
+    "moves": [
+     "splash",
+     "protect",
+     "surf",
+     "earthquake"
+    ],
+    "ability": "Torrent",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Metagross",
+    "moves": [
+     "splash",
+     "protect",
+     "meteormash",
+     "earthquake"
+    ],
+    "ability": "Clear Body",
+    "item": "Leftovers"
+   }
+  ]
+ ],
+ "script": [
+  [
+   "move 3",
+   "move 2"
+  ]
+ ],
+ "expect": {
+  "exact": true
+ }
+}
