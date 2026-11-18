@@ -134,6 +134,16 @@ class JointSession:
                 and normalize_id(v['ability']) == ability and normalize_id(v['item']) == item]
             if not matches:
                 raise ValueError('original own set outside pinned source: ' + species)
+            variant=variants[matches[0]]
+            fixture=worlds._fixture_from_variant_payload(variant,fallback_species=species,set_source=self.source)
+            base=worlds._base_stats_for_species(self.source,species)
+            if fixture is None or base is None:raise ValueError('original own spread unavailable')
+            expected=worlds._computed_stats(base,evs=fixture.evs,ivs=fixture.ivs,level=level)
+            if any(mon.get('stats',{}).get(key)!=expected[key]for key in('atk','def','spa','spd','spe')):
+                raise ValueError('original own stats outside pinned recipe: '+species)
+            condition=str(mon.get('condition','')).split()[0]
+            if '/'not in condition or int(condition.split('/')[1])!=expected['hp']:
+                raise ValueError('original own maximum HP outside pinned recipe: '+species)
             result.append((species, matches[0]))
         if len(result) != 6:
             raise ValueError('six original own members required')

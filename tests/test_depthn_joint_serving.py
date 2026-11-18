@@ -94,3 +94,12 @@ class JointProtocol(ProtocolRoute):
         SP.feature_rows(plan.feature_payload,self.src,game_sha256=plan.game_sha256)
         broken=json.loads(json.dumps(plan.feature_payload));broken['rows'][next(iter(broken['rows']))]['weights'][0]+=1
         with self.assertRaisesRegex(ValueError,'provenance'):SP.feature_rows(broken,self.src,game_sha256=plan.game_sha256)
+
+    def test_original_own_stats_must_match_the_generator_recipe(self):
+        data=fixture('cb_collapse');lines=list(data['request']['lines'])
+        session=JointSession(self.src,producer='shared-battle')
+        self.assertEqual(len(session._own_initial(lines)),6)
+        i=next(i for i,line in enumerate(lines)if line.startswith('|request|'))
+        request=json.loads(lines[i][len('|request|'):]);request['side']['pokemon'][0]['stats']['atk']+=1
+        lines[i]='|request|'+json.dumps(request)
+        with self.assertRaisesRegex(ValueError,'stats outside pinned recipe'):session._own_initial(lines)
