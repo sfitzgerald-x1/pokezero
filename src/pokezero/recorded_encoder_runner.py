@@ -116,6 +116,13 @@ class JaxRecordedAdapter:
             if np.any(np.asarray(error)!=0):raise ValueError('JAX public fold refused boundary')
         # A late host/device failure leaves both previous public cursors intact.
         self.state,self.host,self.bindings=state,host,bindings
+        self._root_set_posterior=None
+
+    def bind_set_posterior(self,payload,*,game_sha256):
+        """Bind a fresh owning-root payload before B2 root extraction encodes it."""
+        from pokezero.set_posterior import feature_rows
+        feature_rows(payload,self.catalog.source,game_sha256=game_sha256)
+        self._root_set_posterior=(json.loads(json.dumps(payload)),game_sha256)
 
     def encode(self,request,*,owner_side,set_posterior_payload=None,game_sha256=None):
         self._check_compiled_functions()
@@ -125,6 +132,8 @@ class JaxRecordedAdapter:
         side=self.jax.numpy.array([owner_side],self.jax.numpy.int32)
         if self.catalog.masks.set_posterior_narrowing:
             from gpu_engine.set_posterior_features import compile_inputs
+            if set_posterior_payload is None and getattr(self,'_root_set_posterior',None) is not None:
+                set_posterior_payload,game_sha256=self._root_set_posterior
             if set_posterior_payload is None:raise ValueError('root set posterior payload required')
             inputs=compile_inputs(set_posterior_payload,self.catalog,self.state,owner=owner_side,game_sha256=game_sha256)
             if not hasattr(self,'_set_posterior_encode'):

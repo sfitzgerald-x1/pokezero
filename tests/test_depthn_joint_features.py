@@ -75,3 +75,15 @@ class JointFeatures(unittest.TestCase):
         payload=json.loads(json.dumps(self.payload));payload['rows'][next(iter(payload['rows']))]['weights'][0]+=1
         with self.assertRaisesRegex(ValueError,'provenance'):
             F.compile_inputs(payload,self.on.catalog,self.on_state,owner=0,game_sha256=self.game)
+
+    def test_adapter_binds_root_payload_before_implicit_b2_encode(self):
+        from pokezero.recorded_encoder_runner import JaxRecordedAdapter
+        adapter=JaxRecordedAdapter(self.on.catalog,owner_side=0)
+        adapter.state=self.on_state
+        payload=json.loads(json.dumps(self.payload))
+        adapter.bind_set_posterior(payload,game_sha256=self.game)
+        payload['rows'][next(iter(payload['rows']))]['weights'][0]+=999
+        actual=adapter.encode(self.on.request(0),owner_side=0)
+        expected=self.encode(self.on,self.on_state,self.inputs)
+        for name in actual:
+            np.testing.assert_array_equal(actual[name],getattr(expected.observation,name)[0])

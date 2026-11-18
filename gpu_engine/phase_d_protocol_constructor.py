@@ -111,10 +111,6 @@ class ProtocolConstructor:
             adapter.feed(tuple(x for x in lines[len(old):]if not x.startswith('|request|')))
             if not self.saved_root_admission:self.sessions[key]=(adapter,lines)
             facts=protocol.tail.facts(public,packet,lines)
-            detached=worlds.from_b2(adapter,packet,self.source,self.metadata,address=public.address,defer_sleep=True,protocol_facts=facts)
-            if detached.source_binding_sha256!=self.source.binding_sha256:
-                raise worlds.Refusal('SAME_PUBLIC_ROOT_SOURCE_BINDING_REQUIRED')
-            detached=protocol._carried_root(public,detached,lines,self.metadata)
             joint_plan=None
             if protocol.JOINT_POSTERIOR_DRAW and self.joint_generator:
                 from pokezero.joint_serving import JointSession
@@ -128,6 +124,12 @@ class ProtocolConstructor:
             if getattr(getattr(self.catalog,'masks',None),'set_posterior_narrowing',False):
                 if joint_plan is None:raise ValueError('joint feature producer required')
                 feature_kwargs=dict(set_posterior_payload=joint_plan.feature_payload,game_sha256=joint_plan.game_sha256)
+                adapter.bind_set_posterior(joint_plan.feature_payload,game_sha256=joint_plan.game_sha256)
+            detached=worlds.from_b2(adapter,packet,self.source,self.metadata,address=public.address,defer_sleep=True,protocol_facts=facts)
+            if detached.source_binding_sha256!=self.source.binding_sha256:
+                raise worlds.Refusal('SAME_PUBLIC_ROOT_SOURCE_BINDING_REQUIRED')
+            detached=protocol._carried_root(public,detached,lines,self.metadata)
+            if feature_kwargs:
                 from .set_posterior_features import compile_inputs,attach_root
                 feature_inputs=compile_inputs(joint_plan.feature_payload,self.catalog,adapter.state,
                     owner=owner,game_sha256=joint_plan.game_sha256)
