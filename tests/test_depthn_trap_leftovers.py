@@ -31,14 +31,14 @@ class IngrainTests(unittest.TestCase):
             self.assertEqual(switches(rooted,owner),[False]*5)
             self.assertEqual(switches(rooted,1-owner),[True]*5)
 
-    def test_only_our_rooted_request_is_deferred_and_the_volatile_is_retained(self):
+    def test_only_our_ingrain_is_deferred_and_the_original_payload_is_retained(self):
         for owner in (0,1):
             with self.subTest(owner=owner):
                 original=payload(owner,rooted=True);before=copy.deepcopy(original)
                 projected,meanlook,wrapped=protocol._defer_traps(original,owner)
                 self.assertEqual(original,before)
                 self.assertFalse(projected['selfActiveRequestState']['trapped'])
-                self.assertEqual(projected['sides'][f'p{owner+1}']['volatiles'],['ingrain'])
+                self.assertEqual(projected['sides'][f'p{owner+1}']['volatiles'],[])
                 self.assertEqual((meanlook,wrapped),(False,()))
                 foreign=payload(owner);foreign['sides'][f'p{2-owner}']['volatiles']=['ingrain']
                 self.assertIs(protocol._defer_traps(foreign,owner)[0],foreign)
@@ -95,6 +95,85 @@ class OpponentMeanLookTests(unittest.TestCase):
             with self.subTest(held=held),self.assertRaisesRegex(ValueError,'OPPONENT_MEANLOOK_B2_PAYLOAD_DISAGREEMENT'):
                 protocol._write_foe_meanlook(host_world(),detached,held,0)
         world=host_world();self.assertIs(protocol._write_foe_meanlook(world,NS(view={}),False,0),world)
+
+
+
+
+class IngrainConstructionTests(unittest.TestCase):
+    def test_real_cpu_and_typed_bridges_defer_ingrain_before_exact_own_restoration(self):
+        """Traverse materialize_protocol with both real bridges; only the final carry rebasing is observed."""
+        from dataclasses import replace
+        import hashlib
+        import json
+        from unittest.mock import patch
+        import jax.numpy as jnp
+        from pokezero.dex import MoveInfo,SpeciesInfo,ShowdownDex
+        from pokezero.env import BattleStartOverride
+        from pokezero.v5_contract import DecisionAddress
+        from pokezero.v5_teacher_public_root import PublicRoot
+        from pokezero.engine_world import battle_spec_from_payload,EngineWorldUnsupported
+        from gpu_engine.device_public_worlds import Root,OWN_MON_FIELDS,OWN_SIDE_FIELDS
+        from gpu_engine.v5_hypothetical_state import map_spec
+        from tests.test_phase_d_batch2_facts import carry_fixture,metadata
+        from gpu_engine.state import legal_actions
+
+        names=('abcdef','ghijkl')
+        stats=dict(hp=100,atk=100,**{'def':100},spa=100,spd=100,spe=100)
+        dex=ShowdownDex({'tackle':MoveInfo('tackle','Tackle','Normal','Physical','Physical',50,100,0,False,False,False,None,{},'normal',False,pp=10)},
+            {name:SpeciesInfo(name,name,('Normal',),stats) for side in names for name in side},{})
+        teams={f'p{side+1}':']'.join('|'.join([name,'','','','tackle','Serious','','N','','','100','255']) for name in party) for side,party in enumerate(names)}
+        start=BattleStartOverride(teams)
+        meta=metadata();meta['vocabulary']['moves']=('','tackle');meta['moves']=[dict(pp=0),dict(pp=10)]
+        source=NS(source_hash='same')
+        for owner in (0,1):
+            with self.subTest(owner=owner):
+                own,foe=f'p{owner+1}',f'p{2-owner}'
+                active=[0,0];active[owner]=1
+                payload=dict(turn=2,selfPlayer=own,selfRequestKind='move',pendingBatonPassSides=[],wishSetTurns={},
+                    selfActiveRequestState=dict(trapped=False),sides={f'p{s+1}':dict(pokemon=[dict(species=name,condition='100/100',active=i==active[s]) for i,name in enumerate(party)],volatiles=[]) for s,party in enumerate(names)})
+                baseline=battle_spec_from_payload(payload,start,dex=dex,approximate_sleep_turns=False,
+                    approximate_substitute_health=False,approximate_partial_trap_turns=False,approximate_hidden_duration_volatiles=False)
+                mapped=map_spec(baseline.spec,metadata=meta,dex=dex,seed=17,turn=2,active_turns=(1,1),happiness=((255,)*6,)*2,held_volatiles=True)
+                self.assertIsNotNone(mapped.state,mapped.refusals)
+                physical=mapped.state
+                own_fields={name:np.array(getattr(physical,name)[0,owner]) for name in OWN_MON_FIELDS+OWN_SIDE_FIELDS}
+                at=int(own_fields['active']);own_fields['volatile'][at]|=ROOTED
+                party=[dict(ident=own+': '+name,details=name+', L100',condition=f'{int(own_fields["hp"][i])}/{int(own_fields["max_hp"][i])}',
+                    active=i==at,moves=['tackle'],baseAbility='',item='') for i,name in enumerate(names[owner])]
+                packet=dict(rqid=1,side=dict(id=own,pokemon=party),active=[dict(trapped=True,moves=[dict(id='tackle',pp=16,maxpp=16,disabled=False)])])
+                lines=('|start',f'|switch|{own}a: {names[owner][at]}|{names[owner][at]}, L100|{int(own_fields["hp"][at])}/{int(own_fields["max_hp"][at])}',
+                    f'|switch|{foe}a: {names[1-owner][0]}|{names[1-owner][0]}, L100|100/100','|turn|1',f'|-start|{own}a: {names[owner][at]}|Ingrain','|request|'+json.dumps(packet))
+                payload['sides'][own]['volatiles']=['ingrain'];payload['selfActiveRequestState']['trapped']=True
+                original=copy.deepcopy(payload)
+                with self.assertRaises(EngineWorldUnsupported) as unsupported:
+                    battle_spec_from_payload(payload,start,dex=dex,approximate_sleep_turns=False,
+                        approximate_substitute_health=False,approximate_partial_trap_turns=False,approximate_hidden_duration_volatiles=False)
+                self.assertEqual(unsupported.exception.reason,'volatile_unsupported')
+                carry=carry_fixture();bit=protocol.live.hooks.VOLATILE_NAMES.index('ingrain');carry.volatiles[0,owner,at,bit]=True
+                address=DecisionAddress(1,0,owner)
+                view=dict(present=np.ones((1,6),bool),active=np.eye(6,dtype=bool)[[0]],species=np.asarray(physical.species)[0,1-owner][None,:],
+                    hp_percent=np.full((1,6),100),revealed_moves=np.zeros((1,6,4),np.int32),move_pp_used=np.zeros((1,6,4),np.int32),
+                    mon_features=dict(toxic_stage=np.zeros((1,6),np.int32),stall_counter=np.zeros((1,6),np.int32),meanlook_trap=np.zeros((1,6),np.int32)))
+                detached=Root(address,own_fields,view,carry,'same')
+                context=NS(public_materialization_state=NS(self_request=packet,belief_engine=NS(set_source=NS(metadata=source))))
+                public=PublicRoot(address,hashlib.sha256(''.join(x+'\n' for x in lines).encode()).hexdigest(),context,payload,())
+                inputs=protocol.ProtocolInputs(detached,lines,NS(source=source,dex=dex),meta,object())
+                seen=[]
+                def rebase(*args,state,**kwargs):
+                    seen.append(True)
+                    self.assertTrue(int(np.asarray(state.volatile)[0,owner,at])&ROOTED)
+                    mask=np.asarray(legal_actions(protocol._device(state)))
+                    self.assertFalse(mask[0,owner,4:].any());self.assertTrue(mask[0,1-owner,4:].all())
+                    return detached.public
+                with patch.object(protocol,'battle_spec_from_payload',wraps=battle_spec_from_payload) as cpu, \
+                        patch.object(protocol,'map_spec',wraps=map_spec) as typed, \
+                        patch.object(protocol.public_worlds,'_revealed',return_value=()),patch.object(protocol,'_set_posteriors',return_value={}), \
+                        patch.object(protocol.states,'_rebase',side_effect=rebase),patch.object(protocol.states,'_rebase_host',side_effect=rebase):
+                    made=protocol.materialize_protocol(public,start,inputs=inputs,seed=17)
+                self.assertIsNotNone(made.state,made.refusals);self.assertTrue(seen)
+                self.assertEqual(cpu.call_count,1);self.assertEqual(typed.call_count,1)
+                self.assertNotIn('ingrain',cpu.call_args.args[0]['sides'][own]['volatiles'])
+                self.assertEqual(payload,original)
 
 
 if __name__=='__main__':unittest.main()

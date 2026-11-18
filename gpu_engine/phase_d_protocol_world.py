@@ -388,15 +388,15 @@ def _defer_traps(payload,owner):
     world's trapper instead). When either cause is ours, our request's `trapped` leaves the projection too: the CPU world no
     longer holds its cause (engine_world._require_world_reproduces_trap would refuse it), and the finished world's root mask
     is checked against the request instead (OWN_REQUEST_TRAP_REPRODUCED). Returns (projection, our Mean Look, wrapped sides);
-    the payload itself when there is nothing to defer. Ingrain stays in the projected volatile bag, but its own request
-    trap is deferred too: the legacy CPU trap check omits it, while the final device mask honors the B2 ROOTED bit."""
+    the payload itself when there is nothing to defer. Own Ingrain leaves the projected bag after exact ROOTED agreement;
+    the original B2 bit is restored after typed mapping, and the final device mask reproduces its request trap."""
     seat=f'p{owner+1}'
     wrapped=tuple(sorted(int(name[1])-1 for name,side in payload['sides'].items() if 'partiallytrapped' in side['volatiles']))
     meanlook=bool(payload['sides'][seat].get('meanlookTrap'))
     rooted='ingrain' in payload['sides'][seat]['volatiles']
     if not wrapped and not meanlook and not rooted:return payload,False,()
     projected=json.loads(json.dumps(payload))
-    for side in projected['sides'].values():side['volatiles']=[v for v in side['volatiles'] if v!='partiallytrapped']
+    for name,side in projected['sides'].items():side['volatiles']=[v for v in side['volatiles'] if v!='partiallytrapped' and not (name==seat and v=='ingrain')]
     if meanlook:projected['sides'][seat]['meanlookTrap']=False
     request=projected.get('selfActiveRequestState')
     if (meanlook or rooted or owner in wrapped) and isinstance(request,dict) and request.get('trapped'):request['trapped']=False
