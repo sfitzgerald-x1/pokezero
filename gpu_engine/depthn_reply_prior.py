@@ -23,7 +23,7 @@ VIEWS = ('eager', 'jit', 'check')
 
 
 class ReplyPrior:
-    def __init__(self, executor, evaluator, params=None, *, views=None, mode='eager', identity=None):
+    def __init__(self, executor, evaluator, params=None, *, views=None, mode='eager', identity=None, self_moves=None):
         """`evaluator`: the reply model (a champion_evaluator.ChampionEvaluator of the reply archive, or any callable
         (params, inputs) -> an object with policy_logits); `params` default evaluator.params; `mode` in VIEWS. `identity`: None, or
         the served archive's {archive_sha256, checkpoint_sha256, view}, echoed in every br_fp response's reply_prior record so the
@@ -32,7 +32,13 @@ class ReplyPrior:
         import jax
         from . import device_depth2_pricer as depth2
         if mode not in VIEWS:raise ValueError(f'reply views mode in {VIEWS} required')
-        self.views = depth2._make_views(executor) if views is None else views
+        # V2 self_moves: the reply model's declaration (default its archive meta, absent = False); its peer views carry own
+        # move/PP cells only when it declares them (never filled from the owner's view).
+        self.self_moves = bool((getattr(evaluator, 'meta', None) or {}).get('self_moves', False)) if self_moves is None else bool(self_moves)
+        if self.self_moves and getattr(executor, 'observe_self_moves_off', None) is None:
+            # Off tables (the executor has no self_moves observe) would hand an on reply model views with no own move cells.
+            raise ValueError('a self_moves reply model requires self_moves observation tables')
+        self.views = depth2._make_views(executor, peer_self_moves=self.self_moves) if views is None else views
         self.evaluator, self.params, self.mode = evaluator, (evaluator.params if params is None else params), mode
         if identity is not None and (type(identity) is not dict or set(identity) != {'archive_sha256', 'checkpoint_sha256', 'view'}):
             raise ValueError('identity: None or {archive_sha256, checkpoint_sha256, view} required')

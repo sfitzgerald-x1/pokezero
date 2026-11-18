@@ -449,6 +449,11 @@ def check_reply_view(meta,args):
 
 def options(argv=None):
     p=parser();args=p.parse_args(argv);evaluators.check_arguments(p,args);check_precision_environment(p,args)
+    # V2 self_moves: the server encodes what its champion contract declares (the contract's masks carry no self_moves, so
+    # False); an OBS_SELF_MOVES override is for measurement tools and refuses a serving start.
+    from pokezero.observation import require_declared_self_moves
+    try:require_declared_self_moves(False,context='depthn live server')
+    except ValueError as error:p.error(str(error))
     if not args.champion_archive:p.error('--champion-archive with its two sha256 flags is required: the champion prices every root and leaf')
     check_reply_arguments(p,args)
     if getattr(args,'eager_peer_fold',False)and not(args.redact_private_reveals or args.peer_view_b):
@@ -522,6 +527,8 @@ def build(args):
     from gpu_engine import constructor_worlds as cw
     constructor=build_constructor(args);catalog,source,metadata=constructor.catalog,constructor.source,constructor.metadata
     evaluator=evaluators.load_from_arguments(args);W=live.RUNGS[args.rung]
+    from gpu_engine.private_self_moves import refuse_search_serving   # V2 self_moves: fail closed until the search threading lands
+    refuse_search_serving(catalog=catalog,meta=getattr(evaluator,'meta',None),context='depthn live server')
     executor=cw.live_executor(metadata,catalog)   # the constructor's own engine metadata and catalog (the depth-N gate's CONSTRUCTOR_ROOTS uses the same)
     params=(evaluator.params,)
     from gpu_engine import depthn_guard_inputs as guard_inputs
@@ -533,6 +540,7 @@ def build(args):
         model=evaluators.load(args.reply_archive,expected_archive_sha256=args.reply_archive_sha256,
             expected_checkpoint_sha256=args.reply_checkpoint_sha256,precision=evaluators.PRECISIONS[args.champion_precision])
         check_reply_view(getattr(model,'meta',None),args)
+        refuse_search_serving(meta=getattr(model,'meta',None),context='depthn live server reply model')
         reply=ReplyPrior(executor,model,mode=args.reply_views,identity=dict(archive_sha256=args.reply_archive_sha256,
             checkpoint_sha256=args.reply_checkpoint_sha256,view=reply_view(getattr(model,'meta',None))))
     return live.DepthNLiveSearch(constructor=constructor,pricers=pricers,params=params,binding=cw.binding(source,metadata,catalog),

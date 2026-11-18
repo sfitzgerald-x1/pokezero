@@ -85,6 +85,11 @@ def load_factory(archive,*,catalog,contract,expected_archive_sha256,expected_che
         expected_archive_sha256=expected_archive_sha256,expected_checkpoint_sha256=expected_checkpoint_sha256,
         expected_category_vocabulary_sha256=expected_category_vocabulary_sha256,
         expected_label_vocabulary_sha256=expected_label_vocabulary_sha256)
+    # V2 self_moves: the archive declares it (v5_model.export writes metadata['self_moves'] only when on; absent = off). The
+    # serving contract and the encoder catalog must say the same, so an on archive is never served off-encoded (or the
+    # reverse); every V5 contract builder (v5_evaluation, v5_python_backend) declares off, so an on archive is refused here.
+    if not bool(metadata.get('self_moves',False))==contract.self_moves==bool(getattr(catalog.masks,'self_moves',False)):
+        raise ValueError('v5 archive self_moves declaration differs from the serving contract/encoder catalog')
     if (contract.checkpoint_sha256!=expected_checkpoint_sha256
             or contract.model_config_sha256!=c._sha(config.metadata())
             # The original routing contract hashes literal tokens. V5's model

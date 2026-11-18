@@ -507,7 +507,7 @@ def _factory(protocol,request):
     if source.metadata.source_hash!=original.belief_set_source_hash:raise ValueError('original public source differs')
     contract=replace(original,checkpoint_sha256=request.snapshot.checkpoint_sha256,model_config_sha256=request.snapshot.model_sha256)
     catalog=v4_encoder.compile_encoder(public_belief.compile_source(source),load_showdown_dex_cached(runtime['showdown']['root']),v,
-        checkpoint_sha256=contract.checkpoint_sha256,feature_masks=dict(contract.feature_masks))
+        checkpoint_sha256=contract.checkpoint_sha256,feature_masks=contract.encoder_masks())
     factory=load_factory(request.archive_path,catalog=catalog,contract=contract,
         expected_archive_sha256=request.snapshot.archive_sha256,expected_checkpoint_sha256=request.snapshot.checkpoint_sha256,
         expected_category_vocabulary_sha256=category_binding(v),

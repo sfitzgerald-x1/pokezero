@@ -185,7 +185,7 @@ def _observe(t,state,side,physical,rows_active,*,identity):
     # Showdown clears them at the faint (sim/pokemon.ts:1509-1518, faintMessages' clearVolatile), and so does the engine
     # (transition._clear_fainted_boosts); B2 keeps them (gpu_engine/public_mon_state.py:164-173: faint writes no boosts;
     # the arrival resets them, :111-112), and so does the Python encoder the champion was trained on
-    # (src/pokezero/showdown.py:2607-2617: cleared only at switch-in). The principle: observation inputs follow the
+    # (src/pokezero/showdown.py:2611-2621: cleared only at switch-in). The principle: observation inputs follow the
     # convention the champion was trained on (B2 + the Python encoder) until V2 retrains; mechanics (legality, dynamics,
     # engine state) follow Showdown. Nobody should "fix" this toward Showdown without retraining the network; V2's flip
     # list records it. So the carry keeps its stages for the side's still-active mon at hp 0, unless the read precedes the
