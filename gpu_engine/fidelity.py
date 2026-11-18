@@ -42,6 +42,7 @@ PHAZING_SALT=271828
 # consumes [s][0..1] (Bonemerang's second hit); the residual roles arrive with M2.
 EFFECT_SALT=1732050
 EFFECT_BOUNDS=(16,16,4,2)
+SHED_SKIN_SALT=2449489
 # The first 50000..50199 panel is immutable historical evidence. Following
 # its authored adapter correction, use one disjoint fixed panel, not a replay.
 FIRST_GAME=50200
@@ -97,7 +98,7 @@ def chance_tape(state,game,index,saved_effect=None):
     sleep=jax.vmap(lambda key:jax.random.randint(jax.random.fold_in(key,1414213),(2,),0,60))(split)
     phazing=jax.vmap(lambda key:jax.random.randint(jax.random.fold_in(key,PHAZING_SALT),(2,),0,60))(split)
     effect=np.asarray(effect_draws(split))[0].tolist()
-    shed_skin=jax.vmap(lambda key:jax.random.randint(jax.random.fold_in(key,2236067),(2,),0,100))(split)
+    shed_skin=jax.vmap(lambda key:jax.random.randint(jax.random.fold_in(key,SHED_SKIN_SALT),(2,),0,100))(split)
     if bool(np.asarray(state.pending_residual)[0]):
         draws=state.residual_draws;secondary=state.secondary_draws;sleep=state.sleep_talk_draws;phazing=state.phazing_draws
         if hasattr(state,'shed_skin_draws'):shed_skin=state.shed_skin_draws

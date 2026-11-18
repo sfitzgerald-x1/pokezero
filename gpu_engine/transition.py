@@ -337,7 +337,7 @@ class ChanceInputs(NamedTuple):
 # CUDA option-A work (design 13 item 6), so `v2e_diff chance` and v2e_cuda_check p2 report it as differing.
 EFFECT_SALT = 1732050
 EFFECT_BOUNDS = (16, 16, 4, 2)
-SHED_SKIN_SALT = 2236067
+SHED_SKIN_SALT = 2449489
 
 
 def shed_skin_chance(keys):

@@ -97,6 +97,14 @@ class ShedSkinTests(unittest.TestCase):
         np.testing.assert_array_equal(chance.effect,t.effect_chance(keys))
         self.assertEqual(chance.shed_skin.shape,(8,2))
 
+    def test_fidelity_tape_matches_sampled_and_saved_cure_stream(self):
+        from gpu_engine.fidelity import chance_tape
+        state=self.statused();chance=t.sample_chance_inputs(state)
+        np.testing.assert_array_equal(chance_tape(state,0,0)['shed_skin'],chance.shed_skin[0])
+        state=state._replace(pending_residual=j.ones(8,bool),
+            shed_skin_draws=j.tile(j.asarray([[0,99]],j.int32),(8,1)))
+        np.testing.assert_array_equal(chance_tape(state,0,1)['shed_skin'],[0,99])
+
 
 class RegressionTests(unittest.TestCase):
     def test_simultaneous_incoming_trace_holder_is_involved(self):

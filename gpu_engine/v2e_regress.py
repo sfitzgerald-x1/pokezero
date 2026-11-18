@@ -218,6 +218,7 @@ PUBLIC_ORDER = 'trackers.public_order'
 EFFECT_DRAWS = 'state.effect_draws'
 SHED_SKIN_DRAWS = 'state.shed_skin_draws'
 EFFECT_SALT, EFFECT_BOUNDS = 1732050, (16, 16, 4, 2)
+SHED_SKIN_SALT = 2449489
 MEANLOOK = "trackers.mon_features['meanlook_trap']"
 PRE_TRACKERS = (MEANLOOK, 'trackers.active_slot')
 TRAP_MOVES = ('meanlook', 'spiderweb', 'block')
@@ -1953,7 +1954,7 @@ class Stepper:
             if hasattr(state,'shed_skin_draws'):
                 # Independent copy of the new stream's law and save/replay rule; never effect involvement.
                 split=jax.vmap(lambda k:jax.random.split(k,2))(state.keys)[:,1]
-                fresh=jax.vmap(lambda k:jax.random.randint(jax.random.fold_in(k,2236067),(2,),0,100))(split)
+                fresh=jax.vmap(lambda k:jax.random.randint(jax.random.fold_in(k,SHED_SKIN_SALT),(2,),0,100))(split)
                 live=~state.done & ~out.step.invalid_actions
                 used=j.where((live & state.pending_residual)[:,None],state.shed_skin_draws,fresh)
                 saved=j.where(out.step.state.pending_residual[:,None],used,0)
