@@ -1,4 +1,5 @@
 """Fail-closed admission of numeric regression witnesses, without an engine run."""
+import ast
 import copy
 from collections import namedtuple
 import importlib.util
@@ -300,6 +301,17 @@ class EncoderLegacySourceTests(unittest.TestCase):
         identity = et.legacy_source_identity()
         self.assertEqual(identity['commit'], '24f39abaa478fd11d27188353ccb0fe6a3f471f0')
         self.assertEqual(set(identity['bodies']), {'_add', 'observe', 'direct', 'damage', 'spikes'})
+
+    def test_ast_identity_ignores_only_empty_new_type_parameter_field(self):
+        original = ast.parse('def f(x): return x + 1').body[0]
+        later = copy.deepcopy(original)
+        if 'type_params' not in later._fields:later._fields += ('type_params',)
+        later.type_params = []
+        self.assertEqual(et._ast_identity(original), et._ast_identity(later))
+        changed = copy.deepcopy(later);changed.body[0].value.right.value = 2
+        self.assertNotEqual(et._ast_identity(original), et._ast_identity(changed))
+        later.type_params = [ast.Name(id='T', ctx=ast.Load())]
+        self.assertNotEqual(et._ast_identity(original), et._ast_identity(later))
 
 
 @unittest.skipUnless(importlib.util.find_spec('jax') is not None, 'requires JAX')

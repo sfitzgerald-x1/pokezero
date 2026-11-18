@@ -8,6 +8,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 import ast
 import hashlib
+import json
 from pathlib import Path
 import sys
 
@@ -19,11 +20,11 @@ from gpu_engine.encoder_regression_witness import (
 
 LEGACY_SOURCE = '24f39abaa478fd11d27188353ccb0fe6a3f471f0'
 LEGACY_BODY_SHA256 = {
-    '_add': '4edc8890c64833d6e32b7c02d013b16dbf335ab4b40f2339f2ff2a3575e41a23',
-    'observe': '9b2aae0fd73bb3af6714204478898fcd92bd3930b0840ca8d78869b89b36d512',
-    'direct': '7bf8ba7369329c5ec5d372b130a945cc9f6273b12a228fb5ee59f9b7a89d086c',
-    'damage': '2668f5080bd0274535501cebe99136fe49372525a488ff217d63da761098e0cd',
-    'spikes': '640a96160f82e657496a3a80fef69787e2f32117a0f80aafb9abf30c23c453f4',
+    '_add': '232da7af72fcefc99dc983e2cfba982a79933435bf888027160aecc27943ce71',
+    'observe': '26cef3902bc76ac204e91e882894f230d790fda6b11cded8e325866ab783c4f5',
+    'direct': '6ffab46cc4ecefd60293faf2826a5ee99c05cbcbc4a6e5d456878b8a9153461b',
+    'damage': '43ab5766d248ae8e886f446a12cf5dc6ad02d3e64964fa9a115912aba0452ed0',
+    'spikes': '4e8f620d5aa1d11255ac9e5121b06059ac0aed2ac2fced6bb72535241521dbed',
 }
 
 
@@ -39,11 +40,28 @@ def encoder_source_identity():
 def legacy_source_identity():
     tree = ast.parse(Path(__file__).read_text())
     factory = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == '_legacy_functions')
-    actual = {n.name: hashlib.sha256(ast.dump(n, include_attributes=False).encode()).hexdigest()
+    actual = {n.name: _ast_identity(n)
               for n in factory.body if isinstance(n, ast.FunctionDef)}
     if actual != LEGACY_BODY_SHA256:
         raise ValueError('frozen ENC arithmetic differs from the recorded legacy source')
-    return dict(commit=LEGACY_SOURCE, bodies=dict(actual))
+    return dict(commit=LEGACY_SOURCE, ast_format='structural-fields-v1', bodies=dict(actual))
+
+
+def _ast_identity(node):
+    """Serialize fields explicitly; ast.dump formatting changes across Python.
+
+    Python 3.12 added FunctionDef.type_params. An empty type-parameter list
+    has no meaning for these baseline functions; nonempty lists stay hashed.
+    All other fields, including empty lists and None, remain in the proof.
+    """
+    def encode(value):
+        if value is Ellipsis:return {'literal': 'ellipsis'}
+        if isinstance(value, ast.AST):
+            return [type(value).__name__, [[name, encode(field)] for name, field in ast.iter_fields(value)
+                    if name != 'type_params' or field]]
+        if isinstance(value, list):return [encode(item) for item in value]
+        return value
+    return hashlib.sha256(json.dumps(encode(node), separators=(',', ':'), ensure_ascii=True).encode()).hexdigest()
 
 
 @dataclass
