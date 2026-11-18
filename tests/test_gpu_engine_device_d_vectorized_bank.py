@@ -25,14 +25,20 @@ class BankTests(unittest.TestCase):
     def test_enablement_and_wrong_cohort_refuse_before_any_setup(self):
         with self.assertRaises(ValueError):bank.measure(None,None,backend=None)
         with self.assertRaises(ValueError):bank.measure(fixture.plan('D'),None,backend=None,enable_benchmark=True)
-    def run_bank(self,seconds):
+    def run_bank(self,seconds,*,self_moves=False):
         template=fixture.plan('D');games=tuple(runs.Game(i+1,'d3-fixture-'+str(i),100+i,(2*i,2*i+1))for i in range(2048))
-        plan=replace(template,iterations=((runs.Batch(games,101,201),),));backend=Backend();training=fixture.FakeTraining()
+        plan=replace(template,iterations=((runs.Batch(games,101,201),),),self_moves=self_moves);backend=Backend();training=fixture.FakeTraining()
         def export(checkpoint,out,**kwargs):
+            self.assertIs(kwargs['self_moves'],plan.self_moves)
+            self.assertEqual(kwargs['expected_checkpoint_sha256'],runs._file_sha(checkpoint))
+            self.assertIsNone(kwargs['off_provenance'])
             Path(out).write_bytes(b'inert-actor');return dict(weights_archive_sha256=runs._file_sha(out))
         with tempfile.TemporaryDirectory()as directory:
-            with patch.object(v5_device_backend,'RuntimeBackend',Backend),patch.object(runs.training,'create',side_effect=training.create),patch.object(runs.training,'save_checkpoint',side_effect=training.save),patch.object(v5_model,'export',side_effect=export),patch.object(runs.training,'train_caches',side_effect=AssertionError('bank must never train')),patch.object(bank.time,'perf_counter',side_effect=[0.,1.,2.,seconds+2.]):
+            # This inert JSON trainer has no Torch checkpoint. Real checkpoint
+            # provenance remains covered by test_self_moves_checkpoint.
+            with patch.object(v5_device_backend,'RuntimeBackend',Backend),patch.object(runs.training,'create',side_effect=training.create),patch.object(runs.training,'save_checkpoint',side_effect=training.save),patch.object(runs.Store,'checkpoint_provenance',return_value=None),patch.object(v5_model,'export',side_effect=export),patch.object(runs.training,'train_caches',side_effect=AssertionError('bank must never train')),patch.object(bank.time,'perf_counter',side_effect=[0.,1.,2.,seconds+2.]):
                 result=bank.measure(plan,Path(directory)/'run',backend=backend,enable_benchmark=True)
+            self.assertEqual(training.created_declarations,[plan.self_moves])
             self.assertTrue(backend.closed);self.assertEqual(training.latest.steps,0)
             self.assertEqual(result['bank_wall_seconds'],seconds);self.assertEqual(result['optimizer_updates'],0)
             self.assertEqual(result['frames']['0']['refused_share_selected'],32/512)
@@ -47,5 +53,7 @@ class BankTests(unittest.TestCase):
     def test_distant_tail_cannot_be_removed_for_a_faster_gate(self):
         result=self.run_bank(2049.)
         self.assertEqual(result['admission'],'FAIL');self.assertLess(result['declared_games_per_second'],1.)
+    def test_on_plan_declaration_reaches_initializer_and_export(self):
+        self.assertEqual(self.run_bank(2048.,self_moves=True)['admission'],'PASS')
 
 if __name__=='__main__':unittest.main()
