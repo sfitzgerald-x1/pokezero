@@ -65,7 +65,10 @@ def load_actor(plan, snapshot, run_root, initializer_run):
     from gpu_engine import v5_model
     from gpu_engine.private_self_moves import check_run_actor
     from pokezero.checkpoint_self_moves import archive_self_moves
+    from pokezero.v5_run import _sha
 
+    if snapshot.model_sha256 != _sha(plan.model.metadata()):
+        raise ValueError('snapshot model digest differs from the plan')
     params, config, meta = v5_model.load(run_root / snapshot.archive, expected_archive_sha256=snapshot.archive_sha256,
         expected_checkpoint_sha256=snapshot.checkpoint_sha256,
         expected_category_vocabulary_sha256=plan.model.category_vocabulary_sha256,

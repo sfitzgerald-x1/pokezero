@@ -49,9 +49,10 @@ class ChunkGateAdmissionTests(unittest.TestCase):
             archive.write_bytes(b'substituted archive')
         return replace(snapshot, checkpoint='initial.pt', archive='initial.npz')
 
-    def run_gate(self, recipe, metadata, *, document=None, origin=False, tamper=False,
+    def run_gate(self, recipe, metadata, *, document=None, origin=False, tamper=False, model_sha256=None,
                  error=RuntimeError, message='collector reached'):
-        snapshot = v5_run.Snapshot(-1, 'initial.pt', 'b' * 64, 'initial.npz', 'c' * 64, 'd' * 64)
+        model_sha256 = v5_run._sha(recipe.model.metadata()) if model_sha256 is None else model_sha256
+        snapshot = v5_run.Snapshot(-1, 'initial.pt', 'b' * 64, 'initial.npz', 'c' * 64, model_sha256)
         params = object()
         with tempfile.TemporaryDirectory() as tmp, ExitStack() as stack:
             root = Path(tmp)
@@ -126,6 +127,12 @@ class ChunkGateAdmissionTests(unittest.TestCase):
         off = plan(arm='D')
         self.run_gate(off, {'self_moves': True}, error=ValueError, message='differs from the plan')
         self.run_gate(replace(off, self_moves=True), {}, error=ValueError, message='requires --initializer-run')
+
+    def test_a_different_snapshot_model_digest_refuses_before_collection(self):
+        for enabled in (False, True):
+            with self.subTest(self_moves=enabled):
+                self.run_gate(replace(plan(arm='D'), self_moves=enabled), {'self_moves': enabled},
+                    model_sha256='d' * 64, error=ValueError, message='snapshot model digest differs')
 
     def test_off_initializer_requires_original_archive_and_checkpoint_evidence(self):
         on = replace(plan(arm='D'), self_moves=True)
