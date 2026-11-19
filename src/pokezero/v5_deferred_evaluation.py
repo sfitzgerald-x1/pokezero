@@ -14,6 +14,7 @@ import math
 import os
 from pathlib import Path
 import stat
+import time
 
 from pokezero import v5_run as run, v5_evaluation as evaluation
 
@@ -279,7 +280,20 @@ def publish_dispatch(request,protocol,expected_run_declaration_sha256, *,
             request=evaluation._request_document(request),prior_completions=_prior(request))
         checked_dispatch_document(value,request)
     directory=request.run_directory/'artifacts'/'cpu-panels'/str(request.declared_games)
-    reference=_publish_equal(directory/'request.json',value)
+    path = directory/'request.json'
+    if protocol is None:
+        if not path.exists():
+            try:
+                run._publish(path, run._json(dict(value, published_unix=time.time())).encode())
+                sync_directory(directory)
+            except FileExistsError:
+                pass
+        existing = json.loads(path.read_bytes())
+        if {k: v for k, v in existing.items() if k != 'published_unix'} != value:
+            raise ValueError('immutable milestone dispatch differs')
+        reference = evaluation.Artifact(str(path.resolve()), run._file_sha(path))
+    else:
+        reference = _publish_equal(path, value)
     relative=str(Path(reference.path).relative_to(request.run_directory))
     return run.EvaluationDispatch(relative,reference.sha256)
 
@@ -306,7 +320,12 @@ def _restore(value):
 
 
 def _restore_milestone(value, *, staged_run_root=None):
-    evaluation._keys(value, ('schema', 'request', 'route_declaration_sha256', 'full_checkpoint'))
+    keys = ('schema', 'request', 'route_declaration_sha256', 'full_checkpoint')
+    if 'published_unix' in value:
+        keys += ('published_unix',)
+        if type(value['published_unix']) not in (int, float) or not math.isfinite(value['published_unix']):
+            raise ValueError('invalid original milestone publication time')
+    evaluation._keys(value, keys)
     if value['schema'] != MILESTONE:
         raise ValueError('committed milestone dispatch required')
     request = evaluation._restore_request(value['request'])

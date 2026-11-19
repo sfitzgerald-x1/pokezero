@@ -13,14 +13,18 @@ import multiprocessing
 import os
 from pathlib import Path
 import random
+import signal
 import statistics
 import threading
 import time
 
 from . import v5_deferred_evaluation as deferred, v5_evaluation as evaluation, v5_run as run
 
-SCHEMA = 'pokezero.v5.progress_showdown.v1'
+SCHEMA = 'pokezero.v5.progress_showdown.v2'
 OPPONENTS = ('foul_play', 'champion_9375', 'max_damage')
+SEATS = {'foul_play': ('p1',), 'champion_9375': ('p1', 'p2'), 'max_damage': ('p1', 'p2')}
+BANK_SEEDS = 1000
+PROGRESS_FP_MS = 100
 INTERVAL_GAMES = 1_000_000
 Z95 = 1.959963984540054
 TERMINAL = ('p1', 'p2', 'tie')
@@ -70,7 +74,7 @@ def load_profile(dispatch, protocol):
     return request, profile, banks
 
 
-def validate_banks(banks, inventory, *, pairs_per_opponent=500):
+def validate_banks(banks, inventory, *, pairs_per_opponent=BANK_SEEDS):
     if inventory.get('complete') is not True:
         raise ValueError('complete training/protected seed and team inventory required')
     seen_seeds = set()
@@ -98,7 +102,7 @@ def validate_banks(banks, inventory, *, pairs_per_opponent=500):
             approval = shared.get(f'{opponent}:{seed}')
             collision = [span for span in ranges if span['start'] <= seed < span['stop']]
             if collision or team_hashes & protected:
-                if (opponent == 'max_damage' or approval != run._sha(teams)
+                if (opponent != 'champion_9375' or approval != run._sha(teams)
                         or any(span.get('owner') != 's0_registered_overlap' for span in collision)):
                     raise ValueError('evaluation bank overlaps protected work')
             if len(team_hashes) != 2 or seen_teams & team_hashes:
@@ -124,7 +128,7 @@ def cell_identity(request, profile, opponent, row, seat):
                 opponent_sha256=profile['opponent_sha256s'][opponent],
                 opponent_law=profile['opponent_law_sha256s'][opponent], seed=row['seed'],
                 teams_sha256=run._sha(row['teams']), seat=seat, max_requests=profile['max_requests'],
-                foulplay_random_seed=fp_seed)
+                foulplay_random_seed=fp_seed, foulplay_search_ms=PROGRESS_FP_MS if opponent == 'foul_play' else None)
 
 
 def _result_from_row(value, identity):
@@ -147,6 +151,18 @@ def read_shared_cell(registry, identity):
         return _result_from_row(json.loads(path.read_bytes()), identity)
     except FileNotFoundError:
         return None
+
+
+def read_shared_start(registry, identity):
+    digest = run._sha(identity)
+    path = Path(registry) / digest[:2] / digest / 'started.json'
+    try:
+        value = json.loads(path.read_bytes())
+    except FileNotFoundError:
+        return None
+    if value['identity'] != identity or not math.isfinite(value['started_unix']):
+        raise ValueError('unmatched original evaluation start')
+    return value
 
 
 def run_shared_cell(registry, identity, evaluate):
@@ -190,9 +206,9 @@ def _fp_config(profile, request, bank, seat, fp_cpu=None):
     config.update(checkpoint=str(request.checkpoint_path), seed_start=bank[0]['seed'], games=len(bank),
                   pokezero_player=seat, foulplay_cpu_affinity=fp_cpu)
     cfg = evaluation._config(config)
-    if (cfg.search_time_ms != 1000 or cfg.foulplay_mcts_iterations is not None
+    if (cfg.search_time_ms != PROGRESS_FP_MS or cfg.foulplay_mcts_iterations is not None
             or cfg.websocket_host != '127.0.0.1' or cfg.max_decision_rounds != profile['max_requests']):
-        raise ValueError('fixed FP1000 local Showdown controls required')
+        raise ValueError('fixed FP100 local Showdown progress controls required')
     return cfg
 
 
@@ -202,7 +218,9 @@ def _champion(profile, fp_config):
     from .neural_policy import (category_vocab_from_model_config, feature_masks_from_model_config,
                                 load_transformer_checkpoint, observation_spec_from_model_config)
     checkpoint = _ref(profile['champion'])
-    cfg = replace(fp_config, checkpoint=checkpoint.verify(), foulplay_cpu_affinity=None)
+    # The champion factory's legacy validation controls are an actor-construction
+    # contract. No Foul Play process or search is used in this H2H opponent.
+    cfg = replace(fp_config, checkpoint=checkpoint.verify(), foulplay_cpu_affinity=None, search_time_ms=1000)
     factory = champion_actor_factory(cfg)
     if factory.contract.checkpoint_sha256 != checkpoint.sha256:
         raise ValueError('untouched 9375 is required')
@@ -295,7 +313,7 @@ def _evaluate_lane(dispatch, protocol, name, registry, selected, cores):
     policy = dict(runtime=profile['runtime'], model_sha256=request.snapshot.model_sha256,
                   label_vocabulary_sha256=profile['label_vocabulary_sha256'], deterministic=True)
     current = evaluation._factory(policy, request, compute_dtype='float32', cpu_only=True)
-    fp_configs = {seat: _fp_config(profile, request, banks['foul_play'], seat, fp_cpu) for seat in ('p1', 'p2')}
+    fp_configs = {seat: _fp_config(profile, request, banks['foul_play'], seat, fp_cpu) for seat in SEATS['foul_play']}
     show = runtime['showdown']
     if any(cfg.showdown_root.resolve() != Path(show['root']).resolve() or cfg.node_binary != show['node']['path']
            for cfg in fp_configs.values()):
@@ -334,7 +352,7 @@ def _evaluate_lane(dispatch, protocol, name, registry, selected, cores):
     try:
         for offset in selected:
             row = banks[name][offset]
-            for seat in ('p1', 'p2'):
+            for seat in SEATS[name]:
                 identity = cell_identity(request, profile, name, row, seat)
                 if name == 'foul_play':
                     play = lambda: asyncio.run(play_fp(offset, row, seat))
@@ -369,6 +387,11 @@ def execute_shard(dispatch, protocol, opponent, registry, *, shard, lanes):
     cores = sorted(os.sched_getaffinity(0))
     if len(cores) < 4 * lanes:
         raise ValueError('four allocated CPUs per active evaluation lane required')
+    # Spread lanes across the inherited cpuset in quota-only pods. Explicitly
+    # assigned 4*lanes cpusets retain the same four-way per-process partition.
+    salt = str(os.environ.get('V2_RUN_NAME', shard))
+    offset = int(run._sha(salt)[:8], 16) % len(cores)
+    cores = cores[offset:] + cores[:offset]
     with ProcessPoolExecutor(max_workers=lanes, mp_context=multiprocessing.get_context('spawn')) as pool:
         futures = [pool.submit(_evaluate_lane, dispatch, protocol, opponent, registry, selected, cores[4*i:4*i+4])
                    for i, selected in enumerate(groups) if selected]
@@ -420,17 +443,18 @@ def _interval(values):
 
 
 def summarize_panel(pairs):
-    if not pairs or any(len(pair) != 2 for pair in pairs):
-        raise ValueError('statistics require the full fixed two-seat bank')
+    width = len(pairs[0]) if pairs else 0
+    if width not in (1, 2) or any(len(pair) != width for pair in pairs):
+        raise ValueError('statistics require the full fixed seat roster')
     seen = [value['win'] for pair in pairs for value in pair if value and value['status'] == 'COMPLETE']
     unknown = sum(value is not None and value['status'] == 'UNKNOWN' for pair in pairs for value in pair)
-    pending = 2 * len(pairs) - len(seen) - unknown
+    pending = width * len(pairs) - len(seen) - unknown
     low, high = [], []
     for pair in pairs:
         wins = sum(value['win'] for value in pair if value and value['status'] == 'COMPLETE')
         missing = sum(not value or value['status'] != 'COMPLETE' for value in pair)
-        low.append(wins / 2)
-        high.append((wins + missing) / 2)
+        low.append(wins / width)
+        high.append((wins + missing) / width)
     bounds = [statistics.mean(low), statistics.mean(high)]
     if not seen:
         ci = None
@@ -439,36 +463,43 @@ def summarize_panel(pairs):
         ci = [max(0., bounds[0] - worst), min(1., bounds[1] + worst)]
     else:
         ci = list(_interval(low))
-    return dict(games_completed=len(seen), unknown=unknown, pending=pending, games_declared=2*len(pairs),
+    return dict(games_completed=len(seen), unknown=unknown, pending=pending, games_declared=width*len(pairs),
                 win_rate=statistics.mean(seen) if seen else None, ci95=ci,
                 identification_bounds=bounds)
 
 
-def summarize(dispatch, protocol, registry, *, output):
+def summarize(dispatch, protocol, registry, *, output=None):
     request, profile, banks = load_profile(dispatch, protocol)
     _check_registry(profile, registry)
     panel = {}
     all_rows = []
+    starts = []
     for name in OPPONENTS:
         pairs = []
         for row in banks[name]:
             pair = []
-            for seat in ('p1', 'p2'):
+            for seat in SEATS[name]:
                 identity = cell_identity(request, profile, name, row, seat)
-                pair.append(read_shared_cell(registry, identity))
+                result = read_shared_cell(registry, identity)
+                pair.append(result)
+                started = result or read_shared_start(registry, identity)
+                if started is not None:
+                    starts.append(started['started_unix'])
             pairs.append(pair)
         panel[name] = summarize_panel(pairs)
         all_rows.extend(row for pair in pairs for row in pair if row)
-    published = Path(dispatch.path).stat().st_mtime
+    document = dispatch.document()
+    published = document['published_unix'] if 'published_unix' in document else Path(dispatch.path).stat().st_mtime
     terminal = all(value['pending'] == 0 for value in panel.values())
     finished = max((x['finished_unix'] for x in all_rows), default=published) if terminal else time.time()
-    first = min((x['started_unix'] for x in all_rows), default=finished)
+    first = min(starts, default=finished)
     result = dict(schema=SCHEMA, declared_games=request.declared_games, protocol_sha256=protocol.sha256,
                   declaration_sha256=request.declaration_sha256, dispatch_sha256=dispatch.sha256,
                   panel=panel, published_unix=published, observed_unix=time.time(), complete=terminal,
-                  work_started=bool(all_rows), queue_wait_seconds=max(0, first-published),
+                  work_started=bool(starts), queue_wait_seconds=max(0, first-published),
                   eval_lag_seconds=max(0, finished-published))
-    deferred._publish_equal(output, result)
+    if output is not None:
+        deferred._publish_equal(output, result)
     return result
 
 
@@ -486,10 +517,16 @@ def pending_shards(dispatch, protocol, registry):
         count = profile['shards'][name]
         for shard in range(count):
             pending = sum(read_shared_cell(registry, cell_identity(request, profile, name, row, seat)) is None
-                          for row in banks[name][shard::count] for seat in ('p1', 'p2'))
+                          for row in banks[name][shard::count] for seat in SEATS[name])
             if pending:
                 result.append(dict(opponent=name, shard=shard, cells_pending=pending))
     return result
+
+
+def _run_owned_shard(dispatch, protocol, registry, opponent, shard, lanes):
+    os.setsid()
+    print(json.dumps(measure_shard(dispatch, protocol, opponent, registry,
+                                  shard=shard, lanes=lanes)), flush=True)
 
 
 def main(argv=None):
@@ -501,15 +538,30 @@ def main(argv=None):
     worker.add_argument('--opponent', choices=OPPONENTS, required=True)
     worker.add_argument('--shard', type=int, required=True)
     worker.add_argument('--lanes', type=int, default=4)
+    worker.add_argument('--wall-seconds', type=int, default=3600)
     commands.add_parser('summarize').add_argument('--output', type=Path, required=True)
     commands.add_parser('pending')
     args = parser.parse_args(argv)
     dispatch = evaluation.Artifact(args.dispatch, args.dispatch_sha256)
     protocol = evaluation.Artifact(args.protocol, args.protocol_sha256)
     if args.command == 'evaluate':
-        print(json.dumps(measure_shard(dispatch, protocol, args.opponent, args.registry,
-                                      shard=args.shard, lanes=args.lanes)))
-        return 0
+        if not 1 <= args.wall_seconds <= 7200:
+            parser.error('finite shard wall time must be at most 7200 seconds')
+        for variable in ('OMP_NUM_THREADS', 'OPENBLAS_NUM_THREADS', 'MKL_NUM_THREADS', 'NUMEXPR_NUM_THREADS'):
+            os.environ[variable] = '1'
+        process = multiprocessing.get_context('spawn').Process(target=_run_owned_shard, args=(
+            dispatch, protocol, args.registry, args.opponent, args.shard, args.lanes))
+        process.start()
+        process.join(args.wall_seconds)
+        if process.is_alive():
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                process.kill()
+            process.join()
+            print(json.dumps(dict(status='UNKNOWN', reason='shard wall deadline', shard=args.shard)))
+            return 124
+        return 0 if process.exitcode == 0 else 1
     result = (summarize(dispatch, protocol, args.registry, output=args.output)
               if args.command == 'summarize' else pending_shards(dispatch, protocol, args.registry))
     print(json.dumps(result))

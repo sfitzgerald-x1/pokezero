@@ -2,9 +2,11 @@
 import json
 from pathlib import Path
 import tempfile
+import shutil
+import subprocess
 from types import SimpleNamespace
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 from pokezero import v5_progress_evaluation as progress, v5_progress_report as report, v5_run as run
 
@@ -20,10 +22,14 @@ class ProgressEvaluationTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'overlap'):
             progress.validate_banks(banks, inventory, pairs_per_opponent=2)
         inventory['seed_ranges'][0]['owner'] = 's0_registered_overlap'
-        original = banks['foul_play'][0]['teams']
-        inventory['registered_s0_pairs'] = {'foul_play:10': run._sha(original)}
+        inventory['registered_s0_pairs'] = {'foul_play:10': run._sha(banks['foul_play'][0]['teams'])}
+        with self.assertRaisesRegex(ValueError, 'overlap'):
+            progress.validate_banks(banks, inventory, pairs_per_opponent=2)
+        inventory['seed_ranges'] = [dict(start=20, stop=21, owner='s0_registered_overlap')]
+        original = banks['champion_9375'][0]['teams']
+        inventory['registered_s0_pairs'] = {'champion_9375:20': run._sha(original)}
         progress.validate_banks(banks, inventory, pairs_per_opponent=2)
-        banks['foul_play'][0]['teams'] = {'p1': original['p2'], 'p2': original['p1']}
+        banks['champion_9375'][0]['teams'] = {'p1': original['p2'], 'p2': original['p1']}
         with self.assertRaisesRegex(ValueError, 'overlap'):
             progress.validate_banks(banks, inventory, pairs_per_opponent=2)
 
@@ -89,6 +95,50 @@ class ProgressEvaluationTests(unittest.TestCase):
             self.assertEqual({key: row['team'] for key, row in users.items()}, teams)
             self.assertEqual(_controlled_players(cfg, None), {seat: 'Current', other: 'FP'})
 
+    def test_native_randbats_honors_both_packed_teams_in_pinned_showdown(self):
+        from pokezero.local_showdown import default_showdown_root
+        node = shutil.which('node')
+        source = default_showdown_root()
+        sim = source/'dist'/'sim'
+        if not node or not (sim/'index.js').is_file():
+            self.skipTest('pinned compiled Showdown is not installed')
+        revision = subprocess.check_output(['git', '-C', str(source), 'rev-parse', 'HEAD'], text=True).strip()
+        if revision != 'f76228a1354b5d0f307ca2d16101294ad3a2308b':
+            self.skipTest('requires bound Showdown revision')
+        script = """
+const {Battle, Teams} = require(process.argv[1]);
+const battle = new Battle({formatid:'gen3randombattle', seed:[1,2,3,4]});
+battle.setPlayer('p1',{name:'A',team:Teams.pack([{species:'Magikarp',moves:['splash'],level:73}])});
+battle.setPlayer('p2',{name:'B',team:Teams.pack([{species:'Caterpie',moves:['tackle'],level:41}])});
+console.log(JSON.stringify(battle.sides.map(side=>side.pokemon.map(p=>[p.species.id,p.level]))));
+battle.destroy();
+"""
+        data = json.loads(subprocess.check_output([node, '-e', script, str(sim)], timeout=15))
+        self.assertEqual(data, [[['magikarp', 73]], [['caterpie', 41]]])
+
+    def test_final_roster_and_active_start_appear_in_progress(self):
+        from pokezero.v5_evaluation import Artifact
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            request_path = root/'request'
+            request_path.write_text(json.dumps({'published_unix': 100}))
+            dispatch = Artifact(str(request_path), run._file_sha(request_path))
+            request = SimpleNamespace(declared_games=1_000_000, declaration_sha256='decl')
+            banks = {n: [{}]*1000 for n in progress.OPPONENTS}
+            profile = {'shared_cell_registry': str(root)}
+            def identity(_request, _profile, opponent, _row, seat):
+                return {'opponent': opponent, 'seat': seat}
+            with patch.object(progress, 'load_profile', return_value=(request, profile, banks)), \
+                    patch.object(progress, 'cell_identity', side_effect=identity), \
+                    patch.object(progress, 'read_shared_cell', return_value=None), \
+                    patch.object(progress, 'read_shared_start', return_value={'started_unix': 117}):
+                row = progress.summarize(dispatch, dispatch, root)
+            self.assertTrue(row['work_started'])
+            self.assertEqual(row['published_unix'], 100)
+            self.assertAlmostEqual(row['queue_wait_seconds'], 17)
+            self.assertFalse(row['complete'])
+            self.assertEqual([row['panel'][n]['games_declared'] for n in progress.OPPONENTS], [1000, 2000, 2000])
+
     def test_staged_request_keeps_original_bytes_and_checks_copied_artifacts(self):
         from pokezero import v5_deferred_evaluation as deferred, v5_evaluation as evaluation
         with tempfile.TemporaryDirectory() as directory:
@@ -113,7 +163,11 @@ class ProgressEvaluationTests(unittest.TestCase):
             copied.write_bytes((original/dispatch.request).read_bytes())
             reference = evaluation.Artifact(str(copied), dispatch.request_sha256)
             self.assertEqual(deferred.read_milestone(reference, staged_run_root=root).archive_path, archive)
-            self.assertEqual(json.loads(copied.read_bytes())['request']['run_directory'], str(original))
+            value = json.loads(copied.read_bytes())
+            self.assertEqual(value['request']['run_directory'], str(original))
+            with patch.object(deferred.time, 'time', return_value=value['published_unix']+17):
+                self.assertEqual(deferred.publish_dispatch(original_request, None, original_request.declaration_sha256),
+                                 dispatch)
             archive.write_bytes(b'wrong actor')
             with self.assertRaisesRegex(ValueError, 'frozen evaluation input differs'):
                 deferred.read_milestone(reference, staged_run_root=root)

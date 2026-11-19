@@ -519,7 +519,17 @@ def _factory(protocol,request,*,compute_dtype='bfloat16',cpu_only=False):
     """Original public catalog for THIS archive; never load a champion model."""
     from . import v5_worker as worker
     from .v5_phasec import category_binding
-    runtime=Artifact(**protocol['runtime']).document();worker._source(runtime)
+    runtime=Artifact(**protocol['runtime']).document()
+    if cpu_only and os.environ.get('V2_OUT'):
+        # The sanctioned launcher supplies a verified archive and does not
+        # include .git in the staged source. Bind that actual launch receipt.
+        receipt = json.loads((Path(os.environ['V2_OUT'])/'source.json').read_bytes())
+        if (receipt != {'commit': runtime['source_commit'], 'archive_sha256': runtime['source_archive_sha256']}
+                or os.environ.get('V2_SOURCE_COMMIT') != runtime['source_commit']):
+            raise ValueError('launched CPU source archive differs from the evaluator binding')
+        worker._record(runtime['showdown']['node'], json_value=False)
+    else:
+        worker._source(runtime)
     if cpu_only:
         import sys
         import jax
