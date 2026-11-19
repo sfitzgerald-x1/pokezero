@@ -163,7 +163,7 @@ class Search:
         packet=_packet(request['own_request_line'],request['owner'])
         with literal_history(adapter,lines):   # V2 self_moves: B2's own moves/PP read this root's literal history, then cleared
             root=worlds.from_b2(adapter,packet,self.source,self.metadata,
-                address=DecisionAddress(request['stream_id'],request['decision_index'],owner))
+                address=DecisionAddress(request['stream_id'],request['decision_index'],owner),lines=lines)
             pending.root=root
             pending.worldset=worlds.sample_worlds(root,self.source,self.tables,count=self.count,seed=self.seed)
             if not pending.worldset.fully_constructed:
