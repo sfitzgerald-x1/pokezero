@@ -12,6 +12,8 @@ from .fresh200_native_identity import to_id
 
 
 SWITCH_CHOICES = frozenset(('switch', 'instaswitch'))
+# Gen 3 Shadow Tag onFoeTrapPokemon in the pinned Native callback catalog.
+SHADOW_TAG_TRAP_CALLBACK = 'Callback:404ef8be16446e7ea614f5f86395c8da0718dc0f3ea85965fd0bbf4fac41bd34'
 
 
 class UnmappedNativeHistory(ValueError):
@@ -185,8 +187,9 @@ class NativeHistory:
     def _switch(self, frame):
         if not frame.leave['result'] or frame.leave['result'] == 'pursuitfaint':return
         arguments=items(frame.enter['arguments']);target=pokemon(arguments[0])
+        side = target[0]
+        previous_install = self.last_active_install[side]
         if frame.leave['result'] is True and self.trap_causes:
-            side = target[0]
             earlier = items(frame.enter['before']['sides'][side]['fields']['active'])
             current = items(frame.leave['after']['sides'][side]['fields']['active'])
             if earlier != current:
@@ -216,6 +219,7 @@ class NativeHistory:
                     and cleared['fainted'] is True and cleared['hp'] == 0 and cleared['status'] == ''):
                 prior['replacement_clear_sequence'] = frame.end
         self._retire_arena_trap(frame, actor, target)
+        self._retire_shadow_tag(frame, actor, target, previous_install)
         self.pending_switches.remove(matches[0]);self.last_kind[target[0]]=1;self.last_index[target[0]]=target[1]
         self.event('INSTALLED_CHOSEN_SWITCH',frame,side=target[0],original_target=target[1],commit_call_id=matches[0]['call'])
 
@@ -246,6 +250,35 @@ class NativeHistory:
                     and 'arena_trap_departure' not in cause):
                 cause['arena_trap_departure'] = dict(replacement=installed[0], enter=frame.sequence,
                                                       end=frame.end, epoch=self.phase_epoch)
+
+    def _retire_shadow_tag(self, frame, actor, target, previous_install):
+        if frame.leave['result'] is not True or actor == target or not self.trap_causes:
+            return
+        before, after = frame.enter['before'], frame.leave['after']
+        side = actor[0]
+        outgoing = items(before['sides'][side]['fields']['active'])
+        installed = items(after['sides'][side]['fields']['active'])
+        opposing = items(before['sides'][1 - side]['fields']['active'])
+        if (len(outgoing) != 1 or not outgoing[0] or pokemon(outgoing[0]) != actor
+                or len(opposing) != 1 or not opposing[0]
+                or opposing != items(after['sides'][1 - side]['fields']['active'])):
+            return
+        victim = pokemon(opposing[0])
+        for cause in self.trap_causes.get(victim, ()):
+            writer = cause.get('shadow_tag_writer')
+            if (not writer or 'shadow_tag_departure' in cause or writer['source'] != outgoing[0]
+                    or writer['victim'] != opposing[0] or writer['epoch'] + 1 != self.phase_epoch
+                    or max(previous_install, self.last_active_install[victim[0]]) >= cause['sequence']
+                    or cause['sequence'] >= frame.sequence):
+                continue
+            live = [member(cache, victim) for cache in (before, after)]
+            source, replacement = member(before, actor), member(after, target)
+            if (not all(mon['hp'] > 0 and mon['fainted'] is False and mon['trapped'] is True for mon in live)
+                    or source['hp'] <= 0 or source['fainted'] is not False or source['ability'] != 'shadowtag'
+                    or replacement['hp'] <= 0 or replacement['fainted'] is not False):
+                continue
+            cause['shadow_tag_departure'] = dict(replacement=installed[0], enter=frame.sequence,
+                                                  end=frame.end, epoch=self.phase_epoch)
 
     def _dispatch(self, frame):
         identity=pokemon(frame.enter['subject']);move=move_id(items(frame.enter['arguments'])[0]);side=identity[0]
@@ -386,6 +419,43 @@ class NativeHistory:
             if any('arena_trap_double_faint' in cause for cause in retained):
                 self.double_faint_trap_proofs[victim] = retained
 
+    def _bind_shadow_tag_replacement_faint(self, frame):
+        if frame.leave['result'] is not False:
+            return
+        for victim, causes in self.trap_causes.items():
+            for cause in causes:
+                writer = cause.get('shadow_tag_writer')
+                departure = cause.get('shadow_tag_departure')
+                if (not writer or not departure or 'shadow_tag_replacement_faint' in cause
+                        or departure['epoch'] != self.phase_epoch
+                        or self.last_active_install[1 - victim[0]] != departure['end']
+                        or self.last_active_install[victim[0]] >= cause['sequence']):
+                    continue
+                replacement = pokemon(departure['replacement'])
+                retained = self.retained_status.get(replacement)
+                faint = self.frames.get(retained['call_id']) if retained else None
+                if (faint is None or faint.enter['subject'] != departure['replacement']
+                        or not departure['end'] < faint.sequence < faint.end < frame.sequence):
+                    continue
+                before, after = frame.enter['before'], frame.leave['after']
+                snapshots = (faint.enter['before'], faint.leave['after'], before, after)
+                if not all(items(cache['sides'][ref['side']]['fields']['active']) == [ref]
+                           for cache in snapshots for ref in (writer['victim'], departure['replacement'])):
+                    continue
+                survivors = [member(cache, victim) for cache in snapshots]
+                if not all(mon['hp'] > 0 and mon['fainted'] is False and mon['trapped'] is True
+                           for mon in survivors):
+                    continue
+                old, new = member(before, replacement), member(after, replacement)
+                if not (old['hp'] == new['hp'] == 0 and old['fainted'] is False and new['fainted'] is True):
+                    continue
+                if not any(child.operation == 'Pokemon.clearVolatile' and child.end is not None
+                           and child.enter['subject'] == departure['replacement'] and self.within(child, frame)
+                           and items(child.enter['arguments']) == [False] for child in self.frames.values()):
+                    continue
+                cause['shadow_tag_replacement_faint'] = dict(faint=faint.end, flush_start=frame.sequence,
+                                                             flush_end=frame.end)
+
     def _disable(self, frame):
         identity=pokemon(frame.enter['subject']);arguments=items(frame.enter['arguments'])
         need(arguments and type(arguments[0]) is str,'literal Native disableMove argument required')
@@ -462,6 +532,44 @@ class NativeHistory:
                             and member(before, identity)['hp'] > 0 and member(before, identity)['trapped'] is False):
                         cause['arena_trap_writer'] = dict(source=source, victim=victims[0], epoch=self.phase_epoch)
         self.trap_causes.setdefault(identity, []).append(cause)
+
+    def _shadow_tag_write(self, frame):
+        event = self.frames.get(frame.parent)
+        arguments = items(frame.enter['arguments'])
+        if not event or event.operation != 'Battle.runEvent' or not arguments:
+            return
+        victim = arguments[0]
+        if items(event.enter['arguments'])[:2] != ['TrapPokemon', victim]:
+            return
+        context = frame.enter.get('context', {})
+        after_context = frame.leave.get('context', {})
+        effect = self._cause(frame, None)
+        state = context.get('effectState')
+        if (not effect or (effect['id'], effect['effect_type']) != ('shadowtag', 'Ability')
+                or not state or 'fields' not in state or after_context.get('effectState') != state
+                or after_context.get('effect') != context.get('effect')
+                or frame.leave['result'] != {'$native': 'undefined'}):
+            return
+        state = fields(state)
+        source = state.get('target')
+        if state.get('id') != 'shadowtag' or not source or source.get('kind') != 'Pokemon':
+            return
+        holder, identity = pokemon(source), pokemon(victim)
+        if holder[0] == identity[0]:
+            return
+        before, after = frame.enter['before'], frame.leave['after']
+        if not all(items(cache['sides'][ref['side']]['fields']['active']) == [ref]
+                   for cache in (before, after) for ref in (source, victim)):
+            return
+        if not all(member(cache, holder)['ability'] == 'shadowtag'
+                   and all(member(cache, actor)['hp'] > 0 and member(cache, actor)['fainted'] is False
+                           for actor in (holder, identity)) for cache in (before, after)):
+            return
+        if member(before, identity)['trapped'] is not False or member(after, identity)['trapped'] is not True:
+            return
+        writer = dict(source=source, victim=victim, epoch=self.phase_epoch)
+        self.trap_causes.setdefault(identity, []).append(dict(effect=effect, call_id=frame.call,
+            sequence=frame.end, shadow_tag_writer=writer))
 
     def _condition_start(self, frame):
         if frame.leave['result'] is False:return
@@ -549,9 +657,12 @@ class NativeHistory:
                 elif frame.operation=='Pokemon.transformInto':self._transform(frame)
                 elif frame.operation=='Side.addSlotCondition':self._wish(frame)
                 elif frame.operation=='Pokemon.faint':self._faint(frame)
-                elif frame.operation=='Battle.faintMessages':self._bind_arena_trap_double_faint(frame)
+                elif frame.operation=='Battle.faintMessages':
+                    self._bind_arena_trap_double_faint(frame)
+                    self._bind_shadow_tag_replacement_faint(frame)
                 elif frame.operation=='Pokemon.disableMove':self._disable(frame)
                 elif frame.operation=='Pokemon.tryTrap':self._trap(frame)
+                elif frame.operation==SHADOW_TAG_TRAP_CALLBACK:self._shadow_tag_write(frame)
                 elif frame.operation=='Battle.singleEvent':self._condition_start(frame)
                 elif frame.operation=='Field.setWeather':self._weather(frame)
                 elif frame.operation=='Pokemon.getMoveRequestData':self._locks(frame)
@@ -571,6 +682,7 @@ class NativeHistory:
             retained_status=[dict(actor=list(k),**v) for k,v in sorted(self.retained_status.items())],
             disable_causes=[dict(actor=list(k[:2]),slot_object=k[2],causes=v) for k,v in sorted(self.disable_causes.items())],
             trap_causes=[dict(actor=list(k),causes=v) for k,v in sorted(self.trap_causes.items())],
+            last_active_install=list(self.last_active_install),
             double_faint_trap_proofs=[dict(actor=list(k), causes=v) for k,v in sorted(self.double_faint_trap_proofs.items())],
             rest_state_objects=sorted(self.rest_states),encore_slots=[dict(actor=list(k[:2]),state_object=k[2],**v) for k,v in sorted(self.encore_slots.items())],
             weather_creation=self.weather_creation,phase_epoch=self.phase_epoch,old_stall=self.old_stall,
