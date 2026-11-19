@@ -24,7 +24,7 @@ except ImportError:
 
 
 def run_fixture(root, out, *, distribution=None, evaluation=None, limit=None, writer_failure=False,
-                publication_failure=False, stop=False):
+                publication_failure=False, stop=False, invalid_resume_rank=None):
     from gpu_engine import v2_bench_trainer, v2_collector, v5_device_backend, v5_model
 
     torch.set_num_threads(1)
@@ -87,7 +87,7 @@ def run_fixture(root, out, *, distribution=None, evaluation=None, limit=None, wr
                                  fixture=(iteration, begin, end))
         return roster, dict(SELFPLAY=end-begin, HISTORICAL=0), 0
 
-    real_save, real_export = trainer.save_checkpoint, v5_model.export
+    real_save, load, real_export = trainer.save_checkpoint, trainer.load_checkpoint, v5_model.export
     real_write, real_link = v2_fused.write_json, trainer.os.link
     def save(path, runtime):
         phases['saves'].append(path.name)
@@ -117,6 +117,8 @@ def run_fixture(root, out, *, distribution=None, evaluation=None, limit=None, wr
 
     def cpu(function):
         def placed(*args, **kwargs):
+            if function is load and rank == invalid_resume_rank:
+                kwargs['expected_checkpoint_sha256'] = '0'*64
             return function(*args, **dict(kwargs, device='cpu'))
         return placed
 
@@ -167,9 +169,12 @@ def run_fixture(root, out, *, distribution=None, evaluation=None, limit=None, wr
         try:
             phases['exit'] = v2_fused.main(argv, distribution=distribution)
         except Exception as error:
-            if not writer_failure:
+            if writer_failure:
+                assert isinstance(error, trainer.CheckpointWriteError), repr(error)
+            elif invalid_resume_rank is not None:
+                assert isinstance(error, ValueError), repr(error)
+            else:
                 raise
-            assert isinstance(error, trainer.CheckpointWriteError), repr(error)
             phases['error'] = str(error)
     return phases
 
@@ -234,6 +239,11 @@ class FusedDeferredTests(unittest.TestCase):
             self.assertEqual(len({tuple(r['saves']) for r in first}), 1)
             self.assertRegex(first[0]['saves'][0], r'^train-0-[0-9a-f]{32}\.pt$')
             request = out/'artifacts/cpu-panels/16/request.json'
+            self.assertFalse(request.exists())
+            refused = run_four(root, 'invalid-resume', evaluation=policy, invalid_resume_rank=3)
+            self.assertEqual({r['error'] for r in refused},
+                {'rank 3 checkpoint resume failed: original checkpoint SHA256 differs'})
+            self.assertEqual([r['collect'] for r in refused], [[], [], [], []])
             self.assertFalse(request.exists())
             second = run_four(root, 'resume', evaluation=policy, stop=True)
             self.assertEqual([r['exit'] for r in second], [0]*4)
