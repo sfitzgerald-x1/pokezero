@@ -828,9 +828,8 @@ def set_posterior_strike(c,state,side,move,caller_move,critical,hits_sub,endured
     set_posterior's support. Reads only operands the step already computed; no draw."""
     if not set_posterior_enabled(c):return c
     from . import device_set_posterior
-    evidence={} if hard_mask is None else dict(hard_mask=hard_mask)
     trackers,_=device_set_posterior.in_tree(c.trackers,c.belief_tables,state,side,move,caller_move,critical,hits_sub,
-        endured,dealt,hp_before,hp_after,num,den,use,pursuit=pursuit,hit_by=hit_by,**evidence)
+        endured,dealt,hp_before,hp_after,num,den,use,pursuit=pursuit,hit_by=hit_by,hard_mask=hard_mask)
     return c._replace(trackers=trackers)
 
 

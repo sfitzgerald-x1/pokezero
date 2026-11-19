@@ -19,4 +19,4 @@ Train B composes retained genders, infatuation and the v6 chance tape at 766833f
 Train B adds Forecast while preserving all prior state at 77a780c2.
 The #1990 integration merge retains the default-off narrowing callbacks.
 """
-CURRENT_TRANSITION = '99009d989be289a4c16d807cd08176e630d9c7f3'
+CURRENT_TRANSITION = 'a56a31373cbbdade6975895d8244cd18188607be'
