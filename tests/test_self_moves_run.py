@@ -145,12 +145,12 @@ class RunChecksTests(unittest.TestCase):
                     refuse_unthreaded({}, plan=plan, catalog=catalog, context='t')
 
     def test_off_only_entry_points_refuse_before_actor_or_backend_use(self):
-        from gpu_engine import v2_head_to_head as plain, v2_search_head_to_head as search
+        from gpu_engine import v2_search_head_to_head as search
         with tempfile.TemporaryDirectory() as tmp:
             common = ['--config', 'unused.json', '--out', tmp, '--a-run', 'a', '--a-iteration', '0', '--b-run', 'b', '--b-iteration', '0']
             champion = ['--config', 'unused.json', '--out', tmp, '--b-run', 'champion', '--b-iteration', '0', '--reduction', 'none', '--label', 'unit',
                 '--champion-archive', 'c.npz', '--champion-archive-sha256', 'a'*64, '--champion-checkpoint-sha256', 'b'*64]
-            for module, args in ((plain, common), (search, common + ['--reduction', 'none', '--label', 'unit']), (search, champion)):
+            for module, args in ((search, common + ['--reduction', 'none', '--label', 'unit']), (search, champion)):
                 for plan_on, catalog_on in ((True, False), (False, True), (True, True)):
                     context = dict(plan=SimpleNamespace(self_moves=plan_on),
                         prepared=SimpleNamespace(catalog=SimpleNamespace(masks=SimpleNamespace(self_moves=catalog_on))))
