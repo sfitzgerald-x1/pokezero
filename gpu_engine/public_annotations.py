@@ -56,6 +56,9 @@ def classify(line):
     if line in ('|debug|natural status immunity', '|debug|weather immunity',
                 '|debug|immune to status', '|debug|doubling secondary chance'):
         return 'text'
+    # Frozen Gen 3 owner streams report the Protect roll and sunlight scaling.
+    if line in ('|debug|Success chance: 50%', '|debug|Sunny Day water suppress'):
+        return 'text'
     if attract_idents(line) is not None:return 'attract'
     # Incidental proc tags retain their existing consumers; text cannot
     # manufacture a source ability/item reveal under this annotation contract.

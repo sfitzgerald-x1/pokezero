@@ -24,6 +24,18 @@ class AnnotationLexicalTests(unittest.TestCase):
             with self.subTest(line=line):
                 self.assertIsNone(classify(line))
 
+    def test_frozen_roots30_and32_owner_diagnostics(self):
+        from gpu_engine.public_annotations import classify
+
+        for line in ('|debug|Success chance: 50%', '|debug|Sunny Day water suppress'):
+            with self.subTest(line=line):
+                self.assertEqual(classify(line), 'text')
+                self.assertIsNone(classify(line + '|extra'))
+        for line in ('|debug|Success chance: 25%', '|debug|Success chance: 050%',
+                     '|debug|Sunny Day fire boost', '|debug|Sunny Day water suppress '):
+            with self.subTest(line=line):
+                self.assertIsNone(classify(line))
+
     def test_literal_gen3_damage_debug_messages(self):
         from gpu_engine.public_annotations import classify
 
