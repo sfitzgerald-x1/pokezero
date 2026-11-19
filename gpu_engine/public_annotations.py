@@ -93,6 +93,8 @@ def classify(line):
     # These pinned diagnostics describe a modifier or refused status attempt.
     if line in ('|debug|rain water boost', '|debug|set status [tox] interrupted'):
         return 'text'
+    if line == '|debug|before turn callback: mirrorcoat':
+        return 'text'
     if kind in ('-hint','-message'):
         return 'text' if len(parts)==3 and parts[2].strip() else None
     # The frozen owner streams include the Focus Punch callback and Reversal power.
