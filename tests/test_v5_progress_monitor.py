@@ -47,7 +47,7 @@ class ProgressMonitorTests(unittest.TestCase):
                 self.assertEqual(monitor.tick(source, folder, **options)['queued'], 1)
                 opaque = launch.call_args.args[-1]
                 self.assertRegex(opaque, r'^v2q-[0-9a-f]{12}-cpu-r1$')
-                observe.return_value = ('own-job-uid', 'Complete')
+                observe.return_value = ('own-job-uid', 'Complete', None)
                 self.assertEqual(monitor.tick(source, folder, **options)['finalized'], 1)
                 monitor.tick(source, folder, **options)
             launch.assert_called_once()
@@ -60,6 +60,35 @@ class ProgressMonitorTests(unittest.TestCase):
             timeline = (folder/'eval-timeline.jsonl').read_text().splitlines()
             self.assertEqual(len(timeline), 1)
             self.assertEqual(json.loads(timeline[0])['declared_games'], 1_000_000)
+
+    def test_exhausted_shard_reports_its_last_failure_without_relaunch(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            dispatch = root/'artifacts/cpu-panels/1000000/request.json'
+            dispatch.parent.mkdir(parents=True)
+            dispatch.write_text('{}')
+            protocol = root/'protocol.json'
+            protocol.write_text('{}')
+            config = dict(staged_run_root=str(root), registry=str(root/'registry'), milestones=1,
+                          protocol=dict(path=str(protocol), sha256=run._file_sha(protocol)),
+                          max_active_jobs=1, max_attempts=1)
+            folder = root/'report'
+            launch, release = Mock(return_value=0), Mock()
+            observe = Mock(return_value=('owned', 'Failed', 'DeadlineExceeded'))
+            pending = dict(opponent='champion_9375', shard=2, cells_pending=17)
+            with patch.object(panels, 'summarize', return_value=dict(complete=False)), \
+                    patch.object(panels, 'pending_shards', return_value=[pending]), \
+                    patch.object(monitor.report, 'update_report'):
+                first = monitor.tick(config, folder, allow_launch=True, launch=launch, observe=observe, release=release)
+                second = monitor.tick(config, folder, allow_launch=True, launch=launch, observe=observe, release=release)
+            self.assertEqual(first['exhausted_shards'], 0)
+            self.assertEqual(second['exhausted_shards'], 1)
+            self.assertEqual(second['queued'], 1)
+            issue, = json.loads((folder/'eval-queue.json').read_text())['exhausted']
+            self.assertEqual(issue['last_reason'], 'DeadlineExceeded')
+            self.assertEqual(issue['cells_pending'], 17)
+            launch.assert_called_once()
+            release.assert_called_once_with(launch.call_args.args[-1], 'owned')
 
     def test_ambiguous_slack_failure_gets_receipt_without_repost(self):
         with tempfile.TemporaryDirectory() as directory:

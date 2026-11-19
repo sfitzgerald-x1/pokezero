@@ -57,6 +57,32 @@ class ProgressEvaluationTests(unittest.TestCase):
             progress.run_shared_cell(directory, self.identity(checkpoint='different'), play)
             self.assertEqual(play.call_count, 2)
 
+    def test_progress_only_unknown_retries_once_without_overwriting_attempt(self):
+        with tempfile.TemporaryDirectory() as directory:
+            identity = self.identity()
+            play = Mock(side_effect=[RuntimeError('lost engine'), ('p1', {'witness': 'finished'})])
+            value = progress.run_shared_cell(directory, identity, play, retry_unknown=True)
+            self.assertEqual((value['status'], value['prior_unknown_attempts']), ('COMPLETE', 1))
+            digest = run._sha(identity)
+            slot = Path(directory) / digest[:2] / digest
+            original = json.loads((slot / 'attempt-0.json').read_bytes())
+            self.assertEqual(original['status'], 'UNKNOWN')
+            self.assertEqual(value['started_unix'], original['started_unix'])
+            self.assertEqual(progress.run_shared_cell(directory, identity, play, retry_unknown=True), value)
+            self.assertEqual(play.call_count, 2)
+            self.assertEqual(progress.summarize_panel([[value]])['prior_unknown_attempts'], 1)
+
+    def test_progress_only_interruption_resumes_the_unstarted_retry(self):
+        with tempfile.TemporaryDirectory() as directory:
+            identity = self.identity()
+            with self.assertRaises(KeyboardInterrupt):
+                progress.run_shared_cell(directory, identity, Mock(side_effect=KeyboardInterrupt), retry_unknown=True)
+            play = Mock(side_effect=RuntimeError('broken simulator'))
+            value = progress.run_shared_cell(directory, identity, play, retry_unknown=True)
+            self.assertEqual((value['status'], value['prior_unknown_attempts']), ('UNKNOWN', 1))
+            progress.run_shared_cell(directory, identity, play, retry_unknown=True)
+            play.assert_called_once_with()
+
     def test_interrupted_cell_remains_unknown(self):
         with tempfile.TemporaryDirectory() as directory:
             with self.assertRaises(KeyboardInterrupt):

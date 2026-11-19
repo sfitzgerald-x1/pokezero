@@ -165,7 +165,7 @@ def read_shared_start(registry, identity):
     return value
 
 
-def run_shared_cell(registry, identity, evaluate):
+def run_shared_cell(registry, identity, evaluate, *, retry_unknown=False):
     """Coordinate exact-cell reuse with route consumers using the same registry."""
     digest = run._sha(identity)
     directory = Path(registry) / digest[:2] / digest
@@ -178,25 +178,38 @@ def run_shared_cell(registry, identity, evaluate):
         result_path = directory / 'result.json'
         if result_path.exists():
             return _result_from_row(json.loads(result_path.read_bytes()), identity)
-        started = directory / 'started.json'
-        if started.exists():
-            first = json.loads(started.read_bytes())
-            if first['identity'] != identity:
-                raise ValueError('attempt belongs to a different registered cell')
-            value = dict(first, status='UNKNOWN', win=None, reason='interrupted original attempt')
-        else:
-            first = dict(identity=identity, started_unix=time.time())
-            deferred._publish_equal(started, first)
-            try:
-                terminal, witness = evaluate()
-                if terminal not in TERMINAL:
-                    raise ValueError('no verified terminal')
-                value = dict(first, status='COMPLETE', terminal=terminal, witness=witness,
-                             win=int(terminal == identity['seat']))
-            except Exception as error:
-                value = dict(first, status='UNKNOWN', win=None,
-                             reason=type(error).__name__ + ': ' + str(error)[:1024])
-        value['finished_unix'] = time.time()
+        first_start = None
+        for attempt in range(2 if retry_unknown else 1):
+            started = directory / ('started.json' if attempt == 0 else 'retry-started.json')
+            outcome = directory / f'attempt-{attempt}.json'
+            if outcome.is_file():
+                value = _result_from_row(json.loads(outcome.read_bytes()), identity)
+            elif started.exists():
+                first = json.loads(started.read_bytes())
+                if first['identity'] != identity:
+                    raise ValueError('attempt belongs to a different registered cell')
+                value = dict(first, status='UNKNOWN', win=None, reason='interrupted original attempt',
+                             finished_unix=time.time())
+                deferred._publish_equal(outcome, value)
+            else:
+                first = dict(identity=identity, started_unix=time.time())
+                deferred._publish_equal(started, first)
+                try:
+                    terminal, witness = evaluate()
+                    if terminal not in TERMINAL:
+                        raise ValueError('no verified terminal')
+                    value = dict(first, status='COMPLETE', terminal=terminal, witness=witness,
+                                 win=int(terminal == identity['seat']))
+                except Exception as error:
+                    value = dict(first, status='UNKNOWN', win=None,
+                                 reason=type(error).__name__ + ': ' + str(error)[:1024])
+                value['finished_unix'] = time.time()
+                deferred._publish_equal(outcome, value)
+            if first_start is None:
+                first_start = value['started_unix']
+            if value['status'] == 'COMPLETE':
+                break
+        value = dict(value, started_unix=first_start, prior_unknown_attempts=attempt)
         deferred._publish_equal(result_path, value)
         return value
 
@@ -306,6 +319,7 @@ def _evaluate_lane(dispatch, protocol, name, registry, selected, cores):
     request, profile, banks = load_profile(dispatch, protocol)
     if profile['opponent_sha256s']['champion_9375'] != ActorContract.champion().checkpoint_sha256:
         raise ValueError('original 9375 checkpoint identity required')
+    shared_pairs = _ref(profile['inventory']).document().get('registered_s0_pairs', {})
     fp_cpu = cores[0] if name == 'foul_play' else None
     if fp_cpu is not None:
         os.sched_setaffinity(0, set(cores[1:]))
@@ -362,7 +376,9 @@ def _evaluate_lane(dispatch, protocol, name, registry, selected, cores):
                 def attempt():
                     counts['attempted'] += 1
                     return play()
-                result = run_shared_cell(registry, identity, attempt)
+                # A registered S0 cell follows its original no-replay rule.
+                result = run_shared_cell(registry, identity, attempt,
+                    retry_unknown=f'{name}:{row["seed"]}' not in shared_pairs)
                 field = 'active_shared_cells' if result is None else result['status'].lower()
                 counts[field] += 1
     finally:
@@ -465,6 +481,8 @@ def summarize_panel(pairs):
         ci = list(_interval(low))
     return dict(games_completed=len(seen), unknown=unknown, pending=pending, games_declared=width*len(pairs),
                 win_rate=statistics.mean(seen) if seen else None, ci95=ci,
+                prior_unknown_attempts=sum(value.get('prior_unknown_attempts', 0)
+                                           for pair in pairs for value in pair if value),
                 identification_bounds=bounds)
 
 

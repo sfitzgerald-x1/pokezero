@@ -41,9 +41,9 @@ def _observe_job(name):
     job = json.loads(result)
     if job['metadata']['labels']['v2-run'] != name:
         raise ValueError('launcher ownership label differs')
-    terminal = next((c['type'] for c in job.get('status', {}).get('conditions', [])
-                     if c['type'] in ('Complete', 'Failed') and c['status'] == 'True'), None)
-    return job['metadata']['uid'], terminal
+    terminal = next((c for c in job.get('status', {}).get('conditions', [])
+                     if c['type'] in ('Complete', 'Failed') and c['status'] == 'True'), {})
+    return job['metadata']['uid'], terminal.get('type'), terminal.get('reason')
 
 
 def _release_job(name, uid):
@@ -135,15 +135,15 @@ def _observe_owned(state, observe, release, log):
                 # Retain a full startup/reconcile window after an ambiguous
                 # launch. Observer errors never release jobs.
                 if now-record['time'] >= 900:
-                    record['state'] = 'CLOSED'
+                    record.update(state='CLOSED', reason='JobMissingAfterObservationWindow')
                 continue
-            uid, terminal = actual
+            uid, terminal, reason = actual
             if record.get('uid', uid) != uid:
                 raise ValueError('owned job UID changed')
             record['uid'] = uid
             if terminal is not None:
                 release(record['name'], uid)
-                record.update(state='CLOSED', terminal=terminal)
+                record.update(state='CLOSED', terminal=terminal, reason=reason)
         except (ValueError, KeyError, TypeError, OSError, subprocess.SubprocessError) as error:
             log('job observation deferred: ' + type(error).__name__)
 
@@ -204,19 +204,34 @@ def _tick(config, folder, allow_launch, channel, send, observe, release, launch,
         for row in finalized:
             _notify(folder, row, channel, send)
 
+    exhausted = []
     if allow_launch:
         limit = config['max_active_jobs']
         max_attempts = config['max_attempts']
         if type(limit) is not int or limit < 1 or type(max_attempts) is not int or not 1 <= max_attempts <= 999:
             raise ValueError('positive job slot and bounded retry count required')
         slots = limit - sum(item['state'] != 'CLOSED' for item in state['attempts'])
-        for dispatch in backlog if slots > 0 else ():
+        for dispatch in backlog:
+            dispatch_attempts = [a for a in state['attempts'] if a['key'][0] == dispatch.sha256]
+            if slots <= 0 and len(dispatch_attempts) < max_attempts:
+                continue
             work = panels.pending_shards(dispatch, protocol, registry)
             for item in sorted(work, key=lambda x: (x['shard'], x['opponent'])):
                 opponent, shard = item['opponent'], item['shard']
                 key = (dispatch.sha256, opponent, shard)
-                attempts = [a for a in state['attempts'] if tuple(a['key']) == key]
-                if len(attempts) >= max_attempts or any(a['state'] != 'CLOSED' for a in attempts):
+                attempts = [a for a in dispatch_attempts if tuple(a['key']) == key]
+                if any(a['state'] != 'CLOSED' for a in attempts):
+                    continue
+                if len(attempts) >= max_attempts:
+                    last = attempts[-1]
+                    exhausted.append(dict(item, dispatch_sha256=dispatch.sha256,
+                        status='EXHAUSTED', attempts=len(attempts), last_job=last['name'],
+                        last_terminal=last.get('terminal'), last_reason=last.get('reason'),
+                        last_launcher_exit_code=last.get('launcher_exit_code'),
+                        last_observation_error=last.get('observation'),
+                        action='Inspect the last shard Job receipt and reconcile its pending cells.'))
+                    continue
+                if slots <= 0:
                     continue
                 name = f'v2q-{hashlib.sha256(repr(key).encode()).hexdigest()[:12]}-cpu-r{len(attempts)+1}'
                 record = dict(key=key, name=name, time=time.time(), state='ADMITTING')
@@ -228,11 +243,9 @@ def _tick(config, folder, allow_launch, channel, send, observe, release, launch,
                     record['observation'] = type(error).__name__
                 _write(state_path, state)
                 slots -= 1
-                if slots == 0:
-                    break
-            if slots == 0:
-                break
-    return dict(finalized=len(finalized), queued=len(backlog), published_games=frontier)
+        _write(folder/'eval-queue.json', dict(exhausted=exhausted))
+    return dict(finalized=len(finalized), queued=len(backlog), published_games=frontier,
+                exhausted_shards=len(exhausted))
 
 
 def main(argv=None):
