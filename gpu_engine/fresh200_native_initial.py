@@ -71,6 +71,22 @@ def _layout():
     return {row['name']:row['spec'] for row in rows}
 
 
+def _typed_projection(values, layout):
+    _need(set(values)==set(layout), 'Native projection field coverage differs')
+    result={}
+    for name,spec in layout.items():
+        raw=np.asarray(values[name]);dtype=np.dtype(spec['dtype']);shape=tuple(spec['shape'][1:])
+        _need(raw.shape==shape, 'Native projection shape differs: '+name)
+        if dtype.kind=='b':
+            _need(all(type(x) is bool for x in _leaves(values[name])), 'Native projection boolean differs: '+name)
+        else:
+            _need(all(type(x) is int for x in _leaves(values[name])), 'Native projection integer type differs: '+name)
+            _need(raw.dtype.kind in 'iu', 'Native projection integer differs: '+name)
+            limits=np.iinfo(dtype);_need(np.all(raw>=limits.min) and np.all(raw<=limits.max), 'Native projection integer overflow: '+name)
+        result[name]=np.asarray(raw,dtype=dtype)[None]
+    return result
+
+
 class Vocabulary:
     def __init__(self, vocabulary):
         self.values=vocabulary;self.ids={}
@@ -250,18 +266,8 @@ def project_initial(snapshot, rows, vocabulary, constructor: ConstructorCoordina
     if weather:
         raise MissingInitialProjection('active Native weather needs source-bound causal provenance')
     else:values['weather_counter']=0
-    layout=_layout();_need(set(values)==set(layout), 'complete 73-field projector coverage differs')
-    result={}
-    for name,spec in layout.items():
-        raw=np.asarray(values[name]);dtype=np.dtype(spec['dtype']);shape=tuple(spec['shape'][1:])
-        _need(raw.shape==shape, 'Native projection shape differs: '+name)
-        if dtype.kind=='b':
-            _need(all(type(x) is bool for x in _leaves(values[name])), 'Native projection boolean differs: '+name)
-        else:
-            _need(all(type(x) is int for x in _leaves(values[name])), 'Native projection integer type differs: '+name)
-            _need(raw.dtype.kind in 'iu', 'Native projection integer differs: '+name)
-            limits=np.iinfo(dtype);_need(np.all(raw>=limits.min) and np.all(raw<=limits.max), 'Native projection integer overflow: '+name)
-        result[name]=np.asarray(raw,dtype=dtype)[None]
+    layout=_layout()
+    result=_typed_projection(values,layout)
     return result,dict(certificate,field_count=len(result),physical_fields=sorted(set(layout)-EXTERNAL),
         external_fields=sorted(EXTERNAL),initial_history_fields=sorted(HISTORY),
         done_binding='literal live Native terminal bit; no external stop/refusal latch at this startup boundary',
