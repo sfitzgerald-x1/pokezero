@@ -283,7 +283,9 @@ def _double_faint_arena_trap(cause, boundary, observed, side, original):
     writer = cause.get('arena_trap_writer')
     witness = cause.get('arena_trap_double_faint')
     phase = boundary.phase
-    if (not writer or not witness or phase.kind != 'replacement-before-residual'
+    effect = cause['effect']
+    if (not effect or (effect['id'], effect['effect_type']) != ('arenatrap', 'Ability')
+            or not writer or not witness or phase.kind != 'replacement-before-residual'
             or 'arena_trap_departure' in cause or phase.pending_residual is not True
             or phase.queued_actor != -1 or phase.queued_actions != (0, 0) or phase.requested != (True, True)
             or any(relation['kind'] != 'forced-replacement' for relation in boundary.relations)):

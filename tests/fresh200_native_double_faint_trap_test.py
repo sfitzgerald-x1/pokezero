@@ -81,6 +81,13 @@ class DoubleFaintArenaTrapTests(unittest.TestCase):
                 else:
                     self.assertEqual(proofs, [])
 
+    def test_frozen68_rejects_a_missing_or_altered_arena_trap_effect(self):
+        boundary, observed = explosion_boundary()
+        cause, = boundary.history['double_faint_trap_proofs'][0]['causes']
+        for effect in (None, dict(cause['effect'], id='shadowtag'), dict(cause['effect'], effect_type='Move')):
+            with self.subTest(effect=effect):
+                self.assertFalse(_double_faint_arena_trap(dict(cause, effect=effect), boundary, observed, 1, 3))
+
     def test_frozen68_proof_only_applies_to_the_closed_both_forced_boundary(self):
         boundary, observed = explosion_boundary()
         cause, = boundary.history['double_faint_trap_proofs'][0]['causes']
