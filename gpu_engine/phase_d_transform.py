@@ -247,7 +247,10 @@ def retained_copy(state,public,request,lines,metadata,catalog,owner):
         check_donor(ids,typ,power,donor['moves'],*donor['hidden'],v['moves'])
         arrays['moves'][0,owner,at]=ids;arrays['pp'][0,owner,at]=pp;arrays['disabled'][0,owner,at]=disabled
         arrays['hidden_power_type'][0,owner,at]=typ;arrays['hidden_power_power'][0,owner,at]=power
-        arrays['stats'][0,owner,at,1:]=donor['stats'];arrays['ability'][0,owner,at]=donor['ability'];arrays['types'][0,owner,at]=donor['types']
+        # The world mapper starts from the copied types and folds any later
+        # observed type change. Resampling the donor must preserve that result.
+        arrays['stats'][0,owner,at,1:]=donor['stats']
+        arrays['ability'][0,owner,at]=donor['ability']
     for side in range(2):
         if not arrays['transformed'][0,side]:continue
         at=int(arrays['active'][0,side]);mid=int(np.asarray(public.context.moves.last_id)[0,side])

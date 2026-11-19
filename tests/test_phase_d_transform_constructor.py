@@ -96,11 +96,15 @@ class TransformConstructorTests(unittest.TestCase):
         adapter.feed(tuple(x for x in lines if not x.startswith('|request|')))
         return adapter
 
-    def transformed(self,name,owner):
+    def transform_requests(self, name, owner):
         before=request(self.source,name,owner);after=deepcopy(before)
         after['side']['pokemon'][0]['moves']=['tackle','protect','hiddenpowerwater']
         after['active'][0]['moves']=[dict(id=m,move=title,pp=pp,maxpp=5,disabled=False) for m,title,pp in (
             ('tackle','Tackle',4),('protect','Protect',5),('hiddenpower','Hidden Power Water 70',3))]
+        return before, after
+
+    def transformed(self,name,owner):
+        before, after = self.transform_requests(name, owner)
         own,peer=f'p{owner+1}',f'p{2-owner}';maximum=before['side']['pokemon'][0]['condition']
         lines=('|start',f'|switch|{own}a: {name}|{name}, L80|{maximum}',f'|switch|{peer}a: snorlax|snorlax, L80|100/100',
             '|turn|1','|request|'+json.dumps(before),f'|move|{own}a: {name}|Transform|{peer}a: snorlax',
@@ -181,17 +185,21 @@ class TransformConstructorTests(unittest.TestCase):
         for (path,a),(other_path,b) in zip(jax.tree_util.tree_flatten_with_path(device.public)[0],jax.tree_util.tree_flatten_with_path(other.public)[0],strict=True):
             self.assertEqual(path,other_path);np.testing.assert_array_equal(a,b,err_msg=str(path))
 
-    def world_inputs(self, root, packet, lines, owner):
+    def capture_world_root(self, lines, address):
         from pokezero.v5_teacher_public_root import capture_root
+        with (patch('subprocess.Popen',side_effect=AssertionError('no simulator')),
+                patch('pokezero.local_showdown.load_gen3_randbat_source_cached',return_value=self.source.original),
+                patch('pokezero.local_showdown.load_showdown_dex_cached',return_value=self.catalog.dex)):
+            return capture_root(config=self.config, contract=self.contract, lines=lines, address=address,
+                                battle_id='transform-authored', seed=7)
+
+    def world_inputs(self, root, packet, lines, owner):
         from pokezero.v5_gumbel import Recipe
         from pokezero.env import BattleStartOverride
         from pokezero.showdown_fixture import pack_team
         from gpu_engine import phase_d_protocol_world as protocol
         lines=('|gen|3','|gametype|singles',*lines)
-        with (patch('subprocess.Popen',side_effect=AssertionError('no simulator')),
-                patch('pokezero.local_showdown.load_gen3_randbat_source_cached',return_value=self.source.original),
-                patch('pokezero.local_showdown.load_showdown_dex_cached',return_value=self.catalog.dex)):
-            public=capture_root(config=self.config,contract=self.contract,lines=lines,address=root.address,battle_id='transform-authored',seed=7)
+        public = self.capture_world_root(lines, root.address)
         recipe=next(Recipe(seed) for seed in range(100) if Recipe(seed).selected(root.address))
         start=plans.plan_starts(root,self.source,recipe).starts[0]
         device=live._materialize_phase_d(root,start,self.tables,recipe)
@@ -204,9 +212,41 @@ class TransformConstructorTests(unittest.TestCase):
         inputs=protocol.ProtocolInputs(root,lines,self.catalog,self.metadata,self.source)
         return public, packed, inputs, device, states.kernel_seed(root,0,recipe)
 
+    def retained_world(self, public, packed, lines, adapter, owner, seed):
+        from gpu_engine import public_wire, v5_owning_history as capture, v5_public_world as world
+
+        prepared = object()
+        binding = (0,) * 8
+        wire = public_wire.WireState()
+        pending = []
+        frames = []
+        for line in lines:
+            if not line.startswith('|request|'):
+                pending.append(line)
+                continue
+            wire, packets = public_wire.project_lines(wire, pending, **v4_encoder.wire_kwargs(self.catalog))
+            words = tuple(tuple(map(int, event.words())) for batch in packets for event in batch.events)
+            frames.append(capture.Frame(len(frames), (words,), ((True,) * len(words),), (False,), line[9:], ()))
+            pending.clear()
+        self.assertFalse(pending)
+        vocabulary = self.metadata['vocabulary']
+        party = json.loads(frames[0].request_json)['side']['pokemon']
+        species = tuple(vocabulary['species'].index(row['details'].split(',')[0]) for row in party)
+        moves = tuple(tuple(vocabulary['moves'].index(move) for move in row['moves']) for row in party)
+        max_pp = tuple(tuple(self.metadata['moves'][move]['pp'] * 8 // 5 for move in row) for row in moves)
+        constructor = tuple(dict(binding=binding, species=species, moves=moves, max_pp=max_pp).items())
+        history = capture.History((0, id(prepared), 0), 0, owner, 1, self.catalog, constructor, tuple(frames))
+        static = world.OwnStatic(1, owner, binding, (255,) * 6)
+        runtime = {'catalog': self.catalog, 'request': {'metadata': json.dumps(self.metadata),
+            'rules': NS(device=NS(engine_binding=binding))}}
+        with (patch.object(world.driver, '_checked', return_value=runtime),
+              patch.object(capture, 'decode', return_value=NS(complete=True, lines=lines)),
+              patch.object(world, 'public_carry', return_value=adapter.state)):
+            return world.materialize(public, packed, prepared=prepared, history=history,
+                                     own_static=static, seed=seed)
+
     def test_base_copy_keeps_its_type_when_rain_starts_after_donor_departure(self):
-        from gpu_engine import phase_d_protocol_world as protocol, public_wire
-        from gpu_engine import v5_owning_history as capture, v5_public_world as world
+        from gpu_engine import phase_d_protocol_world as protocol
 
         for owner in (0, 1):
             own, foe = f'p{owner+1}', f'p{2-owner}'
@@ -239,30 +279,7 @@ class TransformConstructorTests(unittest.TestCase):
                 self.assert_copy_keeps_base_type(result.state, device.state, 1-owner)
 
             with self.subTest(owner=owner, route='retained'):
-                prepared = object()
-                binding = (0,) * 8
-                vocabulary = self.metadata['vocabulary']
-                party = first['side']['pokemon']
-                species = tuple(vocabulary['species'].index(row['details'].split(',')[0]) for row in party)
-                moves = tuple(tuple(vocabulary['moves'].index(move) for move in row['moves']) for row in party)
-                max_pp = tuple(tuple(self.metadata['moves'][move]['pp'] * 8 // 5 for move in row) for row in moves)
-                constructor = tuple(dict(binding=binding, species=species, moves=moves, max_pp=max_pp).items())
-                state = public_wire.WireState()
-                frames = []
-                for index, (prefix, request_packet) in enumerate(((lines[:4], first), (lines[5:-1], packet))):
-                    state, packets = public_wire.project_lines(state, prefix, **v4_encoder.wire_kwargs(self.catalog))
-                    words = tuple(tuple(map(int, event.words())) for batch in packets for event in batch.events)
-                    frames.append(capture.Frame(index, (words,), ((True,) * len(words),), (False,),
-                                                json.dumps(request_packet), ()))
-                history = capture.History((0, id(prepared), 0), 0, owner, 1, self.catalog, constructor, tuple(frames))
-                static = world.OwnStatic(1, owner, binding, (255,) * 6)
-                runtime = {'catalog': self.catalog, 'request': {'metadata': json.dumps(self.metadata),
-                    'rules': NS(device=NS(engine_binding=binding))}}
-                with (patch.object(world.driver, '_checked', return_value=runtime),
-                      patch.object(capture, 'decode', return_value=NS(complete=True, lines=inputs.lines)),
-                      patch.object(world, 'public_carry', return_value=adapter.state)):
-                    result = world.materialize(public, packed, prepared=prepared, history=history,
-                                               own_static=static, seed=seed)
+                result = self.retained_world(public, packed, inputs.lines, adapter, owner, seed)
                 self.assertIsNotNone(result.branch, result.refusals)
                 self.assert_copy_keeps_base_type(result.branch.state, device.state, 1-owner)
 
@@ -273,6 +290,51 @@ class TransformConstructorTests(unittest.TestCase):
         expected = self.metadata['vocabulary']['types'].index('Normal')
         self.assertEqual(device.types[0, side, int(device.active[0, side])].tolist(), [expected, 0])
         self.assertEqual(state.types[0, side, active].tolist(), [expected, 0])
+
+    def test_retained_owner_preserves_observed_color_change_after_donor_leaves(self):
+        for owner in (0, 1):
+            with self.subTest(owner=owner):
+                own, foe = f'p{owner+1}', f'p{2-owner}'
+                first, packet = self.transform_requests('ditto', owner)
+                hp = first['side']['pokemon'][0]['condition']
+                current, maximum = map(int, hp.split('/'))
+                damaged = f'{current-20}/{maximum}'
+                packet['side']['pokemon'][0]['condition'] = damaged
+                prefix = (
+                    '|start',
+                    f'|switch|{own}a: ditto|ditto, L80|{hp}',
+                    f'|switch|{foe}a: kecleon|kecleon, L80|100/100',
+                    '|turn|1',
+                    '|request|' + json.dumps(first),
+                    f'|move|{own}a: ditto|Transform|{foe}a: kecleon',
+                    f'|-transform|{own}a: ditto|{foe}a: kecleon',
+                    '|upkeep', '|turn|2',
+                    f'|switch|{foe}a: snorlax|snorlax, L80|100/100',
+                    f'|move|{foe}a: snorlax|Hidden Power|{own}a: ditto',
+                    f'|-damage|{own}a: ditto|{damaged}',
+                )
+                tail = ('|upkeep', '|turn|3', '|request|' + json.dumps(packet))
+                no_retype = (*prefix, *tail)
+                address = DecisionAddress(1, 1, owner)
+                adapter = self.adapter(no_retype, owner)
+                root = live.from_b2(adapter, packet, self.source, self.metadata, address=address, lines=no_retype)
+                _, packed, _, _, seed = self.world_inputs(root, packet, no_retype, owner)
+
+                event = f'|-start|{own}a: ditto|typechange|Water|[from] ability: Color Change'
+                lines = ('|gen|3', '|gametype|singles', *prefix, event, *tail)
+                adapter = self.adapter(lines, owner)
+                self.assertFalse(transform_facts.history(lines)['copies'][own]['overridden'])
+                with self.assertRaisesRegex(live.Refusal, '^PUBLIC_LIVE_RETYPE_NOT_MATERIALIZED$'):
+                    live.from_b2(adapter, packet, self.source, self.metadata, address=address, lines=lines)
+                public = self.capture_world_root(lines, address)
+                result = self.retained_world(public, packed, lines, adapter, owner, seed)
+                self.assertIsNotNone(result.branch, result.refusals)
+                state = result.branch.state
+                self.assertTrue(bool(state.transformed[0, owner]))
+                active = int(state.active[0, owner])
+                names = self.metadata['vocabulary']['types']
+                self.assertEqual(state.types[0, owner, active].tolist(), [names.index('Water'), 0])
+                self.assertEqual(state.base_types[0, owner, active].tolist(), [names.index('Normal'), 0])
 
     def test_weather_forme_copied_before_donor_departure_refuses_in_both_routes(self):
         import hashlib
