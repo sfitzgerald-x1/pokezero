@@ -106,6 +106,21 @@ class NativeLedgerTests(unittest.TestCase):
         value=ledger().consume(trace.rows).snapshot()
         self.assertEqual(value['wish_amount'],[158,0]);self.assertEqual(value['events'][0]['source'],[0,3])
 
+    def test_literal_wish_name_joins_only_to_successful_creation(self):
+        side = dict(kind='Side', object=10, n=1)
+        before, after = cache(), cache()
+        after['sides'][1]['fields']['slotConditions'] = arr(
+            8200, obj(8201, wish=obj(8202, source=mon(1, 2), duration=2)))
+        for success in (False, True):
+            with self.subTest(success=success):
+                trace = Trace()
+                trace.enter('Side.addSlotCondition', side, (0, 'Wish'), before)
+                trace.leave(success, after=after if success else before)
+                snapshot = ledger().consume(trace.rows).snapshot()
+                self.assertEqual(snapshot['wish_amount'], [0, 158 if success else 0])
+                wishes = [item for item in snapshot['events'] if item['kind'] == 'CREATED_WISH']
+                self.assertEqual([item['source'] for item in wishes], [[1, 2]] if success else [])
+
     def test_transform_saves_actual_donor_and_native_restore_fields(self):
         trace=Trace();trace.dispatch(move='transform',transform=5,transform_success=True)
         value=ledger().consume(trace.rows).snapshot();saved=value['transform_records'][0]

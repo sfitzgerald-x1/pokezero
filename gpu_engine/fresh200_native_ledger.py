@@ -225,7 +225,9 @@ class NativeHistory:
 
     def _wish(self, frame):
         arguments=items(frame.enter['arguments'])
-        if frame.leave['result'] is not True or len(arguments)<2 or arguments[1]!='wish':return
+        # Gen 3 inherits the literal slotCondition "Wish". Native resolves it
+        # to the "wish" key before installing the condition.
+        if frame.leave['result'] is not True or len(arguments)<2 or arguments[1] not in ('Wish','wish'):return
         side=frame.enter['subject'].get('n');need(type(side) is int and side in (0,1),'literal Native Wish side required')
         slots=items(frame.leave['after']['sides'][side]['fields']['slotConditions'])
         need(len(slots)==1,'literal Native singles Wish slot required')
