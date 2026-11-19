@@ -93,7 +93,22 @@ def freeze_linked_role(root, address, *, pre_root, pre_reference, pre_source, re
                    registry=registry, source=source, origin=origin)
 
 
-def compare_boundary(root, gate, expected_reader, *, row, source):
+def _difference(native, expected, kind):
+    detail = dict(kind=kind, native_dtype=native.dtype.str, expected_dtype=expected.dtype.str,
+                  native_shape=list(native.shape), expected_shape=list(expected.shape))
+    if kind == 'bytes':
+        width = native.dtype.itemsize
+        actual = np.frombuffer(native.tobytes(), dtype=np.uint8).reshape(-1, width)
+        target = np.frombuffer(expected.tobytes(), dtype=np.uint8).reshape(-1, width)
+        index = int(np.flatnonzero(np.any(actual != target, axis=1))[0])
+        detail.update(
+            coordinate=[int(i) for i in np.unravel_index(index, native.shape)],
+            native_bits=actual[index].tobytes().hex(), expected_bits=target[index].tobytes().hex(),
+        )
+    return detail
+
+
+def compare_boundary(root, gate, expected_reader, *, row, source, describe_difference=False):
     if not isinstance(gate, BoundaryGate) or gate.receipt is None:
         raise ValueError('complete frozen Native boundary receipt required')
     manifest = json.loads(verify_artifact(root, gate.receipt['reference']))
@@ -105,7 +120,10 @@ def compare_boundary(root, gate, expected_reader, *, row, source):
     for name, data in frozen.items():
         native, device = data[0], expected[name]
         if native.shape != device.shape or native.dtype.str != device.dtype.str:
-            differences[name] = 'dtype_or_shape'
+            kind = 'dtype_or_shape'
         elif native.tobytes() != device.tobytes():
-            differences[name] = 'bytes'
+            kind = 'bytes'
+        else:
+            continue
+        differences[name] = _difference(native, device, kind) if describe_difference else kind
     return differences

@@ -11,6 +11,20 @@ from gpu_engine.fresh200_native_ledger import Frame, NativeHistory
 
 
 class NativeFullBoundaryTest(unittest.TestCase):
+    def test_first_physical_difference_preserves_coordinates_and_literal_bits(self):
+        from gpu_engine.fresh200_native_compare import _difference
+
+        actual = np.asarray([[0.0, 1.0], [2.0, 3.0]], dtype='<f4')
+        expected = actual.copy()
+        expected[0, 0] = -0.0
+        expected[1, 1] = 4.0
+        proof = _difference(actual, expected, 'bytes')
+        self.assertEqual(proof['coordinate'], [0, 0])
+        self.assertEqual(proof['native_bits'], '00000000')
+        self.assertEqual(proof['expected_bits'], '00000080')
+        self.assertEqual(_difference(actual[0, 0], expected[0, 0], 'bytes')['coordinate'], [])
+        self.assertEqual(_difference(actual, expected[0], 'dtype_or_shape')['expected_shape'], [2])
+
     def test_initial_clear_does_not_require_member_cache_before_side_install(self):
         history = NativeHistory(battle_id='b', source_registry_hash='a'*64)
         incomplete = {'sides': [None, None]}
