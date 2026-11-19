@@ -5,6 +5,7 @@ from dataclasses import asdict, dataclass
 import math
 import re
 from numbers import Real
+from threading import Lock
 
 from .v5_contract import (
     BELIEF_TYPE, CATEGORICAL_FEATURES, LabelVocabulary, MAX_VARIANTS, NUMERIC_FEATURES,
@@ -114,6 +115,10 @@ def require_v5_bindings(columns, config):
         raise ValueError('explicit v5 batch and exact category/label namespaces required')
 
 
+_MODEL_TYPES = {}
+_MODEL_TYPES_LOCK = Lock()
+
+
 def build_v5_model(config, *, enable_v5=False):
     """Opt-in precedes Torch/model allocation. No checkpoint loader is involved.
 
@@ -122,6 +127,19 @@ def build_v5_model(config, *, enable_v5=False):
     """
     if enable_v5 is not True or type(config) is not V5ModelConfig:
         raise ValueError('explicit v5 model configuration/enablement required')
+    # Dynamo guards custom module types. Recreating the class family for an
+    # equal configuration forces a different compiled specialization on load.
+    # Retain types for this process's lifetime; instances and tensors are fresh.
+    with _MODEL_TYPES_LOCK:
+        model_type = _MODEL_TYPES.get(config)
+        if model_type is None:
+            model_type = _make_v5_model_type(config)
+            _MODEL_TYPES[config] = model_type
+    return model_type(config)
+
+
+def _make_v5_model_type(config):
+    """Class definitions only: no tensor allocation or random initialization."""
     from .neural_policy import require_torch
     torch = require_torch()
     nn = torch.nn
@@ -183,9 +201,11 @@ def build_v5_model(config, *, enable_v5=False):
             return x
 
     class Model(nn.Module):
-        def __init__(self):
+        def __init__(self, instance_config=None):
+            if instance_config is not None and instance_config != config:
+                raise ValueError('model type requires its original complete configuration')
             super().__init__()
-            self.config = config
+            self.config = config if instance_config is None else instance_config
             self.category_embedding = nn.Embedding(config.category_vocab_size, config.width, padding_idx=0)
             self.token_type_embedding = nn.Embedding(16, config.width)
             self.history_position_embedding = nn.Embedding(1, config.width)
@@ -257,7 +277,7 @@ def build_v5_model(config, *, enable_v5=False):
                     final_hp=self.final_hp_head(pokemon).squeeze(-1).sigmoid())
             return V5Output(policy, value, logits, **auxiliary)
 
-    return Model()
+    return Model
 
 
 def forward_v5(model, tensors, *, include_auxiliary=False):

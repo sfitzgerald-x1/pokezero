@@ -20,7 +20,7 @@ compressed to `<out>/audit/` for offline comparison with the file pipeline.
 All paths are command-line arguments.
 """
 import argparse
-from dataclasses import asdict
+from dataclasses import asdict, replace
 import gc
 import hashlib
 import json
@@ -95,21 +95,32 @@ def history_window(plan, past):
     return tuple(past[-plan.historical_window:])
 
 
-def construct(context, backend, iteration, current, past, ordinal):
+def construct(context, backend, iteration, current, past, ordinal, *, shard=None):
     """Original per-block constructor calls and planner assignments for one iteration."""
     import jax
     from pokezero import v5_run as runs
     from gpu_engine import v5_device_rollout as rollout, v2_collector as v2
     plan = context['plan'];prepared = context['prepared'];blocks = [];kinds = dict(SELFPLAY=0, HISTORICAL=0)
+    offset = 0
     for batch in plan.iterations[iteration]:
+        begin, end = (0, len(batch.games)) if shard is None else (
+            max(0, shard[0] - offset), min(len(batch.games), shard[1] - offset))
+        offset += len(batch.games)
+        if end <= begin:
+            continue
         assignments = tuple(runs.assignment(plan, g, ordinal[g.stream_id], current, past) for g in batch.games)
-        recorded = json.loads(runs._json(assignments))
+        recorded = json.loads(runs._json(assignments[begin:end]))
         for a in recorded:kinds[a['opponent_kind']] += 1
         required = tuple(dict.fromkeys([current.archive_sha256, *(a['opponent']['archive_sha256'] for a in recorded)]))
         bindings = rollout.Bindings(plan.model.category_vocabulary_sha256, plan.model.label_vocabulary, prepared.source_sha256,
             (current.archive_sha256,) * 2, (True, True), backend.declaration_sha256)
         bank = rollout.actor_bank_from_assignments(bindings, required, current_archive=current.archive_sha256, assignments=recorded)
-        blocks.append((jax.block_until_ready(backend._construct(batch)), bank, batch.sampling_seed))
+        # Construct the original full block BEFORE slicing. Reconstructing a
+        # smaller batch would change shape/index-dependent constructor RNG.
+        carry = jax.block_until_ready(backend._construct(batch))
+        if begin or end != len(batch.games):
+            carry = jax.tree.map(lambda value: value[begin:end], carry)
+        blocks.append((carry, bank, batch.sampling_seed))
     window = history_window(plan, past)
     archives, groups = v2.canonical_groups(current.archive_sha256, [s.archive_sha256 for s in window],
         slots=v2.history_slots(len(window)))
@@ -166,7 +177,20 @@ def write_json(path, value):
     os.replace(temporary, path)
 
 
-def main(argv=None):
+def select_learner_precision(context, precision):
+    """Record an explicit learner override without changing the initial binding."""
+    plan = context['plan']
+    if precision is None:
+        return plan
+    from pokezero import v5_run as runs
+    plan = replace(plan, train=replace(plan.train, precision=precision))
+    context['plan'] = plan
+    context['declared'] = dict(context['declared'], learner_precision=precision,
+        effective_plan_sha256=runs._sha(plan.manifest()))
+    return plan
+
+
+def argument_parser():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--config', help='20k diagnostic config (smoke schema)')
     parser.add_argument('--declaration');parser.add_argument('--declaration-sha256')
@@ -178,17 +202,29 @@ def main(argv=None):
     parser.add_argument('--max-iterations', type=int, default=None, help='stop after this many declared iterations')
     parser.add_argument('--lanes', type=int, default=2048)
     parser.add_argument('--mode', default='cudagraphs')
+    parser.add_argument('--native-embedding-backward', action='store_true',
+        help='opt in to native category-embedding backward; must match on resume')
+    parser.add_argument('--fallback-random', action='store_true',
+        help='opt in to compiler native random/dropout (compiled modes); must match on resume')
+    parser.add_argument('--learner-precision', choices=('float32', 'bfloat16'), default=None,
+        help='explicit learner precision override; recorded in the effective plan and must match on resume')
     parser.add_argument('--order', default='ordered')
     parser.add_argument('--row-order', choices=('tick', 'file'), default=None,
         help='tick: collection order; file (default for new runs): the file pipeline cache order (block, frame, row, owner). '
              'A resumed run keeps the order recorded in its state.json')
     parser.add_argument('--check-interval', type=int, default=64)
+    parser.add_argument('--recipe', choices=('R5', 'R2', 'R1'), default=None,
+        help='explicit batch/epochs/LR package from the validated R5 reference; records the effective plan hash')
     parser.add_argument('--compile-threads', type=int, default=16)
     parser.add_argument('--audit-every', type=int, default=50)
     parser.add_argument('--torch-memory-fraction', type=float, default=0.45,
         help='Torch per-process GPU memory cap after the runtime probe (V2 also holds the row store in Torch); '
              '0 keeps the runtime declaration\'s torch_fraction. JAX keeps its own fraction')
-    args = parser.parse_args(argv)
+    return parser
+
+
+def main(argv=None, *, distribution=None):
+    args = argument_parser().parse_args(argv)
     if bool(args.config) == bool(args.declaration):raise SystemExit('exactly one of --config or --declaration')
     out = Path(args.out);(out / 'artifacts').mkdir(parents=True, exist_ok=True);(out / 'audit').mkdir(exist_ok=True)
     wall_start = time.perf_counter()
@@ -198,6 +234,15 @@ def main(argv=None):
     from pokezero import checkpoint_self_moves as encoding
     from gpu_engine.v5_device_backend import RuntimeBackend
     context = prepare(args);plan = context['plan']
+    initial_train = plan.train
+    if args.recipe is not None:
+        from pokezero.v2_distributed import recipe_train
+        plan = replace(plan, train=recipe_train(initial_train, args.recipe));context['plan'] = plan
+        context['declared'] = dict(context['declared'], recipe=args.recipe,
+            effective_plan_sha256=runs._sha(plan.manifest()))
+    plan = select_learner_precision(context, args.learner_precision)
+    if distribution is not None:
+        distribution.bind(context, args)
     if args.torch_memory_fraction > 0:
         # The runtime probe caps Torch for the file pipeline; V2 holds the row store in Torch too.
         torch.cuda.set_per_process_memory_fraction(args.torch_memory_fraction, 0)
@@ -208,21 +253,31 @@ def main(argv=None):
     first = runs.Snapshot(**initial[0])
     if first.model_sha256 != runs._sha(plan.model.metadata()):raise ValueError('initial snapshot model differs from plan')
     roots = {first.archive_sha256: Path(args.reference_run)}
-    v2_config = v2t.V2Config(mode=args.mode, order=args.order, optimizer='fused', check_interval=args.check_interval)
+    v2_config = v2t.V2Config(mode=args.mode, order=args.order, optimizer='fused', check_interval=args.check_interval,
+        distributed_rows=distribution is not None, native_embedding_backward=args.native_embedding_backward,
+        fallback_random=args.fallback_random)
+    placement = {} if distribution is None else dict(process_group=distribution.process_group)
     state_path = out / 'state.json'
     if state_path.exists():
         saved = json.loads(state_path.read_text())
         if saved.get('declaration_sha256') != runs._sha(plan.manifest()):
             raise ValueError('original fused run declaration binding required')
+        if distribution is not None:
+            distribution.check_resume(saved)
+        elif 'distribution' in saved:
+            raise ValueError('distributed fused run requires its original placement on resume')
         encoding_receipts = saved.get('checkpoint_encoding_receipts', {})
         snapshots = [runs.Snapshot(**x) for x in saved['snapshots']];reports = saved['reports']
         for snapshot in snapshots[1:]:roots[snapshot.archive_sha256] = out
         checkpoint = out / snapshots[-1].checkpoint
+        checkpoint_sha = snapshots[-1].checkpoint_sha256
+        off_provenance = None
+        if not plan.self_moves and checkpoint_sha in encoding_receipts:
+            off_provenance = encoding.off_from_receipt(encoding_receipts[checkpoint_sha])
         runtime = v2t.load_checkpoint(checkpoint, enable_v5=True, v2_config=v2_config, expected_model_config=plan.model,
-            expected_loss_config=plan.loss, expected_train_config=plan.train, device='cuda',expected_self_moves=plan.self_moves,
-            expected_checkpoint_sha256=snapshots[-1].checkpoint_sha256,
-            off_provenance=(encoding.off_from_receipt(encoding_receipts[snapshots[-1].checkpoint_sha256])
-                if snapshots[-1].checkpoint_sha256 in encoding_receipts and not plan.self_moves else None))
+            expected_loss_config=plan.loss, expected_train_config=plan.train, device='cuda',
+            expected_self_moves=plan.self_moves, expected_checkpoint_sha256=checkpoint_sha,
+            off_provenance=off_provenance, **placement)
         recorded = saved.get('row_order')
         if recorded is None and args.row_order is None:
             raise SystemExit('state.json does not record its row order (older runs defaulted to tick); pass --row-order explicitly')
@@ -237,11 +292,15 @@ def main(argv=None):
         model, loss, train, weights, _ = bench.configurations(Path(args.reference_run, first.checkpoint),
             expected_checkpoint_sha256=first.checkpoint_sha256,expected_self_moves=plan.self_moves,
             off_provenance=proof,weights_only_initializer=initializer)
-        if model != plan.model or loss != plan.loss or train != plan.train:raise ValueError('initial checkpoint recipe differs from plan')
+        if model != plan.model or loss != plan.loss or train != initial_train:raise ValueError('initial checkpoint recipe differs from plan')
         runtime = v2t.create(plan.model, plan.loss, plan.train, v2_config, enable_v5=True, device='cuda',
-            self_moves=plan.self_moves)
+            self_moves=plan.self_moves, **placement)
         runtime.model.load_state_dict(weights)
-    trainer = v2t.Trainer(runtime)
+    if distribution is None:
+        trainer = v2t.Trainer(runtime)
+    else:
+        from pokezero.v2_distributed import DistributedTrainer
+        trainer = DistributedTrainer(runtime)
     params = {}
     def actor_params(digest):
         if digest not in params:
@@ -259,7 +318,8 @@ def main(argv=None):
             nonlocal clock
             now = time.perf_counter();phase[name] = now - clock;clock = now
         current = snapshots[-1];past = tuple(s for s in snapshots if s.iteration < current.iteration)
-        roster, kinds, history = construct(context, backend, iteration, current, past, ordinal);mark('construct')
+        shard = {} if distribution is None else dict(shard=distribution.shard(plan, iteration))
+        roster, kinds, history = construct(context, backend, iteration, current, past, ordinal, **shard);mark('construct')
         current_params = actor_params(current.archive_sha256)
         tree = tuple(current_params if digest.startswith(v2c.PAD_PREFIX) else actor_params(digest) for digest in roster.actor_archives)
         key = (len(roster.groups), roster.games);compile_timings = None
@@ -278,7 +338,9 @@ def main(argv=None):
         for k, batch in enumerate(plan.iterations[iteration]):
             if (base + k) % args.audit_every == 0:
                 ids = [g.stream_id for g in batch.games];audited.append((base + k, min(ids), max(ids)))
-        audit_records = audit(rows, audited, out / 'audit');mark('audit')
+        audit_out = out / 'audit' if distribution is None else out / 'audit' / f'rank-{distribution.rank}'
+        audit_out.mkdir(parents=True, exist_ok=True)
+        audit_records = audit(rows, audited, audit_out);mark('audit')
         records = v2c.game_records(result);same = None
         if reference_ends:
             from gpu_engine.v5_device_rollout import STATUS
@@ -292,7 +354,8 @@ def main(argv=None):
         # The row arrays hold their own references; dropping the collector's lets each reordered field free its original.
         result.segments.clear()
         segments = None
-        if row_order == 'file':
+        row_keys = rows.keys() if distribution is not None else None
+        if row_order == 'file' and distribution is None:
             # Permute in JAX memory, one field at a time, before the zero-copy hand-off.
             import jax.numpy as jnp
             order, segments = file_pipeline_order(rows.keys(), plan.iterations[iteration])
@@ -303,15 +366,29 @@ def main(argv=None):
                 rows.arrays[name] = jnp.take(value, index, axis=0).block_until_ready();del value
             del index
         tensors = rows.to_torch(device='cuda', exact_dtypes=True)
-        store = v2t.row_store(tensors, plan.model, plan.loss, segments=segments, store_id=f'v2-iteration-{iteration}');mark('handoff_validate')
+        store = v2t.row_store(tensors, plan.model, plan.loss, segments=segments, store_id=f'v2-iteration-{iteration}')
+        del tensors
+        if distribution is not None:
+            from pokezero.v2_distributed import distribute_store
+            rows.arrays.clear()  # DLPack tensors own the buffers through exchange.
+            batches = [tuple(g.stream_id for g in b.games) for b in plan.iterations[iteration]]
+            store = distribute_store(store, row_keys, batches, runtime)
+        mark('handoff_validate')
         train_report = trainer.train(store, window=runs.learning_rate_window(plan, iteration))
         torch.cuda.synchronize();mark('train')
-        del store, tensors;gc.collect()
-        checkpoint = out / 'artifacts' / f'train-{iteration}.pt';receipt=v2t.save_checkpoint(checkpoint, runtime)
+        del store;gc.collect()
+        checkpoint = out / 'artifacts' / f'train-{iteration}.pt'
+        receipt = v2t.save_checkpoint(checkpoint, runtime)
         archive = out / 'artifacts' / f'actor-{iteration}.npz';checkpoint_sha = sha(checkpoint)
-        encoding_receipts[checkpoint_sha]=receipt['encoding_receipt']
-        metadata = v5_model.export(checkpoint, archive, expected_checkpoint_sha256=checkpoint_sha, enable_v5=True,
-            self_moves=plan.self_moves,off_provenance=(encoding.off_from_receipt(receipt['encoding_receipt']) if not plan.self_moves else None))
+        metadata = None
+        if distribution is None or distribution.rank == 0:
+            encoding_receipt = receipt['encoding_receipt']
+            encoding_receipts[checkpoint_sha] = encoding_receipt
+            metadata = v5_model.export(checkpoint, archive, expected_checkpoint_sha256=checkpoint_sha, enable_v5=True,
+                self_moves=plan.self_moves,
+                off_provenance=encoding.off_from_receipt(encoding_receipt) if not plan.self_moves else None)
+        if distribution is not None:
+            metadata = distribution.broadcast(metadata)
         snapshot = runs.Snapshot(iteration=iteration, checkpoint=f'artifacts/train-{iteration}.pt', checkpoint_sha256=checkpoint_sha,
             archive=f'artifacts/actor-{iteration}.npz', archive_sha256=metadata['weights_archive_sha256'],
             model_sha256=runs._sha(plan.model.metadata()))
@@ -327,13 +404,21 @@ def main(argv=None):
                 **training_summary(updates)),
             collector={k: v for k, v in stats.items() if isinstance(v, (int, float, str))},
             audit=audit_records, games_matching_reference=same, snapshot=asdict(snapshot))
+        if distribution is not None:
+            report = distribution.reduce_report(report)
         reports.append(report)
         log('ITERATION', iteration=iteration, games_per_second=round(report['games_per_second'], 2),
             games_per_second_steady=round(report['games_per_second_steady'], 2), phase_seconds={k: round(v, 1) for k, v in phase.items()},
             history=history, reused=reused, occupancy=round(stats.get('occupancy', 0), 3), dispositions=report['dispositions'],
             final_epoch_loss=report['training'].get('final_epoch_mean', {}).get('loss'), matching=same)
-        write_json(state_path, dict(snapshots=[asdict(s) for s in snapshots], reports=reports, row_order=row_order,
-            declaration_sha256=runs._sha(plan.manifest()),checkpoint_encoding_receipts=encoding_receipts))
+        state = dict(snapshots=[asdict(s) for s in snapshots], reports=reports, row_order=row_order,
+            declaration_sha256=runs._sha(plan.manifest()), checkpoint_encoding_receipts=encoding_receipts)
+        if distribution is not None:
+            state['distribution'] = distribution.contract
+        if distribution is None or distribution.rank == 0:
+            write_json(state_path, state)
+        if distribution is not None:
+            distribution.barrier()
         del rows, result, roster, tree;gc.collect()
         keep = {s.archive_sha256 for s in snapshots[-1 - plan.historical_window:]}
         for digest in list(params):
@@ -344,7 +429,8 @@ def main(argv=None):
         order=args.order, row_order=row_order, torch_memory_fraction_override=args.torch_memory_fraction if args.torch_memory_fraction > 0 else None, iterations=reports, preparation_seconds=context['preparation_seconds'], wall_seconds_this_attempt=total,
         games=games, games_per_second_steady_mean=games / max(1e-9, sum(r['steady_seconds'] for r in reports)),
         scope='Throughput of the fused V2 pipeline; not a strength result.')
-    write_json(out / 'report.json', summary)
+    if distribution is None or distribution.rank == 0:
+        write_json(out / 'report.json', summary)
     log('DONE', wall_seconds=total, iterations=len(reports), games=games)
     return 0
 
