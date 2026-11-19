@@ -101,6 +101,31 @@ class NativeTransportContractTests(unittest.TestCase):
         with self.assertRaisesRegex(UnmappedNativePhase, 'old-stall'):
             phase_from_native(snapshot, party, original_inputs=inputs)
 
+    def test_double_faint_keeps_both_replacements_and_the_residual(self):
+        for queued_side in (0, 1):
+            with self.subTest(queued_side=queued_side):
+                snapshot, party, inputs = fainted_requester(queued_side, 'spore')
+                peer = 1 - queued_side
+                request = snapshot['boundaryRequests'][f'p{peer+1}']
+                request.pop('wait')
+                request.pop('active')
+                request['forceSwitch'] = [True]
+                opponent = party.mon(peer, party.active(peer))
+                opponent.update(hp=0, fainted=True)
+                phase = phase_from_native(snapshot, party, original_inputs=inputs, old_stall=[2, 1])
+                self.assertEqual(phase.kind, 'replacement-before-residual')
+                self.assertEqual(phase.requested, (True, True))
+                self.assertTrue(phase.pending_residual)
+                self.assertEqual((phase.queued_actor, phase.queued_actions, phase.queued_stall), (-1, (0, 0), (0, 0)))
+
+                request['wait'] = True
+                with self.assertRaisesRegex(UnmappedNativePhase, 'no proof'):
+                    phase_from_native(snapshot, party, original_inputs=inputs, old_stall=[2, 1])
+                del request['wait']
+                opponent['fainted'] = False
+                with self.assertRaisesRegex(UnmappedNativePhase, 'no proof'):
+                    phase_from_native(snapshot, party, original_inputs=inputs, old_stall=[2, 1])
+
     def test_fainted_requester_requires_exact_witness(self):
         for near_miss in ('living', 'departed', 'both-forced', 'no-wait', 'queue-order', 'format', 'no-residual'):
             with self.subTest(near_miss=near_miss):

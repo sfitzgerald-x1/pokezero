@@ -82,15 +82,20 @@ def phase_from_native(snapshot,party:PartyMap,*,original_inputs=None,old_stall=N
             peer = 1 - queued_side
             peer_request = requests.get(f'p{peer+1}')
             fainted = party.mon(queued_side, original)
-            survivor = party.mon(peer, party.active(peer))
+            opponent = party.mon(peer, party.active(peer))
+            if forced[peer]:
+                peer_matches = (requested[peer] and type(opponent.get('hp')) is int
+                                and opponent['hp'] == 0 and opponent.get('fainted') is True)
+            else:
+                peer_matches = (peer_request is not None and peer_request.get('wait') is True
+                                and type(opponent.get('hp')) is int and opponent['hp'] > 0
+                                and opponent.get('fainted') is False)
             # Showdown leaves the skipped move's fainted actor in the literal queue.
             # PhaseProof stores only the executable continuation and pending residual.
             need(battle.get('formatid') == 'gen3customgame' and battle.get('gameType') == 'singles'
                  and battle.get('midTurn') is True and queue == [moves[0], residual[0]]
-                 and forced[queued_side] and not forced[peer]
-                 and peer_request is not None and peer_request.get('wait') is True
-                 and type(fainted.get('hp')) is int and fainted['hp'] == 0 and fainted.get('fainted') is True
-                 and type(survivor.get('hp')) is int and survivor['hp'] > 0 and survivor.get('fainted') is False,
+                 and forced[queued_side] and peer_matches
+                 and type(fainted.get('hp')) is int and fainted['hp'] == 0 and fainted.get('fainted') is True,
                  'requesting Native actor has no proof of an inert fainted move')
         need(isinstance(original_inputs,OrdinaryInputs) and len(original_inputs.actions)==2
             and all(type(x) is int and 0<=x<9 for x in original_inputs.actions)
