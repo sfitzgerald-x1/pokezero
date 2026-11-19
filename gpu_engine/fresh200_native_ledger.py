@@ -67,6 +67,7 @@ class Frame:
     enter: dict
     leave: object = None
     end: object = None
+    trap_writers_before_faint_flush: object = None
 
 
 class NativeHistory:
@@ -77,6 +78,8 @@ class NativeHistory:
         self.frames={};self.stack=[];self.events=[];self.pending_switches=[]
         self.last_kind=[0,0];self.last_index=[-1,-1];self.wish_amount=[0,0];self.transforms={}
         self.retained_status={};self.disable_causes={};self.trap_causes={};self.rest_states=set();self.encore_slots={}
+        self.last_active_install = [-1, -1]
+        self.double_faint_trap_proofs = {}
         self.weather_creation=None;self.phase_epoch=0;self.old_stall=None;self.stall_refreshed={};self.lock_results={}
         self.dispatch_slots={};self.charge_slots={}
         self.initial=False
@@ -182,6 +185,12 @@ class NativeHistory:
     def _switch(self, frame):
         if not frame.leave['result'] or frame.leave['result'] == 'pursuitfaint':return
         arguments=items(frame.enter['arguments']);target=pokemon(arguments[0])
+        if frame.leave['result'] is True and self.trap_causes:
+            side = target[0]
+            earlier = items(frame.enter['before']['sides'][side]['fields']['active'])
+            current = items(frame.leave['after']['sides'][side]['fields']['active'])
+            if earlier != current:
+                self.last_active_install[side] = frame.end
         action=self.ancestor(frame,'Battle.runAction')
         if action is None:return
         resolved = fields(items(action.enter['arguments'])[0])
@@ -297,6 +306,9 @@ class NativeHistory:
                     if member(before,identity)['hp']<=0:continue
                     self.disable_causes={k:v for k,v in self.disable_causes.items() if k[:2]!=identity}
                     self.trap_causes.pop(identity,None)
+                    self.double_faint_trap_proofs.pop(identity, None)
+        elif frame.operation=='Battle.faintMessages' and self.trap_causes:
+            frame.trap_writers_before_faint_flush = {actor: tuple(causes) for actor, causes in self.trap_causes.items()}
         elif frame.operation=='Battle.commitChoices':
             if frame.enter['before']['fields']['requestState']=='move':
                 self.phase_epoch+=1;self.old_stall=None;self.stall_refreshed={}
@@ -320,6 +332,59 @@ class NativeHistory:
             need(type(before['status']) is str,'literal Native pre-faint major status required')
             self.retained_status[identity]=dict(status=before['status'],state=before['statusState'],call_id=frame.call,sequence=frame.end)
             self.event('PRE_FAINT_MAJOR_STATUS',frame,actor=list(identity),status=before['status'])
+
+    def _bind_arena_trap_double_faint(self, frame):
+        if not frame.trap_writers_before_faint_flush:
+            return
+        for victim, causes in frame.trap_writers_before_faint_flush.items():
+            retained = [dict(cause) for cause in causes]
+            for cause in retained:
+                writer = cause.get('arena_trap_writer')
+                if (not writer or 'arena_trap_departure' in cause or 'arena_trap_double_faint' in cause
+                        or writer['epoch'] + 1 != self.phase_epoch
+                        or max(self.last_active_install) >= cause['sequence']):
+                    continue
+                source = pokemon(writer['source'])
+                if victim not in self.retained_status or source not in self.retained_status:
+                    continue
+                victim_faint = self.frames.get(self.retained_status[victim]['call_id'])
+                source_faint = self.frames.get(self.retained_status[source]['call_id'])
+                if (victim_faint is None or source_faint is None
+                        or not cause['sequence'] < victim_faint.end < source_faint.end < frame.sequence):
+                    continue
+                if (victim_faint.enter['subject'] != writer['victim']
+                        or source_faint.enter['subject'] != writer['source']):
+                    continue
+                action = self.ancestor(victim_faint, 'BattleActions.runMove')
+                if action is None or action is not self.ancestor(source_faint, 'BattleActions.runMove'):
+                    continue
+                arguments = items(action.enter['arguments'])
+                if len(arguments) < 2 or move_id(arguments[0]) != 'explosion' or arguments[1] != writer['victim']:
+                    continue
+                before, after = frame.enter['before'], frame.leave['after']
+                snapshots = [cache for row in (victim_faint, source_faint, frame)
+                             for cache in (row.enter['before'], row.leave['after'])]
+                if not all(items(cache['sides'][ref['side']]['fields']['active']) == [ref]
+                           for cache in snapshots for ref in (writer['victim'], writer['source'])):
+                    continue
+                if not all(member(cache, victim)['trapped'] == 'hidden' for cache in snapshots):
+                    continue
+                old, new = member(before, victim), member(after, victim)
+                if any(cache['trapped'] != 'hidden' or cache['maybeTrapped'] is not True or cache['hp'] != 0
+                       for cache in (old, new)):
+                    continue
+                source_before, source_after = member(before, source), member(after, source)
+                if (old['fainted'] is False and new['fainted'] is True and source_before['hp'] == source_after['hp'] == 0
+                        and source_before['fainted'] is False and source_after['fainted'] is True):
+                    cleared = {pokemon(row.enter['subject']) for row in self.frames.values()
+                               if row.operation == 'Pokemon.clearVolatile' and row.end is not None
+                               and self.within(row, frame)}
+                    if not {victim, source} <= cleared:
+                        continue
+                    cause['arena_trap_double_faint'] = dict(victim_faint=victim_faint.end, source_faint=source_faint.end,
+                        flush_start=frame.sequence, flush_end=frame.end, epoch=self.phase_epoch)
+            if any('arena_trap_double_faint' in cause for cause in retained):
+                self.double_faint_trap_proofs[victim] = retained
 
     def _disable(self, frame):
         identity=pokemon(frame.enter['subject']);arguments=items(frame.enter['arguments'])
@@ -484,6 +549,7 @@ class NativeHistory:
                 elif frame.operation=='Pokemon.transformInto':self._transform(frame)
                 elif frame.operation=='Side.addSlotCondition':self._wish(frame)
                 elif frame.operation=='Pokemon.faint':self._faint(frame)
+                elif frame.operation=='Battle.faintMessages':self._bind_arena_trap_double_faint(frame)
                 elif frame.operation=='Pokemon.disableMove':self._disable(frame)
                 elif frame.operation=='Pokemon.tryTrap':self._trap(frame)
                 elif frame.operation=='Battle.singleEvent':self._condition_start(frame)
@@ -491,6 +557,7 @@ class NativeHistory:
                 elif frame.operation=='Pokemon.getMoveRequestData':self._locks(frame)
                 elif frame.operation=='Pokemon.clearVolatile':
                     identity=pokemon(frame.enter['subject']);self.trap_causes.pop(identity,None);self.lock_results.pop(identity,None)
+                    self.double_faint_trap_proofs.pop(identity, None)
                     self._clear_move_restrictions(frame, identity)
                     self.charge_slots={k:v for k,v in self.charge_slots.items() if v['actor']!=identity}
             elif operation=='COMMAND_END':
@@ -504,6 +571,7 @@ class NativeHistory:
             retained_status=[dict(actor=list(k),**v) for k,v in sorted(self.retained_status.items())],
             disable_causes=[dict(actor=list(k[:2]),slot_object=k[2],causes=v) for k,v in sorted(self.disable_causes.items())],
             trap_causes=[dict(actor=list(k),causes=v) for k,v in sorted(self.trap_causes.items())],
+            double_faint_trap_proofs=[dict(actor=list(k), causes=v) for k,v in sorted(self.double_faint_trap_proofs.items())],
             rest_state_objects=sorted(self.rest_states),encore_slots=[dict(actor=list(k[:2]),state_object=k[2],**v) for k,v in sorted(self.encore_slots.items())],
             weather_creation=self.weather_creation,phase_epoch=self.phase_epoch,old_stall=self.old_stall,
             stall_refreshed=[dict(actor=list(k),**v) for k,v in sorted(self.stall_refreshed.items())],
