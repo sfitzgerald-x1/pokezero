@@ -51,7 +51,7 @@ def compile_catalog(config, belief_source, dex):
     contract = ActorContract.champion()
     return v4_encoder.compile_encoder(public_belief.compile_source(belief_source), dex,
         config.category_vocab, checkpoint_sha256=contract.checkpoint_sha256,
-        feature_masks=config.feature_masks)
+        feature_masks=contract.encoder_masks())
 
 
 def _freeze(value, *, device, contract, shapes):
