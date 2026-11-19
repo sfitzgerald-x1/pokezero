@@ -101,7 +101,7 @@ def classify(line):
         return 'text'
     if line == '|debug|compoundeyes - enhancing accuracy':
         return 'text'
-    if line == '|debug|Wonder Guard immunity: return':
+    if line in ('|debug|Wonder Guard immunity: return', '|debug|Wonder Guard immunity: dragonclaw'):
         return 'text'
     if kind in ('-hint','-message'):
         return 'text' if len(parts)==3 and parts[2].strip() else None
