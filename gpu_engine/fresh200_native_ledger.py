@@ -197,6 +197,15 @@ class NativeHistory:
         need(len(matches)==1,'installed Native chosen switch lacks unique committed target')
         installed=items(frame.leave['after']['sides'][target[0]]['fields']['active'])
         need(len(installed)==1 and pokemon(installed[0])==target,'Native successful switch did not install its literal target')
+        if kind == 'instaswitch' and actor in self.retained_status:
+            before, after = frame.enter['before'], frame.leave['after']
+            departing = items(before['sides'][actor[0]]['fields']['active'])
+            old, cleared = member(before, actor), member(after, actor)
+            prior = self.retained_status[actor]
+            if (len(departing) == 1 and pokemon(departing[0]) == actor and actor != target
+                    and old['fainted'] is True and old['hp'] == 0 and old['status'] in ('fnt', prior['status'])
+                    and cleared['fainted'] is True and cleared['hp'] == 0 and cleared['status'] == ''):
+                prior['replacement_clear_sequence'] = frame.end
         self.pending_switches.remove(matches[0]);self.last_kind[target[0]]=1;self.last_index[target[0]]=target[1]
         self.event('INSTALLED_CHOSEN_SWITCH',frame,side=target[0],original_target=target[1],commit_call_id=matches[0]['call'])
 

@@ -56,6 +56,44 @@ class NativeContinuationTests(unittest.TestCase):
         trace.enter('Pokemon.faint',mon(0,0),(),before);trace.leave(0,after=before)
         self.assertEqual(ledger().consume(trace.rows).snapshot()['retained_status'],[])
 
+    def test_fainted_replacement_binds_clear_to_actual_departing_actor(self):
+        for departing_slot, cache_status, admitted in ((0, '', True), (0, 'fnt', False), (1, '', False)):
+            with self.subTest(departing_slot=departing_slot, cache_status=cache_status):
+                trace = Trace()
+                actor, incoming = mon(1, 0), mon(1, 3)
+                before = living_cache()
+                toxic = obj(11000, id='tox', stage=1)
+                before['sides'][1]['pokemon'][0]['fields'].update(
+                    hp=0, status='tox', statusState=toxic, fainted=False, faintQueued=False)
+                queued = copy.deepcopy(before)
+                queued['sides'][1]['pokemon'][0]['fields']['faintQueued'] = True
+                trace.enter('Pokemon.faint', actor, before=before)
+                trace.leave(0, after=queued)
+
+                departure = copy.deepcopy(queued)
+                departure['fields'] = dict(requestState='switch')
+                side = departure['sides'][1]
+                side['pokemon'][0]['fields'].update(status='fnt', fainted=True)
+                side['fields']['active'] = arr(11001, mon(1, departing_slot))
+                choice = obj(11002, choice='instaswitch', pokemon=actor, target=incoming)
+                side['fields']['choice'] = obj(11003, actions=arr(11004, choice))
+                installed = copy.deepcopy(departure)
+                installed['sides'][1]['fields']['active'] = arr(11001, incoming)
+                installed['sides'][1]['pokemon'][0]['fields']['status'] = cache_status
+                trace.enter('Side.commitChoices', dict(kind='Side', object=11, n=1), before=departure)
+                trace.leave(after=departure)
+                trace.enter('Battle.runAction', arguments=(choice,), before=departure)
+                trace.enter('BattleActions.switchIn', arguments=(incoming, 0), before=departure)
+                trace.leave(True, after=installed)
+                replacement_end = trace.rows[-1]['sequence']
+                trace.leave()
+
+                retained, = ledger().consume(trace.rows).snapshot()['retained_status']
+                self.assertEqual(retained['actor'], [1, 0])
+                self.assertEqual(retained['status'], 'tox')
+                self.assertEqual(retained['state'], toxic)
+                self.assertEqual(retained.get('replacement_clear_sequence'), replacement_end if admitted else None)
+
     def test_continuing_constructor_binding_needs_no_end_or_close(self):
         rows=[dict(operation='COMMAND_BEGIN',battleId='b',phase='start')]
         rows.extend(dict(operation='CALL_ENTER',battleId='b',phase='start',frame=dict(operation='Battle.setPlayer'),evidence=dict(side=side)) for side in ('p1','p2'))

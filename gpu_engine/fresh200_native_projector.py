@@ -90,7 +90,10 @@ def _members(party, observed, scalars, history, sequence):
             prior = retained[side, original]
             # faintMessages sets fainted. checkFainted adds the fnt marker to
             # active members at the switch check, which can be bypassed.
-            _need(status in ('fnt', prior['status']),
+            # Native switchIn clears the outgoing fainted actor's cache.
+            cleared = prior.get('replacement_clear_sequence')
+            replacement_clear = status == '' and type(cleared) is int and prior['sequence'] < cleared <= sequence
+            _need(status in ('fnt', prior['status']) or replacement_clear,
                   f'Native status after faint differs from the retained pre-faint status for {coordinate}')
             status, state = prior['status'], prior['state']
         level, happiness = scalars[side, original]
