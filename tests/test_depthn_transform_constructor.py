@@ -44,7 +44,7 @@ class TransformMappingTests(unittest.TestCase):
         self.assertEqual(mapped.state.pp[0,0,0].tolist(),[5,5,5,0])
 
     def test_retained_request_order_paid_base_pp_and_choice_lock(self):
-        from test_phase_d_transform_constructor import source_fixture,request
+        from test_depthn_phase_d_transform_constructor import source_fixture,request
         source,metadata=source_fixture();metadata['vocabulary']['items'].append('choiceband')
         for copied_transform in (False,True):
             spec,_,base=fixture();copy=spec.side_one.pokemon[0];donor=spec.side_two.pokemon[0]
