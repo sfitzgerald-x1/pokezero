@@ -22,9 +22,9 @@ from gpu_engine import device_public_worlds as plans,device_public_world_state a
 
 
 def source_fixture():
-    names=('ditto','mew','snorlax','kecleon','alakazam','articuno')
-    abilities=('limber','synchronize','immunity','colorchange','synchronize','pressure')
-    types=(('Normal',),('Psychic',),('Normal',),('Normal',),('Psychic',),('Ice','Flying'))
+    names=('ditto','mew','snorlax','kecleon','castform','articuno')
+    abilities=('limber','synchronize','immunity','colorchange','forecast','pressure')
+    types=(('Normal',),('Psychic',),('Normal',),('Normal',),('Normal',),('Ice','Flying'))
     moves={'transform':10,'softboiled':10,'psychic':10,'tackle':35,'protect':10,'hiddenpowerice':15,'hiddenpowerwater':15,'struggle':1}
     universes={};info={}
     for index,name in enumerate(names):
@@ -198,6 +198,66 @@ class TransformConstructorTests(unittest.TestCase):
             np.testing.assert_array_equal(getattr(device.state,name),getattr(other.state,name),err_msg=name)
         for (path,a),(other_path,b) in zip(jax.tree_util.tree_flatten_with_path(device.public)[0],jax.tree_util.tree_flatten_with_path(other.public)[0],strict=True):
             self.assertEqual(path,other_path);np.testing.assert_array_equal(a,b,err_msg=str(path))
+
+    def test_weather_forme_copied_before_donor_departure_refuses_in_both_routes(self):
+        import hashlib
+        from pokezero.env import BattleStartOverride
+        from pokezero.v5_teacher_public_root import PublicRoot
+        from gpu_engine import v5_owning_history as capture, v5_public_world as world
+
+        reason = 'PUBLIC_TRANSFORM_DONOR_OVERRIDDEN'
+        for owner in (0, 1):
+            own, foe = f'p{owner+1}', f'p{2-owner}'
+            first = request(self.source, 'castform', owner)
+            packet = request(self.source, 'snorlax', owner)
+            hp = first['side']['pokemon'][0]['condition']
+            next_hp = packet['side']['pokemon'][0]['condition']
+            lines = (
+                '|start',
+                f'|switch|{own}a: castform|castform, L80|{hp}',
+                f'|switch|{foe}a: ditto|ditto, L80|100/100',
+                '|turn|1',
+                '|request|' + json.dumps(first),
+                '|-weather|RainDance',
+                f'|-formechange|{own}a: castform|Castform-Rainy|[msg]|[from] ability: Forecast',
+                f'|move|{foe}a: ditto|Transform|{own}a: castform',
+                f'|-transform|{foe}a: ditto|{own}a: castform',
+                '|turn|2',
+                f'|switch|{own}a: snorlax|snorlax, L80|{next_hp}',
+                '|-weather|none',
+                '|turn|3',
+                '|request|' + json.dumps(packet),
+            )
+            address = DecisionAddress(1, 0, owner)
+            with self.subTest(owner=owner, route='B2'):
+                adapter = self.adapter(lines, owner)
+                self.assertFalse(bool(adapter.state.context.types.overridden.any()))
+                with self.assertRaisesRegex(live.Refusal, f'^{reason}$'):
+                    live.from_b2(adapter, packet, self.source, self.metadata, address=address, lines=lines)
+
+            with self.subTest(owner=owner, route='retained'):
+                # Exercise the real retained refusal after its owning-history boundary.
+                prepared = object()
+                binding = (0,) * 8
+                frame = capture.Frame(0, (), (), (), json.dumps(packet), ())
+                history = capture.History((0, id(prepared), 0), 0, owner, 1, self.catalog,
+                                          (('binding', binding),), (frame,))
+                static = world.OwnStatic(1, owner, binding, (255,) * 6)
+                source = NS(metadata=NS(source_hash=self.catalog.source.source_hash))
+                state = NS(belief_engine=NS(set_source=source))
+                context = NS(public_materialization_state=state)
+                payload = {'sides': {seat: {'volatiles': (), 'pokemon': ()} for seat in (own, foe)},
+                           'pendingBatonPassSides': ()}
+                digest = hashlib.sha256(''.join(line + '\n' for line in lines).encode()).hexdigest()
+                root = PublicRoot(address, digest, context, payload, ())
+                start = BattleStartOverride({'p1': 'fixture', 'p2': 'fixture'})
+                runtime = {'catalog': self.catalog, 'request': {'metadata': json.dumps(self.metadata)}}
+                with (patch.object(world.driver, '_checked', return_value=runtime),
+                      patch.object(capture, 'decode', return_value=NS(complete=True, lines=lines)),
+                      patch.object(world, '_own_pp_state', return_value=state),
+                      patch.object(world, 'world_battle_spec', side_effect=AssertionError('unsafe donor reached mapper'))):
+                    result = world.materialize(root, start, prepared=prepared, history=history, own_static=static, seed=1)
+                self.assertEqual(result.refusals, (reason,))
 
     def test_departed_transform_borrow_is_cleared_on_device_and_b2_return(self):
         from gpu_engine import engine_device_public_hooks as hooks,engine_device_trackers as trackers

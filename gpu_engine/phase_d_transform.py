@@ -78,7 +78,11 @@ def history(lines):
                 holder,holder_name=_seat_name(ident)
                 if holder in ('p1','p2'):reveal((holder,member(holder,holder_name)),normalize_id(ability),kind in ('-ability','ability') and not traced)
         if seat not in ('p1','p2'):continue
-        if kind=='-start' and normalize_id(parts[3])=='typechange':retyped[seat]=True
+        # Forme events can change the donor's live types just like typechange.
+        # Save that uncertainty at the copy; a later weather change or departure
+        # cannot change the types the transformer already copied.
+        if kind=='-formechange' or (kind=='-start' and normalize_id(parts[3])=='typechange'):
+            retyped[seat]=True
         if kind=='-transform':
             donor_seat,donor_name=_seat_name(parts[3]);donor=(donor_seat,member(donor_seat,donor_name))
             copies[seat]=dict(donor=donor[1],overridden=bool(retyped.get(donor_seat) or borrowed.get(donor)))

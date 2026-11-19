@@ -137,6 +137,15 @@ class TransformHistoryTests(unittest.TestCase):
         trace='|-ability|p1a: donor|Pressure|[from] ability: Trace|[of] p2a: copy'
         self.assertTrue(facts.history((*self.start,trace,copy))['copies']['p2']['overridden'])
 
+    def test_forme_history_is_bound_to_the_donor_encounter_at_copy_time(self):
+        start = ('|switch|p1a: castform|Castform, L80|100/100', self.start[1])
+        forme = '|-formechange|p1a: castform|Castform-Rainy|[msg]|[from] ability: Forecast'
+        copy = '|-transform|p2a: copy|p1a: castform'
+        depart = '|switch|p1a: donor|Kecleon, L80|100/100'
+        self.assertTrue(facts.history((*start, forme, copy, depart))['copies']['p2']['overridden'])
+        self.assertFalse(facts.history((*start, copy, forme, depart))['copies']['p2']['overridden'])
+        self.assertFalse(facts.history((*start, forme, depart, start[0], copy))['copies']['p2']['overridden'])
+
     def test_departed_borrow_survives_until_return_and_private_pressure_stays_private(self):
         lines=(*self.start,'|-ability|p1a: donor|Pressure|[silent]','|-transform|p2a: copy|p1a: donor',
             '|switch|p2a: bench|Mew, L80|100/100')
