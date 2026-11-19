@@ -95,7 +95,9 @@ def _members(party, observed, scalars, history, sequence):
             replacement_clear = status == '' and type(cleared) is int and prior['sequence'] < cleared <= sequence
             _need(status in ('fnt', prior['status']) or replacement_clear,
                   f'Native status after faint differs from the retained pre-faint status for {coordinate}')
-            status, state = prior['status'], prior['state']
+            # Only the transient faint marker needs the retained major status.
+            if not replacement_clear:
+                status, state = prior['status'], prior['state']
         level, happiness = scalars[side, original]
         slots = _field(mon, 'moveSlots')
         _need(type(slots) is list and 1 <= len(slots) <= 4, 'Native physical move-slot count differs')

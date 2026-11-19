@@ -68,7 +68,7 @@ class NativeBoundaryCoreTest(unittest.TestCase):
 
 
 class NativeFaintMarkerTest(unittest.TestCase):
-    def test_fainted_replacement_preserves_status_only_with_closed_clear_witness(self):
+    def test_fainted_replacement_clears_status_only_with_closed_clear_witness(self):
         boundary, species = boundary_with_fainted_sleeper()
         survivor = project_core(boundary, original_species=species)
         snapshot = boundary.snapshot
@@ -83,9 +83,13 @@ class NativeFaintMarkerTest(unittest.TestCase):
                     project_core(replace(boundary, history=history), original_species=species)
         history = dict(boundary.history, retained_status=[dict(prior, replacement_clear_sequence=7)])
         projected = project_core(replace(boundary, history=history), original_species=species)
-        self.assertEqual(projected['status'][0, 0, 0], survivor['status'][0, 0, 0])
-        self.assertEqual(projected['status_counter'][0, 0, 0], 2)
-        self.assertTrue(projected['rest_origin'][0, 0, 0])
+        self.assertNotEqual(survivor['status'][0, 0, 0], 0)
+        self.assertEqual(survivor['status_counter'][0, 0, 0], 2)
+        self.assertTrue(survivor['rest_origin'][0, 0, 0])
+        self.assertEqual(projected['status'][0, 0, 0], 0)
+        self.assertEqual(projected['status_counter'][0, 0, 0], 0)
+        self.assertEqual(projected['sleep_skipped'][0, 0, 0], 0)
+        self.assertFalse(projected['rest_origin'][0, 0, 0])
 
     def test_fainted_member_can_retain_the_native_major_status_before_fnt_marker(self):
         boundary, species = boundary_with_fainted_sleeper()
