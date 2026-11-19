@@ -3,10 +3,15 @@
 from .fresh200_native_archive import RecordedBoundary
 from .fresh200_native_identity import PartyMap
 from .fresh200_native_initial import (
-    BOOSTS, STATS, STATUS, _boolean, _field, _integer, _layout, _need, _typed_projection,
+    BOOSTS, STATS, _boolean, _field, _integer, _layout, _need, _typed_projection,
 )
 from .fresh200_native_ledger import fields, member
 from .fresh200_witness_audit import _same
+
+
+# Physical State codes follow mechanics.py. The public B2 observation has a
+# separate vocabulary and must not supply these position-dependent values.
+ENGINE_STATUS = {'': 0, 'par': 1, 'brn': 2, 'psn': 3, 'tox': 4, 'slp': 5, 'frz': 6}
 
 
 _CHANCE = {
@@ -41,7 +46,7 @@ def _scalars(witness, party):
 
 
 def _major_status(status, state, rest_states):
-    _need(status in STATUS, 'unsupported Native major status')
+    _need(status in ENGINE_STATUS, 'unsupported Native major status')
     counter = skipped = 0
     rest = False
     if status in ('slp', 'tox'):
@@ -54,7 +59,7 @@ def _major_status(status, state, rest_states):
             rest = state['object'] in rest_states
             _need(skipped >= 0 and rest == (values.get('startTime') == 3),
                   'Native sleep history differs from its Rest creation')
-    return dict(status=STATUS[status], status_counter=counter, sleep_skipped=skipped, rest_origin=rest)
+    return dict(status=ENGINE_STATUS[status], status_counter=counter, sleep_skipped=skipped, rest_origin=rest)
 
 
 def _members(party, observed, scalars, history, sequence):

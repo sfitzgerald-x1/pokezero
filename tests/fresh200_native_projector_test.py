@@ -3,7 +3,7 @@ import unittest
 
 from gpu_engine.fresh200_native_archive import RecordedBoundary
 from gpu_engine.fresh200_native_phase import PhaseProof, retained_inputs
-from gpu_engine.fresh200_native_projector import CORE_FIELDS, project_core
+from gpu_engine.fresh200_native_projector import CORE_FIELDS, _major_status, project_core
 from fresh200_native_initial_test import fixture
 
 
@@ -39,13 +39,25 @@ class NativeBoundaryCoreTest(unittest.TestCase):
         values = project_core(boundary, original_species=species)
         self.assertEqual(set(values), CORE_FIELDS)
         self.assertEqual(values['hp'][0, 0, 0], 0)
-        self.assertEqual(values['status'][0, 0, 0], 1)
+        self.assertEqual(values['status'][0, 0, 0], 5)
         self.assertEqual(values['status_counter'][0, 0, 0], 2)
         self.assertEqual(values['sleep_skipped'][0, 0, 0], 1)
         self.assertTrue(values['rest_origin'][0, 0, 0])
         self.assertEqual(values['queued_actor'].tolist(), [1])
         self.assertEqual(values['queued_stall'].tolist(), [[0, 4]])
         self.assertEqual(values['residual_draws'][0, 1, 0], 5)
+
+    def test_physical_status_codes_follow_engine_state(self):
+        for status, code in (('', 0), ('par', 1), ('brn', 2), ('psn', 3), ('frz', 6)):
+            with self.subTest(status=status):
+                self.assertEqual(_major_status(status, None, set())['status'], code)
+        toxic = {'object': 17, 'fields': [['id', 'tox'], ['stage', 3]]}
+        self.assertEqual(_major_status('tox', toxic, set()),
+                         dict(status=4, status_counter=3, sleep_skipped=0, rest_origin=False))
+        # Frozen root 3/p1 POST1: the incoming Relicanth has just used Rest.
+        rest = {'object': 18, 'fields': [['id', 'slp'], ['time', 3], ['skippedTime', 0], ['startTime', 3]]}
+        self.assertEqual(_major_status('slp', rest, {18}),
+                         dict(status=5, status_counter=3, sleep_skipped=0, rest_origin=True))
 
     def test_missing_retained_status_and_mismatched_boundary_are_fatal(self):
         boundary, species = boundary_with_fainted_sleeper()
@@ -64,7 +76,7 @@ class NativeFaintMarkerTest(unittest.TestCase):
         mon['status'] = cached['status'] = 'slp'
         result = project_core(boundary, original_species=species)
         self.assertEqual(result['hp'][0, 0, 0], 0)
-        self.assertEqual(result['status'][0, 0, 0], 1)
+        self.assertEqual(result['status'][0, 0, 0], 5)
         self.assertEqual(result['status_counter'][0, 0, 0], 2)
 
         mon['status'] = cached['status'] = 'par'

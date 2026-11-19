@@ -14,7 +14,6 @@ import numpy as np
 
 from .fresh200_native_identity import PartyMap, to_id, reference_identifier
 
-STATUS = {'':0, 'slp':1, 'par':2, 'brn':3, 'frz':4, 'psn':5, 'tox':6}
 WEATHER = {'':0, 'raindance':1, 'sunnyday':2, 'sandstorm':3, 'hail':4}
 STATS = ('atk', 'def', 'spa', 'spd', 'spe')
 BOOSTS = (*STATS, 'accuracy', 'evasion')
