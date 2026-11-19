@@ -240,8 +240,8 @@ class RollParityTests(unittest.TestCase):
             base_case(ability='plus', defender_ability=A['minus'], move=M['flamethrower'], observed_move='flamethrower'),
             base_case(crit=True, attacker_boosts=[-2, 0, 0, 0, 0, 0, 0], defender_boosts=[0, 3, 0, 0, 0, 0, 0]),
             base_case(move=M['hiddenpower'], observed_move='hiddenpower'),
-            base_case(move=M['hiddenpower'], observed_move='hiddenpower', moves=['hiddenpowerground'], defender_types=[T['flying'], 0]),
             base_case(item='charcoal', move=M['flamethrower'], observed_move='flamethrower'),
+            base_case(move=M['hiddenpower'], observed_move='hiddenpower', moves=['hiddenpowerground'], defender_types=[T['flying'], 0]),
         ]
         result = jax.device_get(jax.jit(dsp.strike)(tables_for(cases), inputs_for(cases)))
         for n, c in enumerate(cases):
@@ -252,7 +252,7 @@ class RollParityTests(unittest.TestCase):
             self.assertEqual(bool(result.ambiguous[n, 0]), want[1], n)
         # Silk Scarf is part of the engine chain. Charcoal still uses the host-only fallback.
         self.assertFalse(bool(result.typeboost[6, 0]))
-        self.assertTrue(bool(result.typeboost[-1, 0]))
+        self.assertTrue(bool(result.typeboost[-2, 0]))
         # An immune Hidden Power variant counts 0 (set_posterior v2), it is not unsupported.
         self.assertTrue(bool(result.immune[-1, 0]));self.assertFalse(bool(result.unsupported[-1, 0]))
         self.assertEqual(int(result.counts[-1, 0]), 0)
