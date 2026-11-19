@@ -167,3 +167,5 @@ if (require.main === module) {
   };
   process.stdout.write(wire(preflight(read(args[0]), read(args[1]))));
 }
+
+module.exports = {preflight};
