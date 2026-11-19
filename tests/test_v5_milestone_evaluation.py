@@ -12,8 +12,8 @@ import test_v5_run as fixture
 
 
 class MilestoneEvaluationTests(unittest.TestCase):
-    def recipe(self):
-        return replace(fixture.plan(),evaluation=r.EvaluationProtocol('e'*64))
+    def recipe(self, interval=2):
+        return replace(fixture.plan(),evaluation=r.EvaluationProtocol('e'*64, interval))
 
     def execute(self,path,recipe,backend,trainer,hook,*,resume=False):
         from gpu_engine import v5_model
@@ -25,6 +25,9 @@ class MilestoneEvaluationTests(unittest.TestCase):
             for name,method in [('create',trainer.create),('save_checkpoint',trainer.save),
                     ('load_checkpoint',trainer.load),('train_caches',trainer.train)]:
                 stack.enter_context(patch.object(r.training,name,side_effect=method))
+            # Fake checkpoint bytes are deliberately not Torch serialization.
+            # The fake export still checks the real immutable artifact digest.
+            stack.enter_context(patch.object(r.Store, 'checkpoint_provenance', return_value=None))
             stack.enter_context(patch.object(v5_model,'export',side_effect=export))
             return r.run(recipe,path,backend=backend,resume=resume,enable_v5=True,evaluation_hook=hook)
 
@@ -34,12 +37,12 @@ class MilestoneEvaluationTests(unittest.TestCase):
         return r.EvaluationOutcome('RESULT',report,r._file_sha(request.run_directory/report))
 
     def test_every_500k_boundary_requires_exact_declared_iteration_end(self):
-        self.assertEqual(r.evaluation_milestones([1250]*1600),{399:500000,799:1000000,1199:1500000,1599:2000000})
-        self.assertEqual(r.evaluation_milestones([200000,300000,499999,1,500000,500000]),
+        self.assertEqual(r.evaluation_milestones([1250]*1600, 500_000),{399:500000,799:1000000,1199:1500000,1599:2000000})
+        self.assertEqual(r.evaluation_milestones([200000,300000,499999,1,500000,500000], 500_000),
             {1:500000,3:1000000,4:1500000,5:2000000})
         for counts in ([500001],[250000,250001],[500000,500001],[1000000],[0],[True]):
-            with self.subTest(counts=counts),self.assertRaises(ValueError):r.evaluation_milestones(counts)
-        self.assertEqual(r.evaluation_milestones([499999]),{})
+            with self.subTest(counts=counts),self.assertRaises(ValueError):r.evaluation_milestones(counts, 500_000)
+        self.assertEqual(r.evaluation_milestones([499999], 500_000),{})
 
     def test_default_manifest_and_absent_hook_leave_legacy_calls_unchanged(self):
         recipe=fixture.plan()
@@ -57,17 +60,17 @@ class MilestoneEvaluationTests(unittest.TestCase):
                 r.run(self.recipe(),Path(temp)/'missing',backend=backend,enable_v5=True)
             with self.assertRaisesRegex(ValueError,'declaration'):
                 r.run(fixture.plan(),Path(temp)/'undeclared',backend=backend,enable_v5=True,evaluation_hook=self.result)
-            with patch.object(r,'EVALUATION_INTERVAL_GAMES',3):
-                #4 declared games end at2/4, so3 cannot be evaluated on time.
-                with self.assertRaisesRegex(ValueError,'crosses'):self.recipe()
-                recipe=replace(fixture.plan(),evaluation=None)
-                object.__setattr__(recipe,'evaluation',r.EvaluationProtocol('e'*64))
-                with self.assertRaisesRegex(ValueError,'crosses'):
-                    r.run(recipe,Path(temp)/'crossing',backend=backend,enable_v5=True,evaluation_hook=self.result)
+            # Four declared games end at 2/4, so game 3 crosses a round.
+            with self.assertRaisesRegex(ValueError,'crosses'):
+                self.recipe(interval=3)
+            recipe=fixture.plan()
+            object.__setattr__(recipe,'evaluation',r.EvaluationProtocol('e'*64, 3))
+            with self.assertRaisesRegex(ValueError,'crosses'):
+                r.run(recipe,Path(temp)/'crossing',backend=backend,enable_v5=True,evaluation_hook=self.result)
             create.assert_not_called();self.assertEqual(list(Path(temp).iterdir()),[])
 
     def test_exact_snapshot_and_start_are_published_before_hook_and_result_is_bound(self):
-        with patch.object(r,'EVALUATION_INTERVAL_GAMES',2),tempfile.TemporaryDirectory() as temp:
+        with tempfile.TemporaryDirectory() as temp:
             recipe=self.recipe();path=Path(temp)/'run';trainer=fixture.FakeTraining();seen=[]
             def hook(request):
                 self.assertIs(type(request),r.EvaluationRequest);self.assertIs(type(request.snapshot),r.Snapshot)
@@ -93,7 +96,7 @@ class MilestoneEvaluationTests(unittest.TestCase):
                 lambda request:self.fail('completed panel replayed'),resume=True)
 
     def test_exception_stops_invocation_then_resume_reenters_original_panel_before_next_iteration(self):
-        with patch.object(r,'EVALUATION_INTERVAL_GAMES',2),tempfile.TemporaryDirectory() as temp:
+        with tempfile.TemporaryDirectory() as temp:
             recipe=self.recipe();path=Path(temp)/'run';trainer=fixture.FakeTraining();backend=fixture.FakeBackend()
             def fail(request):raise RuntimeError('fake-panel-failure')
             stopped=self.execute(path,recipe,backend,trainer,fail)
@@ -110,7 +113,7 @@ class MilestoneEvaluationTests(unittest.TestCase):
 
     def test_interrupted_start_and_result_before_iteration_commit_never_replay(self):
         for after_result in (False,True):
-            with self.subTest(after_result=after_result),patch.object(r,'EVALUATION_INTERVAL_GAMES',2),tempfile.TemporaryDirectory() as temp:
+            with self.subTest(after_result=after_result),tempfile.TemporaryDirectory() as temp:
                 recipe=self.recipe();path=Path(temp)/'run';trainer=fixture.FakeTraining();original=r.Store.emit
                 def emit(store,kind,**payload):
                     out=original(store,kind,**payload)
@@ -129,7 +132,7 @@ class MilestoneEvaluationTests(unittest.TestCase):
 
     def test_explicit_unknown_bad_outcomes_and_mutated_inputs_never_grant_result(self):
         for mode in ('unknown','wrongtype','foreign-report','mutated-checkpoint'):
-            with self.subTest(mode=mode),patch.object(r,'EVALUATION_INTERVAL_GAMES',2),tempfile.TemporaryDirectory() as temp:
+            with self.subTest(mode=mode),tempfile.TemporaryDirectory() as temp:
                 recipe=self.recipe();path=Path(temp)/'run'
                 def hook(request):
                     if mode=='unknown':return r.EvaluationOutcome('UNKNOWN',reason='fake-incomplete-panel')
@@ -144,7 +147,7 @@ class MilestoneEvaluationTests(unittest.TestCase):
                 self.assertEqual(len(store.matching('EVALUATION_UNKNOWN')),1)
 
     def test_journal_protocol_snapshot_report_and_optin_drift_refuse_before_trainer(self):
-        with patch.object(r,'EVALUATION_INTERVAL_GAMES',2),tempfile.TemporaryDirectory() as temp:
+        with tempfile.TemporaryDirectory() as temp:
             root=Path(temp);recipe=self.recipe()
             for mutation in ('snapshot','protocol','report','missing-start','missing-evaluation'):
                 with self.subTest(mutation=mutation):
@@ -173,7 +176,7 @@ class MilestoneEvaluationTests(unittest.TestCase):
                         create.assert_not_called();load.assert_not_called()
             path=root/'optin';self.execute(path,recipe,fixture.FakeBackend(),fixture.FakeTraining(),self.result)
             with self.assertRaisesRegex(ValueError,'declaration'):
-                r.Store(path,replace(recipe,evaluation=r.EvaluationProtocol('f'*64)),resume=True)
+                r.Store(path,replace(recipe,evaluation=r.EvaluationProtocol('f'*64, 2)),resume=True)
             with self.assertRaisesRegex(ValueError,'declaration'):r.Store(path,replace(recipe,evaluation=None),resume=True)
 
 

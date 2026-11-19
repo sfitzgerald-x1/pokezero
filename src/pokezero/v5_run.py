@@ -25,7 +25,7 @@ from .v5_loss import V5LossConfig
 
 
 SCHEMA = 'pokezero.finite_run.v5'
-EVALUATION_INTERVAL_GAMES = 500_000
+LEGACY_EVALUATION_INTERVAL_GAMES = 500_000
 
 
 class MissingDependency(RuntimeError):pass
@@ -101,14 +101,34 @@ class Snapshot:
 
 @dataclass(frozen=True)
 class EvaluationProtocol:
-    """Explicit external panel recipe; never a qualification or launch decision."""
-    protocol_sha256:str
+    """Frozen cadence and execution mode for a declared evaluation protocol."""
 
-    def __post_init__(self):c._binding(self.protocol_sha256)
+    protocol_sha256: str
+    interval_games: int = LEGACY_EVALUATION_INTERVAL_GAMES
+    execution: str = 'legacy'
+    route_declaration_sha256: str | None = None
+
+    def __post_init__(self):
+        c._binding(self.protocol_sha256)
+        if type(self.interval_games) is not int or self.interval_games <= 0:
+            raise ValueError('positive declared evaluation interval required')
+        if self.execution not in ('legacy', 'deferred'):
+            raise ValueError('unknown evaluation execution mode')
+        if self.route_declaration_sha256 is not None:
+            c._binding(self.route_declaration_sha256)
+            if not self.deferred:
+                raise ValueError('S0 route stop requires deferred evaluation')
+
+    @property
+    def deferred(self):
+        return self.execution == 'deferred'
 
     def metadata(self):
-        return dict(protocol_sha256=self.protocol_sha256,interval_games=EVALUATION_INTERVAL_GAMES,
-            progress='DECLARED_GAME_ORDINAL',attempts='RESUME_NOT_ATTEMPTED_NO_CELL_REPLAY')
+        value = dict(protocol_sha256=self.protocol_sha256, interval_games=self.interval_games,
+                     progress='DECLARED_GAME_ORDINAL', attempts='RESUME_NOT_ATTEMPTED_NO_CELL_REPLAY')
+        if self.deferred:
+            value.update(execution='deferred', route_declaration_sha256=self.route_declaration_sha256)
+        return value
 
 
 @dataclass(frozen=True)
@@ -230,16 +250,18 @@ class EvaluationOutcome:
             raise ValueError('evaluation UNKNOWN requires a reason')
 
 
-def evaluation_milestones(iteration_game_counts):
-    """Every fixed 500k boundary must be an exact declared iteration end."""
+def evaluation_milestones(iteration_game_counts, interval_games):
+    """Map zero-based iteration ends to their exact declared game milestones."""
+    if type(interval_games) is not int or interval_games <= 0:
+        raise ValueError('positive declared evaluation interval required')
     counts=tuple(iteration_game_counts)
     if not counts or any(type(count) is not int or count<=0 for count in counts):
         raise ValueError('positive declared iteration game counts required')
     total=0;milestones={}
     for iteration,count in enumerate(counts):
         end=total+count
-        boundary=(total//EVALUATION_INTERVAL_GAMES+1)*EVALUATION_INTERVAL_GAMES
-        if boundary<end:raise ValueError('declared iteration crosses an exact500k evaluation checkpoint')
+        boundary=(total//interval_games+1)*interval_games
+        if boundary<end:raise ValueError('declared iteration crosses a declared evaluation milestone')
         if boundary==end:milestones[iteration]=end
         total=end
     return milestones
@@ -313,7 +335,13 @@ class Plan:
             raise ValueError('one fixed ordered bank, no reused roots/teams required')
         if self.evaluation is not None:
             if type(self.evaluation) is not EvaluationProtocol:raise ValueError('typed evaluation protocol required')
-            evaluation_milestones(sum(len(b.games) for b in batches) for batches in self.iterations)
+            self.evaluation_milestones()
+
+    def evaluation_milestones(self):
+        if self.evaluation is None:
+            return {}
+        counts = (sum(len(batch.games) for batch in batches) for batches in self.iterations)
+        return evaluation_milestones(counts, self.evaluation.interval_games)
 
     @property
     def games(self):return tuple(g for iteration in self.iterations for batch in iteration for g in batch.games)
@@ -414,6 +442,9 @@ class Store:
         relative=f'artifacts/actor-{iteration}-{uuid.uuid4().hex}.npz'
         metadata=v5_model.export(path,self.path/relative,expected_checkpoint_sha256=checkpoint['sha256'],enable_v5=True,
             self_moves=self.plan.self_moves,off_provenance=self.checkpoint_provenance(checkpoint))
+        if self.plan.evaluation is not None and self.plan.evaluation.deferred:
+            from .v5_deferred_evaluation import sync_actor
+            sync_actor(self.path / relative)
         (self.path/relative).chmod(0o444)
         value=Snapshot(iteration=iteration,checkpoint=checkpoint['path'],checkpoint_sha256=checkpoint['sha256'],
             archive=relative,archive_sha256=metadata['weights_archive_sha256'],model_sha256=_sha(self.plan.model.metadata()))
@@ -464,7 +495,7 @@ def learning_rate_window(plan,iteration):
 
 
 def _evaluation_binding(store,snapshot):
-    milestones=evaluation_milestones(sum(len(b.games) for b in batches) for batches in store.plan.iterations)
+    milestones=store.plan.evaluation_milestones()
     if snapshot.iteration not in milestones:raise ValueError('evaluation requires exact declared milestone snapshot')
     return dict(iteration=snapshot.iteration,declared_games=milestones[snapshot.iteration],
         declaration_sha256=_sha(json.loads((store.path/'declaration.json').read_bytes())),
@@ -494,7 +525,7 @@ def _checked_evaluation_start(store,event):
     if len(checkpoints)!=1:raise ValueError('evaluation snapshot requires original prior checkpoint')
     if store.matching('RUN_STARTED')!=[dict(declaration_sha256=binding['declaration_sha256'])]:
         raise ValueError('original accepted evaluation run declaration required')
-    milestones=evaluation_milestones(sum(len(b.games) for b in batches) for batches in store.plan.iterations)
+    milestones=store.plan.evaluation_milestones()
     for earlier in (i for i in milestones if i<iteration):
         if not any(e['kind'] in ('EVALUATION_RESULT','EVALUATION_UNKNOWN','EVALUATION_DISPATCHED') and e['payload'].get('iteration')==earlier for e in prior):
             raise ValueError('evaluation milestone order differs')
@@ -519,7 +550,7 @@ def _evaluation_history(store):
     declaration_sha256=_sha(json.loads((store.path/'declaration.json').read_bytes()))
     if store.matching('RUN_STARTED')!=[dict(declaration_sha256=declaration_sha256)]:
         raise ValueError('original accepted run declaration binding required')
-    milestones=evaluation_milestones(sum(len(b.games) for b in batches) for batches in store.plan.iterations)
+    milestones=store.plan.evaluation_milestones()
     starts={};closed={};published={};completed={};dispatched=set()
     for event in store.events:
         if event['kind']=='SNAPSHOT':
@@ -669,12 +700,14 @@ def _run(plan,path,*,backend,resume=False,enable_v5=False,evaluation_hook=None,m
     if type(iteration_policy_lag)is not int or iteration_policy_lag not in (0,1):
         raise ValueError('explicit zero or one iteration policy lag required')
     if enable_v5 is not True or type(plan) is not Plan:raise ValueError('explicit v5 finite run enablement required')
-    milestones={}
-    if plan.evaluation is not None:
-        if type(plan.evaluation) is not EvaluationProtocol or not callable(evaluation_hook):
-            raise ValueError('explicit declared evaluation protocol and callable hook required')
-        milestones=evaluation_milestones(sum(len(b.games) for b in batches) for batches in plan.iterations)
-    elif evaluation_hook is not None:raise ValueError('evaluation hook requires opted-in immutable declaration')
+    milestones = plan.evaluation_milestones()
+    deferred = plan.evaluation is not None and plan.evaluation.deferred
+    if deferred and iteration_policy_lag:
+        raise ValueError('deferred route checks require collection to start after its iteration boundary')
+    if not deferred and plan.evaluation is not None and not callable(evaluation_hook):
+        raise ValueError('legacy declaration requires the original evaluation hook')
+    if plan.evaluation is None and evaluation_hook is not None:
+        raise ValueError('evaluation hook requires opted-in immutable declaration')
     require_treatment_ready(plan,backend)
     backend.check_plan(plan)
     store=Store(path,plan,resume=resume)
@@ -692,7 +725,15 @@ def _run(plan,path,*,backend,resume=False,enable_v5=False,evaluation_hook=None,m
             store.emit('RUNTIME_PHASE',scope=scope,wall_seconds=time.perf_counter()-clock,status=status,
                 **(dict(iteration=timing_iteration)if iteration_policy_lag else{}),
                 timing_scope='host wall inclusive of original operation and its data I/O; not pure GPU compute')
-    if plan.evaluation is not None:_evaluation_history(store)
+    if deferred:
+        from .v5_deferred_evaluation import (
+            MilestoneDispatch, retain_full_checkpoints, retained_full_checkpoints, sync_directory,
+        )
+        dispatch = MilestoneDispatch(store.path, plan.evaluation, milestones,
+            store.matching('RUN_STARTED')[0]['declaration_sha256'],
+            report_observer_error=lambda reason: store.emit('EVALUATION_STOP_READ_ERROR', reason=reason))
+    elif plan.evaluation is not None:
+        _evaluation_history(store)
     checkpoints=store.matching('CHECKPOINT')
     if checkpoints:
         checkpoint=checkpoints[-1];verified=store.resolve(checkpoint['path'],checkpoint['sha256'])
@@ -712,8 +753,11 @@ def _run(plan,path,*,backend,resume=False,enable_v5=False,evaluation_hook=None,m
         checkpoint=measured('CHECKPOINT_WRITE',store.checkpoint,runtime,iteration=-1)
     snapshots=[Snapshot(**value) for value in store.matching('SNAPSHOT')]
     if not snapshots:snapshots=[measured('ACTOR_EXPORT',store.snapshot,checkpoint,iteration=-1)]
+    if deferred:
+        kept_checkpoints = retained_full_checkpoints(checkpoints, milestones)
     for snapshot in snapshots:
-        store.resolve(snapshot['checkpoint'],snapshot['checkpoint_sha256'])
+        if not deferred or snapshot.checkpoint in kept_checkpoints or snapshot.iteration == -1:
+            store.resolve(snapshot.checkpoint, snapshot.checkpoint_sha256)
         store.resolve(snapshot['archive'],snapshot['archive_sha256'])
         if snapshot['model_sha256']!=_sha(plan.model.metadata()):raise ValueError('historical model namespace differs')
     if getattr(backend,'deferred_game_starts',False):backend.recover_game_ends(store)
@@ -841,11 +885,27 @@ def _run(plan,path,*,backend,resume=False,enable_v5=False,evaluation_hook=None,m
     from concurrent.futures import ThreadPoolExecutor
     executor=ThreadPoolExecutor(max_workers=1,thread_name_prefix='v5-collect-next')if iteration_policy_lag else None
     prefetched={}
+    if deferred and resume:
+        # Repair the hand-off if the trainer died after committing a round.
+        committed = {row['iteration'] for row in store.matching('ITERATION_COMPLETE')}
+        for snapshot in snapshots:
+            if (snapshot.iteration in committed and snapshot.iteration in milestones
+                    and dispatch.request_missing(snapshot)):
+                dispatch.publish_committed(snapshot, report_error=lambda problem: store.emit(
+                    'EVALUATION_REQUEST_ERROR', iteration=snapshot.iteration, reason=problem))
+        retain_full_checkpoints(store.path, checkpoints, milestones)
     try:
         for iteration,batches in enumerate(plan.iterations):
             timing_iteration=iteration
             if store.matching('ITERATION_COMPLETE',iteration=iteration):continue
+            if (deferred and (stop := dispatch.stop_at_boundary(iteration)) is not None
+                    and not store.matching('BATCH_STARTED', iteration=iteration)):
+                store.emit('STOP', iteration=iteration, reason='S0_TRANSFER_FAIL', stop_request=stop)
+                return dict(status='STOPPED', reason='S0_TRANSFER_FAIL', stop_request=stop,
+                            statuses=statuses, steps=runtime.steps, rows=runtime.rows,
+                            scientific_qualification=False)
             current,past=actors(iteration)
+            new_checkpoints = [checkpoint] if deferred else []
             collection=prefetched.pop(iteration,None)
             if collection is None:collection=collect_iteration(iteration,current,past)
             if collection['status']!='COLLECTION_COMPLETE':return collection
@@ -881,6 +941,8 @@ def _run(plan,path,*,backend,resume=False,enable_v5=False,evaluation_hook=None,m
                     store.emit('TRAIN_PROGRESS',iteration=iteration,steps=runtime.steps,rows=runtime.rows,
                         updates=_journal_diagnostics(report.get('updates',[])))
                     checkpoint=measured('CHECKPOINT_WRITE',store.checkpoint,runtime,iteration=iteration)
+                    if deferred:
+                        new_checkpoints.append(checkpoint)
                     if report['complete']:break
                 current=measured('ACTOR_EXPORT',store.snapshot,checkpoint,iteration=iteration);snapshots.append(current)
             published=Snapshot(**existing[0]) if existing else current
@@ -891,15 +953,24 @@ def _run(plan,path,*,backend,resume=False,enable_v5=False,evaluation_hook=None,m
                     store.emit('POLICY_LAG_WINDOW_COMPLETE',training_iteration=iteration,collection_iteration=iteration+1,
                         wall_seconds=time.time()-window['time'],original_start_epoch=window['time'],
                         includes_interruption=resume,scope='one full next collection plus five-epoch prior training/checkpoint/export; overlap, not additive')
-            if iteration in milestones and not _evaluate_snapshot(store,published,evaluation_hook):
+            if not deferred and iteration in milestones and not _evaluate_snapshot(store,published,evaluation_hook):
                 store.emit('STOP',iteration=iteration,reason='EVALUATION_UNKNOWN_NO_AUTOMATIC_REPLAY')
                 return dict(status='STOPPED',reason='EVALUATION_UNKNOWN_NO_AUTOMATIC_REPLAY',statuses=statuses,
                     steps=runtime.steps,rows=runtime.rows,scientific_qualification=False)
             store.emit('ITERATION_COMPLETE',iteration=iteration,snapshot=published,
                 counts={name:list(statuses.values()).count(name) for name in ('NOT_ATTEMPTED','RUNNING','COMPLETE','CAPPED','REFUSED','FAILED')})
+            if deferred:
+                sync_directory(store.path / 'journal')
+                dispatch.publish_committed(published, report_error=lambda problem: store.emit(
+                    'EVALUATION_REQUEST_ERROR', iteration=iteration, reason=problem))
+                retain_full_checkpoints(store.path, new_checkpoints, milestones)
     finally:
         cancel.set()
         if executor is not None:executor.shutdown(wait=True,cancel_futures=True)
+    if deferred and (stop := dispatch.stop_at_boundary(len(plan.iterations))) is not None:
+        store.emit('STOP', iteration=len(plan.iterations), reason='S0_TRANSFER_FAIL', stop_request=stop)
+        return dict(status='STOPPED', reason='S0_TRANSFER_FAIL', stop_request=stop,
+                    statuses=statuses, steps=runtime.steps, rows=runtime.rows, scientific_qualification=False)
     return dict(status='COMPLETE_DECLARATION',statuses=statuses,steps=runtime.steps,rows=runtime.rows,
         scientific_qualification=False)
 
@@ -938,8 +1009,7 @@ def supervise_owned(command,*,plan,path,popen=subprocess.Popen,sleep=time.sleep)
     started=time.monotonic();last=started;longest=0.;seen=0;previous=None;phase='PREPARE';last_steps=-1
     evaluation_store=Store.__new__(Store);evaluation_store.path=Path(path);evaluation_store.plan=plan;evaluation_store.events=[];evaluation_store._journal_lock=threading.RLock()
     evaluation_starts={};evaluation_closed={};evaluation_cells={};evaluation_dispatched=set()
-    milestones=(evaluation_milestones(sum(len(b.games) for b in batches) for batches in plan.iterations)
-        if plan.evaluation is not None else {})
+    milestones = plan.evaluation_milestones() if plan.evaluation is not None and not plan.evaluation.deferred else {}
     process=popen(command,start_new_session=True)
     reason=None;observer_error=None
     try:

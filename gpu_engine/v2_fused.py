@@ -27,6 +27,7 @@ import json
 import os
 from pathlib import Path
 import time
+import uuid
 
 import numpy as np
 
@@ -161,9 +162,20 @@ def file_pipeline_order(keys, batches):
     return order, tuple(int(c) for c in counts if c)
 
 
-def write_json(path, value):
-    temporary = Path(str(path) + '.tmp');temporary.write_text(json.dumps(value, indent=1, default=str) + '\n')
+def write_json(path, value, *, durable=False):
+    temporary = Path(str(path) + '.tmp')
+    with temporary.open('w') as stream:
+        stream.write(json.dumps(value, indent=1, default=str) + '\n')
+        if durable:
+            stream.flush()
+            os.fsync(stream.fileno())
     os.replace(temporary, path)
+    if durable:
+        descriptor = os.open(path.parent, os.O_RDONLY)
+        try:
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
 
 
 def main(argv=None):
@@ -198,6 +210,20 @@ def main(argv=None):
     from pokezero import checkpoint_self_moves as encoding
     from gpu_engine.v5_device_backend import RuntimeBackend
     context = prepare(args);plan = context['plan']
+    dispatch = None
+    declaration_sha256 = runs._sha(plan.manifest())
+    if plan.evaluation is not None and plan.evaluation.deferred:
+        from pokezero.v5_deferred_evaluation import MilestoneDispatch, retain_full_checkpoints, sync_actor
+        declaration = out / 'declaration.json'
+        if (out / 'state.json').exists() and not declaration.is_file():
+            raise ValueError('original fused evaluation declaration is missing')
+        if declaration.exists():
+            if runs._sha(json.loads(declaration.read_bytes())) != declaration_sha256:
+                raise ValueError('original fused evaluation declaration differs')
+        else:
+            runs._publish(declaration, runs._json(plan.manifest()).encode())
+        dispatch = MilestoneDispatch(out, plan.evaluation, plan.evaluation_milestones(), declaration_sha256,
+            report_observer_error=lambda reason: log('EVALUATION_STOP_READ_ERROR', reason=reason))
     if args.torch_memory_fraction > 0:
         # The runtime probe caps Torch for the file pipeline; V2 holds the row store in Torch too.
         torch.cuda.set_per_process_memory_fraction(args.torch_memory_fraction, 0)
@@ -212,7 +238,7 @@ def main(argv=None):
     state_path = out / 'state.json'
     if state_path.exists():
         saved = json.loads(state_path.read_text())
-        if saved.get('declaration_sha256') != runs._sha(plan.manifest()):
+        if saved.get('declaration_sha256') != declaration_sha256:
             raise ValueError('original fused run declaration binding required')
         encoding_receipts = saved.get('checkpoint_encoding_receipts', {})
         snapshots = [runs.Snapshot(**x) for x in saved['snapshots']];reports = saved['reports']
@@ -253,7 +279,24 @@ def main(argv=None):
     collectors = {}
     reference_ends = {e['payload']['stream_id']: e['payload'] for e in events if e['kind'] == 'GAME_END'}
     last = len(plan.iterations) if args.max_iterations is None else min(len(plan.iterations), args.max_iterations)
+    def publish_evaluation(snapshot):
+        dispatch.publish_committed(snapshot, report_error=lambda reason: log(
+            'EVALUATION_REQUEST_ERROR', iteration=snapshot.iteration, reason=reason))
+
+    if dispatch is not None and state_path.exists():
+        for snapshot in snapshots[1:]:
+            if snapshot.iteration in dispatch.milestones and dispatch.request_missing(snapshot):
+                publish_evaluation(snapshot)
+        retain_full_checkpoints(out, [
+            dict(iteration=item.iteration, path=item.checkpoint) for item in snapshots[1:]
+        ], dispatch.milestones)
+    route_stop = None
     for iteration in range(len(reports), last):
+        if dispatch is not None:
+            route_stop = dispatch.stop_at_boundary(iteration)
+            if route_stop is not None:
+                log('STOP', iteration=iteration, reason='S0_TRANSFER_FAIL', stop_request=route_stop)
+                break
         phase = {};clock = time.perf_counter();start = clock
         def mark(name):
             nonlocal clock
@@ -307,13 +350,22 @@ def main(argv=None):
         train_report = trainer.train(store, window=runs.learning_rate_window(plan, iteration))
         torch.cuda.synchronize();mark('train')
         del store, tensors;gc.collect()
-        checkpoint = out / 'artifacts' / f'train-{iteration}.pt';receipt=v2t.save_checkpoint(checkpoint, runtime)
-        archive = out / 'artifacts' / f'actor-{iteration}.npz';checkpoint_sha = sha(checkpoint)
+        # A save left before state.json commits belongs to an interrupted
+        # attempt. Never overwrite it or publish a request from it.
+        suffix = f'-{uuid.uuid4().hex}' if dispatch is not None else ''
+        checkpoint = out / 'artifacts' / f'train-{iteration}{suffix}.pt'
+        receipt = v2t.save_checkpoint(checkpoint, runtime)
+        archive = out / 'artifacts' / f'actor-{iteration}{suffix}.npz'
+        checkpoint_sha = receipt['sha256']
         encoding_receipts[checkpoint_sha]=receipt['encoding_receipt']
         metadata = v5_model.export(checkpoint, archive, expected_checkpoint_sha256=checkpoint_sha, enable_v5=True,
             self_moves=plan.self_moves,off_provenance=(encoding.off_from_receipt(receipt['encoding_receipt']) if not plan.self_moves else None))
-        snapshot = runs.Snapshot(iteration=iteration, checkpoint=f'artifacts/train-{iteration}.pt', checkpoint_sha256=checkpoint_sha,
-            archive=f'artifacts/actor-{iteration}.npz', archive_sha256=metadata['weights_archive_sha256'],
+        if dispatch is not None:
+            # V2 already syncs checkpoint contents. Sync the new archive and
+            # both directory entries before committing state.json.
+            sync_actor(archive)
+        snapshot = runs.Snapshot(iteration=iteration, checkpoint=str(checkpoint.relative_to(out)), checkpoint_sha256=checkpoint_sha,
+            archive=str(archive.relative_to(out)), archive_sha256=metadata['weights_archive_sha256'],
             model_sha256=runs._sha(plan.model.metadata()))
         roots[snapshot.archive_sha256] = out;snapshots.append(snapshot);actor_params(snapshot.archive_sha256)
         mark('checkpoint_export_reload')
@@ -333,17 +385,29 @@ def main(argv=None):
             history=history, reused=reused, occupancy=round(stats.get('occupancy', 0), 3), dispositions=report['dispositions'],
             final_epoch_loss=report['training'].get('final_epoch_mean', {}).get('loss'), matching=same)
         write_json(state_path, dict(snapshots=[asdict(s) for s in snapshots], reports=reports, row_order=row_order,
-            declaration_sha256=runs._sha(plan.manifest()),checkpoint_encoding_receipts=encoding_receipts))
+            declaration_sha256=declaration_sha256,checkpoint_encoding_receipts=encoding_receipts),
+            durable=dispatch is not None)
+        if dispatch is not None:
+            publish_evaluation(snapshot)
+            # The initial snapshot lives under the reference-run root. The
+            # current full save and older milestone saves stay at this run root.
+            retain_full_checkpoints(out, [
+                dict(iteration=item.iteration, path=item.checkpoint) for item in snapshots[-2:]
+                if item.iteration >= 0], dispatch.milestones)
         del rows, result, roster, tree;gc.collect()
         keep = {s.archive_sha256 for s in snapshots[-1 - plan.historical_window:]}
         for digest in list(params):
             if digest not in keep:del params[digest]
+    if dispatch is not None and route_stop is None:
+        route_stop = dispatch.stop_at_boundary(len(reports))
     total = time.perf_counter() - wall_start
     games = sum(r['games'] for r in reports)
     summary = dict(schema='v2-fused-measurement.v2', declared=context['declared'], lanes=args.lanes, mode=args.mode,
         order=args.order, row_order=row_order, torch_memory_fraction_override=args.torch_memory_fraction if args.torch_memory_fraction > 0 else None, iterations=reports, preparation_seconds=context['preparation_seconds'], wall_seconds_this_attempt=total,
         games=games, games_per_second_steady_mean=games / max(1e-9, sum(r['steady_seconds'] for r in reports)),
         scope='Throughput of the fused V2 pipeline; not a strength result.')
+    if route_stop is not None:
+        summary.update(status='STOPPED', reason='S0_TRANSFER_FAIL', stop_request=route_stop)
     write_json(out / 'report.json', summary)
     log('DONE', wall_seconds=total, iterations=len(reports), games=games)
     return 0

@@ -91,7 +91,10 @@ def _plan(document,profile,arm,category_vocabulary):
     extras={}
     if 'evaluation' in document:
         if not hasattr(run,'EvaluationProtocol'):raise run.MissingDependency('reviewed milestone source is not integrated')
-        extras['evaluation']=run.EvaluationProtocol(document['evaluation']['protocol_sha256'])
+        evaluation = document['evaluation']
+        extras['evaluation'] = run.EvaluationProtocol(
+            evaluation['protocol_sha256'], evaluation['interval_games'],
+            evaluation.get('execution', 'legacy'), evaluation.get('route_declaration_sha256'))
     result=run.Plan(document['run_id'],model,loss,train,tuple(iterations),document['pool_sha256'],
         document['selection_seed'],document['historical_fraction'],document['historical_window'],
         document['max_requests'],run.Watchdog(**document['watchdog']),
@@ -370,7 +373,7 @@ def execute(inputs,run_root,*,resume=False,evaluation_hook=None,device_rollout=F
     if device_rollout and inputs.plan.model.arm=='D' and not device_teacher:
         raise run.MissingDependency('device D teacher is default closed; no FULL fallback')
     # No fake/default executor, zero-result success or panel bypass.
-    if getattr(inputs.plan,'evaluation',None) is None or not callable(evaluation_hook):
+    if inputs.plan.evaluation is None or not (inputs.plan.evaluation.deferred or callable(evaluation_hook)):
         raise run.MissingDependency('declared reviewed evaluation protocol and genuine panel executor required')
     _source(inputs.runtime);_memory(inputs.runtime['memory_policy'],apply=True);_probe(inputs.runtime)
     if python_rollout:
@@ -420,8 +423,10 @@ def main(argv=None,*,evaluation_hook=None):
         runtime=args.runtime,expected_runtime_sha256=args.expected_runtime_sha256,arm=args.arm,enable_v5=args.enable_v5)
     if (args.evaluation_protocol is None)!=(args.expected_evaluation_protocol_sha256 is None):
         raise ValueError('explicit evaluation protocol path and digest required together')
-    if args.external_evaluation and args.evaluation_protocol is None:
+    if args.external_evaluation and args.evaluation_protocol is None and not (inputs.plan.evaluation and inputs.plan.evaluation.deferred):
         raise ValueError('external CPU panels require the original declared evaluation protocol')
+    if args.evaluation_protocol is not None and inputs.plan.evaluation and inputs.plan.evaluation.deferred:
+        raise ValueError('deferred plans consume the bound protocol in the separate evaluator')
     if args.evaluation_protocol is not None:
         from .v5_evaluation import Artifact,EvaluationHook
         if (evaluation_hook is not None or inputs.plan.evaluation is None
