@@ -52,6 +52,28 @@ class NativeConditionTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'different physical slot'):
             project_conditions(boundary, **inputs)
 
+    def test_root13_literal_seismic_toss_break_marker_has_no_physical_leaf(self):
+        boundary, members, inputs = conditions_input()
+        battle = boundary.snapshot['battle']
+        battle['formatid'] = 'gen3customgame'
+        target = battle['sides'][1]['pokemon'][0]
+        cache = members[1]['pokemon'][0]['fields']
+        wire = dict(id='substitutebroken', name='substitutebroken', target='[Pokemon:p2a]', effectOrder=12,
+                    source='[Pokemon:p1a]', sourceSlot='p1a', sourceEffect='[Condition:substitute]', move='seismictoss')
+        native = dict(wire, target=dict(kind='Pokemon', object=230, side=1, original=0),
+                      source=dict(kind='Pokemon', object=90, side=0, original=0),
+                      sourceEffect=dict(kind='Effect', effectType='Condition', id='substitute', object=21354))
+        marker = {'object': 22894, 'fields': list(map(list, native.items()))}
+        target['volatiles']['substitutebroken'] = wire
+        cache['volatiles']['fields'].append(['substitutebroken', marker])
+        values = project_conditions(boundary, **inputs)
+        self.assertEqual(values['volatile'][0, 1, 0], 0)
+        self.assertEqual(values['substitute_hp'][0, 1, 0], 0)
+        wire['move'] = 'uturn'
+        marker['fields'][-1][1] = 'uturn'
+        with self.assertRaisesRegex(ValueError, 'admitted Seismic Toss source'):
+            project_conditions(boundary, **inputs)
+
     def test_partial_trap_uses_literal_source_original_slot(self):
         boundary, members, inputs = conditions_input()
         target = boundary.snapshot['battle']['sides'][0]['pokemon'][2]
