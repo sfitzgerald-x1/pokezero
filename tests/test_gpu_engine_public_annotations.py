@@ -91,6 +91,18 @@ class AnnotationLexicalTests(unittest.TestCase):
             with self.subTest(line=line):
                 self.assertIsNone(classify(line))
 
+    def test_frozen_roots55_and57_damage_and_sleep_diagnostics(self):
+        from gpu_engine.public_annotations import classify
+
+        for line in ('|debug|damage event failed', '|debug|set status [slp] interrupted'):
+            with self.subTest(line=line):
+                self.assertEqual(classify(line), 'text')
+                self.assertIsNone(classify(line + '|extra'))
+        for line in ('|debug|damage event succeeded', '|debug|set status [tox] interrupted',
+                     '|debug|set status [slp] succeeded', '|debug|set status [slp] interrupted '):
+            with self.subTest(line=line):
+                self.assertIsNone(classify(line))
+
     def test_bounded_canonical_shapes_and_refusals(self):
         from gpu_engine.public_annotations import classify
         for line in (*SETUP,*ANNOTATIONS):self.assertIsNotNone(classify(line),line)

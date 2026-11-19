@@ -96,6 +96,9 @@ def classify(line):
     if line in ('|debug|before turn callback: focuspunch', '|debug|BP: 40'):
         return 'text'
     if line=='|-fieldactivate|move: Perish Song':return 'perish_announcement'
+    # The pinned Native damage and sleep handlers emit these literal diagnostics.
+    if line in ('|debug|damage event failed', '|debug|set status [slp] interrupted'):
+        return 'text'
     if line in GEN3_CUSTOM_SETUP:return 'setup'
     if kind=='start':return 'setup' if line=='|start' else None
     if kind=='gametype':return 'setup' if line=='|gametype|singles' else None
