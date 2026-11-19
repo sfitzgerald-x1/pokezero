@@ -10,11 +10,9 @@ set_posterior's refusal order and returns the source-order survivor bits that na
 The damage arithmetic is the engine's: mechanics.gen3_damage over the 16 rolls, with the modifiers built by the engine's
 own helpers (items.attack_modifier / defense_modifier, combat.attack_modifier / base_power with tier D's pinch abilities,
 weather.effective / damage_modifier, solar_beam.base_power, variable_moves.resolve / facade_power, absorption's Flash
-Fire phase 1, Explosion's Defense halving). Three Gen 3 modifiers the engine does not model are added exactly as tier2
-applies them, so the kernel matches set_posterior on Showdown strikes: type-boost items (Silk Scarf, Linoone's Setup
-Sweeper item; mods/gen3/items.ts), Marvel Scale and Plus/Minus (mods/gen3/abilities.ts:115-134 reads getAllActive, the
-opposing active in singles). In-tree (guard=True) a strike where one of them is active for a hard variant is refused,
-so the engine's own damage never excludes its true set.
+Fire phase 1, Explosion's Defense halving). The Q12 stat chain also covers supported type-boost items, Marvel Scale
+and Plus/Minus. For other type-boost items the kernel computes the host rolls for parity, while in-tree reduction
+refuses strikes whose hard support includes an active modifier the engine lacks.
 
 What only public facts can decide follows tier2's public rules, precompiled per shown HP percent: a pinch ability is on
 at <= 1/3 and ambiguous within the 0.04 band of 1/3 (a refused strike), Flail / Reversal take their power from the
@@ -75,7 +73,7 @@ REASONS = ('', 'called', 'struggle', 'fixed-damage', 'ohko', 'conditional-power'
     'endure-or-focusband', 'transform', 'type-change', 'item-changed', 'ability-overridden', 'defender-semi-invulnerable',
     'unmodelled:charge', 'unmodelled:mud/water-sport', 'unvalidated:screen', 'no-hp-drop', 'single-variant', 'unknown-defender', 'no-support',
     'core-unsupported', 'ambiguous-band', 'effectiveness-disagreement',
-    'engine-unmodeled:typeboost', 'engine-unmodeled:marvelscale', 'engine-unmodeled:plusminus')
+    'engine-unmodeled:typeboost')
 CODE = {name: i for i, name in enumerate(REASONS)}
 PRECONDITIONS = frozenset(REASONS[1:CODE['single-variant']])   # what a caller may pass (protocol / engine-state facts)
 
@@ -111,9 +109,7 @@ class PosteriorTables(NamedTuple):
     move_class: object       # [M] int32 bitmask of the static refused classes
     full_hp: object          # [M] bool, Eruption / Water Spout
     revenge: object          # [M] bool, Revenge (conditional power after a hit this turn: the caller's bit)
-    # Per engine ability / item.
-    partner: object          # [A] int32 the Plus/Minus partner ability id (0 none)
-    marvel_scale: object     # [A] bool
+    # Per engine item.
     boost_type: object       # [I] int32 type-boost item's type (0 none)
     boost_num: object        # [I] int32 (11, or 21 for Sea Incense)
     boost_den: object        # [I] int32
@@ -314,9 +310,6 @@ def assemble(variants, metadata, *, flail, source_hash):
         for cls, members in (('struggle', {'struggle'}), ('fixed-damage', FIXED_DAMAGE_MOVES), ('ohko', OHKO_MOVES),
                              ('conditional-power', CONDITIONAL_POWER_MOVES), ('multi-hit', MULTI_HIT_MOVES)):
             if move in members or (cls == 'multi-hit' and multi[i]):move_class[i] |= 1 << CODE[cls]
-    partner = np.zeros(len(abilities_v), np.int32)
-    for a, b in (('plus', 'minus'), ('minus', 'plus')):
-        if a in ability_ids:partner[ability_ids[a]] = ability_ids.get(b, 0)
     boost_type = np.zeros(len(items_v), np.int32);boost_num = np.ones(len(items_v), np.int32);boost_den = np.ones(len(items_v), np.int32)
     for name, typ in tier2.TYPE_BOOST_ITEMS.items():
         if name in item_ids:
@@ -328,8 +321,7 @@ def assemble(variants, metadata, *, flail, source_hash):
         power=np.asarray(field('base_power', 0), np.int32), type=np.asarray(field('type', 0), np.int32),
         physical=np.asarray([x == 'Physical' for x in category], bool), damaging=np.asarray([x in ('Physical', 'Special') for x in category], bool),
         move_class=move_class, full_hp=np.asarray([normalize_id(n) in FULL_HP_MOVES for n in moves_v], bool),
-        revenge=np.asarray([normalize_id(n) == 'revenge' for n in moves_v], bool), partner=partner,
-        marvel_scale=np.asarray([normalize_id(n) == 'marvelscale' for n in abilities_v], bool), boost_type=boost_type,
+        revenge=np.asarray([normalize_id(n) == 'revenge' for n in moves_v], bool), boost_type=boost_type,
         boost_num=boost_num, boost_den=boost_den, **_percent_tables(flail),
         type_num=np.where(chart == .5, 1, chart).astype(np.int32), type_den=np.where(chart == .5, 2, 1).astype(np.int32))
     digest = hashlib.sha256(json.dumps([SCHEMA, source_hash, sorted(arrays)]).encode())
@@ -397,17 +389,15 @@ def strike(tables, x):
     attack_stage = j.where(physical, col(x.attacker_boosts[:, 0]), col(x.attacker_boosts[:, 2]))
     defense = j.where(physical, col(x.defender_stats[:, 2]), col(x.defender_stats[:, 4]))
     defense_stage = j.where(physical, col(x.defender_boosts[:, 1]), col(x.defender_boosts[:, 3]))
-    item_num, item_den = held.attack_modifier(tables.items, item, col(tables.engine_species[s]), physical)
-    typeboost = (tables.boost_type[item] > 0) & (tables.boost_type[item] == typ)
+    item_num, item_den = held.attack_modifier(tables.items, item, col(tables.engine_species[s]), physical, move_type=typ)
+    typeboost = (tables.boost_type[item] > 0) & (tables.boost_type[item] == typ) & (tables.items.type_boost[item] != typ)
     item_num = j.where(typeboost, item_num * tables.boost_num[item], item_num)
     item_den = j.where(typeboost, item_den * tables.boost_den[item], item_den)
     attack_num, attack_den = traits.attack_modifier(tables.combat, ability, col(x.attacker_status), physical,
-        item_num=item_num, item_den=item_den)
-    plusminus = (tables.partner[ability] > 0) & (tables.partner[ability] == defender_ability) & ~physical
-    attack_num = j.where(plusminus, attack_num * 3, attack_num);attack_den = j.where(plusminus, attack_den * 2, attack_den)
+        item_num=item_num, item_den=item_den, foe_ability=defender_ability, foe_hp=col(x.hp_before))
     defense_num, defense_den = held.defense_modifier(tables.items, col(x.defender_item), col(x.defender_species), physical)
-    marvel = col(tables.marvel_scale[x.defender_ability] & (x.defender_status != m.NONE)) & physical
-    defense_num = j.where(marvel, defense_num * 3, defense_num);defense_den = j.where(marvel, defense_den * 2, defense_den)
+    defense_num, defense_den = traits.defense_modifier(tables.combat, defender_ability, col(x.defender_status), physical,
+        item_num=defense_num, item_den=defense_den)
     weather_num, weather_den = climate.damage_modifier(tables.weather, effective, typ)
     flash = col(j.where(x.attacker_flash_fire, j.uint32(absorb.FLASH_FIRE), j.uint32(0)))
     phase1_num, phase1_den = absorb.damage_phase1(tables.absorption, typ, flash)
@@ -434,7 +424,7 @@ def strike(tables, x):
     full = tables.full_hp[mv] & (pct < 100)
     move_bits = tables.move_class[mv] | j.where(full, 1 << CODE['conditional-power'], 0)
     return StrikeResult(rolls, counts, unsupported, ambiguous, immune & ~unsupported, effdis, typeboost & ~unsupported,
-        marvel & ~unsupported, plusminus & ~unsupported, move_bits.astype(j.int32))
+        move_bits.astype(j.int32))
 
 
 def reduce(result, hard, precondition, *, guard):
@@ -454,9 +444,7 @@ def reduce(result, hard, precondition, *, guard):
     code = j.where(code > 0, code, j.where(size == 1, CODE['single-variant'], j.where(size == 0, CODE['no-support'],
         j.where(j.any(stop, axis=-1), core, 0))))
     if guard:
-        unmodeled = j.where(j.any(result.typeboost & hard_bits, axis=-1), CODE['engine-unmodeled:typeboost'],
-            j.where(j.any(result.marvel & hard_bits, axis=-1), CODE['engine-unmodeled:marvelscale'],
-            j.where(j.any(result.plusminus & hard_bits, axis=-1), CODE['engine-unmodeled:plusminus'], 0)))
+        unmodeled = j.where(j.any(result.typeboost & hard_bits, axis=-1), CODE['engine-unmodeled:typeboost'], 0)
         code = j.where(code > 0, code, unmodeled)
     fit = pack((result.counts > 0) & hard_bits & (code == 0)[:, None])
     return Reduced(code.astype(j.int32), fit)
@@ -517,7 +505,7 @@ def in_tree(trackers, belief_tables, state, side, move, caller_move, critical, h
     actual HP, and num/den of the true move type (the printed effectiveness line). The attacker's public facts come from
     the carry (its public encounter slot, its species, its hard mask and its shown HP percent); the defender is the
     observer's own active, read exactly from state. Refusals that only engine state can tell are the caller bits:
-    called (a Sleep Talk callee: move != caller_move), hit-substitute, endure-or-focusband, type-change (sticky public type-event history
+    called (a Sleep Talk callee: move != caller_move), hit-substitute, endure-or-focusband, transform (either participant), type-change (sticky public type-event history
     on either side, including restoration to native types), ability-overridden (ability != base_ability: Trace), item-changed (B2's item_mutated
     ledger on either slot), Revenge after a hit this turn (hit_by) and no-hp-drop. An admitted strike's fitting hard
     variants narrow the attacker's standing pin (narrow_pin: intersect, decline empty, count a disjoint conflict) and
@@ -542,8 +530,10 @@ def in_tree(trackers, belief_tables, state, side, move, caller_move, critical, h
     retyped = j.ones(b, bool) if history is None else j.any(history, axis=-1)
     traced = (get(state.ability, side, own) != get(state.base_ability, side, own)) | (
         get(state.ability, foe, target) != get(state.base_ability, foe, target))
+    transformed = j.any(state.transformed, axis=-1)
     pre = (j.where(move != caller_move, bit('called'), 0) | j.where(hits_sub, bit('hit-substitute'), 0)
-           | j.where(endured, bit('endure-or-focusband'), 0) | j.where(retyped, bit('type-change'), 0)
+           | j.where(endured, bit('endure-or-focusband'), 0) | j.where(transformed, bit('transform'), 0)
+           | j.where(retyped, bit('type-change'), 0)
            | j.where(changed, bit('item-changed'), 0) | j.where(traced, bit('ability-overridden'), 0)
            | j.where(~hits_sub & (dealt <= 0), bit('no-hp-drop'), 0))
     if hit_by is not None:

@@ -17,5 +17,6 @@ Train B composes the damage modifiers with tape v4 and the Transform/tier-D trai
 Train B's combined Stick tree moves it to b3b3b6cd: both critical call sites retain current item/species and both planners retain the Stick cut.
 Train B composes retained genders, infatuation and the v6 chance tape at 766833fc.
 Train B adds Forecast while preserving all prior state at 77a780c2.
+The #1990 integration merge retains the default-off narrowing callbacks.
 """
-CURRENT_TRANSITION = '77a780c2e8ac8c941b9cca1ef57a46292c013d2b'
+CURRENT_TRANSITION = '99009d989be289a4c16d807cd08176e630d9c7f3'

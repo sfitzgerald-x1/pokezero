@@ -241,6 +241,7 @@ class RollParityTests(unittest.TestCase):
             base_case(crit=True, attacker_boosts=[-2, 0, 0, 0, 0, 0, 0], defender_boosts=[0, 3, 0, 0, 0, 0, 0]),
             base_case(move=M['hiddenpower'], observed_move='hiddenpower'),
             base_case(move=M['hiddenpower'], observed_move='hiddenpower', moves=['hiddenpowerground'], defender_types=[T['flying'], 0]),
+            base_case(item='charcoal', move=M['flamethrower'], observed_move='flamethrower'),
         ]
         result = jax.device_get(jax.jit(dsp.strike)(tables_for(cases), inputs_for(cases)))
         for n, c in enumerate(cases):
@@ -249,9 +250,9 @@ class RollParityTests(unittest.TestCase):
                 self.assertTrue(bool(result.immune[n, 0]), n);continue
             self.assertEqual(np.asarray(result.rolls)[n, 0].tolist(), want[0], n)
             self.assertEqual(bool(result.ambiguous[n, 0]), want[1], n)
-        # The engine-unmodeled flags.
-        self.assertTrue(bool(result.typeboost[6, 0]));self.assertTrue(bool(result.marvel[7, 0]))
-        self.assertTrue(bool(result.plusminus[26, 0]));self.assertFalse(bool(result.typeboost[0, 0]))
+        # Silk Scarf is part of the engine chain. Charcoal still uses the host-only fallback.
+        self.assertFalse(bool(result.typeboost[6, 0]))
+        self.assertTrue(bool(result.typeboost[-1, 0]))
         # An immune Hidden Power variant counts 0 (set_posterior v2), it is not unsupported.
         self.assertTrue(bool(result.immune[-1, 0]));self.assertFalse(bool(result.unsupported[-1, 0]))
         self.assertEqual(int(result.counts[-1, 0]), 0)
@@ -347,13 +348,14 @@ class VerdictTests(unittest.TestCase):
             moves=['hiddenpowerground', 'tackle'], defender_types=[T['flying'], 0], observed=5)
         self.assertTrue(bool(result.immune[0, 0]));self.assertEqual(reason, '');self.assertEqual(fit, [])
 
-    def test_guard_refuses_engine_unmodeled_modifiers_in_tree(self):
-        _, reason, _ = self.run_one((0, 1), defender_ability=A['marvelscale'], defender_status=1)
+    def test_guard_refuses_only_engine_unmodeled_modifiers(self):
+        _, reason, _ = self.run_one((0, 1), guard=True, defender_ability=A['marvelscale'], defender_status=1)
         self.assertEqual(reason, '')
-        _, reason, fit = self.run_one((0, 1), guard=True, defender_ability=A['marvelscale'], defender_status=1)
-        self.assertEqual((reason, fit), ('engine-unmodeled:marvelscale', []))
-        _, reason, _ = self.run_one((0, 1), guard=True)
+        _, reason, _ = self.run_one((0, 1), guard=True, item='silkscarf')
         self.assertEqual(reason, '')
+        _, reason, _ = self.run_one((0, 1), guard=True, item='charcoal', move=M['flamethrower'],
+                                    observed_move='flamethrower', moves=['flamethrower'])
+        self.assertEqual(reason, 'engine-unmodeled:typeboost')
 
 
 @unittest.skipUnless(HAS_JAX, 'requires JAX')
@@ -482,6 +484,7 @@ class InTreeTests(unittest.TestCase):
             item: object
             weather: object
             hp: object
+            transformed: object
 
         pool = np.zeros((3, 2), np.uint32);pool[2] = [0b1111, 0]       # engine species 2 -> source species 1, four variants
         self.tables = Belief(j.asarray(pool), j.zeros((3, 4, 2), j.uint32), j.zeros((3, 4, 2), j.uint32),
@@ -497,7 +500,7 @@ class InTreeTests(unittest.TestCase):
         types = np.zeros((B, 2, 6, 2), np.int32);types[:, 1, 0] = c['defender_types'];types[:, 0, 0] = [T['normal'], 0]
         state_species = species.copy();state_species[:, 1, 0] = c['defender_species']
         self.state = State(z(B, 2), j.asarray(state_species), j.asarray(types), j.asarray(types), z(B, 2, 6), z(B, 2, 6), z(B, 2, 6),
-                           z(B, 2, 6, 7), z(B, 2, 6, dtype=j.uint32), j.asarray(stats), z(B, 2, 6), z(B), z(B, 2, 6))
+                           z(B, 2, 6, 7), z(B, 2, 6, dtype=j.uint32), j.asarray(stats), z(B, 2, 6), z(B), z(B, 2, 6), z(B, 2, dtype=bool))
 
     def hit(self, observed, *, hits_sub=False, called=False, endured=False, hit_by=False, move='tackle'):
         j = self.j
@@ -550,6 +553,14 @@ class InTreeTests(unittest.TestCase):
         self.assertEqual(self.hit(observed)['reason'], 'type-change')
         self.carry = original
         self.assertEqual(self.hit(observed)['reason'], '')
+
+    def test_transform_refuses_on_either_participant(self):
+        observed = tier2_rolls(base_case(item='choiceband'))[0][-1]
+        state = self.state
+        for side in (0, 1):
+            self.state = state._replace(transformed=state.transformed.at[:, side].set(True))
+            out = self.hit(observed)
+            self.assertEqual((out['reason'], out['active']), ('transform', False))
 
     def test_off_model_strike_is_declined(self):
         out = self.hit(1)   # no variant's roll is 1 HP: no fitting hard variant, the incoming set is empty
