@@ -40,9 +40,51 @@ def timing(provider, records, label_seconds):
         leaves_per_second=None if label_seconds <= compile_ else 162 * priced / (label_seconds - compile_))
 
 
+def initializer_proof(origin, snapshot):
+    from pokezero import checkpoint_self_moves as encoding
+    from pokezero.v5_run import Snapshot
+
+    if origin is None:
+        raise ValueError('an OFF actor in an ON plan requires --initializer-run with original initializer evidence')
+    root, declaration, events = encoding.verified_run(origin)
+    if declaration.get('self_moves', False):
+        raise ValueError('the original initializer run must declare self_moves off')
+    identity = ('iteration', 'checkpoint_sha256', 'archive_sha256', 'model_sha256')
+    matches = [
+        Snapshot(**event['payload']) for event in events
+        if event['kind'] == 'SNAPSHOT'
+        and all(event['payload'].get(field) == getattr(snapshot, field) for field in identity)
+    ]
+    if len(matches) != 1:
+        raise ValueError('exactly one original snapshot matching the destination initializer is required')
+    proof, _ = encoding.original_initializer(root, matches[0])
+    return proof
+
+
+def load_actor(plan, snapshot, run_root, initializer_run):
+    from gpu_engine import v5_model
+    from gpu_engine.private_self_moves import check_run_actor
+    from pokezero.checkpoint_self_moves import archive_self_moves
+
+    params, config, meta = v5_model.load(run_root / snapshot.archive, expected_archive_sha256=snapshot.archive_sha256,
+        expected_checkpoint_sha256=snapshot.checkpoint_sha256,
+        expected_category_vocabulary_sha256=plan.model.category_vocabulary_sha256,
+        expected_label_vocabulary_sha256=plan.model.label_vocabulary.sha256, enable_v5=True)
+    if config != plan.model:
+        raise SystemExit('actor configuration differs')
+    proof = None
+    if plan.self_moves and not archive_self_moves(meta):
+        proof = initializer_proof(initializer_run, snapshot)
+    check_run_actor(meta, plan_self_moves=plan.self_moves, iteration=snapshot.iteration,
+                    context='D3 chunk equal', initializer=proof)
+    return params
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.split('\n')[0])
     parser.add_argument('--d3-root', required=True, help='the D3 bank run root (prespec.json, runtime.json, run/)')
+    parser.add_argument('--initializer-run', type=Path,
+        help='original OFF run directory with the matching iteration -1 snapshot, required only for an OFF initializer in an ON plan')
     parser.add_argument('--out', required=True, help='new output directory')
     parser.add_argument('--chunks', type=int, default=2)
     parser.add_argument('--baseline-chunks', type=int, default=1, help='chunks the baseline teacher labels and the variants are compared on')
@@ -63,7 +105,6 @@ def main(argv=None):
     from pokezero.v5_loss import V5LossConfig
     from pokezero import v5_training as training
     from gpu_engine import v5_device_rollout as rollout
-    from gpu_engine.v2_fused import load_actor
     from gpu_engine.v5_device_backend import RuntimeBackend
     from gpu_engine.v5_device_teacher import Provider
     from gpu_engine.d3_saved_root_gate import differences
@@ -89,7 +130,7 @@ def main(argv=None):
     prepared, pool, _, _ = worker.prepare_device_runtime(inputs)
     events = (json.loads(p.read_text()) for p in sorted((run_root / 'journal').glob('*.json')))
     snap = next(runs.Snapshot(**e['payload']) for e in events if e['kind'] == 'SNAPSHOT' and e['payload']['iteration'] == -1)
-    params = load_actor(plan, snap, run_root)
+    params = load_actor(plan, snap, run_root, args.initializer_run)
     base = dict(frame_batch=True, chunk_batch=True, vectorized=True)
     names = ['baseline'] + args.variant
     providers = {'baseline': Provider(prepared, plan, **base)}
