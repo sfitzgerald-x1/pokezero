@@ -144,21 +144,25 @@ def _protect_counter(phase, history, side, original, active, conditions):
     return counter
 
 
-def _validate_substitute_break_marker(party, side, original, serialized, observed):
-    # In this pinned Gen 3 ruleset, Seismic Toss can leave the inherited Gen 4
-    # Substitute bookkeeping marker. Its only ability reader checks U-turn;
-    # the live Substitute, if any, still has its own HP projection.
+def _validate_substitute_break_marker(party, vocab, side, original, serialized, observed):
+    # In this pinned Gen 3 ruleset, breaking a Substitute can leave the
+    # inherited Gen 4 marker. Its only ability reader checks U-turn. An
+    # actual Substitute still has its own HP projection.
     marker = fields(observed)
     keys = {'id', 'name', 'target', 'effectOrder', 'source', 'sourceSlot', 'sourceEffect', 'move'}
     _need(type(serialized) is dict and set(serialized) == set(marker) == keys,
           'unexpected Native Substitute break marker fields')
+    move = serialized['move']
+    move_ids = vocab.ids['moves']
+    _need(type(move) is str and move == marker['move'] and move != 'uturn'
+          and (move in move_ids or (move == 'hiddenpower' and any(key.startswith('hiddenpower') for key in move_ids))),
+          'Native Substitute break marker has an unsupported or inconsistent move')
     source = _opponent(party, side, serialized['source'])
     _need(serialized['id'] == marker['id'] == serialized['name'] == marker['name'] == 'substitutebroken'
-          and serialized['move'] == marker['move'] == 'seismictoss'
           and _integer(serialized['effectOrder']) == _integer(marker['effectOrder']) >= 0
           and party.resolve_pokemon(serialized['target']) == pokemon(marker['target']) == (side, original)
           and pokemon(marker['source']) == source and serialized['sourceSlot'] == marker['sourceSlot'] == f'p{source[0]+1}a',
-          'Native Substitute break marker differs from the admitted Seismic Toss source')
+          'Native Substitute break marker differs from the admitted source')
     effect = marker['sourceEffect']
     _need(serialized['sourceEffect'] == '[Condition:substitute]' and type(effect) is dict
           and set(effect) == {'kind', 'effectType', 'id', 'object'} and effect['kind'] == 'Effect'
@@ -178,7 +182,7 @@ def _member_conditions(party, observed, boundary, vocab, side, original, roster)
     _need(not unrepresented, f'unrepresented Native volatiles: {sorted(unrepresented)}')
     if 'substitutebroken' in conditions:
         _need(party.battle['formatid'] == 'gen3customgame', 'Native Substitute break marker is specific to the admitted format')
-        _validate_substitute_break_marker(party, side, original, conditions['substitutebroken'], live['substitutebroken'])
+        _validate_substitute_break_marker(party, vocab, side, original, conditions['substitutebroken'], live['substitutebroken'])
     mask = sum(bit for name, bit in BITS.items() if name in conditions)
     if 'focuspunch' in conditions and _boolean(conditions['focuspunch'].get('lostFocus', False)):
         mask |= 32

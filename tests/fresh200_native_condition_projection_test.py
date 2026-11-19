@@ -52,7 +52,7 @@ class NativeConditionTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'different physical slot'):
             project_conditions(boundary, **inputs)
 
-    def test_root13_literal_seismic_toss_break_marker_has_no_physical_leaf(self):
+    def test_literal_substitute_break_markers_bind_to_gen3_move_vocabulary(self):
         boundary, members, inputs = conditions_input()
         battle = boundary.snapshot['battle']
         battle['formatid'] = 'gen3customgame'
@@ -66,13 +66,20 @@ class NativeConditionTest(unittest.TestCase):
         marker = {'object': 22894, 'fields': list(map(list, native.items()))}
         target['volatiles']['substitutebroken'] = wire
         cache['volatiles']['fields'].append(['substitutebroken', marker])
-        values = project_conditions(boundary, **inputs)
-        self.assertEqual(values['volatile'][0, 1, 0], 0)
-        self.assertEqual(values['substitute_hp'][0, 1, 0], 0)
-        wire['move'] = 'uturn'
-        marker['fields'][-1][1] = 'uturn'
-        with self.assertRaisesRegex(ValueError, 'admitted Seismic Toss source'):
-            project_conditions(boundary, **inputs)
+        # Root 13 records Seismic Toss. Root 20 records the untyped Native
+        # Hidden Power ID, while the bound move vocabulary has typed variants.
+        inputs['vocabulary']['moves'].extend(['Seismic Toss', 'U-turn'])
+        for move in ('seismictoss', 'hiddenpower', 'tackle'):
+            with self.subTest(move=move):
+                wire['move'] = marker['fields'][-1][1] = move
+                values = project_conditions(boundary, **inputs)
+                self.assertEqual(values['volatile'][0, 1, 0], 0)
+                self.assertEqual(values['substitute_hp'][0, 1, 0], 0)
+        for serialized, observed in (('uturn', 'uturn'), ('seismictoss', 'hiddenpower'), ('unknownmove', 'unknownmove')):
+            with self.subTest(serialized=serialized, observed=observed):
+                wire['move'], marker['fields'][-1][1] = serialized, observed
+                with self.assertRaisesRegex(ValueError, 'unsupported or inconsistent move'):
+                    project_conditions(boundary, **inputs)
 
     def test_partial_trap_uses_literal_source_original_slot(self):
         boundary, members, inputs = conditions_input()
