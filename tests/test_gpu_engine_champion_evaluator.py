@@ -1121,6 +1121,46 @@ class ReportTextTests(unittest.TestCase):
 # ---------------------------------------------------------------- the forward microbenchmark
 
 class ForwardBenchTests(unittest.TestCase):
+    def test_v2_bench_records_on_archive_and_accepts_legacy_off(self):
+        from gpu_engine import champion_forward_bench as bench, v5_model
+        from pokezero import v5_contract
+        from pokezero.v5_model import V5ModelConfig
+
+        labels = v5_contract.LabelVocabulary('a' * 64, ('surf', 'rest'), (('blissey', 3), ('swalot', 2)))
+        config = V5ModelConfig(16, 'b' * 64, labels, arm='B', width=8, layers=1,
+            attention_heads=2, expert_width=8, value_hidden=(8, 8), value_bins=5)
+        params = {name: np.zeros(shape, np.float32) for name, shape in v5_model.shapes(config).items()}
+        edges = np.linspace(-1, 1, config.value_bins + 1, dtype=np.float32)
+        params['value_centers'] = (edges[:-1] + edges[1:]) / 2
+        metadata = dict(schema=v5_model.ARCHIVE_SCHEMA, model=config.metadata(), checkpoint_sha256=CHECKPOINT,
+            source_contract_sha256=v5_model._sha(v5_contract.contract_descriptor()),
+            torch_source_sha256=v5_model.TORCH_SOURCE_SHA256, contract_source_sha256=v5_model.CONTRACT_SOURCE_SHA256,
+            actor='RAW_POLICY', view='PUBLIC', auxiliary_heads=False, evaluation=True,
+            parameter_count=sum(x.size for x in params.values()),
+            tensor_sha256={k: hashlib.sha256(v.tobytes()).hexdigest() for k, v in params.items()})
+        with tempfile.TemporaryDirectory() as directory, patch.object(sys, 'stdout', io.StringIO()):
+            root = Path(directory)
+            for encoding, extra in (('off', {}), ('on', {'self_moves': True}), ('invalid', {'self_moves': 1})):
+                archive = root / f'{encoding}.npz'
+                encoded = np.frombuffer(json.dumps(dict(metadata, **extra)).encode(), np.uint8)
+                np.savez_compressed(archive, metadata_json=encoded, **params)
+                out = root / encoding
+                argv = ['--out', str(out), '--rows', '2', '--warmup', '0', '--repeats', '1',
+                        '--v2-archive', str(archive), '--v2-archive-sha256', hashlib.sha256(archive.read_bytes()).hexdigest(),
+                        '--v2-checkpoint-sha256', CHECKPOINT]
+                with self.subTest(encoding=encoding):
+                    if encoding == 'invalid':
+                        with self.assertRaisesRegex(ValueError, 'explicit bool archive self_moves'):
+                            bench.load_v2(bench.parse(argv))
+                    elif encoding == 'off':
+                        _, _, header, _ = bench.load_v2(bench.parse(argv))
+                        self.assertNotIn('self_moves', header)
+                    else:
+                        self.assertEqual(bench.main(argv), 0)
+                        report = json.loads((out / 'bench.json').read_text())
+                        self.assertIs(report['evaluators']['v2']['self_moves'], True)
+                        self.assertEqual(report['results']['v2']['2']['valid_rows'], 2)
+
     def test_runs_tiny_on_cpu_with_compile_apart(self):
         from gpu_engine import champion_forward_bench as bench
         from gpu_engine.device_depth2_pricer import default_forward
