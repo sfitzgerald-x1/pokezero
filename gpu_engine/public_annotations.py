@@ -92,6 +92,9 @@ def classify(line):
         return 'text'
     if kind in ('-hint','-message'):
         return 'text' if len(parts)==3 and parts[2].strip() else None
+    # The frozen owner streams include the Focus Punch callback and Reversal power.
+    if line in ('|debug|before turn callback: focuspunch', '|debug|BP: 40'):
+        return 'text'
     if line=='|-fieldactivate|move: Perish Song':return 'perish_announcement'
     if line in GEN3_CUSTOM_SETUP:return 'setup'
     if kind=='start':return 'setup' if line=='|start' else None

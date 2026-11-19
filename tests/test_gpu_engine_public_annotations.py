@@ -36,6 +36,18 @@ class AnnotationLexicalTests(unittest.TestCase):
             with self.subTest(line=line):
                 self.assertIsNone(classify(line))
 
+    def test_frozen_roots29_and43_dispatch_diagnostics(self):
+        from gpu_engine.public_annotations import classify
+
+        for line in ('|debug|before turn callback: focuspunch', '|debug|BP: 40'):
+            with self.subTest(line=line):
+                self.assertEqual(classify(line), 'text')
+                self.assertIsNone(classify(line + '|extra'))
+        for line in ('|debug|before turn callback: Focus Punch', '|debug|before turn callback: shelltrap',
+                     '|debug|BP: 040', '|debug|BP: 41'):
+            with self.subTest(line=line):
+                self.assertIsNone(classify(line))
+
     def test_literal_gen3_damage_debug_messages(self):
         from gpu_engine.public_annotations import classify
 
@@ -75,7 +87,7 @@ class AnnotationLexicalTests(unittest.TestCase):
         from gpu_engine.public_annotations import classify
 
         self.assertEqual(classify('|debug|BP: 20'), 'text')
-        for line in ('|debug|BP: 020', '|debug|BP: 21', '|debug|BP: 20|extra', '|debug|BP: 40'):
+        for line in ('|debug|BP: 020', '|debug|BP: 21', '|debug|BP: 20|extra', '|debug|BP: 42'):
             with self.subTest(line=line):
                 self.assertIsNone(classify(line))
 
