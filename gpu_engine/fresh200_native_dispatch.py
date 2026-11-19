@@ -30,7 +30,12 @@ def _rows(path, extent):
     with path.open('rb') as stream:
         stream.seek(start)
         data = stream.read(end - start)
-    _need(len(data) == end - start and (not data or data.endswith(b'\n')), 'closed command bytes are incomplete')
+    _need(len(data) == end - start, 'closed command extent is incomplete')
+    return _decode_rows(data)
+
+
+def _decode_rows(data):
+    _need(not data or data.endswith(b'\n'), 'closed command bytes are incomplete')
     return [document(line.decode('utf8')) for line in data.split(b'\n')[:-1]]
 
 
@@ -79,7 +84,10 @@ class DecisionEvidence:
         causal = _rows(recorder.directory / 'witness-audit.jsonl', offsets['audit'])
         events = _rows(recorder.directory / 'witness-transport-events.jsonl', offsets['events'])
         stdout = _rows(recorder.artifacts / 'stdout.bin', offsets['stdout'])
-        if record['phase'] == 'start':
+        return self.ingest_closed(record['phase'], causal, events, stdout)
+
+    def ingest_closed(self, phase, causal, events, stdout):
+        if phase == 'start':
             self.history.bind_constructor(causal)
         previous = len(self.history.events)
         self.history.consume(causal)
@@ -242,6 +250,18 @@ def _accept(selection, events, phase):
     return accepted
 
 
+def _confirmed_choices(step, phase, selection, choices, stdout, events):
+    actual = [(event['player'], event['choice'], event['submissionId'])
+              for event in stdout if event['type'] == 'choice_ack']
+    _need(actual == [(owner, value, step.frame) for owner, value in choices.items()],
+          'original Native choice acknowledgments differ from frozen submission')
+    accepted = _accept(selection, events, phase)
+    if phase.kind == 'ordinary':
+        return OrdinaryInputs(step.actions, tuple(accepted[side][0] for side in (0, 1)),
+                              tuple(accepted[side][1] for side in (0, 1)))
+    return None
+
+
 def _constructor(snapshot, teams):
     party = PartyMap(snapshot['battle'], [[member['species'] for member in side] for side in teams])
     facts = {(entry['side'], entry['original']): entry for entry in snapshot['witness']['elidedProperties']}
@@ -333,14 +353,9 @@ class FixedPrefixDispatcher:
                 wire = _json(dict(type=phase_name, battleId=battle_id, choices=choices, submissionId=frame))
                 stdout, events = self._submit(wire, phase_name, frame, self.chance.control.read_bytes(), packet['nonce'])
                 require_resolved(self.recorder.archive_chance_before_retirement(retire=self.chance.end))
-                actual = [(event['player'], event['choice'], event['submissionId'])
-                          for event in stdout if event['type'] == 'choice_ack']
-                _need(actual == [(owner, value, frame) for owner, value in choices.items()],
-                      'original Native choice acknowledgments differ from frozen submission')
-                accepted = _accept(selection, events, phase)
-                if phase.kind == 'ordinary':
-                    prior_ordinary = OrdinaryInputs(step.actions, tuple(accepted[side][0] for side in (0, 1)),
-                                                    tuple(accepted[side][1] for side in (0, 1)))
+                confirmed = _confirmed_choices(step, phase, selection, choices, stdout, events)
+                if confirmed is not None:
+                    prior_ordinary = confirmed
                     ordinary_packet = packet
             else:
                 self._submit(_json(dict(type=phase_name, battleId=battle_id)), phase_name, 8)
