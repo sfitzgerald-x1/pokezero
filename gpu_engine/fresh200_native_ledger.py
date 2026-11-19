@@ -14,6 +14,8 @@ from .fresh200_native_identity import to_id
 SWITCH_CHOICES = frozenset(('switch', 'instaswitch'))
 # Gen 3 Shadow Tag onFoeTrapPokemon in the pinned Native callback catalog.
 SHADOW_TAG_TRAP_CALLBACK = 'Callback:404ef8be16446e7ea614f5f86395c8da0718dc0f3ea85965fd0bbf4fac41bd34'
+# Gen 3 Magnet Pull onAnyTrapPokemon in the pinned Native callback catalog.
+MAGNET_PULL_TRAP_CALLBACK = 'Callback:2d81d02b8604a58a7a605db2898fd18e1cfa6d5c00ef52e6658ab0afc491c8e7'
 
 
 class UnmappedNativeHistory(ValueError):
@@ -456,6 +458,43 @@ class NativeHistory:
                 cause['shadow_tag_replacement_faint'] = dict(faint=faint.end, flush_start=frame.sequence,
                                                              flush_end=frame.end)
 
+
+    def _bind_fainted_magnet_pull(self, frame):
+        if frame.leave['result'] is not False:
+            return
+        for victim, causes in self.trap_causes.items():
+            for cause in causes:
+                writer = cause.get('magnet_pull_writer')
+                if (not writer or 'magnet_pull_source_faint' in cause
+                        or writer['epoch'] + 1 != self.phase_epoch
+                        or max(self.last_active_install) >= cause['sequence']):
+                    continue
+                source = pokemon(writer['source'])
+                retained = self.retained_status.get(source)
+                faint = self.frames.get(retained['call_id']) if retained else None
+                if (faint is None or faint.enter['subject'] != writer['source']
+                        or not cause['sequence'] < faint.sequence < faint.end < frame.sequence):
+                    continue
+                before, after = frame.enter['before'], frame.leave['after']
+                snapshots = (faint.enter['before'], faint.leave['after'], before, after)
+                if not all(items(cache['sides'][ref['side']]['fields']['active']) == [ref]
+                           for cache in snapshots for ref in (writer['victim'], writer['source'])):
+                    continue
+                survivors = [member(cache, victim) for cache in snapshots]
+                if not all(mon['hp'] > 0 and mon['fainted'] is False and mon['trapped'] == 'hidden'
+                           for mon in survivors):
+                    continue
+                old, new = member(before, source), member(after, source)
+                if not (old['hp'] == new['hp'] == 0 and old['fainted'] is False and new['fainted'] is True):
+                    continue
+                if not any(child.operation == 'Pokemon.clearVolatile' and child.end is not None
+                           and child.enter['subject'] == writer['source'] and self.within(child, frame)
+                           and items(child.enter['arguments']) == [False] for child in self.frames.values()):
+                    continue
+                cause['magnet_pull_source_faint'] = dict(faint=faint.end, flush_start=frame.sequence,
+                                                        flush_end=frame.end, epoch=self.phase_epoch)
+
+
     def _disable(self, frame):
         identity=pokemon(frame.enter['subject']);arguments=items(frame.enter['arguments'])
         need(arguments and type(arguments[0]) is str,'literal Native disableMove argument required')
@@ -531,6 +570,10 @@ class NativeHistory:
                             and owner['hp'] > 0 and owner['ability'] == 'arenatrap'
                             and member(before, identity)['hp'] > 0 and member(before, identity)['trapped'] is False):
                         cause['arena_trap_writer'] = dict(source=source, victim=victims[0], epoch=self.phase_epoch)
+        if effect and (effect['id'], effect['effect_type']) == ('magnetpull', 'Ability'):
+            writer = self._magnet_pull_writer(frame, identity)
+            if writer:
+                cause['magnet_pull_writer'] = writer
         self.trap_causes.setdefault(identity, []).append(cause)
 
     def _shadow_tag_write(self, frame):
@@ -570,6 +613,45 @@ class NativeHistory:
         writer = dict(source=source, victim=victim, epoch=self.phase_epoch)
         self.trap_causes.setdefault(identity, []).append(dict(effect=effect, call_id=frame.call,
             sequence=frame.end, shadow_tag_writer=writer))
+
+
+    def _magnet_pull_writer(self, frame, identity):
+        callback = self.frames.get(frame.parent)
+        if not callback or callback.operation != MAGNET_PULL_TRAP_CALLBACK:
+            return None
+        event = self.frames.get(callback.parent)
+        victim = frame.enter['subject']
+        context = frame.enter.get('context', {})
+        callback_context = callback.enter.get('context', {})
+        state = context.get('effectState')
+        arguments = items(frame.enter['arguments'])
+        if (not event or event.operation != 'Battle.runEvent'
+                or items(event.enter['arguments'])[:2] != ['TrapPokemon', victim]
+                or items(callback.enter['arguments'])[:1] != [victim]
+                or arguments != [True] or arguments[0] is not True
+                or not state or 'fields' not in state
+                or callback_context.get('effectState') != state
+                or callback_context.get('effect') != context.get('effect')):
+            return None
+        state = fields(state)
+        source = state.get('target')
+        if state.get('id') != 'magnetpull' or not source or source.get('kind') != 'Pokemon':
+            return None
+        holder = pokemon(source)
+        if holder[0] == identity[0]:
+            return None
+        before, after = frame.enter['before'], frame.leave['after']
+        if not all(items(cache['sides'][ref['side']]['fields']['active']) == [ref]
+                   for cache in (before, after) for ref in (source, victim)):
+            return None
+        if not all(member(cache, holder)['ability'] == 'magnetpull'
+                   and all(member(cache, actor)['hp'] > 0 and member(cache, actor)['fainted'] is False
+                           for actor in (holder, identity)) for cache in (before, after)):
+            return None
+        if member(before, identity)['trapped'] is not False or member(after, identity)['trapped'] != 'hidden':
+            return None
+        return dict(source=source, victim=victim, epoch=self.phase_epoch)
+
 
     def _condition_start(self, frame):
         if frame.leave['result'] is False:return
@@ -660,6 +742,7 @@ class NativeHistory:
                 elif frame.operation=='Battle.faintMessages':
                     self._bind_arena_trap_double_faint(frame)
                     self._bind_shadow_tag_replacement_faint(frame)
+                    self._bind_fainted_magnet_pull(frame)
                 elif frame.operation=='Pokemon.disableMove':self._disable(frame)
                 elif frame.operation=='Pokemon.tryTrap':self._trap(frame)
                 elif frame.operation==SHADOW_TAG_TRAP_CALLBACK:self._shadow_tag_write(frame)
