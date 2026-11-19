@@ -197,6 +197,13 @@ class NativeHistory:
                 self.pending_switches.append(dict(side=side, actor=actor, target=target, kind=kind, call=frame.call))
             self.event('COMMITTED_CHOICE',frame,side=side,choice=action)
 
+    def _installed_switch(self, frame, target):
+        installed = items(frame.leave['after']['sides'][target[0]]['fields']['active'])
+        need(len(installed) == 1 and pokemon(installed[0]) == target,
+             'Native successful switch did not install its literal target')
+        self.last_kind[target[0]] = 1
+        self.last_index[target[0]] = target[1]
+
     def _switch(self, frame):
         if not frame.leave['result'] or frame.leave['result'] == 'pursuitfaint':return
         arguments=items(frame.enter['arguments']);target=pokemon(arguments[0])
@@ -205,12 +212,23 @@ class NativeHistory:
         if frame.leave['result'] is True:
             self.last_active_install[target[0]] = frame.end
             self.retired_fainted_trap_proofs.clear()
+        drag = self.ancestor(frame, 'BattleActions.dragIn')
+        is_drag = len(arguments) == 4 and arguments[3] is True
+        need(is_drag == (drag is not None), 'Native switch drag flag differs from its causal call')
+        if is_drag:
+            need(arguments[2] is None and frame.leave['result'] is True,
+                 'forced Native drag did not report installation')
+            # A drag invalidates the departing active's move slot. Keep the
+            # incoming member's identity without inventing a committed choice.
+            self._installed_switch(frame, target)
+            self.event('INSTALLED_DRAG', frame, side=target[0], original_target=target[1], drag_call_id=drag.call)
+            return
         action=self.ancestor(frame,'Battle.runAction')
         if action is None:return
         resolved = fields(items(action.enter['arguments'])[0])
         kind = resolved.get('choice')
         if kind not in SWITCH_CHOICES:
-            return  # Initial entry and phazing have no committed switch choice.
+            return  # Initial entry has no committed switch choice.
         if kind == 'instaswitch':
             need(frame.leave['result'] is True, 'forced Native replacement did not report installation')
         actor = pokemon(resolved['pokemon'])
@@ -218,8 +236,7 @@ class NativeHistory:
         matches = [choice for choice in self.pending_switches
                    if choice['actor'] == actor and choice['target'] == target and choice['kind'] == kind]
         need(len(matches)==1,'installed Native chosen switch lacks unique committed target')
-        installed=items(frame.leave['after']['sides'][target[0]]['fields']['active'])
-        need(len(installed)==1 and pokemon(installed[0])==target,'Native successful switch did not install its literal target')
+        self._installed_switch(frame, target)
         if kind == 'instaswitch' and actor in self.retained_status:
             before, after = frame.enter['before'], frame.leave['after']
             departing = items(before['sides'][actor[0]]['fields']['active'])
@@ -231,7 +248,7 @@ class NativeHistory:
                 prior['replacement_clear_sequence'] = frame.end
         self._retire_arena_trap(frame, actor, target, kind, installs_before)
         self._retire_shadow_tag(frame, actor, target, previous_install)
-        self.pending_switches.remove(matches[0]);self.last_kind[target[0]]=1;self.last_index[target[0]]=target[1]
+        self.pending_switches.remove(matches[0])
         self.event('INSTALLED_CHOSEN_SWITCH',frame,side=target[0],original_target=target[1],commit_call_id=matches[0]['call'])
 
     def _retire_arena_trap(self, frame, actor, target, kind, installs_before):

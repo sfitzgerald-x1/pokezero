@@ -99,6 +99,52 @@ class NativeLedgerTests(unittest.TestCase):
         initial.enter('BattleActions.switchIn',arguments=(target,0),before=cache());initial.leave(1,after=cache(active=4));initial.leave()
         self.assertEqual(ledger().consume(initial.rows).snapshot()['last_action_kind'],[0,0])
 
+    def root2_post5_trace(self, *, result=True, installed=5, is_drag=True):
+        # Frozen selected[2], command 2120000002/0/12. Regirock (p2 slot 1)
+        # used Earthquake (slot 0) before Whirlwind dragged in Clefable (slot 5).
+        trace = Trace()
+        before = cache(move='earthquake')
+        active = before['sides'][1]['fields']['active']
+        active['items'] = [mon(1, 1)]
+        before['sides'][0]['pokemon'][0]['fields']['volatiles'] = obj(8100)
+        before['sides'][1]['pokemon'][1]['fields']['volatiles'] = obj(8101)
+        actor, target = mon(1, 1), mon(1, 5)
+        move = effect('earthquake')
+        trace.enter('BattleActions.runMove', arguments=(move, actor), before=before)
+        trace.enter('Pokemon.getMoveData', actor, (move,), before)
+        trace.leave(before['sides'][1]['pokemon'][1]['fields']['moveSlots']['items'][0])
+        trace.enter('Pokemon.moveUsed', actor, (move,), before)
+        trace.leave(after=before)
+        trace.leave()
+        trace.enter('Battle.runAction', arguments=(obj(8000, choice='move'),), before=before)
+        trace.enter('BattleActions.dragIn', arguments=(dict(kind='Side', object=10, n=1), 0), before=before)
+        trace.enter('BattleActions.switchIn', arguments=(target, 0, None, is_drag), before=before)
+        after = cache()
+        after['sides'][1]['fields']['active']['items'] = [mon(1, installed)]
+        trace.leave(result, after=after)
+        trace.leave(result, after=after)
+        trace.leave()
+        return trace
+
+    def test_root2_post5_whirlwind_replaces_outgoing_move_slot_with_drag_target(self):
+        value = ledger().consume(self.root2_post5_trace().rows).snapshot()
+        self.assertEqual(value['last_action_kind'], [0, 1])
+        self.assertEqual(value['last_action_index'], [-1, 5])
+        self.assertEqual([event['kind'] for event in value['events']], ['MOVE_USED', 'INSTALLED_DRAG'])
+        self.assertEqual(value['events'][0]['move_id'], 'earthquake')
+        self.assertEqual(value['events'][1]['original_target'], 5)
+
+    def test_unsuccessful_drag_preserves_move_slot(self):
+        value = ledger().consume(self.root2_post5_trace(result=False, installed=1).rows).snapshot()
+        self.assertEqual(value['last_action_kind'], [0, 2])
+        self.assertEqual(value['last_action_index'], [-1, 0])
+        self.assertEqual([event['kind'] for event in value['events']], ['MOVE_USED'])
+
+    def test_drag_requires_literal_flag_and_matching_installed_slot(self):
+        for opts, message in (({'is_drag': False}, 'drag flag'), ({'installed': 4}, 'literal target')):
+            with self.subTest(opts=opts), self.assertRaisesRegex(UnmappedNativeHistory, message):
+                ledger().consume(self.root2_post5_trace(**opts).rows)
+
     def test_wish_retains_actual_source_half_hp_without_current_actor_guess(self):
         trace=Trace();before=cache();after=cache()
         after['sides'][0]['fields']['slotConditions']=arr(8200,obj(8201,wish=obj(8202,source=mon(0,3),duration=2)))
