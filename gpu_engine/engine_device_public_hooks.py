@@ -411,7 +411,8 @@ def entry(c,before,after,side,table,use):
     c=weather(c,before,after,changed,permanent=True,side=side)
     if table.trace is not None:
         copied=starts&table.trace[ability]&(_get(before,'hp',1-side)>0)
-        c=reveal_ability(c,before,side,copied,ability=ability)
+        # Trace confirms the donor's ability and the tracer's running copy.
+        # B2/Python leave the tracer's original-ability observation untouched.
         c=reveal_ability(c,before,1-side,copied)
         p=_li.take(after.active,_r(after),side)
         c=c._replace(trackers=_write(c.trackers,'borrowed_ability',side,p,_get(after,'ability',side),copied))
