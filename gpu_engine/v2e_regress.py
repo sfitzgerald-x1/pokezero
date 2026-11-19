@@ -2323,6 +2323,9 @@ def patched_pass(args, *, step_override=None, prepared=None):
     plugins = [p for p in args.pr.split(',') if p]
     nar.validate_options(plugins, waive=args.waive, faint_clear=args.faint_clear)
     narrowing_rules = plugins == ['NAR']
+    strict_baseline = getattr(args, 'strict_baseline', False)
+    if strict_baseline and (plugins not in (['none'], ['NAR']) or args.allow_base_mismatch or args.waive or args.faint_clear):
+        raise SystemExit('strict baseline requires --pr none or --pr NAR, an exact merge base, and no waivers')
     base_dir = Path(args.base);manifest = json.loads((base_dir / 'manifest.json').read_text())
     rev, dirty = git_source()
     if dirty and not args.allow_dirty:raise SystemExit('the source tree is dirty; commit it or pass --allow-dirty')
@@ -2352,17 +2355,21 @@ def patched_pass(args, *, step_override=None, prepared=None):
     tables = context['prepared'];metadata = context['pool'].metadata();vocab = metadata['vocabulary']
     color_change = [vocab['abilities'].index('colorchange')] if 'colorchange' in vocab.get('abilities', ()) else []
     base_names = manifest['output_names']
+    if strict_baseline and (list(template_named) != manifest.get('input_names') or
+                            (manifest.get('source_dirty') and manifest.get('dirty_paths') != ['gpu_engine/v2e_regress.py'])):
+        raise SystemExit('strict baseline requires identical input leaves and a clean baseline engine')
     # The replay rule is for the PR that adds public_order (its base pass lacks the leaf); once
     # the base pass has it too (a migrated identity pre), the leaf is compared bitwise.
     public_order_rule = PUBLIC_ORDER in new_inputs and PUBLIC_ORDER not in base_names
     # Fidelity R: likewise the saved effect block is checked against the design's derivation while the base lacks it.
     effect_rule = EFFECT_DRAWS in new_inputs and EFFECT_DRAWS not in base_names
-    if narrowing_rules and (public_order_rule or effect_rule):
-        raise SystemExit('NAR requires a baseline with public-order and effect-draw outputs; migration exceptions are forbidden')
+    if (narrowing_rules or strict_baseline) and (public_order_rule or effect_rule):
+        raise SystemExit('this comparison requires public-order and effect-draw outputs in the baseline')
     # The fifth column extends an existing leaf: independently check the whole
     # saved block, including all four old columns, rather than accepting its
     # new shape as involvement. This check also runs with CC dropped.
-    effect_rule |= not narrowing_rules and EFFECT_DRAWS in template_named and np.asarray(template_named[EFFECT_DRAWS]).shape[-1]==5
+    if not (narrowing_rules or strict_baseline) and EFFECT_DRAWS in template_named:
+        effect_rule |= template_named[EFFECT_DRAWS].shape[-1] == 5
     m2_rules = 'M2' in plugins
     m2_ids = {n: vocab['moves'].index(n) for n in ('perishsong', 'yawn', 'wrap') if n in vocab['moves']} if m2_rules else None
     # WH: White Herb's post-state rule and recorded uses, and Facade's recorded line status.
@@ -2437,6 +2444,8 @@ def patched_pass(args, *, step_override=None, prepared=None):
             named, real = pad_lanes(named, manifest['pad_lanes'])
             result = stepper([named[n] for n in names_order])
             names = result['names'];position = {n: i for i, n in enumerate(names)};side_axis = dict(zip(names, result['side_axis']))
+            if strict_baseline and (list(names) != base_names or list(result['side_axis']) != manifest.get('side_axis')):
+                raise ValueError('strict baseline requires identical output leaves and side axes')
             missing = [n for n in base_names if n not in position]
             if missing:raise ValueError(f'output leaves removed by this tree: {missing[:8]}')
             new_outputs = sorted(set(names) - set(base_names))
@@ -2506,13 +2515,22 @@ def patched_pass(args, *, step_override=None, prepared=None):
                 faint_set = set(lanes_list)
             for lane in range(real):
                 counts['lane_steps'] += 1
-                if done[lane]:counts['done_skipped'] += 1;continue
+                if done[lane] and not strict_baseline:counts['done_skipped'] += 1;continue
                 entries = set()
                 for i in np.flatnonzero(diff[lane].any(-1)):
                     leaf = names[i]
                     if side_axis[leaf]:entries |= {(leaf, s) for s in (0, 1) if diff[lane, i, s]}
                     else:entries.add((leaf, None))
                 changed = sorted({leaf for leaf, _ in entries})
+                if strict_baseline and not narrowing_rules:
+                    if not changed:
+                        counts['unchanged'] += 1
+                        continue
+                    counts['changed_but_uninvolved'] += 1
+                    for leaf in changed:
+                        uninvolved_leaves[leaf] = uninvolved_leaves.get(leaf, 0) + 1
+                    listing.write(json.dumps(dict(shard=path.name, lane=lane, changed=changed)) + '\n')
+                    continue
                 effects = {k: [s for s in (0, 1) if v[lane, s]] for k, v in involved.items() if v[lane].any()}
                 if narrowing_rules:
                     # Inspect raw differences before any generic rule consumes them. Even a terminal/KO lane may
@@ -2781,7 +2799,7 @@ def patched_pass(args, *, step_override=None, prepared=None):
         source_dirty=dirty, allow_dirty=bool(args.allow_dirty), oracle_digest=digest, base_oracle_digest=manifest['oracle_digest'],
         capture_sha256=capture_sha, **base_check, shards=len(shards), partial=partial, failures=failures,
         migrated_new_inputs=new_inputs, new_outputs=new_outputs, public_order_rule=public_order_rule, link_rule=link_rule,
-        effect_rule=effect_rule, residual_rule=residual_rule, narrowing_rules=narrowing_rules,
+        effect_rule=effect_rule, residual_rule=residual_rule, narrowing_rules=narrowing_rules, strict_baseline=strict_baseline,
         faint_clear_rule=bool(args.faint_clear), clear_volatile_rule=clear_volatile, m1_rules=m1_rules, m2_rules=m2_rules, wh_rules=wh_rules,
         witness_leaves=witness_leaves, base_source_dirty=manifest.get('source_dirty'), base_dirty_paths=manifest.get('dirty_paths'),
         base_harness_sha256=manifest.get('harness_sha256'), harness_sha256=hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
@@ -2848,6 +2866,7 @@ def main(argv=None):
             p.add_argument('--integration', default=None, help='integration ref; the base pass must be at the merge base with it')
             p.add_argument('--allow-base-mismatch', action='store_true', help='accept a base pass not at the merge base (recorded)')
             p.add_argument('--waive', action='append', default=None, help='leaf regex whose unexpected changes are accepted (recorded)')
+            p.add_argument('--strict-baseline', action='store_true', help='compare a fresh integration baseline without migration rules or terminal skips')
     args = parser.parse_args(argv)
     return base_pass(args) if args.command == 'base' else patched_pass(args)
 
