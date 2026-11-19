@@ -11,6 +11,19 @@ ANNOTATIONS=('|-miss|p1a: Nick|p2a: Absol','|-crit|p2a: Absol','|-supereffective
 
 
 class AnnotationLexicalTests(unittest.TestCase):
+    def test_literal_gen3_custom_game_setup_messages(self):
+        from gpu_engine.public_annotations import classify
+
+        tier = '|tier|[Gen 3] Custom Game'
+        rules = ('|raw|<div class="infobox"><details class="readmore" open><summary><strong>'
+                 '1 custom rule:</strong></summary> sleepclausemod</details></div>')
+        self.assertEqual(classify(tier), 'setup')
+        self.assertEqual(classify(rules), 'setup')
+        for line in (tier + '|extra', '|tier|[Gen 3] Doubles Custom Game', tier.lower(),
+                     rules + '|extra', rules.replace('sleepclausemod', 'other'), '|raw|<b>arbitrary</b>'):
+            with self.subTest(line=line):
+                self.assertIsNone(classify(line))
+
     def test_bounded_canonical_shapes_and_refusals(self):
         from gpu_engine.public_annotations import classify
         for line in (*SETUP,*ANNOTATIONS):self.assertIsNotNone(classify(line),line)
