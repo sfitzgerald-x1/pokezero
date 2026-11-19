@@ -95,6 +95,8 @@ def classify(line):
         return 'text'
     if line == '|debug|before turn callback: mirrorcoat':
         return 'text'
+    if line == '|debug|rain fire suppress':
+        return 'text'
     if kind in ('-hint','-message'):
         return 'text' if len(parts)==3 and parts[2].strip() else None
     # The frozen owner streams include the Focus Punch callback and Reversal power.
