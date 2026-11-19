@@ -23,10 +23,21 @@ def _format_conditions(battle, live):
     # effect. Sleep and Rest evidence are projected from the actual members.
     rule = fields(pseudo['sleepclausemod'])
     undefined = {'$native': 'undefined'}
-    _need(set(rule) == {'id', 'source', 'sourceSlot', 'duration', 'effectOrder'}
+    base_fields = {'id', 'source', 'sourceSlot', 'duration', 'effectOrder'}
+    _need(set(rule) in (base_fields, base_fields | {'target'})
           and rule['id'] == 'sleepclausemod' and rule['source'] is None
           and rule['sourceSlot'] == undefined and rule['duration'] == undefined
           and _integer(rule['effectOrder']) == 0, 'Native Sleep Clause rule has unexpected material state')
+    if 'target' in rule:
+        # In f76228a1, runEvent stores the handler's Field holder on effectState
+        # when Sleep Clause first handles SetStatus (battle.ts:902, 1181–1192).
+        # The passive cache tags the service while serialization names the Field.
+        target = rule['target']
+        serialized = _field(_field(_field(battle, 'field'), 'pseudoWeather'), 'sleepclausemod')
+        _need(type(target) is dict and set(target) == {'kind', 'object'}
+              and target['kind'] == 'NativeService' and _integer(target['object']) >= 0
+              and _field(serialized, 'target') == '[Field]',
+              'Native Sleep Clause handler target differs from serialized Field')
 
 
 def _weather(battle, observed, history, sequence):

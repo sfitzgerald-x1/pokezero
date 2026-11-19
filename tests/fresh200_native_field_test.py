@@ -71,3 +71,23 @@ class NativeFormatConditionTest(unittest.TestCase):
         rules[0][1]['fields'][3][1] = 3
         with self.assertRaisesRegex(ValueError, 'unexpected material state'):
             project_field(boundary, original_species=species)
+
+    def test_root3_active_sleep_clause_handler_target_is_literal_field(self):
+        boundary, species = replacement()
+        snapshot = boundary.snapshot
+        live = snapshot['witness']['nativeObservation']['state']['fields']['field']
+        rule = live['pseudoWeather']['fields'][0][1]['fields']
+        holder = {'kind': 'NativeService', 'object': 0}
+        rule.append(['target', holder])
+        serialized = {'id': 'sleepclausemod', 'source': None, 'effectOrder': 0, 'target': '[Field]'}
+        snapshot['battle']['field']['pseudoWeather'] = {'sleepclausemod': serialized}
+        values = project_field(boundary, original_species=species)
+        self.assertEqual(values['weather'].tolist(), [0])
+        self.assertEqual(values['weather_counter'].tolist(), [0])
+        serialized['target'] = '[Battle]'
+        with self.assertRaisesRegex(ValueError, 'handler target differs'):
+            project_field(boundary, original_species=species)
+        serialized['target'] = '[Field]'
+        holder['kind'] = 'Pokemon'
+        with self.assertRaisesRegex(ValueError, 'handler target differs'):
+            project_field(boundary, original_species=species)
