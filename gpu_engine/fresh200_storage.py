@@ -76,7 +76,10 @@ def read_pool_metadata(path, expected_sha256):
 
 def pool_dimensions(path, expected_sha256):
     path = Path(path)
-    blob = read_pool_metadata(path, expected_sha256)
+    return _pool_dimensions(path, expected_sha256, read_pool_metadata(path, expected_sha256))
+
+
+def _pool_dimensions(path, expected_sha256, blob):
     metadata = json.loads(blob);vocabulary = metadata['vocabulary']
     names = {}
     for kind in ('abilities', 'items'):
@@ -123,7 +126,9 @@ class SealedStorage:
         if type(rows) is not int or rows <= 0:raise ValueError('positive literal storage batch required')
         if expected_pool_sha256 != ORIGINAL_POOL:raise ValueError('the frozen original constructor pool is required')
         schema = _schema();self.source_files = verify_source(source_root, schema)
-        self.binding = pool_dimensions(pool_path, expected_pool_sha256)
+        pool_path = Path(pool_path)
+        self.pool_metadata = read_pool_metadata(pool_path, expected_pool_sha256)
+        self.binding = _pool_dimensions(pool_path, expected_pool_sha256, self.pool_metadata)
         self.rows = rows;self.schema = schema
         self.dimensions = dict(B=rows, V=len(schema['volatile_names']),
             A=self.binding['ability_words'], I=self.binding['item_words'])

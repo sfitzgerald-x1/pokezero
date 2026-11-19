@@ -285,7 +285,17 @@ class NativeHistory:
         identity=pokemon(frame.enter['subject']);arguments=items(frame.enter['arguments'])
         need(arguments and type(arguments[0]) is str,'literal Native disableMove argument required')
         move=to_id(arguments[0]);cause=self._cause(frame,arguments[2] if len(arguments)>2 else None)
-        before=items(member(frame.enter['before'],identity)['moveSlots']);after=items(member(frame.leave['after'],identity)['moveSlots'])
+        old_member=member(frame.enter['before'],identity)
+        before=items(old_member['moveSlots']);after=items(member(frame.leave['after'],identity)['moveSlots'])
+        lock = None
+        if cause and 'volatiles' in old_member:
+            live = fields(old_member['volatiles'])
+            if cause['id'] in ('choicelock', 'encore'):
+                lock = live.get(cause['id'])
+            elif cause['id'] == 'choiceband' and cause['effect_type'] == 'Item' and 'choicelock' in live:
+                choice = live['choicelock']
+                if self._effect(fields(choice).get('sourceEffect')) == cause:
+                    lock = choice
         need(len(before)==len(after),'Native disabling mutated slot roster')
         for slot,(old,new) in enumerate(zip(before,after)):
             old_fields=fields(old);new_fields=fields(new)
@@ -297,7 +307,32 @@ class NativeHistory:
             # slot. Preserve ALL attempted causes, not only disabledSource's
             # last successful write; Choice/Encore overlap stays decomposable.
             self.disable_causes.setdefault(key,[]).append(dict(effect=cause,hidden=len(arguments)>1 and arguments[1] is True,
-                physical_slot=slot,call_id=frame.call,sequence=frame.end))
+                physical_slot=slot,call_id=frame.call,sequence=frame.end,lock_object=None if lock is None else lock['object']))
+
+    def _clear_move_restrictions(self, frame, identity):
+        if not any(key[:2] == identity for key in self.disable_causes):
+            # Constructor clears can occur before the side is installed.
+            return
+        before = items(member(frame.enter['before'], identity)['moveSlots'])
+        after = items(member(frame.leave['after'], identity)['moveSlots'])
+        old = {slot['object']: fields(slot) for slot in before}
+        # clearVolatile slices baseMoveSlots. A base slot can retain its cached
+        # disable flag and source even though the lock itself was removed.
+        retained = set()
+        for slot in after:
+            token = slot['object']
+            value = fields(slot)
+            prior = old.get(token)
+            if prior and value['disabled'] in (True, 'hidden') and value['disabled'] == prior['disabled']:
+                source = value.get('disabledSource')
+                if type(source) is str and source and source == prior.get('disabledSource'):
+                    retained.add(token)
+        self.disable_causes = {key: causes for key, causes in self.disable_causes.items()
+                               if key[:2] != identity or key[2] in retained}
+        for key, causes in self.disable_causes.items():
+            if key[:2] == identity:
+                for cause in causes:
+                    cause['clear_volatile_sequence'] = frame.end
 
     def _trap(self, frame):
         if frame.leave['result'] is not True:return
@@ -339,7 +374,8 @@ class NativeHistory:
                 need(len(matches)==1,'Encore actual slot object is ambiguous')
                 candidates.append((result['object'],matches[0],getter.call))
             need(candidates and len({x[:2] for x in candidates})==1,'Encore lacks exact Native getMoveData slot witness')
-            self.encore_slots[(*identity,state['object'])]=dict(physical_slot=candidates[-1][1],get_move_data_call_id=candidates[-1][2],sequence=frame.end)
+            slot_object,slot,call=candidates[-1]
+            self.encore_slots[(*identity,state['object'])]=dict(slot_object=slot_object,physical_slot=slot,get_move_data_call_id=call,sequence=frame.end)
 
     def _weather(self, frame):
         if frame.leave['result'] is not True:return
@@ -397,7 +433,7 @@ class NativeHistory:
                 elif frame.operation=='Pokemon.getMoveRequestData':self._locks(frame)
                 elif frame.operation=='Pokemon.clearVolatile':
                     identity=pokemon(frame.enter['subject']);self.trap_causes.pop(identity,None);self.lock_results.pop(identity,None)
-                    self.disable_causes={k:v for k,v in self.disable_causes.items() if k[:2]!=identity}
+                    self._clear_move_restrictions(frame, identity)
                     self.charge_slots={k:v for k,v in self.charge_slots.items() if v['actor']!=identity}
             elif operation=='COMMAND_END':
                 need(not self.stack,'Native command ended with open causal frames');self.frames.clear()
