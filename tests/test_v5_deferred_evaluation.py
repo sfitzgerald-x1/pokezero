@@ -17,7 +17,7 @@ class DeferredEvaluationTests(unittest.TestCase):
         recipe=fixture.plan();path=Path(root)/'protocol.json'
         path.write_text(run._json({'model_sha256':run._sha(recipe.model.metadata())}))
         reference=evaluation.Artifact(str(path),run._file_sha(path))
-        return replace(recipe,evaluation=run.EvaluationProtocol(reference.sha256)),reference
+        return replace(recipe,evaluation=run.EvaluationProtocol(reference.sha256, 2)),reference
 
     def execute(self,path,recipe,hook,*,resume=False):
         return milestone.MilestoneEvaluationTests().execute(path,recipe,fixture.FakeBackend(),fixture.FakeTraining(),hook,resume=resume)
@@ -54,7 +54,7 @@ class DeferredEvaluationTests(unittest.TestCase):
                 with self.subTest(change=change),self.assertRaises(ValueError):deferred.read_dispatched_result(ref)
 
     def test_dispatch_continues_both_iterations_without_creating_any_result_or_process(self):
-        with patch.object(run,'EVALUATION_INTERVAL_GAMES',2),tempfile.TemporaryDirectory()as folder:
+        with tempfile.TemporaryDirectory()as folder:
             recipe,protocol=self.recipe(folder);path=Path(folder)/'run';requests=[]
             def hook(request):
                 requests.append(request)
@@ -75,7 +75,7 @@ class DeferredEvaluationTests(unittest.TestCase):
             self.execute(path,recipe,lambda _:self.fail('dispatch replayed on resume'),resume=True)
 
     def test_crash_after_dispatch_never_requeues_the_original_panel(self):
-        with patch.object(run,'EVALUATION_INTERVAL_GAMES',2),tempfile.TemporaryDirectory()as folder:
+        with tempfile.TemporaryDirectory()as folder:
             recipe,protocol=self.recipe(folder);path=Path(folder)/'run';original=run.Store.emit
             def hook(request):return deferred.publish_dispatch(request,protocol,request.declaration_sha256)
             def emit(store,kind,**payload):
@@ -92,7 +92,7 @@ class DeferredEvaluationTests(unittest.TestCase):
             self.assertFalse(store.matching('EVALUATION_RESUMED'))
 
     def test_mutated_dispatch_refuses_before_resume_trainer_and_foreign_requests_stop(self):
-        with patch.object(run,'EVALUATION_INTERVAL_GAMES',2),tempfile.TemporaryDirectory()as folder:
+        with tempfile.TemporaryDirectory()as folder:
             recipe,protocol=self.recipe(folder);path=Path(folder)/'run'
             self.execute(path,recipe,lambda q:deferred.publish_dispatch(q,protocol,q.declaration_sha256))
             store=run.Store(path,recipe,resume=True);item=store.matching('EVALUATION_DISPATCHED')[0]['dispatch']
@@ -101,14 +101,14 @@ class DeferredEvaluationTests(unittest.TestCase):
             with patch.object(run.training,'create')as create,patch.object(run.training,'load_checkpoint')as load:
                 with self.assertRaises(ValueError):self.execute(path,recipe,lambda _:None,resume=True)
                 create.assert_not_called();load.assert_not_called()
-        with patch.object(run,'EVALUATION_INTERVAL_GAMES',2),tempfile.TemporaryDirectory()as folder:
+        with tempfile.TemporaryDirectory()as folder:
             recipe,_=self.recipe(folder);path=Path(folder)/'run'
             result=self.execute(path,recipe,lambda _:run.EvaluationDispatch('../foreign.json','f'*64))
             self.assertEqual(result['status'],'STOPPED')
             self.assertFalse(run.Store(path,recipe,resume=True).matching('EVALUATION_DISPATCHED'))
 
     def test_queue_publication_is_idempotent_and_cpu_controller_never_writes_training_journal(self):
-        with patch.object(run,'EVALUATION_INTERVAL_GAMES',2),tempfile.TemporaryDirectory()as folder:
+        with tempfile.TemporaryDirectory()as folder:
             recipe,protocol=self.recipe(folder);path=Path(folder)/'run';requests=[]
             def hook(request):
                 requests.append(request)

@@ -81,6 +81,20 @@ class WorkerTests(unittest.TestCase):
             Path(raw['constructor_pool']['path']).write_bytes(b'foreign-pool')
             with self.assertRaisesRegex(ValueError,'digest'):self.load(doc,rt,contract)
 
+    def test_deferred_plan_round_trips_explicit_cadence_and_route(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            recipe, contract, _, runtime, _ = self.fixture(root)
+            policy = run.EvaluationProtocol('c' * 64, 2, 'deferred', 'd' * 64)
+            recipe = replace(recipe, evaluation=policy)
+            document = record(root / 'deferred-plan.json', recipe.manifest())
+            self.assertEqual(self.load(document, runtime, contract).plan, recipe)
+            self.assertEqual(recipe.evaluation_milestones(), {0: 2, 1: 4})
+            wrong = recipe.manifest()
+            wrong['evaluation']['interval_games'] = 3
+            with self.assertRaisesRegex(ValueError, 'crosses'):
+                self.load(record(root / 'crossing-plan.json', wrong), runtime, contract)
+
     def test_missing_or_changed_controls_and_reordered_cells_never_default(self):
         with tempfile.TemporaryDirectory() as directory:
             root=Path(directory);recipe,contract,doc,rt,_=self.fixture(root)

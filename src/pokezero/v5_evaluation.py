@@ -109,6 +109,9 @@ def _require_foulplay_source(protocol, roots):
 
 def _pairs(protocol,*,parse_configs,checkpoint=None):
     panels={}
+    interval = protocol.get('interval_games', run.LEGACY_EVALUATION_INTERVAL_GAMES)
+    if type(interval) is not int or interval <= 0:
+        raise ValueError('positive panel interval required')
     for entry in protocol['panels']:
         _keys(entry,('declared_games','seeds','configs'))
         count=entry['declared_games'];seeds=entry['seeds']
@@ -119,10 +122,10 @@ def _pairs(protocol,*,parse_configs,checkpoint=None):
             'pokezero_player','showdown_root','node_binary','foulplay_python','foulplay_root','owning_decision_timeout_seconds')
         if any(not set(required)<=set(x) for x in entry['configs']):raise ValueError('complete fixed panel controls required')
         configs=tuple(SimpleNamespace(**x) for x in entry['configs'])
-        if (type(count) is not int or count<=0 or count%500000 or count in panels
+        if (type(count) is not int or count<=0 or count%interval or count in panels
                 or type(seeds) is not list or len(seeds)!=500 or any(type(x) is not int or not 0<=x<2**32 for x in seeds)
                 or len(set(seeds))!=500 or len(configs)!=2 or tuple(c.pokezero_player for c in configs)!=('p1','p2')):
-            raise ValueError('exact500 declared seeds ×both seats at each500k milestone required')
+            raise ValueError('exact500 declared seeds ×both seats at each declared milestone required')
         for config in configs:
             if (config.checkpoint is not None or config.games!=500 or config.search_time_ms!=1000
                     or config.foulplay_mcts_iterations is not None or config.policy_mode!='raw'
@@ -140,15 +143,16 @@ def _pairs(protocol,*,parse_configs,checkpoint=None):
             from .foulplay_bridge import _per_seed_foulplay_random_seed_schedule_for_offsets
             for config in configs:_per_seed_foulplay_random_seed_schedule_for_offsets(config,offsets=tuple(range(500)))
         panels[count]=configs
-    if not panels or sorted(panels)!=list(range(500000,max(panels)+1,500000)):
-        raise ValueError('complete exact500k milestone declaration required')
+    if not panels or sorted(panels)!=list(range(interval,max(panels)+1,interval)):
+        raise ValueError('complete declared milestone schedule required')
     return panels
 
 
 def _protocol(reference,*,parse_configs=False,checkpoint=None):
     value=reference.document()
     _keys(value,('schema','model_sha256','label_vocabulary_sha256','runtime','worker_python','foulplay_python',
-        'foulplay_commit','foulplay_source','positions','siblings','panels','actor_cpus','foulplay_cpus','watchdog','bins','batch_size','deterministic'))
+        'foulplay_commit','foulplay_source','positions','siblings','panels','actor_cpus','foulplay_cpus','watchdog','bins','batch_size','deterministic')
+        + (('interval_games',) if 'interval_games' in value else ()))
     if value['schema']!=SCHEMA:raise ValueError('explicit v5 evaluation protocol required')
     if value['deterministic'] is not True:raise ValueError('explicit common raw greedy panel policy required')
     for key in ('model_sha256','label_vocabulary_sha256'):run.c._binding(value[key])
@@ -511,12 +515,38 @@ async def _concurrent_panel(configs,factory,protocol,progress_path,namespace,*,i
     return json.loads(Path(progress_path).read_bytes())
 
 
-def _factory(protocol,request):
+def _factory(protocol,request,*,compute_dtype='bfloat16',cpu_only=False):
     """Original public catalog for THIS archive; never load a champion model."""
     from . import v5_worker as worker
     from .v5_phasec import category_binding
-    runtime=Artifact(**protocol['runtime']).document();worker._source(runtime)
-    worker._probe(runtime)
+    runtime=Artifact(**protocol['runtime']).document()
+    if cpu_only and os.environ.get('V2_OUT'):
+        # The sanctioned launcher supplies a verified archive and does not
+        # include .git in the staged source. Bind that actual launch receipt.
+        receipt = json.loads((Path(os.environ['V2_OUT'])/'source.json').read_bytes())
+        if (receipt != {'commit': runtime['source_commit'], 'archive_sha256': runtime['source_archive_sha256']}
+                or os.environ.get('V2_SOURCE_COMMIT') != runtime['source_commit']):
+            raise ValueError('launched CPU source archive differs from the evaluator binding')
+        worker._record(runtime['showdown']['node'], json_value=False)
+    else:
+        worker._source(runtime)
+    if cpu_only:
+        import sys
+        import jax
+        import numpy as np
+        import torch
+        versions = dict(python='.'.join(map(str, sys.version_info[:3])), jax=jax.__version__,
+                        numpy=np.__version__, torch=torch.__version__, torch_cuda=torch.version.cuda)
+        if (versions != runtime['versions'] or any(d.platform != 'cpu' for d in jax.devices())
+                or torch.cuda.is_available()):
+            raise ValueError('exact declared CPU evaluator runtime required')
+        precision = runtime['precision_policy']
+        jax.config.update('jax_enable_x64', False)
+        jax.config.update('jax_default_matmul_precision', precision['jax_matmul'])
+        torch.set_float32_matmul_precision(precision['torch_matmul'])
+        torch.set_num_threads(1)
+    else:
+        worker._probe(runtime)
     from .dex import load_showdown_dex_cached
     from .randbat import load_gen3_randbat_source_cached
     from .category_vocab import CategoryVocabulary
@@ -540,7 +570,7 @@ def _factory(protocol,request):
     factory=load_factory(request.archive_path,catalog=catalog,contract=contract,
         expected_archive_sha256=request.snapshot.archive_sha256,expected_checkpoint_sha256=request.snapshot.checkpoint_sha256,
         expected_category_vocabulary_sha256=category_binding(v),
-        expected_label_vocabulary_sha256=protocol['label_vocabulary_sha256'],compute_dtype='bfloat16',learner_seconds=60.,
+        expected_label_vocabulary_sha256=protocol['label_vocabulary_sha256'],compute_dtype=compute_dtype,learner_seconds=60.,
         deterministic=protocol['deterministic'],enable_v5=True)
     if run._sha(factory.config.metadata())!=protocol['model_sha256']:raise ValueError('exact frozen evaluation model configuration differs')
     return factory
@@ -576,11 +606,16 @@ def _restore_request(value):
 
 
 def _check_request(request,protocol,reference,expected_run_sha256):
-    if (type(request) is not run.EvaluationRequest or type(request.snapshot) is not run.Snapshot or request.protocol_sha256!=reference.sha256
-            or request.declaration_sha256!=expected_run_sha256 or request.snapshot.model_sha256!=protocol['model_sha256']):
+    _check_request_binding(request, protocol['model_sha256'], reference.sha256, expected_run_sha256)
+
+
+def _check_request_binding(request, model_sha256, protocol_sha256, expected_run_sha256, *, declaration=None):
+    if (type(request) is not run.EvaluationRequest or type(request.snapshot) is not run.Snapshot or request.protocol_sha256!=protocol_sha256
+            or request.declaration_sha256!=expected_run_sha256 or request.snapshot.model_sha256!=model_sha256):
         raise ValueError('original frozen milestone snapshot/protocol/run binding required')
-    declaration=json.loads((request.run_directory/'declaration.json').read_bytes())
-    if (run._sha(declaration)!=expected_run_sha256 or declaration['evaluation']['protocol_sha256']!=reference.sha256
+    if declaration is None:
+        declaration=json.loads((request.run_directory/'declaration.json').read_bytes())
+    if (run._sha(declaration)!=expected_run_sha256 or declaration['evaluation']['protocol_sha256']!=protocol_sha256
             or run._sha(declaration['model'])!=request.snapshot.model_sha256):
         raise ValueError('original accepted run declaration differs')
     for path,digest in ((request.checkpoint_path,request.snapshot.checkpoint_sha256),(request.archive_path,request.snapshot.archive_sha256)):
@@ -604,6 +639,9 @@ class EvaluationHook:
     def __call__(self,request):
         from . import v5_foulplay as fp
         protocol,panels=_protocol(self.protocol,parse_configs=True,checkpoint=request.checkpoint_path);_check_request(request,protocol,self.protocol,self.expected_run_declaration_sha256)
+        declaration = json.loads((request.run_directory / 'declaration.json').read_bytes())
+        if protocol.get('interval_games', run.LEGACY_EVALUATION_INTERVAL_GAMES) != declaration['evaluation']['interval_games']:
+            raise ValueError('panel cadence differs from the immutable training declaration')
         _capture_resolver(protocol).require_original_capture(protocol)
         _capture_resolver(protocol).resolve_original_capture(protocol,request)
         if request.declared_games not in panels:raise run.MissingDependency('exact declared milestone panel missing')

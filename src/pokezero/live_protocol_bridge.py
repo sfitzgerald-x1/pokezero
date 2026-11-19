@@ -56,10 +56,10 @@ def validate_encoder_config(config):
         and config.checkpoint is not None and config.value_checkpoint is None
         and config.opponent_policy_mode=='foul-play' and config.format_id=='gen3randombattle'
         and config.device=='cpu' and config.temperature==1. and config.belief_set_source is True
-        and config.opponent_legal_mask_mode=='hidden' and config.search_time_ms==1000
+        and config.opponent_legal_mask_mode=='hidden' and config.search_time_ms in (100,1000)
         and config.foulplay_mcts_iterations is None and config.opponent_crash_retries==0
         and config.allow_search_fallback is False,
-        'owning encoder requires raw champion/checkpoint/CPU/public source/FoulPlay1000 without retry or fallback')
+        'owning encoder requires raw champion/checkpoint/CPU/public source/FP100 or FP1000 without retry or fallback')
     _require(not any(getattr(config,name) for name in (
         'engine_oracle_belief','engine_policy_opponent','engine_opponent_priors',
         'engine_override_telemetry','engine_root_selector_shadow','engine_early_stop',

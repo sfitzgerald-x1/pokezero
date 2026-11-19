@@ -21,7 +21,7 @@ except ImportError:
 def exercise_resume(root, distribution=None):
     model, loss, train = configurations()
     declaration = {'fixture': 'fused-resume', 'self_moves': False}
-    plan = SimpleNamespace(model=model, loss=loss, train=train, self_moves=False, iterations=(), games=(),
+    plan = SimpleNamespace(model=model, loss=loss, train=train, self_moves=False, evaluation=None, iterations=(), games=(),
                            manifest=lambda: declaration)
     context = dict(plan=plan, declared={}, preparation_seconds=0)
     checkpoint = root / 'on.pt'
@@ -43,9 +43,7 @@ def exercise_resume(root, distribution=None):
     }
     assertions = unittest.TestCase()
     for case, message in cases.items():
-        out = root / f'rank-{rank}' / case
-        out.mkdir(parents=True)
-        (out / checkpoint.name).hardlink_to(checkpoint)
+        out = root / case
         state = dict(snapshots=[asdict(snapshot)], reports=[], row_order='file',
                      declaration_sha256=v5_run._sha(declaration), checkpoint_encoding_receipts={})
         if distribution is not None:
@@ -56,7 +54,12 @@ def exercise_resume(root, distribution=None):
             state['declaration_sha256'] = 'c' * 64
         elif case == 'placement':
             state['distribution'] = dict(state.get('distribution', {}), world_size=2)
-        v2_fused.write_json(out / 'state.json', state)
+        if rank == 0:
+            out.mkdir()
+            (out / checkpoint.name).hardlink_to(checkpoint)
+            v2_fused.write_json(out / 'state.json', state)
+        if distribution is not None:
+            distribution.barrier()
         with (patch.object(v2_fused, 'prepare', return_value=context),
               patch.object(checkpoint_self_moves, 'verified_run', return_value=(None, None, events)),
               assertions.assertRaisesRegex(ValueError, message)):

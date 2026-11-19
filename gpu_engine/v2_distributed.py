@@ -3,7 +3,8 @@
 Example: python -m gpu_engine.v2_distributed --ranks 4 --timeout-seconds 3600
 followed by the original v2_fused declaration/runtime/reference/out arguments.
 The parent has a finite deadline and terminates its remaining children if any
-rank fails. A completed round commits one shared checkpoint/state manifest.
+rank fails outside a coordinated checkpoint write failure. A completed round
+commits one shared checkpoint/state manifest.
 """
 from __future__ import annotations
 
@@ -20,6 +21,10 @@ import tempfile
 import threading
 import time
 from uuid import UUID
+
+
+CHECKPOINT_WRITE_EXIT = 75
+CHECKPOINT_WRITE_EXIT_GRACE = 10
 
 
 class Distribution:
@@ -109,7 +114,12 @@ def _worker(args, fused_args):
         group = dist.group.WORLD
     try:
         from gpu_engine import v2_fused
-        return v2_fused.main(fused_args, distribution=Distribution(args.rank, args.ranks, group))
+        from pokezero.v2_trainer import CheckpointWriteError
+        try:
+            return v2_fused.main(fused_args, distribution=Distribution(args.rank, args.ranks, group))
+        except CheckpointWriteError as error:
+            print(str(error), file=sys.stderr, flush=True)
+            return CHECKPOINT_WRITE_EXIT
     finally:
         if group is not None:
             dist.destroy_process_group()
@@ -128,6 +138,25 @@ def _stop(processes):
             except subprocess.TimeoutExpired:
                 os.killpg(process.pid, signal.SIGKILL)
                 process.wait(timeout=10)
+
+
+def _wait_workers(completed, ranks, deadline):
+    codes = {}
+    checkpoint_deadline = None
+    while len(codes) < ranks:
+        end = deadline if checkpoint_deadline is None else checkpoint_deadline
+        try:
+            rank, code = completed.get(timeout=max(.001, end - time.monotonic()))
+        except queue.Empty:
+            codes['deadline'] = 124
+            break
+        codes[rank] = code
+        if code == CHECKPOINT_WRITE_EXIT:
+            if checkpoint_deadline is None:
+                checkpoint_deadline = min(deadline, time.monotonic() + CHECKPOINT_WRITE_EXIT_GRACE)
+        elif code:
+            break
+    return codes
 
 
 def main(argv=None):
@@ -173,14 +202,7 @@ def main(argv=None):
                 process = subprocess.Popen(command, env=env, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
                 processes.append(process)
                 threading.Thread(target=lambda r=rank, p=process: completed.put((r, p.wait())), daemon=True).start()
-            while len(codes) < args.ranks:
-                try:
-                    rank, code = completed.get(timeout=max(.001, deadline - time.monotonic()))
-                except queue.Empty:
-                    codes['deadline'] = 124; break
-                codes[rank] = code
-                if code:
-                    break
+            codes = _wait_workers(completed, args.ranks, deadline)
         finally:
             _stop(processes)
             for log in logs:
