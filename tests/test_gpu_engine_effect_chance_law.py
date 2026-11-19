@@ -30,15 +30,16 @@ def _case(**changes):
 
 
 class EffectCoordinateTests(unittest.TestCase):
-    def test_eight_effect_axes_are_appended_with_the_engine_bounds(self):
-        self.assertEqual(EFFECT_BOUNDS, (16, 16, 4, 2))
+    def test_ten_effect_axes_preserve_old_coordinate_positions(self):
+        self.assertEqual(EFFECT_BOUNDS, (16, 16, 4, 2, 2))
         self.assertEqual(EFFECT_BOUNDS, _assigned(ENGINE/'transition.py', 'EFFECT_BOUNDS'))   # transition's own constant
-        self.assertEqual(len(COORDINATES), 41)
-        self.assertEqual(len(dict(COORDINATES)), 41)
+        self.assertEqual(len(COORDINATES), 43)
+        self.assertEqual(len(dict(COORDINATES)), 43)
         # The 33 original coordinates keep their positions; the stream follows initial_tie.
         self.assertEqual(COORDINATES[32], ('initial_tie', 2))
         self.assertEqual(COORDINATES[:24], tuple((f'draws.{s}.{c}', b) for s in range(2) for c, b in enumerate(DRAW_BOUNDS)))
-        self.assertEqual(COORDINATES[33:], tuple((f'effect.{s}.{c}', b) for s in range(2) for c, b in enumerate(EFFECT_BOUNDS)))
+        self.assertEqual(COORDINATES[33:41], tuple((f'effect.{s}.{c}', b) for s in range(2) for c, b in enumerate(EFFECT_BOUNDS[:4])))
+        self.assertEqual(COORDINATES[41:], (('effect.0.4',2),('effect.1.4',2)))
         self.assertEqual(EFFECT_COORDINATES, tuple(name for name, _ in COORDINATES[33:]))
 
     def test_an_inactive_effect_axis_is_one_point_and_an_active_one_partitions_its_bound(self):
@@ -56,7 +57,7 @@ class ChanceFieldsTests(unittest.TestCase):
     def test_every_field_comes_from_the_case_effect_included(self):
         fields = chance_fields(_case(**{'effect.0.1': 7, 'effect.1.3': 1, 'draws.1.5': 15, 'initial_tie': 1}))
         self.assertEqual(set(fields), {'draws', 'phazing', 'secondary', 'sleep_talk', 'entry_ties', 'initial_tie', 'effect'})
-        self.assertEqual(fields['effect'], [[0, 7, 0, 0], [0, 0, 0, 1]])
+        self.assertEqual(fields['effect'], [[0, 7, 0, 0, 0], [0, 0, 0, 1, 0]])
         self.assertEqual(fields['draws'][1][5], 15)
         self.assertEqual(fields['initial_tie'], 1)
 
@@ -106,6 +107,23 @@ class SuspendedLawTests(unittest.TestCase):
         source = (ENGINE/'transition.py').read_text()
         self.assertIn('effect_draws=jnp.where(resuming[:,None,None],state.effect_draws,effect_draws)', source)
         self.assertIn('work = work._replace(effect_draws=jnp.where(defer_residual[:,None,None],effect_draws,0))', source)
+
+
+
+class TransformLawTests(unittest.TestCase):
+    def test_transform_adds_no_coordinate_and_is_pinned_with_the_kernel(self):
+        """Transform makes no PRNG call (data/moves.ts transform: accuracy true, no protect flag; transformInto draws
+        nothing), so it adds no law coordinate: gpu_engine/transform.py reads no draw, effect-stream or PRNG leaf. A copied
+        ability or stage switches on existing axes only (the closure in chance_consumers/phase_d_chance, tested there), and
+        the conditional law pins transform.py with the other kernel modules, so an edit there drifts the source frame."""
+        tree = ast.parse((ENGINE/'transform.py').read_text())
+        names = ({n.attr for n in ast.walk(tree) if isinstance(n, ast.Attribute)}
+                 | {n.id for n in ast.walk(tree) if isinstance(n, ast.Name)})
+        for chance in ('draws', 'effect_draws', 'random', 'rng', 'prng', 'key', 'chance'):
+            with self.subTest(name=chance):
+                self.assertNotIn(chance, names)
+        self.assertIn('transform', conditional_law.KERNEL_MODULES)
+        self.assertEqual(len(COORDINATES), 43)                     # includes both infatuation axes; no Transform axis
 
 
 if __name__ == '__main__':

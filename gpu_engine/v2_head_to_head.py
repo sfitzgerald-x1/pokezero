@@ -56,14 +56,17 @@ def main(argv=None):
     begin = time.perf_counter()
     prep = argparse.Namespace(config=args.config, arm='B', iterations=2 if args.iteration else 1)
     context = prepare(prep);plan = context['plan']
+    from gpu_engine.private_self_moves import refuse_unthreaded
+    refuse_unthreaded(plan=plan, catalog=context['prepared'].catalog, context='v2 head to head')
     a = snapshot(args.a_run, args.a_iteration);b = snapshot(args.b_run, args.b_iteration)
     if a.archive_sha256 == b.archive_sha256:raise ValueError('two distinct actors required')
     def load(snapshot, root):
         # Same architecture as the evaluation forward; `replicate` (seed label) may differ.
         from gpu_engine import v5_model
-        params, config, _ = v5_model.load(Path(root, snapshot.archive), expected_archive_sha256=snapshot.archive_sha256,
+        params, config, meta = v5_model.load(Path(root, snapshot.archive), expected_archive_sha256=snapshot.archive_sha256,
             expected_checkpoint_sha256=snapshot.checkpoint_sha256, expected_category_vocabulary_sha256=plan.model.category_vocabulary_sha256,
             expected_label_vocabulary_sha256=plan.model.label_vocabulary.sha256, enable_v5=True)
+        from gpu_engine.private_self_moves import refuse_unthreaded;refuse_unthreaded(meta, context='v2 head to head')   # V2 self_moves
         if replace(config, replicate=plan.model.replicate) != plan.model:raise ValueError('actor architecture differs from evaluation model')
         return params
     params = (load(a, args.a_run), load(b, args.b_run))

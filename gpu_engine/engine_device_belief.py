@@ -51,10 +51,32 @@ class Tables(NamedTuple):
     # (engine_device_negative_items.upkeep); an ID absent from the vocabulary is 0, and a pinch berry absent there takes
     # a present one's ID (a repeated name is a no-op in visible_belief.exclude). None: no Lum/pinch rules (fixtures).
     nonproc_items: object = None
+    # V2 self_moves (v4_encoder.Masks.self_moves): SelfMoves when on, None when off. engine_device_observation.encode writes
+    # the own move/PP cells only when this is not None, so every off trace is unchanged.
+    self_moves: object = None
     # Narrowing A (appended): device_set_posterior.PosteriorTables, present only when the resolved checkpoint masks
     # carry set_posterior_narrowing; None keeps every flag-off program unchanged (the damage-reveal producer is traced
     # only when it is set, and standing_pins_enabled then comes from the same mask).
     posterior: object = None
+
+
+class SelfMoves(NamedTuple):
+    """Engine move ID -> the B2 (v4_encoder catalog) lexical move ID and the belief:possible_move category of the name
+    the owner's request shows. Hidden Power stays typed (hiddenpower<type>), unlike engine_move/public_move."""
+    rank: object        # [M] int32, catalog.moves ID (lexical order); 0 for the padding ID
+    category: object    # [M] int32 vocabulary row of belief:possible_move:<name>
+
+
+def compile_self_moves(metadata, catalog):
+    """SelfMoves over the engine move vocabulary. Refuses a move the catalog's namespace lacks, and refuses outright
+    without exact_state: the PP cells are exact-state columns, which Python and B2 write only under it."""
+    if not catalog.masks.exact_state:raise ValueError('self_moves requires exact_state (its PP cells are exact-state columns)')
+    names = metadata['vocabulary']['moves']
+    rank = [catalog.moves.ids.get(normalize_id(n), 0) if i else 0 for i, n in enumerate(names)]
+    missing = [n for i, n in enumerate(names) if i and not rank[i]]
+    if missing:raise ValueError('self moves: engine moves missing from the catalog move namespace: ' + ', '.join(missing[:5]))
+    category = np.asarray(catalog.self_moves.device.category)[np.asarray(rank, np.int32)]
+    return SelfMoves(j.asarray(rank, j.int32), j.asarray(category, j.int32))
 
 
 def compile_tables(metadata, catalog, *, posterior_source=None):
@@ -106,7 +128,8 @@ def compile_tables(metadata, catalog, *, posterior_source=None):
         np.asarray([bool(i) and normalize_id(n) == 'pressure' for i, n in enumerate(v['abilities'])], bool),
         np.asarray(narrowing,bool), nonproc_item_ids(v['items']))
     # Preserve primitive dtype (especially uint32 bitmasks and compact spreads).
-    tables = Tables(*(j.asarray(a, j.float32 if n in floating else None) for n, a in zip(Tables._fields, arrays)))
+    tables = Tables(*(j.asarray(a, j.float32 if n in floating else None) for n, a in zip(Tables._fields, arrays)),
+        self_moves=compile_self_moves(metadata, catalog) if getattr(catalog.masks, 'self_moves', False) else None)
     if narrowing:
         from . import device_set_posterior
         source_object = device_set_posterior.bound_source(catalog.source.source_hash, posterior_source)

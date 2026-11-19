@@ -278,8 +278,13 @@ class Plan:
     checkpoint_updates:int=32
     discount:float=1.0
     evaluation:EvaluationProtocol|None=None
+    # V2 self_moves: the run's actors encode (and train on) own moves and PP on their self tokens. V5ModelConfig is
+    # source-pinned, so the declaration lives here: the manifest records it only when on (an off plan's declaration,
+    # resume and identity are byte-identical), and every collector, export and actor load of the run follows it.
+    self_moves:bool=False
 
     def __post_init__(self):
+        if type(self.self_moves) is not bool:raise ValueError('explicit bool self_moves required')
         object.__setattr__(self,'iterations',tuple(tuple(x) for x in self.iterations))
         _seed(self.selection_seed);c._binding(self.pool_sha256)
         if isinstance(self.discount,bool) or not isinstance(self.discount,Real) or not math.isfinite(self.discount) or not 0<=self.discount<=1:
@@ -322,6 +327,7 @@ class Plan:
             initial_history='EMPTY_POOL_EXPLICIT_SELFPLAY',actor='RAW_POLICY',
             game_seed_scope='TRAJECTORY_IDENTITY_ONLY_BATCH_CONSTRUCTOR_AND_SAMPLING_SEEDS_DRIVE_RNG',scientific_qualification=False)
         if self.evaluation is not None:value['evaluation']=self.evaluation.metadata()
+        if self.self_moves:value['self_moves']=True
         return value
 
 
@@ -354,6 +360,9 @@ class Store:
                 raise ValueError('original ordered run journal changed')
             event['sha256']=digest;self.events.append(event);previous=digest
         if not self.events:self.emit('RUN_STARTED',declaration_sha256=_sha(json.loads(declaration.read_bytes())))
+        if (self.events[0]['kind']!='RUN_STARTED'
+                or self.events[0]['payload'].get('declaration_sha256')!=_sha(json.loads(declaration.read_bytes()))):
+            raise ValueError('RUN_STARTED original declaration binding differs')
 
     def emit(self,kind,**payload):
         with self._journal_lock:return self._emit(kind,**payload)
@@ -385,16 +394,26 @@ class Store:
         self.emit(kind,**value);return value
 
     def checkpoint(self,runtime,*,iteration):
+        if type(runtime.self_moves) is not bool or runtime.self_moves!=self.plan.self_moves:
+            raise ValueError('checkpoint runtime self_moves differs from the plan')
         relative=f'artifacts/train-{iteration}-{uuid.uuid4().hex}.pt';path=self.path/relative;path.parent.mkdir(exist_ok=True)
         receipt=training.save_checkpoint(path,runtime);path.chmod(0o444)
-        value=dict(iteration=iteration,path=relative,sha256=receipt['sha256'],steps=runtime.steps,rows=runtime.rows)
+        value=dict(iteration=iteration,path=relative,sha256=receipt['sha256'],steps=runtime.steps,rows=runtime.rows,
+            **(dict(encoding_receipt=receipt['encoding_receipt']) if 'encoding_receipt' in receipt else {}))
         self.emit('CHECKPOINT',**value);return value
+
+    def checkpoint_provenance(self,checkpoint):
+        from .checkpoint_self_moves import run_checkpoint
+        _,actual,proof=run_checkpoint(self.path,checkpoint['path'],checkpoint['sha256'],iteration=checkpoint['iteration'])
+        if actual!=self.plan.self_moves:raise ValueError('checkpoint self_moves differs from the plan')
+        return proof
 
     def snapshot(self,checkpoint,*,iteration):
         from gpu_engine import v5_model
         path=self.resolve(checkpoint['path'],checkpoint['sha256'])
         relative=f'artifacts/actor-{iteration}-{uuid.uuid4().hex}.npz'
-        metadata=v5_model.export(path,self.path/relative,expected_checkpoint_sha256=checkpoint['sha256'],enable_v5=True)
+        metadata=v5_model.export(path,self.path/relative,expected_checkpoint_sha256=checkpoint['sha256'],enable_v5=True,
+            self_moves=self.plan.self_moves,off_provenance=self.checkpoint_provenance(checkpoint))
         (self.path/relative).chmod(0o444)
         value=Snapshot(iteration=iteration,checkpoint=checkpoint['path'],checkpoint_sha256=checkpoint['sha256'],
             archive=relative,archive_sha256=metadata['weights_archive_sha256'],model_sha256=_sha(self.plan.model.metadata()))
@@ -685,9 +704,11 @@ def _run(plan,path,*,backend,resume=False,enable_v5=False,evaluation_hook=None,m
             options=(dict(expected_learning_rate_window=learning_rate_window(plan,checkpoint['iteration']))
                 if scheduled and checkpoint['iteration']>=0 else {})
             runtime=measured('TRAINER_RESUME',training.load_checkpoint,snapshot,enable_v5=True,expected_model_config=plan.model,
-                expected_loss_config=plan.loss,expected_train_config=plan.train,**options)
+                expected_loss_config=plan.loss,expected_train_config=plan.train,expected_self_moves=plan.self_moves,
+                off_provenance=store.checkpoint_provenance(checkpoint),expected_checkpoint_sha256=checkpoint['sha256'],**options)
     else:
-        runtime=measured('TRAINER_CREATE_COLD',training.create,plan.model,plan.loss,plan.train,enable_v5=True)
+        runtime=measured('TRAINER_CREATE_COLD',training.create,plan.model,plan.loss,plan.train,enable_v5=True,
+            self_moves=plan.self_moves)
         checkpoint=measured('CHECKPOINT_WRITE',store.checkpoint,runtime,iteration=-1)
     snapshots=[Snapshot(**value) for value in store.matching('SNAPSHOT')]
     if not snapshots:snapshots=[measured('ACTOR_EXPORT',store.snapshot,checkpoint,iteration=-1)]

@@ -33,17 +33,29 @@ def expand(pattern):
     return matches
 
 
-def configurations(checkpoint):
-    import torch
+def configurations(checkpoint, *, expected_checkpoint_sha256=None, expected_self_moves=None, off_provenance=None,
+                   weights_only_initializer=None):
     from pokezero.v5_loss import V5LossConfig
     from pokezero.v5_model import V5ModelConfig
     from pokezero import v5_training
-    payload = torch.load(checkpoint, map_location='cpu', weights_only=True)
+    from pokezero import checkpoint_self_moves as encoding
+    checked = encoding.checked_checkpoint(checkpoint,expected_checkpoint_sha256=expected_checkpoint_sha256)
+    if weights_only_initializer is not None:
+        if (type(weights_only_initializer) is not encoding.WeightsOnlyInitializer
+                or weights_only_initializer.checkpoint_sha256 != checked.sha256):
+            raise ValueError('verified original iteration -1 weights-only initializer required')
+        actual = encoding.resolve_self_moves(checked,off_provenance=off_provenance)
+        if expected_self_moves is not True or actual:
+            encoding.resolve_self_moves(checked,expected_self_moves=expected_self_moves,off_provenance=off_provenance)
+    else:
+        actual = encoding.resolve_self_moves(checked,expected_self_moves=expected_self_moves,off_provenance=off_provenance)
+    payload = checked.payload
     metadata = payload['metadata']
     model = V5ModelConfig.from_metadata(metadata['model'])
     loss = V5LossConfig(**{field.name: metadata['loss'][field.name] for field in fields(V5LossConfig)})
     train = v5_training.TrainConfig(**metadata['training'])
-    return model, loss, train, payload['state_dict'], dict(steps=metadata.get('steps'), rows=metadata.get('rows'))
+    return model, loss, train, payload['state_dict'], dict(steps=metadata.get('steps'), rows=metadata.get('rows'),
+        self_moves=actual,checkpoint_sha256=checked.sha256)
 
 
 def synchronize():
@@ -77,7 +89,7 @@ def kernel_profile(trainer, store, window, updates):
         kernel_launches_per_update=sum(item.count for item in kernels) / updates, top=top, top_operators=top_ops)
 
 
-def parity(store, model, loss, train, state, batch_size, device, emulate):
+def parity(store, model, loss, train, state, batch_size, device, emulate, *, self_moves=False):
     """Dropout-free loss/gradient parity on one real batch: original vs static eager vs compiled.
 
     With dropout 0 this runtime's SDPA dispatcher prefers cuDNN attention, which
@@ -89,7 +101,7 @@ def parity(store, model, loss, train, state, batch_size, device, emulate):
     from pokezero import v2_trainer as v2
     torch._dynamo.reset()
     quiet = replace(model, dropout=0.)
-    runtime = v2.create(quiet, loss, replace(train, batch_size=batch_size), enable_v5=True, device=device)
+    runtime = v2.create(quiet, loss, replace(train, batch_size=batch_size), enable_v5=True, device=device,self_moves=self_moves)
     runtime.model.load_state_dict(state); runtime.model.train()
     batch = {name: value[:batch_size] for name, value in store.tensors.items()}
     experts = v2.expert_indices(runtime.model, device); counts = v2._variant_counts(quiet, device)
@@ -127,7 +139,7 @@ def _parity_loss(name, runtime, batch, store, quiet, loss, train, device, expert
     return function(runtime.model, batch, quiet, loss, train.precision, device, experts, counts)[0]
 
 
-def measure(args, store, model, loss, train, state, batch_size, mode, window):
+def measure(args, store, model, loss, train, state, batch_size, mode, window, *, self_moves=False):
     import torch
     from pokezero import v2_trainer as v2
     torch._dynamo.reset(); gc.collect()
@@ -135,7 +147,7 @@ def measure(args, store, model, loss, train, state, batch_size, mode, window):
         torch.cuda.empty_cache(); torch.cuda.reset_peak_memory_stats()
     config = replace(train, batch_size=batch_size)
     runtime = v2.create(model, loss, config, v2.V2Config(mode=mode, order=args.order, check_interval=args.check_interval,
-        optimizer=args.optimizer), enable_v5=True, device=args.device)
+        optimizer=args.optimizer), enable_v5=True, device=args.device,self_moves=self_moves)
     runtime.model.load_state_dict(state)
     trainer = v2.Trainer(runtime)
     begin = time.perf_counter()
@@ -182,6 +194,8 @@ def main(argv=None):
     parser.add_argument('--check-interval', type=int, default=64)
     parser.add_argument('--device', default='cuda:0')
     parser.add_argument('--out', required=True)
+    from pokezero.checkpoint_self_moves import add_receipt_arguments,receipt_from_arguments
+    add_receipt_arguments(parser)
     args = parser.parse_args(argv)
     import torch
     from pokezero import v2_trainer as v2, v5_training
@@ -196,7 +210,7 @@ def main(argv=None):
     device_name = torch.cuda.get_device_name(args.device) if args.device.startswith('cuda') else args.device
     log(f'torch {torch.__version__} cuda {torch.version.cuda} device {device_name}; '
         f'matmul precision {precision}')
-    model, loss, train, state, provenance = configurations(checkpoint)
+    model, loss, train, state, provenance = configurations(checkpoint,off_provenance=receipt_from_arguments(args))
     log(f'config arm={model.arm} width={model.width} layers={model.layers} vocab={model.category_vocab_size} '
         f'dropout={model.dropout} batch={train.batch_size} epochs={train.epochs} lr={train.learning_rate} '
         f'schedule={train.learning_rate_schedule} precision={train.precision} max_grad_norm={train.max_grad_norm}')
@@ -211,7 +225,8 @@ def main(argv=None):
     results = []
     log('parity: original forward_v5/v5_loss vs static eager vs compiled (dropout off)')
     try:
-        check = parity(store, model, loss, train, state, max(int(x) for x in args.batch_sizes.split(',')), args.device, True)
+        check = parity(store, model, loss, train, state, max(int(x) for x in args.batch_sizes.split(',')), args.device, True,
+            self_moves=provenance['self_moves'])
     except Exception as error:
         import traceback
         traceback.print_exc()
@@ -229,7 +244,7 @@ def main(argv=None):
         for mode in args.modes.split(','):
             log(f'measure batch={batch_size} mode={mode}')
             try:
-                result = measure(args, store, model, loss, train, state, batch_size, mode, window)
+                result = measure(args, store, model, loss, train, state, batch_size, mode, window,self_moves=provenance['self_moves'])
             except Exception as error:
                 import traceback
                 traceback.print_exc()

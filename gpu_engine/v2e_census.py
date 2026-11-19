@@ -33,54 +33,54 @@ import numpy as np
 
 SCHEMA = 'pokezero.v2e-census.v1'
 # transition.step_with_chance: def line and last line (design note section 1.1; tree 5bc2fe8c, shifted by fidelity A1, A2, R, B, M1, M2, R1, WH and R2).
-SPAN = (400, 2815)
+SPAN = (463, 2988)
 # (phase, first line, last line, group). 'pre' is the host-side argument checks; boundary statements open the next phase.
 PHASES = (
-    ('pre', 400, 544, 'pre'),
-    ('A', 545, 599, 'A'),      # request kind, validity, resuming draws, key split, age, initialize, Lum
-    ('B', 600, 634, 'B'),      # speeds, switches, saved actor, slot, Struggle, charge, recharge, Focus Punch preparation
-    ('C', 635, 711, 'C'),      # Pursuit per side
-    ('D', 712, 831, 'D'),      # switch order, Baton, depart/install/enter, forced replacement entries, post-switch Lum
-    ('E0', 832, 857, 'E'),     # ordering
-    ('E1', 858, 1080, 'E'),     # per action: pre-move (the recharge turn included)
-    ('E2', 1081, 1482, 'E'),    # damage
-    ('E3', 1483, 2115, 'E'),   # effects (Perish Song, Yawn, the Substitute's trap release and Wrap's trap included)
-    ('E4', 2116, 2243, 'E'),   # post (recoil, move weather, Spikes, drag, Baton, fainted boosts)
-    ('F1', 2244, 2355, 'F'),   # defer/ready, end speeds, Wish, weather
-    ('F2', 2356, 2730, 'F'),   # residual events (argsort at 2363, the 14-event loop at 2364), the Perish pass, White Herb's order 29 and the recharge tick
-    ('G', 2731, 2815, 'G'),    # end of turn
+    ('pre', 463, 608, 'pre'),
+    ('A', 609, 667, 'A'),      # request kind, validity, resuming draws, key split, age, initialize, Lum
+    ('B', 668, 702, 'B'),      # speeds, switches, saved actor, slot, Struggle, charge, recharge, Focus Punch preparation
+    ('C', 703, 783, 'C'),      # Pursuit per side
+    ('D', 784, 917, 'D'),      # switch order, Baton, depart/install/enter, forced replacement entries, post-switch Lum
+    ('E0', 918, 943, 'E'),     # ordering
+    ('E1', 944, 1174, 'E'),     # per action: pre-move (the recharge turn included)
+    ('E2', 1175, 1586, 'E'),    # damage
+    ('E3', 1587, 2238, 'E'),   # effects (Perish Song, Yawn, the Substitute's trap release and Wrap's trap included)
+    ('E4', 2239, 2395, 'E'),   # post (recoil, move weather, Spikes, drag, Baton, fainted boosts)
+    ('F1', 2396, 2511, 'F'),   # defer/ready, end speeds, Wish, weather
+    ('F2', 2512, 2896, 'F'),   # residual events (argsort at 2519, the 14-event loop at 2520), the Perish pass, White Herb's order 29 and the recharge tick
+    ('G', 2897, 2988, 'G'),    # end of turn
 )
 GROUPS = ('A', 'B', 'C', 'D', 'E', 'F', 'G')
 GROUP = {name: group for name, _, _, group in PHASES}
 # Source text each line must start with (stripped): a line shift anywhere above an anchor fails the drift test.
 ANCHORS = {
-    400: 'def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,',
-    545: 'rows = jnp.arange(state.hp.shape[0])',
-    600: '# All action speeds are frozen before ordinary switches.',
-    602: 'speed = _speeds(work,table)',
-    635: 'pursuit_used = jnp.zeros_like(switches)',
-    712: 'bench = bench_indices(state.active)',
-    831: 'else:work = _lum_update(work,table,live,_device_public=_device_public)',
-    832: 'priority = table.priority[moves]',
-    858: 'for order in range(2):',
-    859: '_faint_before_hp=work.hp',
-    1081: 'attack_stats = _active(work.stats, work, side)',
-    1483: 'if table.effects is not None:',
-    2116: '# Gen3 applies contact DamagingHit',
-    2208: 'work,changed,hazard_ko=dragging.drag(work,foe,move,phazing_draws[rows,side],',
-    2244: 'turn_context = live & (~replacement | state.pending_residual)',
-    2356: 'event_sides = jnp.array(residual_order.EVENT_SIDES)',
-    2363: 'event_order = jnp.argsort(event_keys,axis=1)',
-    2364: 'for order in range(residual_order.EVENTS):',
-    2379: 'if _status_residual_context is not None:',
-    2731: 'work=linking.prune(work)',
-    2806: 'work = jax.tree.map(lambda old, new: jnp.where(live.reshape(',
-    2815: 'return result if _public_trace is None else public_callbacks.TracedStep(result,_public_trace)',
+    463: 'def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,',
+    609: 'rows = jnp.arange(state.hp.shape[0])',
+    668: '# All action speeds are frozen before ordinary switches.',
+    670: 'speed = _speeds(work,table)',
+    703: 'pursuit_used = jnp.zeros_like(switches)',
+    784: 'bench = bench_indices(state.active)',
+    917: 'else:work = _lum_update(work,table,live,_device_public=_device_public)',
+    918: 'priority = table.priority[moves]',
+    944: 'for order in range(2):',
+    945: '_faint_before_hp=work.hp',
+    1175: 'attack_stats = _active(work.stats, work, side)',
+    1587: 'if table.effects is not None:',
+    2239: '# Gen3 applies contact DamagingHit',
+    2341: 'work,changed,hazard_ko=dragging.drag(work,foe,move,phazing_draws[rows,side],',
+    2396: 'turn_context = live & (~replacement | state.pending_residual)',
+    2512: 'event_sides = jnp.array(residual_order.EVENT_SIDES)',
+    2519: 'event_order = jnp.argsort(event_keys,axis=1)',
+    2520: 'for order in range(residual_order.EVENTS):',
+    2535: 'if _status_residual_context is not None:',
+    2897: 'work=linking.prune(work)',
+    2979: 'work = jax.tree.map(lambda old, new: jnp.where(live.reshape(',
+    2988: 'return result if _public_trace is None else public_callbacks.TracedStep(result,_public_trace)',
 }
 # Iteration rules over lines in program order (the scratch census's): an E1..E4 line <= E_RESTART after one >= E_LATE
 # starts the second action; in F2 a line <= F2_HEAD after one > F2_BODY starts the next of the 14 residual events.
-E_LATE, E_RESTART = 2134, 944
-F2_LOOP, F2_HEAD, F2_BODY = 2364, 2379, 2394
+E_LATE, E_RESTART = 2257, 1032
+F2_LOOP, F2_HEAD, F2_BODY = 2520, 2535, 2550
 # Design boundaries: the phase label whose first equation each one is (b0: the first step_with_chance equation; b8: the end).
 BOUNDARIES = (('b0', 'A'), ('b1', 'B'), ('b2', 'D'), ('b3', 'E0'), ('b4', 'E1.0'), ('b5', 'E1.1'), ('b6', 'F1'), ('b7', 'G'), ('b8', 'END'))
 TRACKERS = {'engine_device_public_hooks', 'engine_device_trackers', 'engine_device_public_port', 'engine_device_visible_belief',

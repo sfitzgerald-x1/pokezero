@@ -21,13 +21,15 @@ class TapeV2Tests(unittest.TestCase):
     def test_effect_is_the_design_stream_of_the_split_key(self):
         import jax
         import jax.numpy as j
-        from gpu_engine.fidelity import EFFECT_BOUNDS, EFFECT_SALT, TAPE_SCHEMA, chance_tape
+        from gpu_engine.fidelity import EFFECT_BOUNDS, EFFECT_SALT, INFATUATION_SALT, TAPE_SCHEMA, chance_tape
         from gpu_engine.state import empty_state
         s = empty_state(1, seed=23)
         tape = chance_tape(s, 50000, 0)
         self.assertEqual(tape['schema'], TAPE_SCHEMA)
         key = jax.random.split(s.keys[0], 2)[1]
-        expected = jax.random.randint(jax.random.fold_in(key, EFFECT_SALT), (2, 4), 0, j.array(EFFECT_BOUNDS, j.int32))
+        expected = jax.random.randint(jax.random.fold_in(key, EFFECT_SALT), (2, 4), 0, j.array(EFFECT_BOUNDS[:4], j.int32))
+        fifth = jax.random.randint(jax.random.fold_in(key, INFATUATION_SALT), (2, 1), 0, 2, dtype=j.int32)
+        expected = j.concatenate((expected, fifth), axis=1)
         self.assertEqual(tape['effect'], np.asarray(expected).tolist())
         self.assertTrue(all(0 <= v < b for row in tape['effect'] for v, b in zip(row, EFFECT_BOUNDS)))
         # The six legacy fields keep their v1 values: draws is still the plain randint of the split key.
@@ -64,7 +66,7 @@ class TapeV2Tests(unittest.TestCase):
         pending = s._replace(pending_residual=j.array([True]), residual_draws=j.asarray([a['draws']]),
             secondary_draws=j.asarray([a['secondary']]), sleep_talk_draws=j.asarray([a['sleep_talk']]),
             effect_draws=j.asarray([a['effect']]), keys=s.keys + 1)
-        b = chance_tape(pending, 50000, 1, [[0] * 4] * 2)
+        b = chance_tape(pending, 50000, 1, [[0] * 5] * 2)
         self.assertEqual((b['draws'], b['effect']), (a['draws'], a['effect']))
         self.assertNotEqual(chance_tape(s._replace(keys=s.keys + 1), 50000, 2)['effect'], a['effect'])
         # An engine without the leaf: the caller's copy of the suspended turn's tape.

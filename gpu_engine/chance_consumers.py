@@ -24,7 +24,7 @@ CONSUMERS = {
         (1, "mechanics.before_move: thaw<20"),
         (2, "mechanics.before_move: paralysis<25"),
         (3, "mechanics.before_move: confusion>=50"),
-        (4, "transition/pursuit: critical<1 or<2"),
+        (4, "transition/pursuit: critical<1 or<2, or <4 for a Farfetch'd holding Stick (critical.ratio 3)"),
         (5, "transition/pursuit: damage85+draw; confusion damage reuses draw"),
         (6, "mechanics.accuracy_hit: pinned binary64/Q12 integer-roll predicates"),
         (7, "transition primary sleep; encore.apply duration; secondary.apply_chance_effects Signal Beam confusion 2+draw; transition Wrap duration 3+draw"),
@@ -38,25 +38,26 @@ CONSUMERS = {
     "draws.0.11": ("transition switch installation ordering",),
     "draws.1.11": ("transition residual Encore ordering",),
     **{f"{name}.{s}": (use,) for s in range(2) for name, use in (
-        ("phazing", "phazing.choose_bench modulo bench count OR secondary.apply_contact Static/Poison Point/Flame Body<20, Effect Spore<6 then its status draw//2 (<2, <4); dispatched Gen3 moves are disjoint, and no contact move is multi-hit"),
+        ("phazing", "phazing.choose_bench modulo bench count OR secondary.apply_contact Static/Poison Point/Flame Body/Cute Charm<20, Effect Spore<6 then its status draw//2 (<2, <4); dispatched Gen3 moves are disjoint, and no contact move is multi-hit"),
         ("secondary", "secondary.apply and secondary.apply_chance_effects: shared draw<chance*SereneGrace"),
         ("sleep_talk", "sleep_talk.choose: draw modulo callable count before PP test"),
         ("entry_ties", "transition resumed switch/callback ordering"))},
     "initial_tie": ("transition.initialize unresolved initial entry ordering",),
     # Fidelity R (design 2.1): the appended effect stream's consumers, finite_law.COORDINATES' effect.{s}.{c} axes (§6).
     **{f"effect.{s}.{c}": (use,) for s in range(2) for c, use in (
-        (0, "transition Bonemerang second hit: critical<1 or<2 (critical.is_critical)"),
+        (0, "transition Bonemerang second hit: critical<1 or<2, or <4 with Stick (critical.is_critical)"),
         (1, "transition Bonemerang second hit: damage 85+draw"),
         # Fidelity M2: the reserved columns. Column 2 is the drowsy mon's own side; column 3 is a pair tie per row.
         (2, "transition residual Yawn sleep duration 2+draw (the drowsy mon's side); secondary.apply_contact Effect Spore sleep duration 2+draw (the attacker's side; fidelity tier D: a Yawn sleep of that side reads it again in one step only after a Lum Berry cured this sleep at once, which discards the first value)"))},
+    **{f"effect.{s}.4": ("mechanics.before_move: infatuation immobilizes before paralysis on draw<1",) for s in range(2)},
     "effect.0.3": ("transition residual partial-trap (Wrap) pair ordering, subOrder 9",),
     "effect.1.3": ("transition residual Perish pair ordering, order 12 (both ends resolve before faintMessages, so no Gen 3 outcome depends on it)",),
 }
 
 # Changing any source that supplies the consumer/domain proof requires review.
-SOURCE_PINS = {'action_history.py': 'a47bdb2712f7eadaed12d91ede70be2ebe9f1c1ae3f70fe56495437997212407', 'critical.py': 'b66e6cf10c0d4df625b1c4f5e5db238af42052e556d7649a10f911745181401e', 'effects.py': '47f549d608b60d46e8cc4db7bad5be249ae728a4aab2a0ef28f105f3614e40e2', 'encore.py': '63da39bbd181a8c6371b3bca853322291a03674c60f535ad0eacdbe1a440e0dd', 'entry.py': 'eabf2713a100256ba86fd0b5ac4155042e2a0c6dfe0bc37c7f0c6219dbdd22c1', 'mechanics.py': 'e8476cc3e0029f3ed0bf82276312440e6dd8b340ffeb0c68cdd5611754eef661', 'phazing.py': 'c27039f267bd18660adb3c2bd826e58a7da953eea0e79677de5428f042447969', 'pursuit.py': '5b966584634b5230b3efaf16609699484d29966ff8f7ebaf6d160864dba8c2e5', 'residual_order.py': '7b1a958d4ce27cf8fe7560d8f5a4f95d5cb54a17adbe23ba72dccc00e35bf454', 'secondary.py': '68f74574caab36e5f8e8be3426f96b5858964fb24346b2c4641eb6196640e532', 'sleep_talk.py': '968a78ddde87158b13f68dfcacc2158f07336d82c1be472d2283421e8583c154', 'state.py': '67ca721ce1f6b1a5c3e9c6fd42fe33d65f62ffcec006f5c5efd188225111a59c', 'transition.py': 'f03d36eccbe183780daab851beaacde368964fc4b2da12fe6c19c61902f88224', 'weather.py': '3c861027e16d27917fa47fa5cf5d6dc0c68d3a74af282108dfb94369d4db57e5'}
-DOMAIN_MODULES = tuple("action_history absorption baton combat critical damage_moves effects encore entry focus_punch items linked_traps mechanics phazing pressure pursuit residual_order secondary self_destruct sleep_talk solar_beam state sustain transition variable_moves weather".split())
-DOMAIN_SHA256 = '4c7128e52d03448ca73a1304df960ab4df82fd753ad2a708bdd2aef81b92d860'
+SOURCE_PINS = {'action_history.py': 'a47bdb2712f7eadaed12d91ede70be2ebe9f1c1ae3f70fe56495437997212407', 'critical.py': '7f8be9394e5a5473df5e6e9e9dcd242947ac0970cf5f46d50e27b27658e58f72', 'effects.py': '47f549d608b60d46e8cc4db7bad5be249ae728a4aab2a0ef28f105f3614e40e2', 'encore.py': '63da39bbd181a8c6371b3bca853322291a03674c60f535ad0eacdbe1a440e0dd', 'entry.py': '7859ed9ffcafbb581e5bf9411e11df8d2c072a3ff5afe8bc5381d6789d8915d5', 'mechanics.py': 'fa63643594e8e01cae573c324fbd442fd82ddf63e4514bc23c2e3a4c337e3444', 'phazing.py': 'c27039f267bd18660adb3c2bd826e58a7da953eea0e79677de5428f042447969', 'pursuit.py': '31a6805d9a6b0032c849877efcb2b5a2447b9abc29fbe5170e687b0abe1fbb55', 'residual_order.py': '7b1a958d4ce27cf8fe7560d8f5a4f95d5cb54a17adbe23ba72dccc00e35bf454', 'secondary.py': 'a3058e796b8affc38f5aa0d188bf52cc554d6c07cc8b4e83ac792ed70734001a', 'sleep_talk.py': '968a78ddde87158b13f68dfcacc2158f07336d82c1be472d2283421e8583c154', 'state.py': '7f524b07b1897c9d0367619fd78c074fccb105cdec3668098b0ab38eb0ee0acb', 'transition.py': '11e3c0d9e044aa65c9bb1de6bb0f58ac24a6c6161485bd64ead4f6a6c2c4f114', 'weather.py': '3c861027e16d27917fa47fa5cf5d6dc0c68d3a74af282108dfb94369d4db57e5'}
+DOMAIN_MODULES = tuple("absorption action_history baton combat critical damage_moves effects encore entry focus_punch forecast infatuation items linked_traps mechanics phazing pressure pursuit residual_order secondary self_destruct sleep_talk solar_beam state sustain transform transition variable_moves weather".split())
+DOMAIN_SHA256 = 'ee4bb86c03725b47f9a559daf5ce58bba27741c7a7e961978dc152a91473a08c'
 
 
 def _host(value):
@@ -80,6 +81,16 @@ def _opt(table, family, field, index, default=0):
     group = table.get(family)
     values = None if group is None else group.get(field)
     return default if values is None else values[index]
+
+
+def _stick(table, data, side, active):
+    """Stick (critical.ratio): the side's active is a Farfetch'd that holds Stick, or that a foe active holding Stick may
+    Trick it to (a superset); a host table without the fields (pre-Stick) has none."""
+    group = table.get("critical") or {}
+    stick, farfetchd = group.get("stick"), group.get("farfetchd")
+    if stick is None or farfetchd is None or not farfetchd[data["species"][side][active[side]]]:
+        return False
+    return bool(stick[data["item"][side][active[side]]] or stick[data["item"][1-side][active[1-side]]])
 
 
 def _counter(data, name, side, slot):
@@ -164,7 +175,7 @@ def plan_for_state(state, index, actions, table, metadata, *, cap, native_input=
         data = mapping._sample(state, index)
         if data["pending_residual"]:
             # A resumed suspended turn replays its saved blocks (residual_draws.., and effect_draws at transition.py:
-            # 580-582), never fresh coordinates: conditional_law plans those roots. The input mapper refuses them first.
+            # 583-585), never fresh coordinates: conditional_law plans those roots. The input mapper refuses them first.
             return refuse("SUSPENDED_ROOT_SAVED_BLOCKS", "A pending-residual root reads its saved draws and effect blocks")
         t = _host(table._asdict() if hasattr(table, "_asdict") else table)
         if not isinstance(t, dict):
@@ -230,6 +241,18 @@ def plan_for_state(state, index, actions, table, metadata, *, cap, native_input=
                 if trace_table is not None and any(trace_table[ability] for ability in abilities[s]):
                     abilities[s].update(abilities[1-s])
             changed=before!=tuple(frozenset(values) for values in abilities)
+        # Transform (gpu_engine/transform.py) draws nothing, but a selected Transform copies the foe active's ability, so a
+        # copied Static, Synchronize, Hustle, Compound Eyes, Sand Veil or weather ability can switch on an existing axis
+        # this step. Close it with the Trace closure (both copy the opposing current ability) to one fixed point.
+        transform_move=(t.get('transform') or {}).get('move')
+        transforms=[transform_move is not None and any(transform_move[move] for move in selected[s]) for s in range(2)]
+        changed=any(transforms)
+        while changed:
+            before=tuple(frozenset(values) for values in abilities)
+            for s in range(2):
+                if transforms[s] or (trace_table is not None and any(trace_table[ability] for ability in abilities[s])):
+                    abilities[s].update(abilities[1-s])
+            changed=before!=tuple(frozenset(values) for values in abilities)
         statuses = [{data["status"][s][p] for p in participants[s]} for s in range(2)]
         for s in range(2):
             if (any(_at(t, 'secondary', 'contact', move) for move in selected[s])
@@ -271,6 +294,11 @@ def plan_for_state(state, index, actions, table, metadata, *, cap, native_input=
                 # Include both orderings of Haze then self boost and vice versa.
                 stages[s][position].update(max(-6, min(6, value+change))
                     for value in tuple(stages[s][position]) for change in delta)
+        # Transform copies the foe's accuracy and evasion stages too (its own and the foe's later moves read them).
+        for s in range(2):
+            if transforms[s]:
+                for position in range(2):
+                    stages[s][position].update(stages[1-s][position])
 
         observations = {name: [] for name, _ in COORDINATES}
         reasons = {}
@@ -299,6 +327,13 @@ def plan_for_state(state, index, actions, table, metadata, *, cap, native_input=
             random_damage |= bool(observations[prefix+"3"])
             if random_damage:
                 use(prefix+"4", Observation("less_than", 1), Observation("less_than", 2))
+                # Stick: a Farfetch'd holding it crits below 4 (ratio 3, 1/4). With a high-crit move its ratio is 4 (1/3),
+                # which no [0,16) cut represents (critical.CRIT_THRESHOLD): refused; no randbats Farfetch'd has one.
+                if live_move[s] and _stick(t, data, s, active):
+                    if any(_at(t, "critical", "high", move) for move in selected[s]):
+                        return refuse("CRIT_RATIO_UNREPRESENTABLE",
+                                      "Stick on a high-crit move is Gen 3 critRatio 4 (1/3), not a [0,16) cut")
+                    use(prefix+"4", Observation("less_than", 4))
                 use(prefix+"5", Observation("identity"))
             accuracy = set()
             reachable_hustle = any(_at(t, "combat", "hustle", ability) for ability in abilities[s])
@@ -355,6 +390,8 @@ def plan_for_state(state, index, actions, table, metadata, *, cap, native_input=
             # Fidelity tier D (secondary.apply_contact): Poison Point and Flame Body <20 as Static; Effect Spore's chance <6
             # and its slp/par/psn draw//2 (<2, <4); an Effect Spore sleep lasts 2+effect[s][2] (the attacker's side).
             if any(_at(t, 'secondary', 'contact', move) for move in selected[s]):
+                if any(_opt(t, 'infatuation', 'cute_charm', ability, False) for ability in abilities[1-s]):
+                    use(f'phazing.{s}', Observation('less_than', 20))
                 if any(_opt(t, 'secondary', 'contact_status', ability) for ability in abilities[1-s]):
                     use(f'phazing.{s}', Observation('less_than', 20))
                 if any(_opt(t, 'secondary', 'effect_spore', ability, False) for ability in abilities[1-s]):
@@ -386,10 +423,15 @@ def plan_for_state(state, index, actions, table, metadata, *, cap, native_input=
             use("draws.0.10", Observation("identity"))
         if not replacement and all(statuses[s] & {2, 3, 4} for s in range(2)):
             use("draws.1.9", Observation("identity"))
-        # §6: the appended effect stream (fidelity R, design 2.1; M2's residual consumers). transition.py:580-582 reads
+        # §6: the appended effect stream (fidelity R, design 2.1; M2's residual consumers). transition.py:583-585 reads
         # ChanceInputs.effect; a resumed suspended turn reads the saved block instead (refused above).
         for s in range(2):
-            # Bonemerang's second hit (transition.py:1155-1195, run when damage_moves.hits>1 at :1382): its own critical
+            # Attract can land before the slower actor's move in this step.
+            # selected includes callable Sleep Talk and Encore closure.
+            if live_move[s] and (any(data['volatile'][s][p] & 128 for p in participants[s])
+                    or any(_opt(t, 'infatuation', 'attract', move, False) for move in selected[1-s])):
+                use(f'effect.{s}.4', Observation('less_than', 1))
+            # Bonemerang's second hit (transition.py:1158-1198, run when damage_moves.hits>1 at :1385-1386): its own critical
             # roll effect[s][0] (critical.is_critical: below 2 for a high-crit move, else below 1; below 1 without the
             # table) and damage roll 85+effect[s][1]. Callers and Encore are already in the selected closure.
             critical = (t.get("critical") or {}).get("high")
@@ -397,20 +439,22 @@ def plan_for_state(state, index, actions, table, metadata, *, cap, native_input=
             if second_hit:
                 use(f"effect.{s}.0", *(Observation("less_than", 2 if critical is not None and critical[move] else 1)
                                        for move in sorted(second_hit)))
+                if _stick(t, data, s, active):
+                    use(f"effect.{s}.0", Observation("less_than", 4))
                 use(f"effect.{s}.1", Observation("identity"))
-            # Yawn's residual sleep (transition.py:2621-2631): a holder whose count is 1 when this residual runs sleeps
-            # for 2+effect[s][2], s the drowsy mon's own side. A Yawn landing this turn sets 2 (:1789-1797), which ends
+            # Yawn's residual sleep (transition.py:2643-2653): a holder whose count is 1 when this residual runs sleeps
+            # for 2+effect[s][2], s the drowsy mon's own side. A Yawn landing this turn sets 2 (:1803-1811), which ends
             # at the next turn's residual, and only a holder that stays in keeps a count (entry.py, baton.py drop it).
             if not replacement and any(_counter(data, "yawn_counter", s, p) == 1 for p in participants[s]):
                 use(f"effect.{s}.2", Observation("identity"))
-        # The order-10 partial-trap pair (transition.py:2328-2335 with residual_order): effect[0][3] orders the two
-        # Wrap holders' events at equal Speed. A seat holds a trap already or gets one from the other's Wrap (:1997-2002).
+        # The order-10 partial-trap pair (transition.py:2350-2357 with residual_order): effect[0][3] orders the two
+        # Wrap holders' events at equal Speed. A seat holds a trap already or gets one from the other's Wrap (:2011-2016).
         trapped = [any(_counter(data, "partial_trap_counter", s, p) > 0 for p in participants[s])
                    or any(_at(t, "effects", "wrap", move) for move in selected[1-s]) for s in range(2)]
         if not replacement and all(trapped):
             use("effect.0.3", Observation("identity"))
-        # Perish Song's order-12 pair (transition.py:2666-2687): effect[1][3] orders the two holders at equal Speed.
-        # Perish Song gives every active without a count one (:1776-1784), so either seat's use reaches both.
+        # Perish Song's order-12 pair (transition.py:2688-2709): effect[1][3] orders the two holders at equal Speed.
+        # Perish Song gives every active without a count one (:1790-1798), so either seat's use reaches both.
         perish_song = any(_at(t, "effects", "perishsong", move) for choices in selected for move in choices)
         if not replacement and all(perish_song or any(_counter(data, "perish_counter", s, p) > 0 for p in participants[s])
                                    for s in range(2)):

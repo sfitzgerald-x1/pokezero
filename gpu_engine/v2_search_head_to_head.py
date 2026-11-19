@@ -464,6 +464,8 @@ def main(argv=None):
     from gpu_engine.v2_fused import prepare
     begin = time.perf_counter();out = Path(args.out);out.mkdir(parents=True, exist_ok=True)
     context = prepare(argparse.Namespace(config=args.config, arm='B', iterations=2 if args.iteration else 1));plan = context['plan']
+    from gpu_engine.private_self_moves import refuse_unthreaded
+    refuse_unthreaded(plan=plan, catalog=context['prepared'].catalog, context='v2 search head to head')
     loaded = {};evaluator = None
     if champion:
         # The engine session's binding (d3_depth2_gate.load_champion): archive and checkpoint shas, then the runtime catalog.
@@ -473,9 +475,10 @@ def main(argv=None):
         if champion:return loaded[('champion', None)]   # one parameter tree for both seats: (champion,), actors 0/0
         if (run, iteration) not in loaded:
             snap = snapshot(run, iteration)
-            params, config, _ = v5_model.load(Path(run, snap.archive), expected_archive_sha256=snap.archive_sha256,
+            params, config, meta = v5_model.load(Path(run, snap.archive), expected_archive_sha256=snap.archive_sha256,
                 expected_checkpoint_sha256=snap.checkpoint_sha256, expected_category_vocabulary_sha256=plan.model.category_vocabulary_sha256,
                 expected_label_vocabulary_sha256=plan.model.label_vocabulary.sha256, enable_v5=True)
+            from gpu_engine.private_self_moves import refuse_unthreaded;refuse_unthreaded(meta, context='v2 search head to head')   # V2 self_moves
             if replace(config, replicate=plan.model.replicate) != plan.model:raise ValueError('actor architecture differs from evaluation model')
             loaded[(run, iteration)] = (snap, params)
         return loaded[(run, iteration)]

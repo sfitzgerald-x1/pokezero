@@ -39,6 +39,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from pathlib import Path
 import re
 
@@ -78,7 +79,9 @@ FIELDS = (
     ('borrowed_ability', 'mon', 'vocab abilities[t.borrowed_ability]', 'catalog.abilities.names[ctx.abilities.running]'),
     ('shown_ability', 'mon', 'vocab abilities[t.shown_ability]', 'ctx.abilities.running, else ctx.abilities.original'),
     ('types', 'mon', 'vocab types[t.shown_types]', 'TYPE labels of ctx.types.categories when overridden, else '
-     'catalog.species.device.type_categories[mons.species]'),
+     'catalog.species.device.type_categories[ctx.abilities.transform_species when transformed, else mons.species]'),
+    ('transformed', 'mon', 't.transformed', 'ctx.abilities.transformed'),
+    ('transform_species', 'mon', 'vocab species[t.transform_species]', 'catalog.species.names[ctx.abilities.transform_species]'),
     ('belief_hard', 'mon', 't.belief_mask', 'beliefs.hard[observer 1-side]'),
     ('visible_hard', 'mon', 't.visible_belief.visible_hard', 'beliefs.hard[observer 1-side]'),
     ('belief_pin', 'mon', 't.visible_belief.pin / pin_active', 'beliefs.pin / pin_active[observer 1-side]'),
@@ -162,6 +165,10 @@ LEFT_OUT = {
     'own_order, public_order, physical_to_public, active_physical, next_slot': 'private identity cursors and '
               'request-order permutations (never encoded); B2 indexes by public encounter only',
     'error': 'device diagnostic input-contract bits',
+    'copied_pp_used, transform_own_view, transform_borrowed': 'Transform: the device\'s copied-slot uses (for device worlds), '
+              'the transformer owner\'s own view of its copied ability (B2 keeps it only in that owner\'s fold, read for the '
+              'Pressure charge of moves against the transformer), and the mark that a borrowed ability is a Transform copy (the '
+              'readout hides it from the traced column, B2\'s traced); none has a compared B2 counterpart in the opposing fold',
     'wish_turns, wish_pending (field_features)': 'zero in the carry; readout derives them from wish_set_turn '
               '(compared)',
 }
@@ -203,6 +210,17 @@ for _step in ('initial', 0, 1, 2, 3, 4):
 for _step in (3, 4):
     for _field in ('1:0:borrowed_ability', '1:0:shown_ability'):
         ALLOWLIST[('wonderguard_trace', 'base', _step, _field)] = _TRACE_TRACER
+# Approved extension of the same Trace B2 bug: retire these ability-display pins when Trace is fixed.
+# Engine state remains exact; no physics, gender or volatile fields are allowlisted.
+for _step in ('initial', 0, 1, 2, 3, 4):
+    ALLOWLIST[('cutecharm_trace', 'base', _step, '1:0:original_ability')] = _TRACE_TRACER
+for _field in ('1:0:borrowed_ability', '1:0:shown_ability'):
+    ALLOWLIST[('cutecharm_trace', 'base', 2, _field)] = _TRACE_TRACER
+# Damage modifiers: the same OPEN BUG in plusminus_trace, whose Gardevoir traces Minun's Minus at entry (|-ability|p1a:
+# Gardevoir|Minus|[from] ability: Trace|[of] p2a: Minun) and stays in: only the tracer's original ability differs.
+for _case in ('roll=0', 'roll=5', 'roll=10', 'roll=15'):
+    for _step in ('initial', 0, 1, 2):
+        ALLOWLIST[('plusminus_trace', _case, _step, '0:0:original_ability')] = _TRACE_TRACER
 # Fixed (history): OPEN BUG I, the upkeep's Lum and pinch-berry rules (engine_device_negative_items.upkeep), 140 entries retired.
 # B2 limit (explained, not a device fact): B2's fold refuses (PAYLOAD) a side's second encounter of one species, at the
 # repeat's arrival line (|switch|p2a: Gengar2|Gengar, L74, M|...: RAW_BEGIN, SWITCH_PRELUDE, MUDSHOT, SWITCH, NONPROC,
@@ -218,6 +236,13 @@ for _scenario, _cases, _step in (
         ('perishsong_last_faster', ('base',), 1), ('perishsong_tie', ('tie=0', 'tie=1'), 1), ('wrap_tie', ('tie=0', 'tie=1'), 1),
         ('wrap_trapper_dragged_back', ('base',), 1)):
     for _case in _cases:ALLOWLIST[(_scenario, _case, _step, 'b2_refusal')] = _REPEATED_SPECIES
+# OPEN BUG (reported with Forecast; pre-existing, not Forecast's): a temporary weather that the residual clock ends. B2's
+# field fold resets its upkeep count at |-weather|none (public_field.apply: `clear`); the device resets weather_upkeeps
+# only at a weather hook (a weather move, a weather ability), and the residual clock calls none, so the device keeps the
+# last count. The readout never shows it (weather_turns is 0 without weather, and the next weather resets the count).
+_WEATHER_END_UPKEEPS = 'OPEN BUG: the residual clock ends the weather; B2 resets its upkeep count, the device keeps the stale one'
+for _scenario, _steps in (('forecast_rain_ends', (4, 5)), ('forecast_switch_back', (4, 5, 6))):
+    for _step in _steps:ALLOWLIST[(_scenario, 'base', _step, 'field:weather_upkeeps')] = _WEATHER_END_UPKEEPS
 
 
 PINS_PATH = Path(__file__).with_name('effect_probe_device_pins.json')
@@ -336,8 +361,10 @@ def compile_b2(set_lists, showdown_root):
             labels |= {'belief:possible_move:' + normalize_id(m) for m in v.moves if m}
             if v.ability:labels |= {'ability:' + normalize_id(v.ability), 'belief:possible_ability:' + normalize_id(v.ability)}
             if v.item:labels |= {'item:' + normalize_id(v.item), 'belief:possible_item:' + normalize_id(v.item)}
+    # The champion's masks, self_moves declared off: the probe compares the public carry, never an override's encode.
+    if os.environ.get('OBS_SELF_MOVES', ''):raise ValueError('the device probe runs with self_moves declared off: unset OBS_SELF_MOVES')
     catalog = v4_encoder.compile_encoder(public_belief.compile_source(source), dex, CategoryVocabulary(tuple(sorted(labels))),
-        checkpoint_sha256=CHAMPION_CONTRACT['checkpoint_sha256'], feature_masks=dict(CHAMPION_CONTRACT['feature_masks']))
+        checkpoint_sha256=CHAMPION_CONTRACT['checkpoint_sha256'], feature_masks=dict(CHAMPION_CONTRACT['feature_masks'], self_moves=False))
     return catalog
 
 
@@ -435,6 +462,8 @@ def device_view(t, lane, vocab):
                 moves=moves, original_ability=original, borrowed_ability=borrowed,
                 shown_ability=_name(vocab['abilities'], t.shown_ability[lane, s, k]),
                 types=[_name(vocab['types'], x) for x in t.shown_types[lane, s, k] if int(x)],
+                transformed=False if t.transformed is None else bool(t.transformed[lane, s, k]),
+                transform_species='' if t.transform_species is None else _name(vocab['species'], t.transform_species[lane, s, k]),
                 belief_hard=_words(t.belief_mask[lane, s, k]),
                 **({} if vb is None else dict(visible_hard=_words(vb.visible_hard[lane, s, k]),
                     belief_pin=[_words(vb.pin[lane, s, k]), bool(vb.pin_active[lane, s, k])],
@@ -511,7 +540,10 @@ def b2_side(b2, q, own, s, catalog):
             moves=[(_name(catalog.moves.names, m), int(n)) for m, n in zip(ids, uses) if int(m)],
             original_ability=original, borrowed_ability=running, shown_ability=running or original,
             types=type_names(ctx.types.categories[q, s] if bool(ctx.types.overridden[q, s]) and int(ctx.types.encounter[q, s]) == int(mons.encounter[q, s, k])
-                             else static_types[int(mons.species[q, s, k])]),
+                             else static_types[int(ctx.abilities.transform_species[q, s, k]) if bool(ctx.abilities.transformed[q, s, k])
+                                               and int(ctx.abilities.transform_species[q, s, k]) > 0 else int(mons.species[q, s, k])]),
+            transformed=bool(ctx.abilities.transformed[q, s, k]),
+            transform_species=_name(catalog.species.names, ctx.abilities.transform_species[q, s, k]),
             **_belief(beliefs.hard[q, 1 - s, k], beliefs.pin[q, 1 - s, k], beliefs.pin_active[q, 1 - s, k], beliefs.conflicts[q, 1 - s, k]),
             sleep_turns=int(ctx.sleep.count[q, s, k]), rest_sleep=int(ctx.sleep.rest[q, s, k]),
             sleep_skipped_turns=int(ctx.sleep.skipped[q, s, k]), sleep_cant_pending=int(ctx.sleep.pending[q, s, k]),

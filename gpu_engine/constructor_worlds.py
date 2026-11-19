@@ -56,15 +56,15 @@ dict keys and leaves two members None). This module turns prepared roots into De
     (d3_depthn_gate.constructor_roots, prepare_roots per roster root) treats it as a root that did not fully construct
     (listed among the selection's refused roots, never selected).
   - the peer's OPP_HAZARD_CREDIT (fill_owner_spikes): from_b2 fills only hazards[owner, exact] and hazards[foe, shown]
-    (phase_d_live_worlds.py:415), so hazards[owner, shown], the peer's view of the owner's Spikes losses, read 0. The
+    (phase_d_live_worlds.py:432), so hazards[owner, shown], the peer's view of the owner's Spikes losses, read 0. The
     device's shown half is the per-hit sum of (_percent(hp) - _percent(new)) / 100 (engine_device_public_port.spikes);
     B2 keeps only the exact sum, whose per-hit rounding is lost (300 max HP, 37 damage: 300 -> 263 shows 12%, 299 -> 262
     shows 11%), but the owner's own lines carry each hit exactly (a Spikes -damage line after the owner's exact HP on its
     switch-in line), so it is rebuilt hit by hit with the device's own compensated sum. Left 0 when a hit's previous HP
     is not on the lines.
   - Baton Pass arrivals (fill_baton): from_b2 writes last_moves -1 for an active whose last public action was a switch
-    (phase_d_live_worlds.py:320); the device writes -2 after a Baton Pass arrival (engine_device_public_hooks.baton_copy,
-    :569) and B2 encodes the Baton Pass sentinel (mons.arrived_by_baton). The carry does not keep B2's flag, but the lines
+    (phase_d_live_worlds.py:323-324); the device writes -2 after a Baton Pass arrival (engine_device_public_hooks.baton_copy,
+    :1090) and B2 encodes the Baton Pass sentinel (mons.arrived_by_baton). The carry does not keep B2's flag, but the lines
     carry the same fact by the env's and B2's host rule (line_facts' baton), so -1 becomes -2 for that active, both sides.
     That rule is the env's pending flag: a passer that faints to Pursuit before its recipient arrives leaves the flag
     set, so the env and the fill mark the next switch a Baton Pass arrival where the device (no baton_copy) may not;
@@ -312,9 +312,11 @@ def metadata_sha256(metadata):
 def encoder_identity(catalog):
     """The encoder catalog's identity: checkpoint sha256, category vocabulary sha256 and size, feature masks, source hash."""
     from pokezero.live_protocol_actor import MASK_NAMES,_vocab_sha
-    return (('checkpoint_sha256',catalog.checkpoint_sha256),('category_vocab_sha256',_vocab_sha(catalog.vocabulary)),
+    identity=(('checkpoint_sha256',catalog.checkpoint_sha256),('category_vocab_sha256',_vocab_sha(catalog.vocabulary)),
         ('category_vocab_size',int(catalog.vocabulary.size)),('feature_masks',tuple((k,getattr(catalog.masks,k))for k in MASK_NAMES)),
         ('source_hash',catalog.source.source_hash))
+    # V2 self_moves joins the identity only when on: off bindings are unchanged; on, a pricer and constructor disagreeing fail closed.
+    return identity+((('self_moves',True),)if getattr(catalog.masks,'self_moves',False)else())
 
 
 def binding(source,metadata,catalog):
@@ -559,10 +561,23 @@ class LineFacts:
     peer_belief:object=None        # PeerBelief (prepare_roots, the redaction on, a private reveal applicable); None otherwise
     knocked:tuple=((),())          # per side (p1, p2): (species, item) of each member whose item Knock Off removed (line_facts)
     recharge_counter:tuple=(0,0)   # per side (p1, p2): its active's remaining recharge count, 2 or 1 (0: none; line_facts)
+    transform:tuple=(None,None)    # per side (p1, p2): TransformFacts of its CURRENT transformed active, else None (line_facts)
     # B2's Protect-blocked move windows (public_tendency, _blocked_windows): per side (p1, p2) the closed ones' count, and the side
     # whose open window is a blocked move at the prefix's end (-1: none), which B2's readout counts provisionally (fill_blocked_window)
     blocked_closed:tuple=(0,0)
     blocked_open:int=-1
+
+
+@dataclass(frozen=True)
+class TransformFacts:
+    """A side's current transformed active on the lines (gpu_engine/transform.py): `donor` the normalized species of its
+    latest -transform line's target, `copied_uses` ((move, pp charged), ...) in first-use order since that line: each move
+    line of the transformer without [from] (not Struggle), or with [from] Pursuit (a switch intercept), charges 1, or 2 when
+    the opposing active's Pressure is known to the owner (a public -ability Pressure, or the owner's own side-private start
+    line) and the move is foe-targeted. A switch,
+    drag or faint ends it; a re-transform restarts the uses (fresh 5 PP)."""
+    donor:str
+    copied_uses:tuple=()
 
 
 def _seat_name(field):
@@ -590,6 +605,8 @@ def line_facts(lines,owner,*,peer_damage=False):
     knocked={'p1':{},'p2':{}}   # species -> the item Knock Off removed (the first: a knocked-off item is gone for good)
     member=lambda seat,name:species.get((seat,name))or normalize_id(name)
     count={'p1':0,'p2':0}   # recharge_counter: 2 at -mustrecharge, -1 at each residual's |upkeep|, 0 when cleared
+    donors={};copied={}   # Transform: per seat, the current copy's donor species and its copied-slot uses (TransformFacts)
+    from pokezero.belief import _NEVER_PRESSURED_POOL_MOVES
     for line in lines:
         parts=str(line).split('|')
         if parts[1:2]==['upkeep']:count={seat:max(0,n-1)for seat,n in count.items()}
@@ -598,7 +615,7 @@ def line_facts(lines,owner,*,peer_damage=False):
         if len(parts)>=4 and seat in active:
             for found in _ability_attributions(kind,seat,member(seat,name),parts,tags,member):
                 (private if found[0]=='private'else public).add(found[1:])
-        if kind=='faint'and seat in alive:alive[seat]=recharge[seat]=False;count[seat]=0   # |faint|IDENT: three fields
+        if kind=='faint'and seat in alive:alive[seat]=recharge[seat]=False;count[seat]=0;donors.pop(seat,None);copied.pop(seat,None)   # |faint|IDENT: three fields
         if kind=='-mustrecharge'and seat in recharge:recharge[seat]=True;count[seat]=2   # |-mustrecharge|IDENT
         if kind=='cant'and seat in recharge and len(parts)>3 and normalize_id(parts[3])=='recharge':recharge[seat]=False;count[seat]=0
         if len(parts)<4:continue
@@ -608,18 +625,29 @@ def line_facts(lines,owner,*,peer_damage=False):
             tracers[seat].add(species.get((seat,name))or normalize_id(name))
         if kind=='move'and seat in active:
             move=normalize_id(parts[3])
+            # Gen 3's Pursuit intercept ([from] Pursuit) is a paid use, Pressure included (data/mods/gen3/scripts.ts:176);
+            # every other [from] line (a Sleep Talk call, a locked move) pays nothing.
+            paid=not any(t.startswith('[from]')and t!='[from] pursuit'for t in tags)
+            if seat in copied and paid and move!='struggle':
+                other=peer if seat==own else own
+                known=(active[other]in original_pressure or active[other]in running_pressure if other==peer
+                       else (other,active[other],'pressure')in private|public)
+                charge=1+int(known and move not in _NEVER_PRESSURED_POOL_MOVES)
+                copied[seat][move]=copied[seat].get(move,0)+charge
             if move=='batonpass':pending.add(seat)
             else:pending.discard(seat)
             if (seat==own and not any(t.startswith('[from]')for t in tags)and move!='struggle'and seat not in transformed
                     and active[own]):
                 foe=active[peer];moves.append((active[own],move,foe,alive[peer],foe in original_pressure or foe in running_pressure))
-        elif kind=='-transform'and seat in active:transformed.add(seat)
+        elif kind=='-transform'and seat in active:
+            transformed.add(seat);target_seat,target=_seat_name(parts[3]);donors[seat]=member(target_seat,target);copied[seat]={}
         elif kind=='-ability'and seat==peer and normalize_id(parts[3])=='pressure':
             target=species.get((seat,name),'')
             (running_pressure if any(t.startswith('[from] ability: trace')for t in tags)else original_pressure).add(target)
         if kind in SWITCH_KINDS and seat in active:
             arrived=normalize_id(parts[3].split(',')[0]);species[(seat,name)]=arrived;active[seat]=arrived;alive[seat]=True
             transformed.discard(seat);running_pressure.discard(arrived);recharge[seat]=False;count[seat]=0
+            donors.pop(seat,None);copied.pop(seat,None)
             baton[seat]=kind=='switch'and(seat in pending or any('baton pass'in t for t in tags));pending.discard(seat)
         if kind in SWITCH_KINDS:
             if seat==peer:switches.append(normalize_id(parts[3].split(',')[0]))
@@ -640,6 +668,7 @@ def line_facts(lines,owner,*,peer_damage=False):
         (tuple(sorted(tracers['p1'])),tuple(sorted(tracers['p2']))),(hidden,())if own=='p1'else((),hidden),
         knocked=tuple(tuple(sorted(knocked[seat].items()))for seat in('p1','p2')),
         recharge_counter=tuple(count[seat]if recharge[seat]else 0 for seat in('p1','p2')),
+        transform=tuple(TransformFacts(donors[seat],tuple(copied[seat].items()))if seat in donors else None for seat in('p1','p2')),
         blocked_closed=closed,blocked_open=opened)
 
 
@@ -901,7 +930,7 @@ def fill_recharge(public,facts):
     """The public carry with the mustrecharge volatile set on each side's active that must recharge (facts.recharge). B2 keeps
     that fact in its own flag beside the volatile bag (public_active.ActiveState.recharge, merged into the bag only when it
     encodes: public_active.project, `bag=state.volatiles.at[...,RECHARGE_ID].set(state.recharge)`), so from_b2's copy of the
-    bag (phase_d_live_worlds.py:311) drops it and the encoder showed no volatile:mustrecharge where B2 does. In search the
+    bag (phase_d_live_worlds.py:315) drops it and the encoder showed no volatile:mustrecharge where B2 does. In search the
     device clears it with M1's counter (the recharge_turn hook, an arrival, a faint); fix_recharge writes that counter on
     the world state. A silent expiry leaves the bit set with the counter 0, as B2 does."""
     from .public_active import NAMES
@@ -921,7 +950,7 @@ def fill_blocked_window(public,facts):
     == 2), and the device public path counts a blocked move when it is blocked (engine_device_public_port.protect), so both read
     one more than B2's closed count while the window is open: a mid-turn forced-switch root right after the owner's Explosion or
     Self-Destruct into Protect. from_b2 seeds public_port.blocked with the closed count alone (ctx.tendency.blocked,
-    phase_d_live_worlds.py:430), so world 0's NUMERIC_STAT_BLOCKED_ON_OUR_ATTACK read one below B2's there. The window's side
+    phase_d_live_worlds.py:436), so world 0's NUMERIC_STAT_BLOCKED_ON_OUR_ATTACK read one below B2's there. The window's side
     takes min(64, closed + 1) when the carry holds the lines' closed count (from_b2's), so a second pass is a no-op and a carry
     the lines do not explain is left alone."""
     b=_trackers(public)
@@ -935,12 +964,43 @@ def fill_blocked_window(public,facts):
 LEDGER_KEYS=('item_mutated','item_original')   # M1's per-mon item ledger in mon_features (engine_device_public_hooks.MON_KEYS)
 
 
+def fix_copied_pp(state,owner,facts,tables):
+    """The world STATE with the peer's transformed active's copied PP: each copied slot min(5, pp), which is 5 for every Gen 3
+    move, minus its uses since the -transform line (facts.transform). Only a world that already materializes the peer's
+    Transform (state.transformed) changes; a state without the leaf, or nothing to write, is the same state."""
+    peer=1-owner;fact=None if facts is None else facts.transform[peer]
+    if fact is None or not hasattr(state,'transformed')or not bool(_host(state.transformed)[0,peer]):return state
+    at=int(_host(state.active)[0,peer]);moves=_host(state.moves)[0,peer,at];pp=_host(state.pp).copy()
+    uses=dict(fact.copied_uses)
+    for k,mid in enumerate(moves):
+        if mid:pp[0,peer,at,k]=max(0,5-uses.get(_name_index_key(tables,int(mid)),0))
+    return state._replace(pp=jnp.asarray(pp,state.pp.dtype))
+
+
+def _name_index_key(tables,mid):
+    name=tables.move_names[mid]if 0<=mid<len(tables.move_names)else''
+    return 'hiddenpower'if name.startswith('hiddenpower')else name
+
+
+def fill_copied_pp(state,public,owner,facts,tables):
+    """The public carry's copied_pp_used for the peer's transformed active (the device's move hook charges a transformed
+    actor's copied slot there instead of its public PP), from facts.transform and the world state's copied moves. A carry
+    without the field, or a world without the peer's Transform, is the same carry."""
+    peer=1-owner;fact=None if facts is None else facts.transform[peer]
+    if (fact is None or getattr(public,'copied_pp_used',None)is None or not hasattr(state,'transformed')
+            or not bool(_host(state.transformed)[0,peer])):return public
+    at=int(_host(state.active)[0,peer]);moves=_host(state.moves)[0,peer,at];uses=dict(fact.copied_uses)
+    used=_host(public.copied_pp_used).copy()
+    used[0,peer]=[uses.get(_name_index_key(tables,int(mid)),0)if mid else 0 for mid in moves]
+    return public._replace(copied_pp_used=jnp.asarray(used,public.copied_pp_used.dtype))
+
+
 def fill_item_ledger(public,facts,tables):
     """The public carry with M1's per-mon item ledger written for each member the lines show knocked off (facts.knocked, both
     sides), as the device path and B2 hold it after the same -enditem line: mon_features['item_mutated'][side, slot] = 1 and,
     when that member's ledger is fresh (item_mutated and item_original both 0), item_original[side, slot] = the engine item id of
     the removed item (tables.item_names). `slot` is the member's public slot (the carry's species, joined as fix_knocked_items
-    joins). The rule is the device knock_off hook's (engine_device_public_hooks.py:562-566: fresh = item_mutated == 0 and
+    joins). The rule is the device knock_off hook's (engine_device_public_hooks.py:692-695: fresh = item_mutated == 0 and
     item_original == 0; item_original = the item held before the hit when fresh; item_mutated = 1) and B2's REMOVE
     (public_items.py:185, a -enditem line tagged [from] move: Knock Off is REMOVE; public_items.py:130-138: REMOVE sets mutated,
     and own_removal = REMOVE, not yet mutated and no recorded original, records the removed item as the original). Both ledgers
@@ -1072,7 +1132,7 @@ def fix_knocked_items(state,owner,facts,tables):
     """The world state with item_knocked[0, side, p] set for each member the lines show knocked off (facts.knocked, both sides):
     A2's engine leaf (gpu_engine/state.py: pokemon.itemKnockedOff, never reset), which Showdown's Gen 3 Knock Off sets on the
     target whose item it removes (data/mods/gen4/moves.ts:700-701 at f76228a13) and the engine's own Knock Off sets on the same
-    hit (transition.py:2020-2023). Its only engine reader is Trick's Gen 3-4 failure check (transition.py:1703; Showdown's
+    hit (transition.py:2063-2064). Its only engine reader is Trick's Gen 3-4 failure check (transition.py:1733; Showdown's
     sim/pokemon.ts:1853 takeItem: gen <= 4 and either mon's itemKnockedOff): without it an in-tree Trick on that member succeeds
     where Showdown fails. from_b2 and the materializer predate the leaf and leave it False. Members join by normalized species,
     as fix_trace_base_ability joins (the owner's side: the request's party; the peer's: this world's party, whose revealed
@@ -1215,9 +1275,11 @@ def _peer_fold(constructor,request,owner,catalog,functions):
     lines=peer_wire_lines(request['lines'],owner);key=(id(constructor),request.get('battle_id'),owner,request.get('stream_id'))
     held=_PEER_FOLDS.pop(key,None)
     if held is None or held[0]is not constructor or held[2]!=lines[:len(held[2])]:
-        adapter=JaxRecordedAdapter(catalog,owner_side=owner,compiled_functions=functions);adapter.reset(stream_id=1,battle_id='peer-wire');fed=()
-    else:_,adapter,fed=held
-    if len(lines)>len(fed):adapter.feed(lines[len(fed):])
+        adapter=JaxRecordedAdapter(catalog,owner_side=owner,compiled_functions=functions);fed=();fresh=True
+    else:_,adapter,fed=held;fresh=False
+    with adapter.checked_catalog():
+        if fresh:adapter.reset(stream_id=1,battle_id='peer-wire')
+        if len(lines)>len(fed):adapter.feed(lines[len(fed):])
     _PEER_FOLDS[key]=(constructor,adapter,lines)
     while len(_PEER_FOLDS)>PEER_FOLD_CAP:_PEER_FOLDS.pop(next(iter(_PEER_FOLDS)))
     return adapter
@@ -1415,6 +1477,7 @@ def complete_public(state,public,tables,owner,*,facts=None,root=None,redact_priv
     if facts is not None:
         done=fill_recharge(fill_baton(fill_owner_spikes(order_peer(state,done,owner,facts,tables),owner,facts),facts),facts)
         done=fill_item_ledger(done,facts,tables)
+        done=fill_copied_pp(state,done,owner,facts,tables)
         done=fill_blocked_window(done,facts)
         done=fill_peer_pressure(state,done,owner,facts,tables,root)
         if redact_private_reveals or peer_view_b:done=_redact(done,owner,facts,tables)
@@ -1433,6 +1496,7 @@ def complete_carry(state,public,tables,owner,*,facts=None,root=None,redact_priva
     copied Pressure has Trace as its own ability, so earlier moves against it are not recharged, and a second pass, which
     sees the corrected state, gives the same carry)."""
     fixed=fix_recharge(fix_knocked_items(fix_trace_base_ability(fix_peer_base_ability(state,public,owner),owner,facts,tables),owner,facts,tables),facts)
+    fixed=fix_copied_pp(fixed,owner,facts,tables)
     view_b={'peer_view_b':True}if peer_view_b else{}
     return fixed,complete_public(fixed,public,tables,owner,facts=facts,root=root,redact_private_reveals=redact_private_reveals,**view_b)
 

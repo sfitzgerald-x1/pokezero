@@ -40,9 +40,12 @@ from . import self_destruct as exploding
 from . import encore as repeating
 from . import solar_beam as charging
 from . import focus_punch as focusing
+from . import infatuation
+from . import transform as shift
+from . import forecast as forecasting
 from .effects import MoveEffects, from_metadata as effects_from_metadata, stall_success, cure_team, weather_healing
 from .state import FLINCH, FOCUS_PUNCH, FOCUS_LOST, BattleState, bench_indices, empty_state, legal_actions, usable_moves
-from .state import DESTINY_BOND
+from .state import DESTINY_BOND, ATTRACT
 
 
 class MoveTable(NamedTuple):
@@ -77,6 +80,9 @@ class MoveTable(NamedTuple):
     focus_punch: focusing.FocusTable | None = None
     solar_beam: charging.SolarTable | None = None
     public_port: object = None
+    infatuation: infatuation.InfatuationTable | None = None
+    transform: shift.TransformTable | None = None
+    forecast: forecasting.ForecastTable | None = None
 
 
 def tables_from_metadata(metadata: dict) -> MoveTable:
@@ -111,7 +117,9 @@ def tables_from_metadata(metadata: dict) -> MoveTable:
         variable.from_metadata(metadata),intercepts.from_metadata(metadata),passing.from_metadata(metadata),
         dragging.from_metadata(metadata),linking.from_metadata(metadata),crits.from_metadata(metadata),
         secondaries.from_metadata(metadata),talking.from_metadata(metadata),exploding.from_metadata(metadata),
-        repeating.from_metadata(metadata),focusing.from_metadata(metadata),charging.from_metadata(metadata),public_port.compile_tables(metadata))
+        repeating.from_metadata(metadata),focusing.from_metadata(metadata),charging.from_metadata(metadata),public_port.compile_tables(metadata),
+        infatuation=infatuation.from_metadata(metadata),transform=shift.from_metadata(metadata),
+        forecast=forecasting.from_metadata(metadata))
 
 
 def state_from_pool(pool, team_indices, *, seed=0, table=None) -> BattleState:
@@ -145,8 +153,17 @@ def _set_active(value, state, side, update):
     return value.at[rows, side, state.active[rows, side]].set(update)
 
 
-def _lum_update(state,table,eligible,_status_trace=None,*,_device_public=None):
+def _lum_update(state,table,eligible,_status_trace=None,*,_device_public=None,_infatuation_update=True):
     if _device_public is not None:_device_before=state
+    if _status_trace is not None:
+        from . import engine_status_callbacks as status_callbacks
+        # Infatuation has no owning lifecycle receipt yet. Refuse any live
+        # carried relation before it can activate (even on a pass), be cured,
+        # or end on departure. Fresh applications also refuse at their write.
+        _status_trace=status_callbacks.unknown(_status_trace,jnp.asarray(eligible)
+            & jnp.any((state.volatile&jnp.uint32(ATTRACT))!=0,axis=(1,2)))
+    if table.infatuation is not None and _infatuation_update:
+        state=infatuation.update(state,table.infatuation,eligible=eligible,_device_public=_device_public)
     if table.items is None:
         if _status_trace is not None:return state,_status_trace
         return state
@@ -227,7 +244,8 @@ def _clear_fainted_boosts(state,before_hp,*,eligible):
     Previously dead slots and ineligible rows are not new faint transactions.
     """
     fainted=jnp.asarray(eligible)[:,None,None] & (before_hp>0) & (state.hp<=0)
-    return state._replace(boosts=jnp.where(fainted[...,None],0,state.boosts))
+    state=state._replace(boosts=jnp.where(fainted[...,None],0,state.boosts))
+    return infatuation.clear_fainted(state,eligible=eligible)
 
 
 def _speeds(state,table):
@@ -247,6 +265,37 @@ def _speeds(state,table):
     # faintMessages clears boosts; status/ability handlers no longer run for
     # fainted holders. Their pending instaswitch still has an outgoing speed.
     return jnp.where(state.hp[rows,sides,state.active] > 0,live_speed,stats[...,5])
+
+
+def _forecast(state,table,eligible,*,entered=None,departed=None,weather_since=None,fainted_since=None,weather=None,queue_first=None,
+              _public_trace=None,_lifecycle=False,_device_public=None):
+    """Forecast at one Showdown WeatherChange point (gpu_engine/forecast.py). eligible: [B] rows where the point runs; the
+    event that fires there (one keyword): entered=(before, side), one entry's events (forecast.entry_events);
+    departed=(before, side), a living suppressor's End at its switch-out (it, and that side, stop suppressing);
+    weather_since=before, the field weather changed since `before` (setWeather, clearWeather); fainted_since=hp, a
+    suppressor's End at its faint since `hp`; queue_first names the first side in a potentially double-faint queue.
+    None: every eligible row. weather: the field weather the event sees
+    (default the state's). The device writes each re-formed active's |-formechange|...|[from] ability: Forecast as B2
+    folds it (its live types and the Forecast reveal, device_public.forecast); in lifecycle mode a re-formed row's tape
+    takes an unknown-status refusal. Returns (state, tape)."""
+    if table.forecast is None or table.weather is None:return state,_public_trace
+    rows=jnp.arange(state.hp.shape[0]);sides=jnp.arange(2)[None,:]
+    eligible=jnp.broadcast_to(jnp.asarray(eligible,bool),rows.shape)[:,None]
+    ending=None
+    if entered is not None:eligible=eligible & forecasting.entry_events(entered[0],state,entered[1],table.weather)
+    if departed is not None:
+        ending=jnp.broadcast_to(sides==jnp.asarray(departed[1])[...,None],(rows.shape[0],2))
+        eligible=eligible & forecasting.suppressor_departs(*departed,table.weather)[:,None] & ~ending
+    if weather_since is not None:eligible=eligible & (state.weather!=weather_since.weather)[:,None]
+    if fainted_since is not None:eligible=eligible & forecasting.suppressor_fainted(state,fainted_since,table.weather)[:,None]
+    not_fainted=None if queue_first is None else forecasting.faint_recipients(state,fainted_since,queue_first)
+    state,changed=forecasting.update(state,table.forecast,table.weather,eligible=eligible,weather=weather,ending=ending,
+        not_fainted=not_fainted)
+    if _device_public is not None:device_public.forecast(_device_public,state,changed)
+    if _lifecycle:
+        from . import engine_status_callbacks as _forecast_status
+        _public_trace=_forecast_status.unknown(_public_trace,jnp.any(changed,axis=1))
+    return state,_public_trace
 
 
 def initialize(state,table,*,eligible=True,tie_coin=None,_weather_trace=None,_device_public=None):
@@ -274,12 +323,17 @@ def initialize(state,table,*,eligible=True,tie_coin=None,_weather_trace=None,_de
         # marks the battle's leads, whose stages start at 0, and a lead's own Ability Start never lowers its own stages,
         # so the only drop before the second lead's own trigger is the first lead's Intimidate on it.
         if _device_public is not None:_device_entry_before=state
+        _forecast_before=state
         if _weather_trace is not None:
             state,_,_weather_trace = arrival.enter(state,side,table.entry,eligible=pending,
                 hazards=False,startup=state.turn==0,_weather_trace=_weather_trace)
         else:
             state,_ = arrival.enter(state,side,table.entry,eligible=pending,hazards=False,startup=state.turn==0)
         if _device_public is not None:device_public.entry(_device_public,_device_entry_before,state,side,table.entry,pending)
+        # Forecast: this lead's Ability Start (a Castform's own Forecast Start, a weather ability's setWeather), before its
+        # item Start. An installed but not yet started Cloud Nine / Air Lock lead already suppresses (gpu_engine/forecast.py).
+        state,_weather_trace=_forecast(state,table,pending,entered=(_forecast_before,side),_public_trace=_weather_trace,
+            _lifecycle=_weather_trace is not None,_device_public=_device_public)
         if order == 1:
             # Fidelity WH: the second lead's own White Herb (its onAnySwitchIn, then its item Start), restoring the first
             # lead's Intimidate drop; its own Ability Start never lowers its stages, so after the whole entry is the same state.
@@ -289,7 +343,13 @@ def initialize(state,table,*,eligible=True,tie_coin=None,_weather_trace=None,_de
                 _weather_trace=_herb_status.unknown(_weather_trace,_herb)
         state = state._replace(entry_pending=state.entry_pending.at[rows,side].set(
             state.entry_pending[rows,side] & ~pending))
-    if _weather_trace is not None:return _lum_update(state,table,pending_battle,_device_public=_device_public),_weather_trace
+    if _weather_trace is not None:
+        # Authored pending-entry states may carry a relation that Update cures.
+        # Preserve the conservative refusal before the relation disappears.
+        from . import engine_status_callbacks as status_callbacks
+        _weather_trace=status_callbacks.unknown(_weather_trace,pending_battle
+            & jnp.any((state.volatile&jnp.uint32(ATTRACT))!=0,axis=(1,2)))
+        return _lum_update(state,table,pending_battle,_device_public=_device_public),_weather_trace
     return _lum_update(state,table,pending_battle,_device_public=_device_public)
 
 
@@ -315,7 +375,7 @@ class ChanceInputs(NamedTuple):
     Saved ordinary-turn draws override these during suspended replacements.
     Reused columns remain shared; enumeration must not break that correlation.
     ``effect`` (fidelity patch R, design 2.1) is an appended, independent
-    stream with bounds 16,16,4,2; None means "the value sample_chance_inputs
+    stream with bounds 16,16,4,2,2; None means "the value sample_chance_inputs
     draws", so six-field explicit callers keep their exact trajectories.
     """
     draws: jax.Array               # [B,2,12]
@@ -324,7 +384,7 @@ class ChanceInputs(NamedTuple):
     sleep_talk: jax.Array          # [B,2]
     entry_ties: jax.Array          # [B,2]
     initial_tie: jax.Array         # [B]
-    effect: jax.Array | None = None  # [B,2,4]; appended last, so positional six-field constructors still work
+    effect: jax.Array | None = None  # [B,2,5]; appended last, so positional six-field constructors still work
 
 
 # Fidelity patch R (design 2.1): ChanceInputs.effect is fold_in(step key, EFFECT_SALT), drawn from the same
@@ -335,13 +395,16 @@ class ChanceInputs(NamedTuple):
 # The hand-written CUDA chance kernel (cuda/v2e_ffi.cu) does not draw this field yet: it is deferred to the
 # CUDA option-A work (design 13 item 6), so `v2e_diff chance` and v2e_cuda_check p2 report it as differing.
 EFFECT_SALT = 1732050
-EFFECT_BOUNDS = (16, 16, 4, 2)
+EFFECT_BOUNDS = (16, 16, 4, 2, 2)
+INFATUATION_SALT = 2236067
 
 
 def effect_chance(keys):
     """ChanceInputs.effect from the step's split keys (split(state.keys, 2)[:, 1], as sample_chance_inputs uses)."""
-    return jax.vmap(lambda key:jax.random.randint(jax.random.fold_in(key,EFFECT_SALT),(2,4),0,
-        jnp.array(EFFECT_BOUNDS,jnp.int32)))(keys)
+    old=jax.vmap(lambda key:jax.random.randint(jax.random.fold_in(key,EFFECT_SALT),(2,4),0,
+        jnp.array(EFFECT_BOUNDS[:4],jnp.int32)))(keys)
+    attract=jax.vmap(lambda key:jax.random.randint(jax.random.fold_in(key,INFATUATION_SALT),(2,1),0,2))(keys)
+    return jnp.concatenate((old,attract),axis=-1)
 
 
 def sample_chance_inputs(state: BattleState) -> ChanceInputs:
@@ -535,10 +598,11 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                 raise ValueError('owning birth record and original static weather profile required')
             _weather_hp_record=_weather_observer_context[0]
     batch = state.hp.shape[0]
-    shapes = ((batch,2,12),(batch,2),(batch,2),(batch,2),(batch,2),(batch,),(batch,2,4))
+    shapes = ((batch,2,12),(batch,2),(batch,2),(batch,2),(batch,2),(batch,),(batch,2,5))
     for value,shape in zip(chance_inputs,shapes,strict=True):
-        if value is None and shape == (batch,2,4):continue   # effect omitted: derived from the keys below
-        if value.shape != shape or not jnp.issubdtype(value.dtype,jnp.integer):
+        if value is None and shape == (batch,2,5):continue   # effect omitted: derived from the keys below
+        compatible=(shape==(batch,2,5) and value.shape==(batch,2,4))
+        if (value.shape != shape and not compatible) or not jnp.issubdtype(value.dtype,jnp.integer):
             raise ValueError('chance inputs must have declared integer batch shapes')
     if actions.shape != state.active.shape or not jnp.issubdtype(actions.dtype, jnp.integer):
         raise ValueError("actions must be integer [B,2]")
@@ -579,6 +643,10 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
     # sample_chance_inputs draws from these keys; a resumed suspended turn replays its saved block.
     effect_draws=chance_inputs.effect
     if effect_draws is None:effect_draws=effect_chance(splits[:,1])
+    elif effect_draws.shape[-1]==4:
+        # Legacy explicit callers did not bind infatuation. Keep their four
+        # coordinates and use the independent sampled column for the new gate.
+        effect_draws=jnp.concatenate((effect_draws,effect_chance(splits[:,1])[...,4:]),axis=-1)
     effect_draws=jnp.where(resuming[:,None,None],state.effect_draws,effect_draws)
     # Replacement requests do not consume another ordinary-turn chance block.
     # A separate counted fold-in distinguishes repeated hazard-KO entry ties.
@@ -709,6 +777,10 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                 device_public.item_changes(_device_public,_device_pursuit_before,work,used)
             pursuit_used = pursuit_used.at[:,side].set(used)
             pursuit_faint |= fainted
+    # Forecast: a Pursuit KO of a switching Cloud Nine / Air Lock holder runs its End at that faint (no earlier faint in the
+    # step: the step's own HP is the baseline). Its switch then installs with no second End (switchIn's unfaintedActive).
+    work,_public_trace=_forecast(work,table,live,fainted_since=state.hp,_public_trace=_public_trace,_lifecycle=_lifecycle_trace,
+        _device_public=_device_public)
     bench = bench_indices(state.active)
     target = jnp.take_along_axis(bench, jnp.clip(actions - 4, 0, 4)[..., None], axis=2)[..., 0]
     switch_coin = jnp.where(resuming,entry_ties[:,0],draws[:,0,11])
@@ -753,12 +825,17 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
             _device_depart_before=work
             _device_baton=work.baton_pass[rows,side]
             device_public.switch_decision(_device_public,work,side,do_switch & ~replacement,baton=_device_baton)
+        _forecast_before=work
         work=arrival.depart(work,side,table.entry,eligible=do_switch)
         if _device_public is not None:device_public.depart(_device_public,_device_depart_before,work,side,table.entry,do_switch)
         if _lifecycle_trace:
             _public_trace=natural_cure_callbacks.finish(_public_trace,_natural_cure_pending,work)
         if _lifecycle_trace:
             _public_trace=_flash_end.finish(_public_trace,_flash_pending,work)
+        # Forecast: a living Cloud Nine / Air Lock holder's End at this switch-out (its current ability, a Trace copy too),
+        # before the incoming mon is installed: neither suppresses for this event.
+        work,_public_trace=_forecast(work,table,do_switch,departed=(_forecast_before,side),_public_trace=_public_trace,
+            _lifecycle=_lifecycle_trace,_device_public=_device_public)
         work = work._replace(active=work.active.at[rows,side].set(jnp.where(do_switch,target[rows,side],old_active)),
             baton_pass=work.baton_pass.at[rows,side].set(work.baton_pass[rows,side] & ~do_switch),
             forced_switch=work.forced_switch.at[rows,side].set(jnp.where(do_switch,False,work.forced_switch[rows,side])),
@@ -783,6 +860,7 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
             if _lifecycle_trace:_public_trace=status_callbacks.unknown(_public_trace,_herb)
             if _device_public is not None:_device_entry_before=work
             _faint_before_hp=work.hp
+            _forecast_before=work
             if _lifecycle_trace:
                 work,knocked_out,_public_trace = arrival.enter(work,side,table.entry,
                     eligible=do_switch & ~replacement,_weather_trace=_public_trace)
@@ -790,6 +868,9 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                 work,knocked_out = arrival.enter(work,side,table.entry,eligible=do_switch & ~replacement)
             if _device_public is not None:device_public.entry(_device_public,_device_entry_before,work,side,table.entry,do_switch & ~replacement)
             work=_clear_fainted_boosts(work,_faint_before_hp,eligible=do_switch & ~replacement)
+            # Forecast: this entry's events (the entrant's own Forecast Start, a weather its Start set, a suppressor's hazard faint).
+            work,_public_trace=_forecast(work,table,do_switch & ~replacement,entered=(_forecast_before,side),
+                _public_trace=_public_trace,_lifecycle=_lifecycle_trace,_device_public=_device_public)
             # Fidelity WH: no trigger for this entrant's own White Herb: an ordinary switch-in arrives with every stage 0
             # (every stage write is at an active, and each departure, drag included, zeroes the leaver's: entry.depart;
             # faints: _clear_fainted_boosts). Baton Pass, the one stage carrier, sets forced_switch at the end of its step,
@@ -816,6 +897,7 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
             if _lifecycle_trace:_public_trace=status_callbacks.unknown(_public_trace,_herb)
             if _device_public is not None:_device_entry_before=work
             _faint_before_hp=work.hp
+            _forecast_before=work
             if _lifecycle_trace:
                 work,knocked_out,_public_trace = arrival.enter(work,side,table.entry,
                     eligible=eligible,_weather_trace=_public_trace)
@@ -823,6 +905,10 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                 work,knocked_out = arrival.enter(work,side,table.entry,eligible=eligible)
             if _device_public is not None:device_public.entry(_device_public,_device_entry_before,work,side,table.entry,eligible)
             work=_clear_fainted_boosts(work,_faint_before_hp,eligible=eligible)
+            # Forecast: this callback's events. Every entrant is installed first, so an entering Cloud Nine / Air Lock holder
+            # suppresses before its own Start and its hazard faint (End) re-forms an already started Castform.
+            work,_public_trace=_forecast(work,table,eligible,entered=(_forecast_before,side),_public_trace=_public_trace,
+                _lifecycle=_lifecycle_trace,_device_public=_device_public)
             work,_herb=_white_herb(work,table,side,eligible,_device_public=_device_public)
             if _lifecycle_trace:_public_trace=status_callbacks.unknown(_public_trace,_herb)
             # A hazard KO cancels subsequent queued runSwitch callbacks too.
@@ -918,7 +1004,9 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
             _active(work.confusion_counter, work, side), thaw_roll=chance[:, 1],
             paralysis_roll=chance[:, 2], confusion_roll=chance[:, 3],
             flinched=(_active(work.volatile, work, side) & FLINCH) != 0,
-            sleep_usable=sleep_usable,early_bird=early_bird,loafing=loafing,defrost_move=_defrost)
+            sleep_usable=sleep_usable,early_bird=early_bird,loafing=loafing,defrost_move=_defrost,
+            infatuated=((_active(work.volatile,work,side)&jnp.uint32(ATTRACT))!=0)
+                & (_active(work.hp,work,foe)>0),attract_roll=effect_draws[rows,side,4])
         if _lifecycle_trace and table.effects is not None:
             _public_trace=status_callbacks.unknown(_public_trace,eligible & _defrost & (_active(work.status,work,side)==m.FRZ))
         if _device_public is not None:device_public.before_move(_device_public,work,side,before,eligible,loafing=loafing,sleep_usable=sleep_usable)
@@ -956,18 +1044,24 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                 _active(work.item,work,side),_active(work.species,work,side),jnp.ones_like(eligible))
         guts = jnp.zeros_like(eligible)
         hustle = jnp.zeros_like(eligible)
+        confusion_defense_num,confusion_defense_den = (1,1)
         if table.combat is not None:
             ability = _active(work.ability,work,side)
             guts = table.combat.guts[ability]
             hustle = table.combat.hustle[ability]
             confusion_num,confusion_den = traits.attack_modifier(table.combat,ability,
                 _active(work.status,work,side),True,item_num=confusion_num,item_den=confusion_den)
+            # Damage modifiers: the self-hit is getDamage(pokemon, pokemon, 40), so a statused Marvel Scale holder's own
+            # ModifyDef applies (combat.defense_modifier); the typeless move takes no type item.
+            confusion_defense_num,confusion_defense_den = traits.defense_modifier(table.combat,ability,
+                _active(work.status,work,side),True)
         confusion_damage = m.gen3_damage(level=_active(work.level, work, side), power=40,
             attack=own_stats[:, 1], defense=own_stats[:, 2],
             attack_stage=own_boosts[:, 0], defense_stage=own_boosts[:, 1],
             typeless=True, burned=_active(work.status, work, side) == m.BRN,
             guts=guts,hustle=hustle,
             attack_num=confusion_num,attack_den=confusion_den,
+            defense_num=confusion_defense_num,defense_den=confusion_defense_den,
             roll=85 + chance[:, 5])
         hp = _active(work.hp, work, side)
         if _lifecycle_trace:
@@ -1096,20 +1190,27 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
             _facade_power=power
             power=variable.facade_power(table.variable_moves,move,power,_active(work.status,work,side))
             if _lifecycle_trace:_public_trace=status_callbacks.unknown(_public_trace,acts & (power!=_facade_power))
+        # Struggle's ??? (gen4 struggle onModifyMove) is resolved before the stat events: no type item matches it.
+        is_struggle = move == table.struggle
+        typ = jnp.where(is_struggle, 0, typ)
         attack_num,attack_den = (1,1)
         if table.items is not None:
+            # Damage modifiers: Silk Scarf's Atk factor reads the resolved type (items.attack_modifier).
             attack_num,attack_den = held.attack_modifier(table.items,
-                _active(work.item,work,side),_active(work.species,work,side),physical)
+                _active(work.item,work,side),_active(work.species,work,side),physical,move_type=typ)
         defense_num,defense_den = (1,1)
         if table.items is not None:
             defense_num,defense_den = held.defense_modifier(table.items,
                 _active(work.item,work,foe),_active(work.species,work,foe),physical)
         if table.combat is not None:
             hustle = table.combat.hustle[_active(work.ability,work,side)]
+            # Damage modifiers: the ability and item chain in Q12; Gen 3's Plus/Minus read the foe active (combat.attack_modifier).
             attack_num,attack_den = traits.attack_modifier(table.combat,_active(work.ability,work,side),
-                _active(work.status,work,side),physical,item_num=attack_num,item_den=attack_den)
-        is_struggle = move == table.struggle
-        typ = jnp.where(is_struggle, 0, typ)
+                _active(work.status,work,side),physical,item_num=attack_num,item_den=attack_den,
+                foe_ability=_active(work.ability,work,foe),foe_hp=_active(work.hp,work,foe))
+            # Damage modifiers: the target's Marvel Scale (combat.defense_modifier), chained after its item's Def/SpD factor.
+            defense_num,defense_den = traits.defense_modifier(table.combat,_active(work.ability,work,foe),
+                _active(work.status,work,foe),physical,item_num=defense_num,item_den=defense_den)
         own_types = _active(work.types, work, side)
         foe_types = _active(work.types, work, foe)
         num = table.type_num[typ, foe_types[:, 0]] * table.type_num[typ, foe_types[:, 1]]
@@ -1146,7 +1247,9 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                     _active(work.ability,work,side),typ,_active(work.hp,work,side),_active(work.max_hp,work,side)))
         critical = chance[:,4] == 0
         if table.critical is not None:
-            critical = crits.is_critical(table.critical,move,_active(work.ability,work,foe),chance[:,4])
+            # Stick: the attacker's ModifyCritRatio +2 when a Farfetch'd holds it (critical.ratio; 1/4 is roll < 4).
+            critical = crits.is_critical(table.critical,move,_active(work.ability,work,foe),chance[:,4],
+                item=_active(work.item,work,side),species=_active(work.species,work,side))
         damage = m.gen3_damage(level=_active(work.level, work, side), power=power,
             attack=jnp.where(physical, attack_stats[:, 1], attack_stats[:, 3]),
             defense=jnp.where(physical, defense_stats[:, 2], defense_stats[:, 4]),
@@ -1176,7 +1279,8 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
         _effect=effect_draws[rows,side]
         critical2=_effect[:,0]==0
         if table.critical is not None:
-            critical2=crits.is_critical(table.critical,move,_active(work.ability,work,foe),_effect[:,0])
+            critical2=crits.is_critical(table.critical,move,_active(work.ability,work,foe),_effect[:,0],
+                item=_active(work.item,work,side),species=_active(work.species,work,side))
         damage2=m.gen3_damage(level=_active(work.level, work, side), power=power,
             attack=jnp.where(physical, attack_stats[:, 1], attack_stats[:, 3]),
             defense=jnp.where(physical, defense_stats[:, 2], defense_stats[:, 4]),
@@ -1771,6 +1875,17 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                 if _device_public is not None:
                     device_public.trick(_device_public,_device_trick_before,_trick_swapped,side,_trick,table.items.choice_band,
                         herb_used=_herb)
+            if table.transform is not None:
+                # Transform (data/moves.ts transform, sim/pokemon.ts transformInto; gpu_engine/transform.py): accuracy true and
+                # no protect flag, so `hit` holds; bypasssub, so no Substitute gate; a Status move ignores type immunity. `move`
+                # is the post-Sleep-Talk move, so a called Transform is covered. PP (Pressure included) was paid above, before
+                # the saves; the Choice lock site below locks on `transform`, as Showdown does.
+                _transform_used=acts & hit & table.transform.move[move]
+                if _device_public is not None:_device_transform_before=work
+                work,_transform_copied=shift.apply(work,side,_transform_used,table.transform)
+                if _lifecycle_trace:_public_trace=status_callbacks.unknown(_public_trace,_transform_used)
+                if _device_public is not None:
+                    device_public.transform(_device_public,_device_transform_before,work,side,_transform_copied)
             # Charm's primary boosts (moveHit after TryHit): Protect is already in `hit`; a
             # Substitute fails it (TryPrimaryHit); status moves ignore type immunity
             # (tryMoveHit sets ignoreImmunity for Status). The drop is capped first, then
@@ -1786,6 +1901,14 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
             if _device_public is not None:
                 device_public.reveal_ability(_device_public,work,foe,_drop_lands
                     & jnp.any(_drop_blocked & (jnp.clip(_drop_old+_drop,-6,6)!=_drop_old),axis=1))
+            if table.infatuation is not None:
+                # Status moves ignore type immunity; Attract has bypasssub.
+                work,_attracted=infatuation.apply(work,foe,table.infatuation,
+                    eligible=acts & hit & table.infatuation.attract[move])
+                # Failed attempts print -immune/-fail too; no owning receipt
+                # exists for those events, so success is not the refusal gate.
+                if _lifecycle_trace:_public_trace=status_callbacks.unknown(_public_trace,
+                    acts & table.infatuation.attract[move])
             # Destiny Bond: volatileStatus destinybond with -singlemove (accuracy true, targets the
             # user, bypasses a Substitute; Gen 3 reuse never fails).
             _bond=acts & effects.destinybond[move]
@@ -2097,12 +2220,12 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                     _rough_skin_capture=(kernel_risks.CapturedDirectHit(_direct_hit_context,_direct_ticket,side,
                         work.active[rows,side],work.active[rows,foe],move,_direct_write)
                         if _direct_hit_context is not None and _direct_hit_registered else None),_device_public=_device_public,
-                    sleep_roll=effect_draws[rows,side,2])
+                    sleep_roll=effect_draws[rows,side,2],infatuation_table=table.infatuation)
             else:
                 # Fidelity tier D: an Effect Spore sleep lasts 2+effect[s][2], the attacker's column (secondary.apply_contact).
                 work = secondaries.apply_contact(work,side,move,phazing_draws[rows,side],table.secondary,
                     eligible=acts & hit & (dealt>0) & ~hits_sub,item_table=table.items,_device_public=_device_public,
-                    sleep_roll=effect_draws[rows,side,2])
+                    sleep_roll=effect_draws[rows,side,2],infatuation_table=table.infatuation)
         if table.secondary is not None:
             if _lifecycle_trace:
                 work,_public_trace=secondaries.apply_color_change(work,side,typ,table.secondary,
@@ -2111,8 +2234,8 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
             else:
                 work=secondaries.apply_color_change(work,side,typ,table.secondary,
                     eligible=acts & hit & (dealt>0) & ~hits_sub,_device_public=_device_public)
-        if _lifecycle_trace:work,_public_trace=_lum_update(work,table,live & move_context,_public_trace,_device_public=_device_public)
-        else:work = _lum_update(work,table,live & move_context,_device_public=_device_public)
+        if _lifecycle_trace:work,_public_trace=_lum_update(work,table,live & move_context,_public_trace,_device_public=_device_public,_infatuation_update=False)
+        else:work = _lum_update(work,table,live & move_context,_device_public=_device_public,_infatuation_update=False)
         # Gen3 applies contact DamagingHit (and immediate Lum cure) before
         # recoil. A source about to faint can still consume its berry first.
         if _recoil_context is not None:
@@ -2132,6 +2255,10 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
             _public_trace=recoil_callbacks.record_device(_public_trace,_recoil_pending,recoil_callbacks.Write(
                 _recoil_before.actor_physical,_recoil_before.target_physical,_recoil_before.ability,
                 _recoil_before.old_hp,_active(work.hp,work,side),_recoil_before.maximum,_recoil_before.status))
+        if table.infatuation is not None:
+            # Gen3 tryMoveHit Update follows recoil. A recoil KO cannot use
+            # Mental Herb, unlike a Lum consumed immediately by a status event.
+            work=infatuation.update(work,table.infatuation,eligible=live & move_context,_device_public=_device_public)
         # Fidelity WH: the move's runMove reached AfterMove (it passed BeforeMove and PP: caller_acts, a miss, a failure or a
         # charge turn included), so every active White Herb holder's onAnyAfterMove runs (sim/battle-actions.ts:311-312),
         # after all of the move's effects (recoil included) and before runMove's faintMessages: a holder at 0 HP cannot
@@ -2150,6 +2277,7 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
         if _device_public is not None:device_public.observe(_device_public,work,_bond_trigger,record_damage=False)
         if _device_public is not None:_device_weather_before=work
         if table.weather is not None:
+            _forecast_before=work
             if _lifecycle_trace:
                 weather,counter,_public_trace = climate.set_move(work.weather,work.weather_counter,
                     table.weather.move_weather[move],eligible=acts,_weather_trace=_public_trace,
@@ -2159,6 +2287,10 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                     table.weather.move_weather[move],eligible=acts)
             work = work._replace(weather=weather,weather_counter=counter)
             if _device_public is not None:device_public.weather(_device_public,_device_weather_before,work,acts,side=side)
+            # Forecast: setWeather's eachEvent('WeatherChange') on both actives, mid-action: the foe's later move this
+            # step meets the new forme. A same-weather move fails without the event (no change).
+            work,_public_trace=_forecast(work,table,acts,weather_since=_forecast_before,_public_trace=_public_trace,
+                _lifecycle=_lifecycle_trace,_device_public=_device_public)
         if table.entry is not None:
             old_layers = work.spikes[rows,foe]
             if _spikes_context is not None:
@@ -2196,6 +2328,7 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
             device_public.public_move_state(_device_public,_device_move_before,work,side,move,caller_acts)
             _device_drag_before=work
         if table.phazing is not None:
+            _forecast_before=work
             _whirlwind_pending=None
             if _lifecycle_trace and _direct_hit_registered and _direct_hit_context.data.whirlwind is not None:
                 from . import engine_whirlwind_callbacks as whirlwind_callbacks
@@ -2208,6 +2341,12 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                 work,changed,hazard_ko=dragging.drag(work,foe,move,phazing_draws[rows,side],
                     table.phazing,table.entry,eligible=acts & hit & (hp>0))
             if _device_public is not None:device_public.drag(_device_public,_device_drag_before,work,foe,table.entry,changed)
+            # Forecast, in Showdown's order: a dragged-out living Cloud Nine / Air Lock holder's End (before the entrant is
+            # installed: the pre-drag weather, no suppressor on that side), then the entrant's runSwitch events.
+            work,_public_trace=_forecast(work,table,changed,departed=(_forecast_before,foe),weather=_forecast_before.weather,
+                _public_trace=_public_trace,_lifecycle=_lifecycle_trace,_device_public=_device_public)
+            work,_public_trace=_forecast(work,table,changed,entered=(_forecast_before,foe),_public_trace=_public_trace,
+                _lifecycle=_lifecycle_trace,_device_public=_device_public)
             displaced=displaced.at[rows,foe].set(displaced[rows,foe] | changed)
             moves_cancelled |= hazard_ko
             if _lifecycle_trace:work,_public_trace=_lum_update(work,table,changed,_public_trace,_device_public=_device_public)
@@ -2236,7 +2375,20 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
             paused |= passed
         # All move effects, including self-KO/recoil and forced-entry hazards,
         # finish before the original runAction faint queue is processed.
+        # Forecast runs at this queue's suppressor End. A target KO precedes recoil/Destiny Bond; Explosion instead
+        # queues the actor first. The second queued mon is still active even at zero HP (getAllActive checks fainted).
+        work,_public_trace=_forecast(work,table,live & move_context,fainted_since=_faint_before_hp,
+            queue_first=jnp.where(explodes,side,foe),_public_trace=_public_trace,
+            _lifecycle=_lifecycle_trace,_device_public=_device_public)
         work=_clear_fainted_boosts(work,_faint_before_hp,eligible=live & move_context)
+        if table.transform is not None and table.effects is not None:
+            # Gen < 5 eachEvent('Update') after the action (sim/battle.ts:2938): a copied curing ability or Own Tempo acts now.
+            work,_transform_cured,_transform_unconfused=shift.update_cure(work,side,_transform_copied,table.entry)
+            if _lifecycle_trace:_public_trace=status_callbacks.unknown(_public_trace,_transform_cured|_transform_unconfused)
+            if _device_public is not None:
+                # -activate|X|ability: ... (B2 ignores a transformed mon's ability claim), then -curestatus or -end confusion.
+                device_public.observe(_device_public,work,_transform_cured)
+                device_public.confusion_end(_device_public,work,side,_transform_unconfused)
     # Gen 3 action-phase faints request replacement BEFORE the residual action.
     # A KO cancels queued moves; direct Baton retains at most one selected foe
     # move. Both pause residuals, including hazard-KO recovery chains.
@@ -2303,12 +2455,16 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                 _public_trace,_wish_tick_capture=self_move_callbacks.finish(_public_trace,_wish_tick_pending,work)
     if table.weather is not None:
         ordinary = residual_ready & jnp.all(jnp.any(work.hp > 0,axis=2),axis=1)
+        _forecast_before=work
         if _lifecycle_trace:
             weather,counter,_public_trace = climate.residual_clock(work.weather,work.weather_counter,
                 eligible=ordinary,_weather_trace=_public_trace)
         else:
             weather,counter = climate.residual_clock(work.weather,work.weather_counter,eligible=ordinary)
         work = work._replace(weather=weather,weather_counter=counter)
+        # Forecast: clearWeather's eachEvent('WeatherChange') when the clock ends the weather (no chip follows then).
+        work,_public_trace=_forecast(work,table,ordinary,weather_since=_forecast_before,_public_trace=_public_trace,
+            _lifecycle=_lifecycle_trace,_device_public=_device_public)
         active_abilities = work.ability[rows[:,None],sides,work.active]
         active_hp = work.hp[rows[:,None],sides,work.active]
         effective_weather = climate.effective(table.weather,weather,active_abilities,active_hp)
@@ -2686,6 +2842,11 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
             if table.encore is not None:
                 work=work._replace(encore_move=_set_active(work.encore_move,work,side,
                     jnp.where(_active(work.encore_counter,work,side)>0,_active(work.encore_move,work,side),0)))
+        # fieldEvent runs faintMessages after EACH callback. Preserve a Forecast reveal even when Castform faints in
+        # a later callback, and latch its lifecycle refusal before later residual handlers qualify their writes.
+        if order in residual_order.POSITIONS['seed'] | residual_order.POSITIONS['status'] | residual_order.POSITIONS['wrap']:
+            work,_public_trace=_forecast(work,table,eligible,fainted_since=_faint_before_hp,_public_trace=_public_trace,
+                _lifecycle=_lifecycle_trace,_device_public=_device_public)
         work=_clear_fainted_boosts(work,_faint_before_hp,eligible=eligible)
     # Fidelity M2 (design 2.3): Perish Song's residual (data/mods/gen4/moves.ts:993-999, order 12), after the order-10
     # list. Faster first; an equal-Speed pair takes effect[1][3] (that side first). The duration falls; at 0 its onEnd
@@ -2698,6 +2859,7 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
         _upkeep_count=work.perish_counter[rows[:,None],sides,work.active]
     _perish_continues=residual_ready & jnp.all(jnp.any(work.hp>0,axis=2),axis=1)
     _perish_first=jnp.where(end_speed[:,0]!=end_speed[:,1],(end_speed[:,1]>end_speed[:,0]).astype(jnp.int32),effect_draws[:,1,3])
+    _forecast_perish_hp=work.hp
     for order in range(2):
         side=jnp.where(order==0,_perish_first,1-_perish_first)
         _faint_before_hp=work.hp
@@ -2721,6 +2883,10 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
     _herb_residual=residual_ready & jnp.all(jnp.any(work.hp>0,axis=2),axis=1)
     work,_herb=_white_herb_pair(work,table,0,_herb_residual,_device_public=_device_public)
     if _lifecycle_trace:_public_trace=status_callbacks.unknown(_public_trace,jnp.any(_herb,axis=1))
+    # Perish's duration-end callbacks both queue before faintMessages; the later queued recipient remains active at
+    # the earlier suppressor's End, even if its HP is already zero. The next ordinary callback flushes the queue.
+    work,_public_trace=_forecast(work,table,_perish_continues,fainted_since=_forecast_perish_hp,queue_first=_perish_first,
+        _public_trace=_public_trace,_lifecycle=_lifecycle_trace,_device_public=_device_public)
     # Fidelity M1 (design 2.3): mustrecharge has a duration and no residual handler, so the Residual event
     # still decrements it, last (order false sorts after every numbered handler, sim/battle.ts). At 0 it ends
     # silently: a recharge action cancelled by a Gen 3 faint expires here. Fainted holders are cleared below;
@@ -2729,6 +2895,7 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
     work=work._replace(recharge_counter=jnp.where(_recharge_tick[:,None,None] & (work.recharge_counter>0),
         work.recharge_counter-1,work.recharge_counter))
     work=linking.prune(work)
+    work=infatuation.clear_fainted(work,eligible=live)
     work=work._replace(volatile=jnp.where(work.hp>0,work.volatile,
         work.volatile & jnp.uint32(~(FOCUS_PUNCH|FOCUS_LOST)&0xffffffff)))
     work=work._replace(**{name:jnp.where(work.hp>0,getattr(work,name),0)
@@ -2748,6 +2915,9 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
     # until that target's next residual tick releases it silently (data/mods/gen5/conditions.ts:14-20).
     work=work._replace(**{name:jnp.where(work.hp>0,getattr(work,name),0) for name in ("perish_counter","yawn_counter","partial_trap_counter")},
         partial_trap_source=jnp.where(work.hp>0,work.partial_trap_source,-1))
+    # Transform: and the copy of a transformed active (transform.faint_revert, gated on the flag), so the replacement's
+    # outgoing Speed (_speeds) and every step boundary see its original, as in Showdown.
+    if table.transform is not None:work=shift.faint_revert(work)
     alive = jnp.any(work.hp > 0, axis=2)
     done = ~jnp.all(alive, axis=1)
     winner = jnp.where(alive[:, 0], 0, jnp.where(alive[:, 1], 1, 2))
@@ -2803,6 +2973,9 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
         _end_turn=~work.done & ~work.pending_residual & ~jnp.any(work.forced_switch,axis=1)
         work=work._replace(choice_move=jnp.where(_end_turn[:,None,None] & ~table.items.choice_band[work.item],
             0,work.choice_move))
+    if table.transform is not None:
+        # The same DisableMove drops a transformed holder's lock on a move it no longer has (transform.choice_unlock).
+        work=shift.choice_unlock(work,~work.done & ~work.pending_residual & ~jnp.any(work.forced_switch,axis=1))
     work = jax.tree.map(lambda old, new: jnp.where(live.reshape((-1,) + (1,) * (old.ndim - 1)), new, old), state, work)
     if _device_public is not None:
         device_public.turn_end(_device_public,state,work,ordinary,upkeep=residual_ready & (~work.done | _upkeep_perish_end),

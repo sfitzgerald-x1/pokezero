@@ -21,10 +21,10 @@ from .finite_law import Axis, COORDINATES, DRAW_BOUNDS, EFFECT_BOUNDS, Cardinali
 
 # Complete transition-domain proof, including the copy/zero assignments in
 # transition.step_with_chance (the four saved blocks and, since §6, the effect
-# block at :2770-2771). A numeric representative alone is not proof.
-DOMAIN_SHA256 = '4c7128e52d03448ca73a1304df960ab4df82fd753ad2a708bdd2aef81b92d860'
+# block at :2940-2941). A numeric representative alone is not proof.
+DOMAIN_SHA256 = 'ee4bb86c03725b47f9a559daf5ce58bba27741c7a7e961978dc152a91473a08c'
 # Filled only after reviewed implementation stabilizes; drift must refuse.
-MAPPING_PINS = {'carry_law.py': '19bb86991bc09212a46d849bdd3d7629044512c1d8b78f0e79487ddeae45237e', 'chance_consumers.py': '89134c791d761e49cc2d4ea4e6ae7ef90bf6dd153f774cffa02b74899c565acf', 'conditioned_future.py': '95e86f5a019850cea2507305221754fde2fb9456e15a2c6f5cf21d9ea624ffbd', 'fidelity_panel.py': '728c1d14c3cc5e95de63d6d3770d143263d58c0d5d7dec8a444b64c5b829099f', 'finite_law.py': '49c5f0060683814ba182028e4ab54669314aa40e032b2dabee7d71338062e141', 'future_state.py': '57d76476704b138bc8463123ed2cf2d52feb70f7ed38098c5e1ba592c259d940'}
+MAPPING_PINS = {'carry_law.py': '19bb86991bc09212a46d849bdd3d7629044512c1d8b78f0e79487ddeae45237e', 'chance_consumers.py': 'f4fc1c0b135762ab683026cfc481ddad6e767dcb740379a69e2e26dd8f151e6a', 'conditioned_future.py': '6aaff1975525bd64178db5c78a938e61ac78a785a9dedbaf5936b017cdd33b43', 'fidelity_panel.py': '728c1d14c3cc5e95de63d6d3770d143263d58c0d5d7dec8a444b64c5b829099f', 'finite_law.py': '14aabd57a444e7297485f648dfb2ae2bb7bad607964683828870f5cc4d07a3bd', 'future_state.py': 'a0b0da922c5d03fcab83ffcdd008d0563b398256530724d065984b9d1a7cf416'}
 NATIVE_BANK = tuple([(f'residual_draws.{s}.{i}', f'draws.{s}.{i}', bound)
     for s in range(2) for i,bound in enumerate(DRAW_BOUNDS)]
     + [(f'{field}_draws.{s}', f'{field}.{s}', bound)
@@ -32,7 +32,8 @@ NATIVE_BANK = tuple([(f'residual_draws.{s}.{i}', f'draws.{s}.{i}', bound)
 # §6: the saved effect block (fidelity R) is the bank's last rows. It is JAX-only: the native wire (CAPSULE_FIELDS, the
 # ordinary-step chance and bank) has no effect stream, so a native output takes it by the engine's save rule.
 EFFECT_BANK = tuple((f'{conditioned_future.SAVED_BLOCK}.{s}.{c}', f'effect.{s}.{c}', bound)
-    for s in range(2) for c,bound in enumerate(EFFECT_BOUNDS))
+    for s in range(2) for c,bound in enumerate(EFFECT_BOUNDS[:4])) + tuple(
+        (f'{conditioned_future.SAVED_BLOCK}.{s}.4',f'effect.{s}.4',2) for s in range(2))
 BANK = NATIVE_BANK + EFFECT_BANK
 SPACE = algebra.OutputSpace(tuple((name,bound) for name,_,bound in BANK))
 BANK_FIELDS = {'residual_draws','phazing_draws','secondary_draws','sleep_talk_draws',conditioned_future.SAVED_BLOCK}
@@ -157,7 +158,7 @@ def _native_output(branch,certificate,values):
     native_capsule=branch['capsule']
     if type(native_capsule) is not dict or conditioned_future.SAVED_BLOCK in native_capsule:
         raise ValueError('ORDINARY_CAPSULE_FIELDS')
-    # The engine's save rule (transition.py:2770-2771): a suspended successor saves the case's effect block, any other
+    # The engine's save rule (transition.py:2795-2796): a suspended successor saves the case's effect block, any other
     # carries 0. The native engine draws no effect stream, so its output takes the block by that rule.
     pending=native_capsule.get('pending_residual') is True
     effect=chance_fields(values)['effect']

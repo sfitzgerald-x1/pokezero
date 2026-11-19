@@ -17,14 +17,15 @@ escalated.
 
 Enumeration (`EFFECTS`, `REPRESENTED`, `NOT_IN_POOL`; every row cites file:line at this tree and at the pinned Showdown f76228a).
 The pool is the set source the constructor reads: pokezero.randbat.load_gen3_randbat_source_cached(showdown_root) loads
-data/random-battles/gen3/sets.json (gpu_engine/phase_d_protocol_constructor.py:175). Its 220 species hold 125 moves; the
+data/random-battles/gen3/sets.json (gpu_engine/phase_d_protocol_constructor.py:222). Its 220 species hold 125 moves; the
 pool_species of each row are the species with a set listing the move. With --showdown-root that file is re-read and every row's
 pool membership is checked against it (pool_check; a mismatch is reported, never silently accepted).
 - Audited (in the pool, not represented): recharge (Hyper Beam), partial_trap (Wrap), perish_count (Perish Song), drowsy (Yawn),
   destiny_bond (Destiny Bond), transform (Transform), trick_lock (Trick: its user always holds Choice Band, so the target ends up
   choice-locked). recharge, partial_trap and transform are also LOCK-class at gpu_engine/engine_request_source.py:380.
   engine_since: destiny_bond 286a5ffe (A2); recharge and trick_lock 8b212312 (M1); partial_trap, perish_count and drowsy f3e71663 (M2 + R1);
-  transform none.
+  transform none yet: in-tree from the Transform PR (gpu_engine/transform.py), its engine_since is that PR's merge, set with the
+  guard change that follows it (tests/_engine_since.py), so until then it is counted unrepresented, as the guard's tier A keeps it.
 - Not in the pool (zero by construction): the locked-move family (Outrage, Thrash, Petal Dance), Uproar, Rollout, Ice Ball, Bide,
   Rage, the two-turn moves other than Solar Beam (Fly, Dig, Dive, Bounce, Skull Bash, Razor Wind, Sky Attack), the other partial
   traps, Future Sight / Doom Desire, Taunt / Disable / Torment.
@@ -42,7 +43,7 @@ whose replay.status is COMPLETE (root logits and legal mask and every world's gr
   over its enumerated slots (depthn_backups._softmax over t1_own_actions / t1_opp_actions; learner_max averages exactly that
   opponent prior, and the learner's is its prior under the `average` rule). The lane -> move map is read from the turn-1 child state
   (the encoder's: lane i is the active's move slot i, lane 0 the charge move while one charges and Struggle when no move is usable,
-  engine_device_observation.py:290-302). The replay rows hold none of this: `capture` records it (below), and the report joins it by
+  engine_device_observation.py:346-368). The replay rows hold none of this: `capture` records it (below), and the report joins it by
   (ordinal, decision_index). Where a priced root has no turn-2 record the proxy (b1) stands in and the decision is PROVISIONAL.
   (b1) turn-1 mass, the proxy: our root prior (softmax of root.root_logits over root.root_legal) or some world's peer prior
   (softmax of worlds[w].root_peer_logits over worlds[w].kept, the replies turn 1 enumerated: the mass learner_max averages at the
@@ -60,7 +61,7 @@ whose replay.status is COMPLETE (root logits and legal mask and every world's gr
   (carried_effects' marker rules: -mustrecharge, -activate ... move: Wrap, -start ... perishN, -start ... move: Yawn, -singlemove
   ... Destiny Bond, -transform, -item ... Choice Band [from] move: Trick; a switch, drag or faint of that side clears it, as do the
   end markers). The constructor refuses roots after a Transform (phase_d_live_worlds.py:282-283) or a public item swap
-  (phase_d_protocol_world.py:132-134), so their (d) among priced roots should be zero. Since #1949 roots holding an opponent's
+  (phase_d_protocol_world.py:150-152), so their (d) among priced roots should be zero. Since #1949 roots holding an opponent's
   recharge, a Destiny Bond, a drowsy or a perish count are built with that state, and since the trap walls roots holding a partial
   trap (with a drawn duration) are too (their rows' live-root evidence), so their (d) among priced roots can be nonzero; the
   owner's own recharge turn stays single-legal.
@@ -140,12 +141,12 @@ EFFECTS = (
         ('Showdown data/moves.ts:9108-9119: Hyper Beam has flags.recharge and self.volatileStatus mustrecharge',
          'Showdown data/conditions.ts:364-378: mustrecharge cancels the next move (onBeforeMovePriority 11) and is onLockMove recharge; '
          'sim/pokemon.ts:1085-1088: a locked move sets trapped, so the recharge turn has no switch',
-         'in-tree since M1 (8b212312): gpu_engine/state.py:87 recharge_counter; transition.py:882-887 the recharge turn',
-         'live roots: since #1949 an opponent that must recharge is built with its counter (gpu_engine/constructor_worlds.py:887 '
-         'fix_recharge; the pre-M1 OPPONENT_RECHARGE_UNREPRESENTED name, constructor_worlds.py:487, is kept for old rows); the owner\'s recharge turn is single-legal (the phase-D '
-         'mapper refuses a live mustrecharge too: future_state.py:476, RECHARGE_UNREPRESENTED)'),
+         'in-tree since M1 (8b212312): gpu_engine/state.py:88 recharge_counter; transition.py:968-973 the recharge turn',
+         'live roots: since #1949 an opponent that must recharge is built with its counter (gpu_engine/constructor_worlds.py:916 '
+         'fix_recharge; the pre-M1 OPPONENT_RECHARGE_UNREPRESENTED name, constructor_worlds.py:489, is kept for old rows); the owner\'s recharge turn is single-legal (the phase-D '
+         'mapper refuses a live mustrecharge too: future_state.py:494, RECHARGE_UNREPRESENTED)'),
         'Only Slaking carries it, and Slaking\'s one ability is Truant: a residual clock in Gen 3 (Showdown data/mods/gen3/abilities.ts:'
-        '197-212) the engine models (state.py:84 truant_loaf, transition.py:641-643 and 893-894). In-tree since M1 the recharge turn '
+        '197-212) the engine models (state.py:85 truant_loaf, transition.py:709-711 and 979-980). In-tree since M1 the recharge turn '
         'is modelled (trapped, no move); before it the engine\'s free turn after Hyper Beam was spent loafing anyway. A Transform '
         'user copying Slaking remains (Transform is itself unrepresented).', engine_since='8b212312'),
     Effect('partial_trap', ('wrap',), ('shuckle',), False,
@@ -154,16 +155,16 @@ EFFECTS = (
         ('Showdown data/moves.ts:21091 (gen4 mod data/mods/gen4/moves.ts:1515, inherited by gen3): Wrap sets volatile partiallytrapped',
          'Showdown data/conditions.ts:222-252: partiallytrapped lasts several turns, damages at each residual and traps (onTrapPokemon)',
          'gpu_engine/linked_traps.py:12-14: the represented move traps are Mean Look, Spider Web and Block only (Wrap is its own volatile)',
-         'in-tree since M2 + R1 (f3e71663): gpu_engine/state.py:91-92 partial_trap_counter (3 + draws[s][7] at Wrap) and '
-         'partial_trap_source; transition.py:2022-2027 the Wrap set (the counter and partial_trap_source); transition.py:2618-2638 its residual tick (the trapper read at '
+         'in-tree since M2 + R1 (f3e71663): gpu_engine/state.py:92-93 partial_trap_counter (3 + draws[s][7] at Wrap) and '
+         'partial_trap_source; transition.py:2145-2150 the Wrap set (the counter and partial_trap_source); transition.py:2774-2794 its residual tick (the trapper read at '
          'the holder\'s own handler), traced by R1 only at residual_order.POSITIONS wrap 4, 8, 9, 11 (gpu_engine/residual_order.py:99)',
          'probes: 12 wrap* scenarios (20 cases), EXACT against Showdown f76228a1 at M2 + R1 (3e0878e4); each gated position fails a '
          'named probe when dropped (#1930 (M2 + R1) PR body, R1 section, position -> probe table: 4 wrap and seven more, 8 and 9 '
          'wrap_tie, 11 wrap_trapper_faint and wrap_trapper_switch)',
          'live roots: since the trap walls a held partial trap is built (both sides): the protocol world takes partiallytrapped out '
-         'of the payload the CPU materializer sees (gpu_engine/phase_d_protocol_world.py:367-384), counts its ticks on the lines '
-         '(gpu_engine/phase_d_protocol_world.py:338-364) and draws the hidden remaining duration from Showdown\'s posterior, uniform '
-         'on wrap_support, with the opposing active as its trapper (gpu_engine/phase_d_protocol_world.py:327-335, 408-425); an '
+         'of the payload the CPU materializer sees (gpu_engine/phase_d_protocol_world.py:385-402), counts its ticks on the lines '
+         '(gpu_engine/phase_d_protocol_world.py:356-382) and draws the hidden remaining duration from Showdown\'s posterior, uniform '
+         'on wrap_support, with the opposing active as its trapper (gpu_engine/phase_d_protocol_world.py:345-353, 426-443); an '
          'own-held one only on the protocol route (gpu_engine/phase_d_live_worlds.py:349-350; the older route still refuses it, '
          'gpu_engine/phase_d_live_worlds.py:360-361, OWN_VOLATILE_OR_LATENT_CLOCK_UNAVAILABLE)'),
         'Shuckle (Staller) only. In-tree since M2 the trap and its residual chip are modelled; since the trap walls a root already '
@@ -171,22 +172,22 @@ EFFECTS = (
     Effect('perish_count', ('perishsong',), ('misdreavus',), False, '',
         'both actives faint at the end of the third following turn unless they switch',
         ('Showdown data/moves.ts:13232 (gen4 mod data/mods/gen4/moves.ts:993): Perish Song starts a 3-turn count on both actives',
-         'in-tree since M2 + R1 (f3e71663): gpu_engine/state.py:89 perish_counter (4 at Perish Song, -1 per residual, faint at 0); '
-         'transition.py:1801-1809 the count set (Soundproof exempt); transition.py:2699-2712 its residual, a two-holder pass after the '
+         'in-tree since M2 + R1 (f3e71663): gpu_engine/state.py:90 perish_counter (4 at Perish Song, -1 per residual, faint at 0); '
+         'transition.py:1924-1932 the count set (Soundproof exempt); transition.py:2860-2874 its residual, a two-holder pass after the '
          'order-10 list, faster side first, an equal-Speed pair on a drawn effect bit, the count and the faint at 0 (not gated by R1)',
          'probes: 10 perishsong* scenarios (perishsong, _tie, _last_faster, _baton, _switch, _meanlook, _soundproof, _soundproof_user, '
          '_protect_sub, _reuse), EXACT against Showdown f76228a1 at M2 + R1 (3e0878e4)',
          'live roots: since #1949 a held perish count is built (both sides): the protocol world\'s typed mapper writes the shown count '
-         '(gpu_engine/phase_d_protocol_world.py:599 -> v5_hypothetical_state.py:121, held_volatiles) and the protocol world writes '
+         '(gpu_engine/phase_d_protocol_world.py:687 -> v5_hypothetical_state.py:121, held_volatiles) and the protocol world writes '
          'Showdown\'s duration, 4 for the silent perish3 of the Song\'s own turn, carried across a Baton Pass '
-         '(gpu_engine/phase_d_protocol_world.py:224-239, 311-321); an own-held one only on the protocol route (gpu_engine/phase_d_live_worlds.py:349-350); '
+         '(gpu_engine/phase_d_protocol_world.py:242-257, 329-339); an own-held one only on the protocol route (gpu_engine/phase_d_live_worlds.py:349-350); '
          'gpu_engine/public_active.py:46, 217-233 keeps the public counts for the encoder'),
         'Misdreavus (Staller), the set that also carries Mean Look (a represented trap).', engine_since='f3e71663'),
     Effect('drowsy', ('yawn',), ('swalot',), False, '',
         'the target falls asleep at the end of the next turn',
         ('Showdown data/moves.ts:21141 (gen4 mod data/mods/gen4/moves.ts:1527): Yawn puts the target to sleep a turn later',
-         'in-tree since M2 + R1 (f3e71663): gpu_engine/state.py:90 yawn_counter (2 at Yawn, -1 at residual subOrder 19, a sleep attempt '
-         'at 0); transition.py:1814-1822 the Yawn set; transition.py:2639-2667 its countdown (transition.py:2649-2653 Sleep Clause and the '
+         'in-tree since M2 + R1 (f3e71663): gpu_engine/state.py:91 yawn_counter (2 at Yawn, -1 at residual subOrder 19, a sleep attempt '
+         'at 0); transition.py:1937-1945 the Yawn set; transition.py:2795-2823 its countdown (transition.py:2805-2809 Sleep Clause and the '
          'immunities) and the after-status step, '
          'traced by R1 only at residual_order.POSITIONS yawn 6, 12, 13 (gpu_engine/residual_order.py:99)',
          'probes: 11 yawn* scenarios, EXACT against Showdown f76228a1 at M2 + R1 (3e0878e4); each gated position fails a named probe '
@@ -194,12 +195,12 @@ EFFECTS = (
          'reached it; 12 yawn_tie; 13 yawn and six more)',
          'live roots: since #1949 a held drowsy is built (both sides): the protocol world takes yawn out of the payload the CPU '
          'materializer sees and writes yawn_counter, 2 before the Yawn turn\'s residual and 1 after it '
-         '(gpu_engine/phase_d_protocol_world.py:203-221, 311-321); an own-held one only on the protocol route (gpu_engine/phase_d_live_worlds.py:349-350)'),
+         '(gpu_engine/phase_d_protocol_world.py:221-239, 329-339); an own-held one only on the protocol route (gpu_engine/phase_d_live_worlds.py:349-350)'),
         'Swalot (Bulky Attacker) only.', engine_since='f3e71663'),
     Effect('destiny_bond', ('destinybond',), ('banette', 'gengar', 'qwilfish', 'wobbuffet'), False, '',
         'a KO of the user by a move takes its attacker down, until the user moves again (so into the next turn)',
         ('Showdown data/moves.ts:3479-3520: the destinybond volatile ends only at the user\'s next move (onBeforeMove)',
-         'in-tree since A2 (286a5ffe): gpu_engine/state.py:21 DESTINY_BOND; effects.py:46; transition.py:874-878 its end at the '
+         'in-tree since A2 (286a5ffe): gpu_engine/state.py:21 DESTINY_BOND; effects.py:46; transition.py:960-964 its end at the '
          'holder\'s next move',
          'live roots: since #1949 a bonded active is built with the DESTINY_BOND bit: our own by gpu_engine/phase_d_live_worlds.py:367, '
          'the opponent\'s by the protocol world\'s typed mapper (gpu_engine/v5_hypothetical_state.py:119, held_volatiles)'),
@@ -208,55 +209,56 @@ EFFECTS = (
         'request_source_rules.cjs:65-66 transform is a missing origin -> engine_request_source.py:380',
         'the user copies the target\'s species, types, stats, ability, boosts and moves while it stays in',
         ('Showdown data/moves.ts:19836 (gen4 mod data/mods/gen4/moves.ts:1443): Transform',
-         'gpu_engine/transition.py:82-114: no move table names transform (no effect in search); public_refresh_stream.py:17 is the '
-         'encoder\'s public refresh only',
+         'gpu_engine/transition.py:88-121: tables_from_metadata builds the Transform table (gpu_engine/transform.py:70 apply, the '
+         'copy; transform.py:132 revert), in-tree from the Transform PR and still guarded (tier A) until its merge is the engine_since; '
+         'public_refresh_stream.py:17 is the encoder\'s public refresh only',
          'gpu_engine/phase_d_live_worlds.py:282-283: a root with a transformed Pokemon is refused (PUBLIC_TRANSFORM_NOT_MATERIALIZED)'),
         'Ditto and Mew. A transformed root is refused, so the effect reaches the search only as a turn-1 or turn-2 move.'),
     Effect('trick_lock', ('trick',), ('furret', 'kecleon'), False, '',
         'items swap: the user\'s Choice Band choice-locks the target from its next move, the user gets the target\'s item',
         ('Showdown data/random-battles/gen3/teams.ts:473: a set with Trick always holds Choice Band',
          'Showdown data/moves.ts:19875: Trick swaps the two items',
-         'in-tree since M1 (8b212312): gpu_engine/items.py:27-28 the Trick table; transition.py:1752-1761 the swap; state.py:85 '
-         'item_knocked (live roots carry it since #1935, 3f48093b); since WH + C-lite (8823d7c5) transition.py:1762-1773 a received '
+         'in-tree since M1 (8b212312): gpu_engine/items.py:27-28 the Trick table; transition.py:1856-1865 the swap; state.py:86 '
+         'item_knocked (live roots carry it since #1935, 3f48093b); since WH + C-lite (8823d7c5) transition.py:1866-1877 a received '
          'White Herb is used inside Trick\'s onHit, before the device\'s trick hook (probes wh_trick, wh_trick_receive_negative)',
-         'live roots: gpu_engine/phase_d_protocol_world.py:132-134 a root after a public item swap is refused (PUBLIC_ITEM_SWAP_NOT_SUPPORTED)'),
+         'live roots: gpu_engine/phase_d_protocol_world.py:150-152 a root after a public item swap is refused (PUBLIC_ITEM_SWAP_NOT_SUPPORTED)'),
         'Furret and Kecleon. Not LOCK-class at the request source (choice_move and item are read from the state).', engine_since='8b212312'),
 )
 
 REPRESENTED = (
     Effect('charge', ('solarbeam',), ('exeggutor', 'sunflora', 'tangela', 'victreebel'), True,
         'engine_request_source.py:341 a mid-charge request (charge_move != 0) is LOCK', 'two-turn charge',
-        ('gpu_engine/state.py:49-50 charge_move/charge_counter', 'gpu_engine/solar_beam.py:14-15 (Solar Beam only, solar_beam.py:1)',
-         'gpu_engine/transition.py:611-612, 867')),
+        ('gpu_engine/state.py:50-51 charge_move/charge_counter', 'gpu_engine/solar_beam.py:14-15 (Solar Beam only, solar_beam.py:1)',
+         'gpu_engine/transition.py:679-680, 953')),
     Effect('encore', ('encore',), (), True, 'engine_request_source.py:341-342 LOCK while the counters exist and the origin is unknown '
         '(request_source_rules.cjs:64 exempts it from the missing-condition rule)', 'repeat the last move',
-        ('gpu_engine/state.py:47-48 encore_move/encore_counter', 'gpu_engine/encore.py:14-20, 33-52')),
+        ('gpu_engine/state.py:48-49 encore_move/encore_counter', 'gpu_engine/encore.py:14-20, 33-52')),
     Effect('choice_lock', (), (), True, '', 'Choice Band holder locked into its first move',
-        ('gpu_engine/state.py:43 choice_move', 'gpu_engine/state.py:146-148 usable_moves')),
+        ('gpu_engine/state.py:44 choice_move', 'gpu_engine/state.py:159-161 usable_moves')),
     Effect('move_trap', ('meanlook', 'spiderweb'), (), True, '', 'the target cannot switch while the source stays in',
-        ('gpu_engine/state.py:63 trap_source', 'gpu_engine/linked_traps.py:12-25')),
+        ('gpu_engine/state.py:64 trap_source', 'gpu_engine/linked_traps.py:12-25')),
     Effect('seed_and_wish', ('leechseed', 'wish'), (), True, '', 'residual drain; delayed heal',
-        ('gpu_engine/state.py:14, 76-77', 'gpu_engine/sustain.py:22-27', 'gpu_engine/transition.py:1985-1994')),
+        ('gpu_engine/state.py:14, 77-78', 'gpu_engine/sustain.py:22-27', 'gpu_engine/transition.py:2108-2117')),
     Effect('stall_counter', ('protect', 'endure'), (), True, '', 'consecutive-use success chance',
-        ('gpu_engine/state.py:57 protect_counter', 'gpu_engine/effects.py:175 stall_success')),
+        ('gpu_engine/state.py:58 protect_counter', 'gpu_engine/effects.py:175 stall_success')),
     Effect('status_counters', ('rest', 'toxic'), (), True, '', 'sleep turns, Rest origin, Toxic count',
-        ('gpu_engine/state.py:36-39',)),
+        ('gpu_engine/state.py:37-40',)),
     Effect('weather', ('raindance', 'sunnyday'), (), True, '', 'five-turn weather',
-        ('gpu_engine/state.py:78-79 weather/weather_counter', 'gpu_engine/weather.py')),
+        ('gpu_engine/state.py:79-80 weather/weather_counter', 'gpu_engine/weather.py')),
     Effect('focus_punch', ('focuspunch',), (), True, '', 'charge before the turn, lost on a hit',
         ('gpu_engine/state.py:16-17', 'gpu_engine/focus_punch.py:15-19')),
     Effect('sleep_talk', ('sleeptalk',), (), True, 'request_source_rules.cjs:65-66 a missing caller origin at the request source',
-        'calls one of the user\'s moves while asleep', ('gpu_engine/sleep_talk.py:16-22', 'gpu_engine/state.py:38 sleep_skipped')),
-    Effect('spikes', ('spikes',), (), True, '', 'entry hazard', ('gpu_engine/state.py:75', 'gpu_engine/entry.py:50')),
-    Effect('substitute', ('substitute',), (), True, '', 'HP decoy', ('gpu_engine/state.py:58 substitute_hp',)),
+        'calls one of the user\'s moves while asleep', ('gpu_engine/sleep_talk.py:16-22', 'gpu_engine/state.py:39 sleep_skipped')),
+    Effect('spikes', ('spikes',), (), True, '', 'entry hazard', ('gpu_engine/state.py:76', 'gpu_engine/entry.py:51')),
+    Effect('substitute', ('substitute',), (), True, '', 'HP decoy', ('gpu_engine/state.py:59 substitute_hp',)),
     Effect('baton_pass', ('batonpass',), (), True, '', 'switch keeping boosts and volatiles', ('gpu_engine/baton.py:16',)),
     Effect('truant', (), (), True, '', 'ability: loaf every other turn (Gen 3 residual clock)',
-        ('gpu_engine/state.py:84 truant_loaf', 'gpu_engine/transition.py:894, 2783-2787')),
+        ('gpu_engine/state.py:85 truant_loaf', 'gpu_engine/transition.py:980, 2953-2957')),
 )
 
 NOT_IN_POOL = (
     Effect('locked_move', ('outrage', 'thrash', 'petaldance'), (), False, '', '2-3 turns locked into the move, then confusion',
-        ('gpu_engine/state.py:24-92 (BattleState): no locked-move field (future_state.py:155 names lockedmove only as a native duration)',)),
+        ('gpu_engine/state.py:25-93 (BattleState): no locked-move field (future_state.py:164 names lockedmove only as a native duration)',)),
     Effect('uproar', ('uproar',), (), False, 'its condition defines onLockMove', 'locked for several turns, no sleep', ()),
     Effect('rolling', ('rollout', 'iceball'), (), False, '', 'locked for five turns, doubling power', ()),
     Effect('bide', ('bide',), (), False, '', 'stores damage for two turns', ()),

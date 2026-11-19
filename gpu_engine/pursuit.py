@@ -95,7 +95,8 @@ def intercept(state, side, slot, move, chance, table, *, eligible, contact_roll,
     if table.secondary is not None:
         state,*reveals = secondaries.apply_contact(state,side,move,contact_roll,table.secondary,
             eligible=used & (dealt>0) & (sub==0),
-            sleep_roll=jnp.zeros_like(contact_roll) if sleep_roll is None else sleep_roll,_reveal_masks=True)
+            sleep_roll=jnp.zeros_like(contact_roll) if sleep_roll is None else sleep_roll,_reveal_masks=True,
+            infatuation_table=table.infatuation)
     cost = 1
     if table.pressure is not None:
         cost = pp_cost.cost(table.pressure,move,own_types,get(state.ability,foe,target),hp)

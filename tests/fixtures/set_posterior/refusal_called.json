@@ -1,0 +1,148 @@
+{
+ "beliefs": [
+  {
+   "condition": "60/100 par",
+   "gender": "F",
+   "item_mutated": false,
+   "revealed_ability": null,
+   "revealed_item": "Leftovers",
+   "revealed_moves": [
+    "Solar Beam"
+   ],
+   "ruled_out_abilities": [],
+   "ruled_out_items": [
+    "lumberry"
+   ],
+   "showdown_slot": "p2",
+   "species": "Sunflora"
+  }
+ ],
+ "census": {
+  "species": {
+   "sunflora": {
+    "census_lik": [
+     1.0
+    ],
+    "census_n": 1,
+    "census_n_after": 1,
+    "census_strikes": 0,
+    "survivor_ids": [
+     "sunflora-2-variant-5"
+    ],
+    "true_variant": "sunflora-2-variant-5"
+   }
+  },
+  "strikes": [
+   {
+    "attacker": "Sunflora",
+    "crit": false,
+    "eff": null,
+    "hp_before": 272,
+    "ko": false,
+    "line": 39,
+    "move": "solarbeam",
+    "n_excluded_universe": null,
+    "n_variants_with_move": null,
+    "observed": 215,
+    "reason": "called",
+    "true_match": null,
+    "true_variant": null
+   }
+  ]
+ },
+ "decision_index": 2,
+ "format_id": "gen3randombattle",
+ "name": "refusal_called",
+ "note": "Census refusal: called",
+ "ordinal": 1994,
+ "owner": "p1",
+ "posterior": {
+  "sunflora": {
+   "hard": [
+    4
+   ],
+   "provenance": "239bf08dbdcbe19e402eea7b03f0352f1526285719c8fff044dbfdbe8b46e3c7",
+   "strikes": [
+    {
+     "admitted": false,
+     "counts": null,
+     "crit": false,
+     "ko": false,
+     "line": 39,
+     "move": "solarbeam",
+     "observed": 215,
+     "reason": "called"
+    }
+   ],
+   "weights": [
+    0,
+    0,
+    0,
+    0,
+    1
+   ]
+  }
+ },
+ "prefix_sha256": "21e2a6e93f462fcaac207ce9a8138a4ee9009b2ca22390432ac6cf09a27cdd98",
+ "request": {
+  "battle_id": "battle-gen3randombattle-controlled-2103400332",
+  "decision_index": 2,
+  "generation": 6,
+  "lines": [
+   "|t:|1794586258",
+   "|gametype|singles",
+   "|player|p1|PokeZeroBot||",
+   "|player|p2|FoulPlayBot||",
+   "|gen|3",
+   "|tier|[Gen 3] Random Battle",
+   "|rule|HP Percentage Mod: HP is shown in percentages",
+   "|rule|Beat Up Nicknames Mod: Beat Up will not reveal any party members",
+   "|rule|Endless Battle Clause: Forcing endless battles is banned",
+   "|rule|Sleep Clause Mod: Limit one foe put to sleep",
+   "|rule|Switch Priority Clause Mod: Faster Pok\u00e9mon switch first",
+   "|rule|Species Clause: Limit one of each Pok\u00e9mon",
+   "|rule|OHKO Clause: OHKO moves are banned",
+   "|rule|Evasion Items Clause: Evasion items are banned",
+   "|rule|Evasion Moves Clause: Evasion moves are banned",
+   "|",
+   "|t:|1794586259",
+   "|teamsize|p1|6",
+   "|teamsize|p2|6",
+   "|start",
+   "|switch|p1a: Castform|Castform, L90, F|272/272",
+   "|switch|p2a: Sunflora|Sunflora, L99, F|100/100",
+   "|turn|1",
+   "|request|{\"active\":[{\"moves\":[{\"move\":\"Return 102\",\"id\":\"return\",\"pp\":32,\"maxpp\":32,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Fire Blast\",\"id\":\"fireblast\",\"pp\":8,\"maxpp\":8,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Ice Beam\",\"id\":\"icebeam\",\"pp\":16,\"maxpp\":16,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Thunder Wave\",\"id\":\"thunderwave\",\"pp\":32,\"maxpp\":32,\"target\":\"normal\",\"disabled\":false}]}],\"side\":{\"name\":\"PokeZeroBot\",\"id\":\"p1\",\"pokemon\":[{\"ident\":\"p1: Castform\",\"details\":\"Castform, L90, F\",\"condition\":\"272/272\",\"active\":true,\"stats\":{\"atk\":177,\"def\":177,\"spa\":177,\"spd\":177,\"spe\":177},\"moves\":[\"return102\",\"fireblast\",\"icebeam\",\"thunderwave\"],\"baseAbility\":\"forecast\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p1: Whiscash\",\"details\":\"Whiscash, L83, F\",\"condition\":\"318/318\",\"active\":false,\"stats\":{\"atk\":177,\"def\":169,\"spa\":174,\"spd\":166,\"spe\":147},\"moves\":[\"protect\",\"icebeam\",\"earthquake\",\"toxic\"],\"baseAbility\":\"oblivious\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p1: Magneton\",\"details\":\"Magneton, L85\",\"condition\":\"224/224\",\"active\":false,\"stats\":{\"atk\":108,\"def\":209,\"spa\":253,\"spd\":168,\"spe\":168},\"moves\":[\"rest\",\"hiddenpowerice\",\"sleeptalk\",\"thunderbolt\"],\"baseAbility\":\"magnetpull\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p1: Chimecho\",\"details\":\"Chimecho, L89, F\",\"condition\":\"260/260\",\"active\":false,\"stats\":{\"atk\":95,\"def\":175,\"spa\":219,\"spd\":193,\"spe\":166},\"moves\":[\"hiddenpowerfire\",\"calmmind\",\"healbell\",\"psychic\"],\"baseAbility\":\"levitate\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p1: Clefable\",\"details\":\"Clefable, L85, M\",\"condition\":\"300/300\",\"active\":false,\"stats\":{\"atk\":168,\"def\":173,\"spa\":193,\"spd\":202,\"spe\":151},\"moves\":[\"return102\",\"fireblast\",\"softboiled\",\"toxic\"],\"baseAbility\":\"cutecharm\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p1: Scizor\",\"details\":\"Scizor, L82, F\",\"condition\":\"249/249\",\"active\":false,\"stats\":{\"atk\":260,\"def\":211,\"spa\":137,\"spd\":178,\"spe\":154},\"moves\":[\"silverwind\",\"steelwing\",\"hiddenpowerground\",\"swordsdance\"],\"baseAbility\":\"swarm\",\"item\":\"salacberry\",\"pokeball\":\"pokeball\"}]}}",
+   "|",
+   "|t:|1794586261",
+   "|move|p1a: Castform|Thunder Wave|p2a: Sunflora",
+   "|-status|p2a: Sunflora|par",
+   "|move|p2a: Sunflora|Solar Beam||[still]",
+   "|-prepare|p2a: Sunflora|Solar Beam",
+   "|",
+   "|upkeep",
+   "|turn|2",
+   "|request|{\"active\":[{\"moves\":[{\"move\":\"Return 102\",\"id\":\"return\",\"pp\":32,\"maxpp\":32,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Fire Blast\",\"id\":\"fireblast\",\"pp\":8,\"maxpp\":8,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Ice Beam\",\"id\":\"icebeam\",\"pp\":16,\"maxpp\":16,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Thunder Wave\",\"id\":\"thunderwave\",\"pp\":31,\"maxpp\":32,\"target\":\"normal\",\"disabled\":false}]}],\"side\":{\"name\":\"PokeZeroBot\",\"id\":\"p1\",\"pokemon\":[{\"ident\":\"p1: Castform\",\"details\":\"Castform, L90, F\",\"condition\":\"272/272\",\"active\":true,\"stats\":{\"atk\":177,\"def\":177,\"spa\":177,\"spd\":177,\"spe\":177},\"moves\":[\"return102\",\"fireblast\",\"icebeam\",\"thunderwave\"],\"baseAbility\":\"forecast\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p1: Whiscash\",\"details\":\"Whiscash, L83, F\",\"condition\":\"318/318\",\"active\":false,\"stats\":{\"atk\":177,\"def\":169,\"spa\":174,\"spd\":166,\"spe\":147},\"moves\":[\"protect\",\"icebeam\",\"earthquake\",\"toxic\"],\"baseAbility\":\"oblivious\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p1: Magneton\",\"details\":\"Magneton, L85\",\"condition\":\"224/224\",\"active\":false,\"stats\":{\"atk\":108,\"def\":209,\"spa\":253,\"spd\":168,\"spe\":168},\"moves\":[\"rest\",\"hiddenpowerice\",\"sleeptalk\",\"thunderbolt\"],\"baseAbility\":\"magnetpull\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p1: Chimecho\",\"details\":\"Chimecho, L89, F\",\"condition\":\"260/260\",\"active\":false,\"stats\":{\"atk\":95,\"def\":175,\"spa\":219,\"spd\":193,\"spe\":166},\"moves\":[\"hiddenpowerfire\",\"calmmind\",\"healbell\",\"psychic\"],\"baseAbility\":\"levitate\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p1: Clefable\",\"details\":\"Clefable, L85, M\",\"condition\":\"300/300\",\"active\":false,\"stats\":{\"atk\":168,\"def\":173,\"spa\":193,\"spd\":202,\"spe\":151},\"moves\":[\"return102\",\"fireblast\",\"softboiled\",\"toxic\"],\"baseAbility\":\"cutecharm\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p1: Scizor\",\"details\":\"Scizor, L82, F\",\"condition\":\"249/249\",\"active\":false,\"stats\":{\"atk\":260,\"def\":211,\"spa\":137,\"spd\":178,\"spe\":154},\"moves\":[\"silverwind\",\"steelwing\",\"hiddenpowerground\",\"swordsdance\"],\"baseAbility\":\"swarm\",\"item\":\"salacberry\",\"pokeball\":\"pokeball\"}]}}",
+   "|",
+   "|t:|1794586264",
+   "|move|p1a: Castform|Fire Blast|p2a: Sunflora",
+   "|-supereffective|p2a: Sunflora",
+   "|-damage|p2a: Sunflora|53/100 par",
+   "|move|p2a: Sunflora|Solar Beam|p1a: Castform|[from] lockedmove",
+   "|-damage|p1a: Castform|57/272",
+   "|",
+   "|-heal|p1a: Castform|74/272|[from] item: Leftovers",
+   "|-heal|p2a: Sunflora|60/100 par|[from] item: Leftovers",
+   "|upkeep",
+   "|turn|3",
+   "|request|{\"active\":[{\"moves\":[{\"move\":\"Return 102\",\"id\":\"return\",\"pp\":32,\"maxpp\":32,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Fire Blast\",\"id\":\"fireblast\",\"pp\":7,\"maxpp\":8,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Ice Beam\",\"id\":\"icebeam\",\"pp\":16,\"maxpp\":16,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Thunder Wave\",\"id\":\"thunderwave\",\"pp\":31,\"maxpp\":32,\"target\":\"normal\",\"disabled\":false}]}],\"side\":{\"name\":\"PokeZeroBot\",\"id\":\"p1\",\"pokemon\":[{\"ident\":\"p1: Castform\",\"details\":\"Castform, L90, F\",\"condition\":\"74/272\",\"active\":true,\"stats\":{\"atk\":177,\"def\":177,\"spa\":177,\"spd\":177,\"spe\":177},\"moves\":[\"return102\",\"fireblast\",\"icebeam\",\"thunderwave\"],\"baseAbility\":\"forecast\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p1: Whiscash\",\"details\":\"Whiscash, L83, F\",\"condition\":\"318/318\",\"active\":false,\"stats\":{\"atk\":177,\"def\":169,\"spa\":174,\"spd\":166,\"spe\":147},\"moves\":[\"protect\",\"icebeam\",\"earthquake\",\"toxic\"],\"baseAbility\":\"oblivious\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p1: Magneton\",\"details\":\"Magneton, L85\",\"condition\":\"224/224\",\"active\":false,\"stats\":{\"atk\":108,\"def\":209,\"spa\":253,\"spd\":168,\"spe\":168},\"moves\":[\"rest\",\"hiddenpowerice\",\"sleeptalk\",\"thunderbolt\"],\"baseAbility\":\"magnetpull\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p1: Chimecho\",\"details\":\"Chimecho, L89, F\",\"condition\":\"260/260\",\"active\":false,\"stats\":{\"atk\":95,\"def\":175,\"spa\":219,\"spd\":193,\"spe\":166},\"moves\":[\"hiddenpowerfire\",\"calmmind\",\"healbell\",\"psychic\"],\"baseAbility\":\"levitate\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p1: Clefable\",\"details\":\"Clefable, L85, M\",\"condition\":\"300/300\",\"active\":false,\"stats\":{\"atk\":168,\"def\":173,\"spa\":193,\"spd\":202,\"spe\":151},\"moves\":[\"return102\",\"fireblast\",\"softboiled\",\"toxic\"],\"baseAbility\":\"cutecharm\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p1: Scizor\",\"details\":\"Scizor, L82, F\",\"condition\":\"249/249\",\"active\":false,\"stats\":{\"atk\":260,\"def\":211,\"spa\":137,\"spd\":178,\"spe\":154},\"moves\":[\"silverwind\",\"steelwing\",\"hiddenpowerground\",\"swordsdance\"],\"baseAbility\":\"swarm\",\"item\":\"salacberry\",\"pokeball\":\"pokeball\"}]}}"
+  ],
+  "own_request_line": "|request|{\"active\":[{\"moves\":[{\"move\":\"Return 102\",\"id\":\"return\",\"pp\":32,\"maxpp\":32,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Fire Blast\",\"id\":\"fireblast\",\"pp\":7,\"maxpp\":8,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Ice Beam\",\"id\":\"icebeam\",\"pp\":16,\"maxpp\":16,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Thunder Wave\",\"id\":\"thunderwave\",\"pp\":31,\"maxpp\":32,\"target\":\"normal\",\"disabled\":false}]}],\"side\":{\"name\":\"PokeZeroBot\",\"id\":\"p1\",\"pokemon\":[{\"ident\":\"p1: Castform\",\"details\":\"Castform, L90, F\",\"condition\":\"74/272\",\"active\":true,\"stats\":{\"atk\":177,\"def\":177,\"spa\":177,\"spd\":177,\"spe\":177},\"moves\":[\"return102\",\"fireblast\",\"icebeam\",\"thunderwave\"],\"baseAbility\":\"forecast\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p1: Whiscash\",\"details\":\"Whiscash, L83, F\",\"condition\":\"318/318\",\"active\":false,\"stats\":{\"atk\":177,\"def\":169,\"spa\":174,\"spd\":166,\"spe\":147},\"moves\":[\"protect\",\"icebeam\",\"earthquake\",\"toxic\"],\"baseAbility\":\"oblivious\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p1: Magneton\",\"details\":\"Magneton, L85\",\"condition\":\"224/224\",\"active\":false,\"stats\":{\"atk\":108,\"def\":209,\"spa\":253,\"spd\":168,\"spe\":168},\"moves\":[\"rest\",\"hiddenpowerice\",\"sleeptalk\",\"thunderbolt\"],\"baseAbility\":\"magnetpull\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p1: Chimecho\",\"details\":\"Chimecho, L89, F\",\"condition\":\"260/260\",\"active\":false,\"stats\":{\"atk\":95,\"def\":175,\"spa\":219,\"spd\":193,\"spe\":166},\"moves\":[\"hiddenpowerfire\",\"calmmind\",\"healbell\",\"psychic\"],\"baseAbility\":\"levitate\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p1: Clefable\",\"details\":\"Clefable, L85, M\",\"condition\":\"300/300\",\"active\":false,\"stats\":{\"atk\":168,\"def\":173,\"spa\":193,\"spd\":202,\"spe\":151},\"moves\":[\"return102\",\"fireblast\",\"softboiled\",\"toxic\"],\"baseAbility\":\"cutecharm\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p1: Scizor\",\"details\":\"Scizor, L82, F\",\"condition\":\"249/249\",\"active\":false,\"stats\":{\"atk\":260,\"def\":211,\"spa\":137,\"spd\":178,\"spe\":154},\"moves\":[\"silverwind\",\"steelwing\",\"hiddenpowerground\",\"swordsdance\"],\"baseAbility\":\"swarm\",\"item\":\"salacberry\",\"pokeball\":\"pokeball\"}]}}",
+  "owner": "p1",
+  "prefix_sha256": "21e2a6e93f462fcaac207ce9a8138a4ee9009b2ca22390432ac6cf09a27cdd98",
+  "request_id": "battle-gen3randombattle-controlled-2103400332:2",
+  "schema": "pokezero.phase-d.shared-gpu-search.v1",
+  "stream_id": 1
+ },
+ "source_hash": "f5a5265143d423af"
+}

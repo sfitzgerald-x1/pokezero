@@ -1,0 +1,181 @@
+{
+ "beliefs": [
+  {
+   "condition": "100/100",
+   "gender": "M",
+   "item_mutated": false,
+   "revealed_ability": null,
+   "revealed_item": null,
+   "revealed_moves": [
+    "Hidden Power"
+   ],
+   "ruled_out_abilities": [],
+   "ruled_out_items": [],
+   "showdown_slot": "p1",
+   "species": "Tangela"
+  }
+ ],
+ "census": {
+  "species": {
+   "tangela": {
+    "census_lik": [
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0625,
+     0.0625,
+     0.0625
+    ],
+    "census_n": 10,
+    "census_n_after": 3,
+    "census_strikes": 1,
+    "survivor_ids": [
+     "tangela-1-variant-1",
+     "tangela-1-variant-2",
+     "tangela-1-variant-3",
+     "tangela-1-variant-4",
+     "tangela-1-variant-5",
+     "tangela-1-variant-6",
+     "tangela-1-variant-7",
+     "tangela-2-variant-8",
+     "tangela-2-variant-9",
+     "tangela-2-variant-10"
+    ],
+    "true_variant": "tangela-2-variant-9"
+   }
+  },
+  "strikes": [
+   {
+    "attacker": "Tangela",
+    "crit": false,
+    "eff": "supereffective",
+    "hp_before": 290,
+    "ko": false,
+    "line": 26,
+    "move": "hiddenpower",
+    "n_excluded_universe": 7,
+    "n_variants_with_move": 10,
+    "observed": 149,
+    "reason": null,
+    "true_match": 1,
+    "true_variant": "tangela-2-variant-9"
+   }
+  ]
+ },
+ "decision_index": 1,
+ "format_id": "gen3randombattle",
+ "name": "hp_effectiveness",
+ "note": "Hidden Power, -supereffective on Cacturne: the variants whose type is resisted are excluded.",
+ "ordinal": 4113,
+ "owner": "p2",
+ "posterior": {
+  "tangela": {
+   "hard": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9
+   ],
+   "provenance": "3b581abddb866db80cfc1515ee51cd1605d02c5e71c063efbf6dbd9271f2ae1c",
+   "strikes": [
+    {
+     "admitted": true,
+     "counts": [
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      1,
+      1,
+      1,
+      0
+     ],
+     "crit": false,
+     "ko": false,
+     "line": 26,
+     "move": "hiddenpower",
+     "observed": 149,
+     "reason": ""
+    }
+   ],
+   "weights": [
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    1,
+    1,
+    1,
+    0
+   ]
+  }
+ },
+ "prefix_sha256": "0decefe4a4cd87c80eb5a30f7921f61be51034f9e1afefef0034921151c593c6",
+ "request": {
+  "battle_id": "battle-gen3randombattle-controlled-2103400685",
+  "decision_index": 1,
+  "generation": 4,
+  "lines": [
+   "|t:|1794609475",
+   "|gametype|singles",
+   "|player|p1|FoulPlayBot||",
+   "|player|p2|PokeZeroBot||",
+   "|gen|3",
+   "|tier|[Gen 3] Random Battle",
+   "|rule|HP Percentage Mod: HP is shown in percentages",
+   "|rule|Beat Up Nicknames Mod: Beat Up will not reveal any party members",
+   "|rule|Endless Battle Clause: Forcing endless battles is banned",
+   "|rule|Sleep Clause Mod: Limit one foe put to sleep",
+   "|rule|Switch Priority Clause Mod: Faster Pok\u00e9mon switch first",
+   "|rule|Species Clause: Limit one of each Pok\u00e9mon",
+   "|rule|OHKO Clause: OHKO moves are banned",
+   "|rule|Evasion Items Clause: Evasion items are banned",
+   "|rule|Evasion Moves Clause: Evasion moves are banned",
+   "|",
+   "|t:|1794609475",
+   "|teamsize|p1|6",
+   "|teamsize|p2|6",
+   "|start",
+   "|switch|p1a: Tangela|Tangela, L95, M|100/100",
+   "|switch|p2a: Cacturne|Cacturne, L96, M|290/290",
+   "|turn|1",
+   "|request|{\"active\":[{\"moves\":[{\"move\":\"Leech Seed\",\"id\":\"leechseed\",\"pp\":16,\"maxpp\":16,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Focus Punch\",\"id\":\"focuspunch\",\"pp\":32,\"maxpp\":32,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Substitute\",\"id\":\"substitute\",\"pp\":16,\"maxpp\":16,\"target\":\"self\",\"disabled\":false},{\"move\":\"Hidden Power Dark 70\",\"id\":\"hiddenpower\",\"pp\":24,\"maxpp\":24,\"target\":\"normal\",\"disabled\":false}]}],\"side\":{\"name\":\"PokeZeroBot\",\"id\":\"p2\",\"pokemon\":[{\"ident\":\"p2: Cacturne\",\"details\":\"Cacturne, L96, M\",\"condition\":\"290/290\",\"active\":true,\"stats\":{\"atk\":275,\"def\":170,\"spa\":275,\"spd\":170,\"spe\":160},\"moves\":[\"leechseed\",\"focuspunch\",\"substitute\",\"hiddenpowerdark\"],\"baseAbility\":\"sandveil\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Raticate\",\"details\":\"Raticate, L85, M\",\"condition\":\"232/232\",\"active\":false,\"stats\":{\"atk\":186,\"def\":151,\"spa\":133,\"spd\":167,\"spe\":214},\"moves\":[\"hiddenpowerground\",\"facade\",\"doubleedge\",\"shadowball\"],\"baseAbility\":\"guts\",\"item\":\"choiceband\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Murkrow\",\"details\":\"Murkrow, L90, M\",\"condition\":\"254/254\",\"active\":false,\"stats\":{\"atk\":204,\"def\":126,\"spa\":203,\"spd\":126,\"spe\":214},\"moves\":[\"hiddenpowerfighting\",\"doubleedge\",\"shadowball\",\"drillpeck\"],\"baseAbility\":\"insomnia\",\"item\":\"choiceband\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Primeape\",\"details\":\"Primeape, L84, M\",\"condition\":\"246/246\",\"active\":false,\"stats\":{\"atk\":225,\"def\":148,\"spa\":149,\"spd\":165,\"spe\":208},\"moves\":[\"bulkup\",\"reversal\",\"hiddenpowerghost\",\"substitute\"],\"baseAbility\":\"vitalspirit\",\"item\":\"liechiberry\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Butterfree\",\"details\":\"Butterfree, L97, M\",\"condition\":\"273/273\",\"active\":false,\"stats\":{\"atk\":92,\"def\":152,\"spa\":210,\"spd\":210,\"spe\":191},\"moves\":[\"morningsun\",\"sleeppowder\",\"psychic\",\"toxic\"],\"baseAbility\":\"compoundeyes\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Ditto\",\"details\":\"Ditto\",\"condition\":\"258/258\",\"active\":false,\"stats\":{\"atk\":153,\"def\":153,\"spa\":153,\"spd\":153,\"spe\":153},\"moves\":[\"transform\"],\"baseAbility\":\"limber\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"}]}}",
+   "|",
+   "|t:|1794609478",
+   "|move|p1a: Tangela|Hidden Power|p2a: Cacturne",
+   "|-supereffective|p2a: Cacturne",
+   "|-damage|p2a: Cacturne|141/290",
+   "|move|p2a: Cacturne|Substitute|p2a: Cacturne",
+   "|-start|p2a: Cacturne|Substitute",
+   "|-damage|p2a: Cacturne|69/290",
+   "|",
+   "|-heal|p2a: Cacturne|87/290|[from] item: Leftovers",
+   "|upkeep",
+   "|turn|2",
+   "|request|{\"active\":[{\"moves\":[{\"move\":\"Leech Seed\",\"id\":\"leechseed\",\"pp\":16,\"maxpp\":16,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Focus Punch\",\"id\":\"focuspunch\",\"pp\":32,\"maxpp\":32,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Substitute\",\"id\":\"substitute\",\"pp\":15,\"maxpp\":16,\"target\":\"self\",\"disabled\":false},{\"move\":\"Hidden Power Dark 70\",\"id\":\"hiddenpower\",\"pp\":24,\"maxpp\":24,\"target\":\"normal\",\"disabled\":false}]}],\"side\":{\"name\":\"PokeZeroBot\",\"id\":\"p2\",\"pokemon\":[{\"ident\":\"p2: Cacturne\",\"details\":\"Cacturne, L96, M\",\"condition\":\"87/290\",\"active\":true,\"stats\":{\"atk\":275,\"def\":170,\"spa\":275,\"spd\":170,\"spe\":160},\"moves\":[\"leechseed\",\"focuspunch\",\"substitute\",\"hiddenpowerdark\"],\"baseAbility\":\"sandveil\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Raticate\",\"details\":\"Raticate, L85, M\",\"condition\":\"232/232\",\"active\":false,\"stats\":{\"atk\":186,\"def\":151,\"spa\":133,\"spd\":167,\"spe\":214},\"moves\":[\"hiddenpowerground\",\"facade\",\"doubleedge\",\"shadowball\"],\"baseAbility\":\"guts\",\"item\":\"choiceband\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Murkrow\",\"details\":\"Murkrow, L90, M\",\"condition\":\"254/254\",\"active\":false,\"stats\":{\"atk\":204,\"def\":126,\"spa\":203,\"spd\":126,\"spe\":214},\"moves\":[\"hiddenpowerfighting\",\"doubleedge\",\"shadowball\",\"drillpeck\"],\"baseAbility\":\"insomnia\",\"item\":\"choiceband\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Primeape\",\"details\":\"Primeape, L84, M\",\"condition\":\"246/246\",\"active\":false,\"stats\":{\"atk\":225,\"def\":148,\"spa\":149,\"spd\":165,\"spe\":208},\"moves\":[\"bulkup\",\"reversal\",\"hiddenpowerghost\",\"substitute\"],\"baseAbility\":\"vitalspirit\",\"item\":\"liechiberry\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Butterfree\",\"details\":\"Butterfree, L97, M\",\"condition\":\"273/273\",\"active\":false,\"stats\":{\"atk\":92,\"def\":152,\"spa\":210,\"spd\":210,\"spe\":191},\"moves\":[\"morningsun\",\"sleeppowder\",\"psychic\",\"toxic\"],\"baseAbility\":\"compoundeyes\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Ditto\",\"details\":\"Ditto\",\"condition\":\"258/258\",\"active\":false,\"stats\":{\"atk\":153,\"def\":153,\"spa\":153,\"spd\":153,\"spe\":153},\"moves\":[\"transform\"],\"baseAbility\":\"limber\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"}]}}"
+  ],
+  "own_request_line": "|request|{\"active\":[{\"moves\":[{\"move\":\"Leech Seed\",\"id\":\"leechseed\",\"pp\":16,\"maxpp\":16,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Focus Punch\",\"id\":\"focuspunch\",\"pp\":32,\"maxpp\":32,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Substitute\",\"id\":\"substitute\",\"pp\":15,\"maxpp\":16,\"target\":\"self\",\"disabled\":false},{\"move\":\"Hidden Power Dark 70\",\"id\":\"hiddenpower\",\"pp\":24,\"maxpp\":24,\"target\":\"normal\",\"disabled\":false}]}],\"side\":{\"name\":\"PokeZeroBot\",\"id\":\"p2\",\"pokemon\":[{\"ident\":\"p2: Cacturne\",\"details\":\"Cacturne, L96, M\",\"condition\":\"87/290\",\"active\":true,\"stats\":{\"atk\":275,\"def\":170,\"spa\":275,\"spd\":170,\"spe\":160},\"moves\":[\"leechseed\",\"focuspunch\",\"substitute\",\"hiddenpowerdark\"],\"baseAbility\":\"sandveil\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Raticate\",\"details\":\"Raticate, L85, M\",\"condition\":\"232/232\",\"active\":false,\"stats\":{\"atk\":186,\"def\":151,\"spa\":133,\"spd\":167,\"spe\":214},\"moves\":[\"hiddenpowerground\",\"facade\",\"doubleedge\",\"shadowball\"],\"baseAbility\":\"guts\",\"item\":\"choiceband\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Murkrow\",\"details\":\"Murkrow, L90, M\",\"condition\":\"254/254\",\"active\":false,\"stats\":{\"atk\":204,\"def\":126,\"spa\":203,\"spd\":126,\"spe\":214},\"moves\":[\"hiddenpowerfighting\",\"doubleedge\",\"shadowball\",\"drillpeck\"],\"baseAbility\":\"insomnia\",\"item\":\"choiceband\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Primeape\",\"details\":\"Primeape, L84, M\",\"condition\":\"246/246\",\"active\":false,\"stats\":{\"atk\":225,\"def\":148,\"spa\":149,\"spd\":165,\"spe\":208},\"moves\":[\"bulkup\",\"reversal\",\"hiddenpowerghost\",\"substitute\"],\"baseAbility\":\"vitalspirit\",\"item\":\"liechiberry\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Butterfree\",\"details\":\"Butterfree, L97, M\",\"condition\":\"273/273\",\"active\":false,\"stats\":{\"atk\":92,\"def\":152,\"spa\":210,\"spd\":210,\"spe\":191},\"moves\":[\"morningsun\",\"sleeppowder\",\"psychic\",\"toxic\"],\"baseAbility\":\"compoundeyes\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Ditto\",\"details\":\"Ditto\",\"condition\":\"258/258\",\"active\":false,\"stats\":{\"atk\":153,\"def\":153,\"spa\":153,\"spd\":153,\"spe\":153},\"moves\":[\"transform\"],\"baseAbility\":\"limber\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"}]}}",
+  "owner": "p2",
+  "prefix_sha256": "0decefe4a4cd87c80eb5a30f7921f61be51034f9e1afefef0034921151c593c6",
+  "request_id": "battle-gen3randombattle-controlled-2103400685:1",
+  "schema": "pokezero.phase-d.shared-gpu-search.v1",
+  "stream_id": 1
+ },
+ "source_hash": "f5a5265143d423af"
+}

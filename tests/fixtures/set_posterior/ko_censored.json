@@ -1,0 +1,144 @@
+{
+ "beliefs": [
+  {
+   "condition": "40/100",
+   "gender": "M",
+   "item_mutated": false,
+   "revealed_ability": null,
+   "revealed_item": null,
+   "revealed_moves": [
+    "Return"
+   ],
+   "ruled_out_abilities": [],
+   "ruled_out_items": [],
+   "showdown_slot": "p2",
+   "species": "Pidgeot"
+  }
+ ],
+ "census": {
+  "species": {
+   "pidgeot": {
+    "census_lik": [
+     0.8125,
+     0.0,
+     0.0
+    ],
+    "census_n": 3,
+    "census_n_after": 1,
+    "census_strikes": 1,
+    "survivor_ids": [
+     "pidgeot-1-variant-3",
+     "pidgeot-1-variant-4",
+     "pidgeot-2-variant-5"
+    ],
+    "true_variant": "pidgeot-1-variant-3"
+   }
+  },
+  "strikes": [
+   {
+    "attacker": "Pidgeot",
+    "crit": false,
+    "eff": null,
+    "hp_before": 181,
+    "ko": true,
+    "line": 29,
+    "move": "return",
+    "n_excluded_universe": 2,
+    "n_variants_with_move": 3,
+    "observed": 181,
+    "reason": null,
+    "true_match": 13,
+    "true_variant": "pidgeot-1-variant-3"
+   }
+  ]
+ },
+ "decision_index": 1,
+ "format_id": "gen3randombattle",
+ "name": "ko_censored",
+ "note": "An admitted KO, censored: rolls >= our HP before the hit.",
+ "ordinal": 4860,
+ "owner": "p1",
+ "posterior": {
+  "pidgeot": {
+   "hard": [
+    2,
+    3,
+    4
+   ],
+   "provenance": "5cb907a76a36ae114cd2196e6f9f9024c457f3e286be46866996eedd1c4f5035",
+   "strikes": [
+    {
+     "admitted": true,
+     "counts": [
+      0,
+      0,
+      13,
+      0,
+      0
+     ],
+     "crit": false,
+     "ko": true,
+     "line": 29,
+     "move": "return",
+     "observed": 181,
+     "reason": ""
+    }
+   ],
+   "weights": [
+    0,
+    0,
+    1,
+    0,
+    0
+   ]
+  }
+ },
+ "prefix_sha256": "02e2250c6ce4034069669004c6dde203c5e62da593bc4326c62cf387b47a3f96",
+ "request": {
+  "battle_id": "battle-gen3randombattle-controlled-2103400810",
+  "decision_index": 1,
+  "generation": 4,
+  "lines": [
+   "|t:|1794618281",
+   "|gametype|singles",
+   "|player|p1|PokeZeroBot||",
+   "|player|p2|FoulPlayBot||",
+   "|gen|3",
+   "|tier|[Gen 3] Random Battle",
+   "|rule|HP Percentage Mod: HP is shown in percentages",
+   "|rule|Beat Up Nicknames Mod: Beat Up will not reveal any party members",
+   "|rule|Endless Battle Clause: Forcing endless battles is banned",
+   "|rule|Sleep Clause Mod: Limit one foe put to sleep",
+   "|rule|Switch Priority Clause Mod: Faster Pok\u00e9mon switch first",
+   "|rule|Species Clause: Limit one of each Pok\u00e9mon",
+   "|rule|OHKO Clause: OHKO moves are banned",
+   "|rule|Evasion Items Clause: Evasion items are banned",
+   "|rule|Evasion Moves Clause: Evasion moves are banned",
+   "|",
+   "|t:|1794618281",
+   "|teamsize|p1|6",
+   "|teamsize|p2|6",
+   "|start",
+   "|switch|p1a: Fearow|Fearow, L81, F|238/238",
+   "|switch|p2a: Pidgeot|Pidgeot, L87, M|100/100",
+   "|turn|1",
+   "|request|{\"active\":[{\"moves\":[{\"move\":\"Hidden Power Ground 70\",\"id\":\"hiddenpower\",\"pp\":24,\"maxpp\":24,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Quick Attack\",\"id\":\"quickattack\",\"pp\":48,\"maxpp\":48,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Drill Peck\",\"id\":\"drillpeck\",\"pp\":32,\"maxpp\":32,\"target\":\"any\",\"disabled\":false},{\"move\":\"Double-Edge\",\"id\":\"doubleedge\",\"pp\":24,\"maxpp\":24,\"target\":\"normal\",\"disabled\":false}]}],\"side\":{\"name\":\"PokeZeroBot\",\"id\":\"p1\",\"pokemon\":[{\"ident\":\"p1: Fearow\",\"details\":\"Fearow, L81, F\",\"condition\":\"238/238\",\"active\":true,\"stats\":{\"atk\":192,\"def\":152,\"spa\":145,\"spd\":145,\"spe\":209},\"moves\":[\"hiddenpowerground\",\"quickattack\",\"drillpeck\",\"doubleedge\"],\"baseAbility\":\"keeneye\",\"item\":\"choiceband\",\"pokeball\":\"pokeball\"},{\"ident\":\"p1: Feraligatr\",\"details\":\"Feraligatr, L83, M\",\"condition\":\"276/276\",\"active\":false,\"stats\":{\"atk\":221,\"def\":213,\"spa\":178,\"spd\":185,\"spe\":177},\"moves\":[\"rockslide\",\"earthquake\",\"hiddenpowerflying\",\"hydropump\"],\"baseAbility\":\"torrent\",\"item\":\"choiceband\",\"pokeball\":\"pokeball\"},{\"ident\":\"p1: Ledian\",\"details\":\"Ledian, F\",\"condition\":\"272/272\",\"active\":false,\"stats\":{\"atk\":127,\"def\":157,\"spa\":167,\"spd\":277,\"spe\":227},\"moves\":[\"silverwind\",\"substitute\",\"swordsdance\",\"batonpass\"],\"baseAbility\":\"swarm\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p1: Kangaskhan\",\"details\":\"Kangaskhan, L79, F\",\"condition\":\"295/295\",\"active\":false,\"stats\":{\"atk\":196,\"def\":172,\"spa\":109,\"spd\":172,\"spe\":188},\"moves\":[\"shadowball\",\"rest\",\"doubleedge\",\"earthquake\"],\"baseAbility\":\"earlybird\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p1: Medicham\",\"details\":\"Medicham, L81, F\",\"condition\":\"230/230\",\"active\":false,\"stats\":{\"atk\":144,\"def\":168,\"spa\":144,\"spd\":168,\"spe\":176},\"moves\":[\"shadowball\",\"brickbreak\",\"bulkup\",\"rockslide\"],\"baseAbility\":\"purepower\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p1: Houndoom\",\"details\":\"Houndoom, L79, F\",\"condition\":\"248/248\",\"active\":false,\"stats\":{\"atk\":148,\"def\":125,\"spa\":219,\"spd\":172,\"spe\":196},\"moves\":[\"crunch\",\"fireblast\",\"pursuit\",\"hiddenpowergrass\"],\"baseAbility\":\"flashfire\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"}]}}",
+   "|",
+   "|t:|1794618284",
+   "|move|p1a: Fearow|Double-Edge|p2a: Pidgeot",
+   "|-damage|p2a: Pidgeot|40/100",
+   "|-damage|p1a: Fearow|181/238|[from] Recoil|[of] p2a: Pidgeot",
+   "|move|p2a: Pidgeot|Return|p1a: Fearow",
+   "|-damage|p1a: Fearow|0 fnt",
+   "|faint|p1a: Fearow",
+   "|request|{\"forceSwitch\":[true],\"side\":{\"name\":\"PokeZeroBot\",\"id\":\"p1\",\"pokemon\":[{\"ident\":\"p1: Fearow\",\"details\":\"Fearow, L81, F\",\"condition\":\"0 fnt\",\"active\":true,\"stats\":{\"atk\":192,\"def\":152,\"spa\":145,\"spd\":145,\"spe\":209},\"moves\":[\"hiddenpowerground\",\"quickattack\",\"drillpeck\",\"doubleedge\"],\"baseAbility\":\"keeneye\",\"item\":\"choiceband\",\"pokeball\":\"pokeball\"},{\"ident\":\"p1: Feraligatr\",\"details\":\"Feraligatr, L83, M\",\"condition\":\"276/276\",\"active\":false,\"stats\":{\"atk\":221,\"def\":213,\"spa\":178,\"spd\":185,\"spe\":177},\"moves\":[\"rockslide\",\"earthquake\",\"hiddenpowerflying\",\"hydropump\"],\"baseAbility\":\"torrent\",\"item\":\"choiceband\",\"pokeball\":\"pokeball\"},{\"ident\":\"p1: Ledian\",\"details\":\"Ledian, F\",\"condition\":\"272/272\",\"active\":false,\"stats\":{\"atk\":127,\"def\":157,\"spa\":167,\"spd\":277,\"spe\":227},\"moves\":[\"silverwind\",\"substitute\",\"swordsdance\",\"batonpass\"],\"baseAbility\":\"swarm\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p1: Kangaskhan\",\"details\":\"Kangaskhan, L79, F\",\"condition\":\"295/295\",\"active\":false,\"stats\":{\"atk\":196,\"def\":172,\"spa\":109,\"spd\":172,\"spe\":188},\"moves\":[\"shadowball\",\"rest\",\"doubleedge\",\"earthquake\"],\"baseAbility\":\"earlybird\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p1: Medicham\",\"details\":\"Medicham, L81, F\",\"condition\":\"230/230\",\"active\":false,\"stats\":{\"atk\":144,\"def\":168,\"spa\":144,\"spd\":168,\"spe\":176},\"moves\":[\"shadowball\",\"brickbreak\",\"bulkup\",\"rockslide\"],\"baseAbility\":\"purepower\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p1: Houndoom\",\"details\":\"Houndoom, L79, F\",\"condition\":\"248/248\",\"active\":false,\"stats\":{\"atk\":148,\"def\":125,\"spa\":219,\"spd\":172,\"spe\":196},\"moves\":[\"crunch\",\"fireblast\",\"pursuit\",\"hiddenpowergrass\"],\"baseAbility\":\"flashfire\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"}]},\"noCancel\":true}"
+  ],
+  "own_request_line": "|request|{\"forceSwitch\":[true],\"side\":{\"name\":\"PokeZeroBot\",\"id\":\"p1\",\"pokemon\":[{\"ident\":\"p1: Fearow\",\"details\":\"Fearow, L81, F\",\"condition\":\"0 fnt\",\"active\":true,\"stats\":{\"atk\":192,\"def\":152,\"spa\":145,\"spd\":145,\"spe\":209},\"moves\":[\"hiddenpowerground\",\"quickattack\",\"drillpeck\",\"doubleedge\"],\"baseAbility\":\"keeneye\",\"item\":\"choiceband\",\"pokeball\":\"pokeball\"},{\"ident\":\"p1: Feraligatr\",\"details\":\"Feraligatr, L83, M\",\"condition\":\"276/276\",\"active\":false,\"stats\":{\"atk\":221,\"def\":213,\"spa\":178,\"spd\":185,\"spe\":177},\"moves\":[\"rockslide\",\"earthquake\",\"hiddenpowerflying\",\"hydropump\"],\"baseAbility\":\"torrent\",\"item\":\"choiceband\",\"pokeball\":\"pokeball\"},{\"ident\":\"p1: Ledian\",\"details\":\"Ledian, F\",\"condition\":\"272/272\",\"active\":false,\"stats\":{\"atk\":127,\"def\":157,\"spa\":167,\"spd\":277,\"spe\":227},\"moves\":[\"silverwind\",\"substitute\",\"swordsdance\",\"batonpass\"],\"baseAbility\":\"swarm\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p1: Kangaskhan\",\"details\":\"Kangaskhan, L79, F\",\"condition\":\"295/295\",\"active\":false,\"stats\":{\"atk\":196,\"def\":172,\"spa\":109,\"spd\":172,\"spe\":188},\"moves\":[\"shadowball\",\"rest\",\"doubleedge\",\"earthquake\"],\"baseAbility\":\"earlybird\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p1: Medicham\",\"details\":\"Medicham, L81, F\",\"condition\":\"230/230\",\"active\":false,\"stats\":{\"atk\":144,\"def\":168,\"spa\":144,\"spd\":168,\"spe\":176},\"moves\":[\"shadowball\",\"brickbreak\",\"bulkup\",\"rockslide\"],\"baseAbility\":\"purepower\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p1: Houndoom\",\"details\":\"Houndoom, L79, F\",\"condition\":\"248/248\",\"active\":false,\"stats\":{\"atk\":148,\"def\":125,\"spa\":219,\"spd\":172,\"spe\":196},\"moves\":[\"crunch\",\"fireblast\",\"pursuit\",\"hiddenpowergrass\"],\"baseAbility\":\"flashfire\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"}]},\"noCancel\":true}",
+  "owner": "p1",
+  "prefix_sha256": "02e2250c6ce4034069669004c6dde203c5e62da593bc4326c62cf387b47a3f96",
+  "request_id": "battle-gen3randombattle-controlled-2103400810:1",
+  "schema": "pokezero.phase-d.shared-gpu-search.v1",
+  "stream_id": 1
+ },
+ "source_hash": "f5a5265143d423af"
+}

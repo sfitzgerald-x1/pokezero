@@ -272,6 +272,26 @@ def _mechanism_data(protocol):
     return positions,groups
 
 
+UNMEASURED_SELF_MOVES='UNMEASURED_SELF_MOVES_BANK_MISMATCH'
+
+
+def bank_self_moves(header):
+    """V2 self_moves: the heldout bank's encoding, recorded in its header only when on (absent = off)."""
+    value=header.get('self_moves',False)
+    if type(value) is not bool:raise ValueError('heldout bank self_moves must be a bool')
+    return value
+
+
+def unmeasured_self_moves(bank_encoded,factory,**counts):
+    """V2 self_moves: a heldout bank encoded with self_moves=`bank_encoded` scored by a head served with a different
+    declaration (factory.contract.self_moves) would read inputs it was not trained on. Return explicitly unmeasured
+    mechanisms then (the panel still runs and the milestone is not UNKNOWN), or None when the two agree."""
+    served=bool(getattr(getattr(factory,'contract',None),'self_moves',False))
+    if bool(bank_encoded)==served:return None
+    return dict(status=UNMEASURED_SELF_MOVES,bank_self_moves=bool(bank_encoded),served_self_moves=served,calibration=None,
+        outcome_rmse=None,top_two_rows=[],**counts,scientific_qualification=False)
+
+
 def _columns(rows,config):
     import numpy as np
     if any(row.observation.view!='PUBLIC' or row.observation.category_vocabulary_sha256!=config.category_vocabulary_sha256
@@ -344,7 +364,15 @@ def _capture_resolver(protocol=None):
 
 def mechanism(protocol,factory,data):
     """Production entry cannot turn hand-authored record metadata into claims."""
-    return _capture_resolver(protocol).evaluate_original_capture(protocol,factory,data)
+    resolver=_capture_resolver(protocol)
+    # V2 self_moves: a heldout bank is scored only by a head served with the bank's own encoding; otherwise the mechanisms
+    # are explicitly unmeasured and the panel still runs. A device bank (BankData) carries its header's encoding, compared in
+    # evaluate_device_bank; every other bank (the Python capture bank, built on the champion driver catalog, whose own
+    # source files are bound into every captured bank and so stay untouched) is treated as off here.
+    from .v5_device_evaluation_bank import BankData
+    if type(data) is not BankData and unmeasured_self_moves(False,factory) is not None:
+        return unmeasured_self_moves(False,factory,heldout_positions=len(data.positions),sibling_groups=len(data.groups))
+    return resolver.evaluate_original_capture(protocol,factory,data)
 
 
 def _atomic(path,value):
@@ -505,9 +533,10 @@ def _factory(protocol,request):
     if _vocab_sha(v)!=original.category_vocab_sha256:raise ValueError('original categorical row order required')
     source=load_gen3_randbat_source_cached(runtime['showdown']['root'])
     if source.metadata.source_hash!=original.belief_set_source_hash:raise ValueError('original public source differs')
+    # V2 self_moves: load_factory takes the archive's declaration (take_declaration), so an on archive is evaluated on.
     contract=replace(original,checkpoint_sha256=request.snapshot.checkpoint_sha256,model_config_sha256=request.snapshot.model_sha256)
     catalog=v4_encoder.compile_encoder(public_belief.compile_source(source),load_showdown_dex_cached(runtime['showdown']['root']),v,
-        checkpoint_sha256=contract.checkpoint_sha256,feature_masks=dict(contract.feature_masks))
+        checkpoint_sha256=contract.checkpoint_sha256,feature_masks=contract.encoder_masks())
     factory=load_factory(request.archive_path,catalog=catalog,contract=contract,
         expected_archive_sha256=request.snapshot.archive_sha256,expected_checkpoint_sha256=request.snapshot.checkpoint_sha256,
         expected_category_vocabulary_sha256=category_binding(v),

@@ -40,14 +40,18 @@ def main(argv=None):
     from pokezero import v5_run as runs, v5_training as v5, v2_trainer as v2t
     from gpu_engine import v5_model
     from gpu_engine.v2_bench_trainer import configurations
+    from pokezero import checkpoint_self_moves as encoding
     run = Path(args.reference_run);out = Path(args.out);(out / 'artifacts').mkdir(parents=True, exist_ok=True)
-    events = journal(run)
+    _, declaration, events = encoding.verified_run(run)
     def checkpoint_of(iteration):
         found = [e['payload'] for e in events if e['kind'] == 'SNAPSHOT' and e['payload']['iteration'] == iteration]
         if not found:raise ValueError(f'no reference snapshot for iteration {iteration}')
         return runs.Snapshot(**found[-1])
     target, start = checkpoint_of(args.iteration), checkpoint_of(args.iteration - 1)
-    payload = torch.load(run / target.checkpoint, map_location='cpu', weights_only=True)
+    checked, declared, _ = encoding.run_checkpoint(run,target.checkpoint,target.checkpoint_sha256,
+        iteration=args.iteration,require_snapshot=True)
+    payload = checked.payload
+    initializer, proof = encoding.original_initializer(run,start)
     manifest = payload['metadata']['progress']['manifest'] if payload['metadata'].get('progress') else None
     if not manifest:raise ValueError('reference checkpoint carries no cache manifest')
     digests = [record['sha256'] for record in manifest]
@@ -61,14 +65,16 @@ def main(argv=None):
     if missing:log('MISSING_CACHES', digests=missing, searched=[str(run), *args.extra_cache_root])
     if missing:raise ValueError(f'{len(missing)} reference caches not found')
     paths = [by_digest[d] for d in digests]
-    model, loss, train, weights, _ = configurations(run / start.checkpoint)
+    model, loss, train, weights, _ = configurations(run / start.checkpoint,
+        expected_checkpoint_sha256=start.checkpoint_sha256,expected_self_moves=declared,
+        off_provenance=proof,weights_only_initializer=initializer)
     reference_train = v5.TrainConfig(**payload['metadata']['training'])
     if reference_train != train:raise ValueError('reference iteration recipe differs from its starting checkpoint')
     begin = time.perf_counter()
     store = v2t.load_cache_store(paths, model, loss, device='cuda')
     load_seconds = time.perf_counter() - begin
     runtime = v2t.create(model, loss, train, v2t.V2Config(mode=args.mode, order=args.order, optimizer=args.optimizer),
-        enable_v5=True, device='cuda')
+        enable_v5=True, device='cuda',self_moves=declared)
     runtime.model.load_state_dict(weights);trainer = v2t.Trainer(runtime)
     saved_rate = payload['metadata'].get('learning_rate_state')
     if train.learning_rate_schedule == 'constant':
@@ -79,16 +85,18 @@ def main(argv=None):
         window = v5.DeclaredGameWindow(**saved_rate['window'])
     begin = time.perf_counter();report = trainer.train(store, window=window);torch.cuda.synchronize()
     train_seconds = time.perf_counter() - begin
-    checkpoint = out / 'artifacts' / f'train-{args.iteration}.pt';v2t.save_checkpoint(checkpoint, runtime)
+    checkpoint = out / 'artifacts' / f'train-{args.iteration}.pt';receipt=v2t.save_checkpoint(checkpoint, runtime)
     archive = out / 'artifacts' / f'actor-{args.iteration}.npz';digest = sha(checkpoint)
-    metadata = v5_model.export(checkpoint, archive, expected_checkpoint_sha256=digest, enable_v5=True)
+    metadata = v5_model.export(checkpoint, archive, expected_checkpoint_sha256=digest, enable_v5=True, self_moves=declared,
+        off_provenance=encoding.off_from_receipt(receipt['encoding_receipt']) if not declared else None)
     snapshot = runs.Snapshot(iteration=args.iteration, checkpoint=f'artifacts/train-{args.iteration}.pt', checkpoint_sha256=digest,
         archive=f'artifacts/actor-{args.iteration}.npz', archive_sha256=metadata['weights_archive_sha256'], model_sha256=target.model_sha256)
     summary = dict(reference_run=str(run), iteration=args.iteration, caches=len(paths), rows=store.rows,
         reference_steps=payload['metadata'].get('steps'), reference_rows=payload['metadata'].get('rows'),
         v2_steps=runtime.steps, v2_rows=runtime.rows, mode=trainer.mode_report(), order=args.order,
         load_seconds=load_seconds, train_seconds=train_seconds)
-    write_json(out / 'state.json', dict(snapshots=[asdict(snapshot)], reports=[summary]))
+    write_json(out / 'state.json', dict(snapshots=[asdict(snapshot)], reports=[summary],
+        declaration_sha256=runs._sha(declaration),checkpoint_encoding_receipts={digest:receipt['encoding_receipt']}))
     log('RETRAINED', **summary)
     return 0
 

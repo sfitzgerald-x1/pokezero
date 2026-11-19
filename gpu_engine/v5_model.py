@@ -104,16 +104,23 @@ def _config(metadata):
     return config
 
 
-def export(checkpoint, out, *, expected_checkpoint_sha256, enable_v5=False):
-    """Export an explicit v5 checkpoint snapshot; Torch is imported only here."""
+def export(checkpoint, out, *, expected_checkpoint_sha256, enable_v5=False, self_moves=None, off_provenance=None):
+    """Export an explicit v5 checkpoint snapshot; Torch is imported only here.
+
+    ``self_moves`` is an optional expectation of the digest-bound checkpoint
+    declaration. Legacy OFF requires retained checkpoint-bound provenance;
+    callers cannot relabel weights. OFF archive bytes remain unchanged."""
+    if self_moves is not None and type(self_moves) is not bool:
+        raise ValueError('explicit bool self_moves required')
     if enable_v5 is not True:
         raise ValueError('explicit v5 actor enablement required')
     contract._binding(expected_checkpoint_sha256); _sources()
-    blob, digest = _snapshot(checkpoint)
-    if digest != expected_checkpoint_sha256:
-        raise ValueError('original v5 checkpoint SHA256 differs')
+    from pokezero.checkpoint_self_moves import checked_checkpoint, resolve_self_moves
+    checked = checked_checkpoint(checkpoint, expected_checkpoint_sha256=expected_checkpoint_sha256)
+    self_moves = resolve_self_moves(checked, expected_self_moves=self_moves, off_provenance=off_provenance)
+    digest = checked.sha256
     import torch
-    payload = torch.load(io.BytesIO(blob), map_location='cpu', weights_only=True)
+    payload = checked.payload
     metadata = payload.get('metadata', {})
     if (metadata.get('schema') != CHECKPOINT_SCHEMA
             or payload.get('metadata_sha256') != _sha(metadata)
@@ -142,6 +149,8 @@ def export(checkpoint, out, *, expected_checkpoint_sha256, enable_v5=False):
         actor='RAW_POLICY', view='PUBLIC', auxiliary_heads=False, evaluation=True,
         parameter_count=sum(a.size for a in params.values()),
         tensor_sha256={name: hashlib.sha256(a.tobytes()).hexdigest() for name, a in params.items()})
+    if self_moves:
+        result['self_moves'] = True
     encoded = np.frombuffer(json.dumps(result, sort_keys=True, allow_nan=False).encode(), np.uint8)
     archive = io.BytesIO()
     np.savez_compressed(archive, metadata_json=encoded, **params)
@@ -165,6 +174,8 @@ def load(path, *, expected_archive_sha256, expected_checkpoint_sha256, expected_
         raise ValueError('caller-trusted v5 actor archive SHA256 differs')
     with np.load(io.BytesIO(blob), allow_pickle=False) as archive:
         metadata = json.loads(archive['metadata_json'].tobytes())
+        from pokezero.checkpoint_self_moves import archive_self_moves
+        archive_self_moves(metadata)
         params = {name: archive[name] for name in archive.files if name != 'metadata_json'}
     if (metadata.get('schema') != ARCHIVE_SCHEMA or metadata.get('actor') != 'RAW_POLICY'
             or metadata.get('view') != 'PUBLIC' or metadata.get('auxiliary_heads') is not False

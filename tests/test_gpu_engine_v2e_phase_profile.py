@@ -22,9 +22,9 @@ from gpu_engine import v2e_census as cz, v2e_phase_profile as pp
 
 ROOT = Path(__file__).resolve().parents[1]
 # Statements of a stand-in step_with_chance on the real phase lines (A, B, D, E0, two actions E1/E4, F1, two residual events, G).
-CODE = {400: 'def step_with_chance(x, y):', 545: '    a = helper(x) + y', 602: '    b = a * y', 712: '    c = b - x', 832: '    c = c + 1',
-    858: '    for order in range(2):', 860: '        c = c * 2 + order', 2134: '        c = jnp.where(c > 0, c, -c)', 2244: '    d = c - y',
-    2364: '    for event in range(2):', 2365: '        d = d + event', 2461: '        d = d * 3', 2731: '    return d + a'}
+CODE = {463: 'def step_with_chance(x, y):', 609: '    a = helper(x) + y', 670: '    b = a * y', 784: '    c = b - x', 918: '    c = c + 1',
+    944: '    for order in range(2):', 946: '        c = c * 2 + order', 2257: '        c = jnp.where(c > 0, c, -c)', 2396: '    d = c - y',
+    2520: '    for event in range(2):', 2521: '        d = d + event', 2617: '        d = d * 3', 2897: '    return d + a'}
 HEADER = ['import jax', 'import jax.numpy as jnp', '', '', '@jax.jit', 'def helper(x):', '    return x * 3 + 1']
 LABELS = ['A', 'B', 'D', 'E0', 'E1.0', 'E4.0', 'E1.1', 'E4.1', 'F1', 'F2.0', 'F2.1', 'G']
 
@@ -81,7 +81,7 @@ class PhaseTableTest(unittest.TestCase):
         for tag, label in cz.BOUNDARIES:self.assertTrue(label == 'END' or cz.base(label) in names, tag)
 
     def test_label_lines(self):
-        lines = [None, 546, 602, 636, 746, 842, 871, 1131, 1559, 2134, 871, 1131, 2200, 2255, 2357, 2365, 2461, 2370, 2396, 2373, 2749, None]
+        lines = [None, 610, 670, 704, 818, 928, 957, 1232, 1663, 2257, 957, 1232, 2333, 2407, 2513, 2521, 2617, 2526, 2552, 2529, 2916, None]
         want = ['outside', 'A', 'B', 'C', 'D', 'E0', 'E1.0', 'E2.0', 'E3.0', 'E4.0', 'E1.1', 'E2.1', 'E4.1', 'F1', 'F2.pre', 'F2.0', 'F2.0',
             'F2.1', 'F2.1', 'F2.2', 'G', 'outside']
         self.assertEqual(cz.label_lines(lines), want)
@@ -90,7 +90,7 @@ class PhaseTableTest(unittest.TestCase):
 
     def test_listing_lines(self):
         with tempfile.TemporaryDirectory() as d:
-            path = Path(d, 'listing.txt');path.write_text('  411:   check\n  545:   rows\n  602:   speed\n 2255:   x\n 2789:   return\nnoise\n')
+            path = Path(d, 'listing.txt');path.write_text('  474:   check\n  609:   rows\n  670:   speed\n 2407:   x\n 2959:   return\nnoise\n')
             self.assertEqual(cz.listing_lines(path), {'pre': 1, 'A': 1, 'B': 1, 'F1': 1, 'G': 1})
 
 
@@ -173,9 +173,9 @@ FunctionNames
 FileLocations
 1 {file_name_id=1 function_name_id=1 line=10 end_line=10 column=4 end_column=35}
 2 {file_name_id=1 function_name_id=2 line=9 end_line=9 column=11 end_column=30}
-3 {file_name_id=1 function_name_id=3 line=866 end_line=866 column=8 end_column=15}
+3 {file_name_id=1 function_name_id=3 line=952 end_line=952 column=8 end_column=15}
 4 {file_name_id=2 function_name_id=4 line=4 end_line=4 column=11 end_column=23}
-5 {file_name_id=1 function_name_id=3 line=2255 end_line=2255 column=11 end_column=16}
+5 {file_name_id=1 function_name_id=3 line=2407 end_line=2407 column=11 end_column=16}
 
 StackFrames
 1 {file_location_id=1 parent_frame_id=1}
@@ -205,14 +205,14 @@ class JaxAttribTest(unittest.TestCase):
     def test_stacks_reach_the_outermost_frame(self):
         stack = pp.hlo_stacks(HLO.splitlines())
         self.assertEqual(stack.offset, 1)
-        self.assertEqual(stack(4), [('lane_index.py', 'leaf', 4), ('transition.py', 'step_with_chance', 866), ('transition.py', 'outer', 9),
+        self.assertEqual(stack(4), [('lane_index.py', 'leaf', 4), ('transition.py', 'step_with_chance', 952), ('transition.py', 'outer', 9),
             ('transition.py', '<module>', 10)])
-        self.assertEqual([f[2] for f in stack(5)], [2255, 9, 10])
+        self.assertEqual([f[2] for f in stack(5)], [2407, 9, 10])
 
     def test_index_and_attribution(self):
         index = pp.phase_hlo_index(HLO)
-        self.assertEqual((index['fusion.1']['line'], index['fusion.1']['module'], index['fusion.1']['scope']), (866, 'lane_index', 'step'))
-        self.assertEqual(index['fusion.2']['line'], 2255);self.assertIsNone(index['fusion.3']['line']);self.assertEqual(index['fusion.4']['scope'], 'forward')
+        self.assertEqual((index['fusion.1']['line'], index['fusion.1']['module'], index['fusion.1']['scope']), (952, 'lane_index', 'step'))
+        self.assertEqual(index['fusion.2']['line'], 2407);self.assertIsNone(index['fusion.3']['line']);self.assertEqual(index['fusion.4']['scope'], 'forward')
         event = lambda op, dur: dict(name=op, dur=dur, start=0, end=dur, line='Stream #1', stats={'hlo_op': op})
         events = [event('fusion.1', 4_000_000), event('fusion.2', 2_000_000), event('fusion.3', 1_000_000), event('fusion.4', 8_000_000),
             event('unknown.9', 5), dict(name='memcpy', dur=9, start=0, end=9, line='Stream #1', stats={})]
@@ -221,7 +221,7 @@ class JaxAttribTest(unittest.TestCase):
         self.assertEqual(got['ms_per_tick_by_phase'], {'E1': 2.0, 'F1': 1.0, 'outside': 0.5})
         self.assertEqual(got['ms_per_tick_by_group_category']['E'], {'tracker': 2.0})
         self.assertAlmostEqual(got['step_ms_per_tick'], 3.5);self.assertIn('forward', got['ms_per_tick_by_scope'])
-        # fusion.2 (root op at 2255, F1) fuses an op from line 866 (E1): charged whole to F1, and counted as spanning two phases.
+        # fusion.2 (root op at 2407, F1) fuses an op from line 952 (E1): charged whole to F1, and counted as spanning two phases.
         self.assertEqual(index['fusion.2']['phases'], ['E1', 'F1']);self.assertEqual(index['fusion.1']['phases'], ['E1'])
         self.assertAlmostEqual(got['multi_phase_fusion_share'], 2 / 7);self.assertAlmostEqual(got['multi_group_fusion_share'], 2 / 7)
         self.assertIn('root op', got['caveat'])
@@ -231,7 +231,7 @@ class JaxAttribTest(unittest.TestCase):
         for k, p in ((2, 1), (3, 2), (4, 3), (5, 2)):
             fixed = fixed.replace(f'{k} {{file_location_id={k} parent_frame_id={p + 1}}}', f'{k} {{file_location_id={k} parent_frame_id={p}}}')
         stack = pp.hlo_stacks(fixed.splitlines());self.assertEqual(stack.offset, 0)
-        self.assertEqual([f[2] for f in stack(4)], [4, 866, 9, 10])
+        self.assertEqual([f[2] for f in stack(4)], [4, 952, 9, 10])
 
 
 class DivergenceTest(unittest.TestCase):
@@ -242,10 +242,10 @@ class DivergenceTest(unittest.TestCase):
         s = stats.summary(dict(E=.5))['E']
         self.assertEqual(s['warps'], 2);self.assertEqual(s['distinct_classes_per_warp']['mean'], 1.5);self.assertEqual(s['single_class_warps'], .5)
         self.assertEqual(s['lane_features_mean'], 1.);self.assertEqual(s['union_features_mean'], 1.5)
-        # F = 2 features; lane cost .5 + .5 * 1/2 = .75; warp cost .5 + .5 * 1.5/2 = .893.
-        self.assertAlmostEqual(s['union_factor'], .893 / .75);self.assertAlmostEqual(s['masked_uniform_factor'], 1 / .75)
-        # The design's u = 0.7: lane cost .7 + .3 * 1/2 = .85; warp cost .7 + .3 * 1.5/2 = .943.
-        self.assertAlmostEqual(s['union_factor_design_uniform'], .943 / .85);self.assertEqual(s['design_uniform_share'], .7)
+        # F = 2 features; lane cost .5 + .5 * 1/2 = .75; warp cost .5 + .5 * 1.5/2 = .908.
+        self.assertAlmostEqual(s['union_factor'], .908 / .75);self.assertAlmostEqual(s['masked_uniform_factor'], 1 / .75)
+        # The design's u = 0.7: lane cost .7 + .3 * 1/2 = .85; warp cost .7 + .3 * 1.5/2 = .961.
+        self.assertAlmostEqual(s['union_factor_design_uniform'], .961 / .85);self.assertEqual(s['design_uniform_share'], .7)
         self.assertNotIn('G', stats.summary())
         self.assertAlmostEqual(pp.weighted_factor(dict(E=dict(union_factor=2.), F=dict(union_factor=1.)), dict(E=3, F=1)), 1.75)
 
@@ -287,11 +287,11 @@ class ReportTest(unittest.TestCase):
     def test_split_shares(self):
         s = pp.split_shares(1.0, .6, .1, .45)
         self.assertAlmostEqual(s['forward_ms'], 400.);self.assertAlmostEqual(s['engine_ms'], 500.);self.assertAlmostEqual(s['depth1_ms'], 100.)
-        self.assertAlmostEqual(s['forward_share'], .4);self.assertAlmostEqual(s['engine_share'], .5);self.assertEqual(s['total_ms'], 1018.)
+        self.assertAlmostEqual(s['forward_share'], .4);self.assertAlmostEqual(s['engine_share'], .5);self.assertEqual(s['total_ms'], 1036.)
         self.assertAlmostEqual(s['all_forwards_ms'], 550.);self.assertAlmostEqual(s['engine_total_ms'], 450.);self.assertAlmostEqual(s['engine_total_share'], .45)
         self.assertIsNone(pp.split_shares(1.0, None, .1)['forward_ms']);self.assertIsNone(pp.split_shares(1.0, .6, .1)['engine_total_ms'])
         args = pp.parser().parse_args(['pricer-split', '--d3-root', '/d', '--chunk', '0', '--out', '/o'])
-        ns = pp.pricer_args(args);self.assertEqual((ns.capacity, ns.w_values, ns.block_lanes), (8, (2,), 2212))
+        ns = pp.pricer_args(args);self.assertEqual((ns.capacity, ns.w_values, ns.block_lanes), (8, (2,), 2237))
 
     def test_zero_forward_zeroes_every_batch(self):
         import jax
@@ -340,7 +340,7 @@ class ReportTest(unittest.TestCase):
             env = dict(os.environ, JAX_DEFAULT_MATMUL_PRECISION='highest', PYTHONDONTWRITEBYTECODE='1',
                 PYTHONPATH=os.pathsep.join(x for x in (str(ROOT), str(ROOT / 'src'), os.environ.get('PYTHONPATH')) if x))
             result = subprocess.run([sys.executable, '-c', code, *argv], capture_output=True, text=True, timeout=300, env=env, cwd=str(ROOT))
-        self.assertEqual(result.returncode, 0, result.stderr[-2025:])
+        self.assertEqual(result.returncode, 0, result.stderr[-2050:])
         self.assertEqual(json.loads(result.stdout.strip().splitlines()[-1]), dict(jax=False, memory_policy=True))
 
     def test_ncu_csv(self):
@@ -368,7 +368,7 @@ class ReportTest(unittest.TestCase):
             path = Path(d, 'walls_cuda_gpu_trace.csv')
             path.write_text('Start (ns),Duration (ns),GrdX,GrdY,Name\n1,10,4,1,v2e_gen_step::chunk_0(v2e_gen_step::Params)\n'
                 '2,30,4,1,v2e_gen_step::chunk_0(v2e_gen_step::Params)\n3,5,64,1,v2e_gen_step::chunk_1(v2e_gen_step::Params)\n4,7,1,1,memset\n')
-            self.assertEqual(pp.nsys_chunks(path), {128: {'0': 20.}, 2073: {'1': 5.}})
+            self.assertEqual(pp.nsys_chunks(path), {128: {'0': 20.}, 2098: {'1': 5.}})
 
     def test_report_end_to_end(self):
         with tempfile.TemporaryDirectory() as d:
@@ -378,11 +378,11 @@ class ReportTest(unittest.TestCase):
             write('census', 'census.json', dict(census=dict(groups=groups), device_lines={'pre': 9, 'A': 24, 'E1': 98, 'E3': 140}))
             chunk = lambda **v: v
             marks = dict(module=dict(chunks=2), lanes={str(l): dict(by_chunk={'0': chunk(A=10, E=30), '1': chunk(F=40, G=10, outside=10)},
-                by_group_category={'E': dict(tracker=27, inline=3)}) for l in (128, 2073)})
+                by_group_category={'E': dict(tracker=27, inline=3)}) for l in (128, 2098)})
             write('marks', 'marks.json', marks)
-            write('walls', 'walls.json', dict(chunks=2, lanes={'2073': dict(generated=dict(ms_median=10.), jax=dict(ms_median=9.),
+            write('walls', 'walls.json', dict(chunks=2, lanes={'2098': dict(generated=dict(ms_median=10.), jax=dict(ms_median=9.),
                 generated_trace=dict(chunk_ns_median={'0': 400., '1': 600.}))}))
-            write('jax', 'jax_attrib.json', dict(lanes={'2073': dict(ms_per_tick_by_group={'E': 3., 'F': 2.}, multi_phase_fusion_share=.25,
+            write('jax', 'jax_attrib.json', dict(lanes={'2098': dict(ms_per_tick_by_group={'E': 3., 'F': 2.}, multi_phase_fusion_share=.25,
                 multi_group_fusion_share=.1)}, caveat='root op'))
             write('divergence', 'divergence.json', dict(groups={'E': dict(union_factor=1.4, union_factor_design_uniform=1.2)}, weighted_union_factor=1.3,
                 weighted_union_factor_design_uniform=1.1, design_uniform_share=.7))
@@ -391,12 +391,12 @@ class ReportTest(unittest.TestCase):
             with mock.patch('builtins.print'):self.assertEqual(pp.main(argv), 0)
             report = json.loads((d / 'report' / 'phase_attribution.json').read_text());rows = {r['phase']: r for r in report['rows']}
             self.assertEqual(rows['A']['device_lines'], 33);self.assertEqual(rows['E']['device_lines'], 238)
-            self.assertAlmostEqual(rows['E']['generated_ms_2048'], 10 * 300 / 1018);self.assertAlmostEqual(rows['F']['generated_ms_2048'], 10 * 400 / 1018)
+            self.assertAlmostEqual(rows['E']['generated_ms_2048'], 10 * 300 / 1036);self.assertAlmostEqual(rows['F']['generated_ms_2048'], 10 * 400 / 1036)
             self.assertIsNone(rows['E']['generated_ms_128']);self.assertEqual(rows['E']['jax_ms_2048'], 3.);self.assertEqual(rows['E']['union_factor'], 1.4)
             self.assertAlmostEqual(rows['E']['hook_share_cycles_2048'], .9);self.assertIn('outside', rows)
             self.assertEqual(report['decision']['M2'], 'F + G');self.assertEqual(report['decision']['M4'], 'E whole')
             self.assertEqual(rows['E']['union_factor_design_uniform'], 1.2);self.assertEqual(report['warnings'], [])
-            self.assertIn('by chunk kernel time', report['generated_ms_source']['2073']);self.assertEqual(report['jax_attrib']['multi_phase_fusion_share'], {'2073': .25})
+            self.assertIn('by chunk kernel time', report['generated_ms_source']['2098']);self.assertEqual(report['jax_attrib']['multi_phase_fusion_share'], {'2098': .25})
             text = (d / 'report' / 'phase_attribution.md').read_text()
             self.assertIn('Live pricer split', text);self.assertIn('M2 = F + G', text);self.assertIn('opponent-view child-prior forward', text)
             self.assertIn('Every forward zeroed', text);self.assertIn('M6 (observe): not evaluated: observe is not measured in this job', text)
@@ -406,19 +406,19 @@ class ReportTest(unittest.TestCase):
             with mock.patch('builtins.print'):self.assertEqual(pp.main(argv[:2] + [str(d / 'report2')] + argv[3:]), 0)
             report = json.loads((d / 'report2' / 'phase_attribution.json').read_text())
             self.assertEqual(len(report['warnings']), 1);self.assertIn('3 chunks', report['warnings'][0])
-            self.assertIn('no per-chunk times', report['generated_ms_source']['2073'])
+            self.assertIn('no per-chunk times', report['generated_ms_source']['2098'])
 
 
 class CommandLineTest(unittest.TestCase):
     def test_parsers(self):
         p = pp.parser()
         run = ['--config', 'c', '--reference-run', 'r', '--shards', 's', '--out', 'o']
-        self.assertEqual(p.parse_args(['marks', *run]).lanes, [128, 2073])
-        self.assertEqual(p.parse_args(['walls', *run]).lanes, [128, 2073, 8192])
+        self.assertEqual(p.parse_args(['marks', *run]).lanes, [128, 2098])
+        self.assertEqual(p.parse_args(['walls', *run]).lanes, [128, 2098, 8192])
         self.assertEqual(p.parse_args(['ncu-driver', *run]).lanes, 128);self.assertEqual(p.parse_args(['ncu-driver', *run, '--marks', 'm']).marks, 'm')
         self.assertEqual(p.parse_args(['divergence', *run]).design_uniform_share, .7)
         self.assertEqual(p.parse_args(['divergence', *run]).limit, 100)
-        self.assertEqual(p.parse_args(['jax-attrib', '--profile-dir', 'x', '--out', 'o']).lanes, [128, 2073])
+        self.assertEqual(p.parse_args(['jax-attrib', '--profile-dir', 'x', '--out', 'o']).lanes, [128, 2098])
         self.assertEqual(cz.parser().parse_args(['--config', 'c', '--reference-run', 'r', '--out', 'o']).games, 1)
         with self.assertRaises(SystemExit), mock.patch('sys.stderr'):pp.main(['pricer-split', '--d3-root', '/d', '--chunk', '0', '--out', '/o'])
         champion = ['--champion-archive', 'w', '--champion-archive-sha256', 'a' * 64, '--champion-checkpoint-sha256', 'b' * 64]

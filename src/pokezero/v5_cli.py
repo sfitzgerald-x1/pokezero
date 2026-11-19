@@ -21,19 +21,22 @@ def main(argv=None):
     train.add_argument('--out',type=Path,required=True)
     train.add_argument('--summary',type=Path)
     train.add_argument('--max-updates',type=int)
+    from .checkpoint_self_moves import add_receipt_arguments,receipt_from_arguments
+    add_receipt_arguments(train)
     args=parser.parse_args(argv)
     if args.enable_v5 is not True:raise ValueError('explicit v5 trainer enablement required')
     if args.out.exists():raise FileExistsError(args.out)
     if args.summary is not None and args.summary.exists():raise FileExistsError(args.summary)
     if args.resume is not None:
-        runtime=training.load_checkpoint(args.resume,enable_v5=True)
+        runtime=training.load_checkpoint(args.resume,enable_v5=True,off_provenance=receipt_from_arguments(args))
     else:
         config=json.loads(args.config.read_text())
         model=V5ModelConfig.from_metadata(config['model'])
         loss=V5LossConfig(**{field.name:config['loss'][field.name] for field in fields(V5LossConfig)})
         if training._sha(loss.metadata())!=training._sha(config['loss']):
             raise ValueError('explicit v5 loss metadata required')
-        runtime=training.create(model,loss,training.TrainConfig(**config['training']),enable_v5=True)
+        runtime=training.create(model,loss,training.TrainConfig(**config['training']),enable_v5=True,
+            self_moves=config.get('self_moves',False))
     report=training.train_caches(runtime,args.cache,max_updates=args.max_updates)
     report['checkpoint']=training.save_checkpoint(args.out,runtime)
     if args.summary is not None:

@@ -41,15 +41,18 @@ class FakeBackend:
 
 
 class FakeTraining:
-    def __init__(self):self.latest=None;self.traces=[]
+    def __init__(self):self.latest=None;self.traces=[];self.created_declarations=[];self.resumed_expectations=[]
     def create(self,model,loss,train,**kwargs):
-        self.latest=NS(model_config=model,loss_config=loss,train_config=train,steps=0,rows=0,progress=None,rng=train.seed,weight=0.)
+        self.created_declarations.append(kwargs['self_moves'])
+        self.latest=NS(model_config=model,loss_config=loss,train_config=train,steps=0,rows=0,progress=None,rng=train.seed,weight=0.,
+            self_moves=kwargs['self_moves'])
         return self.latest
     def save(self,path,runtime):
-        payload={name:getattr(runtime,name) for name in ('steps','rows','progress','rng','weight')}
+        payload={name:getattr(runtime,name) for name in ('steps','rows','progress','rng','weight','self_moves')}
         with Path(path).open('x') as stream:json.dump(payload,stream,sort_keys=True)
         return dict(sha256=r._file_sha(path))
     def load(self,path,**kwargs):
+        self.resumed_expectations.append(kwargs['expected_self_moves'])
         payload=json.loads(Path(path).read_text())
         self.latest=NS(model_config=kwargs['expected_model_config'],loss_config=kwargs['expected_loss_config'],
             train_config=kwargs['expected_train_config'],**payload)
@@ -68,11 +71,21 @@ class FakeTraining:
 
 
 class V5RunTests(unittest.TestCase):
+    def test_on_declaration_reaches_cold_creation_export_and_resume(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            trainer=FakeTraining();recipe=replace(plan(),self_moves=True);root=Path(tmp)/'run'
+            self.execute(root,recipe,FakeBackend(),trainer)
+            self.assertEqual(trainer.created_declarations,[True])
+            self.execute(root,recipe,FakeBackend(),trainer,resume=True)
+            self.assertEqual(trainer.resumed_expectations,[True])
+            self.assertIs(trainer.latest.self_moves,True)
+
     def execute(self,path,plan,backend,trainer,*,resume=False,interrupt=None):
         from contextlib import ExitStack
         from gpu_engine import v5_model
         def export(checkpoint,out,**kwargs):
             self.assertEqual(kwargs['expected_checkpoint_sha256'],r._file_sha(checkpoint))
+            self.assertIs(kwargs['self_moves'],plan.self_moves)
             with Path(out).open('xb') as stream:stream.write(b'synthetic-actor:'+Path(checkpoint).read_bytes())
             return {'weights_archive_sha256':r._file_sha(out)}
         original=r.Store.checkpoint
@@ -85,6 +98,9 @@ class V5RunTests(unittest.TestCase):
                 stack.enter_context(patch.object(r.training,name,side_effect=method))
             stack.enter_context(patch.object(v5_model,'export',side_effect=export))
             stack.enter_context(patch.object(r.Store,'checkpoint',checkpoint))
+            # The synthetic JSON trainer has no Torch checkpoint. Real journal
+            # provenance is exercised by test_self_moves_checkpoint.
+            stack.enter_context(patch.object(r.Store,'checkpoint_provenance',return_value=None))
             return r.run(plan,path,backend=backend,resume=resume,enable_v5=True)
 
     def test_journal_keeps_each_original_update_with_its_step_and_rows(self):
