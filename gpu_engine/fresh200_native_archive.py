@@ -4,6 +4,7 @@ import copy
 from contextlib import ExitStack
 from dataclasses import dataclass
 import hashlib
+import json
 from pathlib import Path
 
 from .fresh200_fixed_prefix import prefix_schedule
@@ -83,6 +84,9 @@ def load_recorded_boundaries(prefix, root, *, recorded_root, completed_sha256, s
     binding = document(prefix.binding_wire.decode('utf8'))
     _need(_same(binding['schedule'], [vars(command) for command in schedule]),
           'archive extent differs from the sealed prefix schedule')
+    version2 = binding['schema'] == 'pokezero.fresh200.fixed_prefix_inputs.v2'
+    _need(not version2 or visibility_policy_sha256 is not None,
+          'frozen corpus prefix requires its owner visibility policy')
     records = receipt['commands']
     _need(receipt['schema'] == 'pokezero.fresh200.raw_command_recording.v1'
           and receipt['status'] == 'RAW_CLOSED_ARTIFACT_SET_RECORDED_ONLY'
@@ -96,12 +100,23 @@ def load_recorded_boundaries(prefix, root, *, recorded_root, completed_sha256, s
         rule_wire = _artifact(recording, recorded_recording, 'owner-visibility.json',
                               receipt['admission_files']['owner-visibility.json'])
         rule = document(rule_wire.decode('utf8'))
-        _need(digest(rule_wire) == visibility_policy_sha256
+        expected_version = 'v2' if version2 else 'v1'
+        _need(rule['schema'] == 'pokezero.fresh200.owner_visibility.' + expected_version
+              and digest(rule_wire) == visibility_policy_sha256
               and rule['fixed_input_binding_sha256'] == digest(prefix.binding_wire)
               and rule['start_wire_sha256'] == digest(prefix.start_wire)
               and rule['root_index'] == prefix.root_index and rule['stream_id'] == prefix.stream_id
+              and rule['endpoint_frame'] == len(prefix.steps)
               and rule['reference_owner'] == OWNERS[prefix.owner] and rule['battle_id'] == prefix.battle_id,
               'archived visibility declaration differs from the frozen root')
+        if version2:
+            address = json.dumps(binding['selected_root'], ensure_ascii=False, sort_keys=True,
+                                 separators=(',', ':'), allow_nan=False).encode('utf8')
+            _need(rule['storage_row'] == prefix.row and rule['selected_address_sha256'] == digest(address)
+                  and rule['capture_sha256'] == binding['capture_reference']['sha256']
+                  and rule['device_replay_sha256'] == binding['device_reference']['sha256']
+                  and rule['ordered_roster_sha256'] == binding['ordered_roster_sha256'],
+                  'archived visibility declaration differs from the frozen corpus roster')
     _need(_bounded_read(recording / 'frozen-inputs.json') == prefix.binding_wire
           and _bounded_read(recording / 'literal-teams.json') == prefix.team_wire,
           'recorded prefix binding or literal constructor differs')

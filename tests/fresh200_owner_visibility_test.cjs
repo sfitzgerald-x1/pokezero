@@ -26,6 +26,25 @@ const context = Object.freeze({
   session: policy.session, battleId: policy.battle_id, formatid: policy.formatid, stdinSha256: policy.start_wire_sha256,
 });
 
+test('v2 binds the frozen roster and selected address without accepting a v1 substitution', () => {
+  const { prior_recording_sha256, prior_physical_pre_sha256, ...base } = policy;
+  const next = {
+    ...base, schema: 'pokezero.fresh200.owner_visibility.v2', root_index: 1,
+    storage_row: 37, stream_id: 2120000037, reference_owner: 'p1', endpoint_frame: 9,
+    capture_sha256: 'f6c606ffbce81b0b43351d88188c448d5b54a16334e6f75c20681aca2800b13a',
+    device_replay_sha256: 'f6520ff94bbea899f5ba05dcd80cfba8fdc1f0628626f20956f58aaf7de52b29',
+    ordered_roster_sha256: '6'.repeat(64), selected_address_sha256: '7'.repeat(64),
+  };
+  assert.deepEqual(readPolicy(wire(next)).policy, next);
+  for (const mutation of [
+    { schema: policy.schema }, { prior_recording_sha256 }, { prior_physical_pre_sha256 },
+    { root_index: 0 }, { storage_row: false }, { endpoint_frame: 64 },
+    { capture_sha256: '0'.repeat(64) }, { selected_address_sha256: undefined },
+  ]) {
+    assert.throws(() => readPolicy(wire({ ...next, ...mutation })), /EXACT_(FIXED|FROZEN)_OWNER/);
+  }
+});
+
 async function withNativeBattle(run) {
   const stream = new BattleStream({ keepAlive: true });
   const result = { formatid: policy.formatid, strictChoices: true, seed: '1,2,3,4' };
