@@ -1,4 +1,5 @@
 """Inert controllers/tensors only: no engine turn, actor or model execution."""
+from contextlib import ExitStack
 from dataclasses import asdict
 import copy
 import hashlib
@@ -60,6 +61,85 @@ def declaration(root):
 
 
 class DeviceHeldoutBankTests(unittest.TestCase):
+    def capture(self, root, enabled, *, encodings=None, catalog=None, tables=None, error=None):
+        from gpu_engine.v5_device_backend import Prepared
+
+        _, document, _, labels = declaration(root)
+        if enabled:
+            document['self_moves'] = True
+        document['actors'][1] = dict(archive=dict(path='/unit/second.npz', sha256='3' * 64), checkpoint_sha256='4' * 64)
+        pool = NS(arrays=object(), metadata=lambda: {})
+        prepared = Prepared(
+            NS(masks=NS(self_moves=enabled if catalog is None else catalog)),
+            NS(metadata=NS(source_hash='5' * 64)), object(),
+            NS(belief=NS(self_moves=object() if (enabled if tables is None else tables) else None)),
+            document['pool_sha256'], '{}', json.dumps(dict(source_commit=document['source_commit'],
+            pool_metadata_sha256='6' * 64)), document['category_vocabulary_sha256'], document['category_count'])
+        document['source_sha256'] = prepared.source_sha256
+        reference = artifact(root / 'capture.json', document)
+        actors = [({'self_moves': True} if on else {}) for on in (encodings or (enabled, enabled))]
+        directory = Path(document['output_directory'])
+        with ExitStack() as stack:
+            stack.enter_context(patch('gpu_engine.source_provenance._pool', return_value={'pool_sha256': prepared.pool_sha256}))
+            stack.enter_context(patch.object(c, 'source_variant_census', return_value={'source_rows_sha256': labels.source_binding_sha256}))
+            config = object()
+            stack.enter_context(patch.object(producer.v5_model, 'load', side_effect=[
+                (object(), config, meta) for meta in actors]))
+            stack.enter_context(patch.object(producer.jax, 'jit', side_effect=lambda fn: fn))
+            stack.enter_context(patch.object(producer.jax, 'block_until_ready', side_effect=lambda value: value))
+            stack.enter_context(patch.object(producer.transition, 'state_from_pool'))
+            stack.enter_context(patch.object(producer.transition, 'initialize_with_public'))
+            stack.enter_context(patch('gpu_engine.engine_request_source._gender'))
+            executor = stack.enter_context(patch.object(producer, 'make_executor'))
+            stack.enter_context(patch.object(producer, '_collect_batch', return_value=['FAILED'] * 16))
+            if error:
+                with self.assertRaisesRegex(ValueError, error):
+                    producer.collect(reference, prepared, pool, gender_policy=None)
+                executor.assert_not_called()
+                self.assertFalse(directory.exists())
+                return
+            artifacts = producer.collect(reference, prepared, pool, gender_policy=None)
+        for name, kind in (('positions', schema.POSITIONS), ('siblings', schema.SIBLINGS)):
+            header, rows = schema._records(artifacts[name], kind)
+            self.assertEqual(len(rows), 1024)
+            self.assertEqual('self_moves' in header, enabled)
+            if enabled:
+                self.assertIs(header['self_moves'], True)
+        protocol = dict(artifacts, label_vocabulary_sha256=labels.sha256)
+        self.assertIs(schema.resolve_device_bank(protocol, None).self_moves, enabled)
+        index = json.loads((directory / 'cost-root-index.json').read_text())
+        journal = json.loads((directory / 'journal.json').read_text())
+        self.assertEqual(index['namespace'], journal['namespace'])
+        self.assertEqual('self_moves' in index['namespace'], enabled)
+        return protocol, reference
+
+    def test_capture_binds_encoding_in_both_headers_and_the_saved_root_namespace(self):
+        for enabled in (False, True):
+            with self.subTest(self_moves=enabled), tempfile.TemporaryDirectory() as tmp:
+                protocol, reference = self.capture(Path(tmp), enabled)
+                if enabled:
+                    from gpu_engine.device_rollout_truth import bank_manifest
+                    with self.assertRaisesRegex(ValueError, 'does not support a self_moves ON bank'):
+                        bank_manifest(dict(declaration=reference), schema)
+                    for name in ('positions', 'siblings'):
+                        path = Path(protocol[name]['path'])
+                        lines = path.read_text().splitlines()
+                        header = json.loads(lines[0])
+                        del header['self_moves']
+                        path.write_text('\n'.join([json.dumps(header), *lines[1:]]) + '\n')
+                        protocol[name]['sha256'] = run._file_sha(path)
+                    with self.assertRaisesRegex(ValueError, 'header encoding differs from the declaration'):
+                        schema.resolve_device_bank(protocol, None)
+
+    def test_capture_rejects_incoherent_catalog_tables_or_either_actor(self):
+        for options, error in (
+                (dict(catalog=False), 'prepared catalog self_moves'),
+                (dict(tables=False), 'observation tables self_moves'),
+                (dict(encodings=(False, True)), 'actor archive self_moves'),
+                (dict(encodings=(True, False)), 'actor archive self_moves')):
+            with self.subTest(options=options), tempfile.TemporaryDirectory() as tmp:
+                self.capture(Path(tmp), True, error=error, **options)
+
     def test_geometry_and_hash_selection_are_pre_outcome_and_exact(self):
         with tempfile.TemporaryDirectory() as d:
             root=Path(d);reference,doc,games,_=declaration(root)
@@ -69,12 +149,14 @@ class DeviceHeldoutBankTests(unittest.TestCase):
             self.assertEqual(len({s['stream'] for s in parsed['cost_selectors']}),40)
             self.assertEqual([sum(s['frame']==f for s in parsed['cost_selectors']) for f in schema.FRAMES],[10]*4)
             self.assertTrue(all(s['owner']==(s['stream']-1000)%2 for s in parsed['cost_selectors']))
-            for change in ('selector','stream','team','cap'):
+            for change in ('selector','stream','team','cap','bool','string'):
                 bad=copy.deepcopy(doc)
                 if change=='selector':bad['cost_selectors'].reverse()
                 if change=='stream':bad['batches'][1]['games'][0]['stream_id']=1000
                 if change=='team':bad['batches'][1]['games'][0]['team_indices']=[0,33]
                 if change=='cap':bad['max_requests']=100
+                if change=='bool':bad['self_moves']=False
+                if change=='string':bad['self_moves']='true'
                 with self.subTest(change=change),self.assertRaises(ValueError):schema.declaration(artifact(root/'bad.json',bad))
 
     def test_typed_root_roundtrip_both_source_views_and_missing_history_refusal(self):

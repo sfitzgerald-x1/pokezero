@@ -51,8 +51,10 @@ def declaration(reference):
     required = {'schema','role','stop_rule','source_commit','source_sha256','pool_sha256',
         'category_vocabulary_sha256','category_count','label_vocabulary','actors','batches',
         'max_requests','output_directory','training_roster_index','cost_recipe_seed','cost_selectors'}
-    if set(value) != required or value['schema'] != DECLARATION or value['role'] != 'NONTRAINING_EVALUATION' or value['stop_rule'] != STOP_RULE:
+    if set(value) - {'self_moves'} != required or value['schema'] != DECLARATION or value['role'] != 'NONTRAINING_EVALUATION' or value['stop_rule'] != STOP_RULE:
         raise ValueError('explicit prospective nontraining device-bank declaration required')
+    if 'self_moves' in value and value['self_moves'] is not True:
+        raise ValueError('device-bank self_moves must be omitted or declared as true')
     if (type(value['source_commit']) is not str or len(value['source_commit']) != 40
             or any(ch not in '0123456789abcdef' for ch in value['source_commit'])):
         raise ValueError('exact frozen device source required')
@@ -159,6 +161,8 @@ def resolve_device_bank(protocol, request):
     encoded = bank_self_moves(ph)
     if bank_self_moves(sh) != encoded: raise ValueError('positions/siblings name different device-bank encodings')
     plan, _, games, labels = declaration(ph['device_bank']); expected = selectors(games)
+    if encoded != plan.get('self_moves', False):
+        raise ValueError('device-bank header encoding differs from the declaration')
     if (ph['device_source'] != plan['source_commit'] or ph['category_vocabulary_sha256'] != plan['category_vocabulary_sha256']
             or ph['label_vocabulary_sha256'] != labels.sha256 or labels.sha256 != protocol['label_vocabulary_sha256']
             or ph['category_count'] != plan['category_count'] or len(positions) != 1024 or len(groups) != 1024):
