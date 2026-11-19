@@ -384,6 +384,7 @@ class B2SelfMovesTests(unittest.TestCase):
             self.assertIsNone(adapter.own_lines)
         def from_b2(*args, **kwargs):
             self.assertEqual(adapter.own_lines, expected_lines)
+            self.assertEqual(kwargs['lines'], expected_lines)
             return NS(source_binding_sha256='binding')
         old = ()
         with (mock.patch.object(module, 'JaxRecordedAdapter', return_value=adapter),
