@@ -595,7 +595,7 @@ console.log(JSON.stringify(orders));"""
         self.compare_active(c.trackers,project(),a);self.assertFalse(bool(project().numeric[0,1,locked]))
         move(after,1,'|move|p2a: Absol|Tackle|p1a: Snorlax')
         got=project();self.compare_active(c.trackers,got,a);self.assertTrue(bool(got.numeric[0,1,locked]))
-        h.turn_end(c,after,after,yes);fact(a.TURN,-1,1);self.compare_active(c.trackers,project(),a)
+        h.turn_end(c,after,after._replace(turn=c.trackers.turn),yes);fact(a.TURN,-1,1);self.compare_active(c.trackers,project(),a)
         # Snorlax Tricks again: Absol gives the Band back and gets nothing (-enditem [silent]: ITEM_END).
         move(after,0,'|move|p1a: Snorlax|Trick|p2a: Absol')
         back=after._replace(item=after.item.at[:,0,0].set(2).at[:,1,0].set(1))
@@ -636,12 +636,12 @@ console.log(JSON.stringify(orders));"""
         hit=state._replace(recharge_counter=state.recharge_counter.at[:,0,0].set(2))
         h.public_move_state(c,state,hit,0,j.ones(2,j.int32),yes);self.b2_lines(a,catalog,fact,'|-mustrecharge|p1a: Snorlax')
         got=project();self.compare_active(c.trackers,got,a);self.assertTrue(bag(got))
-        h.turn_end(c,hit,hit,yes);fact(a.TURN,-1,1);self.compare_active(c.trackers,project(),a)
+        h.turn_end(c,hit,hit._replace(turn=c.trackers.turn),yes);fact(a.TURN,-1,1);self.compare_active(c.trackers,project(),a)
         h.recharge_turn(c,state,0,yes);self.b2_lines(a,catalog,fact,'|cant|p1a: Snorlax|recharge')
         got=project();self.compare_active(c.trackers,got,a);self.assertFalse(bag(got))
         h.public_move_state(c,state,hit,0,j.ones(2,j.int32),yes);self.b2_lines(a,catalog,fact,'|-mustrecharge|p1a: Snorlax')
-        h.turn_end(c,hit,hit,yes);fact(a.TURN,-1,2)
-        h.turn_end(c,hit,state,yes);fact(a.TURN,-1,3)                              # silent expiry: no line, no hook
+        h.turn_end(c,hit,hit._replace(turn=c.trackers.turn),yes);fact(a.TURN,-1,2)
+        h.turn_end(c,hit,state._replace(turn=c.trackers.turn),yes);fact(a.TURN,-1,3) # silent expiry: no recharge line or hook
         got=project();self.compare_active(c.trackers,got,a);self.assertTrue(bag(got))
         h.destiny_bond(c,state,0,yes);h.move(c,state,0,j.ones(2,j.int32),yes,pp_use=True)
         self.b2_lines(a,catalog,fact,'|move|p1a: Snorlax|Surf|p2a: Absol')
