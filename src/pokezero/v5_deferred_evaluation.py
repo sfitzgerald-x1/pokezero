@@ -305,11 +305,19 @@ def _restore(value):
     return request
 
 
-def _restore_milestone(value):
+def _restore_milestone(value, *, staged_run_root=None):
     evaluation._keys(value, ('schema', 'request', 'route_declaration_sha256', 'full_checkpoint'))
     if value['schema'] != MILESTONE:
         raise ValueError('committed milestone dispatch required')
     request = evaluation._restore_request(value['request'])
+    if staged_run_root is not None:
+        original = request.run_directory
+        if (request.archive_path != original / request.snapshot.archive
+                or request.checkpoint_path != original / request.snapshot.checkpoint):
+            raise ValueError('original dispatch contains a different artifact path')
+        root = Path(staged_run_root).resolve()
+        request = replace(request, run_directory=root, archive_path=root / request.snapshot.archive,
+                          checkpoint_path=root / request.snapshot.checkpoint)
     declaration = json.loads((request.run_directory / 'declaration.json').read_bytes())
     policy = declaration['evaluation']
     if (run._sha(declaration) != request.declaration_sha256
@@ -336,9 +344,9 @@ def _restore_milestone(value):
     return request
 
 
-def read_milestone(reference):
+def read_milestone(reference, *, staged_run_root=None):
     """Shared reader for separate CPU and GPU evaluator entries."""
-    request = _restore_milestone(reference.document())
+    request = _restore_milestone(reference.document(), staged_run_root=staged_run_root)
     path = request.run_directory / 'artifacts' / 'cpu-panels' / str(request.declared_games) / 'request.json'
     if Path(reference.path).resolve() != path:
         raise ValueError('original owned milestone dispatch path required')
@@ -404,6 +412,12 @@ def execute_assay(reference, protocol, assay, *, resume=False):
                '--output', str(output)]
         if resume:
             cmd.append('--resume')
+        if 'progress_showdown' in spec and assay in ('external_fp_greedy', 'matched_h2h_showdown'):
+            progress = evaluation.Artifact(**spec['progress_showdown']).document()
+            registry = Path(progress['shared_cell_registry'])
+            if not registry.is_absolute():
+                raise ValueError('route overlap requires the declared shared cell store')
+            cmd.extend(('--shared-cell-registry', str(registry)))
         outcome = dict(started, status='UNKNOWN')
         try:
             result = subprocess.run(cmd, timeout=deadline, check=False)

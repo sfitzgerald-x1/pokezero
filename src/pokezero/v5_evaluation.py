@@ -515,12 +515,28 @@ async def _concurrent_panel(configs,factory,protocol,progress_path,namespace,*,i
     return json.loads(Path(progress_path).read_bytes())
 
 
-def _factory(protocol,request):
+def _factory(protocol,request,*,compute_dtype='bfloat16',cpu_only=False):
     """Original public catalog for THIS archive; never load a champion model."""
     from . import v5_worker as worker
     from .v5_phasec import category_binding
     runtime=Artifact(**protocol['runtime']).document();worker._source(runtime)
-    worker._probe(runtime)
+    if cpu_only:
+        import sys
+        import jax
+        import numpy as np
+        import torch
+        versions = dict(python='.'.join(map(str, sys.version_info[:3])), jax=jax.__version__,
+                        numpy=np.__version__, torch=torch.__version__, torch_cuda=torch.version.cuda)
+        if (versions != runtime['versions'] or any(d.platform != 'cpu' for d in jax.devices())
+                or torch.cuda.is_available()):
+            raise ValueError('exact declared CPU evaluator runtime required')
+        precision = runtime['precision_policy']
+        jax.config.update('jax_enable_x64', False)
+        jax.config.update('jax_default_matmul_precision', precision['jax_matmul'])
+        torch.set_float32_matmul_precision(precision['torch_matmul'])
+        torch.set_num_threads(1)
+    else:
+        worker._probe(runtime)
     from .dex import load_showdown_dex_cached
     from .randbat import load_gen3_randbat_source_cached
     from .category_vocab import CategoryVocabulary
@@ -544,7 +560,7 @@ def _factory(protocol,request):
     factory=load_factory(request.archive_path,catalog=catalog,contract=contract,
         expected_archive_sha256=request.snapshot.archive_sha256,expected_checkpoint_sha256=request.snapshot.checkpoint_sha256,
         expected_category_vocabulary_sha256=category_binding(v),
-        expected_label_vocabulary_sha256=protocol['label_vocabulary_sha256'],compute_dtype='bfloat16',learner_seconds=60.,
+        expected_label_vocabulary_sha256=protocol['label_vocabulary_sha256'],compute_dtype=compute_dtype,learner_seconds=60.,
         deterministic=protocol['deterministic'],enable_v5=True)
     if run._sha(factory.config.metadata())!=protocol['model_sha256']:raise ValueError('exact frozen evaluation model configuration differs')
     return factory
