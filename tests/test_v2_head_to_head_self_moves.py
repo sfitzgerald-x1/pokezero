@@ -16,7 +16,12 @@ from test_v5_run import plan
 
 class HeadToHeadEncodingTests(unittest.TestCase):
     def evaluate(self, enabled, metadata, *, catalog=None, bad_model=False, error=None):
-        recipe = replace(plan(), self_moves=enabled)
+        original = plan()
+        # The paired runner assigns swapped games to the lower stream namespace.
+        iterations = tuple(tuple(replace(batch, games=tuple(
+            replace(game, stream_id=game.stream_id + h2h.SWAP_OFFSET) for game in batch.games))
+            for batch in iteration) for iteration in original.iterations)
+        recipe = replace(original, iterations=iterations, self_moves=enabled)
         configs = (recipe.model, replace(recipe.model, replicate=1))
         actors = [v5_run.Snapshot(0, 'actor.pt', 'a' * 64, 'actor.npz', digest * 64,
                   v5_run._sha(config.metadata())) for digest, config in zip('bc', configs)]
